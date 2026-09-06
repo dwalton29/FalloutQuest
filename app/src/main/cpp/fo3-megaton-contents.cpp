@@ -2,9 +2,11 @@
 #include <cstdio>
 #include <cstdint>
 #include <cstring>
+#include <functional>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 #include <zlib.h>
 
@@ -114,8 +116,6 @@ bool ReadPayload(FILE* file, uint32_t storedSize, uint32_t flags,
 }
 
 bool IsMegatonChildGroup(uint32_t label, uint32_t type) {
-    // Bethesda CELL child groups. ByroRedux consumes 6/8/9; type 10 is used
-    // by some Gamebryo-era plugins for visible-distant CELL children.
     return label == TARGET_CELL_FORM_ID &&
            (type == 6u || type == 8u || type == 9u || type == 10u);
 }
