@@ -3,33 +3,28 @@ project(falloutquest LANGUAGES C CXX)
 
 find_package(OpenXR REQUIRED CONFIG)
 
-# Q6C keeps the proven Q6A/Q6B OpenXR host but upgrades the scene from a fixed
-# object count to a radius-selected room, centres the player inside the actual
-# Bethesda-authored structure, and lets one NIF contribute multiple materials.
-file(READ "${CMAKE_CURRENT_SOURCE_DIR}/q6a-native.cpp" Q6C_NATIVE_SOURCE)
-string(REPLACE "Q6A" "Q6C" Q6C_NATIVE_SOURCE "${Q6C_NATIVE_SOURCE}")
+# Q6H keeps the proven native OpenXR/render path, but stops using the bed/radius
+# proof-room selector. The CELL itself is now authoritative: every model-bearing
+# REFR in MegatonPlayerHouse is attempted, with per-model CPU NIF caching.
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/q6a-native.cpp" Q6H_NATIVE_SOURCE)
+string(REPLACE "Q6A" "Q6H" Q6H_NATIVE_SOURCE "${Q6H_NATIVE_SOURCE}")
 
 string(REPLACE
     "constexpr float SCENE_FORWARD = -3.20f;"
     "constexpr float SCENE_FORWARD = 0.00f;"
-    Q6C_NATIVE_SOURCE "${Q6C_NATIVE_SOURCE}")
+    Q6H_NATIVE_SOURCE "${Q6H_NATIVE_SOURCE}")
 string(REPLACE
-    "constexpr size_t MAX_SCENE_OBJECTS = 8u;"
-    "constexpr size_t MAX_SCENE_OBJECTS = 48u;"
-    Q6C_NATIVE_SOURCE "${Q6C_NATIVE_SOURCE}")
+    "constexpr size_t MAX_SCENE_OBJECTS = 72u;"
+    "constexpr size_t MAX_SCENE_OBJECTS = 1200u;"
+    Q6H_NATIVE_SOURCE "${Q6H_NATIVE_SOURCE}")
 string(REPLACE
-    "constexpr size_t MAX_MODEL_ATTEMPTS = 48u;"
-    "constexpr size_t MAX_MODEL_ATTEMPTS = 512u;"
-    Q6C_NATIVE_SOURCE "${Q6C_NATIVE_SOURCE}")
-string(REPLACE
-    "constexpr float MAX_MODEL_EXTENT_UNITS = 500.0f;"
-    "constexpr float MAX_MODEL_EXTENT_UNITS = 3000.0f;"
-    Q6C_NATIVE_SOURCE "${Q6C_NATIVE_SOURCE}")
+    "constexpr size_t MAX_MODEL_ATTEMPTS = 800u;"
+    "constexpr size_t MAX_MODEL_ATTEMPTS = 2000u;"
+    Q6H_NATIVE_SOURCE "${Q6H_NATIVE_SOURCE}")
 
-# Anchor room discovery on the actual player bed, with the original chair as a
-# deterministic fallback. This is only for finding the coherent room cluster;
-# the final player origin below is calculated from the surrounding structure.
-set(Q6C_OLD_SORT [=[
+# Preserve ESM order. Q6H no longer sorts toward a bed/chair anchor because the
+# entire CELL is the load domain.
+set(Q6H_OLD_SORT [=[
     std::stable_sort(placements.begin(), placements.end(),
                      [&](const Fo3WorldPlacement& a, const Fo3WorldPlacement& b) {
         const float adx = a.x - centroidX, ady = a.y - centroidY, adz = a.z - centroidZ;
@@ -37,66 +32,23 @@ set(Q6C_OLD_SORT [=[
         return adx * adx + ady * ady + adz * adz < bdx * bdx + bdy * bdy + bdz * bdz;
     });
 ]=])
-set(Q6C_NEW_SORT [=[
-    float anchorX = centroidX, anchorY = centroidY, anchorZ = centroidZ;
-    const char* anchorSource = "centroid";
-    for (const Fo3WorldPlacement& p : placements) {
-        if (p.editorId == "HD01PlayerBed02") {
-            anchorX = p.x; anchorY = p.y; anchorZ = p.z;
-            anchorSource = "HD01PlayerBed02";
-            break;
-        }
-    }
-    if (std::string(anchorSource) == "centroid") {
-        for (const Fo3WorldPlacement& p : placements) {
-            if (p.editorId == "Chair03F") {
-                anchorX = p.x; anchorY = p.y; anchorZ = p.z;
-                anchorSource = "Chair03F";
-                break;
-            }
-        }
-    }
-
-    auto roomScore = [&](const Fo3WorldPlacement& p) {
-        if (p.editorId == "XMarker") return 1.0e30f;
-        if (p.modelPath.rfind("Effects\\", 0) == 0 || p.modelPath.rfind("effects\\", 0) == 0)
-            return 9.0e29f;
-        const float dx = p.x - anchorX;
-        const float dy = p.y - anchorY;
-        const float dz = p.z - anchorZ;
-        float score = dx * dx + dy * dy + dz * dz * 2.0f;
-        const bool architecture =
-            p.modelPath.find("Architecture\\Megaton\\interior\\ShackInteriors") != std::string::npos ||
-            p.modelPath.find("architecture\\megaton\\interior\\shackinteriors") != std::string::npos;
-        if (architecture) score *= 0.08f;
-        if (p.baseRecordType == "DOOR") score *= 0.20f;
-        if (p.baseRecordType == "FURN") score *= 0.45f;
-        if (p.editorId == "HD01PlayerBed02") score = -3.0f;
-        if (p.editorId == "Chair03F") score = -2.0f;
-        return score;
-    };
-
-    Q6C_LOGI("Q6C ROOM ANCHOR: source=%s P=(%.1f %.1f %.1f)",
-             anchorSource, anchorX, anchorY, anchorZ);
-    std::stable_sort(placements.begin(), placements.end(),
-                     [&](const Fo3WorldPlacement& a, const Fo3WorldPlacement& b) {
-        return roomScore(a) < roomScore(b);
-    });
+set(Q6H_NEW_SORT [=[
+    Q6H_LOGI("Q6H CELL SOURCE: cell=000151E3 modelPlacements=%zu centroid=(%.1f %.1f %.1f) fullCell=1",
+             placements.size(), centroidX, centroidY, centroidZ);
 ]=])
-string(REPLACE "${Q6C_OLD_SORT}" "${Q6C_NEW_SORT}"
-       Q6C_NATIVE_SOURCE "${Q6C_NATIVE_SOURCE}")
+string(REPLACE "${Q6H_OLD_SORT}" "${Q6H_NEW_SORT}"
+       Q6H_NATIVE_SOURCE "${Q6H_NATIVE_SOURCE}")
 
-# One placed NIF may contain multiple visible geometry/material shapes. Build a
-# CpuObject per material shape while applying the same ESM REFR transform to all
-# of them, preserving the model exactly rather than discarding later shapes.
-set(Q6C_OLD_BUILD [=[
+# Multi-shape NIF instancing + CPU model cache. Repeated refs copy already parsed
+# mesh data instead of reopening/reparsing the BSA NIF every time.
+set(Q6H_OLD_BUILD [=[
 bool BuildCpuObject(const Fo3WorldPlacement& placement, CpuObject& out) {
     Fo3StaticNifMesh mesh;
     if (!LoadFo3StaticNif(placement.modelPath, mesh)) return false;
 
     const float extent = MaxModelExtent(mesh) * placement.scale;
     if (!(extent >= 1.0f && extent <= MAX_MODEL_EXTENT_UNITS)) {
-        Q6C_LOGW("Q6C SKIP SIZE: ref=%08X model=%s extent=%.1f",
+        Q6H_LOGW("Q6H SKIP SIZE: ref=%08X model=%s extent=%.1f",
                  placement.refFormId, placement.modelPath.c_str(), extent);
         return false;
     }
@@ -135,7 +87,7 @@ bool BuildCpuObject(const Fo3WorldPlacement& placement, CpuObject& out) {
             out.mesh.bitangents[i * 3u], out.mesh.bitangents[i * 3u + 1u], out.mesh.bitangents[i * 3u + 2u]}, placement));
     }
 
-    Q6C_LOGI("Q6C CPU OBJECT: ref=%08X base=%08X EDID=%s model=%s vertices=%zu triangles=%zu ESM=(%.1f %.1f %.1f / %.3f %.3f %.3f / %.3f)",
+    Q6H_LOGI("Q6H CPU OBJECT: ref=%08X base=%08X EDID=%s model=%s vertices=%zu triangles=%zu ESM=(%.1f %.1f %.1f / %.3f %.3f %.3f / %.3f)",
              placement.refFormId, placement.baseFormId,
              placement.editorId.empty() ? "<none>" : placement.editorId.c_str(),
              placement.modelPath.c_str(), vertexCount, out.mesh.indices.size() / 3u,
@@ -144,17 +96,26 @@ bool BuildCpuObject(const Fo3WorldPlacement& placement, CpuObject& out) {
     return true;
 }
 ]=])
-set(Q6C_NEW_BUILD [=[
+set(Q6H_NEW_BUILD [=[
 bool BuildCpuObjects(const Fo3WorldPlacement& placement, std::vector<CpuObject>& outs) {
     outs.clear();
-    std::vector<Fo3StaticNifMesh> meshes;
-    if (!LoadFo3StaticNifMeshes(placement.modelPath, meshes)) return false;
+    static std::unordered_map<std::string, std::vector<Fo3StaticNifMesh>> modelCache;
+
+    auto cached = modelCache.find(placement.modelPath);
+    if (cached == modelCache.end()) {
+        std::vector<Fo3StaticNifMesh> meshes;
+        if (!LoadFo3StaticNifMeshes(placement.modelPath, meshes)) return false;
+        cached = modelCache.emplace(placement.modelPath, std::move(meshes)).first;
+        Q6H_LOGI("Q6H MODEL CACHE MISS: model=%s shapes=%zu uniqueModels=%zu",
+                 placement.modelPath.c_str(), cached->second.size(), modelCache.size());
+    }
 
     size_t shapeIndex = 0;
-    for (Fo3StaticNifMesh& mesh : meshes) {
+    for (const Fo3StaticNifMesh& cachedMesh : cached->second) {
+        Fo3StaticNifMesh mesh = cachedMesh;
         const float extent = MaxModelExtent(mesh) * placement.scale;
         if (!(extent >= 1.0f && extent <= MAX_MODEL_EXTENT_UNITS)) {
-            Q6C_LOGW("Q6C SKIP SHAPE SIZE: ref=%08X model=%s shape=%zu extent=%.1f",
+            Q6H_LOGW("Q6H SKIP SHAPE SIZE: ref=%08X model=%s shape=%zu extent=%.1f",
                      placement.refFormId, placement.modelPath.c_str(), shapeIndex++, extent);
             continue;
         }
@@ -196,24 +157,18 @@ bool BuildCpuObjects(const Fo3WorldPlacement& placement, std::vector<CpuObject>&
                 out.mesh.bitangents[i * 3u], out.mesh.bitangents[i * 3u + 1u], out.mesh.bitangents[i * 3u + 2u]}, placement));
         }
 
-        Q6C_LOGI("Q6C CPU SHAPE: ref=%08X EDID=%s shape=%zu/%zu vertices=%zu triangles=%zu diffuse=%s",
-                 placement.refFormId,
-                 placement.editorId.empty() ? "<none>" : placement.editorId.c_str(),
-                 shapeIndex + 1u, meshes.size(), vertexCount, out.mesh.indices.size() / 3u,
-                 out.mesh.diffuseTexturePath.empty() ? "<none>" : out.mesh.diffuseTexturePath.c_str());
         outs.push_back(std::move(out));
         ++shapeIndex;
     }
     return !outs.empty();
 }
 ]=])
-string(REPLACE "${Q6C_OLD_BUILD}" "${Q6C_NEW_BUILD}"
-       Q6C_NATIVE_SOURCE "${Q6C_NATIVE_SOURCE}")
+string(REPLACE "${Q6H_OLD_BUILD}" "${Q6H_NEW_BUILD}"
+       Q6H_NATIVE_SOURCE "${Q6H_NATIVE_SOURCE}")
 
-# Radius is the primary completeness rule. Structural pieces get a generous
-# envelope so walls/floor/ceiling/roof pieces survive; props use a tighter one.
-# MAX_SCENE_OBJECTS is now only a safety cap on placed REFRs, not the room shape.
-set(Q6C_OLD_SELECT [=[
+# Full CELL selection. Markers/effects remain non-world runtime refs, but there
+# is no distance/radius cull and no 72-placement room cap.
+set(Q6H_OLD_SELECT [=[
     std::vector<CpuObject> selected;
     selected.reserve(MAX_SCENE_OBJECTS);
     size_t attempts = 0;
@@ -224,61 +179,63 @@ set(Q6C_OLD_SELECT [=[
         if (BuildCpuObject(placement, object)) selected.push_back(std::move(object));
     }
 ]=])
-set(Q6C_NEW_SELECT [=[
+set(Q6H_NEW_SELECT [=[
     std::vector<CpuObject> selected;
-    selected.reserve(MAX_SCENE_OBJECTS * 2u);
+    selected.reserve(placements.size() * 2u);
     size_t attempts = 0;
     size_t selectedPlacements = 0;
-    size_t filteredEffects = 0;
+    size_t filteredMarkersEffects = 0;
+    size_t unsupportedPlacements = 0;
+    std::unordered_map<std::string, size_t> attemptedTypes;
+    std::unordered_map<std::string, size_t> renderedTypes;
+
     for (const Fo3WorldPlacement& placement : placements) {
-        if (selectedPlacements >= MAX_SCENE_OBJECTS || attempts >= MAX_MODEL_ATTEMPTS) break;
         ++attempts;
+        const std::string type = placement.baseRecordType.empty() ? "<none>" : placement.baseRecordType;
+        ++attemptedTypes[type];
 
         if (placement.editorId == "XMarker" ||
             placement.modelPath.rfind("Effects\\", 0) == 0 ||
             placement.modelPath.rfind("effects\\", 0) == 0) {
-            ++filteredEffects;
+            ++filteredMarkersEffects;
             continue;
         }
-
-        const float dx = placement.x - anchorX;
-        const float dy = placement.y - anchorY;
-        const float dz = placement.z - anchorZ;
-        const float horizontal2 = dx * dx + dy * dy;
-        const bool architecture =
-            placement.modelPath.find("Architecture\\Megaton\\interior\\ShackInteriors") != std::string::npos ||
-            placement.modelPath.find("architecture\\megaton\\interior\\shackinteriors") != std::string::npos;
-
-        const bool inRoomRadius = architecture
-            ? (horizontal2 <= 950.0f * 950.0f && std::fabs(dz) <= 700.0f)
-            : (horizontal2 <= 575.0f * 575.0f && std::fabs(dz) <= 450.0f);
-        if (!inRoomRadius) continue;
 
         std::vector<CpuObject> parts;
         if (BuildCpuObjects(placement, parts)) {
             ++selectedPlacements;
+            ++renderedTypes[type];
             for (CpuObject& part : parts) selected.push_back(std::move(part));
+        } else {
+            ++unsupportedPlacements;
         }
     }
-    Q6C_LOGI("Q6C ROOM SELECT: placements=%zu drawShapes=%zu attempts=%zu filteredMarkersEffects=%zu radiusDriven=1",
-             selectedPlacements, selected.size(), attempts, filteredEffects);
-]=])
-string(REPLACE "${Q6C_OLD_SELECT}" "${Q6C_NEW_SELECT}"
-       Q6C_NATIVE_SOURCE "${Q6C_NATIVE_SOURCE}")
 
-# Centre the headset on the horizontal envelope of actual Megaton interior
-# structure refs (walls/corners/doors), not on furniture/prop geometry. This
-# makes VR origin the room centre. Floor height still comes from the assembled
-# geometry so the existing Quest standing-height convention remains intact.
-set(Q6C_OLD_CENTER [=[
+    Q6H_LOGI("Q6H CELL SELECT: esmModelPlacements=%zu attempted=%zu renderedPlacements=%zu drawShapes=%zu filteredMarkersEffects=%zu unsupported=%zu fullCell=1",
+             placements.size(), attempts, selectedPlacements, selected.size(),
+             filteredMarkersEffects, unsupportedPlacements);
+    for (const auto& entry : attemptedTypes) {
+        const auto rendered = renderedTypes.find(entry.first);
+        const size_t renderedCount = rendered == renderedTypes.end() ? 0u : rendered->second;
+        Q6H_LOGI("Q6H CELL TYPE: type=%s attempted=%zu rendered=%zu",
+                 entry.first.c_str(), entry.second, renderedCount);
+    }
+]=])
+string(REPLACE "${Q6H_OLD_SELECT}" "${Q6H_NEW_SELECT}"
+       Q6H_NATIVE_SOURCE "${Q6H_NATIVE_SOURCE}")
+
+# Keep the VR coordinate origin near the authored house structure instead of the
+# global bounds centre. Q6H's collision layer then validates/searches a safe,
+# grounded capsule spawn around VR (0,0) on the first physics resolve.
+set(Q6H_OLD_CENTER [=[
     const float centerX = (minimum.x + maximum.x) * 0.5f;
     const float centerY = (minimum.y + maximum.y) * 0.5f;
     const float floorZ = minimum.z;
 ]=])
-set(Q6C_NEW_CENTER [=[
+set(Q6H_NEW_CENTER [=[
     float structureMinX = 1e30f, structureMinY = 1e30f;
     float structureMaxX = -1e30f, structureMaxY = -1e30f;
-    size_t structureRefs = 0;
+    size_t structureShapes = 0;
     for (const CpuObject& object : selected) {
         const std::string& path = object.placement.modelPath;
         const bool architecture =
@@ -289,104 +246,102 @@ set(Q6C_NEW_CENTER [=[
         structureMaxX = std::max(structureMaxX, object.placement.x);
         structureMinY = std::min(structureMinY, object.placement.y);
         structureMaxY = std::max(structureMaxY, object.placement.y);
-        ++structureRefs;
+        ++structureShapes;
     }
 
-    const float centerX = structureRefs > 0u
+    const float centerX = structureShapes > 0u
         ? (structureMinX + structureMaxX) * 0.5f
         : (minimum.x + maximum.x) * 0.5f;
-    const float centerY = structureRefs > 0u
+    const float centerY = structureShapes > 0u
         ? (structureMinY + structureMaxY) * 0.5f
         : (minimum.y + maximum.y) * 0.5f;
     const float floorZ = minimum.z;
-    Q6C_LOGI("Q6C PLAYER ORIGIN: roomCenter=(%.1f %.1f) floorZ=%.1f structureShapes=%zu VR=(0,standing,0)",
-             centerX, centerY, floorZ, structureRefs);
+    Q6H_LOGI("Q6H SPAWN SEED: structureCenter=(%.1f %.1f) floorReferenceZ=%.1f structureShapes=%zu VRseed=(0,0) collisionValidation=pending",
+             centerX, centerY, floorZ, structureShapes);
 ]=])
-string(REPLACE "${Q6C_OLD_CENTER}" "${Q6C_NEW_CENTER}"
-       Q6C_NATIVE_SOURCE "${Q6C_NATIVE_SOURCE}")
+string(REPLACE "${Q6H_OLD_CENTER}" "${Q6H_NEW_CENTER}"
+       Q6H_NATIVE_SOURCE "${Q6H_NATIVE_SOURCE}")
 
-# Avoid the two helper-name collisions with the included proven Q4 renderer.
+# Avoid helper collisions with q4-native.cpp included at the bottom.
 string(REPLACE
     "GLuint CompileShader(GLenum type, const char* source)"
-    "GLuint CompileQ6CShader(GLenum type, const char* source)"
-    Q6C_NATIVE_SOURCE "${Q6C_NATIVE_SOURCE}")
+    "GLuint CompileQ6HShader(GLenum type, const char* source)"
+    Q6H_NATIVE_SOURCE "${Q6H_NATIVE_SOURCE}")
 string(REPLACE
     "GLuint vs = CompileShader(GL_VERTEX_SHADER, vertexSource);"
-    "GLuint vs = CompileQ6CShader(GL_VERTEX_SHADER, vertexSource);"
-    Q6C_NATIVE_SOURCE "${Q6C_NATIVE_SOURCE}")
+    "GLuint vs = CompileQ6HShader(GL_VERTEX_SHADER, vertexSource);"
+    Q6H_NATIVE_SOURCE "${Q6H_NATIVE_SOURCE}")
 string(REPLACE
     "GLuint fs = CompileShader(GL_FRAGMENT_SHADER, fragmentSource);"
-    "GLuint fs = CompileQ6CShader(GL_FRAGMENT_SHADER, fragmentSource);"
-    Q6C_NATIVE_SOURCE "${Q6C_NATIVE_SOURCE}")
+    "GLuint fs = CompileQ6HShader(GL_FRAGMENT_SHADER, fragmentSource);"
+    Q6H_NATIVE_SOURCE "${Q6H_NATIVE_SOURCE}")
 string(REPLACE
     "GLuint CreateProgram()"
-    "GLuint CreateQ6CProgram()"
-    Q6C_NATIVE_SOURCE "${Q6C_NATIVE_SOURCE}")
+    "GLuint CreateQ6HProgram()"
+    Q6H_NATIVE_SOURCE "${Q6H_NATIVE_SOURCE}")
 string(REPLACE
     "gProgram = CreateProgram();"
-    "gProgram = CreateQ6CProgram();"
-    Q6C_NATIVE_SOURCE "${Q6C_NATIVE_SOURCE}")
+    "gProgram = CreateQ6HProgram();"
+    Q6H_NATIVE_SOURCE "${Q6H_NATIVE_SOURCE}")
 
-# Q6E overlays Bethesda-authored bhk collision over the working Q6D scene.
-# The overlay is verification-only and may fail per asset without failing scene
-# initialization. It uses the exact room centre/floor transform used by visuals.
+# Shared Bethesda collision world (Q6F decoder + Q6G player resolver + Q6H safe spawn).
 string(REPLACE
     "#include \"fo3-texture-bsa.h\""
     "#include \"fo3-texture-bsa.h\"\n#include \"fo3-collision-overlay.h\""
-    Q6C_NATIVE_SOURCE "${Q6C_NATIVE_SOURCE}")
+    Q6H_NATIVE_SOURCE "${Q6H_NATIVE_SOURCE}")
 
-set(Q6E_OLD_PROGRAM [=[
-    gProgram = CreateQ6CProgram();
+set(Q6H_OLD_PROGRAM [=[
+    gProgram = CreateQ6HProgram();
 ]=])
-set(Q6E_NEW_PROGRAM [=[
-    std::vector<Fo3WorldPlacement> q6eCollisionPlacements;
-    q6eCollisionPlacements.reserve(selected.size());
+set(Q6H_NEW_PROGRAM [=[
+    std::vector<Fo3WorldPlacement> q6hCollisionPlacements;
+    q6hCollisionPlacements.reserve(selected.size());
     for (const CpuObject& object : selected) {
-        q6eCollisionPlacements.push_back(object.placement);
+        q6hCollisionPlacements.push_back(object.placement);
     }
-    InitializeFo3CollisionOverlay(q6eCollisionPlacements,
-                                  centerX, centerY, floorZ,
-                                  SCENE_FORWARD, FLOOR_Y,
-                                  FO3_UNITS_PER_METRE);
+    const bool collisionReady = InitializeFo3CollisionOverlay(q6hCollisionPlacements,
+                                                               centerX, centerY, floorZ,
+                                                               SCENE_FORWARD, FLOOR_Y,
+                                                               FO3_UNITS_PER_METRE);
+    Q6H_LOGI("Q6H COLLISION WORLD: requestedRefs=%zu ready=%d safeSpawnValidation=firstFrame",
+             q6hCollisionPlacements.size(), collisionReady ? 1 : 0);
 
-    gProgram = CreateQ6CProgram();
+    gProgram = CreateQ6HProgram();
 ]=])
-string(REPLACE "${Q6E_OLD_PROGRAM}" "${Q6E_NEW_PROGRAM}"
-       Q6C_NATIVE_SOURCE "${Q6C_NATIVE_SOURCE}")
+string(REPLACE "${Q6H_OLD_PROGRAM}" "${Q6H_NEW_PROGRAM}"
+       Q6H_NATIVE_SOURCE "${Q6H_NATIVE_SOURCE}")
 
-set(Q6E_OLD_RENDER_RESTORE [=[
+set(Q6H_OLD_RENDER_RESTORE [=[
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture1));
 ]=])
-set(Q6E_NEW_RENDER_RESTORE [=[
+set(Q6H_NEW_RENDER_RESTORE [=[
     RenderFo3CollisionOverlay(mvp);
 
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture1));
 ]=])
-string(REPLACE "${Q6E_OLD_RENDER_RESTORE}" "${Q6E_NEW_RENDER_RESTORE}"
-       Q6C_NATIVE_SOURCE "${Q6C_NATIVE_SOURCE}")
+string(REPLACE "${Q6H_OLD_RENDER_RESTORE}" "${Q6H_NEW_RENDER_RESTORE}"
+       Q6H_NATIVE_SOURCE "${Q6H_NATIVE_SOURCE}")
 
-set(Q6E_OLD_CLEANUP [=[
+set(Q6H_OLD_CLEANUP [=[
     glDeleteFramebuffers(n, framebuffers);
     for (GpuObject& object : gObjects) {
 ]=])
-set(Q6E_NEW_CLEANUP [=[
+set(Q6H_NEW_CLEANUP [=[
     glDeleteFramebuffers(n, framebuffers);
     ShutdownFo3CollisionOverlay();
     for (GpuObject& object : gObjects) {
 ]=])
-string(REPLACE "${Q6E_OLD_CLEANUP}" "${Q6E_NEW_CLEANUP}"
-       Q6C_NATIVE_SOURCE "${Q6C_NATIVE_SOURCE}")
+string(REPLACE "${Q6H_OLD_CLEANUP}" "${Q6H_NEW_CLEANUP}"
+       Q6H_NATIVE_SOURCE "${Q6H_NATIVE_SOURCE}")
 
-file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/q6c-native-generated.cpp" "${Q6C_NATIVE_SOURCE}")
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/q6h-native-generated.cpp" "${Q6H_NATIVE_SOURCE}")
 
-# Generate the multi-shape NIF loader from the already-proven parser. The only
-# semantic change is that it keeps every supported visible shape instead of
-# returning immediately after the first one.
-file(READ "${CMAKE_CURRENT_SOURCE_DIR}/fo3-static-nif.cpp" Q6C_NIF_SOURCE)
-string(REPLACE "Q6A" "Q6C" Q6C_NIF_SOURCE "${Q6C_NIF_SOURCE}")
-set(Q6C_OLD_LOADER [=[
+# Multi-shape NIF loader generated from the proven static parser.
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/fo3-static-nif.cpp" Q6H_NIF_SOURCE)
+string(REPLACE "Q6A" "Q6H" Q6H_NIF_SOURCE "${Q6H_NIF_SOURCE}")
+set(Q6H_OLD_LOADER [=[
 bool LoadFo3StaticNif(const std::string& modelPath, Fo3StaticNifMesh& outMesh) {
     outMesh = {};
     outMesh.modelPath = modelPath;
@@ -398,7 +353,7 @@ bool LoadFo3StaticNif(const std::string& modelPath, Fo3StaticNifMesh& outMesh) {
 
     NifHeader header;
     if (!ParseHeader(nif, header)) {
-        Q6C_LOGW("Q6C NIF UNSUPPORTED HEADER: %s", resolved.c_str());
+        Q6H_LOGW("Q6H NIF UNSUPPORTED HEADER: %s", resolved.c_str());
         return false;
     }
 
@@ -437,20 +392,13 @@ bool LoadFo3StaticNif(const std::string& modelPath, Fo3StaticNifMesh& outMesh) {
 
         candidate.modelPath = resolved;
         outMesh = std::move(candidate);
-        Q6C_LOGI("Q6C NIF READY: model=%s shape=%u type=%s data=%u vertices=%zu triangles=%zu diffuse=%s normal=%s rootTransform=%d",
-                 resolved.c_str(), block, type.c_str(), shape.dataRef,
-                 outMesh.positions.size() / 3u, outMesh.indices.size() / 3u,
-                 outMesh.diffuseTexturePath.empty() ? "<none>" : outMesh.diffuseTexturePath.c_str(),
-                 outMesh.normalTexturePath.empty() ? "<none>" : outMesh.normalTexturePath.c_str(),
-                 directRootChild ? 1 : 0);
         return true;
     }
 
-    Q6C_LOGW("Q6C NIF NO SUPPORTED STATIC SHAPE: %s blocks=%u", resolved.c_str(), header.numBlocks);
     return false;
 }
 ]=])
-set(Q6C_NEW_LOADER [=[
+set(Q6H_NEW_LOADER [=[
 bool LoadFo3StaticNifMeshes(const std::string& modelPath,
                             std::vector<Fo3StaticNifMesh>& outMeshes) {
     outMeshes.clear();
@@ -462,7 +410,7 @@ bool LoadFo3StaticNifMeshes(const std::string& modelPath,
 
     NifHeader header;
     if (!ParseHeader(nif, header)) {
-        Q6C_LOGW("Q6C NIF UNSUPPORTED HEADER: %s", resolved.c_str());
+        Q6H_LOGW("Q6H NIF UNSUPPORTED HEADER: %s", resolved.c_str());
         return false;
     }
 
@@ -498,22 +446,12 @@ bool LoadFo3StaticNifMeshes(const std::string& modelPath,
         if (!TryLoadShape(nif, header, shape,
                           directRootChild ? &rootTransform : nullptr,
                           candidate)) continue;
-
         candidate.modelPath = resolved;
-        Q6C_LOGI("Q6C NIF SHAPE READY: model=%s shape=%u type=%s data=%u vertices=%zu triangles=%zu diffuse=%s normal=%s rootTransform=%d",
-                 resolved.c_str(), block, type.c_str(), shape.dataRef,
-                 candidate.positions.size() / 3u, candidate.indices.size() / 3u,
-                 candidate.diffuseTexturePath.empty() ? "<none>" : candidate.diffuseTexturePath.c_str(),
-                 candidate.normalTexturePath.empty() ? "<none>" : candidate.normalTexturePath.c_str(),
-                 directRootChild ? 1 : 0);
         outMeshes.push_back(std::move(candidate));
     }
 
-    if (outMeshes.empty()) {
-        Q6C_LOGW("Q6C NIF NO SUPPORTED STATIC SHAPE: %s blocks=%u", resolved.c_str(), header.numBlocks);
-        return false;
-    }
-    Q6C_LOGI("Q6C NIF MODEL READY: model=%s visibleShapes=%zu", resolved.c_str(), outMeshes.size());
+    if (outMeshes.empty()) return false;
+    Q6H_LOGI("Q6H NIF MODEL READY: model=%s visibleShapes=%zu", resolved.c_str(), outMeshes.size());
     return true;
 }
 
@@ -524,14 +462,14 @@ bool LoadFo3StaticNif(const std::string& modelPath, Fo3StaticNifMesh& outMesh) {
     return true;
 }
 ]=])
-string(REPLACE "${Q6C_OLD_LOADER}" "${Q6C_NEW_LOADER}"
-       Q6C_NIF_SOURCE "${Q6C_NIF_SOURCE}")
-file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/fo3-static-nif-q6c.cpp" "${Q6C_NIF_SOURCE}")
+string(REPLACE "${Q6H_OLD_LOADER}" "${Q6H_NEW_LOADER}"
+       Q6H_NIF_SOURCE "${Q6H_NIF_SOURCE}")
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/fo3-static-nif-q6h.cpp" "${Q6H_NIF_SOURCE}")
 
 add_library(falloutquest SHARED
-    ${CMAKE_CURRENT_BINARY_DIR}/q6c-native-generated.cpp
+    ${CMAKE_CURRENT_BINARY_DIR}/q6h-native-generated.cpp
     fo3-megaton-scene.cpp
-    ${CMAKE_CURRENT_BINARY_DIR}/fo3-static-nif-q6c.cpp
+    ${CMAKE_CURRENT_BINARY_DIR}/fo3-static-nif-q6h.cpp
     fo3-nif-collision.cpp
     fo3-collision-overlay.cpp
     fo3-bsa-reader.cpp
