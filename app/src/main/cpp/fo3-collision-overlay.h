@@ -25,7 +25,9 @@ bool ResolveFo3PlayerMotionQ6G(float currentX, float currentZ,
 bool IsFo3PlayerCollisionReadyQ6G();
 
 // Q6F debug draw. Q6G keeps this disabled by default while retaining the same
-// collision data for physical movement.
-void RenderFo3CollisionOverlay(const float* mvp16);
+// collision data for physical movement. The symbol is weak so Q7.6b can replace
+// only this disabled visual hook with the exterior LAND renderer; none of the
+// collision/grounding functions above are replaced or modified.
+void RenderFo3CollisionOverlay(const float* mvp16) __attribute__((weak));
 
 void ShutdownFo3CollisionOverlay();
