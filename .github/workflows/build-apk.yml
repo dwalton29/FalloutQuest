@@ -21,6 +21,14 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      - name: Restore stable development signing key
+        run: |
+          base64 --decode app/falloutquest-dev.keystore.b64 > app/falloutquest-dev.keystore
+          keytool -list \
+            -keystore app/falloutquest-dev.keystore \
+            -storepass falloutquest-dev \
+            -alias falloutquest-dev >/dev/null
+
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
