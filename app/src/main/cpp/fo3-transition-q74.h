@@ -113,10 +113,11 @@ bool LoadFo3NifCollisionShapesQ6F(
 inline bool LoadFo3NifCollisionShapesPolicyQ710(
         const std::string& modelPath,
         std::vector<Fo3NifCollisionShapeQ6F>& outShapes) {
-    if (!ShouldLoadFo3StaticCollisionModelQ710(modelPath)) {
-        outShapes.clear();
-        return false;
-    }
+    // Do not touch outShapes here: this header is also included by translation
+    // units that only have a forward declaration of Fo3NifCollisionShapeQ6F.
+    // The collision loader creates a fresh empty vector for every cache miss,
+    // so returning false is sufficient for a filtered dynamic-only model.
+    if (!ShouldLoadFo3StaticCollisionModelQ710(modelPath)) return false;
     return LoadFo3NifCollisionShapesQ6F(modelPath, outShapes);
 }
 
