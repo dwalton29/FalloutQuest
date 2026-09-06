@@ -20,6 +20,8 @@ namespace {
 
 constexpr const char* TAG = "FalloutQuest";
 constexpr size_t MAX_COLLISION_PLACEMENTS = 256u;
+constexpr size_t MAX_EXTERIOR_COLLISION_PLACEMENTS_Q78A = 1024u;
+constexpr size_t MAX_EXTERIOR_COLLISION_TRIANGLES_Q78A = 250000u;
 constexpr size_t MAX_LINE_VERTICES = 800000u;
 constexpr bool SHOW_COLLISION_DEBUG_Q6G = false;
 
@@ -79,18 +81,32 @@ uint64_t gResolveCounter = 0;
 uint64_t gContactLogCount = 0;
 uint64_t gTerrainGroundLogCountQ77 = 0;
 
-bool IsMegatonArchitecture(const std::string& path) {
+std::string NormalizeModelPathQ78A(const std::string& path) {
     std::string lower = path;
     for (char& ch : lower) {
         if (ch >= 'A' && ch <= 'Z') ch = static_cast<char>(ch - 'A' + 'a');
         if (ch == '/') ch = '\\';
     }
-    // Q7.8: the post-door scene swap already rebuilds this collision world
-    // from the exterior Q7.5 placement set. The old Q6 filter only admitted
-    // the player-house ShackInteriors models, silently discarding Bethesda's
-    // authored Megaton exterior Havok. Accept every Megaton architecture NIF;
-    // LAND remains the exterior terrain ground source via Q7.7.
+    return lower;
+}
+
+bool IsMegatonArchitecture(const std::string& path) {
+    const std::string lower = NormalizeModelPathQ78A(path);
+    // Q7.8 kept the existing renderer-side collision rebuild but widened its
+    // legacy house-only filter to Megaton architecture. Q7.8a goes further for
+    // exterior placement sets below; this function remains the conservative
+    // interior policy so the proven player-house path is not broadened again.
     return lower.find("architecture\\megaton") != std::string::npos;
+}
+
+bool IsExteriorMegatonPlacementSetQ78A(const std::vector<Fo3WorldPlacement>& placements) {
+    for (const Fo3WorldPlacement& placement : placements) {
+        const std::string lower = NormalizeModelPathQ78A(placement.modelPath);
+        const bool megatonArchitecture = lower.find("architecture\\megaton") != std::string::npos;
+        const bool houseKit = lower.find("architecture\\megaton\\interior\\shackinteriors") != std::string::npos;
+        if (megatonArchitecture && !houseKit) return true;
+    }
+    return false;
 }
 
 Vec3 RotateX(Vec3 v, float radians) {
@@ -464,25 +480,52 @@ bool InitializeFo3CollisionOverlay(const std::vector<Fo3WorldPlacement>& placeme
     if (placements.empty() || unitsPerMetre <= 0.0f) return false;
     gCollisionFloorY = floorY;
 
+    const bool exteriorAllBhksQ78A = IsExteriorMegatonPlacementSetQ78A(placements);
+    const size_t placementLimitQ78A = exteriorAllBhksQ78A
+        ? MAX_EXTERIOR_COLLISION_PLACEMENTS_Q78A
+        : MAX_COLLISION_PLACEMENTS;
+
     std::unordered_set<uint32_t> seenRefs;
     std::unordered_map<std::string, std::vector<Fo3NifCollisionShapeQ6F>> modelCache;
+    std::unordered_set<std::string> noCollisionModelsQ78A;
     std::vector<float> lines;
     lines.reserve(65536u);
-    gWorldTriangles.reserve(8192u);
+    gWorldTriangles.reserve(exteriorAllBhksQ78A ? 65536u : 8192u);
 
     size_t misses = 0;
     size_t cacheHits = 0;
+    size_t negativeCacheHitsQ78A = 0;
+    size_t pathFilteredQ78A = 0;
+    size_t bhkAttemptsQ78A = 0;
     bool capped = false;
 
     for (const Fo3WorldPlacement& placement : placements) {
-        if (gPlacementCount >= MAX_COLLISION_PLACEMENTS) break;
-        if (!IsMegatonArchitecture(placement.modelPath)) continue;
+        if (gPlacementCount >= placementLimitQ78A) {
+            capped = true;
+            break;
+        }
+        if (exteriorAllBhksQ78A &&
+            gWorldTriangles.size() >= MAX_EXTERIOR_COLLISION_TRIANGLES_Q78A) {
+            capped = true;
+            break;
+        }
+        if (!exteriorAllBhksQ78A && !IsMegatonArchitecture(placement.modelPath)) {
+            ++pathFilteredQ78A;
+            continue;
+        }
         if (!seenRefs.insert(placement.refFormId).second) continue;
+        ++bhkAttemptsQ78A;
+
+        if (noCollisionModelsQ78A.find(placement.modelPath) != noCollisionModelsQ78A.end()) {
+            ++negativeCacheHitsQ78A;
+            continue;
+        }
 
         auto cached = modelCache.find(placement.modelPath);
         if (cached == modelCache.end()) {
             std::vector<Fo3NifCollisionShapeQ6F> shapes;
-            if (!LoadFo3NifCollisionShapesQ6F(placement.modelPath, shapes)) {
+            if (!LoadFo3NifCollisionShapesQ6F(placement.modelPath, shapes) || shapes.empty()) {
+                noCollisionModelsQ78A.insert(placement.modelPath);
                 ++misses;
                 continue;
             }
@@ -500,6 +543,11 @@ bool InitializeFo3CollisionOverlay(const std::vector<Fo3WorldPlacement>& placeme
             if (vertexCount == 0u || shape.indices.empty()) continue;
 
             for (size_t i = 0; i + 2u < shape.indices.size(); i += 3u) {
+                if (exteriorAllBhksQ78A &&
+                    gWorldTriangles.size() >= MAX_EXTERIOR_COLLISION_TRIANGLES_Q78A) {
+                    capped = true;
+                    break;
+                }
                 const uint32_t ia = shape.indices[i];
                 const uint32_t ib = shape.indices[i + 1u];
                 const uint32_t ic = shape.indices[i + 2u];
@@ -544,14 +592,25 @@ bool InitializeFo3CollisionOverlay(const std::vector<Fo3WorldPlacement>& placeme
             gCollisionShapeCount += placementShapes;
             gTriangleCount += placementTriangles;
             for (size_t i = 0; i < gKindCounts.size(); ++i) gKindCounts[i] += placementKinds[i];
-            Q6F_LOGI("Q6F COLLISION OBJECT: ref=%08X EDID=%s model=%s shapes=%zu triangles=%zu packed=%zu convex=%zu box=%zu sphere=%zu capsule=%zu",
-                     placement.refFormId,
-                     placement.editorId.empty() ? "<none>" : placement.editorId.c_str(),
-                     placement.modelPath.c_str(), placementShapes, placementTriangles,
-                     placementKinds[0], placementKinds[1], placementKinds[2], placementKinds[3], placementKinds[4]);
+            if (gPlacementCount <= 80u) {
+                Q6F_LOGI("Q6F COLLISION OBJECT: ref=%08X EDID=%s model=%s shapes=%zu triangles=%zu packed=%zu convex=%zu box=%zu sphere=%zu capsule=%zu",
+                         placement.refFormId,
+                         placement.editorId.empty() ? "<none>" : placement.editorId.c_str(),
+                         placement.modelPath.c_str(), placementShapes, placementTriangles,
+                         placementKinds[0], placementKinds[1], placementKinds[2], placementKinds[3], placementKinds[4]);
+            }
         }
         if (capped) break;
     }
+
+    Q6G_LOGI("Q7.8A COLLISION COVERAGE: exterior=%d policy=%s inputPlacements=%zu bhkAttempts=%zu successfulPlacements=%zu triangles=%zu uniqueCollisionModels=%zu noCollisionModels=%zu cacheHits=%zu negativeCacheHits=%zu pathFiltered=%zu placementLimit=%zu triangleLimit=%zu capped=%d",
+             exteriorAllBhksQ78A ? 1 : 0,
+             exteriorAllBhksQ78A ? "all-authored-bhk" : "megaton-architecture-only",
+             placements.size(), bhkAttemptsQ78A, gPlacementCount, gWorldTriangles.size(),
+             modelCache.size(), noCollisionModelsQ78A.size(), cacheHits,
+             negativeCacheHitsQ78A, pathFilteredQ78A, placementLimitQ78A,
+             exteriorAllBhksQ78A ? MAX_EXTERIOR_COLLISION_TRIANGLES_Q78A : 0u,
+             capped ? 1 : 0);
 
     if (gWorldTriangles.empty()) {
         Q6F_LOGW("Q6F COLLISION READY FAILED: placements=0 misses=%zu uniqueModels=%zu",
