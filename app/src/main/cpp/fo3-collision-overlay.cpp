@@ -29,6 +29,10 @@ constexpr float PLAYER_RADIUS = 0.26f;
 constexpr float PLAYER_HEIGHT = 1.70f;
 constexpr float PLAYER_SKIN = 0.003f;
 constexpr float MAX_STEP_UP = 0.32f;
+constexpr float EXTERIOR_MAX_STEP_UP_Q78B = 0.42f;
+constexpr float STEP_MIN_RISE_Q78B = 0.015f;
+constexpr float SPAWN_AUTHORED_BELOW_Q78B = 0.80f;
+constexpr float SPAWN_AUTHORED_ABOVE_Q78B = 0.80f;
 constexpr float MAX_GROUND_DROP = 0.80f;
 constexpr float SAFE_SPAWN_VERTICAL_SEARCH = 8.0f;
 constexpr int MAX_DEPENETRATION_PASSES = 6;
@@ -77,9 +81,11 @@ std::vector<CollisionTriangle> gWorldTriangles;
 float gCollisionFloorY = -1.55f;
 bool gPlayerCollisionReady = false;
 bool gSafeSpawnResolved = false;
+bool gExteriorAllBhksQ78A = false;
 uint64_t gResolveCounter = 0;
 uint64_t gContactLogCount = 0;
 uint64_t gTerrainGroundLogCountQ77 = 0;
+uint64_t gStepUpLogCountQ78B = 0;
 
 std::string NormalizeModelPathQ78A(const std::string& path) {
     std::string lower = path;
@@ -92,10 +98,6 @@ std::string NormalizeModelPathQ78A(const std::string& path) {
 
 bool IsMegatonArchitecture(const std::string& path) {
     const std::string lower = NormalizeModelPathQ78A(path);
-    // Q7.8 kept the existing renderer-side collision rebuild but widened its
-    // legacy house-only filter to Megaton architecture. Q7.8a goes further for
-    // exterior placement sets below; this function remains the conservative
-    // interior policy so the proven player-house path is not broadened again.
     return lower.find("architecture\\megaton") != std::string::npos;
 }
 
@@ -107,6 +109,10 @@ bool IsExteriorMegatonPlacementSetQ78A(const std::vector<Fo3WorldPlacement>& pla
         if (megatonArchitecture && !houseKit) return true;
     }
     return false;
+}
+
+float StepHeightQ78B() {
+    return gExteriorAllBhksQ78A ? EXTERIOR_MAX_STEP_UP_Q78B : MAX_STEP_UP;
 }
 
 Vec3 RotateX(Vec3 v, float radians) {
@@ -230,6 +236,7 @@ Vec2 ClosestPointTriangleXZ(const CollisionTriangle& tri, Vec2 p, bool& inside) 
 bool FindGround(float x, float z, float feetY, float& groundY) {
     bool found = false;
     float best = -1e30f;
+    const float maxStepUp = StepHeightQ78B();
     for (const CollisionTriangle& tri : gWorldTriangles) {
         if (std::fabs(tri.normal.y) < 0.55f) continue;
         if (x < tri.minX - 0.02f || x > tri.maxX + 0.02f ||
@@ -238,7 +245,7 @@ bool FindGround(float x, float z, float feetY, float& groundY) {
         float u = 0.0f, v = 0.0f, w = 0.0f;
         if (!BarycentricXZ(tri, x, z, u, v, w)) continue;
         const float y = tri.a.y*u + tri.b.y*v + tri.c.y*w;
-        if (y > feetY + MAX_STEP_UP || y < feetY - MAX_GROUND_DROP) continue;
+        if (y > feetY + maxStepUp || y < feetY - MAX_GROUND_DROP) continue;
         if (y > best) {
             best = y;
             found = true;
@@ -272,15 +279,38 @@ bool FindGroundWide(float x, float z, float referenceY, float& groundY) {
     return found;
 }
 
+bool FindAuthoredSpawnGroundQ78B(float x, float z, float referenceY, float& groundY) {
+    bool found = false;
+    float highest = -1e30f;
+    for (const CollisionTriangle& tri : gWorldTriangles) {
+        if (std::fabs(tri.normal.y) < 0.55f) continue;
+        if (x < tri.minX - 0.02f || x > tri.maxX + 0.02f ||
+            z < tri.minZ - 0.02f || z > tri.maxZ + 0.02f) continue;
+        float u = 0.0f, v = 0.0f, w = 0.0f;
+        if (!BarycentricXZ(tri, x, z, u, v, w)) continue;
+        const float y = tri.a.y*u + tri.b.y*v + tri.c.y*w;
+        if (y < referenceY - SPAWN_AUTHORED_BELOW_Q78B ||
+            y > referenceY + SPAWN_AUTHORED_ABOVE_Q78B) continue;
+        if (!found || y > highest) {
+            highest = y;
+            found = true;
+        }
+    }
+    if (found) groundY = highest;
+    return found;
+}
+
 uint32_t ResolveWallPenetrations(float& x, float& z, float feetY) {
     uint32_t contacts = 0;
     const float topY = feetY + PLAYER_HEIGHT;
     const float radius2 = PLAYER_RADIUS * PLAYER_RADIUS;
+    const float stepHeight = StepHeightQ78B();
 
     for (int pass = 0; pass < MAX_DEPENETRATION_PASSES; ++pass) {
         bool changed = false;
         for (const CollisionTriangle& tri : gWorldTriangles) {
             if (std::fabs(tri.normal.y) >= 0.75f) continue;
+            if (gExteriorAllBhksQ78A && tri.maxY <= feetY + stepHeight + PLAYER_SKIN) continue;
             if (tri.maxY < feetY + 0.04f || tri.minY > topY) continue;
             if (x < tri.minX - PLAYER_RADIUS || x > tri.maxX + PLAYER_RADIUS ||
                 z < tri.minZ - PLAYER_RADIUS || z > tri.maxZ + PLAYER_RADIUS) continue;
@@ -481,6 +511,7 @@ bool InitializeFo3CollisionOverlay(const std::vector<Fo3WorldPlacement>& placeme
     gCollisionFloorY = floorY;
 
     const bool exteriorAllBhksQ78A = IsExteriorMegatonPlacementSetQ78A(placements);
+    gExteriorAllBhksQ78A = exteriorAllBhksQ78A;
     const size_t placementLimitQ78A = exteriorAllBhksQ78A
         ? MAX_EXTERIOR_COLLISION_PLACEMENTS_Q78A
         : MAX_COLLISION_PLACEMENTS;
@@ -623,9 +654,10 @@ bool InitializeFo3CollisionOverlay(const std::vector<Fo3WorldPlacement>& placeme
              gPlacementCount, gCollisionShapeCount, gTriangleCount,
              modelCache.size(), cacheHits, misses,
              gKindCounts[0], gKindCounts[1], gKindCounts[2], gKindCounts[3], gKindCounts[4], capped ? 1 : 0);
-    Q6G_LOGI("Q6G PHYSICS READY: authoredTriangles=%zu capsuleRadius=%.2f capsuleHeight=%.2f floorReference=%.2f debugOverlay=%d",
+    Q6G_LOGI("Q7.8B PHYSICS READY: authoredTriangles=%zu capsuleRadius=%.2f capsuleHeight=%.2f interiorStep=%.2f exteriorStep=%.2f exterior=%d bhkFirstSpawn=1 lowEdgeStep=1",
              gWorldTriangles.size(), PLAYER_RADIUS, PLAYER_HEIGHT,
-             gCollisionFloorY, SHOW_COLLISION_DEBUG_Q6G ? 1 : 0);
+             MAX_STEP_UP, EXTERIOR_MAX_STEP_UP_Q78B,
+             gExteriorAllBhksQ78A ? 1 : 0);
 
     if (!SHOW_COLLISION_DEBUG_Q6G) return true;
 
@@ -664,18 +696,30 @@ bool ResolveFo3PlayerMotionQ6G(float currentX, float currentZ,
     ++gResolveCounter;
 
     if (!gSafeSpawnResolved) {
-        // Q7.7: after an exterior XTEL transition, LAND is already decoded and
-        // aligned to the same origin as the visible worldspace. Resolve the
-        // first grounded frame at the authored X/Z instead of searching nearby
-        // Havok floors. In interiors the sampler is inactive and this block is
-        // a strict no-op, preserving the proven Q7.5/Q6K spawn path.
+        if (gExteriorAllBhksQ78A) {
+            const float referenceFeetY = gCollisionFloorY + currentPlayerYOffset;
+            float authoredSpawnGroundY = referenceFeetY;
+            if (FindAuthoredSpawnGroundQ78B(currentX, currentZ,
+                                            referenceFeetY, authoredSpawnGroundY) &&
+                !HasOverheadBlock(currentX, currentZ, authoredSpawnGroundY)) {
+                *outX = currentX;
+                *outZ = currentZ;
+                *outPlayerYOffset = authoredSpawnGroundY - gCollisionFloorY;
+                gSafeSpawnResolved = true;
+                Q6I_LOGI("Q7.8B XTEL AUTHORED SPAWN: seed=(%.3f %.3f) referenceY=%.3f groundY=%.3f playerY=%.3f source=bhk LANDfallback=0",
+                         currentX, currentZ, referenceFeetY, authoredSpawnGroundY,
+                         *outPlayerYOffset);
+                return true;
+            }
+        }
+
         float terrainSpawnY = currentPlayerYOffset;
         if (SampleFo3TerrainGroundQ77(currentX, currentZ, &terrainSpawnY)) {
             *outX = currentX;
             *outZ = currentZ;
             *outPlayerYOffset = terrainSpawnY;
             gSafeSpawnResolved = true;
-            Q6I_LOGI("Q7.7 LAND SAFE SPAWN: seed=(%.3f %.3f) resolvedSameXZ=1 playerY=%.3f source=VHGT",
+            Q6I_LOGI("Q7.8B XTEL LAND FALLBACK: seed=(%.3f %.3f) playerY=%.3f source=VHGT authoredNearMarker=0",
                      currentX, currentZ, terrainSpawnY);
             return true;
         }
@@ -705,9 +749,6 @@ bool ResolveFo3PlayerMotionQ6G(float currentX, float currentZ,
             return true;
         }
 
-        // Never mark an ungrounded spawn as resolved. Keep trying on subsequent
-        // frames rather than accepting the Q6H behaviour that left the headset
-        // poking through the floor.
         *outX = currentX;
         *outZ = currentZ;
         *outPlayerYOffset = currentPlayerYOffset;
@@ -718,6 +759,16 @@ bool ResolveFo3PlayerMotionQ6G(float currentX, float currentZ,
     float x = currentX;
     float z = currentZ;
     float feetY = gCollisionFloorY + currentPlayerYOffset;
+
+    if (gExteriorAllBhksQ78A) {
+        float currentGroundY = feetY;
+        if (FindGround(x, z, feetY, currentGroundY) &&
+            currentGroundY > feetY + STEP_MIN_RISE_Q78B &&
+            !HasOverheadBlock(x, z, currentGroundY)) {
+            feetY = currentGroundY;
+        }
+    }
+
     uint32_t contacts = ResolveWallPenetrations(x, z, feetY);
 
     const float dx = desiredX - currentX;
@@ -741,6 +792,22 @@ bool ResolveFo3PlayerMotionQ6G(float currentX, float currentZ,
             targetX += x - requestedPrevX;
             targetZ += z - requestedPrevZ;
         }
+
+        if (gExteriorAllBhksQ78A) {
+            float stepGroundY = feetY;
+            if (FindGround(targetX, targetZ, feetY, stepGroundY) &&
+                stepGroundY > feetY + STEP_MIN_RISE_Q78B &&
+                !HasOverheadBlock(targetX, targetZ, stepGroundY)) {
+                const float rise = stepGroundY - feetY;
+                feetY = stepGroundY;
+                if (gStepUpLogCountQ78B < 16u || (gResolveCounter % 360u) == 0u) {
+                    ++gStepUpLogCountQ78B;
+                    Q6G_LOGI("Q7.8B STEP UP: target=(%.3f %.3f) rise=%.3f feetY=%.3f maxStep=%.3f",
+                             targetX, targetZ, rise, feetY, StepHeightQ78B());
+                }
+            }
+        }
+
         x = targetX;
         z = targetZ;
         contacts += ResolveWallPenetrations(x, z, feetY);
@@ -750,10 +817,6 @@ bool ResolveFo3PlayerMotionQ6G(float currentX, float currentZ,
     bool grounded = FindGround(x, z, feetY, groundY);
     const bool authoredGrounded = grounded;
 
-    // Q7.7 merge rule: authored Havok remains authoritative for stairs,
-    // platforms and structural floors. LAND fills the gaps where exterior
-    // worldspace ground has no bhk triangle; if terrain is physically above an
-    // authored candidate, prefer the higher surface to avoid sinking through it.
     float terrainPlayerY = currentPlayerYOffset;
     bool terrainGrounded = SampleFo3TerrainGroundQ77(x, z, &terrainPlayerY);
     if (terrainGrounded) {
@@ -769,7 +832,7 @@ bool ResolveFo3PlayerMotionQ6G(float currentX, float currentZ,
         }
     }
 
-    float playerYOffset = currentPlayerYOffset;
+    float playerYOffset = feetY - gCollisionFloorY;
     if (grounded) playerYOffset = groundY - gCollisionFloorY;
 
     *outX = x;
@@ -838,7 +901,9 @@ void ShutdownFo3CollisionOverlay() {
     gWorldTriangles.clear();
     gPlayerCollisionReady = false;
     gSafeSpawnResolved = false;
+    gExteriorAllBhksQ78A = false;
     gResolveCounter = 0;
     gContactLogCount = 0;
     gTerrainGroundLogCountQ77 = 0;
+    gStepUpLogCountQ78B = 0;
 }
