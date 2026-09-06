@@ -6,9 +6,11 @@
 #include <android/log.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -18,9 +20,9 @@ constexpr const char* Q6A_TAG = "FalloutQuest";
 constexpr float FO3_UNITS_PER_METRE = 70.0f;
 constexpr float FLOOR_Y = -1.55f;
 constexpr float SCENE_FORWARD = -3.20f;
-constexpr size_t MAX_SCENE_OBJECTS = 8u;
-constexpr size_t MAX_MODEL_ATTEMPTS = 48u;
-constexpr float MAX_MODEL_EXTENT_UNITS = 500.0f;
+constexpr size_t MAX_SCENE_OBJECTS = 72u;
+constexpr size_t MAX_MODEL_ATTEMPTS = 800u;
+constexpr float MAX_MODEL_EXTENT_UNITS = 3000.0f;
 
 #define Q6A_LOGI(...) __android_log_print(ANDROID_LOG_INFO, Q6A_TAG, __VA_ARGS__)
 #define Q6A_LOGW(...) __android_log_print(ANDROID_LOG_WARN, Q6A_TAG, __VA_ARGS__)
@@ -57,8 +59,6 @@ Vec3 RotateZ(Vec3 v, float radians) {
 }
 
 Vec3 ApplyEsmRotation(Vec3 v, const Fo3WorldPlacement& p) {
-    // TES/Fallout REFR DATA stores XYZ Euler angles in radians. Apply local X,
-    // then Y, then Z to produce the placed model orientation.
     v = RotateX(v, p.rx);
     v = RotateY(v, p.ry);
     v = RotateZ(v, p.rz);
@@ -93,6 +93,11 @@ struct GpuObject {
     std::string modelPath;
 };
 
+struct CachedGpuTexture {
+    GLuint id = 0;
+    bool real = false;
+};
+
 GLuint gProgram = 0;
 GLint gMvpLocation = -1;
 GLint gDiffuseLocation = -1;
@@ -100,11 +105,22 @@ GLint gNormalLocation = -1;
 GLint gGlossinessLocation = -1;
 GLint gNormalStrengthLocation = -1;
 std::vector<GpuObject> gObjects;
+std::unordered_map<std::string, CachedGpuTexture> gTextureCache;
 GLuint gDepthRenderbuffer = 0;
 GLsizei gDepthWidth = 0;
 GLsizei gDepthHeight = 0;
 bool gSceneReady = false;
 bool gLoggedFirstDraw = false;
+
+std::string TextureCacheKey(const std::string& path, const char* label) {
+    if (path.empty()) return std::string("<fallback>:") + label;
+    std::string key = path;
+    for (char& ch : key) {
+        if (ch == '/') ch = '\\';
+        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    }
+    return key;
+}
 
 GLuint CompileShader(GLenum type, const char* source) {
     GLuint shader = glCreateShader(type);
@@ -212,6 +228,16 @@ bool UploadTexture(const std::string& path,
                    const std::vector<uint8_t>& fallback,
                    GLuint& textureId, bool& real, const char* label,
                    uint32_t refFormId) {
+    const std::string cacheKey = TextureCacheKey(path, label);
+    const auto cached = gTextureCache.find(cacheKey);
+    if (cached != gTextureCache.end()) {
+        textureId = cached->second.id;
+        real = cached->second.real;
+        Q6A_LOGI("Q6A GPU %s CACHE HIT: ref=%08X key=%s real=%d",
+                 label, refFormId, cacheKey.c_str(), real ? 1 : 0);
+        return true;
+    }
+
     Fo3RgbaTexture texture;
     real = !path.empty() && LoadFalloutTextureRgba(path, texture);
     if (!real) {
@@ -234,10 +260,16 @@ bool UploadTexture(const std::string& path,
     glGenerateMipmap(GL_TEXTURE_2D);
     glBindTexture(GL_TEXTURE_2D, 0);
 
-    if (glGetError() != GL_NO_ERROR) return false;
-    Q6A_LOGI("Q6A GPU %s: ref=%08X source=%s %dx%d format=%s",
+    if (glGetError() != GL_NO_ERROR) {
+        if (textureId) glDeleteTextures(1, &textureId);
+        textureId = 0;
+        return false;
+    }
+
+    gTextureCache.emplace(cacheKey, CachedGpuTexture{textureId, real});
+    Q6A_LOGI("Q6A GPU %s CACHE MISS: ref=%08X source=%s %dx%d format=%s uniqueTextures=%zu",
              label, refFormId, real ? texture.sourcePath.c_str() : "<fallback>",
-             texture.width, texture.height, texture.format.c_str());
+             texture.width, texture.height, texture.format.c_str(), gTextureCache.size());
     return true;
 }
 
@@ -480,8 +512,8 @@ bool InitializeScene() {
             if (object.realNormal) ++realNormal;
             triangles += static_cast<size_t>(object.vertexCount / 3);
         }
-        Q6A_LOGI("Q6A READY: ESM->REFR->BASE->MODL->BSA->NIF objects=%zu triangles=%zu realDiffuse=%zu realNormal=%zu cell=MegatonPlayerHouse",
-                 gObjects.size(), triangles, realDiffuse, realNormal);
+        Q6A_LOGI("Q6A READY: ESM->REFR->BASE->MODL->BSA->NIF objects=%zu triangles=%zu realDiffuse=%zu realNormal=%zu uniqueTextures=%zu cell=MegatonPlayerHouse",
+                 gObjects.size(), triangles, realDiffuse, realNormal, gTextureCache.size());
     } else {
         Q6A_LOGE("Q6A FAILED: GPU scene objects=%zu", gObjects.size());
     }
@@ -549,10 +581,13 @@ void Q6ADeleteFramebuffers(GLsizei n, const GLuint* framebuffers) {
     for (GpuObject& object : gObjects) {
         if (object.vbo) glDeleteBuffers(1, &object.vbo);
         if (object.vao) glDeleteVertexArrays(1, &object.vao);
-        if (object.diffuse) glDeleteTextures(1, &object.diffuse);
-        if (object.normal) glDeleteTextures(1, &object.normal);
     }
     gObjects.clear();
+    for (const auto& entry : gTextureCache) {
+        const GLuint id = entry.second.id;
+        if (id) glDeleteTextures(1, &id);
+    }
+    gTextureCache.clear();
     if (gProgram) glDeleteProgram(gProgram);
     if (gDepthRenderbuffer) glDeleteRenderbuffers(1, &gDepthRenderbuffer);
     gProgram = 0;
