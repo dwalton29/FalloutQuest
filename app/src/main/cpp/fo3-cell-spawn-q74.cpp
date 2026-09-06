@@ -23,7 +23,7 @@
 
 // Q7.6 reuses Q7.5's already-proven ESM/group helpers in this same translation
 // unit and decodes the selected exterior CELL LAND/VHGT records.
-#include "fo3-land-q76.cpp"
+#include "fo3-terrain-data-q76.cpp"
 
 namespace {
 
