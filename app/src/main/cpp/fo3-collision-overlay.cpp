@@ -684,6 +684,7 @@ bool ResolveFo3PlayerMotionQ6G(float currentX, float currentZ,
 
     float groundY = feetY;
     bool grounded = FindGround(x, z, feetY, groundY);
+    const bool authoredGrounded = grounded;
 
     // Q7.7 merge rule: authored Havok remains authoritative for stairs,
     // platforms and structural floors. LAND fills the gaps where exterior
@@ -700,8 +701,7 @@ bool ResolveFo3PlayerMotionQ6G(float currentX, float currentZ,
         if (gTerrainGroundLogCountQ77 < 12u || (gResolveCounter % 360u) == 0u) {
             ++gTerrainGroundLogCountQ77;
             Q6G_LOGI("Q7.7 LAND GROUND: pos=(%.3f %.3f) terrainY=%.3f selectedGroundY=%.3f authoredGround=%d",
-                     x, z, terrainGroundY, groundY,
-                     FindGround(x, z, feetY, terrainGroundY) ? 1 : 0);
+                     x, z, terrainGroundY, groundY, authoredGrounded ? 1 : 0);
         }
     }
 
