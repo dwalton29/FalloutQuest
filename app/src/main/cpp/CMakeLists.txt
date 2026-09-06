@@ -3,8 +3,35 @@ project(falloutquest LANGUAGES C CXX)
 
 find_package(OpenXR REQUIRED CONFIG)
 
+# q6a-native.cpp includes the proven Q4 renderer as its OpenXR host. Both files
+# originally used two generic helper names in anonymous namespaces. Generate the
+# Q6A translation unit with only its two helpers renamed, leaving the checked-in
+# Q6A source and the known-good Q4 renderer otherwise byte-for-byte untouched.
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/q6a-native.cpp" Q6A_NATIVE_SOURCE)
+string(REPLACE
+    "GLuint CompileShader(GLenum type, const char* source)"
+    "GLuint CompileQ6AShader(GLenum type, const char* source)"
+    Q6A_NATIVE_SOURCE "${Q6A_NATIVE_SOURCE}")
+string(REPLACE
+    "GLuint vs = CompileShader(GL_VERTEX_SHADER, vertexSource);"
+    "GLuint vs = CompileQ6AShader(GL_VERTEX_SHADER, vertexSource);"
+    Q6A_NATIVE_SOURCE "${Q6A_NATIVE_SOURCE}")
+string(REPLACE
+    "GLuint fs = CompileShader(GL_FRAGMENT_SHADER, fragmentSource);"
+    "GLuint fs = CompileQ6AShader(GL_FRAGMENT_SHADER, fragmentSource);"
+    Q6A_NATIVE_SOURCE "${Q6A_NATIVE_SOURCE}")
+string(REPLACE
+    "GLuint CreateProgram()"
+    "GLuint CreateQ6AProgram()"
+    Q6A_NATIVE_SOURCE "${Q6A_NATIVE_SOURCE}")
+string(REPLACE
+    "gProgram = CreateProgram();"
+    "gProgram = CreateQ6AProgram();"
+    Q6A_NATIVE_SOURCE "${Q6A_NATIVE_SOURCE}")
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/q6a-native-fixed.cpp" "${Q6A_NATIVE_SOURCE}")
+
 add_library(falloutquest SHARED
-    q6a-native.cpp
+    ${CMAKE_CURRENT_BINARY_DIR}/q6a-native-fixed.cpp
     fo3-megaton-scene.cpp
     fo3-static-nif.cpp
     fo3-bsa-reader.cpp
