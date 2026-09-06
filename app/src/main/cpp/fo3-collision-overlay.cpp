@@ -1,5 +1,6 @@
 #include "fo3-collision-overlay.h"
 #include "fo3-nif-collision-q6f.h"
+#include "fo3-nif-metadata-q714.h"
 #include "fo3-terrain-q76.h"
 
 #include <GLES3/gl3.h>
@@ -33,6 +34,8 @@ constexpr float EXTERIOR_MAX_STEP_UP_Q78B = 0.30f;
 constexpr float STEP_MIN_RISE_Q78B = 0.015f;
 constexpr float EXTERIOR_CONTACT_SLOP_Q712 = 0.015f;
 constexpr float EXTERIOR_WALKABLE_NORMAL_Y_Q713 = 0.70f;
+constexpr float EXTERIOR_STAIRS_NORMAL_Y_Q714 = 0.55f;
+constexpr size_t EXTERIOR_MAX_MANIFOLD_CONTACTS_Q714 = 3u;
 constexpr float SPAWN_AUTHORED_BELOW_Q78B = 0.80f;
 constexpr float SPAWN_AUTHORED_ABOVE_Q78B = 0.80f;
 constexpr float MAX_GROUND_DROP = 0.80f;
@@ -66,6 +69,22 @@ struct CollisionTriangle {
     float minX = 0.0f, maxX = 0.0f;
     float minY = 0.0f, maxY = 0.0f;
     float minZ = 0.0f, maxZ = 0.0f;
+
+    // Q7.14: preserve the authored packed-Havok identity instead of flattening
+    // every triangle into one anonymous soup. Triangles from the same packed
+    // subshape share a surface key and therefore contribute one manifold contact.
+    uint64_t surfaceKeyQ714 = 0u;
+    uint8_t havokLayerQ714 = 0u;
+    uint32_t havokMaterialQ714 = 0u;
+    bool stairsQ714 = false;
+    bool platformQ714 = false;
+};
+
+struct WallContactQ714 {
+    uint64_t surfaceKey = 0u;
+    float nx = 0.0f;
+    float nz = 0.0f;
+    float push = 0.0f;
 };
 
 GLuint gProgram = 0;
@@ -88,6 +107,7 @@ uint64_t gResolveCounter = 0;
 uint64_t gContactLogCount = 0;
 uint64_t gTerrainGroundLogCountQ77 = 0;
 uint64_t gStepUpLogCountQ78B = 0;
+uint64_t gManifoldLogCountQ714 = 0;
 
 std::string NormalizeModelPathQ78A(const std::string& path) {
     std::string lower = path;
@@ -121,13 +141,33 @@ float GroundNormalThresholdQ713() {
     return gExteriorAllBhksQ78A ? EXTERIOR_WALKABLE_NORMAL_Y_Q713 : 0.55f;
 }
 
+float WalkableNormalThresholdQ714(const CollisionTriangle& tri) {
+    if (gExteriorAllBhksQ78A && tri.stairsQ714) {
+        return std::min(GroundNormalThresholdQ713(), EXTERIOR_STAIRS_NORMAL_Y_Q714);
+    }
+    return GroundNormalThresholdQ713();
+}
+
 float CollisionRadiusQ712() {
-    // A tiny exterior-only tolerance keeps the capsule from being continually
-    // depenetrated by millimetre-scale seams/trim while preserving the full
-    // authored wall topology. Interior Q6G remains byte-for-byte radius-wise.
     return gExteriorAllBhksQ78A
         ? std::max(0.05f, PLAYER_RADIUS - EXTERIOR_CONTACT_SLOP_Q712)
         : PLAYER_RADIUS;
+}
+
+uint64_t MakeSurfaceKeyQ714(uint32_t placementRef, uint32_t shapeBlock, uint16_t subShape) {
+    // FNV-1a style combine; deterministic and sufficiently collision-resistant for
+    // the few thousand collision surfaces present in one loaded scene.
+    uint64_t key = 1469598103934665603ull;
+    auto mix = [&](uint64_t value) {
+        for (int i = 0; i < 8; ++i) {
+            key ^= (value >> (i * 8)) & 0xffu;
+            key *= 1099511628211ull;
+        }
+    };
+    mix(placementRef);
+    mix(shapeBlock);
+    mix(subShape);
+    return key;
 }
 
 Vec3 RotateX(Vec3 v, float radians) {
@@ -253,9 +293,8 @@ bool FindGround(float x, float z, float feetY, float& groundY) {
     float best = -1e30f;
     float bestDistance = std::numeric_limits<float>::max();
     const float maxStepUp = StepHeightQ78B();
-    const float walkableNormalY = GroundNormalThresholdQ713();
     for (const CollisionTriangle& tri : gWorldTriangles) {
-        if (std::fabs(tri.normal.y) < walkableNormalY) continue;
+        if (std::fabs(tri.normal.y) < WalkableNormalThresholdQ714(tri)) continue;
         if (x < tri.minX - 0.02f || x > tri.maxX + 0.02f ||
             z < tri.minZ - 0.02f || z > tri.maxZ + 0.02f) continue;
 
@@ -285,9 +324,8 @@ bool FindStepGroundQ713(float x, float z, float feetY, float& groundY) {
     bool found = false;
     float lowest = std::numeric_limits<float>::max();
     const float maxStepUp = StepHeightQ78B();
-    const float walkableNormalY = GroundNormalThresholdQ713();
     for (const CollisionTriangle& tri : gWorldTriangles) {
-        if (std::fabs(tri.normal.y) < walkableNormalY) continue;
+        if (std::fabs(tri.normal.y) < WalkableNormalThresholdQ714(tri)) continue;
         if (x < tri.minX - 0.02f || x > tri.maxX + 0.02f ||
             z < tri.minZ - 0.02f || z > tri.maxZ + 0.02f) continue;
 
@@ -309,9 +347,8 @@ bool FindGroundWide(float x, float z, float referenceY, float& groundY) {
     bool found = false;
     float bestDistance = std::numeric_limits<float>::max();
     float bestY = referenceY;
-    const float walkableNormalY = GroundNormalThresholdQ713();
     for (const CollisionTriangle& tri : gWorldTriangles) {
-        if (std::fabs(tri.normal.y) < walkableNormalY) continue;
+        if (std::fabs(tri.normal.y) < WalkableNormalThresholdQ714(tri)) continue;
         if (x < tri.minX - 0.02f || x > tri.maxX + 0.02f ||
             z < tri.minZ - 0.02f || z > tri.maxZ + 0.02f) continue;
 
@@ -333,9 +370,8 @@ bool FindGroundWide(float x, float z, float referenceY, float& groundY) {
 bool FindAuthoredSpawnGroundQ78B(float x, float z, float referenceY, float& groundY) {
     bool found = false;
     float highest = -1e30f;
-    const float walkableNormalY = GroundNormalThresholdQ713();
     for (const CollisionTriangle& tri : gWorldTriangles) {
-        if (std::fabs(tri.normal.y) < walkableNormalY) continue;
+        if (std::fabs(tri.normal.y) < WalkableNormalThresholdQ714(tri)) continue;
         if (x < tri.minX - 0.02f || x > tri.maxX + 0.02f ||
             z < tri.minZ - 0.02f || z > tri.maxZ + 0.02f) continue;
         float u = 0.0f, v = 0.0f, w = 0.0f;
@@ -352,57 +388,114 @@ bool FindAuthoredSpawnGroundQ78B(float x, float z, float referenceY, float& grou
     return found;
 }
 
-uint32_t ResolveWallPenetrations(float& x, float& z, float feetY) {
-    uint32_t contacts = 0;
+bool ComputeWallContactQ714(const CollisionTriangle& tri, float x, float z,
+                            float feetY, float collisionRadius,
+                            WallContactQ714& out) {
     const float topY = feetY + PLAYER_HEIGHT;
-    const float collisionRadius = CollisionRadiusQ712();
-    const float radius2 = collisionRadius * collisionRadius;
     const float stepHeight = StepHeightQ78B();
+    const float radius2 = collisionRadius * collisionRadius;
 
-    for (int pass = 0; pass < MAX_DEPENETRATION_PASSES; ++pass) {
-        bool changed = false;
-        for (const CollisionTriangle& tri : gWorldTriangles) {
-            if (std::fabs(tri.normal.y) >= 0.75f) continue;
-            if (gExteriorAllBhksQ78A && tri.maxY <= feetY + stepHeight + PLAYER_SKIN) continue;
-            if (tri.maxY < feetY + 0.04f || tri.minY > topY) continue;
-            if (x < tri.minX - collisionRadius || x > tri.maxX + collisionRadius ||
-                z < tri.minZ - collisionRadius || z > tri.maxZ + collisionRadius) continue;
+    if (std::fabs(tri.normal.y) >= 0.75f) return false;
+    if (gExteriorAllBhksQ78A && tri.maxY <= feetY + stepHeight + PLAYER_SKIN) return false;
+    if (tri.maxY < feetY + 0.04f || tri.minY > topY) return false;
+    if (x < tri.minX - collisionRadius || x > tri.maxX + collisionRadius ||
+        z < tri.minZ - collisionRadius || z > tri.maxZ + collisionRadius) return false;
 
-            const Vec2 p{x, z};
-            bool inside = false;
-            const Vec2 q = ClosestPointTriangleXZ(tri, p, inside);
-            float dx = x - q.x;
-            float dz = z - q.y;
-            float d2 = dx*dx + dz*dz;
-            if (d2 >= radius2) continue;
+    const Vec2 p{x, z};
+    bool inside = false;
+    const Vec2 q = ClosestPointTriangleXZ(tri, p, inside);
+    float dx = x - q.x;
+    float dz = z - q.y;
+    const float d2 = dx*dx + dz*dz;
+    if (d2 >= radius2) return false;
 
-            float distance = std::sqrt(std::max(d2, 0.0f));
-            if (distance > 1e-5f) {
-                dx /= distance;
-                dz /= distance;
-            } else {
-                dx = tri.normal.x;
-                dz = tri.normal.z;
-                float horizontalLength = std::sqrt(dx*dx + dz*dz);
-                if (horizontalLength < 1e-5f) continue;
-                dx /= horizontalLength;
-                dz /= horizontalLength;
-                const float centroidX = (tri.a.x + tri.b.x + tri.c.x) / 3.0f;
-                const float centroidZ = (tri.a.z + tri.b.z + tri.c.z) / 3.0f;
-                if (dx*(x-centroidX) + dz*(z-centroidZ) < 0.0f) {
-                    dx = -dx;
-                    dz = -dz;
-                }
-                distance = 0.0f;
-            }
-
-            const float push = (collisionRadius - distance) + PLAYER_SKIN;
-            x += dx * push;
-            z += dz * push;
-            ++contacts;
-            changed = true;
+    float distance = std::sqrt(std::max(d2, 0.0f));
+    if (distance > 1e-5f) {
+        dx /= distance;
+        dz /= distance;
+    } else {
+        dx = tri.normal.x;
+        dz = tri.normal.z;
+        float horizontalLength = std::sqrt(dx*dx + dz*dz);
+        if (horizontalLength < 1e-5f) return false;
+        dx /= horizontalLength;
+        dz /= horizontalLength;
+        const float centroidX = (tri.a.x + tri.b.x + tri.c.x) / 3.0f;
+        const float centroidZ = (tri.a.z + tri.b.z + tri.c.z) / 3.0f;
+        if (dx*(x-centroidX) + dz*(z-centroidZ) < 0.0f) {
+            dx = -dx;
+            dz = -dz;
         }
-        if (!changed) break;
+        distance = 0.0f;
+    }
+
+    out.surfaceKey = tri.surfaceKeyQ714;
+    out.nx = dx;
+    out.nz = dz;
+    out.push = (collisionRadius - distance) + PLAYER_SKIN;
+    return out.push > 0.0f;
+}
+
+uint32_t ResolveWallPenetrations(float& x, float& z, float feetY) {
+    const float collisionRadius = CollisionRadiusQ712();
+
+    // Preserve the proven interior Q6G response exactly. Q7.14 is deliberately
+    // exterior-only until the authored metadata/manifold behaviour is validated.
+    if (!gExteriorAllBhksQ78A) {
+        uint32_t contacts = 0;
+        for (int pass = 0; pass < MAX_DEPENETRATION_PASSES; ++pass) {
+            bool changed = false;
+            for (const CollisionTriangle& tri : gWorldTriangles) {
+                WallContactQ714 contact;
+                if (!ComputeWallContactQ714(tri, x, z, feetY, collisionRadius, contact)) continue;
+                x += contact.nx * contact.push;
+                z += contact.nz * contact.push;
+                ++contacts;
+                changed = true;
+            }
+            if (!changed) break;
+        }
+        return contacts;
+    }
+
+    uint32_t contacts = 0;
+    for (int pass = 0; pass < MAX_DEPENETRATION_PASSES; ++pass) {
+        std::unordered_map<uint64_t, WallContactQ714> strongestBySurface;
+        size_t rawCandidates = 0u;
+
+        for (const CollisionTriangle& tri : gWorldTriangles) {
+            WallContactQ714 contact;
+            if (!ComputeWallContactQ714(tri, x, z, feetY, collisionRadius, contact)) continue;
+            ++rawCandidates;
+
+            auto found = strongestBySurface.find(contact.surfaceKey);
+            if (found == strongestBySurface.end() || contact.push > found->second.push) {
+                strongestBySurface[contact.surfaceKey] = contact;
+            }
+        }
+
+        if (strongestBySurface.empty()) break;
+
+        std::vector<WallContactQ714> manifold;
+        manifold.reserve(strongestBySurface.size());
+        for (const auto& entry : strongestBySurface) manifold.push_back(entry.second);
+        std::sort(manifold.begin(), manifold.end(), [](const WallContactQ714& a, const WallContactQ714& b) {
+            return a.push > b.push;
+        });
+
+        const size_t applied = std::min(EXTERIOR_MAX_MANIFOLD_CONTACTS_Q714, manifold.size());
+        for (size_t i = 0u; i < applied; ++i) {
+            x += manifold[i].nx * manifold[i].push;
+            z += manifold[i].nz * manifold[i].push;
+            ++contacts;
+        }
+
+        if (rawCandidates >= 8u &&
+            (gManifoldLogCountQ714 < 20u || (gResolveCounter % 360u) == 0u)) {
+            ++gManifoldLogCountQ714;
+            Q6G_LOGI("Q7.14 MANIFOLD: pass=%d rawTriangles=%zu surfaces=%zu applied=%zu pos=(%.3f %.3f)",
+                     pass, rawCandidates, manifold.size(), applied, x, z);
+        }
     }
     return contacts;
 }
@@ -571,6 +664,7 @@ bool InitializeFo3CollisionOverlay(const std::vector<Fo3WorldPlacement>& placeme
 
     std::unordered_set<uint32_t> seenRefs;
     std::unordered_map<std::string, std::vector<Fo3NifCollisionShapeQ6F>> modelCache;
+    std::unordered_map<std::string, Fo3PackedMetadataMapQ714> metadataCacheQ714;
     std::unordered_set<std::string> noCollisionModelsQ78A;
     std::vector<float> lines;
     lines.reserve(65536u);
@@ -581,6 +675,12 @@ bool InitializeFo3CollisionOverlay(const std::vector<Fo3WorldPlacement>& placeme
     size_t negativeCacheHitsQ78A = 0;
     size_t pathFilteredQ78A = 0;
     size_t bhkAttemptsQ78A = 0;
+    size_t metadataBlocksQ714 = 0u;
+    size_t metadataTaggedTrianglesQ714 = 0u;
+    size_t metadataUnmatchedTrianglesQ714 = 0u;
+    size_t filteredNonSolidTrianglesQ714 = 0u;
+    size_t stairTrianglesQ714 = 0u;
+    size_t platformTrianglesQ714 = 0u;
     bool capped = false;
 
     for (const Fo3WorldPlacement& placement : placements) {
@@ -614,9 +714,22 @@ bool InitializeFo3CollisionOverlay(const std::vector<Fo3WorldPlacement>& placeme
                 continue;
             }
             cached = modelCache.emplace(placement.modelPath, std::move(shapes)).first;
+
+            Fo3PackedMetadataMapQ714 metadata;
+            LoadFo3PackedMetadataQ714(placement.modelPath, metadata);
+            metadataBlocksQ714 += metadata.size();
+            metadataCacheQ714.emplace(placement.modelPath, std::move(metadata));
         } else {
             ++cacheHits;
         }
+
+        if (metadataCacheQ714.find(placement.modelPath) == metadataCacheQ714.end()) {
+            Fo3PackedMetadataMapQ714 metadata;
+            LoadFo3PackedMetadataQ714(placement.modelPath, metadata);
+            metadataBlocksQ714 += metadata.size();
+            metadataCacheQ714.emplace(placement.modelPath, std::move(metadata));
+        }
+        const Fo3PackedMetadataMapQ714& modelMetadataQ714 = metadataCacheQ714.at(placement.modelPath);
 
         size_t placementTriangles = 0;
         size_t placementShapes = 0;
@@ -625,6 +738,12 @@ bool InitializeFo3CollisionOverlay(const std::vector<Fo3WorldPlacement>& placeme
         for (const Fo3NifCollisionShapeQ6F& shape : shapes) {
             const size_t vertexCount = shape.positions.size() / 3u;
             if (vertexCount == 0u || shape.indices.empty()) continue;
+
+            const std::vector<Fo3PackedSubShapeMetadataQ714>* packedMetadata = nullptr;
+            if (shape.dataBlock != 0xffffffffu) {
+                const auto metaIt = modelMetadataQ714.find(shape.dataBlock);
+                if (metaIt != modelMetadataQ714.end()) packedMetadata = &metaIt->second;
+            }
 
             for (size_t i = 0; i + 2u < shape.indices.size(); i += 3u) {
                 if (exteriorAllBhksQ78A &&
@@ -636,6 +755,22 @@ bool InitializeFo3CollisionOverlay(const std::vector<Fo3WorldPlacement>& placeme
                 const uint32_t ib = shape.indices[i + 1u];
                 const uint32_t ic = shape.indices[i + 2u];
                 if (ia >= vertexCount || ib >= vertexCount || ic >= vertexCount) continue;
+
+                uint16_t subShapeIndexQ714 = 0xffffu;
+                const Fo3PackedSubShapeMetadataQ714* metaQ714 = nullptr;
+                if (packedMetadata) {
+                    subShapeIndexQ714 = FindFo3PackedSubShapeForTriangleQ714(
+                        *packedMetadata, ia, ib, ic);
+                    if (subShapeIndexQ714 != 0xffffu &&
+                        subShapeIndexQ714 < packedMetadata->size()) {
+                        metaQ714 = &(*packedMetadata)[subShapeIndexQ714];
+                    }
+                }
+
+                if (exteriorAllBhksQ78A && metaQ714 && !metaQ714->BlocksPlayer()) {
+                    ++filteredNonSolidTrianglesQ714;
+                    continue;
+                }
 
                 auto point = [&](uint32_t index) {
                     Vec3 p{
@@ -653,6 +788,19 @@ bool InitializeFo3CollisionOverlay(const std::vector<Fo3WorldPlacement>& placeme
 
                 CollisionTriangle worldTriangle;
                 if (!BuildTriangle(a, b, c, worldTriangle)) continue;
+                worldTriangle.surfaceKeyQ714 = MakeSurfaceKeyQ714(
+                    placement.refFormId, shape.sourceShapeBlock, subShapeIndexQ714);
+                if (metaQ714) {
+                    worldTriangle.havokLayerQ714 = metaQ714->layer;
+                    worldTriangle.havokMaterialQ714 = metaQ714->material;
+                    worldTriangle.stairsQ714 = metaQ714->IsStairs();
+                    worldTriangle.platformQ714 = metaQ714->IsPlatform();
+                    ++metadataTaggedTrianglesQ714;
+                    if (worldTriangle.stairsQ714) ++stairTrianglesQ714;
+                    if (worldTriangle.platformQ714) ++platformTrianglesQ714;
+                } else if (packedMetadata) {
+                    ++metadataUnmatchedTrianglesQ714;
+                }
                 gWorldTriangles.push_back(worldTriangle);
 
                 if (SHOW_COLLISION_DEBUG_Q6G) {
@@ -696,6 +844,12 @@ bool InitializeFo3CollisionOverlay(const std::vector<Fo3WorldPlacement>& placeme
              exteriorAllBhksQ78A ? MAX_EXTERIOR_COLLISION_TRIANGLES_Q78A : 0u,
              capped ? 1 : 0);
 
+    Q6G_LOGI("Q7.14 HAVOK META READY: metadataBlocks=%zu taggedTriangles=%zu unmatchedPackedTriangles=%zu filteredNonSolidTriangles=%zu stairsTriangles=%zu platformTriangles=%zu exteriorFilter=%d",
+             metadataBlocksQ714, metadataTaggedTrianglesQ714,
+             metadataUnmatchedTrianglesQ714, filteredNonSolidTrianglesQ714,
+             stairTrianglesQ714, platformTrianglesQ714,
+             exteriorAllBhksQ78A ? 1 : 0);
+
     if (gWorldTriangles.empty()) {
         Q6F_LOGW("Q6F COLLISION READY FAILED: placements=0 misses=%zu uniqueModels=%zu",
                  misses, modelCache.size());
@@ -707,11 +861,13 @@ bool InitializeFo3CollisionOverlay(const std::vector<Fo3WorldPlacement>& placeme
              gPlacementCount, gCollisionShapeCount, gTriangleCount,
              modelCache.size(), cacheHits, misses,
              gKindCounts[0], gKindCounts[1], gKindCounts[2], gKindCounts[3], gKindCounts[4], capped ? 1 : 0);
-    Q6G_LOGI("Q7.13 PHYSICS READY: authoredTriangles=%zu capsuleRadius=%.2f exteriorCollisionRadius=%.3f contactSlop=%.3f interiorStep=%.2f exteriorStep=%.2f exteriorWalkableNormalY=%.2f predictiveStep=0 exterior=%d bhkFirstSpawn=1",
+    Q6G_LOGI("Q7.14 PHYSICS READY: authoredTriangles=%zu capsuleRadius=%.2f exteriorCollisionRadius=%.3f contactSlop=%.3f interiorStep=%.2f exteriorStep=%.2f exteriorWalkableNormalY=%.2f authoredStairsNormalY=%.2f manifoldContacts=%zu predictiveStep=0 exterior=%d",
              gWorldTriangles.size(), PLAYER_RADIUS, CollisionRadiusQ712(),
              gExteriorAllBhksQ78A ? EXTERIOR_CONTACT_SLOP_Q712 : 0.0f,
              MAX_STEP_UP, EXTERIOR_MAX_STEP_UP_Q78B,
              gExteriorAllBhksQ78A ? EXTERIOR_WALKABLE_NORMAL_Y_Q713 : 0.55f,
+             EXTERIOR_STAIRS_NORMAL_Y_Q714,
+             gExteriorAllBhksQ78A ? EXTERIOR_MAX_MANIFOLD_CONTACTS_Q714 : 0u,
              gExteriorAllBhksQ78A ? 1 : 0);
 
     if (!SHOW_COLLISION_DEBUG_Q6G) return true;
@@ -856,7 +1012,7 @@ bool ResolveFo3PlayerMotionQ6G(float currentX, float currentZ,
                 feetY = stepGroundY;
                 if (gStepUpLogCountQ78B < 20u || (gResolveCounter % 360u) == 0u) {
                     ++gStepUpLogCountQ78B;
-                    Q6G_LOGI("Q7.13 STEP UP: target=(%.3f %.3f) rise=%.3f feetY=%.3f maxStep=%.3f walkableNormalY=%.2f predictive=0",
+                    Q6G_LOGI("Q7.14 STEP UP: target=(%.3f %.3f) rise=%.3f feetY=%.3f maxStep=%.3f baseWalkableNormalY=%.2f authoredStairs=1-or-normal predictive=0",
                              targetX, targetZ, rise, feetY, StepHeightQ78B(),
                              GroundNormalThresholdQ713());
                 }
@@ -899,7 +1055,7 @@ bool ResolveFo3PlayerMotionQ6G(float currentX, float currentZ,
     const bool blocked = contacts > 0u || (correctionX*correctionX + correctionZ*correctionZ) > 0.000004f;
     if (blocked && (gContactLogCount < 24u || (gResolveCounter % 120u) == 0u)) {
         ++gContactLogCount;
-        Q6G_LOGI("Q6G CONTACT: desired=(%.3f %.3f) resolved=(%.3f %.3f) correction=(%.3f %.3f) contacts=%u grounded=%d playerY=%.3f",
+        Q6G_LOGI("Q7.14 CONTACT: desired=(%.3f %.3f) resolved=(%.3f %.3f) correction=(%.3f %.3f) manifoldContacts=%u grounded=%d playerY=%.3f",
                  desiredX, desiredZ, x, z,
                  correctionX, correctionZ, contacts,
                  grounded ? 1 : 0, playerYOffset);
@@ -961,4 +1117,5 @@ void ShutdownFo3CollisionOverlay() {
     gContactLogCount = 0;
     gTerrainGroundLogCountQ77 = 0;
     gStepUpLogCountQ78B = 0;
+    gManifoldLogCountQ714 = 0;
 }
