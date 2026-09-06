@@ -17,12 +17,10 @@
 namespace {
 
 constexpr const char* TAG = "FalloutQuest";
-constexpr size_t MAX_COLLISION_PLACEMENTS = 40u;
+constexpr size_t MAX_COLLISION_PLACEMENTS = 256u;
 constexpr size_t MAX_LINE_VERTICES = 800000u;
 constexpr bool SHOW_COLLISION_DEBUG_Q6G = false;
 
-// Quest-scale standing controller. These are deliberately conservative for the
-// first physical Fallout-world pass; the geometry itself remains Bethesda's.
 constexpr float PLAYER_RADIUS = 0.26f;
 constexpr float PLAYER_HEIGHT = 1.70f;
 constexpr float PLAYER_SKIN = 0.003f;
@@ -35,6 +33,8 @@ constexpr int MAX_DEPENETRATION_PASSES = 6;
 #define Q6F_LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
 #define Q6G_LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
 #define Q6G_LOGW(...) __android_log_print(ANDROID_LOG_WARN, TAG, __VA_ARGS__)
+#define Q6H_LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
+#define Q6H_LOGW(...) __android_log_print(ANDROID_LOG_WARN, TAG, __VA_ARGS__)
 
 struct Vec3 {
     float x = 0.0f;
@@ -69,6 +69,7 @@ bool gLoggedVisible = false;
 std::vector<CollisionTriangle> gWorldTriangles;
 float gCollisionFloorY = -1.55f;
 bool gPlayerCollisionReady = false;
+bool gSafeSpawnResolved = false;
 uint64_t gResolveCounter = 0;
 uint64_t gContactLogCount = 0;
 
@@ -228,8 +229,6 @@ uint32_t ResolveWallPenetrations(float& x, float& z, float feetY) {
     for (int pass = 0; pass < MAX_DEPENETRATION_PASSES; ++pass) {
         bool changed = false;
         for (const CollisionTriangle& tri : gWorldTriangles) {
-            // Floors and ceilings are handled by grounding. Everything more
-            // vertical than this participates in horizontal capsule collision.
             if (std::fabs(tri.normal.y) >= 0.75f) continue;
             if (tri.maxY < feetY + 0.04f || tri.minY > topY) continue;
             if (x < tri.minX - PLAYER_RADIUS || x > tri.maxX + PLAYER_RADIUS ||
@@ -272,6 +271,58 @@ uint32_t ResolveWallPenetrations(float& x, float& z, float feetY) {
         if (!changed) break;
     }
     return contacts;
+}
+
+bool HasOverheadBlock(float x, float z, float feetY) {
+    const float headY = feetY + PLAYER_HEIGHT;
+    for (const CollisionTriangle& tri : gWorldTriangles) {
+        if (std::fabs(tri.normal.y) < 0.75f) continue;
+        if (tri.maxY <= feetY + 0.10f || tri.minY >= headY + 0.02f) continue;
+        if (x < tri.minX - PLAYER_RADIUS || x > tri.maxX + PLAYER_RADIUS ||
+            z < tri.minZ - PLAYER_RADIUS || z > tri.maxZ + PLAYER_RADIUS) continue;
+        float u = 0.0f, v = 0.0f, w = 0.0f;
+        if (BarycentricXZ(tri, x, z, u, v, w)) return true;
+    }
+    return false;
+}
+
+bool SpawnCandidateClear(float x, float z, float seedFeetY, float& outGroundY) {
+    float groundY = seedFeetY;
+    if (!FindGround(x, z, seedFeetY, groundY)) return false;
+    float resolvedX = x;
+    float resolvedZ = z;
+    const uint32_t contacts = ResolveWallPenetrations(resolvedX, resolvedZ, groundY);
+    const float dx = resolvedX - x;
+    const float dz = resolvedZ - z;
+    if (contacts != 0u || dx*dx + dz*dz > 0.0001f) return false;
+    if (HasOverheadBlock(x, z, groundY)) return false;
+    outGroundY = groundY;
+    return true;
+}
+
+bool FindSafeSpawn(float seedX, float seedZ, float currentPlayerYOffset,
+                   float& outX, float& outZ, float& outPlayerYOffset) {
+    const float seedFeetY = gCollisionFloorY + currentPlayerYOffset;
+    constexpr std::array<float, 9> radii{
+        0.0f, 0.30f, 0.60f, 0.90f, 1.20f, 1.50f, 1.80f, 2.10f, 2.40f
+    };
+    constexpr int ANGLES = 24;
+    for (float radius : radii) {
+        const int samples = radius == 0.0f ? 1 : ANGLES;
+        for (int i = 0; i < samples; ++i) {
+            const float angle = samples == 1 ? 0.0f :
+                (6.28318530717958647692f * static_cast<float>(i) / static_cast<float>(samples));
+            const float x = seedX + std::cos(angle) * radius;
+            const float z = seedZ + std::sin(angle) * radius;
+            float groundY = seedFeetY;
+            if (!SpawnCandidateClear(x, z, seedFeetY, groundY)) continue;
+            outX = x;
+            outZ = z;
+            outPlayerYOffset = groundY - gCollisionFloorY;
+            return true;
+        }
+    }
+    return false;
 }
 
 GLuint Compile(GLenum type, const char* source) {
@@ -353,7 +404,7 @@ bool InitializeFo3CollisionOverlay(const std::vector<Fo3WorldPlacement>& placeme
     std::unordered_map<std::string, std::vector<Fo3NifCollisionShapeQ6F>> modelCache;
     std::vector<float> lines;
     lines.reserve(65536u);
-    gWorldTriangles.reserve(4096u);
+    gWorldTriangles.reserve(8192u);
 
     size_t misses = 0;
     size_t cacheHits = 0;
@@ -456,7 +507,7 @@ bool InitializeFo3CollisionOverlay(const std::vector<Fo3WorldPlacement>& placeme
     if (!SHOW_COLLISION_DEBUG_Q6G) return true;
 
     gProgram = BuildProgram();
-    if (!gProgram) return true; // physics remains valid if debug GL fails
+    if (!gProgram) return true;
     gMvpLocation = glGetUniformLocation(gProgram, "uMvp");
     if (gMvpLocation < 0) {
         glDeleteProgram(gProgram);
@@ -488,6 +539,26 @@ bool ResolveFo3PlayerMotionQ6G(float currentX, float currentZ,
         gWorldTriangles.empty()) return false;
 
     ++gResolveCounter;
+
+    if (!gSafeSpawnResolved) {
+        float spawnX = currentX;
+        float spawnZ = currentZ;
+        float spawnPlayerY = currentPlayerYOffset;
+        if (FindSafeSpawn(currentX, currentZ, currentPlayerYOffset,
+                          spawnX, spawnZ, spawnPlayerY)) {
+            *outX = spawnX;
+            *outZ = spawnZ;
+            *outPlayerYOffset = spawnPlayerY;
+            gSafeSpawnResolved = true;
+            Q6H_LOGI("Q6H SAFE SPAWN: seed=(%.3f %.3f) resolved=(%.3f %.3f) playerY=%.3f capsuleClear=1 grounded=1",
+                     currentX, currentZ, spawnX, spawnZ, spawnPlayerY);
+            return true;
+        }
+        gSafeSpawnResolved = true;
+        Q6H_LOGW("Q6H SAFE SPAWN FALLBACK: no clear grounded candidate within 2.40m of seed=(%.3f %.3f); normal depenetration retained",
+                 currentX, currentZ);
+    }
+
     float x = currentX;
     float z = currentZ;
     float feetY = gCollisionFloorY + currentPlayerYOffset;
@@ -504,9 +575,6 @@ bool ResolveFo3PlayerMotionQ6G(float currentX, float currentZ,
         float targetX = currentX + dx*t;
         float targetZ = currentZ + dz*t;
 
-        // Preserve any depenetration accumulated on the first/subsequent step,
-        // then advance by this substep's requested delta. This naturally removes
-        // only the wall-normal component and leaves tangential sliding intact.
         if (step == 1) {
             targetX += x - currentX;
             targetZ += z - currentZ;
@@ -592,6 +660,7 @@ void ShutdownFo3CollisionOverlay() {
     gLoggedVisible = false;
     gWorldTriangles.clear();
     gPlayerCollisionReady = false;
+    gSafeSpawnResolved = false;
     gResolveCounter = 0;
     gContactLogCount = 0;
 }
