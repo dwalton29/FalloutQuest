@@ -319,6 +319,19 @@ bool ParseMaterialProperty(const uint8_t* data, size_t size,
     return c.remaining() == 0u;
 }
 
+bool ParseAlphaProperty(const uint8_t* data, size_t size,
+                        bool& alphaBlend, bool& alphaTest, float& alphaThreshold) {
+    Cursor c(data, size);
+    if (!ParseObjectNetPrefix(c)) return false;
+    uint16_t flags = 0;
+    uint8_t threshold = 0;
+    if (!c.U16(flags) || !c.U8(threshold)) return false;
+    alphaBlend = (flags & 0x0001u) != 0u;
+    alphaTest = (flags & 0x0200u) != 0u;
+    alphaThreshold = static_cast<float>(threshold) / 255.0f;
+    return c.remaining() == 0u;
+}
+
 bool ParseShaderTextureRef(const uint8_t* data, size_t size,
                            const NifHeader& header, uint32_t& textureSetRef) {
     Cursor c(data, size);
@@ -373,7 +386,7 @@ bool ParseGeometryPrefix(Cursor& c, Fo3StaticNifMesh& mesh,
         }
     }
 
-    if (!c.Skip(16u)) return false; // bounding sphere
+    if (!c.Skip(16u)) return false;
 
     uint8_t hasVertexColors = 0;
     if (!c.U8(hasVertexColors)) return false;
@@ -395,7 +408,7 @@ bool ParseGeometryPrefix(Cursor& c, Fo3StaticNifMesh& mesh,
         }
     }
 
-    return c.Skip(2u) && c.Skip(4u); // consistency + additional-data ref
+    return c.Skip(2u) && c.Skip(4u);
 }
 
 bool ParseTriStripsData(const uint8_t* data, size_t size, Fo3StaticNifMesh& mesh) {
@@ -601,16 +614,58 @@ void ApplyVector(const NifTransform& t, float& x, float& y, float& z) {
     x = rx; y = ry; z = rz;
 }
 
+bool CollectAncestorTransforms(const std::vector<uint8_t>& nif,
+                               const NifHeader& header,
+                               uint32_t childBlock,
+                               std::vector<NifTransform>& ancestors) {
+    ancestors.clear();
+    if (childBlock >= header.numBlocks) return false;
+
+    std::vector<uint32_t> parent(header.numBlocks, INVALID_REF);
+    std::vector<NifTransform> nodeTransforms(header.numBlocks);
+    std::vector<uint8_t> parsedNode(header.numBlocks, 0u);
+
+    for (uint32_t block = 0; block < header.numBlocks; ++block) {
+        const std::string& type = BlockType(header, block);
+        if (type != "NiNode" && type != "BSFadeNode") continue;
+        std::vector<uint32_t> children;
+        NifTransform transform;
+        if (!ParseNode(BlockData(nif, header, block), header.blockSizes[block],
+                       header, transform, children)) continue;
+        nodeTransforms[block] = transform;
+        parsedNode[block] = 1u;
+        for (uint32_t child : children) {
+            if (child < header.numBlocks && parent[child] == INVALID_REF) parent[child] = block;
+        }
+    }
+
+    uint32_t current = parent[childBlock];
+    for (uint32_t guard = 0; current < header.numBlocks && guard < header.numBlocks; ++guard) {
+        if (!parsedNode[current]) break;
+        ancestors.push_back(nodeTransforms[current]);
+        const uint32_t next = parent[current];
+        if (next == current) break;
+        current = next;
+    }
+    return !ancestors.empty();
+}
+
 void ApplyTransforms(Fo3StaticNifMesh& mesh,
                      const NifTransform& shape,
-                     const NifTransform* root) {
+                     const std::vector<NifTransform>& ancestors,
+                     const NifTransform* rootFallback) {
+    const bool haveFullChain = !ancestors.empty();
     const size_t vertexCount = mesh.positions.size() / 3u;
     for (size_t i = 0; i < vertexCount; ++i) {
         float& px = mesh.positions[i * 3u];
         float& py = mesh.positions[i * 3u + 1u];
         float& pz = mesh.positions[i * 3u + 2u];
         ApplyPoint(shape, px, py, pz);
-        if (root) ApplyPoint(*root, px, py, pz);
+        if (haveFullChain) {
+            for (const NifTransform& parent : ancestors) ApplyPoint(parent, px, py, pz);
+        } else if (rootFallback) {
+            ApplyPoint(*rootFallback, px, py, pz);
+        }
 
         std::vector<float>* arrays[] = {&mesh.normals, &mesh.tangents, &mesh.bitangents};
         for (std::vector<float>* values : arrays) {
@@ -618,7 +673,11 @@ void ApplyTransforms(Fo3StaticNifMesh& mesh,
             float& y = (*values)[i * 3u + 1u];
             float& z = (*values)[i * 3u + 2u];
             ApplyVector(shape, x, y, z);
-            if (root) ApplyVector(*root, x, y, z);
+            if (haveFullChain) {
+                for (const NifTransform& parent : ancestors) ApplyVector(parent, x, y, z);
+            } else if (rootFallback) {
+                ApplyVector(*rootFallback, x, y, z);
+            }
             Normalize3(x, y, z);
         }
     }
@@ -657,12 +716,14 @@ bool TryLoadShape(const std::vector<uint8_t>& nif, const NifHeader& header,
         } else if (type == "NiMaterialProperty") {
             ParseMaterialProperty(prop, header.blockSizes[ref],
                                   candidate.glossiness, candidate.alpha);
+        } else if (type == "NiAlphaProperty") {
+            ParseAlphaProperty(prop, header.blockSizes[ref],
+                               candidate.alphaBlend, candidate.alphaTest,
+                               candidate.alphaThreshold);
         }
     }
 
     if (textureSetRef >= header.numBlocks || BlockType(header, textureSetRef) != "BSShaderTextureSet") {
-        // Some simple FO3 assets still have exactly one texture set even when a
-        // property link is unusual. Use that only as an unambiguous fallback.
         uint32_t onlyTextureSet = INVALID_REF;
         for (uint32_t block = 0; block < header.numBlocks; ++block) {
             if (BlockType(header, block) == "BSShaderTextureSet") {
@@ -695,7 +756,9 @@ bool TryLoadShape(const std::vector<uint8_t>& nif, const NifHeader& header,
         candidate.normalTexturePath.clear();
     }
 
-    ApplyTransforms(candidate, shape.transform, root);
+    std::vector<NifTransform> ancestors;
+    CollectAncestorTransforms(nif, header, shape.block, ancestors);
+    ApplyTransforms(candidate, shape.transform, ancestors, root);
     mesh = std::move(candidate);
     return true;
 }
