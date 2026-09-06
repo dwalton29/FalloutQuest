@@ -157,14 +157,28 @@ bool LoadFo3CellPlacementsQ74(uint32_t cellFormId,
     // For exterior load doors, the linked REFR often belongs to the WRLD's
     // persistent CELL. Rendering only that CELL produces the Q7.4 random-prop
     // soup. Q7.5 instead merges it with the actual XCLC exterior grid cells.
+    ClearFo3CollisionPolicyQ710();
     if (gPendingTransitionQ74.valid &&
         gPendingTransitionQ74.cellFormId == cellFormId &&
         gPendingTransitionQ74.worldspaceFormId != 0u) {
-        return LoadFo3WorldspaceNeighborhoodQ75(gPendingTransitionQ74.worldspaceFormId,
-                                                cellFormId,
-                                                gPendingTransitionQ74.x,
-                                                gPendingTransitionQ74.y,
-                                                outPlacements);
+        const bool loaded = LoadFo3WorldspaceNeighborhoodQ75(
+            gPendingTransitionQ74.worldspaceFormId,
+            cellFormId,
+            gPendingTransitionQ74.x,
+            gPendingTransitionQ74.y,
+            outPlacements);
+        if (loaded) {
+            const size_t dynamicOnlyModels = ConfigureFo3CollisionPolicyQ710(outPlacements);
+            size_t dynamicPlacements = 0u;
+            for (const Fo3WorldPlacement& placement : outPlacements) {
+                if (IsFo3DynamicCollisionRecordTypeQ710(placement.baseRecordType)) {
+                    ++dynamicPlacements;
+                }
+            }
+            Q71_LOGI("Q7.10 COLLISION POLICY: placements=%zu dynamicPlacements=%zu dynamicOnlyModels=%zu staticBhkPolicy=skip-dynamic-models visualPlacementsUntouched=1",
+                     outPlacements.size(), dynamicPlacements, dynamicOnlyModels);
+        }
+        return loaded;
     }
 
     Q71_LOGE("Q7.5 CELL LOAD FAILED: cell=%08X reason=no-worldspace-transition-context",
