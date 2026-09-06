@@ -40,3 +40,10 @@ bool LoadMegatonPlayerHousePlacements(std::vector<Fo3WorldPlacement>& outPlaceme
 // Reads the paired load-door XTEL authored by Bethesda and returns the exact
 // destination marker used by the original game when entering MegatonPlayerHouse.
 bool LoadMegatonPlayerHouseArrival(Fo3CellArrival& outArrival);
+
+// Q7.1 diagnostic only. Lazily scans XTEL-bearing REFRs inside
+// MegatonPlayerHouse on the first activation attempt and ray-tests them in the
+// exact Q6K VR coordinate frame. It performs no CELL lookup, scene reload or
+// player teleport; a hit is logged only.
+bool ProbeMegatonPlayerHouseDoorQ71(float originX, float originY, float originZ,
+                                    float dirX, float dirY, float dirZ);
