@@ -10,6 +10,8 @@
 #include <EGL/eglext.h>
 #include <GLES3/gl3.h>
 
+#include "fo3-collision-overlay.h"
+
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -716,8 +718,35 @@ private:
         // OpenXR uses -Z as forward. Positive yaw turns the local -Z vector
         // toward -X, so the flattened head-relative basis is:
         // forward=(-sin(yaw), 0, -cos(yaw)), right=(cos(yaw), 0, -sin(yaw)).
-        playerPosition_.x += (strafe * c - forward * s) * velocity;
-        playerPosition_.z += (-strafe * s - forward * c) * velocity;
+        const float requestedDx = (strafe * c - forward * s) * velocity;
+        const float requestedDz = (-strafe * s - forward * c) * velocity;
+        const float desiredPlayerX = playerPosition_.x + requestedDx;
+        const float desiredPlayerZ = playerPosition_.z + requestedDz;
+
+        // Q6G collides the actual virtual body/head position, not merely the
+        // thumbstick translation. This keeps room-scale offsets and the Q6D
+        // pivot-preserved snap turn in the same physical collision space.
+        const XrVector3f headOffset = RotateYaw(headView.pose.position, playerYaw_);
+        const float currentCenterX = headOffset.x + playerPosition_.x;
+        const float currentCenterZ = headOffset.z + playerPosition_.z;
+        const float desiredCenterX = headOffset.x + desiredPlayerX;
+        const float desiredCenterZ = headOffset.z + desiredPlayerZ;
+
+        float resolvedCenterX = desiredCenterX;
+        float resolvedCenterZ = desiredCenterZ;
+        float resolvedPlayerY = playerPosition_.y;
+        if (ResolveFo3PlayerMotionQ6G(currentCenterX, currentCenterZ,
+                                     desiredCenterX, desiredCenterZ,
+                                     playerPosition_.y,
+                                     &resolvedCenterX, &resolvedCenterZ,
+                                     &resolvedPlayerY)) {
+            playerPosition_.x = resolvedCenterX - headOffset.x;
+            playerPosition_.z = resolvedCenterZ - headOffset.z;
+            playerPosition_.y = resolvedPlayerY;
+        } else {
+            playerPosition_.x = desiredPlayerX;
+            playerPosition_.z = desiredPlayerZ;
+        }
     }
 
     XrPosef ToVirtualPose(const XrPosef& localPose) const {
@@ -776,8 +805,9 @@ private:
                 layerCount = 1;
 
                 if ((frameCounter_++ % 180) == 0) {
-                    FQ_LOGI("Q4 live: player %.2f %.2f, hands L=%d R=%d, move %.2f %.2f",
-                            playerPosition_.x, playerPosition_.z,
+                    FQ_LOGI("Q4 live: player %.2f %.2f %.2f, collision=%d, hands L=%d R=%d, move %.2f %.2f",
+                            playerPosition_.x, playerPosition_.y, playerPosition_.z,
+                            IsFo3PlayerCollisionReadyQ6G() ? 1 : 0,
                             handPoseValid_[0] ? 1 : 0, handPoseValid_[1] ? 1 : 0,
                             moveX_, moveY_);
                 }
