@@ -7,6 +7,17 @@ android {
     compileSdk 35
     ndkVersion '27.0.12077973'
 
+    // Development-only key committed so ephemeral GitHub Actions runners
+    // produce update-compatible APKs. Never use this key for a release build.
+    signingConfigs {
+        debug {
+            storeFile file('falloutquest-dev.keystore')
+            storePassword 'falloutquest-dev'
+            keyAlias 'falloutquest-dev'
+            keyPassword 'falloutquest-dev'
+        }
+    }
+
     defaultConfig {
         applicationId 'com.falloutquest.app'
         minSdk 29
@@ -22,6 +33,12 @@ android {
             cmake {
                 cppFlags '-std=c++17 -Wall -Wextra'
             }
+        }
+    }
+
+    buildTypes {
+        debug {
+            signingConfig signingConfigs.debug
         }
     }
 
