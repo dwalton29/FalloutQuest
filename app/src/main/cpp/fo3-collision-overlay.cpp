@@ -29,10 +29,10 @@ constexpr float PLAYER_RADIUS = 0.26f;
 constexpr float PLAYER_HEIGHT = 1.70f;
 constexpr float PLAYER_SKIN = 0.003f;
 constexpr float MAX_STEP_UP = 0.32f;
-constexpr float EXTERIOR_MAX_STEP_UP_Q78B = 0.42f;
+constexpr float EXTERIOR_MAX_STEP_UP_Q78B = 0.30f;
 constexpr float STEP_MIN_RISE_Q78B = 0.015f;
 constexpr float EXTERIOR_CONTACT_SLOP_Q712 = 0.015f;
-constexpr float EXTERIOR_STEP_PROBE_DISTANCE_Q712 = 0.22f;
+constexpr float EXTERIOR_WALKABLE_NORMAL_Y_Q713 = 0.70f;
 constexpr float SPAWN_AUTHORED_BELOW_Q78B = 0.80f;
 constexpr float SPAWN_AUTHORED_ABOVE_Q78B = 0.80f;
 constexpr float MAX_GROUND_DROP = 0.80f;
@@ -88,7 +88,6 @@ uint64_t gResolveCounter = 0;
 uint64_t gContactLogCount = 0;
 uint64_t gTerrainGroundLogCountQ77 = 0;
 uint64_t gStepUpLogCountQ78B = 0;
-uint64_t gPredictiveStepLogCountQ712 = 0;
 
 std::string NormalizeModelPathQ78A(const std::string& path) {
     std::string lower = path;
@@ -116,6 +115,10 @@ bool IsExteriorMegatonPlacementSetQ78A(const std::vector<Fo3WorldPlacement>& pla
 
 float StepHeightQ78B() {
     return gExteriorAllBhksQ78A ? EXTERIOR_MAX_STEP_UP_Q78B : MAX_STEP_UP;
+}
+
+float GroundNormalThresholdQ713() {
+    return gExteriorAllBhksQ78A ? EXTERIOR_WALKABLE_NORMAL_Y_Q713 : 0.55f;
 }
 
 float CollisionRadiusQ712() {
@@ -248,9 +251,11 @@ Vec2 ClosestPointTriangleXZ(const CollisionTriangle& tri, Vec2 p, bool& inside) 
 bool FindGround(float x, float z, float feetY, float& groundY) {
     bool found = false;
     float best = -1e30f;
+    float bestDistance = std::numeric_limits<float>::max();
     const float maxStepUp = StepHeightQ78B();
+    const float walkableNormalY = GroundNormalThresholdQ713();
     for (const CollisionTriangle& tri : gWorldTriangles) {
-        if (std::fabs(tri.normal.y) < 0.55f) continue;
+        if (std::fabs(tri.normal.y) < walkableNormalY) continue;
         if (x < tri.minX - 0.02f || x > tri.maxX + 0.02f ||
             z < tri.minZ - 0.02f || z > tri.maxZ + 0.02f) continue;
 
@@ -258,7 +263,16 @@ bool FindGround(float x, float z, float feetY, float& groundY) {
         if (!BarycentricXZ(tri, x, z, u, v, w)) continue;
         const float y = tri.a.y*u + tri.b.y*v + tri.c.y*w;
         if (y > feetY + maxStepUp || y < feetY - MAX_GROUND_DROP) continue;
-        if (y > best) {
+
+        if (gExteriorAllBhksQ78A) {
+            const float verticalDistance = std::fabs(y - feetY);
+            if (!found || verticalDistance < bestDistance - 0.0001f ||
+                (std::fabs(verticalDistance - bestDistance) <= 0.0001f && y > best)) {
+                bestDistance = verticalDistance;
+                best = y;
+                found = true;
+            }
+        } else if (y > best) {
             best = y;
             found = true;
         }
@@ -267,12 +281,37 @@ bool FindGround(float x, float z, float feetY, float& groundY) {
     return found;
 }
 
+bool FindStepGroundQ713(float x, float z, float feetY, float& groundY) {
+    bool found = false;
+    float lowest = std::numeric_limits<float>::max();
+    const float maxStepUp = StepHeightQ78B();
+    const float walkableNormalY = GroundNormalThresholdQ713();
+    for (const CollisionTriangle& tri : gWorldTriangles) {
+        if (std::fabs(tri.normal.y) < walkableNormalY) continue;
+        if (x < tri.minX - 0.02f || x > tri.maxX + 0.02f ||
+            z < tri.minZ - 0.02f || z > tri.maxZ + 0.02f) continue;
+
+        float u = 0.0f, v = 0.0f, w = 0.0f;
+        if (!BarycentricXZ(tri, x, z, u, v, w)) continue;
+        const float y = tri.a.y*u + tri.b.y*v + tri.c.y*w;
+        const float rise = y - feetY;
+        if (rise <= STEP_MIN_RISE_Q78B || rise > maxStepUp + PLAYER_SKIN) continue;
+        if (y < lowest) {
+            lowest = y;
+            found = true;
+        }
+    }
+    if (found) groundY = lowest;
+    return found;
+}
+
 bool FindGroundWide(float x, float z, float referenceY, float& groundY) {
     bool found = false;
     float bestDistance = std::numeric_limits<float>::max();
     float bestY = referenceY;
+    const float walkableNormalY = GroundNormalThresholdQ713();
     for (const CollisionTriangle& tri : gWorldTriangles) {
-        if (std::fabs(tri.normal.y) < 0.55f) continue;
+        if (std::fabs(tri.normal.y) < walkableNormalY) continue;
         if (x < tri.minX - 0.02f || x > tri.maxX + 0.02f ||
             z < tri.minZ - 0.02f || z > tri.maxZ + 0.02f) continue;
 
@@ -294,8 +333,9 @@ bool FindGroundWide(float x, float z, float referenceY, float& groundY) {
 bool FindAuthoredSpawnGroundQ78B(float x, float z, float referenceY, float& groundY) {
     bool found = false;
     float highest = -1e30f;
+    const float walkableNormalY = GroundNormalThresholdQ713();
     for (const CollisionTriangle& tri : gWorldTriangles) {
-        if (std::fabs(tri.normal.y) < 0.55f) continue;
+        if (std::fabs(tri.normal.y) < walkableNormalY) continue;
         if (x < tri.minX - 0.02f || x > tri.maxX + 0.02f ||
             z < tri.minZ - 0.02f || z > tri.maxZ + 0.02f) continue;
         float u = 0.0f, v = 0.0f, w = 0.0f;
@@ -667,11 +707,11 @@ bool InitializeFo3CollisionOverlay(const std::vector<Fo3WorldPlacement>& placeme
              gPlacementCount, gCollisionShapeCount, gTriangleCount,
              modelCache.size(), cacheHits, misses,
              gKindCounts[0], gKindCounts[1], gKindCounts[2], gKindCounts[3], gKindCounts[4], capped ? 1 : 0);
-    Q6G_LOGI("Q7.12 PHYSICS READY: authoredTriangles=%zu capsuleRadius=%.2f exteriorCollisionRadius=%.3f contactSlop=%.3f interiorStep=%.2f exteriorStep=%.2f predictiveProbe=%.2f exterior=%d bhkFirstSpawn=1",
+    Q6G_LOGI("Q7.13 PHYSICS READY: authoredTriangles=%zu capsuleRadius=%.2f exteriorCollisionRadius=%.3f contactSlop=%.3f interiorStep=%.2f exteriorStep=%.2f exteriorWalkableNormalY=%.2f predictiveStep=0 exterior=%d bhkFirstSpawn=1",
              gWorldTriangles.size(), PLAYER_RADIUS, CollisionRadiusQ712(),
              gExteriorAllBhksQ78A ? EXTERIOR_CONTACT_SLOP_Q712 : 0.0f,
              MAX_STEP_UP, EXTERIOR_MAX_STEP_UP_Q78B,
-             gExteriorAllBhksQ78A ? EXTERIOR_STEP_PROBE_DISTANCE_Q712 : 0.0f,
+             gExteriorAllBhksQ78A ? EXTERIOR_WALKABLE_NORMAL_Y_Q713 : 0.55f,
              gExteriorAllBhksQ78A ? 1 : 0);
 
     if (!SHOW_COLLISION_DEBUG_Q6G) return true;
@@ -789,8 +829,6 @@ bool ResolveFo3PlayerMotionQ6G(float currentX, float currentZ,
     const float dx = desiredX - currentX;
     const float dz = desiredZ - currentZ;
     const float distance = std::sqrt(dx*dx + dz*dz);
-    const float moveDirX = distance > 1e-5f ? dx / distance : 0.0f;
-    const float moveDirZ = distance > 1e-5f ? dz / distance : 0.0f;
     const float maxSubstep = PLAYER_RADIUS * 0.40f;
     const int steps = std::clamp(static_cast<int>(std::ceil(distance / maxSubstep)), 1, 12);
 
@@ -811,43 +849,16 @@ bool ResolveFo3PlayerMotionQ6G(float currentX, float currentZ,
         }
 
         if (gExteriorAllBhksQ78A) {
-            bool stepped = false;
             float stepGroundY = feetY;
-            if (FindGround(targetX, targetZ, feetY, stepGroundY) &&
-                stepGroundY > feetY + STEP_MIN_RISE_Q78B &&
+            if (FindStepGroundQ713(targetX, targetZ, feetY, stepGroundY) &&
                 !HasOverheadBlock(targetX, targetZ, stepGroundY)) {
                 const float rise = stepGroundY - feetY;
                 feetY = stepGroundY;
-                stepped = true;
-                if (gStepUpLogCountQ78B < 16u || (gResolveCounter % 360u) == 0u) {
+                if (gStepUpLogCountQ78B < 20u || (gResolveCounter % 360u) == 0u) {
                     ++gStepUpLogCountQ78B;
-                    Q6G_LOGI("Q7.8B STEP UP: target=(%.3f %.3f) rise=%.3f feetY=%.3f maxStep=%.3f",
-                             targetX, targetZ, rise, feetY, StepHeightQ78B());
-                }
-            }
-
-            // The old controller only sampled ground at the capsule centre.
-            // On a short kerb/ledge the capsule therefore hit the vertical face
-            // before its centre crossed far enough to see the top. Probe one
-            // foot-radius ahead in travel direction and pre-lift only when that
-            // authored top is itself a legal step and has standing headroom.
-            if (!stepped && distance > 1e-5f) {
-                const float probeX = targetX + moveDirX * EXTERIOR_STEP_PROBE_DISTANCE_Q712;
-                const float probeZ = targetZ + moveDirZ * EXTERIOR_STEP_PROBE_DISTANCE_Q712;
-                float probeGroundY = feetY;
-                if (FindGround(probeX, probeZ, feetY, probeGroundY) &&
-                    probeGroundY > feetY + STEP_MIN_RISE_Q78B &&
-                    probeGroundY <= feetY + StepHeightQ78B() + PLAYER_SKIN &&
-                    !HasOverheadBlock(targetX, targetZ, probeGroundY) &&
-                    !HasOverheadBlock(probeX, probeZ, probeGroundY)) {
-                    const float rise = probeGroundY - feetY;
-                    feetY = probeGroundY;
-                    if (gPredictiveStepLogCountQ712 < 20u || (gResolveCounter % 360u) == 0u) {
-                        ++gPredictiveStepLogCountQ712;
-                        Q6G_LOGI("Q7.12 PREDICTIVE STEP: target=(%.3f %.3f) probe=(%.3f %.3f) rise=%.3f feetY=%.3f probeDistance=%.3f",
-                                 targetX, targetZ, probeX, probeZ, rise, feetY,
-                                 EXTERIOR_STEP_PROBE_DISTANCE_Q712);
-                    }
+                    Q6G_LOGI("Q7.13 STEP UP: target=(%.3f %.3f) rise=%.3f feetY=%.3f maxStep=%.3f walkableNormalY=%.2f predictive=0",
+                             targetX, targetZ, rise, feetY, StepHeightQ78B(),
+                             GroundNormalThresholdQ713());
                 }
             }
         }
@@ -950,5 +961,4 @@ void ShutdownFo3CollisionOverlay() {
     gContactLogCount = 0;
     gTerrainGroundLogCountQ77 = 0;
     gStepUpLogCountQ78B = 0;
-    gPredictiveStepLogCountQ712 = 0;
 }

@@ -20,7 +20,7 @@ constexpr float Q76B_CELL_SIZE = 4096.0f;
 constexpr float Q76B_VERTEX_SPACING = Q76B_CELL_SIZE / static_cast<float>(Q76B_LAND_QUADS);
 constexpr size_t Q76B_HEIGHT_COUNT = static_cast<size_t>(Q76B_LAND_SIDE * Q76B_LAND_SIDE);
 constexpr float Q711_TEXTURE_REPEAT_GAME_UNITS = 512.0f;
-constexpr size_t Q711_MAX_REAL_TEXTURES = 16u;
+constexpr size_t Q713_MAX_REAL_TEXTURES = 64u;
 
 #define Q76B_LOGI(...) __android_log_print(ANDROID_LOG_INFO, Q76B_TAG, __VA_ARGS__)
 #define Q76B_LOGW(...) __android_log_print(ANDROID_LOG_WARN, Q76B_TAG, __VA_ARGS__)
@@ -58,6 +58,8 @@ size_t q76bTerrainCells = 0;
 size_t q76bTriangles = 0;
 size_t q711RealTextureBatches = 0;
 size_t q711FallbackBatches = 0;
+size_t q713TextureUploadFailures = 0;
+size_t q713TextureLimitHits = 0;
 
 uint64_t Q711GridKey(int32_t x, int32_t y) {
     return (static_cast<uint64_t>(static_cast<uint32_t>(x)) << 32u) |
@@ -246,6 +248,8 @@ void ShutdownFo3TerrainRenderQ76() {
     q76bTriangles = 0;
     q711RealTextureBatches = 0;
     q711FallbackBatches = 0;
+    q713TextureUploadFailures = 0;
+    q713TextureLimitHits = 0;
 }
 
 bool InitializeFo3TerrainRenderQ76(uint32_t worldspaceFormId,
@@ -406,12 +410,22 @@ bool InitializeFo3TerrainRenderQ76(uint32_t worldspaceFormId,
         Q711TerrainBatch gpu;
         gpu.texturePath = cpu.texturePath;
 
-        if (!cpu.texturePath.empty() && textureUploads < Q711_MAX_REAL_TEXTURES) {
-            gpu.texture = Q711UploadTexture(cpu.texturePath);
-            gpu.realTexture = gpu.texture != 0u;
-            if (gpu.realTexture) {
-                ++textureUploads;
-                ++q711RealTextureBatches;
+        if (!cpu.texturePath.empty()) {
+            if (textureUploads < Q713_MAX_REAL_TEXTURES) {
+                gpu.texture = Q711UploadTexture(cpu.texturePath);
+                gpu.realTexture = gpu.texture != 0u;
+                if (gpu.realTexture) {
+                    ++textureUploads;
+                    ++q711RealTextureBatches;
+                } else {
+                    ++q713TextureUploadFailures;
+                }
+            } else {
+                ++q713TextureLimitHits;
+                if (q713TextureLimitHits <= 8u) {
+                    Q76B_LOGW("Q7.13 TERRAIN TEXTURE LIMIT: path=%s successfulUploads=%zu cap=%zu",
+                              cpu.texturePath.c_str(), textureUploads, Q713_MAX_REAL_TEXTURES);
+                }
             }
         }
         if (!gpu.realTexture) ++q711FallbackBatches;
@@ -452,11 +466,12 @@ bool InitializeFo3TerrainRenderQ76(uint32_t worldspaceFormId,
     q76bTerrainCells = acceptedCells;
     q76bWorldspace = worldspaceFormId;
     q76bReady = true;
-    Q76B_LOGI("Q7.11 TERRAIN GPU READY: worldspace=%08X cells=%zu batches=%zu realTextureBatches=%zu fallbackBatches=%zu texturedQuads=%zu fallbackQuads=%zu vertices=%zu triangles=%zu repeatGameUnits=%.0f seamStitch=1 baseLayerOnly=1 alphaLayers=NEXT",
+    Q76B_LOGI("Q7.13 TERRAIN GPU READY: worldspace=%08X cells=%zu batches=%zu realTextureBatches=%zu fallbackBatches=%zu texturedQuads=%zu fallbackQuads=%zu textureCap=%zu uploadFailures=%zu limitHits=%zu vertices=%zu triangles=%zu repeatGameUnits=%.0f seamStitch=1 baseLayerOnly=1 alphaLayers=NEXT",
               q76bWorldspace, q76bTerrainCells, q711TerrainBatches.size(),
               q711RealTextureBatches, q711FallbackBatches,
-              texturedQuads, fallbackQuads, totalVertices, q76bTriangles,
-              Q711_TEXTURE_REPEAT_GAME_UNITS);
+              texturedQuads, fallbackQuads, Q713_MAX_REAL_TEXTURES,
+              q713TextureUploadFailures, q713TextureLimitHits,
+              totalVertices, q76bTriangles, Q711_TEXTURE_REPEAT_GAME_UNITS);
     return true;
 }
 
@@ -498,9 +513,10 @@ void RenderFo3TerrainQ76(const float* mvp) {
 
     if (!q76bLoggedVisible) {
         q76bLoggedVisible = true;
-        Q76B_LOGI("Q7.11 TERRAIN VISIBLE: worldspace=%08X cells=%zu triangles=%zu batches=%zu textured=%zu fallback=%zu stereoRenderLayer=1",
+        Q76B_LOGI("Q7.13 TERRAIN VISIBLE: worldspace=%08X cells=%zu triangles=%zu batches=%zu textured=%zu fallback=%zu uploadFailures=%zu limitHits=%zu stereoRenderLayer=1",
                   q76bWorldspace, q76bTerrainCells, q76bTriangles,
                   q711TerrainBatches.size(), q711RealTextureBatches,
-                  q711FallbackBatches);
+                  q711FallbackBatches, q713TextureUploadFailures,
+                  q713TextureLimitHits);
     }
 }
