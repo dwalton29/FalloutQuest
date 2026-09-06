@@ -9,6 +9,18 @@ constexpr int Q76_HEIGHT_SIDE = 33;
 constexpr size_t Q76_HEIGHT_COUNT = static_cast<size_t>(Q76_HEIGHT_SIDE * Q76_HEIGHT_SIDE);
 constexpr float Q76_HEIGHT_SCALE = 8.0f;
 
+struct ParentWorldspaceQ79 {
+    uint32_t formId = 0u;
+    uint16_t flags = 0u;
+    bool found = false;
+    bool useLand = false;
+};
+
+uint64_t GridKeyQ79(int32_t x, int32_t y) {
+    return (static_cast<uint64_t>(static_cast<uint32_t>(x)) << 32u) |
+           static_cast<uint32_t>(y);
+}
+
 bool DecodeVhgtQ76(const uint8_t* bytes, uint32_t size, std::vector<float>& heights) {
     // FO3/FNV VHGT = float offset + 33 rows x 33 signed delta bytes + 3 unused.
     // Values are stored in eighths of a Bethesda game unit height step.
@@ -29,6 +41,79 @@ bool DecodeVhgtQ76(const uint8_t* bytes, uint32_t size, std::vector<float>& heig
         }
     }
     return true;
+}
+
+bool ReadParentWorldspaceQ79(uint32_t worldspaceFormId, ParentWorldspaceQ79& out) {
+    out = {};
+    FILE* file = std::fopen(ESM_PATH_Q75, "rb");
+    if (!file) return false;
+    const int64_t fileSize = FileSizeQ75(file);
+    if (fileSize < static_cast<int64_t>(HEADER_SIZE_Q75)) {
+        std::fclose(file);
+        return false;
+    }
+
+    bool recordFound = false;
+    while (true) {
+        const off_t rawOffset = ftello(file);
+        if (rawOffset < 0) break;
+        const uint64_t offset = static_cast<uint64_t>(rawOffset);
+        if (offset + HEADER_SIZE_Q75 > static_cast<uint64_t>(fileSize)) break;
+
+        uint8_t header[HEADER_SIZE_Q75]{};
+        if (!ReadExactQ75(file, header, sizeof(header))) break;
+        const uint32_t sizeField = ReadLe32Q75(header + 4u);
+
+        if (std::memcmp(header, "GRUP", 4u) == 0) {
+            if (sizeField < HEADER_SIZE_Q75 ||
+                offset + sizeField > static_cast<uint64_t>(fileSize)) break;
+            // Pointer already sits at the first child record. Do not seek to
+            // group end; WRLD records are inside the top-level WRLD group.
+            continue;
+        }
+
+        const uint64_t payloadEnd = offset + HEADER_SIZE_Q75 + sizeField;
+        if (payloadEnd > static_cast<uint64_t>(fileSize)) break;
+        const uint32_t formId = ReadLe32Q75(header + 12u);
+        if (std::memcmp(header, "WRLD", 4u) != 0 || formId != worldspaceFormId) {
+            if (fseeko(file, static_cast<off_t>(payloadEnd), SEEK_SET) != 0) break;
+            continue;
+        }
+
+        const uint32_t flags = ReadLe32Q75(header + 8u);
+        std::vector<uint8_t> payload;
+        if (!ReadPayloadQ75(file, sizeField, flags, payload)) break;
+
+        uint32_t parent = 0u;
+        uint16_t parentFlags = 0u;
+        WalkSubrecordsQ75(payload.data(), payload.size(),
+                          [&](const char* type, const uint8_t* bytes, uint32_t subSize) {
+            if (std::memcmp(type, "WNAM", 4u) == 0 && subSize >= 4u) {
+                parent = ReadLe32Q75(bytes);
+            } else if (std::memcmp(type, "PNAM", 4u) == 0 && subSize >= 1u) {
+                parentFlags = bytes[0];
+                if (subSize >= 2u) {
+                    parentFlags |= static_cast<uint16_t>(bytes[1]) << 8u;
+                }
+            }
+        });
+
+        out.formId = parent;
+        out.flags = parentFlags;
+        out.found = true;
+        out.useLand = parent != 0u && (parentFlags & 0x0001u) != 0u;
+        recordFound = true;
+        break;
+    }
+
+    std::fclose(file);
+    if (recordFound) {
+        Q75_LOGI("Q7.9 WRLD PARENT: child=%08X parent=%08X PNAM=%04X useLand=%d",
+                 worldspaceFormId, out.formId, out.flags, out.useLand ? 1 : 0);
+    } else {
+        Q75_LOGW("Q7.9 WRLD PARENT: child=%08X recordNotFound=1", worldspaceFormId);
+    }
+    return recordFound;
 }
 
 bool CollectSelectedLandQ76(uint32_t worldspaceFormId,
@@ -123,6 +208,85 @@ bool CollectSelectedLandQ76(uint32_t worldspaceFormId,
     return !out.empty();
 }
 
+size_t AppendInheritedParentLandQ79(
+    uint32_t childWorldspaceFormId,
+    const std::unordered_set<uint32_t>& selectedChildCells,
+    const std::unordered_map<uint32_t, CellInfoQ75>& childCellsById,
+    std::vector<Fo3TerrainCellQ76>& terrain) {
+
+    ParentWorldspaceQ79 parentInfo;
+    if (!ReadParentWorldspaceQ79(childWorldspaceFormId, parentInfo) ||
+        !parentInfo.useLand || parentInfo.formId == 0u) {
+        return 0u;
+    }
+
+    std::unordered_set<uint64_t> selectedGridKeys;
+    for (uint32_t cellId : selectedChildCells) {
+        const auto it = childCellsById.find(cellId);
+        if (it == childCellsById.end() || !it->second.hasGrid) continue;
+        selectedGridKeys.insert(GridKeyQ79(it->second.gridX, it->second.gridY));
+    }
+
+    std::unordered_set<uint64_t> localGridKeys;
+    for (const Fo3TerrainCellQ76& cell : terrain) {
+        localGridKeys.insert(GridKeyQ79(cell.gridX, cell.gridY));
+    }
+
+    std::vector<CellInfoQ75> parentCells;
+    if (!DiscoverWorldspaceCellsQ75(parentInfo.formId, parentCells)) {
+        Q75_LOGW("Q7.9 LAND PARENT FAILED: child=%08X parent=%08X reason=discover-parent-cells",
+                 childWorldspaceFormId, parentInfo.formId);
+        return 0u;
+    }
+
+    std::unordered_map<uint32_t, CellInfoQ75> parentCellsById;
+    std::unordered_map<uint64_t, uint32_t> parentCellByGrid;
+    for (const CellInfoQ75& cell : parentCells) {
+        parentCellsById[cell.formId] = cell;
+        if (cell.hasGrid) {
+            parentCellByGrid[GridKeyQ79(cell.gridX, cell.gridY)] = cell.formId;
+        }
+    }
+
+    std::unordered_set<uint32_t> selectedParentCells;
+    size_t missingLocalGrids = 0u;
+    size_t parentCellMissing = 0u;
+    for (uint64_t key : selectedGridKeys) {
+        if (localGridKeys.find(key) != localGridKeys.end()) continue;
+        ++missingLocalGrids;
+        const auto parentIt = parentCellByGrid.find(key);
+        if (parentIt == parentCellByGrid.end()) {
+            ++parentCellMissing;
+            continue;
+        }
+        selectedParentCells.insert(parentIt->second);
+    }
+
+    if (selectedParentCells.empty()) {
+        Q75_LOGI("Q7.9 LAND PARENT: child=%08X parent=%08X useLand=1 missingLocalGrids=%zu parentCellsRequested=0 inherited=0 parentCellMissing=%zu",
+                 childWorldspaceFormId, parentInfo.formId,
+                 missingLocalGrids, parentCellMissing);
+        return 0u;
+    }
+
+    std::vector<Fo3TerrainCellQ76> inherited;
+    CollectSelectedLandQ76(parentInfo.formId, selectedParentCells, parentCellsById, inherited);
+
+    size_t appended = 0u;
+    for (Fo3TerrainCellQ76& cell : inherited) {
+        const uint64_t key = GridKeyQ79(cell.gridX, cell.gridY);
+        if (!localGridKeys.insert(key).second) continue;
+        terrain.push_back(std::move(cell));
+        ++appended;
+    }
+
+    Q75_LOGI("Q7.9 LAND PARENT: child=%08X parent=%08X useLand=1 missingLocalGrids=%zu parentCellsRequested=%zu inherited=%zu parentCellMissing=%zu totalTerrainCells=%zu",
+             childWorldspaceFormId, parentInfo.formId,
+             missingLocalGrids, selectedParentCells.size(), appended,
+             parentCellMissing, terrain.size());
+    return appended;
+}
+
 } // namespace
 
 bool LoadFo3TerrainQ76(uint32_t worldspaceFormId,
@@ -156,17 +320,25 @@ bool LoadFo3TerrainQ76(uint32_t worldspaceFormId,
         }
     }
 
-    if (!CollectSelectedLandQ76(worldspaceFormId, selectedCells, cellsById, gTerrainDataQ76)) {
-        Q75_LOGE("Q7.6 LAND LOAD FAILED: worldspace=%08X selectedCells=%zu targetGrid=(%d,%d)",
+    std::vector<Fo3TerrainCellQ76> localTerrain;
+    CollectSelectedLandQ76(worldspaceFormId, selectedCells, cellsById, localTerrain);
+    gTerrainDataQ76 = std::move(localTerrain);
+
+    const size_t localCount = gTerrainDataQ76.size();
+    const size_t inheritedCount = AppendInheritedParentLandQ79(
+        worldspaceFormId, selectedCells, cellsById, gTerrainDataQ76);
+
+    if (gTerrainDataQ76.empty()) {
+        Q75_LOGE("Q7.6 LAND LOAD FAILED: worldspace=%08X selectedCells=%zu targetGrid=(%d,%d) local=0 inherited=0",
                  worldspaceFormId, selectedCells.size(), targetGridX, targetGridY);
         return false;
     }
 
     size_t vertices = 0u;
     for (const Fo3TerrainCellQ76& cell : gTerrainDataQ76) vertices += cell.heights.size();
-    Q75_LOGI("Q7.6 LAND READY: worldspace=%08X terrainCells=%zu heightVertices=%zu targetGrid=(%d,%d) mode=%s",
-             worldspaceFormId, gTerrainDataQ76.size(), vertices,
-             targetGridX, targetGridY,
+    Q75_LOGI("Q7.9 LAND READY: worldspace=%08X terrainCells=%zu local=%zu inherited=%zu heightVertices=%zu selectedGridCells=%zu targetGrid=(%d,%d) mode=%s",
+             worldspaceFormId, gTerrainDataQ76.size(), localCount, inheritedCount,
+             vertices, selectedCells.size(), targetGridX, targetGridY,
              loadWholeWorldspace ? "full-small-worldspace" : "arrival-neighborhood");
     return true;
 }
