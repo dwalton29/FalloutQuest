@@ -4,13 +4,12 @@ project(falloutquest LANGUAGES C CXX)
 find_package(OpenXR REQUIRED CONFIG)
 
 add_library(falloutquest SHARED
-    q4-native.cpp
+    q5g-native.cpp
+    fo3-chair-render-mesh.cpp
     fo3-data-probe.cpp
     fo3-esm-scan.cpp
     fo3-megaton-contents.cpp
     fo3-bsa-extract.cpp
-    fo3-nif-mesh.cpp
-    fo3-nif-strips-probe.cpp
     ${ANDROID_NDK}/sources/android/native_app_glue/android_native_app_glue.c
 )
 
