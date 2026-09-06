@@ -85,7 +85,12 @@ bool IsMegatonArchitecture(const std::string& path) {
         if (ch >= 'A' && ch <= 'Z') ch = static_cast<char>(ch - 'A' + 'a');
         if (ch == '/') ch = '\\';
     }
-    return lower.find("architecture\\megaton\\interior\\shackinteriors") != std::string::npos;
+    // Q7.8: the post-door scene swap already rebuilds this collision world
+    // from the exterior Q7.5 placement set. The old Q6 filter only admitted
+    // the player-house ShackInteriors models, silently discarding Bethesda's
+    // authored Megaton exterior Havok. Accept every Megaton architecture NIF;
+    // LAND remains the exterior terrain ground source via Q7.7.
+    return lower.find("architecture\\megaton") != std::string::npos;
 }
 
 Vec3 RotateX(Vec3 v, float radians) {
