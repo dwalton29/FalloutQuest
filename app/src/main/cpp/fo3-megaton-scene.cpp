@@ -46,24 +46,16 @@ struct RawPlacement {
     uint32_t enableParentFormId = 0;
     uint8_t enableParentFlags = 0;
     bool hasEnableParent = false;
-    float x = 0.0f;
-    float y = 0.0f;
-    float z = 0.0f;
-    float rx = 0.0f;
-    float ry = 0.0f;
-    float rz = 0.0f;
+    float x = 0.0f, y = 0.0f, z = 0.0f;
+    float rx = 0.0f, ry = 0.0f, rz = 0.0f;
     float scale = 1.0f;
     bool hasTransform = false;
 
     bool hasTeleport = false;
     uint32_t teleportDoorRefFormId = 0;
     uint32_t teleportFlags = 0;
-    float teleportX = 0.0f;
-    float teleportY = 0.0f;
-    float teleportZ = 0.0f;
-    float teleportRx = 0.0f;
-    float teleportRy = 0.0f;
-    float teleportRz = 0.0f;
+    float teleportX = 0.0f, teleportY = 0.0f, teleportZ = 0.0f;
+    float teleportRx = 0.0f, teleportRy = 0.0f, teleportRz = 0.0f;
 };
 
 struct BaseRecord {
@@ -456,21 +448,16 @@ bool FindArrivalCandidates(uint32_t targetCellFormId,
         return false;
     }
 
-    std::vector<GroupFrame> groups;
     while (true) {
         const off_t rawOffset = ftello(file);
         if (rawOffset < 0) break;
         const uint64_t offset = static_cast<uint64_t>(rawOffset);
-        while (!groups.empty() && offset >= groups.back().end) groups.pop_back();
         if (offset + HEADER_SIZE > static_cast<uint64_t>(fileSize)) break;
         uint8_t header[HEADER_SIZE]{};
         if (!ReadExact(file, header, sizeof(header))) break;
         const uint32_t sizeField = ReadLe32(header + 4u);
         if (std::memcmp(header, "GRUP", 4u) == 0) {
             if (sizeField < HEADER_SIZE || offset + sizeField > static_cast<uint64_t>(fileSize)) break;
-            groups.push_back(GroupFrame{offset + sizeField,
-                                        ReadLe32(header + 8u),
-                                        ReadLe32(header + 12u)});
             continue;
         }
 
@@ -543,19 +530,11 @@ bool LoadFo3CellPlacements(uint32_t cellFormId,
     }
 
     std::unordered_set<uint32_t> wantedBases;
-    std::unordered_set<uint32_t> teleportTargets;
     wantedBases.reserve(activeRaw.size());
-    for (const RawPlacement* p : activeRaw) {
-        wantedBases.insert(p->baseFormId);
-        if (p->hasTeleport && p->teleportDoorRefFormId != 0u) {
-            teleportTargets.insert(p->teleportDoorRefFormId);
-        }
-    }
+    for (const RawPlacement* p : activeRaw) wantedBases.insert(p->baseFormId);
 
     std::unordered_map<uint32_t, BaseRecord> bases;
     if (!ResolveBases(wantedBases, bases)) return false;
-    std::unordered_map<uint32_t, uint32_t> teleportCells;
-    ResolveOwningCells(teleportTargets, teleportCells);
 
     size_t doorLinks = 0u;
     for (const RawPlacement* rawPlacement : activeRaw) {
@@ -580,8 +559,7 @@ bool LoadFo3CellPlacements(uint32_t cellFormId,
         if (p.hasTeleport) {
             world.teleport.sourceDoorRefFormId = p.refFormId;
             world.teleport.destinationDoorRefFormId = p.teleportDoorRefFormId;
-            const auto cellIt = teleportCells.find(p.teleportDoorRefFormId);
-            if (cellIt != teleportCells.end()) world.teleport.destinationCellFormId = cellIt->second;
+            world.teleport.destinationCellFormId = 0u; // resolved lazily on activation
             world.teleport.flags = p.teleportFlags;
             world.teleport.x = p.teleportX;
             world.teleport.y = p.teleportY;
@@ -589,21 +567,19 @@ bool LoadFo3CellPlacements(uint32_t cellFormId,
             world.teleport.rx = p.teleportRx;
             world.teleport.ry = p.teleportRy;
             world.teleport.rz = p.teleportRz;
-            world.teleport.valid = world.teleport.destinationDoorRefFormId != 0u &&
-                                   world.teleport.destinationCellFormId != 0u;
+            world.teleport.valid = world.teleport.destinationDoorRefFormId != 0u;
             if (world.teleport.valid) {
                 ++doorLinks;
-                Q7A_LOGI("Q7A DOOR LINK: cell=%08X source=%08X destinationDoor=%08X destinationCell=%08X P=(%.2f %.2f %.2f)",
+                Q7A_LOGI("Q7A DOOR LINK: cell=%08X source=%08X destinationDoor=%08X destinationCell=LAZY P=(%.2f %.2f %.2f)",
                          cellFormId, world.refFormId,
                          world.teleport.destinationDoorRefFormId,
-                         world.teleport.destinationCellFormId,
                          world.teleport.x, world.teleport.y, world.teleport.z);
             }
         }
         outPlacements.push_back(std::move(world));
     }
 
-    Q7A_LOGI("Q7A CELL READY: cell=%08X raw=%zu active=%zu modelPlacements=%zu doorLinks=%zu disabledStandalone=%zu disabledByParent=%zu enabledParented=%zu unresolvedParents=%zu cycles=%zu",
+    Q7A_LOGI("Q7A CELL READY: cell=%08X raw=%zu active=%zu modelPlacements=%zu doorLinks=%zu disabledStandalone=%zu disabledByParent=%zu enabledParented=%zu unresolvedParents=%zu cycles=%zu lazyDoorCells=1",
              cellFormId, raw.size(), activeRaw.size(), outPlacements.size(), doorLinks,
              disabledStandalone, disabledByParent, enabledParented, unresolvedParents, cycles);
     return !outPlacements.empty();
@@ -634,26 +610,21 @@ bool LoadFo3CellArrival(uint32_t cellFormId, Fo3CellArrival& outArrival) {
         return false;
     }
 
-    // Prefer a source door outside the target cell; that is the marker used when
-    // entering this CELL rather than leaving it.
-    const Fo3CellArrival* chosen = nullptr;
+    // We already know which refs belong to the target cell. Prefer an XTEL whose
+    // source ref is NOT one of them; that is the authored marker for entering the
+    // cell. Avoid per-candidate whole-ESM ownership scans during startup.
+    const Fo3CellArrival* chosen = &candidates.front();
     for (const Fo3CellArrival& candidate : candidates) {
-        uint32_t sourceCell = 0u;
-        FindFo3RefOwningCell(candidate.sourceDoorRefFormId, sourceCell);
-        const bool sourceInside = sourceCell == cellFormId;
-        if (!chosen) {
+        if (targetRefs.find(candidate.sourceDoorRefFormId) == targetRefs.end()) {
             chosen = &candidate;
-        } else {
-            uint32_t chosenCell = 0u;
-            FindFo3RefOwningCell(chosen->sourceDoorRefFormId, chosenCell);
-            if (chosenCell == cellFormId && !sourceInside) chosen = &candidate;
+            break;
         }
     }
-    if (!chosen) return false;
+
     outArrival = *chosen;
-    Q7A_LOGI("Q7A CELL ARRIVAL: cell=%08X source=%08X destinationDoor=%08X P=(%.2f %.2f %.2f) R=(%.4f %.4f %.4f)",
+    Q7A_LOGI("Q7A CELL ARRIVAL: cell=%08X source=%08X destinationDoor=%08X candidates=%zu P=(%.2f %.2f %.2f) R=(%.4f %.4f %.4f) ownershipScans=0",
              cellFormId, outArrival.sourceDoorRefFormId,
-             outArrival.destinationDoorRefFormId,
+             outArrival.destinationDoorRefFormId, candidates.size(),
              outArrival.x, outArrival.y, outArrival.z,
              outArrival.rx, outArrival.ry, outArrival.rz);
     return true;
