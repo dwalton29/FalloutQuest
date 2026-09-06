@@ -15,7 +15,11 @@
 // Q7.5 is included into this translation unit deliberately. This keeps the
 // existing CMake/source graph unchanged while letting the render-thread Q7.4
 // loader dispatch exterior worldspaces to the XCLC neighborhood assembler.
+// The proven Q7.1 source already has an anonymous-namespace TAG symbol, so
+// remap Q7.5's logger token while it is textually included here.
+#define TAG Q75_TAG
 #include "fo3-worldspace-q75.cpp"
+#undef TAG
 
 namespace {
 
