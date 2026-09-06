@@ -26,6 +26,10 @@
 // CPU LAND/VHGT data. No collision or player-grounding code is touched here.
 #include "fo3-terrain-data-q76.cpp"
 
+// Standalone GLES terrain renderer. Its internal symbols are Q76B-prefixed so
+// it is safe to include in this translation unit without disturbing Q7.1/Q7.5.
+#include "fo3-terrain-render-q76.cpp"
+
 namespace {
 
 struct Q74Owner {
@@ -135,6 +139,14 @@ bool Q74FindDoorHit(float originX, float originY, float originZ,
 
 } // namespace
 
+// Q6G collision debug rendering is disabled in the proven Q7.5 build. The
+// collision header marks only that visual symbol weak, so this strong render
+// hook safely supplies Q7.6b LAND instead. All collision/grounding functions
+// remain the original Q7.5 implementations.
+void RenderFo3CollisionOverlay(const float* mvp16) {
+    RenderFo3TerrainQ76(mvp16);
+}
+
 bool LoadFo3CellPlacementsQ74(uint32_t cellFormId,
                              std::vector<Fo3WorldPlacement>& outPlacements) {
     // For exterior load doors, the linked REFR often belongs to the WRLD's
@@ -166,6 +178,25 @@ bool ConsumeFo3CellTransitionRequestQ74(Fo3CellTransitionRequestQ74& outRequest)
 void CompleteFo3CellTransitionQ74(uint32_t cellFormId) {
     gCurrentCellQ74 = cellFormId;
     gPlayerResetPendingQ74 = true;
+
+    bool terrainReady = false;
+    if (gPendingTransitionQ74.valid &&
+        gPendingTransitionQ74.cellFormId == cellFormId &&
+        gPendingTransitionQ74.worldspaceFormId != 0u) {
+        terrainReady = InitializeFo3TerrainRenderQ76(
+            gPendingTransitionQ74.worldspaceFormId,
+            gPendingTransitionQ74.x,
+            gPendingTransitionQ74.y,
+            gPendingTransitionQ74.z,
+            Q71_SCENE_FORWARD,
+            Q71_FLOOR_Y,
+            Q71_UNITS_PER_METRE);
+    }
+
+    Q71_LOGI("Q7.6b TERRAIN POST-SWAP: persistentCell=%08X worldspace=%08X ready=%d visualOnly=1 collisionUntouched=1",
+             cellFormId,
+             gPendingTransitionQ74.worldspaceFormId,
+             terrainReady ? 1 : 0);
     Q71_LOGI("Q7.5 TRANSITION APPLIED: persistentCell=%08X playerReset=NEXT_PHYSICS_FRAME orientation=preserved worldspaceNeighborhood=1",
              cellFormId);
 }
