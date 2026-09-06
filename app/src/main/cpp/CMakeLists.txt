@@ -4,8 +4,8 @@ project(falloutquest LANGUAGES C CXX)
 find_package(OpenXR REQUIRED CONFIG)
 
 add_library(falloutquest SHARED
-    q5h-native.cpp
-    fo3-chair-textured-mesh.cpp
+    q5i-native.cpp
+    fo3-chair-material-mesh.cpp
     fo3-texture-bsa.cpp
     fo3-data-probe.cpp
     fo3-esm-scan.cpp
@@ -15,7 +15,7 @@ add_library(falloutquest SHARED
 )
 
 target_include_directories(falloutquest PRIVATE
-    ${ANDROID_NDK}/sources/android/native_app_glue
+    ${ANDROID_NDK}/sources/android_native_app_glue
     ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
