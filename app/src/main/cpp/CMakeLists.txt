@@ -473,7 +473,7 @@ file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/fo3-static-nif-q6h.cpp" "${Q6H_NIF_SOURC
 add_library(falloutquest SHARED
     ${CMAKE_CURRENT_BINARY_DIR}/q6h-native-generated.cpp
     fo3-megaton-scene.cpp
-    fo3-cell-spawn.cpp
+    fo3-cell-spawn-q72.cpp
     ${CMAKE_CURRENT_BINARY_DIR}/fo3-static-nif-q6h.cpp
     fo3-nif-collision.cpp
     fo3-collision-overlay.cpp
