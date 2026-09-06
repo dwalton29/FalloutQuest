@@ -326,6 +326,59 @@ string(REPLACE
     "gProgram = CreateProgram();"
     "gProgram = CreateQ6CProgram();"
     Q6C_NATIVE_SOURCE "${Q6C_NATIVE_SOURCE}")
+
+# Q6E overlays Bethesda-authored bhk collision over the working Q6D scene.
+# The overlay is verification-only and may fail per asset without failing scene
+# initialization. It uses the exact room centre/floor transform used by visuals.
+string(REPLACE
+    "#include \"fo3-texture-bsa.h\""
+    "#include \"fo3-texture-bsa.h\"\n#include \"fo3-collision-overlay.h\""
+    Q6C_NATIVE_SOURCE "${Q6C_NATIVE_SOURCE}")
+
+set(Q6E_OLD_PROGRAM [=[
+    gProgram = CreateQ6CProgram();
+]=])
+set(Q6E_NEW_PROGRAM [=[
+    std::vector<Fo3WorldPlacement> q6eCollisionPlacements;
+    q6eCollisionPlacements.reserve(selected.size());
+    for (const CpuObject& object : selected) {
+        q6eCollisionPlacements.push_back(object.placement);
+    }
+    InitializeFo3CollisionOverlay(q6eCollisionPlacements,
+                                  centerX, centerY, floorZ,
+                                  SCENE_FORWARD, FLOOR_Y,
+                                  FO3_UNITS_PER_METRE);
+
+    gProgram = CreateQ6CProgram();
+]=])
+string(REPLACE "${Q6E_OLD_PROGRAM}" "${Q6E_NEW_PROGRAM}"
+       Q6C_NATIVE_SOURCE "${Q6C_NATIVE_SOURCE}")
+
+set(Q6E_OLD_RENDER_RESTORE [=[
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture1));
+]=])
+set(Q6E_NEW_RENDER_RESTORE [=[
+    RenderFo3CollisionOverlay(mvp);
+
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture1));
+]=])
+string(REPLACE "${Q6E_OLD_RENDER_RESTORE}" "${Q6E_NEW_RENDER_RESTORE}"
+       Q6C_NATIVE_SOURCE "${Q6C_NATIVE_SOURCE}")
+
+set(Q6E_OLD_CLEANUP [=[
+    glDeleteFramebuffers(n, framebuffers);
+    for (GpuObject& object : gObjects) {
+]=])
+set(Q6E_NEW_CLEANUP [=[
+    glDeleteFramebuffers(n, framebuffers);
+    ShutdownFo3CollisionOverlay();
+    for (GpuObject& object : gObjects) {
+]=])
+string(REPLACE "${Q6E_OLD_CLEANUP}" "${Q6E_NEW_CLEANUP}"
+       Q6C_NATIVE_SOURCE "${Q6C_NATIVE_SOURCE}")
+
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/q6c-native-generated.cpp" "${Q6C_NATIVE_SOURCE}")
 
 # Generate the multi-shape NIF loader from the already-proven parser. The only
@@ -479,6 +532,8 @@ add_library(falloutquest SHARED
     ${CMAKE_CURRENT_BINARY_DIR}/q6c-native-generated.cpp
     fo3-megaton-scene.cpp
     ${CMAKE_CURRENT_BINARY_DIR}/fo3-static-nif-q6c.cpp
+    fo3-nif-collision.cpp
+    fo3-collision-overlay.cpp
     fo3-bsa-reader.cpp
     fo3-texture-bsa.cpp
     fo3-data-probe.cpp
