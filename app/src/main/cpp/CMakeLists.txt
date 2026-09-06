@@ -10,15 +10,14 @@ add_library(falloutquest SHARED
 
 target_include_directories(falloutquest PRIVATE
     ${ANDROID_NDK}/sources/android/native_app_glue
+    ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
 # openxr_platform.h expects Android JNI and EGL platform types to already be
 # declared when XR_USE_PLATFORM_ANDROID / XR_USE_GRAPHICS_API_OPENGL_ES are set.
-# Force-include them before native-lib.cpp's OpenXR headers so the same source
-# remains portable while we iterate on the Quest runtime.
+# Force-include a single prelude header before native-lib.cpp's OpenXR headers.
 target_compile_options(falloutquest PRIVATE
-    -include jni.h
-    -include EGL/egl.h
+    -include ${CMAKE_CURRENT_SOURCE_DIR}/openxr-platform-prelude.h
 )
 
 find_library(android-lib android)
