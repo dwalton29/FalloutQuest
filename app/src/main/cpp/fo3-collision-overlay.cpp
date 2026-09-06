@@ -8,6 +8,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -26,6 +27,7 @@ constexpr float PLAYER_HEIGHT = 1.70f;
 constexpr float PLAYER_SKIN = 0.003f;
 constexpr float MAX_STEP_UP = 0.32f;
 constexpr float MAX_GROUND_DROP = 0.80f;
+constexpr float SAFE_SPAWN_VERTICAL_SEARCH = 8.0f;
 constexpr int MAX_DEPENETRATION_PASSES = 6;
 
 #define Q6F_LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
@@ -35,6 +37,8 @@ constexpr int MAX_DEPENETRATION_PASSES = 6;
 #define Q6G_LOGW(...) __android_log_print(ANDROID_LOG_WARN, TAG, __VA_ARGS__)
 #define Q6H_LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
 #define Q6H_LOGW(...) __android_log_print(ANDROID_LOG_WARN, TAG, __VA_ARGS__)
+#define Q6I_LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
+#define Q6I_LOGW(...) __android_log_print(ANDROID_LOG_WARN, TAG, __VA_ARGS__)
 
 struct Vec3 {
     float x = 0.0f;
@@ -221,6 +225,30 @@ bool FindGround(float x, float z, float feetY, float& groundY) {
     return found;
 }
 
+bool FindGroundWide(float x, float z, float referenceY, float& groundY) {
+    bool found = false;
+    float bestDistance = std::numeric_limits<float>::max();
+    float bestY = referenceY;
+    for (const CollisionTriangle& tri : gWorldTriangles) {
+        if (std::fabs(tri.normal.y) < 0.55f) continue;
+        if (x < tri.minX - 0.02f || x > tri.maxX + 0.02f ||
+            z < tri.minZ - 0.02f || z > tri.maxZ + 0.02f) continue;
+
+        float u = 0.0f, v = 0.0f, w = 0.0f;
+        if (!BarycentricXZ(tri, x, z, u, v, w)) continue;
+        const float y = tri.a.y*u + tri.b.y*v + tri.c.y*w;
+        const float distance = std::fabs(y - referenceY);
+        if (distance > SAFE_SPAWN_VERTICAL_SEARCH) continue;
+        if (!found || distance < bestDistance) {
+            bestDistance = distance;
+            bestY = y;
+            found = true;
+        }
+    }
+    if (found) groundY = bestY;
+    return found;
+}
+
 uint32_t ResolveWallPenetrations(float& x, float& z, float feetY) {
     uint32_t contacts = 0;
     const float topY = feetY + PLAYER_HEIGHT;
@@ -288,7 +316,7 @@ bool HasOverheadBlock(float x, float z, float feetY) {
 
 bool SpawnCandidateClear(float x, float z, float seedFeetY, float& outGroundY) {
     float groundY = seedFeetY;
-    if (!FindGround(x, z, seedFeetY, groundY)) return false;
+    if (!FindGroundWide(x, z, seedFeetY, groundY)) return false;
     float resolvedX = x;
     float resolvedZ = z;
     const uint32_t contacts = ResolveWallPenetrations(resolvedX, resolvedZ, groundY);
@@ -303,10 +331,11 @@ bool SpawnCandidateClear(float x, float z, float seedFeetY, float& outGroundY) {
 bool FindSafeSpawn(float seedX, float seedZ, float currentPlayerYOffset,
                    float& outX, float& outZ, float& outPlayerYOffset) {
     const float seedFeetY = gCollisionFloorY + currentPlayerYOffset;
-    constexpr std::array<float, 9> radii{
-        0.0f, 0.30f, 0.60f, 0.90f, 1.20f, 1.50f, 1.80f, 2.10f, 2.40f
+    constexpr std::array<float, 13> radii{
+        0.0f, 0.30f, 0.60f, 0.90f, 1.20f, 1.50f, 1.80f,
+        2.10f, 2.40f, 3.00f, 3.60f, 4.20f, 4.80f
     };
-    constexpr int ANGLES = 24;
+    constexpr int ANGLES = 32;
     for (float radius : radii) {
         const int samples = radius == 0.0f ? 1 : ANGLES;
         for (int i = 0; i < samples; ++i) {
@@ -316,6 +345,34 @@ bool FindSafeSpawn(float seedX, float seedZ, float currentPlayerYOffset,
             const float z = seedZ + std::sin(angle) * radius;
             float groundY = seedFeetY;
             if (!SpawnCandidateClear(x, z, seedFeetY, groundY)) continue;
+            outX = x;
+            outZ = z;
+            outPlayerYOffset = groundY - gCollisionFloorY;
+            return true;
+        }
+    }
+    return false;
+}
+
+bool FindGroundedSpawnRescue(float seedX, float seedZ, float currentPlayerYOffset,
+                             float& outX, float& outZ, float& outPlayerYOffset) {
+    const float seedFeetY = gCollisionFloorY + currentPlayerYOffset;
+    constexpr std::array<float, 13> radii{
+        0.0f, 0.30f, 0.60f, 0.90f, 1.20f, 1.50f, 1.80f,
+        2.10f, 2.40f, 3.00f, 3.60f, 4.20f, 4.80f
+    };
+    constexpr int ANGLES = 32;
+    for (float radius : radii) {
+        const int samples = radius == 0.0f ? 1 : ANGLES;
+        for (int i = 0; i < samples; ++i) {
+            const float angle = samples == 1 ? 0.0f :
+                (6.28318530717958647692f * static_cast<float>(i) / static_cast<float>(samples));
+            float x = seedX + std::cos(angle) * radius;
+            float z = seedZ + std::sin(angle) * radius;
+            float groundY = seedFeetY;
+            if (!FindGroundWide(x, z, seedFeetY, groundY)) continue;
+            ResolveWallPenetrations(x, z, groundY);
+            if (HasOverheadBlock(x, z, groundY)) continue;
             outX = x;
             outZ = z;
             outPlayerYOffset = groundY - gCollisionFloorY;
@@ -550,13 +607,30 @@ bool ResolveFo3PlayerMotionQ6G(float currentX, float currentZ,
             *outZ = spawnZ;
             *outPlayerYOffset = spawnPlayerY;
             gSafeSpawnResolved = true;
-            Q6H_LOGI("Q6H SAFE SPAWN: seed=(%.3f %.3f) resolved=(%.3f %.3f) playerY=%.3f capsuleClear=1 grounded=1",
+            Q6I_LOGI("Q6I SAFE SPAWN: seed=(%.3f %.3f) resolved=(%.3f %.3f) playerY=%.3f capsuleClear=1 grounded=1 verticalSearch=%.1f",
+                     currentX, currentZ, spawnX, spawnZ, spawnPlayerY, SAFE_SPAWN_VERTICAL_SEARCH);
+            return true;
+        }
+
+        if (FindGroundedSpawnRescue(currentX, currentZ, currentPlayerYOffset,
+                                    spawnX, spawnZ, spawnPlayerY)) {
+            *outX = spawnX;
+            *outZ = spawnZ;
+            *outPlayerYOffset = spawnPlayerY;
+            gSafeSpawnResolved = true;
+            Q6I_LOGW("Q6I SAFE SPAWN RESCUE: seed=(%.3f %.3f) resolved=(%.3f %.3f) playerY=%.3f grounded=1 capsuleDepenetrated=1",
                      currentX, currentZ, spawnX, spawnZ, spawnPlayerY);
             return true;
         }
-        gSafeSpawnResolved = true;
-        Q6H_LOGW("Q6H SAFE SPAWN FALLBACK: no clear grounded candidate within 2.40m of seed=(%.3f %.3f); normal depenetration retained",
-                 currentX, currentZ);
+
+        // Never mark an ungrounded spawn as resolved. Keep trying on subsequent
+        // frames rather than accepting the Q6H behaviour that left the headset
+        // poking through the floor.
+        *outX = currentX;
+        *outZ = currentZ;
+        *outPlayerYOffset = currentPlayerYOffset;
+        Q6I_LOGW("Q6I SAFE SPAWN DEFER: no grounded collision candidate within 4.80m; movement held and retrying");
+        return true;
     }
 
     float x = currentX;
