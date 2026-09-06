@@ -30,6 +30,10 @@
 // it is safe to include in this translation unit without disturbing Q7.1/Q7.5.
 #include "fo3-terrain-render-q76.cpp"
 
+// Q7.7 physical LAND sampler is also kept in this transition translation unit.
+// It only becomes active after the exterior terrain upload has succeeded.
+#include "fo3-terrain-ground-q77.cpp"
+
 namespace {
 
 struct Q74Owner {
@@ -142,7 +146,8 @@ bool Q74FindDoorHit(float originX, float originY, float originZ,
 // Q6G collision debug rendering is disabled in the proven Q7.5 build. The
 // collision header marks only that visual symbol weak, so this strong render
 // hook safely supplies Q7.6b LAND instead. All collision/grounding functions
-// remain the original Q7.5 implementations.
+// remain the original Q7.5 implementations apart from Q7.7's explicitly
+// guarded terrain-ground merge in the collision resolver.
 void RenderFo3CollisionOverlay(const float* mvp16) {
     RenderFo3TerrainQ76(mvp16);
 }
@@ -191,12 +196,23 @@ void CompleteFo3CellTransitionQ74(uint32_t cellFormId) {
             Q71_SCENE_FORWARD,
             Q71_FLOOR_Y,
             Q71_UNITS_PER_METRE);
+        if (terrainReady) {
+            ActivateFo3TerrainGroundingQ77(
+                gPendingTransitionQ74.worldspaceFormId,
+                gPendingTransitionQ74.x,
+                gPendingTransitionQ74.y,
+                gPendingTransitionQ74.z,
+                Q71_SCENE_FORWARD,
+                Q71_FLOOR_Y,
+                Q71_UNITS_PER_METRE);
+        }
     }
 
-    Q71_LOGI("Q7.6b TERRAIN POST-SWAP: persistentCell=%08X worldspace=%08X ready=%d visualOnly=1 collisionUntouched=1",
+    Q71_LOGI("Q7.7 TERRAIN POST-SWAP: persistentCell=%08X worldspace=%08X ready=%d physicalGround=%d housePathUntouched=1",
              cellFormId,
              gPendingTransitionQ74.worldspaceFormId,
-             terrainReady ? 1 : 0);
+             terrainReady ? 1 : 0,
+             IsFo3TerrainGroundingActiveQ77() ? 1 : 0);
     Q71_LOGI("Q7.5 TRANSITION APPLIED: persistentCell=%08X playerReset=NEXT_PHYSICS_FRAME orientation=preserved worldspaceNeighborhood=1",
              cellFormId);
 }
