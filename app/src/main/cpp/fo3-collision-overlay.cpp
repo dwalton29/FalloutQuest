@@ -19,15 +19,40 @@ namespace {
 constexpr const char* TAG = "FalloutQuest";
 constexpr size_t MAX_COLLISION_PLACEMENTS = 40u;
 constexpr size_t MAX_LINE_VERTICES = 800000u;
+constexpr bool SHOW_COLLISION_DEBUG_Q6G = false;
+
+// Quest-scale standing controller. These are deliberately conservative for the
+// first physical Fallout-world pass; the geometry itself remains Bethesda's.
+constexpr float PLAYER_RADIUS = 0.26f;
+constexpr float PLAYER_HEIGHT = 1.70f;
+constexpr float PLAYER_SKIN = 0.003f;
+constexpr float MAX_STEP_UP = 0.32f;
+constexpr float MAX_GROUND_DROP = 0.80f;
+constexpr int MAX_DEPENETRATION_PASSES = 6;
 
 #define Q6F_LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
 #define Q6F_LOGW(...) __android_log_print(ANDROID_LOG_WARN, TAG, __VA_ARGS__)
 #define Q6F_LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
+#define Q6G_LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
+#define Q6G_LOGW(...) __android_log_print(ANDROID_LOG_WARN, TAG, __VA_ARGS__)
 
 struct Vec3 {
     float x = 0.0f;
     float y = 0.0f;
     float z = 0.0f;
+};
+
+struct Vec2 {
+    float x = 0.0f;
+    float y = 0.0f;
+};
+
+struct CollisionTriangle {
+    Vec3 a, b, c;
+    Vec3 normal;
+    float minX = 0.0f, maxX = 0.0f;
+    float minY = 0.0f, maxY = 0.0f;
+    float minZ = 0.0f, maxZ = 0.0f;
 };
 
 GLuint gProgram = 0;
@@ -40,6 +65,12 @@ size_t gCollisionShapeCount = 0;
 size_t gTriangleCount = 0;
 std::array<size_t, 5> gKindCounts{};
 bool gLoggedVisible = false;
+
+std::vector<CollisionTriangle> gWorldTriangles;
+float gCollisionFloorY = -1.55f;
+bool gPlayerCollisionReady = false;
+uint64_t gResolveCounter = 0;
+uint64_t gContactLogCount = 0;
 
 bool IsMegatonArchitecture(const std::string& path) {
     std::string lower = path;
@@ -85,6 +116,162 @@ Vec3 ToVr(Vec3 game, float centerX, float centerY, float floorZ,
         floorY + (game.z - floorZ) / unitsPerMetre,
         sceneForward - (game.y - centerY) / unitsPerMetre,
     };
+}
+
+Vec3 Cross(Vec3 a, Vec3 b) {
+    return {
+        a.y*b.z - a.z*b.y,
+        a.z*b.x - a.x*b.z,
+        a.x*b.y - a.y*b.x,
+    };
+}
+
+Vec3 Sub(Vec3 a, Vec3 b) {
+    return {a.x-b.x, a.y-b.y, a.z-b.z};
+}
+
+float Length(Vec3 v) {
+    return std::sqrt(v.x*v.x + v.y*v.y + v.z*v.z);
+}
+
+bool BuildTriangle(const Vec3& a, const Vec3& b, const Vec3& c,
+                   CollisionTriangle& out) {
+    Vec3 n = Cross(Sub(b, a), Sub(c, a));
+    const float length = Length(n);
+    if (!(length > 1e-7f) || !std::isfinite(length)) return false;
+    n.x /= length; n.y /= length; n.z /= length;
+    out.a = a; out.b = b; out.c = c; out.normal = n;
+    out.minX = std::min({a.x, b.x, c.x});
+    out.maxX = std::max({a.x, b.x, c.x});
+    out.minY = std::min({a.y, b.y, c.y});
+    out.maxY = std::max({a.y, b.y, c.y});
+    out.minZ = std::min({a.z, b.z, c.z});
+    out.maxZ = std::max({a.z, b.z, c.z});
+    return true;
+}
+
+Vec2 ClosestPointOnSegment2D(Vec2 p, Vec2 a, Vec2 b) {
+    const float abx = b.x - a.x;
+    const float aby = b.y - a.y;
+    const float denom = abx*abx + aby*aby;
+    if (denom <= 1e-10f) return a;
+    float t = ((p.x-a.x)*abx + (p.y-a.y)*aby) / denom;
+    t = std::clamp(t, 0.0f, 1.0f);
+    return {a.x + abx*t, a.y + aby*t};
+}
+
+float Dist2(Vec2 a, Vec2 b) {
+    const float dx = a.x-b.x;
+    const float dy = a.y-b.y;
+    return dx*dx + dy*dy;
+}
+
+bool BarycentricXZ(const CollisionTriangle& tri, float x, float z,
+                   float& u, float& v, float& w) {
+    const float x0 = tri.a.x, z0 = tri.a.z;
+    const float x1 = tri.b.x, z1 = tri.b.z;
+    const float x2 = tri.c.x, z2 = tri.c.z;
+    const float denom = (z1-z2)*(x0-x2) + (x2-x1)*(z0-z2);
+    if (std::fabs(denom) < 1e-8f) return false;
+    u = ((z1-z2)*(x-x2) + (x2-x1)*(z-z2)) / denom;
+    v = ((z2-z0)*(x-x2) + (x0-x2)*(z-z2)) / denom;
+    w = 1.0f - u - v;
+    constexpr float eps = -0.0005f;
+    return u >= eps && v >= eps && w >= eps;
+}
+
+Vec2 ClosestPointTriangleXZ(const CollisionTriangle& tri, Vec2 p, bool& inside) {
+    float u = 0.0f, v = 0.0f, w = 0.0f;
+    inside = BarycentricXZ(tri, p.x, p.y, u, v, w);
+    if (inside) return p;
+
+    const Vec2 a{tri.a.x, tri.a.z};
+    const Vec2 b{tri.b.x, tri.b.z};
+    const Vec2 c{tri.c.x, tri.c.z};
+    const Vec2 qab = ClosestPointOnSegment2D(p, a, b);
+    const Vec2 qbc = ClosestPointOnSegment2D(p, b, c);
+    const Vec2 qca = ClosestPointOnSegment2D(p, c, a);
+    const float dab = Dist2(p, qab);
+    const float dbc = Dist2(p, qbc);
+    const float dca = Dist2(p, qca);
+    if (dab <= dbc && dab <= dca) return qab;
+    if (dbc <= dca) return qbc;
+    return qca;
+}
+
+bool FindGround(float x, float z, float feetY, float& groundY) {
+    bool found = false;
+    float best = -1e30f;
+    for (const CollisionTriangle& tri : gWorldTriangles) {
+        if (std::fabs(tri.normal.y) < 0.55f) continue;
+        if (x < tri.minX - 0.02f || x > tri.maxX + 0.02f ||
+            z < tri.minZ - 0.02f || z > tri.maxZ + 0.02f) continue;
+
+        float u = 0.0f, v = 0.0f, w = 0.0f;
+        if (!BarycentricXZ(tri, x, z, u, v, w)) continue;
+        const float y = tri.a.y*u + tri.b.y*v + tri.c.y*w;
+        if (y > feetY + MAX_STEP_UP || y < feetY - MAX_GROUND_DROP) continue;
+        if (y > best) {
+            best = y;
+            found = true;
+        }
+    }
+    if (found) groundY = best;
+    return found;
+}
+
+uint32_t ResolveWallPenetrations(float& x, float& z, float feetY) {
+    uint32_t contacts = 0;
+    const float topY = feetY + PLAYER_HEIGHT;
+    const float radius2 = PLAYER_RADIUS * PLAYER_RADIUS;
+
+    for (int pass = 0; pass < MAX_DEPENETRATION_PASSES; ++pass) {
+        bool changed = false;
+        for (const CollisionTriangle& tri : gWorldTriangles) {
+            // Floors and ceilings are handled by grounding. Everything more
+            // vertical than this participates in horizontal capsule collision.
+            if (std::fabs(tri.normal.y) >= 0.75f) continue;
+            if (tri.maxY < feetY + 0.04f || tri.minY > topY) continue;
+            if (x < tri.minX - PLAYER_RADIUS || x > tri.maxX + PLAYER_RADIUS ||
+                z < tri.minZ - PLAYER_RADIUS || z > tri.maxZ + PLAYER_RADIUS) continue;
+
+            const Vec2 p{x, z};
+            bool inside = false;
+            const Vec2 q = ClosestPointTriangleXZ(tri, p, inside);
+            float dx = x - q.x;
+            float dz = z - q.y;
+            float d2 = dx*dx + dz*dz;
+            if (d2 >= radius2) continue;
+
+            float distance = std::sqrt(std::max(d2, 0.0f));
+            if (distance > 1e-5f) {
+                dx /= distance;
+                dz /= distance;
+            } else {
+                dx = tri.normal.x;
+                dz = tri.normal.z;
+                float horizontalLength = std::sqrt(dx*dx + dz*dz);
+                if (horizontalLength < 1e-5f) continue;
+                dx /= horizontalLength;
+                dz /= horizontalLength;
+                const float centroidX = (tri.a.x + tri.b.x + tri.c.x) / 3.0f;
+                const float centroidZ = (tri.a.z + tri.b.z + tri.c.z) / 3.0f;
+                if (dx*(x-centroidX) + dz*(z-centroidZ) < 0.0f) {
+                    dx = -dx;
+                    dz = -dz;
+                }
+                distance = 0.0f;
+            }
+
+            const float push = (PLAYER_RADIUS - distance) + PLAYER_SKIN;
+            x += dx * push;
+            z += dz * push;
+            ++contacts;
+            changed = true;
+        }
+        if (!changed) break;
+    }
+    return contacts;
 }
 
 GLuint Compile(GLenum type, const char* source) {
@@ -160,11 +347,13 @@ bool InitializeFo3CollisionOverlay(const std::vector<Fo3WorldPlacement>& placeme
                                    float unitsPerMetre) {
     ShutdownFo3CollisionOverlay();
     if (placements.empty() || unitsPerMetre <= 0.0f) return false;
+    gCollisionFloorY = floorY;
 
     std::unordered_set<uint32_t> seenRefs;
     std::unordered_map<std::string, std::vector<Fo3NifCollisionShapeQ6F>> modelCache;
     std::vector<float> lines;
     lines.reserve(65536u);
+    gWorldTriangles.reserve(4096u);
 
     size_t misses = 0;
     size_t cacheHits = 0;
@@ -196,10 +385,6 @@ bool InitializeFo3CollisionOverlay(const std::vector<Fo3WorldPlacement>& placeme
             if (vertexCount == 0u || shape.indices.empty()) continue;
 
             for (size_t i = 0; i + 2u < shape.indices.size(); i += 3u) {
-                if ((lines.size() / 3u) + 6u > MAX_LINE_VERTICES) {
-                    capped = true;
-                    break;
-                }
                 const uint32_t ia = shape.indices[i];
                 const uint32_t ib = shape.indices[i + 1u];
                 const uint32_t ic = shape.indices[i + 2u];
@@ -218,9 +403,20 @@ bool InitializeFo3CollisionOverlay(const std::vector<Fo3WorldPlacement>& placeme
                 const Vec3 a = point(ia);
                 const Vec3 b = point(ib);
                 const Vec3 c = point(ic);
-                AppendPoint(lines, a); AppendPoint(lines, b);
-                AppendPoint(lines, b); AppendPoint(lines, c);
-                AppendPoint(lines, c); AppendPoint(lines, a);
+
+                CollisionTriangle worldTriangle;
+                if (!BuildTriangle(a, b, c, worldTriangle)) continue;
+                gWorldTriangles.push_back(worldTriangle);
+
+                if (SHOW_COLLISION_DEBUG_Q6G) {
+                    if ((lines.size() / 3u) + 6u > MAX_LINE_VERTICES) {
+                        capped = true;
+                        break;
+                    }
+                    AppendPoint(lines, a); AppendPoint(lines, b);
+                    AppendPoint(lines, b); AppendPoint(lines, c);
+                    AppendPoint(lines, c); AppendPoint(lines, a);
+                }
                 ++placementTriangles;
             }
             if (capped) break;
@@ -242,18 +438,30 @@ bool InitializeFo3CollisionOverlay(const std::vector<Fo3WorldPlacement>& placeme
         if (capped) break;
     }
 
-    if (lines.empty()) {
+    if (gWorldTriangles.empty()) {
         Q6F_LOGW("Q6F COLLISION READY FAILED: placements=0 misses=%zu uniqueModels=%zu",
                  misses, modelCache.size());
         return false;
     }
 
+    gPlayerCollisionReady = true;
+    Q6F_LOGI("Q6F COLLISION READY: placements=%zu shapes=%zu triangles=%zu uniqueModels=%zu modelCacheHits=%zu misses=%zu packed=%zu convex=%zu box=%zu sphere=%zu capsule=%zu capped=%d",
+             gPlacementCount, gCollisionShapeCount, gTriangleCount,
+             modelCache.size(), cacheHits, misses,
+             gKindCounts[0], gKindCounts[1], gKindCounts[2], gKindCounts[3], gKindCounts[4], capped ? 1 : 0);
+    Q6G_LOGI("Q6G PHYSICS READY: authoredTriangles=%zu capsuleRadius=%.2f capsuleHeight=%.2f floorReference=%.2f debugOverlay=%d",
+             gWorldTriangles.size(), PLAYER_RADIUS, PLAYER_HEIGHT,
+             gCollisionFloorY, SHOW_COLLISION_DEBUG_Q6G ? 1 : 0);
+
+    if (!SHOW_COLLISION_DEBUG_Q6G) return true;
+
     gProgram = BuildProgram();
-    if (!gProgram) return false;
+    if (!gProgram) return true; // physics remains valid if debug GL fails
     gMvpLocation = glGetUniformLocation(gProgram, "uMvp");
     if (gMvpLocation < 0) {
-        ShutdownFo3CollisionOverlay();
-        return false;
+        glDeleteProgram(gProgram);
+        gProgram = 0;
+        return true;
     }
 
     glGenVertexArrays(1, &gVao);
@@ -267,21 +475,81 @@ bool InitializeFo3CollisionOverlay(const std::vector<Fo3WorldPlacement>& placeme
     glEnableVertexAttribArray(0);
     glBindVertexArray(0);
     glBindBuffer(GL_ARRAY_BUFFER, 0);
-
     gVertexCount = static_cast<GLsizei>(lines.size() / 3u);
-    if (glGetError() != GL_NO_ERROR) {
-        ShutdownFo3CollisionOverlay();
-        return false;
-    }
-
-    Q6F_LOGI("Q6F COLLISION READY: placements=%zu shapes=%zu triangles=%zu lineVertices=%d uniqueModels=%zu modelCacheHits=%zu misses=%zu packed=%zu convex=%zu box=%zu sphere=%zu capsule=%zu capped=%d",
-             gPlacementCount, gCollisionShapeCount, gTriangleCount, gVertexCount,
-             modelCache.size(), cacheHits, misses,
-             gKindCounts[0], gKindCounts[1], gKindCounts[2], gKindCounts[3], gKindCounts[4], capped ? 1 : 0);
     return true;
 }
 
+bool ResolveFo3PlayerMotionQ6G(float currentX, float currentZ,
+                               float desiredX, float desiredZ,
+                               float currentPlayerYOffset,
+                               float* outX, float* outZ,
+                               float* outPlayerYOffset) {
+    if (!outX || !outZ || !outPlayerYOffset || !gPlayerCollisionReady ||
+        gWorldTriangles.empty()) return false;
+
+    ++gResolveCounter;
+    float x = currentX;
+    float z = currentZ;
+    float feetY = gCollisionFloorY + currentPlayerYOffset;
+    uint32_t contacts = ResolveWallPenetrations(x, z, feetY);
+
+    const float dx = desiredX - currentX;
+    const float dz = desiredZ - currentZ;
+    const float distance = std::sqrt(dx*dx + dz*dz);
+    const float maxSubstep = PLAYER_RADIUS * 0.40f;
+    const int steps = std::clamp(static_cast<int>(std::ceil(distance / maxSubstep)), 1, 12);
+
+    for (int step = 1; step <= steps; ++step) {
+        const float t = static_cast<float>(step) / static_cast<float>(steps);
+        float targetX = currentX + dx*t;
+        float targetZ = currentZ + dz*t;
+
+        // Preserve any depenetration accumulated on the first/subsequent step,
+        // then advance by this substep's requested delta. This naturally removes
+        // only the wall-normal component and leaves tangential sliding intact.
+        if (step == 1) {
+            targetX += x - currentX;
+            targetZ += z - currentZ;
+        } else {
+            const float prevT = static_cast<float>(step - 1) / static_cast<float>(steps);
+            const float requestedPrevX = currentX + dx*prevT;
+            const float requestedPrevZ = currentZ + dz*prevT;
+            targetX += x - requestedPrevX;
+            targetZ += z - requestedPrevZ;
+        }
+        x = targetX;
+        z = targetZ;
+        contacts += ResolveWallPenetrations(x, z, feetY);
+    }
+
+    float groundY = feetY;
+    const bool grounded = FindGround(x, z, feetY, groundY);
+    float playerYOffset = currentPlayerYOffset;
+    if (grounded) playerYOffset = groundY - gCollisionFloorY;
+
+    *outX = x;
+    *outZ = z;
+    *outPlayerYOffset = playerYOffset;
+
+    const float correctionX = x - desiredX;
+    const float correctionZ = z - desiredZ;
+    const bool blocked = contacts > 0u || (correctionX*correctionX + correctionZ*correctionZ) > 0.000004f;
+    if (blocked && (gContactLogCount < 24u || (gResolveCounter % 120u) == 0u)) {
+        ++gContactLogCount;
+        Q6G_LOGI("Q6G CONTACT: desired=(%.3f %.3f) resolved=(%.3f %.3f) correction=(%.3f %.3f) contacts=%u grounded=%d playerY=%.3f",
+                 desiredX, desiredZ, x, z,
+                 correctionX, correctionZ, contacts,
+                 grounded ? 1 : 0, playerYOffset);
+    }
+    return true;
+}
+
+bool IsFo3PlayerCollisionReadyQ6G() {
+    return gPlayerCollisionReady && !gWorldTriangles.empty();
+}
+
 void RenderFo3CollisionOverlay(const float* mvp16) {
+    if (!SHOW_COLLISION_DEBUG_Q6G) return;
     if (!mvp16 || !gProgram || !gVao || gVertexCount <= 0) return;
 
     const GLboolean depthWasEnabled = glIsEnabled(GL_DEPTH_TEST);
@@ -290,7 +558,6 @@ void RenderFo3CollisionOverlay(const float* mvp16) {
     glGetIntegerv(GL_CURRENT_PROGRAM, &previousProgram);
     glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &previousVao);
 
-    // X-ray remains deliberate for Q6F coverage verification.
     glDisable(GL_DEPTH_TEST);
     glUseProgram(gProgram);
     glUniformMatrix4fv(gMvpLocation, 1, GL_FALSE, mvp16);
@@ -323,4 +590,8 @@ void ShutdownFo3CollisionOverlay() {
     gTriangleCount = 0;
     gKindCounts.fill(0u);
     gLoggedVisible = false;
+    gWorldTriangles.clear();
+    gPlayerCollisionReady = false;
+    gResolveCounter = 0;
+    gContactLogCount = 0;
 }
