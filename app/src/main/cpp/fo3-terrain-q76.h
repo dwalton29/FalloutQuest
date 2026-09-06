@@ -24,3 +24,10 @@ bool InitializeFo3TerrainRenderQ76(uint32_t worldspaceFormId,
                                    float unitsPerMetre);
 void RenderFo3TerrainQ76(const float* mvp);
 void ShutdownFo3TerrainRenderQ76();
+
+// Q7.7 exterior-only physical LAND grounding. The sampler is inactive until
+// LoadFo3TerrainQ76 succeeds after the exterior XTEL transition, so the proven
+// Q7.5 player-house spawn/collision path remains unchanged.
+bool SampleFo3TerrainGroundQ77(float virtualX, float virtualZ,
+                               float* outPlayerYOffset);
+bool IsFo3TerrainGroundingActiveQ77();
