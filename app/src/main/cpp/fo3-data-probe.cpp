@@ -30,6 +30,17 @@ bool HasMagic(const char* path, const char* expected, size_t len) {
     return read == len && std::memcmp(buf, expected, len) == 0;
 }
 
+bool CheckNamedFile(const char* name, const char* magic, size_t magicLen) {
+    char path[512]{};
+    std::snprintf(path, sizeof(path), "%s/%s", DATA_ROOT, name);
+    const long long size = FileSize(path);
+    const bool ready = size > 0 && HasMagic(path, magic, magicLen);
+    __android_log_print(ready ? ANDROID_LOG_INFO : ANDROID_LOG_ERROR, TAG,
+                        "Q5 data %s: %s (%lld bytes)",
+                        name, ready ? "READY" : "MISSING/INVALID", size);
+    return ready;
+}
+
 void ProbeFo3Data() {
     __android_log_print(ANDROID_LOG_INFO, TAG,
                         "Q5 target locked: %s (FormID %08X)",
@@ -37,22 +48,35 @@ void ProbeFo3Data() {
     __android_log_print(ANDROID_LOG_INFO, TAG,
                         "Q5 data root: %s", DATA_ROOT);
 
-    const FileCheck required[] = {
-        {"Fallout3.esm", "TES4", 4},
-        {"Fallout - Meshes.bsa", "BSA\0", 4},
-        {"Fallout - Textures.bsa", "BSA\0", 4},
-    };
-
     bool allReady = true;
-    for (const auto& item : required) {
-        char path[512]{};
-        std::snprintf(path, sizeof(path), "%s/%s", DATA_ROOT, item.name);
-        const long long size = FileSize(path);
-        const bool magicOk = size > 0 && HasMagic(path, item.magic, item.magicLen);
-        __android_log_print(magicOk ? ANDROID_LOG_INFO : ANDROID_LOG_ERROR, TAG,
-                            "Q5 data %s: %s (%lld bytes)",
-                            item.name, magicOk ? "READY" : "MISSING/INVALID", size);
-        allReady &= magicOk;
+    allReady &= CheckNamedFile("Fallout3.esm", "TES4", 4);
+    allReady &= CheckNamedFile("Fallout - Meshes.bsa", "BSA\0", 4);
+
+    char primaryTexture[512]{};
+    char fallbackTexture[512]{};
+    std::snprintf(primaryTexture, sizeof(primaryTexture), "%s/%s", DATA_ROOT,
+                  "Fallout - Textures.bsa");
+    std::snprintf(fallbackTexture, sizeof(fallbackTexture), "%s/%s", DATA_ROOT,
+                  "textures.bsa");
+
+    const long long primarySize = FileSize(primaryTexture);
+    const bool primaryReady = primarySize > 0 && HasMagic(primaryTexture, "BSA\0", 4);
+    if (primaryReady) {
+        __android_log_print(ANDROID_LOG_INFO, TAG,
+                            "Q5 data Fallout - Textures.bsa: READY (%lld bytes)", primarySize);
+    } else {
+        const long long fallbackSize = FileSize(fallbackTexture);
+        const bool fallbackReady = fallbackSize > 0 && HasMagic(fallbackTexture, "BSA\0", 4);
+        if (fallbackReady) {
+            __android_log_print(ANDROID_LOG_INFO, TAG,
+                                "Q5 data textures.bsa: READY fallback for Fallout - Textures.bsa (%lld bytes)",
+                                fallbackSize);
+        } else {
+            __android_log_print(ANDROID_LOG_ERROR, TAG,
+                                "Q5 texture archive missing/invalid: primary=%lld fallback=%lld",
+                                primarySize, fallbackSize);
+        }
+        allReady &= fallbackReady;
     }
 
     char optionalPath[512]{};
