@@ -6,6 +6,7 @@ find_package(OpenXR REQUIRED CONFIG)
 add_library(falloutquest SHARED
     q4-native.cpp
     fo3-data-probe.cpp
+    fo3-esm-scan.cpp
     ${ANDROID_NDK}/sources/android/native_app_glue/android_native_app_glue.c
 )
 
@@ -25,6 +26,7 @@ find_library(android-lib android)
 find_library(log-lib log)
 find_library(egl-lib EGL)
 find_library(gles-lib GLESv3)
+find_library(z-lib z)
 
 target_link_libraries(falloutquest
     OpenXR::openxr_loader
@@ -32,4 +34,5 @@ target_link_libraries(falloutquest
     ${log-lib}
     ${egl-lib}
     ${gles-lib}
+    ${z-lib}
 )
