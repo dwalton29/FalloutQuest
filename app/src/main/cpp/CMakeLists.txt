@@ -4,7 +4,7 @@ project(falloutquest LANGUAGES C CXX)
 find_package(OpenXR REQUIRED CONFIG)
 
 add_library(falloutquest SHARED
-    native-lib.cpp
+    q4-native.cpp
     ${ANDROID_NDK}/sources/android/native_app_glue/android_native_app_glue.c
 )
 
@@ -15,7 +15,7 @@ target_include_directories(falloutquest PRIVATE
 
 # openxr_platform.h expects Android JNI and EGL platform types to already be
 # declared when XR_USE_PLATFORM_ANDROID / XR_USE_GRAPHICS_API_OPENGL_ES are set.
-# Force-include a single prelude header before native-lib.cpp's OpenXR headers.
+# Force-include a single prelude header before the OpenXR platform headers.
 target_compile_options(falloutquest PRIVATE
     -include ${CMAKE_CURRENT_SOURCE_DIR}/openxr-platform-prelude.h
 )
