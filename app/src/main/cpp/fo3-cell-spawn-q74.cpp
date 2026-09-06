@@ -26,6 +26,10 @@
 // CPU LAND/VHGT data. No collision or player-grounding code is touched here.
 #include "fo3-terrain-data-q76.cpp"
 
+// Q7.11 resolves LAND BTXT -> LTEX -> TXST -> TX00 so the terrain renderer can
+// use Fallout 3's real landscape diffuse DDS instead of the brown debug colour.
+#include "fo3-terrain-texture-q711.cpp"
+
 // Standalone GLES terrain renderer. Its internal symbols are Q76B-prefixed so
 // it is safe to include in this translation unit without disturbing Q7.1/Q7.5.
 #include "fo3-terrain-render-q76.cpp"
