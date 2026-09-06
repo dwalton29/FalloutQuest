@@ -223,7 +223,20 @@ bool ActivateDoorInternalQ7(float ox, float oy, float oz,
         return false;
     }
 
-    const Fo3DoorTeleport link = hit->teleport;
+    Fo3DoorTeleport link = hit->teleport;
+    if (link.destinationCellFormId == 0u) {
+        if (!FindFo3RefOwningCell(link.destinationDoorRefFormId,
+                                 link.destinationCellFormId) ||
+            link.destinationCellFormId == 0u) {
+            Q6H_LOGE("Q7B DESTINATION RESOLVE FAILED: sourceCell=%08X sourceDoor=%08X destinationDoor=%08X",
+                     gCurrentCellFormId, hit->refFormId,
+                     link.destinationDoorRefFormId);
+            return false;
+        }
+        Q6H_LOGI("Q7B DESTINATION RESOLVED: destinationDoor=%08X destinationCell=%08X ownershipScan=activation-only",
+                 link.destinationDoorRefFormId, link.destinationCellFormId);
+    }
+
     Q6H_LOGI("Q7B DOOR ACTIVATE: sourceCell=%08X sourceDoor=%08X EDID=%s distance=%.2f destinationDoor=%08X destinationCell=%08X XTEL=(%.2f %.2f %.2f)",
              gCurrentCellFormId, hit->refFormId,
              hit->editorId.empty() ? "<none>" : hit->editorId.c_str(), bestT,
