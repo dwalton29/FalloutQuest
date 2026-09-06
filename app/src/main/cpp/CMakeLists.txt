@@ -5,6 +5,7 @@ find_package(OpenXR REQUIRED CONFIG)
 
 add_library(falloutquest SHARED
     q4-native.cpp
+    fo3-data-probe.cpp
     ${ANDROID_NDK}/sources/android/native_app_glue/android_native_app_glue.c
 )
 
