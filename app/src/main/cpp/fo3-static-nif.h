@@ -17,6 +17,9 @@ struct Fo3StaticNifMesh {
     std::string normalTexturePath;
     float glossiness = 10.0f;
     float alpha = 1.0f;
+    bool alphaBlend = false;
+    bool alphaTest = false;
+    float alphaThreshold = 0.5f;
 };
 
 // Loads every fully renderable NiTriStrips/NiTriShape geometry block in an
