@@ -18,6 +18,17 @@ struct Fo3CellTransitionRequestQ74 {
     bool valid = false;
 };
 
+// Decoded Fallout 3 LAND geometry for one exterior CELL. Heights are absolute
+// Bethesda game-Z coordinates in a bottom-up 33x33 grid; X/Y are derived from
+// the CELL's XCLC coordinate at 128 game units per vertex.
+struct Fo3TerrainCellQ76 {
+    uint32_t cellFormId = 0;
+    uint32_t landFormId = 0;
+    int32_t gridX = 0;
+    int32_t gridY = 0;
+    std::vector<float> heights;
+};
+
 // Renderer-side transition queue. The input callback only enqueues; GL/collision
 // teardown and rebuild happen later from the render thread.
 bool ConsumeFo3CellTransitionRequestQ74(Fo3CellTransitionRequestQ74& outRequest);
@@ -40,3 +51,9 @@ bool LoadFo3WorldspaceNeighborhoodQ75(uint32_t worldspaceFormId,
                                      uint32_t persistentCellFormId,
                                      float arrivalX, float arrivalY,
                                      std::vector<Fo3WorldPlacement>& outPlacements);
+
+// Q7.6 LAND loader. Uses the same Q7.5 selected worldspace/XCLC domain, decodes
+// the VHGT delta height maps, and retains them for the render/collision rebuild.
+bool LoadFo3TerrainQ76(uint32_t worldspaceFormId,
+                       float arrivalX, float arrivalY, float arrivalZ);
+const std::vector<Fo3TerrainCellQ76>& GetFo3TerrainQ76();

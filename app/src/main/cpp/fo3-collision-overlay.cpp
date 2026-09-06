@@ -1,5 +1,6 @@
 #include "fo3-collision-overlay.h"
 #include "fo3-nif-collision-q6f.h"
+#include "fo3-transition-q74.h"
 
 #include <GLES3/gl3.h>
 #include <android/log.h>
@@ -30,6 +31,11 @@ constexpr float MAX_GROUND_DROP = 0.80f;
 constexpr float SAFE_SPAWN_VERTICAL_SEARCH = 8.0f;
 constexpr int MAX_DEPENETRATION_PASSES = 6;
 
+constexpr int Q76_LAND_VERTS = 33;
+constexpr int Q76_LAND_QUADS = 32;
+constexpr float Q76_CELL_SIZE = 4096.0f;
+constexpr float Q76_VERTEX_SPACING = Q76_CELL_SIZE / static_cast<float>(Q76_LAND_QUADS);
+
 #define Q6F_LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
 #define Q6F_LOGW(...) __android_log_print(ANDROID_LOG_WARN, TAG, __VA_ARGS__)
 #define Q6F_LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
@@ -39,6 +45,8 @@ constexpr int MAX_DEPENETRATION_PASSES = 6;
 #define Q6H_LOGW(...) __android_log_print(ANDROID_LOG_WARN, TAG, __VA_ARGS__)
 #define Q6I_LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
 #define Q6I_LOGW(...) __android_log_print(ANDROID_LOG_WARN, TAG, __VA_ARGS__)
+#define Q76_LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
+#define Q76_LOGW(...) __android_log_print(ANDROID_LOG_WARN, TAG, __VA_ARGS__)
 
 struct Vec3 {
     float x = 0.0f;
@@ -70,6 +78,24 @@ size_t gTriangleCount = 0;
 std::array<size_t, 5> gKindCounts{};
 bool gLoggedVisible = false;
 
+// Q7.6 LAND is rendered as a solid heightfield and sampled directly for player
+// grounding. It is intentionally not expanded into gWorldTriangles, avoiding a
+// ~22k-triangle per-frame collision scan for the 11 Megaton LAND cells.
+GLuint gTerrainProgramQ76 = 0;
+GLuint gTerrainVaoQ76 = 0;
+GLuint gTerrainVboQ76 = 0;
+GLint gTerrainMvpLocationQ76 = -1;
+GLsizei gTerrainVertexCountQ76 = 0;
+size_t gTerrainTriangleCountQ76 = 0;
+bool gTerrainLoggedVisibleQ76 = false;
+std::vector<Fo3TerrainCellQ76> gTerrainCellsQ76;
+float gTerrainCenterXQ76 = 0.0f;
+float gTerrainCenterYQ76 = 0.0f;
+float gTerrainFloorZQ76 = 0.0f;
+float gTerrainSceneForwardQ76 = 0.0f;
+float gTerrainFloorYQ76 = -1.55f;
+float gTerrainUnitsPerMetreQ76 = 70.0f;
+
 std::vector<CollisionTriangle> gWorldTriangles;
 float gCollisionFloorY = -1.55f;
 bool gPlayerCollisionReady = false;
@@ -98,7 +124,7 @@ Vec3 RotateY(Vec3 v, float radians) {
 
 Vec3 RotateZ(Vec3 v, float radians) {
     const float c = std::cos(radians), s = std::sin(radians);
-    return {c*v.x - s*v.y, s*v.x + c*v.y, v.z};
+    return {c*v.x - s*v.y, s*v.x + c*v.z, v.z};
 }
 
 Vec3 ApplyPlacement(Vec3 v, const Fo3WorldPlacement& p) {
@@ -204,6 +230,40 @@ Vec2 ClosestPointTriangleXZ(const CollisionTriangle& tri, Vec2 p, bool& inside) 
     return qca;
 }
 
+bool SampleTerrainGroundQ76(float vrX, float vrZ, float& outVrY) {
+    if (gTerrainCellsQ76.empty() || gTerrainUnitsPerMetreQ76 <= 0.0f) return false;
+    const float gameX = gTerrainCenterXQ76 + vrX * gTerrainUnitsPerMetreQ76;
+    const float gameY = gTerrainCenterYQ76
+        + (gTerrainSceneForwardQ76 - vrZ) * gTerrainUnitsPerMetreQ76;
+    const int32_t gridX = static_cast<int32_t>(std::floor(gameX / Q76_CELL_SIZE));
+    const int32_t gridY = static_cast<int32_t>(std::floor(gameY / Q76_CELL_SIZE));
+
+    for (const Fo3TerrainCellQ76& cell : gTerrainCellsQ76) {
+        if (cell.gridX != gridX || cell.gridY != gridY ||
+            cell.heights.size() != static_cast<size_t>(Q76_LAND_VERTS * Q76_LAND_VERTS)) continue;
+        const float localX = gameX - static_cast<float>(gridX) * Q76_CELL_SIZE;
+        const float localY = gameY - static_cast<float>(gridY) * Q76_CELL_SIZE;
+        const float gx = std::clamp(localX / Q76_VERTEX_SPACING, 0.0f, 32.0f);
+        const float gy = std::clamp(localY / Q76_VERTEX_SPACING, 0.0f, 32.0f);
+        const int x0 = std::clamp(static_cast<int>(std::floor(gx)), 0, 32);
+        const int y0 = std::clamp(static_cast<int>(std::floor(gy)), 0, 32);
+        const int x1 = std::min(x0 + 1, 32);
+        const int y1 = std::min(y0 + 1, 32);
+        const float tx = gx - static_cast<float>(x0);
+        const float ty = gy - static_cast<float>(y0);
+        auto h = [&](int x, int y) {
+            return cell.heights[static_cast<size_t>(y * Q76_LAND_VERTS + x)];
+        };
+        const float h0 = h(x0, y0) * (1.0f - tx) + h(x1, y0) * tx;
+        const float h1 = h(x0, y1) * (1.0f - tx) + h(x1, y1) * tx;
+        const float gameHeight = h0 * (1.0f - ty) + h1 * ty;
+        outVrY = gTerrainFloorYQ76
+            + (gameHeight - gTerrainFloorZQ76) / gTerrainUnitsPerMetreQ76;
+        return true;
+    }
+    return false;
+}
+
 bool FindGround(float x, float z, float feetY, float& groundY) {
     bool found = false;
     float best = -1e30f;
@@ -221,6 +281,15 @@ bool FindGround(float x, float z, float feetY, float& groundY) {
             found = true;
         }
     }
+
+    float terrainY = feetY;
+    if (SampleTerrainGroundQ76(x, z, terrainY) &&
+        terrainY <= feetY + MAX_STEP_UP && terrainY >= feetY - MAX_GROUND_DROP &&
+        (!found || terrainY > best)) {
+        best = terrainY;
+        found = true;
+    }
+
     if (found) groundY = best;
     return found;
 }
@@ -245,6 +314,17 @@ bool FindGroundWide(float x, float z, float referenceY, float& groundY) {
             found = true;
         }
     }
+
+    float terrainY = referenceY;
+    if (SampleTerrainGroundQ76(x, z, terrainY)) {
+        const float distance = std::fabs(terrainY - referenceY);
+        if (distance <= SAFE_SPAWN_VERTICAL_SEARCH && (!found || distance < bestDistance)) {
+            bestDistance = distance;
+            bestY = terrainY;
+            found = true;
+        }
+    }
+
     if (found) groundY = bestY;
     return found;
 }
@@ -441,10 +521,154 @@ GLuint BuildProgram() {
     return program;
 }
 
+GLuint BuildTerrainProgramQ76() {
+    static const char* vertexSource = R"(
+        #version 300 es
+        layout(location = 0) in vec3 aPosition;
+        layout(location = 1) in vec3 aNormal;
+        uniform mat4 uMvp;
+        out vec3 vNormal;
+        void main() {
+            vNormal = aNormal;
+            gl_Position = uMvp * vec4(aPosition, 1.0);
+        }
+    )";
+    static const char* fragmentSource = R"(
+        #version 300 es
+        precision mediump float;
+        in vec3 vNormal;
+        out vec4 fragColor;
+        void main() {
+            vec3 N = normalize(vNormal);
+            vec3 L = normalize(vec3(0.35, 0.85, 0.40));
+            float lambert = max(dot(N, L), 0.0);
+            vec3 earth = vec3(0.34, 0.30, 0.23);
+            fragColor = vec4(earth * (0.38 + 0.62 * lambert), 1.0);
+        }
+    )";
+
+    GLuint vs = Compile(GL_VERTEX_SHADER, vertexSource);
+    GLuint fs = Compile(GL_FRAGMENT_SHADER, fragmentSource);
+    if (!vs || !fs) {
+        if (vs) glDeleteShader(vs);
+        if (fs) glDeleteShader(fs);
+        return 0;
+    }
+    GLuint program = glCreateProgram();
+    glAttachShader(program, vs);
+    glAttachShader(program, fs);
+    glLinkProgram(program);
+    glDeleteShader(vs);
+    glDeleteShader(fs);
+    GLint ok = GL_FALSE;
+    glGetProgramiv(program, GL_LINK_STATUS, &ok);
+    if (ok != GL_TRUE) {
+        char log[1024]{};
+        glGetProgramInfoLog(program, sizeof(log), nullptr, log);
+        Q76_LOGW("Q7.6 TERRAIN shader link failed: %s", log);
+        glDeleteProgram(program);
+        return 0;
+    }
+    return program;
+}
+
 void AppendPoint(std::vector<float>& lines, const Vec3& p) {
     lines.push_back(p.x);
     lines.push_back(p.y);
     lines.push_back(p.z);
+}
+
+void AppendTerrainVertexQ76(std::vector<float>& vertices, const Vec3& p, const Vec3& n) {
+    vertices.insert(vertices.end(), {p.x, p.y, p.z, n.x, n.y, n.z});
+}
+
+bool PrepareTerrainQ76(float centerX, float centerY, float floorZ,
+                       float sceneForward, float floorY, float unitsPerMetre) {
+    gTerrainCellsQ76 = GetFo3TerrainQ76();
+    if (gTerrainCellsQ76.empty() || unitsPerMetre <= 0.0f) return false;
+
+    gTerrainCenterXQ76 = centerX;
+    gTerrainCenterYQ76 = centerY;
+    gTerrainFloorZQ76 = floorZ;
+    gTerrainSceneForwardQ76 = sceneForward;
+    gTerrainFloorYQ76 = floorY;
+    gTerrainUnitsPerMetreQ76 = unitsPerMetre;
+
+    std::vector<float> vertices;
+    vertices.reserve(gTerrainCellsQ76.size()
+                     * static_cast<size_t>(Q76_LAND_QUADS * Q76_LAND_QUADS * 6)
+                     * 6u);
+    size_t decodedCells = 0u;
+    size_t triangles = 0u;
+
+    for (const Fo3TerrainCellQ76& cell : gTerrainCellsQ76) {
+        if (cell.heights.size() != static_cast<size_t>(Q76_LAND_VERTS * Q76_LAND_VERTS)) continue;
+        ++decodedCells;
+        auto point = [&](int row, int col) {
+            const float gameX = static_cast<float>(cell.gridX) * Q76_CELL_SIZE
+                              + static_cast<float>(col) * Q76_VERTEX_SPACING;
+            const float gameY = static_cast<float>(cell.gridY) * Q76_CELL_SIZE
+                              + static_cast<float>(row) * Q76_VERTEX_SPACING;
+            const float gameZ = cell.heights[static_cast<size_t>(row * Q76_LAND_VERTS + col)];
+            return ToVr({gameX, gameY, gameZ}, centerX, centerY, floorZ,
+                        sceneForward, floorY, unitsPerMetre);
+        };
+
+        auto appendTriangle = [&](Vec3 a, Vec3 b, Vec3 c) {
+            CollisionTriangle tri;
+            if (!BuildTriangle(a, b, c, tri)) return;
+            if (tri.normal.y < 0.0f) {
+                if (!BuildTriangle(a, c, b, tri)) return;
+            }
+            AppendTerrainVertexQ76(vertices, tri.a, tri.normal);
+            AppendTerrainVertexQ76(vertices, tri.b, tri.normal);
+            AppendTerrainVertexQ76(vertices, tri.c, tri.normal);
+            ++triangles;
+        };
+
+        for (int row = 0; row < Q76_LAND_QUADS; ++row) {
+            for (int col = 0; col < Q76_LAND_QUADS; ++col) {
+                const Vec3 p00 = point(row, col);
+                const Vec3 p10 = point(row, col + 1);
+                const Vec3 p01 = point(row + 1, col);
+                const Vec3 p11 = point(row + 1, col + 1);
+                appendTriangle(p00, p10, p11);
+                appendTriangle(p00, p11, p01);
+            }
+        }
+    }
+
+    if (vertices.empty() || triangles == 0u) {
+        gTerrainCellsQ76.clear();
+        return false;
+    }
+
+    gTerrainProgramQ76 = BuildTerrainProgramQ76();
+    if (!gTerrainProgramQ76) return false;
+    gTerrainMvpLocationQ76 = glGetUniformLocation(gTerrainProgramQ76, "uMvp");
+    if (gTerrainMvpLocationQ76 < 0) return false;
+
+    glGenVertexArrays(1, &gTerrainVaoQ76);
+    glBindVertexArray(gTerrainVaoQ76);
+    glGenBuffers(1, &gTerrainVboQ76);
+    glBindBuffer(GL_ARRAY_BUFFER, gTerrainVboQ76);
+    glBufferData(GL_ARRAY_BUFFER,
+                 static_cast<GLsizeiptr>(vertices.size() * sizeof(float)),
+                 vertices.data(), GL_STATIC_DRAW);
+    constexpr GLsizei stride = 6 * static_cast<GLsizei>(sizeof(float));
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, stride, nullptr);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, stride,
+                          reinterpret_cast<const void*>(3 * sizeof(float)));
+    glEnableVertexAttribArray(1);
+    glBindVertexArray(0);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+
+    gTerrainVertexCountQ76 = static_cast<GLsizei>(vertices.size() / 6u);
+    gTerrainTriangleCountQ76 = triangles;
+    Q76_LOGI("Q7.6 TERRAIN GPU READY: cells=%zu triangles=%zu vertices=%d heightfieldCollision=1 material=earth-fallback",
+             decodedCells, triangles, gTerrainVertexCountQ76);
+    return true;
 }
 
 } // namespace
@@ -546,7 +770,10 @@ bool InitializeFo3CollisionOverlay(const std::vector<Fo3WorldPlacement>& placeme
         if (capped) break;
     }
 
-    if (gWorldTriangles.empty()) {
+    const bool terrainReadyQ76 = PrepareTerrainQ76(centerX, centerY, floorZ,
+                                                    sceneForward, floorY, unitsPerMetre);
+
+    if (gWorldTriangles.empty() && !terrainReadyQ76) {
         Q6F_LOGW("Q6F COLLISION READY FAILED: placements=0 misses=%zu uniqueModels=%zu",
                  misses, modelCache.size());
         return false;
@@ -560,6 +787,8 @@ bool InitializeFo3CollisionOverlay(const std::vector<Fo3WorldPlacement>& placeme
     Q6G_LOGI("Q6G PHYSICS READY: authoredTriangles=%zu capsuleRadius=%.2f capsuleHeight=%.2f floorReference=%.2f debugOverlay=%d",
              gWorldTriangles.size(), PLAYER_RADIUS, PLAYER_HEIGHT,
              gCollisionFloorY, SHOW_COLLISION_DEBUG_Q6G ? 1 : 0);
+    Q76_LOGI("Q7.6 TERRAIN PHYSICS READY: cells=%zu heightfield=%d renderTriangles=%zu perFrameTriangleExpansion=0",
+             gTerrainCellsQ76.size(), terrainReadyQ76 ? 1 : 0, gTerrainTriangleCountQ76);
 
     if (!SHOW_COLLISION_DEBUG_Q6G) return true;
 
@@ -687,12 +916,48 @@ bool ResolveFo3PlayerMotionQ6G(float currentX, float currentZ,
 }
 
 bool IsFo3PlayerCollisionReadyQ6G() {
-    return gPlayerCollisionReady && !gWorldTriangles.empty();
+    return gPlayerCollisionReady && (!gWorldTriangles.empty() || !gTerrainCellsQ76.empty());
 }
 
 void RenderFo3CollisionOverlay(const float* mvp16) {
+    if (!mvp16) return;
+
+    if (gTerrainProgramQ76 && gTerrainVaoQ76 && gTerrainVertexCountQ76 > 0) {
+        GLint previousProgram = 0;
+        GLint previousVao = 0;
+        GLboolean previousDepthMask = GL_TRUE;
+        glGetIntegerv(GL_CURRENT_PROGRAM, &previousProgram);
+        glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &previousVao);
+        glGetBooleanv(GL_DEPTH_WRITEMASK, &previousDepthMask);
+        const GLboolean depthWasEnabled = glIsEnabled(GL_DEPTH_TEST);
+        const GLboolean blendWasEnabled = glIsEnabled(GL_BLEND);
+        const GLboolean cullWasEnabled = glIsEnabled(GL_CULL_FACE);
+
+        if (!depthWasEnabled) glEnable(GL_DEPTH_TEST);
+        if (blendWasEnabled) glDisable(GL_BLEND);
+        if (cullWasEnabled) glDisable(GL_CULL_FACE);
+        glDepthMask(GL_TRUE);
+        glUseProgram(gTerrainProgramQ76);
+        glUniformMatrix4fv(gTerrainMvpLocationQ76, 1, GL_FALSE, mvp16);
+        glBindVertexArray(gTerrainVaoQ76);
+        glDrawArrays(GL_TRIANGLES, 0, gTerrainVertexCountQ76);
+
+        glBindVertexArray(static_cast<GLuint>(previousVao));
+        glUseProgram(static_cast<GLuint>(previousProgram));
+        glDepthMask(previousDepthMask);
+        if (cullWasEnabled) glEnable(GL_CULL_FACE);
+        if (blendWasEnabled) glEnable(GL_BLEND);
+        if (!depthWasEnabled) glDisable(GL_DEPTH_TEST);
+
+        if (!gTerrainLoggedVisibleQ76) {
+            gTerrainLoggedVisibleQ76 = true;
+            Q76_LOGI("Q7.6 TERRAIN VISIBLE: cells=%zu triangles=%zu solidBothEyes=1 heightfieldCollision=1",
+                     gTerrainCellsQ76.size(), gTerrainTriangleCountQ76);
+        }
+    }
+
     if (!SHOW_COLLISION_DEBUG_Q6G) return;
-    if (!mvp16 || !gProgram || !gVao || gVertexCount <= 0) return;
+    if (!gProgram || !gVao || gVertexCount <= 0) return;
 
     const GLboolean depthWasEnabled = glIsEnabled(GL_DEPTH_TEST);
     GLint previousProgram = 0;
@@ -722,11 +987,22 @@ void ShutdownFo3CollisionOverlay() {
     if (gVbo) glDeleteBuffers(1, &gVbo);
     if (gVao) glDeleteVertexArrays(1, &gVao);
     if (gProgram) glDeleteProgram(gProgram);
+    if (gTerrainVboQ76) glDeleteBuffers(1, &gTerrainVboQ76);
+    if (gTerrainVaoQ76) glDeleteVertexArrays(1, &gTerrainVaoQ76);
+    if (gTerrainProgramQ76) glDeleteProgram(gTerrainProgramQ76);
     gVbo = 0;
     gVao = 0;
     gProgram = 0;
     gMvpLocation = -1;
     gVertexCount = 0;
+    gTerrainVboQ76 = 0;
+    gTerrainVaoQ76 = 0;
+    gTerrainProgramQ76 = 0;
+    gTerrainMvpLocationQ76 = -1;
+    gTerrainVertexCountQ76 = 0;
+    gTerrainTriangleCountQ76 = 0;
+    gTerrainLoggedVisibleQ76 = false;
+    gTerrainCellsQ76.clear();
     gPlacementCount = 0;
     gCollisionShapeCount = 0;
     gTriangleCount = 0;

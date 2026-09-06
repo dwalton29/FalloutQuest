@@ -21,6 +21,10 @@
 #include "fo3-worldspace-q75.cpp"
 #undef TAG
 
+// Q7.6 reuses Q7.5's already-proven ESM/group helpers in this same translation
+// unit and decodes the selected exterior CELL LAND/VHGT records.
+#include "fo3-land-q76.cpp"
+
 namespace {
 
 struct Q74Owner {
@@ -134,18 +138,31 @@ bool LoadFo3CellPlacementsQ74(uint32_t cellFormId,
                              std::vector<Fo3WorldPlacement>& outPlacements) {
     // For exterior load doors, the linked REFR often belongs to the WRLD's
     // persistent CELL. Rendering only that CELL produces the Q7.4 random-prop
-    // soup. Q7.5 instead merges it with the actual XCLC exterior grid cells.
+    // soup. Q7.5 merges it with the XCLC cells; Q7.6 now decodes those same
+    // cells' LAND records before collision/render rebuild.
     if (gPendingTransitionQ74.valid &&
         gPendingTransitionQ74.cellFormId == cellFormId &&
         gPendingTransitionQ74.worldspaceFormId != 0u) {
-        return LoadFo3WorldspaceNeighborhoodQ75(gPendingTransitionQ74.worldspaceFormId,
-                                                cellFormId,
-                                                gPendingTransitionQ74.x,
-                                                gPendingTransitionQ74.y,
-                                                outPlacements);
+        const bool placementsReady =
+            LoadFo3WorldspaceNeighborhoodQ75(gPendingTransitionQ74.worldspaceFormId,
+                                              cellFormId,
+                                              gPendingTransitionQ74.x,
+                                              gPendingTransitionQ74.y,
+                                              outPlacements);
+        if (!placementsReady) return false;
+
+        const bool terrainReady =
+            LoadFo3TerrainQ76(gPendingTransitionQ74.worldspaceFormId,
+                              gPendingTransitionQ74.x,
+                              gPendingTransitionQ74.y,
+                              gPendingTransitionQ74.z);
+        Q71_LOGI("Q7.6 EXTERIOR ASSEMBLY: worldspace=%08X persistentCell=%08X placements=%zu terrainCells=%zu terrainReady=%d",
+                 gPendingTransitionQ74.worldspaceFormId, cellFormId,
+                 outPlacements.size(), GetFo3TerrainQ76().size(), terrainReady ? 1 : 0);
+        return true;
     }
 
-    Q71_LOGE("Q7.5 CELL LOAD FAILED: cell=%08X reason=no-worldspace-transition-context",
+    Q71_LOGE("Q7.6 CELL LOAD FAILED: cell=%08X reason=no-worldspace-transition-context",
              cellFormId);
     outPlacements.clear();
     return false;
@@ -161,7 +178,7 @@ bool ConsumeFo3CellTransitionRequestQ74(Fo3CellTransitionRequestQ74& outRequest)
 void CompleteFo3CellTransitionQ74(uint32_t cellFormId) {
     gCurrentCellQ74 = cellFormId;
     gPlayerResetPendingQ74 = true;
-    Q71_LOGI("Q7.5 TRANSITION APPLIED: persistentCell=%08X playerReset=NEXT_PHYSICS_FRAME orientation=preserved worldspaceNeighborhood=1",
+    Q71_LOGI("Q7.6 TRANSITION APPLIED: persistentCell=%08X playerReset=NEXT_PHYSICS_FRAME orientation=preserved worldspaceNeighborhood=1 terrain=LAND",
              cellFormId);
 }
 
@@ -180,13 +197,13 @@ bool ProbeMegatonPlayerHouseDoorQ71(float originX, float originY, float originZ,
 
     DoorProbeCandidate door;
     if (!Q74FindDoorHit(originX, originY, originZ, dirX, dirY, dirZ, door)) {
-        Q71_LOGE("Q7.5 TRANSITION REQUEST FAILED: proven Q7.1 hit could not recover door metadata");
+        Q71_LOGE("Q7.6 TRANSITION REQUEST FAILED: proven Q7.1 hit could not recover door metadata");
         return true;
     }
 
     Q74Owner owner;
     if (!Q74ResolveOwner(door.destinationDoorRef, owner) || !owner.valid) {
-        Q71_LOGE("Q7.5 TRANSITION REQUEST FAILED: destinationDoor=%08X owner unresolved",
+        Q71_LOGE("Q7.6 TRANSITION REQUEST FAILED: destinationDoor=%08X owner unresolved",
                  door.destinationDoorRef);
         return true;
     }
@@ -205,7 +222,7 @@ bool ProbeMegatonPlayerHouseDoorQ71(float originX, float originY, float originZ,
     gPendingTransitionQ74.valid = true;
     gHasPendingTransitionQ74 = true;
 
-    Q71_LOGI("Q7.5 TRANSITION REQUESTED: destinationDoor=%08X persistentCell=%08X worldspace=%08X XTEL=(%.2f %.2f %.2f) R=(%.4f %.4f %.4f) queue=render-thread exteriorNeighborhood=1",
+    Q71_LOGI("Q7.6 TRANSITION REQUESTED: destinationDoor=%08X persistentCell=%08X worldspace=%08X XTEL=(%.2f %.2f %.2f) R=(%.4f %.4f %.4f) queue=render-thread exteriorNeighborhood=1 terrain=LAND",
              door.destinationDoorRef, owner.cellFormId, owner.worldspaceFormId,
              door.teleportX, door.teleportY, door.teleportZ,
              door.teleportRx, door.teleportRy, door.teleportRz);
