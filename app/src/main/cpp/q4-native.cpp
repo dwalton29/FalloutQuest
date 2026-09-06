@@ -411,8 +411,8 @@ private:
             !Path("/user/hand/right", &handPaths_[1])) return false;
 
         XrActionSetCreateInfo setInfo{XR_TYPE_ACTION_SET_CREATE_INFO};
-        std::strncpy(setInfo.actionSetName, "gameplay", XR_MAX_ACTION_SET_NAME_SIZE - 1);
-        std::strncpy(setInfo.localizedActionSetName, "Gameplay", XR_MAX_LOCALIZED_ACTION_SET_NAME_SIZE - 1);
+        std::strncpy(setInfo.actionSetName, "gameplay", XR_MAX_ACTION_NAME_SIZE - 1);
+        std::strncpy(setInfo.localizedActionSetName, "Gameplay", XR_MAX_LOCALIZED_ACTION_NAME_SIZE - 1);
         setInfo.priority = 0;
         if (!CheckXr(xrCreateActionSet(instance_, &setInfo, &actionSet_), "xrCreateActionSet")) return false;
 
@@ -692,9 +692,16 @@ private:
         lastFrameTime_ = frameTime;
 
         if (!snapTurnLatched_ && std::fabs(turnX_) > 0.65f) {
-            playerYaw_ += turnX_ > 0.0f ? -SNAP_TURN_RADIANS : SNAP_TURN_RADIANS;
+            const float deltaYaw = turnX_ > 0.0f ? -SNAP_TURN_RADIANS : SNAP_TURN_RADIANS;
+            const XrVector3f before = RotateYaw(headView.pose.position, playerYaw_);
+            const XrVector3f after = RotateYaw(headView.pose.position, playerYaw_ + deltaYaw);
+            playerPosition_.x += before.x - after.x;
+            playerPosition_.z += before.z - after.z;
+            playerYaw_ += deltaYaw;
             snapTurnLatched_ = true;
-            FQ_LOGI("Snap turn: yaw %.1f degrees", playerYaw_ * 180.0f / PI);
+            FQ_LOGI("Snap turn: %s yaw %.1f degrees pivot-preserved=1",
+                    deltaYaw < 0.0f ? "right" : "left",
+                    playerYaw_ * 180.0f / PI);
         } else if (snapTurnLatched_ && std::fabs(turnX_) < 0.30f) {
             snapTurnLatched_ = false;
         }
@@ -705,8 +712,12 @@ private:
         const float c = std::cos(headYaw);
         const float s = std::sin(headYaw);
         const float velocity = MOVE_SPEED_METRES_PER_SECOND * static_cast<float>(dt);
-        playerPosition_.x += (strafe * c + forward * s) * velocity;
-        playerPosition_.z += (strafe * s - forward * c) * velocity;
+
+        // OpenXR uses -Z as forward. Positive yaw turns the local -Z vector
+        // toward -X, so the flattened head-relative basis is:
+        // forward=(-sin(yaw), 0, -cos(yaw)), right=(cos(yaw), 0, -sin(yaw)).
+        playerPosition_.x += (strafe * c - forward * s) * velocity;
+        playerPosition_.z += (-strafe * s - forward * c) * velocity;
     }
 
     XrPosef ToVirtualPose(const XrPosef& localPose) const {
