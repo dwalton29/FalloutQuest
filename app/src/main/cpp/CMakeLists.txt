@@ -4,8 +4,9 @@ project(falloutquest LANGUAGES C CXX)
 find_package(OpenXR REQUIRED CONFIG)
 
 add_library(falloutquest SHARED
-    q5g-native.cpp
-    fo3-chair-render-mesh.cpp
+    q5h-native.cpp
+    fo3-chair-textured-mesh.cpp
+    fo3-texture-bsa.cpp
     fo3-data-probe.cpp
     fo3-esm-scan.cpp
     fo3-megaton-contents.cpp
