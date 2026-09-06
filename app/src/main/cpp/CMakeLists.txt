@@ -4,8 +4,8 @@ project(falloutquest LANGUAGES C CXX)
 find_package(OpenXR REQUIRED CONFIG)
 
 # Q6H keeps the proven native OpenXR/render path, but stops using the bed/radius
-# proof-room selector. The CELL itself is now authoritative: every model-bearing
-# REFR in MegatonPlayerHouse is attempted, with per-model CPU NIF caching.
+# proof-room selector. The CELL itself is authoritative and Q7 then makes that
+# CELL mutable at runtime through authored DOOR/XTEL transitions.
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/q6a-native.cpp" Q6H_NATIVE_SOURCE)
 string(REPLACE "Q6A" "Q6H" Q6H_NATIVE_SOURCE "${Q6H_NATIVE_SOURCE}")
 
@@ -331,6 +331,10 @@ set(Q6H_NEW_CLEANUP [=[
 string(REPLACE "${Q6H_OLD_CLEANUP}" "${Q6H_NEW_CLEANUP}"
        Q6H_NATIVE_SOURCE "${Q6H_NATIVE_SOURCE}")
 
+# Apply Q7 generic CELL + trigger/door transition transforms before writing the
+# generated renderer translation unit.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q7-runtime.cmake")
+
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/q6h-native-generated.cpp" "${Q6H_NATIVE_SOURCE}")
 
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/fo3-static-nif.cpp" Q6H_NIF_SOURCE)
@@ -473,7 +477,6 @@ file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/fo3-static-nif-q6h.cpp" "${Q6H_NIF_SOURC
 add_library(falloutquest SHARED
     ${CMAKE_CURRENT_BINARY_DIR}/q6h-native-generated.cpp
     fo3-megaton-scene.cpp
-    fo3-cell-spawn.cpp
     ${CMAKE_CURRENT_BINARY_DIR}/fo3-static-nif-q6h.cpp
     fo3-nif-collision.cpp
     fo3-collision-overlay.cpp
@@ -489,6 +492,7 @@ add_library(falloutquest SHARED
 target_include_directories(falloutquest PRIVATE
     ${ANDROID_NDK}/sources/android/native_app_glue
     ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_BINARY_DIR}
 )
 
 target_compile_options(falloutquest PRIVATE
