@@ -19,7 +19,12 @@ struct Fo3StaticNifMesh {
     float alpha = 1.0f;
 };
 
-// Loads the first fully renderable static geometry in an arbitrary FO3 NIF.
-// Q6A deliberately targets ordinary static REFR clutter/props; unsupported
-// geometry is skipped so the ESM-driven scene can select another real object.
+// Loads every fully renderable NiTriStrips/NiTriShape geometry block in an
+// arbitrary Fallout 3 NIF, preserving each shape as its own material draw.
+// Unsupported shapes are skipped without discarding the rest of the model.
+bool LoadFo3StaticNifMeshes(const std::string& modelPath,
+                            std::vector<Fo3StaticNifMesh>& outMeshes);
+
+// Compatibility helper used by earlier milestones: returns the first supported
+// renderable shape from the same generalized loader.
 bool LoadFo3StaticNif(const std::string& modelPath, Fo3StaticNifMesh& outMesh);
