@@ -15,7 +15,7 @@ add_library(falloutquest SHARED
 )
 
 target_include_directories(falloutquest PRIVATE
-    ${ANDROID_NDK}/sources/android_native_app_glue
+    ${ANDROID_NDK}/sources/android/native_app_glue
     ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
