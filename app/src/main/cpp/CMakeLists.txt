@@ -8,6 +8,7 @@ add_library(falloutquest SHARED
     fo3-data-probe.cpp
     fo3-esm-scan.cpp
     fo3-megaton-contents.cpp
+    fo3-bsa-extract.cpp
     ${ANDROID_NDK}/sources/android/native_app_glue/android_native_app_glue.c
 )
 
