@@ -104,8 +104,3 @@ bool SampleFo3TerrainGroundQ77(float virtualX, float virtualZ,
 bool IsFo3TerrainGroundingActiveQ77() {
     return gGroundingActiveQ77;
 }
-
-// Textually compile the Q7.8a supplemental authored-bhk layer in the same
-// transition translation unit as Q7.7. It wraps (rather than replaces) the
-// proven Q7.7 collision resolver and stays dormant until exterior LAND is active.
-#include "fo3-collision-extra-q78.cpp"
