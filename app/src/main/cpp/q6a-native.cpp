@@ -85,6 +85,10 @@ struct GpuObject {
     GLuint normal = 0;
     GLsizei vertexCount = 0;
     float glossiness = 10.0f;
+    float materialAlpha = 1.0f;
+    float alphaThreshold = 0.5f;
+    bool alphaBlend = false;
+    bool alphaTest = false;
     bool realDiffuse = false;
     bool realNormal = false;
     uint32_t refFormId = 0;
@@ -104,6 +108,9 @@ GLint gDiffuseLocation = -1;
 GLint gNormalLocation = -1;
 GLint gGlossinessLocation = -1;
 GLint gNormalStrengthLocation = -1;
+GLint gMaterialAlphaLocation = -1;
+GLint gAlphaTestLocation = -1;
+GLint gAlphaThresholdLocation = -1;
 std::vector<GpuObject> gObjects;
 std::unordered_map<std::string, CachedGpuTexture> gTextureCache;
 GLuint gDepthRenderbuffer = 0;
@@ -171,9 +178,15 @@ GLuint CreateProgram() {
         uniform sampler2D uNormalGloss;
         uniform float uGlossiness;
         uniform float uNormalStrength;
+        uniform float uMaterialAlpha;
+        uniform float uAlphaTest;
+        uniform float uAlphaThreshold;
         out vec4 fragColor;
         void main() {
             vec4 diffuseTexel = texture(uDiffuse, vUv);
+            float alpha = diffuseTexel.a * uMaterialAlpha;
+            if (uAlphaTest > 0.5 && alpha < uAlphaThreshold) discard;
+
             vec4 normalGloss = texture(uNormalGloss, vUv);
             vec3 tangentNormal = normalGloss.rgb * 2.0 - 1.0;
             tangentNormal.xy *= uNormalStrength;
@@ -193,7 +206,7 @@ GLuint CreateProgram() {
             float specular = pow(max(dot(mappedNormal, halfVector), 0.0), exponent)
                            * normalGloss.a * 0.32;
             vec3 lit = diffuseTexel.rgb * (0.34 + 0.66 * lambert) + vec3(specular);
-            fragColor = vec4(lit, diffuseTexel.a);
+            fragColor = vec4(lit, alpha);
         }
     )";
 
@@ -375,6 +388,10 @@ bool UploadCpuObject(CpuObject& cpu, float centerX, float centerY, float floorZ,
 
     gpu = {};
     gpu.glossiness = std::max(2.0f, cpu.mesh.glossiness);
+    gpu.materialAlpha = std::clamp(cpu.mesh.alpha, 0.0f, 1.0f);
+    gpu.alphaThreshold = std::clamp(cpu.mesh.alphaThreshold, 0.0f, 1.0f);
+    gpu.alphaBlend = cpu.mesh.alphaBlend || gpu.materialAlpha < 0.999f;
+    gpu.alphaTest = cpu.mesh.alphaTest;
     gpu.refFormId = cpu.placement.refFormId;
     gpu.baseFormId = cpu.placement.baseFormId;
     gpu.editorId = cpu.placement.editorId;
@@ -413,11 +430,13 @@ bool UploadCpuObject(CpuObject& cpu, float centerX, float centerY, float floorZ,
     gpu.vertexCount = static_cast<GLsizei>(expanded.size() / FLOATS_PER_VERTEX);
     if (glGetError() != GL_NO_ERROR) return false;
 
-    Q6A_LOGI("Q6A GPU OBJECT READY: ref=%08X EDID=%s model=%s triangles=%d diffuse=%s normal=%s",
+    Q6A_LOGI("Q6A GPU OBJECT READY: ref=%08X EDID=%s model=%s triangles=%d diffuse=%s normal=%s alphaBlend=%d alphaTest=%d alpha=%.2f threshold=%.2f",
              gpu.refFormId, gpu.editorId.empty() ? "<none>" : gpu.editorId.c_str(),
              gpu.modelPath.c_str(), gpu.vertexCount / 3,
              gpu.realDiffuse ? "REAL" : "FALLBACK",
-             gpu.realNormal ? "REAL" : "FALLBACK");
+             gpu.realNormal ? "REAL" : "FALLBACK",
+             gpu.alphaBlend ? 1 : 0, gpu.alphaTest ? 1 : 0,
+             gpu.materialAlpha, gpu.alphaThreshold);
     return true;
 }
 
@@ -494,6 +513,9 @@ bool InitializeScene() {
     gNormalLocation = glGetUniformLocation(gProgram, "uNormalGloss");
     gGlossinessLocation = glGetUniformLocation(gProgram, "uGlossiness");
     gNormalStrengthLocation = glGetUniformLocation(gProgram, "uNormalStrength");
+    gMaterialAlphaLocation = glGetUniformLocation(gProgram, "uMaterialAlpha");
+    gAlphaTestLocation = glGetUniformLocation(gProgram, "uAlphaTest");
+    gAlphaThresholdLocation = glGetUniformLocation(gProgram, "uAlphaThreshold");
 
     gObjects.reserve(selected.size());
     for (CpuObject& cpu : selected) {
@@ -506,18 +528,34 @@ bool InitializeScene() {
     gSceneReady = gObjects.size() >= 2u;
     if (gSceneReady) {
         size_t realDiffuse = 0, realNormal = 0;
-        size_t triangles = 0;
+        size_t triangles = 0, alphaBlend = 0, alphaTest = 0;
         for (const GpuObject& object : gObjects) {
             if (object.realDiffuse) ++realDiffuse;
             if (object.realNormal) ++realNormal;
+            if (object.alphaBlend) ++alphaBlend;
+            if (object.alphaTest) ++alphaTest;
             triangles += static_cast<size_t>(object.vertexCount / 3);
         }
-        Q6A_LOGI("Q6A READY: ESM->REFR->BASE->MODL->BSA->NIF objects=%zu triangles=%zu realDiffuse=%zu realNormal=%zu uniqueTextures=%zu cell=MegatonPlayerHouse",
-                 gObjects.size(), triangles, realDiffuse, realNormal, gTextureCache.size());
+        Q6A_LOGI("Q6A READY: ESM->REFR->BASE->MODL->BSA->NIF objects=%zu triangles=%zu realDiffuse=%zu realNormal=%zu uniqueTextures=%zu alphaBlend=%zu alphaTest=%zu cell=MegatonPlayerHouse",
+                 gObjects.size(), triangles, realDiffuse, realNormal, gTextureCache.size(), alphaBlend, alphaTest);
     } else {
         Q6A_LOGE("Q6A FAILED: GPU scene objects=%zu", gObjects.size());
     }
     return gSceneReady;
+}
+
+void DrawSceneObject(const GpuObject& object) {
+    glUniform1f(gGlossinessLocation, object.glossiness);
+    glUniform1f(gNormalStrengthLocation, object.realNormal ? 1.0f : 0.0f);
+    glUniform1f(gMaterialAlphaLocation, object.materialAlpha);
+    glUniform1f(gAlphaTestLocation, object.alphaTest ? 1.0f : 0.0f);
+    glUniform1f(gAlphaThresholdLocation, object.alphaThreshold);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, object.diffuse);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, object.normal);
+    glBindVertexArray(object.vao);
+    glDrawArrays(GL_TRIANGLES, 0, object.vertexCount);
 }
 
 void RenderScene() {
@@ -540,21 +578,43 @@ void RenderScene() {
     glActiveTexture(GL_TEXTURE1);
     glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousTexture1);
 
+    const GLboolean blendWasEnabled = glIsEnabled(GL_BLEND);
+    GLboolean previousDepthMask = GL_TRUE;
+    glGetBooleanv(GL_DEPTH_WRITEMASK, &previousDepthMask);
+    GLint previousBlendSrcRgb = GL_ONE, previousBlendDstRgb = GL_ZERO;
+    GLint previousBlendSrcAlpha = GL_ONE, previousBlendDstAlpha = GL_ZERO;
+    glGetIntegerv(GL_BLEND_SRC_RGB, &previousBlendSrcRgb);
+    glGetIntegerv(GL_BLEND_DST_RGB, &previousBlendDstRgb);
+    glGetIntegerv(GL_BLEND_SRC_ALPHA, &previousBlendSrcAlpha);
+    glGetIntegerv(GL_BLEND_DST_ALPHA, &previousBlendDstAlpha);
+
     glUseProgram(gProgram);
     glUniformMatrix4fv(gMvpLocation, 1, GL_FALSE, mvp);
     glUniform1i(gDiffuseLocation, 0);
     glUniform1i(gNormalLocation, 1);
 
+    // Opaque and alpha-tested cutouts first. Alpha testing still writes depth,
+    // which is what FO3 fences/grates/wires expect.
+    glDisable(GL_BLEND);
+    glDepthMask(GL_TRUE);
     for (const GpuObject& object : gObjects) {
-        glUniform1f(gGlossinessLocation, object.glossiness);
-        glUniform1f(gNormalStrengthLocation, object.realNormal ? 1.0f : 0.0f);
-        glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, object.diffuse);
-        glActiveTexture(GL_TEXTURE1);
-        glBindTexture(GL_TEXTURE_2D, object.normal);
-        glBindVertexArray(object.vao);
-        glDrawArrays(GL_TRIANGLES, 0, object.vertexCount);
+        if (!object.alphaBlend) DrawSceneObject(object);
     }
+
+    // True alpha-blended shapes are a second pass and do not write depth.
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glDepthMask(GL_FALSE);
+    for (const GpuObject& object : gObjects) {
+        if (object.alphaBlend) DrawSceneObject(object);
+    }
+
+    glDepthMask(previousDepthMask);
+    glBlendFuncSeparate(static_cast<GLenum>(previousBlendSrcRgb),
+                        static_cast<GLenum>(previousBlendDstRgb),
+                        static_cast<GLenum>(previousBlendSrcAlpha),
+                        static_cast<GLenum>(previousBlendDstAlpha));
+    if (blendWasEnabled) glEnable(GL_BLEND); else glDisable(GL_BLEND);
 
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture1));
