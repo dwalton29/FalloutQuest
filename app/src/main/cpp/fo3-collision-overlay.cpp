@@ -1,10 +1,11 @@
 #include "fo3-collision-overlay.h"
-#include "fo3-nif-collision.h"
+#include "fo3-nif-collision-q6f.h"
 
 #include <GLES3/gl3.h>
 #include <android/log.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <string>
@@ -16,12 +17,12 @@
 namespace {
 
 constexpr const char* TAG = "FalloutQuest";
-constexpr size_t MAX_COLLISION_PLACEMENTS = 32u;
-constexpr size_t MAX_LINE_VERTICES = 600000u;
+constexpr size_t MAX_COLLISION_PLACEMENTS = 40u;
+constexpr size_t MAX_LINE_VERTICES = 800000u;
 
-#define Q6E_LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
-#define Q6E_LOGW(...) __android_log_print(ANDROID_LOG_WARN, TAG, __VA_ARGS__)
-#define Q6E_LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
+#define Q6F_LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
+#define Q6F_LOGW(...) __android_log_print(ANDROID_LOG_WARN, TAG, __VA_ARGS__)
+#define Q6F_LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
 
 struct Vec3 {
     float x = 0.0f;
@@ -35,8 +36,9 @@ GLuint gVbo = 0;
 GLint gMvpLocation = -1;
 GLsizei gVertexCount = 0;
 size_t gPlacementCount = 0;
-size_t gCollisionMeshCount = 0;
+size_t gCollisionShapeCount = 0;
 size_t gTriangleCount = 0;
+std::array<size_t, 5> gKindCounts{};
 bool gLoggedVisible = false;
 
 bool IsMegatonArchitecture(const std::string& path) {
@@ -94,7 +96,7 @@ GLuint Compile(GLenum type, const char* source) {
     if (ok != GL_TRUE) {
         char log[1024]{};
         glGetShaderInfoLog(shader, sizeof(log), nullptr, log);
-        Q6E_LOGE("Q6E COLLISION shader compile failed: %s", log);
+        Q6F_LOGE("Q6F COLLISION shader compile failed: %s", log);
         glDeleteShader(shader);
         return 0;
     }
@@ -137,7 +139,7 @@ GLuint BuildProgram() {
     if (ok != GL_TRUE) {
         char log[1024]{};
         glGetProgramInfoLog(program, sizeof(log), nullptr, log);
-        Q6E_LOGE("Q6E COLLISION shader link failed: %s", log);
+        Q6F_LOGE("Q6F COLLISION shader link failed: %s", log);
         glDeleteProgram(program);
         return 0;
     }
@@ -160,7 +162,7 @@ bool InitializeFo3CollisionOverlay(const std::vector<Fo3WorldPlacement>& placeme
     if (placements.empty() || unitsPerMetre <= 0.0f) return false;
 
     std::unordered_set<uint32_t> seenRefs;
-    std::unordered_map<std::string, std::vector<Fo3NifCollisionMesh>> modelCache;
+    std::unordered_map<std::string, std::vector<Fo3NifCollisionShapeQ6F>> modelCache;
     std::vector<float> lines;
     lines.reserve(65536u);
 
@@ -175,38 +177,39 @@ bool InitializeFo3CollisionOverlay(const std::vector<Fo3WorldPlacement>& placeme
 
         auto cached = modelCache.find(placement.modelPath);
         if (cached == modelCache.end()) {
-            std::vector<Fo3NifCollisionMesh> meshes;
-            if (!LoadFo3NifCollisionMeshes(placement.modelPath, meshes)) {
+            std::vector<Fo3NifCollisionShapeQ6F> shapes;
+            if (!LoadFo3NifCollisionShapesQ6F(placement.modelPath, shapes)) {
                 ++misses;
                 continue;
             }
-            cached = modelCache.emplace(placement.modelPath, std::move(meshes)).first;
+            cached = modelCache.emplace(placement.modelPath, std::move(shapes)).first;
         } else {
             ++cacheHits;
         }
 
         size_t placementTriangles = 0;
-        size_t placementMeshes = 0;
-        const std::vector<Fo3NifCollisionMesh>& meshes = cached->second;
-        for (const Fo3NifCollisionMesh& mesh : meshes) {
-            const size_t vertexCount = mesh.positions.size() / 3u;
-            if (vertexCount == 0u || mesh.indices.empty()) continue;
+        size_t placementShapes = 0;
+        std::array<size_t, 5> placementKinds{};
+        const std::vector<Fo3NifCollisionShapeQ6F>& shapes = cached->second;
+        for (const Fo3NifCollisionShapeQ6F& shape : shapes) {
+            const size_t vertexCount = shape.positions.size() / 3u;
+            if (vertexCount == 0u || shape.indices.empty()) continue;
 
-            for (size_t i = 0; i + 2u < mesh.indices.size(); i += 3u) {
+            for (size_t i = 0; i + 2u < shape.indices.size(); i += 3u) {
                 if ((lines.size() / 3u) + 6u > MAX_LINE_VERTICES) {
                     capped = true;
                     break;
                 }
-                const uint32_t ia = mesh.indices[i];
-                const uint32_t ib = mesh.indices[i + 1u];
-                const uint32_t ic = mesh.indices[i + 2u];
+                const uint32_t ia = shape.indices[i];
+                const uint32_t ib = shape.indices[i + 1u];
+                const uint32_t ic = shape.indices[i + 2u];
                 if (ia >= vertexCount || ib >= vertexCount || ic >= vertexCount) continue;
 
                 auto point = [&](uint32_t index) {
                     Vec3 p{
-                        mesh.positions[index * 3u],
-                        mesh.positions[index * 3u + 1u],
-                        mesh.positions[index * 3u + 2u],
+                        shape.positions[index * 3u],
+                        shape.positions[index * 3u + 1u],
+                        shape.positions[index * 3u + 2u],
                     };
                     return ToVr(ApplyPlacement(p, placement),
                                 centerX, centerY, floorZ,
@@ -221,23 +224,26 @@ bool InitializeFo3CollisionOverlay(const std::vector<Fo3WorldPlacement>& placeme
                 ++placementTriangles;
             }
             if (capped) break;
-            ++placementMeshes;
+            ++placementShapes;
+            ++placementKinds[static_cast<size_t>(shape.kind)];
         }
 
         if (placementTriangles > 0u) {
             ++gPlacementCount;
-            gCollisionMeshCount += placementMeshes;
+            gCollisionShapeCount += placementShapes;
             gTriangleCount += placementTriangles;
-            Q6E_LOGI("Q6E COLLISION OBJECT: ref=%08X EDID=%s model=%s meshes=%zu triangles=%zu",
+            for (size_t i = 0; i < gKindCounts.size(); ++i) gKindCounts[i] += placementKinds[i];
+            Q6F_LOGI("Q6F COLLISION OBJECT: ref=%08X EDID=%s model=%s shapes=%zu triangles=%zu packed=%zu convex=%zu box=%zu sphere=%zu capsule=%zu",
                      placement.refFormId,
                      placement.editorId.empty() ? "<none>" : placement.editorId.c_str(),
-                     placement.modelPath.c_str(), placementMeshes, placementTriangles);
+                     placement.modelPath.c_str(), placementShapes, placementTriangles,
+                     placementKinds[0], placementKinds[1], placementKinds[2], placementKinds[3], placementKinds[4]);
         }
         if (capped) break;
     }
 
     if (lines.empty()) {
-        Q6E_LOGW("Q6E COLLISION READY FAILED: placements=0 misses=%zu uniqueModels=%zu",
+        Q6F_LOGW("Q6F COLLISION READY FAILED: placements=0 misses=%zu uniqueModels=%zu",
                  misses, modelCache.size());
         return false;
     }
@@ -268,9 +274,10 @@ bool InitializeFo3CollisionOverlay(const std::vector<Fo3WorldPlacement>& placeme
         return false;
     }
 
-    Q6E_LOGI("Q6E COLLISION READY: placements=%zu meshes=%zu triangles=%zu lineVertices=%d uniqueModels=%zu modelCacheHits=%zu misses=%zu capped=%d",
-             gPlacementCount, gCollisionMeshCount, gTriangleCount, gVertexCount,
-             modelCache.size(), cacheHits, misses, capped ? 1 : 0);
+    Q6F_LOGI("Q6F COLLISION READY: placements=%zu shapes=%zu triangles=%zu lineVertices=%d uniqueModels=%zu modelCacheHits=%zu misses=%zu packed=%zu convex=%zu box=%zu sphere=%zu capsule=%zu capped=%d",
+             gPlacementCount, gCollisionShapeCount, gTriangleCount, gVertexCount,
+             modelCache.size(), cacheHits, misses,
+             gKindCounts[0], gKindCounts[1], gKindCounts[2], gKindCounts[3], gKindCounts[4], capped ? 1 : 0);
     return true;
 }
 
@@ -283,8 +290,7 @@ void RenderFo3CollisionOverlay(const float* mvp16) {
     glGetIntegerv(GL_CURRENT_PROGRAM, &previousProgram);
     glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &previousVao);
 
-    // X-ray mode is deliberate for Q6E verification: collision embedded exactly
-    // in the visible wall remains readable instead of disappearing to z-fighting.
+    // X-ray remains deliberate for Q6F coverage verification.
     glDisable(GL_DEPTH_TEST);
     glUseProgram(gProgram);
     glUniformMatrix4fv(gMvpLocation, 1, GL_FALSE, mvp16);
@@ -298,8 +304,8 @@ void RenderFo3CollisionOverlay(const float* mvp16) {
 
     if (!gLoggedVisible) {
         gLoggedVisible = true;
-        Q6E_LOGI("Q6E COLLISION VISIBLE: placements=%zu triangles=%zu original Fallout collision submitted as cyan both-eye wireframe",
-                 gPlacementCount, gTriangleCount);
+        Q6F_LOGI("Q6F COLLISION VISIBLE: placements=%zu shapes=%zu triangles=%zu authored Fallout collision submitted as cyan both-eye wireframe",
+                 gPlacementCount, gCollisionShapeCount, gTriangleCount);
     }
 }
 
@@ -313,7 +319,8 @@ void ShutdownFo3CollisionOverlay() {
     gMvpLocation = -1;
     gVertexCount = 0;
     gPlacementCount = 0;
-    gCollisionMeshCount = 0;
+    gCollisionShapeCount = 0;
     gTriangleCount = 0;
+    gKindCounts.fill(0u);
     gLoggedVisible = false;
 }
