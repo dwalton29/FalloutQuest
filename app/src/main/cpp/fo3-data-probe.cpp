@@ -41,7 +41,6 @@ void ProbeFo3Data() {
         {"Fallout3.esm", "TES4", 4},
         {"Fallout - Meshes.bsa", "BSA\0", 4},
         {"Fallout - Textures.bsa", "BSA\0", 4},
-        {"Fallout - Textures2.bsa", "BSA\0", 4},
     };
 
     bool allReady = true;
@@ -54,6 +53,20 @@ void ProbeFo3Data() {
                             "Q5 data %s: %s (%lld bytes)",
                             item.name, magicOk ? "READY" : "MISSING/INVALID", size);
         allReady &= magicOk;
+    }
+
+    char optionalPath[512]{};
+    std::snprintf(optionalPath, sizeof(optionalPath), "%s/%s", DATA_ROOT,
+                  "Fallout - Textures2.bsa");
+    const long long optionalSize = FileSize(optionalPath);
+    if (optionalSize > 0) {
+        const bool optionalMagic = HasMagic(optionalPath, "BSA\0", 4);
+        __android_log_print(optionalMagic ? ANDROID_LOG_INFO : ANDROID_LOG_ERROR, TAG,
+                            "Q5 optional data Fallout - Textures2.bsa: %s (%lld bytes)",
+                            optionalMagic ? "READY" : "INVALID", optionalSize);
+    } else {
+        __android_log_print(ANDROID_LOG_INFO, TAG,
+                            "Q5 optional data Fallout - Textures2.bsa: not present (OK)");
     }
 
     if (allReady) {
