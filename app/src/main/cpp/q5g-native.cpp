@@ -10,13 +10,13 @@
 
 namespace {
 
-constexpr const char* TAG = "FalloutQuest";
+constexpr const char* Q5G_TAG = "FalloutQuest";
 constexpr float FO3_UNITS_PER_METRE = 70.0f;
 constexpr float FLOOR_Y = -1.55f;
 constexpr float CHAIR_DISTANCE_METRES = -2.20f;
 
-#define Q5G_LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
-#define Q5G_LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
+#define Q5G_LOGI(...) __android_log_print(ANDROID_LOG_INFO, Q5G_TAG, __VA_ARGS__)
+#define Q5G_LOGE(...) __android_log_print(ANDROID_LOG_ERROR, Q5G_TAG, __VA_ARGS__)
 
 struct Vec3 {
     float x = 0.0f;
@@ -140,8 +140,6 @@ bool InitializeChairRenderer() {
         const float gameY = mesh.positions[i * 3u + 1u];
         const float gameZ = mesh.positions[i * 3u + 2u];
 
-        // Fallout/Gamebryo is Z-up. OpenXR is Y-up. Rotate axes while
-        // preserving handedness, then convert ~70 Fallout units per metre.
         Vec3 p{
             gameX / FO3_UNITS_PER_METRE,
             gameZ / FO3_UNITS_PER_METRE,
@@ -317,8 +315,6 @@ void Q5GClear(GLbitfield mask) {
 }
 
 void Q5GDrawArrays(GLenum mode, GLint first, GLsizei count) {
-    // Q4's three placeholder triangles occupy vertices 0..8. Replace them
-    // with the real Fallout chair, while leaving floor grid + hands untouched.
     if (mode == GL_TRIANGLES && count == 3 && (first == 0 || first == 3)) {
         return;
     }
