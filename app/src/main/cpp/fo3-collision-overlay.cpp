@@ -1,5 +1,6 @@
 #include "fo3-collision-overlay.h"
 #include "fo3-nif-collision-q6f.h"
+#include "fo3-terrain-q76.h"
 
 #include <GLES3/gl3.h>
 #include <android/log.h>
@@ -76,6 +77,7 @@ bool gPlayerCollisionReady = false;
 bool gSafeSpawnResolved = false;
 uint64_t gResolveCounter = 0;
 uint64_t gContactLogCount = 0;
+uint64_t gTerrainGroundLogCountQ77 = 0;
 
 bool IsMegatonArchitecture(const std::string& path) {
     std::string lower = path;
@@ -598,6 +600,22 @@ bool ResolveFo3PlayerMotionQ6G(float currentX, float currentZ,
     ++gResolveCounter;
 
     if (!gSafeSpawnResolved) {
+        // Q7.7: after an exterior XTEL transition, LAND is already decoded and
+        // aligned to the same origin as the visible worldspace. Resolve the
+        // first grounded frame at the authored X/Z instead of searching nearby
+        // Havok floors. In interiors the sampler is inactive and this block is
+        // a strict no-op, preserving the proven Q7.5/Q6K spawn path.
+        float terrainSpawnY = currentPlayerYOffset;
+        if (SampleFo3TerrainGroundQ77(currentX, currentZ, &terrainSpawnY)) {
+            *outX = currentX;
+            *outZ = currentZ;
+            *outPlayerYOffset = terrainSpawnY;
+            gSafeSpawnResolved = true;
+            Q6I_LOGI("Q7.7 LAND SAFE SPAWN: seed=(%.3f %.3f) resolvedSameXZ=1 playerY=%.3f source=VHGT",
+                     currentX, currentZ, terrainSpawnY);
+            return true;
+        }
+
         float spawnX = currentX;
         float spawnZ = currentZ;
         float spawnPlayerY = currentPlayerYOffset;
@@ -665,7 +683,28 @@ bool ResolveFo3PlayerMotionQ6G(float currentX, float currentZ,
     }
 
     float groundY = feetY;
-    const bool grounded = FindGround(x, z, feetY, groundY);
+    bool grounded = FindGround(x, z, feetY, groundY);
+
+    // Q7.7 merge rule: authored Havok remains authoritative for stairs,
+    // platforms and structural floors. LAND fills the gaps where exterior
+    // worldspace ground has no bhk triangle; if terrain is physically above an
+    // authored candidate, prefer the higher surface to avoid sinking through it.
+    float terrainPlayerY = currentPlayerYOffset;
+    bool terrainGrounded = SampleFo3TerrainGroundQ77(x, z, &terrainPlayerY);
+    if (terrainGrounded) {
+        const float terrainGroundY = gCollisionFloorY + terrainPlayerY;
+        if (!grounded || terrainGroundY > groundY) {
+            groundY = terrainGroundY;
+            grounded = true;
+        }
+        if (gTerrainGroundLogCountQ77 < 12u || (gResolveCounter % 360u) == 0u) {
+            ++gTerrainGroundLogCountQ77;
+            Q6G_LOGI("Q7.7 LAND GROUND: pos=(%.3f %.3f) terrainY=%.3f selectedGroundY=%.3f authoredGround=%d",
+                     x, z, terrainGroundY, groundY,
+                     FindGround(x, z, feetY, terrainGroundY) ? 1 : 0);
+        }
+    }
+
     float playerYOffset = currentPlayerYOffset;
     if (grounded) playerYOffset = groundY - gCollisionFloorY;
 
@@ -737,4 +776,5 @@ void ShutdownFo3CollisionOverlay() {
     gSafeSpawnResolved = false;
     gResolveCounter = 0;
     gContactLogCount = 0;
+    gTerrainGroundLogCountQ77 = 0;
 }
