@@ -31,3 +31,12 @@ bool ConsumeFo3PlayerResetQ74();
 // destination CELL. Only active, model-bearing REFRs are returned.
 bool LoadFo3CellPlacementsQ74(uint32_t cellFormId,
                              std::vector<Fo3WorldPlacement>& outPlacements);
+
+// Q7.5 exterior loader. The XTEL-linked CELL can be a worldspace persistent
+// cell, so this discovers the WRLD's XCLC grid cells, merges the persistent
+// refs with the relevant exterior cells around the arrival point (or all cells
+// for a small dedicated worldspace), and returns one combined placement set.
+bool LoadFo3WorldspaceNeighborhoodQ75(uint32_t worldspaceFormId,
+                                     uint32_t persistentCellFormId,
+                                     float arrivalX, float arrivalY,
+                                     std::vector<Fo3WorldPlacement>& outPlacements);
