@@ -1,6 +1,8 @@
 #include "fo3-megaton-scene.h"
 
 #include <android/log.h>
+#include <algorithm>
+#include <cctype>
 #include <cstdio>
 #include <cstdint>
 #include <cstring>
@@ -19,12 +21,14 @@ constexpr const char* ESM_PATH =
         "/data/user/0/com.falloutquest.app/files/Fallout3/Data/Fallout3.esm";
 constexpr uint32_t TARGET_CELL_FORM_ID = 0x000151E3u;
 constexpr uint32_t FLAG_COMPRESSED = 0x00040000u;
+constexpr uint32_t FLAG_INITIALLY_DISABLED = 0x00000800u;
 constexpr uint64_t HEADER_SIZE = 24u;
 constexpr uint32_t MAX_RECORD_BYTES = 64u * 1024u * 1024u;
 
 #define Q6A_LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
 #define Q6A_LOGW(...) __android_log_print(ANDROID_LOG_WARN, TAG, __VA_ARGS__)
 #define Q6A_LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
+#define Q6I_LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
 
 struct GroupFrame {
     uint64_t end = 0;
@@ -35,6 +39,10 @@ struct GroupFrame {
 struct RawPlacement {
     uint32_t refFormId = 0;
     uint32_t baseFormId = 0;
+    uint32_t recordFlags = 0;
+    uint32_t enableParentFormId = 0;
+    uint8_t enableParentFlags = 0;
+    bool hasEnableParent = false;
     float x = 0.0f;
     float y = 0.0f;
     float z = 0.0f;
@@ -173,6 +181,10 @@ bool ParsePlacement(const std::vector<uint8_t>& payload, RawPlacement& out) {
         } else if (std::memcmp(type, "XSCL", 4) == 0 && size >= 4u) {
             out.scale = ReadLeFloat(bytes);
             if (!(out.scale > 0.0001f && out.scale < 1000.0f)) out.scale = 1.0f;
+        } else if (std::memcmp(type, "XESP", 4) == 0 && size >= 4u) {
+            out.hasEnableParent = true;
+            out.enableParentFormId = ReadLe32(bytes);
+            if (size >= 5u) out.enableParentFlags = bytes[4u];
         }
     });
     return haveBase && out.hasTransform;
@@ -245,6 +257,7 @@ bool CollectReferences(std::vector<RawPlacement>& placements) {
         if (!ReadPayload(file, sizeField, flags, payload)) break;
         RawPlacement p;
         p.refFormId = formId;
+        p.recordFlags = flags;
         if (ParsePlacement(payload, p)) placements.push_back(p);
     }
 
@@ -318,9 +331,32 @@ bool LoadMegatonPlayerHousePlacements(std::vector<Fo3WorldPlacement>& outPlaceme
         return false;
     }
 
+    // Until save-game/global state is wired into the native runtime, render only
+    // unconditional REFRs. Theme/upgrade groups are controlled by Enable Parent
+    // (XESP) and/or Initially Disabled; drawing all of them at once produces the
+    // overlapping player-house themes seen in Q6H.
+    std::vector<const RawPlacement*> activeRaw;
+    activeRaw.reserve(raw.size());
+    size_t initiallyDisabled = 0;
+    size_t enableParentControlled = 0;
+    size_t both = 0;
+    for (const RawPlacement& p : raw) {
+        const bool disabled = (p.recordFlags & FLAG_INITIALLY_DISABLED) != 0u;
+        const bool parentControlled = p.hasEnableParent;
+        if (disabled || parentControlled) {
+            if (disabled) ++initiallyDisabled;
+            if (parentControlled) ++enableParentControlled;
+            if (disabled && parentControlled) ++both;
+            continue;
+        }
+        activeRaw.push_back(&p);
+    }
+    Q6I_LOGI("Q6I ESM STATE FILTER: raw=%zu unconditional=%zu initiallyDisabled=%zu enableParent=%zu both=%zu policy=base-house-only",
+             raw.size(), activeRaw.size(), initiallyDisabled, enableParentControlled, both);
+
     std::unordered_set<uint32_t> wanted;
-    wanted.reserve(raw.size());
-    for (const RawPlacement& p : raw) wanted.insert(p.baseFormId);
+    wanted.reserve(activeRaw.size());
+    for (const RawPlacement* p : activeRaw) wanted.insert(p->baseFormId);
 
     std::unordered_map<uint32_t, BaseRecord> bases;
     if (!ResolveBases(wanted, bases)) {
@@ -328,7 +364,8 @@ bool LoadMegatonPlayerHousePlacements(std::vector<Fo3WorldPlacement>& outPlaceme
         return false;
     }
 
-    for (const RawPlacement& p : raw) {
+    for (const RawPlacement* rawPlacement : activeRaw) {
+        const RawPlacement& p = *rawPlacement;
         const auto it = bases.find(p.baseFormId);
         if (it == bases.end() || it->second.modelPath.empty() || !EndsInNif(it->second.modelPath)) continue;
         const BaseRecord& base = it->second;
