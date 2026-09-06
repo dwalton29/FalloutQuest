@@ -240,14 +240,20 @@ set(Q6H_NEW_CENTER [=[
         ++structureShapes;
     }
 
-    const float centerX = structureShapes > 0u
+    Fo3CellArrival q6kArrival;
+    const bool q6kArrivalReady = LoadMegatonPlayerHouseArrival(q6kArrival) && q6kArrival.valid;
+    const float fallbackCenterX = structureShapes > 0u
         ? (structureMinX + structureMaxX) * 0.5f
         : (minimum.x + maximum.x) * 0.5f;
-    const float centerY = structureShapes > 0u
+    const float fallbackCenterY = structureShapes > 0u
         ? (structureMinY + structureMaxY) * 0.5f
         : (minimum.y + maximum.y) * 0.5f;
-    const float floorZ = minimum.z;
-    Q6H_LOGI("Q6H SPAWN SEED: structureCenter=(%.1f %.1f) floorReferenceZ=%.1f structureShapes=%zu VRseed=(0,0) collisionValidation=pending",
+
+    const float centerX = q6kArrivalReady ? q6kArrival.x : fallbackCenterX;
+    const float centerY = q6kArrivalReady ? q6kArrival.y : fallbackCenterY;
+    const float floorZ = q6kArrivalReady ? q6kArrival.z : minimum.z;
+    Q6H_LOGI("Q6H SPAWN SEED: source=%s center=(%.2f %.2f) floorReferenceZ=%.2f structureShapes=%zu VRseed=(0,0) collisionValidation=pending",
+             q6kArrivalReady ? "Fallout3.esm/XTEL" : "structure-fallback",
              centerX, centerY, floorZ, structureShapes);
 ]=])
 string(REPLACE "${Q6H_OLD_CENTER}" "${Q6H_NEW_CENTER}"
@@ -467,6 +473,7 @@ file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/fo3-static-nif-q6h.cpp" "${Q6H_NIF_SOURC
 add_library(falloutquest SHARED
     ${CMAKE_CURRENT_BINARY_DIR}/q6h-native-generated.cpp
     fo3-megaton-scene.cpp
+    fo3-cell-spawn.cpp
     ${CMAKE_CURRENT_BINARY_DIR}/fo3-static-nif-q6h.cpp
     fo3-nif-collision.cpp
     fo3-collision-overlay.cpp
