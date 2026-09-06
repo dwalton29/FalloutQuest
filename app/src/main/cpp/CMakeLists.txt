@@ -22,8 +22,6 @@ string(REPLACE
     "constexpr size_t MAX_MODEL_ATTEMPTS = 2000u;"
     Q6H_NATIVE_SOURCE "${Q6H_NATIVE_SOURCE}")
 
-# Preserve ESM order. Q6H no longer sorts toward a bed/chair anchor because the
-# entire CELL is the load domain.
 set(Q6H_OLD_SORT [=[
     std::stable_sort(placements.begin(), placements.end(),
                      [&](const Fo3WorldPlacement& a, const Fo3WorldPlacement& b) {
@@ -39,8 +37,6 @@ set(Q6H_NEW_SORT [=[
 string(REPLACE "${Q6H_OLD_SORT}" "${Q6H_NEW_SORT}"
        Q6H_NATIVE_SOURCE "${Q6H_NATIVE_SOURCE}")
 
-# Multi-shape NIF instancing + CPU model cache. Repeated refs copy already parsed
-# mesh data instead of reopening/reparsing the BSA NIF every time.
 set(Q6H_OLD_BUILD [=[
 bool BuildCpuObject(const Fo3WorldPlacement& placement, CpuObject& out) {
     Fo3StaticNifMesh mesh;
@@ -166,8 +162,6 @@ bool BuildCpuObjects(const Fo3WorldPlacement& placement, std::vector<CpuObject>&
 string(REPLACE "${Q6H_OLD_BUILD}" "${Q6H_NEW_BUILD}"
        Q6H_NATIVE_SOURCE "${Q6H_NATIVE_SOURCE}")
 
-# Full CELL selection. Markers/effects remain non-world runtime refs, but there
-# is no distance/radius cull and no 72-placement room cap.
 set(Q6H_OLD_SELECT [=[
     std::vector<CpuObject> selected;
     selected.reserve(MAX_SCENE_OBJECTS);
@@ -224,9 +218,6 @@ set(Q6H_NEW_SELECT [=[
 string(REPLACE "${Q6H_OLD_SELECT}" "${Q6H_NEW_SELECT}"
        Q6H_NATIVE_SOURCE "${Q6H_NATIVE_SOURCE}")
 
-# Keep the VR coordinate origin near the authored house structure instead of the
-# global bounds centre. Q6H's collision layer then validates/searches a safe,
-# grounded capsule spawn around VR (0,0) on the first physics resolve.
 set(Q6H_OLD_CENTER [=[
     const float centerX = (minimum.x + maximum.x) * 0.5f;
     const float centerY = (minimum.y + maximum.y) * 0.5f;
@@ -262,7 +253,6 @@ set(Q6H_NEW_CENTER [=[
 string(REPLACE "${Q6H_OLD_CENTER}" "${Q6H_NEW_CENTER}"
        Q6H_NATIVE_SOURCE "${Q6H_NATIVE_SOURCE}")
 
-# Avoid helper collisions with q4-native.cpp included at the bottom.
 string(REPLACE
     "GLuint CompileShader(GLenum type, const char* source)"
     "GLuint CompileQ6HShader(GLenum type, const char* source)"
@@ -284,7 +274,6 @@ string(REPLACE
     "gProgram = CreateQ6HProgram();"
     Q6H_NATIVE_SOURCE "${Q6H_NATIVE_SOURCE}")
 
-# Shared Bethesda collision world (Q6F decoder + Q6G player resolver + Q6H safe spawn).
 string(REPLACE
     "#include \"fo3-texture-bsa.h\""
     "#include \"fo3-texture-bsa.h\"\n#include \"fo3-collision-overlay.h\""
@@ -338,7 +327,6 @@ string(REPLACE "${Q6H_OLD_CLEANUP}" "${Q6H_NEW_CLEANUP}"
 
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/q6h-native-generated.cpp" "${Q6H_NATIVE_SOURCE}")
 
-# Multi-shape NIF loader generated from the proven static parser.
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/fo3-static-nif.cpp" Q6H_NIF_SOURCE)
 string(REPLACE "Q6A" "Q6H" Q6H_NIF_SOURCE "${Q6H_NIF_SOURCE}")
 set(Q6H_OLD_LOADER [=[
@@ -392,9 +380,16 @@ bool LoadFo3StaticNif(const std::string& modelPath, Fo3StaticNifMesh& outMesh) {
 
         candidate.modelPath = resolved;
         outMesh = std::move(candidate);
+        Q6H_LOGI("Q6H NIF READY: model=%s shape=%u type=%s data=%u vertices=%zu triangles=%zu diffuse=%s normal=%s rootTransform=%d",
+                 resolved.c_str(), block, type.c_str(), shape.dataRef,
+                 outMesh.positions.size() / 3u, outMesh.indices.size() / 3u,
+                 outMesh.diffuseTexturePath.empty() ? "<none>" : outMesh.diffuseTexturePath.c_str(),
+                 outMesh.normalTexturePath.empty() ? "<none>" : outMesh.normalTexturePath.c_str(),
+                 directRootChild ? 1 : 0);
         return true;
     }
 
+    Q6H_LOGW("Q6H NIF NO SUPPORTED STATIC SHAPE: %s blocks=%u", resolved.c_str(), header.numBlocks);
     return false;
 }
 ]=])
@@ -450,7 +445,10 @@ bool LoadFo3StaticNifMeshes(const std::string& modelPath,
         outMeshes.push_back(std::move(candidate));
     }
 
-    if (outMeshes.empty()) return false;
+    if (outMeshes.empty()) {
+        Q6H_LOGW("Q6H NIF NO SUPPORTED STATIC SHAPE: %s blocks=%u", resolved.c_str(), header.numBlocks);
+        return false;
+    }
     Q6H_LOGI("Q6H NIF MODEL READY: model=%s visibleShapes=%zu", resolved.c_str(), outMeshes.size());
     return true;
 }
