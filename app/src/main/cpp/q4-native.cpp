@@ -11,6 +11,7 @@
 #include <GLES3/gl3.h>
 
 #include "fo3-collision-overlay.h"
+#include "fo3-megaton-scene.h"
 
 #include <algorithm>
 #include <array>
@@ -242,17 +243,26 @@ public:
     explicit FalloutQuestXr(android_app* app) : app_(app) {}
 
     bool Initialize() {
+        FQ_LOGI("Q7.1 BOOT STEP: InitializeLoader");
         if (!InitializeLoader()) return false;
+        FQ_LOGI("Q7.1 BOOT STEP: CreateInstance");
         if (!CreateInstance()) return false;
+        FQ_LOGI("Q7.1 BOOT STEP: CreateSystem");
         if (!CreateSystem()) return false;
+        FQ_LOGI("Q7.1 BOOT STEP: CreateEgl");
         if (!CreateEgl()) return false;
+        FQ_LOGI("Q7.1 BOOT STEP: CreateSession");
         if (!CreateSession()) return false;
+        FQ_LOGI("Q7.1 BOOT STEP: CreateInputActions");
         if (!CreateInputActions()) return false;
+        FQ_LOGI("Q7.1 BOOT STEP: CreateReferenceSpace");
         if (!CreateReferenceSpace()) return false;
+        FQ_LOGI("Q7.1 BOOT STEP: CreateSwapchains");
         if (!CreateSwapchains()) return false;
+        FQ_LOGI("Q7.1 BOOT STEP: CreateSceneRenderer");
         if (!CreateSceneRenderer()) return false;
 
-        FQ_LOGI("Q4 READY: stereo + Touch tracking + locomotion + snap turn initialized");
+        FQ_LOGI("Q7.1 READY: Q6K runtime + isolated right-trigger door probe");
         return true;
     }
 
@@ -426,6 +436,8 @@ private:
                           1, &handPaths_[0], &moveYAction_)) return false;
         if (!CreateAction("turn_x", "Turn X", XR_ACTION_TYPE_FLOAT_INPUT,
                           1, &handPaths_[1], &turnXAction_)) return false;
+        if (!CreateAction("activate_value", "Activate", XR_ACTION_TYPE_FLOAT_INPUT,
+                          1, &handPaths_[1], &activateAction_)) return false;
 
         XrPath profile = XR_NULL_PATH;
         XrPath leftAim = XR_NULL_PATH;
@@ -433,19 +445,22 @@ private:
         XrPath leftStickX = XR_NULL_PATH;
         XrPath leftStickY = XR_NULL_PATH;
         XrPath rightStickX = XR_NULL_PATH;
+        XrPath rightTriggerValue = XR_NULL_PATH;
         if (!Path("/interaction_profiles/oculus/touch_controller", &profile) ||
             !Path("/user/hand/left/input/aim/pose", &leftAim) ||
             !Path("/user/hand/right/input/aim/pose", &rightAim) ||
             !Path("/user/hand/left/input/thumbstick/x", &leftStickX) ||
             !Path("/user/hand/left/input/thumbstick/y", &leftStickY) ||
-            !Path("/user/hand/right/input/thumbstick/x", &rightStickX)) return false;
+            !Path("/user/hand/right/input/thumbstick/x", &rightStickX) ||
+            !Path("/user/hand/right/input/trigger/value", &rightTriggerValue)) return false;
 
-        const std::array<XrActionSuggestedBinding, 5> bindings{{
+        const std::array<XrActionSuggestedBinding, 6> bindings{{
             {poseAction_, leftAim},
             {poseAction_, rightAim},
             {moveXAction_, leftStickX},
             {moveYAction_, leftStickY},
             {turnXAction_, rightStickX},
+            {activateAction_, rightTriggerValue},
         }};
         XrInteractionProfileSuggestedBinding suggested{XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING};
         suggested.interactionProfile = profile;
@@ -468,7 +483,7 @@ private:
         attach.actionSets = &actionSet_;
         if (!CheckXr(xrAttachSessionActionSets(session_, &attach), "xrAttachSessionActionSets")) return false;
 
-        FQ_LOGI("Q4 Touch bindings attached: left stick move, right stick snap turn, both aim poses");
+        FQ_LOGI("Q7.1 Touch bindings attached: Q6K controls unchanged + right trigger/value probe");
         return true;
     }
 
@@ -661,6 +676,7 @@ private:
         moveX_ = Deadzone(ReadFloatAction(moveXAction_, handPaths_[0]));
         moveY_ = Deadzone(ReadFloatAction(moveYAction_, handPaths_[0]));
         turnX_ = Deadzone(ReadFloatAction(turnXAction_, handPaths_[1]));
+        activateValue_ = ReadFloatAction(activateAction_, handPaths_[1]);
 
         for (uint32_t hand = 0; hand < 2; ++hand) {
             XrActionStateGetInfo poseInfo{XR_TYPE_ACTION_STATE_GET_INFO};
@@ -715,17 +731,11 @@ private:
         const float s = std::sin(headYaw);
         const float velocity = MOVE_SPEED_METRES_PER_SECOND * static_cast<float>(dt);
 
-        // OpenXR uses -Z as forward. Positive yaw turns the local -Z vector
-        // toward -X, so the flattened head-relative basis is:
-        // forward=(-sin(yaw), 0, -cos(yaw)), right=(cos(yaw), 0, -sin(yaw)).
         const float requestedDx = (strafe * c - forward * s) * velocity;
         const float requestedDz = (-strafe * s - forward * c) * velocity;
         const float desiredPlayerX = playerPosition_.x + requestedDx;
         const float desiredPlayerZ = playerPosition_.z + requestedDz;
 
-        // Q6G collides the actual virtual body/head position, not merely the
-        // thumbstick translation. This keeps room-scale offsets and the Q6D
-        // pivot-preserved snap turn in the same physical collision space.
         const XrVector3f headOffset = RotateYaw(headView.pose.position, playerYaw_);
         const float currentCenterX = headOffset.x + playerPosition_.x;
         const float currentCenterZ = headOffset.z + playerPosition_.z;
@@ -761,6 +771,25 @@ private:
         return result;
     }
 
+    void ProbeDoorQ71() {
+        if (activateValue_ > 0.75f && !activateLatched_) {
+            activateLatched_ = true;
+            if (!handPoseValid_[1]) {
+                FQ_LOGI("Q7.1 DOOR MISS: right-hand aim pose unavailable at trigger edge");
+                return;
+            }
+            const XrPosef hand = ToVirtualPose(handLocalPoses_[1]);
+            const Mat4 handMatrix = MatrixFromPose(hand);
+            const float dx = -handMatrix.m[8];
+            const float dy = -handMatrix.m[9];
+            const float dz = -handMatrix.m[10];
+            ProbeMegatonPlayerHouseDoorQ71(hand.position.x, hand.position.y, hand.position.z,
+                                           dx, dy, dz);
+        } else if (activateValue_ < 0.25f) {
+            activateLatched_ = false;
+        }
+    }
+
     void RenderFrame() {
         XrFrameWaitInfo waitInfo{XR_TYPE_FRAME_WAIT_INFO};
         XrFrameState frameState{XR_TYPE_FRAME_STATE};
@@ -793,6 +822,7 @@ private:
 
                 SyncInput(frameState.predictedDisplayTime);
                 UpdatePlayer(views[0], frameState.predictedDisplayTime);
+                ProbeDoorQ71();
 
                 for (uint32_t eye = 0; eye < 2; ++eye) {
                     RenderEye(eye, views[eye], projectionViews[eye]);
@@ -805,11 +835,11 @@ private:
                 layerCount = 1;
 
                 if ((frameCounter_++ % 180) == 0) {
-                    FQ_LOGI("Q4 live: player %.2f %.2f %.2f, collision=%d, hands L=%d R=%d, move %.2f %.2f",
+                    FQ_LOGI("Q7.1 live: player %.2f %.2f %.2f, collision=%d, hands L=%d R=%d, move %.2f %.2f trigger=%.2f",
                             playerPosition_.x, playerPosition_.y, playerPosition_.z,
                             IsFo3PlayerCollisionReadyQ6G() ? 1 : 0,
                             handPoseValid_[0] ? 1 : 0, handPoseValid_[1] ? 1 : 0,
-                            moveX_, moveY_);
+                            moveX_, moveY_, activateValue_);
                 }
             }
         }
@@ -908,6 +938,7 @@ private:
     XrAction moveXAction_{XR_NULL_HANDLE};
     XrAction moveYAction_{XR_NULL_HANDLE};
     XrAction turnXAction_{XR_NULL_HANDLE};
+    XrAction activateAction_{XR_NULL_HANDLE};
     std::array<XrPath, 2> handPaths_{XR_NULL_PATH, XR_NULL_PATH};
     std::array<XrSpace, 2> handSpaces_{XR_NULL_HANDLE, XR_NULL_HANDLE};
     std::array<XrPosef, 2> handLocalPoses_{};
@@ -915,6 +946,8 @@ private:
     float moveX_{0.0f};
     float moveY_{0.0f};
     float turnX_{0.0f};
+    float activateValue_{0.0f};
+    bool activateLatched_{false};
 
     XrVector3f playerPosition_{0.0f, 0.0f, 0.0f};
     float playerYaw_{0.0f};
@@ -943,13 +976,13 @@ private:
 
 extern "C" void android_main(struct android_app* app) {
     app_dummy();
-    FQ_LOGI("FalloutQuest Q4 native OpenXR process booting");
+    FQ_LOGI("FalloutQuest Q7.1 native OpenXR process booting");
     FalloutQuestXr xr(app);
     if (!xr.Initialize()) {
-        FQ_LOGE("FalloutQuest Q4 initialization failed");
+        FQ_LOGE("FalloutQuest Q7.1 initialization failed");
         return;
     }
     xr.Run();
     xr.Shutdown();
-    FQ_LOGI("FalloutQuest Q4 process stopped");
+    FQ_LOGI("FalloutQuest Q7.1 process stopped");
 }
