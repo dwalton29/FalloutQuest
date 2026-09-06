@@ -6,7 +6,7 @@
 namespace {
 
 constexpr const char* TAG = "FalloutQuest";
-constexpr const char* DATA_ROOT = "/sdcard/Android/data/com.falloutquest.app/files/Fallout3/Data";
+constexpr const char* DATA_ROOT = "/data/user/0/com.falloutquest.app/files/Fallout3/Data";
 constexpr const char* TARGET_CELL_EDID = "MegatonPlayerHouse";
 constexpr unsigned TARGET_CELL_FORM_ID = 0x000151E3u;
 
@@ -61,7 +61,7 @@ void ProbeFo3Data() {
                             "Q5 DATA READY: real Fallout 3 ESM/BSA files are readable on Quest");
     } else {
         __android_log_print(ANDROID_LOG_ERROR, TAG,
-                            "Q5 DATA NOT READY: copy Steam Fallout 3 Data files to the Quest data root");
+                            "Q5 DATA NOT READY: stage Steam Fallout 3 Data files into app-private storage");
     }
 }
 
