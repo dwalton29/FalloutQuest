@@ -3,6 +3,7 @@
 #include <android/log.h>
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <cstdio>
 #include <cstdint>
 #include <cstring>
@@ -22,13 +23,15 @@ constexpr const char* ESM_PATH =
 constexpr uint32_t TARGET_CELL_FORM_ID = 0x000151E3u;
 constexpr uint32_t FLAG_COMPRESSED = 0x00040000u;
 constexpr uint32_t FLAG_INITIALLY_DISABLED = 0x00000800u;
+constexpr uint8_t ENABLE_PARENT_OPPOSITE = 0x01u;
 constexpr uint64_t HEADER_SIZE = 24u;
 constexpr uint32_t MAX_RECORD_BYTES = 64u * 1024u * 1024u;
 
 #define Q6A_LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
 #define Q6A_LOGW(...) __android_log_print(ANDROID_LOG_WARN, TAG, __VA_ARGS__)
 #define Q6A_LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
-#define Q6I_LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
+#define Q6J_LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
+#define Q6J_LOGW(...) __android_log_print(ANDROID_LOG_WARN, TAG, __VA_ARGS__)
 
 struct GroupFrame {
     uint64_t end = 0;
@@ -320,6 +323,76 @@ bool EndsInNif(const std::string& path) {
     return path[n - 4u] == '.' && a == 'n' && b == 'i' && c == 'f';
 }
 
+bool IsMegatonArchitecturePath(const std::string& path) {
+    std::string lower = path;
+    for (char& ch : lower) {
+        if (ch == '/') ch = '\\';
+        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    }
+    return lower.find("architecture\\megaton\\interior\\shackinteriors") != std::string::npos;
+}
+
+bool ResolveInitialEnabled(uint32_t refFormId,
+                           const std::unordered_map<uint32_t, const RawPlacement*>& refs,
+                           std::unordered_map<uint32_t, bool>& memo,
+                           std::unordered_set<uint32_t>& visiting,
+                           size_t& unresolvedParents,
+                           size_t& cycles) {
+    const auto memoIt = memo.find(refFormId);
+    if (memoIt != memo.end()) return memoIt->second;
+    const auto it = refs.find(refFormId);
+    if (it == refs.end()) {
+        ++unresolvedParents;
+        return true;
+    }
+    if (!visiting.insert(refFormId).second) {
+        ++cycles;
+        return true;
+    }
+
+    const RawPlacement& p = *it->second;
+    bool enabled = true;
+    if (p.hasEnableParent && p.enableParentFormId != 0u) {
+        enabled = ResolveInitialEnabled(p.enableParentFormId, refs, memo, visiting,
+                                        unresolvedParents, cycles);
+        if ((p.enableParentFlags & ENABLE_PARENT_OPPOSITE) != 0u) enabled = !enabled;
+    } else {
+        enabled = (p.recordFlags & FLAG_INITIALLY_DISABLED) == 0u;
+    }
+
+    visiting.erase(refFormId);
+    memo[refFormId] = enabled;
+    return enabled;
+}
+
+void ConvertBethesdaRotation(float rx, float ry, float rz,
+                             float& outRx, float& outRy, float& outRz) {
+    // Bethesda REFR angles are clockwise-positive. The runtime renderer's
+    // ApplyEsmRotation builds the conventional Rz*Ry*Rx matrix, so decompose
+    // transpose(Rz(rz)*Ry(ry)*Rx(rx)) back into that same representation.
+    const float sx = std::sin(rx), cx = std::cos(rx);
+    const float sy = std::sin(ry), cy = std::cos(ry);
+    const float sz = std::sin(rz), cz = std::cos(rz);
+
+    const float m00 = cy * cz;
+    const float m01 = sz * cy;
+    const float m10 = sx * sy * cz - sz * cx;
+    const float m11 = sx * sy * sz + cx * cz;
+    const float m20 = sx * sz + sy * cx * cz;
+    const float m21 = -sx * cz + sy * sz * cx;
+    const float m22 = cx * cy;
+
+    outRy = std::asin(std::clamp(-m20, -1.0f, 1.0f));
+    const float cosY = std::cos(outRy);
+    if (std::fabs(cosY) > 1e-5f) {
+        outRx = std::atan2(m21, m22);
+        outRz = std::atan2(m10, m00);
+    } else {
+        outRx = 0.0f;
+        outRz = std::atan2(-m01, m11);
+    }
+}
+
 } // namespace
 
 bool LoadMegatonPlayerHousePlacements(std::vector<Fo3WorldPlacement>& outPlacements) {
@@ -331,28 +404,38 @@ bool LoadMegatonPlayerHousePlacements(std::vector<Fo3WorldPlacement>& outPlaceme
         return false;
     }
 
-    // Until save-game/global state is wired into the native runtime, render only
-    // unconditional REFRs. Theme/upgrade groups are controlled by Enable Parent
-    // (XESP) and/or Initially Disabled; drawing all of them at once produces the
-    // overlapping player-house themes seen in Q6H.
+    std::unordered_map<uint32_t, const RawPlacement*> refs;
+    refs.reserve(raw.size());
+    for (const RawPlacement& p : raw) refs[p.refFormId] = &p;
+
+    // Evaluate the ESM's initial enable-parent graph rather than dropping every
+    // XESP child. This reproduces the cell's authored initial state: theme groups
+    // whose parent marker starts disabled remain hidden, while ordinary house
+    // contents controlled by enabled parents stay visible.
+    std::unordered_map<uint32_t, bool> enabledMemo;
+    enabledMemo.reserve(raw.size());
     std::vector<const RawPlacement*> activeRaw;
     activeRaw.reserve(raw.size());
-    size_t initiallyDisabled = 0;
-    size_t enableParentControlled = 0;
-    size_t both = 0;
+    size_t disabledStandalone = 0;
+    size_t disabledByParent = 0;
+    size_t enabledParented = 0;
+    size_t unresolvedParents = 0;
+    size_t cycles = 0;
     for (const RawPlacement& p : raw) {
-        const bool disabled = (p.recordFlags & FLAG_INITIALLY_DISABLED) != 0u;
-        const bool parentControlled = p.hasEnableParent;
-        if (disabled || parentControlled) {
-            if (disabled) ++initiallyDisabled;
-            if (parentControlled) ++enableParentControlled;
-            if (disabled && parentControlled) ++both;
+        std::unordered_set<uint32_t> visiting;
+        const bool enabled = ResolveInitialEnabled(p.refFormId, refs, enabledMemo, visiting,
+                                                   unresolvedParents, cycles);
+        if (!enabled) {
+            if (p.hasEnableParent) ++disabledByParent;
+            else ++disabledStandalone;
             continue;
         }
+        if (p.hasEnableParent) ++enabledParented;
         activeRaw.push_back(&p);
     }
-    Q6I_LOGI("Q6I ESM STATE FILTER: raw=%zu unconditional=%zu initiallyDisabled=%zu enableParent=%zu both=%zu policy=base-house-only",
-             raw.size(), activeRaw.size(), initiallyDisabled, enableParentControlled, both);
+    Q6J_LOGI("Q6J ESM STATE: raw=%zu activeInitial=%zu disabledStandalone=%zu disabledByParent=%zu enabledParented=%zu unresolvedParents=%zu cycles=%zu policy=initial-enable-graph",
+             raw.size(), activeRaw.size(), disabledStandalone, disabledByParent,
+             enabledParented, unresolvedParents, cycles);
 
     std::unordered_set<uint32_t> wanted;
     wanted.reserve(activeRaw.size());
@@ -364,6 +447,8 @@ bool LoadMegatonPlayerHousePlacements(std::vector<Fo3WorldPlacement>& outPlaceme
         return false;
     }
 
+    bool loggedDoorAnchor = false;
+    size_t rotationConverted = 0;
     for (const RawPlacement* rawPlacement : activeRaw) {
         const RawPlacement& p = *rawPlacement;
         const auto it = bases.find(p.baseFormId);
@@ -379,11 +464,31 @@ bool LoadMegatonPlayerHousePlacements(std::vector<Fo3WorldPlacement>& outPlaceme
         world.x = p.x;
         world.y = p.y;
         world.z = p.z;
-        world.rx = p.rx;
-        world.ry = p.ry;
-        world.rz = p.rz;
+        ConvertBethesdaRotation(p.rx, p.ry, p.rz, world.rx, world.ry, world.rz);
+        ++rotationConverted;
         world.scale = p.scale;
+
+        // Q6H derives VR (0,0) from model paths classified as Megaton structure.
+        // Keep the exit door in that classifier and use forward slashes for the
+        // remaining architecture (the BSA/collision loaders normalize them).
+        // This makes the authored ground-floor entrance the sole structural
+        // spawn anchor without changing any world-space relationships.
+        if (IsMegatonArchitecturePath(world.modelPath) &&
+            world.editorId != "ShackExitDoorReg01") {
+            for (char& ch : world.modelPath) if (ch == '\\') ch = '/';
+        } else if (world.editorId == "ShackExitDoorReg01" && !loggedDoorAnchor) {
+            loggedDoorAnchor = true;
+            Q6J_LOGI("Q6J SPAWN ANCHOR: ref=%08X EDID=%s P=(%.1f %.1f %.1f) source=ground-floor-exit-door",
+                     world.refFormId, world.editorId.c_str(), world.x, world.y, world.z);
+        }
+
         outPlacements.push_back(std::move(world));
+    }
+
+    Q6J_LOGI("Q6J ROTATION CONVENTION: placements=%zu bethesdaClockwise=1 rendererZYXDecomposition=1",
+             rotationConverted);
+    if (!loggedDoorAnchor) {
+        Q6J_LOGW("Q6J SPAWN ANCHOR: ShackExitDoorReg01 not found; Q6H structural-centre fallback will be used");
     }
 
     Q6A_LOGI("Q6A ESM READY: resolvedBases=%zu/%zu modelPlacements=%zu",
