@@ -282,7 +282,7 @@ string(REPLACE
 
 string(REPLACE
     "#include \"fo3-texture-bsa.h\""
-    "#include \"fo3-texture-bsa.h\"\n#include \"fo3-collision-overlay.h\""
+    "#include \"fo3-texture-bsa.h\"\n#include \"fo3-collision-overlay.h\"\n#include \"fo3-transition-q74.h\""
     Q6H_NATIVE_SOURCE "${Q6H_NATIVE_SOURCE}")
 
 set(Q6H_OLD_PROGRAM [=[
@@ -305,6 +305,131 @@ set(Q6H_NEW_PROGRAM [=[
 ]=])
 string(REPLACE "${Q6H_OLD_PROGRAM}" "${Q6H_NEW_PROGRAM}"
        Q6H_NATIVE_SOURCE "${Q6H_NATIVE_SOURCE}")
+
+set(Q74_RENDER_HOOK [=[
+bool Q74ShouldSkipPlacement(const Fo3WorldPlacement& placement) {
+    std::string edid = placement.editorId;
+    std::string model = placement.modelPath;
+    for (char& ch : edid) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    for (char& ch : model) {
+        if (ch == '/') ch = '\\';
+        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    }
+    if (placement.baseRecordType == "IDLM") return true;
+    if (model.rfind("effects\\", 0) == 0) return true;
+    if (edid == "xmarker" || edid == "xmarkerheading") return true;
+    if (edid.find("marker") != std::string::npos) return true;
+    if (edid == "counterlean" || edid == "barkeep") return true;
+    return false;
+}
+
+void Q74DeleteGpuObjects(std::vector<GpuObject>& objects) {
+    for (GpuObject& object : objects) {
+        if (object.vbo) glDeleteBuffers(1, &object.vbo);
+        if (object.vao) glDeleteVertexArrays(1, &object.vao);
+        object.vbo = 0;
+        object.vao = 0;
+    }
+    objects.clear();
+}
+
+bool ProcessQ74TransitionRequest() {
+    Fo3CellTransitionRequestQ74 request;
+    if (!ConsumeFo3CellTransitionRequestQ74(request) || !request.valid) return false;
+
+    Q6H_LOGI("Q7.4 SCENE SWAP BEGIN: door=%08X cell=%08X worldspace=%08X XTEL=(%.2f %.2f %.2f)",
+             request.destinationDoorRef, request.cellFormId, request.worldspaceFormId,
+             request.x, request.y, request.z);
+
+    std::vector<Fo3WorldPlacement> placements;
+    if (!LoadFo3CellPlacementsQ74(request.cellFormId, placements)) {
+        Q6H_LOGE("Q7.4 SCENE SWAP FAILED: cell=%08X reason=cell-loader oldSceneRetained=1",
+                 request.cellFormId);
+        return false;
+    }
+
+    std::vector<CpuObject> selected;
+    selected.reserve(placements.size() * 2u);
+    size_t skipped = 0u;
+    size_t unsupported = 0u;
+    for (const Fo3WorldPlacement& placement : placements) {
+        if (Q74ShouldSkipPlacement(placement)) {
+            ++skipped;
+            continue;
+        }
+        std::vector<CpuObject> parts;
+        if (!BuildCpuObjects(placement, parts)) {
+            ++unsupported;
+            continue;
+        }
+        for (CpuObject& part : parts) selected.push_back(std::move(part));
+    }
+    if (selected.size() < 2u) {
+        Q6H_LOGE("Q7.4 SCENE SWAP FAILED: cell=%08X drawShapes=%zu skipped=%zu unsupported=%zu oldSceneRetained=1",
+                 request.cellFormId, selected.size(), skipped, unsupported);
+        return false;
+    }
+
+    std::vector<GpuObject> replacement;
+    replacement.reserve(selected.size());
+    for (CpuObject& cpu : selected) {
+        GpuObject gpu;
+        if (UploadCpuObject(cpu, request.x, request.y, request.z, gpu)) {
+            replacement.push_back(std::move(gpu));
+        } else {
+            if (gpu.vbo) glDeleteBuffers(1, &gpu.vbo);
+            if (gpu.vao) glDeleteVertexArrays(1, &gpu.vao);
+        }
+    }
+    if (replacement.size() < 2u) {
+        Q74DeleteGpuObjects(replacement);
+        Q6H_LOGE("Q7.4 SCENE SWAP FAILED: cell=%08X gpuObjects=%zu oldSceneRetained=1",
+                 request.cellFormId, replacement.size());
+        return false;
+    }
+
+    std::vector<Fo3WorldPlacement> collisionPlacements;
+    collisionPlacements.reserve(selected.size());
+    for (const CpuObject& cpu : selected) collisionPlacements.push_back(cpu.placement);
+
+    const bool collisionReady = InitializeFo3CollisionOverlay(collisionPlacements,
+                                                               request.x, request.y, request.z,
+                                                               SCENE_FORWARD, FLOOR_Y,
+                                                               FO3_UNITS_PER_METRE);
+
+    const size_t oldObjects = gObjects.size();
+    Q74DeleteGpuObjects(gObjects);
+    gObjects = std::move(replacement);
+    gSceneReady = !gObjects.empty();
+    gLoggedFirstDraw = false;
+
+    size_t triangles = 0u;
+    size_t realDiffuse = 0u;
+    size_t realNormal = 0u;
+    for (const GpuObject& object : gObjects) {
+        triangles += static_cast<size_t>(object.vertexCount / 3);
+        if (object.realDiffuse) ++realDiffuse;
+        if (object.realNormal) ++realNormal;
+    }
+
+    CompleteFo3CellTransitionQ74(request.cellFormId);
+    Q6H_LOGI("Q7.4 SCENE SWAP READY: cell=%08X worldspace=%08X oldObjects=%zu newObjects=%zu triangles=%zu realDiffuse=%zu realNormal=%zu skippedMarkersEffects=%zu unsupported=%zu collisionReady=%d XTELorigin=1 orientationPreserved=1",
+             request.cellFormId, request.worldspaceFormId,
+             oldObjects, gObjects.size(), triangles, realDiffuse, realNormal,
+             skipped, unsupported, collisionReady ? 1 : 0);
+    return true;
+}
+
+]=])
+string(REPLACE
+    "void DrawSceneObject(const GpuObject& object) {"
+    "${Q74_RENDER_HOOK}void DrawSceneObject(const GpuObject& object) {"
+    Q6H_NATIVE_SOURCE "${Q6H_NATIVE_SOURCE}")
+
+string(REPLACE
+    "void RenderScene() {\n    if (!gSceneReady || !gProgram || gObjects.empty()) return;"
+    "void RenderScene() {\n    ProcessQ74TransitionRequest();\n    if (!gSceneReady || !gProgram || gObjects.empty()) return;"
+    Q6H_NATIVE_SOURCE "${Q6H_NATIVE_SOURCE}")
 
 set(Q6H_OLD_RENDER_RESTORE [=[
     glActiveTexture(GL_TEXTURE1);
@@ -470,13 +595,50 @@ string(REPLACE "${Q6H_OLD_LOADER}" "${Q6H_NEW_LOADER}"
        Q6H_NIF_SOURCE "${Q6H_NIF_SOURCE}")
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/fo3-static-nif-q6h.cpp" "${Q6H_NIF_SOURCE}")
 
+# Q7.4 broadens authored collision from the player-house ShackInteriors subset
+# to all Megaton architecture. It also consumes the one-shot post-swap player
+# reset before normal collision grounding runs.
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/fo3-collision-overlay.cpp" Q74_COLLISION_SOURCE)
+string(REPLACE
+    "#include \"fo3-nif-collision-q6f.h\""
+    "#include \"fo3-nif-collision-q6f.h\"\n#include \"fo3-transition-q74.h\""
+    Q74_COLLISION_SOURCE "${Q74_COLLISION_SOURCE}")
+string(REPLACE
+    "return lower.find(\"architecture\\\\megaton\\\\interior\\\\shackinteriors\") != std::string::npos;"
+    "return lower.find(\"architecture\\\\megaton\\\\\") != std::string::npos;"
+    Q74_COLLISION_SOURCE "${Q74_COLLISION_SOURCE}")
+set(Q74_OLD_RESOLVE_GUARD [=[
+    if (!outX || !outZ || !outPlayerYOffset || !gPlayerCollisionReady ||
+        gWorldTriangles.empty()) return false;
+
+    ++gResolveCounter;
+]=])
+set(Q74_NEW_RESOLVE_GUARD [=[
+    if (!outX || !outZ || !outPlayerYOffset) return false;
+    if (ConsumeFo3PlayerResetQ74()) {
+        *outX = 0.0f;
+        *outZ = 0.0f;
+        *outPlayerYOffset = 0.0f;
+        gSafeSpawnResolved = false;
+        Q6G_LOGI("Q7.4 PLAYER RESET: bodyCenter=(0,0) source=XTEL newCollisionReady=%d",
+                 gPlayerCollisionReady ? 1 : 0);
+        return true;
+    }
+    if (!gPlayerCollisionReady || gWorldTriangles.empty()) return false;
+
+    ++gResolveCounter;
+]=])
+string(REPLACE "${Q74_OLD_RESOLVE_GUARD}" "${Q74_NEW_RESOLVE_GUARD}"
+       Q74_COLLISION_SOURCE "${Q74_COLLISION_SOURCE}")
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/fo3-collision-overlay-q74.cpp" "${Q74_COLLISION_SOURCE}")
+
 add_library(falloutquest SHARED
     ${CMAKE_CURRENT_BINARY_DIR}/q6h-native-generated.cpp
     fo3-megaton-scene.cpp
-    fo3-cell-spawn-q72.cpp
+    fo3-cell-spawn-q74.cpp
     ${CMAKE_CURRENT_BINARY_DIR}/fo3-static-nif-q6h.cpp
     fo3-nif-collision.cpp
-    fo3-collision-overlay.cpp
+    ${CMAKE_CURRENT_BINARY_DIR}/fo3-collision-overlay-q74.cpp
     fo3-bsa-reader.cpp
     fo3-texture-bsa.cpp
     fo3-data-probe.cpp
