@@ -1,4 +1,5 @@
 #include "fo3-transition-q74.h"
+#include "fo3-terrain-q76.h"
 
 #include <algorithm>
 #include <cmath>
@@ -20,6 +21,10 @@
 #define TAG Q75_TAG
 #include "fo3-worldspace-q75.cpp"
 #undef TAG
+
+// Q7.6b reuses the exact same Q7.5 worldspace/group helpers, but only decodes
+// CPU LAND/VHGT data. No collision or player-grounding code is touched here.
+#include "fo3-terrain-data-q76.cpp"
 
 namespace {
 
