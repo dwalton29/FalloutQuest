@@ -88,3 +88,7 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/q960-exact-footprint-support.cmake")
 # Q10.0 ports the exterior visual environment without touching the movement
 # stack: authored WRLD/CLMT/WTHR sky + lighting and the real Megaton gate spawn.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q1000-environment-sky.cmake")
+
+# Q10.1 restores depth cues that are already authored in Fallout3.esm:
+# WTHR fog, LAND/VNML smooth normals, and placed REFR -> LIGH local lighting.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q1010-visual-depth.cmake")
