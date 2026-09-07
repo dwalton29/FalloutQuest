@@ -659,12 +659,16 @@ string(REPLACE
     "Q7.16 PHYSICS READY: controller=sweep-slide-step recoveryOnly=1"
     Q74_COLLISION_SOURCE "${Q74_COLLISION_SOURCE}")
 
+# Q7.20 patches the generated exterior controller and CELL/LAND translation unit
+# using Fallout 3's authored XCLC Force Hide Land flags and a clearance-first step.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q720-root-fixes.cmake")
+
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/fo3-collision-overlay-q74.cpp" "${Q74_COLLISION_SOURCE}")
 
 add_library(falloutquest SHARED
     ${CMAKE_CURRENT_BINARY_DIR}/q6h-native-generated.cpp
     fo3-megaton-scene.cpp
-    fo3-cell-spawn-q74.cpp
+    ${Q720_CELL_SOURCE}
     ${CMAKE_CURRENT_BINARY_DIR}/fo3-static-nif-q6h.cpp
     fo3-nif-collision.cpp
     ${CMAKE_CURRENT_BINARY_DIR}/fo3-collision-overlay-q74.cpp
