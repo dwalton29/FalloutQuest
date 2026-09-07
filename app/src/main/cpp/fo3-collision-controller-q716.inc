@@ -1,34 +1,39 @@
-// Q7.17 exterior character-controller response.
+// Q7.18 exterior character-controller response.
 //
-// Q7.16 proved the sweep path itself was not the remaining trap: the bad ledge
-// repeatedly started a frame with a tiny authored overlap, so the old recovery
-// depenetrator ran before movement and pinned the capsule back onto the same two
-// surfaces. Q7.17 never depenetrates normal exterior locomotion. A candidate is
-// blocked only when it creates a new inward contact or deepens an existing one.
-// Existing/tangent/outward overlap is allowed to escape naturally.
+// Q7.17 fixed the old persistent-overlap trap: tangent/outward movement can now
+// escape authored contacts instead of being depenetrated back into them. The
+// remaining ledge snag is different. Two low riser triangles can present two
+// independent wall normals before the capsule centre has crossed far enough for
+// FindStepGround to see the top, so clipping both normals reduces movement to
+// zero. Q7.18 classifies the vertical extent of the actual contact triangles and
+// performs a raised step-over for genuinely low blockers before treating them as
+// a hard two-plane corner.
 
 namespace {
 
-struct WallContactQ717 {
+struct WallContactQ718 {
     uint64_t surfaceKey = 0u;
     float nx = 0.0f;
     float nz = 0.0f;
     float push = 0.0f;
+    float maxY = -1e30f;
     bool stairs = false;
 };
 
-constexpr float Q717_DEPTH_EPS = 0.0015f;
-constexpr float Q717_DIRECTION_EPS = 0.00002f;
-constexpr float Q717_TANGENT_NEW_CONTACT_MAX = 0.010f;
+constexpr float Q718_DEPTH_EPS = 0.0015f;
+constexpr float Q718_DIRECTION_EPS = 0.00002f;
+constexpr float Q718_TANGENT_NEW_CONTACT_MAX = 0.010f;
+constexpr float Q718_LOW_BLOCKER_TOP_EPS = 0.012f;
 
-uint64_t gSweepSlideLogsQ717 = 0u;
-uint64_t gStepSweepLogsQ717 = 0u;
-uint64_t gPersistentEscapeLogsQ717 = 0u;
-uint64_t gBlockedLogsQ717 = 0u;
-bool gControllerReadyLoggedQ717 = false;
+uint64_t gSweepSlideLogsQ718 = 0u;
+uint64_t gStepSweepLogsQ718 = 0u;
+uint64_t gStepOverLogsQ718 = 0u;
+uint64_t gPersistentEscapeLogsQ718 = 0u;
+uint64_t gBlockedLogsQ718 = 0u;
+bool gControllerReadyLoggedQ718 = false;
 
-void GatherWallContactsQ717(float x, float z, float feetY,
-                            std::vector<WallContactQ717>& out,
+void GatherWallContactsQ718(float x, float z, float feetY,
+                            std::vector<WallContactQ718>& out,
                             size_t* outRawTriangles = nullptr) {
     out.clear();
     if (outRawTriangles) *outRawTriangles = 0u;
@@ -46,12 +51,18 @@ void GatherWallContactsQ717(float x, float z, float feetY,
         if (found == slotBySurface.end()) {
             const size_t slot = out.size();
             slotBySurface.emplace(contact.surfaceKey, slot);
-            out.push_back(WallContactQ717{
-                contact.surfaceKey, contact.nx, contact.nz, contact.push, tri.stairsQ714
-            });
+            WallContactQ718 added;
+            added.surfaceKey = contact.surfaceKey;
+            added.nx = contact.nx;
+            added.nz = contact.nz;
+            added.push = contact.push;
+            added.maxY = tri.maxY;
+            added.stairs = tri.stairsQ714;
+            out.push_back(added);
         } else {
-            WallContactQ717& existing = out[found->second];
+            WallContactQ718& existing = out[found->second];
             existing.stairs = existing.stairs || tri.stairsQ714;
+            existing.maxY = std::max(existing.maxY, tri.maxY);
             if (contact.push > existing.push) {
                 existing.nx = contact.nx;
                 existing.nz = contact.nz;
@@ -60,48 +71,43 @@ void GatherWallContactsQ717(float x, float z, float feetY,
         }
     }
 
-    std::sort(out.begin(), out.end(), [](const WallContactQ717& a,
-                                         const WallContactQ717& b) {
+    std::sort(out.begin(), out.end(), [](const WallContactQ718& a,
+                                         const WallContactQ718& b) {
         return a.push > b.push;
     });
 }
 
-const WallContactQ717* FindSurfaceQ717(
-    const std::vector<WallContactQ717>& contacts, uint64_t surfaceKey) {
-    for (const WallContactQ717& contact : contacts) {
+const WallContactQ718* FindSurfaceQ718(
+    const std::vector<WallContactQ718>& contacts, uint64_t surfaceKey) {
+    for (const WallContactQ718& contact : contacts) {
         if (contact.surfaceKey == surfaceKey) return &contact;
     }
     return nullptr;
 }
 
-bool CandidateAllowedQ717(float targetX, float targetZ, float feetY,
+bool CandidateAllowedQ718(float targetX, float targetZ, float feetY,
                           float moveX, float moveZ,
-                          const std::vector<WallContactQ717>& baseline,
-                          std::vector<WallContactQ717>& blockers,
+                          const std::vector<WallContactQ718>& baseline,
+                          std::vector<WallContactQ718>& blockers,
                           size_t* outRawTriangles = nullptr,
                           size_t* outPersistent = nullptr) {
-    std::vector<WallContactQ717> target;
-    GatherWallContactsQ717(targetX, targetZ, feetY, target, outRawTriangles);
+    std::vector<WallContactQ718> target;
+    GatherWallContactsQ718(targetX, targetZ, feetY, target, outRawTriangles);
     blockers.clear();
     if (outPersistent) *outPersistent = 0u;
 
-    for (const WallContactQ717& contact : target) {
-        const WallContactQ717* previous = FindSurfaceQ717(baseline, contact.surfaceKey);
+    for (const WallContactQ718& contact : target) {
+        const WallContactQ718* previous = FindSurfaceQ718(baseline, contact.surfaceKey);
         const float into = moveX * contact.nx + moveZ * contact.nz;
 
         if (previous) {
-            // The capsule is already touching/overlapping this authored surface.
-            // Allow tangent/outward motion and tiny numerical depth jitter. Only
-            // increasing penetration while moving inward is a real blocker.
             const float depthDelta = contact.push - previous->push;
-            if (depthDelta <= Q717_DEPTH_EPS || into >= -Q717_DIRECTION_EPS) {
+            if (depthDelta <= Q718_DEPTH_EPS || into >= -Q718_DIRECTION_EPS) {
                 if (outPersistent) ++(*outPersistent);
                 continue;
             }
-        } else if (into >= -Q717_DIRECTION_EPS &&
-                   contact.push <= Q717_TANGENT_NEW_CONTACT_MAX) {
-            // A brand-new skin-depth contact while moving tangent/outward is not
-            // allowed to glue the controller to a triangle edge.
+        } else if (into >= -Q718_DIRECTION_EPS &&
+                   contact.push <= Q718_TANGENT_NEW_CONTACT_MAX) {
             if (outPersistent) ++(*outPersistent);
             continue;
         }
@@ -111,16 +117,16 @@ bool CandidateAllowedQ717(float targetX, float targetZ, float feetY,
     return blockers.empty();
 }
 
-Vec2 ClipMoveAgainstContactsQ717(Vec2 move,
-                                 const std::vector<WallContactQ717>& contacts,
+Vec2 ClipMoveAgainstContactsQ718(Vec2 move,
+                                 const std::vector<WallContactQ718>& contacts,
                                  size_t& usedNormals) {
     struct Normal2 { float x = 0.0f, z = 0.0f; };
     std::vector<Normal2> normals;
     normals.reserve(std::min<size_t>(contacts.size(), 4u));
 
-    for (const WallContactQ717& contact : contacts) {
+    for (const WallContactQ718& contact : contacts) {
         const float into = move.x * contact.nx + move.y * contact.nz;
-        if (into >= -Q717_DIRECTION_EPS) continue;
+        if (into >= -Q718_DIRECTION_EPS) continue;
 
         bool duplicate = false;
         for (const Normal2& n : normals) {
@@ -147,7 +153,7 @@ Vec2 ClipMoveAgainstContactsQ717(Vec2 move,
     return move;
 }
 
-bool FindStepLandingQ717(float targetX, float targetZ,
+bool FindStepLandingQ718(float targetX, float targetZ,
                          float moveX, float moveZ,
                          float feetY, float& outLandingY) {
     const float length = std::sqrt(moveX * moveX + moveZ * moveZ);
@@ -156,8 +162,8 @@ bool FindStepLandingQ717(float targetX, float targetZ,
     const float nz = moveZ / length;
     const float radius = CollisionRadiusQ712();
 
-    const std::array<float, 4> probes{
-        0.0f, radius * 0.55f, radius * 0.85f, radius * 1.10f
+    const std::array<float, 5> probes{
+        0.0f, radius * 0.45f, radius * 0.75f, radius * 1.05f, radius * 1.35f
     };
     bool found = false;
     float lowest = std::numeric_limits<float>::max();
@@ -175,14 +181,14 @@ bool FindStepLandingQ717(float targetX, float targetZ,
     return found;
 }
 
-bool TryStepSweepQ717(float startX, float startZ,
+bool TryStepSweepQ718(float startX, float startZ,
                       float targetX, float targetZ,
                       float feetY, float& outFeetY,
                       size_t& blockingSurfaces) {
     const float moveX = targetX - startX;
     const float moveZ = targetZ - startZ;
     float landingY = feetY;
-    if (!FindStepLandingQ717(targetX, targetZ, moveX, moveZ,
+    if (!FindStepLandingQ718(targetX, targetZ, moveX, moveZ,
                              feetY, landingY)) return false;
 
     const float rise = landingY - feetY;
@@ -193,49 +199,102 @@ bool TryStepSweepQ717(float startX, float startZ,
     if (HasOverheadBlock(startX, startZ, raisedFeetY) ||
         HasOverheadBlock(targetX, targetZ, landingY)) return false;
 
-    std::vector<WallContactQ717> raisedBaseline;
-    GatherWallContactsQ717(startX, startZ, raisedFeetY, raisedBaseline);
-    std::vector<WallContactQ717> raisedBlockers;
+    std::vector<WallContactQ718> raisedBaseline;
+    GatherWallContactsQ718(startX, startZ, raisedFeetY, raisedBaseline);
+    std::vector<WallContactQ718> raisedBlockers;
     size_t raw = 0u;
     size_t persistent = 0u;
-    CandidateAllowedQ717(targetX, targetZ, raisedFeetY,
+    CandidateAllowedQ718(targetX, targetZ, raisedFeetY,
                          moveX, moveZ, raisedBaseline,
                          raisedBlockers, &raw, &persistent);
     blockingSurfaces = raisedBlockers.size();
     if (!raisedBlockers.empty()) return false;
 
     outFeetY = landingY;
-    if (gStepSweepLogsQ717 < 60u || (gResolveCounter % 360u) == 0u) {
-        ++gStepSweepLogsQ717;
-        Q6G_LOGI("Q7.17 STEP SWEEP: from=(%.3f %.3f) to=(%.3f %.3f) rise=%.3f raisedTestY=%.3f persistent=%zu maxStep=%.3f clear=1",
+    if (gStepSweepLogsQ718 < 80u || (gResolveCounter % 360u) == 0u) {
+        ++gStepSweepLogsQ718;
+        Q6G_LOGI("Q7.18 STEP SWEEP: from=(%.3f %.3f) to=(%.3f %.3f) rise=%.3f raisedTestY=%.3f persistent=%zu maxStep=%.3f clear=1",
                  startX, startZ, targetX, targetZ,
                  rise, raisedFeetY, persistent, StepHeightQ78B());
     }
     return true;
 }
 
-bool MoveExteriorSubstepQ717(float& x, float& z, float& feetY,
+bool TryLowBlockerStepOverQ718(float startX, float startZ,
+                               float targetX, float targetZ,
+                               float feetY,
+                               const std::vector<WallContactQ718>& blockers,
+                               float& outFeetY,
+                               size_t& outRaisedBlockers) {
+    outRaisedBlockers = 0u;
+    if (blockers.empty()) return false;
+
+    const float maxStep = StepHeightQ78B();
+    float blockerTop = -1e30f;
+    for (const WallContactQ718& blocker : blockers) {
+        if (!std::isfinite(blocker.maxY)) return false;
+        blockerTop = std::max(blockerTop, blocker.maxY);
+    }
+
+    const float riseToTop = blockerTop - feetY;
+    if (riseToTop <= STEP_MIN_RISE_Q78B ||
+        riseToTop > maxStep + PLAYER_SKIN + Q718_LOW_BLOCKER_TOP_EPS) {
+        return false;
+    }
+
+    // Raise only as far as required to put the capsule bottom over the contact
+    // triangles. This avoids the visible 30 cm pop of a max-height blind step.
+    const float raisedFeetY = std::min(feetY + maxStep + PLAYER_SKIN,
+                                      blockerTop + PLAYER_SKIN + Q718_LOW_BLOCKER_TOP_EPS);
+    if (HasOverheadBlock(startX, startZ, raisedFeetY) ||
+        HasOverheadBlock(targetX, targetZ, raisedFeetY)) return false;
+
+    const float moveX = targetX - startX;
+    const float moveZ = targetZ - startZ;
+    std::vector<WallContactQ718> raisedBaseline;
+    GatherWallContactsQ718(startX, startZ, raisedFeetY, raisedBaseline);
+    std::vector<WallContactQ718> raisedBlockers;
+    size_t raw = 0u;
+    size_t persistent = 0u;
+    CandidateAllowedQ718(targetX, targetZ, raisedFeetY,
+                         moveX, moveZ, raisedBaseline,
+                         raisedBlockers, &raw, &persistent);
+    outRaisedBlockers = raisedBlockers.size();
+    if (!raisedBlockers.empty()) return false;
+
+    outFeetY = raisedFeetY;
+    if (gStepOverLogsQ718 < 80u || (gResolveCounter % 240u) == 0u) {
+        ++gStepOverLogsQ718;
+        Q6G_LOGI("Q7.18 STEP OVER: from=(%.3f %.3f) to=(%.3f %.3f) blockerTop=%.3f rise=%.3f raisedTestY=%.3f blockers=%zu persistent=%zu clear=1",
+                 startX, startZ, targetX, targetZ,
+                 blockerTop, riseToTop, raisedFeetY,
+                 blockers.size(), persistent);
+    }
+    return true;
+}
+
+bool MoveExteriorSubstepQ718(float& x, float& z, float& feetY,
                              float moveX, float moveZ,
                              bool& steppedThisFrame,
                              uint32_t& contactSurfaces) {
     if (moveX * moveX + moveZ * moveZ < 1e-10f) return true;
 
-    std::vector<WallContactQ717> baseline;
+    std::vector<WallContactQ718> baseline;
     size_t baselineRaw = 0u;
-    GatherWallContactsQ717(x, z, feetY, baseline, &baselineRaw);
+    GatherWallContactsQ718(x, z, feetY, baseline, &baselineRaw);
 
     const float targetX = x + moveX;
     const float targetZ = z + moveZ;
-    std::vector<WallContactQ717> blockers;
+    std::vector<WallContactQ718> blockers;
     size_t rawTriangles = 0u;
     size_t persistent = 0u;
-    if (CandidateAllowedQ717(targetX, targetZ, feetY,
+    if (CandidateAllowedQ718(targetX, targetZ, feetY,
                              moveX, moveZ, baseline,
                              blockers, &rawTriangles, &persistent)) {
         if (!baseline.empty() &&
-            (gPersistentEscapeLogsQ717 < 60u || (gResolveCounter % 240u) == 0u)) {
-            ++gPersistentEscapeLogsQ717;
-            Q6G_LOGI("Q7.17 OVERLAP ESCAPE: from=(%.3f %.3f) to=(%.3f %.3f) baselineSurfaces=%zu persistent=%zu targetRaw=%zu allowed=1",
+            (gPersistentEscapeLogsQ718 < 80u || (gResolveCounter % 240u) == 0u)) {
+            ++gPersistentEscapeLogsQ718;
+            Q6G_LOGI("Q7.18 OVERLAP ESCAPE: from=(%.3f %.3f) to=(%.3f %.3f) baselineSurfaces=%zu persistent=%zu targetRaw=%zu allowed=1",
                      x, z, targetX, targetZ,
                      baseline.size(), persistent, rawTriangles);
         }
@@ -247,11 +306,27 @@ bool MoveExteriorSubstepQ717(float& x, float& z, float& feetY,
 
     size_t stepBlockers = 0u;
     float steppedFeetY = feetY;
-    if (TryStepSweepQ717(x, z, targetX, targetZ,
+    if (TryStepSweepQ718(x, z, targetX, targetZ,
                          feetY, steppedFeetY, stepBlockers)) {
         x = targetX;
         z = targetZ;
         feetY = steppedFeetY;
+        steppedThisFrame = true;
+        return true;
+    }
+
+    // Q7.18: if the normal landing probe cannot see the top yet, do not let two
+    // low riser normals become a permanent corner. Prove the actual contact
+    // triangles fit beneath maxStep, raise just over their top, and test the same
+    // requested horizontal endpoint again at that raised height.
+    size_t raisedStepBlockers = 0u;
+    float stepOverFeetY = feetY;
+    if (TryLowBlockerStepOverQ718(x, z, targetX, targetZ,
+                                  feetY, blockers,
+                                  stepOverFeetY, raisedStepBlockers)) {
+        x = targetX;
+        z = targetZ;
+        feetY = stepOverFeetY;
         steppedThisFrame = true;
         return true;
     }
@@ -261,22 +336,22 @@ bool MoveExteriorSubstepQ717(float& x, float& z, float& feetY,
     size_t usedNormals = 0u;
 
     for (int iteration = 0; iteration < 3; ++iteration) {
-        slide = ClipMoveAgainstContactsQ717(slide, blockers, usedNormals);
+        slide = ClipMoveAgainstContactsQ718(slide, blockers, usedNormals);
         const float slideLength2 = slide.x * slide.x + slide.y * slide.y;
         if (slideLength2 < 0.00000025f) break;
 
         const float slideX = x + slide.x;
         const float slideZ = z + slide.y;
-        std::vector<WallContactQ717> slideBlockers;
+        std::vector<WallContactQ718> slideBlockers;
         size_t slideRawTriangles = 0u;
         size_t slidePersistent = 0u;
-        if (CandidateAllowedQ717(slideX, slideZ, feetY,
+        if (CandidateAllowedQ718(slideX, slideZ, feetY,
                                  slide.x, slide.y, baseline,
                                  slideBlockers, &slideRawTriangles,
                                  &slidePersistent)) {
-            if (gSweepSlideLogsQ717 < 80u || (gResolveCounter % 240u) == 0u) {
-                ++gSweepSlideLogsQ717;
-                Q6G_LOGI("Q7.17 SWEEP SLIDE: from=(%.3f %.3f) requested=(%.3f %.3f) applied=(%.3f %.3f) blockers=%zu normals=%zu persistent=%zu",
+            if (gSweepSlideLogsQ718 < 100u || (gResolveCounter % 240u) == 0u) {
+                ++gSweepSlideLogsQ718;
+                Q6G_LOGI("Q7.18 SWEEP SLIDE: from=(%.3f %.3f) requested=(%.3f %.3f) applied=(%.3f %.3f) blockers=%zu normals=%zu persistent=%zu",
                          x, z, moveX, moveZ, slide.x, slide.y,
                          blockers.size(), usedNormals, slidePersistent);
             }
@@ -287,7 +362,7 @@ bool MoveExteriorSubstepQ717(float& x, float& z, float& feetY,
 
         float slideStepFeetY = feetY;
         size_t slideStepBlockers = 0u;
-        if (TryStepSweepQ717(x, z, slideX, slideZ,
+        if (TryStepSweepQ718(x, z, slideX, slideZ,
                              feetY, slideStepFeetY,
                              slideStepBlockers)) {
             x = slideX;
@@ -297,18 +372,33 @@ bool MoveExteriorSubstepQ717(float& x, float& z, float& feetY,
             return true;
         }
 
+        size_t slideRaisedBlockers = 0u;
+        float slideStepOverY = feetY;
+        if (TryLowBlockerStepOverQ718(x, z, slideX, slideZ,
+                                      feetY, slideBlockers,
+                                      slideStepOverY, slideRaisedBlockers)) {
+            x = slideX;
+            z = slideZ;
+            feetY = slideStepOverY;
+            steppedThisFrame = true;
+            return true;
+        }
+
         blockers.swap(slideBlockers);
         rawTriangles = slideRawTriangles;
         contactSurfaces += static_cast<uint32_t>(blockers.size());
     }
 
-    if (gBlockedLogsQ717 < 60u || (gResolveCounter % 240u) == 0u) {
-        ++gBlockedLogsQ717;
+    if (gBlockedLogsQ718 < 80u || (gResolveCounter % 240u) == 0u) {
+        ++gBlockedLogsQ718;
         const float appliedLength = std::sqrt(slide.x * slide.x + slide.y * slide.y);
-        Q6G_LOGI("Q7.17 BLOCKED: pos=(%.3f %.3f) requestedLen=%.3f clippedLen=%.3f rawTriangles=%zu blockers=%zu normals=%zu stepBlockers=%zu baseline=%zu",
+        float blockerTop = -1e30f;
+        for (const WallContactQ718& blocker : blockers) blockerTop = std::max(blockerTop, blocker.maxY);
+        Q6G_LOGI("Q7.18 BLOCKED: pos=(%.3f %.3f) requestedLen=%.3f clippedLen=%.3f rawTriangles=%zu blockers=%zu normals=%zu stepBlockers=%zu raisedStepBlockers=%zu blockerTop=%.3f feetY=%.3f baseline=%zu",
                  x, z, requestedLength, appliedLength,
                  rawTriangles, blockers.size(), usedNormals,
-                 stepBlockers, baseline.size());
+                 stepBlockers, raisedStepBlockers,
+                 blockerTop, feetY, baseline.size());
     }
     return false;
 }
@@ -327,7 +417,7 @@ bool ResolveFo3PlayerMotionQ6G(float currentX, float currentZ,
         *outZ = 0.0f;
         *outPlayerYOffset = 0.0f;
         gSafeSpawnResolved = false;
-        Q6G_LOGI("Q7.17 PLAYER RESET: bodyCenter=(0,0) source=XTEL newCollisionReady=%d",
+        Q6G_LOGI("Q7.18 PLAYER RESET: bodyCenter=(0,0) source=XTEL newCollisionReady=%d",
                  gPlayerCollisionReady ? 1 : 0);
         return true;
     }
@@ -342,10 +432,10 @@ bool ResolveFo3PlayerMotionQ6G(float currentX, float currentZ,
     }
 
     ++gResolveCounter;
-    if (!gControllerReadyLoggedQ717) {
-        gControllerReadyLoggedQ717 = true;
-        Q6G_LOGI("Q7.17 CONTROLLER READY: mode=sweep-slide-step persistentOverlap=depth-aware depenetration=0 depthEps=%.4f tangentNewContactMax=%.3f",
-                 Q717_DEPTH_EPS, Q717_TANGENT_NEW_CONTACT_MAX);
+    if (!gControllerReadyLoggedQ718) {
+        gControllerReadyLoggedQ718 = true;
+        Q6G_LOGI("Q7.18 CONTROLLER READY: mode=sweep-slide-step-over persistentOverlap=depth-aware depenetration=0 maxStep=%.3f depthEps=%.4f",
+                 StepHeightQ78B(), Q718_DEPTH_EPS);
     }
 
     float x = currentX;
@@ -365,7 +455,7 @@ bool ResolveFo3PlayerMotionQ6G(float currentX, float currentZ,
     bool steppedThisFrame = false;
     uint32_t contactSurfaces = 0u;
     for (int step = 0; step < steps; ++step) {
-        if (!MoveExteriorSubstepQ717(x, z, feetY,
+        if (!MoveExteriorSubstepQ718(x, z, feetY,
                                      subDx, subDz,
                                      steppedThisFrame,
                                      contactSurfaces)) {
@@ -385,14 +475,18 @@ bool ResolveFo3PlayerMotionQ6G(float currentX, float currentZ,
             groundY = terrainGroundY;
             grounded = true;
         }
-        if (gTerrainGroundLogCountQ77 < 16u || (gResolveCounter % 360u) == 0u) {
+        if (gTerrainGroundLogCountQ77 < 20u || (gResolveCounter % 360u) == 0u) {
             ++gTerrainGroundLogCountQ77;
-            Q6G_LOGI("Q7.17 LAND GROUND: pos=(%.3f %.3f) terrainY=%.3f selectedGroundY=%.3f authoredGround=%d",
+            Q6G_LOGI("Q7.18 LAND GROUND: pos=(%.3f %.3f) terrainY=%.3f selectedGroundY=%.3f authoredGround=%d",
                      x, z, terrainGroundY, groundY,
                      authoredGrounded ? 1 : 0);
         }
     }
 
+    // A blind step-over may temporarily put the capsule bottom above the old
+    // floor before its centre has crossed onto the authored top. Preserve that
+    // raised state for this frame; subsequent substeps/frames either find the
+    // real top or naturally drop back to valid ground.
     if (steppedThisFrame && (!grounded || groundY < feetY - 0.05f)) {
         groundY = feetY;
         grounded = true;
@@ -409,9 +503,9 @@ bool ResolveFo3PlayerMotionQ6G(float currentX, float currentZ,
     const float correctionZ = z - desiredZ;
     const bool blocked = contactSurfaces > 0u ||
         correctionX * correctionX + correctionZ * correctionZ > 0.000004f;
-    if (blocked && (gContactLogCount < 60u || (gResolveCounter % 120u) == 0u)) {
+    if (blocked && (gContactLogCount < 80u || (gResolveCounter % 120u) == 0u)) {
         ++gContactLogCount;
-        Q6G_LOGI("Q7.17 CONTACT: desired=(%.3f %.3f) resolved=(%.3f %.3f) correction=(%.3f %.3f) blockers=%u stepped=%d grounded=%d playerY=%.3f",
+        Q6G_LOGI("Q7.18 CONTACT: desired=(%.3f %.3f) resolved=(%.3f %.3f) correction=(%.3f %.3f) blockers=%u stepped=%d grounded=%d playerY=%.3f",
                  desiredX, desiredZ, x, z,
                  correctionX, correctionZ, contactSurfaces,
                  steppedThisFrame ? 1 : 0,
