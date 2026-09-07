@@ -1,7 +1,15 @@
-# Q10.6 NIF coverage: placement-level support can hide missing sub-shapes.
-# Audit every NiTriShape/NiTriStrips block in each model so walls/floors cannot
-# silently disappear while the placement is still counted as rendered.
+# Q10.6 NIF fidelity + coverage.
+# Bethesda's Fallout 3 NiGeometryData uses BSGeometryDataFlags: bit 0 means one
+# UV set is present (not a six-bit UV-set count), and bit 12 means tangents.
+# Treating 0x1003 as three UV sets overreads the block and can drop wall/floor
+# sub-shapes even while the overall placed model still reports as supported.
+string(REPLACE
+    "    const uint16_t uvSets = dataFlags & 0x003fu;"
+    "    const uint16_t uvSets = (dataFlags & 0x0001u) != 0u ? 1u : 0u;"
+    Q6H_NIF_SOURCE "${Q6H_NIF_SOURCE}")
 
+# Audit every NiTriShape/NiTriStrips block in each model so partial geometry
+# cannot silently disappear while the placement itself is counted as rendered.
 string(REPLACE
     "    for (uint32_t block = 0; block < header.numBlocks; ++block) {\n        const std::string& type = BlockType(header, block);\n        if (type != \"NiTriStrips\" && type != \"NiTriShape\") continue;\n\n        ShapeObject shape;"
     "    size_t q1060ShapeBlocks = 0u, q1060ShapeObjectFailures = 0u, q1060ShapeLoadFailures = 0u, q1060FallbackDiffuse = 0u;\n    for (uint32_t block = 0; block < header.numBlocks; ++block) {\n        const std::string& type = BlockType(header, block);\n        if (type != \"NiTriStrips\" && type != \"NiTriShape\") continue;\n        ++q1060ShapeBlocks;\n\n        ShapeObject shape;"
@@ -54,9 +62,10 @@ string(REPLACE
     "    Q6H_LOGI(\"Q10.6 NIF COVERAGE: model=%s shapeBlocks=%zu rendered=%zu shapeObjectReject=%zu shapeLoadReject=%zu fallbackDiffuse=%zu\", resolved.c_str(), q1060ShapeBlocks, outMeshes.size(), q1060ShapeObjectFailures, q1060ShapeLoadFailures, q1060FallbackDiffuse);\n    if (outMeshes.empty()) {"
     Q6H_NIF_SOURCE "${Q6H_NIF_SOURCE}")
 
+string(FIND "${Q6H_NIF_SOURCE}" "const uint16_t uvSets = (dataFlags & 0x0001u) != 0u ? 1u : 0u;" Q1060_UV_PATCH_OK)
 string(FIND "${Q6H_NIF_SOURCE}" "Q10.6 NIF COVERAGE" Q1060_NIF_PATCH_OK)
-if(Q1060_NIF_PATCH_OK LESS 0)
-    message(FATAL_ERROR "Q10.6 NIF coverage hook drifted")
+if(Q1060_UV_PATCH_OK LESS 0 OR Q1060_NIF_PATCH_OK LESS 0)
+    message(FATAL_ERROR "Q10.6 NIF fidelity hook drifted: UV=${Q1060_UV_PATCH_OK} coverage=${Q1060_NIF_PATCH_OK}")
 endif()
 
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/fo3-static-nif-q6h.cpp" "${Q6H_NIF_SOURCE}")
