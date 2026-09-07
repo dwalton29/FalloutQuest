@@ -1,12 +1,13 @@
-# Q10.7: world/asset fidelity repair after the Q10.6 material pass.
-# - expand Fallout3.esm SCOL static collections into their authored STAT parts
-# - preserve Bethesda NIF node subclasses, parent transforms and inherited props
-# - accept NiTriBasedGeom subclasses used by Bethesda statics
-# - stabilize TX01 terrain normals and sharpen oblique VR texture sampling
-# Movement/collision algorithms are unchanged; newly discovered authored static
-# geometry naturally enters the existing visual/collision placement pipeline.
-include("${CMAKE_CURRENT_SOURCE_DIR}/q1070-nif-hierarchy.cmake")
-include("${CMAKE_CURRENT_SOURCE_DIR}/q1070-scol-world-assembly.cmake")
+# Q10.7: retain only the proven Quest texture/terrain fidelity work.
+# The NIF parent-property inheritance experiment caused valid child shapes to
+# inherit sticky material state (notably NoLighting) and could turn wall/floor
+# regions black. SCOL expansion is also disabled: the device scan proved there
+# are zero SCOL definitions/placements in the loaded Fallout3.esm Megaton path.
+#
+# Keep the pieces that were positively verified on-device:
+# - authored LAND TX01 + VCLR from Q10.6
+# - stable LAND tangent basis
+# - 4x anisotropic filtering when the Quest driver exposes it
 include("${CMAKE_CURRENT_SOURCE_DIR}/q1070-texture-terrain-fidelity.cmake")
 
 # Final generated outputs for this milestone.
