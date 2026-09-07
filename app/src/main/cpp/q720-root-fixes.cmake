@@ -29,3 +29,7 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/q800-fo3-havok-proxy.cmake")
 # Fallout 3's packed collision and uses exact mesh adjacency to remove welded
 # low/internal ghost-edge contacts before they reach the character proxy.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q801-havok-welding.cmake")
+
+# Q7.23 changed the CollisionTriangle tail before Q8.1 runs, so apply the Q8.1
+# welding members against that current struct shape.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q801-welding-struct-fix.cmake")
