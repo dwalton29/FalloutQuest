@@ -78,3 +78,9 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/q940-raised-support-local-candidates.cmake"
 # considering adjacent modular objects. The active movement and ground paths no
 # longer rescan all world triangles every frame.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q950-coherent-spatial-controller.cmake")
+
+# Q9.6 keeps Q9.5's spatial/coherent architecture but replaces stair tread probe
+# points with exact circle-vs-triangle footprint support. The highest reachable
+# support inside one step is selected from the blocking object first, so a side
+# contact height cannot hide the actual stair/scrap landing surface.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q960-exact-footprint-support.cmake")
