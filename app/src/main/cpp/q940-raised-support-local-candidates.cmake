@@ -301,11 +301,15 @@ string(REPLACE
     "${Q940_RAISED_SUPPORT_SOURCE}Vec2 ProjectAlongWallQ910(Vec2 move,const CapsuleHitQ910& hit) {"
     Q940_CONTROLLER_SOURCE "${Q940_CONTROLLER_SOURCE}")
 
-# Q9.4 owns both active step decisions. Q9.3's full-world sampled upper sweep
-# remains compiled for comparison but is never called by movement.
+# Q9.4 owns both active step decisions. Q9.3 remains compiled for comparison
+# only; replace only the two movement call sites, not Q9.3's function definition.
 string(REPLACE
-    "TryLocalStepEnvelopeQ930"
-    "TryRaisedStepEnvelopeQ940"
+    "if (TryLocalStepEnvelopeQ930(startX,startZ,targetX,targetZ,feetY,hit,stepY))"
+    "if (TryRaisedStepEnvelopeQ940(startX,startZ,targetX,targetZ,feetY,hit,stepY))"
+    Q940_CONTROLLER_SOURCE "${Q940_CONTROLLER_SOURCE}")
+string(REPLACE
+    "if (TryLocalStepEnvelopeQ930(x,z,slideTargetX,slideTargetZ,feetY,\n                                   slideHit,slideStepY))"
+    "if (TryRaisedStepEnvelopeQ940(x,z,slideTargetX,slideTargetZ,feetY,\n                                   slideHit,slideStepY))"
     Q940_CONTROLLER_SOURCE "${Q940_CONTROLLER_SOURCE}")
 
 string(REPLACE
