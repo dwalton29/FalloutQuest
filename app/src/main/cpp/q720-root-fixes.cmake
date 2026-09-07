@@ -42,3 +42,9 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/q802-validated-low-obstacle-traversal.cmake
 # Q8.3 fixes Q8.2's landing selector so a nearby old floor cannot hide the
 # actual raised stair tread. Enumerate all walkable supports at each probe.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q803-all-surface-step-landing.cmake")
+
+# Q9.0 reconstructs placed bhk mesh triangles back into coherent concave
+# collision shapes. Low faces now transfer support onto a walkable top surface
+# on the same/adjacent authored shape instead of being treated as anonymous
+# triangle blockers.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q900-coherent-collision-shapes.cmake")
