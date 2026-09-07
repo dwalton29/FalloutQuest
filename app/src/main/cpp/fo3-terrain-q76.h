@@ -9,6 +9,9 @@ struct Fo3TerrainCellQ76 {
     int32_t gridX = 0;
     int32_t gridY = 0;
     std::vector<float> heights;
+    // Q10.1: authored LAND/VNML normals in Fallout game axes, xyz triples.
+    // Grounding remains height-only; this is consumed by the visual renderer.
+    std::vector<float> normals;
 };
 
 // CPU LAND/VHGT decode. This is deliberately independent of player collision.
