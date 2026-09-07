@@ -15,3 +15,7 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/q723-walkable-module-endcaps.cmake")
 # Q7.24 uses the exact local 3D contact height (not whole-triangle maxY) for
 # those modular endcaps and requires the same face to clear at raised height.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q724-contact-height-endcaps.cmake")
+
+# Q7.25 replaces the asset-specific traversal response with a universal
+# proxy-style swept capsule, footprint support manifold and constraint solver.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q725-character-proxy.cmake")
