@@ -33,3 +33,8 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/q801-havok-welding.cmake")
 # Q7.23 changed the CollisionTriangle tail before Q8.1 runs, so apply the Q8.1
 # welding members against that current struct shape.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q801-welding-struct-fix.cmake")
+
+# Q8.2: low collision contacts may not cancel forward movement unless there is
+# no supported walkable landing or the full raised capsule cannot clear them.
+# This is geometry-only and retains normal collision as the fallback.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q802-validated-low-obstacle-traversal.cmake")
