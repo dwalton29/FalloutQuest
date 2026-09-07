@@ -71,3 +71,10 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/q930-local-step-envelope.cmake")
 # triangle candidate set and performs only a target upper-body check, removing
 # Q9.3's repeated full-world sampled sweep that caused movement-time stutter.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q940-raised-support-local-candidates.cmake")
+
+# Q9.5 makes Q9.0's coherent authored shapes the actual movement source. Placed
+# collision objects are spatially indexed once, movement queries nearby objects
+# only, and stair traversal follows authored shared-edge/object topology before
+# considering adjacent modular objects. The active movement and ground paths no
+# longer rescan all world triangles every frame.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q950-coherent-spatial-controller.cmake")
