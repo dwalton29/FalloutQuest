@@ -52,9 +52,12 @@ inline bool ParseFo3PackedSubShapeMetadataQ714(
     uint64_t firstVertex = 0u;
     for (uint16_t i = 0u; i < subShapeCount; ++i) {
         Fo3PackedSubShapeMetadataQ714 meta;
+        // FO3 20.2.0.7 hkSubPartData is HavokFilter, Num Vertices, Material.
+        // Q7.14 accidentally read Material before Num Vertices, which made most
+        // packed triangles fail subshape assignment and lose Bethesda metadata.
         if (!c.U8(meta.layer) || !c.U8(meta.flagsAndPartNumber) ||
-            !c.U16(meta.group) || !c.U32(meta.material) ||
-            !c.U32(meta.vertexCount)) {
+            !c.U16(meta.group) || !c.U32(meta.vertexCount) ||
+            !c.U32(meta.material)) {
             out.clear();
             return false;
         }
@@ -68,7 +71,7 @@ inline bool ParseFo3PackedSubShapeMetadataQ714(
         out.push_back(meta);
     }
 
-    // FO3 20.2.0.7 packed data ends after the OblivionSubShape array.
+    // FO3 20.2.0.7 packed data ends after the hkSubPartData array.
     // Allow an incomplete partition defensively, but never accept trailing bytes;
     // that catches a bad layout assumption before it can alter collision policy.
     return c.remaining() == 0u;

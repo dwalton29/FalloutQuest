@@ -24,7 +24,16 @@ namespace {
 constexpr const char* TAG = "FalloutQuest";
 constexpr float PI = 3.14159265358979323846f;
 constexpr float SNAP_TURN_RADIANS = 30.0f * PI / 180.0f;
-constexpr float MOVE_SPEED_METRES_PER_SECOND = 1.8f;
+
+// Q7.15: Fallout 3's own default movement settings, expressed in the same
+// 70 game-units-per-metre scale used by the FalloutQuest world renderer.
+constexpr float FO3_UNITS_PER_METRE_Q715 = 70.0f;
+constexpr float FO3_MOVE_BASE_SPEED_Q715 = 77.0f;
+constexpr float FO3_MOVE_RUN_MULT_Q715 = 4.0f;
+constexpr float FO3_MOVE_NO_WEAPON_MULT_Q715 = 1.1f;
+constexpr float MOVE_SPEED_METRES_PER_SECOND =
+    (FO3_MOVE_BASE_SPEED_Q715 * FO3_MOVE_RUN_MULT_Q715 *
+     FO3_MOVE_NO_WEAPON_MULT_Q715) / FO3_UNITS_PER_METRE_Q715;
 
 #define FQ_LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
 #define FQ_LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
@@ -42,6 +51,21 @@ float Deadzone(float value, float threshold = 0.18f) {
     if (magnitude <= threshold) return 0.0f;
     const float scaled = (magnitude - threshold) / (1.0f - threshold);
     return std::copysign(std::min(scaled, 1.0f), value);
+}
+
+void RadialMoveDeadzoneQ715(float rawX, float rawY, float& outX, float& outY,
+                            float threshold = 0.18f) {
+    const float magnitude = std::sqrt(rawX * rawX + rawY * rawY);
+    if (magnitude <= threshold) {
+        outX = 0.0f;
+        outY = 0.0f;
+        return;
+    }
+    const float clampedMagnitude = std::min(magnitude, 1.0f);
+    const float scaledMagnitude = (clampedMagnitude - threshold) / (1.0f - threshold);
+    const float invMagnitude = 1.0f / std::max(magnitude, 1e-6f);
+    outX = rawX * invMagnitude * scaledMagnitude;
+    outY = rawY * invMagnitude * scaledMagnitude;
 }
 
 struct Mat4 {
@@ -262,6 +286,10 @@ public:
         FQ_LOGI("Q7.1 BOOT STEP: CreateSceneRenderer");
         if (!CreateSceneRenderer()) return false;
 
+        FQ_LOGI("Q7.15 MOVEMENT: base=%.1f runMult=%.2f noWeaponMult=%.2f unitsPerMetre=%.1f fullStick=%.3fm/s radialAnalog=1",
+                FO3_MOVE_BASE_SPEED_Q715, FO3_MOVE_RUN_MULT_Q715,
+                FO3_MOVE_NO_WEAPON_MULT_Q715, FO3_UNITS_PER_METRE_Q715,
+                MOVE_SPEED_METRES_PER_SECOND);
         FQ_LOGI("Q7.1 READY: Q6K runtime + isolated right-trigger door probe");
         return true;
     }
@@ -673,8 +701,9 @@ private:
         sync.activeActionSets = &active;
         if (!CheckXr(xrSyncActions(session_, &sync), "xrSyncActions")) return;
 
-        moveX_ = Deadzone(ReadFloatAction(moveXAction_, handPaths_[0]));
-        moveY_ = Deadzone(ReadFloatAction(moveYAction_, handPaths_[0]));
+        const float rawMoveX = ReadFloatAction(moveXAction_, handPaths_[0]);
+        const float rawMoveY = ReadFloatAction(moveYAction_, handPaths_[0]);
+        RadialMoveDeadzoneQ715(rawMoveX, rawMoveY, moveX_, moveY_);
         turnX_ = Deadzone(ReadFloatAction(turnXAction_, handPaths_[1]));
         activateValue_ = ReadFloatAction(activateAction_, handPaths_[1]);
 
