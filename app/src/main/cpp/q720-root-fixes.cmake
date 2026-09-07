@@ -58,3 +58,9 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/q910-standard-capsule-controller.cmake")
 # one-step lower-body envelope cannot cancel horizontal movement; after moving,
 # feet resolve to the highest valid support within one step. Tall geometry stays solid.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q920-step-envelope-controller.cmake")
+
+# Q9.3 removes Q9.2's remaining whole-triangle maxY veto. Stepability is now
+# local: resolve destination support, then sweep only the body above the one-step
+# envelope. Remote high vertices on the same triangle cannot turn a low riser
+# into a wall, while actual upper-body geometry still blocks.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q930-local-step-envelope.cmake")
