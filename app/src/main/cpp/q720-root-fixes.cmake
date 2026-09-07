@@ -92,3 +92,12 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/q1000-environment-sky.cmake")
 # Q10.1 restores depth cues that are already authored in Fallout3.esm:
 # WTHR fog, LAND/VNML smooth normals, and placed REFR -> LIGH local lighting.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q1010-visual-depth.cmake")
+
+# Q10.2 preserves Fallout 3's authored NIF material behaviour: vertex colours,
+# NoLighting geometry, emissive/glow data and shader-controlled specular.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q1020-material-fidelity.cmake")
+
+# Q10.3 removes the MegatonPlayerHouse bootstrap entirely. Native startup now
+# creates only the renderer, then loads MegatonEntrance from the authored gate
+# XTEL as the first scene/collision/terrain context.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q1030-direct-megaton-entry.cmake")
