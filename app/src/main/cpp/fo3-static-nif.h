@@ -10,13 +10,23 @@ struct Fo3StaticNifMesh {
     std::vector<float> tangents;     // xyz
     std::vector<float> bitangents;   // xyz
     std::vector<float> texcoords;    // uv
+    std::vector<float> vertexColors; // rgba, if authored
     std::vector<uint32_t> indices;   // non-degenerate GL_TRIANGLES list
 
     std::string modelPath;
     std::string diffuseTexturePath;
     std::string normalTexturePath;
+    std::string glowTexturePath;
+
+    float specularColor[3]{1.0f, 1.0f, 1.0f};
+    float emissiveColor[3]{0.0f, 0.0f, 0.0f};
     float glossiness = 10.0f;
     float alpha = 1.0f;
+    float emissiveMult = 1.0f;
+    float environmentMapScale = 1.0f;
+    uint32_t shaderFlags1 = 0u;
+    uint32_t shaderFlags2 = 0u;
+    bool noLighting = false;
     bool alphaBlend = false;
     bool alphaTest = false;
     float alphaThreshold = 0.5f;
