@@ -24,3 +24,8 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/q725-character-proxy.cmake")
 # Fallout 3/Havok-style character proxy: point/plane manifold, linear casts,
 # separate support checks, geometry-only step edge welding and simplex solve.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q800-fo3-havok-proxy.cmake")
+
+# Q8.1 preserves the actual per-triangle Havok welding information authored in
+# Fallout 3's packed collision and uses exact mesh adjacency to remove welded
+# low/internal ghost-edge contacts before they reach the character proxy.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q801-havok-welding.cmake")
