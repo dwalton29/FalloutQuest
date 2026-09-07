@@ -110,3 +110,7 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/q1040-robust-megaton-gate.cmake")
 # Q10.5 adds a cached Quest-safe directional sun shadow map shared by both eyes.
 # Fallout statics and LAND cast/receive; collision and locomotion remain untouched.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q1050-sun-shadows.cmake")
+
+# Q10.6 restores LAND VCLR and TXST/TX01 normal/specular materials, and audits
+# every NIF geometry block so partial building models cannot fail silently.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q1060-asset-fidelity-repair.cmake")
