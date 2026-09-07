@@ -101,3 +101,8 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/q1020-material-fidelity.cmake")
 # creates only the renderer, then loads MegatonEntrance from the authored gate
 # XTEL as the first scene/collision/terrain context.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q1030-direct-megaton-entry.cmake")
+
+# Q10.4 resolves the first-entry gate by the authored cross-world transition
+# itself (Capital Wasteland -> Megaton), rather than assuming where Bethesda
+# grouped the destination reference inside the ESM.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q1040-robust-megaton-gate.cmake")
