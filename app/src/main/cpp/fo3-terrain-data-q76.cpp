@@ -23,7 +23,9 @@ uint64_t GridKeyQ79(int32_t x, int32_t y) {
 
 bool DecodeVhgtQ76(const uint8_t* bytes, uint32_t size, std::vector<float>& heights) {
     // FO3/FNV VHGT = float offset + 33 rows x 33 signed delta bytes + 3 unused.
-    // Values are stored in eighths of a Bethesda game unit height step.
+    // The offset itself is vertex (0,0). The first byte of each subsequent
+    // row moves that row's first vertex north/south; delta[0] is not applied
+    // on top of the offset. One height step is 8 game units.
     constexpr uint32_t expected = 4u + 33u * 33u + 3u;
     if (!bytes || size < expected) return false;
 
@@ -32,7 +34,9 @@ bool DecodeVhgtQ76(const uint8_t* bytes, uint32_t size, std::vector<float>& heig
     float rowStart = ReadLeFloatQ75(bytes);
 
     for (int row = 0; row < Q76_HEIGHT_SIDE; ++row) {
-        rowStart += static_cast<float>(delta[row * Q76_HEIGHT_SIDE]);
+        if (row > 0) {
+            rowStart += static_cast<float>(delta[row * Q76_HEIGHT_SIDE]);
+        }
         float value = rowStart;
         heights[static_cast<size_t>(row * Q76_HEIGHT_SIDE)] = value * Q76_HEIGHT_SCALE;
         for (int col = 1; col < Q76_HEIGHT_SIDE; ++col) {
