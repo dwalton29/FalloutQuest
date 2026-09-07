@@ -38,3 +38,7 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/q801-welding-struct-fix.cmake")
 # no supported walkable landing or the full raised capsule cannot clear them.
 # This is geometry-only and retains normal collision as the fallback.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q802-validated-low-obstacle-traversal.cmake")
+
+# Q8.3 fixes Q8.2's landing selector so a nearby old floor cannot hide the
+# actual raised stair tread. Enumerate all walkable supports at each probe.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q803-all-surface-step-landing.cmake")
