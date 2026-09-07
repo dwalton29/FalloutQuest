@@ -106,3 +106,7 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/q1030-direct-megaton-entry.cmake")
 # itself (Capital Wasteland -> Megaton), rather than assuming where Bethesda
 # grouped the destination reference inside the ESM.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q1040-robust-megaton-gate.cmake")
+
+# Q10.5 adds a cached Quest-safe directional sun shadow map shared by both eyes.
+# Fallout statics and LAND cast/receive; collision and locomotion remain untouched.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q1050-sun-shadows.cmake")
