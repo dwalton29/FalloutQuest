@@ -8,6 +8,7 @@ std::vector<Fo3TerrainCellQ76> gTerrainDataQ76;
 constexpr int Q76_HEIGHT_SIDE = 33;
 constexpr size_t Q76_HEIGHT_COUNT = static_cast<size_t>(Q76_HEIGHT_SIDE * Q76_HEIGHT_SIDE);
 constexpr float Q76_HEIGHT_SCALE = 8.0f;
+constexpr float Q79_PARENT_LOCAL_MAX_MEAN_DELTA = 4096.0f;
 
 struct ParentWorldspaceQ79 {
     uint32_t formId = 0u;
@@ -19,6 +20,13 @@ struct ParentWorldspaceQ79 {
 uint64_t GridKeyQ79(int32_t x, int32_t y) {
     return (static_cast<uint64_t>(static_cast<uint32_t>(x)) << 32u) |
            static_cast<uint32_t>(y);
+}
+
+float MeanHeightQ79(const std::vector<float>& heights) {
+    if (heights.empty()) return 0.0f;
+    double total = 0.0;
+    for (float height : heights) total += static_cast<double>(height);
+    return static_cast<float>(total / static_cast<double>(heights.size()));
 }
 
 bool DecodeVhgtQ76(const uint8_t* bytes, uint32_t size, std::vector<float>& heights) {
@@ -231,9 +239,10 @@ size_t AppendInheritedParentLandQ79(
         selectedGridKeys.insert(GridKeyQ79(it->second.gridX, it->second.gridY));
     }
 
-    std::unordered_set<uint64_t> localGridKeys;
-    for (const Fo3TerrainCellQ76& cell : terrain) {
-        localGridKeys.insert(GridKeyQ79(cell.gridX, cell.gridY));
+    std::unordered_map<uint64_t, size_t> localIndexByGrid;
+    for (size_t index = 0u; index < terrain.size(); ++index) {
+        const Fo3TerrainCellQ76& cell = terrain[index];
+        localIndexByGrid[GridKeyQ79(cell.gridX, cell.gridY)] = index;
     }
 
     std::vector<CellInfoQ75> parentCells;
@@ -252,12 +261,16 @@ size_t AppendInheritedParentLandQ79(
         }
     }
 
+    // Ask for the parent counterpart for every selected child grid, not only
+    // grids with no local LAND. Some FO3 child worldspaces contain local LAND
+    // records whose VHGT is a low/default island even though Use Land Data is
+    // enabled; comparing the overlapping parent cell lets us reject only the
+    // catastrophic vertical outliers without hardcoding a worldspace or grid.
     std::unordered_set<uint32_t> selectedParentCells;
     size_t missingLocalGrids = 0u;
     size_t parentCellMissing = 0u;
     for (uint64_t key : selectedGridKeys) {
-        if (localGridKeys.find(key) != localGridKeys.end()) continue;
-        ++missingLocalGrids;
+        if (localIndexByGrid.find(key) == localIndexByGrid.end()) ++missingLocalGrids;
         const auto parentIt = parentCellByGrid.find(key);
         if (parentIt == parentCellByGrid.end()) {
             ++parentCellMissing;
@@ -267,7 +280,7 @@ size_t AppendInheritedParentLandQ79(
     }
 
     if (selectedParentCells.empty()) {
-        Q75_LOGI("Q7.9 LAND PARENT: child=%08X parent=%08X useLand=1 missingLocalGrids=%zu parentCellsRequested=0 inherited=0 parentCellMissing=%zu",
+        Q75_LOGI("Q7.9 LAND PARENT: child=%08X parent=%08X useLand=1 missingLocalGrids=%zu parentCellsRequested=0 appended=0 replaced=0 parentCellMissing=%zu",
                  childWorldspaceFormId, parentInfo.formId,
                  missingLocalGrids, parentCellMissing);
         return 0u;
@@ -277,18 +290,42 @@ size_t AppendInheritedParentLandQ79(
     CollectSelectedLandQ76(parentInfo.formId, selectedParentCells, parentCellsById, inherited);
 
     size_t appended = 0u;
-    for (Fo3TerrainCellQ76& cell : inherited) {
-        const uint64_t key = GridKeyQ79(cell.gridX, cell.gridY);
-        if (!localGridKeys.insert(key).second) continue;
-        terrain.push_back(std::move(cell));
-        ++appended;
+    size_t replaced = 0u;
+    for (Fo3TerrainCellQ76& parentCell : inherited) {
+        const uint64_t key = GridKeyQ79(parentCell.gridX, parentCell.gridY);
+        const auto localIt = localIndexByGrid.find(key);
+        if (localIt == localIndexByGrid.end()) {
+            const size_t newIndex = terrain.size();
+            terrain.push_back(std::move(parentCell));
+            localIndexByGrid[key] = newIndex;
+            ++appended;
+            continue;
+        }
+
+        Fo3TerrainCellQ76& localCell = terrain[localIt->second];
+        const float localMean = MeanHeightQ79(localCell.heights);
+        const float parentMean = MeanHeightQ79(parentCell.heights);
+        const float meanDelta = std::fabs(localMean - parentMean);
+        if (meanDelta <= Q79_PARENT_LOCAL_MAX_MEAN_DELTA) continue;
+
+        // Preserve the child LAND/CELL identity so child-world texture and
+        // material lookups remain authored locally; only repair the implausible
+        // heightfield from the matching parent grid.
+        Q75_LOGW("Q7.9 LAND PARENT REPLACE: child=%08X parent=%08X grid=(%d,%d) localLAND=%08X parentLAND=%08X localMean=%.1f parentMean=%.1f delta=%.1f threshold=%.1f",
+                 childWorldspaceFormId, parentInfo.formId,
+                 localCell.gridX, localCell.gridY,
+                 localCell.landFormId, parentCell.landFormId,
+                 localMean, parentMean, meanDelta,
+                 Q79_PARENT_LOCAL_MAX_MEAN_DELTA);
+        localCell.heights = std::move(parentCell.heights);
+        ++replaced;
     }
 
-    Q75_LOGI("Q7.9 LAND PARENT: child=%08X parent=%08X useLand=1 missingLocalGrids=%zu parentCellsRequested=%zu inherited=%zu parentCellMissing=%zu totalTerrainCells=%zu",
+    Q75_LOGI("Q7.9 LAND PARENT: child=%08X parent=%08X useLand=1 missingLocalGrids=%zu parentCellsRequested=%zu appended=%zu replaced=%zu parentCellMissing=%zu totalTerrainCells=%zu",
              childWorldspaceFormId, parentInfo.formId,
-             missingLocalGrids, selectedParentCells.size(), appended,
+             missingLocalGrids, selectedParentCells.size(), appended, replaced,
              parentCellMissing, terrain.size());
-    return appended;
+    return appended + replaced;
 }
 
 } // namespace
