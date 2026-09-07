@@ -53,3 +53,8 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/q900-coherent-collision-shapes.cmake")
 # capsule controller: sweep; if blocked, up -> forward -> down; otherwise wall
 # projection. Old low-obstacle/ledge/simplex logic is not used to decide steps.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q910-standard-capsule-controller.cmake")
+
+# Q9.2 removes Q9.1's raised-forward clearance veto. Geometry wholly inside a
+# one-step lower-body envelope cannot cancel horizontal movement; after moving,
+# feet resolve to the highest valid support within one step. Tall geometry stays solid.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q920-step-envelope-controller.cmake")
