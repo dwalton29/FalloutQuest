@@ -64,3 +64,10 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/q920-step-envelope-controller.cmake")
 # envelope. Remote high vertices on the same triangle cannot turn a low riser
 # into a wall, while actual upper-body geometry still blocks.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q930-local-step-envelope.cmake")
+
+# Q9.4 fixes the two remaining Q9.3 issues together: positive risers search for
+# the next raised walkable support before the current floor can win, with a 2cm
+# step tolerance for ~31cm Megaton scrap steps; step validation reuses one local
+# triangle candidate set and performs only a target upper-body check, removing
+# Q9.3's repeated full-world sampled sweep that caused movement-time stutter.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q940-raised-support-local-candidates.cmake")
