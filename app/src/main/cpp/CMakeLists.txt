@@ -21,6 +21,12 @@ string(REPLACE
     "constexpr size_t MAX_MODEL_ATTEMPTS = 800u;"
     "constexpr size_t MAX_MODEL_ATTEMPTS = 2000u;"
     Q6H_NATIVE_SOURCE "${Q6H_NATIVE_SOURCE}")
+# Q7.16 removes the old proof-room 3000-unit static-shape ceiling. Large
+# authored exterior structures are valid Fallout geometry and must not vanish.
+string(REPLACE
+    "constexpr float MAX_MODEL_EXTENT_UNITS = 3000.0f;"
+    "constexpr float MAX_MODEL_EXTENT_UNITS = 20000.0f;"
+    Q6H_NATIVE_SOURCE "${Q6H_NATIVE_SOURCE}")
 
 set(Q6H_OLD_SORT [=[
     std::stable_sort(placements.begin(), placements.end(),
@@ -456,6 +462,12 @@ set(Q6H_NEW_CLEANUP [=[
 string(REPLACE "${Q6H_OLD_CLEANUP}" "${Q6H_NEW_CLEANUP}"
        Q6H_NATIVE_SOURCE "${Q6H_NATIVE_SOURCE}")
 
+# Q7.16 makes static-coverage diagnostics easy to isolate in one adb filter.
+string(REPLACE "Q6H CELL SELECT:" "Q7.16 STATIC COVERAGE:"
+       Q6H_NATIVE_SOURCE "${Q6H_NATIVE_SOURCE}")
+string(REPLACE "Q6H SKIP SHAPE SIZE:" "Q7.16 STATIC SKIP SIZE:"
+       Q6H_NATIVE_SOURCE "${Q6H_NATIVE_SOURCE}")
+
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/q6h-native-generated.cpp" "${Q6H_NATIVE_SOURCE}")
 
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/fo3-static-nif.cpp" Q6H_NIF_SOURCE)
@@ -630,6 +642,23 @@ set(Q74_NEW_RESOLVE_GUARD [=[
 ]=])
 string(REPLACE "${Q74_OLD_RESOLVE_GUARD}" "${Q74_NEW_RESOLVE_GUARD}"
        Q74_COLLISION_SOURCE "${Q74_COLLISION_SOURCE}")
+
+# Q7.16 keeps the old resolver available for interiors/safe-spawn, then injects
+# the exterior sweep-slide-step replacement immediately before the public ready
+# helpers. This avoids destabilising the already-proven interior path.
+string(REPLACE
+    "bool ResolveFo3PlayerMotionQ6G("
+    "bool ResolveFo3PlayerMotionLegacyQ716("
+    Q74_COLLISION_SOURCE "${Q74_COLLISION_SOURCE}")
+string(REPLACE
+    "bool IsFo3PlayerCollisionReadyQ6G() {"
+    "#include \"fo3-collision-controller-q716.inc\"\n\nbool IsFo3PlayerCollisionReadyQ6G() {"
+    Q74_COLLISION_SOURCE "${Q74_COLLISION_SOURCE}")
+string(REPLACE
+    "Q7.14 PHYSICS READY:"
+    "Q7.16 PHYSICS READY: controller=sweep-slide-step recoveryOnly=1"
+    Q74_COLLISION_SOURCE "${Q74_COLLISION_SOURCE}")
+
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/fo3-collision-overlay-q74.cpp" "${Q74_COLLISION_SOURCE}")
 
 add_library(falloutquest SHARED
