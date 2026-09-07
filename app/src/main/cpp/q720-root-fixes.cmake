@@ -48,3 +48,8 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/q803-all-surface-step-landing.cmake")
 # on the same/adjacent authored shape instead of being treated as anonymous
 # triangle blockers.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q900-coherent-collision-shapes.cmake")
+
+# Q9.1 replaces the active character movement path with a fresh conventional
+# capsule controller: sweep; if blocked, up -> forward -> down; otherwise wall
+# projection. Old low-obstacle/ledge/simplex logic is not used to decide steps.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q910-standard-capsule-controller.cmake")
