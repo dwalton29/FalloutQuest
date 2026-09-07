@@ -84,3 +84,7 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/q950-coherent-spatial-controller.cmake")
 # support inside one step is selected from the blocking object first, so a side
 # contact height cannot hide the actual stair/scrap landing surface.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q960-exact-footprint-support.cmake")
+
+# Q10.0 ports the exterior visual environment without touching the movement
+# stack: authored WRLD/CLMT/WTHR sky + lighting and the real Megaton gate spawn.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q1000-environment-sky.cmake")
