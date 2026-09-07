@@ -295,6 +295,9 @@ set(Q6H_OLD_PROGRAM [=[
     gProgram = CreateQ6HProgram();
 ]=])
 set(Q6H_NEW_PROGRAM [=[
+    gSceneCenterX = centerX;
+    gSceneCenterY = centerY;
+    gSceneFloorZ = floorZ;
     std::vector<Fo3WorldPlacement> q6hCollisionPlacements;
     q6hCollisionPlacements.reserve(selected.size());
     for (const CpuObject& object : selected) {
@@ -643,9 +646,9 @@ set(Q74_NEW_RESOLVE_GUARD [=[
 string(REPLACE "${Q74_OLD_RESOLVE_GUARD}" "${Q74_NEW_RESOLVE_GUARD}"
        Q74_COLLISION_SOURCE "${Q74_COLLISION_SOURCE}")
 
-# Q7.16 keeps the old resolver available for interiors/safe-spawn, then injects
-# the exterior sweep-slide-step replacement immediately before the public ready
-# helpers. This avoids destabilising the already-proven interior path.
+# Q7.18 keeps the old resolver available for interiors/safe-spawn, then injects
+# the exterior sweep-slide-step-over replacement immediately before the public
+# ready helpers. This avoids destabilising the already-proven interior path.
 string(REPLACE
     "bool ResolveFo3PlayerMotionQ6G("
     "bool ResolveFo3PlayerMotionLegacyQ716("
@@ -656,7 +659,7 @@ string(REPLACE
     Q74_COLLISION_SOURCE "${Q74_COLLISION_SOURCE}")
 string(REPLACE
     "Q7.14 PHYSICS READY:"
-    "Q7.16 PHYSICS READY: controller=sweep-slide-step recoveryOnly=1"
+    "Q7.18 PHYSICS READY: controller=sweep-slide-step-over persistentOverlap=depth-aware"
     Q74_COLLISION_SOURCE "${Q74_COLLISION_SOURCE}")
 
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/fo3-collision-overlay-q74.cpp" "${Q74_COLLISION_SOURCE}")
