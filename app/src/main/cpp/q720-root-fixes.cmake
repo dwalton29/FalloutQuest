@@ -115,7 +115,10 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/q1050-sun-shadows.cmake")
 # every NIF geometry block so partial building models cannot fail silently.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q1060-asset-fidelity-repair.cmake")
 
-# Q10.7 repairs the authored world/model graph itself: SCOL static collections,
-# Bethesda NIF node/shape subclasses and inherited properties, plus robust
-# terrain TX01 sampling and Quest anisotropic filtering.
+# Q10.7 retains only the device-verified terrain/filtering improvements. The
+# unsafe parent-material inheritance and unused SCOL experiment are rolled back.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q1070-world-fidelity.cmake")
+
+# Q10.8 identifies the exact NiProperty types behind the remaining one-shape
+# fallback materials on complex Megaton buildings, with no visual guesswork.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q1080-material-path-audit.cmake")
