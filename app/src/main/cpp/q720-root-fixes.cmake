@@ -19,3 +19,8 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/q724-contact-height-endcaps.cmake")
 # Q7.25 replaces the asset-specific traversal response with a universal
 # proxy-style swept capsule, footprint support manifold and constraint solver.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q725-character-proxy.cmake")
+
+# Q8.0 replaces Q7.25's strongest-contact approximation with a clean-room
+# Fallout 3/Havok-style character proxy: point/plane manifold, linear casts,
+# separate support checks, geometry-only step edge welding and simplex solve.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q800-fo3-havok-proxy.cmake")
