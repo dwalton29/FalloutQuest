@@ -43,3 +43,6 @@ endif()
 
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/q6h-native-generated.cpp" "${Q6H_NATIVE_SOURCE}")
 message(STATUS "Q11.2 FO3 shader vertex-colour gating enabled")
+
+# Q11.3 corrects the D3D DDS / Gamebryo V-axis handling after Q11.2.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q1130-static-uv-orientation.cmake")
