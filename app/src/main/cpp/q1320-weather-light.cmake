@@ -39,3 +39,8 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/q1350-hdr-eye-adaptation.cmake")
 # target/scene formula saturated at 2x for every Megaton view, so remap the legacy
 # target into this renderer's luminance range and use a bounded sqrt response.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q1360-eye-adaptation-remap.cmake")
+
+# Q13.7 exposes the HDR eye depth as a sampleable texture and adds a conservative
+# 8-tap contact AO pass to ground Bethesda-placed geometry without changing any
+# authored ESM lighting, ImageSpace or material values.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q1370-contact-ao.cmake")
