@@ -1,0 +1,25 @@
+# Q13.0: apply the active WTHR Day Image Space Modifier (IMAD) on top of the
+# resolved CELL/WRLD base IMGS. Q12.9 proved WastelandClear supplies a Day IMAD;
+# this keeps the existing final-frame post path and only fixes authored data
+# composition. With no game clock/weather transitions yet, the already-selected
+# Day modifier is evaluated at full-strength/end state. Dynamic blending follows
+# with the time/weather system.
+
+string(REPLACE
+    "#include \"fo3-imagespace-q1280.h\""
+    "#include \"fo3-imagespace-q1280.h\"\n#include \"fo3-weather-imad-q1300.h\""
+    Q6H_NATIVE_SOURCE "${Q6H_NATIVE_SOURCE}")
+
+string(REPLACE
+    "LoadFo3ImageSpaceQ1280(request.cellFormId, request.worldspaceFormId);"
+    "LoadFo3ImageSpaceQ1300(request.cellFormId, request.worldspaceFormId);"
+    Q6H_NATIVE_SOURCE "${Q6H_NATIVE_SOURCE}")
+
+string(FIND "${Q6H_NATIVE_SOURCE}" "fo3-weather-imad-q1300.h" Q1300_INCLUDE_OK)
+string(FIND "${Q6H_NATIVE_SOURCE}" "LoadFo3ImageSpaceQ1300" Q1300_CALL_OK)
+if(Q1300_INCLUDE_OK EQUAL -1 OR Q1300_CALL_OK EQUAL -1)
+    message(FATAL_ERROR "Q13.0 weather IMAD hook drifted: include=${Q1300_INCLUDE_OK} call=${Q1300_CALL_OK}")
+endif()
+
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/q6h-native-generated.cpp" "${Q6H_NATIVE_SOURCE}")
+message(STATUS "Q13.0 active Day weather IMAD composition enabled")
