@@ -85,3 +85,9 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/q1430-vanilla-exterior-shadow-semantics.cma
 # materials, TOD, ImageSpace, AO, exposure and bloom remain identical.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q1450-fog-ab.cmake")
 include("${CMAKE_CURRENT_SOURCE_DIR}/q1451-fog-ab-link.cmake")
+
+# Q14.6 uses the shipped Fallout 3 ISCinematic shader as the reference rather
+# than the earlier guessed display-domain reconstruction. It removes Q13.4's
+# active gamma round-trip, switches cinematic luminance to 0.299/0.587/0.114,
+# and restores saturation -> tint -> brightness -> contrast ordering.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q1460-vanilla-cinematic.cmake")
