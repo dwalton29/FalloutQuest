@@ -21,3 +21,7 @@ endif()
 
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/q6h-native-generated.cpp" "${Q6H_NATIVE_SOURCE}")
 message(STATUS "Q13.2 authored weather sunlight/sky scaling enabled")
+
+# Q13.3 adds the authored WTHR cloud DDS layers, per-layer colours/speeds and
+# Sun colour/glare on top of the same proven gradient sky base.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q1330-weather-sky.cmake")
