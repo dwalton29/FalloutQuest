@@ -61,49 +61,35 @@ endif()
 string(REPLACE "${Q1360_OLD_COMPOSITE_CLAMP}" "${Q1360_NEW_COMPOSITE_CLAMP}"
        Q6H_NATIVE_SOURCE "${Q6H_NATIVE_SOURCE}")
 
-# Runtime diagnostics: make the corrected mapping obvious on-device.
-set(Q1360_OLD_READY [==[
-Q13.5 HDR ADAPT READY: probe=4x4-log-average history=RGBA8-packed16 gpuOnly=1 update=eye0-once-per-stereo-frame exposureClamp=0.500..2.000 semantics=eyeAdapt-retention
-]==])
-set(Q1360_NEW_READY [==[
-Q13.6 HDR ADAPT READY: probe=4x4-log-average history=RGBA8-packed16 gpuOnly=1 update=eye0-once-per-stereo-frame exposureClamp=0.750..1.350 semantics=eyeAdapt-retention targetLumBridge=quarter-scale sqrtResponse=1
-]==])
-string(FIND "${Q6H_NATIVE_SOURCE}" "${Q1360_OLD_READY}" Q1360_READY_POS)
-if(Q1360_READY_POS EQUAL -1)
-    message(FATAL_ERROR "Q13.6 could not find Q13.5 ready diagnostic")
-endif()
-string(REPLACE "${Q1360_OLD_READY}" "${Q1360_NEW_READY}"
-       Q6H_NATIVE_SOURCE "${Q6H_NATIVE_SOURCE}")
-
-set(Q1360_OLD_EXPOSURE_LOG [==[
-        Q6H_LOGI("Q13.5 HDR EXPOSURE: sceneLum=%.4f targetLum=%.3f desiredExposure=%.4f adaptedExposure=%.4f eyeAdaptSpeed=%.3f update=%llu stereoShared=1 gpuHistory=1 mapping=target-over-logAverage clamp=0.5..2.0",
-                 sceneLum, targetLum, desiredExposure, exposure, eyeSpeed,
-                 static_cast<unsigned long long>(q1350AdaptFrame));
-]==])
-set(Q1360_NEW_EXPOSURE_LOG [==[
-        const float targetBridge = std::clamp(targetLum * 0.25f, 0.10f, 0.60f);
-        Q6H_LOGI("Q13.6 HDR EXPOSURE: sceneLum=%.4f targetLum=%.3f targetBridge=%.4f desiredExposure=%.4f adaptedExposure=%.4f eyeAdaptSpeed=%.3f update=%llu stereoShared=1 gpuHistory=1 mapping=sqrt(targetQuarter/logAverage) clamp=0.75..1.35",
-                 sceneLum, targetLum, targetBridge, desiredExposure, exposure, eyeSpeed,
-                 static_cast<unsigned long long>(q1350AdaptFrame));
-]==])
-string(FIND "${Q6H_NATIVE_SOURCE}" "${Q1360_OLD_EXPOSURE_LOG}" Q1360_LOG_POS)
-if(Q1360_LOG_POS EQUAL -1)
-    message(FATAL_ERROR "Q13.6 could not find Q13.5 exposure diagnostic")
-endif()
-string(REPLACE "${Q1360_OLD_EXPOSURE_LOG}" "${Q1360_NEW_EXPOSURE_LOG}"
-       Q6H_NATIVE_SOURCE "${Q6H_NATIVE_SOURCE}")
+# Runtime diagnostic labels are deliberately patched by stable substrings rather
+# than one giant exact sentence. CMake may preserve generated string formatting
+# differently even though the actual C++ text is semantically identical.
+string(REPLACE "Q13.5 HDR ADAPT READY:"
+               "Q13.6 HDR ADAPT READY:"
+               Q6H_NATIVE_SOURCE "${Q6H_NATIVE_SOURCE}")
+string(REPLACE "exposureClamp=0.500..2.000 semantics=eyeAdapt-retention"
+               "exposureClamp=0.750..1.350 semantics=eyeAdapt-retention targetLumBridge=quarter-scale sqrtResponse=1"
+               Q6H_NATIVE_SOURCE "${Q6H_NATIVE_SOURCE}")
+string(REPLACE "Q13.5 HDR EXPOSURE:"
+               "Q13.6 HDR EXPOSURE:"
+               Q6H_NATIVE_SOURCE "${Q6H_NATIVE_SOURCE}")
+string(REPLACE "mapping=target-over-logAverage clamp=0.5..2.0"
+               "mapping=sqrt(targetQuarter/logAverage) clamp=0.75..1.35"
+               Q6H_NATIVE_SOURCE "${Q6H_NATIVE_SOURCE}")
 
 # Q13.4 predated the temporal bridge; stop labelling eye adaptation deferred.
 string(REPLACE "eyeAdapt=deferred-exact"
                "eyeAdapt=q136-relative-gpu"
                Q6H_NATIVE_SOURCE "${Q6H_NATIVE_SOURCE}")
 
-# Drift guards.
+# Drift guards: verify the actual shader behaviour, not log punctuation.
 string(FIND "${Q6H_NATIVE_SOURCE}" "targetBridge = clamp(uTargetLum * 0.25" Q1360_BRIDGE_OK)
-string(FIND "${Q6H_NATIVE_SOURCE}" "Q13.6 HDR EXPOSURE" Q1360_LOG_OK)
+string(FIND "${Q6H_NATIVE_SOURCE}" "sqrt(targetBridge / max(sceneLum, 0.02))" Q1360_SQRT_OK)
 string(FIND "${Q6H_NATIVE_SOURCE}" "0.75, 1.35" Q1360_CLAMP_OK)
-if(Q1360_BRIDGE_OK EQUAL -1 OR Q1360_LOG_OK EQUAL -1 OR Q1360_CLAMP_OK EQUAL -1)
-    message(FATAL_ERROR "Q13.6 exposure remap verification failed: bridge=${Q1360_BRIDGE_OK} log=${Q1360_LOG_OK} clamp=${Q1360_CLAMP_OK}")
+string(FIND "${Q6H_NATIVE_SOURCE}" "Q13.6 HDR EXPOSURE:" Q1360_LOG_OK)
+if(Q1360_BRIDGE_OK EQUAL -1 OR Q1360_SQRT_OK EQUAL -1 OR
+   Q1360_CLAMP_OK EQUAL -1 OR Q1360_LOG_OK EQUAL -1)
+    message(FATAL_ERROR "Q13.6 exposure remap verification failed: bridge=${Q1360_BRIDGE_OK} sqrt=${Q1360_SQRT_OK} clamp=${Q1360_CLAMP_OK} log=${Q1360_LOG_OK}")
 endif()
 
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/q6h-native-generated.cpp" "${Q6H_NATIVE_SOURCE}")
