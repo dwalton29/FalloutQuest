@@ -132,3 +132,7 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/q1210-default-backface-culling.cmake")
 # Q12.3 is diagnostic-only: log exact material/UV/vertex-colour and decoded
 # texture statistics for MegatonBrassLanternSign and MegatonChurchofAtom.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q1230-material-diagnostics.cmake")
+
+# Q12.4 fixes the Q12.3-proven PP-lit no-glow emissive whiteout/washout by
+# modulating emission with the sampled base colour instead of a flat white mask.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q1240-pplit-emissive-modulation.cmake")
