@@ -136,3 +136,8 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/q1230-material-diagnostics.cmake")
 # Q12.4 fixes the Q12.3-proven PP-lit no-glow emissive whiteout/washout by
 # modulating emission with the sampled base colour instead of a flat white mask.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q1240-pplit-emissive-modulation.cmake")
+
+# Q12.8 moves Fallout's final-frame look into a reusable OpenXR post stage and
+# drives it from the active CELL -> XCIM -> IMGS record: cinematic tint,
+# saturation/contrast/brightness and conservative authored HDR/bloom controls.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q1280-imagespace-post.cmake")
