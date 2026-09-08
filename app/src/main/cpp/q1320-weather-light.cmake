@@ -34,3 +34,8 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/q1340-hdr-display-domain.cmake")
 # Q13.5 restores the missing temporal HDR bridge: a tiny GPU log-luminance probe
 # updates one exposure history value from eye 0 and both stereo eyes consume it.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q1350-hdr-eye-adaptation.cmake")
+
+# Q13.6 fixes Q13.5's first-pass Target-LUM mapping. Device logs proved the old
+# target/scene formula saturated at 2x for every Megaton view, so remap the legacy
+# target into this renderer's luminance range and use a bounded sqrt response.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q1360-eye-adaptation-remap.cmake")
