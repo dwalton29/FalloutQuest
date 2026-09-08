@@ -143,3 +143,7 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/q1120-shader-vertexcolor-gate.cmake")
 # Q11.5 preserves NiAlphaProperty's authored source/destination blend functions
 # so additive/soft glow effect meshes are no longer forced through normal alpha.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q1150-authored-alpha-blend.cmake")
+
+# Q11.6 consumes BSShaderNoLightingProperty's authored view-angle falloff and
+# NiStencilProperty draw mode used by Megaton fake-shadow and glow geometry.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q1160-nolighting-falloff-stencil.cmake")
