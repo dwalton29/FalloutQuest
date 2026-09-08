@@ -84,3 +84,4 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/q1430-vanilla-exterior-shadow-semantics.cma
 # LEFT X toggles only the authored WTHR fog blend on statics + LAND. All lighting,
 # materials, TOD, ImageSpace, AO, exposure and bloom remain identical.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q1450-fog-ab.cmake")
+include("${CMAKE_CURRENT_SOURCE_DIR}/q1451-fog-ab-link.cmake")
