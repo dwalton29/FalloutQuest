@@ -75,3 +75,8 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/q1411-fog-power-land-bridge.cmake")
 # 3's default exterior rendering semantics. Directional Lambert shading remains;
 # only architecture/world cast-shadow visibility is disabled.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q1430-vanilla-exterior-shadow-semantics.cmake")
+
+# Q14.4 isolates the remaining static-model lighting question. LEFT X toggles
+# directional diffuse between the current tangent-space mapped normal and the
+# authored NIF vertex normal. LAND and every other lighting/post path stay fixed.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q1440-model-normal-ab.cmake")
