@@ -130,3 +130,7 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/q970-nif-lod-selection.cmake")
 # Q11.0 forbids cross-shape texture borrowing and logs the final authored
 # material binding for every rendered NIF shape.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q1100-strict-material-binding.cmake")
+
+# Q11.1 preserves truly textureless NoLighting geometry by using neutral white
+# behind authored vertex colours instead of the renderer's tan debug fallback.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q1110-nolighting-vertexcolor.cmake")
