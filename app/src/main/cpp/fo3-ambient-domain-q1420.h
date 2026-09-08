@@ -37,41 +37,42 @@ inline void SampleRawAmbient(const fo3todq1400::WeatherTimeQ1400& weather,
 } // namespace fo3ambientq1420
 
 inline void ApplyFo3AmbientDomainQ1420() {
-    using namespace fo3ambientq1420;
-    using namespace fo3todq1400;
-
-    if (!gRuntime.ready || !gRuntime.weather.haveNam0 ||
+    if (!fo3todq1400::gRuntime.ready || !fo3todq1400::gRuntime.weather.haveNam0 ||
         !gFo3EnvironmentQ1000.valid) {
         return;
     }
 
-    const TimeWeightsQ1400 weights = WeightsForHour(gTestHour, gRuntime.climate);
+    const fo3todq1400::TimeWeightsQ1400 weights =
+        fo3todq1400::WeightsForHour(fo3todq1400::gTestHour,
+                                    fo3todq1400::gRuntime.climate);
     float raw[3]{};
     float q139Linear[3]{};
-    SampleRawAmbient(gRuntime.weather, weights, raw);
-    SampleLinearRgb(gRuntime.weather, 3, weights, q139Linear);
+    fo3ambientq1420::SampleRawAmbient(fo3todq1400::gRuntime.weather, weights, raw);
+    fo3todq1400::SampleLinearRgb(fo3todq1400::gRuntime.weather, 3, weights, q139Linear);
 
     for (int c = 0; c < 3; ++c) {
         gFo3EnvironmentQ1000.ambient[c] = raw[c];
     }
 
-    if (gLoggedWeather != gRuntime.weather.formId) {
-        gLoggedWeather = gRuntime.weather.formId;
-        gLastLoggedHour = -1;
+    if (fo3ambientq1420::gLoggedWeather != fo3todq1400::gRuntime.weather.formId) {
+        fo3ambientq1420::gLoggedWeather = fo3todq1400::gRuntime.weather.formId;
+        fo3ambientq1420::gLastLoggedHour = -1;
         __android_log_print(
-            ANDROID_LOG_INFO, TAG,
+            ANDROID_LOG_INFO, fo3ambientq1420::TAG,
             "Q14.2 AMBIENT DOMAIN READY: weather=%08X EDID=%s source=Fallout3.esm NAM0class=Ambient activeDomain=raw-normalized-byte q139Comparison=sRGB-to-linear onlyAmbientChanged=1 filter=none tint=none",
-            gRuntime.weather.formId,
-            gRuntime.weather.editorId.empty() ? "<none>" : gRuntime.weather.editorId.c_str());
+            fo3todq1400::gRuntime.weather.formId,
+            fo3todq1400::gRuntime.weather.editorId.empty()
+                ? "<none>"
+                : fo3todq1400::gRuntime.weather.editorId.c_str());
     }
 
-    const int hourBucket = static_cast<int>(std::floor(gTestHour));
-    if (hourBucket != gLastLoggedHour) {
-        gLastLoggedHour = hourBucket;
+    const int hourBucket = static_cast<int>(std::floor(fo3todq1400::gTestHour));
+    if (hourBucket != fo3ambientq1420::gLastLoggedHour) {
+        fo3ambientq1420::gLastLoggedHour = hourBucket;
         __android_log_print(
-            ANDROID_LOG_INFO, TAG,
+            ANDROID_LOG_INFO, fo3ambientq1420::TAG,
             "Q14.2 AMBIENT: hour=%05.2f phase=%s encoded=(%.3f %.3f %.3f) q139Linear=(%.3f %.3f %.3f) active=(%.3f %.3f %.3f) source=WTHR/NAM0 noOtherColorPathChanged=1",
-            gTestHour, weights.phase,
+            fo3todq1400::gTestHour, weights.phase,
             raw[0], raw[1], raw[2],
             q139Linear[0], q139Linear[1], q139Linear[2],
             gFo3EnvironmentQ1000.ambient[0],
