@@ -134,3 +134,7 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/q1100-strict-material-binding.cmake")
 # Q11.1 preserves truly textureless NoLighting geometry by using neutral white
 # behind authored vertex colours instead of the renderer's tan debug fallback.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q1110-nolighting-vertexcolor.cmake")
+
+# Q11.2 honors Fallout 3 BSShaderFlags2::Vertex_Colors instead of multiplying
+# every available VCOL stream into lit diffuse textures.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q1120-shader-vertexcolor-gate.cmake")
