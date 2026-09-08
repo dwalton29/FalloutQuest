@@ -147,3 +147,8 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/q1150-authored-alpha-blend.cmake")
 # Q11.6 consumes BSShaderNoLightingProperty's authored view-angle falloff and
 # NiStencilProperty draw mode used by Megaton fake-shadow and glow geometry.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q1160-nolighting-falloff-stencil.cmake")
+
+# Q11.7 restores legacy NiTexturingProperty -> NiSourceTexture material paths
+# (used by FOOD/other FO3 effects) and applies authored decal depth bias to
+# coplanar sign/detail surfaces to stop VR z-fighting.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q1170-legacy-texturing-decal.cmake")
