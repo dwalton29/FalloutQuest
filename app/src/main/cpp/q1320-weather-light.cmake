@@ -60,3 +60,8 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/q1390-authored-color-space.cmake")
 # state. A temporary left-trigger fast-forward lets us sweep the actual authored
 # Sunrise/Day/Sunset/Night colours, IMADs and XEMI emittance in-headset.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q1400-time-of-day.cmake")
+
+# Q14.1 follows the spatial Megaton CELL's XCLR/XCIM links to the actual region
+# weather and ImageSpace, fixes the Fallout 3 152-byte IMGS cinematic tail, and
+# consumes the WTHR FNAM fog power. No hand-authored colour filter is added.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q1410-megaton-cell-environment.cmake")
