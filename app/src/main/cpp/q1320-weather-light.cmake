@@ -25,3 +25,8 @@ message(STATUS "Q13.2 authored weather sunlight/sky scaling enabled")
 # Q13.3 adds the authored WTHR cloud DDS layers, per-layer colours/speeds and
 # Sun colour/glare on top of the same proven gradient sky base.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q1330-weather-sky.cmake")
+
+# Q13.4 fixes the final-frame ordering mismatch that was crushing Megaton's dark
+# values: keep lighting/bloom linear, apply Fallout's cinematic controls in a
+# display-like transfer domain, then return to linear for the OpenXR sRGB target.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q1340-hdr-display-domain.cmake")
