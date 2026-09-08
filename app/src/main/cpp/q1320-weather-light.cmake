@@ -91,3 +91,8 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/q1451-fog-ab-link.cmake")
 # active gamma round-trip, switches cinematic luminance to 0.299/0.587/0.114,
 # and restores saturation -> tint -> brightness -> contrast ordering.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q1460-vanilla-cinematic.cmake")
+
+# Q14.7 tests the remaining coherent colour-domain hypothesis on static
+# BSShaderPPLighting world diffuse. LEFT Y switches BaseMap + WTHR Ambient and
+# Sunlight together between the current linear path and legacy encoded arithmetic.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q1470-pplighting-domain-ab.cmake")
