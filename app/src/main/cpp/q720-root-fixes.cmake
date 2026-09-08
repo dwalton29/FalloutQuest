@@ -126,3 +126,7 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/q1080-material-path-audit.cmake")
 # Q9.70 fixes NIF scene-graph visibility without replacing the current Q10.x
 # renderer/material stack: select NiLODNode/NiSwitchNode branches and hidden nodes.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q970-nif-lod-selection.cmake")
+
+# Q11.0 forbids cross-shape texture borrowing and logs the final authored
+# material binding for every rendered NIF shape.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q1100-strict-material-binding.cmake")
