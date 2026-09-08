@@ -2,7 +2,7 @@ name: Build Quest APK
 
 on:
   push:
-    branches: [main, q3-openxr]
+    branches: [main, q3-openxr, fix/megaton-land-elevation]
   pull_request:
     branches: [main]
   workflow_dispatch:
