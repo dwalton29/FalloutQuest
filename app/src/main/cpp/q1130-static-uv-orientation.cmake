@@ -44,6 +44,8 @@ if(Q1130_V_OK EQUAL -1 OR Q1130_N_OK EQUAL -1)
     message(FATAL_ERROR "Q11.3 static UV orientation verification failed")
 endif()
 
-# Q11.3 is now the final renderer mutation.
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/q6h-native-generated.cpp" "${Q6H_NATIVE_SOURCE}")
 message(STATUS "Q11.3 static DDS/Gamebryo UV orientation fixed")
+
+# Q11.4 preserves vertex alpha on textureless NoLighting overlay geometry.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q1140-nolighting-overlay-alpha.cmake")
