@@ -84,3 +84,7 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/q950-coherent-spatial-controller.cmake")
 # support inside one step is selected from the blocking object first, so a side
 # contact height cannot hide the actual stair/scrap landing surface.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q960-exact-footprint-support.cmake")
+
+# Q9.70 makes static NIF rendering scene-graph aware. Hidden/switch branches are
+# respected and NiLODNode is forced to child 0 (nearest/high-detail) for VR.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q970-nif-lod-selection.cmake")
