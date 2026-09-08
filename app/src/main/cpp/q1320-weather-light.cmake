@@ -76,7 +76,11 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/q1411-fog-power-land-bridge.cmake")
 # only architecture/world cast-shadow visibility is disabled.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q1430-vanilla-exterior-shadow-semantics.cmake")
 
-# Q14.4 isolates the remaining static-model lighting question. LEFT X toggles
-# directional diffuse between the current tangent-space mapped normal and the
-# authored NIF vertex normal. LAND and every other lighting/post path stay fixed.
-include("${CMAKE_CURRENT_SOURCE_DIR}/q1440-model-normal-ab.cmake")
+# Q14.4's model-normal A/B is retained as a falsified diagnostic but is not
+# active in this build. Device testing showed essentially no change in the broad
+# cyan/green cast when directional diffuse used authored NIF vertex normals.
+
+# Q14.5 now isolates the distance/veiling path visible in the same captures.
+# LEFT X toggles only the authored WTHR fog blend on statics + LAND. All lighting,
+# materials, TOD, ImageSpace, AO, exposure and bloom remain identical.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q1450-fog-ab.cmake")
