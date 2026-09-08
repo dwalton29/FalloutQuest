@@ -30,6 +30,10 @@ struct Fo3StaticNifMesh {
     bool alphaBlend = false;
     bool alphaTest = false;
     float alphaThreshold = 0.5f;
+    // Gamebryo NiAlphaProperty bits 1-4 / 5-8. Defaults preserve the old
+    // conventional SRC_ALPHA / ONE_MINUS_SRC_ALPHA path when no property exists.
+    uint8_t alphaSourceBlend = 6u;
+    uint8_t alphaDestBlend = 7u;
 };
 
 // Loads every fully renderable NiTriStrips/NiTriShape geometry block in an
