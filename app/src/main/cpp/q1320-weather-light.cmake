@@ -30,3 +30,7 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/q1330-weather-sky.cmake")
 # values: keep lighting/bloom linear, apply Fallout's cinematic controls in a
 # display-like transfer domain, then return to linear for the OpenXR sRGB target.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q1340-hdr-display-domain.cmake")
+
+# Q13.5 restores the missing temporal HDR bridge: a tiny GPU log-luminance probe
+# updates one exposure history value from eye 0 and both stereo eyes consume it.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q1350-hdr-eye-adaptation.cmake")
