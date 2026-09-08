@@ -175,6 +175,15 @@ inline float ApplyScalarQ1300(float base,
     return std::clamp(value, minValue, maxValue);
 }
 
+inline float NormalizeCinematicTintQ1310(float authoredValue) {
+    // GECK exposes Cinematic Tint R/G/B and Tint Alpha in the editor's
+    // 0..255 colour/intensity domain. The post shader operates in 0..1.
+    // Q13.0 incorrectly treated authored 1.0 as full-strength 1.0, turning
+    // WastelandDayISFX (0,0,1,1) into an opaque blue monochrome frame.
+    if (!std::isfinite(authoredValue)) return 0.0f;
+    return std::clamp(authoredValue, 0.0f, 255.0f) / 255.0f;
+}
+
 inline bool ApplyWeatherImadQ1300(Fo3ImageSpaceQ1280& image) {
     using namespace fo3envq1000;
     if (!image.valid || image.weatherDayImadFormId == 0u) return false;
@@ -226,15 +235,15 @@ inline bool ApplyWeatherImadQ1300(Fo3ImageSpaceQ1280& image) {
         image.cinematicFlags |= 0x08u;
     }
     if (modifier.tint.present) {
-        image.cinematicTint[0] = std::clamp(modifier.tint.rgba[0], 0.0f, 4.0f);
-        image.cinematicTint[1] = std::clamp(modifier.tint.rgba[1], 0.0f, 4.0f);
-        image.cinematicTint[2] = std::clamp(modifier.tint.rgba[2], 0.0f, 4.0f);
-        image.cinematicTintValue = std::clamp(modifier.tint.rgba[3], 0.0f, 1.0f);
+        image.cinematicTint[0] = NormalizeCinematicTintQ1310(modifier.tint.rgba[0]);
+        image.cinematicTint[1] = NormalizeCinematicTintQ1310(modifier.tint.rgba[1]);
+        image.cinematicTint[2] = NormalizeCinematicTintQ1310(modifier.tint.rgba[2]);
+        image.cinematicTintValue = NormalizeCinematicTintQ1310(modifier.tint.rgba[3]);
         image.cinematicFlags |= 0x04u;
     }
 
     __android_log_print(ANDROID_LOG_INFO, TAG,
-        "Q13.0 WEATHER IMAD APPLY: IMAD=%08X EDID=%s flags=0x%08X duration=%.3f mode=day-full-strength endpointKeys=1 blur=%.3f->%.3f threshold=%.3f->%.3f scale=%.3f->%.3f cinematicFlags=0x%02X->0x%02X sat=%.3f->%.3f brightness=%.3f->%.3f contrast=%.3f->%.3f tintPresent=%d tint=(%.3f %.3f %.3f %.3f) sunlightMult=%s skyMult=%s eyeAdapt=deferred",
+        "Q13.1 WEATHER IMAD APPLY: IMAD=%08X EDID=%s flags=0x%08X duration=%.3f mode=day-full-strength endpointKeys=1 blur=%.3f->%.3f threshold=%.3f->%.3f scale=%.3f->%.3f cinematicFlags=0x%02X->0x%02X sat=%.3f->%.3f brightness=%.3f->%.3f contrast=%.3f->%.3f tintPresent=%d tintRaw=(%.3f %.3f %.3f %.3f) tintShader=(%.6f %.6f %.6f %.6f) tintDomain=0..255 sunlightMult=%s skyMult=%s eyeAdapt=deferred",
         modifier.formId,
         modifier.editorId.empty() ? "<none>" : modifier.editorId.c_str(),
         modifier.flags, modifier.duration,
@@ -248,6 +257,8 @@ inline bool ApplyWeatherImadQ1300(Fo3ImageSpaceQ1280& image) {
         modifier.tint.present ? 1 : 0,
         modifier.tint.rgba[0], modifier.tint.rgba[1],
         modifier.tint.rgba[2], modifier.tint.rgba[3],
+        image.cinematicTint[0], image.cinematicTint[1],
+        image.cinematicTint[2], image.cinematicTintValue,
         modifier.sunlightScaleMult.present ? "present" : "none",
         modifier.skyScaleMult.present ? "present" : "none");
     return true;
