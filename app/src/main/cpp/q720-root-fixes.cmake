@@ -157,3 +157,8 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/q1170-legacy-texturing-decal.cmake")
 # the established colour pipeline: no emissive double-add and no falloff on
 # textureless NoLighting overlays.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q1190-nolighting-semantics.cmake")
+
+# Q12.0 obeys BSShaderFlags1::ZBuffer_Test and BSShaderFlags2::ZBuffer_Write per
+# material draw instead of forcibly disabling depth writes for all alpha blends.
+# This directly targets FOOD, Church of Atom alpha surfaces and SignStop02.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q1200-authored-zbuffer.cmake")
