@@ -65,3 +65,4 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/q1400-time-of-day.cmake")
 # weather and ImageSpace, fixes the Fallout 3 152-byte IMGS cinematic tail, and
 # consumes the WTHR FNAM fog power. No hand-authored colour filter is added.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q1410-megaton-cell-environment.cmake")
+include("${CMAKE_CURRENT_SOURCE_DIR}/q1411-fog-power-land-bridge.cmake")
