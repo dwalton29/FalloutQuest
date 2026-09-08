@@ -66,3 +66,8 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/q1400-time-of-day.cmake")
 # consumes the WTHR FNAM fog power. No hand-authored colour filter is added.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q1410-megaton-cell-environment.cmake")
 include("${CMAKE_CURRENT_SOURCE_DIR}/q1411-fog-power-land-bridge.cmake")
+
+# Q14.2 is a one-variable legacy colour-domain A/B: only WTHR Ambient uses the
+# ESM's normalized RGB bytes directly. Sky/fog/sun/sunlight/LIGH/XEMI retain the
+# Q13.9 transfer path so we can isolate the persistent cyan-shadow mismatch.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q1420-ambient-domain-test.cmake")
