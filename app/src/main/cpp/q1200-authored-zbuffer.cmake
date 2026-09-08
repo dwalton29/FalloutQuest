@@ -14,8 +14,6 @@
 # Preserve the existing opaque/alpha pass split and blend functions, but apply
 # authored depth-test/depth-write state immediately before every object draw.
 
-# GPU object: derive the two depth bits directly from the already-preserved
-# BSShaderPPLightingProperty / BSShaderNoLightingProperty shader flags.
 string(REPLACE
     "    uint8_t alphaDestBlend = 7u;"
     "    uint8_t alphaDestBlend = 7u;\n    bool zBufferTestQ1200 = true;\n    bool zBufferWriteQ1200 = true;"
@@ -40,8 +38,6 @@ endif()
 string(REPLACE "${Q1200_OLD_ASSIGN}" "${Q1200_NEW_ASSIGN}"
        Q6H_NATIVE_SOURCE "${Q6H_NATIVE_SOURCE}")
 
-# Save the incoming depth-test enable alongside the depth write mask already
-# preserved by RenderScene.
 set(Q1200_OLD_DEPTH_SAVE [==[
     const GLboolean blendWasEnabled = glIsEnabled(GL_BLEND);
     GLboolean previousDepthMask = GL_TRUE;
@@ -58,9 +54,6 @@ endif()
 string(REPLACE "${Q1200_OLD_DEPTH_SAVE}" "${Q1200_NEW_DEPTH_SAVE}"
        Q6H_NATIVE_SOURCE "${Q6H_NATIVE_SOURCE}")
 
-# Q11.5's final renderer has an opaque pass followed by an authored blend pass.
-# Apply Bethesda's Z test/write flags for each object instead of forcing one
-# global depth-write policy for the entire pass.
 set(Q1200_OLD_PASSES [==[
     // Opaque and alpha-tested cutouts first. Alpha testing still writes depth,
     // which is what FO3 fences/grates/wires expect.
@@ -81,10 +74,6 @@ set(Q1200_OLD_PASSES [==[
     }
 ]==])
 set(Q1200_NEW_PASSES [==[
-    // Opaque/alpha-tested cutouts first, with the exact authored Bethesda Z
-    // state.  ZBuffer_Write remains valid even when NiAlphaProperty also enables
-    // blending; Gamebryo did not implicitly disable it merely because blending
-    // was active.
     glDisable(GL_BLEND);
     for (const GpuObject& object : gObjects) {
         if (object.alphaBlend) continue;
@@ -93,9 +82,6 @@ set(Q1200_NEW_PASSES [==[
         DrawSceneObject(object);
     }
 
-    // Authored alpha blend pass.  Crucially, do NOT force depth writes off:
-    // FOOD, SignStop02 and several Church of Atom shapes explicitly request
-    // BSShaderFlags2::ZBuffer_Write.
     glEnable(GL_BLEND);
     for (const GpuObject& object : gObjects) {
         if (!object.alphaBlend) continue;
@@ -113,7 +99,6 @@ endif()
 string(REPLACE "${Q1200_OLD_PASSES}" "${Q1200_NEW_PASSES}"
        Q6H_NATIVE_SOURCE "${Q6H_NATIVE_SOURCE}")
 
-# Restore the caller's depth state as well as its depth mask.
 set(Q1200_OLD_RESTORE [==[
     glDepthMask(previousDepthMask);
     glBlendFuncSeparate(static_cast<GLenum>(previousBlendSrcRgb),
@@ -139,3 +124,7 @@ endif()
 
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/q6h-native-generated.cpp" "${Q6H_NATIVE_SOURCE}")
 message(STATUS "Q12.0 authored Fallout 3 Z-buffer test/write state enabled")
+
+# Q12.1 restores Gamebryo's default single-sided static rendering. NiStencil
+# remains the explicit Fallout 3 override for two-sided/reversed face drawing.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q1210-default-backface-culling.cmake")
