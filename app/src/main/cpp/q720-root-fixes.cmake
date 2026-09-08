@@ -136,5 +136,10 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/q1100-strict-material-binding.cmake")
 include("${CMAKE_CURRENT_SOURCE_DIR}/q1110-nolighting-vertexcolor.cmake")
 
 # Q11.2 honors Fallout 3 BSShaderFlags2::Vertex_Colors instead of multiplying
-# every available VCOL stream into lit diffuse textures.
+# every available VCOL stream into lit diffuse textures. Q11.2 chains Q11.3 and
+# Q11.4 (UV orientation + textureless NoLighting overlay alpha).
 include("${CMAKE_CURRENT_SOURCE_DIR}/q1120-shader-vertexcolor-gate.cmake")
+
+# Q11.5 preserves NiAlphaProperty's authored source/destination blend functions
+# so additive/soft glow effect meshes are no longer forced through normal alpha.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q1150-authored-alpha-blend.cmake")
