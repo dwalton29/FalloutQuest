@@ -67,7 +67,11 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/q1400-time-of-day.cmake")
 include("${CMAKE_CURRENT_SOURCE_DIR}/q1410-megaton-cell-environment.cmake")
 include("${CMAKE_CURRENT_SOURCE_DIR}/q1411-fog-power-land-bridge.cmake")
 
-# Q14.2 is a one-variable legacy colour-domain A/B: only WTHR Ambient uses the
-# ESM's normalized RGB bytes directly. Sky/fog/sun/sunlight/LIGH/XEMI retain the
-# Q13.9 transfer path so we can isolate the persistent cyan-shadow mismatch.
-include("${CMAKE_CURRENT_SOURCE_DIR}/q1420-ambient-domain-test.cmake")
+# Q14.2's Ambient-domain A/B is retained in the repository as a falsified
+# diagnostic but is deliberately not active from Q14.3 onward. Device testing
+# showed that changing that transfer did not remove the cyan shadow character.
+
+# Q14.3 removes Q10.5's Quest-added static/LAND cast-shadow map to match Fallout
+# 3's default exterior rendering semantics. Directional Lambert shading remains;
+# only architecture/world cast-shadow visibility is disabled.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q1430-vanilla-exterior-shadow-semantics.cmake")
