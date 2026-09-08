@@ -51,13 +51,13 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: FalloutQuest-${{ github.ref_name }}-build-log
+          name: FalloutQuest-build-log
           path: build-output.log
           if-no-files-found: warn
 
       - name: Upload FalloutQuest APK
         uses: actions/upload-artifact@v4
         with:
-          name: FalloutQuest-${{ github.ref_name }}-debug
+          name: FalloutQuest-debug
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
