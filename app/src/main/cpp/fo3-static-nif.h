@@ -34,6 +34,17 @@ struct Fo3StaticNifMesh {
     // conventional SRC_ALPHA / ONE_MINUS_SRC_ALPHA path when no property exists.
     uint8_t alphaSourceBlend = 6u;
     uint8_t alphaDestBlend = 7u;
+
+    // Fallout 3 BSShaderNoLightingProperty carries four view-angle falloff
+    // floats after File Name (Bethesda NIF version >= 27). These modulate alpha.
+    bool noLightingFalloff = false;
+    float noLightingFalloffParams[4]{0.0f, 1.0f, 1.0f, 1.0f};
+
+    // NiStencilProperty draw mode controls face winding / two-sided rendering.
+    // Full stencil-buffer actions are intentionally not required for this first
+    // visual-fidelity path; draw mode alone is authored independently of enable.
+    bool stencilDrawModePresent = false;
+    uint8_t stencilDrawMode = 0u;
 };
 
 // Loads every fully renderable NiTriStrips/NiTriShape geometry block in an
