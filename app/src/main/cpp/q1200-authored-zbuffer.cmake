@@ -128,3 +128,7 @@ message(STATUS "Q12.0 authored Fallout 3 Z-buffer test/write state enabled")
 # Q12.1 restores Gamebryo's default single-sided static rendering. NiStencil
 # remains the explicit Fallout 3 override for two-sided/reversed face drawing.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q1210-default-backface-culling.cmake")
+
+# Q12.3 is diagnostic-only: log exact material/UV/vertex-colour and decoded
+# texture statistics for MegatonBrassLanternSign and MegatonChurchofAtom.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q1230-material-diagnostics.cmake")
