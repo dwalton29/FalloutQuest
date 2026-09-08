@@ -353,15 +353,17 @@ string(REPLACE "${Q970_ROOT_MARKER}" "${Q970_ROOT_INJECT}"
 
 set(Q970_SHAPE_LOOP_MARKER [==[
         if (type != "NiTriStrips" && type != "NiTriShape") continue;
+        ++q1060ShapeBlocks;
 
         ShapeObject shape;
 ]==])
 string(FIND "${Q970_NIF_SOURCE}" "${Q970_SHAPE_LOOP_MARKER}" Q970_SHAPE_LOOP_POS)
 if(Q970_SHAPE_LOOP_POS EQUAL -1)
-    message(FATAL_ERROR "Q9.70 could not find multi-loader shape loop")
+    message(FATAL_ERROR "Q9.70 could not find current Q10.9 multi-loader shape loop")
 endif()
 set(Q970_SHAPE_LOOP_REPLACEMENT [==[
         if (type != "NiTriStrips" && type != "NiTriShape") continue;
+        ++q1060ShapeBlocks;
         if (q970SelectionReady &&
             (block >= q970Renderable.size() || q970Renderable[block] == 0u)) {
             continue;
