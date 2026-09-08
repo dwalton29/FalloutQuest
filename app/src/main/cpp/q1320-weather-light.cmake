@@ -55,3 +55,8 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/q1381-external-emittance-diagnostics.cmake"
 # LIGH and XEMI RGB bytes are decoded through the standard sRGB transfer before
 # entering the linear-light renderer. This is a transfer correction, not a tint.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q1390-authored-color-space.cmake")
+
+# Q14.0 replaces the frozen Day endpoint with the active CLMT/WTHR time-of-day
+# state. A temporary left-trigger fast-forward lets us sweep the actual authored
+# Sunrise/Day/Sunset/Night colours, IMADs and XEMI emittance in-headset.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q1400-time-of-day.cmake")
