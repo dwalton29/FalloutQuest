@@ -152,8 +152,3 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/q1160-nolighting-falloff-stencil.cmake")
 # (used by FOOD/other FO3 effects) and applies authored decal depth bias to
 # coplanar sign/detail surfaces to stop VR z-fighting.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q1170-legacy-texturing-decal.cmake")
-
-# Q11.8 resolves controller-owned legacy textures (NiFlipController first frame)
-# and samples authored diffuse/LAND colour DDS in sRGB while keeping shader-data
-# maps linear.
-include("${CMAKE_CURRENT_SOURCE_DIR}/q1180-flip-srgb.cmake")
