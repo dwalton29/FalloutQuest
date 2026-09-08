@@ -85,40 +85,6 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/q950-coherent-spatial-controller.cmake")
 # contact height cannot hide the actual stair/scrap landing surface.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q960-exact-footprint-support.cmake")
 
-# Q10.0 ports the exterior visual environment without touching the movement
-# stack: authored WRLD/CLMT/WTHR sky + lighting and the real Megaton gate spawn.
-include("${CMAKE_CURRENT_SOURCE_DIR}/q1000-environment-sky.cmake")
-
-# Q10.1 restores depth cues that are already authored in Fallout3.esm:
-# WTHR fog, LAND/VNML smooth normals, and placed REFR -> LIGH local lighting.
-include("${CMAKE_CURRENT_SOURCE_DIR}/q1010-visual-depth.cmake")
-
-# Q10.2 preserves Fallout 3's authored NIF material behaviour: vertex colours,
-# NoLighting geometry, emissive/glow data and shader-controlled specular.
-include("${CMAKE_CURRENT_SOURCE_DIR}/q1020-material-fidelity.cmake")
-
-# Q10.3 removes the MegatonPlayerHouse bootstrap entirely. Native startup now
-# creates only the renderer, then loads MegatonEntrance from the authored gate
-# XTEL as the first scene/collision/terrain context.
-include("${CMAKE_CURRENT_SOURCE_DIR}/q1030-direct-megaton-entry.cmake")
-
-# Q10.4 resolves the first-entry gate by the authored cross-world transition
-# itself (Capital Wasteland -> Megaton), rather than assuming where Bethesda
-# grouped the destination reference inside the ESM.
-include("${CMAKE_CURRENT_SOURCE_DIR}/q1040-robust-megaton-gate.cmake")
-
-# Q10.5 adds a cached Quest-safe directional sun shadow map shared by both eyes.
-# Fallout statics and LAND cast/receive; collision and locomotion remain untouched.
-include("${CMAKE_CURRENT_SOURCE_DIR}/q1050-sun-shadows.cmake")
-
-# Q10.6 restores LAND VCLR and TXST/TX01 normal/specular materials, and audits
-# every NIF geometry block so partial building models cannot fail silently.
-include("${CMAKE_CURRENT_SOURCE_DIR}/q1060-asset-fidelity-repair.cmake")
-
-# Q10.7 retains only the device-verified terrain/filtering improvements. The
-# unsafe parent-material inheritance and unused SCOL experiment are rolled back.
-include("${CMAKE_CURRENT_SOURCE_DIR}/q1070-world-fidelity.cmake")
-
-# Q10.8 identifies the exact NiProperty types behind the remaining one-shape
-# fallback materials on complex Megaton buildings, with no visual guesswork.
-include("${CMAKE_CURRENT_SOURCE_DIR}/q1080-material-path-audit.cmake")
+# Q9.70 makes static NIF rendering scene-graph aware. Hidden/switch branches are
+# respected and NiLODNode is forced to child 0 (nearest/high-detail) for VR.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q970-nif-lod-selection.cmake")
