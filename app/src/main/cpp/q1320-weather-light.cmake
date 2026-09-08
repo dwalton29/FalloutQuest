@@ -49,3 +49,4 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/q1370-contact-ao.cmake")
 # Megaton and gates them with the NIF External Emittance shader flag. Fixed LIGH
 # emittance and REGN->WTHR Day endpoints now drive rendered glow/emissive shapes.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q1380-external-emittance.cmake")
+include("${CMAKE_CURRENT_SOURCE_DIR}/q1381-external-emittance-diagnostics.cmake")
