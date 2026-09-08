@@ -50,3 +50,8 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/q1370-contact-ao.cmake")
 # emittance and REGN->WTHR Day endpoints now drive rendered glow/emissive shapes.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q1380-external-emittance.cmake")
 include("${CMAKE_CURRENT_SOURCE_DIR}/q1381-external-emittance-diagnostics.cmake")
+
+# Q13.9 fixes the remaining colour-domain mismatch: Fallout's authored WTHR,
+# LIGH and XEMI RGB bytes are decoded through the standard sRGB transfer before
+# entering the linear-light renderer. This is a transfer correction, not a tint.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q1390-authored-color-space.cmake")
