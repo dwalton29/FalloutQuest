@@ -44,3 +44,8 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/q1360-eye-adaptation-remap.cmake")
 # 8-tap contact AO pass to ground Bethesda-placed geometry without changing any
 # authored ESM lighting, ImageSpace or material values.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q1370-contact-ao.cmake")
+
+# Q13.8 consumes the reference-level XEMI records actually authored throughout
+# Megaton and gates them with the NIF External Emittance shader flag. Fixed LIGH
+# emittance and REGN->WTHR Day endpoints now drive rendered glow/emissive shapes.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q1380-external-emittance.cmake")
