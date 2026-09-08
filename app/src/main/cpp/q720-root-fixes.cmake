@@ -152,3 +152,8 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/q1160-nolighting-falloff-stencil.cmake")
 # (used by FOOD/other FO3 effects) and applies authored decal depth bias to
 # coplanar sign/detail surfaces to stop VR z-fighting.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q1170-legacy-texturing-decal.cmake")
+
+# Q11.9 corrects Fallout 3 NoLighting colour/falloff semantics without changing
+# the established colour pipeline: no emissive double-add and no falloff on
+# textureless NoLighting overlays.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q1190-nolighting-semantics.cmake")
