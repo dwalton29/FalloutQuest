@@ -10,6 +10,10 @@
 # - 4x anisotropic filtering when the Quest driver exposes it
 include("${CMAKE_CURRENT_SOURCE_DIR}/q1070-texture-terrain-fidelity.cmake")
 
+# Q12.5 is diagnostic only: correlate the exact child LAND records whose VHGT
+# was replaced from the parent with their child-vs-parent material payloads.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q1250-repaired-land-material-audit.cmake")
+
 # Final generated outputs for this milestone.
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/fo3-static-nif-q6h.cpp" "${Q6H_NIF_SOURCE}")
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/fo3-worldspace-q720.cpp" "${Q720_WORLDSPACE_SOURCE}")
