@@ -120,3 +120,9 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/q1510-ambient-strength.cmake")
 # equations decoded from the exact PC Shader Package 17 HDR shaders. Q15.1's
 # lighting A/B remains untouched; this phase targets the remaining washout.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q1520-sp17-hdr-tone.cmake")
+
+# Q15.3b replaces the failed first vertex-fog experiment with the exact SP17
+# metric decoded from SLS1011.vso: pre-divide ModelViewProj.xyz distance,
+# nonlinear fog evaluated per vertex, then rasterizer interpolation. Q15.2's
+# current per-fragment fog remains the default; LEFT X selects the SP17 path.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q1532-sp17-projected-vertex-fog.cmake")
