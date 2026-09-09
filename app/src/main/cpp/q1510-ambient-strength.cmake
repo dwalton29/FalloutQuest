@@ -73,3 +73,8 @@ file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/fo3-terrain-render-q720.cpp"
      "${Q720_TERRAIN_RENDER_SOURCE}")
 
 message(STATUS "Q15.1 neutral Ambient at 65% + authored Sunlight RGB A/B enabled on LEFT Y for statics + LAND")
+
+# Q15.3 uses the already-proven LEFT X fog diagnostic state to compare the
+# current per-fragment nonlinear fog against Shader Package 17's per-vertex
+# evaluation + rasterizer interpolation. Fog RGB/near/far/power are unchanged.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q1530-sp17-vertex-fog.cmake")
