@@ -110,3 +110,8 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/q1490-world-light-chroma-isolation.cmake")
 # the authored Q13.9/Q14.0 Sunlight RGB. This isolates whether ambient is the
 # broad cyan carrier while recovering Fallout 3's warm directional light.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q1500-ambient-neutral-authored-sunlight.cmake")
+
+# Q15.1 keeps Q15.0's successful non-cyan colour split but reduces only the
+# neutral ambient fill to 65%. Authored warm sunlight remains unchanged; this
+# isolates the remaining flat/washed appearance as an ambient-strength issue.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q1510-ambient-strength.cmake")
