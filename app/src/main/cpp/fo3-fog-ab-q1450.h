@@ -1,9 +1,12 @@
 #pragma once
 
-// Q14.5: one-bit runtime state for the exterior fog A/B.
-// Default preserves Q14.4/Q14.3 behaviour. LEFT X toggles only whether the
-// already-authored WTHR fog contribution is blended into static + LAND pixels.
-// No weather RGB, light, ImageSpace, exposure, material or terrain state changes.
+// Q15.3b reuses Q14.5's proven LEFT X state as a fog-path A/B selector.
+// true/default = known-good Q15.2 per-fragment world/eye-distance fog.
+// false        = Shader Package 17 projected-XYZ per-vertex/interpolated fog.
+// WTHR fog RGB/near/far/power are identical in both modes.
+//
+// Legacy getter names stay intact so the existing renderer/OpenXR wiring remains
+// unchanged; only the meaning of the false state changes from FOG_OFF to SP17.
 
 inline bool gFo3FogEnabledQ1450 = true;
 
@@ -16,5 +19,7 @@ inline void ToggleFo3FogEnabledQ1450() {
 }
 
 inline const char* GetFo3FogModeNameQ1450() {
-    return gFo3FogEnabledQ1450 ? "AUTHORED_FOG" : "FOG_OFF";
+    return gFo3FogEnabledQ1450
+        ? "QUEST_FRAGMENT_FOG"
+        : "SP17_PROJECTED_VERTEX_FOG";
 }
