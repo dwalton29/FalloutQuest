@@ -1,10 +1,10 @@
 #pragma once
 
-// Q14.8 reuses Q14.7's proven LEFT Y action/state, but the old legacy
-// BaseMap re-encode experiment is no longer the active diagnostic. LEFT Y now
-// switches only the WTHR Ambient/Sunlight constants supplied to both static
-// BSShaderPPLighting and LAND between Q13.9 sRGB-decoded values and Fallout 3's
-// raw normalized byte values. The shader arithmetic itself stays unchanged.
+// Q14.9 reuses Q14.7's proven LEFT Y action/state. Q14.8's raw-WTHR staging
+// experiment is now dormant after device testing showed it only made the same
+// blue-biased lighting brighter. LEFT Y now removes only the chroma from the
+// current Q13.9/Q14.0 Ambient + Sunlight constants on statics and LAND while
+// preserving each light's linear luminance. Shader arithmetic stays unchanged.
 
 inline bool gFo3LegacyPpDiffuseDomainQ1470 = false;
 
@@ -18,6 +18,6 @@ inline void ToggleFo3LegacyPpDiffuseDomainQ1470() {
 
 inline const char* GetFo3PpDiffuseDomainNameQ1470() {
     return gFo3LegacyPpDiffuseDomainQ1470
-        ? "RAW_WTHR_BYTE_OVER_255"
-        : "Q1390_SRGB_TO_LINEAR";
+        ? "NEUTRAL_WORLD_LIGHT_CHROMA"
+        : "AUTHORED_WORLD_LIGHT_CHROMA";
 }
