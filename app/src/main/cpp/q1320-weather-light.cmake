@@ -96,7 +96,12 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/q1460-vanilla-cinematic.cmake")
 # branch as a dormant diagnostic implementation.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q1470-pplighting-domain-ab.cmake")
 
-# Q14.8 replaces LEFT Y's active meaning with the Fallout3.exe-guided WTHR
-# constant-staging test. BaseMap stays on the normal linear/sRGB-sampled path;
-# Ambient + Sunlight alone switch to raw NAM0 byte/255 values on statics + LAND.
+# Q14.8 is retained as a falsified raw-WTHR staging diagnostic. Device testing
+# showed raw byte/255 Ambient + Sunlight made Megaton brighter but preserved the
+# same blue bias, ruling out Q13.9 RGB transfer as the primary cause.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q1480-weather-byte-staging-ab.cmake")
+
+# Q14.9 reuses LEFT Y for a clean chroma isolation: current Q13.9/Q14.0 Ambient
+# + Sunlight keep their linear luminance but become neutral R=G=B on statics and
+# LAND. If the cyan survives this, it is downstream or material/BaseMap-derived.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q1490-world-light-chroma-isolation.cmake")
