@@ -1,10 +1,11 @@
 #pragma once
 
-// Q14.9 reuses Q14.7's proven LEFT Y action/state. Q14.8's raw-WTHR staging
-// experiment is now dormant after device testing showed it only made the same
-// blue-biased lighting brighter. LEFT Y now removes only the chroma from the
-// current Q13.9/Q14.0 Ambient + Sunlight constants on statics and LAND while
-// preserving each light's linear luminance. Shader arithmetic stays unchanged.
+// Q15.0 reuses Q14.7's proven LEFT Y action/state. Q14.8's raw-WTHR staging
+// experiment is dormant, and Q14.9 proved that removing world-light chroma
+// removes Megaton's cyan cast. Q15.0 narrows that successful isolation: LEFT Y
+// neutralizes only Ambient chroma at the same linear luminance while leaving the
+// authored Q13.9/Q14.0 Sunlight RGB untouched on statics and LAND. Shader
+// arithmetic stays unchanged.
 
 inline bool gFo3LegacyPpDiffuseDomainQ1470 = false;
 
@@ -18,6 +19,6 @@ inline void ToggleFo3LegacyPpDiffuseDomainQ1470() {
 
 inline const char* GetFo3PpDiffuseDomainNameQ1470() {
     return gFo3LegacyPpDiffuseDomainQ1470
-        ? "NEUTRAL_WORLD_LIGHT_CHROMA"
+        ? "NEUTRAL_AMBIENT_AUTHORED_SUNLIGHT"
         : "AUTHORED_WORLD_LIGHT_CHROMA";
 }
