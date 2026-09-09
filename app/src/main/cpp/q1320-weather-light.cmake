@@ -115,3 +115,8 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/q1500-ambient-neutral-authored-sunlight.cma
 # neutral ambient fill to 65%. Authored warm sunlight remains unchanged; this
 # isolates the remaining flat/washed appearance as an ambient-strength issue.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q1510-ambient-strength.cmake")
+
+# Q15.2 replaces the guessed Q13.5/Q13.6 scalar-exposure tone path with the
+# equations decoded from the exact PC Shader Package 17 HDR shaders. Q15.1's
+# lighting A/B remains untouched; this phase targets the remaining washout.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q1520-sp17-hdr-tone.cmake")
