@@ -101,7 +101,12 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/q1470-pplighting-domain-ab.cmake")
 # same blue bias, ruling out Q13.9 RGB transfer as the primary cause.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q1480-weather-byte-staging-ab.cmake")
 
-# Q14.9 reuses LEFT Y for a clean chroma isolation: current Q13.9/Q14.0 Ambient
-# + Sunlight keep their linear luminance but become neutral R=G=B on statics and
-# LAND. If the cyan survives this, it is downstream or material/BaseMap-derived.
+# Q14.9 proved the cyan lives in world-light chroma: neutralizing Ambient +
+# Sunlight removes the cast. It remains in the pipeline as the proven diagnostic
+# layer that Q15.0 narrows further.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q1490-world-light-chroma-isolation.cmake")
+
+# Q15.0 keeps Ambient neutral at the same Rec.709 linear luminance but restores
+# the authored Q13.9/Q14.0 Sunlight RGB. This isolates whether ambient is the
+# broad cyan carrier while recovering Fallout 3's warm directional light.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q1500-ambient-neutral-authored-sunlight.cmake")
