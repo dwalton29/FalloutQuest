@@ -1,10 +1,10 @@
 #pragma once
 
-// Q14.7: runtime A/B for the static BSShaderPPLighting world-light diffuse
-// colour domain. Default A preserves the established FalloutQuest linear-light
-// path. LEFT Y switches only BaseMap + WTHR Ambient/Sunlight diffuse arithmetic
-// to a legacy encoded-domain emulation, then decodes that result back to the
-// renderer's linear buffer before specular/local lights/emissive/fog/post.
+// Q14.8 reuses Q14.7's proven LEFT Y action/state, but the old legacy
+// BaseMap re-encode experiment is no longer the active diagnostic. LEFT Y now
+// switches only the WTHR Ambient/Sunlight constants supplied to both static
+// BSShaderPPLighting and LAND between Q13.9 sRGB-decoded values and Fallout 3's
+// raw normalized byte values. The shader arithmetic itself stays unchanged.
 
 inline bool gFo3LegacyPpDiffuseDomainQ1470 = false;
 
@@ -18,6 +18,6 @@ inline void ToggleFo3LegacyPpDiffuseDomainQ1470() {
 
 inline const char* GetFo3PpDiffuseDomainNameQ1470() {
     return gFo3LegacyPpDiffuseDomainQ1470
-        ? "LEGACY_ENCODED_DIFFUSE"
-        : "CURRENT_LINEAR_DIFFUSE";
+        ? "RAW_WTHR_BYTE_OVER_255"
+        : "Q1390_SRGB_TO_LINEAR";
 }

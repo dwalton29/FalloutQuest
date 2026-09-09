@@ -92,7 +92,11 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/q1451-fog-ab-link.cmake")
 # and restores saturation -> tint -> brightness -> contrast ordering.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q1460-vanilla-cinematic.cmake")
 
-# Q14.7 tests the remaining coherent colour-domain hypothesis on static
-# BSShaderPPLighting world diffuse. LEFT Y switches BaseMap + WTHR Ambient and
-# Sunlight together between the current linear path and legacy encoded arithmetic.
+# Q14.7 retains the proven LEFT Y input/state and its old encoded-domain shader
+# branch as a dormant diagnostic implementation.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q1470-pplighting-domain-ab.cmake")
+
+# Q14.8 replaces LEFT Y's active meaning with the Fallout3.exe-guided WTHR
+# constant-staging test. BaseMap stays on the normal linear/sRGB-sampled path;
+# Ambient + Sunlight alone switch to raw NAM0 byte/255 values on statics + LAND.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q1480-weather-byte-staging-ab.cmake")
