@@ -22,3 +22,7 @@ endif()
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/fo3-terrain-render-q720.cpp"
      "${Q720_TERRAIN_RENDER_SOURCE}")
 message(STATUS "Q15.6 terrain render-stage link fixed via shared inline state")
+
+# Q15.7 runs after the Q15.6 terrain link rewrite so both generated render
+# translation units and the final OpenXR source can share the new domain toggle.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q1570-legacy-colour-domain-ab.cmake")
