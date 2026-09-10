@@ -1,24 +1,28 @@
 #pragma once
 
-// Q15.1 reuses Q14.7's proven LEFT Y action/state. Q14.9 proved that removing
-// world-light chroma removes Megaton's cyan cast, and Q15.0 narrowed the fix to
-// neutral Ambient while preserving authored warm Sunlight. Q15.1 keeps that
-// colour split and reduces only the neutral Ambient luminance to 65% on statics
-// and LAND to test the remaining flat/washed appearance. Shader arithmetic and
-// all other rendering paths stay unchanged.
+// Q15.5: authored Fallout world lighting only.
+//
+// LEFT Y was previously reused by a chain of renderer diagnostics (legacy
+// encoded-domain diffuse, raw WTHR byte staging, neutral world-light chroma,
+// neutral Ambient + authored Sunlight, then neutral Ambient at 65%). Those were
+// useful to isolate the cyan carrier, but they are not vanilla lighting and must
+// not remain selectable while we diagnose final fidelity.
+//
+// Keep the legacy symbol names so the existing CMake patch chain and OpenXR
+// action plumbing continue to compile, but permanently pin the state to the
+// authored path. LEFT Y is therefore a no-op from Q15.5 onward.
 
 inline bool gFo3LegacyPpDiffuseDomainQ1470 = false;
 
 inline bool GetFo3LegacyPpDiffuseDomainQ1470() {
-    return gFo3LegacyPpDiffuseDomainQ1470;
+    return false;
 }
 
 inline void ToggleFo3LegacyPpDiffuseDomainQ1470() {
-    gFo3LegacyPpDiffuseDomainQ1470 = !gFo3LegacyPpDiffuseDomainQ1470;
+    // Q15.5: intentionally disabled. Authored lighting is the only valid state.
+    gFo3LegacyPpDiffuseDomainQ1470 = false;
 }
 
 inline const char* GetFo3PpDiffuseDomainNameQ1470() {
-    return gFo3LegacyPpDiffuseDomainQ1470
-        ? "NEUTRAL_AMBIENT_65PCT_AUTHORED_SUNLIGHT"
-        : "AUTHORED_WORLD_LIGHT_CHROMA";
+    return "AUTHORED_WORLD_LIGHT_ONLY";
 }
