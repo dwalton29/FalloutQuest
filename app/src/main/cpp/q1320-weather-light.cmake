@@ -126,3 +126,9 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/q1520-sp17-hdr-tone.cmake")
 # nonlinear fog evaluated per vertex, then rasterizer interpolation. Q15.2's
 # current per-fragment fog remains the default; LEFT X selects the SP17 path.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q1532-sp17-projected-vertex-fog.cmake")
+
+# Q15.4 retires the fog selector and isolates the first proven PPLighting math
+# mismatch against Shader Package 17. LEFT X now switches only static/NIF diffuse
+# lighting between Quest's world-space mapped-normal path and SLS1011's
+# per-vertex tangent-space LightData path. Fog is Q15.2-identical on both sides.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q1540-sp17-tangent-light-ab.cmake")

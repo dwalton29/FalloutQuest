@@ -1,12 +1,14 @@
 #pragma once
 
-// Q15.3b reuses Q14.5's proven LEFT X state as a fog-path A/B selector.
-// true/default = known-good Q15.2 per-fragment world/eye-distance fog.
-// false        = Shader Package 17 projected-XYZ per-vertex/interpolated fog.
-// WTHR fog RGB/near/far/power are identical in both modes.
+// Q15.4 reuses Q14.5's proven LEFT X one-bit state as a PPLighting-path
+// selector. Fog is no longer controlled by this state: Q15.4 forces the same
+// Q15.2 authored per-fragment fog in both modes.
 //
-// Legacy getter names stay intact so the existing renderer/OpenXR wiring remains
-// unchanged; only the meaning of the false state changes from FOG_OFF to SP17.
+// true/default = current FalloutQuest world-space mapped-normal Lambert path.
+// false        = Shader Package 17 SLS1011 tangent-space LightData path.
+//
+// Legacy getter/function names stay intact so the established renderer,
+// terrain bridge and OpenXR input wiring do not need another state system.
 
 inline bool gFo3FogEnabledQ1450 = true;
 
@@ -20,6 +22,6 @@ inline void ToggleFo3FogEnabledQ1450() {
 
 inline const char* GetFo3FogModeNameQ1450() {
     return gFo3FogEnabledQ1450
-        ? "QUEST_FRAGMENT_FOG"
-        : "SP17_PROJECTED_VERTEX_FOG";
+        ? "QUEST_WORLD_NORMAL_LIGHT"
+        : "SP17_TANGENT_LIGHT";
 }
