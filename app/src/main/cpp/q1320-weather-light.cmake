@@ -132,3 +132,9 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/q1532-sp17-projected-vertex-fog.cmake")
 # lighting between Quest's world-space mapped-normal path and SLS1011's
 # per-vertex tangent-space LightData path. Fog is Q15.2-identical on both sides.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q1540-sp17-tangent-light-ab.cmake")
+
+# Q15.5 pins LEFT Y to authored Fallout Ambient + Sunlight only; the neutral and
+# 65%-Ambient diagnostics remain in source history but can no longer be selected.
+# Q15.6 retires Q15.4's X A/B and cycles whole render stages instead, so the
+# first stage that creates the Megaton mismatch can be identified in one capture.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q1560-render-stage-isolator.cmake")
