@@ -137,4 +137,11 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/q1540-sp17-tangent-light-ab.cmake")
 # 65%-Ambient diagnostics remain in source history but can no longer be selected.
 # Q15.6 retires Q15.4's X A/B and cycles whole render stages instead, so the
 # first stage that creates the Megaton mismatch can be identified in one capture.
+# The generated OpenXR source has accumulated several diagnostic label rewrites;
+# append a harmless build-marker so Q15.6 verifies the intended stage label
+# independently of those historical strings. This does not execute at runtime.
+set(Q1560_Q4_GUARD_INPUT "${CMAKE_CURRENT_BINARY_DIR}/q1280-q4-generated.cpp")
+if(EXISTS "${Q1560_Q4_GUARD_INPUT}")
+    file(APPEND "${Q1560_Q4_GUARD_INPUT}" "\n// Q15.6 RENDER STAGE MODE: build-guard marker\n")
+endif()
 include("${CMAKE_CURRENT_SOURCE_DIR}/q1560-render-stage-isolator.cmake")
