@@ -3,14 +3,19 @@
 # Draw a small vector label reading "Q15.10" just above the left Touch controller.
 # This is deliberately part of the rendered VR scene rather than logcat so every
 # test immediately proves which APK is actually running. The label inherits the
-# authored left-hand pose/MVP, uses the existing tiny q4 line-colour shader, and
-# draws with GL_ALWAYS so world geometry cannot hide the build identifier.
+# authored left-hand pose/MVP, uses the existing tiny OpenXR line-colour shader,
+# and draws with GL_ALWAYS so world geometry cannot hide the build identifier.
+#
+# Q12.8 moved the live OpenXR eye code out of q4-native.cpp into the generated
+# q1280-q4-generated.cpp. Q15.6/Q15.7 subsequently patch that same file. Q15.10
+# therefore edits the FINAL generated OpenXR source in place rather than trying
+# to replace the old q4 include in Q6H_NATIVE_SOURCE.
 
-set(Q1600_Q4_SOURCE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/q4-native.cpp")
-if(NOT EXISTS "${Q1600_Q4_SOURCE_PATH}")
-    message(FATAL_ERROR "Q15.10 expected q4-native.cpp")
+set(Q1600_Q4_INPUT "${CMAKE_CURRENT_BINARY_DIR}/q1280-q4-generated.cpp")
+if(NOT EXISTS "${Q1600_Q4_INPUT}")
+    message(FATAL_ERROR "Q15.10 expected final OpenXR source at ${Q1600_Q4_INPUT}")
 endif()
-file(READ "${Q1600_Q4_SOURCE_PATH}" Q1600_Q4_SOURCE)
+file(READ "${Q1600_Q4_INPUT}" Q1600_Q4_SOURCE)
 
 set(Q1600_GEOMETRY_OLD [=[
         vertices.insert(vertices.end(), controllerVertices.begin(), controllerVertices.end());
@@ -139,27 +144,18 @@ endif()
 string(REPLACE "${Q1600_MEMBER_OLD}" "${Q1600_MEMBER_NEW}"
        Q1600_Q4_SOURCE "${Q1600_Q4_SOURCE}")
 
-set(Q1600_GENERATED_Q4 "${CMAKE_CURRENT_BINARY_DIR}/q4-native-q1600.cpp")
-file(WRITE "${Q1600_GENERATED_Q4}" "${Q1600_Q4_SOURCE}")
-
-# q6h-native-generated.cpp lives in the same binary directory, so a quoted
-# include resolves this generated copy before any source-directory fallback.
-string(FIND "${Q6H_NATIVE_SOURCE}" "#include \"q4-native.cpp\"" Q1600_INCLUDE_POS)
-if(Q1600_INCLUDE_POS EQUAL -1)
-    message(FATAL_ERROR "Q15.10 could not find q4 include in final Q6H source")
-endif()
-string(REPLACE "#include \"q4-native.cpp\""
-               "#include \"q4-native-q1600.cpp\""
-               Q6H_NATIVE_SOURCE "${Q6H_NATIVE_SOURCE}")
+# Replace the live generated OpenXR source in place. Q6H_NATIVE_SOURCE already
+# includes this absolute generated path, so no include rewrite is necessary.
+file(WRITE "${Q1600_Q4_INPUT}" "${Q1600_Q4_SOURCE}")
 
 string(FIND "${Q1600_Q4_SOURCE}" "text=Q15.10 anchor=left-hand" Q1600_LABEL_OK)
 string(FIND "${Q1600_Q4_SOURCE}" "glDrawArrays(GL_LINES, versionStartVertex_, versionVertexCount_)" Q1600_DRAW_OK)
-string(FIND "${Q6H_NATIVE_SOURCE}" "#include \"q4-native-q1600.cpp\"" Q1600_INCLUDE_OK)
-if(Q1600_LABEL_OK EQUAL -1 OR Q1600_DRAW_OK EQUAL -1 OR Q1600_INCLUDE_OK EQUAL -1)
+string(FIND "${Q1600_Q4_SOURCE}" "GLint versionStartVertex_{0};" Q1600_MEMBER_OK)
+if(Q1600_LABEL_OK EQUAL -1 OR Q1600_DRAW_OK EQUAL -1 OR Q1600_MEMBER_OK EQUAL -1)
     message(FATAL_ERROR
-        "Q15.10 build-label verification failed: label=${Q1600_LABEL_OK} draw=${Q1600_DRAW_OK} include=${Q1600_INCLUDE_OK}")
+        "Q15.10 build-label verification failed: label=${Q1600_LABEL_OK} draw=${Q1600_DRAW_OK} member=${Q1600_MEMBER_OK}")
 endif()
 
-file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/q6h-native-generated.cpp"
-     "${Q6H_NATIVE_SOURCE}")
+# Q6H itself was last rewritten by Q15.9; leave it untouched here. The generated
+# OpenXR translation unit is included by that final source at compile time.
 message(STATUS "Q15.10 floating left-hand build label enabled: Q15.10")
