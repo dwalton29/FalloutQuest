@@ -65,3 +65,8 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/q1640-pc-hdr-output.cmake")
 # numeric result directly to the OpenXR target instead of sRGB-decoding it first.
 # Device luminance strongly suggests the inverse transfer was being displayed as-is.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q1650-pc-output-domain.cmake")
+
+# Q15.16 ports the captured PC SKY/SKYTEX semantics without touching Q15.15's
+# world colour path: raw WTHR sky RGB * 1.55, PNAM-zero clouds remain visible,
+# cloud V scrolling, and the authored Sky\\Sun.dds additive sun treatment.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q1660-pc-sky.cmake")
