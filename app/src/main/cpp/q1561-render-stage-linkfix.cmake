@@ -40,3 +40,8 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/q1590-pc-sp17-light-constants.cmake")
 # Q15.10 makes the active test build visually undeniable in-headset: render the
 # exact build label immediately above the left Touch controller.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q1600-left-hand-build-label.cmake")
+
+# Q15.11 follows the uploaded PC apitrace state at a real Megaton PPLighting draw:
+# restore the signed normalized tangent-space LightData path, normalize the sampled
+# normal map before DP3_sat, and match the captured 2.5x sunlight scale.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q1610-pc-sp17-diffuse.cmake")
