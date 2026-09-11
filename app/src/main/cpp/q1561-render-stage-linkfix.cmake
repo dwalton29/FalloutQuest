@@ -16,7 +16,7 @@ string(FIND "${Q720_TERRAIN_RENDER_SOURCE}" "GetFo3RenderStageQ1560()" Q1561_CAL
 string(FIND "${Q720_TERRAIN_RENDER_SOURCE}" "GetFo3RenderStageQ1560Bridge()" Q1561_OLD_CALL)
 if(Q1561_INCLUDE_OK EQUAL -1 OR Q1561_CALL_OK EQUAL -1 OR NOT Q1561_OLD_CALL EQUAL -1)
     message(FATAL_ERROR
-        "Q15.6 terrain stage link fix failed: include=${Q1561_INCLUDE_OK} call=${Q1561_CALL_OK} oldCall=${Q1561_OLD_CALL")
+        "Q15.6 terrain stage link fix failed: include=${Q1561_INCLUDE_OK} call=${Q1561_CALL_OK} oldCall=${Q1561_OLD_CALL}")
 endif()
 
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/fo3-terrain-render-q720.cpp"
