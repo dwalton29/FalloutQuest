@@ -1,19 +1,19 @@
-# Q15.10: visible in-headset build identity.
+# Q15.10+: visible in-headset build identity.
 #
-# Draw a small vector label reading "Q15.10" just above the left Touch controller.
-# This is deliberately part of the rendered VR scene rather than logcat so every
-# test immediately proves which APK is actually running. The label inherits the
-# authored left-hand pose/MVP, uses the existing tiny OpenXR line-colour shader,
-# and draws with GL_ALWAYS so world geometry cannot hide the build identifier.
+# Draw a small vector label reading the active test version just above the left
+# Touch controller. This is deliberately part of the rendered VR scene rather
+# than logcat so every test immediately proves which APK is actually running.
+# The label inherits the authored left-hand pose/MVP, uses the existing tiny
+# OpenXR line-colour shader, and draws with GL_ALWAYS so world geometry cannot
+# hide the build identifier.
 #
 # Q12.8 moved the live OpenXR eye code out of q4-native.cpp into the generated
-# q1280-q4-generated.cpp. Q15.6/Q15.7 subsequently patch that same file. Q15.10
-# therefore edits the FINAL generated OpenXR source in place rather than trying
-# to replace the old q4 include in Q6H_NATIVE_SOURCE.
+# q1280-q4-generated.cpp. Q15.6/Q15.7 subsequently patch that same file. This
+# layer therefore edits the FINAL generated OpenXR source in place.
 
 set(Q1600_Q4_INPUT "${CMAKE_CURRENT_BINARY_DIR}/q1280-q4-generated.cpp")
 if(NOT EXISTS "${Q1600_Q4_INPUT}")
-    message(FATAL_ERROR "Q15.10 expected final OpenXR source at ${Q1600_Q4_INPUT}")
+    message(FATAL_ERROR "Q15.11 expected final OpenXR source at ${Q1600_Q4_INPUT}")
 endif()
 file(READ "${Q1600_Q4_INPUT}" Q1600_Q4_SOURCE)
 
@@ -27,7 +27,7 @@ set(Q1600_GEOMETRY_NEW [=[
         vertices.insert(vertices.end(), controllerVertices.begin(), controllerVertices.end());
         controllerVertexCount_ = 6;
 
-        // Q15.10: vector text "Q15.10" in left-controller local space.
+        // Q15.11: vector text "Q15.11" in left-controller local space.
         // +Y places it physically above the hand; +Z keeps it just in front of
         // the controller body. Lines avoid any font/texture dependency.
         versionStartVertex_ = static_cast<GLint>(vertices.size() / 3);
@@ -55,15 +55,14 @@ set(Q1600_GEOMETRY_NEW [=[
             const float y = q1600Y;
             const float m = y + q1600H * 0.5f;
             const float t = y + q1600H;
-            if (mask & (1u << 0)) q1600Line(x, t, x + q1600W, t);             // A
-            if (mask & (1u << 1)) q1600Line(x + q1600W, t, x + q1600W, m);   // B
-            if (mask & (1u << 2)) q1600Line(x + q1600W, m, x + q1600W, y);   // C
-            if (mask & (1u << 3)) q1600Line(x, y, x + q1600W, y);             // D
-            if (mask & (1u << 4)) q1600Line(x, m, x, y);                       // E
-            if (mask & (1u << 5)) q1600Line(x, t, x, m);                       // F
-            if (mask & (1u << 6)) q1600Line(x, m, x + q1600W, m);             // G
+            if (mask & (1u << 0)) q1600Line(x, t, x + q1600W, t);
+            if (mask & (1u << 1)) q1600Line(x + q1600W, t, x + q1600W, m);
+            if (mask & (1u << 2)) q1600Line(x + q1600W, m, x + q1600W, y);
+            if (mask & (1u << 3)) q1600Line(x, y, x + q1600W, y);
+            if (mask & (1u << 4)) q1600Line(x, m, x, y);
+            if (mask & (1u << 5)) q1600Line(x, t, x, m);
+            if (mask & (1u << 6)) q1600Line(x, m, x + q1600W, m);
         };
-        constexpr unsigned q1600Digit0 = 0x3Fu; // A B C D E F
         constexpr unsigned q1600Digit1 = 0x06u; // B C
         constexpr unsigned q1600Digit5 = 0x6Du; // A F G C D
 
@@ -79,18 +78,18 @@ set(Q1600_GEOMETRY_NEW [=[
 
         q1600Digit(q1600X, q1600Digit1);
         q1600X += q1600W + q1600Gap;
-        q1600Digit(q1600X, q1600Digit0);
+        q1600Digit(q1600X, q1600Digit1);
 
         versionVertexCount_ =
             static_cast<GLsizei>(vertices.size() / 3 - versionStartVertex_);
-        FQ_LOGI("Q15.10 BUILD LABEL: text=Q15.10 anchor=left-hand vertices=%d alwaysVisible=1",
+        FQ_LOGI("Q15.11 BUILD LABEL: text=Q15.11 anchor=left-hand vertices=%d alwaysVisible=1",
                 static_cast<int>(versionVertexCount_));
 
         glGenVertexArrays(1, &vao_);
 ]=])
 string(FIND "${Q1600_Q4_SOURCE}" "${Q1600_GEOMETRY_OLD}" Q1600_GEOMETRY_POS)
 if(Q1600_GEOMETRY_POS EQUAL -1)
-    message(FATAL_ERROR "Q15.10 could not find controller geometry anchor")
+    message(FATAL_ERROR "Q15.11 could not find controller geometry anchor")
 endif()
 string(REPLACE "${Q1600_GEOMETRY_OLD}" "${Q1600_GEOMETRY_NEW}"
        Q1600_Q4_SOURCE "${Q1600_Q4_SOURCE}")
@@ -120,7 +119,7 @@ set(Q1600_HAND_DRAW_NEW [=[
 ]=])
 string(FIND "${Q1600_Q4_SOURCE}" "${Q1600_HAND_DRAW_OLD}" Q1600_HAND_DRAW_POS)
 if(Q1600_HAND_DRAW_POS EQUAL -1)
-    message(FATAL_ERROR "Q15.10 could not find left/right controller draw anchor")
+    message(FATAL_ERROR "Q15.11 could not find left/right controller draw anchor")
 endif()
 string(REPLACE "${Q1600_HAND_DRAW_OLD}" "${Q1600_HAND_DRAW_NEW}"
        Q1600_Q4_SOURCE "${Q1600_Q4_SOURCE}")
@@ -139,23 +138,19 @@ set(Q1600_MEMBER_NEW [=[
 ]=])
 string(FIND "${Q1600_Q4_SOURCE}" "${Q1600_MEMBER_OLD}" Q1600_MEMBER_POS)
 if(Q1600_MEMBER_POS EQUAL -1)
-    message(FATAL_ERROR "Q15.10 could not find controller member anchor")
+    message(FATAL_ERROR "Q15.11 could not find controller member anchor")
 endif()
 string(REPLACE "${Q1600_MEMBER_OLD}" "${Q1600_MEMBER_NEW}"
        Q1600_Q4_SOURCE "${Q1600_Q4_SOURCE}")
 
-# Replace the live generated OpenXR source in place. Q6H_NATIVE_SOURCE already
-# includes this absolute generated path, so no include rewrite is necessary.
 file(WRITE "${Q1600_Q4_INPUT}" "${Q1600_Q4_SOURCE}")
 
-string(FIND "${Q1600_Q4_SOURCE}" "text=Q15.10 anchor=left-hand" Q1600_LABEL_OK)
+string(FIND "${Q1600_Q4_SOURCE}" "text=Q15.11 anchor=left-hand" Q1600_LABEL_OK)
 string(FIND "${Q1600_Q4_SOURCE}" "glDrawArrays(GL_LINES, versionStartVertex_, versionVertexCount_)" Q1600_DRAW_OK)
 string(FIND "${Q1600_Q4_SOURCE}" "GLint versionStartVertex_{0};" Q1600_MEMBER_OK)
 if(Q1600_LABEL_OK EQUAL -1 OR Q1600_DRAW_OK EQUAL -1 OR Q1600_MEMBER_OK EQUAL -1)
     message(FATAL_ERROR
-        "Q15.10 build-label verification failed: label=${Q1600_LABEL_OK} draw=${Q1600_DRAW_OK} member=${Q1600_MEMBER_OK}")
+        "Q15.11 build-label verification failed: label=${Q1600_LABEL_OK} draw=${Q1600_DRAW_OK} member=${Q1600_MEMBER_OK}")
 endif()
 
-# Q6H itself was last rewritten by Q15.9; leave it untouched here. The generated
-# OpenXR translation unit is included by that final source at compile time.
-message(STATUS "Q15.10 floating left-hand build label enabled: Q15.10")
+message(STATUS "Q15.11 floating left-hand build label enabled: Q15.11")
