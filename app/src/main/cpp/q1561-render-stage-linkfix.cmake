@@ -31,3 +31,8 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/q1570-legacy-colour-domain-ab.cmake")
 # the sampled normals and sun vector are exactly the inputs used by the final
 # static/NIF shader, then emits one Megaton NdotL/coordinate-space trace.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q1580-light-direction-trace.cmake")
+
+# Q15.9 consumes the PC D3D9 capture result: SP17 AmbientColor/PSLightColor are
+# raw normalized WTHR bytes (sunlight at the captured 1+base-dimmer scale), not
+# Q13.9-decoded RGB. Keep this correction static/PPLighting-only for isolation.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q1590-pc-sp17-light-constants.cmake")
