@@ -11,7 +11,6 @@ add_library(d3d9 SHARED
 )
 
 target_compile_features(d3d9 PRIVATE cxx_std_17)
-target_compile_definitions(d3d9 PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_link_libraries(d3d9 PRIVATE user32)
 
 if(MSVC)
