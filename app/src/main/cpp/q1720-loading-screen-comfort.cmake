@@ -82,3 +82,7 @@ message(STATUS "Q16.2 loading comfort enabled: 62% optically-distant LSCR + rota
 # but broadens targeting to authored XTEL refs that do not have a drawable door
 # mesh (for example settlement gates with separate visible geometry).
 include("${CMAKE_CURRENT_SOURCE_DIR}/q1730-authored-door-query.cmake")
+
+# Q16.4 fixes Q16.3's late renderer write and expands the known one-triangle
+# Megaton main-gate render proxy to the physical gate's interaction footprint.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q1740-gate-interaction-writefix.cmake")
