@@ -12,6 +12,16 @@ inline float SafeScaleColourQ1320(float value, float scale) {
     return std::clamp(value * scale, 0.0f, 4.0f);
 }
 
+inline float EffectiveSunlightScaleQ1320(float sunlightDimmer) {
+    // PC apitrace ground truth: Fallout 3 sends WTHR Sunlight to the dominant
+    // SP17 PPLighting path as authoredColour * (1 + Sunlight Dimmer). With the
+    // stock exterior value fSunlightDimmer=1.5, PSLightColor is therefore 2.5x
+    // the authored RGB, not 1.5x. Keep the stored IMGS/IMAD value as the authored
+    // dimmer and convert it only when producing the directional-light scale.
+    if (!std::isfinite(sunlightDimmer)) return 1.0f;
+    return std::clamp(1.0f + sunlightDimmer, 0.0f, 5.0f);
+}
+
 inline bool ApplyWeatherLightingQ1320(Fo3ImageSpaceQ1280& image) {
     using namespace fo3envq1000;
     using namespace fo3imadq1300;
@@ -33,6 +43,7 @@ inline bool ApplyWeatherLightingQ1320(Fo3ImageSpaceQ1280& image) {
         modifier.sunlightScaleMult,
         modifier.sunlightScaleAdd,
         0.0f, 4.0f);
+    const float finalSunlightScale = EffectiveSunlightScaleQ1320(finalSunlightDimmer);
     const float finalSkyScale = ApplyScalarQ1300(
         baseSkyScale,
         modifier.skyScaleMult,
@@ -56,9 +67,9 @@ inline bool ApplyWeatherLightingQ1320(Fo3ImageSpaceQ1280& image) {
     float horizonBefore[3]{env.horizon[0], env.horizon[1], env.horizon[2]};
 
     for (int c = 0; c < 3; ++c) {
-        // Sunlight Dimmer affects the authored directional sunlight used by
-        // statics and LAND. Ambient/local LIGH colours remain untouched.
-        env.sunlight[c] = SafeScaleColourQ1320(env.sunlight[c], finalSunlightDimmer);
+        // SP17's PSLightColor includes the authored baseline plus Sunlight
+        // Dimmer. Ambient/local LIGH colours remain untouched.
+        env.sunlight[c] = SafeScaleColourQ1320(env.sunlight[c], finalSunlightScale);
 
         // LUM Ramp No Tex / Sky Scale drives sky brightness. Our current sky is
         // the WTHR-authored gradient, so scale each gradient colour uniformly.
@@ -70,7 +81,7 @@ inline bool ApplyWeatherLightingQ1320(Fo3ImageSpaceQ1280& image) {
 
     __android_log_print(
         ANDROID_LOG_INFO, TAG,
-        "Q13.2 WEATHER LIGHT APPLY: IMAD=%08X EDID=%s baseSunDimmer=%.3f sunMultPresent=%d sunMult=%.3f sunAddPresent=%d sunAdd=%.3f finalSunDimmer=%.3f baseSkyScale=%.3f skyMultPresent=%d skyMult=%.3f skyAddPresent=%d skyAdd=%.3f finalSkyScale=%.3f sunlight=(%.3f %.3f %.3f)->(%.3f %.3f %.3f) skyUpper=(%.3f %.3f %.3f)->(%.3f %.3f %.3f) skyLower=(%.3f %.3f %.3f)->(%.3f %.3f %.3f) horizon=(%.3f %.3f %.3f)->(%.3f %.3f %.3f)",
+        "Q13.2 WEATHER LIGHT APPLY: IMAD=%08X EDID=%s baseSunDimmer=%.3f sunMultPresent=%d sunMult=%.3f sunAddPresent=%d sunAdd=%.3f finalSunDimmer=%.3f effectiveSunScale=%.3f baseSkyScale=%.3f skyMultPresent=%d skyMult=%.3f skyAddPresent=%d skyAdd=%.3f finalSkyScale=%.3f sunlight=(%.3f %.3f %.3f)->(%.3f %.3f %.3f) skyUpper=(%.3f %.3f %.3f)->(%.3f %.3f %.3f) skyLower=(%.3f %.3f %.3f)->(%.3f %.3f %.3f) horizon=(%.3f %.3f %.3f)->(%.3f %.3f %.3f)",
         modifier.formId,
         modifier.editorId.empty() ? "<none>" : modifier.editorId.c_str(),
         baseSunlightDimmer,
@@ -79,6 +90,7 @@ inline bool ApplyWeatherLightingQ1320(Fo3ImageSpaceQ1280& image) {
         modifier.sunlightScaleAdd.present ? 1 : 0,
         modifier.sunlightScaleAdd.present ? modifier.sunlightScaleAdd.value : 0.0f,
         finalSunlightDimmer,
+        finalSunlightScale,
         baseSkyScale,
         modifier.skyScaleMult.present ? 1 : 0,
         modifier.skyScaleMult.present ? modifier.skyScaleMult.value : 1.0f,
