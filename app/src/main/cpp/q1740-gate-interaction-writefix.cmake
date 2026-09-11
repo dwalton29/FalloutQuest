@@ -86,3 +86,8 @@ if(Q1740_FALLBACK_OK EQUAL -1 OR Q1740_GATE_PAD_OK EQUAL -1 OR
 endif()
 
 message(STATUS "Q16.4 gate interaction enabled: q1730 renderer persisted + MegatonMainGate01 6.5m proxy")
+
+# Q16.5 replaces only the drawn interaction geometry with the real HUDMainMenu
+# Info widget proportions discovered in Fallout - Misc.bsa, mounted above the
+# right forearm for VR. Q16.4 interaction targeting remains authoritative.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q1750-arm-mounted-vanilla-info.cmake")
