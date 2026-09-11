@@ -2,6 +2,7 @@
 
 #include "fo3-authored-color-q1390.h"
 #include "fo3-weather-imad-q1300.h"
+#include "fo3-weather-light-q1320.h"
 #include "fo3-weather-sky-q1330.h"
 
 #include <algorithm>
@@ -396,7 +397,9 @@ inline void ApplyEnvironment(RuntimeQ1400& runtime, const TimeWeightsQ1400& weig
     SampleLinearRgb(runtime.weather, 3, weights, value);
     for (int c = 0; c < 3; ++c) env.ambient[c] = value[c];
     SampleLinearRgb(runtime.weather, 4, weights, value);
-    for (int c = 0; c < 3; ++c) env.sunlight[c] = value[c] * gFo3ImageSpaceQ1280.hdrSunlightDimmer;
+    const float sunlightScale = fo3weatherq1320::EffectiveSunlightScaleQ1320(
+        gFo3ImageSpaceQ1280.hdrSunlightDimmer);
+    for (int c = 0; c < 3; ++c) env.sunlight[c] = value[c] * sunlightScale;
     SampleLinearRgb(runtime.weather, 5, weights, value);
     for (int c = 0; c < 3; ++c) env.sun[c] = value[c];
     SampleLinearRgb(runtime.weather, 7, weights, value);
@@ -528,9 +531,11 @@ inline void ApplyCurrentTime(bool forceLog) {
         gLastLoggedHour = hourBucket;
         gLastLoggedPhase = weights.phase;
         const Fo3EnvironmentQ1000& env = gFo3EnvironmentQ1000;
+        const float effectiveSunScale = fo3weatherq1320::EffectiveSunlightScaleQ1320(
+            gFo3ImageSpaceQ1280.hdrSunlightDimmer);
         __android_log_print(
             ANDROID_LOG_INFO, TAG,
-            "Q14.0 TIME: hour=%05.2f phase=%s weights=(sunrise=%.3f day=%.3f sunset=%.3f night=%.3f) ambient=(%.3f %.3f %.3f) sunlight=(%.3f %.3f %.3f) fog=(%.3f %.3f %.3f) fogNear=%.1f fogFar=%.1f sunDir=(%.3f %.3f %.3f) sunDimmer=%.3f skyScale=%.3f activeIMAD=%08X bloomScale=%.3f bloomClamp=%.3f exposureTarget=%.3f",
+            "Q14.0 TIME: hour=%05.2f phase=%s weights=(sunrise=%.3f day=%.3f sunset=%.3f night=%.3f) ambient=(%.3f %.3f %.3f) sunlight=(%.3f %.3f %.3f) fog=(%.3f %.3f %.3f) fogNear=%.1f fogFar=%.1f sunDir=(%.3f %.3f %.3f) sunDimmer=%.3f effectiveSunScale=%.3f skyScale=%.3f activeIMAD=%08X bloomScale=%.3f bloomClamp=%.3f exposureTarget=%.3f",
             gTestHour, weights.phase,
             weights.w[0], weights.w[1], weights.w[2], weights.w[3],
             env.ambient[0], env.ambient[1], env.ambient[2],
@@ -538,6 +543,7 @@ inline void ApplyCurrentTime(bool forceLog) {
             env.fog[0], env.fog[1], env.fog[2], env.fogNear, env.fogFar,
             env.sunDirection[0], env.sunDirection[1], env.sunDirection[2],
             gFo3ImageSpaceQ1280.hdrSunlightDimmer,
+            effectiveSunScale,
             gFo3ImageSpaceQ1280.hdrLumRampNoTex,
             gFo3ImageSpaceQ1280.weatherDayImadFormId,
             gFo3ImageSpaceQ1280.hdrBrightScale,
