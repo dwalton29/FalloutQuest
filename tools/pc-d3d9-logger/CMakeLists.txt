@@ -14,6 +14,11 @@ target_compile_features(d3d9 PRIVATE cxx_std_17)
 target_link_libraries(d3d9 PRIVATE user32)
 
 if(MSVC)
+    # Keep the proxy self-contained. Fallout 3 predates the VC++ 2015+ runtime,
+    # so depending on MSVCP140/VCRUNTIME140 can make the game fail at process
+    # startup before our proxy gets a chance to run.
+    set_property(TARGET d3d9 PROPERTY
+        MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
     target_compile_options(d3d9 PRIVATE /W4 /EHsc /permissive-)
 endif()
 
