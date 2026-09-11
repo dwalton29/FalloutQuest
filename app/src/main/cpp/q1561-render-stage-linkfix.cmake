@@ -81,6 +81,17 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/q1670-pc-hdr-bloom.cmake")
 # that live host to a boolean right-A action before Q16.0 adds its HUD/loading UI.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q1699-active-input-normalizer.cmake")
 
+# Q16.0 patches the heavily generated Q7.20 transition unit. Put its two stable
+# public headers together at the front so the Q16 replacement anchor is
+# deterministic even when older generators have inserted source includes between
+# the originals. Both headers are guarded, so later duplicate includes are safe.
+if(EXISTS "${Q720_CELL_SOURCE}")
+    file(READ "${Q720_CELL_SOURCE}" Q1699_CELL_SOURCE)
+    string(PREPEND Q1699_CELL_SOURCE
+           "#include \"fo3-transition-q74.h\"\n#include \"fo3-terrain-q76.h\"\n")
+    file(WRITE "${Q720_CELL_SOURCE}" "${Q1699_CELL_SOURCE}")
+endif()
+
 # Q16.0 promotes the old proof-door path into real authored CELL traversal:
 # right-hand aim prompt, right A activation, generic interior/exterior XTEL,
 # and destination-aware Fallout3.esm LSCR loading screens presented before swap.
