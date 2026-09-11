@@ -76,3 +76,8 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/q1660-pc-sky.cmake")
 # per-tap bright threshold 0.55 + vertical ISBPBLUR15, then horizontal ISBLUR15.
 # Q15.15 output-domain and Q15.16 sky paths remain untouched.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q1670-pc-hdr-bloom.cmake")
+
+# Q16.0 promotes the old proof-door path into real authored CELL traversal:
+# right-hand aim prompt, right A activation, generic interior/exterior XTEL,
+# and destination-aware Fallout3.esm LSCR loading screens presented before swap.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q1700-cell-traversal-ui.cmake")
