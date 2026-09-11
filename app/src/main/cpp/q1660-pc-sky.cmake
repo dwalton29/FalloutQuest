@@ -1,50 +1,42 @@
-# Q15.16: replace the remaining homemade sky colour/visibility semantics with
-# behaviour proven by the uploaded PC D3D9 captures.
+# Q15.16: port the PC-captured Fallout 3 SKY/SKYTEX semantics without touching
+# Q15.15's now-good world/material/HDR/output path.
 #
-# Ground truth from the Megaton noon sky draws:
-#   * SKY gradient VS blends raw WTHR Horizon/SkyLower/SkyUpper byte/255 values.
-#   * SKY/SKYTEX PS multiplies RGB by Params.y = 1.55; SRGBWRITEENABLE is off.
-#   * Sun uses a textured additive pass (SRC_ALPHA, ONE), not a procedural disc.
-#   * Cloud texture coordinates animate in V/Y (TexCoordYOff), not longitude/U.
-#   * Visible WastelandCloudHorizon01 has vertex/BlendColor alpha 1 even though
-#     its WTHR PNAM Day alpha byte is 0. PNAM alpha therefore must not gate it.
+# Captured Megaton noon ground truth:
+#   * SKY blends raw WTHR Horizon/SkyLower/SkyUpper byte/255 values.
+#   * SKY/SKYTEX multiplies RGB by Params.y = 1.55; sRGB writes are disabled.
+#   * Sun is a textured SRC_ALPHA/ONE additive pass, not a procedural disc.
+#   * Clouds animate their authored V coordinate through TexCoordYOff.
+#   * WastelandCloudHorizon01 is visibly drawn with BlendColor alpha 1.0 even
+#     though its WTHR PNAM Day alpha byte is zero. PNAM alpha is not visibility.
 #
-# Q15.15's now-good world/material/HDR/output path is deliberately untouched.
-# We shadow only the three sky/time headers from the binary directory and bump
-# the visible left-hand build label to Q15.16.
+# Use small deterministic source replacements here. The first Q15.16 version
+# used one large ApplySky text block and CI correctly rejected it when comments
+# made the exact anchor differ; these replacements intentionally avoid that.
 
 # -----------------------------------------------------------------------------
-# Q10.0 base gradient: PC applies the captured SKY Params.y RGB scale after the
-# three authored colours have been blended. Keep the authored values raw here.
+# Q10.0 sky gradient: raw WTHR blend * captured SKY Params.y (1.55).
 # -----------------------------------------------------------------------------
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/fo3-environment-q1000.h" Q1660_ENV_SOURCE)
-set(Q1660_ENV_OLD [=[
-            vec3 colour = mix(lower, uSkyUpper, smoothstep(0.28, 0.95, y));
-            fragColor = vec4(colour, 1.0);
-]=])
-set(Q1660_ENV_NEW [=[
-            vec3 colour = mix(lower, uSkyUpper, smoothstep(0.28, 0.95, y));
+set(Q1660_GRADIENT_OLD "            fragColor = vec4(colour, 1.0);")
+set(Q1660_GRADIENT_NEW [=[
             // Q15.16: PC SKY ps c4.y at the captured Megaton noon draw.
-            // The three WTHR RGB endpoints are raw byte/255 values here.
             fragColor = vec4(colour * 1.55, 1.0);
 ]=])
-string(FIND "${Q1660_ENV_SOURCE}" "${Q1660_ENV_OLD}" Q1660_ENV_POS)
-if(Q1660_ENV_POS EQUAL -1)
+string(FIND "${Q1660_ENV_SOURCE}" "${Q1660_GRADIENT_OLD}" Q1660_GRADIENT_POS)
+if(Q1660_GRADIENT_POS EQUAL -1)
     message(FATAL_ERROR "Q15.16 could not find Q10.0 sky-gradient output")
 endif()
-string(REPLACE "${Q1660_ENV_OLD}" "${Q1660_ENV_NEW}"
+string(REPLACE "${Q1660_GRADIENT_OLD}" "${Q1660_GRADIENT_NEW}"
        Q1660_ENV_SOURCE "${Q1660_ENV_SOURCE}")
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/fo3-environment-q1000.h" "${Q1660_ENV_SOURCE}")
 
 # -----------------------------------------------------------------------------
-# Q14.0 time-of-day: the PC SKY/SKYTEX path consumes raw authored colour bytes,
-# unlike the linear world-lighting path. Add a raw interpolation helper and use
-# it only for sky upper/lower/horizon, Sun and PNAM cloud RGB.
+# Q14.0 time of day: keep the world/fog lighting in its existing linear path,
+# but interpolate SKY/SKYTEX colours in their raw authored byte/display domain.
 # -----------------------------------------------------------------------------
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/fo3-time-of-day-q1400.h" Q1660_TOD_SOURCE)
-set(Q1660_SAMPLE_ANCHOR [=[
-inline float LinearToSrgb(float value) {
-]=])
+
+set(Q1660_SAMPLE_ANCHOR "inline float LinearToSrgb(float value) {")
 set(Q1660_SAMPLE_INSERT [=[
 inline void SampleEncodedRgb(const WeatherTimeQ1400& weather, int cls,
                              const TimeWeightsQ1400& weights, float out[3]) {
@@ -62,128 +54,120 @@ inline float LinearToSrgb(float value) {
 ]=])
 string(FIND "${Q1660_TOD_SOURCE}" "${Q1660_SAMPLE_ANCHOR}" Q1660_SAMPLE_POS)
 if(Q1660_SAMPLE_POS EQUAL -1)
-    message(FATAL_ERROR "Q15.16 could not find Q14.0 sampling helper anchor")
+    message(FATAL_ERROR "Q15.16 could not find Q14.0 sampling-helper anchor")
 endif()
 string(REPLACE "${Q1660_SAMPLE_ANCHOR}" "${Q1660_SAMPLE_INSERT}"
        Q1660_TOD_SOURCE "${Q1660_TOD_SOURCE}")
 
-set(Q1660_ENV_TIME_OLD [=[
-    float value[3]{};
+# ApplyEnvironment(): only sky/sun display-domain classes change. Ambient,
+# sunlight and fog remain exactly on Q15.15's proven world-light path.
+set(Q1660_SKYUP_OLD [=[
     SampleLinearRgb(runtime.weather, 0, weights, value);
     for (int c = 0; c < 3; ++c) env.skyUpper[c] = value[c] * gFo3ImageSpaceQ1280.hdrLumRampNoTex;
-    SampleLinearRgb(runtime.weather, 1, weights, value);
-    for (int c = 0; c < 3; ++c) env.fog[c] = value[c];
-    SampleLinearRgb(runtime.weather, 3, weights, value);
-    for (int c = 0; c < 3; ++c) env.ambient[c] = value[c];
-    SampleLinearRgb(runtime.weather, 4, weights, value);
-    const float sunlightScale = fo3weatherq1320::EffectiveSunlightScaleQ1320(
-        gFo3ImageSpaceQ1280.hdrSunlightDimmer);
-    for (int c = 0; c < 3; ++c) env.sunlight[c] = value[c] * sunlightScale;
-    SampleLinearRgb(runtime.weather, 5, weights, value);
-    for (int c = 0; c < 3; ++c) env.sun[c] = value[c];
+]=])
+set(Q1660_SKYUP_NEW [=[
+    SampleEncodedRgb(runtime.weather, 0, weights, value);
+    for (int c = 0; c < 3; ++c) env.skyUpper[c] = value[c];
+]=])
+set(Q1660_SUN_OLD "    SampleLinearRgb(runtime.weather, 5, weights, value);")
+set(Q1660_SUN_NEW "    SampleEncodedRgb(runtime.weather, 5, weights, value);")
+set(Q1660_SKYLOW_OLD [=[
     SampleLinearRgb(runtime.weather, 7, weights, value);
     for (int c = 0; c < 3; ++c) env.skyLower[c] = value[c] * gFo3ImageSpaceQ1280.hdrLumRampNoTex;
+]=])
+set(Q1660_SKYLOW_NEW [=[
+    SampleEncodedRgb(runtime.weather, 7, weights, value);
+    for (int c = 0; c < 3; ++c) env.skyLower[c] = value[c];
+]=])
+set(Q1660_HORIZON_OLD [=[
     SampleLinearRgb(runtime.weather, 8, weights, value);
     for (int c = 0; c < 3; ++c) env.horizon[c] = value[c] * gFo3ImageSpaceQ1280.hdrLumRampNoTex;
 ]=])
-set(Q1660_ENV_TIME_NEW [=[
-    float value[3]{};
-    // Q15.16: PC SKY uses raw WTHR byte/255 RGB and applies its 1.55 scale in
-    // the pixel shader. Do not sRGB-decode or apply Q14.0's guessed skyScale.
-    SampleEncodedRgb(runtime.weather, 0, weights, value);
-    for (int c = 0; c < 3; ++c) env.skyUpper[c] = value[c];
-    SampleLinearRgb(runtime.weather, 1, weights, value);
-    for (int c = 0; c < 3; ++c) env.fog[c] = value[c];
-    SampleLinearRgb(runtime.weather, 3, weights, value);
-    for (int c = 0; c < 3; ++c) env.ambient[c] = value[c];
-    SampleLinearRgb(runtime.weather, 4, weights, value);
-    const float sunlightScale = fo3weatherq1320::EffectiveSunlightScaleQ1320(
-        gFo3ImageSpaceQ1280.hdrSunlightDimmer);
-    for (int c = 0; c < 3; ++c) env.sunlight[c] = value[c] * sunlightScale;
-    SampleEncodedRgb(runtime.weather, 5, weights, value);
-    for (int c = 0; c < 3; ++c) env.sun[c] = value[c];
-    SampleEncodedRgb(runtime.weather, 7, weights, value);
-    for (int c = 0; c < 3; ++c) env.skyLower[c] = value[c];
+set(Q1660_HORIZON_NEW [=[
     SampleEncodedRgb(runtime.weather, 8, weights, value);
     for (int c = 0; c < 3; ++c) env.horizon[c] = value[c];
 ]=])
-string(FIND "${Q1660_TOD_SOURCE}" "${Q1660_ENV_TIME_OLD}" Q1660_ENV_TIME_POS)
-if(Q1660_ENV_TIME_POS EQUAL -1)
-    message(FATAL_ERROR "Q15.16 could not find Q14.0 sky environment sampling block")
-endif()
-string(REPLACE "${Q1660_ENV_TIME_OLD}" "${Q1660_ENV_TIME_NEW}"
+foreach(pair IN ITEMS SKYUP SKYLOW HORIZON)
+    string(FIND "${Q1660_TOD_SOURCE}" "${Q1660_${pair}_OLD}" Q1660_${pair}_POS)
+    if(Q1660_${pair}_POS EQUAL -1)
+        message(FATAL_ERROR "Q15.16 could not find Q14.0 ${pair} sampling block")
+    endif()
+    string(REPLACE "${Q1660_${pair}_OLD}" "${Q1660_${pair}_NEW}"
+           Q1660_TOD_SOURCE "${Q1660_TOD_SOURCE}")
+endforeach()
+# Class 5 appears once in ApplyEnvironment and once in ApplySky. Replacing both
+# is intentional: Sun is a SKY/SKYTEX display-domain colour in both locations.
+string(REPLACE "${Q1660_SUN_OLD}" "${Q1660_SUN_NEW}"
        Q1660_TOD_SOURCE "${Q1660_TOD_SOURCE}")
 
-set(Q1660_APPLYSKY_OLD [=[
-    float sun[3]{};
-    SampleLinearRgb(runtime.weather, 5, weights, sun);
-    for (int c = 0; c < 3; ++c) gWeatherSkyQ1330.sunColor[c] = sun[c];
-
-    if (runtime.weather.havePnam) {
-        for (int layer = 0; layer < 4; ++layer) {
-            float rgb[3]{0.0f, 0.0f, 0.0f};
-            float alpha = 0.0f;
-            for (int tod = 0; tod < 4; ++tod) {
-                for (int c = 0; c < 3; ++c) {
+# ApplySky(): raw PNAM RGB; do not use PNAM alpha as layer visibility.
+set(Q1660_CLOUD_RGB_OLD [=[
                     rgb[c] += fo3colorq1390::SrgbToLinear(
                         runtime.weather.cloudEncoded[layer][tod][c]) * weights.w[tod];
-                }
-                alpha += runtime.weather.cloudEncoded[layer][tod][3] * weights.w[tod];
-            }
-            for (int c = 0; c < 3; ++c) gWeatherSkyQ1330.clouds[layer].color[c] = rgb[c];
-            gWeatherSkyQ1330.clouds[layer].color[3] = Clamp01(alpha);
-        }
-    }
 ]=])
-set(Q1660_APPLYSKY_NEW [=[
-    float sun[3]{};
-    SampleEncodedRgb(runtime.weather, 5, weights, sun);
-    for (int c = 0; c < 3; ++c) gWeatherSkyQ1330.sunColor[c] = sun[c];
-
-    if (runtime.weather.havePnam) {
-        for (int layer = 0; layer < 4; ++layer) {
-            float rgb[3]{0.0f, 0.0f, 0.0f};
-            for (int tod = 0; tod < 4; ++tod) {
-                for (int c = 0; c < 3; ++c) {
+set(Q1660_CLOUD_RGB_NEW [=[
                     rgb[c] += runtime.weather.cloudEncoded[layer][tod][c] * weights.w[tod];
-                }
-            }
-            for (int c = 0; c < 3; ++c) gWeatherSkyQ1330.clouds[layer].color[c] = rgb[c];
-            // PC BlendColor alpha is 1.0 for the captured visible cloud even
+]=])
+string(FIND "${Q1660_TOD_SOURCE}" "${Q1660_CLOUD_RGB_OLD}" Q1660_CLOUD_RGB_POS)
+if(Q1660_CLOUD_RGB_POS EQUAL -1)
+    message(FATAL_ERROR "Q15.16 could not find Q14.0 cloud RGB interpolation")
+endif()
+string(REPLACE "${Q1660_CLOUD_RGB_OLD}" "${Q1660_CLOUD_RGB_NEW}"
+       Q1660_TOD_SOURCE "${Q1660_TOD_SOURCE}")
+
+set(Q1660_CLOUD_ALPHA_OLD "            gWeatherSkyQ1330.clouds[layer].color[3] = Clamp01(alpha);")
+set(Q1660_CLOUD_ALPHA_NEW [=[
+            // PC draw has BlendColor alpha=1 for WastelandCloudHorizon01 even
             // though WastelandClearMegaton PNAM Day alpha is authored as zero.
             gWeatherSkyQ1330.clouds[layer].color[3] = 1.0f;
-        }
-    }
 ]=])
-string(FIND "${Q1660_TOD_SOURCE}" "${Q1660_APPLYSKY_OLD}" Q1660_APPLYSKY_POS)
-if(Q1660_APPLYSKY_POS EQUAL -1)
-    message(FATAL_ERROR "Q15.16 could not find Q14.0 weather-sky sampling block")
+string(FIND "${Q1660_TOD_SOURCE}" "${Q1660_CLOUD_ALPHA_OLD}" Q1660_CLOUD_ALPHA_POS)
+if(Q1660_CLOUD_ALPHA_POS EQUAL -1)
+    message(FATAL_ERROR "Q15.16 could not find Q14.0 cloud alpha assignment")
 endif()
-string(REPLACE "${Q1660_APPLYSKY_OLD}" "${Q1660_APPLYSKY_NEW}"
+string(REPLACE "${Q1660_CLOUD_ALPHA_OLD}" "${Q1660_CLOUD_ALPHA_NEW}"
        Q1660_TOD_SOURCE "${Q1660_TOD_SOURCE}")
+
+# We are intentionally keeping raw sky values from Q13.9's later authored-colour
+# decoder. gSkyConverted is therefore still true: here it means 'ready for SKY'.
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/fo3-time-of-day-q1400.h" "${Q1660_TOD_SOURCE}")
 
 # -----------------------------------------------------------------------------
-# Q13.3 weather sky: load Bethesda's actual Sky\\Sun.dds, use the texture's
-# authored disc/halo alpha with PC additive blending, animate clouds along V,
-# and apply the captured 1.55 RGB scale in the SKYTEX pixel path.
+# Q13.3 SKYTEX: authored sun texture, V-scroll clouds, captured RGB scale.
 # -----------------------------------------------------------------------------
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/fo3-weather-sky-q1330.h" Q1660_SKY_SOURCE)
 
-string(REPLACE
-    "inline GLint gSunGlareLocQ1330 = -1;\ninline bool gLoggedGpuQ1330 = false;"
-    "inline GLint gSunGlareLocQ1330 = -1;\ninline GLint gSunTexLocQ1330 = -1;\ninline GLint gUseSunTexLocQ1330 = -1;\ninline GLuint gSunTextureQ1660 = 0u;\ninline bool gSunTextureAttemptedQ1660 = false;\ninline bool gLoggedGpuQ1330 = false;"
-    Q1660_SKY_SOURCE "${Q1660_SKY_SOURCE}")
+set(Q1660_GLOBAL_OLD [=[
+inline GLint gSunGlareLocQ1330 = -1;
+inline bool gLoggedGpuQ1330 = false;
+]=])
+set(Q1660_GLOBAL_NEW [=[
+inline GLint gSunGlareLocQ1330 = -1;
+inline GLint gSunTexLocQ1330 = -1;
+inline GLint gUseSunTexLocQ1330 = -1;
+inline GLuint gSunTextureQ1660 = 0u;
+inline bool gSunTextureAttemptedQ1660 = false;
+inline bool gLoggedGpuQ1330 = false;
+]=])
+string(FIND "${Q1660_SKY_SOURCE}" "${Q1660_GLOBAL_OLD}" Q1660_GLOBAL_POS)
+if(Q1660_GLOBAL_POS EQUAL -1)
+    message(FATAL_ERROR "Q15.16 could not find Q13.3 sky globals")
+endif()
+string(REPLACE "${Q1660_GLOBAL_OLD}" "${Q1660_GLOBAL_NEW}"
+       Q1660_SKY_SOURCE "${Q1660_SKY_SOURCE}")
 
+# Zero PNAM alpha does not prevent the PC cloud texture from existing/drawing.
 string(REPLACE
     "if (layer.texturePath.empty() || layer.color[3] <= 0.001f) return false;"
     "if (layer.texturePath.empty()) return false;"
     Q1660_SKY_SOURCE "${Q1660_SKY_SOURCE}")
+string(REPLACE
+    "if (!layer.loaded || layer.texture == 0u || layer.color[3] <= 0.001f) continue;"
+    "if (!layer.loaded || layer.texture == 0u) continue;"
+    Q1660_SKY_SOURCE "${Q1660_SKY_SOURCE}")
 
-set(Q1660_SUN_UPLOAD_ANCHOR [=[
-inline bool EnsureWeatherQ1330() {
-]=])
-set(Q1660_SUN_UPLOAD [=[
+set(Q1660_SUN_LOADER_ANCHOR "inline bool EnsureWeatherQ1330() {")
+set(Q1660_SUN_LOADER [=[
 inline bool EnsureSunTextureQ1660() {
     if (gSunTextureQ1660 != 0u) return true;
     if (gSunTextureAttemptedQ1660) return false;
@@ -215,33 +199,45 @@ inline bool EnsureSunTextureQ1660() {
 
 inline bool EnsureWeatherQ1330() {
 ]=])
-string(FIND "${Q1660_SKY_SOURCE}" "${Q1660_SUN_UPLOAD_ANCHOR}" Q1660_SUN_UPLOAD_POS)
-if(Q1660_SUN_UPLOAD_POS EQUAL -1)
-    message(FATAL_ERROR "Q15.16 could not find Q13.3 weather setup anchor")
+string(FIND "${Q1660_SKY_SOURCE}" "${Q1660_SUN_LOADER_ANCHOR}" Q1660_SUN_LOADER_POS)
+if(Q1660_SUN_LOADER_POS EQUAL -1)
+    message(FATAL_ERROR "Q15.16 could not find Q13.3 EnsureWeather anchor")
 endif()
-string(REPLACE "${Q1660_SUN_UPLOAD_ANCHOR}" "${Q1660_SUN_UPLOAD}"
+string(REPLACE "${Q1660_SUN_LOADER_ANCHOR}" "${Q1660_SUN_LOADER}"
        Q1660_SKY_SOURCE "${Q1660_SKY_SOURCE}")
 
-# Make the texture available before Q13.3 drops its temporary texture binding.
-string(REPLACE
-    "    glBindTexture(GL_TEXTURE_2D, 0u);\n\n    __android_log_print("
-    "    const bool q1660SunTextureReady = EnsureSunTextureQ1660();\n    glBindTexture(GL_TEXTURE_2D, 0u);\n\n    __android_log_print("
-    Q1660_SKY_SOURCE "${Q1660_SKY_SOURCE}")
-string(REPLACE
-    "sunGlare=%.3f mode=DAY\","
-    "sunGlare=%.3f mode=DAY q1516SunTexture=%d\","
-    Q1660_SKY_SOURCE "${Q1660_SKY_SOURCE}")
-string(REPLACE
-    "gWeatherSkyQ1330.sunColor[2], gWeatherSkyQ1330.sunGlare);"
-    "gWeatherSkyQ1330.sunColor[2], gWeatherSkyQ1330.sunGlare, q1660SunTextureReady ? 1 : 0);"
-    Q1660_SKY_SOURCE "${Q1660_SKY_SOURCE}")
+# Load the authored Sun after weather cloud uploads while a valid GLES context is
+# guaranteed. No log-format surgery is needed; the loader has its own Q15.16 log.
+set(Q1660_WEATHER_BIND_OLD [=[
+    glBindTexture(GL_TEXTURE_2D, 0u);
 
-string(REPLACE
-    "        uniform sampler2D uCloud;\n        uniform vec4 uCloudColor;"
-    "        uniform sampler2D uCloud;\n        uniform sampler2D uSunTex;\n        uniform int uUseSunTex;\n        uniform vec4 uCloudColor;"
-    Q1660_SKY_SOURCE "${Q1660_SKY_SOURCE}")
+    __android_log_print(
+]=])
+set(Q1660_WEATHER_BIND_NEW [=[
+    (void)EnsureSunTextureQ1660();
+    glBindTexture(GL_TEXTURE_2D, 0u);
 
-set(Q1660_SKY_SHADER_OLD [=[
+    __android_log_print(
+]=])
+string(FIND "${Q1660_SKY_SOURCE}" "${Q1660_WEATHER_BIND_OLD}" Q1660_WEATHER_BIND_POS)
+if(Q1660_WEATHER_BIND_POS EQUAL -1)
+    message(FATAL_ERROR "Q15.16 could not find Q13.3 post-weather texture bind")
+endif()
+string(REPLACE "${Q1660_WEATHER_BIND_OLD}" "${Q1660_WEATHER_BIND_NEW}"
+       Q1660_SKY_SOURCE "${Q1660_SKY_SOURCE}")
+
+set(Q1660_UNIFORM_OLD "        uniform sampler2D uCloud;\n        uniform vec4 uCloudColor;")
+set(Q1660_UNIFORM_NEW "        uniform sampler2D uCloud;\n        uniform sampler2D uSunTex;\n        uniform int uUseSunTex;\n        uniform vec4 uCloudColor;")
+string(FIND "${Q1660_SKY_SOURCE}" "${Q1660_UNIFORM_OLD}" Q1660_UNIFORM_POS)
+if(Q1660_UNIFORM_POS EQUAL -1)
+    message(FATAL_ERROR "Q15.16 could not find Q13.3 sampler uniforms")
+endif()
+string(REPLACE "${Q1660_UNIFORM_OLD}" "${Q1660_UNIFORM_NEW}"
+       Q1660_SKY_SOURCE "${Q1660_SKY_SOURCE}")
+
+# Replace only the procedural Sun body. The authored texture itself contains the
+# bright disc and wide halo seen in the PC state dump; keep a fallback if absent.
+set(Q1660_SUN_BODY_OLD [=[
             if (uMode == 0) {
                 float alignment = max(dot(d, normalize(uSunDirection)), 0.0);
                 float disc = smoothstep(0.9978, 0.99965, alignment);
@@ -252,42 +248,28 @@ set(Q1660_SKY_SHADER_OLD [=[
                 fragColor = vec4(colour, alpha);
                 return;
             }
-
-            float longitude = atan(d.z, d.x) / (2.0 * PI) + 0.5;
-            float latitude = acos(clamp(d.y, -1.0, 1.0)) / PI;
-            vec2 uv = vec2(longitude + uCloudOffset, latitude * 1.65);
-            vec4 texel = texture(uCloud, uv);
-            float horizonFade = smoothstep(-0.02, 0.18, d.y);
-            float alpha = texel.a * uCloudColor.a * horizonFade;
-            if (alpha <= 0.002) discard;
-            fragColor = vec4(texel.rgb * uCloudColor.rgb, alpha);
 ]=])
-set(Q1660_SKY_SHADER_NEW [=[
+set(Q1660_SUN_BODY_NEW [=[
             if (uMode == 0) {
                 vec3 sunDir = normalize(uSunDirection);
                 float alignment = dot(d, sunDir);
                 if (uUseSunTex != 0 && alignment > 0.25) {
-                    // Reconstruct the PC's large textured sun billboard on the
-                    // sky dome. Sky\\Sun.dds itself carries the small disc and
-                    // broad halo in alpha; the captured pass then multiplies RGB
-                    // by raw Sun WTHR colour and Params.y=1.55.
                     vec3 referenceUp = abs(sunDir.y) > 0.96
                         ? vec3(0.0, 0.0, 1.0) : vec3(0.0, 1.0, 0.0);
                     vec3 right = normalize(cross(referenceUp, sunDir));
                     vec3 up = normalize(cross(sunDir, right));
+                    // Wide dome projection: Sky\\Sun.dds already carries the
+                    // compact disc plus the broad PC halo in its alpha channel.
                     const float halfSpan = 0.78;
                     vec2 uv = vec2(0.5) + vec2(dot(d, right), dot(d, up)) /
                                            (2.0 * halfSpan);
                     if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) discard;
-                    vec4 sunTexel = texture(uSunTex, uv);
-                    float alpha = sunTexel.a;
-                    if (alpha <= 0.001) discard;
-                    fragColor = vec4(sunTexel.rgb * uSunColor * 1.55, alpha);
+                    vec4 texel = texture(uSunTex, uv);
+                    if (texel.a <= 0.001) discard;
+                    fragColor = vec4(texel.rgb * uSunColor * 1.55, texel.a);
                     return;
                 }
 
-                // Texture-load fallback only; keep old disc so a missing BSA
-                // asset cannot make the Sun disappear entirely.
                 alignment = max(alignment, 0.0);
                 float disc = smoothstep(0.9978, 0.99965, alignment);
                 float halo = pow(alignment, 72.0) * clamp(uSunGlare, 0.0, 1.0);
@@ -297,30 +279,37 @@ set(Q1660_SKY_SHADER_NEW [=[
                 fragColor = vec4(colour, alpha);
                 return;
             }
-
-            float longitude = atan(d.z, d.x) / (2.0 * PI) + 0.5;
-            float latitude = acos(clamp(d.y, -1.0, 1.0)) / PI;
-            // PC SKYTEX adds TexCoordYOff to the authored V coordinate. Our
-            // procedural dome still approximates the authored sky mesh, but the
-            // animation axis now matches the captured vertex shader.
-            vec2 uv = vec2(longitude, latitude * 1.65 + uCloudOffset);
-            vec4 texel = texture(uCloud, uv);
-            float horizonFade = smoothstep(-0.02, 0.18, d.y);
-            float alpha = texel.a * uCloudColor.a * horizonFade;
-            if (alpha <= 0.002) discard;
-            fragColor = vec4(texel.rgb * uCloudColor.rgb * 1.55, alpha);
 ]=])
-string(FIND "${Q1660_SKY_SOURCE}" "${Q1660_SKY_SHADER_OLD}" Q1660_SKY_SHADER_POS)
-if(Q1660_SKY_SHADER_POS EQUAL -1)
-    message(FATAL_ERROR "Q15.16 could not find Q13.3 procedural Sun/cloud shader block")
+string(FIND "${Q1660_SKY_SOURCE}" "${Q1660_SUN_BODY_OLD}" Q1660_SUN_BODY_POS)
+if(Q1660_SUN_BODY_POS EQUAL -1)
+    message(FATAL_ERROR "Q15.16 could not find Q13.3 procedural Sun body")
 endif()
-string(REPLACE "${Q1660_SKY_SHADER_OLD}" "${Q1660_SKY_SHADER_NEW}"
+string(REPLACE "${Q1660_SUN_BODY_OLD}" "${Q1660_SUN_BODY_NEW}"
        Q1660_SKY_SOURCE "${Q1660_SKY_SOURCE}")
 
-string(REPLACE
-    "    gCloudTexLocQ1330 = glGetUniformLocation(gProgramQ1330, \"uCloud\");"
-    "    gCloudTexLocQ1330 = glGetUniformLocation(gProgramQ1330, \"uCloud\");\n    gSunTexLocQ1330 = glGetUniformLocation(gProgramQ1330, \"uSunTex\");\n    gUseSunTexLocQ1330 = glGetUniformLocation(gProgramQ1330, \"uUseSunTex\");"
-    Q1660_SKY_SOURCE "${Q1660_SKY_SOURCE}")
+# PC SKYTEX VS adds TexCoordYOff to V/Y, and PS multiplies texture*BlendColor by
+# Params.y=1.55. Keep our sphere geometry for this milestone, but match both.
+set(Q1660_CLOUD_UV_OLD "            vec2 uv = vec2(longitude + uCloudOffset, latitude * 1.65);")
+set(Q1660_CLOUD_UV_NEW "            vec2 uv = vec2(longitude, latitude * 1.65 + uCloudOffset);")
+set(Q1660_CLOUD_OUT_OLD "            fragColor = vec4(texel.rgb * uCloudColor.rgb, alpha);")
+set(Q1660_CLOUD_OUT_NEW "            fragColor = vec4(texel.rgb * uCloudColor.rgb * 1.55, alpha);")
+foreach(pair IN ITEMS CLOUD_UV CLOUD_OUT)
+    string(FIND "${Q1660_SKY_SOURCE}" "${Q1660_${pair}_OLD}" Q1660_${pair}_POS)
+    if(Q1660_${pair}_POS EQUAL -1)
+        message(FATAL_ERROR "Q15.16 could not find Q13.3 ${pair} shader line")
+    endif()
+    string(REPLACE "${Q1660_${pair}_OLD}" "${Q1660_${pair}_NEW}"
+           Q1660_SKY_SOURCE "${Q1660_SKY_SOURCE}")
+endforeach()
+
+set(Q1660_LOC_OLD "    gCloudTexLocQ1330 = glGetUniformLocation(gProgramQ1330, \"uCloud\");")
+set(Q1660_LOC_NEW "    gCloudTexLocQ1330 = glGetUniformLocation(gProgramQ1330, \"uCloud\");\n    gSunTexLocQ1330 = glGetUniformLocation(gProgramQ1330, \"uSunTex\");\n    gUseSunTexLocQ1330 = glGetUniformLocation(gProgramQ1330, \"uUseSunTex\");")
+string(FIND "${Q1660_SKY_SOURCE}" "${Q1660_LOC_OLD}" Q1660_LOC_POS)
+if(Q1660_LOC_POS EQUAL -1)
+    message(FATAL_ERROR "Q15.16 could not find Q13.3 uniform-location anchor")
+endif()
+string(REPLACE "${Q1660_LOC_OLD}" "${Q1660_LOC_NEW}"
+       Q1660_SKY_SOURCE "${Q1660_SKY_SOURCE}")
 
 set(Q1660_SUN_DRAW_OLD [=[
     glUniform1i(gModeLocQ1330, 0);
@@ -341,21 +330,15 @@ set(Q1660_SUN_DRAW_NEW [=[
 ]=])
 string(FIND "${Q1660_SKY_SOURCE}" "${Q1660_SUN_DRAW_OLD}" Q1660_SUN_DRAW_POS)
 if(Q1660_SUN_DRAW_POS EQUAL -1)
-    message(FATAL_ERROR "Q15.16 could not find Q13.3 Sun draw block")
+    message(FATAL_ERROR "Q15.16 could not find Q13.3 Sun draw")
 endif()
 string(REPLACE "${Q1660_SUN_DRAW_OLD}" "${Q1660_SUN_DRAW_NEW}"
        Q1660_SKY_SOURCE "${Q1660_SKY_SOURCE}")
-
-string(REPLACE
-    "if (!layer.loaded || layer.texture == 0u || layer.color[3] <= 0.001f) continue;"
-    "if (!layer.loaded || layer.texture == 0u) continue;"
-    Q1660_SKY_SOURCE "${Q1660_SKY_SOURCE}")
 
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/fo3-weather-sky-q1330.h" "${Q1660_SKY_SOURCE}")
 
 # -----------------------------------------------------------------------------
 # Visible build identity: Q15.15 -> Q15.16.
-# Seven-segment 6 = A F G E D C = 0x7D with Q15.10's bit layout.
 # -----------------------------------------------------------------------------
 set(Q1660_Q4_INPUT "${CMAKE_CURRENT_BINARY_DIR}/q1280-q4-generated.cpp")
 if(NOT EXISTS "${Q1660_Q4_INPUT}")
@@ -369,8 +352,7 @@ string(REPLACE
 string(REPLACE "Q15.15" "Q15.16" Q1660_Q4_SOURCE "${Q1660_Q4_SOURCE}")
 file(WRITE "${Q1660_Q4_INPUT}" "${Q1660_Q4_SOURCE}")
 
-# Hard guards: prove the PC sky semantics are present and that the Q15.15 world
-# output patch remains in the native source untouched.
+# Hard guards: sky changes present; world colour baseline untouched.
 string(FIND "${Q1660_ENV_SOURCE}" "colour * 1.55" Q1660_GRADIENT_OK)
 string(FIND "${Q1660_TOD_SOURCE}" "SampleEncodedRgb(runtime.weather, 0" Q1660_RAW_SKY_OK)
 string(FIND "${Q1660_TOD_SOURCE}" "clouds[layer].color[3] = 1.0f" Q1660_CLOUD_ALPHA_OK)
@@ -387,7 +369,4 @@ if(Q1660_GRADIENT_OK EQUAL -1 OR Q1660_RAW_SKY_OK EQUAL -1 OR
         "Q15.16 verification failed: gradient=${Q1660_GRADIENT_OK} rawSky=${Q1660_RAW_SKY_OK} cloudAlpha=${Q1660_CLOUD_ALPHA_OK} sunTex=${Q1660_SUN_TEX_OK} cloudV=${Q1660_CLOUD_V_OK} cloudScale=${Q1660_CLOUD_SCALE_OK} label=${Q1660_LABEL_OK} q1515=${Q1660_Q1515_BASELINE_OK}")
 endif()
 
-# Q15.16 changes only generated/shadow sky headers and the visible q4 label.
-# q6h-native-generated.cpp still points at the same final eye source and keeps
-# Q15.15's direct PC output-domain write.
-message(STATUS "Q15.16 PC-captured sky enabled: raw WTHR*1.55, visible PNAM-zero cloud, textured additive Sun, V-scroll")
+message(STATUS "Q15.16 PC-captured sky enabled: raw WTHR*1.55, PNAM-zero cloud visible, textured additive Sun, V-scroll")
