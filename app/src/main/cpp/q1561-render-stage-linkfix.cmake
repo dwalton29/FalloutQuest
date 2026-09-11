@@ -114,6 +114,11 @@ if(EXISTS "${Q720_CELL_SOURCE}")
     file(WRITE "${Q720_CELL_SOURCE}" "${Q1699_CELL_SOURCE}")
 endif()
 
+# The old q7-runtime renderer transform is no longer in the active chain. Restore
+# only the required authored-door surfaces on the live Q6H renderer: record type,
+# VR AABB, cached XTEL and the ray helper consumed by Q16.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q1698-active-door-metadata.cmake")
+
 # Q16.0 promotes the old proof-door path into real authored CELL traversal:
 # right-hand aim prompt, right A activation, generic interior/exterior XTEL,
 # and destination-aware Fallout3.esm LSCR loading screens presented before swap.
