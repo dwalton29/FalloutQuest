@@ -70,3 +70,9 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/q1650-pc-output-domain.cmake")
 # world colour path: raw WTHR sky RGB * 1.55, PNAM-zero clouds remain visible,
 # cloud V scrolling, and the authored Sky\\Sun.dds additive sun treatment.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q1660-pc-sky.cmake")
+
+# Q15.17 replaces Q15.2's approximate full-resolution 8-tap bloom source with
+# the captured PC SP17 sequence: 640x256 linear downsample -> 256x256 point,
+# per-tap bright threshold 0.55 + vertical ISBPBLUR15, then horizontal ISBLUR15.
+# Q15.15 output-domain and Q15.16 sky paths remain untouched.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q1670-pc-hdr-bloom.cmake")
