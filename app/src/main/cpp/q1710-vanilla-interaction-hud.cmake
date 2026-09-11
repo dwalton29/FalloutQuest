@@ -70,9 +70,9 @@ string(REPLACE "${Q1710_GEOMETRY_OLD}" "${Q1710_GEOMETRY_NEW}"
 
 # Replace Q16.0's one bright debug draw with the vanilla HUDMain treatment.
 # Fallout 3's default iSystemColorHUDMain is RGB(26,255,128). The original Info
-# control has _glow=true and _line_alpha=255, so render a soft additive halo and
-# then an opaque crisp core. Depth remains disabled for the prompt, matching its
-# HUD role rather than treating it as world geometry.
+# control has _glow=true and _line_alpha=255. The existing tiny OpenXR line
+# shader is RGB-only, so the halo is reproduced as dim additive RGB passes,
+# followed by the full-strength core.
 set(Q1710_DRAW_OLD [==[
                     if (doorAimActiveQ1700_) {
                         glDepthFunc(GL_ALWAYS);
@@ -99,20 +99,26 @@ set(Q1710_DRAW_NEW [==[
 
                         glDepthFunc(GL_ALWAYS);
                         glEnable(GL_BLEND);
-                        glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+                        glBlendFunc(GL_ONE, GL_ONE);
 
-                        // Soft Gamebryo-style text glow.
+                        // Soft Gamebryo-style glow using the RGB-only line shader.
                         glLineWidth(7.0f);
-                        SetMvpAndColor(mvp, 26.0f / 255.0f, 1.0f, 128.0f / 255.0f, 0.10f);
+                        SetMvpAndColor(mvp,
+                                       (26.0f / 255.0f) * 0.10f,
+                                       0.10f,
+                                       (128.0f / 255.0f) * 0.10f);
                         glDrawArrays(GL_LINES, interactionStartVertex_, interactionVertexCount_);
                         glLineWidth(4.0f);
-                        SetMvpAndColor(mvp, 26.0f / 255.0f, 1.0f, 128.0f / 255.0f, 0.24f);
+                        SetMvpAndColor(mvp,
+                                       (26.0f / 255.0f) * 0.22f,
+                                       0.22f,
+                                       (128.0f / 255.0f) * 0.22f);
                         glDrawArrays(GL_LINES, interactionStartVertex_, interactionVertexCount_);
 
-                        // Full-alpha vanilla HUDMain core.
-                        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+                        // Full-alpha vanilla HUDMain core: RGB(26,255,128).
+                        glBlendFunc(GL_ONE, GL_ZERO);
                         glLineWidth(2.0f);
-                        SetMvpAndColor(mvp, 26.0f / 255.0f, 1.0f, 128.0f / 255.0f, 1.0f);
+                        SetMvpAndColor(mvp, 26.0f / 255.0f, 1.0f, 128.0f / 255.0f);
                         glDrawArrays(GL_LINES, interactionStartVertex_, interactionVertexCount_);
 
                         glBlendFuncSeparate(q1710BlendSrcRgb, q1710BlendDstRgb,
@@ -129,18 +135,11 @@ endif()
 string(REPLACE "${Q1710_DRAW_OLD}" "${Q1710_DRAW_NEW}"
        Q1710_Q4_SOURCE "${Q1710_Q4_SOURCE}")
 
-# Update prompt comments/status strings so a CI artifact can be identified from
-# source/logs without changing the traversal implementation itself.
-string(REPLACE
-    "Append fixed vector text A OPEN while q1600's vertex builder is still in scope."
-    "Q16.1 vanilla HUDMain Info interaction geometry (A button + OPEN)."
-    Q1710_Q4_SOURCE "${Q1710_Q4_SOURCE}")
-
 file(WRITE "${Q1710_Q4_INPUT}" "${Q1710_Q4_SOURCE}")
 
 string(FIND "${Q1710_Q4_SOURCE}" "kButtonSegments = 24" Q1710_RING_OK)
 string(FIND "${Q1710_Q4_SOURCE}" "26.0f / 255.0f" Q1710_COLOR_OK)
-string(FIND "${Q1710_Q4_SOURCE}" "glBlendFunc(GL_SRC_ALPHA, GL_ONE)" Q1710_GLOW_OK)
+string(FIND "${Q1710_Q4_SOURCE}" "glBlendFunc(GL_ONE, GL_ONE)" Q1710_GLOW_OK)
 string(FIND "${Q1710_Q4_SOURCE}" "Q16.1: 1 = B C" Q1710_LABEL_OK)
 if(Q1710_RING_OK EQUAL -1 OR Q1710_COLOR_OK EQUAL -1 OR
    Q1710_GLOW_OK EQUAL -1 OR Q1710_LABEL_OK EQUAL -1)
