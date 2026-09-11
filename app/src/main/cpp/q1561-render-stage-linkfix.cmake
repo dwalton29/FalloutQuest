@@ -26,3 +26,8 @@ message(STATUS "Q15.6 terrain render-stage link fixed via shared inline state")
 # Q15.7 runs after the Q15.6 terrain link rewrite so both generated render
 # translation units and the final OpenXR source can share the new domain toggle.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q1570-legacy-colour-domain-ab.cmake")
+
+# Q15.8 is deliberately non-visual. It runs after every active renderer patch so
+# the sampled normals and sun vector are exactly the inputs used by the final
+# static/NIF shader, then emits one Megaton NdotL/coordinate-space trace.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q1580-light-direction-trace.cmake")
