@@ -25,17 +25,13 @@ endif()
 string(REPLACE "${Q1699_ACTION_OLD}" "${Q1699_ACTION_NEW}"
        Q1699_Q4_SOURCE "${Q1699_Q4_SOURCE}")
 
-string(REPLACE "XrPath rightTriggerValue = XR_NULL_PATH;"
-               "XrPath rightA = XR_NULL_PATH;"
+# Normalize the complete symbol, not just one syntactic occurrence. The live q4
+# binding expression is split across `||` clauses, so the previous suffix-only
+# replacement left one stale &rightTriggerValue after changing the path text.
+string(REPLACE "rightTriggerValue" "rightA"
                Q1699_Q4_SOURCE "${Q1699_Q4_SOURCE}")
 string(REPLACE "/user/hand/right/input/trigger/value"
                "/user/hand/right/input/a/click"
-               Q1699_Q4_SOURCE "${Q1699_Q4_SOURCE}")
-string(REPLACE "&rightTriggerValue)) return false;"
-               "&rightA)) return false;"
-               Q1699_Q4_SOURCE "${Q1699_Q4_SOURCE}")
-string(REPLACE "{activateAction_, rightTriggerValue},"
-               "{activateAction_, rightA},"
                Q1699_Q4_SOURCE "${Q1699_Q4_SOURCE}")
 string(REPLACE
     "Q7.1 Touch bindings attached: Q6K controls unchanged + right trigger/value probe"
@@ -115,13 +111,14 @@ string(REPLACE
 string(FIND "${Q1699_Q4_SOURCE}" "XR_ACTION_TYPE_BOOLEAN_INPUT" Q1699_BOOL_OK)
 string(FIND "${Q1699_Q4_SOURCE}" "/user/hand/right/input/a/click" Q1699_A_OK)
 string(FIND "${Q1699_Q4_SOURCE}" "/user/hand/right/input/trigger/value" Q1699_OLD_TRIGGER)
+string(FIND "${Q1699_Q4_SOURCE}" "rightTriggerValue" Q1699_OLD_TRIGGER_SYMBOL)
 string(FIND "${Q1699_Q4_SOURCE}" "ActivateFo3DoorQ1700(" Q1699_ACTIVATE_OK)
 string(FIND "${Q1699_Q4_SOURCE}" "ProbeDoorQ71();" Q1699_OLD_PROBE)
 if(Q1699_BOOL_OK EQUAL -1 OR Q1699_A_OK EQUAL -1 OR
-   NOT Q1699_OLD_TRIGGER EQUAL -1 OR Q1699_ACTIVATE_OK EQUAL -1 OR
-   NOT Q1699_OLD_PROBE EQUAL -1)
+   NOT Q1699_OLD_TRIGGER EQUAL -1 OR NOT Q1699_OLD_TRIGGER_SYMBOL EQUAL -1 OR
+   Q1699_ACTIVATE_OK EQUAL -1 OR NOT Q1699_OLD_PROBE EQUAL -1)
     message(FATAL_ERROR
-        "Q16.0 live input verification failed: bool=${Q1699_BOOL_OK} A=${Q1699_A_OK} oldTrigger=${Q1699_OLD_TRIGGER} activate=${Q1699_ACTIVATE_OK} oldProbe=${Q1699_OLD_PROBE}")
+        "Q16.0 live input verification failed: bool=${Q1699_BOOL_OK} A=${Q1699_A_OK} oldTrigger=${Q1699_OLD_TRIGGER} oldSymbol=${Q1699_OLD_TRIGGER_SYMBOL} activate=${Q1699_ACTIVATE_OK} oldProbe=${Q1699_OLD_PROBE}")
 endif()
 
 file(WRITE "${Q1699_Q4_INPUT}" "${Q1699_Q4_SOURCE}")
