@@ -113,17 +113,15 @@ file(WRITE "${Q720_CELL_SOURCE}" "${Q1698_CELL_SOURCE}")
 
 # -----------------------------------------------------------------------------
 # Active Q6H renderer: retain record type, cached XTEL and rendered AABB.
+# Patch only the stable editorId/modelPath pair. Q9-Q15 legitimately append
+# newer renderer fields after modelPath, so matching the historical closing `};`
+# made this transform needlessly dependent on their exact layout.
 # -----------------------------------------------------------------------------
 set(Q1698_GPU_FIELDS_OLD [==[
-    uint32_t refFormId = 0;
-    uint32_t baseFormId = 0;
     std::string editorId;
     std::string modelPath;
-};
 ]==])
 set(Q1698_GPU_FIELDS_NEW [==[
-    uint32_t refFormId = 0;
-    uint32_t baseFormId = 0;
     std::string editorId;
     std::string modelPath;
     std::string baseRecordType;
@@ -131,17 +129,20 @@ set(Q1698_GPU_FIELDS_NEW [==[
     float minX = 0.0f, maxX = 0.0f;
     float minY = 0.0f, maxY = 0.0f;
     float minZ = 0.0f, maxZ = 0.0f;
-};
 ]==])
 string(FIND "${Q6H_NATIVE_SOURCE}" "${Q1698_GPU_FIELDS_OLD}" Q1698_GPU_FIELDS_POS)
 if(Q1698_GPU_FIELDS_POS EQUAL -1)
-    message(FATAL_ERROR "Q16.0 door metadata could not find active GpuObject tail")
+    message(FATAL_ERROR "Q16.0 door metadata could not find active GpuObject model fields")
 endif()
 string(REPLACE "${Q1698_GPU_FIELDS_OLD}" "${Q1698_GPU_FIELDS_NEW}"
        Q6H_NATIVE_SOURCE "${Q6H_NATIVE_SOURCE}")
 
 # The old mutable-Q7 renderer owned this symbol; current Q10+ boots Megaton's
 # persistent exterior CELL directly, so initialize it to that live CELL.
+string(FIND "${Q6H_NATIVE_SOURCE}" "bool gLoggedFirstDraw = false;" Q1698_CURRENT_CELL_POS)
+if(Q1698_CURRENT_CELL_POS EQUAL -1)
+    message(FATAL_ERROR "Q16.0 door metadata could not find current-cell state anchor")
+endif()
 string(REPLACE
     "bool gLoggedFirstDraw = false;"
     "bool gLoggedFirstDraw = false;\nuint32_t gCurrentCellFormId = 0x00002DBDu;"
