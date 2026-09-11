@@ -77,3 +77,8 @@ if(Q1720_INCLUDE_OK EQUAL -1 OR Q1720_DRAW_OK EQUAL -1 OR
 endif()
 
 message(STATUS "Q16.2 loading comfort enabled: 62% optically-distant LSCR + rotating HUDMain clock/compass")
+
+# Q16.3 keeps Q16.1 interaction visuals and Q16.2 loading presentation intact,
+# but broadens targeting to authored XTEL refs that do not have a drawable door
+# mesh (for example settlement gates with separate visible geometry).
+include("${CMAKE_CURRENT_SOURCE_DIR}/q1730-authored-door-query.cmake")
