@@ -150,3 +150,7 @@ endif()
 # right-hand aim prompt, right A activation, generic interior/exterior XTEL,
 # and destination-aware Fallout3.esm LSCR loading screens presented before swap.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q1700-cell-traversal-ui.cmake")
+
+# Q16.1 keeps Q16.0 traversal intact and replaces only the temporary right-hand
+# debug prompt with Fallout 3 HUDMainMenu's vanilla Info-widget styling.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q1710-vanilla-interaction-hud.cmake")
