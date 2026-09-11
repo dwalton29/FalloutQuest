@@ -85,10 +85,32 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/q1699-active-input-normalizer.cmake")
 # public headers together at the front so the Q16 replacement anchor is
 # deterministic even when older generators have inserted source includes between
 # the originals. Both headers are guarded, so later duplicate includes are safe.
+#
+# Q7.20 also inserts transition bookkeeping between the player-reset assignment
+# and the terrainReady declaration. Q16's inherited patch predates that insertion,
+# so normalize only that declaration's position: remove its original occurrence
+# and put it immediately after the stable reset prefix. No executable statements
+# are removed or reordered relative to one another.
 if(EXISTS "${Q720_CELL_SOURCE}")
     file(READ "${Q720_CELL_SOURCE}" Q1699_CELL_SOURCE)
     string(PREPEND Q1699_CELL_SOURCE
            "#include \"fo3-transition-q74.h\"\n#include \"fo3-terrain-q76.h\"\n")
+
+    set(Q1699_COMPLETE_PREFIX
+        "void CompleteFo3CellTransitionQ74(uint32_t cellFormId) {\n    gCurrentCellQ74 = cellFormId;\n    gPlayerResetPendingQ74 = true;\n")
+    set(Q1699_TERRAIN_DECL "    bool terrainReady = false;\n")
+    string(FIND "${Q1699_CELL_SOURCE}" "${Q1699_COMPLETE_PREFIX}" Q1699_COMPLETE_PREFIX_POS)
+    string(FIND "${Q1699_CELL_SOURCE}" "${Q1699_TERRAIN_DECL}" Q1699_TERRAIN_DECL_POS)
+    if(Q1699_COMPLETE_PREFIX_POS EQUAL -1 OR Q1699_TERRAIN_DECL_POS EQUAL -1)
+        message(FATAL_ERROR
+            "Q16.0 pre-normalizer could not find completion prefix/declaration: prefix=${Q1699_COMPLETE_PREFIX_POS} terrain=${Q1699_TERRAIN_DECL_POS}")
+    endif()
+    string(REPLACE "${Q1699_TERRAIN_DECL}" ""
+           Q1699_CELL_SOURCE "${Q1699_CELL_SOURCE}")
+    string(REPLACE "${Q1699_COMPLETE_PREFIX}"
+           "${Q1699_COMPLETE_PREFIX}\n${Q1699_TERRAIN_DECL}"
+           Q1699_CELL_SOURCE "${Q1699_CELL_SOURCE}")
+
     file(WRITE "${Q720_CELL_SOURCE}" "${Q1699_CELL_SOURCE}")
 endif()
 
