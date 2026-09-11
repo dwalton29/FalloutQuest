@@ -60,3 +60,8 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/q1630-pc-sp17-core-equation.cmake")
 # than the guessed Q13.4 display-domain transform: exact Rec.601 saturation/tint,
 # captured TargetLUM 1.2, legacy no-sRGB-write output semantics, and Q15.14 label.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q1640-pc-hdr-output.cmake")
+
+# Q15.15 tests the last output-domain assumption in Q15.14: write the captured PC
+# numeric result directly to the OpenXR target instead of sRGB-decoding it first.
+# Device luminance strongly suggests the inverse transfer was being displayed as-is.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q1650-pc-output-domain.cmake")
