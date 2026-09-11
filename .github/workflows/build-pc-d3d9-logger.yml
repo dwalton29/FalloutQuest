@@ -1,0 +1,32 @@
+name: Build PC D3D9 Logger
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'tools/pc-d3d9-logger/**'
+      - '.github/workflows/build-pc-d3d9-logger.yml'
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure Win32
+        run: cmake -S tools/pc-d3d9-logger -B tools/pc-d3d9-logger/build -A Win32
+
+      - name: Build Release
+        run: cmake --build tools/pc-d3d9-logger/build --config Release
+
+      - name: Upload logger DLL
+        uses: actions/upload-artifact@v4
+        with:
+          name: Fallout3-D3D9-Logger
+          path: |
+            tools/pc-d3d9-logger/build/Release/d3d9.dll
+            tools/pc-d3d9-logger/analyze_capture.py
+            tools/pc-d3d9-logger/README.md
+          if-no-files-found: error
