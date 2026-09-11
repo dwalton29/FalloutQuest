@@ -148,3 +148,7 @@ if(Q1710_RING_OK EQUAL -1 OR Q1710_COLOR_OK EQUAL -1 OR
 endif()
 
 message(STATUS "Q16.1 vanilla HUDMain Info interaction enabled: [A] OPEN, HUDMain RGB(26,255,128), glow=true")
+
+# Q16.2 keeps the interaction/traversal work above intact and changes only the
+# loading-screen presentation for comfortable VR viewing.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q1720-loading-screen-comfort.cmake")
