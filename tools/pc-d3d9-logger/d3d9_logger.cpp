@@ -1,7 +1,29 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
+
+// d3d9.h declares these DLL entry points. Rename those declarations while the
+// header is parsed so this proxy can provide its own C exports with the exact
+// public D3D9 names below.
+#define Direct3DCreate9 FQ_HEADER_Direct3DCreate9
+#define Direct3DCreate9Ex FQ_HEADER_Direct3DCreate9Ex
+#define D3DPERF_BeginEvent FQ_HEADER_D3DPERF_BeginEvent
+#define D3DPERF_EndEvent FQ_HEADER_D3DPERF_EndEvent
+#define D3DPERF_GetStatus FQ_HEADER_D3DPERF_GetStatus
+#define D3DPERF_QueryRepeatFrame FQ_HEADER_D3DPERF_QueryRepeatFrame
+#define D3DPERF_SetMarker FQ_HEADER_D3DPERF_SetMarker
+#define D3DPERF_SetOptions FQ_HEADER_D3DPERF_SetOptions
+#define D3DPERF_SetRegion FQ_HEADER_D3DPERF_SetRegion
 #include <d3d9.h>
+#undef Direct3DCreate9
+#undef Direct3DCreate9Ex
+#undef D3DPERF_BeginEvent
+#undef D3DPERF_EndEvent
+#undef D3DPERF_GetStatus
+#undef D3DPERF_QueryRepeatFrame
+#undef D3DPERF_SetMarker
+#undef D3DPERF_SetOptions
+#undef D3DPERF_SetRegion
 
 #include <algorithm>
 #include <atomic>
@@ -20,79 +42,70 @@
 
 namespace {
 
-constexpr std::size_t kMaxTextureStages = 8;
-constexpr std::size_t kTextureHashBudget = 64 * 1024;
+constexpr DWORD kTextureStages = 8;
+constexpr std::size_t kTextureHashBudget = 64u * 1024u;
 
 HMODULE gRealD3D9 = nullptr;
-std::mutex gLogMutex;
 FILE* gLog = nullptr;
+std::mutex gLogMutex;
+std::mutex gMetadataMutex;
 std::atomic<bool> gCaptureActive{false};
 std::atomic<std::uint64_t> gFrameId{0};
 std::atomic<std::uint64_t> gDrawId{0};
 
 struct ShaderInfo {
     std::uint64_t hash = 0;
-    UINT byteCount = 0;
-    DWORD versionToken = 0;
+    UINT bytes = 0;
+    DWORD version = 0;
 };
 
-struct TextureInfo {
-    std::string description;
-};
-
-std::mutex gMetadataMutex;
-std::unordered_map<void*, ShaderInfo> gShaders;
-std::unordered_map<void*, TextureInfo> gTextures;
+std::unordered_map<void*, ShaderInfo> gShaderInfo;
+std::unordered_map<void*, std::string> gTextureInfo;
 
 std::uint64_t Fnv1a64(const void* data, std::size_t size) {
-    const auto* bytes = static_cast<const std::uint8_t*>(data);
-    std::uint64_t hash = 14695981039346656037ull;
+    const auto* p = static_cast<const std::uint8_t*>(data);
+    std::uint64_t h = 14695981039346656037ull;
     for (std::size_t i = 0; i < size; ++i) {
-        hash ^= bytes[i];
-        hash *= 1099511628211ull;
+        h ^= p[i];
+        h *= 1099511628211ull;
     }
-    return hash;
+    return h;
 }
 
 std::wstring LogPath() {
-    wchar_t exePath[MAX_PATH]{};
-    const DWORD length = GetModuleFileNameW(nullptr, exePath, MAX_PATH);
-    if (length == 0 || length >= MAX_PATH) {
-        return L"Fallout3D3D9.log";
-    }
-    std::wstring path(exePath, length);
-    const auto slash = path.find_last_of(L"\\/");
-    if (slash != std::wstring::npos) {
-        path.resize(slash + 1);
-    } else {
-        path.clear();
-    }
-    path += L"Fallout3D3D9.log";
-    return path;
+    wchar_t path[MAX_PATH]{};
+    const DWORD len = GetModuleFileNameW(nullptr, path, MAX_PATH);
+    if (len == 0 || len >= MAX_PATH) return L"Fallout3D3D9.log";
+    std::wstring out(path, len);
+    const auto slash = out.find_last_of(L"\\/");
+    if (slash == std::wstring::npos) out.clear();
+    else out.resize(slash + 1);
+    out += L"Fallout3D3D9.log";
+    return out;
 }
 
-void EnsureLogOpenLocked() {
+void EnsureLogLocked() {
     if (gLog) return;
+    FILE* file = nullptr;
     const std::wstring path = LogPath();
-    gLog = _wfopen(path.c_str(), L"wt");
-    if (!gLog) return;
+    if (_wfopen_s(&file, path.c_str(), L"wt") != 0 || !file) return;
+    gLog = file;
     setvbuf(gLog, nullptr, _IOLBF, 0);
-
     SYSTEMTIME st{};
     GetLocalTime(&st);
     std::fprintf(gLog,
-                 "FQ_D3D9_LOGGER version=1 pid=%lu time=%04u-%02u-%02uT%02u:%02u:%02u.%03u hotkey=F10 capture=next_full_frame\n",
-                 GetCurrentProcessId(), st.wYear, st.wMonth, st.wDay,
-                 st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
+        "FQ_D3D9_LOGGER version=2 pid=%lu time=%04u-%02u-%02uT%02u:%02u:%02u.%03u hotkey=F10 capture=next_full_frame\n",
+        GetCurrentProcessId(), st.wYear, st.wMonth, st.wDay,
+        st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
 }
 
-void Log(const char* format, ...) {
+void Log(const char* fmt, ...) {
     std::lock_guard<std::mutex> lock(gLogMutex);
-    EnsureLogOpenLocked();
+    EnsureLogLocked();
     if (!gLog) return;
     va_list args;
-    va_start(args, format);
-    std::vfprintf(gLog, format, args);
+    va_start(args, fmt);
+    std::vfprintf(gLog, fmt, args);
     va_end(args);
     std::fputc('\n', gLog);
 }
@@ -105,9 +118,9 @@ void FlushLog() {
 HMODULE RealD3D9() {
     if (gRealD3D9) return gRealD3D9;
     wchar_t systemDir[MAX_PATH]{};
-    const UINT length = GetSystemDirectoryW(systemDir, MAX_PATH);
-    if (length == 0 || length >= MAX_PATH - 10) return nullptr;
-    std::wstring path(systemDir, length);
+    const UINT len = GetSystemDirectoryW(systemDir, MAX_PATH);
+    if (len == 0 || len >= MAX_PATH - 10) return nullptr;
+    std::wstring path(systemDir, len);
     path += L"\\d3d9.dll";
     gRealD3D9 = LoadLibraryW(path.c_str());
     return gRealD3D9;
@@ -115,27 +128,23 @@ HMODULE RealD3D9() {
 
 template <typename T>
 T RealProc(const char* name) {
-    HMODULE module = RealD3D9();
+    const HMODULE module = RealD3D9();
     return module ? reinterpret_cast<T>(GetProcAddress(module, name)) : nullptr;
 }
 
 template <typename Fn>
 bool PatchVtable(void* object, std::size_t index, Fn hook, Fn* original) {
     if (!object || !original) return false;
-    auto*** objectAsVtable = reinterpret_cast<void***>(object);
-    void** vtable = *objectAsVtable;
+    auto*** objectVtable = reinterpret_cast<void***>(object);
+    void** vtable = *objectVtable;
     if (!vtable) return false;
 
-    void* hookPtr = reinterpret_cast<void*>(hook);
+    void* const hookPtr = reinterpret_cast<void*>(hook);
     if (vtable[index] == hookPtr) return true;
 
     DWORD oldProtect = 0;
-    if (!VirtualProtect(&vtable[index], sizeof(void*), PAGE_EXECUTE_READWRITE, &oldProtect)) {
-        return false;
-    }
-    if (!*original) {
-        *original = reinterpret_cast<Fn>(vtable[index]);
-    }
+    if (!VirtualProtect(&vtable[index], sizeof(void*), PAGE_EXECUTE_READWRITE, &oldProtect)) return false;
+    if (!*original) *original = reinterpret_cast<Fn>(vtable[index]);
     vtable[index] = hookPtr;
     DWORD ignored = 0;
     VirtualProtect(&vtable[index], sizeof(void*), oldProtect, &ignored);
@@ -143,44 +152,44 @@ bool PatchVtable(void* object, std::size_t index, Fn hook, Fn* original) {
     return true;
 }
 
-ShaderInfo ReadShaderInfo(IDirect3DVertexShader9* shader) {
+ShaderInfo ReadShader(IDirect3DVertexShader9* shader) {
     ShaderInfo info{};
     if (!shader) return info;
-    UINT size = 0;
-    if (FAILED(shader->GetFunction(nullptr, &size)) || size == 0) return info;
-    std::vector<std::uint8_t> bytes(size);
-    if (FAILED(shader->GetFunction(bytes.data(), &size)) || size == 0) return info;
-    info.byteCount = size;
-    info.hash = Fnv1a64(bytes.data(), size);
-    if (size >= sizeof(DWORD)) std::memcpy(&info.versionToken, bytes.data(), sizeof(DWORD));
+    UINT bytes = 0;
+    if (FAILED(shader->GetFunction(nullptr, &bytes)) || bytes == 0) return info;
+    std::vector<std::uint8_t> code(bytes);
+    if (FAILED(shader->GetFunction(code.data(), &bytes)) || bytes == 0) return info;
+    info.bytes = bytes;
+    info.hash = Fnv1a64(code.data(), bytes);
+    if (bytes >= sizeof(DWORD)) std::memcpy(&info.version, code.data(), sizeof(DWORD));
     return info;
 }
 
-ShaderInfo ReadShaderInfo(IDirect3DPixelShader9* shader) {
+ShaderInfo ReadShader(IDirect3DPixelShader9* shader) {
     ShaderInfo info{};
     if (!shader) return info;
-    UINT size = 0;
-    if (FAILED(shader->GetFunction(nullptr, &size)) || size == 0) return info;
-    std::vector<std::uint8_t> bytes(size);
-    if (FAILED(shader->GetFunction(bytes.data(), &size)) || size == 0) return info;
-    info.byteCount = size;
-    info.hash = Fnv1a64(bytes.data(), size);
-    if (size >= sizeof(DWORD)) std::memcpy(&info.versionToken, bytes.data(), sizeof(DWORD));
+    UINT bytes = 0;
+    if (FAILED(shader->GetFunction(nullptr, &bytes)) || bytes == 0) return info;
+    std::vector<std::uint8_t> code(bytes);
+    if (FAILED(shader->GetFunction(code.data(), &bytes)) || bytes == 0) return info;
+    info.bytes = bytes;
+    info.hash = Fnv1a64(code.data(), bytes);
+    if (bytes >= sizeof(DWORD)) std::memcpy(&info.version, code.data(), sizeof(DWORD));
     return info;
 }
 
-template <typename T>
-ShaderInfo GetShaderInfo(T* shader) {
+template <typename ShaderT>
+ShaderInfo CachedShader(ShaderT* shader) {
     if (!shader) return {};
     {
         std::lock_guard<std::mutex> lock(gMetadataMutex);
-        const auto it = gShaders.find(shader);
-        if (it != gShaders.end()) return it->second;
+        const auto it = gShaderInfo.find(shader);
+        if (it != gShaderInfo.end()) return it->second;
     }
-    const ShaderInfo info = ReadShaderInfo(shader);
+    const ShaderInfo info = ReadShader(shader);
     {
         std::lock_guard<std::mutex> lock(gMetadataMutex);
-        gShaders[shader] = info;
+        gShaderInfo[shader] = info;
     }
     return info;
 }
@@ -208,29 +217,30 @@ std::string DescribeTexture(IDirect3DBaseTexture9* base) {
     if (!base) return "null";
     {
         std::lock_guard<std::mutex> lock(gMetadataMutex);
-        const auto it = gTextures.find(base);
-        if (it != gTextures.end()) return it->second.description;
+        const auto it = gTextureInfo.find(base);
+        if (it != gTextureInfo.end()) return it->second;
     }
 
-    char buffer[512]{};
+    char text[512]{};
     const D3DRESOURCETYPE type = base->GetType();
     if (type != D3DRTYPE_TEXTURE) {
-        std::snprintf(buffer, sizeof(buffer), "ptr=%p type=%d", base, static_cast<int>(type));
+        std::snprintf(text, sizeof(text), "ptr=%p type=%d", base, static_cast<int>(type));
     } else {
         auto* texture = static_cast<IDirect3DTexture9*>(base);
         D3DSURFACE_DESC desc{};
         if (FAILED(texture->GetLevelDesc(0, &desc))) {
-            std::snprintf(buffer, sizeof(buffer), "ptr=%p type=2D desc=unavailable", base);
+            std::snprintf(text, sizeof(text), "ptr=%p type=2D desc=unavailable", base);
         } else {
             bool hashValid = false;
             std::uint64_t hash = 0;
             std::size_t hashedBytes = 0;
             D3DLOCKED_RECT locked{};
-            if (SUCCEEDED(texture->LockRect(0, &locked, nullptr, D3DLOCK_READONLY)) && locked.pBits && locked.Pitch != 0) {
-                const bool blockCompressed = desc.Format == D3DFMT_DXT1 || desc.Format == D3DFMT_DXT2 ||
-                                             desc.Format == D3DFMT_DXT3 || desc.Format == D3DFMT_DXT4 ||
-                                             desc.Format == D3DFMT_DXT5;
-                const UINT rows = blockCompressed ? std::max<UINT>(1, (desc.Height + 3) / 4) : desc.Height;
+            if (SUCCEEDED(texture->LockRect(0, &locked, nullptr, D3DLOCK_READONLY)) &&
+                locked.pBits && locked.Pitch != 0) {
+                const bool blocks = desc.Format == D3DFMT_DXT1 || desc.Format == D3DFMT_DXT2 ||
+                                    desc.Format == D3DFMT_DXT3 || desc.Format == D3DFMT_DXT4 ||
+                                    desc.Format == D3DFMT_DXT5;
+                const UINT rows = blocks ? std::max<UINT>(1, (desc.Height + 3) / 4) : desc.Height;
                 const std::size_t pitch = static_cast<std::size_t>(locked.Pitch < 0 ? -locked.Pitch : locked.Pitch);
                 std::uint64_t running = 14695981039346656037ull;
                 const auto* row = static_cast<const std::uint8_t*>(locked.pBits);
@@ -243,26 +253,25 @@ std::string DescribeTexture(IDirect3DBaseTexture9* base) {
                     hashedBytes += take;
                     row += locked.Pitch;
                 }
-                hash = running;
-                hashValid = hashedBytes > 0;
                 texture->UnlockRect(0);
+                hash = running;
+                hashValid = hashedBytes != 0;
             }
-            std::snprintf(buffer, sizeof(buffer),
-                          "ptr=%p type=2D w=%u h=%u levels=%u fmt=%s(%d) usage=0x%08lx pool=%d hash=%s%016llx bytes=%zu",
-                          base, desc.Width, desc.Height, texture->GetLevelCount(),
-                          FormatName(desc.Format), static_cast<int>(desc.Format),
-                          static_cast<unsigned long>(desc.Usage), static_cast<int>(desc.Pool),
-                          hashValid ? "" : "NA/",
-                          static_cast<unsigned long long>(hash), hashedBytes);
+            std::snprintf(text, sizeof(text),
+                "ptr=%p type=2D w=%u h=%u levels=%u fmt=%s(%d) usage=0x%08lx pool=%d hash=%s%016llx bytes=%zu",
+                base, desc.Width, desc.Height, texture->GetLevelCount(),
+                FormatName(desc.Format), static_cast<int>(desc.Format),
+                static_cast<unsigned long>(desc.Usage), static_cast<int>(desc.Pool),
+                hashValid ? "" : "NA/", static_cast<unsigned long long>(hash), hashedBytes);
         }
     }
 
-    TextureInfo info{buffer};
+    const std::string result(text);
     {
         std::lock_guard<std::mutex> lock(gMetadataMutex);
-        gTextures[base] = info;
+        gTextureInfo[base] = result;
     }
-    return info.description;
+    return result;
 }
 
 const char* PrimitiveName(D3DPRIMITIVETYPE primitive) {
@@ -277,17 +286,8 @@ const char* PrimitiveName(D3DPRIMITIVETYPE primitive) {
     }
 }
 
-void LogFloatConstants(const char* label, std::uint64_t draw, const float* values, UINT count) {
-    for (UINT reg = 0; reg < count; ++reg) {
-        const float* v = values + reg * 4;
-        if (v[0] == 0.0f && v[1] == 0.0f && v[2] == 0.0f && v[3] == 0.0f) continue;
-        Log("%s draw=%llu r=%u v=%.9g,%.9g,%.9g,%.9g",
-            label, static_cast<unsigned long long>(draw), reg,
-            v[0], v[1], v[2], v[3]);
-    }
-}
-
-void LogRenderState(IDirect3DDevice9* device, std::uint64_t draw, D3DRENDERSTATETYPE state, const char* name) {
+void LogRenderState(IDirect3DDevice9* device, std::uint64_t draw,
+                    D3DRENDERSTATETYPE state, const char* name) {
     DWORD value = 0;
     if (SUCCEEDED(device->GetRenderState(state, &value))) {
         Log("RS draw=%llu name=%s id=%d value=%lu hex=0x%08lx",
@@ -307,9 +307,18 @@ void LogSamplerState(IDirect3DDevice9* device, std::uint64_t draw, DWORD sampler
     }
 }
 
-void DumpDrawState(IDirect3DDevice9* device, const char* kind, D3DPRIMITIVETYPE primitive,
-                   INT baseVertex, UINT minVertex, UINT numVertices, UINT startIndex,
-                   UINT primitiveCount) {
+void LogFloatConstants(const char* label, std::uint64_t draw, const float* values, UINT registers) {
+    for (UINT reg = 0; reg < registers; ++reg) {
+        const float* v = values + reg * 4;
+        if (v[0] == 0.0f && v[1] == 0.0f && v[2] == 0.0f && v[3] == 0.0f) continue;
+        Log("%s draw=%llu r=%u v=%.9g,%.9g,%.9g,%.9g",
+            label, static_cast<unsigned long long>(draw), reg, v[0], v[1], v[2], v[3]);
+    }
+}
+
+void DumpDraw(IDirect3DDevice9* device, const char* kind, D3DPRIMITIVETYPE primitive,
+              INT baseVertex, UINT minVertex, UINT numVertices, UINT startIndex,
+              UINT primitiveCount) {
     if (!gCaptureActive.load(std::memory_order_relaxed)) return;
 
     const std::uint64_t draw = ++gDrawId;
@@ -317,25 +326,22 @@ void DumpDrawState(IDirect3DDevice9* device, const char* kind, D3DPRIMITIVETYPE 
     IDirect3DVertexShader9* vs = nullptr;
     device->GetPixelShader(&ps);
     device->GetVertexShader(&vs);
-    const ShaderInfo psInfo = GetShaderInfo(ps);
-    const ShaderInfo vsInfo = GetShaderInfo(vs);
+    const ShaderInfo psInfo = CachedShader(ps);
+    const ShaderInfo vsInfo = CachedShader(vs);
 
     Log("DRAW id=%llu frame=%llu kind=%s primitive=%s(%d) baseVertex=%d minVertex=%u numVertices=%u startIndex=%u primitiveCount=%u ps=%016llx psBytes=%u psVer=0x%08lx vs=%016llx vsBytes=%u vsVer=0x%08lx",
         static_cast<unsigned long long>(draw), static_cast<unsigned long long>(gFrameId.load()),
         kind, PrimitiveName(primitive), static_cast<int>(primitive), baseVertex, minVertex,
         numVertices, startIndex, primitiveCount,
-        static_cast<unsigned long long>(psInfo.hash), psInfo.byteCount,
-        static_cast<unsigned long>(psInfo.versionToken),
-        static_cast<unsigned long long>(vsInfo.hash), vsInfo.byteCount,
-        static_cast<unsigned long>(vsInfo.versionToken));
+        static_cast<unsigned long long>(psInfo.hash), psInfo.bytes, static_cast<unsigned long>(psInfo.version),
+        static_cast<unsigned long long>(vsInfo.hash), vsInfo.bytes, static_cast<unsigned long>(vsInfo.version));
 
-    for (DWORD stage = 0; stage < kMaxTextureStages; ++stage) {
+    for (DWORD stage = 0; stage < kTextureStages; ++stage) {
         IDirect3DBaseTexture9* texture = nullptr;
         if (SUCCEEDED(device->GetTexture(stage, &texture))) {
-            const std::string description = DescribeTexture(texture);
+            const std::string desc = DescribeTexture(texture);
             Log("TEX draw=%llu stage=%lu %s",
-                static_cast<unsigned long long>(draw), static_cast<unsigned long>(stage),
-                description.c_str());
+                static_cast<unsigned long long>(draw), static_cast<unsigned long>(stage), desc.c_str());
             if (texture) texture->Release();
         }
     }
@@ -351,7 +357,7 @@ void DumpDrawState(IDirect3DDevice9* device, const char* kind, D3DPRIMITIVETYPE 
     LogRenderState(device, draw, D3DRS_LIGHTING, "LIGHTING");
     LogRenderState(device, draw, D3DRS_COLORWRITEENABLE, "COLORWRITEENABLE");
 
-    for (DWORD sampler = 0; sampler < kMaxTextureStages; ++sampler) {
+    for (DWORD sampler = 0; sampler < kTextureStages; ++sampler) {
         LogSamplerState(device, draw, sampler, D3DSAMP_SRGBTEXTURE, "SRGBTEXTURE");
         LogSamplerState(device, draw, sampler, D3DSAMP_MINFILTER, "MINFILTER");
         LogSamplerState(device, draw, sampler, D3DSAMP_MAGFILTER, "MAGFILTER");
@@ -367,11 +373,11 @@ void DumpDrawState(IDirect3DDevice9* device, const char* kind, D3DPRIMITIVETYPE 
 
     D3DCAPS9 caps{};
     UINT vsRegisters = 256;
-    if (SUCCEEDED(device->GetDeviceCaps(&caps)) && caps.MaxVertexShaderConst > 0) {
+    if (SUCCEEDED(device->GetDeviceCaps(&caps)) && caps.MaxVertexShaderConst != 0) {
         vsRegisters = std::min<UINT>(caps.MaxVertexShaderConst, 256);
     }
     std::vector<float> vsConstants(static_cast<std::size_t>(vsRegisters) * 4);
-    if (vsRegisters > 0 && SUCCEEDED(device->GetVertexShaderConstantF(0, vsConstants.data(), vsRegisters))) {
+    if (vsRegisters && SUCCEEDED(device->GetVertexShaderConstantF(0, vsConstants.data(), vsRegisters))) {
         LogFloatConstants("VSF", draw, vsConstants.data(), vsRegisters);
     }
 
@@ -387,8 +393,6 @@ using DrawIndexedPrimitiveFn = HRESULT (STDMETHODCALLTYPE*)(IDirect3DDevice9*, D
 using DrawPrimitiveUPFn = HRESULT (STDMETHODCALLTYPE*)(IDirect3DDevice9*, D3DPRIMITIVETYPE, UINT, const void*, UINT);
 using DrawIndexedPrimitiveUPFn = HRESULT (STDMETHODCALLTYPE*)(IDirect3DDevice9*, D3DPRIMITIVETYPE, UINT, UINT, UINT,
                                                                const void*, D3DFORMAT, const void*, UINT);
-using CreateVertexShaderFn = HRESULT (STDMETHODCALLTYPE*)(IDirect3DDevice9*, const DWORD*, IDirect3DVertexShader9**);
-using CreatePixelShaderFn = HRESULT (STDMETHODCALLTYPE*)(IDirect3DDevice9*, const DWORD*, IDirect3DPixelShader9**);
 
 CreateDeviceFn gCreateDevice = nullptr;
 PresentFn gPresent = nullptr;
@@ -396,8 +400,6 @@ DrawPrimitiveFn gDrawPrimitive = nullptr;
 DrawIndexedPrimitiveFn gDrawIndexedPrimitive = nullptr;
 DrawPrimitiveUPFn gDrawPrimitiveUP = nullptr;
 DrawIndexedPrimitiveUPFn gDrawIndexedPrimitiveUP = nullptr;
-CreateVertexShaderFn gCreateVertexShader = nullptr;
-CreatePixelShaderFn gCreatePixelShader = nullptr;
 
 HRESULT STDMETHODCALLTYPE HookPresent(IDirect3DDevice9* device, const RECT* source, const RECT* dest,
                                       HWND window, const RGNDATA* dirty) {
@@ -410,11 +412,11 @@ HRESULT STDMETHODCALLTYPE HookPresent(IDirect3DDevice9* device, const RECT* sour
 
     const HRESULT result = gPresent(device, source, dest, window, dirty);
 
-    if (GetAsyncKeyState(VK_F10) & 1) {
+    if ((GetAsyncKeyState(VK_F10) & 1) != 0) {
         const std::uint64_t frame = ++gFrameId;
         gDrawId = 0;
         gCaptureActive = true;
-        Log("FRAME_BEGIN id=%llu trigger=F10 note=all_state_is_queried_at_each_draw",
+        Log("FRAME_BEGIN id=%llu trigger=F10 note=next_full_presented_frame",
             static_cast<unsigned long long>(frame));
     }
     return result;
@@ -422,21 +424,22 @@ HRESULT STDMETHODCALLTYPE HookPresent(IDirect3DDevice9* device, const RECT* sour
 
 HRESULT STDMETHODCALLTYPE HookDrawPrimitive(IDirect3DDevice9* device, D3DPRIMITIVETYPE primitive,
                                             UINT startVertex, UINT primitiveCount) {
-    DumpDrawState(device, "DrawPrimitive", primitive, 0, startVertex, 0, 0, primitiveCount);
+    DumpDraw(device, "DrawPrimitive", primitive, 0, startVertex, 0, 0, primitiveCount);
     return gDrawPrimitive(device, primitive, startVertex, primitiveCount);
 }
 
 HRESULT STDMETHODCALLTYPE HookDrawIndexedPrimitive(IDirect3DDevice9* device, D3DPRIMITIVETYPE primitive,
                                                    INT baseVertex, UINT minVertex, UINT numVertices,
                                                    UINT startIndex, UINT primitiveCount) {
-    DumpDrawState(device, "DrawIndexedPrimitive", primitive, baseVertex, minVertex,
-                  numVertices, startIndex, primitiveCount);
-    return gDrawIndexedPrimitive(device, primitive, baseVertex, minVertex, numVertices, startIndex, primitiveCount);
+    DumpDraw(device, "DrawIndexedPrimitive", primitive, baseVertex, minVertex,
+             numVertices, startIndex, primitiveCount);
+    return gDrawIndexedPrimitive(device, primitive, baseVertex, minVertex,
+                                 numVertices, startIndex, primitiveCount);
 }
 
 HRESULT STDMETHODCALLTYPE HookDrawPrimitiveUP(IDirect3DDevice9* device, D3DPRIMITIVETYPE primitive,
                                               UINT primitiveCount, const void* data, UINT stride) {
-    DumpDrawState(device, "DrawPrimitiveUP", primitive, 0, 0, 0, 0, primitiveCount);
+    DumpDraw(device, "DrawPrimitiveUP", primitive, 0, 0, 0, 0, primitiveCount);
     return gDrawPrimitiveUP(device, primitive, primitiveCount, data, stride);
 }
 
@@ -444,32 +447,9 @@ HRESULT STDMETHODCALLTYPE HookDrawIndexedPrimitiveUP(IDirect3DDevice9* device, D
                                                      UINT minVertex, UINT numVertices, UINT primitiveCount,
                                                      const void* indexData, D3DFORMAT indexFormat,
                                                      const void* vertexData, UINT stride) {
-    DumpDrawState(device, "DrawIndexedPrimitiveUP", primitive, 0, minVertex,
-                  numVertices, 0, primitiveCount);
+    DumpDraw(device, "DrawIndexedPrimitiveUP", primitive, 0, minVertex, numVertices, 0, primitiveCount);
     return gDrawIndexedPrimitiveUP(device, primitive, minVertex, numVertices, primitiveCount,
                                    indexData, indexFormat, vertexData, stride);
-}
-
-HRESULT STDMETHODCALLTYPE HookCreateVertexShader(IDirect3DDevice9* device, const DWORD* function,
-                                                 IDirect3DVertexShader9** shader) {
-    const HRESULT result = gCreateVertexShader(device, function, shader);
-    if (SUCCEEDED(result) && shader && *shader) {
-        const ShaderInfo info = ReadShaderInfo(*shader);
-        std::lock_guard<std::mutex> lock(gMetadataMutex);
-        gShaders[*shader] = info;
-    }
-    return result;
-}
-
-HRESULT STDMETHODCALLTYPE HookCreatePixelShader(IDirect3DDevice9* device, const DWORD* function,
-                                                IDirect3DPixelShader9** shader) {
-    const HRESULT result = gCreatePixelShader(device, function, shader);
-    if (SUCCEEDED(result) && shader && *shader) {
-        const ShaderInfo info = ReadShaderInfo(*shader);
-        std::lock_guard<std::mutex> lock(gMetadataMutex);
-        gShaders[*shader] = info;
-    }
-    return result;
 }
 
 void PatchDevice(IDirect3DDevice9* device) {
@@ -480,8 +460,6 @@ void PatchDevice(IDirect3DDevice9* device) {
     ok &= PatchVtable(device, 82, &HookDrawIndexedPrimitive, &gDrawIndexedPrimitive);
     ok &= PatchVtable(device, 83, &HookDrawPrimitiveUP, &gDrawPrimitiveUP);
     ok &= PatchVtable(device, 84, &HookDrawIndexedPrimitiveUP, &gDrawIndexedPrimitiveUP);
-    ok &= PatchVtable(device, 91, &HookCreateVertexShader, &gCreateVertexShader);
-    ok &= PatchVtable(device, 106, &HookCreatePixelShader, &gCreatePixelShader);
 
     D3DCAPS9 caps{};
     device->GetDeviceCaps(&caps);
@@ -516,7 +494,7 @@ void PatchDirect3D9(IDirect3D9* d3d) {
 
 extern "C" __declspec(dllexport) IDirect3D9* WINAPI Direct3DCreate9(UINT sdkVersion) {
     using Fn = IDirect3D9* (WINAPI*)(UINT);
-    Fn real = RealProc<Fn>("Direct3DCreate9");
+    const Fn real = RealProc<Fn>("Direct3DCreate9");
     if (!real) return nullptr;
     IDirect3D9* d3d = real(sdkVersion);
     PatchDirect3D9(d3d);
@@ -525,60 +503,56 @@ extern "C" __declspec(dllexport) IDirect3D9* WINAPI Direct3DCreate9(UINT sdkVers
 
 extern "C" __declspec(dllexport) HRESULT WINAPI Direct3DCreate9Ex(UINT sdkVersion, IDirect3D9Ex** out) {
     using Fn = HRESULT (WINAPI*)(UINT, IDirect3D9Ex**);
-    Fn real = RealProc<Fn>("Direct3DCreate9Ex");
+    const Fn real = RealProc<Fn>("Direct3DCreate9Ex");
     if (!real) return D3DERR_NOTAVAILABLE;
     const HRESULT result = real(sdkVersion, out);
-    if (SUCCEEDED(result) && out && *out) {
-        PatchDirect3D9(static_cast<IDirect3D9*>(*out));
-    }
+    if (SUCCEEDED(result) && out && *out) PatchDirect3D9(static_cast<IDirect3D9*>(*out));
     return result;
 }
 
 extern "C" __declspec(dllexport) void WINAPI D3DPERF_SetOptions(DWORD options) {
     using Fn = void (WINAPI*)(DWORD);
-    Fn real = RealProc<Fn>("D3DPERF_SetOptions");
+    const Fn real = RealProc<Fn>("D3DPERF_SetOptions");
     if (real) real(options);
 }
 
 extern "C" __declspec(dllexport) int WINAPI D3DPERF_BeginEvent(D3DCOLOR color, LPCWSTR name) {
     using Fn = int (WINAPI*)(D3DCOLOR, LPCWSTR);
-    Fn real = RealProc<Fn>("D3DPERF_BeginEvent");
+    const Fn real = RealProc<Fn>("D3DPERF_BeginEvent");
     return real ? real(color, name) : -1;
 }
 
 extern "C" __declspec(dllexport) int WINAPI D3DPERF_EndEvent() {
     using Fn = int (WINAPI*)();
-    Fn real = RealProc<Fn>("D3DPERF_EndEvent");
+    const Fn real = RealProc<Fn>("D3DPERF_EndEvent");
     return real ? real() : -1;
 }
 
 extern "C" __declspec(dllexport) DWORD WINAPI D3DPERF_GetStatus() {
     using Fn = DWORD (WINAPI*)();
-    Fn real = RealProc<Fn>("D3DPERF_GetStatus");
+    const Fn real = RealProc<Fn>("D3DPERF_GetStatus");
     return real ? real() : 0;
 }
 
 extern "C" __declspec(dllexport) BOOL WINAPI D3DPERF_QueryRepeatFrame() {
     using Fn = BOOL (WINAPI*)();
-    Fn real = RealProc<Fn>("D3DPERF_QueryRepeatFrame");
+    const Fn real = RealProc<Fn>("D3DPERF_QueryRepeatFrame");
     return real ? real() : FALSE;
 }
 
 extern "C" __declspec(dllexport) void WINAPI D3DPERF_SetMarker(D3DCOLOR color, LPCWSTR name) {
     using Fn = void (WINAPI*)(D3DCOLOR, LPCWSTR);
-    Fn real = RealProc<Fn>("D3DPERF_SetMarker");
+    const Fn real = RealProc<Fn>("D3DPERF_SetMarker");
     if (real) real(color, name);
 }
 
 extern "C" __declspec(dllexport) void WINAPI D3DPERF_SetRegion(D3DCOLOR color, LPCWSTR name) {
     using Fn = void (WINAPI*)(D3DCOLOR, LPCWSTR);
-    Fn real = RealProc<Fn>("D3DPERF_SetRegion");
+    const Fn real = RealProc<Fn>("D3DPERF_SetRegion");
     if (real) real(color, name);
 }
 
 BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID) {
-    if (reason == DLL_PROCESS_ATTACH) {
-        DisableThreadLibraryCalls(module);
-    }
+    if (reason == DLL_PROCESS_ATTACH) DisableThreadLibraryCalls(module);
     return TRUE;
 }
