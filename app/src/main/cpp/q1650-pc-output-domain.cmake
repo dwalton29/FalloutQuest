@@ -7,22 +7,22 @@
 # assumption: Q15.14 is approximately as dark as an extra sRGB decode of the
 # captured PC framebuffer.
 #
-# This patch changes ONE renderer operation only: write the exact captured PC
-# numeric output directly to the Quest swapchain. All Q15.12 BaseMap sRGB decode,
-# Q15.11/15.13 SP17 lighting, Q15.14 HDR/cinematic constants and fog stay intact.
+# This patch changes ONE renderer operation only: keep the exact captured PC
+# numeric output directly in the final colour value. All Q15.12 BaseMap sRGB
+# decode, Q15.11/15.13 SP17 lighting, Q15.14 HDR/cinematic constants and fog stay
+# intact. The existing final fragColor write downstream remains unchanged.
 
 set(Q1650_OUTPUT_OLD [==[
-            vec3 q1640QuestLinearWrite = Q1340SrgbToLinear(q1640PcOutput);
-            fragColor = vec4(q1640QuestLinearWrite, 1.0);
+            colour = Q1340SrgbToLinear(q1640PcOutput);
 ]==])
 set(Q1650_OUTPUT_NEW [==[
             // Q15.15: preserve the exact numeric code value emitted by the PC
             // X8R8G8B8/SRGBWRITE=0 path. Do not apply a second transfer here.
-            fragColor = vec4(q1640PcOutput, 1.0);
+            colour = q1640PcOutput;
 ]==])
 string(FIND "${Q6H_NATIVE_SOURCE}" "${Q1650_OUTPUT_OLD}" Q1650_OUTPUT_POS)
 if(Q1650_OUTPUT_POS EQUAL -1)
-    message(FATAL_ERROR "Q15.15 could not find Q15.14 inverse-sRGB final write")
+    message(FATAL_ERROR "Q15.15 could not find Q15.14 inverse-sRGB final colour assignment")
 endif()
 string(REPLACE "${Q1650_OUTPUT_OLD}" "${Q1650_OUTPUT_NEW}"
        Q6H_NATIVE_SOURCE "${Q6H_NATIVE_SOURCE}")
@@ -53,8 +53,8 @@ file(WRITE "${Q1650_Q4_INPUT}" "${Q1650_Q4_SOURCE}")
 # Hard guards: preserve every captured Q15.14 constant and Q15.12 BaseMap path,
 # remove only the final inverse transfer, leave terrain untouched, and prove the
 # headset label is Q15.15.
-string(FIND "${Q6H_NATIVE_SOURCE}" "fragColor = vec4(q1640PcOutput, 1.0);" Q1650_DIRECT_OK)
-string(FIND "${Q6H_NATIVE_SOURCE}" "q1640QuestLinearWrite" Q1650_OLD_WRITE)
+string(FIND "${Q6H_NATIVE_SOURCE}" "colour = q1640PcOutput;" Q1650_DIRECT_OK)
+string(FIND "${Q6H_NATIVE_SOURCE}" "colour = Q1340SrgbToLinear(q1640PcOutput);" Q1650_OLD_WRITE)
 string(FIND "${Q6H_NATIVE_SOURCE}" "vec3(0.7399142, 0.5749559, 0.3128335)" Q1650_TINT_OK)
 string(FIND "${Q6H_NATIVE_SOURCE}" "glUniform1f(q1520TargetLumLocation, 1.2f);" Q1650_TARGET_OK)
 string(FIND "${Q6H_NATIVE_SOURCE}" "std::string(label) == \"DIFFUSE\" ? GL_SRGB8_ALPHA8 : GL_RGBA8" Q1650_BASEMAP_OK)
