@@ -46,7 +46,12 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/q1600-left-hand-build-label.cmake")
 # normal map before DP3_sat, and match the captured 2.5x sunlight scale.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q1610-pc-sp17-diffuse.cmake")
 
-# Q15.12 isolates the remaining static BaseMap colour-space assumption. Q11.8
-# forced DIFFUSE to GL_SRGB8_ALPHA8; this build samples those bytes raw via
-# GL_RGBA8 while leaving LAND, normal maps and Q15.11 lighting unchanged.
+# Q15.12 resolves the BaseMap colour-space fork in the direction that produced a
+# major device-side improvement: static DIFFUSE uses GL_SRGB8_ALPHA8 hardware
+# input decode; normal/data textures and LAND remain untouched.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q1620-static-basemap-linear-upload.cmake")
+
+# Q15.13 finishes the captured SP17 static world-light core: tangent-space half
+# vector, normal-map-alpha specular, the low-NdotL spec gate and exact warm
+# PSLightColor spec contribution. Q15.12 BaseMap decode remains enabled.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q1630-pc-sp17-core-equation.cmake")
