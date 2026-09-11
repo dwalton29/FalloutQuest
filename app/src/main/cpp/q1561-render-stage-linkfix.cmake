@@ -37,7 +37,7 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/q1580-light-direction-trace.cmake")
 # Q13.9-decoded RGB. Keep this correction static/PPLighting-only for isolation.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q1590-pc-sp17-light-constants.cmake")
 
-# Q15.10 makes the active test build visually undeniable in-headset: render the
+# Q15.10+ makes the active test build visually undeniable in-headset: render the
 # exact build label immediately above the left Touch controller.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q1600-left-hand-build-label.cmake")
 
@@ -45,3 +45,8 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/q1600-left-hand-build-label.cmake")
 # restore the signed normalized tangent-space LightData path, normalize the sampled
 # normal map before DP3_sat, and match the captured 2.5x sunlight scale.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q1610-pc-sp17-diffuse.cmake")
+
+# Q15.12 isolates the remaining static BaseMap colour-space assumption. Q11.8
+# forced DIFFUSE to GL_SRGB8_ALPHA8; this build samples those bytes raw via
+# GL_RGBA8 while leaving LAND, normal maps and Q15.11 lighting unchanged.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q1620-static-basemap-linear-upload.cmake")
