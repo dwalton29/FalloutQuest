@@ -1,0 +1,59 @@
+# Q15.12: isolate static/NIF BaseMap colour-space handling.
+#
+# Q11.8 unconditionally changed DIFFUSE uploads from GL_RGBA8 to
+# GL_SRGB8_ALPHA8, making GLES perform an automatic sRGB -> linear decode before
+# the FalloutQuest material shader sees the texel. That was an informed porting
+# assumption, not something we had proved from the PC D3D9 state.
+#
+# The uploaded PC apitrace state at Megaton draw 4601215 proves:
+#   * BaseMap is sampler s0 and is a normal D3DFMT_DXT1 resource.
+#   * D3DRS_SRGBWRITEENABLE = 0 for the draw.
+# Apitrace's D3D9 JSON does not expose the inherited D3DSAMP_SRGBTEXTURE value,
+# so Q15.12 is a deliberately narrow visual isolation: remove ONLY Q11.8's
+# static diffuse hardware decode. Normal maps remain linear, terrain remains on
+# its existing path, and Q15.11 lighting/constants remain untouched.
+
+set(Q1620_STATIC_SRGB_OLD [=[
+    const GLenum q1180InternalFormat =
+        std::string(label) == "DIFFUSE" ? GL_SRGB8_ALPHA8 : GL_RGBA8;
+]=])
+set(Q1620_STATIC_SRGB_NEW [=[
+    // Q15.12: sample static diffuse/BaseMap bytes without GLES sRGB decoding.
+    // Normal/gloss and every non-diffuse data texture were already GL_RGBA8.
+    const GLenum q1180InternalFormat = GL_RGBA8;
+]=])
+string(FIND "${Q6H_NATIVE_SOURCE}" "${Q1620_STATIC_SRGB_OLD}" Q1620_STATIC_SRGB_POS)
+if(Q1620_STATIC_SRGB_POS EQUAL -1)
+    message(FATAL_ERROR "Q15.12 could not find Q11.8 static diffuse sRGB upload")
+endif()
+string(REPLACE "${Q1620_STATIC_SRGB_OLD}" "${Q1620_STATIC_SRGB_NEW}"
+       Q6H_NATIVE_SOURCE "${Q6H_NATIVE_SOURCE}")
+
+# Rename Q15.11's runtime proof line so logcat independently confirms this exact
+# BaseMap build is active. No lighting value is changed here.
+string(REPLACE
+    "Q15.11 PC SP17 DIFFUSE:"
+    "Q15.12 RAW BASEMAP:"
+    Q6H_NATIVE_SOURCE "${Q6H_NATIVE_SOURCE}")
+string(REPLACE
+    "scope=static-PPLighting diffuse=TANGENT_NORMALMAP_DP3 terrainChanged=0 baseMapChanged=0 sunScaleCaptured=2.5"
+    "scope=static-PPLighting diffuse=TANGENT_NORMALMAP_DP3 terrainChanged=0 baseMap=GL_RGBA8_NO_SRGB_DECODE sunScaleCaptured=2.5"
+    Q6H_NATIVE_SOURCE "${Q6H_NATIVE_SOURCE}")
+
+# Hard guards: static DIFFUSE must no longer select GL_SRGB8_ALPHA8, while LAND
+# is untouched by Q15.12 so it remains a useful same-scene control.
+string(FIND "${Q6H_NATIVE_SOURCE}" "const GLenum q1180InternalFormat = GL_RGBA8;" Q1620_RAW_OK)
+string(FIND "${Q6H_NATIVE_SOURCE}" "std::string(label) == \"DIFFUSE\" ? GL_SRGB8_ALPHA8" Q1620_OLD_STATIC)
+string(FIND "${Q720_TERRAIN_RENDER_SOURCE}" "Q15.12" Q1620_TERRAIN_CHANGED)
+string(FIND "${Q6H_NATIVE_SOURCE}" "float lambert = q1540Sp17Lambert;" Q1620_SP17_OK)
+string(FIND "${Q6H_NATIVE_SOURCE}" "effectiveSunScale = 2.5f;" Q1620_SUN_OK)
+if(Q1620_RAW_OK EQUAL -1 OR NOT Q1620_OLD_STATIC EQUAL -1 OR
+   NOT Q1620_TERRAIN_CHANGED EQUAL -1 OR Q1620_SP17_OK EQUAL -1 OR
+   Q1620_SUN_OK EQUAL -1)
+    message(FATAL_ERROR
+        "Q15.12 verification failed: raw=${Q1620_RAW_OK} oldStatic=${Q1620_OLD_STATIC} terrain=${Q1620_TERRAIN_CHANGED} sp17=${Q1620_SP17_OK} sun=${Q1620_SUN_OK}")
+endif()
+
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/q6h-native-generated.cpp"
+     "${Q6H_NATIVE_SOURCE}")
+message(STATUS "Q15.12 static BaseMap hardware sRGB decode disabled; LAND and SP17 lighting unchanged")
