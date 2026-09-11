@@ -55,3 +55,8 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/q1620-static-basemap-linear-upload.cmake")
 # vector, normal-map-alpha specular, the low-NdotL spec gate and exact warm
 # PSLightColor spec contribution. Q15.12 BaseMap decode remains enabled.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q1630-pc-sp17-core-equation.cmake")
+
+# Q15.14 uses the actual PC call-4618221 final HDR/ImageSpace shader state rather
+# than the guessed Q13.4 display-domain transform: exact Rec.601 saturation/tint,
+# captured TargetLUM 1.2, legacy no-sRGB-write output semantics, and Q15.14 label.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q1640-pc-hdr-output.cmake")
