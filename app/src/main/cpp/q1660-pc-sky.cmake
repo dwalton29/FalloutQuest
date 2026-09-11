@@ -1,4 +1,4 @@
-# Q15.16: replace only Q13.3's final eye sky draw with the standalone
+# Q15.16: replace only the current Q13.9 final-eye sky draw with the standalone
 # PC-captured SKY/SKYTEX renderer. Do NOT shadow/redefine any existing headers:
 # Q15.15's world/material/HDR/output translation unit stays byte-for-byte on its
 # already-proven path apart from this eye-source sky call and build label.
@@ -9,9 +9,10 @@ if(NOT EXISTS "${Q1660_Q4_INPUT}")
 endif()
 file(READ "${Q1660_Q4_INPUT}" Q1660_Q4_SOURCE)
 
-# Q13.3 has already inserted its source sky include. Add the independent PC sky
-# renderer immediately beside it so all existing weather/runtime types are
-# available without creating a second physical copy of any Q10/Q13/Q14 header.
+# Q13.3 inserted the authored-weather sky include and Q13.9 subsequently wrapped
+# that renderer for its colour-domain conversion. Add the independent PC sky
+# renderer beside the existing sky include; all weather/runtime types therefore
+# stay sourced from the same physical headers with no duplicate definitions.
 set(Q1660_INCLUDE_OLD [=[
 #include "fo3-weather-sky-q1330.h"
 ]=])
@@ -21,17 +22,18 @@ set(Q1660_INCLUDE_NEW [=[
 ]=])
 string(FIND "${Q1660_Q4_SOURCE}" "${Q1660_INCLUDE_OLD}" Q1660_INCLUDE_POS)
 if(Q1660_INCLUDE_POS EQUAL -1)
-    message(FATAL_ERROR "Q15.16 could not find Q13.3 sky include in final eye source")
+    message(FATAL_ERROR "Q15.16 could not find authored sky include in final eye source")
 endif()
 string(REPLACE "${Q1660_INCLUDE_OLD}" "${Q1660_INCLUDE_NEW}"
        Q1660_Q4_SOURCE "${Q1660_Q4_SOURCE}")
 
-# Replace the old approximate gradient/cloud/procedural-Sun renderer only.
-set(Q1660_CALL_OLD "RenderFo3SkyQ1330(skyMvp.m);")
+# Q13.9 is the renderer actually present by this point in the milestone chain.
+# Replace that wrapper only; world/material/HDR/output code remains untouched.
+set(Q1660_CALL_OLD "RenderFo3SkyQ1390(skyMvp.m);")
 set(Q1660_CALL_NEW "RenderFo3PcSkyQ1660(skyMvp.m);")
 string(FIND "${Q1660_Q4_SOURCE}" "${Q1660_CALL_OLD}" Q1660_CALL_POS)
 if(Q1660_CALL_POS EQUAL -1)
-    message(FATAL_ERROR "Q15.16 could not find Q13.3 sky draw in final eye source")
+    message(FATAL_ERROR "Q15.16 could not find Q13.9 sky draw in final eye source")
 endif()
 string(REPLACE "${Q1660_CALL_OLD}" "${Q1660_CALL_NEW}"
        Q1660_Q4_SOURCE "${Q1660_Q4_SOURCE}")
@@ -43,11 +45,11 @@ string(REPLACE
     Q1660_Q4_SOURCE "${Q1660_Q4_SOURCE}")
 string(REPLACE "Q15.15" "Q15.16" Q1660_Q4_SOURCE "${Q1660_Q4_SOURCE}")
 
-# Guards: Q15.16 must be present exactly once, Q13.3 must no longer render, and
+# Guards: Q15.16 must be present, the Q13.9 wrapper must no longer render, and
 # the successful Q15.15 direct-PC output-domain assignment must remain intact.
 string(FIND "${Q1660_Q4_SOURCE}" "#include \"fo3-pc-sky-q1660.h\"" Q1660_INCLUDE_OK)
 string(FIND "${Q1660_Q4_SOURCE}" "RenderFo3PcSkyQ1660(skyMvp.m);" Q1660_CALL_OK)
-string(FIND "${Q1660_Q4_SOURCE}" "RenderFo3SkyQ1330(skyMvp.m);" Q1660_OLD_CALL)
+string(FIND "${Q1660_Q4_SOURCE}" "RenderFo3SkyQ1390(skyMvp.m);" Q1660_OLD_CALL)
 string(FIND "${Q1660_Q4_SOURCE}" "text=Q15.16 anchor=left-hand" Q1660_LABEL_OK)
 string(FIND "${Q1660_Q4_SOURCE}" "q1600Digit(q1600X, 0x7Du)" Q1660_SIX_OK)
 string(FIND "${Q6H_NATIVE_SOURCE}" "colour = q1640PcOutput;" Q1660_Q1515_OK)
