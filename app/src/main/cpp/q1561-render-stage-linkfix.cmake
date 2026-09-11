@@ -119,6 +119,33 @@ endif()
 # VR AABB, cached XTEL and the ray helper consumed by Q16.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q1698-active-door-metadata.cmake")
 
+# Q16 interior destinations need the same arbitrary-CELL REFR->BASE->MODL path
+# that the historical mutable-Q7 renderer had, but the current live transition TU
+# only contains the exterior WRLD neighborhood loader. Include the generic Q16
+# interior parser immediately after fo3-cell-spawn.cpp, where the proven ESM
+# compressed-record/subrecord helpers are already defined, and expose the exact
+# legacy function name q1700's interior dispatch expects.
+if(EXISTS "${Q720_CELL_SOURCE}")
+    file(READ "${Q720_CELL_SOURCE}" Q1697_CELL_SOURCE)
+    set(Q1697_SPAWN_END "#undef ProbeMegatonPlayerHouseDoorQ71\n")
+    set(Q1697_INTERIOR_BRIDGE [=[
+#undef ProbeMegatonPlayerHouseDoorQ71
+#include "fo3-cell-interior-q1700.inc"
+
+bool LoadFo3CellPlacements(uint32_t cellFormId,
+                           std::vector<Fo3WorldPlacement>& outPlacements) {
+    return LoadFo3InteriorCellPlacementsQ1700(cellFormId, outPlacements);
+}
+]=])
+    string(FIND "${Q1697_CELL_SOURCE}" "${Q1697_SPAWN_END}" Q1697_SPAWN_END_POS)
+    if(Q1697_SPAWN_END_POS EQUAL -1)
+        message(FATAL_ERROR "Q16.0 could not find fo3-cell-spawn include tail for interior loader")
+    endif()
+    string(REPLACE "${Q1697_SPAWN_END}" "${Q1697_INTERIOR_BRIDGE}"
+           Q1697_CELL_SOURCE "${Q1697_CELL_SOURCE}")
+    file(WRITE "${Q720_CELL_SOURCE}" "${Q1697_CELL_SOURCE}")
+endif()
+
 # Q16.0 promotes the old proof-door path into real authored CELL traversal:
 # right-hand aim prompt, right A activation, generic interior/exterior XTEL,
 # and destination-aware Fallout3.esm LSCR loading screens presented before swap.
