@@ -37,25 +37,95 @@ string(REPLACE "Q16.9 BUILD LABEL:" "Q16.10 BUILD LABEL:"
 string(REPLACE "text=Q16.9 anchor=left-hand" "text=Q16.10 anchor=left-hand"
        Q1800_Q4_SOURCE "${Q1800_Q4_SOURCE}")
 
+# Fallout 3 XTEL records carry the authored destination rotation. Q7's historical
+# host reset playerYaw_ to zero after every door, which is why entering Megaton
+# could leave the player looking back at the gate. Cache the currently aimed
+# destination's authored Z rotation and make the virtual head face that heading
+# when activation succeeds. Subtracting the physical HMD yaw means this works
+# regardless of which way the user is standing in their real room.
+set(Q1800_AIM_OLD [==[
+        Fo3DoorAimQ1700 aim;
+        doorAimActiveQ1700_ = QueryFo3DoorAimQ1700(
+            hand.position.x, hand.position.y, hand.position.z,
+            -handMatrix.m[8], -handMatrix.m[9], -handMatrix.m[10], &aim) && aim.valid;
+]==])
+set(Q1800_AIM_NEW [==[
+        Fo3DoorAimQ1700 aim;
+        doorAimActiveQ1700_ = QueryFo3DoorAimQ1700(
+            hand.position.x, hand.position.y, hand.position.z,
+            -handMatrix.m[8], -handMatrix.m[9], -handMatrix.m[10], &aim) && aim.valid;
+        if (doorAimActiveQ1700_) {
+            doorAimYawQ1800_ = aim.rz;
+            doorAimDestinationQ1800_ = aim.destinationDoorRef;
+        }
+]==])
+string(FIND "${Q1800_Q4_SOURCE}" "${Q1800_AIM_OLD}" Q1800_AIM_POS)
+if(Q1800_AIM_POS EQUAL -1)
+    message(FATAL_ERROR "Q16.10 could not find Q16.9 door-aim update")
+endif()
+string(REPLACE "${Q1800_AIM_OLD}" "${Q1800_AIM_NEW}"
+       Q1800_Q4_SOURCE "${Q1800_Q4_SOURCE}")
+
+set(Q1800_FIELDS_OLD "    bool doorAimActiveQ1700_{false};")
+set(Q1800_FIELDS_NEW [==[
+    bool doorAimActiveQ1700_{false};
+    float doorAimYawQ1800_{0.0f};
+    uint32_t doorAimDestinationQ1800_{0u};
+]==])
+string(FIND "${Q1800_Q4_SOURCE}" "${Q1800_FIELDS_OLD}" Q1800_FIELDS_POS)
+if(Q1800_FIELDS_POS EQUAL -1)
+    message(FATAL_ERROR "Q16.10 could not find door-aim state field")
+endif()
+string(REPLACE "${Q1800_FIELDS_OLD}" "${Q1800_FIELDS_NEW}"
+       Q1800_Q4_SOURCE "${Q1800_Q4_SOURCE}")
+
+set(Q1800_RESET_OLD [==[
+                            playerPosition_ = {0.0f, 0.0f, 0.0f};
+                            playerYaw_ = 0.0f;
+                            lastFrameTime_ = 0;
+                            FQ_LOGI("Q7C player origin reset after authored door transition");
+]==])
+set(Q1800_RESET_NEW [==[
+                            playerPosition_ = {0.0f, 0.0f, 0.0f};
+                            const float q1800PhysicalHeadYaw =
+                                YawFromQuaternion(views[0].pose.orientation);
+                            const float q1800RawPlayerYaw =
+                                doorAimYawQ1800_ - q1800PhysicalHeadYaw;
+                            playerYaw_ = std::atan2(std::sin(q1800RawPlayerYaw),
+                                                   std::cos(q1800RawPlayerYaw));
+                            lastFrameTime_ = 0;
+                            FQ_LOGI("Q16.10 AUTHORED DOOR FACING: destinationDoor=%08X XTELrz=%.4f physicalHeadYaw=%.4f playerYaw=%.4f degrees=%.1f",
+                                    doorAimDestinationQ1800_, doorAimYawQ1800_,
+                                    q1800PhysicalHeadYaw, playerYaw_,
+                                    playerYaw_ * 180.0f / PI);
+]==])
+string(FIND "${Q1800_Q4_SOURCE}" "${Q1800_RESET_OLD}" Q1800_RESET_POS)
+if(Q1800_RESET_POS EQUAL -1)
+    message(FATAL_ERROR "Q16.10 could not find legacy door player-yaw reset")
+endif()
+string(REPLACE "${Q1800_RESET_OLD}" "${Q1800_RESET_NEW}"
+       Q1800_Q4_SOURCE "${Q1800_Q4_SOURCE}")
+
 set(Q1800_Q4_OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/q1800-q4-generated.cpp")
 file(WRITE "${Q1800_Q4_OUTPUT}" "${Q1800_Q4_SOURCE}")
 
 # -----------------------------------------------------------------------------
-# 2. Replace the monolithic render-thread transition with a staged pump.
+# 2. Preserve the complete current renderer and park only the old monolithic
+#    transition function under a legacy name. The first Q16.10 attempt sliced
+#    from ProcessQ74TransitionRequest all the way to DrawSceneObject, but later
+#    milestones had inserted unrelated lighting/blend/door helpers in that span.
+#    Renaming + insertion keeps every one of those helpers byte-for-byte.
 # -----------------------------------------------------------------------------
 string(PREPEND Q6H_NATIVE_SOURCE "#include <chrono>\n")
 
-set(Q1800_PROCESS_START_TOKEN "bool ProcessQ74TransitionRequest() {")
-set(Q1800_PROCESS_END_TOKEN "void DrawSceneObject(const GpuObject& object) {")
-string(FIND "${Q6H_NATIVE_SOURCE}" "${Q1800_PROCESS_START_TOKEN}" Q1800_PROCESS_START)
-string(FIND "${Q6H_NATIVE_SOURCE}" "${Q1800_PROCESS_END_TOKEN}" Q1800_PROCESS_END)
-if(Q1800_PROCESS_START EQUAL -1 OR Q1800_PROCESS_END EQUAL -1 OR
-   Q1800_PROCESS_END LESS_EQUAL Q1800_PROCESS_START)
-    message(FATAL_ERROR "Q16.10 could not isolate Q7.4 monolithic transition function")
+set(Q1800_PROCESS_OLD "bool ProcessQ74TransitionRequest() {")
+set(Q1800_PROCESS_LEGACY "bool ProcessQ74TransitionRequestLegacyQ1800() {")
+string(FIND "${Q6H_NATIVE_SOURCE}" "${Q1800_PROCESS_OLD}" Q1800_PROCESS_POS)
+if(Q1800_PROCESS_POS EQUAL -1)
+    message(FATAL_ERROR "Q16.10 could not find Q7.4 monolithic transition function")
 endif()
-
-string(SUBSTRING "${Q6H_NATIVE_SOURCE}" 0 ${Q1800_PROCESS_START} Q1800_NATIVE_PREFIX)
-string(SUBSTRING "${Q6H_NATIVE_SOURCE}" ${Q1800_PROCESS_END} -1 Q1800_NATIVE_SUFFIX)
+string(REPLACE "${Q1800_PROCESS_OLD}" "${Q1800_PROCESS_LEGACY}"
+       Q6H_NATIVE_SOURCE "${Q6H_NATIVE_SOURCE}")
 
 set(Q1800_PHASED_PROCESS [==[
 enum Q1800TransitionStage {
@@ -143,7 +213,7 @@ bool ProcessQ74TransitionRequest() {
 
             const float elapsedMs = std::chrono::duration<float, std::milli>(
                 std::chrono::steady_clock::now() - sliceStart).count();
-            if (processedThisSlice >= 16u || elapsedMs >= 4.0f) break;
+            if (processedThisSlice >= 12u || elapsedMs >= 3.0f) break;
         }
 
         if (work.placementIndex >= work.placements.size()) {
@@ -178,7 +248,7 @@ bool ProcessQ74TransitionRequest() {
 
             const float elapsedMs = std::chrono::duration<float, std::milli>(
                 std::chrono::steady_clock::now() - sliceStart).count();
-            if (uploadedThisSlice >= 12u || elapsedMs >= 4.0f) break;
+            if (uploadedThisSlice >= 8u || elapsedMs >= 3.0f) break;
         }
 
         if (work.uploadIndex >= work.selected.size()) {
@@ -231,6 +301,9 @@ bool ProcessQ74TransitionRequest() {
             if (object.realNormal) ++realNormal;
         }
 
+        // Q16.0's completion hook advances WORK -> POST and requests the player
+        // origin reset. POST remains visible until one destination frame reaches
+        // xrEndFrame, so the new world cannot tear through mid-frame.
         CompleteFo3CellTransitionQ74(request.cellFormId);
         gCurrentCellFormId = request.cellFormId;
 
@@ -249,8 +322,14 @@ bool ProcessQ74TransitionRequest() {
 
 ]==])
 
-set(Q6H_NATIVE_SOURCE
-    "${Q1800_NATIVE_PREFIX}${Q1800_PHASED_PROCESS}${Q1800_NATIVE_SUFFIX}")
+set(Q1800_DRAW_MARKER "void DrawSceneObject(const GpuObject& object) {")
+string(FIND "${Q6H_NATIVE_SOURCE}" "${Q1800_DRAW_MARKER}" Q1800_DRAW_POS)
+if(Q1800_DRAW_POS EQUAL -1)
+    message(FATAL_ERROR "Q16.10 could not find DrawSceneObject insertion anchor")
+endif()
+string(REPLACE "${Q1800_DRAW_MARKER}"
+       "${Q1800_PHASED_PROCESS}${Q1800_DRAW_MARKER}"
+       Q6H_NATIVE_SOURCE "${Q6H_NATIVE_SOURCE}")
 
 # -----------------------------------------------------------------------------
 # 3. Route the final native TU to the Q16.10 OpenXR host and freeze it.
@@ -268,20 +347,30 @@ string(REPLACE "${Q1800_Q6H_INCLUDE_OLD}" "${Q1800_Q6H_INCLUDE_NEW}"
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/q6h-native-generated.cpp"
      "${Q6H_NATIVE_SOURCE}")
 
-# Hard configure-time proof. Q16.10 changes only transition scheduling/lifetime;
-# Q16.9's real interaction assets and Q16.8's current loading renderer remain.
+# Hard configure-time proof. Q16.10 changes transition scheduling/lifetime and
+# uses the authored XTEL heading; Q16.9's real interaction assets and Q16.8's
+# current loading renderer remain intact.
+string(FIND "${Q6H_NATIVE_SOURCE}" "ProcessQ74TransitionRequestLegacyQ1800" Q1800_LEGACY_OK)
 string(FIND "${Q6H_NATIVE_SOURCE}" "Q16.10 PHASED LOAD BEGIN:" Q1800_BEGIN_OK)
 string(FIND "${Q6H_NATIVE_SOURCE}" "Q16.10 PHASED LOAD COMPLETE:" Q1800_COMPLETE_OK)
 string(FIND "${Q6H_NATIVE_SOURCE}" "MarkFo3TransitionWorkStartedQ1700" Q1800_WORK_OK)
+string(FIND "${Q6H_NATIVE_SOURCE}" "Q1590UploadPcSp17LightConstants" Q1800_LIGHT_HELPER_OK)
+string(FIND "${Q6H_NATIVE_SOURCE}" "Q1580LogLightTrace" Q1800_TRACE_HELPER_OK)
+string(FIND "${Q6H_NATIVE_SOURCE}" "Q1150BlendFactor" Q1800_BLEND_HELPER_OK)
+string(FIND "${Q6H_NATIVE_SOURCE}" "QueryDoorInternalQ1700" Q1800_DOOR_HELPER_OK)
 string(FIND "${Q6H_NATIVE_SOURCE}" "q1800-q4-generated.cpp" Q1800_ROUTE_OK)
 string(FIND "${Q1800_Q4_SOURCE}" "Q16.10: 1 = B C" Q1800_LABEL_OK)
+string(FIND "${Q1800_Q4_SOURCE}" "Q16.10 AUTHORED DOOR FACING:" Q1800_FACING_OK)
 string(FIND "${Q1800_Q4_SOURCE}" "RenderFo3InteractionHudQ1790" Q1800_HUD_OK)
 string(FIND "${Q1800_Q4_SOURCE}" "RenderFo3LoadingScreenQ1780" Q1800_LOADING_OK)
-if(Q1800_BEGIN_OK EQUAL -1 OR Q1800_COMPLETE_OK EQUAL -1 OR
-   Q1800_WORK_OK EQUAL -1 OR Q1800_ROUTE_OK EQUAL -1 OR
-   Q1800_LABEL_OK EQUAL -1 OR Q1800_HUD_OK EQUAL -1 OR
+if(Q1800_LEGACY_OK EQUAL -1 OR Q1800_BEGIN_OK EQUAL -1 OR
+   Q1800_COMPLETE_OK EQUAL -1 OR Q1800_WORK_OK EQUAL -1 OR
+   Q1800_LIGHT_HELPER_OK EQUAL -1 OR Q1800_TRACE_HELPER_OK EQUAL -1 OR
+   Q1800_BLEND_HELPER_OK EQUAL -1 OR Q1800_DOOR_HELPER_OK EQUAL -1 OR
+   Q1800_ROUTE_OK EQUAL -1 OR Q1800_LABEL_OK EQUAL -1 OR
+   Q1800_FACING_OK EQUAL -1 OR Q1800_HUD_OK EQUAL -1 OR
    Q1800_LOADING_OK EQUAL -1)
-    message(FATAL_ERROR "Q16.10 phased-loading verification failed")
+    message(FATAL_ERROR "Q16.10 phased-loading/facing verification failed")
 endif()
 
-message(STATUS "Q16.10 phased loading pump enabled: 30-frame minimum dwell + sliced NIF CPU build + sliced GL upload + live OpenXR loading animation")
+message(STATUS "Q16.10 phased loading enabled: 30-frame dwell + sliced NIF/GL work + authored XTEL door facing")
