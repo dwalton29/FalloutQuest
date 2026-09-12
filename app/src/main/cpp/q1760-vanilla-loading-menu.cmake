@@ -77,3 +77,8 @@ message(STATUS "Q16.6 vanilla loading menu enabled: 1280x960 canvas, full-screen
 # Capital Wasteland transition local enough for Quest and temporarily removes
 # the closed Megaton entrance assembly so open-world walking can be tested.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q1770-megaton-exterior-unblock.cmake")
+
+# Q16.8 runs last. It preserves Q16.7's exterior fixes but makes the interaction
+# HUD/loading presentation unmistakable in headset and freezes a final generated
+# OpenXR source into the native target for runtime proof.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q1780-visible-ui-runtime.cmake")
