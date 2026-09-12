@@ -20,6 +20,7 @@
 // All presentation values remain sourced from Fallout 3's HUDMainMenu/Info and
 // text_box.xml. Only pixel->metre scale / right-arm placement remain VR-specific.
 
+#include "fo3-interaction-hud-q1790.h"
 #include "fo3-interaction-hud-q1850.h"
 
 #include <algorithm>
