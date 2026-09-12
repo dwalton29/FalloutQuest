@@ -102,3 +102,10 @@ if(Q1810_CALL_OK EQUAL -1 OR Q1810_LOG_OK EQUAL -1 OR
 endif()
 
 message(STATUS "Q16.10 authored XTEL facing enabled: apply cached destination rz once per loading generation")
+
+# Q16.11 rolls the rewritten transition pump out of the live path so all mature
+# authored environment/material hooks remain authoritative.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q1820-startup-loader-guard.cmake")
+# Q16.11 also corrects the real FNT/TAI atlas orientation from the user's exact
+# vanilla files; only the erroneous extra V flip is removed.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q1830-authored-hud-uv.cmake")
