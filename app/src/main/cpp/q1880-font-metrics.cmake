@@ -81,9 +81,11 @@ endif()
 message(STATUS "Q16.16 Fallout HUD baseline enabled: vertical FNT bearing fixed; Q16.13 horizontal metrics and Q16.15 live door cache retained")
 
 # Q16.17 needs its stream state visible to the mature scene-completion function.
-# The actual definitions are emitted later by q1890 beside the full streaming
-# helpers. Forward declarations here solve source-order only; runtime ownership
-# and values remain entirely Q16.17's.
+# q6a-native.cpp owns one anonymous renderer namespace. Inject these declarations
+# immediately INSIDE that namespace so they name the same objects whose actual
+# definitions q1890 emits later beside the streaming helpers. The earlier attempt
+# prepended them before namespace {, which compiled but created unrelated global
+# symbols and therefore failed at link time.
 set(Q1880_Q1617_NATIVE_FILE "${CMAKE_CURRENT_BINARY_DIR}/q6h-native-generated.cpp")
 file(READ "${Q1880_Q1617_NATIVE_FILE}" Q1880_Q1617_NATIVE_SOURCE)
 string(FIND "${Q1880_Q1617_NATIVE_SOURCE}"
@@ -106,7 +108,15 @@ extern int32_t gExteriorWindowGridYQ1890;
 extern uint64_t gExteriorWindowGenerationQ1890;
 
 ]==])
-string(PREPEND Q1880_Q1617_NATIVE_SOURCE "${Q1880_Q1617_FORWARD_DECLS}")
+set(Q1880_Q1617_NAMESPACE_MARKER "namespace {\n")
+string(FIND "${Q1880_Q1617_NATIVE_SOURCE}" "${Q1880_Q1617_NAMESPACE_MARKER}"
+       Q1880_Q1617_NAMESPACE_POS)
+if(Q1880_Q1617_NAMESPACE_POS EQUAL -1)
+    message(FATAL_ERROR "Q16.17 prerequisite missing: q6h renderer namespace")
+endif()
+string(REPLACE "${Q1880_Q1617_NAMESPACE_MARKER}"
+       "${Q1880_Q1617_NAMESPACE_MARKER}${Q1880_Q1617_FORWARD_DECLS}"
+       Q1880_Q1617_NATIVE_SOURCE "${Q1880_Q1617_NATIVE_SOURCE}")
 string(APPEND Q1880_Q1617_NATIVE_SOURCE
        "\n// Q16.15 XTEL CACHE: verified by PrimeFo3AuthoredDoorAnchorsQ1870 live hook.\n")
 file(WRITE "${Q1880_Q1617_NATIVE_FILE}" "${Q1880_Q1617_NATIVE_SOURCE}")
