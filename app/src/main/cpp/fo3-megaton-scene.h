@@ -18,6 +18,16 @@ struct Fo3WorldPlacement {
     float ry = 0.0f;
     float rz = 0.0f;
     float scale = 1.0f;
+
+    // Q16.17 streaming ownership. Interior placements leave these defaults.
+    // Exterior placements retain their authored CELL owner; persistent-CELL
+    // refs additionally receive the spatial XCLC grid derived from their DATA
+    // position so they can enter/leave the same moving window as local refs.
+    uint32_t owningCellFormId = 0;
+    int32_t gridX = 0;
+    int32_t gridY = 0;
+    bool hasExteriorGrid = false;
+    bool persistentExteriorRef = false;
 };
 
 struct Fo3CellArrival {
