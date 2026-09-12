@@ -124,3 +124,7 @@ file(WRITE "${Q1880_Q1617_NATIVE_FILE}" "${Q1880_Q1617_NATIVE_SOURCE}")
 # Q16.17 starts continuous exterior traversal. Keep Q16.16 presentation intact
 # and move only the authored exterior CELL/LAND/collision selection window.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q1890-cell-streaming.cmake")
+
+# Q16.18 keeps Q16.17 as the proven coordinate/fallback implementation, then
+# redirects the live boundary hook to the frame-budgeted incremental streamer.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q1900-incremental-cell-streaming.cmake")
