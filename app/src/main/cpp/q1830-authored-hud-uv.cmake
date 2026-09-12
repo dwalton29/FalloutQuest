@@ -92,3 +92,8 @@ if(Q1830_FONT_OK EQUAL -1 OR Q1830_BUTTON_OK EQUAL -1 OR
 endif()
 
 message(STATUS "Q16.11 authored HUD UV enabled: vanilla FNT/TAI coordinates used directly, no vertical flip")
+
+# Q16.12 replaces the static two-line proof widget with Fallout3.esm-derived
+# load-door wording, the actual single-string text_box.xml layout, and a GL-state
+# sandbox that makes target show/hide a resource-stable operation.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q1840-authored-door-prompt.cmake")
