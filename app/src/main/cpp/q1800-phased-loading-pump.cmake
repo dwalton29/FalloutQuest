@@ -37,12 +37,12 @@ string(REPLACE "Q16.9 BUILD LABEL:" "Q16.10 BUILD LABEL:"
 string(REPLACE "text=Q16.9 anchor=left-hand" "text=Q16.10 anchor=left-hand"
        Q1800_Q4_SOURCE "${Q1800_Q4_SOURCE}")
 
-# Fallout 3 XTEL records carry the authored destination rotation. Q7's historical
-# host reset playerYaw_ to zero after every door, which is why entering Megaton
-# could leave the player looking back at the gate. Cache the currently aimed
-# destination's authored Z rotation and make the virtual head face that heading
-# when activation succeeds. Subtracting the physical HMD yaw means this works
-# regardless of which way the user is standing in their real room.
+# Fallout 3 XTEL records carry the authored destination rotation. Q16.0's live
+# host reset playerYaw_ to zero after every queued door, which is why entering
+# Megaton could leave the player looking back at the gate. Cache the currently
+# aimed destination's authored Z rotation and make the virtual head face that
+# heading when activation succeeds. Subtracting physical HMD yaw makes this
+# independent of which way the user is standing in their real room.
 set(Q1800_AIM_OLD [==[
         Fo3DoorAimQ1700 aim;
         doorAimActiveQ1700_ = QueryFo3DoorAimQ1700(
@@ -83,7 +83,7 @@ set(Q1800_RESET_OLD [==[
                             playerPosition_ = {0.0f, 0.0f, 0.0f};
                             playerYaw_ = 0.0f;
                             lastFrameTime_ = 0;
-                            FQ_LOGI("Q7C player origin reset after authored door transition");
+                            FQ_LOGI("Q16.0 player origin reset for queued authored XTEL");
 ]==])
 set(Q1800_RESET_NEW [==[
                             playerPosition_ = {0.0f, 0.0f, 0.0f};
@@ -101,7 +101,7 @@ set(Q1800_RESET_NEW [==[
 ]==])
 string(FIND "${Q1800_Q4_SOURCE}" "${Q1800_RESET_OLD}" Q1800_RESET_POS)
 if(Q1800_RESET_POS EQUAL -1)
-    message(FATAL_ERROR "Q16.10 could not find legacy door player-yaw reset")
+    message(FATAL_ERROR "Q16.10 could not find live Q16.0 door player-yaw reset")
 endif()
 string(REPLACE "${Q1800_RESET_OLD}" "${Q1800_RESET_NEW}"
        Q1800_Q4_SOURCE "${Q1800_Q4_SOURCE}")
