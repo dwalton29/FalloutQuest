@@ -38,3 +38,8 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/q1860-boot-responsiveness.cmake")
 # one authored XTEL cache while the scene finishes loading. Live ray misses are
 # memory-only; invisible/no-model load-door support is retained.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q1870-live-door-cache.cmake")
+
+# Q16.16 interprets the actual Bethesda bitmap-FNT glyph metrics correctly:
+# left/right kerning plus ascent. This fixes the interaction text baseline and
+# spacing without changing the Q16.15 door cache or any authored HUD assets.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q1880-font-metrics.cmake")
