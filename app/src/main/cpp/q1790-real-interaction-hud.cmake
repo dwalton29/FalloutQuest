@@ -90,3 +90,7 @@ if(Q1790_INCLUDE_OK EQUAL -1 OR Q1790_DRAW_OK EQUAL -1 OR
 endif()
 
 message(STATUS "Q16.9 real Fallout interaction HUD enabled: HUDMainMenu/Info -> FNT + TAI + TEX/DDS from user Textures BSA; VR transform only")
+
+# Q16.10 runs after the asset-accurate HUD and changes only loading lifetime /
+# scene-swap scheduling so OpenXR can keep animating during door transitions.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q1800-phased-loading-pump.cmake")
