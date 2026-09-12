@@ -78,7 +78,9 @@ message(STATUS "Q16.6 vanilla loading menu enabled: 1280x960 canvas, full-screen
 # the closed Megaton entrance assembly so open-world walking can be tested.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q1770-megaton-exterior-unblock.cmake")
 
-# Q16.8 runs last. It preserves Q16.7's exterior fixes but makes the interaction
-# HUD/loading presentation unmistakable in headset and freezes a final generated
-# OpenXR source into the native target for runtime proof.
+# Q16.8 preserves Q16.7's exterior fixes and owns the current VR loading pass.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q1780-visible-ui-runtime.cmake")
+
+# Q16.9 runs last and replaces only the interaction presentation with the real
+# Fallout 3 HUDMainMenu/Info assets read from the user's installed game data.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q1790-real-interaction-hud.cmake")
