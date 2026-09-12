@@ -80,11 +80,10 @@ endif()
 
 message(STATUS "Q16.16 Fallout HUD baseline enabled: vertical FNT bearing fixed; Q16.13 horizontal metrics and Q16.15 live door cache retained")
 
-# Q16.17's own first configure guard looked for the runtime XTEL-cache log text
-# in the renderer TU, although that log correctly lives in the authored-door
-# query implementation. Prove the real renderer-side cache hook instead, then
-# leave a generated-source proof marker for Q16.17's guard. This changes no
-# runtime behaviour and will be removed when Q16.17 is folded into the engine.
+# Q16.17 needs its stream state visible to the mature scene-completion function.
+# The actual definitions are emitted later by q1890 beside the full streaming
+# helpers. Forward declarations here solve source-order only; runtime ownership
+# and values remain entirely Q16.17's.
 set(Q1880_Q1617_NATIVE_FILE "${CMAKE_CURRENT_BINARY_DIR}/q6h-native-generated.cpp")
 file(READ "${Q1880_Q1617_NATIVE_FILE}" Q1880_Q1617_NATIVE_SOURCE)
 string(FIND "${Q1880_Q1617_NATIVE_SOURCE}"
@@ -93,6 +92,21 @@ string(FIND "${Q1880_Q1617_NATIVE_SOURCE}"
 if(Q1880_Q1617_CACHE_PRIME_OK EQUAL -1)
     message(FATAL_ERROR "Q16.17 prerequisite missing: Q16.15 cache-prime hook")
 endif()
+set(Q1880_Q1617_FORWARD_DECLS [==[
+extern const float Q1890_EXTERIOR_CELL_SIZE;
+extern bool gExteriorStreamingActiveQ1890;
+extern bool gExteriorStreamBusyQ1890;
+extern uint32_t gExteriorWorldspaceQ1890;
+extern uint32_t gExteriorPersistentCellQ1890;
+extern float gExteriorOriginXQ1890;
+extern float gExteriorOriginYQ1890;
+extern float gExteriorOriginZQ1890;
+extern int32_t gExteriorWindowGridXQ1890;
+extern int32_t gExteriorWindowGridYQ1890;
+extern uint64_t gExteriorWindowGenerationQ1890;
+
+]==])
+string(PREPEND Q1880_Q1617_NATIVE_SOURCE "${Q1880_Q1617_FORWARD_DECLS}")
 string(APPEND Q1880_Q1617_NATIVE_SOURCE
        "\n// Q16.15 XTEL CACHE: verified by PrimeFo3AuthoredDoorAnchorsQ1870 live hook.\n")
 file(WRITE "${Q1880_Q1617_NATIVE_FILE}" "${Q1880_Q1617_NATIVE_SOURCE}")
