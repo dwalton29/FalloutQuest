@@ -33,3 +33,8 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/q1320-weather-light.cmake")
 # that mature loader intact, removes Q10.4's repeated ESM rescans, and services
 # NativeActivity events during long synchronous authored asset work.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q1860-boot-responsiveness.cmake")
+
+# Q16.15 removes Q16.3's per-REFR full-ESM interaction fallback and primes
+# one authored XTEL cache while the scene finishes loading. Live ray misses are
+# memory-only; invisible/no-model load-door support is retained.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q1870-live-door-cache.cmake")
