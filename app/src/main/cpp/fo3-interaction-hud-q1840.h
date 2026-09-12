@@ -288,8 +288,11 @@ inline bool BuildPromptGeometryQ1840(const std::string& prompt) {
 inline void RenderQ1840(const float* mvp, const char* promptChars) {
     if (!mvp || !promptChars || !promptChars[0]) return;
 
-    // The guard is intentionally the first GL operation in this function.
+    // The guard is intentionally the first GL operation in this function. Force
+    // any first-time UploadTexture work onto unit zero, whose binding the guard
+    // owns and restores, rather than clobbering an arbitrary caller-active unit.
     GlStateGuardQ1840 guard;
+    glActiveTexture(GL_TEXTURE0);
     if (!EnsureResourcesQ1840()) return;
 
     const std::string prompt(promptChars);
