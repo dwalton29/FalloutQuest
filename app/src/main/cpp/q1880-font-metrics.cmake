@@ -79,3 +79,7 @@ if(Q1880_BASELINE_OK EQUAL -1 OR NOT Q1880_BAD_SOURCE_INCLUDE EQUAL -1 OR
 endif()
 
 message(STATUS "Q16.16 Fallout HUD baseline enabled: vertical FNT bearing fixed; Q16.13 horizontal metrics and Q16.15 live door cache retained")
+
+# Q16.17 starts continuous exterior traversal. Keep Q16.16 presentation intact
+# and move only the authored exterior CELL/LAND/collision selection window.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q1890-cell-streaming.cmake")
