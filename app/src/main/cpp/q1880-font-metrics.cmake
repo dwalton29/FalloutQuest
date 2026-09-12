@@ -13,9 +13,19 @@ if(NOT EXISTS "${Q1880_Q4_FILE}")
 endif()
 file(READ "${Q1880_Q4_FILE}" Q1880_Q4_SOURCE)
 
-# Add the baseline-aware renderer. It reuses Q16.13's GL-state sandbox, real
-# FNT/TEX atlas, real InterfaceShared TAI/DDS button and fixed prompt storage.
-string(PREPEND Q1880_Q4_SOURCE "#include \"fo3-interaction-hud-q1880.h\"\n")
+# Q16.11 generated a corrected copy of q1790.h and routed the live host to that
+# generated header. Q16.16 must come AFTER that include (and after Q16.13), or
+# including the source q1790 header again would emit the same fo3q1790 symbols
+# twice. Insert the baseline renderer directly after Q16.13's live renderer.
+set(Q1880_INCLUDE_OLD "#include \"fo3-interaction-hud-q1850.h\"")
+set(Q1880_INCLUDE_NEW
+    "#include \"fo3-interaction-hud-q1850.h\"\n#include \"fo3-interaction-hud-q1880.h\"")
+string(FIND "${Q1880_Q4_SOURCE}" "${Q1880_INCLUDE_OLD}" Q1880_INCLUDE_POS)
+if(Q1880_INCLUDE_POS EQUAL -1)
+    message(FATAL_ERROR "Q16.16 could not find Q16.13 HUD include")
+endif()
+string(REPLACE "${Q1880_INCLUDE_OLD}" "${Q1880_INCLUDE_NEW}"
+       Q1880_Q4_SOURCE "${Q1880_Q4_SOURCE}")
 
 set(Q1880_RENDER_OLD "RenderFo3InteractionHudQ1850")
 set(Q1880_RENDER_NEW "RenderFo3InteractionHudQ1880")
@@ -56,11 +66,14 @@ file(WRITE "${Q1880_Q4_FILE}" "${Q1880_Q4_SOURCE}")
 # must survive; only the live HUD draw target and visible build label change.
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/fo3-interaction-hud-q1880.h" Q1880_HUD_HEADER)
 string(FIND "${Q1880_HUD_HEADER}" "Q16.16 HUD BASELINE:" Q1880_BASELINE_OK)
+string(FIND "${Q1880_HUD_HEADER}" "#include \"fo3-interaction-hud-q1790.h\"" Q1880_BAD_SOURCE_INCLUDE)
 string(FIND "${Q1880_Q4_SOURCE}" "fo3-interaction-hud-q1880.h" Q1880_INCLUDE_OK)
+string(FIND "${Q1880_Q4_SOURCE}" "fo3-interaction-hud-q1830.h" Q1880_AUTHORED_INCLUDE_OK)
 string(FIND "${Q1880_Q4_SOURCE}" "RenderFo3InteractionHudQ1880" Q1880_RENDER_OK)
 string(FIND "${Q1880_Q4_SOURCE}" "Q16.16: 6 = A F G E D C" Q1880_LABEL_OK)
 string(FIND "${Q1880_Q4_SOURCE}" "Q16.13 HUD TARGET HIDE:" Q1880_HIDE_OK)
-if(Q1880_BASELINE_OK EQUAL -1 OR Q1880_INCLUDE_OK EQUAL -1 OR
+if(Q1880_BASELINE_OK EQUAL -1 OR NOT Q1880_BAD_SOURCE_INCLUDE EQUAL -1 OR
+   Q1880_INCLUDE_OK EQUAL -1 OR Q1880_AUTHORED_INCLUDE_OK EQUAL -1 OR
    Q1880_RENDER_OK EQUAL -1 OR Q1880_LABEL_OK EQUAL -1 OR Q1880_HIDE_OK EQUAL -1)
     message(FATAL_ERROR "Q16.16 baseline-aware HUD verification failed")
 endif()
