@@ -1,17 +1,12 @@
 # Q16.12: authored dynamic load-door prompts + crash-safe HUD lifecycle.
 #
-# Three concrete Q16.11 issues are fixed here without inventing presentation:
-#   1. Q16.9 initialized GL resources before saving caller state. First prompt
-#      appearance could therefore clobber bindings; losing aim then exposed the
-#      damaged state. q1840 snapshots GL before any initialization and keeps HUD
-#      resources alive across show/hide.
-#   2. Q16.9 hard-coded two text rows, "Open" and "Door". The real text_box.xml
-#      consumes ONE interaction string and sizes itself from that string.
-#   3. Door wording now comes from Fallout3.esm FULL fields: source DOOR name +
-#      destination CELL name, falling back to its parent WRLD name.
+# This pass fixes three concrete Q16.11 issues without inventing presentation:
+#   1. Save caller GL state BEFORE first-time HUD resource initialization.
+#   2. Render text_box.xml as one dynamically-sized interaction string.
+#   3. Resolve door/destination nouns from Fallout3.esm FULL fields.
 #
-# The only non-data part of "Open <door> to <destination>" is the engine action
-# grammar itself. Nouns/locations are never Megaton-specific or hard-coded.
+# The action grammar "Open <door> to <destination>" is engine behaviour; every
+# noun/location comes from the user's ESM. No Megaton-specific prompt is stored.
 
 if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fo3-door-prompt-q1840.h")
     message(FATAL_ERROR "Q16.12 missing fo3-door-prompt-q1840.h")
@@ -21,13 +16,14 @@ if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fo3-interaction-hud-q1840.h")
 endif()
 
 # -----------------------------------------------------------------------------
-# 1. Transition TU: one-pass ESM FULL-name index and prompt cache.
+# 1. Transition TU: generic Fallout3.esm name/reference index + prompt cache.
 # -----------------------------------------------------------------------------
 if(NOT EXISTS "${Q720_CELL_SOURCE}")
     message(FATAL_ERROR "Q16.12 expected generated transition source at ${Q720_CELL_SOURCE}")
 endif()
 file(READ "${Q720_CELL_SOURCE}" Q1840_CELL_SOURCE)
-string(PREPEND Q1840_CELL_SOURCE "#include \"fo3-door-prompt-q1840.h\"\n")
+string(PREPEND Q1840_CELL_SOURCE
+       "#include \"fo3-door-prompt-q1840.h\"\n#include <algorithm>\n#include <cstring>\n#include <string>\n#include <unordered_map>\n#include <vector>\n")
 
 set(Q1840_PROMPT_IMPL [==[
 namespace Q1840Prompt {
@@ -47,6 +43,7 @@ bool gIndexAttempted = false;
 bool gIndexReady = false;
 std::unordered_map<uint32_t, std::string> gFullNames;
 std::unordered_map<uint32_t, uint32_t> gCellWorldspaces;
+std::unordered_map<uint32_t, uint32_t> gRefBases;
 std::unordered_map<uint32_t, Metadata> gDoorMetadata;
 std::unordered_map<uint32_t, std::string> gPrompts;
 
@@ -84,6 +81,7 @@ bool EnsureIndex() {
     size_t doorNames = 0u;
     size_t cellNames = 0u;
     size_t worldNames = 0u;
+    size_t refBases = 0u;
 
     while (true) {
         const off_t rawOffset = ftello(file);
@@ -109,7 +107,8 @@ bool EnsureIndex() {
         const bool isDoor = std::memcmp(header, "DOOR", 4u) == 0;
         const bool isCell = std::memcmp(header, "CELL", 4u) == 0;
         const bool isWorld = std::memcmp(header, "WRLD", 4u) == 0;
-        if (!isDoor && !isCell && !isWorld) {
+        const bool isRef = std::memcmp(header, "REFR", 4u) == 0;
+        if (!isDoor && !isCell && !isWorld && !isRef) {
             if (fseeko(file, static_cast<off_t>(payloadEnd), SEEK_SET) != 0) break;
             continue;
         }
@@ -120,17 +119,27 @@ bool EnsureIndex() {
         if (!ReadPayload(file, sizeField, recordFlags, payload)) break;
 
         std::string full;
+        uint32_t refBase = 0u;
         WalkSubrecords(payload.data(), payload.size(),
                        [&](const char* type, const uint8_t* bytes, uint32_t size) {
-            if (full.empty() && std::memcmp(type, "FULL", 4u) == 0) {
+            if (!isRef && full.empty() &&
+                std::memcmp(type, "FULL", 4u) == 0) {
                 full = SubrecordString(bytes, size);
+            } else if (isRef && refBase == 0u &&
+                       std::memcmp(type, "NAME", 4u) == 0 && size >= 4u) {
+                refBase = ReadLe32(bytes);
             }
         });
+
         if (!full.empty()) {
             gFullNames[formId] = full;
             if (isDoor) ++doorNames;
             else if (isCell) ++cellNames;
             else if (isWorld) ++worldNames;
+        }
+        if (isRef && refBase != 0u) {
+            gRefBases[formId] = refBase;
+            ++refBases;
         }
         if (isCell) {
             const uint32_t world = CurrentWorldspace(groups);
@@ -139,10 +148,10 @@ bool EnsureIndex() {
     }
 
     std::fclose(file);
-    gIndexReady = !gFullNames.empty();
-    Q71_LOGI("Q16.12 PROMPT INDEX READY: ready=%d fullNames=%zu door=%zu cell=%zu world=%zu cellWorldLinks=%zu source=Fallout3.esm",
+    gIndexReady = !gFullNames.empty() && !gRefBases.empty();
+    Q71_LOGI("Q16.12 PROMPT INDEX READY: ready=%d fullNames=%zu door=%zu cell=%zu world=%zu refs=%zu cellWorldLinks=%zu source=Fallout3.esm",
              gIndexReady ? 1 : 0, gFullNames.size(), doorNames, cellNames,
-             worldNames, gCellWorldspaces.size());
+             worldNames, refBases, gCellWorldspaces.size());
     return gIndexReady;
 }
 
@@ -161,13 +170,35 @@ std::string DestinationName(const Fo3DoorTeleport& teleport) {
     return FullName(worldIt->second);
 }
 
-bool BuildPrompt(uint32_t sourceDoorRef, std::string& out) {
-    out.clear();
-    const auto metaIt = gDoorMetadata.find(sourceDoorRef);
-    if (metaIt == gDoorMetadata.end() || !metaIt->second.teleport.valid) return false;
+bool EnsureDoorMetadata(uint32_t sourceDoorRef) {
+    if (gDoorMetadata.find(sourceDoorRef) != gDoorMetadata.end()) return true;
     if (!EnsureIndex()) return false;
 
-    const Metadata& meta = metaIt->second;
+    const auto baseIt = gRefBases.find(sourceDoorRef);
+    if (baseIt == gRefBases.end() || baseIt->second == 0u) return false;
+
+    Fo3DoorTeleport teleport;
+    if (!ResolveFo3DoorTeleportQ1700(sourceDoorRef, &teleport) || !teleport.valid) {
+        return false;
+    }
+
+    Metadata meta;
+    meta.sourceBase = baseIt->second;
+    meta.teleport = teleport;
+    gDoorMetadata[sourceDoorRef] = meta;
+    Q71_LOGI("Q16.12 PROMPT METADATA LAZY: sourceDoor=%08X sourceBase=%08X destinationDoor=%08X destinationCell=%08X source=Fallout3.esm",
+             sourceDoorRef, meta.sourceBase,
+             teleport.destinationDoorRefFormId,
+             teleport.destinationCellFormId);
+    return true;
+}
+
+bool BuildPrompt(uint32_t sourceDoorRef, std::string& out) {
+    out.clear();
+    if (!EnsureDoorMetadata(sourceDoorRef)) return false;
+    if (!EnsureIndex()) return false;
+
+    const Metadata& meta = gDoorMetadata[sourceDoorRef];
     const std::string doorName = FullName(meta.sourceBase);
     const std::string destination = DestinationName(meta.teleport);
     if (doorName.empty() && destination.empty()) {
@@ -204,10 +235,9 @@ void CacheFo3DoorPromptQ1840(uint32_t sourceDoorRef,
     meta.sourceBase = sourceDoorBase;
     meta.teleport = teleport;
     Q1840Prompt::gDoorMetadata[sourceDoorRef] = meta;
-
-    // Build the name index once while the scene is already being prepared, not
-    // on the first user aim frame. Prompt strings themselves remain lazy so only
-    // doors the player actually points at allocate a final string.
+    Q1840Prompt::gPrompts.erase(sourceDoorRef);
+    // Build the one-time authored-name index during scene preparation rather
+    // than on the first visible HUD frame when possible.
     Q1840Prompt::EnsureIndex();
 }
 
@@ -220,7 +250,9 @@ bool GetFo3DoorPromptQ1840(uint32_t sourceDoorRef,
     auto cached = Q1840Prompt::gPrompts.find(sourceDoorRef);
     if (cached == Q1840Prompt::gPrompts.end()) {
         std::string prompt;
-        if (!Q1840Prompt::BuildPrompt(sourceDoorRef, prompt) || prompt.empty()) return false;
+        if (!Q1840Prompt::BuildPrompt(sourceDoorRef, prompt) || prompt.empty()) {
+            return false;
+        }
         cached = Q1840Prompt::gPrompts.emplace(sourceDoorRef, std::move(prompt)).first;
     }
 
@@ -243,27 +275,12 @@ endif()
 string(REPLACE "${Q1840_CELL_IMPL_MARKER}"
        "${Q1840_PROMPT_IMPL}${Q1840_CELL_IMPL_MARKER}"
        Q1840_CELL_SOURCE "${Q1840_CELL_SOURCE}")
-
-# The invisible/authored XTEL-anchor fallback must register prompt metadata too.
-set(Q1840_ANCHOR_OLD [==[
-        anchor.teleport = teleport;
-        cache.anchors.push_back(anchor);
-]==])
-set(Q1840_ANCHOR_NEW [==[
-        anchor.teleport = teleport;
-        CacheFo3DoorPromptQ1840(p.refFormId, p.baseFormId, teleport);
-        cache.anchors.push_back(anchor);
-]==])
-string(FIND "${Q1840_CELL_SOURCE}" "${Q1840_ANCHOR_OLD}" Q1840_ANCHOR_POS)
-if(Q1840_ANCHOR_POS EQUAL -1)
-    message(FATAL_ERROR "Q16.12 could not find q1730 authored-anchor cache insertion")
-endif()
-string(REPLACE "${Q1840_ANCHOR_OLD}" "${Q1840_ANCHOR_NEW}"
-       Q1840_CELL_SOURCE "${Q1840_CELL_SOURCE}")
 file(WRITE "${Q720_CELL_SOURCE}" "${Q1840_CELL_SOURCE}")
 
 # -----------------------------------------------------------------------------
-# 2. Final renderer: register rendered DOOR base+XTEL metadata with the cache.
+# 2. Final renderer: eagerly register rendered DOOR metadata when available.
+#    Invisible/no-model XTEL anchors need no special patch: GetFo3DoorPromptQ1840
+#    lazily resolves their REFR NAME base + XTEL from Fallout3.esm.
 # -----------------------------------------------------------------------------
 set(Q1840_NATIVE_FILE "${CMAKE_CURRENT_BINARY_DIR}/q6h-native-generated.cpp")
 if(NOT EXISTS "${Q1840_NATIVE_FILE}")
@@ -304,8 +321,6 @@ if(NOT EXISTS "${Q1840_Q4_FILE}")
 endif()
 file(READ "${Q1840_Q4_FILE}" Q1840_Q4_SOURCE)
 
-# q1830 already routes the old real-HUD include to an absolute generated header.
-# Add q1840 immediately afterwards so it can reuse those parsed vanilla types.
 set(Q1840_HUD_INCLUDE_MARKER "#include \"${CMAKE_CURRENT_BINARY_DIR}/fo3-interaction-hud-q1830.h\"")
 set(Q1840_HUD_INCLUDE_NEW
     "${Q1840_HUD_INCLUDE_MARKER}\n#include \"fo3-door-prompt-q1840.h\"\n#include \"fo3-interaction-hud-q1840.h\"\n#include <string>")
@@ -316,8 +331,6 @@ endif()
 string(REPLACE "${Q1840_HUD_INCLUDE_MARKER}" "${Q1840_HUD_INCLUDE_NEW}"
        Q1840_Q4_SOURCE "${Q1840_Q4_SOURCE}")
 
-# Keep q1800's destination/yaw cache untouched on aim loss because q1810 uses it
-# on the first covered loading frame. Prompt identity is separate state.
 set(Q1840_FIELD_MARKER [==[
     uint32_t doorAimDestinationQ1800_{0u};
 ]==])
@@ -351,7 +364,7 @@ set(Q1840_AIM_NEW [==[
             -handMatrix.m[8], -handMatrix.m[9], -handMatrix.m[10], &aim) && aim.valid;
 
         if (q1840NextActive) {
-            // Preserve the authored facing cache used after activation.
+            // Keep the authored destination/yaw cache for the post-A facing fix.
             doorAimYawQ1800_ = aim.rz;
             doorAimDestinationQ1800_ = aim.destinationDoorRef;
 
@@ -362,8 +375,8 @@ set(Q1840_AIM_NEW [==[
                                           sizeof(q1840Prompt))) {
                     doorPromptQ1840_ = q1840Prompt;
                 } else {
-                    // No invented fallback wording: without authored names the
-                    // real HUD stays hidden and the missing data is explicit.
+                    // No invented fallback wording. Missing authored data hides
+                    // the text and leaves an explicit diagnostic.
                     doorPromptQ1840_.clear();
                     FQ_LOGE("Q16.12 HUD PROMPT MISS: sourceDoor=%08X destinationDoor=%08X",
                             aim.sourceDoorRef, aim.destinationDoorRef);
@@ -381,7 +394,7 @@ set(Q1840_AIM_NEW [==[
                 FQ_LOGI("Q16.12 HUD TARGET HIDE: sourceDoor=%08X resourcesRetained=1",
                         doorAimSourceQ1840_);
             }
-            // Hide is state-only. Never destroy/reinitialize GL resources here.
+            // Hide is state-only: do not destroy/reinitialize any GL resource.
             doorAimSourceQ1840_ = 0u;
             doorPromptQ1840_.clear();
         }
@@ -395,9 +408,7 @@ string(REPLACE "${Q1840_AIM_OLD}" "${Q1840_AIM_NEW}"
        Q1840_Q4_SOURCE "${Q1840_Q4_SOURCE}")
 
 set(Q1840_DRAW_OLD "RenderFo3InteractionHudQ1790(mvp.m);")
-set(Q1840_DRAW_NEW [==[
-RenderFo3InteractionHudQ1840(mvp.m, doorPromptQ1840_.c_str());
-]==])
+set(Q1840_DRAW_NEW "RenderFo3InteractionHudQ1840(mvp.m, doorPromptQ1840_.c_str());")
 string(FIND "${Q1840_Q4_SOURCE}" "${Q1840_DRAW_OLD}" Q1840_DRAW_POS)
 if(Q1840_DRAW_POS EQUAL -1)
     message(FATAL_ERROR "Q16.12 could not find Q16.11 live HUD draw")
@@ -431,10 +442,10 @@ string(REPLACE "Q16.11 AUTHORED DOOR FACING" "Q16.12 AUTHORED DOOR FACING"
 file(WRITE "${Q1840_Q4_FILE}" "${Q1840_Q4_SOURCE}")
 
 # -----------------------------------------------------------------------------
-# 4. Configure-time proof: no hard-coded Megaton prompt, mature loader untouched.
+# 4. Configure-time proof: mature loader/environment survive; no hard-coded gate.
 # -----------------------------------------------------------------------------
 string(FIND "${Q1840_CELL_SOURCE}" "Q16.12 AUTHORED DOOR PROMPT:" Q1840_PROMPT_OK)
-string(FIND "${Q1840_CELL_SOURCE}" "CacheFo3DoorPromptQ1840(p.refFormId" Q1840_ANCHOR_OK)
+string(FIND "${Q1840_CELL_SOURCE}" "Q16.12 PROMPT METADATA LAZY:" Q1840_LAZY_OK)
 string(FIND "${Q1840_NATIVE_SOURCE}" "CacheFo3DoorPromptQ1840(gpu.refFormId" Q1840_GPU_OK)
 string(FIND "${Q1840_NATIVE_SOURCE}" "Q16.11 MATURE SCENE SWAP BEGIN:" Q1840_MATURE_OK)
 string(FIND "${Q1840_NATIVE_SOURCE}" "LoadFo3CellEnvironmentQ1410(" Q1840_ENV_OK)
@@ -442,7 +453,7 @@ string(FIND "${Q1840_Q4_SOURCE}" "Q16.12 HUD TARGET HIDE:" Q1840_HIDE_OK)
 string(FIND "${Q1840_Q4_SOURCE}" "RenderFo3InteractionHudQ1840" Q1840_DRAW_OK)
 string(FIND "${Q1840_Q4_SOURCE}" "Q16.12: 2 = A B G E D" Q1840_LABEL_OK)
 string(FIND "${Q1840_Q4_SOURCE}" "Open Gate to Wasteland" Q1840_HARDCODE_BAD)
-if(Q1840_PROMPT_OK EQUAL -1 OR Q1840_ANCHOR_OK EQUAL -1 OR
+if(Q1840_PROMPT_OK EQUAL -1 OR Q1840_LAZY_OK EQUAL -1 OR
    Q1840_GPU_OK EQUAL -1 OR Q1840_MATURE_OK EQUAL -1 OR
    Q1840_ENV_OK EQUAL -1 OR Q1840_HIDE_OK EQUAL -1 OR
    Q1840_DRAW_OK EQUAL -1 OR Q1840_LABEL_OK EQUAL -1 OR
@@ -450,4 +461,4 @@ if(Q1840_PROMPT_OK EQUAL -1 OR Q1840_ANCHOR_OK EQUAL -1 OR
     message(FATAL_ERROR "Q16.12 authored prompt / safe HUD verification failed")
 endif()
 
-message(STATUS "Q16.12 interaction enabled: Fallout3.esm FULL door/destination prompt + text_box.xml single-line layout + GL-safe show/hide")
+message(STATUS "Q16.12 interaction enabled: ESM FULL door/destination prompt + single-string text_box.xml layout + GL-safe show/hide")
