@@ -11,15 +11,20 @@
 #     so the exit is open air until scripted gate animation is implemented.
 #
 # Interior traversal, XTEL ownership, Q16.6 loading UI and Q16.5 arm HUD remain
-# unchanged.
+# unchanged. Start from Q7.20's generated worldspace source so its authored
+# XCLC Force-Hide-Land handling is preserved.
 
-set(Q1770_WORLD_INPUT "${CMAKE_CURRENT_SOURCE_DIR}/fo3-worldspace-q75.cpp")
+set(Q1770_WORLD_INPUT "${CMAKE_CURRENT_BINARY_DIR}/fo3-worldspace-q720.cpp")
 if(NOT EXISTS "${Q1770_WORLD_INPUT}")
-    message(FATAL_ERROR "Q16.7 expected ${Q1770_WORLD_INPUT}")
+    message(FATAL_ERROR "Q16.7 expected Q7.20 generated worldspace at ${Q1770_WORLD_INPUT}")
 endif()
 file(READ "${Q1770_WORLD_INPUT}" Q1770_WORLD_SOURCE)
 
 # 1) Keep the first open-world test light enough for a synchronous Quest swap.
+string(FIND "${Q1770_WORLD_SOURCE}" "constexpr int GRID_RADIUS_Q75 = 2;" Q1770_RADIUS_OLD_POS)
+if(Q1770_RADIUS_OLD_POS EQUAL -1)
+    message(FATAL_ERROR "Q16.7 could not find Q7.20 exterior grid radius")
+endif()
 string(REPLACE
     "constexpr int GRID_RADIUS_Q75 = 2;"
     "constexpr int GRID_RADIUS_Q75 = 1; // Q16.7 temporary 3x3 exterior test window"
@@ -27,10 +32,23 @@ string(REPLACE
 
 # 2) Remember which CELL each raw placement came from so the persistent CELL can
 # be spatially clipped without touching ordinary grid-cell placements.
+string(FIND "${Q1770_WORLD_SOURCE}"
+    "struct RawPlacementQ75 {\n    uint32_t refFormId = 0;"
+    Q1770_RAW_STRUCT_POS)
+if(Q1770_RAW_STRUCT_POS EQUAL -1)
+    message(FATAL_ERROR "Q16.7 could not find RawPlacementQ75")
+endif()
 string(REPLACE
     "struct RawPlacementQ75 {\n    uint32_t refFormId = 0;"
     "struct RawPlacementQ75 {\n    uint32_t refFormId = 0;\n    uint32_t owningCellFormId = 0; // Q16.7 persistent-cell locality"
     Q1770_WORLD_SOURCE "${Q1770_WORLD_SOURCE}")
+
+string(FIND "${Q1770_WORLD_SOURCE}"
+    "placement.refFormId = formId;\n        placement.recordFlags = flags;"
+    Q1770_OWNER_ASSIGN_POS)
+if(Q1770_OWNER_ASSIGN_POS EQUAL -1)
+    message(FATAL_ERROR "Q16.7 could not find raw placement owner assignment point")
+endif()
 string(REPLACE
     "placement.refFormId = formId;\n        placement.recordFlags = flags;"
     "placement.refFormId = formId;\n        placement.owningCellFormId = cell;\n        placement.recordFlags = flags;"
@@ -79,7 +97,7 @@ set(Q1770_COLLECT_NEW [==[
 ]==])
 string(FIND "${Q1770_WORLD_SOURCE}" "${Q1770_COLLECT_OLD}" Q1770_COLLECT_POS)
 if(Q1770_COLLECT_POS EQUAL -1)
-    message(FATAL_ERROR "Q16.7 could not find Q7.5 raw placement collection block")
+    message(FATAL_ERROR "Q16.7 could not find Q7.20 raw placement collection block")
 endif()
 string(REPLACE "${Q1770_COLLECT_OLD}" "${Q1770_COLLECT_NEW}"
        Q1770_WORLD_SOURCE "${Q1770_WORLD_SOURCE}")
@@ -126,7 +144,7 @@ set(Q1770_ASSEMBLY_NEW [==[
 ]==])
 string(FIND "${Q1770_WORLD_SOURCE}" "${Q1770_ASSEMBLY_OLD}" Q1770_ASSEMBLY_POS)
 if(Q1770_ASSEMBLY_POS EQUAL -1)
-    message(FATAL_ERROR "Q16.7 could not find Q7.5 placement assembly loop")
+    message(FATAL_ERROR "Q16.7 could not find Q7.20 placement assembly loop")
 endif()
 string(REPLACE "${Q1770_ASSEMBLY_OLD}" "${Q1770_ASSEMBLY_NEW}"
        Q1770_WORLD_SOURCE "${Q1770_WORLD_SOURCE}")
@@ -139,20 +157,24 @@ string(REPLACE
 set(Q1770_WORLD_OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/fo3-worldspace-q1770.cpp")
 file(WRITE "${Q1770_WORLD_OUTPUT}" "${Q1770_WORLD_SOURCE}")
 
-# Route the already-generated Q16 transition translation unit through the patched
-# Q16.7 worldspace assembler. The generated q74 source lives in the same binary
-# directory, so the quoted include resolves the generated q1770 copy first.
+# Route the already-generated Q16 transition translation unit from Q7.20's
+# generated worldspace source to Q16.7's generated derivative. Q16.0 has already
+# added its traversal code to this translation unit, so patch only the include.
 if(NOT EXISTS "${Q720_CELL_SOURCE}")
     message(FATAL_ERROR "Q16.7 expected generated transition source at ${Q720_CELL_SOURCE}")
 endif()
 file(READ "${Q720_CELL_SOURCE}" Q1770_CELL_SOURCE)
-string(FIND "${Q1770_CELL_SOURCE}" "#include \"fo3-worldspace-q75.cpp\"" Q1770_INCLUDE_POS)
+set(Q1770_WORLD_INCLUDE_OLD
+    "#include \"${CMAKE_CURRENT_BINARY_DIR}/fo3-worldspace-q720.cpp\"")
+set(Q1770_WORLD_INCLUDE_NEW
+    "#include \"${Q1770_WORLD_OUTPUT}\"")
+string(FIND "${Q1770_CELL_SOURCE}" "${Q1770_WORLD_INCLUDE_OLD}" Q1770_INCLUDE_POS)
 if(Q1770_INCLUDE_POS EQUAL -1)
-    message(FATAL_ERROR "Q16.7 could not find Q7.5 worldspace include in transition source")
+    message(FATAL_ERROR "Q16.7 could not find Q7.20 generated worldspace include in transition source")
 endif()
 string(REPLACE
-    "#include \"fo3-worldspace-q75.cpp\""
-    "#include \"fo3-worldspace-q1770.cpp\""
+    "${Q1770_WORLD_INCLUDE_OLD}"
+    "${Q1770_WORLD_INCLUDE_NEW}"
     Q1770_CELL_SOURCE "${Q1770_CELL_SOURCE}")
 file(WRITE "${Q720_CELL_SOURCE}" "${Q1770_CELL_SOURCE}")
 
@@ -181,8 +203,9 @@ string(REPLACE "text=Q16.6 anchor=left-hand" "text=Q16.7 anchor=left-hand"
 file(WRITE "${Q1770_Q4_INPUT}" "${Q1770_Q4_SOURCE}")
 
 # Configure-time proof that this is the lightweight exterior/unblocked build and
-# that the latest UI work remains present.
+# that Q7.20 terrain semantics + latest UI work remain present.
 string(FIND "${Q1770_WORLD_SOURCE}" "GRID_RADIUS_Q75 = 1" Q1770_RADIUS_OK)
+string(FIND "${Q1770_WORLD_SOURCE}" "forceHideLandQ720" Q1770_FORCE_HIDE_OK)
 string(FIND "${Q1770_WORLD_SOURCE}" "Q16.7 PERSISTENT LOCAL CULL" Q1770_CULL_OK)
 string(FIND "${Q1770_WORLD_SOURCE}" "0x00003B24u" Q1770_GATE_OK)
 string(FIND "${Q1770_WORLD_SOURCE}" "0x0001D55Au" Q1770_HOUSE_OK)
@@ -191,12 +214,12 @@ string(FIND "${Q1770_CELL_SOURCE}" "fo3-worldspace-q1770.cpp" Q1770_ROUTE_OK)
 string(FIND "${Q1770_Q4_SOURCE}" "Q16.7: 7 = A B C" Q1770_LABEL_OK)
 string(FIND "${Q1770_Q4_SOURCE}" "RenderFo3LoadingScreenQ1760" Q1770_LOADING_OK)
 string(FIND "${Q1770_Q4_SOURCE}" "q1750ButtonSegments = 32" Q1770_HUD_OK)
-if(Q1770_RADIUS_OK EQUAL -1 OR Q1770_CULL_OK EQUAL -1 OR
-   Q1770_GATE_OK EQUAL -1 OR Q1770_HOUSE_OK EQUAL -1 OR
-   Q1770_DEST_OK EQUAL -1 OR Q1770_ROUTE_OK EQUAL -1 OR
-   Q1770_LABEL_OK EQUAL -1 OR Q1770_LOADING_OK EQUAL -1 OR
-   Q1770_HUD_OK EQUAL -1)
+if(Q1770_RADIUS_OK EQUAL -1 OR Q1770_FORCE_HIDE_OK EQUAL -1 OR
+   Q1770_CULL_OK EQUAL -1 OR Q1770_GATE_OK EQUAL -1 OR
+   Q1770_HOUSE_OK EQUAL -1 OR Q1770_DEST_OK EQUAL -1 OR
+   Q1770_ROUTE_OK EQUAL -1 OR Q1770_LABEL_OK EQUAL -1 OR
+   Q1770_LOADING_OK EQUAL -1 OR Q1770_HUD_OK EQUAL -1)
     message(FATAL_ERROR "Q16.7 verification failed")
 endif()
 
-message(STATUS "Q16.7 exterior test enabled: 3x3 local window + persistent-cell cull + Megaton entrance removed")
+message(STATUS "Q16.7 exterior test enabled: Q7.20 terrain + 3x3 local window + persistent-cell cull + Megaton entrance removed")
