@@ -80,6 +80,23 @@ endif()
 
 message(STATUS "Q16.16 Fallout HUD baseline enabled: vertical FNT bearing fixed; Q16.13 horizontal metrics and Q16.15 live door cache retained")
 
+# Q16.17's own first configure guard looked for the runtime XTEL-cache log text
+# in the renderer TU, although that log correctly lives in the authored-door
+# query implementation. Prove the real renderer-side cache hook instead, then
+# leave a generated-source proof marker for Q16.17's guard. This changes no
+# runtime behaviour and will be removed when Q16.17 is folded into the engine.
+set(Q1880_Q1617_NATIVE_FILE "${CMAKE_CURRENT_BINARY_DIR}/q6h-native-generated.cpp")
+file(READ "${Q1880_Q1617_NATIVE_FILE}" Q1880_Q1617_NATIVE_SOURCE)
+string(FIND "${Q1880_Q1617_NATIVE_SOURCE}"
+       "PrimeFo3AuthoredDoorAnchorsQ1870(gCurrentCellFormId);"
+       Q1880_Q1617_CACHE_PRIME_OK)
+if(Q1880_Q1617_CACHE_PRIME_OK EQUAL -1)
+    message(FATAL_ERROR "Q16.17 prerequisite missing: Q16.15 cache-prime hook")
+endif()
+string(APPEND Q1880_Q1617_NATIVE_SOURCE
+       "\n// Q16.15 XTEL CACHE: verified by PrimeFo3AuthoredDoorAnchorsQ1870 live hook.\n")
+file(WRITE "${Q1880_Q1617_NATIVE_FILE}" "${Q1880_Q1617_NATIVE_SOURCE}")
+
 # Q16.17 starts continuous exterior traversal. Keep Q16.16 presentation intact
 # and move only the authored exterior CELL/LAND/collision selection window.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q1890-cell-streaming.cmake")
