@@ -101,7 +101,3 @@ if(Q1870_INC_OK EQUAL -1 OR NOT Q1870_OLD_INC_BAD EQUAL -1 OR
 endif()
 
 message(STATUS "Q16.15 authored door fallback enabled: scene-primed bounded ESM index, live ray miss memory-only")
-
-# Q16.16 is presentation-only and runs after the now-proven Q16.15 interaction
-# cache. It must not alter transition, exterior, lighting or prompt-query logic.
-include("${CMAKE_CURRENT_SOURCE_DIR}/q1880-font-metrics.cmake")
