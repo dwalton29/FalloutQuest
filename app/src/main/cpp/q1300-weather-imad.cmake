@@ -25,5 +25,11 @@ file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/q6h-native-generated.cpp" "${Q6H_NATIVE_
 message(STATUS "Q13.0 active Day weather IMAD composition enabled")
 
 # Q13.2 consumes IMAD's authored non-post sunlight/sky scale channels and feeds
-# them into the existing WTHR environment lighting/sky renderer.
+# them into the existing WTHR environment lighting/sky renderer. This include
+# chains the complete later renderer/runtime stack through Q16.13.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q1320-weather-light.cmake")
+
+# Q16.14 runs only after the full current runtime chain has completed. It keeps
+# that mature loader intact, removes Q10.4's repeated ESM rescans, and services
+# NativeActivity events during long synchronous authored asset work.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q1860-boot-responsiveness.cmake")
