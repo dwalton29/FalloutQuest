@@ -43,30 +43,48 @@ string(REPLACE
 #    same HUDMain glow and A / OPEN / DOOR semantics, but enlarge the Q16.5
 #    geometry by ~22% and give the two text rows more vertical separation.
 # -----------------------------------------------------------------------------
-set(Q1780_HUD_REPLACEMENTS
-    "constexpr float q1750CharW = 0.0135f;|constexpr float q1750CharW = 0.0165f;"
-    "constexpr float q1750CharH = 0.0205f;|constexpr float q1750CharH = 0.0250f;"
-    "constexpr float q1750CharGap = 0.0035f;|constexpr float q1750CharGap = 0.0042f;"
-    "constexpr float q1750BottomY = 0.105f;|constexpr float q1750BottomY = 0.097f;"
-    "constexpr float q1750TopY = q1750BottomY + q1750CharH + 0.0065f;|constexpr float q1750TopY = q1750BottomY + q1750CharH + 0.0090f;"
-    "constexpr float q1750TextX = -0.030f;|constexpr float q1750TextX = -0.025f;"
-    "constexpr float q1750ButtonCx = -0.074f;|constexpr float q1750ButtonCx = -0.087f;"
-    "constexpr float q1750ButtonRx = 0.0275f;|constexpr float q1750ButtonRx = 0.0335f;"
-    "constexpr float q1750ButtonRy = 0.0275f;|constexpr float q1750ButtonRy = 0.0335f;"
-    "constexpr float aw = 0.0145f;|constexpr float aw = 0.0175f;"
-    "constexpr float ah = 0.0210f;|constexpr float ah = 0.0255f;"
-)
-foreach(Q1780_PAIR IN LISTS Q1780_HUD_REPLACEMENTS)
-    string(REPLACE "|" ";" Q1780_PARTS "${Q1780_PAIR}")
-    list(GET Q1780_PARTS 0 Q1780_OLD)
-    list(GET Q1780_PARTS 1 Q1780_NEW)
+macro(q1780_replace_hud Q1780_OLD Q1780_NEW)
     string(FIND "${Q1780_Q4_SOURCE}" "${Q1780_OLD}" Q1780_FOUND)
     if(Q1780_FOUND EQUAL -1)
         message(FATAL_ERROR "Q16.8 could not find HUD token: ${Q1780_OLD}")
     endif()
     string(REPLACE "${Q1780_OLD}" "${Q1780_NEW}"
            Q1780_Q4_SOURCE "${Q1780_Q4_SOURCE}")
-endforeach()
+endmacro()
+
+q1780_replace_hud(
+    [=[constexpr float q1750CharW = 0.0135f;]=]
+    [=[constexpr float q1750CharW = 0.0165f;]=])
+q1780_replace_hud(
+    [=[constexpr float q1750CharH = 0.0205f;]=]
+    [=[constexpr float q1750CharH = 0.0250f;]=])
+q1780_replace_hud(
+    [=[constexpr float q1750CharGap = 0.0035f;]=]
+    [=[constexpr float q1750CharGap = 0.0042f;]=])
+q1780_replace_hud(
+    [=[constexpr float q1750BottomY = 0.105f;]=]
+    [=[constexpr float q1750BottomY = 0.097f;]=])
+q1780_replace_hud(
+    [=[constexpr float q1750TopY = q1750BottomY + q1750CharH + 0.0065f;]=]
+    [=[constexpr float q1750TopY = q1750BottomY + q1750CharH + 0.0090f;]=])
+q1780_replace_hud(
+    [=[constexpr float q1750TextX = -0.030f;]=]
+    [=[constexpr float q1750TextX = -0.025f;]=])
+q1780_replace_hud(
+    [=[constexpr float q1750ButtonCx = -0.074f;]=]
+    [=[constexpr float q1750ButtonCx = -0.087f;]=])
+q1780_replace_hud(
+    [=[constexpr float q1750ButtonRx = 0.0275f;]=]
+    [=[constexpr float q1750ButtonRx = 0.0335f;]=])
+q1780_replace_hud(
+    [=[constexpr float q1750ButtonRy = 0.0275f;]=]
+    [=[constexpr float q1750ButtonRy = 0.0335f;]=])
+q1780_replace_hud(
+    [=[constexpr float aw = 0.0145f;]=]
+    [=[constexpr float aw = 0.0175f;]=])
+q1780_replace_hud(
+    [=[constexpr float ah = 0.0210f;]=]
+    [=[constexpr float ah = 0.0255f;]=])
 
 # Add a one-shot runtime proof at the actual interaction draw site. This lets a
 # device log distinguish 'door aim never became active' from 'HUD drew but was
