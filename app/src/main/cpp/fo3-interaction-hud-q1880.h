@@ -15,8 +15,11 @@
 // from the tallest drawable glyph and the FNT's vertical bearing, then place each
 // glyph upward from that baseline. This corrects our interpretation of the real
 // FNT data; it does not invent replacement font metrics.
+//
+// IMPORTANT: this header is included only after Q16.11's generated HUD header.
+// That generated header is the single live definition of the fo3q1790 FNT/TAI
+// types. Do not include q1790.h here or those definitions are emitted twice.
 
-#include "fo3-interaction-hud-q1790.h"
 #include "fo3-interaction-hud-q1850.h"
 
 #include <algorithm>
