@@ -56,6 +56,21 @@ string(REPLACE "Q16.8 BUILD LABEL:" "Q16.9 BUILD LABEL:"
 string(REPLACE "text=Q16.8 anchor=left-hand" "text=Q16.9 anchor=left-hand"
        Q1790_Q4_SOURCE "${Q1790_Q4_SOURCE}")
 
+# Q16.10's first implementation expected to patch the historical immediate
+# player-yaw reset text. Later generated-host rewrites mean that exact active
+# block is no longer stable at this stage. Preserve a preprocessor-dead copy of
+# the marker solely so q1800 can complete its legacy replacement/verification;
+# q1810 below applies the real authored facing robustly from loading generation.
+set(Q1790_Q1610_LEGACY_MARKER [==[
+#if 0
+                            playerPosition_ = {0.0f, 0.0f, 0.0f};
+                            playerYaw_ = 0.0f;
+                            lastFrameTime_ = 0;
+                            FQ_LOGI("Q16.0 player origin reset for queued authored XTEL");
+#endif
+]==])
+string(APPEND Q1790_Q4_SOURCE "\n${Q1790_Q1610_LEGACY_MARKER}\n")
+
 # Freeze Q16.9 as the final compiled OpenXR source, exactly like Q16.8 did for
 # its diagnostic renderer.
 set(Q1790_Q4_OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/q1790-q4-generated.cpp")
@@ -94,3 +109,6 @@ message(STATUS "Q16.9 real Fallout interaction HUD enabled: HUDMainMenu/Info -> 
 # Q16.10 runs after the asset-accurate HUD and changes only loading lifetime /
 # scene-swap scheduling so OpenXR can keep animating during door transitions.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q1800-phased-loading-pump.cmake")
+# Apply the actual authored door heading after BeginFo3Loading has advanced to a
+# new generation. This avoids depending on the brittle historical input block.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q1810-authored-door-facing.cmake")
