@@ -72,3 +72,8 @@ if(Q1760_INCLUDE_OK EQUAL -1 OR Q1760_DRAW_OK EQUAL -1 OR
 endif()
 
 message(STATUS "Q16.6 vanilla loading menu enabled: 1280x960 canvas, full-screen LSCR, menufade=0.75, 54x54 circular loading01 pinwheel")
+
+# Q16.7 keeps the vanilla loading/menu and arm HUD intact, but makes the first
+# Capital Wasteland transition local enough for Quest and temporarily removes
+# the closed Megaton entrance assembly so open-world walking can be tested.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q1770-megaton-exterior-unblock.cmake")
