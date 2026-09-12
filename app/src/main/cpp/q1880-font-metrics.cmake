@@ -1,11 +1,11 @@
-# Q16.16: fix the vertical wobble / over-wide interaction text by interpreting
-# Fallout 3's actual bitmap FNT glyph metrics correctly.
+# Q16.16: fix the high/low interaction letters by correcting only the vertical
+# interpretation of Fallout 3's actual bitmap FNT records.
 #
-# Q16.9 recovered the right record size/UVs, but named the final three floats
-# xOffset/yOffset/advance. The vanilla bytes prove they are left kerning, right
-# kerning, and ascent. Q16.13 consequently used right kerning for vertical Y and
-# ascent for horizontal advance. Q16.16 keeps the exact same Bethesda assets and
-# HUDMainMenu/text_box presentation, changing only those engine metric semantics.
+# The vanilla prompt glyphs share the same vertical bearing while their bitmap
+# heights differ. Q16.13 applied that bearing to each glyph's top edge, producing
+# a visibly wandering baseline. Q16.16 keeps the exact Q16.13 horizontal advances,
+# word spacing, button, wording, scale and text_box.xml layout, but positions the
+# glyph bitmaps against one FNT-derived baseline.
 
 set(Q1880_Q4_FILE "${CMAKE_CURRENT_BINARY_DIR}/q1800-q4-generated.cpp")
 if(NOT EXISTS "${Q1880_Q4_FILE}")
@@ -13,8 +13,8 @@ if(NOT EXISTS "${Q1880_Q4_FILE}")
 endif()
 file(READ "${Q1880_Q4_FILE}" Q1880_Q4_SOURCE)
 
-# Add the corrected renderer. It reuses Q16.13's GL state sandbox, actual FNT/TEX
-# atlas, actual InterfaceShared TAI/DDS button, and fixed-storage lifetime.
+# Add the baseline-aware renderer. It reuses Q16.13's GL-state sandbox, real
+# FNT/TEX atlas, real InterfaceShared TAI/DDS button and fixed prompt storage.
 string(PREPEND Q1880_Q4_SOURCE "#include \"fo3-interaction-hud-q1880.h\"\n")
 
 set(Q1880_RENDER_OLD "RenderFo3InteractionHudQ1850")
@@ -52,15 +52,17 @@ string(REPLACE "Q16.15 AUTHORED DOOR FACING" "Q16.16 AUTHORED DOOR FACING"
 
 file(WRITE "${Q1880_Q4_FILE}" "${Q1880_Q4_SOURCE}")
 
-# Configure-time proof. The old renderer may still be defined in its included
-# header for teardown/back-compat, but the final OpenXR host must call Q1880.
+# Configure-time proof. Q16.15's door cache and Q16.13 show/hide state machine
+# must survive; only the live HUD draw target and visible build label change.
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/fo3-interaction-hud-q1880.h" Q1880_HUD_HEADER)
+string(FIND "${Q1880_HUD_HEADER}" "Q16.16 HUD BASELINE:" Q1880_BASELINE_OK)
 string(FIND "${Q1880_Q4_SOURCE}" "fo3-interaction-hud-q1880.h" Q1880_INCLUDE_OK)
 string(FIND "${Q1880_Q4_SOURCE}" "RenderFo3InteractionHudQ1880" Q1880_RENDER_OK)
 string(FIND "${Q1880_Q4_SOURCE}" "Q16.16: 6 = A F G E D C" Q1880_LABEL_OK)
 string(FIND "${Q1880_Q4_SOURCE}" "Q16.13 HUD TARGET HIDE:" Q1880_HIDE_OK)
-if(Q1880_INCLUDE_OK EQUAL -1 OR Q1880_RENDER_OK EQUAL -1 OR
-   Q1880_LABEL_OK EQUAL -1 OR Q1880_HIDE_OK EQUAL -1)
-    message(FATAL_ERROR "Q16.16 corrected FNT renderer verification failed")
+if(Q1880_BASELINE_OK EQUAL -1 OR Q1880_INCLUDE_OK EQUAL -1 OR
+   Q1880_RENDER_OK EQUAL -1 OR Q1880_LABEL_OK EQUAL -1 OR Q1880_HIDE_OK EQUAL -1)
+    message(FATAL_ERROR "Q16.16 baseline-aware HUD verification failed")
 endif()
 
-message(STATUS "Q16.16 Fallout FNT metrics enabled: left/right kerning + ascent baseline; Q16.15 live door cache retained")
+message(STATUS "Q16.16 Fallout HUD baseline enabled: vertical FNT bearing fixed; Q16.13 horizontal metrics and Q16.15 live door cache retained")
