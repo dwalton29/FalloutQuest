@@ -150,3 +150,7 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/q1940-stream-starvation-farclip.cmake")
 # Q16.23 widens retained full-detail visuals to vanilla-style 5x5 while keeping
 # collision local and avoiding a whole 25-cell LAND rebuild on every CELL shift.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q1950-persistent-visual-grid.cmake")
+
+# Q16.23 final linkage repair: route the translation unit that add_library
+# actually compiles through the q1950-aware worldspace source.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q1951-worldspace-linkage.cmake")
