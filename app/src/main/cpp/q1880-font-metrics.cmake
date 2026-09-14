@@ -154,3 +154,8 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/q1950-persistent-visual-grid.cmake")
 # Q16.23 final linkage repair: route the translation unit that add_library
 # actually compiles through the q1950-aware worldspace source.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q1951-worldspace-linkage.cmake")
+
+# Q16.24 loads the Capital Wasteland as 7x7 full-detail visuals immediately,
+# keeps collision local at 3x3, backs it with retained 9x9 LAND, and begins the
+# adjacent entering-strip stream as soon as stable movement direction is known.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q1960-seven-by-seven-residency.cmake")
