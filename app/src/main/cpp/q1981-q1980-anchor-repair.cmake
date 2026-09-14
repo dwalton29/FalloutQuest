@@ -103,6 +103,92 @@ set(Q1981_GENERATED_Q1980
 file(WRITE "${Q1981_GENERATED_Q1980}" "${Q1981_Q1980_SOURCE}")
 include("${Q1981_GENERATED_Q1980}")
 
-# Q16.27 runs only after the repaired Q16.26 generated sources exist.
-include("${CMAKE_CURRENT_SOURCE_DIR}/q1990-persistent-collision-native-lod.cmake")
+# Q16.27 q1990 first CI reached its real configure layer and proved that the
+# collision initializer's neighbouring text has drifted. Repair only that hook:
+# the assignment itself is stable and unique in InitializeFo3CollisionOverlay.
+set(Q1981_Q1990_SOURCE_FILE
+    "${CMAKE_CURRENT_SOURCE_DIR}/q1990-persistent-collision-native-lod.cmake")
+file(READ "${Q1981_Q1990_SOURCE_FILE}" Q1981_Q1990_SOURCE)
+set(Q1981_Q1990_CONTEXT_BRITTLE [====[
+set(Q1990_COLLISION_CONTEXT_OLD [==[
+    gCollisionFloorY = floorY;
+
+    const bool exteriorAllBhksQ78A = IsExteriorMegatonPlacementSetQ78A(placements);
+]==])
+set(Q1990_COLLISION_CONTEXT_NEW [==[
+    gCollisionFloorY = floorY;
+
+    const bool q1990SameCollisionContext = gQ1990CollisionCacheContextValid &&
+        std::fabs(gQ1990CollisionCacheCenterX - centerX) < 0.01f &&
+        std::fabs(gQ1990CollisionCacheCenterY - centerY) < 0.01f &&
+        std::fabs(gQ1990CollisionCacheFloorZ - floorZ) < 0.01f &&
+        std::fabs(gQ1990CollisionCacheSceneForward - sceneForward) < 0.0001f &&
+        std::fabs(gQ1990CollisionCacheFloorY - floorY) < 0.0001f &&
+        std::fabs(gQ1990CollisionCacheUnitsPerMetre - unitsPerMetre) < 0.0001f;
+    if (!q1990SameCollisionContext) {
+        const size_t q1990OldEntries = gQ1990CollisionPlacementCache.size();
+        gQ1990CollisionPlacementCache.clear();
+        gQ1990CollisionCacheContextValid = true;
+        gQ1990CollisionCacheCenterX = centerX;
+        gQ1990CollisionCacheCenterY = centerY;
+        gQ1990CollisionCacheFloorZ = floorZ;
+        gQ1990CollisionCacheSceneForward = sceneForward;
+        gQ1990CollisionCacheFloorY = floorY;
+        gQ1990CollisionCacheUnitsPerMetre = unitsPerMetre;
+        Q6F_LOGI("Q16.27 COLLISION CACHE RESET: oldEntries=%zu origin=(%.2f %.2f %.2f) unitsPerMetre=%.2f",
+                 q1990OldEntries, centerX, centerY, floorZ, unitsPerMetre);
+    }
+
+    const bool exteriorAllBhksQ78A = IsExteriorMegatonPlacementSetQ78A(placements);
+]==])
+string(FIND "${Q74_COLLISION_SOURCE}" "${Q1990_COLLISION_CONTEXT_OLD}" Q1990_COLLISION_CONTEXT_POS)
+if(Q1990_COLLISION_CONTEXT_POS EQUAL -1)
+    message(FATAL_ERROR "Q16.27 could not find collision initialization context")
+endif()
+string(REPLACE "${Q1990_COLLISION_CONTEXT_OLD}" "${Q1990_COLLISION_CONTEXT_NEW}"
+       Q74_COLLISION_SOURCE "${Q74_COLLISION_SOURCE}")
+]====])
+set(Q1981_Q1990_CONTEXT_ROBUST [====[
+set(Q1990_COLLISION_CONTEXT_OLD "    gCollisionFloorY = floorY;")
+set(Q1990_COLLISION_CONTEXT_NEW [==[
+    gCollisionFloorY = floorY;
+
+    const bool q1990SameCollisionContext = gQ1990CollisionCacheContextValid &&
+        std::fabs(gQ1990CollisionCacheCenterX - centerX) < 0.01f &&
+        std::fabs(gQ1990CollisionCacheCenterY - centerY) < 0.01f &&
+        std::fabs(gQ1990CollisionCacheFloorZ - floorZ) < 0.01f &&
+        std::fabs(gQ1990CollisionCacheSceneForward - sceneForward) < 0.0001f &&
+        std::fabs(gQ1990CollisionCacheFloorY - floorY) < 0.0001f &&
+        std::fabs(gQ1990CollisionCacheUnitsPerMetre - unitsPerMetre) < 0.0001f;
+    if (!q1990SameCollisionContext) {
+        const size_t q1990OldEntries = gQ1990CollisionPlacementCache.size();
+        gQ1990CollisionPlacementCache.clear();
+        gQ1990CollisionCacheContextValid = true;
+        gQ1990CollisionCacheCenterX = centerX;
+        gQ1990CollisionCacheCenterY = centerY;
+        gQ1990CollisionCacheFloorZ = floorZ;
+        gQ1990CollisionCacheSceneForward = sceneForward;
+        gQ1990CollisionCacheFloorY = floorY;
+        gQ1990CollisionCacheUnitsPerMetre = unitsPerMetre;
+        Q6F_LOGI("Q16.27 COLLISION CACHE RESET: oldEntries=%zu origin=(%.2f %.2f %.2f) unitsPerMetre=%.2f",
+                 q1990OldEntries, centerX, centerY, floorZ, unitsPerMetre);
+    }
+]==])
+string(FIND "${Q74_COLLISION_SOURCE}" "${Q1990_COLLISION_CONTEXT_OLD}" Q1990_COLLISION_CONTEXT_POS)
+if(Q1990_COLLISION_CONTEXT_POS EQUAL -1)
+    message(FATAL_ERROR "Q16.27 could not find stable collision-floor assignment")
+endif()
+string(REPLACE "${Q1990_COLLISION_CONTEXT_OLD}" "${Q1990_COLLISION_CONTEXT_NEW}"
+       Q74_COLLISION_SOURCE "${Q74_COLLISION_SOURCE}")
+]====])
+string(FIND "${Q1981_Q1990_SOURCE}" "${Q1981_Q1990_CONTEXT_BRITTLE}" Q1981_Q1990_CONTEXT_POS)
+if(Q1981_Q1990_CONTEXT_POS EQUAL -1)
+    message(FATAL_ERROR "Q16.27 wrapper could not find brittle collision initializer block")
+endif()
+string(REPLACE "${Q1981_Q1990_CONTEXT_BRITTLE}" "${Q1981_Q1990_CONTEXT_ROBUST}"
+       Q1981_Q1990_SOURCE "${Q1981_Q1990_SOURCE}")
+set(Q1981_GENERATED_Q1990
+    "${CMAKE_CURRENT_BINARY_DIR}/q1990-persistent-collision-native-lod-fixed.cmake")
+file(WRITE "${Q1981_GENERATED_Q1990}" "${Q1981_Q1990_SOURCE}")
+include("${Q1981_GENERATED_Q1990}")
 include("${CMAKE_CURRENT_SOURCE_DIR}/q1991-q1990-lod-fastpath.cmake")
