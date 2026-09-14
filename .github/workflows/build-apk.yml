@@ -31,6 +31,11 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          # `tools` was the legacy pre-cmdline-tools SDK package and is no longer
+          # published by Google's current repository. setup-android already installs
+          # cmdline-tools; request only the package we actually need here.
+          packages: platform-tools
 
       - name: Install Android build components
         run: |
