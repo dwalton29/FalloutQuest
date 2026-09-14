@@ -105,3 +105,4 @@ include("${Q1981_GENERATED_Q1980}")
 
 # Q16.27 runs only after the repaired Q16.26 generated sources exist.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q1990-persistent-collision-native-lod.cmake")
+include("${CMAKE_CURRENT_SOURCE_DIR}/q1991-q1990-lod-fastpath.cmake")
