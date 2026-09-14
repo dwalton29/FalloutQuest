@@ -168,3 +168,8 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/q1970-centred-active-residency.cmake")
 # Q16.25 generated-source order repair: old transition/stream functions precede
 # the new q1970 helper definitions in the single native translation unit.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q1971-forward-declarations.cmake")
+
+# Q16.26 uses the Q16.25 device log to bound the near-world workload: 5x5
+# resident objects, actual-centred 3x3 full detail, collision before visual GPU
+# staging, one-cell-only catch-up and a retained 5x5 LAND backing ring.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q1980-bounded-residency-collision-first.cmake")
