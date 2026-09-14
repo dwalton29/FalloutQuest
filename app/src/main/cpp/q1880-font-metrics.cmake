@@ -142,3 +142,7 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/q1920-stable-adjacent-streaming.cmake")
 # Keep objects at 3x3, render LAND at 5x5, and explicitly preserve exterior
 # collision semantics during streamed Wasteland recentering.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q1931-terrain-ring-collision-mode.cmake")
+
+# Q16.22 keeps the Q16.21 object/LAND split but repairs stream starvation under
+# continuous movement and raises the original 100m OpenXR far clip to 300m.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q1940-stream-starvation-farclip.cmake")
