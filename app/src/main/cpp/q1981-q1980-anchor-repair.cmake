@@ -74,7 +74,7 @@ string(FIND "${Q1980_NATIVE_SOURCE}" "${Q1980_GPU_NEXT_OLD}" Q1980_GPU_NEXT_POS)
 if(Q1980_GPU_NEXT_POS EQUAL -1)
     message(FATAL_ERROR "Q16.26 could not find GPU -> collision phase transition")
 endif()
-string(REPLACE "${Q1980_GPU_NEXT_OLD}" "${Q1981980_GPU_NEXT_NEW}"
+string(REPLACE "${Q1980_GPU_NEXT_OLD}" "${Q1980_GPU_NEXT_NEW}"
        Q1980_NATIVE_SOURCE "${Q1980_NATIVE_SOURCE}")
 ]====])
 
