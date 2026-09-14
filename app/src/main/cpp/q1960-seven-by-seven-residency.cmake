@@ -1,24 +1,17 @@
-# Q16.24: make the wider exterior world resident before the player can reach its edge.
+# Q16.24: seven-by-seven exterior residency.
 #
-# Q16.23 device evidence proved two remaining continuity problems:
-#   - Capital Wasteland entry still used the historical radius-1 selector, so the
-#     visible world started 3x3 and then visibly grew to the async 5x5 target;
-#   - even after 5x5 was established, one-cell entering strips took long enough
-#     that continuous locomotion could still reach the live edge before commit.
-#
-# Q16.24 therefore makes both initial and streamed Wasteland visuals radius 3
-# (7x7), keeps authored collision local at radius 1 (3x3), and grows the retained
-# LAND backing ring to radius 4 (9x9). The extra LAND ring is deliberate: a 7x7
-# visual window shifted by one cell still fits completely inside a retained 9x9
-# terrain window, so adjacent stream commits do not need to rebuild all terrain
-# geometry. Prefetch begins as soon as stable movement direction exists anywhere
-# in the current 4096-unit CELL; target centres remain adjacent-only.
+# Device evidence from Q16.23 showed that Capital Wasteland entry still began on
+# the historical radius-1 visual selector and only later grew to the async 5x5
+# target. The async generations also remained slow enough for continuous walking
+# to reach the live edge. Q16.24 therefore uses radius 3 (7x7) for both initial
+# and streamed exterior visuals, keeps collision local at radius 1 (3x3), backs
+# the visuals with radius-4 (9x9) LAND, and starts adjacent prefetch as early as
+# Q16.20's stable-direction rules allow.
 
 # -----------------------------------------------------------------------------
 # A. Final compiled worldspace selector: default large-worldspace selection is
-#    now radius 3. Small child worldspaces still take their full-small-worldspace
-#    branch exactly as before. Route the already-mature q1951 CELL TU through a
-#    new generated q1960 copy so no older CELL fixes are lost.
+#    radius 3. Small child worldspaces retain the existing full-small-worldspace
+#    branch. Route the actual compiled CELL TU through the q1960 worldspace copy.
 # -----------------------------------------------------------------------------
 if(NOT DEFINED Q1951_WORLDSPACE_FINAL OR NOT EXISTS "${Q1951_WORLDSPACE_FINAL}")
     message(FATAL_ERROR "Q16.24 expected q1951 final worldspace implementation")
@@ -62,10 +55,11 @@ file(WRITE "${Q1960_CELL_FINAL}" "${Q1960_CELL_SOURCE}")
 set(Q720_CELL_SOURCE "${Q1960_CELL_FINAL}")
 
 # -----------------------------------------------------------------------------
-# B. Mature renderer: stream 7x7 visuals too, but never feed the complete visual
-#    set to collision. The async path already has q1950's radius-1 collision
-#    filter. Add the same policy to the initial Capital Wasteland door transition
-#    so the loading-screen build may create 7x7 visuals without a 7x7 BHK spike.
+# B. Mature renderer: async visuals are radius 3. The async path already has
+#    q1950's radius-1 collision filter. Apply the same 3x3 policy to the LIVE
+#    restored mature transition loader (Q16.11/Q16.14), not the parked Q16.10
+#    phased loader. This lets the loading-screen Wasteland build create 7x7
+#    visuals without feeding all 49 cells to authored BHK collision.
 # -----------------------------------------------------------------------------
 set(Q1960_NATIVE_FILE "${CMAKE_CURRENT_BINARY_DIR}/q6h-native-generated.cpp")
 if(NOT EXISTS "${Q1960_NATIVE_FILE}")
@@ -82,32 +76,27 @@ endif()
 string(REPLACE "${Q1960_WORKER_RADIUS_OLD}" "${Q1960_WORKER_RADIUS_NEW}"
        Q1960_NATIVE_SOURCE "${Q1960_NATIVE_SOURCE}")
 
-set(Q1960_INITIAL_COLLISION_OLD [==[
-    std::vector<Fo3WorldPlacement> collisionPlacements;
-    collisionPlacements.reserve(work.selected.size());
-    for (const CpuObject& cpu : work.selected) {
-        collisionPlacements.push_back(cpu.placement);
-    }
-
-    work.collisionReady = InitializeFo3CollisionOverlay(
+set(Q1960_MATURE_COLLISION_OLD [==[
+    const bool collisionReady = InitializeFo3CollisionOverlay(collisionPlacements,
+                                                               request.x, request.y, request.z,
+                                                               SCENE_FORWARD, FLOOR_Y,
+                                                               FO3_UNITS_PER_METRE);
 ]==])
-set(Q1960_INITIAL_COLLISION_NEW [==[
-    std::vector<Fo3WorldPlacement> collisionPlacements;
-    collisionPlacements.reserve(work.selected.size());
+set(Q1960_MATURE_COLLISION_NEW [==[
+    // Q16.24: initial Capital Wasteland visuals are 7x7, but initial physics is
+    // deliberately local 3x3. Other worldspaces keep their established policy.
+    std::vector<Fo3WorldPlacement> q1960InitialCollisionPlacements;
+    const std::vector<Fo3WorldPlacement>* q1960CollisionSource = &collisionPlacements;
     size_t q1960OutsideInitialCollisionWindow = 0u;
-
-    // Capital Wasteland visuals are now 7x7 from the door transition itself.
-    // Keep physics local: only placements whose authored position lies in the
-    // destination CELL +/-1 are allowed into the initial collision overlay.
-    if (work.request.worldspaceFormId == 0x0000003Cu) {
+    if (request.worldspaceFormId == 0x0000003Cu) {
         constexpr float Q1960_CELL_SIZE = 4096.0f;
         constexpr int Q1960_INITIAL_COLLISION_RADIUS = 1;
         const int32_t q1960TargetGridX = static_cast<int32_t>(
-            std::floor(work.request.x / Q1960_CELL_SIZE));
+            std::floor(request.x / Q1960_CELL_SIZE));
         const int32_t q1960TargetGridY = static_cast<int32_t>(
-            std::floor(work.request.y / Q1960_CELL_SIZE));
-        for (const CpuObject& cpu : work.selected) {
-            const Fo3WorldPlacement& placement = cpu.placement;
+            std::floor(request.y / Q1960_CELL_SIZE));
+        q1960InitialCollisionPlacements.reserve(collisionPlacements.size());
+        for (const Fo3WorldPlacement& placement : collisionPlacements) {
             const int32_t q1960PlacementGridX = static_cast<int32_t>(
                 std::floor(placement.x / Q1960_CELL_SIZE));
             const int32_t q1960PlacementGridY = static_cast<int32_t>(
@@ -119,33 +108,32 @@ set(Q1960_INITIAL_COLLISION_NEW [==[
                 ++q1960OutsideInitialCollisionWindow;
                 continue;
             }
-            collisionPlacements.push_back(placement);
+            q1960InitialCollisionPlacements.push_back(placement);
         }
+        q1960CollisionSource = &q1960InitialCollisionPlacements;
         SetNextFo3CollisionExteriorModeQ1931(true);
-        Q6H_LOGI("Q16.24 INITIAL COLLISION WINDOW: worldspace=%08X targetGrid=(%d,%d) visualShapes=%zu localCollisionPlacements=%zu outside3x3=%zu radius=1",
-                 work.request.worldspaceFormId,
+        Q6H_LOGI("Q16.24 INITIAL COLLISION WINDOW: worldspace=%08X targetGrid=(%d,%d) visualCollisionCandidates=%zu localCollisionPlacements=%zu outside3x3=%zu radius=1",
+                 request.worldspaceFormId,
                  q1960TargetGridX, q1960TargetGridY,
-                 work.selected.size(), collisionPlacements.size(),
+                 collisionPlacements.size(), q1960InitialCollisionPlacements.size(),
                  q1960OutsideInitialCollisionWindow);
-    } else {
-        for (const CpuObject& cpu : work.selected) {
-            collisionPlacements.push_back(cpu.placement);
-        }
     }
-
-    work.collisionReady = InitializeFo3CollisionOverlay(
+    const bool collisionReady = InitializeFo3CollisionOverlay(*q1960CollisionSource,
+                                                               request.x, request.y, request.z,
+                                                               SCENE_FORWARD, FLOOR_Y,
+                                                               FO3_UNITS_PER_METRE);
 ]==])
-string(FIND "${Q1960_NATIVE_SOURCE}" "${Q1960_INITIAL_COLLISION_OLD}" Q1960_INITIAL_COLLISION_POS)
-if(Q1960_INITIAL_COLLISION_POS EQUAL -1)
-    message(FATAL_ERROR "Q16.24 could not find phased initial collision placement block")
+string(FIND "${Q1960_NATIVE_SOURCE}" "${Q1960_MATURE_COLLISION_OLD}" Q1960_MATURE_COLLISION_POS)
+if(Q1960_MATURE_COLLISION_POS EQUAL -1)
+    message(FATAL_ERROR "Q16.24 could not find live mature transition collision call")
 endif()
-string(REPLACE "${Q1960_INITIAL_COLLISION_OLD}" "${Q1960_INITIAL_COLLISION_NEW}"
+string(REPLACE "${Q1960_MATURE_COLLISION_OLD}" "${Q1960_MATURE_COLLISION_NEW}"
        Q1960_NATIVE_SOURCE "${Q1960_NATIVE_SOURCE}")
 
-# Earliest safe adjacent prefetch. This does NOT restore Q16.19 velocity
-# extrapolation: Q16.20's stable-direction logic and actual +/-1 target clamp stay
-# intact. 4096 simply means any distance inside the authored CELL may qualify once
-# direction is stable.
+# Earliest safe adjacent prefetch. This does not restore Q16.19 velocity
+# extrapolation: Q16.20's stable-direction sampling and adjacent-only target clamp
+# remain intact. 4096 means any position within the current CELL can qualify once
+# movement direction is stable.
 set(Q1960_PREFETCH_OLD
     "constexpr float Q1920_PREFETCH_DISTANCE = 3584.0f; // Q16.23 5x5 visual lead time")
 set(Q1960_PREFETCH_NEW
@@ -164,8 +152,7 @@ string(REPLACE "radius=1 rebuildMode=7x7-visual+3x3-collision+9x9-terrain-retain
        "visualRadius=3 collisionRadius=1 terrainRadius=4 rebuildMode=7x7-visual+3x3-collision+9x9-terrain-retain"
        Q1960_NATIVE_SOURCE "${Q1960_NATIVE_SOURCE}")
 
-# Q16.23's retained terrain-centre state remains valid, but its diagnostic radius
-# must describe the new 9x9 backing ring.
+# q1950's retained terrain-centre state remains valid, but the backing ring is 9x9.
 string(REPLACE "centre=(%d,%d) radius=3" "centre=(%d,%d) radius=4"
        Q1960_NATIVE_SOURCE "${Q1960_NATIVE_SOURCE}")
 string(REPLACE "delta=(%d,%d) radius=3 fullGpuRebuild=0"
@@ -175,14 +162,13 @@ string(REPLACE "centre=(%d,%d) radius=3 fullGpuRebuild=1"
        "centre=(%d,%d) radius=4 fullGpuRebuild=1"
        Q1960_NATIVE_SOURCE "${Q1960_NATIVE_SOURCE}")
 
-# All renderer-side stream diagnostics should identify the live build.
+# Renderer-side stream diagnostics identify the live build.
 string(REPLACE "Q16.23" "Q16.24" Q1960_NATIVE_SOURCE "${Q1960_NATIVE_SOURCE}")
 file(WRITE "${Q1960_NATIVE_FILE}" "${Q1960_NATIVE_SOURCE}")
 
 # -----------------------------------------------------------------------------
-# C. LAND: radius 4 (9x9 backing). This is intentionally one ring wider than the
-#    radius-3 visual set so q1950's one-cell TERRAIN RETAIN optimisation remains
-#    geometrically correct after each adjacent visual recenter.
+# C. LAND: radius 4 (9x9 backing), one ring wider than radius-3 visuals so an
+#    adjacent visual recenter remains covered while q1950 retains terrain GPU data.
 # -----------------------------------------------------------------------------
 set(Q1960_TERRAIN_RADIUS_OLD
     "constexpr int Q1931_TERRAIN_GRID_RADIUS = 3; // Q16.23 retained 7x7 LAND ring")
@@ -199,13 +185,12 @@ string(REPLACE "Q16.23 TERRAIN WINDOW:" "Q16.24 TERRAIN WINDOW:"
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/fo3-terrain-data-q720.cpp"
      "${Q720_TERRAIN_DATA_SOURCE}")
 
-# Keep separate collision diagnostics aligned with the live build.
 string(REPLACE "Q16.23 COLLISION MODE OVERRIDE" "Q16.24 COLLISION MODE OVERRIDE"
        Q74_COLLISION_SOURCE "${Q74_COLLISION_SOURCE}")
 
 # -----------------------------------------------------------------------------
-# D. Visible build label Q16.24. The 300m far clip remains deliberate for this
-# test; native Fallout distant LOD is still a separate future layer.
+# D. Visible build label Q16.24. Keep Q16.22's 300m far clip; native Fallout 3
+#    distant LOD remains a separate later layer.
 # -----------------------------------------------------------------------------
 set(Q1960_Q4_FILE "${CMAKE_CURRENT_BINARY_DIR}/q1800-q4-generated.cpp")
 if(NOT EXISTS "${Q1960_Q4_FILE}")
@@ -240,8 +225,7 @@ file(WRITE "${Q1960_Q4_FILE}" "${Q1960_Q4_SOURCE}")
 
 # -----------------------------------------------------------------------------
 # E. Configure-time proof. Fail closed rather than silently shipping a mixed
-# radius build, especially because initial visuals and collision now intentionally
-# use different extents.
+# radius build.
 # -----------------------------------------------------------------------------
 file(READ "${Q720_CELL_SOURCE}" Q1960_CELL_VERIFY)
 string(FIND "${Q1960_CELL_VERIFY}" "fo3-worldspace-q1960.cpp" Q1960_CELL_ROUTE_OK)
