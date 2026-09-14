@@ -74,7 +74,7 @@ string(FIND "${Q1980_NATIVE_SOURCE}" "${Q1980_GPU_NEXT_OLD}" Q1980_GPU_NEXT_POS)
 if(Q1980_GPU_NEXT_POS EQUAL -1)
     message(FATAL_ERROR "Q16.26 could not find GPU -> collision phase transition")
 endif()
-string(REPLACE "${Q1980_GPU_NEXT_OLD}" "${Q1980_GPU_NEXT_NEW}"
+string(REPLACE "${Q1980_GPU_NEXT_OLD}" "${Q1981980_GPU_NEXT_NEW}"
        Q1980_NATIVE_SOURCE "${Q1980_NATIVE_SOURCE}")
 ]====])
 
@@ -102,3 +102,6 @@ set(Q1981_GENERATED_Q1980
     "${CMAKE_CURRENT_BINARY_DIR}/q1980-bounded-residency-collision-first-fixed.cmake")
 file(WRITE "${Q1981_GENERATED_Q1980}" "${Q1981_Q1980_SOURCE}")
 include("${Q1981_GENERATED_Q1980}")
+
+# Q16.27 runs only after the repaired Q16.26 generated sources exist.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q1990-persistent-collision-native-lod.cmake")
