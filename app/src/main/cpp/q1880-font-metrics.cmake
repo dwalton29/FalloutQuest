@@ -159,3 +159,8 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/q1951-worldspace-linkage.cmake")
 # keeps collision local at 3x3, backs it with retained 9x9 LAND, and begins the
 # adjacent entering-strip stream as soon as stable movement direction is known.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q1960-seven-by-seven-residency.cmake")
+
+# Q16.25 separates residency from rendering: retain the 7x7 GPU runway but draw
+# only an actual-player-centred 5x5, centre collision on actual XCLC, and probe
+# Bethesda's real Level4 Wasteland LOD blocks before enabling distant rendering.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q1970-centred-active-residency.cmake")
