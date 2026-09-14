@@ -44,23 +44,21 @@ string(REPLACE "${Q1970_FORWARD_OLD}" "${Q1970_FORWARD_NEW}"
 
 # Every resident GPU shape remembers the authored exterior CELL containing its
 # REFR placement. This is tiny immutable metadata; VAO/VBO ownership is unchanged.
-set(Q1970_GPU_TAIL_OLD [==[
-    std::string editorId;
+# Anchor only to modelPath itself because later material patches legitimately add
+# fields after it in the mature GpuObject struct.
+set(Q1970_GPU_FIELD_OLD [==[
     std::string modelPath;
-};
 ]==])
-set(Q1970_GPU_TAIL_NEW [==[
-    std::string editorId;
+set(Q1970_GPU_FIELD_NEW [==[
     std::string modelPath;
     int32_t q1970GridX = 0;
     int32_t q1970GridY = 0;
-};
 ]==])
-string(FIND "${Q1970_NATIVE_SOURCE}" "${Q1970_GPU_TAIL_OLD}" Q1970_GPU_TAIL_POS)
-if(Q1970_GPU_TAIL_POS EQUAL -1)
-    message(FATAL_ERROR "Q16.25 could not find GpuObject identity tail")
+string(FIND "${Q1970_NATIVE_SOURCE}" "${Q1970_GPU_FIELD_OLD}" Q1970_GPU_FIELD_POS)
+if(Q1970_GPU_FIELD_POS EQUAL -1)
+    message(FATAL_ERROR "Q16.25 could not find GpuObject modelPath field")
 endif()
-string(REPLACE "${Q1970_GPU_TAIL_OLD}" "${Q1970_GPU_TAIL_NEW}"
+string(REPLACE "${Q1970_GPU_FIELD_OLD}" "${Q1970_GPU_FIELD_NEW}"
        Q1970_NATIVE_SOURCE "${Q1970_NATIVE_SOURCE}")
 
 set(Q1970_GPU_ASSIGN_OLD [==[
@@ -81,8 +79,9 @@ string(REPLACE "${Q1970_GPU_ASSIGN_OLD}" "${Q1970_GPU_ASSIGN_NEW}"
 # -----------------------------------------------------------------------------
 # B. 7x7 RESIDENT, 5x5 ACTIVE. Do not render all resident geometry.
 # CapitalWasteland uses actualGrid radius 2; child/interior worlds retain their
-# established behaviour. Both ordinary eye passes and the separate Q10.5 shadow
-# caster pass use the same predicate.
+# established behaviour. The ordinary eye draw helper uses one common predicate.
+# The Q10.5 shadow runtime is defined earlier than DrawSceneObject, so its same
+# 5x5 test is intentionally inlined rather than introducing an ordering hazard.
 # -----------------------------------------------------------------------------
 set(Q1970_DRAW_MARKER [==[
 void DrawSceneObject(const GpuObject& object) {
@@ -125,8 +124,15 @@ set(Q1970_SHADOW_LOOP_OLD [==[
 ]==])
 set(Q1970_SHADOW_LOOP_NEW [==[
     for (const GpuObject& object:gObjects) {
-        if (!Q1970ShouldRenderFullDetail(object) ||
-            object.alphaBlend || !object.vao || object.vertexCount<=0) continue;
+        if (gExteriorWorldspaceQ1890 == 0x0000003Cu) {
+            const int32_t q1970ShadowGridX = gQ1920LatestGridValid
+                ? gQ1920LatestGridX : gExteriorWindowGridXQ1890;
+            const int32_t q1970ShadowGridY = gQ1920LatestGridValid
+                ? gQ1920LatestGridY : gExteriorWindowGridYQ1890;
+            if (std::abs(object.q1970GridX - q1970ShadowGridX) > 2 ||
+                std::abs(object.q1970GridY - q1970ShadowGridY) > 2) continue;
+        }
+        if (object.alphaBlend || !object.vao || object.vertexCount<=0) continue;
 ]==])
 string(FIND "${Q1970_NATIVE_SOURCE}" "${Q1970_SHADOW_LOOP_OLD}" Q1970_SHADOW_POS)
 if(Q1970_SHADOW_POS EQUAL -1)
@@ -511,15 +517,16 @@ file(READ "${Q1970_NATIVE_FILE}" Q1970_NATIVE_VERIFY)
 file(READ "${Q1970_NIF_FILE}" Q1970_NIF_VERIFY)
 string(FIND "${Q1970_NATIVE_VERIFY}" "Q1970_ACTIVE_VISUAL_RADIUS = 2" Q1970_ACTIVE_OK)
 string(FIND "${Q1970_NATIVE_VERIFY}" "Q1970ShouldRenderFullDetail(object)" Q1970_DRAW_OK)
+string(FIND "${Q1970_NATIVE_VERIFY}" "q1970ShadowGridX" Q1970_SHADOW_OK)
 string(FIND "${Q1970_NATIVE_VERIFY}" "q1970CollisionGridX" Q1970_COLLISION_OK)
 string(FIND "${Q1970_NATIVE_VERIFY}" "resident-no-longer-covers-active-5x5" Q1970_COMMIT_OK)
 string(FIND "${Q1970_NATIVE_VERIFY}" "Q16.25 NATIVE LOD PROBE:" Q1970_LOD_OK)
 string(FIND "${Q1970_NIF_VERIFY}" "BSSegmentedTriShape" Q1970_SEGMENTED_OK)
 string(FIND "${Q1970_Q4_SOURCE}" "Q16.25: 5 = A F G C D" Q1970_LABEL_OK)
 if(Q1970_ACTIVE_OK EQUAL -1 OR Q1970_DRAW_OK EQUAL -1 OR
-   Q1970_COLLISION_OK EQUAL -1 OR Q1970_COMMIT_OK EQUAL -1 OR
-   Q1970_LOD_OK EQUAL -1 OR Q1970_SEGMENTED_OK EQUAL -1 OR
-   Q1970_LABEL_OK EQUAL -1)
+   Q1970_SHADOW_OK EQUAL -1 OR Q1970_COLLISION_OK EQUAL -1 OR
+   Q1970_COMMIT_OK EQUAL -1 OR Q1970_LOD_OK EQUAL -1 OR
+   Q1970_SEGMENTED_OK EQUAL -1 OR Q1970_LABEL_OK EQUAL -1)
     message(FATAL_ERROR "Q16.25 centred active/resident + native LOD probe verification failed")
 endif()
 
