@@ -30,23 +30,22 @@ endif()
 string(REPLACE "${Q1930_COLLISION_FLAG_OLD}" "${Q1930_COLLISION_FLAG_NEW}"
        Q74_COLLISION_SOURCE "${Q74_COLLISION_SOURCE}")
 
+# The collision source is heavily patched by earlier layers, so anchor directly
+# on the stable public initializer signature rather than assuming it still sits
+# immediately after the anonymous-namespace closing brace.
 set(Q1930_COLLISION_SETTER_MARKER [==[
-} // namespace
-
-bool InitializeFo3CollisionOverlay(
+bool InitializeFo3CollisionOverlay(const std::vector<Fo3WorldPlacement>& placements,
 ]==])
 set(Q1930_COLLISION_SETTER_REPLACEMENT [==[
-} // namespace
-
 void SetNextFo3CollisionExteriorModeQ1930(bool exterior) {
     gNextCollisionExteriorOverrideQ1930 = exterior ? 1 : 0;
 }
 
-bool InitializeFo3CollisionOverlay(
+bool InitializeFo3CollisionOverlay(const std::vector<Fo3WorldPlacement>& placements,
 ]==])
 string(FIND "${Q74_COLLISION_SOURCE}" "${Q1930_COLLISION_SETTER_MARKER}" Q1930_COLLISION_SETTER_POS)
 if(Q1930_COLLISION_SETTER_POS EQUAL -1)
-    message(FATAL_ERROR "Q16.21 could not find collision initializer boundary")
+    message(FATAL_ERROR "Q16.21 could not find collision initializer signature")
 endif()
 string(REPLACE "${Q1930_COLLISION_SETTER_MARKER}" "${Q1930_COLLISION_SETTER_REPLACEMENT}"
        Q74_COLLISION_SOURCE "${Q74_COLLISION_SOURCE}")
