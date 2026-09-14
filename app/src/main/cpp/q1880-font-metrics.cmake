@@ -128,3 +128,7 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/q1890-cell-streaming.cmake")
 # Q16.18 keeps Q16.17 as the proven coordinate/fallback implementation, then
 # redirects the live boundary hook to the frame-budgeted incremental streamer.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q1900-incremental-cell-streaming.cmake")
+
+# Q16.19 starts the next window ahead of the player and preserves immutable
+# collision/LAND/terrain texture work across recentres.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q1910-stream-cache-pipeline.cmake")
