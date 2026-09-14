@@ -132,3 +132,8 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/q1900-incremental-cell-streaming.cmake")
 # Q16.19 starts the next window ahead of the player and preserves immutable
 # collision/LAND/terrain texture work across recentres.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q1910-stream-cache-pipeline.cmake")
+
+# Q16.20 keeps Q16.19's successful caches but removes unsafe frame-speed
+# prediction. Streams only adjacent cells near an authored boundary and rejects
+# generations whose worldspace/original-XTEL context is stale.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q1920-stable-adjacent-streaming.cmake")
