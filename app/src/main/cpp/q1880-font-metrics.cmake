@@ -137,3 +137,8 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/q1910-stream-cache-pipeline.cmake")
 # prediction. Streams only adjacent cells near an authored boundary and rejects
 # generations whose worldspace/original-XTEL context is stale.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q1920-stable-adjacent-streaming.cmake")
+
+# Q16.21 separates visual terrain extent from expensive object/collision extent.
+# Keep objects at 3x3, render LAND at 5x5, and explicitly preserve exterior
+# collision semantics during streamed Wasteland recentering.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q1930-terrain-ring-collision-mode.cmake")
