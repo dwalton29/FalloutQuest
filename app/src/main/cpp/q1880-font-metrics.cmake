@@ -70,7 +70,7 @@ string(FIND "${Q1880_HUD_HEADER}" "#include \"fo3-interaction-hud-q1790.h\"" Q18
 string(FIND "${Q1880_Q4_SOURCE}" "fo3-interaction-hud-q1880.h" Q1880_INCLUDE_OK)
 string(FIND "${Q1880_Q4_SOURCE}" "fo3-interaction-hud-q1830.h" Q1880_AUTHORED_INCLUDE_OK)
 string(FIND "${Q1880_Q4_SOURCE}" "RenderFo3InteractionHudQ1880" Q1880_RENDER_OK)
-string(FIND "${Q1880_Q4_SOURCE}" "Q16.16: 6 = A F G E D C" Q1880_LABEL_OK)
+string(FIND "${Q1880_Q4_SOURCE}" "Q16.16: 6 = A B C D E F G" Q1880_LABEL_OK)
 string(FIND "${Q1880_Q4_SOURCE}" "Q16.13 HUD TARGET HIDE:" Q1880_HIDE_OK)
 if(Q1880_BASELINE_OK EQUAL -1 OR NOT Q1880_BAD_SOURCE_INCLUDE EQUAL -1 OR
    Q1880_INCLUDE_OK EQUAL -1 OR Q1880_AUTHORED_INCLUDE_OK EQUAL -1 OR
@@ -146,3 +146,7 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/q1931-terrain-ring-collision-mode.cmake")
 # Q16.22 keeps the Q16.21 object/LAND split but repairs stream starvation under
 # continuous movement and raises the original 100m OpenXR far clip to 300m.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q1940-stream-starvation-farclip.cmake")
+
+# Q16.23 widens retained full-detail visuals to vanilla-style 5x5 while keeping
+# collision local and avoiding a whole 25-cell LAND rebuild on every CELL shift.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q1950-persistent-visual-grid.cmake")
