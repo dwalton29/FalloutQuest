@@ -164,3 +164,7 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/q1960-seven-by-seven-residency.cmake")
 # only an actual-player-centred 5x5, centre collision on actual XCLC, and probe
 # Bethesda's real Level4 Wasteland LOD blocks before enabling distant rendering.
 include("${CMAKE_CURRENT_SOURCE_DIR}/q1970-centred-active-residency.cmake")
+
+# Q16.25 generated-source order repair: old transition/stream functions precede
+# the new q1970 helper definitions in the single native translation unit.
+include("${CMAKE_CURRENT_SOURCE_DIR}/q1971-forward-declarations.cmake")
