@@ -14,7 +14,9 @@ if(NOT EXISTS "${Q1981_Q1980_SOURCE_FILE}")
 endif()
 file(READ "${Q1981_Q1980_SOURCE_FILE}" Q1981_Q1980_SOURCE)
 
-set(Q1981_BRITTLE_BLOCK [==[
+# Use a wider bracket delimiter because the literal q1980 source below contains
+# its own [==[ ... ]==] bracket arguments.
+set(Q1981_BRITTLE_BLOCK [====[
 # Collision now returns to visual CPU staging rather than jumping straight to LAND.
 set(Q1980_COLLISION_NEXT_OLD [==[
     gPendingStreamQ1900.phase = Q1900StreamPhase::Terrain;
@@ -33,9 +35,9 @@ if(Q1980_COLLISION_NEXT_POS EQUAL -1)
 endif()
 string(REPLACE "${Q1980_COLLISION_NEXT_OLD}" "${Q1980_COLLISION_NEXT_NEW}"
        Q1980_NATIVE_SOURCE "${Q1980_NATIVE_SOURCE}")
-]==])
+]====])
 
-set(Q1981_ROBUST_BLOCK [==[
+set(Q1981_ROBUST_BLOCK [====[
 # Collision now returns to visual CPU staging rather than jumping straight to LAND.
 # The bare transition is unique in the mature source at this point; do not couple
 # the hook to diagnostic whitespace/order from earlier generated-source layers.
@@ -51,7 +53,7 @@ if(Q1980_COLLISION_NEXT_POS EQUAL -1)
 endif()
 string(REPLACE "${Q1980_COLLISION_NEXT_OLD}" "${Q1980_COLLISION_NEXT_NEW}"
        Q1980_NATIVE_SOURCE "${Q1980_NATIVE_SOURCE}")
-]==])
+]====])
 
 string(FIND "${Q1981_Q1980_SOURCE}" "${Q1981_BRITTLE_BLOCK}" Q1981_BRITTLE_POS)
 if(Q1981_BRITTLE_POS EQUAL -1)
