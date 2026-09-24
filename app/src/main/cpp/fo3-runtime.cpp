@@ -1661,7 +1661,6 @@ bool ProcessQ74TransitionRequest() {
         return false;
     }
 
-    const auto q1800CollisionStarted = std::chrono::steady_clock::now();
     std::vector<Fo3WorldPlacement> collisionPlacements;
     collisionPlacements.reserve(selected.size());
     for (const CpuObject& cpu : selected) collisionPlacements.push_back(cpu.placement);
@@ -2701,6 +2700,7 @@ void Q1900AdvanceCollision() {
         Q1900CancelPending("resident-no-longer-covers-active-3x3");
         return;
     }
+    const auto q1800CollisionStarted = std::chrono::steady_clock::now();
     std::vector<Fo3WorldPlacement> collisionPlacements;
     collisionPlacements.reserve(gPendingStreamQ1900.targetPlacements.size());
     std::unordered_map<uint32_t, uint8_t> seenRefs;
