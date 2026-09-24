@@ -41,6 +41,8 @@ struct Fo3NifCollisionShapeQ6F {
     Fo3CollisionShapeKindQ6F kind = Fo3CollisionShapeKindQ6F::TriangleMesh;
     std::vector<float> positions;
     std::vector<uint32_t> indices;
+    // Authored Havok welding value for each emitted packed triangle.
+    std::vector<uint16_t> triangleWeldingInfo;
     std::string modelPath;
     std::string sourceShapeType;
 
@@ -374,13 +376,13 @@ inline bool ParsePackedData(const uint8_t* data, size_t size, Fo3NifCollisionSha
     Cursor c(data, size);
     uint32_t triangleCount = 0;
     if (!c.U32(triangleCount) || triangleCount == 0u || triangleCount > MAX_COLLISION_TRIANGLES) return false;
-    struct Tri { uint16_t a,b,c; };
+    struct Tri { uint16_t a,b,c,weld; };
     std::vector<Tri> tris;
     tris.reserve(triangleCount);
     for (uint32_t i = 0; i < triangleCount; ++i) {
         uint16_t a=0,b=0,d=0,weld=0;
         if (!c.U16(a) || !c.U16(b) || !c.U16(d) || !c.U16(weld)) return false;
-        tris.push_back({a,b,d});
+        tris.push_back({a,b,d,weld});
     }
     uint32_t vertexCount = 0;
     uint8_t compressed = 0;
@@ -405,10 +407,13 @@ inline bool ParsePackedData(const uint8_t* data, size_t size, Fo3NifCollisionSha
     if (c.remaining() != 0u) return false;
     out.indices.clear();
     out.indices.reserve(static_cast<size_t>(triangleCount) * 3u);
+    out.triangleWeldingInfo.clear();
+    out.triangleWeldingInfo.reserve(triangleCount);
     for (const Tri& t : tris) {
         if (t.a >= vertexCount || t.b >= vertexCount || t.c >= vertexCount) return false;
         if (t.a == t.b || t.b == t.c || t.a == t.c) continue;
         out.indices.insert(out.indices.end(), {t.a,t.b,t.c});
+        out.triangleWeldingInfo.push_back(t.weld);
     }
     return !out.indices.empty();
 }
