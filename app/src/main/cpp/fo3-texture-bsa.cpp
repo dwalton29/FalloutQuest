@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <cstring>
 #include <string>
+#include <unordered_map>
 #include <vector>
 #include <zlib.h>
 
@@ -55,6 +56,14 @@ struct TargetEntry {
     bool compressionToggle = false;
 };
 
+struct TextureArchiveIndexQ1830 {
+    bool attempted = false;
+    bool ready = false;
+    BsaHeader header{};
+    std::unordered_map<std::string, TargetEntry> files;
+};
+std::unordered_map<std::string, TextureArchiveIndexQ1830> gTextureArchiveIndexesQ1830;
+
 uint16_t ReadLe16(const uint8_t* p) {
     return static_cast<uint16_t>(p[0]) |
            static_cast<uint16_t>(static_cast<uint16_t>(p[1]) << 8);
@@ -89,9 +98,13 @@ std::string NormalizePath(std::string value) {
     return value;
 }
 
-std::string WithoutTexturesPrefix(const std::string& value) {
-    const std::string prefix = "textures\\";
-    if (value.rfind(prefix, 0) == 0) return value.substr(prefix.size());
+std::string CanonicalTextureKeyQ1830(std::string value) {
+    value = NormalizePath(std::move(value));
+    // Bethesda-generated LOD NIFs commonly author full Data\\Textures paths,
+    // while BSA entries are stored as textures\\... . Treat all three forms
+    // (Data\\Textures, textures, bare relative) as the same archive key.
+    if (value.rfind("data\\", 0) == 0) value = value.substr(5);
+    if (value.rfind("textures\\", 0) == 0) value = value.substr(9);
     return value;
 }
 
@@ -122,22 +135,40 @@ bool ReadHeader(FILE* file, BsaHeader& out) {
     return true;
 }
 
-bool FindTarget(FILE* file, const BsaHeader& header, const std::string& requestedPath,
-                TargetEntry& target) {
-    if (header.version != BSA_VERSION_FO3) return false;
-    if ((header.archiveFlags & 1u) == 0 || (header.archiveFlags & 2u) == 0) return false;
-    if (header.folderCount == 0 || header.folderCount > 1000000u ||
-        header.fileCount == 0 || header.fileCount > 3000000u ||
-        header.foldersOffset < 36u) return false;
-    if (fseeko(file, static_cast<off_t>(header.foldersOffset), SEEK_SET) != 0) return false;
+bool BuildTextureArchiveIndexQ1830(const char* archivePath,
+                                      TextureArchiveIndexQ1830& index) {
+    if (index.attempted) return index.ready;
+    index.attempted = true;
+
+    FILE* file = std::fopen(archivePath, "rb");
+    if (!file) return false;
+
+    BsaHeader header;
+    if (!ReadHeader(file, header) ||
+        header.version != BSA_VERSION_FO3 ||
+        (header.archiveFlags & 1u) == 0u ||
+        (header.archiveFlags & 2u) == 0u ||
+        header.folderCount == 0u || header.folderCount > 1000000u ||
+        header.fileCount == 0u || header.fileCount > 3000000u ||
+        header.foldersOffset < 36u ||
+        fseeko(file, static_cast<off_t>(header.foldersOffset), SEEK_SET) != 0) {
+        std::fclose(file);
+        return false;
+    }
 
     std::vector<FolderRecord> folders;
     folders.reserve(header.folderCount);
     for (uint32_t i = 0; i < header.folderCount; ++i) {
         uint8_t record[16]{};
-        if (!ReadExact(file, record, sizeof(record))) return false;
+        if (!ReadExact(file, record, sizeof(record))) {
+            std::fclose(file);
+            return false;
+        }
         const uint32_t count = ReadLe32(record + 8);
-        if (count > header.fileCount) return false;
+        if (count > header.fileCount) {
+            std::fclose(file);
+            return false;
+        }
         folders.push_back(FolderRecord{count});
     }
 
@@ -145,50 +176,75 @@ bool FindTarget(FILE* file, const BsaHeader& header, const std::string& requeste
     rawFiles.reserve(header.fileCount);
     for (const FolderRecord& folder : folders) {
         uint8_t nameLen = 0;
-        if (!ReadExact(file, &nameLen, 1) || nameLen == 0) return false;
+        if (!ReadExact(file, &nameLen, 1) || nameLen == 0u) {
+            std::fclose(file);
+            return false;
+        }
         std::vector<char> nameBytes(nameLen);
-        if (!ReadExact(file, nameBytes.data(), nameBytes.size())) return false;
+        if (!ReadExact(file, nameBytes.data(), nameBytes.size())) {
+            std::fclose(file);
+            return false;
+        }
         if (!nameBytes.empty() && nameBytes.back() == '\0') nameBytes.pop_back();
-        const std::string folderName = NormalizePath(
-                std::string(nameBytes.begin(), nameBytes.end()));
+        const std::string folderName =
+            NormalizePath(std::string(nameBytes.begin(), nameBytes.end()));
 
         for (uint32_t j = 0; j < folder.count; ++j) {
             uint8_t fileRecord[16]{};
-            if (!ReadExact(file, fileRecord, sizeof(fileRecord))) return false;
+            if (!ReadExact(file, fileRecord, sizeof(fileRecord))) {
+                std::fclose(file);
+                return false;
+            }
             const uint32_t sizeRaw = ReadLe32(fileRecord + 8);
             RawFileRecord raw;
             raw.folder = folderName;
             raw.size = sizeRaw & 0x3fffffffu;
             raw.offset = ReadLe32(fileRecord + 12);
-            raw.compressionToggle = (sizeRaw & 0x40000000u) != 0;
+            raw.compressionToggle = (sizeRaw & 0x40000000u) != 0u;
             rawFiles.push_back(std::move(raw));
         }
     }
 
-    const std::string wanted = NormalizePath(requestedPath);
-    const std::string wantedShort = WithoutTexturesPrefix(wanted);
-
+    index.files.reserve(rawFiles.size() * 2u);
     for (RawFileRecord& raw : rawFiles) {
         std::string fileName;
-        if (!ReadCString(file, fileName)) return false;
-        fileName = NormalizePath(fileName);
-
+        if (!ReadCString(file, fileName)) {
+            std::fclose(file);
+            return false;
+        }
         std::string fullPath = raw.folder;
         if (!fullPath.empty() && !fileName.empty()) fullPath += "\\";
-        fullPath += fileName;
+        fullPath += NormalizePath(fileName);
         fullPath = NormalizePath(fullPath);
 
-        const std::string fullShort = WithoutTexturesPrefix(fullPath);
-        if (fullPath == wanted || fullShort == wantedShort) {
-            target.found = true;
-            target.storedPath = fullPath;
-            target.size = raw.size;
-            target.offset = raw.offset;
-            target.compressionToggle = raw.compressionToggle;
-            return true;
-        }
+        TargetEntry entry;
+        entry.found = true;
+        entry.storedPath = fullPath;
+        entry.size = raw.size;
+        entry.offset = raw.offset;
+        entry.compressionToggle = raw.compressionToggle;
+        index.files[CanonicalTextureKeyQ1830(fullPath)] = std::move(entry);
     }
+
+    std::fclose(file);
+    index.header = header;
+    index.ready = true;
+    FQ_LOGI("Q18.3 TEXTURE BSA INDEX READY: path=%s textures=%zu flags=0x%08X",
+            archivePath, index.files.size(), header.archiveFlags);
     return true;
+}
+
+const TargetEntry* FindTargetQ1830(const char* archivePath,
+                                   const std::string& requestedPath,
+                                   TextureArchiveIndexQ1830*& outIndex) {
+    TextureArchiveIndexQ1830& index = gTextureArchiveIndexesQ1830[archivePath];
+    outIndex = &index;
+    if (!BuildTextureArchiveIndexQ1830(archivePath, index)) return nullptr;
+
+    const std::string wanted = CanonicalTextureKeyQ1830(requestedPath);
+    const auto found = index.files.find(wanted);
+    if (found == index.files.end()) return nullptr;
+    return &found->second;
 }
 
 bool InflateZlib(const std::vector<uint8_t>& compressed, uint32_t originalSize,
@@ -528,48 +584,36 @@ bool DecodeDds(const std::vector<uint8_t>& dds, Fo3RgbaTexture& out) {
 
 bool TryArchive(const char* archivePath, const std::string& texturePath,
                 Fo3RgbaTexture& outTexture) {
+    TextureArchiveIndexQ1830* index = nullptr;
+    const TargetEntry* target = FindTargetQ1830(archivePath, texturePath, index);
+    if (!target || !index) {
+        FQ_LOGW("Q5H texture not found in %s: %s",
+                archivePath, texturePath.c_str());
+        return false;
+    }
+
     FILE* file = std::fopen(archivePath, "rb");
     if (!file) return false;
 
-    BsaHeader header;
-    if (!ReadHeader(file, header)) {
-        std::fclose(file);
-        return false;
-    }
-    FQ_LOGI("Q5H TEXTURE BSA OPEN: %s version=%u folders=%u files=%u flags=0x%08X",
-            archivePath, header.version, header.folderCount, header.fileCount,
-            header.archiveFlags);
-
-    TargetEntry target;
-    if (!FindTarget(file, header, texturePath, target)) {
-        std::fclose(file);
-        FQ_LOGE("Q5H texture BSA index parse failed: %s", archivePath);
-        return false;
-    }
-    if (!target.found) {
-        std::fclose(file);
-        FQ_LOGW("Q5H texture not found in %s: %s", archivePath, texturePath.c_str());
-        return false;
-    }
-
     std::vector<uint8_t> dds;
     bool compressed = false;
-    if (!ExtractTarget(file, header, target, dds, compressed)) {
+    if (!ExtractTarget(file, index->header, *target, dds, compressed)) {
         std::fclose(file);
-        FQ_LOGE("Q5H texture extraction failed: %s", target.storedPath.c_str());
+        FQ_LOGE("Q5H texture extraction failed: %s", target->storedPath.c_str());
         return false;
     }
     std::fclose(file);
 
     FQ_LOGI("Q5H TEXTURE FOUND: path=%s storedBytes=%u decodedArchiveBytes=%zu compressed=%d",
-            target.storedPath.c_str(), target.size, dds.size(), compressed ? 1 : 0);
+            target->storedPath.c_str(), target->size, dds.size(), compressed ? 1 : 0);
 
     if (!DecodeDds(dds, outTexture)) {
-        FQ_LOGE("Q5H DDS decode failed: %s bytes=%zu", target.storedPath.c_str(), dds.size());
+        FQ_LOGE("Q5H DDS decode failed: %s bytes=%zu",
+                target->storedPath.c_str(), dds.size());
         return false;
     }
 
-    outTexture.sourcePath = target.storedPath;
+    outTexture.sourcePath = target->storedPath;
     FQ_LOGI("Q5H DDS READY: %dx%d format=%s rgbaBytes=%zu path=%s",
             outTexture.width, outTexture.height, outTexture.format.c_str(),
             outTexture.rgba.size(), outTexture.sourcePath.c_str());

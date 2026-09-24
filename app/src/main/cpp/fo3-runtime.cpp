@@ -284,7 +284,10 @@ std::string TextureCacheKey(const std::string& path, const char* label) {
         if (ch == '/') ch = '\\';
         ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
     }
-    return key;
+    while (!key.empty() && key.front() == '\\') key.erase(key.begin());
+    if (key.rfind("data\\", 0) == 0) key = key.substr(5);
+    if (key.rfind("textures\\", 0) == 0) key = key.substr(9);
+    return std::string("textures\\") + key;
 }
 
 GLuint CompileQ6HShader(GLenum type, const char* source) {
@@ -2503,8 +2506,8 @@ bool gQ1920LatestGridValid = false;
 int32_t gQ1920LatestGridX = 0;
 int32_t gQ1920LatestGridY = 0;
 
-constexpr size_t Q1900_CPU_PLACEMENTS_PER_FRAME = 8u; // Q16.27 bounded CPU catch-up
-constexpr size_t Q1900_GPU_SHAPES_PER_FRAME = 3u; // Q16.27 cached VBO/VAO catch-up
+constexpr size_t Q1900_CPU_PLACEMENTS_PER_FRAME = 2u; // Q18.3 keep CPU prep below a VR frame
+constexpr size_t Q1900_GPU_SHAPES_PER_FRAME = 1u; // Q18.3 one geometry/texture upload per frame
 constexpr uint64_t Q1820_COLLISION_PRIME_BUDGET_US = 2500u;
 
 void Q1900DeleteGpuShape(GpuObject& object) {
@@ -3208,9 +3211,11 @@ void UpdateFo3ExteriorStreamingQ1890(float virtualHeadX, float virtualHeadZ) {
         return;
     }
 
+    const int32_t q1830PreviousActualGridX = q1920PreviousActualGridX;
+    const int32_t q1830PreviousActualGridY = q1920PreviousActualGridY;
     const bool actualCellChanged =
-        actualGridX != q1920PreviousActualGridX ||
-        actualGridY != q1920PreviousActualGridY;
+        actualGridX != q1830PreviousActualGridX ||
+        actualGridY != q1830PreviousActualGridY;
     q1920PreviousActualGridX = actualGridX;
     q1920PreviousActualGridY = actualGridY;
 
@@ -3224,33 +3229,36 @@ void UpdateFo3ExteriorStreamingQ1890(float virtualHeadX, float virtualHeadZ) {
     constexpr float Q1920_MAX_VALID_FRAME_DELTA = 96.0f;
     if (std::fabs(frameDx) > Q1920_MAX_VALID_FRAME_DELTA ||
         std::fabs(frameDy) > Q1920_MAX_VALID_FRAME_DELTA) {
-        q1920SmoothDx = 0.0f;
-        q1920SmoothDy = 0.0f;
-        Q6H_LOGW("Q16.27 MOTION SAMPLE REJECTED: delta=(%.2f %.2f) actual=(%d,%d) reason=stall-or-teleport",
-                 frameDx, frameDy, actualGridX, actualGridY);
+        const int q1830CellDx = actualGridX - q1830PreviousActualGridX;
+        const int q1830CellDy = actualGridY - q1830PreviousActualGridY;
+        const bool q1830AdjacentTravel =
+            std::abs(q1830CellDx) <= 2 && std::abs(q1830CellDy) <= 2 &&
+            (q1830CellDx != 0 || q1830CellDy != 0);
+        if (q1830AdjacentTravel) {
+            q1920SmoothDx = q1830CellDx > 0 ? 1.0f : (q1830CellDx < 0 ? -1.0f : 0.0f);
+            q1920SmoothDy = q1830CellDy > 0 ? 1.0f : (q1830CellDy < 0 ? -1.0f : 0.0f);
+        } else {
+            q1920SmoothDx = 0.0f;
+            q1920SmoothDy = 0.0f;
+        }
+        Q6H_LOGW("Q18.3 MOTION SAMPLE REJECTED: delta=(%.2f %.2f) actual=(%d,%d) inferredCellDirection=(%d,%d) reason=stall-or-teleport",
+                 frameDx, frameDy, actualGridX, actualGridY,
+                 q1830CellDx, q1830CellDy);
     } else {
         q1920SmoothDx = q1920SmoothDx * 0.82f + frameDx * 0.18f;
         q1920SmoothDy = q1920SmoothDy * 0.82f + frameDy * 0.18f;
     }
 
-    // If prefetch was missed and the player actually entered another CELL, make
-    // the new actual CELL the centre. This remains only one adjacent recenter.
+    // Q18.3: crossing an authored CELL boundary is not itself a reason to rebuild.
+    // A resident radius-2 window still fully covers the actual-centred radius-1
+    // draw/collision neighborhood while actual is at most one CELL from its centre.
+    // Keep using that runway and prepare the next strip from motion direction.
     if (actualCellChanged &&
-        (actualGridX != gExteriorWindowGridXQ1890 ||
-         actualGridY != gExteriorWindowGridYQ1890)) {
-        const int dx = std::abs(actualGridX - gExteriorWindowGridXQ1890);
-        const int dy = std::abs(actualGridY - gExteriorWindowGridYQ1890);
-        if (dx <= 1 && dy <= 1) {
-            const float selectionX =
-                (static_cast<float>(actualGridX) + 0.5f) * Q1890_EXTERIOR_CELL_SIZE;
-            const float selectionY =
-                (static_cast<float>(actualGridY) + 0.5f) * Q1890_EXTERIOR_CELL_SIZE;
-            Q6H_LOGI("Q16.27 ADJACENT CATCHUP: window=(%d,%d) actual=(%d,%d) selection=(%.2f %.2f)",
-                     gExteriorWindowGridXQ1890, gExteriorWindowGridYQ1890,
-                     actualGridX, actualGridY, selectionX, selectionY);
-            Q1900BeginStream(selectionX, selectionY, actualGridX, actualGridY);
-            return;
-        }
+        std::abs(actualGridX - gExteriorWindowGridXQ1890) <= 1 &&
+        std::abs(actualGridY - gExteriorWindowGridYQ1890) <= 1) {
+        Q6H_LOGI("Q18.3 RESIDENT RUNWAY: window=(%d,%d) actual=(%d,%d) boundaryRecenter=0 residentRadius=2 activeRadius=1",
+                 gExteriorWindowGridXQ1890, gExteriorWindowGridYQ1890,
+                 actualGridX, actualGridY);
     }
 
     // A player outside the current 3x3 means an older request was missed or
@@ -3312,14 +3320,18 @@ void UpdateFo3ExteriorStreamingQ1890(float virtualHeadX, float virtualHeadZ) {
     }
     if (axis == 0 || bestDistance > Q1920_PREFETCH_DISTANCE) return;
 
-    // Preserve any already-useful one-cell lead on the other axis. Only the
-    // chosen axis moves, and every target coordinate remains within +/-1 of actual.
+    // Move the resident centre by exactly one CELL. If it is already one CELL
+    // ahead of the player, hold it there; if it trails by one, this catches the
+    // resident window up without treating the boundary as a load trigger.
     int32_t desiredGridX = gExteriorWindowGridXQ1890;
     int32_t desiredGridY = gExteriorWindowGridYQ1890;
-    desiredGridX = std::clamp(desiredGridX, actualGridX - 1, actualGridX + 1);
-    desiredGridY = std::clamp(desiredGridY, actualGridY - 1, actualGridY + 1);
-    if (axis == 1) desiredGridX = actualGridX + step;
-    else desiredGridY = actualGridY + step;
+    if (axis == 1) {
+        desiredGridX = std::clamp(gExteriorWindowGridXQ1890 + step,
+                                  actualGridX - 1, actualGridX + 1);
+    } else {
+        desiredGridY = std::clamp(gExteriorWindowGridYQ1890 + step,
+                                  actualGridY - 1, actualGridY + 1);
+    }
 
     if (desiredGridX == gExteriorWindowGridXQ1890 &&
         desiredGridY == gExteriorWindowGridYQ1890) return;
@@ -3328,7 +3340,7 @@ void UpdateFo3ExteriorStreamingQ1890(float virtualHeadX, float virtualHeadZ) {
         (static_cast<float>(desiredGridX) + 0.5f) * Q1890_EXTERIOR_CELL_SIZE;
     const float selectionGameY =
         (static_cast<float>(desiredGridY) + 0.5f) * Q1890_EXTERIOR_CELL_SIZE;
-    Q6H_LOGI("Q16.27 ADJACENT PREFETCH: window=(%d,%d) actual=(%d,%d) desired=(%d,%d) axis=%c step=%d edgeDistance=%.1f smoothDelta=(%.2f %.2f) selection=(%.2f %.2f)",
+    Q6H_LOGI("Q18.3 RESIDENT PREFETCH: window=(%d,%d) actual=(%d,%d) desired=(%d,%d) axis=%c step=%d edgeDistance=%.1f smoothDelta=(%.2f %.2f) selection=(%.2f %.2f)",
              gExteriorWindowGridXQ1890, gExteriorWindowGridYQ1890,
              actualGridX, actualGridY, desiredGridX, desiredGridY,
              axis == 1 ? 'X' : 'Y', step, bestDistance,
