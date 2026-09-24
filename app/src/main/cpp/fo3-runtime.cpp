@@ -967,8 +967,12 @@ bool UploadCpuObject(CpuObject& cpu, float centerX, float centerY, float floorZ,
     gpu.baseFormId = cpu.placement.baseFormId;
     gpu.editorId = cpu.placement.editorId;
     gpu.modelPath = cpu.placement.modelPath;
-    gpu.q1970GridX = static_cast<int32_t>(std::floor(cpu.placement.x / Q1890_EXTERIOR_CELL_SIZE));
-    gpu.q1970GridY = static_cast<int32_t>(std::floor(cpu.placement.y / Q1890_EXTERIOR_CELL_SIZE));
+    gpu.q1970GridX = cpu.placement.hasExteriorGrid
+        ? cpu.placement.gridX
+        : static_cast<int32_t>(std::floor(cpu.placement.x / Q1890_EXTERIOR_CELL_SIZE));
+    gpu.q1970GridY = cpu.placement.hasExteriorGrid
+        ? cpu.placement.gridY
+        : static_cast<int32_t>(std::floor(cpu.placement.y / Q1890_EXTERIOR_CELL_SIZE));
     gpu.baseRecordType = cpu.placement.baseRecordType;
     if (gpu.baseRecordType == "DOOR") {
         ResolveDoorTeleportCachedQ1698(gpu.refFormId, gpu.teleport);
@@ -2682,10 +2686,12 @@ void Q1900AdvanceCollision() {
     const int32_t q1970CollisionGridX = gPendingStreamQ1900.targetGridX;
     const int32_t q1970CollisionGridY = gPendingStreamQ1900.targetGridY;
     for (const Fo3WorldPlacement& placement : gPendingStreamQ1900.targetPlacements) {
-        const int32_t placementGridX = static_cast<int32_t>(
-            std::floor(placement.x / Q1890_EXTERIOR_CELL_SIZE));
-        const int32_t placementGridY = static_cast<int32_t>(
-            std::floor(placement.y / Q1890_EXTERIOR_CELL_SIZE));
+        const int32_t placementGridX = placement.hasExteriorGrid
+            ? placement.gridX
+            : static_cast<int32_t>(std::floor(placement.x / Q1890_EXTERIOR_CELL_SIZE));
+        const int32_t placementGridY = placement.hasExteriorGrid
+            ? placement.gridY
+            : static_cast<int32_t>(std::floor(placement.y / Q1890_EXTERIOR_CELL_SIZE));
         if (std::abs(placementGridX - q1970CollisionGridX) > Q1950_COLLISION_GRID_RADIUS ||
             std::abs(placementGridY - q1970CollisionGridY) > Q1950_COLLISION_GRID_RADIUS) {
             ++q1950OutsideCollisionWindow;

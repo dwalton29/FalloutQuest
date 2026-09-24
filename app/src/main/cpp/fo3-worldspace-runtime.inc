@@ -770,23 +770,26 @@ bool LoadFo3WorldspaceNeighborhoodQ75(uint32_t worldspaceFormId,
     for (const RawPlacementQ75& p : raw) {
         if (p.owningCellFormId == persistentCellFormId) ++q1770PersistentBefore;
     }
+    const int q1800PersistentResidentRadius =
+        q1800Index ? q1950SelectionRadius : GRID_RADIUS_Q75;
     raw.erase(std::remove_if(raw.begin(), raw.end(),
                              [&](const RawPlacementQ75& p) {
         if (p.owningCellFormId != persistentCellFormId) return false;
         const int32_t gx = static_cast<int32_t>(std::floor(p.x / EXTERIOR_CELL_SIZE_Q75));
         const int32_t gy = static_cast<int32_t>(std::floor(p.y / EXTERIOR_CELL_SIZE_Q75));
-        return std::abs(gx - targetGridX) > GRID_RADIUS_Q75 ||
-               std::abs(gy - targetGridY) > GRID_RADIUS_Q75;
+        return std::abs(gx - targetGridX) > q1800PersistentResidentRadius ||
+               std::abs(gy - targetGridY) > q1800PersistentResidentRadius;
     }), raw.end());
     size_t q1770PersistentAfter = 0u;
     for (const RawPlacementQ75& p : raw) {
         if (p.owningCellFormId == persistentCellFormId) ++q1770PersistentAfter;
     }
-    Q75_LOGI("Q16.7 PERSISTENT LOCAL CULL: worldspace=%08X persistent=%08X before=%zu kept=%zu removed=%zu targetGrid=(%d,%d) radius=%d",
+    Q75_LOGI("Q18 PERSISTENT RESIDENCY: worldspace=%08X persistent=%08X before=%zu kept=%zu removed=%zu targetGrid=(%d,%d) radius=%d source=%s",
              worldspaceFormId, persistentCellFormId,
              q1770PersistentBefore, q1770PersistentAfter,
              q1770PersistentBefore - q1770PersistentAfter,
-             targetGridX, targetGridY, GRID_RADIUS_Q75);
+             targetGridX, targetGridY, q1800PersistentResidentRadius,
+             q1800Index ? "Q18-index" : "legacy");
 
     std::unordered_map<uint32_t, const RawPlacementQ75*> refs;
     refs.reserve(raw.size());
@@ -873,7 +876,8 @@ bool LoadFo3WorldspaceNeighborhoodQ75(uint32_t worldspaceFormId,
         outPlacements.push_back(std::move(world));
     }
 
-    Q75_LOGI("Q16.7 EXTERIOR TEST READY: entranceSkipped=%zu persistentKept=%zu radius=%d", q1770MegatonEntranceSkipped, q1770PersistentAfter, GRID_RADIUS_Q75);
+    Q75_LOGI("Q18 EXTERIOR RESIDENCY READY: entranceSkipped=%zu persistentKept=%zu residentRadius=%d",
+             q1770MegatonEntranceSkipped, q1770PersistentAfter, q1800PersistentResidentRadius);
     const auto lookupElapsedQ1800 = std::chrono::duration_cast<std::chrono::microseconds>(
         std::chrono::steady_clock::now() - lookupStartedQ1800).count();
     Q75_LOGI("Q7.5 WORLDSPACE READY: worldspace=%08X persistent=%08X selectedCells=%zu LAND=%zu rawRefs=%zu activeRefs=%zu disabledInitial=%zu bases=%zu modelPlacements=%zu uniqueModels=%zu XTEL=(%.2f %.2f) source=%s lookupUs=%lld",
