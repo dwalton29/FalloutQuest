@@ -47,3 +47,24 @@ state and constants and maps them to Shader Package 17.
 
 main is the working branch unless explicitly requested otherwise. Changes should
 leave the cloud APK build passing before additional systems are layered on top.
+
+
+## Q18 Wasteland residency
+
+Capital Wasteland CELL, REFR and base/model metadata are indexed once from the
+user's Fallout3.esm. Rolling 5x5 neighbourhood requests use indexed CELL lookup
+rather than rescanning the ESM. Exterior placements preserve their authored CELL
+owner/XCLC grid; persistent-CELL refs use their authored DATA position for
+spatial residency.
+
+The current hierarchy is intentionally unchanged while it is measured:
+
+- 3x3 active full-detail draw set.
+- 3x3 authored collision set.
+- 5x5 resident/prefetched visual placement set.
+- 7x7 LAND runway.
+- Bethesda Level4 terrain/object LOD outside the near world.
+
+Streaming logs include per-phase microsecond totals for metadata, CPU NIF work,
+GPU upload, collision, terrain and commit. Use these measurements before changing
+budgets or restructuring collision further.

@@ -1661,6 +1661,7 @@ bool ProcessQ74TransitionRequest() {
         return false;
     }
 
+    const auto q1800CollisionStarted = std::chrono::steady_clock::now();
     std::vector<Fo3WorldPlacement> collisionPlacements;
     collisionPlacements.reserve(selected.size());
     for (const CpuObject& cpu : selected) collisionPlacements.push_back(cpu.placement);
@@ -2426,6 +2427,7 @@ struct Q1900MetadataTask {
     float selectionGameY = 0.0f;
     std::vector<Fo3WorldPlacement> placements;
     bool success = false;
+    uint64_t elapsedUs = 0u;
     std::atomic<bool> ready{false};
 };
 
@@ -2456,6 +2458,12 @@ struct Q1900PendingStream {
     size_t unsupportedPlacements = 0u;
     size_t dynamicOnlyModels = 0u;
     size_t frames = 0u;
+    std::chrono::steady_clock::time_point startedAt{};
+    uint64_t metadataUs = 0u;
+    uint64_t cpuUs = 0u;
+    uint64_t gpuUs = 0u;
+    uint64_t collisionUs = 0u;
+    uint64_t terrainUs = 0u;
     bool collisionReady = false;
     bool terrainReady = false;
 };
@@ -2516,6 +2524,7 @@ bool Q1900BeginStream(float selectionGameX, float selectionGameY,
     gPendingStreamQ1900.sourceOriginY = gExteriorOriginYQ1890;
     gPendingStreamQ1900.sourceOriginZ = gExteriorOriginZQ1890;
     gPendingStreamQ1900.phase = Q1900StreamPhase::Metadata;
+    gPendingStreamQ1900.startedAt = std::chrono::steady_clock::now();
 
     auto task = std::make_shared<Q1900MetadataTask>();
     task->worldspace = gExteriorWorldspaceQ1890;
@@ -2532,12 +2541,16 @@ bool Q1900BeginStream(float selectionGameX, float selectionGameY,
              Q1900_CPU_PLACEMENTS_PER_FRAME, Q1900_GPU_SHAPES_PER_FRAME);
 
     std::thread([task]() {
-        SetFo3WorldspaceGridRadiusOverrideQ1950(2); // Q16.27 streamed 5x5 resident
+        const auto q1800MetadataStarted = std::chrono::steady_clock::now();
+        SetFo3WorldspaceGridRadiusOverrideQ1950(2); // Q18 streamed 5x5 resident
         task->success = LoadFo3WorldspaceNeighborhoodQ75(
             task->worldspace, task->persistentCell,
             task->selectionGameX, task->selectionGameY,
             task->placements);
         SetFo3WorldspaceGridRadiusOverrideQ1950(-1);
+        task->elapsedUs = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::steady_clock::now() - q1800MetadataStarted).count());
         task->ready.store(true, std::memory_order_release);
     }).detach();
     return true;
@@ -2555,6 +2568,7 @@ void Q1900PrepareMetadata() {
         return;
     }
 
+    gPendingStreamQ1900.metadataUs = task->elapsedUs;
     gPendingStreamQ1900.targetPlacements = std::move(task->placements);
     gPendingStreamQ1900.metadata.reset();
     gPendingStreamQ1900.dynamicOnlyModels =
@@ -2603,6 +2617,7 @@ void Q1900PrepareMetadata() {
 }
 
 void Q1900AdvanceCpu() {
+    const auto q1800CpuStarted = std::chrono::steady_clock::now();
     size_t budget = Q1900_CPU_PLACEMENTS_PER_FRAME;
     while (budget-- > 0u &&
            gPendingStreamQ1900.cpuCursor < gPendingStreamQ1900.incomingPlacements.size()) {
@@ -2622,6 +2637,10 @@ void Q1900AdvanceCpu() {
         }
     }
 
+    gPendingStreamQ1900.cpuUs += static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - q1800CpuStarted).count());
+
     if (gPendingStreamQ1900.cpuCursor >=
         gPendingStreamQ1900.incomingPlacements.size()) {
         gPendingStreamQ1900.phase = gPendingStreamQ1900.incomingCpu.empty()
@@ -2637,6 +2656,7 @@ void Q1900AdvanceCpu() {
 }
 
 void Q1900AdvanceGpu() {
+    const auto q1800GpuStarted = std::chrono::steady_clock::now();
     size_t budget = Q1900_GPU_SHAPES_PER_FRAME;
     while (budget-- > 0u &&
            gPendingStreamQ1900.gpuCursor < gPendingStreamQ1900.incomingCpu.size()) {
@@ -2655,6 +2675,10 @@ void Q1900AdvanceGpu() {
         }
         cpu = CpuObject{};
     }
+
+    gPendingStreamQ1900.gpuUs += static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - q1800GpuStarted).count());
 
     if (gPendingStreamQ1900.gpuCursor >= gPendingStreamQ1900.incomingCpu.size()) {
         gPendingStreamQ1900.phase = Q1900StreamPhase::Terrain;
@@ -2723,13 +2747,19 @@ void Q1900AdvanceCollision() {
         ? Q1900StreamPhase::Terrain : Q1900StreamPhase::Cpu;
 
 
-    Q6H_LOGI("Q16.27 COLLISION READY: generation=%llu uniqueRenderableRefs=%zu ready=%d isolatedFrame=1",
+    gPendingStreamQ1900.collisionUs += static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - q1800CollisionStarted).count());
+
+    Q6H_LOGI("Q18 COLLISION READY: generation=%llu uniqueRenderableRefs=%zu ready=%d isolatedFrame=1 workUs=%llu",
              static_cast<unsigned long long>(gPendingStreamQ1900.generation),
              collisionPlacements.size(),
-             gPendingStreamQ1900.collisionReady ? 1 : 0);
+             gPendingStreamQ1900.collisionReady ? 1 : 0,
+             static_cast<unsigned long long>(gPendingStreamQ1900.collisionUs));
 }
 
 void Q1900AdvanceTerrain() {
+    const auto q1800TerrainStarted = std::chrono::steady_clock::now();
     static bool q1950TerrainWindowValid = false;
     static uint32_t q1950TerrainWorldspace = 0u;
     static uint32_t q1950TerrainPersistent = 0u;
@@ -2761,6 +2791,9 @@ void Q1900AdvanceTerrain() {
     // actualGrid moves two cells from the retained LAND centre.
     if (q1950TerrainDx <= 2 && q1950TerrainDy <= 2) {
         gPendingStreamQ1900.terrainReady = true;
+        gPendingStreamQ1900.terrainUs += static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::steady_clock::now() - q1800TerrainStarted).count());
         gPendingStreamQ1900.phase = Q1900StreamPhase::Commit;
         Q6H_LOGI("Q16.27 TERRAIN RETAIN: generation=%llu retainedCentre=(%d,%d) target=(%d,%d) delta=(%d,%d) radius=3 fullGpuRebuild=0",
                  static_cast<unsigned long long>(gPendingStreamQ1900.generation),
@@ -2800,9 +2833,12 @@ void Q1900AdvanceTerrain() {
             SCENE_FORWARD, FLOOR_Y, FO3_UNITS_PER_METRE);
     }
     PumpFo3AndroidEventsQ1860();
+    gPendingStreamQ1900.terrainUs += static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - q1800TerrainStarted).count());
     gPendingStreamQ1900.phase = Q1900StreamPhase::Commit;
 
-    Q6H_LOGI("Q16.27 TERRAIN READY: generation=%llu selection=(%.2f %.2f) ready=%d isolatedFrame=1 originPreserved=1",
+    Q6H_LOGI("Q18 TERRAIN READY: generation=%llu selection=(%.2f %.2f) ready=%d isolatedFrame=1 originPreserved=1",
              static_cast<unsigned long long>(gPendingStreamQ1900.generation),
              gPendingStreamQ1900.selectionGameX,
              gPendingStreamQ1900.selectionGameY,
@@ -2810,6 +2846,7 @@ void Q1900AdvanceTerrain() {
 }
 
 void Q1900CommitWindow() {
+    const auto q1800CommitStarted = std::chrono::steady_clock::now();
     if (gExteriorWorldspaceQ1890 == 0x0000003Cu && gQ1920LatestGridValid &&
         (std::abs(gPendingStreamQ1900.targetGridX - gQ1920LatestGridX) > 1 ||
          std::abs(gPendingStreamQ1900.targetGridY - gQ1920LatestGridY) > 1)) {
@@ -2864,12 +2901,26 @@ void Q1900CommitWindow() {
     const bool collisionReady = gPendingStreamQ1900.collisionReady;
     const bool terrainReady = gPendingStreamQ1900.terrainReady;
 
-    Q6H_LOGI("Q16.27 WINDOW READY: generation=%llu grid=(%d,%d) oldShapes=%zu retainedShapes=%zu enteringShapes=%zu retiredShapes=%zu liveShapes=%zu triangles=%zu stagedFrames=%zu collisionReady=%d terrainReady=%d originPreserved=1 playerReset=0 fullSceneRebuild=0",
+    const uint64_t q1800CommitUs = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - q1800CommitStarted).count());
+    const uint64_t q1800TotalUs = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - gPendingStreamQ1900.startedAt).count());
+
+    Q6H_LOGI("Q18 WINDOW READY: generation=%llu grid=(%d,%d) oldShapes=%zu retainedShapes=%zu enteringShapes=%zu retiredShapes=%zu liveShapes=%zu triangles=%zu stagedFrames=%zu collisionReady=%d terrainReady=%d metadataUs=%llu cpuUs=%llu gpuUs=%llu collisionUs=%llu terrainUs=%llu commitUs=%llu totalUs=%llu originPreserved=1 playerReset=0 fullSceneRebuild=0",
              static_cast<unsigned long long>(generation),
              gExteriorWindowGridXQ1890, gExteriorWindowGridYQ1890,
              oldShapes, retainedShapes, enteringShapes, retiredShapes,
              gObjects.size(), triangles, frames,
-             collisionReady ? 1 : 0, terrainReady ? 1 : 0);
+             collisionReady ? 1 : 0, terrainReady ? 1 : 0,
+             static_cast<unsigned long long>(gPendingStreamQ1900.metadataUs),
+             static_cast<unsigned long long>(gPendingStreamQ1900.cpuUs),
+             static_cast<unsigned long long>(gPendingStreamQ1900.gpuUs),
+             static_cast<unsigned long long>(gPendingStreamQ1900.collisionUs),
+             static_cast<unsigned long long>(gPendingStreamQ1900.terrainUs),
+             static_cast<unsigned long long>(q1800CommitUs),
+             static_cast<unsigned long long>(q1800TotalUs));
 
     gPendingStreamQ1900 = Q1900PendingStream{};
     gExteriorStreamBusyQ1890 = false;
