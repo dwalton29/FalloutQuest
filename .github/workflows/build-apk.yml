@@ -2,7 +2,7 @@ name: Build Quest APK
 
 on:
   push:
-    branches: [main, q3-openxr, fix/megaton-land-elevation]
+    branches: [main]
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -32,9 +32,6 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
         with:
-          # `tools` was the legacy pre-cmdline-tools SDK package and is no longer
-          # published by Google's current repository. setup-android already installs
-          # cmdline-tools; request only the package we actually need here.
           packages: platform-tools
 
       - name: Install Android build components
@@ -51,58 +48,6 @@ jobs:
         run: |
           set -o pipefail
           gradle assembleDebug --stacktrace 2>&1 | tee build-output.log
-
-      - name: Capture generated native sources for consolidation
-        if: always()
-        shell: bash
-        run: |
-          rm -rf consolidation-generated
-          mkdir -p consolidation-generated
-          if [ -d app/.cxx ]; then
-            cp -a app/.cxx consolidation-generated/app-cxx
-          fi
-
-      - name: Upload generated native sources
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: FalloutQuest-generated-native
-          path: consolidation-generated
-          if-no-files-found: warn
-
-      - name: Validate Q17 consolidated runtime
-        id: q17validate
-        if: always()
-        shell: bash
-        run: |
-          set -o pipefail
-          python3 tools/q17-consolidate.py
-          rm -rf app/.cxx app/build
-          gradle assembleDebug --stacktrace 2>&1 | tee q17-consolidation-build.log
-
-      - name: Upload validated Q17 source
-        if: always() && steps.q17validate.outcome == 'success'
-        uses: actions/upload-artifact@v4
-        with:
-          name: FalloutQuest-q17-source
-          path: |
-            app/src/main/cpp
-            README.md
-            docs/ARCHITECTURE.md
-            q17-consolidation-build.log
-          if-no-files-found: error
-
-      - name: Export validated Q17 source for commit
-        if: always() && steps.q17validate.outcome == 'success'
-        shell: bash
-        run: |
-          for file in             app/src/main/cpp/CMakeLists.txt             app/src/main/cpp/fo3-runtime.cpp             app/src/main/cpp/fo3-runtime-loop.inc             app/src/main/cpp/fo3-interaction-hud-runtime.h             app/src/main/cpp/fo3-cell-world.cpp             app/src/main/cpp/fo3-worldspace-runtime.inc             app/src/main/cpp/fo3-terrain-data-runtime.inc             app/src/main/cpp/fo3-terrain-render-runtime.inc             app/src/main/cpp/fo3-terrain-ground-runtime.inc             app/src/main/cpp/fo3-static-nif-runtime.cpp             app/src/main/cpp/fo3-collision-runtime.cpp             app/src/main/cpp/fo3-player-controller-runtime.inc             README.md             docs/ARCHITECTURE.md
-          do
-            echo "__Q17_FILE_BEGIN__:$file"
-            base64 -w0 "$file"
-            echo
-            echo "__Q17_FILE_END__:$file"
-          done
 
       - name: Upload build diagnostics
         if: always()
