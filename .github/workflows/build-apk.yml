@@ -52,6 +52,29 @@ jobs:
           set -o pipefail
           gradle assembleDebug --stacktrace 2>&1 | tee build-output.log
 
+      - name: Capture generated native sources for consolidation
+        if: always()
+        shell: bash
+        run: |
+          rm -rf consolidation-generated
+          mkdir -p consolidation-generated
+          if [ -d app/.cxx ]; then
+            find app/.cxx -type f \\( -name '*.cpp' -o -name '*.c' -o -name '*.h' -o -name '*.inc' \\) -print0 \
+              | while IFS= read -r -d '' file; do
+                  rel="${file#app/.cxx/}"
+                  mkdir -p "consolidation-generated/$(dirname "$rel")"
+                  cp "$file" "consolidation-generated/$rel"
+                done
+          fi
+
+      - name: Upload generated native sources
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: FalloutQuest-generated-native
+          path: consolidation-generated
+          if-no-files-found: warn
+
       - name: Upload build diagnostics
         if: always()
         uses: actions/upload-artifact@v4
