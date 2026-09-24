@@ -220,6 +220,8 @@ GLint gEmissiveMultLocationQ1020 = -1;
 GLint gGlowEnabledLocationQ1020 = -1;
 GLint gExternalEmittanceEnabledLocationQ1380 = -1;
 GLint gExternalEmittanceColorLocationQ1380 = -1;
+GLint gNativeLodClipEnabledLocationQ1810 = -1;
+GLint gNativeLodClipBoundsLocationQ1810 = -1;
 GLint gLightMvpLocationQ1050 = -1;
 GLint gShadowMapLocationQ1050 = -1;
 GLint gShadowTexelLocationQ1050 = -1;
@@ -418,6 +420,8 @@ GLuint CreateQ6HProgram() {
         uniform vec3 uLegacyAmbientQ1570;
         uniform vec3 uLegacySunlightQ1570;
         uniform float uQ1470LegacyPpDiffuseDomain;
+        uniform float uNativeLodClipEnabledQ1810;
+        uniform vec4 uNativeLodClipBoundsQ1810;
         uniform int uLocalLightCount;
         uniform vec4 uLocalLightPosRadius[8];
         uniform vec4 uLocalLightColorFalloff[8];
@@ -463,6 +467,17 @@ GLuint CreateQ6HProgram() {
             return visible * 0.25;
         }
         void main() {
+            // Q18.1: Bethesda Level4 object/terrain meshes cover coarse 4x4
+            // macroblocks. Clip only the part overlapped by the live 3x3
+            // detailed cells; the remainder of the same authored LOD shape
+            // stays visible beyond the near-world boundary.
+            if (uNativeLodClipEnabledQ1810 > 0.5 &&
+                vPosition.x >= uNativeLodClipBoundsQ1810.x &&
+                vPosition.x <= uNativeLodClipBoundsQ1810.y &&
+                vPosition.z >= uNativeLodClipBoundsQ1810.z &&
+                vPosition.z <= uNativeLodClipBoundsQ1810.w) {
+                discard;
+            }
             vec4 diffuseTexel = texture(uDiffuse, vUv);
             vec3 baseColor = diffuseTexel.rgb * mix(vec3(1.0), vColor.rgb, uUseVertexColor);
             float alpha = diffuseTexel.a * uMaterialAlpha * mix(1.0, vColor.a, uUseVertexAlpha);
@@ -1499,6 +1514,10 @@ bool InitializeScene() {
         glGetUniformLocation(gProgram, "uExternalEmittanceEnabledQ1380");
     gExternalEmittanceColorLocationQ1380 =
         glGetUniformLocation(gProgram, "uExternalEmittanceColorQ1380");
+    gNativeLodClipEnabledLocationQ1810 =
+        glGetUniformLocation(gProgram, "uNativeLodClipEnabledQ1810");
+    gNativeLodClipBoundsLocationQ1810 =
+        glGetUniformLocation(gProgram, "uNativeLodClipBoundsQ1810");
     gLightMvpLocationQ1050 = glGetUniformLocation(gProgram, "uLightMvp");
     gShadowMapLocationQ1050 = glGetUniformLocation(gProgram, "uShadowMap");
     gShadowTexelLocationQ1050 = glGetUniformLocation(gProgram, "uShadowTexelSize");
@@ -3275,8 +3294,61 @@ bool Q1970ShouldRenderFullDetail(const GpuObject& object) {
            std::abs(object.q1970GridY - activeGridY) <= Q1970_ACTIVE_VISUAL_RADIUS;
 }
 
+bool Q1810GetNativeLodNearClip(float& minX, float& maxX,
+                               float& minZ, float& maxZ) {
+    int32_t activeGridX = 0;
+    int32_t activeGridY = 0;
+    if (!Q1970GetActiveGrid(activeGridX, activeGridY)) return false;
+
+    constexpr int Q1810_ACTIVE_RADIUS = 1;
+    const float minGameX =
+        static_cast<float>(activeGridX - Q1810_ACTIVE_RADIUS) * Q1890_EXTERIOR_CELL_SIZE;
+    const float maxGameX =
+        static_cast<float>(activeGridX + Q1810_ACTIVE_RADIUS + 1) * Q1890_EXTERIOR_CELL_SIZE;
+    const float minGameY =
+        static_cast<float>(activeGridY - Q1810_ACTIVE_RADIUS) * Q1890_EXTERIOR_CELL_SIZE;
+    const float maxGameY =
+        static_cast<float>(activeGridY + Q1810_ACTIVE_RADIUS + 1) * Q1890_EXTERIOR_CELL_SIZE;
+
+    minX = (minGameX - gExteriorOriginXQ1890) / FO3_UNITS_PER_METRE;
+    maxX = (maxGameX - gExteriorOriginXQ1890) / FO3_UNITS_PER_METRE;
+
+    const float zAtMinGameY =
+        SCENE_FORWARD - (minGameY - gExteriorOriginYQ1890) / FO3_UNITS_PER_METRE;
+    const float zAtMaxGameY =
+        SCENE_FORWARD - (maxGameY - gExteriorOriginYQ1890) / FO3_UNITS_PER_METRE;
+    minZ = std::min(zAtMinGameY, zAtMaxGameY);
+    maxZ = std::max(zAtMinGameY, zAtMaxGameY);
+    return true;
+}
+
 void DrawSceneObject(const GpuObject& object) {
     if (!Q1970ShouldRenderFullDetail(object)) return;
+
+    bool q1810ClipNativeLod = false;
+    float q1810MinX = 0.0f, q1810MaxX = 0.0f;
+    float q1810MinZ = 0.0f, q1810MaxZ = 0.0f;
+    if (object.q1990NativeLod &&
+        gNativeLodClipEnabledLocationQ1810 >= 0 &&
+        gNativeLodClipBoundsLocationQ1810 >= 0) {
+        q1810ClipNativeLod =
+            Q1810GetNativeLodNearClip(q1810MinX, q1810MaxX,
+                                      q1810MinZ, q1810MaxZ);
+    }
+    if (gNativeLodClipEnabledLocationQ1810 >= 0) {
+        glUniform1f(gNativeLodClipEnabledLocationQ1810,
+                    q1810ClipNativeLod ? 1.0f : 0.0f);
+    }
+    if (q1810ClipNativeLod && gNativeLodClipBoundsLocationQ1810 >= 0) {
+        glUniform4f(gNativeLodClipBoundsLocationQ1810,
+                    q1810MinX, q1810MaxX, q1810MinZ, q1810MaxZ);
+        static bool q1810ClipLogged = false;
+        if (!q1810ClipLogged) {
+            q1810ClipLogged = true;
+            Q6H_LOGI("Q18.1 NATIVE LOD NEAR CLIP: activeRadius=1 boundsRenderXZ=(%.3f..%.3f, %.3f..%.3f) mode=fragment-clip-preserve-macroblock-outside-near-world",
+                     q1810MinX, q1810MaxX, q1810MinZ, q1810MaxZ);
+        }
+    }
     glUniform1f(gGlossinessLocation, object.glossiness);
     glUniform1f(gNoLightingLocationQ1020, object.noLighting ? 1.0f : 0.0f);
     glUniform1f(gNoLightingFalloffLocationQ1160, object.noLightingFalloff ? 1.0f : 0.0f);
@@ -3639,8 +3711,11 @@ void Q1990RenderNativeLod(bool alphaPass) {
     for (Q1990NativeLodBlock& block : gQ1990NativeLodBlocks) {
         if (!Q1990LodBlockDesired(block.blockX, block.blockY)) continue;
         // The current 4x4 macroblock is completely covered by the actual-centred
-        // 7x7 LAND runway. Do not double-render coarse terrain there. Object LOD
-        // remains visible so structures survive beyond the 3x3 detailed objects.
+        // 7x7 LAND runway, so its coarse terrain stays suppressed. Q18.1 clips
+        // all remaining native LOD fragments against the exact active 3x3 near
+        // rectangle in DrawSceneObject, preventing coarse object LOD from
+        // overlapping detailed REFR geometry while preserving the same macroblock
+        // outside the near cells.
         if (block.blockX != gQ1990NativeLodCentreBlockX ||
             block.blockY != gQ1990NativeLodCentreBlockY) {
             for (const GpuObject& object : block.terrain) {

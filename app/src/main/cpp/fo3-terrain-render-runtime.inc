@@ -106,7 +106,9 @@ float q1050TerrainLightMvp[16]{};
 bool q1050TerrainShadowEnabled = false;
 std::vector<Q711TerrainBatch> q711TerrainBatches;
 std::unordered_map<std::string, GLuint> q1910TerrainTextureCache;
+std::unordered_map<std::string, GLuint> q1810TerrainNormalTextureCache;
 constexpr size_t Q1910_TERRAIN_TEXTURE_CACHE_LIMIT = 256u;
+constexpr size_t Q1810_TERRAIN_NORMAL_CACHE_LIMIT = 256u;
 
 bool q76bReady = false;
 bool q76bLoggedVisible = false;
@@ -924,8 +926,9 @@ bool InitializeFo3TerrainRenderQ76(uint32_t worldspaceFormId,
     size_t baseVertices = 0u;
     size_t alphaVertices = 0u;
     auto& uploadedByPath = q1910TerrainTextureCache;
-    std::unordered_map<std::string, GLuint> uploadedNormalsQ1060;
+    auto& uploadedNormalsQ1060 = q1810TerrainNormalTextureCache;
     size_t q1060NormalUploads = 0u;
+    size_t q1810NormalCacheHits = 0u;
     size_t q1060NormalMisses = 0u;
     for (Q711CpuBatch& cpu : cpuBatches) {
         if (cpu.vertices.empty()) continue;
@@ -966,16 +969,23 @@ bool InitializeFo3TerrainRenderQ76(uint32_t worldspaceFormId,
             if (cachedNormal != uploadedNormalsQ1060.end()) {
                 gpu.normalTexture = cachedNormal->second;
                 gpu.realNormal = gpu.normalTexture != 0u;
-            } else if (q1060NormalUploads < Q713_MAX_REAL_TEXTURES) {
+                if (gpu.realNormal) ++q1810NormalCacheHits;
+            } else if (q1060NormalUploads < Q713_MAX_REAL_TEXTURES &&
+                       uploadedNormalsQ1060.size() < Q1810_TERRAIN_NORMAL_CACHE_LIMIT) {
                 gpu.normalTexture = Q711UploadTexture(cpu.normalPath);
                 gpu.realNormal = gpu.normalTexture != 0u;
                 if (gpu.realNormal) {
-                    gpu.ownsNormal = true;
+                    // Q18.1: normals are immutable Fallout assets just like the
+                    // diffuse LAND textures. Keep them process-lifetime so a
+                    // 7x7 recenter does not reopen/decode the same DDS files.
+                    gpu.ownsNormal = false;
                     uploadedNormalsQ1060[cpu.normalPath] = gpu.normalTexture;
                     ++q1060NormalUploads;
                 } else {
                     ++q1060NormalMisses;
                 }
+            } else {
+                ++q1060NormalMisses;
             }
         }
 
@@ -1035,7 +1045,10 @@ bool InitializeFo3TerrainRenderQ76(uint32_t worldspaceFormId,
     for (const Fo3TerrainCellQ76& c : terrain) {
         if (GetFo3TerrainVertexColorsQ1060(c.landFormId).size() == Q76B_HEIGHT_COUNT * 3u) ++q1070VclrCells;
     }
-    Q76B_LOGI("Q10.7 TERRAIN MATERIAL ACTIVE: cells=%zu VCLR=%zu normalUploads=%zu normalMisses=%zu strideFloats=12 TX01=1", acceptedCells, q1070VclrCells, q1060NormalUploads, q1060NormalMisses);
+    Q76B_LOGI("Q18.1 TERRAIN MATERIAL ACTIVE: cells=%zu VCLR=%zu normalUploads=%zu normalCacheHits=%zu normalCacheEntries=%zu normalMisses=%zu strideFloats=12 TX01=1",
+              acceptedCells, q1070VclrCells, q1060NormalUploads,
+              q1810NormalCacheHits, uploadedNormalsQ1060.size(),
+              q1060NormalMisses);
     Q76B_LOGI("Q7.20 LAND HIDE APPLIED: worldspace=%08X hiddenBaseQuads=%zu hiddenAlphaLayers=%zu", q76bWorldspace, q720HiddenBaseQuads, q720HiddenAlphaLayers);
     Q76B_LOGI("Q7.20 TERRAIN GPU READY: worldspace=%08X cells=%zu baseTriangles=%zu alphaTriangles=%zu batches=%zu alphaBatches=%zu uniqueTextureUploads=%zu realTextureBatches=%zu fallbackBatches=%zu texturedQuads=%zu fallbackQuads=%zu alphaLayersSeen=%zu alphaLayersResolved=%zu alphaLayersUnresolved=%zu alphaQuads=%zu uploadFailures=%zu limitHits=%zu alphaLayers=1 seamGuard=1",
               q76bWorldspace, q76bTerrainCells, q76bTriangles, q718AlphaTriangles,
