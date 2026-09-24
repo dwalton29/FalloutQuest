@@ -106,17 +106,15 @@ def repair_collision_declaration_order() -> None:
         1,
     )
 
-    old = textwrap.dedent(
-        """\
-            gHkWeldAdjacencyReadyQ801 = false;
-            gHkShapesReadyQ900 = false;
-            gQ950Ready = false;
-            gPlayerCollisionReady = true;"""
+    old = (
+        "    gHkWeldAdjacencyReadyQ801 = false;\n"
+        "    gHkShapesReadyQ900 = false;\n"
+        "    gQ950Ready = false;\n"
+        "    gPlayerCollisionReady = true;"
     )
-    new = textwrap.dedent(
-        """\
-            InvalidateDerivedCollisionCachesQ17();
-            gPlayerCollisionReady = true;"""
+    new = (
+        "    InvalidateDerivedCollisionCachesQ17();\n"
+        "    gPlayerCollisionReady = true;"
     )
     if old not in text:
         raise SystemExit("Q17: Q16.27 derived-cache invalidation block missing")
