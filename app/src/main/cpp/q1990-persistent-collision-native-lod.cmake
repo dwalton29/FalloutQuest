@@ -615,34 +615,32 @@ string(REPLACE "${Q1990_RENDER_MARKER}" "${Q1990_LOD_HELPERS}"
 
 set(Q1990_OPAQUE_OLD [==[
     glDisable(GL_BLEND);
-    glDepthMask(GL_TRUE);
     for (const GpuObject& object : gObjects) {
 ]==])
 set(Q1990_OPAQUE_NEW [==[
     glDisable(GL_BLEND);
-    glDepthMask(GL_TRUE);
     Q1990RenderNativeLod(false);
     for (const GpuObject& object : gObjects) {
 ]==])
 string(FIND "${Q1990_NATIVE_SOURCE}" "${Q1990_OPAQUE_OLD}" Q1990_OPAQUE_POS)
 if(Q1990_OPAQUE_POS EQUAL -1)
-    message(FATAL_ERROR "Q16.27 could not find opaque static render pass")
+    message(FATAL_ERROR "Q16.27 could not find current opaque render pass")
 endif()
 string(REPLACE "${Q1990_OPAQUE_OLD}" "${Q1990_OPAQUE_NEW}"
        Q1990_NATIVE_SOURCE "${Q1990_NATIVE_SOURCE}")
 
 set(Q1990_ALPHA_OLD [==[
-    glDepthMask(GL_FALSE);
+    glEnable(GL_BLEND);
     for (const GpuObject& object : gObjects) {
 ]==])
 set(Q1990_ALPHA_NEW [==[
-    glDepthMask(GL_FALSE);
+    glEnable(GL_BLEND);
     Q1990RenderNativeLod(true);
     for (const GpuObject& object : gObjects) {
 ]==])
 string(FIND "${Q1990_NATIVE_SOURCE}" "${Q1990_ALPHA_OLD}" Q1990_ALPHA_POS)
 if(Q1990_ALPHA_POS EQUAL -1)
-    message(FATAL_ERROR "Q16.27 could not find alpha static render pass")
+    message(FATAL_ERROR "Q16.27 could not find current alpha render pass")
 endif()
 string(REPLACE "${Q1990_ALPHA_OLD}" "${Q1990_ALPHA_NEW}"
        Q1990_NATIVE_SOURCE "${Q1990_NATIVE_SOURCE}")
