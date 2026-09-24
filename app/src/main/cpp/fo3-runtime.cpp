@@ -144,6 +144,14 @@ struct CpuObject {
     std::vector<Vec3> normalsGame;
     std::vector<Vec3> tangentsGame;
     std::vector<Vec3> bitangentsGame;
+
+    // Q19.6: final interleaved vertex stream is prepared by the CELL worker.
+    // Non-Q19 callers lazily populate it in UploadCpuObject as before.
+    std::vector<float> q1960ExpandedVertices;
+    bool q1960ExpandedReady = false;
+    float q1960MinX = 0.0f, q1960MaxX = 0.0f;
+    float q1960MinY = 0.0f, q1960MaxY = 0.0f;
+    float q1960MinZ = 0.0f, q1960MaxZ = 0.0f;
 };
 
 struct GpuObject {
@@ -279,6 +287,9 @@ std::mutex gQ1900TextureCpuMutexQ19;
 std::unordered_map<std::string, Q1900PreparedTextureQ19>
     gQ1900PreparedTexturesQ19;
 std::unordered_set<std::string> gQ1900KnownGpuTextureKeysQ19;
+
+bool gQ1960CaptureVboQ19 = false;
+std::vector<float>* gQ1960CapturedVboVerticesQ19 = nullptr;
 GLuint gDepthRenderbuffer = 0;
 GLsizei gDepthWidth = 0;
 GLsizei gDepthHeight = 0;
@@ -951,9 +962,12 @@ bool ResolveDoorTeleportCachedQ1698(uint32_t refFormId,
     return out.valid;
 }
 
-bool UploadCpuObject(CpuObject& cpu, float centerX, float centerY, float floorZ,
-                     GpuObject& gpu) {
+bool PrepareExpandedVertexStreamQ1960(
+        CpuObject& cpu, float centerX, float centerY, float floorZ) {
     constexpr size_t FLOATS_PER_VERTEX = 18u;
+    if (cpu.q1960ExpandedReady && !cpu.q1960ExpandedVertices.empty())
+        return true;
+
     const size_t vertexCount = cpu.positionsGame.size();
     std::vector<float> expanded;
     expanded.reserve(cpu.mesh.indices.size() * FLOATS_PER_VERTEX);
@@ -998,6 +1012,29 @@ bool UploadCpuObject(CpuObject& cpu, float centerX, float centerY, float floorZ,
         });
     }
     if (expanded.empty()) return false;
+
+    cpu.q1960ExpandedVertices = std::move(expanded);
+    cpu.q1960ExpandedReady = true;
+    cpu.q1960MinX = objectMinimum.x; cpu.q1960MaxX = objectMaximum.x;
+    cpu.q1960MinY = objectMinimum.y; cpu.q1960MaxY = objectMaximum.y;
+    cpu.q1960MinZ = objectMinimum.z; cpu.q1960MaxZ = objectMaximum.z;
+    return true;
+}
+
+bool UploadCpuObject(CpuObject& cpu, float centerX, float centerY, float floorZ,
+                     GpuObject& gpu) {
+    constexpr size_t FLOATS_PER_VERTEX = 18u;
+    const size_t vertexCount = cpu.positionsGame.size();
+    if (!PrepareExpandedVertexStreamQ1960(cpu, centerX, centerY, floorZ))
+        return false;
+
+    std::vector<float> expanded = std::move(cpu.q1960ExpandedVertices);
+    cpu.q1960ExpandedReady = false;
+    const size_t q1960ExpandedFloatCount = expanded.size();
+    if (q1960ExpandedFloatCount == 0u) return false;
+
+    Vec3 objectMinimum{cpu.q1960MinX, cpu.q1960MinY, cpu.q1960MinZ};
+    Vec3 objectMaximum{cpu.q1960MaxX, cpu.q1960MaxY, cpu.q1960MaxZ};
 
     gpu = {};
     gpu.glossiness = std::max(2.0f, cpu.mesh.glossiness);
@@ -1239,9 +1276,15 @@ bool UploadCpuObject(CpuObject& cpu, float centerX, float centerY, float floorZ,
     glBindVertexArray(gpu.vao);
     glGenBuffers(1, &gpu.vbo);
     glBindBuffer(GL_ARRAY_BUFFER, gpu.vbo);
-    glBufferData(GL_ARRAY_BUFFER,
-                 static_cast<GLsizeiptr>(expanded.size() * sizeof(float)),
-                 expanded.data(), GL_STATIC_DRAW);
+    const GLsizeiptr q1960VboBytes =
+        static_cast<GLsizeiptr>(q1960ExpandedFloatCount * sizeof(float));
+    if (gQ1960CaptureVboQ19 && gQ1960CapturedVboVerticesQ19) {
+        *gQ1960CapturedVboVerticesQ19 = std::move(expanded);
+        glBufferData(GL_ARRAY_BUFFER, q1960VboBytes, nullptr, GL_STATIC_DRAW);
+    } else {
+        glBufferData(GL_ARRAY_BUFFER, q1960VboBytes,
+                     expanded.data(), GL_STATIC_DRAW);
+    }
 
     constexpr GLsizei stride = static_cast<GLsizei>(FLOATS_PER_VERTEX * sizeof(float));
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, stride, nullptr);
@@ -1263,7 +1306,8 @@ bool UploadCpuObject(CpuObject& cpu, float centerX, float centerY, float floorZ,
     glEnableVertexAttribArray(5);
     glBindVertexArray(0);
 
-    gpu.vertexCount = static_cast<GLsizei>(expanded.size() / FLOATS_PER_VERTEX);
+    gpu.vertexCount =
+        static_cast<GLsizei>(q1960ExpandedFloatCount / FLOATS_PER_VERTEX);
     if (glGetError() != GL_NO_ERROR) return false;
 
     if (!gExteriorStreamingActiveQ1890) Q6H_LOGI("Q6H GPU OBJECT READY: ref=%08X EDID=%s model=%s triangles=%d diffuse=%s normal=%s alphaBlend=%d alphaTest=%d alpha=%.2f threshold=%.2f",

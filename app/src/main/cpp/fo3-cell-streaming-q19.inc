@@ -17,6 +17,30 @@ struct Q1900TextureRequestQ19 {
     std::array<uint8_t, 4> fallback{};
 };
 
+struct Q1960TextureUploadQ19 {
+    bool active = false;
+    GLuint id = 0u;
+    std::string cacheKey;
+    std::string path;
+    std::string label;
+    Fo3RgbaTexture texture;
+    bool real = false;
+    size_t nextRow = 0u;
+    size_t chunks = 0u;
+    uint64_t totalUs = 0u;
+    uint64_t maxStepUs = 0u;
+};
+
+struct Q1960ShapeUploadQ19 {
+    bool active = false;
+    GpuObject gpu;
+    std::vector<float> vertices;
+    size_t nextByte = 0u;
+    size_t chunks = 0u;
+    uint64_t totalUs = 0u;
+    uint64_t maxStepUs = 0u;
+};
+
 struct Q1900CellWorkerTaskQ19 {
     uint64_t contextSerial = 0u;
     uint32_t worldspace = 0u;
@@ -69,6 +93,8 @@ struct Q1900CellStateQ19 {
     uint64_t gpuUs = 0u;
     uint64_t maxTextureGpuUs = 0u;
     uint64_t maxShapeGpuUs = 0u;
+    Q1960TextureUploadQ19 q1960TextureUpload;
+    Q1960ShapeUploadQ19 q1960ShapeUpload;
 };
 
 std::unordered_map<uint64_t, Q1900CellStateQ19> gQ1900CellsQ19;
@@ -106,6 +132,9 @@ constexpr int Q1900_RESIDENT_RADIUS_Q19 = 2;
 constexpr int Q1900_CACHE_RADIUS_Q19 = 3;
 constexpr float Q1900_PREFETCH_EDGE_UNITS_Q19 = 1152.0f;
 constexpr uint64_t Q1900_GPU_BUDGET_US_Q19 = 2200u;
+constexpr size_t Q1960_GPU_BYTES_PER_FRAME = 256u * 1024u;
+constexpr size_t Q1960_TEXTURE_CHUNK_BYTES = 128u * 1024u;
+constexpr size_t Q1960_VBO_CHUNK_BYTES = 128u * 1024u;
 constexpr uint64_t Q1910_GPU_DELETE_BUDGET_US = 750u;
 constexpr uint64_t Q1910_GPU_ITEM_WARN_US = 8000u;
 std::deque<GpuObject> gQ1910DeferredGpuDeletesQ19;
@@ -402,6 +431,12 @@ void Q1900RunCellWorkerQ19(
                     task->textures, textureSeen,
                     part.mesh.glowTexturePath, "GLOW",
                     {0u,0u,0u,255u});
+                if (!PrepareExpandedVertexStreamQ1960(
+                        part,
+                        task->originX, task->originY, task->originZ)) {
+                    ++task->unsupported;
+                    continue;
+                }
                 task->cpu.push_back(std::move(part));
             }
         }
@@ -546,18 +581,354 @@ void Q1900LaunchWorkerQ19(int32_t actualGridX, int32_t actualGridY) {
     std::thread([task]() { Q1900RunCellWorkerQ19(task); }).detach();
 }
 
-bool Q1900UploadTextureRequestQ19(const Q1900TextureRequestQ19& request) {
-    GLuint id = 0u;
-    bool real = false;
-    std::vector<uint8_t> fallback{
-        request.fallback[0], request.fallback[1],
-        request.fallback[2], request.fallback[3]};
-    return UploadTexture(request.path, fallback, id, real,
-                         request.label.c_str(), 0u);
+enum class Q1960UploadStepQ19 : uint8_t {
+    Pending = 0,
+    Complete,
+    Failed,
+};
+
+uint64_t Q1960ElapsedUsQ19(
+        const std::chrono::steady_clock::time_point& started) {
+    return static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - started).count());
+}
+
+void Q1960RecordStepQ19(uint64_t stepUs, uint64_t& totalUs,
+                        uint64_t& maxStepUs) {
+    totalUs += stepUs;
+    maxStepUs = std::max(maxStepUs, stepUs);
+}
+
+Q1960UploadStepQ19 Q1960AdvanceTextureQ19(
+        Q1900CellStateQ19& state, size_t& bytesThisFrame) {
+    Q1960TextureUploadQ19& upload = state.q1960TextureUpload;
+
+    if (!upload.active) {
+        if (state.textureCursor >= state.textures.size())
+            return Q1960UploadStepQ19::Complete;
+
+        const Q1900TextureRequestQ19& request =
+            state.textures[state.textureCursor];
+        const std::string cacheKey =
+            TextureCacheKey(request.path, request.label.c_str());
+        const auto cached = gTextureCache.find(cacheKey);
+        if (cached != gTextureCache.end()) {
+            Q1900MarkGpuTextureKnownQ19(cacheKey);
+            ++state.textureCursor;
+            return Q1960UploadStepQ19::Complete;
+        }
+
+        const auto started = std::chrono::steady_clock::now();
+        Fo3RgbaTexture texture;
+        bool real = false;
+        const bool prepared = Q1900TakePreparedTextureQ19(
+            TextureCacheKey(request.path, ""), texture, real);
+        if (!prepared) {
+            // This should be unreachable because one active staged upload owns
+            // the uploader until its cache entry is published. Keep a
+            // correctness fallback rather than leaving the CELL permanently
+            // stuck if an unexpected cache/preparation mismatch occurs.
+            GLuint id = 0u;
+            std::vector<uint8_t> fallback{
+                request.fallback[0], request.fallback[1],
+                request.fallback[2], request.fallback[3]};
+            const bool ok = UploadTexture(
+                request.path, fallback, id, real,
+                request.label.c_str(), 0u);
+            const uint64_t stepUs = Q1960ElapsedUsQ19(started);
+            state.gpuUs += stepUs;
+            state.maxTextureGpuUs =
+                std::max(state.maxTextureGpuUs, stepUs);
+            Q6H_LOGW("Q19.6 TEXTURE PREP MISS: cell=(%d,%d) path=%s fallbackSynchronous=%d itemUs=%llu",
+                     state.gridX, state.gridY, request.path.c_str(),
+                     ok ? 1 : 0,
+                     static_cast<unsigned long long>(stepUs));
+            ++state.textureCursor;
+            return ok ? Q1960UploadStepQ19::Complete
+                      : Q1960UploadStepQ19::Failed;
+        }
+
+        if (!real) {
+            texture.width = 1;
+            texture.height = 1;
+            texture.rgba.assign(request.fallback.begin(),
+                                request.fallback.end());
+            texture.sourcePath = "<fallback>";
+            texture.format = "fallback";
+        }
+
+        upload = {};
+        upload.active = true;
+        upload.cacheKey = cacheKey;
+        upload.path = request.path;
+        upload.label = request.label;
+        upload.texture = std::move(texture);
+        upload.real = real;
+
+        glGenTextures(1, &upload.id);
+        glBindTexture(GL_TEXTURE_2D, upload.id);
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+        // The texture is not published until complete, so use non-mip
+        // filtering during construction and restore authored filtering later.
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        Q1070ApplyStaticAnisotropy();
+        const GLenum internalFormat =
+            upload.label == "DIFFUSE" ? GL_SRGB8_ALPHA8 : GL_RGBA8;
+        glTexImage2D(GL_TEXTURE_2D, 0, internalFormat,
+                     upload.texture.width, upload.texture.height, 0,
+                     GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+        glBindTexture(GL_TEXTURE_2D, 0);
+
+        const uint64_t stepUs = Q1960ElapsedUsQ19(started);
+        Q1960RecordStepQ19(
+            stepUs, upload.totalUs, upload.maxStepUs);
+        state.gpuUs += stepUs;
+        state.maxTextureGpuUs =
+            std::max(state.maxTextureGpuUs, stepUs);
+
+        if (glGetError() != GL_NO_ERROR || upload.id == 0u) {
+            if (upload.id) glDeleteTextures(1, &upload.id);
+            upload = {};
+            Q6H_LOGE("Q19.6 TEXTURE STAGE FAILED: cell=(%d,%d) phase=allocate path=%s",
+                     state.gridX, state.gridY, request.path.c_str());
+            ++state.textureCursor;
+            return Q1960UploadStepQ19::Failed;
+        }
+        if (stepUs >= Q1910_GPU_ITEM_WARN_US) {
+            Q6H_LOGW("Q19.6 GPU STAGE SPIKE: phase=texture-allocate cell=(%d,%d) itemUs=%llu path=%s size=%dx%d",
+                     state.gridX, state.gridY,
+                     static_cast<unsigned long long>(stepUs),
+                     upload.path.c_str(),
+                     upload.texture.width, upload.texture.height);
+        }
+        return Q1960UploadStepQ19::Pending;
+    }
+
+    if (upload.nextRow <
+        static_cast<size_t>(std::max(upload.texture.height, 0))) {
+        const size_t rowBytes =
+            static_cast<size_t>(upload.texture.width) * 4u;
+        if (rowBytes == 0u) return Q1960UploadStepQ19::Failed;
+        const size_t rowsByBytes =
+            std::max<size_t>(1u, Q1960_TEXTURE_CHUNK_BYTES / rowBytes);
+        const size_t remainingRows =
+            static_cast<size_t>(upload.texture.height) - upload.nextRow;
+        const size_t rows = std::min(rowsByBytes, remainingRows);
+        const size_t bytes = rows * rowBytes;
+
+        const auto started = std::chrono::steady_clock::now();
+        glBindTexture(GL_TEXTURE_2D, upload.id);
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+        glTexSubImage2D(
+            GL_TEXTURE_2D, 0,
+            0, static_cast<GLint>(upload.nextRow),
+            upload.texture.width, static_cast<GLsizei>(rows),
+            GL_RGBA, GL_UNSIGNED_BYTE,
+            upload.texture.rgba.data() + upload.nextRow * rowBytes);
+        glBindTexture(GL_TEXTURE_2D, 0);
+        const uint64_t stepUs = Q1960ElapsedUsQ19(started);
+
+        Q1960RecordStepQ19(
+            stepUs, upload.totalUs, upload.maxStepUs);
+        state.gpuUs += stepUs;
+        state.maxTextureGpuUs =
+            std::max(state.maxTextureGpuUs, stepUs);
+        upload.nextRow += rows;
+        ++upload.chunks;
+        bytesThisFrame += bytes;
+
+        if (stepUs >= Q1910_GPU_ITEM_WARN_US) {
+            Q6H_LOGW("Q19.6 GPU STAGE SPIKE: phase=texture-chunk cell=(%d,%d) itemUs=%llu bytes=%zu path=%s row=%zu/%d",
+                     state.gridX, state.gridY,
+                     static_cast<unsigned long long>(stepUs),
+                     bytes, upload.path.c_str(),
+                     upload.nextRow, upload.texture.height);
+        }
+        return Q1960UploadStepQ19::Pending;
+    }
+
+    // Mipmap generation remains one driver operation. Keeping it separate from
+    // the final pixel chunk lets telemetry prove whether it is the next stall.
+    const auto started = std::chrono::steady_clock::now();
+    glBindTexture(GL_TEXTURE_2D, upload.id);
+    glGenerateMipmap(GL_TEXTURE_2D);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER,
+                    GL_LINEAR_MIPMAP_LINEAR);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    const uint64_t stepUs = Q1960ElapsedUsQ19(started);
+    Q1960RecordStepQ19(stepUs, upload.totalUs, upload.maxStepUs);
+    state.gpuUs += stepUs;
+    state.maxTextureGpuUs =
+        std::max(state.maxTextureGpuUs, stepUs);
+
+    const bool ok = glGetError() == GL_NO_ERROR;
+    if (ok) {
+        gTextureCache.emplace(
+            upload.cacheKey,
+            CachedGpuTexture{upload.id, upload.real});
+        Q1900MarkGpuTextureKnownQ19(upload.cacheKey);
+        Q6H_LOGI("Q19.6 TEXTURE READY: cell=(%d,%d) path=%s size=%dx%d chunks=%zu totalUs=%llu maxStepUs=%llu stagedRows=1 mipFinalizeUs=%llu",
+                 state.gridX, state.gridY, upload.path.c_str(),
+                 upload.texture.width, upload.texture.height,
+                 upload.chunks,
+                 static_cast<unsigned long long>(upload.totalUs),
+                 static_cast<unsigned long long>(upload.maxStepUs),
+                 static_cast<unsigned long long>(stepUs));
+        upload.id = 0u; // cache now owns the GL texture.
+    } else {
+        if (upload.id) glDeleteTextures(1, &upload.id);
+        Q6H_LOGE("Q19.6 TEXTURE STAGE FAILED: cell=(%d,%d) phase=mipmap path=%s",
+                 state.gridX, state.gridY, upload.path.c_str());
+    }
+    if (stepUs >= Q1910_GPU_ITEM_WARN_US) {
+        Q6H_LOGW("Q19.6 GPU STAGE SPIKE: phase=texture-mipmap cell=(%d,%d) itemUs=%llu path=%s",
+                 state.gridX, state.gridY,
+                 static_cast<unsigned long long>(stepUs),
+                 upload.path.c_str());
+    }
+
+    upload = {};
+    ++state.textureCursor;
+    return ok ? Q1960UploadStepQ19::Complete
+              : Q1960UploadStepQ19::Failed;
+}
+
+Q1960UploadStepQ19 Q1960AdvanceShapeQ19(
+        Q1900CellStateQ19& state, size_t& bytesThisFrame) {
+    Q1960ShapeUploadQ19& upload = state.q1960ShapeUpload;
+
+    if (!upload.active) {
+        if (state.gpuCursor >= state.cpu.size())
+            return Q1960UploadStepQ19::Complete;
+
+        CpuObject& cpu = state.cpu[state.gpuCursor];
+        const auto started = std::chrono::steady_clock::now();
+        upload = {};
+        gQ1960CaptureVboQ19 = true;
+        gQ1960CapturedVboVerticesQ19 = &upload.vertices;
+        const bool ok = UploadCpuObject(
+            cpu,
+            gExteriorOriginXQ1890,
+            gExteriorOriginYQ1890,
+            gExteriorOriginZQ1890,
+            upload.gpu);
+        gQ1960CaptureVboQ19 = false;
+        gQ1960CapturedVboVerticesQ19 = nullptr;
+        const uint64_t stepUs = Q1960ElapsedUsQ19(started);
+
+        state.gpuUs += stepUs;
+        state.maxShapeGpuUs =
+            std::max(state.maxShapeGpuUs, stepUs);
+        Q1960RecordStepQ19(
+            stepUs, upload.totalUs, upload.maxStepUs);
+
+        if (!ok || upload.vertices.empty() || upload.gpu.vbo == 0u) {
+            Q1900DeleteGpuShape(upload.gpu);
+            const std::string model = cpu.placement.modelPath;
+            cpu = CpuObject{};
+            upload = {};
+            ++state.gpuCursor;
+            Q6H_LOGE("Q19.6 VBO STAGE FAILED: cell=(%d,%d) phase=allocate model=%s",
+                     state.gridX, state.gridY, model.c_str());
+            return Q1960UploadStepQ19::Failed;
+        }
+
+        upload.active = true;
+        // All material/texture metadata is now captured. The heavy vertex
+        // stream itself remains CPU-side until the chunked sub-data steps.
+        cpu = CpuObject{};
+
+        if (stepUs >= Q1910_GPU_ITEM_WARN_US) {
+            Q6H_LOGW("Q19.6 GPU STAGE SPIKE: phase=vbo-allocate cell=(%d,%d) itemUs=%llu bytes=%zu model=%s",
+                     state.gridX, state.gridY,
+                     static_cast<unsigned long long>(stepUs),
+                     upload.vertices.size() * sizeof(float),
+                     upload.gpu.modelPath.c_str());
+        }
+        return Q1960UploadStepQ19::Pending;
+    }
+
+    const size_t totalBytes = upload.vertices.size() * sizeof(float);
+    if (upload.nextByte < totalBytes) {
+        const size_t bytes =
+            std::min(Q1960_VBO_CHUNK_BYTES,
+                     totalBytes - upload.nextByte);
+        const auto started = std::chrono::steady_clock::now();
+        glBindBuffer(GL_ARRAY_BUFFER, upload.gpu.vbo);
+        glBufferSubData(
+            GL_ARRAY_BUFFER,
+            static_cast<GLintptr>(upload.nextByte),
+            static_cast<GLsizeiptr>(bytes),
+            reinterpret_cast<const uint8_t*>(upload.vertices.data()) +
+                upload.nextByte);
+        glBindBuffer(GL_ARRAY_BUFFER, 0);
+        const uint64_t stepUs = Q1960ElapsedUsQ19(started);
+
+        Q1960RecordStepQ19(
+            stepUs, upload.totalUs, upload.maxStepUs);
+        state.gpuUs += stepUs;
+        state.maxShapeGpuUs =
+            std::max(state.maxShapeGpuUs, stepUs);
+        upload.nextByte += bytes;
+        ++upload.chunks;
+        bytesThisFrame += bytes;
+
+        if (stepUs >= Q1910_GPU_ITEM_WARN_US) {
+            Q6H_LOGW("Q19.6 GPU STAGE SPIKE: phase=vbo-chunk cell=(%d,%d) itemUs=%llu bytes=%zu uploaded=%zu/%zu model=%s",
+                     state.gridX, state.gridY,
+                     static_cast<unsigned long long>(stepUs),
+                     bytes, upload.nextByte, totalBytes,
+                     upload.gpu.modelPath.c_str());
+        }
+        return Q1960UploadStepQ19::Pending;
+    }
+
+    const auto started = std::chrono::steady_clock::now();
+    const GLenum error = glGetError();
+    const uint64_t stepUs = Q1960ElapsedUsQ19(started);
+    Q1960RecordStepQ19(
+        stepUs, upload.totalUs, upload.maxStepUs);
+    state.gpuUs += stepUs;
+    state.maxShapeGpuUs =
+        std::max(state.maxShapeGpuUs, stepUs);
+
+    if (error != GL_NO_ERROR) {
+        Q6H_LOGE("Q19.6 VBO STAGE FAILED: cell=(%d,%d) phase=finalize glError=0x%X model=%s",
+                 state.gridX, state.gridY, error,
+                 upload.gpu.modelPath.c_str());
+        Q1900DeleteGpuShape(upload.gpu);
+        upload = {};
+        ++state.gpuCursor;
+        return Q1960UploadStepQ19::Failed;
+    }
+
+    Q6H_LOGI("Q19.6 VBO READY: cell=(%d,%d) model=%s bytes=%zu chunks=%zu totalUs=%llu maxStepUs=%llu workerExpanded=1",
+             state.gridX, state.gridY,
+             upload.gpu.modelPath.c_str(), totalBytes,
+             upload.chunks,
+             static_cast<unsigned long long>(upload.totalUs),
+             static_cast<unsigned long long>(upload.maxStepUs));
+    state.stagedGpu.push_back(std::move(upload.gpu));
+    upload = {};
+    ++state.gpuCursor;
+    return Q1960UploadStepQ19::Complete;
 }
 
 Q1900CellStateQ19* Q1900SelectUploadingCellQ19(
         int32_t actualGridX, int32_t actualGridY) {
+    for (auto& entry : gQ1900CellsQ19) {
+        Q1900CellStateQ19& state = entry.second;
+        if (state.stage == Q1900CellStageQ19::Uploading &&
+            (state.q1960TextureUpload.active ||
+             state.q1960ShapeUpload.active)) {
+            return &state;
+        }
+    }
+
     Q1900CellStateQ19* best = nullptr;
     int bestPriority = 1000000;
     for (auto& entry : gQ1900CellsQ19) {
@@ -577,9 +948,6 @@ void Q1900CommitCellVisualsQ19(Q1900CellStateQ19& state) {
     const auto retireStarted = std::chrono::steady_clock::now();
     size_t retired = 0u;
 
-    // Q19.1: remove an old copy of only this CELL in one linear compaction.
-    // Geometry destruction is deferred; never issue hundreds of glDelete calls
-    // or repeated vector::erase shifts on the boundary frame.
     size_t write = 0u;
     const size_t oldLive = gObjects.size();
     for (size_t read = 0u; read < oldLive; ++read) {
@@ -626,7 +994,7 @@ void Q1900CommitCellVisualsQ19(Q1900CellStateQ19& state) {
             std::chrono::duration_cast<std::chrono::microseconds>(
                 std::chrono::steady_clock::now() - state.requestedAt).count());
 
-    Q6H_LOGI("Q19.1 CELL READY: cell=(%d,%d) enteringShapes=%zu replacedShapes=%zu liveShapes=%zu deferredDeletes=%zu placements=%zu workerUs=%llu gpuUs=%llu retireQueueUs=%llu maxTextureGpuUs=%llu maxShapeGpuUs=%llu totalUs=%llu lodHandoff=cell-specific",
+    Q6H_LOGI("Q19.6 CELL READY: cell=(%d,%d) enteringShapes=%zu replacedShapes=%zu liveShapes=%zu deferredDeletes=%zu placements=%zu workerUs=%llu gpuUs=%llu retireQueueUs=%llu maxTextureStepUs=%llu maxShapeStepUs=%llu totalUs=%llu uploadBytesPerFrame=%zu lodHandoff=cell-specific",
              state.gridX, state.gridY, entering, retired, gObjects.size(),
              gQ1910DeferredGpuDeletesQ19.size(), state.placements.size(),
              static_cast<unsigned long long>(state.workerUs),
@@ -634,7 +1002,8 @@ void Q1900CommitCellVisualsQ19(Q1900CellStateQ19& state) {
              static_cast<unsigned long long>(retireQueueUs),
              static_cast<unsigned long long>(state.maxTextureGpuUs),
              static_cast<unsigned long long>(state.maxShapeGpuUs),
-             static_cast<unsigned long long>(totalUs));
+             static_cast<unsigned long long>(totalUs),
+             Q1960_GPU_BYTES_PER_FRAME);
 }
 
 void Q1900AdvanceGpuQ19(int32_t actualGridX, int32_t actualGridY) {
@@ -643,79 +1012,57 @@ void Q1900AdvanceGpuQ19(int32_t actualGridX, int32_t actualGridY) {
     if (!state) return;
 
     const auto frameStarted = std::chrono::steady_clock::now();
+    size_t bytesThisFrame = 0u;
     bool didWork = false;
 
     while (state->textureCursor < state->textures.size()) {
-        const size_t requestIndex = state->textureCursor;
-        const auto itemStarted = std::chrono::steady_clock::now();
-        Q1900UploadTextureRequestQ19(
-            state->textures[state->textureCursor++]);
-        const uint64_t itemUs = static_cast<uint64_t>(
-            std::chrono::duration_cast<std::chrono::microseconds>(
-                std::chrono::steady_clock::now() - itemStarted).count());
-        state->gpuUs += itemUs;
-        state->maxTextureGpuUs = std::max(state->maxTextureGpuUs, itemUs);
-        if (itemUs >= Q1910_GPU_ITEM_WARN_US) {
-            Q6H_LOGW("Q19.1 GPU ITEM SPIKE: phase=texture cell=(%d,%d) itemUs=%llu index=%zu/%zu path=%s",
-                     state->gridX, state->gridY,
-                     static_cast<unsigned long long>(itemUs),
-                     requestIndex + 1u, state->textures.size(),
-                     state->textures[requestIndex].path.c_str());
-        }
+        const Q1960UploadStepQ19 step =
+            Q1960AdvanceTextureQ19(*state, bytesThisFrame);
         didWork = true;
-        if (static_cast<uint64_t>(
-                std::chrono::duration_cast<std::chrono::microseconds>(
-                    std::chrono::steady_clock::now() - frameStarted).count()) >=
-            Q1900_GPU_BUDGET_US_Q19) {
+        if (step == Q1960UploadStepQ19::Failed) {
+            // Keep progressing; UploadCpuObject will use fallback/cache state.
+        }
+        if (bytesThisFrame >= Q1960_GPU_BYTES_PER_FRAME ||
+            Q1960ElapsedUsQ19(frameStarted) >= Q1900_GPU_BUDGET_US_Q19) {
             return;
+        }
+        if (state->q1960TextureUpload.active) {
+            // Continue the same texture only while both budgets allow.
+            continue;
         }
     }
 
     while (state->gpuCursor < state->cpu.size()) {
-        CpuObject& cpu = state->cpu[state->gpuCursor++];
-        const auto itemStarted = std::chrono::steady_clock::now();
-        GpuObject gpu;
-        if (UploadCpuObject(cpu,
-                            gExteriorOriginXQ1890,
-                            gExteriorOriginYQ1890,
-                            gExteriorOriginZQ1890,
-                            gpu)) {
-            state->stagedGpu.push_back(std::move(gpu));
-        } else {
-            Q1900DeleteGpuShape(gpu);
-        }
-        cpu = CpuObject{};
-        const uint64_t itemUs = static_cast<uint64_t>(
-            std::chrono::duration_cast<std::chrono::microseconds>(
-                std::chrono::steady_clock::now() - itemStarted).count());
-        state->gpuUs += itemUs;
-        state->maxShapeGpuUs = std::max(state->maxShapeGpuUs, itemUs);
-        if (itemUs >= Q1910_GPU_ITEM_WARN_US) {
-            Q6H_LOGW("Q19.1 GPU ITEM SPIKE: phase=shape cell=(%d,%d) itemUs=%llu index=%zu/%zu model=%s",
-                     state->gridX, state->gridY,
-                     static_cast<unsigned long long>(itemUs),
-                     state->gpuCursor, state->cpu.size(),
-                     gpu.modelPath.c_str());
-        }
+        const Q1960UploadStepQ19 step =
+            Q1960AdvanceShapeQ19(*state, bytesThisFrame);
         didWork = true;
-        if (static_cast<uint64_t>(
-                std::chrono::duration_cast<std::chrono::microseconds>(
-                    std::chrono::steady_clock::now() - frameStarted).count()) >=
-            Q1900_GPU_BUDGET_US_Q19) {
+        if (step == Q1960UploadStepQ19::Failed) {
+            // Failed shape is skipped exactly like the legacy upload path.
+        }
+        if (bytesThisFrame >= Q1960_GPU_BYTES_PER_FRAME ||
+            Q1960ElapsedUsQ19(frameStarted) >= Q1900_GPU_BUDGET_US_Q19) {
             return;
+        }
+        if (state->q1960ShapeUpload.active) {
+            continue;
         }
     }
 
     if (state->textureCursor >= state->textures.size() &&
-        state->gpuCursor >= state->cpu.size()) {
+        state->gpuCursor >= state->cpu.size() &&
+        !state->q1960TextureUpload.active &&
+        !state->q1960ShapeUpload.active) {
         Q1900CommitCellVisualsQ19(*state);
     } else if (didWork) {
-        Q6H_LOGI("Q19 CELL GPU: cell=(%d,%d) textures=%zu/%zu shapes=%zu/%zu staged=%zu budgetUs=%llu",
+        Q6H_LOGI("Q19.6 CELL GPU: cell=(%d,%d) textures=%zu/%zu shapes=%zu/%zu staged=%zu frameBytes=%zu byteBudget=%zu timeBudgetUs=%llu textureActive=%d shapeActive=%d",
                  state->gridX, state->gridY,
                  state->textureCursor, state->textures.size(),
                  state->gpuCursor, state->cpu.size(),
                  state->stagedGpu.size(),
-                 static_cast<unsigned long long>(Q1900_GPU_BUDGET_US_Q19));
+                 bytesThisFrame, Q1960_GPU_BYTES_PER_FRAME,
+                 static_cast<unsigned long long>(Q1900_GPU_BUDGET_US_Q19),
+                 state->q1960TextureUpload.active ? 1 : 0,
+                 state->q1960ShapeUpload.active ? 1 : 0);
     }
 }
 
