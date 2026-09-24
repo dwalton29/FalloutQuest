@@ -812,6 +812,10 @@ bool LoadFo3WorldspaceNeighborhoodQ75(uint32_t worldspaceFormId,
         return false;
     }
 
+    std::unordered_map<uint32_t, const CellInfoQ75*> cellInfoByFormQ1800;
+    cellInfoByFormQ1800.reserve(cells.size());
+    for (const CellInfoQ75& cell : cells) cellInfoByFormQ1800[cell.formId] = &cell;
+
     std::unordered_map<std::string, size_t> baseTypes;
     std::unordered_set<std::string> uniqueModels;
     size_t q1770MegatonEntranceSkipped = 0u;
@@ -847,6 +851,24 @@ bool LoadFo3WorldspaceNeighborhoodQ75(uint32_t worldspaceFormId,
         world.z = p->z;
         ConvertBethesdaRotationQ75(p->rx, p->ry, p->rz, world.rx, world.ry, world.rz);
         world.scale = p->scale;
+
+        world.owningCellFormId = p->owningCellFormId;
+        if (p->owningCellFormId == persistentCellFormId) {
+            // Persistent-CELL REFRs are spatially resident according to their
+            // authored DATA position, matching the moving exterior window.
+            world.gridX = static_cast<int32_t>(std::floor(p->x / EXTERIOR_CELL_SIZE_Q75));
+            world.gridY = static_cast<int32_t>(std::floor(p->y / EXTERIOR_CELL_SIZE_Q75));
+            world.hasExteriorGrid = true;
+            world.persistentExteriorRef = true;
+        } else {
+            const auto owningCell = cellInfoByFormQ1800.find(p->owningCellFormId);
+            if (owningCell != cellInfoByFormQ1800.end() && owningCell->second->hasGrid) {
+                world.gridX = owningCell->second->gridX;
+                world.gridY = owningCell->second->gridY;
+                world.hasExteriorGrid = true;
+            }
+        }
+
         uniqueModels.insert(world.modelPath);
         outPlacements.push_back(std::move(world));
     }
