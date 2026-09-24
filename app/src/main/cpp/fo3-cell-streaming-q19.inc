@@ -73,6 +73,18 @@ struct Q1900CellStateQ19 {
 
 std::unordered_map<uint64_t, Q1900CellStateQ19> gQ1900CellsQ19;
 std::shared_ptr<Q1900CellWorkerTaskQ19> gQ1900WorkerQ19;
+
+struct Q1930CollisionSnapshotTaskQ19 {
+    uint64_t contextSerial = 0u;
+    int32_t centreX = 0;
+    int32_t centreY = 0;
+    std::vector<Fo3WorldPlacement> placements;
+    uint64_t snapshotToken = 0u;
+    uint64_t prepareUs = 0u;
+    bool success = false;
+    std::atomic<bool> ready{false};
+};
+std::shared_ptr<Q1930CollisionSnapshotTaskQ19> gQ1930CollisionTaskQ19;
 uint64_t gQ1900ContextSerialQ19 = 0u;
 uint64_t gQ1900TickQ19 = 0u;
 bool gQ1900ContextReadyQ19 = false;
@@ -498,7 +510,7 @@ void Q1900ConsumeWorkerQ19() {
 }
 
 void Q1900LaunchWorkerQ19(int32_t actualGridX, int32_t actualGridY) {
-    if (gQ1900WorkerQ19) return;
+    if (gQ1900WorkerQ19 || gQ1930CollisionTaskQ19) return;
 
     Q1900CellStateQ19* best = nullptr;
     int bestPriority = 1000000;
@@ -733,35 +745,87 @@ bool Q1900CollectCollisionWindowQ19(
     return true;
 }
 
+void Q1930RunCollisionSnapshotTaskQ19(
+        const std::shared_ptr<Q1930CollisionSnapshotTaskQ19>& task) {
+    const auto started = std::chrono::steady_clock::now();
+    task->success = PrepareFo3CollisionSnapshotQ1930(
+        task->placements,
+        gQ1900OriginXQ19,
+        gQ1900OriginYQ19,
+        gQ1900OriginZQ19,
+        SCENE_FORWARD, FLOOR_Y, FO3_UNITS_PER_METRE,
+        &task->snapshotToken);
+    task->prepareUs = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - started).count());
+    task->ready.store(true, std::memory_order_release);
+}
+
 void Q1900TryPublishCollisionQ19(int32_t actualGridX, int32_t actualGridY) {
-    if (gQ1900WorkerQ19) return;
     if (gQ1900CollisionCentreValidQ19 &&
         gQ1900CollisionCentreXQ19 == actualGridX &&
-        gQ1900CollisionCentreYQ19 == actualGridY) return;
+        gQ1900CollisionCentreYQ19 == actualGridY) {
+        return;
+    }
+
+    if (gQ1930CollisionTaskQ19) {
+        if (!gQ1930CollisionTaskQ19->ready.load(std::memory_order_acquire))
+            return;
+
+        const auto task = gQ1930CollisionTaskQ19;
+        gQ1930CollisionTaskQ19.reset();
+
+        const bool stale =
+            task->contextSerial != gQ1900ContextSerialQ19 ||
+            task->centreX != actualGridX ||
+            task->centreY != actualGridY;
+        if (stale) {
+            DiscardFo3CollisionSnapshotQ1930(task->snapshotToken);
+            Q6H_LOGW("Q19.3 COLLISION SNAPSHOT STALE: preparedCentre=(%d,%d) actual=(%d,%d) prepareUs=%llu action=discard oldCollisionRetained=1",
+                     task->centreX, task->centreY,
+                     actualGridX, actualGridY,
+                     static_cast<unsigned long long>(task->prepareUs));
+        } else if (task->success && task->snapshotToken != 0u) {
+            uint64_t swapUs = 0u;
+            const bool ready = PublishFo3CollisionSnapshotQ1930(
+                task->snapshotToken, &swapUs);
+            if (ready) {
+                gQ1900CollisionCentreValidQ19 = true;
+                gQ1900CollisionCentreXQ19 = actualGridX;
+                gQ1900CollisionCentreYQ19 = actualGridY;
+            }
+            Q6H_LOGI("Q19.3 COLLISION PUBLISH: centre=(%d,%d) placements=%zu ready=%d prepareUs=%llu swapUs=%llu source=prepared-snapshot derivedReadyAtPublish=1 oldCollisionLiveDuringPrepare=1",
+                     actualGridX, actualGridY, task->placements.size(),
+                     ready ? 1 : 0,
+                     static_cast<unsigned long long>(task->prepareUs),
+                     static_cast<unsigned long long>(swapUs));
+            return;
+        } else {
+            Q6H_LOGE("Q19.3 COLLISION SNAPSHOT FAILED: centre=(%d,%d) placements=%zu prepareUs=%llu oldCollisionRetained=1",
+                     task->centreX, task->centreY,
+                     task->placements.size(),
+                     static_cast<unsigned long long>(task->prepareUs));
+        }
+    }
+
+    // Keep one serialized background asset job at a time. The transformed REFR
+    // cache is shared with CELL prewarming and was designed for single-writer use.
+    if (gQ1900WorkerQ19 || gQ1930CollisionTaskQ19) return;
 
     std::vector<Fo3WorldPlacement> placements;
     if (!Q1900CollectCollisionWindowQ19(
             actualGridX, actualGridY, placements)) return;
 
-    const auto started = std::chrono::steady_clock::now();
-    SetNextFo3CollisionExteriorModeQ1931(true);
-    const bool ready = InitializeFo3CollisionOverlay(
-        placements,
-        gExteriorOriginXQ1890,
-        gExteriorOriginYQ1890,
-        gExteriorOriginZQ1890,
-        SCENE_FORWARD, FLOOR_Y, FO3_UNITS_PER_METRE);
-    const uint64_t publishUs = static_cast<uint64_t>(
-        std::chrono::duration_cast<std::chrono::microseconds>(
-            std::chrono::steady_clock::now() - started).count());
-    if (ready) {
-        gQ1900CollisionCentreValidQ19 = true;
-        gQ1900CollisionCentreXQ19 = actualGridX;
-        gQ1900CollisionCentreYQ19 = actualGridY;
-    }
-    Q6H_LOGI("Q19 COLLISION PUBLISH: centre=(%d,%d) placements=%zu ready=%d publishUs=%llu source=prewarmed-cell-chunks derivedCachesStillLegacy=1",
-             actualGridX, actualGridY, placements.size(), ready ? 1 : 0,
-             static_cast<unsigned long long>(publishUs));
+    auto task = std::make_shared<Q1930CollisionSnapshotTaskQ19>();
+    task->contextSerial = gQ1900ContextSerialQ19;
+    task->centreX = actualGridX;
+    task->centreY = actualGridY;
+    task->placements = std::move(placements);
+    gQ1930CollisionTaskQ19 = task;
+
+    Q6H_LOGI("Q19.3 COLLISION SNAPSHOT START: centre=(%d,%d) placements=%zu oldCollisionRetained=1 thread=serialized-asset-worker",
+             actualGridX, actualGridY, task->placements.size());
+    std::thread([task]() { Q1930RunCollisionSnapshotTaskQ19(task); }).detach();
 }
 
 void Q1900MaintainTerrainQ19(int32_t actualGridX, int32_t actualGridY) {
@@ -915,7 +979,9 @@ void Q1900UpdateCellStreamingQ19(
         }
     }
     gExteriorStreamBusyQ1890 =
-        gQ1900WorkerQ19 != nullptr || pendingVisual;
+        gQ1900WorkerQ19 != nullptr ||
+        gQ1930CollisionTaskQ19 != nullptr ||
+        pendingVisual;
 
     // Logical centre follows the player; residency is now CELL-specific rather
     // than represented by a single 5x5 generation centre.

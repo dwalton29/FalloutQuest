@@ -13,6 +13,8 @@ extern void PumpFo3AndroidEventsQ1860();
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <memory>
+#include <mutex>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -1442,7 +1444,452 @@ bool ResolveFo3PlayerMotionLegacyQ716(float currentX, float currentZ,
     return true;
 }
 
+
 #include "fo3-player-controller-runtime.inc"
+
+// Q19.3 exterior collision snapshot. All expensive derived structures are built
+// from the prewarmed transformed REFR cache on the serialized asset worker.
+// The live controller continues using the previous snapshot until publish.
+struct Q1930PreparedCollisionSnapshot {
+    std::vector<CollisionTriangle> triangles;
+    std::unordered_map<uint64_t, CollisionSurfaceSourceQ722> surfaceSources;
+    size_t placementCount = 0u;
+    size_t collisionShapeCount = 0u;
+    size_t triangleCount = 0u;
+    std::array<size_t, 5> kindCounts{};
+    float floorY = -1.55f;
+
+    std::vector<std::array<int32_t, 3>> weldNeighbours;
+    std::vector<HkCoherentShapeQ900> shapes;
+    std::unordered_map<uint64_t, size_t> shapeIndex;
+
+    std::vector<Q950CollisionObject> q950Objects;
+    std::vector<uint32_t> q950TriangleObject;
+    std::unordered_map<uint64_t, Q950GridCell> q950Grid;
+    std::vector<uint32_t> q950LargeObjects;
+    std::vector<uint32_t> q950LargeLegacy;
+    std::vector<uint32_t> q950ObjectStamp;
+    std::vector<uint32_t> q950TriangleStamp;
+
+    size_t shapedTriangles = 0u;
+    size_t walkableTriangles = 0u;
+    size_t authoredWeldTriangles = 0u;
+    size_t sharedEdges = 0u;
+    size_t q950ShapedTriangles = 0u;
+    size_t q950LegacyTriangles = 0u;
+
+    uint64_t assemblyUs = 0u;
+    uint64_t shapesUs = 0u;
+    uint64_t weldUs = 0u;
+    uint64_t broadphaseUs = 0u;
+    uint64_t totalUs = 0u;
+};
+
+std::mutex gQ1930SnapshotMutex;
+std::unordered_map<uint64_t, std::shared_ptr<Q1930PreparedCollisionSnapshot>>
+    gQ1930PreparedSnapshots;
+uint64_t gQ1930SnapshotSerial = 0u;
+
+float Q1930WalkableThreshold(const CollisionTriangle& tri) {
+    return tri.stairsQ714
+        ? std::min(EXTERIOR_WALKABLE_NORMAL_Y_Q713,
+                   EXTERIOR_STAIRS_NORMAL_Y_Q714)
+        : EXTERIOR_WALKABLE_NORMAL_Y_Q713;
+}
+
+bool Q1930AssembleCachedExterior(
+        const std::vector<Fo3WorldPlacement>& placements,
+        Q1930PreparedCollisionSnapshot& snapshot) {
+    std::unordered_set<uint32_t> seenRefs;
+    snapshot.triangles.reserve(140000u);
+
+    for (const Fo3WorldPlacement& placement : placements) {
+        if (placement.refFormId == 0u ||
+            !seenRefs.insert(placement.refFormId).second) continue;
+        if (snapshot.placementCount >= MAX_EXTERIOR_COLLISION_PLACEMENTS_Q78A)
+            break;
+
+        const auto cached =
+            gQ1990CollisionPlacementCache.find(placement.refFormId);
+        if (cached == gQ1990CollisionPlacementCache.end()) {
+            if (gQ1820NegativeCollisionPlacementCache.find(placement.refFormId) !=
+                gQ1820NegativeCollisionPlacementCache.end()) {
+                continue;
+            }
+            Q6G_LOGW("Q19.3 COLLISION SNAPSHOT MISS: ref=%08X model=%s reason=not-prewarmed",
+                     placement.refFormId, placement.modelPath.c_str());
+            return false;
+        }
+
+        Q1990CachedCollisionPlacement& entry = cached->second;
+        if (snapshot.triangles.size() + entry.triangles.size() >
+            MAX_EXTERIOR_COLLISION_TRIANGLES_Q78A) {
+            break;
+        }
+
+        snapshot.triangles.insert(snapshot.triangles.end(),
+                                  entry.triangles.begin(),
+                                  entry.triangles.end());
+        for (uint64_t surfaceKey : entry.surfaceKeys) {
+            snapshot.surfaceSources.emplace(
+                surfaceKey,
+                CollisionSurfaceSourceQ722{
+                    placement.refFormId,
+                    placement.editorId,
+                    placement.modelPath});
+        }
+        ++snapshot.placementCount;
+        snapshot.collisionShapeCount += entry.shapeCount;
+        snapshot.triangleCount += entry.triangles.size();
+        for (size_t i = 0u; i < snapshot.kindCounts.size(); ++i)
+            snapshot.kindCounts[i] += entry.kindCounts[i];
+        entry.lastUse = ++gQ1990CollisionCacheSerial;
+    }
+    return !snapshot.triangles.empty();
+}
+
+void Q1930BuildShapes(Q1930PreparedCollisionSnapshot& snapshot) {
+    snapshot.shapes.clear();
+    snapshot.shapeIndex.clear();
+    snapshot.shapeIndex.reserve(snapshot.triangles.size() / 8u + 32u);
+
+    for (size_t triIndex = 0u; triIndex < snapshot.triangles.size(); ++triIndex) {
+        const CollisionTriangle& tri = snapshot.triangles[triIndex];
+        if (tri.meshKeyQ801 == 0u) continue;
+        ++snapshot.shapedTriangles;
+
+        size_t shapeIndex = 0u;
+        const auto found = snapshot.shapeIndex.find(tri.meshKeyQ801);
+        if (found == snapshot.shapeIndex.end()) {
+            shapeIndex = snapshot.shapes.size();
+            HkCoherentShapeQ900 shape;
+            shape.key = tri.meshKeyQ801;
+            shape.minX = tri.minX; shape.maxX = tri.maxX;
+            shape.minY = tri.minY; shape.maxY = tri.maxY;
+            shape.minZ = tri.minZ; shape.maxZ = tri.maxZ;
+            snapshot.shapes.push_back(std::move(shape));
+            snapshot.shapeIndex.emplace(tri.meshKeyQ801, shapeIndex);
+        } else {
+            shapeIndex = found->second;
+        }
+
+        HkCoherentShapeQ900& shape = snapshot.shapes[shapeIndex];
+        shape.triangles.push_back(triIndex);
+        shape.minX = std::min(shape.minX, tri.minX);
+        shape.maxX = std::max(shape.maxX, tri.maxX);
+        shape.minY = std::min(shape.minY, tri.minY);
+        shape.maxY = std::max(shape.maxY, tri.maxY);
+        shape.minZ = std::min(shape.minZ, tri.minZ);
+        shape.maxZ = std::max(shape.maxZ, tri.maxZ);
+        if (std::fabs(tri.normal.y) >= Q1930WalkableThreshold(tri)) {
+            ++shape.walkableTriangles;
+            ++snapshot.walkableTriangles;
+        }
+    }
+}
+
+void Q1930BuildWeldAdjacency(Q1930PreparedCollisionSnapshot& snapshot) {
+    snapshot.weldNeighbours.assign(
+        snapshot.triangles.size(), std::array<int32_t,3>{-1,-1,-1});
+    struct EdgeOwner { size_t tri = 0u; int edge = 0; };
+    std::unordered_map<HkWeldEdgeKeyQ801, EdgeOwner, HkWeldEdgeHashQ801> first;
+    first.reserve(snapshot.triangles.size() * 2u);
+
+    for (size_t triIndex = 0u; triIndex < snapshot.triangles.size(); ++triIndex) {
+        const CollisionTriangle& tri = snapshot.triangles[triIndex];
+        if (tri.weldingInfoQ801 != 0u) ++snapshot.authoredWeldTriangles;
+        if (tri.meshKeyQ801 == 0u ||
+            tri.vertexAQ801 == 0xffffffffu ||
+            tri.vertexBQ801 == 0xffffffffu ||
+            tri.vertexCQ801 == 0xffffffffu) continue;
+
+        const std::array<std::pair<uint32_t,uint32_t>,3> edges{{
+            {tri.vertexAQ801, tri.vertexBQ801},
+            {tri.vertexBQ801, tri.vertexCQ801},
+            {tri.vertexCQ801, tri.vertexAQ801}
+        }};
+        for (int edge = 0; edge < 3; ++edge) {
+            uint32_t a = edges[edge].first;
+            uint32_t b = edges[edge].second;
+            if (a > b) std::swap(a, b);
+            const HkWeldEdgeKeyQ801 key{tri.meshKeyQ801, a, b};
+            const auto found = first.find(key);
+            if (found == first.end()) {
+                first.emplace(key, EdgeOwner{triIndex, edge});
+            } else {
+                const EdgeOwner owner = found->second;
+                if (snapshot.weldNeighbours[owner.tri][owner.edge] < 0 &&
+                    snapshot.weldNeighbours[triIndex][edge] < 0) {
+                    snapshot.weldNeighbours[owner.tri][owner.edge] =
+                        static_cast<int32_t>(triIndex);
+                    snapshot.weldNeighbours[triIndex][edge] =
+                        static_cast<int32_t>(owner.tri);
+                    ++snapshot.sharedEdges;
+                }
+            }
+        }
+    }
+}
+
+void Q1930BuildBroadphase(Q1930PreparedCollisionSnapshot& snapshot) {
+    snapshot.q950Objects.clear();
+    snapshot.q950TriangleObject.assign(
+        snapshot.triangles.size(), 0xffffffffu);
+    snapshot.q950Grid.clear();
+    snapshot.q950LargeObjects.clear();
+    snapshot.q950LargeLegacy.clear();
+
+    std::unordered_map<uint64_t,uint32_t> objectByKey;
+    objectByKey.reserve(snapshot.shapes.size() + 32u);
+
+    for (const HkCoherentShapeQ900& shape : snapshot.shapes) {
+        if (shape.triangles.empty()) continue;
+        uint32_t refFormId = 0u;
+        for (size_t triIndex : shape.triangles) {
+            if (triIndex >= snapshot.triangles.size()) continue;
+            const auto src = snapshot.surfaceSources.find(
+                snapshot.triangles[triIndex].surfaceKeyQ714);
+            if (src != snapshot.surfaceSources.end() &&
+                src->second.refFormId != 0u) {
+                refFormId = src->second.refFormId;
+                break;
+            }
+        }
+        const uint64_t objectKey = refFormId != 0u
+            ? (0x8000000000000000ULL | static_cast<uint64_t>(refFormId))
+            : shape.key;
+
+        uint32_t objectIndex = 0u;
+        const auto found = objectByKey.find(objectKey);
+        if (found == objectByKey.end()) {
+            objectIndex = static_cast<uint32_t>(snapshot.q950Objects.size());
+            Q950CollisionObject object;
+            object.key = objectKey;
+            object.refFormId = refFormId;
+            object.minX = shape.minX; object.maxX = shape.maxX;
+            object.minY = shape.minY; object.maxY = shape.maxY;
+            object.minZ = shape.minZ; object.maxZ = shape.maxZ;
+            snapshot.q950Objects.push_back(std::move(object));
+            objectByKey.emplace(objectKey, objectIndex);
+        } else {
+            objectIndex = found->second;
+        }
+
+        Q950CollisionObject& object = snapshot.q950Objects[objectIndex];
+        object.shapeKeys.push_back(shape.key);
+        object.minX = std::min(object.minX, shape.minX);
+        object.maxX = std::max(object.maxX, shape.maxX);
+        object.minY = std::min(object.minY, shape.minY);
+        object.maxY = std::max(object.maxY, shape.maxY);
+        object.minZ = std::min(object.minZ, shape.minZ);
+        object.maxZ = std::max(object.maxZ, shape.maxZ);
+        object.walkableTriangles += shape.walkableTriangles;
+        for (size_t triIndex : shape.triangles) {
+            if (triIndex >= snapshot.triangles.size()) continue;
+            object.triangles.push_back(triIndex);
+            snapshot.q950TriangleObject[triIndex] = objectIndex;
+            ++snapshot.q950ShapedTriangles;
+        }
+    }
+
+    auto insertObject = [&](uint32_t objectIndex) {
+        const Q950CollisionObject& object = snapshot.q950Objects[objectIndex];
+        const int minCx = Q950CellCoord(object.minX);
+        const int maxCx = Q950CellCoord(object.maxX);
+        const int minCz = Q950CellCoord(object.minZ);
+        const int maxCz = Q950CellCoord(object.maxZ);
+        const int64_t spanX = static_cast<int64_t>(maxCx) - minCx + 1;
+        const int64_t spanZ = static_cast<int64_t>(maxCz) - minCz + 1;
+        if (spanX <= 0 || spanZ <= 0 ||
+            static_cast<uint64_t>(spanX * spanZ) >
+                Q950_MAX_GRID_CELLS_PER_ITEM) {
+            snapshot.q950LargeObjects.push_back(objectIndex);
+            return;
+        }
+        for (int cx = minCx; cx <= maxCx; ++cx)
+            for (int cz = minCz; cz <= maxCz; ++cz)
+                snapshot.q950Grid[Q950CellKey(cx,cz)].objects.push_back(
+                    objectIndex);
+    };
+    for (uint32_t i = 0u; i < snapshot.q950Objects.size(); ++i)
+        insertObject(i);
+
+    for (uint32_t triIndex = 0u;
+         triIndex < snapshot.triangles.size(); ++triIndex) {
+        if (snapshot.q950TriangleObject[triIndex] != 0xffffffffu) continue;
+        ++snapshot.q950LegacyTriangles;
+        const CollisionTriangle& tri = snapshot.triangles[triIndex];
+        const int minCx = Q950CellCoord(tri.minX);
+        const int maxCx = Q950CellCoord(tri.maxX);
+        const int minCz = Q950CellCoord(tri.minZ);
+        const int maxCz = Q950CellCoord(tri.maxZ);
+        const int64_t spanX = static_cast<int64_t>(maxCx) - minCx + 1;
+        const int64_t spanZ = static_cast<int64_t>(maxCz) - minCz + 1;
+        if (spanX <= 0 || spanZ <= 0 ||
+            static_cast<uint64_t>(spanX * spanZ) >
+                Q950_MAX_GRID_CELLS_PER_ITEM) {
+            snapshot.q950LargeLegacy.push_back(triIndex);
+            continue;
+        }
+        for (int cx = minCx; cx <= maxCx; ++cx)
+            for (int cz = minCz; cz <= maxCz; ++cz)
+                snapshot.q950Grid[Q950CellKey(cx,cz)]
+                    .legacyTriangles.push_back(triIndex);
+    }
+
+    snapshot.q950ObjectStamp.assign(snapshot.q950Objects.size(), 0u);
+    snapshot.q950TriangleStamp.assign(snapshot.triangles.size(), 0u);
+}
+
+bool PrepareFo3CollisionSnapshotQ1930(
+        const std::vector<Fo3WorldPlacement>& placements,
+        float centerX, float centerY, float floorZ,
+        float sceneForward, float floorY, float unitsPerMetre,
+        uint64_t* outToken) {
+    if (outToken) *outToken = 0u;
+    if (!outToken || placements.empty() || unitsPerMetre <= 0.0f) return false;
+
+    // Priming and snapshot construction are serialized by Q19.3's scheduler.
+    // Guard against a context mismatch rather than rebuilding transformed data.
+    const bool sameContext = gQ1990CollisionCacheContextValid &&
+        std::fabs(gQ1990CollisionCacheCenterX - centerX) < 0.01f &&
+        std::fabs(gQ1990CollisionCacheCenterY - centerY) < 0.01f &&
+        std::fabs(gQ1990CollisionCacheFloorZ - floorZ) < 0.01f &&
+        std::fabs(gQ1990CollisionCacheSceneForward - sceneForward) < 0.0001f &&
+        std::fabs(gQ1990CollisionCacheFloorY - floorY) < 0.0001f &&
+        std::fabs(gQ1990CollisionCacheUnitsPerMetre - unitsPerMetre) < 0.0001f;
+    if (!sameContext) {
+        Q6G_LOGW("Q19.3 COLLISION SNAPSHOT FAILED: reason=cache-context-mismatch");
+        return false;
+    }
+
+    const auto totalStarted = std::chrono::steady_clock::now();
+    auto snapshot = std::make_shared<Q1930PreparedCollisionSnapshot>();
+    snapshot->floorY = floorY;
+
+    auto phaseStarted = std::chrono::steady_clock::now();
+    if (!Q1930AssembleCachedExterior(placements, *snapshot)) return false;
+    snapshot->assemblyUs = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - phaseStarted).count());
+
+    phaseStarted = std::chrono::steady_clock::now();
+    Q1930BuildShapes(*snapshot);
+    snapshot->shapesUs = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - phaseStarted).count());
+
+    phaseStarted = std::chrono::steady_clock::now();
+    Q1930BuildWeldAdjacency(*snapshot);
+    snapshot->weldUs = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - phaseStarted).count());
+
+    phaseStarted = std::chrono::steady_clock::now();
+    Q1930BuildBroadphase(*snapshot);
+    snapshot->broadphaseUs = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - phaseStarted).count());
+
+    snapshot->totalUs = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - totalStarted).count());
+
+    uint64_t token = 0u;
+    {
+        std::lock_guard<std::mutex> lock(gQ1930SnapshotMutex);
+        token = ++gQ1930SnapshotSerial;
+        gQ1930PreparedSnapshots[token] = snapshot;
+    }
+    *outToken = token;
+
+    Q6G_LOGI("Q19.3 COLLISION SNAPSHOT PREPARED: token=%llu placements=%zu triangles=%zu shapes=%zu weldEdges=%zu objects=%zu gridCells=%zu assemblyUs=%llu shapesUs=%llu weldUs=%llu broadphaseUs=%llu totalUs=%llu thread=serialized-asset-worker",
+             static_cast<unsigned long long>(token),
+             snapshot->placementCount, snapshot->triangles.size(),
+             snapshot->shapes.size(), snapshot->sharedEdges,
+             snapshot->q950Objects.size(), snapshot->q950Grid.size(),
+             static_cast<unsigned long long>(snapshot->assemblyUs),
+             static_cast<unsigned long long>(snapshot->shapesUs),
+             static_cast<unsigned long long>(snapshot->weldUs),
+             static_cast<unsigned long long>(snapshot->broadphaseUs),
+             static_cast<unsigned long long>(snapshot->totalUs));
+    return true;
+}
+
+bool PublishFo3CollisionSnapshotQ1930(uint64_t token, uint64_t* outSwapUs) {
+    if (outSwapUs) *outSwapUs = 0u;
+    std::shared_ptr<Q1930PreparedCollisionSnapshot> snapshot;
+    {
+        std::lock_guard<std::mutex> lock(gQ1930SnapshotMutex);
+        const auto found = gQ1930PreparedSnapshots.find(token);
+        if (found == gQ1930PreparedSnapshots.end()) return false;
+        snapshot = std::move(found->second);
+        gQ1930PreparedSnapshots.erase(found);
+    }
+    if (!snapshot || snapshot->triangles.empty()) return false;
+
+    const auto started = std::chrono::steady_clock::now();
+
+    // Debug collision GL is disabled in normal Quest builds. If enabled later,
+    // rebuild its visual overlay separately; locomotion data below is complete.
+    gWorldTriangles = std::move(snapshot->triangles);
+    gSurfaceSourcesQ722 = std::move(snapshot->surfaceSources);
+    gPlacementCount = snapshot->placementCount;
+    gCollisionShapeCount = snapshot->collisionShapeCount;
+    gTriangleCount = snapshot->triangleCount;
+    gKindCounts = snapshot->kindCounts;
+    gCollisionFloorY = snapshot->floorY;
+    gExteriorAllBhksQ78A = true;
+    gPlayerCollisionReady = true;
+
+    gHkWeldNeighboursQ801 = std::move(snapshot->weldNeighbours);
+    gHkWeldAdjacencyReadyQ801 = true;
+    gHkWeldTriangleCountQ801 = gWorldTriangles.size();
+    gHkWeldTriangleDataQ801 =
+        gWorldTriangles.empty() ? nullptr : gWorldTriangles.data();
+
+    gHkShapesQ900 = std::move(snapshot->shapes);
+    gHkShapeIndexQ900 = std::move(snapshot->shapeIndex);
+    gHkShapesReadyQ900 = true;
+    gHkShapeTriangleCountQ900 = gWorldTriangles.size();
+    gHkShapeTriangleDataQ900 =
+        gWorldTriangles.empty() ? nullptr : gWorldTriangles.data();
+
+    gQ950Objects = std::move(snapshot->q950Objects);
+    gQ950TriangleObject = std::move(snapshot->q950TriangleObject);
+    gQ950Grid = std::move(snapshot->q950Grid);
+    gQ950LargeObjects = std::move(snapshot->q950LargeObjects);
+    gQ950LargeLegacy = std::move(snapshot->q950LargeLegacy);
+    gQ950ObjectStamp = std::move(snapshot->q950ObjectStamp);
+    gQ950TriangleStamp = std::move(snapshot->q950TriangleStamp);
+    gQ950QuerySerial = 1u;
+    gQ950Data = gWorldTriangles.empty() ? nullptr : gWorldTriangles.data();
+    gQ950TriangleCount = gWorldTriangles.size();
+    gQ950Ready = true;
+
+    // A rolling exterior snapshot is not a teleport. Preserve the player's
+    // already-resolved standing state, but discard contact manifold indices that
+    // referred to the previous triangle vector.
+    gHkManifoldValidQ800 = false;
+
+    const uint64_t swapUs = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - started).count());
+    if (outSwapUs) *outSwapUs = swapUs;
+
+    Q6G_LOGI("Q19.3 COLLISION SNAPSHOT PUBLISHED: token=%llu triangles=%zu shapes=%zu objects=%zu gridCells=%zu swapUs=%llu derivedReadyAtPublish=1 lazyRebuild=0",
+             static_cast<unsigned long long>(token),
+             gWorldTriangles.size(), gHkShapesQ900.size(),
+             gQ950Objects.size(), gQ950Grid.size(),
+             static_cast<unsigned long long>(swapUs));
+    return true;
+}
+
+void DiscardFo3CollisionSnapshotQ1930(uint64_t token) {
+    if (token == 0u) return;
+    std::lock_guard<std::mutex> lock(gQ1930SnapshotMutex);
+    gQ1930PreparedSnapshots.erase(token);
+}
 
 void InvalidateDerivedCollisionCachesQ17() {
     gHkWeldAdjacencyReadyQ801 = false;

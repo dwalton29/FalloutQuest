@@ -22,6 +22,18 @@ bool PrimeFo3CollisionPlacementCacheQ1820(
     float sceneForward, float floorY, float unitsPerMetre,
     size_t* outTriangles);
 
+// Q19.3: build the complete exterior 3x3 collision snapshot off the gameplay
+// thread from already-prewarmed REFR chunks. The returned token owns triangles,
+// coherent shapes, authored weld adjacency, and Q9.5 broadphase until published.
+bool PrepareFo3CollisionSnapshotQ1930(
+    const std::vector<Fo3WorldPlacement>& placements,
+    float centerX, float centerY, float floorZ,
+    float sceneForward, float floorY, float unitsPerMetre,
+    uint64_t* outToken);
+
+bool PublishFo3CollisionSnapshotQ1930(uint64_t token, uint64_t* outSwapUs);
+void DiscardFo3CollisionSnapshotQ1930(uint64_t token);
+
 // Resolves a standing player capsule against the Q6F-authored Fallout collision
 // world. X/Z are the virtual headset/body centre in metres. playerYOffset is the
 // locomotion-space Y translation; grounding updates it relative to floorY.
