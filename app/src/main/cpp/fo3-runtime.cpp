@@ -3485,6 +3485,10 @@ bool Q1030InitializeRenderProgramOnly() {
         glGetUniformLocation(gProgram, "uExternalEmittanceEnabledQ1380");
     gExternalEmittanceColorLocationQ1380 =
         glGetUniformLocation(gProgram, "uExternalEmittanceColorQ1380");
+    gNativeLodClipEnabledLocationQ1810 =
+        glGetUniformLocation(gProgram, "uNativeLodClipEnabledQ1810");
+    gNativeLodClipBoundsLocationQ1810 =
+        glGetUniformLocation(gProgram, "uNativeLodClipBoundsQ1810");
     gLightMvpLocationQ1050 = glGetUniformLocation(gProgram, "uLightMvp");
     gShadowMapLocationQ1050 = glGetUniformLocation(gProgram, "uShadowMap");
     gShadowTexelLocationQ1050 = glGetUniformLocation(gProgram, "uShadowTexelSize");
