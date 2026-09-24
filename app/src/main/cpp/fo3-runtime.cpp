@@ -3409,12 +3409,58 @@ void Q1970ProbeNativeLod(float gameX, float gameY) {
 
 bool Q1970GetActiveGrid(int32_t& gridX, int32_t& gridY) {
     if (gExteriorWorldspaceQ1890 != 0x0000003Cu) return false;
-    if (gQ1920LatestGridValid) {
-        gridX = gQ1920LatestGridX;
-        gridY = gQ1920LatestGridY;
-    } else {
-        gridX = gExteriorWindowGridXQ1890;
-        gridY = gExteriorWindowGridYQ1890;
+
+    const int32_t residentX = gExteriorWindowGridXQ1890;
+    const int32_t residentY = gExteriorWindowGridYQ1890;
+    if (!gQ1920LatestGridValid) {
+        gridX = residentX;
+        gridY = residentY;
+        return true;
+    }
+
+    // The committed REFR window is radius 2 while detailed drawing is radius 1.
+    // Therefore a safe detailed centre may move at most one CELL away from the
+    // committed resident centre. If locomotion outruns streaming, hold the
+    // detail/LOD handoff at the last fully covered centre until commit catches up.
+    constexpr int Q1850_RESIDENT_RADIUS = 2;
+    constexpr int Q1850_ACTIVE_RADIUS = 1;
+    constexpr int Q1850_SAFE_CENTRE_DELTA =
+        Q1850_RESIDENT_RADIUS - Q1850_ACTIVE_RADIUS;
+    gridX = std::clamp(gQ1920LatestGridX,
+                       residentX - Q1850_SAFE_CENTRE_DELTA,
+                       residentX + Q1850_SAFE_CENTRE_DELTA);
+    gridY = std::clamp(gQ1920LatestGridY,
+                       residentY - Q1850_SAFE_CENTRE_DELTA,
+                       residentY + Q1850_SAFE_CENTRE_DELTA);
+
+    static bool q1850WasClamped = false;
+    static int32_t q1850LastActualX = INT32_MIN;
+    static int32_t q1850LastActualY = INT32_MIN;
+    static int32_t q1850LastResidentX = INT32_MIN;
+    static int32_t q1850LastResidentY = INT32_MIN;
+    static int32_t q1850LastDrawX = INT32_MIN;
+    static int32_t q1850LastDrawY = INT32_MIN;
+    const bool clamped =
+        gridX != gQ1920LatestGridX || gridY != gQ1920LatestGridY;
+    if (clamped != q1850WasClamped ||
+        (clamped &&
+         (gQ1920LatestGridX != q1850LastActualX ||
+          gQ1920LatestGridY != q1850LastActualY ||
+          residentX != q1850LastResidentX ||
+          residentY != q1850LastResidentY ||
+          gridX != q1850LastDrawX ||
+          gridY != q1850LastDrawY))) {
+        Q6H_LOGI("Q18.5 SAFE DETAIL HANDOFF: actual=(%d,%d) resident=(%d,%d) drawCentre=(%d,%d) clamped=%d residentRadius=2 activeRadius=1 lodPreservedUntilResident=1",
+                 gQ1920LatestGridX, gQ1920LatestGridY,
+                 residentX, residentY, gridX, gridY,
+                 clamped ? 1 : 0);
+        q1850WasClamped = clamped;
+        q1850LastActualX = gQ1920LatestGridX;
+        q1850LastActualY = gQ1920LatestGridY;
+        q1850LastResidentX = residentX;
+        q1850LastResidentY = residentY;
+        q1850LastDrawX = gridX;
+        q1850LastDrawY = gridY;
     }
     return true;
 }
@@ -4885,7 +4931,9 @@ bool Q1280EnsurePostProgram() {
 
         float Q1370LinearDepth(float depth01) {
             const float nearZ = 0.04;
-            const float farZ = 100.0;
+            // Q18.5: Fallout.ini fBlockLoadDistance=125000.0 game units.
+            // FalloutQuest exterior scale is 70 game units per metre.
+            const float farZ = 1785.7142857;
             float z = depth01 * 2.0 - 1.0;
             return (2.0 * nearZ * farZ) /
                    max(farZ + nearZ - z * (farZ - nearZ), 0.0001);

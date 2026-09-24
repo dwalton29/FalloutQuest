@@ -1390,13 +1390,18 @@ private:
             }
             glClear(GL_COLOR_BUFFER_BIT);
 
-            constexpr float Q1940_FAR_CLIP_METRES = 300.0f;
+            constexpr float Q1850_FO3_BLOCK_LOAD_DISTANCE_UNITS = 125000.0f;
+            constexpr float Q1850_FAR_CLIP_METRES =
+                Q1850_FO3_BLOCK_LOAD_DISTANCE_UNITS / FO3_UNITS_PER_METRE_Q715;
             const Mat4 projection = ProjectionFromFov(
-                view.fov, 0.04f, Q1940_FAR_CLIP_METRES);
-            static bool q1940FarClipLogged = false;
-            if (!q1940FarClipLogged) {
-                q1940FarClipLogged = true;
-                FQ_LOGI("Q16.27 FAR CLIP: near=0.04m far=300.0m");
+                view.fov, 0.04f, Q1850_FAR_CLIP_METRES);
+            static bool q1850FarClipLogged = false;
+            if (!q1850FarClipLogged) {
+                q1850FarClipLogged = true;
+                FQ_LOGI("Q18.5 FAR CLIP: near=0.04m far=%.3fm source=Fallout.ini/fBlockLoadDistance gameUnits=%.1f unitsPerMetre=%.1f",
+                        Q1850_FAR_CLIP_METRES,
+                        Q1850_FO3_BLOCK_LOAD_DISTANCE_UNITS,
+                        FO3_UNITS_PER_METRE_Q715);
             }
             const XrPosef virtualEyePose = ToVirtualPose(view.pose);
             UpdateFo3VisualEyeQ1010(virtualEyePose.position.x, virtualEyePose.position.y, virtualEyePose.position.z);
