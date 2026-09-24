@@ -199,7 +199,7 @@ string(REPLACE "${Q1990_COLLISION_STORE_OLD}" "${Q1990_COLLISION_STORE_NEW}"
        Q74_COLLISION_SOURCE "${Q74_COLLISION_SOURCE}")
 
 set(Q1990_COLLISION_LOG_OLD [==[
-    Q6G_LOGI("Q7.8A COLLISION COVERAGE:
+    if (gWorldTriangles.empty()) {
 ]==])
 set(Q1990_COLLISION_LOG_NEW [==[
     // Bound the persistent transformed cache. A few thousand refs cover several
@@ -219,11 +219,11 @@ set(Q1990_COLLISION_LOG_NEW [==[
              q1990PlacementCacheHits, q1990PlacementCacheMisses,
              q1990PlacementCacheTriangles, gQ1990CollisionPlacementCache.size());
 
-    Q6G_LOGI("Q7.8A COLLISION COVERAGE:
+    if (gWorldTriangles.empty()) {
 ]==])
 string(FIND "${Q74_COLLISION_SOURCE}" "${Q1990_COLLISION_LOG_OLD}" Q1990_COLLISION_LOG_POS)
 if(Q1990_COLLISION_LOG_POS EQUAL -1)
-    message(FATAL_ERROR "Q16.27 could not find collision coverage log")
+    message(FATAL_ERROR "Q16.27 could not find stable empty-collision guard")
 endif()
 string(REPLACE "${Q1990_COLLISION_LOG_OLD}" "${Q1990_COLLISION_LOG_NEW}"
        Q74_COLLISION_SOURCE "${Q74_COLLISION_SOURCE}")
