@@ -4,10 +4,12 @@
 
 #include <algorithm>
 #include <cmath>
+#include <chrono>
 #include <cstdio>
 #include <cstdint>
 #include <cstring>
 #include <functional>
+#include <mutex>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -419,6 +421,225 @@ bool ResolveBasesQ75(const std::unordered_set<uint32_t>& wanted,
     return true;
 }
 
+
+constexpr uint32_t WASTELAND_WORLDSPACE_Q1800 = 0x0000003Cu;
+
+struct Q1800WorldspaceIndex {
+    std::vector<CellInfoQ75> cells;
+    std::unordered_map<uint64_t, std::vector<uint32_t>> gridCells;
+    std::unordered_map<uint32_t, size_t> cellByFormId;
+    std::unordered_map<uint32_t, std::vector<RawPlacementQ75>> refsByCell;
+    std::unordered_map<uint32_t, size_t> landCountByCell;
+    std::unordered_map<uint32_t, BaseRecordQ75> bases;
+    size_t gridCellCount = 0u;
+    size_t rawRefCount = 0u;
+    size_t landRecordCount = 0u;
+};
+
+Q1800WorldspaceIndex gQ1800WastelandIndex;
+std::once_flag gQ1800WastelandIndexOnce;
+bool gQ1800WastelandIndexReady = false;
+
+uint64_t GridKeyQ1800(int32_t x, int32_t y) {
+    return (static_cast<uint64_t>(static_cast<uint32_t>(x)) << 32u) |
+           static_cast<uint32_t>(y);
+}
+
+uint32_t OwningWorldspaceCellQ1800(const std::vector<GroupFrameQ75>& groups) {
+    for (auto it = groups.rbegin(); it != groups.rend(); ++it) {
+        if (it->type == 6u || it->type == 8u || it->type == 9u || it->type == 10u) {
+            return it->label;
+        }
+    }
+    return 0u;
+}
+
+bool BuildWastelandIndexQ1800(Q1800WorldspaceIndex& out) {
+    const auto started = std::chrono::steady_clock::now();
+    out = Q1800WorldspaceIndex{};
+
+    FILE* file = std::fopen(ESM_PATH_Q75, "rb");
+    if (!file) return false;
+    const int64_t fileSize = FileSizeQ75(file);
+    if (fileSize < static_cast<int64_t>(HEADER_SIZE_Q75)) {
+        std::fclose(file);
+        return false;
+    }
+
+    std::unordered_set<uint32_t> wantedBases;
+    std::vector<GroupFrameQ75> groups;
+
+    while (true) {
+        const off_t rawOffset = ftello(file);
+        if (rawOffset < 0) break;
+        const uint64_t offset = static_cast<uint64_t>(rawOffset);
+        while (!groups.empty() && offset >= groups.back().end) groups.pop_back();
+        if (offset + HEADER_SIZE_Q75 > static_cast<uint64_t>(fileSize)) break;
+
+        uint8_t header[HEADER_SIZE_Q75]{};
+        if (!ReadExactQ75(file, header, sizeof(header))) break;
+        const uint32_t sizeField = ReadLe32Q75(header + 4u);
+        if (std::memcmp(header, "GRUP", 4u) == 0) {
+            if (sizeField < HEADER_SIZE_Q75 ||
+                offset + sizeField > static_cast<uint64_t>(fileSize)) break;
+            groups.push_back(GroupFrameQ75{offset + sizeField,
+                                           ReadLe32Q75(header + 8u),
+                                           ReadLe32Q75(header + 12u)});
+            continue;
+        }
+
+        const uint32_t flags = ReadLe32Q75(header + 8u);
+        const uint32_t formId = ReadLe32Q75(header + 12u);
+        const uint64_t payloadEnd = offset + HEADER_SIZE_Q75 + sizeField;
+        if (payloadEnd > static_cast<uint64_t>(fileSize)) break;
+
+        if (!InWorldspaceQ75(groups, WASTELAND_WORLDSPACE_Q1800)) {
+            if (fseeko(file, static_cast<off_t>(payloadEnd), SEEK_SET) != 0) break;
+            continue;
+        }
+
+        if (std::memcmp(header, "CELL", 4u) == 0) {
+            std::vector<uint8_t> payload;
+            if (!ReadPayloadQ75(file, sizeField, flags, payload)) break;
+
+            CellInfoQ75 cell;
+            cell.formId = formId;
+            WalkSubrecordsQ75(payload.data(), payload.size(),
+                              [&](const char* type, const uint8_t* bytes, uint32_t size) {
+                if (std::memcmp(type, "XCLC", 4u) == 0 && size >= 8u) {
+                    cell.gridX = static_cast<int32_t>(ReadLe32Q75(bytes + 0u));
+                    cell.gridY = static_cast<int32_t>(ReadLe32Q75(bytes + 4u));
+                    cell.forceHideLandQ720 =
+                        size >= 12u ? (ReadLe32Q75(bytes + 8u) & 0x0fu) : 0u;
+                    cell.hasGrid = true;
+                } else if (std::memcmp(type, "EDID", 4u) == 0 && cell.editorId.empty()) {
+                    size_t len = 0u;
+                    while (len < size && bytes[len] != 0u) ++len;
+                    cell.editorId.assign(reinterpret_cast<const char*>(bytes), len);
+                }
+            });
+
+            const size_t cellIndex = out.cells.size();
+            out.cellByFormId[cell.formId] = cellIndex;
+            if (cell.hasGrid) {
+                out.gridCells[GridKeyQ1800(cell.gridX, cell.gridY)].push_back(cell.formId);
+                ++out.gridCellCount;
+            }
+            out.cells.push_back(std::move(cell));
+            continue;
+        }
+
+        const uint32_t ownerCell = OwningWorldspaceCellQ1800(groups);
+        if (ownerCell != 0u && std::memcmp(header, "LAND", 4u) == 0) {
+            ++out.landCountByCell[ownerCell];
+            ++out.landRecordCount;
+            if (fseeko(file, static_cast<off_t>(payloadEnd), SEEK_SET) != 0) break;
+            continue;
+        }
+
+        if (ownerCell != 0u && std::memcmp(header, "REFR", 4u) == 0) {
+            std::vector<uint8_t> payload;
+            if (!ReadPayloadQ75(file, sizeField, flags, payload)) break;
+            RawPlacementQ75 placement;
+            placement.refFormId = formId;
+            placement.owningCellFormId = ownerCell;
+            placement.recordFlags = flags;
+            if (ParsePlacementQ75(payload, placement)) {
+                wantedBases.insert(placement.baseFormId);
+                out.refsByCell[ownerCell].push_back(std::move(placement));
+                ++out.rawRefCount;
+            }
+            continue;
+        }
+
+        if (fseeko(file, static_cast<off_t>(payloadEnd), SEEK_SET) != 0) break;
+    }
+
+    std::fclose(file);
+
+    if (out.cells.empty() || out.rawRefCount == 0u) return false;
+    if (!ResolveBasesQ75(wantedBases, out.bases)) return false;
+
+    const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - started).count();
+    Q75_LOGI("Q18 WASTELAND INDEX READY: cells=%zu gridCells=%zu refs=%zu LAND=%zu bases=%zu buildMs=%lld source=Fallout3.esm",
+             out.cells.size(), out.gridCellCount, out.rawRefCount,
+             out.landRecordCount, out.bases.size(),
+             static_cast<long long>(elapsed));
+    return true;
+}
+
+const Q1800WorldspaceIndex* GetWastelandIndexQ1800() {
+    std::call_once(gQ1800WastelandIndexOnce, []() {
+        gQ1800WastelandIndexReady = BuildWastelandIndexQ1800(gQ1800WastelandIndex);
+        if (!gQ1800WastelandIndexReady) {
+            Q75_LOGE("Q18 WASTELAND INDEX FAILED: source=Fallout3.esm");
+        }
+    });
+    return gQ1800WastelandIndexReady ? &gQ1800WastelandIndex : nullptr;
+}
+
+bool CollectIndexedRefsQ1800(const Q1800WorldspaceIndex& index,
+                             const std::unordered_set<uint32_t>& selectedCells,
+                             std::vector<RawPlacementQ75>& out,
+                             size_t& landRecords) {
+    out.clear();
+    landRecords = 0u;
+
+    size_t reserveRefs = 0u;
+    for (uint32_t cellFormId : selectedCells) {
+        const auto refs = index.refsByCell.find(cellFormId);
+        if (refs != index.refsByCell.end()) reserveRefs += refs->second.size();
+        const auto land = index.landCountByCell.find(cellFormId);
+        if (land != index.landCountByCell.end()) landRecords += land->second;
+    }
+    out.reserve(reserveRefs);
+
+    for (uint32_t cellFormId : selectedCells) {
+        const auto refs = index.refsByCell.find(cellFormId);
+        if (refs == index.refsByCell.end()) continue;
+        out.insert(out.end(), refs->second.begin(), refs->second.end());
+    }
+    return !out.empty();
+}
+
+void SelectIndexedCellsQ1800(const Q1800WorldspaceIndex& index,
+                             uint32_t persistentCellFormId,
+                             int32_t targetGridX, int32_t targetGridY,
+                             int radius, bool loadWholeWorldspace,
+                             std::unordered_set<uint32_t>& selectedCells) {
+    selectedCells.clear();
+    if (persistentCellFormId != 0u) selectedCells.insert(persistentCellFormId);
+
+    if (loadWholeWorldspace) {
+        for (const CellInfoQ75& cell : index.cells) {
+            if (cell.hasGrid) selectedCells.insert(cell.formId);
+        }
+        return;
+    }
+
+    for (int dy = -radius; dy <= radius; ++dy) {
+        for (int dx = -radius; dx <= radius; ++dx) {
+            const auto found =
+                index.gridCells.find(GridKeyQ1800(targetGridX + dx, targetGridY + dy));
+            if (found == index.gridCells.end()) continue;
+            for (uint32_t cellFormId : found->second) selectedCells.insert(cellFormId);
+        }
+    }
+}
+
+void ResolveIndexedBasesQ1800(const Q1800WorldspaceIndex& index,
+                              const std::unordered_set<uint32_t>& wanted,
+                              std::unordered_map<uint32_t, BaseRecordQ75>& out) {
+    out.clear();
+    out.reserve(wanted.size());
+    for (uint32_t formId : wanted) {
+        const auto found = index.bases.find(formId);
+        if (found != index.bases.end()) out.emplace(formId, found->second);
+    }
+}
+
+
 bool EndsInNifQ75(const std::string& path) {
     if (path.size() < 4u) return false;
     std::string tail = path.substr(path.size() - 4u);
@@ -463,48 +684,85 @@ bool LoadFo3WorldspaceNeighborhoodQ75(uint32_t worldspaceFormId,
                                      std::vector<Fo3WorldPlacement>& outPlacements) {
     outPlacements.clear();
 
-    std::vector<CellInfoQ75> cells;
-    if (!DiscoverWorldspaceCellsQ75(worldspaceFormId, cells)) {
-        Q75_LOGE("Q7.5 WORLDSPACE LOAD FAILED: worldspace=%08X reason=discover-cells",
-                 worldspaceFormId);
-        return false;
+    const auto lookupStartedQ1800 = std::chrono::steady_clock::now();
+    const Q1800WorldspaceIndex* q1800Index =
+        worldspaceFormId == WASTELAND_WORLDSPACE_Q1800 ? GetWastelandIndexQ1800() : nullptr;
+
+    std::vector<CellInfoQ75> legacyCellsQ1800;
+    const std::vector<CellInfoQ75>* cellsQ1800 = nullptr;
+    if (q1800Index) {
+        cellsQ1800 = &q1800Index->cells;
+    } else {
+        if (!DiscoverWorldspaceCellsQ75(worldspaceFormId, legacyCellsQ1800)) {
+            Q75_LOGE("Q7.5 WORLDSPACE LOAD FAILED: worldspace=%08X reason=discover-cells",
+                     worldspaceFormId);
+            return false;
+        }
+        cellsQ1800 = &legacyCellsQ1800;
     }
+    const std::vector<CellInfoQ75>& cells = *cellsQ1800;
 
     std::vector<const CellInfoQ75*> gridCells;
-    for (const CellInfoQ75& cell : cells) if (cell.hasGrid) gridCells.push_back(&cell);
+    if (!q1800Index) {
+        for (const CellInfoQ75& cell : cells) if (cell.hasGrid) gridCells.push_back(&cell);
+    }
+    const size_t gridCellCountQ1800 =
+        q1800Index ? q1800Index->gridCellCount : gridCells.size();
     const int32_t targetGridX = static_cast<int32_t>(std::floor(arrivalX / EXTERIOR_CELL_SIZE_Q75));
     const int32_t targetGridY = static_cast<int32_t>(std::floor(arrivalY / EXTERIOR_CELL_SIZE_Q75));
-    const bool loadWholeWorldspace = gridCells.size() <= SMALL_WORLDSPACE_CELL_LIMIT_Q75;
+    const bool loadWholeWorldspace = gridCellCountQ1800 <= SMALL_WORLDSPACE_CELL_LIMIT_Q75;
     const int q1950SelectionRadius = gQ1950WorldspaceGridRadiusOverride >= 0
         ? gQ1950WorldspaceGridRadiusOverride : 2; // Q16.26 initial exterior 5x5 resident
 
     std::unordered_set<uint32_t> selectedCells;
-    if (persistentCellFormId != 0u) selectedCells.insert(persistentCellFormId);
-    for (const CellInfoQ75* cell : gridCells) {
-        if (loadWholeWorldspace ||
-            (std::abs(cell->gridX - targetGridX) <= q1950SelectionRadius &&
-             std::abs(cell->gridY - targetGridY) <= q1950SelectionRadius)) {
-            selectedCells.insert(cell->formId);
+    if (q1800Index) {
+        SelectIndexedCellsQ1800(*q1800Index, persistentCellFormId,
+                                targetGridX, targetGridY, q1950SelectionRadius,
+                                loadWholeWorldspace, selectedCells);
+    } else {
+        if (persistentCellFormId != 0u) selectedCells.insert(persistentCellFormId);
+        for (const CellInfoQ75* cell : gridCells) {
+            if (loadWholeWorldspace ||
+                (std::abs(cell->gridX - targetGridX) <= q1950SelectionRadius &&
+                 std::abs(cell->gridY - targetGridY) <= q1950SelectionRadius)) {
+                selectedCells.insert(cell->formId);
+            }
         }
     }
 
-    Q75_LOGI("Q16.26 VISUAL WINDOW: worldspace=%08X persistent=%08X discovered=%zu gridCells=%zu selected=%zu targetGrid=(%d,%d) mode=%s radius=%d",
-             worldspaceFormId, persistentCellFormId, cells.size(), gridCells.size(), selectedCells.size(),
-             targetGridX, targetGridY,
+    Q75_LOGI("Q16.26 VISUAL WINDOW: worldspace=%08X persistent=%08X discovered=%zu gridCells=%zu selected=%zu targetGrid=(%d,%d) mode=%s radius=%d source=%s",
+             worldspaceFormId, persistentCellFormId, cells.size(), gridCellCountQ1800,
+             selectedCells.size(), targetGridX, targetGridY,
              loadWholeWorldspace ? "full-small-worldspace" : "arrival-neighborhood",
-             q1950SelectionRadius);
-    for (const CellInfoQ75* cell : gridCells) {
-        if (selectedCells.find(cell->formId) == selectedCells.end()) continue;
-        Q75_LOGI("Q7.5 GRID CELL: cell=%08X grid=(%d,%d) EDID=%s selected=1",
-                 cell->formId, cell->gridX, cell->gridY,
-                 cell->editorId.empty() ? "<none>" : cell->editorId.c_str());
+             q1950SelectionRadius, q1800Index ? "Q18-index" : "ESM-scan");
+    if (q1800Index) {
+        for (uint32_t cellFormId : selectedCells) {
+            const auto cellIndex = q1800Index->cellByFormId.find(cellFormId);
+            if (cellIndex == q1800Index->cellByFormId.end()) continue;
+            const CellInfoQ75& cell = q1800Index->cells[cellIndex->second];
+            if (!cell.hasGrid) continue;
+            Q75_LOGI("Q7.5 GRID CELL: cell=%08X grid=(%d,%d) EDID=%s selected=1",
+                     cell.formId, cell.gridX, cell.gridY,
+                     cell.editorId.empty() ? "<none>" : cell.editorId.c_str());
+        }
+    } else {
+        for (const CellInfoQ75* cell : gridCells) {
+            if (selectedCells.find(cell->formId) == selectedCells.end()) continue;
+            Q75_LOGI("Q7.5 GRID CELL: cell=%08X grid=(%d,%d) EDID=%s selected=1",
+                     cell->formId, cell->gridX, cell->gridY,
+                     cell->editorId.empty() ? "<none>" : cell->editorId.c_str());
+        }
     }
 
     std::vector<RawPlacementQ75> raw;
     size_t landRecords = 0u;
-    if (!CollectSelectedRefsQ75(worldspaceFormId, selectedCells, raw, landRecords)) {
-        Q75_LOGE("Q7.5 WORLDSPACE LOAD FAILED: worldspace=%08X reason=collect-refs selectedCells=%zu",
-                 worldspaceFormId, selectedCells.size());
+    const bool refsReadyQ1800 = q1800Index
+        ? CollectIndexedRefsQ1800(*q1800Index, selectedCells, raw, landRecords)
+        : CollectSelectedRefsQ75(worldspaceFormId, selectedCells, raw, landRecords);
+    if (!refsReadyQ1800) {
+        Q75_LOGE("Q7.5 WORLDSPACE LOAD FAILED: worldspace=%08X reason=collect-refs selectedCells=%zu source=%s",
+                 worldspaceFormId, selectedCells.size(),
+                 q1800Index ? "Q18-index" : "ESM-scan");
         return false;
     }
 
@@ -546,7 +804,9 @@ bool LoadFo3WorldspaceNeighborhoodQ75(uint32_t worldspaceFormId,
     std::unordered_set<uint32_t> wanted;
     for (const RawPlacementQ75* p : active) if (p->baseFormId != 0u) wanted.insert(p->baseFormId);
     std::unordered_map<uint32_t, BaseRecordQ75> bases;
-    if (!ResolveBasesQ75(wanted, bases)) {
+    if (q1800Index) {
+        ResolveIndexedBasesQ1800(*q1800Index, wanted, bases);
+    } else if (!ResolveBasesQ75(wanted, bases)) {
         Q75_LOGE("Q7.5 WORLDSPACE LOAD FAILED: worldspace=%08X reason=resolve-bases wanted=%zu",
                  worldspaceFormId, wanted.size());
         return false;
@@ -592,10 +852,13 @@ bool LoadFo3WorldspaceNeighborhoodQ75(uint32_t worldspaceFormId,
     }
 
     Q75_LOGI("Q16.7 EXTERIOR TEST READY: entranceSkipped=%zu persistentKept=%zu radius=%d", q1770MegatonEntranceSkipped, q1770PersistentAfter, GRID_RADIUS_Q75);
-    Q75_LOGI("Q7.5 WORLDSPACE READY: worldspace=%08X persistent=%08X selectedCells=%zu LAND=%zu rawRefs=%zu activeRefs=%zu disabledInitial=%zu bases=%zu modelPlacements=%zu uniqueModels=%zu XTEL=(%.2f %.2f)",
+    const auto lookupElapsedQ1800 = std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::steady_clock::now() - lookupStartedQ1800).count();
+    Q75_LOGI("Q7.5 WORLDSPACE READY: worldspace=%08X persistent=%08X selectedCells=%zu LAND=%zu rawRefs=%zu activeRefs=%zu disabledInitial=%zu bases=%zu modelPlacements=%zu uniqueModels=%zu XTEL=(%.2f %.2f) source=%s lookupUs=%lld",
              worldspaceFormId, persistentCellFormId, selectedCells.size(), landRecords,
              raw.size(), active.size(), disabled, bases.size(), outPlacements.size(), uniqueModels.size(),
-             arrivalX, arrivalY);
+             arrivalX, arrivalY, q1800Index ? "Q18-index" : "ESM-scan",
+             static_cast<long long>(lookupElapsedQ1800));
     for (const auto& entry : baseTypes) {
         Q75_LOGI("Q7.5 BASE TYPE: type=%s placements=%zu", entry.first.c_str(), entry.second);
     }
