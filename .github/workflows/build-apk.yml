@@ -70,6 +70,28 @@ jobs:
           path: consolidation-generated
           if-no-files-found: warn
 
+      - name: Validate Q17 consolidated runtime
+        id: q17validate
+        if: always()
+        shell: bash
+        run: |
+          set -o pipefail
+          python3 tools/q17-consolidate.py
+          rm -rf app/.cxx app/build
+          gradle assembleDebug --stacktrace 2>&1 | tee q17-consolidation-build.log
+
+      - name: Upload validated Q17 source
+        if: always() && steps.q17validate.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: FalloutQuest-q17-source
+          path: |
+            app/src/main/cpp
+            README.md
+            docs/ARCHITECTURE.md
+            q17-consolidation-build.log
+          if-no-files-found: error
+
       - name: Upload build diagnostics
         if: always()
         uses: actions/upload-artifact@v4
