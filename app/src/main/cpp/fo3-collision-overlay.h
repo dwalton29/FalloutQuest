@@ -12,6 +12,16 @@ bool InitializeFo3CollisionOverlay(const std::vector<Fo3WorldPlacement>& placeme
                                    float sceneForward, float floorY,
                                    float unitsPerMetre);
 
+// Q18.2: prepare one exterior REFR's transformed authored bhk chunk without
+// replacing the currently active collision world. The streaming runtime calls
+// this under a small per-frame budget, then performs a cheap cached 3x3 publish.
+bool IsFo3CollisionPlacementCachedQ1820(uint32_t refFormId);
+bool PrimeFo3CollisionPlacementCacheQ1820(
+    const Fo3WorldPlacement& placement,
+    float centerX, float centerY, float floorZ,
+    float sceneForward, float floorY, float unitsPerMetre,
+    size_t* outTriangles);
+
 // Resolves a standing player capsule against the Q6F-authored Fallout collision
 // world. X/Z are the virtual headset/body centre in metres. playerYOffset is the
 // locomotion-space Y translation; grounding updates it relative to floorY.

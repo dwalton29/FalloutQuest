@@ -122,11 +122,24 @@ std::unordered_map<uint64_t, CollisionSurfaceSourceQ722> gSurfaceSourcesQ722;
 // only the entering strip. The cache is scoped to one immutable exterior origin.
 struct Q1990CachedCollisionPlacement {
     std::vector<CollisionTriangle> triangles;
+    // One source record per authored Havok surface, not one per triangle.
+    // Q18.2 uses this to rebuild the active source map without hashing every
+    // triangle in the retained 3x3 on each CELL crossing.
+    std::vector<uint64_t> surfaceKeys;
     size_t shapeCount = 0u;
     std::array<size_t, 5> kindCounts{};
     uint64_t lastUse = 0u;
 };
 std::unordered_map<uint32_t, Q1990CachedCollisionPlacement> gQ1990CollisionPlacementCache;
+std::unordered_set<uint32_t> gQ1820NegativeCollisionPlacementCache;
+
+// Immutable NIF collision assets are process-lifetime. Q18.2 needs the same
+// caches both for active-world assembly and for budgeted prewarming.
+std::unordered_map<std::string, std::vector<Fo3NifCollisionShapeQ6F>>
+    gQ1820CollisionModelCache;
+std::unordered_map<std::string, Fo3PackedMetadataMapQ714>
+    gQ1820CollisionMetadataCache;
+std::unordered_set<std::string> gQ1820NoCollisionModels;
 uint64_t gQ1990CollisionCacheSerial = 0u;
 bool gQ1990CollisionCacheContextValid = false;
 float gQ1990CollisionCacheCenterX = 0.0f;
@@ -704,6 +717,166 @@ void SetNextFo3CollisionExteriorModeQ1931(bool exterior) {
     gNextCollisionExteriorOverrideQ1931 = exterior ? 1 : 0;
 }
 
+bool IsFo3CollisionPlacementCachedQ1820(uint32_t refFormId) {
+    if (refFormId == 0u) return true;
+    return gQ1990CollisionPlacementCache.find(refFormId) !=
+               gQ1990CollisionPlacementCache.end() ||
+           gQ1820NegativeCollisionPlacementCache.find(refFormId) !=
+               gQ1820NegativeCollisionPlacementCache.end();
+}
+
+bool PrimeFo3CollisionPlacementCacheQ1820(
+        const Fo3WorldPlacement& placement,
+        float centerX, float centerY, float floorZ,
+        float sceneForward, float floorY, float unitsPerMetre,
+        size_t* outTriangles) {
+    if (outTriangles) *outTriangles = 0u;
+    if (placement.refFormId == 0u || unitsPerMetre <= 0.0f) return true;
+
+    const bool sameContext = gQ1990CollisionCacheContextValid &&
+        std::fabs(gQ1990CollisionCacheCenterX - centerX) < 0.01f &&
+        std::fabs(gQ1990CollisionCacheCenterY - centerY) < 0.01f &&
+        std::fabs(gQ1990CollisionCacheFloorZ - floorZ) < 0.01f &&
+        std::fabs(gQ1990CollisionCacheSceneForward - sceneForward) < 0.0001f &&
+        std::fabs(gQ1990CollisionCacheFloorY - floorY) < 0.0001f &&
+        std::fabs(gQ1990CollisionCacheUnitsPerMetre - unitsPerMetre) < 0.0001f;
+    if (!sameContext) {
+        const size_t oldEntries = gQ1990CollisionPlacementCache.size();
+        gQ1990CollisionPlacementCache.clear();
+        gQ1820NegativeCollisionPlacementCache.clear();
+        gQ1990CollisionCacheContextValid = true;
+        gQ1990CollisionCacheCenterX = centerX;
+        gQ1990CollisionCacheCenterY = centerY;
+        gQ1990CollisionCacheFloorZ = floorZ;
+        gQ1990CollisionCacheSceneForward = sceneForward;
+        gQ1990CollisionCacheFloorY = floorY;
+        gQ1990CollisionCacheUnitsPerMetre = unitsPerMetre;
+        Q6F_LOGI("Q18.2 COLLISION PREWARM CONTEXT: oldEntries=%zu origin=(%.2f %.2f %.2f)",
+                 oldEntries, centerX, centerY, floorZ);
+    }
+
+    auto already = gQ1990CollisionPlacementCache.find(placement.refFormId);
+    if (already != gQ1990CollisionPlacementCache.end()) {
+        already->second.lastUse = ++gQ1990CollisionCacheSerial;
+        if (outTriangles) *outTriangles = already->second.triangles.size();
+        return true;
+    }
+    if (gQ1820NegativeCollisionPlacementCache.find(placement.refFormId) !=
+        gQ1820NegativeCollisionPlacementCache.end()) return true;
+
+    if (gQ1820NoCollisionModels.find(placement.modelPath) !=
+        gQ1820NoCollisionModels.end()) {
+        gQ1820NegativeCollisionPlacementCache.insert(placement.refFormId);
+        return true;
+    }
+
+    auto modelIt = gQ1820CollisionModelCache.find(placement.modelPath);
+    if (modelIt == gQ1820CollisionModelCache.end()) {
+        std::vector<Fo3NifCollisionShapeQ6F> shapes;
+        if (!LoadFo3NifCollisionShapesQ6F(placement.modelPath, shapes) ||
+            shapes.empty()) {
+            gQ1820NoCollisionModels.insert(placement.modelPath);
+            gQ1820NegativeCollisionPlacementCache.insert(placement.refFormId);
+            return true;
+        }
+        modelIt = gQ1820CollisionModelCache.emplace(
+            placement.modelPath, std::move(shapes)).first;
+    }
+
+    auto metadataIt = gQ1820CollisionMetadataCache.find(placement.modelPath);
+    if (metadataIt == gQ1820CollisionMetadataCache.end()) {
+        Fo3PackedMetadataMapQ714 metadata;
+        LoadFo3PackedMetadataQ714(placement.modelPath, metadata);
+        metadataIt = gQ1820CollisionMetadataCache.emplace(
+            placement.modelPath, std::move(metadata)).first;
+    }
+    const Fo3PackedMetadataMapQ714& modelMetadata = metadataIt->second;
+
+    Q1990CachedCollisionPlacement entry;
+    std::unordered_set<uint64_t> uniqueSurfaceKeys;
+    for (const Fo3NifCollisionShapeQ6F& shape : modelIt->second) {
+        const size_t vertexCount = shape.positions.size() / 3u;
+        if (vertexCount == 0u || shape.indices.empty()) continue;
+
+        const std::vector<Fo3PackedSubShapeMetadataQ714>* packedMetadata = nullptr;
+        if (shape.dataBlock != 0xffffffffu) {
+            const auto metaIt = modelMetadata.find(shape.dataBlock);
+            if (metaIt != modelMetadata.end()) packedMetadata = &metaIt->second;
+        }
+
+        const size_t beforeShape = entry.triangles.size();
+        for (size_t i = 0; i + 2u < shape.indices.size(); i += 3u) {
+            const uint32_t ia = shape.indices[i];
+            const uint32_t ib = shape.indices[i + 1u];
+            const uint32_t ic = shape.indices[i + 2u];
+            if (ia >= vertexCount || ib >= vertexCount || ic >= vertexCount) continue;
+
+            uint16_t subShapeIndex = 0xffffu;
+            const Fo3PackedSubShapeMetadataQ714* meta = nullptr;
+            if (packedMetadata) {
+                subShapeIndex = FindFo3PackedSubShapeForTriangleQ714(
+                    *packedMetadata, ia, ib, ic);
+                if (subShapeIndex != 0xffffu &&
+                    subShapeIndex < packedMetadata->size()) {
+                    meta = &(*packedMetadata)[subShapeIndex];
+                }
+            }
+            if (meta && !meta->BlocksPlayer()) continue;
+
+            auto point = [&](uint32_t index) {
+                Vec3 p{
+                    shape.positions[index * 3u],
+                    shape.positions[index * 3u + 1u],
+                    shape.positions[index * 3u + 2u],
+                };
+                return ToVr(ApplyPlacement(p, placement),
+                            centerX, centerY, floorZ,
+                            sceneForward, floorY, unitsPerMetre);
+            };
+
+            CollisionTriangle tri;
+            if (!BuildTriangle(point(ia), point(ib), point(ic), tri)) continue;
+            tri.walkableModuleQ723 = IsWalkableModuleQ723(placement);
+            tri.surfaceKeyQ714 = MakeSurfaceKeyQ714(
+                placement.refFormId, shape.sourceShapeBlock, subShapeIndex);
+            tri.meshKeyQ801 = MakeSurfaceKeyQ714(
+                placement.refFormId, shape.sourceShapeBlock, 0xfffeu);
+            tri.vertexAQ801 = ia;
+            tri.vertexBQ801 = ib;
+            tri.vertexCQ801 = ic;
+            const size_t ordinal = i / 3u;
+            if (ordinal < shape.triangleWeldingInfo.size())
+                tri.weldingInfoQ801 = shape.triangleWeldingInfo[ordinal];
+            if (meta) {
+                tri.havokLayerQ714 = meta->layer;
+                tri.havokMaterialQ714 = meta->material;
+                tri.stairsQ714 = meta->IsStairs();
+                tri.platformQ714 = meta->IsPlatform();
+            }
+            if (uniqueSurfaceKeys.insert(tri.surfaceKeyQ714).second)
+                entry.surfaceKeys.push_back(tri.surfaceKeyQ714);
+            entry.triangles.push_back(tri);
+
+            if (entry.triangles.size() > MAX_EXTERIOR_COLLISION_TRIANGLES_Q78A)
+                return false;
+        }
+        if (entry.triangles.size() > beforeShape) {
+            ++entry.shapeCount;
+            ++entry.kindCounts[static_cast<size_t>(shape.kind)];
+        }
+    }
+
+    if (entry.triangles.empty()) {
+        gQ1820NegativeCollisionPlacementCache.insert(placement.refFormId);
+        return true;
+    }
+
+    entry.lastUse = ++gQ1990CollisionCacheSerial;
+    if (outTriangles) *outTriangles = entry.triangles.size();
+    gQ1990CollisionPlacementCache[placement.refFormId] = std::move(entry);
+    return true;
+}
+
 void InvalidateDerivedCollisionCachesQ17();
 
 bool InitializeFo3CollisionOverlay(const std::vector<Fo3WorldPlacement>& placements,
@@ -714,6 +887,8 @@ bool InitializeFo3CollisionOverlay(const std::vector<Fo3WorldPlacement>& placeme
     if (placements.empty() || unitsPerMetre <= 0.0f) return false;
     gCollisionFloorY = floorY;
 
+    // Q18.2 also calls this from the budgeted prewarm path. It is a no-op for
+    // ordinary rolling CELL streams because the exterior render origin is fixed.
     const bool q1990SameCollisionContext = gQ1990CollisionCacheContextValid &&
         std::fabs(gQ1990CollisionCacheCenterX - centerX) < 0.01f &&
         std::fabs(gQ1990CollisionCacheCenterY - centerY) < 0.01f &&
@@ -724,6 +899,7 @@ bool InitializeFo3CollisionOverlay(const std::vector<Fo3WorldPlacement>& placeme
     if (!q1990SameCollisionContext) {
         const size_t q1990OldEntries = gQ1990CollisionPlacementCache.size();
         gQ1990CollisionPlacementCache.clear();
+        gQ1820NegativeCollisionPlacementCache.clear();
         gQ1990CollisionCacheContextValid = true;
         gQ1990CollisionCacheCenterX = centerX;
         gQ1990CollisionCacheCenterY = centerY;
@@ -731,10 +907,9 @@ bool InitializeFo3CollisionOverlay(const std::vector<Fo3WorldPlacement>& placeme
         gQ1990CollisionCacheSceneForward = sceneForward;
         gQ1990CollisionCacheFloorY = floorY;
         gQ1990CollisionCacheUnitsPerMetre = unitsPerMetre;
-        Q6F_LOGI("Q16.27 COLLISION CACHE RESET: oldEntries=%zu origin=(%.2f %.2f %.2f) unitsPerMetre=%.2f",
+        Q6F_LOGI("Q18.2 COLLISION CACHE RESET: oldEntries=%zu origin=(%.2f %.2f %.2f) unitsPerMetre=%.2f",
                  q1990OldEntries, centerX, centerY, floorZ, unitsPerMetre);
     }
-
 
     const bool inferredExteriorQ1931 = IsExteriorMegatonPlacementSetQ78A(placements);
     const bool exteriorAllBhksQ78A =
@@ -754,11 +929,10 @@ bool InitializeFo3CollisionOverlay(const std::vector<Fo3WorldPlacement>& placeme
         : MAX_COLLISION_PLACEMENTS;
 
     std::unordered_set<uint32_t> seenRefs;
-    // Q16.19: these describe immutable NIF assets, not a CELL instance. Keep
-    // them process-lifetime so a recentered 3x3 reuses already parsed bhk data.
-    static std::unordered_map<std::string, std::vector<Fo3NifCollisionShapeQ6F>> modelCache;
-    static std::unordered_map<std::string, Fo3PackedMetadataMapQ714> metadataCacheQ714;
-    static std::unordered_set<std::string> noCollisionModelsQ78A;
+    // Q18.2: shared with budgeted collision prewarming.
+    auto& modelCache = gQ1820CollisionModelCache;
+    auto& metadataCacheQ714 = gQ1820CollisionMetadataCache;
+    auto& noCollisionModelsQ78A = gQ1820NoCollisionModels;
     std::vector<float> lines;
     lines.reserve(65536u);
     gWorldTriangles.reserve(exteriorAllBhksQ78A ? 65536u : 8192u);
@@ -810,10 +984,11 @@ bool InitializeFo3CollisionOverlay(const std::vector<Fo3WorldPlacement>& placeme
                 }
                 gWorldTriangles.insert(gWorldTriangles.end(),
                                        q1990Entry.triangles.begin(), q1990Entry.triangles.end());
-                for (const CollisionTriangle& q1990Tri : q1990Entry.triangles) {
-                    if (gSurfaceSourcesQ722.find(q1990Tri.surfaceKeyQ714) == gSurfaceSourcesQ722.end()) {
+                for (uint64_t q1990SurfaceKey : q1990Entry.surfaceKeys) {
+                    if (gSurfaceSourcesQ722.find(q1990SurfaceKey) ==
+                        gSurfaceSourcesQ722.end()) {
                         gSurfaceSourcesQ722.emplace(
-                            q1990Tri.surfaceKeyQ714,
+                            q1990SurfaceKey,
                             CollisionSurfaceSourceQ722{placement.refFormId,
                                                        placement.editorId,
                                                        placement.modelPath});
@@ -832,7 +1007,15 @@ bool InitializeFo3CollisionOverlay(const std::vector<Fo3WorldPlacement>& placeme
             ++q1990PlacementCacheMisses;
         }
 
+        if (exteriorAllBhksQ78A &&
+            gQ1820NegativeCollisionPlacementCache.find(placement.refFormId) !=
+                gQ1820NegativeCollisionPlacementCache.end()) {
+            ++negativeCacheHitsQ78A;
+            continue;
+        }
         if (noCollisionModelsQ78A.find(placement.modelPath) != noCollisionModelsQ78A.end()) {
+            if (exteriorAllBhksQ78A && placement.refFormId != 0u)
+                gQ1820NegativeCollisionPlacementCache.insert(placement.refFormId);
             ++negativeCacheHitsQ78A;
             continue;
         }
@@ -981,6 +1164,13 @@ bool InitializeFo3CollisionOverlay(const std::vector<Fo3WorldPlacement>& placeme
                 q1990Entry.triangles.assign(
                     gWorldTriangles.begin() + static_cast<std::ptrdiff_t>(q1990PlacementTriangleStart),
                     gWorldTriangles.end());
+                {
+                    std::unordered_set<uint64_t> q1820SurfaceKeys;
+                    for (const CollisionTriangle& q1820Tri : q1990Entry.triangles) {
+                        if (q1820SurfaceKeys.insert(q1820Tri.surfaceKeyQ714).second)
+                            q1990Entry.surfaceKeys.push_back(q1820Tri.surfaceKeyQ714);
+                    }
+                }
                 q1990Entry.shapeCount = placementShapes;
                 q1990Entry.kindCounts = placementKinds;
                 q1990Entry.lastUse = ++gQ1990CollisionCacheSerial;

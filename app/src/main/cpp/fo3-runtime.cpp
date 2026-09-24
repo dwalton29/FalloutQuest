@@ -2465,12 +2465,22 @@ struct Q1900PendingStream {
     std::shared_ptr<Q1900MetadataTask> metadata;
     std::vector<Fo3WorldPlacement> targetPlacements;
     std::vector<Fo3WorldPlacement> incomingPlacements;
+    std::vector<Fo3WorldPlacement> collisionPlacements;
+    std::vector<Fo3WorldPlacement> collisionPrimePlacements;
     std::vector<CpuObject> incomingCpu;
     std::vector<GpuObject> incomingGpu;
     std::unordered_map<uint32_t, uint8_t> targetRefs;
     std::unordered_map<uint32_t, uint8_t> visibleRefs;
     size_t cpuCursor = 0u;
     size_t gpuCursor = 0u;
+    size_t collisionPrimeCursor = 0u;
+    size_t collisionPrimeBuilt = 0u;
+    size_t collisionPrimeNegative = 0u;
+    size_t collisionPrimeFailed = 0u;
+    size_t collisionPrimeTriangles = 0u;
+    size_t collisionPrimeFrames = 0u;
+    uint64_t collisionPrimeMaxItemUs = 0u;
+    bool collisionWindowPrepared = false;
     size_t retainedShapes = 0u;
     size_t skippedPlacements = 0u;
     size_t unsupportedPlacements = 0u;
@@ -2481,6 +2491,8 @@ struct Q1900PendingStream {
     uint64_t cpuUs = 0u;
     uint64_t gpuUs = 0u;
     uint64_t collisionUs = 0u;
+    uint64_t collisionPrimeUs = 0u;
+    uint64_t collisionPublishUs = 0u;
     uint64_t terrainUs = 0u;
     bool collisionReady = false;
     bool terrainReady = false;
@@ -2493,6 +2505,7 @@ int32_t gQ1920LatestGridY = 0;
 
 constexpr size_t Q1900_CPU_PLACEMENTS_PER_FRAME = 8u; // Q16.27 bounded CPU catch-up
 constexpr size_t Q1900_GPU_SHAPES_PER_FRAME = 3u; // Q16.27 cached VBO/VAO catch-up
+constexpr uint64_t Q1820_COLLISION_PRIME_BUDGET_US = 2500u;
 
 void Q1900DeleteGpuShape(GpuObject& object) {
     // diffuse/normal are shared texture-cache handles and must survive a REFR
@@ -2719,62 +2732,173 @@ void Q1900AdvanceCollision() {
         Q1900CancelPending("resident-no-longer-covers-active-3x3");
         return;
     }
-    const auto q1800CollisionStarted = std::chrono::steady_clock::now();
-    std::vector<Fo3WorldPlacement> collisionPlacements;
-    collisionPlacements.reserve(gPendingStreamQ1900.targetPlacements.size());
-    std::unordered_map<uint32_t, uint8_t> seenRefs;
-    seenRefs.reserve(gPendingStreamQ1900.targetPlacements.size());
-    size_t q1950OutsideCollisionWindow = 0u;
-    constexpr int Q1950_COLLISION_GRID_RADIUS = 1;
-    const int32_t q1970CollisionGridX = gPendingStreamQ1900.targetGridX;
-    const int32_t q1970CollisionGridY = gPendingStreamQ1900.targetGridY;
-    for (const Fo3WorldPlacement& placement : gPendingStreamQ1900.targetPlacements) {
-        const int32_t placementGridX = placement.hasExteriorGrid
-            ? placement.gridX
-            : static_cast<int32_t>(std::floor(placement.x / Q1890_EXTERIOR_CELL_SIZE));
-        const int32_t placementGridY = placement.hasExteriorGrid
-            ? placement.gridY
-            : static_cast<int32_t>(std::floor(placement.y / Q1890_EXTERIOR_CELL_SIZE));
-        if (std::abs(placementGridX - q1970CollisionGridX) > Q1950_COLLISION_GRID_RADIUS ||
-            std::abs(placementGridY - q1970CollisionGridY) > Q1950_COLLISION_GRID_RADIUS) {
-            ++q1950OutsideCollisionWindow;
-            continue;
+
+    if (!gPendingStreamQ1900.collisionWindowPrepared) {
+        std::unordered_map<uint32_t, uint8_t> seenRefs;
+        seenRefs.reserve(gPendingStreamQ1900.targetPlacements.size());
+        size_t outsideCollisionWindow = 0u;
+        constexpr int Q1950_COLLISION_GRID_RADIUS = 1;
+        const int32_t collisionGridX = gPendingStreamQ1900.targetGridX;
+        const int32_t collisionGridY = gPendingStreamQ1900.targetGridY;
+
+        gPendingStreamQ1900.collisionPlacements.reserve(
+            gPendingStreamQ1900.targetPlacements.size());
+        for (const Fo3WorldPlacement& placement :
+             gPendingStreamQ1900.targetPlacements) {
+            const int32_t placementGridX = placement.hasExteriorGrid
+                ? placement.gridX
+                : static_cast<int32_t>(
+                    std::floor(placement.x / Q1890_EXTERIOR_CELL_SIZE));
+            const int32_t placementGridY = placement.hasExteriorGrid
+                ? placement.gridY
+                : static_cast<int32_t>(
+                    std::floor(placement.y / Q1890_EXTERIOR_CELL_SIZE));
+            if (std::abs(placementGridX - collisionGridX) >
+                    Q1950_COLLISION_GRID_RADIUS ||
+                std::abs(placementGridY - collisionGridY) >
+                    Q1950_COLLISION_GRID_RADIUS) {
+                ++outsideCollisionWindow;
+                continue;
+            }
+            if (placement.refFormId == 0u ||
+                !seenRefs.emplace(placement.refFormId, 1u).second ||
+                Q74ShouldSkipPlacement(placement)) {
+                continue;
+            }
+            gPendingStreamQ1900.collisionPlacements.push_back(placement);
+            if (!IsFo3CollisionPlacementCachedQ1820(placement.refFormId))
+                gPendingStreamQ1900.collisionPrimePlacements.push_back(placement);
         }
-        if (placement.refFormId == 0u ||
-            !seenRefs.emplace(placement.refFormId, 1u).second ||
-            Q74ShouldSkipPlacement(placement)) {
-            continue;
-        }
-        collisionPlacements.push_back(placement);
+        gPendingStreamQ1900.collisionWindowPrepared = true;
+
+        Q6H_LOGI("Q18.2 COLLISION WINDOW: generation=%llu targetGrid=(%d,%d) visualPlacements=%zu localRenderableRefs=%zu primeMissRefs=%zu outside3x3=%zu radius=1 prewarmBudgetUs=%llu oldCollisionLive=1",
+                 static_cast<unsigned long long>(gPendingStreamQ1900.generation),
+                 gPendingStreamQ1900.targetGridX,
+                 gPendingStreamQ1900.targetGridY,
+                 gPendingStreamQ1900.targetPlacements.size(),
+                 gPendingStreamQ1900.collisionPlacements.size(),
+                 gPendingStreamQ1900.collisionPrimePlacements.size(),
+                 outsideCollisionWindow,
+                 static_cast<unsigned long long>(
+                     Q1820_COLLISION_PRIME_BUDGET_US));
     }
 
-    Q6H_LOGI("Q16.27 COLLISION WINDOW: generation=%llu targetGrid=(%d,%d) visualPlacements=%zu localRenderableRefs=%zu outside3x3=%zu radius=1",
-             static_cast<unsigned long long>(gPendingStreamQ1900.generation),
-             gPendingStreamQ1900.targetGridX, gPendingStreamQ1900.targetGridY,
-             gPendingStreamQ1900.targetPlacements.size(), collisionPlacements.size(),
-             q1950OutsideCollisionWindow);
+    if (gPendingStreamQ1900.collisionPrimeCursor <
+        gPendingStreamQ1900.collisionPrimePlacements.size()) {
+        const auto frameStarted = std::chrono::steady_clock::now();
+        ++gPendingStreamQ1900.collisionPrimeFrames;
+        size_t processedThisFrame = 0u;
+
+        while (gPendingStreamQ1900.collisionPrimeCursor <
+               gPendingStreamQ1900.collisionPrimePlacements.size()) {
+            const Fo3WorldPlacement& placement =
+                gPendingStreamQ1900.collisionPrimePlacements[
+                    gPendingStreamQ1900.collisionPrimeCursor++];
+            size_t primedTriangles = 0u;
+            const auto itemStarted = std::chrono::steady_clock::now();
+            const bool primed = PrimeFo3CollisionPlacementCacheQ1820(
+                placement,
+                gExteriorOriginXQ1890,
+                gExteriorOriginYQ1890,
+                gExteriorOriginZQ1890,
+                SCENE_FORWARD, FLOOR_Y, FO3_UNITS_PER_METRE,
+                &primedTriangles);
+            const uint64_t itemUs = static_cast<uint64_t>(
+                std::chrono::duration_cast<std::chrono::microseconds>(
+                    std::chrono::steady_clock::now() - itemStarted).count());
+            gPendingStreamQ1900.collisionPrimeUs += itemUs;
+            gPendingStreamQ1900.collisionPrimeMaxItemUs =
+                std::max(gPendingStreamQ1900.collisionPrimeMaxItemUs, itemUs);
+            if (!primed) {
+                ++gPendingStreamQ1900.collisionPrimeFailed;
+            } else if (primedTriangles == 0u) {
+                ++gPendingStreamQ1900.collisionPrimeNegative;
+            } else {
+                ++gPendingStreamQ1900.collisionPrimeBuilt;
+                gPendingStreamQ1900.collisionPrimeTriangles += primedTriangles;
+            }
+            ++processedThisFrame;
+            PumpFo3AndroidEventsQ1860();
+
+            const uint64_t frameUs = static_cast<uint64_t>(
+                std::chrono::duration_cast<std::chrono::microseconds>(
+                    std::chrono::steady_clock::now() - frameStarted).count());
+            if (frameUs >= Q1820_COLLISION_PRIME_BUDGET_US) break;
+        }
+
+        if (gPendingStreamQ1900.collisionPrimeCursor <
+            gPendingStreamQ1900.collisionPrimePlacements.size()) {
+            if (gPendingStreamQ1900.collisionPrimeFrames <= 3u ||
+                (gPendingStreamQ1900.collisionPrimeFrames % 30u) == 0u) {
+                Q6H_LOGI("Q18.2 COLLISION PRIME: generation=%llu cursor=%zu/%zu processed=%zu built=%zu negative=%zu failed=%zu triangles=%zu primeUs=%llu maxItemUs=%llu oldCollisionLive=1",
+                         static_cast<unsigned long long>(
+                             gPendingStreamQ1900.generation),
+                         gPendingStreamQ1900.collisionPrimeCursor,
+                         gPendingStreamQ1900.collisionPrimePlacements.size(),
+                         processedThisFrame,
+                         gPendingStreamQ1900.collisionPrimeBuilt,
+                         gPendingStreamQ1900.collisionPrimeNegative,
+                         gPendingStreamQ1900.collisionPrimeFailed,
+                         gPendingStreamQ1900.collisionPrimeTriangles,
+                         static_cast<unsigned long long>(
+                             gPendingStreamQ1900.collisionPrimeUs),
+                         static_cast<unsigned long long>(
+                             gPendingStreamQ1900.collisionPrimeMaxItemUs));
+            }
+            return;
+        }
+
+        Q6H_LOGI("Q18.2 COLLISION PRIME READY: generation=%llu refs=%zu built=%zu negative=%zu failed=%zu triangles=%zu frames=%zu primeUs=%llu maxItemUs=%llu",
+                 static_cast<unsigned long long>(
+                     gPendingStreamQ1900.generation),
+                 gPendingStreamQ1900.collisionPrimePlacements.size(),
+                 gPendingStreamQ1900.collisionPrimeBuilt,
+                 gPendingStreamQ1900.collisionPrimeNegative,
+                 gPendingStreamQ1900.collisionPrimeFailed,
+                 gPendingStreamQ1900.collisionPrimeTriangles,
+                 gPendingStreamQ1900.collisionPrimeFrames,
+                 static_cast<unsigned long long>(
+                     gPendingStreamQ1900.collisionPrimeUs),
+                 static_cast<unsigned long long>(
+                     gPendingStreamQ1900.collisionPrimeMaxItemUs));
+        return; // publish on a clean frame after the final prewarm item
+    }
+
+    const auto publishStarted = std::chrono::steady_clock::now();
     PumpFo3AndroidEventsQ1860();
     SetNextFo3CollisionExteriorModeQ1931(true);
     gPendingStreamQ1900.collisionReady = InitializeFo3CollisionOverlay(
-        collisionPlacements,
+        gPendingStreamQ1900.collisionPlacements,
         gExteriorOriginXQ1890,
         gExteriorOriginYQ1890,
         gExteriorOriginZQ1890,
         SCENE_FORWARD, FLOOR_Y, FO3_UNITS_PER_METRE);
     PumpFo3AndroidEventsQ1860();
+
+    gPendingStreamQ1900.collisionPublishUs = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - publishStarted).count());
+    gPendingStreamQ1900.collisionUs =
+        gPendingStreamQ1900.collisionPrimeUs +
+        gPendingStreamQ1900.collisionPublishUs;
+
     gPendingStreamQ1900.phase = gPendingStreamQ1900.incomingPlacements.empty()
         ? Q1900StreamPhase::Terrain : Q1900StreamPhase::Cpu;
 
-
-    gPendingStreamQ1900.collisionUs += static_cast<uint64_t>(
-        std::chrono::duration_cast<std::chrono::microseconds>(
-            std::chrono::steady_clock::now() - q1800CollisionStarted).count());
-
-    Q6H_LOGI("Q18 COLLISION READY: generation=%llu uniqueRenderableRefs=%zu ready=%d isolatedFrame=1 workUs=%llu",
+    Q6H_LOGI("Q18.2 COLLISION READY: generation=%llu uniqueRenderableRefs=%zu ready=%d staged=1 primeRefs=%zu primeFrames=%zu primeUs=%llu publishUs=%llu totalCollisionUs=%llu maxPrimeItemUs=%llu",
              static_cast<unsigned long long>(gPendingStreamQ1900.generation),
-             collisionPlacements.size(),
+             gPendingStreamQ1900.collisionPlacements.size(),
              gPendingStreamQ1900.collisionReady ? 1 : 0,
-             static_cast<unsigned long long>(gPendingStreamQ1900.collisionUs));
+             gPendingStreamQ1900.collisionPrimePlacements.size(),
+             gPendingStreamQ1900.collisionPrimeFrames,
+             static_cast<unsigned long long>(
+                 gPendingStreamQ1900.collisionPrimeUs),
+             static_cast<unsigned long long>(
+                 gPendingStreamQ1900.collisionPublishUs),
+             static_cast<unsigned long long>(
+                 gPendingStreamQ1900.collisionUs),
+             static_cast<unsigned long long>(
+                 gPendingStreamQ1900.collisionPrimeMaxItemUs));
 }
 
 void Q1900AdvanceTerrain() {
@@ -2927,7 +3051,7 @@ void Q1900CommitWindow() {
         std::chrono::duration_cast<std::chrono::microseconds>(
             std::chrono::steady_clock::now() - gPendingStreamQ1900.startedAt).count());
 
-    Q6H_LOGI("Q18 WINDOW READY: generation=%llu grid=(%d,%d) oldShapes=%zu retainedShapes=%zu enteringShapes=%zu retiredShapes=%zu liveShapes=%zu triangles=%zu stagedFrames=%zu collisionReady=%d terrainReady=%d metadataUs=%llu cpuUs=%llu gpuUs=%llu collisionUs=%llu terrainUs=%llu commitUs=%llu totalUs=%llu originPreserved=1 playerReset=0 fullSceneRebuild=0",
+    Q6H_LOGI("Q18 WINDOW READY: generation=%llu grid=(%d,%d) oldShapes=%zu retainedShapes=%zu enteringShapes=%zu retiredShapes=%zu liveShapes=%zu triangles=%zu stagedFrames=%zu collisionReady=%d terrainReady=%d metadataUs=%llu cpuUs=%llu gpuUs=%llu collisionUs=%llu collisionPrimeUs=%llu collisionPublishUs=%llu terrainUs=%llu commitUs=%llu totalUs=%llu originPreserved=1 playerReset=0 fullSceneRebuild=0",
              static_cast<unsigned long long>(generation),
              gExteriorWindowGridXQ1890, gExteriorWindowGridYQ1890,
              oldShapes, retainedShapes, enteringShapes, retiredShapes,
@@ -2937,6 +3061,8 @@ void Q1900CommitWindow() {
              static_cast<unsigned long long>(gPendingStreamQ1900.cpuUs),
              static_cast<unsigned long long>(gPendingStreamQ1900.gpuUs),
              static_cast<unsigned long long>(gPendingStreamQ1900.collisionUs),
+             static_cast<unsigned long long>(gPendingStreamQ1900.collisionPrimeUs),
+             static_cast<unsigned long long>(gPendingStreamQ1900.collisionPublishUs),
              static_cast<unsigned long long>(gPendingStreamQ1900.terrainUs),
              static_cast<unsigned long long>(q1800CommitUs),
              static_cast<unsigned long long>(q1800TotalUs));
