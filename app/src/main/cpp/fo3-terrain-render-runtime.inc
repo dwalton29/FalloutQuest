@@ -129,6 +129,24 @@ int32_t q1940StageCentreY = 0;
 size_t q1940StageInitialRetained = 0u;
 size_t q1940StageEntered = 0u;
 
+bool q76bReady = false;
+bool q76bLoggedVisible = false;
+uint32_t q76bWorldspace = 0;
+size_t q76bTerrainCells = 0;
+size_t q76bTriangles = 0;
+size_t q718AlphaTriangles = 0;
+size_t q711RealTextureBatches = 0;
+size_t q711FallbackBatches = 0;
+size_t q713TextureUploadFailures = 0;
+size_t q713TextureLimitHits = 0;
+size_t q718AlphaBatches = 0;
+size_t q718AlphaQuads = 0;
+size_t q718AlphaLayersSeen = 0;
+size_t q718AlphaLayersResolved = 0;
+size_t q718AlphaLayersUnresolved = 0;
+size_t q720HiddenBaseQuads = 0;
+size_t q720HiddenAlphaLayers = 0;
+
 bool Q1940SameTerrainTransform(uint32_t worldspaceFormId,
                                float arrivalX, float arrivalY, float arrivalZ,
                                float sceneForward, float floorY,
@@ -185,23 +203,6 @@ void Q1940RefreshTerrainBatchStats() {
     q76bTerrainCells = q1940ResidentTerrainCells.size();
 }
 
-bool q76bReady = false;
-bool q76bLoggedVisible = false;
-uint32_t q76bWorldspace = 0;
-size_t q76bTerrainCells = 0;
-size_t q76bTriangles = 0;
-size_t q718AlphaTriangles = 0;
-size_t q711RealTextureBatches = 0;
-size_t q711FallbackBatches = 0;
-size_t q713TextureUploadFailures = 0;
-size_t q713TextureLimitHits = 0;
-size_t q718AlphaBatches = 0;
-size_t q718AlphaQuads = 0;
-size_t q718AlphaLayersSeen = 0;
-size_t q718AlphaLayersResolved = 0;
-size_t q718AlphaLayersUnresolved = 0;
-size_t q720HiddenBaseQuads = 0;
-size_t q720HiddenAlphaLayers = 0;
 
 uint64_t Q711GridKey(int32_t x, int32_t y) {
     return (static_cast<uint64_t>(static_cast<uint32_t>(x)) << 32u) |
