@@ -20,6 +20,7 @@ float GetFo3FogPowerQ1410();
 #include <cstring>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace {
@@ -46,6 +47,8 @@ struct Q76BV3 {
 };
 
 struct Q711TerrainBatch {
+    int32_t gridX = 0;
+    int32_t gridY = 0;
     std::string texturePath;
     std::string normalPath;
     GLuint vao = 0;
@@ -63,6 +66,8 @@ struct Q711TerrainBatch {
 };
 
 struct Q711CpuBatch {
+    int32_t gridX = 0;
+    int32_t gridY = 0;
     std::string texturePath;
     std::string normalPath;
     bool specularEnabled = false;
@@ -109,6 +114,76 @@ std::unordered_map<std::string, GLuint> q1910TerrainTextureCache;
 std::unordered_map<std::string, GLuint> q1810TerrainNormalTextureCache;
 constexpr size_t Q1910_TERRAIN_TEXTURE_CACHE_LIMIT = 256u;
 constexpr size_t Q1810_TERRAIN_NORMAL_CACHE_LIMIT = 256u;
+
+std::unordered_set<uint64_t> q1940ResidentTerrainCells;
+bool q1940TerrainTransformValid = false;
+float q1940ArrivalX = 0.0f;
+float q1940ArrivalY = 0.0f;
+float q1940ArrivalZ = 0.0f;
+float q1940SceneForward = 0.0f;
+float q1940FloorY = 0.0f;
+float q1940UnitsPerMetre = 0.0f;
+bool q1940StageTargetValid = false;
+int32_t q1940StageCentreX = 0;
+int32_t q1940StageCentreY = 0;
+size_t q1940StageInitialRetained = 0u;
+size_t q1940StageEntered = 0u;
+
+bool Q1940SameTerrainTransform(uint32_t worldspaceFormId,
+                               float arrivalX, float arrivalY, float arrivalZ,
+                               float sceneForward, float floorY,
+                               float unitsPerMetre) {
+    return q76bReady && q76bProgram != 0u &&
+        q76bWorldspace == worldspaceFormId &&
+        q1940TerrainTransformValid &&
+        std::fabs(q1940ArrivalX - arrivalX) < 0.01f &&
+        std::fabs(q1940ArrivalY - arrivalY) < 0.01f &&
+        std::fabs(q1940ArrivalZ - arrivalZ) < 0.01f &&
+        std::fabs(q1940SceneForward - sceneForward) < 0.0001f &&
+        std::fabs(q1940FloorY - floorY) < 0.0001f &&
+        std::fabs(q1940UnitsPerMetre - unitsPerMetre) < 0.0001f;
+}
+
+void Q1940DeleteTerrainBatchGeometry(Q711TerrainBatch& batch) {
+    if (batch.vbo) {
+        glDeleteBuffers(1, &batch.vbo);
+        batch.vbo = 0u;
+    }
+    if (batch.vao) {
+        glDeleteVertexArrays(1, &batch.vao);
+        batch.vao = 0u;
+    }
+    if (batch.normalTexture && batch.ownsNormal) {
+        glDeleteTextures(1, &batch.normalTexture);
+        batch.normalTexture = 0u;
+    }
+    if (batch.texture && batch.ownsTexture) {
+        glDeleteTextures(1, &batch.texture);
+        batch.texture = 0u;
+    }
+}
+
+void Q1940RefreshTerrainBatchStats() {
+    size_t baseVertices = 0u;
+    size_t alphaVertices = 0u;
+    q711RealTextureBatches = 0u;
+    q711FallbackBatches = 0u;
+    q718AlphaBatches = 0u;
+    for (const Q711TerrainBatch& batch : q711TerrainBatches) {
+        if (batch.alphaLayer) {
+            alphaVertices += static_cast<size_t>(std::max<GLsizei>(0, batch.vertexCount));
+            ++q718AlphaBatches;
+        } else {
+            baseVertices += static_cast<size_t>(std::max<GLsizei>(0, batch.vertexCount));
+            if (batch.realTexture) ++q711RealTextureBatches;
+            else ++q711FallbackBatches;
+        }
+        if (batch.alphaLayer && batch.realTexture) ++q711RealTextureBatches;
+    }
+    q76bTriangles = baseVertices / 3u;
+    q718AlphaTriangles = alphaVertices / 3u;
+    q76bTerrainCells = q1940ResidentTerrainCells.size();
+}
 
 bool q76bReady = false;
 bool q76bLoggedVisible = false;
@@ -481,13 +556,15 @@ int Q711QuadrantForQuad(int x, int y) {
 
 void ShutdownFo3TerrainRenderQ76() {
     for (Q711TerrainBatch& batch : q711TerrainBatches) {
-        if (batch.vbo) glDeleteBuffers(1, &batch.vbo);
-        if (batch.vao) glDeleteVertexArrays(1, &batch.vao);
-        // Q16.19: texture is process-cache owned; recenter retires only window geometry.
-        if (batch.normalTexture && batch.ownsNormal) glDeleteTextures(1, &batch.normalTexture);
+        Q1940DeleteTerrainBatchGeometry(batch);
         batch = {};
     }
     q711TerrainBatches.clear();
+    q1940ResidentTerrainCells.clear();
+    q1940TerrainTransformValid = false;
+    q1940StageTargetValid = false;
+    q1940StageInitialRetained = 0u;
+    q1940StageEntered = 0u;
     if (q76bProgram) glDeleteProgram(q76bProgram);
     q76bProgram = 0;
     q76bMvpLocation = -1;
@@ -544,8 +621,15 @@ bool InitializeFo3TerrainRenderQ76(uint32_t worldspaceFormId,
                                    float arrivalX, float arrivalY, float arrivalZ,
                                    float sceneForward, float floorY,
                                    float unitsPerMetre) {
-    ShutdownFo3TerrainRenderQ76();
     if (worldspaceFormId == 0u || unitsPerMetre <= 1e-4f) return false;
+
+    const bool q1940Incremental =
+        Q1940SameTerrainTransform(worldspaceFormId,
+                                  arrivalX, arrivalY, arrivalZ,
+                                  sceneForward, floorY, unitsPerMetre);
+    if (!q1940Incremental) {
+        ShutdownFo3TerrainRenderQ76();
+    }
 
     if (!LoadFo3TerrainQ76(worldspaceFormId, arrivalX, arrivalY, arrivalZ)) {
         Q76B_LOGE("Q7.20 TERRAIN GPU FAILED: worldspace=%08X reason=LAND-load", worldspaceFormId);
@@ -553,6 +637,74 @@ bool InitializeFo3TerrainRenderQ76(uint32_t worldspaceFormId,
     }
     const std::vector<Fo3TerrainCellQ76>& terrain = GetFo3TerrainQ76();
     if (terrain.empty()) return false;
+
+    std::unordered_set<uint64_t> q1940TargetCells;
+    q1940TargetCells.reserve(terrain.size() * 2u);
+    int32_t q1940MinX = INT32_MAX, q1940MaxX = INT32_MIN;
+    int32_t q1940MinY = INT32_MAX, q1940MaxY = INT32_MIN;
+    for (const Fo3TerrainCellQ76& cell : terrain) {
+        if (cell.heights.size() != Q76B_HEIGHT_COUNT) continue;
+        q1940TargetCells.insert(Q711GridKey(cell.gridX, cell.gridY));
+        q1940MinX = std::min(q1940MinX, cell.gridX);
+        q1940MaxX = std::max(q1940MaxX, cell.gridX);
+        q1940MinY = std::min(q1940MinY, cell.gridY);
+        q1940MaxY = std::max(q1940MaxY, cell.gridY);
+    }
+    if (q1940TargetCells.empty()) return false;
+
+    const int32_t q1940CentreX = (q1940MinX + q1940MaxX) / 2;
+    const int32_t q1940CentreY = (q1940MinY + q1940MaxY) / 2;
+    size_t q1940RetainedTargetCells = 0u;
+    std::vector<uint64_t> q1940MissingCells;
+    q1940MissingCells.reserve(q1940TargetCells.size());
+    for (uint64_t key : q1940TargetCells) {
+        if (q1940ResidentTerrainCells.find(key) != q1940ResidentTerrainCells.end())
+            ++q1940RetainedTargetCells;
+        else
+            q1940MissingCells.push_back(key);
+    }
+
+    if (q1940Incremental &&
+        (!q1940StageTargetValid ||
+         q1940StageCentreX != q1940CentreX ||
+         q1940StageCentreY != q1940CentreY)) {
+        q1940StageTargetValid = true;
+        q1940StageCentreX = q1940CentreX;
+        q1940StageCentreY = q1940CentreY;
+        q1940StageInitialRetained = q1940RetainedTargetCells;
+        q1940StageEntered = 0u;
+        Q76B_LOGI("Q19.4 TERRAIN RESIDENCY TARGET: centre=(%d,%d) targetCells=%zu retainedCells=%zu enteringCells=%zu oldCellsRemainLive=1 buildCellsPerUpdate=1",
+                  q1940CentreX, q1940CentreY,
+                  q1940TargetCells.size(), q1940RetainedTargetCells,
+                  q1940MissingCells.size());
+    }
+
+    uint64_t q1940BuildCellKey = 0u;
+    if (q1940Incremental && !q1940MissingCells.empty()) {
+        auto decodeGrid = [](uint64_t key, int32_t& x, int32_t& y) {
+            x = static_cast<int32_t>(static_cast<uint32_t>(key >> 32u));
+            y = static_cast<int32_t>(static_cast<uint32_t>(key & 0xffffffffu));
+        };
+        auto best = q1940MissingCells.begin();
+        int32_t bestX = 0, bestY = 0;
+        decodeGrid(*best, bestX, bestY);
+        int bestManhattan =
+            std::abs(bestX - q1940CentreX) + std::abs(bestY - q1940CentreY);
+        for (auto it = q1940MissingCells.begin() + 1;
+             it != q1940MissingCells.end(); ++it) {
+            int32_t x = 0, y = 0;
+            decodeGrid(*it, x, y);
+            const int manhattan =
+                std::abs(x - q1940CentreX) + std::abs(y - q1940CentreY);
+            if (manhattan < bestManhattan) {
+                best = it;
+                bestX = x;
+                bestY = y;
+                bestManhattan = manhattan;
+            }
+        }
+        q1940BuildCellKey = *best;
+    }
 
     std::vector<std::vector<float>> stitchedHeights;
     stitchedHeights.reserve(terrain.size());
@@ -620,10 +772,15 @@ bool InitializeFo3TerrainRenderQ76(uint32_t worldspaceFormId,
 
     std::vector<Q711CpuBatch> cpuBatches;
     std::unordered_map<std::string, size_t> batchByTexture;
+    int32_t q1940BatchGridX = 0;
+    int32_t q1940BatchGridY = 0;
     auto getBatch = [&](const std::string& texturePath,
                         bool alphaLayer,
                         int layerOrder) -> Q711CpuBatch& {
-        const std::string key = (alphaLayer ? "A" : "B") +
+        const std::string key =
+            std::to_string(q1940BatchGridX) + "," +
+            std::to_string(q1940BatchGridY) + "|" +
+            (alphaLayer ? "A" : "B") +
             std::to_string(layerOrder) + "|" +
             (texturePath.empty() ? std::string("<fallback>") : texturePath);
         const auto found = batchByTexture.find(key);
@@ -631,6 +788,8 @@ bool InitializeFo3TerrainRenderQ76(uint32_t worldspaceFormId,
         const size_t index = cpuBatches.size();
         batchByTexture.emplace(key, index);
         Q711CpuBatch batch;
+        batch.gridX = q1940BatchGridX;
+        batch.gridY = q1940BatchGridY;
         batch.texturePath = texturePath;
         batch.normalPath = ResolveFo3TerrainNormalTextureQ1060(texturePath);
         batch.specularEnabled = IsFo3TerrainSpecularEnabledQ1060(texturePath);
@@ -647,6 +806,10 @@ bool InitializeFo3TerrainRenderQ76(uint32_t worldspaceFormId,
         const Fo3TerrainCellQ76& cell = terrain[cellIndex];
         if (stitchedHeights[cellIndex].size() != Q76B_HEIGHT_COUNT) continue;
         ++acceptedCells;
+        const uint64_t q1940CellKey = Q711GridKey(cell.gridX, cell.gridY);
+        if (q1940Incremental && q1940CellKey != q1940BuildCellKey) continue;
+        q1940BatchGridX = cell.gridX;
+        q1940BatchGridY = cell.gridY;
         const float originX = static_cast<float>(cell.gridX) * Q76B_CELL_SIZE;
         const float originY = static_cast<float>(cell.gridY) * Q76B_CELL_SIZE;
 
@@ -874,7 +1037,8 @@ bool InitializeFo3TerrainRenderQ76(uint32_t worldspaceFormId,
         }
     }
 
-    if (acceptedCells == 0u || cpuBatches.empty()) return false;
+    if (acceptedCells == 0u) return false;
+    if (!q1940Incremental && cpuBatches.empty()) return false;
 
     std::stable_sort(cpuBatches.begin(), cpuBatches.end(),
                      [](const Q711CpuBatch& a, const Q711CpuBatch& b) {
@@ -883,10 +1047,12 @@ bool InitializeFo3TerrainRenderQ76(uint32_t worldspaceFormId,
         return false;
     });
 
-    q76bProgram = Q76BCreateProgram();
     if (!q76bProgram) {
-        Q76B_LOGE("Q10.7 TERRAIN FAILED: stage=shader-program");
-        return false;
+        q76bProgram = Q76BCreateProgram();
+        if (!q76bProgram) {
+            Q76B_LOGE("Q10.7 TERRAIN FAILED: stage=shader-program");
+            return false;
+        }
     }
     q76bMvpLocation = glGetUniformLocation(q76bProgram, "uMvp");
     q76bSamplerLocation = glGetUniformLocation(q76bProgram, "uDiffuse");
@@ -930,9 +1096,13 @@ bool InitializeFo3TerrainRenderQ76(uint32_t worldspaceFormId,
     size_t q1060NormalUploads = 0u;
     size_t q1810NormalCacheHits = 0u;
     size_t q1060NormalMisses = 0u;
+    std::vector<Q711TerrainBatch> q1940NewBatches;
+    q1940NewBatches.reserve(cpuBatches.size());
     for (Q711CpuBatch& cpu : cpuBatches) {
         if (cpu.vertices.empty()) continue;
         Q711TerrainBatch gpu;
+        gpu.gridX = cpu.gridX;
+        gpu.gridY = cpu.gridY;
         gpu.texturePath = cpu.texturePath;
         gpu.normalPath = cpu.normalPath;
         gpu.specularEnabled = cpu.specularEnabled;
@@ -1024,23 +1194,96 @@ bool InitializeFo3TerrainRenderQ76(uint32_t worldspaceFormId,
         gpu.vertexCount = static_cast<GLsizei>(cpu.vertices.size() / 12u);
         if (gpu.alphaLayer) alphaVertices += static_cast<size_t>(gpu.vertexCount);
         else baseVertices += static_cast<size_t>(gpu.vertexCount);
-        q711TerrainBatches.push_back(std::move(gpu));
+        q1940NewBatches.push_back(std::move(gpu));
     }
 
     const GLenum error = glGetError();
-    if (error != GL_NO_ERROR || q711TerrainBatches.empty()) {
-        Q76B_LOGE("Q10.7 TERRAIN FAILED: stage=gpu-upload worldspace=%08X glError=0x%X batches=%zu", worldspaceFormId, error, q711TerrainBatches.size());
-        Q76B_LOGE("Q7.20 TERRAIN GPU FAILED: worldspace=%08X glError=0x%X batches=%zu",
-                  worldspaceFormId, error, q711TerrainBatches.size());
-        ShutdownFo3TerrainRenderQ76();
+    if (error != GL_NO_ERROR ||
+        (!q1940Incremental && q1940NewBatches.empty())) {
+        Q76B_LOGE("Q10.7 TERRAIN FAILED: stage=gpu-upload worldspace=%08X glError=0x%X newBatches=%zu retainedBatches=%zu",
+                  worldspaceFormId, error, q1940NewBatches.size(),
+                  q711TerrainBatches.size());
+        for (Q711TerrainBatch& batch : q1940NewBatches)
+            Q1940DeleteTerrainBatchGeometry(batch);
+        if (!q1940Incremental) ShutdownFo3TerrainRenderQ76();
         return false;
     }
 
-    q76bTriangles = baseVertices / 3u;
-    q718AlphaTriangles = alphaVertices / 3u;
-    q76bTerrainCells = acceptedCells;
+    for (Q711TerrainBatch& batch : q1940NewBatches)
+        q711TerrainBatches.push_back(std::move(batch));
+    if (q1940BuildCellKey != 0u) {
+        q1940ResidentTerrainCells.insert(q1940BuildCellKey);
+        ++q1940StageEntered;
+    } else if (!q1940Incremental) {
+        q1940ResidentTerrainCells = q1940TargetCells;
+    }
+
     q76bWorldspace = worldspaceFormId;
     q76bReady = true;
+    q1940TerrainTransformValid = true;
+    q1940ArrivalX = arrivalX;
+    q1940ArrivalY = arrivalY;
+    q1940ArrivalZ = arrivalZ;
+    q1940SceneForward = sceneForward;
+    q1940FloorY = floorY;
+    q1940UnitsPerMetre = unitsPerMetre;
+
+    size_t q1940RemainingTarget = 0u;
+    for (uint64_t key : q1940TargetCells) {
+        if (q1940ResidentTerrainCells.find(key) == q1940ResidentTerrainCells.end())
+            ++q1940RemainingTarget;
+    }
+
+    if (q1940Incremental && q1940RemainingTarget > 0u) {
+        Q1940RefreshTerrainBatchStats();
+        int32_t builtX = 0, builtY = 0;
+        if (q1940BuildCellKey != 0u) {
+            builtX = static_cast<int32_t>(
+                static_cast<uint32_t>(q1940BuildCellKey >> 32u));
+            builtY = static_cast<int32_t>(
+                static_cast<uint32_t>(q1940BuildCellKey & 0xffffffffu));
+        }
+        Q76B_LOGI("Q19.4 TERRAIN RESIDENCY STAGE: centre=(%d,%d) builtCell=(%d,%d) newBatches=%zu remainingCells=%zu residentCells=%zu oldStripRetained=1 fullGpuRebuild=0",
+                  q1940CentreX, q1940CentreY, builtX, builtY,
+                  q1940NewBatches.size(), q1940RemainingTarget,
+                  q1940ResidentTerrainCells.size());
+        return false;
+    }
+
+    size_t q1940RetiredBatches = 0u;
+    std::unordered_set<uint64_t> q1940RetiredCellKeys;
+    size_t q1940Write = 0u;
+    for (size_t q1940Read = 0u;
+         q1940Read < q711TerrainBatches.size(); ++q1940Read) {
+        Q711TerrainBatch& batch = q711TerrainBatches[q1940Read];
+        const uint64_t key = Q711GridKey(batch.gridX, batch.gridY);
+        if (q1940TargetCells.find(key) == q1940TargetCells.end()) {
+            q1940RetiredCellKeys.insert(key);
+            Q1940DeleteTerrainBatchGeometry(batch);
+            ++q1940RetiredBatches;
+            continue;
+        }
+        if (q1940Write != q1940Read) {
+            q711TerrainBatches[q1940Write] = std::move(batch);
+            batch.vbo = 0u;
+            batch.vao = 0u;
+            batch.texture = 0u;
+            batch.normalTexture = 0u;
+        }
+        ++q1940Write;
+    }
+    q711TerrainBatches.resize(q1940Write);
+    q1940ResidentTerrainCells = q1940TargetCells;
+
+    std::stable_sort(q711TerrainBatches.begin(), q711TerrainBatches.end(),
+                     [](const Q711TerrainBatch& a, const Q711TerrainBatch& b) {
+        if (a.alphaLayer != b.alphaLayer) return !a.alphaLayer;
+        if (a.alphaLayer && a.layerOrder != b.layerOrder)
+            return a.layerOrder < b.layerOrder;
+        return false;
+    });
+    Q1940RefreshTerrainBatchStats();
+    q76bTerrainCells = q1940TargetCells.size();
     size_t q1070VclrCells = 0u;
     for (const Fo3TerrainCellQ76& c : terrain) {
         if (GetFo3TerrainVertexColorsQ1060(c.landFormId).size() == Q76B_HEIGHT_COUNT * 3u) ++q1070VclrCells;
@@ -1058,6 +1301,15 @@ bool InitializeFo3TerrainRenderQ76(uint32_t worldspaceFormId,
               q718AlphaLayersSeen, q718AlphaLayersResolved,
               q718AlphaLayersUnresolved, q718AlphaQuads,
               q713TextureUploadFailures, q713TextureLimitHits);
+    Q76B_LOGI("Q19.4 TERRAIN RESIDENCY READY: centre=(%d,%d) targetCells=%zu retainedAtStart=%zu enteredCells=%zu retiredCells=%zu retiredBatches=%zu liveBatches=%zu fullGpuRebuild=%d",
+              q1940CentreX, q1940CentreY, q1940TargetCells.size(),
+              q1940Incremental ? q1940StageInitialRetained : 0u,
+              q1940Incremental ? q1940StageEntered : q1940TargetCells.size(),
+              q1940RetiredCellKeys.size(), q1940RetiredBatches,
+              q711TerrainBatches.size(), q1940Incremental ? 0 : 1);
+    q1940StageTargetValid = false;
+    q1940StageInitialRetained = 0u;
+    q1940StageEntered = 0u;
     return true;
 }
 

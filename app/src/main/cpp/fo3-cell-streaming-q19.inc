@@ -835,9 +835,18 @@ void Q1900MaintainTerrainQ19(int32_t actualGridX, int32_t actualGridY) {
         gQ1900TerrainCentreYQ19 = actualGridY;
         return;
     }
+
     const int dx = std::abs(actualGridX - gQ1900TerrainCentreXQ19);
     const int dy = std::abs(actualGridY - gQ1900TerrainCentreYQ19);
-    if (dx <= 2 && dy <= 2) return;
+    if (dx == 0 && dy == 0) return;
+
+    // Radius 3 safely carries the active radius-1 world while the resident LAND
+    // centre trails by up to two cells. Yield optional strip work to detailed
+    // CELL/collision streaming inside that runway, but force catch-up at 3.
+    if ((gQ1900WorkerQ19 || gQ1930CollisionTaskQ19) &&
+        dx <= 2 && dy <= 2) {
+        return;
+    }
 
     const auto started = std::chrono::steady_clock::now();
     const float selectionX =
@@ -852,6 +861,7 @@ void Q1900MaintainTerrainQ19(int32_t actualGridX, int32_t actualGridY) {
         gExteriorOriginZQ1890,
         SCENE_FORWARD, FLOOR_Y, FO3_UNITS_PER_METRE);
     SetFo3TerrainSelectionOverrideQ1890(false, 0.0f, 0.0f);
+
     if (ready) {
         ActivateFo3TerrainGroundingQ77(
             gExteriorWorldspaceQ1890,
@@ -862,11 +872,14 @@ void Q1900MaintainTerrainQ19(int32_t actualGridX, int32_t actualGridY) {
         gQ1900TerrainCentreXQ19 = actualGridX;
         gQ1900TerrainCentreYQ19 = actualGridY;
     }
+
     const uint64_t elapsedUs = static_cast<uint64_t>(
         std::chrono::duration_cast<std::chrono::microseconds>(
             std::chrono::steady_clock::now() - started).count());
-    Q6H_LOGI("Q19 TERRAIN LEGACY RECENTER: centre=(%d,%d) ready=%d elapsedUs=%llu radius=3 note=next-q19-terrain-cell-residency",
-             actualGridX, actualGridY, ready ? 1 : 0,
+    Q6H_LOGI("Q19.4 TERRAIN UPDATE: targetCentre=(%d,%d) retainedCentre=(%d,%d) ready=%d elapsedUs=%llu radius=3 cellOwnedGpu=1 buildCellsPerUpdate=1 oldTerrainLiveUntilComplete=1",
+             actualGridX, actualGridY,
+             gQ1900TerrainCentreXQ19, gQ1900TerrainCentreYQ19,
+             ready ? 1 : 0,
              static_cast<unsigned long long>(elapsedUs));
 }
 
