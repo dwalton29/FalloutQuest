@@ -92,6 +92,18 @@ jobs:
             q17-consolidation-build.log
           if-no-files-found: error
 
+      - name: Export validated Q17 source for commit
+        if: always() && steps.q17validate.outcome == 'success'
+        shell: bash
+        run: |
+          for file in             app/src/main/cpp/CMakeLists.txt             app/src/main/cpp/fo3-runtime.cpp             app/src/main/cpp/fo3-runtime-loop.inc             app/src/main/cpp/fo3-interaction-hud-runtime.h             app/src/main/cpp/fo3-cell-world.cpp             app/src/main/cpp/fo3-worldspace-runtime.inc             app/src/main/cpp/fo3-terrain-data-runtime.inc             app/src/main/cpp/fo3-terrain-render-runtime.inc             app/src/main/cpp/fo3-terrain-ground-runtime.inc             app/src/main/cpp/fo3-static-nif-runtime.cpp             app/src/main/cpp/fo3-collision-runtime.cpp             app/src/main/cpp/fo3-player-controller-runtime.inc             README.md             docs/ARCHITECTURE.md
+          do
+            echo "__Q17_FILE_BEGIN__:$file"
+            base64 -w0 "$file"
+            echo
+            echo "__Q17_FILE_END__:$file"
+          done
+
       - name: Upload build diagnostics
         if: always()
         uses: actions/upload-artifact@v4
