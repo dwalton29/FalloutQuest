@@ -3261,28 +3261,25 @@ void UpdateFo3ExteriorStreamingQ1890(float virtualHeadX, float virtualHeadZ) {
                  actualGridX, actualGridY);
     }
 
-    // A player outside the current 3x3 means an older request was missed or
-    // cancelled. Recenter exactly on actual position; never extrapolate farther.
+    // Q18.4: if streaming ever falls far enough behind that the live 5x5 no
+    // longer covers the actual-centred 3x3, this is recovery, not prediction.
+    // Jump the target centre directly under the player. The old one-CELL step
+    // could itself be >1 CELL behind actual, so the stale guard cancelled it
+    // immediately and requeued forever.
     if (std::abs(actualGridX - gExteriorWindowGridXQ1890) > 1 ||
         std::abs(actualGridY - gExteriorWindowGridYQ1890) > 1) {
-        const int q1980CatchupDx = actualGridX - gExteriorWindowGridXQ1890;
-        const int q1980CatchupDy = actualGridY - gExteriorWindowGridYQ1890;
-        int32_t q1980CatchupGridX = gExteriorWindowGridXQ1890;
-        int32_t q1980CatchupGridY = gExteriorWindowGridYQ1890;
-        if (std::abs(q1980CatchupDx) >= std::abs(q1980CatchupDy) && q1980CatchupDx != 0) {
-            q1980CatchupGridX += q1980CatchupDx > 0 ? 1 : -1;
-        } else if (q1980CatchupDy != 0) {
-            q1980CatchupGridY += q1980CatchupDy > 0 ? 1 : -1;
-        }
+        const int32_t q1980CatchupGridX = actualGridX;
+        const int32_t q1980CatchupGridY = actualGridY;
         const float selectionX =
             (static_cast<float>(q1980CatchupGridX) + 0.5f) * Q1890_EXTERIOR_CELL_SIZE;
         const float selectionY =
             (static_cast<float>(q1980CatchupGridY) + 0.5f) * Q1890_EXTERIOR_CELL_SIZE;
-        Q6H_LOGW("Q16.27 STEP CATCHUP: window=(%d,%d) actual=(%d,%d) next=(%d,%d) selection=(%.2f %.2f)",
+        Q6H_LOGW("Q18.4 DIRECT CATCHUP: window=(%d,%d) actual=(%d,%d) target=(%d,%d) selection=(%.2f %.2f) reason=resident-runway-missed",
                  gExteriorWindowGridXQ1890, gExteriorWindowGridYQ1890,
                  actualGridX, actualGridY, q1980CatchupGridX, q1980CatchupGridY,
                  selectionX, selectionY);
-        Q1900BeginStream(selectionX, selectionY, q1980CatchupGridX, q1980CatchupGridY);
+        Q1900BeginStream(selectionX, selectionY,
+                         q1980CatchupGridX, q1980CatchupGridY);
         return;
     }
 
@@ -3761,9 +3758,25 @@ Q1990NativeLodBlock* Q1990FindLodBlock(int32_t blockX, int32_t blockY) {
     return nullptr;
 }
 
+constexpr int Q1840_LEVEL4_BLOCK_CELLS = 4;
+// Fallout.ini: uGridDistantCount=20. Keep that authored distant-grid horizon
+// separate from the 3x3 detailed draw radius and the 5x5 resident REFR window.
+constexpr int Q1840_DISTANT_GRID_RADIUS_CELLS = 20;
+constexpr int Q1840_DISTANT_BLOCK_RADIUS =
+    (Q1840_DISTANT_GRID_RADIUS_CELLS + Q1840_LEVEL4_BLOCK_CELLS - 1) /
+    Q1840_LEVEL4_BLOCK_CELLS; // 5 Level4 blocks each direction => up to 11x11.
+constexpr int Q1840_DISTANT_BLOCK_COORD_RADIUS =
+    Q1840_DISTANT_BLOCK_RADIUS * Q1840_LEVEL4_BLOCK_CELLS;
+constexpr size_t Q1840_DISTANT_TARGET_BLOCKS =
+    static_cast<size_t>((Q1840_DISTANT_BLOCK_RADIUS * 2 + 1) *
+                        (Q1840_DISTANT_BLOCK_RADIUS * 2 + 1));
+constexpr size_t Q1840_DISTANT_CACHE_BLOCKS = 144u;
+
 bool Q1990LodBlockDesired(int32_t blockX, int32_t blockY) {
-    return std::abs(blockX - gQ1990NativeLodCentreBlockX) <= 4 &&
-           std::abs(blockY - gQ1990NativeLodCentreBlockY) <= 4;
+    return std::abs(blockX - gQ1990NativeLodCentreBlockX) <=
+               Q1840_DISTANT_BLOCK_COORD_RADIUS &&
+           std::abs(blockY - gQ1990NativeLodCentreBlockY) <=
+               Q1840_DISTANT_BLOCK_COORD_RADIUS;
 }
 
 void Q1990EnsureNativeLodForCell(int32_t cellX, int32_t cellY,
@@ -3782,66 +3795,138 @@ void Q1990EnsureNativeLodForCell(int32_t cellX, int32_t cellY,
 
     const int32_t centreBlockX = Q1990FloorToLevel4Block(cellX);
     const int32_t centreBlockY = Q1990FloorToLevel4Block(cellY);
-    if (sameOrigin && !gQ1990NativeLodBlocks.empty() &&
-        centreBlockX == gQ1990NativeLodCentreBlockX &&
-        centreBlockY == gQ1990NativeLodCentreBlockY) {
-        return;
-    }
-    gQ1990NativeLodCentreBlockX = centreBlockX;
-    gQ1990NativeLodCentreBlockY = centreBlockY;
-    ++gQ1990NativeLodSerial;
+    const bool centreChanged =
+        !sameOrigin ||
+        centreBlockX != gQ1990NativeLodCentreBlockX ||
+        centreBlockY != gQ1990NativeLodCentreBlockY;
 
-    size_t newBlocks = 0u;
-    size_t totalTriangles = 0u;
-    for (int32_t by = centreBlockY - 4; by <= centreBlockY + 4; by += 4) {
-        for (int32_t bx = centreBlockX - 4; bx <= centreBlockX + 4; bx += 4) {
-            Q1990NativeLodBlock* existing = Q1990FindLodBlock(bx, by);
-            if (existing) {
-                existing->lastUse = gQ1990NativeLodSerial;
-                continue;
+    if (centreChanged) {
+        gQ1990NativeLodCentreBlockX = centreBlockX;
+        gQ1990NativeLodCentreBlockY = centreBlockY;
+        ++gQ1990NativeLodSerial;
+        gQ1990NativeLodDrawLogged = false;
+        for (Q1990NativeLodBlock& block : gQ1990NativeLodBlocks) {
+            if (Q1990LodBlockDesired(block.blockX, block.blockY))
+                block.lastUse = gQ1990NativeLodSerial;
+        }
+        Q6H_LOGI("Q18.4 NATIVE LOD HORIZON: playerCell=(%d,%d) centreBlock=(%d,%d) radiusCells=%d radiusLevel4Blocks=%d targetBlocks=%zu source=Fallout.ini/uGridDistantCount",
+                 cellX, cellY, centreBlockX, centreBlockY,
+                 Q1840_DISTANT_GRID_RADIUS_CELLS,
+                 Q1840_DISTANT_BLOCK_RADIUS,
+                 Q1840_DISTANT_TARGET_BLOCKS);
+    }
+
+    // Pick exactly one missing authored Level4 block, nearest ring first.
+    // The old 3x3 implementation synchronously loaded an entire strip when the
+    // player crossed a Level4 boundary. Growing the horizon to Fallout's 20-cell
+    // setting would make that catastrophic, so the far world fills progressively.
+    int32_t nextBlockX = 0;
+    int32_t nextBlockY = 0;
+    int bestRing = 1000000;
+    int bestManhattan = 1000000;
+    bool missingFound = false;
+    for (int dy = -Q1840_DISTANT_BLOCK_RADIUS;
+         dy <= Q1840_DISTANT_BLOCK_RADIUS; ++dy) {
+        for (int dx = -Q1840_DISTANT_BLOCK_RADIUS;
+             dx <= Q1840_DISTANT_BLOCK_RADIUS; ++dx) {
+            const int32_t bx =
+                centreBlockX + dx * Q1840_LEVEL4_BLOCK_CELLS;
+            const int32_t by =
+                centreBlockY + dy * Q1840_LEVEL4_BLOCK_CELLS;
+            if (Q1990FindLodBlock(bx, by)) continue;
+            const int ring = std::max(std::abs(dx), std::abs(dy));
+            const int manhattan = std::abs(dx) + std::abs(dy);
+            if (!missingFound || ring < bestRing ||
+                (ring == bestRing && manhattan < bestManhattan)) {
+                missingFound = true;
+                bestRing = ring;
+                bestManhattan = manhattan;
+                nextBlockX = bx;
+                nextBlockY = by;
             }
-            Q1990NativeLodBlock block;
-            block.blockX = bx;
-            block.blockY = by;
-            block.lastUse = gQ1990NativeLodSerial;
-            const std::string suffix = "Wasteland.Level4.X" + std::to_string(bx) +
-                                       ".Y" + std::to_string(by) + ".NIF";
-            const std::string terrainPath = "Landscape\\LOD\\Wasteland\\" + suffix;
-            const std::string objectPath = "Landscape\\LOD\\Wasteland\\Blocks\\" + suffix;
-            size_t terrainTriangles = 0u;
-            size_t objectTriangles = 0u;
-            const bool terrainReady = Q1990UploadNativeLodNif(
-                terrainPath, centerX, centerY, floorZ, block.terrain, terrainTriangles);
-            const bool objectsReady = Q1990UploadNativeLodNif(
-                objectPath, centerX, centerY, floorZ, block.objects, objectTriangles);
-            totalTriangles += terrainTriangles + objectTriangles;
-            Q6H_LOGI("Q16.27 NATIVE LOD BLOCK READY: block=(%d,%d) terrainReady=%d terrainShapes=%zu terrainTriangles=%zu objectsReady=%d objectShapes=%zu objectTriangles=%zu",
-                     bx, by, terrainReady ? 1 : 0, block.terrain.size(), terrainTriangles,
-                     objectsReady ? 1 : 0, block.objects.size(), objectTriangles);
-            gQ1990NativeLodBlocks.push_back(std::move(block));
-            ++newBlocks;
         }
     }
 
-    // Keep a bounded warm macroblock cache. Nine are visible; seven additional
-    // recently-used blocks make reversing direction cheap without unbounded VAOs.
-    while (gQ1990NativeLodBlocks.size() > 16u) {
+    // Always establish the old 3x3 core (rings 0..1). Beyond that, don't let
+    // far-LOD expansion compete with an active detailed/collision generation.
+    if (missingFound && (bestRing <= 1 || !gExteriorStreamBusyQ1890)) {
+        const auto q1840LoadStarted = std::chrono::steady_clock::now();
+        Q1990NativeLodBlock block;
+        block.blockX = nextBlockX;
+        block.blockY = nextBlockY;
+        block.lastUse = gQ1990NativeLodSerial;
+
+        const std::string suffix =
+            "Wasteland.Level4.X" + std::to_string(nextBlockX) +
+            ".Y" + std::to_string(nextBlockY) + ".NIF";
+        const std::string terrainPath =
+            "Landscape\\LOD\\Wasteland\\" + suffix;
+        const std::string objectPath =
+            "Landscape\\LOD\\Wasteland\\Blocks\\" + suffix;
+        size_t terrainTriangles = 0u;
+        size_t objectTriangles = 0u;
+        const bool terrainReady = Q1990UploadNativeLodNif(
+            terrainPath, centerX, centerY, floorZ,
+            block.terrain, terrainTriangles);
+        const bool objectsReady = Q1990UploadNativeLodNif(
+            objectPath, centerX, centerY, floorZ,
+            block.objects, objectTriangles);
+        const uint64_t q1840LoadUs = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::steady_clock::now() - q1840LoadStarted).count());
+
+        Q6H_LOGI("Q18.4 NATIVE LOD BLOCK READY: block=(%d,%d) ring=%d terrainReady=%d terrainShapes=%zu terrainTriangles=%zu objectsReady=%d objectShapes=%zu objectTriangles=%zu loadUs=%llu detailedStreamBusy=%d",
+                 nextBlockX, nextBlockY, bestRing,
+                 terrainReady ? 1 : 0, block.terrain.size(), terrainTriangles,
+                 objectsReady ? 1 : 0, block.objects.size(), objectTriangles,
+                 static_cast<unsigned long long>(q1840LoadUs),
+                 gExteriorStreamBusyQ1890 ? 1 : 0);
+        // Empty authored coordinates are cached too, so we do not probe them
+        // every frame while filling the distant horizon.
+        gQ1990NativeLodBlocks.push_back(std::move(block));
+    }
+
+    while (gQ1990NativeLodBlocks.size() > Q1840_DISTANT_CACHE_BLOCKS) {
         size_t victim = gQ1990NativeLodBlocks.size();
         uint64_t oldest = UINT64_MAX;
         for (size_t i = 0u; i < gQ1990NativeLodBlocks.size(); ++i) {
             const Q1990NativeLodBlock& block = gQ1990NativeLodBlocks[i];
             if (Q1990LodBlockDesired(block.blockX, block.blockY)) continue;
-            if (block.lastUse < oldest) { oldest = block.lastUse; victim = i; }
+            if (block.lastUse < oldest) {
+                oldest = block.lastUse;
+                victim = i;
+            }
         }
         if (victim >= gQ1990NativeLodBlocks.size()) break;
-        for (GpuObject& object : gQ1990NativeLodBlocks[victim].terrain) Q1990DeleteLodGpu(object);
-        for (GpuObject& object : gQ1990NativeLodBlocks[victim].objects) Q1990DeleteLodGpu(object);
-        gQ1990NativeLodBlocks.erase(gQ1990NativeLodBlocks.begin() + static_cast<std::ptrdiff_t>(victim));
+        for (GpuObject& object : gQ1990NativeLodBlocks[victim].terrain)
+            Q1990DeleteLodGpu(object);
+        for (GpuObject& object : gQ1990NativeLodBlocks[victim].objects)
+            Q1990DeleteLodGpu(object);
+        gQ1990NativeLodBlocks.erase(
+            gQ1990NativeLodBlocks.begin() +
+            static_cast<std::ptrdiff_t>(victim));
     }
 
-    Q6H_LOGI("Q16.27 NATIVE LOD WINDOW: playerCell=(%d,%d) centreBlock=(%d,%d) visibleBlocks=9 cachedBlocks=%zu newBlocks=%zu newTriangles=%zu mode=Bethesda-Level4-authored-world-coordinates",
-             cellX, cellY, centreBlockX, centreBlockY,
-             gQ1990NativeLodBlocks.size(), newBlocks, totalTriangles);
+    size_t desiredLoaded = 0u;
+    for (const Q1990NativeLodBlock& block : gQ1990NativeLodBlocks)
+        if (Q1990LodBlockDesired(block.blockX, block.blockY))
+            ++desiredLoaded;
+
+    static size_t q1840LastLoggedLoaded = static_cast<size_t>(-1);
+    static int32_t q1840LastLoggedCentreX = INT32_MIN;
+    static int32_t q1840LastLoggedCentreY = INT32_MIN;
+    if (desiredLoaded != q1840LastLoggedLoaded ||
+        centreBlockX != q1840LastLoggedCentreX ||
+        centreBlockY != q1840LastLoggedCentreY) {
+        q1840LastLoggedLoaded = desiredLoaded;
+        q1840LastLoggedCentreX = centreBlockX;
+        q1840LastLoggedCentreY = centreBlockY;
+        Q6H_LOGI("Q18.4 NATIVE LOD WINDOW: playerCell=(%d,%d) centreBlock=(%d,%d) desiredLoaded=%zu/%zu cachedBlocks=%zu radiusCells=%d stagedOneBlockPerFrame=1 outerLoadsYieldToDetailedStreaming=1",
+                 cellX, cellY, centreBlockX, centreBlockY,
+                 desiredLoaded, Q1840_DISTANT_TARGET_BLOCKS,
+                 gQ1990NativeLodBlocks.size(),
+                 Q1840_DISTANT_GRID_RADIUS_CELLS);
+    }
 }
 
 void Q1990RenderNativeLod(bool alphaPass) {
@@ -3877,7 +3962,7 @@ void Q1990RenderNativeLod(bool alphaPass) {
     glDisable(GL_POLYGON_OFFSET_FILL);
     if (!alphaPass && !gQ1990NativeLodDrawLogged) {
         gQ1990NativeLodDrawLogged = true;
-        Q6H_LOGI("Q16.27 NATIVE LOD DRAW: shapes=%zu triangles=%zu currentTerrainBlockSuppressed=1 polygonOffset=1 shadows=0",
+        Q6H_LOGI("Q18.4 NATIVE LOD DRAW: shapes=%zu triangles=%zu radiusCells=20 currentTerrainBlockSuppressed=1 polygonOffset=1 shadows=0",
                  drawnShapes, drawnTriangles);
     }
 }
