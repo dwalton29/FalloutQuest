@@ -55,6 +55,7 @@ bool QueueFo3MegatonEntryQ1860();
 #include <cctype>
 #include <cmath>
 #include <cstdint>
+#include <deque>
 #include <cstring>
 #include <string>
 #include <unordered_map>
@@ -5420,6 +5421,7 @@ void Q6HDeleteFramebuffers(GLsizei n, const GLuint* framebuffers) {
         if (object.vao) glDeleteVertexArrays(1, &object.vao);
     }
     gObjects.clear();
+    Q1910DrainDeferredGpuDeletesQ19(true);
     for (const auto& entry : gTextureCache) {
         const GLuint id = entry.second.id;
         if (id) glDeleteTextures(1, &id);

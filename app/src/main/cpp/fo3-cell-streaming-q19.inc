@@ -67,6 +67,8 @@ struct Q1900CellStateQ19 {
     size_t unsupported = 0u;
     uint64_t workerUs = 0u;
     uint64_t gpuUs = 0u;
+    uint64_t maxTextureGpuUs = 0u;
+    uint64_t maxShapeGpuUs = 0u;
 };
 
 std::unordered_map<uint64_t, Q1900CellStateQ19> gQ1900CellsQ19;
@@ -92,6 +94,58 @@ constexpr int Q1900_RESIDENT_RADIUS_Q19 = 2;
 constexpr int Q1900_CACHE_RADIUS_Q19 = 3;
 constexpr float Q1900_PREFETCH_EDGE_UNITS_Q19 = 1152.0f;
 constexpr uint64_t Q1900_GPU_BUDGET_US_Q19 = 2200u;
+constexpr uint64_t Q1910_GPU_DELETE_BUDGET_US = 750u;
+constexpr uint64_t Q1910_GPU_ITEM_WARN_US = 8000u;
+std::deque<GpuObject> gQ1910DeferredGpuDeletesQ19;
+
+void Q1910QueueGpuDeleteQ19(GpuObject& object) {
+    if (object.vbo == 0u && object.vao == 0u) return;
+    gQ1910DeferredGpuDeletesQ19.push_back(std::move(object));
+    // GpuObject is not RAII. Clear the source handles explicitly so moved-from
+    // vectors can be compacted/destroyed without double-deleting GL geometry.
+    object.vbo = 0u;
+    object.vao = 0u;
+}
+
+void Q1910DrainDeferredGpuDeletesQ19(bool flushAll = false) {
+    if (gQ1910DeferredGpuDeletesQ19.empty()) return;
+    const size_t queuedBefore = gQ1910DeferredGpuDeletesQ19.size();
+    const auto started = std::chrono::steady_clock::now();
+    size_t deleted = 0u;
+    uint64_t maxItemUs = 0u;
+
+    while (!gQ1910DeferredGpuDeletesQ19.empty()) {
+        const auto itemStarted = std::chrono::steady_clock::now();
+        Q1900DeleteGpuShape(gQ1910DeferredGpuDeletesQ19.front());
+        gQ1910DeferredGpuDeletesQ19.pop_front();
+        const uint64_t itemUs = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::steady_clock::now() - itemStarted).count());
+        maxItemUs = std::max(maxItemUs, itemUs);
+        ++deleted;
+
+        if (!flushAll) {
+            const uint64_t elapsedUs = static_cast<uint64_t>(
+                std::chrono::duration_cast<std::chrono::microseconds>(
+                    std::chrono::steady_clock::now() - started).count());
+            if (elapsedUs >= Q1910_GPU_DELETE_BUDGET_US) break;
+        }
+    }
+
+    const uint64_t elapsedUs = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - started).count());
+    if (flushAll || gQ1910DeferredGpuDeletesQ19.empty() ||
+        maxItemUs >= Q1910_GPU_ITEM_WARN_US ||
+        elapsedUs >= Q1910_GPU_DELETE_BUDGET_US * 2u) {
+        Q6H_LOGI("Q19.1 GPU DELETE DRAIN: deleted=%zu queuedBefore=%zu remaining=%zu elapsedUs=%llu maxItemUs=%llu budgetUs=%llu flush=%d",
+                 deleted, queuedBefore, gQ1910DeferredGpuDeletesQ19.size(),
+                 static_cast<unsigned long long>(elapsedUs),
+                 static_cast<unsigned long long>(maxItemUs),
+                 static_cast<unsigned long long>(Q1910_GPU_DELETE_BUDGET_US),
+                 flushAll ? 1 : 0);
+    }
+}
 
 uint64_t Q1900CellKeyQ19(int32_t x, int32_t y) {
     return (static_cast<uint64_t>(static_cast<uint32_t>(x)) << 32u) |
@@ -508,20 +562,36 @@ Q1900CellStateQ19* Q1900SelectUploadingCellQ19(
 }
 
 void Q1900CommitCellVisualsQ19(Q1900CellStateQ19& state) {
+    const auto retireStarted = std::chrono::steady_clock::now();
     size_t retired = 0u;
-    // A retry or cache re-entry may leave an old copy. Replace only this CELL;
-    // all other resident CELL geometry remains untouched.
-    for (size_t i = 0u; i < gObjects.size();) {
-        if (!gObjects[i].q1990NativeLod &&
-            gObjects[i].q1970GridX == state.gridX &&
-            gObjects[i].q1970GridY == state.gridY) {
-            Q1900DeleteGpuShape(gObjects[i]);
-            gObjects.erase(gObjects.begin() + static_cast<std::ptrdiff_t>(i));
+
+    // Q19.1: remove an old copy of only this CELL in one linear compaction.
+    // Geometry destruction is deferred; never issue hundreds of glDelete calls
+    // or repeated vector::erase shifts on the boundary frame.
+    size_t write = 0u;
+    const size_t oldLive = gObjects.size();
+    for (size_t read = 0u; read < oldLive; ++read) {
+        GpuObject& object = gObjects[read];
+        const bool replace =
+            !object.q1990NativeLod &&
+            object.q1970GridX == state.gridX &&
+            object.q1970GridY == state.gridY;
+        if (replace) {
+            Q1910QueueGpuDeleteQ19(object);
             ++retired;
-        } else {
-            ++i;
+            continue;
         }
+        if (write != read) {
+            gObjects[write] = std::move(object);
+            object.vbo = 0u;
+            object.vao = 0u;
+        }
+        ++write;
     }
+    gObjects.resize(write);
+    const uint64_t retireQueueUs = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - retireStarted).count());
 
     const size_t entering = state.stagedGpu.size();
     for (GpuObject& object : state.stagedGpu) {
@@ -544,11 +614,14 @@ void Q1900CommitCellVisualsQ19(Q1900CellStateQ19& state) {
             std::chrono::duration_cast<std::chrono::microseconds>(
                 std::chrono::steady_clock::now() - state.requestedAt).count());
 
-    Q6H_LOGI("Q19 CELL READY: cell=(%d,%d) enteringShapes=%zu retiredShapes=%zu liveShapes=%zu placements=%zu workerUs=%llu gpuUs=%llu totalUs=%llu lodHandoff=cell-specific",
+    Q6H_LOGI("Q19.1 CELL READY: cell=(%d,%d) enteringShapes=%zu replacedShapes=%zu liveShapes=%zu deferredDeletes=%zu placements=%zu workerUs=%llu gpuUs=%llu retireQueueUs=%llu maxTextureGpuUs=%llu maxShapeGpuUs=%llu totalUs=%llu lodHandoff=cell-specific",
              state.gridX, state.gridY, entering, retired, gObjects.size(),
-             state.placements.size(),
+             gQ1910DeferredGpuDeletesQ19.size(), state.placements.size(),
              static_cast<unsigned long long>(state.workerUs),
              static_cast<unsigned long long>(state.gpuUs),
+             static_cast<unsigned long long>(retireQueueUs),
+             static_cast<unsigned long long>(state.maxTextureGpuUs),
+             static_cast<unsigned long long>(state.maxShapeGpuUs),
              static_cast<unsigned long long>(totalUs));
 }
 
@@ -561,12 +634,22 @@ void Q1900AdvanceGpuQ19(int32_t actualGridX, int32_t actualGridY) {
     bool didWork = false;
 
     while (state->textureCursor < state->textures.size()) {
+        const size_t requestIndex = state->textureCursor;
         const auto itemStarted = std::chrono::steady_clock::now();
         Q1900UploadTextureRequestQ19(
             state->textures[state->textureCursor++]);
-        state->gpuUs += static_cast<uint64_t>(
+        const uint64_t itemUs = static_cast<uint64_t>(
             std::chrono::duration_cast<std::chrono::microseconds>(
                 std::chrono::steady_clock::now() - itemStarted).count());
+        state->gpuUs += itemUs;
+        state->maxTextureGpuUs = std::max(state->maxTextureGpuUs, itemUs);
+        if (itemUs >= Q1910_GPU_ITEM_WARN_US) {
+            Q6H_LOGW("Q19.1 GPU ITEM SPIKE: phase=texture cell=(%d,%d) itemUs=%llu index=%zu/%zu path=%s",
+                     state->gridX, state->gridY,
+                     static_cast<unsigned long long>(itemUs),
+                     requestIndex + 1u, state->textures.size(),
+                     state->textures[requestIndex].path.c_str());
+        }
         didWork = true;
         if (static_cast<uint64_t>(
                 std::chrono::duration_cast<std::chrono::microseconds>(
@@ -590,9 +673,18 @@ void Q1900AdvanceGpuQ19(int32_t actualGridX, int32_t actualGridY) {
             Q1900DeleteGpuShape(gpu);
         }
         cpu = CpuObject{};
-        state->gpuUs += static_cast<uint64_t>(
+        const uint64_t itemUs = static_cast<uint64_t>(
             std::chrono::duration_cast<std::chrono::microseconds>(
                 std::chrono::steady_clock::now() - itemStarted).count());
+        state->gpuUs += itemUs;
+        state->maxShapeGpuUs = std::max(state->maxShapeGpuUs, itemUs);
+        if (itemUs >= Q1910_GPU_ITEM_WARN_US) {
+            Q6H_LOGW("Q19.1 GPU ITEM SPIKE: phase=shape cell=(%d,%d) itemUs=%llu index=%zu/%zu model=%s",
+                     state->gridX, state->gridY,
+                     static_cast<unsigned long long>(itemUs),
+                     state->gpuCursor, state->cpu.size(),
+                     gpu.modelPath.c_str());
+        }
         didWork = true;
         if (static_cast<uint64_t>(
                 std::chrono::duration_cast<std::chrono::microseconds>(
@@ -720,23 +812,38 @@ void Q1900RetireFarCellsQ19(int32_t actualGridX, int32_t actualGridY) {
     gQ1900LastActualXQ19 = actualGridX;
     gQ1900LastActualYQ19 = actualGridY;
 
+    const auto retireStarted = std::chrono::steady_clock::now();
     size_t retiredShapes = 0u;
-    for (size_t i = 0u; i < gObjects.size();) {
-        const int dx = std::abs(gObjects[i].q1970GridX - actualGridX);
-        const int dy = std::abs(gObjects[i].q1970GridY - actualGridY);
-        if (!gObjects[i].q1990NativeLod &&
-            std::max(dx, dy) > Q1900_CACHE_RADIUS_Q19) {
-            Q1900DeleteGpuShape(gObjects[i]);
-            gObjects.erase(gObjects.begin() + static_cast<std::ptrdiff_t>(i));
+    const size_t oldLive = gObjects.size();
+    size_t write = 0u;
+
+    // Q19.1: one O(n) compaction. Outgoing shapes stop drawing immediately,
+    // but their GL objects are destroyed later under a tiny frame budget.
+    for (size_t read = 0u; read < oldLive; ++read) {
+        GpuObject& object = gObjects[read];
+        const int dx = std::abs(object.q1970GridX - actualGridX);
+        const int dy = std::abs(object.q1970GridY - actualGridY);
+        const bool retire =
+            !object.q1990NativeLod &&
+            std::max(dx, dy) > Q1900_CACHE_RADIUS_Q19;
+        if (retire) {
+            Q1910QueueGpuDeleteQ19(object);
             ++retiredShapes;
-        } else {
-            ++i;
+            continue;
         }
+        if (write != read) {
+            gObjects[write] = std::move(object);
+            object.vbo = 0u;
+            object.vao = 0u;
+        }
+        ++write;
     }
+    gObjects.resize(write);
 
     const uint64_t workerKey = gQ1900WorkerQ19
         ? Q1900CellKeyQ19(gQ1900WorkerQ19->gridX, gQ1900WorkerQ19->gridY)
         : UINT64_MAX;
+    size_t retiredStaged = 0u;
     for (auto it = gQ1900CellsQ19.begin(); it != gQ1900CellsQ19.end();) {
         const int dx = std::abs(it->second.gridX - actualGridX);
         const int dy = std::abs(it->second.gridY - actualGridY);
@@ -744,17 +851,27 @@ void Q1900RetireFarCellsQ19(int32_t actualGridX, int32_t actualGridY) {
             it->second.stage == Q1900CellStageQ19::Uploading;
         if (it->first != workerKey && !uploading &&
             std::max(dx, dy) > Q1900_CACHE_RADIUS_Q19 + 1) {
-            for (GpuObject& object : it->second.stagedGpu)
-                Q1900DeleteGpuShape(object);
+            for (GpuObject& object : it->second.stagedGpu) {
+                Q1910QueueGpuDeleteQ19(object);
+                ++retiredStaged;
+            }
             it = gQ1900CellsQ19.erase(it);
         } else {
             ++it;
         }
     }
-    if (retiredShapes > 0u) {
-        Q6H_LOGI("Q19 CELL RETIRE: actual=(%d,%d) retiredShapes=%zu liveShapes=%zu cacheRadius=%d",
-                 actualGridX, actualGridY, retiredShapes, gObjects.size(),
-                 Q1900_CACHE_RADIUS_Q19);
+
+    const uint64_t retireQueueUs = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - retireStarted).count());
+    if (retiredShapes > 0u || retiredStaged > 0u) {
+        gSceneReady = !gObjects.empty();
+        gShadowDirtyQ1050 = true;
+        Q6H_LOGI("Q19.1 CELL RETIRE QUEUED: actual=(%d,%d) retiredLiveShapes=%zu retiredStagedShapes=%zu liveShapes=%zu deferredDeletes=%zu cacheRadius=%d queueUs=%llu algorithm=single-pass-compact+deferred-gl-delete",
+                 actualGridX, actualGridY, retiredShapes, retiredStaged,
+                 gObjects.size(), gQ1910DeferredGpuDeletesQ19.size(),
+                 Q1900_CACHE_RADIUS_Q19,
+                 static_cast<unsigned long long>(retireQueueUs));
     }
 }
 
@@ -777,6 +894,7 @@ void Q1900UpdateCellStreamingQ19(
 
     Q1900ConsumeWorkerQ19();
     Q1900EnsureWantedCellsQ19(gameX, gameY, actualGridX, actualGridY);
+    Q1910DrainDeferredGpuDeletesQ19(false);
     Q1900AdvanceGpuQ19(actualGridX, actualGridY);
     Q1900TryPublishCollisionQ19(actualGridX, actualGridY);
     Q1900MaintainTerrainQ19(actualGridX, actualGridY);
