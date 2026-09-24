@@ -59,12 +59,7 @@ jobs:
           rm -rf consolidation-generated
           mkdir -p consolidation-generated
           if [ -d app/.cxx ]; then
-            find app/.cxx -type f \\( -name '*.cpp' -o -name '*.c' -o -name '*.h' -o -name '*.inc' \\) -print0 \
-              | while IFS= read -r -d '' file; do
-                  rel="${file#app/.cxx/}"
-                  mkdir -p "consolidation-generated/$(dirname "$rel")"
-                  cp "$file" "consolidation-generated/$rel"
-                done
+            cp -a app/.cxx consolidation-generated/app-cxx
           fi
 
       - name: Upload generated native sources
