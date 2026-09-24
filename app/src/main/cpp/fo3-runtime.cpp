@@ -907,15 +907,45 @@ bool BuildCpuObjects(const Fo3WorldPlacement& placement, std::vector<CpuObject>&
     return !outs.empty();
 }
 
-bool ResolveDoorTeleportCachedQ1698(uint32_t refFormId, Fo3DoorTeleport& out) {
+bool ResolveDoorTeleportCachedQ1698(uint32_t refFormId,
+                                      bool wastelandExterior,
+                                      Fo3DoorTeleport& out) {
     static std::unordered_map<uint32_t, Fo3DoorTeleport> cache;
     const auto cached = cache.find(refFormId);
     if (cached != cache.end()) {
         out = cached->second;
         return out.valid;
     }
+
     Fo3DoorTeleport resolved;
-    ResolveFo3DoorTeleportQ1700(refFormId, &resolved);
+    bool q1920IndexReady = false;
+    bool q1920IndexedLookup = false;
+    if (wastelandExterior) {
+        q1920IndexedLookup =
+            LookupFo3WastelandDoorTeleportQ1920(
+                refFormId, &resolved, &q1920IndexReady);
+    }
+
+    if (wastelandExterior && q1920IndexReady) {
+        if (q1920IndexedLookup && resolved.valid) {
+            Q6H_LOGI("Q19.2 DOOR XTEL INDEX HIT: sourceDoor=%08X destinationDoor=%08X destinationCell=%08X renderThreadEsmScan=0",
+                     refFormId, resolved.destinationDoorRefFormId,
+                     resolved.destinationCellFormId);
+        } else {
+            Q6H_LOGI("Q19.2 DOOR XTEL INDEX ABSENT: sourceDoor=%08X renderThreadEsmScan=0",
+                     refFormId);
+        }
+    } else {
+        // Interior and non-Wasteland worlds retain the proven generic resolver.
+        // If the Wasteland index failed unexpectedly, correctness wins over the
+        // optimisation and this path remains a safe fallback.
+        ResolveFo3DoorTeleportQ1700(refFormId, &resolved);
+        if (wastelandExterior) {
+            Q6H_LOGW("Q19.2 DOOR XTEL INDEX FALLBACK: sourceDoor=%08X reason=index-unavailable",
+                     refFormId);
+        }
+    }
+
     cache.emplace(refFormId, resolved);
     out = resolved;
     return out.valid;
@@ -1078,7 +1108,12 @@ bool UploadCpuObject(CpuObject& cpu, float centerX, float centerY, float floorZ,
         : static_cast<int32_t>(std::floor(cpu.placement.y / Q1890_EXTERIOR_CELL_SIZE));
     gpu.baseRecordType = cpu.placement.baseRecordType;
     if (gpu.baseRecordType == "DOOR") {
-        ResolveDoorTeleportCachedQ1698(gpu.refFormId, gpu.teleport);
+        const bool q1920WastelandExterior =
+            gExteriorWorldspaceQ1890 == 0x0000003Cu &&
+            (cpu.placement.hasExteriorGrid ||
+             cpu.placement.persistentExteriorRef);
+        ResolveDoorTeleportCachedQ1698(
+            gpu.refFormId, q1920WastelandExterior, gpu.teleport);
         if (gpu.teleport.valid) {
             CacheFo3DoorPromptQ1840(gpu.refFormId,
                                     cpu.placement.baseFormId,

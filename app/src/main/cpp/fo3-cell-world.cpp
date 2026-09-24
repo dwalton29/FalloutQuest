@@ -46,6 +46,24 @@ bool LoadFo3CellPlacements(uint32_t cellFormId,
 #include "fo3-worldspace-runtime.inc"
 #undef TAG
 
+bool LookupFo3WastelandDoorTeleportQ1920(
+        uint32_t sourceDoorRef,
+        Fo3DoorTeleport* outTeleport,
+        bool* outIndexReady) {
+    if (outTeleport) *outTeleport = {};
+    if (outIndexReady) *outIndexReady = false;
+    if (sourceDoorRef == 0u || !outTeleport) return false;
+
+    const Q1800WorldspaceIndex* index = GetWastelandIndexQ1800();
+    if (!index) return false;
+    if (outIndexReady) *outIndexReady = true;
+
+    const auto found = index->doorTeleportsQ1920.find(sourceDoorRef);
+    if (found == index->doorTeleportsQ1920.end()) return false;
+    *outTeleport = found->second;
+    return outTeleport->valid;
+}
+
 // Q7.6b reuses the exact same Q7.5 worldspace/group helpers, but only decodes
 // CPU LAND/VHGT data. No collision or player-grounding code is touched here.
 #include "fo3-terrain-data-runtime.inc"

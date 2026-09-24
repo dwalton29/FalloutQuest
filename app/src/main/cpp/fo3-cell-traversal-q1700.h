@@ -37,6 +37,14 @@ struct Fo3DoorAimQ1700 {
 bool ResolveFo3DoorTeleportQ1700(uint32_t sourceDoorRef,
                                  Fo3DoorTeleport* outTeleport);
 
+// Q19.2 Wasteland fast path. The immutable Q18 worldspace index stores XTEL
+// and destination CELL ownership during its normal ESM walk. When outIndexReady
+// is true, a false return means the authored source REFR simply has no XTEL;
+// callers must not fall back to a render-thread ESM scan.
+bool LookupFo3WastelandDoorTeleportQ1920(uint32_t sourceDoorRef,
+                                         Fo3DoorTeleport* outTeleport,
+                                         bool* outIndexReady);
+
 // Renderer-side authored DOOR targeting. Coordinates/direction are in the same
 // virtual OpenXR scene frame as the static NIF renderer.
 bool QueryFo3DoorAimQ1700(float originX, float originY, float originZ,

@@ -431,9 +431,20 @@ struct Q1800WorldspaceIndex {
     std::unordered_map<uint32_t, std::vector<RawPlacementQ75>> refsByCell;
     std::unordered_map<uint32_t, size_t> landCountByCell;
     std::unordered_map<uint32_t, BaseRecordQ75> bases;
+
+    // Q19.2: XTEL-bearing Wasteland REFRs are indexed during the same immutable
+    // ESM walk as CELL/REFR residency. Destination ownership is taken from the
+    // group stack for every REFR in the ESM, so render-thread door uploads never
+    // need to scan Fallout3.esm.
+    std::unordered_map<uint32_t, uint32_t> refOwnerCellsQ1920;
+    std::unordered_map<uint32_t, Fo3DoorTeleport> doorTeleportsQ1920;
+
     size_t gridCellCount = 0u;
     size_t rawRefCount = 0u;
     size_t landRecordCount = 0u;
+    size_t refOwnerCountQ1920 = 0u;
+    size_t doorTeleportCountQ1920 = 0u;
+    size_t doorTeleportResolvedCountQ1920 = 0u;
 };
 
 Q1800WorldspaceIndex gQ1800WastelandIndex;
@@ -452,6 +463,26 @@ uint32_t OwningWorldspaceCellQ1800(const std::vector<GroupFrameQ75>& groups) {
         }
     }
     return 0u;
+}
+
+bool ParseDoorTeleportQ1920(const std::vector<uint8_t>& payload,
+                            Fo3DoorTeleport& outTeleport) {
+    outTeleport = {};
+    bool found = false;
+    WalkSubrecordsQ75(payload.data(), payload.size(),
+                      [&](const char* type, const uint8_t* bytes, uint32_t size) {
+        if (found || std::memcmp(type, "XTEL", 4u) != 0 || size < 28u) return;
+        outTeleport.destinationDoorRefFormId = ReadLe32Q75(bytes + 0u);
+        outTeleport.x = ReadLeFloatQ75(bytes + 4u);
+        outTeleport.y = ReadLeFloatQ75(bytes + 8u);
+        outTeleport.z = ReadLeFloatQ75(bytes + 12u);
+        outTeleport.rx = ReadLeFloatQ75(bytes + 16u);
+        outTeleport.ry = ReadLeFloatQ75(bytes + 20u);
+        outTeleport.rz = ReadLeFloatQ75(bytes + 24u);
+        if (size >= 32u) outTeleport.flags = ReadLe32Q75(bytes + 28u);
+        found = outTeleport.destinationDoorRefFormId != 0u;
+    });
+    return found;
 }
 
 bool BuildWastelandIndexQ1800(Q1800WorldspaceIndex& out) {
@@ -492,6 +523,14 @@ bool BuildWastelandIndexQ1800(Q1800WorldspaceIndex& out) {
         const uint32_t formId = ReadLe32Q75(header + 12u);
         const uint64_t payloadEnd = offset + HEADER_SIZE_Q75 + sizeField;
         if (payloadEnd > static_cast<uint64_t>(fileSize)) break;
+
+        const bool q1920IsRef =
+            std::memcmp(header, "REFR", 4u) == 0;
+        const uint32_t q1920OwnerCell =
+            q1920IsRef ? OwningWorldspaceCellQ1800(groups) : 0u;
+        if (q1920IsRef && q1920OwnerCell != 0u) {
+            out.refOwnerCellsQ1920[formId] = q1920OwnerCell;
+        }
 
         if (!InWorldspaceQ75(groups, WASTELAND_WORLDSPACE_Q1800)) {
             if (fseeko(file, static_cast<off_t>(payloadEnd), SEEK_SET) != 0) break;
@@ -540,6 +579,12 @@ bool BuildWastelandIndexQ1800(Q1800WorldspaceIndex& out) {
         if (ownerCell != 0u && std::memcmp(header, "REFR", 4u) == 0) {
             std::vector<uint8_t> payload;
             if (!ReadPayloadQ75(file, sizeField, flags, payload)) break;
+
+            Fo3DoorTeleport q1920Teleport;
+            if (ParseDoorTeleportQ1920(payload, q1920Teleport)) {
+                out.doorTeleportsQ1920[formId] = q1920Teleport;
+            }
+
             RawPlacementQ75 placement;
             placement.refFormId = formId;
             placement.owningCellFormId = ownerCell;
@@ -557,6 +602,19 @@ bool BuildWastelandIndexQ1800(Q1800WorldspaceIndex& out) {
 
     std::fclose(file);
 
+    out.refOwnerCountQ1920 = out.refOwnerCellsQ1920.size();
+    out.doorTeleportCountQ1920 = out.doorTeleportsQ1920.size();
+    for (auto& entry : out.doorTeleportsQ1920) {
+        Fo3DoorTeleport& teleport = entry.second;
+        const auto owner =
+            out.refOwnerCellsQ1920.find(teleport.destinationDoorRefFormId);
+        if (owner != out.refOwnerCellsQ1920.end()) {
+            teleport.destinationCellFormId = owner->second;
+            ++out.doorTeleportResolvedCountQ1920;
+        }
+        teleport.valid = teleport.destinationDoorRefFormId != 0u;
+    }
+
     if (out.cells.empty() || out.rawRefCount == 0u) return false;
     if (!ResolveBasesQ75(wantedBases, out.bases)) return false;
 
@@ -566,6 +624,11 @@ bool BuildWastelandIndexQ1800(Q1800WorldspaceIndex& out) {
              out.cells.size(), out.gridCellCount, out.rawRefCount,
              out.landRecordCount, out.bases.size(),
              static_cast<long long>(elapsed));
+    Q75_LOGI("Q19.2 DOOR INDEX READY: sourceXTEL=%zu resolvedDestCells=%zu refOwners=%zu unresolvedDestCells=%zu source=Q18-Wasteland-index renderThreadEsmScans=0",
+             out.doorTeleportCountQ1920,
+             out.doorTeleportResolvedCountQ1920,
+             out.refOwnerCountQ1920,
+             out.doorTeleportCountQ1920 - out.doorTeleportResolvedCountQ1920);
     return true;
 }
 
