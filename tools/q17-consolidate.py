@@ -316,6 +316,10 @@ def verify_no_build_paths(paths: list[Path]) -> None:
 
 
 def main() -> None:
+    if (SRC / "fo3-runtime.cpp").exists():
+        print("Q17: canonical runtime already present; nothing to migrate")
+        return
+
     gen = find_generated_dir()
     written = copy_generated(gen)
     rewrite_generated_includes()
