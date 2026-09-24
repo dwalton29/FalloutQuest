@@ -1,8 +1,11 @@
 void SetFo3WorldspaceGridRadiusOverrideQ1950(int radius);
 void SetNextFo3CollisionExteriorModeQ1931(bool exterior);
+#include <array>
 #include <atomic>
 #include <memory>
+#include <mutex>
 #include <thread>
+#include <unordered_set>
 #include "fo3-terrain-q76.h"
 extern void SetFo3TerrainSelectionOverrideQ1890(bool enabled, float gameX, float gameY);
 #include "fo3-authored-door-query-q1870.h"
@@ -221,7 +224,8 @@ GLint gGlowEnabledLocationQ1020 = -1;
 GLint gExternalEmittanceEnabledLocationQ1380 = -1;
 GLint gExternalEmittanceColorLocationQ1380 = -1;
 GLint gNativeLodClipEnabledLocationQ1810 = -1;
-GLint gNativeLodClipBoundsLocationQ1810 = -1;
+GLint gNativeLodClipCellCountLocationQ1900 = -1;
+GLint gNativeLodClipCellsLocationQ1900 = -1;
 GLint gLightMvpLocationQ1050 = -1;
 GLint gShadowMapLocationQ1050 = -1;
 GLint gShadowTexelLocationQ1050 = -1;
@@ -263,6 +267,17 @@ GLint gLocalLightPosRadiusLocationQ1010 = -1;
 GLint gLocalLightColorFalloffLocationQ1010 = -1;
 std::vector<GpuObject> gObjects;
 std::unordered_map<std::string, CachedGpuTexture> gTextureCache;
+
+// Q19: decoded DDS data is prepared on the serialized asset worker and
+// consumed later by the render thread. OpenGL handles remain render-thread only.
+struct Q1900PreparedTextureQ19 {
+    Fo3RgbaTexture texture;
+    bool real = false;
+};
+std::mutex gQ1900TextureCpuMutexQ19;
+std::unordered_map<std::string, Q1900PreparedTextureQ19>
+    gQ1900PreparedTexturesQ19;
+std::unordered_set<std::string> gQ1900KnownGpuTextureKeysQ19;
 GLuint gDepthRenderbuffer = 0;
 GLsizei gDepthWidth = 0;
 GLsizei gDepthHeight = 0;
@@ -288,6 +303,61 @@ std::string TextureCacheKey(const std::string& path, const char* label) {
     if (key.rfind("data\\", 0) == 0) key = key.substr(5);
     if (key.rfind("textures\\", 0) == 0) key = key.substr(9);
     return std::string("textures\\") + key;
+}
+
+bool Q1900GpuTextureKnownQ19(const std::string& path) {
+    if (path.empty()) return true;
+    const std::string key = TextureCacheKey(path, "");
+    std::lock_guard<std::mutex> lock(gQ1900TextureCpuMutexQ19);
+    return gQ1900KnownGpuTextureKeysQ19.find(key) !=
+               gQ1900KnownGpuTextureKeysQ19.end() ||
+           gQ1900PreparedTexturesQ19.find(key) !=
+               gQ1900PreparedTexturesQ19.end();
+}
+
+void Q1900PrepareTextureCpuQ19(const std::string& path) {
+    if (path.empty()) return;
+    const std::string key = TextureCacheKey(path, "");
+    {
+        std::lock_guard<std::mutex> lock(gQ1900TextureCpuMutexQ19);
+        if (gQ1900KnownGpuTextureKeysQ19.find(key) !=
+                gQ1900KnownGpuTextureKeysQ19.end() ||
+            gQ1900PreparedTexturesQ19.find(key) !=
+                gQ1900PreparedTexturesQ19.end()) {
+            return;
+        }
+    }
+
+    Fo3RgbaTexture decoded;
+    const bool real = LoadFalloutTextureRgba(path, decoded);
+    std::lock_guard<std::mutex> lock(gQ1900TextureCpuMutexQ19);
+    if (gQ1900KnownGpuTextureKeysQ19.find(key) ==
+            gQ1900KnownGpuTextureKeysQ19.end() &&
+        gQ1900PreparedTexturesQ19.find(key) ==
+            gQ1900PreparedTexturesQ19.end()) {
+        Q1900PreparedTextureQ19 prepared;
+        prepared.texture = std::move(decoded);
+        prepared.real = real;
+        gQ1900PreparedTexturesQ19.emplace(key, std::move(prepared));
+    }
+}
+
+bool Q1900TakePreparedTextureQ19(const std::string& key,
+                                 Fo3RgbaTexture& texture,
+                                 bool& real) {
+    std::lock_guard<std::mutex> lock(gQ1900TextureCpuMutexQ19);
+    auto found = gQ1900PreparedTexturesQ19.find(key);
+    if (found == gQ1900PreparedTexturesQ19.end()) return false;
+    texture = std::move(found->second.texture);
+    real = found->second.real;
+    gQ1900PreparedTexturesQ19.erase(found);
+    return true;
+}
+
+void Q1900MarkGpuTextureKnownQ19(const std::string& key) {
+    if (key.empty() || key.rfind("<fallback>:", 0) == 0) return;
+    std::lock_guard<std::mutex> lock(gQ1900TextureCpuMutexQ19);
+    gQ1900KnownGpuTextureKeysQ19.insert(key);
 }
 
 GLuint CompileQ6HShader(GLenum type, const char* source) {
@@ -424,7 +494,8 @@ GLuint CreateQ6HProgram() {
         uniform vec3 uLegacySunlightQ1570;
         uniform float uQ1470LegacyPpDiffuseDomain;
         uniform float uNativeLodClipEnabledQ1810;
-        uniform vec4 uNativeLodClipBoundsQ1810;
+        uniform int uNativeLodClipCellCountQ1900;
+        uniform vec4 uNativeLodClipCellsQ1900[9];
         uniform int uLocalLightCount;
         uniform vec4 uLocalLightPosRadius[8];
         uniform vec4 uLocalLightColorFalloff[8];
@@ -470,16 +541,20 @@ GLuint CreateQ6HProgram() {
             return visible * 0.25;
         }
         void main() {
-            // Q18.1: Bethesda Level4 object/terrain meshes cover coarse 4x4
-            // macroblocks. Clip only the part overlapped by the live 3x3
-            // detailed cells; the remainder of the same authored LOD shape
-            // stays visible beyond the near-world boundary.
-            if (uNativeLodClipEnabledQ1810 > 0.5 &&
-                vPosition.x >= uNativeLodClipBoundsQ1810.x &&
-                vPosition.x <= uNativeLodClipBoundsQ1810.y &&
-                vPosition.z >= uNativeLodClipBoundsQ1810.z &&
-                vPosition.z <= uNativeLodClipBoundsQ1810.w) {
-                discard;
+            // Q19: clip authored Level4 only where the corresponding detailed
+            // exterior CELL is actually resident. A slow/missing CELL therefore
+            // keeps its LOD instead of turning into a hole at the boundary.
+            if (uNativeLodClipEnabledQ1810 > 0.5) {
+                for (int q1900I = 0; q1900I < 9; ++q1900I) {
+                    if (q1900I >= uNativeLodClipCellCountQ1900) break;
+                    vec4 q1900Bounds = uNativeLodClipCellsQ1900[q1900I];
+                    if (vPosition.x >= q1900Bounds.x &&
+                        vPosition.x <= q1900Bounds.y &&
+                        vPosition.z >= q1900Bounds.z &&
+                        vPosition.z <= q1900Bounds.w) {
+                        discard;
+                    }
+                }
             }
             vec4 diffuseTexel = texture(uDiffuse, vUv);
             vec3 baseColor = diffuseTexel.rgb * mix(vec3(1.0), vColor.rgb, uUseVertexColor);
@@ -651,13 +726,21 @@ bool UploadTexture(const std::string& path,
     if (cached != gTextureCache.end()) {
         textureId = cached->second.id;
         real = cached->second.real;
+        Q1900MarkGpuTextureKnownQ19(cacheKey);
         if (!gExteriorStreamingActiveQ1890) Q6H_LOGI("Q6H GPU %s CACHE HIT: ref=%08X key=%s real=%d",
                  label, refFormId, cacheKey.c_str(), real ? 1 : 0);
         return true;
     }
 
     Fo3RgbaTexture texture;
-    real = !path.empty() && LoadFalloutTextureRgba(path, texture);
+    bool q1900PreparedQ19 = false;
+    if (!path.empty()) {
+        q1900PreparedQ19 =
+            Q1900TakePreparedTextureQ19(TextureCacheKey(path, ""), texture, real);
+    }
+    if (!q1900PreparedQ19) {
+        real = !path.empty() && LoadFalloutTextureRgba(path, texture);
+    }
     if (!real) {
         texture.width = 1;
         texture.height = 1;
@@ -735,6 +818,7 @@ bool UploadTexture(const std::string& path,
     }
 
     gTextureCache.emplace(cacheKey, CachedGpuTexture{textureId, real});
+    Q1900MarkGpuTextureKnownQ19(cacheKey);
     if (!gExteriorStreamingActiveQ1890) Q6H_LOGI("Q6H GPU %s CACHE MISS: ref=%08X source=%s %dx%d format=%s uniqueTextures=%zu",
              label, refFormId, real ? texture.sourcePath.c_str() : "<fallback>",
              texture.width, texture.height, texture.format.c_str(), gTextureCache.size());
@@ -1519,8 +1603,10 @@ bool InitializeScene() {
         glGetUniformLocation(gProgram, "uExternalEmittanceColorQ1380");
     gNativeLodClipEnabledLocationQ1810 =
         glGetUniformLocation(gProgram, "uNativeLodClipEnabledQ1810");
-    gNativeLodClipBoundsLocationQ1810 =
-        glGetUniformLocation(gProgram, "uNativeLodClipBoundsQ1810");
+    gNativeLodClipCellCountLocationQ1900 =
+        glGetUniformLocation(gProgram, "uNativeLodClipCellCountQ1900");
+    gNativeLodClipCellsLocationQ1900 =
+        glGetUniformLocation(gProgram, "uNativeLodClipCellsQ1900[0]");
     gLightMvpLocationQ1050 = glGetUniformLocation(gProgram, "uLightMvp");
     gShadowMapLocationQ1050 = glGetUniformLocation(gProgram, "uShadowMap");
     gShadowTexelLocationQ1050 = glGetUniformLocation(gProgram, "uShadowTexelSize");
@@ -3127,6 +3213,8 @@ void Q1900AdvanceStream() {
     }
 }
 
+#include "fo3-cell-streaming-q19.inc"
+
 void UpdateFo3ExteriorStreamingQ1890(float virtualHeadX, float virtualHeadZ) {
     if (!gExteriorStreamingActiveQ1890) {
         gQ1920LatestGridValid = false;
@@ -3149,6 +3237,11 @@ void UpdateFo3ExteriorStreamingQ1890(float virtualHeadX, float virtualHeadZ) {
                                     gExteriorOriginXQ1890,
                                     gExteriorOriginYQ1890,
                                     gExteriorOriginZQ1890);
+    }
+
+    if (gExteriorWorldspaceQ1890 == 0x0000003Cu) {
+        Q1900UpdateCellStreamingQ19(gameX, gameY, actualGridX, actualGridY);
+        return;
     }
 
     static bool q1970ActiveLogReady = false;
@@ -3409,58 +3502,12 @@ void Q1970ProbeNativeLod(float gameX, float gameY) {
 
 bool Q1970GetActiveGrid(int32_t& gridX, int32_t& gridY) {
     if (gExteriorWorldspaceQ1890 != 0x0000003Cu) return false;
-
-    const int32_t residentX = gExteriorWindowGridXQ1890;
-    const int32_t residentY = gExteriorWindowGridYQ1890;
-    if (!gQ1920LatestGridValid) {
-        gridX = residentX;
-        gridY = residentY;
-        return true;
-    }
-
-    // The committed REFR window is radius 2 while detailed drawing is radius 1.
-    // Therefore a safe detailed centre may move at most one CELL away from the
-    // committed resident centre. If locomotion outruns streaming, hold the
-    // detail/LOD handoff at the last fully covered centre until commit catches up.
-    constexpr int Q1850_RESIDENT_RADIUS = 2;
-    constexpr int Q1850_ACTIVE_RADIUS = 1;
-    constexpr int Q1850_SAFE_CENTRE_DELTA =
-        Q1850_RESIDENT_RADIUS - Q1850_ACTIVE_RADIUS;
-    gridX = std::clamp(gQ1920LatestGridX,
-                       residentX - Q1850_SAFE_CENTRE_DELTA,
-                       residentX + Q1850_SAFE_CENTRE_DELTA);
-    gridY = std::clamp(gQ1920LatestGridY,
-                       residentY - Q1850_SAFE_CENTRE_DELTA,
-                       residentY + Q1850_SAFE_CENTRE_DELTA);
-
-    static bool q1850WasClamped = false;
-    static int32_t q1850LastActualX = INT32_MIN;
-    static int32_t q1850LastActualY = INT32_MIN;
-    static int32_t q1850LastResidentX = INT32_MIN;
-    static int32_t q1850LastResidentY = INT32_MIN;
-    static int32_t q1850LastDrawX = INT32_MIN;
-    static int32_t q1850LastDrawY = INT32_MIN;
-    const bool clamped =
-        gridX != gQ1920LatestGridX || gridY != gQ1920LatestGridY;
-    if (clamped != q1850WasClamped ||
-        (clamped &&
-         (gQ1920LatestGridX != q1850LastActualX ||
-          gQ1920LatestGridY != q1850LastActualY ||
-          residentX != q1850LastResidentX ||
-          residentY != q1850LastResidentY ||
-          gridX != q1850LastDrawX ||
-          gridY != q1850LastDrawY))) {
-        Q6H_LOGI("Q18.5 SAFE DETAIL HANDOFF: actual=(%d,%d) resident=(%d,%d) drawCentre=(%d,%d) clamped=%d residentRadius=2 activeRadius=1 lodPreservedUntilResident=1",
-                 gQ1920LatestGridX, gQ1920LatestGridY,
-                 residentX, residentY, gridX, gridY,
-                 clamped ? 1 : 0);
-        q1850WasClamped = clamped;
-        q1850LastActualX = gQ1920LatestGridX;
-        q1850LastActualY = gQ1920LatestGridY;
-        q1850LastResidentX = residentX;
-        q1850LastResidentY = residentY;
-        q1850LastDrawX = gridX;
-        q1850LastDrawY = gridY;
+    if (gQ1920LatestGridValid) {
+        gridX = gQ1920LatestGridX;
+        gridY = gQ1920LatestGridY;
+    } else {
+        gridX = gExteriorWindowGridXQ1890;
+        gridY = gExteriorWindowGridYQ1890;
     }
     return true;
 }
@@ -3475,60 +3522,74 @@ bool Q1970ShouldRenderFullDetail(const GpuObject& object) {
            std::abs(object.q1970GridY - activeGridY) <= Q1970_ACTIVE_VISUAL_RADIUS;
 }
 
-bool Q1810GetNativeLodNearClip(float& minX, float& maxX,
-                               float& minZ, float& maxZ) {
+int Q1900BuildNativeLodClipCells(float* bounds, bool objectLod) {
     int32_t activeGridX = 0;
     int32_t activeGridY = 0;
-    if (!Q1970GetActiveGrid(activeGridX, activeGridY)) return false;
+    if (!Q1970GetActiveGrid(activeGridX, activeGridY)) return 0;
 
-    constexpr int Q1810_ACTIVE_RADIUS = 1;
-    const float minGameX =
-        static_cast<float>(activeGridX - Q1810_ACTIVE_RADIUS) * Q1890_EXTERIOR_CELL_SIZE;
-    const float maxGameX =
-        static_cast<float>(activeGridX + Q1810_ACTIVE_RADIUS + 1) * Q1890_EXTERIOR_CELL_SIZE;
-    const float minGameY =
-        static_cast<float>(activeGridY - Q1810_ACTIVE_RADIUS) * Q1890_EXTERIOR_CELL_SIZE;
-    const float maxGameY =
-        static_cast<float>(activeGridY + Q1810_ACTIVE_RADIUS + 1) * Q1890_EXTERIOR_CELL_SIZE;
+    int count = 0;
+    for (int dy = -1; dy <= 1; ++dy) {
+        for (int dx = -1; dx <= 1; ++dx) {
+            const int32_t cellX = activeGridX + dx;
+            const int32_t cellY = activeGridY + dy;
+            if (objectLod && !Q1900CellVisualReadyQ19(cellX, cellY)) continue;
 
-    minX = (minGameX - gExteriorOriginXQ1890) / FO3_UNITS_PER_METRE;
-    maxX = (maxGameX - gExteriorOriginXQ1890) / FO3_UNITS_PER_METRE;
+            const float minGameX =
+                static_cast<float>(cellX) * Q1890_EXTERIOR_CELL_SIZE;
+            const float maxGameX =
+                static_cast<float>(cellX + 1) * Q1890_EXTERIOR_CELL_SIZE;
+            const float minGameY =
+                static_cast<float>(cellY) * Q1890_EXTERIOR_CELL_SIZE;
+            const float maxGameY =
+                static_cast<float>(cellY + 1) * Q1890_EXTERIOR_CELL_SIZE;
+            const float minX =
+                (minGameX - gExteriorOriginXQ1890) / FO3_UNITS_PER_METRE;
+            const float maxX =
+                (maxGameX - gExteriorOriginXQ1890) / FO3_UNITS_PER_METRE;
+            const float z0 =
+                SCENE_FORWARD -
+                (minGameY - gExteriorOriginYQ1890) / FO3_UNITS_PER_METRE;
+            const float z1 =
+                SCENE_FORWARD -
+                (maxGameY - gExteriorOriginYQ1890) / FO3_UNITS_PER_METRE;
 
-    const float zAtMinGameY =
-        SCENE_FORWARD - (minGameY - gExteriorOriginYQ1890) / FO3_UNITS_PER_METRE;
-    const float zAtMaxGameY =
-        SCENE_FORWARD - (maxGameY - gExteriorOriginYQ1890) / FO3_UNITS_PER_METRE;
-    minZ = std::min(zAtMinGameY, zAtMaxGameY);
-    maxZ = std::max(zAtMinGameY, zAtMaxGameY);
-    return true;
+            bounds[count * 4 + 0] = minX;
+            bounds[count * 4 + 1] = maxX;
+            bounds[count * 4 + 2] = std::min(z0, z1);
+            bounds[count * 4 + 3] = std::max(z0, z1);
+            ++count;
+        }
+    }
+    return count;
 }
 
 void DrawSceneObject(const GpuObject& object) {
     if (!Q1970ShouldRenderFullDetail(object)) return;
 
-    bool q1810ClipNativeLod = false;
-    float q1810MinX = 0.0f, q1810MaxX = 0.0f;
-    float q1810MinZ = 0.0f, q1810MaxZ = 0.0f;
+    float q1900LodClipCells[9 * 4]{};
+    int q1900LodClipCount = 0;
     if (object.q1990NativeLod &&
         gNativeLodClipEnabledLocationQ1810 >= 0 &&
-        gNativeLodClipBoundsLocationQ1810 >= 0) {
-        q1810ClipNativeLod =
-            Q1810GetNativeLodNearClip(q1810MinX, q1810MaxX,
-                                      q1810MinZ, q1810MaxZ);
+        gNativeLodClipCellCountLocationQ1900 >= 0 &&
+        gNativeLodClipCellsLocationQ1900 >= 0) {
+        const std::string q1900Path = object.modelPath;
+        const bool q1900ObjectLod =
+            q1900Path.find("\\blocks\\") != std::string::npos;
+        q1900LodClipCount =
+            Q1900BuildNativeLodClipCells(q1900LodClipCells, q1900ObjectLod);
     }
     if (gNativeLodClipEnabledLocationQ1810 >= 0) {
         glUniform1f(gNativeLodClipEnabledLocationQ1810,
-                    q1810ClipNativeLod ? 1.0f : 0.0f);
+                    q1900LodClipCount > 0 ? 1.0f : 0.0f);
     }
-    if (q1810ClipNativeLod && gNativeLodClipBoundsLocationQ1810 >= 0) {
-        glUniform4f(gNativeLodClipBoundsLocationQ1810,
-                    q1810MinX, q1810MaxX, q1810MinZ, q1810MaxZ);
-        static bool q1810ClipLogged = false;
-        if (!q1810ClipLogged) {
-            q1810ClipLogged = true;
-            Q6H_LOGI("Q18.1 NATIVE LOD NEAR CLIP: activeRadius=1 boundsRenderXZ=(%.3f..%.3f, %.3f..%.3f) mode=fragment-clip-preserve-macroblock-outside-near-world",
-                     q1810MinX, q1810MaxX, q1810MinZ, q1810MaxZ);
-        }
+    if (gNativeLodClipCellCountLocationQ1900 >= 0) {
+        glUniform1i(gNativeLodClipCellCountLocationQ1900,
+                    q1900LodClipCount);
+    }
+    if (q1900LodClipCount > 0 &&
+        gNativeLodClipCellsLocationQ1900 >= 0) {
+        glUniform4fv(gNativeLodClipCellsLocationQ1900,
+                     q1900LodClipCount, q1900LodClipCells);
     }
     glUniform1f(gGlossinessLocation, object.glossiness);
     glUniform1f(gNoLightingLocationQ1020, object.noLighting ? 1.0f : 0.0f);
@@ -3668,8 +3729,10 @@ bool Q1030InitializeRenderProgramOnly() {
         glGetUniformLocation(gProgram, "uExternalEmittanceColorQ1380");
     gNativeLodClipEnabledLocationQ1810 =
         glGetUniformLocation(gProgram, "uNativeLodClipEnabledQ1810");
-    gNativeLodClipBoundsLocationQ1810 =
-        glGetUniformLocation(gProgram, "uNativeLodClipBoundsQ1810");
+    gNativeLodClipCellCountLocationQ1900 =
+        glGetUniformLocation(gProgram, "uNativeLodClipCellCountQ1900");
+    gNativeLodClipCellsLocationQ1900 =
+        glGetUniformLocation(gProgram, "uNativeLodClipCellsQ1900[0]");
     gLightMvpLocationQ1050 = glGetUniformLocation(gProgram, "uLightMvp");
     gShadowMapLocationQ1050 = glGetUniformLocation(gProgram, "uShadowMap");
     gShadowTexelLocationQ1050 = glGetUniformLocation(gProgram, "uShadowTexelSize");
