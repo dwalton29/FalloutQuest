@@ -4423,6 +4423,11 @@ void Q1970AdvanceNativeLodQ19(int32_t cellX, int32_t cellY,
 
     Q1970ConsumeLodWorkerQ19();
 
+    // Q20 terrain promotion has priority over distant horizon fill. Both use
+    // bounded GPU stages, but keeping only one of them active avoids stacking
+    // two upload budgets in the same VR frame.
+    if (IsFo3TerrainStreamingBusyQ2000()) return;
+
     // Q19.7 exterior scheduling calls this after Q1900UpdateCellStreaming, so
     // detailed CELL uploads always receive the first frame-budget opportunity.
     // LOD only progresses one bounded leftover slice here.
@@ -4432,6 +4437,7 @@ void Q1970AdvanceNativeLodQ19(int32_t cellX, int32_t cellY,
     // Share the CPU asset lane safely, but do not wait for all radius-2/prefetch
     // cells. As soon as the active 3x3 is visually covered, LOD may take one turn.
     if (gQ1900WorkerQ19 || gQ1930CollisionTaskQ19 ||
+        IsFo3TerrainStreamingCpuBusyQ2000() ||
         !Q1970NearDetailSafeQ19(cellX, cellY)) {
         return;
     }
