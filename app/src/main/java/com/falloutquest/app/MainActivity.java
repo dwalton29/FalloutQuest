@@ -40,7 +40,7 @@ public class MainActivity extends Activity {
         title.setGravity(Gravity.CENTER);
 
         TextView status = new TextView(this);
-        status.setText(nativeBootMessage() + "\n\nQ20 CELL-RESIDENT LAND STREAMING\nFallout 3 data -> OpenXR -> Quest 3");
+        status.setText(nativeBootMessage() + "\n\nQ20.1 5x5 DETAIL + COHERENT FAR LOD\nFallout 3 data -> OpenXR -> Quest 3");
         status.setTextColor(Color.rgb(210, 220, 205));
         status.setTextSize(20);
         status.setGravity(Gravity.CENTER);
