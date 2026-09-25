@@ -468,14 +468,11 @@ void Q2000RunWorker(const std::shared_ptr<Q2000WorkerTask>& task) {
     const auto workerStarted = std::chrono::steady_clock::now();
 
     const auto loadStarted = std::chrono::steady_clock::now();
-    const float selectionX =
-        (static_cast<float>(task->targetCentreX) + 0.5f) * Q76B_CELL_SIZE;
-    const float selectionY =
-        (static_cast<float>(task->targetCentreY) + 0.5f) * Q76B_CELL_SIZE;
-    SetFo3TerrainSelectionOverrideQ1890(true, selectionX, selectionY);
-    const bool loaded = LoadFo3TerrainQ76(
-        task->worldspace, task->arrivalX, task->arrivalY, task->arrivalZ);
-    SetFo3TerrainSelectionOverrideQ1890(false, 0.0f, 0.0f);
+    std::vector<Fo3TerrainCellQ76> terrain;
+    const bool loaded = LoadFo3TerrainWindowQ2000(
+        task->worldspace,
+        task->targetCentreX, task->targetCentreY,
+        terrain);
     task->loadUs = Q2000ElapsedUs(loadStarted);
 
     if (!loaded) {
@@ -485,7 +482,6 @@ void Q2000RunWorker(const std::shared_ptr<Q2000WorkerTask>& task) {
     }
 
     const auto buildStarted = std::chrono::steady_clock::now();
-    const std::vector<Fo3TerrainCellQ76> terrain = GetFo3TerrainQ76();
     std::unordered_map<uint64_t, size_t> byGrid;
     std::vector<std::vector<float>> stitched;
     byGrid.reserve(terrain.size() * 2u);
