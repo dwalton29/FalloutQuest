@@ -334,6 +334,8 @@ bool CollectSelectedLandQ1910(uint32_t worldspaceFormId,
         terrain.landFormId = entry.landFormId;
         terrain.gridX = cellIt->second.gridX;
         terrain.gridY = cellIt->second.gridY;
+        terrain.forceHideMask = static_cast<uint8_t>(
+            cellIt->second.forceHideLandQ720 & 0x0fu);
         bool haveVhgt = false;
         bool haveVnml = false;
         bool haveVclr = false;
@@ -431,6 +433,8 @@ bool CollectSelectedLandQ76(uint32_t worldspaceFormId,
         terrain.landFormId = formId;
         terrain.gridX = cellIt->second.gridX;
         terrain.gridY = cellIt->second.gridY;
+        terrain.forceHideMask = static_cast<uint8_t>(
+            cellIt->second.forceHideLandQ720 & 0x0fu);
         bool haveVhgt = false;
         bool haveVnml = false;
         bool haveVclr = false;
