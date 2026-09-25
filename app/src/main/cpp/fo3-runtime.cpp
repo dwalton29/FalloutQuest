@@ -3336,6 +3336,14 @@ void UpdateFo3ExteriorStreamingQ1890(float virtualHeadX, float virtualHeadZ) {
     gQ1920LatestGridX = actualGridX;
     gQ1920LatestGridY = actualGridY;
     if (gExteriorWorldspaceQ1890 == 0x0000003Cu) {
+        // Detailed CELL work owns the first budget opportunity each update.
+        const auto q1970DetailStarted = std::chrono::steady_clock::now();
+        Q1900UpdateCellStreamingQ19(gameX, gameY, actualGridX, actualGridY);
+        q1970PreviousDetailUs = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::steady_clock::now() - q1970DetailStarted).count());
+
+        // Far LOD gets only the bounded leftover opportunity.
         const auto q1970LodStarted = std::chrono::steady_clock::now();
         Q1990EnsureNativeLodForCell(actualGridX, actualGridY,
                                     gExteriorOriginXQ1890,
@@ -3344,14 +3352,7 @@ void UpdateFo3ExteriorStreamingQ1890(float virtualHeadX, float virtualHeadZ) {
         q1970PreviousLodUs = static_cast<uint64_t>(
             std::chrono::duration_cast<std::chrono::microseconds>(
                 std::chrono::steady_clock::now() - q1970LodStarted).count());
-    }
 
-    if (gExteriorWorldspaceQ1890 == 0x0000003Cu) {
-        const auto q1970DetailStarted = std::chrono::steady_clock::now();
-        Q1900UpdateCellStreamingQ19(gameX, gameY, actualGridX, actualGridY);
-        q1970PreviousDetailUs = static_cast<uint64_t>(
-            std::chrono::duration_cast<std::chrono::microseconds>(
-                std::chrono::steady_clock::now() - q1970DetailStarted).count());
         const uint64_t q1970TotalUs = static_cast<uint64_t>(
             std::chrono::duration_cast<std::chrono::microseconds>(
                 std::chrono::steady_clock::now() - q1970UpdateStarted).count());

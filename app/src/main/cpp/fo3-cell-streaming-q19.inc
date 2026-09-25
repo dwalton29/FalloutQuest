@@ -1397,9 +1397,9 @@ void Q1970AdvanceNativeLodQ19(int32_t cellX, int32_t cellY,
 
     Q1970ConsumeLodWorkerQ19();
 
-    // Detailed uploads always get their Q19.6 budget first because this function
-    // runs before Q1900UpdateCellStreaming. If LOD has a GPU item in flight,
-    // progress only one bounded far-LOD slice here.
+    // Q19.7 exterior scheduling calls this after Q1900UpdateCellStreaming, so
+    // detailed CELL uploads always receive the first frame-budget opportunity.
+    // LOD only progresses one bounded leftover slice here.
     Q1970AdvanceLodGpuQ19();
     if (gQ1970LodUploadQ19 || gQ1970LodWorkerQ19) return;
 
