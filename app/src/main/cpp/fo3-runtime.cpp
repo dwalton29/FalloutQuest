@@ -510,7 +510,7 @@ GLuint CreateQ6HProgram() {
         uniform float uQ1470LegacyPpDiffuseDomain;
         uniform float uNativeLodClipEnabledQ1810;
         uniform int uNativeLodClipCellCountQ1900;
-        uniform vec4 uNativeLodClipCellsQ1900[9];
+        uniform vec4 uNativeLodClipCellsQ1900[25];
         uniform int uLocalLightCount;
         uniform vec4 uLocalLightPosRadius[8];
         uniform vec4 uLocalLightColorFalloff[8];
@@ -560,7 +560,7 @@ GLuint CreateQ6HProgram() {
             // exterior CELL is actually resident. A slow/missing CELL therefore
             // keeps its LOD instead of turning into a hole at the boundary.
             if (uNativeLodClipEnabledQ1810 > 0.5) {
-                for (int q1900I = 0; q1900I < 9; ++q1900I) {
+                for (int q1900I = 0; q1900I < 25; ++q1900I) {
                     if (q1900I >= uNativeLodClipCellCountQ1900) break;
                     vec4 q1900Bounds = uNativeLodClipCellsQ1900[q1900I];
                     if (vPosition.x >= q1900Bounds.x &&
@@ -3640,7 +3640,7 @@ bool Q1970ShouldRenderFullDetail(const GpuObject& object) {
     int32_t activeGridX = 0;
     int32_t activeGridY = 0;
     if (!Q1970GetActiveGrid(activeGridX, activeGridY)) return true;
-    constexpr int Q1970_ACTIVE_VISUAL_RADIUS = 1; // Q16.27 3x3 full-detail draw set
+    constexpr int Q1970_ACTIVE_VISUAL_RADIUS = 2; // Q20.1 Bethesda-style 5x5 full-detail draw set
     return std::abs(object.q1970GridX - activeGridX) <= Q1970_ACTIVE_VISUAL_RADIUS &&
            std::abs(object.q1970GridY - activeGridY) <= Q1970_ACTIVE_VISUAL_RADIUS;
 }
@@ -3651,8 +3651,8 @@ int Q1900BuildNativeLodClipCells(float* bounds, bool objectLod) {
     if (!Q1970GetActiveGrid(activeGridX, activeGridY)) return 0;
 
     int count = 0;
-    for (int dy = -1; dy <= 1; ++dy) {
-        for (int dx = -1; dx <= 1; ++dx) {
+    for (int dy = -2; dy <= 2; ++dy) {
+        for (int dx = -2; dx <= 2; ++dx) {
             const int32_t cellX = activeGridX + dx;
             const int32_t cellY = activeGridY + dy;
             if (objectLod && !Q1900CellVisualReadyQ19(cellX, cellY)) continue;
@@ -3689,7 +3689,7 @@ int Q1900BuildNativeLodClipCells(float* bounds, bool objectLod) {
 void DrawSceneObject(const GpuObject& object) {
     if (!Q1970ShouldRenderFullDetail(object)) return;
 
-    float q1900LodClipCells[9 * 4]{};
+    float q1900LodClipCells[25 * 4]{};
     int q1900LodClipCount = 0;
     if (object.q1990NativeLod &&
         gNativeLodClipEnabledLocationQ1810 >= 0 &&
@@ -3912,6 +3912,13 @@ float gQ1990NativeLodFloorZ = 0.0f;
 int32_t gQ1990NativeLodCentreBlockX = 0;
 int32_t gQ1990NativeLodCentreBlockY = 0;
 bool gQ1990NativeLodDrawLogged = false;
+// Q20.1: requested Level4 centre follows the player, while the visible centre
+// advances only when an equally coherent shell is available. This avoids the
+// horizon reshuffling at every four-CELL Level4 boundary.
+bool gQ2010VisibleLodValid = false;
+int32_t gQ2010VisibleLodCentreBlockX = 0;
+int32_t gQ2010VisibleLodCentreBlockY = 0;
+int gQ2010VisibleLodRing = -1;
 
 int32_t Q1990FloorToLevel4Block(int32_t cell) {
     int32_t quotient = cell / 4;
@@ -3933,6 +3940,10 @@ void Q1990ClearNativeLodGeometry() {
     }
     gQ1990NativeLodBlocks.clear();
     gQ1990NativeLodDrawLogged = false;
+    gQ2010VisibleLodValid = false;
+    gQ2010VisibleLodCentreBlockX = 0;
+    gQ2010VisibleLodCentreBlockY = 0;
+    gQ2010VisibleLodRing = -1;
 }
 
 bool Q1990UploadNativeLodNif(const std::string& path,
@@ -3992,7 +4003,7 @@ Q1990NativeLodBlock* Q1990FindLodBlock(int32_t blockX, int32_t blockY) {
 
 constexpr int Q1840_LEVEL4_BLOCK_CELLS = 4;
 // Fallout.ini: uGridDistantCount=20. Keep that authored distant-grid horizon
-// separate from the 3x3 detailed draw radius and the 5x5 resident REFR window.
+// separate from the Q20.1 5x5 detailed draw radius/resident REFR window.
 constexpr int Q1840_DISTANT_GRID_RADIUS_CELLS = 20;
 constexpr int Q1840_DISTANT_BLOCK_RADIUS =
     (Q1840_DISTANT_GRID_RADIUS_CELLS + Q1840_LEVEL4_BLOCK_CELLS - 1) /
@@ -4009,6 +4020,89 @@ bool Q1990LodBlockDesired(int32_t blockX, int32_t blockY) {
                Q1840_DISTANT_BLOCK_COORD_RADIUS &&
            std::abs(blockY - gQ1990NativeLodCentreBlockY) <=
                Q1840_DISTANT_BLOCK_COORD_RADIUS;
+}
+
+int Q2010NativeLodRingForBlockAround(
+        int32_t blockX, int32_t blockY,
+        int32_t centreBlockX, int32_t centreBlockY) {
+    const int dx = std::abs(blockX - centreBlockX) /
+                   Q1840_LEVEL4_BLOCK_CELLS;
+    const int dy = std::abs(blockY - centreBlockY) /
+                   Q1840_LEVEL4_BLOCK_CELLS;
+    return std::max(dx, dy);
+}
+
+int Q2010CompleteNativeLodRingAround(
+        int32_t centreBlockX, int32_t centreBlockY) {
+    int completeRing = -1;
+    for (int ring = 0; ring <= Q1840_DISTANT_BLOCK_RADIUS; ++ring) {
+        bool complete = true;
+        for (int dy = -ring; dy <= ring && complete; ++dy) {
+            for (int dx = -ring; dx <= ring; ++dx) {
+                if (std::max(std::abs(dx), std::abs(dy)) != ring) continue;
+                const int32_t bx = centreBlockX +
+                    dx * Q1840_LEVEL4_BLOCK_CELLS;
+                const int32_t by = centreBlockY +
+                    dy * Q1840_LEVEL4_BLOCK_CELLS;
+                if (!Q1990FindLodBlock(bx, by)) {
+                    complete = false;
+                    break;
+                }
+            }
+        }
+        if (!complete) break;
+        completeRing = ring;
+    }
+    return completeRing;
+}
+
+size_t Q2010NativeLodVisibleBlockCount(int completeRing) {
+    if (completeRing < 0) return 0u;
+    const int side = completeRing * 2 + 1;
+    return static_cast<size_t>(side * side);
+}
+
+void Q2010AdvanceVisibleNativeLodWindow() {
+    const int requestedRing = Q2010CompleteNativeLodRingAround(
+        gQ1990NativeLodCentreBlockX, gQ1990NativeLodCentreBlockY);
+
+    if (!gQ2010VisibleLodValid) {
+        if (requestedRing < 0) return;
+        gQ2010VisibleLodValid = true;
+        gQ2010VisibleLodCentreBlockX = gQ1990NativeLodCentreBlockX;
+        gQ2010VisibleLodCentreBlockY = gQ1990NativeLodCentreBlockY;
+        gQ2010VisibleLodRing = requestedRing;
+        gQ1990NativeLodDrawLogged = false;
+        return;
+    }
+
+    const int stillCompleteVisibleRing = Q2010CompleteNativeLodRingAround(
+        gQ2010VisibleLodCentreBlockX, gQ2010VisibleLodCentreBlockY);
+    if (stillCompleteVisibleRing < gQ2010VisibleLodRing) {
+        gQ2010VisibleLodRing = stillCompleteVisibleRing;
+        gQ1990NativeLodDrawLogged = false;
+    }
+
+    const bool sameCentre =
+        gQ2010VisibleLodCentreBlockX == gQ1990NativeLodCentreBlockX &&
+        gQ2010VisibleLodCentreBlockY == gQ1990NativeLodCentreBlockY;
+    if (sameCentre) {
+        if (requestedRing > gQ2010VisibleLodRing) {
+            gQ2010VisibleLodRing = requestedRing;
+            gQ1990NativeLodDrawLogged = false;
+        }
+        return;
+    }
+
+    // Do not shrink or checkerboard the horizon merely because the requested
+    // Level4 centre crossed a 4-CELL boundary. Hand over once the new centre
+    // can preserve the current coherent radius.
+    if (requestedRing >= gQ2010VisibleLodRing) {
+        gQ2010VisibleLodCentreBlockX = gQ1990NativeLodCentreBlockX;
+        gQ2010VisibleLodCentreBlockY = gQ1990NativeLodCentreBlockY;
+        gQ2010VisibleLodRing = requestedRing;
+        gQ1990NativeLodDrawLogged = false;
+    }
 }
 
 void Q1990EnsureNativeLodForCell(int32_t cellX, int32_t cellY,
@@ -4080,6 +4174,8 @@ void Q1990EnsureNativeLodForCell(int32_t cellX, int32_t cellY,
         if (Q1990LodBlockDesired(block.blockX, block.blockY))
             ++desiredLoaded;
 
+    Q2010AdvanceVisibleNativeLodWindow();
+
     static size_t q1840LastLoggedLoaded = static_cast<size_t>(-1);
     static int32_t q1840LastLoggedCentreX = INT32_MIN;
     static int32_t q1840LastLoggedCentreY = INT32_MIN;
@@ -4089,11 +4185,18 @@ void Q1990EnsureNativeLodForCell(int32_t cellX, int32_t cellY,
         q1840LastLoggedLoaded = desiredLoaded;
         q1840LastLoggedCentreX = centreBlockX;
         q1840LastLoggedCentreY = centreBlockY;
-        Q6H_LOGI("Q18.4 NATIVE LOD WINDOW: playerCell=(%d,%d) centreBlock=(%d,%d) desiredLoaded=%zu/%zu cachedBlocks=%zu radiusCells=%d asyncCpu=1 stagedGpu=1 fairWithDetailedStreaming=1",
+        const int q2010RequestedRing =
+            Q2010CompleteNativeLodRingAround(centreBlockX, centreBlockY);
+        Q6H_LOGI("Q20.1 NATIVE LOD WINDOW: playerCell=(%d,%d) requestedCentre=(%d,%d) desiredLoaded=%zu/%zu cachedBlocks=%zu radiusCells=%d requestedCompleteRing=%d visibleCentre=(%d,%d) visibleRing=%d visibleBlocks=%zu publishPolicy=committed-complete-rings asyncCpu=1 stagedGpu=1 fairWithDetailedStreaming=1",
                  cellX, cellY, centreBlockX, centreBlockY,
                  desiredLoaded, Q1840_DISTANT_TARGET_BLOCKS,
                  gQ1990NativeLodBlocks.size(),
-                 Q1840_DISTANT_GRID_RADIUS_CELLS);
+                 Q1840_DISTANT_GRID_RADIUS_CELLS,
+                 q2010RequestedRing,
+                 gQ2010VisibleLodCentreBlockX,
+                 gQ2010VisibleLodCentreBlockY,
+                 gQ2010VisibleLodRing,
+                 Q2010NativeLodVisibleBlockCount(gQ2010VisibleLodRing));
     }
 }
 
@@ -4463,19 +4566,29 @@ void Q1970AdvanceNativeLodQ19(int32_t cellX, int32_t cellY,
 
 
 void Q1990RenderNativeLod(bool alphaPass) {
-    if (gExteriorWorldspaceQ1890 != 0x0000003Cu || gQ1990NativeLodBlocks.empty()) return;
+    if (gExteriorWorldspaceQ1890 != 0x0000003Cu ||
+        gQ1990NativeLodBlocks.empty() ||
+        !gQ2010VisibleLodValid ||
+        gQ2010VisibleLodRing < 0) return;
     size_t drawnShapes = 0u;
     size_t drawnTriangles = 0u;
     glEnable(GL_POLYGON_OFFSET_FILL);
     glPolygonOffset(2.0f, 6.0f);
     for (Q1990NativeLodBlock& block : gQ1990NativeLodBlocks) {
-        if (!Q1990LodBlockDesired(block.blockX, block.blockY)) continue;
+        if (Q2010NativeLodRingForBlockAround(
+                block.blockX, block.blockY,
+                gQ2010VisibleLodCentreBlockX,
+                gQ2010VisibleLodCentreBlockY) >
+            gQ2010VisibleLodRing) {
+            continue;
+        }
         // The current 4x4 macroblock is completely covered by the actual-centred
         // 7x7 LAND runway, so its coarse terrain stays suppressed. Q18.1 clips
         // all remaining native LOD fragments against the exact active 3x3 near
         // rectangle in DrawSceneObject, preventing coarse object LOD from
         // overlapping detailed REFR geometry while preserving the same macroblock
-        // outside the near cells.
+        // outside the near cells. Q20.1 expands this handoff to the full 5x5
+        // detailed visual set, while only visually-ready object cells clip LOD.
         if (block.blockX != gQ1990NativeLodCentreBlockX ||
             block.blockY != gQ1990NativeLodCentreBlockY) {
             for (const GpuObject& object : block.terrain) {
@@ -4495,8 +4608,14 @@ void Q1990RenderNativeLod(bool alphaPass) {
     glDisable(GL_POLYGON_OFFSET_FILL);
     if (!alphaPass && !gQ1990NativeLodDrawLogged) {
         gQ1990NativeLodDrawLogged = true;
-        Q6H_LOGI("Q18.4 NATIVE LOD DRAW: shapes=%zu triangles=%zu radiusCells=20 currentTerrainBlockSuppressed=1 polygonOffset=1 shadows=0",
-                 drawnShapes, drawnTriangles);
+        Q6H_LOGI("Q20.1 NATIVE LOD DRAW: shapes=%zu triangles=%zu radiusCells=20 visibleCentre=(%d,%d) visibleRing=%d visibleBlocks=%zu requestedCentre=(%d,%d) currentTerrainBlockSuppressed=1 detailedClip=5x5 polygonOffset=1 shadows=0",
+                 drawnShapes, drawnTriangles,
+                 gQ2010VisibleLodCentreBlockX,
+                 gQ2010VisibleLodCentreBlockY,
+                 gQ2010VisibleLodRing,
+                 Q2010NativeLodVisibleBlockCount(gQ2010VisibleLodRing),
+                 gQ1990NativeLodCentreBlockX,
+                 gQ1990NativeLodCentreBlockY);
     }
 }
 
