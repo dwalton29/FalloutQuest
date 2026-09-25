@@ -31,34 +31,32 @@ bool SampleGameHeightQ77(float gameX, float gameY, float& outGameZ) {
     const int32_t gridX = static_cast<int32_t>(std::floor(gameX / CELL_SIZE_Q77));
     const int32_t gridY = static_cast<int32_t>(std::floor(gameY / CELL_SIZE_Q77));
 
-    const auto& terrain = GetFo3TerrainQ76();
-    for (const Fo3TerrainCellQ76& cell : terrain) {
-        if (cell.gridX != gridX || cell.gridY != gridY ||
-            cell.heights.size() != HEIGHT_COUNT_Q77) continue;
+    const Fo3TerrainCellQ76* cell =
+        FindFo3TerrainGroundCellQ2000(gridX, gridY);
+    if (!cell || cell->heights.size() != HEIGHT_COUNT_Q77) return false;
 
-        const float localX = gameX - static_cast<float>(gridX) * CELL_SIZE_Q77;
-        const float localY = gameY - static_cast<float>(gridY) * CELL_SIZE_Q77;
-        const int quadrant = (localY >= CELL_SIZE_Q77 * 0.5f ? 2 : 0) +
-                             (localX >= CELL_SIZE_Q77 * 0.5f ? 1 : 0);
-        if (IsFo3TerrainQuadrantHiddenQ720(gridX, gridY, quadrant)) return false;
-        const float gx = std::clamp(localX / VERTEX_SPACING_Q77, 0.0f, 32.0f);
-        const float gy = std::clamp(localY / VERTEX_SPACING_Q77, 0.0f, 32.0f);
-        const int x0 = std::clamp(static_cast<int>(std::floor(gx)), 0, 32);
-        const int y0 = std::clamp(static_cast<int>(std::floor(gy)), 0, 32);
-        const int x1 = std::min(x0 + 1, 32);
-        const int y1 = std::min(y0 + 1, 32);
-        const float tx = gx - static_cast<float>(x0);
-        const float ty = gy - static_cast<float>(y0);
+    const float localX = gameX - static_cast<float>(gridX) * CELL_SIZE_Q77;
+    const float localY = gameY - static_cast<float>(gridY) * CELL_SIZE_Q77;
+    const int quadrant = (localY >= CELL_SIZE_Q77 * 0.5f ? 2 : 0) +
+                         (localX >= CELL_SIZE_Q77 * 0.5f ? 1 : 0);
+    if ((cell->forceHideMask & static_cast<uint8_t>(1u << quadrant)) != 0u)
+        return false;
+    const float gx = std::clamp(localX / VERTEX_SPACING_Q77, 0.0f, 32.0f);
+    const float gy = std::clamp(localY / VERTEX_SPACING_Q77, 0.0f, 32.0f);
+    const int x0 = std::clamp(static_cast<int>(std::floor(gx)), 0, 32);
+    const int y0 = std::clamp(static_cast<int>(std::floor(gy)), 0, 32);
+    const int x1 = std::min(x0 + 1, 32);
+    const int y1 = std::min(y0 + 1, 32);
+    const float tx = gx - static_cast<float>(x0);
+    const float ty = gy - static_cast<float>(y0);
 
-        auto h = [&](int x, int y) {
-            return cell.heights[static_cast<size_t>(y * LAND_SIDE_Q77 + x)];
-        };
-        const float h0 = h(x0, y0) * (1.0f - tx) + h(x1, y0) * tx;
-        const float h1 = h(x0, y1) * (1.0f - tx) + h(x1, y1) * tx;
-        outGameZ = h0 * (1.0f - ty) + h1 * ty;
-        return std::isfinite(outGameZ);
-    }
-    return false;
+    auto h = [&](int x, int y) {
+        return cell->heights[static_cast<size_t>(y * LAND_SIDE_Q77 + x)];
+    };
+    const float h0 = h(x0, y0) * (1.0f - tx) + h(x1, y0) * tx;
+    const float h1 = h(x0, y1) * (1.0f - tx) + h(x1, y1) * tx;
+    outGameZ = h0 * (1.0f - ty) + h1 * ty;
+    return std::isfinite(outGameZ);
 }
 
 } // namespace
@@ -68,7 +66,8 @@ void ActivateFo3TerrainGroundingQ77(uint32_t worldspaceFormId,
                                     float sceneForward, float floorY,
                                     float unitsPerMetre) {
     gGroundingActiveQ77 = false;
-    if (worldspaceFormId == 0u || unitsPerMetre <= 1e-4f || GetFo3TerrainQ76().empty()) return;
+    if (worldspaceFormId == 0u || unitsPerMetre <= 1e-4f ||
+        GetFo3TerrainGroundCellCountQ2000() == 0u) return;
 
     gGroundingWorldspaceQ77 = worldspaceFormId;
     gArrivalXQ77 = arrivalX;
@@ -81,7 +80,7 @@ void ActivateFo3TerrainGroundingQ77(uint32_t worldspaceFormId,
     gGroundingActiveQ77 = true;
 
     Q77_LOGI("Q7.20 LAND PHYSICS READY: worldspace=%08X cells=%zu XTEL=(%.2f %.2f %.2f) visualFrameShared=1 housePathUntouched=1",
-             gGroundingWorldspaceQ77, GetFo3TerrainQ76().size(),
+             gGroundingWorldspaceQ77, GetFo3TerrainGroundCellCountQ2000(),
              gArrivalXQ77, gArrivalYQ77, gArrivalZQ77);
 }
 
