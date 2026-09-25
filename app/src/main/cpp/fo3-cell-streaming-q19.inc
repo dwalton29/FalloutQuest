@@ -100,6 +100,9 @@ struct Q1900CellStateQ19 {
 std::unordered_map<uint64_t, Q1900CellStateQ19> gQ1900CellsQ19;
 std::shared_ptr<Q1900CellWorkerTaskQ19> gQ1900WorkerQ19;
 
+struct Q1970LodWorkerTaskQ19;
+extern std::shared_ptr<Q1970LodWorkerTaskQ19> gQ1970LodWorkerQ19;
+
 struct Q1930CollisionSnapshotTaskQ19 {
     uint64_t contextSerial = 0u;
     int32_t centreX = 0;
@@ -545,7 +548,8 @@ void Q1900ConsumeWorkerQ19() {
 }
 
 void Q1900LaunchWorkerQ19(int32_t actualGridX, int32_t actualGridY) {
-    if (gQ1900WorkerQ19 || gQ1930CollisionTaskQ19) return;
+    if (gQ1900WorkerQ19 || gQ1930CollisionTaskQ19 ||
+        gQ1970LodWorkerQ19) return;
 
     Q1900CellStateQ19* best = nullptr;
     int bestPriority = 1000000;
@@ -1066,6 +1070,365 @@ void Q1900AdvanceGpuQ19(int32_t actualGridX, int32_t actualGridY) {
     }
 }
 
+
+// -----------------------------------------------------------------------------
+// Q19.7: staged native Level4 LOD.
+// CPU extraction/scenegraph/texture decode shares the serialized asset lane with
+// CELL/collision work. GPU upload reuses Q19.6's resumable texture/VBO stages.
+// -----------------------------------------------------------------------------
+struct Q1970LodWorkerTaskQ19 {
+    uint64_t contextSerial = 0u;
+    int32_t blockX = 0;
+    int32_t blockY = 0;
+    int ring = 0;
+    float centerX = 0.0f;
+    float centerY = 0.0f;
+    float floorZ = 0.0f;
+    std::vector<CpuObject> cpu;
+    std::vector<Q1900TextureRequestQ19> textures;
+    size_t terrainShapes = 0u;
+    size_t objectShapes = 0u;
+    size_t terrainTriangles = 0u;
+    size_t objectTriangles = 0u;
+    uint64_t workerUs = 0u;
+    bool success = false;
+    std::atomic<bool> ready{false};
+};
+
+std::shared_ptr<Q1970LodWorkerTaskQ19> gQ1970LodWorkerQ19;
+std::unique_ptr<Q1900CellStateQ19> gQ1970LodUploadQ19;
+int32_t gQ1970LodUploadBlockXQ19 = 0;
+int32_t gQ1970LodUploadBlockYQ19 = 0;
+int gQ1970LodUploadRingQ19 = 0;
+uint64_t gQ1970LodUploadWorkerUsQ19 = 0u;
+
+bool Q1970LodBlockPendingQ19(int32_t blockX, int32_t blockY) {
+    if (gQ1970LodWorkerQ19 &&
+        gQ1970LodWorkerQ19->blockX == blockX &&
+        gQ1970LodWorkerQ19->blockY == blockY) return true;
+    return gQ1970LodUploadQ19 &&
+        gQ1970LodUploadBlockXQ19 == blockX &&
+        gQ1970LodUploadBlockYQ19 == blockY;
+}
+
+bool Q1970NearDetailSafeQ19(int32_t actualGridX, int32_t actualGridY) {
+    for (int dy = -1; dy <= 1; ++dy) {
+        for (int dx = -1; dx <= 1; ++dx) {
+            const auto found = gQ1900CellsQ19.find(
+                Q1900CellKeyQ19(actualGridX + dx, actualGridY + dy));
+            if (found == gQ1900CellsQ19.end() ||
+                !found->second.visualReady) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+bool Q1970AppendLodNifCpuQ19(
+        const std::string& path,
+        const std::shared_ptr<Q1970LodWorkerTaskQ19>& task,
+        bool terrain,
+        std::unordered_set<std::string>& textureSeen) {
+    std::vector<Fo3StaticNifMesh> meshes;
+    if (!LoadFo3StaticNifMeshes(path, meshes) || meshes.empty())
+        return false;
+
+    bool any = false;
+    for (Fo3StaticNifMesh& mesh : meshes) {
+        const size_t vertexCount = mesh.positions.size() / 3u;
+        if (vertexCount == 0u || mesh.indices.empty() ||
+            mesh.normals.size() / 3u != vertexCount ||
+            mesh.tangents.size() / 3u != vertexCount ||
+            mesh.bitangents.size() / 3u != vertexCount ||
+            mesh.texcoords.size() / 2u != vertexCount) {
+            continue;
+        }
+
+        CpuObject cpu;
+        cpu.placement.refFormId = 0u;
+        cpu.placement.baseFormId = 0u;
+        cpu.placement.scale = 1.0f;
+        cpu.placement.modelPath = path;
+        cpu.mesh = std::move(mesh);
+        cpu.positionsGame.reserve(vertexCount);
+        cpu.normalsGame.reserve(vertexCount);
+        cpu.tangentsGame.reserve(vertexCount);
+        cpu.bitangentsGame.reserve(vertexCount);
+        for (size_t i = 0u; i < vertexCount; ++i) {
+            cpu.positionsGame.push_back(Vec3{
+                cpu.mesh.positions[i * 3u],
+                cpu.mesh.positions[i * 3u + 1u],
+                cpu.mesh.positions[i * 3u + 2u]});
+            cpu.normalsGame.push_back(Vec3{
+                cpu.mesh.normals[i * 3u],
+                cpu.mesh.normals[i * 3u + 1u],
+                cpu.mesh.normals[i * 3u + 2u]});
+            cpu.tangentsGame.push_back(Vec3{
+                cpu.mesh.tangents[i * 3u],
+                cpu.mesh.tangents[i * 3u + 1u],
+                cpu.mesh.tangents[i * 3u + 2u]});
+            cpu.bitangentsGame.push_back(Vec3{
+                cpu.mesh.bitangents[i * 3u],
+                cpu.mesh.bitangents[i * 3u + 1u],
+                cpu.mesh.bitangents[i * 3u + 2u]});
+        }
+
+        if (!PrepareExpandedVertexStreamQ1960(
+                cpu, task->centerX, task->centerY, task->floorZ)) {
+            continue;
+        }
+
+        Q1900AddTextureRequestQ19(
+            task->textures, textureSeen,
+            cpu.mesh.diffuseTexturePath, "DIFFUSE",
+            {180u,180u,180u,255u});
+        Q1900AddTextureRequestQ19(
+            task->textures, textureSeen,
+            cpu.mesh.normalTexturePath, "NORMAL",
+            {128u,128u,255u,255u});
+        Q1900AddTextureRequestQ19(
+            task->textures, textureSeen,
+            cpu.mesh.glowTexturePath, "GLOW",
+            {0u,0u,0u,255u});
+
+        const size_t triangles = cpu.mesh.indices.size() / 3u;
+        if (terrain) {
+            ++task->terrainShapes;
+            task->terrainTriangles += triangles;
+        } else {
+            ++task->objectShapes;
+            task->objectTriangles += triangles;
+        }
+        task->cpu.push_back(std::move(cpu));
+        any = true;
+    }
+    return any;
+}
+
+void Q1970RunLodWorkerQ19(
+        const std::shared_ptr<Q1970LodWorkerTaskQ19>& task) {
+    const auto started = std::chrono::steady_clock::now();
+    std::unordered_set<std::string> textureSeen;
+
+    const std::string suffix =
+        "Wasteland.Level4.X" + std::to_string(task->blockX) +
+        ".Y" + std::to_string(task->blockY) + ".NIF";
+    const std::string terrainPath =
+        "Landscape\\LOD\\Wasteland\\" + suffix;
+    const std::string objectPath =
+        "Landscape\\LOD\\Wasteland\\Blocks\\" + suffix;
+
+    const bool terrainReady =
+        Q1970AppendLodNifCpuQ19(
+            terrainPath, task, true, textureSeen);
+    const bool objectsReady =
+        Q1970AppendLodNifCpuQ19(
+            objectPath, task, false, textureSeen);
+
+    for (const Q1900TextureRequestQ19& request : task->textures) {
+        Q1900PrepareTextureCpuQ19(request.path);
+    }
+
+    task->success = terrainReady || objectsReady || task->cpu.empty();
+    task->workerUs = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - started).count());
+    task->ready.store(true, std::memory_order_release);
+}
+
+void Q1970ConsumeLodWorkerQ19() {
+    if (!gQ1970LodWorkerQ19 ||
+        !gQ1970LodWorkerQ19->ready.load(std::memory_order_acquire)) {
+        return;
+    }
+
+    const auto task = gQ1970LodWorkerQ19;
+    gQ1970LodWorkerQ19.reset();
+
+    const bool stale =
+        task->contextSerial != gQ1900ContextSerialQ19 ||
+        std::fabs(task->centerX - gExteriorOriginXQ1890) > 0.01f ||
+        std::fabs(task->centerY - gExteriorOriginYQ1890) > 0.01f ||
+        std::fabs(task->floorZ - gExteriorOriginZQ1890) > 0.01f ||
+        !Q1990LodBlockDesired(task->blockX, task->blockY);
+    if (stale || Q1990FindLodBlock(task->blockX, task->blockY)) {
+        Q6H_LOGI("Q19.7 LOD CPU STALE: block=(%d,%d) ring=%d workerUs=%llu action=discard",
+                 task->blockX, task->blockY, task->ring,
+                 static_cast<unsigned long long>(task->workerUs));
+        return;
+    }
+
+    auto upload = std::make_unique<Q1900CellStateQ19>();
+    upload->gridX = task->blockX;
+    upload->gridY = task->blockY;
+    upload->stage = Q1900CellStageQ19::Uploading;
+    upload->textures = std::move(task->textures);
+    upload->cpu = std::move(task->cpu);
+    upload->placements.clear();
+    gQ1970LodUploadBlockXQ19 = task->blockX;
+    gQ1970LodUploadBlockYQ19 = task->blockY;
+    gQ1970LodUploadRingQ19 = task->ring;
+    gQ1970LodUploadWorkerUsQ19 = task->workerUs;
+    gQ1970LodUploadQ19 = std::move(upload);
+
+    Q6H_LOGI("Q19.7 LOD CPU READY: block=(%d,%d) ring=%d terrainShapes=%zu terrainTriangles=%zu objectShapes=%zu objectTriangles=%zu textures=%zu cpuShapes=%zu workerUs=%llu gpuDeferred=1",
+             task->blockX, task->blockY, task->ring,
+             task->terrainShapes, task->terrainTriangles,
+             task->objectShapes, task->objectTriangles,
+             gQ1970LodUploadQ19->textures.size(),
+             gQ1970LodUploadQ19->cpu.size(),
+             static_cast<unsigned long long>(task->workerUs));
+}
+
+void Q1970AdvanceLodGpuQ19() {
+    if (!gQ1970LodUploadQ19) return;
+    Q1900CellStateQ19& state = *gQ1970LodUploadQ19;
+
+    const auto frameStarted = std::chrono::steady_clock::now();
+    // Far LOD gets a deliberately smaller share than detailed CELL uploads.
+    constexpr size_t Q1970_LOD_GPU_BYTES_PER_UPDATE = 128u * 1024u;
+    constexpr uint64_t Q1970_LOD_GPU_BUDGET_US = 1200u;
+    size_t bytesThisFrame = 0u;
+
+    while (state.textureCursor < state.textures.size()) {
+        Q1960AdvanceTextureQ19(state, bytesThisFrame);
+        if (bytesThisFrame >= Q1970_LOD_GPU_BYTES_PER_UPDATE ||
+            Q1960ElapsedUsQ19(frameStarted) >= Q1970_LOD_GPU_BUDGET_US ||
+            state.q1960TextureUpload.active) {
+            return;
+        }
+    }
+
+    while (state.gpuCursor < state.cpu.size()) {
+        Q1960AdvanceShapeQ19(state, bytesThisFrame);
+        if (bytesThisFrame >= Q1970_LOD_GPU_BYTES_PER_UPDATE ||
+            Q1960ElapsedUsQ19(frameStarted) >= Q1970_LOD_GPU_BUDGET_US ||
+            state.q1960ShapeUpload.active) {
+            return;
+        }
+    }
+
+    if (state.textureCursor < state.textures.size() ||
+        state.gpuCursor < state.cpu.size() ||
+        state.q1960TextureUpload.active ||
+        state.q1960ShapeUpload.active) {
+        return;
+    }
+
+    Q1990NativeLodBlock block;
+    block.blockX = gQ1970LodUploadBlockXQ19;
+    block.blockY = gQ1970LodUploadBlockYQ19;
+    block.lastUse = gQ1990NativeLodSerial;
+    size_t terrainTriangles = 0u;
+    size_t objectTriangles = 0u;
+
+    for (GpuObject& gpu : state.stagedGpu) {
+        gpu.q1990NativeLod = true;
+        const std::string lower = TextureCacheKey(gpu.modelPath, "");
+        const bool objectLod =
+            lower.find("landscape\\lod\\wasteland\\blocks\\") !=
+            std::string::npos;
+        if (objectLod) {
+            objectTriangles += static_cast<size_t>(gpu.vertexCount / 3);
+            block.objects.push_back(std::move(gpu));
+        } else {
+            terrainTriangles += static_cast<size_t>(gpu.vertexCount / 3);
+            block.terrain.push_back(std::move(gpu));
+        }
+        gpu.vbo = 0u;
+        gpu.vao = 0u;
+    }
+    state.stagedGpu.clear();
+
+    // Cache authored empty blocks as completed too.
+    gQ1990NativeLodBlocks.push_back(std::move(block));
+    Q6H_LOGI("Q19.7 LOD BLOCK READY: block=(%d,%d) ring=%d terrainShapes=%zu terrainTriangles=%zu objectShapes=%zu objectTriangles=%zu workerUs=%llu gpuUs=%llu maxTextureStepUs=%llu maxShapeStepUs=%llu stagedGpu=1 fairScheduler=1",
+             gQ1970LodUploadBlockXQ19, gQ1970LodUploadBlockYQ19,
+             gQ1970LodUploadRingQ19,
+             gQ1990NativeLodBlocks.back().terrain.size(), terrainTriangles,
+             gQ1990NativeLodBlocks.back().objects.size(), objectTriangles,
+             static_cast<unsigned long long>(gQ1970LodUploadWorkerUsQ19),
+             static_cast<unsigned long long>(state.gpuUs),
+             static_cast<unsigned long long>(state.maxTextureGpuUs),
+             static_cast<unsigned long long>(state.maxShapeGpuUs));
+
+    gQ1970LodUploadQ19.reset();
+}
+
+bool Q1970ChooseMissingLodQ19(
+        int32_t& nextBlockX, int32_t& nextBlockY, int& bestRing) {
+    int bestManhattan = 1000000;
+    bestRing = 1000000;
+    bool foundMissing = false;
+    for (int dy = -Q1840_DISTANT_BLOCK_RADIUS;
+         dy <= Q1840_DISTANT_BLOCK_RADIUS; ++dy) {
+        for (int dx = -Q1840_DISTANT_BLOCK_RADIUS;
+             dx <= Q1840_DISTANT_BLOCK_RADIUS; ++dx) {
+            const int32_t bx =
+                gQ1990NativeLodCentreBlockX +
+                dx * Q1840_LEVEL4_BLOCK_CELLS;
+            const int32_t by =
+                gQ1990NativeLodCentreBlockY +
+                dy * Q1840_LEVEL4_BLOCK_CELLS;
+            if (Q1990FindLodBlock(bx, by) ||
+                Q1970LodBlockPendingQ19(bx, by)) continue;
+            const int ring = std::max(std::abs(dx), std::abs(dy));
+            const int manhattan = std::abs(dx) + std::abs(dy);
+            if (!foundMissing || ring < bestRing ||
+                (ring == bestRing && manhattan < bestManhattan)) {
+                foundMissing = true;
+                bestRing = ring;
+                bestManhattan = manhattan;
+                nextBlockX = bx;
+                nextBlockY = by;
+            }
+        }
+    }
+    return foundMissing;
+}
+
+void Q1970AdvanceNativeLodQ19(int32_t cellX, int32_t cellY,
+                              float centerX, float centerY, float floorZ) {
+    if (!gQ1900ContextReadyQ19 ||
+        gExteriorWorldspaceQ1890 != 0x0000003Cu) {
+        return;
+    }
+
+    Q1970ConsumeLodWorkerQ19();
+
+    // Detailed uploads always get their Q19.6 budget first because this function
+    // runs before Q1900UpdateCellStreaming. If LOD has a GPU item in flight,
+    // progress only one bounded far-LOD slice here.
+    Q1970AdvanceLodGpuQ19();
+    if (gQ1970LodUploadQ19 || gQ1970LodWorkerQ19) return;
+
+    // Share the CPU asset lane safely, but do not wait for all radius-2/prefetch
+    // cells. As soon as the active 3x3 is visually covered, LOD may take one turn.
+    if (gQ1900WorkerQ19 || gQ1930CollisionTaskQ19 ||
+        !Q1970NearDetailSafeQ19(cellX, cellY)) {
+        return;
+    }
+
+    int32_t blockX = 0, blockY = 0;
+    int ring = 0;
+    if (!Q1970ChooseMissingLodQ19(blockX, blockY, ring)) return;
+
+    auto task = std::make_shared<Q1970LodWorkerTaskQ19>();
+    task->contextSerial = gQ1900ContextSerialQ19;
+    task->blockX = blockX;
+    task->blockY = blockY;
+    task->ring = ring;
+    task->centerX = centerX;
+    task->centerY = centerY;
+    task->floorZ = floorZ;
+    gQ1970LodWorkerQ19 = task;
+
+    Q6H_LOGI("Q19.7 LOD CPU START: block=(%d,%d) ring=%d active3x3Ready=1 serializedAssetLane=1 outerRingStarvation=0",
+             blockX, blockY, ring);
+    std::thread([task]() { Q1970RunLodWorkerQ19(task); }).detach();
+}
+
 bool Q1900CollectCollisionWindowQ19(
         int32_t centreX, int32_t centreY,
         std::vector<Fo3WorldPlacement>& placements) {
@@ -1157,7 +1520,8 @@ void Q1900TryPublishCollisionQ19(int32_t actualGridX, int32_t actualGridY) {
 
     // Keep one serialized background asset job at a time. The transformed REFR
     // cache is shared with CELL prewarming and was designed for single-writer use.
-    if (gQ1900WorkerQ19 || gQ1930CollisionTaskQ19) return;
+    if (gQ1900WorkerQ19 || gQ1930CollisionTaskQ19 ||
+        gQ1970LodWorkerQ19) return;
 
     std::vector<Fo3WorldPlacement> placements;
     if (!Q1900CollectCollisionWindowQ19(

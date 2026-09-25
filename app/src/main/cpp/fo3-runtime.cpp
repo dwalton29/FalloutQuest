@@ -83,6 +83,9 @@ extern int32_t gQ1920LatestGridY;
 void Q1990EnsureNativeLodForCell(int32_t cellX, int32_t cellY,
                                  float centerX, float centerY, float floorZ);
 
+void Q1970AdvanceNativeLodQ19(int32_t cellX, int32_t cellY,
+                              float centerX, float centerY, float floorZ);
+
 
 constexpr const char* Q6H_TAG = "FalloutQuest";
 constexpr float FO3_UNITS_PER_METRE = 70.0f;
@@ -3296,6 +3299,26 @@ void Q1900AdvanceStream() {
 #include "fo3-cell-streaming-q19.inc"
 
 void UpdateFo3ExteriorStreamingQ1890(float virtualHeadX, float virtualHeadZ) {
+    static std::chrono::steady_clock::time_point q1970PreviousUpdate{};
+    static uint64_t q1970PreviousLodUs = 0u;
+    static uint64_t q1970PreviousDetailUs = 0u;
+    const auto q1970UpdateStarted = std::chrono::steady_clock::now();
+    if (q1970PreviousUpdate.time_since_epoch().count() != 0) {
+        const uint64_t gapUs = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::microseconds>(
+                q1970UpdateStarted - q1970PreviousUpdate).count());
+        if (gapUs >= 50000u) {
+            Q6H_LOGW("Q19.7 FRAME GAP: gapUs=%llu thresholdUs=50000 previousLodUs=%llu previousDetailUs=%llu worldspace=%08X",
+                     static_cast<unsigned long long>(gapUs),
+                     static_cast<unsigned long long>(q1970PreviousLodUs),
+                     static_cast<unsigned long long>(q1970PreviousDetailUs),
+                     gExteriorWorldspaceQ1890);
+        }
+    }
+    q1970PreviousUpdate = q1970UpdateStarted;
+    q1970PreviousLodUs = 0u;
+    q1970PreviousDetailUs = 0u;
+
     if (!gExteriorStreamingActiveQ1890) {
         gQ1920LatestGridValid = false;
         return;
@@ -3313,14 +3336,33 @@ void UpdateFo3ExteriorStreamingQ1890(float virtualHeadX, float virtualHeadZ) {
     gQ1920LatestGridX = actualGridX;
     gQ1920LatestGridY = actualGridY;
     if (gExteriorWorldspaceQ1890 == 0x0000003Cu) {
+        const auto q1970LodStarted = std::chrono::steady_clock::now();
         Q1990EnsureNativeLodForCell(actualGridX, actualGridY,
                                     gExteriorOriginXQ1890,
                                     gExteriorOriginYQ1890,
                                     gExteriorOriginZQ1890);
+        q1970PreviousLodUs = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::steady_clock::now() - q1970LodStarted).count());
     }
 
     if (gExteriorWorldspaceQ1890 == 0x0000003Cu) {
+        const auto q1970DetailStarted = std::chrono::steady_clock::now();
         Q1900UpdateCellStreamingQ19(gameX, gameY, actualGridX, actualGridY);
+        q1970PreviousDetailUs = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::steady_clock::now() - q1970DetailStarted).count());
+        const uint64_t q1970TotalUs = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::steady_clock::now() - q1970UpdateStarted).count());
+        if (q1970TotalUs >= 50000u) {
+            Q6H_LOGW("Q19.7 STREAM STALL: totalUs=%llu lodUs=%llu detailUs=%llu actual=(%d,%d) streamBusy=%d",
+                     static_cast<unsigned long long>(q1970TotalUs),
+                     static_cast<unsigned long long>(q1970PreviousLodUs),
+                     static_cast<unsigned long long>(q1970PreviousDetailUs),
+                     actualGridX, actualGridY,
+                     gExteriorStreamBusyQ1890 ? 1 : 0);
+        }
         return;
     }
 
@@ -4005,75 +4047,11 @@ void Q1990EnsureNativeLodForCell(int32_t cellX, int32_t cellY,
                  Q1840_DISTANT_TARGET_BLOCKS);
     }
 
-    // Pick exactly one missing authored Level4 block, nearest ring first.
-    // The old 3x3 implementation synchronously loaded an entire strip when the
-    // player crossed a Level4 boundary. Growing the horizon to Fallout's 20-cell
-    // setting would make that catastrophic, so the far world fills progressively.
-    int32_t nextBlockX = 0;
-    int32_t nextBlockY = 0;
-    int bestRing = 1000000;
-    int bestManhattan = 1000000;
-    bool missingFound = false;
-    for (int dy = -Q1840_DISTANT_BLOCK_RADIUS;
-         dy <= Q1840_DISTANT_BLOCK_RADIUS; ++dy) {
-        for (int dx = -Q1840_DISTANT_BLOCK_RADIUS;
-             dx <= Q1840_DISTANT_BLOCK_RADIUS; ++dx) {
-            const int32_t bx =
-                centreBlockX + dx * Q1840_LEVEL4_BLOCK_CELLS;
-            const int32_t by =
-                centreBlockY + dy * Q1840_LEVEL4_BLOCK_CELLS;
-            if (Q1990FindLodBlock(bx, by)) continue;
-            const int ring = std::max(std::abs(dx), std::abs(dy));
-            const int manhattan = std::abs(dx) + std::abs(dy);
-            if (!missingFound || ring < bestRing ||
-                (ring == bestRing && manhattan < bestManhattan)) {
-                missingFound = true;
-                bestRing = ring;
-                bestManhattan = manhattan;
-                nextBlockX = bx;
-                nextBlockY = by;
-            }
-        }
-    }
-
-    // Always establish the old 3x3 core (rings 0..1). Beyond that, don't let
-    // far-LOD expansion compete with an active detailed/collision generation.
-    if (missingFound && (bestRing <= 1 || !gExteriorStreamBusyQ1890)) {
-        const auto q1840LoadStarted = std::chrono::steady_clock::now();
-        Q1990NativeLodBlock block;
-        block.blockX = nextBlockX;
-        block.blockY = nextBlockY;
-        block.lastUse = gQ1990NativeLodSerial;
-
-        const std::string suffix =
-            "Wasteland.Level4.X" + std::to_string(nextBlockX) +
-            ".Y" + std::to_string(nextBlockY) + ".NIF";
-        const std::string terrainPath =
-            "Landscape\\LOD\\Wasteland\\" + suffix;
-        const std::string objectPath =
-            "Landscape\\LOD\\Wasteland\\Blocks\\" + suffix;
-        size_t terrainTriangles = 0u;
-        size_t objectTriangles = 0u;
-        const bool terrainReady = Q1990UploadNativeLodNif(
-            terrainPath, centerX, centerY, floorZ,
-            block.terrain, terrainTriangles);
-        const bool objectsReady = Q1990UploadNativeLodNif(
-            objectPath, centerX, centerY, floorZ,
-            block.objects, objectTriangles);
-        const uint64_t q1840LoadUs = static_cast<uint64_t>(
-            std::chrono::duration_cast<std::chrono::microseconds>(
-                std::chrono::steady_clock::now() - q1840LoadStarted).count());
-
-        Q6H_LOGI("Q18.4 NATIVE LOD BLOCK READY: block=(%d,%d) ring=%d terrainReady=%d terrainShapes=%zu terrainTriangles=%zu objectsReady=%d objectShapes=%zu objectTriangles=%zu loadUs=%llu detailedStreamBusy=%d",
-                 nextBlockX, nextBlockY, bestRing,
-                 terrainReady ? 1 : 0, block.terrain.size(), terrainTriangles,
-                 objectsReady ? 1 : 0, block.objects.size(), objectTriangles,
-                 static_cast<unsigned long long>(q1840LoadUs),
-                 gExteriorStreamBusyQ1890 ? 1 : 0);
-        // Empty authored coordinates are cached too, so we do not probe them
-        // every frame while filling the distant horizon.
-        gQ1990NativeLodBlocks.push_back(std::move(block));
-    }
+    // Q19.7: Level4 extraction/parse/texture decode and GPU publication are
+    // staged by the Q19 streamer. This call is bounded and never loads a full
+    // authored macroblock synchronously on the VR thread.
+    Q1970AdvanceNativeLodQ19(
+        cellX, cellY, centerX, centerY, floorZ);
 
     while (gQ1990NativeLodBlocks.size() > Q1840_DISTANT_CACHE_BLOCKS) {
         size_t victim = gQ1990NativeLodBlocks.size();
@@ -4110,7 +4088,7 @@ void Q1990EnsureNativeLodForCell(int32_t cellX, int32_t cellY,
         q1840LastLoggedLoaded = desiredLoaded;
         q1840LastLoggedCentreX = centreBlockX;
         q1840LastLoggedCentreY = centreBlockY;
-        Q6H_LOGI("Q18.4 NATIVE LOD WINDOW: playerCell=(%d,%d) centreBlock=(%d,%d) desiredLoaded=%zu/%zu cachedBlocks=%zu radiusCells=%d stagedOneBlockPerFrame=1 outerLoadsYieldToDetailedStreaming=1",
+        Q6H_LOGI("Q18.4 NATIVE LOD WINDOW: playerCell=(%d,%d) centreBlock=(%d,%d) desiredLoaded=%zu/%zu cachedBlocks=%zu radiusCells=%d asyncCpu=1 stagedGpu=1 fairWithDetailedStreaming=1",
                  cellX, cellY, centreBlockX, centreBlockY,
                  desiredLoaded, Q1840_DISTANT_TARGET_BLOCKS,
                  gQ1990NativeLodBlocks.size(),
@@ -4156,7 +4134,23 @@ void Q1990RenderNativeLod(bool alphaPass) {
     }
 }
 
+struct Q1970RenderStallScopeQ19 {
+    std::chrono::steady_clock::time_point started =
+        std::chrono::steady_clock::now();
+    ~Q1970RenderStallScopeQ19() {
+        const uint64_t us = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::steady_clock::now() - started).count());
+        if (us >= 50000u) {
+            Q6H_LOGW("Q19.7 RENDER STALL: renderUs=%llu thresholdUs=50000 sceneObjects=%zu lodBlocks=%zu",
+                     static_cast<unsigned long long>(us),
+                     gObjects.size(), gQ1990NativeLodBlocks.size());
+        }
+    }
+};
+
 void RenderScene() {
+    Q1970RenderStallScopeQ19 q1970RenderStallScope;
     if (!gSceneReady) Q1030BootMegatonOnRender();
     ProcessQ74TransitionRequest();
     if (!gSceneReady || !gProgram || gObjects.empty()) return;
