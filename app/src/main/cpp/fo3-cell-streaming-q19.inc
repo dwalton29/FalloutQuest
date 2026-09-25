@@ -224,6 +224,7 @@ void Q1900SeedTextureKnowledgeQ19() {
 
 void Q1900ResetCellsQ19(int32_t actualGridX, int32_t actualGridY) {
     ++gQ1900ContextSerialQ19;
+    ResetFo3TerrainStreamingQ2000();
     gQ1900CellsQ19.clear();
     gQ1900ContextReadyQ19 = true;
     gQ1900WorldspaceQ19 = gExteriorWorldspaceQ1890;
@@ -549,7 +550,7 @@ void Q1900ConsumeWorkerQ19() {
 
 void Q1900LaunchWorkerQ19(int32_t actualGridX, int32_t actualGridY) {
     if (gQ1900WorkerQ19 || gQ1930CollisionTaskQ19 ||
-        gQ1970LodWorkerQ19) return;
+        gQ1970LodWorkerQ19 || IsFo3TerrainStreamingCpuBusyQ2000()) return;
 
     Q1900CellStateQ19* best = nullptr;
     int bestPriority = 1000000;
@@ -1163,7 +1164,7 @@ void Q1900TryPublishCollisionQ19(int32_t actualGridX, int32_t actualGridY) {
     // Keep one serialized background asset job at a time. The transformed REFR
     // cache is shared with CELL prewarming and was designed for single-writer use.
     if (gQ1900WorkerQ19 || gQ1930CollisionTaskQ19 ||
-        gQ1970LodWorkerQ19) return;
+        gQ1970LodWorkerQ19 || IsFo3TerrainStreamingCpuBusyQ2000()) return;
 
     std::vector<Fo3WorldPlacement> placements;
     if (!Q1900CollectCollisionWindowQ19(
@@ -1182,45 +1183,52 @@ void Q1900TryPublishCollisionQ19(int32_t actualGridX, int32_t actualGridY) {
 }
 
 void Q1900MaintainTerrainQ19(int32_t actualGridX, int32_t actualGridY) {
-    if (!gQ1900TerrainCentreValidQ19) {
-        gQ1900TerrainCentreValidQ19 = true;
-        gQ1900TerrainCentreXQ19 = actualGridX;
-        gQ1900TerrainCentreYQ19 = actualGridY;
-        return;
-    }
-    const int dx = std::abs(actualGridX - gQ1900TerrainCentreXQ19);
-    const int dy = std::abs(actualGridY - gQ1900TerrainCentreYQ19);
-    if (dx <= 2 && dy <= 2) return;
+    int32_t residentX = actualGridX;
+    int32_t residentY = actualGridY;
+    const bool haveResident =
+        GetFo3TerrainResidentCentreQ2000(&residentX, &residentY);
 
-    const auto started = std::chrono::steady_clock::now();
-    const float selectionX =
-        (static_cast<float>(actualGridX) + 0.5f) * Q1890_EXTERIOR_CELL_SIZE;
-    const float selectionY =
-        (static_cast<float>(actualGridY) + 0.5f) * Q1890_EXTERIOR_CELL_SIZE;
-    SetFo3TerrainSelectionOverrideQ1890(true, selectionX, selectionY);
-    const bool ready = InitializeFo3TerrainRenderQ76(
+    // Detailed radius-2 visuals normally get the serialized CPU lane first.
+    // If LAND is two or more cells behind, however, it becomes safety-critical
+    // and may take the next idle lane turn. Q20 itself only moves one CELL per
+    // completed terrain target, so a normal shift remains 42 retained + 7 new.
+    bool urgentVisualRequest = false;
+    for (const auto& entry : gQ1900CellsQ19) {
+        const Q1900CellStateQ19& state = entry.second;
+        if (state.visualReady) continue;
+        if (state.stage != Q1900CellStageQ19::Requested) continue;
+        if (std::max(std::abs(state.gridX - actualGridX),
+                     std::abs(state.gridY - actualGridY)) <=
+            Q1900_RESIDENT_RADIUS_Q19) {
+            urgentVisualRequest = true;
+            break;
+        }
+    }
+
+    const int terrainLag = haveResident
+        ? std::max(std::abs(actualGridX - residentX),
+                   std::abs(actualGridY - residentY))
+        : 0;
+    const bool serializedLaneIdle =
+        !gQ1900WorkerQ19 && !gQ1930CollisionTaskQ19 &&
+        !gQ1970LodWorkerQ19 && !IsFo3TerrainStreamingCpuBusyQ2000();
+    const bool allowTerrainCpu =
+        serializedLaneIdle && (!urgentVisualRequest || terrainLag >= 2);
+
+    UpdateFo3TerrainStreamingQ2000(
         gExteriorWorldspaceQ1890,
+        actualGridX, actualGridY,
         gExteriorOriginXQ1890,
         gExteriorOriginYQ1890,
         gExteriorOriginZQ1890,
-        SCENE_FORWARD, FLOOR_Y, FO3_UNITS_PER_METRE);
-    SetFo3TerrainSelectionOverrideQ1890(false, 0.0f, 0.0f);
-    if (ready) {
-        ActivateFo3TerrainGroundingQ77(
-            gExteriorWorldspaceQ1890,
-            gExteriorOriginXQ1890,
-            gExteriorOriginYQ1890,
-            gExteriorOriginZQ1890,
-            SCENE_FORWARD, FLOOR_Y, FO3_UNITS_PER_METRE);
-        gQ1900TerrainCentreXQ19 = actualGridX;
-        gQ1900TerrainCentreYQ19 = actualGridY;
+        SCENE_FORWARD, FLOOR_Y, FO3_UNITS_PER_METRE,
+        allowTerrainCpu);
+
+    if (GetFo3TerrainResidentCentreQ2000(&residentX, &residentY)) {
+        gQ1900TerrainCentreValidQ19 = true;
+        gQ1900TerrainCentreXQ19 = residentX;
+        gQ1900TerrainCentreYQ19 = residentY;
     }
-    const uint64_t elapsedUs = static_cast<uint64_t>(
-        std::chrono::duration_cast<std::chrono::microseconds>(
-            std::chrono::steady_clock::now() - started).count());
-    Q6H_LOGI("Q19 TERRAIN LEGACY RECENTER: centre=(%d,%d) ready=%d elapsedUs=%llu radius=3 note=next-q19-terrain-cell-residency",
-             actualGridX, actualGridY, ready ? 1 : 0,
-             static_cast<unsigned long long>(elapsedUs));
 }
 
 void Q1900RetireFarCellsQ19(int32_t actualGridX, int32_t actualGridY) {
@@ -1334,6 +1342,7 @@ void Q1900UpdateCellStreamingQ19(
     gExteriorStreamBusyQ1890 =
         gQ1900WorkerQ19 != nullptr ||
         gQ1930CollisionTaskQ19 != nullptr ||
+        IsFo3TerrainStreamingBusyQ2000() ||
         pendingVisual;
 
     // Logical centre follows the player; residency is now CELL-specific rather
