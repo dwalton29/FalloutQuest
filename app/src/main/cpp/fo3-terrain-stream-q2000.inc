@@ -195,12 +195,29 @@ void Q2000Bootstrap(int32_t actualGridX, int32_t actualGridY) {
     if (gQ2000ResidentValid || !q76bReady || q76bWorldspace == 0u) return;
 
     gQ2000Worldspace = q76bWorldspace;
-    gQ2000ResidentCentreX = actualGridX;
-    gQ2000ResidentCentreY = actualGridY;
-    gQ2000WindowKeys = Q2000WindowKeys(actualGridX, actualGridY);
+
+    // Bootstrap from the LAND window that the proven cold-boot path actually
+    // produced, rather than assuming the player has not moved a fraction across
+    // a CELL boundary before Q19/Q20 takes ownership.
+    int32_t minX = INT32_MAX, maxX = INT32_MIN;
+    int32_t minY = INT32_MAX, maxY = INT32_MIN;
+    const std::vector<Fo3TerrainCellQ76>& legacy = GetFo3TerrainQ76();
+    for (const Fo3TerrainCellQ76& cell : legacy) {
+        if (cell.heights.size() != Q76B_HEIGHT_COUNT) continue;
+        minX = std::min(minX, cell.gridX);
+        maxX = std::max(maxX, cell.gridX);
+        minY = std::min(minY, cell.gridY);
+        maxY = std::max(maxY, cell.gridY);
+    }
+    const bool haveLegacyWindow =
+        minX != INT32_MAX && minY != INT32_MAX;
+    gQ2000ResidentCentreX = haveLegacyWindow ? (minX + maxX) / 2 : actualGridX;
+    gQ2000ResidentCentreY = haveLegacyWindow ? (minY + maxY) / 2 : actualGridY;
+    gQ2000WindowKeys = Q2000WindowKeys(
+        gQ2000ResidentCentreX, gQ2000ResidentCentreY);
     gQ2000GroundCells.clear();
 
-    for (const Fo3TerrainCellQ76& cell : GetFo3TerrainQ76()) {
+    for (const Fo3TerrainCellQ76& cell : legacy) {
         const uint64_t key = Q711GridKey(cell.gridX, cell.gridY);
         if (gQ2000WindowKeys.find(key) != gQ2000WindowKeys.end()) {
             gQ2000GroundCells[key] = cell;
@@ -210,7 +227,7 @@ void Q2000Bootstrap(int32_t actualGridX, int32_t actualGridY) {
     gQ2000ResidentValid = true;
     Q2000RefreshStats();
     Q76B_LOGI("Q20 TERRAIN BOOTSTRAP: centre=(%d,%d) windowCells=%zu groundCells=%zu gpuBatches=%zu legacyColdBoot=1 perCellOwnership=1",
-              actualGridX, actualGridY, gQ2000WindowKeys.size(),
+              gQ2000ResidentCentreX, gQ2000ResidentCentreY, gQ2000WindowKeys.size(),
               gQ2000GroundCells.size(), q711TerrainBatches.size());
 }
 
@@ -1037,6 +1054,28 @@ void ResetFo3TerrainStreamingQ2000() {
         Q2000DeleteBatchGeometry(batch);
     gQ2000CurrentCellBatches.clear();
     Q2000DrainDeferredGeometry(true);
+
+    // If a target was partially published, strip any entering CELL geometry
+    // that is outside the last committed window. This matters on a context
+    // change that interrupts Q20 between CELL READY and WINDOW READY.
+    if (gQ2000ResidentValid && !gQ2000WindowKeys.empty()) {
+        size_t write = 0u;
+        for (size_t read = 0u; read < q711TerrainBatches.size(); ++read) {
+            Q711TerrainBatch& batch = q711TerrainBatches[read];
+            const uint64_t key = Q711GridKey(batch.gridX, batch.gridY);
+            if (gQ2000WindowKeys.find(key) == gQ2000WindowKeys.end()) {
+                Q2000DeleteBatchGeometry(batch);
+                continue;
+            }
+            if (write != read) {
+                q711TerrainBatches[write] = std::move(batch);
+                batch.vao = 0u;
+                batch.vbo = 0u;
+            }
+            ++write;
+        }
+        q711TerrainBatches.resize(write);
+    }
 
     gQ2000Worldspace = 0u;
     gQ2000ResidentValid = false;
