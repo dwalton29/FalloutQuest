@@ -1075,8 +1075,11 @@ const Fo3TerrainCellQ76* FindFo3TerrainGroundCellQ2000(
     const auto found =
         gQ2000GroundCells.find(Q711GridKey(gridX, gridY));
     if (found != gQ2000GroundCells.end()) return &found->second;
+    if (gQ2000ResidentValid) return nullptr;
 
-    // Cold boot / pre-Q20 bootstrap fallback.
+    // Cold boot / pre-Q20 bootstrap fallback. Once Q20 owns the runway we do
+    // not touch gTerrainDataQ76 from the gameplay thread because the worker
+    // intentionally reuses that legacy vector as private decode scratch.
     const std::vector<Fo3TerrainCellQ76>& legacy = GetFo3TerrainQ76();
     for (const Fo3TerrainCellQ76& cell : legacy)
         if (cell.gridX == gridX && cell.gridY == gridY) return &cell;
