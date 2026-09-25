@@ -77,6 +77,11 @@ bool LookupFo3WastelandDoorTeleportQ1920(
 // it is safe to include in this translation unit without disturbing Q7.1/Q7.5.
 #include "fo3-terrain-render-runtime.inc"
 
+// Q20 owns the moving 7x7 terrain runway by CELL. It is textually included
+// here so it can reuse the proven LAND material/renderer helpers without
+// duplicating them or widening their public surface.
+#include "fo3-terrain-stream-q2000.inc"
+
 // Q7.7 physical LAND sampler is also kept in this transition translation unit.
 // It only becomes active after the exterior terrain upload has succeeded.
 #include "fo3-terrain-ground-runtime.inc"

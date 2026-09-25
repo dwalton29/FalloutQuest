@@ -46,6 +46,8 @@ struct Q76BV3 {
 };
 
 struct Q711TerrainBatch {
+    int32_t gridX = 0;
+    int32_t gridY = 0;
     std::string texturePath;
     std::string normalPath;
     GLuint vao = 0;
@@ -63,6 +65,8 @@ struct Q711TerrainBatch {
 };
 
 struct Q711CpuBatch {
+    int32_t gridX = 0;
+    int32_t gridY = 0;
     std::string texturePath;
     std::string normalPath;
     bool specularEnabled = false;
@@ -480,6 +484,9 @@ int Q711QuadrantForQuad(int x, int y) {
 } // namespace
 
 void ShutdownFo3TerrainRenderQ76() {
+    // Q20 may own a worker or partially staged incoming strip. Stop that work
+    // before deleting the legacy/cell-owned terrain GL objects.
+    ResetFo3TerrainStreamingQ2000();
     for (Q711TerrainBatch& batch : q711TerrainBatches) {
         if (batch.vbo) glDeleteBuffers(1, &batch.vbo);
         if (batch.vao) glDeleteVertexArrays(1, &batch.vao);
@@ -620,10 +627,15 @@ bool InitializeFo3TerrainRenderQ76(uint32_t worldspaceFormId,
 
     std::vector<Q711CpuBatch> cpuBatches;
     std::unordered_map<std::string, size_t> batchByTexture;
+    int32_t q2000BatchGridX = 0;
+    int32_t q2000BatchGridY = 0;
     auto getBatch = [&](const std::string& texturePath,
                         bool alphaLayer,
                         int layerOrder) -> Q711CpuBatch& {
-        const std::string key = (alphaLayer ? "A" : "B") +
+        const std::string key =
+            std::to_string(q2000BatchGridX) + "," +
+            std::to_string(q2000BatchGridY) + "|" +
+            (alphaLayer ? "A" : "B") +
             std::to_string(layerOrder) + "|" +
             (texturePath.empty() ? std::string("<fallback>") : texturePath);
         const auto found = batchByTexture.find(key);
@@ -631,6 +643,8 @@ bool InitializeFo3TerrainRenderQ76(uint32_t worldspaceFormId,
         const size_t index = cpuBatches.size();
         batchByTexture.emplace(key, index);
         Q711CpuBatch batch;
+        batch.gridX = q2000BatchGridX;
+        batch.gridY = q2000BatchGridY;
         batch.texturePath = texturePath;
         batch.normalPath = ResolveFo3TerrainNormalTextureQ1060(texturePath);
         batch.specularEnabled = IsFo3TerrainSpecularEnabledQ1060(texturePath);
@@ -647,6 +661,8 @@ bool InitializeFo3TerrainRenderQ76(uint32_t worldspaceFormId,
         const Fo3TerrainCellQ76& cell = terrain[cellIndex];
         if (stitchedHeights[cellIndex].size() != Q76B_HEIGHT_COUNT) continue;
         ++acceptedCells;
+        q2000BatchGridX = cell.gridX;
+        q2000BatchGridY = cell.gridY;
         const float originX = static_cast<float>(cell.gridX) * Q76B_CELL_SIZE;
         const float originY = static_cast<float>(cell.gridY) * Q76B_CELL_SIZE;
 
@@ -933,6 +949,8 @@ bool InitializeFo3TerrainRenderQ76(uint32_t worldspaceFormId,
     for (Q711CpuBatch& cpu : cpuBatches) {
         if (cpu.vertices.empty()) continue;
         Q711TerrainBatch gpu;
+        gpu.gridX = cpu.gridX;
+        gpu.gridY = cpu.gridY;
         gpu.texturePath = cpu.texturePath;
         gpu.normalPath = cpu.normalPath;
         gpu.specularEnabled = cpu.specularEnabled;

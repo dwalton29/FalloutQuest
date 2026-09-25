@@ -334,6 +334,8 @@ bool CollectSelectedLandQ1910(uint32_t worldspaceFormId,
         terrain.landFormId = entry.landFormId;
         terrain.gridX = cellIt->second.gridX;
         terrain.gridY = cellIt->second.gridY;
+        terrain.forceHideMask = static_cast<uint8_t>(
+            cellIt->second.forceHideLandQ720 & 0x0fu);
         bool haveVhgt = false;
         bool haveVnml = false;
         bool haveVclr = false;
@@ -431,6 +433,8 @@ bool CollectSelectedLandQ76(uint32_t worldspaceFormId,
         terrain.landFormId = formId;
         terrain.gridX = cellIt->second.gridX;
         terrain.gridY = cellIt->second.gridY;
+        terrain.forceHideMask = static_cast<uint8_t>(
+            cellIt->second.forceHideLandQ720 & 0x0fu);
         bool haveVhgt = false;
         bool haveVnml = false;
         bool haveVclr = false;
@@ -581,6 +585,57 @@ size_t AppendInheritedParentLandQ79(
              missingLocalGrids, selectedParentCells.size(), appended, replaced,
              parentCellMissing, terrain.size());
     return appended + replaced;
+}
+
+
+bool LoadFo3TerrainWindowQ2000(uint32_t worldspaceFormId,
+                               int32_t targetGridX, int32_t targetGridY,
+                               std::vector<Fo3TerrainCellQ76>& out) {
+    out.clear();
+
+    const std::vector<CellInfoQ75>* cells =
+        Q1910GetWorldspaceCells(worldspaceFormId);
+    if (!cells) return false;
+
+    std::unordered_map<uint32_t, CellInfoQ75> cellsById;
+    std::unordered_set<uint32_t> selectedCells;
+    size_t gridCells = 0u;
+    for (const CellInfoQ75& cell : *cells) {
+        cellsById[cell.formId] = cell;
+        if (!cell.hasGrid) continue;
+        ++gridCells;
+    }
+
+    const bool loadWholeWorldspace =
+        gridCells <= SMALL_WORLDSPACE_CELL_LIMIT_Q75;
+    constexpr int Q2000_RADIUS = 3;
+    for (const CellInfoQ75& cell : *cells) {
+        if (!cell.hasGrid) continue;
+        if (loadWholeWorldspace ||
+            (std::abs(cell.gridX - targetGridX) <= Q2000_RADIUS &&
+             std::abs(cell.gridY - targetGridY) <= Q2000_RADIUS)) {
+            selectedCells.insert(cell.formId);
+        }
+    }
+
+    // Parent/material repair is rebuilt for this immutable CPU snapshot. Unlike
+    // LoadFo3TerrainQ76 this does not touch gTerrainDataQ76, the legacy live
+    // selection vector used during cold boot.
+    gQ1250ParentLandByChildLand.clear();
+    gQ1270MaterialParentLandByChildLand.clear();
+
+    std::vector<Fo3TerrainCellQ76> local;
+    CollectSelectedLandQ1910(
+        worldspaceFormId, selectedCells, cellsById, local);
+    out = std::move(local);
+    const size_t inherited = AppendInheritedParentLandQ79(
+        worldspaceFormId, selectedCells, cellsById, out);
+
+    Q75_LOGI("Q20 LAND WINDOW CPU: worldspace=%08X centre=(%d,%d) selectedCells=%zu terrainCells=%zu inherited=%zu decodedCache=%zu legacySelectionUntouched=1",
+             worldspaceFormId, targetGridX, targetGridY,
+             selectedCells.size(), out.size(), inherited,
+             gQ1910DecodedLand.size());
+    return !out.empty();
 }
 
 } // namespace
