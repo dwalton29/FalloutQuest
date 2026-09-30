@@ -4934,18 +4934,43 @@ GLint q1670PcBloomLocation = -1;
 GLint q1670PcBloomReadyLocation = -1;
 
 GLuint q1350AdaptProgram = 0u;
+GLuint q1350ReduceProgram = 0u;
+GLuint q1350CopyProgram = 0u;
 GLuint q1350AdaptVao = 0u;
 GLuint q1350AdaptFbo = 0u;
 GLuint q1350AdaptTexture[2]{0u, 0u};
+GLuint q1350ReduceTexture[5]{0u, 0u, 0u, 0u, 0u}; // 640x256, 256x256, 64x64, 16x16, 4x4
 int q1350AdaptIndex = 0;
 uint64_t q1350AdaptFrame = 0u;
 bool q1350AdaptLoggedReady = false;
 
 GLint q1350AdaptSceneLocation = -1;
 GLint q1350AdaptPrevLocation = -1;
-GLint q1350AdaptTargetLocation = -1;
-GLint q1350AdaptSpeedLocation = -1;
+GLint q1350AdaptTargetLocation = -1; // PC HDRParam.w upper magnitude clamp
+GLint q1350AdaptSpeedLocation = -1;  // PC HDRParam.z retention base
+GLint q1350AdaptTimingLocationQ2040 = -1;
 GLint q1350AdaptFirstLocation = -1;
+GLint q1350ReduceSrcLocationQ2040 = -1;
+GLint q1350ReduceTexelLocationQ2040 = -1;
+GLint q1350CopySrcLocationQ2040 = -1;
+
+// Q20.4: TimingData.z is frame-varying in the PC capture (.465/.480/.465...).
+// Those values correspond to 15.5/16.0 ms when expressed as 30-Hz frame units.
+// The shader math itself is exact; this dt*30 CPU feed is the one explicitly
+// marked bridge until the original executable-side TimingData write is traced.
+double q2040HdrFrameDeltaSeconds = 1.0 / 60.0;
+int64_t q2040HdrLastPredictedDisplayTime = 0;
+
+void SetFo3HdrFrameTimeQ2040(int64_t predictedDisplayTime) {
+    if (q2040HdrLastPredictedDisplayTime != 0 &&
+        predictedDisplayTime > q2040HdrLastPredictedDisplayTime) {
+        const double dt =
+            static_cast<double>(predictedDisplayTime - q2040HdrLastPredictedDisplayTime) /
+            1000000000.0;
+        q2040HdrFrameDeltaSeconds = std::clamp(dt, 1.0 / 240.0, 0.05);
+    }
+    q2040HdrLastPredictedDisplayTime = predictedDisplayTime;
+}
 
 GLuint Q1280CompilePostShader(GLenum type, const char* source) {
     const GLuint shader = glCreateShader(type);
@@ -4964,10 +4989,15 @@ GLuint Q1280CompilePostShader(GLenum type, const char* source) {
 }
 
 bool Q1350EnsureAdaptationQ1350() {
-    if (q1350AdaptProgram && q1350AdaptVao && q1350AdaptFbo &&
-        q1350AdaptTexture[0] && q1350AdaptTexture[1]) return true;
+    bool reductionsReady = true;
+    for (GLuint tex : q1350ReduceTexture) reductionsReady = reductionsReady && tex != 0u;
+    if (q1350AdaptProgram && q1350ReduceProgram && q1350CopyProgram &&
+        q1350AdaptVao && q1350AdaptFbo &&
+        q1350AdaptTexture[0] && q1350AdaptTexture[1] && reductionsReady) {
+        return true;
+    }
 
-    static const char* adaptVertex = R"(
+    static const char* fullscreenVertex = R"(
         #version 300 es
         precision highp float;
         out vec2 vUv;
@@ -4981,117 +5011,174 @@ bool Q1350EnsureAdaptationQ1350() {
         }
     )";
 
+    // PC 1280x720 -> 640x256 and 640x256 -> 256x256 stages are the same
+    // two-instruction Src0 copy shader; only sampler filtering changes.
+    static const char* copyFragment = R"(
+        #version 300 es
+        precision highp float;
+        in vec2 vUv;
+        uniform sampler2D uSrc;
+        out vec4 fragColor;
+        void main() {
+            fragColor = texture(uSrc, vUv);
+        }
+    )";
+
+    // Captured ISHDR downsample shader used for 256->64, 64->16 and 16->4:
+    // four diagonal samples at +/- one source texel, each weighted 0.25.
+    static const char* reduceFragment = R"(
+        #version 300 es
+        precision highp float;
+        in vec2 vUv;
+        uniform sampler2D uSrc;
+        uniform vec2 uSourceTexel;
+        out vec4 fragColor;
+        void main() {
+            vec3 c = vec3(0.0);
+            c += texture(uSrc, vUv + vec2(-uSourceTexel.x, -uSourceTexel.y)).rgb * 0.25;
+            c += texture(uSrc, vUv + vec2( uSourceTexel.x, -uSourceTexel.y)).rgb * 0.25;
+            c += texture(uSrc, vUv + vec2( uSourceTexel.x,  uSourceTexel.y)).rgb * 0.25;
+            c += texture(uSrc, vUv + vec2(-uSourceTexel.x,  uSourceTexel.y)).rgb * 0.25;
+            fragColor = vec4(c, 0.0);
+        }
+    )";
+
+    // Captured ISHDRADAPT: sample the four clamped corners of the 4x4 FP16
+    // reduction, blend against the previous 1x1 FP16 history using
+    // pow(HDRParam.z, TimingData.z), then clamp RGB vector magnitude to
+    // [0.01, HDRParam.w]. Alpha is BlurScale.z = 0 in the captured pass.
     static const char* adaptFragment = R"(
         #version 300 es
         precision highp float;
+        in vec2 vUv;
         uniform sampler2D uScene;
         uniform sampler2D uPrev;
         uniform float uTargetLum;
         uniform float uEyeAdaptSpeed;
+        uniform float uTimingDataZ;
         uniform int uFirstFrame;
         out vec4 fragColor;
-
-        float Q1350Lum(vec3 c) {
-            return dot(max(c, vec3(0.0)), vec3(0.2126, 0.7152, 0.0722));
-        }
-
-        float Q1350UnpackExposure(vec2 rg) {
-            return (rg.r + rg.g / 255.0) * 4.0;
-        }
-
-        vec2 Q1350PackExposure(float exposure) {
-            float normalized = clamp(exposure / 4.0, 0.0, 1.0);
-            float scaled = normalized * 255.0;
-            float highByte = floor(scaled);
-            float lowByte = fract(scaled);
-            return vec2(highByte / 255.0, lowByte);
-        }
-
         void main() {
-            vec3 currentAverageQ1520 = vec3(0.0);
-            for (int y = 0; y < 4; ++y) {
-                for (int x = 0; x < 4; ++x) {
-                    vec2 uv = (vec2(float(x), float(y)) + vec2(0.5)) / 4.0;
-                    currentAverageQ1520 += max(texture(uScene, uv).rgb, vec3(0.0));
-                }
-            }
-            currentAverageQ1520 *= (1.0 / 16.0);
+            vec3 current = vec3(0.0);
+            current += texture(uScene, vUv + vec2(-1.0, -1.0)).rgb * 0.25;
+            current += texture(uScene, vUv + vec2( 1.0, -1.0)).rgb * 0.25;
+            current += texture(uScene, vUv + vec2( 1.0,  1.0)).rgb * 0.25;
+            current += texture(uScene, vUv + vec2(-1.0,  1.0)).rgb * 0.25;
 
-            vec3 previousAverageQ1520 = max(texture(uPrev, vec2(0.5)).rgb, vec3(0.0));
+            vec3 previous = texture(uPrev, vec2(0.5)).rgb;
+            float retention = pow(uEyeAdaptSpeed, uTimingDataZ);
+            vec3 adapted = (uFirstFrame != 0)
+                ? current
+                : mix(current, previous, retention);
 
-            // ISHDRADAPT uses p = pow(EyeAdaptSpeed, TimingData.z), then
-            // (1-p)*previous + p*current. Q15.2 uses one settled comparison step
-            // per stereo frame while TimingData.z's CPU feed is traced; steady
-            // state is identical and that is the visual target of this build.
-            float pQ1520 = clamp(uEyeAdaptSpeed, 0.0, 1.0);
-            vec3 adaptedQ1520 = (uFirstFrame != 0)
-                ? currentAverageQ1520
-                : mix(previousAverageQ1520, currentAverageQ1520, pQ1520);
-
-            float adaptedMagnitudeQ1520 = length(adaptedQ1520);
-            float safeMagnitudeQ1520 = max(0.01, adaptedMagnitudeQ1520);
-            float clampedMagnitudeQ1520 = min(safeMagnitudeQ1520, max(uTargetLum, 0.01));
-            adaptedQ1520 *= clampedMagnitudeQ1520 / safeMagnitudeQ1520;
-
-            // RGB is the adapted/clamped vector itself, matching ISHDRADAPT.
-            // Alpha carries current magnitude only for diagnostics.
-            fragColor = vec4(adaptedQ1520,
-                             clamp(length(currentAverageQ1520) * 0.25, 0.0, 1.0));
+            float magnitude = length(adapted);
+            float safeMagnitude = max(0.01, magnitude);
+            float clampedMagnitude = min(safeMagnitude, uTargetLum);
+            adapted *= clampedMagnitude / safeMagnitude;
+            fragColor = vec4(adapted, 0.0);
         }
     )";
 
-    const GLuint vs = Q1280CompilePostShader(GL_VERTEX_SHADER, adaptVertex);
-    const GLuint fs = Q1280CompilePostShader(GL_FRAGMENT_SHADER, adaptFragment);
-    if (!vs || !fs) {
+    const GLuint vs = Q1280CompilePostShader(GL_VERTEX_SHADER, fullscreenVertex);
+    const GLuint fsCopy = Q1280CompilePostShader(GL_FRAGMENT_SHADER, copyFragment);
+    const GLuint fsReduce = Q1280CompilePostShader(GL_FRAGMENT_SHADER, reduceFragment);
+    const GLuint fsAdapt = Q1280CompilePostShader(GL_FRAGMENT_SHADER, adaptFragment);
+    if (!vs || !fsCopy || !fsReduce || !fsAdapt) {
         if (vs) glDeleteShader(vs);
-        if (fs) glDeleteShader(fs);
+        if (fsCopy) glDeleteShader(fsCopy);
+        if (fsReduce) glDeleteShader(fsReduce);
+        if (fsAdapt) glDeleteShader(fsAdapt);
         return false;
     }
 
-    q1350AdaptProgram = glCreateProgram();
-    glAttachShader(q1350AdaptProgram, vs);
-    glAttachShader(q1350AdaptProgram, fs);
-    glLinkProgram(q1350AdaptProgram);
+    auto linkProgramQ2040 = [&](GLuint fs, const char* label) -> GLuint {
+        GLuint program = glCreateProgram();
+        glAttachShader(program, vs);
+        glAttachShader(program, fs);
+        glLinkProgram(program);
+        GLint linked = GL_FALSE;
+        glGetProgramiv(program, GL_LINK_STATUS, &linked);
+        if (linked != GL_TRUE) {
+            char log[1024]{};
+            glGetProgramInfoLog(program, sizeof(log), nullptr, log);
+            Q6H_LOGE("Q20.4 HDR %s program link failed: %s", label, log);
+            glDeleteProgram(program);
+            return 0u;
+        }
+        return program;
+    };
+
+    q1350CopyProgram = linkProgramQ2040(fsCopy, "COPY");
+    q1350ReduceProgram = linkProgramQ2040(fsReduce, "REDUCE");
+    q1350AdaptProgram = linkProgramQ2040(fsAdapt, "ADAPT");
     glDeleteShader(vs);
-    glDeleteShader(fs);
-
-    GLint linked = GL_FALSE;
-    glGetProgramiv(q1350AdaptProgram, GL_LINK_STATUS, &linked);
-    if (linked != GL_TRUE) {
-        char log[1024]{};
-        glGetProgramInfoLog(q1350AdaptProgram, sizeof(log), nullptr, log);
-        Q6H_LOGE("Q13.5 HDR ADAPT program link failed: %s", log);
-        glDeleteProgram(q1350AdaptProgram);
-        q1350AdaptProgram = 0u;
-        return false;
-    }
+    glDeleteShader(fsCopy);
+    glDeleteShader(fsReduce);
+    glDeleteShader(fsAdapt);
+    if (!q1350CopyProgram || !q1350ReduceProgram || !q1350AdaptProgram) return false;
 
     glGenVertexArrays(1, &q1350AdaptVao);
     glGenFramebuffers(1, &q1350AdaptFbo);
+    glGenTextures(5, q1350ReduceTexture);
     glGenTextures(2, q1350AdaptTexture);
 
-    // Initial packed exposure = 1.0. Pack(exposure/4 = .25) -> bytes 63,191.
-    const uint8_t initialPixel[4]{0u, 0u, 0u, 255u};
+    const GLsizei reduceWidths[5]{640, 256, 64, 16, 4};
+    const GLsizei reduceHeights[5]{256, 256, 64, 16, 4};
+    for (int i = 0; i < 5; ++i) {
+        glBindTexture(GL_TEXTURE_2D, q1350ReduceTexture[i]);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F,
+                     reduceWidths[i], reduceHeights[i], 0,
+                     GL_RGBA, GL_HALF_FLOAT, nullptr);
+        glBindFramebuffer(GL_FRAMEBUFFER, q1350AdaptFbo);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                               GL_TEXTURE_2D, q1350ReduceTexture[i], 0);
+        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+            Q6H_LOGE("Q20.4 HDR reduction target incomplete: index=%d size=%dx%d",
+                     i, reduceWidths[i], reduceHeights[i]);
+            return false;
+        }
+    }
+
+    const float initialHistory[4]{0.0f, 0.0f, 0.0f, 0.0f};
     for (GLuint tex : q1350AdaptTexture) {
         glBindTexture(GL_TEXTURE_2D, tex);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 1, 1, 0,
-                     GL_RGBA, GL_UNSIGNED_BYTE, initialPixel);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, 1, 1, 0,
+                     GL_RGBA, GL_FLOAT, initialHistory);
+        glBindFramebuffer(GL_FRAMEBUFFER, q1350AdaptFbo);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                               GL_TEXTURE_2D, tex, 0);
+        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+            Q6H_LOGE("Q20.4 HDR history target incomplete");
+            return false;
+        }
     }
 
+    q1350CopySrcLocationQ2040 = glGetUniformLocation(q1350CopyProgram, "uSrc");
+    q1350ReduceSrcLocationQ2040 = glGetUniformLocation(q1350ReduceProgram, "uSrc");
+    q1350ReduceTexelLocationQ2040 =
+        glGetUniformLocation(q1350ReduceProgram, "uSourceTexel");
     q1350AdaptSceneLocation = glGetUniformLocation(q1350AdaptProgram, "uScene");
     q1350AdaptPrevLocation = glGetUniformLocation(q1350AdaptProgram, "uPrev");
     q1350AdaptTargetLocation = glGetUniformLocation(q1350AdaptProgram, "uTargetLum");
     q1350AdaptSpeedLocation = glGetUniformLocation(q1350AdaptProgram, "uEyeAdaptSpeed");
+    q1350AdaptTimingLocationQ2040 =
+        glGetUniformLocation(q1350AdaptProgram, "uTimingDataZ");
     q1350AdaptFirstLocation = glGetUniformLocation(q1350AdaptProgram, "uFirstFrame");
 
-    if (q1350AdaptSceneLocation < 0 || q1350AdaptPrevLocation < 0 ||
+    if (q1350CopySrcLocationQ2040 < 0 ||
+        q1350ReduceSrcLocationQ2040 < 0 || q1350ReduceTexelLocationQ2040 < 0 ||
+        q1350AdaptSceneLocation < 0 || q1350AdaptPrevLocation < 0 ||
         q1350AdaptTargetLocation < 0 || q1350AdaptSpeedLocation < 0 ||
-        q1350AdaptFirstLocation < 0) {
-        Q6H_LOGE("Q13.5 HDR ADAPT missing shader uniforms");
+        q1350AdaptTimingLocationQ2040 < 0 || q1350AdaptFirstLocation < 0) {
+        Q6H_LOGE("Q20.4 HDR pipeline missing shader uniforms");
         return false;
     }
 
@@ -5099,7 +5186,7 @@ bool Q1350EnsureAdaptationQ1350() {
     q1350AdaptFrame = 0u;
     if (!q1350AdaptLoggedReady) {
         q1350AdaptLoggedReady = true;
-        Q6H_LOGI("Q15.2 SP17 HDR ADAPT READY: probe=4x4-log-average history=RGBA8-packed16 gpuOnly=1 update=eye0-once-per-stereo-frame exposureClamp=0.750..1.350 semantics=eyeAdapt-retention targetLumBridge=quarter-scale sqrtResponse=1");
+        Q6H_LOGI("Q20.4 PC HDR READY: reduction=1280ish->640x256(linear copy)->256x256(point copy)->64->16->4(fourTapQuarter) history=RGBA16F 1x1 adapt=ISHDRADAPT exact retention=pow(IMAD_time0_eyeAdapt,TimingData.z) timingFeed=QuestFrameSeconds*30_bridge stereoShared=1");
     }
     return true;
 }
@@ -5125,55 +5212,94 @@ void Q1350UpdateExposureQ1350() {
     glActiveTexture(GL_TEXTURE1);
     glGetIntegerv(GL_TEXTURE_BINDING_2D, &oldTexture1);
 
-    const int nextIndex = 1 - q1350AdaptIndex;
     glBindFramebuffer(GL_FRAMEBUFFER, q1350AdaptFbo);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
-                           GL_TEXTURE_2D, q1350AdaptTexture[nextIndex], 0);
-    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
-        Q6H_LOGE("Q13.5 HDR ADAPT FBO incomplete");
-        glBindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(oldFramebuffer));
-        return;
-    }
-
-    glViewport(0, 0, 1, 1);
     glDisable(GL_DEPTH_TEST);
     glDisable(GL_BLEND);
     glDepthMask(GL_FALSE);
-    glUseProgram(q1350AdaptProgram);
     glBindVertexArray(q1350AdaptVao);
 
+    // PC pass 1: full FP16 HDR scene -> fixed 640x256, linear-filtered copy.
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                           GL_TEXTURE_2D, q1350ReduceTexture[0], 0);
+    glViewport(0, 0, 640, 256);
+    glUseProgram(q1350CopyProgram);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, q1280PostColor);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glUniform1i(q1350CopySrcLocationQ2040, 0);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+
+    // PC pass 2: 640x256 -> 256x256, point-filtered copy.
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                           GL_TEXTURE_2D, q1350ReduceTexture[1], 0);
+    glViewport(0, 0, 256, 256);
+    glBindTexture(GL_TEXTURE_2D, q1350ReduceTexture[0]);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+
+    // PC pass 3: 256->64->16->4. The captured shader samples +/- one
+    // source texel diagonally with four 0.25 weights at every level.
+    const GLsizei widths[5]{640, 256, 64, 16, 4};
+    const GLsizei heights[5]{256, 256, 64, 16, 4};
+    glUseProgram(q1350ReduceProgram);
+    glUniform1i(q1350ReduceSrcLocationQ2040, 0);
+    for (int dst = 2; dst <= 4; ++dst) {
+        const int src = dst - 1;
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                               GL_TEXTURE_2D, q1350ReduceTexture[dst], 0);
+        glViewport(0, 0, widths[dst], heights[dst]);
+        glBindTexture(GL_TEXTURE_2D, q1350ReduceTexture[src]);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glUniform2f(q1350ReduceTexelLocationQ2040,
+                    1.0f / static_cast<float>(widths[src]),
+                    1.0f / static_cast<float>(heights[src]));
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+    }
+
+    const int nextIndex = 1 - q1350AdaptIndex;
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                           GL_TEXTURE_2D, q1350AdaptTexture[nextIndex], 0);
+    glViewport(0, 0, 1, 1);
+    glUseProgram(q1350AdaptProgram);
+
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, q1350ReduceTexture[4]);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glUniform1i(q1350AdaptSceneLocation, 0);
+
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D, q1350AdaptTexture[q1350AdaptIndex]);
     glUniform1i(q1350AdaptPrevLocation, 1);
 
     const Fo3ImageSpaceQ1280& image = GetFo3ImageSpaceQ1280();
-    const float targetLum = image.valid ? std::clamp(image.hdrTargetLum, 0.001f, 4.0f) : 1.0f;
-    const float upperLum = image.valid ? std::clamp(image.hdrUpperLumClamp, 0.01f, 4.0f) : 1.0f;
-    const float eyeSpeed = image.valid ? std::clamp(image.hdrEyeAdaptSpeed, 0.0f, 1.0f) : 0.5f;
+    const float upperLum =
+        image.valid ? std::clamp(image.hdrUpperLumClamp, 0.01f, 4.0f) : 1.0f;
+    const float retentionBase =
+        image.valid ? std::clamp(image.hdrEyeAdaptSpeed, 0.0001f, 1.0f) : 0.92f;
+    const float timingDataZ = std::clamp(
+        static_cast<float>(q2040HdrFrameDeltaSeconds * 30.0), 0.001f, 4.0f);
+
     glUniform1f(q1350AdaptTargetLocation, upperLum);
-    glUniform1f(q1350AdaptSpeedLocation, eyeSpeed);
+    glUniform1f(q1350AdaptSpeedLocation, retentionBase);
+    glUniform1f(q1350AdaptTimingLocationQ2040, timingDataZ);
     glUniform1i(q1350AdaptFirstLocation, q1350AdaptFrame == 0u ? 1 : 0);
     glDrawArrays(GL_TRIANGLES, 0, 3);
 
     q1350AdaptIndex = nextIndex;
     ++q1350AdaptFrame;
 
-    // Diagnostic-only 1x1 readback: first update and then roughly every two
-    // seconds at 72 Hz. Rendering itself never depends on this CPU readback.
     if (q1350AdaptFrame == 1u || (q1350AdaptFrame % 144u) == 0u) {
-        uint8_t pixel[4]{};
-        glReadPixels(0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
-        const float packed = static_cast<float>(pixel[0]) / 255.0f +
-                             (static_cast<float>(pixel[1]) / 255.0f) / 255.0f;
-        const float exposure = packed * 4.0f;
-        const float sceneLum = (static_cast<float>(pixel[2]) / 255.0f) * 4.0f;
-        const float desiredExposure = (static_cast<float>(pixel[3]) / 255.0f) * 4.0f;
-        Q6H_LOGI("Q15.2 SP17 HDR HISTORY: sceneLum=%.4f targetLum=%.3f desiredExposure=%.4f adaptedExposure=%.4f eyeAdaptSpeed=%.3f update=%llu stereoShared=1 gpuHistory=1 mapping=sqrt(targetQuarter/logAverage) clamp=0.75..1.35",
-                 sceneLum, targetLum, desiredExposure, exposure, eyeSpeed,
-                 static_cast<unsigned long long>(q1350AdaptFrame));
+        const float effectiveRetention = std::pow(retentionBase, timingDataZ);
+        Q6H_LOGI(
+            "Q20.4 PC HDR HISTORY: eyeAdaptBase=%.4f timingDataZ=%.4f frameDtMs=%.3f retention=%.6f currentWeight=%.6f upperLum=%.3f update=%llu reduction=640/256/64/16/4 history=FP16 source=PC-capture timingScale=dt*30-bridge",
+            retentionBase, timingDataZ,
+            static_cast<float>(q2040HdrFrameDeltaSeconds * 1000.0),
+            effectiveRetention, 1.0f - effectiveRetention, upperLum,
+            static_cast<unsigned long long>(q1350AdaptFrame));
     }
 
     glActiveTexture(GL_TEXTURE1);
@@ -5972,13 +6098,22 @@ void Q1280ShutdownPostQ1280() {
     if (q1370PostDepth) glDeleteTextures(1, &q1370PostDepth);
     q1370PostDepth = 0u;
     if (q1350AdaptTexture[0] || q1350AdaptTexture[1]) glDeleteTextures(2, q1350AdaptTexture);
+    bool q2040HaveReduce = false;
+    for (GLuint tex : q1350ReduceTexture) q2040HaveReduce = q2040HaveReduce || tex != 0u;
+    if (q2040HaveReduce) glDeleteTextures(5, q1350ReduceTexture);
     if (q1350AdaptFbo) glDeleteFramebuffers(1, &q1350AdaptFbo);
     if (q1350AdaptVao) glDeleteVertexArrays(1, &q1350AdaptVao);
     if (q1350AdaptProgram) glDeleteProgram(q1350AdaptProgram);
+    if (q1350ReduceProgram) glDeleteProgram(q1350ReduceProgram);
+    if (q1350CopyProgram) glDeleteProgram(q1350CopyProgram);
     q1350AdaptTexture[0] = q1350AdaptTexture[1] = 0u;
+    for (GLuint& tex : q1350ReduceTexture) tex = 0u;
     q1350AdaptFbo = q1350AdaptVao = q1350AdaptProgram = 0u;
+    q1350ReduceProgram = q1350CopyProgram = 0u;
     q1350AdaptFrame = 0u;
     q1350AdaptIndex = 0;
+    q2040HdrLastPredictedDisplayTime = 0;
+    q2040HdrFrameDeltaSeconds = 1.0 / 60.0;
 
     if (q1280PostColor) glDeleteTextures(1, &q1280PostColor);
     if (q1280PostFbo) glDeleteFramebuffers(1, &q1280PostFbo);
