@@ -1262,6 +1262,7 @@ private:
         XrFrameWaitInfo waitInfo{XR_TYPE_FRAME_WAIT_INFO};
         XrFrameState frameState{XR_TYPE_FRAME_STATE};
         if (!CheckXr(xrWaitFrame(session_, &waitInfo, &frameState), "xrWaitFrame")) return;
+        SetFo3HdrFrameTimeQ2040(static_cast<int64_t>(frameState.predictedDisplayTime));
         XrFrameBeginInfo beginInfo{XR_TYPE_FRAME_BEGIN_INFO};
         if (!CheckXr(xrBeginFrame(session_, &beginInfo), "xrBeginFrame")) return;
         PrepareFo3LoadingScreensQ1700();
