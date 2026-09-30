@@ -669,12 +669,11 @@ GLuint CreateQ6HProgram() {
                     : baseColor;
                 lit += emissiveMask * uEmissiveColor * uEmissiveMult;
             }
-            float fogDistance = length(vPosition - uEyePosition);
-            float fogT = clamp((fogDistance - uFogNear) /
-                               max(uFogFar - uFogNear, 0.01), 0.0, 1.0);
-            float q1532QuestFragmentFog = pow(fogT, max(uFogPower, 0.01));
+            // Q20.3c PC static parity: SLS1011.vso computes FogParam in
+            // the vertex shader and SLS1017.pso consumes the interpolated D1.w.
+            // Do not recompute a separate world-distance fog in the pixel stage.
             float fogFactor = uRenderStageQ1560 >= 1
-                ? q1532QuestFragmentFog
+                ? vFogFactorQ1532
                 : 0.0;
             lit = mix(lit, uFogColor, fogFactor);
             fragColor = vec4(max(lit, vec3(0.0)), alpha);
@@ -815,11 +814,11 @@ bool UploadTexture(const std::string& path,
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     Q1070ApplyStaticAnisotropy();
-    // Q15.12: test the unresolved PC sampler-input colour-space state.
-    // Only authored diffuse/BaseMap colour receives hardware sRGB -> linear
-    // decoding. Normal/gloss and other data textures remain linear GL_RGBA8.
-    const GLenum q1620InternalFormat =
-        std::string(label) == "DIFFUSE" ? GL_SRGB8_ALPHA8 : GL_RGBA8;
+    // Q20.3c PC static parity: the complete D3D9 trace contains no
+    // D3DSAMP_SRGBTEXTURE state change. D3D9 therefore leaves sampler sRGB
+    // decode at its default disabled state. Preserve decoded DDS bytes as raw
+    // normalized texture values for BaseMap as well as data textures.
+    const GLenum q1620InternalFormat = GL_RGBA8;
     glTexImage2D(GL_TEXTURE_2D, 0, q1620InternalFormat,
                  texture.width, texture.height, 0,
                  GL_RGBA, GL_UNSIGNED_BYTE, texture.rgba.data());
@@ -2139,7 +2138,7 @@ void Q1590UploadPcSp17LightConstants() {
         q1590LastWeather = fo3todq1400::gRuntime.weatherFormId;
         q1590LastHour = hourBucket;
         Q6H_LOGI(
-            "Q15.13 SP17 CORE: weather=%08X EDID=%s hour=%.2f ambient=(%.6f %.6f %.6f) sunlight=(%.6f %.6f %.6f) baseSunDimmer=%.3f effectiveSunScale=%.3f scope=static-PPLighting core=PC_DP3_DIFFUSE_TANGENT_HALF_SPEC normalAlphaSpec=1 lowNdotLSpecGate=1 syntheticSpec032=0 baseMap=GL_SRGB8_ALPHA8_DECODE terrainChanged=0 sunScaleSource=Q14-ImageSpace",
+            "Q15.13 SP17 CORE: weather=%08X EDID=%s hour=%.2f ambient=(%.6f %.6f %.6f) sunlight=(%.6f %.6f %.6f) baseSunDimmer=%.3f effectiveSunScale=%.3f scope=static-PPLighting core=PC_DP3_DIFFUSE_TANGENT_HALF_SPEC normalAlphaSpec=1 lowNdotLSpecGate=1 syntheticSpec032=0 baseMap=GL_RGBA8_RAW pcFog=VERTEX_INTERPOLATED terrainChanged=0 sunScaleSource=Q14-ImageSpace",
             fo3todq1400::gRuntime.weatherFormId,
             fo3todq1400::gRuntime.weather.editorId.empty()
                 ? "<none>" : fo3todq1400::gRuntime.weather.editorId.c_str(),
