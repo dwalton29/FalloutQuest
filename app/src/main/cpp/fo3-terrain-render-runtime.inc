@@ -1142,6 +1142,9 @@ void RenderFo3TerrainQ76(const float* mvp) {
     glUniform1i(q76bSamplerLocation, 0);
     if (q1060TerrainNormalSamplerLocation >= 0) glUniform1i(q1060TerrainNormalSamplerLocation, 1);
     const Fo3EnvironmentQ1000& q1000Env = GetFo3EnvironmentQ1000();
+    float q203dPcLightDirection[3]{0.35f, 0.85f, 0.40f};
+    const bool q203dPcLightReady =
+        GetFo3PcLightDirectionQ203D(q203dPcLightDirection);
 
     // Q20.3 PC LAND parity: the captured SLS2124 constants prove that WTHR
     // AmbientColor and PSLightColor chroma are supplied in raw normalized byte
@@ -1176,11 +1179,13 @@ void RenderFo3TerrainQ76(const float* mvp) {
         };
         glUniform3fv(q1000TerrainAmbientLocation, 1, q2030RawAmbient);
         glUniform3fv(q1000TerrainSunlightLocation, 1, q2030PcSunlight);
-        glUniform3fv(q1000TerrainSunDirectionLocation, 1, q1000Env.sunDirection);
+        glUniform3fv(q1000TerrainSunDirectionLocation, 1,
+                     q203dPcLightReady ? q203dPcLightDirection : q1000Env.sunDirection);
     } else if (q1000Env.valid) {
         glUniform3fv(q1000TerrainAmbientLocation, 1, q1000Env.ambient);
         glUniform3fv(q1000TerrainSunlightLocation, 1, q1000Env.sunlight);
-        glUniform3fv(q1000TerrainSunDirectionLocation, 1, q1000Env.sunDirection);
+        glUniform3fv(q1000TerrainSunDirectionLocation, 1,
+                     q203dPcLightReady ? q203dPcLightDirection : q1000Env.sunDirection);
     } else {
         glUniform3f(q1000TerrainAmbientLocation, 0.48f, 0.48f, 0.48f);
         glUniform3f(q1000TerrainSunlightLocation, 0.52f, 0.52f, 0.52f);
@@ -1191,7 +1196,7 @@ void RenderFo3TerrainQ76(const float* mvp) {
     if (!q2030PcLandLogged && q1000Env.valid && q2030RawLightingReady) {
         q2030PcLandLogged = true;
         Q76B_LOGI(
-            "Q20.3 PC LAND CORE: ambientRaw=(%.6f %.6f %.6f) sunlightRaw=(%.6f %.6f %.6f) recoveredSunScale=%.6f fogRaw=(%.6f %.6f %.6f) shader=SLS2100+SLS2124 fog=vertex-PC direction=Q14-bridge-unmodified textureSRGB=unchanged",
+            "Q20.3 PC LAND CORE: ambientRaw=(%.6f %.6f %.6f) sunlightRaw=(%.6f %.6f %.6f) recoveredSunScale=%.6f fogRaw=(%.6f %.6f %.6f) shader=SLS2100+SLS2124 fog=vertex-PC direction=PC_CAPTURE_Q20.3D textureSRGB=unchanged",
             q2030RawAmbient[0], q2030RawAmbient[1], q2030RawAmbient[2],
             q2030RawSunlight[0], q2030RawSunlight[1], q2030RawSunlight[2],
             q2030SunScale,
