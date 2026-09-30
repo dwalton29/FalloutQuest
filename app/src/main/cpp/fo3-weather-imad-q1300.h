@@ -13,8 +13,14 @@ namespace fo3imadq1300 {
 
 struct ScalarCurveQ1300 {
     bool present = false;
+    // Existing endpoint behaviour keeps the highest-time key in value/time.
     float value = 0.0f;
     float time = 0.0f;
+    // Q20.4: weather HDR capture proves EyeAdapt uses the curve's time=0
+    // value while the modifier is active. Preserve the earliest key too,
+    // without changing any existing channel semantics.
+    float firstValue = 0.0f;
+    float firstTime = 0.0f;
     uint32_t keys = 0u;
 };
 
@@ -58,6 +64,8 @@ inline void ReadScalarCurveQ1300(const uint8_t* bytes, uint32_t size,
     if (!bytes || size < 8u) return;
     float bestTime = -1.0e30f;
     float bestValue = 0.0f;
+    float firstTime = 1.0e30f;
+    float firstValue = 0.0f;
     uint32_t keys = 0u;
     for (uint32_t pos = 0u; pos + 8u <= size; pos += 8u) {
         const float time = ReadFloat(bytes + pos);
@@ -68,11 +76,17 @@ inline void ReadScalarCurveQ1300(const uint8_t* bytes, uint32_t size,
             bestTime = time;
             bestValue = value;
         }
+        if (time <= firstTime) {
+            firstTime = time;
+            firstValue = value;
+        }
     }
     if (keys == 0u) return;
     out.present = true;
     out.value = bestValue;
     out.time = bestTime;
+    out.firstValue = firstValue;
+    out.firstTime = firstTime;
     out.keys = keys;
 }
 
