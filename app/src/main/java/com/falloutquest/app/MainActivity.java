@@ -40,7 +40,7 @@ public class MainActivity extends Activity {
         title.setGravity(Gravity.CENTER);
 
         TextView status = new TextView(this);
-        status.setText(nativeBootMessage() + "\n\nQ20.3A PC LAND LIGHTING / FOG CORE\nFallout 3 data -> OpenXR -> Quest 3");
+        status.setText(nativeBootMessage() + "\n\nQ20.3B LIVE STATIC SUN SCALE\nFallout 3 data -> OpenXR -> Quest 3");
         status.setTextColor(Color.rgb(210, 220, 205));
         status.setTextSize(20);
         status.setGravity(Gravity.CENTER);
