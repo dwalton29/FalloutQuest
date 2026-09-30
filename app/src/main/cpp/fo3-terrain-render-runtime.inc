@@ -441,7 +441,7 @@ void Q1070ApplyTerrainAnisotropy() {
     }
 }
 
-GLuint Q711UploadTexture(const std::string& path, bool srgbColour) {
+GLuint Q711UploadTexture(const std::string& path) {
     if (path.empty()) return 0;
     Fo3RgbaTexture image;
     if (!LoadFalloutTextureRgba(path, image) ||
@@ -458,8 +458,7 @@ GLuint Q711UploadTexture(const std::string& path, bool srgbColour) {
     Q1070ApplyTerrainAnisotropy();
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-    const GLenum internalFormat = srgbColour ? GL_SRGB8_ALPHA8 : GL_RGBA8;
-    glTexImage2D(GL_TEXTURE_2D, 0, internalFormat,
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8,
                  image.width, image.height, 0,
                  GL_RGBA, GL_UNSIGNED_BYTE, image.rgba.data());
     glGenerateMipmap(GL_TEXTURE_2D);
@@ -470,9 +469,9 @@ GLuint Q711UploadTexture(const std::string& path, bool srgbColour) {
         return 0;
     }
 
-    Q76B_LOGI("Q7.20 TERRAIN DDS READY: path=%s resolved=%s size=%dx%d format=%s gpuDomain=%s",
+    Q76B_LOGI("Q7.20 TERRAIN DDS READY: path=%s resolved=%s size=%dx%d format=%s",
               path.c_str(), image.sourcePath.c_str(), image.width, image.height,
-              image.format.c_str(), srgbColour ? "sRGB-colour" : "linear-data");
+              image.format.c_str());
     return texture;
 }
 
@@ -965,7 +964,7 @@ bool InitializeFo3TerrainRenderQ76(uint32_t worldspaceFormId,
                 gpu.realTexture = gpu.texture != 0u;
             } else if (textureUploads < Q713_MAX_REAL_TEXTURES &&
                        q1910TerrainTextureCache.size() < Q1910_TERRAIN_TEXTURE_CACHE_LIMIT) {
-                gpu.texture = Q711UploadTexture(cpu.texturePath, true);
+                gpu.texture = Q711UploadTexture(cpu.texturePath);
                 gpu.realTexture = gpu.texture != 0u;
                 if (gpu.realTexture) {
                     gpu.ownsTexture = false; // Q16.19 shared process-lifetime terrain texture cache
@@ -991,7 +990,7 @@ bool InitializeFo3TerrainRenderQ76(uint32_t worldspaceFormId,
                 if (gpu.realNormal) ++q1810NormalCacheHits;
             } else if (q1060NormalUploads < Q713_MAX_REAL_TEXTURES &&
                        uploadedNormalsQ1060.size() < Q1810_TERRAIN_NORMAL_CACHE_LIMIT) {
-                gpu.normalTexture = Q711UploadTexture(cpu.normalPath, false);
+                gpu.normalTexture = Q711UploadTexture(cpu.normalPath);
                 gpu.realNormal = gpu.normalTexture != 0u;
                 if (gpu.realNormal) {
                     // Q18.1: normals are immutable Fallout assets just like the
