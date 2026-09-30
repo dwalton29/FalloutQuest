@@ -370,12 +370,12 @@ GLuint Q76BCreateProgram() {
                 float attenuation = pow(edge, max(uLocalLightColorFalloff[i].w, 0.25));
                 lit += albedo * uLocalLightColorFalloff[i].rgb * localLambert * attenuation;
             }
-            float fogDistance = length(vPosition - uEyePosition);
-            float fogT = clamp((fogDistance - uFogNear) /
-                               max(uFogFar - uFogNear, 0.01), 0.0, 1.0);
-            float q1532QuestFragmentFog = pow(fogT, max(uFogPower, 0.01));
+            // PC SLS2100.vso computes LAND fog per vertex from transformed
+            // position, FogParam=(far, far-near, power, _), then SLS2124.pso
+            // blends against the interpolated factor. Use the already matching
+            // vertex result instead of recomputing a different world-distance fog.
             float fogFactor = uRenderStageQ1560 >= 1
-                ? q1532QuestFragmentFog
+                ? vFogFactorQ1532
                 : 0.0;
             lit = mix(lit, uFogColor, fogFactor);
             fragColor = vec4(max(lit, vec3(0.0)), clamp(vAlpha, 0.0, 1.0));
@@ -1142,16 +1142,43 @@ void RenderFo3TerrainQ76(const float* mvp) {
     glUniform1i(q76bSamplerLocation, 0);
     if (q1060TerrainNormalSamplerLocation >= 0) glUniform1i(q1060TerrainNormalSamplerLocation, 1);
     const Fo3EnvironmentQ1000& q1000Env = GetFo3EnvironmentQ1000();
-    if (q1000Env.valid) {
-        float q1500Ambient[3]{q1000Env.ambient[0], q1000Env.ambient[1], q1000Env.ambient[2]};
-        if (GetFo3LegacyPpDiffuseDomainQ1470()) {
-            const float q1500AmbientLuma =
-                0.2126f * q1500Ambient[0] + 0.7152f * q1500Ambient[1] + 0.0722f * q1500Ambient[2];
-            q1500Ambient[0] = q1500AmbientLuma * 0.65f;
-            q1500Ambient[1] = q1500AmbientLuma * 0.65f;
-            q1500Ambient[2] = q1500AmbientLuma * 0.65f;
+
+    // Q20.3 PC LAND parity: the captured SLS2124 constants prove that WTHR
+    // AmbientColor and PSLightColor chroma are supplied in raw normalized byte
+    // space, not after sRGB->linear conversion. Recover only the scalar already
+    // applied by Q14 from its linear sunlight result; this deliberately changes
+    // colour-domain interpretation without inventing a new intensity curve.
+    float q2030RawAmbient[3]{0.48f, 0.48f, 0.48f};
+    float q2030RawSunlight[3]{0.52f, 0.52f, 0.52f};
+    float q2030LinearSunlight[3]{0.52f, 0.52f, 0.52f};
+    float q2030RawFog[3]{0.0f, 0.0f, 0.0f};
+    RefreshFo3RawWeatherLightingQ1480();
+    const bool q2030RawLightingReady =
+        GetFo3RawWeatherLightingQ1480(q2030RawAmbient, q2030RawSunlight) &&
+        GetFo3LinearWeatherSunlightQ1480(q2030LinearSunlight);
+    const bool q2030RawFogReady = GetFo3RawWeatherFogQ1480(q2030RawFog);
+
+    float q2030SunScale = 1.0f;
+    if (q1000Env.valid && q2030RawLightingReady) {
+        float numerator = 0.0f;
+        float denominator = 0.0f;
+        for (int channel = 0; channel < 3; ++channel) {
+            numerator += q1000Env.sunlight[channel] * q2030LinearSunlight[channel];
+            denominator += q2030LinearSunlight[channel] * q2030LinearSunlight[channel];
         }
-        glUniform3fv(q1000TerrainAmbientLocation, 1, q1500Ambient);
+        if (denominator > 1.0e-8f) {
+            q2030SunScale = std::clamp(numerator / denominator, 0.0f, 8.0f);
+        }
+        float q2030PcSunlight[3]{
+            q2030RawSunlight[0] * q2030SunScale,
+            q2030RawSunlight[1] * q2030SunScale,
+            q2030RawSunlight[2] * q2030SunScale,
+        };
+        glUniform3fv(q1000TerrainAmbientLocation, 1, q2030RawAmbient);
+        glUniform3fv(q1000TerrainSunlightLocation, 1, q2030PcSunlight);
+        glUniform3fv(q1000TerrainSunDirectionLocation, 1, q1000Env.sunDirection);
+    } else if (q1000Env.valid) {
+        glUniform3fv(q1000TerrainAmbientLocation, 1, q1000Env.ambient);
         glUniform3fv(q1000TerrainSunlightLocation, 1, q1000Env.sunlight);
         glUniform3fv(q1000TerrainSunDirectionLocation, 1, q1000Env.sunDirection);
     } else {
@@ -1160,6 +1187,16 @@ void RenderFo3TerrainQ76(const float* mvp) {
         glUniform3f(q1000TerrainSunDirectionLocation, 0.35f, 0.85f, 0.40f);
     }
 
+    static bool q2030PcLandLogged = false;
+    if (!q2030PcLandLogged && q1000Env.valid && q2030RawLightingReady) {
+        q2030PcLandLogged = true;
+        Q76B_LOGI(
+            "Q20.3 PC LAND CORE: ambientRaw=(%.6f %.6f %.6f) sunlightRaw=(%.6f %.6f %.6f) recoveredSunScale=%.6f fogRaw=(%.6f %.6f %.6f) shader=SLS2100+SLS2124 fog=vertex-PC direction=Q14-bridge-unmodified textureSRGB=unchanged",
+            q2030RawAmbient[0], q2030RawAmbient[1], q2030RawAmbient[2],
+            q2030RawSunlight[0], q2030RawSunlight[1], q2030RawSunlight[2],
+            q2030SunScale,
+            q2030RawFog[0], q2030RawFog[1], q2030RawFog[2]);
+    }
 
     glUniform3fv(q1010TerrainEyeLocation, 1, gFo3EyePositionQ1010);
     glUniform1i(q1010TerrainLightCountLocation, gFo3SelectedLightCountQ1010);
@@ -1203,7 +1240,11 @@ void RenderFo3TerrainQ76(const float* mvp) {
     if (q1532TerrainFogPowerVertexLocation >= 0)
         glUniform1f(q1532TerrainFogPowerVertexLocation, GetFo3FogPowerQ1410());
     if (q1000Env.valid && q1000Env.fogFar > q1000Env.fogNear + 1.0f) {
-        glUniform3fv(q1010TerrainFogColorLocation, 1, q1000Env.fog);
+        if (q2030RawFogReady) {
+            glUniform3fv(q1010TerrainFogColorLocation, 1, q2030RawFog);
+        } else {
+            glUniform3fv(q1010TerrainFogColorLocation, 1, q1000Env.fog);
+        }
         glUniform1f(q1010TerrainFogNearLocation, std::max(0.0f, q1000Env.fogNear / 70.0f));
         glUniform1f(q1010TerrainFogFarLocation, std::max(0.1f, q1000Env.fogFar / 70.0f));
     } else {
