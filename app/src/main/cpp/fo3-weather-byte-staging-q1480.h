@@ -13,6 +13,8 @@
 inline bool gFo3RawWeatherLightingReadyQ1480 = false;
 inline float gFo3RawWeatherAmbientQ1480[3]{0.0f, 0.0f, 0.0f};
 inline float gFo3RawWeatherSunlightQ1480[3]{0.0f, 0.0f, 0.0f};
+inline float gFo3RawWeatherFogQ1480[3]{0.0f, 0.0f, 0.0f};
+inline float gFo3LinearWeatherSunlightQ1480[3]{0.0f, 0.0f, 0.0f};
 
 void RefreshFo3RawWeatherLightingQ1480();
 
@@ -30,21 +32,25 @@ void RefreshFo3RawWeatherLightingQ1480() {
     for (int c = 0; c < 3; ++c) {
         float ambient = 0.0f;
         float sunlight = 0.0f;
+        float fog = 0.0f;
+        float linearSunlight = 0.0f;
         for (int tod = 0; tod < 4; ++tod) {
             const float w = weights.w[tod];
             ambient += runtime.weather.encoded[3][tod][c] * w;
             sunlight += runtime.weather.encoded[4][tod][c] * w;
+            fog += runtime.weather.encoded[1][tod][c] * w;
+            linearSunlight += fo3colorq1390::SrgbToLinear(
+                runtime.weather.encoded[4][tod][c]) * w;
         }
+        // PC D3D9 LAND captures prove AmbientColor, PSLightColor's authored
+        // chroma, and FogColor are supplied from WTHR in the raw normalized
+        // byte/display domain. Keep these staging values unscaled; callers that
+        // need the existing Q14 sunlight scalar can recover it from the staged
+        // linear sample and the live environment.
         gFo3RawWeatherAmbientQ1480[c] = ambient;
         gFo3RawWeatherSunlightQ1480[c] = sunlight;
-    }
-
-    // Q14.0 applies ImageSpace/IMAD sunlight dimming after WTHR RGB sampling.
-    // Preserve that exact scalar so LEFT Y changes only byte RGB transfer.
-    const float sunlightDimmer = std::clamp(
-        gFo3ImageSpaceQ1280.hdrSunlightDimmer, 0.0f, 4.0f);
-    for (int c = 0; c < 3; ++c) {
-        gFo3RawWeatherSunlightQ1480[c] *= sunlightDimmer;
+        gFo3RawWeatherFogQ1480[c] = fog;
+        gFo3LinearWeatherSunlightQ1480[c] = linearSunlight;
     }
 
     gFo3RawWeatherLightingReadyQ1480 = true;
@@ -59,6 +65,20 @@ inline bool GetFo3RawWeatherLightingQ1480(float outAmbient[3],
     for (int c = 0; c < 3; ++c) {
         outAmbient[c] = gFo3RawWeatherAmbientQ1480[c];
         outSunlight[c] = gFo3RawWeatherSunlightQ1480[c];
+    }
+    return true;
+}
+
+inline bool GetFo3RawWeatherFogQ1480(float outFog[3]) {
+    if (!outFog || !gFo3RawWeatherLightingReadyQ1480) return false;
+    for (int c = 0; c < 3; ++c) outFog[c] = gFo3RawWeatherFogQ1480[c];
+    return true;
+}
+
+inline bool GetFo3LinearWeatherSunlightQ1480(float outSunlight[3]) {
+    if (!outSunlight || !gFo3RawWeatherLightingReadyQ1480) return false;
+    for (int c = 0; c < 3; ++c) {
+        outSunlight[c] = gFo3LinearWeatherSunlightQ1480[c];
     }
     return true;
 }
