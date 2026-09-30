@@ -385,6 +385,64 @@ inline void UpdateSunDirection(Fo3EnvironmentQ1000& env, float hour,
     }
 }
 
+// Q20.3d: capture-backed exterior LightData direction.
+//
+// PC D3D9 LAND captures identify PSLightDir (c18) at three exact clock anchors:
+//   12:00 = ( 0.3702947, 0.6568416, 0.6568416)
+//   18:00 = (-0.9792222, 0.1433943, 0.1433943)
+//   00:00 = (-0.3894624, 0.6512753, 0.6512753)
+// These are Bethesda Z-up/game-space directions. FalloutQuest's rendered basis
+// maps game (x,y,z) -> OpenXR (x,z,-y), matching static/NIF vector conversion.
+//
+// The original engine's continuous LightData trajectory between the three
+// captured hours is not yet recovered. Until more runtime anchors are captured,
+// spherical interpolation is an explicitly marked bridge; the three anchor
+// values themselves are copied directly from the PC runtime.
+inline void SlerpPcLightDirectionQ203D(const float a[3], const float b[3],
+                                       float t, float out[3]) {
+    const float clampedT = Clamp01(t);
+    float dot = a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    dot = std::clamp(dot, -1.0f, 1.0f);
+    if (dot > 0.9995f) {
+        out[0] = a[0] + (b[0] - a[0]) * clampedT;
+        out[1] = a[1] + (b[1] - a[1]) * clampedT;
+        out[2] = a[2] + (b[2] - a[2]) * clampedT;
+    } else {
+        const float theta = std::acos(dot);
+        const float sinTheta = std::sin(theta);
+        const float wa = std::sin((1.0f - clampedT) * theta) / sinTheta;
+        const float wb = std::sin(clampedT * theta) / sinTheta;
+        out[0] = a[0] * wa + b[0] * wb;
+        out[1] = a[1] * wa + b[1] * wb;
+        out[2] = a[2] * wa + b[2] * wb;
+    }
+    const float len = std::sqrt(out[0] * out[0] + out[1] * out[1] + out[2] * out[2]);
+    if (len > 1.0e-6f) {
+        out[0] /= len;
+        out[1] /= len;
+        out[2] /= len;
+    }
+}
+
+inline bool GetPcLightDirectionQ203D(float hour, float out[3]) {
+    if (!out) return false;
+
+    // Direct PC c18 anchors converted from Bethesda Z-up to OpenXR Y-up.
+    static constexpr float kMidnight[3] = {-0.3894624f, 0.6512753f, -0.6512753f};
+    static constexpr float kNoon[3]     = { 0.3702947f, 0.6568416f, -0.6568416f};
+    static constexpr float k1800[3]     = {-0.9792222f, 0.1433943f, -0.1433943f};
+
+    const float h = WrapHour(hour);
+    if (h < 12.0f) {
+        SlerpPcLightDirectionQ203D(kMidnight, kNoon, h / 12.0f, out);
+    } else if (h < 18.0f) {
+        SlerpPcLightDirectionQ203D(kNoon, k1800, (h - 12.0f) / 6.0f, out);
+    } else {
+        SlerpPcLightDirectionQ203D(k1800, kMidnight, (h - 18.0f) / 6.0f, out);
+    }
+    return true;
+}
+
 inline void ApplyEnvironment(RuntimeQ1400& runtime, const TimeWeightsQ1400& weights) {
     Fo3EnvironmentQ1000& env = gFo3EnvironmentQ1000;
     if (!env.valid) return;
@@ -592,4 +650,8 @@ inline void UpdateFo3TimeOfDayQ1400(float leftTriggerValue, int64_t predictedDis
 
 inline float GetFo3TestHourQ1400() {
     return fo3todq1400::gTestHour;
+}
+
+inline bool GetFo3PcLightDirectionQ203D(float out[3]) {
+    return fo3todq1400::GetPcLightDirectionQ203D(fo3todq1400::gTestHour, out);
 }
