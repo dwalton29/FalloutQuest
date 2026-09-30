@@ -286,6 +286,24 @@ inline void BuildEndpointImages(RuntimeQ1400& runtime) {
         if (!LoadWeatherImadQ1300(runtime.weather.imad[i], modifier) || !modifier.valid) continue;
         ApplyWeatherImadQ1300(runtime.endpointImage[i]);
 
+        // Q20.4 PC HDR capture: ISHDRADAPT receives 0.92 at Megaton noon
+        // (WastelandDayISFX @IAD time=0) and 0.97 at midnight
+        // (WastelandMegatonNightISFX @IAD time=0). Preserve existing IMAD
+        // behaviour for every other channel, but feed EyeAdapt from the
+        // captured time-zero multiplier/add pair so the four weather endpoints
+        // can still blend continuously through Q14.0.
+        if (modifier.eyeAdaptMult.present || modifier.eyeAdaptAdd.present) {
+            float q2040Eye = runtime.baseImage.hdrEyeAdaptSpeed;
+            if (modifier.eyeAdaptMult.present) {
+                q2040Eye *= modifier.eyeAdaptMult.firstValue;
+            }
+            if (modifier.eyeAdaptAdd.present) {
+                q2040Eye += modifier.eyeAdaptAdd.firstValue;
+            }
+            runtime.endpointImage[i].hdrEyeAdaptSpeed =
+                std::clamp(q2040Eye, 0.0f, 1.0f);
+        }
+
         // Q13.2 applies these two non-post channels separately. Build their
         // per-time endpoint values here so the same clock can interpolate them.
         runtime.endpointImage[i].hdrSunlightDimmer = ApplyScalarQ1300(
