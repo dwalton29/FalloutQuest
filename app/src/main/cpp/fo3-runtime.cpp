@@ -1088,27 +1088,31 @@ bool UploadCpuObject(CpuObject& cpu, float centerX, float centerY, float floorZ,
     const bool q1120HasVertexColorStream =
         cpu.mesh.vertexColors.size() == vertexCount * 4u;
 
-    // Q20.4a targeted PC A/B: the noon PC trace draws the exact
-    // MegatonChurchofAtom 1466- and 10249-vertex shapes with c27.x=1
-    // (vertex-colour multiplication enabled), while our parsed NIF reports
-    // shaderFlags2=00000001 and the old generic gate disables the authored
-    // colour stream. Restrict the evidence-backed override to that exact
-    // placed Church reference until the general Bethesda flag/runtime rule is
-    // recovered from more PC draws.
-    const bool q204aPcVerifiedChurchVertexColor =
+    // Q20.4b Fallout3.exe PPLighting rule:
+    // Toggles.x is driven by the geometry's vertex-colour stream presence,
+    // not BSShaderPPLightingProperty shaderFlags2 bit 0x20.  This replaces
+    // Q20.4a's Church-only trace override with the recovered engine rule.
+    gpu.useVertexColor = q1120HasVertexColorStream;
+
+    const bool q204bOldLitVertexColorGate =
         !cpu.mesh.noLighting &&
-        cpu.placement.refFormId == 0x0001CBF2u;
-    gpu.useVertexColor =
-        q1120HasVertexColorStream &&
-        (cpu.mesh.noLighting ||
-         (cpu.mesh.shaderFlags2 & 0x00000020u) != 0u ||
-         q204aPcVerifiedChurchVertexColor);
-    if (q1120HasVertexColorStream && q204aPcVerifiedChurchVertexColor &&
-        (cpu.mesh.shaderFlags2 & 0x00000020u) == 0u) {
-        Q6H_LOGI(
-            "Q20.4A PC VCOLOR OVERRIDE: ref=%08X model=%s stream=1 oldGate=0 pcC27x=1 applied=1 scope=verified-MegatonChurchofAtom",
-            cpu.placement.refFormId, cpu.placement.modelPath.c_str());
+        (cpu.mesh.shaderFlags2 & 0x00000020u) != 0u;
+    if (q1120HasVertexColorStream && !cpu.mesh.noLighting &&
+        !q204bOldLitVertexColorGate) {
+        // Diagnostic only: these are shapes Q20.4a and earlier incorrectly
+        // forced to white even though Fallout3.exe enables Toggles.x.
+        static uint32_t q204bRecoveredLitVcolorShapes = 0u;
+        ++q204bRecoveredLitVcolorShapes;
+        if (q204bRecoveredLitVcolorShapes <= 24u) {
+            Q6H_LOGI(
+                "Q20.4B EXE VCOLOR: ref=%08X model=%s stream=1 shaderFlags2=%08X oldGate=0 exeRule=1 recoveredIndex=%u",
+                cpu.placement.refFormId, cpu.placement.modelPath.c_str(),
+                cpu.mesh.shaderFlags2, q204bRecoveredLitVcolorShapes);
+        } else if (q204bRecoveredLitVcolorShapes == 25u) {
+            Q6H_LOGI("Q20.4B EXE VCOLOR: additional recovered lit shapes suppressed from log");
+        }
     }
+
     const bool q1140TexturelessNoLightingOverlay =
         q1120HasVertexColorStream && cpu.mesh.noLighting &&
         cpu.mesh.diffuseTexturePath.empty() && cpu.mesh.alphaBlend;
@@ -1126,13 +1130,6 @@ bool UploadCpuObject(CpuObject& cpu, float centerX, float centerY, float floorZ,
         Q6H_LOGI("Q11.4 OVERLAY ALPHA: ref=%08X model=%s min=%.3f max=%.3f applied=1",
                  gpu.refFormId, cpu.placement.modelPath.c_str(),
                  q1140MinAlpha, q1140MaxAlpha);
-    }
-    if (q1120HasVertexColorStream && !cpu.mesh.noLighting &&
-        (cpu.mesh.shaderFlags2 & 0x00000020u) == 0u &&
-        !q204aPcVerifiedChurchVertexColor) {
-        if (!gExteriorStreamingActiveQ1890) Q6H_LOGI("Q11.2 VCOLOR GATE: ref=%08X model=%s shaderFlags2=%08X stream=1 applied=0",
-                 gpu.refFormId, cpu.placement.modelPath.c_str(),
-                 cpu.mesh.shaderFlags2);
     }
     gpu.specularEnabled = !gpu.noLighting && (cpu.mesh.shaderFlags1 & 0x00000001u) != 0u;
     for (int i = 0; i < 3; ++i) { gpu.specularColor[i] = cpu.mesh.specularColor[i]; gpu.emissiveColor[i] = cpu.mesh.emissiveColor[i]; }
@@ -2158,7 +2155,7 @@ void Q1590UploadPcSp17LightConstants() {
         q1590LastWeather = fo3todq1400::gRuntime.weatherFormId;
         q1590LastHour = hourBucket;
         Q6H_LOGI(
-            "Q15.13 SP17 CORE: weather=%08X EDID=%s hour=%.2f ambient=(%.6f %.6f %.6f) sunlight=(%.6f %.6f %.6f) baseSunDimmer=%.3f effectiveSunScale=%.3f scope=static-PPLighting core=PC_DP3_DIFFUSE_TANGENT_HALF_SPEC normalAlphaSpec=1 lowNdotLSpecGate=1 syntheticSpec032=0 baseMap=GL_RGBA8_RAW pcFog=VERTEX_INTERPOLATED LightData=PC_CAPTURE_Q20.3D sunScaleSource=Q14-ImageSpace",
+            "Q15.13 SP17 CORE: weather=%08X EDID=%s hour=%.2f ambient=(%.6f %.6f %.6f) sunlight=(%.6f %.6f %.6f) baseSunDimmer=%.3f effectiveSunScale=%.3f scope=static-PPLighting core=PC_DP3_DIFFUSE_TANGENT_HALF_SPEC normalAlphaSpec=1 lowNdotLSpecGate=1 syntheticSpec032=0 baseMap=GL_RGBA8_RAW pcFog=VERTEX_INTERPOLATED LightData=PC_CAPTURE_Q20.3D vcolorRule=EXE_GEOMETRY_STREAM_Q20.4B sunScaleSource=Q14-ImageSpace",
             fo3todq1400::gRuntime.weatherFormId,
             fo3todq1400::gRuntime.weather.editorId.empty()
                 ? "<none>" : fo3todq1400::gRuntime.weather.editorId.c_str(),
