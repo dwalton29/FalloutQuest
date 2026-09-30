@@ -4,6 +4,12 @@
 #include <cstdint>
 #include <vector>
 
+// Q20.3d runtime LightData bridge is owned by fo3-time-of-day-q1400.h in the
+// main renderer TU. The terrain renderer is also textually compiled inside
+// fo3-cell-world.cpp, so declare the shared accessor here without pulling the
+// entire time-of-day implementation into that translation unit.
+bool GetFo3PcLightDirectionQ203D(float out[3]);
+
 struct Fo3TerrainCellQ76 {
     uint32_t cellFormId = 0;
     uint32_t landFormId = 0;
