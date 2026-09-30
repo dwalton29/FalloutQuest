@@ -5642,31 +5642,24 @@ bool Q1280EnsurePostProgram() {
             colour = max(q1520HdrBright * bloomWeightQ1520, vec3(0.0)) +
                      colour * sceneWeightQ1520;
 
-            // Q20.2: preserve Q15.14's captured PC instruction ordering, but
-            // feed it the live IMGS/IMAD values that Q14 interpolates for the
-            // current time of day. The old block froze one daytime capture into
-            // every frame, so sunset/night could never reach FINAL correctly.
+            // Q15.14 / PC call 4618221: literal captured final-film arithmetic.
+            // The PC performs this directly on the FP16 HDR-combined values.
             vec3 q1640PcOutput = colour;
             float q1640Lum = dot(q1640PcOutput,
                                  vec3(0.298999995, 0.587000012, 0.114));
 
-            // PC order: saturation -> tint -> brightness -> contrast.
-            if ((uFlags & 1) != 0) {
-                q1640PcOutput = mix(vec3(q1640Lum), q1640PcOutput, uSaturation);
-            }
-            if ((uFlags & 4) != 0) {
-                vec3 q1640TintTarget = q1640Lum * max(uTintColor, vec3(0.0));
-                q1640PcOutput = mix(q1640PcOutput, q1640TintTarget,
-                                    clamp(uTintValue, 0.0, 1.0));
-            }
-            if ((uFlags & 8) != 0) {
-                q1640PcOutput *= uBrightness;
-            }
-            if ((uFlags & 2) != 0) {
-                q1640PcOutput =
-                    (q1640PcOutput - vec3(uContrastAvg)) * uContrast +
-                    vec3(uContrastAvg);
-            }
+            // lrp r1.xyz, c19.x, r0, r0.w ; c19.x = 0.875 saturation
+            q1640PcOutput = mix(vec3(q1640Lum), q1640PcOutput, 0.875);
+
+            // mad/mad tint pair with c20 =
+            // (0.7399142, 0.5749559, 0.3128335, 0.6).
+            vec3 q1640TintTarget = q1640Lum *
+                vec3(0.7399142, 0.5749559, 0.3128335);
+            q1640PcOutput = mix(q1640PcOutput, q1640TintTarget, 0.6);
+
+            // c19.w brightness=1.1, c19.y contrastAverage=0,
+            // c19.z contrast=1.02. Fade c22=(0,0,0,0), so Fade is identity.
+            q1640PcOutput = (q1640PcOutput * 1.1 - vec3(0.0)) * 1.02 + vec3(0.0);
 
             // X8R8G8B8 clamps on the PC. Match that numeric result before
             // compensating for Quest's sRGB swapchain storage conversion.
@@ -5875,8 +5868,7 @@ void Q1280CompositeEyePostQ1280(GLuint swapchainFbo, GLsizei width, GLsizei heig
     const Fo3ImageSpaceQ1280& image = GetFo3ImageSpaceQ1280();
     const int q1560Stage = GetFo3RenderStageQ1560();
     glUniform1i(q1560PostRenderStageLocation, q1560Stage);
-    glUniform1f(q1520TargetLumLocation,
-                image.valid ? std::clamp(image.hdrTargetLum, 0.001f, 4.0f) : 1.0f);
+    glUniform1f(q1520TargetLumLocation, 1.2f);
     // Stage 2 keeps HDR/adaptation but removes only cinematic IMGS controls.
     const int flags = (q1560Stage >= FO3_RENDER_STAGE_FINAL_Q1560 && image.valid)
         ? static_cast<int>(image.cinematicFlags)
@@ -5908,7 +5900,7 @@ void Q1280CompositeEyePostQ1280(GLuint swapchainFbo, GLsizei width, GLsizei heig
     static bool q1640Logged = false;
     if (!q1640Logged) {
         q1640Logged = true;
-        Q6H_LOGI("Q20.2 PC HDR OUTPUT DOMAIN: call=4618221 filmParams=live-IMGS-IMAD order=sat-tint-brightness-contrast lum=REC601 pcTarget=X8R8G8B8 pcSrgbWrite=0 questSrgbCompensation=0 directPcCodeWrite=1");
+        Q6H_LOGI("Q15.15 PC HDR OUTPUT DOMAIN: call=4618221 targetLum=1.200 saturation=0.875 tint=(0.739914 0.574956 0.312834) tintValue=0.600 contrastAvg=0.000 contrast=1.020 brightness=1.100 fade=0 lum=REC601 pcTarget=X8R8G8B8 pcSrgbWrite=0 questSrgbCompensation=0 directPcCodeWrite=1");
     }
 
     static uint32_t lastLoggedImageSpace = 0xFFFFFFFFu;
