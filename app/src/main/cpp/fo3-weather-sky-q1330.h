@@ -119,7 +119,11 @@ inline bool ParseWeatherSkyQ1330(uint32_t weatherFormId, WeatherSkyQ1330& out) {
 }
 
 inline bool UploadCloudQ1330(CloudLayerQ1330& layer, int index) {
-    if (layer.texturePath.empty() || layer.color[3] <= 0.001f) return false;
+    // WTHR PNAM's fourth byte is not a cloud-opacity gate. Stock
+    // WastelandClear authors useful cloud RGB with A=0, so treating that byte
+    // as opacity discards the entire authored layer. Visibility comes from the
+    // cloud DDS alpha; PNAM contributes the time-of-day RGB modulation only.
+    if (layer.texturePath.empty()) return false;
     Fo3RgbaTexture decoded;
     if (!LoadFalloutTextureRgba(layer.texturePath, decoded) ||
         decoded.width <= 0 || decoded.height <= 0 || decoded.rgba.empty()) {
@@ -250,7 +254,7 @@ inline bool EnsureProgramQ1330() {
             vec2 uv = vec2(longitude + uCloudOffset, latitude * 1.65);
             vec4 texel = texture(uCloud, uv);
             float horizonFade = smoothstep(-0.02, 0.18, d.y);
-            float alpha = texel.a * uCloudColor.a * horizonFade;
+            float alpha = texel.a * horizonFade;
             if (alpha <= 0.002) discard;
             fragColor = vec4(texel.rgb * uCloudColor.rgb, alpha);
         }
@@ -332,7 +336,8 @@ inline void RenderLayersQ1330(const float* mvp16) {
     glUniform1f(gSunGlareLocQ1330, gWeatherSkyQ1330.sunGlare);
     glDrawArrays(GL_TRIANGLES, 0, fo3envq1000::skyVertexCount);
 
-    // Four authored WTHR cloud layers, using their Day colours and ONAM speeds.
+    // Four authored WTHR cloud layers. Q14 updates their RGB from the active
+    // time-of-day endpoints; DDS alpha supplies the actual cloud coverage mask.
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glUniform1i(gModeLocQ1330, 1);
     glUniform1i(gCloudTexLocQ1330, 0);
@@ -340,7 +345,7 @@ inline void RenderLayersQ1330(const float* mvp16) {
     int rendered = 0;
     for (int i = 0; i < 4; ++i) {
         const CloudLayerQ1330& layer = gWeatherSkyQ1330.clouds[i];
-        if (!layer.loaded || layer.texture == 0u || layer.color[3] <= 0.001f) continue;
+        if (!layer.loaded || layer.texture == 0u) continue;
         const float offset = static_cast<float>(std::fmod(now * layer.speed, 1.0));
         glBindTexture(GL_TEXTURE_2D, layer.texture);
         glUniform4fv(gCloudColorLocQ1330, 1, layer.color);
