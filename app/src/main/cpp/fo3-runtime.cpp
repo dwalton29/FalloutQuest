@@ -2076,7 +2076,8 @@ void Q1580LogLightTrace(const Fo3EnvironmentQ1000& env) {
 bool Q1590GetPcSp17LightConstants(float ambient[3], float sunlight[3],
                                   float& baseSunDimmer, float& effectiveSunScale) {
     using namespace fo3todq1400;
-    if (!gRuntime.ready || !gRuntime.weather.haveNam0 || !gRuntime.climate.valid) {
+    if (!gRuntime.ready || !gRuntime.weather.haveNam0 || !gRuntime.climate.valid ||
+        !gFo3ImageSpaceQ1280.valid) {
         return false;
     }
 
@@ -2091,9 +2092,14 @@ bool Q1590GetPcSp17LightConstants(float ambient[3], float sunlight[3],
         }
     }
 
-    // Q15.11 PC reference capture: fSunlightDimmer=1.5 -> PSLightColor x2.5.
-    baseSunDimmer = 1.5f;
-    effectiveSunScale = 2.5f;
+    // Q20.3b: keep the capture-proven raw WTHR SP17 colour domain, but stop
+    // freezing the directional-light multiplier at the noon capture's x2.5.
+    // Q14 already carries the live blended ImageSpace/IMAD Sunlight Dimmer;
+    // use the same authored runtime value here so statics follow 12:00->18:00
+    // ->00:00 intensity changes without touching the still-unresolved direction.
+    baseSunDimmer = gFo3ImageSpaceQ1280.hdrSunlightDimmer;
+    effectiveSunScale =
+        fo3weatherq1320::EffectiveSunlightScaleQ1320(baseSunDimmer);
     for (int c = 0; c < 3; ++c) {
         ambient[c] = rawAmbient[c];
         sunlight[c] = rawSunlight[c] * effectiveSunScale;
@@ -2133,7 +2139,7 @@ void Q1590UploadPcSp17LightConstants() {
         q1590LastWeather = fo3todq1400::gRuntime.weatherFormId;
         q1590LastHour = hourBucket;
         Q6H_LOGI(
-            "Q15.13 SP17 CORE: weather=%08X EDID=%s hour=%.2f ambient=(%.6f %.6f %.6f) sunlight=(%.6f %.6f %.6f) baseSunDimmer=%.3f effectiveSunScale=%.3f scope=static-PPLighting core=PC_DP3_DIFFUSE_TANGENT_HALF_SPEC normalAlphaSpec=1 lowNdotLSpecGate=1 syntheticSpec032=0 baseMap=GL_SRGB8_ALPHA8_DECODE terrainChanged=0 sunScaleCaptured=2.5",
+            "Q15.13 SP17 CORE: weather=%08X EDID=%s hour=%.2f ambient=(%.6f %.6f %.6f) sunlight=(%.6f %.6f %.6f) baseSunDimmer=%.3f effectiveSunScale=%.3f scope=static-PPLighting core=PC_DP3_DIFFUSE_TANGENT_HALF_SPEC normalAlphaSpec=1 lowNdotLSpecGate=1 syntheticSpec032=0 baseMap=GL_SRGB8_ALPHA8_DECODE terrainChanged=0 sunScaleSource=Q14-ImageSpace",
             fo3todq1400::gRuntime.weatherFormId,
             fo3todq1400::gRuntime.weather.editorId.empty()
                 ? "<none>" : fo3todq1400::gRuntime.weather.editorId.c_str(),
