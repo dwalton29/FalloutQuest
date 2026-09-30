@@ -2138,7 +2138,7 @@ void Q1590UploadPcSp17LightConstants() {
         q1590LastWeather = fo3todq1400::gRuntime.weatherFormId;
         q1590LastHour = hourBucket;
         Q6H_LOGI(
-            "Q15.13 SP17 CORE: weather=%08X EDID=%s hour=%.2f ambient=(%.6f %.6f %.6f) sunlight=(%.6f %.6f %.6f) baseSunDimmer=%.3f effectiveSunScale=%.3f scope=static-PPLighting core=PC_DP3_DIFFUSE_TANGENT_HALF_SPEC normalAlphaSpec=1 lowNdotLSpecGate=1 syntheticSpec032=0 baseMap=GL_RGBA8_RAW pcFog=VERTEX_INTERPOLATED terrainChanged=0 sunScaleSource=Q14-ImageSpace",
+            "Q15.13 SP17 CORE: weather=%08X EDID=%s hour=%.2f ambient=(%.6f %.6f %.6f) sunlight=(%.6f %.6f %.6f) baseSunDimmer=%.3f effectiveSunScale=%.3f scope=static-PPLighting core=PC_DP3_DIFFUSE_TANGENT_HALF_SPEC normalAlphaSpec=1 lowNdotLSpecGate=1 syntheticSpec032=0 baseMap=GL_RGBA8_RAW pcFog=VERTEX_INTERPOLATED LightData=PC_CAPTURE_Q20.3D sunScaleSource=Q14-ImageSpace",
             fo3todq1400::gRuntime.weatherFormId,
             fo3todq1400::gRuntime.weather.editorId.empty()
                 ? "<none>" : fo3todq1400::gRuntime.weather.editorId.c_str(),
@@ -4683,6 +4683,9 @@ void RenderScene() {
     glUniform1i(gNormalLocation, 1);
     glUniform1i(gGlowLocationQ1020, 2);
     const Fo3EnvironmentQ1000& q1000Env = GetFo3EnvironmentQ1000();
+    float q203dPcLightDirection[3]{0.35f, 0.85f, 0.40f};
+    const bool q203dPcLightReady =
+        GetFo3PcLightDirectionQ203D(q203dPcLightDirection);
     if (q1000Env.valid) {
         float q1500Ambient[3]{q1000Env.ambient[0], q1000Env.ambient[1], q1000Env.ambient[2]};
         if (GetFo3LegacyPpDiffuseDomainQ1470()) {
@@ -4694,7 +4697,8 @@ void RenderScene() {
         }
         glUniform3fv(gAmbientColorLocationQ1000, 1, q1500Ambient);
         glUniform3fv(gSunlightColorLocationQ1000, 1, q1000Env.sunlight);
-        glUniform3fv(gSunDirectionLocationQ1000, 1, q1000Env.sunDirection);
+        glUniform3fv(gSunDirectionLocationQ1000, 1,
+                     q203dPcLightReady ? q203dPcLightDirection : q1000Env.sunDirection);
     } else {
         glUniform3f(gAmbientColorLocationQ1000, 0.34f, 0.34f, 0.34f);
         glUniform3f(gSunlightColorLocationQ1000, 0.66f, 0.66f, 0.66f);
@@ -4755,11 +4759,25 @@ void RenderScene() {
     if (gFogPowerVertexLocationQ1532 >= 0)
         glUniform1f(gFogPowerVertexLocationQ1532, GetFo3FogPowerQ1410());
     if (gSunDirectionVertexLocationQ1540 >= 0) {
-        if (q1000Env.valid) {
+        if (q203dPcLightReady) {
+            glUniform3fv(gSunDirectionVertexLocationQ1540, 1, q203dPcLightDirection);
+        } else if (q1000Env.valid) {
             glUniform3fv(gSunDirectionVertexLocationQ1540, 1, q1000Env.sunDirection);
         } else {
             glUniform3f(gSunDirectionVertexLocationQ1540, 0.35f, 0.85f, 0.40f);
         }
+    }
+
+    static int q203dLastLightHourBucket = -1;
+    const int q203dLightHourBucket =
+        static_cast<int>(std::floor(GetFo3TestHourQ1400() * 10.0f));
+    if (q203dPcLightReady && q203dLightHourBucket != q203dLastLightHourBucket) {
+        q203dLastLightHourBucket = q203dLightHourBucket;
+        Q6H_LOGI(
+            "Q20.3D LIGHTDATA: hour=%.2f pcLightOpenXR=(%.7f %.7f %.7f) oldSynthetic=(%.7f %.7f %.7f) source=PC_LAND_c18 anchors=00,12,18 interpolation=SLERP bridge=explicit staticSP17=1 LAND=1 skySun=unchanged",
+            GetFo3TestHourQ1400(),
+            q203dPcLightDirection[0], q203dPcLightDirection[1], q203dPcLightDirection[2],
+            q1000Env.sunDirection[0], q1000Env.sunDirection[1], q1000Env.sunDirection[2]);
     }
     if (gEyePositionVertexLocationQ1630 >= 0) {
         glUniform3fv(gEyePositionVertexLocationQ1630, 1, gFo3EyePositionQ1010);
