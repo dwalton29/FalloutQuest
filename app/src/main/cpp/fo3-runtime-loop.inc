@@ -534,6 +534,9 @@ private:
         if (!CreateAction("pplighting_domain_toggle", "PPLighting Domain Toggle",
                           XR_ACTION_TYPE_BOOLEAN_INPUT,
                           1, &handPaths_[0], &ppDomainToggleAction_)) return false;
+        if (!CreateAction("contact_ao_toggle", "Contact AO Toggle",
+                          XR_ACTION_TYPE_BOOLEAN_INPUT,
+                          1, &handPaths_[1], &contactAoToggleAction_)) return false;
 
         XrPath profile = XR_NULL_PATH;
         XrPath leftAim = XR_NULL_PATH;
@@ -545,6 +548,7 @@ private:
         XrPath leftTimeTriggerValue = XR_NULL_PATH;
         XrPath leftFogX = XR_NULL_PATH;
         XrPath leftPpDomainY = XR_NULL_PATH;
+        XrPath rightContactAoB = XR_NULL_PATH;
         if (!Path("/interaction_profiles/oculus/touch_controller", &profile) ||
             !Path("/user/hand/left/input/aim/pose", &leftAim) ||
             !Path("/user/hand/right/input/aim/pose", &rightAim) ||
@@ -554,9 +558,10 @@ private:
             !Path("/user/hand/right/input/a/click", &rightA) ||
             !Path("/user/hand/left/input/trigger/value", &leftTimeTriggerValue) ||
             !Path("/user/hand/left/input/x/click", &leftFogX) ||
-            !Path("/user/hand/left/input/y/click", &leftPpDomainY)) return false;
+            !Path("/user/hand/left/input/y/click", &leftPpDomainY) ||
+            !Path("/user/hand/right/input/b/click", &rightContactAoB)) return false;
 
-        const std::array<XrActionSuggestedBinding, 9> bindings{{
+        const std::array<XrActionSuggestedBinding, 10> bindings{{
             {poseAction_, leftAim},
             {poseAction_, rightAim},
             {moveXAction_, leftStickX},
@@ -566,6 +571,7 @@ private:
             {timeAdvanceAction_, leftTimeTriggerValue},
             {fogToggleAction_, leftFogX},
             {ppDomainToggleAction_, leftPpDomainY},
+            {contactAoToggleAction_, rightContactAoB},
         }};
         XrInteractionProfileSuggestedBinding suggested{XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING};
         suggested.interactionProfile = profile;
@@ -1066,6 +1072,15 @@ private:
                     GetFo3LegacyColourDomainNameQ1570());
         }
         ppDomainTogglePressed_ = q1470DomainPressed;
+
+        const bool q204eContactAoPressed =
+            ReadBooleanActionQ1450(contactAoToggleAction_, handPaths_[1]);
+        if (q204eContactAoPressed && !contactAoTogglePressed_) {
+            ToggleFo3ContactAoQ204E();
+            FQ_LOGI("Q20.4E CONTACT AO MODE: enabled=%d source=RIGHT_B syntheticQuestEffect=1 vanillaParityDefault=OFF",
+                    GetFo3ContactAoEnabledQ204E() ? 1 : 0);
+        }
+        contactAoTogglePressed_ = q204eContactAoPressed;
         activateDownQ1700_ = ReadBoolActionQ1699(activateAction_, handPaths_[1]);
 
         for (uint32_t hand = 0; hand < 2; ++hand) {
@@ -1559,6 +1574,7 @@ private:
     XrAction timeAdvanceAction_{XR_NULL_HANDLE};
     XrAction fogToggleAction_{XR_NULL_HANDLE};
     XrAction ppDomainToggleAction_{XR_NULL_HANDLE};
+    XrAction contactAoToggleAction_{XR_NULL_HANDLE};
     std::array<XrPath, 2> handPaths_{XR_NULL_PATH, XR_NULL_PATH};
     std::array<XrSpace, 2> handSpaces_{XR_NULL_HANDLE, XR_NULL_HANDLE};
     std::array<XrPosef, 2> handLocalPoses_{};
@@ -1571,6 +1587,7 @@ private:
     float timeAdvanceValue_{0.0f};
     bool fogTogglePressed_{false};
     bool ppDomainTogglePressed_{false};
+    bool contactAoTogglePressed_{false};
     bool activateLatched_{false};
 
     XrVector3f playerPosition_{0.0f, 0.0f, 0.0f};
