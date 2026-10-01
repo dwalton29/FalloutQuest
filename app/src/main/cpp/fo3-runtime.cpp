@@ -100,6 +100,10 @@ void Q1990EnsureNativeLodForCell(int32_t cellX, int32_t cellY,
 
 void Q1970AdvanceNativeLodQ19(int32_t cellX, int32_t cellY,
                               float centerX, float centerY, float floorZ);
+bool Q1970AnyLodWorkerQ19();
+bool Q2013NativeLodBootstrapReadyQ19(
+    int32_t cellX, int32_t cellY, size_t* outReady);
+bool Q2013HasNativeObjectLodForCellQ19(int32_t cellX, int32_t cellY);
 
 
 constexpr const char* Q6H_TAG = "FalloutQuest";
@@ -2070,9 +2074,20 @@ void Q74DeleteGpuObjects(std::vector<GpuObject>& objects) {
     objects.clear();
 }
 
+bool gQ2013ExteriorWarmupPending = false;
+std::chrono::steady_clock::time_point gQ2013ExteriorWarmupStarted{};
+
 bool ProcessQ74TransitionRequest() {
     Fo3CellTransitionRequestQ74 request;
     if (!ConsumeFo3CellTransitionRequestQ74(request) || !request.valid) return false;
+
+    const bool q2013HoldExteriorLoading =
+        request.worldspaceFormId == 0x0000003Cu &&
+        IsFo3LoadingVisibleQ1700();
+    gQ2013ExteriorWarmupPending = q2013HoldExteriorLoading;
+    gQ2013ExteriorWarmupStarted = q2013HoldExteriorLoading
+        ? std::chrono::steady_clock::now()
+        : std::chrono::steady_clock::time_point{};
 
     Q6H_LOGI("Q16.11 MATURE SCENE SWAP BEGIN: door=%08X cell=%08X worldspace=%08X XTEL=(%.2f %.2f %.2f)",
              request.destinationDoorRef, request.cellFormId, request.worldspaceFormId,
@@ -2145,10 +2160,8 @@ bool ProcessQ74TransitionRequest() {
     size_t q1960OutsideInitialCollisionWindow = 0u;
     if (request.worldspaceFormId == 0x0000003Cu) {
         Q1970ProbeNativeLod(request.x, request.y);
-        Q1990EnsureNativeLodForCell(
-            static_cast<int32_t>(std::floor(request.x / Q1890_EXTERIOR_CELL_SIZE)),
-            static_cast<int32_t>(std::floor(request.y / Q1890_EXTERIOR_CELL_SIZE)),
-            request.x, request.y, request.z);
+        // Q20.13: start Level4 only after the new exterior/Q19 context exists.
+        // The loading overlay remains up while that asynchronous warmup runs.
         constexpr float Q1960_CELL_SIZE = 4096.0f;
         constexpr int Q1960_INITIAL_COLLISION_RADIUS = 1;
         const int32_t q1960TargetGridX = static_cast<int32_t>(
@@ -2221,7 +2234,7 @@ bool ProcessQ74TransitionRequest() {
         gExteriorWindowGridYQ1890 = static_cast<int32_t>(
             std::floor(request.y / Q1890_EXTERIOR_CELL_SIZE));
         gExteriorWindowGenerationQ1890 = 0u;
-        Q6H_LOGI("Q16.27 STREAM CONTEXT: active=1 worldspace=%08X persistent=%08X grid=(%d,%d) originXTEL=(%.2f %.2f %.2f) residentRadius=2 activeRadius=1 collisionRadius=1 terrainRadius=3 rebuildMode=5x5-resident+3x3-active+cached-3x3-collision+7x7-terrain+Level4-LOD",
+        Q6H_LOGI("Q16.27 STREAM CONTEXT: active=1 worldspace=%08X persistent=%08X grid=(%d,%d) originXTEL=(%.2f %.2f %.2f) residentRadius=2 activeRadius=1 collisionRadius=1 terrainRadius=3 rebuildMode=5x5-visible+7x7-warm+cached-3x3-collision+7x7-terrain+progressive-Level4-LOD",
                  gExteriorWorldspaceQ1890, gExteriorPersistentCellQ1890,
                  gExteriorWindowGridXQ1890, gExteriorWindowGridYQ1890,
                  gExteriorOriginXQ1890, gExteriorOriginYQ1890,
@@ -3669,6 +3682,33 @@ void UpdateFo3ExteriorStreamingQ1890(float virtualHeadX, float virtualHeadZ) {
             q1970PreviousLodUs = static_cast<uint64_t>(
                 std::chrono::duration_cast<std::chrono::microseconds>(
                     std::chrono::steady_clock::now() - q1970LodStarted).count());
+
+            if (gQ2013ExteriorWarmupPending && IsFo3LoadingVisibleQ1700()) {
+                size_t detailReady = 0u;
+                size_t lodReady = 0u;
+                const bool detailComplete =
+                    Q1900WarmShellReadyQ2013(
+                        actualGridX, actualGridY, &detailReady);
+                const bool lodComplete =
+                    Q2013NativeLodBootstrapReadyQ19(
+                        actualGridX, actualGridY, &lodReady);
+                const uint64_t warmupUs =
+                    gQ2013ExteriorWarmupStarted.time_since_epoch().count() == 0
+                        ? 0u
+                        : static_cast<uint64_t>(
+                            std::chrono::duration_cast<std::chrono::microseconds>(
+                                std::chrono::steady_clock::now() -
+                                gQ2013ExteriorWarmupStarted).count());
+                const bool timeout = warmupUs >= 15000000u;
+                if ((detailComplete && lodComplete) || timeout) {
+                    Q6H_LOGI("Q20.13 EXTERIOR WARMUP COMPLETE: detailReady=%zu/49 lodRing1Ready=%zu/9 elapsedUs=%llu timeout=%d action=release-loading-screen",
+                             detailReady, lodReady,
+                             static_cast<unsigned long long>(warmupUs),
+                             timeout ? 1 : 0);
+                    gQ2013ExteriorWarmupPending = false;
+                    NotifyFo3TransitionCompleteQ1700();
+                }
+            }
         }
 
         const uint64_t q1970TotalUs = static_cast<uint64_t>(
@@ -3959,9 +3999,18 @@ bool Q1970ShouldRenderFullDetail(const GpuObject& object) {
     int32_t activeGridX = 0;
     int32_t activeGridY = 0;
     if (!Q1970GetActiveGrid(activeGridX, activeGridY)) return true;
-    constexpr int Q1970_ACTIVE_VISUAL_RADIUS = 2; // Q20.1 Bethesda-style 5x5 full-detail draw set
-    return std::abs(object.q1970GridX - activeGridX) <= Q1970_ACTIVE_VISUAL_RADIUS &&
-           std::abs(object.q1970GridY - activeGridY) <= Q1970_ACTIVE_VISUAL_RADIUS;
+
+    const int cheb =
+        std::max(std::abs(object.q1970GridX - activeGridX),
+                 std::abs(object.q1970GridY - activeGridY));
+    if (cheb <= 2) return true;
+    if (cheb > 3) return false;
+
+    // Q20.13: ring 3 is a warm emergency handoff. Keep detailed objects until
+    // authored Level4 object LOD for that macroblock has actually published.
+    if (gExteriorWorldspaceQ1890 != 0x0000003Cu) return true;
+    return !Q2013HasNativeObjectLodForCellQ19(
+        object.q1970GridX, object.q1970GridY);
 }
 
 int Q1900BuildNativeLodClipCells(float* bounds, bool objectLod) {
@@ -4369,6 +4418,39 @@ bool Q1990LodBlockDesired(int32_t blockX, int32_t blockY) {
                Q1840_DISTANT_BLOCK_COORD_RADIUS;
 }
 
+bool Q2013HasNativeObjectLodForCellQ19(int32_t cellX, int32_t cellY) {
+    const int32_t blockX = Q1990FloorToLevel4Block(cellX);
+    const int32_t blockY = Q1990FloorToLevel4Block(cellY);
+    const Q1990NativeLodBlock* block = Q1990FindLodBlock(blockX, blockY);
+    return block && !block->objects.empty();
+}
+
+size_t Q2013ProgressiveLodCountQ19() {
+    size_t count = 0u;
+    for (const Q1990NativeLodBlock& block : gQ1990NativeLodBlocks) {
+        if (Q1990LodBlockDesired(block.blockX, block.blockY)) ++count;
+    }
+    return count;
+}
+
+bool Q2013NativeLodBootstrapReadyQ19(
+        int32_t cellX, int32_t cellY, size_t* outReady) {
+    const int32_t centreX = Q1990FloorToLevel4Block(cellX);
+    const int32_t centreY = Q1990FloorToLevel4Block(cellY);
+    size_t ready = 0u;
+    for (int dy = -1; dy <= 1; ++dy) {
+        for (int dx = -1; dx <= 1; ++dx) {
+            if (Q1990FindLodBlock(
+                    centreX + dx * Q1840_LEVEL4_BLOCK_CELLS,
+                    centreY + dy * Q1840_LEVEL4_BLOCK_CELLS)) {
+                ++ready;
+            }
+        }
+    }
+    if (outReady) *outReady = ready;
+    return ready == 9u;
+}
+
 int Q2010NativeLodRingForBlockAround(
         int32_t blockX, int32_t blockY,
         int32_t centreBlockX, int32_t centreBlockY) {
@@ -4410,46 +4492,13 @@ size_t Q2010NativeLodVisibleBlockCount(int completeRing) {
 }
 
 void Q2010AdvanceVisibleNativeLodWindow() {
-    const int requestedRing = Q2010CompleteNativeLodRingAround(
-        gQ1990NativeLodCentreBlockX, gQ1990NativeLodCentreBlockY);
-
-    if (!gQ2010VisibleLodValid) {
-        if (requestedRing < 0) return;
-        gQ2010VisibleLodValid = true;
-        gQ2010VisibleLodCentreBlockX = gQ1990NativeLodCentreBlockX;
-        gQ2010VisibleLodCentreBlockY = gQ1990NativeLodCentreBlockY;
-        gQ2010VisibleLodRing = requestedRing;
-        gQ1990NativeLodDrawLogged = false;
-        return;
-    }
-
-    const int stillCompleteVisibleRing = Q2010CompleteNativeLodRingAround(
-        gQ2010VisibleLodCentreBlockX, gQ2010VisibleLodCentreBlockY);
-    if (stillCompleteVisibleRing < gQ2010VisibleLodRing) {
-        gQ2010VisibleLodRing = stillCompleteVisibleRing;
-        gQ1990NativeLodDrawLogged = false;
-    }
-
-    const bool sameCentre =
-        gQ2010VisibleLodCentreBlockX == gQ1990NativeLodCentreBlockX &&
-        gQ2010VisibleLodCentreBlockY == gQ1990NativeLodCentreBlockY;
-    if (sameCentre) {
-        if (requestedRing > gQ2010VisibleLodRing) {
-            gQ2010VisibleLodRing = requestedRing;
-            gQ1990NativeLodDrawLogged = false;
-        }
-        return;
-    }
-
-    // Do not shrink or checkerboard the horizon merely because the requested
-    // Level4 centre crossed a 4-CELL boundary. Hand over once the new centre
-    // can preserve the current coherent radius.
-    if (requestedRing >= gQ2010VisibleLodRing) {
-        gQ2010VisibleLodCentreBlockX = gQ1990NativeLodCentreBlockX;
-        gQ2010VisibleLodCentreBlockY = gQ1990NativeLodCentreBlockY;
-        gQ2010VisibleLodRing = requestedRing;
-        gQ1990NativeLodDrawLogged = false;
-    }
+    // Q20.13: no complete-ring publication barrier. Every completed authored
+    // Level4 block is immediately eligible to draw.
+    gQ2010VisibleLodCentreBlockX = gQ1990NativeLodCentreBlockX;
+    gQ2010VisibleLodCentreBlockY = gQ1990NativeLodCentreBlockY;
+    gQ2010VisibleLodValid = !gQ1990NativeLodBlocks.empty();
+    gQ2010VisibleLodRing =
+        gQ2010VisibleLodValid ? Q1840_DISTANT_BLOCK_RADIUS : -1;
 }
 
 void Q1990EnsureNativeLodForCell(int32_t cellX, int32_t cellY,
@@ -4532,18 +4581,12 @@ void Q1990EnsureNativeLodForCell(int32_t cellX, int32_t cellY,
         q1840LastLoggedLoaded = desiredLoaded;
         q1840LastLoggedCentreX = centreBlockX;
         q1840LastLoggedCentreY = centreBlockY;
-        const int q2010RequestedRing =
-            Q2010CompleteNativeLodRingAround(centreBlockX, centreBlockY);
-        Q6H_LOGI("Q20.1 NATIVE LOD WINDOW: playerCell=(%d,%d) requestedCentre=(%d,%d) desiredLoaded=%zu/%zu cachedBlocks=%zu radiusCells=%d requestedCompleteRing=%d visibleCentre=(%d,%d) visibleRing=%d visibleBlocks=%zu publishPolicy=committed-complete-rings asyncCpu=1 stagedGpu=1 fairWithDetailedStreaming=1",
+        Q6H_LOGI("Q20.13 NATIVE LOD WINDOW: playerCell=(%d,%d) requestedCentre=(%d,%d) desiredLoaded=%zu/%zu cachedBlocks=%zu radiusCells=%d progressiveVisibleBlocks=%zu publishPolicy=immediate-loaded-blocks cpuWorkers=4 stagedGpuQueue=1",
                  cellX, cellY, centreBlockX, centreBlockY,
                  desiredLoaded, Q1840_DISTANT_TARGET_BLOCKS,
                  gQ1990NativeLodBlocks.size(),
                  Q1840_DISTANT_GRID_RADIUS_CELLS,
-                 q2010RequestedRing,
-                 gQ2010VisibleLodCentreBlockX,
-                 gQ2010VisibleLodCentreBlockY,
-                 gQ2010VisibleLodRing,
-                 Q2010NativeLodVisibleBlockCount(gQ2010VisibleLodRing));
+                 Q2013ProgressiveLodCountQ19());
     }
 }
 
@@ -4571,20 +4614,43 @@ struct Q1970LodWorkerTaskQ19 {
     std::atomic<bool> ready{false};
 };
 
-std::shared_ptr<Q1970LodWorkerTaskQ19> gQ1970LodWorkerQ19;
-std::unique_ptr<Q1900CellStateQ19> gQ1970LodUploadQ19;
-int32_t gQ1970LodUploadBlockXQ19 = 0;
-int32_t gQ1970LodUploadBlockYQ19 = 0;
-int gQ1970LodUploadRingQ19 = 0;
-uint64_t gQ1970LodUploadWorkerUsQ19 = 0u;
+constexpr size_t Q2013_LOD_WORKER_SLOTS = 4u;
+std::array<std::shared_ptr<Q1970LodWorkerTaskQ19>,
+           Q2013_LOD_WORKER_SLOTS> gQ2013LodWorkersQ19;
+
+struct Q1970LodUploadTaskQ2013 {
+    std::unique_ptr<Q1900CellStateQ19> state;
+    int32_t blockX = 0;
+    int32_t blockY = 0;
+    int ring = 0;
+    uint64_t workerUs = 0u;
+};
+std::deque<Q1970LodUploadTaskQ2013> gQ2013LodUploadsQ19;
+
+bool Q1970AnyLodWorkerQ19() {
+    for (const auto& worker : gQ2013LodWorkersQ19) {
+        if (worker) return true;
+    }
+    return false;
+}
+
+size_t Q2013ActiveLodWorkersQ19() {
+    size_t active = 0u;
+    for (const auto& worker : gQ2013LodWorkersQ19) {
+        if (worker) ++active;
+    }
+    return active;
+}
 
 bool Q1970LodBlockPendingQ19(int32_t blockX, int32_t blockY) {
-    if (gQ1970LodWorkerQ19 &&
-        gQ1970LodWorkerQ19->blockX == blockX &&
-        gQ1970LodWorkerQ19->blockY == blockY) return true;
-    return gQ1970LodUploadQ19 &&
-        gQ1970LodUploadBlockXQ19 == blockX &&
-        gQ1970LodUploadBlockYQ19 == blockY;
+    for (const auto& worker : gQ2013LodWorkersQ19) {
+        if (worker && worker->blockX == blockX &&
+            worker->blockY == blockY) return true;
+    }
+    for (const auto& upload : gQ2013LodUploadsQ19) {
+        if (upload.blockX == blockX && upload.blockY == blockY) return true;
+    }
+    return false;
 }
 
 bool Q1970NearDetailSafeQ19(int32_t actualGridX, int32_t actualGridY) {
@@ -4719,123 +4785,126 @@ void Q1970RunLodWorkerQ19(
     task->ready.store(true, std::memory_order_release);
 }
 
-void Q1970ConsumeLodWorkerQ19() {
-    if (!gQ1970LodWorkerQ19 ||
-        !gQ1970LodWorkerQ19->ready.load(std::memory_order_acquire)) {
-        return;
-    }
+void Q1970ConsumeLodWorkersQ19() {
+    for (size_t slot = 0u; slot < Q2013_LOD_WORKER_SLOTS; ++slot) {
+        auto& worker = gQ2013LodWorkersQ19[slot];
+        if (!worker || !worker->ready.load(std::memory_order_acquire)) continue;
 
-    const auto task = gQ1970LodWorkerQ19;
-    gQ1970LodWorkerQ19.reset();
+        const auto task = worker;
+        worker.reset();
+        const bool stale =
+            task->contextSerial != gQ1900ContextSerialQ19 ||
+            std::fabs(task->centerX - gExteriorOriginXQ1890) > 0.01f ||
+            std::fabs(task->centerY - gExteriorOriginYQ1890) > 0.01f ||
+            std::fabs(task->floorZ - gExteriorOriginZQ1890) > 0.01f ||
+            !Q1990LodBlockDesired(task->blockX, task->blockY);
+        if (stale || Q1990FindLodBlock(task->blockX, task->blockY)) {
+            Q6H_LOGI("Q20.13 LOD CPU STALE: slot=%zu block=(%d,%d) ring=%d workerUs=%llu action=discard",
+                     slot + 1u, task->blockX, task->blockY, task->ring,
+                     static_cast<unsigned long long>(task->workerUs));
+            continue;
+        }
 
-    const bool stale =
-        task->contextSerial != gQ1900ContextSerialQ19 ||
-        std::fabs(task->centerX - gExteriorOriginXQ1890) > 0.01f ||
-        std::fabs(task->centerY - gExteriorOriginYQ1890) > 0.01f ||
-        std::fabs(task->floorZ - gExteriorOriginZQ1890) > 0.01f ||
-        !Q1990LodBlockDesired(task->blockX, task->blockY);
-    if (stale || Q1990FindLodBlock(task->blockX, task->blockY)) {
-        Q6H_LOGI("Q19.7 LOD CPU STALE: block=(%d,%d) ring=%d workerUs=%llu action=discard",
-                 task->blockX, task->blockY, task->ring,
+        Q1970LodUploadTaskQ2013 upload;
+        upload.state = std::make_unique<Q1900CellStateQ19>();
+        upload.state->gridX = task->blockX;
+        upload.state->gridY = task->blockY;
+        upload.state->stage = Q1900CellStageQ19::Uploading;
+        upload.state->textures = std::move(task->textures);
+        upload.state->cpu = std::move(task->cpu);
+        upload.blockX = task->blockX;
+        upload.blockY = task->blockY;
+        upload.ring = task->ring;
+        upload.workerUs = task->workerUs;
+        gQ2013LodUploadsQ19.push_back(std::move(upload));
+
+        Q6H_LOGI("Q20.13 LOD CPU READY: slot=%zu block=(%d,%d) ring=%d queuedUploads=%zu workerUs=%llu",
+                 slot + 1u, task->blockX, task->blockY, task->ring,
+                 gQ2013LodUploadsQ19.size(),
                  static_cast<unsigned long long>(task->workerUs));
-        return;
     }
-
-    auto upload = std::make_unique<Q1900CellStateQ19>();
-    upload->gridX = task->blockX;
-    upload->gridY = task->blockY;
-    upload->stage = Q1900CellStageQ19::Uploading;
-    upload->textures = std::move(task->textures);
-    upload->cpu = std::move(task->cpu);
-    upload->placements.clear();
-    gQ1970LodUploadBlockXQ19 = task->blockX;
-    gQ1970LodUploadBlockYQ19 = task->blockY;
-    gQ1970LodUploadRingQ19 = task->ring;
-    gQ1970LodUploadWorkerUsQ19 = task->workerUs;
-    gQ1970LodUploadQ19 = std::move(upload);
-
-    Q6H_LOGI("Q19.7 LOD CPU READY: block=(%d,%d) ring=%d terrainShapes=%zu terrainTriangles=%zu objectShapes=%zu objectTriangles=%zu textures=%zu cpuShapes=%zu workerUs=%llu gpuDeferred=1",
-             task->blockX, task->blockY, task->ring,
-             task->terrainShapes, task->terrainTriangles,
-             task->objectShapes, task->objectTriangles,
-             gQ1970LodUploadQ19->textures.size(),
-             gQ1970LodUploadQ19->cpu.size(),
-             static_cast<unsigned long long>(task->workerUs));
 }
 
 void Q1970AdvanceLodGpuQ19() {
-    if (!gQ1970LodUploadQ19) return;
-    Q1900CellStateQ19& state = *gQ1970LodUploadQ19;
+    if (gQ2013LodUploadsQ19.empty()) return;
 
+    constexpr size_t Q2013_LOD_GPU_BYTES_PER_UPDATE = 512u * 1024u;
+    constexpr uint64_t Q2013_LOD_GPU_BUDGET_US = 1800u;
     const auto frameStarted = std::chrono::steady_clock::now();
-    // Far LOD gets a deliberately smaller share than detailed CELL uploads.
-    constexpr size_t Q1970_LOD_GPU_BYTES_PER_UPDATE = 128u * 1024u;
-    constexpr uint64_t Q1970_LOD_GPU_BUDGET_US = 1200u;
     size_t bytesThisFrame = 0u;
 
-    while (state.textureCursor < state.textures.size()) {
-        Q1960AdvanceTextureQ19(state, bytesThisFrame);
-        if (bytesThisFrame >= Q1970_LOD_GPU_BYTES_PER_UPDATE ||
-            Q1960ElapsedUsQ19(frameStarted) >= Q1970_LOD_GPU_BUDGET_US ||
-            state.q1960TextureUpload.active) {
-            return;
+    while (!gQ2013LodUploadsQ19.empty()) {
+        Q1970LodUploadTaskQ2013& pending = gQ2013LodUploadsQ19.front();
+        if (!Q1990LodBlockDesired(pending.blockX, pending.blockY) ||
+            Q1990FindLodBlock(pending.blockX, pending.blockY)) {
+            gQ2013LodUploadsQ19.pop_front();
+            continue;
         }
-    }
 
-    while (state.gpuCursor < state.cpu.size()) {
-        Q1960AdvanceShapeQ19(state, bytesThisFrame);
-        if (bytesThisFrame >= Q1970_LOD_GPU_BYTES_PER_UPDATE ||
-            Q1960ElapsedUsQ19(frameStarted) >= Q1970_LOD_GPU_BUDGET_US ||
-            state.q1960ShapeUpload.active) {
-            return;
+        Q1900CellStateQ19& state = *pending.state;
+        while (state.textureCursor < state.textures.size()) {
+            Q1960AdvanceTextureQ19(state, bytesThisFrame);
+            if (bytesThisFrame >= Q2013_LOD_GPU_BYTES_PER_UPDATE ||
+                Q1960ElapsedUsQ19(frameStarted) >= Q2013_LOD_GPU_BUDGET_US ||
+                state.q1960TextureUpload.active) return;
         }
-    }
-
-    if (state.textureCursor < state.textures.size() ||
-        state.gpuCursor < state.cpu.size() ||
-        state.q1960TextureUpload.active ||
-        state.q1960ShapeUpload.active) {
-        return;
-    }
-
-    Q1990NativeLodBlock block;
-    block.blockX = gQ1970LodUploadBlockXQ19;
-    block.blockY = gQ1970LodUploadBlockYQ19;
-    block.lastUse = gQ1990NativeLodSerial;
-    size_t terrainTriangles = 0u;
-    size_t objectTriangles = 0u;
-
-    for (GpuObject& gpu : state.stagedGpu) {
-        gpu.q1990NativeLod = true;
-        const std::string lower = TextureCacheKey(gpu.modelPath, "");
-        const bool objectLod =
-            lower.find("landscape\\lod\\wasteland\\blocks\\") !=
-            std::string::npos;
-        if (objectLod) {
-            objectTriangles += static_cast<size_t>(gpu.vertexCount / 3);
-            block.objects.push_back(std::move(gpu));
-        } else {
-            terrainTriangles += static_cast<size_t>(gpu.vertexCount / 3);
-            block.terrain.push_back(std::move(gpu));
+        while (state.gpuCursor < state.cpu.size()) {
+            Q1960AdvanceShapeQ19(state, bytesThisFrame);
+            if (bytesThisFrame >= Q2013_LOD_GPU_BYTES_PER_UPDATE ||
+                Q1960ElapsedUsQ19(frameStarted) >= Q2013_LOD_GPU_BUDGET_US ||
+                state.q1960ShapeUpload.active) return;
         }
-        gpu.vbo = 0u;
-        gpu.vao = 0u;
+        if (state.textureCursor < state.textures.size() ||
+            state.gpuCursor < state.cpu.size() ||
+            state.q1960TextureUpload.active ||
+            state.q1960ShapeUpload.active) return;
+
+        Q1990NativeLodBlock block;
+        block.blockX = pending.blockX;
+        block.blockY = pending.blockY;
+        block.lastUse = gQ1990NativeLodSerial;
+        size_t terrainTriangles = 0u;
+        size_t objectTriangles = 0u;
+        for (GpuObject& gpu : state.stagedGpu) {
+            gpu.q1990NativeLod = true;
+            const std::string lower = TextureCacheKey(gpu.modelPath, "");
+            const bool objectLod =
+                lower.find("landscape\\lod\\wasteland\\blocks\\") !=
+                std::string::npos;
+            if (objectLod) {
+                objectTriangles += static_cast<size_t>(gpu.vertexCount / 3);
+                block.objects.push_back(std::move(gpu));
+            } else {
+                terrainTriangles += static_cast<size_t>(gpu.vertexCount / 3);
+                block.terrain.push_back(std::move(gpu));
+            }
+            gpu.vbo = 0u;
+            gpu.vao = 0u;
+        }
+        state.stagedGpu.clear();
+
+        const int32_t readyX = pending.blockX;
+        const int32_t readyY = pending.blockY;
+        const int readyRing = pending.ring;
+        const uint64_t workerUs = pending.workerUs;
+        const uint64_t gpuUs = state.gpuUs;
+        gQ1990NativeLodBlocks.push_back(std::move(block));
+        gQ2013LodUploadsQ19.pop_front();
+        gQ1990NativeLodDrawLogged = false;
+        Q2010AdvanceVisibleNativeLodWindow();
+
+        Q6H_LOGI("Q20.13 LOD BLOCK READY: block=(%d,%d) ring=%d terrainShapes=%zu terrainTriangles=%zu objectShapes=%zu objectTriangles=%zu workerUs=%llu gpuUs=%llu remainingUploads=%zu progressiveVisibleBlocks=%zu",
+                 readyX, readyY, readyRing,
+                 gQ1990NativeLodBlocks.back().terrain.size(), terrainTriangles,
+                 gQ1990NativeLodBlocks.back().objects.size(), objectTriangles,
+                 static_cast<unsigned long long>(workerUs),
+                 static_cast<unsigned long long>(gpuUs),
+                 gQ2013LodUploadsQ19.size(),
+                 Q2013ProgressiveLodCountQ19());
+
+        if (bytesThisFrame >= Q2013_LOD_GPU_BYTES_PER_UPDATE ||
+            Q1960ElapsedUsQ19(frameStarted) >= Q2013_LOD_GPU_BUDGET_US) return;
     }
-    state.stagedGpu.clear();
-
-    // Cache authored empty blocks as completed too.
-    gQ1990NativeLodBlocks.push_back(std::move(block));
-    Q6H_LOGI("Q19.7 LOD BLOCK READY: block=(%d,%d) ring=%d terrainShapes=%zu terrainTriangles=%zu objectShapes=%zu objectTriangles=%zu workerUs=%llu gpuUs=%llu maxTextureStepUs=%llu maxShapeStepUs=%llu stagedGpu=1 fairScheduler=1",
-             gQ1970LodUploadBlockXQ19, gQ1970LodUploadBlockYQ19,
-             gQ1970LodUploadRingQ19,
-             gQ1990NativeLodBlocks.back().terrain.size(), terrainTriangles,
-             gQ1990NativeLodBlocks.back().objects.size(), objectTriangles,
-             static_cast<unsigned long long>(gQ1970LodUploadWorkerUsQ19),
-             static_cast<unsigned long long>(state.gpuUs),
-             static_cast<unsigned long long>(state.maxTextureGpuUs),
-             static_cast<unsigned long long>(state.maxShapeGpuUs));
-
-    gQ1970LodUploadQ19.reset();
 }
 
 bool Q1970ChooseMissingLodQ19(
@@ -4873,69 +4942,51 @@ bool Q1970ChooseMissingLodQ19(
 void Q1970AdvanceNativeLodQ19(int32_t cellX, int32_t cellY,
                               float centerX, float centerY, float floorZ) {
     if (!gQ1900ContextReadyQ19 ||
-        gExteriorWorldspaceQ1890 != 0x0000003Cu) {
-        return;
-    }
+        gExteriorWorldspaceQ1890 != 0x0000003Cu) return;
 
-    Q1970ConsumeLodWorkerQ19();
-
-    // Q20 terrain promotion has priority over distant horizon fill. Both use
-    // bounded GPU stages, but keeping only one of them active avoids stacking
-    // two upload budgets in the same VR frame.
-    if (IsFo3TerrainStreamingBusyQ2000()) return;
-
-    // Q19.7 exterior scheduling calls this after Q1900UpdateCellStreaming, so
-    // detailed CELL uploads always receive the first frame-budget opportunity.
-    // LOD only progresses one bounded leftover slice here.
+    Q1970ConsumeLodWorkersQ19();
     Q1970AdvanceLodGpuQ19();
-    if (gQ1970LodUploadQ19 || gQ1970LodWorkerQ19) return;
 
-    // Q20.12: LOD has its own worker and can prepare alongside detailed CELL
-    // visuals. Collision and terrain remain exclusive because they touch shared
-    // mutable gameplay/terrain caches.
+    // Collision and terrain CPU work keep exclusive access to their mutable
+    // caches; Level4 NIF work may coexist with detailed CELL workers.
     if (gQ1930CollisionTaskQ19 ||
         IsFo3TerrainStreamingCpuBusyQ2000() ||
-        !Q1970NearDetailSafeQ19(cellX, cellY)) {
-        return;
+        !Q1970NearDetailSafeQ19(cellX, cellY)) return;
+
+    for (size_t slot = 0u; slot < Q2013_LOD_WORKER_SLOTS; ++slot) {
+        if (gQ2013LodWorkersQ19[slot]) continue;
+
+        int32_t blockX = 0;
+        int32_t blockY = 0;
+        int ring = 0;
+        if (!Q1970ChooseMissingLodQ19(blockX, blockY, ring)) break;
+
+        auto task = std::make_shared<Q1970LodWorkerTaskQ19>();
+        task->contextSerial = gQ1900ContextSerialQ19;
+        task->blockX = blockX;
+        task->blockY = blockY;
+        task->ring = ring;
+        task->centerX = centerX;
+        task->centerY = centerY;
+        task->floorZ = floorZ;
+        gQ2013LodWorkersQ19[slot] = task;
+
+        Q6H_LOGI("Q20.13 LOD CPU START: slot=%zu/%zu block=(%d,%d) ring=%d activeWorkers=%zu progressivePublish=1",
+                 slot + 1u, Q2013_LOD_WORKER_SLOTS,
+                 blockX, blockY, ring, Q2013ActiveLodWorkersQ19());
+        std::thread([task]() { Q1970RunLodWorkerQ19(task); }).detach();
     }
-
-    int32_t blockX = 0, blockY = 0;
-    int ring = 0;
-    if (!Q1970ChooseMissingLodQ19(blockX, blockY, ring)) return;
-
-    auto task = std::make_shared<Q1970LodWorkerTaskQ19>();
-    task->contextSerial = gQ1900ContextSerialQ19;
-    task->blockX = blockX;
-    task->blockY = blockY;
-    task->ring = ring;
-    task->centerX = centerX;
-    task->centerY = centerY;
-    task->floorZ = floorZ;
-    gQ1970LodWorkerQ19 = task;
-
-    Q6H_LOGI("Q20.12 LOD CPU START: block=(%d,%d) ring=%d active3x3Ready=1 concurrentWithDetail=1",
-             blockX, blockY, ring);
-    std::thread([task]() { Q1970RunLodWorkerQ19(task); }).detach();
 }
-
 
 void Q1990RenderNativeLod(bool alphaPass) {
     if (gExteriorWorldspaceQ1890 != 0x0000003Cu ||
-        gQ1990NativeLodBlocks.empty() ||
-        !gQ2010VisibleLodValid ||
-        gQ2010VisibleLodRing < 0) return;
+        gQ1990NativeLodBlocks.empty()) return;
     size_t drawnShapes = 0u;
     size_t drawnTriangles = 0u;
     glEnable(GL_POLYGON_OFFSET_FILL);
     glPolygonOffset(2.0f, 6.0f);
     for (Q1990NativeLodBlock& block : gQ1990NativeLodBlocks) {
-        if (Q2010NativeLodRingForBlockAround(
-                block.blockX, block.blockY,
-                gQ2010VisibleLodCentreBlockX,
-                gQ2010VisibleLodCentreBlockY) >
-            gQ2010VisibleLodRing) {
-            continue;
-        }
+        if (!Q1990LodBlockDesired(block.blockX, block.blockY)) continue;
         // The current 4x4 macroblock is completely covered by the actual-centred
         // 7x7 LAND runway, so its coarse terrain stays suppressed. Q18.1 clips
         // all remaining native LOD fragments against the exact active 3x3 near
@@ -4962,14 +5013,11 @@ void Q1990RenderNativeLod(bool alphaPass) {
     glDisable(GL_POLYGON_OFFSET_FILL);
     if (!alphaPass && !gQ1990NativeLodDrawLogged) {
         gQ1990NativeLodDrawLogged = true;
-        Q6H_LOGI("Q20.1 NATIVE LOD DRAW: shapes=%zu triangles=%zu radiusCells=20 visibleCentre=(%d,%d) visibleRing=%d visibleBlocks=%zu requestedCentre=(%d,%d) currentTerrainBlockSuppressed=1 detailedClip=5x5 polygonOffset=1 shadows=0",
+        Q6H_LOGI("Q20.13 NATIVE LOD DRAW: shapes=%zu triangles=%zu radiusCells=20 requestedCentre=(%d,%d) progressiveVisibleBlocks=%zu currentTerrainBlockSuppressed=1 detailedClip=5x5+ring3-fallback polygonOffset=1 shadows=0",
                  drawnShapes, drawnTriangles,
-                 gQ2010VisibleLodCentreBlockX,
-                 gQ2010VisibleLodCentreBlockY,
-                 gQ2010VisibleLodRing,
-                 Q2010NativeLodVisibleBlockCount(gQ2010VisibleLodRing),
                  gQ1990NativeLodCentreBlockX,
-                 gQ1990NativeLodCentreBlockY);
+                 gQ1990NativeLodCentreBlockY,
+                 Q2013ProgressiveLodCountQ19());
     }
 }
 

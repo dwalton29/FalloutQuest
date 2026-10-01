@@ -1117,7 +1117,15 @@ bool ConsumeFo3CellTransitionRequestQ74(Fo3CellTransitionRequestQ74& outRequest)
 void CompleteFo3CellTransitionQ74(uint32_t cellFormId) {
     gCurrentCellQ74 = cellFormId;
     gPlayerResetPendingQ74 = true;
-    NotifyFo3TransitionCompleteQ1700();
+    const bool q2013DeferWastelandLoading =
+        gPendingTransitionQ74.valid &&
+        gPendingTransitionQ74.worldspaceFormId == 0x0000003Cu &&
+        IsFo3LoadingVisibleQ1700();
+    if (!q2013DeferWastelandLoading) {
+        NotifyFo3TransitionCompleteQ1700();
+    } else {
+        Q71_LOGI("Q20.13 LOADING HOLD: worldspace=0000003C reason=warm-7x7+Level4-ring1 notification=deferred");
+    }
 
     if (gPendingTransitionQ74.valid &&
         gPendingTransitionQ74.cellFormId == cellFormId &&

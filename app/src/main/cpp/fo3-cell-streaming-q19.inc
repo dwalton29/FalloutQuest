@@ -130,8 +130,8 @@ bool Q1900CellWorkerOwnsQ19(uint64_t key) {
     return false;
 }
 
-struct Q1970LodWorkerTaskQ19;
-extern std::shared_ptr<Q1970LodWorkerTaskQ19> gQ1970LodWorkerQ19;
+// Defined later in fo3-runtime.cpp after the Level4 worker type is complete.
+bool Q1970AnyLodWorkerQ19();
 
 struct Q1930CollisionSnapshotTaskQ19 {
     uint64_t contextSerial = 0u;
@@ -167,6 +167,7 @@ float gQ2012MotionXQ19 = 0.0f;
 float gQ2012MotionYQ19 = 0.0f;
 
 constexpr int Q1900_RESIDENT_RADIUS_Q19 = 2;
+constexpr int Q2013_WARM_RADIUS_Q19 = 3;
 constexpr int Q1900_CACHE_RADIUS_Q19 = 3;
 // Begin the next strip before the final quarter of the current CELL. 1792
 // leaves a 512-unit neutral band around centre, avoiding an arbitrary direction
@@ -312,7 +313,7 @@ void Q1900ResetCellsQ19(int32_t actualGridX, int32_t actualGridY) {
         Q1900CancelPending("q19-cell-streaming-takeover");
     gExteriorStreamBusyQ1890 = false;
 
-    Q6H_LOGI("Q19 CELL STREAM RESET: context=%llu worldspace=%08X persistent=%08X bootCentre=(%d,%d) actual=(%d,%d) seededCells=25 workers=3 cpuOffThread=1 textureDecodeOffThread=1 cellCommit=1 cancelOnMovement=0",
+    Q6H_LOGI("Q20.13 CELL STREAM RESET: context=%llu worldspace=%08X persistent=%08X bootCentre=(%d,%d) actual=(%d,%d) seededVisibleCells=25 warmTargetCells=49 warmRadius=3 workers=3 cpuOffThread=1 textureDecodeOffThread=1 progressiveGpu=1",
              static_cast<unsigned long long>(gQ1900ContextSerialQ19),
              gQ1900WorldspaceQ19, gQ1900PersistentQ19,
              gExteriorWindowGridXQ1890, gExteriorWindowGridYQ1890,
@@ -348,24 +349,20 @@ void Q1900EnsureWantedCellsQ19(float gameX, float gameY,
     ++gQ1900TickQ19;
     for (auto& entry : gQ1900CellsQ19) entry.second.wanted = false;
 
-    for (int dy = -Q1900_RESIDENT_RADIUS_Q19;
-         dy <= Q1900_RESIDENT_RADIUS_Q19; ++dy) {
-        for (int dx = -Q1900_RESIDENT_RADIUS_Q19;
-             dx <= Q1900_RESIDENT_RADIUS_Q19; ++dx) {
-            Q1900MarkWantedQ19(actualGridX + dx, actualGridY + dy, false);
+    // Q20.13: residency is proactive, not movement-triggered. Keep a complete
+    // 7x7 detailed buffer warm around the player at all times. The inner 5x5
+    // remains the normal full-detail set; ring 3 is prefetched insurance.
+    for (int dy = -Q2013_WARM_RADIUS_Q19;
+         dy <= Q2013_WARM_RADIUS_Q19; ++dy) {
+        for (int dx = -Q2013_WARM_RADIUS_Q19;
+             dx <= Q2013_WARM_RADIUS_Q19; ++dx) {
+            const bool warmShell =
+                std::max(std::abs(dx), std::abs(dy)) >
+                Q1900_RESIDENT_RADIUS_Q19;
+            Q1900MarkWantedQ19(actualGridX + dx, actualGridY + dy, warmShell);
         }
     }
 
-    const float localX =
-        gameX - static_cast<float>(actualGridX) * Q1890_EXTERIOR_CELL_SIZE;
-    const float localY =
-        gameY - static_cast<float>(actualGridY) * Q1890_EXTERIOR_CELL_SIZE;
-    const float farEdge =
-        Q1890_EXTERIOR_CELL_SIZE - Q1900_PREFETCH_EDGE_UNITS_Q19;
-
-    // Q20.12: prefetch in the direction the player is actually moving.
-    // Q20.10/Q20.11 used the player's quadrant inside the CELL, which could
-    // queue two full strips behind/sideways and leave 20+ speculative jobs.
     if (gQ2012MotionValidQ19) {
         const float frameDx = gameX - gQ2012LastGameXQ19;
         const float frameDy = gameY - gQ2012LastGameYQ19;
@@ -383,35 +380,24 @@ void Q1900EnsureWantedCellsQ19(float gameX, float gameY,
     }
     gQ2012LastGameXQ19 = gameX;
     gQ2012LastGameYQ19 = gameY;
+}
 
-    auto prefetchVertical = [&](int32_t x) {
-        // Centre first in the worker priority; mark the whole strip so a
-        // one-CELL shift can retain 20 and add the five authored neighbours.
-        for (int dy = -Q1900_RESIDENT_RADIUS_Q19;
-             dy <= Q1900_RESIDENT_RADIUS_Q19; ++dy)
-            Q1900MarkWantedQ19(x, actualGridY + dy, true);
-    };
-    auto prefetchHorizontal = [&](int32_t y) {
-        for (int dx = -Q1900_RESIDENT_RADIUS_Q19;
-             dx <= Q1900_RESIDENT_RADIUS_Q19; ++dx)
-            Q1900MarkWantedQ19(actualGridX + dx, y, true);
-    };
-
-    if (gQ2012MotionXQ19 > Q2012_PREFETCH_MOTION_EPSILON &&
-        localX >= farEdge) {
-        prefetchVertical(actualGridX + Q1900_RESIDENT_RADIUS_Q19 + 1);
-    } else if (gQ2012MotionXQ19 < -Q2012_PREFETCH_MOTION_EPSILON &&
-               localX <= Q1900_PREFETCH_EDGE_UNITS_Q19) {
-        prefetchVertical(actualGridX - Q1900_RESIDENT_RADIUS_Q19 - 1);
+bool Q1900WarmShellReadyQ2013(
+        int32_t actualGridX, int32_t actualGridY,
+        size_t* outReady = nullptr) {
+    size_t ready = 0u;
+    for (int dy = -Q2013_WARM_RADIUS_Q19;
+         dy <= Q2013_WARM_RADIUS_Q19; ++dy) {
+        for (int dx = -Q2013_WARM_RADIUS_Q19;
+             dx <= Q2013_WARM_RADIUS_Q19; ++dx) {
+            const auto found = gQ1900CellsQ19.find(
+                Q1900CellKeyQ19(actualGridX + dx, actualGridY + dy));
+            if (found != gQ1900CellsQ19.end() &&
+                found->second.visualReady) ++ready;
+        }
     }
-
-    if (gQ2012MotionYQ19 > Q2012_PREFETCH_MOTION_EPSILON &&
-        localY >= farEdge) {
-        prefetchHorizontal(actualGridY + Q1900_RESIDENT_RADIUS_Q19 + 1);
-    } else if (gQ2012MotionYQ19 < -Q2012_PREFETCH_MOTION_EPSILON &&
-               localY <= Q1900_PREFETCH_EDGE_UNITS_Q19) {
-        prefetchHorizontal(actualGridY - Q1900_RESIDENT_RADIUS_Q19 - 1);
-    }
+    if (outReady) *outReady = ready;
+    return ready == 49u;
 }
 
 int Q1900CellPriorityQ19(const Q1900CellStateQ19& state,
@@ -423,8 +409,8 @@ int Q1900CellPriorityQ19(const Q1900CellStateQ19& state,
         if (cheb == 0) return 0;
         if (cheb == 1) return 10 + dx + dy;
         if (cheb == 2) return 30 + dx + dy;
-        // Prefetch strips are centre-out instead of unordered-map order.
-        return 60 + dx + dy;
+        if (cheb == 3) return 40 + dx + dy;
+        return 70 + dx + dy;
     }
     if (!state.metadataReady) {
         if (cheb <= 1) return 100 + dx + dy;
@@ -436,7 +422,7 @@ int Q1900CellPriorityQ19(const Q1900CellStateQ19& state,
         // visual ring. The current CELL still gets prompt collision service,
         // but surrounding collision yields to buildings the player can see.
         if (cheb == 0) return 15;
-        if (cheb == 1) return 45 + dx + dy;
+        if (cheb == 1) return 80 + dx + dy;
         return 1000000;
     }
     return 1000000;
@@ -1073,36 +1059,9 @@ Q1960UploadStepQ19 Q1960AdvanceShapeQ19(
     return Q1960UploadStepQ19::Complete;
 }
 
-Q1900CellStateQ19* Q1900SelectUploadingCellQ19(
-        int32_t actualGridX, int32_t actualGridY) {
-    for (auto& entry : gQ1900CellsQ19) {
-        Q1900CellStateQ19& state = entry.second;
-        if (state.stage == Q1900CellStageQ19::Uploading &&
-            (state.q1960TextureUpload.active ||
-             state.q1960ShapeUpload.active)) {
-            return &state;
-        }
-    }
-
-    Q1900CellStateQ19* best = nullptr;
-    int bestPriority = 1000000;
-    for (auto& entry : gQ1900CellsQ19) {
-        Q1900CellStateQ19& state = entry.second;
-        if (state.stage != Q1900CellStageQ19::Uploading) continue;
-        const int priority =
-            Q1900CellPriorityQ19(state, actualGridX, actualGridY);
-        if (!best || priority < bestPriority) {
-            best = &state;
-            bestPriority = priority;
-        }
-    }
-    return best;
-}
-
 void Q1900CommitCellVisualsQ19(Q1900CellStateQ19& state) {
     const auto retireStarted = std::chrono::steady_clock::now();
     size_t retired = 0u;
-
     size_t write = 0u;
     const size_t oldLive = gObjects.size();
     for (size_t read = 0u; read < oldLive; ++read) {
@@ -1149,7 +1108,7 @@ void Q1900CommitCellVisualsQ19(Q1900CellStateQ19& state) {
             std::chrono::duration_cast<std::chrono::microseconds>(
                 std::chrono::steady_clock::now() - state.requestedAt).count());
 
-    Q6H_LOGI("Q20.11 CELL READY: cell=(%d,%d) enteringShapes=%zu replacedShapes=%zu liveShapes=%zu deferredDeletes=%zu placements=%zu workerUs=%llu gpuUs=%llu retireQueueUs=%llu maxTextureStepUs=%llu maxShapeStepUs=%llu totalUs=%llu baseUploadBytesPerFrame=%zu urgentUploadBytesPerFrame=%zu lodHandoff=cell-specific",
+    Q6H_LOGI("Q20.13 CELL READY: cell=(%d,%d) enteringShapes=%zu replacedShapes=%zu liveShapes=%zu deferredDeletes=%zu placements=%zu workerUs=%llu gpuUs=%llu retireQueueUs=%llu maxTextureStepUs=%llu maxShapeStepUs=%llu totalUs=%llu publication=global-fair-queue warmRadius=3",
              state.gridX, state.gridY, entering, retired, gObjects.size(),
              gQ1910DeferredGpuDeletesQ19.size(), state.placements.size(),
              static_cast<unsigned long long>(state.workerUs),
@@ -1157,78 +1116,96 @@ void Q1900CommitCellVisualsQ19(Q1900CellStateQ19& state) {
              static_cast<unsigned long long>(retireQueueUs),
              static_cast<unsigned long long>(state.maxTextureGpuUs),
              static_cast<unsigned long long>(state.maxShapeGpuUs),
-             static_cast<unsigned long long>(totalUs),
-             Q1960_GPU_BYTES_PER_FRAME,
-             Q1960_GPU_BYTES_PER_FRAME_URGENT);
+             static_cast<unsigned long long>(totalUs));
+}
+
+bool Q2013AdvanceCellGpuSliceQ19(
+        Q1900CellStateQ19& state,
+        int32_t actualGridX, int32_t actualGridY,
+        size_t& globalBytes) {
+    const auto sliceStarted = std::chrono::steady_clock::now();
+    const size_t sliceStartBytes = globalBytes;
+    bool didWork = false;
+    const int cheb =
+        std::max(std::abs(state.gridX - actualGridX),
+                 std::abs(state.gridY - actualGridY));
+    const bool urgent = cheb <= Q1900_RESIDENT_RADIUS_Q19;
+    const size_t sliceByteBudget =
+        urgent ? Q1960_GPU_BYTES_PER_FRAME_URGENT
+               : Q1960_GPU_BYTES_PER_FRAME;
+    const uint64_t sliceTimeBudgetUs = urgent ? 1400u : 950u;
+
+    while (state.textureCursor < state.textures.size()) {
+        Q1960AdvanceTextureQ19(state, globalBytes);
+        didWork = true;
+        if (globalBytes - sliceStartBytes >= sliceByteBudget ||
+            Q1960ElapsedUsQ19(sliceStarted) >= sliceTimeBudgetUs) return false;
+        if (state.q1960TextureUpload.active) continue;
+    }
+    while (state.gpuCursor < state.cpu.size()) {
+        Q1960AdvanceShapeQ19(state, globalBytes);
+        didWork = true;
+        if (globalBytes - sliceStartBytes >= sliceByteBudget ||
+            Q1960ElapsedUsQ19(sliceStarted) >= sliceTimeBudgetUs) return false;
+        if (state.q1960ShapeUpload.active) continue;
+    }
+
+    if (state.textureCursor >= state.textures.size() &&
+        state.gpuCursor >= state.cpu.size() &&
+        !state.q1960TextureUpload.active &&
+        !state.q1960ShapeUpload.active) {
+        Q1900CommitCellVisualsQ19(state);
+        return true;
+    }
+    if (didWork) {
+        Q6H_LOGI("Q20.13 CELL GPU SLICE: cell=(%d,%d) cheb=%d textures=%zu/%zu shapes=%zu/%zu staged=%zu sliceBytes=%zu sliceBudget=%zu sliceTimeUs=%llu",
+                 state.gridX, state.gridY, cheb,
+                 state.textureCursor, state.textures.size(),
+                 state.gpuCursor, state.cpu.size(), state.stagedGpu.size(),
+                 globalBytes - sliceStartBytes, sliceByteBudget,
+                 static_cast<unsigned long long>(Q1960ElapsedUsQ19(sliceStarted)));
+    }
+    return false;
 }
 
 void Q1900AdvanceGpuQ19(int32_t actualGridX, int32_t actualGridY) {
-    Q1900CellStateQ19* state =
-        Q1900SelectUploadingCellQ19(actualGridX, actualGridY);
-    if (!state) return;
+    std::vector<Q1900CellStateQ19*> uploading;
+    uploading.reserve(gQ1900CellsQ19.size());
+    for (auto& entry : gQ1900CellsQ19)
+        if (entry.second.stage == Q1900CellStageQ19::Uploading)
+            uploading.push_back(&entry.second);
+    if (uploading.empty()) return;
 
+    std::sort(uploading.begin(), uploading.end(),
+              [&](const Q1900CellStateQ19* a, const Q1900CellStateQ19* b) {
+        const int pa = Q1900CellPriorityQ19(*a, actualGridX, actualGridY);
+        const int pb = Q1900CellPriorityQ19(*b, actualGridX, actualGridY);
+        if (pa != pb) return pa < pb;
+        return a->requestedAt < b->requestedAt;
+    });
+
+    constexpr uint64_t Q2013_GLOBAL_GPU_BUDGET_US = 4200u;
+    constexpr size_t Q2013_GLOBAL_GPU_BYTES = 3u * 1024u * 1024u;
+    constexpr size_t Q2013_GPU_CELLS_PER_FRAME = 6u;
     const auto frameStarted = std::chrono::steady_clock::now();
-    size_t bytesThisFrame = 0u;
-    bool didWork = false;
-    const int q2011Cheb =
-        std::max(std::abs(state->gridX - actualGridX),
-                 std::abs(state->gridY - actualGridY));
-    const size_t q2011ByteBudget =
-        q2011Cheb <= 1
-            ? Q1960_GPU_BYTES_PER_FRAME_URGENT
-            : Q1960_GPU_BYTES_PER_FRAME;
-
-    while (state->textureCursor < state->textures.size()) {
-        const Q1960UploadStepQ19 step =
-            Q1960AdvanceTextureQ19(*state, bytesThisFrame);
-        didWork = true;
-        if (step == Q1960UploadStepQ19::Failed) {
-            // Keep progressing; UploadCpuObject will use fallback/cache state.
-        }
-        if (bytesThisFrame >= q2011ByteBudget ||
-            Q1960ElapsedUsQ19(frameStarted) >= Q1900_GPU_BUDGET_US_Q19) {
-            return;
-        }
-        if (state->q1960TextureUpload.active) {
-            // Continue the same texture only while both budgets allow.
-            continue;
-        }
+    size_t globalBytes = 0u;
+    size_t serviced = 0u;
+    for (Q1900CellStateQ19* state : uploading) {
+        if (!state || state->stage != Q1900CellStageQ19::Uploading) continue;
+        if (serviced >= Q2013_GPU_CELLS_PER_FRAME ||
+            globalBytes >= Q2013_GLOBAL_GPU_BYTES ||
+            Q1960ElapsedUsQ19(frameStarted) >= Q2013_GLOBAL_GPU_BUDGET_US) break;
+        Q2013AdvanceCellGpuSliceQ19(*state, actualGridX, actualGridY, globalBytes);
+        ++serviced;
     }
-
-    while (state->gpuCursor < state->cpu.size()) {
-        const Q1960UploadStepQ19 step =
-            Q1960AdvanceShapeQ19(*state, bytesThisFrame);
-        didWork = true;
-        if (step == Q1960UploadStepQ19::Failed) {
-            // Failed shape is skipped exactly like the legacy upload path.
-        }
-        if (bytesThisFrame >= q2011ByteBudget ||
-            Q1960ElapsedUsQ19(frameStarted) >= Q1900_GPU_BUDGET_US_Q19) {
-            return;
-        }
-        if (state->q1960ShapeUpload.active) {
-            continue;
-        }
-    }
-
-    if (state->textureCursor >= state->textures.size() &&
-        state->gpuCursor >= state->cpu.size() &&
-        !state->q1960TextureUpload.active &&
-        !state->q1960ShapeUpload.active) {
-        Q1900CommitCellVisualsQ19(*state);
-    } else if (didWork) {
-        Q6H_LOGI("Q19.6 CELL GPU: cell=(%d,%d) textures=%zu/%zu shapes=%zu/%zu staged=%zu frameBytes=%zu byteBudget=%zu timeBudgetUs=%llu textureActive=%d shapeActive=%d",
-                 state->gridX, state->gridY,
-                 state->textureCursor, state->textures.size(),
-                 state->gpuCursor, state->cpu.size(),
-                 state->stagedGpu.size(),
-                 bytesThisFrame, q2011ByteBudget,
-                 static_cast<unsigned long long>(Q1900_GPU_BUDGET_US_Q19),
-                 state->q1960TextureUpload.active ? 1 : 0,
-                 state->q1960ShapeUpload.active ? 1 : 0);
+    if (uploading.size() > 1u) {
+        Q6H_LOGI("Q20.13 GPU QUEUE: uploading=%zu serviced=%zu frameBytes=%zu elapsedUs=%llu globalBytes=%zu globalBudgetUs=%llu",
+                 uploading.size(), serviced, globalBytes,
+                 static_cast<unsigned long long>(Q1960ElapsedUsQ19(frameStarted)),
+                 Q2013_GLOBAL_GPU_BYTES,
+                 static_cast<unsigned long long>(Q2013_GLOBAL_GPU_BUDGET_US));
     }
 }
-
 
 bool Q1900CollectCollisionWindowQ19(
         int32_t centreX, int32_t centreY,
@@ -1335,7 +1312,7 @@ void Q1900TryPublishCollisionQ19(int32_t actualGridX, int32_t actualGridY) {
     // Keep one serialized background asset job at a time. The transformed REFR
     // cache is shared with CELL prewarming and was designed for single-writer use.
     if (Q1900AnyCellWorkerQ19() || gQ1930CollisionTaskQ19 ||
-        gQ1970LodWorkerQ19 || IsFo3TerrainStreamingCpuBusyQ2000()) return;
+        Q1970AnyLodWorkerQ19() || IsFo3TerrainStreamingCpuBusyQ2000()) return;
 
     std::vector<Fo3WorldPlacement> placements;
     if (!Q1900CollectCollisionWindowQ19(
@@ -1382,7 +1359,7 @@ void Q1900MaintainTerrainQ19(int32_t actualGridX, int32_t actualGridY) {
         : 0;
     const bool serializedLaneIdle =
         !Q1900AnyCellWorkerQ19() && !gQ1930CollisionTaskQ19 &&
-        !gQ1970LodWorkerQ19 && !IsFo3TerrainStreamingCpuBusyQ2000();
+        !Q1970AnyLodWorkerQ19() && !IsFo3TerrainStreamingCpuBusyQ2000();
     const bool allowTerrainCpu =
         serializedLaneIdle && (!urgentVisualRequest || terrainLag >= 2);
 

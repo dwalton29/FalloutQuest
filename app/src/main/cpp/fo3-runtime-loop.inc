@@ -1352,12 +1352,14 @@ private:
                 }
                 if (!IsFo3LoadingVisibleQ1700()) {
                     UpdatePlayer(views[0], frameState.predictedDisplayTime);
-                const XrPosef q1890VirtualHead = ToVirtualPose(views[0].pose);
-                UpdateFo3ExteriorStreamingQ1890(q1890VirtualHead.position.x,
-                                                q1890VirtualHead.position.z);
                 } else {
                     lastFrameTime_ = 0;
                 }
+                // Q20.13: loading freezes player motion, not world preparation.
+                // Keep CELL/terrain/LOD streaming alive beneath the overlay.
+                const XrPosef q1890VirtualHead = ToVirtualPose(views[0].pose);
+                UpdateFo3ExteriorStreamingQ1890(q1890VirtualHead.position.x,
+                                                q1890VirtualHead.position.z);
                 UpdateDoorAimQ1700();
                 ApplyAuthoredDoorFacingQ1810(views[0]);
                 if (activateDownQ1700_ && !activateLatched_) {
