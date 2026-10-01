@@ -77,6 +77,19 @@ extern float gExteriorOriginZQ1890;
 extern int32_t gExteriorWindowGridXQ1890;
 extern int32_t gExteriorWindowGridYQ1890;
 extern uint64_t gExteriorWindowGenerationQ1890;
+
+// Q20.8A water executes before the post-process declarations later in this
+// translation unit. Forward-declare the existing Q20.6 resolve state here.
+extern GLuint q1280PostFbo;
+extern GLuint q1280PostColor;
+extern GLuint q1370PostDepth;
+extern GLsizei q1280PostWidth;
+extern GLsizei q1280PostHeight;
+extern GLuint q2060MsaaFbo;
+extern GLsizei q2060MsaaSamples;
+extern bool q2060MsaaActive;
+void Q2060ResolveEyeMsaaQ2060();
+
 extern bool gQ1920LatestGridValid;
 extern int32_t gQ1920LatestGridX;
 extern int32_t gQ1920LatestGridY;
