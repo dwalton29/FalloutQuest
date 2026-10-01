@@ -621,15 +621,27 @@ private:
         if (!CheckXr(xrEnumerateSwapchainFormats(session_, formatCount, &formatCount, formats.data()),
                      "xrEnumerateSwapchainFormats")) return false;
 
+        // Q20.4c clean output-domain A/B:
+        // Fallout's captured final pass writes numeric display-code values to an
+        // X8R8G8B8 target with sRGB write disabled. Prefer a linear UNORM
+        // OpenXR swapchain here so Quest does not apply an additional hardware
+        // linear->sRGB encode to those already-final numeric values.
         int64_t chosenFormat = formats.empty() ? 0 : formats.front();
+        bool q204cHaveRgba8 = false;
+        bool q204cHaveSrgb8 = false;
         for (int64_t format : formats) {
-            if (format == GL_SRGB8_ALPHA8) {
-                chosenFormat = format;
-                break;
-            }
-            if (format == GL_RGBA8) chosenFormat = format;
+            if (format == GL_RGBA8) q204cHaveRgba8 = true;
+            if (format == GL_SRGB8_ALPHA8) q204cHaveSrgb8 = true;
+        }
+        if (q204cHaveRgba8) {
+            chosenFormat = GL_RGBA8;
+        } else if (q204cHaveSrgb8) {
+            chosenFormat = GL_SRGB8_ALPHA8;
         }
         if (!chosenFormat) return false;
+        FQ_LOGI("Q20.4C OUTPUT DOMAIN: chosen=0x%llX rgba8Available=%d srgb8Available=%d preference=GL_RGBA8_LINEAR_UNORM pcTarget=X8R8G8B8 pcSrgbWrite=0",
+                static_cast<unsigned long long>(chosenFormat),
+                q204cHaveRgba8 ? 1 : 0, q204cHaveSrgb8 ? 1 : 0);
 
         for (uint32_t i = 0; i < 2; ++i) {
             EyeSwapchain& eye = eyes_[i];
