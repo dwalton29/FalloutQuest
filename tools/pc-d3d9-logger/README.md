@@ -19,6 +19,19 @@ For every draw call in the captured frame:
 
 The logger queries the device at the draw call rather than relying on earlier `Set*` calls, so state applied through D3D9 state blocks is still visible.
 
+## Gamma-ramp capture
+
+Q20.4E also captures Fallout 3's final D3D9 display gamma path. The proxy hooks
+`IDirect3DDevice9::SetGammaRamp` and records all 256 RGB WORD entries whenever
+Fallout supplies a distinct ramp. It also calls `GetGammaRamp` immediately
+after the device is patched, so the current ramp is still captured if Fallout
+set it before the hook was installed.
+
+Gamma capture is automatic; F10 is not required for it. Look for
+`GAMMA_RAMP` followed by 256 `GAMMA_ENTRY` lines in `Fallout3D3D9.log`.
+For renderer parity, keep the same `fGamma` value used by the PC reference
+install when making the capture.
+
 ## Build locally
 
 Requirements: Visual Studio 2022 / Build Tools with **Desktop development with C++**, Windows SDK and CMake.
