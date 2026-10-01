@@ -3,6 +3,7 @@
 #include <android/log.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdio>
 #include <cstdint>
@@ -27,6 +28,7 @@ constexpr uint32_t MAX_RECORD_BYTES_Q75 = 64u * 1024u * 1024u;
 constexpr float EXTERIOR_CELL_SIZE_Q75 = 4096.0f;
 constexpr int GRID_RADIUS_Q75 = 2;
 constexpr size_t SMALL_WORLDSPACE_CELL_LIMIT_Q75 = 64u;
+std::atomic<int> gGridRadiusOverrideQ1950{-1};
 
 #define Q75_LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
 #define Q75_LOGW(...) __android_log_print(ANDROID_LOG_WARN, TAG, __VA_ARGS__)
@@ -447,6 +449,11 @@ void ConvertBethesdaRotationQ75(float rx, float ry, float rz,
 
 } // namespace
 
+void SetFo3WorldspaceGridRadiusOverrideQ1950(int radius) {
+    gGridRadiusOverrideQ1950.store(std::clamp(radius, -1, 8),
+                                   std::memory_order_relaxed);
+}
+
 bool LoadFo3WorldspaceNeighborhoodQ75(uint32_t worldspaceFormId,
                                      uint32_t persistentCellFormId,
                                      float arrivalX, float arrivalY,
@@ -464,23 +471,28 @@ bool LoadFo3WorldspaceNeighborhoodQ75(uint32_t worldspaceFormId,
     for (const CellInfoQ75& cell : cells) if (cell.hasGrid) gridCells.push_back(&cell);
     const int32_t targetGridX = static_cast<int32_t>(std::floor(arrivalX / EXTERIOR_CELL_SIZE_Q75));
     const int32_t targetGridY = static_cast<int32_t>(std::floor(arrivalY / EXTERIOR_CELL_SIZE_Q75));
-    const bool loadWholeWorldspace = gridCells.size() <= SMALL_WORLDSPACE_CELL_LIMIT_Q75;
+    const int q1950Override =
+        gGridRadiusOverrideQ1950.load(std::memory_order_relaxed);
+    const bool loadWholeWorldspace =
+        q1950Override < 0 && gridCells.size() <= SMALL_WORLDSPACE_CELL_LIMIT_Q75;
+    const int gridRadius =
+        q1950Override >= 0 ? q1950Override : GRID_RADIUS_Q75;
 
     std::unordered_set<uint32_t> selectedCells;
     if (persistentCellFormId != 0u) selectedCells.insert(persistentCellFormId);
     for (const CellInfoQ75* cell : gridCells) {
         if (loadWholeWorldspace ||
-            (std::abs(cell->gridX - targetGridX) <= GRID_RADIUS_Q75 &&
-             std::abs(cell->gridY - targetGridY) <= GRID_RADIUS_Q75)) {
+            (std::abs(cell->gridX - targetGridX) <= gridRadius &&
+             std::abs(cell->gridY - targetGridY) <= gridRadius)) {
             selectedCells.insert(cell->formId);
         }
     }
 
-    Q75_LOGI("Q7.5 WORLDSPACE CELLS: worldspace=%08X persistent=%08X discovered=%zu gridCells=%zu selected=%zu targetGrid=(%d,%d) mode=%s radius=%d",
+    Q75_LOGI("Q7.5 WORLDSPACE CELLS: worldspace=%08X persistent=%08X discovered=%zu gridCells=%zu selected=%zu targetGrid=(%d,%d) mode=%s radius=%d override=%d",
              worldspaceFormId, persistentCellFormId, cells.size(), gridCells.size(), selectedCells.size(),
              targetGridX, targetGridY,
              loadWholeWorldspace ? "full-small-worldspace" : "arrival-neighborhood",
-             GRID_RADIUS_Q75);
+             gridRadius, q1950Override);
     for (const CellInfoQ75* cell : gridCells) {
         if (selectedCells.find(cell->formId) == selectedCells.end()) continue;
         Q75_LOGI("Q7.5 GRID CELL: cell=%08X grid=(%d,%d) EDID=%s selected=1",
