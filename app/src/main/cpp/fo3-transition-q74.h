@@ -44,6 +44,11 @@ bool LoadFo3WorldspaceNeighborhoodQ75(uint32_t worldspaceFormId,
                                      float arrivalX, float arrivalY,
                                      std::vector<Fo3WorldPlacement>& outPlacements);
 
+// Q19.5 streaming worker override. -1 restores the normal Q7.5 policy;
+// 0 selects only the requested grid cell; positive values select that
+// Chebyshev-radius neighborhood.
+void SetFo3WorldspaceGridRadiusOverrideQ1950(int radius);
+
 // Q7.10 collision classification. Q7.8a proved that blindly welding every bhk
 // model into the static world makes Fallout's movable clutter behave like
 // concrete. Keep a small process-wide set of model paths used exclusively by
