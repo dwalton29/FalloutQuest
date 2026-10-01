@@ -42,7 +42,9 @@ struct RawWaterCell {
     int32_t gridX = 0;
     int32_t gridY = 0;
     bool hasGrid = false;
+    bool hasWaterFlag = false;
     bool hasWaterHeight = false;
+    bool inheritedWaterHeight = false;
     float waterHeight = 0.0f;
     uint32_t waterType = 0u;
     std::string noiseTexture;
@@ -50,6 +52,15 @@ struct RawWaterCell {
 
 std::vector<Fo3WaterCellQ2070> gWaterCells;
 uint32_t gWorldspace = 0u;
+
+// Q20.9 generic exterior-water catalogue. Fallout3.esm is scanned once per
+// worldspace; recentering then only filters the cached CELL inventory.
+uint32_t gWaterCatalogWorldspace = 0u;
+uint32_t gWaterCatalogDefaultType = 0u;
+float gWaterCatalogDefaultHeight = 0.0f;
+std::string gWaterCatalogNoise;
+std::vector<RawWaterCell> gWaterCatalogCells;
+std::unordered_map<uint32_t, Fo3WaterTypeQ2070> gWaterCatalogTypes;
 
 GLuint gProgram = 0u;
 GLuint gVao = 0u;
@@ -241,8 +252,10 @@ bool DecodeVisualData(const uint8_t* bytes, uint32_t size,
 
 bool ReadWorldDefaults(uint32_t worldspaceFormId,
                        uint32_t& defaultWaterType,
+                       float& defaultWaterHeight,
                        std::string& noiseTexture) {
     defaultWaterType = 0u;
+    defaultWaterHeight = 0.0f;
     noiseTexture.clear();
     FILE* file = std::fopen(ESM_PATH, "rb");
     if (!file) return false;
@@ -279,7 +292,13 @@ bool ReadWorldDefaults(uint32_t worldspaceFormId,
         WalkSubrecords(payload.data(), payload.size(),
             [&](const char* type, const uint8_t* bytes, uint32_t subSize) {
                 if (std::memcmp(type, "NAM2", 4u) == 0 && subSize >= 4u) {
+                    // WRLD NAM2 = default WATR.
                     defaultWaterType = ReadLe32(bytes);
+                } else if (std::memcmp(type, "DNAM", 4u) == 0 && subSize >= 8u) {
+                    // Fallout 3 WRLD DNAM = {Default Land Height,
+                    // Default Water Height}. CELLs whose XCLW is absent/Default
+                    // inherit the second float.
+                    defaultWaterHeight = ReadLeFloat(bytes + 4u);
                 } else if (std::memcmp(type, "XNAM", 4u) == 0) {
                     noiseTexture = ReadCString(bytes, subSize);
                 }
@@ -293,7 +312,7 @@ bool ReadWorldDefaults(uint32_t worldspaceFormId,
 }
 
 bool CollectWaterCells(uint32_t worldspaceFormId,
-                       float arrivalX, float arrivalY,
+                       float defaultWaterHeight,
                        std::vector<RawWaterCell>& out) {
     out.clear();
     FILE* file = std::fopen(ESM_PATH, "rb");
@@ -303,11 +322,6 @@ bool CollectWaterCells(uint32_t worldspaceFormId,
         std::fclose(file);
         return false;
     }
-
-    const int32_t targetX =
-        static_cast<int32_t>(std::floor(arrivalX / CELL_SIZE));
-    const int32_t targetY =
-        static_cast<int32_t>(std::floor(arrivalY / CELL_SIZE));
 
     std::vector<GroupFrame> groups;
     while (true) {
@@ -345,7 +359,10 @@ bool CollectWaterCells(uint32_t worldspaceFormId,
         cell.formId = ReadLe32(header + 12u);
         WalkSubrecords(payload.data(), payload.size(),
             [&](const char* type, const uint8_t* bytes, uint32_t subSize) {
-                if (std::memcmp(type, "XCLC", 4u) == 0 && subSize >= 8u) {
+                if (std::memcmp(type, "DATA", 4u) == 0 && subSize >= 1u) {
+                    // CELL DATA bit 1 = Has Water.
+                    cell.hasWaterFlag = (bytes[0] & 0x02u) != 0u;
+                } else if (std::memcmp(type, "XCLC", 4u) == 0 && subSize >= 8u) {
                     cell.gridX = static_cast<int32_t>(ReadLe32(bytes));
                     cell.gridY = static_cast<int32_t>(ReadLe32(bytes + 4u));
                     cell.hasGrid = true;
@@ -366,10 +383,14 @@ bool CollectWaterCells(uint32_t worldspaceFormId,
                 }
             });
 
-        if (cell.hasGrid && cell.hasWaterHeight &&
-            std::abs(cell.gridX - targetX) <= WATER_RADIUS_CELLS &&
-            std::abs(cell.gridY - targetY) <= WATER_RADIUS_CELLS) {
-            out.push_back(std::move(cell));
+        if (cell.hasGrid && cell.hasWaterFlag) {
+            if (!cell.hasWaterHeight) {
+                cell.waterHeight = defaultWaterHeight;
+                cell.hasWaterHeight = std::isfinite(defaultWaterHeight) &&
+                                      std::fabs(defaultWaterHeight) < 1.0e30f;
+                cell.inheritedWaterHeight = cell.hasWaterHeight;
+            }
+            if (cell.hasWaterHeight) out.push_back(std::move(cell));
         }
     }
 
@@ -902,28 +923,70 @@ bool LoadFo3WaterSceneQ2070(uint32_t worldspaceFormId,
     gRenderLogged = false;
     if (worldspaceFormId == 0u) return false;
 
-    uint32_t defaultWaterType = 0u;
-    std::string worldNoise;
-    ReadWorldDefaults(worldspaceFormId, defaultWaterType, worldNoise);
+    if (gWaterCatalogWorldspace != worldspaceFormId) {
+        gWaterCatalogWorldspace = 0u;
+        gWaterCatalogDefaultType = 0u;
+        gWaterCatalogDefaultHeight = 0.0f;
+        gWaterCatalogNoise.clear();
+        gWaterCatalogCells.clear();
+        gWaterCatalogTypes.clear();
+
+        if (!ReadWorldDefaults(worldspaceFormId,
+                               gWaterCatalogDefaultType,
+                               gWaterCatalogDefaultHeight,
+                               gWaterCatalogNoise)) {
+            WLOGE("Q20.9 WATER CATALOG FAILED: worldspace=%08X reason=WRLD-defaults",
+                  worldspaceFormId);
+            return false;
+        }
+
+        if (!CollectWaterCells(worldspaceFormId,
+                               gWaterCatalogDefaultHeight,
+                               gWaterCatalogCells)) {
+            WLOGE("Q20.9 WATER CATALOG FAILED: worldspace=%08X reason=CELL-scan",
+                  worldspaceFormId);
+            return false;
+        }
+
+        std::unordered_set<uint32_t> wanted;
+        for (const RawWaterCell& cell : gWaterCatalogCells) {
+            const uint32_t type =
+                cell.waterType ? cell.waterType : gWaterCatalogDefaultType;
+            if (type != 0u) wanted.insert(type);
+        }
+        if (!ResolveWaterTypes(wanted, gWaterCatalogTypes)) {
+            WLOGE("Q20.9 WATER CATALOG FAILED: worldspace=%08X reason=WATR-scan",
+                  worldspaceFormId);
+            return false;
+        }
+
+        size_t inheritedHeights = 0u;
+        size_t explicitHeights = 0u;
+        for (const RawWaterCell& cell : gWaterCatalogCells) {
+            if (cell.inheritedWaterHeight) ++inheritedHeights;
+            else ++explicitHeights;
+        }
+        gWaterCatalogWorldspace = worldspaceFormId;
+        WLOGI("Q20.9 WATER CATALOG READY: worldspace=%08X authoredWaterCells=%zu explicitHeights=%zu inheritedWrldHeights=%zu defaultHeight=%.3f defaultType=%08X WATRtypes=%zu worldNoise=%s source=CELL-DATA+XCLW+XCWT/WRLD-DNAM+NAM2",
+              worldspaceFormId, gWaterCatalogCells.size(),
+              explicitHeights, inheritedHeights,
+              gWaterCatalogDefaultHeight, gWaterCatalogDefaultType,
+              gWaterCatalogTypes.size(),
+              gWaterCatalogNoise.empty() ? "<none>" : gWaterCatalogNoise.c_str());
+    }
+
+    const int32_t targetX =
+        static_cast<int32_t>(std::floor(arrivalX / CELL_SIZE));
+    const int32_t targetY =
+        static_cast<int32_t>(std::floor(arrivalY / CELL_SIZE));
 
     std::vector<RawWaterCell> raw;
-    if (!CollectWaterCells(worldspaceFormId, arrivalX, arrivalY, raw)) {
-        WLOGE("Q20.7A WATER LOAD FAILED: worldspace=%08X reason=cell-scan",
-              worldspaceFormId);
-        return false;
-    }
-
-    std::unordered_set<uint32_t> wanted;
-    for (const RawWaterCell& cell : raw) {
-        const uint32_t type = cell.waterType ? cell.waterType : defaultWaterType;
-        if (type != 0u) wanted.insert(type);
-    }
-
-    std::unordered_map<uint32_t, Fo3WaterTypeQ2070> types;
-    if (!ResolveWaterTypes(wanted, types)) {
-        WLOGE("Q20.7A WATER LOAD FAILED: worldspace=%08X reason=watr-scan",
-              worldspaceFormId);
-        return false;
+    raw.reserve(64u);
+    for (const RawWaterCell& cell : gWaterCatalogCells) {
+        if (std::abs(cell.gridX - targetX) <= WATER_RADIUS_CELLS &&
+            std::abs(cell.gridY - targetY) <= WATER_RADIUS_CELLS) {
+            raw.push_back(cell);
+        }
     }
 
     for (const RawWaterCell& rawCell : raw) {
@@ -933,21 +996,24 @@ bool LoadFo3WaterSceneQ2070(uint32_t worldspaceFormId,
         cell.gridY = rawCell.gridY;
         cell.waterHeightGame = rawCell.waterHeight;
         cell.waterTypeFormId =
-            rawCell.waterType ? rawCell.waterType : defaultWaterType;
+            rawCell.waterType ? rawCell.waterType : gWaterCatalogDefaultType;
 
-        const auto it = types.find(cell.waterTypeFormId);
-        if (it != types.end()) cell.type = it->second;
+        const auto it = gWaterCatalogTypes.find(cell.waterTypeFormId);
+        if (it != gWaterCatalogTypes.end()) cell.type = it->second;
         if (!rawCell.noiseTexture.empty()) {
             cell.noiseTexturePath = rawCell.noiseTexture;
         } else if (!cell.type.noiseTexturePath.empty()) {
             cell.noiseTexturePath = cell.type.noiseTexturePath;
         } else {
-            cell.noiseTexturePath = worldNoise;
+            cell.noiseTexturePath = gWaterCatalogNoise;
         }
 
-        WLOGI("Q20.7A WATER CELL: worldspace=%08X cell=%08X grid=(%d,%d) heightGame=%.3f type=%08X EDID=%s noise=%s",
+        WLOGI("Q20.9 WATER CELL: worldspace=%08X cell=%08X grid=(%d,%d) heightGame=%.3f heightSource=%s type=%08X typeSource=%s EDID=%s noise=%s",
               worldspaceFormId, cell.cellFormId, cell.gridX, cell.gridY,
-              cell.waterHeightGame, cell.waterTypeFormId,
+              cell.waterHeightGame,
+              rawCell.inheritedWaterHeight ? "WRLD-DNAM" : "CELL-XCLW",
+              cell.waterTypeFormId,
+              rawCell.waterType ? "CELL-XCWT" : "WRLD-NAM2",
               cell.type.editorId.empty() ? "<none>" : cell.type.editorId.c_str(),
               cell.noiseTexturePath.empty() ? "<none>" : cell.noiseTexturePath.c_str());
         if (cell.type.valid) {
@@ -973,12 +1039,10 @@ bool LoadFo3WaterSceneQ2070(uint32_t worldspaceFormId,
         gWaterCells.push_back(std::move(cell));
     }
 
-    WLOGI("Q20.7A WATER DATA READY: worldspace=%08X targetGrid=(%d,%d) radius=%d cells=%zu defaultType=%08X worldNoise=%s source=Fallout3.esm XCLW+XCWT+WATR",
-          worldspaceFormId,
-          static_cast<int>(std::floor(arrivalX / CELL_SIZE)),
-          static_cast<int>(std::floor(arrivalY / CELL_SIZE)),
-          WATER_RADIUS_CELLS, gWaterCells.size(), defaultWaterType,
-          worldNoise.empty() ? "<none>" : worldNoise.c_str());
+    WLOGI("Q20.9 WATER WINDOW READY: worldspace=%08X targetGrid=(%d,%d) radius=%d waterCells=%zu catalogue=%zu defaultHeight=%.3f defaultType=%08X genericExterior=1",
+          worldspaceFormId, targetX, targetY, WATER_RADIUS_CELLS,
+          gWaterCells.size(), gWaterCatalogCells.size(),
+          gWaterCatalogDefaultHeight, gWaterCatalogDefaultType);
     return !gWaterCells.empty();
 }
 
