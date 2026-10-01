@@ -1,4 +1,4 @@
-void SetFo3WorldspaceGridRadiusOverrideQ1950(int radius);
+#include "fo3-water-q2070.h"\nvoid SetFo3WorldspaceGridRadiusOverrideQ1950(int radius);
 void SetNextFo3CollisionExteriorModeQ1931(bool exterior);
 #include <array>
 #include <atomic>
@@ -2156,6 +2156,11 @@ bool ProcessQ74TransitionRequest() {
     }
     LoadFo3CellEnvironmentQ1410(request.cellFormId, request.worldspaceFormId,
                                 request.x, request.y);
+    if (request.worldspaceFormId != 0u) {
+        LoadFo3WaterSceneQ2070(request.worldspaceFormId, request.x, request.y);
+    } else {
+        ClearFo3WaterSceneQ2070();
+    }
     // Rebuild Q14.0 from the corrected region weather/XCIM on the first frame.
     fo3todq1400::gRuntime = {};
     fo3todq1400::gAppliedOnce = false;
@@ -5126,6 +5131,19 @@ void RenderScene() {
                         static_cast<GLenum>(previousBlendDstAlpha));
     if (blendWasEnabled) glEnable(GL_BLEND); else glDisable(GL_BLEND);
 
+    // Q20.7A: authored CELL XCLW water geometry proof. This intentionally
+    // precedes terrain debug/overlay rendering and does not alter Q20.4F post.
+    if (gExteriorStreamingActiveQ1890 && gExteriorWorldspaceQ1890 != 0u) {
+        RenderFo3WaterSurfaceQ2070(
+            mvp,
+            gExteriorOriginXQ1890,
+            gExteriorOriginYQ1890,
+            gExteriorOriginZQ1890,
+            FLOOR_Y,
+            SCENE_FORWARD,
+            FO3_UNITS_PER_METRE);
+    }
+
     RenderFo3CollisionOverlay(mvp);
 
     glActiveTexture(GL_TEXTURE5);
@@ -6441,6 +6459,7 @@ void Q1280ShutdownPostQ1280() {
 
 void Q6HDeleteFramebuffers(GLsizei n, const GLuint* framebuffers) {
     Q1280ShutdownPostQ1280();
+    ShutdownFo3WaterQ2070();
     glDeleteFramebuffers(n, framebuffers);
     ShutdownFo3CollisionOverlay();
     for (GpuObject& object : gObjects) {
