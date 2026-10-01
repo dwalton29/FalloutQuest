@@ -4929,6 +4929,10 @@ GLsizei q1280PostHeight = 0;
 GLenum q1280PostInternalFormat = GL_RGBA8;
 bool q1280PostActive = false;
 bool q1280PostLoggedGpu = false;
+// Q20.4E parity diagnostic: Q13.7 contact AO is a FalloutQuest-only effect,
+// not part of the captured Fallout 3 SP17/final-film path. Keep it OFF by
+// default and expose a runtime A/B toggle rather than contaminating vanilla.
+bool q204eContactAoEnabled = false;
 
 GLint q1280SceneLocation = -1;
 GLint q1280TexelLocation = -1;
@@ -4945,6 +4949,7 @@ GLint q1280BloomThresholdLocation = -1;
 GLint q1280BloomAlphaLocation = -1;
 GLint q1350ExposureLocation = -1;
 GLint q1370DepthLocation = -1;
+GLint q204eContactAoEnabledLocation = -1;
 GLint q1520TargetLumLocation = -1;
 GLint q1560PostRenderStageLocation = -1;
 GLint q1670PcBloomLocation = -1;
@@ -5556,6 +5561,7 @@ bool Q1280EnsurePostProgram() {
         uniform float uBloomAlpha;
         uniform sampler2D uExposureQ1350;
         uniform sampler2D uDepthQ1370;
+        uniform float uContactAoEnabledQ204E;
         uniform float uTargetLumQ1520;
         uniform int uRenderStageQ1560;
         uniform sampler2D uPcBloomQ1670;
@@ -5663,10 +5669,15 @@ bool Q1280EnsurePostProgram() {
             // Keep bloom/lighting linear, temporarily enter display transfer
             // space for the film controls, then return to linear for the sRGB
             // OpenXR target.
-            float contactAoQ1370 = Q1370ContactAo(vUv, texture(uDepthQ1370, vUv).r);
-            float aoLumQ1370 = Q1280Lum(max(colour, vec3(0.0)));
-            float aoMaterialMaskQ1370 = 1.0 - smoothstep(0.70, 1.35, aoLumQ1370);
-            colour *= mix(1.0, contactAoQ1370, aoMaterialMaskQ1370);
+            // Q20.4E: this contact AO is a Quest-only diagnostic effect. It was
+            // never observed in the captured Fallout 3 final path, so vanilla
+            // parity defaults to disabled. RIGHT_B can enable it for a clean A/B.
+            if (uContactAoEnabledQ204E > 0.5) {
+                float contactAoQ1370 = Q1370ContactAo(vUv, texture(uDepthQ1370, vUv).r);
+                float aoLumQ1370 = Q1280Lum(max(colour, vec3(0.0)));
+                float aoMaterialMaskQ1370 = 1.0 - smoothstep(0.70, 1.35, aoLumQ1370);
+                colour *= mix(1.0, contactAoQ1370, aoMaterialMaskQ1370);
+            }
 
             // shaderpackage017 / ISHDRBLENDINSHADER(CIN): Src0.a in vanilla
             // carries the adapted HDR magnitude through the blur chain. Quest
@@ -5763,12 +5774,14 @@ bool Q1280EnsurePostProgram() {
     q1280BloomAlphaLocation = glGetUniformLocation(q1280PostProgram, "uBloomAlpha");
     q1350ExposureLocation = glGetUniformLocation(q1280PostProgram, "uExposureQ1350");
     q1370DepthLocation = glGetUniformLocation(q1280PostProgram, "uDepthQ1370");
+    q204eContactAoEnabledLocation = glGetUniformLocation(q1280PostProgram, "uContactAoEnabledQ204E");
     q1520TargetLumLocation = glGetUniformLocation(q1280PostProgram, "uTargetLumQ1520");
     q1560PostRenderStageLocation = glGetUniformLocation(q1280PostProgram, "uRenderStageQ1560");
     q1670PcBloomLocation = glGetUniformLocation(q1280PostProgram, "uPcBloomQ1670");
     q1670PcBloomReadyLocation = glGetUniformLocation(q1280PostProgram, "uPcBloomReadyQ1670");
     return q1280SceneLocation >= 0 && q1280TexelLocation >= 0 &&
            q1350ExposureLocation >= 0 && q1370DepthLocation >= 0 &&
+           q204eContactAoEnabledLocation >= 0 &&
            q1520TargetLumLocation >= 0 && q1560PostRenderStageLocation >= 0 &&
            q1670PcBloomLocation >= 0 && q1670PcBloomReadyLocation >= 0;
 }
@@ -5838,7 +5851,7 @@ bool Q1280AllocatePostTarget(GLsizei width, GLsizei height) {
     q1280PostHeight = height;
     if (!q1280PostLoggedGpu) {
         q1280PostLoggedGpu = true;
-        Q6H_LOGI("Q13.7 CONTACT AO READY: size=%dx%d depth=DEPTH_COMPONENT24 sampleable=1 taps=8 maxDarken=0.220 radiusPx=2.5..7.0 skyExcluded=1 emissiveProtected=1 stereoSequential=1",
+        Q6H_LOGI("Q20.4E CONTACT AO A/B READY: size=%dx%d depth=DEPTH_COMPONENT24 taps=8 maxDarken=0.220 radiusPx=2.5..7.0 defaultEnabled=0 toggle=RIGHT_B syntheticQuestEffect=1",
                  width, height);
         Q6H_LOGI("Q12.8 POST GPU READY: size=%dx%d format=%s pcBloom=Q15.17-640x256-256x256-15tapV-15tapH stereoSequential=1",
                  width, height,
@@ -5901,6 +5914,7 @@ void Q1280CompositeEyePostQ1280(GLuint swapchainFbo, GLsizei width, GLsizei heig
     glActiveTexture(GL_TEXTURE2);
     glBindTexture(GL_TEXTURE_2D, q1370PostDepth);
     glUniform1i(q1370DepthLocation, 2);
+    glUniform1f(q204eContactAoEnabledLocation, q204eContactAoEnabled ? 1.0f : 0.0f);
     glActiveTexture(GL_TEXTURE3);
     glBindTexture(GL_TEXTURE_2D, q1670BloomTexture[1]);
     glUniform1i(q1670PcBloomLocation, 3);
@@ -6093,6 +6107,14 @@ void Q6HDrawArrays(GLenum mode, GLint first, GLsizei count) {
         return;
     }
     glDrawArrays(mode, first, count);
+}
+
+void ToggleFo3ContactAoQ204E() {
+    q204eContactAoEnabled = !q204eContactAoEnabled;
+}
+
+bool GetFo3ContactAoEnabledQ204E() {
+    return q204eContactAoEnabled;
 }
 
 } // namespace
