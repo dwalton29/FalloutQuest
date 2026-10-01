@@ -582,6 +582,161 @@ bool DecodeDds(const std::vector<uint8_t>& dds, Fo3RgbaTexture& out) {
     return true;
 }
 
+
+size_t DdsMipByteSizeQ2050(uint32_t pixelFlags, uint32_t fourCC,
+                           uint32_t bitsPerPixel, int width, int height) {
+    const int w = std::max(width, 1);
+    const int h = std::max(height, 1);
+    if ((pixelFlags & 0x4u) != 0u) {
+        const size_t blocksX = static_cast<size_t>((w + 3) / 4);
+        const size_t blocksY = static_cast<size_t>((h + 3) / 4);
+        if (fourCC == FourCC('D', 'X', 'T', '1')) return blocksX * blocksY * 8u;
+        if (fourCC == FourCC('D', 'X', 'T', '3') ||
+            fourCC == FourCC('D', 'X', 'T', '5')) return blocksX * blocksY * 16u;
+        return 0u;
+    }
+    if ((pixelFlags & 0x40u) != 0u &&
+        (bitsPerPixel == 24u || bitsPerPixel == 32u)) {
+        return static_cast<size_t>(w) * static_cast<size_t>(h) *
+               static_cast<size_t>(bitsPerPixel / 8u);
+    }
+    return 0u;
+}
+
+bool DecodeDdsLevelQ2050(const uint8_t* pixels, size_t pixelBytes,
+                         uint32_t pixelFlags, uint32_t fourCC,
+                         uint32_t bitsPerPixel,
+                         uint32_t rMask, uint32_t gMask,
+                         uint32_t bMask, uint32_t aMask,
+                         int width, int height,
+                         std::vector<uint8_t>& rgba,
+                         std::string& format) {
+    if ((pixelFlags & 0x4u) != 0u) {
+        if (fourCC == FourCC('D', 'X', 'T', '1')) {
+            format = "DXT1/BC1";
+            return DecodeDxt1(pixels, pixelBytes, width, height, rgba);
+        }
+        if (fourCC == FourCC('D', 'X', 'T', '3')) {
+            format = "DXT3/BC2";
+            return DecodeDxt3(pixels, pixelBytes, width, height, rgba);
+        }
+        if (fourCC == FourCC('D', 'X', 'T', '5')) {
+            format = "DXT5/BC3";
+            return DecodeDxt5(pixels, pixelBytes, width, height, rgba);
+        }
+        return false;
+    }
+    if ((pixelFlags & 0x40u) != 0u) {
+        format = bitsPerPixel == 32u ? "RGBA32" : "RGB24";
+        const uint32_t rowPitch =
+            static_cast<uint32_t>(std::max(width, 1)) * (bitsPerPixel / 8u);
+        return DecodeRgb(pixels, pixelBytes, width, height, rowPitch,
+                         bitsPerPixel, rMask, gMask, bMask, aMask, rgba);
+    }
+    return false;
+}
+
+bool DecodeDdsCubeQ2050(const std::vector<uint8_t>& dds,
+                        Fo3RgbaCubeTexture& out) {
+    if (dds.size() < 128u || std::memcmp(dds.data(), "DDS ", 4) != 0) return false;
+    if (ReadLe32(dds.data() + 4) != 124u || ReadLe32(dds.data() + 76) != 32u) return false;
+
+    const uint32_t height = ReadLe32(dds.data() + 12);
+    const uint32_t width = ReadLe32(dds.data() + 16);
+    uint32_t mipLevels = ReadLe32(dds.data() + 28);
+    if (mipLevels == 0u) mipLevels = 1u;
+    const uint32_t pixelFlags = ReadLe32(dds.data() + 80);
+    const uint32_t fourCC = ReadLe32(dds.data() + 84);
+    const uint32_t bitsPerPixel = ReadLe32(dds.data() + 88);
+    const uint32_t rMask = ReadLe32(dds.data() + 92);
+    const uint32_t gMask = ReadLe32(dds.data() + 96);
+    const uint32_t bMask = ReadLe32(dds.data() + 100);
+    const uint32_t aMask = ReadLe32(dds.data() + 104);
+    const uint32_t caps2 = ReadLe32(dds.data() + 112);
+
+    constexpr uint32_t DDSCAPS2_CUBEMAP_Q2050 = 0x00000200u;
+    constexpr uint32_t DDSCAPS2_ALL_FACES_Q2050 =
+        0x00000400u | 0x00000800u | 0x00001000u |
+        0x00002000u | 0x00004000u | 0x00008000u;
+    if ((caps2 & DDSCAPS2_CUBEMAP_Q2050) == 0u ||
+        (caps2 & DDSCAPS2_ALL_FACES_Q2050) != DDSCAPS2_ALL_FACES_Q2050) {
+        FQ_LOGE("Q20.5 DDS is not a complete legacy cubemap caps2=0x%08X", caps2);
+        return false;
+    }
+    if (width == 0u || height == 0u ||
+        width > static_cast<uint32_t>(MAX_TEXTURE_DIMENSION) ||
+        height > static_cast<uint32_t>(MAX_TEXTURE_DIMENSION) ||
+        mipLevels > 16u) return false;
+
+    size_t offset = 128u;
+    std::string format;
+    for (size_t face = 0u; face < 6u; ++face) {
+        out.rgbaLevels[face].clear();
+        out.rgbaLevels[face].reserve(mipLevels);
+        int mipWidth = static_cast<int>(width);
+        int mipHeight = static_cast<int>(height);
+        for (uint32_t mip = 0u; mip < mipLevels; ++mip) {
+            const size_t levelBytes =
+                DdsMipByteSizeQ2050(pixelFlags, fourCC, bitsPerPixel,
+                                    mipWidth, mipHeight);
+            if (levelBytes == 0u || offset > dds.size() ||
+                levelBytes > dds.size() - offset) return false;
+
+            std::vector<uint8_t> rgba;
+            std::string levelFormat;
+            if (!DecodeDdsLevelQ2050(dds.data() + offset, levelBytes,
+                                     pixelFlags, fourCC, bitsPerPixel,
+                                     rMask, gMask, bMask, aMask,
+                                     mipWidth, mipHeight, rgba, levelFormat)) {
+                return false;
+            }
+            if (format.empty()) format = levelFormat;
+            out.rgbaLevels[face].push_back(std::move(rgba));
+            offset += levelBytes;
+            mipWidth = std::max(1, mipWidth >> 1);
+            mipHeight = std::max(1, mipHeight >> 1);
+        }
+    }
+
+    out.width = static_cast<int>(width);
+    out.height = static_cast<int>(height);
+    out.mipLevels = static_cast<int>(mipLevels);
+    out.format = format;
+    return true;
+}
+
+bool TryArchiveCubeQ2050(const char* archivePath,
+                         const std::string& texturePath,
+                         Fo3RgbaCubeTexture& outTexture) {
+    TextureArchiveIndexQ1830* index = nullptr;
+    const TargetEntry* target = FindTargetQ1830(archivePath, texturePath, index);
+    if (!target || !index) return false;
+
+    FILE* file = std::fopen(archivePath, "rb");
+    if (!file) return false;
+
+    std::vector<uint8_t> dds;
+    bool compressed = false;
+    if (!ExtractTarget(file, index->header, *target, dds, compressed)) {
+        std::fclose(file);
+        FQ_LOGE("Q20.5 CUBE extraction failed: %s", target->storedPath.c_str());
+        return false;
+    }
+    std::fclose(file);
+
+    if (!DecodeDdsCubeQ2050(dds, outTexture)) {
+        FQ_LOGE("Q20.5 CUBE DDS decode failed: %s bytes=%zu",
+                target->storedPath.c_str(), dds.size());
+        return false;
+    }
+    outTexture.sourcePath = target->storedPath;
+    FQ_LOGI("Q20.5 CUBE DDS READY: %dx%d mips=%d format=%s path=%s compressed=%d",
+            outTexture.width, outTexture.height, outTexture.mipLevels,
+            outTexture.format.c_str(), outTexture.sourcePath.c_str(),
+            compressed ? 1 : 0);
+    return true;
+}
+
 bool TryArchive(const char* archivePath, const std::string& texturePath,
                 Fo3RgbaTexture& outTexture) {
     TextureArchiveIndexQ1830* index = nullptr;
@@ -631,6 +786,20 @@ bool LoadFalloutTextureRgba(const std::string& texturePath, Fo3RgbaTexture& outT
     }
 
     FQ_LOGE("Q5H FAILED: diffuse texture could not be loaded from either texture BSA name: %s",
+            texturePath.c_str());
+    return false;
+}
+
+bool LoadFalloutCubeTextureRgba(const std::string& texturePath,
+                                 Fo3RgbaCubeTexture& outTexture) {
+    outTexture = {};
+    if (texturePath.empty()) return false;
+
+    for (const char* archivePath : TEXTURE_BSA_PATHS) {
+        if (TryArchiveCubeQ2050(archivePath, texturePath, outTexture)) return true;
+    }
+
+    FQ_LOGE("Q20.5 CUBE FAILED: texture could not be loaded from either texture BSA name: %s",
             texturePath.c_str());
     return false;
 }
