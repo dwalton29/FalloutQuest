@@ -1144,6 +1144,46 @@ const std::vector<Fo3WaterCellQ2070>& GetFo3WaterCellsQ2070() {
     return gWaterCells;
 }
 
+size_t GetFo3ExposedWaterCellCountQ209B() {
+    size_t count = 0u;
+    for (const Fo3WaterCellQ2070& cell : gWaterCells) {
+        if (IsWaterCellExposedQ209B(cell)) ++count;
+    }
+    return count;
+}
+
+bool IsFo3WaterPotentiallyVisibleQ209B(const float* mvp16,
+                                       float originGameX,
+                                       float originGameY,
+                                       float originGameZ,
+                                       float floorY,
+                                       float sceneForward,
+                                       float unitsPerMetre) {
+    if (!mvp16 || unitsPerMetre <= 0.0f) return false;
+    for (const Fo3WaterCellQ2070& cell : gWaterCells) {
+        if (!IsWaterCellExposedQ209B(cell)) continue;
+
+        const float gameMinX = static_cast<float>(cell.gridX) * CELL_SIZE;
+        const float gameMaxX = gameMinX + CELL_SIZE;
+        const float gameMinY = static_cast<float>(cell.gridY) * CELL_SIZE;
+        const float gameMaxY = gameMinY + CELL_SIZE;
+        const float x0 = (gameMinX - originGameX) / unitsPerMetre;
+        const float x1 = (gameMaxX - originGameX) / unitsPerMetre;
+        const float z0 = sceneForward - (gameMinY - originGameY) / unitsPerMetre;
+        const float z1 = sceneForward - (gameMaxY - originGameY) / unitsPerMetre;
+        const float y = floorY +
+            (cell.waterHeightGame - originGameZ) / unitsPerMetre;
+
+        float clip[4][4]{};
+        TransformClipQ209B(mvp16, x0, y, z0, clip[0]);
+        TransformClipQ209B(mvp16, x1, y, z0, clip[1]);
+        TransformClipQ209B(mvp16, x1, y, z1, clip[2]);
+        TransformClipQ209B(mvp16, x0, y, z1, clip[3]);
+        if (QuadIntersectsClipQ209B(clip)) return true;
+    }
+    return false;
+}
+
 bool GetFo3DominantWaterPlaneQ2070(float eyeSceneX, float eyeSceneZ,
                                    float originGameX, float originGameY,
                                    float originGameZ, float floorY,
@@ -1162,6 +1202,7 @@ bool GetFo3DominantWaterPlaneQ2070(float eyeSceneX, float eyeSceneZ,
     float bestDistance2 = 1.0e30f;
     bool bestContainsEye = false;
     for (const Fo3WaterCellQ2070& cell : gWaterCells) {
+        if (!IsWaterCellExposedQ209B(cell)) continue;
         const float minX = static_cast<float>(cell.gridX) * CELL_SIZE;
         const float maxX = minX + CELL_SIZE;
         const float minY = static_cast<float>(cell.gridY) * CELL_SIZE;
@@ -1314,7 +1355,12 @@ void RenderFo3WaterSurfaceQ2070(const float* mvp16,
     glDisable(GL_CULL_FACE);
 
     size_t draws = 0u;
+    size_t buriedSkipped = 0u;
     for (const Fo3WaterCellQ2070& cell : gWaterCells) {
+        if (!IsWaterCellExposedQ209B(cell)) {
+            ++buriedSkipped;
+            continue;
+        }
         const float gameMinX = static_cast<float>(cell.gridX) * CELL_SIZE;
         const float gameMaxX = gameMinX + CELL_SIZE;
         const float gameMinY = static_cast<float>(cell.gridY) * CELL_SIZE;
@@ -1385,8 +1431,8 @@ void RenderFo3WaterSurfaceQ2070(const float* mvp16,
 
     if (!gRenderLogged) {
         gRenderLogged = true;
-        WLOGI("Q20.9 WATER000 DRAW: worldspace=%08X cells=%zu draws=%zu snapshotReady=%d reflectionReady=%d scene=%dx%d noiseReal=%d depthTest=LEQUAL depthWrite=0 blend=OPAQUE_RGB refraction=OPAQUE_SCENE_RESOLVE depth=SCENE_DEPTH_RECONSTRUCTION fresnel=SP17 shallowDeep=SP17 waterFog=SP17 reflection=PLANAR_SCENE_RT+WATR_LERP reflectionSize=1024x1024 displacement=DEFERRED_WATER017",
-              gWorldspace, gWaterCells.size(), draws,
+        WLOGI("Q20.9B WATER000 DRAW: worldspace=%08X loadedCells=%zu exposedDraws=%zu buriedSkipped=%zu snapshotReady=%d reflectionReady=%d scene=%dx%d noiseReal=%d depthTest=LEQUAL depthWrite=0 blend=OPAQUE_RGB refraction=OPAQUE_SCENE_RESOLVE depth=SCENE_DEPTH_RECONSTRUCTION reflection=PLANAR_SCENE_RT+WATR_LERP",
+              gWorldspace, gWaterCells.size(), draws, buriedSkipped,
               sceneSnapshotReady ? 1 : 0,
               reflectionReady ? 1 : 0,
               sceneWidth, sceneHeight,
