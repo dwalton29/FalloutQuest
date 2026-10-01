@@ -5131,8 +5131,12 @@ void RenderScene() {
                         static_cast<GLenum>(previousBlendDstAlpha));
     if (blendWasEnabled) glEnable(GL_BLEND); else glDisable(GL_BLEND);
 
-    // Q20.7A: authored CELL XCLW water geometry proof. This intentionally
-    // precedes terrain debug/overlay rendering and does not alter Q20.4F post.
+    // Q20.7B: LAND must be present in the depth buffer before water.
+    // RenderFo3CollisionOverlay is the historical hook name but currently
+    // dispatches the real LAND terrain renderer. Q20.7A drew water first with
+    // depthWrite=0, so LAND painted over nearly the entire water plane.
+    RenderFo3CollisionOverlay(mvp);
+
     if (gExteriorStreamingActiveQ1890 && gExteriorWorldspaceQ1890 != 0u) {
         RenderFo3WaterSurfaceQ2070(
             mvp,
@@ -5143,8 +5147,6 @@ void RenderScene() {
             SCENE_FORWARD,
             FO3_UNITS_PER_METRE);
     }
-
-    RenderFo3CollisionOverlay(mvp);
 
     glActiveTexture(GL_TEXTURE5);
     glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture5Q2050));
