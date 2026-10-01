@@ -54,7 +54,8 @@ bool LookupFo3WastelandDoorTeleportQ1920(
     if (outIndexReady) *outIndexReady = false;
     if (sourceDoorRef == 0u || !outTeleport) return false;
 
-    const Q1800WorldspaceIndex* index = GetWastelandIndexQ1800();
+    const Q1800WorldspaceIndex* index =
+        GetWorldspaceIndexQ1800(WASTELAND_WORLDSPACE_Q1800);
     if (!index) return false;
     if (outIndexReady) *outIndexReady = true;
 
