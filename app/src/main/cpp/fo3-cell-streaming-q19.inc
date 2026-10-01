@@ -435,6 +435,10 @@ void Q1900RunCellWorkerQ19(
                     task->textures, textureSeen,
                     part.mesh.glowTexturePath, "GLOW",
                     {0u,0u,0u,255u});
+                Q1900AddTextureRequestQ19(
+                    task->textures, textureSeen,
+                    part.mesh.environmentMaskTexturePath, "ENV_MASK",
+                    {255u,255u,255u,255u});
                 if (!PrepareExpandedVertexStreamQ1960(
                         part,
                         task->originX, task->originY, task->originZ)) {
