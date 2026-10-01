@@ -241,6 +241,12 @@ GLint gEnvironmentMaskLocationQ2050 = -1;
 GLint gEnvironmentPassLocationQ2050 = -1;
 GLint gEnvironmentScaleLocationQ2050 = -1;
 GLint gEnvironmentCustomMaskLocationQ2050 = -1;
+bool gEnvironmentPassEnabledQ205A = true;
+size_t gEnvironmentCandidatesQ205A = 0u;
+size_t gEnvironmentEnabledMaterialsQ205A = 0u;
+size_t gEnvironmentCubeFailuresQ205A = 0u;
+size_t gEnvironmentMaskFailuresQ205A = 0u;
+uint64_t gEnvironmentHeartbeatFrameQ205A = 0u;
 GLint gEmissiveColorLocationQ1020 = -1;
 GLint gEmissiveMultLocationQ1020 = -1;
 GLint gGlowEnabledLocationQ1020 = -1;
@@ -922,8 +928,9 @@ bool UploadCubeTextureQ2050(const std::string& path,
     real = LoadFalloutCubeTextureRgba(path, cube);
     if (!real || cube.width <= 0 || cube.height <= 0 ||
         cube.mipLevels <= 0) {
-        Q6H_LOGW("Q20.5 CUBE UPLOAD SKIP: ref=%08X path=%s reason=decode-failed",
-                 refFormId, path.c_str());
+        ++gEnvironmentCubeFailuresQ205A;
+        Q6H_LOGW("Q20.5A CUBE UPLOAD SKIP: ref=%08X path=%s reason=decode-failed failures=%zu",
+                 refFormId, path.c_str(), gEnvironmentCubeFailuresQ205A);
         return true;
     }
 
@@ -1433,10 +1440,16 @@ bool UploadCpuObject(CpuObject& cpu, float centerX, float centerY, float floorZ,
                        gpu.normal, gpu.realNormal, "NORMAL", gpu.refFormId)) return false;
     if (!UploadTexture(cpu.mesh.glowTexturePath, {0u, 0u, 0u, 255u},
                        gpu.glow, gpu.realGlow, "GLOW", gpu.refFormId)) return false;
+    if (!cpu.mesh.environmentCubeTexturePath.empty()) {
+        ++gEnvironmentCandidatesQ205A;
+    }
     if (!UploadTexture(cpu.mesh.environmentMaskTexturePath,
                        {255u, 255u, 255u, 255u},
                        gpu.environmentMask, gpu.realEnvironmentMask,
                        "ENV_MASK", gpu.refFormId)) return false;
+    if (!cpu.mesh.environmentMaskTexturePath.empty() && !gpu.realEnvironmentMask) {
+        ++gEnvironmentMaskFailuresQ205A;
+    }
     if (!UploadCubeTextureQ2050(cpu.mesh.environmentCubeTexturePath,
                                 gpu.environmentCube,
                                 gpu.realEnvironmentCube,
@@ -1444,6 +1457,9 @@ bool UploadCpuObject(CpuObject& cpu, float centerX, float centerY, float floorZ,
     gpu.environmentEnabledQ2050 =
         !gpu.noLighting && gpu.realNormal && gpu.realEnvironmentCube &&
         gpu.environmentMapScaleQ2050 > 0.0f;
+    if (gpu.environmentEnabledQ2050) {
+        ++gEnvironmentEnabledMaterialsQ205A;
+    }
     if (gpu.environmentEnabledQ2050) {
         Q6H_LOGI("Q20.5 ENV MATERIAL: ref=%08X model=%s cube=%s mask=%s customMask=%d scale=%.4f vertexColor=%d pcPass=SLS2057/2058 blend=ONE+ONE depth=EQUAL fadeScalar=neutral-until-recovered",
                  gpu.refFormId, gpu.modelPath.c_str(),
@@ -5076,16 +5092,29 @@ void RenderScene() {
     glDepthMask(GL_FALSE);
     glEnable(GL_BLEND);
     glBlendFunc(GL_ONE, GL_ONE);
-    for (const GpuObject& object : gObjects) {
-        if (!object.environmentEnabledQ2050 || !object.zBufferWriteQ1200) continue;
-        DrawSceneObject(object, true);
-        ++q2050EnvironmentDraws;
+    if (gEnvironmentPassEnabledQ205A) {
+        for (const GpuObject& object : gObjects) {
+            if (!object.environmentEnabledQ2050 || !object.zBufferWriteQ1200) continue;
+            DrawSceneObject(object, true);
+            ++q2050EnvironmentDraws;
+        }
     }
     static bool q2050PassLogged = false;
     if (!q2050PassLogged) {
         q2050PassLogged = true;
         Q6H_LOGI("Q20.5 ENV PASS READY: draws=%zu source=SP17-SLS2057/2058+nif-slots4,5 pcTraceCalls=14054-14114 blend=ONE+ONE depthFunc=EQUAL depthWrite=0 cube=authored customMask=authored envScale=authored globalPost=Q20.4F-unchanged pcPerObjectFade=pending",
                  q2050EnvironmentDraws);
+    }
+    ++gEnvironmentHeartbeatFrameQ205A;
+    if ((gEnvironmentHeartbeatFrameQ205A % 300u) == 1u) {
+        Q6H_LOGI("Q20.5A ENV HEARTBEAT: passEnabled=%d drawsThisEye=%zu candidatesSeen=%zu enabledMaterials=%zu cubeFailures=%zu maskFailures=%zu objects=%zu",
+                 gEnvironmentPassEnabledQ205A ? 1 : 0,
+                 q2050EnvironmentDraws,
+                 gEnvironmentCandidatesQ205A,
+                 gEnvironmentEnabledMaterialsQ205A,
+                 gEnvironmentCubeFailuresQ205A,
+                 gEnvironmentMaskFailuresQ205A,
+                 gObjects.size());
     }
 
     glDepthFunc(static_cast<GLenum>(previousDepthFuncQ2050));
@@ -6353,6 +6382,14 @@ void ToggleFo3ContactAoQ204E() {
 
 bool GetFo3ContactAoEnabledQ204E() {
     return q204eContactAoEnabled;
+}
+
+void ToggleFo3EnvironmentPassQ205A() {
+    gEnvironmentPassEnabledQ205A = !gEnvironmentPassEnabledQ205A;
+}
+
+bool GetFo3EnvironmentPassEnabledQ205A() {
+    return gEnvironmentPassEnabledQ205A;
 }
 
 } // namespace
