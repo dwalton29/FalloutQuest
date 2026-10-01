@@ -61,6 +61,8 @@ struct ShaderInfo {
 
 std::unordered_map<void*, ShaderInfo> gShaderInfo;
 std::unordered_map<void*, std::string> gTextureInfo;
+std::uint64_t gLastGammaRampHash = 0;
+bool gHaveGammaRampHash = false;
 
 std::uint64_t Fnv1a64(const void* data, std::size_t size) {
     const auto* p = static_cast<const std::uint8_t*>(data);
@@ -94,7 +96,7 @@ void EnsureLogLocked() {
     SYSTEMTIME st{};
     GetLocalTime(&st);
     std::fprintf(gLog,
-        "FQ_D3D9_LOGGER version=2 pid=%lu time=%04u-%02u-%02uT%02u:%02u:%02u.%03u hotkey=F10 capture=next_full_frame\n",
+        "FQ_D3D9_LOGGER version=3 pid=%lu time=%04u-%02u-%02uT%02u:%02u:%02u.%03u hotkey=F10 capture=next_full_frame gammaRampCapture=1\n",
         GetCurrentProcessId(), st.wYear, st.wMonth, st.wDay,
         st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
 }
@@ -113,6 +115,43 @@ void Log(const char* fmt, ...) {
 void FlushLog() {
     std::lock_guard<std::mutex> lock(gLogMutex);
     if (gLog) std::fflush(gLog);
+}
+
+void LogGammaRamp(const char* source, UINT swapChain, DWORD flags,
+                  const D3DGAMMARAMP* ramp) {
+    if (!ramp) {
+        Log("GAMMA_RAMP source=%s swapChain=%u flags=0x%08lx null=1",
+            source ? source : "<unknown>", swapChain,
+            static_cast<unsigned long>(flags));
+        return;
+    }
+
+    const std::uint64_t hash = Fnv1a64(ramp, sizeof(*ramp));
+    bool duplicate = false;
+    {
+        std::lock_guard<std::mutex> lock(gMetadataMutex);
+        duplicate = gHaveGammaRampHash && gLastGammaRampHash == hash;
+        if (!duplicate) {
+            gLastGammaRampHash = hash;
+            gHaveGammaRampHash = true;
+        }
+    }
+
+    Log("GAMMA_RAMP source=%s swapChain=%u flags=0x%08lx hash=%016llx duplicate=%d entries=256 format=WORD16",
+        source ? source : "<unknown>", swapChain,
+        static_cast<unsigned long>(flags),
+        static_cast<unsigned long long>(hash), duplicate ? 1 : 0);
+
+    if (duplicate) return;
+
+    for (UINT i = 0; i < 256u; ++i) {
+        Log("GAMMA_ENTRY index=%03u r=%u g=%u b=%u",
+            i,
+            static_cast<unsigned>(ramp->red[i]),
+            static_cast<unsigned>(ramp->green[i]),
+            static_cast<unsigned>(ramp->blue[i]));
+    }
+    FlushLog();
 }
 
 HMODULE RealD3D9() {
@@ -388,6 +427,7 @@ void DumpDraw(IDirect3DDevice9* device, const char* kind, D3DPRIMITIVETYPE primi
 using CreateDeviceFn = HRESULT (STDMETHODCALLTYPE*)(IDirect3D9*, UINT, D3DDEVTYPE, HWND, DWORD,
                                                      D3DPRESENT_PARAMETERS*, IDirect3DDevice9**);
 using PresentFn = HRESULT (STDMETHODCALLTYPE*)(IDirect3DDevice9*, const RECT*, const RECT*, HWND, const RGNDATA*);
+using SetGammaRampFn = void (STDMETHODCALLTYPE*)(IDirect3DDevice9*, UINT, DWORD, const D3DGAMMARAMP*);
 using DrawPrimitiveFn = HRESULT (STDMETHODCALLTYPE*)(IDirect3DDevice9*, D3DPRIMITIVETYPE, UINT, UINT);
 using DrawIndexedPrimitiveFn = HRESULT (STDMETHODCALLTYPE*)(IDirect3DDevice9*, D3DPRIMITIVETYPE, INT, UINT, UINT, UINT, UINT);
 using DrawPrimitiveUPFn = HRESULT (STDMETHODCALLTYPE*)(IDirect3DDevice9*, D3DPRIMITIVETYPE, UINT, const void*, UINT);
@@ -396,6 +436,7 @@ using DrawIndexedPrimitiveUPFn = HRESULT (STDMETHODCALLTYPE*)(IDirect3DDevice9*,
 
 CreateDeviceFn gCreateDevice = nullptr;
 PresentFn gPresent = nullptr;
+SetGammaRampFn gSetGammaRamp = nullptr;
 DrawPrimitiveFn gDrawPrimitive = nullptr;
 DrawIndexedPrimitiveFn gDrawIndexedPrimitive = nullptr;
 DrawPrimitiveUPFn gDrawPrimitiveUP = nullptr;
@@ -420,6 +461,12 @@ HRESULT STDMETHODCALLTYPE HookPresent(IDirect3DDevice9* device, const RECT* sour
             static_cast<unsigned long long>(frame));
     }
     return result;
+}
+
+void STDMETHODCALLTYPE HookSetGammaRamp(IDirect3DDevice9* device, UINT swapChain,
+                                        DWORD flags, const D3DGAMMARAMP* ramp) {
+    LogGammaRamp("SetGammaRamp", swapChain, flags, ramp);
+    gSetGammaRamp(device, swapChain, flags, ramp);
 }
 
 HRESULT STDMETHODCALLTYPE HookDrawPrimitive(IDirect3DDevice9* device, D3DPRIMITIVETYPE primitive,
@@ -456,10 +503,18 @@ void PatchDevice(IDirect3DDevice9* device) {
     if (!device) return;
     bool ok = true;
     ok &= PatchVtable(device, 17, &HookPresent, &gPresent);
+    // IDirect3DDevice9::SetGammaRamp is vtable slot 21; GetGammaRamp is slot 22.
+    ok &= PatchVtable(device, 21, &HookSetGammaRamp, &gSetGammaRamp);
     ok &= PatchVtable(device, 81, &HookDrawPrimitive, &gDrawPrimitive);
     ok &= PatchVtable(device, 82, &HookDrawIndexedPrimitive, &gDrawIndexedPrimitive);
     ok &= PatchVtable(device, 83, &HookDrawPrimitiveUP, &gDrawPrimitiveUP);
     ok &= PatchVtable(device, 84, &HookDrawIndexedPrimitiveUP, &gDrawIndexedPrimitiveUP);
+
+    // Read the current ramp immediately as well. This covers the case where
+    // Fallout configured gamma before the proxy patched SetGammaRamp.
+    D3DGAMMARAMP currentRamp{};
+    device->GetGammaRamp(0u, &currentRamp);
+    LogGammaRamp("GetGammaRampAfterPatch", 0u, 0u, &currentRamp);
 
     D3DCAPS9 caps{};
     device->GetDeviceCaps(&caps);
