@@ -1,10 +1,12 @@
 #include "fo3-water-q2070.h"
+#include "fo3-texture-bsa.h"
 
 #include <GLES3/gl3.h>
 #include <android/log.h>
 #include <zlib.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdint>
@@ -52,9 +54,44 @@ uint32_t gWorldspace = 0u;
 GLuint gProgram = 0u;
 GLuint gVao = 0u;
 GLuint gVbo = 0u;
+GLuint gNoiseTexture = 0u;
+std::string gNoiseTexturePath;
+bool gNoiseTextureReal = false;
+
 GLint gMvpLocation = -1;
-GLint gColorLocation = -1;
+GLint gNoiseLocation = -1;
+GLint gSceneColorLocation = -1;
+GLint gSceneDepthLocation = -1;
+GLint gSceneSnapshotReadyLocation = -1;
+GLint gViewportLocation = -1;
+GLint gEyePositionLocation = -1;
+GLint gSunDirectionLocation = -1;
+GLint gSunColorLocation = -1;
+GLint gSceneFogColorLocation = -1;
+GLint gSceneFogNearFarLocation = -1;
+GLint gSceneFogPowerLocation = -1;
+GLint gClipNearFarLocation = -1;
+GLint gUnitsPerMetreLocation = -1;
+GLint gTimeLocation = -1;
+GLint gShallowLocation = -1;
+GLint gDeepLocation = -1;
+GLint gReflectionLocation = -1;
+GLint gNormalUvScaleLocation = -1;
+GLint gFresnelLocation = -1;
+GLint gShininessLocation = -1;
+GLint gDepthFalloffLocation = -1;
+GLint gWaterFogNearFarLocation = -1;
+GLint gWaterFogAmountLocation = -1;
+GLint gDistortionLocation = -1;
+GLint gNoiseScaleLocation = -1;
+GLint gLayerUvScaleLocation = -1;
+GLint gLayerWindDirLocation = -1;
+GLint gLayerWindSpeedLocation = -1;
+GLint gLayerAmpLocation = -1;
+
 bool gRenderLogged = false;
+bool gNoiseLogged = false;
+const auto gWaterTimeOrigin = std::chrono::steady_clock::now();
 
 uint16_t ReadLe16(const uint8_t* p) {
     return static_cast<uint16_t>(p[0]) |
@@ -414,26 +451,330 @@ GLuint CompileShader(GLenum type, const char* source) {
     return shader;
 }
 
+bool EnsureNoiseTexture(const std::string& path) {
+    if (gNoiseTexture && path == gNoiseTexturePath) return true;
+
+    if (gNoiseTexture) {
+        glDeleteTextures(1, &gNoiseTexture);
+        gNoiseTexture = 0u;
+    }
+    gNoiseTexturePath = path;
+    gNoiseTextureReal = false;
+
+    Fo3RgbaTexture decoded;
+    const bool loaded = !path.empty() && LoadFalloutTextureRgba(path, decoded) &&
+        decoded.width > 0 && decoded.height > 0 && !decoded.rgba.empty();
+
+    uint8_t fallback[4]{128u, 128u, 255u, 255u};
+    const uint8_t* pixels = loaded ? decoded.rgba.data() : fallback;
+    const int width = loaded ? decoded.width : 1;
+    const int height = loaded ? decoded.height : 1;
+
+    glGenTextures(1, &gNoiseTexture);
+    glBindTexture(GL_TEXTURE_2D, gNoiseTexture);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0,
+                 GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+    gNoiseTextureReal = loaded;
+
+    WLOGI("Q20.8A WATER NOISE: path=%s loaded=%d size=%dx%d format=%s source=%s prepass=INLINE_RECOVERED_3LAYER_SOBEL",
+          path.empty() ? "<none>" : path.c_str(), loaded ? 1 : 0,
+          width, height,
+          loaded ? decoded.format.c_str() : "fallback-flat",
+          loaded ? "Fallout-BSA-DDS" : "fallback");
+    return gNoiseTexture != 0u;
+}
+
 bool EnsureRenderer() {
     if (gProgram && gVao && gVbo) return true;
 
     static const char* vs = R"(
         #version 300 es
+        precision highp float;
         layout(location=0) in vec3 aPosition;
+        layout(location=1) in vec2 aGameXY;
         uniform mat4 uMvp;
+        out highp vec3 vWorldPos;
+        out highp vec2 vGameXY;
         void main() {
+            vWorldPos = aPosition;
+            vGameXY = aGameXY;
             gl_Position = uMvp * vec4(aPosition, 1.0);
         }
     )";
+
     static const char* fs = R"(
         #version 300 es
-        precision mediump float;
-        uniform vec3 uColor;
+        precision highp float;
+
+        in highp vec3 vWorldPos;
+        in highp vec2 vGameXY;
+
+        uniform mat4 uMvp;
+        uniform sampler2D uNoise;
+        uniform sampler2D uSceneColor;
+        uniform sampler2D uSceneDepth;
+        uniform float uSceneSnapshotReady;
+        uniform vec2 uViewport;
+        uniform vec3 uEyePosition;
+        uniform vec3 uSunDirection;
+        uniform vec3 uSunColor;
+        uniform vec3 uSceneFogColor;
+        uniform vec2 uSceneFogNearFar;
+        uniform float uSceneFogPower;
+        uniform vec2 uClipNearFar;
+        uniform float uUnitsPerMetre;
+        uniform float uTime;
+
+        uniform vec3 uShallow;
+        uniform vec3 uDeep;
+        uniform vec3 uReflection;
+        uniform float uNormalUvScale;
+        uniform float uFresnel;
+        uniform float uShininess;
+        uniform vec2 uDepthFalloff;
+        uniform vec2 uWaterFogNearFar;
+        uniform float uWaterFogAmount;
+        uniform float uDistortion;
+        uniform float uNoiseScale;
+        uniform vec3 uLayerUvScale;
+        uniform vec3 uLayerWindDir;
+        uniform vec3 uLayerWindSpeed;
+        uniform vec3 uLayerAmp;
+
         out vec4 fragColor;
+
+        const float PI = 3.14159265358979323846;
+
+        vec3 SceneToGame(vec3 v) {
+            // Fallout game axes -> Quest scene axes are (x,z,-y).
+            return vec3(v.x, -v.z, v.y);
+        }
+
+        vec2 LayerScroll(float degrees, float speed) {
+            float radians = degrees * (PI / 180.0);
+            return fract(vec2(sin(radians), cos(radians)) * (speed * uTime));
+        }
+
+        float NoiseHeight(vec2 tileUv) {
+            // Recovered ISNOISESCROLLANDBLEND.pso:
+            // layer 0 samples B, layer 1 G, layer 2 R; each unpacks to
+            // [-1,1], receives its authored amplitude, then the sum is packed.
+            vec3 scale = max(vec3(1.0), ceil(uLayerUvScale * 0.01));
+            vec2 uv0 = tileUv * scale.x +
+                LayerScroll(uLayerWindDir.x, uLayerWindSpeed.x);
+            vec2 uv1 = tileUv * scale.y +
+                LayerScroll(uLayerWindDir.y, uLayerWindSpeed.y);
+            vec2 uv2 = tileUv * scale.z +
+                LayerScroll(uLayerWindDir.z, uLayerWindSpeed.z);
+            float l0 = textureLod(uNoise, uv0, 0.0).b * 2.0 - 1.0;
+            float l1 = textureLod(uNoise, uv1, 0.0).g * 2.0 - 1.0;
+            float l2 = textureLod(uNoise, uv2, 0.0).r * 2.0 - 1.0;
+            return (dot(vec3(l0, l1, l2), uLayerAmp) * 0.5) + 0.5;
+        }
+
+        vec3 RecoveredNoiseNormal(vec2 tileUv) {
+            // Recovered ISNOISENORMALMAP.pso: literal one-texel 256x256
+            // Sobel stencil, multiplied by DNAM NoiseScale, z=1, normalize.
+            const float d = 1.0 / 256.0;
+            float w  = abs(NoiseHeight(tileUv + vec2(-d,  0.0)));
+            float e  = abs(NoiseHeight(tileUv + vec2( d,  0.0)));
+            float n  = abs(NoiseHeight(tileUv + vec2(0.0,  d)));
+            float s  = abs(NoiseHeight(tileUv + vec2(0.0, -d)));
+            float nw = abs(NoiseHeight(tileUv + vec2(-d,  d)));
+            float ne = abs(NoiseHeight(tileUv + vec2( d,  d)));
+            float sw = abs(NoiseHeight(tileUv + vec2(-d, -d)));
+            float se = abs(NoiseHeight(tileUv + vec2( d, -d)));
+            return normalize(vec3(
+                (2.0*w + nw + sw - 2.0*e - ne - se) * uNoiseScale,
+                (2.0*n + nw + ne - 2.0*s - sw - se) * uNoiseScale,
+                1.0));
+        }
+
+        float LinearDepth(float depth01) {
+            float n = uClipNearFar.x;
+            float f = uClipNearFar.y;
+            return (n * f) / max(f - depth01 * (f - n), 1.0e-6);
+        }
+
+        float SceneFogAmount(float distanceMetres) {
+            if (uSceneFogNearFar.y <= uSceneFogNearFar.x + 0.001) return 0.0;
+            float q = clamp(
+                (distanceMetres - uSceneFogNearFar.x) /
+                (uSceneFogNearFar.y - uSceneFogNearFar.x), 0.0, 1.0);
+            return pow(q, max(uSceneFogPower, 0.01));
+        }
+
         void main() {
-            // Q20.7A is placement/data proof only. Use the authored WATR
-            // shallow colour without inventing Fallout's WATER017 blending.
-            fragColor = vec4(uColor, 1.0);
+            vec3 eyeScene = uEyePosition - vWorldPos;
+            float eyeDistanceMetres = length(eyeScene);
+            vec3 Vscene = normalize(eyeScene);
+            vec3 Vgame = normalize(SceneToGame(eyeScene));
+            vec3 sunGame = normalize(SceneToGame(uSunDirection));
+
+            float horizontalDistanceGame =
+                length(vec2(eyeScene.x, eyeScene.z)) * uUnitsPerMetre;
+            float noiseFade =
+                clamp((8192.0 - horizontalDistanceGame) / 4096.0, 0.0, 1.0);
+
+            vec2 screenUv = gl_FragCoord.xy / max(uViewport, vec2(1.0));
+            bool haveScene = uSceneSnapshotReady > 0.5;
+
+            float depthT = 1.0;
+            vec2 rawDepth = vec2(1.0);
+            vec2 correctedDepth = vec2(1.0);
+            vec3 scenePoint = vWorldPos;
+
+            if (haveScene) {
+                float sceneDepth01 = texture(uSceneDepth, screenUv).r;
+                float sceneDistance = LinearDepth(sceneDepth01);
+                float waterDistance = LinearDepth(gl_FragCoord.z);
+                bool validDepth =
+                    sceneDepth01 > 0.0 && sceneDepth01 <= 1.0 &&
+                    sceneDistance > waterDistance + 1.0e-5 &&
+                    waterDistance > 1.0e-5;
+
+                if (validDepth) {
+                    float rayScale = sceneDistance / waterDistance;
+                    scenePoint = uEyePosition +
+                        (vWorldPos - uEyePosition) * rayScale;
+                    float fogFarGame = max(uWaterFogNearFar.y, 1.0);
+                    float slantGame =
+                        length(scenePoint - vWorldPos) * uUnitsPerMetre;
+                    float verticalGame =
+                        max(vWorldPos.y - scenePoint.y, 0.0) * uUnitsPerMetre;
+                    rawDepth = vec2(slantGame, verticalGame) / fogFarGame;
+                    correctedDepth = clamp(
+                        mix(vec2(1.0), rawDepth, noiseFade), 0.0, 1.0);
+                    float span = uDepthFalloff.y - uDepthFalloff.x;
+                    if (span > 1.0e-6) {
+                        depthT = clamp(
+                            (rawDepth.y - uDepthFalloff.x) / span,
+                            0.0, 1.0);
+                    }
+                } else {
+                    haveScene = false;
+                }
+            }
+
+            // WATER001/WATER000 vertex shader supplies worldXY / TexScale.
+            vec2 waterUv = vGameXY / max(uNormalUvScale, 1.0);
+            vec3 preNormalGame = RecoveredNoiseNormal(waterUv);
+
+            // WATER001 pixel path: sampled normal * shoreline depth, add
+            // (0,0,1), distance-fade XY, normalize.
+            vec3 normalGame = preNormalGame * depthT;
+            normalGame.z += 1.0;
+            normalGame.xy *= noiseFade;
+            normalGame = normalize(normalGame);
+
+            vec3 normalScene = normalize(vec3(
+                normalGame.x, normalGame.z, -normalGame.y));
+
+            vec3 body = mix(uShallow, uDeep, correctedDepth.y);
+            vec3 bodyLightDir =
+                normalize(vec3(sunGame.x, 4.0 * sunGame.y, sunGame.z));
+            body *= clamp(dot(normalGame, bodyLightDir), 0.0, 1.0);
+
+            float ndotv = clamp(dot(normalGame, Vgame), 0.0, 1.0);
+            float oneMinus = 1.0 - ndotv;
+            float fresnel5 = oneMinus * oneMinus;
+            fresnel5 *= fresnel5 * oneMinus;
+            float fresnel = clamp(
+                uFresnel + (1.0 - uFresnel) * fresnel5, 0.0, 1.0);
+            float fresneled = clamp(fresnel * correctedDepth.x, 0.0, 1.0);
+
+            vec3 reflectedGame = reflect(-Vgame, normalGame);
+            float sunSpec = pow(
+                clamp(dot(reflectedGame, sunGame), 0.0, 1.0),
+                max(uShininess, 1.0));
+            float skyGlint = pow(
+                clamp(dot(normalGame.xz,
+                          normalize(vec2(-0.57, 0.82))), 0.0, 1.0),
+                100.0);
+            vec3 specular = (sunSpec + skyGlint) * uSunColor;
+
+            if (!haveScene) {
+                // Exact WATER003-style source-backed fallback when the Quest
+                // opaque-scene snapshot is unavailable: no invented refraction.
+                vec3 fallback = mix(body, uReflection, fresneled) + specular;
+                float sceneFog = SceneFogAmount(eyeDistanceMetres);
+                fallback = mix(fallback, uSceneFogColor, sceneFog);
+                fragColor = vec4(max(fallback, vec3(0.0)), 1.0);
+                return;
+            }
+
+            // WATER001 recovered refraction displacement. DistortionAmount and
+            // reconstructed vertical column are in Fallout game-unit domain.
+            float distanceRamp =
+                clamp(horizontalDistanceGame / 5000.0, 0.0, 1.0);
+            float distortionScale = mix(4.0, uDistortion, distanceRamp);
+            vec2 deltaGame =
+                rawDepth.y * depthT * distortionScale * normalGame.xy;
+            vec3 displacedScene = vWorldPos + vec3(
+                deltaGame.x / uUnitsPerMetre,
+                0.0,
+                -deltaGame.y / uUnitsPerMetre);
+
+            vec4 displacedClip = uMvp * vec4(displacedScene, 1.0);
+            vec2 refractionUv = screenUv;
+            if (displacedClip.w > 1.0e-5) {
+                vec2 displacedNdc = displacedClip.xy / displacedClip.w;
+                vec2 candidate = displacedNdc * 0.5 + 0.5;
+                if (all(greaterThanEqual(candidate, vec2(0.0))) &&
+                    all(lessThanEqual(candidate, vec2(1.0)))) {
+                    // The Quest snapshot contains the whole opaque scene, while
+                    // retail's RefractionMap was selectively populated. Reject
+                    // a displaced tap if it lands on foreground geometry.
+                    float tapDepth = texture(uSceneDepth, candidate).r;
+                    float tapDistance = LinearDepth(tapDepth);
+                    float displacedWaterDistance =
+                        LinearDepth(clamp(
+                            displacedClip.z / displacedClip.w * 0.5 + 0.5,
+                            0.0, 1.0));
+                    if (tapDistance > displacedWaterDistance) {
+                        refractionUv = candidate;
+                    }
+                }
+            }
+
+            vec3 refraction = texture(uSceneColor, refractionUv).rgb;
+
+            // Retail WATER001 de-fogs the RefractionMap, performs the water
+            // optical composite, then reapplies ordinary scene fog.
+            float refractedDistance = length(scenePoint - uEyePosition);
+            float displacedFog = SceneFogAmount(refractedDistance);
+            vec3 refracted = (refraction -
+                displacedFog * uSceneFogColor) /
+                max(1.0 - displacedFog, 1.0e-4);
+
+            float waterFogRange =
+                max(uWaterFogNearFar.y - uWaterFogNearFar.x, 1.0e-3);
+            float aboveWaterFog =
+                (1.0 - clamp(
+                    uWaterFogNearFar.y * (1.0 - correctedDepth.x) /
+                    waterFogRange, 0.0, 1.0)) *
+                clamp(uWaterFogAmount, 0.0, 1.0);
+
+            vec3 transmitted = mix(
+                refracted, body,
+                clamp(depthT * aboveWaterFog, 0.0, 1.0));
+
+            // WATER001 has no ReflectionMap sampler: it uses the authored
+            // ReflectionColor constant. WATER000 will replace this lane with
+            // the planar reflection RT in the next stage.
+            vec3 bodyReflection =
+                mix(body, uReflection, fresneled);
+            vec3 color =
+                mix(transmitted, bodyReflection, correctedDepth.y);
+            color += specular;
+
+            float finalFog = SceneFogAmount(eyeDistanceMetres);
+            color = mix(color, uSceneFogColor, finalFog);
+            fragColor = vec4(max(color, vec3(0.0)), 1.0);
         }
     )";
 
@@ -457,24 +798,60 @@ bool EnsureRenderer() {
     if (linked != GL_TRUE) {
         char log[1024]{};
         glGetProgramInfoLog(gProgram, sizeof(log), nullptr, log);
-        WLOGE("Q20.7A WATER program link failed: %s", log);
+        WLOGE("Q20.8A WATER program link failed: %s", log);
         glDeleteProgram(gProgram);
         gProgram = 0u;
         return false;
     }
 
     gMvpLocation = glGetUniformLocation(gProgram, "uMvp");
-    gColorLocation = glGetUniformLocation(gProgram, "uColor");
+    gNoiseLocation = glGetUniformLocation(gProgram, "uNoise");
+    gSceneColorLocation = glGetUniformLocation(gProgram, "uSceneColor");
+    gSceneDepthLocation = glGetUniformLocation(gProgram, "uSceneDepth");
+    gSceneSnapshotReadyLocation = glGetUniformLocation(gProgram, "uSceneSnapshotReady");
+    gViewportLocation = glGetUniformLocation(gProgram, "uViewport");
+    gEyePositionLocation = glGetUniformLocation(gProgram, "uEyePosition");
+    gSunDirectionLocation = glGetUniformLocation(gProgram, "uSunDirection");
+    gSunColorLocation = glGetUniformLocation(gProgram, "uSunColor");
+    gSceneFogColorLocation = glGetUniformLocation(gProgram, "uSceneFogColor");
+    gSceneFogNearFarLocation = glGetUniformLocation(gProgram, "uSceneFogNearFar");
+    gSceneFogPowerLocation = glGetUniformLocation(gProgram, "uSceneFogPower");
+    gClipNearFarLocation = glGetUniformLocation(gProgram, "uClipNearFar");
+    gUnitsPerMetreLocation = glGetUniformLocation(gProgram, "uUnitsPerMetre");
+    gTimeLocation = glGetUniformLocation(gProgram, "uTime");
+    gShallowLocation = glGetUniformLocation(gProgram, "uShallow");
+    gDeepLocation = glGetUniformLocation(gProgram, "uDeep");
+    gReflectionLocation = glGetUniformLocation(gProgram, "uReflection");
+    gNormalUvScaleLocation = glGetUniformLocation(gProgram, "uNormalUvScale");
+    gFresnelLocation = glGetUniformLocation(gProgram, "uFresnel");
+    gShininessLocation = glGetUniformLocation(gProgram, "uShininess");
+    gDepthFalloffLocation = glGetUniformLocation(gProgram, "uDepthFalloff");
+    gWaterFogNearFarLocation = glGetUniformLocation(gProgram, "uWaterFogNearFar");
+    gWaterFogAmountLocation = glGetUniformLocation(gProgram, "uWaterFogAmount");
+    gDistortionLocation = glGetUniformLocation(gProgram, "uDistortion");
+    gNoiseScaleLocation = glGetUniformLocation(gProgram, "uNoiseScale");
+    gLayerUvScaleLocation = glGetUniformLocation(gProgram, "uLayerUvScale");
+    gLayerWindDirLocation = glGetUniformLocation(gProgram, "uLayerWindDir");
+    gLayerWindSpeedLocation = glGetUniformLocation(gProgram, "uLayerWindSpeed");
+    gLayerAmpLocation = glGetUniformLocation(gProgram, "uLayerAmp");
+
     glGenVertexArrays(1, &gVao);
     glGenBuffers(1, &gVbo);
     glBindVertexArray(gVao);
     glBindBuffer(GL_ARRAY_BUFFER, gVbo);
-    glBufferData(GL_ARRAY_BUFFER, 18u * sizeof(float), nullptr, GL_DYNAMIC_DRAW);
+    glBufferData(GL_ARRAY_BUFFER, 30u * sizeof(float), nullptr, GL_DYNAMIC_DRAW);
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE,
-                          3 * sizeof(float), nullptr);
+                          5 * sizeof(float), nullptr);
     glEnableVertexAttribArray(0);
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE,
+                          5 * sizeof(float),
+                          reinterpret_cast<const void*>(3 * sizeof(float)));
+    glEnableVertexAttribArray(1);
     glBindVertexArray(0);
-    return gMvpLocation >= 0 && gColorLocation >= 0;
+
+    WLOGI("Q20.8A WATER PROGRAM READY: pixelPath=SP17-WATER001 samplers=RefractionMap+NoiseMap+DepthMap reflection=authored-ReflectionColor noisePrepass=INLINE-ISNOISESCROLLANDBLEND+ISNOISENORMALMAP displacement=deferred-WATER017");
+    return gMvpLocation >= 0 && gNoiseLocation >= 0 &&
+           gSceneSnapshotReadyLocation >= 0;
 }
 
 } // namespace
