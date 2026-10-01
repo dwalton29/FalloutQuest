@@ -5481,12 +5481,35 @@ void RenderScene() {
     RenderFo3CollisionOverlay(mvp);
 
     if (gExteriorStreamingActiveQ1890 && gExteriorWorldspaceQ1890 != 0u) {
-        // Q20.8A Quest bridge for the retail WATER001 RefractionMap + DepthMap.
-        // The world is currently rendering into Q20.6's multisampled HDR FBO.
-        // Resolve the opaque scene after LAND, then restore the multisampled
-        // draw FBO so water can sample the resolved colour/depth without an
-        // attachment feedback loop. If MSAA is unavailable, WATER001 falls
-        // back to the genuine RT-free WATER003 optical lanes.
+        // Q20.9 WATER000: first render the current eye's mirrored world into
+        // FalloutPrefs' 1024x1024 ReflectionMap, then resolve the already-drawn
+        // main scene for WATER001's RefractionMap + DepthMap inputs.
+        float q2090PlaneY = 0.0f;
+        float q2090HeightGame = 0.0f;
+        uint32_t q2090PlaneCell = 0u;
+        uint32_t q2090PlaneType = 0u;
+        const bool q2090HavePlane = GetFo3DominantWaterPlaneQ2070(
+            gFo3EyePositionQ1010[0], gFo3EyePositionQ1010[2],
+            gExteriorOriginXQ1890, gExteriorOriginYQ1890,
+            gExteriorOriginZQ1890, FLOOR_Y, SCENE_FORWARD,
+            FO3_UNITS_PER_METRE,
+            &q2090PlaneY, &q2090HeightGame,
+            &q2090PlaneCell, &q2090PlaneType);
+
+        float q2090ReflectionMvp[16]{};
+        const bool q2090ReflectionReady =
+            q2090HavePlane &&
+            Q2090RenderWaterReflection(mvp, q2090PlaneY, q2090ReflectionMvp);
+
+        static uint32_t q2090LastPlaneCellLogged = 0u;
+        if (q2090HavePlane && q2090PlaneCell != q2090LastPlaneCellLogged) {
+            q2090LastPlaneCellLogged = q2090PlaneCell;
+            Q6H_LOGI("Q20.9 WATER MIRROR PLANE: worldspace=%08X cell=%08X WATR=%08X heightGame=%.3f planeSceneY=%.5f reflectionReady=%d selector=eye-containing-cell-else-nearest",
+                     gExteriorWorldspaceQ1890, q2090PlaneCell, q2090PlaneType,
+                     q2090HeightGame, q2090PlaneY,
+                     q2090ReflectionReady ? 1 : 0);
+        }
+
         const bool q2080SceneSnapshotReady =
             q2060MsaaActive && q2060MsaaSamples > 1 &&
             q2060MsaaFbo != 0u && q1280PostFbo != 0u &&
@@ -5533,7 +5556,10 @@ void RenderScene() {
             q1532StaticFogFar,
             GetFo3FogPowerQ1410(),
             q2080NearClipMetres,
-            q2080FarClipMetres);
+            q2080FarClipMetres,
+            q2090ReflectionReady ? gWaterReflectionColorQ2090 : 0u,
+            q2090ReflectionReady,
+            q2090ReflectionReady ? q2090ReflectionMvp : nullptr);
     }
 
     glActiveTexture(GL_TEXTURE5);
