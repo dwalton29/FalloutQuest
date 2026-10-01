@@ -992,6 +992,56 @@ const std::vector<Fo3WaterCellQ2070>& GetFo3WaterCellsQ2070() {
     return gWaterCells;
 }
 
+bool GetFo3DominantWaterPlaneQ2070(float eyeSceneX, float eyeSceneZ,
+                                   float originGameX, float originGameY,
+                                   float originGameZ, float floorY,
+                                   float sceneForward, float unitsPerMetre,
+                                   float* outPlaneSceneY,
+                                   float* outHeightGame,
+                                   uint32_t* outCellFormId,
+                                   uint32_t* outWaterTypeFormId) {
+    if (gWaterCells.empty() || unitsPerMetre <= 0.0f) return false;
+
+    const float eyeGameX = originGameX + eyeSceneX * unitsPerMetre;
+    const float eyeGameY =
+        originGameY - (eyeSceneZ - sceneForward) * unitsPerMetre;
+
+    const Fo3WaterCellQ2070* best = nullptr;
+    float bestDistance2 = 1.0e30f;
+    bool bestContainsEye = false;
+    for (const Fo3WaterCellQ2070& cell : gWaterCells) {
+        const float minX = static_cast<float>(cell.gridX) * CELL_SIZE;
+        const float maxX = minX + CELL_SIZE;
+        const float minY = static_cast<float>(cell.gridY) * CELL_SIZE;
+        const float maxY = minY + CELL_SIZE;
+        const bool contains =
+            eyeGameX >= minX && eyeGameX < maxX &&
+            eyeGameY >= minY && eyeGameY < maxY;
+        const float cx = minX + CELL_SIZE * 0.5f;
+        const float cy = minY + CELL_SIZE * 0.5f;
+        const float dx = eyeGameX - cx;
+        const float dy = eyeGameY - cy;
+        const float distance2 = dx * dx + dy * dy;
+
+        if (!best || (contains && !bestContainsEye) ||
+            (contains == bestContainsEye && distance2 < bestDistance2)) {
+            best = &cell;
+            bestDistance2 = distance2;
+            bestContainsEye = contains;
+        }
+    }
+    if (!best) return false;
+
+    if (outPlaneSceneY) {
+        *outPlaneSceneY = floorY +
+            (best->waterHeightGame - originGameZ) / unitsPerMetre;
+    }
+    if (outHeightGame) *outHeightGame = best->waterHeightGame;
+    if (outCellFormId) *outCellFormId = best->cellFormId;
+    if (outWaterTypeFormId) *outWaterTypeFormId = best->waterTypeFormId;
+    return true;
+}
+
 void RenderFo3WaterSurfaceQ2070(const float* mvp16,
                                 float originGameX,
                                 float originGameY,
@@ -1012,7 +1062,10 @@ void RenderFo3WaterSurfaceQ2070(const float* mvp16,
                                 float sceneFogFarMetres,
                                 float sceneFogPower,
                                 float nearClipMetres,
-                                float farClipMetres) {
+                                float farClipMetres,
+                                uint32_t reflectionTexture,
+                                bool reflectionReady,
+                                const float reflectionMvp16[16]) {
     if (!mvp16 || gWaterCells.empty() || unitsPerMetre <= 0.0f) return;
     if (!EnsureRenderer()) return;
 
@@ -1026,6 +1079,7 @@ void RenderFo3WaterSurfaceQ2070(const float* mvp16,
     GLint previousTexture0 = 0;
     GLint previousTexture1 = 0;
     GLint previousTexture2 = 0;
+    GLint previousTexture3 = 0;
     glGetIntegerv(GL_CURRENT_PROGRAM, &previousProgram);
     glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &previousVao);
     glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &previousArrayBuffer);
@@ -1036,6 +1090,8 @@ void RenderFo3WaterSurfaceQ2070(const float* mvp16,
     glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousTexture1);
     glActiveTexture(GL_TEXTURE2);
     glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousTexture2);
+    glActiveTexture(GL_TEXTURE3);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousTexture3);
 
     const GLboolean depthWasEnabled = glIsEnabled(GL_DEPTH_TEST);
     const GLboolean blendWasEnabled = glIsEnabled(GL_BLEND);
@@ -1054,6 +1110,14 @@ void RenderFo3WaterSurfaceQ2070(const float* mvp16,
     glUniform1i(gNoiseLocation, 0);
     glUniform1i(gSceneColorLocation, 1);
     glUniform1i(gSceneDepthLocation, 2);
+    if (gReflectionMapLocation >= 0) glUniform1i(gReflectionMapLocation, 3);
+    if (gReflectionReadyLocation >= 0) {
+        glUniform1f(gReflectionReadyLocation,
+                    reflectionReady && reflectionTexture && reflectionMvp16 ? 1.0f : 0.0f);
+    }
+    if (gReflectionMvpLocation >= 0 && reflectionMvp16) {
+        glUniformMatrix4fv(gReflectionMvpLocation, 1, GL_FALSE, reflectionMvp16);
+    }
     glUniform1f(gSceneSnapshotReadyLocation,
                 sceneSnapshotReady && sceneColorTexture && sceneDepthTexture ? 1.0f : 0.0f);
     glUniform2f(gViewportLocation,
@@ -1082,6 +1146,9 @@ void RenderFo3WaterSurfaceQ2070(const float* mvp16,
     glActiveTexture(GL_TEXTURE2);
     glBindTexture(GL_TEXTURE_2D,
                   sceneSnapshotReady ? static_cast<GLuint>(sceneDepthTexture) : 0u);
+    glActiveTexture(GL_TEXTURE3);
+    glBindTexture(GL_TEXTURE_2D,
+                  reflectionReady ? static_cast<GLuint>(reflectionTexture) : 0u);
 
     glBindVertexArray(gVao);
     glBindBuffer(GL_ARRAY_BUFFER, gVbo);
@@ -1122,6 +1189,15 @@ void RenderFo3WaterSurfaceQ2070(const float* mvp16,
         glUniform3fv(gShallowLocation, 1, w.shallowColor);
         glUniform3fv(gDeepLocation, 1, w.deepColor);
         glUniform3fv(gReflectionLocation, 1, w.reflectionColor);
+        if (gReflectivityLocation >= 0) {
+            glUniform1f(gReflectivityLocation,
+                        std::clamp(w.reflectivity, 0.0f, 1.0f));
+        }
+        if (gReflectionHdrLocation >= 0) {
+            // TESWaterSystem uploads max(DNAM ReflectionHDRMult * 0.1, 1).
+            glUniform1f(gReflectionHdrLocation,
+                        std::max(w.reflectionHdrMultiplier * 0.1f, 1.0f));
+        }
         glUniform1f(gNormalUvScaleLocation,
                     std::max(w.normalUvScale, 1.0f));
         glUniform1f(gFresnelLocation,
@@ -1157,9 +1233,11 @@ void RenderFo3WaterSurfaceQ2070(const float* mvp16,
 
     if (!gRenderLogged) {
         gRenderLogged = true;
-        WLOGI("Q20.8A WATER001 DRAW: worldspace=%08X cells=%zu draws=%zu snapshotReady=%d scene=%dx%d noiseReal=%d depthTest=LEQUAL depthWrite=0 blend=OPAQUE_RGB refraction=OPAQUE_SCENE_RESOLVE depth=SCENE_DEPTH_RECONSTRUCTION fresnel=SP17 shallowDeep=SP17 waterFog=SP17 reflection=AUTHORED_CONSTANT displacement=DEFERRED_WATER017 vrAdaptation=legacy-RefractionMap+DepthMap-from-resolved-Quest-scene",
+        WLOGI("Q20.9 WATER000 DRAW: worldspace=%08X cells=%zu draws=%zu snapshotReady=%d reflectionReady=%d scene=%dx%d noiseReal=%d depthTest=LEQUAL depthWrite=0 blend=OPAQUE_RGB refraction=OPAQUE_SCENE_RESOLVE depth=SCENE_DEPTH_RECONSTRUCTION fresnel=SP17 shallowDeep=SP17 waterFog=SP17 reflection=PLANAR_SCENE_RT+WATR_LERP reflectionSize=1024x1024 displacement=DEFERRED_WATER017",
               gWorldspace, gWaterCells.size(), draws,
-              sceneSnapshotReady ? 1 : 0, sceneWidth, sceneHeight,
+              sceneSnapshotReady ? 1 : 0,
+              reflectionReady ? 1 : 0,
+              sceneWidth, sceneHeight,
               gNoiseTextureReal ? 1 : 0);
     }
 
@@ -1169,6 +1247,8 @@ void RenderFo3WaterSurfaceQ2070(const float* mvp16,
     if (blendWasEnabled) glEnable(GL_BLEND); else glDisable(GL_BLEND);
     if (cullWasEnabled) glEnable(GL_CULL_FACE); else glDisable(GL_CULL_FACE);
 
+    glActiveTexture(GL_TEXTURE3);
+    glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture3));
     glActiveTexture(GL_TEXTURE2);
     glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture2));
     glActiveTexture(GL_TEXTURE1);
