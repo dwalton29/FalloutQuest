@@ -1,5 +1,6 @@
 #include "fo3-water-q2070.h"
 #include "fo3-texture-bsa.h"
+#include "fo3-terrain-q76.h"
 
 #include <GLES3/gl3.h>
 #include <android/log.h>
@@ -126,6 +127,68 @@ float ReadLeFloat(const uint8_t* p) {
     float value = 0.0f;
     std::memcpy(&value, &bits, sizeof(value));
     return value;
+}
+
+const Fo3TerrainCellQ76* FindMatchingLandQ209B(const Fo3WaterCellQ2070& water) {
+    if (const Fo3TerrainCellQ76* streamed =
+            FindFo3TerrainGroundCellQ2000(water.gridX, water.gridY)) {
+        return streamed;
+    }
+    const auto& terrain = GetFo3TerrainQ76();
+    for (const Fo3TerrainCellQ76& land : terrain) {
+        if (land.gridX == water.gridX && land.gridY == water.gridY) {
+            return &land;
+        }
+    }
+    return nullptr;
+}
+
+bool IsWaterCellExposedQ209B(const Fo3WaterCellQ2070& water,
+                             float* outMinLand = nullptr) {
+    const Fo3TerrainCellQ76* land = FindMatchingLandQ209B(water);
+    if (!land || land->heights.empty()) {
+        // Preserve authored water when LAND is genuinely absent. The runtime
+        // clip/depth path will still reject occluded fragments.
+        if (outMinLand) *outMinLand = water.waterHeightGame - 1.0f;
+        return true;
+    }
+    const float minLand =
+        *std::min_element(land->heights.begin(), land->heights.end());
+    if (outMinLand) *outMinLand = minLand;
+    return minLand < water.waterHeightGame;
+}
+
+void TransformClipQ209B(const float* m, float x, float y, float z,
+                        float out[4]) {
+    out[0] = m[0]*x + m[4]*y + m[8]*z + m[12];
+    out[1] = m[1]*x + m[5]*y + m[9]*z + m[13];
+    out[2] = m[2]*x + m[6]*y + m[10]*z + m[14];
+    out[3] = m[3]*x + m[7]*y + m[11]*z + m[15];
+}
+
+bool QuadIntersectsClipQ209B(const float clip[4][4]) {
+    // Conservative homogeneous frustum rejection. Only reject if all four
+    // corners are outside the same clip plane.
+    const auto allOutside = [&](int axis, float sign) {
+        for (int i = 0; i < 4; ++i) {
+            const float v = clip[i][axis] * sign;
+            if (v <= clip[i][3]) return false;
+        }
+        return true;
+    };
+    if (allOutside(0,  1.0f) || allOutside(0, -1.0f) ||
+        allOutside(1,  1.0f) || allOutside(1, -1.0f) ||
+        allOutside(2,  1.0f) || allOutside(2, -1.0f)) {
+        return false;
+    }
+    bool anyInFront = false;
+    for (int i = 0; i < 4; ++i) {
+        if (clip[i][3] > 1.0e-5f) {
+            anyInFront = true;
+            break;
+        }
+    }
+    return anyInFront;
 }
 
 bool ReadExact(FILE* file, void* dst, size_t size) {
