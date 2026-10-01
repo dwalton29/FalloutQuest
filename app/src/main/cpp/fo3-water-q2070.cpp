@@ -62,6 +62,11 @@ GLint gMvpLocation = -1;
 GLint gNoiseLocation = -1;
 GLint gSceneColorLocation = -1;
 GLint gSceneDepthLocation = -1;
+GLint gReflectionMapLocation = -1;
+GLint gReflectionReadyLocation = -1;
+GLint gReflectionMvpLocation = -1;
+GLint gReflectivityLocation = -1;
+GLint gReflectionHdrLocation = -1;
 GLint gSceneSnapshotReadyLocation = -1;
 GLint gViewportLocation = -1;
 GLint gEyePositionLocation = -1;
@@ -347,8 +352,11 @@ bool CollectWaterCells(uint32_t worldspaceFormId,
                 } else if (std::memcmp(type, "XCLW", 4u) == 0 &&
                            subSize >= 4u) {
                     cell.waterHeight = ReadLeFloat(bytes);
+                    // CELL XCLW uses INT32_MIN-as-float (-2147483648) as
+                    // the no-water sentinel in the shipped master.
                     cell.hasWaterHeight =
                         std::isfinite(cell.waterHeight) &&
+                        cell.waterHeight > -2.0e9f &&
                         std::fabs(cell.waterHeight) < 1.0e30f;
                 } else if (std::memcmp(type, "XCWT", 4u) == 0 &&
                            subSize >= 4u) {
@@ -517,6 +525,11 @@ bool EnsureRenderer() {
         uniform sampler2D uNoise;
         uniform sampler2D uSceneColor;
         uniform sampler2D uSceneDepth;
+        uniform sampler2D uReflectionMap;
+        uniform float uReflectionReady;
+        uniform mat4 uReflectionMvp;
+        uniform float uReflectivity;
+        uniform float uReflectionHdr;
         uniform float uSceneSnapshotReady;
         uniform vec2 uViewport;
         uniform vec3 uEyePosition;
@@ -763,11 +776,32 @@ bool EnsureRenderer() {
                 refracted, body,
                 clamp(depthT * aboveWaterFog, 0.0, 1.0));
 
-            // WATER001 has no ReflectionMap sampler: it uses the authored
-            // ReflectionColor constant. WATER000 will replace this lane with
-            // the planar reflection RT in the next stage.
+            // SP17 WATER000: project the same normal-displaced surface point
+            // into the planar ReflectionMap. VarAmounts.y is WATR
+            // ReflectivityAmount and is a LERP weight from the authored
+            // ReflectionColor toward the RT; FresnelRI.w is the engine-scaled
+            // ReflectionHDRMult lane.
+            vec3 reflectionTerm = uReflection;
+            if (uReflectionReady > 0.5) {
+                vec4 reflectionClip =
+                    uReflectionMvp * vec4(displacedScene, 1.0);
+                if (reflectionClip.w > 1.0e-5) {
+                    vec2 reflectionUv =
+                        reflectionClip.xy / reflectionClip.w * 0.5 + 0.5;
+                    if (all(greaterThanEqual(reflectionUv, vec2(0.0))) &&
+                        all(lessThanEqual(reflectionUv, vec2(1.0)))) {
+                        vec3 reflectionRt =
+                            texture(uReflectionMap, reflectionUv).rgb;
+                        reflectionTerm = mix(
+                            uReflection, reflectionRt,
+                            clamp(uReflectivity, 0.0, 1.0));
+                    }
+                }
+            }
+            reflectionTerm *= max(uReflectionHdr, 1.0);
+
             vec3 bodyReflection =
-                mix(body, uReflection, fresneled);
+                mix(body, reflectionTerm, fresneled);
             vec3 color =
                 mix(transmitted, bodyReflection, correctedDepth.y);
             color += specular;
@@ -808,6 +842,11 @@ bool EnsureRenderer() {
     gNoiseLocation = glGetUniformLocation(gProgram, "uNoise");
     gSceneColorLocation = glGetUniformLocation(gProgram, "uSceneColor");
     gSceneDepthLocation = glGetUniformLocation(gProgram, "uSceneDepth");
+    gReflectionMapLocation = glGetUniformLocation(gProgram, "uReflectionMap");
+    gReflectionReadyLocation = glGetUniformLocation(gProgram, "uReflectionReady");
+    gReflectionMvpLocation = glGetUniformLocation(gProgram, "uReflectionMvp");
+    gReflectivityLocation = glGetUniformLocation(gProgram, "uReflectivity");
+    gReflectionHdrLocation = glGetUniformLocation(gProgram, "uReflectionHdr");
     gSceneSnapshotReadyLocation = glGetUniformLocation(gProgram, "uSceneSnapshotReady");
     gViewportLocation = glGetUniformLocation(gProgram, "uViewport");
     gEyePositionLocation = glGetUniformLocation(gProgram, "uEyePosition");
@@ -849,7 +888,7 @@ bool EnsureRenderer() {
     glEnableVertexAttribArray(1);
     glBindVertexArray(0);
 
-    WLOGI("Q20.8A WATER PROGRAM READY: pixelPath=SP17-WATER001 samplers=RefractionMap+NoiseMap+DepthMap reflection=authored-ReflectionColor noisePrepass=INLINE-ISNOISESCROLLANDBLEND+ISNOISENORMALMAP displacement=deferred-WATER017");
+    WLOGI("Q20.9 WATER PROGRAM READY: pixelPath=SP17-WATER000 samplers=ReflectionMap+RefractionMap+NoiseMap+DepthMap reflection=PLANAR_SCENE_RT noisePrepass=INLINE-ISNOISESCROLLANDBLEND+ISNOISENORMALMAP displacement=deferred-WATER017");
     return gMvpLocation >= 0 && gNoiseLocation >= 0 &&
            gSceneSnapshotReadyLocation >= 0;
 }
