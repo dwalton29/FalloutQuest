@@ -1461,6 +1461,7 @@ private:
             skyView.m[13] = 0.0f;
             skyView.m[14] = 0.0f;
             const Mat4 skyMvp = Multiply(projection, skyView);
+            SetFo3WaterSkyMvpQ2090(skyMvp.m);
             RenderFo3PcSkyQ1660(skyMvp.m);
             const Mat4 viewProjection = Multiply(projection, camera);
 
