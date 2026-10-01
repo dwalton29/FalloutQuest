@@ -1,4 +1,5 @@
-#include "fo3-water-q2070.h"\nvoid SetFo3WorldspaceGridRadiusOverrideQ1950(int radius);
+#include "fo3-water-q2070.h"
+void SetFo3WorldspaceGridRadiusOverrideQ1950(int radius);
 void SetNextFo3CollisionExteriorModeQ1931(bool exterior);
 #include <array>
 #include <atomic>
@@ -4905,6 +4906,295 @@ void Q1990RenderNativeLod(bool alphaPass) {
     }
 }
 
+
+void SetFo3WaterSkyMvpQ2090(const float* skyMvp16) {
+    if (!skyMvp16) {
+        gWaterSkyMvpReadyQ2090 = false;
+        return;
+    }
+    std::memcpy(gWaterSkyMvpQ2090, skyMvp16, 16u * sizeof(float));
+    gWaterSkyMvpReadyQ2090 = true;
+}
+
+void Q2090MultiplyMatrix(const float a[16], const float b[16], float out[16]) {
+    float result[16]{};
+    for (int column = 0; column < 4; ++column) {
+        for (int row = 0; row < 4; ++row) {
+            float value = 0.0f;
+            for (int k = 0; k < 4; ++k) {
+                value += a[k * 4 + row] * b[column * 4 + k];
+            }
+            result[column * 4 + row] = value;
+        }
+    }
+    std::memcpy(out, result, sizeof(result));
+}
+
+void Q2090BuildReflectionMatrix(float planeY, float out[16]) {
+    // Column-vector OpenGL matrix for y' = 2h - y.
+    const float reflection[16]{
+        1.0f,  0.0f, 0.0f, 0.0f,
+        0.0f, -1.0f, 0.0f, 0.0f,
+        0.0f,  0.0f, 1.0f, 0.0f,
+        0.0f, 2.0f * planeY, 0.0f, 1.0f
+    };
+    std::memcpy(out, reflection, sizeof(reflection));
+}
+
+bool Q2090EnsureReflectionTarget() {
+    if (gWaterReflectionTargetReadyQ2090 &&
+        gWaterReflectionFboQ2090 && gWaterReflectionColorQ2090 &&
+        gWaterReflectionDepthQ2090) {
+        return true;
+    }
+
+    if (!gWaterReflectionFboQ2090) glGenFramebuffers(1, &gWaterReflectionFboQ2090);
+    if (!gWaterReflectionColorQ2090) glGenTextures(1, &gWaterReflectionColorQ2090);
+    if (!gWaterReflectionDepthQ2090) glGenRenderbuffers(1, &gWaterReflectionDepthQ2090);
+
+    GLint previousFbo = 0;
+    GLint previousTexture = 0;
+    GLint previousRenderbuffer = 0;
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &previousFbo);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousTexture);
+    glGetIntegerv(GL_RENDERBUFFER_BINDING, &previousRenderbuffer);
+
+    glBindTexture(GL_TEXTURE_2D, gWaterReflectionColorQ2090);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+    GLenum chosenFormat = GL_RGBA16F;
+    glTexImage2D(GL_TEXTURE_2D, 0, chosenFormat,
+                 Q2090_REFLECTION_SIZE, Q2090_REFLECTION_SIZE, 0,
+                 GL_RGBA, GL_HALF_FLOAT, nullptr);
+
+    glBindRenderbuffer(GL_RENDERBUFFER, gWaterReflectionDepthQ2090);
+    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24,
+                          Q2090_REFLECTION_SIZE, Q2090_REFLECTION_SIZE);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, gWaterReflectionFboQ2090);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                           GL_TEXTURE_2D, gWaterReflectionColorQ2090, 0);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+                              GL_RENDERBUFFER, gWaterReflectionDepthQ2090);
+
+    GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+    if (status != GL_FRAMEBUFFER_COMPLETE) {
+        chosenFormat = GL_RGBA8;
+        glBindTexture(GL_TEXTURE_2D, gWaterReflectionColorQ2090);
+        glTexImage2D(GL_TEXTURE_2D, 0, chosenFormat,
+                     Q2090_REFLECTION_SIZE, Q2090_REFLECTION_SIZE, 0,
+                     GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+        glBindFramebuffer(GL_FRAMEBUFFER, gWaterReflectionFboQ2090);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                               GL_TEXTURE_2D, gWaterReflectionColorQ2090, 0);
+        status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+    }
+
+    gWaterReflectionTargetReadyQ2090 =
+        status == GL_FRAMEBUFFER_COMPLETE;
+
+    glBindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(previousFbo));
+    glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture));
+    glBindRenderbuffer(GL_RENDERBUFFER, static_cast<GLuint>(previousRenderbuffer));
+
+    if (!gWaterReflectionTargetLoggedQ2090) {
+        gWaterReflectionTargetLoggedQ2090 = true;
+        if (gWaterReflectionTargetReadyQ2090) {
+            Q6H_LOGI("Q20.9 WATER MIRROR TARGET READY: size=1024x1024 color=%s depth=DEPTH_COMPONENT24 source=FalloutPrefs iWaterReflectWidth/Height=1024 blur=pending",
+                     chosenFormat == GL_RGBA16F ? "RGBA16F" : "RGBA8");
+        } else {
+            Q6H_LOGW("Q20.9 WATER MIRROR TARGET FAILED: size=1024x1024 status=0x%X fallback=WATER001-authored-reflection",
+                     status);
+        }
+    }
+    return gWaterReflectionTargetReadyQ2090;
+}
+
+bool Q2090RenderWaterReflection(const float mainMvp[16],
+                                float planeY,
+                                float outReflectionMvp[16]) {
+    if (!mainMvp || !outReflectionMvp ||
+        !gWaterSkyMvpReadyQ2090 ||
+        !Q2090EnsureReflectionTarget()) {
+        return false;
+    }
+
+    // Above-water WATER000 only. Underwater optics are a distinct renderer
+    // state and remain a later milestone.
+    if (gFo3EyePositionQ1010[1] <= planeY + 0.001f) return false;
+
+    float reflection[16]{};
+    Q2090BuildReflectionMatrix(planeY, reflection);
+    Q2090MultiplyMatrix(mainMvp, reflection, outReflectionMvp);
+
+    float skyFlip[16]{
+        1.0f,  0.0f, 0.0f, 0.0f,
+        0.0f, -1.0f, 0.0f, 0.0f,
+        0.0f,  0.0f, 1.0f, 0.0f,
+        0.0f,  0.0f, 0.0f, 1.0f
+    };
+    float reflectedSkyMvp[16]{};
+    Q2090MultiplyMatrix(gWaterSkyMvpQ2090, skyFlip, reflectedSkyMvp);
+
+    GLint previousFbo = 0;
+    GLint previousViewport[4]{};
+    GLint previousProgram = 0;
+    GLint previousVao = 0;
+    GLint previousDepthFunc = GL_LESS;
+    GLint previousBlendSrcRgb = GL_ONE, previousBlendDstRgb = GL_ZERO;
+    GLint previousBlendSrcAlpha = GL_ONE, previousBlendDstAlpha = GL_ZERO;
+    GLfloat previousClearColor[4]{};
+    GLboolean previousDepthMask = GL_TRUE;
+    const GLboolean depthWasEnabled = glIsEnabled(GL_DEPTH_TEST);
+    const GLboolean blendWasEnabled = glIsEnabled(GL_BLEND);
+    const GLboolean cullWasEnabled = glIsEnabled(GL_CULL_FACE);
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &previousFbo);
+    glGetIntegerv(GL_VIEWPORT, previousViewport);
+    glGetIntegerv(GL_CURRENT_PROGRAM, &previousProgram);
+    glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &previousVao);
+    glGetIntegerv(GL_DEPTH_FUNC, &previousDepthFunc);
+    glGetBooleanv(GL_DEPTH_WRITEMASK, &previousDepthMask);
+    glGetIntegerv(GL_BLEND_SRC_RGB, &previousBlendSrcRgb);
+    glGetIntegerv(GL_BLEND_DST_RGB, &previousBlendDstRgb);
+    glGetIntegerv(GL_BLEND_SRC_ALPHA, &previousBlendSrcAlpha);
+    glGetIntegerv(GL_BLEND_DST_ALPHA, &previousBlendDstAlpha);
+    glGetFloatv(GL_COLOR_CLEAR_VALUE, previousClearColor);
+
+    const float originalEye[3]{
+        gFo3EyePositionQ1010[0],
+        gFo3EyePositionQ1010[1],
+        gFo3EyePositionQ1010[2]
+    };
+    const float mirroredEye[3]{
+        originalEye[0],
+        2.0f * planeY - originalEye[1],
+        originalEye[2]
+    };
+
+    glBindFramebuffer(GL_FRAMEBUFFER, gWaterReflectionFboQ2090);
+    glViewport(0, 0, Q2090_REFLECTION_SIZE, Q2090_REFLECTION_SIZE);
+
+    const Fo3EnvironmentQ1000& env = GetFo3EnvironmentQ1000();
+    if (env.valid) {
+        glClearColor(env.horizon[0], env.horizon[1], env.horizon[2], 1.0f);
+    } else {
+        glClearColor(0.18f, 0.18f, 0.14f, 1.0f);
+    }
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+    gWaterReflectionPassQ2090 = true;
+    gWaterReflectionPlaneYQ2090 = planeY;
+    gFo3EyePositionQ1010[0] = mirroredEye[0];
+    gFo3EyePositionQ1010[1] = mirroredEye[1];
+    gFo3EyePositionQ1010[2] = mirroredEye[2];
+
+    // PC sky is a direction-space background, so reflect only Y direction;
+    // the water-plane translation belongs to world geometry, not the dome.
+    RenderFo3PcSkyQ1660(reflectedSkyMvp);
+
+    glUseProgram(gProgram);
+    glUniformMatrix4fv(gMvpLocation, 1, GL_FALSE, outReflectionMvp);
+    if (gWaterReflectionClipEnabledLocationQ2090 >= 0) {
+        glUniform1f(gWaterReflectionClipEnabledLocationQ2090, 1.0f);
+    }
+    if (gWaterReflectionPlaneYLocationQ2090 >= 0) {
+        glUniform1f(gWaterReflectionPlaneYLocationQ2090, planeY);
+    }
+    if (gEyePositionLocationQ1010 >= 0)
+        glUniform3fv(gEyePositionLocationQ1010, 1, mirroredEye);
+    if (gEyePositionVertexLocationQ1630 >= 0)
+        glUniform3fv(gEyePositionVertexLocationQ1630, 1, mirroredEye);
+
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LEQUAL);
+    glDepthMask(GL_TRUE);
+    glDisable(GL_BLEND);
+
+    Q1990RenderNativeLod(false);
+    for (const GpuObject& object : gObjects) {
+        if (object.alphaBlend) continue;
+        if (object.zBufferTestQ1200) glEnable(GL_DEPTH_TEST); else glDisable(GL_DEPTH_TEST);
+        glDepthMask(object.zBufferWriteQ1200 ? GL_TRUE : GL_FALSE);
+        DrawSceneObject(object);
+    }
+
+    glEnable(GL_BLEND);
+    Q1990RenderNativeLod(true);
+    for (const GpuObject& object : gObjects) {
+        if (!object.alphaBlend) continue;
+        if (object.zBufferTestQ1200) glEnable(GL_DEPTH_TEST); else glDisable(GL_DEPTH_TEST);
+        glDepthMask(object.zBufferWriteQ1200 ? GL_TRUE : GL_FALSE);
+        glBlendFunc(Q1150BlendFactor(object.alphaSourceBlend, true),
+                    Q1150BlendFactor(object.alphaDestBlend, false));
+        DrawSceneObject(object);
+    }
+
+    // Preserve Q20.5 material reflections inside the planar reflection image.
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_EQUAL);
+    glDepthMask(GL_FALSE);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_ONE, GL_ONE);
+    if (gEnvironmentPassEnabledQ205A) {
+        for (const GpuObject& object : gObjects) {
+            if (!object.environmentEnabledQ2050 ||
+                !object.zBufferWriteQ1200) continue;
+            DrawSceneObject(object, true);
+        }
+    }
+
+    // LAND uses its own program, so arm the same water-plane clip there.
+    SetFo3TerrainWaterReflectionClipQ2090(true, planeY);
+    RenderFo3CollisionOverlay(outReflectionMvp);
+    SetFo3TerrainWaterReflectionClipQ2090(false, planeY);
+
+    // Restore main-eye global/uniform state before the WATER000 draw.
+    gFo3EyePositionQ1010[0] = originalEye[0];
+    gFo3EyePositionQ1010[1] = originalEye[1];
+    gFo3EyePositionQ1010[2] = originalEye[2];
+    glUseProgram(gProgram);
+    if (gWaterReflectionClipEnabledLocationQ2090 >= 0)
+        glUniform1f(gWaterReflectionClipEnabledLocationQ2090, 0.0f);
+    if (gEyePositionLocationQ1010 >= 0)
+        glUniform3fv(gEyePositionLocationQ1010, 1, originalEye);
+    if (gEyePositionVertexLocationQ1630 >= 0)
+        glUniform3fv(gEyePositionVertexLocationQ1630, 1, originalEye);
+    gWaterReflectionPassQ2090 = false;
+
+    glBindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(previousFbo));
+    glViewport(previousViewport[0], previousViewport[1],
+               previousViewport[2], previousViewport[3]);
+    glClearColor(previousClearColor[0], previousClearColor[1],
+                 previousClearColor[2], previousClearColor[3]);
+    glDepthFunc(static_cast<GLenum>(previousDepthFunc));
+    glDepthMask(previousDepthMask);
+    glBlendFuncSeparate(static_cast<GLenum>(previousBlendSrcRgb),
+                        static_cast<GLenum>(previousBlendDstRgb),
+                        static_cast<GLenum>(previousBlendSrcAlpha),
+                        static_cast<GLenum>(previousBlendDstAlpha));
+    if (depthWasEnabled) glEnable(GL_DEPTH_TEST); else glDisable(GL_DEPTH_TEST);
+    if (blendWasEnabled) glEnable(GL_BLEND); else glDisable(GL_BLEND);
+    if (cullWasEnabled) glEnable(GL_CULL_FACE); else glDisable(GL_CULL_FACE);
+    glBindVertexArray(static_cast<GLuint>(previousVao));
+    glUseProgram(static_cast<GLuint>(previousProgram));
+
+    ++gWaterReflectionFramesQ2090;
+    if (gWaterReflectionFramesQ2090 == 1u ||
+        (gWaterReflectionFramesQ2090 % 600u) == 0u) {
+        Q6H_LOGI("Q20.9 WATER MIRROR DRAW: frame=%llu planeY=%.5f eyeMain=(%.4f %.4f %.4f) eyeMirror=(%.4f %.4f %.4f) size=1024x1024 sky=PC-Q16.6 statics=%zu LAND=1 environmentPass=%d belowPlaneClip=1 stereoPerEye=1 blur=pending",
+                 static_cast<unsigned long long>(gWaterReflectionFramesQ2090),
+                 planeY,
+                 originalEye[0], originalEye[1], originalEye[2],
+                 mirroredEye[0], mirroredEye[1], mirroredEye[2],
+                 gObjects.size(),
+                 gEnvironmentPassEnabledQ205A ? 1 : 0);
+    }
+    return true;
+}
+
 struct Q1970RenderStallScopeQ19 {
     std::chrono::steady_clock::time_point started =
         std::chrono::steady_clock::now();
@@ -4968,6 +5258,9 @@ void RenderScene() {
 
     glUseProgram(gProgram);
     glUniformMatrix4fv(gMvpLocation, 1, GL_FALSE, mvp);
+    if (gWaterReflectionClipEnabledLocationQ2090 >= 0) {
+        glUniform1f(gWaterReflectionClipEnabledLocationQ2090, 0.0f);
+    }
     glUniform1i(gDiffuseLocation, 0);
     glUniform1i(gNormalLocation, 1);
     glUniform1i(gGlowLocationQ1020, 2);
