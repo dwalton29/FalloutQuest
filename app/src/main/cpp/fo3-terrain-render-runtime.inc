@@ -105,6 +105,10 @@ GLint q1050TerrainLightMvpLocation = -1;
 GLint q1050TerrainShadowMapLocation = -1;
 GLint q1050TerrainShadowTexelLocation = -1;
 GLint q1050TerrainShadowsEnabledLocation = -1;
+GLint q2090TerrainReflectionClipEnabledLocation = -1;
+GLint q2090TerrainReflectionPlaneYLocation = -1;
+bool q2090TerrainReflectionClipEnabled = false;
+float q2090TerrainReflectionPlaneY = 0.0f;
 GLuint q1050TerrainShadowTexture = 0;
 float q1050TerrainLightMvp[16]{};
 bool q1050TerrainShadowEnabled = false;
@@ -281,6 +285,8 @@ GLuint Q76BCreateProgram() {
         uniform sampler2D uShadowMap;
         uniform vec2 uShadowTexelSize;
         uniform float uShadowsEnabled;
+        uniform float uWaterReflectionClipEnabledQ2090;
+        uniform float uWaterReflectionPlaneYQ2090;
         out vec4 fragColor;
         float Q1570LinearToSrgb1(float value) {
             float c = max(value, 0.0);
@@ -323,6 +329,10 @@ GLuint Q76BCreateProgram() {
             return visible * 0.25;
         }
         void main() {
+            if (uWaterReflectionClipEnabledQ2090 > 0.5 &&
+                vPosition.y < uWaterReflectionPlaneYQ2090) {
+                discard;
+            }
             vec3 N = normalize(vNormal);
             vec4 normalGloss = vec4(0.5, 0.5, 1.0, 0.0);
             if (uUseNormal != 0) {
@@ -482,6 +492,11 @@ int Q711QuadrantForQuad(int x, int y) {
 }
 
 } // namespace
+
+void SetFo3TerrainWaterReflectionClipQ2090(bool enabled, float planeY) {
+    q2090TerrainReflectionClipEnabled = enabled;
+    q2090TerrainReflectionPlaneY = planeY;
+}
 
 void ShutdownFo3TerrainRenderQ76() {
     // Q20 may own a worker or partially staged incoming strip. Stop that work
@@ -933,6 +948,10 @@ bool InitializeFo3TerrainRenderQ76(uint32_t worldspaceFormId,
     q1050TerrainShadowMapLocation = glGetUniformLocation(q76bProgram, "uShadowMap");
     q1050TerrainShadowTexelLocation = glGetUniformLocation(q76bProgram, "uShadowTexelSize");
     q1050TerrainShadowsEnabledLocation = glGetUniformLocation(q76bProgram, "uShadowsEnabled");
+    q2090TerrainReflectionClipEnabledLocation =
+        glGetUniformLocation(q76bProgram, "uWaterReflectionClipEnabledQ2090");
+    q2090TerrainReflectionPlaneYLocation =
+        glGetUniformLocation(q76bProgram, "uWaterReflectionPlaneYQ2090");
     if (q76bMvpLocation < 0 || q76bSamplerLocation < 0 || q76bUseTextureLocation < 0 || q1000TerrainAmbientLocation < 0 || q1000TerrainSunlightLocation < 0 || q1000TerrainSunDirectionLocation < 0) {
         ShutdownFo3TerrainRenderQ76();
         return false;
@@ -1139,6 +1158,14 @@ void RenderFo3TerrainQ76(const float* mvp) {
     glDepthMask(GL_TRUE);
     glUseProgram(q76bProgram);
     glUniformMatrix4fv(q76bMvpLocation, 1, GL_FALSE, mvp);
+    if (q2090TerrainReflectionClipEnabledLocation >= 0) {
+        glUniform1f(q2090TerrainReflectionClipEnabledLocation,
+                    q2090TerrainReflectionClipEnabled ? 1.0f : 0.0f);
+    }
+    if (q2090TerrainReflectionPlaneYLocation >= 0) {
+        glUniform1f(q2090TerrainReflectionPlaneYLocation,
+                    q2090TerrainReflectionPlaneY);
+    }
     glUniform1i(q76bSamplerLocation, 0);
     if (q1060TerrainNormalSamplerLocation >= 0) glUniform1i(q1060TerrainNormalSamplerLocation, 1);
     const Fo3EnvironmentQ1000& q1000Env = GetFo3EnvironmentQ1000();
