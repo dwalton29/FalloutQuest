@@ -626,6 +626,14 @@ private:
                         XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO, viewCount, &viewCount,
                         configViews.data()), "xrEnumerateViewConfigurationViews")) return false;
 
+        const uint32_t q2060RecommendedSamples =
+            std::min(configViews[0].recommendedSwapchainSampleCount,
+                     configViews[1].recommendedSwapchainSampleCount);
+        const uint32_t q2060MaxSamples =
+            std::min(configViews[0].maxSwapchainSampleCount,
+                     configViews[1].maxSwapchainSampleCount);
+        Q2060SetOpenXrSampleInfo(q2060RecommendedSamples, q2060MaxSamples);
+
         uint32_t formatCount = 0;
         if (!CheckXr(xrEnumerateSwapchainFormats(session_, 0, &formatCount, nullptr),
                      "xrEnumerateSwapchainFormats(count)")) return false;
