@@ -60,6 +60,15 @@ bool GetFo3DominantWaterPlaneQ2070(float eyeSceneX, float eyeSceneZ,
                                    uint32_t* outCellFormId,
                                    uint32_t* outWaterTypeFormId);
 
+size_t GetFo3ExposedWaterCellCountQ209B();
+bool IsFo3WaterPotentiallyVisibleQ209B(const float* mvp16,
+                                       float originGameX,
+                                       float originGameY,
+                                       float originGameZ,
+                                       float floorY,
+                                       float sceneForward,
+                                       float unitsPerMetre);
+
 // Q20.9 WATER000 adds the PC planar ReflectionMap on top of Q20.8A's
 // source-backed WATER001 refraction/depth/noise path.
 void RenderFo3WaterSurfaceQ2070(const float* mvp16,
