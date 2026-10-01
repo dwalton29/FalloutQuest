@@ -6855,6 +6855,20 @@ void Q1350CompositeEyePostQ1350(uint32_t eyeIndex, GLuint swapchainFbo,
 
 void Q1280ShutdownPostQ1280() {
     Q1670ShutdownPcBloomQ1670();
+
+    if (gWaterReflectionDepthQ2090)
+        glDeleteRenderbuffers(1, &gWaterReflectionDepthQ2090);
+    if (gWaterReflectionColorQ2090)
+        glDeleteTextures(1, &gWaterReflectionColorQ2090);
+    if (gWaterReflectionFboQ2090)
+        glDeleteFramebuffers(1, &gWaterReflectionFboQ2090);
+    gWaterReflectionDepthQ2090 = 0u;
+    gWaterReflectionColorQ2090 = 0u;
+    gWaterReflectionFboQ2090 = 0u;
+    gWaterReflectionTargetReadyQ2090 = false;
+    gWaterReflectionTargetLoggedQ2090 = false;
+    gWaterReflectionFramesQ2090 = 0u;
+    gWaterSkyMvpReadyQ2090 = false;
     if (q2060MsaaColor) glDeleteRenderbuffers(1, &q2060MsaaColor);
     if (q2060MsaaDepth) glDeleteRenderbuffers(1, &q2060MsaaDepth);
     if (q2060MsaaFbo) glDeleteFramebuffers(1, &q2060MsaaFbo);
