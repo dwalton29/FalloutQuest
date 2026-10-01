@@ -121,10 +121,11 @@ size_t Q1900ActiveCellWorkersQ19() {
 
 bool Q1900CellWorkerOwnsQ19(uint64_t key) {
     for (const auto& worker : gQ1900WorkersQ19) {
-        if (worker &&
-            Q1900CellKeyQ19(worker->gridX, worker->gridY) == key) {
-            return true;
-        }
+        if (!worker) continue;
+        const uint64_t workerKey =
+            (static_cast<uint64_t>(static_cast<uint32_t>(worker->gridX)) << 32u) |
+            static_cast<uint32_t>(worker->gridY);
+        if (workerKey == key) return true;
     }
     return false;
 }
