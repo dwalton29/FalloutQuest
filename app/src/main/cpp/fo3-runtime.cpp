@@ -3615,32 +3615,36 @@ void UpdateFo3ExteriorStreamingQ1890(float virtualHeadX, float virtualHeadZ) {
     gQ1920LatestGridValid = true;
     gQ1920LatestGridX = actualGridX;
     gQ1920LatestGridY = actualGridY;
-    if (gExteriorWorldspaceQ1890 == 0x0000003Cu) {
-        // Detailed CELL work owns the first budget opportunity each update.
+    if (gExteriorWorldspaceQ1890 != 0u) {
+        // Q20.10: CELL-specific streaming now owns every exterior worldspace,
+        // including child worlds such as MegatonWorld. Native Level4 LOD remains
+        // Wasteland-only because those archive paths are authored for 0000003C.
         const auto q1970DetailStarted = std::chrono::steady_clock::now();
         Q1900UpdateCellStreamingQ19(gameX, gameY, actualGridX, actualGridY);
         q1970PreviousDetailUs = static_cast<uint64_t>(
             std::chrono::duration_cast<std::chrono::microseconds>(
                 std::chrono::steady_clock::now() - q1970DetailStarted).count());
 
-        // Far LOD gets only the bounded leftover opportunity.
-        const auto q1970LodStarted = std::chrono::steady_clock::now();
-        Q1990EnsureNativeLodForCell(actualGridX, actualGridY,
-                                    gExteriorOriginXQ1890,
-                                    gExteriorOriginYQ1890,
-                                    gExteriorOriginZQ1890);
-        q1970PreviousLodUs = static_cast<uint64_t>(
-            std::chrono::duration_cast<std::chrono::microseconds>(
-                std::chrono::steady_clock::now() - q1970LodStarted).count());
+        if (gExteriorWorldspaceQ1890 == 0x0000003Cu) {
+            const auto q1970LodStarted = std::chrono::steady_clock::now();
+            Q1990EnsureNativeLodForCell(actualGridX, actualGridY,
+                                        gExteriorOriginXQ1890,
+                                        gExteriorOriginYQ1890,
+                                        gExteriorOriginZQ1890);
+            q1970PreviousLodUs = static_cast<uint64_t>(
+                std::chrono::duration_cast<std::chrono::microseconds>(
+                    std::chrono::steady_clock::now() - q1970LodStarted).count());
+        }
 
         const uint64_t q1970TotalUs = static_cast<uint64_t>(
             std::chrono::duration_cast<std::chrono::microseconds>(
                 std::chrono::steady_clock::now() - q1970UpdateStarted).count());
         if (q1970TotalUs >= 50000u) {
-            Q6H_LOGW("Q19.7 STREAM STALL: totalUs=%llu lodUs=%llu detailUs=%llu actual=(%d,%d) streamBusy=%d",
+            Q6H_LOGW("Q20.10 STREAM STALL: totalUs=%llu lodUs=%llu detailUs=%llu worldspace=%08X actual=(%d,%d) streamBusy=%d",
                      static_cast<unsigned long long>(q1970TotalUs),
                      static_cast<unsigned long long>(q1970PreviousLodUs),
                      static_cast<unsigned long long>(q1970PreviousDetailUs),
+                     gExteriorWorldspaceQ1890,
                      actualGridX, actualGridY,
                      gExteriorStreamBusyQ1890 ? 1 : 0);
         }

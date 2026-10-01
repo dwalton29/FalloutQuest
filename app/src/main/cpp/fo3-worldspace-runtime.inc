@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <cstring>
 #include <functional>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <unordered_map>
@@ -447,9 +448,9 @@ struct Q1800WorldspaceIndex {
     size_t doorTeleportResolvedCountQ1920 = 0u;
 };
 
-Q1800WorldspaceIndex gQ1800WastelandIndex;
-std::once_flag gQ1800WastelandIndexOnce;
-bool gQ1800WastelandIndexReady = false;
+std::mutex gQ1800WorldspaceIndexesMutex;
+std::unordered_map<uint32_t, std::shared_ptr<Q1800WorldspaceIndex>>
+    gQ1800WorldspaceIndexes;
 
 uint64_t GridKeyQ1800(int32_t x, int32_t y) {
     return (static_cast<uint64_t>(static_cast<uint32_t>(x)) << 32u) |
@@ -485,9 +486,12 @@ bool ParseDoorTeleportQ1920(const std::vector<uint8_t>& payload,
     return found;
 }
 
-bool BuildWastelandIndexQ1800(Q1800WorldspaceIndex& out) {
+bool BuildWorldspaceIndexQ1800(uint32_t worldspaceFormId,
+                               Q1800WorldspaceIndex& out) {
     const auto started = std::chrono::steady_clock::now();
     out = Q1800WorldspaceIndex{};
+    const bool buildDoorIndex =
+        worldspaceFormId == WASTELAND_WORLDSPACE_Q1800;
 
     FILE* file = std::fopen(ESM_PATH_Q75, "rb");
     if (!file) return false;
@@ -528,11 +532,11 @@ bool BuildWastelandIndexQ1800(Q1800WorldspaceIndex& out) {
             std::memcmp(header, "REFR", 4u) == 0;
         const uint32_t q1920OwnerCell =
             q1920IsRef ? OwningWorldspaceCellQ1800(groups) : 0u;
-        if (q1920IsRef && q1920OwnerCell != 0u) {
+        if (buildDoorIndex && q1920IsRef && q1920OwnerCell != 0u) {
             out.refOwnerCellsQ1920[formId] = q1920OwnerCell;
         }
 
-        if (!InWorldspaceQ75(groups, WASTELAND_WORLDSPACE_Q1800)) {
+        if (!InWorldspaceQ75(groups, worldspaceFormId)) {
             if (fseeko(file, static_cast<off_t>(payloadEnd), SEEK_SET) != 0) break;
             continue;
         }
@@ -580,9 +584,11 @@ bool BuildWastelandIndexQ1800(Q1800WorldspaceIndex& out) {
             std::vector<uint8_t> payload;
             if (!ReadPayloadQ75(file, sizeField, flags, payload)) break;
 
-            Fo3DoorTeleport q1920Teleport;
-            if (ParseDoorTeleportQ1920(payload, q1920Teleport)) {
-                out.doorTeleportsQ1920[formId] = q1920Teleport;
+            if (buildDoorIndex) {
+                Fo3DoorTeleport q1920Teleport;
+                if (ParseDoorTeleportQ1920(payload, q1920Teleport)) {
+                    out.doorTeleportsQ1920[formId] = q1920Teleport;
+                }
             }
 
             RawPlacementQ75 placement;
@@ -620,26 +626,35 @@ bool BuildWastelandIndexQ1800(Q1800WorldspaceIndex& out) {
 
     const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now() - started).count();
-    Q75_LOGI("Q18 WASTELAND INDEX READY: cells=%zu gridCells=%zu refs=%zu LAND=%zu bases=%zu buildMs=%lld source=Fallout3.esm",
-             out.cells.size(), out.gridCellCount, out.rawRefCount,
+    Q75_LOGI("Q20.10 WORLDSPACE INDEX READY: worldspace=%08X cells=%zu gridCells=%zu refs=%zu LAND=%zu bases=%zu buildMs=%lld source=Fallout3.esm",
+             worldspaceFormId, out.cells.size(), out.gridCellCount, out.rawRefCount,
              out.landRecordCount, out.bases.size(),
              static_cast<long long>(elapsed));
-    Q75_LOGI("Q19.2 DOOR INDEX READY: sourceXTEL=%zu resolvedDestCells=%zu refOwners=%zu unresolvedDestCells=%zu source=Q18-Wasteland-index renderThreadEsmScans=0",
-             out.doorTeleportCountQ1920,
-             out.doorTeleportResolvedCountQ1920,
-             out.refOwnerCountQ1920,
-             out.doorTeleportCountQ1920 - out.doorTeleportResolvedCountQ1920);
+    if (buildDoorIndex) {
+        Q75_LOGI("Q19.2 DOOR INDEX READY: sourceXTEL=%zu resolvedDestCells=%zu refOwners=%zu unresolvedDestCells=%zu source=Q18-Wasteland-index renderThreadEsmScans=0",
+                 out.doorTeleportCountQ1920,
+                 out.doorTeleportResolvedCountQ1920,
+                 out.refOwnerCountQ1920,
+                 out.doorTeleportCountQ1920 - out.doorTeleportResolvedCountQ1920);
+    }
     return true;
 }
 
-const Q1800WorldspaceIndex* GetWastelandIndexQ1800() {
-    std::call_once(gQ1800WastelandIndexOnce, []() {
-        gQ1800WastelandIndexReady = BuildWastelandIndexQ1800(gQ1800WastelandIndex);
-        if (!gQ1800WastelandIndexReady) {
-            Q75_LOGE("Q18 WASTELAND INDEX FAILED: source=Fallout3.esm");
-        }
-    });
-    return gQ1800WastelandIndexReady ? &gQ1800WastelandIndex : nullptr;
+const Q1800WorldspaceIndex* GetWorldspaceIndexQ1800(uint32_t worldspaceFormId) {
+    if (worldspaceFormId == 0u) return nullptr;
+    std::lock_guard<std::mutex> lock(gQ1800WorldspaceIndexesMutex);
+    const auto cached = gQ1800WorldspaceIndexes.find(worldspaceFormId);
+    if (cached != gQ1800WorldspaceIndexes.end()) return cached->second.get();
+
+    auto index = std::make_shared<Q1800WorldspaceIndex>();
+    if (!BuildWorldspaceIndexQ1800(worldspaceFormId, *index)) {
+        Q75_LOGE("Q20.10 WORLDSPACE INDEX FAILED: worldspace=%08X source=Fallout3.esm",
+                 worldspaceFormId);
+        return nullptr;
+    }
+    const Q1800WorldspaceIndex* result = index.get();
+    gQ1800WorldspaceIndexes.emplace(worldspaceFormId, std::move(index));
+    return result;
 }
 
 bool CollectIndexedRefsQ1800(const Q1800WorldspaceIndex& index,
@@ -663,7 +678,8 @@ bool CollectIndexedRefsQ1800(const Q1800WorldspaceIndex& index,
         if (refs == index.refsByCell.end()) continue;
         out.insert(out.end(), refs->second.begin(), refs->second.end());
     }
-    return !out.empty();
+    // An indexed CELL with zero REFRs is still a valid streamed CELL.
+    return true;
 }
 
 void SelectIndexedCellsQ1800(const Q1800WorldspaceIndex& index,
@@ -749,7 +765,7 @@ bool LoadFo3WorldspaceNeighborhoodQ75(uint32_t worldspaceFormId,
 
     const auto lookupStartedQ1800 = std::chrono::steady_clock::now();
     const Q1800WorldspaceIndex* q1800Index =
-        worldspaceFormId == WASTELAND_WORLDSPACE_Q1800 ? GetWastelandIndexQ1800() : nullptr;
+        GetWorldspaceIndexQ1800(worldspaceFormId);
 
     std::vector<CellInfoQ75> legacyCellsQ1800;
     const std::vector<CellInfoQ75>* cellsQ1800 = nullptr;
@@ -773,8 +789,12 @@ bool LoadFo3WorldspaceNeighborhoodQ75(uint32_t worldspaceFormId,
         q1800Index ? q1800Index->gridCellCount : gridCells.size();
     const int32_t targetGridX = static_cast<int32_t>(std::floor(arrivalX / EXTERIOR_CELL_SIZE_Q75));
     const int32_t targetGridY = static_cast<int32_t>(std::floor(arrivalY / EXTERIOR_CELL_SIZE_Q75));
-    const bool loadWholeWorldspace = gridCellCountQ1800 <= SMALL_WORLDSPACE_CELL_LIMIT_Q75;
-    const int q1950SelectionRadius = gQ1950WorldspaceGridRadiusOverride >= 0
+    const bool q1950ExplicitRadius =
+        gQ1950WorldspaceGridRadiusOverride >= 0;
+    const bool loadWholeWorldspace =
+        !q1950ExplicitRadius &&
+        gridCellCountQ1800 <= SMALL_WORLDSPACE_CELL_LIMIT_Q75;
+    const int q1950SelectionRadius = q1950ExplicitRadius
         ? gQ1950WorldspaceGridRadiusOverride : 2; // Q16.26 initial exterior 5x5 resident
 
     std::unordered_set<uint32_t> selectedCells;
@@ -951,5 +971,8 @@ bool LoadFo3WorldspaceNeighborhoodQ75(uint32_t worldspaceFormId,
     for (const auto& entry : baseTypes) {
         Q75_LOGI("Q7.5 BASE TYPE: type=%s placements=%zu", entry.first.c_str(), entry.second);
     }
+    // Q19 radius-0 requests must also succeed for authored empty CELLs so
+    // residency can advance without retrying a nonexistent visual payload.
+    if (gQ1950WorldspaceGridRadiusOverride == 0) return true;
     return !outPlacements.empty();
 }

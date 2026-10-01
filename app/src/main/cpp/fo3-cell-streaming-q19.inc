@@ -1,7 +1,7 @@
 // Q19 - persistent exterior CELL streaming.
 // Included by fo3-runtime.cpp inside its anonymous namespace after the legacy
-// Q18 whole-window pipeline. Wasteland UpdateFo3ExteriorStreamingQ1890 routes
-// here; the legacy pipeline remains available for non-Wasteland contexts.
+// Q18 whole-window pipeline. Q20.10 routes every exterior worldspace through
+// this CELL-specific path; native Wasteland Level4 LOD remains separately gated.
 
 enum class Q1900CellStageQ19 : uint8_t {
     Ready = 0,
@@ -51,6 +51,8 @@ struct Q1900CellWorkerTaskQ19 {
     float originY = 0.0f;
     float originZ = 0.0f;
     bool needVisual = false;
+    bool primeCollision = false;
+    bool placementsProvided = false;
 
     std::vector<Fo3WorldPlacement> placements;
     std::vector<CpuObject> cpu;
@@ -133,7 +135,10 @@ int32_t gQ1900LastActualYQ19 = INT32_MIN;
 
 constexpr int Q1900_RESIDENT_RADIUS_Q19 = 2;
 constexpr int Q1900_CACHE_RADIUS_Q19 = 3;
-constexpr float Q1900_PREFETCH_EDGE_UNITS_Q19 = 1152.0f;
+// Begin the next strip before the final quarter of the current CELL. 1792
+// leaves a 512-unit neutral band around centre, avoiding an arbitrary direction
+// choice while giving the asset worker substantially more lead time.
+constexpr float Q1900_PREFETCH_EDGE_UNITS_Q19 = 1792.0f;
 constexpr uint64_t Q1900_GPU_BUDGET_US_Q19 = 2200u;
 constexpr size_t Q1960_GPU_BYTES_PER_FRAME = 256u * 1024u;
 constexpr size_t Q1960_TEXTURE_CHUNK_BYTES = 128u * 1024u;
@@ -289,8 +294,11 @@ void Q1900MarkWantedQ19(int32_t x, int32_t y, bool prefetch) {
     state.lastWantedTick = gQ1900TickQ19;
     if (state.stage == Q1900CellStageQ19::Failed)
         state.stage = Q1900CellStageQ19::Requested;
-    // Seeded ready cells still need exact metadata/collision chunks eventually.
-    if (!state.metadataReady && state.stage == Q1900CellStageQ19::Ready)
+    // Visual publication is independent from collision prewarming. Ready
+    // visuals are requeued only when their metadata or active 3x3 collision
+    // cache still needs background work.
+    if ((!state.metadataReady || !state.collisionPrimed) &&
+        state.stage == Q1900CellStageQ19::Ready)
         state.stage = Q1900CellStageQ19::Requested;
 }
 
@@ -352,6 +360,12 @@ int Q1900CellPriorityQ19(const Q1900CellStateQ19& state,
         if (cheb <= 2) return 120 + dx + dy;
         return 160 + cheb;
     }
+    if (!state.collisionPrimed) {
+        // Collision is needed only for the active 3x3. It runs immediately
+        // after near visual work, before radius-2/prefetch visuals can starve it.
+        if (cheb <= 1) return 20 + dx + dy;
+        return 1000000;
+    }
     return 1000000;
 }
 
@@ -372,41 +386,43 @@ void Q1900AddTextureRequestQ19(
 
 void Q1900RunCellWorkerQ19(
         const std::shared_ptr<Q1900CellWorkerTaskQ19>& task) {
-    const auto metadataStarted = std::chrono::steady_clock::now();
-    std::vector<Fo3WorldPlacement> neighborhood;
-    SetFo3WorldspaceGridRadiusOverrideQ1950(0);
-    const float selectionX =
-        (static_cast<float>(task->gridX) + 0.5f) * Q1890_EXTERIOR_CELL_SIZE;
-    const float selectionY =
-        (static_cast<float>(task->gridY) + 0.5f) * Q1890_EXTERIOR_CELL_SIZE;
-    const bool loaded = LoadFo3WorldspaceNeighborhoodQ75(
-        task->worldspace, task->persistentCell,
-        selectionX, selectionY, neighborhood);
-    SetFo3WorldspaceGridRadiusOverrideQ1950(-1);
-    task->metadataUs = static_cast<uint64_t>(
-        std::chrono::duration_cast<std::chrono::microseconds>(
-            std::chrono::steady_clock::now() - metadataStarted).count());
+    if (!task->placementsProvided) {
+        const auto metadataStarted = std::chrono::steady_clock::now();
+        std::vector<Fo3WorldPlacement> neighborhood;
+        SetFo3WorldspaceGridRadiusOverrideQ1950(0);
+        const float selectionX =
+            (static_cast<float>(task->gridX) + 0.5f) * Q1890_EXTERIOR_CELL_SIZE;
+        const float selectionY =
+            (static_cast<float>(task->gridY) + 0.5f) * Q1890_EXTERIOR_CELL_SIZE;
+        const bool loaded = LoadFo3WorldspaceNeighborhoodQ75(
+            task->worldspace, task->persistentCell,
+            selectionX, selectionY, neighborhood);
+        SetFo3WorldspaceGridRadiusOverrideQ1950(-1);
+        task->metadataUs = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::steady_clock::now() - metadataStarted).count());
 
-    if (!loaded) {
-        task->success = false;
-        task->ready.store(true, std::memory_order_release);
-        return;
-    }
+        if (!loaded) {
+            task->success = false;
+            task->ready.store(true, std::memory_order_release);
+            return;
+        }
 
-    std::unordered_set<uint32_t> seenRefs;
-    for (const Fo3WorldPlacement& placement : neighborhood) {
-        const int32_t gridX = placement.hasExteriorGrid
-            ? placement.gridX
-            : static_cast<int32_t>(
-                std::floor(placement.x / Q1890_EXTERIOR_CELL_SIZE));
-        const int32_t gridY = placement.hasExteriorGrid
-            ? placement.gridY
-            : static_cast<int32_t>(
-                std::floor(placement.y / Q1890_EXTERIOR_CELL_SIZE));
-        if (gridX != task->gridX || gridY != task->gridY) continue;
-        if (placement.refFormId != 0u &&
-            !seenRefs.insert(placement.refFormId).second) continue;
-        task->placements.push_back(placement);
+        std::unordered_set<uint32_t> seenRefs;
+        for (const Fo3WorldPlacement& placement : neighborhood) {
+            const int32_t gridX = placement.hasExteriorGrid
+                ? placement.gridX
+                : static_cast<int32_t>(
+                    std::floor(placement.x / Q1890_EXTERIOR_CELL_SIZE));
+            const int32_t gridY = placement.hasExteriorGrid
+                ? placement.gridY
+                : static_cast<int32_t>(
+                    std::floor(placement.y / Q1890_EXTERIOR_CELL_SIZE));
+            if (gridX != task->gridX || gridY != task->gridY) continue;
+            if (placement.refFormId != 0u &&
+                !seenRefs.insert(placement.refFormId).second) continue;
+            task->placements.push_back(placement);
+        }
     }
 
     if (task->needVisual) {
@@ -460,32 +476,34 @@ void Q1900RunCellWorkerQ19(
                 std::chrono::steady_clock::now() - textureStarted).count());
     }
 
-    // Prime transformed authored collision while still off the render thread.
-    // The scheduler does not publish/read the placement cache while this worker
-    // is running, so the legacy cache remains single-writer.
-    const auto collisionStarted = std::chrono::steady_clock::now();
-    for (const Fo3WorldPlacement& placement : task->placements) {
-        if (placement.refFormId == 0u || Q74ShouldSkipPlacement(placement))
-            continue;
-        const auto itemStarted = std::chrono::steady_clock::now();
-        size_t triangles = 0u;
-        if (PrimeFo3CollisionPlacementCacheQ1820(
-                placement,
-                task->originX, task->originY, task->originZ,
-                SCENE_FORWARD, FLOOR_Y, FO3_UNITS_PER_METRE,
-                &triangles)) {
-            ++task->collisionPrimedRefs;
-            task->collisionTriangles += triangles;
+    // New visual CELLs publish first. Collision prewarming is a second,
+    // lower-priority pass for the active 3x3 so slow Havok/NIF work can no
+    // longer hold the visible CELL behind the worker.
+    if (task->primeCollision) {
+        const auto collisionStarted = std::chrono::steady_clock::now();
+        for (const Fo3WorldPlacement& placement : task->placements) {
+            if (placement.refFormId == 0u || Q74ShouldSkipPlacement(placement))
+                continue;
+            const auto itemStarted = std::chrono::steady_clock::now();
+            size_t triangles = 0u;
+            if (PrimeFo3CollisionPlacementCacheQ1820(
+                    placement,
+                    task->originX, task->originY, task->originZ,
+                    SCENE_FORWARD, FLOOR_Y, FO3_UNITS_PER_METRE,
+                    &triangles)) {
+                ++task->collisionPrimedRefs;
+                task->collisionTriangles += triangles;
+            }
+            const uint64_t itemUs = static_cast<uint64_t>(
+                std::chrono::duration_cast<std::chrono::microseconds>(
+                    std::chrono::steady_clock::now() - itemStarted).count());
+            task->maxCollisionItemUs =
+                std::max(task->maxCollisionItemUs, itemUs);
         }
-        const uint64_t itemUs = static_cast<uint64_t>(
+        task->collisionUs = static_cast<uint64_t>(
             std::chrono::duration_cast<std::chrono::microseconds>(
-                std::chrono::steady_clock::now() - itemStarted).count());
-        task->maxCollisionItemUs =
-            std::max(task->maxCollisionItemUs, itemUs);
+                std::chrono::steady_clock::now() - collisionStarted).count());
     }
-    task->collisionUs = static_cast<uint64_t>(
-        std::chrono::duration_cast<std::chrono::microseconds>(
-            std::chrono::steady_clock::now() - collisionStarted).count());
 
     task->success = true;
     task->ready.store(true, std::memory_order_release);
@@ -522,7 +540,7 @@ void Q1900ConsumeWorkerQ19() {
 
     state.placements = std::move(task->placements);
     state.metadataReady = true;
-    state.collisionPrimed = true;
+    if (task->primeCollision) state.collisionPrimed = true;
     state.skipped = task->skipped;
     state.unsupported = task->unsupported;
     state.workerUs = task->metadataUs + task->cpuUs +
@@ -540,8 +558,10 @@ void Q1900ConsumeWorkerQ19() {
         state.stage = Q1900CellStageQ19::Ready;
     }
 
-    Q6H_LOGI("Q19 WORKER READY: cell=(%d,%d) needVisual=%d placements=%zu cpuShapes=%zu textures=%zu skipped=%zu unsupported=%zu metadataUs=%llu cpuUs=%llu textureUs=%llu collisionUs=%llu collisionRefs=%zu collisionTriangles=%zu maxCollisionItemUs=%llu",
+    Q6H_LOGI("Q20.10 WORKER READY: cell=(%d,%d) needVisual=%d primeCollision=%d reusedMetadata=%d placements=%zu cpuShapes=%zu textures=%zu skipped=%zu unsupported=%zu metadataUs=%llu cpuUs=%llu textureUs=%llu collisionUs=%llu collisionRefs=%zu collisionTriangles=%zu maxCollisionItemUs=%llu",
              state.gridX, state.gridY, task->needVisual ? 1 : 0,
+             task->primeCollision ? 1 : 0,
+             task->placementsProvided ? 1 : 0,
              state.placements.size(), state.cpu.size(), state.textures.size(),
              state.skipped, state.unsupported,
              static_cast<unsigned long long>(task->metadataUs),
@@ -581,11 +601,18 @@ void Q1900LaunchWorkerQ19(int32_t actualGridX, int32_t actualGridY) {
     task->originY = gExteriorOriginYQ1890;
     task->originZ = gExteriorOriginZQ1890;
     task->needVisual = !best->visualReady;
+    task->primeCollision = best->visualReady && !best->collisionPrimed;
+    if (best->metadataReady) {
+        task->placements = best->placements;
+        task->placementsProvided = true;
+    }
 
     best->stage = Q1900CellStageQ19::Worker;
     gQ1900WorkerQ19 = task;
-    Q6H_LOGI("Q19 WORKER START: cell=(%d,%d) needVisual=%d priority=%d actual=(%d,%d) noCancelOnMovement=1",
+    Q6H_LOGI("Q20.10 WORKER START: cell=(%d,%d) needVisual=%d primeCollision=%d reuseMetadata=%d priority=%d actual=(%d,%d) visualFirst=1 noCancelOnMovement=1",
              task->gridX, task->gridY, task->needVisual ? 1 : 0,
+             task->primeCollision ? 1 : 0,
+             task->placementsProvided ? 1 : 0,
              bestPriority, actualGridX, actualGridY);
     std::thread([task]() { Q1900RunCellWorkerQ19(task); }).detach();
 }
@@ -1240,6 +1267,16 @@ void Q1900RetireFarCellsQ19(int32_t actualGridX, int32_t actualGridY) {
         actualGridY == gQ1900LastActualYQ19) return;
     gQ1900LastActualXQ19 = actualGridX;
     gQ1900LastActualYQ19 = actualGridY;
+
+    // Water follows the same logical CELL centre as the visual streamer. The
+    // expensive ESM catalogue is cached inside Q20.9, so recentering is only a
+    // small in-memory filter after the first worldspace load.
+    const float q2010WaterX =
+        (static_cast<float>(actualGridX) + 0.5f) * Q1890_EXTERIOR_CELL_SIZE;
+    const float q2010WaterY =
+        (static_cast<float>(actualGridY) + 0.5f) * Q1890_EXTERIOR_CELL_SIZE;
+    LoadFo3WaterSceneQ2070(
+        gExteriorWorldspaceQ1890, q2010WaterX, q2010WaterY);
 
     const auto retireStarted = std::chrono::steady_clock::now();
     size_t retiredShapes = 0u;
