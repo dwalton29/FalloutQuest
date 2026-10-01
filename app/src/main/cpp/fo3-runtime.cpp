@@ -5712,22 +5712,29 @@ bool Q1280EnsurePostProgram() {
             // c19.z contrast=1.02. Fade c22=(0,0,0,0), so Fade is identity.
             q1640PcOutput = (q1640PcOutput * 1.1 - vec3(0.0)) * 1.02 + vec3(0.0);
 
-            // X8R8G8B8 clamps on the PC. Match that numeric result before
-            // compensating for Quest's sRGB swapchain storage conversion.
+            // X8R8G8B8 clamps AND quantises the final shader result to an
+            // 8-bit display code before the D3D9 gamma ramp is applied.
             q1640PcOutput = clamp(q1640PcOutput, vec3(0.0), vec3(1.0));
+            vec3 q204fPcBackbufferCode =
+                floor(q1640PcOutput * 255.0 + 0.5) / 255.0;
+
+            // Q20.4F / apitrace call 39178:
+            // IDirect3DDevice9::SetGammaRamp(... D3DSGR_CALIBRATE ...)
+            // captured with FalloutPrefs fGamma=0.7600. R/G/B are identical
+            // and the 256-entry WORD16 ramp is the game's x^0.76 curve
+            // (to capture precision; only one entry differs by one 16-bit LSB).
+            // Apply this AFTER the X8R8G8B8 quantisation, matching the PC's
+            // scanout order rather than treating gamma as another film grade.
+            vec3 q204fPcPresentedCode =
+                pow(q204fPcBackbufferCode, vec3(0.76));
 
             // PC: X8R8G8B8 + D3DRS_SRGBWRITEENABLE=0 stores the shader
-            // numeric value directly as a non-linear display code. Q20.4c moved
-            // Quest to a GL_RGBA8 OpenXR swapchain, and OpenXR defines non-sRGB
-            // swapchain formats as LINEAR values. Therefore submitting the PC
-            // code value directly makes the runtime treat gamma-space midtones
-            // as linear light and lifts them again at presentation.
-            //
-            // Decode the captured PC display code back to linear here. The
-            // OpenXR compositor can then perform its normal linear composition /
-            // presentation transfer and land on the same display code the PC
-            // wrote. This is a colour-domain bridge, not an authored grade.
-            colour = Q1340SrgbToLinear(q1640PcOutput);
+            // numeric value directly. The hardware gamma ramp then maps that
+            // stored code to q204fPcPresentedCode. Quest uses a GL_RGBA8
+            // OpenXR swapchain whose values are linear, so decode the *post-
+            // gamma-ramp PC display code* to linear before submission. The
+            // compositor presentation transfer then lands on the same code.
+            colour = Q1340SrgbToLinear(q204fPcPresentedCode);
             fragColor = vec4(max(colour, vec3(0.0)), 1.0);
         }
     )";
@@ -5959,7 +5966,7 @@ void Q1280CompositeEyePostQ1280(GLuint swapchainFbo, GLsizei width, GLsizei heig
     static bool q1640Logged = false;
     if (!q1640Logged) {
         q1640Logged = true;
-        Q6H_LOGI("Q20.4D PC HDR OUTPUT DOMAIN: call=4618221 targetLum=1.200 saturation=0.875 tint=(0.739914 0.574956 0.312834) tintValue=0.600 contrastAvg=0.000 contrast=1.020 brightness=1.100 fade=0 lum=REC601 pcTarget=X8R8G8B8 pcSrgbWrite=0 questSwapchain=GL_RGBA8 openxrDomain=LINEAR pcCodeToLinear=SRGB_DECODE directPcCodeWrite=0");
+        Q6H_LOGI("Q20.4F PC PRESENTATION: finalPassCall=4618221 gammaRampCall=39178 targetLum=1.200 saturation=0.875 tint=(0.739914 0.574956 0.312834) tintValue=0.600 contrastAvg=0.000 contrast=1.020 brightness=1.100 pcTarget=X8R8G8B8 backbufferQuantise=8bit gammaExponent=0.760000 gammaRGBIdentical=1 pcSrgbWrite=0 questSwapchain=GL_RGBA8 postGammaCodeToLinear=SRGB_DECODE");
     }
 
     static uint32_t lastLoggedImageSpace = 0xFFFFFFFFu;
