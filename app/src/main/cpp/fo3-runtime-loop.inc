@@ -621,7 +621,7 @@ private:
         if (!CheckXr(xrEnumerateSwapchainFormats(session_, formatCount, &formatCount, formats.data()),
                      "xrEnumerateSwapchainFormats")) return false;
 
-        // Q20.4c clean output-domain A/B:
+        // Q20.4d PC-code -> OpenXR-linear output parity:
         // Fallout's captured final pass writes numeric display-code values to an
         // X8R8G8B8 target with sRGB write disabled. Prefer a linear UNORM
         // OpenXR swapchain here so Quest does not apply an additional hardware
@@ -639,7 +639,7 @@ private:
             chosenFormat = GL_SRGB8_ALPHA8;
         }
         if (!chosenFormat) return false;
-        FQ_LOGI("Q20.4C OUTPUT DOMAIN: chosen=0x%llX rgba8Available=%d srgb8Available=%d preference=GL_RGBA8_LINEAR_UNORM pcTarget=X8R8G8B8 pcSrgbWrite=0",
+        FQ_LOGI("Q20.4D OUTPUT DOMAIN: chosen=0x%llX rgba8Available=%d srgb8Available=%d preference=GL_RGBA8_LINEAR_UNORM pcTarget=X8R8G8B8 pcSrgbWrite=0 postPcCodeToLinear=1",
                 static_cast<unsigned long long>(chosenFormat),
                 q204cHaveRgba8 ? 1 : 0, q204cHaveSrgb8 ? 1 : 0);
 
