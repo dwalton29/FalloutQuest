@@ -5705,13 +5705,18 @@ bool Q1280EnsurePostProgram() {
             // compensating for Quest's sRGB swapchain storage conversion.
             q1640PcOutput = clamp(q1640PcOutput, vec3(0.0), vec3(1.0));
 
-            // PC: X8R8G8B8 + D3DRS_SRGBWRITEENABLE=0, so its shader numeric
-            // value becomes the stored/display code directly. Quest prefers an
-            // sRGB OpenXR attachment; inverse-transfer here so attachment encode
-            // lands on the identical final code value.
-            // Q15.15: preserve the exact numeric code value emitted by the PC
-            // X8R8G8B8/SRGBWRITE=0 path. Do not apply a second transfer here.
-            colour = q1640PcOutput;
+            // PC: X8R8G8B8 + D3DRS_SRGBWRITEENABLE=0 stores the shader
+            // numeric value directly as a non-linear display code. Q20.4c moved
+            // Quest to a GL_RGBA8 OpenXR swapchain, and OpenXR defines non-sRGB
+            // swapchain formats as LINEAR values. Therefore submitting the PC
+            // code value directly makes the runtime treat gamma-space midtones
+            // as linear light and lifts them again at presentation.
+            //
+            // Decode the captured PC display code back to linear here. The
+            // OpenXR compositor can then perform its normal linear composition /
+            // presentation transfer and land on the same display code the PC
+            // wrote. This is a colour-domain bridge, not an authored grade.
+            colour = Q1340SrgbToLinear(q1640PcOutput);
             fragColor = vec4(max(colour, vec3(0.0)), 1.0);
         }
     )";
@@ -5940,7 +5945,7 @@ void Q1280CompositeEyePostQ1280(GLuint swapchainFbo, GLsizei width, GLsizei heig
     static bool q1640Logged = false;
     if (!q1640Logged) {
         q1640Logged = true;
-        Q6H_LOGI("Q15.15 PC HDR OUTPUT DOMAIN: call=4618221 targetLum=1.200 saturation=0.875 tint=(0.739914 0.574956 0.312834) tintValue=0.600 contrastAvg=0.000 contrast=1.020 brightness=1.100 fade=0 lum=REC601 pcTarget=X8R8G8B8 pcSrgbWrite=0 questSrgbCompensation=0 directPcCodeWrite=1");
+        Q6H_LOGI("Q20.4D PC HDR OUTPUT DOMAIN: call=4618221 targetLum=1.200 saturation=0.875 tint=(0.739914 0.574956 0.312834) tintValue=0.600 contrastAvg=0.000 contrast=1.020 brightness=1.100 fade=0 lum=REC601 pcTarget=X8R8G8B8 pcSrgbWrite=0 questSwapchain=GL_RGBA8 openxrDomain=LINEAR pcCodeToLinear=SRGB_DECODE directPcCodeWrite=0");
     }
 
     static uint32_t lastLoggedImageSpace = 0xFFFFFFFFu;
