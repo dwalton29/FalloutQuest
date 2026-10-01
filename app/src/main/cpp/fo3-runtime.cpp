@@ -163,6 +163,8 @@ struct GpuObject {
     GLuint diffuse = 0;
     GLuint normal = 0;
     GLuint glow = 0;
+    GLuint environmentCube = 0;
+    GLuint environmentMask = 0;
     GLsizei vertexCount = 0;
     float glossiness = 10.0f;
     float materialAlpha = 1.0f;
@@ -176,6 +178,10 @@ struct GpuObject {
     bool realDiffuse = false;
     bool realNormal = false;
     bool realGlow = false;
+    bool realEnvironmentCube = false;
+    bool realEnvironmentMask = false;
+    bool environmentEnabledQ2050 = false;
+    float environmentMapScaleQ2050 = 1.0f;
     bool noLighting = false;
     bool noLightingFalloff = false;
     float noLightingFalloffParams[4]{0.0f, 1.0f, 1.0f, 1.0f};
@@ -230,6 +236,11 @@ GLint gUseVertexColorLocationQ1020 = -1;
 GLint gUseVertexAlphaLocationQ1020 = -1;
 GLint gSpecularEnabledLocationQ1020 = -1;
 GLint gSpecularColorLocationQ1020 = -1;
+GLint gEnvironmentCubeLocationQ2050 = -1;
+GLint gEnvironmentMaskLocationQ2050 = -1;
+GLint gEnvironmentPassLocationQ2050 = -1;
+GLint gEnvironmentScaleLocationQ2050 = -1;
+GLint gEnvironmentCustomMaskLocationQ2050 = -1;
 GLint gEmissiveColorLocationQ1020 = -1;
 GLint gEmissiveMultLocationQ1020 = -1;
 GLint gGlowEnabledLocationQ1020 = -1;
@@ -279,6 +290,7 @@ GLint gLocalLightPosRadiusLocationQ1010 = -1;
 GLint gLocalLightColorFalloffLocationQ1010 = -1;
 std::vector<GpuObject> gObjects;
 std::unordered_map<std::string, CachedGpuTexture> gTextureCache;
+std::unordered_map<std::string, CachedGpuTexture> gCubeTextureCacheQ2050;
 
 // Q19: decoded DDS data is prepared on the serialized asset worker and
 // consumed later by the render thread. OpenGL handles remain render-thread only.
@@ -836,6 +848,85 @@ bool UploadTexture(const std::string& path,
     if (!gExteriorStreamingActiveQ1890) Q6H_LOGI("Q6H GPU %s CACHE MISS: ref=%08X source=%s %dx%d format=%s uniqueTextures=%zu",
              label, refFormId, real ? texture.sourcePath.c_str() : "<fallback>",
              texture.width, texture.height, texture.format.c_str(), gTextureCache.size());
+    return true;
+}
+
+
+bool UploadCubeTextureQ2050(const std::string& path,
+                            GLuint& textureId, bool& real,
+                            const char* label, uint32_t refFormId) {
+    textureId = 0u;
+    real = false;
+    if (path.empty()) return true;
+
+    const std::string cacheKey = std::string("cube:") + TextureCacheKey(path, label);
+    const auto cached = gCubeTextureCacheQ2050.find(cacheKey);
+    if (cached != gCubeTextureCacheQ2050.end()) {
+        textureId = cached->second.id;
+        real = cached->second.real;
+        return true;
+    }
+
+    Fo3RgbaCubeTexture cube;
+    real = LoadFalloutCubeTextureRgba(path, cube);
+    if (!real || cube.width <= 0 || cube.height <= 0 ||
+        cube.mipLevels <= 0) {
+        Q6H_LOGW("Q20.5 CUBE UPLOAD SKIP: ref=%08X path=%s reason=decode-failed",
+                 refFormId, path.c_str());
+        return true;
+    }
+
+    glGenTextures(1, &textureId);
+    glBindTexture(GL_TEXTURE_CUBE_MAP, textureId);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER,
+                    cube.mipLevels > 1 ? GL_LINEAR_MIPMAP_LINEAR : GL_LINEAR);
+
+    for (int face = 0; face < 6; ++face) {
+        int w = cube.width;
+        int h = cube.height;
+        if (static_cast<int>(cube.rgbaLevels[face].size()) != cube.mipLevels) {
+            glBindTexture(GL_TEXTURE_CUBE_MAP, 0);
+            glDeleteTextures(1, &textureId);
+            textureId = 0u;
+            real = false;
+            return true;
+        }
+        for (int mip = 0; mip < cube.mipLevels; ++mip) {
+            const std::vector<uint8_t>& rgba = cube.rgbaLevels[face][mip];
+            const size_t expected =
+                static_cast<size_t>(w) * static_cast<size_t>(h) * 4u;
+            if (rgba.size() != expected) {
+                glBindTexture(GL_TEXTURE_CUBE_MAP, 0);
+                glDeleteTextures(1, &textureId);
+                textureId = 0u;
+                real = false;
+                return true;
+            }
+            glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + face, mip, GL_RGBA8,
+                         w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, rgba.data());
+            w = std::max(1, w >> 1);
+            h = std::max(1, h >> 1);
+        }
+    }
+    glBindTexture(GL_TEXTURE_CUBE_MAP, 0);
+
+    if (glGetError() != GL_NO_ERROR) {
+        glDeleteTextures(1, &textureId);
+        textureId = 0u;
+        real = false;
+        return true;
+    }
+
+    gCubeTextureCacheQ2050.emplace(cacheKey,
+                                   CachedGpuTexture{textureId, true});
+    Q6H_LOGI("Q20.5 CUBE GPU READY: ref=%08X path=%s size=%dx%d mips=%d format=%s cache=%zu faces=+X,-X,+Y,-Y,+Z,-Z",
+             refFormId, path.c_str(), cube.width, cube.height, cube.mipLevels,
+             cube.format.c_str(), gCubeTextureCacheQ2050.size());
     return true;
 }
 
