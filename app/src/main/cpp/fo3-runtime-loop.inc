@@ -537,6 +537,9 @@ private:
         if (!CreateAction("contact_ao_toggle", "Contact AO Toggle",
                           XR_ACTION_TYPE_BOOLEAN_INPUT,
                           1, &handPaths_[1], &contactAoToggleAction_)) return false;
+        if (!CreateAction("environment_toggle", "Environment Mapping Toggle",
+                          XR_ACTION_TYPE_BOOLEAN_INPUT,
+                          1, &handPaths_[1], &environmentToggleAction_)) return false;
 
         XrPath profile = XR_NULL_PATH;
         XrPath leftAim = XR_NULL_PATH;
@@ -549,6 +552,7 @@ private:
         XrPath leftFogX = XR_NULL_PATH;
         XrPath leftPpDomainY = XR_NULL_PATH;
         XrPath rightContactAoB = XR_NULL_PATH;
+        XrPath rightEnvironmentStick = XR_NULL_PATH;
         if (!Path("/interaction_profiles/oculus/touch_controller", &profile) ||
             !Path("/user/hand/left/input/aim/pose", &leftAim) ||
             !Path("/user/hand/right/input/aim/pose", &rightAim) ||
@@ -559,9 +563,10 @@ private:
             !Path("/user/hand/left/input/trigger/value", &leftTimeTriggerValue) ||
             !Path("/user/hand/left/input/x/click", &leftFogX) ||
             !Path("/user/hand/left/input/y/click", &leftPpDomainY) ||
-            !Path("/user/hand/right/input/b/click", &rightContactAoB)) return false;
+            !Path("/user/hand/right/input/b/click", &rightContactAoB) ||
+            !Path("/user/hand/right/input/thumbstick/click", &rightEnvironmentStick)) return false;
 
-        const std::array<XrActionSuggestedBinding, 10> bindings{{
+        const std::array<XrActionSuggestedBinding, 11> bindings{{
             {poseAction_, leftAim},
             {poseAction_, rightAim},
             {moveXAction_, leftStickX},
@@ -572,6 +577,7 @@ private:
             {fogToggleAction_, leftFogX},
             {ppDomainToggleAction_, leftPpDomainY},
             {contactAoToggleAction_, rightContactAoB},
+            {environmentToggleAction_, rightEnvironmentStick},
         }};
         XrInteractionProfileSuggestedBinding suggested{XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING};
         suggested.interactionProfile = profile;
@@ -1081,6 +1087,15 @@ private:
                     GetFo3ContactAoEnabledQ204E() ? 1 : 0);
         }
         contactAoTogglePressed_ = q204eContactAoPressed;
+
+        const bool q205aEnvironmentPressed =
+            ReadBooleanActionQ1450(environmentToggleAction_, handPaths_[1]);
+        if (q205aEnvironmentPressed && !environmentTogglePressed_) {
+            ToggleFo3EnvironmentPassQ205A();
+            FQ_LOGI("Q20.5A ENV TOGGLE: enabled=%d source=RIGHT_STICK_CLICK",
+                    GetFo3EnvironmentPassEnabledQ205A() ? 1 : 0);
+        }
+        environmentTogglePressed_ = q205aEnvironmentPressed;
         activateDownQ1700_ = ReadBoolActionQ1699(activateAction_, handPaths_[1]);
 
         for (uint32_t hand = 0; hand < 2; ++hand) {
@@ -1575,6 +1590,7 @@ private:
     XrAction fogToggleAction_{XR_NULL_HANDLE};
     XrAction ppDomainToggleAction_{XR_NULL_HANDLE};
     XrAction contactAoToggleAction_{XR_NULL_HANDLE};
+    XrAction environmentToggleAction_{XR_NULL_HANDLE};
     std::array<XrPath, 2> handPaths_{XR_NULL_PATH, XR_NULL_PATH};
     std::array<XrSpace, 2> handSpaces_{XR_NULL_HANDLE, XR_NULL_HANDLE};
     std::array<XrPosef, 2> handLocalPoses_{};
@@ -1588,6 +1604,7 @@ private:
     bool fogTogglePressed_{false};
     bool ppDomainTogglePressed_{false};
     bool contactAoTogglePressed_{false};
+    bool environmentTogglePressed_{false};
     bool activateLatched_{false};
 
     XrVector3f playerPosition_{0.0f, 0.0f, 0.0f};
