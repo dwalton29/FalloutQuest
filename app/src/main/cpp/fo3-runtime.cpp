@@ -5563,20 +5563,38 @@ void RenderScene() {
             &q2090PlaneCell, &q2090PlaneType);
 
         float q2090ReflectionMvp[16]{};
-        const bool q2090WaterExposed = Q2090AnyLoadedWaterAboveLand();
+        const size_t q209bExposedCells = GetFo3ExposedWaterCellCountQ209B();
+        const bool q209bWaterInFrustum =
+            q2090HavePlane && q209bExposedCells > 0u &&
+            IsFo3WaterPotentiallyVisibleQ209B(
+                mvp,
+                gExteriorOriginXQ1890,
+                gExteriorOriginYQ1890,
+                gExteriorOriginZQ1890,
+                FLOOR_Y,
+                SCENE_FORWARD,
+                FO3_UNITS_PER_METRE);
         const bool q2090ReflectionReady =
-            q2090HavePlane && q2090WaterExposed &&
+            q2090HavePlane && q209bWaterInFrustum &&
             Q2090RenderWaterReflection(mvp, q2090PlaneY, q2090ReflectionMvp);
 
         static uint32_t q2090LastPlaneCellLogged = 0u;
-        if (q2090HavePlane && q2090PlaneCell != q2090LastPlaneCellLogged) {
+        static int q209bLastExposedLogged = -1;
+        static int q209bLastFrustumLogged = -1;
+        if ((q2090HavePlane && q2090PlaneCell != q2090LastPlaneCellLogged) ||
+            static_cast<int>(q209bExposedCells) != q209bLastExposedLogged ||
+            (q209bWaterInFrustum ? 1 : 0) != q209bLastFrustumLogged) {
             q2090LastPlaneCellLogged = q2090PlaneCell;
-            Q6H_LOGI("Q20.9 WATER MIRROR PLANE: worldspace=%08X cell=%08X WATR=%08X heightGame=%.3f planeSceneY=%.5f reflectionReady=%d selector=eye-containing-cell-else-nearest",
-                     gExteriorWorldspaceQ1890, q2090PlaneCell, q2090PlaneType,
+            q209bLastExposedLogged = static_cast<int>(q209bExposedCells);
+            q209bLastFrustumLogged = q209bWaterInFrustum ? 1 : 0;
+            Q6H_LOGI("Q20.9B WATER VISIBILITY: worldspace=%08X loaded=%zu exposed=%zu frustumVisible=%d dominantCell=%08X WATR=%08X heightGame=%.3f planeSceneY=%.5f reflectionReady=%d policy=LAND-min<water+homogeneous-frustum",
+                     gExteriorWorldspaceQ1890,
+                     GetFo3WaterCellsQ2070().size(),
+                     q209bExposedCells,
+                     q209bWaterInFrustum ? 1 : 0,
+                     q2090PlaneCell, q2090PlaneType,
                      q2090HeightGame, q2090PlaneY,
                      q2090ReflectionReady ? 1 : 0);
-            Q6H_LOGI("Q20.9 WATER REFLECTION VISIBILITY: exposedAboveLAND=%d policy=loaded-LAND-min-vs-authored-water-height",
-                     q2090WaterExposed ? 1 : 0);
         }
 
         const bool q2080SceneSnapshotReady =
