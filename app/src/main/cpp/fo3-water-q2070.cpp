@@ -923,6 +923,13 @@ bool LoadFo3WaterSceneQ2070(uint32_t worldspaceFormId,
                   cell.type.depthFalloffStart, cell.type.depthFalloffEnd,
                   cell.type.distortionAmount, cell.type.shininess,
                   cell.type.reflectionHdrMultiplier);
+            WLOGI("Q20.8A WATER NOISE DATA: type=%08X noiseScale=%.6f normalUvScale=%.6f uvScale=(%.6f %.6f %.6f) windDirDeg=(%.6f %.6f %.6f) windSpeed=(%.6f %.6f %.6f) amplitude=(%.6f %.6f %.6f) source=WATR-DNAM",
+                  cell.type.formId,
+                  cell.type.noiseScale, cell.type.normalUvScale,
+                  cell.type.uvScale[0], cell.type.uvScale[1], cell.type.uvScale[2],
+                  cell.type.windDirection[0], cell.type.windDirection[1], cell.type.windDirection[2],
+                  cell.type.windSpeed[0], cell.type.windSpeed[1], cell.type.windSpeed[2],
+                  cell.type.amplitudeScale[0], cell.type.amplitudeScale[1], cell.type.amplitudeScale[2]);
         }
         gWaterCells.push_back(std::move(cell));
     }
@@ -952,16 +959,45 @@ void RenderFo3WaterSurfaceQ2070(const float* mvp16,
                                 float originGameZ,
                                 float floorY,
                                 float sceneForward,
-                                float unitsPerMetre) {
+                                float unitsPerMetre,
+                                uint32_t sceneColorTexture,
+                                uint32_t sceneDepthTexture,
+                                int sceneWidth,
+                                int sceneHeight,
+                                bool sceneSnapshotReady,
+                                const float eyePosition[3],
+                                const float sunDirection[3],
+                                const float sunColor[3],
+                                const float sceneFogColor[3],
+                                float sceneFogNearMetres,
+                                float sceneFogFarMetres,
+                                float sceneFogPower,
+                                float nearClipMetres,
+                                float farClipMetres) {
     if (!mvp16 || gWaterCells.empty() || unitsPerMetre <= 0.0f) return;
     if (!EnsureRenderer()) return;
+
+    const Fo3WaterCellQ2070& firstCell = gWaterCells.front();
+    if (!EnsureNoiseTexture(firstCell.noiseTexturePath)) return;
 
     GLint previousProgram = 0;
     GLint previousVao = 0;
     GLint previousArrayBuffer = 0;
+    GLint previousActiveTexture = GL_TEXTURE0;
+    GLint previousTexture0 = 0;
+    GLint previousTexture1 = 0;
+    GLint previousTexture2 = 0;
     glGetIntegerv(GL_CURRENT_PROGRAM, &previousProgram);
     glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &previousVao);
     glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &previousArrayBuffer);
+    glGetIntegerv(GL_ACTIVE_TEXTURE, &previousActiveTexture);
+    glActiveTexture(GL_TEXTURE0);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousTexture0);
+    glActiveTexture(GL_TEXTURE1);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousTexture1);
+    glActiveTexture(GL_TEXTURE2);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousTexture2);
+
     const GLboolean depthWasEnabled = glIsEnabled(GL_DEPTH_TEST);
     const GLboolean blendWasEnabled = glIsEnabled(GL_BLEND);
     const GLboolean cullWasEnabled = glIsEnabled(GL_CULL_FACE);
@@ -970,16 +1006,56 @@ void RenderFo3WaterSurfaceQ2070(const float* mvp16,
     GLint previousDepthFunc = GL_LESS;
     glGetIntegerv(GL_DEPTH_FUNC, &previousDepthFunc);
 
+    const float elapsedSeconds = static_cast<float>(
+        std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - gWaterTimeOrigin).count());
+
     glUseProgram(gProgram);
     glUniformMatrix4fv(gMvpLocation, 1, GL_FALSE, mvp16);
+    glUniform1i(gNoiseLocation, 0);
+    glUniform1i(gSceneColorLocation, 1);
+    glUniform1i(gSceneDepthLocation, 2);
+    glUniform1f(gSceneSnapshotReadyLocation,
+                sceneSnapshotReady && sceneColorTexture && sceneDepthTexture ? 1.0f : 0.0f);
+    glUniform2f(gViewportLocation,
+                static_cast<float>(std::max(sceneWidth, 1)),
+                static_cast<float>(std::max(sceneHeight, 1)));
+    if (eyePosition) glUniform3fv(gEyePositionLocation, 1, eyePosition);
+    else glUniform3f(gEyePositionLocation, 0.0f, 0.0f, 0.0f);
+    if (sunDirection) glUniform3fv(gSunDirectionLocation, 1, sunDirection);
+    else glUniform3f(gSunDirectionLocation, 0.35f, 0.85f, 0.40f);
+    if (sunColor) glUniform3fv(gSunColorLocation, 1, sunColor);
+    else glUniform3f(gSunColorLocation, 1.0f, 1.0f, 1.0f);
+    if (sceneFogColor) glUniform3fv(gSceneFogColorLocation, 1, sceneFogColor);
+    else glUniform3f(gSceneFogColorLocation, 0.0f, 0.0f, 0.0f);
+    glUniform2f(gSceneFogNearFarLocation,
+                sceneFogNearMetres, sceneFogFarMetres);
+    glUniform1f(gSceneFogPowerLocation, sceneFogPower);
+    glUniform2f(gClipNearFarLocation, nearClipMetres, farClipMetres);
+    glUniform1f(gUnitsPerMetreLocation, unitsPerMetre);
+    glUniform1f(gTimeLocation, elapsedSeconds);
+
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, gNoiseTexture);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D,
+                  sceneSnapshotReady ? static_cast<GLuint>(sceneColorTexture) : 0u);
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D,
+                  sceneSnapshotReady ? static_cast<GLuint>(sceneDepthTexture) : 0u);
+
     glBindVertexArray(gVao);
     glBindBuffer(GL_ARRAY_BUFFER, gVbo);
     glEnable(GL_DEPTH_TEST);
     glDepthFunc(GL_LEQUAL);
     glDepthMask(GL_FALSE);
+
+    // WATER001 is an opaque optical composite: the sampled RefractionMap is
+    // already present in RGB. Do not alpha-blend it over the scene a second time.
     glDisable(GL_BLEND);
     glDisable(GL_CULL_FACE);
 
+    size_t draws = 0u;
     for (const Fo3WaterCellQ2070& cell : gWaterCells) {
         const float gameMinX = static_cast<float>(cell.gridX) * CELL_SIZE;
         const float gameMaxX = gameMinX + CELL_SIZE;
@@ -992,26 +1068,60 @@ void RenderFo3WaterSurfaceQ2070(const float* mvp16,
         const float y = floorY +
             (cell.waterHeightGame - originGameZ) / unitsPerMetre;
 
-        const float vertices[18] = {
-            x0, y, z0,  x1, y, z0,  x1, y, z1,
-            x0, y, z0,  x1, y, z1,  x0, y, z1
+        // position.xyz + exact Fallout game-space XY for WATER vso TexScale UV.
+        const float vertices[30] = {
+            x0,y,z0, gameMinX,gameMinY,
+            x1,y,z0, gameMaxX,gameMinY,
+            x1,y,z1, gameMaxX,gameMaxY,
+            x0,y,z0, gameMinX,gameMinY,
+            x1,y,z1, gameMaxX,gameMaxY,
+            x0,y,z1, gameMinX,gameMaxY
         };
         glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(vertices), vertices);
 
-        const float* color = cell.type.valid
-            ? cell.type.shallowColor
-            : Fo3WaterTypeQ2070{}.shallowColor;
-        glUniform3f(gColorLocation,
-                    cell.type.valid ? color[0] : 0.16f,
-                    cell.type.valid ? color[1] : 0.22f,
-                    cell.type.valid ? color[2] : 0.14f);
+        const Fo3WaterTypeQ2070& w = cell.type;
+        glUniform3fv(gShallowLocation, 1, w.shallowColor);
+        glUniform3fv(gDeepLocation, 1, w.deepColor);
+        glUniform3fv(gReflectionLocation, 1, w.reflectionColor);
+        glUniform1f(gNormalUvScaleLocation,
+                    std::max(w.normalUvScale, 1.0f));
+        glUniform1f(gFresnelLocation,
+                    std::clamp(w.fresnelAmount, 0.0f, 1.0f));
+        glUniform1f(gShininessLocation,
+                    std::max(w.shininess, 1.0f));
+        glUniform2f(gDepthFalloffLocation,
+                    w.depthFalloffStart, w.depthFalloffEnd);
+        glUniform2f(gWaterFogNearFarLocation,
+                    w.aboveFogNear, w.aboveFogFar);
+        glUniform1f(gWaterFogAmountLocation,
+                    std::clamp(w.aboveFogAmount, 0.0f, 1.0f));
+        glUniform1f(gDistortionLocation,
+                    std::max(w.distortionAmount, 0.0f));
+        glUniform1f(gNoiseScaleLocation,
+                    std::max(w.noiseScale, 0.0f));
+        glUniform3fv(gLayerUvScaleLocation, 1, w.uvScale);
+        glUniform3fv(gLayerWindDirLocation, 1, w.windDirection);
+        glUniform3fv(gLayerWindSpeedLocation, 1, w.windSpeed);
+        glUniform3fv(gLayerAmpLocation, 1, w.amplitudeScale);
+
+        // If a later streamed CELL resolves a different NNAM, switch its real
+        // authored texture before drawing that CELL.
+        if (cell.noiseTexturePath != gNoiseTexturePath) {
+            EnsureNoiseTexture(cell.noiseTexturePath);
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, gNoiseTexture);
+        }
+
         glDrawArrays(GL_TRIANGLES, 0, 6);
+        ++draws;
     }
 
     if (!gRenderLogged) {
         gRenderLogged = true;
-        WLOGI("Q20.7A WATER SURFACE DRAW: worldspace=%08X cells=%zu mode=ESM-XCLW-plane diagnosticColour=WATR-shallow depthTest=LEQUAL depthWrite=0 reflection=DEFERRED refraction=DEFERRED depthColour=DEFERRED displacement=DEFERRED pcTargetShader=WATER-family",
-              gWorldspace, gWaterCells.size());
+        WLOGI("Q20.8A WATER001 DRAW: worldspace=%08X cells=%zu draws=%zu snapshotReady=%d scene=%dx%d noiseReal=%d depthTest=LEQUAL depthWrite=0 blend=OPAQUE_RGB refraction=OPAQUE_SCENE_RESOLVE depth=SCENE_DEPTH_RECONSTRUCTION fresnel=SP17 shallowDeep=SP17 waterFog=SP17 reflection=AUTHORED_CONSTANT displacement=DEFERRED_WATER017 vrAdaptation=legacy-RefractionMap+DepthMap-from-resolved-Quest-scene",
+              gWorldspace, gWaterCells.size(), draws,
+              sceneSnapshotReady ? 1 : 0, sceneWidth, sceneHeight,
+              gNoiseTextureReal ? 1 : 0);
     }
 
     glDepthFunc(static_cast<GLenum>(previousDepthFunc));
@@ -1019,18 +1129,31 @@ void RenderFo3WaterSurfaceQ2070(const float* mvp16,
     if (depthWasEnabled) glEnable(GL_DEPTH_TEST); else glDisable(GL_DEPTH_TEST);
     if (blendWasEnabled) glEnable(GL_BLEND); else glDisable(GL_BLEND);
     if (cullWasEnabled) glEnable(GL_CULL_FACE); else glDisable(GL_CULL_FACE);
+
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture2));
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture1));
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture0));
+    glActiveTexture(static_cast<GLenum>(previousActiveTexture));
+
     glBindBuffer(GL_ARRAY_BUFFER, static_cast<GLuint>(previousArrayBuffer));
     glBindVertexArray(static_cast<GLuint>(previousVao));
     glUseProgram(static_cast<GLuint>(previousProgram));
 }
 
 void ShutdownFo3WaterQ2070() {
+    if (gNoiseTexture) glDeleteTextures(1, &gNoiseTexture);
     if (gVbo) glDeleteBuffers(1, &gVbo);
     if (gVao) glDeleteVertexArrays(1, &gVao);
     if (gProgram) glDeleteProgram(gProgram);
-    gVbo = gVao = gProgram = 0u;
-    gMvpLocation = gColorLocation = -1;
+    gNoiseTexture = gVbo = gVao = gProgram = 0u;
+    gNoiseTexturePath.clear();
+    gNoiseTextureReal = false;
+    gMvpLocation = -1;
     gRenderLogged = false;
+    gNoiseLogged = false;
     gWaterCells.clear();
     gWorldspace = 0u;
 }
