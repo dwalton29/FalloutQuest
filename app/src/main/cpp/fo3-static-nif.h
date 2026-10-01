@@ -17,6 +17,11 @@ struct Fo3StaticNifMesh {
     std::string diffuseTexturePath;
     std::string normalTexturePath;
     std::string glowTexturePath;
+    // Fallout 3 BSShaderTextureSet slots recovered from the supplied Megaton NIFs:
+    // 4 = EnvironmentCubeMap (e.g. textures\effects\Chrome_e.dds)
+    // 5 = CustomEnvMask (material-specific *_m.dds).
+    std::string environmentCubeTexturePath;
+    std::string environmentMaskTexturePath;
 
     float specularColor[3]{1.0f, 1.0f, 1.0f};
     float emissiveColor[3]{0.0f, 0.0f, 0.0f};
