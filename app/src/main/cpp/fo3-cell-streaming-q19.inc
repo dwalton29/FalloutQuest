@@ -140,7 +140,11 @@ constexpr int Q1900_CACHE_RADIUS_Q19 = 3;
 // choice while giving the asset worker substantially more lead time.
 constexpr float Q1900_PREFETCH_EDGE_UNITS_Q19 = 1792.0f;
 constexpr uint64_t Q1900_GPU_BUDGET_US_Q19 = 2200u;
-constexpr size_t Q1960_GPU_BYTES_PER_FRAME = 256u * 1024u;
+// Q20.11: the previous 256 KiB cap was reached well before the 2.2 ms time
+// budget on Quest 3, stretching dense CELL publication over many frames.
+// Keep the time cap unchanged, but allow more bytes when the CELL is close.
+constexpr size_t Q1960_GPU_BYTES_PER_FRAME = 512u * 1024u;
+constexpr size_t Q1960_GPU_BYTES_PER_FRAME_URGENT = 1024u * 1024u;
 constexpr size_t Q1960_TEXTURE_CHUNK_BYTES = 128u * 1024u;
 constexpr size_t Q1960_VBO_CHUNK_BYTES = 128u * 1024u;
 constexpr uint64_t Q1910_GPU_DELETE_BUDGET_US = 750u;
@@ -361,9 +365,11 @@ int Q1900CellPriorityQ19(const Q1900CellStateQ19& state,
         return 160 + cheb;
     }
     if (!state.collisionPrimed) {
-        // Collision is needed only for the active 3x3. It runs immediately
-        // after near visual work, before radius-2/prefetch visuals can starve it.
-        if (cheb <= 1) return 20 + dx + dy;
+        // Q20.11: do not let neighbour collision work leapfrog the radius-2
+        // visual ring. The current CELL still gets prompt collision service,
+        // but surrounding collision yields to buildings the player can see.
+        if (cheb == 0) return 15;
+        if (cheb == 1) return 45 + dx + dy;
         return 1000000;
     }
     return 1000000;
@@ -1030,7 +1036,7 @@ void Q1900CommitCellVisualsQ19(Q1900CellStateQ19& state) {
             std::chrono::duration_cast<std::chrono::microseconds>(
                 std::chrono::steady_clock::now() - state.requestedAt).count());
 
-    Q6H_LOGI("Q19.6 CELL READY: cell=(%d,%d) enteringShapes=%zu replacedShapes=%zu liveShapes=%zu deferredDeletes=%zu placements=%zu workerUs=%llu gpuUs=%llu retireQueueUs=%llu maxTextureStepUs=%llu maxShapeStepUs=%llu totalUs=%llu uploadBytesPerFrame=%zu lodHandoff=cell-specific",
+    Q6H_LOGI("Q20.11 CELL READY: cell=(%d,%d) enteringShapes=%zu replacedShapes=%zu liveShapes=%zu deferredDeletes=%zu placements=%zu workerUs=%llu gpuUs=%llu retireQueueUs=%llu maxTextureStepUs=%llu maxShapeStepUs=%llu totalUs=%llu baseUploadBytesPerFrame=%zu urgentUploadBytesPerFrame=%zu lodHandoff=cell-specific",
              state.gridX, state.gridY, entering, retired, gObjects.size(),
              gQ1910DeferredGpuDeletesQ19.size(), state.placements.size(),
              static_cast<unsigned long long>(state.workerUs),
@@ -1039,7 +1045,8 @@ void Q1900CommitCellVisualsQ19(Q1900CellStateQ19& state) {
              static_cast<unsigned long long>(state.maxTextureGpuUs),
              static_cast<unsigned long long>(state.maxShapeGpuUs),
              static_cast<unsigned long long>(totalUs),
-             Q1960_GPU_BYTES_PER_FRAME);
+             Q1960_GPU_BYTES_PER_FRAME,
+             Q1960_GPU_BYTES_PER_FRAME_URGENT);
 }
 
 void Q1900AdvanceGpuQ19(int32_t actualGridX, int32_t actualGridY) {
@@ -1050,6 +1057,13 @@ void Q1900AdvanceGpuQ19(int32_t actualGridX, int32_t actualGridY) {
     const auto frameStarted = std::chrono::steady_clock::now();
     size_t bytesThisFrame = 0u;
     bool didWork = false;
+    const int q2011Cheb =
+        std::max(std::abs(state->gridX - actualGridX),
+                 std::abs(state->gridY - actualGridY));
+    const size_t q2011ByteBudget =
+        q2011Cheb <= 1
+            ? Q1960_GPU_BYTES_PER_FRAME_URGENT
+            : Q1960_GPU_BYTES_PER_FRAME;
 
     while (state->textureCursor < state->textures.size()) {
         const Q1960UploadStepQ19 step =
@@ -1058,7 +1072,7 @@ void Q1900AdvanceGpuQ19(int32_t actualGridX, int32_t actualGridY) {
         if (step == Q1960UploadStepQ19::Failed) {
             // Keep progressing; UploadCpuObject will use fallback/cache state.
         }
-        if (bytesThisFrame >= Q1960_GPU_BYTES_PER_FRAME ||
+        if (bytesThisFrame >= q2011ByteBudget ||
             Q1960ElapsedUsQ19(frameStarted) >= Q1900_GPU_BUDGET_US_Q19) {
             return;
         }
@@ -1075,7 +1089,7 @@ void Q1900AdvanceGpuQ19(int32_t actualGridX, int32_t actualGridY) {
         if (step == Q1960UploadStepQ19::Failed) {
             // Failed shape is skipped exactly like the legacy upload path.
         }
-        if (bytesThisFrame >= Q1960_GPU_BYTES_PER_FRAME ||
+        if (bytesThisFrame >= q2011ByteBudget ||
             Q1960ElapsedUsQ19(frameStarted) >= Q1900_GPU_BUDGET_US_Q19) {
             return;
         }
@@ -1095,7 +1109,7 @@ void Q1900AdvanceGpuQ19(int32_t actualGridX, int32_t actualGridY) {
                  state->textureCursor, state->textures.size(),
                  state->gpuCursor, state->cpu.size(),
                  state->stagedGpu.size(),
-                 bytesThisFrame, Q1960_GPU_BYTES_PER_FRAME,
+                 bytesThisFrame, q2011ByteBudget,
                  static_cast<unsigned long long>(Q1900_GPU_BUDGET_US_Q19),
                  state->q1960TextureUpload.active ? 1 : 0,
                  state->q1960ShapeUpload.active ? 1 : 0);
@@ -1189,6 +1203,19 @@ void Q1900TryPublishCollisionQ19(int32_t actualGridX, int32_t actualGridY) {
                      task->centreX, task->centreY,
                      task->placements.size(),
                      static_cast<unsigned long long>(task->prepareUs));
+        }
+    }
+
+    // Q20.11: collision snapshot assembly is expensive and shares the same
+    // serialized asset lane as visible CELL work. Do not start a new snapshot
+    // while any radius-2 visual CELL is still missing.
+    for (const auto& entry : gQ1900CellsQ19) {
+        const Q1900CellStateQ19& state = entry.second;
+        const int dx = std::abs(state.gridX - actualGridX);
+        const int dy = std::abs(state.gridY - actualGridY);
+        if (std::max(dx, dy) <= Q1900_RESIDENT_RADIUS_Q19 &&
+            state.wanted && !state.visualReady) {
+            return;
         }
     }
 

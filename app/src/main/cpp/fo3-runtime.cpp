@@ -4553,8 +4553,13 @@ bool Q1970LodBlockPendingQ19(int32_t blockX, int32_t blockY) {
 }
 
 bool Q1970NearDetailSafeQ19(int32_t actualGridX, int32_t actualGridY) {
-    for (int dy = -1; dy <= 1; ++dy) {
-        for (int dx = -1; dx <= 1; ++dx) {
+    // Q20.11: distant LOD is idle work. Require the entire detailed 5x5 to be
+    // visually resident, not merely the active 3x3, and yield whenever an
+    // earlier prefetch has already requested another visible CELL.
+    for (int dy = -Q1900_RESIDENT_RADIUS_Q19;
+         dy <= Q1900_RESIDENT_RADIUS_Q19; ++dy) {
+        for (int dx = -Q1900_RESIDENT_RADIUS_Q19;
+             dx <= Q1900_RESIDENT_RADIUS_Q19; ++dx) {
             const auto found = gQ1900CellsQ19.find(
                 Q1900CellKeyQ19(actualGridX + dx, actualGridY + dy));
             if (found == gQ1900CellsQ19.end() ||
@@ -4562,6 +4567,9 @@ bool Q1970NearDetailSafeQ19(int32_t actualGridX, int32_t actualGridY) {
                 return false;
             }
         }
+    }
+    for (const auto& entry : gQ1900CellsQ19) {
+        if (entry.second.wanted && !entry.second.visualReady) return false;
     }
     return true;
 }
@@ -4853,8 +4861,8 @@ void Q1970AdvanceNativeLodQ19(int32_t cellX, int32_t cellY,
     Q1970AdvanceLodGpuQ19();
     if (gQ1970LodUploadQ19 || gQ1970LodWorkerQ19) return;
 
-    // Share the CPU asset lane safely, but do not wait for all radius-2/prefetch
-    // cells. As soon as the active 3x3 is visually covered, LOD may take one turn.
+    // Q20.11: LOD is true idle work. It may use the serialized CPU lane only
+    // after the complete 5x5 detail set and any directional prefetch are ready.
     if (gQ1900WorkerQ19 || gQ1930CollisionTaskQ19 ||
         IsFo3TerrainStreamingCpuBusyQ2000() ||
         !Q1970NearDetailSafeQ19(cellX, cellY)) {
@@ -4875,7 +4883,7 @@ void Q1970AdvanceNativeLodQ19(int32_t cellX, int32_t cellY,
     task->floorZ = floorZ;
     gQ1970LodWorkerQ19 = task;
 
-    Q6H_LOGI("Q19.7 LOD CPU START: block=(%d,%d) ring=%d active3x3Ready=1 serializedAssetLane=1 outerRingStarvation=0",
+    Q6H_LOGI("Q20.11 LOD CPU START: block=(%d,%d) ring=%d full5x5Ready=1 pendingVisuals=0 serializedAssetLane=1",
              blockX, blockY, ring);
     std::thread([task]() { Q1970RunLodWorkerQ19(task); }).detach();
 }
