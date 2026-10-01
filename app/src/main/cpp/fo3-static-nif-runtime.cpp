@@ -304,7 +304,9 @@ bool ParseShapeObject(const uint8_t* data, size_t size, const NifHeader& header,
 
 bool ParseTextureSet(const uint8_t* data, size_t size,
                      std::string& diffuse, std::string& normal,
-                     std::string& glow) {
+                     std::string& glow,
+                     std::string& environmentCube,
+                     std::string& environmentMask) {
     Cursor c(data, size);
     uint32_t count = 0;
     if (!c.U32(count) || count == 0u || count > 32u) return false;
@@ -314,6 +316,9 @@ bool ParseTextureSet(const uint8_t* data, size_t size,
         if (i == 0u) diffuse = value;
         if (i == 1u) normal = value;
         if (i == 2u) glow = value;
+        // Directly observed in supplied Fallout 3 Megaton meshes.
+        if (i == 4u) environmentCube = value;
+        if (i == 5u) environmentMask = value;
     }
     return !diffuse.empty();
 }
@@ -1158,7 +1163,9 @@ bool TryLoadShape(const std::vector<uint8_t>& nif, const NifHeader& header,
         ParseTextureSet(BlockData(nif, header, textureSetRef),
                         header.blockSizes[textureSetRef],
                         candidate.diffuseTexturePath, candidate.normalTexturePath,
-                        candidate.glowTexturePath);
+                        candidate.glowTexturePath,
+                        candidate.environmentCubeTexturePath,
+                        candidate.environmentMaskTexturePath);
     }
 
     const size_t vertexCount = candidate.positions.size() / 3u;
@@ -1173,6 +1180,8 @@ bool TryLoadShape(const std::vector<uint8_t>& nif, const NifHeader& header,
         candidate.diffuseTexturePath.clear();
         candidate.normalTexturePath.clear();
         candidate.glowTexturePath.clear();
+        candidate.environmentCubeTexturePath.clear();
+        candidate.environmentMaskTexturePath.clear();
     }
 
     std::vector<NifTransform> ancestors;
@@ -1292,11 +1301,14 @@ bool LoadFo3StaticNifMeshes(const std::string& modelPath,
             else q1100Properties += "<invalid>";
         }
         if (q1100Properties.empty()) q1100Properties = "<none>";
-        Q6H_LOGI("Q11.0 MATERIAL BIND: model=%s shapeBlock=%u shapeType=%s properties=%s diffuse=%s normal=%s glow=%s noLighting=%d shaderFlags1=%08X shaderFlags2=%08X",
+        Q6H_LOGI("Q20.5 MATERIAL BIND: model=%s shapeBlock=%u shapeType=%s properties=%s diffuse=%s normal=%s glow=%s envCube=%s envMask=%s envScale=%.4f noLighting=%d shaderFlags1=%08X shaderFlags2=%08X",
                  resolved.c_str(), block, type.c_str(), q1100Properties.c_str(),
                  candidate.diffuseTexturePath.empty() ? "<none>" : candidate.diffuseTexturePath.c_str(),
                  candidate.normalTexturePath.empty() ? "<none>" : candidate.normalTexturePath.c_str(),
                  candidate.glowTexturePath.empty() ? "<none>" : candidate.glowTexturePath.c_str(),
+                 candidate.environmentCubeTexturePath.empty() ? "<none>" : candidate.environmentCubeTexturePath.c_str(),
+                 candidate.environmentMaskTexturePath.empty() ? "<none>" : candidate.environmentMaskTexturePath.c_str(),
+                 candidate.environmentMapScale,
                  candidate.noLighting ? 1 : 0,
                  candidate.shaderFlags1, candidate.shaderFlags2);
         outMeshes.push_back(std::move(candidate));
