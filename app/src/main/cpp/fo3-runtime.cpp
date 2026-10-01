@@ -5182,6 +5182,20 @@ void Q6HGenFramebuffers(GLsizei n, GLuint* framebuffers) {
 GLuint q1280PostFbo = 0u;
 GLuint q1280PostColor = 0u;
 GLuint q1370PostDepth = 0u;
+
+// Q20.6: FalloutPrefs requests 8x MSAA. The Quest scene renders through an
+// off-screen HDR target before post processing, so multisampling must live
+// here rather than on the final OpenXR full-screen composite.
+GLuint q2060MsaaFbo = 0u;
+GLuint q2060MsaaColor = 0u;
+GLuint q2060MsaaDepth = 0u;
+GLsizei q2060MsaaWidth = 0;
+GLsizei q2060MsaaHeight = 0;
+GLsizei q2060MsaaSamples = 1;
+GLint q2060GlMaxSamples = 1;
+bool q2060MsaaActive = false;
+constexpr GLsizei Q2060_PC_REQUESTED_MSAA = 8;
+
 GLuint q1280PostProgram = 0u;
 GLuint q1280PostVao = 0u;
 GLsizei q1280PostWidth = 0;
@@ -6060,6 +6074,79 @@ bool Q1280DriverSupportsHalfFloatTarget() {
            std::strstr(extensions, "GL_EXT_color_buffer_float") != nullptr;
 }
 
+bool Q2060AllocateMsaaTargetQ2060(GLsizei width, GLsizei height,
+                                  GLenum colorFormat) {
+    q2060MsaaActive = false;
+    q2060MsaaSamples = 1;
+    if (width <= 0 || height <= 0) return false;
+
+    glGetIntegerv(GL_MAX_SAMPLES, &q2060GlMaxSamples);
+    q2060GlMaxSamples = std::max(q2060GlMaxSamples, 1);
+
+    if (!q2060MsaaFbo) glGenFramebuffers(1, &q2060MsaaFbo);
+    if (!q2060MsaaColor) glGenRenderbuffers(1, &q2060MsaaColor);
+    if (!q2060MsaaDepth) glGenRenderbuffers(1, &q2060MsaaDepth);
+
+    const GLsizei capped =
+        std::min<GLsizei>(Q2060_PC_REQUESTED_MSAA,
+                          static_cast<GLsizei>(q2060GlMaxSamples));
+    const GLsizei candidates[] = {8, 4, 2};
+    GLenum finalStatus = 0u;
+
+    for (GLsizei samples : candidates) {
+        if (samples > capped) continue;
+
+        while (glGetError() != GL_NO_ERROR) {}
+
+        glBindFramebuffer(GL_FRAMEBUFFER, q2060MsaaFbo);
+
+        glBindRenderbuffer(GL_RENDERBUFFER, q2060MsaaColor);
+        glRenderbufferStorageMultisample(GL_RENDERBUFFER, samples,
+                                         colorFormat, width, height);
+        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                                  GL_RENDERBUFFER, q2060MsaaColor);
+
+        glBindRenderbuffer(GL_RENDERBUFFER, q2060MsaaDepth);
+        glRenderbufferStorageMultisample(GL_RENDERBUFFER, samples,
+                                         GL_DEPTH_COMPONENT24, width, height);
+        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+                                  GL_RENDERBUFFER, q2060MsaaDepth);
+
+        finalStatus = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+        const GLenum error = glGetError();
+        if (finalStatus == GL_FRAMEBUFFER_COMPLETE && error == GL_NO_ERROR) {
+            q2060MsaaSamples = samples;
+            q2060MsaaWidth = width;
+            q2060MsaaHeight = height;
+            q2060MsaaActive = true;
+            Q6H_LOGI("Q20.6 MSAA READY: pcRequested=%dx glMax=%d chosen=%dx size=%dx%d color=%s depth=DEPTH_COMPONENT24 sceneTarget=multisample-renderbuffer resolve=COLOR+DEPTH postPipeline=unchanged swapchainSamples=1 transparencyMsaa=pending",
+                     Q2060_PC_REQUESTED_MSAA, q2060GlMaxSamples,
+                     q2060MsaaSamples, width, height,
+                     colorFormat == GL_RGBA16F ? "RGBA16F" : "RGBA8");
+            return true;
+        }
+    }
+
+    q2060MsaaWidth = width;
+    q2060MsaaHeight = height;
+    Q6H_LOGW("Q20.6 MSAA FALLBACK: pcRequested=%dx glMax=%d chosen=1x status=0x%X color=%s reason=no-complete-multisample-target",
+             Q2060_PC_REQUESTED_MSAA, q2060GlMaxSamples, finalStatus,
+             colorFormat == GL_RGBA16F ? "RGBA16F" : "RGBA8");
+    return true;
+}
+
+void Q2060ResolveEyeMsaaQ2060() {
+    if (!q2060MsaaActive || q2060MsaaSamples <= 1 ||
+        !q2060MsaaFbo || !q1280PostFbo) return;
+
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, q2060MsaaFbo);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, q1280PostFbo);
+    glBlitFramebuffer(0, 0, q1280PostWidth, q1280PostHeight,
+                      0, 0, q1280PostWidth, q1280PostHeight,
+                      GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT,
+                      GL_NEAREST);
+}
+
 bool Q1280AllocatePostTarget(GLsizei width, GLsizei height) {
     if (width <= 0 || height <= 0) return false;
     if (!q1280PostFbo) glGenFramebuffers(1, &q1280PostFbo);
@@ -6116,6 +6203,7 @@ bool Q1280AllocatePostTarget(GLsizei width, GLsizei height) {
 
     q1280PostWidth = width;
     q1280PostHeight = height;
+    Q2060AllocateMsaaTargetQ2060(width, height, q1280PostInternalFormat);
     if (!q1280PostLoggedGpu) {
         q1280PostLoggedGpu = true;
         Q6H_LOGI("Q20.4E CONTACT AO A/B READY: size=%dx%d depth=DEPTH_COMPONENT24 taps=8 maxDarken=0.220 radiusPx=2.5..7.0 defaultEnabled=0 toggle=RIGHT_B syntheticQuestEffect=1",
@@ -6133,7 +6221,8 @@ bool Q1280BeginEyePostQ1280(GLuint swapchainFbo, GLsizei width, GLsizei height) 
         glBindFramebuffer(GL_FRAMEBUFFER, swapchainFbo);
         return false;
     }
-    glBindFramebuffer(GL_FRAMEBUFFER, q1280PostFbo);
+    glBindFramebuffer(GL_FRAMEBUFFER,
+                      q2060MsaaActive ? q2060MsaaFbo : q1280PostFbo);
     q1280PostActive = true;
     return true;
 }
@@ -6266,12 +6355,22 @@ void Q1280CompositeEyePostQ1280(GLuint swapchainFbo, GLsizei width, GLsizei heig
 
 void Q1350CompositeEyePostQ1350(uint32_t eyeIndex, GLuint swapchainFbo,
                                 GLsizei width, GLsizei height) {
+    // Resolve the multisampled HDR scene into the existing single-sample
+    // colour/depth textures before eye adaptation, bloom and final-film work.
+    Q2060ResolveEyeMsaaQ2060();
     if (eyeIndex == 0u) Q1350UpdateExposureQ1350();
     Q1280CompositeEyePostQ1280(swapchainFbo, width, height);
 }
 
 void Q1280ShutdownPostQ1280() {
     Q1670ShutdownPcBloomQ1670();
+    if (q2060MsaaColor) glDeleteRenderbuffers(1, &q2060MsaaColor);
+    if (q2060MsaaDepth) glDeleteRenderbuffers(1, &q2060MsaaDepth);
+    if (q2060MsaaFbo) glDeleteFramebuffers(1, &q2060MsaaFbo);
+    q2060MsaaColor = q2060MsaaDepth = q2060MsaaFbo = 0u;
+    q2060MsaaWidth = q2060MsaaHeight = 0;
+    q2060MsaaSamples = 1;
+    q2060MsaaActive = false;
     if (q1370PostDepth) glDeleteTextures(1, &q1370PostDepth);
     q1370PostDepth = 0u;
     if (q1350AdaptTexture[0] || q1350AdaptTexture[1]) glDeleteTextures(2, q1350AdaptTexture);
@@ -6338,6 +6437,12 @@ void Q6HViewport(GLint x, GLint y, GLsizei width, GLsizei height) {
     if (q1280PostFbo != 0u && q1370PostDepth != 0u &&
         q1370CurrentFbo == static_cast<GLint>(q1280PostFbo)) {
         // Q13.7 depth texture was already attached during target allocation.
+        return;
+    }
+    if (q2060MsaaActive && q2060MsaaFbo != 0u &&
+        q1370CurrentFbo == static_cast<GLint>(q2060MsaaFbo)) {
+        // Q20.6 multisampled colour/depth renderbuffers are already attached.
+        // Do not replace the depth attachment with the legacy single-sample RB.
         return;
     }
     if (!gDepthRenderbuffer) glGenRenderbuffers(1, &gDepthRenderbuffer);
