@@ -5138,6 +5138,37 @@ void RenderScene() {
     RenderFo3CollisionOverlay(mvp);
 
     if (gExteriorStreamingActiveQ1890 && gExteriorWorldspaceQ1890 != 0u) {
+        // Q20.8A Quest bridge for the retail WATER001 RefractionMap + DepthMap.
+        // The world is currently rendering into Q20.6's multisampled HDR FBO.
+        // Resolve the opaque scene after LAND, then restore the multisampled
+        // draw FBO so water can sample the resolved colour/depth without an
+        // attachment feedback loop. If MSAA is unavailable, WATER001 falls
+        // back to the genuine RT-free WATER003 optical lanes.
+        const bool q2080SceneSnapshotReady =
+            q2060MsaaActive && q2060MsaaSamples > 1 &&
+            q2060MsaaFbo != 0u && q1280PostFbo != 0u &&
+            q1280PostColor != 0u && q1370PostDepth != 0u &&
+            q1280PostWidth > 0 && q1280PostHeight > 0;
+        if (q2080SceneSnapshotReady) {
+            Q2060ResolveEyeMsaaQ2060();
+            glBindFramebuffer(GL_FRAMEBUFFER, q2060MsaaFbo);
+            glViewport(0, 0, q1280PostWidth, q1280PostHeight);
+        }
+
+        const float q2080FallbackSunDirection[3]{0.35f, 0.85f, 0.40f};
+        const float q2080FallbackSunColor[3]{1.0f, 1.0f, 1.0f};
+        const float q2080FallbackFogColor[3]{0.0f, 0.0f, 0.0f};
+        const float* q2080SunDirection = q203dPcLightReady
+            ? q203dPcLightDirection
+            : (q1000Env.valid ? q1000Env.sunDirection : q2080FallbackSunDirection);
+        const float* q2080SunColor = q1000Env.valid
+            ? q1000Env.sunlight : q2080FallbackSunColor;
+        const float* q2080FogColor = q1000Env.valid
+            ? q1000Env.fog : q2080FallbackFogColor;
+        constexpr float q2080NearClipMetres = 0.04f;
+        constexpr float q2080FarClipMetres =
+            125000.0f / FO3_UNITS_PER_METRE;
+
         RenderFo3WaterSurfaceQ2070(
             mvp,
             gExteriorOriginXQ1890,
@@ -5145,7 +5176,21 @@ void RenderScene() {
             gExteriorOriginZQ1890,
             FLOOR_Y,
             SCENE_FORWARD,
-            FO3_UNITS_PER_METRE);
+            FO3_UNITS_PER_METRE,
+            q2080SceneSnapshotReady ? q1280PostColor : 0u,
+            q2080SceneSnapshotReady ? q1370PostDepth : 0u,
+            q1280PostWidth,
+            q1280PostHeight,
+            q2080SceneSnapshotReady,
+            gFo3EyePositionQ1010,
+            q2080SunDirection,
+            q2080SunColor,
+            q2080FogColor,
+            q1532StaticFogNear,
+            q1532StaticFogFar,
+            GetFo3FogPowerQ1410(),
+            q2080NearClipMetres,
+            q2080FarClipMetres);
     }
 
     glActiveTexture(GL_TEXTURE5);
