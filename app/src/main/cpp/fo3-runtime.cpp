@@ -268,6 +268,10 @@ GLint gExternalEmittanceColorLocationQ1380 = -1;
 GLint gNativeLodClipEnabledLocationQ1810 = -1;
 GLint gNativeLodClipCellCountLocationQ1900 = -1;
 GLint gNativeLodClipCellsLocationQ1900 = -1;
+GLint gWaterReflectionClipEnabledLocationQ2090 = -1;
+GLint gWaterReflectionPlaneYLocationQ2090 = -1;
+bool gWaterReflectionPassQ2090 = false;
+float gWaterReflectionPlaneYQ2090 = 0.0f;
 GLint gLightMvpLocationQ1050 = -1;
 GLint gShadowMapLocationQ1050 = -1;
 GLint gShadowTexelLocationQ1050 = -1;
@@ -547,6 +551,8 @@ GLuint CreateQ6HProgram() {
         uniform float uNativeLodClipEnabledQ1810;
         uniform int uNativeLodClipCellCountQ1900;
         uniform vec4 uNativeLodClipCellsQ1900[25];
+        uniform float uWaterReflectionClipEnabledQ2090;
+        uniform float uWaterReflectionPlaneYQ2090;
         uniform int uLocalLightCount;
         uniform vec4 uLocalLightPosRadius[8];
         uniform vec4 uLocalLightColorFalloff[8];
@@ -592,6 +598,10 @@ GLuint CreateQ6HProgram() {
             return visible * 0.25;
         }
         void main() {
+            if (uWaterReflectionClipEnabledQ2090 > 0.5 &&
+                vPosition.y < uWaterReflectionPlaneYQ2090) {
+                discard;
+            }
             // Q19: clip authored Level4 only where the corresponding detailed
             // exterior CELL is actually resident. A slow/missing CELL therefore
             // keeps its LOD instead of turning into a hole at the boundary.
@@ -1904,6 +1914,10 @@ bool InitializeScene() {
         glGetUniformLocation(gProgram, "uNativeLodClipCellCountQ1900");
     gNativeLodClipCellsLocationQ1900 =
         glGetUniformLocation(gProgram, "uNativeLodClipCellsQ1900[0]");
+    gWaterReflectionClipEnabledLocationQ2090 =
+        glGetUniformLocation(gProgram, "uWaterReflectionClipEnabledQ2090");
+    gWaterReflectionPlaneYLocationQ2090 =
+        glGetUniformLocation(gProgram, "uWaterReflectionPlaneYQ2090");
     gLightMvpLocationQ1050 = glGetUniformLocation(gProgram, "uLightMvp");
     gShadowMapLocationQ1050 = glGetUniformLocation(gProgram, "uShadowMap");
     gShadowTexelLocationQ1050 = glGetUniformLocation(gProgram, "uShadowTexelSize");
@@ -3998,7 +4012,7 @@ void DrawSceneObject(const GpuObject& object, bool environmentPassQ2050 = false)
     // Gamebryo default: ordinary geometry is single-sided.
     glEnable(GL_CULL_FACE);
     glCullFace(GL_BACK);
-    glFrontFace(GL_CCW);
+    glFrontFace(gWaterReflectionPassQ2090 ? GL_CW : GL_CCW);
 
     // NiStencilProperty is FO3's authored override for two-sided / reversed
     // face rendering. Preserve Q11.6's decoded draw mode exactly.
@@ -4006,7 +4020,11 @@ void DrawSceneObject(const GpuObject& object, bool environmentPassQ2050 = false)
         if (object.stencilDrawMode == 3u) {
             glDisable(GL_CULL_FACE);
         } else {
-            glFrontFace(object.stencilDrawMode == 2u ? GL_CW : GL_CCW);
+            GLenum q2090Front = object.stencilDrawMode == 2u ? GL_CW : GL_CCW;
+            if (gWaterReflectionPassQ2090) {
+                q2090Front = q2090Front == GL_CW ? GL_CCW : GL_CW;
+            }
+            glFrontFace(q2090Front);
         }
     }
 
@@ -4101,6 +4119,10 @@ bool Q1030InitializeRenderProgramOnly() {
         glGetUniformLocation(gProgram, "uNativeLodClipCellCountQ1900");
     gNativeLodClipCellsLocationQ1900 =
         glGetUniformLocation(gProgram, "uNativeLodClipCellsQ1900[0]");
+    gWaterReflectionClipEnabledLocationQ2090 =
+        glGetUniformLocation(gProgram, "uWaterReflectionClipEnabledQ2090");
+    gWaterReflectionPlaneYLocationQ2090 =
+        glGetUniformLocation(gProgram, "uWaterReflectionPlaneYQ2090");
     gLightMvpLocationQ1050 = glGetUniformLocation(gProgram, "uLightMvp");
     gShadowMapLocationQ1050 = glGetUniformLocation(gProgram, "uShadowMap");
     gShadowTexelLocationQ1050 = glGetUniformLocation(gProgram, "uShadowTexelSize");
