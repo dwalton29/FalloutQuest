@@ -2199,10 +2199,20 @@ bool ProcessQ74TransitionRequest() {
     }
     LoadFo3CellEnvironmentQ1410(request.cellFormId, request.worldspaceFormId,
                                 request.x, request.y);
+    Q6H_LOGI("Q20.9A WATER TRANSITION DISPATCH: cell=%08X worldspace=%08X XTEL=(%.2f %.2f %.2f) exteriorStreaming=%d",
+             request.cellFormId, request.worldspaceFormId,
+             request.x, request.y, request.z,
+             gExteriorStreamingActiveQ1890 ? 1 : 0);
     if (request.worldspaceFormId != 0u) {
-        LoadFo3WaterSceneQ2070(request.worldspaceFormId, request.x, request.y);
+        const bool q209aWaterLoaded =
+            LoadFo3WaterSceneQ2070(request.worldspaceFormId, request.x, request.y);
+        Q6H_LOGI("Q20.9A WATER TRANSITION RESULT: worldspace=%08X loaded=%d nearbyWaterCells=%zu",
+                 request.worldspaceFormId,
+                 q209aWaterLoaded ? 1 : 0,
+                 GetFo3WaterCellsQ2070().size());
     } else {
         ClearFo3WaterSceneQ2070();
+        Q6H_LOGI("Q20.9A WATER TRANSITION RESULT: worldspace=00000000 loaded=0 nearbyWaterCells=0 reason=interior-or-missing-WRLD");
     }
     // Rebuild Q14.0 from the corrected region weather/XCIM on the first frame.
     fo3todq1400::gRuntime = {};
@@ -5257,6 +5267,20 @@ void RenderScene() {
     if (!gSceneReady) Q1030BootMegatonOnRender();
     ProcessQ74TransitionRequest();
     if (!gSceneReady || !gProgram || gObjects.empty()) return;
+
+    static uint64_t q209aWaterHeartbeatFrame = 0u;
+    ++q209aWaterHeartbeatFrame;
+    if (q209aWaterHeartbeatFrame == 1u ||
+        (q209aWaterHeartbeatFrame % 300u) == 0u) {
+        Q6H_LOGI("Q20.9A WATER HEARTBEAT: build=Q20.9A exteriorStreaming=%d worldspace=%08X currentCell=%08X grid=(%d,%d) nearbyWaterCells=%zu sceneObjects=%zu",
+                 gExteriorStreamingActiveQ1890 ? 1 : 0,
+                 gExteriorWorldspaceQ1890,
+                 gCurrentCellFormId,
+                 gExteriorWindowGridXQ1890,
+                 gExteriorWindowGridYQ1890,
+                 GetFo3WaterCellsQ2070().size(),
+                 gObjects.size());
+    }
 
     GLint mainProgram = 0, mainVao = 0, previousActiveTexture = 0;
     glGetIntegerv(GL_CURRENT_PROGRAM, &mainProgram);
