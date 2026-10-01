@@ -253,7 +253,8 @@ bool DecodeVisualData(const uint8_t* bytes, uint32_t size,
 bool ReadWorldDefaults(uint32_t worldspaceFormId,
                        uint32_t& defaultWaterType,
                        float& defaultWaterHeight,
-                       std::string& noiseTexture) {
+                       std::string& noiseTexture,
+                       int recursionDepth = 0) {
     defaultWaterType = 0u;
     defaultWaterHeight = 0.0f;
     noiseTexture.clear();
@@ -266,6 +267,8 @@ bool ReadWorldDefaults(uint32_t worldspaceFormId,
     }
 
     bool found = false;
+    uint32_t parentWorldspace = 0u;
+    uint8_t parentFlags = 0u;
     while (true) {
         const off_t rawOffset = ftello(file);
         if (rawOffset < 0) break;
@@ -291,7 +294,11 @@ bool ReadWorldDefaults(uint32_t worldspaceFormId,
         if (!ReadPayload(file, sizeField, flags, payload)) break;
         WalkSubrecords(payload.data(), payload.size(),
             [&](const char* type, const uint8_t* bytes, uint32_t subSize) {
-                if (std::memcmp(type, "NAM2", 4u) == 0 && subSize >= 4u) {
+                if (std::memcmp(type, "WNAM", 4u) == 0 && subSize >= 4u) {
+                    parentWorldspace = ReadLe32(bytes);
+                } else if (std::memcmp(type, "PNAM", 4u) == 0 && subSize >= 1u) {
+                    parentFlags = bytes[0];
+                } else if (std::memcmp(type, "NAM2", 4u) == 0 && subSize >= 4u) {
                     // WRLD NAM2 = default WATR.
                     defaultWaterType = ReadLe32(bytes);
                 } else if (std::memcmp(type, "DNAM", 4u) == 0 && subSize >= 8u) {
@@ -308,6 +315,24 @@ bool ReadWorldDefaults(uint32_t worldspaceFormId,
     }
 
     std::fclose(file);
+
+    // WRLD PNAM bit 0x08 = Use Water Data from parent worldspace.
+    if (found && parentWorldspace != 0u && (parentFlags & 0x08u) != 0u &&
+        recursionDepth < 8) {
+        uint32_t parentType = 0u;
+        float parentHeight = 0.0f;
+        std::string parentNoise;
+        if (ReadWorldDefaults(parentWorldspace, parentType, parentHeight,
+                              parentNoise, recursionDepth + 1)) {
+            defaultWaterType = parentType;
+            defaultWaterHeight = parentHeight;
+            noiseTexture = parentNoise;
+            WLOGI("Q20.9 WATER WRLD INHERIT: child=%08X parent=%08X parentFlags=0x%02X waterType=%08X defaultHeight=%.3f noise=%s",
+                  worldspaceFormId, parentWorldspace, parentFlags,
+                  defaultWaterType, defaultWaterHeight,
+                  noiseTexture.empty() ? "<none>" : noiseTexture.c_str());
+        }
+    }
     return found;
 }
 
