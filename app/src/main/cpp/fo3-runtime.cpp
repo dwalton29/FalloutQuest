@@ -4508,6 +4508,10 @@ bool Q1970AppendLodNifCpuQ19(
             task->textures, textureSeen,
             cpu.mesh.glowTexturePath, "GLOW",
             {0u,0u,0u,255u});
+        Q1900AddTextureRequestQ19(
+            task->textures, textureSeen,
+            cpu.mesh.environmentMaskTexturePath, "ENV_MASK",
+            {255u,255u,255u,255u});
 
         const size_t triangles = cpu.mesh.indices.size() / 3u;
         if (terrain) {
