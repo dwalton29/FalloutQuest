@@ -621,9 +621,17 @@ GLuint CreateQ6HProgram() {
             // multiplies by the custom mask, Toggles.z (NIF env scale),
             // optional vertex colour, and vertex fog visibility.
             if (uEnvironmentPassQ2050 > 0.5) {
+                // SP17 SLS2050.vso scales the authored tangent and bitangent
+                // by exactly 0.1 before ObjToCubeSpace, while leaving the normal
+                // at full strength. Reconstruct the same reflection normal here:
+                // normal-map X/Y perturbation is therefore one tenth of Z.
+                vec3 q2050ReflectionNormal = normalize(
+                    T * (tangentNormal.x * 0.1) +
+                    B * (tangentNormal.y * 0.1) +
+                    N * tangentNormal.z);
                 vec3 q2050SurfaceToEye = normalize(uEyePosition - vPosition);
                 vec3 q2050ReflectionScene =
-                    reflect(-q2050SurfaceToEye, mappedNormal);
+                    reflect(-q2050SurfaceToEye, q2050ReflectionNormal);
 
                 // Gamebryo -> OpenXR is (x,z,-y); invert that bridge for the
                 // authored Fallout cubemap coordinate domain.
