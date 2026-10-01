@@ -5194,7 +5194,18 @@ GLsizei q2060MsaaHeight = 0;
 GLsizei q2060MsaaSamples = 1;
 GLint q2060GlMaxSamples = 1;
 bool q2060MsaaActive = false;
+bool q2060MsaaAttempted = false;
+uint64_t q2060MsaaHeartbeatFrame = 0u;
+uint32_t q2060OpenXrRecommendedSamples = 0u;
+uint32_t q2060OpenXrMaxSamples = 0u;
 constexpr GLsizei Q2060_PC_REQUESTED_MSAA = 8;
+
+void Q2060SetOpenXrSampleInfo(uint32_t recommendedSamples, uint32_t maxSamples) {
+    q2060OpenXrRecommendedSamples = recommendedSamples;
+    q2060OpenXrMaxSamples = maxSamples;
+    Q6H_LOGI("Q20.6 OPENXR SAMPLE INFO: recommended=%u max=%u sceneMsaaPolicy=offscreen-probe-up-to-PC8x",
+             recommendedSamples, maxSamples);
+}
 
 GLuint q1280PostProgram = 0u;
 GLuint q1280PostVao = 0u;
@@ -6078,7 +6089,16 @@ bool Q2060AllocateMsaaTargetQ2060(GLsizei width, GLsizei height,
                                   GLenum colorFormat) {
     q2060MsaaActive = false;
     q2060MsaaSamples = 1;
-    if (width <= 0 || height <= 0) return false;
+    q2060MsaaAttempted = true;
+    if (width <= 0 || height <= 0) {
+        Q6H_LOGW("Q20.6 MSAA ALLOCATE ENTER: size=%dx%d valid=0", width, height);
+        return false;
+    }
+
+    Q6H_LOGI("Q20.6 MSAA ALLOCATE ENTER: size=%dx%d color=%s xrRecommended=%u xrMax=%u",
+             width, height,
+             colorFormat == GL_RGBA16F ? "RGBA16F" : "RGBA8",
+             q2060OpenXrRecommendedSamples, q2060OpenXrMaxSamples);
 
     glGetIntegerv(GL_MAX_SAMPLES, &q2060GlMaxSamples);
     q2060GlMaxSamples = std::max(q2060GlMaxSamples, 1);
@@ -6154,7 +6174,19 @@ bool Q1280AllocatePostTarget(GLsizei width, GLsizei height) {
     if (!q1370PostDepth) glGenTextures(1, &q1370PostDepth);
 
     if (q1280PostWidth == width && q1280PostHeight == height &&
-        q1280PostColor && q1370PostDepth) return true;
+        q1280PostColor && q1370PostDepth) {
+        // Q20.6A: an already-valid single-sample HDR target must not bypass
+        // multisample initialisation. This path can be reached by subsequent
+        // eye/setup passes before the new MSAA state has been established.
+        if (!q2060MsaaAttempted ||
+            q2060MsaaWidth != width || q2060MsaaHeight != height) {
+            Q6H_LOGI("Q20.6A MSAA ENSURE FROM POST CACHE: post=%dx%d attempted=%d active=%d",
+                     width, height, q2060MsaaAttempted ? 1 : 0,
+                     q2060MsaaActive ? 1 : 0);
+            Q2060AllocateMsaaTargetQ2060(width, height, q1280PostInternalFormat);
+        }
+        return true;
+    }
 
     glBindTexture(GL_TEXTURE_2D, q1280PostColor);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
@@ -6358,6 +6390,16 @@ void Q1350CompositeEyePostQ1350(uint32_t eyeIndex, GLuint swapchainFbo,
     // Resolve the multisampled HDR scene into the existing single-sample
     // colour/depth textures before eye adaptation, bloom and final-film work.
     Q2060ResolveEyeMsaaQ2060();
+    ++q2060MsaaHeartbeatFrame;
+    if ((q2060MsaaHeartbeatFrame % 300u) == 1u) {
+        Q6H_LOGI("Q20.6A MSAA HEARTBEAT: attempted=%d active=%d chosen=%dx glMax=%d xrRecommended=%u xrMax=%u size=%dx%d msaaFbo=%u postFbo=%u",
+                 q2060MsaaAttempted ? 1 : 0,
+                 q2060MsaaActive ? 1 : 0,
+                 q2060MsaaSamples, q2060GlMaxSamples,
+                 q2060OpenXrRecommendedSamples, q2060OpenXrMaxSamples,
+                 q2060MsaaWidth, q2060MsaaHeight,
+                 q2060MsaaFbo, q1280PostFbo);
+    }
     if (eyeIndex == 0u) Q1350UpdateExposureQ1350();
     Q1280CompositeEyePostQ1280(swapchainFbo, width, height);
 }
@@ -6371,6 +6413,8 @@ void Q1280ShutdownPostQ1280() {
     q2060MsaaWidth = q2060MsaaHeight = 0;
     q2060MsaaSamples = 1;
     q2060MsaaActive = false;
+    q2060MsaaAttempted = false;
+    q2060MsaaHeartbeatFrame = 0u;
     if (q1370PostDepth) glDeleteTextures(1, &q1370PostDepth);
     q1370PostDepth = 0u;
     if (q1350AdaptTexture[0] || q1350AdaptTexture[1]) glDeleteTextures(2, q1350AdaptTexture);
