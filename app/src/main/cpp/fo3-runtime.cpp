@@ -26,6 +26,7 @@ extern void PumpFo3AndroidEventsQ1860();
 #include "fo3-imagespace-q1280.h"
 #include "fo3-weather-imad-q1300.h"
 #include "fo3-weather-light-q1320.h"
+#include "fo3-pc-sky-q1660.h"
 #include "fo3-external-emittance-q1380.h"
 #include "fo3-authored-color-q1390.h"
 #include "fo3-megaton-cell-environment-q1410.h"
@@ -332,6 +333,20 @@ GLuint gDepthRenderbuffer = 0;
 GLsizei gDepthWidth = 0;
 GLsizei gDepthHeight = 0;
 bool gSceneReady = false;
+
+// Q20.9 PC WATER000 planar ReflectionMap. FalloutPrefs requests a 1024x1024
+// reflection target. It is regenerated per eye because a single monoscopic
+// reflection is incorrect in stereo VR.
+constexpr GLsizei Q2090_REFLECTION_SIZE = 1024;
+GLuint gWaterReflectionFboQ2090 = 0u;
+GLuint gWaterReflectionColorQ2090 = 0u;
+GLuint gWaterReflectionDepthQ2090 = 0u;
+bool gWaterReflectionTargetReadyQ2090 = false;
+bool gWaterReflectionTargetLoggedQ2090 = false;
+float gWaterSkyMvpQ2090[16]{};
+bool gWaterSkyMvpReadyQ2090 = false;
+uint64_t gWaterReflectionFramesQ2090 = 0u;
+
 bool gLoggedFirstDraw = false;
 uint32_t gCurrentCellFormId = 0x00002DBDu;
 float gSceneCenterXQ1730 = 0.0f;
