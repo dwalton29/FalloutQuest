@@ -2840,6 +2840,11 @@ bool RebuildExteriorWindowQ1890(float selectionGameX, float selectionGameY,
     gExteriorWindowGridXQ1890 = targetGridX;
     gExteriorWindowGridYQ1890 = targetGridY;
 
+    // Q20.9 generic water window follows the same actual-centred exterior
+    // stream. The expensive ESM scan is catalogue-cached per worldspace.
+    LoadFo3WaterSceneQ2070(
+        gExteriorWorldspaceQ1890, selectionGameX, selectionGameY);
+
     size_t triangles = 0u;
     for (const GpuObject& object : gObjects) {
         triangles += static_cast<size_t>(object.vertexCount / 3);
@@ -3459,6 +3464,16 @@ void Q1900CommitWindow() {
     gLoggedFirstDraw = false;
     gExteriorWindowGridXQ1890 = gPendingStreamQ1900.targetGridX;
     gExteriorWindowGridYQ1890 = gPendingStreamQ1900.targetGridY;
+
+    const float q2090WaterSelectionX =
+        (static_cast<float>(gExteriorWindowGridXQ1890) + 0.5f) *
+        Q1890_EXTERIOR_CELL_SIZE;
+    const float q2090WaterSelectionY =
+        (static_cast<float>(gExteriorWindowGridYQ1890) + 0.5f) *
+        Q1890_EXTERIOR_CELL_SIZE;
+    LoadFo3WaterSceneQ2070(
+        gExteriorWorldspaceQ1890,
+        q2090WaterSelectionX, q2090WaterSelectionY);
 
     size_t triangles = 0u;
     for (const GpuObject& object : gObjects) {
