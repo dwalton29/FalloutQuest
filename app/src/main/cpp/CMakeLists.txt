@@ -13,6 +13,7 @@ add_library(falloutquest SHARED
     fo3-collision-runtime.cpp
     fo3-bsa-reader.cpp
     fo3-texture-bsa.cpp
+    fo3-water-q2070.cpp
     fo3-data-probe.cpp
     fo3-esm-scan.cpp
     fo3-megaton-contents.cpp
