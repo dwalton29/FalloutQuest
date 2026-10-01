@@ -498,6 +498,11 @@ GLuint CreateQ6HProgram() {
         uniform float uUseVertexAlpha;
         uniform float uSpecularEnabled;
         uniform vec3 uSpecularColor;
+        uniform samplerCube uEnvironmentCubeQ2050;
+        uniform sampler2D uEnvironmentMaskQ2050;
+        uniform float uEnvironmentPassQ2050;
+        uniform float uEnvironmentScaleQ2050;
+        uniform float uEnvironmentCustomMaskQ2050;
         uniform vec3 uEmissiveColor;
         uniform float uEmissiveMult;
         uniform float uGlowEnabled;
@@ -609,6 +614,44 @@ GLuint CreateQ6HProgram() {
             vec3 T = normalize(vTangent - N * dot(N, vTangent));
             vec3 B = normalize(vBitangent - N * dot(N, vBitangent));
             vec3 mappedNormal = normalize(mat3(T, B, N) * tangentNormal);
+
+            // Q20.5 SP17 environment pass. The supplied Megaton NIFs bind
+            // slot 4 as EnvironmentCubeMap and slot 5 as CustomEnvMask.
+            // PC SLS2057 computes 2*dot(N,V)*N - V, samples the cube, then
+            // multiplies by the custom mask, Toggles.z (NIF env scale),
+            // optional vertex colour, and vertex fog visibility.
+            if (uEnvironmentPassQ2050 > 0.5) {
+                vec3 q2050SurfaceToEye = normalize(uEyePosition - vPosition);
+                vec3 q2050ReflectionScene =
+                    reflect(-q2050SurfaceToEye, mappedNormal);
+
+                // Gamebryo -> OpenXR is (x,z,-y); invert that bridge for the
+                // authored Fallout cubemap coordinate domain.
+                vec3 q2050ReflectionGame = vec3(
+                    q2050ReflectionScene.x,
+                    -q2050ReflectionScene.z,
+                    q2050ReflectionScene.y);
+
+                vec3 q2050Cube =
+                    texture(uEnvironmentCubeQ2050, q2050ReflectionGame).rgb;
+                float q2050Mask = uEnvironmentCustomMaskQ2050 > 0.5
+                    ? texture(uEnvironmentMaskQ2050, vUv).r
+                    : normalGloss.a;
+                q2050Mask *= uEnvironmentScaleQ2050;
+
+                vec3 q2050Env = q2050Cube * q2050Mask;
+                q2050Env *= mix(vec3(1.0), vColor.rgb, uUseVertexColor);
+                float q2050FogVisibility = uRenderStageQ1560 >= 1
+                    ? (1.0 - vFogFactorQ1532)
+                    : 1.0;
+                q2050Env *= q2050FogVisibility;
+
+                // PC c1.w is an additional per-object environment fade. Its
+                // source has not yet been recovered, so Q20.5 leaves that
+                // scalar neutral rather than inventing a distance formula.
+                fragColor = vec4(max(q2050Env, vec3(0.0)), 1.0);
+                return;
+            }
 
             vec3 lightDirection = normalize(uSunDirection);
             float q1540QuestLambert = max(dot(mappedNormal, lightDirection), 0.0);
@@ -1784,6 +1827,11 @@ bool InitializeScene() {
     gUseVertexAlphaLocationQ1020 = glGetUniformLocation(gProgram, "uUseVertexAlpha");
     gSpecularEnabledLocationQ1020 = glGetUniformLocation(gProgram, "uSpecularEnabled");
     gSpecularColorLocationQ1020 = glGetUniformLocation(gProgram, "uSpecularColor");
+    gEnvironmentCubeLocationQ2050 = glGetUniformLocation(gProgram, "uEnvironmentCubeQ2050");
+    gEnvironmentMaskLocationQ2050 = glGetUniformLocation(gProgram, "uEnvironmentMaskQ2050");
+    gEnvironmentPassLocationQ2050 = glGetUniformLocation(gProgram, "uEnvironmentPassQ2050");
+    gEnvironmentScaleLocationQ2050 = glGetUniformLocation(gProgram, "uEnvironmentScaleQ2050");
+    gEnvironmentCustomMaskLocationQ2050 = glGetUniformLocation(gProgram, "uEnvironmentCustomMaskQ2050");
     gEmissiveColorLocationQ1020 = glGetUniformLocation(gProgram, "uEmissiveColor");
     gEmissiveMultLocationQ1020 = glGetUniformLocation(gProgram, "uEmissiveMult");
     gGlowEnabledLocationQ1020 = glGetUniformLocation(gProgram, "uGlowEnabled");
@@ -3956,6 +4004,11 @@ bool Q1030InitializeRenderProgramOnly() {
     gUseVertexAlphaLocationQ1020 = glGetUniformLocation(gProgram, "uUseVertexAlpha");
     gSpecularEnabledLocationQ1020 = glGetUniformLocation(gProgram, "uSpecularEnabled");
     gSpecularColorLocationQ1020 = glGetUniformLocation(gProgram, "uSpecularColor");
+    gEnvironmentCubeLocationQ2050 = glGetUniformLocation(gProgram, "uEnvironmentCubeQ2050");
+    gEnvironmentMaskLocationQ2050 = glGetUniformLocation(gProgram, "uEnvironmentMaskQ2050");
+    gEnvironmentPassLocationQ2050 = glGetUniformLocation(gProgram, "uEnvironmentPassQ2050");
+    gEnvironmentScaleLocationQ2050 = glGetUniformLocation(gProgram, "uEnvironmentScaleQ2050");
+    gEnvironmentCustomMaskLocationQ2050 = glGetUniformLocation(gProgram, "uEnvironmentCustomMaskQ2050");
     gEmissiveColorLocationQ1020 = glGetUniformLocation(gProgram, "uEmissiveColor");
     gEmissiveMultLocationQ1020 = glGetUniformLocation(gProgram, "uEmissiveMult");
     gGlowEnabledLocationQ1020 = glGetUniformLocation(gProgram, "uGlowEnabled");
