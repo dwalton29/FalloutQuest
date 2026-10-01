@@ -48,9 +48,20 @@ bool LoadFo3WaterSceneQ2070(uint32_t worldspaceFormId,
 void ClearFo3WaterSceneQ2070();
 const std::vector<Fo3WaterCellQ2070>& GetFo3WaterCellsQ2070();
 
-// Q20.7A deliberately renders only the authored surface placement/colour.
-// Reflection/refraction/depth/displacement shader parity is staged after a
-// PC WATER pass capture rather than guessed.
+// Select the relevant authored horizontal water plane for this eye. Exterior
+// water can contain multiple CELL heights in the resident window; prefer the
+// CELL containing the eye's game-space XY, otherwise the nearest CELL centre.
+bool GetFo3DominantWaterPlaneQ2070(float eyeSceneX, float eyeSceneZ,
+                                   float originGameX, float originGameY,
+                                   float originGameZ, float floorY,
+                                   float sceneForward, float unitsPerMetre,
+                                   float* outPlaneSceneY,
+                                   float* outHeightGame,
+                                   uint32_t* outCellFormId,
+                                   uint32_t* outWaterTypeFormId);
+
+// Q20.9 WATER000 adds the PC planar ReflectionMap on top of Q20.8A's
+// source-backed WATER001 refraction/depth/noise path.
 void RenderFo3WaterSurfaceQ2070(const float* mvp16,
                                 float originGameX,
                                 float originGameY,
@@ -71,5 +82,8 @@ void RenderFo3WaterSurfaceQ2070(const float* mvp16,
                                 float sceneFogFarMetres,
                                 float sceneFogPower,
                                 float nearClipMetres,
-                                float farClipMetres);
+                                float farClipMetres,
+                                uint32_t reflectionTexture,
+                                bool reflectionReady,
+                                const float reflectionMvp16[16]);
 void ShutdownFo3WaterQ2070();
