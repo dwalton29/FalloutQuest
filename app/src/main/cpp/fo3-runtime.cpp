@@ -1268,6 +1268,7 @@ bool UploadCpuObject(CpuObject& cpu, float centerX, float centerY, float floorZ,
     gpu.specularEnabled = !gpu.noLighting && (cpu.mesh.shaderFlags1 & 0x00000001u) != 0u;
     for (int i = 0; i < 3; ++i) { gpu.specularColor[i] = cpu.mesh.specularColor[i]; gpu.emissiveColor[i] = cpu.mesh.emissiveColor[i]; }
     gpu.emissiveMult = std::max(0.0f, cpu.mesh.emissiveMult);
+    gpu.environmentMapScaleQ2050 = std::max(0.0f, cpu.mesh.environmentMapScale);
     gpu.externalEmittanceFlagQ1380 =
         (cpu.mesh.shaderFlags1 & fo3emittanceq1380::EXTERNAL_EMITTANCE_SHADER_FLAG) != 0u;
     if (gpu.externalEmittanceFlagQ1380) {
@@ -1424,6 +1425,27 @@ bool UploadCpuObject(CpuObject& cpu, float centerX, float centerY, float floorZ,
                        gpu.normal, gpu.realNormal, "NORMAL", gpu.refFormId)) return false;
     if (!UploadTexture(cpu.mesh.glowTexturePath, {0u, 0u, 0u, 255u},
                        gpu.glow, gpu.realGlow, "GLOW", gpu.refFormId)) return false;
+    if (!UploadTexture(cpu.mesh.environmentMaskTexturePath,
+                       {255u, 255u, 255u, 255u},
+                       gpu.environmentMask, gpu.realEnvironmentMask,
+                       "ENV_MASK", gpu.refFormId)) return false;
+    if (!UploadCubeTextureQ2050(cpu.mesh.environmentCubeTexturePath,
+                                gpu.environmentCube,
+                                gpu.realEnvironmentCube,
+                                "ENV_CUBE", gpu.refFormId)) return false;
+    gpu.environmentEnabledQ2050 =
+        !gpu.noLighting && gpu.realNormal && gpu.realEnvironmentCube &&
+        gpu.environmentMapScaleQ2050 > 0.0f;
+    if (gpu.environmentEnabledQ2050) {
+        Q6H_LOGI("Q20.5 ENV MATERIAL: ref=%08X model=%s cube=%s mask=%s customMask=%d scale=%.4f vertexColor=%d pcPass=SLS2057/2058 blend=ONE+ONE depth=EQUAL fadeScalar=neutral-until-recovered",
+                 gpu.refFormId, gpu.modelPath.c_str(),
+                 cpu.mesh.environmentCubeTexturePath.c_str(),
+                 cpu.mesh.environmentMaskTexturePath.empty() ? "<normal-alpha>" :
+                     cpu.mesh.environmentMaskTexturePath.c_str(),
+                 gpu.realEnvironmentMask ? 1 : 0,
+                 gpu.environmentMapScaleQ2050,
+                 gpu.useVertexColor ? 1 : 0);
+    }
 
     glGenVertexArrays(1, &gpu.vao);
     glBindVertexArray(gpu.vao);
