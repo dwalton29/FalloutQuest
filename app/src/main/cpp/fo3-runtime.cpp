@@ -5028,6 +5028,33 @@ bool Q2090EnsureReflectionTarget() {
     return gWaterReflectionTargetReadyQ2090;
 }
 
+bool Q2090AnyLoadedWaterAboveLand() {
+    const auto& waters = GetFo3WaterCellsQ2070();
+    if (waters.empty()) return false;
+    const auto& terrain = GetFo3TerrainQ76();
+
+    for (const Fo3WaterCellQ2070& water : waters) {
+        const Fo3TerrainCellQ76* matchingLand = nullptr;
+        for (const Fo3TerrainCellQ76& land : terrain) {
+            if (land.cellFormId == water.cellFormId ||
+                (land.gridX == water.gridX && land.gridY == water.gridY)) {
+                matchingLand = &land;
+                break;
+            }
+        }
+
+        // A water CELL without local LAND can still expose water around
+        // placed geometry, so do not suppress it merely because LAND is absent.
+        if (!matchingLand || matchingLand->heights.empty()) return true;
+
+        const float minLand =
+            *std::min_element(matchingLand->heights.begin(),
+                              matchingLand->heights.end());
+        if (minLand < water.waterHeightGame) return true;
+    }
+    return false;
+}
+
 bool Q2090RenderWaterReflection(const float mainMvp[16],
                                 float planeY,
                                 float outReflectionMvp[16]) {
@@ -5512,8 +5539,9 @@ void RenderScene() {
             &q2090PlaneCell, &q2090PlaneType);
 
         float q2090ReflectionMvp[16]{};
+        const bool q2090WaterExposed = Q2090AnyLoadedWaterAboveLand();
         const bool q2090ReflectionReady =
-            q2090HavePlane &&
+            q2090HavePlane && q2090WaterExposed &&
             Q2090RenderWaterReflection(mvp, q2090PlaneY, q2090ReflectionMvp);
 
         static uint32_t q2090LastPlaneCellLogged = 0u;
@@ -5523,6 +5551,8 @@ void RenderScene() {
                      gExteriorWorldspaceQ1890, q2090PlaneCell, q2090PlaneType,
                      q2090HeightGame, q2090PlaneY,
                      q2090ReflectionReady ? 1 : 0);
+            Q6H_LOGI("Q20.9 WATER REFLECTION VISIBILITY: exposedAboveLAND=%d policy=loaded-LAND-min-vs-authored-water-height",
+                     q2090WaterExposed ? 1 : 0);
         }
 
         const bool q2080SceneSnapshotReady =
