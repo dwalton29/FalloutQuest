@@ -3869,8 +3869,9 @@ int Q1900BuildNativeLodClipCells(float* bounds, bool objectLod) {
     return count;
 }
 
-void DrawSceneObject(const GpuObject& object) {
+void DrawSceneObject(const GpuObject& object, bool environmentPassQ2050 = false) {
     if (!Q1970ShouldRenderFullDetail(object)) return;
+    if (environmentPassQ2050 && !object.environmentEnabledQ2050) return;
 
     float q1900LodClipCells[25 * 4]{};
     int q1900LodClipCount = 0;
@@ -3905,6 +3906,13 @@ void DrawSceneObject(const GpuObject& object) {
     glUniform1f(gUseVertexAlphaLocationQ1020, object.useVertexAlpha ? 1.0f : 0.0f);
     glUniform1f(gSpecularEnabledLocationQ1020, object.specularEnabled ? 1.0f : 0.0f);
     glUniform3fv(gSpecularColorLocationQ1020, 1, object.specularColor);
+    if (gEnvironmentPassLocationQ2050 >= 0)
+        glUniform1f(gEnvironmentPassLocationQ2050, environmentPassQ2050 ? 1.0f : 0.0f);
+    if (gEnvironmentScaleLocationQ2050 >= 0)
+        glUniform1f(gEnvironmentScaleLocationQ2050, object.environmentMapScaleQ2050);
+    if (gEnvironmentCustomMaskLocationQ2050 >= 0)
+        glUniform1f(gEnvironmentCustomMaskLocationQ2050,
+                    object.realEnvironmentMask ? 1.0f : 0.0f);
     glUniform3fv(gEmissiveColorLocationQ1020, 1, object.emissiveColor);
     glUniform1f(gEmissiveMultLocationQ1020, object.emissiveMult);
     glUniform1f(gGlowEnabledLocationQ1020, object.realGlow ? 1.0f : 0.0f);
@@ -3922,6 +3930,13 @@ void DrawSceneObject(const GpuObject& object) {
     glBindTexture(GL_TEXTURE_2D, object.normal);
     glActiveTexture(GL_TEXTURE2);
     glBindTexture(GL_TEXTURE_2D, object.glow);
+    glActiveTexture(GL_TEXTURE4);
+    glBindTexture(GL_TEXTURE_CUBE_MAP,
+                  object.environmentEnabledQ2050 ? object.environmentCube : 0u);
+    glActiveTexture(GL_TEXTURE5);
+    glBindTexture(GL_TEXTURE_2D,
+                  object.realEnvironmentMask ? object.environmentMask : 0u);
+    glActiveTexture(GL_TEXTURE0);
     glBindVertexArray(object.vao);
 
     if (object.modelPath.find("megatonbrasslanternsign") != std::string::npos ||
@@ -4844,6 +4859,7 @@ void RenderScene() {
     glGetUniformfv(static_cast<GLuint>(mainProgram), sourceMvp, mvp);
 
     GLint previousTexture0 = 0, previousTexture1 = 0, previousTexture2 = 0, previousTexture3 = 0;
+    GLint previousTexture4CubeQ2050 = 0, previousTexture5Q2050 = 0;
     glActiveTexture(GL_TEXTURE0);
     glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousTexture0);
     glActiveTexture(GL_TEXTURE1);
@@ -4852,11 +4868,18 @@ void RenderScene() {
     glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousTexture2);
     glActiveTexture(GL_TEXTURE3);
     glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousTexture3);
+    glActiveTexture(GL_TEXTURE4);
+    glGetIntegerv(GL_TEXTURE_BINDING_CUBE_MAP, &previousTexture4CubeQ2050);
+    glActiveTexture(GL_TEXTURE5);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousTexture5Q2050);
+    glActiveTexture(GL_TEXTURE0);
 
     const GLboolean blendWasEnabled = glIsEnabled(GL_BLEND);
     const GLboolean depthTestWasEnabledQ1200 = glIsEnabled(GL_DEPTH_TEST);
     GLboolean previousDepthMask = GL_TRUE;
     glGetBooleanv(GL_DEPTH_WRITEMASK, &previousDepthMask);
+    GLint previousDepthFuncQ2050 = GL_LESS;
+    glGetIntegerv(GL_DEPTH_FUNC, &previousDepthFuncQ2050);
     GLint previousBlendSrcRgb = GL_ONE, previousBlendDstRgb = GL_ZERO;
     GLint previousBlendSrcAlpha = GL_ONE, previousBlendDstAlpha = GL_ZERO;
     glGetIntegerv(GL_BLEND_SRC_RGB, &previousBlendSrcRgb);
@@ -4869,6 +4892,10 @@ void RenderScene() {
     glUniform1i(gDiffuseLocation, 0);
     glUniform1i(gNormalLocation, 1);
     glUniform1i(gGlowLocationQ1020, 2);
+    if (gEnvironmentCubeLocationQ2050 >= 0)
+        glUniform1i(gEnvironmentCubeLocationQ2050, 4);
+    if (gEnvironmentMaskLocationQ2050 >= 0)
+        glUniform1i(gEnvironmentMaskLocationQ2050, 5);
     const Fo3EnvironmentQ1000& q1000Env = GetFo3EnvironmentQ1000();
     float q203dPcLightDirection[3]{0.35f, 0.85f, 0.40f};
     const bool q203dPcLightReady =
@@ -5032,6 +5059,28 @@ void RenderScene() {
         DrawSceneObject(object);
     }
 
+    // Q20.5 PC apitrace calls 14054-14061: Fallout switches to a
+    // dedicated environment pass with ZWRITE=FALSE, ZFUNC=EQUAL and
+    // additive ONE/ONE blending. Re-draw only authored reflective shapes.
+    size_t q2050EnvironmentDraws = 0u;
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_EQUAL);
+    glDepthMask(GL_FALSE);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_ONE, GL_ONE);
+    for (const GpuObject& object : gObjects) {
+        if (!object.environmentEnabledQ2050 || !object.zBufferWriteQ1200) continue;
+        DrawSceneObject(object, true);
+        ++q2050EnvironmentDraws;
+    }
+    static bool q2050PassLogged = false;
+    if (!q2050PassLogged) {
+        q2050PassLogged = true;
+        Q6H_LOGI("Q20.5 ENV PASS READY: draws=%zu source=SP17-SLS2057/2058+nif-slots4,5 pcTraceCalls=14054-14114 blend=ONE+ONE depthFunc=EQUAL depthWrite=0 cube=authored customMask=authored envScale=authored globalPost=Q20.4F-unchanged pcPerObjectFade=pending",
+                 q2050EnvironmentDraws);
+    }
+
+    glDepthFunc(static_cast<GLenum>(previousDepthFuncQ2050));
     glDepthMask(previousDepthMask);
     if (depthTestWasEnabledQ1200) glEnable(GL_DEPTH_TEST); else glDisable(GL_DEPTH_TEST);
     glBlendFuncSeparate(static_cast<GLenum>(previousBlendSrcRgb),
@@ -5042,6 +5091,10 @@ void RenderScene() {
 
     RenderFo3CollisionOverlay(mvp);
 
+    glActiveTexture(GL_TEXTURE5);
+    glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture5Q2050));
+    glActiveTexture(GL_TEXTURE4);
+    glBindTexture(GL_TEXTURE_CUBE_MAP, static_cast<GLuint>(previousTexture4CubeQ2050));
     glActiveTexture(GL_TEXTURE3);
     glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture3));
     glActiveTexture(GL_TEXTURE2);
