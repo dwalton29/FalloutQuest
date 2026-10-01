@@ -324,6 +324,7 @@ struct Q1900PreparedTextureQ19 {
     bool real = false;
 };
 std::mutex gQ1900TextureCpuMutexQ19;
+std::mutex gQ2012TextureDecodeMutexQ19;
 std::unordered_map<std::string, Q1900PreparedTextureQ19>
     gQ1900PreparedTexturesQ19;
 std::unordered_set<std::string> gQ1900KnownGpuTextureKeysQ19;
@@ -395,7 +396,14 @@ void Q1900PrepareTextureCpuQ19(const std::string& path) {
     }
 
     Fo3RgbaTexture decoded;
-    const bool real = LoadFalloutTextureRgba(path, decoded);
+    bool real = false;
+    {
+        // Multiple detailed CELL workers may prepare textures concurrently in
+        // Q20.12. Keep the lazy texture-BSA/index decoder single-entry while
+        // still allowing NIF transforms to run in parallel.
+        std::lock_guard<std::mutex> decodeLock(gQ2012TextureDecodeMutexQ19);
+        real = LoadFalloutTextureRgba(path, decoded);
+    }
     std::lock_guard<std::mutex> lock(gQ1900TextureCpuMutexQ19);
     if (gQ1900KnownGpuTextureKeysQ19.find(key) ==
             gQ1900KnownGpuTextureKeysQ19.end() &&
@@ -1044,19 +1052,46 @@ float MaxModelExtent(const Fo3StaticNifMesh& mesh) {
 
 bool BuildCpuObjects(const Fo3WorldPlacement& placement, std::vector<CpuObject>& outs) {
     outs.clear();
-    static std::unordered_map<std::string, std::vector<Fo3StaticNifMesh>> modelCache;
 
-    auto cached = modelCache.find(placement.modelPath);
-    if (cached == modelCache.end()) {
+    // Q20.12: detailed CELLs can build in parallel. Keep parsed NIFs immutable
+    // behind shared_ptrs so cache lookup/insertion is thread-safe without
+    // serializing each placement's transform/expanded-vertex work.
+    using Q2012CachedMeshes =
+        std::shared_ptr<const std::vector<Fo3StaticNifMesh>>;
+    static std::mutex modelCacheMutex;
+    static std::unordered_map<std::string, Q2012CachedMeshes> modelCache;
+
+    Q2012CachedMeshes cachedMeshes;
+    {
+        std::lock_guard<std::mutex> lock(modelCacheMutex);
+        const auto cached = modelCache.find(placement.modelPath);
+        if (cached != modelCache.end()) cachedMeshes = cached->second;
+    }
+
+    if (!cachedMeshes) {
         std::vector<Fo3StaticNifMesh> meshes;
         if (!LoadFo3StaticNifMeshes(placement.modelPath, meshes)) return false;
-        cached = modelCache.emplace(placement.modelPath, std::move(meshes)).first;
-        Q6H_LOGI("Q6H MODEL CACHE MISS: model=%s shapes=%zu uniqueModels=%zu",
-                 placement.modelPath.c_str(), cached->second.size(), modelCache.size());
+        auto candidate = std::make_shared<const std::vector<Fo3StaticNifMesh>>(
+            std::move(meshes));
+        bool inserted = false;
+        size_t uniqueModels = 0u;
+        {
+            std::lock_guard<std::mutex> lock(modelCacheMutex);
+            const auto result =
+                modelCache.emplace(placement.modelPath, candidate);
+            cachedMeshes = result.first->second;
+            inserted = result.second;
+            uniqueModels = modelCache.size();
+        }
+        if (inserted) {
+            Q6H_LOGI("Q20.12 MODEL CACHE MISS: model=%s shapes=%zu uniqueModels=%zu parallelSafe=1",
+                     placement.modelPath.c_str(), cachedMeshes->size(),
+                     uniqueModels);
+        }
     }
 
     size_t shapeIndex = 0;
-    for (const Fo3StaticNifMesh& cachedMesh : cached->second) {
+    for (const Fo3StaticNifMesh& cachedMesh : *cachedMeshes) {
         Fo3StaticNifMesh mesh = cachedMesh;
         const float extent = MaxModelExtent(mesh) * placement.scale;
         if (!(extent >= 1.0f && extent <= MAX_MODEL_EXTENT_UNITS)) {
@@ -4553,13 +4588,10 @@ bool Q1970LodBlockPendingQ19(int32_t blockX, int32_t blockY) {
 }
 
 bool Q1970NearDetailSafeQ19(int32_t actualGridX, int32_t actualGridY) {
-    // Q20.11: distant LOD is idle work. Require the entire detailed 5x5 to be
-    // visually resident, not merely the active 3x3, and yield whenever an
-    // earlier prefetch has already requested another visible CELL.
-    for (int dy = -Q1900_RESIDENT_RADIUS_Q19;
-         dy <= Q1900_RESIDENT_RADIUS_Q19; ++dy) {
-        for (int dx = -Q1900_RESIDENT_RADIUS_Q19;
-             dx <= Q1900_RESIDENT_RADIUS_Q19; ++dx) {
+    // Q20.12: LOD may prepare concurrently with outer detailed/prefetch work,
+    // but never before the active 3x3 has real detailed coverage.
+    for (int dy = -1; dy <= 1; ++dy) {
+        for (int dx = -1; dx <= 1; ++dx) {
             const auto found = gQ1900CellsQ19.find(
                 Q1900CellKeyQ19(actualGridX + dx, actualGridY + dy));
             if (found == gQ1900CellsQ19.end() ||
@@ -4567,9 +4599,6 @@ bool Q1970NearDetailSafeQ19(int32_t actualGridX, int32_t actualGridY) {
                 return false;
             }
         }
-    }
-    for (const auto& entry : gQ1900CellsQ19) {
-        if (entry.second.wanted && !entry.second.visualReady) return false;
     }
     return true;
 }
@@ -4861,9 +4890,10 @@ void Q1970AdvanceNativeLodQ19(int32_t cellX, int32_t cellY,
     Q1970AdvanceLodGpuQ19();
     if (gQ1970LodUploadQ19 || gQ1970LodWorkerQ19) return;
 
-    // Q20.11: LOD is true idle work. It may use the serialized CPU lane only
-    // after the complete 5x5 detail set and any directional prefetch are ready.
-    if (gQ1900WorkerQ19 || gQ1930CollisionTaskQ19 ||
+    // Q20.12: LOD has its own worker and can prepare alongside detailed CELL
+    // visuals. Collision and terrain remain exclusive because they touch shared
+    // mutable gameplay/terrain caches.
+    if (gQ1930CollisionTaskQ19 ||
         IsFo3TerrainStreamingCpuBusyQ2000() ||
         !Q1970NearDetailSafeQ19(cellX, cellY)) {
         return;
@@ -4883,7 +4913,7 @@ void Q1970AdvanceNativeLodQ19(int32_t cellX, int32_t cellY,
     task->floorZ = floorZ;
     gQ1970LodWorkerQ19 = task;
 
-    Q6H_LOGI("Q20.11 LOD CPU START: block=(%d,%d) ring=%d full5x5Ready=1 pendingVisuals=0 serializedAssetLane=1",
+    Q6H_LOGI("Q20.12 LOD CPU START: block=(%d,%d) ring=%d active3x3Ready=1 concurrentWithDetail=1",
              blockX, blockY, ring);
     std::thread([task]() { Q1970RunLodWorkerQ19(task); }).detach();
 }

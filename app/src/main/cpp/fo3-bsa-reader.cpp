@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstdint>
 #include <cstring>
+#include <mutex>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -76,6 +77,8 @@ struct ArchiveIndex {
 };
 
 ArchiveIndex gIndex;
+std::once_flag gIndexOnce;
+bool gIndexOnceReady = false;
 
 bool BuildIndex() {
     if (gIndex.attempted) return gIndex.ready;
@@ -187,7 +190,10 @@ bool BuildIndex() {
 }
 
 const Entry* FindEntry(const std::string& requested, std::string& resolved) {
-    if (!BuildIndex()) return nullptr;
+    std::call_once(gIndexOnce, []() {
+        gIndexOnceReady = BuildIndex();
+    });
+    if (!gIndexOnceReady) return nullptr;
 
     const std::string normalized = Normalize(requested);
     const std::string candidates[] = {
