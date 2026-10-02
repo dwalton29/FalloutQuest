@@ -106,6 +106,7 @@ bool Q1970AnyLodWorkerQ19();
 bool Q2013NativeLodBootstrapReadyQ19(
     int32_t cellX, int32_t cellY, size_t* outReady);
 bool Q2013HasNativeObjectLodForCellQ19(int32_t cellX, int32_t cellY);
+bool Q1990LodBlockDesired(int32_t blockX, int32_t blockY);
 
 
 constexpr const char* Q6H_TAG = "FalloutQuest";
