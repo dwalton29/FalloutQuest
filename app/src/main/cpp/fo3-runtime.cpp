@@ -4842,7 +4842,9 @@ void DrawSceneObject(const GpuObject& object, bool environmentPassQ2050 = false)
         float q2021Mode = 0.0f;
         if (gExteriorWorldspaceQ1890 == 0x0000003Cu &&
             gQ2021PlayerSceneValid) {
-            if (!object.q1990NativeLod && !object.q210PlayerBody) {
+            if (!object.q1990NativeLod &&
+                !object.q210PlayerBody &&
+                !object.q230NpcActor) {
                 q2021Mode = 1.0f;
             } else if (object.modelPath.find("\\blocks\\") !=
                        std::string::npos) {
@@ -9948,36 +9950,57 @@ bool Q230EnsureNpcActors() {
     size_t cpuShapes=0u;
     size_t gpuShapes=0u;
     size_t triangles=0u;
+    size_t authoredGpuShapes=0u;
+    size_t proofGpuShapes=0u;
     float rx=0.0f, ry=0.0f, rz=0.0f;
     Q230ConvertBethesdaRotation(
         lucas->rx,lucas->ry,lucas->rz,rx,ry,rz);
 
-    for(const std::string& path:models){
+    // Q23.1 visual proof: keep the authored actor at the ESM position, but
+    // also build a second copy two metres in front of the current HMD.  The
+    // proof copy is deliberately unlit and ignores depth so an assembly
+    // failure can be distinguished from a world-placement/occlusion failure
+    // without depending on logcat.  This is diagnostic-only VR placement;
+    // all meshes still come from Lucas's real ESM-linked Fallout assets.
+    const float q231ForwardX=-std::sin(gQ210Head[3]);
+    const float q231ForwardZ=-std::cos(gQ210Head[3]);
+    const float q231ProofSceneX=gQ210Head[0]+q231ForwardX*2.0f;
+    const float q231ProofSceneZ=gQ210Head[2]+q231ForwardZ*2.0f;
+    const float q231ProofGameX=
+        gExteriorOriginXQ1890+q231ProofSceneX*FO3_UNITS_PER_METRE;
+    const float q231ProofGameY=
+        gExteriorOriginYQ1890+
+        (SCENE_FORWARD-q231ProofSceneZ)*FO3_UNITS_PER_METRE;
+    const float q231ProofGameZ=gExteriorOriginZQ1890;
+
+    auto q231BuildModelAt = [&](const std::string& path,
+                                float px, float py, float pz,
+                                float prx, float pry, float prz,
+                                bool proofCopy) {
         Fo3WorldPlacement placement;
         placement.refFormId=lucas->refFormId;
         placement.baseFormId=lucas->baseFormId;
         placement.baseRecordType="NPC_";
         placement.editorId=lucas->editorId;
         placement.modelPath=path;
-        placement.x=lucas->x;
-        placement.y=lucas->y;
-        placement.z=lucas->z;
-        placement.rx=rx;
-        placement.ry=ry;
-        placement.rz=rz;
+        placement.x=px;
+        placement.y=py;
+        placement.z=pz;
+        placement.rx=prx;
+        placement.ry=pry;
+        placement.rz=prz;
         placement.scale=lucas->scale;
 
         std::vector<CpuObject> parts;
         if(!BuildCpuObjects(placement,parts)){
-            Q6H_LOGW("Q23.0 NPC PART MISS: actor=%s model=%s stage=cpu",
-                     lucas->editorId.c_str(),path.c_str());
-            continue;
+            Q6H_LOGW("Q23.1 NPC PART MISS: actor=%s model=%s copy=%s stage=cpu",
+                     lucas->editorId.c_str(),path.c_str(),
+                     proofCopy?"proof":"authored");
+            return;
         }
         cpuShapes+=parts.size();
 
         for(CpuObject& part:parts){
-            // Same authored BSDismember section-cap suppression used by the
-            // player body; this does not remove ordinary limb/body geometry.
             Q215SuppressPlayerGoreCaps(part.mesh);
             GpuObject gpu;
             if(!UploadCpuObject(
@@ -9986,23 +10009,47 @@ bool Q230EnsureNpcActors() {
                     gExteriorOriginYQ1890,
                     gExteriorOriginZQ1890,
                     gpu)){
-                Q6H_LOGW("Q23.0 NPC PART MISS: actor=%s model=%s stage=gpu",
-                         lucas->editorId.c_str(),path.c_str());
+                Q6H_LOGW("Q23.1 NPC PART MISS: actor=%s model=%s copy=%s stage=gpu",
+                         lucas->editorId.c_str(),path.c_str(),
+                         proofCopy?"proof":"authored");
                 continue;
             }
             gpu.q230NpcActor=true;
+            if(proofCopy){
+                gpu.noLighting=true;
+                gpu.zBufferTestQ1200=false;
+                gpu.zBufferWriteQ1200=false;
+                ++proofGpuShapes;
+            } else {
+                ++authoredGpuShapes;
+            }
             triangles+=static_cast<size_t>(gpu.vertexCount/3);
             gQ230NpcActors.push_back(std::move(gpu));
             ++gpuShapes;
         }
+    };
+
+    for(const std::string& path:models){
+        q231BuildModelAt(
+            path,
+            lucas->x,lucas->y,lucas->z,
+            rx,ry,rz,
+            false);
+        q231BuildModelAt(
+            path,
+            q231ProofGameX,q231ProofGameY,q231ProofGameZ,
+            0.0f,0.0f,0.0f,
+            true);
     }
 
     gQ230NpcReady=!gQ230NpcActors.empty();
-    Q6H_LOGI("Q23.0 NPC VISUAL READY: ready=%d actor=%s ref=%08X base=%08X assets=%zu cpuShapes=%zu gpuShapes=%zu triangles=%zu pose=bind faceGenApplied=0 faceGenPresent=%d source=ACHR->NPC_->RACE/HAIR/HDPT/ARMO",
+    Q6H_LOGI("Q23.1 NPC VISUAL READY: ready=%d actor=%s ref=%08X base=%08X assets=%zu cpuShapes=%zu gpuShapes=%zu authoredGpu=%zu proofGpu=%zu triangles=%zu proofScene=(%.2f %.2f) pose=bind faceGenApplied=0 faceGenPresent=%d source=ACHR->NPC_->RACE/HAIR/HDPT/ARMO",
              gQ230NpcReady?1:0,
              lucas->fullName.empty()?lucas->editorId.c_str():lucas->fullName.c_str(),
              lucas->refFormId,lucas->baseFormId,
-             models.size(),cpuShapes,gpuShapes,triangles,
+             models.size(),cpuShapes,gpuShapes,
+             authoredGpuShapes,proofGpuShapes,triangles,
+             q231ProofSceneX,q231ProofSceneZ,
              lucas->hasFaceGenGeometry?1:0);
     if(!gQ230NpcReady) Q230DeleteNpcActors();
     return gQ230NpcReady;
