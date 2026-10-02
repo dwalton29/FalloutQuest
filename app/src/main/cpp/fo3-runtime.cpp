@@ -107,6 +107,11 @@ bool Q2013NativeLodBootstrapReadyQ19(
     int32_t cellX, int32_t cellY, size_t* outReady);
 bool Q2013HasNativeObjectLodForCellQ19(int32_t cellX, int32_t cellY);
 bool Q1990LodBlockDesired(int32_t blockX, int32_t blockY);
+bool Q1990TerrainLodBlockDesired(int32_t blockX, int32_t blockY);
+void Q2024GetAuthoredWarmupState(size_t& level32Ready,
+                                 size_t& level32Target,
+                                 size_t& highReady,
+                                 size_t& highTarget);
 
 
 constexpr const char* Q6H_TAG = "FalloutQuest";
@@ -305,6 +310,7 @@ struct GpuObject {
     int32_t q1970GridX = 0;
     int32_t q1970GridY = 0;
     bool q1990NativeLod = false;
+    bool q2024TerrainLod = false;
     std::string baseRecordType;
     Fo3DoorTeleport teleport;
     float minX = 0.0f, maxX = 0.0f;
@@ -471,6 +477,7 @@ GLint gExternalEmittanceEnabledLocationQ1380 = -1;
 GLint gExternalEmittanceColorLocationQ1380 = -1;
 GLint gNativeLodClipEnabledLocationQ1810 = -1;
 GLint gLodFadeModeLocationQ2021 = -1;
+GLint gTerrainLodModeLocationQ2024 = -1;
 GLint gLodFadePlayerLocationQ2021 = -1;
 GLint gLodFadeRangeLocationQ2021 = -1;
 GLint gNativeLodClipCellCountLocationQ1900 = -1;
@@ -965,6 +972,7 @@ GLuint CreateQ6HProgram() {
         uniform int uNativeLodClipCellCountQ1900;
         uniform vec4 uNativeLodClipCellsQ1900[25];
         uniform float uLodFadeModeQ2021;
+        uniform float uTerrainLodModeQ2024;
         uniform vec2 uLodFadePlayerQ2021;
         uniform vec2 uLodFadeRangeQ2021;
         uniform float uWaterReflectionClipEnabledQ2090;
@@ -1150,12 +1158,28 @@ GLuint CreateQ6HProgram() {
             float q1630SpecLow = q1630SpecBase * clamp(q1630RawNdotL + 0.5, 0.0, 1.0);
             float q1630Spec = q1630RawNdotL <= 0.2 ? q1630SpecLow : q1630SpecBase;
             vec3 q1630SpecularRgb = clamp(uSunlightColor * q1630Spec, 0.0, 1.0)
-                                  * uSpecularEnabled;
+                                  * uSpecularEnabled
+                                  * (1.0 - uTerrainLodModeQ2024);
             float q1050SunVisibility = Q1050ShadowVisibility(vShadowCoord, mappedNormal, lightDirection);
             vec3 q1630Sp17Lighting = max(
                 uAmbientColor + uSunlightColor * lambert, vec3(0.0));
+
+            // Q20.24: landscape LOD is not a static-object PPLighting material.
+            // Match the existing detailed LAND lighting until Fallout3.exe's
+            // dedicated landscape-LOD shader is recovered.
+            if (uTerrainLodModeQ2024 > 0.5) {
+                vec3 q2024LandLight =
+                    normalize(vec3(0.35, 0.85, 0.40));
+                float q2024LandLambert =
+                    max(dot(N, q2024LandLight), 0.0);
+                q1630Sp17Lighting =
+                    vec3(0.48 + 0.52 * q2024LandLambert);
+            }
+
             vec3 q1470WorldDiffuse = baseColor * q1630Sp17Lighting;
-            if (uLegacyColourDomainQ1570 > 0.5 && uNoLighting <= 0.5) {
+            if (uLegacyColourDomainQ1570 > 0.5 &&
+                uNoLighting <= 0.5 &&
+                uTerrainLodModeQ2024 <= 0.5) {
                 vec3 q1570BaseEncoded = Q1470LinearToSrgb(baseColor);
                 vec3 q1570EncodedDiffuse = q1570BaseEncoded *
                     (uLegacyAmbientQ1570 + uLegacySunlightQ1570 * lambert);
@@ -1165,7 +1189,9 @@ GLuint CreateQ6HProgram() {
                 ? baseColor
                 : q1470WorldDiffuse + q1630SpecularRgb;
             for (int i = 0; i < 8; ++i) {
-                if (uNoLighting > 0.5 || i >= uLocalLightCount) break;
+                if (uNoLighting > 0.5 ||
+                    uTerrainLodModeQ2024 > 0.5 ||
+                    i >= uLocalLightCount) break;
                 vec3 toLight = uLocalLightPosRadius[i].xyz - vPosition;
                 float distanceToLight = length(toLight);
                 float radius = max(uLocalLightPosRadius[i].w, 0.001);
@@ -2434,6 +2460,8 @@ bool InitializeScene() {
         glGetUniformLocation(gProgram, "uNativeLodClipEnabledQ1810");
     gLodFadeModeLocationQ2021 =
         glGetUniformLocation(gProgram, "uLodFadeModeQ2021");
+    gTerrainLodModeLocationQ2024 =
+        glGetUniformLocation(gProgram, "uTerrainLodModeQ2024");
     gLodFadePlayerLocationQ2021 =
         glGetUniformLocation(gProgram, "uLodFadePlayerQ2021");
     gLodFadeRangeLocationQ2021 =
@@ -4203,9 +4231,19 @@ void UpdateFo3ExteriorStreamingQ1890(float virtualHeadX, float virtualHeadZ) {
                 const bool detailComplete =
                     Q1900WarmShellReadyQ2013(
                         actualGridX, actualGridY, &detailReady);
-                const bool lodComplete =
-                    Q2013NativeLodBootstrapReadyQ19(
-                        actualGridX, actualGridY, &lodReady);
+                Q2013NativeLodBootstrapReadyQ19(
+                    actualGridX, actualGridY, &lodReady);
+                size_t level32Ready = 0u, level32Target = 0u;
+                size_t highReady = 0u, highTarget = 0u;
+                Q2024GetAuthoredWarmupState(
+                    level32Ready, level32Target,
+                    highReady, highTarget);
+                const bool nearLodComplete = lodReady >= 9u;
+                const bool horizonComplete =
+                    level32Target > 0u &&
+                    level32Ready >= level32Target &&
+                    highTarget > 0u &&
+                    highReady >= highTarget;
                 const uint64_t warmupUs =
                     gQ2013ExteriorWarmupStarted.time_since_epoch().count() == 0
                         ? 0u
@@ -4213,10 +4251,13 @@ void UpdateFo3ExteriorStreamingQ1890(float virtualHeadX, float virtualHeadZ) {
                             std::chrono::duration_cast<std::chrono::microseconds>(
                                 std::chrono::steady_clock::now() -
                                 gQ2013ExteriorWarmupStarted).count());
-                const bool timeout = warmupUs >= 15000000u;
-                if ((detailComplete && lodComplete) || timeout) {
-                    Q6H_LOGI("Q20.14 EXTERIOR WARMUP COMPLETE: detailReady=%zu/49 lodRing2Ready=%zu/25 elapsedUs=%llu timeout=%d action=release-loading-screen",
+                const bool timeout = warmupUs >= 25000000u;
+                if ((detailComplete && nearLodComplete && horizonComplete) ||
+                    timeout) {
+                    Q6H_LOGI("Q20.24 EXTERIOR WARMUP COMPLETE: detailReady=%zu/49 nearLevel4=%zu/9 level32=%zu/%zu high=%zu/%zu elapsedUs=%llu timeout=%d action=release-loading-screen",
                              detailReady, lodReady,
+                             level32Ready, level32Target,
+                             highReady, highTarget,
                              static_cast<unsigned long long>(warmupUs),
                              timeout ? 1 : 0);
                     gQ2013ExteriorWarmupPending = false;
@@ -4638,6 +4679,10 @@ void DrawSceneObject(const GpuObject& object, bool environmentPassQ2050 = false)
         }
         glUniform1f(gLodFadeModeLocationQ2021, q2021Mode);
     }
+    if (gTerrainLodModeLocationQ2024 >= 0) {
+        glUniform1f(gTerrainLodModeLocationQ2024,
+                    object.q2024TerrainLod ? 1.0f : 0.0f);
+    }
     if (gLodFadePlayerLocationQ2021 >= 0) {
         glUniform2f(gLodFadePlayerLocationQ2021,
                     gQ2021PlayerSceneX, gQ2021PlayerSceneZ);
@@ -5028,6 +5073,8 @@ bool Q1030InitializeRenderProgramOnly() {
         glGetUniformLocation(gProgram, "uNativeLodClipEnabledQ1810");
     gLodFadeModeLocationQ2021 =
         glGetUniformLocation(gProgram, "uLodFadeModeQ2021");
+    gTerrainLodModeLocationQ2024 =
+        glGetUniformLocation(gProgram, "uTerrainLodModeQ2024");
     gLodFadePlayerLocationQ2021 =
         glGetUniformLocation(gProgram, "uLodFadePlayerQ2021");
     gLodFadeRangeLocationQ2021 =
@@ -5125,6 +5172,27 @@ std::vector<Q2023CoarseTerrainTile> gQ2023CoarseTerrainTiles;
 std::vector<Q2023HighObjectBlock> gQ2023HighObjectBlocks;
 bool gQ2023LodAssetsDiscovered = false;
 bool gQ2023LodDiscoveryLogged = false;
+
+void Q2024GetAuthoredWarmupState(size_t& level32Ready,
+                                 size_t& level32Target,
+                                 size_t& highReady,
+                                 size_t& highTarget) {
+    level32Ready = 0u;
+    level32Target = 0u;
+    highReady = gQ2023HighObjectBlocks.size();
+    highTarget = 0u;
+    for (const Q2023CoarseTerrainTile& tile : gQ2023CoarseTerrainTiles) {
+        if (tile.levelCells == 32) ++level32Ready;
+    }
+    for (const Q2023LodAsset& asset : gQ2023LodAssets) {
+        if (asset.kind == Q2023LodAssetKind::HighObjects) {
+            ++highTarget;
+        } else if (asset.kind == Q2023LodAssetKind::CoarseTerrain &&
+                   asset.levelCells == 32) {
+            ++level32Target;
+        }
+    }
+}
 
 uint64_t gQ1990NativeLodSerial = 0u;
 bool gQ1990NativeLodOriginValid = false;
@@ -5414,7 +5482,7 @@ bool Q2023TileFullyRefinedQ19(
             if (childLevel == 4) {
                 Q1990NativeLodBlock* child =
                     Q1990FindLodBlock(childX, childY);
-                if (!child || !Q1990LodBlockDesired(childX, childY))
+                if (!child || !Q1990TerrainLodBlockDesired(childX, childY))
                     return false;
             } else if (!Q2023TileActiveQ19(
                            childLevel, childX, childY,
@@ -5550,24 +5618,43 @@ void Q2022ProbeLodArchive(int32_t cellX, int32_t cellY) {
     }
 }
 
-// Fallout.ini: uGridDistantCount=20. Keep that authored distant-grid horizon
-// separate from the Q20.1 5x5 detailed draw radius/resident REFR window.
+// Q20.24: separate terrain refinement from object-LOD range.
+// Terrain Level4 keeps the existing uGridDistantCount=20 window. The PC
+// profile separately requests fBlockLoadDistance=125000 (~30.5 CELLs), so
+// object blocks are searched through the next aligned four-CELL macroblock.
 constexpr int Q1840_DISTANT_GRID_RADIUS_CELLS = 20;
 constexpr int Q1840_DISTANT_BLOCK_RADIUS =
     (Q1840_DISTANT_GRID_RADIUS_CELLS + Q1840_LEVEL4_BLOCK_CELLS - 1) /
-    Q1840_LEVEL4_BLOCK_CELLS; // 5 Level4 blocks each direction => up to 11x11.
+    Q1840_LEVEL4_BLOCK_CELLS;
 constexpr int Q1840_DISTANT_BLOCK_COORD_RADIUS =
     Q1840_DISTANT_BLOCK_RADIUS * Q1840_LEVEL4_BLOCK_CELLS;
 constexpr size_t Q1840_DISTANT_TARGET_BLOCKS =
     static_cast<size_t>((Q1840_DISTANT_BLOCK_RADIUS * 2 + 1) *
                         (Q1840_DISTANT_BLOCK_RADIUS * 2 + 1));
-constexpr size_t Q1840_DISTANT_CACHE_BLOCKS = 144u;
 
-bool Q1990LodBlockDesired(int32_t blockX, int32_t blockY) {
+constexpr int Q2024_OBJECT_LOD_RADIUS_CELLS = 31;
+constexpr int Q2024_OBJECT_LOD_BLOCK_RADIUS =
+    (Q2024_OBJECT_LOD_RADIUS_CELLS + Q1840_LEVEL4_BLOCK_CELLS - 1) /
+    Q1840_LEVEL4_BLOCK_CELLS;
+constexpr int Q2024_OBJECT_LOD_BLOCK_COORD_RADIUS =
+    Q2024_OBJECT_LOD_BLOCK_RADIUS * Q1840_LEVEL4_BLOCK_CELLS;
+constexpr size_t Q2024_OBJECT_LOD_TARGET_BLOCKS =
+    static_cast<size_t>((Q2024_OBJECT_LOD_BLOCK_RADIUS * 2 + 1) *
+                        (Q2024_OBJECT_LOD_BLOCK_RADIUS * 2 + 1));
+constexpr size_t Q1840_DISTANT_CACHE_BLOCKS = 324u;
+
+bool Q1990TerrainLodBlockDesired(int32_t blockX, int32_t blockY) {
     return std::abs(blockX - gQ1990NativeLodCentreBlockX) <=
                Q1840_DISTANT_BLOCK_COORD_RADIUS &&
            std::abs(blockY - gQ1990NativeLodCentreBlockY) <=
                Q1840_DISTANT_BLOCK_COORD_RADIUS;
+}
+
+bool Q1990LodBlockDesired(int32_t blockX, int32_t blockY) {
+    return std::abs(blockX - gQ1990NativeLodCentreBlockX) <=
+               Q2024_OBJECT_LOD_BLOCK_COORD_RADIUS &&
+           std::abs(blockY - gQ1990NativeLodCentreBlockY) <=
+               Q2024_OBJECT_LOD_BLOCK_COORD_RADIUS;
 }
 
 bool Q2013HasNativeObjectLodForCellQ19(int32_t cellX, int32_t cellY) {
@@ -5683,11 +5770,14 @@ void Q1990EnsureNativeLodForCell(int32_t cellX, int32_t cellY,
             if (Q1990LodBlockDesired(block.blockX, block.blockY))
                 block.lastUse = gQ1990NativeLodSerial;
         }
-        Q6H_LOGI("Q18.4 NATIVE LOD HORIZON: playerCell=(%d,%d) centreBlock=(%d,%d) radiusCells=%d radiusLevel4Blocks=%d targetBlocks=%zu source=Fallout.ini/uGridDistantCount",
+        Q6H_LOGI("Q20.24 NATIVE LOD HORIZON: playerCell=(%d,%d) centreBlock=(%d,%d) terrainRadiusCells=%d terrainBlocksRadius=%d terrainTarget=%zu objectRadiusCells=%d objectBlocksRadius=%d objectSearchTarget=%zu source=uGridDistantCount+fBlockLoadDistance125000",
                  cellX, cellY, centreBlockX, centreBlockY,
                  Q1840_DISTANT_GRID_RADIUS_CELLS,
                  Q1840_DISTANT_BLOCK_RADIUS,
-                 Q1840_DISTANT_TARGET_BLOCKS);
+                 Q1840_DISTANT_TARGET_BLOCKS,
+                 Q2024_OBJECT_LOD_RADIUS_CELLS,
+                 Q2024_OBJECT_LOD_BLOCK_RADIUS,
+                 Q2024_OBJECT_LOD_TARGET_BLOCKS);
     }
 
     // Q19.7: Level4 extraction/parse/texture decode and GPU publication are
@@ -5733,11 +5823,12 @@ void Q1990EnsureNativeLodForCell(int32_t cellX, int32_t cellY,
         q1840LastLoggedLoaded = desiredLoaded;
         q1840LastLoggedCentreX = centreBlockX;
         q1840LastLoggedCentreY = centreBlockY;
-        Q6H_LOGI("Q20.14 NATIVE LOD WINDOW: playerCell=(%d,%d) requestedCentre=(%d,%d) desiredLoaded=%zu/%zu cachedBlocks=%zu radiusCells=%d progressiveVisibleBlocks=%zu publishPolicy=immediate-loaded-blocks cpuWorkers=4 stagedGpuQueue=1",
+        Q6H_LOGI("Q20.24 NATIVE LOD WINDOW: playerCell=(%d,%d) requestedCentre=(%d,%d) objectBlocksVisited=%zu/%zu cachedBlocks=%zu terrainRadiusCells=%d objectRadiusCells=%d progressiveVisibleBlocks=%zu publishPolicy=split-terrain-object-horizons",
                  cellX, cellY, centreBlockX, centreBlockY,
-                 desiredLoaded, Q1840_DISTANT_TARGET_BLOCKS,
+                 desiredLoaded, Q2024_OBJECT_LOD_TARGET_BLOCKS,
                  gQ1990NativeLodBlocks.size(),
                  Q1840_DISTANT_GRID_RADIUS_CELLS,
+                 Q2024_OBJECT_LOD_RADIUS_CELLS,
                  Q2013ProgressiveLodCountQ19());
     }
 }
@@ -5939,8 +6030,11 @@ void Q1970RunLodWorkerQ19(
             "Landscape\\LOD\\Wasteland\\" + suffix;
         const std::string objectPath =
             "Landscape\\LOD\\Wasteland\\Blocks\\" + suffix;
-        terrainReady = Q1970AppendLodNifCpuQ19(
-            terrainPath, task, true, textureSeen);
+        if (Q1990TerrainLodBlockDesired(
+                task->blockX, task->blockY)) {
+            terrainReady = Q1970AppendLodNifCpuQ19(
+                terrainPath, task, true, textureSeen);
+        }
         objectsReady = Q1970AppendLodNifCpuQ19(
             objectPath, task, false, textureSeen);
     }
@@ -6052,16 +6146,18 @@ void Q1970AdvanceLodGpuQ19() {
         [](const Q1970LodUploadTaskQ2013& a,
            const Q1970LodUploadTaskQ2013& b) {
             auto priority = [](const Q1970LodUploadTaskQ2013& item) {
-                // Q20.23B: preserve the safety-critical near Level4 bootstrap,
-                // then publish Bethesda's authored horizon before spending GPU
-                // budget on the rest of the 20-cell Level4 expansion.
+                // Q20.24: secure the immediate Level4 ring, establish the
+                // authored horizon/landmarks, then fill refinement and the
+                // farther object-LOD range.
                 if (!item.q2023AuthoredAsset) {
-                    return item.ring <= 2 ? 0 : 5;
+                    if (item.ring <= 1) return 0;
+                    if (item.ring <= 2) return 3;
+                    return 6;
                 }
                 if (item.q2023LevelCells == 32) return 1;
                 if (item.q2023Kind == Q2023LodAssetKind::HighObjects) return 2;
-                if (item.q2023LevelCells == 16) return 3;
-                return 4; // Level8
+                if (item.q2023LevelCells == 16) return 4;
+                return 5;
             };
             const int ap = priority(a);
             const int bp = priority(b);
@@ -6078,9 +6174,9 @@ void Q1970AdvanceLodGpuQ19() {
 
     const bool q2015Loading = IsFo3LoadingVisibleQ1700();
     const size_t q2015LodGpuBytes =
-        q2015Loading ? 4u * 1024u * 1024u : 1024u * 1024u;
+        q2015Loading ? 8u * 1024u * 1024u : 1024u * 1024u;
     const uint64_t q2015LodGpuBudgetUs =
-        q2015Loading ? 3500u : 900u;
+        q2015Loading ? 6000u : 900u;
     const auto frameStarted = std::chrono::steady_clock::now();
     size_t bytesThisFrame = 0u;
 
@@ -6151,6 +6247,7 @@ void Q1970AdvanceLodGpuQ19() {
                     objectTriangles += static_cast<size_t>(gpu.vertexCount / 3);
                     block.objects.push_back(std::move(gpu));
                 } else {
+                    gpu.q2024TerrainLod = true;
                     terrainTriangles += static_cast<size_t>(gpu.vertexCount / 3);
                     block.terrain.push_back(std::move(gpu));
                 }
@@ -6168,6 +6265,7 @@ void Q1970AdvanceLodGpuQ19() {
             tile.blockY = pending.blockY;
             for (GpuObject& gpu : state.stagedGpu) {
                 gpu.q1990NativeLod = true;
+                gpu.q2024TerrainLod = true;
                 terrainTriangles += static_cast<size_t>(gpu.vertexCount / 3);
                 tile.terrain.push_back(std::move(gpu));
                 gpu.vbo = 0u;
@@ -6228,10 +6326,10 @@ bool Q1970ChooseMissingLodQ19(
     int bestManhattan = 1000000;
     bestRing = 1000000;
     bool foundMissing = false;
-    for (int dy = -Q1840_DISTANT_BLOCK_RADIUS;
-         dy <= Q1840_DISTANT_BLOCK_RADIUS; ++dy) {
-        for (int dx = -Q1840_DISTANT_BLOCK_RADIUS;
-             dx <= Q1840_DISTANT_BLOCK_RADIUS; ++dx) {
+    for (int dy = -Q2024_OBJECT_LOD_BLOCK_RADIUS;
+         dy <= Q2024_OBJECT_LOD_BLOCK_RADIUS; ++dy) {
+        for (int dx = -Q2024_OBJECT_LOD_BLOCK_RADIUS;
+             dx <= Q2024_OBJECT_LOD_BLOCK_RADIUS; ++dx) {
             const int32_t bx =
                 gQ1990NativeLodCentreBlockX +
                 dx * Q1840_LEVEL4_BLOCK_CELLS;
@@ -6325,14 +6423,21 @@ void Q1970AdvanceNativeLodQ19(int32_t cellX, int32_t cellY,
     size_t q2023bLevel8 = 0u;
     size_t q2023bLevel16 = 0u;
     size_t q2023bLevel32 = 0u;
+    size_t q2024FarObjectBlocks = 0u;
     for (const Q2023CoarseTerrainTile& tile : gQ2023CoarseTerrainTiles) {
         if (tile.levelCells == 8) ++q2023bLevel8;
         else if (tile.levelCells == 16) ++q2023bLevel16;
         else if (tile.levelCells == 32) ++q2023bLevel32;
     }
+    for (const Q1990NativeLodBlock& block : gQ1990NativeLodBlocks) {
+        if (!Q1990TerrainLodBlockDesired(block.blockX, block.blockY) &&
+            !block.objects.empty()) {
+            ++q2024FarObjectBlocks;
+        }
+    }
 
     if (q2023aPulse) {
-        Q6H_LOGI("Q20.23B LOD STATE: pulse=%llu cell=(%d,%d) contextReady=%d wasteland=%d collisionBusy=%d terrainBusy=%d near3x3Ready=%zu/9 nearSafe=%d bootstrapLevel4=%zu/25 bootstrapComplete=%d level4DesiredLoaded=%zu level8=%zu level16=%zu level32=%zu coarseTiles=%zu highBlocks=%zu activeWorkers=%zu uploads=%zu assetsDiscovered=%d assets=%zu",
+        Q6H_LOGI("Q20.24 LOD STATE: pulse=%llu cell=(%d,%d) contextReady=%d wasteland=%d collisionBusy=%d terrainBusy=%d near3x3Ready=%zu/9 nearSafe=%d bootstrapLevel4=%zu/25 bootstrapComplete=%d level4DesiredLoaded=%zu level8=%zu level16=%zu level32=%zu coarseTiles=%zu highBlocks=%zu farObjectBlocks=%zu activeWorkers=%zu uploads=%zu assetsDiscovered=%d assets=%zu",
                  static_cast<unsigned long long>(q2023aGatePulse),
                  cellX, cellY,
                  gQ1900ContextReadyQ19 ? 1 : 0,
@@ -6349,6 +6454,7 @@ void Q1970AdvanceNativeLodQ19(int32_t cellX, int32_t cellY,
                  q2023bLevel32,
                  gQ2023CoarseTerrainTiles.size(),
                  gQ2023HighObjectBlocks.size(),
+                 q2024FarObjectBlocks,
                  Q2013ActiveLodWorkersQ19(),
                  gQ2013LodUploadsQ19.size(),
                  gQ2023LodAssetsDiscovered ? 1 : 0,
@@ -6382,8 +6488,11 @@ void Q1970AdvanceNativeLodQ19(int32_t cellX, int32_t cellY,
         const bool bootstrapComplete =
             Q2013NativeLodBootstrapReadyQ19(
                 cellX, cellY, &bootstrapReady);
+        const bool authoredAllowed = bootstrapReady >= 9u;
+        const bool q2024Loading = IsFo3LoadingVisibleQ1700();
         const bool preferAuthored =
-            bootstrapComplete && ((slot & 1u) != 0u);
+            authoredAllowed &&
+            (q2024Loading ? slot != 0u : ((slot & 1u) != 0u));
 
         int32_t blockX = 0;
         int32_t blockY = 0;
@@ -6397,7 +6506,7 @@ void Q1970AdvanceNativeLodQ19(int32_t cellX, int32_t cellY,
         }
         if (!authored &&
             !Q1970ChooseMissingLodQ19(blockX, blockY, ring)) {
-            authored = bootstrapComplete &&
+            authored = authoredAllowed &&
                 Q2023ChooseMissingAuthoredLodQ19(
                     cellX, cellY, authoredIndex);
             if (!authored) break;
@@ -6511,8 +6620,9 @@ void Q1990RenderNativeLod(bool alphaPass) {
     glPolygonOffset(2.0f, 6.0f);
     for (Q1990NativeLodBlock& block : gQ1990NativeLodBlocks) {
         if (!Q1990LodBlockDesired(block.blockX, block.blockY)) continue;
-        if (block.blockX != gQ1990NativeLodCentreBlockX ||
-            block.blockY != gQ1990NativeLodCentreBlockY) {
+        if (Q1990TerrainLodBlockDesired(block.blockX, block.blockY) &&
+            (block.blockX != gQ1990NativeLodCentreBlockX ||
+             block.blockY != gQ1990NativeLodCentreBlockY)) {
             for (const GpuObject& object : block.terrain) {
                 if (object.alphaBlend != alphaPass) continue;
                 DrawSceneObject(object);
