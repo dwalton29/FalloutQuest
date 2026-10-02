@@ -67,6 +67,7 @@ struct RawPlacementQ75 {
 
 struct BaseRecordQ75 {
     uint32_t formId = 0;
+    uint32_t recordFlags = 0;
     std::string recordType;
     std::string editorId;
     std::string modelPath;
@@ -397,6 +398,7 @@ bool ResolveBasesQ75(const std::unordered_set<uint32_t>& wanted,
         if (!ReadPayloadQ75(file, sizeField, flags, payload)) break;
         BaseRecordQ75 base;
         base.formId = formId;
+        base.recordFlags = flags;
         base.recordType = FourCCQ75(header);
         WalkSubrecordsQ75(payload.data(), payload.size(),
                           [&](const char* type, const uint8_t* bytes, uint32_t size) {
@@ -541,6 +543,8 @@ bool LoadFo3WorldspaceNeighborhoodQ75(uint32_t worldspaceFormId,
         Fo3WorldPlacement world;
         world.refFormId = p->refFormId;
         world.baseFormId = p->baseFormId;
+        world.referenceRecordFlags = p->recordFlags;
+        world.baseRecordFlags = base.recordFlags;
         world.baseRecordType = base.recordType;
         world.editorId = base.editorId;
         world.modelPath = base.modelPath;

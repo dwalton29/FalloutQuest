@@ -7,6 +7,10 @@
 struct Fo3WorldPlacement {
     uint32_t refFormId = 0;
     uint32_t baseFormId = 0;
+    // Q20.25: retain authored record flags so renderer-side handoff can
+    // distinguish true VWD references/statics from detail-only geometry.
+    uint32_t referenceRecordFlags = 0;
+    uint32_t baseRecordFlags = 0;
     std::string baseRecordType;
     std::string editorId;
     std::string modelPath;

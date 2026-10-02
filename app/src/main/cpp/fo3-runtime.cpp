@@ -311,6 +311,9 @@ struct GpuObject {
     int32_t q1970GridY = 0;
     bool q1990NativeLod = false;
     bool q2024TerrainLod = false;
+    bool q2025LandscapeRock = false;
+    bool q2025VisibleWhenDistant = false;
+    bool q2025HighPriorityLod = false;
     std::string baseRecordType;
     Fo3DoorTeleport teleport;
     float minX = 0.0f, maxX = 0.0f;
@@ -1819,6 +1822,18 @@ bool UploadCpuObject(CpuObject& cpu, float centerX, float centerY, float floorZ,
     gpu.baseFormId = cpu.placement.baseFormId;
     gpu.editorId = cpu.placement.editorId;
     gpu.modelPath = cpu.placement.modelPath;
+    const std::string q2025ModelLower =
+        TextureCacheKey(cpu.placement.modelPath, "");
+    gpu.q2025LandscapeRock =
+        q2025ModelLower.find("landscape\\rocks\\") != std::string::npos;
+    const uint32_t q2025LodFlags =
+        cpu.placement.referenceRecordFlags |
+        cpu.placement.baseRecordFlags;
+    gpu.q2025VisibleWhenDistant =
+        (q2025LodFlags & Q2025_FLAG_VISIBLE_WHEN_DISTANT) != 0u;
+    gpu.q2025HighPriorityLod =
+        (cpu.placement.referenceRecordFlags &
+         Q2025_FLAG_HIGH_PRIORITY_LOD) != 0u;
     gpu.q2016ShapeIndex = cpu.q2016ShapeIndex;
     Q2016BuildPlacementMatrix(
         cpu.placement, centerX, centerY, floorZ,
@@ -2587,9 +2602,12 @@ bool ProcessQ74TransitionRequest() {
         request.worldspaceFormId == 0x0000003Cu &&
         IsFo3LoadingVisibleQ1700();
     gQ2013ExteriorWarmupPending = q2013HoldExteriorLoading;
-    gQ2013ExteriorWarmupStarted = q2013HoldExteriorLoading
-        ? std::chrono::steady_clock::now()
-        : std::chrono::steady_clock::time_point{};
+    // Q20.25: ProcessQ74TransitionRequest performs substantial synchronous
+    // CELL/NIF/GPU scene work. Starting the async horizon timeout here meant
+    // that work could consume the whole timeout before LOD got its first tick.
+    // Arm the timer lazily on the first actual Wasteland streaming frame.
+    gQ2013ExteriorWarmupStarted =
+        std::chrono::steady_clock::time_point{};
 
     Q6H_LOGI("Q16.11 MATURE SCENE SWAP BEGIN: door=%08X cell=%08X worldspace=%08X XTEL=(%.2f %.2f %.2f)",
              request.destinationDoorRef, request.cellFormId, request.worldspaceFormId,
@@ -3287,6 +3305,20 @@ constexpr float Q2021_DETAIL_FADE_START_M =
     Q2021_DETAIL_FADE_START_GAME / FO3_UNITS_PER_METRE;
 constexpr float Q2021_DETAIL_FADE_END_M =
     Q2021_DETAIL_FADE_END_GAME / FO3_UNITS_PER_METRE;
+
+// Q20.25: most Fallout 3 rock/cliff STATs are not authored VWD. Do not
+// pretend they have generated block LOD. Instead, for non-VWD landscape-rock
+// detail that is already resident in the 7x7 visual cache, hold it through the
+// old generic cutoff and fade it across the outer resident ring.
+constexpr uint32_t Q2025_FLAG_VISIBLE_WHEN_DISTANT = 0x00008000u;
+constexpr uint32_t Q2025_FLAG_HIGH_PRIORITY_LOD = 0x00010000u;
+constexpr float Q2025_ROCK_FADE_START_GAME = 10240.0f;
+constexpr float Q2025_ROCK_FADE_END_GAME = 14336.0f; // 3.5 exterior CELLs.
+constexpr float Q2025_ROCK_FADE_START_M =
+    Q2025_ROCK_FADE_START_GAME / FO3_UNITS_PER_METRE;
+constexpr float Q2025_ROCK_FADE_END_M =
+    Q2025_ROCK_FADE_END_GAME / FO3_UNITS_PER_METRE;
+
 bool gQ2021PlayerSceneValid = false;
 float gQ2021PlayerSceneX = 0.0f;
 float gQ2021PlayerSceneZ = 0.0f;
@@ -4216,6 +4248,15 @@ void UpdateFo3ExteriorStreamingQ1890(float virtualHeadX, float virtualHeadZ) {
                 std::chrono::steady_clock::now() - q1970DetailStarted).count());
 
         if (gExteriorWorldspaceQ1890 == 0x0000003Cu) {
+            if (gQ2013ExteriorWarmupPending &&
+                IsFo3LoadingVisibleQ1700() &&
+                gQ2013ExteriorWarmupStarted.time_since_epoch().count() == 0) {
+                gQ2013ExteriorWarmupStarted =
+                    std::chrono::steady_clock::now();
+                Q6H_LOGI("Q20.25 EXTERIOR WARMUP STREAM START: actual=(%d,%d) timerOrigin=first-wasteland-stream-frame",
+                         actualGridX, actualGridY);
+            }
+
             const auto q1970LodStarted = std::chrono::steady_clock::now();
             Q1990EnsureNativeLodForCell(actualGridX, actualGridY,
                                         gExteriorOriginXQ1890,
@@ -4254,7 +4295,7 @@ void UpdateFo3ExteriorStreamingQ1890(float virtualHeadX, float virtualHeadZ) {
                 const bool timeout = warmupUs >= 25000000u;
                 if ((detailComplete && nearLodComplete && horizonComplete) ||
                     timeout) {
-                    Q6H_LOGI("Q20.24 EXTERIOR WARMUP COMPLETE: detailReady=%zu/49 nearLevel4=%zu/9 level32=%zu/%zu high=%zu/%zu elapsedUs=%llu timeout=%d action=release-loading-screen",
+                    Q6H_LOGI("Q20.25 EXTERIOR WARMUP COMPLETE: detailReady=%zu/49 nearLevel4=%zu/9 level32=%zu/%zu high=%zu/%zu elapsedUs=%llu timeout=%d action=release-loading-screen",
                              detailReady, lodReady,
                              level32Ready, level32Target,
                              highReady, highTarget,
@@ -4566,10 +4607,10 @@ bool Q1970ShouldRenderFullDetail(const GpuObject& object) {
         return true;
     }
 
-    // Q20.21: PC FO3 does not hard-pop the outer uGrids=5 square.
-    // Keep any already-resident detailed object whose AABB reaches inside the
-    // PC fNoLODFarDistanceMax=10240 radius. Shader-side alpha-to-coverage then
-    // performs the 0.6 -> 1.0 fade interval continuously.
+    // Q20.25: keep the generic Q20.21 fade for authored VWD/static objects.
+    // Non-VWD landscape rocks have no generated block replacement in the
+    // overwhelming majority of the ESM, so let already-resident rock detail
+    // survive to the edge of the 7x7 visual cache and fade there instead.
     if (cheb > 3) return false;
     const float nearestX =
         gQ2021PlayerSceneX < object.minX ? object.minX :
@@ -4581,8 +4622,12 @@ bool Q1970ShouldRenderFullDetail(const GpuObject& object) {
          gQ2021PlayerSceneZ);
     const float dx = nearestX - gQ2021PlayerSceneX;
     const float dz = nearestZ - gQ2021PlayerSceneZ;
-    return dx * dx + dz * dz <=
-        Q2021_DETAIL_FADE_END_M * Q2021_DETAIL_FADE_END_M;
+    const float fadeEnd =
+        object.q2025LandscapeRock &&
+        !object.q2025VisibleWhenDistant
+            ? Q2025_ROCK_FADE_END_M
+            : Q2021_DETAIL_FADE_END_M;
+    return dx * dx + dz * dz <= fadeEnd * fadeEnd;
 }
 
 int Q1900BuildNativeLodClipCells(float* bounds, bool objectLod) {
@@ -4688,9 +4733,17 @@ void DrawSceneObject(const GpuObject& object, bool environmentPassQ2050 = false)
                     gQ2021PlayerSceneX, gQ2021PlayerSceneZ);
     }
     if (gLodFadeRangeLocationQ2021 >= 0) {
+        const bool q2025ExtendedRockFade =
+            !object.q1990NativeLod &&
+            object.q2025LandscapeRock &&
+            !object.q2025VisibleWhenDistant;
         glUniform2f(gLodFadeRangeLocationQ2021,
-                    Q2021_DETAIL_FADE_START_M,
-                    Q2021_DETAIL_FADE_END_M);
+                    q2025ExtendedRockFade
+                        ? Q2025_ROCK_FADE_START_M
+                        : Q2021_DETAIL_FADE_START_M,
+                    q2025ExtendedRockFade
+                        ? Q2025_ROCK_FADE_END_M
+                        : Q2021_DETAIL_FADE_END_M);
     }
     if (gNativeLodClipCellCountLocationQ1900 >= 0) {
         glUniform1i(gNativeLodClipCellCountLocationQ1900,
@@ -4705,8 +4758,18 @@ void DrawSceneObject(const GpuObject& object, bool environmentPassQ2050 = false)
     glUniform1f(gNoLightingLocationQ1020, object.noLighting ? 1.0f : 0.0f);
     glUniform1f(gNoLightingFalloffLocationQ1160, object.noLightingFalloff ? 1.0f : 0.0f);
     glUniform4fv(gNoLightingFalloffParamsLocationQ1160, 1, object.noLightingFalloffParams);
-    glUniform1f(gUseVertexColorLocationQ1020, object.useVertexColor ? 1.0f : 0.0f);
-    glUniform1f(gUseVertexAlphaLocationQ1020, object.useVertexAlpha ? 1.0f : 0.0f);
+    // Q20.25: landscape-LOD NIF vertex colours are not the detailed LAND
+    // material colour path. Multiplying them into the diffuse was driving far
+    // terrain towards black. Keep the authored stream for diagnostics, but do
+    // not apply it to landscape LOD colour/alpha.
+    const bool q2025ApplyVertexColor =
+        object.useVertexColor && !object.q2024TerrainLod;
+    const bool q2025ApplyVertexAlpha =
+        object.useVertexAlpha && !object.q2024TerrainLod;
+    glUniform1f(gUseVertexColorLocationQ1020,
+                q2025ApplyVertexColor ? 1.0f : 0.0f);
+    glUniform1f(gUseVertexAlphaLocationQ1020,
+                q2025ApplyVertexAlpha ? 1.0f : 0.0f);
     glUniform1f(gSpecularEnabledLocationQ1020, object.specularEnabled ? 1.0f : 0.0f);
     glUniform3fv(gSpecularColorLocationQ1020, 1, object.specularColor);
     if (gEnvironmentPassLocationQ2050 >= 0)
@@ -6424,6 +6487,9 @@ void Q1970AdvanceNativeLodQ19(int32_t cellX, int32_t cellY,
     size_t q2023bLevel16 = 0u;
     size_t q2023bLevel32 = 0u;
     size_t q2024FarObjectBlocks = 0u;
+    size_t q2025TerrainShapes = 0u;
+    size_t q2025TerrainRealDiffuse = 0u;
+    size_t q2025TerrainVertexColor = 0u;
     for (const Q2023CoarseTerrainTile& tile : gQ2023CoarseTerrainTiles) {
         if (tile.levelCells == 8) ++q2023bLevel8;
         else if (tile.levelCells == 16) ++q2023bLevel16;
@@ -6434,10 +6500,22 @@ void Q1970AdvanceNativeLodQ19(int32_t cellX, int32_t cellY,
             !block.objects.empty()) {
             ++q2024FarObjectBlocks;
         }
+        for (const GpuObject& object : block.terrain) {
+            ++q2025TerrainShapes;
+            if (object.realDiffuse) ++q2025TerrainRealDiffuse;
+            if (object.useVertexColor) ++q2025TerrainVertexColor;
+        }
+    }
+    for (const Q2023CoarseTerrainTile& tile : gQ2023CoarseTerrainTiles) {
+        for (const GpuObject& object : tile.terrain) {
+            ++q2025TerrainShapes;
+            if (object.realDiffuse) ++q2025TerrainRealDiffuse;
+            if (object.useVertexColor) ++q2025TerrainVertexColor;
+        }
     }
 
     if (q2023aPulse) {
-        Q6H_LOGI("Q20.24 LOD STATE: pulse=%llu cell=(%d,%d) contextReady=%d wasteland=%d collisionBusy=%d terrainBusy=%d near3x3Ready=%zu/9 nearSafe=%d bootstrapLevel4=%zu/25 bootstrapComplete=%d level4DesiredLoaded=%zu level8=%zu level16=%zu level32=%zu coarseTiles=%zu highBlocks=%zu farObjectBlocks=%zu activeWorkers=%zu uploads=%zu assetsDiscovered=%d assets=%zu",
+        Q6H_LOGI("Q20.25 LOD STATE: pulse=%llu cell=(%d,%d) contextReady=%d wasteland=%d collisionBusy=%d terrainBusy=%d near3x3Ready=%zu/9 nearSafe=%d bootstrapLevel4=%zu/25 bootstrapComplete=%d level4DesiredLoaded=%zu level8=%zu level16=%zu level32=%zu coarseTiles=%zu highBlocks=%zu farObjectBlocks=%zu terrainShapes=%zu terrainRealDiffuse=%zu terrainFallbackDiffuse=%zu terrainVertexColorStreams=%zu activeWorkers=%zu uploads=%zu assetsDiscovered=%d assets=%zu",
                  static_cast<unsigned long long>(q2023aGatePulse),
                  cellX, cellY,
                  gQ1900ContextReadyQ19 ? 1 : 0,
@@ -6455,6 +6533,10 @@ void Q1970AdvanceNativeLodQ19(int32_t cellX, int32_t cellY,
                  gQ2023CoarseTerrainTiles.size(),
                  gQ2023HighObjectBlocks.size(),
                  q2024FarObjectBlocks,
+                 q2025TerrainShapes,
+                 q2025TerrainRealDiffuse,
+                 q2025TerrainShapes - q2025TerrainRealDiffuse,
+                 q2025TerrainVertexColor,
                  Q2013ActiveLodWorkersQ19(),
                  gQ2013LodUploadsQ19.size(),
                  gQ2023LodAssetsDiscovered ? 1 : 0,
