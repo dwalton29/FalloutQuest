@@ -8359,6 +8359,43 @@ void Q210DeletePlayerBody() {
     gQ210PlayerBodyReady = false;
 }
 
+bool Q215IsDismemberCap(uint16_t bodyPart) {
+    return (bodyPart >= 101u && bodyPart <= 113u) ||
+           (bodyPart >= 201u && bodyPart <= 213u);
+}
+
+size_t Q215SuppressPlayerGoreCaps(Fo3StaticNifMesh& mesh) {
+    const size_t triangleCount = mesh.indices.size() / 3u;
+    if (!mesh.dismemberSkin ||
+        mesh.skinTriangleBodyParts.size() != triangleCount) {
+        return 0u;
+    }
+
+    std::vector<uint32_t> keptIndices;
+    std::vector<uint16_t> keptBodyParts;
+    keptIndices.reserve(mesh.indices.size());
+    keptBodyParts.reserve(triangleCount);
+
+    size_t removed = 0u;
+    for (size_t tri = 0u; tri < triangleCount; ++tri) {
+        const uint16_t bodyPart = mesh.skinTriangleBodyParts[tri];
+        if (Q215IsDismemberCap(bodyPart)) {
+            ++removed;
+            continue;
+        }
+        keptIndices.push_back(mesh.indices[tri * 3u + 0u]);
+        keptIndices.push_back(mesh.indices[tri * 3u + 1u]);
+        keptIndices.push_back(mesh.indices[tri * 3u + 2u]);
+        keptBodyParts.push_back(bodyPart);
+    }
+
+    if (removed > 0u) {
+        mesh.indices.swap(keptIndices);
+        mesh.skinTriangleBodyParts.swap(keptBodyParts);
+    }
+    return removed;
+}
+
 bool Q210EnsurePlayerBody() {
     if (gQ210PlayerBodyReady) return true;
     if (gQ210PlayerBodyAttempted) return false;
@@ -8367,22 +8404,37 @@ bool Q210EnsurePlayerBody() {
     std::vector<FalloutMeshIndexEntry> maleEntries;
     ListFalloutMeshFilesByPrefix("Characters\\_Male\\", maleEntries);
 
-    const char* wantedSuffixes[] = {
-        // Fallout 3's vanilla third-person human body is split: UpperBody
-        // contains the torso/limbs through the wrists, while each hand is a
-        // separate skinned NIF. Q21.2 incorrectly guessed hands.nif.
-        "characters\\_male\\upperbody.nif",
-        "characters\\_male\\lefthand.nif",
-        "characters\\_male\\righthand.nif",
-    };
-    std::vector<std::string> bodyPaths;
-    for (const char* suffix : wantedSuffixes) {
-        for (const FalloutMeshIndexEntry& entry : maleEntries) {
-            if (Q210EndsWithInsensitive(entry.path, suffix)) {
-                bodyPaths.push_back(entry.path);
-                break;
-            }
+    auto q215FindMesh = [](const char* prefix, const char* suffix) {
+        std::vector<FalloutMeshIndexEntry> entries;
+        ListFalloutMeshFilesByPrefix(prefix, entries);
+        for (const FalloutMeshIndexEntry& entry : entries) {
+            if (Q210EndsWithInsensitive(entry.path, suffix))
+                return entry.path;
         }
+        return std::string{};
+    };
+
+    // Q21.15: exact Fallout3.esm equipment models for the local male player.
+    // VaultSuit101 MODL -> Armor\\VaultSuit\\M\\Outfit.NIF
+    // PipBoy MODL      -> PipBoy3000\\PipBoyArm.NIF
+    // PipBoyGlove MODL -> Characters\\_Male\\LeftHandPipboyGlove.NIF
+    std::vector<std::string> bodyPaths;
+    const std::string q215Vault101 = q215FindMesh(
+        "Armor\\VaultSuit\\M\\",
+        "armor\\vaultsuit\\m\\outfit.nif");
+    const std::string q215PipBoyGlove = q215FindMesh(
+        "Characters\\_Male\\",
+        "characters\\_male\\lefthandpipboyglove.nif");
+    const std::string q215RightHand = q215FindMesh(
+        "Characters\\_Male\\",
+        "characters\\_male\\righthand.nif");
+    const std::string q215PipBoy = q215FindMesh(
+        "PipBoy3000\\",
+        "pipboy3000\\pipboyarm.nif");
+
+    for (const std::string* path :
+         {&q215Vault101, &q215PipBoyGlove, &q215RightHand, &q215PipBoy}) {
+        if (!path->empty()) bodyPaths.push_back(*path);
     }
 
     std::string skeletonPath = "Characters\\_Male\\Skeleton.NIF";
@@ -8399,8 +8451,12 @@ bool Q210EnsurePlayerBody() {
         if (!q212BodyAssetSummary.empty()) q212BodyAssetSummary += ",";
         q212BodyAssetSummary += bodyPath;
     }
-    Q6H_LOGI("Q21.5 PLAYER BODY ASSETS: found=%zu expected=3 paths=%s",
+    Q6H_LOGI("Q21.15 PLAYER EQUIPMENT ASSETS: found=%zu expected=4 vault101=%d pipGlove=%d rightHand=%d pipBoy=%d paths=%s",
              bodyPaths.size(),
+             q215Vault101.empty() ? 0 : 1,
+             q215PipBoyGlove.empty() ? 0 : 1,
+             q215RightHand.empty() ? 0 : 1,
+             q215PipBoy.empty() ? 0 : 1,
              q212BodyAssetSummary.empty()
                  ? "<none>"
                  : q212BodyAssetSummary.c_str());
@@ -8434,7 +8490,10 @@ bool Q210EnsurePlayerBody() {
         }
         cpuShapes += parts.size();
 
+        size_t q215CapsRemovedForModel = 0u;
         for (CpuObject& part : parts) {
+            q215CapsRemovedForModel +=
+                Q215SuppressPlayerGoreCaps(part.mesh);
             std::vector<float> q211BindExpanded;
             if (part.mesh.skinned &&
                 PrepareExpandedVertexStreamQ1960(
@@ -8598,10 +8657,13 @@ bool Q210EnsurePlayerBody() {
             }
             ++gpuShapes;
         }
+
+        Q6H_LOGI("Q21.15 PLAYER GORE FILTER: model=%s capTrianglesRemoved=%zu mode=BSDismember-authored-caps-only",
+                 path.c_str(), q215CapsRemovedForModel);
     }
 
     gQ210PlayerBodyReady = !gQ210PlayerBody.empty();
-    Q6H_LOGI("Q21.5 PLAYER BODY READY: ready=%d archiveMaleEntries=%zu bodyPartsFound=%zu cpuShapes=%zu gpuShapes=%zu rigParts=%zu triangles=%zu skinInstances=%zu referencedBonesAcrossParts=%zu skeletonNodes=%u skeletonNamedNodes=%zu mode=real-FO3-weighted-skinning armIK=two-bone",
+    Q6H_LOGI("Q21.15 PLAYER BODY READY: ready=%d archiveMaleEntries=%zu bodyPartsFound=%zu cpuShapes=%zu gpuShapes=%zu rigParts=%zu triangles=%zu skinInstances=%zu referencedBonesAcrossParts=%zu skeletonNodes=%u skeletonNamedNodes=%zu mode=real-FO3-weighted-skinning armIK=two-bone",
              gQ210PlayerBodyReady ? 1 : 0,
              maleEntries.size(), bodyPaths.size(),
              cpuShapes, gpuShapes, gQ211PlayerRigParts.size(), triangles,

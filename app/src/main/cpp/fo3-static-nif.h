@@ -64,6 +64,11 @@ struct Fo3StaticNifMesh {
     std::vector<Fo3NifSkinBone> skinBones;
     std::vector<uint16_t> skinBoneIndices; // 4 per vertex, 0xffff = unused
     std::vector<float> skinBoneWeights;     // 4 per vertex
+
+    // Q21.15: Fallout BSDismember body-part id per rendered triangle,
+    // parallel to indices/3. 0xffff means no partition mapping was recovered.
+    bool dismemberSkin = false;
+    std::vector<uint16_t> skinTriangleBodyParts;
 };
 
 // Loads every fully renderable NiTriStrips/NiTriShape geometry block in an

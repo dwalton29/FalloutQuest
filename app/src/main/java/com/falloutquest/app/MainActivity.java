@@ -40,7 +40,7 @@ public class MainActivity extends Activity {
         title.setGravity(Gravity.CENTER);
 
         TextView status = new TextView(this);
-        status.setText(nativeBootMessage() + "\n\nQ21.14 RIGHT HAND + OUTWARD CAL");
+        status.setText(nativeBootMessage() + "\n\nQ21.15 VAULT 101 + PIP-BOY + GORE FILTER");
         status.setTextColor(Color.rgb(210, 220, 205));
         status.setTextSize(20);
         status.setGravity(Gravity.CENTER);

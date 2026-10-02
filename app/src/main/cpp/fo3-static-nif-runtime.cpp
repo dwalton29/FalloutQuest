@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <cstring>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -1081,6 +1082,9 @@ struct Q211SkinInstance {
     uint32_t partitionRef = INVALID_REF;
     uint32_t skeletonRoot = INVALID_REF;
     std::vector<uint32_t> bones;
+    bool dismember = false;
+    std::vector<uint16_t> partitionFlags;
+    std::vector<uint16_t> bodyParts;
 };
 
 bool Q211ReadNiTransform(Cursor& c, NifTransform& out) {
@@ -1127,6 +1131,20 @@ bool Q211ParseSkinInstance(const std::vector<uint8_t>& nif,
     out.bones.resize(count);
     for (uint32_t& bone : out.bones) {
         if (!c.U32(bone)) return false;
+    }
+
+    if (type == "BSDismemberSkinInstance") {
+        uint32_t numPartitions = 0u;
+        if (!c.U32(numPartitions) || numPartitions > 128u) return false;
+        out.dismember = true;
+        out.partitionFlags.resize(numPartitions);
+        out.bodyParts.resize(numPartitions);
+        for (uint32_t i = 0u; i < numPartitions; ++i) {
+            if (!c.U16(out.partitionFlags[i]) ||
+                !c.U16(out.bodyParts[i])) {
+                return false;
+            }
+        }
     }
     return true;
 }
@@ -1289,6 +1307,168 @@ bool Q211ParseSkinPartitionWeights(
     return any;
 }
 
+uint64_t Q215TriangleKey(uint32_t a, uint32_t b, uint32_t c) {
+    if (a > b) std::swap(a, b);
+    if (b > c) std::swap(b, c);
+    if (a > b) std::swap(a, b);
+    return static_cast<uint64_t>(a) |
+           (static_cast<uint64_t>(b) << 16u) |
+           (static_cast<uint64_t>(c) << 32u);
+}
+
+bool Q215PopulateDismemberTriangleParts(
+        const std::vector<uint8_t>& nif,
+        const NifHeader& header,
+        const Q211SkinInstance& skin,
+        Fo3StaticNifMesh& mesh) {
+    mesh.dismemberSkin = skin.dismember;
+    mesh.skinTriangleBodyParts.assign(
+        mesh.indices.size() / 3u, static_cast<uint16_t>(0xffffu));
+
+    if (!skin.dismember ||
+        skin.partitionRef >= header.numBlocks ||
+        BlockType(header, skin.partitionRef) != "NiSkinPartition" ||
+        skin.bodyParts.empty()) {
+        return false;
+    }
+
+    Cursor c(BlockData(nif, header, skin.partitionRef),
+             header.blockSizes[skin.partitionRef]);
+    uint32_t numPartitions = 0u;
+    if (!c.U32(numPartitions) || numPartitions == 0u ||
+        numPartitions > 128u) {
+        return false;
+    }
+
+    std::unordered_map<uint64_t, uint16_t> triangleParts;
+    triangleParts.reserve(mesh.indices.size() / 3u);
+
+    for (uint32_t part = 0u; part < numPartitions; ++part) {
+        uint16_t numVertices = 0u, numTriangles = 0u, numBones = 0u;
+        uint16_t numStrips = 0u, weightsPerVertex = 0u;
+        if (!c.U16(numVertices) || !c.U16(numTriangles) ||
+            !c.U16(numBones) || !c.U16(numStrips) ||
+            !c.U16(weightsPerVertex) ||
+            numVertices > 65530u || numBones > 256u ||
+            weightsPerVertex == 0u || weightsPerVertex > 8u) {
+            return false;
+        }
+
+        if (!c.Skip(static_cast<size_t>(numBones) * sizeof(uint16_t)))
+            return false;
+
+        uint8_t hasVertexMap = 0u;
+        if (!c.U8(hasVertexMap)) return false;
+        std::vector<uint16_t> vertexMap(numVertices);
+        if (hasVertexMap) {
+            for (uint16_t& vertex : vertexMap) {
+                if (!c.U16(vertex)) return false;
+            }
+        } else {
+            for (uint32_t i = 0u; i < numVertices; ++i)
+                vertexMap[i] = static_cast<uint16_t>(i);
+        }
+
+        uint8_t hasVertexWeights = 0u;
+        if (!c.U8(hasVertexWeights)) return false;
+        if (hasVertexWeights &&
+            !c.Skip(static_cast<size_t>(numVertices) *
+                    weightsPerVertex * sizeof(float))) {
+            return false;
+        }
+
+        std::vector<uint16_t> stripLengths(numStrips);
+        size_t stripPointCount = 0u;
+        for (uint16_t& length : stripLengths) {
+            if (!c.U16(length)) return false;
+            stripPointCount += length;
+        }
+
+        const uint16_t bodyPart =
+            part < skin.bodyParts.size()
+                ? skin.bodyParts[part]
+                : static_cast<uint16_t>(0xffffu);
+
+        uint8_t hasFaces = 0u;
+        if (!c.U8(hasFaces)) return false;
+        if (hasFaces) {
+            if (numStrips != 0u) {
+                std::vector<uint16_t> stripPoints(stripPointCount);
+                for (uint16_t& point : stripPoints) {
+                    if (!c.U16(point)) return false;
+                }
+
+                size_t stripCursor = 0u;
+                for (uint16_t stripLength : stripLengths) {
+                    if (stripCursor + stripLength > stripPoints.size())
+                        return false;
+                    for (uint32_t i = 2u; i < stripLength; ++i) {
+                        uint16_t a = stripPoints[stripCursor + i - 2u];
+                        uint16_t b = stripPoints[stripCursor + i - 1u];
+                        uint16_t d = stripPoints[stripCursor + i];
+                        if ((i & 1u) != 0u) std::swap(a, b);
+                        if (a == b || b == d || a == d) continue;
+                        if (a >= vertexMap.size() ||
+                            b >= vertexMap.size() ||
+                            d >= vertexMap.size()) {
+                            continue;
+                        }
+                        triangleParts[Q215TriangleKey(
+                            vertexMap[a], vertexMap[b], vertexMap[d])] =
+                            bodyPart;
+                    }
+                    stripCursor += stripLength;
+                }
+            } else {
+                for (uint32_t tri = 0u; tri < numTriangles; ++tri) {
+                    uint16_t a = 0u, b = 0u, d = 0u;
+                    if (!c.U16(a) || !c.U16(b) || !c.U16(d))
+                        return false;
+                    if (a >= vertexMap.size() ||
+                        b >= vertexMap.size() ||
+                        d >= vertexMap.size()) {
+                        continue;
+                    }
+                    triangleParts[Q215TriangleKey(
+                        vertexMap[a], vertexMap[b], vertexMap[d])] =
+                        bodyPart;
+                }
+            }
+        }
+
+        uint8_t hasBoneIndices = 0u;
+        if (!c.U8(hasBoneIndices)) return false;
+        if (hasBoneIndices &&
+            !c.Skip(static_cast<size_t>(numVertices) *
+                    weightsPerVertex * sizeof(uint8_t))) {
+            return false;
+        }
+    }
+
+    size_t mapped = 0u;
+    size_t capTriangles = 0u;
+    for (size_t tri = 0u; tri * 3u + 2u < mesh.indices.size(); ++tri) {
+        const uint64_t key = Q215TriangleKey(
+            mesh.indices[tri * 3u + 0u],
+            mesh.indices[tri * 3u + 1u],
+            mesh.indices[tri * 3u + 2u]);
+        const auto found = triangleParts.find(key);
+        if (found == triangleParts.end()) continue;
+        mesh.skinTriangleBodyParts[tri] = found->second;
+        ++mapped;
+        const uint16_t bodyPart = found->second;
+        if ((bodyPart >= 101u && bodyPart <= 113u) ||
+            (bodyPart >= 201u && bodyPart <= 213u)) {
+            ++capTriangles;
+        }
+    }
+
+    Q6H_LOGI("Q21.15 DISMEMBER MAP: partitions=%u metadata=%zu triangles=%zu mapped=%zu capTriangles=%zu",
+             numPartitions, skin.bodyParts.size(),
+             mesh.indices.size() / 3u, mapped, capTriangles);
+    return mapped > 0u;
+}
+
 bool Q211InverseBindOrigin(const NifTransform& skinToBone,
                            float out[3]) {
     if (!skinToBone.valid ||
@@ -1345,6 +1525,8 @@ bool Q211PopulateSkinInfo(const std::vector<uint8_t>& nif,
     mesh.skinBones.clear();
     mesh.skinBoneIndices.clear();
     mesh.skinBoneWeights.clear();
+    mesh.dismemberSkin = false;
+    mesh.skinTriangleBodyParts.clear();
 
     const size_t vertexCount = mesh.positions.size() / 3u;
     if (shape.skinRef == INVALID_REF || vertexCount == 0u) return false;
@@ -1445,6 +1627,7 @@ bool Q211PopulateSkinInfo(const std::vector<uint8_t>& nif,
     }
 
     mesh.skinned = weightedVertices > 0u && !mesh.skinBones.empty();
+    Q215PopulateDismemberTriangleParts(nif, header, skin, mesh);
     Q6H_LOGI("Q21.1C SKIN READY: shape=%u skinRef=%u bones=%zu vertices=%zu weightedVertices=%zu dataParsed=%d softwareWeights=%d partitionWeights=%d inverseBindPivots=%zu nodeFallbackPivots=%zu skinTransformT=(%.2f %.2f %.2f)",
              shape.block, shape.skinRef, mesh.skinBones.size(),
              vertexCount, weightedVertices,

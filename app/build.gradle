@@ -22,8 +22,8 @@ android {
         applicationId 'com.falloutquest.app'
         minSdk 29
         targetSdk 35
-        versionCode 92
-        versionName '0.21.14-q21.14-right-hand-mirror-outward-offset'
+        versionCode 93
+        versionName '0.21.15-q21.15-vault101-pipboy-dismember-caps'
 
         ndk {
             abiFilters 'arm64-v8a'
