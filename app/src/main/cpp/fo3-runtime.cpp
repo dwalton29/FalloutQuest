@@ -121,6 +121,8 @@ constexpr float SCENE_FORWARD = 0.00f;
 constexpr size_t MAX_SCENE_OBJECTS = 1200u;
 constexpr size_t MAX_MODEL_ATTEMPTS = 2000u;
 constexpr float MAX_MODEL_EXTENT_UNITS = 20000.0f;
+constexpr uint32_t Q2025_FLAG_VISIBLE_WHEN_DISTANT = 0x00008000u;
+constexpr uint32_t Q2025_FLAG_HIGH_PRIORITY_LOD = 0x00010000u;
 
 #define Q6H_LOGI(...) __android_log_print(ANDROID_LOG_INFO, Q6H_TAG, __VA_ARGS__)
 #define Q6H_LOGW(...) __android_log_print(ANDROID_LOG_WARN, Q6H_TAG, __VA_ARGS__)
@@ -3310,8 +3312,6 @@ constexpr float Q2021_DETAIL_FADE_END_M =
 // pretend they have generated block LOD. Instead, for non-VWD landscape-rock
 // detail that is already resident in the 7x7 visual cache, hold it through the
 // old generic cutoff and fade it across the outer resident ring.
-constexpr uint32_t Q2025_FLAG_VISIBLE_WHEN_DISTANT = 0x00008000u;
-constexpr uint32_t Q2025_FLAG_HIGH_PRIORITY_LOD = 0x00010000u;
 constexpr float Q2025_ROCK_FADE_START_GAME = 10240.0f;
 constexpr float Q2025_ROCK_FADE_END_GAME = 14336.0f; // 3.5 exterior CELLs.
 constexpr float Q2025_ROCK_FADE_START_M =
