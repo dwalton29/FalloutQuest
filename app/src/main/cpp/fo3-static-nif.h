@@ -4,6 +4,13 @@
 #include <string>
 #include <vector>
 
+struct Fo3NifSkinBone {
+    std::string name;
+    // Bind-pose bone origin in NIF model/game coordinates after the authored
+    // NiNode hierarchy has been evaluated.
+    float bindPosition[3]{0.0f, 0.0f, 0.0f};
+};
+
 struct Fo3StaticNifMesh {
     std::vector<float> positions;    // xyz in NIF model space after NIF transforms
     std::vector<float> normals;      // xyz
@@ -50,6 +57,13 @@ struct Fo3StaticNifMesh {
     // visual-fidelity path; draw mode alone is authored independently of enable.
     bool stencilDrawModePresent = false;
     uint8_t stencilDrawMode = 0u;
+
+    // Q21.1: legacy Gamebryo actor skinning. Four packed influences per source
+    // vertex, indexing skinBones in NiSkinInstance order.
+    bool skinned = false;
+    std::vector<Fo3NifSkinBone> skinBones;
+    std::vector<uint16_t> skinBoneIndices; // 4 per vertex, 0xffff = unused
+    std::vector<float> skinBoneWeights;     // 4 per vertex
 };
 
 // Loads every fully renderable NiTriStrips/NiTriShape geometry block in an
