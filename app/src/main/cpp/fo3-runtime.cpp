@@ -10189,8 +10189,8 @@ bool Q230EnsureNpcActors() {
                         path,part.mesh.diffuseTexturePath,
                         q234FaceTex,generated)){
                     const std::string key=
-                        "__q234_facegen__\"+
-                        lucas->editorId+"\"+
+                        "__q234_facegen__/"+
+                        lucas->editorId+"/"+
                         std::to_string(part.q2016ShapeIndex)+".dds";
                     Fo3RgbaTexture rgba;
                     rgba.width=generated.width;
