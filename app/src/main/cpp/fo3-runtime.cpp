@@ -6052,11 +6052,16 @@ void Q1970AdvanceLodGpuQ19() {
         [](const Q1970LodUploadTaskQ2013& a,
            const Q1970LodUploadTaskQ2013& b) {
             auto priority = [](const Q1970LodUploadTaskQ2013& item) {
-                if (!item.q2023AuthoredAsset) return 0;
-                if (item.q2023Kind == Q2023LodAssetKind::HighObjects) return 2;
+                // Q20.23B: preserve the safety-critical near Level4 bootstrap,
+                // then publish Bethesda's authored horizon before spending GPU
+                // budget on the rest of the 20-cell Level4 expansion.
+                if (!item.q2023AuthoredAsset) {
+                    return item.ring <= 2 ? 0 : 5;
+                }
                 if (item.q2023LevelCells == 32) return 1;
+                if (item.q2023Kind == Q2023LodAssetKind::HighObjects) return 2;
                 if (item.q2023LevelCells == 16) return 3;
-                return 4;
+                return 4; // Level8
             };
             const int ap = priority(a);
             const int bp = priority(b);
@@ -6317,9 +6322,17 @@ void Q1970AdvanceNativeLodQ19(int32_t cellX, int32_t cellY,
     const bool q2023aBootstrapComplete =
         Q2013NativeLodBootstrapReadyQ19(
             cellX, cellY, &q2023aBootstrapReady);
+    size_t q2023bLevel8 = 0u;
+    size_t q2023bLevel16 = 0u;
+    size_t q2023bLevel32 = 0u;
+    for (const Q2023CoarseTerrainTile& tile : gQ2023CoarseTerrainTiles) {
+        if (tile.levelCells == 8) ++q2023bLevel8;
+        else if (tile.levelCells == 16) ++q2023bLevel16;
+        else if (tile.levelCells == 32) ++q2023bLevel32;
+    }
 
     if (q2023aPulse) {
-        Q6H_LOGI("Q20.23A LOD STATE: pulse=%llu cell=(%d,%d) contextReady=%d wasteland=%d collisionBusy=%d terrainBusy=%d near3x3Ready=%zu/9 nearSafe=%d bootstrapLevel4=%zu/25 bootstrapComplete=%d level4DesiredLoaded=%zu coarseTiles=%zu highBlocks=%zu activeWorkers=%zu uploads=%zu assetsDiscovered=%d assets=%zu",
+        Q6H_LOGI("Q20.23B LOD STATE: pulse=%llu cell=(%d,%d) contextReady=%d wasteland=%d collisionBusy=%d terrainBusy=%d near3x3Ready=%zu/9 nearSafe=%d bootstrapLevel4=%zu/25 bootstrapComplete=%d level4DesiredLoaded=%zu level8=%zu level16=%zu level32=%zu coarseTiles=%zu highBlocks=%zu activeWorkers=%zu uploads=%zu assetsDiscovered=%d assets=%zu",
                  static_cast<unsigned long long>(q2023aGatePulse),
                  cellX, cellY,
                  gQ1900ContextReadyQ19 ? 1 : 0,
@@ -6331,6 +6344,9 @@ void Q1970AdvanceNativeLodQ19(int32_t cellX, int32_t cellY,
                  q2023aBootstrapReady,
                  q2023aBootstrapComplete ? 1 : 0,
                  Q2013ProgressiveLodCountQ19(),
+                 q2023bLevel8,
+                 q2023bLevel16,
+                 q2023bLevel32,
                  gQ2023CoarseTerrainTiles.size(),
                  gQ2023HighObjectBlocks.size(),
                  Q2013ActiveLodWorkersQ19(),
