@@ -565,6 +565,14 @@ struct Q211PlayerRigPart {
     int rightUpperArm = -1;
     int rightForearm = -1;
     int rightHand = -1;
+    Vec3 leftPalmAnchor{};
+    Vec3 rightPalmAnchor{};
+    Vec3 leftForearmCentroid{};
+    Vec3 rightForearmCentroid{};
+    bool leftPalmAnchorValid = false;
+    bool rightPalmAnchorValid = false;
+    bool leftForearmCentroidValid = false;
+    bool rightForearmCentroidValid = false;
     bool leftChainReady = false;
     bool rightChainReady = false;
 };
@@ -7327,6 +7335,48 @@ int Q211BoneRole(const std::string& authoredName) {
     return 0;
 }
 
+bool Q211WeightedGeometryAnchor(
+        const Q211PlayerRigPart& part,
+        int desiredRole,
+        Vec3& out,
+        float& outWeight) {
+    constexpr size_t STRIDE = 18u;
+    out = {};
+    outWeight = 0.0f;
+    const size_t vertices = part.bindExpanded.size() / STRIDE;
+    if (part.expandedBoneIndices.size() != vertices * 4u ||
+        part.expandedBoneWeights.size() != vertices * 4u) {
+        return false;
+    }
+
+    for (size_t v = 0u; v < vertices; ++v) {
+        float roleWeight = 0.0f;
+        for (size_t slot = 0u; slot < 4u; ++slot) {
+            const size_t at = v * 4u + slot;
+            const uint16_t bone = part.expandedBoneIndices[at];
+            if (bone >= part.bones.size()) continue;
+            if (Q211BoneRole(part.bones[bone].name) == desiredRole) {
+                roleWeight += part.expandedBoneWeights[at];
+            }
+        }
+        if (roleWeight <= 0.001f) continue;
+        const size_t base = v * STRIDE;
+        out.x += part.bindExpanded[base + 0u] * roleWeight;
+        out.y += part.bindExpanded[base + 1u] * roleWeight;
+        out.z += part.bindExpanded[base + 2u] * roleWeight;
+        outWeight += roleWeight;
+    }
+
+    if (outWeight <= 0.001f) return false;
+    const float inv = 1.0f / outWeight;
+    out.x *= inv;
+    out.y *= inv;
+    out.z *= inv;
+    return std::isfinite(out.x) &&
+           std::isfinite(out.y) &&
+           std::isfinite(out.z);
+}
+
 Vec3 Q211BindBonePoint(const Fo3NifSkinBone& bone) {
     // Same game->OpenXR conversion used by PrepareExpandedVertexStreamQ1960
     // for a player mesh placed at the local origin.
@@ -7484,7 +7534,20 @@ void Q211BuildArmDeltas(
 
     const Vec3 shoulder = Q211BindBonePoint(part.bones[upper]);
     const Vec3 restElbow = Q211BindBonePoint(part.bones[fore]);
-    const Vec3 restHand = Q211BindBonePoint(part.bones[hand]);
+
+    // Q21.1D: use the actual weighted hand/finger vertex cloud as the distal
+    // endpoint. Some FO3 hand bone bind transforms point opposite the visible
+    // forearm geometry; using that pivot folded the forearm back toward the
+    // bicep even though the shoulder/elbow solve itself was correct.
+    Vec3 restHand = Q211BindBonePoint(part.bones[hand]);
+    const bool palmAnchorValid =
+        left ? part.leftPalmAnchorValid
+             : part.rightPalmAnchorValid;
+    if (palmAnchorValid) {
+        restHand = left ? part.leftPalmAnchor
+                        : part.rightPalmAnchor;
+    }
+
     Vec3 currentHand{};
     if (!Q211SolveArm(
             left, shoulder, restElbow, restHand,
@@ -7498,20 +7561,15 @@ void Q211BuildArmDeltas(
     const Q211Delta foreDelta = Q211MakeDelta(
         restElbow, Q211Sub(restHand, restElbow),
         outElbow, Q211Sub(currentHand, outElbow));
-    const Q211Delta handDelta = Q211MakeDelta(
-        restHand, Q211Sub(restHand, restElbow),
-        currentHand, Q211Sub(currentHand, outElbow));
 
     for (size_t i = 0u; i < part.bones.size(); ++i) {
         const int role = Q211BoneRole(part.bones[i].name);
         if (left) {
             if (role == 1) deltas[i] = upperDelta;
-            else if (role == 2) deltas[i] = foreDelta;
-            else if (role == 3) deltas[i] = handDelta;
+            else if (role == 2 || role == 3) deltas[i] = foreDelta;
         } else {
             if (role == 4) deltas[i] = upperDelta;
-            else if (role == 5) deltas[i] = foreDelta;
-            else if (role == 6) deltas[i] = handDelta;
+            else if (role == 5 || role == 6) deltas[i] = foreDelta;
         }
     }
     solved = true;
@@ -7670,7 +7728,7 @@ void Q211UpdatePlayerRig() {
     glBindBuffer(GL_ARRAY_BUFFER, 0);
 
     if ((gQ211TrackingSerial % 180u) == 1u) {
-        Q6H_LOGI("Q21.1C ARM IK: serial=%llu rigParts=%zu headAnchorReady=%d headAnchor=(%.3f %.3f %.3f) trackedHeadRoot=(%.3f %.3f %.3f) leftValid=%d leftSolved=%d targetL=(%.3f %.3f %.3f) elbowL=(%.3f %.3f %.3f) rightValid=%d rightSolved=%d targetR=(%.3f %.3f %.3f) elbowR=(%.3f %.3f %.3f) mode=weighted-LBS-two-bone-IK targetSpace=HMD-relative-to-authored-head wristOrientation=forearm",
+        Q6H_LOGI("Q21.1D ARM IK: serial=%llu rigParts=%zu headAnchorReady=%d headAnchor=(%.3f %.3f %.3f) trackedHeadRoot=(%.3f %.3f %.3f) leftValid=%d leftSolved=%d targetL=(%.3f %.3f %.3f) elbowL=(%.3f %.3f %.3f) rightValid=%d rightSolved=%d targetR=(%.3f %.3f %.3f) elbowR=(%.3f %.3f %.3f) mode=weighted-LBS-two-bone-IK targetSpace=HMD-relative-to-authored-head wristOrientation=forearm",
                  static_cast<unsigned long long>(gQ211TrackingSerial),
                  gQ211PlayerRigParts.size(),
                  avatarHeadReady ? 1 : 0,
@@ -7832,6 +7890,23 @@ bool Q210EnsurePlayerBody() {
                     rig.rightForearm >= 0 &&
                     rig.rightHand >= 0;
 
+                float q211dLHandWeight = 0.0f;
+                float q211dRHandWeight = 0.0f;
+                float q211dLForeWeight = 0.0f;
+                float q211dRForeWeight = 0.0f;
+                rig.leftPalmAnchorValid =
+                    Q211WeightedGeometryAnchor(
+                        rig, 3, rig.leftPalmAnchor, q211dLHandWeight);
+                rig.rightPalmAnchorValid =
+                    Q211WeightedGeometryAnchor(
+                        rig, 6, rig.rightPalmAnchor, q211dRHandWeight);
+                rig.leftForearmCentroidValid =
+                    Q211WeightedGeometryAnchor(
+                        rig, 2, rig.leftForearmCentroid, q211dLForeWeight);
+                rig.rightForearmCentroidValid =
+                    Q211WeightedGeometryAnchor(
+                        rig, 5, rig.rightForearmCentroid, q211dRForeWeight);
+
                 Vec3 q211cLUpper{}, q211cLFore{}, q211cLHand{};
                 Vec3 q211cRUpper{}, q211cRFore{}, q211cRHand{};
                 if (rig.leftChainReady) {
@@ -7845,20 +7920,46 @@ bool Q210EnsurePlayerBody() {
                     q211cRHand = Q211BindBonePoint(rig.bones[rig.rightHand]);
                 }
 
-                Q6H_LOGI("Q21.1C RIG PART: model=%s shape=%u gpuIndex=%zu bones=%zu expandedVertices=%zu leftChain=%d indices=(%d,%d,%d) bindLUpper=(%.3f %.3f %.3f) bindLFore=(%.3f %.3f %.3f) bindLHand=(%.3f %.3f %.3f) rightChain=%d indices=(%d,%d,%d) bindRUpper=(%.3f %.3f %.3f) bindRFore=(%.3f %.3f %.3f) bindRHand=(%.3f %.3f %.3f)",
+                const Vec3 q211dLRestBoneDir =
+                    Q211Sub(q211cLHand, q211cLFore);
+                const Vec3 q211dRRestBoneDir =
+                    Q211Sub(q211cRHand, q211cRFore);
+                const Vec3 q211dLGeomDir =
+                    Q211Sub(rig.leftPalmAnchor, q211cLFore);
+                const Vec3 q211dRGeomDir =
+                    Q211Sub(rig.rightPalmAnchor, q211cRFore);
+                const float q211dLDot =
+                    rig.leftPalmAnchorValid
+                        ? Q211Dot(
+                              Q211NormalizeSafe(q211dLRestBoneDir),
+                              Q211NormalizeSafe(q211dLGeomDir))
+                        : 0.0f;
+                const float q211dRDot =
+                    rig.rightPalmAnchorValid
+                        ? Q211Dot(
+                              Q211NormalizeSafe(q211dRRestBoneDir),
+                              Q211NormalizeSafe(q211dRGeomDir))
+                        : 0.0f;
+
+                Q6H_LOGI("Q21.1D RIG PART: model=%s shape=%u gpuIndex=%zu expandedVertices=%zu leftChain=%d palmL=%d anchorL=(%.3f %.3f %.3f) boneHandL=(%.3f %.3f %.3f) distalDotL=%.3f rightChain=%d palmR=%d anchorR=(%.3f %.3f %.3f) boneHandR=(%.3f %.3f %.3f) distalDotR=%.3f handWeight=(%.1f,%.1f) foreWeight=(%.1f,%.1f)",
                          path.c_str(), part.q2016ShapeIndex,
-                         q211GpuIndex, rig.bones.size(),
-                         rig.bindExpanded.size() / 18u,
+                         q211GpuIndex, rig.bindExpanded.size() / 18u,
                          rig.leftChainReady ? 1 : 0,
-                         rig.leftUpperArm, rig.leftForearm, rig.leftHand,
-                         q211cLUpper.x, q211cLUpper.y, q211cLUpper.z,
-                         q211cLFore.x, q211cLFore.y, q211cLFore.z,
+                         rig.leftPalmAnchorValid ? 1 : 0,
+                         rig.leftPalmAnchor.x,
+                         rig.leftPalmAnchor.y,
+                         rig.leftPalmAnchor.z,
                          q211cLHand.x, q211cLHand.y, q211cLHand.z,
+                         q211dLDot,
                          rig.rightChainReady ? 1 : 0,
-                         rig.rightUpperArm, rig.rightForearm, rig.rightHand,
-                         q211cRUpper.x, q211cRUpper.y, q211cRUpper.z,
-                         q211cRFore.x, q211cRFore.y, q211cRFore.z,
-                         q211cRHand.x, q211cRHand.y, q211cRHand.z);
+                         rig.rightPalmAnchorValid ? 1 : 0,
+                         rig.rightPalmAnchor.x,
+                         rig.rightPalmAnchor.y,
+                         rig.rightPalmAnchor.z,
+                         q211cRHand.x, q211cRHand.y, q211cRHand.z,
+                         q211dRDot,
+                         q211dLHandWeight, q211dRHandWeight,
+                         q211dLForeWeight, q211dRForeWeight);
 
                 if (rig.expandedBoneIndices.size() ==
                         (rig.bindExpanded.size() / 18u) * 4u) {
@@ -7870,7 +7971,7 @@ bool Q210EnsurePlayerBody() {
     }
 
     gQ210PlayerBodyReady = !gQ210PlayerBody.empty();
-    Q6H_LOGI("Q21.1C PLAYER BODY READY: ready=%d archiveMaleEntries=%zu bodyPartsFound=%zu cpuShapes=%zu gpuShapes=%zu rigParts=%zu triangles=%zu skinInstances=%zu referencedBonesAcrossParts=%zu skeletonNodes=%u skeletonNamedNodes=%zu mode=real-FO3-weighted-skinning armIK=two-bone",
+    Q6H_LOGI("Q21.1D PLAYER BODY READY: ready=%d archiveMaleEntries=%zu bodyPartsFound=%zu cpuShapes=%zu gpuShapes=%zu rigParts=%zu triangles=%zu skinInstances=%zu referencedBonesAcrossParts=%zu skeletonNodes=%u skeletonNamedNodes=%zu mode=real-FO3-weighted-skinning armIK=two-bone",
              gQ210PlayerBodyReady ? 1 : 0,
              maleEntries.size(), bodyPaths.size(),
              cpuShapes, gpuShapes, gQ211PlayerRigParts.size(), triangles,
