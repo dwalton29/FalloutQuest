@@ -7436,81 +7436,102 @@ struct Q220HandBasis {
     bool ready = false;
 };
 
-int Q221FindFingerBaseBone(
-        const std::vector<Fo3NifSkinBone>& bones,
+bool Q221FindGlobalBonePoint(
         bool left,
-        int finger) {
+        const std::string& authoredSuffix,
+        Vec3& outPoint,
+        std::string& outName) {
     const std::string prefix =
-        std::string("bip01 ") + (left ? "l " : "r ") +
-        "finger" + std::to_string(finger);
-    int fallback = -1;
-    size_t fallbackLength = std::numeric_limits<size_t>::max();
-    for (size_t i = 0u; i < bones.size(); ++i) {
-        const std::string lower = Q211Lower(bones[i].name);
-        if (lower == prefix) return static_cast<int>(i);
-        if (lower.rfind(prefix, 0u) == 0u &&
-            lower.size() < fallbackLength) {
-            fallback = static_cast<int>(i);
-            fallbackLength = lower.size();
+        std::string("bip01 ") + (left ? "l " : "r ") + authoredSuffix;
+    bool found = false;
+    size_t bestLength = std::numeric_limits<size_t>::max();
+
+    for (const Q211PlayerRigPart& part : gQ211PlayerRigParts) {
+        for (const Fo3NifSkinBone& bone : part.bones) {
+            const std::string lower = Q211Lower(bone.name);
+            if (lower == prefix) {
+                outPoint = Q211BindBonePoint(bone);
+                outName = bone.name;
+                return true;
+            }
+            if (lower.rfind(prefix, 0u) == 0u &&
+                lower.size() < bestLength) {
+                outPoint = Q211BindBonePoint(bone);
+                outName = bone.name;
+                bestLength = lower.size();
+                found = true;
+            }
         }
     }
-    return fallback;
+    return found;
 }
 
 bool Q220FindAuthoredHandBasis(bool left, Q220HandBasis& out) {
     out = {};
-    for (const Q211PlayerRigPart& part : gQ211PlayerRigParts) {
-        const int hand = left ? part.leftHand : part.rightHand;
-        if (hand < 0 || static_cast<size_t>(hand) >= part.bones.size())
-            continue;
 
-        const int thumb = Q221FindFingerBaseBone(part.bones, left, 0);
-        const int middle = Q221FindFingerBaseBone(part.bones, left, 2);
-        const int little = Q221FindFingerBaseBone(part.bones, left, 4);
-        if (thumb < 0 || middle < 0 || little < 0) continue;
+    Vec3 handPoint{}, thumbPoint{}, middlePoint{}, littlePoint{};
+    std::string handName, thumbName, middleName, littleName;
+    const bool handReady =
+        Q221FindGlobalBonePoint(left, "hand", handPoint, handName);
+    const bool thumbReady =
+        Q221FindGlobalBonePoint(left, "finger0", thumbPoint, thumbName);
+    const bool middleReady =
+        Q221FindGlobalBonePoint(left, "finger2", middlePoint, middleName);
+    const bool littleReady =
+        Q221FindGlobalBonePoint(left, "finger4", littlePoint, littleName);
 
-        const Vec3 handPoint =
-            Q211BindBonePoint(part.bones[hand]);
-        const Vec3 thumbPoint =
-            Q211BindBonePoint(part.bones[thumb]);
-        const Vec3 middlePoint =
-            Q211BindBonePoint(part.bones[middle]);
-        const Vec3 littlePoint =
-            Q211BindBonePoint(part.bones[little]);
-
-        Vec3 fingerForward =
-            Q211Sub(middlePoint, handPoint);
-        Vec3 littleToThumb =
-            Q211Sub(thumbPoint, littlePoint);
-        if (Q211Length(fingerForward) < 0.02f ||
-            Q211Length(littleToThumb) < 0.02f) {
-            continue;
+    if (!handReady || !thumbReady || !middleReady || !littleReady) {
+        if ((gQ211TrackingSerial % 180u) == 1u) {
+            Q6H_LOGI("Q21.12 HAND BONE LOOKUP: side=%s hand=%d(%s) thumb0=%d(%s) middle2=%d(%s) little4=%d(%s)",
+                     left ? "L" : "R",
+                     handReady ? 1 : 0, handName.c_str(),
+                     thumbReady ? 1 : 0, thumbName.c_str(),
+                     middleReady ? 1 : 0, middleName.c_str(),
+                     littleReady ? 1 : 0, littleName.c_str());
         }
-
-        fingerForward = Q211NormalizeSafe(fingerForward);
-        littleToThumb = Q211NormalizeSafe(littleToThumb);
-
-        // Match the OpenXR grip semantics directly:
-        //   -Z = little finger -> thumb.
-        // The palm normal is the other authored palm-plane axis.
-        Vec3 intoPalm =
-            Q211NormalizeSafe(Q211Cross(fingerForward, littleToThumb));
-
-        // Re-orthogonalize the across-hand vector against the palm normal.
-        littleToThumb = Q211Sub(
-            littleToThumb,
-            Q211Mul(intoPalm, Q211Dot(littleToThumb, intoPalm)));
-        if (Q211Length(littleToThumb) < 0.03f ||
-            Q211Length(intoPalm) < 0.03f) {
-            continue;
-        }
-
-        out.littleToThumb = Q211NormalizeSafe(littleToThumb);
-        out.intoPalm = Q211NormalizeSafe(intoPalm);
-        out.ready = true;
-        return true;
+        return false;
     }
-    return false;
+
+    Vec3 fingerForward =
+        Q211Sub(middlePoint, handPoint);
+    Vec3 littleToThumb =
+        Q211Sub(thumbPoint, littlePoint);
+    if (Q211Length(fingerForward) < 0.02f ||
+        Q211Length(littleToThumb) < 0.02f) {
+        return false;
+    }
+
+    fingerForward = Q211NormalizeSafe(fingerForward);
+    littleToThumb = Q211NormalizeSafe(littleToThumb);
+
+    // All points come from Fallout's authored bind skeleton, even though the
+    // skin partitions that reference them may be different.
+    Vec3 intoPalm =
+        Q211NormalizeSafe(Q211Cross(fingerForward, littleToThumb));
+
+    littleToThumb = Q211Sub(
+        littleToThumb,
+        Q211Mul(intoPalm, Q211Dot(littleToThumb, intoPalm)));
+    if (Q211Length(littleToThumb) < 0.03f ||
+        Q211Length(intoPalm) < 0.03f) {
+        return false;
+    }
+
+    out.littleToThumb = Q211NormalizeSafe(littleToThumb);
+    out.intoPalm = Q211NormalizeSafe(intoPalm);
+    out.ready = true;
+
+    if ((gQ211TrackingSerial % 180u) == 1u) {
+        Q6H_LOGI("Q21.12 HAND BONE LOOKUP: side=%s hand=%s thumb0=%s middle2=%s little4=%s handP=(%.3f %.3f %.3f) thumbP=(%.3f %.3f %.3f) middleP=(%.3f %.3f %.3f) littleP=(%.3f %.3f %.3f)",
+                 left ? "L" : "R",
+                 handName.c_str(), thumbName.c_str(),
+                 middleName.c_str(), littleName.c_str(),
+                 handPoint.x, handPoint.y, handPoint.z,
+                 thumbPoint.x, thumbPoint.y, thumbPoint.z,
+                 middlePoint.x, middlePoint.y, middlePoint.z,
+                 littlePoint.x, littlePoint.y, littlePoint.z);
+    }
+    return true;
 }
 
 struct Q211Delta {
@@ -8228,7 +8249,7 @@ void Q211UpdatePlayerRig() {
     glBindBuffer(GL_ARRAY_BUFFER, 0);
 
     if ((gQ211TrackingSerial % 180u) == 1u) {
-        Q6H_LOGI("Q21.11 HAND BASIS: authored=(L%d,R%d) Lacross=(%.3f %.3f %.3f) Linward=(%.3f %.3f %.3f) Racross=(%.3f %.3f %.3f) Rinward=(%.3f %.3f %.3f) openxrAxes=(-Z little-to-thumb,+/-X palm-normal) source=(Finger0,Finger2,Finger4)",
+        Q6H_LOGI("Q21.12 HAND BASIS: authored=(L%d,R%d) Lacross=(%.3f %.3f %.3f) Linward=(%.3f %.3f %.3f) Racross=(%.3f %.3f %.3f) Rinward=(%.3f %.3f %.3f) openxrAxes=(-Z little-to-thumb,+/-X palm-normal) source=global-authored-(Hand,Finger0,Finger2,Finger4)",
                  q220LeftBasisReady ? 1 : 0,
                  q220RightBasisReady ? 1 : 0,
                  q220LeftAuthoredBasis.littleToThumb.x,
