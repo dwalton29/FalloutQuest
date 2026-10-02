@@ -23,7 +23,7 @@ android {
         minSdk 29
         targetSdk 35
         versionCode 83
-        versionName '0.21.4-q21.4-foretwist-arm-skinning'
+        versionName '0.21.5-q21.5-vanilla-left-right-hands'
 
         ndk {
             abiFilters 'arm64-v8a'
