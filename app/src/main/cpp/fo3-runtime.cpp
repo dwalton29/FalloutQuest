@@ -7195,7 +7195,7 @@ bool Q210EnsurePlayerBody() {
     if (gQ210PlayerBodyAttempted) return false;
     gQ210PlayerBodyAttempted = true;
 
-    std::vector<std::string> maleEntries;
+    std::vector<FalloutMeshIndexEntry> maleEntries;
     ListFalloutMeshFilesByPrefix("Characters\\_Male\\", maleEntries);
 
     const char* wantedSuffixes[] = {
@@ -7206,19 +7206,19 @@ bool Q210EnsurePlayerBody() {
     };
     std::vector<std::string> bodyPaths;
     for (const char* suffix : wantedSuffixes) {
-        for (const std::string& entry : maleEntries) {
-            if (Q210EndsWithInsensitive(entry, suffix)) {
-                bodyPaths.push_back(entry);
+        for (const FalloutMeshIndexEntry& entry : maleEntries) {
+            if (Q210EndsWithInsensitive(entry.path, suffix)) {
+                bodyPaths.push_back(entry.path);
                 break;
             }
         }
     }
 
     std::string skeletonPath = "Characters\\_Male\\Skeleton.NIF";
-    for (const std::string& entry : maleEntries) {
+    for (const FalloutMeshIndexEntry& entry : maleEntries) {
         if (Q210EndsWithInsensitive(
-                entry, "characters\\_male\\skeleton.nif")) {
-            skeletonPath = entry;
+                entry.path, "characters\\_male\\skeleton.nif")) {
+            skeletonPath = entry.path;
             break;
         }
     }
