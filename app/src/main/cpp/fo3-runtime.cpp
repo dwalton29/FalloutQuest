@@ -7412,6 +7412,24 @@ Vec3 Q211TransformPoint(const float m[16], Vec3 p) {
     };
 }
 
+Vec3 Q218TransformVector(const float m[16], Vec3 v) {
+    return {
+        m[0]*v.x + m[4]*v.y + m[8]*v.z,
+        m[1]*v.x + m[5]*v.y + m[9]*v.z,
+        m[2]*v.x + m[6]*v.y + m[10]*v.z
+    };
+}
+
+Vec3 Q218RotateQuaternion(const float q[4], Vec3 v) {
+    const Vec3 u{q[0], q[1], q[2]};
+    const float qw = q[3];
+    return Q211Add(
+        Q211Add(
+            Q211Mul(u, 2.0f * Q211Dot(u, v)),
+            Q211Mul(v, qw*qw - Q211Dot(u, u))),
+        Q211Mul(Q211Cross(u, v), 2.0f * qw));
+}
+
 struct Q220HandBasis {
     Vec3 littleToThumb{0.0f, 0.0f, -1.0f};
     Vec3 intoPalm{0.0f, -1.0f, 0.0f};
