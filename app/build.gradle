@@ -22,8 +22,8 @@ android {
         applicationId 'com.falloutquest.app'
         minSdk 29
         targetSdk 35
-        versionCode 63
-        versionName '0.20.19-q20.19-reflection-instancing-terrain-safe'
+        versionCode 64
+        versionName '0.20.20-q20.20-reflection-frustum-cull'
 
         ndk {
             abiFilters 'arm64-v8a'

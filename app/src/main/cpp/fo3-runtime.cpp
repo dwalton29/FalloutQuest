@@ -346,7 +346,9 @@ uint64_t gQ2015CullPassed = 0u;
 uint64_t gQ2015CullScopes = 0u;
 
 bool Q2015AabbVisible(const GpuObject& object) {
-    if (!gQ2015FrustumCullActive || gWaterReflectionPassQ2090) return true;
+    // Q20.20: reflection passes now install their own reflected-camera frustum.
+    // Do not bypass culling merely because we are drawing the planar mirror.
+    if (!gQ2015FrustumCullActive) return true;
     if (object.minX > object.maxX || object.minY > object.maxY ||
         object.minZ > object.maxZ) return true;
 
@@ -391,19 +393,30 @@ bool Q2015AabbVisible(const GpuObject& object) {
 }
 
 struct Q2015FrustumCullScope {
+    bool previousActive = false;
+    float previousMvp[16]{};
+
     explicit Q2015FrustumCullScope(const float* mvp) {
+        previousActive = gQ2015FrustumCullActive;
+        if (previousActive)
+            std::copy(gQ2015FrustumMvp, gQ2015FrustumMvp + 16, previousMvp);
         std::copy(mvp, mvp + 16, gQ2015FrustumMvp);
         gQ2015FrustumCullActive = true;
     }
     ~Q2015FrustumCullScope() {
-        gQ2015FrustumCullActive = false;
+        if (previousActive) {
+            std::copy(previousMvp, previousMvp + 16, gQ2015FrustumMvp);
+            gQ2015FrustumCullActive = true;
+        } else {
+            gQ2015FrustumCullActive = false;
+        }
         ++gQ2015CullScopes;
         if ((gQ2015CullScopes % 300u) == 0u) {
             const double pct = gQ2015CullTested > 0u
                 ? 100.0 * static_cast<double>(gQ2015CullRejected) /
                   static_cast<double>(gQ2015CullTested)
                 : 0.0;
-            Q6H_LOGI("Q20.15 FRUSTUM: tested=%llu rejected=%llu passed=%llu rejectedPct=%.1f liveShapes=%zu scope=main-eye-aabb conservativePaddingM=1.0",
+            Q6H_LOGI("Q20.20 FRUSTUM: tested=%llu rejected=%llu passed=%llu rejectedPct=%.1f liveShapes=%zu scope=nested-main+reflection-aabb conservativePaddingM=1.0",
                      static_cast<unsigned long long>(gQ2015CullTested),
                      static_cast<unsigned long long>(gQ2015CullRejected),
                      static_cast<unsigned long long>(gQ2015CullPassed),
@@ -5975,6 +5988,13 @@ bool Q2090RenderWaterReflection(const float mainMvp[16],
     glDepthMask(GL_TRUE);
     glDisable(GL_BLEND);
 
+    // Q20.20: Q20.19 correctly instanced the mirror, but DrawSceneObject still
+    // bypassed Q20.15 culling whenever gWaterReflectionPassQ2090 was true.
+    // Install the reflected MVP as a nested frustum so native LOD, detailed
+    // statics, alpha and environment passes only submit geometry the mirror
+    // camera can actually see.
+    Q2015FrustumCullScope q2020ReflectionFrustum(outReflectionMvp);
+
     const auto q2019ReflectionOpaqueStarted =
         std::chrono::steady_clock::now();
     Q1990RenderNativeLod(false);
@@ -6076,7 +6096,7 @@ bool Q2090RenderWaterReflection(const float mainMvp[16],
             q2019ReflectionStarted).count());
     if (gWaterReflectionFramesQ2090 == 1u ||
         (gWaterReflectionFramesQ2090 % 120u) == 0u ||
-        q2019ReflectionTotalUs >= 12000u) {
+        q2019ReflectionTotalUs >= 35000u) {
         Q6H_LOGI("Q20.19 WATER REFLECTION PHASES: totalUs=%llu opaqueUs=%llu alphaUs=%llu envUs=%llu landUs=%llu objects=%zu sharedMeshes=%zu target=1024x1024 instancedOpaque=1",
                  static_cast<unsigned long long>(q2019ReflectionTotalUs),
                  static_cast<unsigned long long>(q2019OpaqueUs),
@@ -6543,7 +6563,7 @@ void RenderScene() {
         static uint64_t q2019WaterEyePasses = 0u;
         ++q2019WaterEyePasses;
         if ((q2019WaterEyePasses % 120u) == 1u ||
-            q2019WaterReflectionCallUs >= 12000u ||
+            q2019WaterReflectionCallUs >= 35000u ||
             q2019WaterPostUs >= 12000u) {
             Q6H_LOGI("Q20.19 WATER OUTSIDE PHASES: reflectionUs=%llu postAndWaterUs=%llu waterDrawUs=%llu reflectionReady=%d waterInFrustum=%d exposedCells=%zu snapshotReady=%d",
                      static_cast<unsigned long long>(q2019WaterReflectionCallUs),
