@@ -1945,7 +1945,7 @@ bool UploadCpuObject(CpuObject& cpu, float centerX, float centerY, float floorZ,
     if (gpu.q220LooseObject) {
         static std::unordered_set<uint32_t> q220LoggedRefs;
         if (q220LoggedRefs.insert(gpu.refFormId).second) {
-            Q6H_LOGI("Q22.0 LOOSE CANDIDATE: ref=%08X base=%08X type=%s edid=%s model=%s",
+            Q6H_LOGI("Q22.1 LOOSE CANDIDATE: ref=%08X base=%08X type=%s edid=%s model=%s",
                      gpu.refFormId, gpu.baseFormId,
                      gpu.baseRecordType.c_str(),
                      gpu.editorId.empty() ? "<none>" : gpu.editorId.c_str(),
@@ -7382,7 +7382,7 @@ void Q220ControllerDeltaMatrix(
 struct Q220GrabState {
     bool active = false;
     uint32_t refFormId = 0u;
-    Vec3 startHand{};
+    Vec3 startPalm{};
     float startQuat[4]{0,0,0,1};
     float baseTransform[16]{
         1,0,0,0,
@@ -7493,9 +7493,10 @@ void Q220UpdateLooseGrab(
                 hand, ref, center, distance)) {
             state.active = true;
             state.refFormId = ref;
-            state.startHand = hand;
+            state.startPalm = hand;
             std::copy(quat, quat + 4, state.startQuat);
 
+            float existingTransform[16]{};
             bool copied = false;
             for (const GpuObject& object : gObjects) {
                 if (object.q220LooseObject &&
@@ -7503,23 +7504,40 @@ void Q220UpdateLooseGrab(
                     std::copy(
                         object.q220DynamicTransform,
                         object.q220DynamicTransform + 16,
-                        state.baseTransform);
+                        existingTransform);
                     copied = true;
                     break;
                 }
             }
-            if (!copied) Q220Identity(state.baseTransform);
+            if (!copied) Q220Identity(existingTransform);
 
-            Q6H_LOGI("Q22.0 GRAB BEGIN: hand=%s ref=%08X surfaceDistance=%.3f center=(%.3f %.3f %.3f) source=Fallout3.esm-pickup-REFR",
+            // Q22.1 generic loose-clutter anchor:
+            // snap the authored REFR bounds-center to the weighted Fallout
+            // palm anchor produced by the same IK solve that draws the hand.
+            float snapTranslation[16]{};
+            Q220Identity(snapTranslation);
+            snapTranslation[12] = hand.x - center.x;
+            snapTranslation[13] = hand.y - center.y;
+            snapTranslation[14] = hand.z - center.z;
+            Q220MulMat4(
+                snapTranslation,
+                existingTransform,
+                state.baseTransform);
+            Q220SetRefTransform(ref, state.baseTransform);
+
+            const float snapDistance =
+                Q211Length(Q211Sub(hand, center));
+            Q6H_LOGI("Q22.1 GRAB BEGIN: hand=%s ref=%08X surfaceDistance=%.3f snapDistance=%.3f objectCenter=(%.3f %.3f %.3f) palm=(%.3f %.3f %.3f) anchor=authored-bounds-center-to-weighted-player-palm",
                      handIndex == 0 ? "L" : "R",
-                     ref, distance,
-                     center.x, center.y, center.z);
+                     ref, distance, snapDistance,
+                     center.x, center.y, center.z,
+                     hand.x, hand.y, hand.z);
         }
     }
 
     if (state.active) {
         if (grip <= RELEASE) {
-            Q6H_LOGI("Q22.0 GRAB RELEASE: hand=%s ref=%08X mode=drop-in-place-no-gravity-yet",
+            Q6H_LOGI("Q22.1 GRAB RELEASE: hand=%s ref=%08X mode=drop-in-place-no-gravity-yet",
                      handIndex == 0 ? "L" : "R",
                      state.refFormId);
             state.active = false;
@@ -7527,7 +7545,7 @@ void Q220UpdateLooseGrab(
         } else {
             float controllerDelta[16]{};
             Q220ControllerDeltaMatrix(
-                state.startHand, state.startQuat,
+                state.startPalm, state.startQuat,
                 hand, quat, controllerDelta);
             float finalTransform[16]{};
             Q220MulMat4(
@@ -7543,22 +7561,18 @@ void Q220UpdateLooseGrab(
     state.previousGrip = grip;
 }
 
-void Q220UpdateLooseObjects() {
-    const Vec3 left{
-        gQ210LeftHand[0],
-        gQ210LeftHand[1],
-        gQ210LeftHand[2]};
-    const Vec3 right{
-        gQ210RightHand[0],
-        gQ210RightHand[1],
-        gQ210RightHand[2]};
+void Q221UpdateLooseObjectsFromSolvedPalms(
+        bool leftPalmValid,
+        Vec3 leftPalmWorld,
+        bool rightPalmValid,
+        Vec3 rightPalmWorld) {
     Q220UpdateLooseGrab(
-        0, gQ210LeftHandValid,
-        left, gQ218LeftHandQuat,
+        0, leftPalmValid,
+        leftPalmWorld, gQ218LeftHandQuat,
         gQ217FingerGrip[0]);
     Q220UpdateLooseGrab(
-        1, gQ210RightHandValid,
-        right, gQ218RightHandQuat,
+        1, rightPalmValid,
+        rightPalmWorld, gQ218RightHandQuat,
         gQ217FingerGrip[1]);
 }
 
@@ -8985,6 +8999,27 @@ void Q211UpdatePlayerRig() {
     }
     glBindBuffer(GL_ARRAY_BUFFER, 0);
 
+    // Q22.1: q213*.hand is the solved endpoint whose rest endpoint is the
+    // weighted Fallout palm anchor. Transform it by the player root so object
+    // grabbing follows exactly the palm that the player mesh is drawing.
+    Vec3 q221LeftPalmWorld{};
+    Vec3 q221RightPalmWorld{};
+    const bool q221LeftPalmValid =
+        gQ210LeftHandValid && q213LeftPose.solved;
+    const bool q221RightPalmValid =
+        gQ210RightHandValid && q213RightPose.solved;
+    if (q221LeftPalmValid) {
+        q221LeftPalmWorld =
+            Q211TransformPoint(gQ210PlayerRoot, q213LeftPose.hand);
+    }
+    if (q221RightPalmValid) {
+        q221RightPalmWorld =
+            Q211TransformPoint(gQ210PlayerRoot, q213RightPose.hand);
+    }
+    Q221UpdateLooseObjectsFromSolvedPalms(
+        q221LeftPalmValid, q221LeftPalmWorld,
+        q221RightPalmValid, q221RightPalmWorld);
+
     if ((gQ211TrackingSerial % 180u) == 1u) {
         Q6H_LOGI("Q21.14 HAND BASIS: authored=(L%d,R%d) Lacross=(%.3f %.3f %.3f) Linward=(%.3f %.3f %.3f) Racross=(%.3f %.3f %.3f) Rinward=(%.3f %.3f %.3f) rightPalmMirror=1 outwardOffset=%.3fm source=global-authored-(Hand,Finger2,Finger4)",
                  q220LeftBasisReady ? 1 : 0,
@@ -9002,6 +9037,13 @@ void Q211UpdatePlayerRig() {
                  q220RightAuthoredBasis.intoPalm.y,
                  q220RightAuthoredBasis.intoPalm.z,
                  Q214_HAND_OUTWARD_OFFSET);
+        Q6H_LOGI("Q22.1 PALM ANCHOR: L(valid=%d world=%.3f %.3f %.3f controller=%.3f %.3f %.3f) R(valid=%d world=%.3f %.3f %.3f controller=%.3f %.3f %.3f) source=solved-weighted-palm",
+                 q221LeftPalmValid ? 1 : 0,
+                 q221LeftPalmWorld.x, q221LeftPalmWorld.y, q221LeftPalmWorld.z,
+                 gQ210LeftHand[0], gQ210LeftHand[1], gQ210LeftHand[2],
+                 q221RightPalmValid ? 1 : 0,
+                 q221RightPalmWorld.x, q221RightPalmWorld.y, q221RightPalmWorld.z,
+                 gQ210RightHand[0], gQ210RightHand[1], gQ210RightHand[2]);
         Q6H_LOGI("Q21.20 FINGER INPUT: L(trigger=%.2f triggerTouch=%d grip=%.2f thumbTouch=%d posedBones=%zu) R(trigger=%.2f triggerTouch=%d grip=%.2f thumbTouch=%d posedBones=%zu) mapping=index=trigger lower3=squeeze thumb=capacitive",
                  gQ217FingerTrigger[0],
                  gQ217TriggerTouched[0] ? 1 : 0,
@@ -11407,7 +11449,6 @@ void SetFo3PlayerBodyTrackingQ210(
     gQ217ThumbTouched[0] = leftThumbTouched;
     gQ217ThumbTouched[1] = rightThumbTouched;
 
-    Q220UpdateLooseObjects();
     ++gQ211TrackingSerial;
 
     // Q21.13: infer torso yaw with a neck dead-zone. Looking around within
