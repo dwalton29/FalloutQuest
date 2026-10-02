@@ -5087,6 +5087,44 @@ struct Q1990NativeLodBlock {
 };
 
 std::vector<Q1990NativeLodBlock> gQ1990NativeLodBlocks;
+
+// Q20.23: Bethesda ships a real terrain pyramid (Level8/16/32) plus a
+// sparse Level4.High VWD object set. Keep those caches separate from the
+// proven Level4 near-LOD cache so the detailed/Level4 handoff stays intact.
+enum class Q2023LodAssetKind : uint8_t {
+    CoarseTerrain = 0,
+    HighObjects = 1,
+};
+
+struct Q2023LodAsset {
+    Q2023LodAssetKind kind = Q2023LodAssetKind::CoarseTerrain;
+    std::string path;
+    int levelCells = 0;
+    int32_t blockX = 0;
+    int32_t blockY = 0;
+    bool loaded = false;
+    bool pending = false;
+};
+
+struct Q2023CoarseTerrainTile {
+    int levelCells = 0;
+    int32_t blockX = 0;
+    int32_t blockY = 0;
+    std::vector<GpuObject> terrain;
+};
+
+struct Q2023HighObjectBlock {
+    int32_t blockX = 0;
+    int32_t blockY = 0;
+    std::vector<GpuObject> objects;
+};
+
+std::vector<Q2023LodAsset> gQ2023LodAssets;
+std::vector<Q2023CoarseTerrainTile> gQ2023CoarseTerrainTiles;
+std::vector<Q2023HighObjectBlock> gQ2023HighObjectBlocks;
+bool gQ2023LodAssetsDiscovered = false;
+bool gQ2023LodDiscoveryLogged = false;
+
 uint64_t gQ1990NativeLodSerial = 0u;
 bool gQ1990NativeLodOriginValid = false;
 float gQ1990NativeLodCenterX = 0.0f;
@@ -5122,7 +5160,19 @@ void Q1990ClearNativeLodGeometry() {
         for (GpuObject& object : block.terrain) Q1990DeleteLodGpu(object);
         for (GpuObject& object : block.objects) Q1990DeleteLodGpu(object);
     }
+    for (Q2023CoarseTerrainTile& tile : gQ2023CoarseTerrainTiles) {
+        for (GpuObject& object : tile.terrain) Q1990DeleteLodGpu(object);
+    }
+    for (Q2023HighObjectBlock& block : gQ2023HighObjectBlocks) {
+        for (GpuObject& object : block.objects) Q1990DeleteLodGpu(object);
+    }
     gQ1990NativeLodBlocks.clear();
+    gQ2023CoarseTerrainTiles.clear();
+    gQ2023HighObjectBlocks.clear();
+    for (Q2023LodAsset& asset : gQ2023LodAssets) {
+        asset.loaded = false;
+        asset.pending = false;
+    }
     gQ1990NativeLodDrawLogged = false;
     gQ2010VisibleLodValid = false;
     gQ2010VisibleLodCentreBlockX = 0;
@@ -5195,6 +5245,184 @@ int32_t Q2022FloorToSpan(int32_t cell, int span) {
     int32_t quotient = cell / span;
     if (cell < 0 && (cell % span) != 0) --quotient;
     return quotient * span;
+}
+
+bool Q2023ParseAxis(const std::string& path, const char* marker, int32_t& out) {
+    const size_t markerPos = path.find(marker);
+    if (markerPos == std::string::npos) return false;
+    size_t p = markerPos + std::strlen(marker);
+    bool negative = false;
+    if (p < path.size() && path[p] == '-') {
+        negative = true;
+        ++p;
+    }
+    if (p >= path.size() || !std::isdigit(static_cast<unsigned char>(path[p])))
+        return false;
+    int32_t value = 0;
+    while (p < path.size() &&
+           std::isdigit(static_cast<unsigned char>(path[p]))) {
+        value = value * 10 + static_cast<int32_t>(path[p] - '0');
+        ++p;
+    }
+    out = negative ? -value : value;
+    return true;
+}
+
+int Q2023ParseTerrainLevel(const std::string& path) {
+    if (path.find(".level32.") != std::string::npos) return 32;
+    if (path.find(".level16.") != std::string::npos) return 16;
+    if (path.find(".level8.") != std::string::npos) return 8;
+    if (path.find(".level4.") != std::string::npos) return 4;
+    return 0;
+}
+
+bool Q2023EndsWith(const std::string& value, const char* suffix) {
+    const size_t n = std::strlen(suffix);
+    return value.size() >= n &&
+           value.compare(value.size() - n, n, suffix) == 0;
+}
+
+bool Q2023DiscoverLodAssetsQ19() {
+    if (gQ2023LodAssetsDiscovered) return true;
+
+    std::vector<FalloutMeshIndexEntry> entries;
+    if (!ListFalloutMeshFilesByPrefix(
+            "Landscape\\LOD\\Wasteland\\", entries)) {
+        return false;
+    }
+
+    size_t terrain8 = 0u, terrain16 = 0u, terrain32 = 0u;
+    size_t high = 0u, postApocalypseSkipped = 0u, treeDtlDeferred = 0u;
+    gQ2023LodAssets.clear();
+    gQ2023LodAssets.reserve(384u);
+
+    for (const FalloutMeshIndexEntry& entry : entries) {
+        const std::string& path = entry.path;
+        if (path.find("\\trees\\") != std::string::npos &&
+            Q2023EndsWith(path, ".dtl")) {
+            ++treeDtlDeferred;
+            continue;
+        }
+        if (!Q2023EndsWith(path, ".nif")) continue;
+
+        if (path.find(".postapocalypse.nif") != std::string::npos) {
+            ++postApocalypseSkipped;
+            continue;
+        }
+
+        int32_t x = 0, y = 0;
+        if (!Q2023ParseAxis(path, ".x", x) ||
+            !Q2023ParseAxis(path, ".y", y)) {
+            continue;
+        }
+
+        const bool inBlocks =
+            path.find("\\blocks\\") != std::string::npos;
+        if (inBlocks &&
+            path.find(".level4.high.") != std::string::npos) {
+            Q2023LodAsset asset;
+            asset.kind = Q2023LodAssetKind::HighObjects;
+            asset.path = path;
+            asset.levelCells = 4;
+            asset.blockX = x;
+            asset.blockY = y;
+            gQ2023LodAssets.push_back(std::move(asset));
+            ++high;
+            continue;
+        }
+
+        if (inBlocks) continue;
+        const int level = Q2023ParseTerrainLevel(path);
+        if (level != 8 && level != 16 && level != 32) continue;
+
+        Q2023LodAsset asset;
+        asset.kind = Q2023LodAssetKind::CoarseTerrain;
+        asset.path = path;
+        asset.levelCells = level;
+        asset.blockX = x;
+        asset.blockY = y;
+        gQ2023LodAssets.push_back(std::move(asset));
+        if (level == 8) ++terrain8;
+        else if (level == 16) ++terrain16;
+        else ++terrain32;
+    }
+
+    gQ2023LodAssetsDiscovered = true;
+    if (!gQ2023LodDiscoveryLogged) {
+        gQ2023LodDiscoveryLogged = true;
+        Q6H_LOGI("Q20.23 LOD PYRAMID DISCOVERED: assets=%zu terrain8=%zu terrain16=%zu terrain32=%zu highObjects=%zu postApocalypseSkipped=%zu treeDtlDeferred=%zu source=Fallout-Meshes.bsa-index",
+                 gQ2023LodAssets.size(), terrain8, terrain16, terrain32,
+                 high, postApocalypseSkipped, treeDtlDeferred);
+    }
+    return true;
+}
+
+bool Q2023TileDesiredQ19(
+        int levelCells, int32_t blockX, int32_t blockY,
+        int32_t playerCellX, int32_t playerCellY) {
+    if (levelCells == 32) return true;
+    const int32_t centreX = blockX + levelCells / 2;
+    const int32_t centreY = blockY + levelCells / 2;
+    const int cheb = std::max(
+        std::abs(centreX - playerCellX),
+        std::abs(centreY - playerCellY));
+    if (levelCells == 16) return cheb <= 72;
+    if (levelCells == 8) return cheb <= 44;
+    return false;
+}
+
+bool Q2023AssetDesiredQ19(
+        const Q2023LodAsset& asset,
+        int32_t playerCellX, int32_t playerCellY) {
+    if (asset.kind == Q2023LodAssetKind::HighObjects) return true;
+    return Q2023TileDesiredQ19(
+        asset.levelCells, asset.blockX, asset.blockY,
+        playerCellX, playerCellY);
+}
+
+Q2023CoarseTerrainTile* Q2023FindCoarseTerrainTileQ19(
+        int levelCells, int32_t blockX, int32_t blockY) {
+    for (Q2023CoarseTerrainTile& tile : gQ2023CoarseTerrainTiles) {
+        if (tile.levelCells == levelCells &&
+            tile.blockX == blockX && tile.blockY == blockY) {
+            return &tile;
+        }
+    }
+    return nullptr;
+}
+
+bool Q2023TileActiveQ19(
+        int levelCells, int32_t blockX, int32_t blockY,
+        int32_t playerCellX, int32_t playerCellY) {
+    return Q2023TileDesiredQ19(
+               levelCells, blockX, blockY,
+               playerCellX, playerCellY) &&
+           Q2023FindCoarseTerrainTileQ19(
+               levelCells, blockX, blockY) != nullptr;
+}
+
+bool Q2023TileFullyRefinedQ19(
+        int levelCells, int32_t blockX, int32_t blockY,
+        int32_t playerCellX, int32_t playerCellY) {
+    const int childLevel = levelCells / 2;
+    if (childLevel < 4) return false;
+    for (int dy = 0; dy < 2; ++dy) {
+        for (int dx = 0; dx < 2; ++dx) {
+            const int32_t childX = blockX + dx * childLevel;
+            const int32_t childY = blockY + dy * childLevel;
+            if (childLevel == 4) {
+                Q1990NativeLodBlock* child =
+                    Q1990FindLodBlock(childX, childY);
+                if (!child || !Q1990LodBlockDesired(childX, childY))
+                    return false;
+            } else if (!Q2023TileActiveQ19(
+                           childLevel, childX, childY,
+                           playerCellX, playerCellY)) {
+                return false;
+            }
+        }
+    }
+    return true;
 }
 
 void Q2022ProbeLodArchive(int32_t cellX, int32_t cellY) {
@@ -5523,6 +5751,11 @@ struct Q1970LodWorkerTaskQ19 {
     int32_t blockX = 0;
     int32_t blockY = 0;
     int ring = 0;
+    bool q2023AuthoredAsset = false;
+    size_t q2023AssetIndex = static_cast<size_t>(-1);
+    Q2023LodAssetKind q2023Kind = Q2023LodAssetKind::CoarseTerrain;
+    int q2023LevelCells = 4;
+    std::string q2023Path;
     float centerX = 0.0f;
     float centerY = 0.0f;
     float floorZ = 0.0f;
@@ -5547,6 +5780,10 @@ struct Q1970LodUploadTaskQ2013 {
     int32_t blockX = 0;
     int32_t blockY = 0;
     int ring = 0;
+    bool q2023AuthoredAsset = false;
+    size_t q2023AssetIndex = static_cast<size_t>(-1);
+    Q2023LodAssetKind q2023Kind = Q2023LodAssetKind::CoarseTerrain;
+    int q2023LevelCells = 4;
     uint64_t workerUs = 0u;
 };
 std::deque<Q1970LodUploadTaskQ2013> gQ2013LodUploadsQ19;
@@ -5683,20 +5920,29 @@ void Q1970RunLodWorkerQ19(
     const auto started = std::chrono::steady_clock::now();
     std::unordered_set<std::string> textureSeen;
 
-    const std::string suffix =
-        "Wasteland.Level4.X" + std::to_string(task->blockX) +
-        ".Y" + std::to_string(task->blockY) + ".NIF";
-    const std::string terrainPath =
-        "Landscape\\LOD\\Wasteland\\" + suffix;
-    const std::string objectPath =
-        "Landscape\\LOD\\Wasteland\\Blocks\\" + suffix;
-
-    const bool terrainReady =
-        Q1970AppendLodNifCpuQ19(
+    bool terrainReady = false;
+    bool objectsReady = false;
+    if (task->q2023AuthoredAsset) {
+        if (task->q2023Kind == Q2023LodAssetKind::CoarseTerrain) {
+            terrainReady = Q1970AppendLodNifCpuQ19(
+                task->q2023Path, task, true, textureSeen);
+        } else {
+            objectsReady = Q1970AppendLodNifCpuQ19(
+                task->q2023Path, task, false, textureSeen);
+        }
+    } else {
+        const std::string suffix =
+            "Wasteland.Level4.X" + std::to_string(task->blockX) +
+            ".Y" + std::to_string(task->blockY) + ".NIF";
+        const std::string terrainPath =
+            "Landscape\\LOD\\Wasteland\\" + suffix;
+        const std::string objectPath =
+            "Landscape\\LOD\\Wasteland\\Blocks\\" + suffix;
+        terrainReady = Q1970AppendLodNifCpuQ19(
             terrainPath, task, true, textureSeen);
-    const bool objectsReady =
-        Q1970AppendLodNifCpuQ19(
+        objectsReady = Q1970AppendLodNifCpuQ19(
             objectPath, task, false, textureSeen);
+    }
 
     for (const Q1900TextureRequestQ19& request : task->textures) {
         Q1900PrepareTextureCpuQ19(request.path);
@@ -5716,15 +5962,31 @@ void Q1970ConsumeLodWorkersQ19() {
 
         const auto task = worker;
         worker.reset();
-        const bool stale =
+        const bool contextStale =
             task->contextSerial != gQ1900ContextSerialQ19 ||
             std::fabs(task->centerX - gExteriorOriginXQ1890) > 0.01f ||
             std::fabs(task->centerY - gExteriorOriginYQ1890) > 0.01f ||
-            std::fabs(task->floorZ - gExteriorOriginZQ1890) > 0.01f ||
+            std::fabs(task->floorZ - gExteriorOriginZQ1890) > 0.01f;
+        const bool level4Stale =
+            !task->q2023AuthoredAsset &&
             !Q1990LodBlockDesired(task->blockX, task->blockY);
-        if (stale || Q1990FindLodBlock(task->blockX, task->blockY)) {
-            Q6H_LOGI("Q20.14 LOD CPU STALE: slot=%zu block=(%d,%d) ring=%d workerUs=%llu action=discard",
+        const bool level4Duplicate =
+            !task->q2023AuthoredAsset &&
+            Q1990FindLodBlock(task->blockX, task->blockY) != nullptr;
+        const bool authoredDuplicate =
+            task->q2023AuthoredAsset &&
+            task->q2023AssetIndex < gQ2023LodAssets.size() &&
+            gQ2023LodAssets[task->q2023AssetIndex].loaded;
+        if (contextStale || level4Stale ||
+            level4Duplicate || authoredDuplicate) {
+            if (task->q2023AuthoredAsset &&
+                task->q2023AssetIndex < gQ2023LodAssets.size()) {
+                gQ2023LodAssets[task->q2023AssetIndex].pending = false;
+            }
+            Q6H_LOGI("Q20.23 LOD CPU STALE: slot=%zu block=(%d,%d) ring=%d authored=%d level=%d workerUs=%llu action=discard",
                      slot + 1u, task->blockX, task->blockY, task->ring,
+                     task->q2023AuthoredAsset ? 1 : 0,
+                     task->q2023LevelCells,
                      static_cast<unsigned long long>(task->workerUs));
             continue;
         }
@@ -5739,11 +6001,17 @@ void Q1970ConsumeLodWorkersQ19() {
         upload.blockX = task->blockX;
         upload.blockY = task->blockY;
         upload.ring = task->ring;
+        upload.q2023AuthoredAsset = task->q2023AuthoredAsset;
+        upload.q2023AssetIndex = task->q2023AssetIndex;
+        upload.q2023Kind = task->q2023Kind;
+        upload.q2023LevelCells = task->q2023LevelCells;
         upload.workerUs = task->workerUs;
         gQ2013LodUploadsQ19.push_back(std::move(upload));
 
-        Q6H_LOGI("Q20.14 LOD CPU READY: slot=%zu block=(%d,%d) ring=%d queuedUploads=%zu workerUs=%llu",
+        Q6H_LOGI("Q20.23 LOD CPU READY: slot=%zu block=(%d,%d) ring=%d authored=%d level=%d queuedUploads=%zu workerUs=%llu",
                  slot + 1u, task->blockX, task->blockY, task->ring,
+                 task->q2023AuthoredAsset ? 1 : 0,
+                 task->q2023LevelCells,
                  gQ2013LodUploadsQ19.size(),
                  static_cast<unsigned long long>(task->workerUs));
     }
@@ -5756,8 +6024,19 @@ void Q1970AdvanceLodGpuQ19() {
     // sit in front of newly-near blocks after a Level4 centre change.
     for (auto it = gQ2013LodUploadsQ19.begin();
          it != gQ2013LodUploadsQ19.end();) {
-        if (!Q1990LodBlockDesired(it->blockX, it->blockY) ||
-            Q1990FindLodBlock(it->blockX, it->blockY)) {
+        const bool level4Drop =
+            !it->q2023AuthoredAsset &&
+            (!Q1990LodBlockDesired(it->blockX, it->blockY) ||
+             Q1990FindLodBlock(it->blockX, it->blockY));
+        const bool authoredDrop =
+            it->q2023AuthoredAsset &&
+            it->q2023AssetIndex < gQ2023LodAssets.size() &&
+            gQ2023LodAssets[it->q2023AssetIndex].loaded;
+        if (level4Drop || authoredDrop) {
+            if (it->q2023AuthoredAsset &&
+                it->q2023AssetIndex < gQ2023LodAssets.size()) {
+                gQ2023LodAssets[it->q2023AssetIndex].pending = false;
+            }
             it = gQ2013LodUploadsQ19.erase(it);
         } else {
             ++it;
@@ -5771,15 +6050,16 @@ void Q1970AdvanceLodGpuQ19() {
         gQ2013LodUploadsQ19.begin(), gQ2013LodUploadsQ19.end(),
         [](const Q1970LodUploadTaskQ2013& a,
            const Q1970LodUploadTaskQ2013& b) {
-            const int ar = Q2010NativeLodRingForBlockAround(
-                a.blockX, a.blockY,
-                gQ1990NativeLodCentreBlockX,
-                gQ1990NativeLodCentreBlockY);
-            const int br = Q2010NativeLodRingForBlockAround(
-                b.blockX, b.blockY,
-                gQ1990NativeLodCentreBlockX,
-                gQ1990NativeLodCentreBlockY);
-            if (ar != br) return ar < br;
+            auto priority = [](const Q1970LodUploadTaskQ2013& item) {
+                if (!item.q2023AuthoredAsset) return 0;
+                if (item.q2023Kind == Q2023LodAssetKind::HighObjects) return 2;
+                if (item.q2023LevelCells == 32) return 1;
+                if (item.q2023LevelCells == 16) return 3;
+                return 4;
+            };
+            const int ap = priority(a);
+            const int bp = priority(b);
+            if (ap != bp) return ap < bp;
             const int am = std::abs(a.blockX - gQ1990NativeLodCentreBlockX) +
                            std::abs(a.blockY - gQ1990NativeLodCentreBlockY);
             const int bm = std::abs(b.blockX - gQ1990NativeLodCentreBlockX) +
@@ -5800,8 +6080,19 @@ void Q1970AdvanceLodGpuQ19() {
 
     while (!gQ2013LodUploadsQ19.empty()) {
         Q1970LodUploadTaskQ2013& pending = gQ2013LodUploadsQ19.front();
-        if (!Q1990LodBlockDesired(pending.blockX, pending.blockY) ||
-            Q1990FindLodBlock(pending.blockX, pending.blockY)) {
+        const bool level4Drop =
+            !pending.q2023AuthoredAsset &&
+            (!Q1990LodBlockDesired(pending.blockX, pending.blockY) ||
+             Q1990FindLodBlock(pending.blockX, pending.blockY));
+        const bool authoredDrop =
+            pending.q2023AuthoredAsset &&
+            pending.q2023AssetIndex < gQ2023LodAssets.size() &&
+            gQ2023LodAssets[pending.q2023AssetIndex].loaded;
+        if (level4Drop || authoredDrop) {
+            if (pending.q2023AuthoredAsset &&
+                pending.q2023AssetIndex < gQ2023LodAssets.size()) {
+                gQ2023LodAssets[pending.q2023AssetIndex].pending = false;
+            }
             gQ2013LodUploadsQ19.pop_front();
             continue;
         }
@@ -5829,48 +6120,97 @@ void Q1970AdvanceLodGpuQ19() {
             state.q1960TextureUpload.active ||
             state.q1960ShapeUpload.active) return;
 
-        Q1990NativeLodBlock block;
-        block.blockX = pending.blockX;
-        block.blockY = pending.blockY;
-        block.lastUse = gQ1990NativeLodSerial;
         size_t terrainTriangles = 0u;
         size_t objectTriangles = 0u;
-        for (GpuObject& gpu : state.stagedGpu) {
-            gpu.q1990NativeLod = true;
-            const std::string lower = TextureCacheKey(gpu.modelPath, "");
-            const bool objectLod =
-                lower.find("landscape\\lod\\wasteland\\blocks\\") !=
-                std::string::npos;
-            if (objectLod) {
-                objectTriangles += static_cast<size_t>(gpu.vertexCount / 3);
-                block.objects.push_back(std::move(gpu));
-            } else {
-                terrainTriangles += static_cast<size_t>(gpu.vertexCount / 3);
-                block.terrain.push_back(std::move(gpu));
-            }
-            gpu.vbo = 0u;
-            gpu.vao = 0u;
-        }
-        state.stagedGpu.clear();
-
         const int32_t readyX = pending.blockX;
         const int32_t readyY = pending.blockY;
         const int readyRing = pending.ring;
         const uint64_t workerUs = pending.workerUs;
         const uint64_t gpuUs = state.gpuUs;
-        gQ1990NativeLodBlocks.push_back(std::move(block));
+        size_t publishedTerrainShapes = 0u;
+        size_t publishedObjectShapes = 0u;
+
+        if (!pending.q2023AuthoredAsset) {
+            Q1990NativeLodBlock block;
+            block.blockX = pending.blockX;
+            block.blockY = pending.blockY;
+            block.lastUse = gQ1990NativeLodSerial;
+            for (GpuObject& gpu : state.stagedGpu) {
+                gpu.q1990NativeLod = true;
+                const std::string lower = TextureCacheKey(gpu.modelPath, "");
+                const bool objectLod =
+                    lower.find("landscape\\lod\\wasteland\\blocks\\") !=
+                    std::string::npos;
+                if (objectLod) {
+                    objectTriangles += static_cast<size_t>(gpu.vertexCount / 3);
+                    block.objects.push_back(std::move(gpu));
+                } else {
+                    terrainTriangles += static_cast<size_t>(gpu.vertexCount / 3);
+                    block.terrain.push_back(std::move(gpu));
+                }
+                gpu.vbo = 0u;
+                gpu.vao = 0u;
+            }
+            publishedTerrainShapes = block.terrain.size();
+            publishedObjectShapes = block.objects.size();
+            gQ1990NativeLodBlocks.push_back(std::move(block));
+            Q2010AdvanceVisibleNativeLodWindow();
+        } else if (pending.q2023Kind == Q2023LodAssetKind::CoarseTerrain) {
+            Q2023CoarseTerrainTile tile;
+            tile.levelCells = pending.q2023LevelCells;
+            tile.blockX = pending.blockX;
+            tile.blockY = pending.blockY;
+            for (GpuObject& gpu : state.stagedGpu) {
+                gpu.q1990NativeLod = true;
+                terrainTriangles += static_cast<size_t>(gpu.vertexCount / 3);
+                tile.terrain.push_back(std::move(gpu));
+                gpu.vbo = 0u;
+                gpu.vao = 0u;
+            }
+            publishedTerrainShapes = tile.terrain.size();
+            gQ2023CoarseTerrainTiles.push_back(std::move(tile));
+        } else {
+            Q2023HighObjectBlock block;
+            block.blockX = pending.blockX;
+            block.blockY = pending.blockY;
+            for (GpuObject& gpu : state.stagedGpu) {
+                gpu.q1990NativeLod = true;
+                objectTriangles += static_cast<size_t>(gpu.vertexCount / 3);
+                block.objects.push_back(std::move(gpu));
+                gpu.vbo = 0u;
+                gpu.vao = 0u;
+            }
+            publishedObjectShapes = block.objects.size();
+            gQ2023HighObjectBlocks.push_back(std::move(block));
+        }
+        state.stagedGpu.clear();
+
+        if (pending.q2023AuthoredAsset &&
+            pending.q2023AssetIndex < gQ2023LodAssets.size()) {
+            gQ2023LodAssets[pending.q2023AssetIndex].loaded = true;
+            gQ2023LodAssets[pending.q2023AssetIndex].pending = false;
+        }
+
+        const bool publishedAuthored = pending.q2023AuthoredAsset;
+        const int publishedLevel = pending.q2023LevelCells;
+        const bool publishedHigh =
+            pending.q2023AuthoredAsset &&
+            pending.q2023Kind == Q2023LodAssetKind::HighObjects;
         gQ2013LodUploadsQ19.pop_front();
         gQ1990NativeLodDrawLogged = false;
-        Q2010AdvanceVisibleNativeLodWindow();
 
-        Q6H_LOGI("Q20.14 LOD BLOCK READY: block=(%d,%d) ring=%d terrainShapes=%zu terrainTriangles=%zu objectShapes=%zu objectTriangles=%zu workerUs=%llu gpuUs=%llu remainingUploads=%zu progressiveVisibleBlocks=%zu",
+        Q6H_LOGI("Q20.23 LOD BLOCK READY: block=(%d,%d) ring=%d authored=%d level=%d high=%d terrainShapes=%zu terrainTriangles=%zu objectShapes=%zu objectTriangles=%zu workerUs=%llu gpuUs=%llu remainingUploads=%zu level4VisibleBlocks=%zu coarseTiles=%zu highBlocks=%zu",
                  readyX, readyY, readyRing,
-                 gQ1990NativeLodBlocks.back().terrain.size(), terrainTriangles,
-                 gQ1990NativeLodBlocks.back().objects.size(), objectTriangles,
+                 publishedAuthored ? 1 : 0, publishedLevel,
+                 publishedHigh ? 1 : 0,
+                 publishedTerrainShapes, terrainTriangles,
+                 publishedObjectShapes, objectTriangles,
                  static_cast<unsigned long long>(workerUs),
                  static_cast<unsigned long long>(gpuUs),
                  gQ2013LodUploadsQ19.size(),
-                 Q2013ProgressiveLodCountQ19());
+                 Q2013ProgressiveLodCountQ19(),
+                 gQ2023CoarseTerrainTiles.size(),
+                 gQ2023HighObjectBlocks.size());
 
         if (bytesThisFrame >= q2015LodGpuBytes ||
             Q1960ElapsedUsQ19(frameStarted) >= q2015LodGpuBudgetUs) return;
@@ -5909,6 +6249,43 @@ bool Q1970ChooseMissingLodQ19(
     return foundMissing;
 }
 
+bool Q2023ChooseMissingAuthoredLodQ19(
+        int32_t playerCellX, int32_t playerCellY,
+        size_t& outAssetIndex) {
+    if (!Q2023DiscoverLodAssetsQ19()) return false;
+
+    bool found = false;
+    int bestGroup = 100;
+    int bestDistance = 1000000;
+    for (size_t i = 0u; i < gQ2023LodAssets.size(); ++i) {
+        Q2023LodAsset& asset = gQ2023LodAssets[i];
+        if (asset.loaded || asset.pending ||
+            !Q2023AssetDesiredQ19(asset, playerCellX, playerCellY)) {
+            continue;
+        }
+
+        int group = 4;
+        if (asset.kind == Q2023LodAssetKind::HighObjects) group = 1;
+        else if (asset.levelCells == 32) group = 0;
+        else if (asset.levelCells == 16) group = 2;
+        else if (asset.levelCells == 8) group = 3;
+
+        const int32_t centreX = asset.blockX + asset.levelCells / 2;
+        const int32_t centreY = asset.blockY + asset.levelCells / 2;
+        const int distance = std::max(
+            std::abs(centreX - playerCellX),
+            std::abs(centreY - playerCellY));
+        if (!found || group < bestGroup ||
+            (group == bestGroup && distance < bestDistance)) {
+            found = true;
+            bestGroup = group;
+            bestDistance = distance;
+            outAssetIndex = i;
+        }
+    }
+    return found;
+}
+
 void Q1970AdvanceNativeLodQ19(int32_t cellX, int32_t cellY,
                               float centerX, float centerY, float floorZ) {
     if (!gQ1900ContextReadyQ19 ||
@@ -5934,46 +6311,139 @@ void Q1970AdvanceNativeLodQ19(int32_t cellX, int32_t cellY,
             break;
         }
 
+        size_t bootstrapReady = 0u;
+        const bool bootstrapComplete =
+            Q2013NativeLodBootstrapReadyQ19(
+                cellX, cellY, &bootstrapReady);
+        const bool preferAuthored =
+            bootstrapComplete && ((slot & 1u) != 0u);
+
         int32_t blockX = 0;
         int32_t blockY = 0;
         int ring = 0;
-        if (!Q1970ChooseMissingLodQ19(blockX, blockY, ring)) break;
+        size_t authoredIndex = static_cast<size_t>(-1);
+        bool authored = false;
+
+        if (preferAuthored) {
+            authored = Q2023ChooseMissingAuthoredLodQ19(
+                cellX, cellY, authoredIndex);
+        }
+        if (!authored &&
+            !Q1970ChooseMissingLodQ19(blockX, blockY, ring)) {
+            authored = bootstrapComplete &&
+                Q2023ChooseMissingAuthoredLodQ19(
+                    cellX, cellY, authoredIndex);
+            if (!authored) break;
+        }
 
         auto task = std::make_shared<Q1970LodWorkerTaskQ19>();
         task->contextSerial = gQ1900ContextSerialQ19;
-        task->blockX = blockX;
-        task->blockY = blockY;
-        task->ring = ring;
         task->centerX = centerX;
         task->centerY = centerY;
         task->floorZ = floorZ;
+
+        if (authored) {
+            Q2023LodAsset& asset = gQ2023LodAssets[authoredIndex];
+            asset.pending = true;
+            task->q2023AuthoredAsset = true;
+            task->q2023AssetIndex = authoredIndex;
+            task->q2023Kind = asset.kind;
+            task->q2023LevelCells = asset.levelCells;
+            task->q2023Path = asset.path;
+            task->blockX = asset.blockX;
+            task->blockY = asset.blockY;
+            const int32_t centreX =
+                asset.blockX + asset.levelCells / 2;
+            const int32_t centreY =
+                asset.blockY + asset.levelCells / 2;
+            task->ring = std::max(
+                std::abs(centreX - cellX),
+                std::abs(centreY - cellY));
+        } else {
+            task->blockX = blockX;
+            task->blockY = blockY;
+            task->ring = ring;
+            task->q2023LevelCells = 4;
+        }
+
         gQ2013LodWorkersQ19[slot] = task;
 
-        Q6H_LOGI("Q20.14 LOD CPU START: slot=%zu/%zu block=(%d,%d) ring=%d activeWorkers=%zu uploadBacklog=%zu/%zu progressivePublish=1",
+        Q6H_LOGI("Q20.23 LOD CPU START: slot=%zu/%zu block=(%d,%d) ring=%d authored=%d level=%d high=%d activeWorkers=%zu uploadBacklog=%zu/%zu bootstrap=%zu/25",
                  slot + 1u, Q2013_LOD_WORKER_SLOTS,
-                 blockX, blockY, ring, Q2013ActiveLodWorkersQ19(),
+                 task->blockX, task->blockY, task->ring,
+                 task->q2023AuthoredAsset ? 1 : 0,
+                 task->q2023LevelCells,
+                 task->q2023AuthoredAsset &&
+                     task->q2023Kind == Q2023LodAssetKind::HighObjects ? 1 : 0,
+                 Q2013ActiveLodWorkersQ19(),
                  gQ2013LodUploadsQ19.size(),
-                 Q2014_LOD_UPLOAD_BACKLOG_LIMIT);
+                 Q2014_LOD_UPLOAD_BACKLOG_LIMIT,
+                 bootstrapReady);
         std::thread([task]() { Q1970RunLodWorkerQ19(task); }).detach();
     }
 }
 
 void Q1990RenderNativeLod(bool alphaPass) {
-    if (gExteriorWorldspaceQ1890 != 0x0000003Cu ||
-        gQ1990NativeLodBlocks.empty()) return;
+    if (gExteriorWorldspaceQ1890 != 0x0000003Cu) return;
+    if (gQ1990NativeLodBlocks.empty() &&
+        gQ2023CoarseTerrainTiles.empty() &&
+        gQ2023HighObjectBlocks.empty()) return;
+
+    const int32_t playerCellX =
+        gQ1920LatestGridValid
+            ? gQ1920LatestGridX
+            : gExteriorWindowGridXQ1890;
+    const int32_t playerCellY =
+        gQ1920LatestGridValid
+            ? gQ1920LatestGridY
+            : gExteriorWindowGridYQ1890;
+
     size_t drawnShapes = 0u;
     size_t drawnTriangles = 0u;
+    size_t drawnLevel8 = 0u;
+    size_t drawnLevel16 = 0u;
+    size_t drawnLevel32 = 0u;
+    size_t drawnHigh = 0u;
+
     glEnable(GL_POLYGON_OFFSET_FILL);
+
+    // Q20.23: draw the coarsest authored fallback first. A parent tile remains
+    // visible until all four desired children are resident, so streaming never
+    // punches holes into the horizon. Finer tiers use progressively smaller
+    // polygon offsets and naturally win the depth test at overlap seams.
+    const int levels[] = {32, 16, 8};
+    for (int level : levels) {
+        if (level == 32) glPolygonOffset(8.0f, 14.0f);
+        else if (level == 16) glPolygonOffset(6.0f, 11.0f);
+        else glPolygonOffset(4.0f, 8.0f);
+
+        for (Q2023CoarseTerrainTile& tile : gQ2023CoarseTerrainTiles) {
+            if (tile.levelCells != level ||
+                !Q2023TileDesiredQ19(
+                    tile.levelCells, tile.blockX, tile.blockY,
+                    playerCellX, playerCellY)) {
+                continue;
+            }
+            if (Q2023TileFullyRefinedQ19(
+                    tile.levelCells, tile.blockX, tile.blockY,
+                    playerCellX, playerCellY)) {
+                continue;
+            }
+            for (const GpuObject& object : tile.terrain) {
+                if (object.alphaBlend != alphaPass) continue;
+                DrawSceneObject(object);
+                ++drawnShapes;
+                drawnTriangles += static_cast<size_t>(object.vertexCount / 3);
+                if (level == 8) ++drawnLevel8;
+                else if (level == 16) ++drawnLevel16;
+                else ++drawnLevel32;
+            }
+        }
+    }
+
     glPolygonOffset(2.0f, 6.0f);
     for (Q1990NativeLodBlock& block : gQ1990NativeLodBlocks) {
         if (!Q1990LodBlockDesired(block.blockX, block.blockY)) continue;
-        // The current 4x4 macroblock is completely covered by the actual-centred
-        // 7x7 LAND runway, so its coarse terrain stays suppressed. Q18.1 clips
-        // all remaining native LOD fragments against the exact active 3x3 near
-        // rectangle in DrawSceneObject, preventing coarse object LOD from
-        // overlapping detailed REFR geometry while preserving the same macroblock
-        // outside the near cells. Q20.1 expands this handoff to the full 5x5
-        // detailed visual set, while only visually-ready object cells clip LOD.
         if (block.blockX != gQ1990NativeLodCentreBlockX ||
             block.blockY != gQ1990NativeLodCentreBlockY) {
             for (const GpuObject& object : block.terrain) {
@@ -5990,17 +6460,38 @@ void Q1990RenderNativeLod(bool alphaPass) {
             drawnTriangles += static_cast<size_t>(object.vertexCount / 3);
         }
     }
+
+    // The sparse .High VWD set is the long-distance landmark layer. Suppress a
+    // high block whenever its normal Level4 object block is resident inside the
+    // normal 20-cell horizon; outside that horizon the high mesh remains.
+    for (Q2023HighObjectBlock& high : gQ2023HighObjectBlocks) {
+        Q1990NativeLodBlock* normal =
+            Q1990FindLodBlock(high.blockX, high.blockY);
+        if (normal && !normal->objects.empty() &&
+            Q1990LodBlockDesired(high.blockX, high.blockY)) {
+            continue;
+        }
+        for (const GpuObject& object : high.objects) {
+            if (object.alphaBlend != alphaPass) continue;
+            DrawSceneObject(object);
+            ++drawnShapes;
+            ++drawnHigh;
+            drawnTriangles += static_cast<size_t>(object.vertexCount / 3);
+        }
+    }
+
     glDisable(GL_POLYGON_OFFSET_FILL);
     if (!alphaPass && !gQ1990NativeLodDrawLogged) {
         gQ1990NativeLodDrawLogged = true;
-        Q6H_LOGI("Q20.14 NATIVE LOD DRAW: shapes=%zu triangles=%zu radiusCells=20 requestedCentre=(%d,%d) progressiveVisibleBlocks=%zu currentTerrainBlockSuppressed=1 detailedClip=5x5+ring3-fallback polygonOffset=1 shadows=0",
+        Q6H_LOGI("Q20.23 NATIVE LOD DRAW: shapes=%zu triangles=%zu level32Shapes=%zu level16Shapes=%zu level8Shapes=%zu highShapes=%zu level4Loaded=%zu coarseTiles=%zu highBlocks=%zu playerCell=(%d,%d) hierarchy=32>16>8>4>detail refinement=no-holes treesDTL=deferred postApocalypse=deferred",
                  drawnShapes, drawnTriangles,
-                 gQ1990NativeLodCentreBlockX,
-                 gQ1990NativeLodCentreBlockY,
-                 Q2013ProgressiveLodCountQ19());
+                 drawnLevel32, drawnLevel16, drawnLevel8, drawnHigh,
+                 Q2013ProgressiveLodCountQ19(),
+                 gQ2023CoarseTerrainTiles.size(),
+                 gQ2023HighObjectBlocks.size(),
+                 playerCellX, playerCellY);
     }
 }
-
 
 void SetFo3WaterSkyMvpQ2090(const float* skyMvp16) {
     if (!skyMvp16) {
