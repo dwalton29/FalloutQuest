@@ -22,8 +22,8 @@ android {
         applicationId 'com.falloutquest.app'
         minSdk 29
         targetSdk 35
-        versionCode 95
-        versionName '0.21.17-q21.17-controller-finger-pose'
+        versionCode 96
+        versionName '0.21.18-q21.18-authored-finger-joint-axes'
 
         ndk {
             abiFilters 'arm64-v8a'

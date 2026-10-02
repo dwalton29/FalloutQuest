@@ -7804,10 +7804,11 @@ Q211Delta Q220MakePivotRotationMatrix(
     return out;
 }
 
-bool Q217ParseDigitBoneName(
+bool Q218ParseDigitBoneName(
         const std::string& authoredName,
         bool left,
         int& outChain,
+        int& outDepth,
         bool& outThumb) {
     const std::string lower = Q211Lower(authoredName);
     const std::string sideToken =
@@ -7815,11 +7816,26 @@ bool Q217ParseDigitBoneName(
     if (lower.find(sideToken) == std::string::npos) return false;
 
     outChain = -1;
+    outDepth = 0;
     outThumb = false;
 
     const size_t thumbAt = lower.find("thumb");
     if (thumbAt != std::string::npos) {
         outThumb = true;
+        size_t digitAt = thumbAt + 5u;
+        while (digitAt < lower.size() &&
+               (lower[digitAt] < '0' || lower[digitAt] > '9')) {
+            ++digitAt;
+        }
+        int depth = 0;
+        bool have = false;
+        while (digitAt < lower.size() &&
+               lower[digitAt] >= '0' && lower[digitAt] <= '9') {
+            depth = depth * 10 + static_cast<int>(lower[digitAt] - '0');
+            have = true;
+            ++digitAt;
+        }
+        outDepth = have ? depth : 0;
         return true;
     }
 
@@ -7832,8 +7848,24 @@ bool Q217ParseDigitBoneName(
     }
     if (digitAt >= lower.size()) return false;
 
-    outChain = static_cast<int>(lower[digitAt] - '0');
+    std::string digits;
+    while (digitAt < lower.size() &&
+           lower[digitAt] >= '0' && lower[digitAt] <= '9') {
+        digits.push_back(lower[digitAt]);
+        ++digitAt;
+    }
+    if (digits.empty()) return false;
+
+    outChain = static_cast<int>(digits[0] - '0');
     outThumb = outChain == 0;
+    if (digits.size() > 1u) {
+        int depth = 0;
+        for (size_t i = 1u; i < digits.size(); ++i)
+            depth = depth * 10 + static_cast<int>(digits[i] - '0');
+        outDepth = depth;
+    } else {
+        outDepth = 0;
+    }
     return true;
 }
 
@@ -7852,8 +7884,14 @@ bool Q217EnsureFingerRig(
         return false;
     }
 
+    Vec3 middlePoint{};
+    std::string middleName;
+    if (!Q221FindGlobalBonePoint(
+            left, "finger2", middlePoint, middleName)) {
+        return false;
+    }
     rig.fingerForward = Q211NormalizeSafe(
-        Q211Cross(basis.intoPalm, basis.littleToThumb));
+        Q211Sub(middlePoint, rig.handPoint));
     if (Q211Length(rig.fingerForward) < 0.03f) return false;
 
     std::unordered_map<int, std::vector<Q217FingerJoint>> byChain;
@@ -7862,9 +7900,10 @@ bool Q217EnsureFingerRig(
     for (const Q211PlayerRigPart& part : gQ211PlayerRigParts) {
         for (const Fo3NifSkinBone& bone : part.bones) {
             int chain = -1;
+            int depth = 0;
             bool thumb = false;
-            if (!Q217ParseDigitBoneName(
-                    bone.name, left, chain, thumb)) {
+            if (!Q218ParseDigitBoneName(
+                    bone.name, left, chain, depth, thumb)) {
                 continue;
             }
 
@@ -7875,6 +7914,7 @@ bool Q217EnsureFingerRig(
             joint.name = lower;
             joint.pivot = Q211BindBonePoint(bone);
             joint.chain = chain;
+            joint.depth = depth;
             joint.thumb = thumb;
             if (thumb) rig.thumb.push_back(joint);
             else byChain[chain].push_back(joint);
@@ -7889,15 +7929,10 @@ bool Q217EnsureFingerRig(
             chain.joints.begin(), chain.joints.end(),
             [&](const Q217FingerJoint& a,
                 const Q217FingerJoint& b) {
-                return Q211Dot(
-                           Q211Sub(a.pivot, rig.handPoint),
-                           rig.fingerForward) <
-                       Q211Dot(
-                           Q211Sub(b.pivot, rig.handPoint),
-                           rig.fingerForward);
+                if (a.depth != b.depth) return a.depth < b.depth;
+                return Q211Length(Q211Sub(a.pivot, rig.handPoint)) <
+                       Q211Length(Q211Sub(b.pivot, rig.handPoint));
             });
-        for (size_t i = 0u; i < chain.joints.size(); ++i)
-            chain.joints[i].depth = static_cast<int>(i);
         rig.chains.push_back(std::move(chain));
     }
 
@@ -7905,11 +7940,10 @@ bool Q217EnsureFingerRig(
         rig.thumb.begin(), rig.thumb.end(),
         [&](const Q217FingerJoint& a,
             const Q217FingerJoint& b) {
+            if (a.depth != b.depth) return a.depth < b.depth;
             return Q211Length(Q211Sub(a.pivot, rig.handPoint)) <
                    Q211Length(Q211Sub(b.pivot, rig.handPoint));
         });
-    for (size_t i = 0u; i < rig.thumb.size(); ++i)
-        rig.thumb[i].depth = static_cast<int>(i);
 
     // Choose the most thumbward authored non-thumb chain as the index finger.
     // No FingerN number is assumed to mean index.
@@ -7925,17 +7959,10 @@ bool Q217EnsureFingerRig(
         }
     }
 
-    // Determine curl sign from the authored hand frame: whichever rotation
-    // around little->thumb bends finger-forward toward the palm wins.
-    float plusR[9]{};
-    float minusR[9]{};
-    Q218AxisRotation(basis.littleToThumb, 0.20f, plusR);
-    Q218AxisRotation(basis.littleToThumb, -0.20f, minusR);
-    const float plusPalm = Q211Dot(
-        Q211Rotate(plusR, rig.fingerForward), basis.intoPalm);
-    const float minusPalm = Q211Dot(
-        Q211Rotate(minusR, rig.fingerForward), basis.intoPalm);
-    rig.curlSign = plusPalm >= minusPalm ? 1.0f : -1.0f;
+    // Q21.18 no longer needs a mirrored curl sign. Each joint axis is built
+    // from its own authored segment direction x palm-normal, so positive
+    // rotation bends that segment toward the palm on both hands.
+    rig.curlSign = 1.0f;
 
     rig.ready = rig.indexChain >= 0 && !rig.chains.empty();
 
@@ -7961,13 +7988,12 @@ bool Q217EnsureFingerRig(
     }
     rig.summary = summary;
 
-    Q6H_LOGI("Q21.17 FINGER MAP: side=%s ready=%d indexChain=%d chains=%zu thumbBones=%zu curlSign=%.0f bones=%s",
+    Q6H_LOGI("Q21.18 FINGER MAP: side=%s ready=%d indexChain=%d chains=%zu thumbBones=%zu order=authored-numeric-suffix bendAxis=segment-cross-palm bones=%s",
              left ? "L" : "R",
              rig.ready ? 1 : 0,
              rig.indexChain,
              rig.chains.size(),
              rig.thumb.size(),
-             rig.curlSign,
              rig.summary.empty() ? "<none>" : rig.summary.c_str());
     return rig.ready;
 }
@@ -8008,19 +8034,46 @@ std::unordered_map<std::string, Q211Delta> Q217BuildFingerPose(
         Q211Delta cumulative;
         for (size_t i = 0u; i < chain.joints.size(); ++i) {
             const Q217FingerJoint& joint = chain.joints[i];
+
+            Vec3 segmentDirection = rig.fingerForward;
+            if (i + 1u < chain.joints.size()) {
+                segmentDirection = Q211Sub(
+                    chain.joints[i + 1u].pivot,
+                    joint.pivot);
+            } else if (i > 0u) {
+                segmentDirection = Q211Sub(
+                    joint.pivot,
+                    chain.joints[i - 1u].pivot);
+            }
+            if (Q211Length(segmentDirection) < 0.005f)
+                segmentDirection = rig.fingerForward;
+            segmentDirection = Q211NormalizeSafe(
+                segmentDirection, rig.fingerForward);
+
+            // For unit segment v and palm direction p, axis=v x p gives
+            // axis x v = p (when orthogonal), so a positive angle always
+            // bends the authored segment into the palm.
+            Vec3 restAxis =
+                Q211Cross(segmentDirection, basis.intoPalm);
+            if (Q211Length(restAxis) < 0.005f)
+                restAxis = basis.littleToThumb;
+            restAxis = Q211NormalizeSafe(
+                restAxis, basis.littleToThumb);
+
             const Vec3 pivot = cumulative.active
                 ? Q211ApplyDelta(cumulative, joint.pivot)
                 : joint.pivot;
             const Vec3 axis = cumulative.active
-                ? Q211ApplyDeltaVector(
-                      cumulative, basis.littleToThumb)
-                : basis.littleToThumb;
+                ? Q211NormalizeSafe(
+                      Q211ApplyDeltaVector(cumulative, restAxis),
+                      restAxis)
+                : restAxis;
             const float degrees =
                 jointDegrees[std::min<size_t>(i, 2u)];
             const Q211Delta bend = Q218MakePivotRotation(
                 pivot,
                 axis,
-                rig.curlSign * curl * degrees * DEG);
+                curl * degrees * DEG);
             cumulative = Q218ComposeRigid(cumulative, bend);
             out[joint.name] = cumulative;
         }
@@ -8652,7 +8705,7 @@ void Q211UpdatePlayerRig() {
                  q220RightAuthoredBasis.intoPalm.y,
                  q220RightAuthoredBasis.intoPalm.z,
                  Q214_HAND_OUTWARD_OFFSET);
-        Q6H_LOGI("Q21.17 FINGER INPUT: L(trigger=%.2f triggerTouch=%d grip=%.2f thumbTouch=%d posedBones=%zu) R(trigger=%.2f triggerTouch=%d grip=%.2f thumbTouch=%d posedBones=%zu) mapping=index=trigger lower3=squeeze thumb=capacitive",
+        Q6H_LOGI("Q21.18 FINGER INPUT: L(trigger=%.2f triggerTouch=%d grip=%.2f thumbTouch=%d posedBones=%zu) R(trigger=%.2f triggerTouch=%d grip=%.2f thumbTouch=%d posedBones=%zu) mapping=index=trigger lower3=squeeze thumb=capacitive",
                  gQ217FingerTrigger[0],
                  gQ217TriggerTouched[0] ? 1 : 0,
                  gQ217FingerGrip[0],
