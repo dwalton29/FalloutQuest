@@ -7519,6 +7519,67 @@ bool Q211SolveArm(
     return true;
 }
 
+struct Q213ArmPose {
+    Q211Delta upper;
+    Q211Delta fore;
+    Vec3 elbow{};
+    Vec3 hand{};
+    bool solved = false;
+};
+
+Q213ArmPose Q213SolveMasterArm(
+        const Q211PlayerRigPart& part,
+        bool left,
+        Vec3 target) {
+    Q213ArmPose pose;
+    const int upper = left ? part.leftUpperArm : part.rightUpperArm;
+    const int fore = left ? part.leftForearm : part.rightForearm;
+    const int hand = left ? part.leftHand : part.rightHand;
+    if (upper < 0 || fore < 0 || hand < 0) return pose;
+
+    const Vec3 shoulder = Q211BindBonePoint(part.bones[upper]);
+    const Vec3 restElbow = Q211BindBonePoint(part.bones[fore]);
+    Vec3 restHand = Q211BindBonePoint(part.bones[hand]);
+    const bool palmAnchorValid =
+        left ? part.leftPalmAnchorValid : part.rightPalmAnchorValid;
+    if (palmAnchorValid) {
+        restHand = left ? part.leftPalmAnchor : part.rightPalmAnchor;
+    }
+
+    if (!Q211SolveArm(
+            left, shoulder, restElbow, restHand,
+            target, pose.elbow, pose.hand)) {
+        return pose;
+    }
+
+    pose.upper = Q211MakeDelta(
+        shoulder, Q211Sub(restElbow, shoulder),
+        shoulder, Q211Sub(pose.elbow, shoulder));
+    pose.fore = Q211MakeDelta(
+        restElbow, Q211Sub(restHand, restElbow),
+        pose.elbow, Q211Sub(pose.hand, pose.elbow));
+    pose.solved = true;
+    return pose;
+}
+
+void Q213AssignArmPoseToPart(
+        const Q211PlayerRigPart& part,
+        const Q213ArmPose& left,
+        const Q213ArmPose& right,
+        std::vector<Q211Delta>& deltas) {
+    for (size_t i = 0u; i < part.bones.size(); ++i) {
+        const int role = Q211BoneRole(part.bones[i].name);
+        if (left.solved) {
+            if (role == 1) deltas[i] = left.upper;
+            else if (role == 2 || role == 3) deltas[i] = left.fore;
+        }
+        if (right.solved) {
+            if (role == 4) deltas[i] = right.upper;
+            else if (role == 5 || role == 6) deltas[i] = right.fore;
+        }
+    }
+}
+
 void Q211BuildArmDeltas(
         const Q211PlayerRigPart& part,
         bool left,
@@ -7612,10 +7673,32 @@ void Q211UpdatePlayerRig() {
         avatarHeadAnchor,
         Q211Sub(trackedRightRoot, trackedHeadRoot));
 
-    bool anyLeftSolved = false;
-    bool anyRightSolved = false;
-    Vec3 lastLeftElbow{};
-    Vec3 lastRightElbow{};
+    // Q21.3: solve each arm once from a part that has the complete chain.
+    // Gamebryo skin partitions/shapes often reference only a subset of the
+    // shared skeleton. Requiring every individual shape to contain
+    // UpperArm+Forearm+Hand left forearm-heavy partitions frozen in bind pose.
+    const Q211PlayerRigPart* q213LeftMaster = nullptr;
+    const Q211PlayerRigPart* q213RightMaster = nullptr;
+    for (const Q211PlayerRigPart& candidate : gQ211PlayerRigParts) {
+        if (!q213LeftMaster && candidate.leftChainReady)
+            q213LeftMaster = &candidate;
+        if (!q213RightMaster && candidate.rightChainReady)
+            q213RightMaster = &candidate;
+    }
+
+    Q213ArmPose q213LeftPose;
+    Q213ArmPose q213RightPose;
+    if (gQ210LeftHandValid && q213LeftMaster) {
+        q213LeftPose =
+            Q213SolveMasterArm(*q213LeftMaster, true, leftTarget);
+    }
+    if (gQ210RightHandValid && q213RightMaster) {
+        q213RightPose =
+            Q213SolveMasterArm(*q213RightMaster, false, rightTarget);
+    }
+
+    size_t q213LeftAffectedParts = 0u;
+    size_t q213RightAffectedParts = 0u;
 
     constexpr size_t STRIDE = 18u;
     for (Q211PlayerRigPart& part : gQ211PlayerRigParts) {
@@ -7626,22 +7709,24 @@ void Q211UpdatePlayerRig() {
         }
 
         std::vector<Q211Delta> deltas(part.bones.size());
-        Vec3 leftElbow{}, rightElbow{};
-        bool leftSolved = false, rightSolved = false;
-        if (gQ210LeftHandValid && part.leftChainReady) {
-            Q211BuildArmDeltas(
-                part, true, leftTarget, deltas,
-                leftElbow, leftSolved);
+        Q213AssignArmPoseToPart(
+            part, q213LeftPose, q213RightPose, deltas);
+
+        bool q213PartHasLeftArm = false;
+        bool q213PartHasRightArm = false;
+        for (const Fo3NifSkinBone& bone : part.bones) {
+            const int role = Q211BoneRole(bone.name);
+            q213PartHasLeftArm =
+                q213PartHasLeftArm ||
+                role == 1 || role == 2 || role == 3;
+            q213PartHasRightArm =
+                q213PartHasRightArm ||
+                role == 4 || role == 5 || role == 6;
         }
-        if (gQ210RightHandValid && part.rightChainReady) {
-            Q211BuildArmDeltas(
-                part, false, rightTarget, deltas,
-                rightElbow, rightSolved);
-        }
-        anyLeftSolved = anyLeftSolved || leftSolved;
-        anyRightSolved = anyRightSolved || rightSolved;
-        if (leftSolved) lastLeftElbow = leftElbow;
-        if (rightSolved) lastRightElbow = rightElbow;
+        if (q213LeftPose.solved && q213PartHasLeftArm)
+            ++q213LeftAffectedParts;
+        if (q213RightPose.solved && q213PartHasRightArm)
+            ++q213RightAffectedParts;
 
         std::copy(
             part.bindExpanded.begin(), part.bindExpanded.end(),
@@ -7728,20 +7813,32 @@ void Q211UpdatePlayerRig() {
     glBindBuffer(GL_ARRAY_BUFFER, 0);
 
     if ((gQ211TrackingSerial % 180u) == 1u) {
-        Q6H_LOGI("Q21.2 ARM IK: serial=%llu rigParts=%zu headAnchorReady=%d headAnchor=(%.3f %.3f %.3f) trackedHeadRoot=(%.3f %.3f %.3f) leftValid=%d leftSolved=%d targetL=(%.3f %.3f %.3f) elbowL=(%.3f %.3f %.3f) rightValid=%d rightSolved=%d targetR=(%.3f %.3f %.3f) elbowR=(%.3f %.3f %.3f) mode=weighted-LBS-two-bone-IK targetSpace=HMD-relative-to-authored-head wristOrientation=forearm",
+        Q6H_LOGI("Q21.3 ARM IK: serial=%llu rigParts=%zu masters=(L%d,R%d) affectedParts=(L%zu,R%zu) headAnchorReady=%d leftValid=%d leftSolved=%d targetL=(%.3f %.3f %.3f) elbowL=(%.3f %.3f %.3f) handL=(%.3f %.3f %.3f) rightValid=%d rightSolved=%d targetR=(%.3f %.3f %.3f) elbowR=(%.3f %.3f %.3f) handR=(%.3f %.3f %.3f) mode=global-skeleton-pose-across-skin-partitions",
                  static_cast<unsigned long long>(gQ211TrackingSerial),
                  gQ211PlayerRigParts.size(),
+                 q213LeftMaster ? 1 : 0,
+                 q213RightMaster ? 1 : 0,
+                 q213LeftAffectedParts,
+                 q213RightAffectedParts,
                  avatarHeadReady ? 1 : 0,
-                 avatarHeadAnchor.x, avatarHeadAnchor.y, avatarHeadAnchor.z,
-                 trackedHeadRoot.x, trackedHeadRoot.y, trackedHeadRoot.z,
                  gQ210LeftHandValid ? 1 : 0,
-                 anyLeftSolved ? 1 : 0,
+                 q213LeftPose.solved ? 1 : 0,
                  leftTarget.x, leftTarget.y, leftTarget.z,
-                 lastLeftElbow.x, lastLeftElbow.y, lastLeftElbow.z,
+                 q213LeftPose.elbow.x,
+                 q213LeftPose.elbow.y,
+                 q213LeftPose.elbow.z,
+                 q213LeftPose.hand.x,
+                 q213LeftPose.hand.y,
+                 q213LeftPose.hand.z,
                  gQ210RightHandValid ? 1 : 0,
-                 anyRightSolved ? 1 : 0,
+                 q213RightPose.solved ? 1 : 0,
                  rightTarget.x, rightTarget.y, rightTarget.z,
-                 lastRightElbow.x, lastRightElbow.y, lastRightElbow.z);
+                 q213RightPose.elbow.x,
+                 q213RightPose.elbow.y,
+                 q213RightPose.elbow.z,
+                 q213RightPose.hand.x,
+                 q213RightPose.hand.y,
+                 q213RightPose.hand.z);
     }
 }
 
@@ -7797,7 +7894,7 @@ bool Q210EnsurePlayerBody() {
         if (!q212BodyAssetSummary.empty()) q212BodyAssetSummary += ",";
         q212BodyAssetSummary += bodyPath;
     }
-    Q6H_LOGI("Q21.2 PLAYER BODY ASSETS: found=%zu expected=4 paths=%s",
+    Q6H_LOGI("Q21.3 PLAYER BODY ASSETS: found=%zu expected=4 paths=%s",
              bodyPaths.size(),
              q212BodyAssetSummary.empty()
                  ? "<none>"
@@ -7952,7 +8049,7 @@ bool Q210EnsurePlayerBody() {
                               Q211NormalizeSafe(q211dRGeomDir))
                         : 0.0f;
 
-                Q6H_LOGI("Q21.2 RIG PART: model=%s shape=%u gpuIndex=%zu expandedVertices=%zu leftChain=%d palmL=%d anchorL=(%.3f %.3f %.3f) boneHandL=(%.3f %.3f %.3f) distalDotL=%.3f rightChain=%d palmR=%d anchorR=(%.3f %.3f %.3f) boneHandR=(%.3f %.3f %.3f) distalDotR=%.3f handWeight=(%.1f,%.1f) foreWeight=(%.1f,%.1f)",
+                Q6H_LOGI("Q21.3 RIG PART: model=%s shape=%u gpuIndex=%zu expandedVertices=%zu leftChain=%d palmL=%d anchorL=(%.3f %.3f %.3f) boneHandL=(%.3f %.3f %.3f) distalDotL=%.3f rightChain=%d palmR=%d anchorR=(%.3f %.3f %.3f) boneHandR=(%.3f %.3f %.3f) distalDotR=%.3f handWeight=(%.1f,%.1f) foreWeight=(%.1f,%.1f)",
                          path.c_str(), part.q2016ShapeIndex,
                          q211GpuIndex, rig.bindExpanded.size() / 18u,
                          rig.leftChainReady ? 1 : 0,
@@ -7982,7 +8079,7 @@ bool Q210EnsurePlayerBody() {
     }
 
     gQ210PlayerBodyReady = !gQ210PlayerBody.empty();
-    Q6H_LOGI("Q21.2 PLAYER BODY READY: ready=%d archiveMaleEntries=%zu bodyPartsFound=%zu cpuShapes=%zu gpuShapes=%zu rigParts=%zu triangles=%zu skinInstances=%zu referencedBonesAcrossParts=%zu skeletonNodes=%u skeletonNamedNodes=%zu mode=real-FO3-weighted-skinning armIK=two-bone",
+    Q6H_LOGI("Q21.3 PLAYER BODY READY: ready=%d archiveMaleEntries=%zu bodyPartsFound=%zu cpuShapes=%zu gpuShapes=%zu rigParts=%zu triangles=%zu skinInstances=%zu referencedBonesAcrossParts=%zu skeletonNodes=%u skeletonNamedNodes=%zu mode=real-FO3-weighted-skinning armIK=two-bone",
              gQ210PlayerBodyReady ? 1 : 0,
              maleEntries.size(), bodyPaths.size(),
              cpuShapes, gpuShapes, gQ211PlayerRigParts.size(), triangles,
