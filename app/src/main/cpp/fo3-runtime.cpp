@@ -559,6 +559,16 @@ constexpr float Q219_ARM_MAX_SCALE = 1.22f;
 constexpr float Q219_TARGET_EXTENSION_RATIO = 0.93f;
 constexpr float Q219_SCALE_GROW_PER_FRAME = 0.0025f;
 float gQ219ArmLengthScale = Q219_ARM_BASE_SCALE;
+
+// Q21.13 VR torso inference: preserve independent head look inside a neck
+// dead-zone, then let the torso follow the excess yaw. Snap/locomotion yaw is
+// applied immediately so artificial turning stays coherent.
+constexpr float Q213_NECK_YAW_LIMIT = 0.6108652382f; // 35 degrees
+constexpr float Q213_TORSO_FOLLOW_MAX_STEP = 0.0261799388f; // 1.5 deg/frame
+bool gQ213TorsoYawReady = false;
+float gQ213TorsoYaw = 0.0f;
+float gQ213LastLocomotionYaw = 0.0f;
+
 uint64_t gQ211TrackingSerial = 0u;
 uint64_t gQ211LastSkinnedSerial = ~0ull;
 
@@ -7469,23 +7479,20 @@ bool Q221FindGlobalBonePoint(
 bool Q220FindAuthoredHandBasis(bool left, Q220HandBasis& out) {
     out = {};
 
-    Vec3 handPoint{}, thumbPoint{}, middlePoint{}, littlePoint{};
-    std::string handName, thumbName, middleName, littleName;
+    Vec3 handPoint{}, middlePoint{}, littlePoint{};
+    std::string handName, middleName, littleName;
     const bool handReady =
         Q221FindGlobalBonePoint(left, "hand", handPoint, handName);
-    const bool thumbReady =
-        Q221FindGlobalBonePoint(left, "finger0", thumbPoint, thumbName);
     const bool middleReady =
         Q221FindGlobalBonePoint(left, "finger2", middlePoint, middleName);
     const bool littleReady =
         Q221FindGlobalBonePoint(left, "finger4", littlePoint, littleName);
 
-    if (!handReady || !thumbReady || !middleReady || !littleReady) {
+    if (!handReady || !middleReady || !littleReady) {
         if ((gQ211TrackingSerial % 180u) == 1u) {
-            Q6H_LOGI("Q21.12 HAND BONE LOOKUP: side=%s hand=%d(%s) thumb0=%d(%s) middle2=%d(%s) little4=%d(%s)",
+            Q6H_LOGI("Q21.13 HAND BONE LOOKUP: side=%s hand=%d(%s) middle2=%d(%s) little4=%d(%s)",
                      left ? "L" : "R",
                      handReady ? 1 : 0, handName.c_str(),
-                     thumbReady ? 1 : 0, thumbName.c_str(),
                      middleReady ? 1 : 0, middleName.c_str(),
                      littleReady ? 1 : 0, littleName.c_str());
         }
@@ -7494,8 +7501,14 @@ bool Q220FindAuthoredHandBasis(bool left, Q220HandBasis& out) {
 
     Vec3 fingerForward =
         Q211Sub(middlePoint, handPoint);
+
+    // Fallout does not expose Finger0 in these loaded hand partitions.
+    // Finger4 is the little-finger chain and Finger2 is the middle chain, so
+    // little -> middle is an authored approximation of OpenXR's required
+    // little -> thumb (-Z) across-palm direction without inventing an offset.
     Vec3 littleToThumb =
-        Q211Sub(thumbPoint, littlePoint);
+        Q211Sub(middlePoint, littlePoint);
+
     if (Q211Length(fingerForward) < 0.02f ||
         Q211Length(littleToThumb) < 0.02f) {
         return false;
@@ -7504,10 +7517,10 @@ bool Q220FindAuthoredHandBasis(bool left, Q220HandBasis& out) {
     fingerForward = Q211NormalizeSafe(fingerForward);
     littleToThumb = Q211NormalizeSafe(littleToThumb);
 
-    // All points come from Fallout's authored bind skeleton, even though the
-    // skin partitions that reference them may be different.
+    // In Fallout's authored T-pose the palm normal is perpendicular to the
+    // finger direction and the across-palm direction.
     Vec3 intoPalm =
-        Q211NormalizeSafe(Q211Cross(fingerForward, littleToThumb));
+        Q211NormalizeSafe(Q211Cross(littleToThumb, fingerForward));
 
     littleToThumb = Q211Sub(
         littleToThumb,
@@ -7522,12 +7535,10 @@ bool Q220FindAuthoredHandBasis(bool left, Q220HandBasis& out) {
     out.ready = true;
 
     if ((gQ211TrackingSerial % 180u) == 1u) {
-        Q6H_LOGI("Q21.12 HAND BONE LOOKUP: side=%s hand=%s thumb0=%s middle2=%s little4=%s handP=(%.3f %.3f %.3f) thumbP=(%.3f %.3f %.3f) middleP=(%.3f %.3f %.3f) littleP=(%.3f %.3f %.3f)",
+        Q6H_LOGI("Q21.13 HAND BONE LOOKUP: side=%s hand=%s middle2=%s little4=%s handP=(%.3f %.3f %.3f) middleP=(%.3f %.3f %.3f) littleP=(%.3f %.3f %.3f)",
                  left ? "L" : "R",
-                 handName.c_str(), thumbName.c_str(),
-                 middleName.c_str(), littleName.c_str(),
+                 handName.c_str(), middleName.c_str(), littleName.c_str(),
                  handPoint.x, handPoint.y, handPoint.z,
-                 thumbPoint.x, thumbPoint.y, thumbPoint.z,
                  middlePoint.x, middlePoint.y, middlePoint.z,
                  littlePoint.x, littlePoint.y, littlePoint.z);
     }
@@ -8249,7 +8260,7 @@ void Q211UpdatePlayerRig() {
     glBindBuffer(GL_ARRAY_BUFFER, 0);
 
     if ((gQ211TrackingSerial % 180u) == 1u) {
-        Q6H_LOGI("Q21.12 HAND BASIS: authored=(L%d,R%d) Lacross=(%.3f %.3f %.3f) Linward=(%.3f %.3f %.3f) Racross=(%.3f %.3f %.3f) Rinward=(%.3f %.3f %.3f) openxrAxes=(-Z little-to-thumb,+/-X palm-normal) source=global-authored-(Hand,Finger0,Finger2,Finger4)",
+        Q6H_LOGI("Q21.13 HAND BASIS: authored=(L%d,R%d) Lacross=(%.3f %.3f %.3f) Linward=(%.3f %.3f %.3f) Racross=(%.3f %.3f %.3f) Rinward=(%.3f %.3f %.3f) openxrAxes=(-Z little-to-thumb,+/-X palm-normal) source=global-authored-(Hand,Finger2,Finger4)",
                  q220LeftBasisReady ? 1 : 0,
                  q220RightBasisReady ? 1 : 0,
                  q220LeftAuthoredBasis.littleToThumb.x,
@@ -8269,7 +8280,7 @@ void Q211UpdatePlayerRig() {
                  Q219_ARM_BASE_SCALE, Q219_ARM_MAX_SCALE,
                  Q219_TARGET_EXTENSION_RATIO,
                  q219LRest, q219LDist, q219RRest, q219RDist);
-        Q6H_LOGI("Q21.8 ARM RETARGET: scale=%.3f L(rest=%.3f scaled=%.3f targetDist=%.3f ratio=%.3f twistDeg=%.1f) R(rest=%.3f scaled=%.3f targetDist=%.3f ratio=%.3f twistDeg=%.1f) wristMode=authored-finger0-2-4-to-openxr-grip",
+        Q6H_LOGI("Q21.8 ARM RETARGET: scale=%.3f L(rest=%.3f scaled=%.3f targetDist=%.3f ratio=%.3f twistDeg=%.1f) R(rest=%.3f scaled=%.3f targetDist=%.3f ratio=%.3f twistDeg=%.1f) wristMode=authored-hand-finger2-4-to-openxr-grip",
                  gQ219ArmLengthScale,
                  q213LeftPose.restReach,
                  q213LeftPose.restReach * gQ219ArmLengthScale,
@@ -8329,6 +8340,7 @@ void Q210DeletePlayerBody() {
     gQ211PlayerRigParts.clear();
     gQ211LastSkinnedSerial = ~0ull;
     gQ219ArmLengthScale = Q219_ARM_BASE_SCALE;
+    gQ213TorsoYawReady = false;
     gQ210PlayerBodyReady = false;
 }
 
@@ -10561,10 +10573,42 @@ void SetFo3PlayerBodyTrackingQ210(
     gQ218RightHandQuat[3] = rightQw;
     ++gQ211TrackingSerial;
 
-    // Q21.9: physical head look must not rotate the shoulders. The body root
-    // follows locomotion/snap-turn heading; headYaw remains tracking data only.
-    const float c = std::cos(bodyYaw);
-    const float s = std::sin(bodyYaw);
+    // Q21.13: infer torso yaw with a neck dead-zone. Looking around within
+    // +/-35 degrees leaves the shoulders alone. Beyond that, the torso follows
+    // only the excess angle. Artificial snap/locomotion yaw is applied
+    // immediately so the body does not lag behind snap turns.
+    if (!gQ213TorsoYawReady) {
+        gQ213TorsoYaw = bodyYaw;
+        gQ213LastLocomotionYaw = bodyYaw;
+        gQ213TorsoYawReady = true;
+    } else {
+        const float locomotionDelta =
+            Q218WrapAngle(bodyYaw - gQ213LastLocomotionYaw);
+        gQ213TorsoYaw =
+            Q218WrapAngle(gQ213TorsoYaw + locomotionDelta);
+        gQ213LastLocomotionYaw = bodyYaw;
+    }
+
+    const float headRelative =
+        Q218WrapAngle(headYaw - gQ213TorsoYaw);
+    if (std::fabs(headRelative) > Q213_NECK_YAW_LIMIT) {
+        const float desiredTorso =
+            Q218WrapAngle(
+                headYaw -
+                std::copysign(Q213_NECK_YAW_LIMIT, headRelative));
+        const float followDelta =
+            Q218WrapAngle(desiredTorso - gQ213TorsoYaw);
+        gQ213TorsoYaw = Q218WrapAngle(
+            gQ213TorsoYaw +
+            std::clamp(
+                followDelta,
+                -Q213_TORSO_FOLLOW_MAX_STEP,
+                Q213_TORSO_FOLLOW_MAX_STEP));
+    }
+
+    const float resolvedBodyYaw = gQ213TorsoYaw;
+    const float c = std::cos(resolvedBodyYaw);
+    const float s = std::sin(resolvedBodyYaw);
     const float rootX = headX + s * 0.08f;
     const float rootZ = headZ + c * 0.08f;
 
@@ -10593,11 +10637,12 @@ void SetFo3PlayerBodyTrackingQ210(
     gQ210PlayerRoot[15] = 1.0f;
 
     if ((gQ211TrackingSerial % 180u) == 1u) {
-        Q6H_LOGI("Q21.9 BODY HEAD ALIGN: ready=%d headYaw=%.1fdeg bodyYaw=%.1fdeg yawDelta=%.1fdeg headWorldY=%.3f localHeadY=%.3f authoredHeadY=%.3f legacyRootY=%.3f alignedRootY=%.3f correction=%.3f",
+        Q6H_LOGI("Q21.13 BODY HEAD ALIGN: ready=%d headYaw=%.1fdeg locomotionYaw=%.1fdeg torsoYaw=%.1fdeg neckYaw=%.1fdeg neckLimit=35deg headWorldY=%.3f localHeadY=%.3f authoredHeadY=%.3f legacyRootY=%.3f alignedRootY=%.3f correction=%.3f",
                  q217HeadAnchorReady ? 1 : 0,
                  headYaw * 57.2957795f,
                  bodyYaw * 57.2957795f,
-                 Q218WrapAngle(headYaw - bodyYaw) * 57.2957795f,
+                 resolvedBodyYaw * 57.2957795f,
+                 Q218WrapAngle(headYaw - resolvedBodyYaw) * 57.2957795f,
                  headY, localHeadY,
                  q217HeadAnchorReady ? q217AvatarHeadAnchor.y : localHeadY,
                  q217LegacyRootY, q217RootY,
