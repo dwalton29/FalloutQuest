@@ -7820,7 +7820,7 @@ void Q211UpdatePlayerRig() {
     glBindBuffer(GL_ARRAY_BUFFER, 0);
 
     if ((gQ211TrackingSerial % 180u) == 1u) {
-        Q6H_LOGI("Q21.4 ARM IK: serial=%llu rigParts=%zu masters=(L%d,R%d) affectedParts=(L%zu,R%zu) headAnchorReady=%d leftValid=%d leftSolved=%d targetL=(%.3f %.3f %.3f) elbowL=(%.3f %.3f %.3f) handL=(%.3f %.3f %.3f) rightValid=%d rightSolved=%d targetR=(%.3f %.3f %.3f) elbowR=(%.3f %.3f %.3f) handR=(%.3f %.3f %.3f) mode=global-skeleton-pose-across-skin-partitions",
+        Q6H_LOGI("Q21.5 ARM IK: serial=%llu rigParts=%zu masters=(L%d,R%d) affectedParts=(L%zu,R%zu) headAnchorReady=%d leftValid=%d leftSolved=%d targetL=(%.3f %.3f %.3f) elbowL=(%.3f %.3f %.3f) handL=(%.3f %.3f %.3f) rightValid=%d rightSolved=%d targetR=(%.3f %.3f %.3f) elbowR=(%.3f %.3f %.3f) handR=(%.3f %.3f %.3f) mode=global-skeleton-pose-across-skin-partitions",
                  static_cast<unsigned long long>(gQ211TrackingSerial),
                  gQ211PlayerRigParts.size(),
                  q213LeftMaster ? 1 : 0,
@@ -7872,10 +7872,12 @@ bool Q210EnsurePlayerBody() {
     ListFalloutMeshFilesByPrefix("Characters\\_Male\\", maleEntries);
 
     const char* wantedSuffixes[] = {
+        // Fallout 3's vanilla third-person human body is split: UpperBody
+        // contains the torso/limbs through the wrists, while each hand is a
+        // separate skinned NIF. Q21.2 incorrectly guessed hands.nif.
         "characters\\_male\\upperbody.nif",
-        "characters\\_male\\lowerbody.nif",
-        "characters\\_male\\hands.nif",
-        "characters\\_male\\foot.nif",
+        "characters\\_male\\lefthand.nif",
+        "characters\\_male\\righthand.nif",
     };
     std::vector<std::string> bodyPaths;
     for (const char* suffix : wantedSuffixes) {
@@ -7901,7 +7903,7 @@ bool Q210EnsurePlayerBody() {
         if (!q212BodyAssetSummary.empty()) q212BodyAssetSummary += ",";
         q212BodyAssetSummary += bodyPath;
     }
-    Q6H_LOGI("Q21.4 PLAYER BODY ASSETS: found=%zu expected=4 paths=%s",
+    Q6H_LOGI("Q21.5 PLAYER BODY ASSETS: found=%zu expected=3 paths=%s",
              bodyPaths.size(),
              q212BodyAssetSummary.empty()
                  ? "<none>"
@@ -8011,7 +8013,7 @@ bool Q210EnsurePlayerBody() {
                         q214ArmBones += ":";
                         q214ArmBones += std::to_string(role);
                     }
-                    Q6H_LOGI("Q21.4 ARM BONE MAP: model=%s shape=%u bones=%s",
+                    Q6H_LOGI("Q21.5 ARM BONE MAP: model=%s shape=%u bones=%s",
                              path.c_str(), part.q2016ShapeIndex,
                              q214ArmBones.empty()
                                  ? "<none>"
@@ -8073,7 +8075,7 @@ bool Q210EnsurePlayerBody() {
                               Q211NormalizeSafe(q211dRGeomDir))
                         : 0.0f;
 
-                Q6H_LOGI("Q21.4 RIG PART: model=%s shape=%u gpuIndex=%zu expandedVertices=%zu leftChain=%d palmL=%d anchorL=(%.3f %.3f %.3f) boneHandL=(%.3f %.3f %.3f) distalDotL=%.3f rightChain=%d palmR=%d anchorR=(%.3f %.3f %.3f) boneHandR=(%.3f %.3f %.3f) distalDotR=%.3f handWeight=(%.1f,%.1f) foreWeight=(%.1f,%.1f)",
+                Q6H_LOGI("Q21.5 RIG PART: model=%s shape=%u gpuIndex=%zu expandedVertices=%zu leftChain=%d palmL=%d anchorL=(%.3f %.3f %.3f) boneHandL=(%.3f %.3f %.3f) distalDotL=%.3f rightChain=%d palmR=%d anchorR=(%.3f %.3f %.3f) boneHandR=(%.3f %.3f %.3f) distalDotR=%.3f handWeight=(%.1f,%.1f) foreWeight=(%.1f,%.1f)",
                          path.c_str(), part.q2016ShapeIndex,
                          q211GpuIndex, rig.bindExpanded.size() / 18u,
                          rig.leftChainReady ? 1 : 0,
@@ -8103,7 +8105,7 @@ bool Q210EnsurePlayerBody() {
     }
 
     gQ210PlayerBodyReady = !gQ210PlayerBody.empty();
-    Q6H_LOGI("Q21.4 PLAYER BODY READY: ready=%d archiveMaleEntries=%zu bodyPartsFound=%zu cpuShapes=%zu gpuShapes=%zu rigParts=%zu triangles=%zu skinInstances=%zu referencedBonesAcrossParts=%zu skeletonNodes=%u skeletonNamedNodes=%zu mode=real-FO3-weighted-skinning armIK=two-bone",
+    Q6H_LOGI("Q21.5 PLAYER BODY READY: ready=%d archiveMaleEntries=%zu bodyPartsFound=%zu cpuShapes=%zu gpuShapes=%zu rigParts=%zu triangles=%zu skinInstances=%zu referencedBonesAcrossParts=%zu skeletonNodes=%u skeletonNamedNodes=%zu mode=real-FO3-weighted-skinning armIK=two-bone",
              gQ210PlayerBodyReady ? 1 : 0,
              maleEntries.size(), bodyPaths.size(),
              cpuShapes, gpuShapes, gQ211PlayerRigParts.size(), triangles,
