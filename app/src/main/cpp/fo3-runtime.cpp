@@ -9913,7 +9913,7 @@ bool Q230EnsureNpcActors() {
     if (gQ230NpcReady) return true;
     if (gQ230NpcAttempted) return false;
     if (!gExteriorStreamingActiveQ1890 ||
-        gExteriorWorldspaceQ1890 != 0x0000003Cu) return false;
+        gExteriorWorldspaceQ1890 != 0x00000A74u) return false;
     gQ230NpcAttempted = true;
 
     std::vector<Fo3NpcActorQ230> actors;
@@ -10057,7 +10057,7 @@ bool Q230EnsureNpcActors() {
 
 void Q230RenderNpcActors(bool alphaPass) {
     if (!gExteriorStreamingActiveQ1890 ||
-        gExteriorWorldspaceQ1890 != 0x0000003Cu) return;
+        gExteriorWorldspaceQ1890 != 0x00000A74u) return;
     if (!Q230EnsureNpcActors()) return;
 
     for (const GpuObject& object : gQ230NpcActors) {
