@@ -600,6 +600,14 @@ void Q1900ConsumeWorkerSlotQ19(size_t slot) {
     if (found == gQ1900CellsQ19.end()) return;
     Q1900CellStateQ19& state = found->second;
 
+    if (task->needVisual && !state.wanted && !state.visualReady) {
+        Q6H_LOGI("Q20.15 WORKER DROP: cell=(%d,%d) reason=no-longer-wanted cpuShapes=%zu textures=%zu",
+                 task->gridX, task->gridY,
+                 task->cpu.size(), task->textures.size());
+        gQ1900CellsQ19.erase(found);
+        return;
+    }
+
     if (!task->success) {
         state.stage = Q1900CellStageQ19::Failed;
         Q6H_LOGE("Q19 WORKER FAILED: cell=(%d,%d) metadataUs=%llu",
@@ -1184,26 +1192,38 @@ void Q1900AdvanceGpuQ19(int32_t actualGridX, int32_t actualGridY) {
         return a->requestedAt < b->requestedAt;
     });
 
-    constexpr uint64_t Q2013_GLOBAL_GPU_BUDGET_US = 4200u;
-    constexpr size_t Q2013_GLOBAL_GPU_BYTES = 3u * 1024u * 1024u;
-    constexpr size_t Q2013_GPU_CELLS_PER_FRAME = 6u;
+    const bool q2015Loading = IsFo3LoadingVisibleQ1700();
+    const uint64_t q2015GlobalGpuBudgetUs =
+        q2015Loading ? 4200u : 1200u;
+    const size_t q2015GlobalGpuBytes =
+        q2015Loading ? 3u * 1024u * 1024u : 1024u * 1024u;
+    const size_t q2015GpuCellsPerFrame =
+        q2015Loading ? 6u : 3u;
     const auto frameStarted = std::chrono::steady_clock::now();
     size_t globalBytes = 0u;
     size_t serviced = 0u;
     for (Q1900CellStateQ19* state : uploading) {
         if (!state || state->stage != Q1900CellStageQ19::Uploading) continue;
-        if (serviced >= Q2013_GPU_CELLS_PER_FRAME ||
-            globalBytes >= Q2013_GLOBAL_GPU_BYTES ||
-            Q1960ElapsedUsQ19(frameStarted) >= Q2013_GLOBAL_GPU_BUDGET_US) break;
+        if (serviced >= q2015GpuCellsPerFrame ||
+            globalBytes >= q2015GlobalGpuBytes ||
+            Q1960ElapsedUsQ19(frameStarted) >= q2015GlobalGpuBudgetUs) break;
         Q2013AdvanceCellGpuSliceQ19(*state, actualGridX, actualGridY, globalBytes);
         ++serviced;
     }
     if (uploading.size() > 1u) {
-        Q6H_LOGI("Q20.13 GPU QUEUE: uploading=%zu serviced=%zu frameBytes=%zu elapsedUs=%llu globalBytes=%zu globalBudgetUs=%llu",
-                 uploading.size(), serviced, globalBytes,
-                 static_cast<unsigned long long>(Q1960ElapsedUsQ19(frameStarted)),
-                 Q2013_GLOBAL_GPU_BYTES,
-                 static_cast<unsigned long long>(Q2013_GLOBAL_GPU_BUDGET_US));
+        static size_t q2015LastUploadCount = SIZE_MAX;
+        static uint64_t q2015UploadHeartbeat = 0u;
+        ++q2015UploadHeartbeat;
+        if (uploading.size() != q2015LastUploadCount ||
+            (q2015UploadHeartbeat % 120u) == 0u) {
+            q2015LastUploadCount = uploading.size();
+            Q6H_LOGI("Q20.15 GPU QUEUE: uploading=%zu serviced=%zu frameBytes=%zu elapsedUs=%llu globalBytes=%zu globalBudgetUs=%llu loading=%d log=state-change-or-heartbeat",
+                     uploading.size(), serviced, globalBytes,
+                     static_cast<unsigned long long>(Q1960ElapsedUsQ19(frameStarted)),
+                     q2015GlobalGpuBytes,
+                     static_cast<unsigned long long>(q2015GlobalGpuBudgetUs),
+                     q2015Loading ? 1 : 0);
+        }
     }
 }
 
@@ -1379,6 +1399,25 @@ void Q1900MaintainTerrainQ19(int32_t actualGridX, int32_t actualGridY) {
     }
 }
 
+void Q2015DiscardCellUploadQ19(Q1900CellStateQ19& state) {
+    if (state.q1960TextureUpload.id != 0u) {
+        glDeleteTextures(1, &state.q1960TextureUpload.id);
+    }
+    state.q1960TextureUpload = {};
+
+    if (state.q1960ShapeUpload.active) {
+        Q1910QueueGpuDeleteQ19(state.q1960ShapeUpload.gpu);
+    }
+    state.q1960ShapeUpload = {};
+
+    for (GpuObject& object : state.stagedGpu) {
+        Q1910QueueGpuDeleteQ19(object);
+    }
+    state.stagedGpu.clear();
+    state.cpu.clear();
+    state.textures.clear();
+}
+
 void Q1900RetireFarCellsQ19(int32_t actualGridX, int32_t actualGridY) {
     if (actualGridX == gQ1900LastActualXQ19 &&
         actualGridY == gQ1900LastActualYQ19) return;
@@ -1429,13 +1468,17 @@ void Q1900RetireFarCellsQ19(int32_t actualGridX, int32_t actualGridY) {
     for (auto it = gQ1900CellsQ19.begin(); it != gQ1900CellsQ19.end();) {
         const int dx = std::abs(it->second.gridX - actualGridX);
         const int dy = std::abs(it->second.gridY - actualGridY);
-        const bool uploading =
-            it->second.stage == Q1900CellStageQ19::Uploading;
-        if (!Q1900CellWorkerOwnsQ19(it->first) && !uploading &&
-            std::max(dx, dy) > Q1900_CACHE_RADIUS_Q19 + 1) {
-            for (GpuObject& object : it->second.stagedGpu) {
-                Q1910QueueGpuDeleteQ19(object);
-                ++retiredStaged;
+        const bool outsideWarm =
+            std::max(dx, dy) > Q2013_WARM_RADIUS_Q19;
+        if (!Q1900CellWorkerOwnsQ19(it->first) && outsideWarm) {
+            if (it->second.stage == Q1900CellStageQ19::Uploading) {
+                retiredStaged += it->second.stagedGpu.size();
+                Q2015DiscardCellUploadQ19(it->second);
+            } else {
+                for (GpuObject& object : it->second.stagedGpu) {
+                    Q1910QueueGpuDeleteQ19(object);
+                    ++retiredStaged;
+                }
             }
             it = gQ1900CellsQ19.erase(it);
         } else {
@@ -1452,7 +1495,7 @@ void Q1900RetireFarCellsQ19(int32_t actualGridX, int32_t actualGridY) {
         Q6H_LOGI("Q19.1 CELL RETIRE QUEUED: actual=(%d,%d) retiredLiveShapes=%zu retiredStagedShapes=%zu liveShapes=%zu deferredDeletes=%zu cacheRadius=%d queueUs=%llu algorithm=single-pass-compact+deferred-gl-delete",
                  actualGridX, actualGridY, retiredShapes, retiredStaged,
                  gObjects.size(), gQ1910DeferredGpuDeletesQ19.size(),
-                 Q1900_CACHE_RADIUS_Q19,
+                 Q2013_WARM_RADIUS_Q19,
                  static_cast<unsigned long long>(retireQueueUs));
     }
 }

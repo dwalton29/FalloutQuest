@@ -21,8 +21,8 @@
 namespace {
 
 constexpr int Q2000_TERRAIN_RADIUS = 3;
-constexpr size_t Q2000_GPU_BYTES_PER_UPDATE = 2u * 1024u * 1024u;
-constexpr uint64_t Q2000_GPU_BUDGET_US = 3000u;
+constexpr size_t Q2000_GPU_BYTES_PER_UPDATE = 1024u * 1024u;
+constexpr uint64_t Q2000_GPU_BUDGET_US = 1500u;
 constexpr uint64_t Q2000_GPU_SPIKE_US = 8000u;
 
 struct Q2000PreparedTexture {

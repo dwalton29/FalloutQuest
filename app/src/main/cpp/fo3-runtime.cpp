@@ -238,6 +238,83 @@ struct CachedGpuTexture {
     bool real = false;
 };
 
+// Q20.15: keep the 7x7 buffer resident, but reject AABBs outside the current
+// eye frustum before any GL state changes. Bounds are already in scene metres.
+bool gQ2015FrustumCullActive = false;
+float gQ2015FrustumMvp[16]{};
+uint64_t gQ2015CullTested = 0u;
+uint64_t gQ2015CullRejected = 0u;
+uint64_t gQ2015CullPassed = 0u;
+uint64_t gQ2015CullScopes = 0u;
+
+bool Q2015AabbVisible(const GpuObject& object) {
+    if (!gQ2015FrustumCullActive || gWaterReflectionPassQ2090) return true;
+    if (object.minX > object.maxX || object.minY > object.maxY ||
+        object.minZ > object.maxZ) return true;
+
+    ++gQ2015CullTested;
+    const float cx = 0.5f * (object.minX + object.maxX);
+    const float cy = 0.5f * (object.minY + object.maxY);
+    const float cz = 0.5f * (object.minZ + object.maxZ);
+    const float ex = 0.5f * (object.maxX - object.minX);
+    const float ey = 0.5f * (object.maxY - object.minY);
+    const float ez = 0.5f * (object.maxZ - object.minZ);
+
+    const float* m = gQ2015FrustumMvp;
+    const float planes[6][4] = {
+        {m[3] + m[0],  m[7] + m[4],  m[11] + m[8],  m[15] + m[12]},
+        {m[3] - m[0],  m[7] - m[4],  m[11] - m[8],  m[15] - m[12]},
+        {m[3] + m[1],  m[7] + m[5],  m[11] + m[9],  m[15] + m[13]},
+        {m[3] - m[1],  m[7] - m[5],  m[11] - m[9],  m[15] - m[13]},
+        {m[3] + m[2],  m[7] + m[6],  m[11] + m[10], m[15] + m[14]},
+        {m[3] - m[2],  m[7] - m[6],  m[11] - m[10], m[15] - m[14]},
+    };
+
+    constexpr float Q2015_FRUSTUM_PADDING_METRES = 1.0f;
+    for (const auto& p : planes) {
+        const float len =
+            std::sqrt(p[0]*p[0] + p[1]*p[1] + p[2]*p[2]);
+        if (len < 1e-6f) continue;
+        const float inv = 1.0f / len;
+        const float a = p[0] * inv;
+        const float b = p[1] * inv;
+        const float c = p[2] * inv;
+        const float d = p[3] * inv;
+        const float distance = a*cx + b*cy + c*cz + d;
+        const float radius =
+            std::fabs(a)*ex + std::fabs(b)*ey + std::fabs(c)*ez;
+        if (distance + radius < -Q2015_FRUSTUM_PADDING_METRES) {
+            ++gQ2015CullRejected;
+            return false;
+        }
+    }
+    ++gQ2015CullPassed;
+    return true;
+}
+
+struct Q2015FrustumCullScope {
+    explicit Q2015FrustumCullScope(const float* mvp) {
+        std::copy(mvp, mvp + 16, gQ2015FrustumMvp);
+        gQ2015FrustumCullActive = true;
+    }
+    ~Q2015FrustumCullScope() {
+        gQ2015FrustumCullActive = false;
+        ++gQ2015CullScopes;
+        if ((gQ2015CullScopes % 300u) == 0u) {
+            const double pct = gQ2015CullTested > 0u
+                ? 100.0 * static_cast<double>(gQ2015CullRejected) /
+                  static_cast<double>(gQ2015CullTested)
+                : 0.0;
+            Q6H_LOGI("Q20.15 FRUSTUM: tested=%llu rejected=%llu passed=%llu rejectedPct=%.1f liveShapes=%zu scope=main-eye-aabb conservativePaddingM=1.0",
+                     static_cast<unsigned long long>(gQ2015CullTested),
+                     static_cast<unsigned long long>(gQ2015CullRejected),
+                     static_cast<unsigned long long>(gQ2015CullPassed),
+                     pct, gObjects.size());
+            gQ2015CullTested = gQ2015CullRejected = gQ2015CullPassed = 0u;
+        }
+    }
+};
+
 GLuint gProgram = 0;
 GLint gMvpLocation = -1;
 GLint gDiffuseLocation = -1;
@@ -4056,6 +4133,7 @@ int Q1900BuildNativeLodClipCells(float* bounds, bool objectLod) {
 
 void DrawSceneObject(const GpuObject& object, bool environmentPassQ2050 = false) {
     if (!Q1970ShouldRenderFullDetail(object)) return;
+    if (!Q2015AabbVisible(object)) return;
     if (environmentPassQ2050 && !object.environmentEnabledQ2050) return;
 
     float q1900LodClipCells[25 * 4]{};
@@ -4867,8 +4945,11 @@ void Q1970AdvanceLodGpuQ19() {
         std::iter_swap(best, gQ2013LodUploadsQ19.begin());
     }
 
-    constexpr size_t Q2014_LOD_GPU_BYTES_PER_UPDATE = 4u * 1024u * 1024u;
-    constexpr uint64_t Q2014_LOD_GPU_BUDGET_US = 3500u;
+    const bool q2015Loading = IsFo3LoadingVisibleQ1700();
+    const size_t q2015LodGpuBytes =
+        q2015Loading ? 4u * 1024u * 1024u : 1024u * 1024u;
+    const uint64_t q2015LodGpuBudgetUs =
+        q2015Loading ? 3500u : 900u;
     const auto frameStarted = std::chrono::steady_clock::now();
     size_t bytesThisFrame = 0u;
 
@@ -4883,8 +4964,8 @@ void Q1970AdvanceLodGpuQ19() {
         Q1900CellStateQ19& state = *pending.state;
         while (state.textureCursor < state.textures.size()) {
             Q1960AdvanceTextureQ19(state, bytesThisFrame);
-            if (bytesThisFrame >= Q2014_LOD_GPU_BYTES_PER_UPDATE ||
-                Q1960ElapsedUsQ19(frameStarted) >= Q2014_LOD_GPU_BUDGET_US) {
+            if (bytesThisFrame >= q2015LodGpuBytes ||
+                Q1960ElapsedUsQ19(frameStarted) >= q2015LodGpuBudgetUs) {
                 return;
             }
             // Q20.14: active means "more chunks remain", not "yield now".
@@ -4892,8 +4973,8 @@ void Q1970AdvanceLodGpuQ19() {
         }
         while (state.gpuCursor < state.cpu.size()) {
             Q1960AdvanceShapeQ19(state, bytesThisFrame);
-            if (bytesThisFrame >= Q2014_LOD_GPU_BYTES_PER_UPDATE ||
-                Q1960ElapsedUsQ19(frameStarted) >= Q2014_LOD_GPU_BUDGET_US) {
+            if (bytesThisFrame >= q2015LodGpuBytes ||
+                Q1960ElapsedUsQ19(frameStarted) >= q2015LodGpuBudgetUs) {
                 return;
             }
             if (state.q1960ShapeUpload.active) continue;
@@ -4946,8 +5027,8 @@ void Q1970AdvanceLodGpuQ19() {
                  gQ2013LodUploadsQ19.size(),
                  Q2013ProgressiveLodCountQ19());
 
-        if (bytesThisFrame >= Q2014_LOD_GPU_BYTES_PER_UPDATE ||
-            Q1960ElapsedUsQ19(frameStarted) >= Q2014_LOD_GPU_BUDGET_US) return;
+        if (bytesThisFrame >= q2015LodGpuBytes ||
+            Q1960ElapsedUsQ19(frameStarted) >= q2015LodGpuBudgetUs) return;
     }
 }
 
@@ -5436,6 +5517,7 @@ void RenderScene() {
     if (sourceMvp < 0) return;
     GLfloat mvp[16]{};
     glGetUniformfv(static_cast<GLuint>(mainProgram), sourceMvp, mvp);
+    Q2015FrustumCullScope q2015FrustumScope(mvp);
 
     GLint previousTexture0 = 0, previousTexture1 = 0, previousTexture2 = 0, previousTexture3 = 0;
     GLint previousTexture4CubeQ2050 = 0, previousTexture5Q2050 = 0;
