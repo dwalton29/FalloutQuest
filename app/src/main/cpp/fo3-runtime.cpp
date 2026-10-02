@@ -551,10 +551,6 @@ float gQ218LeftHandQuat[4]{0.0f, 0.0f, 0.0f, 1.0f};
 float gQ218RightHandQuat[4]{0.0f, 0.0f, 0.0f, 1.0f};
 bool gQ210LeftHandValid = false;
 bool gQ210RightHandValid = false;
-bool gQ218LeftTwistReferenceValid = false;
-bool gQ218RightTwistReferenceValid = false;
-float gQ218LeftTwistReference = 0.0f;
-float gQ218RightTwistReference = 0.0f;
 // Q21.9 VR-specific retarget calibration. Both arms share one scale so the
 // avatar stays symmetric. The scale only grows during a session, avoiding
 // visible arm-length "breathing" during ordinary controller motion.
@@ -7416,6 +7412,93 @@ Vec3 Q211TransformPoint(const float m[16], Vec3 p) {
     };
 }
 
+struct Q220HandBasis {
+    Vec3 forward{0.0f, 1.0f, 0.0f};   // wrist/palm -> fingers
+    Vec3 intoPalm{0.0f, 0.0f, 1.0f};  // back of hand -> palm
+    bool ready = false;
+};
+
+bool Q220BoneMatchesSide(const std::string& lower, bool left) {
+    return left
+        ? (lower.find("bip01 l ") != std::string::npos ||
+           lower.find(" l ") != std::string::npos)
+        : (lower.find("bip01 r ") != std::string::npos ||
+           lower.find(" r ") != std::string::npos);
+}
+
+bool Q220FindAuthoredHandBasis(bool left, Q220HandBasis& out) {
+    out = {};
+    for (const Q211PlayerRigPart& part : gQ211PlayerRigParts) {
+        const int hand = left ? part.leftHand : part.rightHand;
+        if (hand < 0 || static_cast<size_t>(hand) >= part.bones.size())
+            continue;
+
+        Vec3 origin = Q211BindBonePoint(part.bones[hand]);
+        const bool palmAnchorValid =
+            left ? part.leftPalmAnchorValid : part.rightPalmAnchorValid;
+        if (palmAnchorValid) {
+            origin = left ? part.leftPalmAnchor : part.rightPalmAnchor;
+        }
+
+        int thumb = -1;
+        int finger = -1;
+        float thumbDistance = 1.0e9f;
+        float fingerDistance = 1.0e9f;
+        for (size_t i = 0u; i < part.bones.size(); ++i) {
+            const std::string lower = Q211Lower(part.bones[i].name);
+            if (!Q220BoneMatchesSide(lower, left)) continue;
+
+            const bool thumbLike =
+                lower.find("thumb") != std::string::npos ||
+                lower.find("finger0") != std::string::npos;
+            const bool fingerLike =
+                lower.find("finger") != std::string::npos &&
+                !thumbLike;
+            if (!thumbLike && !fingerLike) continue;
+
+            const Vec3 p = Q211BindBonePoint(part.bones[i]);
+            const float distance = Q211Length(Q211Sub(p, origin));
+            if (distance < 0.005f || distance > 0.45f) continue;
+
+            if (thumbLike && distance < thumbDistance) {
+                thumbDistance = distance;
+                thumb = static_cast<int>(i);
+            }
+            if (fingerLike && distance < fingerDistance) {
+                fingerDistance = distance;
+                finger = static_cast<int>(i);
+            }
+        }
+
+        if (thumb < 0 || finger < 0) continue;
+
+        Vec3 forward = Q211NormalizeSafe(
+            Q211Sub(Q211BindBonePoint(part.bones[finger]), origin));
+        const Vec3 thumbDirection = Q211NormalizeSafe(
+            Q211Sub(Q211BindBonePoint(part.bones[thumb]), origin));
+
+        // The mirrored cross-product gives the same anatomical quantity for
+        // both hands: the vector pointing from the back of the hand into the
+        // palm. This is directly comparable to OpenXR grip +X semantics.
+        Vec3 intoPalm = Q211NormalizeSafe(
+            Q211Cross(forward, thumbDirection));
+        if (!left) intoPalm = Q211Mul(intoPalm, -1.0f);
+
+        forward = Q211Sub(
+            forward, Q211Mul(intoPalm, Q211Dot(forward, intoPalm)));
+        if (Q211Length(forward) < 0.05f ||
+            Q211Length(intoPalm) < 0.05f) {
+            continue;
+        }
+
+        out.forward = Q211NormalizeSafe(forward);
+        out.intoPalm = Q211NormalizeSafe(intoPalm);
+        out.ready = true;
+        return true;
+    }
+    return false;
+}
+
 Vec3 Q218TransformVector(const float m[16], Vec3 v) {
     return {
         m[0]*v.x + m[4]*v.y + m[8]*v.z,
@@ -7578,36 +7661,70 @@ Vec3 Q211ApplyDeltaVector(const Q211Delta& d, Vec3 v) {
     return d.active ? Q211Rotate(d.r, v) : v;
 }
 
-bool Q218TwistAngle(
-        Vec3 shoulder, Vec3 elbow, Vec3 hand,
-        Vec3 palmNormal, float& outAngle) {
-    const Vec3 axis = Q211NormalizeSafe(Q211Sub(hand, elbow));
-    Vec3 reference = Q211Sub(shoulder, elbow);
-    reference = Q211Sub(
-        reference, Q211Mul(axis, Q211Dot(reference, axis)));
-    if (Q211Length(reference) < 0.03f) {
-        reference = Vec3{0.0f, 1.0f, 0.0f};
-        reference = Q211Sub(
-            reference, Q211Mul(axis, Q211Dot(reference, axis)));
-    }
-    if (Q211Length(reference) < 0.03f) {
-        reference = Vec3{0.0f, 0.0f, -1.0f};
-        reference = Q211Sub(
-            reference, Q211Mul(axis, Q211Dot(reference, axis)));
-    }
-    reference = Q211NormalizeSafe(reference);
+bool Q220BasisRotation(
+        Vec3 currentForward, Vec3 currentIntoPalm,
+        Vec3 targetForward, Vec3 targetIntoPalm,
+        float out[9]) {
+    currentForward = Q211NormalizeSafe(currentForward);
+    currentIntoPalm = Q211Sub(
+        currentIntoPalm,
+        Q211Mul(currentForward, Q211Dot(currentIntoPalm, currentForward)));
+    targetForward = Q211NormalizeSafe(targetForward);
+    targetIntoPalm = Q211Sub(
+        targetIntoPalm,
+        Q211Mul(targetForward, Q211Dot(targetIntoPalm, targetForward)));
 
-    palmNormal = Q211Sub(
-        palmNormal, Q211Mul(axis, Q211Dot(palmNormal, axis)));
-    if (Q211Length(palmNormal) < 0.03f) return false;
-    palmNormal = Q211NormalizeSafe(palmNormal);
+    if (Q211Length(currentIntoPalm) < 0.03f ||
+        Q211Length(targetIntoPalm) < 0.03f) {
+        return false;
+    }
 
-    const Vec3 side =
-        Q211NormalizeSafe(Q211Cross(axis, reference));
-    outAngle = std::atan2(
-        Q211Dot(palmNormal, side),
-        Q211Dot(palmNormal, reference));
-    return std::isfinite(outAngle);
+    currentIntoPalm = Q211NormalizeSafe(currentIntoPalm);
+    targetIntoPalm = Q211NormalizeSafe(targetIntoPalm);
+    const Vec3 currentSide =
+        Q211NormalizeSafe(Q211Cross(currentForward, currentIntoPalm));
+    const Vec3 targetSide =
+        Q211NormalizeSafe(Q211Cross(targetForward, targetIntoPalm));
+
+    const Vec3 currentBasis[3]{
+        currentForward, currentIntoPalm, currentSide};
+    const Vec3 targetBasis[3]{
+        targetForward, targetIntoPalm, targetSide};
+
+    for (int row = 0; row < 3; ++row) {
+        for (int col = 0; col < 3; ++col) {
+            const float t0 = row == 0 ? targetBasis[0].x
+                           : row == 1 ? targetBasis[0].y
+                                      : targetBasis[0].z;
+            const float t1 = row == 0 ? targetBasis[1].x
+                           : row == 1 ? targetBasis[1].y
+                                      : targetBasis[1].z;
+            const float t2 = row == 0 ? targetBasis[2].x
+                           : row == 1 ? targetBasis[2].y
+                                      : targetBasis[2].z;
+            const float c0 = col == 0 ? currentBasis[0].x
+                           : col == 1 ? currentBasis[0].y
+                                      : currentBasis[0].z;
+            const float c1 = col == 0 ? currentBasis[1].x
+                           : col == 1 ? currentBasis[1].y
+                                      : currentBasis[1].z;
+            const float c2 = col == 0 ? currentBasis[2].x
+                           : col == 1 ? currentBasis[2].y
+                                      : currentBasis[2].z;
+            out[row * 3 + col] = t0*c0 + t1*c1 + t2*c2;
+        }
+    }
+    return true;
+}
+
+Q211Delta Q220MakePivotRotationMatrix(
+        Vec3 pivot, const float rotation[9]) {
+    Q211Delta out;
+    std::copy(rotation, rotation + 9, out.r);
+    out.t = Q211Sub(pivot, Q211Rotate(out.r, pivot));
+    out.stretchPivot = pivot;
+    out.active = true;
+    return out;
 }
 
 float Q218WrapAngle(float angle) {
@@ -7713,7 +7830,9 @@ Q213ArmPose Q213SolveMasterArm(
         const Q211PlayerRigPart& part,
         bool left,
         Vec3 target,
-        Vec3 gripPalmNormal,
+        const Q220HandBasis& authoredHandBasis,
+        Vec3 gripFingerDirection,
+        Vec3 gripIntoPalm,
         bool gripOrientationValid,
         float armLengthScale) {
     Q213ArmPose pose;
@@ -7758,29 +7877,28 @@ Q213ArmPose Q213SolveMasterArm(
         restHand, restFore,
         pose.hand, Q211Sub(pose.hand, pose.elbow));
 
-    if (gripOrientationValid) {
-        float absoluteTwist = 0.0f;
-        if (Q218TwistAngle(
-                shoulder, pose.elbow, pose.hand,
-                gripPalmNormal, absoluteTwist)) {
-            bool& referenceValid = left
-                ? gQ218LeftTwistReferenceValid
-                : gQ218RightTwistReferenceValid;
-            float& reference = left
-                ? gQ218LeftTwistReference
-                : gQ218RightTwistReference;
-            if (!referenceValid) {
-                reference = absoluteTwist;
-                referenceValid = true;
-            }
-            pose.wristTwist =
-                Q218WrapAngle(absoluteTwist - reference);
-            const Q211Delta twist = Q218MakePivotRotation(
-                pose.hand,
-                Q211Sub(pose.hand, pose.elbow),
-                pose.wristTwist);
+    if (gripOrientationValid && authoredHandBasis.ready) {
+        const Vec3 currentForward =
+            Q211ApplyDeltaVector(
+                pose.handDelta, authoredHandBasis.forward);
+        const Vec3 currentIntoPalm =
+            Q211ApplyDeltaVector(
+                pose.handDelta, authoredHandBasis.intoPalm);
+
+        float wristRotation[9]{};
+        if (Q220BasisRotation(
+                currentForward, currentIntoPalm,
+                gripFingerDirection, gripIntoPalm,
+                wristRotation)) {
+            const float trace =
+                wristRotation[0] + wristRotation[4] + wristRotation[8];
+            pose.wristTwist = std::acos(
+                std::clamp((trace - 1.0f) * 0.5f, -1.0f, 1.0f));
+            const Q211Delta wrist =
+                Q220MakePivotRotationMatrix(
+                    pose.hand, wristRotation);
             pose.handDelta =
-                Q218ComposeRigid(pose.handDelta, twist);
+                Q218ComposeRigid(pose.handDelta, wrist);
         }
     }
 
@@ -7885,16 +8003,33 @@ void Q211UpdatePlayerRig() {
     const Vec3 trackedRightRoot =
         Q211TransformPoint(invRoot, rightTargetWorld);
 
-    // Q21.9: grip-space coordinates are shared by both controllers but the
-    // anatomical palm normal is mirrored between hands.
-    const Vec3 leftPalmWorld =
+    // Q21.10: OpenXR grip orientation is anatomical, not "controller top".
+    // +X is palm-normal with opposite handedness, while +Y provides the
+    // orthogonal hand/finger axis. Convert both into Fallout body-root space.
+    const Vec3 leftIntoPalmWorld =
         Q218RotateQuaternion(gQ218LeftHandQuat, Vec3{-1.0f, 0.0f, 0.0f});
-    const Vec3 rightPalmWorld =
+    const Vec3 rightIntoPalmWorld =
         Q218RotateQuaternion(gQ218RightHandQuat, Vec3{1.0f, 0.0f, 0.0f});
+    const Vec3 leftFingerWorld =
+        Q218RotateQuaternion(gQ218LeftHandQuat, Vec3{0.0f, 1.0f, 0.0f});
+    const Vec3 rightFingerWorld =
+        Q218RotateQuaternion(gQ218RightHandQuat, Vec3{0.0f, 1.0f, 0.0f});
+
     const Vec3 leftPalmRoot =
-        Q211NormalizeSafe(Q218TransformVector(invRoot, leftPalmWorld));
+        Q211NormalizeSafe(Q218TransformVector(invRoot, leftIntoPalmWorld));
     const Vec3 rightPalmRoot =
-        Q211NormalizeSafe(Q218TransformVector(invRoot, rightPalmWorld));
+        Q211NormalizeSafe(Q218TransformVector(invRoot, rightIntoPalmWorld));
+    const Vec3 leftFingerRoot =
+        Q211NormalizeSafe(Q218TransformVector(invRoot, leftFingerWorld));
+    const Vec3 rightFingerRoot =
+        Q211NormalizeSafe(Q218TransformVector(invRoot, rightFingerWorld));
+
+    Q220HandBasis q220LeftAuthoredBasis;
+    Q220HandBasis q220RightAuthoredBasis;
+    const bool q220LeftBasisReady =
+        Q220FindAuthoredHandBasis(true, q220LeftAuthoredBasis);
+    const bool q220RightBasisReady =
+        Q220FindAuthoredHandBasis(false, q220RightAuthoredBasis);
 
     Vec3 avatarHeadAnchor = trackedHeadRoot;
     const bool avatarHeadReady =
@@ -7966,14 +8101,18 @@ void Q211UpdatePlayerRig() {
         q213LeftPose =
             Q213SolveMasterArm(
                 *q213LeftMaster, true, leftTarget,
-                leftPalmRoot, true,
+                q220LeftAuthoredBasis,
+                leftFingerRoot, leftPalmRoot,
+                q220LeftBasisReady,
                 gQ219ArmLengthScale);
     }
     if (gQ210RightHandValid && q213RightMaster) {
         q213RightPose =
             Q213SolveMasterArm(
                 *q213RightMaster, false, rightTarget,
-                rightPalmRoot, true,
+                q220RightAuthoredBasis,
+                rightFingerRoot, rightPalmRoot,
+                q220RightBasisReady,
                 gQ219ArmLengthScale);
     }
 
@@ -8093,12 +8232,27 @@ void Q211UpdatePlayerRig() {
     glBindBuffer(GL_ARRAY_BUFFER, 0);
 
     if ((gQ211TrackingSerial % 180u) == 1u) {
+        Q6H_LOGI("Q21.10 HAND BASIS: authored=(L%d,R%d) Lforward=(%.3f %.3f %.3f) Linward=(%.3f %.3f %.3f) Rforward=(%.3f %.3f %.3f) Rinward=(%.3f %.3f %.3f) mode=authored-hand-bones-to-openxr-grip",
+                 q220LeftBasisReady ? 1 : 0,
+                 q220RightBasisReady ? 1 : 0,
+                 q220LeftAuthoredBasis.forward.x,
+                 q220LeftAuthoredBasis.forward.y,
+                 q220LeftAuthoredBasis.forward.z,
+                 q220LeftAuthoredBasis.intoPalm.x,
+                 q220LeftAuthoredBasis.intoPalm.y,
+                 q220LeftAuthoredBasis.intoPalm.z,
+                 q220RightAuthoredBasis.forward.x,
+                 q220RightAuthoredBasis.forward.y,
+                 q220RightAuthoredBasis.forward.z,
+                 q220RightAuthoredBasis.intoPalm.x,
+                 q220RightAuthoredBasis.intoPalm.y,
+                 q220RightAuthoredBasis.intoPalm.z);
         Q6H_LOGI("Q21.9 BODY/REACH: armScale=%.3f requested=%.3f base=%.3f max=%.3f targetExtension=%.2f measureL=(rest=%.3f dist=%.3f) measureR=(rest=%.3f dist=%.3f)",
                  gQ219ArmLengthScale, q219RequestedScale,
                  Q219_ARM_BASE_SCALE, Q219_ARM_MAX_SCALE,
                  Q219_TARGET_EXTENSION_RATIO,
                  q219LRest, q219LDist, q219RRest, q219RDist);
-        Q6H_LOGI("Q21.8 ARM RETARGET: scale=%.3f L(rest=%.3f scaled=%.3f targetDist=%.3f ratio=%.3f twistDeg=%.1f) R(rest=%.3f scaled=%.3f targetDist=%.3f ratio=%.3f twistDeg=%.1f) wristMode=relative-grip-roll",
+        Q6H_LOGI("Q21.8 ARM RETARGET: scale=%.3f L(rest=%.3f scaled=%.3f targetDist=%.3f ratio=%.3f twistDeg=%.1f) R(rest=%.3f scaled=%.3f targetDist=%.3f ratio=%.3f twistDeg=%.1f) wristMode=authored-basis-to-openxr-grip",
                  gQ219ArmLengthScale,
                  q213LeftPose.restReach,
                  q213LeftPose.restReach * gQ219ArmLengthScale,
@@ -8157,8 +8311,6 @@ void Q210DeletePlayerBody() {
     gQ210PlayerBody.clear();
     gQ211PlayerRigParts.clear();
     gQ211LastSkinnedSerial = ~0ull;
-    gQ218LeftTwistReferenceValid = false;
-    gQ218RightTwistReferenceValid = false;
     gQ219ArmLengthScale = Q219_ARM_BASE_SCALE;
     gQ210PlayerBodyReady = false;
 }
