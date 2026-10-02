@@ -10018,6 +10018,15 @@ bool Q230EnsureNpcActors() {
                (!lucas->raceHeadModels[7].empty() &&
                 samePath(path,lucas->raceHeadModels[7]));
     };
+
+    auto q237RaceHeadSlot=[&](const std::string& path)->int {
+        for(size_t slot=0u;slot<lucas->raceHeadModels.size();++slot){
+            if(!lucas->raceHeadModels[slot].empty() &&
+               samePath(path,lucas->raceHeadModels[slot]))
+                return static_cast<int>(slot);
+        }
+        return -1;
+    };
     auto isHairTintModel=[&](const std::string& path){
         if(!lucas->hairModel.empty() && samePath(path,lucas->hairModel))
             return true;
@@ -10078,6 +10087,49 @@ bool Q230EnsureNpcActors() {
     const std::vector<float> q234FaceTex=
         combineFaceGen(lucas->raceFaceGenTextureSymmetric,
                        lucas->faceGenTextureSymmetric);
+
+    // Q23.7: evaluate the RACE Body Texture Model (.egt) against each
+    // authored body/hand base map. FaceGen body statistics are designed to be
+    // effectively constant below the neck, so the same body SCM coordinate is
+    // valid across the actor's exposed skin maps.
+    std::vector<std::string> q237RaceBodyGeneratedKeys(
+        lucas->raceBodyTextures.size());
+    size_t q237BodyEgtTextures=0u;
+    size_t q237BodyEgtPixels=0u;
+    if(!lucas->raceBodyTextureModel.empty() && !q234FaceTex.empty()){
+        for(size_t slot=0u;
+            slot<lucas->raceBodyTextures.size() && slot<3u;
+            ++slot){
+            const std::string& base=lucas->raceBodyTextures[slot];
+            if(base.empty()) continue;
+            Fo3FaceGenTextureQ234 generated;
+            if(!LoadFo3FaceGenTextureQ234(
+                    lucas->raceBodyTextureModel,
+                    base,q234FaceTex,generated)) continue;
+
+            const std::string key=
+                "__q237_bodyfacegen__/"+
+                lucas->editorId+"/"+
+                std::to_string(slot)+".dds";
+            Fo3RgbaTexture rgba;
+            rgba.width=generated.width;
+            rgba.height=generated.height;
+            rgba.rgba=std::move(generated.rgba);
+            rgba.sourcePath=
+                generated.baseTexturePath+" + "+generated.egtPath;
+            rgba.format="Q23.7-RaceBody-EGT";
+            q237BodyEgtPixels+=
+                static_cast<size_t>(rgba.width)*
+                static_cast<size_t>(rgba.height);
+            gQ234GeneratedTextures[key]=std::move(rgba);
+            q237RaceBodyGeneratedKeys[slot]=key;
+            ++q237BodyEgtTextures;
+        }
+    }
+
+    bool q237HeadAnchorReady=false;
+    Vec3 q237HeadBindGame{};
+    size_t q237RigidHeadAttachedShapes=0u;
 
     size_t cpuShapes=0u;
     size_t gpuShapes=0u;
@@ -10182,6 +10234,30 @@ bool Q230EnsureNpcActors() {
         return true;
     };
 
+    auto q237CaptureHeadAnchor=[&](const CpuObject& part){
+        if(q237HeadAnchorReady || !part.mesh.skinned) return;
+        for(const Fo3NifSkinBone& bone:part.mesh.skinBones){
+            const std::string lower=Q211Lower(bone.name);
+            if(lower=="bip01 head" ||
+               lower.find("bip01 head")!=std::string::npos){
+                q237HeadBindGame={
+                    bone.bindPosition[0],
+                    bone.bindPosition[1],
+                    bone.bindPosition[2]};
+                q237HeadAnchorReady=true;
+                return;
+            }
+        }
+    };
+
+    auto q237AttachRigidHeadPart=[&](CpuObject& part){
+        if(!q237HeadAnchorReady || part.mesh.skinned) return false;
+        Vec3 offset=Q211Mul(q237HeadBindGame,part.placement.scale);
+        offset=ApplyEsmRotation(offset,part.placement);
+        for(Vec3& p:part.positionsGame) p=Q211Add(p,offset);
+        return true;
+    };
+
     const float q234HairR=
         static_cast<float>(lucas->hairColor[0])/255.0f;
     const float q234HairG=
@@ -10206,7 +10282,7 @@ bool Q230EnsureNpcActors() {
 
         std::vector<CpuObject> parts;
         if(!BuildCpuObjects(placement,parts)){
-            Q6H_LOGW("Q23.6 NPC PART MISS: actor=%s model=%s stage=cpu",
+            Q6H_LOGW("Q23.7 NPC PART MISS: actor=%s model=%s stage=cpu",
                      lucas->editorId.c_str(),path.c_str());
             continue;
         }
@@ -10221,6 +10297,18 @@ bool Q230EnsureNpcActors() {
         if(haveMorph) ++faceGenEgmAssets;
 
         for(CpuObject& part:parts){
+            const int q237HeadSlot=q237RaceHeadSlot(path);
+            if(q237HeadSlot==0)
+                q237CaptureHeadAnchor(part);
+
+            // RACE mouth/teeth/tongue/eyes are actor head attachments. Some
+            // are rigid NIFs rather than NiSkinInstance meshes, so apply the
+            // authored Head bind offset instead of leaving them at actor root.
+            if(q237HeadSlot>=2 && q237HeadSlot<=7 &&
+               q237AttachRigidHeadPart(part)){
+                ++q237RigidHeadAttachedShapes;
+            }
+
             if(haveMorph && q233ApplyMorph(part,morph)){
                 ++faceGenMorphedShapes;
                 faceGenMorphedVertices+=part.positionsGame.size();
@@ -10236,8 +10324,14 @@ bool Q230EnsureNpcActors() {
             if(q236BodySlot>=0 &&
                static_cast<size_t>(q236BodySlot)<lucas->raceBodyTextures.size() &&
                !lucas->raceBodyTextures[static_cast<size_t>(q236BodySlot)].empty()){
-                part.mesh.diffuseTexturePath=
-                    lucas->raceBodyTextures[static_cast<size_t>(q236BodySlot)];
+                const size_t slot=static_cast<size_t>(q236BodySlot);
+                if(slot<q237RaceBodyGeneratedKeys.size() &&
+                   !q237RaceBodyGeneratedKeys[slot].empty())
+                    part.mesh.diffuseTexturePath=
+                        q237RaceBodyGeneratedKeys[slot];
+                else
+                    part.mesh.diffuseTexturePath=
+                        lucas->raceBodyTextures[slot];
                 ++raceBodyTextureOverrides;
             }
 
@@ -10246,11 +10340,24 @@ bool Q230EnsureNpcActors() {
             // authored in the armor NIF. When that shape has no diffuse,
             // use the male RACE upper-body texture instead of the beige fallback.
             if(isArmorModel(path) &&
-               part.mesh.diffuseTexturePath.empty() &&
                !lucas->raceBodyTextures.empty() &&
                !lucas->raceBodyTextures[0u].empty()){
-                part.mesh.diffuseTexturePath=lucas->raceBodyTextures[0u];
-                ++armorSkinFallbackOverrides;
+                const bool q237EmptySkin=
+                    part.mesh.diffuseTexturePath.empty();
+                const bool q237BaseSkin=
+                    !q237EmptySkin &&
+                    samePath(part.mesh.diffuseTexturePath,
+                             lucas->raceBodyTextures[0u]);
+                if(q237EmptySkin || q237BaseSkin){
+                    if(!q237RaceBodyGeneratedKeys.empty() &&
+                       !q237RaceBodyGeneratedKeys[0u].empty())
+                        part.mesh.diffuseTexturePath=
+                            q237RaceBodyGeneratedKeys[0u];
+                    else
+                        part.mesh.diffuseTexturePath=
+                            lucas->raceBodyTextures[0u];
+                    ++armorSkinFallbackOverrides;
+                }
             }
 
             if(isEyeModel(path) && !lucas->eyeTexturePath.empty()){
@@ -10321,7 +10428,7 @@ bool Q230EnsureNpcActors() {
                     gExteriorOriginYQ1890,
                     gExteriorOriginZQ1890,
                     gpu)){
-                Q6H_LOGW("Q23.6 NPC PART MISS: actor=%s model=%s stage=gpu",
+                Q6H_LOGW("Q23.7 NPC PART MISS: actor=%s model=%s stage=gpu",
                          lucas->editorId.c_str(),path.c_str());
                 continue;
             }
@@ -10333,7 +10440,7 @@ bool Q230EnsureNpcActors() {
     }
 
     gQ230NpcReady=!gQ230NpcActors.empty();
-    Q6H_LOGI("Q23.6 NPC VISUAL READY: ready=%d actor=%s ref=%08X base=%08X assets=%zu cpuShapes=%zu gpuShapes=%zu triangles=%zu raceHeadParts=%zu egmAssets=%zu morphedShapes=%zu morphedVertices=%zu faceTextureShapes=%zu faceTexturePixels=%zu eyeTextureOverrides=%zu hairTextureOverrides=%zu hairTintShapes=%zu raceBodyTextureOverrides=%zu armorSkinFallbackOverrides=%zu equippedMask=%08X faceGenGeometryApplied=%d faceGenTextureApplied=%d combinedCoeffs=(%zu,%zu,%zu) npcCoeffs=(%zu,%zu,%zu) raceCoeffs=(%zu,%zu,%zu) hairRGB=(%u,%u,%u) pose=bind source=RACE-head/body-slots+BMDT+RACE-baseline+NPC-FaceGen+EGM/EGT+HCLR",
+    Q6H_LOGI("Q23.7 NPC VISUAL READY: ready=%d actor=%s ref=%08X base=%08X assets=%zu cpuShapes=%zu gpuShapes=%zu triangles=%zu raceHeadParts=%zu egmAssets=%zu morphedShapes=%zu morphedVertices=%zu faceTextureShapes=%zu faceTexturePixels=%zu eyeTextureOverrides=%zu hairTextureOverrides=%zu hairTintShapes=%zu raceBodyTextureOverrides=%zu armorSkinFallbackOverrides=%zu bodyEgtTextures=%zu bodyEgtPixels=%zu rigidHeadAttachedShapes=%zu headAnchorReady=%d equippedMask=%08X faceGenGeometryApplied=%d faceGenTextureApplied=%d combinedCoeffs=(%zu,%zu,%zu) npcCoeffs=(%zu,%zu,%zu) raceCoeffs=(%zu,%zu,%zu) hairRGB=(%u,%u,%u) pose=bind source=RACE-head/body-slots+BMDT+BodyEGT+HeadBindAttach+RACE-baseline+NPC-FaceGen+EGM/EGT+HCLR",
              gQ230NpcReady?1:0,
              lucas->fullName.empty()?lucas->editorId.c_str():lucas->fullName.c_str(),
              lucas->refFormId,lucas->baseFormId,
@@ -10342,7 +10449,10 @@ bool Q230EnsureNpcActors() {
              faceGenEgmAssets,faceGenMorphedShapes,faceGenMorphedVertices,
              faceGenTextureShapes,faceGenTexturePixels,
              eyeTextureOverrides,hairTextureOverrides,hairTintShapes,
-             raceBodyTextureOverrides,armorSkinFallbackOverrides,q236EquippedMask,
+             raceBodyTextureOverrides,armorSkinFallbackOverrides,
+             q237BodyEgtTextures,q237BodyEgtPixels,
+             q237RigidHeadAttachedShapes,q237HeadAnchorReady?1:0,
+             q236EquippedMask,
              faceGenMorphedShapes>0u?1:0,
              faceGenTextureShapes>0u?1:0,
              q234FaceSym.size(),q234FaceAsym.size(),q234FaceTex.size(),
