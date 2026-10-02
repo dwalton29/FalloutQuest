@@ -3701,7 +3701,7 @@ void UpdateFo3ExteriorStreamingQ1890(float virtualHeadX, float virtualHeadZ) {
                                 gQ2013ExteriorWarmupStarted).count());
                 const bool timeout = warmupUs >= 15000000u;
                 if ((detailComplete && lodComplete) || timeout) {
-                    Q6H_LOGI("Q20.13 EXTERIOR WARMUP COMPLETE: detailReady=%zu/49 lodRing1Ready=%zu/9 elapsedUs=%llu timeout=%d action=release-loading-screen",
+                    Q6H_LOGI("Q20.14 EXTERIOR WARMUP COMPLETE: detailReady=%zu/49 lodRing2Ready=%zu/25 elapsedUs=%llu timeout=%d action=release-loading-screen",
                              detailReady, lodReady,
                              static_cast<unsigned long long>(warmupUs),
                              timeout ? 1 : 0);
@@ -4438,8 +4438,8 @@ bool Q2013NativeLodBootstrapReadyQ19(
     const int32_t centreX = Q1990FloorToLevel4Block(cellX);
     const int32_t centreY = Q1990FloorToLevel4Block(cellY);
     size_t ready = 0u;
-    for (int dy = -1; dy <= 1; ++dy) {
-        for (int dx = -1; dx <= 1; ++dx) {
+    for (int dy = -2; dy <= 2; ++dy) {
+        for (int dx = -2; dx <= 2; ++dx) {
             if (Q1990FindLodBlock(
                     centreX + dx * Q1840_LEVEL4_BLOCK_CELLS,
                     centreY + dy * Q1840_LEVEL4_BLOCK_CELLS)) {
@@ -4448,7 +4448,7 @@ bool Q2013NativeLodBootstrapReadyQ19(
         }
     }
     if (outReady) *outReady = ready;
-    return ready == 9u;
+    return ready == 25u;
 }
 
 int Q2010NativeLodRingForBlockAround(
@@ -4581,7 +4581,7 @@ void Q1990EnsureNativeLodForCell(int32_t cellX, int32_t cellY,
         q1840LastLoggedLoaded = desiredLoaded;
         q1840LastLoggedCentreX = centreBlockX;
         q1840LastLoggedCentreY = centreBlockY;
-        Q6H_LOGI("Q20.13 NATIVE LOD WINDOW: playerCell=(%d,%d) requestedCentre=(%d,%d) desiredLoaded=%zu/%zu cachedBlocks=%zu radiusCells=%d progressiveVisibleBlocks=%zu publishPolicy=immediate-loaded-blocks cpuWorkers=4 stagedGpuQueue=1",
+        Q6H_LOGI("Q20.14 NATIVE LOD WINDOW: playerCell=(%d,%d) requestedCentre=(%d,%d) desiredLoaded=%zu/%zu cachedBlocks=%zu radiusCells=%d progressiveVisibleBlocks=%zu publishPolicy=immediate-loaded-blocks cpuWorkers=4 stagedGpuQueue=1",
                  cellX, cellY, centreBlockX, centreBlockY,
                  desiredLoaded, Q1840_DISTANT_TARGET_BLOCKS,
                  gQ1990NativeLodBlocks.size(),
@@ -4615,6 +4615,7 @@ struct Q1970LodWorkerTaskQ19 {
 };
 
 constexpr size_t Q2013_LOD_WORKER_SLOTS = 4u;
+constexpr size_t Q2014_LOD_UPLOAD_BACKLOG_LIMIT = 12u;
 std::array<std::shared_ptr<Q1970LodWorkerTaskQ19>,
            Q2013_LOD_WORKER_SLOTS> gQ2013LodWorkersQ19;
 
@@ -4799,7 +4800,7 @@ void Q1970ConsumeLodWorkersQ19() {
             std::fabs(task->floorZ - gExteriorOriginZQ1890) > 0.01f ||
             !Q1990LodBlockDesired(task->blockX, task->blockY);
         if (stale || Q1990FindLodBlock(task->blockX, task->blockY)) {
-            Q6H_LOGI("Q20.13 LOD CPU STALE: slot=%zu block=(%d,%d) ring=%d workerUs=%llu action=discard",
+            Q6H_LOGI("Q20.14 LOD CPU STALE: slot=%zu block=(%d,%d) ring=%d workerUs=%llu action=discard",
                      slot + 1u, task->blockX, task->blockY, task->ring,
                      static_cast<unsigned long long>(task->workerUs));
             continue;
@@ -4818,7 +4819,7 @@ void Q1970ConsumeLodWorkersQ19() {
         upload.workerUs = task->workerUs;
         gQ2013LodUploadsQ19.push_back(std::move(upload));
 
-        Q6H_LOGI("Q20.13 LOD CPU READY: slot=%zu block=(%d,%d) ring=%d queuedUploads=%zu workerUs=%llu",
+        Q6H_LOGI("Q20.14 LOD CPU READY: slot=%zu block=(%d,%d) ring=%d queuedUploads=%zu workerUs=%llu",
                  slot + 1u, task->blockX, task->blockY, task->ring,
                  gQ2013LodUploadsQ19.size(),
                  static_cast<unsigned long long>(task->workerUs));
@@ -4828,8 +4829,46 @@ void Q1970ConsumeLodWorkersQ19() {
 void Q1970AdvanceLodGpuQ19() {
     if (gQ2013LodUploadsQ19.empty()) return;
 
-    constexpr size_t Q2013_LOD_GPU_BYTES_PER_UPDATE = 512u * 1024u;
-    constexpr uint64_t Q2013_LOD_GPU_BUDGET_US = 1800u;
+    // Drop work that fell outside the current authored horizon before it can
+    // sit in front of newly-near blocks after a Level4 centre change.
+    for (auto it = gQ2013LodUploadsQ19.begin();
+         it != gQ2013LodUploadsQ19.end();) {
+        if (!Q1990LodBlockDesired(it->blockX, it->blockY) ||
+            Q1990FindLodBlock(it->blockX, it->blockY)) {
+            it = gQ2013LodUploadsQ19.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    if (gQ2013LodUploadsQ19.empty()) return;
+
+    // Always publish the currently-nearest completed block first rather than
+    // preserving worker-completion FIFO order.
+    auto best = std::min_element(
+        gQ2013LodUploadsQ19.begin(), gQ2013LodUploadsQ19.end(),
+        [](const Q1970LodUploadTaskQ2013& a,
+           const Q1970LodUploadTaskQ2013& b) {
+            const int ar = Q2010NativeLodRingForBlockAround(
+                a.blockX, a.blockY,
+                gQ1990NativeLodCentreBlockX,
+                gQ1990NativeLodCentreBlockY);
+            const int br = Q2010NativeLodRingForBlockAround(
+                b.blockX, b.blockY,
+                gQ1990NativeLodCentreBlockX,
+                gQ1990NativeLodCentreBlockY);
+            if (ar != br) return ar < br;
+            const int am = std::abs(a.blockX - gQ1990NativeLodCentreBlockX) +
+                           std::abs(a.blockY - gQ1990NativeLodCentreBlockY);
+            const int bm = std::abs(b.blockX - gQ1990NativeLodCentreBlockX) +
+                           std::abs(b.blockY - gQ1990NativeLodCentreBlockY);
+            return am < bm;
+        });
+    if (best != gQ2013LodUploadsQ19.begin()) {
+        std::iter_swap(best, gQ2013LodUploadsQ19.begin());
+    }
+
+    constexpr size_t Q2014_LOD_GPU_BYTES_PER_UPDATE = 4u * 1024u * 1024u;
+    constexpr uint64_t Q2014_LOD_GPU_BUDGET_US = 3500u;
     const auto frameStarted = std::chrono::steady_clock::now();
     size_t bytesThisFrame = 0u;
 
@@ -4844,15 +4883,20 @@ void Q1970AdvanceLodGpuQ19() {
         Q1900CellStateQ19& state = *pending.state;
         while (state.textureCursor < state.textures.size()) {
             Q1960AdvanceTextureQ19(state, bytesThisFrame);
-            if (bytesThisFrame >= Q2013_LOD_GPU_BYTES_PER_UPDATE ||
-                Q1960ElapsedUsQ19(frameStarted) >= Q2013_LOD_GPU_BUDGET_US ||
-                state.q1960TextureUpload.active) return;
+            if (bytesThisFrame >= Q2014_LOD_GPU_BYTES_PER_UPDATE ||
+                Q1960ElapsedUsQ19(frameStarted) >= Q2014_LOD_GPU_BUDGET_US) {
+                return;
+            }
+            // Q20.14: active means "more chunks remain", not "yield now".
+            if (state.q1960TextureUpload.active) continue;
         }
         while (state.gpuCursor < state.cpu.size()) {
             Q1960AdvanceShapeQ19(state, bytesThisFrame);
-            if (bytesThisFrame >= Q2013_LOD_GPU_BYTES_PER_UPDATE ||
-                Q1960ElapsedUsQ19(frameStarted) >= Q2013_LOD_GPU_BUDGET_US ||
-                state.q1960ShapeUpload.active) return;
+            if (bytesThisFrame >= Q2014_LOD_GPU_BYTES_PER_UPDATE ||
+                Q1960ElapsedUsQ19(frameStarted) >= Q2014_LOD_GPU_BUDGET_US) {
+                return;
+            }
+            if (state.q1960ShapeUpload.active) continue;
         }
         if (state.textureCursor < state.textures.size() ||
             state.gpuCursor < state.cpu.size() ||
@@ -4893,7 +4937,7 @@ void Q1970AdvanceLodGpuQ19() {
         gQ1990NativeLodDrawLogged = false;
         Q2010AdvanceVisibleNativeLodWindow();
 
-        Q6H_LOGI("Q20.13 LOD BLOCK READY: block=(%d,%d) ring=%d terrainShapes=%zu terrainTriangles=%zu objectShapes=%zu objectTriangles=%zu workerUs=%llu gpuUs=%llu remainingUploads=%zu progressiveVisibleBlocks=%zu",
+        Q6H_LOGI("Q20.14 LOD BLOCK READY: block=(%d,%d) ring=%d terrainShapes=%zu terrainTriangles=%zu objectShapes=%zu objectTriangles=%zu workerUs=%llu gpuUs=%llu remainingUploads=%zu progressiveVisibleBlocks=%zu",
                  readyX, readyY, readyRing,
                  gQ1990NativeLodBlocks.back().terrain.size(), terrainTriangles,
                  gQ1990NativeLodBlocks.back().objects.size(), objectTriangles,
@@ -4902,8 +4946,8 @@ void Q1970AdvanceLodGpuQ19() {
                  gQ2013LodUploadsQ19.size(),
                  Q2013ProgressiveLodCountQ19());
 
-        if (bytesThisFrame >= Q2013_LOD_GPU_BYTES_PER_UPDATE ||
-            Q1960ElapsedUsQ19(frameStarted) >= Q2013_LOD_GPU_BUDGET_US) return;
+        if (bytesThisFrame >= Q2014_LOD_GPU_BYTES_PER_UPDATE ||
+            Q1960ElapsedUsQ19(frameStarted) >= Q2014_LOD_GPU_BUDGET_US) return;
     }
 }
 
@@ -4953,8 +4997,16 @@ void Q1970AdvanceNativeLodQ19(int32_t cellX, int32_t cellY,
         IsFo3TerrainStreamingCpuBusyQ2000() ||
         !Q1970NearDetailSafeQ19(cellX, cellY)) return;
 
+    if (gQ2013LodUploadsQ19.size() >= Q2014_LOD_UPLOAD_BACKLOG_LIMIT) {
+        return;
+    }
+
     for (size_t slot = 0u; slot < Q2013_LOD_WORKER_SLOTS; ++slot) {
         if (gQ2013LodWorkersQ19[slot]) continue;
+        if (gQ2013LodUploadsQ19.size() + Q2013ActiveLodWorkersQ19() >=
+            Q2014_LOD_UPLOAD_BACKLOG_LIMIT) {
+            break;
+        }
 
         int32_t blockX = 0;
         int32_t blockY = 0;
@@ -4971,9 +5023,11 @@ void Q1970AdvanceNativeLodQ19(int32_t cellX, int32_t cellY,
         task->floorZ = floorZ;
         gQ2013LodWorkersQ19[slot] = task;
 
-        Q6H_LOGI("Q20.13 LOD CPU START: slot=%zu/%zu block=(%d,%d) ring=%d activeWorkers=%zu progressivePublish=1",
+        Q6H_LOGI("Q20.14 LOD CPU START: slot=%zu/%zu block=(%d,%d) ring=%d activeWorkers=%zu uploadBacklog=%zu/%zu progressivePublish=1",
                  slot + 1u, Q2013_LOD_WORKER_SLOTS,
-                 blockX, blockY, ring, Q2013ActiveLodWorkersQ19());
+                 blockX, blockY, ring, Q2013ActiveLodWorkersQ19(),
+                 gQ2013LodUploadsQ19.size(),
+                 Q2014_LOD_UPLOAD_BACKLOG_LIMIT);
         std::thread([task]() { Q1970RunLodWorkerQ19(task); }).detach();
     }
 }
@@ -5013,7 +5067,7 @@ void Q1990RenderNativeLod(bool alphaPass) {
     glDisable(GL_POLYGON_OFFSET_FILL);
     if (!alphaPass && !gQ1990NativeLodDrawLogged) {
         gQ1990NativeLodDrawLogged = true;
-        Q6H_LOGI("Q20.13 NATIVE LOD DRAW: shapes=%zu triangles=%zu radiusCells=20 requestedCentre=(%d,%d) progressiveVisibleBlocks=%zu currentTerrainBlockSuppressed=1 detailedClip=5x5+ring3-fallback polygonOffset=1 shadows=0",
+        Q6H_LOGI("Q20.14 NATIVE LOD DRAW: shapes=%zu triangles=%zu radiusCells=20 requestedCentre=(%d,%d) progressiveVisibleBlocks=%zu currentTerrainBlockSuppressed=1 detailedClip=5x5+ring3-fallback polygonOffset=1 shadows=0",
                  drawnShapes, drawnTriangles,
                  gQ1990NativeLodCentreBlockX,
                  gQ1990NativeLodCentreBlockY,

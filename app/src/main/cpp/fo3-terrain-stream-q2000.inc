@@ -21,8 +21,8 @@
 namespace {
 
 constexpr int Q2000_TERRAIN_RADIUS = 3;
-constexpr size_t Q2000_GPU_BYTES_PER_UPDATE = 128u * 1024u;
-constexpr uint64_t Q2000_GPU_BUDGET_US = 1500u;
+constexpr size_t Q2000_GPU_BYTES_PER_UPDATE = 2u * 1024u * 1024u;
+constexpr uint64_t Q2000_GPU_BUDGET_US = 3000u;
 constexpr uint64_t Q2000_GPU_SPIKE_US = 8000u;
 
 struct Q2000PreparedTexture {
@@ -614,7 +614,7 @@ void Q2000ConsumeWorker() {
     gQ2000TargetGpuUs = 0u;
     gQ2000TargetMaxGpuStepUs = 0u;
 
-    Q76B_LOGI("Q20 TERRAIN CPU READY: targetCentre=(%d,%d) enteringCells=%zu preparedCells=%zu textures=%zu loadUs=%llu buildUs=%llu textureUs=%llu workerUs=%llu oldTerrainLive=1",
+    Q76B_LOGI("Q20.14 TERRAIN CPU READY: targetCentre=(%d,%d) enteringCells=%zu preparedCells=%zu textures=%zu loadUs=%llu buildUs=%llu textureUs=%llu workerUs=%llu oldTerrainLive=1",
               gQ2000TargetCentreX, gQ2000TargetCentreY,
               task->entering.size(), gQ2000PendingCells.size(),
               gQ2000PendingTextures.size(),
@@ -874,7 +874,7 @@ void Q2000PublishCurrentCell(Q2000CpuCell& cell) {
             std::move(cell.ground);
     }
 
-    Q76B_LOGI("Q20 TERRAIN CELL READY: cell=(%d,%d) hasLAND=%d batches=%zu baseTriangles=%zu alphaTriangles=%zu oldTerrainLive=1",
+    Q76B_LOGI("Q20.14 TERRAIN CELL READY: cell=(%d,%d) hasLAND=%d batches=%zu baseTriangles=%zu alphaTriangles=%zu oldTerrainLive=1",
               cell.gridX, cell.gridY, cell.hasTerrain ? 1 : 0,
               batches, cell.baseTriangles, cell.alphaTriangles);
 }
@@ -925,7 +925,7 @@ void Q2000CommitTarget() {
     gQ2000TextureCursor = gQ2000CellCursor = gQ2000BatchCursor = 0u;
     Q2000RefreshStats();
 
-    Q76B_LOGI("Q20 TERRAIN WINDOW READY: centre=(%d,%d) retainedCells=%zu enteringCells=%zu retiredCells=%zu retiredBatches=%zu liveBatches=%zu groundCells=%zu workerUs=%llu loadUs=%llu buildUs=%llu textureUs=%llu gpuUs=%llu maxGpuStepUs=%llu full49Rebuild=0 oneCellShift=1 oldTerrainLiveUntilComplete=1",
+    Q76B_LOGI("Q20.14 TERRAIN WINDOW READY: centre=(%d,%d) retainedCells=%zu enteringCells=%zu retiredCells=%zu retiredBatches=%zu liveBatches=%zu groundCells=%zu workerUs=%llu loadUs=%llu buildUs=%llu textureUs=%llu gpuUs=%llu maxGpuStepUs=%llu full49Rebuild=0 directCatchup=1 oldTerrainLiveUntilComplete=1",
               gQ2000ResidentCentreX, gQ2000ResidentCentreY,
               retained, entering, retiredCells, retiredBatches,
               q711TerrainBatches.size(), gQ2000GroundCells.size(),
@@ -946,11 +946,14 @@ void Q2000AdvanceGpu() {
 
     while (gQ2000TextureCursor < gQ2000PendingTextures.size()) {
         const bool complete = Q2000AdvanceOneTexture(bytesThisUpdate);
-        if (!complete ||
-            bytesThisUpdate >= Q2000_GPU_BYTES_PER_UPDATE ||
+        if (bytesThisUpdate >= Q2000_GPU_BYTES_PER_UPDATE ||
             Q2000ElapsedUs(updateStarted) >= Q2000_GPU_BUDGET_US) {
             gQ2000TargetGpuUs += Q2000ElapsedUs(updateStarted);
             return;
+        }
+        if (!complete) {
+            // Q20.14: keep feeding the current texture while budget remains.
+            continue;
         }
     }
 
@@ -967,16 +970,16 @@ void Q2000AdvanceGpu() {
             Q711CpuBatch& batch = cell.batches[gQ2000BatchCursor];
             const bool complete =
                 Q2000AdvanceOneBatch(cell, batch, bytesThisUpdate);
-            if (!complete) {
-                gQ2000TargetGpuUs += Q2000ElapsedUs(updateStarted);
-                return;
-            }
-            ++gQ2000BatchCursor;
             if (bytesThisUpdate >= Q2000_GPU_BYTES_PER_UPDATE ||
                 Q2000ElapsedUs(updateStarted) >= Q2000_GPU_BUDGET_US) {
                 gQ2000TargetGpuUs += Q2000ElapsedUs(updateStarted);
                 return;
             }
+            if (!complete) {
+                // Continue this VBO in the same update while there is headroom.
+                continue;
+            }
+            ++gQ2000BatchCursor;
         }
 
         Q2000PublishCurrentCell(cell);
@@ -1026,7 +1029,7 @@ void Q2000LaunchWorker(
         task->cachedNormals.insert(entry.first);
 
     gQ2000Worker = task;
-    Q76B_LOGI("Q20 TERRAIN CPU START: fromCentre=(%d,%d) targetCentre=(%d,%d) retainedCells=%zu enteringCells=%zu thread=serialized-asset-worker full49GpuRebuild=0",
+    Q76B_LOGI("Q20.14 TERRAIN CPU START: fromCentre=(%d,%d) targetCentre=(%d,%d) retainedCells=%zu enteringCells=%zu thread=serialized-asset-worker full49GpuRebuild=0",
               gQ2000ResidentCentreX, gQ2000ResidentCentreY,
               targetCentreX, targetCentreY,
               target.size() - task->entering.size(),
@@ -1151,19 +1154,11 @@ void UpdateFo3TerrainStreamingQ2000(
     if (actualGridX == gQ2000ResidentCentreX &&
         actualGridY == gQ2000ResidentCentreY) return;
 
-    // Never jump a multi-cell catch-up.  Move one axis by one CELL, so a normal
-    // update retains exactly 42/49 cells and prepares only one seven-cell strip.
-    const int dx = actualGridX - gQ2000ResidentCentreX;
-    const int dy = actualGridY - gQ2000ResidentCentreY;
-    int32_t nextX = gQ2000ResidentCentreX;
-    int32_t nextY = gQ2000ResidentCentreY;
-    if (std::abs(dx) >= std::abs(dy) && dx != 0)
-        nextX += dx > 0 ? 1 : -1;
-    else if (dy != 0)
-        nextY += dy > 0 ? 1 : -1;
-
+    // Q20.14: catch up to the newest player centre directly. If the player has
+    // moved several CELLs while the previous target was publishing, rebuilding
+    // one stale intermediate strip at a time only compounds visible lag.
     Q2000LaunchWorker(
-        worldspaceFormId, nextX, nextY,
+        worldspaceFormId, actualGridX, actualGridY,
         arrivalX, arrivalY, arrivalZ,
         sceneForward, floorY, unitsPerMetre);
 }
