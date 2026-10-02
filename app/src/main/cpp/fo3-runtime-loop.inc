@@ -1369,6 +1369,7 @@ private:
                     q210VirtualHead.position.y,
                     q210VirtualHead.position.z,
                     YawFromQuaternion(q210VirtualHead.orientation),
+                    views[0].pose.position.y,
                     handPoseValid_[0],
                     q210Left.position.x, q210Left.position.y, q210Left.position.z,
                     handPoseValid_[1],
