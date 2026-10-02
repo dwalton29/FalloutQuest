@@ -316,6 +316,7 @@ struct GpuObject {
     bool q2025LandscapeRock = false;
     bool q2025VisibleWhenDistant = false;
     bool q2025HighPriorityLod = false;
+    bool q210PlayerBody = false;
     std::string baseRecordType;
     Fo3DoorTeleport teleport;
     float minX = 0.0f, maxX = 0.0f;
@@ -531,6 +532,24 @@ GLint gLocalLightCountLocationQ1010 = -1;
 GLint gLocalLightPosRadiusLocationQ1010 = -1;
 GLint gLocalLightColorFalloffLocationQ1010 = -1;
 std::vector<GpuObject> gObjects;
+
+// Q21.0: real Fallout actor geometry kept outside CELL ownership.
+std::vector<GpuObject> gQ210PlayerBody;
+bool gQ210PlayerBodyAttempted = false;
+bool gQ210PlayerBodyReady = false;
+uint64_t gQ210PlayerBodyFrames = 0u;
+float gQ210PlayerRoot[16]{
+    1,0,0,0,
+    0,1,0,0,
+    0,0,1,0,
+    0,0,0,1
+};
+float gQ210Head[4]{0.0f, 0.0f, 0.0f, 0.0f};
+float gQ210LeftHand[3]{0.0f, 0.0f, 0.0f};
+float gQ210RightHand[3]{0.0f, 0.0f, 0.0f};
+bool gQ210LeftHandValid = false;
+bool gQ210RightHandValid = false;
+
 std::unordered_map<std::string, CachedGpuTexture> gTextureCache;
 std::unordered_map<std::string, CachedGpuTexture> gCubeTextureCacheQ2050;
 
@@ -4672,15 +4691,16 @@ int Q1900BuildNativeLodClipCells(float* bounds, bool objectLod) {
 }
 
 void DrawSceneObject(const GpuObject& object, bool environmentPassQ2050 = false) {
-    if (!Q1970ShouldRenderFullDetail(object)) return;
-    if (!Q2015AabbVisible(object)) return;
+    if (!object.q210PlayerBody && !Q1970ShouldRenderFullDetail(object)) return;
+    if (!object.q210PlayerBody && !Q2015AabbVisible(object)) return;
     if (environmentPassQ2050 && !object.environmentEnabledQ2050) return;
     if (gInstancingEnabledLocationQ2016 >= 0) {
         glUniform1f(gInstancingEnabledLocationQ2016,
                     gInstancedDrawActiveQ2016 ? 1.0f : 0.0f);
     }
     const bool q2017UseObjectTransform =
-        object.q2017SharedGeometry && !gInstancedDrawActiveQ2016;
+        (object.q2017SharedGeometry || object.q210PlayerBody) &&
+        !gInstancedDrawActiveQ2016;
     if (gObjectTransformEnabledLocationQ2017 >= 0) {
         glUniform1f(gObjectTransformEnabledLocationQ2017,
                     q2017UseObjectTransform ? 1.0f : 0.0f);
@@ -4689,7 +4709,8 @@ void DrawSceneObject(const GpuObject& object, bool environmentPassQ2050 = false)
         gObjectTransformLocationQ2017 >= 0) {
         glUniformMatrix4fv(
             gObjectTransformLocationQ2017, 1, GL_FALSE,
-            object.q2017RelativeMatrix);
+            object.q210PlayerBody ? gQ210PlayerRoot
+                                  : object.q2017RelativeMatrix);
     }
 
     float q1900LodClipCells[25 * 4]{};
@@ -4715,7 +4736,7 @@ void DrawSceneObject(const GpuObject& object, bool environmentPassQ2050 = false)
         float q2021Mode = 0.0f;
         if (gExteriorWorldspaceQ1890 == 0x0000003Cu &&
             gQ2021PlayerSceneValid) {
-            if (!object.q1990NativeLod) {
+            if (!object.q1990NativeLod && !object.q210PlayerBody) {
                 q2021Mode = 1.0f;
             } else if (object.modelPath.find("\\blocks\\") !=
                        std::string::npos) {
@@ -7143,6 +7164,147 @@ struct Q1970RenderStallScopeQ19 {
     }
 };
 
+
+bool Q210EndsWithInsensitive(std::string value, std::string suffix) {
+    for (char& ch : value) {
+        if (ch == '/') ch = '\\';
+        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    }
+    for (char& ch : suffix) {
+        if (ch == '/') ch = '\\';
+        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    }
+    return value.size() >= suffix.size() &&
+        value.compare(value.size() - suffix.size(), suffix.size(), suffix) == 0;
+}
+
+void Q210DeletePlayerBody() {
+    for (GpuObject& object : gQ210PlayerBody) {
+        if (Q2017ReleaseSharedGeometry(object)) continue;
+        if (object.vbo) glDeleteBuffers(1, &object.vbo);
+        if (object.vao) glDeleteVertexArrays(1, &object.vao);
+        object.vbo = 0u;
+        object.vao = 0u;
+    }
+    gQ210PlayerBody.clear();
+    gQ210PlayerBodyReady = false;
+}
+
+bool Q210EnsurePlayerBody() {
+    if (gQ210PlayerBodyReady) return true;
+    if (gQ210PlayerBodyAttempted) return false;
+    gQ210PlayerBodyAttempted = true;
+
+    std::vector<std::string> maleEntries;
+    ListFalloutMeshFilesByPrefix("Characters\\_Male\\", maleEntries);
+
+    const char* wantedSuffixes[] = {
+        "characters\\_male\\upperbody.nif",
+        "characters\\_male\\lowerbody.nif",
+        "characters\\_male\\hand.nif",
+        "characters\\_male\\foot.nif",
+    };
+    std::vector<std::string> bodyPaths;
+    for (const char* suffix : wantedSuffixes) {
+        for (const std::string& entry : maleEntries) {
+            if (Q210EndsWithInsensitive(entry, suffix)) {
+                bodyPaths.push_back(entry);
+                break;
+            }
+        }
+    }
+
+    std::string skeletonPath = "Characters\\_Male\\Skeleton.NIF";
+    for (const std::string& entry : maleEntries) {
+        if (Q210EndsWithInsensitive(
+                entry, "characters\\_male\\skeleton.nif")) {
+            skeletonPath = entry;
+            break;
+        }
+    }
+
+    Fo3NifSkinProbe skeletonProbe;
+    ProbeFo3NifSkin(skeletonPath, skeletonProbe);
+
+    size_t cpuShapes = 0u;
+    size_t gpuShapes = 0u;
+    size_t triangles = 0u;
+    size_t skinInstances = 0u;
+    size_t referencedBones = 0u;
+
+    for (const std::string& path : bodyPaths) {
+        Fo3NifSkinProbe probe;
+        ProbeFo3NifSkin(path, probe);
+        skinInstances += probe.skinInstances;
+        referencedBones += probe.referencedBones;
+
+        Fo3WorldPlacement placement;
+        placement.modelPath = path;
+        placement.baseRecordType = "NPC_";
+        placement.editorId = "FalloutQuestPlayerBodyQ210";
+        placement.scale = 1.0f;
+
+        std::vector<CpuObject> parts;
+        if (!BuildCpuObjects(placement, parts)) {
+            Q6H_LOGW("Q21.0 PLAYER BODY PART MISS: model=%s stage=cpu",
+                     path.c_str());
+            continue;
+        }
+        cpuShapes += parts.size();
+
+        for (CpuObject& part : parts) {
+            GpuObject gpu;
+            if (!UploadCpuObject(part, 0.0f, 0.0f, 0.0f, gpu)) {
+                Q6H_LOGW("Q21.0 PLAYER BODY PART MISS: model=%s stage=gpu",
+                         path.c_str());
+                continue;
+            }
+            gpu.q210PlayerBody = true;
+            triangles += static_cast<size_t>(gpu.vertexCount / 3);
+            gQ210PlayerBody.push_back(std::move(gpu));
+            ++gpuShapes;
+        }
+    }
+
+    gQ210PlayerBodyReady = !gQ210PlayerBody.empty();
+    Q6H_LOGI("Q21.0 PLAYER BODY READY: ready=%d archiveMaleEntries=%zu bodyPartsFound=%zu cpuShapes=%zu gpuShapes=%zu triangles=%zu skinInstances=%zu referencedBonesAcrossParts=%zu skeletonNodes=%u skeletonNamedNodes=%zu mode=real-FO3-bind-pose root=HMD-yaw controllers=tracked skinning=next",
+             gQ210PlayerBodyReady ? 1 : 0,
+             maleEntries.size(), bodyPaths.size(),
+             cpuShapes, gpuShapes, triangles,
+             skinInstances, referencedBones,
+             skeletonProbe.nodes, skeletonProbe.nodeNames.size());
+    if (!gQ210PlayerBodyReady) Q210DeletePlayerBody();
+    return gQ210PlayerBodyReady;
+}
+
+void Q210RenderPlayerBody(bool alphaPass) {
+    if (!Q210EnsurePlayerBody()) return;
+    for (const GpuObject& object : gQ210PlayerBody) {
+        if (object.alphaBlend != alphaPass) continue;
+        if (object.zBufferTestQ1200) glEnable(GL_DEPTH_TEST);
+        else glDisable(GL_DEPTH_TEST);
+        glDepthMask(object.zBufferWriteQ1200 ? GL_TRUE : GL_FALSE);
+        if (alphaPass) {
+            glEnable(GL_BLEND);
+            glBlendFunc(Q1150BlendFactor(object.alphaSourceBlend, true),
+                        Q1150BlendFactor(object.alphaDestBlend, false));
+        }
+        DrawSceneObject(object);
+    }
+
+    ++gQ210PlayerBodyFrames;
+    if ((gQ210PlayerBodyFrames % 360u) == 1u) {
+        Q6H_LOGI("Q21.0 PLAYER BODY HEARTBEAT: shapes=%zu head=(%.3f %.3f %.3f yaw=%.1fdeg) left=(%d %.3f %.3f %.3f) right=(%d %.3f %.3f %.3f) pose=bind rootFollowsHMD=1",
+                 gQ210PlayerBody.size(),
+                 gQ210Head[0], gQ210Head[1], gQ210Head[2],
+                 gQ210Head[3] * 57.2957795f,
+                 gQ210LeftHandValid ? 1 : 0,
+                 gQ210LeftHand[0], gQ210LeftHand[1], gQ210LeftHand[2],
+                 gQ210RightHandValid ? 1 : 0,
+                 gQ210RightHand[0], gQ210RightHand[1], gQ210RightHand[2]);
+    }
+}
+
 void RenderScene() {
     Q1970RenderStallScopeQ19 q1970RenderStallScope;
     if (!gSceneReady) Q1030BootMegatonOnRender();
@@ -7399,6 +7561,7 @@ void RenderScene() {
         glEnable(GL_SAMPLE_ALPHA_TO_COVERAGE);
     Q1990RenderNativeLod(false);
     Q2017RenderOpaqueDetailedInstanced();
+    Q210RenderPlayerBody(false);
     if (!q2021MainA2cWas)
         glDisable(GL_SAMPLE_ALPHA_TO_COVERAGE);
     const uint64_t q2017OpaqueUs = static_cast<uint64_t>(
@@ -7409,6 +7572,7 @@ void RenderScene() {
     const auto q2017AlphaStarted = std::chrono::steady_clock::now();
     glEnable(GL_BLEND);
     Q1990RenderNativeLod(true);
+    Q210RenderPlayerBody(true);
     for (const GpuObject& object : gObjects) {
         if (!object.alphaBlend) continue;
         if (object.zBufferTestQ1200) glEnable(GL_DEPTH_TEST); else glDisable(GL_DEPTH_TEST);
@@ -9057,6 +9221,40 @@ bool GetFo3EnvironmentPassEnabledQ205A() {
 }
 
 } // namespace
+
+void SetFo3PlayerBodyTrackingQ210(
+        float headX, float headY, float headZ, float headYaw,
+        bool leftValid, float leftX, float leftY, float leftZ,
+        bool rightValid, float rightX, float rightY, float rightZ) {
+    gQ210Head[0] = headX;
+    gQ210Head[1] = headY;
+    gQ210Head[2] = headZ;
+    gQ210Head[3] = headYaw;
+    gQ210LeftHandValid = leftValid;
+    gQ210RightHandValid = rightValid;
+    gQ210LeftHand[0] = leftX;
+    gQ210LeftHand[1] = leftY;
+    gQ210LeftHand[2] = leftZ;
+    gQ210RightHand[0] = rightX;
+    gQ210RightHand[1] = rightY;
+    gQ210RightHand[2] = rightZ;
+
+    const float c = std::cos(headYaw);
+    const float s = std::sin(headYaw);
+    const float rootX = headX + s * 0.08f;
+    const float rootZ = headZ + c * 0.08f;
+
+    std::fill(gQ210PlayerRoot, gQ210PlayerRoot + 16, 0.0f);
+    gQ210PlayerRoot[0] = c;
+    gQ210PlayerRoot[2] = -s;
+    gQ210PlayerRoot[5] = 1.0f;
+    gQ210PlayerRoot[8] = s;
+    gQ210PlayerRoot[10] = c;
+    gQ210PlayerRoot[12] = rootX;
+    gQ210PlayerRoot[13] = 0.0f;
+    gQ210PlayerRoot[14] = rootZ;
+    gQ210PlayerRoot[15] = 1.0f;
+}
 
 bool QueryFo3DoorAimQ1700(float originX, float originY, float originZ,
                           float dirX, float dirY, float dirZ,

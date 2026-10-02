@@ -40,7 +40,7 @@ public class MainActivity extends Activity {
         title.setGravity(Gravity.CENTER);
 
         TextView status = new TextView(this);
-        status.setText(nativeBootMessage() + "\n\nQ20.25 WARMUP ROCK FADE TERRAIN VCOLOR\nFallout 3 data -> OpenXR -> Quest 3");
+        status.setText(nativeBootMessage() + "\n\nQ21.0 PLAYER BODY SKELETON\nFallout 3 data -> OpenXR -> Quest 3");
         status.setTextColor(Color.rgb(210, 220, 205));
         status.setTextSize(20);
         status.setGravity(Gravity.CENTER);

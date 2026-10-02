@@ -136,6 +136,7 @@ struct NifTransform {
 struct ShapeObject {
     uint32_t block = INVALID_REF;
     uint32_t dataRef = INVALID_REF;
+    uint32_t skinRef = INVALID_REF;
     NifTransform transform;
     std::vector<uint32_t> properties;
 };
@@ -285,8 +286,7 @@ bool ParseShapeObject(const uint8_t* data, size_t size, const NifHeader& header,
     Cursor c(data, size);
     if (!ParseAvObjectPrefix(c, header, out.transform, &out.properties)) return false;
 
-    uint32_t skinRef = INVALID_REF;
-    if (!c.U32(out.dataRef) || !c.U32(skinRef)) return false;
+    if (!c.U32(out.dataRef) || !c.U32(out.skinRef)) return false;
 
     uint32_t numMaterials = 0;
     if (!c.U32(numMaterials) || numMaterials > 4096u) return false;
@@ -1327,5 +1327,121 @@ bool LoadFo3StaticNif(const std::string& modelPath, Fo3StaticNifMesh& outMesh) {
     std::vector<Fo3StaticNifMesh> meshes;
     if (!LoadFo3StaticNifMeshes(modelPath, meshes) || meshes.empty()) return false;
     outMesh = std::move(meshes.front());
+    return true;
+}
+
+
+namespace {
+
+std::string Q210BlockName(const std::vector<uint8_t>& nif,
+                          const NifHeader& header,
+                          uint32_t block) {
+    if (block >= header.numBlocks || header.blockSizes[block] < 4u)
+        return {};
+    const uint8_t* data = BlockData(nif, header, block);
+    if (!data) return {};
+    const uint32_t nameIndex = ReadLe32(data);
+    if (nameIndex == INVALID_REF || nameIndex >= header.strings.size())
+        return {};
+    return header.strings[nameIndex];
+}
+
+bool Q210ParseSkinInstance(const std::vector<uint8_t>& nif,
+                           const NifHeader& header,
+                           uint32_t block,
+                           std::vector<uint32_t>& bones) {
+    bones.clear();
+    if (block >= header.numBlocks) return false;
+    const std::string& type = BlockType(header, block);
+    if (type != "NiSkinInstance" &&
+        type != "BSDismemberSkinInstance") return false;
+
+    Cursor c(BlockData(nif, header, block), header.blockSizes[block]);
+    uint32_t dataRef = INVALID_REF;
+    uint32_t partitionRef = INVALID_REF;
+    uint32_t skeletonRoot = INVALID_REF;
+    uint32_t count = 0u;
+    if (!c.U32(dataRef) || !c.U32(partitionRef) ||
+        !c.U32(skeletonRoot) || !c.U32(count) ||
+        count > MAX_BLOCKS) return false;
+    bones.resize(count);
+    for (uint32_t& bone : bones) {
+        if (!c.U32(bone)) {
+            bones.clear();
+            return false;
+        }
+    }
+    return true;
+}
+
+} // namespace
+
+bool ProbeFo3NifSkin(const std::string& modelPath, Fo3NifSkinProbe& outProbe) {
+    outProbe = {};
+    std::vector<uint8_t> nif;
+    std::string resolved;
+    if (!LoadFalloutMeshFile(modelPath, nif, &resolved) ||
+        nif.empty() || nif.size() > MAX_NIF_BYTES) {
+        Q6H_LOGW("Q21.0 SKIN PROBE MISS: model=%s stage=bsa-load",
+                 modelPath.c_str());
+        return false;
+    }
+
+    NifHeader header;
+    if (!ParseHeader(nif, header)) {
+        Q6H_LOGW("Q21.0 SKIN PROBE MISS: model=%s stage=nif-header",
+                 resolved.c_str());
+        return false;
+    }
+
+    outProbe.loaded = true;
+    outProbe.blocks = header.numBlocks;
+    std::vector<uint32_t> referencedBoneBlocks;
+    for (uint32_t block = 0u; block < header.numBlocks; ++block) {
+        const std::string& type = BlockType(header, block);
+        if (type == "NiNode" || type == "BSFadeNode") {
+            ++outProbe.nodes;
+            const std::string name = Q210BlockName(nif, header, block);
+            if (!name.empty()) outProbe.nodeNames.push_back(name);
+        } else if (type == "NiSkinData") {
+            ++outProbe.skinDataBlocks;
+        } else if (type == "NiSkinPartition") {
+            ++outProbe.skinPartitions;
+        } else if (type == "NiSkinInstance" ||
+                   type == "BSDismemberSkinInstance") {
+            ++outProbe.skinInstances;
+            std::vector<uint32_t> bones;
+            if (Q210ParseSkinInstance(nif, header, block, bones)) {
+                for (uint32_t bone : bones) {
+                    if (std::find(referencedBoneBlocks.begin(),
+                                  referencedBoneBlocks.end(), bone) ==
+                        referencedBoneBlocks.end()) {
+                        referencedBoneBlocks.push_back(bone);
+                    }
+                }
+            }
+        }
+    }
+
+    outProbe.referencedBones =
+        static_cast<uint32_t>(referencedBoneBlocks.size());
+    for (uint32_t bone : referencedBoneBlocks) {
+        const std::string name = Q210BlockName(nif, header, bone);
+        if (!name.empty()) outProbe.boneNames.push_back(name);
+    }
+
+    std::string summary;
+    const size_t shown = std::min<size_t>(outProbe.boneNames.size(), 24u);
+    for (size_t i = 0u; i < shown; ++i) {
+        if (!summary.empty()) summary += ",";
+        summary += outProbe.boneNames[i];
+    }
+    if (summary.empty()) summary = "<none>";
+
+    Q6H_LOGI("Q21.0 SKIN PROBE: model=%s blocks=%u nodes=%u skinInstances=%u skinData=%u skinPartitions=%u referencedBones=%u namedBones=%zu bones=%s",
+             resolved.c_str(), outProbe.blocks, outProbe.nodes,
+             outProbe.skinInstances, outProbe.skinDataBlocks,
+             outProbe.skinPartitions, outProbe.referencedBones,
+             outProbe.boneNames.size(), summary.c_str());
     return true;
 }

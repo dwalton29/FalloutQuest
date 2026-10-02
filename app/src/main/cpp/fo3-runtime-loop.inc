@@ -1355,9 +1355,28 @@ private:
                 } else {
                     lastFrameTime_ = 0;
                 }
+                // Q21.0: drive the Fallout body root from the exact virtual
+                // HMD/controller poses used by locomotion and interaction.
+                const XrPosef q210VirtualHead = ToVirtualPose(views[0].pose);
+                XrPosef q210Left{};
+                XrPosef q210Right{};
+                if (handPoseValid_[0])
+                    q210Left = ToVirtualPose(handLocalPoses_[0]);
+                if (handPoseValid_[1])
+                    q210Right = ToVirtualPose(handLocalPoses_[1]);
+                SetFo3PlayerBodyTrackingQ210(
+                    q210VirtualHead.position.x,
+                    q210VirtualHead.position.y,
+                    q210VirtualHead.position.z,
+                    YawFromQuaternion(q210VirtualHead.orientation),
+                    handPoseValid_[0],
+                    q210Left.position.x, q210Left.position.y, q210Left.position.z,
+                    handPoseValid_[1],
+                    q210Right.position.x, q210Right.position.y, q210Right.position.z);
+
                 // Q20.13: loading freezes player motion, not world preparation.
                 // Keep CELL/terrain/LOD streaming alive beneath the overlay.
-                const XrPosef q1890VirtualHead = ToVirtualPose(views[0].pose);
+                const XrPosef q1890VirtualHead = q210VirtualHead;
                 UpdateFo3ExteriorStreamingQ1890(q1890VirtualHead.position.x,
                                                 q1890VirtualHead.position.z);
                 UpdateDoorAimQ1700();

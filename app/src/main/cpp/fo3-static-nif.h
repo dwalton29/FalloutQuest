@@ -61,3 +61,20 @@ bool LoadFo3StaticNifMeshes(const std::string& modelPath,
 // Compatibility helper used by earlier milestones: returns the first supported
 // renderable shape from the same generalized loader.
 bool LoadFo3StaticNif(const std::string& modelPath, Fo3StaticNifMesh& outMesh);
+
+
+// Q21.0 actor-skin diagnostic. This exposes the authored hierarchy needed to
+// bootstrap a VR body without pretending static-NIF decoding is skinning.
+struct Fo3NifSkinProbe {
+    bool loaded = false;
+    uint32_t blocks = 0;
+    uint32_t nodes = 0;
+    uint32_t skinInstances = 0;
+    uint32_t skinDataBlocks = 0;
+    uint32_t skinPartitions = 0;
+    uint32_t referencedBones = 0;
+    std::vector<std::string> nodeNames;
+    std::vector<std::string> boneNames;
+};
+
+bool ProbeFo3NifSkin(const std::string& modelPath, Fo3NifSkinProbe& outProbe);
