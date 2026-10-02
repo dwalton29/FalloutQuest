@@ -549,6 +549,27 @@ float gQ210LeftHand[3]{0.0f, 0.0f, 0.0f};
 float gQ210RightHand[3]{0.0f, 0.0f, 0.0f};
 bool gQ210LeftHandValid = false;
 bool gQ210RightHandValid = false;
+uint64_t gQ211TrackingSerial = 0u;
+uint64_t gQ211LastSkinnedSerial = ~0ull;
+
+struct Q211PlayerRigPart {
+    size_t gpuIndex = 0u;
+    std::vector<float> bindExpanded;
+    std::vector<float> workExpanded;
+    std::vector<uint16_t> expandedBoneIndices; // 4 per expanded vertex
+    std::vector<float> expandedBoneWeights;     // 4 per expanded vertex
+    std::vector<Fo3NifSkinBone> bones;
+    int leftUpperArm = -1;
+    int leftForearm = -1;
+    int leftHand = -1;
+    int rightUpperArm = -1;
+    int rightForearm = -1;
+    int rightHand = -1;
+    bool leftChainReady = false;
+    bool rightChainReady = false;
+};
+
+std::vector<Q211PlayerRigPart> gQ211PlayerRigParts;
 
 std::unordered_map<std::string, CachedGpuTexture> gTextureCache;
 std::unordered_map<std::string, CachedGpuTexture> gCubeTextureCacheQ2050;
