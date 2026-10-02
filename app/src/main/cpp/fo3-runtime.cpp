@@ -6397,6 +6397,38 @@ void RenderScene() {
     Q1970RenderStallScopeQ19 q1970RenderStallScope;
     if (!gSceneReady) Q1030BootMegatonOnRender();
     ProcessQ74TransitionRequest();
+
+    // Q20.22C: run the LOD archive diagnostic from the render path as well as
+    // transition/streaming. RenderScene is a proven heartbeat in captures, so
+    // this cannot disappear just because a one-shot transition message rolled
+    // out of logcat. Retry the archive query periodically while in Wasteland.
+    static uint64_t q2022cProbeHeartbeat = 0u;
+    ++q2022cProbeHeartbeat;
+    const bool q2022cPulse =
+        q2022cProbeHeartbeat == 1u ||
+        (q2022cProbeHeartbeat % 120u) == 0u;
+    const bool q2022cWasteland =
+        gExteriorStreamingActiveQ1890 &&
+        gExteriorWorldspaceQ1890 == 0x0000003Cu;
+    if (q2022cPulse && q2022cWasteland &&
+        !gQ2022LodArchiveProbeDone) {
+        Q2022ProbeLodArchive(
+            gExteriorWindowGridXQ1890,
+            gExteriorWindowGridYQ1890);
+    }
+    if (q2022cPulse) {
+        Q6H_LOGI("Q20.22C PROBE HEARTBEAT: frame=%llu sceneReady=%d exteriorActive=%d worldspace=%08X currentCell=%08X grid=(%d,%d) wasteland=%d probeDone=%d",
+                 static_cast<unsigned long long>(q2022cProbeHeartbeat),
+                 gSceneReady ? 1 : 0,
+                 gExteriorStreamingActiveQ1890 ? 1 : 0,
+                 gExteriorWorldspaceQ1890,
+                 gCurrentCellFormId,
+                 gExteriorWindowGridXQ1890,
+                 gExteriorWindowGridYQ1890,
+                 q2022cWasteland ? 1 : 0,
+                 gQ2022LodArchiveProbeDone ? 1 : 0);
+    }
+
     if (!gSceneReady || !gProgram || gObjects.empty()) return;
 
     static uint64_t q209aWaterHeartbeatFrame = 0u;
