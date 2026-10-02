@@ -6289,6 +6289,56 @@ bool Q2023ChooseMissingAuthoredLodQ19(
 
 void Q1970AdvanceNativeLodQ19(int32_t cellX, int32_t cellY,
                               float centerX, float centerY, float floorZ) {
+    // Q20.23A: persistent gate telemetry. Previous LOD diagnostics were mostly
+    // transition/change driven, so by the time logcat was inspected the useful
+    // lines could already have rolled out of the buffer.
+    static uint64_t q2023aGatePulse = 0u;
+    ++q2023aGatePulse;
+    const bool q2023aPulse =
+        q2023aGatePulse == 1u || (q2023aGatePulse % 120u) == 0u;
+
+    size_t q2023aNearReady = 0u;
+    for (int dy = -1; dy <= 1; ++dy) {
+        for (int dx = -1; dx <= 1; ++dx) {
+            const auto found = gQ1900CellsQ19.find(
+                Q1900CellKeyQ19(cellX + dx, cellY + dy));
+            if (found != gQ1900CellsQ19.end() &&
+                found->second.visualReady) {
+                ++q2023aNearReady;
+            }
+        }
+    }
+    const bool q2023aNearSafe = q2023aNearReady == 9u;
+    const bool q2023aTerrainBusy =
+        IsFo3TerrainStreamingCpuBusyQ2000();
+    const bool q2023aCollisionBusy =
+        static_cast<bool>(gQ1930CollisionTaskQ19);
+    size_t q2023aBootstrapReady = 0u;
+    const bool q2023aBootstrapComplete =
+        Q2013NativeLodBootstrapReadyQ19(
+            cellX, cellY, &q2023aBootstrapReady);
+
+    if (q2023aPulse) {
+        Q6H_LOGI("Q20.23A LOD STATE: pulse=%llu cell=(%d,%d) contextReady=%d wasteland=%d collisionBusy=%d terrainBusy=%d near3x3Ready=%zu/9 nearSafe=%d bootstrapLevel4=%zu/25 bootstrapComplete=%d level4DesiredLoaded=%zu coarseTiles=%zu highBlocks=%zu activeWorkers=%zu uploads=%zu assetsDiscovered=%d assets=%zu",
+                 static_cast<unsigned long long>(q2023aGatePulse),
+                 cellX, cellY,
+                 gQ1900ContextReadyQ19 ? 1 : 0,
+                 gExteriorWorldspaceQ1890 == 0x0000003Cu ? 1 : 0,
+                 q2023aCollisionBusy ? 1 : 0,
+                 q2023aTerrainBusy ? 1 : 0,
+                 q2023aNearReady,
+                 q2023aNearSafe ? 1 : 0,
+                 q2023aBootstrapReady,
+                 q2023aBootstrapComplete ? 1 : 0,
+                 Q2013ProgressiveLodCountQ19(),
+                 gQ2023CoarseTerrainTiles.size(),
+                 gQ2023HighObjectBlocks.size(),
+                 Q2013ActiveLodWorkersQ19(),
+                 gQ2013LodUploadsQ19.size(),
+                 gQ2023LodAssetsDiscovered ? 1 : 0,
+                 gQ2023LodAssets.size());
+    }
+
     if (!gQ1900ContextReadyQ19 ||
         gExteriorWorldspaceQ1890 != 0x0000003Cu) return;
 
@@ -6297,9 +6347,9 @@ void Q1970AdvanceNativeLodQ19(int32_t cellX, int32_t cellY,
 
     // Collision and terrain CPU work keep exclusive access to their mutable
     // caches; Level4 NIF work may coexist with detailed CELL workers.
-    if (gQ1930CollisionTaskQ19 ||
-        IsFo3TerrainStreamingCpuBusyQ2000() ||
-        !Q1970NearDetailSafeQ19(cellX, cellY)) return;
+    if (q2023aCollisionBusy ||
+        q2023aTerrainBusy ||
+        !q2023aNearSafe) return;
 
     if (gQ2013LodUploadsQ19.size() >= Q2014_LOD_UPLOAD_BACKLOG_LIMIT) {
         return;
