@@ -1147,7 +1147,9 @@ bool Q211ParseSkinDataWeights(
         const NifHeader& header,
         const Q211SkinInstance& skin,
         std::vector<std::vector<std::pair<uint16_t, float>>>& influences,
-        bool& hasSoftwareWeights) {
+        bool& hasSoftwareWeights,
+        NifTransform& skinTransformOut,
+        std::vector<NifTransform>& boneOffsetsOut) {
     hasSoftwareWeights = false;
     if (skin.dataRef >= header.numBlocks ||
         BlockType(header, skin.dataRef) != "NiSkinData") return false;
@@ -1163,6 +1165,10 @@ bool Q211ParseSkinDataWeights(
         return false;
     }
 
+    skinTransformOut = skinTransform;
+    boneOffsetsOut.clear();
+    boneOffsetsOut.reserve(numBones);
+
     hasSoftwareWeights = hasWeights != 0u;
     for (uint32_t bone = 0u; bone < numBones; ++bone) {
         NifTransform boneOffset;
@@ -1170,6 +1176,7 @@ bool Q211ParseSkinDataWeights(
         float radius = 0.0f;
         uint16_t numVertices = 0u;
         if (!Q211ReadNiTransform(c, boneOffset)) return false;
+        boneOffsetsOut.push_back(boneOffset);
         for (float& value : center) if (!c.F32(value)) return false;
         if (!c.F32(radius) || !c.U16(numVertices)) return false;
 
@@ -1282,19 +1289,51 @@ bool Q211ParseSkinPartitionWeights(
     return any;
 }
 
-bool Q211BoneBindPosition(const std::vector<uint8_t>& nif,
-                          const NifHeader& header,
-                          uint32_t boneRef,
-                          float out[3]) {
-    Q970NodeInfo node;
-    if (!Q970ParseNodeInfo(nif, header, boneRef, node)) return false;
-    float x = 0.0f, y = 0.0f, z = 0.0f;
-    ApplyPoint(node.transform, x, y, z);
+bool Q211InverseBindOrigin(const NifTransform& skinToBone,
+                           float out[3]) {
+    if (!skinToBone.valid ||
+        !std::isfinite(skinToBone.scale) ||
+        std::fabs(skinToBone.scale) < 1.0e-8f) {
+        return false;
+    }
+
+    // skinToBone: p_bone = R * (s * p_skin) + t
+    // Bone origin in skin space is inverse(skinToBone) * (0,0,0).
+    const float tx = -skinToBone.translation[0];
+    const float ty = -skinToBone.translation[1];
+    const float tz = -skinToBone.translation[2];
+    const float invScale = 1.0f / skinToBone.scale;
+
+    out[0] = (skinToBone.rotation[0] * tx +
+              skinToBone.rotation[3] * ty +
+              skinToBone.rotation[6] * tz) * invScale;
+    out[1] = (skinToBone.rotation[1] * tx +
+              skinToBone.rotation[4] * ty +
+              skinToBone.rotation[7] * tz) * invScale;
+    out[2] = (skinToBone.rotation[2] * tx +
+              skinToBone.rotation[5] * ty +
+              skinToBone.rotation[8] * tz) * invScale;
+    return std::isfinite(out[0]) &&
+           std::isfinite(out[1]) &&
+           std::isfinite(out[2]);
+}
+
+bool Q211BindPositionFromSkinData(
+        const std::vector<uint8_t>& nif,
+        const NifHeader& header,
+        const ShapeObject& shape,
+        const NifTransform& boneOffset,
+        float out[3]) {
+    if (!Q211InverseBindOrigin(boneOffset, out)) return false;
+
+    // The mesh vertices are subsequently pushed through the geometry's
+    // NiAVObject transform chain by ApplyTransforms(). Put the inverse-bind
+    // pivot through the exact same chain so both live in one coordinate space.
+    ApplyPoint(shape.transform, out[0], out[1], out[2]);
     std::vector<NifTransform> ancestors;
-    Q970CollectAncestorTransforms(nif, header, boneRef, ancestors);
+    Q970CollectAncestorTransforms(nif, header, shape.block, ancestors);
     for (const NifTransform& parent : ancestors)
-        ApplyPoint(parent, x, y, z);
-    out[0] = x; out[1] = y; out[2] = z;
+        ApplyPoint(parent, out[0], out[1], out[2]);
     return true;
 }
 
@@ -1315,9 +1354,12 @@ bool Q211PopulateSkinInfo(const std::vector<uint8_t>& nif,
 
     std::vector<std::vector<std::pair<uint16_t, float>>> influences(vertexCount);
     bool softwareWeights = false;
+    NifTransform skinTransform;
+    std::vector<NifTransform> boneOffsets;
     const bool dataParsed =
         Q211ParseSkinDataWeights(
-            nif, header, skin, influences, softwareWeights);
+            nif, header, skin, influences, softwareWeights,
+            skinTransform, boneOffsets);
     bool partitionWeights = false;
     if (!softwareWeights) {
         partitionWeights =
@@ -1326,11 +1368,37 @@ bool Q211PopulateSkinInfo(const std::vector<uint8_t>& nif,
     }
 
     mesh.skinBones.resize(skin.bones.size());
+    size_t inverseBindPivots = 0u;
+    size_t nodeFallbackPivots = 0u;
     for (size_t i = 0u; i < skin.bones.size(); ++i) {
         Fo3NifSkinBone& bone = mesh.skinBones[i];
         bone.name = Q211BlockName(nif, header, skin.bones[i]);
-        Q211BoneBindPosition(
-            nif, header, skin.bones[i], bone.bindPosition);
+
+        bool pivotReady = false;
+        if (i < boneOffsets.size()) {
+            pivotReady = Q211BindPositionFromSkinData(
+                nif, header, shape, boneOffsets[i], bone.bindPosition);
+            if (pivotReady) ++inverseBindPivots;
+        }
+
+        // Diagnostic fallback only. A valid NiSkinData bone transform is the
+        // authoritative bind offset for a skinned mesh.
+        if (!pivotReady) {
+            Q970NodeInfo node;
+            if (Q970ParseNodeInfo(nif, header, skin.bones[i], node)) {
+                float x = 0.0f, y = 0.0f, z = 0.0f;
+                ApplyPoint(node.transform, x, y, z);
+                std::vector<NifTransform> ancestors;
+                Q970CollectAncestorTransforms(
+                    nif, header, skin.bones[i], ancestors);
+                for (const NifTransform& parent : ancestors)
+                    ApplyPoint(parent, x, y, z);
+                bone.bindPosition[0] = x;
+                bone.bindPosition[1] = y;
+                bone.bindPosition[2] = z;
+                ++nodeFallbackPivots;
+            }
+        }
     }
 
     mesh.skinBoneIndices.assign(vertexCount * 4u, 0xffffu);
@@ -1377,12 +1445,16 @@ bool Q211PopulateSkinInfo(const std::vector<uint8_t>& nif,
     }
 
     mesh.skinned = weightedVertices > 0u && !mesh.skinBones.empty();
-    Q6H_LOGI("Q21.1 SKIN READY: shape=%u skinRef=%u bones=%zu vertices=%zu weightedVertices=%zu dataParsed=%d softwareWeights=%d partitionWeights=%d",
+    Q6H_LOGI("Q21.1C SKIN READY: shape=%u skinRef=%u bones=%zu vertices=%zu weightedVertices=%zu dataParsed=%d softwareWeights=%d partitionWeights=%d inverseBindPivots=%zu nodeFallbackPivots=%zu skinTransformT=(%.2f %.2f %.2f)",
              shape.block, shape.skinRef, mesh.skinBones.size(),
              vertexCount, weightedVertices,
              dataParsed ? 1 : 0,
              softwareWeights ? 1 : 0,
-             partitionWeights ? 1 : 0);
+             partitionWeights ? 1 : 0,
+             inverseBindPivots, nodeFallbackPivots,
+             skinTransform.translation[0],
+             skinTransform.translation[1],
+             skinTransform.translation[2]);
     return mesh.skinned;
 }
 
