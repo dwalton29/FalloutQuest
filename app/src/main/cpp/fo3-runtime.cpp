@@ -7199,6 +7199,417 @@ bool Q210EndsWithInsensitive(std::string value, std::string suffix) {
         value.compare(value.size() - suffix.size(), suffix.size(), suffix) == 0;
 }
 
+
+Vec3 Q211Add(Vec3 a, Vec3 b) {
+    return {a.x + b.x, a.y + b.y, a.z + b.z};
+}
+Vec3 Q211Sub(Vec3 a, Vec3 b) {
+    return {a.x - b.x, a.y - b.y, a.z - b.z};
+}
+Vec3 Q211Mul(Vec3 v, float s) {
+    return {v.x * s, v.y * s, v.z * s};
+}
+float Q211Dot(Vec3 a, Vec3 b) {
+    return a.x*b.x + a.y*b.y + a.z*b.z;
+}
+Vec3 Q211Cross(Vec3 a, Vec3 b) {
+    return {
+        a.y*b.z - a.z*b.y,
+        a.z*b.x - a.x*b.z,
+        a.x*b.y - a.y*b.x
+    };
+}
+float Q211Length(Vec3 v) {
+    return std::sqrt(std::max(0.0f, Q211Dot(v, v)));
+}
+Vec3 Q211NormalizeSafe(Vec3 v, Vec3 fallback = {1.0f, 0.0f, 0.0f}) {
+    const float len = Q211Length(v);
+    return len > 1.0e-6f ? Q211Mul(v, 1.0f / len) : fallback;
+}
+
+std::string Q211Lower(std::string value) {
+    for (char& ch : value)
+        ch = static_cast<char>(
+            std::tolower(static_cast<unsigned char>(ch)));
+    return value;
+}
+
+int Q211FindPrimaryBone(
+        const std::vector<Fo3NifSkinBone>& bones,
+        const char* exactToken,
+        const char* fallbackToken) {
+    int fallback = -1;
+    for (size_t i = 0u; i < bones.size(); ++i) {
+        const std::string lower = Q211Lower(bones[i].name);
+        if (lower.find(exactToken) != std::string::npos &&
+            lower.find("twist") == std::string::npos) {
+            return static_cast<int>(i);
+        }
+        if (fallback < 0 &&
+            lower.find(fallbackToken) != std::string::npos &&
+            lower.find("twist") == std::string::npos) {
+            fallback = static_cast<int>(i);
+        }
+    }
+    return fallback;
+}
+
+int Q211BoneRole(const std::string& authoredName) {
+    const std::string name = Q211Lower(authoredName);
+    const bool left =
+        name.find("bip01 l ") != std::string::npos ||
+        name.find(" l ") != std::string::npos;
+    const bool right =
+        name.find("bip01 r ") != std::string::npos ||
+        name.find(" r ") != std::string::npos;
+    if (!left && !right) return 0;
+
+    if (name.find("upperarm") != std::string::npos)
+        return left ? 1 : 4;
+    if (name.find("forearm") != std::string::npos)
+        return left ? 2 : 5;
+    if (name.find("hand") != std::string::npos ||
+        name.find("finger") != std::string::npos ||
+        name.find("thumb") != std::string::npos)
+        return left ? 3 : 6;
+    return 0;
+}
+
+Vec3 Q211BindBonePoint(const Fo3NifSkinBone& bone) {
+    // Same game->OpenXR conversion used by PrepareExpandedVertexStreamQ1960
+    // for a player mesh placed at the local origin.
+    return {
+        bone.bindPosition[0] / FO3_UNITS_PER_METRE,
+        FLOOR_Y + bone.bindPosition[2] / FO3_UNITS_PER_METRE,
+        SCENE_FORWARD - bone.bindPosition[1] / FO3_UNITS_PER_METRE
+    };
+}
+
+Vec3 Q211TransformPoint(const float m[16], Vec3 p) {
+    return {
+        m[0]*p.x + m[4]*p.y + m[8]*p.z + m[12],
+        m[1]*p.x + m[5]*p.y + m[9]*p.z + m[13],
+        m[2]*p.x + m[6]*p.y + m[10]*p.z + m[14]
+    };
+}
+
+struct Q211Delta {
+    float r[9]{
+        1,0,0,
+        0,1,0,
+        0,0,1
+    };
+    Vec3 t{0.0f, 0.0f, 0.0f};
+    bool active = false;
+};
+
+void Q211RotationFromTo(Vec3 from, Vec3 to, float out[9]) {
+    const Vec3 a = Q211NormalizeSafe(from);
+    const Vec3 b = Q211NormalizeSafe(to, a);
+    const float d = std::clamp(Q211Dot(a, b), -1.0f, 1.0f);
+    Vec3 axis = Q211Cross(a, b);
+    float axisLen = Q211Length(axis);
+
+    if (axisLen < 1.0e-5f) {
+        if (d > 0.0f) {
+            out[0]=1; out[1]=0; out[2]=0;
+            out[3]=0; out[4]=1; out[5]=0;
+            out[6]=0; out[7]=0; out[8]=1;
+            return;
+        }
+        Vec3 helper =
+            std::fabs(a.y) < 0.9f ? Vec3{0,1,0} : Vec3{1,0,0};
+        axis = Q211NormalizeSafe(Q211Cross(a, helper));
+        axisLen = 1.0f;
+    } else {
+        axis = Q211Mul(axis, 1.0f / axisLen);
+    }
+
+    const float angle = std::acos(d);
+    const float c = std::cos(angle);
+    const float s = std::sin(angle);
+    const float one = 1.0f - c;
+    const float x = axis.x, y = axis.y, z = axis.z;
+
+    out[0] = c + x*x*one;
+    out[1] = x*y*one - z*s;
+    out[2] = x*z*one + y*s;
+    out[3] = y*x*one + z*s;
+    out[4] = c + y*y*one;
+    out[5] = y*z*one - x*s;
+    out[6] = z*x*one - y*s;
+    out[7] = z*y*one + x*s;
+    out[8] = c + z*z*one;
+}
+
+Vec3 Q211Rotate(const float r[9], Vec3 v) {
+    return {
+        r[0]*v.x + r[1]*v.y + r[2]*v.z,
+        r[3]*v.x + r[4]*v.y + r[5]*v.z,
+        r[6]*v.x + r[7]*v.y + r[8]*v.z
+    };
+}
+
+Q211Delta Q211MakeDelta(
+        Vec3 restPivot, Vec3 restDirection,
+        Vec3 currentPivot, Vec3 currentDirection) {
+    Q211Delta out;
+    Q211RotationFromTo(restDirection, currentDirection, out.r);
+    out.t = Q211Sub(
+        currentPivot, Q211Rotate(out.r, restPivot));
+    out.active = true;
+    return out;
+}
+
+Vec3 Q211ApplyDelta(const Q211Delta& d, Vec3 p) {
+    return d.active ? Q211Add(Q211Rotate(d.r, p), d.t) : p;
+}
+
+Vec3 Q211ApplyDeltaVector(const Q211Delta& d, Vec3 v) {
+    return d.active ? Q211Rotate(d.r, v) : v;
+}
+
+bool Q211SolveArm(
+        bool left,
+        Vec3 shoulder, Vec3 restElbow, Vec3 restHand,
+        Vec3 target,
+        Vec3& outElbow,
+        Vec3& outHand) {
+    const float upperLen = Q211Length(Q211Sub(restElbow, shoulder));
+    const float foreLen = Q211Length(Q211Sub(restHand, restElbow));
+    if (upperLen < 0.05f || foreLen < 0.05f) return false;
+
+    Vec3 toTarget = Q211Sub(target, shoulder);
+    float dist = Q211Length(toTarget);
+    if (dist < 0.04f) return false;
+    const Vec3 dir = Q211Mul(toTarget, 1.0f / dist);
+
+    const float maxReach = std::max(0.05f, upperLen + foreLen - 0.015f);
+    const float minReach =
+        std::max(0.03f, std::fabs(upperLen - foreLen) + 0.01f);
+    dist = std::clamp(dist, minReach, maxReach);
+    outHand = Q211Add(shoulder, Q211Mul(dir, dist));
+
+    Vec3 preferred{
+        left ? -0.75f : 0.75f,
+        -0.30f,
+        0.35f
+    };
+    preferred = Q211Sub(
+        preferred, Q211Mul(dir, Q211Dot(preferred, dir)));
+    if (Q211Length(preferred) < 0.05f) {
+        preferred = Q211Cross(
+            dir, std::fabs(dir.y) < 0.8f
+                ? Vec3{0.0f, 1.0f, 0.0f}
+                : Vec3{1.0f, 0.0f, 0.0f});
+    }
+    preferred = Q211NormalizeSafe(preferred);
+
+    const float along =
+        (upperLen*upperLen + dist*dist - foreLen*foreLen) /
+        std::max(0.0001f, 2.0f * dist);
+    const float sideSq =
+        std::max(0.0f, upperLen*upperLen - along*along);
+    const float side = std::sqrt(sideSq);
+    outElbow = Q211Add(
+        Q211Add(shoulder, Q211Mul(dir, along)),
+        Q211Mul(preferred, side));
+    return true;
+}
+
+void Q211BuildArmDeltas(
+        const Q211PlayerRigPart& part,
+        bool left,
+        Vec3 target,
+        std::vector<Q211Delta>& deltas,
+        Vec3& outElbow,
+        bool& solved) {
+    const int upper = left ? part.leftUpperArm : part.rightUpperArm;
+    const int fore = left ? part.leftForearm : part.rightForearm;
+    const int hand = left ? part.leftHand : part.rightHand;
+    solved = false;
+    if (upper < 0 || fore < 0 || hand < 0) return;
+
+    const Vec3 shoulder = Q211BindBonePoint(part.bones[upper]);
+    const Vec3 restElbow = Q211BindBonePoint(part.bones[fore]);
+    const Vec3 restHand = Q211BindBonePoint(part.bones[hand]);
+    Vec3 currentHand{};
+    if (!Q211SolveArm(
+            left, shoulder, restElbow, restHand,
+            target, outElbow, currentHand)) {
+        return;
+    }
+
+    const Q211Delta upperDelta = Q211MakeDelta(
+        shoulder, Q211Sub(restElbow, shoulder),
+        shoulder, Q211Sub(outElbow, shoulder));
+    const Q211Delta foreDelta = Q211MakeDelta(
+        restElbow, Q211Sub(restHand, restElbow),
+        outElbow, Q211Sub(currentHand, outElbow));
+    const Q211Delta handDelta = Q211MakeDelta(
+        restHand, Q211Sub(restHand, restElbow),
+        currentHand, Q211Sub(currentHand, outElbow));
+
+    for (size_t i = 0u; i < part.bones.size(); ++i) {
+        const int role = Q211BoneRole(part.bones[i].name);
+        if (left) {
+            if (role == 1) deltas[i] = upperDelta;
+            else if (role == 2) deltas[i] = foreDelta;
+            else if (role == 3) deltas[i] = handDelta;
+        } else {
+            if (role == 4) deltas[i] = upperDelta;
+            else if (role == 5) deltas[i] = foreDelta;
+            else if (role == 6) deltas[i] = handDelta;
+        }
+    }
+    solved = true;
+}
+
+void Q211UpdatePlayerRig() {
+    if (gQ211LastSkinnedSerial == gQ211TrackingSerial) return;
+    gQ211LastSkinnedSerial = gQ211TrackingSerial;
+    if (gQ211PlayerRigParts.empty()) return;
+
+    float invRoot[16]{};
+    if (!Q2016InvertAffine(gQ210PlayerRoot, invRoot)) return;
+
+    const Vec3 leftTargetWorld{
+        gQ210LeftHand[0], gQ210LeftHand[1], gQ210LeftHand[2]};
+    const Vec3 rightTargetWorld{
+        gQ210RightHand[0], gQ210RightHand[1], gQ210RightHand[2]};
+    const Vec3 leftTarget = Q211TransformPoint(invRoot, leftTargetWorld);
+    const Vec3 rightTarget = Q211TransformPoint(invRoot, rightTargetWorld);
+
+    bool anyLeftSolved = false;
+    bool anyRightSolved = false;
+    Vec3 lastLeftElbow{};
+    Vec3 lastRightElbow{};
+
+    constexpr size_t STRIDE = 18u;
+    for (Q211PlayerRigPart& part : gQ211PlayerRigParts) {
+        if (part.gpuIndex >= gQ210PlayerBody.size() ||
+            part.bindExpanded.empty() ||
+            part.bindExpanded.size() != part.workExpanded.size()) {
+            continue;
+        }
+
+        std::vector<Q211Delta> deltas(part.bones.size());
+        Vec3 leftElbow{}, rightElbow{};
+        bool leftSolved = false, rightSolved = false;
+        if (gQ210LeftHandValid && part.leftChainReady) {
+            Q211BuildArmDeltas(
+                part, true, leftTarget, deltas,
+                leftElbow, leftSolved);
+        }
+        if (gQ210RightHandValid && part.rightChainReady) {
+            Q211BuildArmDeltas(
+                part, false, rightTarget, deltas,
+                rightElbow, rightSolved);
+        }
+        anyLeftSolved = anyLeftSolved || leftSolved;
+        anyRightSolved = anyRightSolved || rightSolved;
+        if (leftSolved) lastLeftElbow = leftElbow;
+        if (rightSolved) lastRightElbow = rightElbow;
+
+        std::copy(
+            part.bindExpanded.begin(), part.bindExpanded.end(),
+            part.workExpanded.begin());
+
+        const size_t expandedVertices = part.bindExpanded.size() / STRIDE;
+        if (part.expandedBoneIndices.size() != expandedVertices * 4u ||
+            part.expandedBoneWeights.size() != expandedVertices * 4u) {
+            continue;
+        }
+
+        for (size_t v = 0u; v < expandedVertices; ++v) {
+            const size_t base = v * STRIDE;
+            const Vec3 bindP{
+                part.bindExpanded[base + 0u],
+                part.bindExpanded[base + 1u],
+                part.bindExpanded[base + 2u]};
+            const Vec3 bindN{
+                part.bindExpanded[base + 3u],
+                part.bindExpanded[base + 4u],
+                part.bindExpanded[base + 5u]};
+            const Vec3 bindT{
+                part.bindExpanded[base + 6u],
+                part.bindExpanded[base + 7u],
+                part.bindExpanded[base + 8u]};
+            const Vec3 bindB{
+                part.bindExpanded[base + 9u],
+                part.bindExpanded[base + 10u],
+                part.bindExpanded[base + 11u]};
+
+            Vec3 p{0,0,0}, n{0,0,0}, t{0,0,0}, b{0,0,0};
+            float sum = 0.0f;
+            for (size_t slot = 0u; slot < 4u; ++slot) {
+                const size_t at = v * 4u + slot;
+                const uint16_t bone = part.expandedBoneIndices[at];
+                const float weight = part.expandedBoneWeights[at];
+                if (weight <= 0.000001f || bone >= deltas.size()) continue;
+                p = Q211Add(p, Q211Mul(
+                    Q211ApplyDelta(deltas[bone], bindP), weight));
+                n = Q211Add(n, Q211Mul(
+                    Q211ApplyDeltaVector(deltas[bone], bindN), weight));
+                t = Q211Add(t, Q211Mul(
+                    Q211ApplyDeltaVector(deltas[bone], bindT), weight));
+                b = Q211Add(b, Q211Mul(
+                    Q211ApplyDeltaVector(deltas[bone], bindB), weight));
+                sum += weight;
+            }
+            if (sum < 0.999f) {
+                const float remain = std::max(0.0f, 1.0f - sum);
+                p = Q211Add(p, Q211Mul(bindP, remain));
+                n = Q211Add(n, Q211Mul(bindN, remain));
+                t = Q211Add(t, Q211Mul(bindT, remain));
+                b = Q211Add(b, Q211Mul(bindB, remain));
+            }
+
+            n = Q211NormalizeSafe(n, bindN);
+            t = Q211NormalizeSafe(t, bindT);
+            b = Q211NormalizeSafe(b, bindB);
+
+            part.workExpanded[base + 0u] = p.x;
+            part.workExpanded[base + 1u] = p.y;
+            part.workExpanded[base + 2u] = p.z;
+            part.workExpanded[base + 3u] = n.x;
+            part.workExpanded[base + 4u] = n.y;
+            part.workExpanded[base + 5u] = n.z;
+            part.workExpanded[base + 6u] = t.x;
+            part.workExpanded[base + 7u] = t.y;
+            part.workExpanded[base + 8u] = t.z;
+            part.workExpanded[base + 9u] = b.x;
+            part.workExpanded[base + 10u] = b.y;
+            part.workExpanded[base + 11u] = b.z;
+        }
+
+        GpuObject& gpu = gQ210PlayerBody[part.gpuIndex];
+        if (gpu.vbo != 0u) {
+            glBindBuffer(GL_ARRAY_BUFFER, gpu.vbo);
+            glBufferSubData(
+                GL_ARRAY_BUFFER, 0,
+                static_cast<GLsizeiptr>(
+                    part.workExpanded.size() * sizeof(float)),
+                part.workExpanded.data());
+        }
+    }
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+
+    if ((gQ211TrackingSerial % 180u) == 1u) {
+        Q6H_LOGI("Q21.1 ARM IK: serial=%llu rigParts=%zu leftValid=%d leftSolved=%d targetL=(%.3f %.3f %.3f) elbowL=(%.3f %.3f %.3f) rightValid=%d rightSolved=%d targetR=(%.3f %.3f %.3f) elbowR=(%.3f %.3f %.3f) mode=weighted-LBS-two-bone-IK wristOrientation=forearm",
+                 static_cast<unsigned long long>(gQ211TrackingSerial),
+                 gQ211PlayerRigParts.size(),
+                 gQ210LeftHandValid ? 1 : 0,
+                 anyLeftSolved ? 1 : 0,
+                 leftTarget.x, leftTarget.y, leftTarget.z,
+                 lastLeftElbow.x, lastLeftElbow.y, lastLeftElbow.z,
+                 gQ210RightHandValid ? 1 : 0,
+                 anyRightSolved ? 1 : 0,
+                 rightTarget.x, rightTarget.y, rightTarget.z,
+                 lastRightElbow.x, lastRightElbow.y, lastRightElbow.z);
+    }
+}
+
 void Q210DeletePlayerBody() {
     for (GpuObject& object : gQ210PlayerBody) {
         if (Q2017ReleaseSharedGeometry(object)) continue;
