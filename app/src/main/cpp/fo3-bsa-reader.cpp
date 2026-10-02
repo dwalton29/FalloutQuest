@@ -228,6 +228,40 @@ bool Inflate(const std::vector<uint8_t>& compressed, uint32_t originalSize,
 
 } // namespace
 
+bool ListFalloutMeshFilesByPrefix(
+        const std::string& prefix,
+        std::vector<FalloutMeshIndexEntry>& outEntries,
+        size_t maxResults) {
+    outEntries.clear();
+    std::call_once(gIndexOnce, []() {
+        gIndexOnceReady = BuildIndex();
+    });
+    if (!gIndexOnceReady) return false;
+
+    const std::string normalizedPrefix = Normalize(prefix);
+    const bool compressedDefault = (gIndex.archiveFlags & 4u) != 0u;
+    for (const auto& pair : gIndex.files) {
+        if (!normalizedPrefix.empty() &&
+            pair.first.rfind(normalizedPrefix, 0) != 0) {
+            continue;
+        }
+        FalloutMeshIndexEntry item;
+        item.path = pair.first;
+        item.storedBytes = pair.second.storedBytes;
+        item.compressed =
+            compressedDefault != pair.second.compressionToggle;
+        outEntries.push_back(std::move(item));
+        if (maxResults > 0u && outEntries.size() >= maxResults) break;
+    }
+    std::sort(
+        outEntries.begin(), outEntries.end(),
+        [](const FalloutMeshIndexEntry& a,
+           const FalloutMeshIndexEntry& b) {
+            return a.path < b.path;
+        });
+    return true;
+}
+
 bool LoadFalloutMeshFile(const std::string& modelPath,
                          std::vector<uint8_t>& outBytes,
                          std::string* outResolvedPath) {

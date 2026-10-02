@@ -4155,6 +4155,9 @@ void UpdateFo3ExteriorStreamingQ1890(float virtualHeadX, float virtualHeadZ) {
     gQ1920LatestGridValid = true;
     gQ1920LatestGridX = actualGridX;
     gQ1920LatestGridY = actualGridY;
+    if (gExteriorWorldspaceQ1890 == 0x0000003Cu) {
+        Q2022ProbeLodArchive(actualGridX, actualGridY);
+    }
     if (gExteriorWorldspaceQ1890 != 0u) {
         // Q20.10: CELL-specific streaming now owns every exterior worldspace,
         // including child worlds such as MegatonWorld. Native Level4 LOD remains
@@ -5165,6 +5168,138 @@ Q1990NativeLodBlock* Q1990FindLodBlock(int32_t blockX, int32_t blockY) {
 }
 
 constexpr int Q1840_LEVEL4_BLOCK_CELLS = 4;
+
+// Q20.22: authoritative Fallout - Meshes.bsa LOD hierarchy probe.
+// This is diagnostic only: no rendering/streaming behaviour is changed.
+bool gQ2022LodArchiveProbeDone = false;
+
+int32_t Q2022FloorToSpan(int32_t cell, int span) {
+    int32_t quotient = cell / span;
+    if (cell < 0 && (cell % span) != 0) --quotient;
+    return quotient * span;
+}
+
+void Q2022ProbeLodArchive(int32_t cellX, int32_t cellY) {
+    if (gQ2022LodArchiveProbeDone) return;
+    gQ2022LodArchiveProbeDone = true;
+
+    std::vector<FalloutMeshIndexEntry> entries;
+    if (!ListFalloutMeshFilesByPrefix(
+            "Landscape\\LOD\\Wasteland\\", entries)) {
+        Q6H_LOGE("Q20.22 LOD ARCHIVE PROBE FAILED: reason=bsa-index-unavailable");
+        return;
+    }
+
+    struct Bucket {
+        const char* name;
+        const char* needle;
+        size_t count = 0u;
+        uint64_t bytes = 0u;
+        std::vector<const FalloutMeshIndexEntry*> samples;
+    };
+    Bucket buckets[] = {
+        {"Level4", "level4"},
+        {"Level8", "level8"},
+        {"Level16", "level16"},
+        {"Level32", "level32"},
+        {"Blocks", "\\blocks\\"},
+        {"Trees", "\\trees\\"},
+        {"High", "high"},
+    };
+
+    size_t nifCount = 0u;
+    size_t otherLevelCount = 0u;
+    for (const FalloutMeshIndexEntry& entry : entries) {
+        if (entry.path.size() < 4u ||
+            entry.path.substr(entry.path.size() - 4u) != ".nif") {
+            continue;
+        }
+        ++nifCount;
+        bool knownLevel = false;
+        for (Bucket& bucket : buckets) {
+            if (entry.path.find(bucket.needle) == std::string::npos) continue;
+            ++bucket.count;
+            bucket.bytes += entry.storedBytes;
+            if (bucket.samples.size() < 5u)
+                bucket.samples.push_back(&entry);
+            if (bucket.name[0] == 'L') knownLevel = true;
+        }
+        if (entry.path.find("level") != std::string::npos &&
+            !knownLevel) {
+            ++otherLevelCount;
+        }
+    }
+
+    Q6H_LOGI("Q20.22 LOD ARCHIVE SUMMARY: playerCell=(%d,%d) prefix=landscape\\lod\\wasteland entries=%zu nif=%zu level4=%zu level8=%zu level16=%zu level32=%zu blocks=%zu trees=%zu high=%zu otherLevel=%zu source=Fallout-Meshes.bsa-index renderChanges=0",
+             cellX, cellY, entries.size(), nifCount,
+             buckets[0].count, buckets[1].count,
+             buckets[2].count, buckets[3].count,
+             buckets[4].count, buckets[5].count,
+             buckets[6].count, otherLevelCount);
+
+    for (const Bucket& bucket : buckets) {
+        Q6H_LOGI("Q20.22 LOD ARCHIVE BUCKET: category=%s count=%zu storedMB=%.2f samples=%zu",
+                 bucket.name, bucket.count,
+                 static_cast<double>(bucket.bytes) /
+                     (1024.0 * 1024.0),
+                 bucket.samples.size());
+        for (const FalloutMeshIndexEntry* sample : bucket.samples) {
+            Q6H_LOGI("Q20.22 LOD ARCHIVE SAMPLE: category=%s path=%s storedBytes=%u compressed=%d",
+                     bucket.name, sample->path.c_str(),
+                     sample->storedBytes,
+                     sample->compressed ? 1 : 0);
+        }
+    }
+
+    const int spans[] = {4, 8, 16, 32};
+    for (int span : spans) {
+        const int32_t bx = Q2022FloorToSpan(cellX, span);
+        const int32_t by = Q2022FloorToSpan(cellY, span);
+        const std::string level =
+            "level" + std::to_string(span);
+        const std::string coord =
+            ".x" + std::to_string(bx) +
+            ".y" + std::to_string(by);
+
+        size_t localMatches = 0u;
+        for (const FalloutMeshIndexEntry& entry : entries) {
+            if (entry.path.find(level) == std::string::npos ||
+                entry.path.find(coord) == std::string::npos) {
+                continue;
+            }
+            ++localMatches;
+            if (localMatches <= 16u) {
+                Q6H_LOGI("Q20.22 LOD LOCAL: span=%d aligned=(%d,%d) path=%s storedBytes=%u compressed=%d",
+                         span, bx, by, entry.path.c_str(),
+                         entry.storedBytes,
+                         entry.compressed ? 1 : 0);
+            }
+        }
+        Q6H_LOGI("Q20.22 LOD LOCAL SUMMARY: span=%d playerCell=(%d,%d) aligned=(%d,%d) matches=%zu",
+                 span, cellX, cellY, bx, by, localMatches);
+    }
+
+    // Also surface exact archive conventions that do not fit our guessed
+    // Level4/8/16/32 vocabulary.
+    size_t unusualLogged = 0u;
+    for (const FalloutMeshIndexEntry& entry : entries) {
+        if (entry.path.size() < 4u ||
+            entry.path.substr(entry.path.size() - 4u) != ".nif" ||
+            entry.path.find("level") == std::string::npos) {
+            continue;
+        }
+        const bool known =
+            entry.path.find("level4") != std::string::npos ||
+            entry.path.find("level8") != std::string::npos ||
+            entry.path.find("level16") != std::string::npos ||
+            entry.path.find("level32") != std::string::npos;
+        if (known) continue;
+        Q6H_LOGI("Q20.22 LOD UNUSUAL LEVEL: path=%s storedBytes=%u",
+                 entry.path.c_str(), entry.storedBytes);
+        if (++unusualLogged >= 20u) break;
+    }
+}
+
 // Fallout.ini: uGridDistantCount=20. Keep that authored distant-grid horizon
 // separate from the Q20.1 5x5 detailed draw radius/resident REFR window.
 constexpr int Q1840_DISTANT_GRID_RADIUS_CELLS = 20;
