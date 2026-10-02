@@ -239,11 +239,27 @@ bool ListFalloutMeshFilesByPrefix(
     if (!gIndexOnceReady) return false;
 
     const std::string normalizedPrefix = Normalize(prefix);
+
+    // Q20.22D: BSA folder keys may include the archive's "meshes\\" root
+    // while callers traditionally pass model paths relative to that root.
+    // Match the same two path forms that FindEntry() already accepts so
+    // read-only archive probes see exactly the files the production loader can.
+    std::string alternatePrefix;
+    if (normalizedPrefix.rfind("meshes\\", 0) == 0) {
+        alternatePrefix = normalizedPrefix.substr(7);
+    } else if (!normalizedPrefix.empty()) {
+        alternatePrefix = "meshes\\" + normalizedPrefix;
+    }
+
     const bool compressedDefault = (gIndex.archiveFlags & 4u) != 0u;
     for (const auto& pair : gIndex.files) {
-        if (!normalizedPrefix.empty() &&
-            pair.first.rfind(normalizedPrefix, 0) != 0) {
-            continue;
+        if (!normalizedPrefix.empty()) {
+            const bool primaryMatch =
+                pair.first.rfind(normalizedPrefix, 0) == 0;
+            const bool alternateMatch =
+                !alternatePrefix.empty() &&
+                pair.first.rfind(alternatePrefix, 0) == 0;
+            if (!primaryMatch && !alternateMatch) continue;
         }
         FalloutMeshIndexEntry item;
         item.path = pair.first;
