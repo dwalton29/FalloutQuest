@@ -18,6 +18,7 @@ extern void PumpFo3AndroidEventsQ1860();
 #include "fo3-loading-state-q1700.h"
 #include "fo3-loading-screen-q1700.h"
 #include "fo3-megaton-scene.h"
+#include "fo3-npc-q23.h"
 #include "fo3-static-nif.h"
 #include "fo3-bsa-reader.h"
 #include "fo3-texture-bsa.h"
@@ -320,6 +321,7 @@ struct GpuObject {
     bool q2025HighPriorityLod = false;
     bool q210PlayerBody = false;
     bool q220LooseObject = false;
+    bool q230NpcActor = false;
     float q223PlacementScale = 1.0f;
     float q220DynamicTransform[16]{
         1,0,0,0,
@@ -548,6 +550,9 @@ std::vector<GpuObject> gObjects;
 
 // Q21.0: real Fallout actor geometry kept outside CELL ownership.
 std::vector<GpuObject> gQ210PlayerBody;
+std::vector<GpuObject> gQ230NpcActors;
+bool gQ230NpcAttempted = false;
+bool gQ230NpcReady = false;
 bool gQ210PlayerBodyAttempted = false;
 bool gQ210PlayerBodyReady = false;
 uint64_t gQ210PlayerBodyFrames = 0u;
@@ -4780,8 +4785,11 @@ int Q1900BuildNativeLodClipCells(float* bounds, bool objectLod) {
 }
 
 void DrawSceneObject(const GpuObject& object, bool environmentPassQ2050 = false) {
-    if (!object.q210PlayerBody && !Q1970ShouldRenderFullDetail(object)) return;
     if (!object.q210PlayerBody &&
+        !object.q230NpcActor &&
+        !Q1970ShouldRenderFullDetail(object)) return;
+    if (!object.q210PlayerBody &&
+        !object.q230NpcActor &&
         !object.q220LooseObject &&
         !Q2015AabbVisible(object)) return;
     if (environmentPassQ2050 && !object.environmentEnabledQ2050) return;
@@ -9864,6 +9872,162 @@ size_t Q215SuppressPlayerGoreCaps(Fo3StaticNifMesh& mesh) {
     return removed;
 }
 
+void Q230DeleteNpcActors() {
+    for (GpuObject& object : gQ230NpcActors) {
+        if (object.vbo) glDeleteBuffers(1, &object.vbo);
+        if (object.vao) glDeleteVertexArrays(1, &object.vao);
+    }
+    gQ230NpcActors.clear();
+    gQ230NpcReady = false;
+    gQ230NpcAttempted = false;
+}
+
+void Q230ConvertBethesdaRotation(
+        float rx, float ry, float rz,
+        float& outRx, float& outRy, float& outRz) {
+    // Exact conversion used by the existing Wasteland placement loader.
+    const float sx=std::sin(rx), cx=std::cos(rx);
+    const float sy=std::sin(ry), cy=std::cos(ry);
+    const float sz=std::sin(rz), cz=std::cos(rz);
+    const float m00=cy*cz;
+    const float m01=sz*cy;
+    const float m10=sx*sy*cz-sz*cx;
+    const float m11=sx*sy*sz+cx*cz;
+    const float m20=sx*sz+sy*cx*cz;
+    const float m21=-sx*cz+sy*sz*cx;
+    const float m22=cx*cy;
+    outRy=std::asin(std::clamp(-m20,-1.0f,1.0f));
+    const float cosY=std::cos(outRy);
+    if(std::fabs(cosY)>1.0e-5f){
+        outRx=std::atan2(m21,m22);
+        outRz=std::atan2(m10,m00);
+    } else {
+        outRx=0.0f;
+        outRz=std::atan2(-m01,m11);
+    }
+}
+
+bool Q230EnsureNpcActors() {
+    if (gQ230NpcReady) return true;
+    if (gQ230NpcAttempted) return false;
+    if (!gExteriorStreamingActiveQ1890 ||
+        gExteriorWorldspaceQ1890 != 0x0000003Cu) return false;
+    gQ230NpcAttempted = true;
+
+    std::vector<Fo3NpcActorQ230> actors;
+    if (!LoadFo3MegatonExteriorActorsQ230(actors)) {
+        Q6H_LOGW("Q23.0 NPC RENDER MISS: stage=esm-resolve");
+        return false;
+    }
+
+    const Fo3NpcActorQ230* lucas = nullptr;
+    for (const Fo3NpcActorQ230& actor : actors) {
+        if (actor.editorId == "LucasSimms") {
+            lucas = &actor;
+            break;
+        }
+    }
+    if (!lucas) {
+        Q6H_LOGW("Q23.0 NPC RENDER MISS: stage=LucasSimms-not-found");
+        return false;
+    }
+
+    std::vector<std::string> models;
+    auto addModel=[&](const std::string& path){
+        if(path.empty()) return;
+        for(const std::string& existing:models)
+            if(Q210EndsWithInsensitive(existing,path.c_str())) return;
+        models.push_back(path);
+    };
+    addModel(lucas->raceHeadModel);
+    addModel(lucas->hairModel);
+    for(const std::string& path:lucas->headPartModels) addModel(path);
+    for(const Fo3NpcVisualItemQ230& item:lucas->inventory)
+        if(item.recordType=="ARMO") addModel(item.modelPath);
+
+    size_t cpuShapes=0u;
+    size_t gpuShapes=0u;
+    size_t triangles=0u;
+    float rx=0.0f, ry=0.0f, rz=0.0f;
+    Q230ConvertBethesdaRotation(
+        lucas->rx,lucas->ry,lucas->rz,rx,ry,rz);
+
+    for(const std::string& path:models){
+        Fo3WorldPlacement placement;
+        placement.refFormId=lucas->refFormId;
+        placement.baseFormId=lucas->baseFormId;
+        placement.baseRecordType="NPC_";
+        placement.editorId=lucas->editorId;
+        placement.modelPath=path;
+        placement.x=lucas->x;
+        placement.y=lucas->y;
+        placement.z=lucas->z;
+        placement.rx=rx;
+        placement.ry=ry;
+        placement.rz=rz;
+        placement.scale=lucas->scale;
+
+        std::vector<CpuObject> parts;
+        if(!BuildCpuObjects(placement,parts)){
+            Q6H_LOGW("Q23.0 NPC PART MISS: actor=%s model=%s stage=cpu",
+                     lucas->editorId.c_str(),path.c_str());
+            continue;
+        }
+        cpuShapes+=parts.size();
+
+        for(CpuObject& part:parts){
+            // Same authored BSDismember section-cap suppression used by the
+            // player body; this does not remove ordinary limb/body geometry.
+            Q215SuppressPlayerGoreCaps(part.mesh);
+            GpuObject gpu;
+            if(!UploadCpuObject(
+                    part,
+                    gExteriorOriginXQ1890,
+                    gExteriorOriginYQ1890,
+                    gExteriorOriginZQ1890,
+                    gpu)){
+                Q6H_LOGW("Q23.0 NPC PART MISS: actor=%s model=%s stage=gpu",
+                         lucas->editorId.c_str(),path.c_str());
+                continue;
+            }
+            gpu.q230NpcActor=true;
+            triangles+=static_cast<size_t>(gpu.vertexCount/3);
+            gQ230NpcActors.push_back(std::move(gpu));
+            ++gpuShapes;
+        }
+    }
+
+    gQ230NpcReady=!gQ230NpcActors.empty();
+    Q6H_LOGI("Q23.0 NPC VISUAL READY: ready=%d actor=%s ref=%08X base=%08X assets=%zu cpuShapes=%zu gpuShapes=%zu triangles=%zu pose=bind faceGenApplied=0 faceGenPresent=%d source=ACHR->NPC_->RACE/HAIR/HDPT/ARMO",
+             gQ230NpcReady?1:0,
+             lucas->fullName.empty()?lucas->editorId.c_str():lucas->fullName.c_str(),
+             lucas->refFormId,lucas->baseFormId,
+             models.size(),cpuShapes,gpuShapes,triangles,
+             lucas->hasFaceGenGeometry?1:0);
+    if(!gQ230NpcReady) Q230DeleteNpcActors();
+    return gQ230NpcReady;
+}
+
+void Q230RenderNpcActors(bool alphaPass) {
+    if (!gExteriorStreamingActiveQ1890 ||
+        gExteriorWorldspaceQ1890 != 0x0000003Cu) return;
+    if (!Q230EnsureNpcActors()) return;
+
+    for (const GpuObject& object : gQ230NpcActors) {
+        if (object.alphaBlend != alphaPass) continue;
+        if (object.zBufferTestQ1200) glEnable(GL_DEPTH_TEST);
+        else glDisable(GL_DEPTH_TEST);
+        glDepthMask(object.zBufferWriteQ1200 ? GL_TRUE : GL_FALSE);
+        if(alphaPass){
+            glEnable(GL_BLEND);
+            glBlendFunc(
+                Q1150BlendFactor(object.alphaSourceBlend,true),
+                Q1150BlendFactor(object.alphaDestBlend,false));
+        }
+        DrawSceneObject(object);
+    }
+}
+
 bool Q210EnsurePlayerBody() {
     if (gQ210PlayerBodyReady) return true;
     if (gQ210PlayerBodyAttempted) return false;
@@ -10442,6 +10606,7 @@ void RenderScene() {
         glEnable(GL_SAMPLE_ALPHA_TO_COVERAGE);
     Q1990RenderNativeLod(false);
     Q2017RenderOpaqueDetailedInstanced();
+    Q230RenderNpcActors(false);
     Q210RenderPlayerBody(false);
     if (!q2021MainA2cWas)
         glDisable(GL_SAMPLE_ALPHA_TO_COVERAGE);
@@ -10453,6 +10618,7 @@ void RenderScene() {
     const auto q2017AlphaStarted = std::chrono::steady_clock::now();
     glEnable(GL_BLEND);
     Q1990RenderNativeLod(true);
+    Q230RenderNpcActors(true);
     Q210RenderPlayerBody(true);
     for (const GpuObject& object : gObjects) {
         if (!object.alphaBlend) continue;
@@ -12003,6 +12169,7 @@ void Q6HDeleteFramebuffers(GLsizei n, const GLuint* framebuffers) {
         Q1900DeleteGpuShape(object);
     }
     gObjects.clear();
+    Q230DeleteNpcActors();
     Q1910DrainDeferredGpuDeletesQ19(true);
     Q2017ForceClearSharedGeometry();
     if (gInstanceBufferQ2016) {
