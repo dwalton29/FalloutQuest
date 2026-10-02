@@ -184,13 +184,14 @@ bool Q2016InvertAffine(const float m[16], float out[16]) {
     if (std::fabs(det) < 1.0e-8f) return false;
     const float invDet = 1.0f / det;
 
+    // Column-major inverse of the 3x3 affine basis.
     out[0]  = c00 * invDet;
-    out[4]  = (a12*a20 - a10*a22) * invDet;
-    out[8]  = (a10*a21 - a11*a20) * invDet;
-    out[1]  = c01 * invDet;
+    out[4]  = c01 * invDet;
+    out[8]  = c02 * invDet;
+    out[1]  = (a12*a20 - a10*a22) * invDet;
     out[5]  = (a00*a22 - a02*a20) * invDet;
     out[9]  = (a02*a10 - a00*a12) * invDet;
-    out[2]  = c02 * invDet;
+    out[2]  = (a10*a21 - a11*a20) * invDet;
     out[6]  = (a01*a20 - a00*a21) * invDet;
     out[10] = (a00*a11 - a01*a10) * invDet;
     out[3]=out[7]=out[11]=0.0f;

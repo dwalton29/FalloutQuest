@@ -62,6 +62,9 @@ struct Q711TerrainBatch {
     bool specularEnabled = false;
     bool ownsTexture = false;
     bool ownsNormal = false;
+    float minX = 0.0f, maxX = 0.0f;
+    float minY = 0.0f, maxY = 0.0f;
+    float minZ = 0.0f, maxZ = 0.0f;
 };
 
 struct Q711CpuBatch {
@@ -139,6 +142,60 @@ size_t q720HiddenAlphaLayers = 0;
 uint64_t Q711GridKey(int32_t x, int32_t y) {
     return (static_cast<uint64_t>(static_cast<uint32_t>(x)) << 32u) |
            static_cast<uint32_t>(y);
+}
+
+struct Q2018TerrainFrustum {
+    float planes[6][4]{};
+    bool valid = false;
+};
+
+Q2018TerrainFrustum Q2018BuildTerrainFrustum(const float* m) {
+    Q2018TerrainFrustum out;
+    if (!m) return out;
+    const float raw[6][4] = {
+        {m[3] + m[0], m[7] + m[4], m[11] + m[8],  m[15] + m[12]},
+        {m[3] - m[0], m[7] - m[4], m[11] - m[8],  m[15] - m[12]},
+        {m[3] + m[1], m[7] + m[5], m[11] + m[9],  m[15] + m[13]},
+        {m[3] - m[1], m[7] - m[5], m[11] - m[9],  m[15] - m[13]},
+        {m[3] + m[2], m[7] + m[6], m[11] + m[10], m[15] + m[14]},
+        {m[3] - m[2], m[7] - m[6], m[11] - m[10], m[15] - m[14]},
+    };
+    for (int i = 0; i < 6; ++i) {
+        const float len = std::sqrt(
+            raw[i][0]*raw[i][0] +
+            raw[i][1]*raw[i][1] +
+            raw[i][2]*raw[i][2]);
+        if (len < 1.0e-6f) return out;
+        const float inv = 1.0f / len;
+        for (int j = 0; j < 4; ++j)
+            out.planes[i][j] = raw[i][j] * inv;
+    }
+    out.valid = true;
+    return out;
+}
+
+bool Q2018TerrainBatchVisible(
+        const Q2018TerrainFrustum& frustum,
+        const Q711TerrainBatch& batch) {
+    if (!frustum.valid) return true;
+    const float cx = 0.5f * (batch.minX + batch.maxX);
+    const float cy = 0.5f * (batch.minY + batch.maxY);
+    const float cz = 0.5f * (batch.minZ + batch.maxZ);
+    const float ex = 0.5f * (batch.maxX - batch.minX);
+    const float ey = 0.5f * (batch.maxY - batch.minY);
+    const float ez = 0.5f * (batch.maxZ - batch.minZ);
+    constexpr float Q2018_TERRAIN_PADDING_M = 6.0f;
+    for (const auto& p : frustum.planes) {
+        const float distance =
+            p[0]*cx + p[1]*cy + p[2]*cz + p[3];
+        const float radius =
+            std::fabs(p[0])*ex +
+            std::fabs(p[1])*ey +
+            std::fabs(p[2])*ez;
+        if (distance + radius < -Q2018_TERRAIN_PADDING_M)
+            return false;
+    }
+    return true;
 }
 
 Q76BV3 Q76BSub(const Q76BV3& a, const Q76BV3& b) {
@@ -976,6 +1033,22 @@ bool InitializeFo3TerrainRenderQ76(uint32_t worldspaceFormId,
         gpu.alphaLayer = cpu.alphaLayer;
         gpu.layerOrder = cpu.layerOrder;
 
+        if (cpu.vertices.size() >= 12u) {
+            gpu.minX = gpu.maxX = cpu.vertices[0];
+            gpu.minY = gpu.maxY = cpu.vertices[1];
+            gpu.minZ = gpu.maxZ = cpu.vertices[2];
+            for (size_t q2018v = 12u;
+                 q2018v + 2u < cpu.vertices.size();
+                 q2018v += 12u) {
+                gpu.minX = std::min(gpu.minX, cpu.vertices[q2018v + 0u]);
+                gpu.maxX = std::max(gpu.maxX, cpu.vertices[q2018v + 0u]);
+                gpu.minY = std::min(gpu.minY, cpu.vertices[q2018v + 1u]);
+                gpu.maxY = std::max(gpu.maxY, cpu.vertices[q2018v + 1u]);
+                gpu.minZ = std::min(gpu.minZ, cpu.vertices[q2018v + 2u]);
+                gpu.maxZ = std::max(gpu.maxZ, cpu.vertices[q2018v + 2u]);
+            }
+        }
+
         if (!cpu.texturePath.empty()) {
             const auto cached = uploadedByPath.find(cpu.texturePath);
             if (cached != uploadedByPath.end()) {
@@ -1121,6 +1194,14 @@ void RenderFo3TerrainShadowQ1050(const float* lightMvp,
 
 void RenderFo3TerrainQ76(const float* mvp) {
     if (!q76bReady || !mvp || !q76bProgram || q711TerrainBatches.empty()) return;
+
+    const auto q2018TerrainStarted = std::chrono::steady_clock::now();
+    const Q2018TerrainFrustum q2018Frustum =
+        Q2018BuildTerrainFrustum(mvp);
+    size_t q2018BaseTested = 0u;
+    size_t q2018BaseDrawn = 0u;
+    size_t q2018AlphaTested = 0u;
+    size_t q2018AlphaDrawn = 0u;
 
     GLint previousProgram = 0;
     GLint previousVao = 0;
@@ -1294,6 +1375,9 @@ void RenderFo3TerrainQ76(const float* mvp) {
     glActiveTexture(GL_TEXTURE0);
     for (const Q711TerrainBatch& batch : q711TerrainBatches) {
         if (batch.alphaLayer || !batch.vao || batch.vertexCount <= 0) continue;
+        ++q2018BaseTested;
+        if (!Q2018TerrainBatchVisible(q2018Frustum, batch)) continue;
+        ++q2018BaseDrawn;
         glUniform1i(q76bUseTextureLocation, batch.realTexture ? 1 : 0);
         if (q1060TerrainUseNormalLocation >= 0) glUniform1i(q1060TerrainUseNormalLocation, batch.realNormal ? 1 : 0);
         if (q1060TerrainSpecularLocation >= 0) glUniform1f(q1060TerrainSpecularLocation, batch.specularEnabled ? 1.0f : 0.0f);
@@ -1314,6 +1398,9 @@ void RenderFo3TerrainQ76(const float* mvp) {
     glDepthFunc(GL_LEQUAL);
     for (const Q711TerrainBatch& batch : q711TerrainBatches) {
         if (!batch.alphaLayer || !batch.realTexture || !batch.vao || batch.vertexCount <= 0) continue;
+        ++q2018AlphaTested;
+        if (!Q2018TerrainBatchVisible(q2018Frustum, batch)) continue;
+        ++q2018AlphaDrawn;
         glUniform1i(q76bUseTextureLocation, 1);
         if (q1060TerrainUseNormalLocation >= 0) glUniform1i(q1060TerrainUseNormalLocation, batch.realNormal ? 1 : 0);
         if (q1060TerrainSpecularLocation >= 0) glUniform1f(q1060TerrainSpecularLocation, batch.specularEnabled ? 1.0f : 0.0f);
@@ -1341,6 +1428,24 @@ void RenderFo3TerrainQ76(const float* mvp) {
     glUseProgram(static_cast<GLuint>(previousProgram));
     if (cullWasEnabled) glEnable(GL_CULL_FACE); else glDisable(GL_CULL_FACE);
     if (blendWasEnabled) glEnable(GL_BLEND); else glDisable(GL_BLEND);
+
+    const uint64_t q2018TerrainUs = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() -
+            q2018TerrainStarted).count());
+    static uint64_t q2018TerrainPasses = 0u;
+    ++q2018TerrainPasses;
+    if ((q2018TerrainPasses % 240u) == 1u ||
+        q2018TerrainUs >= 12000u) {
+        Q76B_LOGI("Q20.18 TERRAIN CULL: renderUs=%llu baseTested=%zu baseDrawn=%zu baseRejected=%zu alphaTested=%zu alphaDrawn=%zu alphaRejected=%zu totalBatches=%zu reflection=%d paddingM=6",
+                  static_cast<unsigned long long>(q2018TerrainUs),
+                  q2018BaseTested, q2018BaseDrawn,
+                  q2018BaseTested - q2018BaseDrawn,
+                  q2018AlphaTested, q2018AlphaDrawn,
+                  q2018AlphaTested - q2018AlphaDrawn,
+                  q711TerrainBatches.size(),
+                  q2090TerrainReflectionClipEnabled ? 1 : 0);
+    }
 
     if (!q76bLoggedVisible) {
         q76bLoggedVisible = true;

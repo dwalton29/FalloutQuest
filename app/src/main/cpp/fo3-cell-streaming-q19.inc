@@ -985,8 +985,15 @@ Q1960UploadStepQ19 Q1960AdvanceShapeQ19(
             cpu = CpuObject{};
             upload = {};
             ++state.gpuCursor;
-            Q6H_LOGI("Q20.17 VBO CACHE HIT: cell=(%d,%d) model=%s action=skip-vertex-upload",
-                     state.gridX, state.gridY, model.c_str());
+            static uint64_t q2018VboCacheHitsLogged = 0u;
+            ++q2018VboCacheHitsLogged;
+            if (q2018VboCacheHitsLogged <= 12u ||
+                (q2018VboCacheHitsLogged % 256u) == 0u) {
+                Q6H_LOGI("Q20.18 VBO CACHE HIT: count=%llu cell=(%d,%d) model=%s action=skip-vertex-upload log=first12+heartbeat256",
+                         static_cast<unsigned long long>(
+                             q2018VboCacheHitsLogged),
+                         state.gridX, state.gridY, model.c_str());
+            }
             return Q1960UploadStepQ19::Complete;
         }
 
