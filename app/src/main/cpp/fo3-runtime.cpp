@@ -1948,7 +1948,7 @@ bool UploadCpuObject(CpuObject& cpu, float centerX, float centerY, float floorZ,
     if (gpu.q220LooseObject) {
         static std::unordered_set<uint32_t> q220LoggedRefs;
         if (q220LoggedRefs.insert(gpu.refFormId).second) {
-            Q6H_LOGI("Q22.3 LOOSE CANDIDATE: ref=%08X base=%08X type=%s edid=%s model=%s",
+            Q6H_LOGI("Q22.4 LOOSE CANDIDATE: ref=%08X base=%08X type=%s edid=%s model=%s",
                      gpu.refFormId, gpu.baseFormId,
                      gpu.baseRecordType.c_str(),
                      gpu.editorId.empty() ? "<none>" : gpu.editorId.c_str(),
@@ -7539,18 +7539,36 @@ Q223DynamicBody* Q223EnsureDynamicBody(uint32_t refFormId) {
 
     const float radiusUnits =
         Q223CollisionRadiusUnits(modelPath);
-    body.collisionRadius =
-        radiusUnits > 0.0f
-            ? (radiusUnits * placementScale) /
-                  FO3_UNITS_PER_METRE
-            : 0.0f;
+    const Vec3 renderHalf{
+        (maximum.x - minimum.x) * 0.5f,
+        (maximum.y - minimum.y) * 0.5f,
+        (maximum.z - minimum.z) * 0.5f};
+    const float renderRadius =
+        Q211Length(renderHalf);
 
-    Q6H_LOGI("Q22.3 PHYSICS BODY: ref=%08X model=%s radius=%.4fm source=authored-bhk-bounds placementScale=%.3f physics=%s",
+    const bool authoredBhk =
+        radiusUnits > 0.0f &&
+        std::isfinite(radiusUnits);
+    if (authoredBhk) {
+        body.collisionRadius =
+            (radiusUnits * placementScale) /
+            FO3_UNITS_PER_METRE;
+    } else {
+        // Q22.4 fallback for Bethesda loose clutter with no bhkRigidBody.
+        // The visible mesh is still Fallout-authored data; only the enclosing
+        // sphere representation is a standalone-VR simplification.
+        body.collisionRadius =
+            std::max(0.015f, renderRadius);
+    }
+
+    Q6H_LOGI("Q22.4 PHYSICS BODY: ref=%08X model=%s radius=%.4fm source=%s renderHalf=(%.3f %.3f %.3f) placementScale=%.3f physics=enabled",
              refFormId, modelPath.c_str(),
-             body.collisionRadius, placementScale,
-             body.collisionRadius > 0.0f
-                 ? "enabled"
-                 : "disabled-no-authored-bhk");
+             body.collisionRadius,
+             authoredBhk
+                 ? "authored-bhk-bounds"
+                 : "authored-render-bounds-fallback",
+             renderHalf.x, renderHalf.y, renderHalf.z,
+             placementScale);
 
     auto inserted =
         gQ223DynamicBodies.emplace(refFormId, std::move(body));
@@ -7763,7 +7781,7 @@ void Q223AdvanceDynamicBodies() {
                 ++q223ContactLog;
                 if (q223ContactLog <= 40u ||
                     (q223ContactLog % 180u) == 0u) {
-                    Q6H_LOGI("Q22.3 CONTACT: ref=%08X contacts=%u radius=%.3f normal=(%.2f %.2f %.2f) velocity=(%.2f %.2f %.2f)",
+                    Q6H_LOGI("Q22.4 CONTACT: ref=%08X contacts=%u radius=%.3f normal=(%.2f %.2f %.2f) velocity=(%.2f %.2f %.2f)",
                              body.refFormId, contacts,
                              body.collisionRadius,
                              normal.x, normal.y, normal.z,
@@ -7923,7 +7941,7 @@ void Q220UpdateLooseGrab(
 
             const float snapDistance =
                 Q211Length(Q211Sub(hand, center));
-            Q6H_LOGI("Q22.3 GRAB BEGIN: hand=%s ref=%08X surfaceDistance=%.3f snapDistance=%.3f objectCenter=(%.3f %.3f %.3f) palm=(%.3f %.3f %.3f) anchor=authored-bounds-center-to-weighted-player-palm",
+            Q6H_LOGI("Q22.4 GRAB BEGIN: hand=%s ref=%08X surfaceDistance=%.3f snapDistance=%.3f objectCenter=(%.3f %.3f %.3f) palm=(%.3f %.3f %.3f) anchor=authored-bounds-center-to-weighted-player-palm",
                      handIndex == 0 ? "L" : "R",
                      ref, distance, snapDistance,
                      center.x, center.y, center.z,
@@ -7947,7 +7965,7 @@ void Q220UpdateLooseGrab(
                 body->lastPhysicsStep =
                     std::chrono::steady_clock::now();
 
-                Q6H_LOGI("Q22.3 THROW RELEASE: hand=%s ref=%08X physics=%d linear=(%.2f %.2f %.2f)mps angular=(%.2f %.2f %.2f)radps radius=%.3f",
+                Q6H_LOGI("Q22.4 THROW RELEASE: hand=%s ref=%08X physics=%d linear=(%.2f %.2f %.2f)mps angular=(%.2f %.2f %.2f)radps radius=%.3f",
                          handIndex == 0 ? "L" : "R",
                          releasedRef,
                          body->dynamic ? 1 : 0,
@@ -9618,7 +9636,7 @@ void Q211UpdatePlayerRig() {
                  q220RightAuthoredBasis.intoPalm.y,
                  q220RightAuthoredBasis.intoPalm.z,
                  Q214_HAND_OUTWARD_OFFSET);
-        Q6H_LOGI("Q22.3 PALM ANCHOR: L(valid=%d world=%.3f %.3f %.3f rest=%.3f %.3f %.3f weight=%.1f source=%s) R(valid=%d world=%.3f %.3f %.3f rest=%.3f %.3f %.3f weight=%.1f source=%s) mode=visible-exact-Hand-bone-weights",
+        Q6H_LOGI("Q22.4 PALM ANCHOR: L(valid=%d world=%.3f %.3f %.3f rest=%.3f %.3f %.3f weight=%.1f source=%s) R(valid=%d world=%.3f %.3f %.3f rest=%.3f %.3f %.3f weight=%.1f source=%s) mode=visible-exact-Hand-bone-weights",
                  q221LeftPalmValid ? 1 : 0,
                  q221LeftPalmWorld.x, q221LeftPalmWorld.y, q221LeftPalmWorld.z,
                  q222LeftGrabPalmRest.x, q222LeftGrabPalmRest.y, q222LeftGrabPalmRest.z,
