@@ -7294,10 +7294,11 @@ void Q210RenderPlayerBody(bool alphaPass) {
 
     ++gQ210PlayerBodyFrames;
     if ((gQ210PlayerBodyFrames % 360u) == 1u) {
-        Q6H_LOGI("Q21.0 PLAYER BODY HEARTBEAT: shapes=%zu head=(%.3f %.3f %.3f yaw=%.1fdeg) left=(%d %.3f %.3f %.3f) right=(%d %.3f %.3f %.3f) pose=bind rootFollowsHMD=1",
+        Q6H_LOGI("Q21.0B PLAYER BODY HEARTBEAT: shapes=%zu head=(%.3f %.3f %.3f yaw=%.1fdeg) rootY=%.3f left=(%d %.3f %.3f %.3f) right=(%d %.3f %.3f %.3f) pose=bind rootFollowsHMDXZ=1 rootFollowsFloorY=1",
                  gQ210PlayerBody.size(),
                  gQ210Head[0], gQ210Head[1], gQ210Head[2],
                  gQ210Head[3] * 57.2957795f,
+                 gQ210PlayerRoot[13],
                  gQ210LeftHandValid ? 1 : 0,
                  gQ210LeftHand[0], gQ210LeftHand[1], gQ210LeftHand[2],
                  gQ210RightHandValid ? 1 : 0,
