@@ -4168,7 +4168,7 @@ void UpdateFo3ExteriorStreamingQ1890(float virtualHeadX, float virtualHeadZ) {
     gQ1920LatestGridY = actualGridY;
     if (gExteriorWorldspaceQ1890 == 0x0000003Cu) {
         Q2022ProbeLodArchive(actualGridX, actualGridY);
-    } else if (!gQ2022LodArchiveProbeDone) {
+    } else {
         static bool q2022LoggedNonWasteland = false;
         if (!q2022LoggedNonWasteland) {
             q2022LoggedNonWasteland = true;
