@@ -7255,6 +7255,8 @@ int Q211FindPrimaryBone(
 }
 
 
+Vec3 Q211BindBonePoint(const Fo3NifSkinBone& bone);
+
 int Q211FindHeadAnchorBone(
         const std::vector<Fo3NifSkinBone>& bones,
         bool& isNeck) {
