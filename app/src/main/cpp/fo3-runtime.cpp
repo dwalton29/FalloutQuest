@@ -1945,7 +1945,7 @@ bool UploadCpuObject(CpuObject& cpu, float centerX, float centerY, float floorZ,
     if (gpu.q220LooseObject) {
         static std::unordered_set<uint32_t> q220LoggedRefs;
         if (q220LoggedRefs.insert(gpu.refFormId).second) {
-            Q6H_LOGI("Q22.1 LOOSE CANDIDATE: ref=%08X base=%08X type=%s edid=%s model=%s",
+            Q6H_LOGI("Q22.2 LOOSE CANDIDATE: ref=%08X base=%08X type=%s edid=%s model=%s",
                      gpu.refFormId, gpu.baseFormId,
                      gpu.baseRecordType.c_str(),
                      gpu.editorId.empty() ? "<none>" : gpu.editorId.c_str(),
@@ -7527,7 +7527,7 @@ void Q220UpdateLooseGrab(
 
             const float snapDistance =
                 Q211Length(Q211Sub(hand, center));
-            Q6H_LOGI("Q22.1 GRAB BEGIN: hand=%s ref=%08X surfaceDistance=%.3f snapDistance=%.3f objectCenter=(%.3f %.3f %.3f) palm=(%.3f %.3f %.3f) anchor=authored-bounds-center-to-weighted-player-palm",
+            Q6H_LOGI("Q22.2 GRAB BEGIN: hand=%s ref=%08X surfaceDistance=%.3f snapDistance=%.3f objectCenter=(%.3f %.3f %.3f) palm=(%.3f %.3f %.3f) anchor=authored-bounds-center-to-weighted-player-palm",
                      handIndex == 0 ? "L" : "R",
                      ref, distance, snapDistance,
                      center.x, center.y, center.z,
@@ -7537,7 +7537,7 @@ void Q220UpdateLooseGrab(
 
     if (state.active) {
         if (grip <= RELEASE) {
-            Q6H_LOGI("Q22.1 GRAB RELEASE: hand=%s ref=%08X mode=drop-in-place-no-gravity-yet",
+            Q6H_LOGI("Q22.2 GRAB RELEASE: hand=%s ref=%08X mode=drop-in-place-no-gravity-yet",
                      handIndex == 0 ? "L" : "R",
                      state.refFormId);
             state.active = false;
@@ -7723,6 +7723,121 @@ bool Q211WeightedGeometryAnchor(
     return std::isfinite(out.x) &&
            std::isfinite(out.y) &&
            std::isfinite(out.z);
+}
+
+// Q22.2: grabbing needs the centre of the visible palm, not Q21's distal
+// arm endpoint. Use only the exact Hand bone's authored vertex weights so
+// fingers/thumb/forearm cannot pull the interaction anchor toward the wrist.
+bool Q222ExactBoneGeometryAnchor(
+        const Q211PlayerRigPart& part,
+        int boneIndex,
+        Vec3& out,
+        float& outWeight) {
+    constexpr size_t STRIDE = 18u;
+    out = {};
+    outWeight = 0.0f;
+    if (boneIndex < 0 ||
+        static_cast<size_t>(boneIndex) >= part.bones.size()) {
+        return false;
+    }
+
+    const size_t vertices = part.bindExpanded.size() / STRIDE;
+    if (part.expandedBoneIndices.size() != vertices * 4u ||
+        part.expandedBoneWeights.size() != vertices * 4u) {
+        return false;
+    }
+
+    for (size_t v = 0u; v < vertices; ++v) {
+        float exactWeight = 0.0f;
+        for (size_t slot = 0u; slot < 4u; ++slot) {
+            const size_t at = v * 4u + slot;
+            if (part.expandedBoneIndices[at] ==
+                static_cast<uint16_t>(boneIndex)) {
+                exactWeight += part.expandedBoneWeights[at];
+            }
+        }
+        if (exactWeight <= 0.001f) continue;
+
+        const size_t base = v * STRIDE;
+        out.x += part.bindExpanded[base + 0u] * exactWeight;
+        out.y += part.bindExpanded[base + 1u] * exactWeight;
+        out.z += part.bindExpanded[base + 2u] * exactWeight;
+        outWeight += exactWeight;
+    }
+
+    if (outWeight <= 0.001f) return false;
+    const float inv = 1.0f / outWeight;
+    out.x *= inv;
+    out.y *= inv;
+    out.z *= inv;
+    return std::isfinite(out.x) &&
+           std::isfinite(out.y) &&
+           std::isfinite(out.z);
+}
+
+bool Q222FindVisibleGrabPalmAnchor(
+        bool left,
+        Vec3& out,
+        float& outWeight,
+        std::string& outSource) {
+    out = {};
+    outWeight = 0.0f;
+    outSource.clear();
+
+    const char* preferred =
+        left
+            ? "characters\\_male\\lefthandpipboyglove.nif"
+            : "characters\\_male\\righthand.nif";
+
+    // Pass 0: exact visible hand/glove asset. Pass 1: any visible non-IK
+    // player part that exposes the authored Hand bone.
+    for (int pass = 0; pass < 2; ++pass) {
+        Vec3 weighted{};
+        float totalWeight = 0.0f;
+        std::string sources;
+
+        for (const Q211PlayerRigPart& part : gQ211PlayerRigParts) {
+            const bool preferredMatch =
+                Q210EndsWithInsensitive(
+                    part.sourceModelPath, preferred);
+            if (pass == 0 && !preferredMatch) continue;
+            if (pass == 1) {
+                if (preferredMatch) continue;
+                if (Q210EndsWithInsensitive(
+                        part.sourceModelPath,
+                        "characters\\_male\\upperbody.nif")) {
+                    continue;
+                }
+            }
+
+            const int handBone =
+                left ? part.leftHand : part.rightHand;
+            Vec3 localAnchor{};
+            float localWeight = 0.0f;
+            if (!Q222ExactBoneGeometryAnchor(
+                    part, handBone,
+                    localAnchor, localWeight)) {
+                continue;
+            }
+
+            weighted = Q211Add(
+                weighted,
+                Q211Mul(localAnchor, localWeight));
+            totalWeight += localWeight;
+
+            if (!sources.empty()) sources += ",";
+            sources += part.sourceModelPath;
+        }
+
+        if (totalWeight > 0.001f) {
+            out = Q211Mul(weighted, 1.0f / totalWeight);
+            outWeight = totalWeight;
+            outSource = sources;
+            return true;
+        }
+    }
+
+    return false;
 }
 
 Vec3 Q211BindBonePoint(const Fo3NifSkinBone& bone) {
@@ -8999,23 +9114,62 @@ void Q211UpdatePlayerRig() {
     }
     glBindBuffer(GL_ARRAY_BUFFER, 0);
 
-    // Q22.1: q213*.hand is the solved endpoint whose rest endpoint is the
-    // weighted Fallout palm anchor. Transform it by the player root so object
-    // grabbing follows exactly the palm that the player mesh is drawing.
+    // Q22.2: Q21's hand endpoint is an arm-retarget anchor and is slightly
+    // proximal for VR gripping. Derive a separate interaction centre from the
+    // visible hand/glove mesh's exact Bip01 Hand vertex weights, then carry
+    // that point through the already-solved hand/wrist transform.
+    Vec3 q222LeftGrabPalmRest{};
+    Vec3 q222RightGrabPalmRest{};
+    float q222LeftGrabPalmWeight = 0.0f;
+    float q222RightGrabPalmWeight = 0.0f;
+    std::string q222LeftGrabPalmSource;
+    std::string q222RightGrabPalmSource;
+
+    const bool q222LeftGrabAnchorReady =
+        Q222FindVisibleGrabPalmAnchor(
+            true,
+            q222LeftGrabPalmRest,
+            q222LeftGrabPalmWeight,
+            q222LeftGrabPalmSource);
+    const bool q222RightGrabAnchorReady =
+        Q222FindVisibleGrabPalmAnchor(
+            false,
+            q222RightGrabPalmRest,
+            q222RightGrabPalmWeight,
+            q222RightGrabPalmSource);
+
     Vec3 q221LeftPalmWorld{};
     Vec3 q221RightPalmWorld{};
     const bool q221LeftPalmValid =
-        gQ210LeftHandValid && q213LeftPose.solved;
+        gQ210LeftHandValid &&
+        q213LeftPose.solved &&
+        q222LeftGrabAnchorReady;
     const bool q221RightPalmValid =
-        gQ210RightHandValid && q213RightPose.solved;
+        gQ210RightHandValid &&
+        q213RightPose.solved &&
+        q222RightGrabAnchorReady;
+
     if (q221LeftPalmValid) {
+        const Vec3 posedPalmRoot =
+            Q211ApplyDelta(
+                q213LeftPose.handDelta,
+                q222LeftGrabPalmRest);
         q221LeftPalmWorld =
-            Q211TransformPoint(gQ210PlayerRoot, q213LeftPose.hand);
+            Q211TransformPoint(
+                gQ210PlayerRoot,
+                posedPalmRoot);
     }
     if (q221RightPalmValid) {
+        const Vec3 posedPalmRoot =
+            Q211ApplyDelta(
+                q213RightPose.handDelta,
+                q222RightGrabPalmRest);
         q221RightPalmWorld =
-            Q211TransformPoint(gQ210PlayerRoot, q213RightPose.hand);
+            Q211TransformPoint(
+                gQ210PlayerRoot,
+                posedPalmRoot);
     }
+
     Q221UpdateLooseObjectsFromSolvedPalms(
         q221LeftPalmValid, q221LeftPalmWorld,
         q221RightPalmValid, q221RightPalmWorld);
@@ -9037,13 +9191,21 @@ void Q211UpdatePlayerRig() {
                  q220RightAuthoredBasis.intoPalm.y,
                  q220RightAuthoredBasis.intoPalm.z,
                  Q214_HAND_OUTWARD_OFFSET);
-        Q6H_LOGI("Q22.1 PALM ANCHOR: L(valid=%d world=%.3f %.3f %.3f controller=%.3f %.3f %.3f) R(valid=%d world=%.3f %.3f %.3f controller=%.3f %.3f %.3f) source=solved-weighted-palm",
+        Q6H_LOGI("Q22.2 PALM ANCHOR: L(valid=%d world=%.3f %.3f %.3f rest=%.3f %.3f %.3f weight=%.1f source=%s) R(valid=%d world=%.3f %.3f %.3f rest=%.3f %.3f %.3f weight=%.1f source=%s) mode=visible-exact-Hand-bone-weights",
                  q221LeftPalmValid ? 1 : 0,
                  q221LeftPalmWorld.x, q221LeftPalmWorld.y, q221LeftPalmWorld.z,
-                 gQ210LeftHand[0], gQ210LeftHand[1], gQ210LeftHand[2],
+                 q222LeftGrabPalmRest.x, q222LeftGrabPalmRest.y, q222LeftGrabPalmRest.z,
+                 q222LeftGrabPalmWeight,
+                 q222LeftGrabPalmSource.empty()
+                     ? "<none>"
+                     : q222LeftGrabPalmSource.c_str(),
                  q221RightPalmValid ? 1 : 0,
                  q221RightPalmWorld.x, q221RightPalmWorld.y, q221RightPalmWorld.z,
-                 gQ210RightHand[0], gQ210RightHand[1], gQ210RightHand[2]);
+                 q222RightGrabPalmRest.x, q222RightGrabPalmRest.y, q222RightGrabPalmRest.z,
+                 q222RightGrabPalmWeight,
+                 q222RightGrabPalmSource.empty()
+                     ? "<none>"
+                     : q222RightGrabPalmSource.c_str());
         Q6H_LOGI("Q21.20 FINGER INPUT: L(trigger=%.2f triggerTouch=%d grip=%.2f thumbTouch=%d posedBones=%zu) R(trigger=%.2f triggerTouch=%d grip=%.2f thumbTouch=%d posedBones=%zu) mapping=index=trigger lower3=squeeze thumb=capacitive",
                  gQ217FingerTrigger[0],
                  gQ217TriggerTouched[0] ? 1 : 0,
