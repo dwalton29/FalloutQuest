@@ -40,7 +40,7 @@ public class MainActivity extends Activity {
         title.setGravity(Gravity.CENTER);
 
         TextView status = new TextView(this);
-        status.setText(nativeBootMessage() + "\n\nQ21.4 FORETWIST ARM SKINNING\nFallout 3 data -> OpenXR -> Quest 3");
+        status.setText(nativeBootMessage() + "\n\nQ21.5 VANILLA LEFT RIGHT HANDS");
         status.setTextColor(Color.rgb(210, 220, 205));
         status.setTextSize(20);
         status.setGravity(Gravity.CENTER);
