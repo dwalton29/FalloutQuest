@@ -68,6 +68,7 @@ bool QueueFo3MegatonEntryQ1860();
 namespace {
 struct GpuObject;
 bool Q1970ShouldRenderFullDetail(const GpuObject& object);
+bool Q220IsLooseRecordType(const std::string& type);
 void Q1970ProbeNativeLod(float gameX, float gameY);
 void Q2022ProbeLodArchive(int32_t cellX, int32_t cellY);
 extern const float Q1890_EXTERIOR_CELL_SIZE;
@@ -317,6 +318,13 @@ struct GpuObject {
     bool q2025VisibleWhenDistant = false;
     bool q2025HighPriorityLod = false;
     bool q210PlayerBody = false;
+    bool q220LooseObject = false;
+    float q220DynamicTransform[16]{
+        1,0,0,0,
+        0,1,0,0,
+        0,0,1,0,
+        0,0,0,1
+    };
     // Q21.16: authored upperbody.nif can participate in the VR IK solve
     // without being visually drawn underneath equipped armour.
     bool q215IkReferenceOnly = false;
@@ -1931,6 +1939,19 @@ bool UploadCpuObject(CpuObject& cpu, float centerX, float centerY, float floorZ,
         ? cpu.placement.gridY
         : static_cast<int32_t>(std::floor(cpu.placement.y / Q1890_EXTERIOR_CELL_SIZE));
     gpu.baseRecordType = cpu.placement.baseRecordType;
+    gpu.q220LooseObject =
+        cpu.placement.refFormId != 0u &&
+        Q220IsLooseRecordType(gpu.baseRecordType);
+    if (gpu.q220LooseObject) {
+        static std::unordered_set<uint32_t> q220LoggedRefs;
+        if (q220LoggedRefs.insert(gpu.refFormId).second) {
+            Q6H_LOGI("Q22.0 LOOSE CANDIDATE: ref=%08X base=%08X type=%s edid=%s model=%s",
+                     gpu.refFormId, gpu.baseFormId,
+                     gpu.baseRecordType.c_str(),
+                     gpu.editorId.empty() ? "<none>" : gpu.editorId.c_str(),
+                     gpu.modelPath.c_str());
+        }
+    }
     if (gpu.baseRecordType == "DOOR") {
         const bool q1920WastelandExterior =
             gExteriorWorldspaceQ1890 == 0x0000003Cu &&
@@ -4757,14 +4778,18 @@ int Q1900BuildNativeLodClipCells(float* bounds, bool objectLod) {
 
 void DrawSceneObject(const GpuObject& object, bool environmentPassQ2050 = false) {
     if (!object.q210PlayerBody && !Q1970ShouldRenderFullDetail(object)) return;
-    if (!object.q210PlayerBody && !Q2015AabbVisible(object)) return;
+    if (!object.q210PlayerBody &&
+        !object.q220LooseObject &&
+        !Q2015AabbVisible(object)) return;
     if (environmentPassQ2050 && !object.environmentEnabledQ2050) return;
     if (gInstancingEnabledLocationQ2016 >= 0) {
         glUniform1f(gInstancingEnabledLocationQ2016,
                     gInstancedDrawActiveQ2016 ? 1.0f : 0.0f);
     }
     const bool q2017UseObjectTransform =
-        (object.q2017SharedGeometry || object.q210PlayerBody) &&
+        (object.q2017SharedGeometry ||
+         object.q210PlayerBody ||
+         object.q220LooseObject) &&
         !gInstancedDrawActiveQ2016;
     if (gObjectTransformEnabledLocationQ2017 >= 0) {
         glUniform1f(gObjectTransformEnabledLocationQ2017,
@@ -4772,10 +4797,15 @@ void DrawSceneObject(const GpuObject& object, bool environmentPassQ2050 = false)
     }
     if (q2017UseObjectTransform &&
         gObjectTransformLocationQ2017 >= 0) {
+        const float* q220Transform =
+            object.q210PlayerBody
+                ? gQ210PlayerRoot
+                : object.q220LooseObject
+                    ? object.q220DynamicTransform
+                    : object.q2017RelativeMatrix;
         glUniformMatrix4fv(
             gObjectTransformLocationQ2017, 1, GL_FALSE,
-            object.q210PlayerBody ? gQ210PlayerRoot
-                                  : object.q2017RelativeMatrix);
+            q220Transform);
     }
 
     float q1900LodClipCells[25 * 4]{};
@@ -4984,6 +5014,7 @@ void DrawSceneObject(const GpuObject& object, bool environmentPassQ2050 = false)
 
 bool Q2017EligibleForInstancing(const GpuObject& object) {
     return object.q2017SharedGeometry &&
+           !object.q220LooseObject &&
            gExteriorStreamingActiveQ1890 &&
            !object.q1990NativeLod &&
            !object.alphaBlend &&
@@ -7271,6 +7302,266 @@ Vec3 Q211NormalizeSafe(Vec3 v, Vec3 fallback = {1.0f, 0.0f, 0.0f}) {
     return len > 1.0e-6f ? Q211Mul(v, 1.0f / len) : fallback;
 }
 
+bool Q220IsLooseRecordType(const std::string& type) {
+    return type == "MISC" ||
+           type == "WEAP" ||
+           type == "ARMO" ||
+           type == "AMMO" ||
+           type == "ALCH" ||
+           type == "BOOK" ||
+           type == "KEYM";
+}
+
+void Q220Identity(float out[16]) {
+    std::fill(out, out + 16, 0.0f);
+    out[0] = out[5] = out[10] = out[15] = 1.0f;
+}
+
+void Q220MulMat4(const float a[16], const float b[16], float out[16]) {
+    float r[16]{};
+    for (int col = 0; col < 4; ++col) {
+        for (int row = 0; row < 4; ++row) {
+            r[col*4 + row] =
+                a[0*4 + row] * b[col*4 + 0] +
+                a[1*4 + row] * b[col*4 + 1] +
+                a[2*4 + row] * b[col*4 + 2] +
+                a[3*4 + row] * b[col*4 + 3];
+        }
+    }
+    std::copy(r, r + 16, out);
+}
+
+Vec3 Q220TransformPoint(const float m[16], Vec3 p) {
+    return {
+        m[0]*p.x + m[4]*p.y + m[8]*p.z + m[12],
+        m[1]*p.x + m[5]*p.y + m[9]*p.z + m[13],
+        m[2]*p.x + m[6]*p.y + m[10]*p.z + m[14]
+    };
+}
+
+void Q220ControllerDeltaMatrix(
+        Vec3 startPos, const float startQ[4],
+        Vec3 currentPos, const float currentQ[4],
+        float out[16]) {
+    const float sx = -startQ[0], sy = -startQ[1],
+                sz = -startQ[2], sw = startQ[3];
+    const float cx = currentQ[0], cy = currentQ[1],
+                cz = currentQ[2], cw = currentQ[3];
+
+    float x = cw*sx + cx*sw + cy*sz - cz*sy;
+    float y = cw*sy - cx*sz + cy*sw + cz*sx;
+    float z = cw*sz + cx*sy - cy*sx + cz*sw;
+    float w = cw*sw - cx*sx - cy*sy - cz*sz;
+    const float len = std::sqrt(x*x + y*y + z*z + w*w);
+    if (len > 1.0e-6f) {
+        x /= len; y /= len; z /= len; w /= len;
+    } else {
+        x = y = z = 0.0f; w = 1.0f;
+    }
+
+    Q220Identity(out);
+    out[0] = 1.0f - 2.0f*(y*y + z*z);
+    out[1] = 2.0f*(x*y + z*w);
+    out[2] = 2.0f*(x*z - y*w);
+    out[4] = 2.0f*(x*y - z*w);
+    out[5] = 1.0f - 2.0f*(x*x + z*z);
+    out[6] = 2.0f*(y*z + x*w);
+    out[8] = 2.0f*(x*z + y*w);
+    out[9] = 2.0f*(y*z - x*w);
+    out[10] = 1.0f - 2.0f*(x*x + y*y);
+
+    const Vec3 rotatedStart{
+        out[0]*startPos.x + out[4]*startPos.y + out[8]*startPos.z,
+        out[1]*startPos.x + out[5]*startPos.y + out[9]*startPos.z,
+        out[2]*startPos.x + out[6]*startPos.y + out[10]*startPos.z};
+    out[12] = currentPos.x - rotatedStart.x;
+    out[13] = currentPos.y - rotatedStart.y;
+    out[14] = currentPos.z - rotatedStart.z;
+}
+
+struct Q220GrabState {
+    bool active = false;
+    uint32_t refFormId = 0u;
+    Vec3 startHand{};
+    float startQuat[4]{0,0,0,1};
+    float baseTransform[16]{
+        1,0,0,0,
+        0,1,0,0,
+        0,0,1,0,
+        0,0,0,1
+    };
+    float previousGrip = 0.0f;
+};
+
+Q220GrabState gQ220Grab[2];
+
+void Q220ResetGrabState() {
+    gQ220Grab[0] = {};
+    gQ220Grab[1] = {};
+}
+
+void Q220SetRefTransform(uint32_t refFormId, const float transform[16]) {
+    for (GpuObject& object : gObjects) {
+        if (object.q220LooseObject &&
+            object.refFormId == refFormId) {
+            std::copy(transform, transform + 16,
+                      object.q220DynamicTransform);
+        }
+    }
+}
+
+bool Q220FindNearestLooseRef(
+        Vec3 hand,
+        uint32_t& outRef,
+        Vec3& outCenter,
+        float& outSurfaceDistance) {
+    struct Aggregate {
+        Vec3 minimum{1e30f,1e30f,1e30f};
+        Vec3 maximum{-1e30f,-1e30f,-1e30f};
+        const float* transform = nullptr;
+    };
+    std::unordered_map<uint32_t, Aggregate> refs;
+    for (const GpuObject& object : gObjects) {
+        if (!object.q220LooseObject ||
+            object.refFormId == 0u) continue;
+        Aggregate& a = refs[object.refFormId];
+        a.minimum.x = std::min(a.minimum.x, object.minX);
+        a.minimum.y = std::min(a.minimum.y, object.minY);
+        a.minimum.z = std::min(a.minimum.z, object.minZ);
+        a.maximum.x = std::max(a.maximum.x, object.maxX);
+        a.maximum.y = std::max(a.maximum.y, object.maxY);
+        a.maximum.z = std::max(a.maximum.z, object.maxZ);
+        if (!a.transform)
+            a.transform = object.q220DynamicTransform;
+    }
+
+    constexpr float Q220_GRAB_REACH = 0.16f;
+    bool found = false;
+    float best = Q220_GRAB_REACH;
+    for (const auto& entry : refs) {
+        const Aggregate& a = entry.second;
+        if (!a.transform) continue;
+        const Vec3 originalCenter{
+            (a.minimum.x + a.maximum.x) * 0.5f,
+            (a.minimum.y + a.maximum.y) * 0.5f,
+            (a.minimum.z + a.maximum.z) * 0.5f};
+        const Vec3 center =
+            Q220TransformPoint(a.transform, originalCenter);
+        const Vec3 half{
+            (a.maximum.x - a.minimum.x) * 0.5f,
+            (a.maximum.y - a.minimum.y) * 0.5f,
+            (a.maximum.z - a.minimum.z) * 0.5f};
+        const float radius =
+            std::max(0.015f, Q211Length(half));
+        const float surfaceDistance =
+            std::max(
+                0.0f,
+                Q211Length(Q211Sub(hand, center)) - radius);
+        if (surfaceDistance <= best) {
+            best = surfaceDistance;
+            outRef = entry.first;
+            outCenter = center;
+            outSurfaceDistance = surfaceDistance;
+            found = true;
+        }
+    }
+    return found;
+}
+
+void Q220UpdateLooseGrab(
+        int handIndex,
+        bool handValid,
+        Vec3 hand,
+        const float quat[4],
+        float grip) {
+    Q220GrabState& state = gQ220Grab[handIndex];
+    constexpr float PRESS = 0.65f;
+    constexpr float RELEASE = 0.25f;
+
+    if (!handValid) {
+        state.previousGrip = grip;
+        return;
+    }
+
+    if (!state.active &&
+        state.previousGrip < PRESS &&
+        grip >= PRESS) {
+        uint32_t ref = 0u;
+        Vec3 center{};
+        float distance = 0.0f;
+        if (Q220FindNearestLooseRef(
+                hand, ref, center, distance)) {
+            state.active = true;
+            state.refFormId = ref;
+            state.startHand = hand;
+            std::copy(quat, quat + 4, state.startQuat);
+
+            bool copied = false;
+            for (const GpuObject& object : gObjects) {
+                if (object.q220LooseObject &&
+                    object.refFormId == ref) {
+                    std::copy(
+                        object.q220DynamicTransform,
+                        object.q220DynamicTransform + 16,
+                        state.baseTransform);
+                    copied = true;
+                    break;
+                }
+            }
+            if (!copied) Q220Identity(state.baseTransform);
+
+            Q6H_LOGI("Q22.0 GRAB BEGIN: hand=%s ref=%08X surfaceDistance=%.3f center=(%.3f %.3f %.3f) source=Fallout3.esm-pickup-REFR",
+                     handIndex == 0 ? "L" : "R",
+                     ref, distance,
+                     center.x, center.y, center.z);
+        }
+    }
+
+    if (state.active) {
+        if (grip <= RELEASE) {
+            Q6H_LOGI("Q22.0 GRAB RELEASE: hand=%s ref=%08X mode=drop-in-place-no-gravity-yet",
+                     handIndex == 0 ? "L" : "R",
+                     state.refFormId);
+            state.active = false;
+            state.refFormId = 0u;
+        } else {
+            float controllerDelta[16]{};
+            Q220ControllerDeltaMatrix(
+                state.startHand, state.startQuat,
+                hand, quat, controllerDelta);
+            float finalTransform[16]{};
+            Q220MulMat4(
+                controllerDelta,
+                state.baseTransform,
+                finalTransform);
+            Q220SetRefTransform(
+                state.refFormId,
+                finalTransform);
+        }
+    }
+
+    state.previousGrip = grip;
+}
+
+void Q220UpdateLooseObjects() {
+    const Vec3 left{
+        gQ210LeftHand[0],
+        gQ210LeftHand[1],
+        gQ210LeftHand[2]};
+    const Vec3 right{
+        gQ210RightHand[0],
+        gQ210RightHand[1],
+        gQ210RightHand[2]};
+    Q220UpdateLooseGrab(
+        0, gQ210LeftHandValid,
+        left, gQ218LeftHandQuat,
+        gQ217FingerGrip[0]);
+    Q220UpdateLooseGrab(
+        1, gQ210RightHandValid,
+        right, gQ218RightHandQuat,
+        gQ217FingerGrip[1]);
+}
+
 std::string Q211Lower(std::string value) {
     for (char& ch : value)
         ch = static_cast<char>(
@@ -8790,6 +9081,7 @@ void Q210DeletePlayerBody() {
     gQ213TorsoYawReady = false;
     gQ217FingerRig[0] = {};
     gQ217FingerRig[1] = {};
+    Q220ResetGrabState();
     gQ210PlayerBodyReady = false;
 }
 
@@ -11115,6 +11407,7 @@ void SetFo3PlayerBodyTrackingQ210(
     gQ217ThumbTouched[0] = leftThumbTouched;
     gQ217ThumbTouched[1] = rightThumbTouched;
 
+    Q220UpdateLooseObjects();
     ++gQ211TrackingSerial;
 
     // Q21.13: infer torso yaw with a neck dead-zone. Looking around within
