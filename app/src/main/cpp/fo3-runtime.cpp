@@ -210,9 +210,9 @@ void Q2016BuildPlacementMatrix(
     const Vec3 xAxis = GameDirectionToOpenXr(
         ApplyEsmRotation({1.0f, 0.0f, 0.0f}, placement));
     const Vec3 yAxis = GameDirectionToOpenXr(
-        ApplyEsmRotation({0.0f, 0.0f, 1.0f}, placement));
+        ApplyEsmRotation({0.0f, 1.0f, 0.0f}, placement));
     const Vec3 zAxis = GameDirectionToOpenXr(
-        ApplyEsmRotation({0.0f, -1.0f, 0.0f}, placement));
+        ApplyEsmRotation({0.0f, 0.0f, 1.0f}, placement));
     const float s = placement.scale;
 
     std::fill(out, out + 16, 0.0f);
@@ -315,6 +315,15 @@ struct GpuObject {
         0,0,1,0,
         0,0,0,1
     };
+    bool q2017SharedCandidate = false;
+    bool q2017SharedGeometry = false;
+    uint64_t q2017SharedMeshKey = 0u;
+    float q2017RelativeMatrix[16]{
+        1,0,0,0,
+        0,1,0,0,
+        0,0,1,0,
+        0,0,0,1
+    };
     std::vector<Vec3> q1580NormalSamples;
 };
 
@@ -406,8 +415,12 @@ struct Q2015FrustumCullScope {
 GLuint gProgram = 0;
 GLint gMvpLocation = -1;
 GLint gInstancingEnabledLocationQ2016 = -1;
+GLint gObjectTransformEnabledLocationQ2017 = -1;
+GLint gObjectTransformLocationQ2017 = -1;
 GLuint gInstanceBufferQ2016 = 0u;
 bool gInstancedDrawActiveQ2016 = false;
+size_t gInstanceMatrixBaseFloatQ2017 = 0u;
+GLsizei gInstanceCountQ2017 = 0;
 std::vector<float> gInstanceMatricesQ2016;
 GLint gDiffuseLocation = -1;
 GLint gNormalLocation = -1;
@@ -489,6 +502,167 @@ GLint gLocalLightColorFalloffLocationQ1010 = -1;
 std::vector<GpuObject> gObjects;
 std::unordered_map<std::string, CachedGpuTexture> gTextureCache;
 std::unordered_map<std::string, CachedGpuTexture> gCubeTextureCacheQ2050;
+
+struct Q2017SharedGeometryEntry {
+    GLuint vao = 0u;
+    GLuint vbo = 0u;
+    GLsizei vertexCount = 0;
+    std::string modelPath;
+    uint32_t shapeIndex = 0u;
+    float ownerPlacementMatrix[16]{
+        1,0,0,0,
+        0,1,0,0,
+        0,0,1,0,
+        0,0,0,1
+    };
+    size_t refs = 0u;
+};
+std::unordered_map<uint64_t, Q2017SharedGeometryEntry> gQ2017SharedGeometry;
+uint64_t gQ2017SharedHits = 0u;
+uint64_t gQ2017SharedMisses = 0u;
+uint64_t gQ2017SharedAvoidedBytes = 0u;
+
+uint64_t Q2017SharedMeshKey(const GpuObject& gpu) {
+    uint64_t hash =
+        static_cast<uint64_t>(std::hash<std::string>{}(gpu.modelPath));
+    auto mix = [&](uint64_t value) {
+        hash ^= value + 0x9e3779b97f4a7c15ULL +
+                (hash << 6u) + (hash >> 2u);
+    };
+    mix(gpu.q2016ShapeIndex);
+    mix(static_cast<uint64_t>(gpu.vertexCount));
+    return hash == 0u ? 1u : hash;
+}
+
+bool Q2017CanShareGeometry(const GpuObject& gpu) {
+    const bool authoredStatic =
+        gpu.baseRecordType == "STAT" ||
+        gpu.baseRecordType == "SCOL" ||
+        gpu.baseRecordType == "TREE";
+    return gExteriorStreamingActiveQ1890 &&
+           authoredStatic &&
+           !gpu.q1990NativeLod &&
+           !gpu.alphaBlend &&
+           !gpu.decalQ1170 &&
+           !gpu.externalEmittanceFlagQ1380 &&
+           gpu.vertexCount > 0 &&
+           !gpu.modelPath.empty();
+}
+
+bool Q2017TryReuseSharedGeometry(GpuObject& gpu) {
+    if (!gpu.q2017SharedCandidate || gpu.q2017SharedMeshKey == 0u)
+        return false;
+    const auto found = gQ2017SharedGeometry.find(gpu.q2017SharedMeshKey);
+    if (found == gQ2017SharedGeometry.end()) return false;
+    Q2017SharedGeometryEntry& shared = found->second;
+    if (shared.modelPath != gpu.modelPath ||
+        shared.shapeIndex != gpu.q2016ShapeIndex ||
+        shared.vertexCount != gpu.vertexCount ||
+        shared.vao == 0u || shared.vbo == 0u) {
+        return false;
+    }
+
+    float relative[16]{};
+    if (!Q2016RelativeMatrix(
+            shared.ownerPlacementMatrix,
+            gpu.q2016PlacementMatrix,
+            relative)) {
+        return false;
+    }
+    std::copy(relative, relative + 16, gpu.q2017RelativeMatrix);
+    gpu.vao = shared.vao;
+    gpu.vbo = shared.vbo;
+    gpu.q2017SharedGeometry = true;
+    ++shared.refs;
+    ++gQ2017SharedHits;
+    gQ2017SharedAvoidedBytes +=
+        static_cast<uint64_t>(gpu.vertexCount) * 18u * sizeof(float);
+    return true;
+}
+
+void Q2017PublishSharedGeometry(GpuObject& gpu) {
+    if (!gpu.q2017SharedCandidate ||
+        gpu.q2017SharedGeometry ||
+        gpu.q2017SharedMeshKey == 0u ||
+        gpu.vao == 0u || gpu.vbo == 0u ||
+        gpu.vertexCount <= 0) {
+        return;
+    }
+
+    const auto existing =
+        gQ2017SharedGeometry.find(gpu.q2017SharedMeshKey);
+    if (existing != gQ2017SharedGeometry.end()) {
+        Q2017SharedGeometryEntry& shared = existing->second;
+        if (shared.modelPath == gpu.modelPath &&
+            shared.shapeIndex == gpu.q2016ShapeIndex &&
+            shared.vertexCount == gpu.vertexCount) {
+            float relative[16]{};
+            if (Q2016RelativeMatrix(
+                    shared.ownerPlacementMatrix,
+                    gpu.q2016PlacementMatrix,
+                    relative)) {
+                glDeleteBuffers(1, &gpu.vbo);
+                glDeleteVertexArrays(1, &gpu.vao);
+                gpu.vbo = shared.vbo;
+                gpu.vao = shared.vao;
+                std::copy(relative, relative + 16,
+                          gpu.q2017RelativeMatrix);
+                gpu.q2017SharedGeometry = true;
+                ++shared.refs;
+                ++gQ2017SharedHits;
+                return;
+            }
+        }
+        return;
+    }
+
+    Q2017SharedGeometryEntry shared;
+    shared.vao = gpu.vao;
+    shared.vbo = gpu.vbo;
+    shared.vertexCount = gpu.vertexCount;
+    shared.modelPath = gpu.modelPath;
+    shared.shapeIndex = gpu.q2016ShapeIndex;
+    std::copy(gpu.q2016PlacementMatrix,
+              gpu.q2016PlacementMatrix + 16,
+              shared.ownerPlacementMatrix);
+    shared.refs = 1u;
+    gQ2017SharedGeometry.emplace(gpu.q2017SharedMeshKey, std::move(shared));
+    gpu.q2017SharedGeometry = true;
+    std::fill(gpu.q2017RelativeMatrix,
+              gpu.q2017RelativeMatrix + 16, 0.0f);
+    gpu.q2017RelativeMatrix[0] = gpu.q2017RelativeMatrix[5] =
+        gpu.q2017RelativeMatrix[10] = gpu.q2017RelativeMatrix[15] = 1.0f;
+    ++gQ2017SharedMisses;
+}
+
+bool Q2017ReleaseSharedGeometry(GpuObject& gpu) {
+    if (!gpu.q2017SharedGeometry || gpu.q2017SharedMeshKey == 0u)
+        return false;
+    const auto found = gQ2017SharedGeometry.find(gpu.q2017SharedMeshKey);
+    if (found != gQ2017SharedGeometry.end()) {
+        Q2017SharedGeometryEntry& shared = found->second;
+        if (shared.refs > 0u) --shared.refs;
+        if (shared.refs == 0u) {
+            if (shared.vbo) glDeleteBuffers(1, &shared.vbo);
+            if (shared.vao) glDeleteVertexArrays(1, &shared.vao);
+            gQ2017SharedGeometry.erase(found);
+        }
+    }
+    gpu.vbo = 0u;
+    gpu.vao = 0u;
+    gpu.q2017SharedGeometry = false;
+    gpu.q2017SharedCandidate = false;
+    gpu.q2017SharedMeshKey = 0u;
+    return true;
+}
+
+void Q2017ForceClearSharedGeometry() {
+    for (auto& entry : gQ2017SharedGeometry) {
+        if (entry.second.vbo) glDeleteBuffers(1, &entry.second.vbo);
+        if (entry.second.vao) glDeleteVertexArrays(1, &entry.second.vao);
+    }
+    gQ2017SharedGeometry.clear();
+}
 
 // Q19: decoded DDS data is prepared on the serialized asset worker and
 // consumed later by the render thread. OpenGL handles remain render-thread only.
@@ -638,6 +812,8 @@ GLuint CreateQ6HProgram() {
         layout(location = 9) in vec4 aInstance3Q2016;
         uniform mat4 uMvp;
         uniform float uInstancingEnabledQ2016;
+        uniform float uObjectTransformEnabledQ2017;
+        uniform mat4 uObjectTransformQ2017;
         uniform highp float uFogNearVertexQ1532;
         uniform highp float uFogFarVertexQ1532;
         uniform highp float uFogPowerVertexQ1532;
@@ -658,17 +834,18 @@ GLuint CreateQ6HProgram() {
             mat4 q2016Instance = mat4(
                 aInstance0Q2016, aInstance1Q2016,
                 aInstance2Q2016, aInstance3Q2016);
-            vec4 q2016WorldPosition = vec4(aPosition, 1.0);
-            vec3 q2016Normal = aNormal;
-            vec3 q2016Tangent = aTangent;
-            vec3 q2016Bitangent = aBitangent;
+            mat4 q2017Transform = mat4(1.0);
             if (uInstancingEnabledQ2016 > 0.5) {
-                q2016WorldPosition = q2016Instance * q2016WorldPosition;
-                mat3 q2016Basis = mat3(q2016Instance);
-                q2016Normal = normalize(q2016Basis * aNormal);
-                q2016Tangent = normalize(q2016Basis * aTangent);
-                q2016Bitangent = normalize(q2016Basis * aBitangent);
+                q2017Transform = q2016Instance;
+            } else if (uObjectTransformEnabledQ2017 > 0.5) {
+                q2017Transform = uObjectTransformQ2017;
             }
+            vec4 q2016WorldPosition =
+                q2017Transform * vec4(aPosition, 1.0);
+            mat3 q2016Basis = mat3(q2017Transform);
+            vec3 q2016Normal = normalize(q2016Basis * aNormal);
+            vec3 q2016Tangent = normalize(q2016Basis * aTangent);
+            vec3 q2016Bitangent = normalize(q2016Basis * aBitangent);
             vNormal = q2016Normal;
             vTangent = q2016Tangent;
             vBitangent = q2016Bitangent;
@@ -1743,42 +1920,67 @@ bool UploadCpuObject(CpuObject& cpu, float centerX, float centerY, float floorZ,
                  gpu.useVertexColor ? 1 : 0);
     }
 
-    glGenVertexArrays(1, &gpu.vao);
-    glBindVertexArray(gpu.vao);
-    glGenBuffers(1, &gpu.vbo);
-    glBindBuffer(GL_ARRAY_BUFFER, gpu.vbo);
-    const GLsizeiptr q1960VboBytes =
-        static_cast<GLsizeiptr>(q1960ExpandedFloatCount * sizeof(float));
-    if (gQ1960CaptureVboQ19 && gQ1960CapturedVboVerticesQ19) {
-        *gQ1960CapturedVboVerticesQ19 = std::move(expanded);
-        glBufferData(GL_ARRAY_BUFFER, q1960VboBytes, nullptr, GL_STATIC_DRAW);
-    } else {
-        glBufferData(GL_ARRAY_BUFFER, q1960VboBytes,
-                     expanded.data(), GL_STATIC_DRAW);
-    }
-
-    constexpr GLsizei stride = static_cast<GLsizei>(FLOATS_PER_VERTEX * sizeof(float));
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, stride, nullptr);
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, stride,
-                          reinterpret_cast<const void*>(3 * sizeof(float)));
-    glEnableVertexAttribArray(1);
-    glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, stride,
-                          reinterpret_cast<const void*>(6 * sizeof(float)));
-    glEnableVertexAttribArray(2);
-    glVertexAttribPointer(3, 3, GL_FLOAT, GL_FALSE, stride,
-                          reinterpret_cast<const void*>(9 * sizeof(float)));
-    glEnableVertexAttribArray(3);
-    glVertexAttribPointer(4, 2, GL_FLOAT, GL_FALSE, stride,
-                          reinterpret_cast<const void*>(12 * sizeof(float)));
-    glEnableVertexAttribArray(4);
-    glVertexAttribPointer(5, 4, GL_FLOAT, GL_FALSE, stride,
-                          reinterpret_cast<const void*>(14 * sizeof(float)));
-    glEnableVertexAttribArray(5);
-    glBindVertexArray(0);
-
     gpu.vertexCount =
         static_cast<GLsizei>(q1960ExpandedFloatCount / FLOATS_PER_VERTEX);
+    gpu.q2017SharedCandidate = Q2017CanShareGeometry(gpu);
+    gpu.q2017SharedMeshKey = gpu.q2017SharedCandidate
+        ? Q2017SharedMeshKey(gpu) : 0u;
+
+    const bool q2017Reused =
+        gpu.q2017SharedCandidate && Q2017TryReuseSharedGeometry(gpu);
+    if (!q2017Reused) {
+        glGenVertexArrays(1, &gpu.vao);
+        glBindVertexArray(gpu.vao);
+        glGenBuffers(1, &gpu.vbo);
+        glBindBuffer(GL_ARRAY_BUFFER, gpu.vbo);
+        const GLsizeiptr q1960VboBytes =
+            static_cast<GLsizeiptr>(
+                q1960ExpandedFloatCount * sizeof(float));
+        if (gQ1960CaptureVboQ19 && gQ1960CapturedVboVerticesQ19) {
+            *gQ1960CapturedVboVerticesQ19 = std::move(expanded);
+            glBufferData(GL_ARRAY_BUFFER, q1960VboBytes,
+                         nullptr, GL_STATIC_DRAW);
+        } else {
+            glBufferData(GL_ARRAY_BUFFER, q1960VboBytes,
+                         expanded.data(), GL_STATIC_DRAW);
+        }
+
+        constexpr GLsizei stride =
+            static_cast<GLsizei>(
+                FLOATS_PER_VERTEX * sizeof(float));
+        glVertexAttribPointer(
+            0, 3, GL_FLOAT, GL_FALSE, stride, nullptr);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(
+            1, 3, GL_FLOAT, GL_FALSE, stride,
+            reinterpret_cast<const void*>(3 * sizeof(float)));
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(
+            2, 3, GL_FLOAT, GL_FALSE, stride,
+            reinterpret_cast<const void*>(6 * sizeof(float)));
+        glEnableVertexAttribArray(2);
+        glVertexAttribPointer(
+            3, 3, GL_FLOAT, GL_FALSE, stride,
+            reinterpret_cast<const void*>(9 * sizeof(float)));
+        glEnableVertexAttribArray(3);
+        glVertexAttribPointer(
+            4, 2, GL_FLOAT, GL_FALSE, stride,
+            reinterpret_cast<const void*>(12 * sizeof(float)));
+        glEnableVertexAttribArray(4);
+        glVertexAttribPointer(
+            5, 4, GL_FLOAT, GL_FALSE, stride,
+            reinterpret_cast<const void*>(14 * sizeof(float)));
+        glEnableVertexAttribArray(5);
+        glBindVertexArray(0);
+
+        // Synchronous/non-Q19 callers have already filled the VBO.
+        // Q19 publishes after its chunked glBufferSubData completes.
+        if (!gQ1960CaptureVboQ19) {
+            Q2017PublishSharedGeometry(gpu);
+        }
+    } else if (gQ1960CapturedVboVerticesQ19) {
+        gQ1960CapturedVboVerticesQ19->clear();
+    }
 
     // Same NIF path + shape index means identical authored vertex/material
     // content. Include render-state handles as a collision-resistant guard.
@@ -2155,6 +2357,10 @@ bool InitializeScene() {
     gMvpLocation = glGetUniformLocation(gProgram, "uMvp");
     gInstancingEnabledLocationQ2016 =
         glGetUniformLocation(gProgram, "uInstancingEnabledQ2016");
+    gObjectTransformEnabledLocationQ2017 =
+        glGetUniformLocation(gProgram, "uObjectTransformEnabledQ2017");
+    gObjectTransformLocationQ2017 =
+        glGetUniformLocation(gProgram, "uObjectTransformQ2017");
     gDiffuseLocation = glGetUniformLocation(gProgram, "uDiffuse");
     gNormalLocation = glGetUniformLocation(gProgram, "uNormalGloss");
     gGlossinessLocation = glGetUniformLocation(gProgram, "uGlossiness");
@@ -2285,10 +2491,11 @@ bool Q74ShouldSkipPlacement(const Fo3WorldPlacement& placement) {
 
 void Q74DeleteGpuObjects(std::vector<GpuObject>& objects) {
     for (GpuObject& object : objects) {
+        if (Q2017ReleaseSharedGeometry(object)) continue;
         if (object.vbo) glDeleteBuffers(1, &object.vbo);
         if (object.vao) glDeleteVertexArrays(1, &object.vao);
-        object.vbo = 0;
-        object.vao = 0;
+        object.vbo = 0u;
+        object.vao = 0u;
     }
     objects.clear();
 }
@@ -3217,6 +3424,8 @@ constexpr size_t Q1900_GPU_SHAPES_PER_FRAME = 1u; // Q18.3 one geometry/texture 
 constexpr uint64_t Q1820_COLLISION_PRIME_BUDGET_US = 2500u;
 
 void Q1900DeleteGpuShape(GpuObject& object) {
+    // Q20.17 shared STAT/SCOL/TREE VBOs live until their final REFR leaves.
+    if (Q2017ReleaseSharedGeometry(object)) return;
     // diffuse/normal are shared texture-cache handles and must survive a REFR
     // leaving the live window. Only per-shape geometry belongs to this object.
     if (object.vbo) {
@@ -4281,6 +4490,18 @@ void DrawSceneObject(const GpuObject& object, bool environmentPassQ2050 = false)
         glUniform1f(gInstancingEnabledLocationQ2016,
                     gInstancedDrawActiveQ2016 ? 1.0f : 0.0f);
     }
+    const bool q2017UseObjectTransform =
+        object.q2017SharedGeometry && !gInstancedDrawActiveQ2016;
+    if (gObjectTransformEnabledLocationQ2017 >= 0) {
+        glUniform1f(gObjectTransformEnabledLocationQ2017,
+                    q2017UseObjectTransform ? 1.0f : 0.0f);
+    }
+    if (q2017UseObjectTransform &&
+        gObjectTransformLocationQ2017 >= 0) {
+        glUniformMatrix4fv(
+            gObjectTransformLocationQ2017, 1, GL_FALSE,
+            object.q2017RelativeMatrix);
+    }
 
     float q1900LodClipCells[25 * 4]{};
     int q1900LodClipCount = 0;
@@ -4349,27 +4570,22 @@ void DrawSceneObject(const GpuObject& object, bool environmentPassQ2050 = false)
     glBindVertexArray(object.vao);
 
     if (gInstancedDrawActiveQ2016 &&
-        gInstanceMatricesQ2016.size() >= 32u) {
-        if (gInstanceBufferQ2016 == 0u) {
-            glGenBuffers(1, &gInstanceBufferQ2016);
-        }
+        gInstanceCountQ2017 > 0 &&
+        gInstanceBufferQ2016 != 0u) {
         glBindBuffer(GL_ARRAY_BUFFER, gInstanceBufferQ2016);
-        glBufferData(
-            GL_ARRAY_BUFFER,
-            static_cast<GLsizeiptr>(
-                gInstanceMatricesQ2016.size() * sizeof(float)),
-            gInstanceMatricesQ2016.data(),
-            GL_STREAM_DRAW);
         constexpr GLsizei q2016Stride =
             static_cast<GLsizei>(16u * sizeof(float));
+        const uintptr_t q2017BaseBytes =
+            static_cast<uintptr_t>(
+                gInstanceMatrixBaseFloatQ2017 * sizeof(float));
         for (GLuint q2016Column = 0u; q2016Column < 4u; ++q2016Column) {
             const GLuint location = 6u + q2016Column;
             glEnableVertexAttribArray(location);
             glVertexAttribPointer(
                 location, 4, GL_FLOAT, GL_FALSE, q2016Stride,
                 reinterpret_cast<const void*>(
-                    static_cast<uintptr_t>(
-                        q2016Column * 4u * sizeof(float))));
+                    q2017BaseBytes +
+                    q2016Column * 4u * sizeof(float)));
             glVertexAttribDivisor(location, 1u);
         }
         glBindBuffer(GL_ARRAY_BUFFER, 0u);
@@ -4420,11 +4636,10 @@ void DrawSceneObject(const GpuObject& object, bool environmentPassQ2050 = false)
     }
 
     if (gInstancedDrawActiveQ2016 &&
-        gInstanceMatricesQ2016.size() >= 32u) {
-        const GLsizei q2016Instances = static_cast<GLsizei>(
-            gInstanceMatricesQ2016.size() / 16u);
+        gInstanceCountQ2017 > 0) {
         glDrawArraysInstanced(
-            GL_TRIANGLES, 0, object.vertexCount, q2016Instances);
+            GL_TRIANGLES, 0, object.vertexCount,
+            gInstanceCountQ2017);
         for (GLuint q2016Column = 0u; q2016Column < 4u; ++q2016Column) {
             const GLuint location = 6u + q2016Column;
             glVertexAttribDivisor(location, 0u);
@@ -4445,8 +4660,9 @@ void DrawSceneObject(const GpuObject& object, bool environmentPassQ2050 = false)
     if (q1160CullWasEnabled) glEnable(GL_CULL_FACE); else glDisable(GL_CULL_FACE);
 }
 
-bool Q2016EligibleForInstancing(const GpuObject& object) {
-    return gExteriorStreamingActiveQ1890 &&
+bool Q2017EligibleForInstancing(const GpuObject& object) {
+    return object.q2017SharedGeometry &&
+           gExteriorStreamingActiveQ1890 &&
            !object.q1990NativeLod &&
            !object.alphaBlend &&
            !object.decalQ1170 &&
@@ -4457,7 +4673,13 @@ bool Q2016EligibleForInstancing(const GpuObject& object) {
            object.vertexCount > 0;
 }
 
-void Q2016RenderOpaqueDetailedInstanced() {
+struct Q2017InstanceBatch {
+    const GpuObject* representative = nullptr;
+    size_t matrixBaseFloat = 0u;
+    GLsizei count = 0;
+};
+
+void Q2017RenderOpaqueDetailedInstanced() {
     std::unordered_map<uint64_t, std::vector<const GpuObject*>> groups;
     groups.reserve(gObjects.size() / 3u + 1u);
     std::vector<const GpuObject*> singles;
@@ -4469,18 +4691,87 @@ void Q2016RenderOpaqueDetailedInstanced() {
         if (!Q1970ShouldRenderFullDetail(object)) continue;
         if (!Q2015AabbVisible(object)) continue;
         ++visible;
-        if (Q2016EligibleForInstancing(object)) {
+        if (Q2017EligibleForInstancing(object)) {
             groups[object.q2016BatchKey].push_back(&object);
         } else {
             singles.push_back(&object);
         }
     }
 
-    size_t instancedObjects = 0u;
-    size_t instancedDraws = 0u;
-    size_t fallbackDraws = 0u;
-    size_t largestBatch = 0u;
+    std::vector<Q2017InstanceBatch> batches;
+    batches.reserve(groups.size());
+    std::vector<const GpuObject*> groupFallbacks;
+    gInstanceMatricesQ2016.clear();
+    gInstanceMatricesQ2016.reserve(visible * 16u);
 
+    size_t instancedObjects = 0u;
+    size_t largestBatch = 0u;
+    for (auto& entry : groups) {
+        std::vector<const GpuObject*>& group = entry.second;
+        if (group.empty()) continue;
+        const GpuObject* representative = group.front();
+
+        const size_t matrixStart = gInstanceMatricesQ2016.size();
+        size_t validCount = 0u;
+        for (const GpuObject* target : group) {
+            if (!target ||
+                target->q2017SharedMeshKey !=
+                    representative->q2017SharedMeshKey ||
+                target->vao != representative->vao ||
+                target->vbo != representative->vbo ||
+                target->vertexCount != representative->vertexCount ||
+                target->diffuse != representative->diffuse ||
+                target->normal != representative->normal ||
+                target->glow != representative->glow ||
+                target->environmentCube != representative->environmentCube ||
+                target->environmentMask != representative->environmentMask) {
+                if (target) groupFallbacks.push_back(target);
+                continue;
+            }
+            gInstanceMatricesQ2016.insert(
+                gInstanceMatricesQ2016.end(),
+                target->q2017RelativeMatrix,
+                target->q2017RelativeMatrix + 16);
+            ++validCount;
+        }
+
+        if (validCount < 2u) {
+            gInstanceMatricesQ2016.resize(matrixStart);
+            for (const GpuObject* target : group) {
+                if (target &&
+                    std::find(groupFallbacks.begin(),
+                              groupFallbacks.end(),
+                              target) == groupFallbacks.end()) {
+                    groupFallbacks.push_back(target);
+                }
+            }
+            continue;
+        }
+
+        Q2017InstanceBatch batch;
+        batch.representative = representative;
+        batch.matrixBaseFloat = matrixStart;
+        batch.count = static_cast<GLsizei>(validCount);
+        batches.push_back(batch);
+        instancedObjects += validCount;
+        largestBatch = std::max(largestBatch, validCount);
+    }
+
+    // One driver upload for every instance matrix used by this eye.
+    if (!gInstanceMatricesQ2016.empty()) {
+        if (gInstanceBufferQ2016 == 0u)
+            glGenBuffers(1, &gInstanceBufferQ2016);
+        glBindBuffer(GL_ARRAY_BUFFER, gInstanceBufferQ2016);
+        glBufferData(
+            GL_ARRAY_BUFFER,
+            static_cast<GLsizeiptr>(
+                gInstanceMatricesQ2016.size() * sizeof(float)),
+            gInstanceMatricesQ2016.data(),
+            GL_STREAM_DRAW);
+        glBindBuffer(GL_ARRAY_BUFFER, 0u);
+    }
+
+    size_t fallbackDraws = 0u;
     for (const GpuObject* object : singles) {
         if (!object) continue;
         if (object->zBufferTestQ1200) glEnable(GL_DEPTH_TEST);
@@ -4489,90 +4780,52 @@ void Q2016RenderOpaqueDetailedInstanced() {
         DrawSceneObject(*object);
         ++fallbackDraws;
     }
-
-    for (auto& entry : groups) {
-        std::vector<const GpuObject*>& batch = entry.second;
-        if (batch.empty()) continue;
-
-        const GpuObject* representative = batch.front();
-        std::vector<const GpuObject*> valid;
-        valid.reserve(batch.size());
-        gInstanceMatricesQ2016.clear();
-        gInstanceMatricesQ2016.reserve(batch.size() * 16u);
-
-        for (const GpuObject* target : batch) {
-            if (!target ||
-                target->vertexCount != representative->vertexCount ||
-                target->diffuse != representative->diffuse ||
-                target->normal != representative->normal ||
-                target->glow != representative->glow ||
-                target->environmentCube != representative->environmentCube ||
-                target->environmentMask != representative->environmentMask) {
-                continue;
-            }
-            float relative[16]{};
-            if (!Q2016RelativeMatrix(
-                    representative->q2016PlacementMatrix,
-                    target->q2016PlacementMatrix,
-                    relative)) {
-                continue;
-            }
-            gInstanceMatricesQ2016.insert(
-                gInstanceMatricesQ2016.end(), relative, relative + 16);
-            valid.push_back(target);
-        }
-
-        if (valid.size() < 2u) {
-            for (const GpuObject* object : batch) {
-                if (!object) continue;
-                if (object->zBufferTestQ1200) glEnable(GL_DEPTH_TEST);
-                else glDisable(GL_DEPTH_TEST);
-                glDepthMask(object->zBufferWriteQ1200 ? GL_TRUE : GL_FALSE);
-                DrawSceneObject(*object);
-                ++fallbackDraws;
-            }
-            continue;
-        }
-
-        if (representative->zBufferTestQ1200) glEnable(GL_DEPTH_TEST);
+    for (const GpuObject* object : groupFallbacks) {
+        if (!object) continue;
+        if (object->zBufferTestQ1200) glEnable(GL_DEPTH_TEST);
         else glDisable(GL_DEPTH_TEST);
-        glDepthMask(representative->zBufferWriteQ1200 ? GL_TRUE : GL_FALSE);
-
-        gInstancedDrawActiveQ2016 = true;
-        DrawSceneObject(*representative);
-        gInstancedDrawActiveQ2016 = false;
-
-        instancedObjects += valid.size();
-        ++instancedDraws;
-        largestBatch = std::max(largestBatch, valid.size());
-
-        // Hash collisions/material mismatches remain ordinary draws.
-        if (valid.size() != batch.size()) {
-            for (const GpuObject* object : batch) {
-                if (!object ||
-                    std::find(valid.begin(), valid.end(), object) != valid.end())
-                    continue;
-                if (object->zBufferTestQ1200) glEnable(GL_DEPTH_TEST);
-                else glDisable(GL_DEPTH_TEST);
-                glDepthMask(object->zBufferWriteQ1200 ? GL_TRUE : GL_FALSE);
-                DrawSceneObject(*object);
-                ++fallbackDraws;
-            }
-        }
+        glDepthMask(object->zBufferWriteQ1200 ? GL_TRUE : GL_FALSE);
+        DrawSceneObject(*object);
+        ++fallbackDraws;
     }
 
-    static uint64_t q2016EyePasses = 0u;
-    ++q2016EyePasses;
-    if ((q2016EyePasses % 240u) == 1u) {
+    for (const Q2017InstanceBatch& batch : batches) {
+        if (!batch.representative || batch.count <= 0) continue;
+        if (batch.representative->zBufferTestQ1200)
+            glEnable(GL_DEPTH_TEST);
+        else
+            glDisable(GL_DEPTH_TEST);
+        glDepthMask(
+            batch.representative->zBufferWriteQ1200
+                ? GL_TRUE : GL_FALSE);
+
+        gInstanceMatrixBaseFloatQ2017 = batch.matrixBaseFloat;
+        gInstanceCountQ2017 = batch.count;
+        gInstancedDrawActiveQ2016 = true;
+        DrawSceneObject(*batch.representative);
+        gInstancedDrawActiveQ2016 = false;
+    }
+
+    static uint64_t q2017EyePasses = 0u;
+    ++q2017EyePasses;
+    if ((q2017EyePasses % 240u) == 1u) {
+        const size_t instancedDraws = batches.size();
         const size_t saved =
             instancedObjects > instancedDraws
                 ? instancedObjects - instancedDraws : 0u;
-        Q6H_LOGI("Q20.16 INSTANCING: visibleOpaque=%zu groups=%zu instancedObjects=%zu instancedDraws=%zu fallbackDraws=%zu drawsSaved=%zu largestBatch=%zu liveShapes=%zu path=representative-world-vbo+relative-matrix specialCases=doors,blend,decal,external-emittance",
-                 visible, groups.size(), instancedObjects, instancedDraws,
-                 fallbackDraws, saved, largestBatch, gObjects.size());
+        Q6H_LOGI("Q20.17 SHARED INSTANCING: visibleOpaque=%zu sharedMeshes=%zu cacheHits=%llu cacheMisses=%llu avoidedVboMB=%.2f instancedObjects=%zu instancedDraws=%zu fallbackDraws=%zu drawsSaved=%zu largestBatch=%zu matrixUploadsPerEye=%d liveShapes=%zu orientationBasis=C*R*[X,Y,Z]",
+                 visible, gQ2017SharedGeometry.size(),
+                 static_cast<unsigned long long>(gQ2017SharedHits),
+                 static_cast<unsigned long long>(gQ2017SharedMisses),
+                 static_cast<double>(gQ2017SharedAvoidedBytes) /
+                     (1024.0 * 1024.0),
+                 instancedObjects, instancedDraws, fallbackDraws,
+                 saved, largestBatch, 1, gObjects.size());
     }
 
     gInstancedDrawActiveQ2016 = false;
+    gInstanceMatrixBaseFloatQ2017 = 0u;
+    gInstanceCountQ2017 = 0;
     gInstanceMatricesQ2016.clear();
 }
 
@@ -4587,6 +4840,10 @@ bool Q1030InitializeRenderProgramOnly() {
     gMvpLocation = glGetUniformLocation(gProgram, "uMvp");
     gInstancingEnabledLocationQ2016 =
         glGetUniformLocation(gProgram, "uInstancingEnabledQ2016");
+    gObjectTransformEnabledLocationQ2017 =
+        glGetUniformLocation(gProgram, "uObjectTransformEnabledQ2017");
+    gObjectTransformLocationQ2017 =
+        glGetUniformLocation(gProgram, "uObjectTransformQ2017");
     gDiffuseLocation = glGetUniformLocation(gProgram, "uDiffuse");
     gNormalLocation = glGetUniformLocation(gProgram, "uNormalGloss");
     gGlossinessLocation = glGetUniformLocation(gProgram, "uGlossiness");
@@ -4720,6 +4977,7 @@ int32_t Q1990FloorToLevel4Block(int32_t cell) {
 }
 
 void Q1990DeleteLodGpu(GpuObject& object) {
+    if (Q2017ReleaseSharedGeometry(object)) return;
     if (object.vbo) glDeleteBuffers(1, &object.vbo);
     if (object.vao) glDeleteVertexArrays(1, &object.vao);
     object.vbo = 0u;
@@ -6022,10 +6280,16 @@ void RenderScene() {
     glActiveTexture(GL_TEXTURE3);
     glBindTexture(GL_TEXTURE_2D,q1050ShadowActive?gShadowDepthQ1050:0u);
     glActiveTexture(GL_TEXTURE0);
+    const auto q2017OpaqueStarted = std::chrono::steady_clock::now();
     glDisable(GL_BLEND);
     Q1990RenderNativeLod(false);
-    Q2016RenderOpaqueDetailedInstanced();
+    Q2017RenderOpaqueDetailedInstanced();
+    const uint64_t q2017OpaqueUs = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() -
+            q2017OpaqueStarted).count());
 
+    const auto q2017AlphaStarted = std::chrono::steady_clock::now();
     glEnable(GL_BLEND);
     Q1990RenderNativeLod(true);
     for (const GpuObject& object : gObjects) {
@@ -6036,7 +6300,12 @@ void RenderScene() {
                     Q1150BlendFactor(object.alphaDestBlend, false));
         DrawSceneObject(object);
     }
+    const uint64_t q2017AlphaUs = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() -
+            q2017AlphaStarted).count());
 
+    const auto q2017EnvStarted = std::chrono::steady_clock::now();
     // Q20.5 PC apitrace calls 14054-14061: Fallout switches to a
     // dedicated environment pass with ZWRITE=FALSE, ZFUNC=EQUAL and
     // additive ONE/ONE blending. Re-draw only authored reflective shapes.
@@ -6079,6 +6348,23 @@ void RenderScene() {
                         static_cast<GLenum>(previousBlendSrcAlpha),
                         static_cast<GLenum>(previousBlendDstAlpha));
     if (blendWasEnabled) glEnable(GL_BLEND); else glDisable(GL_BLEND);
+    const uint64_t q2017EnvUs = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() -
+            q2017EnvStarted).count());
+
+    static uint64_t q2017PhaseEye = 0u;
+    ++q2017PhaseEye;
+    if ((q2017PhaseEye % 240u) == 1u ||
+        q2017OpaqueUs >= 12000u ||
+        q2017AlphaUs >= 12000u ||
+        q2017EnvUs >= 12000u) {
+        Q6H_LOGI("Q20.17 RENDER PHASES: opaqueUs=%llu alphaUs=%llu envUs=%llu sceneObjects=%zu lodBlocks=%zu",
+                 static_cast<unsigned long long>(q2017OpaqueUs),
+                 static_cast<unsigned long long>(q2017AlphaUs),
+                 static_cast<unsigned long long>(q2017EnvUs),
+                 gObjects.size(), gQ1990NativeLodBlocks.size());
+    }
 
     // Q20.7B: LAND must be present in the depth buffer before water.
     // RenderFo3CollisionOverlay is the historical hook name but currently
@@ -7520,11 +7806,15 @@ void Q6HDeleteFramebuffers(GLsizei n, const GLuint* framebuffers) {
     glDeleteFramebuffers(n, framebuffers);
     ShutdownFo3CollisionOverlay();
     for (GpuObject& object : gObjects) {
-        if (object.vbo) glDeleteBuffers(1, &object.vbo);
-        if (object.vao) glDeleteVertexArrays(1, &object.vao);
+        Q1900DeleteGpuShape(object);
     }
     gObjects.clear();
     Q1910DrainDeferredGpuDeletesQ19(true);
+    Q2017ForceClearSharedGeometry();
+    if (gInstanceBufferQ2016) {
+        glDeleteBuffers(1, &gInstanceBufferQ2016);
+        gInstanceBufferQ2016 = 0u;
+    }
     for (const auto& entry : gTextureCache) {
         const GLuint id = entry.second.id;
         if (id) glDeleteTextures(1, &id);

@@ -193,6 +193,9 @@ void Q1910QueueGpuDeleteQ19(GpuObject& object) {
     // vectors can be compacted/destroyed without double-deleting GL geometry.
     object.vbo = 0u;
     object.vao = 0u;
+    object.q2017SharedGeometry = false;
+    object.q2017SharedCandidate = false;
+    object.q2017SharedMeshKey = 0u;
 }
 
 void Q1910DrainDeferredGpuDeletesQ19(bool flushAll = false) {
@@ -975,6 +978,18 @@ Q1960UploadStepQ19 Q1960AdvanceShapeQ19(
         Q1960RecordStepQ19(
             stepUs, upload.totalUs, upload.maxStepUs);
 
+        if (ok && upload.gpu.q2017SharedGeometry &&
+            upload.vertices.empty() && upload.gpu.vbo != 0u) {
+            const std::string model = upload.gpu.modelPath;
+            state.stagedGpu.push_back(std::move(upload.gpu));
+            cpu = CpuObject{};
+            upload = {};
+            ++state.gpuCursor;
+            Q6H_LOGI("Q20.17 VBO CACHE HIT: cell=(%d,%d) model=%s action=skip-vertex-upload",
+                     state.gridX, state.gridY, model.c_str());
+            return Q1960UploadStepQ19::Complete;
+        }
+
         if (!ok || upload.vertices.empty() || upload.gpu.vbo == 0u) {
             Q1900DeleteGpuShape(upload.gpu);
             const std::string model = cpu.placement.modelPath;
@@ -1055,12 +1070,15 @@ Q1960UploadStepQ19 Q1960AdvanceShapeQ19(
         return Q1960UploadStepQ19::Failed;
     }
 
-    Q6H_LOGI("Q19.6 VBO READY: cell=(%d,%d) model=%s bytes=%zu chunks=%zu totalUs=%llu maxStepUs=%llu workerExpanded=1",
+    Q2017PublishSharedGeometry(upload.gpu);
+    Q6H_LOGI("Q19.6 VBO READY: cell=(%d,%d) model=%s bytes=%zu chunks=%zu totalUs=%llu maxStepUs=%llu workerExpanded=1 shared=%d sharedMeshes=%zu",
              state.gridX, state.gridY,
              upload.gpu.modelPath.c_str(), totalBytes,
              upload.chunks,
              static_cast<unsigned long long>(upload.totalUs),
-             static_cast<unsigned long long>(upload.maxStepUs));
+             static_cast<unsigned long long>(upload.maxStepUs),
+             upload.gpu.q2017SharedGeometry ? 1 : 0,
+             gQ2017SharedGeometry.size());
     state.stagedGpu.push_back(std::move(upload.gpu));
     upload = {};
     ++state.gpuCursor;
