@@ -40,7 +40,7 @@ public class MainActivity extends Activity {
         title.setGravity(Gravity.CENTER);
 
         TextView status = new TextView(this);
-        status.setText(nativeBootMessage() + "\n\nQ21.8 ARM REACH + WRIST ROLL");
+        status.setText(nativeBootMessage() + "\n\nQ21.9 BODY YAW + ADAPTIVE REACH");
         status.setTextColor(Color.rgb(210, 220, 205));
         status.setTextSize(20);
         status.setGravity(Gravity.CENTER);

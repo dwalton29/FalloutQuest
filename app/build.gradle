@@ -22,8 +22,8 @@ android {
         applicationId 'com.falloutquest.app'
         minSdk 29
         targetSdk 35
-        versionCode 86
-        versionName '0.21.8-q21.8-arm-reach-wrist-roll'
+        versionCode 87
+        versionName '0.21.9-q21.9-body-yaw-adaptive-reach'
 
         ndk {
             abiFilters 'arm64-v8a'

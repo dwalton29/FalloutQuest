@@ -555,7 +555,14 @@ bool gQ218LeftTwistReferenceValid = false;
 bool gQ218RightTwistReferenceValid = false;
 float gQ218LeftTwistReference = 0.0f;
 float gQ218RightTwistReference = 0.0f;
-constexpr float Q218_ARM_LENGTH_SCALE = 1.10f;
+// Q21.9 VR-specific retarget calibration. Both arms share one scale so the
+// avatar stays symmetric. The scale only grows during a session, avoiding
+// visible arm-length "breathing" during ordinary controller motion.
+constexpr float Q219_ARM_BASE_SCALE = 1.12f;
+constexpr float Q219_ARM_MAX_SCALE = 1.22f;
+constexpr float Q219_TARGET_EXTENSION_RATIO = 0.93f;
+constexpr float Q219_SCALE_GROW_PER_FRAME = 0.0025f;
+float gQ219ArmLengthScale = Q219_ARM_BASE_SCALE;
 uint64_t gQ211TrackingSerial = 0u;
 uint64_t gQ211LastSkinnedSerial = ~0ull;
 
@@ -7673,12 +7680,42 @@ struct Q213ArmPose {
     bool solved = false;
 };
 
+bool Q219MeasureArmReach(
+        const Q211PlayerRigPart& part,
+        bool left,
+        Vec3 target,
+        float& outRestReach,
+        float& outTargetDistance) {
+    const int upper = left ? part.leftUpperArm : part.rightUpperArm;
+    const int fore = left ? part.leftForearm : part.rightForearm;
+    const int hand = left ? part.leftHand : part.rightHand;
+    if (upper < 0 || fore < 0 || hand < 0) return false;
+
+    const Vec3 shoulder = Q211BindBonePoint(part.bones[upper]);
+    const Vec3 restElbow = Q211BindBonePoint(part.bones[fore]);
+    Vec3 restHand = Q211BindBonePoint(part.bones[hand]);
+    const bool palmAnchorValid =
+        left ? part.leftPalmAnchorValid : part.rightPalmAnchorValid;
+    if (palmAnchorValid) {
+        restHand = left ? part.leftPalmAnchor : part.rightPalmAnchor;
+    }
+
+    outRestReach =
+        Q211Length(Q211Sub(restElbow, shoulder)) +
+        Q211Length(Q211Sub(restHand, restElbow));
+    outTargetDistance = Q211Length(Q211Sub(target, shoulder));
+    return outRestReach > 0.05f &&
+           std::isfinite(outRestReach) &&
+           std::isfinite(outTargetDistance);
+}
+
 Q213ArmPose Q213SolveMasterArm(
         const Q211PlayerRigPart& part,
         bool left,
         Vec3 target,
         Vec3 gripPalmNormal,
-        bool gripOrientationValid) {
+        bool gripOrientationValid,
+        float armLengthScale) {
     Q213ArmPose pose;
     const int upper = left ? part.leftUpperArm : part.rightUpperArm;
     const int fore = left ? part.leftForearm : part.rightForearm;
@@ -7701,7 +7738,7 @@ Q213ArmPose Q213SolveMasterArm(
 
     if (!Q211SolveArm(
             left, shoulder, restElbow, restHand,
-            target, Q218_ARM_LENGTH_SCALE,
+            target, armLengthScale,
             pose.elbow, pose.hand)) {
         return pose;
     }
@@ -7709,11 +7746,11 @@ Q213ArmPose Q213SolveMasterArm(
     pose.upper = Q218MakeSegmentDelta(
         shoulder, restUpper,
         shoulder, Q211Sub(pose.elbow, shoulder),
-        Q218_ARM_LENGTH_SCALE);
+        armLengthScale);
     pose.fore = Q218MakeSegmentDelta(
         restElbow, restFore,
         pose.elbow, Q211Sub(pose.hand, pose.elbow),
-        Q218_ARM_LENGTH_SCALE);
+        armLengthScale);
 
     // Keep the hand itself at authored size: move/rotate it with the stretched
     // forearm endpoint, then layer controller roll around the current wrist axis.
@@ -7848,8 +7885,10 @@ void Q211UpdatePlayerRig() {
     const Vec3 trackedRightRoot =
         Q211TransformPoint(invRoot, rightTargetWorld);
 
+    // Q21.9: grip-space coordinates are shared by both controllers but the
+    // anatomical palm normal is mirrored between hands.
     const Vec3 leftPalmWorld =
-        Q218RotateQuaternion(gQ218LeftHandQuat, Vec3{1.0f, 0.0f, 0.0f});
+        Q218RotateQuaternion(gQ218LeftHandQuat, Vec3{-1.0f, 0.0f, 0.0f});
     const Vec3 rightPalmWorld =
         Q218RotateQuaternion(gQ218RightHandQuat, Vec3{1.0f, 0.0f, 0.0f});
     const Vec3 leftPalmRoot =
@@ -7886,19 +7925,56 @@ void Q211UpdatePlayerRig() {
             q213RightMaster = &candidate;
     }
 
+    float q219RequestedScale = Q219_ARM_BASE_SCALE;
+    float q219LRest = 0.0f, q219LDist = 0.0f;
+    float q219RRest = 0.0f, q219RDist = 0.0f;
+    if (gQ210LeftHandValid && q213LeftMaster &&
+        Q219MeasureArmReach(
+            *q213LeftMaster, true, leftTarget,
+            q219LRest, q219LDist)) {
+        q219RequestedScale = std::max(
+            q219RequestedScale,
+            q219LDist /
+                std::max(
+                    0.05f,
+                    q219LRest * Q219_TARGET_EXTENSION_RATIO));
+    }
+    if (gQ210RightHandValid && q213RightMaster &&
+        Q219MeasureArmReach(
+            *q213RightMaster, false, rightTarget,
+            q219RRest, q219RDist)) {
+        q219RequestedScale = std::max(
+            q219RequestedScale,
+            q219RDist /
+                std::max(
+                    0.05f,
+                    q219RRest * Q219_TARGET_EXTENSION_RATIO));
+    }
+    q219RequestedScale = std::clamp(
+        q219RequestedScale,
+        Q219_ARM_BASE_SCALE,
+        Q219_ARM_MAX_SCALE);
+    if (q219RequestedScale > gQ219ArmLengthScale) {
+        gQ219ArmLengthScale = std::min(
+            q219RequestedScale,
+            gQ219ArmLengthScale + Q219_SCALE_GROW_PER_FRAME);
+    }
+
     Q213ArmPose q213LeftPose;
     Q213ArmPose q213RightPose;
     if (gQ210LeftHandValid && q213LeftMaster) {
         q213LeftPose =
             Q213SolveMasterArm(
                 *q213LeftMaster, true, leftTarget,
-                leftPalmRoot, true);
+                leftPalmRoot, true,
+                gQ219ArmLengthScale);
     }
     if (gQ210RightHandValid && q213RightMaster) {
         q213RightPose =
             Q213SolveMasterArm(
                 *q213RightMaster, false, rightTarget,
-                rightPalmRoot, true);
+                rightPalmRoot, true,
+                gQ219ArmLengthScale);
     }
 
     size_t q213LeftAffectedParts = 0u;
@@ -8017,22 +8093,27 @@ void Q211UpdatePlayerRig() {
     glBindBuffer(GL_ARRAY_BUFFER, 0);
 
     if ((gQ211TrackingSerial % 180u) == 1u) {
+        Q6H_LOGI("Q21.9 BODY/REACH: armScale=%.3f requested=%.3f base=%.3f max=%.3f targetExtension=%.2f measureL=(rest=%.3f dist=%.3f) measureR=(rest=%.3f dist=%.3f)",
+                 gQ219ArmLengthScale, q219RequestedScale,
+                 Q219_ARM_BASE_SCALE, Q219_ARM_MAX_SCALE,
+                 Q219_TARGET_EXTENSION_RATIO,
+                 q219LRest, q219LDist, q219RRest, q219RDist);
         Q6H_LOGI("Q21.8 ARM RETARGET: scale=%.3f L(rest=%.3f scaled=%.3f targetDist=%.3f ratio=%.3f twistDeg=%.1f) R(rest=%.3f scaled=%.3f targetDist=%.3f ratio=%.3f twistDeg=%.1f) wristMode=relative-grip-roll",
-                 Q218_ARM_LENGTH_SCALE,
+                 gQ219ArmLengthScale,
                  q213LeftPose.restReach,
-                 q213LeftPose.restReach * Q218_ARM_LENGTH_SCALE,
+                 q213LeftPose.restReach * gQ219ArmLengthScale,
                  q213LeftPose.targetDistance,
                  q213LeftPose.restReach > 0.001f
                      ? q213LeftPose.targetDistance /
-                           (q213LeftPose.restReach * Q218_ARM_LENGTH_SCALE)
+                           (q213LeftPose.restReach * gQ219ArmLengthScale)
                      : 0.0f,
                  q213LeftPose.wristTwist * 57.2957795f,
                  q213RightPose.restReach,
-                 q213RightPose.restReach * Q218_ARM_LENGTH_SCALE,
+                 q213RightPose.restReach * gQ219ArmLengthScale,
                  q213RightPose.targetDistance,
                  q213RightPose.restReach > 0.001f
                      ? q213RightPose.targetDistance /
-                           (q213RightPose.restReach * Q218_ARM_LENGTH_SCALE)
+                           (q213RightPose.restReach * gQ219ArmLengthScale)
                      : 0.0f,
                  q213RightPose.wristTwist * 57.2957795f);
 
@@ -8078,6 +8159,7 @@ void Q210DeletePlayerBody() {
     gQ211LastSkinnedSerial = ~0ull;
     gQ218LeftTwistReferenceValid = false;
     gQ218RightTwistReferenceValid = false;
+    gQ219ArmLengthScale = Q219_ARM_BASE_SCALE;
     gQ210PlayerBodyReady = false;
 }
 
@@ -10282,6 +10364,7 @@ bool GetFo3EnvironmentPassEnabledQ205A() {
 
 void SetFo3PlayerBodyTrackingQ210(
         float headX, float headY, float headZ, float headYaw,
+        float bodyYaw,
         float localHeadY,
         bool leftValid, float leftX, float leftY, float leftZ,
         float leftQx, float leftQy, float leftQz, float leftQw,
@@ -10309,8 +10392,10 @@ void SetFo3PlayerBodyTrackingQ210(
     gQ218RightHandQuat[3] = rightQw;
     ++gQ211TrackingSerial;
 
-    const float c = std::cos(headYaw);
-    const float s = std::sin(headYaw);
+    // Q21.9: physical head look must not rotate the shoulders. The body root
+    // follows locomotion/snap-turn heading; headYaw remains tracking data only.
+    const float c = std::cos(bodyYaw);
+    const float s = std::sin(bodyYaw);
     const float rootX = headX + s * 0.08f;
     const float rootZ = headZ + c * 0.08f;
 
@@ -10339,8 +10424,11 @@ void SetFo3PlayerBodyTrackingQ210(
     gQ210PlayerRoot[15] = 1.0f;
 
     if ((gQ211TrackingSerial % 180u) == 1u) {
-        Q6H_LOGI("Q21.7 BODY HEAD ALIGN: ready=%d headWorldY=%.3f localHeadY=%.3f authoredHeadY=%.3f legacyRootY=%.3f alignedRootY=%.3f correction=%.3f",
+        Q6H_LOGI("Q21.9 BODY HEAD ALIGN: ready=%d headYaw=%.1fdeg bodyYaw=%.1fdeg yawDelta=%.1fdeg headWorldY=%.3f localHeadY=%.3f authoredHeadY=%.3f legacyRootY=%.3f alignedRootY=%.3f correction=%.3f",
                  q217HeadAnchorReady ? 1 : 0,
+                 headYaw * 57.2957795f,
+                 bodyYaw * 57.2957795f,
+                 Q218WrapAngle(headYaw - bodyYaw) * 57.2957795f,
                  headY, localHeadY,
                  q217HeadAnchorReady ? q217AvatarHeadAnchor.y : localHeadY,
                  q217LegacyRootY, q217RootY,
