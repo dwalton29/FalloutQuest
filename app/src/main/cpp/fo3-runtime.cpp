@@ -317,6 +317,9 @@ struct GpuObject {
     bool q2025VisibleWhenDistant = false;
     bool q2025HighPriorityLod = false;
     bool q210PlayerBody = false;
+    // Q21.16: authored upperbody.nif can participate in the VR IK solve
+    // without being visually drawn underneath equipped armour.
+    bool q215IkReferenceOnly = false;
     std::string baseRecordType;
     Fo3DoorTeleport teleport;
     float minX = 0.0f, maxX = 0.0f;
@@ -577,6 +580,7 @@ uint64_t gQ211LastSkinnedSerial = ~0ull;
 
 struct Q211PlayerRigPart {
     size_t gpuIndex = 0u;
+    std::string sourceModelPath;
     std::vector<float> bindExpanded;
     std::vector<float> workExpanded;
     std::vector<uint16_t> expandedBoneIndices; // 4 per expanded vertex
@@ -8102,6 +8106,16 @@ void Q211UpdatePlayerRig() {
             q213RightMaster = &candidate;
     }
 
+    if ((gQ211TrackingSerial % 180u) == 1u) {
+        Q6H_LOGI("Q21.16 IK MASTER: left=%s right=%s expected=characters\\_male\\upperbody.nif",
+                 q213LeftMaster
+                     ? q213LeftMaster->sourceModelPath.c_str()
+                     : "<none>",
+                 q213RightMaster
+                     ? q213RightMaster->sourceModelPath.c_str()
+                     : "<none>");
+    }
+
     float q219RequestedScale = Q219_ARM_BASE_SCALE;
     float q219LRest = 0.0f, q219LDist = 0.0f;
     float q219RRest = 0.0f, q219RDist = 0.0f;
@@ -8419,6 +8433,9 @@ bool Q210EnsurePlayerBody() {
     // PipBoy MODL      -> PipBoy3000\\PipBoyArm.NIF
     // PipBoyGlove MODL -> Characters\\_Male\\LeftHandPipboyGlove.NIF
     std::vector<std::string> bodyPaths;
+    const std::string q216UpperBodyIk = q215FindMesh(
+        "Characters\\_Male\\",
+        "characters\\_male\\upperbody.nif");
     const std::string q215Vault101 = q215FindMesh(
         "Armor\\VaultSuit\\M\\",
         "armor\\vaultsuit\\m\\outfit.nif");
@@ -8432,8 +8449,11 @@ bool Q210EnsurePlayerBody() {
         "PipBoy3000\\",
         "pipboy3000\\pipboyarm.nif");
 
+    // Put the hidden canonical body first: master-arm selection is intentionally
+    // first-valid, preserving the exact Q21.14 authored arm lengths/pivots.
     for (const std::string* path :
-         {&q215Vault101, &q215PipBoyGlove, &q215RightHand, &q215PipBoy}) {
+         {&q216UpperBodyIk, &q215Vault101, &q215PipBoyGlove,
+          &q215RightHand, &q215PipBoy}) {
         if (!path->empty()) bodyPaths.push_back(*path);
     }
 
@@ -8451,8 +8471,9 @@ bool Q210EnsurePlayerBody() {
         if (!q212BodyAssetSummary.empty()) q212BodyAssetSummary += ",";
         q212BodyAssetSummary += bodyPath;
     }
-    Q6H_LOGI("Q21.15 PLAYER EQUIPMENT ASSETS: found=%zu expected=4 vault101=%d pipGlove=%d rightHand=%d pipBoy=%d paths=%s",
+    Q6H_LOGI("Q21.16 PLAYER EQUIPMENT ASSETS: found=%zu expected=5 ikUpperBody=%d vault101=%d pipGlove=%d rightHand=%d pipBoy=%d paths=%s",
              bodyPaths.size(),
+             q216UpperBodyIk.empty() ? 0 : 1,
              q215Vault101.empty() ? 0 : 1,
              q215PipBoyGlove.empty() ? 0 : 1,
              q215RightHand.empty() ? 0 : 1,
@@ -8508,6 +8529,9 @@ bool Q210EnsurePlayerBody() {
                 continue;
             }
             gpu.q210PlayerBody = true;
+            gpu.q215IkReferenceOnly =
+                Q210EndsWithInsensitive(
+                    path, "characters\\_male\\upperbody.nif");
             triangles += static_cast<size_t>(gpu.vertexCount / 3);
 
             const size_t q211GpuIndex = gQ210PlayerBody.size();
@@ -8521,6 +8545,7 @@ bool Q210EnsurePlayerBody() {
                     part.positionsGame.size() * 4u) {
                 Q211PlayerRigPart rig;
                 rig.gpuIndex = q211GpuIndex;
+                rig.sourceModelPath = path;
                 rig.bindExpanded = std::move(q211BindExpanded);
                 rig.workExpanded = rig.bindExpanded;
                 rig.bones = part.mesh.skinBones;
@@ -8658,12 +8683,15 @@ bool Q210EnsurePlayerBody() {
             ++gpuShapes;
         }
 
-        Q6H_LOGI("Q21.15 PLAYER GORE FILTER: model=%s capTrianglesRemoved=%zu mode=BSDismember-authored-caps-only",
-                 path.c_str(), q215CapsRemovedForModel);
+        Q6H_LOGI("Q21.16 PLAYER PART: model=%s ikReferenceOnly=%d capTrianglesRemoved=%zu mode=BSDismember-authored-caps-only",
+                 path.c_str(),
+                 Q210EndsWithInsensitive(
+                     path, "characters\\_male\\upperbody.nif") ? 1 : 0,
+                 q215CapsRemovedForModel);
     }
 
     gQ210PlayerBodyReady = !gQ210PlayerBody.empty();
-    Q6H_LOGI("Q21.15 PLAYER BODY READY: ready=%d archiveMaleEntries=%zu bodyPartsFound=%zu cpuShapes=%zu gpuShapes=%zu rigParts=%zu triangles=%zu skinInstances=%zu referencedBonesAcrossParts=%zu skeletonNodes=%u skeletonNamedNodes=%zu mode=real-FO3-weighted-skinning armIK=two-bone",
+    Q6H_LOGI("Q21.16 PLAYER BODY READY: ready=%d archiveMaleEntries=%zu bodyPartsFound=%zu cpuShapes=%zu gpuShapes=%zu rigParts=%zu triangles=%zu skinInstances=%zu referencedBonesAcrossParts=%zu skeletonNodes=%u skeletonNamedNodes=%zu mode=real-FO3-weighted-skinning armIK=two-bone",
              gQ210PlayerBodyReady ? 1 : 0,
              maleEntries.size(), bodyPaths.size(),
              cpuShapes, gpuShapes, gQ211PlayerRigParts.size(), triangles,
@@ -8677,6 +8705,7 @@ void Q210RenderPlayerBody(bool alphaPass) {
     if (!Q210EnsurePlayerBody()) return;
     Q211UpdatePlayerRig();
     for (const GpuObject& object : gQ210PlayerBody) {
+        if (object.q215IkReferenceOnly) continue;
         if (object.alphaBlend != alphaPass) continue;
         if (object.zBufferTestQ1200) glEnable(GL_DEPTH_TEST);
         else glDisable(GL_DEPTH_TEST);
