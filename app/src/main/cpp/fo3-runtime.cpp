@@ -9993,6 +9993,39 @@ bool Q230EnsureNpcActors() {
             if(!hp.empty() && samePath(path,hp)) return true;
         return false;
     };
+
+    // Q23.5: Fallout's RACE head table owns the head-part texture selection.
+    // Do not depend on the texture string embedded inside a generic NIF.  In
+    // AfricanAmerican, HeadHuman.NIF owns both the Head and Ear face-data
+    // parts: shape 0 uses INDX 0 HeadHuman.dds and shape 1 uses INDX 1
+    // EarsHuman.dds. The remaining model-bearing slots map one-to-one.
+    auto q235RaceTextureForPart =
+        [&](const std::string& path, uint32_t shapeIndex)->std::string {
+            if(lucas->raceHeadModels.empty() ||
+               lucas->raceHeadTextures.empty()) return {};
+
+            if(lucas->raceHeadModels.size()>0u &&
+               !lucas->raceHeadModels[0].empty() &&
+               samePath(path,lucas->raceHeadModels[0])){
+                if(shapeIndex==0u &&
+                   lucas->raceHeadTextures.size()>0u)
+                    return lucas->raceHeadTextures[0];
+                if(shapeIndex==1u &&
+                   lucas->raceHeadTextures.size()>1u)
+                    return lucas->raceHeadTextures[1];
+                return {};
+            }
+
+            for(size_t slot=2u;
+                slot<lucas->raceHeadModels.size() &&
+                slot<lucas->raceHeadTextures.size();
+                ++slot){
+                if(!lucas->raceHeadModels[slot].empty() &&
+                   samePath(path,lucas->raceHeadModels[slot]))
+                    return lucas->raceHeadTextures[slot];
+            }
+            return {};
+        };
     auto combineFaceGen=[](const std::vector<float>& race,
                            const std::vector<float>& npc){
         const size_t count=std::max(race.size(),npc.size());
@@ -10139,7 +10172,7 @@ bool Q230EnsureNpcActors() {
 
         std::vector<CpuObject> parts;
         if(!BuildCpuObjects(placement,parts)){
-            Q6H_LOGW("Q23.4 NPC PART MISS: actor=%s model=%s stage=cpu",
+            Q6H_LOGW("Q23.5 NPC PART MISS: actor=%s model=%s stage=cpu",
                      lucas->editorId.c_str(),path.c_str());
             continue;
         }
@@ -10159,6 +10192,12 @@ bool Q230EnsureNpcActors() {
                 faceGenMorphedVertices+=part.positionsGame.size();
             }
 
+            const std::string q235RaceTexture=
+                q235RaceTextureForPart(path,part.q2016ShapeIndex);
+            if(!q235RaceTexture.empty()){
+                part.mesh.diffuseTexturePath=q235RaceTexture;
+            }
+
             if(isEyeModel(path) && !lucas->eyeTexturePath.empty()){
                 part.mesh.diffuseTexturePath=lucas->eyeTexturePath;
                 ++eyeTextureOverrides;
@@ -10171,34 +10210,32 @@ bool Q230EnsureNpcActors() {
                 ++hairTextureOverrides;
             }
 
-            // Apply FGTS only to the primary RACE face colour map, not ears,
-            // mouth, teeth or eyes that happen to live in the same head NIF.
-            const bool q234PrimaryHead=
+            // Apply FGTS to the actual RACE Head slot, regardless of whatever
+            // generic/default texture the NIF happened to contain internally.
+            const bool q235PrimaryHeadShape=
                 !lucas->raceHeadModels.empty() &&
                 !lucas->raceHeadModels[0].empty() &&
-                samePath(path,lucas->raceHeadModels[0]);
-            const bool q234PrimaryFaceTexture=
+                samePath(path,lucas->raceHeadModels[0]) &&
+                part.q2016ShapeIndex==0u &&
                 !lucas->raceHeadTextures.empty() &&
-                !lucas->raceHeadTextures[0].empty() &&
-                samePath(part.mesh.diffuseTexturePath,
-                         lucas->raceHeadTextures[0]);
-            if(q234PrimaryHead && q234PrimaryFaceTexture &&
-               !q234FaceTex.empty()){
+                !lucas->raceHeadTextures[0].empty();
+            if(q235PrimaryHeadShape && !q234FaceTex.empty()){
+                const std::string& q235BaseHeadTexture=
+                    lucas->raceHeadTextures[0];
                 Fo3FaceGenTextureQ234 generated;
                 if(LoadFo3FaceGenTextureQ234(
-                        path,part.mesh.diffuseTexturePath,
+                        path,q235BaseHeadTexture,
                         q234FaceTex,generated)){
                     const std::string key=
-                        "__q234_facegen__/"+
-                        lucas->editorId+"/"+
-                        std::to_string(part.q2016ShapeIndex)+".dds";
+                        "__q235_facegen__/"+
+                        lucas->editorId+"/head.dds";
                     Fo3RgbaTexture rgba;
                     rgba.width=generated.width;
                     rgba.height=generated.height;
                     rgba.rgba=std::move(generated.rgba);
                     rgba.sourcePath=
                         generated.baseTexturePath+" + "+generated.egtPath;
-                    rgba.format="Q23.4-FaceGen-EGT";
+                    rgba.format="Q23.5-FaceGen-EGT";
                     gQ234GeneratedTextures[key]=std::move(rgba);
                     part.mesh.diffuseTexturePath=key;
                     ++faceGenTextureShapes;
@@ -10229,7 +10266,7 @@ bool Q230EnsureNpcActors() {
                     gExteriorOriginYQ1890,
                     gExteriorOriginZQ1890,
                     gpu)){
-                Q6H_LOGW("Q23.4 NPC PART MISS: actor=%s model=%s stage=gpu",
+                Q6H_LOGW("Q23.5 NPC PART MISS: actor=%s model=%s stage=gpu",
                          lucas->editorId.c_str(),path.c_str());
                 continue;
             }
@@ -10241,7 +10278,7 @@ bool Q230EnsureNpcActors() {
     }
 
     gQ230NpcReady=!gQ230NpcActors.empty();
-    Q6H_LOGI("Q23.4 NPC VISUAL READY: ready=%d actor=%s ref=%08X base=%08X assets=%zu cpuShapes=%zu gpuShapes=%zu triangles=%zu raceHeadParts=%zu egmAssets=%zu morphedShapes=%zu morphedVertices=%zu faceTextureShapes=%zu faceTexturePixels=%zu eyeTextureOverrides=%zu hairTextureOverrides=%zu hairTintShapes=%zu faceGenGeometryApplied=%d faceGenTextureApplied=%d combinedCoeffs=(%zu,%zu,%zu) npcCoeffs=(%zu,%zu,%zu) raceCoeffs=(%zu,%zu,%zu) hairRGB=(%u,%u,%u) pose=bind source=RACE-baseline+NPC-FaceGen+EGM/EGT+HCLR",
+    Q6H_LOGI("Q23.5 NPC VISUAL READY: ready=%d actor=%s ref=%08X base=%08X assets=%zu cpuShapes=%zu gpuShapes=%zu triangles=%zu raceHeadParts=%zu egmAssets=%zu morphedShapes=%zu morphedVertices=%zu faceTextureShapes=%zu faceTexturePixels=%zu eyeTextureOverrides=%zu hairTextureOverrides=%zu hairTintShapes=%zu faceGenGeometryApplied=%d faceGenTextureApplied=%d combinedCoeffs=(%zu,%zu,%zu) npcCoeffs=(%zu,%zu,%zu) raceCoeffs=(%zu,%zu,%zu) hairRGB=(%u,%u,%u) pose=bind source=RACE-texture-slots+RACE-baseline+NPC-FaceGen+EGM/EGT+HCLR",
              gQ230NpcReady?1:0,
              lucas->fullName.empty()?lucas->editorId.c_str():lucas->fullName.c_str(),
              lucas->refFormId,lucas->baseFormId,
