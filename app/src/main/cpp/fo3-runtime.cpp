@@ -7728,7 +7728,7 @@ void Q211UpdatePlayerRig() {
     glBindBuffer(GL_ARRAY_BUFFER, 0);
 
     if ((gQ211TrackingSerial % 180u) == 1u) {
-        Q6H_LOGI("Q21.1D ARM IK: serial=%llu rigParts=%zu headAnchorReady=%d headAnchor=(%.3f %.3f %.3f) trackedHeadRoot=(%.3f %.3f %.3f) leftValid=%d leftSolved=%d targetL=(%.3f %.3f %.3f) elbowL=(%.3f %.3f %.3f) rightValid=%d rightSolved=%d targetR=(%.3f %.3f %.3f) elbowR=(%.3f %.3f %.3f) mode=weighted-LBS-two-bone-IK targetSpace=HMD-relative-to-authored-head wristOrientation=forearm",
+        Q6H_LOGI("Q21.2 ARM IK: serial=%llu rigParts=%zu headAnchorReady=%d headAnchor=(%.3f %.3f %.3f) trackedHeadRoot=(%.3f %.3f %.3f) leftValid=%d leftSolved=%d targetL=(%.3f %.3f %.3f) elbowL=(%.3f %.3f %.3f) rightValid=%d rightSolved=%d targetR=(%.3f %.3f %.3f) elbowR=(%.3f %.3f %.3f) mode=weighted-LBS-two-bone-IK targetSpace=HMD-relative-to-authored-head wristOrientation=forearm",
                  static_cast<unsigned long long>(gQ211TrackingSerial),
                  gQ211PlayerRigParts.size(),
                  avatarHeadReady ? 1 : 0,
@@ -7770,7 +7770,7 @@ bool Q210EnsurePlayerBody() {
     const char* wantedSuffixes[] = {
         "characters\\_male\\upperbody.nif",
         "characters\\_male\\lowerbody.nif",
-        "characters\\_male\\hand.nif",
+        "characters\\_male\\hands.nif",
         "characters\\_male\\foot.nif",
     };
     std::vector<std::string> bodyPaths;
@@ -7791,6 +7791,17 @@ bool Q210EnsurePlayerBody() {
             break;
         }
     }
+
+    std::string q212BodyAssetSummary;
+    for (const std::string& bodyPath : bodyPaths) {
+        if (!q212BodyAssetSummary.empty()) q212BodyAssetSummary += ",";
+        q212BodyAssetSummary += bodyPath;
+    }
+    Q6H_LOGI("Q21.2 PLAYER BODY ASSETS: found=%zu expected=4 paths=%s",
+             bodyPaths.size(),
+             q212BodyAssetSummary.empty()
+                 ? "<none>"
+                 : q212BodyAssetSummary.c_str());
 
     Fo3NifSkinProbe skeletonProbe;
     ProbeFo3NifSkin(skeletonPath, skeletonProbe);
@@ -7941,7 +7952,7 @@ bool Q210EnsurePlayerBody() {
                               Q211NormalizeSafe(q211dRGeomDir))
                         : 0.0f;
 
-                Q6H_LOGI("Q21.1D RIG PART: model=%s shape=%u gpuIndex=%zu expandedVertices=%zu leftChain=%d palmL=%d anchorL=(%.3f %.3f %.3f) boneHandL=(%.3f %.3f %.3f) distalDotL=%.3f rightChain=%d palmR=%d anchorR=(%.3f %.3f %.3f) boneHandR=(%.3f %.3f %.3f) distalDotR=%.3f handWeight=(%.1f,%.1f) foreWeight=(%.1f,%.1f)",
+                Q6H_LOGI("Q21.2 RIG PART: model=%s shape=%u gpuIndex=%zu expandedVertices=%zu leftChain=%d palmL=%d anchorL=(%.3f %.3f %.3f) boneHandL=(%.3f %.3f %.3f) distalDotL=%.3f rightChain=%d palmR=%d anchorR=(%.3f %.3f %.3f) boneHandR=(%.3f %.3f %.3f) distalDotR=%.3f handWeight=(%.1f,%.1f) foreWeight=(%.1f,%.1f)",
                          path.c_str(), part.q2016ShapeIndex,
                          q211GpuIndex, rig.bindExpanded.size() / 18u,
                          rig.leftChainReady ? 1 : 0,
@@ -7971,7 +7982,7 @@ bool Q210EnsurePlayerBody() {
     }
 
     gQ210PlayerBodyReady = !gQ210PlayerBody.empty();
-    Q6H_LOGI("Q21.1D PLAYER BODY READY: ready=%d archiveMaleEntries=%zu bodyPartsFound=%zu cpuShapes=%zu gpuShapes=%zu rigParts=%zu triangles=%zu skinInstances=%zu referencedBonesAcrossParts=%zu skeletonNodes=%u skeletonNamedNodes=%zu mode=real-FO3-weighted-skinning armIK=two-bone",
+    Q6H_LOGI("Q21.2 PLAYER BODY READY: ready=%d archiveMaleEntries=%zu bodyPartsFound=%zu cpuShapes=%zu gpuShapes=%zu rigParts=%zu triangles=%zu skinInstances=%zu referencedBonesAcrossParts=%zu skeletonNodes=%u skeletonNamedNodes=%zu mode=real-FO3-weighted-skinning armIK=two-bone",
              gQ210PlayerBodyReady ? 1 : 0,
              maleEntries.size(), bodyPaths.size(),
              cpuShapes, gpuShapes, gQ211PlayerRigParts.size(), triangles,
