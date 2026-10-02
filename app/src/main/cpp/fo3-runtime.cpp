@@ -240,6 +240,9 @@ struct CachedGpuTexture {
 
 // Q20.15: keep the 7x7 buffer resident, but reject AABBs outside the current
 // eye frustum before any GL state changes. Bounds are already in scene metres.
+// These runtime objects are defined later in this translation unit.
+extern bool gWaterReflectionPassQ2090;
+extern std::vector<GpuObject> gObjects;
 bool gQ2015FrustumCullActive = false;
 float gQ2015FrustumMvp[16]{};
 uint64_t gQ2015CullTested = 0u;
