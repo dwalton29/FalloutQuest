@@ -7254,6 +7254,56 @@ int Q211FindPrimaryBone(
     return fallback;
 }
 
+
+int Q211FindHeadAnchorBone(
+        const std::vector<Fo3NifSkinBone>& bones,
+        bool& isNeck) {
+    isNeck = false;
+    for (size_t i = 0u; i < bones.size(); ++i) {
+        const std::string lower = Q211Lower(bones[i].name);
+        if (lower == "bip01 head" ||
+            lower.find("bip01 head") != std::string::npos) {
+            return static_cast<int>(i);
+        }
+    }
+    for (size_t i = 0u; i < bones.size(); ++i) {
+        const std::string lower = Q211Lower(bones[i].name);
+        if (lower == "bip01 neck" ||
+            lower.find("bip01 neck") != std::string::npos) {
+            isNeck = true;
+            return static_cast<int>(i);
+        }
+    }
+    return -1;
+}
+
+bool Q211FindAvatarHeadAnchor(Vec3& out) {
+    // Prefer the authored Head node. Some body parts do not reference Head;
+    // Neck is a stable fallback, then shoulder midpoint.
+    for (const Q211PlayerRigPart& part : gQ211PlayerRigParts) {
+        bool isNeck = false;
+        const int bone = Q211FindHeadAnchorBone(part.bones, isNeck);
+        if (bone >= 0) {
+            out = Q211BindBonePoint(part.bones[bone]);
+            if (isNeck) out.y += 0.14f;
+            return true;
+        }
+    }
+
+    for (const Q211PlayerRigPart& part : gQ211PlayerRigParts) {
+        if (part.leftUpperArm >= 0 && part.rightUpperArm >= 0) {
+            const Vec3 l = Q211BindBonePoint(
+                part.bones[part.leftUpperArm]);
+            const Vec3 r = Q211BindBonePoint(
+                part.bones[part.rightUpperArm]);
+            out = Q211Mul(Q211Add(l, r), 0.5f);
+            out.y += 0.23f;
+            return true;
+        }
+    }
+    return false;
+}
+
 int Q211BoneRole(const std::string& authoredName) {
     const std::string name = Q211Lower(authoredName);
     const bool left =
@@ -7473,12 +7523,34 @@ void Q211UpdatePlayerRig() {
     float invRoot[16]{};
     if (!Q2016InvertAffine(gQ210PlayerRoot, invRoot)) return;
 
+    const Vec3 headWorld{
+        gQ210Head[0], gQ210Head[1], gQ210Head[2]};
     const Vec3 leftTargetWorld{
         gQ210LeftHand[0], gQ210LeftHand[1], gQ210LeftHand[2]};
     const Vec3 rightTargetWorld{
         gQ210RightHand[0], gQ210RightHand[1], gQ210RightHand[2]};
-    const Vec3 leftTarget = Q211TransformPoint(invRoot, leftTargetWorld);
-    const Vec3 rightTarget = Q211TransformPoint(invRoot, rightTargetWorld);
+
+    const Vec3 trackedHeadRoot = Q211TransformPoint(invRoot, headWorld);
+    const Vec3 trackedLeftRoot =
+        Q211TransformPoint(invRoot, leftTargetWorld);
+    const Vec3 trackedRightRoot =
+        Q211TransformPoint(invRoot, rightTargetWorld);
+
+    Vec3 avatarHeadAnchor = trackedHeadRoot;
+    const bool avatarHeadReady =
+        Q211FindAvatarHeadAnchor(avatarHeadAnchor);
+
+    // Q21.1B: Quest LOCAL space is session/HMD-relative, while Fallout's
+    // bones are actor-model-relative. Map the physical controller offset from
+    // the HMD onto Fallout's authored head/neck anchor. Feeding the raw LOCAL
+    // Y directly made targets ~0.4-0.8 m below the actor and pulled the
+    // forearm/hand geometry out of view.
+    const Vec3 leftTarget = Q211Add(
+        avatarHeadAnchor,
+        Q211Sub(trackedLeftRoot, trackedHeadRoot));
+    const Vec3 rightTarget = Q211Add(
+        avatarHeadAnchor,
+        Q211Sub(trackedRightRoot, trackedHeadRoot));
 
     bool anyLeftSolved = false;
     bool anyRightSolved = false;
@@ -7596,9 +7668,12 @@ void Q211UpdatePlayerRig() {
     glBindBuffer(GL_ARRAY_BUFFER, 0);
 
     if ((gQ211TrackingSerial % 180u) == 1u) {
-        Q6H_LOGI("Q21.1 ARM IK: serial=%llu rigParts=%zu leftValid=%d leftSolved=%d targetL=(%.3f %.3f %.3f) elbowL=(%.3f %.3f %.3f) rightValid=%d rightSolved=%d targetR=(%.3f %.3f %.3f) elbowR=(%.3f %.3f %.3f) mode=weighted-LBS-two-bone-IK wristOrientation=forearm",
+        Q6H_LOGI("Q21.1B ARM IK: serial=%llu rigParts=%zu headAnchorReady=%d headAnchor=(%.3f %.3f %.3f) trackedHeadRoot=(%.3f %.3f %.3f) leftValid=%d leftSolved=%d targetL=(%.3f %.3f %.3f) elbowL=(%.3f %.3f %.3f) rightValid=%d rightSolved=%d targetR=(%.3f %.3f %.3f) elbowR=(%.3f %.3f %.3f) mode=weighted-LBS-two-bone-IK targetSpace=HMD-relative-to-authored-head wristOrientation=forearm",
                  static_cast<unsigned long long>(gQ211TrackingSerial),
                  gQ211PlayerRigParts.size(),
+                 avatarHeadReady ? 1 : 0,
+                 avatarHeadAnchor.x, avatarHeadAnchor.y, avatarHeadAnchor.z,
+                 trackedHeadRoot.x, trackedHeadRoot.y, trackedHeadRoot.z,
                  gQ210LeftHandValid ? 1 : 0,
                  anyLeftSolved ? 1 : 0,
                  leftTarget.x, leftTarget.y, leftTarget.z,
