@@ -554,6 +554,15 @@ float gQ218LeftHandQuat[4]{0.0f, 0.0f, 0.0f, 1.0f};
 float gQ218RightHandQuat[4]{0.0f, 0.0f, 0.0f, 1.0f};
 bool gQ210LeftHandValid = false;
 bool gQ210RightHandValid = false;
+
+// Q21.17 controller-driven finger pose. These are VR input/calibration values;
+// the actual finger grouping and curl axes are derived from Fallout's authored
+// hand skeleton at runtime.
+float gQ217FingerTrigger[2]{0.0f, 0.0f};
+float gQ217FingerGrip[2]{0.0f, 0.0f};
+bool gQ217TriggerTouched[2]{false, false};
+bool gQ217ThumbTouched[2]{false, false};
+
 // Q21.9 VR-specific retarget calibration. Both arms share one scale so the
 // avatar stays symmetric. The scale only grows during a session, avoiding
 // visible arm-length "breathing" during ordinary controller motion.
@@ -7558,6 +7567,33 @@ bool Q220FindAuthoredHandBasis(bool left, Q220HandBasis& out) {
     return true;
 }
 
+struct Q217FingerJoint {
+    std::string name;
+    Vec3 pivot{};
+    int chain = -1;
+    int depth = 0;
+    bool thumb = false;
+};
+
+struct Q217FingerChain {
+    int id = -1;
+    std::vector<Q217FingerJoint> joints;
+};
+
+struct Q217FingerRig {
+    bool attempted = false;
+    bool ready = false;
+    int indexChain = -1;
+    float curlSign = 1.0f;
+    Vec3 handPoint{};
+    Vec3 fingerForward{};
+    std::vector<Q217FingerChain> chains;
+    std::vector<Q217FingerJoint> thumb;
+    std::string summary;
+};
+
+Q217FingerRig gQ217FingerRig[2];
+
 struct Q211Delta {
     float r[9]{
         1,0,0,
@@ -7765,6 +7801,281 @@ Q211Delta Q220MakePivotRotationMatrix(
     out.t = Q211Sub(pivot, Q211Rotate(out.r, pivot));
     out.stretchPivot = pivot;
     out.active = true;
+    return out;
+}
+
+bool Q217ParseDigitBoneName(
+        const std::string& authoredName,
+        bool left,
+        int& outChain,
+        bool& outThumb) {
+    const std::string lower = Q211Lower(authoredName);
+    const std::string sideToken =
+        std::string("bip01 ") + (left ? "l " : "r ");
+    if (lower.find(sideToken) == std::string::npos) return false;
+
+    outChain = -1;
+    outThumb = false;
+
+    const size_t thumbAt = lower.find("thumb");
+    if (thumbAt != std::string::npos) {
+        outThumb = true;
+        return true;
+    }
+
+    const size_t fingerAt = lower.find("finger");
+    if (fingerAt == std::string::npos) return false;
+    size_t digitAt = fingerAt + 6u;
+    while (digitAt < lower.size() &&
+           (lower[digitAt] < '0' || lower[digitAt] > '9')) {
+        ++digitAt;
+    }
+    if (digitAt >= lower.size()) return false;
+
+    outChain = static_cast<int>(lower[digitAt] - '0');
+    outThumb = outChain == 0;
+    return true;
+}
+
+bool Q217EnsureFingerRig(
+        bool left,
+        const Q220HandBasis& basis) {
+    Q217FingerRig& rig = gQ217FingerRig[left ? 0 : 1];
+    if (rig.attempted) return rig.ready;
+    rig.attempted = true;
+
+    if (!basis.ready) return false;
+
+    std::string handName;
+    if (!Q221FindGlobalBonePoint(
+            left, "hand", rig.handPoint, handName)) {
+        return false;
+    }
+
+    rig.fingerForward = Q211NormalizeSafe(
+        Q211Cross(basis.intoPalm, basis.littleToThumb));
+    if (Q211Length(rig.fingerForward) < 0.03f) return false;
+
+    std::unordered_map<int, std::vector<Q217FingerJoint>> byChain;
+    std::unordered_set<std::string> seen;
+
+    for (const Q211PlayerRigPart& part : gQ211PlayerRigParts) {
+        for (const Fo3NifSkinBone& bone : part.bones) {
+            int chain = -1;
+            bool thumb = false;
+            if (!Q217ParseDigitBoneName(
+                    bone.name, left, chain, thumb)) {
+                continue;
+            }
+
+            const std::string lower = Q211Lower(bone.name);
+            if (!seen.insert(lower).second) continue;
+
+            Q217FingerJoint joint;
+            joint.name = lower;
+            joint.pivot = Q211BindBonePoint(bone);
+            joint.chain = chain;
+            joint.thumb = thumb;
+            if (thumb) rig.thumb.push_back(joint);
+            else byChain[chain].push_back(joint);
+        }
+    }
+
+    for (auto& entry : byChain) {
+        Q217FingerChain chain;
+        chain.id = entry.first;
+        chain.joints = std::move(entry.second);
+        std::sort(
+            chain.joints.begin(), chain.joints.end(),
+            [&](const Q217FingerJoint& a,
+                const Q217FingerJoint& b) {
+                return Q211Dot(
+                           Q211Sub(a.pivot, rig.handPoint),
+                           rig.fingerForward) <
+                       Q211Dot(
+                           Q211Sub(b.pivot, rig.handPoint),
+                           rig.fingerForward);
+            });
+        for (size_t i = 0u; i < chain.joints.size(); ++i)
+            chain.joints[i].depth = static_cast<int>(i);
+        rig.chains.push_back(std::move(chain));
+    }
+
+    std::sort(
+        rig.thumb.begin(), rig.thumb.end(),
+        [&](const Q217FingerJoint& a,
+            const Q217FingerJoint& b) {
+            return Q211Length(Q211Sub(a.pivot, rig.handPoint)) <
+                   Q211Length(Q211Sub(b.pivot, rig.handPoint));
+        });
+    for (size_t i = 0u; i < rig.thumb.size(); ++i)
+        rig.thumb[i].depth = static_cast<int>(i);
+
+    // Choose the most thumbward authored non-thumb chain as the index finger.
+    // No FingerN number is assumed to mean index.
+    float bestAcross = -1.0e30f;
+    for (const Q217FingerChain& chain : rig.chains) {
+        if (chain.joints.empty()) continue;
+        const float across = Q211Dot(
+            Q211Sub(chain.joints.front().pivot, rig.handPoint),
+            basis.littleToThumb);
+        if (across > bestAcross) {
+            bestAcross = across;
+            rig.indexChain = chain.id;
+        }
+    }
+
+    // Determine curl sign from the authored hand frame: whichever rotation
+    // around little->thumb bends finger-forward toward the palm wins.
+    float plusR[9]{};
+    float minusR[9]{};
+    Q218AxisRotation(basis.littleToThumb, 0.20f, plusR);
+    Q218AxisRotation(basis.littleToThumb, -0.20f, minusR);
+    const float plusPalm = Q211Dot(
+        Q211Rotate(plusR, rig.fingerForward), basis.intoPalm);
+    const float minusPalm = Q211Dot(
+        Q211Rotate(minusR, rig.fingerForward), basis.intoPalm);
+    rig.curlSign = plusPalm >= minusPalm ? 1.0f : -1.0f;
+
+    rig.ready = rig.indexChain >= 0 && !rig.chains.empty();
+
+    std::string summary;
+    for (const Q217FingerChain& chain : rig.chains) {
+        if (!summary.empty()) summary += " ";
+        summary += "F";
+        summary += std::to_string(chain.id);
+        summary += chain.id == rig.indexChain ? "[INDEX]={" : "={";
+        for (size_t i = 0u; i < chain.joints.size(); ++i) {
+            if (i) summary += ",";
+            summary += chain.joints[i].name;
+        }
+        summary += "}";
+    }
+    if (!rig.thumb.empty()) {
+        summary += " THUMB={";
+        for (size_t i = 0u; i < rig.thumb.size(); ++i) {
+            if (i) summary += ",";
+            summary += rig.thumb[i].name;
+        }
+        summary += "}";
+    }
+    rig.summary = summary;
+
+    Q6H_LOGI("Q21.17 FINGER MAP: side=%s ready=%d indexChain=%d chains=%zu thumbBones=%zu curlSign=%.0f bones=%s",
+             left ? "L" : "R",
+             rig.ready ? 1 : 0,
+             rig.indexChain,
+             rig.chains.size(),
+             rig.thumb.size(),
+             rig.curlSign,
+             rig.summary.empty() ? "<none>" : rig.summary.c_str());
+    return rig.ready;
+}
+
+std::unordered_map<std::string, Q211Delta> Q217BuildFingerPose(
+        bool left,
+        const Q220HandBasis& basis,
+        float trigger,
+        bool triggerTouched,
+        float grip,
+        bool thumbTouched) {
+    std::unordered_map<std::string, Q211Delta> out;
+    if (!Q217EnsureFingerRig(left, basis)) return out;
+
+    Q217FingerRig& rig = gQ217FingerRig[left ? 0 : 1];
+    out.reserve(
+        rig.thumb.size() +
+        [&]() {
+            size_t n = 0u;
+            for (const Q217FingerChain& c : rig.chains)
+                n += c.joints.size();
+            return n;
+        }());
+
+    const float indexCurl = std::clamp(
+        std::max(trigger, triggerTouched ? 0.16f : 0.0f),
+        0.0f, 1.0f);
+    const float gripCurl = std::clamp(grip, 0.0f, 1.0f);
+
+    constexpr float DEG = 0.01745329251994329577f;
+    const float jointDegrees[3]{55.0f, 45.0f, 35.0f};
+
+    for (const Q217FingerChain& chain : rig.chains) {
+        const float curl =
+            chain.id == rig.indexChain ? indexCurl : gripCurl;
+        if (curl <= 0.0001f) continue;
+
+        Q211Delta cumulative;
+        for (size_t i = 0u; i < chain.joints.size(); ++i) {
+            const Q217FingerJoint& joint = chain.joints[i];
+            const Vec3 pivot = cumulative.active
+                ? Q211ApplyDelta(cumulative, joint.pivot)
+                : joint.pivot;
+            const Vec3 axis = cumulative.active
+                ? Q211ApplyDeltaVector(
+                      cumulative, basis.littleToThumb)
+                : basis.littleToThumb;
+            const float degrees =
+                jointDegrees[std::min<size_t>(i, 2u)];
+            const Q211Delta bend = Q218MakePivotRotation(
+                pivot,
+                axis,
+                rig.curlSign * curl * degrees * DEG);
+            cumulative = Q218ComposeRigid(cumulative, bend);
+            out[joint.name] = cumulative;
+        }
+    }
+
+    // Thumb opposition is a VR-specific controller pose. Its axis and sign are
+    // still derived from Fallout's authored thumb position and palm frame.
+    if (thumbTouched && !rig.thumb.empty()) {
+        Vec3 thumbDirection{};
+        if (rig.thumb.size() >= 2u) {
+            thumbDirection = Q211Sub(
+                rig.thumb[1].pivot, rig.thumb[0].pivot);
+        } else {
+            thumbDirection = Q211Sub(
+                rig.thumb[0].pivot, rig.handPoint);
+        }
+
+        if (Q211Length(thumbDirection) > 0.01f) {
+            thumbDirection = Q211NormalizeSafe(thumbDirection);
+            const Vec3 targetDirection = Q211NormalizeSafe(
+                Q211Add(
+                    Q211Mul(basis.littleToThumb, -1.0f),
+                    Q211Mul(basis.intoPalm, 0.35f)));
+            Vec3 thumbAxis =
+                Q211Cross(thumbDirection, targetDirection);
+            if (Q211Length(thumbAxis) > 0.01f) {
+                thumbAxis = Q211NormalizeSafe(thumbAxis);
+                const float targetAngle = std::min(
+                    std::acos(std::clamp(
+                        Q211Dot(thumbDirection, targetDirection),
+                        -1.0f, 1.0f)),
+                    50.0f * DEG);
+
+                Q211Delta cumulative;
+                for (size_t i = 0u; i < rig.thumb.size(); ++i) {
+                    const Q217FingerJoint& joint = rig.thumb[i];
+                    const Vec3 pivot = cumulative.active
+                        ? Q211ApplyDelta(cumulative, joint.pivot)
+                        : joint.pivot;
+                    const Vec3 axis = cumulative.active
+                        ? Q211ApplyDeltaVector(cumulative, thumbAxis)
+                        : thumbAxis;
+                    const float weight =
+                        i == 0u ? 0.70f :
+                        i == 1u ? 0.35f : 0.20f;
+                    const Q211Delta bend = Q218MakePivotRotation(
+                        pivot, axis, targetAngle * weight);
+                    cumulative = Q218ComposeRigid(
+                        cumulative, bend);
+                    out[joint.name] = cumulative;
+                }
+            }
+        }
+    }
+
     return out;
 }
 
@@ -8172,6 +8483,21 @@ void Q211UpdatePlayerRig() {
                 gQ219ArmLengthScale);
     }
 
+    const std::unordered_map<std::string, Q211Delta> q217LeftFingerPose =
+        q213LeftPose.solved
+            ? Q217BuildFingerPose(
+                  true, q220LeftAuthoredBasis,
+                  gQ217FingerTrigger[0], gQ217TriggerTouched[0],
+                  gQ217FingerGrip[0], gQ217ThumbTouched[0])
+            : std::unordered_map<std::string, Q211Delta>{};
+    const std::unordered_map<std::string, Q211Delta> q217RightFingerPose =
+        q213RightPose.solved
+            ? Q217BuildFingerPose(
+                  false, q220RightAuthoredBasis,
+                  gQ217FingerTrigger[1], gQ217TriggerTouched[1],
+                  gQ217FingerGrip[1], gQ217ThumbTouched[1])
+            : std::unordered_map<std::string, Q211Delta>{};
+
     size_t q213LeftAffectedParts = 0u;
     size_t q213RightAffectedParts = 0u;
 
@@ -8186,6 +8512,28 @@ void Q211UpdatePlayerRig() {
         std::vector<Q211Delta> deltas(part.bones.size());
         Q213AssignArmPoseToPart(
             part, q213LeftPose, q213RightPose, deltas);
+
+        // Layer authored-finger-space curls before the already-solved hand
+        // transform. This preserves the Q21.16 wrist/arm solution.
+        for (size_t boneIndex = 0u;
+             boneIndex < part.bones.size();
+             ++boneIndex) {
+            const std::string lower =
+                Q211Lower(part.bones[boneIndex].name);
+            const auto leftFinger =
+                q217LeftFingerPose.find(lower);
+            if (leftFinger != q217LeftFingerPose.end()) {
+                deltas[boneIndex] = Q218ComposeRigid(
+                    leftFinger->second, deltas[boneIndex]);
+                continue;
+            }
+            const auto rightFinger =
+                q217RightFingerPose.find(lower);
+            if (rightFinger != q217RightFingerPose.end()) {
+                deltas[boneIndex] = Q218ComposeRigid(
+                    rightFinger->second, deltas[boneIndex]);
+            }
+        }
 
         bool q213PartHasLeftArm = false;
         bool q213PartHasRightArm = false;
@@ -8304,6 +8652,17 @@ void Q211UpdatePlayerRig() {
                  q220RightAuthoredBasis.intoPalm.y,
                  q220RightAuthoredBasis.intoPalm.z,
                  Q214_HAND_OUTWARD_OFFSET);
+        Q6H_LOGI("Q21.17 FINGER INPUT: L(trigger=%.2f triggerTouch=%d grip=%.2f thumbTouch=%d posedBones=%zu) R(trigger=%.2f triggerTouch=%d grip=%.2f thumbTouch=%d posedBones=%zu) mapping=index=trigger lower3=squeeze thumb=capacitive",
+                 gQ217FingerTrigger[0],
+                 gQ217TriggerTouched[0] ? 1 : 0,
+                 gQ217FingerGrip[0],
+                 gQ217ThumbTouched[0] ? 1 : 0,
+                 q217LeftFingerPose.size(),
+                 gQ217FingerTrigger[1],
+                 gQ217TriggerTouched[1] ? 1 : 0,
+                 gQ217FingerGrip[1],
+                 gQ217ThumbTouched[1] ? 1 : 0,
+                 q217RightFingerPose.size());
         Q6H_LOGI("Q21.9 BODY/REACH: armScale=%.3f requested=%.3f base=%.3f max=%.3f targetExtension=%.2f measureL=(rest=%.3f dist=%.3f) measureR=(rest=%.3f dist=%.3f)",
                  gQ219ArmLengthScale, q219RequestedScale,
                  Q219_ARM_BASE_SCALE, Q219_ARM_MAX_SCALE,
@@ -8370,6 +8729,8 @@ void Q210DeletePlayerBody() {
     gQ211LastSkinnedSerial = ~0ull;
     gQ219ArmLengthScale = Q219_ARM_BASE_SCALE;
     gQ213TorsoYawReady = false;
+    gQ217FingerRig[0] = {};
+    gQ217FingerRig[1] = {};
     gQ210PlayerBodyReady = false;
 }
 
@@ -10656,7 +11017,11 @@ void SetFo3PlayerBodyTrackingQ210(
         bool leftValid, float leftX, float leftY, float leftZ,
         float leftQx, float leftQy, float leftQz, float leftQw,
         bool rightValid, float rightX, float rightY, float rightZ,
-        float rightQx, float rightQy, float rightQz, float rightQw) {
+        float rightQx, float rightQy, float rightQz, float rightQw,
+        float leftTrigger, float leftGrip,
+        bool leftTriggerTouched, bool leftThumbTouched,
+        float rightTrigger, float rightGrip,
+        bool rightTriggerTouched, bool rightThumbTouched) {
     gQ210Head[0] = headX;
     gQ210Head[1] = headY;
     gQ210Head[2] = headZ;
@@ -10677,6 +11042,20 @@ void SetFo3PlayerBodyTrackingQ210(
     gQ218RightHandQuat[1] = rightQy;
     gQ218RightHandQuat[2] = rightQz;
     gQ218RightHandQuat[3] = rightQw;
+
+    gQ217FingerTrigger[0] =
+        std::clamp(leftTrigger, 0.0f, 1.0f);
+    gQ217FingerTrigger[1] =
+        std::clamp(rightTrigger, 0.0f, 1.0f);
+    gQ217FingerGrip[0] =
+        std::clamp(leftGrip, 0.0f, 1.0f);
+    gQ217FingerGrip[1] =
+        std::clamp(rightGrip, 0.0f, 1.0f);
+    gQ217TriggerTouched[0] = leftTriggerTouched;
+    gQ217TriggerTouched[1] = rightTriggerTouched;
+    gQ217ThumbTouched[0] = leftThumbTouched;
+    gQ217ThumbTouched[1] = rightThumbTouched;
+
     ++gQ211TrackingSerial;
 
     // Q21.13: infer torso yaw with a neck dead-zone. Looking around within

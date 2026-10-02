@@ -40,7 +40,7 @@ public class MainActivity extends Activity {
         title.setGravity(Gravity.CENTER);
 
         TextView status = new TextView(this);
-        status.setText(nativeBootMessage() + "\n\nQ21.16 VAULT 101 + RESTORED ARM IK");
+        status.setText(nativeBootMessage() + "\n\nQ21.17 CONTROLLER FINGER POSE");
         status.setTextColor(Color.rgb(210, 220, 205));
         status.setTextSize(20);
         status.setGravity(Gravity.CENTER);

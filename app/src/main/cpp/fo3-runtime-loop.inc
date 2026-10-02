@@ -548,6 +548,26 @@ private:
                           XR_ACTION_TYPE_BOOLEAN_INPUT,
                           1, &handPaths_[1], &environmentToggleAction_)) return false;
 
+        // Q21.17: Touch controller finger state.
+        // Left trigger/value is already owned by timeAdvanceAction_; reuse its
+        // sampled value for the left index finger to avoid duplicate bindings.
+        if (!CreateAction("right_finger_trigger", "Right Finger Trigger",
+                          XR_ACTION_TYPE_FLOAT_INPUT,
+                          1, &handPaths_[1],
+                          &rightFingerTriggerAction_)) return false;
+        if (!CreateAction("finger_grip", "Finger Grip",
+                          XR_ACTION_TYPE_FLOAT_INPUT,
+                          2, handPaths_.data(),
+                          &fingerGripAction_)) return false;
+        if (!CreateAction("finger_trigger_touch", "Trigger Finger Touch",
+                          XR_ACTION_TYPE_BOOLEAN_INPUT,
+                          2, handPaths_.data(),
+                          &fingerTriggerTouchAction_)) return false;
+        if (!CreateAction("finger_thumb_contact", "Thumb Contact",
+                          XR_ACTION_TYPE_BOOLEAN_INPUT,
+                          2, handPaths_.data(),
+                          &fingerThumbContactAction_)) return false;
+
         XrPath profile = XR_NULL_PATH;
         XrPath leftAim = XR_NULL_PATH;
         XrPath rightAim = XR_NULL_PATH;
@@ -562,6 +582,19 @@ private:
         XrPath leftPpDomainY = XR_NULL_PATH;
         XrPath rightContactAoB = XR_NULL_PATH;
         XrPath rightEnvironmentStick = XR_NULL_PATH;
+        XrPath rightFingerTriggerValue = XR_NULL_PATH;
+        XrPath leftSqueezeValue = XR_NULL_PATH;
+        XrPath rightSqueezeValue = XR_NULL_PATH;
+        XrPath leftTriggerTouch = XR_NULL_PATH;
+        XrPath rightTriggerTouch = XR_NULL_PATH;
+        XrPath leftThumbstickTouch = XR_NULL_PATH;
+        XrPath rightThumbstickTouch = XR_NULL_PATH;
+        XrPath leftThumbrestTouch = XR_NULL_PATH;
+        XrPath rightThumbrestTouch = XR_NULL_PATH;
+        XrPath leftXTouch = XR_NULL_PATH;
+        XrPath leftYTouch = XR_NULL_PATH;
+        XrPath rightATouch = XR_NULL_PATH;
+        XrPath rightBTouch = XR_NULL_PATH;
         if (!Path("/interaction_profiles/oculus/touch_controller", &profile) ||
             !Path("/user/hand/left/input/aim/pose", &leftAim) ||
             !Path("/user/hand/right/input/aim/pose", &rightAim) ||
@@ -575,9 +608,22 @@ private:
             !Path("/user/hand/left/input/x/click", &leftFogX) ||
             !Path("/user/hand/left/input/y/click", &leftPpDomainY) ||
             !Path("/user/hand/right/input/b/click", &rightContactAoB) ||
-            !Path("/user/hand/right/input/thumbstick/click", &rightEnvironmentStick)) return false;
+            !Path("/user/hand/right/input/thumbstick/click", &rightEnvironmentStick) ||
+            !Path("/user/hand/right/input/trigger/value", &rightFingerTriggerValue) ||
+            !Path("/user/hand/left/input/squeeze/value", &leftSqueezeValue) ||
+            !Path("/user/hand/right/input/squeeze/value", &rightSqueezeValue) ||
+            !Path("/user/hand/left/input/trigger/touch", &leftTriggerTouch) ||
+            !Path("/user/hand/right/input/trigger/touch", &rightTriggerTouch) ||
+            !Path("/user/hand/left/input/thumbstick/touch", &leftThumbstickTouch) ||
+            !Path("/user/hand/right/input/thumbstick/touch", &rightThumbstickTouch) ||
+            !Path("/user/hand/left/input/thumbrest/touch", &leftThumbrestTouch) ||
+            !Path("/user/hand/right/input/thumbrest/touch", &rightThumbrestTouch) ||
+            !Path("/user/hand/left/input/x/touch", &leftXTouch) ||
+            !Path("/user/hand/left/input/y/touch", &leftYTouch) ||
+            !Path("/user/hand/right/input/a/touch", &rightATouch) ||
+            !Path("/user/hand/right/input/b/touch", &rightBTouch)) return false;
 
-        const std::array<XrActionSuggestedBinding, 13> bindings{{
+        const std::array<XrActionSuggestedBinding, 26> bindings{{
             {poseAction_, leftAim},
             {poseAction_, rightAim},
             {gripPoseAction_, leftGrip},
@@ -591,6 +637,19 @@ private:
             {ppDomainToggleAction_, leftPpDomainY},
             {contactAoToggleAction_, rightContactAoB},
             {environmentToggleAction_, rightEnvironmentStick},
+            {rightFingerTriggerAction_, rightFingerTriggerValue},
+            {fingerGripAction_, leftSqueezeValue},
+            {fingerGripAction_, rightSqueezeValue},
+            {fingerTriggerTouchAction_, leftTriggerTouch},
+            {fingerTriggerTouchAction_, rightTriggerTouch},
+            {fingerThumbContactAction_, leftThumbstickTouch},
+            {fingerThumbContactAction_, rightThumbstickTouch},
+            {fingerThumbContactAction_, leftThumbrestTouch},
+            {fingerThumbContactAction_, rightThumbrestTouch},
+            {fingerThumbContactAction_, leftXTouch},
+            {fingerThumbContactAction_, leftYTouch},
+            {fingerThumbContactAction_, rightATouch},
+            {fingerThumbContactAction_, rightBTouch},
         }};
         XrInteractionProfileSuggestedBinding suggested{XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING};
         suggested.interactionProfile = profile;
@@ -617,7 +676,7 @@ private:
         attach.actionSets = &actionSet_;
         if (!CheckXr(xrAttachSessionActionSets(session_, &attach), "xrAttachSessionActionSets")) return false;
 
-        FQ_LOGI("Q16.1 Touch bindings attached: Q6K controls unchanged + right A/click activate");
+        FQ_LOGI("Q21.17 Touch bindings attached: existing controls + trigger/squeeze/capacitive finger pose");
         return true;
     }
 
@@ -1088,6 +1147,27 @@ private:
         RadialMoveDeadzoneQ715(rawMoveX, rawMoveY, moveX_, moveY_);
         turnX_ = Deadzone(ReadFloatAction(turnXAction_, handPaths_[1]));
         timeAdvanceValue_ = ReadFloatAction(timeAdvanceAction_, handPaths_[0]);
+
+        fingerTriggerValue_[0] = timeAdvanceValue_;
+        fingerTriggerValue_[1] =
+            ReadFloatAction(rightFingerTriggerAction_, handPaths_[1]);
+        fingerGripValue_[0] =
+            ReadFloatAction(fingerGripAction_, handPaths_[0]);
+        fingerGripValue_[1] =
+            ReadFloatAction(fingerGripAction_, handPaths_[1]);
+        fingerTriggerTouched_[0] =
+            ReadBooleanActionQ1450(
+                fingerTriggerTouchAction_, handPaths_[0]);
+        fingerTriggerTouched_[1] =
+            ReadBooleanActionQ1450(
+                fingerTriggerTouchAction_, handPaths_[1]);
+        fingerThumbTouched_[0] =
+            ReadBooleanActionQ1450(
+                fingerThumbContactAction_, handPaths_[0]);
+        fingerThumbTouched_[1] =
+            ReadBooleanActionQ1450(
+                fingerThumbContactAction_, handPaths_[1]);
+
         const bool q1450FogPressed = ReadBooleanActionQ1450(fogToggleAction_, handPaths_[0]);
         if (q1450FogPressed && !fogTogglePressed_) {
             CycleFo3RenderStageQ1560();
@@ -1424,7 +1504,11 @@ private:
                     q210RightValid,
                     q210Right.position.x, q210Right.position.y, q210Right.position.z,
                     q210Right.orientation.x, q210Right.orientation.y,
-                    q210Right.orientation.z, q210Right.orientation.w);
+                    q210Right.orientation.z, q210Right.orientation.w,
+                    fingerTriggerValue_[0], fingerGripValue_[0],
+                    fingerTriggerTouched_[0], fingerThumbTouched_[0],
+                    fingerTriggerValue_[1], fingerGripValue_[1],
+                    fingerTriggerTouched_[1], fingerThumbTouched_[1]);
 
                 // Q20.13: loading freezes player motion, not world preparation.
                 // Keep CELL/terrain/LOD streaming alive beneath the overlay.
@@ -1462,14 +1546,20 @@ private:
                 layerCount = 1;
 
                 if ((frameCounter_++ % 180) == 0) {
-                    FQ_LOGI("Q21.6 live: player %.2f %.2f %.2f collision=%d aim=(L%d,R%d) grip=(L%d,R%d) bodyHandSource=(L%s,R%s) move %.2f %.2f trigger=%.2f",
+                    FQ_LOGI("Q21.17 live: player %.2f %.2f %.2f collision=%d aim=(L%d,R%d) gripPose=(L%d,R%d) bodyHandSource=(L%s,R%s) move %.2f %.2f fingers=L[t%.2f g%.2f tt%d th%d] R[t%.2f g%.2f tt%d th%d]",
                             playerPosition_.x, playerPosition_.y, playerPosition_.z,
                             IsFo3PlayerCollisionReadyQ6G() ? 1 : 0,
                             handPoseValid_[0] ? 1 : 0, handPoseValid_[1] ? 1 : 0,
                             gripHandPoseValid_[0] ? 1 : 0, gripHandPoseValid_[1] ? 1 : 0,
                             gripHandPoseValid_[0] ? "grip" : (handPoseValid_[0] ? "aim-fallback" : "none"),
                             gripHandPoseValid_[1] ? "grip" : (handPoseValid_[1] ? "aim-fallback" : "none"),
-                            moveX_, moveY_, activateValue_);
+                            moveX_, moveY_,
+                            fingerTriggerValue_[0], fingerGripValue_[0],
+                            fingerTriggerTouched_[0] ? 1 : 0,
+                            fingerThumbTouched_[0] ? 1 : 0,
+                            fingerTriggerValue_[1], fingerGripValue_[1],
+                            fingerTriggerTouched_[1] ? 1 : 0,
+                            fingerThumbTouched_[1] ? 1 : 0);
                 }
             }
         }
@@ -1677,6 +1767,10 @@ private:
     XrAction ppDomainToggleAction_{XR_NULL_HANDLE};
     XrAction contactAoToggleAction_{XR_NULL_HANDLE};
     XrAction environmentToggleAction_{XR_NULL_HANDLE};
+    XrAction rightFingerTriggerAction_{XR_NULL_HANDLE};
+    XrAction fingerGripAction_{XR_NULL_HANDLE};
+    XrAction fingerTriggerTouchAction_{XR_NULL_HANDLE};
+    XrAction fingerThumbContactAction_{XR_NULL_HANDLE};
     std::array<XrPath, 2> handPaths_{XR_NULL_PATH, XR_NULL_PATH};
     std::array<XrSpace, 2> handSpaces_{XR_NULL_HANDLE, XR_NULL_HANDLE};
     std::array<XrSpace, 2> gripHandSpaces_{XR_NULL_HANDLE, XR_NULL_HANDLE};
@@ -1690,6 +1784,10 @@ private:
     float activateValue_{0.0f}; // legacy Q7.1 method only; no longer sampled
     bool activateDownQ1700_{false};
     float timeAdvanceValue_{0.0f};
+    std::array<float, 2> fingerTriggerValue_{0.0f, 0.0f};
+    std::array<float, 2> fingerGripValue_{0.0f, 0.0f};
+    std::array<bool, 2> fingerTriggerTouched_{false, false};
+    std::array<bool, 2> fingerThumbTouched_{false, false};
     bool fogTogglePressed_{false};
     bool ppDomainTogglePressed_{false};
     bool contactAoTogglePressed_{false};
