@@ -1075,6 +1075,317 @@ bool Q970BuildRenderableSet(const std::vector<uint8_t>& nif,
     return shapeCount > 0u;
 }
 
+
+struct Q211SkinInstance {
+    uint32_t dataRef = INVALID_REF;
+    uint32_t partitionRef = INVALID_REF;
+    uint32_t skeletonRoot = INVALID_REF;
+    std::vector<uint32_t> bones;
+};
+
+bool Q211ReadNiTransform(Cursor& c, NifTransform& out) {
+    out = {};
+    for (float& value : out.rotation) if (!c.F32(value)) return false;
+    for (float& value : out.translation) if (!c.F32(value)) return false;
+    if (!c.F32(out.scale)) return false;
+    out.valid = true;
+    return true;
+}
+
+std::string Q211BlockName(const std::vector<uint8_t>& nif,
+                          const NifHeader& header,
+                          uint32_t block) {
+    if (block >= header.numBlocks || header.blockSizes[block] < 4u)
+        return {};
+    const uint8_t* data = BlockData(nif, header, block);
+    if (!data) return {};
+    const uint32_t nameIndex = ReadLe32(data);
+    if (nameIndex == INVALID_REF || nameIndex >= header.strings.size())
+        return {};
+    return header.strings[nameIndex];
+}
+
+bool Q211ParseSkinInstance(const std::vector<uint8_t>& nif,
+                           const NifHeader& header,
+                           uint32_t skinRef,
+                           Q211SkinInstance& out) {
+    out = {};
+    if (skinRef >= header.numBlocks) return false;
+    const std::string& type = BlockType(header, skinRef);
+    if (type != "NiSkinInstance" &&
+        type != "BSDismemberSkinInstance") return false;
+
+    Cursor c(BlockData(nif, header, skinRef), header.blockSizes[skinRef]);
+    uint32_t count = 0u;
+    if (!c.U32(out.dataRef) ||
+        !c.U32(out.partitionRef) ||
+        !c.U32(out.skeletonRoot) ||
+        !c.U32(count) ||
+        count == 0u || count > 256u) {
+        return false;
+    }
+    out.bones.resize(count);
+    for (uint32_t& bone : out.bones) {
+        if (!c.U32(bone)) return false;
+    }
+    return true;
+}
+
+void Q211AddInfluence(
+        std::vector<std::vector<std::pair<uint16_t, float>>>& influences,
+        uint32_t vertex, uint32_t bone, float weight) {
+    if (vertex >= influences.size() || bone > 0xfffeu ||
+        !(weight > 0.000001f) || !std::isfinite(weight)) {
+        return;
+    }
+    influences[vertex].push_back(
+        {static_cast<uint16_t>(bone), weight});
+}
+
+bool Q211ParseSkinDataWeights(
+        const std::vector<uint8_t>& nif,
+        const NifHeader& header,
+        const Q211SkinInstance& skin,
+        std::vector<std::vector<std::pair<uint16_t, float>>>& influences,
+        bool& hasSoftwareWeights) {
+    hasSoftwareWeights = false;
+    if (skin.dataRef >= header.numBlocks ||
+        BlockType(header, skin.dataRef) != "NiSkinData") return false;
+
+    Cursor c(BlockData(nif, header, skin.dataRef),
+             header.blockSizes[skin.dataRef]);
+    NifTransform skinTransform;
+    uint32_t numBones = 0u;
+    uint8_t hasWeights = 0u;
+    if (!Q211ReadNiTransform(c, skinTransform) ||
+        !c.U32(numBones) || numBones > 256u ||
+        !c.U8(hasWeights)) {
+        return false;
+    }
+
+    hasSoftwareWeights = hasWeights != 0u;
+    for (uint32_t bone = 0u; bone < numBones; ++bone) {
+        NifTransform boneOffset;
+        float center[3]{};
+        float radius = 0.0f;
+        uint16_t numVertices = 0u;
+        if (!Q211ReadNiTransform(c, boneOffset)) return false;
+        for (float& value : center) if (!c.F32(value)) return false;
+        if (!c.F32(radius) || !c.U16(numVertices)) return false;
+
+        if (hasSoftwareWeights) {
+            for (uint16_t i = 0u; i < numVertices; ++i) {
+                uint16_t vertex = 0u;
+                float weight = 0.0f;
+                if (!c.U16(vertex) || !c.F32(weight)) return false;
+                Q211AddInfluence(influences, vertex, bone, weight);
+            }
+        }
+    }
+    return true;
+}
+
+bool Q211ParseSkinPartitionWeights(
+        const std::vector<uint8_t>& nif,
+        const NifHeader& header,
+        const Q211SkinInstance& skin,
+        std::vector<std::vector<std::pair<uint16_t, float>>>& influences) {
+    if (skin.partitionRef >= header.numBlocks ||
+        BlockType(header, skin.partitionRef) != "NiSkinPartition") {
+        return false;
+    }
+
+    Cursor c(BlockData(nif, header, skin.partitionRef),
+             header.blockSizes[skin.partitionRef]);
+    uint32_t numPartitions = 0u;
+    if (!c.U32(numPartitions) || numPartitions == 0u ||
+        numPartitions > 128u) return false;
+
+    bool any = false;
+    for (uint32_t part = 0u; part < numPartitions; ++part) {
+        uint16_t numVertices = 0u, numTriangles = 0u, numBones = 0u;
+        uint16_t numStrips = 0u, weightsPerVertex = 0u;
+        if (!c.U16(numVertices) || !c.U16(numTriangles) ||
+            !c.U16(numBones) || !c.U16(numStrips) ||
+            !c.U16(weightsPerVertex) ||
+            numVertices > 65530u || numBones > 256u ||
+            weightsPerVertex == 0u || weightsPerVertex > 8u) {
+            return false;
+        }
+
+        std::vector<uint16_t> bones(numBones);
+        for (uint16_t& bone : bones) if (!c.U16(bone)) return false;
+
+        uint8_t hasVertexMap = 0u;
+        if (!c.U8(hasVertexMap)) return false;
+        std::vector<uint16_t> vertexMap(numVertices);
+        if (hasVertexMap) {
+            for (uint16_t& vertex : vertexMap) {
+                if (!c.U16(vertex)) return false;
+            }
+        } else {
+            for (uint32_t i = 0u; i < numVertices; ++i)
+                vertexMap[i] = static_cast<uint16_t>(i);
+        }
+
+        uint8_t hasVertexWeights = 0u;
+        if (!c.U8(hasVertexWeights)) return false;
+        std::vector<float> weights(
+            static_cast<size_t>(numVertices) * weightsPerVertex, 0.0f);
+        if (hasVertexWeights) {
+            for (float& weight : weights) if (!c.F32(weight)) return false;
+        }
+
+        std::vector<uint16_t> stripLengths(numStrips);
+        size_t stripPointCount = 0u;
+        for (uint16_t& length : stripLengths) {
+            if (!c.U16(length)) return false;
+            stripPointCount += length;
+        }
+
+        uint8_t hasFaces = 0u;
+        if (!c.U8(hasFaces)) return false;
+        if (hasFaces) {
+            if (numStrips != 0u) {
+                if (!c.Skip(stripPointCount * sizeof(uint16_t))) return false;
+            } else {
+                if (!c.Skip(static_cast<size_t>(numTriangles) * 3u *
+                            sizeof(uint16_t))) return false;
+            }
+        }
+
+        uint8_t hasBoneIndices = 0u;
+        if (!c.U8(hasBoneIndices)) return false;
+        std::vector<uint8_t> boneIndices(
+            static_cast<size_t>(numVertices) * weightsPerVertex, 0u);
+        if (hasBoneIndices) {
+            for (uint8_t& index : boneIndices) {
+                if (!c.U8(index)) return false;
+            }
+        }
+
+        if (!hasVertexWeights || !hasBoneIndices) continue;
+        for (uint32_t v = 0u; v < numVertices; ++v) {
+            const uint32_t sourceVertex = vertexMap[v];
+            for (uint32_t slot = 0u; slot < weightsPerVertex; ++slot) {
+                const size_t at =
+                    static_cast<size_t>(v) * weightsPerVertex + slot;
+                const uint32_t palette = boneIndices[at];
+                if (palette >= bones.size()) continue;
+                const uint32_t skinBone = bones[palette];
+                Q211AddInfluence(
+                    influences, sourceVertex, skinBone, weights[at]);
+                any = any || weights[at] > 0.000001f;
+            }
+        }
+    }
+    return any;
+}
+
+bool Q211BoneBindPosition(const std::vector<uint8_t>& nif,
+                          const NifHeader& header,
+                          uint32_t boneRef,
+                          float out[3]) {
+    Q970NodeInfo node;
+    if (!Q970ParseNodeInfo(nif, header, boneRef, node)) return false;
+    float x = 0.0f, y = 0.0f, z = 0.0f;
+    ApplyPoint(node.transform, x, y, z);
+    std::vector<NifTransform> ancestors;
+    Q970CollectAncestorTransforms(nif, header, boneRef, ancestors);
+    for (const NifTransform& parent : ancestors)
+        ApplyPoint(parent, x, y, z);
+    out[0] = x; out[1] = y; out[2] = z;
+    return true;
+}
+
+bool Q211PopulateSkinInfo(const std::vector<uint8_t>& nif,
+                          const NifHeader& header,
+                          const ShapeObject& shape,
+                          Fo3StaticNifMesh& mesh) {
+    mesh.skinned = false;
+    mesh.skinBones.clear();
+    mesh.skinBoneIndices.clear();
+    mesh.skinBoneWeights.clear();
+
+    const size_t vertexCount = mesh.positions.size() / 3u;
+    if (shape.skinRef == INVALID_REF || vertexCount == 0u) return false;
+
+    Q211SkinInstance skin;
+    if (!Q211ParseSkinInstance(nif, header, shape.skinRef, skin)) return false;
+
+    std::vector<std::vector<std::pair<uint16_t, float>>> influences(vertexCount);
+    bool softwareWeights = false;
+    const bool dataParsed =
+        Q211ParseSkinDataWeights(
+            nif, header, skin, influences, softwareWeights);
+    bool partitionWeights = false;
+    if (!softwareWeights) {
+        partitionWeights =
+            Q211ParseSkinPartitionWeights(
+                nif, header, skin, influences);
+    }
+
+    mesh.skinBones.resize(skin.bones.size());
+    for (size_t i = 0u; i < skin.bones.size(); ++i) {
+        Fo3NifSkinBone& bone = mesh.skinBones[i];
+        bone.name = Q211BlockName(nif, header, skin.bones[i]);
+        Q211BoneBindPosition(
+            nif, header, skin.bones[i], bone.bindPosition);
+    }
+
+    mesh.skinBoneIndices.assign(vertexCount * 4u, 0xffffu);
+    mesh.skinBoneWeights.assign(vertexCount * 4u, 0.0f);
+
+    size_t weightedVertices = 0u;
+    for (size_t vertex = 0u; vertex < vertexCount; ++vertex) {
+        auto& list = influences[vertex];
+        if (list.empty()) continue;
+
+        std::sort(list.begin(), list.end(),
+                  [](const auto& a, const auto& b) {
+                      if (a.first != b.first) return a.first < b.first;
+                      return a.second > b.second;
+                  });
+        std::vector<std::pair<uint16_t, float>> merged;
+        for (const auto& influence : list) {
+            if (!merged.empty() &&
+                merged.back().first == influence.first) {
+                merged.back().second =
+                    std::max(merged.back().second, influence.second);
+            } else {
+                merged.push_back(influence);
+            }
+        }
+        std::sort(merged.begin(), merged.end(),
+                  [](const auto& a, const auto& b) {
+                      return a.second > b.second;
+                  });
+
+        const size_t count = std::min<size_t>(4u, merged.size());
+        float sum = 0.0f;
+        for (size_t slot = 0u; slot < count; ++slot)
+            sum += std::max(0.0f, merged[slot].second);
+        if (sum <= 0.000001f) continue;
+
+        ++weightedVertices;
+        for (size_t slot = 0u; slot < count; ++slot) {
+            mesh.skinBoneIndices[vertex * 4u + slot] =
+                merged[slot].first;
+            mesh.skinBoneWeights[vertex * 4u + slot] =
+                std::max(0.0f, merged[slot].second) / sum;
+        }
+    }
+
+    mesh.skinned = weightedVertices > 0u && !mesh.skinBones.empty();
+    Q6H_LOGI("Q21.1 SKIN READY: shape=%u skinRef=%u bones=%zu vertices=%zu weightedVertices=%zu dataParsed=%d softwareWeights=%d partitionWeights=%d",
+             shape.block, shape.skinRef, mesh.skinBones.size(),
+             vertexCount, weightedVertices,
+             dataParsed ? 1 : 0,
+             softwareWeights ? 1 : 0,
+             partitionWeights ? 1 : 0);
+    return mesh.skinned;
+}
+
 bool TryLoadShape(const std::vector<uint8_t>& nif, const NifHeader& header,
                   const ShapeObject& shape,
                   const NifTransform* root,
@@ -1187,6 +1498,7 @@ bool TryLoadShape(const std::vector<uint8_t>& nif, const NifHeader& header,
     std::vector<NifTransform> ancestors;
     Q970CollectAncestorTransforms(nif, header, shape.block, ancestors);
     ApplyTransforms(candidate, shape.transform, ancestors, root);
+    Q211PopulateSkinInfo(nif, header, shape, candidate);
     mesh = std::move(candidate);
     return true;
 }
