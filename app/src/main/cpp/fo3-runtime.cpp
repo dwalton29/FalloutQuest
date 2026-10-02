@@ -69,6 +69,7 @@ namespace {
 struct GpuObject;
 bool Q1970ShouldRenderFullDetail(const GpuObject& object);
 void Q1970ProbeNativeLod(float gameX, float gameY);
+void Q2022ProbeLodArchive(int32_t cellX, int32_t cellY);
 extern const float Q1890_EXTERIOR_CELL_SIZE;
 extern bool gExteriorStreamingActiveQ1890;
 extern bool gExteriorStreamBusyQ1890;
