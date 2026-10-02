@@ -22,8 +22,8 @@ android {
         applicationId 'com.falloutquest.app'
         minSdk 29
         targetSdk 35
-        versionCode 75
-        versionName '0.21.0-q21.0-player-body-bind-pose'
+        versionCode 76
+        versionName '0.21.0b-q21.0b-player-body-floor-follow'
 
         ndk {
             abiFilters 'arm64-v8a'
