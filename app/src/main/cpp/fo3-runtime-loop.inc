@@ -377,6 +377,9 @@ public:
         for (XrSpace space : handSpaces_) {
             if (space != XR_NULL_HANDLE) xrDestroySpace(space);
         }
+        for (XrSpace space : gripHandSpaces_) {
+            if (space != XR_NULL_HANDLE) xrDestroySpace(space);
+        }
         for (auto& eye : eyes_) {
             if (eye.handle != XR_NULL_HANDLE) xrDestroySwapchain(eye.handle);
         }
@@ -517,8 +520,12 @@ private:
         setInfo.priority = 0;
         if (!CheckXr(xrCreateActionSet(instance_, &setInfo, &actionSet_), "xrCreateActionSet")) return false;
 
-        if (!CreateAction("hand_pose", "Hand Pose", XR_ACTION_TYPE_POSE_INPUT,
+        if (!CreateAction("hand_pose", "Hand Aim Pose", XR_ACTION_TYPE_POSE_INPUT,
                           2, handPaths_.data(), &poseAction_)) return false;
+        // Q21.6: keep aim pose for pointing/interactions, but track the
+        // controller grip pose separately for anatomical hand/body placement.
+        if (!CreateAction("hand_grip_pose", "Hand Grip Pose", XR_ACTION_TYPE_POSE_INPUT,
+                          2, handPaths_.data(), &gripPoseAction_)) return false;
         if (!CreateAction("move_x", "Move X", XR_ACTION_TYPE_FLOAT_INPUT,
                           1, &handPaths_[0], &moveXAction_)) return false;
         if (!CreateAction("move_y", "Move Y", XR_ACTION_TYPE_FLOAT_INPUT,
@@ -544,6 +551,8 @@ private:
         XrPath profile = XR_NULL_PATH;
         XrPath leftAim = XR_NULL_PATH;
         XrPath rightAim = XR_NULL_PATH;
+        XrPath leftGrip = XR_NULL_PATH;
+        XrPath rightGrip = XR_NULL_PATH;
         XrPath leftStickX = XR_NULL_PATH;
         XrPath leftStickY = XR_NULL_PATH;
         XrPath rightStickX = XR_NULL_PATH;
@@ -556,6 +565,8 @@ private:
         if (!Path("/interaction_profiles/oculus/touch_controller", &profile) ||
             !Path("/user/hand/left/input/aim/pose", &leftAim) ||
             !Path("/user/hand/right/input/aim/pose", &rightAim) ||
+            !Path("/user/hand/left/input/grip/pose", &leftGrip) ||
+            !Path("/user/hand/right/input/grip/pose", &rightGrip) ||
             !Path("/user/hand/left/input/thumbstick/x", &leftStickX) ||
             !Path("/user/hand/left/input/thumbstick/y", &leftStickY) ||
             !Path("/user/hand/right/input/thumbstick/x", &rightStickX) ||
@@ -566,9 +577,11 @@ private:
             !Path("/user/hand/right/input/b/click", &rightContactAoB) ||
             !Path("/user/hand/right/input/thumbstick/click", &rightEnvironmentStick)) return false;
 
-        const std::array<XrActionSuggestedBinding, 11> bindings{{
+        const std::array<XrActionSuggestedBinding, 13> bindings{{
             {poseAction_, leftAim},
             {poseAction_, rightAim},
+            {gripPoseAction_, leftGrip},
+            {gripPoseAction_, rightGrip},
             {moveXAction_, leftStickX},
             {moveYAction_, leftStickY},
             {turnXAction_, rightStickX},
@@ -592,7 +605,11 @@ private:
             spaceInfo.subactionPath = handPaths_[hand];
             spaceInfo.poseInActionSpace.orientation.w = 1.0f;
             if (!CheckXr(xrCreateActionSpace(session_, &spaceInfo, &handSpaces_[hand]),
-                         "xrCreateActionSpace")) return false;
+                         "xrCreateActionSpace(aimHand)")) return false;
+
+            spaceInfo.action = gripPoseAction_;
+            if (!CheckXr(xrCreateActionSpace(session_, &spaceInfo, &gripHandSpaces_[hand]),
+                         "xrCreateActionSpace(gripHand)")) return false;
         }
 
         XrSessionActionSetsAttachInfo attach{XR_TYPE_SESSION_ACTION_SETS_ATTACH_INFO};
@@ -1106,26 +1123,43 @@ private:
         environmentTogglePressed_ = q205aEnvironmentPressed;
         activateDownQ1700_ = ReadBoolActionQ1699(activateAction_, handPaths_[1]);
 
+        const XrSpaceLocationFlags required = XR_SPACE_LOCATION_POSITION_VALID_BIT |
+                                              XR_SPACE_LOCATION_ORIENTATION_VALID_BIT;
         for (uint32_t hand = 0; hand < 2; ++hand) {
+            handPoseValid_[hand] = false;
             XrActionStateGetInfo poseInfo{XR_TYPE_ACTION_STATE_GET_INFO};
             poseInfo.action = poseAction_;
             poseInfo.subactionPath = handPaths_[hand];
             XrActionStatePose poseState{XR_TYPE_ACTION_STATE_POSE};
-            if (!CheckXr(xrGetActionStatePose(session_, &poseInfo, &poseState), "xrGetActionStatePose") ||
-                !poseState.isActive) {
-                handPoseValid_[hand] = false;
-                continue;
+            if (CheckXr(xrGetActionStatePose(session_, &poseInfo, &poseState),
+                        "xrGetActionStatePose(aim)") &&
+                poseState.isActive) {
+                XrSpaceLocation location{XR_TYPE_SPACE_LOCATION};
+                if (CheckXr(xrLocateSpace(handSpaces_[hand], localSpace_, time, &location),
+                            "xrLocateSpace(aimHand)")) {
+                    handPoseValid_[hand] =
+                        (location.locationFlags & required) == required;
+                    if (handPoseValid_[hand]) handLocalPoses_[hand] = location.pose;
+                }
             }
 
-            XrSpaceLocation location{XR_TYPE_SPACE_LOCATION};
-            if (!CheckXr(xrLocateSpace(handSpaces_[hand], localSpace_, time, &location), "xrLocateSpace(hand)")) {
-                handPoseValid_[hand] = false;
-                continue;
+            gripHandPoseValid_[hand] = false;
+            XrActionStateGetInfo gripInfo{XR_TYPE_ACTION_STATE_GET_INFO};
+            gripInfo.action = gripPoseAction_;
+            gripInfo.subactionPath = handPaths_[hand];
+            XrActionStatePose gripState{XR_TYPE_ACTION_STATE_POSE};
+            if (CheckXr(xrGetActionStatePose(session_, &gripInfo, &gripState),
+                        "xrGetActionStatePose(grip)") &&
+                gripState.isActive) {
+                XrSpaceLocation gripLocation{XR_TYPE_SPACE_LOCATION};
+                if (CheckXr(xrLocateSpace(gripHandSpaces_[hand], localSpace_, time, &gripLocation),
+                            "xrLocateSpace(gripHand)")) {
+                    gripHandPoseValid_[hand] =
+                        (gripLocation.locationFlags & required) == required;
+                    if (gripHandPoseValid_[hand])
+                        gripHandLocalPoses_[hand] = gripLocation.pose;
+                }
             }
-            const XrSpaceLocationFlags required = XR_SPACE_LOCATION_POSITION_VALID_BIT |
-                                                  XR_SPACE_LOCATION_ORIENTATION_VALID_BIT;
-            handPoseValid_[hand] = (location.locationFlags & required) == required;
-            if (handPoseValid_[hand]) handLocalPoses_[hand] = location.pose;
         }
     }
 
@@ -1360,19 +1394,31 @@ private:
                 const XrPosef q210VirtualHead = ToVirtualPose(views[0].pose);
                 XrPosef q210Left{};
                 XrPosef q210Right{};
-                if (handPoseValid_[0])
-                    q210Left = ToVirtualPose(handLocalPoses_[0]);
-                if (handPoseValid_[1])
-                    q210Right = ToVirtualPose(handLocalPoses_[1]);
+                const bool q210LeftValid =
+                    gripHandPoseValid_[0] || handPoseValid_[0];
+                const bool q210RightValid =
+                    gripHandPoseValid_[1] || handPoseValid_[1];
+                if (q210LeftValid) {
+                    q210Left = ToVirtualPose(
+                        gripHandPoseValid_[0]
+                            ? gripHandLocalPoses_[0]
+                            : handLocalPoses_[0]);
+                }
+                if (q210RightValid) {
+                    q210Right = ToVirtualPose(
+                        gripHandPoseValid_[1]
+                            ? gripHandLocalPoses_[1]
+                            : handLocalPoses_[1]);
+                }
                 SetFo3PlayerBodyTrackingQ210(
                     q210VirtualHead.position.x,
                     q210VirtualHead.position.y,
                     q210VirtualHead.position.z,
                     YawFromQuaternion(q210VirtualHead.orientation),
                     views[0].pose.position.y,
-                    handPoseValid_[0],
+                    q210LeftValid,
                     q210Left.position.x, q210Left.position.y, q210Left.position.z,
-                    handPoseValid_[1],
+                    q210RightValid,
                     q210Right.position.x, q210Right.position.y, q210Right.position.z);
 
                 // Q20.13: loading freezes player motion, not world preparation.
@@ -1411,10 +1457,13 @@ private:
                 layerCount = 1;
 
                 if ((frameCounter_++ % 180) == 0) {
-                    FQ_LOGI("Q7.1 live: player %.2f %.2f %.2f, collision=%d, hands L=%d R=%d, move %.2f %.2f trigger=%.2f",
+                    FQ_LOGI("Q21.6 live: player %.2f %.2f %.2f collision=%d aim=(L%d,R%d) grip=(L%d,R%d) bodyHandSource=(L%s,R%s) move %.2f %.2f trigger=%.2f",
                             playerPosition_.x, playerPosition_.y, playerPosition_.z,
                             IsFo3PlayerCollisionReadyQ6G() ? 1 : 0,
                             handPoseValid_[0] ? 1 : 0, handPoseValid_[1] ? 1 : 0,
+                            gripHandPoseValid_[0] ? 1 : 0, gripHandPoseValid_[1] ? 1 : 0,
+                            gripHandPoseValid_[0] ? "grip" : (handPoseValid_[0] ? "aim-fallback" : "none"),
+                            gripHandPoseValid_[1] ? "grip" : (handPoseValid_[1] ? "aim-fallback" : "none"),
                             moveX_, moveY_, activateValue_);
                 }
             }
@@ -1613,6 +1662,7 @@ private:
 
     XrActionSet actionSet_{XR_NULL_HANDLE};
     XrAction poseAction_{XR_NULL_HANDLE};
+    XrAction gripPoseAction_{XR_NULL_HANDLE};
     XrAction moveXAction_{XR_NULL_HANDLE};
     XrAction moveYAction_{XR_NULL_HANDLE};
     XrAction turnXAction_{XR_NULL_HANDLE};
@@ -1624,8 +1674,11 @@ private:
     XrAction environmentToggleAction_{XR_NULL_HANDLE};
     std::array<XrPath, 2> handPaths_{XR_NULL_PATH, XR_NULL_PATH};
     std::array<XrSpace, 2> handSpaces_{XR_NULL_HANDLE, XR_NULL_HANDLE};
+    std::array<XrSpace, 2> gripHandSpaces_{XR_NULL_HANDLE, XR_NULL_HANDLE};
     std::array<XrPosef, 2> handLocalPoses_{};
+    std::array<XrPosef, 2> gripHandLocalPoses_{};
     std::array<bool, 2> handPoseValid_{false, false};
+    std::array<bool, 2> gripHandPoseValid_{false, false};
     float moveX_{0.0f};
     float moveY_{0.0f};
     float turnX_{0.0f};
