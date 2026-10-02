@@ -614,6 +614,15 @@ void ApplyVector(const NifTransform& t, float& x, float& y, float& z) {
     x = rx; y = ry; z = rz;
 }
 
+void ApplyDeltaVector(const NifTransform& t, float& x, float& y, float& z) {
+    if (!t.valid) return;
+    const float sx=x*t.scale, sy=y*t.scale, sz=z*t.scale;
+    const float rx=t.rotation[0]*sx+t.rotation[1]*sy+t.rotation[2]*sz;
+    const float ry=t.rotation[3]*sx+t.rotation[4]*sy+t.rotation[5]*sz;
+    const float rz=t.rotation[6]*sx+t.rotation[7]*sy+t.rotation[8]*sz;
+    x=rx; y=ry; z=rz;
+}
+
 bool CollectAncestorTransforms(const std::vector<uint8_t>& nif,
                                const NifHeader& header,
                                uint32_t childBlock,
@@ -648,6 +657,29 @@ bool CollectAncestorTransforms(const std::vector<uint8_t>& nif,
         current = next;
     }
     return !ancestors.empty();
+}
+
+void CaptureGeometryDeltaTransform(
+        Fo3StaticNifMesh& mesh,
+        const NifTransform& shape,
+        const std::vector<NifTransform>& ancestors,
+        const NifTransform* rootFallback) {
+    const bool haveFullChain=!ancestors.empty();
+    for(int axis=0;axis<3;++axis){
+        float x=axis==0?1.0f:0.0f;
+        float y=axis==1?1.0f:0.0f;
+        float z=axis==2?1.0f:0.0f;
+        ApplyDeltaVector(shape,x,y,z);
+        if(haveFullChain){
+            for(const NifTransform& parent:ancestors)
+                ApplyDeltaVector(parent,x,y,z);
+        } else if(rootFallback){
+            ApplyDeltaVector(*rootFallback,x,y,z);
+        }
+        mesh.geometryDeltaToModel[0+axis]=x;
+        mesh.geometryDeltaToModel[3+axis]=y;
+        mesh.geometryDeltaToModel[6+axis]=z;
+    }
 }
 
 void ApplyTransforms(Fo3StaticNifMesh& mesh,
@@ -758,6 +790,8 @@ bool TryLoadShape(const std::vector<uint8_t>& nif, const NifHeader& header,
 
     std::vector<NifTransform> ancestors;
     CollectAncestorTransforms(nif, header, shape.block, ancestors);
+    CaptureGeometryDeltaTransform(
+        candidate, shape.transform, ancestors, root);
     ApplyTransforms(candidate, shape.transform, ancestors, root);
     mesh = std::move(candidate);
     return true;

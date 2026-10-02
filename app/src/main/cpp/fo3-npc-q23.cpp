@@ -1,6 +1,8 @@
 #include "fo3-npc-q23.h"
+#include "fo3-bsa-reader.h"
 
 #include <android/log.h>
+#include <cmath>
 #include <cstdio>
 #include <cstdint>
 #include <cstring>
@@ -56,6 +58,10 @@ struct NpcBase {
     std::string skeleton;
     std::vector<uint32_t> headParts;
     std::vector<std::pair<uint32_t,int32_t>> inventory;
+    std::vector<float> faceSymmetric;
+    std::vector<float> faceAsymmetric;
+    std::vector<float> faceTextureSymmetric;
+    uint8_t hairColor[4]{0u,0u,0u,0u};
     bool faceGen = false;
 };
 
@@ -65,6 +71,8 @@ struct Linked {
     std::string fullName;
     std::string model;
     std::string model2;
+    std::string icon;
+    std::vector<std::string> maleHeadModels;
 };
 
 uint16_t U16(const uint8_t* p) {
@@ -82,6 +90,12 @@ float F32(const uint8_t* p) {
     float v = 0.0f;
     std::memcpy(&v, &bits, sizeof(v));
     return v;
+}
+void FloatArray(const uint8_t* p, uint32_t n, std::vector<float>& out) {
+    out.clear();
+    if ((n & 3u) != 0u) return;
+    out.reserve(n / 4u);
+    for (uint32_t at = 0u; at < n; at += 4u) out.push_back(F32(p + at));
 }
 bool ReadExact(FILE* f, void* dst, size_t n) {
     return std::fread(dst,1,n,f) == n;
@@ -259,10 +273,19 @@ bool ParseNpc(FILE* f, const Locator& loc,
         else if(std::memcmp(type,"CNTO",4u)==0 && n>=8u)
             out.inventory.push_back({
                 U32(p),static_cast<int32_t>(U32(p+4u))});
-        else if(std::memcmp(type,"FGGS",4u)==0 ||
-                std::memcmp(type,"FGGA",4u)==0 ||
-                std::memcmp(type,"FGTS",4u)==0)
+        else if(std::memcmp(type,"HCLR",4u)==0 && n>=4u) {
+            out.hairColor[0]=p[0]; out.hairColor[1]=p[1];
+            out.hairColor[2]=p[2]; out.hairColor[3]=p[3];
+        } else if(std::memcmp(type,"FGGS",4u)==0) {
+            FloatArray(p,n,out.faceSymmetric);
             out.faceGen=true;
+        } else if(std::memcmp(type,"FGGA",4u)==0) {
+            FloatArray(p,n,out.faceAsymmetric);
+            out.faceGen=true;
+        } else if(std::memcmp(type,"FGTS",4u)==0) {
+            FloatArray(p,n,out.faceTextureSymmetric);
+            out.faceGen=true;
+        }
     });
     return !out.editorId.empty() || !out.fullName.empty();
 }
@@ -271,15 +294,64 @@ bool ParseLinked(FILE* f, const Locator& loc, Linked& out) {
     std::vector<uint8_t> data;
     if(!ReadPayload(f,loc,data)) return false;
     out.type=loc.type;
+
+    // Fallout 3 RACE records contain an indexed male head-part table between
+    // NAM0/MNAM and FNAM.  Q23.0 incorrectly treated the first MODL as the
+    // entire race head.  Preserve every authored male piece (head, mouth,
+    // teeth, tongue, left/right eye) by its INDX slot.
+    bool raceHeadData=false;
+    bool raceMaleHead=false;
+    uint32_t raceHeadIndex=0xffffffffu;
+
     Walk(data,[&](const char* type,const uint8_t* p,uint32_t n){
         if(std::memcmp(type,"EDID",4u)==0 && out.editorId.empty())
             out.editorId=ZString(p,n);
         else if(std::memcmp(type,"FULL",4u)==0 && out.fullName.empty())
             out.fullName=ZString(p,n);
-        else if(std::memcmp(type,"MODL",4u)==0 && out.model.empty())
-            out.model=ZString(p,n);
-        else if(std::memcmp(type,"MOD2",4u)==0 && out.model2.empty())
+
+        if(loc.type=="RACE"){
+            if(std::memcmp(type,"NAM0",4u)==0){
+                raceHeadData=true;
+                raceMaleHead=false;
+                raceHeadIndex=0xffffffffu;
+                return;
+            }
+            if(std::memcmp(type,"NAM1",4u)==0){
+                raceHeadData=false;
+                raceMaleHead=false;
+                raceHeadIndex=0xffffffffu;
+                return;
+            }
+            if(raceHeadData && std::memcmp(type,"MNAM",4u)==0){
+                raceMaleHead=true;
+                raceHeadIndex=0xffffffffu;
+                return;
+            }
+            if(raceHeadData && std::memcmp(type,"FNAM",4u)==0){
+                raceMaleHead=false;
+                raceHeadIndex=0xffffffffu;
+                return;
+            }
+            if(raceHeadData && raceMaleHead &&
+               std::memcmp(type,"INDX",4u)==0 && n>=4u){
+                raceHeadIndex=U32(p);
+                return;
+            }
+        }
+
+        if(std::memcmp(type,"MODL",4u)==0){
+            const std::string path=ZString(p,n);
+            if(out.model.empty()) out.model=path;
+            if(loc.type=="RACE" && raceHeadData && raceMaleHead &&
+               raceHeadIndex<8u && !path.empty()){
+                if(out.maleHeadModels.size()<8u)
+                    out.maleHeadModels.resize(8u);
+                out.maleHeadModels[raceHeadIndex]=path;
+            }
+        } else if(std::memcmp(type,"MOD2",4u)==0 && out.model2.empty())
             out.model2=ZString(p,n);
+        else if(std::memcmp(type,"ICON",4u)==0 && out.icon.empty())
+            out.icon=ZString(p,n);
     });
     return true;
 }
@@ -324,6 +396,10 @@ bool LoadFo3MegatonExteriorActorsQ230(
         actor.fullName=npc.fullName;
         actor.skeletonModel=npc.skeleton;
         actor.headPartFormIds=npc.headParts;
+        actor.faceGenGeometrySymmetric=npc.faceSymmetric;
+        actor.faceGenGeometryAsymmetric=npc.faceAsymmetric;
+        actor.faceGenTextureSymmetric=npc.faceTextureSymmetric;
+        for(int i=0;i<4;++i) actor.hairColor[i]=npc.hairColor[i];
         actor.hasFaceGenGeometry=npc.faceGen;
         actor.x=placed.x; actor.y=placed.y; actor.z=placed.z;
         actor.rx=placed.rx; actor.ry=placed.ry; actor.rz=placed.rz;
@@ -338,11 +414,16 @@ bool LoadFo3MegatonExteriorActorsQ230(
         if(npc.race!=0u && resolve(npc.race,race)){
             actor.raceEditorId=race.editorId;
             actor.raceHeadModel=race.model;
+            actor.raceHeadModels=race.maleHeadModels;
         }
 
         Linked hair;
         if(npc.hair!=0u && resolve(npc.hair,hair))
             actor.hairModel=hair.model;
+
+        Linked eyes;
+        if(npc.eyes!=0u && resolve(npc.eyes,eyes))
+            actor.eyeTexturePath=eyes.icon;
 
         for(uint32_t id:npc.headParts){
             Linked part;
@@ -383,17 +464,24 @@ bool LoadFo3MegatonExteriorActorsQ230(
         size_t armorModels=0u;
         for(const auto& item:a.inventory)
             if(item.recordType=="ARMO" && !item.modelPath.empty()) ++armorModels;
-        Q230_LOGI("Q23.0 NPC: ref=%08X base=%08X EDID=%s FULL=%s female=%d actorFlags=%08X race=%08X raceEDID=%s skeleton=%s head=%s hair=%s headParts=%zu inventory=%zu armorModels=%zu faceGen=%d pos=(%.1f %.1f %.1f) rot=(%.3f %.3f %.3f)",
+        Q230_LOGI("Q23.3 NPC: ref=%08X base=%08X EDID=%s FULL=%s female=%d actorFlags=%08X race=%08X raceEDID=%s skeleton=%s maleRaceHeadParts=%zu hair=%s npcHeadParts=%zu eyeTex=%s inventory=%zu armorModels=%zu faceGen=(%zu,%zu,%zu) hairRGB=(%u,%u,%u) pos=(%.1f %.1f %.1f) rot=(%.3f %.3f %.3f)",
                   a.refFormId,a.baseFormId,
                   a.editorId.empty()?"<none>":a.editorId.c_str(),
                   a.fullName.empty()?"<none>":a.fullName.c_str(),
                   a.female?1:0,a.actorBaseFlags,a.raceFormId,
                   a.raceEditorId.empty()?"<none>":a.raceEditorId.c_str(),
                   a.skeletonModel.empty()?"<none>":a.skeletonModel.c_str(),
-                  a.raceHeadModel.empty()?"<none>":a.raceHeadModel.c_str(),
+                  a.raceHeadModels.size(),
                   a.hairModel.empty()?"<none>":a.hairModel.c_str(),
-                  a.headPartModels.size(),a.inventory.size(),armorModels,
-                  a.hasFaceGenGeometry?1:0,
+                  a.headPartModels.size(),
+                  a.eyeTexturePath.empty()?"<none>":a.eyeTexturePath.c_str(),
+                  a.inventory.size(),armorModels,
+                  a.faceGenGeometrySymmetric.size(),
+                  a.faceGenGeometryAsymmetric.size(),
+                  a.faceGenTextureSymmetric.size(),
+                  static_cast<unsigned>(a.hairColor[0]),
+                  static_cast<unsigned>(a.hairColor[1]),
+                  static_cast<unsigned>(a.hairColor[2]),
                   a.x,a.y,a.z,a.rx,a.ry,a.rz);
         for(const auto& item:a.inventory){
             if(item.recordType=="ARMO" && !item.modelPath.empty()){
@@ -406,4 +494,88 @@ bool LoadFo3MegatonExteriorActorsQ230(
         }
     }
     return !outActors.empty();
+}
+
+
+bool LoadFo3FaceGenMorphQ233(
+        const std::string& nifPath,
+        const std::vector<float>& symmetric,
+        const std::vector<float>& asymmetric,
+        Fo3FaceGenMorphQ233& out) {
+    out = {};
+    if (nifPath.empty()) return false;
+
+    std::string egmPath=nifPath;
+    const size_t dot=egmPath.find_last_of('.');
+    if(dot==std::string::npos) return false;
+    egmPath.replace(dot,std::string::npos,".egm");
+
+    std::vector<uint8_t> bytes;
+    std::string resolved;
+    if(!LoadFalloutMeshFile(egmPath,bytes,&resolved)) return false;
+    if(bytes.size()<64u || std::memcmp(bytes.data(),"FREGM002",8u)!=0){
+        Q230_LOGW("Q23.3 FACEGEN EGM INVALID: nif=%s egm=%s bytes=%zu",
+                  nifPath.c_str(),resolved.c_str(),bytes.size());
+        return false;
+    }
+
+    const uint32_t vertices=U32(bytes.data()+8u);
+    const uint32_t symModes=U32(bytes.data()+12u);
+    const uint32_t asymModes=U32(bytes.data()+16u);
+    const uint32_t basisVersion=U32(bytes.data()+20u);
+    if(vertices==0u || vertices>200000u ||
+       symModes>256u || asymModes>256u){
+        return false;
+    }
+
+    const uint64_t bytesPerMode=
+        4ull+static_cast<uint64_t>(vertices)*6ull;
+    const uint64_t required=
+        64ull+bytesPerMode*
+        (static_cast<uint64_t>(symModes)+
+         static_cast<uint64_t>(asymModes));
+    if(required>bytes.size()){
+        Q230_LOGW("Q23.3 FACEGEN EGM TRUNCATED: egm=%s vertices=%u modes=(%u,%u) need=%llu have=%zu",
+                  resolved.c_str(),vertices,symModes,asymModes,
+                  static_cast<unsigned long long>(required),bytes.size());
+        return false;
+    }
+
+    out.egmPath=resolved;
+    out.vertexCount=vertices;
+    out.symmetricModes=symModes;
+    out.asymmetricModes=asymModes;
+    out.geometryBasisVersion=basisVersion;
+    out.deltaXYZ.assign(static_cast<size_t>(vertices)*3u,0.0f);
+
+    size_t at=64u;
+    auto consume=[&](uint32_t modeCount,const std::vector<float>& coeffs){
+        for(uint32_t mode=0u;mode<modeCount;++mode){
+            const float scale=F32(bytes.data()+at);
+            at+=4u;
+            const float coefficient=
+                mode<coeffs.size()?coeffs[mode]:0.0f;
+            for(uint32_t vertex=0u;vertex<vertices;++vertex){
+                const int16_t dx=static_cast<int16_t>(U16(bytes.data()+at+0u));
+                const int16_t dy=static_cast<int16_t>(U16(bytes.data()+at+2u));
+                const int16_t dz=static_cast<int16_t>(U16(bytes.data()+at+4u));
+                at+=6u;
+                if(std::fabs(coefficient)>1.0e-8f){
+                    const float factor=coefficient*scale;
+                    const size_t base=static_cast<size_t>(vertex)*3u;
+                    out.deltaXYZ[base+0u]+=static_cast<float>(dx)*factor;
+                    out.deltaXYZ[base+1u]+=static_cast<float>(dy)*factor;
+                    out.deltaXYZ[base+2u]+=static_cast<float>(dz)*factor;
+                }
+            }
+        }
+    };
+    consume(symModes,symmetric);
+    consume(asymModes,asymmetric);
+
+    Q230_LOGI("Q23.3 FACEGEN EGM READY: nif=%s egm=%s vertices=%u modes=(%u,%u) coeffs=(%zu,%zu) basis=%u source=Fallout-Meshes.bsa+NPC_FGGS/FGGA",
+              nifPath.c_str(),resolved.c_str(),vertices,
+              symModes,asymModes,symmetric.size(),asymmetric.size(),
+              basisVersion);
+    return true;
 }

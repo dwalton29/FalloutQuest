@@ -20,6 +20,14 @@ struct Fo3StaticNifMesh {
     std::vector<float> vertexColors; // rgba, if authored
     std::vector<uint32_t> indices;   // non-degenerate GL_TRIANGLES list
 
+    // Linear transform from raw geometry/EGM delta coordinates into the
+    // model-space coordinates stored in positions. Translation is excluded.
+    float geometryDeltaToModel[9]{
+        1.0f,0.0f,0.0f,
+        0.0f,1.0f,0.0f,
+        0.0f,0.0f,1.0f
+    };
+
     std::string modelPath;
     std::string diffuseTexturePath;
     std::string normalTexturePath;

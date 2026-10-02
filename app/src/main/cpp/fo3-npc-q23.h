@@ -27,11 +27,17 @@ struct Fo3NpcActorQ230 {
     std::string skeletonModel;
     std::string raceEditorId;
     std::string raceHeadModel;
+    std::vector<std::string> raceHeadModels;
     std::string hairModel;
+    std::string eyeTexturePath;
 
     std::vector<uint32_t> headPartFormIds;
     std::vector<std::string> headPartModels;
     std::vector<Fo3NpcVisualItemQ230> inventory;
+    std::vector<float> faceGenGeometrySymmetric;
+    std::vector<float> faceGenGeometryAsymmetric;
+    std::vector<float> faceGenTextureSymmetric;
+    uint8_t hairColor[4]{0u, 0u, 0u, 0u};
 
     float x = 0.0f;
     float y = 0.0f;
@@ -47,3 +53,21 @@ struct Fo3NpcActorQ230 {
 
 bool LoadFo3MegatonExteriorActorsQ230(
     std::vector<Fo3NpcActorQ230>& outActors);
+
+
+struct Fo3FaceGenMorphQ233 {
+    std::string egmPath;
+    uint32_t vertexCount = 0u;
+    uint32_t symmetricModes = 0u;
+    uint32_t asymmetricModes = 0u;
+    uint32_t geometryBasisVersion = 0u;
+    std::vector<float> deltaXYZ;
+};
+
+// Resolve the exact companion .egm from Fallout - Meshes.bsa and evaluate the
+// NPC's authored FGGS/FGGA coefficients into one XYZ delta per source vertex.
+bool LoadFo3FaceGenMorphQ233(
+    const std::string& nifPath,
+    const std::vector<float>& symmetric,
+    const std::vector<float>& asymmetric,
+    Fo3FaceGenMorphQ233& out);

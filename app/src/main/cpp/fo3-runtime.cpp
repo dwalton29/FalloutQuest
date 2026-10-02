@@ -9935,72 +9935,194 @@ bool Q230EnsureNpcActors() {
     }
 
     std::vector<std::string> models;
+    std::vector<std::string> faceGenModels;
+    auto samePath=[](const std::string& a,const std::string& b){
+        return a.size()==b.size() && Q210EndsWithInsensitive(a,b);
+    };
     auto addModel=[&](const std::string& path){
         if(path.empty()) return;
         for(const std::string& existing:models)
-            if(Q210EndsWithInsensitive(existing,path.c_str())) return;
+            if(samePath(existing,path)) return;
         models.push_back(path);
     };
-    addModel(lucas->raceHeadModel);
-    addModel(lucas->hairModel);
-    for(const std::string& path:lucas->headPartModels) addModel(path);
+    auto addFaceGenModel=[&](const std::string& path){
+        if(path.empty()) return;
+        addModel(path);
+        for(const std::string& existing:faceGenModels)
+            if(samePath(existing,path)) return;
+        faceGenModels.push_back(path);
+    };
+
+    // Q23.3: assemble the complete authored male RACE head table instead of
+    // treating the first RACE MODL (HeadHuman.NIF) as the entire head.
+    if(!lucas->raceHeadModels.empty()){
+        for(const std::string& path:lucas->raceHeadModels)
+            addFaceGenModel(path);
+    } else {
+        addFaceGenModel(lucas->raceHeadModel);
+    }
+    addFaceGenModel(lucas->hairModel);
+    for(const std::string& path:lucas->headPartModels)
+        addFaceGenModel(path);
     for(const Fo3NpcVisualItemQ230& item:lucas->inventory)
         if(item.recordType=="ARMO") addModel(item.modelPath);
+
+    auto isFaceGenModel=[&](const std::string& path){
+        for(const std::string& candidate:faceGenModels)
+            if(samePath(path,candidate)) return true;
+        return false;
+    };
+    auto isEyeModel=[&](const std::string& path){
+        if(lucas->raceHeadModels.size()<8u) return false;
+        return (!lucas->raceHeadModels[6].empty() &&
+                samePath(path,lucas->raceHeadModels[6])) ||
+               (!lucas->raceHeadModels[7].empty() &&
+                samePath(path,lucas->raceHeadModels[7]));
+    };
 
     size_t cpuShapes=0u;
     size_t gpuShapes=0u;
     size_t triangles=0u;
-    size_t authoredGpuShapes=0u;
-    size_t proofGpuShapes=0u;
+    size_t faceGenEgmAssets=0u;
+    size_t faceGenMorphedShapes=0u;
+    size_t faceGenMorphedVertices=0u;
+    size_t eyeTextureOverrides=0u;
     float rx=0.0f, ry=0.0f, rz=0.0f;
     Q230ConvertBethesdaRotation(
         lucas->rx,lucas->ry,lucas->rz,rx,ry,rz);
 
-    // Q23.1 visual proof: keep the authored actor at the ESM position, but
-    // also build a second copy two metres in front of the current HMD.  The
-    // proof copy is deliberately unlit and ignores depth so an assembly
-    // failure can be distinguished from a world-placement/occlusion failure
-    // without depending on logcat.  This is diagnostic-only VR placement;
-    // all meshes still come from Lucas's real ESM-linked Fallout assets.
-    const float q231ForwardX=-std::sin(gQ210Head[3]);
-    const float q231ForwardZ=-std::cos(gQ210Head[3]);
-    const float q231ProofSceneX=gQ210Head[0]+q231ForwardX*2.0f;
-    const float q231ProofSceneZ=gQ210Head[2]+q231ForwardZ*2.0f;
-    const float q231ProofGameX=
-        gExteriorOriginXQ1890+q231ProofSceneX*FO3_UNITS_PER_METRE;
-    const float q231ProofGameY=
-        gExteriorOriginYQ1890+
-        (SCENE_FORWARD-q231ProofSceneZ)*FO3_UNITS_PER_METRE;
-    const float q231ProofGameZ=gExteriorOriginZQ1890;
+    auto q233RebuildBasis=[](CpuObject& part){
+        const size_t vertexCount=part.positionsGame.size();
+        if(vertexCount==0u) return;
+        std::vector<Vec3> normals(vertexCount);
+        std::vector<Vec3> tangents(vertexCount);
+        std::vector<Vec3> bitangents(vertexCount);
+        const size_t triCount=part.mesh.indices.size()/3u;
+        for(size_t tri=0u;tri<triCount;++tri){
+            const uint32_t ia=part.mesh.indices[tri*3u+0u];
+            const uint32_t ib=part.mesh.indices[tri*3u+1u];
+            const uint32_t ic=part.mesh.indices[tri*3u+2u];
+            if(ia>=vertexCount||ib>=vertexCount||ic>=vertexCount) continue;
+            const Vec3 a=part.positionsGame[ia];
+            const Vec3 b=part.positionsGame[ib];
+            const Vec3 c=part.positionsGame[ic];
+            const Vec3 e1=Q211Sub(b,a);
+            const Vec3 e2=Q211Sub(c,a);
+            const Vec3 n=Q211Cross(e1,e2);
+            normals[ia]=Q211Add(normals[ia],n);
+            normals[ib]=Q211Add(normals[ib],n);
+            normals[ic]=Q211Add(normals[ic],n);
 
-    auto q231BuildModelAt = [&](const std::string& path,
-                                float px, float py, float pz,
-                                float prx, float pry, float prz,
-                                bool proofCopy) {
+            if(part.mesh.texcoords.size()==vertexCount*2u){
+                const float u0=part.mesh.texcoords[ia*2u+0u];
+                const float v0=part.mesh.texcoords[ia*2u+1u];
+                const float u1=part.mesh.texcoords[ib*2u+0u];
+                const float v1=part.mesh.texcoords[ib*2u+1u];
+                const float u2=part.mesh.texcoords[ic*2u+0u];
+                const float v2=part.mesh.texcoords[ic*2u+1u];
+                const float du1=u1-u0, dv1=v1-v0;
+                const float du2=u2-u0, dv2=v2-v0;
+                const float det=du1*dv2-du2*dv1;
+                if(std::fabs(det)>1.0e-8f){
+                    const float inv=1.0f/det;
+                    const Vec3 t={
+                        (e1.x*dv2-e2.x*dv1)*inv,
+                        (e1.y*dv2-e2.y*dv1)*inv,
+                        (e1.z*dv2-e2.z*dv1)*inv};
+                    const Vec3 bt={
+                        (e2.x*du1-e1.x*du2)*inv,
+                        (e2.y*du1-e1.y*du2)*inv,
+                        (e2.z*du1-e1.z*du2)*inv};
+                    tangents[ia]=Q211Add(tangents[ia],t);
+                    tangents[ib]=Q211Add(tangents[ib],t);
+                    tangents[ic]=Q211Add(tangents[ic],t);
+                    bitangents[ia]=Q211Add(bitangents[ia],bt);
+                    bitangents[ib]=Q211Add(bitangents[ib],bt);
+                    bitangents[ic]=Q211Add(bitangents[ic],bt);
+                }
+            }
+        }
+        for(size_t i=0u;i<vertexCount;++i){
+            const Vec3 n=Q211NormalizeSafe(normals[i],{0.0f,1.0f,0.0f});
+            Vec3 t=tangents[i];
+            t=Q211Sub(t,Q211Mul(n,Q211Dot(n,t)));
+            t=Q211NormalizeSafe(t,{1.0f,0.0f,0.0f});
+            Vec3 bt=Q211NormalizeSafe(Q211Cross(n,t),{0.0f,0.0f,1.0f});
+            if(Q211Dot(bt,bitangents[i])<0.0f) bt=Q211Mul(bt,-1.0f);
+            part.normalsGame[i]=n;
+            part.tangentsGame[i]=t;
+            part.bitangentsGame[i]=bt;
+        }
+    };
+
+    auto q233ApplyMorph=[&](CpuObject& part,
+                            const Fo3FaceGenMorphQ233& morph){
+        const size_t vertexCount=part.positionsGame.size();
+        if(vertexCount!=morph.vertexCount ||
+           morph.deltaXYZ.size()!=vertexCount*3u) return false;
+        const float* m=part.mesh.geometryDeltaToModel;
+        for(size_t i=0u;i<vertexCount;++i){
+            const float dx=morph.deltaXYZ[i*3u+0u];
+            const float dy=morph.deltaXYZ[i*3u+1u];
+            const float dz=morph.deltaXYZ[i*3u+2u];
+            Vec3 deltaModel{
+                m[0]*dx+m[1]*dy+m[2]*dz,
+                m[3]*dx+m[4]*dy+m[5]*dz,
+                m[6]*dx+m[7]*dy+m[8]*dz};
+            deltaModel=Q211Mul(deltaModel,part.placement.scale);
+            deltaModel=ApplyEsmRotation(deltaModel,part.placement);
+            part.positionsGame[i]=
+                Q211Add(part.positionsGame[i],deltaModel);
+        }
+        q233RebuildBasis(part);
+        return true;
+    };
+
+    for(const std::string& path:models){
         Fo3WorldPlacement placement;
         placement.refFormId=lucas->refFormId;
         placement.baseFormId=lucas->baseFormId;
         placement.baseRecordType="NPC_";
         placement.editorId=lucas->editorId;
         placement.modelPath=path;
-        placement.x=px;
-        placement.y=py;
-        placement.z=pz;
-        placement.rx=prx;
-        placement.ry=pry;
-        placement.rz=prz;
+        placement.x=lucas->x;
+        placement.y=lucas->y;
+        placement.z=lucas->z;
+        placement.rx=rx;
+        placement.ry=ry;
+        placement.rz=rz;
         placement.scale=lucas->scale;
 
         std::vector<CpuObject> parts;
         if(!BuildCpuObjects(placement,parts)){
-            Q6H_LOGW("Q23.1 NPC PART MISS: actor=%s model=%s copy=%s stage=cpu",
-                     lucas->editorId.c_str(),path.c_str(),
-                     proofCopy?"proof":"authored");
-            return;
+            Q6H_LOGW("Q23.3 NPC PART MISS: actor=%s model=%s stage=cpu",
+                     lucas->editorId.c_str(),path.c_str());
+            continue;
         }
         cpuShapes+=parts.size();
 
+        Fo3FaceGenMorphQ233 morph;
+        const bool faceGenCandidate=isFaceGenModel(path);
+        const bool haveMorph=
+            faceGenCandidate &&
+            LoadFo3FaceGenMorphQ233(
+                path,
+                lucas->faceGenGeometrySymmetric,
+                lucas->faceGenGeometryAsymmetric,
+                morph);
+        if(haveMorph) ++faceGenEgmAssets;
+
         for(CpuObject& part:parts){
+            if(haveMorph && q233ApplyMorph(part,morph)){
+                ++faceGenMorphedShapes;
+                faceGenMorphedVertices+=part.positionsGame.size();
+            }
+
+            if(isEyeModel(path) && !lucas->eyeTexturePath.empty()){
+                part.mesh.diffuseTexturePath=lucas->eyeTexturePath;
+                ++eyeTextureOverrides;
+            }
+
             Q215SuppressPlayerGoreCaps(part.mesh);
             GpuObject gpu;
             if(!UploadCpuObject(
@@ -10009,48 +10131,30 @@ bool Q230EnsureNpcActors() {
                     gExteriorOriginYQ1890,
                     gExteriorOriginZQ1890,
                     gpu)){
-                Q6H_LOGW("Q23.1 NPC PART MISS: actor=%s model=%s copy=%s stage=gpu",
-                         lucas->editorId.c_str(),path.c_str(),
-                         proofCopy?"proof":"authored");
+                Q6H_LOGW("Q23.3 NPC PART MISS: actor=%s model=%s stage=gpu",
+                         lucas->editorId.c_str(),path.c_str());
                 continue;
             }
             gpu.q230NpcActor=true;
-            if(proofCopy){
-                gpu.noLighting=true;
-                gpu.zBufferTestQ1200=false;
-                gpu.zBufferWriteQ1200=false;
-                ++proofGpuShapes;
-            } else {
-                ++authoredGpuShapes;
-            }
             triangles+=static_cast<size_t>(gpu.vertexCount/3);
             gQ230NpcActors.push_back(std::move(gpu));
             ++gpuShapes;
         }
-    };
-
-    for(const std::string& path:models){
-        q231BuildModelAt(
-            path,
-            lucas->x,lucas->y,lucas->z,
-            rx,ry,rz,
-            false);
-        q231BuildModelAt(
-            path,
-            q231ProofGameX,q231ProofGameY,q231ProofGameZ,
-            0.0f,0.0f,0.0f,
-            true);
     }
 
     gQ230NpcReady=!gQ230NpcActors.empty();
-    Q6H_LOGI("Q23.1 NPC VISUAL READY: ready=%d actor=%s ref=%08X base=%08X assets=%zu cpuShapes=%zu gpuShapes=%zu authoredGpu=%zu proofGpu=%zu triangles=%zu proofScene=(%.2f %.2f) pose=bind faceGenApplied=0 faceGenPresent=%d source=ACHR->NPC_->RACE/HAIR/HDPT/ARMO",
+    Q6H_LOGI("Q23.3 NPC VISUAL READY: ready=%d actor=%s ref=%08X base=%08X assets=%zu cpuShapes=%zu gpuShapes=%zu triangles=%zu raceHeadParts=%zu egmAssets=%zu morphedShapes=%zu morphedVertices=%zu eyeTextureOverrides=%zu faceGenGeometryApplied=%d faceGenTextureApplied=0 coeffs=(%zu,%zu,%zu) pose=bind source=ACHR->NPC_->RACE/HAIR/HDPT/ARMO+EGM",
              gQ230NpcReady?1:0,
              lucas->fullName.empty()?lucas->editorId.c_str():lucas->fullName.c_str(),
              lucas->refFormId,lucas->baseFormId,
-             models.size(),cpuShapes,gpuShapes,
-             authoredGpuShapes,proofGpuShapes,triangles,
-             q231ProofSceneX,q231ProofSceneZ,
-             lucas->hasFaceGenGeometry?1:0);
+             models.size(),cpuShapes,gpuShapes,triangles,
+             lucas->raceHeadModels.size(),
+             faceGenEgmAssets,faceGenMorphedShapes,faceGenMorphedVertices,
+             eyeTextureOverrides,
+             faceGenMorphedShapes>0u?1:0,
+             lucas->faceGenGeometrySymmetric.size(),
+             lucas->faceGenGeometryAsymmetric.size(),
+             lucas->faceGenTextureSymmetric.size());
     if(!gQ230NpcReady) Q230DeleteNpcActors();
     return gQ230NpcReady;
 }
