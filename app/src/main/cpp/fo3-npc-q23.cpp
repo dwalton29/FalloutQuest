@@ -1,5 +1,6 @@
 #include "fo3-npc-q23.h"
 #include "fo3-bsa-reader.h"
+#include "fo3-texture-bsa.h"
 
 #include <android/log.h>
 #include <cmath>
@@ -73,6 +74,10 @@ struct Linked {
     std::string model2;
     std::string icon;
     std::vector<std::string> maleHeadModels;
+    std::vector<std::string> maleHeadTextures;
+    std::vector<float> maleFaceSymmetric;
+    std::vector<float> maleFaceAsymmetric;
+    std::vector<float> maleFaceTextureSymmetric;
 };
 
 uint16_t U16(const uint8_t* p) {
@@ -295,13 +300,10 @@ bool ParseLinked(FILE* f, const Locator& loc, Linked& out) {
     if(!ReadPayload(f,loc,data)) return false;
     out.type=loc.type;
 
-    // Fallout 3 RACE records contain an indexed male head-part table between
-    // NAM0/MNAM and FNAM.  Q23.0 incorrectly treated the first MODL as the
-    // entire race head.  Preserve every authored male piece (head, mouth,
-    // teeth, tongue, left/right eye) by its INDX slot.
     bool raceHeadData=false;
     bool raceMaleHead=false;
     uint32_t raceHeadIndex=0xffffffffu;
+    int raceFaceGender=0; // 1 male, 2 female
 
     Walk(data,[&](const char* type,const uint8_t* p,uint32_t n){
         if(std::memcmp(type,"EDID",4u)==0 && out.editorId.empty())
@@ -322,19 +324,37 @@ bool ParseLinked(FILE* f, const Locator& loc, Linked& out) {
                 raceHeadIndex=0xffffffffu;
                 return;
             }
-            if(raceHeadData && std::memcmp(type,"MNAM",4u)==0){
-                raceMaleHead=true;
-                raceHeadIndex=0xffffffffu;
+            if(std::memcmp(type,"MNAM",4u)==0){
+                if(raceHeadData){
+                    raceMaleHead=true;
+                    raceHeadIndex=0xffffffffu;
+                }
+                raceFaceGender=1;
                 return;
             }
-            if(raceHeadData && std::memcmp(type,"FNAM",4u)==0){
-                raceMaleHead=false;
-                raceHeadIndex=0xffffffffu;
+            if(std::memcmp(type,"FNAM",4u)==0){
+                if(raceHeadData){
+                    raceMaleHead=false;
+                    raceHeadIndex=0xffffffffu;
+                }
+                raceFaceGender=2;
                 return;
             }
             if(raceHeadData && raceMaleHead &&
                std::memcmp(type,"INDX",4u)==0 && n>=4u){
                 raceHeadIndex=U32(p);
+                return;
+            }
+            if(std::memcmp(type,"FGGS",4u)==0 && raceFaceGender==1){
+                FloatArray(p,n,out.maleFaceSymmetric);
+                return;
+            }
+            if(std::memcmp(type,"FGGA",4u)==0 && raceFaceGender==1){
+                FloatArray(p,n,out.maleFaceAsymmetric);
+                return;
+            }
+            if(std::memcmp(type,"FGTS",4u)==0 && raceFaceGender==1){
+                FloatArray(p,n,out.maleFaceTextureSymmetric);
                 return;
             }
         }
@@ -348,10 +368,19 @@ bool ParseLinked(FILE* f, const Locator& loc, Linked& out) {
                     out.maleHeadModels.resize(8u);
                 out.maleHeadModels[raceHeadIndex]=path;
             }
-        } else if(std::memcmp(type,"MOD2",4u)==0 && out.model2.empty())
+        } else if(std::memcmp(type,"MOD2",4u)==0 && out.model2.empty()){
             out.model2=ZString(p,n);
-        else if(std::memcmp(type,"ICON",4u)==0 && out.icon.empty())
-            out.icon=ZString(p,n);
+        } else if(std::memcmp(type,"ICON",4u)==0){
+            const std::string path=ZString(p,n);
+            if(out.icon.empty()) out.icon=path;
+            if(loc.type=="RACE" && raceHeadData && raceMaleHead &&
+               raceHeadIndex<8u && !path.empty()){
+                if(out.maleHeadTextures.size()<8u)
+                    out.maleHeadTextures.resize(8u);
+                if(out.maleHeadTextures[raceHeadIndex].empty())
+                    out.maleHeadTextures[raceHeadIndex]=path;
+            }
+        }
     });
     return true;
 }
@@ -415,11 +444,17 @@ bool LoadFo3MegatonExteriorActorsQ230(
             actor.raceEditorId=race.editorId;
             actor.raceHeadModel=race.model;
             actor.raceHeadModels=race.maleHeadModels;
+            actor.raceHeadTextures=race.maleHeadTextures;
+            actor.raceFaceGenGeometrySymmetric=race.maleFaceSymmetric;
+            actor.raceFaceGenGeometryAsymmetric=race.maleFaceAsymmetric;
+            actor.raceFaceGenTextureSymmetric=race.maleFaceTextureSymmetric;
         }
 
         Linked hair;
-        if(npc.hair!=0u && resolve(npc.hair,hair))
+        if(npc.hair!=0u && resolve(npc.hair,hair)){
             actor.hairModel=hair.model;
+            actor.hairTexturePath=hair.icon;
+        }
 
         Linked eyes;
         if(npc.eyes!=0u && resolve(npc.eyes,eyes))
@@ -464,7 +499,7 @@ bool LoadFo3MegatonExteriorActorsQ230(
         size_t armorModels=0u;
         for(const auto& item:a.inventory)
             if(item.recordType=="ARMO" && !item.modelPath.empty()) ++armorModels;
-        Q230_LOGI("Q23.3 NPC: ref=%08X base=%08X EDID=%s FULL=%s female=%d actorFlags=%08X race=%08X raceEDID=%s skeleton=%s maleRaceHeadParts=%zu hair=%s npcHeadParts=%zu eyeTex=%s inventory=%zu armorModels=%zu faceGen=(%zu,%zu,%zu) hairRGB=(%u,%u,%u) pos=(%.1f %.1f %.1f) rot=(%.3f %.3f %.3f)",
+        Q230_LOGI("Q23.4 NPC: ref=%08X base=%08X EDID=%s FULL=%s female=%d actorFlags=%08X race=%08X raceEDID=%s skeleton=%s maleRaceHeadParts=%zu hair=%s hairTex=%s npcHeadParts=%zu eyeTex=%s inventory=%zu armorModels=%zu npcFaceGen=(%zu,%zu,%zu) raceFaceGen=(%zu,%zu,%zu) hairRGB=(%u,%u,%u) pos=(%.1f %.1f %.1f) rot=(%.3f %.3f %.3f)",
                   a.refFormId,a.baseFormId,
                   a.editorId.empty()?"<none>":a.editorId.c_str(),
                   a.fullName.empty()?"<none>":a.fullName.c_str(),
@@ -473,12 +508,16 @@ bool LoadFo3MegatonExteriorActorsQ230(
                   a.skeletonModel.empty()?"<none>":a.skeletonModel.c_str(),
                   a.raceHeadModels.size(),
                   a.hairModel.empty()?"<none>":a.hairModel.c_str(),
+                  a.hairTexturePath.empty()?"<none>":a.hairTexturePath.c_str(),
                   a.headPartModels.size(),
                   a.eyeTexturePath.empty()?"<none>":a.eyeTexturePath.c_str(),
                   a.inventory.size(),armorModels,
                   a.faceGenGeometrySymmetric.size(),
                   a.faceGenGeometryAsymmetric.size(),
                   a.faceGenTextureSymmetric.size(),
+                  a.raceFaceGenGeometrySymmetric.size(),
+                  a.raceFaceGenGeometryAsymmetric.size(),
+                  a.raceFaceGenTextureSymmetric.size(),
                   static_cast<unsigned>(a.hairColor[0]),
                   static_cast<unsigned>(a.hairColor[1]),
                   static_cast<unsigned>(a.hairColor[2]),
@@ -577,5 +616,147 @@ bool LoadFo3FaceGenMorphQ233(
               nifPath.c_str(),resolved.c_str(),vertices,
               symModes,asymModes,symmetric.size(),asymmetric.size(),
               basisVersion);
+    return true;
+}
+
+
+bool LoadFo3FaceGenTextureQ234(
+        const std::string& nifPath,
+        const std::string& baseTexturePath,
+        const std::vector<float>& symmetric,
+        Fo3FaceGenTextureQ234& out) {
+    out = {};
+    if(nifPath.empty() || baseTexturePath.empty() || symmetric.empty())
+        return false;
+
+    std::string egtPath=nifPath;
+    const size_t dot=egtPath.find_last_of('.');
+    if(dot==std::string::npos) return false;
+    egtPath.replace(dot,std::string::npos,".egt");
+
+    std::vector<uint8_t> bytes;
+    std::string resolved;
+    if(!LoadFalloutMeshFile(egtPath,bytes,&resolved)) return false;
+    if(bytes.size()<64u || std::memcmp(bytes.data(),"FREGT003",8u)!=0){
+        return false;
+    }
+
+    const uint32_t rows=U32(bytes.data()+8u);
+    const uint32_t columns=U32(bytes.data()+12u);
+    const uint32_t symModes=U32(bytes.data()+16u);
+    const uint32_t asymModes=U32(bytes.data()+20u);
+    const uint32_t basisVersion=U32(bytes.data()+24u);
+    if(rows==0u || columns==0u || rows>8192u || columns>8192u ||
+       symModes==0u || symModes>256u || asymModes>256u){
+        return false;
+    }
+
+    const uint64_t pixels=
+        static_cast<uint64_t>(rows)*static_cast<uint64_t>(columns);
+    const uint64_t bytesPerMode=4ull+pixels*3ull;
+    const uint64_t required=
+        64ull+bytesPerMode*
+        (static_cast<uint64_t>(symModes)+
+         static_cast<uint64_t>(asymModes));
+    if(required>bytes.size()) return false;
+
+    Fo3RgbaTexture base;
+    if(!LoadFalloutTextureRgba(baseTexturePath,base) ||
+       base.width<=0 || base.height<=0 ||
+       base.rgba.size()!=
+           static_cast<size_t>(base.width)*base.height*4u){
+        return false;
+    }
+    if(static_cast<uint64_t>(base.width)*rows !=
+       static_cast<uint64_t>(base.height)*columns){
+        Q230_LOGW("Q23.4 FACEGEN EGT ASPECT MISS: nif=%s egt=%s base=%s egtDims=%ux%u baseDims=%dx%d",
+                  nifPath.c_str(),resolved.c_str(),baseTexturePath.c_str(),
+                  columns,rows,base.width,base.height);
+        return false;
+    }
+
+    std::vector<float> delta(static_cast<size_t>(pixels)*3u,0.0f);
+    size_t at=64u;
+    for(uint32_t mode=0u;mode<symModes;++mode){
+        const float scale=F32(bytes.data()+at);
+        at+=4u;
+        const uint8_t* r=bytes.data()+at;
+        const uint8_t* g=r+pixels;
+        const uint8_t* b=g+pixels;
+        at+=static_cast<size_t>(pixels)*3u;
+        const float coefficient=
+            mode<symmetric.size()?symmetric[mode]:0.0f;
+        if(std::fabs(coefficient)<1.0e-8f) continue;
+        const float factor=coefficient*scale;
+        for(size_t px=0u;px<static_cast<size_t>(pixels);++px){
+            delta[px*3u+0u]+=
+                static_cast<float>(static_cast<int8_t>(r[px]))*factor;
+            delta[px*3u+1u]+=
+                static_cast<float>(static_cast<int8_t>(g[px]))*factor;
+            delta[px*3u+2u]+=
+                static_cast<float>(static_cast<int8_t>(b[px]))*factor;
+        }
+    }
+    // Fallout 3 NPC records expose only FGTS (symmetric texture coordinates).
+    // Consume the asymmetric EGT payload only for validation/layout parity.
+    at+=static_cast<size_t>(bytesPerMode)*asymModes;
+    if(at>bytes.size()) return false;
+
+    auto sampleDelta=[&](float sx,float sy,int channel){
+        sx=std::clamp(sx,0.0f,static_cast<float>(columns-1u));
+        sy=std::clamp(sy,0.0f,static_cast<float>(rows-1u));
+        const uint32_t x0=static_cast<uint32_t>(std::floor(sx));
+        const uint32_t y0=static_cast<uint32_t>(std::floor(sy));
+        const uint32_t x1=std::min(x0+1u,columns-1u);
+        const uint32_t y1=std::min(y0+1u,rows-1u);
+        const float fx=sx-static_cast<float>(x0);
+        const float fy=sy-static_cast<float>(y0);
+        auto v=[&](uint32_t x,uint32_t y){
+            return delta[
+                (static_cast<size_t>(y)*columns+x)*3u+
+                static_cast<size_t>(channel)];
+        };
+        const float a=v(x0,y0)*(1.0f-fx)+v(x1,y0)*fx;
+        const float c=v(x0,y1)*(1.0f-fx)+v(x1,y1)*fx;
+        return a*(1.0f-fy)+c*fy;
+    };
+
+    out.egtPath=resolved;
+    out.baseTexturePath=baseTexturePath;
+    out.rows=rows;
+    out.columns=columns;
+    out.symmetricModes=symModes;
+    out.asymmetricModes=asymModes;
+    out.textureBasisVersion=basisVersion;
+    out.width=base.width;
+    out.height=base.height;
+    out.rgba=base.rgba;
+
+    for(int y=0;y<base.height;++y){
+        const float sy=
+            ((static_cast<float>(y)+0.5f)/
+             static_cast<float>(base.height))*
+             static_cast<float>(rows)-0.5f;
+        for(int x=0;x<base.width;++x){
+            const float sx=
+                ((static_cast<float>(x)+0.5f)/
+                 static_cast<float>(base.width))*
+                 static_cast<float>(columns)-0.5f;
+            const size_t dst=
+                (static_cast<size_t>(y)*base.width+x)*4u;
+            for(int c=0;c<3;++c){
+                const float value=
+                    static_cast<float>(base.rgba[dst+c])+
+                    sampleDelta(sx,sy,c);
+                out.rgba[dst+c]=static_cast<uint8_t>(
+                    std::lround(std::clamp(value,0.0f,255.0f)));
+            }
+        }
+    }
+
+    Q230_LOGI("Q23.4 FACEGEN EGT READY: nif=%s egt=%s base=%s egtDims=%ux%u baseDims=%dx%d modes=(%u,%u) coeffs=%zu basis=%u operation=base-plus-EGT-delta alpha=preserved",
+              nifPath.c_str(),resolved.c_str(),baseTexturePath.c_str(),
+              columns,rows,base.width,base.height,
+              symModes,asymModes,symmetric.size(),basisVersion);
     return true;
 }

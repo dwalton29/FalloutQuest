@@ -28,7 +28,9 @@ struct Fo3NpcActorQ230 {
     std::string raceEditorId;
     std::string raceHeadModel;
     std::vector<std::string> raceHeadModels;
+    std::vector<std::string> raceHeadTextures;
     std::string hairModel;
+    std::string hairTexturePath;
     std::string eyeTexturePath;
 
     std::vector<uint32_t> headPartFormIds;
@@ -37,6 +39,9 @@ struct Fo3NpcActorQ230 {
     std::vector<float> faceGenGeometrySymmetric;
     std::vector<float> faceGenGeometryAsymmetric;
     std::vector<float> faceGenTextureSymmetric;
+    std::vector<float> raceFaceGenGeometrySymmetric;
+    std::vector<float> raceFaceGenGeometryAsymmetric;
+    std::vector<float> raceFaceGenTextureSymmetric;
     uint8_t hairColor[4]{0u, 0u, 0u, 0u};
 
     float x = 0.0f;
@@ -71,3 +76,26 @@ bool LoadFo3FaceGenMorphQ233(
     const std::vector<float>& symmetric,
     const std::vector<float>& asymmetric,
     Fo3FaceGenMorphQ233& out);
+
+
+struct Fo3FaceGenTextureQ234 {
+    std::string egtPath;
+    std::string baseTexturePath;
+    uint32_t rows = 0u;
+    uint32_t columns = 0u;
+    uint32_t symmetricModes = 0u;
+    uint32_t asymmetricModes = 0u;
+    uint32_t textureBasisVersion = 0u;
+    int width = 0;
+    int height = 0;
+    std::vector<uint8_t> rgba;
+};
+
+// Evaluate the authored FaceGen EGT colour basis over the decoded Fallout DDS.
+// This mirrors FaceGen's SCM operation in the same 0..255 colour domain:
+// base colour + sum(mode * coefficient), preserving authored alpha.
+bool LoadFo3FaceGenTextureQ234(
+    const std::string& nifPath,
+    const std::string& baseTexturePath,
+    const std::vector<float>& symmetric,
+    Fo3FaceGenTextureQ234& out);

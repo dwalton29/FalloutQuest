@@ -40,7 +40,7 @@ public class MainActivity extends Activity {
         title.setGravity(Gravity.CENTER);
 
         TextView status = new TextView(this);
-        status.setText(nativeBootMessage() + "\n\nQ23.3 LUCAS FACEGEN GEOMETRY");
+        status.setText(nativeBootMessage() + "\n\nQ23.4 LUCAS FACEGEN + HCLR");
         status.setTextColor(Color.rgb(210, 220, 205));
         status.setTextSize(20);
         status.setGravity(Gravity.CENTER);

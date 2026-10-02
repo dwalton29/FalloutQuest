@@ -22,8 +22,8 @@ android {
         applicationId 'com.falloutquest.app'
         minSdk 29
         targetSdk 35
-        versionCode 108
-        versionName '0.23.3-q23.3-lucas-facegen-geometry'
+        versionCode 109
+        versionName '0.23.4-q23.4-lucas-facegen-texture-hair'
 
         ndk {
             abiFilters 'arm64-v8a'
