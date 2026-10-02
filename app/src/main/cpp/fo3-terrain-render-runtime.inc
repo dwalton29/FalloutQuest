@@ -1376,7 +1376,11 @@ void RenderFo3TerrainQ76(const float* mvp) {
     for (const Q711TerrainBatch& batch : q711TerrainBatches) {
         if (batch.alphaLayer || !batch.vao || batch.vertexCount <= 0) continue;
         ++q2018BaseTested;
-        if (!Q2018TerrainBatchVisible(q2018Frustum, batch)) continue;
+        // Q20.19 correctness rollback: Q20.18's clip-space AABB extraction
+        // rejected entire authored LAND windows on valid main-eye views.
+        // Preserve the telemetry but draw every authored base batch until
+        // terrain visibility can be proven against the renderer's exact
+        // projection convention.
         ++q2018BaseDrawn;
         glUniform1i(q76bUseTextureLocation, batch.realTexture ? 1 : 0);
         if (q1060TerrainUseNormalLocation >= 0) glUniform1i(q1060TerrainUseNormalLocation, batch.realNormal ? 1 : 0);
@@ -1399,7 +1403,7 @@ void RenderFo3TerrainQ76(const float* mvp) {
     for (const Q711TerrainBatch& batch : q711TerrainBatches) {
         if (!batch.alphaLayer || !batch.realTexture || !batch.vao || batch.vertexCount <= 0) continue;
         ++q2018AlphaTested;
-        if (!Q2018TerrainBatchVisible(q2018Frustum, batch)) continue;
+        // Same Q20.19 correctness rollback for painted ATXT/VTXT layers.
         ++q2018AlphaDrawn;
         glUniform1i(q76bUseTextureLocation, 1);
         if (q1060TerrainUseNormalLocation >= 0) glUniform1i(q1060TerrainUseNormalLocation, batch.realNormal ? 1 : 0);
@@ -1437,7 +1441,7 @@ void RenderFo3TerrainQ76(const float* mvp) {
     ++q2018TerrainPasses;
     if ((q2018TerrainPasses % 240u) == 1u ||
         q2018TerrainUs >= 12000u) {
-        Q76B_LOGI("Q20.18 TERRAIN CULL: renderUs=%llu baseTested=%zu baseDrawn=%zu baseRejected=%zu alphaTested=%zu alphaDrawn=%zu alphaRejected=%zu totalBatches=%zu reflection=%d paddingM=6",
+        Q76B_LOGI("Q20.19 TERRAIN SAFE: renderUs=%llu baseTested=%zu baseDrawn=%zu baseRejected=%zu alphaTested=%zu alphaDrawn=%zu alphaRejected=%zu totalBatches=%zu reflection=%d culling=OFF-q20.18-rollback",
                   static_cast<unsigned long long>(q2018TerrainUs),
                   q2018BaseTested, q2018BaseDrawn,
                   q2018BaseTested - q2018BaseDrawn,

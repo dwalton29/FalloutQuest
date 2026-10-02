@@ -5871,6 +5871,13 @@ bool Q2090AnyLoadedWaterAboveLand() {
 bool Q2090RenderWaterReflection(const float mainMvp[16],
                                 float planeY,
                                 float outReflectionMvp[16]) {
+    const auto q2019ReflectionStarted =
+        std::chrono::steady_clock::now();
+    uint64_t q2019OpaqueUs = 0u;
+    uint64_t q2019AlphaUs = 0u;
+    uint64_t q2019EnvUs = 0u;
+    uint64_t q2019LandUs = 0u;
+
     if (!mainMvp || !outReflectionMvp ||
         !gWaterSkyMvpReadyQ2090 ||
         !Q2090EnsureReflectionTarget()) {
@@ -5968,14 +5975,22 @@ bool Q2090RenderWaterReflection(const float mainMvp[16],
     glDepthMask(GL_TRUE);
     glDisable(GL_BLEND);
 
+    const auto q2019ReflectionOpaqueStarted =
+        std::chrono::steady_clock::now();
     Q1990RenderNativeLod(false);
-    for (const GpuObject& object : gObjects) {
-        if (object.alphaBlend) continue;
-        if (object.zBufferTestQ1200) glEnable(GL_DEPTH_TEST); else glDisable(GL_DEPTH_TEST);
-        glDepthMask(object.zBufferWriteQ1200 ? GL_TRUE : GL_FALSE);
-        DrawSceneObject(object);
-    }
+    // Q20.19: the planar mirror previously bypassed Q20.17 and submitted every
+    // opaque detailed object one-by-one. Reuse the exact same shared-geometry
+    // instancing path as the main eye. DrawSceneObject already flips winding
+    // while gWaterReflectionPassQ2090 is true, so reflection semantics remain
+    // unchanged while repeated STAT/SCOL/TREE geometry collapses to batches.
+    Q2017RenderOpaqueDetailedInstanced();
+    q2019OpaqueUs = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() -
+            q2019ReflectionOpaqueStarted).count());
 
+    const auto q2019ReflectionAlphaStarted =
+        std::chrono::steady_clock::now();
     glEnable(GL_BLEND);
     Q1990RenderNativeLod(true);
     for (const GpuObject& object : gObjects) {
@@ -5987,6 +6002,13 @@ bool Q2090RenderWaterReflection(const float mainMvp[16],
         DrawSceneObject(object);
     }
 
+    q2019AlphaUs = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() -
+            q2019ReflectionAlphaStarted).count());
+
+    const auto q2019ReflectionEnvStarted =
+        std::chrono::steady_clock::now();
     // Preserve Q20.5 material reflections inside the planar reflection image.
     glEnable(GL_DEPTH_TEST);
     glDepthFunc(GL_EQUAL);
@@ -6001,10 +6023,21 @@ bool Q2090RenderWaterReflection(const float mainMvp[16],
         }
     }
 
+    q2019EnvUs = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() -
+            q2019ReflectionEnvStarted).count());
+
+    const auto q2019ReflectionLandStarted =
+        std::chrono::steady_clock::now();
     // LAND uses its own program, so arm the same water-plane clip there.
     SetFo3TerrainWaterReflectionClipQ2090(true, planeY);
     RenderFo3CollisionOverlay(outReflectionMvp);
     SetFo3TerrainWaterReflectionClipQ2090(false, planeY);
+    q2019LandUs = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() -
+            q2019ReflectionLandStarted).count());
 
     // Restore main-eye global/uniform state before the WATER000 draw.
     gFo3EyePositionQ1010[0] = originalEye[0];
@@ -6037,6 +6070,21 @@ bool Q2090RenderWaterReflection(const float mainMvp[16],
     glUseProgram(static_cast<GLuint>(previousProgram));
 
     ++gWaterReflectionFramesQ2090;
+    const uint64_t q2019ReflectionTotalUs = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() -
+            q2019ReflectionStarted).count());
+    if (gWaterReflectionFramesQ2090 == 1u ||
+        (gWaterReflectionFramesQ2090 % 120u) == 0u ||
+        q2019ReflectionTotalUs >= 12000u) {
+        Q6H_LOGI("Q20.19 WATER REFLECTION PHASES: totalUs=%llu opaqueUs=%llu alphaUs=%llu envUs=%llu landUs=%llu objects=%zu sharedMeshes=%zu target=1024x1024 instancedOpaque=1",
+                 static_cast<unsigned long long>(q2019ReflectionTotalUs),
+                 static_cast<unsigned long long>(q2019OpaqueUs),
+                 static_cast<unsigned long long>(q2019AlphaUs),
+                 static_cast<unsigned long long>(q2019EnvUs),
+                 static_cast<unsigned long long>(q2019LandUs),
+                 gObjects.size(), gQ2017SharedGeometry.size());
+    }
     if (gWaterReflectionFramesQ2090 == 1u ||
         (gWaterReflectionFramesQ2090 % 600u) == 0u) {
         Q6H_LOGI("Q20.9 WATER MIRROR DRAW: frame=%llu planeY=%.5f eyeMain=(%.4f %.4f %.4f) eyeMirror=(%.4f %.4f %.4f) size=1024x1024 sky=PC-Q16.6 statics=%zu LAND=1 environmentPass=%d belowPlaneClip=1 stereoPerEye=1 blur=pending",
@@ -6401,9 +6449,15 @@ void RenderScene() {
                 FLOOR_Y,
                 SCENE_FORWARD,
                 FO3_UNITS_PER_METRE);
+        const auto q2019WaterReflectionCallStarted =
+            std::chrono::steady_clock::now();
         const bool q2090ReflectionReady =
             q2090HavePlane && q209bWaterInFrustum &&
             Q2090RenderWaterReflection(mvp, q2090PlaneY, q2090ReflectionMvp);
+        const uint64_t q2019WaterReflectionCallUs = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::steady_clock::now() -
+                q2019WaterReflectionCallStarted).count());
 
         static uint32_t q2090LastPlaneCellLogged = 0u;
         static int q209bLastExposedLogged = -1;
@@ -6424,6 +6478,8 @@ void RenderScene() {
                      q2090ReflectionReady ? 1 : 0);
         }
 
+        const auto q2019WaterPostStarted =
+            std::chrono::steady_clock::now();
         const bool q2080SceneSnapshotReady =
             q2060MsaaActive && q2060MsaaSamples > 1 &&
             q2060MsaaFbo != 0u && q1280PostFbo != 0u &&
@@ -6449,6 +6505,8 @@ void RenderScene() {
         constexpr float q2080FarClipMetres =
             125000.0f / FO3_UNITS_PER_METRE;
 
+        const auto q2019WaterDrawStarted =
+            std::chrono::steady_clock::now();
         RenderFo3WaterSurfaceQ2070(
             mvp,
             gExteriorOriginXQ1890,
@@ -6474,6 +6532,28 @@ void RenderScene() {
             q2090ReflectionReady ? gWaterReflectionColorQ2090 : 0u,
             q2090ReflectionReady,
             q2090ReflectionReady ? q2090ReflectionMvp : nullptr);
+        const uint64_t q2019WaterDrawUs = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::steady_clock::now() -
+                q2019WaterDrawStarted).count());
+        const uint64_t q2019WaterPostUs = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::steady_clock::now() -
+                q2019WaterPostStarted).count());
+        static uint64_t q2019WaterEyePasses = 0u;
+        ++q2019WaterEyePasses;
+        if ((q2019WaterEyePasses % 120u) == 1u ||
+            q2019WaterReflectionCallUs >= 12000u ||
+            q2019WaterPostUs >= 12000u) {
+            Q6H_LOGI("Q20.19 WATER OUTSIDE PHASES: reflectionUs=%llu postAndWaterUs=%llu waterDrawUs=%llu reflectionReady=%d waterInFrustum=%d exposedCells=%zu snapshotReady=%d",
+                     static_cast<unsigned long long>(q2019WaterReflectionCallUs),
+                     static_cast<unsigned long long>(q2019WaterPostUs),
+                     static_cast<unsigned long long>(q2019WaterDrawUs),
+                     q2090ReflectionReady ? 1 : 0,
+                     q209bWaterInFrustum ? 1 : 0,
+                     q209bExposedCells,
+                     q2080SceneSnapshotReady ? 1 : 0);
+        }
     }
 
     glActiveTexture(GL_TEXTURE5);
