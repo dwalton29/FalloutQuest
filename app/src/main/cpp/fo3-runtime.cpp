@@ -7988,7 +7988,7 @@ bool Q217EnsureFingerRig(
     }
     rig.summary = summary;
 
-    Q6H_LOGI("Q21.19 FINGER MAP: side=%s ready=%d indexChain=%d chains=%zu thumbBones=%zu order=authored-numeric-suffix bendAxis=segment-cross-palm bones=%s",
+    Q6H_LOGI("Q21.20 FINGER MAP: side=%s ready=%d indexChain=%d chains=%zu thumbBones=%zu order=authored-numeric-suffix bendAxis=segment-cross-palm bones=%s",
              left ? "L" : "R",
              rig.ready ? 1 : 0,
              rig.indexChain,
@@ -8103,14 +8103,19 @@ std::unordered_map<std::string, Q211Delta> Q217BuildFingerPose(
                 Q211Cross(thumbDirection, targetDirection);
             if (Q211Length(thumbAxis) > 0.01f) {
                 thumbAxis = Q211NormalizeSafe(thumbAxis);
+                // Q21.20: thumb contact should flex from the thumb knuckle,
+                // not fold the whole thumb down from its hand-side base.
+                // Leave authored thumb[0] attached to the hand, start at the
+                // first actual knuckle, and cap the total opposition more
+                // gently than Q21.17-Q21.19.
                 const float targetAngle = std::min(
                     std::acos(std::clamp(
                         Q211Dot(thumbDirection, targetDirection),
                         -1.0f, 1.0f)),
-                    50.0f * DEG);
+                    28.0f * DEG);
 
                 Q211Delta cumulative;
-                for (size_t i = 0u; i < rig.thumb.size(); ++i) {
+                for (size_t i = 1u; i < rig.thumb.size(); ++i) {
                     const Q217FingerJoint& joint = rig.thumb[i];
                     const Vec3 pivot = cumulative.active
                         ? Q211ApplyDelta(cumulative, joint.pivot)
@@ -8119,8 +8124,7 @@ std::unordered_map<std::string, Q211Delta> Q217BuildFingerPose(
                         ? Q211ApplyDeltaVector(cumulative, thumbAxis)
                         : thumbAxis;
                     const float weight =
-                        i == 0u ? 0.70f :
-                        i == 1u ? 0.35f : 0.20f;
+                        i == 1u ? 0.70f : 0.30f;
                     const Q211Delta bend = Q218MakePivotRotation(
                         pivot, axis, targetAngle * weight);
                     cumulative = Q218ComposeRigid(
@@ -8707,7 +8711,7 @@ void Q211UpdatePlayerRig() {
                  q220RightAuthoredBasis.intoPalm.y,
                  q220RightAuthoredBasis.intoPalm.z,
                  Q214_HAND_OUTWARD_OFFSET);
-        Q6H_LOGI("Q21.19 FINGER INPUT: L(trigger=%.2f triggerTouch=%d grip=%.2f thumbTouch=%d posedBones=%zu) R(trigger=%.2f triggerTouch=%d grip=%.2f thumbTouch=%d posedBones=%zu) mapping=index=trigger lower3=squeeze thumb=capacitive",
+        Q6H_LOGI("Q21.20 FINGER INPUT: L(trigger=%.2f triggerTouch=%d grip=%.2f thumbTouch=%d posedBones=%zu) R(trigger=%.2f triggerTouch=%d grip=%.2f thumbTouch=%d posedBones=%zu) mapping=index=trigger lower3=squeeze thumb=capacitive",
                  gQ217FingerTrigger[0],
                  gQ217TriggerTouched[0] ? 1 : 0,
                  gQ217FingerGrip[0],
