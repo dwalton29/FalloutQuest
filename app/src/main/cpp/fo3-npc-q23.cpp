@@ -75,6 +75,9 @@ struct Linked {
     std::string icon;
     std::vector<std::string> maleHeadModels;
     std::vector<std::string> maleHeadTextures;
+    std::vector<std::string> maleBodyModels;
+    std::vector<std::string> maleBodyTextures;
+    uint32_t bipedMask = 0u;
     std::vector<float> maleFaceSymmetric;
     std::vector<float> maleFaceAsymmetric;
     std::vector<float> maleFaceTextureSymmetric;
@@ -301,8 +304,11 @@ bool ParseLinked(FILE* f, const Locator& loc, Linked& out) {
     out.type=loc.type;
 
     bool raceHeadData=false;
+    bool raceBodyData=false;
     bool raceMaleHead=false;
+    bool raceMaleBody=false;
     uint32_t raceHeadIndex=0xffffffffu;
+    uint32_t raceBodyIndex=0xffffffffu;
     int raceFaceGender=0; // 1 male, 2 female
 
     Walk(data,[&](const char* type,const uint8_t* p,uint32_t n){
@@ -311,39 +317,71 @@ bool ParseLinked(FILE* f, const Locator& loc, Linked& out) {
         else if(std::memcmp(type,"FULL",4u)==0 && out.fullName.empty())
             out.fullName=ZString(p,n);
 
+        if(loc.type=="ARMO" &&
+           std::memcmp(type,"BMDT",4u)==0 && n>=4u){
+            out.bipedMask=U32(p);
+        }
+
         if(loc.type=="RACE"){
             if(std::memcmp(type,"NAM0",4u)==0){
                 raceHeadData=true;
+                raceBodyData=false;
                 raceMaleHead=false;
+                raceMaleBody=false;
                 raceHeadIndex=0xffffffffu;
+                raceBodyIndex=0xffffffffu;
                 return;
             }
             if(std::memcmp(type,"NAM1",4u)==0){
                 raceHeadData=false;
+                raceBodyData=true;
                 raceMaleHead=false;
+                raceMaleBody=false;
                 raceHeadIndex=0xffffffffu;
+                raceBodyIndex=0xffffffffu;
                 return;
+            }
+            // HNAM/ENAM come after the body model table and before the final
+            // male/female FaceGen data markers.
+            if((std::memcmp(type,"HNAM",4u)==0 ||
+                std::memcmp(type,"ENAM",4u)==0) && raceBodyData){
+                raceBodyData=false;
+                raceMaleBody=false;
+                raceBodyIndex=0xffffffffu;
             }
             if(std::memcmp(type,"MNAM",4u)==0){
                 if(raceHeadData){
                     raceMaleHead=true;
                     raceHeadIndex=0xffffffffu;
+                } else if(raceBodyData){
+                    raceMaleBody=true;
+                    raceBodyIndex=0xffffffffu;
+                } else {
+                    raceFaceGender=1;
                 }
-                raceFaceGender=1;
                 return;
             }
             if(std::memcmp(type,"FNAM",4u)==0){
                 if(raceHeadData){
                     raceMaleHead=false;
                     raceHeadIndex=0xffffffffu;
+                } else if(raceBodyData){
+                    raceMaleBody=false;
+                    raceBodyIndex=0xffffffffu;
+                } else {
+                    raceFaceGender=2;
                 }
-                raceFaceGender=2;
                 return;
             }
-            if(raceHeadData && raceMaleHead &&
-               std::memcmp(type,"INDX",4u)==0 && n>=4u){
-                raceHeadIndex=U32(p);
-                return;
+            if(std::memcmp(type,"INDX",4u)==0 && n>=4u){
+                if(raceHeadData && raceMaleHead){
+                    raceHeadIndex=U32(p);
+                    return;
+                }
+                if(raceBodyData && raceMaleBody){
+                    raceBodyIndex=U32(p);
+                    return;
+                }
             }
             if(std::memcmp(type,"FGGS",4u)==0 && raceFaceGender==1){
                 FloatArray(p,n,out.maleFaceSymmetric);
@@ -368,6 +406,12 @@ bool ParseLinked(FILE* f, const Locator& loc, Linked& out) {
                     out.maleHeadModels.resize(8u);
                 out.maleHeadModels[raceHeadIndex]=path;
             }
+            if(loc.type=="RACE" && raceBodyData && raceMaleBody &&
+               raceBodyIndex<4u && !path.empty()){
+                if(out.maleBodyModels.size()<4u)
+                    out.maleBodyModels.resize(4u);
+                out.maleBodyModels[raceBodyIndex]=path;
+            }
         } else if(std::memcmp(type,"MOD2",4u)==0 && out.model2.empty()){
             out.model2=ZString(p,n);
         } else if(std::memcmp(type,"ICON",4u)==0){
@@ -379,6 +423,13 @@ bool ParseLinked(FILE* f, const Locator& loc, Linked& out) {
                     out.maleHeadTextures.resize(8u);
                 if(out.maleHeadTextures[raceHeadIndex].empty())
                     out.maleHeadTextures[raceHeadIndex]=path;
+            }
+            if(loc.type=="RACE" && raceBodyData && raceMaleBody &&
+               raceBodyIndex<4u && !path.empty()){
+                if(out.maleBodyTextures.size()<4u)
+                    out.maleBodyTextures.resize(4u);
+                if(out.maleBodyTextures[raceBodyIndex].empty())
+                    out.maleBodyTextures[raceBodyIndex]=path;
             }
         }
     });
@@ -445,6 +496,10 @@ bool LoadFo3MegatonExteriorActorsQ230(
             actor.raceHeadModel=race.model;
             actor.raceHeadModels=race.maleHeadModels;
             actor.raceHeadTextures=race.maleHeadTextures;
+            actor.raceBodyModels=race.maleBodyModels;
+            actor.raceBodyTextures=race.maleBodyTextures;
+            if(race.maleBodyModels.size()>3u)
+                actor.raceBodyTextureModel=race.maleBodyModels[3u];
             actor.raceFaceGenGeometrySymmetric=race.maleFaceSymmetric;
             actor.raceFaceGenGeometryAsymmetric=race.maleFaceAsymmetric;
             actor.raceFaceGenTextureSymmetric=race.maleFaceTextureSymmetric;
@@ -482,6 +537,7 @@ bool LoadFo3MegatonExteriorActorsQ230(
                             actor.female && !linked.model2.empty()
                                 ? linked.model2
                                 : linked.model;
+                        item.bipedMask=linked.bipedMask;
                     }
                 }
             }
@@ -499,7 +555,7 @@ bool LoadFo3MegatonExteriorActorsQ230(
         size_t armorModels=0u;
         for(const auto& item:a.inventory)
             if(item.recordType=="ARMO" && !item.modelPath.empty()) ++armorModels;
-        Q230_LOGI("Q23.4 NPC: ref=%08X base=%08X EDID=%s FULL=%s female=%d actorFlags=%08X race=%08X raceEDID=%s skeleton=%s maleRaceHeadParts=%zu hair=%s hairTex=%s npcHeadParts=%zu eyeTex=%s inventory=%zu armorModels=%zu npcFaceGen=(%zu,%zu,%zu) raceFaceGen=(%zu,%zu,%zu) hairRGB=(%u,%u,%u) pos=(%.1f %.1f %.1f) rot=(%.3f %.3f %.3f)",
+        Q230_LOGI("Q23.6 NPC: ref=%08X base=%08X EDID=%s FULL=%s female=%d actorFlags=%08X race=%08X raceEDID=%s skeleton=%s maleRaceHeadParts=%zu maleRaceBodyParts=%zu hair=%s hairTex=%s npcHeadParts=%zu eyeTex=%s inventory=%zu armorModels=%zu npcFaceGen=(%zu,%zu,%zu) raceFaceGen=(%zu,%zu,%zu) hairRGB=(%u,%u,%u) pos=(%.1f %.1f %.1f) rot=(%.3f %.3f %.3f)",
                   a.refFormId,a.baseFormId,
                   a.editorId.empty()?"<none>":a.editorId.c_str(),
                   a.fullName.empty()?"<none>":a.fullName.c_str(),
@@ -507,6 +563,7 @@ bool LoadFo3MegatonExteriorActorsQ230(
                   a.raceEditorId.empty()?"<none>":a.raceEditorId.c_str(),
                   a.skeletonModel.empty()?"<none>":a.skeletonModel.c_str(),
                   a.raceHeadModels.size(),
+                  a.raceBodyModels.size(),
                   a.hairModel.empty()?"<none>":a.hairModel.c_str(),
                   a.hairTexturePath.empty()?"<none>":a.hairTexturePath.c_str(),
                   a.headPartModels.size(),
@@ -524,11 +581,11 @@ bool LoadFo3MegatonExteriorActorsQ230(
                   a.x,a.y,a.z,a.rx,a.ry,a.rz);
         for(const auto& item:a.inventory){
             if(item.recordType=="ARMO" && !item.modelPath.empty()){
-                Q230_LOGI("Q23.0 NPC ARMOR: actor=%s form=%08X EDID=%s FULL=%s count=%d model=%s",
+                Q230_LOGI("Q23.6 NPC ARMOR: actor=%s form=%08X EDID=%s FULL=%s count=%d bipedMask=%08X model=%s",
                           a.editorId.c_str(),item.formId,
                           item.editorId.empty()?"<none>":item.editorId.c_str(),
                           item.fullName.empty()?"<none>":item.fullName.c_str(),
-                          item.count,item.modelPath.c_str());
+                          item.count,item.bipedMask,item.modelPath.c_str());
             }
         }
     }

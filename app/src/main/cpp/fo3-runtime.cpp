@@ -9971,8 +9971,40 @@ bool Q230EnsureNpcActors() {
     addFaceGenModel(lucas->hairModel);
     for(const std::string& path:lucas->headPartModels)
         addFaceGenModel(path);
-    for(const Fo3NpcVisualItemQ230& item:lucas->inventory)
-        if(item.recordType=="ARMO") addModel(item.modelPath);
+    uint32_t q236EquippedMask=0u;
+    for(const Fo3NpcVisualItemQ230& item:lucas->inventory){
+        if(item.recordType=="ARMO"){
+            addModel(item.modelPath);
+            q236EquippedMask|=item.bipedMask;
+        }
+    }
+
+    // Fallout equipment slots: 0x4 Upper Body, 0x8 Left Hand,
+    // 0x10 Right Hand. Only add uncovered RACE body pieces.
+    if(lucas->raceBodyModels.size()>0u &&
+       (q236EquippedMask & 0x00000004u)==0u)
+        addFaceGenModel(lucas->raceBodyModels[0u]);
+    if(lucas->raceBodyModels.size()>1u &&
+       (q236EquippedMask & 0x00000008u)==0u)
+        addFaceGenModel(lucas->raceBodyModels[1u]);
+    if(lucas->raceBodyModels.size()>2u &&
+       (q236EquippedMask & 0x00000010u)==0u)
+        addFaceGenModel(lucas->raceBodyModels[2u]);
+
+    auto isArmorModel=[&](const std::string& path){
+        for(const Fo3NpcVisualItemQ230& item:lucas->inventory)
+            if(item.recordType=="ARMO" &&
+               !item.modelPath.empty() &&
+               samePath(path,item.modelPath)) return true;
+        return false;
+    };
+    auto isRaceBodyModel=[&](const std::string& path)->int {
+        for(size_t slot=0u;slot<lucas->raceBodyModels.size() && slot<3u;++slot)
+            if(!lucas->raceBodyModels[slot].empty() &&
+               samePath(path,lucas->raceBodyModels[slot]))
+                return static_cast<int>(slot);
+        return -1;
+    };
 
     auto isFaceGenModel=[&](const std::string& path){
         for(const std::string& candidate:faceGenModels)
@@ -10058,6 +10090,8 @@ bool Q230EnsureNpcActors() {
     size_t eyeTextureOverrides=0u;
     size_t hairTextureOverrides=0u;
     size_t hairTintShapes=0u;
+    size_t raceBodyTextureOverrides=0u;
+    size_t armorSkinFallbackOverrides=0u;
     float rx=0.0f, ry=0.0f, rz=0.0f;
     Q230ConvertBethesdaRotation(
         lucas->rx,lucas->ry,lucas->rz,rx,ry,rz);
@@ -10172,7 +10206,7 @@ bool Q230EnsureNpcActors() {
 
         std::vector<CpuObject> parts;
         if(!BuildCpuObjects(placement,parts)){
-            Q6H_LOGW("Q23.5 NPC PART MISS: actor=%s model=%s stage=cpu",
+            Q6H_LOGW("Q23.6 NPC PART MISS: actor=%s model=%s stage=cpu",
                      lucas->editorId.c_str(),path.c_str());
             continue;
         }
@@ -10196,6 +10230,27 @@ bool Q230EnsureNpcActors() {
                 q235RaceTextureForPart(path,part.q2016ShapeIndex);
             if(!q235RaceTexture.empty()){
                 part.mesh.diffuseTexturePath=q235RaceTexture;
+            }
+
+            const int q236BodySlot=isRaceBodyModel(path);
+            if(q236BodySlot>=0 &&
+               static_cast<size_t>(q236BodySlot)<lucas->raceBodyTextures.size() &&
+               !lucas->raceBodyTextures[static_cast<size_t>(q236BodySlot)].empty()){
+                part.mesh.diffuseTexturePath=
+                    lucas->raceBodyTextures[static_cast<size_t>(q236BodySlot)];
+                ++raceBodyTextureOverrides;
+            }
+
+            // Equipped upper-body NIFs can contain exposed-skin shapes whose
+            // texture is supplied dynamically by the actor race rather than
+            // authored in the armor NIF. When that shape has no diffuse,
+            // use the male RACE upper-body texture instead of the beige fallback.
+            if(isArmorModel(path) &&
+               part.mesh.diffuseTexturePath.empty() &&
+               !lucas->raceBodyTextures.empty() &&
+               !lucas->raceBodyTextures[0u].empty()){
+                part.mesh.diffuseTexturePath=lucas->raceBodyTextures[0u];
+                ++armorSkinFallbackOverrides;
             }
 
             if(isEyeModel(path) && !lucas->eyeTexturePath.empty()){
@@ -10266,7 +10321,7 @@ bool Q230EnsureNpcActors() {
                     gExteriorOriginYQ1890,
                     gExteriorOriginZQ1890,
                     gpu)){
-                Q6H_LOGW("Q23.5 NPC PART MISS: actor=%s model=%s stage=gpu",
+                Q6H_LOGW("Q23.6 NPC PART MISS: actor=%s model=%s stage=gpu",
                          lucas->editorId.c_str(),path.c_str());
                 continue;
             }
@@ -10278,7 +10333,7 @@ bool Q230EnsureNpcActors() {
     }
 
     gQ230NpcReady=!gQ230NpcActors.empty();
-    Q6H_LOGI("Q23.5 NPC VISUAL READY: ready=%d actor=%s ref=%08X base=%08X assets=%zu cpuShapes=%zu gpuShapes=%zu triangles=%zu raceHeadParts=%zu egmAssets=%zu morphedShapes=%zu morphedVertices=%zu faceTextureShapes=%zu faceTexturePixels=%zu eyeTextureOverrides=%zu hairTextureOverrides=%zu hairTintShapes=%zu faceGenGeometryApplied=%d faceGenTextureApplied=%d combinedCoeffs=(%zu,%zu,%zu) npcCoeffs=(%zu,%zu,%zu) raceCoeffs=(%zu,%zu,%zu) hairRGB=(%u,%u,%u) pose=bind source=RACE-texture-slots+RACE-baseline+NPC-FaceGen+EGM/EGT+HCLR",
+    Q6H_LOGI("Q23.6 NPC VISUAL READY: ready=%d actor=%s ref=%08X base=%08X assets=%zu cpuShapes=%zu gpuShapes=%zu triangles=%zu raceHeadParts=%zu egmAssets=%zu morphedShapes=%zu morphedVertices=%zu faceTextureShapes=%zu faceTexturePixels=%zu eyeTextureOverrides=%zu hairTextureOverrides=%zu hairTintShapes=%zu raceBodyTextureOverrides=%zu armorSkinFallbackOverrides=%zu equippedMask=%08X faceGenGeometryApplied=%d faceGenTextureApplied=%d combinedCoeffs=(%zu,%zu,%zu) npcCoeffs=(%zu,%zu,%zu) raceCoeffs=(%zu,%zu,%zu) hairRGB=(%u,%u,%u) pose=bind source=RACE-head/body-slots+BMDT+RACE-baseline+NPC-FaceGen+EGM/EGT+HCLR",
              gQ230NpcReady?1:0,
              lucas->fullName.empty()?lucas->editorId.c_str():lucas->fullName.c_str(),
              lucas->refFormId,lucas->baseFormId,
@@ -10287,6 +10342,7 @@ bool Q230EnsureNpcActors() {
              faceGenEgmAssets,faceGenMorphedShapes,faceGenMorphedVertices,
              faceGenTextureShapes,faceGenTexturePixels,
              eyeTextureOverrides,hairTextureOverrides,hairTintShapes,
+             raceBodyTextureOverrides,armorSkinFallbackOverrides,q236EquippedMask,
              faceGenMorphedShapes>0u?1:0,
              faceGenTextureShapes>0u?1:0,
              q234FaceSym.size(),q234FaceAsym.size(),q234FaceTex.size(),

@@ -11,6 +11,7 @@ struct Fo3NpcVisualItemQ230 {
     std::string editorId;
     std::string fullName;
     std::string modelPath;
+    uint32_t bipedMask = 0u;
 };
 
 struct Fo3NpcActorQ230 {
@@ -29,6 +30,9 @@ struct Fo3NpcActorQ230 {
     std::string raceHeadModel;
     std::vector<std::string> raceHeadModels;
     std::vector<std::string> raceHeadTextures;
+    std::vector<std::string> raceBodyModels;
+    std::vector<std::string> raceBodyTextures;
+    std::string raceBodyTextureModel;
     std::string hairModel;
     std::string hairTexturePath;
     std::string eyeTexturePath;
