@@ -10086,6 +10086,19 @@ void SetFo3PlayerBodyTrackingQ210(
     const float rootX = headX + s * 0.08f;
     const float rootZ = headZ + c * 0.08f;
 
+    // Q21.7: align the authored Fallout head/neck anchor to the real HMD
+    // vertically. Previously the body root stayed on the legacy LOCAL-space
+    // floor while the arm targets were re-anchored to the authored head.
+    // Any difference between those two head heights therefore shifted BOTH
+    // virtual hands by that amount and left the camera sunk into the torso.
+    Vec3 q217AvatarHeadAnchor{};
+    const bool q217HeadAnchorReady =
+        Q211FindAvatarHeadAnchor(q217AvatarHeadAnchor);
+    const float q217LegacyRootY = headY - localHeadY;
+    const float q217RootY = q217HeadAnchorReady
+        ? headY - q217AvatarHeadAnchor.y
+        : q217LegacyRootY;
+
     std::fill(gQ210PlayerRoot, gQ210PlayerRoot + 16, 0.0f);
     gQ210PlayerRoot[0] = c;
     gQ210PlayerRoot[2] = -s;
@@ -10093,9 +10106,18 @@ void SetFo3PlayerBodyTrackingQ210(
     gQ210PlayerRoot[8] = s;
     gQ210PlayerRoot[10] = c;
     gQ210PlayerRoot[12] = rootX;
-    gQ210PlayerRoot[13] = headY - localHeadY;
+    gQ210PlayerRoot[13] = q217RootY;
     gQ210PlayerRoot[14] = rootZ;
     gQ210PlayerRoot[15] = 1.0f;
+
+    if ((gQ211TrackingSerial % 180u) == 1u) {
+        Q6H_LOGI("Q21.7 BODY HEAD ALIGN: ready=%d headWorldY=%.3f localHeadY=%.3f authoredHeadY=%.3f legacyRootY=%.3f alignedRootY=%.3f correction=%.3f",
+                 q217HeadAnchorReady ? 1 : 0,
+                 headY, localHeadY,
+                 q217HeadAnchorReady ? q217AvatarHeadAnchor.y : localHeadY,
+                 q217LegacyRootY, q217RootY,
+                 q217RootY - q217LegacyRootY);
+    }
 }
 
 bool QueryFo3DoorAimQ1700(float originX, float originY, float originZ,
