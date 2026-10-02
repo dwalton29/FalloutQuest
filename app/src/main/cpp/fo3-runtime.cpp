@@ -565,6 +565,9 @@ float gQ219ArmLengthScale = Q219_ARM_BASE_SCALE;
 // applied immediately so artificial turning stays coherent.
 constexpr float Q213_NECK_YAW_LIMIT = 0.6108652382f; // 35 degrees
 constexpr float Q213_TORSO_FOLLOW_MAX_STEP = 0.0261799388f; // 1.5 deg/frame
+// Q21.14 VR-specific controller-to-avatar calibration requested from in-headset
+// testing: move each solved hand 2.5 cm farther away from the body centreline.
+constexpr float Q214_HAND_OUTWARD_OFFSET = 0.025f;
 bool gQ213TorsoYawReady = false;
 float gQ213TorsoYaw = 0.0f;
 float gQ213LastLocomotionYaw = 0.0f;
@@ -7522,6 +7525,12 @@ bool Q220FindAuthoredHandBasis(bool left, Q220HandBasis& out) {
     Vec3 intoPalm =
         Q211NormalizeSafe(Q211Cross(littleToThumb, fingerForward));
 
+    // Q21.14: the authored across-hand axis is already correctly mirrored by
+    // the Fallout skeleton, but the right-hand palm normal produced by the
+    // same cross-product has the opposite anatomical sign. Mirror only this
+    // normal; changing the across-hand axis would re-introduce the inversion.
+    if (!left) intoPalm = Q211Mul(intoPalm, -1.0f);
+
     littleToThumb = Q211Sub(
         littleToThumb,
         Q211Mul(intoPalm, Q211Dot(littleToThumb, intoPalm)));
@@ -8068,12 +8077,17 @@ void Q211UpdatePlayerRig() {
     // the HMD onto Fallout's authored head/neck anchor. Feeding the raw LOCAL
     // Y directly made targets ~0.4-0.8 m below the actor and pulled the
     // forearm/hand geometry out of view.
-    const Vec3 leftTarget = Q211Add(
+    Vec3 leftTarget = Q211Add(
         avatarHeadAnchor,
         Q211Sub(trackedLeftRoot, trackedHeadRoot));
-    const Vec3 rightTarget = Q211Add(
+    Vec3 rightTarget = Q211Add(
         avatarHeadAnchor,
         Q211Sub(trackedRightRoot, trackedHeadRoot));
+
+    // Body-root X is the authored left/right axis (left < 0, right > 0).
+    // Keep the calibration symmetric so it cannot skew the avatar.
+    leftTarget.x -= Q214_HAND_OUTWARD_OFFSET;
+    rightTarget.x += Q214_HAND_OUTWARD_OFFSET;
 
     // Q21.3: solve each arm once from a part that has the complete chain.
     // Gamebryo skin partitions/shapes often reference only a subset of the
@@ -8260,7 +8274,7 @@ void Q211UpdatePlayerRig() {
     glBindBuffer(GL_ARRAY_BUFFER, 0);
 
     if ((gQ211TrackingSerial % 180u) == 1u) {
-        Q6H_LOGI("Q21.13 HAND BASIS: authored=(L%d,R%d) Lacross=(%.3f %.3f %.3f) Linward=(%.3f %.3f %.3f) Racross=(%.3f %.3f %.3f) Rinward=(%.3f %.3f %.3f) openxrAxes=(-Z little-to-thumb,+/-X palm-normal) source=global-authored-(Hand,Finger2,Finger4)",
+        Q6H_LOGI("Q21.14 HAND BASIS: authored=(L%d,R%d) Lacross=(%.3f %.3f %.3f) Linward=(%.3f %.3f %.3f) Racross=(%.3f %.3f %.3f) Rinward=(%.3f %.3f %.3f) rightPalmMirror=1 outwardOffset=%.3fm source=global-authored-(Hand,Finger2,Finger4)",
                  q220LeftBasisReady ? 1 : 0,
                  q220RightBasisReady ? 1 : 0,
                  q220LeftAuthoredBasis.littleToThumb.x,
@@ -8274,7 +8288,8 @@ void Q211UpdatePlayerRig() {
                  q220RightAuthoredBasis.littleToThumb.z,
                  q220RightAuthoredBasis.intoPalm.x,
                  q220RightAuthoredBasis.intoPalm.y,
-                 q220RightAuthoredBasis.intoPalm.z);
+                 q220RightAuthoredBasis.intoPalm.z,
+                 Q214_HAND_OUTWARD_OFFSET);
         Q6H_LOGI("Q21.9 BODY/REACH: armScale=%.3f requested=%.3f base=%.3f max=%.3f targetExtension=%.2f measureL=(rest=%.3f dist=%.3f) measureR=(rest=%.3f dist=%.3f)",
                  gQ219ArmLengthScale, q219RequestedScale,
                  Q219_ARM_BASE_SCALE, Q219_ARM_MAX_SCALE,
