@@ -1948,7 +1948,7 @@ bool UploadCpuObject(CpuObject& cpu, float centerX, float centerY, float floorZ,
     if (gpu.q220LooseObject) {
         static std::unordered_set<uint32_t> q220LoggedRefs;
         if (q220LoggedRefs.insert(gpu.refFormId).second) {
-            Q6H_LOGI("Q22.4 LOOSE CANDIDATE: ref=%08X base=%08X type=%s edid=%s model=%s",
+            Q6H_LOGI("Q22.5 LOOSE CANDIDATE: ref=%08X base=%08X type=%s edid=%s model=%s",
                      gpu.refFormId, gpu.baseFormId,
                      gpu.baseRecordType.c_str(),
                      gpu.editorId.empty() ? "<none>" : gpu.editorId.c_str(),
@@ -7389,6 +7389,10 @@ struct Q223DynamicBody {
     bool dynamic = false;
     Vec3 authoredCenter{};
     float collisionRadius = 0.0f;
+    Vec3 collisionHalfExtents{};
+    bool sleeping = false;
+    float sleepTimer = 0.0f;
+    int motionSamples = 0;
     Vec3 linearVelocity{};
     Vec3 angularVelocity{};
     Vec3 lastPalm{};
@@ -7549,6 +7553,7 @@ Q223DynamicBody* Q223EnsureDynamicBody(uint32_t refFormId) {
     const bool authoredBhk =
         radiusUnits > 0.0f &&
         std::isfinite(radiusUnits);
+    body.collisionHalfExtents = renderHalf;
     if (authoredBhk) {
         body.collisionRadius =
             (radiusUnits * placementScale) /
@@ -7561,7 +7566,7 @@ Q223DynamicBody* Q223EnsureDynamicBody(uint32_t refFormId) {
             std::max(0.015f, renderRadius);
     }
 
-    Q6H_LOGI("Q22.4 PHYSICS BODY: ref=%08X model=%s radius=%.4fm source=%s renderHalf=(%.3f %.3f %.3f) placementScale=%.3f physics=enabled",
+    Q6H_LOGI("Q22.5 PHYSICS BODY: ref=%08X model=%s radius=%.4fm source=%s renderHalf=(%.3f %.3f %.3f) placementScale=%.3f physics=enabled",
              refFormId, modelPath.c_str(),
              body.collisionRadius,
              authoredBhk
@@ -7585,10 +7590,18 @@ void Q223SampleHeldMotion(
             std::chrono::duration<float>(
                 now - body.lastPalmSample).count();
         if (dt >= 0.001f && dt <= 0.050f) {
-            body.sampledLinearVelocity =
+            const Vec3 instantLinear =
                 Q211Mul(
                     Q211Sub(palm, body.lastPalm),
                     1.0f / dt);
+            if (body.motionSamples == 0) {
+                body.sampledLinearVelocity = instantLinear;
+            } else {
+                body.sampledLinearVelocity =
+                    Q211Add(
+                        Q211Mul(body.sampledLinearVelocity,0.60f),
+                        Q211Mul(instantLinear,0.40f));
+            }
 
             const float sx = -body.lastPalmQuat[0];
             const float sy = -body.lastPalmQuat[1];
@@ -7623,11 +7636,20 @@ void Q223SampleHeldMotion(
                     qx / sinHalf,
                     qy / sinHalf,
                     qz / sinHalf};
-                body.sampledAngularVelocity =
+                const Vec3 instantAngular =
                     Q211Mul(axis, angle / dt);
-            } else {
+                if (body.motionSamples == 0) {
+                    body.sampledAngularVelocity = instantAngular;
+                } else {
+                    body.sampledAngularVelocity =
+                        Q211Add(
+                            Q211Mul(body.sampledAngularVelocity,0.60f),
+                            Q211Mul(instantAngular,0.40f));
+                }
+            } else if (body.motionSamples == 0) {
                 body.sampledAngularVelocity = {};
             }
+            ++body.motionSamples;
         }
     }
 
@@ -7693,6 +7715,7 @@ void Q223AdvanceDynamicBodies() {
     for (auto& entry : gQ223DynamicBodies) {
         Q223DynamicBody& body = entry.second;
         if (!body.dynamic || body.held ||
+            body.sleeping ||
             !(body.collisionRadius > 0.0f)) {
             continue;
         }
@@ -7742,8 +7765,25 @@ void Q223AdvanceDynamicBodies() {
             float nx = 0.0f, ny = 0.0f, nz = 0.0f;
             uint32_t contacts = 0u;
 
+            Vec3 axisX{
+                currentTransform[0],
+                currentTransform[1],
+                currentTransform[2]};
+            Vec3 axisY{
+                currentTransform[4],
+                currentTransform[5],
+                currentTransform[6]};
+            Vec3 axisZ{
+                currentTransform[8],
+                currentTransform[9],
+                currentTransform[10]};
+            axisX = Q211NormalizeSafe(axisX,{1.0f,0.0f,0.0f});
+            axisY = Q211NormalizeSafe(axisY,{0.0f,1.0f,0.0f});
+            axisZ = Q211NormalizeSafe(axisZ,{0.0f,0.0f,1.0f});
+
+            uint32_t candidates = 0u;
             const bool collisionReady =
-                ResolveFo3DynamicSphereQ223(
+                ResolveFo3DynamicBoxQ225(
                     body.refFormId,
                     currentCenter.x,
                     currentCenter.y,
@@ -7751,10 +7791,17 @@ void Q223AdvanceDynamicBodies() {
                     desiredCenter.x,
                     desiredCenter.y,
                     desiredCenter.z,
+                    body.collisionHalfExtents.x,
+                    body.collisionHalfExtents.y,
+                    body.collisionHalfExtents.z,
+                    axisX.x, axisX.y, axisX.z,
+                    axisY.x, axisY.y, axisY.z,
+                    axisZ.x, axisZ.y, axisZ.z,
                     body.collisionRadius,
                     &rx, &ry, &rz,
                     &nx, &ny, &nz,
-                    &contacts);
+                    &contacts,
+                    &candidates);
 
             const Vec3 resolvedCenter{rx, ry, rz};
             if (collisionReady && contacts > 0u) {
@@ -7773,21 +7820,62 @@ void Q223AdvanceDynamicBodies() {
                             Q211Mul(normal, inward));
                 }
 
-                // First contact model is intentionally non-bouncy. Authored
-                // Havok material restitution/friction comes next.
-                body.angularVelocity = {};
+                // Q22.5 temporary VR-side settling response. Preserve
+                // tangential motion/spin instead of freezing at first touch.
+                // These damping values are solver choices until authored
+                // Havok material/inertia fields are connected.
+                const float linearRetain =
+                    std::exp(-1.25f * dt);
+                const float angularRetain =
+                    std::exp(-2.00f * dt);
+                body.linearVelocity =
+                    Q211Mul(body.linearVelocity,linearRetain);
+                body.angularVelocity =
+                    Q211Mul(body.angularVelocity,angularRetain);
 
-                static uint64_t q223ContactLog = 0u;
-                ++q223ContactLog;
-                if (q223ContactLog <= 40u ||
-                    (q223ContactLog % 180u) == 0u) {
-                    Q6H_LOGI("Q22.4 CONTACT: ref=%08X contacts=%u radius=%.3f normal=(%.2f %.2f %.2f) velocity=(%.2f %.2f %.2f)",
-                             body.refFormId, contacts,
+                const float linearSpeed =
+                    Q211Length(body.linearVelocity);
+                const float angularSpeed =
+                    Q211Length(body.angularVelocity);
+                if (normal.y > 0.45f &&
+                    linearSpeed < 0.08f &&
+                    angularSpeed < 0.22f) {
+                    body.sleepTimer += dt;
+                } else {
+                    body.sleepTimer = 0.0f;
+                }
+
+                if (body.sleepTimer >= 0.30f) {
+                    body.sleeping = true;
+                    body.dynamic = false;
+                    body.linearVelocity = {};
+                    body.angularVelocity = {};
+                    Q6H_LOGI("Q22.5 SLEEP: ref=%08X center=(%.3f %.3f %.3f) after=%.2fs",
+                             body.refFormId,
+                             resolvedCenter.x,
+                             resolvedCenter.y,
+                             resolvedCenter.z,
+                             body.sleepTimer);
+                }
+
+                static uint64_t q225ContactLog = 0u;
+                ++q225ContactLog;
+                if (q225ContactLog <= 40u ||
+                    (q225ContactLog % 180u) == 0u) {
+                    Q6H_LOGI("Q22.5 CONTACT: ref=%08X contacts=%u candidates=%u broadRadius=%.3f half=(%.3f %.3f %.3f) normal=(%.2f %.2f %.2f) velocity=(%.2f %.2f %.2f) angular=%.2f sleep=%.2f",
+                             body.refFormId,
+                             contacts,
+                             candidates,
                              body.collisionRadius,
+                             body.collisionHalfExtents.x,
+                             body.collisionHalfExtents.y,
+                             body.collisionHalfExtents.z,
                              normal.x, normal.y, normal.z,
                              body.linearVelocity.x,
                              body.linearVelocity.y,
-                             body.linearVelocity.z);
+                             body.linearVelocity.z,
+                             angularSpeed,
+                             body.sleepTimer);
                 }
             }
 
@@ -7806,6 +7894,7 @@ void Q223AdvanceDynamicBodies() {
             Q220SetRefTransform(
                 body.refFormId,
                 finalTransform);
+            if (body.sleeping) break;
         }
     }
 }
@@ -7904,6 +7993,9 @@ void Q220UpdateLooseGrab(
                 body->angularVelocity = {};
                 body->sampledLinearVelocity = {};
                 body->sampledAngularVelocity = {};
+                body->motionSamples = 0;
+                body->sleeping = false;
+                body->sleepTimer = 0.0f;
                 body->lastPalmSample = {};
                 body->lastPhysicsStep = {};
                 Q223SampleHeldMotion(
@@ -7941,7 +8033,7 @@ void Q220UpdateLooseGrab(
 
             const float snapDistance =
                 Q211Length(Q211Sub(hand, center));
-            Q6H_LOGI("Q22.4 GRAB BEGIN: hand=%s ref=%08X surfaceDistance=%.3f snapDistance=%.3f objectCenter=(%.3f %.3f %.3f) palm=(%.3f %.3f %.3f) anchor=authored-bounds-center-to-weighted-player-palm",
+            Q6H_LOGI("Q22.5 GRAB BEGIN: hand=%s ref=%08X surfaceDistance=%.3f snapDistance=%.3f objectCenter=(%.3f %.3f %.3f) palm=(%.3f %.3f %.3f) anchor=authored-bounds-center-to-weighted-player-palm",
                      handIndex == 0 ? "L" : "R",
                      ref, distance, snapDistance,
                      center.x, center.y, center.z,
@@ -7950,6 +8042,12 @@ void Q220UpdateLooseGrab(
     }
 
     if (state.active) {
+        if (Q223DynamicBody* body =
+                Q223EnsureDynamicBody(state.refFormId)) {
+            body->held = true;
+            Q223SampleHeldMotion(*body, hand, quat);
+        }
+
         if (grip <= RELEASE) {
             const uint32_t releasedRef =
                 state.refFormId;
@@ -7962,10 +8060,12 @@ void Q220UpdateLooseGrab(
                     body->sampledAngularVelocity;
                 body->dynamic =
                     body->collisionRadius > 0.0f;
+                body->sleeping = false;
+                body->sleepTimer = 0.0f;
                 body->lastPhysicsStep =
                     std::chrono::steady_clock::now();
 
-                Q6H_LOGI("Q22.4 THROW RELEASE: hand=%s ref=%08X physics=%d linear=(%.2f %.2f %.2f)mps angular=(%.2f %.2f %.2f)radps radius=%.3f",
+                Q6H_LOGI("Q22.5 THROW RELEASE: hand=%s ref=%08X physics=%d linear=(%.2f %.2f %.2f)mps angular=(%.2f %.2f %.2f)radps radius=%.3f",
                          handIndex == 0 ? "L" : "R",
                          releasedRef,
                          body->dynamic ? 1 : 0,
@@ -7992,13 +8092,6 @@ void Q220UpdateLooseGrab(
             Q220SetRefTransform(
                 state.refFormId,
                 finalTransform);
-            if (Q223DynamicBody* body =
-                    Q223EnsureDynamicBody(
-                        state.refFormId)) {
-                body->held = true;
-                Q223SampleHeldMotion(
-                    *body, hand, quat);
-            }
         }
     }
 
@@ -9636,7 +9729,7 @@ void Q211UpdatePlayerRig() {
                  q220RightAuthoredBasis.intoPalm.y,
                  q220RightAuthoredBasis.intoPalm.z,
                  Q214_HAND_OUTWARD_OFFSET);
-        Q6H_LOGI("Q22.4 PALM ANCHOR: L(valid=%d world=%.3f %.3f %.3f rest=%.3f %.3f %.3f weight=%.1f source=%s) R(valid=%d world=%.3f %.3f %.3f rest=%.3f %.3f %.3f weight=%.1f source=%s) mode=visible-exact-Hand-bone-weights",
+        Q6H_LOGI("Q22.5 PALM ANCHOR: L(valid=%d world=%.3f %.3f %.3f rest=%.3f %.3f %.3f weight=%.1f source=%s) R(valid=%d world=%.3f %.3f %.3f rest=%.3f %.3f %.3f weight=%.1f source=%s) mode=visible-exact-Hand-bone-weights",
                  q221LeftPalmValid ? 1 : 0,
                  q221LeftPalmWorld.x, q221LeftPalmWorld.y, q221LeftPalmWorld.z,
                  q222LeftGrabPalmRest.x, q222LeftGrabPalmRest.y, q222LeftGrabPalmRest.z,

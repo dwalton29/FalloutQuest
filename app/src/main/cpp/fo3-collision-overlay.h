@@ -50,14 +50,19 @@ bool IsFo3PlayerCollisionReadyQ6G();
 // against the currently active authored Fallout collision world. The moving
 // REFR is excluded from contact tests so its original static bhk placement
 // cannot collide with itself after pickup.
-bool ResolveFo3DynamicSphereQ223(
+bool ResolveFo3DynamicBoxQ225(
     uint32_t movingRefFormId,
     float currentX, float currentY, float currentZ,
     float desiredX, float desiredY, float desiredZ,
-    float radius,
+    float halfX, float halfY, float halfZ,
+    float axisXx, float axisXy, float axisXz,
+    float axisYx, float axisYy, float axisYz,
+    float axisZx, float axisZy, float axisZz,
+    float broadRadius,
     float* outX, float* outY, float* outZ,
     float* outNormalX, float* outNormalY, float* outNormalZ,
-    uint32_t* outContacts);
+    uint32_t* outContacts,
+    uint32_t* outCandidates);
 
 // Q6F debug draw. Q6G keeps this disabled by default while retaining the same
 // collision data for physical movement. The symbol is weak so Q7.6b can replace
