@@ -547,8 +547,15 @@ float gQ210PlayerRoot[16]{
 float gQ210Head[4]{0.0f, 0.0f, 0.0f, 0.0f};
 float gQ210LeftHand[3]{0.0f, 0.0f, 0.0f};
 float gQ210RightHand[3]{0.0f, 0.0f, 0.0f};
+float gQ218LeftHandQuat[4]{0.0f, 0.0f, 0.0f, 1.0f};
+float gQ218RightHandQuat[4]{0.0f, 0.0f, 0.0f, 1.0f};
 bool gQ210LeftHandValid = false;
 bool gQ210RightHandValid = false;
+bool gQ218LeftTwistReferenceValid = false;
+bool gQ218RightTwistReferenceValid = false;
+float gQ218LeftTwistReference = 0.0f;
+float gQ218RightTwistReference = 0.0f;
+constexpr float Q218_ARM_LENGTH_SCALE = 1.10f;
 uint64_t gQ211TrackingSerial = 0u;
 uint64_t gQ211LastSkinnedSerial = ~0ull;
 
@@ -7402,6 +7409,24 @@ Vec3 Q211TransformPoint(const float m[16], Vec3 p) {
     };
 }
 
+Vec3 Q218TransformVector(const float m[16], Vec3 v) {
+    return {
+        m[0]*v.x + m[4]*v.y + m[8]*v.z,
+        m[1]*v.x + m[5]*v.y + m[9]*v.z,
+        m[2]*v.x + m[6]*v.y + m[10]*v.z
+    };
+}
+
+Vec3 Q218RotateQuaternion(const float q[4], Vec3 v) {
+    const Vec3 u{q[0], q[1], q[2]};
+    const float s = q[3];
+    return Q211Add(
+        Q211Add(
+            Q211Mul(u, 2.0f * Q211Dot(u, v)),
+            Q211Mul(v, s*s - Q211Dot(u, u))),
+        Q211Mul(Q211Cross(u, v), 2.0f * s));
+}
+
 struct Q211Delta {
     float r[9]{
         1,0,0,
@@ -7409,6 +7434,9 @@ struct Q211Delta {
         0,0,1
     };
     Vec3 t{0.0f, 0.0f, 0.0f};
+    Vec3 stretchPivot{0.0f, 0.0f, 0.0f};
+    Vec3 stretchAxis{1.0f, 0.0f, 0.0f};
+    float axialScale = 1.0f;
     bool active = false;
 };
 
@@ -7466,26 +7494,133 @@ Q211Delta Q211MakeDelta(
     Q211RotationFromTo(restDirection, currentDirection, out.r);
     out.t = Q211Sub(
         currentPivot, Q211Rotate(out.r, restPivot));
+    out.stretchPivot = restPivot;
+    out.stretchAxis = Q211NormalizeSafe(restDirection);
+    out.active = true;
+    return out;
+}
+
+Q211Delta Q218MakeSegmentDelta(
+        Vec3 restPivot, Vec3 restDirection,
+        Vec3 currentPivot, Vec3 currentDirection,
+        float axialScale) {
+    Q211Delta out = Q211MakeDelta(
+        restPivot, restDirection, currentPivot, currentDirection);
+    out.axialScale = std::max(0.01f, axialScale);
+    return out;
+}
+
+void Q218AxisRotation(Vec3 axis, float angle, float out[9]) {
+    axis = Q211NormalizeSafe(axis);
+    const float c = std::cos(angle);
+    const float s = std::sin(angle);
+    const float one = 1.0f - c;
+    const float x = axis.x, y = axis.y, z = axis.z;
+    out[0] = c + x*x*one;
+    out[1] = x*y*one - z*s;
+    out[2] = x*z*one + y*s;
+    out[3] = y*x*one + z*s;
+    out[4] = c + y*y*one;
+    out[5] = y*z*one - x*s;
+    out[6] = z*x*one - y*s;
+    out[7] = z*y*one + x*s;
+    out[8] = c + z*z*one;
+}
+
+Q211Delta Q218MakePivotRotation(Vec3 pivot, Vec3 axis, float angle) {
+    Q211Delta out;
+    Q218AxisRotation(axis, angle, out.r);
+    out.t = Q211Sub(pivot, Q211Rotate(out.r, pivot));
+    out.stretchPivot = pivot;
+    out.active = true;
+    return out;
+}
+
+Q211Delta Q218ComposeRigid(const Q211Delta& first, const Q211Delta& second) {
+    if (!first.active) return second;
+    if (!second.active) return first;
+    Q211Delta out;
+    for (int row = 0; row < 3; ++row) {
+        for (int col = 0; col < 3; ++col) {
+            out.r[row*3 + col] =
+                second.r[row*3 + 0] * first.r[0*3 + col] +
+                second.r[row*3 + 1] * first.r[1*3 + col] +
+                second.r[row*3 + 2] * first.r[2*3 + col];
+        }
+    }
+    out.t = Q211Add(Q211Rotate(second.r, first.t), second.t);
     out.active = true;
     return out;
 }
 
 Vec3 Q211ApplyDelta(const Q211Delta& d, Vec3 p) {
-    return d.active ? Q211Add(Q211Rotate(d.r, p), d.t) : p;
+    if (!d.active) return p;
+    if (std::fabs(d.axialScale - 1.0f) > 0.0001f) {
+        Vec3 rel = Q211Sub(p, d.stretchPivot);
+        const float along = Q211Dot(rel, d.stretchAxis);
+        rel = Q211Add(
+            rel,
+            Q211Mul(d.stretchAxis, along * (d.axialScale - 1.0f)));
+        p = Q211Add(d.stretchPivot, rel);
+    }
+    return Q211Add(Q211Rotate(d.r, p), d.t);
 }
 
 Vec3 Q211ApplyDeltaVector(const Q211Delta& d, Vec3 v) {
+    // Rotate normals/tangents with the segment but do not axially stretch them.
     return d.active ? Q211Rotate(d.r, v) : v;
+}
+
+bool Q218TwistAngle(
+        Vec3 shoulder, Vec3 elbow, Vec3 hand,
+        Vec3 palmNormal, float& outAngle) {
+    const Vec3 axis = Q211NormalizeSafe(Q211Sub(hand, elbow));
+    Vec3 reference = Q211Sub(shoulder, elbow);
+    reference = Q211Sub(
+        reference, Q211Mul(axis, Q211Dot(reference, axis)));
+    if (Q211Length(reference) < 0.03f) {
+        reference = Vec3{0.0f, 1.0f, 0.0f};
+        reference = Q211Sub(
+            reference, Q211Mul(axis, Q211Dot(reference, axis)));
+    }
+    if (Q211Length(reference) < 0.03f) {
+        reference = Vec3{0.0f, 0.0f, -1.0f};
+        reference = Q211Sub(
+            reference, Q211Mul(axis, Q211Dot(reference, axis)));
+    }
+    reference = Q211NormalizeSafe(reference);
+
+    palmNormal = Q211Sub(
+        palmNormal, Q211Mul(axis, Q211Dot(palmNormal, axis)));
+    if (Q211Length(palmNormal) < 0.03f) return false;
+    palmNormal = Q211NormalizeSafe(palmNormal);
+
+    const Vec3 side =
+        Q211NormalizeSafe(Q211Cross(axis, reference));
+    outAngle = std::atan2(
+        Q211Dot(palmNormal, side),
+        Q211Dot(palmNormal, reference));
+    return std::isfinite(outAngle);
+}
+
+float Q218WrapAngle(float angle) {
+    constexpr float TWO_PI = 6.28318530718f;
+    while (angle > 3.14159265359f) angle -= TWO_PI;
+    while (angle < -3.14159265359f) angle += TWO_PI;
+    return angle;
 }
 
 bool Q211SolveArm(
         bool left,
         Vec3 shoulder, Vec3 restElbow, Vec3 restHand,
         Vec3 target,
+        float lengthScale,
         Vec3& outElbow,
         Vec3& outHand) {
-    const float upperLen = Q211Length(Q211Sub(restElbow, shoulder));
-    const float foreLen = Q211Length(Q211Sub(restHand, restElbow));
+    const float upperLen =
+        Q211Length(Q211Sub(restElbow, shoulder)) * lengthScale;
+    const float foreLen =
+        Q211Length(Q211Sub(restHand, restElbow)) * lengthScale;
     if (upperLen < 0.05f || foreLen < 0.05f) return false;
 
     Vec3 toTarget = Q211Sub(target, shoulder);
@@ -7529,15 +7664,21 @@ bool Q211SolveArm(
 struct Q213ArmPose {
     Q211Delta upper;
     Q211Delta fore;
+    Q211Delta handDelta;
     Vec3 elbow{};
     Vec3 hand{};
+    float restReach = 0.0f;
+    float targetDistance = 0.0f;
+    float wristTwist = 0.0f;
     bool solved = false;
 };
 
 Q213ArmPose Q213SolveMasterArm(
         const Q211PlayerRigPart& part,
         bool left,
-        Vec3 target) {
+        Vec3 target,
+        Vec3 gripPalmNormal,
+        bool gripOrientationValid) {
     Q213ArmPose pose;
     const int upper = left ? part.leftUpperArm : part.rightUpperArm;
     const int fore = left ? part.leftForearm : part.rightForearm;
@@ -7553,18 +7694,59 @@ Q213ArmPose Q213SolveMasterArm(
         restHand = left ? part.leftPalmAnchor : part.rightPalmAnchor;
     }
 
+    const Vec3 restUpper = Q211Sub(restElbow, shoulder);
+    const Vec3 restFore = Q211Sub(restHand, restElbow);
+    pose.restReach = Q211Length(restUpper) + Q211Length(restFore);
+    pose.targetDistance = Q211Length(Q211Sub(target, shoulder));
+
     if (!Q211SolveArm(
             left, shoulder, restElbow, restHand,
-            target, pose.elbow, pose.hand)) {
+            target, Q218_ARM_LENGTH_SCALE,
+            pose.elbow, pose.hand)) {
         return pose;
     }
 
-    pose.upper = Q211MakeDelta(
-        shoulder, Q211Sub(restElbow, shoulder),
-        shoulder, Q211Sub(pose.elbow, shoulder));
-    pose.fore = Q211MakeDelta(
-        restElbow, Q211Sub(restHand, restElbow),
-        pose.elbow, Q211Sub(pose.hand, pose.elbow));
+    pose.upper = Q218MakeSegmentDelta(
+        shoulder, restUpper,
+        shoulder, Q211Sub(pose.elbow, shoulder),
+        Q218_ARM_LENGTH_SCALE);
+    pose.fore = Q218MakeSegmentDelta(
+        restElbow, restFore,
+        pose.elbow, Q211Sub(pose.hand, pose.elbow),
+        Q218_ARM_LENGTH_SCALE);
+
+    // Keep the hand itself at authored size: move/rotate it with the stretched
+    // forearm endpoint, then layer controller roll around the current wrist axis.
+    pose.handDelta = Q211MakeDelta(
+        restHand, restFore,
+        pose.hand, Q211Sub(pose.hand, pose.elbow));
+
+    if (gripOrientationValid) {
+        float absoluteTwist = 0.0f;
+        if (Q218TwistAngle(
+                shoulder, pose.elbow, pose.hand,
+                gripPalmNormal, absoluteTwist)) {
+            bool& referenceValid = left
+                ? gQ218LeftTwistReferenceValid
+                : gQ218RightTwistReferenceValid;
+            float& reference = left
+                ? gQ218LeftTwistReference
+                : gQ218RightTwistReference;
+            if (!referenceValid) {
+                reference = absoluteTwist;
+                referenceValid = true;
+            }
+            pose.wristTwist =
+                Q218WrapAngle(absoluteTwist - reference);
+            const Q211Delta twist = Q218MakePivotRotation(
+                pose.hand,
+                Q211Sub(pose.hand, pose.elbow),
+                pose.wristTwist);
+            pose.handDelta =
+                Q218ComposeRigid(pose.handDelta, twist);
+        }
+    }
+
     pose.solved = true;
     return pose;
 }
@@ -7578,11 +7760,13 @@ void Q213AssignArmPoseToPart(
         const int role = Q211BoneRole(part.bones[i].name);
         if (left.solved) {
             if (role == 1) deltas[i] = left.upper;
-            else if (role == 2 || role == 3) deltas[i] = left.fore;
+            else if (role == 2) deltas[i] = left.fore;
+            else if (role == 3) deltas[i] = left.handDelta;
         }
         if (right.solved) {
             if (role == 4) deltas[i] = right.upper;
-            else if (role == 5 || role == 6) deltas[i] = right.fore;
+            else if (role == 5) deltas[i] = right.fore;
+            else if (role == 6) deltas[i] = right.handDelta;
         }
     }
 }
@@ -7619,7 +7803,7 @@ void Q211BuildArmDeltas(
     Vec3 currentHand{};
     if (!Q211SolveArm(
             left, shoulder, restElbow, restHand,
-            target, outElbow, currentHand)) {
+            target, 1.0f, outElbow, currentHand)) {
         return;
     }
 
@@ -7664,6 +7848,15 @@ void Q211UpdatePlayerRig() {
     const Vec3 trackedRightRoot =
         Q211TransformPoint(invRoot, rightTargetWorld);
 
+    const Vec3 leftPalmWorld =
+        Q218RotateQuaternion(gQ218LeftHandQuat, Vec3{1.0f, 0.0f, 0.0f});
+    const Vec3 rightPalmWorld =
+        Q218RotateQuaternion(gQ218RightHandQuat, Vec3{1.0f, 0.0f, 0.0f});
+    const Vec3 leftPalmRoot =
+        Q211NormalizeSafe(Q218TransformVector(invRoot, leftPalmWorld));
+    const Vec3 rightPalmRoot =
+        Q211NormalizeSafe(Q218TransformVector(invRoot, rightPalmWorld));
+
     Vec3 avatarHeadAnchor = trackedHeadRoot;
     const bool avatarHeadReady =
         Q211FindAvatarHeadAnchor(avatarHeadAnchor);
@@ -7697,11 +7890,15 @@ void Q211UpdatePlayerRig() {
     Q213ArmPose q213RightPose;
     if (gQ210LeftHandValid && q213LeftMaster) {
         q213LeftPose =
-            Q213SolveMasterArm(*q213LeftMaster, true, leftTarget);
+            Q213SolveMasterArm(
+                *q213LeftMaster, true, leftTarget,
+                leftPalmRoot, true);
     }
     if (gQ210RightHandValid && q213RightMaster) {
         q213RightPose =
-            Q213SolveMasterArm(*q213RightMaster, false, rightTarget);
+            Q213SolveMasterArm(
+                *q213RightMaster, false, rightTarget,
+                rightPalmRoot, true);
     }
 
     size_t q213LeftAffectedParts = 0u;
@@ -7820,6 +8017,25 @@ void Q211UpdatePlayerRig() {
     glBindBuffer(GL_ARRAY_BUFFER, 0);
 
     if ((gQ211TrackingSerial % 180u) == 1u) {
+        Q6H_LOGI("Q21.8 ARM RETARGET: scale=%.3f L(rest=%.3f scaled=%.3f targetDist=%.3f ratio=%.3f twistDeg=%.1f) R(rest=%.3f scaled=%.3f targetDist=%.3f ratio=%.3f twistDeg=%.1f) wristMode=relative-grip-roll",
+                 Q218_ARM_LENGTH_SCALE,
+                 q213LeftPose.restReach,
+                 q213LeftPose.restReach * Q218_ARM_LENGTH_SCALE,
+                 q213LeftPose.targetDistance,
+                 q213LeftPose.restReach > 0.001f
+                     ? q213LeftPose.targetDistance /
+                           (q213LeftPose.restReach * Q218_ARM_LENGTH_SCALE)
+                     : 0.0f,
+                 q213LeftPose.wristTwist * 57.2957795f,
+                 q213RightPose.restReach,
+                 q213RightPose.restReach * Q218_ARM_LENGTH_SCALE,
+                 q213RightPose.targetDistance,
+                 q213RightPose.restReach > 0.001f
+                     ? q213RightPose.targetDistance /
+                           (q213RightPose.restReach * Q218_ARM_LENGTH_SCALE)
+                     : 0.0f,
+                 q213RightPose.wristTwist * 57.2957795f);
+
         Q6H_LOGI("Q21.5 ARM IK: serial=%llu rigParts=%zu masters=(L%d,R%d) affectedParts=(L%zu,R%zu) headAnchorReady=%d leftValid=%d leftSolved=%d targetL=(%.3f %.3f %.3f) elbowL=(%.3f %.3f %.3f) handL=(%.3f %.3f %.3f) rightValid=%d rightSolved=%d targetR=(%.3f %.3f %.3f) elbowR=(%.3f %.3f %.3f) handR=(%.3f %.3f %.3f) mode=global-skeleton-pose-across-skin-partitions",
                  static_cast<unsigned long long>(gQ211TrackingSerial),
                  gQ211PlayerRigParts.size(),
@@ -7860,6 +8076,8 @@ void Q210DeletePlayerBody() {
     gQ210PlayerBody.clear();
     gQ211PlayerRigParts.clear();
     gQ211LastSkinnedSerial = ~0ull;
+    gQ218LeftTwistReferenceValid = false;
+    gQ218RightTwistReferenceValid = false;
     gQ210PlayerBodyReady = false;
 }
 
@@ -10066,7 +10284,9 @@ void SetFo3PlayerBodyTrackingQ210(
         float headX, float headY, float headZ, float headYaw,
         float localHeadY,
         bool leftValid, float leftX, float leftY, float leftZ,
-        bool rightValid, float rightX, float rightY, float rightZ) {
+        float leftQx, float leftQy, float leftQz, float leftQw,
+        bool rightValid, float rightX, float rightY, float rightZ,
+        float rightQx, float rightQy, float rightQz, float rightQw) {
     gQ210Head[0] = headX;
     gQ210Head[1] = headY;
     gQ210Head[2] = headZ;
@@ -10076,9 +10296,17 @@ void SetFo3PlayerBodyTrackingQ210(
     gQ210LeftHand[0] = leftX;
     gQ210LeftHand[1] = leftY;
     gQ210LeftHand[2] = leftZ;
+    gQ218LeftHandQuat[0] = leftQx;
+    gQ218LeftHandQuat[1] = leftQy;
+    gQ218LeftHandQuat[2] = leftQz;
+    gQ218LeftHandQuat[3] = leftQw;
     gQ210RightHand[0] = rightX;
     gQ210RightHand[1] = rightY;
     gQ210RightHand[2] = rightZ;
+    gQ218RightHandQuat[0] = rightQx;
+    gQ218RightHandQuat[1] = rightQy;
+    gQ218RightHandQuat[2] = rightQz;
+    gQ218RightHandQuat[3] = rightQw;
     ++gQ211TrackingSerial;
 
     const float c = std::cos(headYaw);

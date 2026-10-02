@@ -1418,8 +1418,12 @@ private:
                     views[0].pose.position.y,
                     q210LeftValid,
                     q210Left.position.x, q210Left.position.y, q210Left.position.z,
+                    q210Left.orientation.x, q210Left.orientation.y,
+                    q210Left.orientation.z, q210Left.orientation.w,
                     q210RightValid,
-                    q210Right.position.x, q210Right.position.y, q210Right.position.z);
+                    q210Right.position.x, q210Right.position.y, q210Right.position.z,
+                    q210Right.orientation.x, q210Right.orientation.y,
+                    q210Right.orientation.z, q210Right.orientation.w);
 
                 // Q20.13: loading freezes player motion, not world preparation.
                 // Keep CELL/terrain/LOD streaming alive beneath the overlay.
