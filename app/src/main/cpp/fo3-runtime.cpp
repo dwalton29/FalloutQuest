@@ -9224,6 +9224,7 @@ bool GetFo3EnvironmentPassEnabledQ205A() {
 
 void SetFo3PlayerBodyTrackingQ210(
         float headX, float headY, float headZ, float headYaw,
+        float localHeadY,
         bool leftValid, float leftX, float leftY, float leftZ,
         bool rightValid, float rightX, float rightY, float rightZ) {
     gQ210Head[0] = headX;
@@ -9251,7 +9252,7 @@ void SetFo3PlayerBodyTrackingQ210(
     gQ210PlayerRoot[8] = s;
     gQ210PlayerRoot[10] = c;
     gQ210PlayerRoot[12] = rootX;
-    gQ210PlayerRoot[13] = headY - 1.70f;
+    gQ210PlayerRoot[13] = headY - localHeadY;
     gQ210PlayerRoot[14] = rootZ;
     gQ210PlayerRoot[15] = 1.0f;
 }
