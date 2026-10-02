@@ -59,6 +59,7 @@ bool QueueFo3MegatonEntryQ1860();
 #include <cstdint>
 #include <deque>
 #include <cstring>
+#include <functional>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -159,6 +160,81 @@ Vec3 GameDirectionToOpenXr(Vec3 v) {
     return Normalize({v.x, v.z, -v.y});
 }
 
+void Q2016MulMat4(const float a[16], const float b[16], float out[16]) {
+    float r[16]{};
+    for (int col = 0; col < 4; ++col) {
+        for (int row = 0; row < 4; ++row) {
+            for (int k = 0; k < 4; ++k) {
+                r[col * 4 + row] +=
+                    a[k * 4 + row] * b[col * 4 + k];
+            }
+        }
+    }
+    std::copy(r, r + 16, out);
+}
+
+bool Q2016InvertAffine(const float m[16], float out[16]) {
+    const float a00=m[0], a01=m[4], a02=m[8];
+    const float a10=m[1], a11=m[5], a12=m[9];
+    const float a20=m[2], a21=m[6], a22=m[10];
+    const float c00 = a11*a22 - a12*a21;
+    const float c01 = a02*a21 - a01*a22;
+    const float c02 = a01*a12 - a02*a11;
+    const float det = a00*c00 + a10*c01 + a20*c02;
+    if (std::fabs(det) < 1.0e-8f) return false;
+    const float invDet = 1.0f / det;
+
+    out[0]  = c00 * invDet;
+    out[4]  = (a12*a20 - a10*a22) * invDet;
+    out[8]  = (a10*a21 - a11*a20) * invDet;
+    out[1]  = c01 * invDet;
+    out[5]  = (a00*a22 - a02*a20) * invDet;
+    out[9]  = (a02*a10 - a00*a12) * invDet;
+    out[2]  = c02 * invDet;
+    out[6]  = (a01*a20 - a00*a21) * invDet;
+    out[10] = (a00*a11 - a01*a10) * invDet;
+    out[3]=out[7]=out[11]=0.0f;
+    out[15]=1.0f;
+
+    const float tx=m[12], ty=m[13], tz=m[14];
+    out[12] = -(out[0]*tx + out[4]*ty + out[8]*tz);
+    out[13] = -(out[1]*tx + out[5]*ty + out[9]*tz);
+    out[14] = -(out[2]*tx + out[6]*ty + out[10]*tz);
+    return true;
+}
+
+void Q2016BuildPlacementMatrix(
+        const Fo3WorldPlacement& placement,
+        float centerX, float centerY, float floorZ,
+        float out[16]) {
+    const Vec3 xAxis = GameDirectionToOpenXr(
+        ApplyEsmRotation({1.0f, 0.0f, 0.0f}, placement));
+    const Vec3 yAxis = GameDirectionToOpenXr(
+        ApplyEsmRotation({0.0f, 0.0f, 1.0f}, placement));
+    const Vec3 zAxis = GameDirectionToOpenXr(
+        ApplyEsmRotation({0.0f, -1.0f, 0.0f}, placement));
+    const float s = placement.scale;
+
+    std::fill(out, out + 16, 0.0f);
+    out[0]=xAxis.x*s; out[1]=xAxis.y*s; out[2]=xAxis.z*s;
+    out[4]=yAxis.x*s; out[5]=yAxis.y*s; out[6]=yAxis.z*s;
+    out[8]=zAxis.x*s; out[9]=zAxis.y*s; out[10]=zAxis.z*s;
+    out[12]=(placement.x-centerX)/FO3_UNITS_PER_METRE;
+    out[13]=FLOOR_Y+(placement.z-floorZ)/FO3_UNITS_PER_METRE;
+    out[14]=SCENE_FORWARD-(placement.y-centerY)/FO3_UNITS_PER_METRE;
+    out[15]=1.0f;
+}
+
+bool Q2016RelativeMatrix(
+        const float representative[16],
+        const float target[16],
+        float out[16]) {
+    float inverse[16]{};
+    if (!Q2016InvertAffine(representative, inverse)) return false;
+    Q2016MulMat4(target, inverse, out);
+    return true;
+}
+
 struct CpuObject {
     Fo3WorldPlacement placement;
     Fo3StaticNifMesh mesh;
@@ -174,6 +250,7 @@ struct CpuObject {
     float q1960MinX = 0.0f, q1960MaxX = 0.0f;
     float q1960MinY = 0.0f, q1960MaxY = 0.0f;
     float q1960MinZ = 0.0f, q1960MaxZ = 0.0f;
+    uint32_t q2016ShapeIndex = 0u;
 };
 
 struct GpuObject {
@@ -230,6 +307,14 @@ struct GpuObject {
     float minX = 0.0f, maxX = 0.0f;
     float minY = 0.0f, maxY = 0.0f;
     float minZ = 0.0f, maxZ = 0.0f;
+    uint32_t q2016ShapeIndex = 0u;
+    uint64_t q2016BatchKey = 0u;
+    float q2016PlacementMatrix[16]{
+        1,0,0,0,
+        0,1,0,0,
+        0,0,1,0,
+        0,0,0,1
+    };
     std::vector<Vec3> q1580NormalSamples;
 };
 
@@ -320,6 +405,10 @@ struct Q2015FrustumCullScope {
 
 GLuint gProgram = 0;
 GLint gMvpLocation = -1;
+GLint gInstancingEnabledLocationQ2016 = -1;
+GLuint gInstanceBufferQ2016 = 0u;
+bool gInstancedDrawActiveQ2016 = false;
+std::vector<float> gInstanceMatricesQ2016;
 GLint gDiffuseLocation = -1;
 GLint gNormalLocation = -1;
 GLint gGlossinessLocation = -1;
@@ -543,7 +632,12 @@ GLuint CreateQ6HProgram() {
         layout(location = 3) in vec3 aBitangent;
         layout(location = 4) in vec2 aUv;
         layout(location = 5) in vec4 aColor;
+        layout(location = 6) in vec4 aInstance0Q2016;
+        layout(location = 7) in vec4 aInstance1Q2016;
+        layout(location = 8) in vec4 aInstance2Q2016;
+        layout(location = 9) in vec4 aInstance3Q2016;
         uniform mat4 uMvp;
+        uniform float uInstancingEnabledQ2016;
         uniform highp float uFogNearVertexQ1532;
         uniform highp float uFogFarVertexQ1532;
         uniform highp float uFogPowerVertexQ1532;
@@ -561,17 +655,31 @@ GLuint CreateQ6HProgram() {
         out vec4 vShadowCoord;
         uniform mat4 uLightMvp;
         void main() {
-            vNormal = aNormal;
-            vTangent = aTangent;
-            vBitangent = aBitangent;
+            mat4 q2016Instance = mat4(
+                aInstance0Q2016, aInstance1Q2016,
+                aInstance2Q2016, aInstance3Q2016);
+            vec4 q2016WorldPosition = vec4(aPosition, 1.0);
+            vec3 q2016Normal = aNormal;
+            vec3 q2016Tangent = aTangent;
+            vec3 q2016Bitangent = aBitangent;
+            if (uInstancingEnabledQ2016 > 0.5) {
+                q2016WorldPosition = q2016Instance * q2016WorldPosition;
+                mat3 q2016Basis = mat3(q2016Instance);
+                q2016Normal = normalize(q2016Basis * aNormal);
+                q2016Tangent = normalize(q2016Basis * aTangent);
+                q2016Bitangent = normalize(q2016Basis * aBitangent);
+            }
+            vNormal = q2016Normal;
+            vTangent = q2016Tangent;
+            vBitangent = q2016Bitangent;
             vUv = aUv;
             // SLS1011.vso: LightData is dotted with the authored T/B/N rows in
             // the vertex stage, then encoded for interpolation to the pixel stage.
             vec3 q1540LightData = normalize(uSunDirectionVertexQ1540);
             vec3 q1540LightTangent = vec3(
-                dot(aTangent, q1540LightData),
-                dot(aBitangent, q1540LightData),
-                dot(aNormal, q1540LightData));
+                dot(q2016Tangent, q1540LightData),
+                dot(q2016Bitangent, q1540LightData),
+                dot(q2016Normal, q1540LightData));
             // PC SLS vertex shader: dp3 T/B/N then rsq-normalize before oT1.
             float q1610LightLen2 = dot(q1540LightTangent, q1540LightTangent);
             vSp17LightEncodedQ1540 = q1540LightTangent *
@@ -579,19 +687,20 @@ GLuint CreateQ6HProgram() {
 
             // PC SLS: normalize(EyePosition - vertex), add LightData, normalize,
             // project the half vector into T/B/N, then normalize before oT3.
-            vec3 q1630ViewWorld = normalize(uEyePositionVertexQ1630 - aPosition);
+            vec3 q1630ViewWorld =
+                normalize(uEyePositionVertexQ1630 - q2016WorldPosition.xyz);
             vec3 q1630HalfWorld = normalize(q1630ViewWorld + q1540LightData);
             vec3 q1630HalfTangent = vec3(
-                dot(aTangent, q1630HalfWorld),
-                dot(aBitangent, q1630HalfWorld),
-                dot(aNormal, q1630HalfWorld));
+                dot(q2016Tangent, q1630HalfWorld),
+                dot(q2016Bitangent, q1630HalfWorld),
+                dot(q2016Normal, q1630HalfWorld));
             float q1630HalfLen2 = dot(q1630HalfTangent, q1630HalfTangent);
             vSp17HalfQ1630 = q1630HalfTangent *
                 inversesqrt(max(q1630HalfLen2, 1.0e-12));
-            vPosition = aPosition;
+            vPosition = q2016WorldPosition.xyz;
             vColor = aColor;
-            vShadowCoord = uLightMvp * vec4(aPosition, 1.0);
-            vec4 q1532Clip = uMvp * vec4(aPosition, 1.0);
+            vShadowCoord = uLightMvp * q2016WorldPosition;
+            vec4 q1532Clip = uMvp * q2016WorldPosition;
             gl_Position = q1532Clip;
             float q1532FogDistance = length(q1532Clip.xyz);
             float q1532FogT = 1.0 - clamp(
@@ -1195,6 +1304,7 @@ bool BuildCpuObjects(const Fo3WorldPlacement& placement, std::vector<CpuObject>&
 
         CpuObject out;
         out.placement = placement;
+        out.q2016ShapeIndex = static_cast<uint32_t>(shapeIndex);
         out.mesh = std::move(mesh);
         out.positionsGame.resize(vertexCount);
         out.normalsGame.resize(vertexCount);
@@ -1464,6 +1574,10 @@ bool UploadCpuObject(CpuObject& cpu, float centerX, float centerY, float floorZ,
     gpu.baseFormId = cpu.placement.baseFormId;
     gpu.editorId = cpu.placement.editorId;
     gpu.modelPath = cpu.placement.modelPath;
+    gpu.q2016ShapeIndex = cpu.q2016ShapeIndex;
+    Q2016BuildPlacementMatrix(
+        cpu.placement, centerX, centerY, floorZ,
+        gpu.q2016PlacementMatrix);
     gpu.q1970GridX = cpu.placement.hasExteriorGrid
         ? cpu.placement.gridX
         : static_cast<int32_t>(std::floor(cpu.placement.x / Q1890_EXTERIOR_CELL_SIZE));
@@ -1665,6 +1779,29 @@ bool UploadCpuObject(CpuObject& cpu, float centerX, float centerY, float floorZ,
 
     gpu.vertexCount =
         static_cast<GLsizei>(q1960ExpandedFloatCount / FLOATS_PER_VERTEX);
+
+    // Same NIF path + shape index means identical authored vertex/material
+    // content. Include render-state handles as a collision-resistant guard.
+    uint64_t q2016Hash =
+        static_cast<uint64_t>(std::hash<std::string>{}(gpu.modelPath));
+    auto q2016Mix = [&](uint64_t value) {
+        q2016Hash ^= value + 0x9e3779b97f4a7c15ULL +
+                     (q2016Hash << 6u) + (q2016Hash >> 2u);
+    };
+    q2016Mix(gpu.q2016ShapeIndex);
+    q2016Mix(static_cast<uint64_t>(gpu.vertexCount));
+    q2016Mix(static_cast<uint64_t>(gpu.diffuse));
+    q2016Mix(static_cast<uint64_t>(gpu.normal));
+    q2016Mix(static_cast<uint64_t>(gpu.glow));
+    q2016Mix(static_cast<uint64_t>(gpu.environmentCube));
+    q2016Mix(static_cast<uint64_t>(gpu.environmentMask));
+    q2016Mix(static_cast<uint64_t>(gpu.alphaTest));
+    q2016Mix(static_cast<uint64_t>(gpu.zBufferTestQ1200) << 1u |
+             static_cast<uint64_t>(gpu.zBufferWriteQ1200));
+    q2016Mix(static_cast<uint64_t>(gpu.stencilDrawModePresent) << 8u |
+             static_cast<uint64_t>(gpu.stencilDrawMode));
+    gpu.q2016BatchKey = q2016Hash == 0u ? 1u : q2016Hash;
+
     if (glGetError() != GL_NO_ERROR) return false;
 
     if (!gExteriorStreamingActiveQ1890) Q6H_LOGI("Q6H GPU OBJECT READY: ref=%08X EDID=%s model=%s triangles=%d diffuse=%s normal=%s alphaBlend=%d alphaTest=%d alpha=%.2f threshold=%.2f",
@@ -2016,6 +2153,8 @@ bool InitializeScene() {
     gProgram = CreateQ6HProgram();
     if (!gProgram) return false;
     gMvpLocation = glGetUniformLocation(gProgram, "uMvp");
+    gInstancingEnabledLocationQ2016 =
+        glGetUniformLocation(gProgram, "uInstancingEnabledQ2016");
     gDiffuseLocation = glGetUniformLocation(gProgram, "uDiffuse");
     gNormalLocation = glGetUniformLocation(gProgram, "uNormalGloss");
     gGlossinessLocation = glGetUniformLocation(gProgram, "uGlossiness");
@@ -4138,6 +4277,10 @@ void DrawSceneObject(const GpuObject& object, bool environmentPassQ2050 = false)
     if (!Q1970ShouldRenderFullDetail(object)) return;
     if (!Q2015AabbVisible(object)) return;
     if (environmentPassQ2050 && !object.environmentEnabledQ2050) return;
+    if (gInstancingEnabledLocationQ2016 >= 0) {
+        glUniform1f(gInstancingEnabledLocationQ2016,
+                    gInstancedDrawActiveQ2016 ? 1.0f : 0.0f);
+    }
 
     float q1900LodClipCells[25 * 4]{};
     int q1900LodClipCount = 0;
@@ -4205,6 +4348,33 @@ void DrawSceneObject(const GpuObject& object, bool environmentPassQ2050 = false)
     glActiveTexture(GL_TEXTURE0);
     glBindVertexArray(object.vao);
 
+    if (gInstancedDrawActiveQ2016 &&
+        gInstanceMatricesQ2016.size() >= 32u) {
+        if (gInstanceBufferQ2016 == 0u) {
+            glGenBuffers(1, &gInstanceBufferQ2016);
+        }
+        glBindBuffer(GL_ARRAY_BUFFER, gInstanceBufferQ2016);
+        glBufferData(
+            GL_ARRAY_BUFFER,
+            static_cast<GLsizeiptr>(
+                gInstanceMatricesQ2016.size() * sizeof(float)),
+            gInstanceMatricesQ2016.data(),
+            GL_STREAM_DRAW);
+        constexpr GLsizei q2016Stride =
+            static_cast<GLsizei>(16u * sizeof(float));
+        for (GLuint q2016Column = 0u; q2016Column < 4u; ++q2016Column) {
+            const GLuint location = 6u + q2016Column;
+            glEnableVertexAttribArray(location);
+            glVertexAttribPointer(
+                location, 4, GL_FLOAT, GL_FALSE, q2016Stride,
+                reinterpret_cast<const void*>(
+                    static_cast<uintptr_t>(
+                        q2016Column * 4u * sizeof(float))));
+            glVertexAttribDivisor(location, 1u);
+        }
+        glBindBuffer(GL_ARRAY_BUFFER, 0u);
+    }
+
     if (object.modelPath.find("megatonbrasslanternsign") != std::string::npos ||
         object.modelPath.find("megatonchurchofatom") != std::string::npos ||
         object.modelPath.find("signstop02") != std::string::npos) {
@@ -4249,7 +4419,20 @@ void DrawSceneObject(const GpuObject& object, bool environmentPassQ2050 = false)
         glPolygonOffset(-0.65f, -1.0f);
     }
 
-    glDrawArrays(GL_TRIANGLES, 0, object.vertexCount);
+    if (gInstancedDrawActiveQ2016 &&
+        gInstanceMatricesQ2016.size() >= 32u) {
+        const GLsizei q2016Instances = static_cast<GLsizei>(
+            gInstanceMatricesQ2016.size() / 16u);
+        glDrawArraysInstanced(
+            GL_TRIANGLES, 0, object.vertexCount, q2016Instances);
+        for (GLuint q2016Column = 0u; q2016Column < 4u; ++q2016Column) {
+            const GLuint location = 6u + q2016Column;
+            glVertexAttribDivisor(location, 0u);
+            glDisableVertexAttribArray(location);
+        }
+    } else {
+        glDrawArrays(GL_TRIANGLES, 0, object.vertexCount);
+    }
 
     if (object.decalQ1170) {
         glPolygonOffset(q1170OldFactor, q1170OldUnits);
@@ -4262,6 +4445,137 @@ void DrawSceneObject(const GpuObject& object, bool environmentPassQ2050 = false)
     if (q1160CullWasEnabled) glEnable(GL_CULL_FACE); else glDisable(GL_CULL_FACE);
 }
 
+bool Q2016EligibleForInstancing(const GpuObject& object) {
+    return gExteriorStreamingActiveQ1890 &&
+           !object.q1990NativeLod &&
+           !object.alphaBlend &&
+           !object.decalQ1170 &&
+           !object.externalEmittanceFlagQ1380 &&
+           object.baseRecordType != "DOOR" &&
+           object.q2016BatchKey != 0u &&
+           object.vao != 0u &&
+           object.vertexCount > 0;
+}
+
+void Q2016RenderOpaqueDetailedInstanced() {
+    std::unordered_map<uint64_t, std::vector<const GpuObject*>> groups;
+    groups.reserve(gObjects.size() / 3u + 1u);
+    std::vector<const GpuObject*> singles;
+    singles.reserve(gObjects.size() / 4u + 1u);
+
+    size_t visible = 0u;
+    for (const GpuObject& object : gObjects) {
+        if (object.alphaBlend) continue;
+        if (!Q1970ShouldRenderFullDetail(object)) continue;
+        if (!Q2015AabbVisible(object)) continue;
+        ++visible;
+        if (Q2016EligibleForInstancing(object)) {
+            groups[object.q2016BatchKey].push_back(&object);
+        } else {
+            singles.push_back(&object);
+        }
+    }
+
+    size_t instancedObjects = 0u;
+    size_t instancedDraws = 0u;
+    size_t fallbackDraws = 0u;
+    size_t largestBatch = 0u;
+
+    for (const GpuObject* object : singles) {
+        if (!object) continue;
+        if (object->zBufferTestQ1200) glEnable(GL_DEPTH_TEST);
+        else glDisable(GL_DEPTH_TEST);
+        glDepthMask(object->zBufferWriteQ1200 ? GL_TRUE : GL_FALSE);
+        DrawSceneObject(*object);
+        ++fallbackDraws;
+    }
+
+    for (auto& entry : groups) {
+        std::vector<const GpuObject*>& batch = entry.second;
+        if (batch.empty()) continue;
+
+        const GpuObject* representative = batch.front();
+        std::vector<const GpuObject*> valid;
+        valid.reserve(batch.size());
+        gInstanceMatricesQ2016.clear();
+        gInstanceMatricesQ2016.reserve(batch.size() * 16u);
+
+        for (const GpuObject* target : batch) {
+            if (!target ||
+                target->vertexCount != representative->vertexCount ||
+                target->diffuse != representative->diffuse ||
+                target->normal != representative->normal ||
+                target->glow != representative->glow ||
+                target->environmentCube != representative->environmentCube ||
+                target->environmentMask != representative->environmentMask) {
+                continue;
+            }
+            float relative[16]{};
+            if (!Q2016RelativeMatrix(
+                    representative->q2016PlacementMatrix,
+                    target->q2016PlacementMatrix,
+                    relative)) {
+                continue;
+            }
+            gInstanceMatricesQ2016.insert(
+                gInstanceMatricesQ2016.end(), relative, relative + 16);
+            valid.push_back(target);
+        }
+
+        if (valid.size() < 2u) {
+            for (const GpuObject* object : batch) {
+                if (!object) continue;
+                if (object->zBufferTestQ1200) glEnable(GL_DEPTH_TEST);
+                else glDisable(GL_DEPTH_TEST);
+                glDepthMask(object->zBufferWriteQ1200 ? GL_TRUE : GL_FALSE);
+                DrawSceneObject(*object);
+                ++fallbackDraws;
+            }
+            continue;
+        }
+
+        if (representative->zBufferTestQ1200) glEnable(GL_DEPTH_TEST);
+        else glDisable(GL_DEPTH_TEST);
+        glDepthMask(representative->zBufferWriteQ1200 ? GL_TRUE : GL_FALSE);
+
+        gInstancedDrawActiveQ2016 = true;
+        DrawSceneObject(*representative);
+        gInstancedDrawActiveQ2016 = false;
+
+        instancedObjects += valid.size();
+        ++instancedDraws;
+        largestBatch = std::max(largestBatch, valid.size());
+
+        // Hash collisions/material mismatches remain ordinary draws.
+        if (valid.size() != batch.size()) {
+            for (const GpuObject* object : batch) {
+                if (!object ||
+                    std::find(valid.begin(), valid.end(), object) != valid.end())
+                    continue;
+                if (object->zBufferTestQ1200) glEnable(GL_DEPTH_TEST);
+                else glDisable(GL_DEPTH_TEST);
+                glDepthMask(object->zBufferWriteQ1200 ? GL_TRUE : GL_FALSE);
+                DrawSceneObject(*object);
+                ++fallbackDraws;
+            }
+        }
+    }
+
+    static uint64_t q2016EyePasses = 0u;
+    ++q2016EyePasses;
+    if ((q2016EyePasses % 240u) == 1u) {
+        const size_t saved =
+            instancedObjects > instancedDraws
+                ? instancedObjects - instancedDraws : 0u;
+        Q6H_LOGI("Q20.16 INSTANCING: visibleOpaque=%zu groups=%zu instancedObjects=%zu instancedDraws=%zu fallbackDraws=%zu drawsSaved=%zu largestBatch=%zu liveShapes=%zu path=representative-world-vbo+relative-matrix specialCases=doors,blend,decal,external-emittance",
+                 visible, groups.size(), instancedObjects, instancedDraws,
+                 fallbackDraws, saved, largestBatch, gObjects.size());
+    }
+
+    gInstancedDrawActiveQ2016 = false;
+    gInstanceMatricesQ2016.clear();
+}
+
 bool Q1030InitializeRenderProgramOnly() {
     if (gProgram) return true;
     gProgram = CreateQ6HProgram();
@@ -4271,6 +4585,8 @@ bool Q1030InitializeRenderProgramOnly() {
     }
 
     gMvpLocation = glGetUniformLocation(gProgram, "uMvp");
+    gInstancingEnabledLocationQ2016 =
+        glGetUniformLocation(gProgram, "uInstancingEnabledQ2016");
     gDiffuseLocation = glGetUniformLocation(gProgram, "uDiffuse");
     gNormalLocation = glGetUniformLocation(gProgram, "uNormalGloss");
     gGlossinessLocation = glGetUniformLocation(gProgram, "uGlossiness");
@@ -5708,12 +6024,7 @@ void RenderScene() {
     glActiveTexture(GL_TEXTURE0);
     glDisable(GL_BLEND);
     Q1990RenderNativeLod(false);
-    for (const GpuObject& object : gObjects) {
-        if (object.alphaBlend) continue;
-        if (object.zBufferTestQ1200) glEnable(GL_DEPTH_TEST); else glDisable(GL_DEPTH_TEST);
-        glDepthMask(object.zBufferWriteQ1200 ? GL_TRUE : GL_FALSE);
-        DrawSceneObject(object);
-    }
+    Q2016RenderOpaqueDetailedInstanced();
 
     glEnable(GL_BLEND);
     Q1990RenderNativeLod(true);
