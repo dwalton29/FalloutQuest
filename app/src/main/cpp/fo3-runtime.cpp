@@ -7988,7 +7988,7 @@ bool Q217EnsureFingerRig(
     }
     rig.summary = summary;
 
-    Q6H_LOGI("Q21.18 FINGER MAP: side=%s ready=%d indexChain=%d chains=%zu thumbBones=%zu order=authored-numeric-suffix bendAxis=segment-cross-palm bones=%s",
+    Q6H_LOGI("Q21.19 FINGER MAP: side=%s ready=%d indexChain=%d chains=%zu thumbBones=%zu order=authored-numeric-suffix bendAxis=segment-cross-palm bones=%s",
              left ? "L" : "R",
              rig.ready ? 1 : 0,
              rig.indexChain,
@@ -8050,9 +8050,11 @@ std::unordered_map<std::string, Q211Delta> Q217BuildFingerPose(
             segmentDirection = Q211NormalizeSafe(
                 segmentDirection, rig.fingerForward);
 
-            // For unit segment v and palm direction p, axis=v x p gives
-            // axis x v = p (when orthogonal), so a positive angle always
-            // bends the authored segment into the palm.
+            // Q21.19 headset verification showed the authored palm normal used
+            // by the wrist basis has the opposite sign for finger flexion.
+            // Keep the per-joint authored axis/order from Q21.18, but invert
+            // only the four finger-chain bend angles. Thumb opposition below
+            // is already correct and remains untouched.
             Vec3 restAxis =
                 Q211Cross(segmentDirection, basis.intoPalm);
             if (Q211Length(restAxis) < 0.005f)
@@ -8073,7 +8075,7 @@ std::unordered_map<std::string, Q211Delta> Q217BuildFingerPose(
             const Q211Delta bend = Q218MakePivotRotation(
                 pivot,
                 axis,
-                curl * degrees * DEG);
+                -curl * degrees * DEG);
             cumulative = Q218ComposeRigid(cumulative, bend);
             out[joint.name] = cumulative;
         }
@@ -8705,7 +8707,7 @@ void Q211UpdatePlayerRig() {
                  q220RightAuthoredBasis.intoPalm.y,
                  q220RightAuthoredBasis.intoPalm.z,
                  Q214_HAND_OUTWARD_OFFSET);
-        Q6H_LOGI("Q21.18 FINGER INPUT: L(trigger=%.2f triggerTouch=%d grip=%.2f thumbTouch=%d posedBones=%zu) R(trigger=%.2f triggerTouch=%d grip=%.2f thumbTouch=%d posedBones=%zu) mapping=index=trigger lower3=squeeze thumb=capacitive",
+        Q6H_LOGI("Q21.19 FINGER INPUT: L(trigger=%.2f triggerTouch=%d grip=%.2f thumbTouch=%d posedBones=%zu) R(trigger=%.2f triggerTouch=%d grip=%.2f thumbTouch=%d posedBones=%zu) mapping=index=trigger lower3=squeeze thumb=capacitive",
                  gQ217FingerTrigger[0],
                  gQ217TriggerTouched[0] ? 1 : 0,
                  gQ217FingerGrip[0],
