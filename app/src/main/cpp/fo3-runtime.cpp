@@ -7670,7 +7670,7 @@ void Q211UpdatePlayerRig() {
     glBindBuffer(GL_ARRAY_BUFFER, 0);
 
     if ((gQ211TrackingSerial % 180u) == 1u) {
-        Q6H_LOGI("Q21.1B ARM IK: serial=%llu rigParts=%zu headAnchorReady=%d headAnchor=(%.3f %.3f %.3f) trackedHeadRoot=(%.3f %.3f %.3f) leftValid=%d leftSolved=%d targetL=(%.3f %.3f %.3f) elbowL=(%.3f %.3f %.3f) rightValid=%d rightSolved=%d targetR=(%.3f %.3f %.3f) elbowR=(%.3f %.3f %.3f) mode=weighted-LBS-two-bone-IK targetSpace=HMD-relative-to-authored-head wristOrientation=forearm",
+        Q6H_LOGI("Q21.1C ARM IK: serial=%llu rigParts=%zu headAnchorReady=%d headAnchor=(%.3f %.3f %.3f) trackedHeadRoot=(%.3f %.3f %.3f) leftValid=%d leftSolved=%d targetL=(%.3f %.3f %.3f) elbowL=(%.3f %.3f %.3f) rightValid=%d rightSolved=%d targetR=(%.3f %.3f %.3f) elbowR=(%.3f %.3f %.3f) mode=weighted-LBS-two-bone-IK targetSpace=HMD-relative-to-authored-head wristOrientation=forearm",
                  static_cast<unsigned long long>(gQ211TrackingSerial),
                  gQ211PlayerRigParts.size(),
                  avatarHeadReady ? 1 : 0,
@@ -7832,14 +7832,33 @@ bool Q210EnsurePlayerBody() {
                     rig.rightForearm >= 0 &&
                     rig.rightHand >= 0;
 
-                Q6H_LOGI("Q21.1 RIG PART: model=%s shape=%u gpuIndex=%zu bones=%zu expandedVertices=%zu leftChain=%d indices=(%d,%d,%d) rightChain=%d indices=(%d,%d,%d)",
+                Vec3 q211cLUpper{}, q211cLFore{}, q211cLHand{};
+                Vec3 q211cRUpper{}, q211cRFore{}, q211cRHand{};
+                if (rig.leftChainReady) {
+                    q211cLUpper = Q211BindBonePoint(rig.bones[rig.leftUpperArm]);
+                    q211cLFore = Q211BindBonePoint(rig.bones[rig.leftForearm]);
+                    q211cLHand = Q211BindBonePoint(rig.bones[rig.leftHand]);
+                }
+                if (rig.rightChainReady) {
+                    q211cRUpper = Q211BindBonePoint(rig.bones[rig.rightUpperArm]);
+                    q211cRFore = Q211BindBonePoint(rig.bones[rig.rightForearm]);
+                    q211cRHand = Q211BindBonePoint(rig.bones[rig.rightHand]);
+                }
+
+                Q6H_LOGI("Q21.1C RIG PART: model=%s shape=%u gpuIndex=%zu bones=%zu expandedVertices=%zu leftChain=%d indices=(%d,%d,%d) bindLUpper=(%.3f %.3f %.3f) bindLFore=(%.3f %.3f %.3f) bindLHand=(%.3f %.3f %.3f) rightChain=%d indices=(%d,%d,%d) bindRUpper=(%.3f %.3f %.3f) bindRFore=(%.3f %.3f %.3f) bindRHand=(%.3f %.3f %.3f)",
                          path.c_str(), part.q2016ShapeIndex,
                          q211GpuIndex, rig.bones.size(),
                          rig.bindExpanded.size() / 18u,
                          rig.leftChainReady ? 1 : 0,
                          rig.leftUpperArm, rig.leftForearm, rig.leftHand,
+                         q211cLUpper.x, q211cLUpper.y, q211cLUpper.z,
+                         q211cLFore.x, q211cLFore.y, q211cLFore.z,
+                         q211cLHand.x, q211cLHand.y, q211cLHand.z,
                          rig.rightChainReady ? 1 : 0,
-                         rig.rightUpperArm, rig.rightForearm, rig.rightHand);
+                         rig.rightUpperArm, rig.rightForearm, rig.rightHand,
+                         q211cRUpper.x, q211cRUpper.y, q211cRUpper.z,
+                         q211cRFore.x, q211cRFore.y, q211cRFore.z,
+                         q211cRHand.x, q211cRHand.y, q211cRHand.z);
 
                 if (rig.expandedBoneIndices.size() ==
                         (rig.bindExpanded.size() / 18u) * 4u) {
@@ -7851,7 +7870,7 @@ bool Q210EnsurePlayerBody() {
     }
 
     gQ210PlayerBodyReady = !gQ210PlayerBody.empty();
-    Q6H_LOGI("Q21.1 PLAYER BODY READY: ready=%d archiveMaleEntries=%zu bodyPartsFound=%zu cpuShapes=%zu gpuShapes=%zu rigParts=%zu triangles=%zu skinInstances=%zu referencedBonesAcrossParts=%zu skeletonNodes=%u skeletonNamedNodes=%zu mode=real-FO3-weighted-skinning armIK=two-bone",
+    Q6H_LOGI("Q21.1C PLAYER BODY READY: ready=%d archiveMaleEntries=%zu bodyPartsFound=%zu cpuShapes=%zu gpuShapes=%zu rigParts=%zu triangles=%zu skinInstances=%zu referencedBonesAcrossParts=%zu skeletonNodes=%u skeletonNamedNodes=%zu mode=real-FO3-weighted-skinning armIK=two-bone",
              gQ210PlayerBodyReady ? 1 : 0,
              maleEntries.size(), bodyPaths.size(),
              cpuShapes, gpuShapes, gQ211PlayerRigParts.size(), triangles,
