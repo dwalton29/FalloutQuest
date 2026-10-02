@@ -9251,7 +9251,7 @@ void SetFo3PlayerBodyTrackingQ210(
     gQ210PlayerRoot[8] = s;
     gQ210PlayerRoot[10] = c;
     gQ210PlayerRoot[12] = rootX;
-    gQ210PlayerRoot[13] = 0.0f;
+    gQ210PlayerRoot[13] = headY - 1.70f;
     gQ210PlayerRoot[14] = rootZ;
     gQ210PlayerRoot[15] = 1.0f;
 }
