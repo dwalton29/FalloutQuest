@@ -22,6 +22,7 @@ extern void PumpFo3AndroidEventsQ1860();
 #include "fo3-bsa-reader.h"
 #include "fo3-texture-bsa.h"
 #include "fo3-collision-overlay.h"
+#include "fo3-nif-collision-q6f.h"
 #include "fo3-transition-q74.h"
 #include "fo3-environment-q1000.h"
 #include "fo3-imagespace-q1280.h"
@@ -319,6 +320,7 @@ struct GpuObject {
     bool q2025HighPriorityLod = false;
     bool q210PlayerBody = false;
     bool q220LooseObject = false;
+    float q223PlacementScale = 1.0f;
     float q220DynamicTransform[16]{
         1,0,0,0,
         0,1,0,0,
@@ -1942,10 +1944,11 @@ bool UploadCpuObject(CpuObject& cpu, float centerX, float centerY, float floorZ,
     gpu.q220LooseObject =
         cpu.placement.refFormId != 0u &&
         Q220IsLooseRecordType(gpu.baseRecordType);
+    gpu.q223PlacementScale = cpu.placement.scale;
     if (gpu.q220LooseObject) {
         static std::unordered_set<uint32_t> q220LoggedRefs;
         if (q220LoggedRefs.insert(gpu.refFormId).second) {
-            Q6H_LOGI("Q22.2 LOOSE CANDIDATE: ref=%08X base=%08X type=%s edid=%s model=%s",
+            Q6H_LOGI("Q22.3 LOOSE CANDIDATE: ref=%08X base=%08X type=%s edid=%s model=%s",
                      gpu.refFormId, gpu.baseFormId,
                      gpu.baseRecordType.c_str(),
                      gpu.editorId.empty() ? "<none>" : gpu.editorId.c_str(),
@@ -7379,6 +7382,27 @@ void Q220ControllerDeltaMatrix(
     out[14] = currentPos.z - rotatedStart.z;
 }
 
+struct Q223DynamicBody {
+    uint32_t refFormId = 0u;
+    bool initialized = false;
+    bool held = false;
+    bool dynamic = false;
+    Vec3 authoredCenter{};
+    float collisionRadius = 0.0f;
+    Vec3 linearVelocity{};
+    Vec3 angularVelocity{};
+    Vec3 lastPalm{};
+    float lastPalmQuat[4]{0,0,0,1};
+    Vec3 sampledLinearVelocity{};
+    Vec3 sampledAngularVelocity{};
+    std::chrono::steady_clock::time_point lastPalmSample{};
+    std::chrono::steady_clock::time_point lastPhysicsStep{};
+    std::string modelPath;
+};
+
+std::unordered_map<uint32_t, Q223DynamicBody> gQ223DynamicBodies;
+std::unordered_map<std::string, float> gQ223CollisionRadiusUnitsCache;
+
 struct Q220GrabState {
     bool active = false;
     uint32_t refFormId = 0u;
@@ -7398,6 +7422,7 @@ Q220GrabState gQ220Grab[2];
 void Q220ResetGrabState() {
     gQ220Grab[0] = {};
     gQ220Grab[1] = {};
+    gQ223DynamicBodies.clear();
 }
 
 void Q220SetRefTransform(uint32_t refFormId, const float transform[16]) {
@@ -7406,6 +7431,363 @@ void Q220SetRefTransform(uint32_t refFormId, const float transform[16]) {
             object.refFormId == refFormId) {
             std::copy(transform, transform + 16,
                       object.q220DynamicTransform);
+        }
+    }
+}
+
+bool Q223GetRefTransform(uint32_t refFormId, float out[16]) {
+    for (const GpuObject& object : gObjects) {
+        if (object.q220LooseObject &&
+            object.refFormId == refFormId) {
+            std::copy(
+                object.q220DynamicTransform,
+                object.q220DynamicTransform + 16,
+                out);
+            return true;
+        }
+    }
+    Q220Identity(out);
+    return false;
+}
+
+float Q223CollisionRadiusUnits(const std::string& modelPath) {
+    const auto cached =
+        gQ223CollisionRadiusUnitsCache.find(modelPath);
+    if (cached != gQ223CollisionRadiusUnitsCache.end())
+        return cached->second;
+
+    std::vector<Fo3NifCollisionShapeQ6F> shapes;
+    if (!LoadFo3NifCollisionShapesQ6F(modelPath, shapes) ||
+        shapes.empty()) {
+        gQ223CollisionRadiusUnitsCache[modelPath] = 0.0f;
+        return 0.0f;
+    }
+
+    Vec3 minimum{1e30f,1e30f,1e30f};
+    Vec3 maximum{-1e30f,-1e30f,-1e30f};
+    size_t points = 0u;
+    for (const Fo3NifCollisionShapeQ6F& shape : shapes) {
+        for (size_t i = 0u;
+             i + 2u < shape.positions.size();
+             i += 3u) {
+            const Vec3 p{
+                shape.positions[i + 0u],
+                shape.positions[i + 1u],
+                shape.positions[i + 2u]};
+            minimum.x = std::min(minimum.x, p.x);
+            minimum.y = std::min(minimum.y, p.y);
+            minimum.z = std::min(minimum.z, p.z);
+            maximum.x = std::max(maximum.x, p.x);
+            maximum.y = std::max(maximum.y, p.y);
+            maximum.z = std::max(maximum.z, p.z);
+            ++points;
+        }
+    }
+
+    if (points == 0u) {
+        gQ223CollisionRadiusUnitsCache[modelPath] = 0.0f;
+        return 0.0f;
+    }
+
+    const Vec3 half{
+        (maximum.x - minimum.x) * 0.5f,
+        (maximum.y - minimum.y) * 0.5f,
+        (maximum.z - minimum.z) * 0.5f};
+    const float radius = Q211Length(half);
+    gQ223CollisionRadiusUnitsCache[modelPath] = radius;
+    return radius;
+}
+
+Q223DynamicBody* Q223EnsureDynamicBody(uint32_t refFormId) {
+    auto existing = gQ223DynamicBodies.find(refFormId);
+    if (existing != gQ223DynamicBodies.end())
+        return &existing->second;
+
+    Vec3 minimum{1e30f,1e30f,1e30f};
+    Vec3 maximum{-1e30f,-1e30f,-1e30f};
+    std::string modelPath;
+    float placementScale = 1.0f;
+    bool found = false;
+
+    for (const GpuObject& object : gObjects) {
+        if (!object.q220LooseObject ||
+            object.refFormId != refFormId) {
+            continue;
+        }
+        minimum.x = std::min(minimum.x, object.minX);
+        minimum.y = std::min(minimum.y, object.minY);
+        minimum.z = std::min(minimum.z, object.minZ);
+        maximum.x = std::max(maximum.x, object.maxX);
+        maximum.y = std::max(maximum.y, object.maxY);
+        maximum.z = std::max(maximum.z, object.maxZ);
+        if (modelPath.empty()) {
+            modelPath = object.modelPath;
+            placementScale = object.q223PlacementScale;
+        }
+        found = true;
+    }
+    if (!found || modelPath.empty()) return nullptr;
+
+    Q223DynamicBody body;
+    body.refFormId = refFormId;
+    body.initialized = true;
+    body.authoredCenter = {
+        (minimum.x + maximum.x) * 0.5f,
+        (minimum.y + maximum.y) * 0.5f,
+        (minimum.z + maximum.z) * 0.5f};
+    body.modelPath = modelPath;
+
+    const float radiusUnits =
+        Q223CollisionRadiusUnits(modelPath);
+    body.collisionRadius =
+        radiusUnits > 0.0f
+            ? (radiusUnits * placementScale) /
+                  FO3_UNITS_PER_METRE
+            : 0.0f;
+
+    Q6H_LOGI("Q22.3 PHYSICS BODY: ref=%08X model=%s radius=%.4fm source=authored-bhk-bounds placementScale=%.3f physics=%s",
+             refFormId, modelPath.c_str(),
+             body.collisionRadius, placementScale,
+             body.collisionRadius > 0.0f
+                 ? "enabled"
+                 : "disabled-no-authored-bhk");
+
+    auto inserted =
+        gQ223DynamicBodies.emplace(refFormId, std::move(body));
+    return &inserted.first->second;
+}
+
+void Q223SampleHeldMotion(
+        Q223DynamicBody& body,
+        Vec3 palm,
+        const float quat[4]) {
+    const auto now = std::chrono::steady_clock::now();
+    if (body.lastPalmSample.time_since_epoch().count() != 0) {
+        const float dt =
+            std::chrono::duration<float>(
+                now - body.lastPalmSample).count();
+        if (dt >= 0.001f && dt <= 0.050f) {
+            body.sampledLinearVelocity =
+                Q211Mul(
+                    Q211Sub(palm, body.lastPalm),
+                    1.0f / dt);
+
+            const float sx = -body.lastPalmQuat[0];
+            const float sy = -body.lastPalmQuat[1];
+            const float sz = -body.lastPalmQuat[2];
+            const float sw =  body.lastPalmQuat[3];
+            const float cx = quat[0], cy = quat[1],
+                        cz = quat[2], cw = quat[3];
+            float qx = cw*sx + cx*sw + cy*sz - cz*sy;
+            float qy = cw*sy - cx*sz + cy*sw + cz*sx;
+            float qz = cw*sz + cx*sy - cy*sx + cz*sw;
+            float qw = cw*sw - cx*sx - cy*sy - cz*sz;
+
+            const float qlen =
+                std::sqrt(
+                    qx*qx + qy*qy + qz*qz + qw*qw);
+            if (qlen > 1.0e-6f) {
+                qx /= qlen; qy /= qlen;
+                qz /= qlen; qw /= qlen;
+            }
+            if (qw < 0.0f) {
+                qx = -qx; qy = -qy;
+                qz = -qz; qw = -qw;
+            }
+            qw = std::clamp(qw, -1.0f, 1.0f);
+            const float angle = 2.0f * std::acos(qw);
+            const float sinHalf =
+                std::sqrt(
+                    std::max(0.0f, 1.0f - qw*qw));
+            if (angle > 1.0e-5f &&
+                sinHalf > 1.0e-5f) {
+                const Vec3 axis{
+                    qx / sinHalf,
+                    qy / sinHalf,
+                    qz / sinHalf};
+                body.sampledAngularVelocity =
+                    Q211Mul(axis, angle / dt);
+            } else {
+                body.sampledAngularVelocity = {};
+            }
+        }
+    }
+
+    body.lastPalm = palm;
+    std::copy(quat, quat + 4, body.lastPalmQuat);
+    body.lastPalmSample = now;
+}
+
+void Q223BuildMotionDelta(
+        Vec3 currentCenter,
+        Vec3 desiredCenter,
+        Vec3 angularVelocity,
+        float dt,
+        float out[16]) {
+    Q220Identity(out);
+
+    const float omega = Q211Length(angularVelocity);
+    if (omega > 1.0e-5f) {
+        const Vec3 axis =
+            Q211Mul(angularVelocity, 1.0f / omega);
+        const float angle = omega * dt;
+        const float c = std::cos(angle);
+        const float s = std::sin(angle);
+        const float t = 1.0f - c;
+        const float x = axis.x, y = axis.y, z = axis.z;
+
+        out[0] = t*x*x + c;
+        out[1] = t*x*y + s*z;
+        out[2] = t*x*z - s*y;
+        out[4] = t*x*y - s*z;
+        out[5] = t*y*y + c;
+        out[6] = t*y*z + s*x;
+        out[8] = t*x*z + s*y;
+        out[9] = t*y*z - s*x;
+        out[10] = t*z*z + c;
+    }
+
+    const Vec3 rotatedCenter{
+        out[0]*currentCenter.x +
+            out[4]*currentCenter.y +
+            out[8]*currentCenter.z,
+        out[1]*currentCenter.x +
+            out[5]*currentCenter.y +
+            out[9]*currentCenter.z,
+        out[2]*currentCenter.x +
+            out[6]*currentCenter.y +
+            out[10]*currentCenter.z};
+    out[12] = desiredCenter.x - rotatedCenter.x;
+    out[13] = desiredCenter.y - rotatedCenter.y;
+    out[14] = desiredCenter.z - rotatedCenter.z;
+}
+
+void Q223AdvanceDynamicBodies() {
+    if (gQ223DynamicBodies.empty()) return;
+
+    const auto now = std::chrono::steady_clock::now();
+    // Q22.3 standalone-VR runtime liberty: SI Earth gravity. Fallout's
+    // supplied INI/ESM does not expose an unambiguous gravity acceleration.
+    constexpr float GRAVITY_MPS2 = 9.80665f;
+    // Fallout.ini [HAVOK] fMaxTime=0.016.
+    constexpr float HAVOK_MAX_STEP = 0.016f;
+
+    for (auto& entry : gQ223DynamicBodies) {
+        Q223DynamicBody& body = entry.second;
+        if (!body.dynamic || body.held ||
+            !(body.collisionRadius > 0.0f)) {
+            continue;
+        }
+
+        if (body.lastPhysicsStep.time_since_epoch().count() == 0) {
+            body.lastPhysicsStep = now;
+            continue;
+        }
+
+        float remaining =
+            std::chrono::duration<float>(
+                now - body.lastPhysicsStep).count();
+        body.lastPhysicsStep = now;
+        if (!(remaining > 0.0f)) continue;
+
+        // Avoid a headset pause/resume producing seconds of catch-up work.
+        remaining = std::min(remaining, 0.064f);
+
+        while (remaining > 0.00001f) {
+            const float dt =
+                std::min(remaining, HAVOK_MAX_STEP);
+            remaining -= dt;
+
+            float currentTransform[16]{};
+            if (!Q223GetRefTransform(
+                    body.refFormId,
+                    currentTransform)) {
+                body.dynamic = false;
+                break;
+            }
+
+            const Vec3 currentCenter =
+                Q220TransformPoint(
+                    currentTransform,
+                    body.authoredCenter);
+
+            body.linearVelocity.y -=
+                GRAVITY_MPS2 * dt;
+            const Vec3 desiredCenter =
+                Q211Add(
+                    currentCenter,
+                    Q211Mul(body.linearVelocity, dt));
+
+            float rx = desiredCenter.x;
+            float ry = desiredCenter.y;
+            float rz = desiredCenter.z;
+            float nx = 0.0f, ny = 0.0f, nz = 0.0f;
+            uint32_t contacts = 0u;
+
+            const bool collisionReady =
+                ResolveFo3DynamicSphereQ223(
+                    body.refFormId,
+                    currentCenter.x,
+                    currentCenter.y,
+                    currentCenter.z,
+                    desiredCenter.x,
+                    desiredCenter.y,
+                    desiredCenter.z,
+                    body.collisionRadius,
+                    &rx, &ry, &rz,
+                    &nx, &ny, &nz,
+                    &contacts);
+
+            const Vec3 resolvedCenter{rx, ry, rz};
+            if (collisionReady && contacts > 0u) {
+                const Vec3 normal =
+                    Q211NormalizeSafe(
+                        Vec3{nx, ny, nz},
+                        Vec3{0.0f, 1.0f, 0.0f});
+                const float inward =
+                    Q211Dot(
+                        body.linearVelocity,
+                        normal);
+                if (inward < 0.0f) {
+                    body.linearVelocity =
+                        Q211Sub(
+                            body.linearVelocity,
+                            Q211Mul(normal, inward));
+                }
+
+                // First contact model is intentionally non-bouncy. Authored
+                // Havok material restitution/friction comes next.
+                body.angularVelocity = {};
+
+                static uint64_t q223ContactLog = 0u;
+                ++q223ContactLog;
+                if (q223ContactLog <= 40u ||
+                    (q223ContactLog % 180u) == 0u) {
+                    Q6H_LOGI("Q22.3 CONTACT: ref=%08X contacts=%u radius=%.3f normal=(%.2f %.2f %.2f) velocity=(%.2f %.2f %.2f)",
+                             body.refFormId, contacts,
+                             body.collisionRadius,
+                             normal.x, normal.y, normal.z,
+                             body.linearVelocity.x,
+                             body.linearVelocity.y,
+                             body.linearVelocity.z);
+                }
+            }
+
+            float motionDelta[16]{};
+            Q223BuildMotionDelta(
+                currentCenter,
+                resolvedCenter,
+                body.angularVelocity,
+                dt,
+                motionDelta);
+            float finalTransform[16]{};
+            Q220MulMat4(
+                motionDelta,
+                currentTransform,
+                finalTransform);
+            Q220SetRefTransform(
+                body.refFormId,
+                finalTransform);
         }
     }
 }
@@ -7496,6 +7878,20 @@ void Q220UpdateLooseGrab(
             state.startPalm = hand;
             std::copy(quat, quat + 4, state.startQuat);
 
+            if (Q223DynamicBody* body =
+                    Q223EnsureDynamicBody(ref)) {
+                body->held = true;
+                body->dynamic = false;
+                body->linearVelocity = {};
+                body->angularVelocity = {};
+                body->sampledLinearVelocity = {};
+                body->sampledAngularVelocity = {};
+                body->lastPalmSample = {};
+                body->lastPhysicsStep = {};
+                Q223SampleHeldMotion(
+                    *body, hand, quat);
+            }
+
             float existingTransform[16]{};
             bool copied = false;
             for (const GpuObject& object : gObjects) {
@@ -7527,7 +7923,7 @@ void Q220UpdateLooseGrab(
 
             const float snapDistance =
                 Q211Length(Q211Sub(hand, center));
-            Q6H_LOGI("Q22.2 GRAB BEGIN: hand=%s ref=%08X surfaceDistance=%.3f snapDistance=%.3f objectCenter=(%.3f %.3f %.3f) palm=(%.3f %.3f %.3f) anchor=authored-bounds-center-to-weighted-player-palm",
+            Q6H_LOGI("Q22.3 GRAB BEGIN: hand=%s ref=%08X surfaceDistance=%.3f snapDistance=%.3f objectCenter=(%.3f %.3f %.3f) palm=(%.3f %.3f %.3f) anchor=authored-bounds-center-to-weighted-player-palm",
                      handIndex == 0 ? "L" : "R",
                      ref, distance, snapDistance,
                      center.x, center.y, center.z,
@@ -7537,9 +7933,32 @@ void Q220UpdateLooseGrab(
 
     if (state.active) {
         if (grip <= RELEASE) {
-            Q6H_LOGI("Q22.2 GRAB RELEASE: hand=%s ref=%08X mode=drop-in-place-no-gravity-yet",
-                     handIndex == 0 ? "L" : "R",
-                     state.refFormId);
+            const uint32_t releasedRef =
+                state.refFormId;
+            if (Q223DynamicBody* body =
+                    Q223EnsureDynamicBody(releasedRef)) {
+                body->held = false;
+                body->linearVelocity =
+                    body->sampledLinearVelocity;
+                body->angularVelocity =
+                    body->sampledAngularVelocity;
+                body->dynamic =
+                    body->collisionRadius > 0.0f;
+                body->lastPhysicsStep =
+                    std::chrono::steady_clock::now();
+
+                Q6H_LOGI("Q22.3 THROW RELEASE: hand=%s ref=%08X physics=%d linear=(%.2f %.2f %.2f)mps angular=(%.2f %.2f %.2f)radps radius=%.3f",
+                         handIndex == 0 ? "L" : "R",
+                         releasedRef,
+                         body->dynamic ? 1 : 0,
+                         body->linearVelocity.x,
+                         body->linearVelocity.y,
+                         body->linearVelocity.z,
+                         body->angularVelocity.x,
+                         body->angularVelocity.y,
+                         body->angularVelocity.z,
+                         body->collisionRadius);
+            }
             state.active = false;
             state.refFormId = 0u;
         } else {
@@ -7555,6 +7974,13 @@ void Q220UpdateLooseGrab(
             Q220SetRefTransform(
                 state.refFormId,
                 finalTransform);
+            if (Q223DynamicBody* body =
+                    Q223EnsureDynamicBody(
+                        state.refFormId)) {
+                body->held = true;
+                Q223SampleHeldMotion(
+                    *body, hand, quat);
+            }
         }
     }
 
@@ -7566,6 +7992,7 @@ void Q221UpdateLooseObjectsFromSolvedPalms(
         Vec3 leftPalmWorld,
         bool rightPalmValid,
         Vec3 rightPalmWorld) {
+    Q223AdvanceDynamicBodies();
     Q220UpdateLooseGrab(
         0, leftPalmValid,
         leftPalmWorld, gQ218LeftHandQuat,
@@ -9191,7 +9618,7 @@ void Q211UpdatePlayerRig() {
                  q220RightAuthoredBasis.intoPalm.y,
                  q220RightAuthoredBasis.intoPalm.z,
                  Q214_HAND_OUTWARD_OFFSET);
-        Q6H_LOGI("Q22.2 PALM ANCHOR: L(valid=%d world=%.3f %.3f %.3f rest=%.3f %.3f %.3f weight=%.1f source=%s) R(valid=%d world=%.3f %.3f %.3f rest=%.3f %.3f %.3f weight=%.1f source=%s) mode=visible-exact-Hand-bone-weights",
+        Q6H_LOGI("Q22.3 PALM ANCHOR: L(valid=%d world=%.3f %.3f %.3f rest=%.3f %.3f %.3f weight=%.1f source=%s) R(valid=%d world=%.3f %.3f %.3f rest=%.3f %.3f %.3f weight=%.1f source=%s) mode=visible-exact-Hand-bone-weights",
                  q221LeftPalmValid ? 1 : 0,
                  q221LeftPalmWorld.x, q221LeftPalmWorld.y, q221LeftPalmWorld.z,
                  q222LeftGrabPalmRest.x, q222LeftGrabPalmRest.y, q222LeftGrabPalmRest.z,

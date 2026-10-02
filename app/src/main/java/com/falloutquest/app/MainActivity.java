@@ -40,7 +40,7 @@ public class MainActivity extends Activity {
         title.setGravity(Gravity.CENTER);
 
         TextView status = new TextView(this);
-        status.setText(nativeBootMessage() + "\n\nQ22.2 VISIBLE-HAND PALM SNAP");
+        status.setText(nativeBootMessage() + "\n\nQ22.3 GRAVITY + THROW PHYSICS");
         status.setTextColor(Color.rgb(210, 220, 205));
         status.setTextSize(20);
         status.setGravity(Gravity.CENTER);

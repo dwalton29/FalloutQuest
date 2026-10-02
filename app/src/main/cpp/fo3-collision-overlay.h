@@ -46,6 +46,19 @@ bool ResolveFo3PlayerMotionQ6G(float currentX, float currentZ,
 
 bool IsFo3PlayerCollisionReadyQ6G();
 
+// Q22.3: resolve a moving loose object's authored-collision bounding sphere
+// against the currently active authored Fallout collision world. The moving
+// REFR is excluded from contact tests so its original static bhk placement
+// cannot collide with itself after pickup.
+bool ResolveFo3DynamicSphereQ223(
+    uint32_t movingRefFormId,
+    float currentX, float currentY, float currentZ,
+    float desiredX, float desiredY, float desiredZ,
+    float radius,
+    float* outX, float* outY, float* outZ,
+    float* outNormalX, float* outNormalY, float* outNormalZ,
+    uint32_t* outContacts);
+
 // Q6F debug draw. Q6G keeps this disabled by default while retaining the same
 // collision data for physical movement. The symbol is weak so Q7.6b can replace
 // only this disabled visual hook with the exterior LAND renderer; none of the

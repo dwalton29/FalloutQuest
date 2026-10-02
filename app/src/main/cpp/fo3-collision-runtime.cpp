@@ -1897,6 +1897,169 @@ void InvalidateDerivedCollisionCachesQ17() {
     gQ950Ready = false;
 }
 
+bool ResolveFo3DynamicSphereQ223(
+        uint32_t movingRefFormId,
+        float currentX, float currentY, float currentZ,
+        float desiredX, float desiredY, float desiredZ,
+        float radius,
+        float* outX, float* outY, float* outZ,
+        float* outNormalX, float* outNormalY, float* outNormalZ,
+        uint32_t* outContacts) {
+    if (!outX || !outY || !outZ ||
+        !outNormalX || !outNormalY || !outNormalZ ||
+        !outContacts || !(radius > 0.0f) ||
+        !gPlayerCollisionReady || gWorldTriangles.empty()) {
+        return false;
+    }
+
+    auto dot3 = [](Vec3 a, Vec3 b) {
+        return a.x*b.x + a.y*b.y + a.z*b.z;
+    };
+    auto add3 = [](Vec3 a, Vec3 b) {
+        return Vec3{a.x+b.x, a.y+b.y, a.z+b.z};
+    };
+    auto mul3 = [](Vec3 v, float s) {
+        return Vec3{v.x*s, v.y*s, v.z*s};
+    };
+    auto closestPointTriangle = [&](Vec3 p, const CollisionTriangle& tri) {
+        const Vec3 a = tri.a, b = tri.b, c = tri.c;
+        const Vec3 ab = Sub(b, a);
+        const Vec3 ac = Sub(c, a);
+        const Vec3 ap = Sub(p, a);
+        const float d1 = dot3(ab, ap);
+        const float d2 = dot3(ac, ap);
+        if (d1 <= 0.0f && d2 <= 0.0f) return a;
+
+        const Vec3 bp = Sub(p, b);
+        const float d3 = dot3(ab, bp);
+        const float d4 = dot3(ac, bp);
+        if (d3 >= 0.0f && d4 <= d3) return b;
+
+        const float vc = d1*d4 - d3*d2;
+        if (vc <= 0.0f && d1 >= 0.0f && d3 <= 0.0f) {
+            const float v = d1 / (d1 - d3);
+            return add3(a, mul3(ab, v));
+        }
+
+        const Vec3 cp = Sub(p, c);
+        const float d5 = dot3(ab, cp);
+        const float d6 = dot3(ac, cp);
+        if (d6 >= 0.0f && d5 <= d6) return c;
+
+        const float vb = d5*d2 - d1*d6;
+        if (vb <= 0.0f && d2 >= 0.0f && d6 <= 0.0f) {
+            const float w = d2 / (d2 - d6);
+            return add3(a, mul3(ac, w));
+        }
+
+        const float va = d3*d6 - d5*d4;
+        if (va <= 0.0f &&
+            (d4 - d3) >= 0.0f &&
+            (d5 - d6) >= 0.0f) {
+            const Vec3 bc = Sub(c, b);
+            const float w =
+                (d4 - d3) /
+                ((d4 - d3) + (d5 - d6));
+            return add3(b, mul3(bc, w));
+        }
+
+        const float denom = 1.0f / (va + vb + vc);
+        const float v = vb * denom;
+        const float w = vc * denom;
+        return add3(a, add3(mul3(ab, v), mul3(ac, w)));
+    };
+    auto sourceRef = [&](const CollisionTriangle& tri) {
+        const auto found =
+            gSurfaceSourcesQ722.find(tri.surfaceKeyQ714);
+        return found == gSurfaceSourcesQ722.end()
+            ? 0u
+            : found->second.refFormId;
+    };
+
+    Vec3 p{currentX, currentY, currentZ};
+    const Vec3 desired{desiredX, desiredY, desiredZ};
+    const Vec3 total = Sub(desired, p);
+    const float travel = Length(total);
+
+    // Conservative sphere sweep via short authored-world substeps.
+    const float stepLength = std::max(0.01f, radius * 0.40f);
+    const int steps = std::clamp(
+        static_cast<int>(std::ceil(
+            travel / std::max(stepLength, 0.001f))),
+        1, 32);
+    const Vec3 perStep = mul3(total, 1.0f / static_cast<float>(steps));
+
+    Vec3 normalSum{0.0f, 0.0f, 0.0f};
+    uint32_t contacts = 0u;
+    constexpr float CONTACT_SKIN = 0.0015f;
+
+    for (int step = 0; step < steps; ++step) {
+        p = add3(p, perStep);
+
+        for (int iteration = 0; iteration < 6; ++iteration) {
+            float deepest = 0.0f;
+            Vec3 deepestNormal{0.0f, 1.0f, 0.0f};
+
+            for (const CollisionTriangle& tri : gWorldTriangles) {
+                if (movingRefFormId != 0u &&
+                    sourceRef(tri) == movingRefFormId) {
+                    continue;
+                }
+
+                if (p.x < tri.minX - radius ||
+                    p.x > tri.maxX + radius ||
+                    p.y < tri.minY - radius ||
+                    p.y > tri.maxY + radius ||
+                    p.z < tri.minZ - radius ||
+                    p.z > tri.maxZ + radius) {
+                    continue;
+                }
+
+                const Vec3 q = closestPointTriangle(p, tri);
+                Vec3 separation = Sub(p, q);
+                float distance = Length(separation);
+                if (distance >= radius) continue;
+
+                Vec3 normal = tri.normal;
+                if (distance > 1.0e-6f) {
+                    normal = mul3(separation, 1.0f / distance);
+                } else if (dot3(normal, perStep) > 0.0f) {
+                    normal = mul3(normal, -1.0f);
+                }
+
+                const float penetration =
+                    radius - distance + CONTACT_SKIN;
+                if (penetration > deepest) {
+                    deepest = penetration;
+                    deepestNormal = normal;
+                }
+            }
+
+            if (deepest <= 0.0f) break;
+            p = add3(p, mul3(deepestNormal, deepest));
+            normalSum = add3(normalSum, deepestNormal);
+            ++contacts;
+        }
+    }
+
+    *outX = p.x;
+    *outY = p.y;
+    *outZ = p.z;
+    *outContacts = contacts;
+
+    const float normalLen = Length(normalSum);
+    if (normalLen > 1.0e-6f) {
+        *outNormalX = normalSum.x / normalLen;
+        *outNormalY = normalSum.y / normalLen;
+        *outNormalZ = normalSum.z / normalLen;
+    } else {
+        *outNormalX = 0.0f;
+        *outNormalY = 0.0f;
+        *outNormalZ = 0.0f;
+    }
+    return true;
+}
+
 bool IsFo3PlayerCollisionReadyQ6G() {
     return gPlayerCollisionReady && !gWorldTriangles.empty();
 }
