@@ -381,6 +381,81 @@ void Q1900EnsureWantedCellsQ19(float gameX, float gameY,
         gQ2012MotionXQ19 = 0.0f;
         gQ2012MotionYQ19 = 0.0f;
     }
+    // Q20.21: keep one hidden seven-CELL strip ahead of locomotion. This is a
+    // Quest streaming runway only; it does not extend the visible FO3 distance.
+    // It exists so the next ring-3 overlap cells are already resident before
+    // the active CELL changes.
+    const float q2021LocalX =
+        gameX - static_cast<float>(actualGridX) *
+                    Q1890_EXTERIOR_CELL_SIZE;
+    const float q2021LocalY =
+        gameY - static_cast<float>(actualGridY) *
+                    Q1890_EXTERIOR_CELL_SIZE;
+    constexpr float Q2021_PREFETCH_MOTION_EPS = 0.20f;
+    constexpr float Q2021_PREFETCH_EDGE_FRACTION = 0.45f;
+    bool q2021East = false, q2021West = false;
+    bool q2021North = false, q2021South = false;
+
+    if (gQ2012MotionXQ19 > Q2021_PREFETCH_MOTION_EPS &&
+        q2021LocalX >
+            Q1890_EXTERIOR_CELL_SIZE *
+            Q2021_PREFETCH_EDGE_FRACTION) {
+        q2021East = true;
+        for (int dy = -Q2013_WARM_RADIUS_Q19;
+             dy <= Q2013_WARM_RADIUS_Q19; ++dy) {
+            Q1900MarkWantedQ19(
+                actualGridX + Q2013_WARM_RADIUS_Q19 + 1,
+                actualGridY + dy, true);
+        }
+    } else if (gQ2012MotionXQ19 < -Q2021_PREFETCH_MOTION_EPS &&
+               q2021LocalX <
+                   Q1890_EXTERIOR_CELL_SIZE *
+                   (1.0f - Q2021_PREFETCH_EDGE_FRACTION)) {
+        q2021West = true;
+        for (int dy = -Q2013_WARM_RADIUS_Q19;
+             dy <= Q2013_WARM_RADIUS_Q19; ++dy) {
+            Q1900MarkWantedQ19(
+                actualGridX - Q2013_WARM_RADIUS_Q19 - 1,
+                actualGridY + dy, true);
+        }
+    }
+
+    if (gQ2012MotionYQ19 > Q2021_PREFETCH_MOTION_EPS &&
+        q2021LocalY >
+            Q1890_EXTERIOR_CELL_SIZE *
+            Q2021_PREFETCH_EDGE_FRACTION) {
+        q2021North = true;
+        for (int dx = -Q2013_WARM_RADIUS_Q19;
+             dx <= Q2013_WARM_RADIUS_Q19; ++dx) {
+            Q1900MarkWantedQ19(
+                actualGridX + dx,
+                actualGridY + Q2013_WARM_RADIUS_Q19 + 1, true);
+        }
+    } else if (gQ2012MotionYQ19 < -Q2021_PREFETCH_MOTION_EPS &&
+               q2021LocalY <
+                   Q1890_EXTERIOR_CELL_SIZE *
+                   (1.0f - Q2021_PREFETCH_EDGE_FRACTION)) {
+        q2021South = true;
+        for (int dx = -Q2013_WARM_RADIUS_Q19;
+             dx <= Q2013_WARM_RADIUS_Q19; ++dx) {
+            Q1900MarkWantedQ19(
+                actualGridX + dx,
+                actualGridY - Q2013_WARM_RADIUS_Q19 - 1, true);
+        }
+    }
+
+    static uint64_t q2021PrefetchHeartbeat = 0u;
+    ++q2021PrefetchHeartbeat;
+    if ((q2021East || q2021West || q2021North || q2021South) &&
+        (q2021PrefetchHeartbeat % 120u) == 1u) {
+        Q6H_LOGI("Q20.21 LOOKAHEAD: actual=(%d,%d) local=(%.0f,%.0f) motion=(%.2f,%.2f) strips=E%dW%dN%dS%d visibleDistanceUnchanged=1",
+                 actualGridX, actualGridY,
+                 q2021LocalX, q2021LocalY,
+                 gQ2012MotionXQ19, gQ2012MotionYQ19,
+                 q2021East ? 1 : 0, q2021West ? 1 : 0,
+                 q2021North ? 1 : 0, q2021South ? 1 : 0);
+    }
+
     gQ2012LastGameXQ19 = gameX;
     gQ2012LastGameYQ19 = gameY;
 }
@@ -413,6 +488,7 @@ int Q1900CellPriorityQ19(const Q1900CellStateQ19& state,
         if (cheb == 1) return 10 + dx + dy;
         if (cheb == 2) return 30 + dx + dy;
         if (cheb == 3) return 40 + dx + dy;
+        if (cheb == 4 && state.prefetched) return 48 + dx + dy;
         return 70 + dx + dy;
     }
     if (!state.metadataReady) {
@@ -1470,9 +1546,16 @@ void Q1900RetireFarCellsQ19(int32_t actualGridX, int32_t actualGridY) {
         GpuObject& object = gObjects[read];
         const int dx = std::abs(object.q1970GridX - actualGridX);
         const int dy = std::abs(object.q1970GridY - actualGridY);
+        const auto q2021Cell = gQ1900CellsQ19.find(
+            Q1900CellKeyQ19(
+                object.q1970GridX, object.q1970GridY));
+        const bool q2021Wanted =
+            q2021Cell != gQ1900CellsQ19.end() &&
+            q2021Cell->second.wanted;
         const bool retire =
             !object.q1990NativeLod &&
-            std::max(dx, dy) > Q1900_CACHE_RADIUS_Q19;
+            std::max(dx, dy) > Q1900_CACHE_RADIUS_Q19 &&
+            !q2021Wanted;
         if (retire) {
             Q1910QueueGpuDeleteQ19(object);
             ++retiredShapes;
@@ -1495,7 +1578,8 @@ void Q1900RetireFarCellsQ19(int32_t actualGridX, int32_t actualGridY) {
         const int dy = std::abs(it->second.gridY - actualGridY);
         const bool outsideWarm =
             std::max(dx, dy) > Q2013_WARM_RADIUS_Q19;
-        if (!Q1900CellWorkerOwnsQ19(it->first) && outsideWarm) {
+        if (!Q1900CellWorkerOwnsQ19(it->first) &&
+            outsideWarm && !it->second.wanted) {
             if (it->second.stage == Q1900CellStageQ19::Uploading) {
                 retiredStaged += it->second.stagedGpu.size();
                 Q2015DiscardCellUploadQ19(it->second);

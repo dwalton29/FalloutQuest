@@ -468,6 +468,9 @@ GLint gGlowEnabledLocationQ1020 = -1;
 GLint gExternalEmittanceEnabledLocationQ1380 = -1;
 GLint gExternalEmittanceColorLocationQ1380 = -1;
 GLint gNativeLodClipEnabledLocationQ1810 = -1;
+GLint gLodFadeModeLocationQ2021 = -1;
+GLint gLodFadePlayerLocationQ2021 = -1;
+GLint gLodFadeRangeLocationQ2021 = -1;
 GLint gNativeLodClipCellCountLocationQ1900 = -1;
 GLint gNativeLodClipCellsLocationQ1900 = -1;
 GLint gWaterReflectionClipEnabledLocationQ2090 = -1;
@@ -959,6 +962,9 @@ GLuint CreateQ6HProgram() {
         uniform float uNativeLodClipEnabledQ1810;
         uniform int uNativeLodClipCellCountQ1900;
         uniform vec4 uNativeLodClipCellsQ1900[25];
+        uniform float uLodFadeModeQ2021;
+        uniform vec2 uLodFadePlayerQ2021;
+        uniform vec2 uLodFadeRangeQ2021;
         uniform float uWaterReflectionClipEnabledQ2090;
         uniform float uWaterReflectionPlaneYQ2090;
         uniform int uLocalLightCount;
@@ -1025,6 +1031,24 @@ GLuint CreateQ6HProgram() {
                     }
                 }
             }
+            float q2021FadeAlpha = 1.0;
+            if (uLodFadeModeQ2021 > 0.5) {
+                float q2021Distance =
+                    length(vPosition.xz - uLodFadePlayerQ2021);
+                float q2021Span = max(
+                    uLodFadeRangeQ2021.y -
+                    uLodFadeRangeQ2021.x, 0.001);
+                float q2021T = clamp(
+                    (q2021Distance - uLodFadeRangeQ2021.x) /
+                    q2021Span, 0.0, 1.0);
+                float q2021DetailWeight =
+                    1.0 - smoothstep(0.0, 1.0, q2021T);
+                q2021FadeAlpha =
+                    uLodFadeModeQ2021 < 1.5
+                        ? q2021DetailWeight
+                        : (1.0 - q2021DetailWeight);
+            }
+
             vec4 diffuseTexel = texture(uDiffuse, vUv);
             vec3 baseColor = diffuseTexel.rgb * mix(vec3(1.0), vColor.rgb, uUseVertexColor);
             float alpha = diffuseTexel.a * uMaterialAlpha * mix(1.0, vColor.a, uUseVertexAlpha);
@@ -1040,6 +1064,7 @@ GLuint CreateQ6HProgram() {
                 alpha *= mix(startOpacityQ1160, stopOpacityQ1160, falloffTQ1160);
             }
             if (uAlphaTest > 0.5 && alpha < uAlphaThreshold) discard;
+            alpha *= q2021FadeAlpha;
 
             vec4 normalGloss = texture(uNormalGloss, vUv);
             vec3 tangentNormal = normalGloss.rgb * 2.0 - 1.0;
@@ -1086,6 +1111,7 @@ GLuint CreateQ6HProgram() {
 
                 vec3 q2050Env = q2050Cube * q2050Mask;
                 q2050Env *= mix(vec3(1.0), vColor.rgb, uUseVertexColor);
+                q2050Env *= q2021FadeAlpha;
                 float q2050FogVisibility = uRenderStageQ1560 >= 1
                     ? (1.0 - vFogFactorQ1532)
                     : 1.0;
@@ -2404,6 +2430,12 @@ bool InitializeScene() {
         glGetUniformLocation(gProgram, "uExternalEmittanceColorQ1380");
     gNativeLodClipEnabledLocationQ1810 =
         glGetUniformLocation(gProgram, "uNativeLodClipEnabledQ1810");
+    gLodFadeModeLocationQ2021 =
+        glGetUniformLocation(gProgram, "uLodFadeModeQ2021");
+    gLodFadePlayerLocationQ2021 =
+        glGetUniformLocation(gProgram, "uLodFadePlayerQ2021");
+    gLodFadeRangeLocationQ2021 =
+        glGetUniformLocation(gProgram, "uLodFadeRangeQ2021");
     gNativeLodClipCellCountLocationQ1900 =
         glGetUniformLocation(gProgram, "uNativeLodClipCellCountQ1900");
     gNativeLodClipCellsLocationQ1900 =
@@ -3204,6 +3236,20 @@ float gExteriorOriginZQ1890 = 0.0f;
 int32_t gExteriorWindowGridXQ1890 = 0;
 int32_t gExteriorWindowGridYQ1890 = 0;
 uint64_t gExteriorWindowGenerationQ1890 = 0u;
+
+// Q20.21 source-backed exterior handoff values from the supplied PC INIs:
+// uGridsToLoad=5, fNoLODFarDistanceMax=10240,
+// fLODFadeOutPercent=0.6000, bLODPopObjects=0.
+// The fade therefore starts at 6144 game units and ends at 10240.
+constexpr float Q2021_DETAIL_FADE_START_GAME = 6144.0f;
+constexpr float Q2021_DETAIL_FADE_END_GAME = 10240.0f;
+constexpr float Q2021_DETAIL_FADE_START_M =
+    Q2021_DETAIL_FADE_START_GAME / FO3_UNITS_PER_METRE;
+constexpr float Q2021_DETAIL_FADE_END_M =
+    Q2021_DETAIL_FADE_END_GAME / FO3_UNITS_PER_METRE;
+bool gQ2021PlayerSceneValid = false;
+float gQ2021PlayerSceneX = 0.0f;
+float gQ2021PlayerSceneZ = 0.0f;
 
 bool Q1890InsideCandidatePastHysteresis(float gameX, float gameY,
                                         int32_t oldX, int32_t oldY,
@@ -4091,6 +4137,7 @@ void UpdateFo3ExteriorStreamingQ1890(float virtualHeadX, float virtualHeadZ) {
 
     if (!gExteriorStreamingActiveQ1890) {
         gQ1920LatestGridValid = false;
+        gQ2021PlayerSceneValid = false;
         return;
     }
 
@@ -4098,6 +4145,9 @@ void UpdateFo3ExteriorStreamingQ1890(float virtualHeadX, float virtualHeadZ) {
                         virtualHeadX * FO3_UNITS_PER_METRE;
     const float gameY = gExteriorOriginYQ1890 +
                         (SCENE_FORWARD - virtualHeadZ) * FO3_UNITS_PER_METRE;
+    gQ2021PlayerSceneValid = true;
+    gQ2021PlayerSceneX = virtualHeadX;
+    gQ2021PlayerSceneZ = virtualHeadZ;
     const int32_t actualGridX = static_cast<int32_t>(
         std::floor(gameX / Q1890_EXTERIOR_CELL_SIZE));
     const int32_t actualGridY = static_cast<int32_t>(
@@ -4183,7 +4233,7 @@ void UpdateFo3ExteriorStreamingQ1890(float virtualHeadX, float virtualHeadZ) {
             ++q1970ActiveShapes;
             q1970ActiveTriangles += static_cast<size_t>(q1970Object.vertexCount / 3);
         }
-        Q6H_LOGI("Q16.27 ACTIVE DRAW: actual=(%d,%d) residentCentre=(%d,%d) residentShapes=%zu activeShapes=%zu activeTriangles=%zu activeRadius=1 residentRadius=2",
+        Q6H_LOGI("Q20.21 VANILLA HANDOFF: actual=(%d,%d) residentCentre=(%d,%d) residentShapes=%zu activeShapes=%zu activeTriangles=%zu uGrids=5 distantCount=20 fadeStartGame=6144 fadeEndGame=10240 fadePercent=0.6 popObjects=0 mode=continuous-radius+a2c",
                  actualGridX, actualGridY,
                  gExteriorWindowGridXQ1890, gExteriorWindowGridYQ1890,
                  gObjects.size(), q1970ActiveShapes, q1970ActiveTriangles);
@@ -4445,14 +4495,31 @@ bool Q1970ShouldRenderFullDetail(const GpuObject& object) {
     const int cheb =
         std::max(std::abs(object.q1970GridX - activeGridX),
                  std::abs(object.q1970GridY - activeGridY));
-    if (cheb <= 2) return true;
-    if (cheb > 3) return false;
 
-    // Q20.13: ring 3 is a warm emergency handoff. Keep detailed objects until
-    // authored Level4 object LOD for that macroblock has actually published.
-    if (gExteriorWorldspaceQ1890 != 0x0000003Cu) return true;
-    return !Q2013HasNativeObjectLodForCellQ19(
-        object.q1970GridX, object.q1970GridY);
+    if (gExteriorWorldspaceQ1890 != 0x0000003Cu ||
+        !gQ2021PlayerSceneValid) {
+        if (cheb <= 2) return true;
+        if (cheb > 3) return false;
+        return true;
+    }
+
+    // Q20.21: PC FO3 does not hard-pop the outer uGrids=5 square.
+    // Keep any already-resident detailed object whose AABB reaches inside the
+    // PC fNoLODFarDistanceMax=10240 radius. Shader-side alpha-to-coverage then
+    // performs the 0.6 -> 1.0 fade interval continuously.
+    if (cheb > 3) return false;
+    const float nearestX =
+        gQ2021PlayerSceneX < object.minX ? object.minX :
+        (gQ2021PlayerSceneX > object.maxX ? object.maxX :
+         gQ2021PlayerSceneX);
+    const float nearestZ =
+        gQ2021PlayerSceneZ < object.minZ ? object.minZ :
+        (gQ2021PlayerSceneZ > object.maxZ ? object.maxZ :
+         gQ2021PlayerSceneZ);
+    const float dx = nearestX - gQ2021PlayerSceneX;
+    const float dz = nearestZ - gQ2021PlayerSceneZ;
+    return dx * dx + dz * dz <=
+        Q2021_DETAIL_FADE_END_M * Q2021_DETAIL_FADE_END_M;
 }
 
 int Q1900BuildNativeLodClipCells(float* bounds, bool objectLod) {
@@ -4526,12 +4593,37 @@ void DrawSceneObject(const GpuObject& object, bool environmentPassQ2050 = false)
         const std::string q1900Path = object.modelPath;
         const bool q1900ObjectLod =
             q1900Path.find("\\blocks\\") != std::string::npos;
-        q1900LodClipCount =
-            Q1900BuildNativeLodClipCells(q1900LodClipCells, q1900ObjectLod);
+        q1900LodClipCount = q1900ObjectLod
+            ? 0
+            : Q1900BuildNativeLodClipCells(
+                  q1900LodClipCells, false);
     }
     if (gNativeLodClipEnabledLocationQ1810 >= 0) {
         glUniform1f(gNativeLodClipEnabledLocationQ1810,
                     q1900LodClipCount > 0 ? 1.0f : 0.0f);
+    }
+
+    if (gLodFadeModeLocationQ2021 >= 0) {
+        float q2021Mode = 0.0f;
+        if (gExteriorWorldspaceQ1890 == 0x0000003Cu &&
+            gQ2021PlayerSceneValid) {
+            if (!object.q1990NativeLod) {
+                q2021Mode = 1.0f;
+            } else if (object.modelPath.find("\\blocks\\") !=
+                       std::string::npos) {
+                q2021Mode = 2.0f;
+            }
+        }
+        glUniform1f(gLodFadeModeLocationQ2021, q2021Mode);
+    }
+    if (gLodFadePlayerLocationQ2021 >= 0) {
+        glUniform2f(gLodFadePlayerLocationQ2021,
+                    gQ2021PlayerSceneX, gQ2021PlayerSceneZ);
+    }
+    if (gLodFadeRangeLocationQ2021 >= 0) {
+        glUniform2f(gLodFadeRangeLocationQ2021,
+                    Q2021_DETAIL_FADE_START_M,
+                    Q2021_DETAIL_FADE_END_M);
     }
     if (gNativeLodClipCellCountLocationQ1900 >= 0) {
         glUniform1i(gNativeLodClipCellCountLocationQ1900,
@@ -4912,6 +5004,12 @@ bool Q1030InitializeRenderProgramOnly() {
         glGetUniformLocation(gProgram, "uExternalEmittanceColorQ1380");
     gNativeLodClipEnabledLocationQ1810 =
         glGetUniformLocation(gProgram, "uNativeLodClipEnabledQ1810");
+    gLodFadeModeLocationQ2021 =
+        glGetUniformLocation(gProgram, "uLodFadeModeQ2021");
+    gLodFadePlayerLocationQ2021 =
+        glGetUniformLocation(gProgram, "uLodFadePlayerQ2021");
+    gLodFadeRangeLocationQ2021 =
+        glGetUniformLocation(gProgram, "uLodFadeRangeQ2021");
     gNativeLodClipCellCountLocationQ1900 =
         glGetUniformLocation(gProgram, "uNativeLodClipCellCountQ1900");
     gNativeLodClipCellsLocationQ1900 =
@@ -5997,6 +6095,10 @@ bool Q2090RenderWaterReflection(const float mainMvp[16],
 
     const auto q2019ReflectionOpaqueStarted =
         std::chrono::steady_clock::now();
+    const GLboolean q2021ReflectionA2cWas =
+        glIsEnabled(GL_SAMPLE_ALPHA_TO_COVERAGE);
+    if (q2060MsaaActive && q2060MsaaSamples > 1)
+        glEnable(GL_SAMPLE_ALPHA_TO_COVERAGE);
     Q1990RenderNativeLod(false);
     // Q20.19: the planar mirror previously bypassed Q20.17 and submitted every
     // opaque detailed object one-by-one. Reuse the exact same shared-geometry
@@ -6004,6 +6106,8 @@ bool Q2090RenderWaterReflection(const float mainMvp[16],
     // while gWaterReflectionPassQ2090 is true, so reflection semantics remain
     // unchanged while repeated STAT/SCOL/TREE geometry collapses to batches.
     Q2017RenderOpaqueDetailedInstanced();
+    if (!q2021ReflectionA2cWas)
+        glDisable(GL_SAMPLE_ALPHA_TO_COVERAGE);
     q2019OpaqueUs = static_cast<uint64_t>(
         std::chrono::duration_cast<std::chrono::microseconds>(
             std::chrono::steady_clock::now() -
@@ -6351,8 +6455,14 @@ void RenderScene() {
     glActiveTexture(GL_TEXTURE0);
     const auto q2017OpaqueStarted = std::chrono::steady_clock::now();
     glDisable(GL_BLEND);
+    const GLboolean q2021MainA2cWas =
+        glIsEnabled(GL_SAMPLE_ALPHA_TO_COVERAGE);
+    if (q2060MsaaActive && q2060MsaaSamples > 1)
+        glEnable(GL_SAMPLE_ALPHA_TO_COVERAGE);
     Q1990RenderNativeLod(false);
     Q2017RenderOpaqueDetailedInstanced();
+    if (!q2021MainA2cWas)
+        glDisable(GL_SAMPLE_ALPHA_TO_COVERAGE);
     const uint64_t q2017OpaqueUs = static_cast<uint64_t>(
         std::chrono::duration_cast<std::chrono::microseconds>(
             std::chrono::steady_clock::now() -
