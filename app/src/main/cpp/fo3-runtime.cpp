@@ -7619,6 +7619,8 @@ void Q210DeletePlayerBody() {
         object.vao = 0u;
     }
     gQ210PlayerBody.clear();
+    gQ211PlayerRigParts.clear();
+    gQ211LastSkinnedSerial = ~0ull;
     gQ210PlayerBodyReady = false;
 }
 
@@ -7685,6 +7687,13 @@ bool Q210EnsurePlayerBody() {
         cpuShapes += parts.size();
 
         for (CpuObject& part : parts) {
+            std::vector<float> q211BindExpanded;
+            if (part.mesh.skinned &&
+                PrepareExpandedVertexStreamQ1960(
+                    part, 0.0f, 0.0f, 0.0f)) {
+                q211BindExpanded = part.q1960ExpandedVertices;
+            }
+
             GpuObject gpu;
             if (!UploadCpuObject(part, 0.0f, 0.0f, 0.0f, gpu)) {
                 Q6H_LOGW("Q21.0 PLAYER BODY PART MISS: model=%s stage=gpu",
@@ -7693,16 +7702,82 @@ bool Q210EnsurePlayerBody() {
             }
             gpu.q210PlayerBody = true;
             triangles += static_cast<size_t>(gpu.vertexCount / 3);
+
+            const size_t q211GpuIndex = gQ210PlayerBody.size();
             gQ210PlayerBody.push_back(std::move(gpu));
+
+            if (part.mesh.skinned &&
+                !q211BindExpanded.empty() &&
+                part.mesh.skinBoneIndices.size() ==
+                    part.positionsGame.size() * 4u &&
+                part.mesh.skinBoneWeights.size() ==
+                    part.positionsGame.size() * 4u) {
+                Q211PlayerRigPart rig;
+                rig.gpuIndex = q211GpuIndex;
+                rig.bindExpanded = std::move(q211BindExpanded);
+                rig.workExpanded = rig.bindExpanded;
+                rig.bones = part.mesh.skinBones;
+                rig.expandedBoneIndices.reserve(
+                    part.mesh.indices.size() * 4u);
+                rig.expandedBoneWeights.reserve(
+                    part.mesh.indices.size() * 4u);
+
+                for (uint32_t sourceVertex : part.mesh.indices) {
+                    if (sourceVertex >= part.positionsGame.size()) continue;
+                    for (size_t slot = 0u; slot < 4u; ++slot) {
+                        const size_t at =
+                            static_cast<size_t>(sourceVertex) * 4u + slot;
+                        rig.expandedBoneIndices.push_back(
+                            part.mesh.skinBoneIndices[at]);
+                        rig.expandedBoneWeights.push_back(
+                            part.mesh.skinBoneWeights[at]);
+                    }
+                }
+
+                rig.leftUpperArm = Q211FindPrimaryBone(
+                    rig.bones, "bip01 l upperarm", "l upperarm");
+                rig.leftForearm = Q211FindPrimaryBone(
+                    rig.bones, "bip01 l forearm", "l forearm");
+                rig.leftHand = Q211FindPrimaryBone(
+                    rig.bones, "bip01 l hand", "l hand");
+                rig.rightUpperArm = Q211FindPrimaryBone(
+                    rig.bones, "bip01 r upperarm", "r upperarm");
+                rig.rightForearm = Q211FindPrimaryBone(
+                    rig.bones, "bip01 r forearm", "r forearm");
+                rig.rightHand = Q211FindPrimaryBone(
+                    rig.bones, "bip01 r hand", "r hand");
+                rig.leftChainReady =
+                    rig.leftUpperArm >= 0 &&
+                    rig.leftForearm >= 0 &&
+                    rig.leftHand >= 0;
+                rig.rightChainReady =
+                    rig.rightUpperArm >= 0 &&
+                    rig.rightForearm >= 0 &&
+                    rig.rightHand >= 0;
+
+                Q6H_LOGI("Q21.1 RIG PART: model=%s shape=%u gpuIndex=%zu bones=%zu expandedVertices=%zu leftChain=%d indices=(%d,%d,%d) rightChain=%d indices=(%d,%d,%d)",
+                         path.c_str(), part.q2016ShapeIndex,
+                         q211GpuIndex, rig.bones.size(),
+                         rig.bindExpanded.size() / 18u,
+                         rig.leftChainReady ? 1 : 0,
+                         rig.leftUpperArm, rig.leftForearm, rig.leftHand,
+                         rig.rightChainReady ? 1 : 0,
+                         rig.rightUpperArm, rig.rightForearm, rig.rightHand);
+
+                if (rig.expandedBoneIndices.size() ==
+                        (rig.bindExpanded.size() / 18u) * 4u) {
+                    gQ211PlayerRigParts.push_back(std::move(rig));
+                }
+            }
             ++gpuShapes;
         }
     }
 
     gQ210PlayerBodyReady = !gQ210PlayerBody.empty();
-    Q6H_LOGI("Q21.0 PLAYER BODY READY: ready=%d archiveMaleEntries=%zu bodyPartsFound=%zu cpuShapes=%zu gpuShapes=%zu triangles=%zu skinInstances=%zu referencedBonesAcrossParts=%zu skeletonNodes=%u skeletonNamedNodes=%zu mode=real-FO3-bind-pose root=HMD-yaw controllers=tracked skinning=next",
+    Q6H_LOGI("Q21.1 PLAYER BODY READY: ready=%d archiveMaleEntries=%zu bodyPartsFound=%zu cpuShapes=%zu gpuShapes=%zu rigParts=%zu triangles=%zu skinInstances=%zu referencedBonesAcrossParts=%zu skeletonNodes=%u skeletonNamedNodes=%zu mode=real-FO3-weighted-skinning armIK=two-bone",
              gQ210PlayerBodyReady ? 1 : 0,
              maleEntries.size(), bodyPaths.size(),
-             cpuShapes, gpuShapes, triangles,
+             cpuShapes, gpuShapes, gQ211PlayerRigParts.size(), triangles,
              skinInstances, referencedBones,
              skeletonProbe.nodes, skeletonProbe.nodeNames.size());
     if (!gQ210PlayerBodyReady) Q210DeletePlayerBody();
@@ -7711,6 +7786,7 @@ bool Q210EnsurePlayerBody() {
 
 void Q210RenderPlayerBody(bool alphaPass) {
     if (!Q210EnsurePlayerBody()) return;
+    Q211UpdatePlayerRig();
     for (const GpuObject& object : gQ210PlayerBody) {
         if (object.alphaBlend != alphaPass) continue;
         if (object.zBufferTestQ1200) glEnable(GL_DEPTH_TEST);
@@ -9672,6 +9748,7 @@ void SetFo3PlayerBodyTrackingQ210(
     gQ210RightHand[0] = rightX;
     gQ210RightHand[1] = rightY;
     gQ210RightHand[2] = rightZ;
+    ++gQ211TrackingSerial;
 
     const float c = std::cos(headYaw);
     const float s = std::sin(headYaw);
