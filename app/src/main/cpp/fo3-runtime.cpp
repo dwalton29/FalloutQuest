@@ -2712,6 +2712,16 @@ bool ProcessQ74TransitionRequest() {
                  gExteriorWindowGridXQ1890, gExteriorWindowGridYQ1890,
                  gExteriorOriginXQ1890, gExteriorOriginYQ1890,
                  gExteriorOriginZQ1890);
+        Q6H_LOGI("Q20.22B PROBE TRIGGER: phase=scene-transition worldspace=%08X grid=(%d,%d) wastelandExpected=0000003C willProbe=%d",
+                 gExteriorWorldspaceQ1890,
+                 gExteriorWindowGridXQ1890,
+                 gExteriorWindowGridYQ1890,
+                 gExteriorWorldspaceQ1890 == 0x0000003Cu ? 1 : 0);
+        if (gExteriorWorldspaceQ1890 == 0x0000003Cu) {
+            Q2022ProbeLodArchive(
+                gExteriorWindowGridXQ1890,
+                gExteriorWindowGridYQ1890);
+        }
     } else {
         gExteriorStreamingActiveQ1890 = false;
         gExteriorWorldspaceQ1890 = 0u;
@@ -4158,6 +4168,13 @@ void UpdateFo3ExteriorStreamingQ1890(float virtualHeadX, float virtualHeadZ) {
     gQ1920LatestGridY = actualGridY;
     if (gExteriorWorldspaceQ1890 == 0x0000003Cu) {
         Q2022ProbeLodArchive(actualGridX, actualGridY);
+    } else if (!gQ2022LodArchiveProbeDone) {
+        static bool q2022LoggedNonWasteland = false;
+        if (!q2022LoggedNonWasteland) {
+            q2022LoggedNonWasteland = true;
+            Q6H_LOGI("Q20.22B PROBE WAIT: phase=runtime worldspace=%08X actual=(%d,%d) reason=not-wasteland-0000003C",
+                     gExteriorWorldspaceQ1890, actualGridX, actualGridY);
+        }
     }
     if (gExteriorWorldspaceQ1890 != 0u) {
         // Q20.10: CELL-specific streaming now owns every exterior worldspace,
@@ -5182,14 +5199,17 @@ int32_t Q2022FloorToSpan(int32_t cell, int span) {
 
 void Q2022ProbeLodArchive(int32_t cellX, int32_t cellY) {
     if (gQ2022LodArchiveProbeDone) return;
-    gQ2022LodArchiveProbeDone = true;
+
+    Q6H_LOGI("Q20.22B LOD ARCHIVE PROBE BEGIN: playerCell=(%d,%d) worldspace=%08X source=scene-transition-or-runtime",
+             cellX, cellY, gExteriorWorldspaceQ1890);
 
     std::vector<FalloutMeshIndexEntry> entries;
     if (!ListFalloutMeshFilesByPrefix(
             "Landscape\\LOD\\Wasteland\\", entries)) {
-        Q6H_LOGE("Q20.22 LOD ARCHIVE PROBE FAILED: reason=bsa-index-unavailable");
+        Q6H_LOGE("Q20.22B LOD ARCHIVE PROBE FAILED: reason=bsa-index-unavailable retry=1");
         return;
     }
+    gQ2022LodArchiveProbeDone = true;
 
     struct Bucket {
         const char* name;
