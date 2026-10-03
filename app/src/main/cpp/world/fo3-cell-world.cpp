@@ -77,7 +77,7 @@ bool LookupFo3WastelandDoorTeleportQ1920(
 
 // Standalone GLES terrain renderer. Its internal symbols are Q76B-prefixed so
 // it is safe to include in this translation unit without disturbing Q7.1/Q7.5.
-#include "fo3-terrain-render-runtime.inc"
+#include "rendering/terrain/fo3-terrain-render.inc"
 
 // Q20 owns the moving 7x7 terrain runway by CELL. It is textually included
 // here so it can reuse the proven LAND material/renderer helpers without
