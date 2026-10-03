@@ -3,7 +3,7 @@
 #include "rendering/environment/fo3-authored-color.h"
 #include "rendering/environment/fo3-weather-imagespace.h"
 #include "rendering/environment/fo3-weather-light.h"
-#include "fo3-weather-sky-q1330.h"
+#include "rendering/environment/fo3-weather-sky.h"
 
 #include <algorithm>
 #include <array>
