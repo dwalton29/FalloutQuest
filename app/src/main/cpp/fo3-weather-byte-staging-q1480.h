@@ -1,7 +1,5 @@
 #pragma once
 
-#include "fo3-pplighting-domain-q1470.h"
-
 #include <algorithm>
 
 // Q14.8 bridge: render translation units only see this tiny cache/getter layer.
@@ -83,6 +81,3 @@ inline bool GetFo3LinearWeatherSunlightQ1480(float outSunlight[3]) {
     return true;
 }
 
-inline bool UseFo3RawWeatherLightingQ1480() {
-    return GetFo3LegacyPpDiffuseDomainQ1470();
-}
