@@ -15,7 +15,7 @@ add_library(falloutquest SHARED
     data/fo3-esm-reader.cpp
     data/fo3-texture-bsa.cpp
     fo3-water-q2070.cpp
-    fo3-npc-q23.cpp
+    npc/fo3-npc.cpp
     ${ANDROID_NDK}/sources/android/native_app_glue/android_native_app_glue.c
 )
 

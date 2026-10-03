@@ -18,7 +18,7 @@ extern void PumpFo3AndroidEventsQ1860();
 #include "fo3-loading-state-q1700.h"
 #include "fo3-loading-screen-q1700.h"
 #include "fo3-megaton-scene.h"
-#include "fo3-npc-q23.h"
+#include "fo3-npc.h"
 #include "fo3-static-nif.h"
 #include "fo3-bsa-reader.h"
 #include "fo3-texture-bsa.h"

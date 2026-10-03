@@ -1,4 +1,4 @@
-#include "fo3-npc-q23.h"
+#include "fo3-npc.h"
 #include "fo3-bsa-reader.h"
 #include "fo3-texture-bsa.h"
 #include "fo3-esm-reader.h"
