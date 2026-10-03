@@ -10,7 +10,7 @@ add_library(falloutquest SHARED
     fo3-cell-world.cpp
     fo3-static-nif-runtime.cpp
     fo3-nif-collision.cpp
-    fo3-collision-runtime.cpp
+    physics/fo3-collision-runtime.cpp
     data/fo3-bsa-reader.cpp
     data/fo3-esm-reader.cpp
     data/fo3-texture-bsa.cpp
