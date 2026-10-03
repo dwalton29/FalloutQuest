@@ -11,9 +11,9 @@ add_library(falloutquest SHARED
     fo3-static-nif-runtime.cpp
     fo3-nif-collision.cpp
     fo3-collision-runtime.cpp
-    fo3-bsa-reader.cpp
-    fo3-esm-reader.cpp
-    fo3-texture-bsa.cpp
+    data/fo3-bsa-reader.cpp
+    data/fo3-esm-reader.cpp
+    data/fo3-texture-bsa.cpp
     fo3-water-q2070.cpp
     fo3-npc-q23.cpp
     ${ANDROID_NDK}/sources/android/native_app_glue/android_native_app_glue.c
@@ -22,6 +22,15 @@ add_library(falloutquest SHARED
 target_include_directories(falloutquest PRIVATE
     ${ANDROID_NDK}/sources/android/native_app_glue
     ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/core
+    ${CMAKE_CURRENT_SOURCE_DIR}/data
+    ${CMAKE_CURRENT_SOURCE_DIR}/world
+    ${CMAKE_CURRENT_SOURCE_DIR}/rendering
+    ${CMAKE_CURRENT_SOURCE_DIR}/rendering/terrain
+    ${CMAKE_CURRENT_SOURCE_DIR}/physics
+    ${CMAKE_CURRENT_SOURCE_DIR}/player
+    ${CMAKE_CURRENT_SOURCE_DIR}/npc
+    ${CMAKE_CURRENT_SOURCE_DIR}/ui
 )
 
 target_compile_options(falloutquest PRIVATE
