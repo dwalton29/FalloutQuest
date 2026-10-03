@@ -1,4 +1,4 @@
-#include "fo3-nif-collision.h"
+#include "fo3-nif-collision-parser.h"
 #include "fo3-bsa-reader.h"
 
 #include <android/log.h>
