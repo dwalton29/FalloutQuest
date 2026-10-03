@@ -23,6 +23,8 @@ extern void PumpFo3AndroidEventsQ1860();
 #include "fo3-npc.h"
 #include "fo3-actor-animation.h"
 #include "player/fo3-player-state.h"
+#include "world/interaction/fo3-interaction.h"
+#include "world/interaction/fo3-interaction-ray.h"
 #include "rendering/mesh/fo3-static-nif.h"
 #include "fo3-bsa-reader.h"
 #include "fo3-texture-bsa.h"
@@ -3042,6 +3044,7 @@ bool ProcessQ74TransitionRequest() {
             p.InventoryWeight(), p.CarryCapacity(), p.Snapshot().inventory.size(), p.Definitions().items.size(),
             gPlayerSession->saveBlocked ? 1 : 0);
     }
+    if (gPlayerSession) SetFo3CollectedCollisionRefs(gPlayerSession->player.Snapshot().collected);
     FlushFo3PlayerState();
     Q74DeleteGpuObjects(gObjects);
     Q230DeleteNpcActors();
@@ -3399,6 +3402,10 @@ bool ActivateDoorInternalQ1700(float ox, float oy, float oz,
     Fo3DoorAimQ1700 aim;
     if (!QueryDoorInternalQ1700(ox, oy, oz, dx, dy, dz, &aim) || !aim.valid) {
         Q6H_LOGI("Q16.0 ACTIVATE MISS: maxDistance=3.0m");
+        return false;
+    }
+    if (!gPlayerSession || !gPlayerSession->player.CanOpenDoor(aim.sourceDoorRef)) {
+        Q6H_LOGI("DOOR BLOCKED: source=%08X authored lock/ownership/script policy",aim.sourceDoorRef);
         return false;
     }
     if (!QueueFo3DoorTransitionQ1700(aim.sourceDoorRef,
@@ -5001,6 +5008,7 @@ int Q1900BuildNativeLodClipCells(float* bounds, bool objectLod) {
 }
 
 void DrawSceneObject(const GpuObject& object, bool environmentPassQ2050 = false) {
+    if (gPlayerSession && gPlayerSession->player.IsCollected(object.refFormId)) return;
     if (!object.q210PlayerBody &&
         !object.q230NpcActor &&
         !Q1970ShouldRenderFullDetail(object)) return;
@@ -5270,6 +5278,7 @@ void Q2017RenderOpaqueDetailedInstanced() {
     size_t visible = 0u;
     for (const GpuObject& object : gObjects) {
         if (object.alphaBlend) continue;
+        if (gPlayerSession && gPlayerSession->player.IsCollected(object.refFormId)) continue;
         if (!Q1970ShouldRenderFullDetail(object)) continue;
         if (!Q2015AabbVisible(object)) continue;
         ++visible;
@@ -7990,6 +7999,7 @@ bool Q220FindNearestLooseRef(
     std::unordered_map<uint32_t, Aggregate> refs;
     for (const GpuObject& object : gObjects) {
         if (!object.q220LooseObject ||
+            (gPlayerSession && gPlayerSession->player.IsCollected(object.refFormId)) ||
             object.refFormId == 0u) continue;
         Aggregate& a = refs[object.refFormId];
         a.minimum.x = std::min(a.minimum.x, object.minX);
@@ -12549,6 +12559,8 @@ void Q6HDrawArrays(GLenum mode, GLint first, GLsizei count) {
 } // namespace
 
 fo3player::Session* GetFo3PlayerSession() { return gPlayerSession.get(); }
+
+#include "world/interaction/fo3-interaction-runtime.inc"
 
 void SetFo3PlayerBodyTrackingQ210(
         float headX, float headY, float headZ, float headYaw,

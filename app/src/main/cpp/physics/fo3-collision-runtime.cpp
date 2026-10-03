@@ -4,6 +4,7 @@ extern void PumpFo3AndroidEventsQ1860();
 #include "fo3-transition.h"
 #include "fo3-nif-metadata.h"
 #include "rendering/terrain/fo3-terrain.h"
+#include "world/interaction/fo3-interaction-ray.h"
 
 #include <GLES3/gl3.h>
 #include <android/log.h>
@@ -167,6 +168,8 @@ uint64_t gManifoldLogCountQ714 = 0;
 constexpr float Q225_DYNAMIC_GRID_CELL = 1.5f;
 std::unordered_map<uint64_t, std::vector<uint32_t>> gQ225DynamicGrid;
 std::vector<uint32_t> gQ225DynamicStamp;
+std::vector<uint32_t> gInteractionLargeTriangles;
+std::unordered_set<uint32_t> gCollectedCollisionRefs;
 uint32_t gQ225DynamicSerial = 1u;
 
 int Q225CellCoord(float value) {
@@ -180,6 +183,7 @@ uint64_t Q225CellKey(int x, int z) {
 
 void Q225RebuildDynamicGrid() {
     gQ225DynamicGrid.clear();
+    gInteractionLargeTriangles.clear();
     gQ225DynamicStamp.assign(gWorldTriangles.size(), 0u);
     gQ225DynamicSerial = 1u;
 
@@ -194,7 +198,10 @@ void Q225RebuildDynamicGrid() {
         const int64_t span =
             static_cast<int64_t>(maxX - minX + 1) *
             static_cast<int64_t>(maxZ - minZ + 1);
-        if (span <= 0 || span > 64) continue;
+        if (span <= 0 || span > 64) {
+            gInteractionLargeTriangles.push_back(i);
+            continue;
+        }
         for (int x = minX; x <= maxX; ++x)
             for (int z = minZ; z <= maxZ; ++z)
                 gQ225DynamicGrid[Q225CellKey(x,z)].push_back(i);
@@ -1274,6 +1281,7 @@ bool InitializeFo3CollisionOverlay(const std::vector<Fo3WorldPlacement>& placeme
     InvalidateDerivedCollisionCachesQ17();
     gPlayerCollisionReady = true;
     Q225RebuildDynamicGrid();
+    SetFo3CollectedCollisionRefs(gCollectedCollisionRefs);
     Q6F_LOGI("Q6F COLLISION READY: placements=%zu shapes=%zu triangles=%zu uniqueModels=%zu modelCacheHits=%zu misses=%zu packed=%zu convex=%zu box=%zu sphere=%zu capsule=%zu capped=%d",
              gPlacementCount, gCollisionShapeCount, gTriangleCount,
              modelCache.size(), cacheHits, misses,
@@ -1912,6 +1920,7 @@ bool PublishFo3CollisionSnapshotQ1930(uint64_t token, uint64_t* outSwapUs) {
     gQ950TriangleCount = gWorldTriangles.size();
     gQ950Ready = true;
     Q225RebuildDynamicGrid();
+    SetFo3CollectedCollisionRefs(gCollectedCollisionRefs);
 
     // A rolling exterior snapshot is not a teleport. Preserve the player's
     // already-resolved standing state, but discard contact manifold indices that
@@ -1941,6 +1950,45 @@ void InvalidateDerivedCollisionCachesQ17() {
     gHkWeldAdjacencyReadyQ801 = false;
     gHkShapesReadyQ900 = false;
     gQ950Ready = false;
+}
+
+void SetFo3CollectedCollisionRefs(const std::unordered_set<uint32_t>& refs) {
+    gCollectedCollisionRefs=refs;
+    if (refs.empty()) return;
+    const auto before=gWorldTriangles.size();
+    gWorldTriangles.erase(std::remove_if(gWorldTriangles.begin(),gWorldTriangles.end(),
+        [&](const CollisionTriangle& tri) {
+            const auto source=gSurfaceSourcesQ722.find(tri.surfaceKeyQ714);
+            return source!=gSurfaceSourcesQ722.end() && refs.count(source->second.refFormId);
+        }),gWorldTriangles.end());
+    if (before==gWorldTriangles.size()) return;
+    gTriangleCount=gWorldTriangles.size();
+    InvalidateDerivedCollisionCachesQ17();
+    gHkManifoldValidQ800=false;
+    Q225RebuildDynamicGrid();
+}
+
+bool HasFo3InteractionOccluder(float ox,float oy,float oz,float dx,float dy,float dz,
+                              float distance,uint32_t targetRef) {
+    if (distance<=0.01f) return false;
+    const fo3interaction::Point origin{ox,oy,oz},direction{dx,dy,dz};
+    const float endX=ox+dx*distance,endZ=oz+dz*distance;
+    auto blocked=[&](uint32_t index) {
+        if (index>=gWorldTriangles.size()) return false;
+        const auto& tri=gWorldTriangles[index];
+        const auto source=gSurfaceSourcesQ722.find(tri.surfaceKeyQ714);
+        if (source!=gSurfaceSourcesQ722.end() && source->second.refFormId==targetRef) return false;
+        return fo3interaction::Triangle(origin,direction,{tri.a.x,tri.a.y,tri.a.z},
+            {tri.b.x,tri.b.y,tri.b.z},{tri.c.x,tri.c.y,tri.c.z},distance);
+    };
+    for (int x=Q225CellCoord(std::min(ox,endX));x<=Q225CellCoord(std::max(ox,endX));++x)
+        for (int z=Q225CellCoord(std::min(oz,endZ));z<=Q225CellCoord(std::max(oz,endZ));++z) {
+            const auto cell=gQ225DynamicGrid.find(Q225CellKey(x,z));
+            if (cell!=gQ225DynamicGrid.end())
+                for (auto index:cell->second) if (blocked(index)) return true;
+        }
+    for (auto index:gInteractionLargeTriangles) if (blocked(index)) return true;
+    return false;
 }
 
 bool ResolveFo3DynamicBoxQ225(

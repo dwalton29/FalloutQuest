@@ -164,6 +164,26 @@ Bytes Fixture(bool levelled = false, bool missingRule = false,
     Record(b, type, id, item, flags);
   }
   // Wrap records after TES4 in a GRUP, exercising bounded nested traversal.
+  for (uint32_t id = 200; id < 203; ++id) {
+    Bytes placed, base, n, health;
+    U32(base, 100);
+    Sub(placed, "NAME", base);
+    U32(n, 3);
+    Sub(placed, "XCNT", n);
+    F32(health, .5f);
+    Sub(placed, "XHLP", health);
+    if (id == 201) {
+      Bytes owner;
+      U32(owner, 99);
+      Sub(placed, "XOWN", owner);
+    }
+    if (id == 202) {
+      Bytes lock(12, 0);
+      lock[4] = 104;
+      Sub(placed, "XLOC", lock);
+    }
+    Record(b, "REFR", id, placed);
+  }
   const size_t headerSize = 24 + header.size();
   Bytes grouped(b.begin(), b.begin() + headerSize);
   grouped.insert(grouped.end(), {'G', 'R', 'U', 'P'});
@@ -251,7 +271,39 @@ void Synthetic(const std::string &root) {
                 p.Snapshot().inventory.size(),
         "save roundtrip");
   Check(Id(restored, 101, true) == Id(p, 101, true), "equipment restored");
+  Check(c.references.at(200).count == 3 &&
+            c.references.at(200).condition == .5f,
+        "placed count and health decode");
+  Check(!p.Pickup(201) && !p.Pickup(202), "owned/locked placed items blocked");
+  Check(p.Pickup(200) && !p.Pickup(200) && p.Save(save, error),
+        "pickup identity prevents duplication");
+  Check(restored.Restore(save, error) && restored.IsCollected(200),
+        "collected ref roundtrip");
+  // A v1 save has the same stats/inventory prefix, without world-removal data.
+  Bytes legacy = Read(save);
+  legacy.resize(legacy.size() - 12);
+  legacy[4] = 1;
+  const uint32_t legacySize = legacy.size() - 20;
+  for (int i = 0; i < 4; ++i)
+    legacy[12 + i] = (legacySize >> (8 * i)) & 255;
+  Rechecksum(legacy);
+  Write(save, legacy);
+  Check(restored.Restore(save, error) && !restored.IsCollected(200),
+        "v1 player saves migrate without losing inventory");
+  Check(p.Save(save, error) && restored.Restore(save, error),
+        "restore v2 after migration check");
   const Bytes good = Read(save);
+  Bytes wrongWorld = good;
+  wrongWorld[wrongWorld.size() - 12] ^= 1;
+  Rechecksum(wrongWorld);
+  Write(save, wrongWorld);
+  Check(!restored.Restore(save, error), "world fingerprint mismatch rejected");
+  Bytes unknownRef = good;
+  unknownRef.back() ^= 1;
+  Rechecksum(unknownRef);
+  Write(save, unknownRef);
+  Check(!restored.Restore(save, error),
+        "unknown collected reference with valid CRC rejected");
   Bytes bad = good;
   bad.back() ^= 1;
   Write(save, bad);
@@ -343,10 +395,16 @@ void Original(const std::string &path) {
   Check(p.Definitions().items.at(0x15038).editorId == "PipBoy" &&
             !p.Definitions().items.at(0x15038).playable,
         "original Pip-Boy record");
+  size_t pickups = 0;
+  for (const auto &ref : c.references)
+    if (p.CanPickup(ref.first))
+      ++pickups;
+  Check(pickups > 100, "original loose items resolve");
   std::cout << "Original ESM: " << c.items.size()
             << " item definitions, HP=" << p.MaxHealth()
             << ", AP=" << p.MaxActionPoints() << ", carry=" << p.CarryCapacity()
-            << ", starting stacks=" << p.Snapshot().inventory.size() << '\n';
+            << ", starting stacks=" << p.Snapshot().inventory.size()
+            << ", supported pickups=" << pickups << '\n';
 }
 } // namespace
 int main(int argc, char **argv) {

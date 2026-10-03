@@ -3,6 +3,12 @@
 #include "fo3-megaton-scene.h"
 
 #include <vector>
+#include <unordered_set>
+
+// Render-thread world removal; reapplied when a rolling snapshot publishes.
+void SetFo3CollectedCollisionRefs(const std::unordered_set<uint32_t>& refs);
+bool HasFo3InteractionOccluder(float ox,float oy,float oz,float dx,float dy,float dz,
+                              float distance,uint32_t targetRef);
 
 // Builds the shared authored-collision world from Bethesda NIF bhk shapes for
 // selected Megaton structural placements. Q6F can render it as a debug overlay;

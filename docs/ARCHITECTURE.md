@@ -402,3 +402,46 @@ state is not connected to the visible body rig. Consumption, ownership/theft,
 container transfer, scripts, perks, effects, radiation/limb damage, combat,
 level progression and character-creation allocation remain unimplemented.
 Portable checks in `tests/player` are run by the APK workflow.
+
+## Item and load-door interaction (0.27.0)
+
+The player catalog also indexes REFR NAME, XCNT, XHLP, XOWN and XLOC, CELL
+ownership and scripted DOOR bases. Counts and normalized condition come from
+original records. The CELL GRUP hierarchy supplies inherited ownership. Explicit
+Player ownership is accepted; other ownership, malformed references, non-playable
+items and scripted base activation are blocked until those runtimes exist. Any
+XLOC is treated conservatively as locked, including key-only locks; a matching
+inventory key permits travel. This does not execute OnActivate or OnAdd scripts,
+faction privileges, public-cell ownership exceptions or leveled lock rules.
+
+The right-controller virtual aim ray chooses the closest rendered loose-item
+shape or existing authored XTEL door within 3 m. Item AABBs transform all eight
+corners with the current loose-body matrix. A 1.5 cm item targeting tolerance is
+an explicit VR adaptation. The authored collision grid performs two-sided ray
+triangle occlusion, retaining large surfaces outside the dynamic grid. References
+without rendered item geometry cannot be picked up. Existing no-model load-door
+anchors remain available. Local door animation and container looting are pending.
+
+Right A activates once per input edge. Pickup records the source REFR exactly
+once, adds its authored count/condition, releases either hand and its dynamic body,
+removes its collision, and flushes the player save. It never resets the VR player
+origin. Door travel retains the existing destination resolution and origin/facing
+handoff. The original HUD font/widget renders FULL item names with the vanilla
+English Take label, verified in the supplied Fallout3.exe. No Bethesda asset is
+committed. Unsupported items show their name but activation remains blocked.
+
+Rendering (including instancing/reflection), grab selection and targeting skip
+collected IDs. The collision TU owns a render-thread exclusion set, filters the
+active triangle vector and invalidates derived caches/manifolds after removal.
+It reapplies exclusions to initial worlds and every rolling snapshot publication;
+background snapshot workers never read mutable Player state. Small removal events
+can trigger a one-time derived collision rebuild; headset frame time needs checking.
+
+FQPS v2 adds a separately fingerprinted world definition set and sorted collected
+IDs. v1 saves retain their existing catalog identity and inventory/resources.
+Restoration rejects duplicate/unknown collected IDs, mismatched world records,
+truncated lists and invalid CRCs before publishing anything. World removals and
+inventory share one atomic save, preventing restart duplication. Save-blocked
+sessions reject pickup. Failed writes retain live state and retry on lifecycle
+flush; loss of the process before a successful flush can lose a recent pickup.
+This does not implement object respawning, drop-to-world, quests or general savegames.

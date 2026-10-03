@@ -218,6 +218,8 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
     return fail("Truncated ESM");
   Catalog next;
   std::vector<uint64_t> groups;
+  std::vector<uint32_t> groupCells;
+  std::unordered_map<uint32_t, uint32_t> cellOwners;
   std::unordered_map<std::string, float> settings;
   struct StartingItem {
     uint32_t form;
@@ -229,8 +231,10 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
   uint32_t fingerprint = 0;
   uint64_t at = 0;
   while (at < static_cast<uint64_t>(fileSize)) {
-    while (!groups.empty() && at == groups.back())
+    while (!groups.empty() && at == groups.back()) {
       groups.pop_back();
+      groupCells.pop_back();
+    }
     const uint64_t boundary =
         groups.empty() ? static_cast<uint64_t>(fileSize) : groups.back();
     if (at > boundary || boundary - at < 24)
@@ -246,6 +250,12 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
       if (size < 24 || size > boundary - at)
         return fail("Invalid ESM group size");
       groups.push_back(at + size);
+      const auto groupType = fo3esm::ReadU32(h + 12);
+      const bool cellGroup =
+          groupType == 6 || groupType == 8 || groupType == 9 || groupType == 10;
+      groupCells.push_back(cellGroup
+                               ? fo3esm::ReadU32(h + 8)
+                               : (groupCells.empty() ? 0 : groupCells.back()));
       at += 24;
       continue;
     }
@@ -254,8 +264,9 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
     const auto flags = fo3esm::ReadU32(h + 8), form = fo3esm::ReadU32(h + 12);
     ItemKind kind{};
     const bool item = Kind(type, kind);
-    const bool selected = type == "TES4" || type == "GMST" || item ||
-                          (type == "NPC_" && form == PlayerBase);
+    const bool worldRecord = type == "REFR" || type == "DOOR" || type == "CELL";
+    const bool selected = worldRecord || type == "TES4" || type == "GMST" ||
+                          item || (type == "NPC_" && form == PlayerBase);
     if (at == 0 && type != "TES4")
       return fail("Missing TES4 file header");
     if (selected && !(flags & 0x20)) {
@@ -266,10 +277,64 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
       std::vector<Sub> subs;
       if (!Subs(payload, subs))
         return fail("Malformed ESM subrecord");
-      fingerprint = static_cast<uint32_t>(crc32(fingerprint, h, sizeof(h)));
-      fingerprint = static_cast<uint32_t>(crc32(
-          fingerprint, payload.data(), static_cast<uInt>(payload.size())));
-      if (type == "TES4") {
+      // Keep the v1 catalog identity stable so existing player saves migrate.
+      if (!worldRecord) {
+        fingerprint = static_cast<uint32_t>(crc32(fingerprint, h, sizeof(h)));
+        fingerprint = static_cast<uint32_t>(crc32(
+            fingerprint, payload.data(), static_cast<uInt>(payload.size())));
+      } else {
+        next.worldFingerprint =
+            static_cast<uint32_t>(crc32(next.worldFingerprint, h, sizeof(h)));
+        next.worldFingerprint =
+            static_cast<uint32_t>(crc32(next.worldFingerprint, payload.data(),
+                                        static_cast<uInt>(payload.size())));
+      }
+      if (type == "REFR") {
+        Reference ref;
+        ref.flags = flags;
+        ref.cell = groupCells.empty() ? 0 : groupCells.back();
+        const auto *base = Find(subs, "NAME");
+        if (!base || base->size != 4)
+          return fail("Invalid reference base");
+        ref.base = fo3esm::ReadU32(base->data);
+        for (const auto &sub : subs) {
+          if (sub.type == "XCNT") {
+            if (sub.size != 4)
+              ref.valid = false;
+            else
+              ref.count = I32(sub.data);
+          } else if (sub.type == "XHLP") {
+            if (sub.size != 4)
+              ref.valid = false;
+            else
+              ref.condition = fo3esm::ReadF32(sub.data);
+          } else if (sub.type == "XOWN") {
+            if (sub.size != 4)
+              ref.valid = false;
+            else
+              ref.owner = fo3esm::ReadU32(sub.data);
+          } else if (sub.type == "XLOC") {
+            if (sub.size < 12)
+              ref.valid = false;
+            else {
+              ref.locked =
+                  true; // XLOC authors a lock, including key-only locks.
+              ref.key = fo3esm::ReadU32(sub.data + 4);
+            }
+          }
+        }
+        ref.valid = ref.valid && ref.count > 0 &&
+                    std::isfinite(ref.condition) && ref.condition >= 0 &&
+                    ref.condition <= 1;
+        next.references[form] = ref;
+      } else if (type == "CELL") {
+        const auto *owner = Find(subs, "XOWN");
+        if (owner && owner->size == 4)
+          cellOwners[form] = fo3esm::ReadU32(owner->data);
+      } else if (type == "DOOR") {
+        if (Find(subs, "SCRI"))
+          next.scriptedBases.insert(form);
+      } else if (type == "TES4") {
         if (tes4Found || Find(subs, "MAST"))
           return fail("Only standalone Fallout3.esm is supported");
         tes4Found = true;
@@ -278,6 +343,8 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
         const auto *d = Find(subs, "DATA");
         if (!id.empty() && id[0] == 'f' && d && d->size == 4)
           settings[id] = fo3esm::ReadF32(d->data);
+        if (!id.empty() && id[0] == 's' && d)
+          next.strings[id] = fo3esm::ZString(d->data, d->size);
       } else if (item) {
         Item definition;
         if (!form || !DecodeItem(form, flags, kind, subs, definition))
@@ -348,6 +415,9 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
     *entry.second = it->second;
   }
   next.fingerprint = fingerprint;
+  for (auto &entry : next.references)
+    if (!entry.second.owner && cellOwners.count(entry.second.cell))
+      entry.second.owner = cellOwners.at(entry.second.cell);
   Player initial(std::move(next));
   if (!std::isfinite(initial.MaxHealth()) || initial.MaxHealth() <= 0 ||
       !std::isfinite(initial.MaxActionPoints()) ||
@@ -468,6 +538,46 @@ bool Player::Unequip(uint64_t id) {
     }
   return false;
 }
+bool Player::CanPickup(uint32_t id) const {
+  const auto r = catalog_.references.find(id);
+  if (r == catalog_.references.end() || IsCollected(id))
+    return false;
+  const auto &ref = r->second;
+  const auto i = catalog_.items.find(ref.base);
+  return ref.valid && !(ref.flags & 0x20) &&
+         (!ref.owner || ref.owner == PlayerBase) && !ref.locked &&
+         i != catalog_.items.end() && i->second.playable && !i->second.script &&
+         (i->second.maxCondition > 0 || ref.condition == 1);
+}
+bool Player::Pickup(uint32_t id) {
+  if (!CanPickup(id) || state_.collected.size() >= 100000)
+    return false;
+  const auto &ref = catalog_.references.at(id);
+  // Record before Add (which can allocate); undo on an invalid Add.
+  state_.collected.insert(id);
+  if (!Add(ref.base, ref.count, ref.condition)) {
+    state_.collected.erase(id);
+    return false;
+  }
+  return true;
+}
+bool Player::CanOpenDoor(uint32_t id) const {
+  const auto r = catalog_.references.find(id);
+  if (r == catalog_.references.end())
+    return false;
+  const auto &ref = r->second;
+  if (!ref.valid || (ref.owner && ref.owner != PlayerBase) ||
+      catalog_.scriptedBases.count(ref.base))
+    return false;
+  if (!ref.locked)
+    return true;
+  if (!ref.key)
+    return false;
+  for (const auto &s : state_.inventory)
+    if (s.formId == ref.key && s.count > 0)
+      return true;
+  return false;
+}
 bool Player::DamageHealth(float amount) {
   if (!Amount(amount))
     return false;
@@ -520,8 +630,15 @@ bool Player::Save(const std::string &path, std::string &error) const {
     PutFloat(payload, s.condition);
     payload.push_back(s.equipped ? 1 : 0);
   }
+  Put32(payload, catalog_.worldFingerprint);
+  Put32(payload, static_cast<uint32_t>(state_.collected.size()));
+  std::vector<uint32_t> collected(state_.collected.begin(),
+                                  state_.collected.end());
+  std::sort(collected.begin(), collected.end());
+  for (auto id : collected)
+    Put32(payload, id);
   Bytes bytes{'F', 'Q', 'P', 'S'};
-  Put32(bytes, 1);
+  Put32(bytes, 2);
   Put32(bytes, catalog_.fingerprint);
   Put32(bytes, static_cast<uint32_t>(payload.size()));
   Put32(bytes, Crc(payload));
@@ -578,7 +695,8 @@ bool Player::Restore(const std::string &path, std::string &error) {
   if (!fo3esm::ReadExact(f.get(), bytes.data(), bytes.size()))
     return fail("Truncated player save");
   const auto *h = bytes.data();
-  if (std::memcmp(h, "FQPS", 4) || fo3esm::ReadU32(h + 4) != 1)
+  const auto version = fo3esm::ReadU32(h + 4);
+  if (std::memcmp(h, "FQPS", 4) || (version != 1 && version != 2))
     return fail("Unsupported player save format");
   if (fo3esm::ReadU32(h + 8) != catalog_.fingerprint)
     return fail("Player save belongs to different game definitions");
@@ -593,9 +711,9 @@ bool Player::Restore(const std::string &path, std::string &error) {
   next.apSpent = fo3esm::ReadF32(p + 4);
   next.nextStackId = U64(p + 8);
   const uint32_t count = fo3esm::ReadU32(p + 16);
-  if (count > MaxStacks ||
-      payload.size() != 20 + static_cast<size_t>(count) * 21 ||
-      !next.nextStackId)
+  const size_t inventoryEnd = 20 + static_cast<size_t>(count) * 21;
+  if (count > MaxStacks || payload.size() < inventoryEnd ||
+      (version == 1 && payload.size() != inventoryEnd) || !next.nextStackId)
     return fail("Invalid player save inventory size");
   if (!std::isfinite(next.healthDamage) || next.healthDamage < 0 ||
       next.healthDamage > MaxHealth() || !std::isfinite(next.apSpent) ||
@@ -621,6 +739,23 @@ bool Player::Restore(const std::string &path, std::string &error) {
           Conflicts(catalog_.items.at(prior.formId), item->second))
         return fail("Conflicting saved equipment");
     next.inventory.push_back(stack);
+  }
+  next.collected.clear();
+  if (version == 2) {
+    if (payload.size() - inventoryEnd < 8)
+      return fail("Missing collected references");
+    if (fo3esm::ReadU32(p + inventoryEnd) != catalog_.worldFingerprint)
+      return fail("Collected references belong to different world definitions");
+    const auto n = fo3esm::ReadU32(p + inventoryEnd + 4);
+    if (n > 100000 || payload.size() - inventoryEnd != 8ull + 4ull * n)
+      return fail("Invalid collected reference count");
+    for (uint32_t i = 0; i < n; ++i) {
+      const auto id = fo3esm::ReadU32(p + inventoryEnd + 8 + i * 4);
+      if (!id || !catalog_.references.count(id) ||
+          !catalog_.items.count(catalog_.references.at(id).base) ||
+          !next.collected.insert(id).second)
+        return fail("Invalid collected reference");
+    }
   }
   state_ = std::move(next);
   ++revision_;

@@ -2,7 +2,23 @@
 
 Experimental standalone Meta Quest runtime for user-supplied Fallout 3 game data.
 
-## Current milestone: 0.26.0 — Player stats and inventory foundation
+## Current milestone: 0.27.0 — Item pickup and door interaction
+
+Aim the right controller and press **A** to take supported loose items or use
+authored load doors. Item names come from FULL; counts and condition come from
+placed REFR XCNT/XHLP. Targeting follows moved props and checks authored collision
+for intervening walls. Collected references disappear from rendering, grabbing
+and collision, and stay collected across CELL changes, streaming and restarts.
+FQPS v2 saves preserve world removals and can read existing v1 player saves.
+
+Authored locked doors require their matching key in inventory. Lockpicking,
+scripted activation, NPC/faction ownership/theft, containers and animated local
+doors are pending. These unsupported actions are blocked. Explicit Player-owned
+items and doors are supported; CELL ownership is inherited conservatively.
+The existing Fallout HUD font/widget supplies prompts; the 3 m controller ray
+and small item aiming tolerance are VR adaptations. Headset testing remains.
+
+## Player stats and inventory foundation: 0.26.0
 
 The startup worker loads the original Player NPC_ record, its SPECIAL, manual
 skills, level, karma and CNTO inventory, plus 1,762 original inventory item

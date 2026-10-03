@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -69,6 +70,12 @@ struct Rules {
   float healthEnduranceMult = 0, healthEnduranceOffset = 0, healthLevelMult = 0;
   float apBase = 0, apMult = 0, carryBase = 0, carryMult = 0;
 };
+struct Reference {
+  uint32_t base = 0, flags = 0, owner = 0, key = 0, cell = 0;
+  int32_t count = 1;
+  float condition = 1;
+  bool locked = false, valid = true;
+};
 struct State {
   std::array<uint8_t, 7> special{};
   std::array<uint8_t, 14> skills{}, skillOffsets{};
@@ -77,12 +84,17 @@ struct State {
   float karma = 0, healthDamage = 0, apSpent = 0;
   uint64_t nextStackId = 1;
   std::vector<Stack> inventory;
+  std::unordered_set<uint32_t> collected;
 };
 struct Catalog {
   std::unordered_map<uint32_t, Item> items;
+  std::unordered_map<uint32_t, Reference> references;
+  std::unordered_set<uint32_t> scriptedBases;
+  std::unordered_map<std::string, std::string> strings;
   Rules rules;
   State initial;
   uint32_t fingerprint = 0;
+  uint32_t worldFingerprint = 0;
 };
 // All-or-nothing, single-master Fallout3.esm loader. No plugins, scripts or
 // save import.
@@ -101,11 +113,18 @@ public:
   double InventoryWeight() const;
   bool Overencumbered() const { return InventoryWeight() > CarryCapacity(); }
   uint64_t Revision() const { return revision_; }
-  // Invalid requests are atomic no-ops. Removal respects quest/cannot-drop flags.
+  // Invalid requests are atomic no-ops. Removal respects quest/cannot-drop
+  // flags.
   bool Add(uint32_t formId, int32_t count, float condition = 1);
   bool Remove(uint64_t stackId, int32_t count);
   bool Equip(uint64_t stackId);
   bool Unequip(uint64_t stackId);
+  bool CanPickup(uint32_t reference) const;
+  bool Pickup(uint32_t reference);
+  bool CanOpenDoor(uint32_t reference) const;
+  bool IsCollected(uint32_t reference) const {
+    return state_.collected.count(reference) != 0;
+  }
   bool DamageHealth(float amount);
   bool RestoreHealth(float amount);
   bool SpendActionPoints(float amount);

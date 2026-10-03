@@ -1285,52 +1285,25 @@ private:
         }
         const XrPosef hand = ToVirtualPose(handLocalPoses_[1]);
         const Mat4 handMatrix = MatrixFromPose(hand);
-        Fo3DoorAimQ1700 aim{};
-        const bool q1850WasActive = doorAimActiveQ1700_;
-        const bool q1850NextActive = QueryFo3DoorAimQ1700(
-            hand.position.x, hand.position.y, hand.position.z,
-            -handMatrix.m[8], -handMatrix.m[9], -handMatrix.m[10], &aim) && aim.valid;
-
-        if (q1850NextActive) {
-            // Keep the authored destination/yaw cache for the post-A facing fix.
-            doorAimYawQ1800_ = aim.rz;
-            doorAimDestinationQ1800_ = aim.destinationDoorRef;
-
-            if (doorAimSourceQ1840_ != aim.sourceDoorRef || !doorPromptValidQ1850_) {
-                std::array<char, 512> q1850Prompt{};
-                if (GetFo3DoorPromptQ1840(aim.sourceDoorRef,
-                                          q1850Prompt.data(),
-                                          q1850Prompt.size())) {
-                    // Fixed-size copy only when the target changes. On aim loss
-                    // these bytes are deliberately retained and never mutated.
-                    std::memcpy(doorPromptQ1850_.data(),
-                                q1850Prompt.data(),
-                                doorPromptQ1850_.size());
-                    doorPromptValidQ1850_ = true;
-                } else {
-                    doorPromptValidQ1850_ = false;
-                    FQ_LOGE("Q16.13 HUD PROMPT MISS: sourceDoor=%08X destinationDoor=%08X",
-                            aim.sourceDoorRef, aim.destinationDoorRef);
-                }
-                doorAimSourceQ1840_ = aim.sourceDoorRef;
+        Fo3InteractionTarget target;
+        const bool active = QueryFo3Interaction(
+            hand.position.x,hand.position.y,hand.position.z,
+            -handMatrix.m[8],-handMatrix.m[9],-handMatrix.m[10],target);
+        if (active) {
+            if (!target.pickup) {
+                doorAimYawQ1800_ = target.door.rz;
+                doorAimDestinationQ1800_ = target.door.destinationDoorRef;
             }
-
-            if (!q1850WasActive) {
-                FQ_LOGI("Q16.13 HUD TARGET SHOW: sourceDoor=%08X destinationDoor=%08X text=%s promptStorage=fixed",
-                        aim.sourceDoorRef, aim.destinationDoorRef,
-                        doorPromptValidQ1850_ ? doorPromptQ1850_.data() : "<missing>");
-            }
+            if (doorAimSourceQ1840_ != target.reference ||
+                std::strcmp(doorPromptQ1850_.data(),target.prompt.data()) != 0)
+                doorPromptQ1850_ = target.prompt;
+            doorAimSourceQ1840_ = target.reference;
+            doorPromptValidQ1850_ = target.prompt[0] != '\0';
         } else {
-            if (q1850WasActive) {
-                FQ_LOGI("Q16.13 HUD TARGET HIDE: sourceDoor=%08X reason=ray-miss promptStorage=fixed-retained",
-                        doorAimSourceQ1840_);
-            }
-            // Aim loss is now three scalar writes. Do NOT clear/memset/free the
-            // prompt buffer, and do not touch HUD GL resources.
-            doorAimSourceQ1840_ = 0u;
+            doorAimSourceQ1840_ = 0;
             doorPromptValidQ1850_ = false;
         }
-        doorAimActiveQ1700_ = q1850NextActive;
+        doorAimActiveQ1700_ = active;
     }
 
     void ApplyAuthoredDoorFacingQ1810(const XrView& view) {
@@ -1468,7 +1441,7 @@ private:
                     if (handPoseValid_[1]) {
                         const XrPosef handQ1700 = ToVirtualPose(handLocalPoses_[1]);
                         const Mat4 handMatrixQ1700 = MatrixFromPose(handQ1700);
-                        if (ActivateFo3DoorQ1700(
+                        if (ActivateFo3Interaction(
                                 handQ1700.position.x, handQ1700.position.y, handQ1700.position.z,
                                 -handMatrixQ1700.m[8], -handMatrixQ1700.m[9], -handMatrixQ1700.m[10])) {
                             playerPosition_ = {0.0f, 0.0f, 0.0f};

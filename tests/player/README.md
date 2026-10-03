@@ -25,3 +25,10 @@ build/host-player/player_state_tests /path/to/Fallout3.esm
 The supplied original yields 1,762 items, all seven SPECIAL values at five,
 200 maximum HP, 75 AP, 200 carry capacity and the original PipBoy/PipBoyGlove
 inventory. This verifies data interpretation, not full Bethesda gameplay parity.
+
+`interaction_runtime_tests` executes the actual render interaction bridge with
+recording stubs: nearest item/door choice, moved bounds, loading/occlusion guards,
+blocked ownership, key access, pickup without origin reset, grab/rigid-body
+retirement and collision/save notifications. Geometry checks cover slabs and
+two-sided triangle occlusion. State fixtures cover REFR counts/condition,
+duplicate pickup, collected-reference persistence and v1 save migration.
