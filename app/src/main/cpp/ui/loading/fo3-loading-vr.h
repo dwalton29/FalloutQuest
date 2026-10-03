@@ -9,7 +9,7 @@
 #include <chrono>
 #include <cstdint>
 
-// Q16.8: keep Fallout 3's authored loading-menu identity, but adapt the final
+// keep Fallout 3's authored loading-menu identity, but adapt the final
 // presentation for binocular VR instead of recreating the desktop 1280x960
 // footprint at nearly eye-filling size.
 //
@@ -17,9 +17,9 @@
 // The spinner follows loading_menu.xml's Interface\\Circular Loading\\loading01.nif
 // pinwheel language, enlarged slightly for headset legibility. Both are drawn at
 // identical per-eye coordinates (zero forced disparity) to avoid the near-plane
-// convergence discomfort seen with the original Q16.0 card.
+// convergence discomfort seen with the original card.
 
-namespace fo3loadq1780 {
+namespace fo3loadingvr {
 
 constexpr const char* TAG = "FalloutQuest";
 
@@ -46,7 +46,7 @@ inline GLuint Compile(GLenum type, const char* source) {
         char log[2048]{};
         glGetShaderInfoLog(shader, sizeof(log), nullptr, log);
         __android_log_print(ANDROID_LOG_ERROR, TAG,
-                            "Q16.8 LOADING shader compile failed: %s", log);
+                            "LOADING shader compile failed: %s", log);
         glDeleteShader(shader);
         return 0u;
     }
@@ -167,7 +167,7 @@ inline bool EnsureProgram() {
         char log[2048]{};
         glGetProgramInfoLog(gProgram, sizeof(log), nullptr, log);
         __android_log_print(ANDROID_LOG_ERROR, TAG,
-                            "Q16.8 LOADING program link failed: %s", log);
+                            "LOADING program link failed: %s", log);
         glDeleteProgram(gProgram);
         gProgram = 0u;
         return false;
@@ -188,16 +188,16 @@ inline bool EnsureProgram() {
 }
 
 inline void Render(GLuint framebuffer, GLsizei width, GLsizei height) {
-    if (!IsFo3LoadingVisibleQ1700() || width <= 0 || height <= 0) return;
+    if (!IsFo3LoadingVisible() || width <= 0 || height <= 0) return;
 
-    const uint64_t generation = GetFo3LoadingGenerationQ1700();
+    const uint64_t generation = GetFo3LoadingGeneration();
     const auto now = std::chrono::steady_clock::now();
     if (generation != gGeneration) {
         gGeneration = generation;
         gGenerationStart = now;
     }
 
-    const bool haveImage = fo3loadq1700::LoadForCurrentGeneration();
+    const bool haveImage = fo3loading::LoadForCurrentGeneration();
 
     GLint oldProgram = 0;
     GLint oldVao = 0;
@@ -231,15 +231,15 @@ inline void Render(GLuint framebuffer, GLsizei width, GLsizei height) {
         glUseProgram(gProgram);
         glBindVertexArray(gVao);
         glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, haveImage ? fo3loadq1700::gTexture : 0u);
+        glBindTexture(GL_TEXTURE_2D, haveImage ? fo3loading::gTexture : 0u);
         glUniform1i(gImageLoc, 0);
         glUniform1f(gHaveImageLoc, haveImage ? 1.0f : 0.0f);
 
         const float viewAspect = static_cast<float>(width) /
                                  static_cast<float>(std::max<GLsizei>(height, 1));
         const float imageAspect = haveImage
-            ? static_cast<float>(fo3loadq1700::gImageWidth) /
-              static_cast<float>(std::max(fo3loadq1700::gImageHeight, 1))
+            ? static_cast<float>(fo3loading::gImageWidth) /
+              static_cast<float>(std::max(fo3loading::gImageHeight, 1))
             : (4.0f / 3.0f);
 
         float sx = 0.62f;
@@ -264,7 +264,7 @@ inline void Render(GLuint framebuffer, GLsizei width, GLsizei height) {
             gLoggedGeneration = generation;
             __android_log_print(
                 ANDROID_LOG_INFO, TAG,
-                "Q16.8 VR LOADING MENU DRAW: generation=%llu image=%d panel=(%.3f %.3f) center=(0.50 0.60) spinner=loading01-style radius=0.026 stereo=zeroDisparity",
+                "VR LOADING MENU DRAW: generation=%llu image=%d panel=(%.3f %.3f) center=(0.50 0.60) spinner=loading01-style radius=0.026 stereo=zeroDisparity",
                 static_cast<unsigned long long>(generation), haveImage ? 1 : 0,
                 sx, sy);
         }
@@ -291,13 +291,13 @@ inline void Shutdown() {
     gLoggedGeneration = ~uint64_t{0};
 }
 
-} // namespace fo3loadq1780
+} // namespace fo3loadingvr
 
-inline void RenderFo3LoadingScreenQ1780(GLuint framebuffer, GLsizei width, GLsizei height) {
-    fo3loadq1780::Render(framebuffer, width, height);
+inline void RenderFo3LoadingVr(GLuint framebuffer, GLsizei width, GLsizei height) {
+    fo3loadingvr::Render(framebuffer, width, height);
 }
 
-inline void ShutdownFo3LoadingScreenQ1780() {
-    fo3loadq1780::Shutdown();
-    ShutdownFo3LoadingScreenQ1700();
+inline void ShutdownFo3LoadingVr() {
+    fo3loadingvr::Shutdown();
+    ShutdownFo3LoadingScreenBase();
 }

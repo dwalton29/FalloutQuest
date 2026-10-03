@@ -14,7 +14,7 @@
 #include <string>
 #include <vector>
 
-namespace fo3loadq1700 {
+namespace fo3loading {
 
 constexpr const char* TAG = "FalloutQuest";
 constexpr const char* ESM_PATH =
@@ -135,7 +135,7 @@ inline void Prepare() {
     FILE* f = std::fopen(ESM_PATH, "rb");
     if (!f) {
         __android_log_print(ANDROID_LOG_ERROR, TAG,
-                            "Q16.0 LSCR CACHE FAIL: Fallout3.esm open failed");
+                            "LSCR CACHE FAIL: Fallout3.esm open failed");
         return;
     }
 
@@ -167,7 +167,7 @@ inline void Prepare() {
     std::fclose(f);
 
     __android_log_print(ANDROID_LOG_INFO, TAG,
-                        "Q16.0 LSCR CACHE READY: records=%zu usableIcons=%zu source=Fallout3.esm",
+                        "LSCR CACHE READY: records=%zu usableIcons=%zu source=Fallout3.esm",
                         records, gScreens.size());
 }
 
@@ -207,7 +207,7 @@ inline GLuint Compile(GLenum type, const char* source) {
         char log[1024]{};
         glGetShaderInfoLog(shader, sizeof(log), nullptr, log);
         __android_log_print(ANDROID_LOG_ERROR, TAG,
-                            "Q16.0 LOADING shader compile failed: %s", log);
+                            "LOADING shader compile failed: %s", log);
         glDeleteShader(shader);
         return 0u;
     }
@@ -268,7 +268,7 @@ inline bool EnsureProgram() {
         char log[1024]{};
         glGetProgramInfoLog(gProgram, sizeof(log), nullptr, log);
         __android_log_print(ANDROID_LOG_ERROR, TAG,
-                            "Q16.0 LOADING program link failed: %s", log);
+                            "LOADING program link failed: %s", log);
         glDeleteProgram(gProgram);
         gProgram = 0u;
         return false;
@@ -280,7 +280,7 @@ inline bool EnsureProgram() {
 }
 
 inline bool LoadForCurrentGeneration() {
-    const uint64_t generation = GetFo3LoadingGenerationQ1700();
+    const uint64_t generation = GetFo3LoadingGeneration();
     if (generation == gLoadedGeneration) return gTexture != 0u;
     gLoadedGeneration = generation;
 
@@ -292,12 +292,12 @@ inline bool LoadForCurrentGeneration() {
     gLoadedIcon.clear();
 
     Prepare();
-    const uint32_t cell = GetFo3LoadingCellQ1700();
-    const uint32_t world = GetFo3LoadingWorldspaceQ1700();
+    const uint32_t cell = GetFo3LoadingCell();
+    const uint32_t world = GetFo3LoadingWorldspace();
     const LoadingScreen* selected = Select(cell, world);
     if (!selected) {
         __android_log_print(ANDROID_LOG_WARN, TAG,
-                            "Q16.0 LSCR SELECT MISS: cell=%08X worldspace=%08X",
+                            "LSCR SELECT MISS: cell=%08X worldspace=%08X",
                             cell, world);
         return false;
     }
@@ -306,7 +306,7 @@ inline bool LoadForCurrentGeneration() {
     if (!LoadFalloutTextureRgba(selected->iconPath, decoded) ||
         decoded.width <= 0 || decoded.height <= 0 || decoded.rgba.empty()) {
         __android_log_print(ANDROID_LOG_WARN, TAG,
-                            "Q16.0 LSCR DDS MISS: EDID=%s icon=%s cell=%08X worldspace=%08X",
+                            "LSCR DDS MISS: EDID=%s icon=%s cell=%08X worldspace=%08X",
                             selected->editorId.c_str(), selected->iconPath.c_str(), cell, world);
         return false;
     }
@@ -327,7 +327,7 @@ inline bool LoadForCurrentGeneration() {
     gLoadedIcon = selected->iconPath;
 
     __android_log_print(ANDROID_LOG_INFO, TAG,
-                        "Q16.0 LSCR ACTIVE: cell=%08X worldspace=%08X EDID=%s icon=%s size=%dx%d locationMatched=%d DESC=%s",
+                        "LSCR ACTIVE: cell=%08X worldspace=%08X EDID=%s icon=%s size=%dx%d locationMatched=%d DESC=%s",
                         cell, world, gLoadedEditorId.c_str(), gLoadedIcon.c_str(),
                         gImageWidth, gImageHeight,
                         ContainsLocation(*selected, cell) || ContainsLocation(*selected, world) ? 1 : 0,
@@ -336,7 +336,7 @@ inline bool LoadForCurrentGeneration() {
 }
 
 inline void Render(GLuint framebuffer, GLsizei width, GLsizei height) {
-    if (!IsFo3LoadingVisibleQ1700() || width <= 0 || height <= 0) return;
+    if (!IsFo3LoadingVisible() || width <= 0 || height <= 0) return;
     const bool haveImage = LoadForCurrentGeneration();
 
     GLint oldProgram = 0, oldVao = 0, oldActiveTexture = 0, oldTexture = 0;
@@ -398,10 +398,10 @@ inline void Shutdown() {
     gLoadedGeneration = ~uint64_t{0};
 }
 
-} // namespace fo3loadq1700
+} // namespace fo3loading
 
-inline void PrepareFo3LoadingScreensQ1700() { fo3loadq1700::Prepare(); }
-inline void RenderFo3LoadingScreenQ1700(GLuint framebuffer, GLsizei width, GLsizei height) {
-    fo3loadq1700::Render(framebuffer, width, height);
+inline void PrepareFo3LoadingScreens() { fo3loading::Prepare(); }
+inline void RenderFo3LoadingScreenBase(GLuint framebuffer, GLsizei width, GLsizei height) {
+    fo3loading::Render(framebuffer, width, height);
 }
-inline void ShutdownFo3LoadingScreenQ1700() { fo3loadq1700::Shutdown(); }
+inline void ShutdownFo3LoadingScreenBase() { fo3loading::Shutdown(); }

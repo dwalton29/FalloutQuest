@@ -9,7 +9,7 @@
 #include <chrono>
 #include <cstdint>
 
-// Q16.6: Fallout 3 loading-menu presentation reconstructed from the user's
+// Fallout 3 loading-menu presentation reconstructed from the user's
 // Fallout - Misc.bsa / menus/loading_menu.xml.
 //
 // Authored vanilla facts used here:
@@ -22,12 +22,12 @@
 //   - the wheel is centred horizontally near the bottom of the authored canvas
 //
 // FalloutQuest keeps the menu at zero stereo disparity for VR comfort. The
-// Bethesda LSCR DDS remains user-owned and is still selected by Q16.0 from the
+// Bethesda LSCR DDS remains user-owned and is still selected by from the
 // ESM/Textures BSA. The circular NIF is represented procedurally for now so the
 // loading menu does not depend on animated-UI-NIF playback; its authored size,
 // location and timing are preserved.
 
-namespace fo3loadq1760 {
+namespace fo3loadingvanilla {
 
 constexpr const char* TAG = "FalloutQuest";
 
@@ -54,7 +54,7 @@ inline GLuint Compile(GLenum type, const char* source) {
         char log[2048]{};
         glGetShaderInfoLog(shader, sizeof(log), nullptr, log);
         __android_log_print(ANDROID_LOG_ERROR, TAG,
-                            "Q16.6 LOADING shader compile failed: %s", log);
+                            "LOADING shader compile failed: %s", log);
         glDeleteShader(shader);
         return 0u;
     }
@@ -113,7 +113,7 @@ inline bool EnsureProgram() {
 
             if (inPanel && uHaveImage > 0.5) {
                 // loading_world_image is explicitly screen width x screen height
-                // in loading_menu.xml, so do not add Q16.2's inner image card.
+                // in loading_menu.xml, so do not add 's inner image card.
                 vec4 image = texture(uImage, panel);
                 colour = image.rgb * image.a;
             }
@@ -141,7 +141,7 @@ inline bool EnsureProgram() {
 
             // Procedural fallback for Interface\Circular Loading\loading01.nif:
             // twelve short radial blades with a moving intensity head/trail. This
-            // is intentionally a pinwheel, not Q16.2's incorrect clock face.
+            // is intentionally a pinwheel, not 's incorrect clock face.
             for (int i = 0; i < 12; ++i) {
                 float fi = float(i);
                 float a = fi * (TAU / 12.0) + PI * 0.5;
@@ -190,7 +190,7 @@ inline bool EnsureProgram() {
         char log[2048]{};
         glGetProgramInfoLog(gProgram, sizeof(log), nullptr, log);
         __android_log_print(ANDROID_LOG_ERROR, TAG,
-                            "Q16.6 LOADING program link failed: %s", log);
+                            "LOADING program link failed: %s", log);
         glDeleteProgram(gProgram);
         gProgram = 0u;
         return false;
@@ -211,18 +211,18 @@ inline bool EnsureProgram() {
 }
 
 inline void Render(GLuint framebuffer, GLsizei width, GLsizei height) {
-    if (!IsFo3LoadingVisibleQ1700() || width <= 0 || height <= 0) return;
+    if (!IsFo3LoadingVisible() || width <= 0 || height <= 0) return;
 
-    const uint64_t generation = GetFo3LoadingGenerationQ1700();
+    const uint64_t generation = GetFo3LoadingGeneration();
     const auto now = std::chrono::steady_clock::now();
     if (generation != gGeneration) {
         gGeneration = generation;
         gGenerationStart = now;
     }
 
-    // Keep Q16.0's proven ESM location selection and DDS upload. Unlike Q16.2,
+    // Keep 's proven ESM location selection and DDS upload. Unlike ,
     // a DDS miss no longer suppresses the menu/pinwheel itself.
-    const bool haveImage = fo3loadq1700::LoadForCurrentGeneration();
+    const bool haveImage = fo3loading::LoadForCurrentGeneration();
     if (!EnsureProgram()) {
         glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
         glViewport(0, 0, width, height);
@@ -259,7 +259,7 @@ inline void Render(GLuint framebuffer, GLsizei width, GLsizei height) {
     glUseProgram(gProgram);
     glBindVertexArray(gVao);
     glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, haveImage ? fo3loadq1700::gTexture : 0u);
+    glBindTexture(GL_TEXTURE_2D, haveImage ? fo3loading::gTexture : 0u);
     glUniform1i(gImageLoc, 0);
     glUniform1f(gHaveImageLoc, haveImage ? 1.0f : 0.0f);
 
@@ -269,7 +269,7 @@ inline void Render(GLuint framebuffer, GLsizei width, GLsizei height) {
 
     // A comfortable virtual 4:3 Fallout screen. Zero disparity keeps the panel
     // optically distant while retaining substantially more of the vanilla full-
-    // screen composition than Q16.2's 62% artwork card.
+    // screen composition than 's 62% artwork card.
     float panelW = 0.86f;
     float panelH = panelW * viewAspect / authoredAspect;
     if (panelH > 0.82f) {
@@ -292,7 +292,7 @@ inline void Render(GLuint framebuffer, GLsizei width, GLsizei height) {
         gLoggedGeneration = generation;
         __android_log_print(
             ANDROID_LOG_INFO, TAG,
-            "Q16.6 VANILLA LOADING MENU: generation=%llu canvas=1280x960 panel=(%.3f %.3f) menufade=0.75 worldImage=%d pinwheel=Interface\\Circular Loading\\loading01.nif authoredSize=54x54 animation=Idle stereo=zeroDisparity",
+            "VANILLA LOADING MENU: generation=%llu canvas=1280x960 panel=(%.3f %.3f) menufade=0.75 worldImage=%d pinwheel=Interface\\Circular Loading\\loading01.nif authoredSize=54x54 animation=Idle stereo=zeroDisparity",
             static_cast<unsigned long long>(generation), panelW, panelH,
             haveImage ? 1 : 0);
     }
@@ -318,13 +318,13 @@ inline void Shutdown() {
     gLoggedGeneration = ~uint64_t{0};
 }
 
-} // namespace fo3loadq1760
+} // namespace fo3loadingvanilla
 
-inline void RenderFo3LoadingScreenQ1760(GLuint framebuffer, GLsizei width, GLsizei height) {
-    fo3loadq1760::Render(framebuffer, width, height);
+inline void RenderFo3LoadingVanilla(GLuint framebuffer, GLsizei width, GLsizei height) {
+    fo3loadingvanilla::Render(framebuffer, width, height);
 }
 
-inline void ShutdownFo3LoadingScreenQ1760() {
-    fo3loadq1760::Shutdown();
-    ShutdownFo3LoadingScreenQ1700();
+inline void ShutdownFo3LoadingVanilla() {
+    fo3loadingvanilla::Shutdown();
+    ShutdownFo3LoadingScreenBase();
 }

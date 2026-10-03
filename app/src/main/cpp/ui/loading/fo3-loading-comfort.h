@@ -9,7 +9,7 @@
 #include <chrono>
 #include <cstdint>
 
-namespace fo3loadq1720 {
+namespace fo3loadingcomfort {
 
 constexpr const char* TAG = "FalloutQuest";
 
@@ -32,7 +32,7 @@ inline GLuint Compile(GLenum type, const char* source) {
         char log[2048]{};
         glGetShaderInfoLog(shader, sizeof(log), nullptr, log);
         __android_log_print(ANDROID_LOG_ERROR, TAG,
-                            "Q16.2 LOADING shader compile failed: %s", log);
+                            "LOADING shader compile failed: %s", log);
         glDeleteShader(shader);
         return 0u;
     }
@@ -84,7 +84,7 @@ inline bool EnsureProgram() {
             vec2 panel = vUv - uCenter;
 
             // Real Fallout3.esm LSCR artwork. The panel is deliberately much
-            // smaller than Q16.0 and sits above optical centre, leaving space
+            // smaller than and sits above optical centre, leaving space
             // for the loading dial beneath it.
             if (abs(panel.x) <= halfScale.x && abs(panel.y) <= halfScale.y) {
                 vec2 uv = panel / uScale + vec2(0.5);
@@ -167,7 +167,7 @@ inline bool EnsureProgram() {
         char log[2048]{};
         glGetProgramInfoLog(gProgram, sizeof(log), nullptr, log);
         __android_log_print(ANDROID_LOG_ERROR, TAG,
-                            "Q16.2 LOADING program link failed: %s", log);
+                            "LOADING program link failed: %s", log);
         glDeleteProgram(gProgram);
         gProgram = 0u;
         return false;
@@ -185,11 +185,10 @@ inline bool EnsureProgram() {
 }
 
 inline void Render(GLuint framebuffer, GLsizei width, GLsizei height) {
-    if (!IsFo3LoadingVisibleQ1700() || width <= 0 || height <= 0) return;
+    if (!IsFo3LoadingVisible() || width <= 0 || height <= 0) return;
 
-    // Keep Q16.0's proven ESM LSCR selection/DDS upload exactly as-is. Q16.2
-    // owns presentation only.
-    const bool haveImage = fo3loadq1700::LoadForCurrentGeneration();
+    // Keep 's proven ESM LSCR selection/DDS upload exactly as-is. // owns presentation only.
+    const bool haveImage = fo3loading::LoadForCurrentGeneration();
 
     GLint oldProgram = 0;
     GLint oldVao = 0;
@@ -223,15 +222,15 @@ inline void Render(GLuint framebuffer, GLsizei width, GLsizei height) {
         glUseProgram(gProgram);
         glBindVertexArray(gVao);
         glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, fo3loadq1700::gTexture);
+        glBindTexture(GL_TEXTURE_2D, fo3loading::gTexture);
         glUniform1i(gImageLoc, 0);
 
         const float viewAspect = static_cast<float>(width) /
                                  static_cast<float>(height);
-        const float imageAspect = static_cast<float>(fo3loadq1700::gImageWidth) /
-                                  static_cast<float>(std::max(fo3loadq1700::gImageHeight, 1));
+        const float imageAspect = static_cast<float>(fo3loading::gImageWidth) /
+                                  static_cast<float>(std::max(fo3loading::gImageHeight, 1));
 
-        // Q16.0 filled 86% of each eye. 62% plus zero forced stereo disparity
+        // filled 86% of each eye. 62% plus zero forced stereo disparity
         // makes the panel read optically far away instead of sitting on the
         // viewer's face and forcing uncomfortable convergence.
         float sx = 0.62f;
@@ -253,11 +252,11 @@ inline void Render(GLuint framebuffer, GLsizei width, GLsizei height) {
         glUniform1f(gTimeLoc, seconds);
         glDrawArrays(GL_TRIANGLES, 0, 3);
 
-        const uint64_t generation = GetFo3LoadingGenerationQ1700();
+        const uint64_t generation = GetFo3LoadingGeneration();
         if (generation != gLoggedGeneration) {
             gLoggedGeneration = generation;
             __android_log_print(ANDROID_LOG_INFO, TAG,
-                                "Q16.2 LOADING COMFORT: generation=%llu panelScale=(%.3f %.3f) center=(0.50 0.60) stereo=zeroDisparity spinner=loadinganim01-style HUDMainRGB=(26,255,128)",
+                                "LOADING COMFORT: generation=%llu panelScale=(%.3f %.3f) center=(0.50 0.60) stereo=zeroDisparity spinner=loadinganim01-style HUDMainRGB=(26,255,128)",
                                 static_cast<unsigned long long>(generation), sx, sy);
         }
     }
@@ -282,13 +281,13 @@ inline void Shutdown() {
     gLoggedGeneration = ~uint64_t{0};
 }
 
-} // namespace fo3loadq1720
+} // namespace fo3loadingcomfort
 
-inline void RenderFo3LoadingScreenQ1720(GLuint framebuffer, GLsizei width, GLsizei height) {
-    fo3loadq1720::Render(framebuffer, width, height);
+inline void RenderFo3LoadingComfort(GLuint framebuffer, GLsizei width, GLsizei height) {
+    fo3loadingcomfort::Render(framebuffer, width, height);
 }
 
-inline void ShutdownFo3LoadingScreenQ1720() {
-    fo3loadq1720::Shutdown();
-    ShutdownFo3LoadingScreenQ1700();
+inline void ShutdownFo3LoadingComfort() {
+    fo3loadingcomfort::Shutdown();
+    ShutdownFo3LoadingScreenBase();
 }
