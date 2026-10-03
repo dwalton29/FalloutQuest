@@ -24,45 +24,45 @@
 //                 TexCoordYOff animates V/Y rather than U/X.
 //   Output:        D3DRS_SRGBWRITEENABLE = 0.
 
-namespace fo3pcskyq1660 {
+namespace fo3pcsky {
 
 constexpr const char* TAG = "FalloutQuest";
 constexpr float PI = 3.14159265358979323846f;
 constexpr float PC_SKY_RGB_SCALE = 1.55f;
 
-struct CloudGpuQ1660 {
+struct CloudGpu {
     std::string path;
     GLuint texture = 0u;
     float speed = 0.0f;
     bool loaded = false;
 };
 
-inline std::array<CloudGpuQ1660, 4> gCloudsQ1660{};
-inline uint32_t gWeatherFormQ1660 = 0u;
-inline GLuint gSunTextureQ1660 = 0u;
-inline bool gSunTextureAttemptedQ1660 = false;
+inline std::array<CloudGpu, 4> gClouds{};
+inline uint32_t gWeatherForm = 0u;
+inline GLuint gSunTexture = 0u;
+inline bool gSunTextureAttempted = false;
 
-inline GLuint gProgramQ1660 = 0u;
-inline GLint gMvpLocQ1660 = -1;
-inline GLint gModeLocQ1660 = -1;
-inline GLint gTextureLocQ1660 = -1;
-inline GLint gUpperLocQ1660 = -1;
-inline GLint gLowerLocQ1660 = -1;
-inline GLint gHorizonLocQ1660 = -1;
-inline GLint gColourLocQ1660 = -1;
-inline GLint gOffsetLocQ1660 = -1;
-inline GLint gSunDirectionLocQ1660 = -1;
-inline bool gLoggedQ1660 = false;
+inline GLuint gProgram = 0u;
+inline GLint gMvpLoc = -1;
+inline GLint gModeLoc = -1;
+inline GLint gTextureLoc = -1;
+inline GLint gUpperLoc = -1;
+inline GLint gLowerLoc = -1;
+inline GLint gHorizonLoc = -1;
+inline GLint gColourLoc = -1;
+inline GLint gOffsetLoc = -1;
+inline GLint gSunDirectionLoc = -1;
+inline bool gLogged = false;
 
-inline void DeleteCloudsQ1660() {
-    for (CloudGpuQ1660& layer : gCloudsQ1660) {
+inline void DeleteClouds() {
+    for (CloudGpu& layer : gClouds) {
         if (layer.texture != 0u) glDeleteTextures(1, &layer.texture);
         layer = {};
     }
-    gWeatherFormQ1660 = 0u;
+    gWeatherForm = 0u;
 }
 
-inline GLuint UploadTextureQ1660(const std::string& path, bool repeat) {
+inline GLuint UploadTexture(const std::string& path, bool repeat) {
     if (path.empty()) return 0u;
     Fo3RgbaTexture decoded;
     if (!LoadFalloutTextureRgba(path, decoded) || decoded.width <= 0 ||
@@ -92,44 +92,44 @@ inline GLuint UploadTextureQ1660(const std::string& path, bool repeat) {
     return texture;
 }
 
-inline bool EnsureSunTextureQ1660() {
-    if (gSunTextureQ1660 != 0u) return true;
-    if (gSunTextureAttemptedQ1660) return false;
-    gSunTextureAttemptedQ1660 = true;
+inline bool EnsureSunTexture() {
+    if (gSunTexture != 0u) return true;
+    if (gSunTextureAttempted) return false;
+    gSunTextureAttempted = true;
 
     // Fallout3.exe names Sky\\Sun.dds explicitly. Keep SunGlare as a data-driven
     // fallback only in case the BSA layout differs on this install.
-    gSunTextureQ1660 = UploadTextureQ1660("Sky\\Sun.dds", false);
-    if (gSunTextureQ1660 == 0u) {
-        gSunTextureQ1660 = UploadTextureQ1660("Sky\\SunGlare.dds", false);
+    gSunTexture = UploadTexture("Sky\\Sun.dds", false);
+    if (gSunTexture == 0u) {
+        gSunTexture = UploadTexture("Sky\\SunGlare.dds", false);
     }
-    return gSunTextureQ1660 != 0u;
+    return gSunTexture != 0u;
 }
 
-inline bool SyncWeatherTexturesQ1660() {
-    const Fo3EnvironmentQ1000& env = GetFo3EnvironmentQ1000();
+inline bool SyncWeatherTextures() {
+    const Fo3Environment& env = GetFo3Environment();
     if (!env.valid || env.weatherFormId == 0u) return false;
-    if (gWeatherFormQ1660 == env.weatherFormId) return true;
+    if (gWeatherForm == env.weatherFormId) return true;
 
-    DeleteCloudsQ1660();
-    fo3skyq1330::WeatherSkyQ1330 parsed;
-    if (!fo3skyq1330::ParseWeatherSkyQ1330(env.weatherFormId, parsed)) return false;
+    DeleteClouds();
+    fo3sky::WeatherSky parsed;
+    if (!fo3sky::ParseWeatherSky(env.weatherFormId, parsed)) return false;
 
     for (int i = 0; i < 4; ++i) {
-        gCloudsQ1660[i].path = parsed.clouds[i].texturePath;
-        gCloudsQ1660[i].speed = parsed.clouds[i].speed;
-        if (!gCloudsQ1660[i].path.empty()) {
-            gCloudsQ1660[i].texture = UploadTextureQ1660(gCloudsQ1660[i].path, true);
-            gCloudsQ1660[i].loaded = gCloudsQ1660[i].texture != 0u;
+        gClouds[i].path = parsed.clouds[i].texturePath;
+        gClouds[i].speed = parsed.clouds[i].speed;
+        if (!gClouds[i].path.empty()) {
+            gClouds[i].texture = UploadTexture(gClouds[i].path, true);
+            gClouds[i].loaded = gClouds[i].texture != 0u;
         }
     }
-    gWeatherFormQ1660 = env.weatherFormId;
-    (void)EnsureSunTextureQ1660();
+    gWeatherForm = env.weatherFormId;
+    (void)EnsureSunTexture();
     glBindTexture(GL_TEXTURE_2D, 0u);
     return true;
 }
 
-inline GLuint CompileQ1660(GLenum type, const char* source) {
+inline GLuint CompileShader(GLenum type, const char* source) {
     const GLuint shader = glCreateShader(type);
     glShaderSource(shader, 1, &source, nullptr);
     glCompileShader(shader);
@@ -146,8 +146,8 @@ inline GLuint CompileQ1660(GLenum type, const char* source) {
     return shader;
 }
 
-inline bool EnsureProgramQ1660() {
-    if (gProgramQ1660 != 0u) return true;
+inline bool EnsureProgram() {
+    if (gProgram != 0u) return true;
 
     static const char* vsSource = R"(
         #version 300 es
@@ -228,48 +228,48 @@ inline bool EnsureProgramQ1660() {
         }
     )";
 
-    const GLuint vs = CompileQ1660(GL_VERTEX_SHADER, vsSource);
-    const GLuint fs = CompileQ1660(GL_FRAGMENT_SHADER, fsSource);
+    const GLuint vs = CompileShader(GL_VERTEX_SHADER, vsSource);
+    const GLuint fs = CompileShader(GL_FRAGMENT_SHADER, fsSource);
     if (!vs || !fs) {
         if (vs) glDeleteShader(vs);
         if (fs) glDeleteShader(fs);
         return false;
     }
-    gProgramQ1660 = glCreateProgram();
-    glAttachShader(gProgramQ1660, vs);
-    glAttachShader(gProgramQ1660, fs);
-    glLinkProgram(gProgramQ1660);
+    gProgram = glCreateProgram();
+    glAttachShader(gProgram, vs);
+    glAttachShader(gProgram, fs);
+    glLinkProgram(gProgram);
     glDeleteShader(vs);
     glDeleteShader(fs);
 
     GLint linked = GL_FALSE;
-    glGetProgramiv(gProgramQ1660, GL_LINK_STATUS, &linked);
+    glGetProgramiv(gProgram, GL_LINK_STATUS, &linked);
     if (linked != GL_TRUE) {
         char log[2048]{};
-        glGetProgramInfoLog(gProgramQ1660, sizeof(log), nullptr, log);
+        glGetProgramInfoLog(gProgram, sizeof(log), nullptr, log);
         __android_log_print(ANDROID_LOG_ERROR, TAG,
                             "Q15.16 SKY program link failed: %s", log);
-        glDeleteProgram(gProgramQ1660);
-        gProgramQ1660 = 0u;
+        glDeleteProgram(gProgram);
+        gProgram = 0u;
         return false;
     }
 
-    gMvpLocQ1660 = glGetUniformLocation(gProgramQ1660, "uMvp");
-    gModeLocQ1660 = glGetUniformLocation(gProgramQ1660, "uMode");
-    gTextureLocQ1660 = glGetUniformLocation(gProgramQ1660, "uTexture");
-    gUpperLocQ1660 = glGetUniformLocation(gProgramQ1660, "uSkyUpper");
-    gLowerLocQ1660 = glGetUniformLocation(gProgramQ1660, "uSkyLower");
-    gHorizonLocQ1660 = glGetUniformLocation(gProgramQ1660, "uHorizon");
-    gColourLocQ1660 = glGetUniformLocation(gProgramQ1660, "uColour");
-    gOffsetLocQ1660 = glGetUniformLocation(gProgramQ1660, "uOffset");
-    gSunDirectionLocQ1660 = glGetUniformLocation(gProgramQ1660, "uSunDirection");
-    return gMvpLocQ1660 >= 0 && gModeLocQ1660 >= 0 &&
-           gTextureLocQ1660 >= 0 && gColourLocQ1660 >= 0;
+    gMvpLoc = glGetUniformLocation(gProgram, "uMvp");
+    gModeLoc = glGetUniformLocation(gProgram, "uMode");
+    gTextureLoc = glGetUniformLocation(gProgram, "uTexture");
+    gUpperLoc = glGetUniformLocation(gProgram, "uSkyUpper");
+    gLowerLoc = glGetUniformLocation(gProgram, "uSkyLower");
+    gHorizonLoc = glGetUniformLocation(gProgram, "uHorizon");
+    gColourLoc = glGetUniformLocation(gProgram, "uColour");
+    gOffsetLoc = glGetUniformLocation(gProgram, "uOffset");
+    gSunDirectionLoc = glGetUniformLocation(gProgram, "uSunDirection");
+    return gMvpLoc >= 0 && gModeLoc >= 0 &&
+           gTextureLoc >= 0 && gColourLoc >= 0;
 }
 
-inline bool RuntimeWeightsQ1660(fo3todq1400::TimeWeightsQ1400& weights) {
-    using namespace fo3todq1400;
-    const Fo3EnvironmentQ1000& env = GetFo3EnvironmentQ1000();
+inline bool RuntimeWeights(fo3tod::TimeWeights& weights) {
+    using namespace fo3tod;
+    const Fo3Environment& env = GetFo3Environment();
     if (!gRuntime.ready || !env.valid ||
         gRuntime.weatherFormId != env.weatherFormId || !gRuntime.weather.haveNam0) {
         return false;
@@ -278,10 +278,10 @@ inline bool RuntimeWeightsQ1660(fo3todq1400::TimeWeightsQ1400& weights) {
     return true;
 }
 
-inline void SampleRawNam0Q1660(int cls,
-                               const fo3todq1400::TimeWeightsQ1400& weights,
+inline void SampleRawNam0(int cls,
+                               const fo3tod::TimeWeights& weights,
                                float out[3]) {
-    using namespace fo3todq1400;
+    using namespace fo3tod;
     out[0] = out[1] = out[2] = 0.0f;
     if (!gRuntime.ready || cls < 0 || cls >= 10) return;
     for (int tod = 0; tod < 4; ++tod) {
@@ -291,10 +291,10 @@ inline void SampleRawNam0Q1660(int cls,
     }
 }
 
-inline void SampleRawCloudQ1660(int layer,
-                                const fo3todq1400::TimeWeightsQ1400& weights,
+inline void SampleRawCloud(int layer,
+                                const fo3tod::TimeWeights& weights,
                                 float out[3]) {
-    using namespace fo3todq1400;
+    using namespace fo3tod;
     out[0] = out[1] = out[2] = 0.0f;
     if (!gRuntime.ready || !gRuntime.weather.havePnam || layer < 0 || layer >= 4) return;
     for (int tod = 0; tod < 4; ++tod) {
@@ -304,23 +304,23 @@ inline void SampleRawCloudQ1660(int layer,
     }
 }
 
-inline void RenderQ1660(const float* mvp16) {
-    if (!mvp16 || !fo3envq1000::EnsureSkyGpu() ||
-        !EnsureProgramQ1660() || !SyncWeatherTexturesQ1660()) return;
+inline void Render(const float* mvp16) {
+    if (!mvp16 || !fo3env::EnsureSkyGpu() ||
+        !EnsureProgram() || !SyncWeatherTextures()) return;
 
-    const Fo3EnvironmentQ1000& env = GetFo3EnvironmentQ1000();
-    fo3todq1400::TimeWeightsQ1400 weights;
-    const bool haveRuntime = RuntimeWeightsQ1660(weights);
+    const Fo3Environment& env = GetFo3Environment();
+    fo3tod::TimeWeights weights;
+    const bool haveRuntime = RuntimeWeights(weights);
 
     float skyUpper[3]{env.skyUpper[0], env.skyUpper[1], env.skyUpper[2]};
     float skyLower[3]{env.skyLower[0], env.skyLower[1], env.skyLower[2]};
     float horizon[3]{env.horizon[0], env.horizon[1], env.horizon[2]};
     float sun[3]{env.sun[0], env.sun[1], env.sun[2]};
     if (haveRuntime) {
-        SampleRawNam0Q1660(0, weights, skyUpper);
-        SampleRawNam0Q1660(7, weights, skyLower);
-        SampleRawNam0Q1660(8, weights, horizon);
-        SampleRawNam0Q1660(5, weights, sun);
+        SampleRawNam0(0, weights, skyUpper);
+        SampleRawNam0(7, weights, skyLower);
+        SampleRawNam0(8, weights, horizon);
+        SampleRawNam0(5, weights, sun);
     }
 
     GLint previousProgram = 0, previousVao = 0, previousActiveTexture = 0;
@@ -345,46 +345,46 @@ inline void RenderQ1660(const float* mvp16) {
     glDisable(GL_DEPTH_TEST);
     glDepthMask(GL_FALSE);
     glDisable(GL_CULL_FACE);
-    glUseProgram(gProgramQ1660);
-    glBindVertexArray(fo3envq1000::skyVao);
-    glUniformMatrix4fv(gMvpLocQ1660, 1, GL_FALSE, mvp16);
-    glUniform1i(gTextureLocQ1660, 0);
+    glUseProgram(gProgram);
+    glBindVertexArray(fo3env::skyVao);
+    glUniformMatrix4fv(gMvpLoc, 1, GL_FALSE, mvp16);
+    glUniform1i(gTextureLoc, 0);
 
     // SKY gradient. Alpha is 1, so PC's SRC_ALPHA/INVSRC_ALPHA blend resolves
     // to the same replacement colour; draw opaque for clarity.
     glDisable(GL_BLEND);
-    glUniform1i(gModeLocQ1660, 0);
-    glUniform3fv(gUpperLocQ1660, 1, skyUpper);
-    glUniform3fv(gLowerLocQ1660, 1, skyLower);
-    glUniform3fv(gHorizonLocQ1660, 1, horizon);
-    glDrawArrays(GL_TRIANGLES, 0, fo3envq1000::skyVertexCount);
+    glUniform1i(gModeLoc, 0);
+    glUniform3fv(gUpperLoc, 1, skyUpper);
+    glUniform3fv(gLowerLoc, 1, skyLower);
+    glUniform3fv(gHorizonLoc, 1, horizon);
+    glDrawArrays(GL_TRIANGLES, 0, fo3env::skyVertexCount);
 
     // Sun: exact PC blend equation SRC_ALPHA, ONE.
-    if (EnsureSunTextureQ1660()) {
+    if (EnsureSunTexture()) {
         glEnable(GL_BLEND);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE);
-        glBindTexture(GL_TEXTURE_2D, gSunTextureQ1660);
-        glUniform1i(gModeLocQ1660, 2);
-        glUniform4f(gColourLocQ1660, sun[0], sun[1], sun[2], 1.0f);
-        glUniform3fv(gSunDirectionLocQ1660, 1, env.sunDirection);
-        glDrawArrays(GL_TRIANGLES, 0, fo3envq1000::skyVertexCount);
+        glBindTexture(GL_TEXTURE_2D, gSunTexture);
+        glUniform1i(gModeLoc, 2);
+        glUniform4f(gColourLoc, sun[0], sun[1], sun[2], 1.0f);
+        glUniform3fv(gSunDirectionLoc, 1, env.sunDirection);
+        glDrawArrays(GL_TRIANGLES, 0, fo3env::skyVertexCount);
     }
 
     // Clouds: PC uses SRC_ALPHA, INVSRC_ALPHA and BlendColor alpha 1.0 for the
     // visible Wasteland horizon layer. PNAM alpha is deliberately ignored.
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    glUniform1i(gModeLocQ1660, 1);
-    const double seconds = fo3skyq1330::MonotonicSecondsQ1330();
+    glUniform1i(gModeLoc, 1);
+    const double seconds = fo3sky::MonotonicSeconds();
     int renderedClouds = 0;
     for (int layer = 0; layer < 4; ++layer) {
-        if (!gCloudsQ1660[layer].loaded || gCloudsQ1660[layer].texture == 0u) continue;
+        if (!gClouds[layer].loaded || gClouds[layer].texture == 0u) continue;
         float colour[3]{0.0f, 0.0f, 0.0f};
         if (haveRuntime) {
-            SampleRawCloudQ1660(layer, weights, colour);
+            SampleRawCloud(layer, weights, colour);
         } else {
-            fo3skyq1330::WeatherSkyQ1330 parsed;
-            if (fo3skyq1330::ParseWeatherSkyQ1330(env.weatherFormId, parsed)) {
+            fo3sky::WeatherSky parsed;
+            if (fo3sky::ParseWeatherSky(env.weatherFormId, parsed)) {
                 for (int c = 0; c < 3; ++c) colour[c] = parsed.clouds[layer].color[c];
             }
         }
@@ -393,11 +393,11 @@ inline void RenderQ1660(const float* mvp16) {
         if (colour[0] + colour[1] + colour[2] <= 0.001f) continue;
 
         const float offset = static_cast<float>(
-            std::fmod(seconds * static_cast<double>(gCloudsQ1660[layer].speed), 1.0));
-        glBindTexture(GL_TEXTURE_2D, gCloudsQ1660[layer].texture);
-        glUniform4f(gColourLocQ1660, colour[0], colour[1], colour[2], 1.0f);
-        glUniform1f(gOffsetLocQ1660, offset);
-        glDrawArrays(GL_TRIANGLES, 0, fo3envq1000::skyVertexCount);
+            std::fmod(seconds * static_cast<double>(gClouds[layer].speed), 1.0));
+        glBindTexture(GL_TEXTURE_2D, gClouds[layer].texture);
+        glUniform4f(gColourLoc, colour[0], colour[1], colour[2], 1.0f);
+        glUniform1f(gOffsetLoc, offset);
+        glDrawArrays(GL_TRIANGLES, 0, fo3env::skyVertexCount);
         ++renderedClouds;
     }
 
@@ -412,17 +412,17 @@ inline void RenderQ1660(const float* mvp16) {
                         static_cast<GLenum>(oldSrcAlpha), static_cast<GLenum>(oldDstAlpha));
     glActiveTexture(static_cast<GLenum>(previousActiveTexture));
 
-    if (!gLoggedQ1660) {
-        gLoggedQ1660 = true;
+    if (!gLogged) {
+        gLogged = true;
         __android_log_print(
             ANDROID_LOG_INFO, TAG,
-            "Q15.16 PC SKY: weather=%08X rawWthr=1 rgbScale=1.55 cloudVScroll=1 pnamAlphaVisibility=0 cloudsRendered=%d texturedSun=%d q1515WorldUntouched=1",
-            env.weatherFormId, renderedClouds, gSunTextureQ1660 != 0u ? 1 : 0);
+            "Q15.16 PC SKY: weather=%08X rawWthr=1 rgbScale=1.55 cloudVScroll=1 pnamAlphaVisibility=0 cloudsRendered=%d texturedSun=%d worldUntouched=1",
+            env.weatherFormId, renderedClouds, gSunTexture != 0u ? 1 : 0);
     }
 }
 
-} // namespace fo3pcskyq1660
+} // namespace fo3pcsky
 
-inline void RenderFo3PcSkyQ1660(const float* mvp16) {
-    fo3pcskyq1660::RenderQ1660(mvp16);
+inline void RenderFo3PcSky(const float* mvp16) {
+    fo3pcsky::Render(mvp16);
 }

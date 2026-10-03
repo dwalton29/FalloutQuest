@@ -6886,7 +6886,7 @@ bool Q2090RenderWaterReflection(const float mainMvp[16],
 
     // PC sky is a direction-space background, so reflect only Y direction;
     // the water-plane translation belongs to world geometry, not the dome.
-    RenderFo3PcSkyQ1660(reflectedSkyMvp);
+    RenderFo3PcSky(reflectedSkyMvp);
 
     glUseProgram(gProgram);
     glUniformMatrix4fv(gMvpLocation, 1, GL_FALSE, outReflectionMvp);

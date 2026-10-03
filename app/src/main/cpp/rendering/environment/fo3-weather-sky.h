@@ -15,9 +15,9 @@
 #include <time.h>
 #include <vector>
 
-namespace fo3skyq1330 {
+namespace fo3sky {
 
-struct CloudLayerQ1330 {
+struct CloudLayer {
     std::string texturePath;
     float color[4]{1.0f, 1.0f, 1.0f, 0.0f};
     float speed = 0.0f;
@@ -27,42 +27,42 @@ struct CloudLayerQ1330 {
     bool loaded = false;
 };
 
-struct WeatherSkyQ1330 {
+struct WeatherSky {
     bool valid = false;
     uint32_t weatherFormId = 0u;
     std::string editorId;
-    std::array<CloudLayerQ1330, 4> clouds;
+    std::array<CloudLayer, 4> clouds;
     float sunColor[3]{1.0f, 1.0f, 1.0f};
     float sunGlare = 0.0f;
 };
 
-inline WeatherSkyQ1330 gWeatherSkyQ1330;
-inline GLuint gProgramQ1330 = 0u;
-inline GLint gMvpLocQ1330 = -1;
-inline GLint gModeLocQ1330 = -1;
-inline GLint gCloudTexLocQ1330 = -1;
-inline GLint gCloudColorLocQ1330 = -1;
-inline GLint gCloudOffsetLocQ1330 = -1;
-inline GLint gSunDirectionLocQ1330 = -1;
-inline GLint gSunColorLocQ1330 = -1;
-inline GLint gSunGlareLocQ1330 = -1;
-inline bool gLoggedGpuQ1330 = false;
+inline WeatherSky gWeatherSky;
+inline GLuint gProgram = 0u;
+inline GLint gMvpLoc = -1;
+inline GLint gModeLoc = -1;
+inline GLint gCloudTexLoc = -1;
+inline GLint gCloudColorLoc = -1;
+inline GLint gCloudOffsetLoc = -1;
+inline GLint gSunDirectionLoc = -1;
+inline GLint gSunColorLoc = -1;
+inline GLint gSunGlareLoc = -1;
+inline bool gLoggedGpu = false;
 
-inline double MonotonicSecondsQ1330() {
+inline double MonotonicSeconds() {
     timespec ts{};
     if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) return 0.0;
     return static_cast<double>(ts.tv_sec) + static_cast<double>(ts.tv_nsec) * 1.0e-9;
 }
 
-inline void DeleteWeatherTexturesQ1330() {
-    for (CloudLayerQ1330& layer : gWeatherSkyQ1330.clouds) {
+inline void DeleteWeatherTextures() {
+    for (CloudLayer& layer : gWeatherSky.clouds) {
         if (layer.texture != 0u) glDeleteTextures(1, &layer.texture);
         layer.texture = 0u;
         layer.loaded = false;
     }
 }
 
-inline void ReadDayRgbaQ1330(const uint8_t* data, uint32_t size,
+inline void ReadDayRgba(const uint8_t* data, uint32_t size,
                              uint32_t baseOffset, float out[4]) {
     // Time-of-day colour: sunrise RGBA, day RGBA, sunset RGBA, night RGBA.
     const uint32_t dayOffset = baseOffset + 4u;
@@ -73,8 +73,8 @@ inline void ReadDayRgbaQ1330(const uint8_t* data, uint32_t size,
     out[3] = static_cast<float>(data[dayOffset + 3u]) / 255.0f;
 }
 
-inline bool ParseWeatherSkyQ1330(uint32_t weatherFormId, WeatherSkyQ1330& out) {
-    using namespace fo3envq1000;
+inline bool ParseWeatherSky(uint32_t weatherFormId, WeatherSky& out) {
+    using namespace fo3env;
     out = {};
     out.weatherFormId = weatherFormId;
     if (weatherFormId == 0u) return false;
@@ -100,12 +100,12 @@ inline bool ParseWeatherSkyQ1330(uint32_t weatherFormId, WeatherSkyQ1330& out) {
             }
         } else if (std::memcmp(type, "PNAM", 4u) == 0 && size >= 64u) {
             for (uint32_t i = 0u; i < 4u; ++i) {
-                ReadDayRgbaQ1330(bytes, size, i * 16u, out.clouds[i].color);
+                ReadDayRgba(bytes, size, i * 16u, out.clouds[i].color);
             }
         } else if (std::memcmp(type, "NAM0", 4u) == 0 && size >= 160u) {
             // Category 5 is Sun; select Day within the four time-of-day colours.
             float rgba[4]{1.0f, 1.0f, 1.0f, 1.0f};
-            ReadDayRgbaQ1330(bytes, size, 5u * 16u, rgba);
+            ReadDayRgba(bytes, size, 5u * 16u, rgba);
             out.sunColor[0] = rgba[0];
             out.sunColor[1] = rgba[1];
             out.sunColor[2] = rgba[2];
@@ -118,7 +118,7 @@ inline bool ParseWeatherSkyQ1330(uint32_t weatherFormId, WeatherSkyQ1330& out) {
     return true;
 }
 
-inline bool UploadCloudQ1330(CloudLayerQ1330& layer, int index) {
+inline bool UploadCloud(CloudLayer& layer, int index) {
     // WTHR PNAM's fourth byte is not a cloud-opacity gate. Stock
     // WastelandClear authors useful cloud RGB with A=0, so treating that byte
     // as opacity discards the entire authored layer. Visibility comes from the
@@ -127,7 +127,7 @@ inline bool UploadCloudQ1330(CloudLayerQ1330& layer, int index) {
     Fo3RgbaTexture decoded;
     if (!LoadFalloutTextureRgba(layer.texturePath, decoded) ||
         decoded.width <= 0 || decoded.height <= 0 || decoded.rgba.empty()) {
-        __android_log_print(ANDROID_LOG_WARN, fo3envq1000::TAG,
+        __android_log_print(ANDROID_LOG_WARN, fo3env::TAG,
                             "Q13.3 CLOUD DDS MISS: layer=%d path=%s",
                             index, layer.texturePath.c_str());
         return false;
@@ -146,7 +146,7 @@ inline bool UploadCloudQ1330(CloudLayerQ1330& layer, int index) {
     layer.width = decoded.width;
     layer.height = decoded.height;
     layer.loaded = true;
-    __android_log_print(ANDROID_LOG_INFO, fo3envq1000::TAG,
+    __android_log_print(ANDROID_LOG_INFO, fo3env::TAG,
                         "Q13.3 CLOUD DDS READY: layer=%d path=%s resolved=%s size=%dx%d format=%s alpha=%.3f speed=%.5f",
                         index, layer.texturePath.c_str(), decoded.sourcePath.c_str(),
                         decoded.width, decoded.height, decoded.format.c_str(),
@@ -154,41 +154,41 @@ inline bool UploadCloudQ1330(CloudLayerQ1330& layer, int index) {
     return true;
 }
 
-inline bool EnsureWeatherQ1330() {
-    const Fo3EnvironmentQ1000& env = GetFo3EnvironmentQ1000();
+inline bool EnsureWeather() {
+    const Fo3Environment& env = GetFo3Environment();
     if (!env.valid || env.weatherFormId == 0u) return false;
-    if (gWeatherSkyQ1330.valid && gWeatherSkyQ1330.weatherFormId == env.weatherFormId) {
+    if (gWeatherSky.valid && gWeatherSky.weatherFormId == env.weatherFormId) {
         return true;
     }
 
-    DeleteWeatherTexturesQ1330();
-    WeatherSkyQ1330 parsed;
-    if (!ParseWeatherSkyQ1330(env.weatherFormId, parsed)) {
-        gWeatherSkyQ1330 = {};
+    DeleteWeatherTextures();
+    WeatherSky parsed;
+    if (!ParseWeatherSky(env.weatherFormId, parsed)) {
+        gWeatherSky = {};
         return false;
     }
-    gWeatherSkyQ1330 = std::move(parsed);
+    gWeatherSky = std::move(parsed);
 
     int authored = 0;
     int loaded = 0;
     for (int i = 0; i < 4; ++i) {
-        if (!gWeatherSkyQ1330.clouds[i].texturePath.empty()) ++authored;
-        if (UploadCloudQ1330(gWeatherSkyQ1330.clouds[i], i)) ++loaded;
+        if (!gWeatherSky.clouds[i].texturePath.empty()) ++authored;
+        if (UploadCloud(gWeatherSky.clouds[i], i)) ++loaded;
     }
     glBindTexture(GL_TEXTURE_2D, 0u);
 
     __android_log_print(
-        ANDROID_LOG_INFO, fo3envq1000::TAG,
+        ANDROID_LOG_INFO, fo3env::TAG,
         "Q13.3 WEATHER SKY READY: weather=%08X EDID=%s cloudPaths=%d cloudLoaded=%d sunColor=(%.3f %.3f %.3f) sunGlare=%.3f mode=DAY",
-        gWeatherSkyQ1330.weatherFormId,
-        gWeatherSkyQ1330.editorId.empty() ? "<none>" : gWeatherSkyQ1330.editorId.c_str(),
+        gWeatherSky.weatherFormId,
+        gWeatherSky.editorId.empty() ? "<none>" : gWeatherSky.editorId.c_str(),
         authored, loaded,
-        gWeatherSkyQ1330.sunColor[0], gWeatherSkyQ1330.sunColor[1],
-        gWeatherSkyQ1330.sunColor[2], gWeatherSkyQ1330.sunGlare);
+        gWeatherSky.sunColor[0], gWeatherSky.sunColor[1],
+        gWeatherSky.sunColor[2], gWeatherSky.sunGlare);
     return true;
 }
 
-inline GLuint CompileQ1330(GLenum type, const char* source) {
+inline GLuint CompileShader(GLenum type, const char* source) {
     const GLuint shader = glCreateShader(type);
     glShaderSource(shader, 1, &source, nullptr);
     glCompileShader(shader);
@@ -197,7 +197,7 @@ inline GLuint CompileQ1330(GLenum type, const char* source) {
     if (ok != GL_TRUE) {
         char log[1024]{};
         glGetShaderInfoLog(shader, sizeof(log), nullptr, log);
-        __android_log_print(ANDROID_LOG_ERROR, fo3envq1000::TAG,
+        __android_log_print(ANDROID_LOG_ERROR, fo3env::TAG,
                             "Q13.3 SKY shader compile failed: %s", log);
         glDeleteShader(shader);
         return 0u;
@@ -205,8 +205,8 @@ inline GLuint CompileQ1330(GLenum type, const char* source) {
     return shader;
 }
 
-inline bool EnsureProgramQ1330() {
-    if (gProgramQ1330 != 0u) return true;
+inline bool EnsureProgram() {
+    if (gProgram != 0u) return true;
 
     static const char* vertexSource = R"(
         #version 300 es
@@ -260,46 +260,46 @@ inline bool EnsureProgramQ1330() {
         }
     )";
 
-    const GLuint vs = CompileQ1330(GL_VERTEX_SHADER, vertexSource);
-    const GLuint fs = CompileQ1330(GL_FRAGMENT_SHADER, fragmentSource);
+    const GLuint vs = CompileShader(GL_VERTEX_SHADER, vertexSource);
+    const GLuint fs = CompileShader(GL_FRAGMENT_SHADER, fragmentSource);
     if (!vs || !fs) {
         if (vs) glDeleteShader(vs);
         if (fs) glDeleteShader(fs);
         return false;
     }
-    gProgramQ1330 = glCreateProgram();
-    glAttachShader(gProgramQ1330, vs);
-    glAttachShader(gProgramQ1330, fs);
-    glLinkProgram(gProgramQ1330);
+    gProgram = glCreateProgram();
+    glAttachShader(gProgram, vs);
+    glAttachShader(gProgram, fs);
+    glLinkProgram(gProgram);
     glDeleteShader(vs);
     glDeleteShader(fs);
 
     GLint linked = GL_FALSE;
-    glGetProgramiv(gProgramQ1330, GL_LINK_STATUS, &linked);
+    glGetProgramiv(gProgram, GL_LINK_STATUS, &linked);
     if (linked != GL_TRUE) {
         char log[1024]{};
-        glGetProgramInfoLog(gProgramQ1330, sizeof(log), nullptr, log);
-        __android_log_print(ANDROID_LOG_ERROR, fo3envq1000::TAG,
+        glGetProgramInfoLog(gProgram, sizeof(log), nullptr, log);
+        __android_log_print(ANDROID_LOG_ERROR, fo3env::TAG,
                             "Q13.3 SKY program link failed: %s", log);
-        glDeleteProgram(gProgramQ1330);
-        gProgramQ1330 = 0u;
+        glDeleteProgram(gProgram);
+        gProgram = 0u;
         return false;
     }
 
-    gMvpLocQ1330 = glGetUniformLocation(gProgramQ1330, "uMvp");
-    gModeLocQ1330 = glGetUniformLocation(gProgramQ1330, "uMode");
-    gCloudTexLocQ1330 = glGetUniformLocation(gProgramQ1330, "uCloud");
-    gCloudColorLocQ1330 = glGetUniformLocation(gProgramQ1330, "uCloudColor");
-    gCloudOffsetLocQ1330 = glGetUniformLocation(gProgramQ1330, "uCloudOffset");
-    gSunDirectionLocQ1330 = glGetUniformLocation(gProgramQ1330, "uSunDirection");
-    gSunColorLocQ1330 = glGetUniformLocation(gProgramQ1330, "uSunColor");
-    gSunGlareLocQ1330 = glGetUniformLocation(gProgramQ1330, "uSunGlare");
-    return gMvpLocQ1330 >= 0 && gModeLocQ1330 >= 0 && gCloudTexLocQ1330 >= 0;
+    gMvpLoc = glGetUniformLocation(gProgram, "uMvp");
+    gModeLoc = glGetUniformLocation(gProgram, "uMode");
+    gCloudTexLoc = glGetUniformLocation(gProgram, "uCloud");
+    gCloudColorLoc = glGetUniformLocation(gProgram, "uCloudColor");
+    gCloudOffsetLoc = glGetUniformLocation(gProgram, "uCloudOffset");
+    gSunDirectionLoc = glGetUniformLocation(gProgram, "uSunDirection");
+    gSunColorLoc = glGetUniformLocation(gProgram, "uSunColor");
+    gSunGlareLoc = glGetUniformLocation(gProgram, "uSunGlare");
+    return gMvpLoc >= 0 && gModeLoc >= 0 && gCloudTexLoc >= 0;
 }
 
-inline void RenderLayersQ1330(const float* mvp16) {
-    if (!mvp16 || !EnsureWeatherQ1330() || !EnsureProgramQ1330()) return;
-    if (!fo3envq1000::EnsureSkyGpu()) return;
+inline void RenderLayers(const float* mvp16) {
+    if (!mvp16 || !EnsureWeather() || !EnsureProgram()) return;
+    if (!fo3env::EnsureSkyGpu()) return;
 
     GLint previousProgram = 0, previousVao = 0, previousActiveTexture = 0;
     GLint previousTexture0 = 0;
@@ -323,34 +323,34 @@ inline void RenderLayersQ1330(const float* mvp16) {
     glDepthMask(GL_FALSE);
     glDisable(GL_CULL_FACE);
     glEnable(GL_BLEND);
-    glUseProgram(gProgramQ1330);
-    glUniformMatrix4fv(gMvpLocQ1330, 1, GL_FALSE, mvp16);
-    glBindVertexArray(fo3envq1000::skyVao);
+    glUseProgram(gProgram);
+    glUniformMatrix4fv(gMvpLoc, 1, GL_FALSE, mvp16);
+    glBindVertexArray(fo3env::skyVao);
 
     // Sun first. Clouds draw afterwards so their authored alpha can obscure it.
-    const Fo3EnvironmentQ1000& env = GetFo3EnvironmentQ1000();
+    const Fo3Environment& env = GetFo3Environment();
     glBlendFunc(GL_SRC_ALPHA, GL_ONE);
-    glUniform1i(gModeLocQ1330, 0);
-    glUniform3fv(gSunDirectionLocQ1330, 1, env.sunDirection);
-    glUniform3fv(gSunColorLocQ1330, 1, gWeatherSkyQ1330.sunColor);
-    glUniform1f(gSunGlareLocQ1330, gWeatherSkyQ1330.sunGlare);
-    glDrawArrays(GL_TRIANGLES, 0, fo3envq1000::skyVertexCount);
+    glUniform1i(gModeLoc, 0);
+    glUniform3fv(gSunDirectionLoc, 1, env.sunDirection);
+    glUniform3fv(gSunColorLoc, 1, gWeatherSky.sunColor);
+    glUniform1f(gSunGlareLoc, gWeatherSky.sunGlare);
+    glDrawArrays(GL_TRIANGLES, 0, fo3env::skyVertexCount);
 
     // Four authored WTHR cloud layers. Q14 updates their RGB from the active
     // time-of-day endpoints; DDS alpha supplies the actual cloud coverage mask.
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    glUniform1i(gModeLocQ1330, 1);
-    glUniform1i(gCloudTexLocQ1330, 0);
-    const double now = MonotonicSecondsQ1330();
+    glUniform1i(gModeLoc, 1);
+    glUniform1i(gCloudTexLoc, 0);
+    const double now = MonotonicSeconds();
     int rendered = 0;
     for (int i = 0; i < 4; ++i) {
-        const CloudLayerQ1330& layer = gWeatherSkyQ1330.clouds[i];
+        const CloudLayer& layer = gWeatherSky.clouds[i];
         if (!layer.loaded || layer.texture == 0u) continue;
         const float offset = static_cast<float>(std::fmod(now * layer.speed, 1.0));
         glBindTexture(GL_TEXTURE_2D, layer.texture);
-        glUniform4fv(gCloudColorLocQ1330, 1, layer.color);
-        glUniform1f(gCloudOffsetLocQ1330, offset);
-        glDrawArrays(GL_TRIANGLES, 0, fo3envq1000::skyVertexCount);
+        glUniform4fv(gCloudColorLoc, 1, layer.color);
+        glUniform1f(gCloudOffsetLoc, offset);
+        glDrawArrays(GL_TRIANGLES, 0, fo3env::skyVertexCount);
         ++rendered;
     }
 
@@ -365,19 +365,19 @@ inline void RenderLayersQ1330(const float* mvp16) {
                         static_cast<GLenum>(oldSrcAlpha), static_cast<GLenum>(oldDstAlpha));
     glActiveTexture(static_cast<GLenum>(previousActiveTexture));
 
-    if (!gLoggedGpuQ1330) {
-        gLoggedGpuQ1330 = true;
-        __android_log_print(ANDROID_LOG_INFO, fo3envq1000::TAG,
+    if (!gLoggedGpu) {
+        gLoggedGpu = true;
+        __android_log_print(ANDROID_LOG_INFO, fo3env::TAG,
                             "Q13.3 WEATHER SKY GPU: cloudLayersRendered=%d sunDisc=1 authoredDDS=1 stereoSharedState=1",
                             rendered);
     }
 }
 
-} // namespace fo3skyq1330
+} // namespace fo3sky
 
-inline void RenderFo3SkyQ1330(const float* mvp16) {
+inline void RenderFo3WeatherSky(const float* mvp16) {
     // Keep Q10.0's proven WTHR gradient/fog-colour base, then add the authored
     // weather texture layers and sun treatment without changing scene geometry.
-    RenderFo3SkyQ1000(mvp16);
-    fo3skyq1330::RenderLayersQ1330(mvp16);
+    RenderFo3EnvironmentSky(mvp16);
+    fo3sky::RenderLayers(mvp16);
 }
