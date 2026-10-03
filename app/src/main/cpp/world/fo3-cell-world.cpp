@@ -12,7 +12,7 @@ extern void PumpFo3AndroidEventsQ1860();
 #include "fo3-transition.h"
 #include "rendering/terrain/fo3-terrain.h"
 #include "fo3-cell-traversal.h"
-#include "fo3-loading-state-q1700.h"
+#include "ui/loading/fo3-loading-state.h"
 #include "fo3-transition.h"
 #include "rendering/environment/fo3-environment.h"
 #include "rendering/environment/fo3-visual-depth.h"

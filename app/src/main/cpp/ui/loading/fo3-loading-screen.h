@@ -1,6 +1,6 @@
 #pragma once
 
-#include "fo3-loading-state-q1700.h"
+#include "fo3-loading-state.h"
 #include "fo3-texture-bsa.h"
 
 #include <GLES3/gl3.h>
