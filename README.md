@@ -2,7 +2,7 @@
 
 Experimental standalone Meta Quest runtime for user-supplied Fallout 3 game data.
 
-## Current milestone: 0.24.10 — World streaming ownership
+## Current milestone: 0.24.11 — Background scene preparation
 
 FalloutQuest is a native ARM64/OpenXR reimplementation of the runtime needed to
 interpret Fallout 3's original data on Quest. It is not a port of the original
@@ -22,8 +22,9 @@ texture/cubemap and raw HUD assets. Worldspace placement selection and residency
 planning now compile independently, with request-local selection and one owner
 for live CELL streaming state. Existing DDS decoding, residency rules and GPU
 budgets remain in place. See `docs/ARCHITECTURE.md`, `tests/assets/README.md` and
-`tests/world/README.md` for ownership boundaries and portable checks. Player and
-renderer subsystems are being extracted incrementally.
+`tests/world/README.md` for ownership boundaries and portable checks. Startup and door transitions share background CPU preparation, budgeted GPU
+uploads and phase timing. Player and renderer subsystems are being extracted
+incrementally.
 
 At the Q18 baseline, the Capital Wasteland streaming path built an
 immutable in-memory index of authored Wasteland CELL/REFR/base metadata once,

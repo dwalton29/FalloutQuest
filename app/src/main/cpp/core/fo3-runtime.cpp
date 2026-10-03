@@ -1,5 +1,6 @@
 #include "rendering/water/fo3-water.h"
 #include "world/fo3-worldspace-runtime.h"
+#include "world/fo3-scene-preparation.h"
 #include "world/fo3-world-streaming.h"
 void SetNextFo3CollisionExteriorModeQ1931(bool exterior);
 #include <array>
@@ -2661,85 +2662,201 @@ void Q74DeleteGpuObjects(std::vector<GpuObject>& objects) {
 bool gQ2013ExteriorWarmupPending = false;
 std::chrono::steady_clock::time_point gQ2013ExteriorWarmupStarted{};
 
-bool ProcessQ74TransitionRequest() {
-    Fo3CellTransitionRequestQ74 request;
-    if (!ConsumeFo3CellTransitionRequestQ74(request) || !request.valid) return false;
-
-    const bool q2013HoldExteriorLoading =
-        request.worldspaceFormId == 0x0000003Cu &&
-        IsFo3LoadingVisible();
-    gQ2013ExteriorWarmupPending = q2013HoldExteriorLoading;
-    // Q20.25: ProcessQ74TransitionRequest performs substantial synchronous
-    // CELL/NIF/GPU scene work. Starting the async horizon timeout here meant
-    // that work could consume the whole timeout before LOD got its first tick.
-    // Arm the timer lazily on the first actual Wasteland streaming frame.
-    gQ2013ExteriorWarmupStarted =
-        std::chrono::steady_clock::time_point{};
-
-    Q6H_LOGI("Q16.11 MATURE SCENE SWAP BEGIN: door=%08X cell=%08X worldspace=%08X XTEL=(%.2f %.2f %.2f)",
-             request.destinationDoorRef, request.cellFormId, request.worldspaceFormId,
-             request.x, request.y, request.z);
-
+struct Fo3SceneCpuPreparation {
+    Fo3CellTransitionRequestQ74 request{};
     std::vector<Fo3WorldPlacement> placements;
-    if (!LoadFo3CellPlacementsQ74(request.cellFormId, placements)) {
-        Q6H_LOGE("Q7.4 SCENE SWAP FAILED: cell=%08X reason=cell-loader oldSceneRetained=1",
-                 request.cellFormId);
-        return false;
-    }
-
+    std::vector<Fo3WorldPlacement> collisionPlacements;
     std::vector<CpuObject> selected;
-    selected.reserve(placements.size() * 2u);
     size_t skipped = 0u;
     size_t unsupported = 0u;
-    size_t q1860CpuPumpCount = 0u;
-    for (const Fo3WorldPlacement& placement : placements) {
-        PumpFo3AndroidEventsQ1860();
-        ++q1860CpuPumpCount;
-        if (Q74ShouldSkipPlacement(placement)) {
-            ++skipped;
-            continue;
-        }
-        std::vector<CpuObject> parts;
-        if (!BuildCpuObjects(placement, parts)) {
-            ++unsupported;
-            continue;
-        }
-        for (CpuObject& part : parts) selected.push_back(std::move(part));
-    }
-    if (selected.size() < 2u) {
-        Q6H_LOGE("Q7.4 SCENE SWAP FAILED: cell=%08X drawShapes=%zu skipped=%zu unsupported=%zu oldSceneRetained=1",
-                 request.cellFormId, selected.size(), skipped, unsupported);
-        return false;
-    }
+    size_t preparedTextures = 0u;
+    uint64_t resolveUs = 0u;
+    uint64_t metadataUs = 0u;
+    uint64_t cpuUs = 0u;
+    uint64_t textureUs = 0u;
+};
 
+struct Fo3SceneLoadWork {
+    fo3scene::Preparation<Fo3SceneCpuPreparation> preparation;
     std::vector<GpuObject> replacement;
-    replacement.reserve(selected.size());
-    size_t q1860GpuPumpCount = 0u;
-    for (CpuObject& cpu : selected) {
-        PumpFo3AndroidEventsQ1860();
-        ++q1860GpuPumpCount;
-        GpuObject gpu;
-        if (UploadCpuObject(cpu, request.x, request.y, request.z, gpu)) {
-            replacement.push_back(std::move(gpu));
-        } else {
-            if (gpu.vbo) glDeleteBuffers(1, &gpu.vbo);
-            if (gpu.vao) glDeleteVertexArrays(1, &gpu.vao);
+    std::chrono::steady_clock::time_point started{};
+    uint64_t generation = 0u;
+    uint64_t lastFrame = UINT64_MAX;
+    uint64_t uploadUs = 0u;
+    uint64_t maxUploadSliceUs = 0u;
+    size_t uploadIndex = 0u;
+    bool active = false;
+    bool boot = false;
+    bool bootAttempted = false;
+    bool contextApplied = false;
+    std::unordered_set<std::string> previousCollisionPolicy;
+};
+Fo3SceneLoadWork gSceneLoad;
+uint64_t gSceneLoadFrame = 0u;
+
+bool DrainFo3TransitionBackgroundWork();
+
+uint64_t Fo3SceneElapsedUs(std::chrono::steady_clock::time_point since) {
+    return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::steady_clock::now() - since).count());
+}
+
+void AbortFo3SceneLoad(const char* reason) {
+    Q6H_LOGE("SCENE LOAD FAILED: reason=%s oldSceneRetained=1", reason);
+    Q74DeleteGpuObjects(gSceneLoad.replacement);
+    if (gSceneLoad.contextApplied)
+        Fo3DynamicOnlyCollisionModelsQ710() = std::move(gSceneLoad.previousCollisionPolicy);
+    gSceneLoad.preparation.Reset();
+    gSceneLoad.active = false;
+    if (gSceneLoad.generation == GetFo3LoadingGeneration()) CancelFo3Loading();
+}
+
+bool BeginFo3SceneLoad(const Fo3CellTransitionRequestQ74& request, bool boot) {
+    if (gSceneLoad.active) return false;
+    gSceneLoad.active = true;
+    gSceneLoad.boot = boot;
+    gSceneLoad.contextApplied = false;
+    gSceneLoad.started = std::chrono::steady_clock::now();
+    gSceneLoad.generation = GetFo3LoadingGeneration();
+    gSceneLoad.uploadIndex = 0u;
+    gSceneLoad.uploadUs = 0u;
+    gSceneLoad.maxUploadSliceUs = 0u;
+    gSceneLoad.replacement.clear();
+    MarkFo3TransitionWorkStarted();
+    Q6H_LOGI("SCENE LOAD BEGIN: boot=%d cell=%08X worldspace=%08X generation=%llu cpuWorker=1",
+             boot ? 1 : 0, request.cellFormId, request.worldspaceFormId,
+             static_cast<unsigned long long>(gSceneLoad.generation));
+    if (!gSceneLoad.preparation.Start(
+            [request, boot](Fo3SceneCpuPreparation& result, const std::atomic<bool>& cancel) {
+        result.request = request;
+        auto phase = std::chrono::steady_clock::now();
+        if (boot && !ResolveFo3MegatonEntryQ1860(result.request, &cancel)) return false;
+        result.resolveUs = Fo3SceneElapsedUs(phase);
+        if (cancel.load(std::memory_order_acquire)) return false;
+        phase = std::chrono::steady_clock::now();
+        if (!LoadFo3ScenePlacements(result.request, result.placements)) return false;
+        result.metadataUs = Fo3SceneElapsedUs(phase);
+        phase = std::chrono::steady_clock::now();
+        result.selected.reserve(result.placements.size() * 2u);
+        for (const Fo3WorldPlacement& placement : result.placements) {
+            if (cancel.load(std::memory_order_acquire)) return false;
+            if (Q74ShouldSkipPlacement(placement)) { ++result.skipped; continue; }
+            std::vector<CpuObject> parts;
+            if (!BuildCpuObjects(placement, parts)) { ++result.unsupported; continue; }
+            for (CpuObject& part : parts) {
+                result.collisionPlacements.push_back(part.placement);
+                result.selected.push_back(std::move(part));
+            }
         }
-    }
-    if (replacement.size() < 2u) {
-        Q74DeleteGpuObjects(replacement);
-        Q6H_LOGE("Q7.4 SCENE SWAP FAILED: cell=%08X gpuObjects=%zu oldSceneRetained=1",
-                 request.cellFormId, replacement.size());
+        result.cpuUs = Fo3SceneElapsedUs(phase);
+        if (result.selected.size() < 2u) return false;
+        phase = std::chrono::steady_clock::now();
+        std::unordered_set<std::string> texturePaths;
+        for (const CpuObject& cpu : result.selected) {
+            for (const std::string* path : {&cpu.mesh.diffuseTexturePath,
+                    &cpu.mesh.normalTexturePath, &cpu.mesh.glowTexturePath,
+                    &cpu.mesh.environmentMaskTexturePath}) {
+                if (!path->empty()) texturePaths.insert(*path);
+            }
+        }
+        for (const std::string& path : texturePaths) {
+            if (cancel.load(std::memory_order_acquire)) return false;
+            // Bound speculative decoded-image retention. Remaining textures use
+            // the existing upload-time decoder; no assets are omitted.
+            size_t retainedBytes = 0u;
+            {
+                std::lock_guard<std::mutex> lock(gQ1900TextureCpuMutexQ19);
+                for (const auto& entry : gQ1900PreparedTexturesQ19)
+                    retainedBytes += entry.second.texture.rgba.size();
+            }
+            if (retainedBytes >= 64u * 1024u * 1024u) break;
+            Q1900PrepareTextureCpuQ19(path);
+            ++result.preparedTextures;
+        }
+        result.textureUs = Fo3SceneElapsedUs(phase);
+        return !cancel.load(std::memory_order_acquire);
+    })) {
+        AbortFo3SceneLoad("worker-start");
         return false;
     }
+    return true;
+}
 
+bool ProcessQ74TransitionRequest() {
+    // Advance once per submitted frame, not once for each stereo eye.
+    if (gSceneLoad.lastFrame == gSceneLoadFrame) return false;
+    gSceneLoad.lastFrame = gSceneLoadFrame;
+    if (!gSceneLoad.active) {
+        Fo3CellTransitionRequestQ74 request;
+        if (!ConsumeFo3CellTransitionRequestQ74(request) || !request.valid) return false;
+        BeginFo3SceneLoad(request, false);
+        return false;
+    }
+    if (gSceneLoad.generation != GetFo3LoadingGeneration()) {
+        AbortFo3SceneLoad("superseded-generation");
+        return false;
+    }
+    if (!gSceneLoad.preparation.Ready() || ShouldDelayFo3TransitionConsume()) return false;
+    MarkFo3TransitionWorkStarted();
+    if (!gSceneLoad.preparation.Successful()) {
+        AbortFo3SceneLoad("cpu-preparation");
+        return false;
+    }
+    Fo3SceneCpuPreparation& prepared = gSceneLoad.preparation.Get();
+    const Fo3CellTransitionRequestQ74 request = prepared.request;
+    auto& selected = prepared.selected;
+    const size_t skipped = prepared.skipped;
+    const size_t unsupported = prepared.unsupported;
+    if (!gSceneLoad.contextApplied) {
+        // Retire completed background collision tasks before changing its policy.
+        if (!DrainFo3TransitionBackgroundWork()) return false;
+        SetFo3TransitionContextQ74(request);
+        gFo3LoadingCell.store(request.cellFormId, std::memory_order_release);
+        gFo3LoadingWorldspace.store(request.worldspaceFormId, std::memory_order_release);
+        gSceneLoad.previousCollisionPolicy = Fo3DynamicOnlyCollisionModelsQ710();
+        ClearFo3CollisionPolicyQ710();
+        if (request.worldspaceFormId != 0u) ConfigureFo3CollisionPolicyQ710(prepared.placements);
+        gQ2013ExteriorWarmupPending = request.worldspaceFormId == 0x0000003Cu && IsFo3LoadingVisible();
+        gQ2013ExteriorWarmupStarted = std::chrono::steady_clock::time_point{};
+        gSceneLoad.replacement.reserve(selected.size());
+        gSceneLoad.contextApplied = true;
+        Q6H_LOGI("SCENE CPU READY: boot=%d cell=%08X placements=%zu shapes=%zu resolveUs=%llu metadataUs=%llu cpuUs=%llu textureUs=%llu preparedTextures=%zu",
+                 gSceneLoad.boot ? 1 : 0, request.cellFormId, prepared.placements.size(), selected.size(),
+                 static_cast<unsigned long long>(prepared.resolveUs),
+                 static_cast<unsigned long long>(prepared.metadataUs),
+                 static_cast<unsigned long long>(prepared.cpuUs),
+                 static_cast<unsigned long long>(prepared.textureUs), prepared.preparedTextures);
+    }
+    const auto uploadStarted = std::chrono::steady_clock::now();
+    if (gSceneLoad.uploadIndex < selected.size()) {
+        do {
+            CpuObject& cpu = selected[gSceneLoad.uploadIndex++];
+            GpuObject gpu;
+            if (UploadCpuObject(cpu, request.x, request.y, request.z, gpu)) {
+                gSceneLoad.replacement.push_back(std::move(gpu));
+            } else {
+                if (gpu.vbo) glDeleteBuffers(1, &gpu.vbo);
+                if (gpu.vao) glDeleteVertexArrays(1, &gpu.vao);
+            }
+            // Release transformed/expanded CPU buffers after their GPU upload.
+            cpu = CpuObject{};
+        } while (gSceneLoad.uploadIndex < selected.size() &&
+                 Fo3SceneElapsedUs(uploadStarted) < 6000u);
+        const uint64_t sliceUs = Fo3SceneElapsedUs(uploadStarted);
+        gSceneLoad.uploadUs += sliceUs;
+        gSceneLoad.maxUploadSliceUs = std::max(gSceneLoad.maxUploadSliceUs, sliceUs);
+        return false; // collision/finalization starts on a clean following frame
+    }
+    auto& replacement = gSceneLoad.replacement;
+    if (replacement.size() < 2u) {
+        AbortFo3SceneLoad("gpu-upload-too-small");
+        return false;
+    }
+    const auto collisionStarted = std::chrono::steady_clock::now();
     std::vector<Fo3WorldPlacement> collisionPlacements;
     collisionPlacements.reserve(selected.size());
-    for (const CpuObject& cpu : selected) collisionPlacements.push_back(cpu.placement);
+    collisionPlacements = std::move(prepared.collisionPlacements);
 
-    Q6H_LOGI("Q16.14 MATURE LOAD PUMP: phase=cpu-gpu-complete cpuBoundaries=%zu gpuBoundaries=%zu collisionPlacements=%zu",
-             q1860CpuPumpCount, q1860GpuPumpCount, collisionPlacements.size());
-    PumpFo3AndroidEventsQ1860();
     // Q16.27: initial Capital Wasteland visuals are 7x7, but initial physics is
     // deliberately local 3x3. Other worldspaces keep their established policy.
     std::vector<Fo3WorldPlacement> q1960InitialCollisionPlacements;
@@ -2782,8 +2899,9 @@ bool ProcessQ74TransitionRequest() {
                                                                request.x, request.y, request.z,
                                                                SCENE_FORWARD, FLOOR_Y,
                                                                FO3_UNITS_PER_METRE);
-    PumpFo3AndroidEventsQ1860();
 
+    const uint64_t collisionUs = Fo3SceneElapsedUs(collisionStarted);
+    const auto finalizationStarted = std::chrono::steady_clock::now();
     const size_t oldObjects = gObjects.size();
     Q74DeleteGpuObjects(gObjects);
     gObjects = std::move(replacement);
@@ -2859,6 +2977,21 @@ bool ProcessQ74TransitionRequest() {
              request.cellFormId, request.worldspaceFormId,
              oldObjects, gObjects.size(), triangles, realDiffuse, realNormal,
              skipped, unsupported, collisionReady ? 1 : 0);
+    Q6H_LOGI("SCENE LOAD READY: boot=%d cell=%08X resolveUs=%llu metadataUs=%llu cpuUs=%llu textureUs=%llu uploadUs=%llu maxUploadSliceUs=%llu collisionUs=%llu finalizationUs=%llu totalUs=%llu exteriorWarmupPending=%d",
+             gSceneLoad.boot ? 1 : 0, request.cellFormId,
+             static_cast<unsigned long long>(prepared.resolveUs),
+             static_cast<unsigned long long>(prepared.metadataUs),
+             static_cast<unsigned long long>(prepared.cpuUs),
+             static_cast<unsigned long long>(prepared.textureUs),
+             static_cast<unsigned long long>(gSceneLoad.uploadUs),
+             static_cast<unsigned long long>(gSceneLoad.maxUploadSliceUs),
+             static_cast<unsigned long long>(collisionUs),
+             static_cast<unsigned long long>(Fo3SceneElapsedUs(finalizationStarted)),
+             static_cast<unsigned long long>(Fo3SceneElapsedUs(gSceneLoad.started)),
+             gQ2013ExteriorWarmupPending ? 1 : 0);
+    gSceneLoad.preparation.Reset();
+    gSceneLoad.previousCollisionPolicy.clear();
+    gSceneLoad.active = false;
     return true;
 }
 
@@ -4232,7 +4365,19 @@ void Q1900AdvanceStream() {
 
 #include "fo3-cell-streaming.inc"
 
+bool DrainFo3TransitionBackgroundWork() {
+    Q1900ConsumeWorkerQ19();
+    if (gWorldStreaming.collisionTask) {
+        if (!gWorldStreaming.collisionTask->ready.load(std::memory_order_acquire)) return false;
+        DiscardFo3CollisionSnapshotQ1930(gWorldStreaming.collisionTask->snapshotToken);
+        gWorldStreaming.collisionTask.reset();
+    }
+    return !Q1900AnyCellWorkerQ19() && DrainFo3TerrainStreamingCpuQ2000();
+}
+
 void UpdateFo3ExteriorStreamingQ1890(float virtualHeadX, float virtualHeadZ) {
+    if (gSceneLoad.active ||
+        (IsFo3LoadingVisible() && !gQ2013ExteriorWarmupPending)) return;
     static std::chrono::steady_clock::time_point q1970PreviousUpdate{};
     static uint64_t q1970PreviousLodUs = 0u;
     static uint64_t q1970PreviousDetailUs = 0u;
@@ -5212,28 +5357,20 @@ bool Q1030InitializeRenderProgramOnly() {
 }
 
 bool Q1030BootMegatonOnRender() {
-    static bool attempted = false;
-    static bool succeeded = false;
-    if (succeeded) return true;
-    if (attempted) return false;
-    attempted = true;
-
-    Q6H_LOGI("Q10.4 DIRECT BOOT BEGIN: transition=CapitalWasteland-to-Megaton worldspace=00000A74 stage=first-render");
-    if (!Q1030InitializeRenderProgramOnly()) return false;
-    if (!QueueFo3MegatonEntryQ1860()) {
-        Q6H_LOGE("Q10.3 DIRECT BOOT FAILED: stage=xtel reason=gate-not-found");
+    if (gSceneReady) return true;
+    if (gSceneLoad.bootAttempted) return false;
+    gSceneLoad.bootAttempted = true;
+    BeginFo3Loading(0u, 0x00000A74u);
+    if (!BeginFo3SceneLoad({}, true)) return false;
+    // CPU gate/scene preparation overlaps render-thread shader compilation.
+    const auto shaderStarted = std::chrono::steady_clock::now();
+    if (!Q1030InitializeRenderProgramOnly()) {
+        AbortFo3SceneLoad("render-program");
         return false;
     }
-    Q6H_LOGI("Q10.4 DIRECT BOOT XTEL READY: destination=resolved-by-XTEL-owner source=Fallout3.esm");
-    if (!ProcessQ74TransitionRequest()) {
-        Q6H_LOGE("Q10.3 DIRECT BOOT FAILED: stage=exterior-load reason=scene-swap");
-        return false;
-    }
-
-    succeeded = gSceneReady && !gObjects.empty();
-    Q6H_LOGI("Q10.4 DIRECT MEGATON ENTRY READY: destination=resolved-by-XTEL worldspace=00000A74 objects=%zu sceneReady=%d bootstrapCell=NONE source=Fallout3.esm/XTEL",
-             gObjects.size(), gSceneReady ? 1 : 0);
-    return succeeded;
+    Q6H_LOGI("SCENE STARTUP SHADERS: elapsedUs=%llu cpuPreparationOverlapped=1",
+             static_cast<unsigned long long>(Fo3SceneElapsedUs(shaderStarted)));
+    return true;
 }
 
 struct Q1990NativeLodBlock {
@@ -12197,6 +12334,11 @@ void Q1280ShutdownPostQ1280() {
 }
 
 void Q6HDeleteFramebuffers(GLsizei n, const GLuint* framebuffers) {
+    gSceneLoad.preparation.Reset();
+    Q74DeleteGpuObjects(gSceneLoad.replacement);
+    gSceneLoad.active = false;
+    gSceneLoad.bootAttempted = false;
+    CancelFo3Loading();
     Q1280ShutdownPostQ1280();
     ShutdownFo3WaterQ2070();
     glDeleteFramebuffers(n, framebuffers);

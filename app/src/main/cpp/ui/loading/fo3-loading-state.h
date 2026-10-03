@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 
 // loading-screen state shared by the OpenXR host and the CELL loader.
@@ -20,6 +21,17 @@ inline std::atomic<uint32_t> gFo3LoadingCell{0u};
 inline std::atomic<uint32_t> gFo3LoadingWorldspace{0u};
 inline std::atomic<uint64_t> gFo3LoadingGeneration{0u};
 inline std::atomic<uint32_t> gFo3LoadingPresentedFrames{0u};
+inline std::atomic<uint64_t> gFo3LoadingStartedUs{0u};
+
+inline uint64_t Fo3LoadingClockUs() {
+    return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count());
+}
+
+inline uint64_t GetFo3LoadingElapsedUs() {
+    const uint64_t started = gFo3LoadingStartedUs.load(std::memory_order_acquire);
+    return started == 0u ? 0u : Fo3LoadingClockUs() - started;
+}
 
 // At Quest refresh rates this is roughly 0.33-0.42 seconds. The visual
 // fade is 0.35s, so the loader can no longer flash for a single submitted frame
@@ -27,6 +39,7 @@ inline std::atomic<uint32_t> gFo3LoadingPresentedFrames{0u};
 constexpr uint32_t FO3_LOADING_MIN_PRESENT_FRAMES = 30u;
 
 inline void BeginFo3Loading(uint32_t cellFormId, uint32_t worldspaceFormId) {
+    gFo3LoadingStartedUs.store(Fo3LoadingClockUs(), std::memory_order_release);
     gFo3LoadingCell.store(cellFormId, std::memory_order_release);
     gFo3LoadingWorldspace.store(worldspaceFormId, std::memory_order_release);
     gFo3LoadingPresentedFrames.store(0u, std::memory_order_release);

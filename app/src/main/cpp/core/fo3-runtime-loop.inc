@@ -1388,6 +1388,7 @@ private:
                 (viewState.viewStateFlags & XR_VIEW_STATE_POSITION_VALID_BIT) &&
                 (viewState.viewStateFlags & XR_VIEW_STATE_ORIENTATION_VALID_BIT)) {
 
+                ++gSceneLoadFrame;
                 SyncInput(frameState.predictedDisplayTime);
                 UpdateFo3TimeOfDay(0.0f,
                     static_cast<int64_t>(frameState.predictedDisplayTime));
@@ -1506,7 +1507,16 @@ private:
         endInfo.layers = layerCount ? layers : nullptr;
         const bool q1700FrameSubmitted =
             CheckXr(xrEndFrame(session_, &endInfo), "xrEndFrame");
-        if (q1700FrameSubmitted) MarkFo3LoadingFramePresented();
+        if (q1700FrameSubmitted) {
+            const bool wasLoading = IsFo3LoadingVisible();
+            MarkFo3LoadingFramePresented();
+            if (wasLoading && !IsFo3LoadingVisible()) {
+                FQ_LOGI("LOADING PRESENTATION COMPLETE: generation=%llu cell=%08X worldspace=%08X totalUs=%llu",
+                        static_cast<unsigned long long>(GetFo3LoadingGeneration()),
+                        GetFo3LoadingCell(), GetFo3LoadingWorldspace(),
+                        static_cast<unsigned long long>(GetFo3LoadingElapsedUs()));
+            }
+        }
     }
 
     void SetMvpAndColor(const Mat4& mvp, float r, float g, float b) {
@@ -1768,6 +1778,5 @@ extern "C" void android_main(struct android_app* app) {
     xr.Shutdown();
     FQ_LOGI("FalloutQuest Q7.1 process stopped");
 }
-
 
 

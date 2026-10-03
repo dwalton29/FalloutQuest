@@ -59,7 +59,7 @@ jobs:
           cmake --build build/host-assets --parallel 2
           ctest --test-dir build/host-assets --output-on-failure
 
-      - name: Test world residency planner on host
+      - name: Test world residency and scene preparation on host
         run: |
           cmake -S tests/world -B build/host-world
           cmake --build build/host-world --parallel 2

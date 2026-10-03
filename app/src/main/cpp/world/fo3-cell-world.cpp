@@ -1,4 +1,5 @@
 #include <chrono>
+#include "fo3-worldspace-runtime.h"
 #include "fo3-esm-reader.h"
 #include <unordered_map>
 extern void PumpFo3AndroidEventsQ1860();
@@ -917,7 +918,9 @@ bool GetFo3DoorPromptQ1840(uint32_t sourceDoorRef,
     return count > 0u;
 }
 
-bool QueueFo3MegatonEntryQ1860() {
+bool ResolveFo3MegatonEntryQ1860(Fo3CellTransitionRequestQ74& outRequest,
+                               const std::atomic<bool>* cancelled) {
+    outRequest = {};
     constexpr uint32_t WASTELAND_WORLDSPACE = 0x0000003Cu;
     constexpr uint32_t MEGATON_WORLDSPACE = 0x00000A74u;
     constexpr uint32_t PREFERRED_ENTRANCE_CELL = 0x00002DBDu;
@@ -965,7 +968,11 @@ bool QueueFo3MegatonEntryQ1860() {
         uint8_t header[fo3esm::HEADER_SIZE]{};
         if (!fo3esm::ReadExact(file, header, sizeof(header))) break;
         ++records;
-        if ((records & 0x1fffu) == 0u) PumpFo3AndroidEventsQ1860();
+        if ((records & 0x1fffu) == 0u && cancelled &&
+            cancelled->load(std::memory_order_acquire)) {
+            std::fclose(file);
+            return false;
+        }
 
         const uint32_t sizeField = fo3esm::ReadU32(header + 4u);
         if (std::memcmp(header, "GRUP", 4u) == 0) {
@@ -1063,24 +1070,47 @@ bool QueueFo3MegatonEntryQ1860() {
         return false;
     }
 
-    gPendingTransitionQ74 = {};
-    gPendingTransitionQ74.destinationDoorRef = best.destinationRef;
-    gPendingTransitionQ74.cellFormId = bestOwner.cell;
-    gPendingTransitionQ74.worldspaceFormId = MEGATON_WORLDSPACE;
-    gPendingTransitionQ74.x = best.x;
-    gPendingTransitionQ74.y = best.y;
-    gPendingTransitionQ74.z = best.z;
-    gPendingTransitionQ74.rx = best.rx;
-    gPendingTransitionQ74.ry = best.ry;
-    gPendingTransitionQ74.rz = best.rz;
-    gPendingTransitionQ74.valid = true;
-    gHasPendingTransitionQ74 = true;
+    outRequest = {};
+    outRequest.destinationDoorRef = best.destinationRef;
+    outRequest.cellFormId = bestOwner.cell;
+    outRequest.worldspaceFormId = MEGATON_WORLDSPACE;
+    outRequest.x = best.x;
+    outRequest.y = best.y;
+    outRequest.z = best.z;
+    outRequest.rx = best.rx;
+    outRequest.ry = best.ry;
+    outRequest.rz = best.rz;
+    outRequest.valid = true;
 
     Q71_LOGI("Q16.14 FAST GATE READY: sourceDoor=%08X sourceCell=%08X sourceWorld=%08X destinationDoor=%08X destinationCell=%08X destinationWorld=%08X XTEL=(%.2f %.2f %.2f) R=(%.4f %.4f %.4f) score=%d source=Fallout3.esm",
              best.sourceRef, best.sourceCell, WASTELAND_WORLDSPACE,
              best.destinationRef, bestOwner.cell, MEGATON_WORLDSPACE,
              best.x, best.y, best.z, best.rx, best.ry, best.rz, bestScore);
     return true;
+}
+
+bool QueueFo3MegatonEntryQ1860() {
+    Fo3CellTransitionRequestQ74 request;
+    if (!ResolveFo3MegatonEntryQ1860(request)) return false;
+    gPendingTransitionQ74 = request;
+    gHasPendingTransitionQ74 = true;
+    return true;
+}
+
+void SetFo3TransitionContextQ74(const Fo3CellTransitionRequestQ74& request) {
+    gPendingTransitionQ74 = request;
+}
+
+bool LoadFo3ScenePlacements(const Fo3CellTransitionRequestQ74& request,
+                           std::vector<Fo3WorldPlacement>& outPlacements) {
+    outPlacements.clear();
+    if (!request.valid) return false;
+    if (request.worldspaceFormId != 0u) {
+        return LoadFo3WorldspacePlacements(
+            {request.worldspaceFormId, request.cellFormId, request.x, request.y, -1},
+            outPlacements);
+    }
+    return LoadFo3CellPlacements(request.cellFormId, outPlacements);
 }
 
 bool ConsumeFo3CellTransitionRequestQ74(Fo3CellTransitionRequestQ74& outRequest) {

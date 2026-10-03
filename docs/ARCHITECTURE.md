@@ -81,6 +81,40 @@ matched 20,000 planner frames against the previous implementation, plus 26
 concurrent placement requests in the supplied Wasteland/Megaton ESM and all 240
 indexed door teleports. No game data is committed.
 
+## Background scene preparation: 0.24.11
+
+Direct Megaton startup and authored door transitions share one preparation job.
+The worker resolves the startup XTEL (when needed), loads request-local placement
+metadata and builds CPU mesh objects. It uses the existing thread-safe model
+and texture caches. Texture predecoding stops once the shared prepared-image
+cache reaches 64 MiB; one image may cross that threshold. Remaining textures
+use the existing upload-time decoder without changing rendered content.
+Startup CPU preparation overlaps render-thread shader compilation.
+
+CPU placement loading no longer invokes terrain teardown, mutates the transition
+queue or changes collision policy. The render thread applies those effects.
+Rolling exterior work is paused during preparation/publication, and old CELL,
+collision and terrain workers are drained before changing collision policy.
+The preparation job supports cancellation and is joined before renderer teardown.
+
+Uploads advance once per stereo frame, targeting a 6 ms slice after each whole
+shape. One shape/texture upload can exceed that budget; progressive byte/row
+uploads remain a later improvement. Collision construction, terrain/environment
+setup and scene commitment still run on the render thread, and are timed.
+CPU upload buffers are released after each shape; the old scene remains until
+the destination finishes. The original renderable-placement collision inputs
+(including per-shape entries), authored origin and readiness rules are retained.
+The Wasteland 49-CELL/LOD warmup gate and loading presentation dwell are unchanged.
+
+Diagnostics: `SCENE STARTUP SHADERS`, `SCENE CPU READY` and `SCENE LOAD READY`
+report shader, gate-resolution, metadata, CPU, texture, upload, collision and
+finalization costs. `LOADING PRESENTATION COMPLETE` reports elapsed time from
+loading begin through the submitted finished frame, including exterior warmup.
+These are measurement hooks; no on-headset wall-clock speedup is claimed yet.
+Portable tests cover preparation publication, failure, cancellation and lifetime.
+The extracted startup resolver also matched the previous authored gate/XTEL
+result exactly against the supplied Fallout3.esm.
+
 ## Source-of-truth rule
 
 Fallout 3's supplied data and observable PC runtime behaviour are authoritative

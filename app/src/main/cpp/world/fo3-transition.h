@@ -2,6 +2,7 @@
 
 #include "fo3-megaton-scene.h"
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -20,6 +21,14 @@ struct Fo3CellTransitionRequestQ74 {
     float rz = 0.0f;
     bool valid = false;
 };
+
+// CPU-only entry points: no terrain teardown or collision-policy mutation.
+bool ResolveFo3MegatonEntryQ1860(Fo3CellTransitionRequestQ74& outRequest,
+                               const std::atomic<bool>* cancelled = nullptr);
+bool LoadFo3ScenePlacements(const Fo3CellTransitionRequestQ74& request,
+                           std::vector<Fo3WorldPlacement>& outPlacements);
+// Render thread publishes a resolved startup context before finalization.
+void SetFo3TransitionContextQ74(const Fo3CellTransitionRequestQ74& request);
 
 // Renderer-side transition queue. The input callback only enqueues; GL/collision
 // teardown and rebuild happen later from the render thread.

@@ -65,3 +65,6 @@ void UpdateFo3TerrainStreamingQ2000(
     float arrivalX, float arrivalY, float arrivalZ,
     float sceneForward, float floorY, float unitsPerMetre,
     bool allowCpuWorker);
+
+// Render-thread drain used before explicit scene swaps; schedules no new work.
+bool DrainFo3TerrainStreamingCpuQ2000();

@@ -1092,6 +1092,11 @@ void ResetFo3TerrainStreamingQ2000() {
     gQ2000TextureCursor = gQ2000CellCursor = gQ2000BatchCursor = 0u;
 }
 
+bool DrainFo3TerrainStreamingCpuQ2000() {
+    Q2000ConsumeWorker();
+    return gQ2000Worker == nullptr;
+}
+
 bool IsFo3TerrainStreamingCpuBusyQ2000() {
     return gQ2000Worker != nullptr;
 }
