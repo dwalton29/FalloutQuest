@@ -1,6 +1,6 @@
 #pragma once
 
-#include "fo3-weather-imad-q1300.h"
+#include "rendering/environment/fo3-weather-imagespace.h"
 
 #include <algorithm>
 #include <cmath>
