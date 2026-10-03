@@ -4231,7 +4231,7 @@ void Q1900AdvanceStream() {
     }
 }
 
-#include "fo3-cell-streaming-q19.inc"
+#include "fo3-cell-streaming.inc"
 
 void UpdateFo3ExteriorStreamingQ1890(float virtualHeadX, float virtualHeadZ) {
     static std::chrono::steady_clock::time_point q1970PreviousUpdate{};

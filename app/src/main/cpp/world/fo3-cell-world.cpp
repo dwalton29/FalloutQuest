@@ -30,7 +30,7 @@ extern void PumpFo3AndroidEventsQ1860();
 #define ProbeMegatonPlayerHouseDoorQ71 ProbeMegatonPlayerHouseDoorQ71BaseQ74
 #include "fo3-cell-spawn.cpp"
 #undef ProbeMegatonPlayerHouseDoorQ71
-#include "fo3-cell-interior-q1700.inc"
+#include "fo3-cell-interior.inc"
 #include "fo3-authored-door-query-q1870.inc"
 
 bool LoadFo3CellPlacements(uint32_t cellFormId,
