@@ -8,7 +8,7 @@ add_library(falloutquest SHARED
     core/fo3-runtime.cpp
     world/fo3-megaton-scene.cpp
     world/fo3-cell-world.cpp
-    fo3-static-nif-runtime.cpp
+    rendering/mesh/fo3-static-nif.cpp
     physics/fo3-nif-collision-parser.cpp
     physics/fo3-collision-runtime.cpp
     data/fo3-bsa-reader.cpp
@@ -27,6 +27,7 @@ target_include_directories(falloutquest PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/world
     ${CMAKE_CURRENT_SOURCE_DIR}/world/interaction
     ${CMAKE_CURRENT_SOURCE_DIR}/rendering
+    ${CMAKE_CURRENT_SOURCE_DIR}/rendering/mesh
     ${CMAKE_CURRENT_SOURCE_DIR}/rendering/terrain
     ${CMAKE_CURRENT_SOURCE_DIR}/physics
     ${CMAKE_CURRENT_SOURCE_DIR}/player

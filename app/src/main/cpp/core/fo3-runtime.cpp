@@ -19,7 +19,7 @@ extern void PumpFo3AndroidEventsQ1860();
 #include "ui/loading/fo3-loading-screen.h"
 #include "fo3-megaton-scene.h"
 #include "fo3-npc.h"
-#include "fo3-static-nif.h"
+#include "rendering/mesh/fo3-static-nif.h"
 #include "fo3-bsa-reader.h"
 #include "fo3-texture-bsa.h"
 #include "fo3-collision-overlay.h"
