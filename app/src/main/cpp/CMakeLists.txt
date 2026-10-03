@@ -3,7 +3,7 @@ project(falloutquest LANGUAGES C CXX)
 
 find_package(OpenXR REQUIRED CONFIG)
 
-# Q17 consolidated baseline: normal sources, no generated-source patch chain.
+# Native runtime sources.
 add_library(falloutquest SHARED
     fo3-runtime.cpp
     world/fo3-megaton-scene.cpp
@@ -25,12 +25,15 @@ target_include_directories(falloutquest PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/core
     ${CMAKE_CURRENT_SOURCE_DIR}/data
     ${CMAKE_CURRENT_SOURCE_DIR}/world
+    ${CMAKE_CURRENT_SOURCE_DIR}/world/interaction
     ${CMAKE_CURRENT_SOURCE_DIR}/rendering
     ${CMAKE_CURRENT_SOURCE_DIR}/rendering/terrain
     ${CMAKE_CURRENT_SOURCE_DIR}/physics
     ${CMAKE_CURRENT_SOURCE_DIR}/player
     ${CMAKE_CURRENT_SOURCE_DIR}/npc
     ${CMAKE_CURRENT_SOURCE_DIR}/ui
+    ${CMAKE_CURRENT_SOURCE_DIR}/ui/interaction
+    ${CMAKE_CURRENT_SOURCE_DIR}/ui/loading
 )
 
 target_compile_options(falloutquest PRIVATE
