@@ -32,7 +32,7 @@ extern void PumpFo3AndroidEventsQ1860();
 #include "rendering/environment/fo3-pc-sky.h"
 #include "rendering/environment/fo3-external-emittance.h"
 #include "rendering/environment/fo3-authored-color.h"
-#include "fo3-megaton-cell-environment-q1410.h"
+#include "rendering/environment/fo3-megaton-cell-environment.h"
 #define LoadFo3ImageSpaceQ1280 LoadFo3ImageSpaceBaseQ1410
 #include "rendering/environment/fo3-time-of-day.h"
 #define FO3_Q1480_DEFINE_REFRESH 1
