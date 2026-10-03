@@ -95,7 +95,7 @@ inline void PrepareCatalog() {
 inline void SetHead(float x,float y,float z,float qx,float qy,float qz,float qw) {
     gHead=fo3loadingpose::Anchor(x,y,z,qx,qy,qz,qw);
 }
-inline void PrepareVertices(std::vector<CpuShape>& source,bool compass,float uiExtent=0.17f,fo3anim::Matrix* mapping=nullptr);
+inline void PrepareVertices(std::vector<CpuShape>& source,bool compass,float uiExtent=0.17f,fo3anim::Matrix* mapping=nullptr,const fo3anim::Pose* initialPose=nullptr);
 inline bool ReadShapes(const std::string& path,std::vector<CpuShape>& out,
                        const std::atomic<bool>& cancelled,bool originalUi=false) {
     std::vector<Fo3StaticNifMesh> meshes;
@@ -140,10 +140,16 @@ inline GLuint UploadImage(const Fo3RgbaTexture& image) {
     glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA,image.width,image.height,0,GL_RGBA,GL_UNSIGNED_BYTE,image.rgba.data());
     return texture;
 }
-inline void PrepareVertices(std::vector<CpuShape>& source,bool compass,float uiExtent,fo3anim::Matrix* mapping) {
+inline void PrepareVertices(std::vector<CpuShape>& source,bool compass,float uiExtent,fo3anim::Matrix* mapping,const fo3anim::Pose* initialPose) {
     float lo[3]={INFINITY,INFINITY,INFINITY},hi[3]={-INFINITY,-INFINITY,-INFINITY};
-    for(const auto& s:source) for(size_t i=0;i+2<s.mesh.positions.size();i+=3)
-        for(int a=0;a<3;++a) {lo[a]=std::min(lo[a],s.mesh.positions[i+a]);hi[a]=std::max(hi[a],s.mesh.positions[i+a]);}
+    for(const auto& s:source) for(size_t i=0;i+2<s.mesh.positions.size();i+=3) {
+        std::array<float,3> point{s.mesh.positions[i],s.mesh.positions[i+1],s.mesh.positions[i+2]};
+        // Embedded Idle rotates the authored XZ rest geometry into the XY UI
+        // plane. Choose bounds and axes from the displayed pose, not rest.
+        if(initialPose && s.bone>=0 && static_cast<size_t>(s.bone)<initialPose->delta.size())
+            point=fo3anim::Point(initialPose->delta[s.bone],point);
+        for(int a=0;a<3;++a) {lo[a]=std::min(lo[a],point[a]);hi[a]=std::max(hi[a],point[a]);}
+    }
     float span[3]={hi[0]-lo[0],hi[1]-lo[1],hi[2]-lo[2]};
     const float extent=std::max({span[0],span[1],span[2]});
     if(!std::isfinite(extent) || extent<0.0001f)return;
@@ -347,7 +353,13 @@ inline void AdvanceAssets() {
                     if(ReadShapes(path,out.model,cancelled)) {out.modelPath=path;break;}
                 }
             }
-            PrepareVertices(out.model,false);PrepareVertices(out.compass,true,0.17f,&out.compassToPanel);
+            fo3anim::Pose compassInitial;
+            bool haveCompassPose=false;
+            for(const auto& clip:out.compassClips)
+                if(clip.name==menu.compassAnimation)
+                    haveCompassPose=fo3anim::Sample(out.compassHierarchy,clip,clip.start,compassInitial);
+            PrepareVertices(out.model,false);
+            PrepareVertices(out.compass,true,0.17f,&out.compassToPanel,haveCompassPose?&compassInitial:nullptr);
             fo3anim::Inverse(out.compassToPanel,out.panelToCompass);
             return !cancelled.load();
         });
