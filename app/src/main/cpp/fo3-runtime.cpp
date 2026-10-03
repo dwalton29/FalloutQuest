@@ -3028,13 +3028,6 @@ void Q1590UploadPcSp17LightConstants() {
         glUniform3fv(gSunlightColorLocationQ1000, 1, sunlight);
     }
 
-    // Q15.7's encoded-BaseMap branch changes more than the PC capture proves.
-    // Keep it disabled for statics so this test changes only the two proven
-    // SP17 lighting constants. Terrain remains untouched by Q15.9.
-    if (gLegacyColourDomainLocationQ1570 >= 0) {
-        glUniform1f(gLegacyColourDomainLocationQ1570, 0.0f);
-    }
-
     static uint32_t q1590LastWeather = 0u;
     static int q1590LastHour = -1;
     const int hourBucket = static_cast<int>(std::floor(fo3todq1400::gTestHour * 10.0f));
@@ -10878,7 +10871,7 @@ void RenderScene() {
                  gFo3SelectedLightColorFalloffQ1010);
     if (gFogPowerLocationQ1410 >= 0) glUniform1f(gFogPowerLocationQ1410, GetFo3FogPowerQ1410());
     Q1590UploadPcSp17LightConstants();
-    }
+
     const float q1532StaticFogNear =
         (q1000Env.valid && q1000Env.fogFar > q1000Env.fogNear + 1.0f)
             ? std::max(0.0f, q1000Env.fogNear / FO3_UNITS_PER_METRE)
