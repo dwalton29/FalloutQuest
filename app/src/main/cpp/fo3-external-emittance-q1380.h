@@ -27,17 +27,8 @@ inline bool gFo3ExternalEmittanceLoadedQ1380 = false;
 
 namespace fo3emittanceq1380 {
 
-using fo3visualq1010::CString;
-using fo3visualq1010::FileSize;
-using fo3visualq1010::FLAG_COMPRESSED;
 using fo3visualq1010::GroupFrame;
-using fo3visualq1010::HEADER_SIZE;
 using fo3visualq1010::InWorldspace;
-using fo3visualq1010::Read32;
-using fo3visualq1010::ReadExact;
-using fo3visualq1010::ReadFloat;
-using fo3visualq1010::ReadPayload;
-using fo3visualq1010::WalkSubrecords;
 
 constexpr const char* TAG = "FalloutQuest";
 constexpr const char* ESM_PATH = fo3visualq1010::ESM_PATH;
@@ -69,7 +60,7 @@ struct WeatherDay {
 
 inline bool SeekNextRecord(FILE* file, int64_t fileSize,
                            std::vector<GroupFrame>& groups,
-                           uint8_t header[HEADER_SIZE], uint64_t& offset,
+                           uint8_t header[fo3esm::HEADER_SIZE], uint64_t& offset,
                            uint32_t& sizeField, uint32_t& flags,
                            uint32_t& formId, uint64_t& payloadEnd) {
     while (true) {
@@ -77,20 +68,20 @@ inline bool SeekNextRecord(FILE* file, int64_t fileSize,
         if (rawOffset < 0) return false;
         offset = static_cast<uint64_t>(rawOffset);
         while (!groups.empty() && offset >= groups.back().end) groups.pop_back();
-        if (offset + HEADER_SIZE > static_cast<uint64_t>(fileSize)) return false;
-        if (!ReadExact(file, header, HEADER_SIZE)) return false;
-        sizeField = Read32(header + 4u);
+        if (offset + fo3esm::HEADER_SIZE > static_cast<uint64_t>(fileSize)) return false;
+        if (!fo3esm::ReadExact(file, header, fo3esm::HEADER_SIZE)) return false;
+        sizeField = fo3esm::ReadU32(header + 4u);
         if (std::memcmp(header, "GRUP", 4u) == 0) {
-            if (sizeField < HEADER_SIZE ||
+            if (sizeField < fo3esm::HEADER_SIZE ||
                 offset + sizeField > static_cast<uint64_t>(fileSize)) return false;
             groups.push_back(GroupFrame{offset + sizeField,
-                                        Read32(header + 8u),
-                                        Read32(header + 12u)});
+                                        fo3esm::ReadU32(header + 8u),
+                                        fo3esm::ReadU32(header + 12u)});
             continue;
         }
-        flags = Read32(header + 8u);
-        formId = Read32(header + 12u);
-        payloadEnd = offset + HEADER_SIZE + sizeField;
+        flags = fo3esm::ReadU32(header + 8u);
+        formId = fo3esm::ReadU32(header + 12u);
+        payloadEnd = offset + fo3esm::HEADER_SIZE + sizeField;
         if (payloadEnd > static_cast<uint64_t>(fileSize)) return false;
         return true;
     }
@@ -136,8 +127,8 @@ inline bool LoadFo3ExternalEmittanceQ1380(uint32_t worldspaceFormId) {
                             "Q13.8 XEMI ESM open failed: %s", ESM_PATH);
         return false;
     }
-    const int64_t fileSize = FileSize(file);
-    if (fileSize < static_cast<int64_t>(HEADER_SIZE)) {
+    const int64_t fileSize = fo3esm::FileSize(file);
+    if (fileSize < static_cast<int64_t>(fo3esm::HEADER_SIZE)) {
         std::fclose(file);
         return false;
     }
@@ -147,7 +138,7 @@ inline bool LoadFo3ExternalEmittanceQ1380(uint32_t worldspaceFormId) {
     std::unordered_set<uint32_t> wantedEmittance;
     std::vector<GroupFrame> groups;
     while (true) {
-        uint8_t header[HEADER_SIZE]{};
+        uint8_t header[fo3esm::HEADER_SIZE]{};
         uint64_t offset = 0u, payloadEnd = 0u;
         uint32_t sizeField = 0u, flags = 0u, formId = 0u;
         if (!SeekNextRecord(file, fileSize, groups, header, offset,
@@ -158,12 +149,12 @@ inline bool LoadFo3ExternalEmittanceQ1380(uint32_t worldspaceFormId) {
             continue;
         }
         std::vector<uint8_t> payload;
-        if (!ReadPayload(file, sizeField, flags, payload)) break;
+        if (!fo3esm::ReadPayloadCurrent(file, sizeField, flags, payload)) break;
         uint32_t xemi = 0u;
-        WalkSubrecords(payload.data(), payload.size(),
+        fo3esm::WalkSubrecords(payload.data(), payload.size(),
                        [&](const char* type, const uint8_t* bytes, uint32_t size) {
             if (std::memcmp(type, "XEMI", 4u) == 0 && size >= 4u) {
-                xemi = Read32(bytes);
+                xemi = fo3esm::ReadU32(bytes);
             }
         });
         if (xemi != 0u) {
@@ -182,7 +173,7 @@ inline bool LoadFo3ExternalEmittanceQ1380(uint32_t worldspaceFormId) {
         return false;
     }
     while (true) {
-        uint8_t header[HEADER_SIZE]{};
+        uint8_t header[fo3esm::HEADER_SIZE]{};
         uint64_t offset = 0u, payloadEnd = 0u;
         uint32_t sizeField = 0u, flags = 0u, formId = 0u;
         if (!SeekNextRecord(file, fileSize, groups, header, offset,
@@ -195,21 +186,21 @@ inline bool LoadFo3ExternalEmittanceQ1380(uint32_t worldspaceFormId) {
             continue;
         }
         std::vector<uint8_t> payload;
-        if (!ReadPayload(file, sizeField, flags, payload)) break;
+        if (!fo3esm::ReadPayloadCurrent(file, sizeField, flags, payload)) break;
         if (isLight) {
             FixedLight value;
             bool haveColor = false;
-            WalkSubrecords(payload.data(), payload.size(),
+            fo3esm::WalkSubrecords(payload.data(), payload.size(),
                            [&](const char* type, const uint8_t* bytes, uint32_t size) {
                 if (std::memcmp(type, "EDID", 4u) == 0) {
-                    value.editorId = CString(bytes, size);
+                    value.editorId = fo3esm::ZString(bytes, size);
                 } else if (std::memcmp(type, "DATA", 4u) == 0 && size >= 12u) {
                     value.color[0] = static_cast<float>(bytes[8u]) / 255.0f;
                     value.color[1] = static_cast<float>(bytes[9u]) / 255.0f;
                     value.color[2] = static_cast<float>(bytes[10u]) / 255.0f;
                     haveColor = true;
                 } else if (std::memcmp(type, "FNAM", 4u) == 0 && size >= 4u) {
-                    value.fade = ReadFloat(bytes);
+                    value.fade = fo3esm::ReadF32(bytes);
                 }
             });
             if (!std::isfinite(value.fade)) value.fade = 1.0f;
@@ -219,13 +210,13 @@ inline bool LoadFo3ExternalEmittanceQ1380(uint32_t worldspaceFormId) {
             if (value.valid) fixedLights[formId] = value;
         } else {
             RegionLink value;
-            WalkSubrecords(payload.data(), payload.size(),
+            fo3esm::WalkSubrecords(payload.data(), payload.size(),
                            [&](const char* type, const uint8_t* bytes, uint32_t size) {
                 if (std::memcmp(type, "EDID", 4u) == 0) {
-                    value.editorId = CString(bytes, size);
+                    value.editorId = fo3esm::ZString(bytes, size);
                 } else if (std::memcmp(type, "RDWT", 4u) == 0 && size >= 4u &&
                            value.weatherFormId == 0u) {
-                    value.weatherFormId = Read32(bytes);
+                    value.weatherFormId = fo3esm::ReadU32(bytes);
                 }
             });
             value.valid = value.weatherFormId != 0u;
@@ -246,7 +237,7 @@ inline bool LoadFo3ExternalEmittanceQ1380(uint32_t worldspaceFormId) {
         return false;
     }
     while (true) {
-        uint8_t header[HEADER_SIZE]{};
+        uint8_t header[fo3esm::HEADER_SIZE]{};
         uint64_t offset = 0u, payloadEnd = 0u;
         uint32_t sizeField = 0u, flags = 0u, formId = 0u;
         if (!SeekNextRecord(file, fileSize, groups, header, offset,
@@ -257,12 +248,12 @@ inline bool LoadFo3ExternalEmittanceQ1380(uint32_t worldspaceFormId) {
             continue;
         }
         std::vector<uint8_t> payload;
-        if (!ReadPayload(file, sizeField, flags, payload)) break;
+        if (!fo3esm::ReadPayloadCurrent(file, sizeField, flags, payload)) break;
         WeatherDay value;
-        WalkSubrecords(payload.data(), payload.size(),
+        fo3esm::WalkSubrecords(payload.data(), payload.size(),
                        [&](const char* type, const uint8_t* bytes, uint32_t size) {
             if (std::memcmp(type, "EDID", 4u) == 0) {
-                value.editorId = CString(bytes, size);
+                value.editorId = fo3esm::ZString(bytes, size);
             } else if (std::memcmp(type, "NAM0", 4u) == 0 && size >= 80u) {
                 // WTHR NAM0 = ten colour classes, each four time endpoints.
                 // Sunlight class is index 4 (offset 64), Day is endpoint 1 (+4).

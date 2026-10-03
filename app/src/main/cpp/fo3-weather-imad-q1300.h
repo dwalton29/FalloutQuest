@@ -60,8 +60,8 @@ inline void ReadScalarCurveQ1300(const uint8_t* bytes, uint32_t size,
     float bestValue = 0.0f;
     uint32_t keys = 0u;
     for (uint32_t pos = 0u; pos + 8u <= size; pos += 8u) {
-        const float time = ReadFloat(bytes + pos);
-        const float value = ReadFloat(bytes + pos + 4u);
+        const float time = fo3esm::ReadF32(bytes + pos);
+        const float value = fo3esm::ReadF32(bytes + pos + 4u);
         if (!std::isfinite(time) || !std::isfinite(value)) continue;
         ++keys;
         if (time >= bestTime) {
@@ -84,12 +84,12 @@ inline void ReadColorCurveQ1300(const uint8_t* bytes, uint32_t size,
     float best[4]{1.0f, 1.0f, 1.0f, 0.0f};
     uint32_t keys = 0u;
     for (uint32_t pos = 0u; pos + 20u <= size; pos += 20u) {
-        const float time = ReadFloat(bytes + pos);
+        const float time = fo3esm::ReadF32(bytes + pos);
         float rgba[4]{
-            ReadFloat(bytes + pos + 4u),
-            ReadFloat(bytes + pos + 8u),
-            ReadFloat(bytes + pos + 12u),
-            ReadFloat(bytes + pos + 16u),
+            fo3esm::ReadF32(bytes + pos + 4u),
+            fo3esm::ReadF32(bytes + pos + 8u),
+            fo3esm::ReadF32(bytes + pos + 12u),
+            fo3esm::ReadF32(bytes + pos + 16u),
         };
         if (!std::isfinite(time) || !std::isfinite(rgba[0]) ||
             !std::isfinite(rgba[1]) || !std::isfinite(rgba[2]) ||
@@ -121,15 +121,15 @@ inline bool LoadWeatherImadQ1300(uint32_t formId, WeatherImadQ1300& out) {
         return false;
     }
 
-    WalkSubrecords(payload.data(), payload.size(),
+    fo3esm::WalkSubrecords(payload.data(), payload.size(),
                    [&](const char* type, const uint8_t* bytes, uint32_t size) {
         if (std::memcmp(type, "EDID", 4u) == 0 && out.editorId.empty()) {
-            out.editorId = CString(bytes, size);
+            out.editorId = fo3esm::ZString(bytes, size);
             return;
         }
         if (std::memcmp(type, "DNAM", 4u) == 0 && size >= 8u) {
-            out.flags = Read32(bytes);
-            out.duration = ReadFloat(bytes + 4u);
+            out.flags = fo3esm::ReadU32(bytes);
+            out.duration = fo3esm::ReadF32(bytes + 4u);
             return;
         }
 

@@ -76,14 +76,14 @@ inline bool ReadWorldImageLinkQ1290(uint32_t worldspaceFormId,
     out = {};
     std::vector<uint8_t> payload;
     if (!FindRecord("WRLD", worldspaceFormId, payload)) return false;
-    WalkSubrecords(payload.data(), payload.size(),
+    fo3esm::WalkSubrecords(payload.data(), payload.size(),
                    [&](const char* type, const uint8_t* bytes, uint32_t size) {
         if (std::memcmp(type, "WNAM", 4u) == 0 && size >= 4u) {
-            out.parentWorld = Read32(bytes);
+            out.parentWorld = fo3esm::ReadU32(bytes);
         } else if (std::memcmp(type, "PNAM", 4u) == 0 && size >= 1u) {
             out.parentFlags = bytes[0];
         } else if (std::memcmp(type, "INAM", 4u) == 0 && size >= 4u) {
-            out.imageSpace = Read32(bytes);
+            out.imageSpace = fo3esm::ReadU32(bytes);
         }
     });
     return true;
@@ -133,13 +133,13 @@ inline uint32_t ResolveWeatherDayImadQ1290(uint32_t weatherFormId) {
     std::vector<uint8_t> payload;
     if (!FindRecord("WTHR", weatherFormId, payload)) return 0u;
     uint32_t dayImad = 0u;
-    WalkSubrecords(payload.data(), payload.size(),
+    fo3esm::WalkSubrecords(payload.data(), payload.size(),
                    [&](const char* type, const uint8_t* bytes, uint32_t size) {
         // Fallout 3 uses binary subrecord names 00IAD..03IAD for
         // sunrise/day/sunset/night Image Space Modifiers.
         if (size >= 4u && static_cast<uint8_t>(type[0]) == 0x01u &&
             type[1] == 'I' && type[2] == 'A' && type[3] == 'D') {
-            dayImad = Read32(bytes);
+            dayImad = fo3esm::ReadU32(bytes);
         }
     });
     return dayImad;
@@ -164,10 +164,10 @@ inline bool LoadFo3ImageSpaceQ1280(uint32_t cellFormId, uint32_t worldspaceFormI
         return false;
     }
 
-    WalkSubrecords(cellPayload.data(), cellPayload.size(),
+    fo3esm::WalkSubrecords(cellPayload.data(), cellPayload.size(),
                    [&](const char* type, const uint8_t* bytes, uint32_t size) {
         if (std::memcmp(type, "XCIM", 4u) == 0 && size >= 4u) {
-            imageSpaceFormId = Read32(bytes);
+            imageSpaceFormId = fo3esm::ReadU32(bytes);
         }
     });
 
@@ -222,15 +222,15 @@ inline bool LoadFo3ImageSpaceQ1280(uint32_t cellFormId, uint32_t worldspaceFormI
     image.imageSpaceInheritedFromParent = imageSpaceInheritedFromParent;
     bool haveDnam = false;
 
-    WalkSubrecords(imagePayload.data(), imagePayload.size(),
+    fo3esm::WalkSubrecords(imagePayload.data(), imagePayload.size(),
                    [&](const char* type, const uint8_t* bytes, uint32_t size) {
         if (std::memcmp(type, "EDID", 4u) == 0 && image.editorId.empty()) {
-            image.editorId = CString(bytes, size);
+            image.editorId = fo3esm::ZString(bytes, size);
             return;
         }
         if (std::memcmp(type, "DNAM", 4u) != 0 || size < 148u) return;
 
-        auto f = [&](uint32_t offset) { return ReadFloat(bytes + offset); };
+        auto f = [&](uint32_t offset) { return fo3esm::ReadF32(bytes + offset); };
         image.hdrEyeAdaptSpeed = f(0u);
         image.hdrBlurRadius = f(4u);
         image.hdrBlurPasses = f(8u);

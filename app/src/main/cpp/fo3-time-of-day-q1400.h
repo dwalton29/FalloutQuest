@@ -121,7 +121,7 @@ inline bool LoadClimateTimes(uint32_t climateFormId, ClimateTimesQ1400& out) {
     if (climateFormId == 0u) return false;
     std::vector<uint8_t> payload;
     if (!FindRecord("CLMT", climateFormId, payload)) return false;
-    WalkSubrecords(payload.data(), payload.size(),
+    fo3esm::WalkSubrecords(payload.data(), payload.size(),
                    [&](const char* type, const uint8_t* bytes, uint32_t size) {
         if (std::memcmp(type, "TNAM", 4u) == 0 && size >= 4u) {
             out.sunriseBegin = ByteTimeToHours(bytes[0]);
@@ -145,10 +145,10 @@ inline bool LoadWeatherTime(uint32_t weatherFormId, WeatherTimeQ1400& out) {
 
     std::vector<uint8_t> payload;
     if (!FindRecord("WTHR", weatherFormId, payload)) return false;
-    WalkSubrecords(payload.data(), payload.size(),
+    fo3esm::WalkSubrecords(payload.data(), payload.size(),
                    [&](const char* type, const uint8_t* bytes, uint32_t size) {
         if (std::memcmp(type, "EDID", 4u) == 0 && out.editorId.empty()) {
-            out.editorId = CString(bytes, size);
+            out.editorId = fo3esm::ZString(bytes, size);
             return;
         }
         if (std::memcmp(type, "NAM0", 4u) == 0 && size >= 160u) {
@@ -178,10 +178,10 @@ inline bool LoadWeatherTime(uint32_t weatherFormId, WeatherTimeQ1400& out) {
             return;
         }
         if (std::memcmp(type, "FNAM", 4u) == 0 && size >= 16u) {
-            out.fogDayNear = ReadFloat(bytes + 0u);
-            out.fogDayFar = ReadFloat(bytes + 4u);
-            out.fogNightNear = ReadFloat(bytes + 8u);
-            out.fogNightFar = ReadFloat(bytes + 12u);
+            out.fogDayNear = fo3esm::ReadF32(bytes + 0u);
+            out.fogDayFar = fo3esm::ReadF32(bytes + 4u);
+            out.fogNightNear = fo3esm::ReadF32(bytes + 8u);
+            out.fogNightFar = fo3esm::ReadF32(bytes + 12u);
             out.haveFog = std::isfinite(out.fogDayNear) && std::isfinite(out.fogDayFar) &&
                           std::isfinite(out.fogNightNear) && std::isfinite(out.fogNightFar);
             return;
@@ -189,7 +189,7 @@ inline bool LoadWeatherTime(uint32_t weatherFormId, WeatherTimeQ1400& out) {
         const uint8_t first = static_cast<uint8_t>(type[0]);
         if (first <= 0x03u && type[1] == 'I' && type[2] == 'A' && type[3] == 'D' &&
             size >= 4u) {
-            out.imad[first] = Read32(bytes);
+            out.imad[first] = fo3esm::ReadU32(bytes);
         }
     });
     out.valid = out.haveNam0;
