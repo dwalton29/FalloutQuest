@@ -29,7 +29,7 @@ jobs:
           fi
           for source in \
             fo3-runtime.cpp \
-            fo3-cell-world.cpp \
+            world/fo3-cell-world.cpp \
             fo3-static-nif-runtime.cpp \
             physics/fo3-collision-runtime.cpp \
             fo3-player-controller-runtime.inc \
