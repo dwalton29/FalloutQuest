@@ -82,18 +82,18 @@ inline bool ParseWeatherSkyQ1330(uint32_t weatherFormId, WeatherSkyQ1330& out) {
     std::vector<uint8_t> payload;
     if (!FindRecord("WTHR", weatherFormId, payload)) return false;
 
-    WalkSubrecords(payload.data(), payload.size(),
+    fo3esm::WalkSubrecords(payload.data(), payload.size(),
                    [&](const char* type, const uint8_t* bytes, uint32_t size) {
         if (std::memcmp(type, "EDID", 4u) == 0 && out.editorId.empty()) {
-            out.editorId = CString(bytes, size);
+            out.editorId = fo3esm::ZString(bytes, size);
         } else if (std::memcmp(type, "DNAM", 4u) == 0) {
-            out.clouds[0].texturePath = CString(bytes, size);
+            out.clouds[0].texturePath = fo3esm::ZString(bytes, size);
         } else if (std::memcmp(type, "CNAM", 4u) == 0) {
-            out.clouds[1].texturePath = CString(bytes, size);
+            out.clouds[1].texturePath = fo3esm::ZString(bytes, size);
         } else if (std::memcmp(type, "ANAM", 4u) == 0) {
-            out.clouds[2].texturePath = CString(bytes, size);
+            out.clouds[2].texturePath = fo3esm::ZString(bytes, size);
         } else if (std::memcmp(type, "BNAM", 4u) == 0) {
-            out.clouds[3].texturePath = CString(bytes, size);
+            out.clouds[3].texturePath = fo3esm::ZString(bytes, size);
         } else if (std::memcmp(type, "ONAM", 4u) == 0 && size >= 4u) {
             for (int i = 0; i < 4; ++i) {
                 out.clouds[i].speed = static_cast<float>(bytes[i]) / 2550.0f;

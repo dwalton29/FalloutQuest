@@ -54,7 +54,7 @@ inline bool ReadFixedLightLinear(uint32_t lightFormId, float out[3]) {
     bool haveColor = false;
     float encoded[3]{0.0f, 0.0f, 0.0f};
     float fade = 1.0f;
-    WalkSubrecords(payload.data(), payload.size(),
+    fo3esm::WalkSubrecords(payload.data(), payload.size(),
                    [&](const char* type, const uint8_t* bytes, uint32_t size) {
         if (std::memcmp(type, "DATA", 4u) == 0 && size >= 12u) {
             encoded[0] = static_cast<float>(bytes[8u]) / 255.0f;
@@ -62,7 +62,7 @@ inline bool ReadFixedLightLinear(uint32_t lightFormId, float out[3]) {
             encoded[2] = static_cast<float>(bytes[10u]) / 255.0f;
             haveColor = true;
         } else if (std::memcmp(type, "FNAM", 4u) == 0 && size >= 4u) {
-            fade = ReadFloat(bytes);
+            fade = fo3esm::ReadF32(bytes);
         }
     });
     if (!haveColor) return false;

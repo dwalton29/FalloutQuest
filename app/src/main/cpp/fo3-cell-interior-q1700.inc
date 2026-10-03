@@ -6,6 +6,8 @@
 // the target CELL FormID is supplied at runtime and there are no house-specific
 // model-path/spawn hacks.
 
+#include "fo3-esm-reader.h"
+
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -57,25 +59,25 @@ bool InCellChildren(const std::vector<Frame>& groups, uint32_t cellFormId) {
 
 bool ParsePlacementPayload(const std::vector<uint8_t>& payload, RawPlacement& out) {
     bool haveBase = false;
-    WalkSubrecords(payload.data(), payload.size(),
+    fo3esm::WalkSubrecords(payload.data(), payload.size(),
                    [&](const char* type, const uint8_t* bytes, uint32_t size) {
         if (std::memcmp(type, "NAME", 4u) == 0 && size >= 4u) {
-            out.baseFormId = ReadLe32(bytes);
+            out.baseFormId = fo3esm::ReadU32(bytes);
             haveBase = out.baseFormId != 0u;
         } else if (std::memcmp(type, "DATA", 4u) == 0 && size >= 24u) {
-            out.x = ReadLeFloat(bytes + 0u);
-            out.y = ReadLeFloat(bytes + 4u);
-            out.z = ReadLeFloat(bytes + 8u);
-            out.rx = ReadLeFloat(bytes + 12u);
-            out.ry = ReadLeFloat(bytes + 16u);
-            out.rz = ReadLeFloat(bytes + 20u);
+            out.x = fo3esm::ReadF32(bytes + 0u);
+            out.y = fo3esm::ReadF32(bytes + 4u);
+            out.z = fo3esm::ReadF32(bytes + 8u);
+            out.rx = fo3esm::ReadF32(bytes + 12u);
+            out.ry = fo3esm::ReadF32(bytes + 16u);
+            out.rz = fo3esm::ReadF32(bytes + 20u);
             out.hasTransform = true;
         } else if (std::memcmp(type, "XSCL", 4u) == 0 && size >= 4u) {
-            out.scale = ReadLeFloat(bytes);
+            out.scale = fo3esm::ReadF32(bytes);
             if (!(out.scale > 0.0001f && out.scale < 1000.0f)) out.scale = 1.0f;
         } else if (std::memcmp(type, "XESP", 4u) == 0 && size >= 4u) {
             out.hasEnableParent = true;
-            out.enableParentFormId = ReadLe32(bytes);
+            out.enableParentFormId = fo3esm::ReadU32(bytes);
             if (size >= 5u) out.enableParentFlags = bytes[4u];
         }
     });
@@ -86,8 +88,8 @@ bool CollectCellReferences(uint32_t cellFormId, std::vector<RawPlacement>& out) 
     out.clear();
     FILE* file = std::fopen(ESM_PATH, "rb");
     if (!file) return false;
-    const int64_t fileSize = FileSize(file);
-    if (fileSize < static_cast<int64_t>(HEADER_SIZE)) {
+    const int64_t fileSize = fo3esm::FileSize(file);
+    if (fileSize < static_cast<int64_t>(fo3esm::HEADER_SIZE)) {
         std::fclose(file);
         return false;
     }
@@ -99,15 +101,15 @@ bool CollectCellReferences(uint32_t cellFormId, std::vector<RawPlacement>& out) 
         if (rawOffset < 0) break;
         const uint64_t offset = static_cast<uint64_t>(rawOffset);
         while (!groups.empty() && offset >= groups.back().end) groups.pop_back();
-        if (offset + HEADER_SIZE > static_cast<uint64_t>(fileSize)) break;
+        if (offset + fo3esm::HEADER_SIZE > static_cast<uint64_t>(fileSize)) break;
 
-        uint8_t header[HEADER_SIZE]{};
-        if (!ReadExact(file, header, sizeof(header))) break;
-        const uint32_t sizeField = ReadLe32(header + 4u);
+        uint8_t header[fo3esm::HEADER_SIZE]{};
+        if (!fo3esm::ReadExact(file, header, sizeof(header))) break;
+        const uint32_t sizeField = fo3esm::ReadU32(header + 4u);
         if (std::memcmp(header, "GRUP", 4u) == 0) {
-            if (sizeField < HEADER_SIZE || offset + sizeField > static_cast<uint64_t>(fileSize)) break;
-            const uint32_t label = ReadLe32(header + 8u);
-            const uint32_t type = ReadLe32(header + 12u);
+            if (sizeField < fo3esm::HEADER_SIZE || offset + sizeField > static_cast<uint64_t>(fileSize)) break;
+            const uint32_t label = fo3esm::ReadU32(header + 8u);
+            const uint32_t type = fo3esm::ReadU32(header + 12u);
             groups.push_back(Frame{offset + sizeField, label, type});
             if (label == cellFormId &&
                 (type == 6u || type == 8u || type == 9u || type == 10u)) {
@@ -116,9 +118,9 @@ bool CollectCellReferences(uint32_t cellFormId, std::vector<RawPlacement>& out) 
             continue;
         }
 
-        const uint32_t flags = ReadLe32(header + 8u);
-        const uint32_t formId = ReadLe32(header + 12u);
-        const uint64_t payloadEnd = offset + HEADER_SIZE + sizeField;
+        const uint32_t flags = fo3esm::ReadU32(header + 8u);
+        const uint32_t formId = fo3esm::ReadU32(header + 12u);
+        const uint64_t payloadEnd = offset + fo3esm::HEADER_SIZE + sizeField;
         if (payloadEnd > static_cast<uint64_t>(fileSize)) break;
         if (!InCellChildren(groups, cellFormId) || std::memcmp(header, "REFR", 4u) != 0) {
             if (fseeko(file, static_cast<off_t>(payloadEnd), SEEK_SET) != 0) break;
@@ -126,7 +128,7 @@ bool CollectCellReferences(uint32_t cellFormId, std::vector<RawPlacement>& out) 
         }
 
         std::vector<uint8_t> payload;
-        if (!ReadPayload(file, sizeField, flags, payload)) break;
+        if (!fo3esm::ReadPayloadCurrent(file, sizeField, flags, payload)) break;
         RawPlacement placement;
         placement.refFormId = formId;
         placement.recordFlags = flags;
@@ -144,7 +146,7 @@ BaseRecord ParseBase(uint32_t formId, const char* recordType,
     BaseRecord out;
     out.formId = formId;
     out.recordType.assign(recordType, 4u);
-    WalkSubrecords(payload.data(), payload.size(),
+    fo3esm::WalkSubrecords(payload.data(), payload.size(),
                    [&](const char* type, const uint8_t* bytes, uint32_t size) {
         if (std::memcmp(type, "EDID", 4u) == 0 && out.editorId.empty()) {
             size_t n = 0u;
@@ -164,8 +166,8 @@ bool ResolveBases(const std::unordered_set<uint32_t>& wanted,
     out.clear();
     FILE* file = std::fopen(ESM_PATH, "rb");
     if (!file) return false;
-    const int64_t fileSize = FileSize(file);
-    if (fileSize < static_cast<int64_t>(HEADER_SIZE)) {
+    const int64_t fileSize = fo3esm::FileSize(file);
+    if (fileSize < static_cast<int64_t>(fo3esm::HEADER_SIZE)) {
         std::fclose(file);
         return false;
     }
@@ -174,18 +176,18 @@ bool ResolveBases(const std::unordered_set<uint32_t>& wanted,
         const off_t rawOffset = ftello(file);
         if (rawOffset < 0) break;
         const uint64_t offset = static_cast<uint64_t>(rawOffset);
-        if (offset + HEADER_SIZE > static_cast<uint64_t>(fileSize)) break;
-        uint8_t header[HEADER_SIZE]{};
-        if (!ReadExact(file, header, sizeof(header))) break;
-        const uint32_t sizeField = ReadLe32(header + 4u);
+        if (offset + fo3esm::HEADER_SIZE > static_cast<uint64_t>(fileSize)) break;
+        uint8_t header[fo3esm::HEADER_SIZE]{};
+        if (!fo3esm::ReadExact(file, header, sizeof(header))) break;
+        const uint32_t sizeField = fo3esm::ReadU32(header + 4u);
         if (std::memcmp(header, "GRUP", 4u) == 0) {
-            if (sizeField < HEADER_SIZE || offset + sizeField > static_cast<uint64_t>(fileSize)) break;
+            if (sizeField < fo3esm::HEADER_SIZE || offset + sizeField > static_cast<uint64_t>(fileSize)) break;
             continue;
         }
 
-        const uint32_t flags = ReadLe32(header + 8u);
-        const uint32_t formId = ReadLe32(header + 12u);
-        const uint64_t payloadEnd = offset + HEADER_SIZE + sizeField;
+        const uint32_t flags = fo3esm::ReadU32(header + 8u);
+        const uint32_t formId = fo3esm::ReadU32(header + 12u);
+        const uint64_t payloadEnd = offset + fo3esm::HEADER_SIZE + sizeField;
         if (payloadEnd > static_cast<uint64_t>(fileSize)) break;
         if (wanted.find(formId) == wanted.end()) {
             if (fseeko(file, static_cast<off_t>(payloadEnd), SEEK_SET) != 0) break;
@@ -193,7 +195,7 @@ bool ResolveBases(const std::unordered_set<uint32_t>& wanted,
         }
 
         std::vector<uint8_t> payload;
-        if (!ReadPayload(file, sizeField, flags, payload)) break;
+        if (!fo3esm::ReadPayloadCurrent(file, sizeField, flags, payload)) break;
         out[formId] = ParseBase(formId, reinterpret_cast<const char*>(header), payload);
     }
     std::fclose(file);

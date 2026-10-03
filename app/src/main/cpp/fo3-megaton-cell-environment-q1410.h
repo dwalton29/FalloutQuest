@@ -64,8 +64,8 @@ inline bool FindSpatialCell(uint32_t worldspaceFormId,
 
     FILE* file = std::fopen(ESM_PATH, "rb");
     if (!file) return false;
-    const int64_t fileSize = FileSize(file);
-    if (fileSize < static_cast<int64_t>(HEADER_SIZE)) {
+    const int64_t fileSize = fo3esm::FileSize(file);
+    if (fileSize < static_cast<int64_t>(fo3esm::HEADER_SIZE)) {
         std::fclose(file);
         return false;
     }
@@ -79,20 +79,20 @@ inline bool FindSpatialCell(uint32_t worldspaceFormId,
         if (rawOffset < 0) break;
         const uint64_t offset = static_cast<uint64_t>(rawOffset);
         while (!groups.empty() && offset >= groups.back().end) groups.pop_back();
-        if (offset + HEADER_SIZE > static_cast<uint64_t>(fileSize)) break;
+        if (offset + fo3esm::HEADER_SIZE > static_cast<uint64_t>(fileSize)) break;
 
-        uint8_t header[HEADER_SIZE]{};
-        if (!ReadExact(file, header, sizeof(header))) break;
-        const uint32_t sizeField = Read32(header + 4u);
+        uint8_t header[fo3esm::HEADER_SIZE]{};
+        if (!fo3esm::ReadExact(file, header, sizeof(header))) break;
+        const uint32_t sizeField = fo3esm::ReadU32(header + 4u);
         if (std::memcmp(header, "GRUP", 4u) == 0) {
-            if (sizeField < HEADER_SIZE ||
+            if (sizeField < fo3esm::HEADER_SIZE ||
                 offset + sizeField > static_cast<uint64_t>(fileSize)) break;
             groups.push_back(
-                GroupQ1410{offset + sizeField, Read32(header + 8u), Read32(header + 12u)});
+                GroupQ1410{offset + sizeField, fo3esm::ReadU32(header + 8u), fo3esm::ReadU32(header + 12u)});
             continue;
         }
 
-        const uint64_t payloadEnd = offset + HEADER_SIZE + sizeField;
+        const uint64_t payloadEnd = offset + fo3esm::HEADER_SIZE + sizeField;
         if (payloadEnd > static_cast<uint64_t>(fileSize)) break;
 
         bool inWorld = false;
@@ -108,26 +108,26 @@ inline bool FindSpatialCell(uint32_t worldspaceFormId,
             continue;
         }
 
-        const uint32_t flags = Read32(header + 8u);
-        const uint32_t formId = Read32(header + 12u);
+        const uint32_t flags = fo3esm::ReadU32(header + 8u);
+        const uint32_t formId = fo3esm::ReadU32(header + 12u);
         std::vector<uint8_t> payload;
-        if (!ReadPayload(file, sizeField, flags, payload)) break;
+        if (!fo3esm::ReadPayloadCurrent(file, sizeField, flags, payload)) break;
 
         CellEnvironmentQ1410 candidate;
         candidate.cellFormId = formId;
         bool haveGrid = false;
-        WalkSubrecords(payload.data(), payload.size(),
+        fo3esm::WalkSubrecords(payload.data(), payload.size(),
                        [&](const char* type, const uint8_t* bytes, uint32_t size) {
             if (std::memcmp(type, "EDID", 4u) == 0 && candidate.cellEditorId.empty()) {
-                candidate.cellEditorId = CString(bytes, size);
+                candidate.cellEditorId = fo3esm::ZString(bytes, size);
             } else if (std::memcmp(type, "XCLC", 4u) == 0 && size >= 8u) {
-                candidate.gridX = static_cast<int32_t>(Read32(bytes + 0u));
-                candidate.gridY = static_cast<int32_t>(Read32(bytes + 4u));
+                candidate.gridX = static_cast<int32_t>(fo3esm::ReadU32(bytes + 0u));
+                candidate.gridY = static_cast<int32_t>(fo3esm::ReadU32(bytes + 4u));
                 haveGrid = true;
             } else if (std::memcmp(type, "XCLR", 4u) == 0 && size >= 4u) {
-                candidate.regionFormId = Read32(bytes);
+                candidate.regionFormId = fo3esm::ReadU32(bytes);
             } else if (std::memcmp(type, "XCIM", 4u) == 0 && size >= 4u) {
-                candidate.imageSpaceFormId = Read32(bytes);
+                candidate.imageSpaceFormId = fo3esm::ReadU32(bytes);
             }
         });
 
@@ -167,18 +167,18 @@ inline bool ResolveRegionWeather(uint32_t regionFormId,
     if (!FindRecord("REGN", regionFormId, payload)) return false;
 
     uint32_t currentDataType = 0xffffffffu;
-    WalkSubrecords(payload.data(), payload.size(),
+    fo3esm::WalkSubrecords(payload.data(), payload.size(),
                    [&](const char* type, const uint8_t* bytes, uint32_t size) {
         if (std::memcmp(type, "RDAT", 4u) == 0 && size >= 4u) {
-            currentDataType = Read32(bytes);
+            currentDataType = fo3esm::ReadU32(bytes);
             return;
         }
         // RDAT type 3 is Weather. RDWT entries are {weather, chance, global}.
         if (currentDataType == 3u &&
             std::memcmp(type, "RDWT", 4u) == 0 && size >= 12u) {
             for (uint32_t pos = 0u; pos + 12u <= size; pos += 12u) {
-                const uint32_t weather = Read32(bytes + pos);
-                const int32_t entryChance = static_cast<int32_t>(Read32(bytes + pos + 4u));
+                const uint32_t weather = fo3esm::ReadU32(bytes + pos);
+                const int32_t entryChance = static_cast<int32_t>(fo3esm::ReadU32(bytes + pos + 4u));
                 if (weather != 0u && entryChance > chance) {
                     weatherFormId = weather;
                     chance = entryChance;
@@ -190,10 +190,10 @@ inline bool ResolveRegionWeather(uint32_t regionFormId,
 
     std::vector<uint8_t> weatherPayload;
     if (FindRecord("WTHR", weatherFormId, weatherPayload)) {
-        WalkSubrecords(weatherPayload.data(), weatherPayload.size(),
+        fo3esm::WalkSubrecords(weatherPayload.data(), weatherPayload.size(),
                        [&](const char* type, const uint8_t* bytes, uint32_t size) {
             if (std::memcmp(type, "EDID", 4u) == 0 && weatherEditorId.empty()) {
-                weatherEditorId = CString(bytes, size);
+                weatherEditorId = fo3esm::ZString(bytes, size);
             }
         });
     }
@@ -214,7 +214,7 @@ inline bool ReadFogPower(uint32_t weatherFormId,
     std::vector<uint8_t> payload;
     if (!FindRecord("WTHR", weatherFormId, payload)) return false;
     bool haveFnam = false;
-    WalkSubrecords(payload.data(), payload.size(),
+    fo3esm::WalkSubrecords(payload.data(), payload.size(),
                    [&](const char* type, const uint8_t* bytes, uint32_t size) {
         if (std::memcmp(type, "NAM0", 4u) == 0 && size >= 160u) {
             const uint32_t p = 1u * 16u + 4u; // Fog / Day.
@@ -222,10 +222,10 @@ inline bool ReadFogPower(uint32_t weatherFormId,
             dayFogRgb[1] = static_cast<float>(bytes[p + 1u]) / 255.0f;
             dayFogRgb[2] = static_cast<float>(bytes[p + 2u]) / 255.0f;
         } else if (std::memcmp(type, "FNAM", 4u) == 0 && size >= 24u) {
-            dayNear = ReadFloat(bytes + 0u);
-            dayFar = ReadFloat(bytes + 4u);
-            dayPower = ReadFloat(bytes + 16u);
-            nightPower = ReadFloat(bytes + 20u);
+            dayNear = fo3esm::ReadF32(bytes + 0u);
+            dayFar = fo3esm::ReadF32(bytes + 4u);
+            dayPower = fo3esm::ReadF32(bytes + 16u);
+            nightPower = fo3esm::ReadF32(bytes + 20u);
             if (!std::isfinite(dayPower) || dayPower <= 0.0f) dayPower = 1.0f;
             if (!std::isfinite(nightPower) || nightPower <= 0.0f) nightPower = dayPower;
             haveFnam = true;
@@ -241,10 +241,10 @@ inline bool CorrectImageSpaceLayout(Fo3ImageSpaceQ1280& image) {
     if (!FindRecord("IMGS", image.imageSpaceFormId, payload)) return false;
 
     bool corrected = false;
-    WalkSubrecords(payload.data(), payload.size(),
+    fo3esm::WalkSubrecords(payload.data(), payload.size(),
                    [&](const char* type, const uint8_t* bytes, uint32_t size) {
         if (std::memcmp(type, "DNAM", 4u) != 0 || size < 152u) return;
-        auto f = [&](uint32_t offset) { return ReadFloat(bytes + offset); };
+        auto f = [&](uint32_t offset) { return fo3esm::ReadF32(bytes + offset); };
 
         // FO3's 152-byte ImageSpace layout:
         // saturation @100, contrast avg @104, contrast @108,

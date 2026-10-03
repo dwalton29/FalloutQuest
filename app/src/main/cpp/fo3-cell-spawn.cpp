@@ -154,7 +154,7 @@ bool FindArrivalCandidates(const std::unordered_set<uint32_t>& targetRefs,
         }
 
         std::vector<uint8_t> payload;
-        if (!ReadPayload(file, sizeField, recordFlags, payload)) break;
+        if (!fo3esm::ReadPayloadCurrent(file, sizeField, recordFlags, payload)) break;
         fo3esm::WalkSubrecords(payload.data(), payload.size(),
                        [&](const char* type, const uint8_t* bytes, uint32_t size) {
             if (std::memcmp(type, "XTEL", 4u) != 0 || size < 28u) return;
@@ -219,7 +219,7 @@ bool CollectTargetCellDoorProbes(std::vector<DoorProbeCandidate>& doors) {
         }
 
         std::vector<uint8_t> payload;
-        if (!ReadPayload(file, sizeField, recordFlags, payload)) break;
+        if (!fo3esm::ReadPayloadCurrent(file, sizeField, recordFlags, payload)) break;
         DoorProbeCandidate candidate;
         candidate.sourceDoorRef = sourceRef;
         bool haveData = false;
