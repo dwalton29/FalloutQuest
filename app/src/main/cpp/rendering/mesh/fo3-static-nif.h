@@ -28,6 +28,7 @@ struct Fo3StaticNifMesh {
         0.0f,0.0f,1.0f
     };
 
+    uint32_t shapeBlock = UINT32_MAX; // original block ID for rigid UI animation
     std::string modelPath;
     std::string diffuseTexturePath;
     std::string normalTexturePath;

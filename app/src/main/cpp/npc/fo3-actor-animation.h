@@ -39,11 +39,16 @@ struct Track {
   Channel translation, rotation, scale;
   std::array<Channel, 3> xyzRotation;
 };
+struct TextKey {
+  float time = 0;
+  std::string text;
+};
 struct Clip {
   std::string name, accumulationRoot;
   float start = 0, stop = 0, frequency = 1;
   uint32_t cycle = 0;
   std::vector<Track> tracks;
+  std::vector<TextKey> textKeys;
   size_t compressedTracks = 0, ignoredControllers = 0;
 };
 struct Pose {
@@ -68,4 +73,8 @@ bool Sample(const Skeleton &skeleton, const Clip &clip, double elapsed,
             Pose &pose);
 bool DecodeSkeleton(const std::vector<uint8_t> &bytes, Skeleton &out);
 bool DecodeClip(const std::vector<uint8_t> &bytes, Clip &out);
+// UI NIFs embed multiple sequences and animate an AVObject hierarchy, including
+// geometry. blockBones maps original NIF block IDs to that hierarchy.
+bool DecodeUiAnimation(const std::vector<uint8_t> &bytes, Skeleton &hierarchy,
+                       std::vector<int> &blockBones, std::vector<Clip> &clips);
 } // namespace fo3anim

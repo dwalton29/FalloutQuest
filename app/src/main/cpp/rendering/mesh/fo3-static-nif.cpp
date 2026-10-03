@@ -1880,6 +1880,7 @@ bool LoadFo3StaticNifMeshes(const std::string& modelPath,
                      candidate.diffuseTexturePath.empty() ? 1 : 0,
                      candidate.shaderFlags1, candidate.shaderFlags2);
         }
+        candidate.shapeBlock = block;
         candidate.modelPath = resolved;
         std::string q1100Properties;
         for (uint32_t q1100Ref : shape.properties) {

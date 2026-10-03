@@ -2,7 +2,10 @@
 #include "fo3-loading-screen.h"
 #include "fo3-loading-pose.h"
 #include "fo3-loading-menu.h"
+#include "fo3-loading-slideshow.h"
+#include "audio/fo3-audio.h"
 #include "data/fo3-asset-store.h"
+#include "data/fo3-bsa-reader.h"
 #include "rendering/mesh/fo3-static-nif.h"
 #include "world/fo3-scene-preparation.h"
 #include <cmath>
@@ -17,13 +20,19 @@ using fo3loadingpose::Matrix;
 using fo3loadingpose::Multiply;
 using fo3loadingpose::Placement;
 struct Vertex { float p[3],n[3],uv[2],colour[4]; };
-struct CpuShape { Fo3StaticNifMesh mesh; Fo3RgbaTexture image; std::vector<Vertex> vertices; };
+struct CpuShape { Fo3StaticNifMesh mesh; Fo3RgbaTexture image; std::vector<Vertex> vertices; int bone=-1,slide=-1; };
 struct CpuDisplay {
     Fo3RgbaTexture art;
     std::vector<CpuShape> model, compass, overlay;
     std::string modelPath, artPath;
+    std::vector<Fo3RgbaTexture> slides;
+    fo3anim::Skeleton hierarchy;
+    std::vector<fo3anim::Clip> clips;
+    std::vector<int> blockBones;
+    fo3anim::Matrix uiToPanel=fo3anim::Identity(),panelToUi=fo3anim::Identity();
+    float halfHeight=0.68f;
 };
-struct Shape { GLuint vao=0,vbo=0,ibo=0,texture=0; GLsizei count=0; bool unlit=false,blend=false; uint8_t sourceBlend=6,destBlend=7; float alpha=1,cutoff=0.02f; };
+struct Shape { GLuint vao=0,vbo=0,ibo=0,texture=0; GLsizei count=0; bool unlit=false,blend=false; uint8_t sourceBlend=6,destBlend=7; float alpha=1,cutoff=0.02f; int bone=-1,slide=-1; float centre[3]{}; };
 inline fo3scene::Preparation<fo3loadingmenu::Definition> gCatalog;
 inline fo3loadingmenu::Definition gMenu;
 inline fo3scene::Preparation<CpuDisplay> gPreparation;
@@ -34,11 +43,21 @@ inline Matrix gHead=fo3loadingpose::Identity(),gAnchor=fo3loadingpose::Identity(
 inline std::vector<Shape> gModel,gCompass,gOverlay,gNextModel,gNextCompass,gNextOverlay;
 inline size_t gModelUpload=0,gCompassUpload=0,gOverlayUpload=0;
 inline bool gArtUploaded=false;
+inline std::vector<GLuint> gSlides,gNextSlides;
+inline size_t gSlideUpload=0;
+inline fo3anim::Skeleton gUiHierarchy;
+inline std::vector<fo3anim::Clip> gUiClips;
+inline fo3anim::Matrix gUiToPanel=fo3anim::Identity(),gPanelToUi=fo3anim::Identity();
+inline float gUiHalfHeight=0.68f;
+inline fo3slideshow::Player gSlideshow;
+inline uint64_t gSlideStarted=0;
+inline std::vector<Matrix> gUiDeltas;
+inline std::vector<size_t> gUiDrawOrder;
 inline GLuint gArt=0,gProgram=0,gQuad=0,gQuadBuffer=0;
 inline GLuint gFramebuffer=0,gColour=0,gDepth=0;
 inline int gWidth=0,gHeight=0;
 inline float gArtAspect=4.0f/3.0f;
-inline GLint gMvp=-1,gSampler=-1,gUnlit=-1,gTint=-1,gFade=-1,gCutoff=-1;
+inline GLint gMvp=-1,gSampler=-1,gUnlit=-1,gTint=-1,gFade=-1,gCutoff=-1,gClipUi=-1,gUiTransform=-1,gClipHalf=-1;
 inline uint64_t gVisibleStart=0,gRotationStart=0;
 inline float gFrameRotationSeconds=0;
 inline float gFrameSeconds=0;
@@ -145,10 +164,51 @@ inline void PrepareVertices(std::vector<CpuShape>& source,bool compass,float uiE
         m.positions.clear();m.normals.clear();m.texcoords.clear();m.vertexColors.clear();
     }
 }
+// Map the original background plane, rather than the bounds of off-screen
+// slides, to the user's 2.4m panel. Preserve all authored layer depth offsets.
+inline bool PrepareOverlay(CpuDisplay& display) {
+    float lo[3]={INFINITY,INFINITY,INFINITY},hi[3]={-INFINITY,-INFINITY,-INFINITY};
+    bool background=false;
+    for(const auto& shape:display.overlay) {
+        if(fo3loadingmenu::Lower(shape.mesh.diffuseTexturePath).find("loading_background.dds")==std::string::npos)continue;
+        for(size_t i=0;i<shape.mesh.positions.size();i+=3)
+            for(int a=0;a<3;++a) {lo[a]=std::min(lo[a],shape.mesh.positions[i+a]);hi[a]=std::max(hi[a],shape.mesh.positions[i+a]);}
+        background=true;
+    }
+    if(!background || hi[0]-lo[0]<1 || hi[1]-lo[1]<1)return false;
+    const float scale=2.4f/(hi[0]-lo[0]);
+    auto& map=display.uiToPanel;
+    map=fo3anim::Identity();map[0]=map[5]=scale;map[10]=-scale;
+    map[12]=-(lo[0]+hi[0])*0.5f*scale;map[13]=-(lo[1]+hi[1])*0.5f*scale;map[14]=hi[2]*scale;
+    if(!fo3anim::Inverse(map,display.panelToUi))return false;
+    display.halfHeight=(hi[1]-lo[1])*scale*0.5f;
+    for(auto& shape:display.overlay) {
+        auto& mesh=shape.mesh;
+        if(mesh.shapeBlock<display.blockBones.size())shape.bone=display.blockBones[mesh.shapeBlock];
+        const auto path=fo3loadingmenu::Lower(mesh.diffuseTexturePath);
+        if(path.find("loading_screen01.dds")!=std::string::npos)shape.slide=0;
+        if(path.find("loading_screen02.dds")!=std::string::npos)shape.slide=1;
+        shape.vertices.resize(mesh.positions.size()/3);
+        for(size_t i=0;i<shape.vertices.size();++i) {
+            auto& v=shape.vertices[i];
+            auto point=fo3anim::Point(map,{mesh.positions[i*3],mesh.positions[i*3+1],mesh.positions[i*3+2]});
+            std::copy(point.begin(),point.end(),v.p);v.n[0]=v.n[1]=0;v.n[2]=1;
+            for(int a=0;a<2;++a)v.uv[a]=mesh.texcoords.size()==shape.vertices.size()*2?mesh.texcoords[i*2+a]:0;
+            for(int a=0;a<4;++a)v.colour[a]=mesh.vertexColors.size()==shape.vertices.size()*4?mesh.vertexColors[i*4+a]:1;
+        }
+        mesh.positions.clear();mesh.normals.clear();mesh.texcoords.clear();mesh.vertexColors.clear();
+    }
+    return true;
+}
+inline void DeleteImages(std::vector<GLuint>& images) {
+    for(GLuint texture:images)if(texture)glDeleteTextures(1,&texture);
+    images.clear();
+}
 inline void UploadShape(CpuShape& src,std::vector<Shape>& target,bool compass) {
     auto& m=src.mesh;auto& v=src.vertices;
     if(v.empty() || m.indices.empty())return;
-    Shape s;s.count=static_cast<GLsizei>(m.indices.size());s.unlit=compass||m.noLighting;s.alpha=m.alpha;s.blend=m.alphaBlend;s.sourceBlend=m.alphaSourceBlend;s.destBlend=m.alphaDestBlend;
+    Shape s;s.bone=src.bone;s.slide=src.slide;s.count=static_cast<GLsizei>(m.indices.size());s.unlit=compass||m.noLighting;s.alpha=m.alpha;s.blend=m.alphaBlend;s.sourceBlend=m.alphaSourceBlend;s.destBlend=m.alphaDestBlend;
+    for(const auto& vertex:v)for(int a=0;a<3;++a)s.centre[a]+=vertex.p[a]/v.size();
     s.cutoff=m.alphaTest?m.alphaThreshold:0.0f;
     s.texture=UploadImage(src.image);
     if(!s.texture) { Fo3RgbaTexture white;white.width=white.height=1;white.rgba={255,255,255,255};s.texture=UploadImage(white); }
@@ -175,15 +235,16 @@ inline bool EnsureProgram() {
     layout(location=1) in vec3 aNormal;
     layout(location=2) in vec2 aUv;
     layout(location=3) in vec4 aColour;
-    uniform mat4 uMvp;
-    out vec2 uv;out vec3 normal;out vec4 colour;
-    void main(){gl_Position=uMvp*vec4(aPosition,1);uv=aUv;normal=aNormal;colour=aColour;})";
+    uniform mat4 uMvp;uniform mat4 uUiTransform;
+    out vec2 uv;out vec3 normal;out vec4 colour;out vec2 uiPosition;
+    void main(){gl_Position=uMvp*vec4(aPosition,1);uv=aUv;normal=aNormal;colour=aColour;uiPosition=(uUiTransform*vec4(aPosition,1)).xy;})";
     const char* fs=R"(#version 300 es
     precision highp float;
-    in vec2 uv;in vec3 normal;in vec4 colour;
+    in vec2 uv;in vec3 normal;in vec4 colour;in vec2 uiPosition;
+    uniform float uClipUi;uniform vec2 uClipHalf;
     uniform sampler2D uImage;uniform float uUnlit;uniform vec4 uTint;uniform float uFade;uniform float uCutoff;
     out vec4 result;
-    void main(){vec4 c=texture(uImage,uv)*colour*uTint;
+    void main(){if(uClipUi>0.5 && any(greaterThan(abs(uiPosition),uClipHalf)))discard;vec4 c=texture(uImage,uv)*colour*uTint;
     if(c.a<uCutoff)discard;
     float light=uUnlit>0.5?1.0:0.35+0.65*max(dot(normalize(normal),normalize(vec3(-0.4,0.7,1))),0.0);
     result=vec4(c.rgb*light*uFade,c.a);})";
@@ -194,6 +255,7 @@ inline bool EnsureProgram() {
     if(!ok){glDeleteProgram(gProgram);gProgram=0;return false;}
     gMvp=glGetUniformLocation(gProgram,"uMvp");gSampler=glGetUniformLocation(gProgram,"uImage");
     gUnlit=glGetUniformLocation(gProgram,"uUnlit");gTint=glGetUniformLocation(gProgram,"uTint");gFade=glGetUniformLocation(gProgram,"uFade");gCutoff=glGetUniformLocation(gProgram,"uCutoff");
+    gClipUi=glGetUniformLocation(gProgram,"uClipUi");gUiTransform=glGetUniformLocation(gProgram,"uUiTransform");gClipHalf=glGetUniformLocation(gProgram,"uClipHalf");
     const Vertex quad[]={{{-1,-1,0},{0,0,1},{0,1},{1,1,1,1}},{{1,-1,0},{0,0,1},{1,1},{1,1,1,1}},
         {{-1,1,0},{0,0,1},{0,0},{1,1,1,1}},{{1,1,0},{0,0,1},{1,0},{1,1,1,1}}};
     glGenVertexArrays(1,&gQuad);glBindVertexArray(gQuad);glGenBuffers(1,&gQuadBuffer);glBindBuffer(GL_ARRAY_BUFFER,gQuadBuffer);
@@ -208,8 +270,9 @@ inline bool EnsureProgram() {
 inline void AdvanceAssets() {
     const uint64_t generation=GetFo3LoadingGeneration();
     if(generation!=gGeneration) {
-        gPreparation.Reset();DeleteShapes(gNextModel);DeleteShapes(gNextCompass);DeleteShapes(gNextOverlay);
-        gModelUpload=gCompassUpload=gOverlayUpload=0;gArtUploaded=false;
+        gPreparation.Reset();DeleteShapes(gNextModel);DeleteShapes(gNextCompass);DeleteShapes(gNextOverlay);DeleteImages(gNextSlides);
+        gModelUpload=gCompassUpload=gOverlayUpload=gSlideUpload=0;gArtUploaded=false;
+        gSlideshow.running=false;
         gGeneration=generation;gAnchor=gHead;gJobStarted=gUploaded=false;gVisibleStart=Fo3LoadingClockUs();gRotationStart=gVisibleStart;
     }
     PrepareCatalog();
@@ -222,8 +285,32 @@ inline void AdvanceAssets() {
         gJobStarted=gPreparation.Start([cell,world,random,needCompass,needOverlay,menu](CpuDisplay& out,const std::atomic<bool>& cancelled){
             const auto* art=fo3loading::Select(cell,world,random);
             if(art) {out.artPath=art->iconPath;LoadFalloutTextureRgba(art->iconPath,out.art);}
+            size_t slideBytes=0;std::vector<std::string> paths;
+            if(!out.art.rgba.empty()) {paths.push_back(out.artPath);out.slides.push_back(out.art);slideBytes=out.art.rgba.size();}
+            for(size_t i=1;i<=32 && out.slides.size()<4 && !cancelled.load();++i) {
+                const auto* choice=fo3loading::Select(cell,world,fo3loadingpose::Mix(random+i));
+                if(!choice || std::find(paths.begin(),paths.end(),choice->iconPath)!=paths.end())continue;
+                Fo3RgbaTexture image;
+                if(LoadFalloutTextureRgba(choice->iconPath,image) && !image.rgba.empty() &&
+                   slideBytes+image.rgba.size()<=16u*1024u*1024u) {
+                    paths.push_back(choice->iconPath);slideBytes+=image.rgba.size();out.slides.push_back(std::move(image));
+                }
+            }
             if(needCompass)ReadShapes(menu.compassPath,out.compass,cancelled,true);
-            if(needOverlay)ReadShapes(menu.overlayPath,out.overlay,cancelled,true);
+            if(needOverlay) {
+                ReadShapes(menu.overlayPath,out.overlay,cancelled,true);
+                std::vector<uint8_t> bytes;
+                if(LoadFalloutMeshFile(menu.overlayPath,bytes,nullptr) &&
+                   fo3anim::DecodeUiAnimation(bytes,out.hierarchy,out.blockBones,out.clips)) {
+                    fo3slideshow::Player check;
+                    if(!check.Configure(out.hierarchy,out.clips))out.clips.clear();
+                }
+                if(out.clips.empty() || !PrepareOverlay(out)) {
+                    // Show the resolved artwork when an unsupported NIF is
+                    // installed; never leave static, off-screen slide layers.
+                    out.overlay.clear();out.clips.clear();
+                }
+            }
             if(!fo3loading::gModels.empty()) {
                 const size_t start=random%fo3loading::gModels.size();
                 for(size_t i=0;i<std::min<size_t>(8,fo3loading::gModels.size()) && !cancelled.load();++i) {
@@ -232,7 +319,7 @@ inline void AdvanceAssets() {
                     if(ReadShapes(path,out.model,cancelled)) {out.modelPath=path;break;}
                 }
             }
-            PrepareVertices(out.model,false);PrepareVertices(out.compass,true);PrepareVertices(out.overlay,true,2.4f);
+            PrepareVertices(out.model,false);PrepareVertices(out.compass,true);
             return !cancelled.load();
         });
         if(!gJobStarted)gUploaded=true; // Thread creation failure must not trap a transition.
@@ -247,6 +334,11 @@ inline void AdvanceAssets() {
                 cpu.art=Fo3RgbaTexture{};gArtUploaded=true;
                 return; // Separate artwork upload from mesh uploads.
             }
+            if(gSlideUpload<cpu.slides.size()) {
+                auto& image=cpu.slides[gSlideUpload++];GLuint texture=UploadImage(image);
+                if(texture)gNextSlides.push_back(texture);
+                image=Fo3RgbaTexture{};return;
+            }
             if(gCompassUpload<cpu.compass.size()) {
                 UploadShape(cpu.compass[gCompassUpload++],gNextCompass,true);return;
             }
@@ -258,12 +350,23 @@ inline void AdvanceAssets() {
             }
             DeleteShapes(gModel);gModel.swap(gNextModel);
             if(!gNextCompass.empty()) {DeleteShapes(gCompass);gCompass.swap(gNextCompass);}
-            if(!gNextOverlay.empty()) {DeleteShapes(gOverlay);gOverlay.swap(gNextOverlay);}
+            if(!gNextOverlay.empty()) {
+                DeleteShapes(gOverlay);gOverlay.swap(gNextOverlay);
+                gUiHierarchy=std::move(cpu.hierarchy);gUiClips=std::move(cpu.clips);
+                gUiToPanel=cpu.uiToPanel;gPanelToUi=cpu.panelToUi;gUiHalfHeight=cpu.halfHeight;
+                gUiDrawOrder.resize(gOverlay.size());
+                for(size_t i=0;i<gUiDrawOrder.size();++i)gUiDrawOrder[i]=i;
+                gUiDeltas.resize(gUiHierarchy.bones.size());
+            }
+            DeleteImages(gSlides);gSlides.swap(gNextSlides);
+            gSlideshow.Configure(gUiHierarchy,gUiClips);
+            gSlideStarted=Fo3LoadingClockUs();gSlideshow.Reset(0,gSlides.size());
             __android_log_print(ANDROID_LOG_INFO,"FalloutQuest",
                 "VR LOADING ASSETS: generation=%llu art=%s model=%s compassShapes=%zu panel=2.5m exhibit=1.6m offset=(-0.58,-0.33)",
                 static_cast<unsigned long long>(generation),cpu.artPath.c_str(),cpu.modelPath.c_str(),gCompass.size());
-            __android_log_print(ANDROID_LOG_INFO,"FalloutQuest","ORIGINAL LOADING MENU: overlay=%s shapes=%zu mainMenuRGB=(%d,%d,%d) fade=%.2fs compassAnimation=%s controllers=pending-inspection",
+            __android_log_print(ANDROID_LOG_INFO,"FalloutQuest","ORIGINAL LOADING MENU: overlay=%s shapes=%zu mainMenuRGB=(%d,%d,%d) fade=%.2fs compassAnimation=%s controllers=embedded-transform-playback",
                 gMenu.overlayPath.c_str(),gOverlay.size(),gMenu.red,gMenu.green,gMenu.blue,gMenu.fadeSeconds,gMenu.compassAnimation.c_str());
+            __android_log_print(ANDROID_LOG_INFO,"FalloutQuest","LOADING SLIDESHOW: clips=%zu images=%zu canvasHeight=%.3f hold=6s active=%d",gUiClips.size(),gSlides.size(),gUiHalfHeight*2,gSlideshow.running);
             if(gOverlay.empty())__android_log_print(ANDROID_LOG_WARN,"FalloutQuest","AUTHORED LOADING OVERLAY UNAVAILABLE: %s; check original mesh/texture archives",gMenu.overlayPath.c_str());
             if(gCompass.empty())__android_log_print(ANDROID_LOG_WARN,"FalloutQuest","AUTHORED LOADING COMPASS UNAVAILABLE: Interface/Circular Loading/loading01.nif; check original mesh/texture archives");
         }
@@ -293,13 +396,13 @@ inline GLenum BlendFactor(uint8_t blend) {
         GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA,GL_DST_ALPHA,GL_ONE_MINUS_DST_ALPHA,GL_SRC_ALPHA_SATURATE};
     return blend<11?factors[blend]:GL_ONE;
 }
-inline void Draw(const Shape& s,const Matrix& mvp,float green=0) {
+inline void Draw(const Shape& s,const Matrix& mvp,float green=0,GLuint image=0) {
     glUniformMatrix4fv(gMvp,1,GL_FALSE,mvp.m);glUniform1f(gUnlit,s.unlit?1:0);
     glUniform4f(gTint,green>0?gMenu.red/255.0f:1,green>0?gMenu.green/255.0f:1,green>0?gMenu.blue/255.0f:1,s.alpha);
     glUniform1f(gCutoff,s.cutoff);
     if(s.blend) {glEnable(GL_BLEND);glBlendFunc(BlendFactor(s.sourceBlend),BlendFactor(s.destBlend));}
     else glDisable(GL_BLEND);
-    glBindTexture(GL_TEXTURE_2D,s.texture);glBindVertexArray(s.vao);
+    glBindTexture(GL_TEXTURE_2D,image?image:s.texture);glBindVertexArray(s.vao);
     glDrawElements(GL_TRIANGLES,s.count,GL_UNSIGNED_INT,nullptr);
 }
 inline void Render(GLuint framebuffer,GLsizei width,GLsizei height,const float* viewProjection,bool advance) {
@@ -323,6 +426,19 @@ inline void Render(GLuint framebuffer,GLsizei width,GLsizei height,const float* 
         const uint64_t now=Fo3LoadingClockUs();
         gFrameSeconds=gVisibleStart?static_cast<float>(now-gVisibleStart)/1000000:0;
         gFrameRotationSeconds=gRotationStart?static_cast<float>(now-gRotationStart)/1000000:0;
+        if(gSlideshow.Advance(gUiHierarchy,gUiClips,gSlideStarted?double(now-gSlideStarted)/1000000:0,gSlides.size())) {
+            for(size_t i=0;i<gUiDeltas.size();++i) {
+                auto delta=fo3anim::Multiply(gUiToPanel,fo3anim::Multiply(gSlideshow.pose.delta[i],gPanelToUi));
+                std::copy(delta.begin(),delta.end(),gUiDeltas[i].m);
+            }
+            auto depth=[](const Shape& shape) {
+                if(shape.bone<0 || static_cast<size_t>(shape.bone)>=gUiDeltas.size())return shape.centre[2];
+                const auto& m=gUiDeltas[shape.bone].m;
+                return m[2]*shape.centre[0]+m[6]*shape.centre[1]+m[10]*shape.centre[2]+m[14];
+            };
+            std::stable_sort(gUiDrawOrder.begin(),gUiDrawOrder.end(),[&](size_t a,size_t b){return depth(gOverlay[a])<depth(gOverlay[b]);});
+            for(const auto& sound:gSlideshow.sounds)fo3audio::NamedSound(sound);
+        }
     }
     const bool target=EnsureTarget(width,height);
     if(target) {
@@ -333,6 +449,7 @@ inline void Render(GLuint framebuffer,GLsizei width,GLsizei height,const float* 
             glUseProgram(gProgram);glUniform1i(gSampler,0);
             const float seconds=gFrameSeconds;
             glUniform1f(gFade,std::clamp(seconds/gMenu.fadeSeconds,0.0f,1.0f));
+            glUniform1f(gClipUi,0);const Matrix identity=fo3loadingpose::Identity();glUniformMatrix4fv(gUiTransform,1,GL_FALSE,identity.m);
             glEnable(GL_DEPTH_TEST);glDepthFunc(GL_LEQUAL);
             if(gArt) {
                 Matrix size=fo3loadingpose::Identity();size.m[0]=1.2f;size.m[5]=1.2f/gArtAspect;
@@ -345,7 +462,18 @@ inline void Render(GLuint framebuffer,GLsizei width,GLsizei height,const float* 
             // loading_nif explicitly opts out of inherited system colour.
             glDepthMask(GL_FALSE);
             const Matrix overlay=Multiply(panel,Placement(0,0,0.02f,0));
-            for(const auto& shape:gOverlay)Draw(shape,overlay);
+            if(gSlideshow.running) {
+                glUniform1f(gClipUi,1);glUniform2f(gClipHalf,1.2f,gUiHalfHeight);
+                for(size_t index:gUiDrawOrder) {
+                    const auto& shape=gOverlay[index];
+                    const Matrix& delta=shape.bone>=0 && static_cast<size_t>(shape.bone)<gUiDeltas.size()?gUiDeltas[shape.bone]:identity;
+                    glUniformMatrix4fv(gUiTransform,1,GL_FALSE,delta.m);
+                    GLuint texture=0;
+                    if(shape.slide>=0 && !gSlides.empty())texture=gSlides[gSlideshow.slots[shape.slide]%gSlides.size()];
+                    Draw(shape,Multiply(overlay,delta),0,texture);
+                }
+                glUniform1f(gClipUi,0);glUniformMatrix4fv(gUiTransform,1,GL_FALSE,identity.m);
+            }
             glDepthMask(GL_TRUE);
             Matrix model=Multiply(panel,Placement(fo3loadingpose::ModelX,fo3loadingpose::ModelY,fo3loadingpose::PanelDistance-fo3loadingpose::ModelDistance,gFrameRotationSeconds*fo3loadingpose::RotationRadiansPerSecond));
             for(const auto& s:gModel)Draw(s,model);
@@ -353,7 +481,7 @@ inline void Render(GLuint framebuffer,GLsizei width,GLsizei height,const float* 
             // emblem; this is not Gamebryo controller/Idle animation playback.
             Matrix spin=fo3loadingpose::Identity();float a=-gFrameRotationSeconds*0.8f;
             spin.m[0]=spin.m[5]=std::cos(a);spin.m[1]=std::sin(a);spin.m[4]=-std::sin(a);
-            Matrix compass=Multiply(panel,Multiply(Placement(1.04f,-1.2f/gArtAspect+0.14f,0.10f,0),spin));
+            Matrix compass=Multiply(panel,Multiply(Placement(1.04f,-(gSlideshow.running?gUiHalfHeight:1.2f/gArtAspect)+0.14f,0.10f,0),spin));
             glDisable(GL_DEPTH_TEST);
             for(const auto& s:gCompass)Draw(s,compass,1);
         }
@@ -375,7 +503,8 @@ inline void Shutdown() {
     fo3loading::gScreens.clear();fo3loading::gModels.clear();fo3loading::gScreensPrepared=false;
     gMenu=fo3loadingmenu::Definition{};
     gCatalogStarted=gCatalogFailed=false;gJobStarted=gUploaded=false;
-    DeleteShapes(gModel);DeleteShapes(gCompass);DeleteShapes(gOverlay);DeleteShapes(gNextModel);DeleteShapes(gNextCompass);DeleteShapes(gNextOverlay);
+    DeleteShapes(gModel);DeleteShapes(gCompass);DeleteShapes(gOverlay);DeleteShapes(gNextModel);DeleteShapes(gNextCompass);DeleteShapes(gNextOverlay);DeleteImages(gSlides);DeleteImages(gNextSlides);
+    gUiHierarchy={};gUiClips.clear();gSlideshow={};gUiDeltas.clear();gUiDrawOrder.clear();
     if(gArt)glDeleteTextures(1,&gArt);
     if(gColour)glDeleteTextures(1,&gColour);
     if(gDepth)glDeleteRenderbuffers(1,&gDepth);

@@ -21,6 +21,7 @@ struct Event {
   int kind;
   uint32_t id;
   bool active;
+  std::string name{};
 };
 struct Runtime {
   JavaVM *vm = nullptr;
@@ -249,7 +250,10 @@ void Worker() {
       continue;
     }
     uint32_t id = 0;
-    if (e.kind == 4) {
+    if (e.kind == 5) {
+      auto n = catalog.names.find(e.name);
+      if (n != catalog.names.end()) id = n->second;
+    } else if (e.kind == 4) {
       auto n = catalog.names.find("UIMenuFocus");
       if (n != catalog.names.end())
         id = n->second;
@@ -329,4 +333,7 @@ void Pickup(uint32_t base) { Push({1, base, true}); }
 void Open(uint32_t base) { Push({2, base, true}); }
 void Close(uint32_t base) { Push({3, base, true}); }
 void Scroll() { Push({4, 0, true}); }
+void NamedSound(const std::string &editorId) {
+  if (!editorId.empty() && editorId.size() <= 128) Push({5, 0, true, editorId});
+}
 } // namespace fo3audio

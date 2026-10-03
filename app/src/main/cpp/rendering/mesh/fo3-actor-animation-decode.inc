@@ -177,7 +177,9 @@ bool ActorTrack(const std::vector<uint8_t> &bytes, const NifHeader &h,
 }
 } // namespace
 
-bool fo3anim::DecodeSkeleton(const std::vector<uint8_t> &bytes, Skeleton &out) {
+static bool DecodeHierarchy(const std::vector<uint8_t> &bytes, fo3anim::Skeleton &out,
+                            std::vector<int> *blockBones = nullptr) {
+  using namespace fo3anim;
   out = {};
   Skeleton result;
   NifHeader h;
@@ -191,7 +193,9 @@ bool fo3anim::DecodeSkeleton(const std::vector<uint8_t> &bytes, Skeleton &out) {
   std::vector<Node> nodes;
   std::unordered_map<uint32_t, size_t> index;
   for (uint32_t block = 0; block < h.numBlocks; ++block) {
-    if (BlockType(h, block) != "NiNode" && BlockType(h, block) != "BSFadeNode")
+    const auto &type = BlockType(h, block);
+    if (type != "NiNode" && type != "BSFadeNode" &&
+        !(blockBones && Q970IsShapeType(type)))
       continue;
     Cursor name(BlockData(bytes, h, block), h.blockSizes[block]);
     uint32_t ni = 0;
@@ -217,7 +221,7 @@ bool fo3anim::DecodeSkeleton(const std::vector<uint8_t> &bytes, Skeleton &out) {
     if (!ActorValid(transform.scale) || transform.scale <= 0)
       return false;
     uint32_t children = 0;
-    if (!c.U32(children) || children > h.numBlocks)
+    if (!Q970IsShapeType(type) && (!c.U32(children) || children > h.numBlocks))
       return false;
     node.children.resize(children);
     for (auto &ref : node.children)
@@ -238,12 +242,14 @@ bool fo3anim::DecodeSkeleton(const std::vector<uint8_t> &bytes, Skeleton &out) {
         return false;
       parents[it->second] = static_cast<int>(i);
     }
+  if (blockBones) blockBones->assign(h.numBlocks, -1);
   std::vector<uint8_t> state(nodes.size());
   std::function<bool(size_t, int)> visit = [&](size_t i, int parent) {
     if (state[i])
       return false;
     state[i] = 1;
     int dst = static_cast<int>(result.bones.size());
+    if (blockBones) (*blockBones)[nodes[i].block] = dst;
     nodes[i].bone.parent = parent;
     result.bones.push_back(nodes[i].bone);
     for (uint32_t child : nodes[i].children) {
@@ -266,8 +272,13 @@ bool fo3anim::DecodeSkeleton(const std::vector<uint8_t> &bytes, Skeleton &out) {
   return true;
 }
 
-bool fo3anim::DecodeClip(const std::vector<uint8_t> &bytes, Clip &out) {
-  out = {};
+bool fo3anim::DecodeSkeleton(const std::vector<uint8_t> &bytes, Skeleton &out) {
+  return DecodeHierarchy(bytes, out);
+}
+
+static bool DecodeClips(const std::vector<uint8_t> &bytes, std::vector<fo3anim::Clip> &out) {
+  using namespace fo3anim;
+  out.clear();
   NifHeader h;
   if (!ActorHeader(bytes, h) || h.userVersion != 11 || h.bsVersion != 34)
     return false;
@@ -320,10 +331,49 @@ bool fo3anim::DecodeClip(const std::vector<uint8_t> &bytes, Clip &out) {
       return false;
     if (root < h.strings.size())
       clip.accumulationRoot = h.strings[root];
-    if (clip.tracks.empty())
-      return false;
-    out = std::move(clip);
-    return true;
+    if (text != INVALID_REF) {
+      if (text >= h.numBlocks || BlockType(h, text) != "NiTextKeyExtraData")
+        return false;
+      Cursor tc(BlockData(bytes, h, text), h.blockSizes[text]);
+      uint32_t extraName = 0, keys = 0;
+      if (!tc.U32(extraName) || !tc.U32(keys) || keys > 4096) return false;
+      float previous = -1e30f;
+      for (uint32_t i = 0; i < keys; ++i) {
+        TextKey key; uint32_t value = 0;
+        if (!tc.F32(key.time) || !ActorValid(key.time) || key.time < previous ||
+            !tc.U32(value) || value >= h.strings.size()) return false;
+        previous = key.time; key.text = h.strings[value];
+        clip.textKeys.push_back(std::move(key));
+      }
+      if (tc.remaining()) return false;
+    }
+    if (clip.tracks.empty()) return false;
+    out.push_back(std::move(clip));
   }
-  return false;
+  return !out.empty();
+}
+
+bool fo3anim::DecodeClip(const std::vector<uint8_t> &bytes, Clip &out) {
+  out = {};
+  std::vector<Clip> clips;
+  if (!DecodeClips(bytes, clips)) return false;
+  out = std::move(clips.front());
+  return true;
+}
+
+bool fo3anim::DecodeUiAnimation(const std::vector<uint8_t> &bytes, Skeleton &out,
+                               std::vector<int> &blockBones, std::vector<Clip> &clips) {
+  out = {}; blockBones.clear(); clips.clear();
+  Skeleton hierarchy; std::vector<int> mapping; std::vector<Clip> sequences;
+  if (!DecodeHierarchy(bytes, hierarchy, &mapping) || !DecodeClips(bytes, sequences))
+    return false;
+  for (auto &clip : sequences) {
+    // UI root transforms are part of the authored canvas, not actor root motion.
+    clip.accumulationRoot.clear();
+    if (clip.ignoredControllers) return false;
+    for (const auto &track : clip.tracks)
+      if (FindBone(hierarchy, track.bone) < 0) return false;
+  }
+  out = std::move(hierarchy); blockBones = std::move(mapping); clips = std::move(sequences);
+  return true;
 }

@@ -19,3 +19,5 @@ Optional local integration (user-supplied assets only):
 ```
 
 These inputs are never committed or needed for the synthetic CI tests.
+
+Loading slideshow coverage (`loading_animation_tests`) checks embedded UI hierarchy binding, all sequences, text/sound key timing, two-slot changes, single-image handling, restart and long-frame behavior. Pass an original `loadinganim01.nif` path for asset integration; it is not shipped in the repository.
