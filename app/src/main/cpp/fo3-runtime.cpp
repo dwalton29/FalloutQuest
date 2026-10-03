@@ -1,4 +1,4 @@
-#include "fo3-water-q2070.h"
+#include "rendering/water/fo3-water.h"
 void SetFo3WorldspaceGridRadiusOverrideQ1950(int radius);
 void SetNextFo3CollisionExteriorModeQ1931(bool exterior);
 #include <array>

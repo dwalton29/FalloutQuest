@@ -1,4 +1,4 @@
-#include "fo3-water-q2070.h"
+#include "fo3-water.h"
 #include "fo3-texture-bsa.h"
 #include "rendering/terrain/fo3-terrain.h"
 
