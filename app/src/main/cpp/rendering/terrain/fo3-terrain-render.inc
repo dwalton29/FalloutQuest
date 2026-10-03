@@ -1255,7 +1255,7 @@ void RenderFo3TerrainQ76(const float* mvp) {
             q2030RawFog[0], q2030RawFog[1], q2030RawFog[2]);
     }
 
-    glUniform3fv(q1010TerrainEyeLocation, 1, gFo3EyePositionQ1010);
+    glUniform3fv(q1010TerrainEyeLocation, 1, gFo3EyePosition);
     glUniform1i(q1010TerrainLightCountLocation, gFo3SelectedLightCount);
     glUniform4fv(q1010TerrainLightPosRadiusLocation, FO3_SHADER_LIGHTS,
                  gFo3SelectedLightPosRadius);

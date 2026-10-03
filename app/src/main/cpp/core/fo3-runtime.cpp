@@ -1863,7 +1863,7 @@ bool UploadCpuObject(CpuObject& cpu, float centerX, float centerY, float floorZ,
     if (gpu.externalEmittanceFlagQ1380) {
         ++gQ1380ExternalFlagShapes;
         Fo3ExternalEmittance q1380;
-        if (ResolveFo3ExternalEmittanceQ1390(0x00000A74u,
+        if (ResolveFo3ExternalEmittance(0x00000A74u,
                                              cpu.placement.refFormId, q1380)) {
             gpu.externalEmittanceEnabledQ1380 = true;
             gpu.externalEmittanceRegionQ1380 = q1380.regionDriven;
@@ -2214,7 +2214,7 @@ void Q1050Ortho(float halfSpan, float nearZ, float farZ, float out[16]) {
 void Q1050BuildLightMvp(float out[16]) {
     const Fo3Environment& env = GetFo3Environment();
     Q1050V3 sun = Q1050Norm({env.sunDirection[0],env.sunDirection[1],env.sunDirection[2]});
-    Q1050V3 center{gFo3EyePositionQ1010[0], gFo3EyePositionQ1010[1] + 4.0f, gFo3EyePositionQ1010[2]};
+    Q1050V3 center{gFo3EyePosition[0], gFo3EyePosition[1] + 4.0f, gFo3EyePosition[2]};
     Q1050V3 eye{center.x + sun.x*80.0f, center.y + sun.y*80.0f, center.z + sun.z*80.0f};
     Q1050V3 up = std::fabs(sun.y) > 0.92f ? Q1050V3{0.0f,0.0f,1.0f} : Q1050V3{0.0f,1.0f,0.0f};
     float view[16], projection[16];
@@ -2295,9 +2295,9 @@ bool Q1050UpdateSunShadow() {
     if (!gSceneReady || gObjects.empty()) return false;
     const Fo3Environment& env=GetFo3Environment();
     if (!env.valid || !Q1050CreateShadowResources()) return false;
-    const float dx=gFo3EyePositionQ1010[0]-gShadowLastEyeQ1050[0];
-    const float dy=gFo3EyePositionQ1010[1]-gShadowLastEyeQ1050[1];
-    const float dz=gFo3EyePositionQ1010[2]-gShadowLastEyeQ1050[2];
+    const float dx=gFo3EyePosition[0]-gShadowLastEyeQ1050[0];
+    const float dy=gFo3EyePosition[1]-gShadowLastEyeQ1050[1];
+    const float dz=gFo3EyePosition[2]-gShadowLastEyeQ1050[2];
     const float sdx=env.sunDirection[0]-gShadowLastSunQ1050[0];
     const float sdy=env.sunDirection[1]-gShadowLastSunQ1050[1];
     const float sdz=env.sunDirection[2]-gShadowLastSunQ1050[2];
@@ -2362,12 +2362,12 @@ bool Q1050UpdateSunShadow() {
     if (cullWas) glEnable(GL_CULL_FACE); else glDisable(GL_CULL_FACE);
     if (polyWas) glEnable(GL_POLYGON_OFFSET_FILL); else glDisable(GL_POLYGON_OFFSET_FILL);
 
-    std::copy(gFo3EyePositionQ1010,gFo3EyePositionQ1010+3,gShadowLastEyeQ1050);
+    std::copy(gFo3EyePosition,gFo3EyePosition+3,gShadowLastEyeQ1050);
     std::copy(env.sunDirection,env.sunDirection+3,gShadowLastSunQ1050);
     gShadowReadyQ1050=true; gShadowDirtyQ1050=false;
     SetFo3TerrainShadowQ1050(gShadowDepthQ1050,gLightMvpQ1050,true);
     static size_t updates=0; ++updates;
-    if (updates<=8 || updates%40==0) Q6H_LOGI("Q10.5 SHADOW MAP: update=%zu staticCasters=%zu eye=(%.2f %.2f %.2f) footprint=116m",updates,staticCasters,gFo3EyePositionQ1010[0],gFo3EyePositionQ1010[1],gFo3EyePositionQ1010[2]);
+    if (updates<=8 || updates%40==0) Q6H_LOGI("Q10.5 SHADOW MAP: update=%zu staticCasters=%zu eye=(%.2f %.2f %.2f) footprint=116m",updates,staticCasters,gFo3EyePosition[0],gFo3EyePosition[1],gFo3EyePosition[2]);
     return true;
 }
 
@@ -6817,7 +6817,7 @@ bool Q2090RenderWaterReflection(const float mainMvp[16],
 
     // Above-water WATER000 only. Underwater optics are a distinct renderer
     // state and remain a later milestone.
-    if (gFo3EyePositionQ1010[1] <= planeY + 0.001f) return false;
+    if (gFo3EyePosition[1] <= planeY + 0.001f) return false;
 
     float reflection[16]{};
     Q2090BuildReflectionMatrix(planeY, reflection);
@@ -6857,9 +6857,9 @@ bool Q2090RenderWaterReflection(const float mainMvp[16],
     glGetFloatv(GL_COLOR_CLEAR_VALUE, previousClearColor);
 
     const float originalEye[3]{
-        gFo3EyePositionQ1010[0],
-        gFo3EyePositionQ1010[1],
-        gFo3EyePositionQ1010[2]
+        gFo3EyePosition[0],
+        gFo3EyePosition[1],
+        gFo3EyePosition[2]
     };
     const float mirroredEye[3]{
         originalEye[0],
@@ -6880,9 +6880,9 @@ bool Q2090RenderWaterReflection(const float mainMvp[16],
 
     gWaterReflectionPassQ2090 = true;
     gWaterReflectionPlaneYQ2090 = planeY;
-    gFo3EyePositionQ1010[0] = mirroredEye[0];
-    gFo3EyePositionQ1010[1] = mirroredEye[1];
-    gFo3EyePositionQ1010[2] = mirroredEye[2];
+    gFo3EyePosition[0] = mirroredEye[0];
+    gFo3EyePosition[1] = mirroredEye[1];
+    gFo3EyePosition[2] = mirroredEye[2];
 
     // PC sky is a direction-space background, so reflect only Y direction;
     // the water-plane translation belongs to world geometry, not the dome.
@@ -6984,9 +6984,9 @@ bool Q2090RenderWaterReflection(const float mainMvp[16],
             q2019ReflectionLandStarted).count());
 
     // Restore main-eye global/uniform state before the WATER000 draw.
-    gFo3EyePositionQ1010[0] = originalEye[0];
-    gFo3EyePositionQ1010[1] = originalEye[1];
-    gFo3EyePositionQ1010[2] = originalEye[2];
+    gFo3EyePosition[0] = originalEye[0];
+    gFo3EyePosition[1] = originalEye[1];
+    gFo3EyePosition[2] = originalEye[2];
     glUseProgram(gProgram);
     if (gWaterReflectionClipEnabledLocationQ2090 >= 0)
         glUniform1f(gWaterReflectionClipEnabledLocationQ2090, 0.0f);
@@ -10677,7 +10677,7 @@ void RenderScene() {
     }
 
 
-    glUniform3fv(gEyePositionLocationQ1010, 1, gFo3EyePositionQ1010);
+    glUniform3fv(gEyePositionLocationQ1010, 1, gFo3EyePosition);
     glUniform1i(gLocalLightCountLocationQ1010, gFo3SelectedLightCount);
     glUniform4fv(gLocalLightPosRadiusLocationQ1010, FO3_SHADER_LIGHTS,
                  gFo3SelectedLightPosRadius);
@@ -10722,7 +10722,7 @@ void RenderScene() {
             q1000Env.sunDirection[0], q1000Env.sunDirection[1], q1000Env.sunDirection[2]);
     }
     if (gEyePositionVertexLocationQ1630 >= 0) {
-        glUniform3fv(gEyePositionVertexLocationQ1630, 1, gFo3EyePositionQ1010);
+        glUniform3fv(gEyePositionVertexLocationQ1630, 1, gFo3EyePosition);
     }
     if (q1000Env.valid && q1000Env.fogFar > q1000Env.fogNear + 1.0f) {
         glUniform3fv(gFogColorLocationQ1010, 1, q1000Env.fog);
@@ -10858,7 +10858,7 @@ void RenderScene() {
         uint32_t q2090PlaneCell = 0u;
         uint32_t q2090PlaneType = 0u;
         const bool q2090HavePlane = GetFo3DominantWaterPlaneQ2070(
-            gFo3EyePositionQ1010[0], gFo3EyePositionQ1010[2],
+            gFo3EyePosition[0], gFo3EyePosition[2],
             gExteriorOriginXQ1890, gExteriorOriginYQ1890,
             gExteriorOriginZQ1890, FLOOR_Y, SCENE_FORWARD,
             FO3_UNITS_PER_METRE,
@@ -10948,7 +10948,7 @@ void RenderScene() {
             q1280PostWidth,
             q1280PostHeight,
             q2080SceneSnapshotReady,
-            gFo3EyePositionQ1010,
+            gFo3EyePosition,
             q2080SunDirection,
             q2080SunColor,
             q2080FogColor,
@@ -12428,6 +12428,10 @@ bool ActivateFo3DoorQ1700(float originX, float originY, float originZ,
                           float dirX, float dirY, float dirZ) {
     return ActivateDoorInternalQ1700(originX, originY, originZ,
                                      dirX, dirY, dirZ);
+}
+
+bool GetFo3PcLightDirection(float out[3]) {
+    return fo3tod::GetPcLightDirection(fo3tod::gTestHour, out);
 }
 
 #define glGenFramebuffers Q6HGenFramebuffers

@@ -652,6 +652,6 @@ inline float GetFo3TimeOfDayHour() {
     return fo3tod::gTestHour;
 }
 
-inline bool GetFo3PcLightDirection(float out[3]) {
-    return fo3tod::GetPcLightDirection(fo3tod::gTestHour, out);
-}
+// Defined in the core runtime so terrain and the main renderer share one
+// externally linked accessor, including in builds that inline local calls.
+bool GetFo3PcLightDirection(float out[3]);

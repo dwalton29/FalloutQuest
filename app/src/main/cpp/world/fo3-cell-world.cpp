@@ -1140,14 +1140,14 @@ void CompleteFo3CellTransitionQ74(uint32_t cellFormId) {
     bool terrainReady = false;
 
     if (gPendingTransitionQ74.valid && gPendingTransitionQ74.worldspaceFormId != 0u) {
-        LoadFo3EnvironmentQ1390(gPendingTransitionQ74.worldspaceFormId);
-        LoadFo3PlacedLightsQ1390(gPendingTransitionQ74.worldspaceFormId,
+        LoadFo3Environment(gPendingTransitionQ74.worldspaceFormId);
+        LoadFo3PlacedLights(gPendingTransitionQ74.worldspaceFormId,
                                  gPendingTransitionQ74.x,
                                  gPendingTransitionQ74.y,
                                  gPendingTransitionQ74.z);
     } else {
-        ResetFo3EnvironmentQ1390();
-        ResetFo3PlacedLightsQ1010();
+        ResetFo3Environment();
+        ResetFo3PlacedLights();
     }
 
     if (gPendingTransitionQ74.valid &&
