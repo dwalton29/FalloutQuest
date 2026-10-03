@@ -1,6 +1,6 @@
 #pragma once
 
-#include "fo3-loading-screen-q1700.h"
+#include "fo3-loading-screen.h"
 
 #include <GLES3/gl3.h>
 #include <android/log.h>

@@ -5,9 +5,9 @@
 #include "ui/interaction/fo3-interaction-hud-layout.h"
 #include <array>
 #include <string>
-#include "fo3-loading-vr-q1780.h"
-#include "fo3-loading-vanilla-q1760.h"
-#include "fo3-loading-comfort-q1720.h"
+#include "ui/loading/fo3-loading-vr.h"
+#include "ui/loading/fo3-loading-vanilla.h"
+#include "ui/loading/fo3-loading-comfort.h"
 #define XR_USE_PLATFORM_ANDROID
 #define XR_USE_GRAPHICS_API_OPENGL_ES
 
