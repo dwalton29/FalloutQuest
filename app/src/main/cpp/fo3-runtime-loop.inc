@@ -1,8 +1,8 @@
-#include "fo3-interaction-hud-runtime.h"
+#include "ui/interaction/fo3-interaction-hud-assets.h"
 #include "fo3-door-prompt.h"
-#include "fo3-interaction-hud-q1840.h"
-#include "fo3-interaction-hud-q1850.h"
-#include "fo3-interaction-hud-q1880.h"
+#include "ui/interaction/fo3-interaction-hud-dynamic.h"
+#include "ui/interaction/fo3-interaction-hud-renderer.h"
+#include "ui/interaction/fo3-interaction-hud-layout.h"
 #include <array>
 #include <string>
 #include "fo3-loading-vr-q1780.h"

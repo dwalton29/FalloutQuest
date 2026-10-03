@@ -20,7 +20,7 @@
 // That generated header is the single live definition of the fo3q1790 FNT/TAI
 // types. Do not include q1790.h here or those definitions are emitted twice.
 
-#include "fo3-interaction-hud-q1850.h"
+#include "fo3-interaction-hud-renderer.h"
 
 #include <algorithm>
 #include <cstddef>
