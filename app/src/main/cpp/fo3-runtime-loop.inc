@@ -33,10 +33,6 @@
 #include <cmath>
 #include <cstring>
 #include <vector>
-#include "fo3-fog-ab-q1450.h"
-#include "fo3-render-stage-q1560.h"
-#include "fo3-legacy-colour-domain-q1570.h"
-#include "fo3-pplighting-domain-q1470.h"
 
 // Q16.14: NativeActivity event bridge for long synchronous Fallout asset work.
 // External linkage lets the renderer/collision TUs service Android without
@@ -1774,18 +1770,4 @@ extern "C" void android_main(struct android_app* app) {
 }
 
 
-#if 0
-                            playerPosition_ = {0.0f, 0.0f, 0.0f};
-                            const float q1800PhysicalHeadYaw =
-                                YawFromQuaternion(views[0].pose.orientation);
-                            const float q1800RawPlayerYaw =
-                                doorAimYawQ1800_ - q1800PhysicalHeadYaw;
-                            playerYaw_ = std::atan2(std::sin(q1800RawPlayerYaw),
-                                                   std::cos(q1800RawPlayerYaw));
-                            lastFrameTime_ = 0;
-                            FQ_LOGI("Q16.27 AUTHORED DOOR FACING: destinationDoor=%08X XTELrz=%.4f physicalHeadYaw=%.4f playerYaw=%.4f degrees=%.1f",
-                                    doorAimDestinationQ1800_, doorAimYawQ1800_,
-                                    q1800PhysicalHeadYaw, playerYaw_,
-                                    playerYaw_ * 180.0f / PI);
-#endif
 

@@ -35,10 +35,6 @@ extern void PumpFo3AndroidEventsQ1860();
 #include "fo3-megaton-cell-environment-q1410.h"
 #define LoadFo3ImageSpaceQ1280 LoadFo3ImageSpaceBaseQ1410
 #include "fo3-time-of-day-q1400.h"
-#include "fo3-fog-ab-q1450.h"
-#include "fo3-render-stage-q1560.h"
-#include "fo3-legacy-colour-domain-q1570.h"
-#include "fo3-pplighting-domain-q1470.h"
 #define FO3_Q1480_DEFINE_REFRESH 1
 #include "fo3-weather-byte-staging-q1480.h"
 #undef FO3_Q1480_DEFINE_REFRESH
@@ -532,17 +528,11 @@ GLint gFogColorLocationQ1010 = -1;
 GLint gFogNearLocationQ1010 = -1;
 GLint gFogFarLocationQ1010 = -1;
 GLint gFogPowerLocationQ1410 = -1;
-GLint gFogEnabledLocationQ1450 = -1;
-GLint gRenderStageLocationQ1560 = -1;
-GLint gLegacyColourDomainLocationQ1570 = -1;
-GLint gLegacyAmbientLocationQ1570 = -1;
-GLint gLegacySunlightLocationQ1570 = -1;
 GLint gFogNearVertexLocationQ1532 = -1;
 GLint gFogFarVertexLocationQ1532 = -1;
 GLint gFogPowerVertexLocationQ1532 = -1;
 GLint gSunDirectionVertexLocationQ1540 = -1;
 GLint gEyePositionVertexLocationQ1630 = -1;
-GLint gPpDiffuseDomainLocationQ1470 = -1;
 GLint gLocalLightCountLocationQ1010 = -1;
 GLint gLocalLightPosRadiusLocationQ1010 = -1;
 GLint gLocalLightColorFalloffLocationQ1010 = -1;
@@ -1067,12 +1057,6 @@ GLuint CreateQ6HProgram() {
         uniform float uFogNear;
         uniform float uFogFar;
         uniform float uFogPower;
-        uniform float uQ1450FogEnabled;
-        uniform int uRenderStageQ1560;
-        uniform float uLegacyColourDomainQ1570;
-        uniform vec3 uLegacyAmbientQ1570;
-        uniform vec3 uLegacySunlightQ1570;
-        uniform float uQ1470LegacyPpDiffuseDomain;
         uniform float uNativeLodClipEnabledQ1810;
         uniform int uNativeLodClipCellCountQ1900;
         uniform vec4 uNativeLodClipCellsQ1900[25];
@@ -1086,29 +1070,6 @@ GLuint CreateQ6HProgram() {
         uniform vec4 uLocalLightPosRadius[8];
         uniform vec4 uLocalLightColorFalloff[8];
         out vec4 fragColor;
-        float Q1470LinearToSrgb1(float value) {
-            float c = max(value, 0.0);
-            return c <= 0.0031308
-                ? c * 12.92
-                : 1.055 * pow(c, 1.0 / 2.4) - 0.055;
-        }
-        vec3 Q1470LinearToSrgb(vec3 value) {
-            return vec3(Q1470LinearToSrgb1(value.r),
-                        Q1470LinearToSrgb1(value.g),
-                        Q1470LinearToSrgb1(value.b));
-        }
-        float Q1470SrgbToLinear1(float value) {
-            float c = max(value, 0.0);
-            return c <= 0.04045
-                ? c / 12.92
-                : pow((c + 0.055) / 1.055, 2.4);
-        }
-        vec3 Q1470SrgbToLinear(vec3 value) {
-            return vec3(Q1470SrgbToLinear1(value.r),
-                        Q1470SrgbToLinear1(value.g),
-                        Q1470SrgbToLinear1(value.b));
-        }
-
         float Q1050ShadowVisibility(vec4 shadowCoord, vec3 N, vec3 L) {
             if (uShadowsEnabled < 0.5 || shadowCoord.w <= 0.0) return 1.0;
             vec3 projected = shadowCoord.xyz / shadowCoord.w;
@@ -1227,9 +1188,7 @@ GLuint CreateQ6HProgram() {
                 vec3 q2050Env = q2050Cube * q2050Mask;
                 q2050Env *= mix(vec3(1.0), vColor.rgb, uUseVertexColor);
                 q2050Env *= q2021FadeAlpha;
-                float q2050FogVisibility = uRenderStageQ1560 >= 1
-                    ? (1.0 - vFogFactorQ1532)
-                    : 1.0;
+                float q2050FogVisibility = 1.0 - vFogFactorQ1532;
                 q2050Env *= q2050FogVisibility;
 
                 // PC c1.w is an additional per-object environment fade. Its
@@ -1282,14 +1241,6 @@ GLuint CreateQ6HProgram() {
             }
 
             vec3 q1470WorldDiffuse = baseColor * q1630Sp17Lighting;
-            if (uLegacyColourDomainQ1570 > 0.5 &&
-                uNoLighting <= 0.5 &&
-                uTerrainLodModeQ2024 <= 0.5) {
-                vec3 q1570BaseEncoded = Q1470LinearToSrgb(baseColor);
-                vec3 q1570EncodedDiffuse = q1570BaseEncoded *
-                    (uLegacyAmbientQ1570 + uLegacySunlightQ1570 * lambert);
-                q1470WorldDiffuse = Q1470SrgbToLinear(q1570EncodedDiffuse);
-            }
             vec3 lit = uNoLighting > 0.5
                 ? baseColor
                 : q1470WorldDiffuse + q1630SpecularRgb;
@@ -1331,9 +1282,7 @@ GLuint CreateQ6HProgram() {
             // Q20.3c PC static parity: SLS1011.vso computes FogParam in
             // the vertex shader and SLS1017.pso consumes the interpolated D1.w.
             // Do not recompute a separate world-distance fog in the pixel stage.
-            float fogFactor = uRenderStageQ1560 >= 1
-                ? vFogFactorQ1532
-                : 0.0;
+            float fogFactor = vFogFactorQ1532;
             lit = mix(lit, uFogColor, fogFactor);
             fragColor = vec4(max(lit, vec3(0.0)), alpha);
         }
@@ -2625,17 +2574,11 @@ bool InitializeScene() {
     gFogNearLocationQ1010 = glGetUniformLocation(gProgram, "uFogNear");
     gFogFarLocationQ1010 = glGetUniformLocation(gProgram, "uFogFar");
     gFogPowerLocationQ1410 = glGetUniformLocation(gProgram, "uFogPower");
-    gFogEnabledLocationQ1450 = glGetUniformLocation(gProgram, "uQ1450FogEnabled");
-    gRenderStageLocationQ1560 = glGetUniformLocation(gProgram, "uRenderStageQ1560");
-    gLegacyColourDomainLocationQ1570 = glGetUniformLocation(gProgram, "uLegacyColourDomainQ1570");
-    gLegacyAmbientLocationQ1570 = glGetUniformLocation(gProgram, "uLegacyAmbientQ1570");
-    gLegacySunlightLocationQ1570 = glGetUniformLocation(gProgram, "uLegacySunlightQ1570");
     gFogNearVertexLocationQ1532 = glGetUniformLocation(gProgram, "uFogNearVertexQ1532");
     gFogFarVertexLocationQ1532 = glGetUniformLocation(gProgram, "uFogFarVertexQ1532");
     gFogPowerVertexLocationQ1532 = glGetUniformLocation(gProgram, "uFogPowerVertexQ1532");
     gSunDirectionVertexLocationQ1540 = glGetUniformLocation(gProgram, "uSunDirectionVertexQ1540");
     gEyePositionVertexLocationQ1630 = glGetUniformLocation(gProgram, "uEyePositionVertexQ1630");
-    gPpDiffuseDomainLocationQ1470 = glGetUniformLocation(gProgram, "uQ1470LegacyPpDiffuseDomain");
     gLocalLightCountLocationQ1010 = glGetUniformLocation(gProgram, "uLocalLightCount");
     gLocalLightPosRadiusLocationQ1010 = glGetUniformLocation(gProgram, "uLocalLightPosRadius[0]");
     gLocalLightColorFalloffLocationQ1010 = glGetUniformLocation(gProgram, "uLocalLightColorFalloff[0]");
@@ -5236,17 +5179,11 @@ bool Q1030InitializeRenderProgramOnly() {
     gFogNearLocationQ1010 = glGetUniformLocation(gProgram, "uFogNear");
     gFogFarLocationQ1010 = glGetUniformLocation(gProgram, "uFogFar");
     gFogPowerLocationQ1410 = glGetUniformLocation(gProgram, "uFogPower");
-    gFogEnabledLocationQ1450 = glGetUniformLocation(gProgram, "uQ1450FogEnabled");
-    gRenderStageLocationQ1560 = glGetUniformLocation(gProgram, "uRenderStageQ1560");
-    gLegacyColourDomainLocationQ1570 = glGetUniformLocation(gProgram, "uLegacyColourDomainQ1570");
-    gLegacyAmbientLocationQ1570 = glGetUniformLocation(gProgram, "uLegacyAmbientQ1570");
-    gLegacySunlightLocationQ1570 = glGetUniformLocation(gProgram, "uLegacySunlightQ1570");
     gFogNearVertexLocationQ1532 = glGetUniformLocation(gProgram, "uFogNearVertexQ1532");
     gFogFarVertexLocationQ1532 = glGetUniformLocation(gProgram, "uFogFarVertexQ1532");
     gFogPowerVertexLocationQ1532 = glGetUniformLocation(gProgram, "uFogPowerVertexQ1532");
     gSunDirectionVertexLocationQ1540 = glGetUniformLocation(gProgram, "uSunDirectionVertexQ1540");
     gEyePositionVertexLocationQ1630 = glGetUniformLocation(gProgram, "uEyePositionVertexQ1630");
-    gPpDiffuseDomainLocationQ1470 = glGetUniformLocation(gProgram, "uQ1470LegacyPpDiffuseDomain");
     gLocalLightCountLocationQ1010 = glGetUniformLocation(gProgram, "uLocalLightCount");
     gLocalLightPosRadiusLocationQ1010 = glGetUniformLocation(gProgram, "uLocalLightPosRadius[0]");
     gLocalLightColorFalloffLocationQ1010 = glGetUniformLocation(gProgram, "uLocalLightColorFalloff[0]");
@@ -10922,13 +10859,6 @@ void RenderScene() {
         GetFo3PcLightDirectionQ203D(q203dPcLightDirection);
     if (q1000Env.valid) {
         float q1500Ambient[3]{q1000Env.ambient[0], q1000Env.ambient[1], q1000Env.ambient[2]};
-        if (GetFo3LegacyPpDiffuseDomainQ1470()) {
-            const float q1500AmbientLuma =
-                0.2126f * q1500Ambient[0] + 0.7152f * q1500Ambient[1] + 0.0722f * q1500Ambient[2];
-            q1500Ambient[0] = q1500AmbientLuma * 0.65f;
-            q1500Ambient[1] = q1500AmbientLuma * 0.65f;
-            q1500Ambient[2] = q1500AmbientLuma * 0.65f;
-        }
         glUniform3fv(gAmbientColorLocationQ1000, 1, q1500Ambient);
         glUniform3fv(gSunlightColorLocationQ1000, 1, q1000Env.sunlight);
         glUniform3fv(gSunDirectionLocationQ1000, 1,
@@ -10947,36 +10877,7 @@ void RenderScene() {
     glUniform4fv(gLocalLightColorFalloffLocationQ1010, FO3_SHADER_LIGHTS_Q1010,
                  gFo3SelectedLightColorFalloffQ1010);
     if (gFogPowerLocationQ1410 >= 0) glUniform1f(gFogPowerLocationQ1410, GetFo3FogPowerQ1410());
-    if (gFogEnabledLocationQ1450 >= 0) {
-        glUniform1f(gFogEnabledLocationQ1450, GetFo3FogEnabledQ1450() ? 1.0f : 0.0f);
-    }
-    if (gRenderStageLocationQ1560 >= 0) {
-        glUniform1i(gRenderStageLocationQ1560, GetFo3RenderStageQ1560());
-    }
-    if (gLegacyColourDomainLocationQ1570 >= 0) {
-        glUniform1f(gLegacyColourDomainLocationQ1570,
-                    GetFo3LegacyColourDomainQ1570() ? 1.0f : 0.0f);
-    }
     Q1590UploadPcSp17LightConstants();
-    if (gLegacyAmbientLocationQ1570 >= 0 && gLegacySunlightLocationQ1570 >= 0) {
-        float q1570RawAmbient[3]{0.34f, 0.34f, 0.34f};
-        float q1570RawSunlight[3]{0.66f, 0.66f, 0.66f};
-        RefreshFo3RawWeatherLightingQ1480();
-        Q1580LogLightTrace(q1000Env);
-        const bool q1570RawReady =
-            GetFo3RawWeatherLightingQ1480(q1570RawAmbient, q1570RawSunlight);
-        glUniform3fv(gLegacyAmbientLocationQ1570, 1, q1570RawAmbient);
-        glUniform3fv(gLegacySunlightLocationQ1570, 1, q1570RawSunlight);
-
-        static int q1570LastLoggedMode = -1;
-        const int q1570Mode = GetFo3LegacyColourDomainQ1570() ? 1 : 0;
-        if (q1570Mode != q1570LastLoggedMode) {
-            q1570LastLoggedMode = q1570Mode;
-            Q6H_LOGI("Q15.7 LEGACY DOMAIN: mode=%s rawReady=%d ambient=(%.3f %.3f %.3f) sunlight=(%.3f %.3f %.3f) scope=statics+LAND baseMapEncoded=1 outputLinear=1 fakeLighting=0",
-                     GetFo3LegacyColourDomainNameQ1570(), q1570RawReady ? 1 : 0,
-                     q1570RawAmbient[0], q1570RawAmbient[1], q1570RawAmbient[2],
-                     q1570RawSunlight[0], q1570RawSunlight[1], q1570RawSunlight[2]);
-        }
     }
     const float q1532StaticFogNear =
         (q1000Env.valid && q1000Env.fogFar > q1000Env.fogNear + 1.0f)
@@ -11015,26 +10916,6 @@ void RenderScene() {
     }
     if (gEyePositionVertexLocationQ1630 >= 0) {
         glUniform3fv(gEyePositionVertexLocationQ1630, 1, gFo3EyePositionQ1010);
-    }
-    if (gPpDiffuseDomainLocationQ1470 >= 0) {
-        glUniform1f(gPpDiffuseDomainLocationQ1470, 0.0f);
-    }
-    static bool q1470ReadyLogged = false;
-    if (!q1470ReadyLogged) {
-        q1470ReadyLogged = true;
-        Q6H_LOGI("Q15.1 AMBIENT STRENGTH A/B READY: mode=%s control=LEFT_Y scope=statics+LAND ambientNeutralLuminance=Rec709Linear ambientScale=0.65 authoredSunlightRGB=1 baseMapUnchanged=1 localLightsUnchanged=1 fogUnchanged=1 postUnchanged=1",
-                 GetFo3PpDiffuseDomainNameQ1470());
-    }
-    static bool q1450FogReadyLogged = false;
-    if (!q1450FogReadyLogged && q1000Env.valid) {
-        q1450FogReadyLogged = true;
-        Q6H_LOGI("Q15.6 RENDER STAGE READY: mode=%s control=LEFT_X weather=%08X fogRGB=(%.3f %.3f %.3f) nearGame=%.1f farGame=%.1f nearRender=%.3f farRender=%.3f power=%.3f stages=RAW_FOG_HDR_FINAL authoredLightingOnly=1 tangentABRetired=1",
-                 GetFo3FogModeNameQ1450(), q1000Env.weatherFormId,
-                 q1000Env.fog[0], q1000Env.fog[1], q1000Env.fog[2],
-                 q1000Env.fogNear, q1000Env.fogFar,
-                 q1000Env.fogNear / FO3_UNITS_PER_METRE,
-                 q1000Env.fogFar / FO3_UNITS_PER_METRE,
-                 GetFo3FogPowerQ1410());
     }
     if (q1000Env.valid && q1000Env.fogFar > q1000Env.fogNear + 1.0f) {
         glUniform3fv(gFogColorLocationQ1010, 1, q1000Env.fog);
@@ -11330,13 +11211,6 @@ void RenderScene() {
     }
 }
 
-bool GetFo3FogEnabledQ1450Bridge() {
-    return GetFo3FogEnabledQ1450();
-}
-
-int GetFo3RenderStageQ1560Bridge() {
-    return GetFo3RenderStageQ1560();
-}
 
 void Q6HGenFramebuffers(GLsizei n, GLuint* framebuffers) {
     glGenFramebuffers(n, framebuffers);
@@ -11382,13 +11256,8 @@ GLsizei q1280PostHeight = 0;
 GLenum q1280PostInternalFormat = GL_RGBA8;
 bool q1280PostActive = false;
 bool q1280PostLoggedGpu = false;
-// Q20.4E parity diagnostic: Q13.7 contact AO is a FalloutQuest-only effect,
-// not part of the captured Fallout 3 SP17/final-film path. Keep it OFF by
-// default and expose a runtime A/B toggle rather than contaminating vanilla.
-bool q204eContactAoEnabled = false;
 
 GLint q1280SceneLocation = -1;
-GLint q1280TexelLocation = -1;
 GLint q1280FlagsLocation = -1;
 GLint q1280SaturationLocation = -1;
 GLint q1280ContrastAvgLocation = -1;
@@ -11401,10 +11270,7 @@ GLint q1280BloomScaleLocation = -1;
 GLint q1280BloomThresholdLocation = -1;
 GLint q1280BloomAlphaLocation = -1;
 GLint q1350ExposureLocation = -1;
-GLint q1370DepthLocation = -1;
-GLint q204eContactAoEnabledLocation = -1;
 GLint q1520TargetLumLocation = -1;
-GLint q1560PostRenderStageLocation = -1;
 GLint q1670PcBloomLocation = -1;
 GLint q1670PcBloomReadyLocation = -1;
 
@@ -12000,7 +11866,6 @@ bool Q1280EnsurePostProgram() {
         precision mediump float;
         in vec2 vUv;
         uniform sampler2D uScene;
-        uniform vec2 uTexel;
         uniform int uFlags;
         uniform float uSaturation;
         uniform float uContrastAvg;
@@ -12013,25 +11878,10 @@ bool Q1280EnsurePostProgram() {
         uniform float uBloomThreshold;
         uniform float uBloomAlpha;
         uniform sampler2D uExposureQ1350;
-        uniform sampler2D uDepthQ1370;
-        uniform float uContactAoEnabledQ204E;
         uniform float uTargetLumQ1520;
-        uniform int uRenderStageQ1560;
         uniform sampler2D uPcBloomQ1670;
         uniform float uPcBloomReadyQ1670;
         out vec4 fragColor;
-
-        float Q1280Lum(vec3 c) {
-            return dot(c, vec3(0.2126, 0.7152, 0.0722));
-        }
-
-        vec3 Q1280Bright(vec2 uv) {
-            vec3 c = texture(uScene, clamp(uv, vec2(0.0), vec2(1.0))).rgb;
-            // shaderpackage017 / ISHDRBRIGHT.pso:
-            // max(Src0.rgb - HDRParam.x, 0) * HDRParam.y
-            return max(c - vec3(max(uBloomThreshold, 0.0)), vec3(0.0)) *
-                   max(uBloomScale, 0.0);
-        }
 
         vec3 Q1340LinearToSrgb(vec3 c) {
             c = max(c, vec3(0.0));
@@ -12050,63 +11900,9 @@ bool Q1280EnsurePostProgram() {
         }
 
 
-        float Q1370LinearDepth(float depth01) {
-            const float nearZ = 0.04;
-            // Q18.5: Fallout.ini fBlockLoadDistance=125000.0 game units.
-            // FalloutQuest exterior scale is 70 game units per metre.
-            const float farZ = 1785.7142857;
-            float z = depth01 * 2.0 - 1.0;
-            return (2.0 * nearZ * farZ) /
-                   max(farZ + nearZ - z * (farZ - nearZ), 0.0001);
-        }
-
-        float Q1370ContactAo(vec2 uv, float centerRaw) {
-            if (centerRaw >= 0.99995) return 1.0;
-            float center = Q1370LinearDepth(centerRaw);
-
-            // Screen-space contact radius narrows with distance. This is not a
-            // large SSAO halo pass: it is deliberately aimed at object/ground,
-            // wall/floor and clutter/structure contact regions.
-            float distanceFade = clamp(center / 24.0, 0.0, 1.0);
-            float radiusPx = mix(7.0, 2.5, distanceFade);
-            float bias = max(0.012, center * 0.0015);
-            float range = max(0.16, center * 0.028);
-
-            const vec2 dirs[8] = vec2[8](
-                vec2( 1.000,  0.000), vec2(-1.000,  0.000),
-                vec2( 0.000,  1.000), vec2( 0.000, -1.000),
-                vec2( 0.707,  0.707), vec2(-0.707,  0.707),
-                vec2( 0.707, -0.707), vec2(-0.707, -0.707));
-
-            float occ = 0.0;
-            for (int i = 0; i < 8; ++i) {
-                // Alternate inner/outer ring without noise so VR is temporally
-                // stable and both eyes use the same deterministic kernel.
-                float ring = (i < 4) ? 0.55 : 1.0;
-                vec2 sampleUv = clamp(uv + dirs[i] * uTexel * radiusPx * ring,
-                                      vec2(0.0), vec2(1.0));
-                float neighbourRaw = texture(uDepthQ1370, sampleUv).r;
-                if (neighbourRaw >= 0.99995) continue;
-                float neighbour = Q1370LinearDepth(neighbourRaw);
-                float delta = center - neighbour;
-                float nearOccluder = smoothstep(bias, range, delta);
-                float haloReject = 1.0 - smoothstep(range, range * 3.0, delta);
-                occ += nearOccluder * haloReject;
-            }
-
-            float normalized = occ * 0.125;
-            return 1.0 - normalized * 0.22;
-        }
-
         void main() {
             vec3 colour = texture(uScene, vUv).rgb;
 
-            // RAW and FOG isolate the pre-post scene exactly. Fog itself is
-            // already controlled in the world shaders by the same stage value.
-            if (uRenderStageQ1560 <= 1) {
-                fragColor = vec4(max(colour, vec3(0.0)), 1.0);
-                return;
-            }
 
             // Q15.17 / PC calls 4618165 + 4618189: Src0 is already the
             // 256x256 bright-pass Gaussian result. Final call 4618221 samples it
@@ -12122,15 +11918,6 @@ bool Q1280EnsurePostProgram() {
             // Keep bloom/lighting linear, temporarily enter display transfer
             // space for the film controls, then return to linear for the sRGB
             // OpenXR target.
-            // Q20.4E: this contact AO is a Quest-only diagnostic effect. It was
-            // never observed in the captured Fallout 3 final path, so vanilla
-            // parity defaults to disabled. RIGHT_B can enable it for a clean A/B.
-            if (uContactAoEnabledQ204E > 0.5) {
-                float contactAoQ1370 = Q1370ContactAo(vUv, texture(uDepthQ1370, vUv).r);
-                float aoLumQ1370 = Q1280Lum(max(colour, vec3(0.0)));
-                float aoMaterialMaskQ1370 = 1.0 - smoothstep(0.70, 1.35, aoLumQ1370);
-                colour *= mix(1.0, contactAoQ1370, aoMaterialMaskQ1370);
-            }
 
             // shaderpackage017 / ISHDRBLENDINSHADER(CIN): Src0.a in vanilla
             // carries the adapted HDR magnitude through the blur chain. Quest
@@ -12220,7 +12007,6 @@ bool Q1280EnsurePostProgram() {
 
     glGenVertexArrays(1, &q1280PostVao);
     q1280SceneLocation = glGetUniformLocation(q1280PostProgram, "uScene");
-    q1280TexelLocation = glGetUniformLocation(q1280PostProgram, "uTexel");
     q1280FlagsLocation = glGetUniformLocation(q1280PostProgram, "uFlags");
     q1280SaturationLocation = glGetUniformLocation(q1280PostProgram, "uSaturation");
     q1280ContrastAvgLocation = glGetUniformLocation(q1280PostProgram, "uContrastAvg");
@@ -12233,16 +12019,12 @@ bool Q1280EnsurePostProgram() {
     q1280BloomThresholdLocation = glGetUniformLocation(q1280PostProgram, "uBloomThreshold");
     q1280BloomAlphaLocation = glGetUniformLocation(q1280PostProgram, "uBloomAlpha");
     q1350ExposureLocation = glGetUniformLocation(q1280PostProgram, "uExposureQ1350");
-    q1370DepthLocation = glGetUniformLocation(q1280PostProgram, "uDepthQ1370");
-    q204eContactAoEnabledLocation = glGetUniformLocation(q1280PostProgram, "uContactAoEnabledQ204E");
     q1520TargetLumLocation = glGetUniformLocation(q1280PostProgram, "uTargetLumQ1520");
-    q1560PostRenderStageLocation = glGetUniformLocation(q1280PostProgram, "uRenderStageQ1560");
     q1670PcBloomLocation = glGetUniformLocation(q1280PostProgram, "uPcBloomQ1670");
     q1670PcBloomReadyLocation = glGetUniformLocation(q1280PostProgram, "uPcBloomReadyQ1670");
-    return q1280SceneLocation >= 0 && q1280TexelLocation >= 0 &&
-           q1350ExposureLocation >= 0 && q1370DepthLocation >= 0 &&
-           q204eContactAoEnabledLocation >= 0 &&
-           q1520TargetLumLocation >= 0 && q1560PostRenderStageLocation >= 0 &&
+    return q1280SceneLocation >= 0 &&
+           q1350ExposureLocation >= 0 &&
+           q1520TargetLumLocation >= 0 &&
            q1670PcBloomLocation >= 0 && q1670PcBloomReadyLocation >= 0;
 }
 
@@ -12406,8 +12188,6 @@ bool Q1280AllocatePostTarget(GLsizei width, GLsizei height) {
     Q2060AllocateMsaaTargetQ2060(width, height, q1280PostInternalFormat);
     if (!q1280PostLoggedGpu) {
         q1280PostLoggedGpu = true;
-        Q6H_LOGI("Q20.4E CONTACT AO A/B READY: size=%dx%d depth=DEPTH_COMPONENT24 taps=8 maxDarken=0.220 radiusPx=2.5..7.0 defaultEnabled=0 toggle=RIGHT_B syntheticQuestEffect=1",
-                 width, height);
         Q6H_LOGI("Q12.8 POST GPU READY: size=%dx%d format=%s pcBloom=Q15.17-640x256-256x256-15tapV-15tapH stereoSequential=1",
                  width, height,
                  q1280PostInternalFormat == GL_RGBA16F ? "RGBA16F" : "RGBA8");
@@ -12467,25 +12247,14 @@ void Q1280CompositeEyePostQ1280(GLuint swapchainFbo, GLsizei width, GLsizei heig
         glUniform1i(q1350ExposureLocation, 1);
         glActiveTexture(GL_TEXTURE0);
     }
-    glActiveTexture(GL_TEXTURE2);
-    glBindTexture(GL_TEXTURE_2D, q1370PostDepth);
-    glUniform1i(q1370DepthLocation, 2);
-    glUniform1f(q204eContactAoEnabledLocation, q204eContactAoEnabled ? 1.0f : 0.0f);
     glActiveTexture(GL_TEXTURE3);
     glBindTexture(GL_TEXTURE_2D, q1670BloomTexture[1]);
     glUniform1i(q1670PcBloomLocation, 3);
     glUniform1f(q1670PcBloomReadyLocation, q1670BloomReadyQ1670 ? 1.0f : 0.0f);
     glActiveTexture(GL_TEXTURE0);
-    glUniform2f(q1280TexelLocation,
-                1.0f / static_cast<float>(std::max<GLsizei>(width, 1)),
-                1.0f / static_cast<float>(std::max<GLsizei>(height, 1)));
-
     const Fo3ImageSpaceQ1280& image = GetFo3ImageSpaceQ1280();
-    const int q1560Stage = GetFo3RenderStageQ1560();
-    glUniform1i(q1560PostRenderStageLocation, q1560Stage);
     glUniform1f(q1520TargetLumLocation, 1.2f);
-    // Stage 2 keeps HDR/adaptation but removes only cinematic IMGS controls.
-    const int flags = (q1560Stage >= FO3_RENDER_STAGE_FINAL_Q1560 && image.valid)
+    const int flags = image.valid
         ? static_cast<int>(image.cinematicFlags)
         : 0;
     glUniform1i(q1280FlagsLocation, flags);
@@ -12713,21 +12482,6 @@ void Q6HDrawArrays(GLenum mode, GLint first, GLsizei count) {
     glDrawArrays(mode, first, count);
 }
 
-void ToggleFo3ContactAoQ204E() {
-    q204eContactAoEnabled = !q204eContactAoEnabled;
-}
-
-bool GetFo3ContactAoEnabledQ204E() {
-    return q204eContactAoEnabled;
-}
-
-void ToggleFo3EnvironmentPassQ205A() {
-    gEnvironmentPassEnabledQ205A = !gEnvironmentPassEnabledQ205A;
-}
-
-bool GetFo3EnvironmentPassEnabledQ205A() {
-    return gEnvironmentPassEnabledQ205A;
-}
 
 } // namespace
 

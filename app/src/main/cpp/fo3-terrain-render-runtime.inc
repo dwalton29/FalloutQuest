@@ -1,7 +1,3 @@
-#include "fo3-render-stage-q1560.h"
-#include "fo3-legacy-colour-domain-q1570.h"
-
-bool GetFo3FogEnabledQ1450Bridge();
 
 float GetFo3FogPowerQ1410();
 
@@ -93,11 +89,6 @@ GLint q1010TerrainFogColorLocation = -1;
 GLint q1010TerrainFogNearLocation = -1;
 GLint q1010TerrainFogFarLocation = -1;
 GLint q1410TerrainFogPowerLocation = -1;
-GLint q1450TerrainFogEnabledLocation = -1;
-GLint q1560TerrainRenderStageLocation = -1;
-GLint q1570TerrainLegacyDomainLocation = -1;
-GLint q1570TerrainLegacyAmbientLocation = -1;
-GLint q1570TerrainLegacySunlightLocation = -1;
 GLint q1532TerrainFogNearVertexLocation = -1;
 GLint q1532TerrainFogFarVertexLocation = -1;
 GLint q1532TerrainFogPowerVertexLocation = -1;
@@ -331,11 +322,6 @@ GLuint Q76BCreateProgram() {
         uniform float uFogNear;
         uniform float uFogFar;
         uniform float uFogPower;
-        uniform float uQ1450FogEnabled;
-        uniform int uRenderStageQ1560;
-        uniform float uLegacyColourDomainQ1570;
-        uniform vec3 uLegacyAmbientQ1570;
-        uniform vec3 uLegacySunlightQ1570;
         uniform int uLocalLightCount;
         uniform vec4 uLocalLightPosRadius[8];
         uniform vec4 uLocalLightColorFalloff[8];
@@ -345,29 +331,6 @@ GLuint Q76BCreateProgram() {
         uniform float uWaterReflectionClipEnabledQ2090;
         uniform float uWaterReflectionPlaneYQ2090;
         out vec4 fragColor;
-        float Q1570LinearToSrgb1(float value) {
-            float c = max(value, 0.0);
-            return c <= 0.0031308
-                ? c * 12.92
-                : 1.055 * pow(c, 1.0 / 2.4) - 0.055;
-        }
-        vec3 Q1570LinearToSrgb(vec3 value) {
-            return vec3(Q1570LinearToSrgb1(value.r),
-                        Q1570LinearToSrgb1(value.g),
-                        Q1570LinearToSrgb1(value.b));
-        }
-        float Q1570SrgbToLinear1(float value) {
-            float c = max(value, 0.0);
-            return c <= 0.04045
-                ? c / 12.92
-                : pow((c + 0.055) / 1.055, 2.4);
-        }
-        vec3 Q1570SrgbToLinear(vec3 value) {
-            return vec3(Q1570SrgbToLinear1(value.r),
-                        Q1570SrgbToLinear1(value.g),
-                        Q1570SrgbToLinear1(value.b));
-        }
-
         float Q1050ShadowVisibility(vec4 shadowCoord, vec3 N, vec3 L) {
             if (uShadowsEnabled < 0.5 || shadowCoord.w <= 0.0) return 1.0;
             vec3 projected = shadowCoord.xyz / shadowCoord.w;
@@ -411,13 +374,6 @@ GLuint Q76BCreateProgram() {
             float q1050SunVisibility = Q1050ShadowVisibility(vShadowCoord, N, lightDirection);
             vec3 q1570LandWorldDiffuse =
                 albedo * (uAmbientColor + uSunlightColor * lambert * q1050SunVisibility);
-            if (uLegacyColourDomainQ1570 > 0.5) {
-                vec3 q1570LandBaseEncoded = Q1570LinearToSrgb(albedo);
-                vec3 q1570LandEncodedDiffuse = q1570LandBaseEncoded *
-                    (uLegacyAmbientQ1570 +
-                     uLegacySunlightQ1570 * lambert * q1050SunVisibility);
-                q1570LandWorldDiffuse = Q1570SrgbToLinear(q1570LandEncodedDiffuse);
-            }
             vec3 lit = q1570LandWorldDiffuse;
             if (uUseNormal != 0 && uTerrainSpecularEnabled > 0.5) {
                 vec3 V = normalize(uEyePosition - vPosition);
@@ -441,9 +397,7 @@ GLuint Q76BCreateProgram() {
             // position, FogParam=(far, far-near, power, _), then SLS2124.pso
             // blends against the interpolated factor. Use the already matching
             // vertex result instead of recomputing a different world-distance fog.
-            float fogFactor = uRenderStageQ1560 >= 1
-                ? vFogFactorQ1532
-                : 0.0;
+            float fogFactor = vFogFactorQ1532;
             lit = mix(lit, uFogColor, fogFactor);
             fragColor = vec4(max(lit, vec3(0.0)), clamp(vAlpha, 0.0, 1.0));
         }
@@ -583,11 +537,6 @@ void ShutdownFo3TerrainRenderQ76() {
     q1010TerrainFogNearLocation = -1;
     q1010TerrainFogFarLocation = -1;
     q1410TerrainFogPowerLocation = -1;
-    q1450TerrainFogEnabledLocation = -1;
-    q1560TerrainRenderStageLocation = -1;
-    q1570TerrainLegacyDomainLocation = -1;
-    q1570TerrainLegacyAmbientLocation = -1;
-    q1570TerrainLegacySunlightLocation = -1;
     q1532TerrainFogNearVertexLocation = -1;
     q1532TerrainFogFarVertexLocation = -1;
     q1532TerrainFogPowerVertexLocation = -1;
@@ -990,11 +939,6 @@ bool InitializeFo3TerrainRenderQ76(uint32_t worldspaceFormId,
     q1010TerrainFogNearLocation = glGetUniformLocation(q76bProgram, "uFogNear");
     q1010TerrainFogFarLocation = glGetUniformLocation(q76bProgram, "uFogFar");
     q1410TerrainFogPowerLocation = glGetUniformLocation(q76bProgram, "uFogPower");
-    q1450TerrainFogEnabledLocation = glGetUniformLocation(q76bProgram, "uQ1450FogEnabled");
-    q1560TerrainRenderStageLocation = glGetUniformLocation(q76bProgram, "uRenderStageQ1560");
-    q1570TerrainLegacyDomainLocation = glGetUniformLocation(q76bProgram, "uLegacyColourDomainQ1570");
-    q1570TerrainLegacyAmbientLocation = glGetUniformLocation(q76bProgram, "uLegacyAmbientQ1570");
-    q1570TerrainLegacySunlightLocation = glGetUniformLocation(q76bProgram, "uLegacySunlightQ1570");
     q1532TerrainFogNearVertexLocation = glGetUniformLocation(q76bProgram, "uFogNearVertexQ1532");
     q1532TerrainFogFarVertexLocation = glGetUniformLocation(q76bProgram, "uFogFarVertexQ1532");
     q1532TerrainFogPowerVertexLocation = glGetUniformLocation(q76bProgram, "uFogPowerVertexQ1532");
@@ -1318,26 +1262,6 @@ void RenderFo3TerrainQ76(const float* mvp) {
     glUniform4fv(q1010TerrainLightColorFalloffLocation, FO3_SHADER_LIGHTS_Q1010,
                  gFo3SelectedLightColorFalloffQ1010);
     if (q1410TerrainFogPowerLocation >= 0) glUniform1f(q1410TerrainFogPowerLocation, GetFo3FogPowerQ1410());
-    if (q1450TerrainFogEnabledLocation >= 0) {
-        glUniform1f(q1450TerrainFogEnabledLocation,
-                    GetFo3FogEnabledQ1450Bridge() ? 1.0f : 0.0f);
-    }
-    if (q1560TerrainRenderStageLocation >= 0) {
-        glUniform1i(q1560TerrainRenderStageLocation, GetFo3RenderStageQ1560());
-    }
-    if (q1570TerrainLegacyDomainLocation >= 0) {
-        glUniform1f(q1570TerrainLegacyDomainLocation,
-                    GetFo3LegacyColourDomainQ1570() ? 1.0f : 0.0f);
-    }
-    if (q1570TerrainLegacyAmbientLocation >= 0 &&
-        q1570TerrainLegacySunlightLocation >= 0) {
-        float q1570RawAmbient[3]{0.48f, 0.48f, 0.48f};
-        float q1570RawSunlight[3]{0.52f, 0.52f, 0.52f};
-        RefreshFo3RawWeatherLightingQ1480();
-        GetFo3RawWeatherLightingQ1480(q1570RawAmbient, q1570RawSunlight);
-        glUniform3fv(q1570TerrainLegacyAmbientLocation, 1, q1570RawAmbient);
-        glUniform3fv(q1570TerrainLegacySunlightLocation, 1, q1570RawSunlight);
-    }
     const float q1532TerrainFogNear =
         (q1000Env.valid && q1000Env.fogFar > q1000Env.fogNear + 1.0f)
             ? std::max(0.0f, q1000Env.fogNear / 70.0f)
