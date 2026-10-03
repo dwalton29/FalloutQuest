@@ -1,6 +1,6 @@
 #pragma once
 
-#include "fo3-authored-color-q1390.h"
+#include "rendering/environment/fo3-authored-color.h"
 #include "fo3-weather-sky-q1330.h"
 
 namespace fo3skycolorq1390 {
