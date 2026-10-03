@@ -1,6 +1,6 @@
 #pragma once
 
-#include "fo3-environment-q1000.h"
+#include "rendering/environment/fo3-environment.h"
 #include "fo3-texture-bsa.h"
 
 #include <GLES3/gl3.h>
