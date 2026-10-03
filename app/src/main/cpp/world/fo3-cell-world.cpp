@@ -86,7 +86,7 @@ bool LookupFo3WastelandDoorTeleportQ1920(
 
 // Q7.7 physical LAND sampler is also kept in this transition translation unit.
 // It only becomes active after the exterior terrain upload has succeeded.
-#include "fo3-terrain-ground-runtime.inc"
+#include "rendering/terrain/fo3-terrain-ground.inc"
 
 namespace {
 
