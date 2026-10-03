@@ -1,7 +1,7 @@
 #pragma once
 
 #include "rendering/environment/fo3-authored-color.h"
-#include "fo3-weather-light-q1320.h"
+#include "rendering/environment/fo3-weather-light.h"
 
 #include <algorithm>
 #include <cmath>
