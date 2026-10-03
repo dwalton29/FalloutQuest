@@ -1,5 +1,9 @@
 #include "player/fo3-player-state.h"
+// Reproduce the Android platform far macro that caused the native build
+// failure.
+#define far
 #include "world/interaction/fo3-interaction-ray.h"
+#undef far
 #include "world/interaction/fo3-interaction.h"
 #include <algorithm>
 #include <cstdio>

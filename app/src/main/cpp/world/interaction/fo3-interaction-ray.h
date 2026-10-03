@@ -7,7 +7,7 @@ namespace fo3interaction {
 using Point = std::array<float, 3>;
 inline bool Box(const Point &o, const Point &d, const Point &lo,
                 const Point &hi, float limit, float &distance) {
-  float near = 0, far = limit;
+  float entryDistance = 0, exitDistance = limit;
   for (int i = 0; i < 3; ++i) {
     if (!std::isfinite(o[i]) || !std::isfinite(d[i]) || !std::isfinite(lo[i]) ||
         !std::isfinite(hi[i]) || lo[i] > hi[i])
@@ -19,14 +19,14 @@ inline bool Box(const Point &o, const Point &d, const Point &lo,
       float a = (lo[i] - o[i]) / d[i], b = (hi[i] - o[i]) / d[i];
       if (a > b)
         std::swap(a, b);
-      near = std::max(near, a);
-      far = std::min(far, b);
-      if (near > far)
+      entryDistance = std::max(entryDistance, a);
+      exitDistance = std::min(exitDistance, b);
+      if (entryDistance > exitDistance)
         return false;
     }
   }
-  distance = near;
-  return far >= 0 && near <= limit;
+  distance = entryDistance;
+  return exitDistance >= 0 && entryDistance <= limit;
 }
 inline Point Sub(const Point &a, const Point &b) {
   return {a[0] - b[0], a[1] - b[1], a[2] - b[2]};
