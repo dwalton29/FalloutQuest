@@ -36,7 +36,7 @@ extern void PumpFo3AndroidEventsQ1860();
 #define LoadFo3ImageSpaceQ1280 LoadFo3ImageSpaceBaseQ1410
 #include "rendering/environment/fo3-time-of-day.h"
 #define FO3_Q1480_DEFINE_REFRESH 1
-#include "fo3-weather-byte-staging-q1480.h"
+#include "rendering/environment/fo3-weather-byte-staging.h"
 #undef FO3_Q1480_DEFINE_REFRESH
 #undef LoadFo3ImageSpaceQ1280
 #include "rendering/environment/fo3-visual-depth.h"

@@ -3,7 +3,7 @@ float GetFo3FogPowerQ1410();
 
 #include "fo3-terrain-q76.h"
 #include "rendering/environment/fo3-environment.h"
-#include "fo3-weather-byte-staging-q1480.h"
+#include "rendering/environment/fo3-weather-byte-staging.h"
 #include "rendering/environment/fo3-visual-depth.h"
 #include "fo3-texture-bsa.h"
 
