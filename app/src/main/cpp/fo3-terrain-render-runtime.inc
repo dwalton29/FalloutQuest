@@ -1,7 +1,7 @@
 
 float GetFo3FogPowerQ1410();
 
-#include "fo3-terrain-q76.h"
+#include "rendering/terrain/fo3-terrain.h"
 #include "rendering/environment/fo3-environment.h"
 #include "rendering/environment/fo3-weather-byte-staging.h"
 #include "rendering/environment/fo3-visual-depth.h"

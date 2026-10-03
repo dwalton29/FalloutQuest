@@ -10,14 +10,14 @@ extern void PumpFo3AndroidEventsQ1860();
 #include <vector>
 #include "fo3-cell-traversal.h"
 #include "fo3-transition.h"
-#include "fo3-terrain-q76.h"
+#include "rendering/terrain/fo3-terrain.h"
 #include "fo3-cell-traversal.h"
 #include "fo3-loading-state-q1700.h"
 #include "fo3-transition.h"
 #include "rendering/environment/fo3-environment.h"
 #include "rendering/environment/fo3-visual-depth.h"
 #include "rendering/environment/fo3-authored-color.h"
-#include "fo3-terrain-q76.h"
+#include "rendering/terrain/fo3-terrain.h"
 
 #include <algorithm>
 #include <cmath>

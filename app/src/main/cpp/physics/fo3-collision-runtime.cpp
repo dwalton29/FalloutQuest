@@ -3,7 +3,7 @@ extern void PumpFo3AndroidEventsQ1860();
 #include "fo3-nif-collision.h"
 #include "fo3-transition.h"
 #include "fo3-nif-metadata.h"
-#include "fo3-terrain-q76.h"
+#include "rendering/terrain/fo3-terrain.h"
 
 #include <GLES3/gl3.h>
 #include <android/log.h>

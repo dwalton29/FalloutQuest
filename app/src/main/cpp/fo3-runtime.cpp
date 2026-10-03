@@ -7,7 +7,7 @@ void SetNextFo3CollisionExteriorModeQ1931(bool exterior);
 #include <mutex>
 #include <thread>
 #include <unordered_set>
-#include "fo3-terrain-q76.h"
+#include "rendering/terrain/fo3-terrain.h"
 extern void SetFo3TerrainSelectionOverrideQ1890(bool enabled, float gameX, float gameY);
 #include "fo3-authored-door-query-q1870.h"
 extern void PumpFo3AndroidEventsQ1860();

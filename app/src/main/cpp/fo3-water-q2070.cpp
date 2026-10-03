@@ -1,6 +1,6 @@
 #include "fo3-water-q2070.h"
 #include "fo3-texture-bsa.h"
-#include "fo3-terrain-q76.h"
+#include "rendering/terrain/fo3-terrain.h"
 
 #include <GLES3/gl3.h>
 #include <android/log.h>
