@@ -15,24 +15,26 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Verify consolidated native layout
+      - name: Verify native source layout
         shell: bash
         run: |
           set -euo pipefail
-          if find app/src/main/cpp -maxdepth 1 -type f -name 'q*.cmake' | grep -q .; then
-            echo "Q-series CMake patch scripts must not return to the active source tree."
+          if find app/src/main/cpp -type f -name 'q*.cmake' | grep -q .; then
+            echo "Generated CMake patch scripts must not return to the active source tree."
             exit 1
           fi
           if grep -Eq 'file\(READ|string\(REPLACE' app/src/main/cpp/CMakeLists.txt; then
-            echo "Generated-source text patching is forbidden after Q17 consolidation."
+            echo "Generated-source text patching is forbidden in the canonical native build."
             exit 1
           fi
           for source in \
             fo3-runtime.cpp \
             fo3-cell-world.cpp \
             fo3-static-nif-runtime.cpp \
-            fo3-collision-runtime.cpp \
-            fo3-player-controller-runtime.inc; do
+            physics/fo3-collision-runtime.cpp \
+            fo3-player-controller-runtime.inc \
+            data/fo3-esm-reader.cpp \
+            npc/fo3-npc.cpp; do
             test -f "app/src/main/cpp/$source"
           done
           if grep -R -n '/home/runner/work/FalloutQuest' app/src/main/cpp \
