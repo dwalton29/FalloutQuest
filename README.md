@@ -2,7 +2,7 @@
 
 Experimental standalone Meta Quest runtime for user-supplied Fallout 3 game data.
 
-## Current milestone: 0.29.0 — Original audio
+## Current milestone: 0.30.1 — Loading animation and audio fixes
 
 The runtime now plays original item pickup sounds (YNAM), door/container open
 and close sounds (SNAM/ANAM/QNAM), and the original menu focus sound while
@@ -14,7 +14,8 @@ without a music override are left silent for now.
 
 Install your original **Data/Music/** directory and either **Data/Sound/** or
 **Data/Fallout - Sound.bsa** alongside the existing ESM in the app's
-`files/Fallout3/Data/` directory. Preserve subfolders. These assets are not bundled
+`files/Fallout3/Data/` directory. Extracted Sound/Music folders directly inside
+`files/Fallout3/` are also accepted. Preserve subfolders. These assets are not bundled
 in the APK. Missing files log their original path and do not block gameplay.
 The extracted Sound folder is available in Dropbox; the separate Music folder
 was absent when this milestone was built.

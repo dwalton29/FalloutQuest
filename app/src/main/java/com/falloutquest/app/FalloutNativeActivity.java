@@ -3,6 +3,7 @@ package com.falloutquest.app;
 import android.app.NativeActivity;
 import android.media.AudioAttributes;
 import android.media.MediaPlayer;
+import android.media.AudioManager;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.HandlerThread;
@@ -30,10 +31,12 @@ public final class FalloutNativeActivity extends NativeActivity {
         thread.start();
         audio = new Handler(thread.getLooper());
         super.onCreate(state);
+        setVolumeControlStream(AudioManager.STREAM_MUSIC);
+        Log.i("FalloutQuest", "AUDIO platform thread ready");
     }
     @Override public void onResume() {
         super.onResume();
-        audio.post(() -> { resumed = true; refresh(); });
+        audio.post(() -> { resumed = true; Log.i("FalloutQuest", "AUDIO activity resumed"); refresh(); });
     }
     @Override public void onPause() {
         audio.post(() -> { resumed = false; stopAll(); });
@@ -45,7 +48,7 @@ public final class FalloutNativeActivity extends NativeActivity {
     }
     // Called from the native worker, never directly operate MediaPlayer there.
     public void audioActive(boolean value) {
-        audio.post(() -> { if (focused != value) { focused = value; refresh(); } });
+        audio.post(() -> { if (focused != value) { focused = value; Log.i("FalloutQuest", "AUDIO XR focus=" + value); refresh(); } });
     }
     public void audioMusic(String playlist) {
         audio.post(() -> {
@@ -99,6 +102,7 @@ public final class FalloutNativeActivity extends NativeActivity {
             player.setOnPreparedListener(p -> {
                 if (enabled() && current.check()) {
                     p.setVolume(gain, gain); p.setLooping(loop); p.start();
+                    Log.i("FalloutQuest", "AUDIO playing: " + path + " gain=" + gain + " loop=" + loop);
                 }
             });
             player.setOnCompletionListener(p -> { if (current.check()) complete.run(); });

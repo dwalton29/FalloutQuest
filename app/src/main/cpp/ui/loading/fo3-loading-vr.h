@@ -31,6 +31,10 @@ struct CpuDisplay {
     std::vector<int> blockBones;
     fo3anim::Matrix uiToPanel=fo3anim::Identity(),panelToUi=fo3anim::Identity();
     float halfHeight=0.68f;
+    fo3anim::Skeleton compassHierarchy;
+    std::vector<fo3anim::Clip> compassClips;
+    std::vector<int> compassBlocks;
+    fo3anim::Matrix compassToPanel=fo3anim::Identity(),panelToCompass=fo3anim::Identity();
 };
 struct Shape { GLuint vao=0,vbo=0,ibo=0,texture=0; GLsizei count=0; bool unlit=false,blend=false; uint8_t sourceBlend=6,destBlend=7; float alpha=1,cutoff=0.02f; int bone=-1,slide=-1; float centre[3]{}; };
 inline fo3scene::Preparation<fo3loadingmenu::Definition> gCatalog;
@@ -52,6 +56,12 @@ inline float gUiHalfHeight=0.68f;
 inline fo3slideshow::Player gSlideshow;
 inline uint64_t gSlideStarted=0;
 inline std::vector<Matrix> gUiDeltas;
+inline fo3anim::Skeleton gCompassHierarchy;
+inline std::vector<fo3anim::Clip> gCompassClips;
+inline fo3anim::Pose gCompassPose;
+inline int gCompassClip=-1;
+inline fo3anim::Matrix gCompassToPanel=fo3anim::Identity(),gPanelToCompass=fo3anim::Identity();
+inline std::vector<Matrix> gCompassDeltas;
 inline std::vector<size_t> gUiDrawOrder;
 inline GLuint gArt=0,gProgram=0,gQuad=0,gQuadBuffer=0;
 inline GLuint gFramebuffer=0,gColour=0,gDepth=0;
@@ -85,7 +95,7 @@ inline void PrepareCatalog() {
 inline void SetHead(float x,float y,float z,float qx,float qy,float qz,float qw) {
     gHead=fo3loadingpose::Anchor(x,y,z,qx,qy,qz,qw);
 }
-inline void PrepareVertices(std::vector<CpuShape>& source,bool compass,float uiExtent=0.17f);
+inline void PrepareVertices(std::vector<CpuShape>& source,bool compass,float uiExtent=0.17f,fo3anim::Matrix* mapping=nullptr);
 inline bool ReadShapes(const std::string& path,std::vector<CpuShape>& out,
                        const std::atomic<bool>& cancelled,bool originalUi=false) {
     std::vector<Fo3StaticNifMesh> meshes;
@@ -130,7 +140,7 @@ inline GLuint UploadImage(const Fo3RgbaTexture& image) {
     glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA,image.width,image.height,0,GL_RGBA,GL_UNSIGNED_BYTE,image.rgba.data());
     return texture;
 }
-inline void PrepareVertices(std::vector<CpuShape>& source,bool compass,float uiExtent) {
+inline void PrepareVertices(std::vector<CpuShape>& source,bool compass,float uiExtent,fo3anim::Matrix* mapping) {
     float lo[3]={INFINITY,INFINITY,INFINITY},hi[3]={-INFINITY,-INFINITY,-INFINITY};
     for(const auto& s:source) for(size_t i=0;i+2<s.mesh.positions.size();i+=3)
         for(int a=0;a<3;++a) {lo[a]=std::min(lo[a],s.mesh.positions[i+a]);hi[a]=std::max(hi[a],s.mesh.positions[i+a]);}
@@ -146,6 +156,16 @@ inline void PrepareVertices(std::vector<CpuShape>& source,bool compass,float uiE
     }
     const float diagonal=std::sqrt(span[0]*span[0]+span[1]*span[1]+span[2]*span[2]);
     const float scale=compass?uiExtent/extent:0.72f/diagonal;
+    if(mapping) {
+        *mapping=fo3anim::Identity();
+        for(int c=0;c<3;++c)for(int r=0;r<3;++r)(*mapping)[c*4+r]=0;
+        const int axes[3]={ax,ay,az};
+        for(int a=0;a<3;++a) {
+            const float sign=(!compass&&a==2)?-1.0f:1.0f;
+            (*mapping)[axes[a]*4+a]=scale*sign;
+            (*mapping)[12+a]=-(lo[axes[a]]+hi[axes[a]])*0.5f*scale*sign;
+        }
+    }
     for(auto& src:source) {
         auto& m=src.mesh;
         std::vector<Vertex> v(m.positions.size()/3);
@@ -194,6 +214,7 @@ inline bool PrepareOverlay(CpuDisplay& display) {
             auto point=fo3anim::Point(map,{mesh.positions[i*3],mesh.positions[i*3+1],mesh.positions[i*3+2]});
             std::copy(point.begin(),point.end(),v.p);v.n[0]=v.n[1]=0;v.n[2]=1;
             for(int a=0;a<2;++a)v.uv[a]=mesh.texcoords.size()==shape.vertices.size()*2?mesh.texcoords[i*2+a]:0;
+            if(shape.slide>=0)v.uv[1]=1.0f-v.uv[1];
             for(int a=0;a<4;++a)v.colour[a]=mesh.vertexColors.size()==shape.vertices.size()*4?mesh.vertexColors[i*4+a]:1;
         }
         mesh.positions.clear();mesh.normals.clear();mesh.texcoords.clear();mesh.vertexColors.clear();
@@ -296,7 +317,14 @@ inline void AdvanceAssets() {
                     paths.push_back(choice->iconPath);slideBytes+=image.rgba.size();out.slides.push_back(std::move(image));
                 }
             }
-            if(needCompass)ReadShapes(menu.compassPath,out.compass,cancelled,true);
+            if(needCompass) {
+                ReadShapes(menu.compassPath,out.compass,cancelled,true);
+                std::vector<uint8_t> bytes;
+                if(LoadFalloutMeshFile(menu.compassPath,bytes,nullptr))
+                    fo3anim::DecodeUiAnimation(bytes,out.compassHierarchy,out.compassBlocks,out.compassClips);
+                for(auto& shape:out.compass)
+                    if(shape.mesh.shapeBlock<out.compassBlocks.size())shape.bone=out.compassBlocks[shape.mesh.shapeBlock];
+            }
             if(needOverlay) {
                 ReadShapes(menu.overlayPath,out.overlay,cancelled,true);
                 std::vector<uint8_t> bytes;
@@ -319,7 +347,8 @@ inline void AdvanceAssets() {
                     if(ReadShapes(path,out.model,cancelled)) {out.modelPath=path;break;}
                 }
             }
-            PrepareVertices(out.model,false);PrepareVertices(out.compass,true);
+            PrepareVertices(out.model,false);PrepareVertices(out.compass,true,0.17f,&out.compassToPanel);
+            fo3anim::Inverse(out.compassToPanel,out.panelToCompass);
             return !cancelled.load();
         });
         if(!gJobStarted)gUploaded=true; // Thread creation failure must not trap a transition.
@@ -349,7 +378,15 @@ inline void AdvanceAssets() {
                 UploadShape(cpu.model[gModelUpload++],gNextModel,false);return;
             }
             DeleteShapes(gModel);gModel.swap(gNextModel);
-            if(!gNextCompass.empty()) {DeleteShapes(gCompass);gCompass.swap(gNextCompass);}
+            if(!gNextCompass.empty()) {
+                DeleteShapes(gCompass);gCompass.swap(gNextCompass);
+                gCompassHierarchy=std::move(cpu.compassHierarchy);gCompassClips=std::move(cpu.compassClips);
+                gCompassToPanel=cpu.compassToPanel;gPanelToCompass=cpu.panelToCompass;gCompassClip=-1;
+                for(size_t i=0;i<gCompassClips.size();++i)
+                    if(gCompassClips[i].name==gMenu.compassAnimation)gCompassClip=static_cast<int>(i);
+                if(gCompassClip>=0)fo3anim::BindClip(gCompassHierarchy,gCompassClips[gCompassClip],gCompassPose);
+                gCompassDeltas.resize(gCompassHierarchy.bones.size());
+            }
             if(!gNextOverlay.empty()) {
                 DeleteShapes(gOverlay);gOverlay.swap(gNextOverlay);
                 gUiHierarchy=std::move(cpu.hierarchy);gUiClips=std::move(cpu.clips);
@@ -426,6 +463,11 @@ inline void Render(GLuint framebuffer,GLsizei width,GLsizei height,const float* 
         const uint64_t now=Fo3LoadingClockUs();
         gFrameSeconds=gVisibleStart?static_cast<float>(now-gVisibleStart)/1000000:0;
         gFrameRotationSeconds=gRotationStart?static_cast<float>(now-gRotationStart)/1000000:0;
+        if(gCompassClip>=0 && fo3anim::Sample(gCompassHierarchy,gCompassClips[gCompassClip],gFrameRotationSeconds,gCompassPose))
+            for(size_t i=0;i<gCompassDeltas.size();++i) {
+                auto delta=fo3anim::Multiply(gCompassToPanel,fo3anim::Multiply(gCompassPose.delta[i],gPanelToCompass));
+                std::copy(delta.begin(),delta.end(),gCompassDeltas[i].m);
+            }
         if(gSlideshow.Advance(gUiHierarchy,gUiClips,gSlideStarted?double(now-gSlideStarted)/1000000:0,gSlides.size())) {
             for(size_t i=0;i<gUiDeltas.size();++i) {
                 auto delta=fo3anim::Multiply(gUiToPanel,fo3anim::Multiply(gSlideshow.pose.delta[i],gPanelToUi));
@@ -477,13 +519,14 @@ inline void Render(GLuint framebuffer,GLsizei width,GLsizei height,const float* 
             glDepthMask(GL_TRUE);
             Matrix model=Multiply(panel,Placement(fo3loadingpose::ModelX,fo3loadingpose::ModelY,fo3loadingpose::PanelDistance-fo3loadingpose::ModelDistance,gFrameRotationSeconds*fo3loadingpose::RotationRadiansPerSecond));
             for(const auto& s:gModel)Draw(s,model);
-            // Bottom right of the artwork. Rotate the real mesh as a rigid UI
-            // emblem; this is not Gamebryo controller/Idle animation playback.
-            Matrix spin=fo3loadingpose::Identity();float a=-gFrameRotationSeconds*0.8f;
-            spin.m[0]=spin.m[5]=std::cos(a);spin.m[1]=std::sin(a);spin.m[4]=-std::sin(a);
-            Matrix compass=Multiply(panel,Multiply(Placement(1.04f,-(gSlideshow.running?gUiHalfHeight:1.2f/gArtAspect)+0.14f,0.10f,0),spin));
+            // The authored Idle sequence animates Pointer independently of
+            // the dial. Unsupported controller data leaves the dial stationary.
+            Matrix compass=Multiply(panel,Placement(1.04f,-(gSlideshow.running?gUiHalfHeight:1.2f/gArtAspect)+0.14f,0.10f,0));
             glDisable(GL_DEPTH_TEST);
-            for(const auto& s:gCompass)Draw(s,compass,1);
+            for(const auto& shape:gCompass) {
+                const Matrix& delta=gCompassClip>=0 && shape.bone>=0 && static_cast<size_t>(shape.bone)<gCompassDeltas.size()?gCompassDeltas[shape.bone]:identity;
+                Draw(shape,Multiply(compass,delta),1);
+            }
         }
         glBindFramebuffer(GL_READ_FRAMEBUFFER,gFramebuffer);glBindFramebuffer(GL_DRAW_FRAMEBUFFER,framebuffer);
         glBlitFramebuffer(0,0,width,height,0,0,width,height,GL_COLOR_BUFFER_BIT,GL_NEAREST);
@@ -505,6 +548,7 @@ inline void Shutdown() {
     gCatalogStarted=gCatalogFailed=false;gJobStarted=gUploaded=false;
     DeleteShapes(gModel);DeleteShapes(gCompass);DeleteShapes(gOverlay);DeleteShapes(gNextModel);DeleteShapes(gNextCompass);DeleteShapes(gNextOverlay);DeleteImages(gSlides);DeleteImages(gNextSlides);
     gUiHierarchy={};gUiClips.clear();gSlideshow={};gUiDeltas.clear();gUiDrawOrder.clear();
+    gCompassHierarchy={};gCompassClips.clear();gCompassPose={};gCompassClip=-1;gCompassDeltas.clear();
     if(gArt)glDeleteTextures(1,&gArt);
     if(gColour)glDeleteTextures(1,&gColour);
     if(gDepth)glDeleteRenderbuffers(1,&gDepth);

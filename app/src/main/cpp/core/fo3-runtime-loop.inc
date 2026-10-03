@@ -1064,6 +1064,7 @@ private:
                 if (sessionState_ == XR_SESSION_STATE_FOCUSED && changed->state != XR_SESSION_STATE_FOCUSED)
                     FlushFo3PlayerState();
                 sessionState_ = changed->state;
+                fo3audio::Context(gCurrentCellFormId,sessionState_ == XR_SESSION_STATE_FOCUSED);
                 FQ_LOGI("OpenXR session state -> %d", static_cast<int>(sessionState_));
 
                 if (sessionState_ == XR_SESSION_STATE_READY && !sessionRunning_) {
@@ -1785,12 +1786,13 @@ private:
 extern "C" void android_main(struct android_app* app) {
     app_dummy();
     FQ_LOGI("FalloutQuest Q7.1 native OpenXR process booting");
+    fo3audio::Start(app->activity->vm, app->activity->clazz);
     FalloutQuestXr xr(app);
     if (!xr.Initialize()) {
         FQ_LOGE("FalloutQuest Q7.1 initialization failed");
+        fo3audio::Shutdown();
         return;
     }
-    fo3audio::Start(app->activity->vm, app->activity->clazz);
     xr.Run();
     fo3audio::Shutdown();
     xr.Shutdown();

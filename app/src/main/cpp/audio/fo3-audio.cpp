@@ -1,6 +1,7 @@
 #include "fo3-audio.h"
 #include "data/fo3-asset-store.h"
 #include "fo3-audio-catalog.h"
+#include "fo3-audio-assets.h"
 #include <algorithm>
 #include <android/log.h>
 #include <cctype>
@@ -34,35 +35,8 @@ struct Runtime {
   uint32_t lastCell = UINT32_MAX;
   bool lastActive = false;
 } runtime;
-// Resolve original Windows paths against case-sensitive Android storage.
 std::string Loose(const std::string &relative) {
-  if (!SafePath(relative))
-    return {};
-  std::string path = fo3assets::FalloutDataPath("");
-  size_t at = 0;
-  while (at < relative.size()) {
-    auto end = relative.find('/', at);
-    auto part = relative.substr(at, end - at);
-    DIR *d = opendir(path.c_str());
-    if (!d)
-      return {};
-    std::string found;
-    while (auto *entry = readdir(d)) {
-      if (strcasecmp(entry->d_name, part.c_str()) == 0) {
-        found = entry->d_name;
-        break;
-      }
-    }
-    closedir(d);
-    if (found.empty())
-      return {};
-    path += found;
-    if (end == std::string::npos)
-      break;
-    path += '/';
-    at = end + 1;
-  }
-  return path;
+  return FindAudioFile(fo3assets::FalloutDataPath(""),relative);
 }
 bool Playable(const std::string &p) {
   auto dot = p.rfind('.');
@@ -83,8 +57,10 @@ void Push(Event e) {
 }
 void Worker() {
   JNIEnv *env = nullptr;
-  if (runtime.vm->AttachCurrentThread(&env, nullptr) != JNI_OK)
+  if (runtime.vm->AttachCurrentThread(&env, nullptr) != JNI_OK) {
+    __android_log_print(ANDROID_LOG_ERROR,"FalloutQuest","AUDIO JNI attach failed");
     return;
+  }
   auto cls = env->GetObjectClass(runtime.activity);
   auto music = env->GetMethodID(cls, "audioMusic", "(Ljava/lang/String;)V"),
        effect = env->GetMethodID(cls, "audioEffect", "(Ljava/lang/String;F)V"),
@@ -92,6 +68,7 @@ void Worker() {
            env->GetMethodID(cls, "audioAmbient", "(Ljava/lang/String;F)V"),
        active = env->GetMethodID(cls, "audioActive", "(Z)V");
   if (env->ExceptionCheck() || !music || !effect || !ambient || !active) {
+    __android_log_print(ANDROID_LOG_ERROR,"FalloutQuest","AUDIO JNI bridge unavailable");
     env->ExceptionClear();
     env->DeleteLocalRef(cls);
     runtime.vm->DetachCurrentThread();
@@ -111,6 +88,7 @@ void Worker() {
       env->CallVoidMethod(runtime.activity, method, str);
     env->DeleteLocalRef(str);
     if (env->ExceptionCheck()) {
+      __android_log_print(ANDROID_LOG_ERROR,"FalloutQuest","AUDIO JNI playback call failed");
       env->ExceptionDescribe();
       env->ExceptionClear();
     }
@@ -128,35 +106,43 @@ void Worker() {
   std::unordered_map<std::string, std::string> extracted;
   std::vector<std::string> temporary;
   size_t cacheBytes = 0;
+  const auto archives=SoundArchives(fo3assets::FalloutDataPath(""));
+  __android_log_print(ANDROID_LOG_INFO,"FalloutQuest",
+      "AUDIO FILES: Sound=%s Music=%s archives=%zu dataRoot=%s",
+      Loose("sound/").empty()?"missing":"present",Loose("music/").empty()?"missing":"present",
+      archives.size(),fo3assets::FalloutDataPath("").c_str());
+  if(Loose("sound/").empty() && archives.empty())
+    __android_log_print(ANDROID_LOG_WARN,"FalloutQuest","AUDIO INSTALL REQUIRED: original Sound folder or Fallout - Sound.bsa is absent; APK contains no game audio");
+  if(Loose("music/").empty())
+    __android_log_print(ANDROID_LOG_WARN,"FalloutQuest","AUDIO INSTALL REQUIRED: original Music folder is absent; APK contains no game music");
   std::mt19937 random(std::random_device{}());
   auto choices = [&](const std::string &relative) {
     std::vector<std::string> result;
-    auto loose = Loose(relative);
-    struct stat st{};
-    if (!loose.empty() && !stat(loose.c_str(), &st)) {
-      if (S_ISREG(st.st_mode) && Playable(loose))
-        result.push_back(relative);
-      else if (S_ISDIR(st.st_mode)) {
-        DIR *d = opendir(loose.c_str());
-        if (d) {
-          while (auto *e = readdir(d)) {
-            if (Playable(e->d_name) && result.size() < 128)
-              result.push_back(relative + (relative.back() == '/' ? "" : "/") +
-                               e->d_name);
+    for(const auto& root:AudioRoots(fo3assets::FalloutDataPath(""))) {
+      auto loose=LooseAt(root,relative);
+      struct stat st{};
+      if(!loose.empty() && !stat(loose.c_str(),&st)) {
+        if(S_ISREG(st.st_mode) && Playable(loose))result.push_back(relative);
+        else if(S_ISDIR(st.st_mode)) {
+          DIR* d=opendir(loose.c_str());
+          if(d) {
+            while(auto* entry=readdir(d))
+              if(Playable(entry->d_name) && result.size()<128)
+                result.push_back(relative+(relative.back()=='/'?"":"/")+entry->d_name);
+            closedir(d);
           }
-          closedir(d);
         }
       }
+      if(!result.empty())break;
     }
-    if (result.empty() && relative.rfind("sound/", 0) == 0 &&
-        relative.back() == '/') {
-      std::vector<fo3assets::BsaFileInfo> files;
-      fo3assets::GetBsaArchive(
-          fo3assets::FalloutDataPath("Fallout - Sound.bsa"))
-          ->List(relative, files, fo3assets::BsaPathKind::Exact, 128);
-      for (auto &f : files)
-        if (Playable(f.path))
-          result.push_back(f.path);
+    if (result.empty() && relative.rfind("sound/", 0) == 0 && !Playable(relative)) {
+      for(const auto& archive:archives) {
+        std::vector<fo3assets::BsaFileInfo> files;
+        const auto prefix=relative.back()=='/'?relative:relative+'/';
+        fo3assets::GetBsaArchive(archive)->List(prefix,files,fo3assets::BsaPathKind::Exact,128);
+        for(auto& f:files)if(Playable(f.path))result.push_back(f.path);
+        if(!result.empty())break;
+      }
     }
     std::sort(result.begin(), result.end());
     return result;
@@ -175,12 +161,10 @@ void Worker() {
     if (!Playable(path) || extracted.size() >= 128)
       return std::string{};
     std::vector<uint8_t> bytes;
-    if (!fo3assets::GetBsaArchive(
-             fo3assets::FalloutDataPath("Fallout - Sound.bsa"))
-             ->Read(path, bytes, nullptr, fo3assets::BsaPathKind::Exact,
-                    8 * 1024 * 1024) ||
-        cacheBytes + bytes.size() > 64 * 1024 * 1024)
-      return std::string{};
+    bool loaded=false;
+    for(const auto& archive:archives)
+      if(fo3assets::GetBsaArchive(archive)->Read(path,bytes,nullptr,fo3assets::BsaPathKind::Exact,8*1024*1024)) {loaded=true;break;}
+    if(!loaded || cacheBytes+bytes.size()>64*1024*1024)return std::string{};
     auto target = "/data/user/0/com.falloutquest.app/cache/fq-audio-" +
                   std::to_string(getpid()) + "-" +
                   std::to_string(temporary.size()) +
@@ -224,6 +208,7 @@ void Worker() {
       runtime.events.pop_front();
     }
     if (e.kind == 0) {
+      __android_log_print(ANDROID_LOG_INFO,"FalloutQuest","AUDIO CONTEXT: cell=%08X focused=%d",e.id,e.active);
       env->CallVoidMethod(runtime.activity, active, jboolean(e.active));
       if (env->ExceptionCheck())
         env->ExceptionClear();
@@ -243,6 +228,7 @@ void Worker() {
                 ANDROID_LOG_WARN, "FalloutQuest",
                 "AUDIO missing music: %s (install original Data/Music)",
                 relative.c_str());
+          __android_log_print(ANDROID_LOG_INFO,"FalloutQuest","AUDIO MUSIC: original=%s tracks=%zu",relative.c_str(),static_cast<size_t>(std::count(playlist.begin(),playlist.end(),'\n')));
           call(music, playlist, 1, false);
         }
         sound(catalog.AmbientForCell(cell), ambient);
