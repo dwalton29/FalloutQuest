@@ -1,6 +1,6 @@
 #pragma once
 
-// Q16.9: Fallout 3's authored HUDMainMenu/Info interaction widget.
+// Fallout 3's authored HUDMainMenu/Info interaction widget.
 // No Bethesda assets are embedded here. The runtime reads the user's own
 // Fallout - Textures.bsa and interprets the exact vanilla FNT/TAI/TEX/DDS data.
 
@@ -20,7 +20,7 @@
 #include <vector>
 #include <zlib.h>
 
-namespace fo3q1790 {
+namespace fo3hudassets {
 
 constexpr const char* kTag = "FalloutQuest";
 constexpr const char* kTextureBsaPaths[] = {
@@ -209,7 +209,7 @@ inline bool LoadRawFromOneBsa(const char* path, const std::string& request,
     }
     if (resolved) *resolved = storedPath;
     __android_log_print(ANDROID_LOG_INFO, kTag,
-                        "Q16.9 RAW UI ASSET: path=%s bytes=%zu compressed=%d",
+                        "RAW UI ASSET: path=%s bytes=%zu compressed=%d",
                         storedPath.c_str(), out.size(), compressed ? 1 : 0);
     return true;
 }
@@ -220,7 +220,7 @@ inline bool LoadRaw(const std::string& request, std::vector<uint8_t>& out,
         if (LoadRawFromOneBsa(path, request, out, resolved)) return true;
     }
     __android_log_print(ANDROID_LOG_ERROR, kTag,
-                        "Q16.9 RAW UI ASSET MISS: %s", request.c_str());
+                        "RAW UI ASSET MISS: %s", request.c_str());
     return false;
 }
 
@@ -281,7 +281,7 @@ inline bool ParseFont(Font& out) {
 
     const Glyph& o = out.glyphs[static_cast<uint8_t>('O')];
     __android_log_print(ANDROID_LOG_INFO, kTag,
-                        "Q16.9 FNT READY: lineHeight=%.1f atlas=%s %dx%d O=(%.0fx%.0f adv=%.0f)",
+                        "FNT READY: lineHeight=%.1f atlas=%s %dx%d O=(%.0fx%.0f adv=%.0f)",
                         out.lineHeight, out.texPath.c_str(), out.textureWidth, out.textureHeight,
                         o.width, o.height, o.advance);
     return true;
@@ -332,7 +332,7 @@ inline bool ParseButtonTai(TaiSprite& out) {
         out.h = std::strtof(fields[7].c_str(), nullptr);
         if (out.atlasPath.empty() || out.w <= 0.0f || out.h <= 0.0f) return false;
         __android_log_print(ANDROID_LOG_INFO, kTag,
-                            "Q16.9 TAI READY: alias=%s atlas=%s uv=(%.6f %.6f %.6f %.6f)",
+                            "TAI READY: alias=%s atlas=%s uv=(%.6f %.6f %.6f %.6f)",
                             alias.c_str(), out.atlasPath.c_str(), out.u, out.v, out.w, out.h);
         return true;
     }
@@ -376,7 +376,7 @@ inline GLuint CompileShader(GLenum type, const char* source) {
         GLsizei n = 0;
         glGetShaderInfoLog(shader, sizeof(log), &n, log);
         __android_log_print(ANDROID_LOG_ERROR, kTag,
-                            "Q16.9 HUD SHADER FAILED: %.*s", static_cast<int>(n), log);
+                            "HUD SHADER FAILED: %.*s", static_cast<int>(n), log);
         glDeleteShader(shader);
         return 0;
     }
@@ -423,7 +423,7 @@ void main() {
         GLsizei n = 0;
         glGetProgramInfoLog(p, sizeof(log), &n, log);
         __android_log_print(ANDROID_LOG_ERROR, kTag,
-                            "Q16.9 HUD PROGRAM FAILED: %.*s", static_cast<int>(n), log);
+                            "HUD PROGRAM FAILED: %.*s", static_cast<int>(n), log);
         glDeleteProgram(p);
         return 0;
     }
@@ -478,14 +478,14 @@ inline bool Initialize() {
     TaiSprite button;
     if (!ParseFont(font) || !ParseButtonTai(button)) {
         __android_log_print(ANDROID_LOG_ERROR, kTag,
-                            "Q16.9 REAL HUD UNAVAILABLE: vanilla FNT/TAI assets could not be read");
+                            "REAL HUD UNAVAILABLE: vanilla FNT/TAI assets could not be read");
         return false;
     }
 
     Fo3RgbaTexture interfaceAtlas;
     if (!LoadFalloutTextureRgba(button.atlasPath, interfaceAtlas)) {
         __android_log_print(ANDROID_LOG_ERROR, kTag,
-                            "Q16.9 REAL HUD UNAVAILABLE: InterfaceShared atlas failed: %s",
+                            "REAL HUD UNAVAILABLE: InterfaceShared atlas failed: %s",
                             button.atlasPath.c_str());
         return false;
     }
@@ -590,16 +590,16 @@ inline bool Initialize() {
     s.ready = s.vao && s.vbo && s.mvpLoc >= 0 && s.tintLoc >= 0 && s.texLoc >= 0;
 
     __android_log_print(s.ready ? ANDROID_LOG_INFO : ANDROID_LOG_ERROR, kTag,
-                        "Q16.9 REAL HUD ASSETS READY: ready=%d font=%s interface=%s OpenWidth=%.1f DoorWidth=%.1f button=75x75 scale=%.6fm/px",
+                        "REAL HUD ASSETS READY: ready=%d font=%s interface=%s OpenWidth=%.1f DoorWidth=%.1f button=75x75 scale=%.6fm/px",
                         s.ready ? 1 : 0, font.texPath.c_str(), button.atlasPath.c_str(),
                         openWidth, doorWidth, metresPerPixel);
     return s.ready;
 }
 
-} // namespace fo3q1790
+} // namespace fo3hudassets
 
-inline void RenderFo3InteractionHudQ1790(const float* mvp) {
-    using namespace fo3q1790;
+inline void RenderFo3InteractionHudStatic(const float* mvp) {
+    using namespace fo3hudassets;
     if (!mvp || !Initialize()) return;
     HudState& s = State();
 
@@ -607,7 +607,7 @@ inline void RenderFo3InteractionHudQ1790(const float* mvp) {
     if (!logged) {
         logged = true;
         __android_log_print(ANDROID_LOG_INFO, kTag,
-                            "Q16.11 REAL HUD DRAW: source=HUDMainMenu/Info button=glow_general_button_a.dds font=Baked-in_Monofonto_Large text=Open/Door uv=authored-no-flip");
+                            "REAL HUD DRAW: source=HUDMainMenu/Info button=glow_general_button_a.dds font=Baked-in_Monofonto_Large text=Open/Door uv=authored-no-flip");
     }
 
     GLint oldProgram = 0, oldVao = 0, oldBuffer = 0, oldActiveTexture = 0, oldTexture = 0;
@@ -651,8 +651,8 @@ inline void RenderFo3InteractionHudQ1790(const float* mvp) {
     glActiveTexture(static_cast<GLenum>(oldActiveTexture));
 }
 
-inline void ShutdownFo3InteractionHudQ1790() {
-    using namespace fo3q1790;
+inline void ShutdownFo3InteractionHudStatic() {
+    using namespace fo3hudassets;
     HudState& s = State();
     if (s.vbo) glDeleteBuffers(1, &s.vbo);
     if (s.vao) glDeleteVertexArrays(1, &s.vao);

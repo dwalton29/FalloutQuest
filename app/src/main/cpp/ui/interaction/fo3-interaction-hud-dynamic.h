@@ -1,15 +1,14 @@
 #pragma once
 
-// Q16.12 dynamic renderer for Fallout 3's HUDMainMenu/Info widget.
+// dynamic renderer for Fallout 3's HUDMainMenu/Info widget.
 //
-// IMPORTANT: this header is included immediately after the generated Q16.11
-// fo3-interaction-hud-q1830.h, so the exact vanilla FNT/TAI parsers and glyph
-// structures in namespace fo3q1790 are already available. No Bethesda asset is
+// IMPORTANT: this header is included immediately after the generated // fo3-interaction-hud-q1830.h, so the exact vanilla FNT/TAI parsers and glyph
+// structures in namespace fo3hudassets are already available. No Bethesda asset is
 // embedded here; all pixels still come from the user's Fallout - Textures.bsa.
 //
-// Q16.9 built one static two-line "Open" / "Door" VBO. Fallout's text_box.xml
+// built one static two-line "Open" / "Door" VBO. Fallout's text_box.xml
 // actually receives one interaction string and derives its box from that text.
-// Q16.12 therefore rebuilds only the small text VBO when the authored prompt
+// therefore rebuilds only the small text VBO when the authored prompt
 // changes, while keeping textures/program/resources alive when aim is lost.
 
 #include <GLES3/gl3.h>
@@ -23,11 +22,11 @@
 #include <string>
 #include <vector>
 
-namespace fo3hudq1840 {
+namespace fo3huddynamic {
 
-constexpr const char* kTagQ1840 = "FalloutQuest";
+constexpr const char* kTag = "FalloutQuest";
 
-struct HudStateQ1840 {
+struct HudState {
     bool attempted = false;
     bool ready = false;
     GLuint program = 0u;
@@ -43,21 +42,21 @@ struct HudStateQ1840 {
     GLsizei textFirst = 0;
     GLsizei textCount = 0;
     float lineHeight = 0.0f;
-    std::array<fo3q1790::Glyph, 256> glyphs{};
-    fo3q1790::TaiSprite button{};
+    std::array<fo3hudassets::Glyph, 256> glyphs{};
+    fo3hudassets::TaiSprite button{};
     std::string prompt;
 };
 
-inline HudStateQ1840& StateQ1840() {
-    static HudStateQ1840 state;
+inline HudState& State() {
+    static HudState state;
     return state;
 }
 
-// Snapshot BEFORE EnsureResourcesQ1840(). Q16.9 captured state only after its
+// Snapshot BEFORE EnsureResources(). captured state only after its
 // first-time GL initialization had already bound/unbound textures and VAOs. That
 // meant the first prompt draw could permanently clobber the caller's bindings;
 // losing aim on the next frame then exposed the damaged render state.
-struct GlStateGuardQ1840 {
+struct GlStateGuard {
     GLint program = 0;
     GLint vao = 0;
     GLint arrayBuffer = 0;
@@ -75,7 +74,7 @@ struct GlStateGuardQ1840 {
     GLboolean blendEnabled = GL_FALSE;
     GLboolean depthMask = GL_TRUE;
 
-    GlStateGuardQ1840() {
+    GlStateGuard() {
         glGetIntegerv(GL_CURRENT_PROGRAM, &program);
         glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &vao);
         glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &arrayBuffer);
@@ -99,7 +98,7 @@ struct GlStateGuardQ1840 {
         glActiveTexture(static_cast<GLenum>(activeTexture));
     }
 
-    ~GlStateGuardQ1840() {
+    ~GlStateGuard() {
         glUseProgram(static_cast<GLuint>(program));
         glBindVertexArray(static_cast<GLuint>(vao));
         glBindBuffer(GL_ARRAY_BUFFER, static_cast<GLuint>(arrayBuffer));
@@ -123,32 +122,32 @@ struct GlStateGuardQ1840 {
     }
 };
 
-inline bool EnsureResourcesQ1840() {
-    HudStateQ1840& s = StateQ1840();
+inline bool EnsureResources() {
+    HudState& s = State();
     if (s.attempted) return s.ready;
     s.attempted = true;
 
-    fo3q1790::Font font;
-    fo3q1790::TaiSprite button;
-    if (!fo3q1790::ParseFont(font) || !fo3q1790::ParseButtonTai(button)) {
-        __android_log_print(ANDROID_LOG_ERROR, kTagQ1840,
-                            "Q16.12 HUD ASSET INIT FAILED: vanilla FNT/TAI unavailable");
+    fo3hudassets::Font font;
+    fo3hudassets::TaiSprite button;
+    if (!fo3hudassets::ParseFont(font) || !fo3hudassets::ParseButtonTai(button)) {
+        __android_log_print(ANDROID_LOG_ERROR, kTag,
+                            "HUD ASSET INIT FAILED: vanilla FNT/TAI unavailable");
         return false;
     }
 
     Fo3RgbaTexture interfaceAtlas;
     if (!LoadFalloutTextureRgba(button.atlasPath, interfaceAtlas)) {
-        __android_log_print(ANDROID_LOG_ERROR, kTagQ1840,
-                            "Q16.12 HUD ASSET INIT FAILED: interface atlas=%s",
+        __android_log_print(ANDROID_LOG_ERROR, kTag,
+                            "HUD ASSET INIT FAILED: interface atlas=%s",
                             button.atlasPath.c_str());
         return false;
     }
 
-    s.program = fo3q1790::BuildProgram();
+    s.program = fo3hudassets::BuildProgram();
     if (!s.program) return false;
-    s.fontTexture = fo3q1790::UploadTexture(font.textureWidth, font.textureHeight,
+    s.fontTexture = fo3hudassets::UploadTexture(font.textureWidth, font.textureHeight,
                                             font.rgba.data());
-    s.interfaceTexture = fo3q1790::UploadTexture(interfaceAtlas.width,
+    s.interfaceTexture = fo3hudassets::UploadTexture(interfaceAtlas.width,
                                                  interfaceAtlas.height,
                                                  interfaceAtlas.rgba.data());
     if (!s.fontTexture || !s.interfaceTexture) return false;
@@ -165,19 +164,19 @@ inline bool EnsureResourcesQ1840() {
               s.mvpLoc >= 0 && s.tintLoc >= 0 && s.texLoc >= 0;
 
     __android_log_print(s.ready ? ANDROID_LOG_INFO : ANDROID_LOG_ERROR,
-                        kTagQ1840,
-                        "Q16.12 HUD GL SAFE INIT: ready=%d stateCapturedBeforeAssets=1 font=%s interface=%s",
+                        kTag,
+                        "HUD GL SAFE INIT: ready=%d stateCapturedBeforeAssets=1 font=%s interface=%s",
                         s.ready ? 1 : 0, font.texPath.c_str(), button.atlasPath.c_str());
     return s.ready;
 }
 
-inline float TextWidthQ1840(const HudStateQ1840& s, const std::string& text) {
+inline float TextWidth(const HudState& s, const std::string& text) {
     float width = 0.0f;
     for (unsigned char ch : text) width += s.glyphs[ch].advance;
     return width;
 }
 
-inline void AddQuadQ1840(std::vector<fo3q1790::Vertex>& verts,
+inline void AddQuad(std::vector<fo3hudassets::Vertex>& verts,
                          float x0, float y0, float x1, float y1, float z,
                          float uTL, float vTL, float uTR, float vTR,
                          float uBL, float vBL, float uBR, float vBR) {
@@ -189,8 +188,8 @@ inline void AddQuadQ1840(std::vector<fo3q1790::Vertex>& verts,
     verts.push_back({x1, y1, z, uBR, vBR});
 }
 
-inline bool BuildPromptGeometryQ1840(const std::string& prompt) {
-    HudStateQ1840& s = StateQ1840();
+inline bool BuildPromptGeometry(const std::string& prompt) {
+    HudState& s = State();
     if (!s.ready || prompt.empty()) return false;
     if (s.prompt == prompt && s.textCount > 0) return true;
 
@@ -203,8 +202,8 @@ inline bool BuildPromptGeometryQ1840(const std::string& prompt) {
     //   glow text y += 7 after vertical centering
     //   Xbox image = 75x75
     //   left placement x = box.x - (75 - 10) = box.x - 65
-    // This is ONE interaction string, not Q16.9's invented two-line layout.
-    const float textWidth = TextWidthQ1840(s, prompt);
+    // This is ONE interaction string, not 's invented two-line layout.
+    const float textWidth = TextWidth(s, prompt);
     const float textHeight = s.lineHeight;
     const float boxWidth = textWidth + 20.0f;
     const float boxHeight = textHeight + 10.0f;
@@ -230,7 +229,7 @@ inline bool BuildPromptGeometryQ1840(const std::string& prompt) {
         return anchorY - (py - contentCenterY) * metresPerPixel;
     };
 
-    std::vector<fo3q1790::Vertex> verts;
+    std::vector<fo3hudassets::Vertex> verts;
     verts.reserve(6u * (1u + prompt.size()));
 
     s.buttonFirst = static_cast<GLsizei>(verts.size());
@@ -238,7 +237,7 @@ inline bool BuildPromptGeometryQ1840(const std::string& prompt) {
     const float bu1 = s.button.u + s.button.w;
     const float bvTop = s.button.v;
     const float bvBottom = s.button.v + s.button.h;
-    AddQuadQ1840(verts,
+    AddQuad(verts,
                  X(buttonX0), Y(buttonY0),
                  X(buttonX0 + 75.0f), Y(buttonY0 + 75.0f), anchorZ,
                  bu0, bvTop, bu1, bvTop,
@@ -248,15 +247,15 @@ inline bool BuildPromptGeometryQ1840(const std::string& prompt) {
     s.textFirst = static_cast<GLsizei>(verts.size());
     float penX = textCenterX - textWidth * 0.5f;
     for (unsigned char ch : prompt) {
-        const fo3q1790::Glyph& g = s.glyphs[ch];
+        const fo3hudassets::Glyph& g = s.glyphs[ch];
         if (g.width > 0.0f && g.height > 0.0f) {
             const float gx0 = penX + g.xOffset;
             const float gy0 = textTopY + g.yOffset;
             const float gx1 = gx0 + g.width;
             const float gy1 = gy0 + g.height;
-            // Q16.11 verified these are already authored for the raw .tex row
+            // verified these are already authored for the raw .tex row
             // convention. Do not vertically flip them.
-            AddQuadQ1840(verts, X(gx0), Y(gy0), X(gx1), Y(gy1), anchorZ,
+            AddQuad(verts, X(gx0), Y(gy0), X(gx1), Y(gy1), anchorZ,
                          g.uv[0], g.uv[1], g.uv[2], g.uv[3],
                          g.uv[4], g.uv[5], g.uv[6], g.uv[7]);
         }
@@ -268,37 +267,37 @@ inline bool BuildPromptGeometryQ1840(const std::string& prompt) {
     glBindVertexArray(s.vao);
     glBindBuffer(GL_ARRAY_BUFFER, s.vbo);
     glBufferData(GL_ARRAY_BUFFER,
-                 static_cast<GLsizeiptr>(verts.size() * sizeof(fo3q1790::Vertex)),
+                 static_cast<GLsizeiptr>(verts.size() * sizeof(fo3hudassets::Vertex)),
                  verts.data(), GL_DYNAMIC_DRAW);
     glEnableVertexAttribArray(0);
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE,
-                          sizeof(fo3q1790::Vertex), reinterpret_cast<const void*>(0));
+                          sizeof(fo3hudassets::Vertex), reinterpret_cast<const void*>(0));
     glEnableVertexAttribArray(1);
     glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE,
-                          sizeof(fo3q1790::Vertex),
+                          sizeof(fo3hudassets::Vertex),
                           reinterpret_cast<const void*>(3u * sizeof(float)));
 
     s.prompt = prompt;
-    __android_log_print(ANDROID_LOG_INFO, kTagQ1840,
-                        "Q16.12 HUD TEXT GEOMETRY: text=\"%s\" textWidth=%.1f box=(%.1fx%.1f) button=75x75 singleLine=1 horbuf=20 verbuf=10 glowOffset=(-4,+7)",
+    __android_log_print(ANDROID_LOG_INFO, kTag,
+                        "HUD TEXT GEOMETRY: text=\"%s\" textWidth=%.1f box=(%.1fx%.1f) button=75x75 singleLine=1 horbuf=20 verbuf=10 glowOffset=(-4,+7)",
                         prompt.c_str(), textWidth, boxWidth, boxHeight);
     return true;
 }
 
-inline void RenderQ1840(const float* mvp, const char* promptChars) {
+inline void Render(const float* mvp, const char* promptChars) {
     if (!mvp || !promptChars || !promptChars[0]) return;
 
     // The guard is intentionally the first GL operation in this function. Force
     // any first-time UploadTexture work onto unit zero, whose binding the guard
     // owns and restores, rather than clobbering an arbitrary caller-active unit.
-    GlStateGuardQ1840 guard;
+    GlStateGuard guard;
     glActiveTexture(GL_TEXTURE0);
-    if (!EnsureResourcesQ1840()) return;
+    if (!EnsureResources()) return;
 
     const std::string prompt(promptChars);
-    if (!BuildPromptGeometryQ1840(prompt)) return;
+    if (!BuildPromptGeometry(prompt)) return;
 
-    HudStateQ1840& s = StateQ1840();
+    HudState& s = State();
     glDisable(GL_DEPTH_TEST);
     glDepthMask(GL_FALSE);
     glEnable(GL_BLEND);
@@ -322,14 +321,14 @@ inline void RenderQ1840(const float* mvp, const char* promptChars) {
     static std::string lastLoggedPrompt;
     if (lastLoggedPrompt != prompt) {
         lastLoggedPrompt = prompt;
-        __android_log_print(ANDROID_LOG_INFO, kTagQ1840,
-                            "Q16.12 REAL HUD DRAW: text=\"%s\" source=HUDMainMenu/Info layout=text_box.xml singleLine=1 uv=authored-no-flip glSandbox=1",
+        __android_log_print(ANDROID_LOG_INFO, kTag,
+                            "REAL HUD DRAW: text=\"%s\" source=HUDMainMenu/Info layout=text_box.xml singleLine=1 uv=authored-no-flip glSandbox=1",
                             prompt.c_str());
     }
 }
 
-inline void ShutdownQ1840() {
-    HudStateQ1840& s = StateQ1840();
+inline void Shutdown() {
+    HudState& s = State();
     if (s.vbo) glDeleteBuffers(1, &s.vbo);
     if (s.vao) glDeleteVertexArrays(1, &s.vao);
     if (s.fontTexture) glDeleteTextures(1, &s.fontTexture);
@@ -338,12 +337,12 @@ inline void ShutdownQ1840() {
     s = {};
 }
 
-} // namespace fo3hudq1840
+} // namespace fo3huddynamic
 
-inline void RenderFo3InteractionHudQ1840(const float* mvp, const char* prompt) {
-    fo3hudq1840::RenderQ1840(mvp, prompt);
+inline void RenderFo3InteractionHudDynamic(const float* mvp, const char* prompt) {
+    fo3huddynamic::Render(mvp, prompt);
 }
 
-inline void ShutdownFo3InteractionHudQ1840() {
-    fo3hudq1840::ShutdownQ1840();
+inline void ShutdownFo3InteractionHudDynamic() {
+    fo3huddynamic::Shutdown();
 }

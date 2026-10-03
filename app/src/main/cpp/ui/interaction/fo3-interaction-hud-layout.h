@@ -1,23 +1,23 @@
 #pragma once
 
-// Q16.16: baseline-aware Fallout 3 HUDMainMenu/Info text geometry.
+// baseline-aware Fallout 3 HUDMainMenu/Info text geometry.
 //
-// Q16.13 correctly reads the user's vanilla Baked-in_Monofonto_Large FNT and
+// correctly reads the user's vanilla Baked-in_Monofonto_Large FNT and
 // uses the authored horizontal advances, including the special 13px space.
-// Device imagery exposed one remaining interpretation bug: Q16.13 treated the
+// Device imagery exposed one remaining interpretation bug: treated the
 // per-glyph vertical offset as a top-edge offset. In the actual font records the
 // visible prompt glyphs share the same vertical bearing (-10) while their bitmap
 // heights vary (for example O=36, e=29, t=33). Top-anchoring those bitmaps makes
 // their bottoms wander, matching the high/low text seen in-headset.
 //
-// Q16.16 preserves every horizontal metric and every HUDMainMenu/text_box.xml
+// preserves every horizontal metric and every HUDMainMenu/text_box.xml
 // presentation value. It changes only vertical placement: derive one baseline
 // from the tallest drawable glyph and the FNT's vertical bearing, then place each
 // glyph upward from that baseline. This corrects our interpretation of the real
 // FNT data; it does not invent replacement font metrics.
 //
-// IMPORTANT: this header is included only after Q16.11's generated HUD header.
-// That generated header is the single live definition of the fo3q1790 FNT/TAI
+// IMPORTANT: this header is included only after 's generated HUD header.
+// That generated header is the single live definition of the fo3hudassets FNT/TAI
 // types. Do not include q1790.h here or those definitions are emitted twice.
 
 #include "fo3-interaction-hud-renderer.h"
@@ -28,23 +28,23 @@
 #include <cstring>
 #include <vector>
 
-namespace fo3hudq1880 {
+namespace fo3hudlayout {
 
-constexpr const char* kTagQ1880 = "FalloutQuest";
+constexpr const char* kTag = "FalloutQuest";
 
-inline bool BuildPromptGeometryQ1880(const char* promptChars) {
-    fo3hudq1850::HudStateQ1850& s = fo3hudq1850::StateQ1850();
+inline bool BuildPromptGeometry(const char* promptChars) {
+    fo3hudrenderer::HudState& s = fo3hudrenderer::State();
     if (!s.ready || !promptChars || !promptChars[0]) return false;
 
-    const size_t length = fo3hudq1850::PromptLengthQ1850(promptChars);
+    const size_t length = fo3hudrenderer::PromptLength(promptChars);
     if (length == 0u) return false;
-    if (fo3hudq1850::SameBuiltPromptQ1850(s, promptChars, length) && s.textCount > 0) {
+    if (fo3hudrenderer::SameBuiltPrompt(s, promptChars, length) && s.textCount > 0) {
         return true;
     }
 
     // Exact authored text_box.xml / HUDMainMenu Info values already recovered.
-    // Keep Q16.13's horizontal FNT interpretation byte-for-byte in this pass.
-    const float textWidth = fo3hudq1850::TextWidthQ1850(s, promptChars, length);
+    // Keep 's horizontal FNT interpretation byte-for-byte in this pass.
+    const float textWidth = fo3hudrenderer::TextWidth(s, promptChars, length);
     const float textHeight = s.lineHeight;
     const float boxWidth = textWidth + 20.0f;       // _horbuf
     const float boxHeight = textHeight + 10.0f;    // HUD Info _verbuf override
@@ -62,7 +62,7 @@ inline bool BuildPromptGeometryQ1880(const char* promptChars) {
     float referenceYOffset = 0.0f;
     for (size_t i = 0u; i < length; ++i) {
         const unsigned char ch = static_cast<unsigned char>(promptChars[i]);
-        const fo3q1790::Glyph& g = s.glyphs[ch];
+        const fo3hudassets::Glyph& g = s.glyphs[ch];
         if (g.width > 0.0f && g.height > maxDrawableHeight) {
             maxDrawableHeight = g.height;
             referenceYOffset = g.yOffset;
@@ -83,7 +83,7 @@ inline bool BuildPromptGeometryQ1880(const char* promptChars) {
     const auto X = [&](float px) { return (px - contentCenterX) * metresPerPixel; };
     const auto Y = [&](float py) { return anchorY - (py - contentCenterY) * metresPerPixel; };
 
-    std::vector<fo3q1790::Vertex> verts;
+    std::vector<fo3hudassets::Vertex> verts;
     verts.reserve(6u * (1u + length));
 
     s.buttonFirst = static_cast<GLsizei>(verts.size());
@@ -91,7 +91,7 @@ inline bool BuildPromptGeometryQ1880(const char* promptChars) {
     const float bu1 = s.button.u + s.button.w;
     const float bvTop = s.button.v;
     const float bvBottom = s.button.v + s.button.h;
-    fo3hudq1850::AddQuadQ1850(
+    fo3hudrenderer::AddQuad(
         verts,
         X(buttonX0), Y(buttonY0),
         X(buttonX0 + 75.0f), Y(buttonY0 + 75.0f), anchorZ,
@@ -106,7 +106,7 @@ inline bool BuildPromptGeometryQ1880(const char* promptChars) {
 
     for (size_t i = 0u; i < length; ++i) {
         const unsigned char ch = static_cast<unsigned char>(promptChars[i]);
-        const fo3q1790::Glyph& g = s.glyphs[ch];
+        const fo3hudassets::Glyph& g = s.glyphs[ch];
 
         if (g.width > 0.0f && g.height > 0.0f) {
             const float gx0 = penX + g.xOffset;
@@ -118,15 +118,15 @@ inline bool BuildPromptGeometryQ1880(const char* promptChars) {
             minGlyphBottom = std::min(minGlyphBottom, glyphBottomY);
             maxGlyphBottom = std::max(maxGlyphBottom, glyphBottomY);
 
-            fo3hudq1850::AddQuadQ1850(
+            fo3hudrenderer::AddQuad(
                 verts, X(gx0), Y(gy0), X(gx1), Y(gy1), anchorZ,
                 g.uv[0], g.uv[1], g.uv[2], g.uv[3],
                 g.uv[4], g.uv[5], g.uv[6], g.uv[7]);
         }
 
-        // Deliberately unchanged from Q16.13: preserve the actual FNT horizontal
+        // Deliberately unchanged from preserve the actual FNT horizontal
         // advance and its special authored space handling until visually retested.
-        penX += fo3hudq1850::GlyphAdvanceQ1850(s, ch);
+        penX += fo3hudrenderer::GlyphAdvance(s, ch);
     }
 
     s.textCount = static_cast<GLsizei>(verts.size()) - s.textFirst;
@@ -135,14 +135,14 @@ inline bool BuildPromptGeometryQ1880(const char* promptChars) {
     glBindVertexArray(s.vao);
     glBindBuffer(GL_ARRAY_BUFFER, s.vbo);
     glBufferData(GL_ARRAY_BUFFER,
-                 static_cast<GLsizeiptr>(verts.size() * sizeof(fo3q1790::Vertex)),
+                 static_cast<GLsizeiptr>(verts.size() * sizeof(fo3hudassets::Vertex)),
                  verts.data(), GL_DYNAMIC_DRAW);
     glEnableVertexAttribArray(0);
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE,
-                          sizeof(fo3q1790::Vertex), reinterpret_cast<const void*>(0));
+                          sizeof(fo3hudassets::Vertex), reinterpret_cast<const void*>(0));
     glEnableVertexAttribArray(1);
     glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE,
-                          sizeof(fo3q1790::Vertex),
+                          sizeof(fo3hudassets::Vertex),
                           reinterpret_cast<const void*>(3u * sizeof(float)));
 
     s.builtPrompt.fill('\0');
@@ -153,22 +153,22 @@ inline bool BuildPromptGeometryQ1880(const char* promptChars) {
     const float bottomSpread =
         (minGlyphBottom <= maxGlyphBottom) ? (maxGlyphBottom - minGlyphBottom) : 0.0f;
     __android_log_print(
-        ANDROID_LOG_INFO, kTagQ1880,
-        "Q16.16 HUD BASELINE: text=\"%.*s\" maxHeight=%.1f referenceYOffset=%.1f baselineY=%.1f textTopY=%.1f bottomSpread=%.3f horizontal=Q16.13-authored source=vanilla-FNT",
+        ANDROID_LOG_INFO, kTag,
+        "HUD BASELINE: text=\"%.*s\" maxHeight=%.1f referenceYOffset=%.1f baselineY=%.1f textTopY=%.1f bottomSpread=%.3f horizontal=-authored source=vanilla-FNT",
         static_cast<int>(copyLength), s.builtPrompt.data(),
         maxDrawableHeight, referenceYOffset, baselineY, textTopY, bottomSpread);
     return true;
 }
 
-inline void RenderQ1880(const float* mvp, const char* promptChars) {
+inline void Render(const float* mvp, const char* promptChars) {
     if (!mvp || !promptChars || !promptChars[0]) return;
 
-    fo3hudq1850::GlStateGuardQ1850 guard;
+    fo3hudrenderer::GlStateGuard guard;
     glActiveTexture(GL_TEXTURE0);
-    if (!fo3hudq1850::EnsureResourcesQ1850()) return;
-    if (!BuildPromptGeometryQ1880(promptChars)) return;
+    if (!fo3hudrenderer::EnsureResources()) return;
+    if (!BuildPromptGeometry(promptChars)) return;
 
-    fo3hudq1850::HudStateQ1850& s = fo3hudq1850::StateQ1850();
+    fo3hudrenderer::HudState& s = fo3hudrenderer::State();
     glDisable(GL_DEPTH_TEST);
     glDepthMask(GL_FALSE);
     glEnable(GL_BLEND);
@@ -190,13 +190,13 @@ inline void RenderQ1880(const float* mvp, const char* promptChars) {
     static bool loggedDraw = false;
     if (!loggedDraw) {
         loggedDraw = true;
-        __android_log_print(ANDROID_LOG_INFO, kTagQ1880,
-                            "Q16.16 REAL HUD DRAW: source=Fallout3-FNT/TAI vertical=shared-baseline horizontal=Q16.13-authored");
+        __android_log_print(ANDROID_LOG_INFO, kTag,
+                            "REAL HUD DRAW: source=Fallout3-FNT/TAI vertical=shared-baseline horizontal=-authored");
     }
 }
 
-} // namespace fo3hudq1880
+} // namespace fo3hudlayout
 
-inline void RenderFo3InteractionHudQ1880(const float* mvp, const char* prompt) {
-    fo3hudq1880::RenderQ1880(mvp, prompt);
+inline void RenderFo3InteractionHud(const float* mvp, const char* prompt) {
+    fo3hudlayout::Render(mvp, prompt);
 }
