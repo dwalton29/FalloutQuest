@@ -14,11 +14,8 @@ add_library(falloutquest SHARED
     fo3-bsa-reader.cpp
     fo3-texture-bsa.cpp
     fo3-water-q2070.cpp
-    fo3-data-probe.cpp
-    fo3-esm-scan.cpp
     fo3-megaton-contents.cpp
     fo3-npc-q23.cpp
-    fo3-bsa-extract.cpp
     fo3-fog-ab-q1450.cpp
     ${ANDROID_NDK}/sources/android/native_app_glue/android_native_app_glue.c
 )

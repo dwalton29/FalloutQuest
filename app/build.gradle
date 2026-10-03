@@ -22,8 +22,8 @@ android {
         applicationId 'com.falloutquest.app'
         minSdk 29
         targetSdk 35
-        versionCode 113
-        versionName '0.24.1-q24.1-retire-renderer-experiments'
+        versionCode 114
+        versionName '0.24.2-q24.2-remove-startup-probes'
 
         ndk {
             abiFilters 'arm64-v8a'
