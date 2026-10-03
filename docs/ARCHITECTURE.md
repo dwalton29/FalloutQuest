@@ -445,3 +445,55 @@ inventory share one atomic save, preventing restart duplication. Save-blocked
 sessions reject pickup. Failed writes retain live state and retry on lifecycle
 flush; loss of the process before a successful flush can lose a recent pickup.
 This does not implement object respawning, drop-to-world, quests or general savegames.
+
+## Floating container looting (0.28.0)
+
+The user requested Fallout 4 style in-world looting with the right analogue stick,
+without a submenu. `fo3-loot-panel.h` implements that explicit VR adaptation using
+original Fallout 3 FNT glyphs, HUDMain colour and A sprite. It draws five rows,
+a selected-row highlight and a translucent backing near the aimed container's
+front surface. The panel faces the centre-head position with one shared transform
+for both eyes. Geometry changes only with visible content/selection; GL resources
+are retained and released before EGL shutdown. Aim loss, loading or invalid hand
+tracking dismisses it. No Fallout 4 graphics or Bethesda files are embedded.
+
+Right-stick Y is a new OpenXR float action. A neutral guard, .65 entry threshold,
+.30 release threshold and delayed repeat (.35 s then .12 s) handle list navigation.
+Target changes reset selection. A takes the selected whole stack once per input
+edge. Right-stick snap turning is suppressed during the list and remains latched
+until release after dismissal. Left-stick locomotion continues. Target/selection
+refreshes before locomotion and after streaming; activation checks the same current
+reference, so previous-panel state cannot loot another container. Empty containers
+retain their world model and collision. There is no blocking menu state.
+
+The portable catalog decodes CONT DATA, SCRI and CNTO/COED; LVLI LVLD/LVLF/LVLG and
+LVLO/COED; GLOB FLTV; and iLevItemLevelDifferenceMax. Layouts follow xEdit's
+[FO3 definitions](https://github.com/TES5Edit/TES5Edit/blob/dev-4.1.6/Core/wbDefinitionsFO3.pas)
+and [common LVLO definition](https://github.com/TES5Edit/TES5Edit/blob/dev-4.1.6/Core/wbDefinitionsCommon.pas).
+`fo3-container-state.cpp` resolves direct and nested entries at the current player
+level: nearest eligible level or all eligible levels, optional level range,
+per-count rolls, Use All regardless of level, and chance-none from authored fields
+or the initial global. Entry count multiplication, stack merging and explicit
+condition are retained. Owned entries requiring another actor/faction, malformed
+records, unknown items/lists and cycles fail generation without a partial result.
+Limits: depth 32, 10,000 expansion operations/stacks per container, 10,000 touched
+containers and 30,000 total remaining loot stacks. Unsupported item activation is
+retained in the list with taking disabled rather than executing scripts.
+
+RNG is an explicit runtime choice: mt19937 seeded from reference, installed catalog
+fingerprints and player level. Outcomes persist on first successful preview and
+never reroll after aim loss, travel or restart. This is an interpretation of
+original list rules, not replication of Bethesda's random stream, encounter-zone
+state or scripted global mutations. Respawn flags are retained without running a
+respawn timer. Scripted and non-player-owned containers remain blocked; keys use
+the same guard as doors. Failed generation leaves only the container name prompt.
+
+FQPS v3 retains the v2 inventory/world prefix and adds a separate loot-definition
+fingerprint and sorted per-reference remaining stacks, including empty inventories.
+v1/v2 catalog/world identities remain unchanged. Restore validates container
+ownership of state (REFR points to CONT), stack identity uniqueness across player
+and all containers, counts, conditions, definitions, lengths and CRC before commit.
+Container generation and taking both flush saves; a transfer updates inventory and
+remaining contents in one state file. Invalid writes retain the live state for
+lifecycle retry. Storing/depositing, quantities per transfer, take-all, lockpicking,
+container animation/sounds, corpses, theft and quest inventory changes are pending.

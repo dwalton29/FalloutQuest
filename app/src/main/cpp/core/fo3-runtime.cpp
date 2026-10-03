@@ -25,6 +25,7 @@ extern void PumpFo3AndroidEventsQ1860();
 #include "player/fo3-player-state.h"
 #include "world/interaction/fo3-interaction.h"
 #include "world/interaction/fo3-interaction-ray.h"
+#include "world/interaction/fo3-loot-cursor.h"
 #include "rendering/mesh/fo3-static-nif.h"
 #include "fo3-bsa-reader.h"
 #include "fo3-texture-bsa.h"

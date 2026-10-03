@@ -76,6 +76,25 @@ struct Reference {
   float condition = 1;
   bool locked = false, valid = true;
 };
+struct LootEntry {
+  uint32_t form = 0, owner = 0;
+  int32_t count = 1;
+  uint16_t level = 1;
+  float condition = 1;
+  bool extra = false;
+};
+struct Container {
+  std::string name;
+  uint32_t script = 0;
+  bool valid = true, respawns = false;
+  std::vector<LootEntry> entries;
+};
+struct LootList {
+  uint8_t flags = 0, chanceNone = 0;
+  uint32_t global = 0;
+  bool valid = true;
+  std::vector<LootEntry> entries;
+};
 struct State {
   std::array<uint8_t, 7> special{};
   std::array<uint8_t, 14> skills{}, skillOffsets{};
@@ -85,16 +104,22 @@ struct State {
   uint64_t nextStackId = 1;
   std::vector<Stack> inventory;
   std::unordered_set<uint32_t> collected;
+  std::unordered_map<uint32_t, std::vector<Stack>> containers;
 };
 struct Catalog {
   std::unordered_map<uint32_t, Item> items;
   std::unordered_map<uint32_t, Reference> references;
   std::unordered_set<uint32_t> scriptedBases;
   std::unordered_map<std::string, std::string> strings;
+  std::unordered_map<uint32_t, Container> containers;
+  std::unordered_map<uint32_t, LootList> lootLists;
+  std::unordered_map<uint32_t, float> globals;
+  int32_t lootLevelDifference = 0;
   Rules rules;
   State initial;
   uint32_t fingerprint = 0;
   uint32_t worldFingerprint = 0;
+  uint32_t lootFingerprint = 0;
 };
 // All-or-nothing, single-master Fallout3.esm loader. No plugins, scripts or
 // save import.
@@ -122,6 +147,11 @@ public:
   bool CanPickup(uint32_t reference) const;
   bool Pickup(uint32_t reference);
   bool CanOpenDoor(uint32_t reference) const;
+  bool CanLootContainer(uint32_t reference) const;
+  bool PrepareContainer(uint32_t reference);
+  const std::vector<Stack> *ContainerContents(uint32_t reference) const;
+  bool CanTakeContainerStack(uint32_t reference, uint64_t stack) const;
+  bool TakeContainerStack(uint32_t reference, uint64_t stack);
   bool IsCollected(uint32_t reference) const {
     return state_.collected.count(reference) != 0;
   }

@@ -2,7 +2,24 @@
 
 Experimental standalone Meta Quest runtime for user-supplied Fallout 3 game data.
 
-## Current milestone: 0.27.0 — Item pickup and door interaction
+## Current milestone: 0.28.0 — Floating container loot
+
+Aim at a supported container to see an in-world loot list. Use **right stick
+up/down** to scroll and **A** to take the highlighted stack. There is no submenu;
+left-stick movement continues and right-stick turning is suppressed while the
+list is active. Aim away to dismiss it. The user-requested Fallout 4 style flow
+uses Fallout 3's original names, font, HUD colour and A-button sprite, with an
+explicit VR floating layout and highlight.
+
+The installed ESM supplies CONT contents and nested LVLI definitions, counts,
+condition, level rules, chance-none and initial global values. Loot generates
+once per container and remaining stacks save with player inventory. FQPS v3
+loads existing v1/v2 saves. Keys, ownership and script guards still apply.
+Loot RNG is runtime-owned rather than Bethesda RNG/save parity. Respawn timers,
+quest-driven inventory/global changes, theft, storage and scripted containers
+remain pending. Panel positioning, readability and controls need headset testing.
+
+## Item pickup and door interaction: 0.27.0
 
 Aim the right controller and press **A** to take supported loose items or use
 authored load doors. Item names come from FULL; counts and condition come from

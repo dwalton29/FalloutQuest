@@ -164,6 +164,39 @@ Bytes Fixture(bool levelled = false, bool missingRule = false,
     Record(b, type, id, item, flags);
   }
   // Wrap records after TES4 in a GRUP, exercising bounded nested traversal.
+  for (uint32_t id = 400; id < 402; ++id) {
+    Bytes cont, data, item, extra;
+    Text(cont, "FULL", "Authored Box");
+    data.push_back(2);
+    F32(data, 0);
+    Sub(cont, "DATA", data);
+    U32(item, id == 400 ? 100 : 500);
+    U32(item, id == 400 ? 2 : 3);
+    Sub(cont, "CNTO", item);
+    U32(extra, 0);
+    U32(extra, 0);
+    F32(extra, .5f);
+    if (id == 400)
+      Sub(cont, "COED", extra);
+    Record(b, "CONT", id, cont);
+    Bytes ref, base;
+    U32(base, id);
+    Sub(ref, "NAME", base);
+    Record(b, "REFR", id - 100, ref);
+  }
+  Bytes list;
+  Sub(list, "LVLD", Bytes{0});
+  Sub(list, "LVLF", Bytes{4});
+  for (uint32_t item : {102u, 104u}) {
+    Bytes entry;
+    U16(entry, 99);
+    U16(entry, 0);
+    U32(entry, item);
+    U16(entry, 2);
+    U16(entry, 0);
+    Sub(list, "LVLO", entry);
+  }
+  Record(b, "LVLI", 500, list);
   for (uint32_t id = 200; id < 203; ++id) {
     Bytes placed, base, n, health;
     U32(base, 100);
@@ -281,7 +314,7 @@ void Synthetic(const std::string &root) {
         "collected ref roundtrip");
   // A v1 save has the same stats/inventory prefix, without world-removal data.
   Bytes legacy = Read(save);
-  legacy.resize(legacy.size() - 12);
+  legacy.resize(40 + 21 * fo3esm::ReadU32(legacy.data() + 36));
   legacy[4] = 1;
   const uint32_t legacySize = legacy.size() - 20;
   for (int i = 0; i < 4; ++i)
@@ -293,13 +326,24 @@ void Synthetic(const std::string &root) {
   Check(p.Save(save, error) && restored.Restore(save, error),
         "restore v2 after migration check");
   const Bytes good = Read(save);
+  Bytes version2 = good;
+  version2.resize(version2.size() - 8);
+  version2[4] = 2;
+  const auto v2size = version2.size() - 20;
+  for (int i = 0; i < 4; ++i)
+    version2[12 + i] = (v2size >> (8 * i)) & 255;
+  Rechecksum(version2);
+  Write(save, version2);
+  Check(restored.Restore(save, error) && restored.IsCollected(200),
+        "v2 collected saves retain world removals");
+  const size_t worldStart = 40 + 21 * fo3esm::ReadU32(good.data() + 36);
   Bytes wrongWorld = good;
-  wrongWorld[wrongWorld.size() - 12] ^= 1;
+  wrongWorld[worldStart] ^= 1;
   Rechecksum(wrongWorld);
   Write(save, wrongWorld);
   Check(!restored.Restore(save, error), "world fingerprint mismatch rejected");
   Bytes unknownRef = good;
-  unknownRef.back() ^= 1;
+  unknownRef[worldStart + 11] ^= 1;
   Rechecksum(unknownRef);
   Write(save, unknownRef);
   Check(!restored.Restore(save, error),
@@ -400,16 +444,100 @@ void Original(const std::string &path) {
     if (p.CanPickup(ref.first))
       ++pickups;
   Check(pickups > 100, "original loose items resolve");
+  size_t containerRefs = 0, generated = 0, failed = 0;
+  for (const auto &ref : c.references)
+    if (c.containers.count(ref.second.base)) {
+      ++containerRefs;
+      if (p.CanLootContainer(ref.first)) {
+        if (p.PrepareContainer(ref.first))
+          ++generated;
+        else
+          ++failed;
+      }
+    }
+  Check(c.containers.size() > 500 && generated > 100,
+        "original containers and levelled loot resolve");
   std::cout << "Original ESM: " << c.items.size()
             << " item definitions, HP=" << p.MaxHealth()
             << ", AP=" << p.MaxActionPoints() << ", carry=" << p.CarryCapacity()
             << ", starting stacks=" << p.Snapshot().inventory.size()
-            << ", supported pickups=" << pickups << '\n';
+            << ", supported pickups=" << pickups
+            << ", containers=" << c.containers.size()
+            << ", container refs=" << containerRefs
+            << ", generated=" << generated << ", rejected=" << failed << '\n';
+}
+void Containers(const std::string &root) {
+  const auto esm = root + ".esm", save = root + ".fqps";
+  Write(esm, Fixture());
+  fo3player::Catalog c;
+  std::string error;
+  Check(fo3player::LoadCatalog(esm, c, error), error.c_str());
+  Check(c.containers.at(400).respawns && c.lootLists.at(500).flags == 4,
+        "CONT/LVLI decoded");
+  fo3player::Player p(c);
+  Check(p.PrepareContainer(300) &&
+            p.ContainerContents(300)->front().count == 2 &&
+            p.ContainerContents(300)->front().condition == .5f,
+        "fixed authored contents and condition");
+  const auto rev = p.Revision();
+  Check(p.PrepareContainer(300) && p.Revision() == rev,
+        "preview never rerolls");
+  Check(p.PrepareContainer(301) && p.ContainerContents(301)->size() == 2 &&
+            p.ContainerContents(301)->front().count == 6,
+        "use-all includes above-level entries and parent count");
+  const auto id = p.ContainerContents(300)->front().id;
+  Check(p.TakeContainerStack(300, id) && p.ContainerContents(300)->empty() &&
+            !p.TakeContainerStack(300, id),
+        "transfer atomic and once-only");
+  Check(p.Save(save, error), error.c_str());
+  fo3player::Player restored(c);
+  Check(restored.Restore(save, error) &&
+            restored.ContainerContents(300)->empty() &&
+            restored.ContainerContents(301)->size() == 2,
+        "empty and remaining container contents persist");
+  Check(restored.PrepareContainer(300) &&
+            restored.ContainerContents(300)->empty(),
+        "emptied container never regenerates");
+  Check(p.Add(104, INT32_MAX), "overflow fixture");
+  uint64_t ammo = 0;
+  for (const auto &s : *p.ContainerContents(301))
+    if (s.formId == 104)
+      ammo = s.id;
+  const auto revision = p.Revision();
+  Check(!p.TakeContainerStack(301, ammo) && p.Revision() == revision &&
+            p.ContainerContents(301)->size() == 2,
+        "failed transfer leaves loot intact");
+  c.references[300].owner = 99;
+  fo3player::Player owned(c);
+  Check(!owned.PrepareContainer(300), "owned container blocked");
+  c.references[300].owner = 0;
+  c.containers[400].script = 123;
+  fo3player::Player scripted(c);
+  Check(!scripted.PrepareContainer(300), "scripted container blocked");
+  c.containers[400].script = 0;
+  c.lootLists[500].flags = 0;
+  fo3player::Player level(c);
+  Check(level.PrepareContainer(301) && level.ContainerContents(301)->empty(),
+        "above-level loot excluded without Use All");
+  c.lootLists[500].flags = 4;
+  c.lootLists[500].chanceNone = 100;
+  fo3player::Player none(c);
+  Check(none.PrepareContainer(301) && none.ContainerContents(301)->empty(),
+        "chance-none persisted empty");
+  c.lootLists[500].chanceNone = 0;
+  c.lootLists[500].entries[0].form = 500;
+  fo3player::Player cycle(c);
+  Check(!cycle.PrepareContainer(301) && !cycle.ContainerContents(301) &&
+            cycle.Revision() == 0,
+        "nested cycle rejected without partial state");
+  std::remove(esm.c_str());
+  std::remove(save.c_str());
 }
 } // namespace
 int main(int argc, char **argv) {
   try {
     Synthetic("/tmp/falloutquest-player-" + std::to_string(getpid()));
+    Containers("/tmp/falloutquest-containers-" + std::to_string(getpid()));
     if (argc > 1)
       Original(argv[1]);
     std::cout << "Player state tests passed\n";

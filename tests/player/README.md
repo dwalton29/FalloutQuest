@@ -32,3 +32,13 @@ blocked ownership, key access, pickup without origin reset, grab/rigid-body
 retirement and collision/save notifications. Geometry checks cover slabs and
 two-sided triangle occlusion. State fixtures cover REFR counts/condition,
 duplicate pickup, collected-reference persistence and v1 save migration.
+
+Container checks cover CONT/CNTO/COED and LVLI/LVLO decoding, Use All above-level
+entries, parent counts, chance-none, cycle rejection, stable previews, equipment
+condition, empty-container persistence, failed transfer rollback and v1/v2 save
+compatibility. The runtime bridge exercises actual floating panel state, selection
+and A transfer without travel or removal of the container. Cursor checks cover
+neutral arming, edge/hold repeat and target changes. Original-data integration
+loads 535 containers and generates 9,000 accessible placed references at the
+authored baseline level (one unsupported result rejected). This is not a headset
+visual check or full quest/respawn/RNG parity.

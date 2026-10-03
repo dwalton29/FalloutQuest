@@ -5,6 +5,7 @@
 #include "world/interaction/fo3-interaction-ray.h"
 #undef far
 #include "world/interaction/fo3-interaction.h"
+#include "world/interaction/fo3-loot-cursor.h"
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
@@ -146,6 +147,58 @@ int main() {
     gPlayerSession = std::make_unique<fo3player::Session>(c);
     Check(!gPlayerSession->player.CanOpenDoor(20),
           "scripted door not bypassed");
+    fo3player::Container box;
+    box.name = "Authored Box";
+    box.entries.push_back({100, 0, 4, 1, .5f, true});
+    auto second = item;
+    second.formId = 101;
+    second.name = "Second Item";
+    c.items[101] = second;
+    box.entries.push_back({101, 0, 2, 1, 1, false});
+    c.containers[400] = box;
+    fo3player::Reference boxRef;
+    boxRef.base = 400;
+    c.references[40] = boxRef;
+    gPlayerSession = std::make_unique<fo3player::Session>(c);
+    GpuObject object;
+    object.q220LooseObject = false;
+    object.refFormId = 40;
+    object.baseFormId = 400;
+    gObjects.push_back(object);
+    Check(query() && t.container && !t.pickup && t.allowed,
+          "container joins nearest right-hand targets");
+    UpdateFo3LootSelection(t, 0, 1);
+    Check(GetFo3LootPanel().reference == 40 &&
+              GetFo3LootPanel().rows.size() == 2,
+          "floating rows contain authored stacks");
+    UpdateFo3LootSelection(t, -1, 1.1);
+    Check(GetFo3LootPanel().selected == 1,
+          "right stick down selects next loot row");
+    const auto previousDoors = doorActivations;
+    Check(!activate() && doorActivations == previousDoors &&
+              GetFo3LootPanel().rows.size() == 1,
+          "A takes selected stack without teleport or submenu");
+    Check(!gPlayerSession->player.IsCollected(40) &&
+              !removedCollision.count(40),
+          "container stays in world after looting");
+    UpdateFo3LootSelection({}, 0, 2);
+    Check(!GetFo3LootPanel().reference, "aim loss closes loot list");
+    Check(!activate() && GetFo3LootPanel().rows.empty(),
+          "activation without current selection cannot loot stale row");
+    fo3loot::Cursor cursor;
+    cursor.Target(40, 10);
+    cursor.Scroll(-1, 1, 10);
+    Check(cursor.selected == 0,
+          "entering a target with held stick waits for neutral");
+    cursor.Scroll(0, 1, 10);
+    cursor.Scroll(-1, 1.1, 10);
+    cursor.Scroll(-1, 1.2, 10);
+    Check(cursor.selected == 1, "scroll debounces held input");
+    cursor.Scroll(-1, 1.46, 10);
+    Check(cursor.selected == 2, "held scroll repeats after delay");
+    cursor.Target(41, 1);
+    Check(cursor.selected == 0 && !cursor.armed,
+          "new container resets selection and neutral guard");
     float distance = 0;
     using namespace fo3interaction;
     Check(Box({0, 0, 0}, {0, 0, -1}, {-.1f, -.1f, -1.1f}, {.1f, .1f, -.9f}, 3,

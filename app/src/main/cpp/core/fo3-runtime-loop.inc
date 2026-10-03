@@ -3,6 +3,7 @@
 #include "ui/interaction/fo3-interaction-hud-dynamic.h"
 #include "ui/interaction/fo3-interaction-hud-renderer.h"
 #include "ui/interaction/fo3-interaction-hud-layout.h"
+#include "ui/interaction/fo3-loot-panel.h"
 #include <array>
 #include <string>
 #include "ui/loading/fo3-loading-vr.h"
@@ -361,6 +362,8 @@ public:
 
     void Shutdown() {
         FlushFo3PlayerState();
+        fo3lootui::Shutdown();
+        fo3huddynamic::Shutdown();
         if (sessionRunning_) {
             xrEndSession(session_);
             sessionRunning_ = false;
@@ -529,6 +532,8 @@ private:
                           1, &handPaths_[0], &moveYAction_)) return false;
         if (!CreateAction("turn_x", "Turn X", XR_ACTION_TYPE_FLOAT_INPUT,
                           1, &handPaths_[1], &turnXAction_)) return false;
+        if (!CreateAction("loot_scroll_y", "Loot Scroll", XR_ACTION_TYPE_FLOAT_INPUT,
+                          1, &handPaths_[1], &lootScrollAction_)) return false;
         if (!CreateAction("activate_q160", "Activate", XR_ACTION_TYPE_BOOLEAN_INPUT,
                           1, &handPaths_[1], &activateAction_)) return false;
 
@@ -559,6 +564,7 @@ private:
         XrPath leftStickX = XR_NULL_PATH;
         XrPath leftStickY = XR_NULL_PATH;
         XrPath rightStickX = XR_NULL_PATH;
+        XrPath rightStickY = XR_NULL_PATH;
         XrPath rightA = XR_NULL_PATH;
         XrPath leftTriggerValue = XR_NULL_PATH;
         XrPath rightTriggerValue = XR_NULL_PATH;
@@ -582,6 +588,7 @@ private:
             !Path("/user/hand/left/input/thumbstick/x", &leftStickX) ||
             !Path("/user/hand/left/input/thumbstick/y", &leftStickY) ||
             !Path("/user/hand/right/input/thumbstick/x", &rightStickX) ||
+            !Path("/user/hand/right/input/thumbstick/y", &rightStickY) ||
             !Path("/user/hand/right/input/a/click", &rightA) ||
             !Path("/user/hand/left/input/trigger/value", &leftTriggerValue) ||
             !Path("/user/hand/right/input/trigger/value", &rightTriggerValue) ||
@@ -598,7 +605,7 @@ private:
             !Path("/user/hand/right/input/a/touch", &rightATouch) ||
             !Path("/user/hand/right/input/b/touch", &rightBTouch)) return false;
 
-        const std::array<XrActionSuggestedBinding, 22> bindings{{
+        const std::array<XrActionSuggestedBinding, 23> bindings{{
             {poseAction_, leftAim},
             {poseAction_, rightAim},
             {gripPoseAction_, leftGrip},
@@ -606,6 +613,7 @@ private:
             {moveXAction_, leftStickX},
             {moveYAction_, leftStickY},
             {turnXAction_, rightStickX},
+            {lootScrollAction_, rightStickY},
             {activateAction_, rightA},
             {fingerTriggerAction_, leftTriggerValue},
             {fingerTriggerAction_, rightTriggerValue},
@@ -1119,6 +1127,7 @@ private:
         const float rawMoveY = ReadFloatAction(moveYAction_, handPaths_[0]);
         RadialMoveDeadzoneQ715(rawMoveX, rawMoveY, moveX_, moveY_);
         turnX_ = Deadzone(ReadFloatAction(turnXAction_, handPaths_[1]));
+        lootScrollY_ = ReadFloatAction(lootScrollAction_, handPaths_[1]);
 
         fingerTriggerValue_[0] =
             ReadFloatAction(fingerTriggerAction_, handPaths_[0]);
@@ -1190,7 +1199,10 @@ private:
         }
         lastFrameTime_ = frameTime;
 
-        if (!snapTurnLatched_ && std::fabs(turnX_) > 0.65f) {
+        if (GetFo3LootPanel().reference) {
+            // Releasing the list while the stick is held cannot cause an accidental turn.
+            snapTurnLatched_ = std::fabs(turnX_) >= .30f;
+        } else if (!snapTurnLatched_ && std::fabs(turnX_) > 0.65f) {
             const float deltaYaw = turnX_ > 0.0f ? -SNAP_TURN_RADIANS : SNAP_TURN_RADIANS;
             const XrVector3f before = RotateYaw(headView.pose.position, playerYaw_);
             const XrVector3f after = RotateYaw(headView.pose.position, playerYaw_ + deltaYaw);
@@ -1271,7 +1283,7 @@ private:
         }
     }
 
-    void UpdateDoorAimQ1700() {
+    void UpdateDoorAimQ1700(double lootTime) {
         if (IsFo3LoadingVisible() || !handPoseValid_[1]) {
             if (doorAimActiveQ1700_) {
                 FQ_LOGI("Q16.13 HUD TARGET HIDE: sourceDoor=%08X reason=%s promptStorage=fixed-retained",
@@ -1281,6 +1293,7 @@ private:
             doorAimActiveQ1700_ = false;
             doorAimSourceQ1840_ = 0u;
             doorPromptValidQ1850_ = false;
+            UpdateFo3LootSelection({},0,lootTime);
             return;
         }
         const XrPosef hand = ToVirtualPose(handLocalPoses_[1]);
@@ -1289,8 +1302,9 @@ private:
         const bool active = QueryFo3Interaction(
             hand.position.x,hand.position.y,hand.position.z,
             -handMatrix.m[8],-handMatrix.m[9],-handMatrix.m[10],target);
+        UpdateFo3LootSelection(target,lootScrollY_,lootTime);
         if (active) {
-            if (!target.pickup) {
+            if (!target.pickup && !target.container) {
                 doorAimYawQ1800_ = target.door.rz;
                 doorAimDestinationQ1800_ = target.door.destinationDoorRef;
             }
@@ -1383,6 +1397,7 @@ private:
                         fo3tod::gRuntime.climate.sunsetBegin,
                         fo3tod::gRuntime.climate.sunsetEnd);
                 }
+                UpdateDoorAimQ1700(static_cast<double>(frameState.predictedDisplayTime)*1e-9);
                 if (!IsFo3LoadingVisible()) {
                     UpdatePlayer(views[0], frameState.predictedDisplayTime);
                 } else {
@@ -1434,7 +1449,7 @@ private:
                 const XrPosef q1890VirtualHead = q210VirtualHead;
                 UpdateFo3ExteriorStreamingQ1890(q1890VirtualHead.position.x,
                                                 q1890VirtualHead.position.z);
-                UpdateDoorAimQ1700();
+                UpdateDoorAimQ1700(static_cast<double>(frameState.predictedDisplayTime)*1e-9);
                 ApplyAuthoredDoorFacingQ1810(views[0]);
                 if (activateDownQ1700_ && !activateLatched_) {
                     activateLatched_ = true;
@@ -1454,6 +1469,9 @@ private:
                     activateLatched_ = false;
                 }
 
+                const auto lootViewer=ToVirtualPose(loadingHead);
+                const auto& lootPanel=GetFo3LootPanel();
+                lootPanelYaw_=std::atan2(lootViewer.position.x-lootPanel.anchor[0],lootViewer.position.z-lootPanel.anchor[2]);
                 for (uint32_t eye = 0; eye < 2; ++eye) {
                     RenderEye(eye, views[eye], projectionViews[eye]);
                 }
@@ -1593,10 +1611,20 @@ private:
                     SetMvpAndColor(mvp, 1.0f, 0.48f, 0.18f);
                     glDrawArrays(GL_TRIANGLES, controllerStartVertex_, controllerVertexCount_);
                     if (doorAimActiveQ1700_) {
-                        if (doorPromptValidQ1850_) {
+                        if (doorPromptValidQ1850_ && !GetFo3LootPanel().reference) {
                             RenderFo3InteractionHud(mvp.m, doorPromptQ1850_.data());
                         }
 
+                    }
+                    const auto& loot=GetFo3LootPanel();
+                    if (loot.reference) {
+                        const float yaw=lootPanelYaw_;
+                        Mat4 panelModel{};
+                        panelModel.m[0]=std::cos(yaw);panelModel.m[2]=-std::sin(yaw);
+                        panelModel.m[5]=1;panelModel.m[8]=std::sin(yaw);panelModel.m[10]=std::cos(yaw);
+                        panelModel.m[12]=loot.anchor[0];panelModel.m[13]=loot.anchor[1];panelModel.m[14]=loot.anchor[2];panelModel.m[15]=1;
+                        const auto panelMvp=Multiply(viewProjection,panelModel);
+                        fo3lootui::Render(panelMvp.m,loot);
                     }
                     if (false) {
                         static bool q1780HudDrawLogged = false;
@@ -1691,6 +1719,9 @@ private:
     XrAction moveYAction_{XR_NULL_HANDLE};
     XrAction turnXAction_{XR_NULL_HANDLE};
     XrAction activateAction_{XR_NULL_HANDLE};
+    XrAction lootScrollAction_{XR_NULL_HANDLE};
+    float lootScrollY_=0;
+    float lootPanelYaw_=0;
     XrAction fingerTriggerAction_{XR_NULL_HANDLE};
     XrAction fingerGripAction_{XR_NULL_HANDLE};
     XrAction fingerTriggerTouchAction_{XR_NULL_HANDLE};

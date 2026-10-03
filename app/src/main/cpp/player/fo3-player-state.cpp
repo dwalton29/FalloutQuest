@@ -15,7 +15,7 @@
 namespace fo3player {
 namespace {
 constexpr size_t MaxStacks = 10000;
-constexpr size_t MaxSaveBytes = 1024 * 1024;
+constexpr size_t MaxSaveBytes = 4 * 1024 * 1024;
 using Bytes = std::vector<uint8_t>;
 struct CloseFile {
   void operator()(FILE *f) const { std::fclose(f); }
@@ -171,6 +171,46 @@ bool DecodeItem(uint32_t form, uint32_t flags, ItemKind kind,
   }
   return std::isfinite(item.weight) && item.weight >= 0;
 }
+bool DecodeLoot(const std::vector<Sub> &subs, bool levelled,
+                std::vector<LootEntry> &out) {
+  bool extraAllowed = false;
+  for (const auto &sub : subs) {
+    if (sub.type == (levelled ? "LVLO" : "CNTO")) {
+      LootEntry e;
+      if (levelled) {
+        if (sub.size != 8 && sub.size != 12)
+          return false;
+        e.level = fo3esm::ReadU16(sub.data);
+        e.form = fo3esm::ReadU32(sub.data + 4);
+        e.count = sub.size == 12 ? fo3esm::ReadU16(sub.data + 8) : 1;
+      } else {
+        if (sub.size != 8)
+          return false;
+        e.form = fo3esm::ReadU32(sub.data);
+        e.count = I32(sub.data + 4);
+      }
+      if (!e.form || e.count <= 0 || out.size() >= 10000)
+        return false;
+      out.push_back(e);
+      extraAllowed = true;
+    } else if (sub.type == "COED") {
+      if (!extraAllowed || sub.size != 12)
+        return false;
+      auto &e = out.back();
+      e.owner = fo3esm::ReadU32(sub.data);
+      e.extra = true;
+      // Rank/global ownership is not evaluated by this milestone.
+      if (fo3esm::ReadU32(sub.data + 4))
+        return false;
+      e.condition = fo3esm::ReadF32(sub.data + 8);
+      if (!std::isfinite(e.condition) || e.condition < 0 || e.condition > 1)
+        return false;
+      extraAllowed = false;
+    } else
+      extraAllowed = false;
+  }
+  return true;
+}
 void Put32(Bytes &b, uint32_t v) {
   for (unsigned i = 0; i < 4; ++i)
     b.push_back(static_cast<uint8_t>(v >> (8 * i)));
@@ -265,8 +305,10 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
     ItemKind kind{};
     const bool item = Kind(type, kind);
     const bool worldRecord = type == "REFR" || type == "DOOR" || type == "CELL";
-    const bool selected = worldRecord || type == "TES4" || type == "GMST" ||
-                          item || (type == "NPC_" && form == PlayerBase);
+    const bool lootRecord = type == "CONT" || type == "LVLI" || type == "GLOB";
+    const bool selected = lootRecord || worldRecord || type == "TES4" ||
+                          type == "GMST" || item ||
+                          (type == "NPC_" && form == PlayerBase);
     if (at == 0 && type != "TES4")
       return fail("Missing TES4 file header");
     if (selected && !(flags & 0x20)) {
@@ -278,7 +320,13 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
       if (!Subs(payload, subs))
         return fail("Malformed ESM subrecord");
       // Keep the v1 catalog identity stable so existing player saves migrate.
-      if (!worldRecord) {
+      if (lootRecord) {
+        next.lootFingerprint =
+            static_cast<uint32_t>(crc32(next.lootFingerprint, h, sizeof(h)));
+        next.lootFingerprint =
+            static_cast<uint32_t>(crc32(next.lootFingerprint, payload.data(),
+                                        static_cast<uInt>(payload.size())));
+      } else if (!worldRecord) {
         fingerprint = static_cast<uint32_t>(crc32(fingerprint, h, sizeof(h)));
         fingerprint = static_cast<uint32_t>(crc32(
             fingerprint, payload.data(), static_cast<uInt>(payload.size())));
@@ -289,7 +337,47 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
             static_cast<uint32_t>(crc32(next.worldFingerprint, payload.data(),
                                         static_cast<uInt>(payload.size())));
       }
-      if (type == "REFR") {
+      if (type == "CONT") {
+        Container c;
+        c.name = Text(subs, "FULL");
+        if (const auto *script = Find(subs, "SCRI")) {
+          if (script->size != 4)
+            c.valid = false;
+          else
+            c.script = fo3esm::ReadU32(script->data);
+        }
+        const auto *data = Find(subs, "DATA");
+        if (!data || data->size != 5)
+          c.valid = false;
+        else
+          c.respawns = (data->data[0] & 2) != 0;
+        c.valid = DecodeLoot(subs, false, c.entries) && c.valid;
+        next.containers[form] = std::move(c);
+      } else if (type == "LVLI") {
+        LootList list;
+        const auto *chance = Find(subs, "LVLD"),
+                   *listFlags = Find(subs, "LVLF");
+        if (!chance || chance->size != 1 || !listFlags || listFlags->size != 1)
+          list.valid = false;
+        else {
+          list.chanceNone = chance->data[0];
+          list.flags = listFlags->data[0];
+        }
+        if (const auto *global = Find(subs, "LVLG")) {
+          if (global->size != 4)
+            list.valid = false;
+          else
+            list.global = fo3esm::ReadU32(global->data);
+        }
+        list.valid = DecodeLoot(subs, true, list.entries) && list.valid &&
+                     list.chanceNone <= 100 && !(list.flags & ~7u);
+        next.lootLists[form] = std::move(list);
+      } else if (type == "GLOB") {
+        const auto *value = Find(subs, "FLTV");
+        if (value && value->size == 4 &&
+            std::isfinite(fo3esm::ReadF32(value->data)))
+          next.globals[form] = fo3esm::ReadF32(value->data);
+      } else if (type == "REFR") {
         Reference ref;
         ref.flags = flags;
         ref.cell = groupCells.empty() ? 0 : groupCells.back();
@@ -345,6 +433,8 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
           settings[id] = fo3esm::ReadF32(d->data);
         if (!id.empty() && id[0] == 's' && d)
           next.strings[id] = fo3esm::ZString(d->data, d->size);
+        if (id == "iLevItemLevelDifferenceMax" && d && d->size == 4)
+          next.lootLevelDifference = std::max(0, I32(d->data));
       } else if (item) {
         Item definition;
         if (!form || !DecodeItem(form, flags, kind, subs, definition))
@@ -638,7 +728,24 @@ bool Player::Save(const std::string &path, std::string &error) const {
   for (auto id : collected)
     Put32(payload, id);
   Bytes bytes{'F', 'Q', 'P', 'S'};
-  Put32(bytes, 2);
+  Put32(payload, catalog_.lootFingerprint);
+  Put32(payload, static_cast<uint32_t>(state_.containers.size()));
+  std::vector<uint32_t> containerIds;
+  for (const auto &entry : state_.containers)
+    containerIds.push_back(entry.first);
+  std::sort(containerIds.begin(), containerIds.end());
+  for (auto id : containerIds) {
+    Put32(payload, id);
+    const auto &contents = state_.containers.at(id);
+    Put32(payload, static_cast<uint32_t>(contents.size()));
+    for (const auto &stack : contents) {
+      Put64(payload, stack.id);
+      Put32(payload, stack.formId);
+      Put32(payload, stack.count);
+      PutFloat(payload, stack.condition);
+    }
+  }
+  Put32(bytes, 3);
   Put32(bytes, catalog_.fingerprint);
   Put32(bytes, static_cast<uint32_t>(payload.size()));
   Put32(bytes, Crc(payload));
@@ -696,7 +803,8 @@ bool Player::Restore(const std::string &path, std::string &error) {
     return fail("Truncated player save");
   const auto *h = bytes.data();
   const auto version = fo3esm::ReadU32(h + 4);
-  if (std::memcmp(h, "FQPS", 4) || (version != 1 && version != 2))
+  if (std::memcmp(h, "FQPS", 4) ||
+      (version != 1 && version != 2 && version != 3))
     return fail("Unsupported player save format");
   if (fo3esm::ReadU32(h + 8) != catalog_.fingerprint)
     return fail("Player save belongs to different game definitions");
@@ -741,13 +849,16 @@ bool Player::Restore(const std::string &path, std::string &error) {
     next.inventory.push_back(stack);
   }
   next.collected.clear();
-  if (version == 2) {
+  size_t worldEnd = inventoryEnd;
+  if (version >= 2) {
     if (payload.size() - inventoryEnd < 8)
       return fail("Missing collected references");
     if (fo3esm::ReadU32(p + inventoryEnd) != catalog_.worldFingerprint)
       return fail("Collected references belong to different world definitions");
     const auto n = fo3esm::ReadU32(p + inventoryEnd + 4);
-    if (n > 100000 || payload.size() - inventoryEnd != 8ull + 4ull * n)
+    worldEnd = inventoryEnd + 8ull + 4ull * n;
+    if (n > 100000 || worldEnd > payload.size() ||
+        (version == 2 && worldEnd != payload.size()))
       return fail("Invalid collected reference count");
     for (uint32_t i = 0; i < n; ++i) {
       const auto id = fo3esm::ReadU32(p + inventoryEnd + 8 + i * 4);
@@ -756,6 +867,45 @@ bool Player::Restore(const std::string &path, std::string &error) {
           !next.collected.insert(id).second)
         return fail("Invalid collected reference");
     }
+  }
+  next.containers.clear();
+  if (version == 3) {
+    if (payload.size() - worldEnd < 8 ||
+        fo3esm::ReadU32(p + worldEnd) != catalog_.lootFingerprint)
+      return fail("Invalid container definitions");
+    const auto number = fo3esm::ReadU32(p + worldEnd + 4);
+    if (number > 10000)
+      return fail("Too many saved containers");
+    size_t at = worldEnd + 8, totalStacks = 0;
+    for (uint32_t c = 0; c < number; ++c) {
+      if (payload.size() - at < 8)
+        return fail("Truncated container header");
+      const auto ref = fo3esm::ReadU32(p + at),
+                 size = fo3esm::ReadU32(p + at + 4);
+      at += 8;
+      const auto found = catalog_.references.find(ref);
+      if (found == catalog_.references.end() ||
+          !catalog_.containers.count(found->second.base) ||
+          next.containers.count(ref) || size > 10000 ||
+          (totalStacks += size) > 30000 || payload.size() - at < 20ull * size)
+        return fail("Invalid saved container");
+      std::vector<Stack> contents;
+      for (uint32_t i = 0; i < size; ++i, at += 20) {
+        Stack stack{U64(p + at), fo3esm::ReadU32(p + at + 8), I32(p + at + 12),
+                    fo3esm::ReadF32(p + at + 16), false};
+        const auto item = catalog_.items.find(stack.formId);
+        if (!stack.id || stack.id >= next.nextStackId ||
+            !ids.insert(stack.id).second || item == catalog_.items.end() ||
+            stack.count <= 0 || !std::isfinite(stack.condition) ||
+            stack.condition < 0 || stack.condition > 1 ||
+            (item->second.maxCondition == 0 && stack.condition != 1))
+          return fail("Invalid container stack");
+        contents.push_back(stack);
+      }
+      next.containers.emplace(ref, std::move(contents));
+    }
+    if (at != payload.size())
+      return fail("Trailing container save data");
   }
   state_ = std::move(next);
   ++revision_;
