@@ -5,14 +5,14 @@
 #include <algorithm>
 #include <cmath>
 
-namespace fo3weatherq1320 {
+namespace fo3weather {
 
-inline float SafeScaleColourQ1320(float value, float scale) {
+inline float SafeScaleColour(float value, float scale) {
     if (!std::isfinite(value) || !std::isfinite(scale)) return 0.0f;
     return std::clamp(value * scale, 0.0f, 4.0f);
 }
 
-inline float EffectiveSunlightScaleQ1320(float sunlightDimmer) {
+inline float EffectiveSunlightScale(float sunlightDimmer) {
     // PC apitrace ground truth: Fallout 3 sends WTHR Sunlight to the dominant
     // SP17 PPLighting path as authoredColour * (1 + Sunlight Dimmer). With the
     // stock exterior value fSunlightDimmer=1.5, PSLightColor is therefore 2.5x
@@ -22,14 +22,14 @@ inline float EffectiveSunlightScaleQ1320(float sunlightDimmer) {
     return std::clamp(1.0f + sunlightDimmer, 0.0f, 5.0f);
 }
 
-inline bool ApplyWeatherLightingQ1320(Fo3ImageSpaceQ1280& image) {
-    using namespace fo3envq1000;
-    using namespace fo3imadq1300;
+inline bool ApplyWeatherLighting(Fo3ImageSpace& image) {
+    using namespace fo3env;
+    using namespace fo3imad;
 
     if (!image.valid || image.weatherDayImadFormId == 0u) return false;
 
-    WeatherImadQ1300 modifier;
-    if (!LoadWeatherImadQ1300(image.weatherDayImadFormId, modifier) || !modifier.valid) {
+    WeatherImad modifier;
+    if (!LoadWeatherImad(image.weatherDayImadFormId, modifier) || !modifier.valid) {
         return false;
     }
 
@@ -38,13 +38,13 @@ inline bool ApplyWeatherLightingQ1320(Fo3ImageSpaceQ1280& image) {
     // (sunlight scale) and 07IAD/GIAD (sky scale) multiply/add channels.
     const float baseSunlightDimmer = image.hdrSunlightDimmer;
     const float baseSkyScale = image.hdrLumRampNoTex;
-    const float finalSunlightDimmer = ApplyScalarQ1300(
+    const float finalSunlightDimmer = ApplyScalar(
         baseSunlightDimmer,
         modifier.sunlightScaleMult,
         modifier.sunlightScaleAdd,
         0.0f, 4.0f);
-    const float finalSunlightScale = EffectiveSunlightScaleQ1320(finalSunlightDimmer);
-    const float finalSkyScale = ApplyScalarQ1300(
+    const float finalSunlightScale = EffectiveSunlightScale(finalSunlightDimmer);
+    const float finalSkyScale = ApplyScalar(
         baseSkyScale,
         modifier.skyScaleMult,
         modifier.skyScaleAdd,
@@ -53,7 +53,7 @@ inline bool ApplyWeatherLightingQ1320(Fo3ImageSpaceQ1280& image) {
     image.hdrSunlightDimmer = finalSunlightDimmer;
     image.hdrLumRampNoTex = finalSkyScale;
 
-    Fo3EnvironmentQ1000& env = gFo3EnvironmentQ1000;
+    Fo3Environment& env = gFo3Environment;
     if (!env.valid) {
         __android_log_print(ANDROID_LOG_WARN, TAG,
                             "Q13.2 WEATHER LIGHT: IMAD=%08X result=no-active-environment",
@@ -69,14 +69,14 @@ inline bool ApplyWeatherLightingQ1320(Fo3ImageSpaceQ1280& image) {
     for (int c = 0; c < 3; ++c) {
         // SP17's PSLightColor includes the authored baseline plus Sunlight
         // Dimmer. Ambient/local LIGH colours remain untouched.
-        env.sunlight[c] = SafeScaleColourQ1320(env.sunlight[c], finalSunlightScale);
+        env.sunlight[c] = SafeScaleColour(env.sunlight[c], finalSunlightScale);
 
         // LUM Ramp No Tex / Sky Scale drives sky brightness. Our current sky is
         // the WTHR-authored gradient, so scale each gradient colour uniformly.
         // Fog is deliberately not scaled: it has its own authored WTHR colour.
-        env.skyUpper[c] = SafeScaleColourQ1320(env.skyUpper[c], finalSkyScale);
-        env.skyLower[c] = SafeScaleColourQ1320(env.skyLower[c], finalSkyScale);
-        env.horizon[c] = SafeScaleColourQ1320(env.horizon[c], finalSkyScale);
+        env.skyUpper[c] = SafeScaleColour(env.skyUpper[c], finalSkyScale);
+        env.skyLower[c] = SafeScaleColour(env.skyLower[c], finalSkyScale);
+        env.horizon[c] = SafeScaleColour(env.horizon[c], finalSkyScale);
     }
 
     __android_log_print(
@@ -108,11 +108,11 @@ inline bool ApplyWeatherLightingQ1320(Fo3ImageSpaceQ1280& image) {
     return true;
 }
 
-} // namespace fo3weatherq1320
+} // namespace fo3weather
 
-inline bool LoadFo3ImageSpaceQ1320(uint32_t cellFormId, uint32_t worldspaceFormId) {
-    const bool ready = LoadFo3ImageSpaceQ1300(cellFormId, worldspaceFormId);
+inline bool LoadFo3WeatherLightingImageSpace(uint32_t cellFormId, uint32_t worldspaceFormId) {
+    const bool ready = LoadFo3WeatherImageSpace(cellFormId, worldspaceFormId);
     if (!ready) return false;
-    fo3weatherq1320::ApplyWeatherLightingQ1320(gFo3ImageSpaceQ1280);
-    return gFo3ImageSpaceQ1280.valid;
+    fo3weather::ApplyWeatherLighting(gFo3ImageSpace);
+    return gFo3ImageSpace.valid;
 }

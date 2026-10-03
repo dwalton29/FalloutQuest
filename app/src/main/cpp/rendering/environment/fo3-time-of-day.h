@@ -30,14 +30,14 @@
 // the authored Sunrise/Sunset endpoint at the span midpoint, yielding a smooth
 // Night->Sunrise->Day and Day->Sunset->Night bridge without inventing colours.
 
-namespace fo3todq1400 {
+namespace fo3tod {
 
 constexpr const char* TAG = "FalloutQuest";
 constexpr float PI = 3.14159265358979323846f;
 constexpr float TEST_HOURS_PER_REAL_SECOND = 2.0f;
 constexpr float TRIGGER_DEADZONE = 0.05f;
 
-struct ClimateTimesQ1400 {
+struct ClimateTimes {
     bool valid = false;
     uint32_t formId = 0u;
     float sunriseBegin = 5.0f;
@@ -46,7 +46,7 @@ struct ClimateTimesQ1400 {
     float sunsetEnd = 20.0f;
 };
 
-struct WeatherTimeQ1400 {
+struct WeatherTime {
     bool valid = false;
     uint32_t formId = 0u;
     std::string editorId;
@@ -70,24 +70,24 @@ struct WeatherTimeQ1400 {
     uint32_t imad[4]{0u, 0u, 0u, 0u};
 };
 
-struct TimeWeightsQ1400 {
+struct TimeWeights {
     float w[4]{0.0f, 1.0f, 0.0f, 0.0f};
     const char* phase = "DAY";
 };
 
-struct RuntimeQ1400 {
+struct TimeOfDayRuntime {
     bool ready = false;
     uint32_t worldspaceFormId = 0u;
     uint32_t climateFormId = 0u;
     uint32_t weatherFormId = 0u;
-    ClimateTimesQ1400 climate;
-    WeatherTimeQ1400 weather;
-    Fo3ImageSpaceQ1280 baseImage;
-    std::array<Fo3ImageSpaceQ1280, 4> endpointImage{};
-    std::unordered_map<uint32_t, WeatherTimeQ1400> emittanceWeather;
+    ClimateTimes climate;
+    WeatherTime weather;
+    Fo3ImageSpace baseImage;
+    std::array<Fo3ImageSpace, 4> endpointImage{};
+    std::unordered_map<uint32_t, WeatherTime> emittanceWeather;
 };
 
-inline RuntimeQ1400 gRuntime;
+inline TimeOfDayRuntime gRuntime;
 inline float gTestHour = 12.0f;
 inline int64_t gLastPredictedNs = 0;
 inline int gLastLoggedHour = -1;
@@ -114,8 +114,8 @@ inline float ByteTimeToHours(uint8_t value) {
     return static_cast<float>(value) / 6.0f;
 }
 
-inline bool LoadClimateTimes(uint32_t climateFormId, ClimateTimesQ1400& out) {
-    using namespace fo3envq1000;
+inline bool LoadClimateTimes(uint32_t climateFormId, ClimateTimes& out) {
+    using namespace fo3env;
     out = {};
     out.formId = climateFormId;
     if (climateFormId == 0u) return false;
@@ -137,8 +137,8 @@ inline bool LoadClimateTimes(uint32_t climateFormId, ClimateTimesQ1400& out) {
     return out.valid;
 }
 
-inline bool LoadWeatherTime(uint32_t weatherFormId, WeatherTimeQ1400& out) {
-    using namespace fo3envq1000;
+inline bool LoadWeatherTime(uint32_t weatherFormId, WeatherTime& out) {
+    using namespace fo3env;
     out = {};
     out.formId = weatherFormId;
     if (weatherFormId == 0u) return false;
@@ -196,8 +196,8 @@ inline bool LoadWeatherTime(uint32_t weatherFormId, WeatherTimeQ1400& out) {
     return out.valid;
 }
 
-inline TimeWeightsQ1400 WeightsForHour(float hour, const ClimateTimesQ1400& c) {
-    TimeWeightsQ1400 out;
+inline TimeWeights WeightsForHour(float hour, const ClimateTimes& c) {
+    TimeWeights out;
     std::fill(std::begin(out.w), std::end(out.w), 0.0f);
     hour = WrapHour(hour);
     const float sunriseMid = 0.5f * (c.sunriseBegin + c.sunriseEnd);
@@ -235,9 +235,9 @@ inline TimeWeightsQ1400 WeightsForHour(float hour, const ClimateTimesQ1400& c) {
     return out;
 }
 
-inline void SampleLinearRgb(const WeatherTimeQ1400& weather, int cls,
-                            const TimeWeightsQ1400& weights, float out[3]) {
-    using fo3colorq1390::SrgbToLinear;
+inline void SampleLinearRgb(const WeatherTime& weather, int cls,
+                            const TimeWeights& weights, float out[3]) {
+    using fo3color::SrgbToLinear;
     out[0] = out[1] = out[2] = 0.0f;
     if (!weather.haveNam0 || cls < 0 || cls >= 10) return;
     for (int tod = 0; tod < 4; ++tod) {
@@ -255,77 +255,77 @@ inline float LinearToSrgb(float value) {
         : 1.055f * std::pow(c, 1.0f / 2.4f) - 0.055f;
 }
 
-inline float BlendField(const std::array<Fo3ImageSpaceQ1280, 4>& endpoint,
-                        const TimeWeightsQ1400& weights,
-                        float Fo3ImageSpaceQ1280::*member) {
+inline float BlendField(const std::array<Fo3ImageSpace, 4>& endpoint,
+                        const TimeWeights& weights,
+                        float Fo3ImageSpace::*member) {
     float v = 0.0f;
     for (int i = 0; i < 4; ++i) v += endpoint[i].*member * weights.w[i];
     return v;
 }
 
-inline void BuildEndpointImages(RuntimeQ1400& runtime) {
+inline void BuildEndpointImages(TimeOfDayRuntime& runtime) {
     // Q12.8's loader is the clean base IMGS parser; Q13.0/Q13.2 then layer the
     // weather endpoint on top. Temporarily ask Q12.8 for the base and restore the
     // live global immediately afterwards so no frame can observe the temporary.
-    const Fo3ImageSpaceQ1280 live = gFo3ImageSpaceQ1280;
+    const Fo3ImageSpace live = gFo3ImageSpace;
     if (live.valid && live.cellFormId != 0u && live.worldspaceFormId != 0u &&
-        LoadFo3ImageSpaceQ1280(live.cellFormId, live.worldspaceFormId)) {
-        runtime.baseImage = gFo3ImageSpaceQ1280;
+        LoadFo3ImageSpace(live.cellFormId, live.worldspaceFormId)) {
+        runtime.baseImage = gFo3ImageSpace;
     } else {
         runtime.baseImage = live;
     }
-    gFo3ImageSpaceQ1280 = live;
+    gFo3ImageSpace = live;
 
-    using namespace fo3imadq1300;
+    using namespace fo3imad;
     for (int i = 0; i < 4; ++i) {
         runtime.endpointImage[i] = runtime.baseImage;
         runtime.endpointImage[i].weatherDayImadFormId = runtime.weather.imad[i];
         if (runtime.weather.imad[i] == 0u) continue;
 
-        WeatherImadQ1300 modifier;
-        if (!LoadWeatherImadQ1300(runtime.weather.imad[i], modifier) || !modifier.valid) continue;
-        ApplyWeatherImadQ1300(runtime.endpointImage[i]);
+        WeatherImad modifier;
+        if (!LoadWeatherImad(runtime.weather.imad[i], modifier) || !modifier.valid) continue;
+        ApplyWeatherImad(runtime.endpointImage[i]);
 
         // Q13.2 applies these two non-post channels separately. Build their
         // per-time endpoint values here so the same clock can interpolate them.
-        runtime.endpointImage[i].hdrSunlightDimmer = ApplyScalarQ1300(
+        runtime.endpointImage[i].hdrSunlightDimmer = ApplyScalar(
             runtime.baseImage.hdrSunlightDimmer,
             modifier.sunlightScaleMult, modifier.sunlightScaleAdd, 0.0f, 4.0f);
-        runtime.endpointImage[i].hdrLumRampNoTex = ApplyScalarQ1300(
+        runtime.endpointImage[i].hdrLumRampNoTex = ApplyScalar(
             runtime.baseImage.hdrLumRampNoTex,
             modifier.skyScaleMult, modifier.skyScaleAdd, 0.0f, 4.0f);
     }
 }
 
-inline Fo3ImageSpaceQ1280 BlendImage(const RuntimeQ1400& runtime,
-                                     const TimeWeightsQ1400& weights) {
-    Fo3ImageSpaceQ1280 out = runtime.baseImage;
-#define Q1400_BLEND_FIELD(name) out.name = BlendField(runtime.endpointImage, weights, &Fo3ImageSpaceQ1280::name)
-    Q1400_BLEND_FIELD(hdrEyeAdaptSpeed);
-    Q1400_BLEND_FIELD(hdrBlurRadius);
-    Q1400_BLEND_FIELD(hdrBlurPasses);
-    Q1400_BLEND_FIELD(hdrEmissiveMultiplier);
-    Q1400_BLEND_FIELD(hdrTargetLum);
-    Q1400_BLEND_FIELD(hdrUpperLumClamp);
-    Q1400_BLEND_FIELD(hdrBrightScale);
-    Q1400_BLEND_FIELD(hdrBrightClamp);
-    Q1400_BLEND_FIELD(hdrLumRampNoTex);
-    Q1400_BLEND_FIELD(hdrLumRampMin);
-    Q1400_BLEND_FIELD(hdrLumRampMax);
-    Q1400_BLEND_FIELD(hdrSunlightDimmer);
-    Q1400_BLEND_FIELD(hdrGrassDimmer);
-    Q1400_BLEND_FIELD(hdrTreeDimmer);
-    Q1400_BLEND_FIELD(hdrSkinDimmer);
-    Q1400_BLEND_FIELD(bloomBlurRadius);
-    Q1400_BLEND_FIELD(bloomAlphaInterior);
-    Q1400_BLEND_FIELD(bloomAlphaExterior);
-    Q1400_BLEND_FIELD(nightEyeBrightness);
-    Q1400_BLEND_FIELD(cinematicSaturation);
-    Q1400_BLEND_FIELD(cinematicContrastAvgLum);
-    Q1400_BLEND_FIELD(cinematicContrast);
-    Q1400_BLEND_FIELD(cinematicTintValue);
-    Q1400_BLEND_FIELD(cinematicBrightness);
-#undef Q1400_BLEND_FIELD
+inline Fo3ImageSpace BlendImage(const TimeOfDayRuntime& runtime,
+                                     const TimeWeights& weights) {
+    Fo3ImageSpace out = runtime.baseImage;
+#define FO3_BLEND_IMAGE_FIELD(name) out.name = BlendField(runtime.endpointImage, weights, &Fo3ImageSpace::name)
+    FO3_BLEND_IMAGE_FIELD(hdrEyeAdaptSpeed);
+    FO3_BLEND_IMAGE_FIELD(hdrBlurRadius);
+    FO3_BLEND_IMAGE_FIELD(hdrBlurPasses);
+    FO3_BLEND_IMAGE_FIELD(hdrEmissiveMultiplier);
+    FO3_BLEND_IMAGE_FIELD(hdrTargetLum);
+    FO3_BLEND_IMAGE_FIELD(hdrUpperLumClamp);
+    FO3_BLEND_IMAGE_FIELD(hdrBrightScale);
+    FO3_BLEND_IMAGE_FIELD(hdrBrightClamp);
+    FO3_BLEND_IMAGE_FIELD(hdrLumRampNoTex);
+    FO3_BLEND_IMAGE_FIELD(hdrLumRampMin);
+    FO3_BLEND_IMAGE_FIELD(hdrLumRampMax);
+    FO3_BLEND_IMAGE_FIELD(hdrSunlightDimmer);
+    FO3_BLEND_IMAGE_FIELD(hdrGrassDimmer);
+    FO3_BLEND_IMAGE_FIELD(hdrTreeDimmer);
+    FO3_BLEND_IMAGE_FIELD(hdrSkinDimmer);
+    FO3_BLEND_IMAGE_FIELD(bloomBlurRadius);
+    FO3_BLEND_IMAGE_FIELD(bloomAlphaInterior);
+    FO3_BLEND_IMAGE_FIELD(bloomAlphaExterior);
+    FO3_BLEND_IMAGE_FIELD(nightEyeBrightness);
+    FO3_BLEND_IMAGE_FIELD(cinematicSaturation);
+    FO3_BLEND_IMAGE_FIELD(cinematicContrastAvgLum);
+    FO3_BLEND_IMAGE_FIELD(cinematicContrast);
+    FO3_BLEND_IMAGE_FIELD(cinematicTintValue);
+    FO3_BLEND_IMAGE_FIELD(cinematicBrightness);
+#undef FO3_BLEND_IMAGE_FIELD
 
     for (int c = 0; c < 3; ++c) {
         out.nightEyeTint[c] = 0.0f;
@@ -347,8 +347,8 @@ inline Fo3ImageSpaceQ1280 BlendImage(const RuntimeQ1400& runtime,
     return out;
 }
 
-inline void UpdateSunDirection(Fo3EnvironmentQ1000& env, float hour,
-                               const ClimateTimesQ1400& climate) {
+inline void UpdateSunDirection(Fo3Environment& env, float hour,
+                               const ClimateTimes& climate) {
     // Fallout's solar trajectory is engine behaviour rather than a WTHR colour.
     // For the Q14.0 test clock, derive a continuous daylight arc from the actual
     // CLMT sunrise/sunset limits and preserve Q10.0's established noon azimuth
@@ -398,7 +398,7 @@ inline void UpdateSunDirection(Fo3EnvironmentQ1000& env, float hour,
 // captured hours is not yet recovered. Until more runtime anchors are captured,
 // spherical interpolation is an explicitly marked bridge; the three anchor
 // values themselves are copied directly from the PC runtime.
-inline void SlerpPcLightDirectionQ203D(const float a[3], const float b[3],
+inline void SlerpPcLightDirection(const float a[3], const float b[3],
                                        float t, float out[3]) {
     const float clampedT = Clamp01(t);
     float dot = a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
@@ -424,7 +424,7 @@ inline void SlerpPcLightDirectionQ203D(const float a[3], const float b[3],
     }
 }
 
-inline bool GetPcLightDirectionQ203D(float hour, float out[3]) {
+inline bool GetPcLightDirection(float hour, float out[3]) {
     if (!out) return false;
 
     // Direct PC c18 anchors converted from Bethesda Z-up to OpenXR Y-up.
@@ -434,36 +434,36 @@ inline bool GetPcLightDirectionQ203D(float hour, float out[3]) {
 
     const float h = WrapHour(hour);
     if (h < 12.0f) {
-        SlerpPcLightDirectionQ203D(kMidnight, kNoon, h / 12.0f, out);
+        SlerpPcLightDirection(kMidnight, kNoon, h / 12.0f, out);
     } else if (h < 18.0f) {
-        SlerpPcLightDirectionQ203D(kNoon, k1800, (h - 12.0f) / 6.0f, out);
+        SlerpPcLightDirection(kNoon, k1800, (h - 12.0f) / 6.0f, out);
     } else {
-        SlerpPcLightDirectionQ203D(k1800, kMidnight, (h - 18.0f) / 6.0f, out);
+        SlerpPcLightDirection(k1800, kMidnight, (h - 18.0f) / 6.0f, out);
     }
     return true;
 }
 
-inline void ApplyEnvironment(RuntimeQ1400& runtime, const TimeWeightsQ1400& weights) {
-    Fo3EnvironmentQ1000& env = gFo3EnvironmentQ1000;
+inline void ApplyEnvironment(TimeOfDayRuntime& runtime, const TimeWeights& weights) {
+    Fo3Environment& env = gFo3Environment;
     if (!env.valid) return;
 
     float value[3]{};
     SampleLinearRgb(runtime.weather, 0, weights, value);
-    for (int c = 0; c < 3; ++c) env.skyUpper[c] = value[c] * gFo3ImageSpaceQ1280.hdrLumRampNoTex;
+    for (int c = 0; c < 3; ++c) env.skyUpper[c] = value[c] * gFo3ImageSpace.hdrLumRampNoTex;
     SampleLinearRgb(runtime.weather, 1, weights, value);
     for (int c = 0; c < 3; ++c) env.fog[c] = value[c];
     SampleLinearRgb(runtime.weather, 3, weights, value);
     for (int c = 0; c < 3; ++c) env.ambient[c] = value[c];
     SampleLinearRgb(runtime.weather, 4, weights, value);
-    const float sunlightScale = fo3weatherq1320::EffectiveSunlightScaleQ1320(
-        gFo3ImageSpaceQ1280.hdrSunlightDimmer);
+    const float sunlightScale = fo3weather::EffectiveSunlightScale(
+        gFo3ImageSpace.hdrSunlightDimmer);
     for (int c = 0; c < 3; ++c) env.sunlight[c] = value[c] * sunlightScale;
     SampleLinearRgb(runtime.weather, 5, weights, value);
     for (int c = 0; c < 3; ++c) env.sun[c] = value[c];
     SampleLinearRgb(runtime.weather, 7, weights, value);
-    for (int c = 0; c < 3; ++c) env.skyLower[c] = value[c] * gFo3ImageSpaceQ1280.hdrLumRampNoTex;
+    for (int c = 0; c < 3; ++c) env.skyLower[c] = value[c] * gFo3ImageSpace.hdrLumRampNoTex;
     SampleLinearRgb(runtime.weather, 8, weights, value);
-    for (int c = 0; c < 3; ++c) env.horizon[c] = value[c] * gFo3ImageSpaceQ1280.hdrLumRampNoTex;
+    for (int c = 0; c < 3; ++c) env.horizon[c] = value[c] * gFo3ImageSpace.hdrLumRampNoTex;
 
     if (runtime.weather.haveFog) {
         // FNAM has only Day and Night distances. Sunrise/Sunset receive an equal
@@ -475,7 +475,7 @@ inline void ApplyEnvironment(RuntimeQ1400& runtime, const TimeWeightsQ1400& weig
     UpdateSunDirection(env, gTestHour, runtime.climate);
 }
 
-inline void ApplySky(RuntimeQ1400& runtime, const TimeWeightsQ1400& weights) {
+inline void ApplySky(TimeOfDayRuntime& runtime, const TimeWeights& weights) {
     using namespace fo3skyq1330;
     if (!EnsureWeatherQ1330() || gWeatherSkyQ1330.weatherFormId != runtime.weather.formId) return;
 
@@ -489,7 +489,7 @@ inline void ApplySky(RuntimeQ1400& runtime, const TimeWeightsQ1400& weights) {
             float alpha = 0.0f;
             for (int tod = 0; tod < 4; ++tod) {
                 for (int c = 0; c < 3; ++c) {
-                    rgb[c] += fo3colorq1390::SrgbToLinear(
+                    rgb[c] += fo3color::SrgbToLinear(
                         runtime.weather.cloudEncoded[layer][tod][c]) * weights.w[tod];
                 }
                 alpha += runtime.weather.cloudEncoded[layer][tod][3] * weights.w[tod];
@@ -501,14 +501,14 @@ inline void ApplySky(RuntimeQ1400& runtime, const TimeWeightsQ1400& weights) {
 
     // We have directly written linear RGB, so prevent Q13.9's render wrapper
     // from decoding these already-linear dynamic values a second time.
-    fo3colorq1390::gSkyWeather = runtime.weather.formId;
-    fo3colorq1390::gSkyConverted = true;
+    fo3color::gSkyWeather = runtime.weather.formId;
+    fo3color::gSkyConverted = true;
 }
 
-inline void ApplyRegionEmittance(RuntimeQ1400& runtime,
-                                 const TimeWeightsQ1400& weights) {
-    for (auto& pair : gFo3ExternalEmittanceQ1380) {
-        Fo3ExternalEmittanceQ1380& value = pair.second;
+inline void ApplyRegionEmittance(TimeOfDayRuntime& runtime,
+                                 const TimeWeights& weights) {
+    for (auto& pair : gFo3ExternalEmittance) {
+        Fo3ExternalEmittance& value = pair.second;
         if (!value.valid || !value.regionDriven || value.weatherFormId == 0u) continue;
         auto found = runtime.emittanceWeather.find(value.weatherFormId);
         if (found == runtime.emittanceWeather.end()) continue;
@@ -522,10 +522,10 @@ inline void ApplyRegionEmittance(RuntimeQ1400& runtime,
 }
 
 inline bool BuildRuntime() {
-    RuntimeQ1400 runtime;
-    const Fo3EnvironmentQ1000& env = gFo3EnvironmentQ1000;
+    TimeOfDayRuntime runtime;
+    const Fo3Environment& env = gFo3Environment;
     if (!env.valid || env.worldspaceFormId == 0u || env.weatherFormId == 0u ||
-        env.climateFormId == 0u || !gFo3ImageSpaceQ1280.valid) {
+        env.climateFormId == 0u || !gFo3ImageSpace.valid) {
         return false;
     }
 
@@ -541,14 +541,14 @@ inline bool BuildRuntime() {
 
     // Load the same XEMI map Q13.8/Q13.9 use, then cache the full four-endpoint
     // WTHR records for every region-driven external-emittance assignment.
-    LoadFo3ExternalEmittanceQ1380(runtime.worldspaceFormId);
-    for (const auto& pair : gFo3ExternalEmittanceQ1380) {
-        const Fo3ExternalEmittanceQ1380& value = pair.second;
+    LoadFo3ExternalEmittance(runtime.worldspaceFormId);
+    for (const auto& pair : gFo3ExternalEmittance) {
+        const Fo3ExternalEmittance& value = pair.second;
         if (!value.valid || !value.regionDriven || value.weatherFormId == 0u ||
             runtime.emittanceWeather.find(value.weatherFormId) != runtime.emittanceWeather.end()) {
             continue;
         }
-        WeatherTimeQ1400 weather;
+        WeatherTime weather;
         if (LoadWeatherTime(value.weatherFormId, weather)) {
             runtime.emittanceWeather.emplace(value.weatherFormId, std::move(weather));
         }
@@ -575,9 +575,9 @@ inline bool BuildRuntime() {
 
 inline void ApplyCurrentTime(bool forceLog) {
     if (!gRuntime.ready) return;
-    const TimeWeightsQ1400 weights = WeightsForHour(gTestHour, gRuntime.climate);
+    const TimeWeights weights = WeightsForHour(gTestHour, gRuntime.climate);
 
-    gFo3ImageSpaceQ1280 = BlendImage(gRuntime, weights);
+    gFo3ImageSpace = BlendImage(gRuntime, weights);
     ApplyEnvironment(gRuntime, weights);
     ApplySky(gRuntime, weights);
     ApplyRegionEmittance(gRuntime, weights);
@@ -588,9 +588,9 @@ inline void ApplyCurrentTime(bool forceLog) {
     if (forceLog || hourBucket != gLastLoggedHour || phaseChanged) {
         gLastLoggedHour = hourBucket;
         gLastLoggedPhase = weights.phase;
-        const Fo3EnvironmentQ1000& env = gFo3EnvironmentQ1000;
-        const float effectiveSunScale = fo3weatherq1320::EffectiveSunlightScaleQ1320(
-            gFo3ImageSpaceQ1280.hdrSunlightDimmer);
+        const Fo3Environment& env = gFo3Environment;
+        const float effectiveSunScale = fo3weather::EffectiveSunlightScale(
+            gFo3ImageSpace.hdrSunlightDimmer);
         __android_log_print(
             ANDROID_LOG_INFO, TAG,
             "Q14.0 TIME: hour=%05.2f phase=%s weights=(sunrise=%.3f day=%.3f sunset=%.3f night=%.3f) ambient=(%.3f %.3f %.3f) sunlight=(%.3f %.3f %.3f) fog=(%.3f %.3f %.3f) fogNear=%.1f fogFar=%.1f sunDir=(%.3f %.3f %.3f) sunDimmer=%.3f effectiveSunScale=%.3f skyScale=%.3f activeIMAD=%08X bloomScale=%.3f bloomClamp=%.3f exposureTarget=%.3f",
@@ -600,22 +600,22 @@ inline void ApplyCurrentTime(bool forceLog) {
             env.sunlight[0], env.sunlight[1], env.sunlight[2],
             env.fog[0], env.fog[1], env.fog[2], env.fogNear, env.fogFar,
             env.sunDirection[0], env.sunDirection[1], env.sunDirection[2],
-            gFo3ImageSpaceQ1280.hdrSunlightDimmer,
+            gFo3ImageSpace.hdrSunlightDimmer,
             effectiveSunScale,
-            gFo3ImageSpaceQ1280.hdrLumRampNoTex,
-            gFo3ImageSpaceQ1280.weatherDayImadFormId,
-            gFo3ImageSpaceQ1280.hdrBrightScale,
-            gFo3ImageSpaceQ1280.hdrBrightClamp,
-            gFo3ImageSpaceQ1280.hdrTargetLum);
+            gFo3ImageSpace.hdrLumRampNoTex,
+            gFo3ImageSpace.weatherDayImadFormId,
+            gFo3ImageSpace.hdrBrightScale,
+            gFo3ImageSpace.hdrBrightClamp,
+            gFo3ImageSpace.hdrTargetLum);
     }
 }
 
-} // namespace fo3todq1400
+} // namespace fo3tod
 
-inline void UpdateFo3TimeOfDayQ1400(float leftTriggerValue, int64_t predictedDisplayTimeNs) {
-    using namespace fo3todq1400;
-    const Fo3EnvironmentQ1000& env = gFo3EnvironmentQ1000;
-    if (!env.valid || !gFo3ImageSpaceQ1280.valid) {
+inline void UpdateFo3TimeOfDay(float leftTriggerValue, int64_t predictedDisplayTimeNs) {
+    using namespace fo3tod;
+    const Fo3Environment& env = gFo3Environment;
+    if (!env.valid || !gFo3ImageSpace.valid) {
         gLastPredictedNs = predictedDisplayTimeNs;
         return;
     }
@@ -648,10 +648,10 @@ inline void UpdateFo3TimeOfDayQ1400(float leftTriggerValue, int64_t predictedDis
     if (!gAppliedOnce || moved) ApplyCurrentTime(!gAppliedOnce);
 }
 
-inline float GetFo3TestHourQ1400() {
-    return fo3todq1400::gTestHour;
+inline float GetFo3TimeOfDayHour() {
+    return fo3tod::gTestHour;
 }
 
-inline bool GetFo3PcLightDirectionQ203D(float out[3]) {
-    return fo3todq1400::GetPcLightDirectionQ203D(fo3todq1400::gTestHour, out);
+inline bool GetFo3PcLightDirection(float out[3]) {
+    return fo3tod::GetPcLightDirection(fo3tod::gTestHour, out);
 }

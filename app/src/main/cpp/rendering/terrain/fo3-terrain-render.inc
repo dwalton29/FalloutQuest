@@ -1,5 +1,5 @@
 
-float GetFo3FogPowerQ1410();
+float GetFo3FogPower();
 
 #include "rendering/terrain/fo3-terrain.h"
 #include "rendering/environment/fo3-environment.h"
@@ -1193,10 +1193,10 @@ void RenderFo3TerrainQ76(const float* mvp) {
     }
     glUniform1i(q76bSamplerLocation, 0);
     if (q1060TerrainNormalSamplerLocation >= 0) glUniform1i(q1060TerrainNormalSamplerLocation, 1);
-    const Fo3EnvironmentQ1000& q1000Env = GetFo3EnvironmentQ1000();
+    const Fo3Environment& q1000Env = GetFo3Environment();
     float q203dPcLightDirection[3]{0.35f, 0.85f, 0.40f};
     const bool q203dPcLightReady =
-        GetFo3PcLightDirectionQ203D(q203dPcLightDirection);
+        GetFo3PcLightDirection(q203dPcLightDirection);
 
     // Q20.3 PC LAND parity: the captured SLS2124 constants prove that WTHR
     // AmbientColor and PSLightColor chroma are supplied in raw normalized byte
@@ -1207,11 +1207,11 @@ void RenderFo3TerrainQ76(const float* mvp) {
     float q2030RawSunlight[3]{0.52f, 0.52f, 0.52f};
     float q2030LinearSunlight[3]{0.52f, 0.52f, 0.52f};
     float q2030RawFog[3]{0.0f, 0.0f, 0.0f};
-    RefreshFo3RawWeatherLightingQ1480();
+    RefreshFo3RawWeatherLighting();
     const bool q2030RawLightingReady =
-        GetFo3RawWeatherLightingQ1480(q2030RawAmbient, q2030RawSunlight) &&
-        GetFo3LinearWeatherSunlightQ1480(q2030LinearSunlight);
-    const bool q2030RawFogReady = GetFo3RawWeatherFogQ1480(q2030RawFog);
+        GetFo3RawWeatherLighting(q2030RawAmbient, q2030RawSunlight) &&
+        GetFo3LinearWeatherSunlight(q2030LinearSunlight);
+    const bool q2030RawFogReady = GetFo3RawWeatherFog(q2030RawFog);
 
     float q2030SunScale = 1.0f;
     if (q1000Env.valid && q2030RawLightingReady) {
@@ -1256,12 +1256,12 @@ void RenderFo3TerrainQ76(const float* mvp) {
     }
 
     glUniform3fv(q1010TerrainEyeLocation, 1, gFo3EyePositionQ1010);
-    glUniform1i(q1010TerrainLightCountLocation, gFo3SelectedLightCountQ1010);
-    glUniform4fv(q1010TerrainLightPosRadiusLocation, FO3_SHADER_LIGHTS_Q1010,
-                 gFo3SelectedLightPosRadiusQ1010);
-    glUniform4fv(q1010TerrainLightColorFalloffLocation, FO3_SHADER_LIGHTS_Q1010,
-                 gFo3SelectedLightColorFalloffQ1010);
-    if (q1410TerrainFogPowerLocation >= 0) glUniform1f(q1410TerrainFogPowerLocation, GetFo3FogPowerQ1410());
+    glUniform1i(q1010TerrainLightCountLocation, gFo3SelectedLightCount);
+    glUniform4fv(q1010TerrainLightPosRadiusLocation, FO3_SHADER_LIGHTS,
+                 gFo3SelectedLightPosRadius);
+    glUniform4fv(q1010TerrainLightColorFalloffLocation, FO3_SHADER_LIGHTS,
+                 gFo3SelectedLightColorFalloff);
+    if (q1410TerrainFogPowerLocation >= 0) glUniform1f(q1410TerrainFogPowerLocation, GetFo3FogPower());
     const float q1532TerrainFogNear =
         (q1000Env.valid && q1000Env.fogFar > q1000Env.fogNear + 1.0f)
             ? std::max(0.0f, q1000Env.fogNear / 70.0f)
@@ -1275,7 +1275,7 @@ void RenderFo3TerrainQ76(const float* mvp) {
     if (q1532TerrainFogFarVertexLocation >= 0)
         glUniform1f(q1532TerrainFogFarVertexLocation, q1532TerrainFogFar);
     if (q1532TerrainFogPowerVertexLocation >= 0)
-        glUniform1f(q1532TerrainFogPowerVertexLocation, GetFo3FogPowerQ1410());
+        glUniform1f(q1532TerrainFogPowerVertexLocation, GetFo3FogPower());
     if (q1000Env.valid && q1000Env.fogFar > q1000Env.fogNear + 1.0f) {
         if (q2030RawFogReady) {
             glUniform3fv(q1010TerrainFogColorLocation, 1, q2030RawFog);

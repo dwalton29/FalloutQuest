@@ -303,7 +303,7 @@ inline bool LoadFo3CellEnvironment(uint32_t persistentCellFormId,
             ANDROID_LOG_WARN, TAG,
             "Q14.1 CELL ENV FAILED: persistentCell=%08X world=%08X arrival=(%.1f %.1f) reason=no-authored-spatial-cell",
             persistentCellFormId, worldspaceFormId, arrivalX, arrivalY);
-        return LoadFo3ImageSpaceQ1320(persistentCellFormId, worldspaceFormId);
+        return LoadFo3WeatherLightingImageSpace(persistentCellFormId, worldspaceFormId);
     }
 
     uint32_t regionWeather = 0u;
@@ -315,7 +315,7 @@ inline bool LoadFo3CellEnvironment(uint32_t persistentCellFormId,
             "Q14.1 CELL ENV FAILED: cell=%08X EDID=%s region=%08X reason=no-region-weather",
             cell.cellFormId, cell.cellEditorId.empty() ? "<none>" : cell.cellEditorId.c_str(),
             cell.regionFormId);
-        return LoadFo3ImageSpaceQ1320(cell.cellFormId, worldspaceFormId);
+        return LoadFo3WeatherLightingImageSpace(cell.cellFormId, worldspaceFormId);
     }
     cell.weatherFormId = regionWeather;
     cell.weatherChance = chance;
@@ -341,8 +341,8 @@ inline bool LoadFo3CellEnvironment(uint32_t persistentCellFormId,
     // the current weather's Day IMAD once. Q14.0 immediately replaces this with
     // interpolated endpoint values once the test clock starts.
     if (!LoadFo3BaseImageSpaceForCell(cell.cellFormId, worldspaceFormId)) return false;
-    fo3imadq1300::ApplyWeatherImadQ1300(gFo3ImageSpace);
-    fo3weatherq1320::ApplyWeatherLightingQ1320(gFo3ImageSpace);
+    fo3imad::ApplyWeatherImad(gFo3ImageSpace);
+    fo3weather::ApplyWeatherLighting(gFo3ImageSpace);
 
     float dayFogRgb[3]{};
     float dayNear = 0.0f, dayFar = 0.0f;

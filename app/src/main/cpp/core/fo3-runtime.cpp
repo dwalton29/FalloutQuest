@@ -33,12 +33,12 @@ extern void PumpFo3AndroidEventsQ1860();
 #include "rendering/environment/fo3-external-emittance.h"
 #include "rendering/environment/fo3-authored-color.h"
 #include "rendering/environment/fo3-megaton-cell-environment.h"
-#define LoadFo3ImageSpaceQ1280 LoadFo3ImageSpaceBaseQ1410
+#define LoadFo3ImageSpace LoadFo3BaseImageSpaceForCell
 #include "rendering/environment/fo3-time-of-day.h"
-#define FO3_Q1480_DEFINE_REFRESH 1
+#define FO3_DEFINE_WEATHER_REFRESH 1
 #include "rendering/environment/fo3-weather-byte-staging.h"
-#undef FO3_Q1480_DEFINE_REFRESH
-#undef LoadFo3ImageSpaceQ1280
+#undef FO3_DEFINE_WEATHER_REFRESH
+#undef LoadFo3ImageSpace
 #include "rendering/environment/fo3-visual-depth.h"
 
 void SetFo3TerrainShadowQ1050(GLuint depthTexture, const float* lightMvp, bool enabled);
@@ -1859,10 +1859,10 @@ bool UploadCpuObject(CpuObject& cpu, float centerX, float centerY, float floorZ,
     gpu.emissiveMult = std::max(0.0f, cpu.mesh.emissiveMult);
     gpu.environmentMapScaleQ2050 = std::max(0.0f, cpu.mesh.environmentMapScale);
     gpu.externalEmittanceFlagQ1380 =
-        (cpu.mesh.shaderFlags1 & fo3emittanceq1380::EXTERNAL_EMITTANCE_SHADER_FLAG) != 0u;
+        (cpu.mesh.shaderFlags1 & fo3emittance::EXTERNAL_EMITTANCE_SHADER_FLAG) != 0u;
     if (gpu.externalEmittanceFlagQ1380) {
         ++gQ1380ExternalFlagShapes;
-        Fo3ExternalEmittanceQ1380 q1380;
+        Fo3ExternalEmittance q1380;
         if (ResolveFo3ExternalEmittanceQ1390(0x00000A74u,
                                              cpu.placement.refFormId, q1380)) {
             gpu.externalEmittanceEnabledQ1380 = true;
@@ -2212,7 +2212,7 @@ void Q1050Ortho(float halfSpan, float nearZ, float farZ, float out[16]) {
     out[15] = 1.0f;
 }
 void Q1050BuildLightMvp(float out[16]) {
-    const Fo3EnvironmentQ1000& env = GetFo3EnvironmentQ1000();
+    const Fo3Environment& env = GetFo3Environment();
     Q1050V3 sun = Q1050Norm({env.sunDirection[0],env.sunDirection[1],env.sunDirection[2]});
     Q1050V3 center{gFo3EyePositionQ1010[0], gFo3EyePositionQ1010[1] + 4.0f, gFo3EyePositionQ1010[2]};
     Q1050V3 eye{center.x + sun.x*80.0f, center.y + sun.y*80.0f, center.z + sun.z*80.0f};
@@ -2293,7 +2293,7 @@ bool Q1050CreateShadowResources() {
 
 bool Q1050UpdateSunShadow() {
     if (!gSceneReady || gObjects.empty()) return false;
-    const Fo3EnvironmentQ1000& env=GetFo3EnvironmentQ1000();
+    const Fo3Environment& env=GetFo3Environment();
     if (!env.valid || !Q1050CreateShadowResources()) return false;
     const float dx=gFo3EyePositionQ1010[0]-gShadowLastEyeQ1050[0];
     const float dy=gFo3EyePositionQ1010[1]-gShadowLastEyeQ1050[1];
@@ -2582,7 +2582,7 @@ bool InitializeScene() {
     gLocalLightPosRadiusLocationQ1010 = glGetUniformLocation(gProgram, "uLocalLightPosRadius[0]");
     gLocalLightColorFalloffLocationQ1010 = glGetUniformLocation(gProgram, "uLocalLightColorFalloff[0]");
 
-    LoadFo3ExternalEmittanceQ1380(0x00000A74u);
+    LoadFo3ExternalEmittance(0x00000A74u);
     gObjects.reserve(selected.size());
     size_t q1860GpuPumpCount = 0u;
     for (CpuObject& cpu : selected) {
@@ -2597,7 +2597,7 @@ bool InitializeScene() {
     Q6H_LOGI("Q13.8 EMITTANCE GPU: nifFlagShapes=%zu resolvedShapes=%zu fixedLIGHShapes=%zu regionDayShapes=%zu shaderFlag=0x%08X dayEndpoint=1 authoredOnly=1 effectsFolderStillDeferred=1",
              gQ1380ExternalFlagShapes, gQ1380ExternalResolvedShapes,
              gQ1380ExternalFixedShapes, gQ1380ExternalRegionShapes,
-             fo3emittanceq1380::EXTERNAL_EMITTANCE_SHADER_FLAG);
+             fo3emittance::EXTERNAL_EMITTANCE_SHADER_FLAG);
     gSceneReady = gObjects.size() >= 2u;
     if (gSceneReady) {
         size_t realDiffuse = 0, realNormal = 0;
@@ -2620,7 +2620,7 @@ bool InitializeScene() {
         Q6H_LOGI("Q13.8 EMITTANCE GPU: nifFlagShapes=%zu resolvedShapes=%zu fixedLIGHShapes=%zu regionDayShapes=%zu shaderFlag=0x%08X dayEndpoint=1 authoredOnly=1 effectsFolderStillDeferred=1",
                  gQ1380ExternalFlagShapes, gQ1380ExternalResolvedShapes,
                  gQ1380ExternalFixedShapes, gQ1380ExternalRegionShapes,
-                 fo3emittanceq1380::EXTERNAL_EMITTANCE_SHADER_FLAG);
+                 fo3emittance::EXTERNAL_EMITTANCE_SHADER_FLAG);
 
         Q6H_LOGI("Q6H READY: ESM->REFR->BASE->MODL->BSA->NIF objects=%zu triangles=%zu realDiffuse=%zu realNormal=%zu uniqueTextures=%zu alphaBlend=%zu alphaTest=%zu cell=MegatonPlayerHouse",
                  gObjects.size(), triangles, realDiffuse, realNormal, gTextureCache.size(), alphaBlend, alphaTest);
@@ -2831,7 +2831,7 @@ bool ProcessQ74TransitionRequest() {
         gExteriorPersistentCellQ1890 = 0u;
         Q6H_LOGI("Q16.27 STREAM CONTEXT: active=0 reason=interior");
     }
-    LoadFo3CellEnvironmentQ1410(request.cellFormId, request.worldspaceFormId,
+    LoadFo3CellEnvironment(request.cellFormId, request.worldspaceFormId,
                                 request.x, request.y);
     Q6H_LOGI("Q20.9A WATER TRANSITION DISPATCH: cell=%08X worldspace=%08X XTEL=(%.2f %.2f %.2f) exteriorStreaming=%d",
              request.cellFormId, request.worldspaceFormId,
@@ -2849,11 +2849,11 @@ bool ProcessQ74TransitionRequest() {
         Q6H_LOGI("Q20.9A WATER TRANSITION RESULT: worldspace=00000000 loaded=0 nearbyWaterCells=0 reason=interior-or-missing-WRLD");
     }
     // Rebuild Q14.0 from the corrected region weather/XCIM on the first frame.
-    fo3todq1400::gRuntime = {};
-    fo3todq1400::gAppliedOnce = false;
-    fo3todq1400::gLastPredictedNs = 0;
-    fo3todq1400::gLastLoggedHour = -1;
-    fo3todq1400::gLastLoggedPhase.clear();
+    fo3tod::gRuntime = {};
+    fo3tod::gAppliedOnce = false;
+    fo3tod::gLastPredictedNs = 0;
+    fo3tod::gLastLoggedHour = -1;
+    fo3tod::gLastLoggedPhase.clear();
     Q6H_LOGI("Q7.4 SCENE SWAP READY: cell=%08X worldspace=%08X oldObjects=%zu newObjects=%zu triangles=%zu realDiffuse=%zu realNormal=%zu skippedMarkersEffects=%zu unsupported=%zu collisionReady=%d XTELorigin=1 orientationPreserved=1",
              request.cellFormId, request.worldspaceFormId,
              oldObjects, gObjects.size(), triangles, realDiffuse, realNormal,
@@ -2908,10 +2908,10 @@ bool Q1580MegatonArchitecture(const GpuObject& object) {
            object.modelPath.find("Megaton") != std::string::npos;
 }
 
-void Q1580LogLightTrace(const Fo3EnvironmentQ1000& env) {
+void Q1580LogLightTrace(const Fo3Environment& env) {
     static bool q1580Logged = false;
     if (q1580Logged || !env.valid || env.worldspaceFormId != 0x00000A74u ||
-        !fo3todq1400::gRuntime.ready || gObjects.empty()) return;
+        !fo3tod::gRuntime.ready || gObjects.empty()) return;
 
     const Vec3 uploaded = Normalize({env.sunDirection[0], env.sunDirection[1], env.sunDirection[2]});
     const Vec3 converted = GameDirectionToOpenXr({env.sunDirection[0], env.sunDirection[1], env.sunDirection[2]});
@@ -2950,7 +2950,7 @@ void Q1580LogLightTrace(const Fo3EnvironmentQ1000& env) {
 
     Q6H_LOGI("Q15.8 LIGHT TRACE HEADER: world=%08X climate=%08X weather=%08X EDID=%s hour=%.2f uploadedSun=(%.6f %.6f %.6f) convertedCandidate=(%.6f %.6f %.6f) pcSP17LightDataUnaligned=(-0.684054 0.286799 0.670684) ambient=(%.6f %.6f %.6f) sunlight=(%.6f %.6f %.6f)",
              env.worldspaceFormId, env.climateFormId, env.weatherFormId,
-             env.weatherEditorId.empty()?"<none>":env.weatherEditorId.c_str(), GetFo3TestHourQ1400(),
+             env.weatherEditorId.empty()?"<none>":env.weatherEditorId.c_str(), GetFo3TimeOfDayHour(),
              uploaded.x, uploaded.y, uploaded.z, converted.x, converted.y, converted.z,
              env.ambient[0], env.ambient[1], env.ambient[2], env.sunlight[0], env.sunlight[1], env.sunlight[2]);
     Q6H_LOGI("Q15.8 LIGHT TRACE SUMMARY: litObjects=%zu samples=%zu uploaded(mean=%.3f zero=%.1f%% lt10=%.1f%% lt25=%.1f%% max=%.3f) converted(mean=%.3f zero=%.1f%% lt10=%.1f%% lt25=%.1f%% max=%.3f) inverted(mean=%.3f zero=%.1f%% max=%.3f)",
@@ -2968,13 +2968,13 @@ void Q1580LogLightTrace(const Fo3EnvironmentQ1000& env) {
 
 bool Q1590GetPcSp17LightConstants(float ambient[3], float sunlight[3],
                                   float& baseSunDimmer, float& effectiveSunScale) {
-    using namespace fo3todq1400;
+    using namespace fo3tod;
     if (!gRuntime.ready || !gRuntime.weather.haveNam0 || !gRuntime.climate.valid ||
-        !gFo3ImageSpaceQ1280.valid) {
+        !gFo3ImageSpace.valid) {
         return false;
     }
 
-    const TimeWeightsQ1400 weights = WeightsForHour(gTestHour, gRuntime.climate);
+    const TimeWeights weights = WeightsForHour(gTestHour, gRuntime.climate);
     float rawAmbient[3]{0.0f, 0.0f, 0.0f};
     float rawSunlight[3]{0.0f, 0.0f, 0.0f};
     for (int tod = 0; tod < 4; ++tod) {
@@ -2990,9 +2990,9 @@ bool Q1590GetPcSp17LightConstants(float ambient[3], float sunlight[3],
     // Q14 already carries the live blended ImageSpace/IMAD Sunlight Dimmer;
     // use the same authored runtime value here so statics follow 12:00->18:00
     // ->00:00 intensity changes without touching the still-unresolved direction.
-    baseSunDimmer = gFo3ImageSpaceQ1280.hdrSunlightDimmer;
+    baseSunDimmer = gFo3ImageSpace.hdrSunlightDimmer;
     effectiveSunScale =
-        fo3weatherq1320::EffectiveSunlightScaleQ1320(baseSunDimmer);
+        fo3weather::EffectiveSunlightScale(baseSunDimmer);
     for (int c = 0; c < 3; ++c) {
         ambient[c] = rawAmbient[c];
         sunlight[c] = rawSunlight[c] * effectiveSunScale;
@@ -3019,17 +3019,17 @@ void Q1590UploadPcSp17LightConstants() {
 
     static uint32_t q1590LastWeather = 0u;
     static int q1590LastHour = -1;
-    const int hourBucket = static_cast<int>(std::floor(fo3todq1400::gTestHour * 10.0f));
-    if (q1590LastWeather != fo3todq1400::gRuntime.weatherFormId ||
+    const int hourBucket = static_cast<int>(std::floor(fo3tod::gTestHour * 10.0f));
+    if (q1590LastWeather != fo3tod::gRuntime.weatherFormId ||
         q1590LastHour != hourBucket) {
-        q1590LastWeather = fo3todq1400::gRuntime.weatherFormId;
+        q1590LastWeather = fo3tod::gRuntime.weatherFormId;
         q1590LastHour = hourBucket;
         Q6H_LOGI(
             "Q15.13 SP17 CORE: weather=%08X EDID=%s hour=%.2f ambient=(%.6f %.6f %.6f) sunlight=(%.6f %.6f %.6f) baseSunDimmer=%.3f effectiveSunScale=%.3f scope=static-PPLighting core=PC_DP3_DIFFUSE_TANGENT_HALF_SPEC normalAlphaSpec=1 lowNdotLSpecGate=1 syntheticSpec032=0 baseMap=GL_RGBA8_RAW pcFog=VERTEX_INTERPOLATED LightData=PC_CAPTURE_Q20.3D vcolorRule=EXE_GEOMETRY_STREAM_Q20.4B sunScaleSource=Q14-ImageSpace",
-            fo3todq1400::gRuntime.weatherFormId,
-            fo3todq1400::gRuntime.weather.editorId.empty()
-                ? "<none>" : fo3todq1400::gRuntime.weather.editorId.c_str(),
-            fo3todq1400::gTestHour,
+            fo3tod::gRuntime.weatherFormId,
+            fo3tod::gRuntime.weather.editorId.empty()
+                ? "<none>" : fo3tod::gRuntime.weather.editorId.c_str(),
+            fo3tod::gTestHour,
             ambient[0], ambient[1], ambient[2],
             sunlight[0], sunlight[1], sunlight[2],
             baseSunDimmer, effectiveSunScale);
@@ -6870,7 +6870,7 @@ bool Q2090RenderWaterReflection(const float mainMvp[16],
     glBindFramebuffer(GL_FRAMEBUFFER, gWaterReflectionFboQ2090);
     glViewport(0, 0, Q2090_REFLECTION_SIZE, Q2090_REFLECTION_SIZE);
 
-    const Fo3EnvironmentQ1000& env = GetFo3EnvironmentQ1000();
+    const Fo3Environment& env = GetFo3Environment();
     if (env.valid) {
         glClearColor(env.horizon[0], env.horizon[1], env.horizon[2], 1.0f);
     } else {
@@ -10660,10 +10660,10 @@ void RenderScene() {
         glUniform1i(gEnvironmentCubeLocationQ2050, 4);
     if (gEnvironmentMaskLocationQ2050 >= 0)
         glUniform1i(gEnvironmentMaskLocationQ2050, 5);
-    const Fo3EnvironmentQ1000& q1000Env = GetFo3EnvironmentQ1000();
+    const Fo3Environment& q1000Env = GetFo3Environment();
     float q203dPcLightDirection[3]{0.35f, 0.85f, 0.40f};
     const bool q203dPcLightReady =
-        GetFo3PcLightDirectionQ203D(q203dPcLightDirection);
+        GetFo3PcLightDirection(q203dPcLightDirection);
     if (q1000Env.valid) {
         float q1500Ambient[3]{q1000Env.ambient[0], q1000Env.ambient[1], q1000Env.ambient[2]};
         glUniform3fv(gAmbientColorLocationQ1000, 1, q1500Ambient);
@@ -10678,12 +10678,12 @@ void RenderScene() {
 
 
     glUniform3fv(gEyePositionLocationQ1010, 1, gFo3EyePositionQ1010);
-    glUniform1i(gLocalLightCountLocationQ1010, gFo3SelectedLightCountQ1010);
-    glUniform4fv(gLocalLightPosRadiusLocationQ1010, FO3_SHADER_LIGHTS_Q1010,
-                 gFo3SelectedLightPosRadiusQ1010);
-    glUniform4fv(gLocalLightColorFalloffLocationQ1010, FO3_SHADER_LIGHTS_Q1010,
-                 gFo3SelectedLightColorFalloffQ1010);
-    if (gFogPowerLocationQ1410 >= 0) glUniform1f(gFogPowerLocationQ1410, GetFo3FogPowerQ1410());
+    glUniform1i(gLocalLightCountLocationQ1010, gFo3SelectedLightCount);
+    glUniform4fv(gLocalLightPosRadiusLocationQ1010, FO3_SHADER_LIGHTS,
+                 gFo3SelectedLightPosRadius);
+    glUniform4fv(gLocalLightColorFalloffLocationQ1010, FO3_SHADER_LIGHTS,
+                 gFo3SelectedLightColorFalloff);
+    if (gFogPowerLocationQ1410 >= 0) glUniform1f(gFogPowerLocationQ1410, GetFo3FogPower());
     Q1590UploadPcSp17LightConstants();
 
     const float q1532StaticFogNear =
@@ -10699,7 +10699,7 @@ void RenderScene() {
     if (gFogFarVertexLocationQ1532 >= 0)
         glUniform1f(gFogFarVertexLocationQ1532, q1532StaticFogFar);
     if (gFogPowerVertexLocationQ1532 >= 0)
-        glUniform1f(gFogPowerVertexLocationQ1532, GetFo3FogPowerQ1410());
+        glUniform1f(gFogPowerVertexLocationQ1532, GetFo3FogPower());
     if (gSunDirectionVertexLocationQ1540 >= 0) {
         if (q203dPcLightReady) {
             glUniform3fv(gSunDirectionVertexLocationQ1540, 1, q203dPcLightDirection);
@@ -10712,12 +10712,12 @@ void RenderScene() {
 
     static int q203dLastLightHourBucket = -1;
     const int q203dLightHourBucket =
-        static_cast<int>(std::floor(GetFo3TestHourQ1400() * 10.0f));
+        static_cast<int>(std::floor(GetFo3TimeOfDayHour() * 10.0f));
     if (q203dPcLightReady && q203dLightHourBucket != q203dLastLightHourBucket) {
         q203dLastLightHourBucket = q203dLightHourBucket;
         Q6H_LOGI(
             "Q20.3D LIGHTDATA: hour=%.2f pcLightOpenXR=(%.7f %.7f %.7f) oldSynthetic=(%.7f %.7f %.7f) source=PC_LAND_c18 anchors=00,12,18 interpolation=SLERP bridge=explicit staticSP17=1 LAND=1 skySun=unchanged",
-            GetFo3TestHourQ1400(),
+            GetFo3TimeOfDayHour(),
             q203dPcLightDirection[0], q203dPcLightDirection[1], q203dPcLightDirection[2],
             q1000Env.sunDirection[0], q1000Env.sunDirection[1], q1000Env.sunDirection[2]);
     }
@@ -10954,7 +10954,7 @@ void RenderScene() {
             q2080FogColor,
             q1532StaticFogNear,
             q1532StaticFogFar,
-            GetFo3FogPowerQ1410(),
+            GetFo3FogPower(),
             q2080NearClipMetres,
             q2080FarClipMetres,
             q2090ReflectionReady ? gWaterReflectionColorQ2090 : 0u,
@@ -11297,7 +11297,7 @@ void Q1350UpdateExposureQ1350() {
     glBindTexture(GL_TEXTURE_2D, q1350AdaptTexture[q1350AdaptIndex]);
     glUniform1i(q1350AdaptPrevLocation, 1);
 
-    const Fo3ImageSpaceQ1280& image = GetFo3ImageSpaceQ1280();
+    const Fo3ImageSpace& image = GetFo3ImageSpace();
     const float targetLum = image.valid ? std::clamp(image.hdrTargetLum, 0.001f, 4.0f) : 1.0f;
     const float upperLum = image.valid ? std::clamp(image.hdrUpperLumClamp, 0.01f, 4.0f) : 1.0f;
     const float eyeSpeed = image.valid ? std::clamp(image.hdrEyeAdaptSpeed, 0.0f, 1.0f) : 0.5f;
@@ -12059,7 +12059,7 @@ void Q1280CompositeEyePostQ1280(GLuint swapchainFbo, GLsizei width, GLsizei heig
     glUniform1i(q1670PcBloomLocation, 3);
     glUniform1f(q1670PcBloomReadyLocation, q1670BloomReadyQ1670 ? 1.0f : 0.0f);
     glActiveTexture(GL_TEXTURE0);
-    const Fo3ImageSpaceQ1280& image = GetFo3ImageSpaceQ1280();
+    const Fo3ImageSpace& image = GetFo3ImageSpace();
     glUniform1f(q1520TargetLumLocation, 1.2f);
     const int flags = image.valid
         ? static_cast<int>(image.cinematicFlags)
@@ -12070,7 +12070,7 @@ void Q1280CompositeEyePostQ1280(GLuint swapchainFbo, GLsizei width, GLsizei heig
     glUniform1f(q1280ContrastLocation, image.valid ? image.cinematicContrast : 1.0f);
     glUniform1f(q1280BrightnessLocation, image.valid ? image.cinematicBrightness : 1.0f);
     glUniform3fv(q1280TintColorLocation, 1,
-                 image.valid ? image.cinematicTint : Fo3ImageSpaceQ1280{}.cinematicTint);
+                 image.valid ? image.cinematicTint : Fo3ImageSpace{}.cinematicTint);
     glUniform1f(q1280TintValueLocation, image.valid ? image.cinematicTintValue : 0.0f);
 
     const float authoredRadius = image.valid
@@ -12234,7 +12234,7 @@ void Q6HDeleteFramebuffers(GLsizei n, const GLuint* framebuffers) {
     gQ1380ExternalResolvedShapes = 0u;
     gQ1380ExternalFixedShapes = 0u;
     gQ1380ExternalRegionShapes = 0u;
-    ResetFo3ExternalEmittanceQ1380();
+    ResetFo3ExternalEmittance();
 }
 
 void Q6HViewport(GLint x, GLint y, GLsizei width, GLsizei height) {

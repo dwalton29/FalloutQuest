@@ -1389,15 +1389,15 @@ private:
                 (viewState.viewStateFlags & XR_VIEW_STATE_ORIENTATION_VALID_BIT)) {
 
                 SyncInput(frameState.predictedDisplayTime);
-                UpdateFo3TimeOfDayQ1400(0.0f,
+                UpdateFo3TimeOfDay(0.0f,
                     static_cast<int64_t>(frameState.predictedDisplayTime));
-                if (fo3todq1400::gRuntime.ready) {
-                    UpdateFo3FogPowerQ1410(
-                        fo3todq1400::gTestHour,
-                        fo3todq1400::gRuntime.climate.sunriseBegin,
-                        fo3todq1400::gRuntime.climate.sunriseEnd,
-                        fo3todq1400::gRuntime.climate.sunsetBegin,
-                        fo3todq1400::gRuntime.climate.sunsetEnd);
+                if (fo3tod::gRuntime.ready) {
+                    UpdateFo3FogPower(
+                        fo3tod::gTestHour,
+                        fo3tod::gRuntime.climate.sunriseBegin,
+                        fo3tod::gRuntime.climate.sunriseEnd,
+                        fo3tod::gRuntime.climate.sunsetBegin,
+                        fo3tod::gRuntime.climate.sunsetEnd);
                 }
                 if (!IsFo3LoadingVisible()) {
                     UpdatePlayer(views[0], frameState.predictedDisplayTime);
@@ -1533,7 +1533,7 @@ private:
 
         if (glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE) {
             glDisable(GL_DEPTH_TEST);
-            const Fo3EnvironmentQ1000& q1000Env = GetFo3EnvironmentQ1000();
+            const Fo3Environment& q1000Env = GetFo3Environment();
             if (q1000Env.valid) {
                 glClearColor(q1000Env.horizon[0], q1000Env.horizon[1], q1000Env.horizon[2], 1.0f);
             } else {
@@ -1555,7 +1555,7 @@ private:
                         FO3_UNITS_PER_METRE_Q715);
             }
             const XrPosef virtualEyePose = ToVirtualPose(view.pose);
-            UpdateFo3VisualEyeQ1010(virtualEyePose.position.x, virtualEyePose.position.y, virtualEyePose.position.z);
+            UpdateFo3VisualEye(virtualEyePose.position.x, virtualEyePose.position.y, virtualEyePose.position.z);
             const Mat4 camera = ViewFromPose(virtualEyePose);
             Mat4 skyView = camera;
             skyView.m[12] = 0.0f;
