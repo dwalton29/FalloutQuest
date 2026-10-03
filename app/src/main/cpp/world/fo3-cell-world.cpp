@@ -2,7 +2,7 @@
 #include "fo3-esm-reader.h"
 #include <unordered_map>
 extern void PumpFo3AndroidEventsQ1860();
-#include "fo3-door-prompt.h"
+#include "world/interaction/fo3-door-prompt.h"
 #include <algorithm>
 #include <cstring>
 #include <string>

@@ -1,5 +1,5 @@
 #include "ui/interaction/fo3-interaction-hud-assets.h"
-#include "fo3-door-prompt.h"
+#include "world/interaction/fo3-door-prompt.h"
 #include "ui/interaction/fo3-interaction-hud-dynamic.h"
 #include "ui/interaction/fo3-interaction-hud-renderer.h"
 #include "ui/interaction/fo3-interaction-hud-layout.h"
