@@ -6,8 +6,8 @@ find_package(OpenXR REQUIRED CONFIG)
 # Q17 consolidated baseline: normal sources, no generated-source patch chain.
 add_library(falloutquest SHARED
     fo3-runtime.cpp
-    fo3-megaton-scene.cpp
-    fo3-cell-world.cpp
+    world/fo3-megaton-scene.cpp
+    world/fo3-cell-world.cpp
     fo3-static-nif-runtime.cpp
     physics/fo3-nif-collision-parser.cpp
     physics/fo3-collision-runtime.cpp
