@@ -2677,8 +2677,20 @@ struct Fo3SceneCpuPreparation {
     uint64_t textureUs = 0u;
 };
 
+struct Fo3SceneCollisionPreparation {
+    std::vector<Fo3WorldPlacement> placements;
+    uint64_t token = 0u;
+    uint64_t elapsedUs = 0u;
+    ~Fo3SceneCollisionPreparation() { if (token) DiscardFo3CollisionSnapshotQ1930(token); }
+};
+
 struct Fo3SceneLoadWork {
     fo3scene::Preparation<Fo3SceneCpuPreparation> preparation;
+    fo3scene::Preparation<Fo3SceneCollisionPreparation> collisionPreparation;
+    bool collisionStarted = false;
+    bool collisionComplete = false;
+    bool collisionReady = false;
+    uint64_t collisionUs = 0u;
     std::vector<GpuObject> replacement;
     std::chrono::steady_clock::time_point started{};
     uint64_t generation = 0u;
@@ -2705,6 +2717,7 @@ uint64_t Fo3SceneElapsedUs(std::chrono::steady_clock::time_point since) {
 void AbortFo3SceneLoad(const char* reason) {
     Q6H_LOGE("SCENE LOAD FAILED: reason=%s oldSceneRetained=1", reason);
     Q74DeleteGpuObjects(gSceneLoad.replacement);
+    gSceneLoad.collisionPreparation.Reset();
     if (gSceneLoad.contextApplied)
         Fo3DynamicOnlyCollisionModelsQ710() = std::move(gSceneLoad.previousCollisionPolicy);
     gSceneLoad.preparation.Reset();
@@ -2717,6 +2730,9 @@ bool BeginFo3SceneLoad(const Fo3CellTransitionRequestQ74& request, bool boot) {
     gSceneLoad.active = true;
     gSceneLoad.boot = boot;
     gSceneLoad.contextApplied = false;
+    gSceneLoad.collisionPreparation.Reset();
+    gSceneLoad.collisionStarted = gSceneLoad.collisionComplete = gSceneLoad.collisionReady = false;
+    gSceneLoad.collisionUs = 0u;
     gSceneLoad.started = std::chrono::steady_clock::now();
     gSceneLoad.generation = GetFo3LoadingGeneration();
     gSceneLoad.uploadIndex = 0u;
@@ -2854,55 +2870,77 @@ bool ProcessQ74TransitionRequest() {
         AbortFo3SceneLoad("gpu-upload-too-small");
         return false;
     }
-    const auto collisionStarted = std::chrono::steady_clock::now();
-    std::vector<Fo3WorldPlacement> collisionPlacements;
-    collisionPlacements.reserve(selected.size());
-    collisionPlacements = std::move(prepared.collisionPlacements);
-
-    // Q16.27: initial Capital Wasteland visuals are 7x7, but initial physics is
-    // deliberately local 3x3. Other worldspaces keep their established policy.
-    std::vector<Fo3WorldPlacement> q1960InitialCollisionPlacements;
-    const std::vector<Fo3WorldPlacement>* q1960CollisionSource = &collisionPlacements;
-    size_t q1960OutsideInitialCollisionWindow = 0u;
-    if (request.worldspaceFormId == 0x0000003Cu) {
-        Q1970ProbeNativeLod(request.x, request.y);
-        // Q20.13: start Level4 only after the new exterior/Q19 context exists.
-        // The loading overlay remains up while that asynchronous warmup runs.
-        constexpr float Q1960_CELL_SIZE = 4096.0f;
-        constexpr int Q1960_INITIAL_COLLISION_RADIUS = 1;
-        const int32_t q1960TargetGridX = static_cast<int32_t>(
-            std::floor(request.x / Q1960_CELL_SIZE));
-        const int32_t q1960TargetGridY = static_cast<int32_t>(
-            std::floor(request.y / Q1960_CELL_SIZE));
-        q1960InitialCollisionPlacements.reserve(collisionPlacements.size());
-        for (const Fo3WorldPlacement& placement : collisionPlacements) {
-            const int32_t q1960PlacementGridX = static_cast<int32_t>(
-                std::floor(placement.x / Q1960_CELL_SIZE));
-            const int32_t q1960PlacementGridY = static_cast<int32_t>(
-                std::floor(placement.y / Q1960_CELL_SIZE));
-            if (std::abs(q1960PlacementGridX - q1960TargetGridX) >
-                    Q1960_INITIAL_COLLISION_RADIUS ||
-                std::abs(q1960PlacementGridY - q1960TargetGridY) >
-                    Q1960_INITIAL_COLLISION_RADIUS) {
-                ++q1960OutsideInitialCollisionWindow;
-                continue;
+    if (!gSceneLoad.collisionComplete) {
+        const bool backgroundExterior = request.worldspaceFormId == 0x0000003Cu ||
+                                        request.worldspaceFormId == 0x00000A74u;
+        if (backgroundExterior) {
+            if (!gSceneLoad.collisionStarted) {
+                // Existing CELL collision workers are drained before contextApplied.
+                // Player queries and hidden-world draws are paused under the loader;
+                // only this worker may write the placement cache until publication.
+                std::vector<Fo3WorldPlacement> source = std::move(prepared.collisionPlacements);
+                gSceneLoad.collisionStarted = gSceneLoad.collisionPreparation.Start(
+                    [request, source = std::move(source)](Fo3SceneCollisionPreparation& out,
+                                                       const std::atomic<bool>& cancelled) {
+                    const auto started = std::chrono::steady_clock::now();
+                    for (const auto& placement : source) {
+                        if (cancelled.load(std::memory_order_acquire)) return false;
+                        if (request.worldspaceFormId == 0x0000003Cu) {
+                            const int32_t gx = static_cast<int32_t>(std::floor(placement.x / 4096.0f));
+                            const int32_t gy = static_cast<int32_t>(std::floor(placement.y / 4096.0f));
+                            const int32_t tx = static_cast<int32_t>(std::floor(request.x / 4096.0f));
+                            const int32_t ty = static_cast<int32_t>(std::floor(request.y / 4096.0f));
+                            if (std::abs(gx-tx)>1 || std::abs(gy-ty)>1) continue;
+                        }
+                        out.placements.push_back(placement);
+                        size_t triangles = 0u;
+                        if (!PrimeFo3CollisionPlacementCacheQ1820(placement,
+                                request.x, request.y, request.z, SCENE_FORWARD, FLOOR_Y,
+                                FO3_UNITS_PER_METRE, &triangles)) return false;
+                    }
+                    if (cancelled.load(std::memory_order_acquire)) return false;
+                    const bool ready = PrepareFo3CollisionSnapshotQ1930(out.placements,
+                        request.x, request.y, request.z, SCENE_FORWARD, FLOOR_Y,
+                        FO3_UNITS_PER_METRE, &out.token);
+                    out.elapsedUs = Fo3SceneElapsedUs(started);
+                    return ready;
+                });
+                if (!gSceneLoad.collisionStarted) {
+                    AbortFo3SceneLoad("collision-worker-start");
+                }
+                return false;
             }
-            q1960InitialCollisionPlacements.push_back(placement);
+            if (!gSceneLoad.collisionPreparation.Ready()) return false;
+            if (!gSceneLoad.collisionPreparation.Successful()) {
+                AbortFo3SceneLoad("collision-preparation");
+                return false;
+            }
+            auto& collision = gSceneLoad.collisionPreparation.Get();
+            uint64_t swapUs = 0u;
+            gSceneLoad.collisionReady = PublishFo3CollisionSnapshotQ1930(collision.token, &swapUs);
+            collision.token = 0u;
+            gSceneLoad.collisionUs = collision.elapsedUs + swapUs;
+            if (!gSceneLoad.collisionReady) {
+                AbortFo3SceneLoad("collision-publication");
+                return false;
+            }
+            Q6H_LOGI("SCENE COLLISION READY: placements=%zu prepareUs=%llu swapUs=%llu background=1",
+                     collision.placements.size(),
+                     static_cast<unsigned long long>(collision.elapsedUs),
+                     static_cast<unsigned long long>(swapUs));
+            gSceneLoad.collisionPreparation.Reset();
+        } else {
+            // Retain authored interior selection until it has its own CPU snapshot.
+            const auto started = std::chrono::steady_clock::now();
+            gSceneLoad.collisionReady = InitializeFo3CollisionOverlay(prepared.collisionPlacements,
+                request.x, request.y, request.z, SCENE_FORWARD, FLOOR_Y, FO3_UNITS_PER_METRE);
+            gSceneLoad.collisionUs = Fo3SceneElapsedUs(started);
         }
-        q1960CollisionSource = &q1960InitialCollisionPlacements;
-        SetNextFo3CollisionExteriorModeQ1931(true);
-        Q6H_LOGI("Q16.27 INITIAL COLLISION WINDOW: worldspace=%08X targetGrid=(%d,%d) visualCollisionCandidates=%zu localCollisionPlacements=%zu outside3x3=%zu radius=1",
-                 request.worldspaceFormId,
-                 q1960TargetGridX, q1960TargetGridY,
-                 collisionPlacements.size(), q1960InitialCollisionPlacements.size(),
-                 q1960OutsideInitialCollisionWindow);
+        gSceneLoad.collisionComplete = true;
+        return false; // Commit/environment/terrain gets a separate submitted frame.
     }
-    const bool collisionReady = InitializeFo3CollisionOverlay(*q1960CollisionSource,
-                                                               request.x, request.y, request.z,
-                                                               SCENE_FORWARD, FLOOR_Y,
-                                                               FO3_UNITS_PER_METRE);
-
-    const uint64_t collisionUs = Fo3SceneElapsedUs(collisionStarted);
+    const bool collisionReady = gSceneLoad.collisionReady;
+    const uint64_t collisionUs = gSceneLoad.collisionUs;
     const auto finalizationStarted = std::chrono::steady_clock::now();
     const size_t oldObjects = gObjects.size();
     Q74DeleteGpuObjects(gObjects);
@@ -10733,6 +10771,9 @@ void RenderScene() {
     if (!gSceneReady) Q1030BootMegatonOnRender();
     ProcessQ74TransitionRequest();
 
+    // A loading eye is replaced completely: skip invisible world draws, shadow
+    // map rebuilds, reflections, terrain and actors while preparation advances.
+    if (IsFo3LoadingVisible()) return;
     if (!gSceneReady || !gProgram || gObjects.empty()) return;
 
     static uint64_t q209aWaterHeartbeatFrame = 0u;
@@ -12340,6 +12381,7 @@ void Q1280ShutdownPostQ1280() {
 }
 
 void Q6HDeleteFramebuffers(GLsizei n, const GLuint* framebuffers) {
+    gSceneLoad.collisionPreparation.Reset();
     gSceneLoad.preparation.Reset();
     Q74DeleteGpuObjects(gSceneLoad.replacement);
     gSceneLoad.active = false;

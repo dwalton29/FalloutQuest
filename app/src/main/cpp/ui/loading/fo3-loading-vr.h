@@ -36,7 +36,8 @@ inline GLuint gFramebuffer=0,gColour=0,gDepth=0;
 inline int gWidth=0,gHeight=0;
 inline float gArtAspect=4.0f/3.0f;
 inline GLint gMvp=-1,gSampler=-1,gUnlit=-1,gTint=-1,gFade=-1;
-inline uint64_t gVisibleStart=0;
+inline uint64_t gVisibleStart=0,gRotationStart=0;
+inline float gFrameRotationSeconds=0;
 inline float gFrameSeconds=0;
 
 inline void PrepareCatalog() {
@@ -175,8 +176,8 @@ inline bool EnsureProgram() {
     if(!ok){glDeleteProgram(gProgram);gProgram=0;return false;}
     gMvp=glGetUniformLocation(gProgram,"uMvp");gSampler=glGetUniformLocation(gProgram,"uImage");
     gUnlit=glGetUniformLocation(gProgram,"uUnlit");gTint=glGetUniformLocation(gProgram,"uTint");gFade=glGetUniformLocation(gProgram,"uFade");
-    const Vertex quad[]={{{-1,-1,0},{0,0,1},{0,0},{1,1,1,1}},{{1,-1,0},{0,0,1},{1,0},{1,1,1,1}},
-        {{-1,1,0},{0,0,1},{0,1},{1,1,1,1}},{{1,1,0},{0,0,1},{1,1},{1,1,1,1}}};
+    const Vertex quad[]={{{-1,-1,0},{0,0,1},{0,1},{1,1,1,1}},{{1,-1,0},{0,0,1},{1,1},{1,1,1,1}},
+        {{-1,1,0},{0,0,1},{0,0},{1,1,1,1}},{{1,1,0},{0,0,1},{1,0},{1,1,1,1}}};
     glGenVertexArrays(1,&gQuad);glBindVertexArray(gQuad);glGenBuffers(1,&gQuadBuffer);glBindBuffer(GL_ARRAY_BUFFER,gQuadBuffer);
     glBufferData(GL_ARRAY_BUFFER,sizeof(quad),quad,GL_STATIC_DRAW);
     for(GLuint a=0;a<4;++a)glEnableVertexAttribArray(a);
@@ -191,7 +192,7 @@ inline void AdvanceAssets() {
     if(generation!=gGeneration) {
         gPreparation.Reset();DeleteShapes(gNextModel);DeleteShapes(gNextCompass);
         gModelUpload=gCompassUpload=0;gArtUploaded=false;
-        gGeneration=generation;gAnchor=gHead;gJobStarted=gUploaded=false;gVisibleStart=Fo3LoadingClockUs();
+        gGeneration=generation;gAnchor=gHead;gJobStarted=gUploaded=false;gVisibleStart=Fo3LoadingClockUs();gRotationStart=gVisibleStart;
     }
     PrepareCatalog();
     if(!gJobStarted && (gCatalog.Ready() || gCatalogFailed)) {
@@ -234,7 +235,7 @@ inline void AdvanceAssets() {
             DeleteShapes(gModel);gModel.swap(gNextModel);
             if(!gNextCompass.empty()) {DeleteShapes(gCompass);gCompass.swap(gNextCompass);}
             __android_log_print(ANDROID_LOG_INFO,"FalloutQuest",
-                "VR LOADING ASSETS: generation=%llu art=%s model=%s compassShapes=%zu panel=2.5m exhibit=2.1m",
+                "VR LOADING ASSETS: generation=%llu art=%s model=%s compassShapes=%zu panel=2.5m exhibit=1.6m offset=(-0.58,-0.33)",
                 static_cast<unsigned long long>(generation),cpu.artPath.c_str(),cpu.modelPath.c_str(),gCompass.size());
             if(gCompass.empty())__android_log_print(ANDROID_LOG_WARN,"FalloutQuest","AUTHORED LOADING COMPASS UNAVAILABLE: Interface/Circular Loading/loading01.nif; check original mesh/texture archives");
         }
@@ -280,7 +281,9 @@ inline void Render(GLuint framebuffer,GLsizei width,GLsizei height,const float* 
     glColorMask(GL_TRUE,GL_TRUE,GL_TRUE,GL_TRUE);glDepthMask(GL_TRUE);glClearColor(0,0,0,1);
     if(advance) {
         AdvanceAssets();
-        gFrameSeconds=gVisibleStart?static_cast<float>(Fo3LoadingClockUs()-gVisibleStart)/1000000:0;
+        const uint64_t now=Fo3LoadingClockUs();
+        gFrameSeconds=gVisibleStart?static_cast<float>(now-gVisibleStart)/1000000:0;
+        gFrameRotationSeconds=gRotationStart?static_cast<float>(now-gRotationStart)/1000000:0;
     }
     const bool target=EnsureTarget(width,height);
     if(target) {
@@ -299,11 +302,11 @@ inline void Render(GLuint framebuffer,GLsizei width,GLsizei height,const float* 
                 glDrawArrays(GL_TRIANGLE_STRIP,0,4);
             }
             glEnable(GL_BLEND);glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);
-            Matrix model=Multiply(panel,Placement(0,0,fo3loadingpose::PanelDistance-fo3loadingpose::ModelDistance,seconds*fo3loadingpose::RotationRadiansPerSecond));
+            Matrix model=Multiply(panel,Placement(fo3loadingpose::ModelX,fo3loadingpose::ModelY,fo3loadingpose::PanelDistance-fo3loadingpose::ModelDistance,gFrameRotationSeconds*fo3loadingpose::RotationRadiansPerSecond));
             for(const auto& s:gModel)Draw(s,model);
             // Bottom right of the artwork. Rotate the real mesh as a rigid UI
             // emblem; this is not Gamebryo controller/Idle animation playback.
-            Matrix spin=fo3loadingpose::Identity();float a=-seconds*0.8f;
+            Matrix spin=fo3loadingpose::Identity();float a=-gFrameRotationSeconds*0.8f;
             spin.m[0]=spin.m[5]=std::cos(a);spin.m[1]=std::sin(a);spin.m[4]=-std::sin(a);
             Matrix compass=Multiply(panel,Multiply(Placement(1.04f,-1.2f/gArtAspect+0.14f,0.10f,0),spin));
             glDisable(GL_DEPTH_TEST);

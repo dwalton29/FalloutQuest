@@ -173,7 +173,7 @@ eye uses its physical tracking-space view/projection; door arrival yaw and
 locomotion do not move the loading panel. Prior art/model resources remain
 visible during later preparation, then staged meshes replace the old display.
 
-The panel is 2.5 metres away; the 0.72-metre exhibit is 2.1 metres away and
+The panel is 2.5 metres away; the 0.72-metre exhibit is 1.6 metres away, offset 0.58 metres left and 0.33 metres down and
 rotates at 0.20 radians/second. Original LSCR selection retains CELL/worldspace
 priority with a per-session/per-generation random seed. Fallout 3 LSCR records
 have no model association: exhibits are original weapons and ordinary props,
@@ -196,3 +196,32 @@ retains its existing behaviour; loading scenes cover explicit CELL transitions.
 Headset stereo comfort, compass orientation and frame timing still require an
 on-device pass with the full installed archives. Host tests cover anchor/eye
 separation, randomized location priority, malformed records and release gates.
+
+### Loading hitch reduction (0.24.13)
+
+The artwork quad reverses V to display DDS top-row artwork upright; exhibit
+UVs retain the NIF convention. Fade and rotation clocks are separate: the
+rotation phase stays continuous when newly uploaded assets finish their fade.
+Both eyes use the same captured animation times.
+
+While a loading presentation is visible, RenderScene advances the scene job
+then returns before hidden world, terrain, actor, shadow and reflection draws.
+The host also suppresses hidden sky draws. Initial Megaton/Wasteland collision
+uses the existing placement-cache/snapshot path in a joined preparation worker.
+The current collision remains available until the render thread publishes the
+snapshot. Wasteland retains the exact authored arrival 3x3 filter; Megaton keeps
+its original full placement set. Cancellation joins before restoring collision
+policy and discards an unpublished token. A clean frame separates collision
+publication from final scene/environment/terrain commit. Other worlds/interiors
+retain their previous collision path.
+
+This reduces known end-of-load work on the rendering thread, but is not a
+measured guarantee of hitch-free loading: initial terrain generation/uploads,
+interior collision and final environment setup still contain synchronous work.
+Use SCENE COLLISION READY prepareUs/swapUs and SCENE LOAD READY finalizationUs
+logs from the headset to identify any remaining pause.
+
+Development parity against the supplied 224 Megaton NIFs compared the legacy
+initializer with fresh-cache prewarm/snapshot publication: 172 collidable
+placements and 32,889 triangles matched exactly, including transformed
+vertices/normals, surface/layer/material identities and Havok welding keys.

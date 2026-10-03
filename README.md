@@ -2,7 +2,7 @@
 
 Experimental standalone Meta Quest runtime for user-supplied Fallout 3 game data.
 
-## Current milestone: 0.24.12 — Immersive loading
+## Current milestone: 0.24.13 — Loading polish
 
 FalloutQuest is a native ARM64/OpenXR reimplementation of the runtime needed to
 interpret Fallout 3's original data on Quest. It is not a port of the original
@@ -34,10 +34,13 @@ active set, a 5x5 visual resident/prefetch set is retained, LAND remains a 7x7
 runway, and Bethesda Level4 meshes provide the distant world.
 
 Startup and door/CELL transitions now use original LSCR artwork on a tracking-space
-panel 2.5 metres ahead, a random original weapon/prop at 2.1 metres, and the
+panel 2.5 metres ahead, a random original weapon/prop at 1.6 metres toward the bottom left, and the
 original loading01.nif compass at the panel's bottom right. Archive decoding and
 vertex preparation run on workers; each loading mesh uploads on a separate
 frame. The opaque loading target covers both eye images until scene completion.
+Hidden world, sky, shadow and reflection draws pause under the loading screen;
+Megaton/Wasteland initial collision snapshots prepare on a worker and publish
+before finalization. Loading artwork UVs are flipped independently of model UVs.
 Wasteland warmup no longer reveals unfinished detail/LOD after a time limit.
 
 See docs/ARCHITECTURE.md for the current source layout and development rules.

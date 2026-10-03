@@ -13,8 +13,10 @@ int main(int argc,char**argv) {
     assert(near(a.m[12],1)&&near(a.m[13],1.6f)&&near(a.m[14],0.5f));
     Matrix right=Anchor(1,1.6f,3,0,std::sqrt(0.5f),0,std::sqrt(0.5f));
     assert(near(right.m[12],-1.5f)&&near(right.m[14],3));
-    Matrix exhibit=Multiply(a,Placement(0,0,PanelDistance-ModelDistance,0));
+    Matrix exhibit=Multiply(a,Placement(ModelX,ModelY,PanelDistance-ModelDistance,0));
     assert(near(3-exhibit.m[14],ModelDistance));
+    assert(near(exhibit.m[12],1+ModelX) && near(exhibit.m[13],1.6f+ModelY));
+    assert(ModelX<0 && ModelY<0 && ModelDistance<2.1f);
     // Same tracking-space panel produces opposite horizontal offsets for eyes
     // 64mm apart. This guards against the old zero-disparity overlay regression.
     Matrix leftEye=Placement(0.032f,0,0,0),rightEye=Placement(-0.032f,0,0,0);

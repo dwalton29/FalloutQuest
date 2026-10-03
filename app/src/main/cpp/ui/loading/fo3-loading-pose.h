@@ -5,7 +5,9 @@
 
 namespace fo3loadingpose {
 constexpr float PanelDistance = 2.5f;
-constexpr float ModelDistance = 2.1f;
+constexpr float ModelDistance = 1.6f;
+constexpr float ModelX = -0.58f;
+constexpr float ModelY = -0.33f;
 constexpr float RotationRadiansPerSecond = 0.20f;
 struct Matrix { float m[16]{}; };
 inline Matrix Identity() { Matrix a; a.m[0]=a.m[5]=a.m[10]=a.m[15]=1; return a; }
