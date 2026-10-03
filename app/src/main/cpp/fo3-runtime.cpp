@@ -14,7 +14,7 @@ extern void PumpFo3AndroidEventsQ1860();
 #include "fo3-door-prompt-q1840.h"
 #include <chrono>
 #include "fo3-authored-door-query-q1730.h"
-#include "fo3-cell-traversal-q1700.h"
+#include "fo3-cell-traversal.h"
 #include "fo3-loading-state-q1700.h"
 #include "fo3-loading-screen-q1700.h"
 #include "fo3-megaton-scene.h"

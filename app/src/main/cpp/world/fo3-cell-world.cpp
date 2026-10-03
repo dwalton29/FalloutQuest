@@ -8,10 +8,10 @@ extern void PumpFo3AndroidEventsQ1860();
 #include <string>
 #include <unordered_map>
 #include <vector>
-#include "fo3-cell-traversal-q1700.h"
+#include "fo3-cell-traversal.h"
 #include "fo3-transition-q74.h"
 #include "fo3-terrain-q76.h"
-#include "fo3-cell-traversal-q1700.h"
+#include "fo3-cell-traversal.h"
 #include "fo3-loading-state-q1700.h"
 #include "fo3-transition-q74.h"
 #include "fo3-environment-q1000.h"

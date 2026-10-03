@@ -1,6 +1,6 @@
 #pragma once
 
-#include "fo3-cell-traversal-q1700.h"
+#include "fo3-cell-traversal.h"
 
 #include <cstddef>
 #include <cstdint>
