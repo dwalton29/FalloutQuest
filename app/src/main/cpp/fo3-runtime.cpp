@@ -26,7 +26,7 @@ extern void PumpFo3AndroidEventsQ1860();
 #include "fo3-nif-collision.h"
 #include "fo3-transition.h"
 #include "rendering/environment/fo3-environment.h"
-#include "fo3-imagespace-q1280.h"
+#include "rendering/environment/fo3-imagespace.h"
 #include "fo3-weather-imad-q1300.h"
 #include "fo3-weather-light-q1320.h"
 #include "fo3-pc-sky-q1660.h"
