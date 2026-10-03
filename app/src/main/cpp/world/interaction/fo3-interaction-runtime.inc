@@ -77,13 +77,20 @@ Fo3LootPanel gLootPanel;
 uint64_t gLootPanelRevision=UINT64_MAX;
 const Fo3LootPanel& GetFo3LootPanel() {return gLootPanel;}
 void UpdateFo3LootSelection(const Fo3InteractionTarget& target,float stickY,double time) {
-    if (!target.container || !target.allowed || !gPlayerSession || IsFo3LoadingVisible()) {
+    const bool valid=target.container && target.allowed && gPlayerSession && !IsFo3LoadingVisible();
+    const auto previousReference=gLootPanel.reference;
+    if (previousReference && (!valid || previousReference!=target.reference) && gPlayerSession) {
+        const auto ref=gPlayerSession->player.Definitions().references.find(previousReference);
+        if (ref!=gPlayerSession->player.Definitions().references.end()) fo3audio::Close(ref->second.base);
+    }
+    if (!valid) {
         gLootPanel.reference=0;gLootPanel.rows.clear();gLootPanel.title.clear();
         gLootCursor.Target(0,0);return;
     }
     auto& player=gPlayerSession->player;
     const auto revision=player.Revision();
     if (!player.PrepareContainer(target.reference)) {
+        if (previousReference==target.reference) fo3audio::Close(player.Definitions().references.at(target.reference).base);
         gLootPanel.reference=0;gLootPanel.rows.clear();gLootCursor.Target(0,0);return;
     }
     if (revision!=player.Revision()) FlushFo3PlayerState();
@@ -98,9 +105,12 @@ void UpdateFo3LootSelection(const Fo3InteractionTarget& target,float stickY,doub
         }
         gLootPanelRevision=player.Revision();
     }
+    if (previousReference!=target.reference) fo3audio::Open(catalog.references.at(target.reference).base);
     gLootPanel.reference=target.reference;gLootPanel.anchor=target.anchor;
     gLootCursor.Target(target.reference,gLootPanel.rows.size());
+    const auto previousSelection=gLootCursor.selected;
     gLootCursor.Scroll(stickY,time,gLootPanel.rows.size());
+    if (previousSelection!=gLootCursor.selected) fo3audio::Scroll();
     gLootPanel.selected=gLootCursor.selected;
 }
 
@@ -111,14 +121,26 @@ bool ActivateFo3Interaction(float ox,float oy,float oz,float dx,float dy,float d
         // Selection comes from this frame's target; never use a previous container.
         if (gLootPanel.reference!=target.reference || gLootPanel.rows.empty()) return false;
         const auto& row=gLootPanel.rows[gLootPanel.selected];
+        uint32_t base=0;
+        for (const auto& stack:*gPlayerSession->player.ContainerContents(target.reference))
+            if (stack.id==row.stack) base=stack.formId;
         if (row.allowed && gPlayerSession->player.TakeContainerStack(target.reference,row.stack)) {
+            fo3audio::Pickup(base);
             FlushFo3PlayerState();
             UpdateFo3LootSelection(target,NAN,0);
         }
         return false;
     }
-    if (!target.pickup) return ActivateDoorInternalQ1700(ox,oy,oz,dx,dy,dz);
+    if (!target.pickup) {
+        const bool activated=ActivateDoorInternalQ1700(ox,oy,oz,dx,dy,dz);
+        if (activated) {
+            const auto ref=gPlayerSession->player.Definitions().references.find(target.reference);
+            if (ref!=gPlayerSession->player.Definitions().references.end()) fo3audio::Open(ref->second.base);
+        }
+        return activated;
+    }
     if (!gPlayerSession->player.Pickup(target.reference)) return false;
+    fo3audio::Pickup(gPlayerSession->player.Definitions().references.at(target.reference).base);
     for (auto& hand : gQ220Grab) if (hand.refFormId==target.reference) hand={};
     gQ223DynamicBodies.erase(target.reference);
     SetFo3CollectedCollisionRefs(gPlayerSession->player.Snapshot().collected);

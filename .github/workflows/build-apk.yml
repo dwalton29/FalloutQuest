@@ -77,6 +77,12 @@ jobs:
           cmake --build build/host-player --parallel 2
           ctest --test-dir build/host-player --output-on-failure
 
+      - name: Test audio catalog on host
+        run: |
+          cmake -S tests/audio -B build/host-audio
+          cmake --build build/host-audio --parallel 2
+          ctest --test-dir build/host-audio --output-on-failure
+
       - name: Restore stable development signing key
         run: |
           base64 --decode app/falloutquest-dev.keystore.b64 > app/falloutquest-dev.keystore

@@ -23,6 +23,8 @@ add_library(falloutquest SHARED
     npc/fo3-actor-animation.cpp
     player/fo3-player-state.cpp
     player/fo3-container-state.cpp
+    audio/fo3-audio.cpp
+    audio/fo3-audio-catalog.cpp
     ${ANDROID_NDK}/sources/android/native_app_glue/android_native_app_glue.c
 )
 

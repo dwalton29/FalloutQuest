@@ -497,3 +497,46 @@ Container generation and taking both flush saves; a transfer updates inventory a
 remaining contents in one state file. Invalid writes retain the live state for
 lifecycle retry. Storing/depositing, quantities per transfer, take-all, lockpicking,
 container animation/sounds, corpses, theft and quest inventory changes are pending.
+
+
+## Original audio (0.29)
+
+`audio/fo3-audio-catalog.*` streams selected records through the shared ESM reader
+on a dedicated worker. It preserves SOUN FNAM, SNDX/SNDD static attenuation and
+loop flags, MUSC paths including directory-valued definitions, item YNAM,
+DOOR SNAM/ANAM, CONT SNAM/QNAM, CELL XCMO/XCAS and ASPC SNAM. Record links and
+layouts are checked against TES5Edit's primary `Core/wbDefinitionsFO3.pas`
+(dev-4.1.6); integration tests read the supplied original ESM. Catalog failure
+leaves gameplay available and logs the problem. Paths reject traversal.
+
+`audio/fo3-audio.cpp` owns a 32-request worker queue and JNI bridge. Context
+updates coalesce and take priority; focus loss discards pending effects.
+Case-insensitive component lookup supports original Windows names on Android.
+Loose original sound/music files are resolved first; the original Sound BSA is
+read through the shared archive service when a sound is not loose. At most 128
+extracted effects and 64 MiB are cached per process, with an 8 MiB per-effect
+limit; temporary files are removed at shutdown. No Bethesda audio is committed.
+
+`FalloutNativeActivity` remains a NativeActivity subclass and owns a separate
+HandlerThread for all MediaPlayer operations. Async preparation and completion
+callbacks are guarded by current-player identity and Android/OpenXR focus.
+Players are bounded to six effects, one music and one ambient loop. Playback
+errors release their player and do not spin retries. Activity destruction
+releases all players and terminates the audio looper. Native shutdown joins its
+worker before dropping the activity global reference.
+
+The interaction layer emits sounds after successful pickup/transfer/travel,
+on successful floating-container entry/exit, and when selection changes. Failed
+and repeated blocked actions do not emit pickup sounds. Opening/closing floating
+loot maps to authored container sound links; mesh animation remains separate.
+Load doors emit their authored opening sound when travel is accepted; no closing
+sound is fabricated for an animation that has not run.
+
+Music uses explicit cell MUSC links, respects authored silence, and enables only
+the exterior DefaultExplore fallback where no override exists. Interior default
+category rules and region priority/music rules are deferred. Folder shuffle,
+continuous sequencing and stereo playback are explicit runtime adaptations;
+there is no claim of original engine timing, 3D falloff, reverb or combat parity.
+The supplied INI gives music gain 0.3 and effect/master gain 1.0. Runtime INI
+editing and a volume UI are not yet implemented. Audio assets must be installed
+in the app's original Data tree; Dropbox is a source, not streamed at runtime.

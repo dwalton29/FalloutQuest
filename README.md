@@ -2,7 +2,34 @@
 
 Experimental standalone Meta Quest runtime for user-supplied Fallout 3 game data.
 
-## Current milestone: 0.28.0 — Floating container loot
+## Current milestone: 0.29.0 — Original audio
+
+The runtime now plays original item pickup sounds (YNAM), door/container open
+and close sounds (SNAM/ANAM/QNAM), and the original menu focus sound while
+scrolling floating loot. Successful actions emit effects once; blocked actions
+remain silent. CELL XCAS → ASPC SNAM supplies an ambient loop where authored.
+CELL XCMO → MUSC supplies music; exteriors without an override use the original
+DefaultExplore definition. Explicit no-music cells stay silent. Interior cells
+without a music override are left silent for now.
+
+Install your original **Data/Music/** directory and either **Data/Sound/** or
+**Data/Fallout - Sound.bsa** alongside the existing ESM in the app's
+`files/Fallout3/Data/` directory. Preserve subfolders. These assets are not bundled
+in the APK. Missing files log their original path and do not block gameplay.
+The extracted Sound folder is available in Dropbox; the separate Music folder
+was absent when this milestone was built.
+
+Android decodes on a separate audio thread, with a bounded native request queue,
+six one-shot voices, one music player and one ambient player. File reads and BSA
+extraction happen on the native audio worker, never the render thread. Original
+static attenuation is applied; music volume uses the supplied INI's 0.3 default.
+Music folders use a shuffled continuous playlist, a runtime adaptation rather
+than exact Bethesda scheduling. Losing Android/OpenXR focus releases playback;
+resume restarts the current track/loop. Headset playback and latency need testing.
+Spatial positioning, region sound scheduling, reverb, footsteps, physics impacts,
+combat, NPC voices and radio are pending.
+
+## Container loot: 0.28.0 — Floating container loot
 
 Aim at a supported container to see an in-world loot list. Use **right stick
 up/down** to scroll and **A** to take the highlighted stack. There is no submenu;

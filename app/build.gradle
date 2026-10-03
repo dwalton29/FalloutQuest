@@ -22,8 +22,8 @@ android {
         applicationId 'com.falloutquest.app'
         minSdk 29
         targetSdk 35
-        versionCode 131
-        versionName '0.28.0-floating-container-loot'
+        versionCode 132
+        versionName '0.29.0-original-audio'
 
         ndk {
             abiFilters 'arm64-v8a'

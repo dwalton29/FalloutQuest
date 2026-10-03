@@ -16,7 +16,7 @@
         android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen">
 
         <activity
-            android:name="android.app.NativeActivity"
+            android:name="com.falloutquest.app.FalloutNativeActivity"
             android:configChanges="keyboard|keyboardHidden|navigation|orientation|screenLayout|screenSize|uiMode"
             android:exported="true"
             android:launchMode="singleTask"

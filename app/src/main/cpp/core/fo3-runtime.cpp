@@ -23,6 +23,7 @@ extern void PumpFo3AndroidEventsQ1860();
 #include "fo3-npc.h"
 #include "fo3-actor-animation.h"
 #include "player/fo3-player-state.h"
+#include "audio/fo3-audio.h"
 #include "world/interaction/fo3-interaction.h"
 #include "world/interaction/fo3-interaction-ray.h"
 #include "world/interaction/fo3-loot-cursor.h"

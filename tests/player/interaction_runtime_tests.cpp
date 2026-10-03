@@ -12,6 +12,13 @@
 #include <iostream>
 #include <memory>
 #include <stdexcept>
+namespace fo3audio {
+int pickups = 0, opens = 0, closes = 0, scrolls = 0;
+void Pickup(uint32_t) { ++pickups; }
+void Open(uint32_t) { ++opens; }
+void Close(uint32_t) { ++closes; }
+void Scroll() { ++scrolls; }
+} // namespace fo3audio
 using fo3player::Reference;
 struct Vec3 {
   float x, y, z;
@@ -119,6 +126,8 @@ int main() {
     Check(flushes == 1 && removedCollision.count(10) &&
               gQ220Grab[0].refFormId == 0 && gQ223DynamicBodies.empty(),
           "pickup retires physics/grab and flushes state");
+    Check(fo3audio::pickups == 1,
+          "successful pickup emits exactly one authored effect");
     const auto &stack = gPlayerSession->player.Snapshot().inventory.front();
     Check(stack.count == 3 && stack.condition == .4f,
           "authored quantities and condition");
@@ -167,10 +176,13 @@ int main() {
     gObjects.push_back(object);
     Check(query() && t.container && !t.pickup && t.allowed,
           "container joins nearest right-hand targets");
+    const int audioOpens = fo3audio::opens, audioPickups = fo3audio::pickups,
+              audioCloses = fo3audio::closes;
     UpdateFo3LootSelection(t, 0, 1);
     Check(GetFo3LootPanel().reference == 40 &&
               GetFo3LootPanel().rows.size() == 2,
           "floating rows contain authored stacks");
+    Check(fo3audio::opens == audioOpens + 1, "container aim opens once");
     UpdateFo3LootSelection(t, -1, 1.1);
     Check(GetFo3LootPanel().selected == 1,
           "right stick down selects next loot row");
@@ -181,7 +193,11 @@ int main() {
     Check(!gPlayerSession->player.IsCollected(40) &&
               !removedCollision.count(40),
           "container stays in world after looting");
+    Check(fo3audio::pickups == audioPickups + 1 &&
+              fo3audio::opens == audioOpens + 1 && fo3audio::scrolls == 1,
+          "loot transfer and selection sound without reopening");
     UpdateFo3LootSelection({}, 0, 2);
+    Check(fo3audio::closes == audioCloses + 1, "aim loss closes once");
     Check(!GetFo3LootPanel().reference, "aim loss closes loot list");
     Check(!activate() && GetFo3LootPanel().rows.empty(),
           "activation without current selection cannot loot stale row");
