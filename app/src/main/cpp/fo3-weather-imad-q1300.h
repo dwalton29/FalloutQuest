@@ -1,6 +1,6 @@
 #pragma once
 
-#include "fo3-imagespace-q1280.h"
+#include "rendering/environment/fo3-imagespace.h"
 
 #include <algorithm>
 #include <cmath>
