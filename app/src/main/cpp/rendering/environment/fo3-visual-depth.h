@@ -17,7 +17,7 @@
 #include <utility>
 #include <vector>
 
-struct Fo3PlacedLightQ1010 {
+struct Fo3PlacedLight {
     uint32_t refFormId = 0u;
     uint32_t baseFormId = 0u;
     std::string editorId;
@@ -29,14 +29,14 @@ struct Fo3PlacedLightQ1010 {
     uint32_t flags = 0u;
 };
 
-constexpr int FO3_SHADER_LIGHTS_Q1010 = 8;
-inline std::vector<Fo3PlacedLightQ1010> gFo3PlacedLightsQ1010;
-inline int gFo3SelectedLightCountQ1010 = 0;
-inline float gFo3SelectedLightPosRadiusQ1010[FO3_SHADER_LIGHTS_Q1010 * 4]{};
-inline float gFo3SelectedLightColorFalloffQ1010[FO3_SHADER_LIGHTS_Q1010 * 4]{};
-inline float gFo3EyePositionQ1010[3]{0.0f, 0.0f, 0.0f};
+constexpr int FO3_SHADER_LIGHTS = 8;
+inline std::vector<Fo3PlacedLight> gFo3PlacedLights;
+inline int gFo3SelectedLightCount = 0;
+inline float gFo3SelectedLightPosRadius[FO3_SHADER_LIGHTS * 4]{};
+inline float gFo3SelectedLightColorFalloff[FO3_SHADER_LIGHTS * 4]{};
+inline float gFo3EyePosition[3]{0.0f, 0.0f, 0.0f};
 
-namespace fo3visualq1010 {
+namespace fo3visual {
 
 constexpr const char* TAG = "FalloutQuest";
 constexpr const char* ESM_PATH =
@@ -78,21 +78,21 @@ inline bool InWorldspace(const std::vector<GroupFrame>& groups, uint32_t worldsp
     return false;
 }
 
-} // namespace fo3visualq1010
+} // namespace fo3visual
 
-inline void ResetFo3PlacedLightsQ1010() {
-    gFo3PlacedLightsQ1010.clear();
-    gFo3SelectedLightCountQ1010 = 0;
-    std::fill(std::begin(gFo3SelectedLightPosRadiusQ1010),
-              std::end(gFo3SelectedLightPosRadiusQ1010), 0.0f);
-    std::fill(std::begin(gFo3SelectedLightColorFalloffQ1010),
-              std::end(gFo3SelectedLightColorFalloffQ1010), 0.0f);
+inline void ResetFo3PlacedLights() {
+    gFo3PlacedLights.clear();
+    gFo3SelectedLightCount = 0;
+    std::fill(std::begin(gFo3SelectedLightPosRadius),
+              std::end(gFo3SelectedLightPosRadius), 0.0f);
+    std::fill(std::begin(gFo3SelectedLightColorFalloff),
+              std::end(gFo3SelectedLightColorFalloff), 0.0f);
 }
 
-inline bool LoadFo3PlacedLightsQ1010(uint32_t worldspaceFormId,
+inline bool LoadFo3PlacedLights(uint32_t worldspaceFormId,
                                      float arrivalX, float arrivalY, float arrivalZ) {
-    using namespace fo3visualq1010;
-    ResetFo3PlacedLightsQ1010();
+    using namespace fo3visual;
+    ResetFo3PlacedLights();
     if (worldspaceFormId == 0u) return false;
 
     FILE* file = std::fopen(ESM_PATH, "rb");
@@ -214,8 +214,8 @@ inline bool LoadFo3PlacedLightsQ1010(uint32_t worldspaceFormId,
     size_t offByDefault = 0u;
     size_t spotLights = 0u;
     size_t negativeLights = 0u;
-    float minFadeQ1220 = 1e30f;
-    float maxFadeQ1220 = 0.0f;
+    float minFade = 1e30f;
+    float maxFade = 0.0f;
     for (const RawLightRef& ref : refs) {
         const auto found = bases.find(ref.baseFormId);
         if (found == bases.end()) continue;
@@ -227,7 +227,7 @@ inline bool LoadFo3PlacedLightsQ1010(uint32_t worldspaceFormId,
         if ((base.flags & 0x00000200u) != 0u) ++spotLights;
         if ((base.flags & 0x00000004u) != 0u) ++negativeLights;
 
-        Fo3PlacedLightQ1010 light;
+        Fo3PlacedLight light;
         light.refFormId = ref.refFormId;
         light.baseFormId = ref.baseFormId;
         light.editorId = base.editorId;
@@ -245,35 +245,35 @@ inline bool LoadFo3PlacedLightsQ1010(uint32_t worldspaceFormId,
         light.radius = std::max(0.10f, static_cast<float>(base.radius) / FO3_UNITS_PER_METRE);
         light.falloff = std::clamp(base.falloff, 0.25f, 8.0f);
         light.flags = base.flags;
-        minFadeQ1220 = std::min(minFadeQ1220, authoredFade);
-        maxFadeQ1220 = std::max(maxFadeQ1220, authoredFade);
-        gFo3PlacedLightsQ1010.push_back(std::move(light));
+        minFade = std::min(minFade, authoredFade);
+        maxFade = std::max(maxFade, authoredFade);
+        gFo3PlacedLights.push_back(std::move(light));
     }
 
-    if (gFo3PlacedLightsQ1010.empty()) {
-        minFadeQ1220 = 0.0f;
-        maxFadeQ1220 = 0.0f;
+    if (gFo3PlacedLights.empty()) {
+        minFade = 0.0f;
+        maxFade = 0.0f;
     }
     __android_log_print(ANDROID_LOG_INFO, TAG,
         "Q12.2 LIGH READY: worldspace=%08X refs=%zu lightBases=%zu activeLights=%zu offByDefault=%zu spot=%zu negative=%zu shaderNearest=%d fadeRange=(%.3f %.3f) authoredFade=1 source=Fallout3.esm",
-        worldspaceFormId, refs.size(), bases.size(), gFo3PlacedLightsQ1010.size(),
-        offByDefault, spotLights, negativeLights, FO3_SHADER_LIGHTS_Q1010,
-        minFadeQ1220, maxFadeQ1220);
-    return !gFo3PlacedLightsQ1010.empty();
+        worldspaceFormId, refs.size(), bases.size(), gFo3PlacedLights.size(),
+        offByDefault, spotLights, negativeLights, FO3_SHADER_LIGHTS,
+        minFade, maxFade);
+    return !gFo3PlacedLights.empty();
 }
 
-inline void UpdateFo3VisualEyeQ1010(float x, float y, float z) {
-    gFo3EyePositionQ1010[0] = x;
-    gFo3EyePositionQ1010[1] = y;
-    gFo3EyePositionQ1010[2] = z;
+inline void UpdateFo3VisualEye(float x, float y, float z) {
+    gFo3EyePosition[0] = x;
+    gFo3EyePosition[1] = y;
+    gFo3EyePosition[2] = z;
 
     // Q12.2: rank all candidates then keep the true nearest/radius-weighted
     // eight. The old fixed-array insertion stopped increasing `used` at eight,
     // so later lights could overwrite the last slot even when they ranked worse.
     std::vector<std::pair<float, size_t>> best;
-    best.reserve(gFo3PlacedLightsQ1010.size());
-    for (size_t i = 0u; i < gFo3PlacedLightsQ1010.size(); ++i) {
-        const Fo3PlacedLightQ1010& light = gFo3PlacedLightsQ1010[i];
+    best.reserve(gFo3PlacedLights.size());
+    for (size_t i = 0u; i < gFo3PlacedLights.size(); ++i) {
+        const Fo3PlacedLight& light = gFo3PlacedLights[i];
         const float dx = x - light.position[0];
         const float dy = y - light.position[1];
         const float dz = z - light.position[2];
@@ -283,18 +283,18 @@ inline void UpdateFo3VisualEyeQ1010(float x, float y, float z) {
     }
     std::sort(best.begin(), best.end(),
               [](const auto& a, const auto& b) { return a.first < b.first; });
-    if (best.size() > static_cast<size_t>(FO3_SHADER_LIGHTS_Q1010))
-        best.resize(static_cast<size_t>(FO3_SHADER_LIGHTS_Q1010));
+    if (best.size() > static_cast<size_t>(FO3_SHADER_LIGHTS))
+        best.resize(static_cast<size_t>(FO3_SHADER_LIGHTS));
 
-    gFo3SelectedLightCountQ1010 = static_cast<int>(best.size());
-    std::fill(std::begin(gFo3SelectedLightPosRadiusQ1010),
-              std::end(gFo3SelectedLightPosRadiusQ1010), 0.0f);
-    std::fill(std::begin(gFo3SelectedLightColorFalloffQ1010),
-              std::end(gFo3SelectedLightColorFalloffQ1010), 0.0f);
-    for (int slot = 0; slot < gFo3SelectedLightCountQ1010; ++slot) {
-        const Fo3PlacedLightQ1010& light = gFo3PlacedLightsQ1010[best[static_cast<size_t>(slot)].second];
-        float* pr = &gFo3SelectedLightPosRadiusQ1010[slot * 4];
-        float* cf = &gFo3SelectedLightColorFalloffQ1010[slot * 4];
+    gFo3SelectedLightCount = static_cast<int>(best.size());
+    std::fill(std::begin(gFo3SelectedLightPosRadius),
+              std::end(gFo3SelectedLightPosRadius), 0.0f);
+    std::fill(std::begin(gFo3SelectedLightColorFalloff),
+              std::end(gFo3SelectedLightColorFalloff), 0.0f);
+    for (int slot = 0; slot < gFo3SelectedLightCount; ++slot) {
+        const Fo3PlacedLight& light = gFo3PlacedLights[best[static_cast<size_t>(slot)].second];
+        float* pr = &gFo3SelectedLightPosRadius[slot * 4];
+        float* cf = &gFo3SelectedLightColorFalloff[slot * 4];
         pr[0] = light.position[0]; pr[1] = light.position[1]; pr[2] = light.position[2]; pr[3] = light.radius;
         cf[0] = light.color[0]; cf[1] = light.color[1]; cf[2] = light.color[2]; cf[3] = light.falloff;
     }

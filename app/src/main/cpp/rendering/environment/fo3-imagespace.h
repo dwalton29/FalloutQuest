@@ -9,7 +9,7 @@
 #include <string>
 #include <vector>
 
-struct Fo3ImageSpaceQ1280 {
+struct Fo3ImageSpace {
     bool valid = false;
     uint32_t cellFormId = 0u;
     uint32_t worldspaceFormId = 0u;
@@ -52,27 +52,27 @@ struct Fo3ImageSpaceQ1280 {
     uint8_t cinematicFlags = 0u;
 };
 
-inline Fo3ImageSpaceQ1280 gFo3ImageSpaceQ1280;
+inline Fo3ImageSpace gFo3ImageSpace;
 
-inline const Fo3ImageSpaceQ1280& GetFo3ImageSpaceQ1280() {
-    return gFo3ImageSpaceQ1280;
+inline const Fo3ImageSpace& GetFo3ImageSpace() {
+    return gFo3ImageSpace;
 }
 
-inline void ResetFo3ImageSpaceQ1280() {
-    gFo3ImageSpaceQ1280 = {};
+inline void ResetFo3ImageSpace() {
+    gFo3ImageSpace = {};
 }
 
-namespace fo3imgq1290 {
+namespace fo3imagespace {
 
-struct WorldImageLinkQ1290 {
+struct WorldImageLink {
     uint32_t parentWorld = 0u;
     uint32_t imageSpace = 0u;
     uint8_t parentFlags = 0u;
 };
 
-inline bool ReadWorldImageLinkQ1290(uint32_t worldspaceFormId,
-                                    WorldImageLinkQ1290& out) {
-    using namespace fo3envq1000;
+inline bool ReadWorldImageLink(uint32_t worldspaceFormId,
+                                    WorldImageLink& out) {
+    using namespace fo3env;
     out = {};
     std::vector<uint8_t> payload;
     if (!FindRecord("WRLD", worldspaceFormId, payload)) return false;
@@ -89,7 +89,7 @@ inline bool ReadWorldImageLinkQ1290(uint32_t worldspaceFormId,
     return true;
 }
 
-inline bool ResolveWorldImageSpaceQ1290(uint32_t worldspaceFormId,
+inline bool ResolveWorldImageSpace(uint32_t worldspaceFormId,
                                         uint32_t& imageSpaceFormId,
                                         uint32_t& sourceWorldFormId,
                                         bool& inheritedFromParent) {
@@ -99,13 +99,13 @@ inline bool ResolveWorldImageSpaceQ1290(uint32_t worldspaceFormId,
 
     uint32_t current = worldspaceFormId;
     for (int depth = 0; depth < 8 && current != 0u; ++depth) {
-        WorldImageLinkQ1290 link;
-        if (!ReadWorldImageLinkQ1290(current, link)) return false;
+        WorldImageLink link;
+        if (!ReadWorldImageLink(current, link)) return false;
 
         // WRLD PNAM 0x20 means this child explicitly uses its parent's Image
         // Space data. Follow that ownership before considering the child's INAM.
         if (link.parentWorld != 0u && (link.parentFlags & 0x20u) != 0u) {
-            __android_log_print(ANDROID_LOG_INFO, fo3envq1000::TAG,
+            __android_log_print(ANDROID_LOG_INFO, fo3env::TAG,
                                 "Q12.9 IMAGE SPACE PARENT: world=%08X parent=%08X flags=0x%02X useImageSpace=1",
                                 current, link.parentWorld, link.parentFlags);
             inheritedFromParent = true;
@@ -119,7 +119,7 @@ inline bool ResolveWorldImageSpaceQ1290(uint32_t worldspaceFormId,
             return true;
         }
 
-        __android_log_print(ANDROID_LOG_INFO, fo3envq1000::TAG,
+        __android_log_print(ANDROID_LOG_INFO, fo3env::TAG,
                             "Q12.9 IMAGE SPACE WORLD: world=%08X INAM=00000000 parent=%08X flags=0x%02X result=no-world-imagespace",
                             current, link.parentWorld, link.parentFlags);
         return false;
@@ -127,8 +127,8 @@ inline bool ResolveWorldImageSpaceQ1290(uint32_t worldspaceFormId,
     return false;
 }
 
-inline uint32_t ResolveWeatherDayImadQ1290(uint32_t weatherFormId) {
-    using namespace fo3envq1000;
+inline uint32_t ResolveWeatherDayImad(uint32_t weatherFormId) {
+    using namespace fo3env;
     if (weatherFormId == 0u) return 0u;
     std::vector<uint8_t> payload;
     if (!FindRecord("WTHR", weatherFormId, payload)) return 0u;
@@ -145,11 +145,11 @@ inline uint32_t ResolveWeatherDayImadQ1290(uint32_t weatherFormId) {
     return dayImad;
 }
 
-} // namespace fo3imgq1290
+} // namespace fo3imagespace
 
-inline bool LoadFo3ImageSpaceQ1280(uint32_t cellFormId, uint32_t worldspaceFormId) {
-    using namespace fo3envq1000;
-    ResetFo3ImageSpaceQ1280();
+inline bool LoadFo3ImageSpace(uint32_t cellFormId, uint32_t worldspaceFormId) {
+    using namespace fo3env;
+    ResetFo3ImageSpace();
 
     uint32_t imageSpaceFormId = 0u;
     bool imageSpaceFromCell = false;
@@ -177,7 +177,7 @@ inline bool LoadFo3ImageSpaceQ1280(uint32_t cellFormId, uint32_t worldspaceFormI
                             "Q12.9 IMAGE SPACE RESOLVE: cell=%08X world=%08X source=CELL XCIM=%08X",
                             cellFormId, worldspaceFormId, imageSpaceFormId);
     } else {
-        fo3imgq1290::ResolveWorldImageSpaceQ1290(
+        fo3imagespace::ResolveWorldImageSpace(
             worldspaceFormId, imageSpaceFormId, imageSpaceSourceWorld,
             imageSpaceInheritedFromParent);
         __android_log_print(ANDROID_LOG_INFO, TAG,
@@ -188,9 +188,9 @@ inline bool LoadFo3ImageSpaceQ1280(uint32_t cellFormId, uint32_t worldspaceFormI
                             imageSpaceInheritedFromParent ? 1 : 0);
     }
 
-    const Fo3EnvironmentQ1000& env = GetFo3EnvironmentQ1000();
+    const Fo3Environment& env = GetFo3Environment();
     const uint32_t weatherDayImad =
-        fo3imgq1290::ResolveWeatherDayImadQ1290(env.weatherFormId);
+        fo3imagespace::ResolveWeatherDayImad(env.weatherFormId);
     __android_log_print(ANDROID_LOG_INFO, TAG,
                         "Q12.9 WEATHER IMAD: weather=%08X EDID=%s dayIMAD=%08X applied=0 auditOnly=1",
                         env.weatherFormId,
@@ -212,7 +212,7 @@ inline bool LoadFo3ImageSpaceQ1280(uint32_t cellFormId, uint32_t worldspaceFormI
         return false;
     }
 
-    Fo3ImageSpaceQ1280 image;
+    Fo3ImageSpace image;
     image.cellFormId = cellFormId;
     image.worldspaceFormId = worldspaceFormId;
     image.imageSpaceFormId = imageSpaceFormId;
@@ -295,7 +295,7 @@ inline bool LoadFo3ImageSpaceQ1280(uint32_t cellFormId, uint32_t worldspaceFormI
     }
 
     image.valid = true;
-    gFo3ImageSpaceQ1280 = image;
+    gFo3ImageSpace = image;
     __android_log_print(ANDROID_LOG_INFO, TAG,
                         "Q12.9 IMAGE SPACE READY: cell=%08X world=%08X IMGS=%08X EDID=%s source=%s sourceWorld=%08X inherited=%d flags=0x%02X sat=%.3f contrastAvg=%.3f contrast=%.3f brightness=%.3f tint=(%.3f %.3f %.3f) tintValue=%.3f hdrBlur=%.3f hdrBrightScale=%.3f hdrBrightClamp=%.3f bloomRadius=%.3f bloomExterior=%.3f dayIMAD=%08X",
                         cellFormId, worldspaceFormId, imageSpaceFormId,

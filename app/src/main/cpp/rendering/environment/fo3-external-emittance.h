@@ -11,7 +11,7 @@
 #include <unordered_set>
 #include <vector>
 
-struct Fo3ExternalEmittanceQ1380 {
+struct Fo3ExternalEmittance {
     bool valid = false;
     bool regionDriven = false;
     uint32_t referenceFormId = 0u;
@@ -21,17 +21,17 @@ struct Fo3ExternalEmittanceQ1380 {
     std::string editorId;
 };
 
-inline std::unordered_map<uint32_t, Fo3ExternalEmittanceQ1380> gFo3ExternalEmittanceQ1380;
-inline uint32_t gFo3ExternalEmittanceWorldQ1380 = 0u;
-inline bool gFo3ExternalEmittanceLoadedQ1380 = false;
+inline std::unordered_map<uint32_t, Fo3ExternalEmittance> gFo3ExternalEmittance;
+inline uint32_t gFo3ExternalEmittanceWorld = 0u;
+inline bool gFo3ExternalEmittanceLoaded = false;
 
-namespace fo3emittanceq1380 {
+namespace fo3emittance {
 
-using fo3visualq1010::GroupFrame;
-using fo3visualq1010::InWorldspace;
+using fo3visual::GroupFrame;
+using fo3visual::InWorldspace;
 
 constexpr const char* TAG = "FalloutQuest";
-constexpr const char* ESM_PATH = fo3visualq1010::ESM_PATH;
+constexpr const char* ESM_PATH = fo3visual::ESM_PATH;
 constexpr uint32_t EXTERNAL_EMITTANCE_SHADER_FLAG = 0x20000000u;
 
 struct RawRef {
@@ -91,7 +91,7 @@ inline bool Rewind(FILE* file) {
     return fseeko(file, 0, SEEK_SET) == 0;
 }
 
-inline void LogExample(const Fo3ExternalEmittanceQ1380& value) {
+inline void LogExample(const Fo3ExternalEmittance& value) {
     __android_log_print(ANDROID_LOG_INFO, TAG,
         "Q13.8 XEMI: ref=%08X emittance=%08X type=%s EDID=%s weather=%08X dayColor=(%.3f %.3f %.3f)",
         value.referenceFormId, value.emittanceFormId,
@@ -101,24 +101,24 @@ inline void LogExample(const Fo3ExternalEmittanceQ1380& value) {
         value.color[0], value.color[1], value.color[2]);
 }
 
-} // namespace fo3emittanceq1380
+} // namespace fo3emittance
 
-inline void ResetFo3ExternalEmittanceQ1380() {
-    gFo3ExternalEmittanceQ1380.clear();
-    gFo3ExternalEmittanceWorldQ1380 = 0u;
-    gFo3ExternalEmittanceLoadedQ1380 = false;
+inline void ResetFo3ExternalEmittance() {
+    gFo3ExternalEmittance.clear();
+    gFo3ExternalEmittanceWorld = 0u;
+    gFo3ExternalEmittanceLoaded = false;
 }
 
-inline bool LoadFo3ExternalEmittanceQ1380(uint32_t worldspaceFormId) {
-    using namespace fo3emittanceq1380;
-    if (gFo3ExternalEmittanceLoadedQ1380 &&
-        gFo3ExternalEmittanceWorldQ1380 == worldspaceFormId) {
-        return !gFo3ExternalEmittanceQ1380.empty();
+inline bool LoadFo3ExternalEmittance(uint32_t worldspaceFormId) {
+    using namespace fo3emittance;
+    if (gFo3ExternalEmittanceLoaded &&
+        gFo3ExternalEmittanceWorld == worldspaceFormId) {
+        return !gFo3ExternalEmittance.empty();
     }
 
-    ResetFo3ExternalEmittanceQ1380();
-    gFo3ExternalEmittanceWorldQ1380 = worldspaceFormId;
-    gFo3ExternalEmittanceLoadedQ1380 = true;
+    ResetFo3ExternalEmittance();
+    gFo3ExternalEmittanceWorld = worldspaceFormId;
+    gFo3ExternalEmittanceLoaded = true;
     if (worldspaceFormId == 0u) return false;
 
     FILE* file = std::fopen(ESM_PATH, "rb");
@@ -270,7 +270,7 @@ inline bool LoadFo3ExternalEmittanceQ1380(uint32_t worldspaceFormId) {
 
     size_t fixedCount = 0u, regionCount = 0u, unresolved = 0u;
     for (const RawRef& raw : refs) {
-        Fo3ExternalEmittanceQ1380 value;
+        Fo3ExternalEmittance value;
         value.referenceFormId = raw.refFormId;
         value.emittanceFormId = raw.emittanceFormId;
         const auto fixed = fixedLights.find(raw.emittanceFormId);
@@ -294,33 +294,33 @@ inline bool LoadFo3ExternalEmittanceQ1380(uint32_t worldspaceFormId) {
                 }
             }
         }
-        if (value.valid) gFo3ExternalEmittanceQ1380[raw.refFormId] = value;
+        if (value.valid) gFo3ExternalEmittance[raw.refFormId] = value;
         else ++unresolved;
     }
 
     __android_log_print(ANDROID_LOG_INFO, TAG,
         "Q13.8 EXTERNAL EMITTANCE READY: world=%08X xemiRefs=%zu resolved=%zu fixedLIGH=%zu regionWTHR=%zu unresolved=%zu time=DAY source=Fallout3.esm shaderFlag=0x%08X",
-        worldspaceFormId, refs.size(), gFo3ExternalEmittanceQ1380.size(),
+        worldspaceFormId, refs.size(), gFo3ExternalEmittance.size(),
         fixedCount, regionCount, unresolved, EXTERNAL_EMITTANCE_SHADER_FLAG);
 
     size_t logged = 0u;
-    for (const auto& pair : gFo3ExternalEmittanceQ1380) {
+    for (const auto& pair : gFo3ExternalEmittance) {
         if (logged >= 6u) break;
         LogExample(pair.second);
         ++logged;
     }
-    return !gFo3ExternalEmittanceQ1380.empty();
+    return !gFo3ExternalEmittance.empty();
 }
 
-inline bool ResolveFo3ExternalEmittanceQ1380(uint32_t worldspaceFormId,
+inline bool ResolveFo3ExternalEmittance(uint32_t worldspaceFormId,
                                               uint32_t referenceFormId,
-                                              Fo3ExternalEmittanceQ1380& out) {
-    if (!gFo3ExternalEmittanceLoadedQ1380 ||
-        gFo3ExternalEmittanceWorldQ1380 != worldspaceFormId) {
-        LoadFo3ExternalEmittanceQ1380(worldspaceFormId);
+                                              Fo3ExternalEmittance& out) {
+    if (!gFo3ExternalEmittanceLoaded ||
+        gFo3ExternalEmittanceWorld != worldspaceFormId) {
+        LoadFo3ExternalEmittance(worldspaceFormId);
     }
-    const auto found = gFo3ExternalEmittanceQ1380.find(referenceFormId);
-    if (found == gFo3ExternalEmittanceQ1380.end()) {
+    const auto found = gFo3ExternalEmittance.find(referenceFormId);
+    if (found == gFo3ExternalEmittance.end()) {
         out = {};
         return false;
     }

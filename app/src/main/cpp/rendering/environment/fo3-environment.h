@@ -14,7 +14,7 @@
 #include <string>
 #include <vector>
 
-struct Fo3EnvironmentQ1000 {
+struct Fo3Environment {
     bool valid = false;
     uint32_t worldspaceFormId = 0u;
     uint32_t climateFormId = 0u;
@@ -38,9 +38,9 @@ struct Fo3EnvironmentQ1000 {
     float sunDirection[3]{0.35f, 0.85f, 0.40f};
 };
 
-inline Fo3EnvironmentQ1000 gFo3EnvironmentQ1000;
+inline Fo3Environment gFo3Environment;
 
-namespace fo3envq1000 {
+namespace fo3env {
 
 constexpr const char* TAG = "FalloutQuest";
 constexpr const char* ESM_PATH =
@@ -171,7 +171,7 @@ inline void ReadDayColor(const uint8_t* nam0, uint32_t size,
     out[2] = static_cast<float>(nam0[offset + 2u]) / 255.0f;
 }
 
-inline bool ReadWeather(uint32_t weatherFormId, Fo3EnvironmentQ1000& env) {
+inline bool ReadWeather(uint32_t weatherFormId, Fo3Environment& env) {
     std::vector<uint8_t> payload;
     if (!FindRecord("WTHR", weatherFormId, payload)) return false;
 
@@ -323,23 +323,23 @@ inline bool EnsureSkyGpu() {
            skyLowerLocation >= 0 && skyHorizonLocation >= 0;
 }
 
-} // namespace fo3envq1000
+} // namespace fo3env
 
-inline void ResetFo3EnvironmentQ1000() {
-    gFo3EnvironmentQ1000 = Fo3EnvironmentQ1000{};
+inline void ResetFo3Environment() {
+    gFo3Environment = Fo3Environment{};
 }
 
-inline const Fo3EnvironmentQ1000& GetFo3EnvironmentQ1000() {
-    return gFo3EnvironmentQ1000;
+inline const Fo3Environment& GetFo3Environment() {
+    return gFo3Environment;
 }
 
-inline bool LoadFo3EnvironmentQ1000(uint32_t worldspaceFormId) {
-    Fo3EnvironmentQ1000 env;
+inline bool LoadFo3Environment(uint32_t worldspaceFormId) {
+    Fo3Environment env;
     env.worldspaceFormId = worldspaceFormId;
     uint32_t climate = 0u;
-    if (!fo3envq1000::ResolveClimate(worldspaceFormId, climate) || climate == 0u) {
-        ResetFo3EnvironmentQ1000();
-        __android_log_print(ANDROID_LOG_WARN, fo3envq1000::TAG,
+    if (!fo3env::ResolveClimate(worldspaceFormId, climate) || climate == 0u) {
+        ResetFo3Environment();
+        __android_log_print(ANDROID_LOG_WARN, fo3env::TAG,
                             "Q10.0 ENV FALLBACK: worldspace=%08X reason=no-climate",
                             worldspaceFormId);
         return false;
@@ -347,27 +347,27 @@ inline bool LoadFo3EnvironmentQ1000(uint32_t worldspaceFormId) {
     env.climateFormId = climate;
 
     uint32_t weather = 0u;
-    if (!fo3envq1000::ChooseClimateWeather(climate, weather, env.climateEditorId) ||
+    if (!fo3env::ChooseClimateWeather(climate, weather, env.climateEditorId) ||
         weather == 0u) {
-        ResetFo3EnvironmentQ1000();
-        __android_log_print(ANDROID_LOG_WARN, fo3envq1000::TAG,
+        ResetFo3Environment();
+        __android_log_print(ANDROID_LOG_WARN, fo3env::TAG,
                             "Q10.0 ENV FALLBACK: worldspace=%08X climate=%08X reason=no-weather",
                             worldspaceFormId, climate);
         return false;
     }
     env.weatherFormId = weather;
-    if (!fo3envq1000::ReadWeather(weather, env)) {
-        ResetFo3EnvironmentQ1000();
-        __android_log_print(ANDROID_LOG_WARN, fo3envq1000::TAG,
+    if (!fo3env::ReadWeather(weather, env)) {
+        ResetFo3Environment();
+        __android_log_print(ANDROID_LOG_WARN, fo3env::TAG,
                             "Q10.0 ENV FALLBACK: worldspace=%08X climate=%08X weather=%08X reason=no-NAM0",
                             worldspaceFormId, climate, weather);
         return false;
     }
 
     env.valid = true;
-    gFo3EnvironmentQ1000 = env;
+    gFo3Environment = env;
     __android_log_print(
-        ANDROID_LOG_INFO, fo3envq1000::TAG,
+        ANDROID_LOG_INFO, fo3env::TAG,
         "Q10.0 ENV READY: worldspace=%08X climate=%08X(%s) weather=%08X(%s) mode=DAY skyUpper=(%.3f %.3f %.3f) skyLower=(%.3f %.3f %.3f) horizon=(%.3f %.3f %.3f) ambient=(%.3f %.3f %.3f) sunlight=(%.3f %.3f %.3f) fog=(%.3f %.3f %.3f) fogNear=%.1f fogFar=%.1f sunDirection=legacy-until-game-clock",
         env.worldspaceFormId, env.climateFormId,
         env.climateEditorId.empty() ? "<none>" : env.climateEditorId.c_str(),
@@ -382,10 +382,10 @@ inline bool LoadFo3EnvironmentQ1000(uint32_t worldspaceFormId) {
     return true;
 }
 
-inline void RenderFo3SkyQ1000(const float* mvp16) {
+inline void RenderFo3EnvironmentSky(const float* mvp16) {
     if (!mvp16) return;
-    const Fo3EnvironmentQ1000& env = GetFo3EnvironmentQ1000();
-    if (!env.valid || !fo3envq1000::EnsureSkyGpu()) return;
+    const Fo3Environment& env = GetFo3Environment();
+    if (!env.valid || !fo3env::EnsureSkyGpu()) return;
 
     GLint previousProgram = 0;
     GLint previousVao = 0;
@@ -401,13 +401,13 @@ inline void RenderFo3SkyQ1000(const float* mvp16) {
     glDepthMask(GL_FALSE);
     glDisable(GL_CULL_FACE);
     glDisable(GL_BLEND);
-    glUseProgram(fo3envq1000::skyProgram);
-    glUniformMatrix4fv(fo3envq1000::skyMvpLocation, 1, GL_FALSE, mvp16);
-    glUniform3fv(fo3envq1000::skyUpperLocation, 1, env.skyUpper);
-    glUniform3fv(fo3envq1000::skyLowerLocation, 1, env.skyLower);
-    glUniform3fv(fo3envq1000::skyHorizonLocation, 1, env.horizon);
-    glBindVertexArray(fo3envq1000::skyVao);
-    glDrawArrays(GL_TRIANGLES, 0, fo3envq1000::skyVertexCount);
+    glUseProgram(fo3env::skyProgram);
+    glUniformMatrix4fv(fo3env::skyMvpLocation, 1, GL_FALSE, mvp16);
+    glUniform3fv(fo3env::skyUpperLocation, 1, env.skyUpper);
+    glUniform3fv(fo3env::skyLowerLocation, 1, env.skyLower);
+    glUniform3fv(fo3env::skyHorizonLocation, 1, env.horizon);
+    glBindVertexArray(fo3env::skyVao);
+    glDrawArrays(GL_TRIANGLES, 0, fo3env::skyVertexCount);
 
     glBindVertexArray(static_cast<GLuint>(previousVao));
     glUseProgram(static_cast<GLuint>(previousProgram));
@@ -416,9 +416,9 @@ inline void RenderFo3SkyQ1000(const float* mvp16) {
     if (cullWasEnabled) glEnable(GL_CULL_FACE); else glDisable(GL_CULL_FACE);
     if (blendWasEnabled) glEnable(GL_BLEND); else glDisable(GL_BLEND);
 
-    if (!fo3envq1000::skyLogged) {
-        fo3envq1000::skyLogged = true;
-        __android_log_print(ANDROID_LOG_INFO, fo3envq1000::TAG,
+    if (!fo3env::skyLogged) {
+        fo3env::skyLogged = true;
+        __android_log_print(ANDROID_LOG_INFO, fo3env::TAG,
                             "Q10.0 SKY VISIBLE: worldspace=%08X weather=%08X authoredWTHRGradient=1 stereo=1",
                             env.worldspaceFormId, env.weatherFormId);
     }

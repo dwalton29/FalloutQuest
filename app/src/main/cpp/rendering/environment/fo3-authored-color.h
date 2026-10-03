@@ -15,7 +15,7 @@
 // authored colour bytes must enter the lighting equation in the same linear
 // domain. This is a transfer-function correction only: no hue, saturation,
 // Fallout-green filter, LUT, or hand-authored colour is introduced here.
-namespace fo3colorq1390 {
+namespace fo3color {
 
 constexpr const char* TAG = "FalloutQuest";
 
@@ -47,7 +47,7 @@ inline void ResetState() {
 }
 
 inline bool ReadFixedLightLinear(uint32_t lightFormId, float out[3]) {
-    using namespace fo3envq1000;
+    using namespace fo3env;
     std::vector<uint8_t> payload;
     if (!FindRecord("LIGH", lightFormId, payload)) return false;
 
@@ -74,18 +74,18 @@ inline bool ReadFixedLightLinear(uint32_t lightFormId, float out[3]) {
     return true;
 }
 
-} // namespace fo3colorq1390
+} // namespace fo3color
 
-inline bool LoadFo3EnvironmentQ1390(uint32_t worldspaceFormId) {
-    using namespace fo3colorq1390;
-    if (!LoadFo3EnvironmentQ1000(worldspaceFormId)) {
+inline bool LoadFo3AuthoredEnvironment(uint32_t worldspaceFormId) {
+    using namespace fo3color;
+    if (!LoadFo3Environment(worldspaceFormId)) {
         gEnvironmentConverted = false;
         gEnvironmentWorld = 0u;
         return false;
     }
     if (gEnvironmentConverted && gEnvironmentWorld == worldspaceFormId) return true;
 
-    Fo3EnvironmentQ1000& env = gFo3EnvironmentQ1000;
+    Fo3Environment& env = gFo3Environment;
     const float rawSky[3]{env.skyUpper[0], env.skyUpper[1], env.skyUpper[2]};
     const float rawAmbient[3]{env.ambient[0], env.ambient[1], env.ambient[2]};
     const float rawSunlight[3]{env.sunlight[0], env.sunlight[1], env.sunlight[2]};
@@ -112,20 +112,20 @@ inline bool LoadFo3EnvironmentQ1390(uint32_t worldspaceFormId) {
     return true;
 }
 
-inline void ResetFo3EnvironmentQ1390() {
-    ResetFo3EnvironmentQ1000();
-    fo3colorq1390::gEnvironmentWorld = 0u;
-    fo3colorq1390::gEnvironmentConverted = false;
-    fo3colorq1390::gSkyWeather = 0u;
-    fo3colorq1390::gSkyConverted = false;
+inline void ResetFo3AuthoredEnvironment() {
+    ResetFo3Environment();
+    fo3color::gEnvironmentWorld = 0u;
+    fo3color::gEnvironmentConverted = false;
+    fo3color::gSkyWeather = 0u;
+    fo3color::gSkyConverted = false;
 }
 
-inline bool LoadFo3PlacedLightsQ1390(uint32_t worldspaceFormId,
+inline bool LoadFo3AuthoredPlacedLights(uint32_t worldspaceFormId,
                                      float arrivalX, float arrivalY, float arrivalZ) {
-    using namespace fo3colorq1390;
-    const bool result = LoadFo3PlacedLightsQ1010(worldspaceFormId,
+    using namespace fo3color;
+    const bool result = LoadFo3PlacedLights(worldspaceFormId,
                                                   arrivalX, arrivalY, arrivalZ);
-    for (Fo3PlacedLightQ1010& light : gFo3PlacedLightsQ1010) {
+    for (Fo3PlacedLight& light : gFo3PlacedLights) {
         const float fade = std::max(light.fade, 0.0f);
         for (int channel = 0; channel < 3; ++channel) {
             const float signedValue = light.color[channel];
@@ -138,15 +138,15 @@ inline bool LoadFo3PlacedLightsQ1390(uint32_t worldspaceFormId,
     }
     __android_log_print(ANDROID_LOG_INFO, TAG,
                         "Q13.9 LOCAL LIGHT COLOR: world=%08X lights=%zu transfer=sRGB-bytes-to-linear authoredFadePreserved=1",
-                        worldspaceFormId, gFo3PlacedLightsQ1010.size());
+                        worldspaceFormId, gFo3PlacedLights.size());
     return result;
 }
 
-inline bool ResolveFo3ExternalEmittanceQ1390(uint32_t worldspaceFormId,
+inline bool ResolveFo3AuthoredExternalEmittance(uint32_t worldspaceFormId,
                                               uint32_t referenceFormId,
-                                              Fo3ExternalEmittanceQ1380& out) {
-    using namespace fo3colorq1390;
-    if (!ResolveFo3ExternalEmittanceQ1380(worldspaceFormId, referenceFormId, out)) {
+                                              Fo3ExternalEmittance& out) {
+    using namespace fo3color;
+    if (!ResolveFo3ExternalEmittance(worldspaceFormId, referenceFormId, out)) {
         return false;
     }
 

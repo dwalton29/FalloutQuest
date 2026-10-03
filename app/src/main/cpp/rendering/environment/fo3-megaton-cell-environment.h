@@ -18,12 +18,12 @@
 //   CELL XCIM -> IMGS
 // This helper also corrects the FO3 152-byte IMGS DNAM cinematic tail and keeps
 // WTHR FNAM fog power available to the shaders.
-namespace fo3cellenvq1410 {
+namespace fo3cellenv {
 
 constexpr const char* TAG = "FalloutQuest";
 constexpr float CELL_SIZE_UNITS = 4096.0f;
 
-struct CellEnvironmentQ1410 {
+struct CellEnvironment {
     bool valid = false;
     uint32_t cellFormId = 0u;
     std::string cellEditorId;
@@ -37,13 +37,13 @@ struct CellEnvironmentQ1410 {
     int gridFallbackDistance = 0;
 };
 
-struct GroupQ1410 {
+struct CellGroup {
     uint64_t end = 0u;
     uint32_t label = 0u;
     uint32_t type = 0u;
 };
 
-inline CellEnvironmentQ1410 gCellEnvironment;
+inline CellEnvironment gCellEnvironment;
 inline float gFogDayPower = 1.0f;
 inline float gFogNightPower = 1.0f;
 inline float gFogPower = 1.0f;
@@ -56,8 +56,8 @@ inline int32_t GameCoordToCell(float value) {
 
 inline bool FindSpatialCell(uint32_t worldspaceFormId,
                             float gameX, float gameY,
-                            CellEnvironmentQ1410& out) {
-    using namespace fo3envq1000;
+                            CellEnvironment& out) {
+    using namespace fo3env;
     out = {};
     const int32_t wantedX = GameCoordToCell(gameX);
     const int32_t wantedY = GameCoordToCell(gameY);
@@ -70,8 +70,8 @@ inline bool FindSpatialCell(uint32_t worldspaceFormId,
         return false;
     }
 
-    std::vector<GroupQ1410> groups;
-    CellEnvironmentQ1410 best;
+    std::vector<CellGroup> groups;
+    CellEnvironment best;
     int bestDistance = 9999;
 
     while (true) {
@@ -88,7 +88,7 @@ inline bool FindSpatialCell(uint32_t worldspaceFormId,
             if (sizeField < fo3esm::HEADER_SIZE ||
                 offset + sizeField > static_cast<uint64_t>(fileSize)) break;
             groups.push_back(
-                GroupQ1410{offset + sizeField, fo3esm::ReadU32(header + 8u), fo3esm::ReadU32(header + 12u)});
+                CellGroup{offset + sizeField, fo3esm::ReadU32(header + 8u), fo3esm::ReadU32(header + 12u)});
             continue;
         }
 
@@ -113,7 +113,7 @@ inline bool FindSpatialCell(uint32_t worldspaceFormId,
         std::vector<uint8_t> payload;
         if (!fo3esm::ReadPayloadCurrent(file, sizeField, flags, payload)) break;
 
-        CellEnvironmentQ1410 candidate;
+        CellEnvironment candidate;
         candidate.cellFormId = formId;
         bool haveGrid = false;
         fo3esm::WalkSubrecords(payload.data(), payload.size(),
@@ -157,7 +157,7 @@ inline bool ResolveRegionWeather(uint32_t regionFormId,
                                  uint32_t& weatherFormId,
                                  int32_t& chance,
                                  std::string& weatherEditorId) {
-    using namespace fo3envq1000;
+    using namespace fo3env;
     weatherFormId = 0u;
     chance = -1;
     weatherEditorId.clear();
@@ -204,7 +204,7 @@ inline bool ReadFogPower(uint32_t weatherFormId,
                          float& dayPower, float& nightPower,
                          float dayFogRgb[3],
                          float& dayNear, float& dayFar) {
-    using namespace fo3envq1000;
+    using namespace fo3env;
     dayPower = 1.0f;
     nightPower = 1.0f;
     dayNear = 0.0f;
@@ -234,8 +234,8 @@ inline bool ReadFogPower(uint32_t weatherFormId,
     return haveFnam;
 }
 
-inline bool CorrectImageSpaceLayout(Fo3ImageSpaceQ1280& image) {
-    using namespace fo3envq1000;
+inline bool CorrectImageSpaceLayout(Fo3ImageSpace& image) {
+    using namespace fo3env;
     if (!image.valid || image.imageSpaceFormId == 0u) return false;
     std::vector<uint8_t> payload;
     if (!FindRecord("IMGS", image.imageSpaceFormId, payload)) return false;
@@ -285,19 +285,19 @@ inline bool CorrectImageSpaceLayout(Fo3ImageSpaceQ1280& image) {
 
 // Used by Q14.0's BuildEndpointImages through a temporary preprocessor alias.
 // It fixes the base IMGS parser before weather IMAD endpoints are layered on.
-inline bool LoadFo3ImageSpaceBaseQ1410(uint32_t cellFormId,
+inline bool LoadFo3BaseImageSpaceForCell(uint32_t cellFormId,
                                        uint32_t worldspaceFormId) {
-    const bool ready = LoadFo3ImageSpaceQ1280(cellFormId, worldspaceFormId);
-    if (ready) CorrectImageSpaceLayout(gFo3ImageSpaceQ1280);
+    const bool ready = LoadFo3ImageSpace(cellFormId, worldspaceFormId);
+    if (ready) CorrectImageSpaceLayout(gFo3ImageSpace);
     return ready;
 }
 
-inline bool LoadFo3CellEnvironmentQ1410(uint32_t persistentCellFormId,
+inline bool LoadFo3CellEnvironment(uint32_t persistentCellFormId,
                                         uint32_t worldspaceFormId,
                                         float arrivalX, float arrivalY) {
-    using namespace fo3envq1000;
+    using namespace fo3env;
 
-    CellEnvironmentQ1410 cell;
+    CellEnvironment cell;
     if (!FindSpatialCell(worldspaceFormId, arrivalX, arrivalY, cell)) {
         __android_log_print(
             ANDROID_LOG_WARN, TAG,
@@ -323,8 +323,8 @@ inline bool LoadFo3CellEnvironmentQ1410(uint32_t persistentCellFormId,
 
     // Retain the WRLD-authored climate (time spans), but replace the selected
     // climate-list weather with the CELL region's 100%-chance weather.
-    if (!LoadFo3EnvironmentQ1000(worldspaceFormId)) return false;
-    Fo3EnvironmentQ1000& env = gFo3EnvironmentQ1000;
+    if (!LoadFo3Environment(worldspaceFormId)) return false;
+    Fo3Environment& env = gFo3Environment;
     env.weatherFormId = regionWeather;
     env.weatherEditorId.clear();
     if (!ReadWeather(regionWeather, env)) return false;
@@ -332,17 +332,17 @@ inline bool LoadFo3CellEnvironmentQ1410(uint32_t persistentCellFormId,
     // The Q14.0 per-frame sampler writes environment RGB in the established
     // Q13.9 domain before the first visible draw. Mark the old one-shot state
     // dirty so no stale world/weather conversion can be reused.
-    fo3colorq1390::gEnvironmentWorld = 0u;
-    fo3colorq1390::gEnvironmentConverted = false;
-    fo3colorq1390::gSkyWeather = 0u;
-    fo3colorq1390::gSkyConverted = false;
+    fo3color::gEnvironmentWorld = 0u;
+    fo3color::gEnvironmentConverted = false;
+    fo3color::gSkyWeather = 0u;
+    fo3color::gSkyConverted = false;
 
     // Load the CELL-authored XCIM, correct the 152-byte FO3 layout, then apply
     // the current weather's Day IMAD once. Q14.0 immediately replaces this with
     // interpolated endpoint values once the test clock starts.
-    if (!LoadFo3ImageSpaceBaseQ1410(cell.cellFormId, worldspaceFormId)) return false;
-    fo3imadq1300::ApplyWeatherImadQ1300(gFo3ImageSpaceQ1280);
-    fo3weatherq1320::ApplyWeatherLightingQ1320(gFo3ImageSpaceQ1280);
+    if (!LoadFo3BaseImageSpaceForCell(cell.cellFormId, worldspaceFormId)) return false;
+    fo3imadq1300::ApplyWeatherImadQ1300(gFo3ImageSpace);
+    fo3weatherq1320::ApplyWeatherLightingQ1320(gFo3ImageSpace);
 
     float dayFogRgb[3]{};
     float dayNear = 0.0f, dayFar = 0.0f;
@@ -354,7 +354,7 @@ inline bool LoadFo3CellEnvironmentQ1410(uint32_t persistentCellFormId,
     gCellEnvironment = cell;
     gCellEnvironment.valid = true;
 
-    const Fo3ImageSpaceQ1280& image = gFo3ImageSpaceQ1280;
+    const Fo3ImageSpace& image = gFo3ImageSpace;
     __android_log_print(
         ANDROID_LOG_INFO, TAG,
         "Q14.1 CELL ENV READY: persistentCell=%08X spatialCell=%08X EDID=%s grid=(%d %d) gridFallback=%d region=%08X weather=%08X EDID=%s chance=%d imagespace=%08X IMGS=%08X IMGS_EDID=%s fogDayEncoded=(%.3f %.3f %.3f) fogNear=%.1f fogFar=%.1f fogPowerDay=%.3f fogPowerNight=%.3f source=Fallout3.esm",
@@ -423,7 +423,7 @@ inline float FogPowerForHour(float hour,
     return gFogDayPower + (gFogNightPower - gFogDayPower) * nightAmount;
 }
 
-inline void UpdateFo3FogPowerQ1410(float hour,
+inline void UpdateFo3FogPower(float hour,
                                    float sunriseBegin, float sunriseEnd,
                                    float sunsetBegin, float sunsetEnd) {
     gFogPower = std::clamp(
@@ -438,31 +438,31 @@ inline void UpdateFo3FogPowerQ1410(float hour,
     }
 }
 
-inline float GetFo3FogPowerQ1410() {
+inline float GetFo3FogPower() {
     return std::clamp(gFogPower, 0.01f, 8.0f);
 }
 
-} // namespace fo3cellenvq1410
+} // namespace fo3cellenv
 
-inline bool LoadFo3ImageSpaceBaseQ1410(uint32_t cellFormId,
+inline bool LoadFo3BaseImageSpaceForCell(uint32_t cellFormId,
                                        uint32_t worldspaceFormId) {
-    return fo3cellenvq1410::LoadFo3ImageSpaceBaseQ1410(cellFormId, worldspaceFormId);
+    return fo3cellenv::LoadFo3BaseImageSpaceForCell(cellFormId, worldspaceFormId);
 }
 
-inline bool LoadFo3CellEnvironmentQ1410(uint32_t persistentCellFormId,
+inline bool LoadFo3CellEnvironment(uint32_t persistentCellFormId,
                                         uint32_t worldspaceFormId,
                                         float arrivalX, float arrivalY) {
-    return fo3cellenvq1410::LoadFo3CellEnvironmentQ1410(
+    return fo3cellenv::LoadFo3CellEnvironment(
         persistentCellFormId, worldspaceFormId, arrivalX, arrivalY);
 }
 
-inline void UpdateFo3FogPowerQ1410(float hour,
+inline void UpdateFo3FogPower(float hour,
                                    float sunriseBegin, float sunriseEnd,
                                    float sunsetBegin, float sunsetEnd) {
-    fo3cellenvq1410::UpdateFo3FogPowerQ1410(
+    fo3cellenv::UpdateFo3FogPower(
         hour, sunriseBegin, sunriseEnd, sunsetBegin, sunsetEnd);
 }
 
-inline float GetFo3FogPowerQ1410() {
-    return fo3cellenvq1410::GetFo3FogPowerQ1410();
+inline float GetFo3FogPower() {
+    return fo3cellenv::GetFo3FogPower();
 }
