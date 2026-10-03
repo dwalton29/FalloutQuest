@@ -22,6 +22,7 @@ extern void PumpFo3AndroidEventsQ1860();
 #include "fo3-megaton-scene.h"
 #include "fo3-npc.h"
 #include "fo3-actor-animation.h"
+#include "player/fo3-player-state.h"
 #include "rendering/mesh/fo3-static-nif.h"
 #include "fo3-bsa-reader.h"
 #include "fo3-texture-bsa.h"
@@ -58,6 +59,7 @@ bool QueueFo3MegatonEntryQ1860();
 #include <cctype>
 #include <cmath>
 #include <cstdint>
+#include <cerrno>
 #include <deque>
 #include <cstring>
 #include <functional>
@@ -2697,10 +2699,12 @@ struct Fo3SceneCpuPreparation {
     std::vector<Fo3WorldPlacement> collisionPlacements;
     std::vector<CpuObject> selected;
     std::vector<Q230ActorVisual> actors;
+    std::unique_ptr<fo3player::Session> playerSession;
     size_t skipped = 0u;
     size_t unsupported = 0u;
     size_t preparedTextures = 0u;
     uint64_t resolveUs = 0u;
+    uint64_t playerUs = 0u;
     uint64_t metadataUs = 0u;
     uint64_t cpuUs = 0u;
     uint64_t textureUs = 0u;
@@ -2736,6 +2740,13 @@ struct Fo3SceneLoadWork {
 };
 Fo3SceneLoadWork gSceneLoad;
 uint64_t gSceneLoadFrame = 0u;
+std::unique_ptr<fo3player::Session> gPlayerSession;
+
+void FlushFo3PlayerState() {
+    if (!gPlayerSession) return;
+    std::string error;
+    if (!gPlayerSession->Flush(error)) Q6H_LOGE("PLAYER SAVE: %s", error.c_str());
+}
 
 bool DrainFo3TransitionBackgroundWork();
 
@@ -2779,10 +2790,32 @@ bool BeginFo3SceneLoad(const Fo3CellTransitionRequestQ74& request, bool boot) {
     Q6H_LOGI("SCENE LOAD BEGIN: boot=%d cell=%08X worldspace=%08X generation=%llu cpuWorker=1",
              boot ? 1 : 0, request.cellFormId, request.worldspaceFormId,
              static_cast<unsigned long long>(gSceneLoad.generation));
+    const bool loadPlayer = !gPlayerSession;
     if (!gSceneLoad.preparation.Start(
-            [request, boot](Fo3SceneCpuPreparation& result, const std::atomic<bool>& cancel) {
+            [request, boot, loadPlayer](Fo3SceneCpuPreparation& result, const std::atomic<bool>& cancel) {
         result.request = request;
         auto phase = std::chrono::steady_clock::now();
+        if (loadPlayer) {
+            fo3player::Catalog catalog;
+            std::string error;
+            if (fo3player::LoadCatalog("/data/user/0/com.falloutquest.app/files/Fallout3/Data/Fallout3.esm", catalog, error)) {
+                result.playerSession = std::make_unique<fo3player::Session>(std::move(catalog));
+                auto& session = *result.playerSession;
+                session.savePath = "/data/user/0/com.falloutquest.app/files/player-state.fqps";
+                FILE* save = std::fopen(session.savePath.c_str(), "rb");
+                if (save) {
+                    std::fclose(save);
+                    if (session.player.Restore(session.savePath, error)) session.savedRevision = session.player.Revision();
+                    else { session.saveBlocked = true; Q6H_LOGE("PLAYER SAVE PRESERVED: %s", error.c_str()); }
+                } else if (errno != ENOENT) {
+                    session.saveBlocked = true;
+                    Q6H_LOGE("PLAYER SAVE PRESERVED: existing file cannot be read");
+                }
+            } else Q6H_LOGE("PLAYER STATE UNAVAILABLE: %s", error.c_str());
+        }
+        if (cancel.load(std::memory_order_acquire)) return false;
+        result.playerUs = Fo3SceneElapsedUs(phase);
+        phase = std::chrono::steady_clock::now();
         if (boot && !ResolveFo3MegatonEntryQ1860(result.request, &cancel)) return false;
         result.resolveUs = Fo3SceneElapsedUs(phase);
         if (cancel.load(std::memory_order_acquire)) return false;
@@ -2876,9 +2909,10 @@ bool ProcessQ74TransitionRequest() {
         gFo3LoadingWarmupWarned = false;
         gSceneLoad.replacement.reserve(selected.size());
         gSceneLoad.contextApplied = true;
-        Q6H_LOGI("SCENE CPU READY: boot=%d cell=%08X placements=%zu shapes=%zu resolveUs=%llu metadataUs=%llu cpuUs=%llu textureUs=%llu preparedTextures=%zu",
+        Q6H_LOGI("SCENE CPU READY: boot=%d cell=%08X placements=%zu shapes=%zu resolveUs=%llu playerUs=%llu metadataUs=%llu cpuUs=%llu textureUs=%llu preparedTextures=%zu",
                  gSceneLoad.boot ? 1 : 0, request.cellFormId, prepared.placements.size(), selected.size(),
                  static_cast<unsigned long long>(prepared.resolveUs),
+                 static_cast<unsigned long long>(prepared.playerUs),
                  static_cast<unsigned long long>(prepared.metadataUs),
                  static_cast<unsigned long long>(prepared.cpuUs),
                  static_cast<unsigned long long>(prepared.textureUs), prepared.preparedTextures);
@@ -3000,6 +3034,15 @@ bool ProcessQ74TransitionRequest() {
     const uint64_t collisionUs = gSceneLoad.collisionUs;
     const auto finalizationStarted = std::chrono::steady_clock::now();
     const size_t oldObjects = gObjects.size();
+    if (prepared.playerSession) {
+        gPlayerSession = std::move(prepared.playerSession);
+        const auto& p = gPlayerSession->player;
+        Q6H_LOGI("PLAYER STATE READY: level=%u HP=%.1f/%.1f AP=%.1f/%.1f weight=%.2f/%.1f stacks=%zu items=%zu saveBlocked=%d",
+            p.Snapshot().level, p.Health(), p.MaxHealth(), p.ActionPoints(), p.MaxActionPoints(),
+            p.InventoryWeight(), p.CarryCapacity(), p.Snapshot().inventory.size(), p.Definitions().items.size(),
+            gPlayerSession->saveBlocked ? 1 : 0);
+    }
+    FlushFo3PlayerState();
     Q74DeleteGpuObjects(gObjects);
     Q230DeleteNpcActors();
     gQ230NpcActors = std::move(prepared.actors);
@@ -12400,6 +12443,7 @@ void Q1280ShutdownPostQ1280() {
 }
 
 void Q6HDeleteFramebuffers(GLsizei n, const GLuint* framebuffers) {
+    FlushFo3PlayerState();
     gSceneLoad.collisionPreparation.Reset();
     if (gSceneLoad.preparation.Ready()) {
         for (auto& actor : gSceneLoad.preparation.Get().actors)
@@ -12503,6 +12547,8 @@ void Q6HDrawArrays(GLenum mode, GLint first, GLsizei count) {
 
 
 } // namespace
+
+fo3player::Session* GetFo3PlayerSession() { return gPlayerSession.get(); }
 
 void SetFo3PlayerBodyTrackingQ210(
         float headX, float headY, float headZ, float headYaw,

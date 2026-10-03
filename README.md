@@ -2,7 +2,24 @@
 
 Experimental standalone Meta Quest runtime for user-supplied Fallout 3 game data.
 
-## Current milestone: 0.25.0 — Original NPC idle playback
+## Current milestone: 0.26.0 — Player stats and inventory foundation
+
+The startup worker loads the original Player NPC_ record, its SPECIAL, manual
+skills, level, karma and CNTO inventory, plus 1,762 original inventory item
+definitions. Health, AP and carry capacity use the installed ESM's game settings.
+A scene-independent player session owns stack identities, quantities, item
+condition, equipment slots and current health/AP. It saves to a versioned Quest
+state file on scene commitment, OpenXR session stop and renderer shutdown.
+Invalid or incompatible saves are preserved rather than overwritten.
+
+This is the gameplay data/API foundation. There is no new Pip-Boy menu or pickup
+input yet; equipment mutations do not rebuild the visible player body. Scripts,
+character creation, perks/effects, level progression, consumption, combat,
+encumbrance movement penalties, container ownership and Bethesda .fos import
+remain separate work. The prototype starts from the authored Player template,
+not a simulated Vault 101 quest progression or invented starter gear.
+
+## Original NPC idle playback: 0.25.0
 
 Actors in Megaton and explicitly loaded interior CELLs now share an authored
 appearance assembly path instead of selecting only Lucas Simms. Female race

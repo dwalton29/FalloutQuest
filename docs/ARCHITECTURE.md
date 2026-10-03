@@ -331,3 +331,74 @@ Optional integration arguments sample the original idle/walk for 360 frames each
 and resolve the supplied Megaton ESM; no game data is shipped in the repository.
 Headset stereo appearance, skin seams, door-return placement and performance
 still require an on-device pass.
+
+## Player state and inventory foundation (0.26.0)
+
+`player/fo3-player-state.*` is a portable gameplay data/state layer, independent
+of Android, OpenXR and GL. Its bounded ESM scan reads the original Player NPC_
+FormID 7 (ACBS, DATA, DNAM, CNTO), the required seven GMSTs, and original WEAP,
+ARMO, AMMO, ALCH, INGR, MISC, KEYM, BOOK and NOTE definitions. Record layouts
+follow [xEdit's FO3 definitions](https://github.com/TES5Edit/TES5Edit/blob/dev-4.1.6/Core/wbDefinitionsFO3.pas).
+Deleted records are excluded; compressed records and extended subrecords are
+supported. Missing/invalid player data, inherited/auto-calculated player stats,
+plugins/master chains and levelled starting inventory are explicitly rejected.
+Starting CNTO/COED entries retain authored condition; unresolved owner/rank
+metadata is rejected rather than discarded.
+The destination catalog remains unchanged on failure.
+
+The current player stats use the manually authored Player template. Derived
+health is `DATA baseHealth + (END + fAVDHealthEnduranceOffset) *
+fAVDHealthEnduranceMult + (level - 1) * fAVDHealthLevelMult`; AP is
+`fAVDActionPointsBase + AGI * fAVDActionPointsMult`; capacity is
+`fAVDCarryWeightsBase + STR * fAVDCarryWeightMult`. These baseline relationships
+are documented in the original GECK settings reference, mirrored at
+[health](https://geck.uesp.net/wiki/FAVDHealthEnduranceMult),
+[AP](https://geck.uesp.net/wiki/FAVDActionPointsBase) and
+[carry](https://geck.uesp.net/wiki/FAVDCarryWeightsBase).
+Constants come from the installed ESM, not those documentation pages (which may
+also describe New Vegas). Skills and skill offsets are retained in original
+DNAM order, including the unused Throwing slot. They are not re-derived from
+SPECIAL or tagged by a simulated character-creation script.
+
+Inventory stores stable per-stack IDs, positive signed quantities and normalized
+condition. Identical unequipped FormID/condition stacks merge. Equipped items
+split out as one instance retaining the selected stack ID. Equipping a weapon
+unequips the previous weapon; armour only displaces overlapping authored biped
+slots. Non-playable and broken items cannot be user-equipped. Authored quest
+flags and weapon cannot-drop flags block removal. Counts, stack limits and numeric inputs are bounded; invalid
+operations leave state/revision unchanged. Weight currently sums authored item
+weights, including equipped stacks; ownership/quest runtime exceptions and
+encumbrance movement effects are not implemented. FO3 ammunition has no weight
+field. Aid/ingredient auto-calculated values are flagged unknown rather than
+claimed to be complete without the magic-effect runtime. Script/enchantment
+FormIDs are retained without executing them.
+
+The startup scene worker creates a request-local Session, restored from
+`files/player-state.fqps` if present. It publishes on scene commitment; the one
+render-thread-owned session survives CELL changes and GL resource recreation.
+`GetFo3PlayerSession()` returns null before publication. UI/gameplay callers must
+mutate through Player operations on that same thread. Catalog failure leaves
+the existing world prototype usable and emits `PLAYER STATE UNAVAILABLE`.
+`PLAYER STATE READY` reports HP/AP, capacity, weight, catalog size and save status.
+No game data is loaded or save file read every frame.
+
+The custom FQPS v1 save contains mutable resources and inventory, with explicit
+little-endian fields, catalog fingerprint, payload length and CRC. Restore
+validates IDs, quantities, conditions, equipment conflicts and resource bounds
+before replacing live state. The catalog fingerprint covers decoded consumed
+ESM records/headers, binding saves to the supplied definitions. Saves write a
+temporary sibling file, flush/fsync it, then rename it over the destination and
+fsync its parent directory. Dirty state flushes at scene commitment, loss of
+OpenXR focus, session STOPPING and renderer shutdown. A rejected/unreadable
+existing save blocks writes and is preserved;
+its baseline session can still be inspected. No automatic reset or silent save
+migration occurs. This is not Bethesda .fos compatibility, and it does not save
+world/quest state or player position. Unexpected process termination before a
+lifecycle flush can lose unflushed changes.
+
+This milestone provides state and APIs for the next original Pip-Boy/pickup
+slice. There is no stats/inventory UI or new controller action yet. Equipment
+state is not connected to the visible body rig. Consumption, ownership/theft,
+container transfer, scripts, perks, effects, radiation/limb damage, combat,
+level progression and character-creation allocation remain unimplemented.
+Portable checks in `tests/player` are run by the APK workflow.

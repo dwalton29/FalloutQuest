@@ -71,6 +71,12 @@ jobs:
           cmake --build build/host-nif --parallel 2
           ctest --test-dir build/host-nif --output-on-failure
 
+      - name: Test player stats and inventory on host
+        run: |
+          cmake -S tests/player -B build/host-player
+          cmake --build build/host-player --parallel 2
+          ctest --test-dir build/host-player --output-on-failure
+
       - name: Restore stable development signing key
         run: |
           base64 --decode app/falloutquest-dev.keystore.b64 > app/falloutquest-dev.keystore

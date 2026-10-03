@@ -360,6 +360,7 @@ public:
     }
 
     void Shutdown() {
+        FlushFo3PlayerState();
         if (sessionRunning_) {
             xrEndSession(session_);
             sessionRunning_ = false;
@@ -1051,6 +1052,8 @@ private:
         while (xrPollEvent(instance_, &event) == XR_SUCCESS) {
             if (event.type == XR_TYPE_EVENT_DATA_SESSION_STATE_CHANGED) {
                 const auto* changed = reinterpret_cast<const XrEventDataSessionStateChanged*>(&event);
+                if (sessionState_ == XR_SESSION_STATE_FOCUSED && changed->state != XR_SESSION_STATE_FOCUSED)
+                    FlushFo3PlayerState();
                 sessionState_ = changed->state;
                 FQ_LOGI("OpenXR session state -> %d", static_cast<int>(sessionState_));
 
@@ -1062,6 +1065,7 @@ private:
                         lastFrameTime_ = 0;
                     }
                 } else if (sessionState_ == XR_SESSION_STATE_STOPPING && sessionRunning_) {
+                    FlushFo3PlayerState();
                     CheckXr(xrEndSession(session_), "xrEndSession");
                     sessionRunning_ = false;
                 } else if (sessionState_ == XR_SESSION_STATE_EXITING ||
@@ -1785,5 +1789,3 @@ extern "C" void android_main(struct android_app* app) {
     xr.Shutdown();
     FQ_LOGI("FalloutQuest Q7.1 process stopped");
 }
-
-
