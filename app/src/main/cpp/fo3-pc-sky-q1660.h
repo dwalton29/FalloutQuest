@@ -1,6 +1,6 @@
 #pragma once
 
-#include "fo3-time-of-day-q1400.h"
+#include "rendering/environment/fo3-time-of-day.h"
 #include "fo3-texture-bsa.h"
 
 #include <GLES3/gl3.h>

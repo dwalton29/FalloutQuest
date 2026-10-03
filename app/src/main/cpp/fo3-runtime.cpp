@@ -34,7 +34,7 @@ extern void PumpFo3AndroidEventsQ1860();
 #include "rendering/environment/fo3-authored-color.h"
 #include "fo3-megaton-cell-environment-q1410.h"
 #define LoadFo3ImageSpaceQ1280 LoadFo3ImageSpaceBaseQ1410
-#include "fo3-time-of-day-q1400.h"
+#include "rendering/environment/fo3-time-of-day.h"
 #define FO3_Q1480_DEFINE_REFRESH 1
 #include "fo3-weather-byte-staging-q1480.h"
 #undef FO3_Q1480_DEFINE_REFRESH
