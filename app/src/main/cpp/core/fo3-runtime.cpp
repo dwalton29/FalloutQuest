@@ -1,5 +1,6 @@
 #include "rendering/water/fo3-water.h"
-void SetFo3WorldspaceGridRadiusOverrideQ1950(int radius);
+#include "world/fo3-worldspace-runtime.h"
+#include "world/fo3-world-streaming.h"
 void SetNextFo3CollisionExteriorModeQ1931(bool exterior);
 #include <array>
 #include <atomic>
@@ -3670,12 +3671,10 @@ bool Q1900BeginStream(float selectionGameX, float selectionGameY,
 
     std::thread([task]() {
         const auto q1800MetadataStarted = std::chrono::steady_clock::now();
-        SetFo3WorldspaceGridRadiusOverrideQ1950(2); // Q18 streamed 5x5 resident
-        task->success = LoadFo3WorldspaceNeighborhoodQ75(
-            task->worldspace, task->persistentCell,
-            task->selectionGameX, task->selectionGameY,
+        task->success = LoadFo3WorldspacePlacements(
+            {task->worldspace, task->persistentCell,
+             task->selectionGameX, task->selectionGameY, 2},
             task->placements);
-        SetFo3WorldspaceGridRadiusOverrideQ1950(-1);
         task->elapsedUs = static_cast<uint64_t>(
             std::chrono::duration_cast<std::chrono::microseconds>(
                 std::chrono::steady_clock::now() - q1800MetadataStarted).count());
@@ -5888,9 +5887,9 @@ bool Q1970NearDetailSafeQ19(int32_t actualGridX, int32_t actualGridY) {
     // but never before the active 3x3 has real detailed coverage.
     for (int dy = -1; dy <= 1; ++dy) {
         for (int dx = -1; dx <= 1; ++dx) {
-            const auto found = gQ1900CellsQ19.find(
+            const auto found = gWorldStreaming.cells.find(
                 Q1900CellKeyQ19(actualGridX + dx, actualGridY + dy));
-            if (found == gQ1900CellsQ19.end() ||
+            if (found == gWorldStreaming.cells.end() ||
                 !found->second.visualReady) {
                 return false;
             }
@@ -6035,7 +6034,7 @@ void Q1970ConsumeLodWorkersQ19() {
         const auto task = worker;
         worker.reset();
         const bool contextStale =
-            task->contextSerial != gQ1900ContextSerialQ19 ||
+            task->contextSerial != gWorldStreaming.contextSerial ||
             std::fabs(task->centerX - gExteriorOriginXQ1890) > 0.01f ||
             std::fabs(task->centerY - gExteriorOriginYQ1890) > 0.01f ||
             std::fabs(task->floorZ - gExteriorOriginZQ1890) > 0.01f;
@@ -6380,9 +6379,9 @@ void Q1970AdvanceNativeLodQ19(int32_t cellX, int32_t cellY,
     size_t q2023aNearReady = 0u;
     for (int dy = -1; dy <= 1; ++dy) {
         for (int dx = -1; dx <= 1; ++dx) {
-            const auto found = gQ1900CellsQ19.find(
+            const auto found = gWorldStreaming.cells.find(
                 Q1900CellKeyQ19(cellX + dx, cellY + dy));
-            if (found != gQ1900CellsQ19.end() &&
+            if (found != gWorldStreaming.cells.end() &&
                 found->second.visualReady) {
                 ++q2023aNearReady;
             }
@@ -6392,7 +6391,7 @@ void Q1970AdvanceNativeLodQ19(int32_t cellX, int32_t cellY,
     const bool q2023aTerrainBusy =
         IsFo3TerrainStreamingCpuBusyQ2000();
     const bool q2023aCollisionBusy =
-        static_cast<bool>(gQ1930CollisionTaskQ19);
+        static_cast<bool>(gWorldStreaming.collisionTask);
     size_t q2023aBootstrapReady = 0u;
     const bool q2023aBootstrapComplete =
         Q2013NativeLodBootstrapReadyQ19(
@@ -6432,7 +6431,7 @@ void Q1970AdvanceNativeLodQ19(int32_t cellX, int32_t cellY,
         Q6H_LOGI("Q20.25 LOD STATE: pulse=%llu cell=(%d,%d) contextReady=%d wasteland=%d collisionBusy=%d terrainBusy=%d near3x3Ready=%zu/9 nearSafe=%d bootstrapLevel4=%zu/25 bootstrapComplete=%d level4DesiredLoaded=%zu level8=%zu level16=%zu level32=%zu coarseTiles=%zu highBlocks=%zu farObjectBlocks=%zu terrainShapes=%zu terrainRealDiffuse=%zu terrainFallbackDiffuse=%zu terrainVertexColorStreams=%zu activeWorkers=%zu uploads=%zu assetsDiscovered=%d assets=%zu",
                  static_cast<unsigned long long>(q2023aGatePulse),
                  cellX, cellY,
-                 gQ1900ContextReadyQ19 ? 1 : 0,
+                 gWorldStreaming.contextReady ? 1 : 0,
                  gExteriorWorldspaceQ1890 == 0x0000003Cu ? 1 : 0,
                  q2023aCollisionBusy ? 1 : 0,
                  q2023aTerrainBusy ? 1 : 0,
@@ -6457,7 +6456,7 @@ void Q1970AdvanceNativeLodQ19(int32_t cellX, int32_t cellY,
                  gQ2023LodAssets.size());
     }
 
-    if (!gQ1900ContextReadyQ19 ||
+    if (!gWorldStreaming.contextReady ||
         gExteriorWorldspaceQ1890 != 0x0000003Cu) return;
 
     Q1970ConsumeLodWorkersQ19();
@@ -6509,7 +6508,7 @@ void Q1970AdvanceNativeLodQ19(int32_t cellX, int32_t cellY,
         }
 
         auto task = std::make_shared<Q1970LodWorkerTaskQ19>();
-        task->contextSerial = gQ1900ContextSerialQ19;
+        task->contextSerial = gWorldStreaming.contextSerial;
         task->centerX = centerX;
         task->centerY = centerY;
         task->floorZ = floorZ;

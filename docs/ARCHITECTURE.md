@@ -22,7 +22,9 @@ generated-source patching for engine behaviour.
 - rendering/mesh/fo3-static-nif.cpp: static NIF render-mesh/material loading.
 - fo3-collision-runtime.cpp: authored collision world and collision entry points.
 - player/fo3-player-controller.inc: consolidated exterior player controller.
-- world/fo3-worldspace-runtime.inc and rendering/terrain/fo3-terrain-*.inc: consolidated world/terrain implementation.
+- world/fo3-worldspace-runtime.cpp: immutable worldspace metadata/index and request-local placement selection.
+- world/fo3-world-streaming.cpp: portable CELL residency and motion-lookahead planner.
+- world/fo3-cell-streaming.inc and rendering/terrain/fo3-terrain-*.inc: render-thread CELL publication and terrain implementation.
 - Existing BSA, ESM, NIF and texture helpers remain normal source files.
 
 ## Shared assets: 0.24.9
@@ -47,6 +49,37 @@ reads without game assets. During this extraction, the adapters were compared
 with the previous loaders using the supplied 224 Megaton NIFs and 78 DDS files
 in temporary test archives, and the original supplied Misc BSA. The temporary
 archives and copyrighted data are not repository contents.
+
+## World streaming: 0.24.10
+
+`world/fo3-worldspace-runtime.cpp` owns the immutable CELL/REFR/base and
+Wasteland door-teleport index. The previous textual worldspace implementation
+is removed. LAND decoding consumes explicit CPU helper declarations from
+`fo3-worldspace-data.h`, without access to the placement index internals.
+Initial arrivals keep the existing neighborhood API; background CELL and
+legacy window workers pass `Fo3WorldspaceSelection` directly. Radius selection
+is request-local, replacing the thread-local override and its selection mutex.
+Index construction/publication remains locked; immutable reads remain safe
+across workers.
+
+`world/fo3-world-streaming.cpp` owns the residency planner's motion history and
+returns a fixed-capacity plan without per-frame allocation. It preserves the
+5x5 normal resident set, the complete 7x7 warm buffer and one hidden seven-CELL
+lookahead strip per motion axis. Active collision/drawing gates, terrain runway,
+LOD handoff and GPU upload/deletion budgets are unchanged.
+
+`Fo3WorldStreamingState` groups live CELLs, worker slots, context generations,
+collision task, terrain/collision centres, deferred GL deletion and planner
+state. Render-thread publication remains in `fo3-cell-streaming.inc` while it
+still shares renderer-owned GPU types/caches. This is an incremental extraction,
+not yet a standalone GPU/world runtime. Detached collision workers now capture
+their submission origin instead of reading mutable scene coordinates.
+
+Portable tests in `tests/world` cover residency, directional prefetch, negative
+grids, transition resets and independent planner state. Development comparisons
+matched 20,000 planner frames against the previous implementation, plus 26
+concurrent placement requests in the supplied Wasteland/Megaton ESM and all 240
+indexed door teleports. No game data is committed.
 
 ## Source-of-truth rule
 

@@ -99,28 +99,64 @@ struct Q1900CellStateQ19 {
     Q1960ShapeUploadQ19 q1960ShapeUpload;
 };
 
-std::unordered_map<uint64_t, Q1900CellStateQ19> gQ1900CellsQ19;
-
 constexpr size_t Q2012_CELL_WORKER_SLOTS = 3u;
-std::array<std::shared_ptr<Q1900CellWorkerTaskQ19>,
-           Q2012_CELL_WORKER_SLOTS> gQ1900WorkersQ19;
-std::mutex gQ2012MetadataSelectMutexQ19;
+
+struct Q1930CollisionSnapshotTaskQ19 {
+    uint64_t contextSerial = 0u;
+    int32_t centreX = 0;
+    int32_t centreY = 0;
+    std::vector<Fo3WorldPlacement> placements;
+    float originX = 0.0f;
+    float originY = 0.0f;
+    float originZ = 0.0f;
+    uint64_t snapshotToken = 0u;
+    uint64_t prepareUs = 0u;
+    bool success = false;
+    std::atomic<bool> ready{false};
+};
+// One owner for the live CELL pipeline. Mutated on the render thread; detached
+// workers publish only into their captured task payloads through ready atomics.
+struct Fo3WorldStreamingState {
+    std::unordered_map<uint64_t, Q1900CellStateQ19> cells;
+    std::array<std::shared_ptr<Q1900CellWorkerTaskQ19>, Q2012_CELL_WORKER_SLOTS> workers;
+    std::shared_ptr<Q1930CollisionSnapshotTaskQ19> collisionTask;
+    uint64_t contextSerial = 0u;
+    uint64_t tick = 0u;
+    bool contextReady = false;
+    uint32_t worldspace = 0u;
+    uint32_t persistentCell = 0u;
+    std::deque<GpuObject> deferredGpuDeletes;
+    float originX = 0.0f;
+    float originY = 0.0f;
+    float originZ = 0.0f;
+    bool collisionCentreValid = false;
+    int32_t collisionCentreX = 0;
+    int32_t collisionCentreY = 0;
+    bool terrainCentreValid = false;
+    int32_t terrainCentreX = 0;
+    int32_t terrainCentreY = 0;
+    int32_t lastActualX = INT32_MIN;
+    int32_t lastActualY = INT32_MIN;
+    fo3world::ResidencyPlanner residency;
+    uint64_t prefetchHeartbeat = 0u;
+};
+Fo3WorldStreamingState gWorldStreaming;
 
 bool Q1900AnyCellWorkerQ19() {
-    for (const auto& worker : gQ1900WorkersQ19)
+    for (const auto& worker : gWorldStreaming.workers)
         if (worker) return true;
     return false;
 }
 
 size_t Q1900ActiveCellWorkersQ19() {
     size_t active = 0u;
-    for (const auto& worker : gQ1900WorkersQ19)
+    for (const auto& worker : gWorldStreaming.workers)
         if (worker) ++active;
     return active;
 }
 
 bool Q1900CellWorkerOwnsQ19(uint64_t key) {
-    for (const auto& worker : gQ1900WorkersQ19) {
+    for (const auto& worker : gWorldStreaming.workers) {
         if (!worker) continue;
         const uint64_t workerKey =
             (static_cast<uint64_t>(static_cast<uint32_t>(worker->gridX)) << 32u) |
@@ -133,42 +169,10 @@ bool Q1900CellWorkerOwnsQ19(uint64_t key) {
 // Defined later in fo3-runtime.cpp after the Level4 worker type is complete.
 bool Q1970AnyLodWorkerQ19();
 
-struct Q1930CollisionSnapshotTaskQ19 {
-    uint64_t contextSerial = 0u;
-    int32_t centreX = 0;
-    int32_t centreY = 0;
-    std::vector<Fo3WorldPlacement> placements;
-    uint64_t snapshotToken = 0u;
-    uint64_t prepareUs = 0u;
-    bool success = false;
-    std::atomic<bool> ready{false};
-};
-std::shared_ptr<Q1930CollisionSnapshotTaskQ19> gQ1930CollisionTaskQ19;
-uint64_t gQ1900ContextSerialQ19 = 0u;
-uint64_t gQ1900TickQ19 = 0u;
-bool gQ1900ContextReadyQ19 = false;
-uint32_t gQ1900WorldspaceQ19 = 0u;
-uint32_t gQ1900PersistentQ19 = 0u;
-float gQ1900OriginXQ19 = 0.0f;
-float gQ1900OriginYQ19 = 0.0f;
-float gQ1900OriginZQ19 = 0.0f;
-bool gQ1900CollisionCentreValidQ19 = false;
-int32_t gQ1900CollisionCentreXQ19 = 0;
-int32_t gQ1900CollisionCentreYQ19 = 0;
-bool gQ1900TerrainCentreValidQ19 = false;
-int32_t gQ1900TerrainCentreXQ19 = 0;
-int32_t gQ1900TerrainCentreYQ19 = 0;
-int32_t gQ1900LastActualXQ19 = INT32_MIN;
-int32_t gQ1900LastActualYQ19 = INT32_MIN;
-bool gQ2012MotionValidQ19 = false;
-float gQ2012LastGameXQ19 = 0.0f;
-float gQ2012LastGameYQ19 = 0.0f;
-float gQ2012MotionXQ19 = 0.0f;
-float gQ2012MotionYQ19 = 0.0f;
 
-constexpr int Q1900_RESIDENT_RADIUS_Q19 = 2;
-constexpr int Q2013_WARM_RADIUS_Q19 = 3;
-constexpr int Q1900_CACHE_RADIUS_Q19 = 3;
+constexpr int Q1900_RESIDENT_RADIUS_Q19 = fo3world::ResidentRadius;
+constexpr int Q2013_WARM_RADIUS_Q19 = fo3world::WarmRadius;
+constexpr int Q1900_CACHE_RADIUS_Q19 = fo3world::CacheRadius;
 // Begin the next strip before the final quarter of the current CELL. 1792
 // leaves a 512-unit neutral band around centre, avoiding an arbitrary direction
 // choice while giving the asset worker substantially more lead time.
@@ -184,11 +188,10 @@ constexpr size_t Q1960_TEXTURE_CHUNK_BYTES = 128u * 1024u;
 constexpr size_t Q1960_VBO_CHUNK_BYTES = 128u * 1024u;
 constexpr uint64_t Q1910_GPU_DELETE_BUDGET_US = 750u;
 constexpr uint64_t Q1910_GPU_ITEM_WARN_US = 8000u;
-std::deque<GpuObject> gQ1910DeferredGpuDeletesQ19;
 
 void Q1910QueueGpuDeleteQ19(GpuObject& object) {
     if (object.vbo == 0u && object.vao == 0u) return;
-    gQ1910DeferredGpuDeletesQ19.push_back(std::move(object));
+    gWorldStreaming.deferredGpuDeletes.push_back(std::move(object));
     // GpuObject is not RAII. Clear the source handles explicitly so moved-from
     // vectors can be compacted/destroyed without double-deleting GL geometry.
     object.vbo = 0u;
@@ -199,16 +202,16 @@ void Q1910QueueGpuDeleteQ19(GpuObject& object) {
 }
 
 void Q1910DrainDeferredGpuDeletesQ19(bool flushAll = false) {
-    if (gQ1910DeferredGpuDeletesQ19.empty()) return;
-    const size_t queuedBefore = gQ1910DeferredGpuDeletesQ19.size();
+    if (gWorldStreaming.deferredGpuDeletes.empty()) return;
+    const size_t queuedBefore = gWorldStreaming.deferredGpuDeletes.size();
     const auto started = std::chrono::steady_clock::now();
     size_t deleted = 0u;
     uint64_t maxItemUs = 0u;
 
-    while (!gQ1910DeferredGpuDeletesQ19.empty()) {
+    while (!gWorldStreaming.deferredGpuDeletes.empty()) {
         const auto itemStarted = std::chrono::steady_clock::now();
-        Q1900DeleteGpuShape(gQ1910DeferredGpuDeletesQ19.front());
-        gQ1910DeferredGpuDeletesQ19.pop_front();
+        Q1900DeleteGpuShape(gWorldStreaming.deferredGpuDeletes.front());
+        gWorldStreaming.deferredGpuDeletes.pop_front();
         const uint64_t itemUs = static_cast<uint64_t>(
             std::chrono::duration_cast<std::chrono::microseconds>(
                 std::chrono::steady_clock::now() - itemStarted).count());
@@ -226,11 +229,11 @@ void Q1910DrainDeferredGpuDeletesQ19(bool flushAll = false) {
     const uint64_t elapsedUs = static_cast<uint64_t>(
         std::chrono::duration_cast<std::chrono::microseconds>(
             std::chrono::steady_clock::now() - started).count());
-    if (flushAll || gQ1910DeferredGpuDeletesQ19.empty() ||
+    if (flushAll || gWorldStreaming.deferredGpuDeletes.empty() ||
         maxItemUs >= Q1910_GPU_ITEM_WARN_US ||
         elapsedUs >= Q1910_GPU_DELETE_BUDGET_US * 2u) {
         Q6H_LOGI("Q19.1 GPU DELETE DRAIN: deleted=%zu queuedBefore=%zu remaining=%zu elapsedUs=%llu maxItemUs=%llu budgetUs=%llu flush=%d",
-                 deleted, queuedBefore, gQ1910DeferredGpuDeletesQ19.size(),
+                 deleted, queuedBefore, gWorldStreaming.deferredGpuDeletes.size(),
                  static_cast<unsigned long long>(elapsedUs),
                  static_cast<unsigned long long>(maxItemUs),
                  static_cast<unsigned long long>(Q1910_GPU_DELETE_BUDGET_US),
@@ -244,21 +247,21 @@ uint64_t Q1900CellKeyQ19(int32_t x, int32_t y) {
 }
 
 bool Q1900CellVisualReadyQ19(int32_t x, int32_t y) {
-    if (!gQ1900ContextReadyQ19) return false;
-    const auto found = gQ1900CellsQ19.find(Q1900CellKeyQ19(x, y));
-    return found != gQ1900CellsQ19.end() && found->second.visualReady;
+    if (!gWorldStreaming.contextReady) return false;
+    const auto found = gWorldStreaming.cells.find(Q1900CellKeyQ19(x, y));
+    return found != gWorldStreaming.cells.end() && found->second.visualReady;
 }
 
 Q1900CellStateQ19& Q1900EnsureCellStateQ19(int32_t x, int32_t y) {
     const uint64_t key = Q1900CellKeyQ19(x, y);
-    auto found = gQ1900CellsQ19.find(key);
-    if (found != gQ1900CellsQ19.end()) return found->second;
+    auto found = gWorldStreaming.cells.find(key);
+    if (found != gWorldStreaming.cells.end()) return found->second;
     Q1900CellStateQ19 state;
     state.gridX = x;
     state.gridY = y;
     state.stage = Q1900CellStageQ19::Requested;
     state.requestedAt = std::chrono::steady_clock::now();
-    auto inserted = gQ1900CellsQ19.emplace(key, std::move(state));
+    auto inserted = gWorldStreaming.cells.emplace(key, std::move(state));
     Q6H_LOGI("Q19 CELL REQUEST: cell=(%d,%d) reason=new-resident-cell", x, y);
     return inserted.first->second;
 }
@@ -270,26 +273,24 @@ void Q1900SeedTextureKnowledgeQ19() {
 }
 
 void Q1900ResetCellsQ19(int32_t actualGridX, int32_t actualGridY) {
-    ++gQ1900ContextSerialQ19;
+    ++gWorldStreaming.contextSerial;
     ResetFo3TerrainStreamingQ2000();
-    gQ1900CellsQ19.clear();
-    gQ1900ContextReadyQ19 = true;
-    gQ1900WorldspaceQ19 = gExteriorWorldspaceQ1890;
-    gQ1900PersistentQ19 = gExteriorPersistentCellQ1890;
-    gQ1900OriginXQ19 = gExteriorOriginXQ1890;
-    gQ1900OriginYQ19 = gExteriorOriginYQ1890;
-    gQ1900OriginZQ19 = gExteriorOriginZQ1890;
-    gQ1900CollisionCentreValidQ19 = true;
-    gQ1900CollisionCentreXQ19 = gExteriorWindowGridXQ1890;
-    gQ1900CollisionCentreYQ19 = gExteriorWindowGridYQ1890;
-    gQ1900TerrainCentreValidQ19 = true;
-    gQ1900TerrainCentreXQ19 = gExteriorWindowGridXQ1890;
-    gQ1900TerrainCentreYQ19 = gExteriorWindowGridYQ1890;
-    gQ1900LastActualXQ19 = actualGridX;
-    gQ1900LastActualYQ19 = actualGridY;
-    gQ2012MotionValidQ19 = false;
-    gQ2012MotionXQ19 = 0.0f;
-    gQ2012MotionYQ19 = 0.0f;
+    gWorldStreaming.cells.clear();
+    gWorldStreaming.contextReady = true;
+    gWorldStreaming.worldspace = gExteriorWorldspaceQ1890;
+    gWorldStreaming.persistentCell = gExteriorPersistentCellQ1890;
+    gWorldStreaming.originX = gExteriorOriginXQ1890;
+    gWorldStreaming.originY = gExteriorOriginYQ1890;
+    gWorldStreaming.originZ = gExteriorOriginZQ1890;
+    gWorldStreaming.collisionCentreValid = true;
+    gWorldStreaming.collisionCentreX = gExteriorWindowGridXQ1890;
+    gWorldStreaming.collisionCentreY = gExteriorWindowGridYQ1890;
+    gWorldStreaming.terrainCentreValid = true;
+    gWorldStreaming.terrainCentreX = gExteriorWindowGridXQ1890;
+    gWorldStreaming.terrainCentreY = gExteriorWindowGridYQ1890;
+    gWorldStreaming.lastActualX = actualGridX;
+    gWorldStreaming.lastActualY = actualGridY;
+    gWorldStreaming.residency.Reset();
 
     // The boot/transition path already built a complete radius-2 visual window.
     // Seed all 25 CELLs as visually ready, including authored empty cells.
@@ -303,7 +304,7 @@ void Q1900ResetCellsQ19(int32_t actualGridX, int32_t actualGridY) {
             state.stage = Q1900CellStageQ19::Requested;
             state.visualReady = true;
             state.requestedAt = std::chrono::steady_clock::now();
-            gQ1900CellsQ19.emplace(
+            gWorldStreaming.cells.emplace(
                 Q1900CellKeyQ19(state.gridX, state.gridY),
                 std::move(state));
         }
@@ -317,26 +318,26 @@ void Q1900ResetCellsQ19(int32_t actualGridX, int32_t actualGridY) {
     gExteriorStreamBusyQ1890 = false;
 
     Q6H_LOGI("Q20.13 CELL STREAM RESET: context=%llu worldspace=%08X persistent=%08X bootCentre=(%d,%d) actual=(%d,%d) seededVisibleCells=25 warmTargetCells=49 warmRadius=3 workers=3 cpuOffThread=1 textureDecodeOffThread=1 progressiveGpu=1",
-             static_cast<unsigned long long>(gQ1900ContextSerialQ19),
-             gQ1900WorldspaceQ19, gQ1900PersistentQ19,
+             static_cast<unsigned long long>(gWorldStreaming.contextSerial),
+             gWorldStreaming.worldspace, gWorldStreaming.persistentCell,
              gExteriorWindowGridXQ1890, gExteriorWindowGridYQ1890,
              actualGridX, actualGridY);
 }
 
 bool Q1900ContextChangedQ19() {
-    return !gQ1900ContextReadyQ19 ||
-        gQ1900WorldspaceQ19 != gExteriorWorldspaceQ1890 ||
-        gQ1900PersistentQ19 != gExteriorPersistentCellQ1890 ||
-        std::fabs(gQ1900OriginXQ19 - gExteriorOriginXQ1890) > 0.01f ||
-        std::fabs(gQ1900OriginYQ19 - gExteriorOriginYQ1890) > 0.01f ||
-        std::fabs(gQ1900OriginZQ19 - gExteriorOriginZQ1890) > 0.01f;
+    return !gWorldStreaming.contextReady ||
+        gWorldStreaming.worldspace != gExteriorWorldspaceQ1890 ||
+        gWorldStreaming.persistentCell != gExteriorPersistentCellQ1890 ||
+        std::fabs(gWorldStreaming.originX - gExteriorOriginXQ1890) > 0.01f ||
+        std::fabs(gWorldStreaming.originY - gExteriorOriginYQ1890) > 0.01f ||
+        std::fabs(gWorldStreaming.originZ - gExteriorOriginZQ1890) > 0.01f;
 }
 
 void Q1900MarkWantedQ19(int32_t x, int32_t y, bool prefetch) {
     Q1900CellStateQ19& state = Q1900EnsureCellStateQ19(x, y);
     state.wanted = true;
     state.prefetched = state.prefetched || prefetch;
-    state.lastWantedTick = gQ1900TickQ19;
+    state.lastWantedTick = gWorldStreaming.tick;
     if (state.stage == Q1900CellStageQ19::Failed)
         state.stage = Q1900CellStageQ19::Requested;
     // Visual publication is independent from collision prewarming. Ready
@@ -349,115 +350,25 @@ void Q1900MarkWantedQ19(int32_t x, int32_t y, bool prefetch) {
 
 void Q1900EnsureWantedCellsQ19(float gameX, float gameY,
                                int32_t actualGridX, int32_t actualGridY) {
-    ++gQ1900TickQ19;
-    for (auto& entry : gQ1900CellsQ19) entry.second.wanted = false;
+    ++gWorldStreaming.tick;
+    for (auto& entry : gWorldStreaming.cells) entry.second.wanted = false;
 
-    // Q20.13: residency is proactive, not movement-triggered. Keep a complete
-    // 7x7 detailed buffer warm around the player at all times. The inner 5x5
-    // remains the normal full-detail set; ring 3 is prefetched insurance.
-    for (int dy = -Q2013_WARM_RADIUS_Q19;
-         dy <= Q2013_WARM_RADIUS_Q19; ++dy) {
-        for (int dx = -Q2013_WARM_RADIUS_Q19;
-             dx <= Q2013_WARM_RADIUS_Q19; ++dx) {
-            const bool warmShell =
-                std::max(std::abs(dx), std::abs(dy)) >
-                Q1900_RESIDENT_RADIUS_Q19;
-            Q1900MarkWantedQ19(actualGridX + dx, actualGridY + dy, warmShell);
-        }
-    }
+    const fo3world::ResidencyPlan plan = gWorldStreaming.residency.Update(
+        gameX, gameY, actualGridX, actualGridY);
+    for (const fo3world::WantedCell& cell : plan)
+        Q1900MarkWantedQ19(cell.x, cell.y, cell.prefetch);
 
-    if (gQ2012MotionValidQ19) {
-        const float frameDx = gameX - gQ2012LastGameXQ19;
-        const float frameDy = gameY - gQ2012LastGameYQ19;
-        constexpr float Q2012_MOTION_BLEND = 0.25f;
-        gQ2012MotionXQ19 =
-            gQ2012MotionXQ19 * (1.0f - Q2012_MOTION_BLEND) +
-            frameDx * Q2012_MOTION_BLEND;
-        gQ2012MotionYQ19 =
-            gQ2012MotionYQ19 * (1.0f - Q2012_MOTION_BLEND) +
-            frameDy * Q2012_MOTION_BLEND;
-    } else {
-        gQ2012MotionValidQ19 = true;
-        gQ2012MotionXQ19 = 0.0f;
-        gQ2012MotionYQ19 = 0.0f;
-    }
-    // Q20.21: keep one hidden seven-CELL strip ahead of locomotion. This is a
-    // Quest streaming runway only; it does not extend the visible FO3 distance.
-    // It exists so the next ring-3 overlap cells are already resident before
-    // the active CELL changes.
-    const float q2021LocalX =
-        gameX - static_cast<float>(actualGridX) *
-                    Q1890_EXTERIOR_CELL_SIZE;
-    const float q2021LocalY =
-        gameY - static_cast<float>(actualGridY) *
-                    Q1890_EXTERIOR_CELL_SIZE;
-    constexpr float Q2021_PREFETCH_MOTION_EPS = 0.20f;
-    constexpr float Q2021_PREFETCH_EDGE_FRACTION = 0.45f;
-    bool q2021East = false, q2021West = false;
-    bool q2021North = false, q2021South = false;
-
-    if (gQ2012MotionXQ19 > Q2021_PREFETCH_MOTION_EPS &&
-        q2021LocalX >
-            Q1890_EXTERIOR_CELL_SIZE *
-            Q2021_PREFETCH_EDGE_FRACTION) {
-        q2021East = true;
-        for (int dy = -Q2013_WARM_RADIUS_Q19;
-             dy <= Q2013_WARM_RADIUS_Q19; ++dy) {
-            Q1900MarkWantedQ19(
-                actualGridX + Q2013_WARM_RADIUS_Q19 + 1,
-                actualGridY + dy, true);
-        }
-    } else if (gQ2012MotionXQ19 < -Q2021_PREFETCH_MOTION_EPS &&
-               q2021LocalX <
-                   Q1890_EXTERIOR_CELL_SIZE *
-                   (1.0f - Q2021_PREFETCH_EDGE_FRACTION)) {
-        q2021West = true;
-        for (int dy = -Q2013_WARM_RADIUS_Q19;
-             dy <= Q2013_WARM_RADIUS_Q19; ++dy) {
-            Q1900MarkWantedQ19(
-                actualGridX - Q2013_WARM_RADIUS_Q19 - 1,
-                actualGridY + dy, true);
-        }
-    }
-
-    if (gQ2012MotionYQ19 > Q2021_PREFETCH_MOTION_EPS &&
-        q2021LocalY >
-            Q1890_EXTERIOR_CELL_SIZE *
-            Q2021_PREFETCH_EDGE_FRACTION) {
-        q2021North = true;
-        for (int dx = -Q2013_WARM_RADIUS_Q19;
-             dx <= Q2013_WARM_RADIUS_Q19; ++dx) {
-            Q1900MarkWantedQ19(
-                actualGridX + dx,
-                actualGridY + Q2013_WARM_RADIUS_Q19 + 1, true);
-        }
-    } else if (gQ2012MotionYQ19 < -Q2021_PREFETCH_MOTION_EPS &&
-               q2021LocalY <
-                   Q1890_EXTERIOR_CELL_SIZE *
-                   (1.0f - Q2021_PREFETCH_EDGE_FRACTION)) {
-        q2021South = true;
-        for (int dx = -Q2013_WARM_RADIUS_Q19;
-             dx <= Q2013_WARM_RADIUS_Q19; ++dx) {
-            Q1900MarkWantedQ19(
-                actualGridX + dx,
-                actualGridY - Q2013_WARM_RADIUS_Q19 - 1, true);
-        }
-    }
-
-    static uint64_t q2021PrefetchHeartbeat = 0u;
-    ++q2021PrefetchHeartbeat;
-    if ((q2021East || q2021West || q2021North || q2021South) &&
-        (q2021PrefetchHeartbeat % 120u) == 1u) {
+    ++gWorldStreaming.prefetchHeartbeat;
+    if ((plan.east || plan.west || plan.north || plan.south) &&
+        (gWorldStreaming.prefetchHeartbeat % 120u) == 1u) {
         Q6H_LOGI("Q20.21 LOOKAHEAD: actual=(%d,%d) local=(%.0f,%.0f) motion=(%.2f,%.2f) strips=E%dW%dN%dS%d visibleDistanceUnchanged=1",
                  actualGridX, actualGridY,
-                 q2021LocalX, q2021LocalY,
-                 gQ2012MotionXQ19, gQ2012MotionYQ19,
-                 q2021East ? 1 : 0, q2021West ? 1 : 0,
-                 q2021North ? 1 : 0, q2021South ? 1 : 0);
+                 plan.localX, plan.localY,
+                 plan.motionX, plan.motionY,
+                 plan.east ? 1 : 0, plan.west ? 1 : 0,
+                 plan.north ? 1 : 0, plan.south ? 1 : 0);
     }
 
-    gQ2012LastGameXQ19 = gameX;
-    gQ2012LastGameYQ19 = gameY;
 }
 
 bool Q1900WarmShellReadyQ2013(
@@ -468,9 +379,9 @@ bool Q1900WarmShellReadyQ2013(
          dy <= Q2013_WARM_RADIUS_Q19; ++dy) {
         for (int dx = -Q2013_WARM_RADIUS_Q19;
              dx <= Q2013_WARM_RADIUS_Q19; ++dx) {
-            const auto found = gQ1900CellsQ19.find(
+            const auto found = gWorldStreaming.cells.find(
                 Q1900CellKeyQ19(actualGridX + dx, actualGridY + dy));
-            if (found != gQ1900CellsQ19.end() &&
+            if (found != gWorldStreaming.cells.end() &&
                 found->second.visualReady) ++ready;
         }
     }
@@ -527,25 +438,13 @@ void Q1900RunCellWorkerQ19(
     if (!task->placementsProvided) {
         const auto metadataStarted = std::chrono::steady_clock::now();
         std::vector<Fo3WorldPlacement> neighborhood;
-        bool loaded = false;
-        {
-            // gQ1950WorldspaceGridRadiusOverride is legacy global state. Keep
-            // this tiny indexed-CELL selection section single-entry while the
-            // expensive NIF/vertex work below runs across multiple workers.
-            std::lock_guard<std::mutex> selectionLock(
-                gQ2012MetadataSelectMutexQ19);
-            SetFo3WorldspaceGridRadiusOverrideQ1950(0);
-            const float selectionX =
-                (static_cast<float>(task->gridX) + 0.5f) *
-                Q1890_EXTERIOR_CELL_SIZE;
-            const float selectionY =
-                (static_cast<float>(task->gridY) + 0.5f) *
-                Q1890_EXTERIOR_CELL_SIZE;
-            loaded = LoadFo3WorldspaceNeighborhoodQ75(
-                task->worldspace, task->persistentCell,
-                selectionX, selectionY, neighborhood);
-            SetFo3WorldspaceGridRadiusOverrideQ1950(-1);
-        }
+        const float selectionX =
+            (static_cast<float>(task->gridX) + 0.5f) * fo3world::CellSize;
+        const float selectionY =
+            (static_cast<float>(task->gridY) + 0.5f) * fo3world::CellSize;
+        const bool loaded = LoadFo3WorldspacePlacements(
+            {task->worldspace, task->persistentCell, selectionX, selectionY, 0},
+            neighborhood);
         task->metadataUs = static_cast<uint64_t>(
             std::chrono::duration_cast<std::chrono::microseconds>(
                 std::chrono::steady_clock::now() - metadataStarted).count());
@@ -658,32 +557,32 @@ void Q1900RunCellWorkerQ19(
 }
 
 void Q1900ConsumeWorkerSlotQ19(size_t slot) {
-    auto& worker = gQ1900WorkersQ19[slot];
+    auto& worker = gWorldStreaming.workers[slot];
     if (!worker ||
         !worker->ready.load(std::memory_order_acquire)) return;
 
     const auto task = worker;
     worker.reset();
-    if (task->contextSerial != gQ1900ContextSerialQ19 ||
+    if (task->contextSerial != gWorldStreaming.contextSerial ||
         task->worldspace != gExteriorWorldspaceQ1890 ||
         task->persistentCell != gExteriorPersistentCellQ1890) {
         Q6H_LOGW("Q19 WORKER DROP: cell=(%d,%d) workerContext=%llu liveContext=%llu reason=context-changed",
                  task->gridX, task->gridY,
                  static_cast<unsigned long long>(task->contextSerial),
-                 static_cast<unsigned long long>(gQ1900ContextSerialQ19));
+                 static_cast<unsigned long long>(gWorldStreaming.contextSerial));
         return;
     }
 
-    auto found = gQ1900CellsQ19.find(
+    auto found = gWorldStreaming.cells.find(
         Q1900CellKeyQ19(task->gridX, task->gridY));
-    if (found == gQ1900CellsQ19.end()) return;
+    if (found == gWorldStreaming.cells.end()) return;
     Q1900CellStateQ19& state = found->second;
 
     if (task->needVisual && !state.wanted && !state.visualReady) {
         Q6H_LOGI("Q20.15 WORKER DROP: cell=(%d,%d) reason=no-longer-wanted cpuShapes=%zu textures=%zu",
                  task->gridX, task->gridY,
                  task->cpu.size(), task->textures.size());
-        gQ1900CellsQ19.erase(found);
+        gWorldStreaming.cells.erase(found);
         return;
     }
 
@@ -737,16 +636,16 @@ void Q1900ConsumeWorkerQ19() {
 void Q1900LaunchWorkerQ19(int32_t actualGridX, int32_t actualGridY) {
     // Collision/terrain mutate shared caches and remain serialized. Distant
     // LOD is allowed to coexist with visual CELL preparation in Q20.12.
-    if (gQ1930CollisionTaskQ19 || IsFo3TerrainStreamingCpuBusyQ2000()) return;
+    if (gWorldStreaming.collisionTask || IsFo3TerrainStreamingCpuBusyQ2000()) return;
 
     for (size_t slot = 0u; slot < Q2012_CELL_WORKER_SLOTS; ++slot) {
-        if (gQ1900WorkersQ19[slot]) continue;
+        if (gWorldStreaming.workers[slot]) continue;
 
         const size_t activeBefore = Q1900ActiveCellWorkersQ19();
         Q1900CellStateQ19* best = nullptr;
         int bestPriority = 1000000;
 
-        for (auto& entry : gQ1900CellsQ19) {
+        for (auto& entry : gWorldStreaming.cells) {
             Q1900CellStateQ19& state = entry.second;
             if (state.stage != Q1900CellStageQ19::Requested) continue;
             if (!state.wanted && state.visualReady) continue;
@@ -765,7 +664,7 @@ void Q1900LaunchWorkerQ19(int32_t actualGridX, int32_t actualGridY) {
         if (!best || bestPriority >= 1000000) break;
 
         auto task = std::make_shared<Q1900CellWorkerTaskQ19>();
-        task->contextSerial = gQ1900ContextSerialQ19;
+        task->contextSerial = gWorldStreaming.contextSerial;
         task->worldspace = gExteriorWorldspaceQ1890;
         task->persistentCell = gExteriorPersistentCellQ1890;
         task->gridX = best->gridX;
@@ -782,7 +681,7 @@ void Q1900LaunchWorkerQ19(int32_t actualGridX, int32_t actualGridY) {
         }
 
         best->stage = Q1900CellStageQ19::Worker;
-        gQ1900WorkersQ19[slot] = task;
+        gWorldStreaming.workers[slot] = task;
 
         const uint64_t queueWaitUs =
             best->requestedAt.time_since_epoch().count() == 0
@@ -1219,7 +1118,7 @@ void Q1900CommitCellVisualsQ19(Q1900CellStateQ19& state) {
 
     Q6H_LOGI("Q20.13 CELL READY: cell=(%d,%d) enteringShapes=%zu replacedShapes=%zu liveShapes=%zu deferredDeletes=%zu placements=%zu workerUs=%llu gpuUs=%llu retireQueueUs=%llu maxTextureStepUs=%llu maxShapeStepUs=%llu totalUs=%llu publication=global-fair-queue warmRadius=3",
              state.gridX, state.gridY, entering, retired, gObjects.size(),
-             gQ1910DeferredGpuDeletesQ19.size(), state.placements.size(),
+             gWorldStreaming.deferredGpuDeletes.size(), state.placements.size(),
              static_cast<unsigned long long>(state.workerUs),
              static_cast<unsigned long long>(state.gpuUs),
              static_cast<unsigned long long>(retireQueueUs),
@@ -1279,8 +1178,8 @@ bool Q2013AdvanceCellGpuSliceQ19(
 
 void Q1900AdvanceGpuQ19(int32_t actualGridX, int32_t actualGridY) {
     std::vector<Q1900CellStateQ19*> uploading;
-    uploading.reserve(gQ1900CellsQ19.size());
-    for (auto& entry : gQ1900CellsQ19)
+    uploading.reserve(gWorldStreaming.cells.size());
+    for (auto& entry : gWorldStreaming.cells)
         if (entry.second.stage == Q1900CellStageQ19::Uploading)
             uploading.push_back(&entry.second);
     if (uploading.empty()) return;
@@ -1335,9 +1234,9 @@ bool Q1900CollectCollisionWindowQ19(
     std::unordered_set<uint32_t> refs;
     for (int dy = -1; dy <= 1; ++dy) {
         for (int dx = -1; dx <= 1; ++dx) {
-            const auto found = gQ1900CellsQ19.find(
+            const auto found = gWorldStreaming.cells.find(
                 Q1900CellKeyQ19(centreX + dx, centreY + dy));
-            if (found == gQ1900CellsQ19.end() ||
+            if (found == gWorldStreaming.cells.end() ||
                 !found->second.metadataReady ||
                 !found->second.collisionPrimed) {
                 return false;
@@ -1359,9 +1258,9 @@ void Q1930RunCollisionSnapshotTaskQ19(
     const auto started = std::chrono::steady_clock::now();
     task->success = PrepareFo3CollisionSnapshotQ1930(
         task->placements,
-        gQ1900OriginXQ19,
-        gQ1900OriginYQ19,
-        gQ1900OriginZQ19,
+        task->originX,
+        task->originY,
+        task->originZ,
         SCENE_FORWARD, FLOOR_Y, FO3_UNITS_PER_METRE,
         &task->snapshotToken);
     task->prepareUs = static_cast<uint64_t>(
@@ -1371,21 +1270,21 @@ void Q1930RunCollisionSnapshotTaskQ19(
 }
 
 void Q1900TryPublishCollisionQ19(int32_t actualGridX, int32_t actualGridY) {
-    if (gQ1900CollisionCentreValidQ19 &&
-        gQ1900CollisionCentreXQ19 == actualGridX &&
-        gQ1900CollisionCentreYQ19 == actualGridY) {
+    if (gWorldStreaming.collisionCentreValid &&
+        gWorldStreaming.collisionCentreX == actualGridX &&
+        gWorldStreaming.collisionCentreY == actualGridY) {
         return;
     }
 
-    if (gQ1930CollisionTaskQ19) {
-        if (!gQ1930CollisionTaskQ19->ready.load(std::memory_order_acquire))
+    if (gWorldStreaming.collisionTask) {
+        if (!gWorldStreaming.collisionTask->ready.load(std::memory_order_acquire))
             return;
 
-        const auto task = gQ1930CollisionTaskQ19;
-        gQ1930CollisionTaskQ19.reset();
+        const auto task = gWorldStreaming.collisionTask;
+        gWorldStreaming.collisionTask.reset();
 
         const bool stale =
-            task->contextSerial != gQ1900ContextSerialQ19 ||
+            task->contextSerial != gWorldStreaming.contextSerial ||
             task->centreX != actualGridX ||
             task->centreY != actualGridY;
         if (stale) {
@@ -1399,9 +1298,9 @@ void Q1900TryPublishCollisionQ19(int32_t actualGridX, int32_t actualGridY) {
             const bool ready = PublishFo3CollisionSnapshotQ1930(
                 task->snapshotToken, &swapUs);
             if (ready) {
-                gQ1900CollisionCentreValidQ19 = true;
-                gQ1900CollisionCentreXQ19 = actualGridX;
-                gQ1900CollisionCentreYQ19 = actualGridY;
+                gWorldStreaming.collisionCentreValid = true;
+                gWorldStreaming.collisionCentreX = actualGridX;
+                gWorldStreaming.collisionCentreY = actualGridY;
             }
             Q6H_LOGI("Q19.3 COLLISION PUBLISH: centre=(%d,%d) placements=%zu ready=%d prepareUs=%llu swapUs=%llu source=prepared-snapshot derivedReadyAtPublish=1 oldCollisionLiveDuringPrepare=1",
                      actualGridX, actualGridY, task->placements.size(),
@@ -1420,7 +1319,7 @@ void Q1900TryPublishCollisionQ19(int32_t actualGridX, int32_t actualGridY) {
     // Q20.11: collision snapshot assembly is expensive and shares the same
     // serialized asset lane as visible CELL work. Do not start a new snapshot
     // while any radius-2 visual CELL is still missing.
-    for (const auto& entry : gQ1900CellsQ19) {
+    for (const auto& entry : gWorldStreaming.cells) {
         const Q1900CellStateQ19& state = entry.second;
         const int dx = std::abs(state.gridX - actualGridX);
         const int dy = std::abs(state.gridY - actualGridY);
@@ -1432,7 +1331,7 @@ void Q1900TryPublishCollisionQ19(int32_t actualGridX, int32_t actualGridY) {
 
     // Keep one serialized background asset job at a time. The transformed REFR
     // cache is shared with CELL prewarming and was designed for single-writer use.
-    if (Q1900AnyCellWorkerQ19() || gQ1930CollisionTaskQ19 ||
+    if (Q1900AnyCellWorkerQ19() || gWorldStreaming.collisionTask ||
         Q1970AnyLodWorkerQ19() || IsFo3TerrainStreamingCpuBusyQ2000()) return;
 
     std::vector<Fo3WorldPlacement> placements;
@@ -1440,11 +1339,14 @@ void Q1900TryPublishCollisionQ19(int32_t actualGridX, int32_t actualGridY) {
             actualGridX, actualGridY, placements)) return;
 
     auto task = std::make_shared<Q1930CollisionSnapshotTaskQ19>();
-    task->contextSerial = gQ1900ContextSerialQ19;
+    task->contextSerial = gWorldStreaming.contextSerial;
     task->centreX = actualGridX;
     task->centreY = actualGridY;
+    task->originX = gWorldStreaming.originX;
+    task->originY = gWorldStreaming.originY;
+    task->originZ = gWorldStreaming.originZ;
     task->placements = std::move(placements);
-    gQ1930CollisionTaskQ19 = task;
+    gWorldStreaming.collisionTask = task;
 
     Q6H_LOGI("Q19.3 COLLISION SNAPSHOT START: centre=(%d,%d) placements=%zu oldCollisionRetained=1 thread=serialized-asset-worker",
              actualGridX, actualGridY, task->placements.size());
@@ -1462,7 +1364,7 @@ void Q1900MaintainTerrainQ19(int32_t actualGridX, int32_t actualGridY) {
     // and may take the next idle lane turn. Q20 itself only moves one CELL per
     // completed terrain target, so a normal shift remains 42 retained + 7 new.
     bool urgentVisualRequest = false;
-    for (const auto& entry : gQ1900CellsQ19) {
+    for (const auto& entry : gWorldStreaming.cells) {
         const Q1900CellStateQ19& state = entry.second;
         if (state.visualReady) continue;
         if (state.stage != Q1900CellStageQ19::Requested) continue;
@@ -1479,7 +1381,7 @@ void Q1900MaintainTerrainQ19(int32_t actualGridX, int32_t actualGridY) {
                    std::abs(actualGridY - residentY))
         : 0;
     const bool serializedLaneIdle =
-        !Q1900AnyCellWorkerQ19() && !gQ1930CollisionTaskQ19 &&
+        !Q1900AnyCellWorkerQ19() && !gWorldStreaming.collisionTask &&
         !Q1970AnyLodWorkerQ19() && !IsFo3TerrainStreamingCpuBusyQ2000();
     const bool allowTerrainCpu =
         serializedLaneIdle && (!urgentVisualRequest || terrainLag >= 2);
@@ -1494,9 +1396,9 @@ void Q1900MaintainTerrainQ19(int32_t actualGridX, int32_t actualGridY) {
         allowTerrainCpu);
 
     if (GetFo3TerrainResidentCentreQ2000(&residentX, &residentY)) {
-        gQ1900TerrainCentreValidQ19 = true;
-        gQ1900TerrainCentreXQ19 = residentX;
-        gQ1900TerrainCentreYQ19 = residentY;
+        gWorldStreaming.terrainCentreValid = true;
+        gWorldStreaming.terrainCentreX = residentX;
+        gWorldStreaming.terrainCentreY = residentY;
     }
 }
 
@@ -1520,10 +1422,10 @@ void Q2015DiscardCellUploadQ19(Q1900CellStateQ19& state) {
 }
 
 void Q1900RetireFarCellsQ19(int32_t actualGridX, int32_t actualGridY) {
-    if (actualGridX == gQ1900LastActualXQ19 &&
-        actualGridY == gQ1900LastActualYQ19) return;
-    gQ1900LastActualXQ19 = actualGridX;
-    gQ1900LastActualYQ19 = actualGridY;
+    if (actualGridX == gWorldStreaming.lastActualX &&
+        actualGridY == gWorldStreaming.lastActualY) return;
+    gWorldStreaming.lastActualX = actualGridX;
+    gWorldStreaming.lastActualY = actualGridY;
 
     // Water follows the same logical CELL centre as the visual streamer. The
     // expensive ESM catalogue is cached inside Q20.9, so recentering is only a
@@ -1546,11 +1448,11 @@ void Q1900RetireFarCellsQ19(int32_t actualGridX, int32_t actualGridY) {
         GpuObject& object = gObjects[read];
         const int dx = std::abs(object.q1970GridX - actualGridX);
         const int dy = std::abs(object.q1970GridY - actualGridY);
-        const auto q2021Cell = gQ1900CellsQ19.find(
+        const auto q2021Cell = gWorldStreaming.cells.find(
             Q1900CellKeyQ19(
                 object.q1970GridX, object.q1970GridY));
         const bool q2021Wanted =
-            q2021Cell != gQ1900CellsQ19.end() &&
+            q2021Cell != gWorldStreaming.cells.end() &&
             q2021Cell->second.wanted;
         const bool retire =
             !object.q1990NativeLod &&
@@ -1573,7 +1475,7 @@ void Q1900RetireFarCellsQ19(int32_t actualGridX, int32_t actualGridY) {
     // In-flight visual workers own their CELL state until the render thread
     // consumes the completed task.
     size_t retiredStaged = 0u;
-    for (auto it = gQ1900CellsQ19.begin(); it != gQ1900CellsQ19.end();) {
+    for (auto it = gWorldStreaming.cells.begin(); it != gWorldStreaming.cells.end();) {
         const int dx = std::abs(it->second.gridX - actualGridX);
         const int dy = std::abs(it->second.gridY - actualGridY);
         const bool outsideWarm =
@@ -1589,7 +1491,7 @@ void Q1900RetireFarCellsQ19(int32_t actualGridX, int32_t actualGridY) {
                     ++retiredStaged;
                 }
             }
-            it = gQ1900CellsQ19.erase(it);
+            it = gWorldStreaming.cells.erase(it);
         } else {
             ++it;
         }
@@ -1603,7 +1505,7 @@ void Q1900RetireFarCellsQ19(int32_t actualGridX, int32_t actualGridY) {
         gShadowDirtyQ1050 = true;
         Q6H_LOGI("Q19.1 CELL RETIRE QUEUED: actual=(%d,%d) retiredLiveShapes=%zu retiredStagedShapes=%zu liveShapes=%zu deferredDeletes=%zu cacheRadius=%d queueUs=%llu algorithm=single-pass-compact+deferred-gl-delete",
                  actualGridX, actualGridY, retiredShapes, retiredStaged,
-                 gObjects.size(), gQ1910DeferredGpuDeletesQ19.size(),
+                 gObjects.size(), gWorldStreaming.deferredGpuDeletes.size(),
                  Q2013_WARM_RADIUS_Q19,
                  static_cast<unsigned long long>(retireQueueUs));
     }
@@ -1638,7 +1540,7 @@ void Q1900UpdateCellStreamingQ19(
     bool pendingVisual = false;
     size_t readyCells = 0u;
     size_t requestedCells = 0u;
-    for (const auto& entry : gQ1900CellsQ19) {
+    for (const auto& entry : gWorldStreaming.cells) {
         const Q1900CellStateQ19& state = entry.second;
         if (state.visualReady) ++readyCells;
         if (state.stage == Q1900CellStageQ19::Requested ||
@@ -1650,7 +1552,7 @@ void Q1900UpdateCellStreamingQ19(
     }
     gExteriorStreamBusyQ1890 =
         Q1900AnyCellWorkerQ19() ||
-        gQ1930CollisionTaskQ19 != nullptr ||
+        gWorldStreaming.collisionTask != nullptr ||
         IsFo3TerrainStreamingBusyQ2000() ||
         pendingVisual;
 
@@ -1662,17 +1564,17 @@ void Q1900UpdateCellStreamingQ19(
     static int32_t lastStatusX = INT32_MIN;
     static int32_t lastStatusY = INT32_MIN;
     static bool lastReady = true;
-    const auto active = gQ1900CellsQ19.find(
+    const auto active = gWorldStreaming.cells.find(
         Q1900CellKeyQ19(actualGridX, actualGridY));
     const bool activeReady =
-        active != gQ1900CellsQ19.end() && active->second.visualReady;
+        active != gWorldStreaming.cells.end() && active->second.visualReady;
     if (actualGridX != lastStatusX || actualGridY != lastStatusY ||
         activeReady != lastReady) {
-        const char* stage = active == gQ1900CellsQ19.end()
+        const char* stage = active == gWorldStreaming.cells.end()
             ? "absent" : Q1900CellStageNameQ19(active->second.stage);
         Q6H_LOGI("Q19 ACTIVE CELL: cell=(%d,%d) ready=%d stage=%s readyCells=%zu trackedCells=%zu pendingCells=%zu lodKeptUntilReady=%d noGenerationCancel=1",
                  actualGridX, actualGridY, activeReady ? 1 : 0, stage,
-                 readyCells, gQ1900CellsQ19.size(), requestedCells,
+                 readyCells, gWorldStreaming.cells.size(), requestedCells,
                  activeReady ? 0 : 1);
         lastStatusX = actualGridX;
         lastStatusY = actualGridY;

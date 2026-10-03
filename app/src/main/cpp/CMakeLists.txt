@@ -7,6 +7,8 @@ find_package(OpenXR REQUIRED CONFIG)
 add_library(falloutquest SHARED
     core/fo3-runtime.cpp
     world/fo3-megaton-scene.cpp
+    world/fo3-worldspace-runtime.cpp
+    world/fo3-world-streaming.cpp
     world/fo3-cell-world.cpp
     rendering/mesh/fo3-static-nif.cpp
     physics/fo3-nif-collision-parser.cpp

@@ -38,33 +38,11 @@ bool LoadFo3CellPlacements(uint32_t cellFormId,
     return LoadFo3InteriorCellPlacementsQ1700(cellFormId, outPlacements);
 }
 
-// Q7.5 is included into this translation unit deliberately. This keeps the
-// existing CMake/source graph unchanged while letting the render-thread Q7.4
-// loader dispatch exterior worldspaces to the XCLC neighborhood assembler.
-// The proven Q7.1 source already has an anonymous-namespace TAG symbol, so
-// remap Q7.5's logger token while it is textually included here.
-#define TAG Q75_TAG
-#include "fo3-worldspace-runtime.inc"
-#undef TAG
-
-bool LookupFo3WastelandDoorTeleportQ1920(
-        uint32_t sourceDoorRef,
-        Fo3DoorTeleport* outTeleport,
-        bool* outIndexReady) {
-    if (outTeleport) *outTeleport = {};
-    if (outIndexReady) *outIndexReady = false;
-    if (sourceDoorRef == 0u || !outTeleport) return false;
-
-    const Q1800WorldspaceIndex* index =
-        GetWorldspaceIndexQ1800(WASTELAND_WORLDSPACE_Q1800);
-    if (!index) return false;
-    if (outIndexReady) *outIndexReady = true;
-
-    const auto found = index->doorTeleportsQ1920.find(sourceDoorRef);
-    if (found == index->doorTeleportsQ1920.end()) return false;
-    *outTeleport = found->second;
-    return outTeleport->valid;
-}
+// Placement metadata is compiled separately; LAND shares only explicit CPU
+// ESM helpers, without depending on placement-index implementation details.
+#include "fo3-worldspace-data.h"
+#include "fo3-worldspace-log.h"
+using namespace fo3world_detail;
 
 // Q7.6b reuses the exact same Q7.5 worldspace/group helpers, but only decodes
 // CPU LAND/VHGT data. No collision or player-grounding code is touched here.

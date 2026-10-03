@@ -31,6 +31,8 @@ jobs:
             core/fo3-runtime.cpp \
             core/fo3-runtime-loop.inc \
             world/fo3-cell-world.cpp \
+            world/fo3-worldspace-runtime.cpp \
+            world/fo3-world-streaming.cpp \
             rendering/mesh/fo3-static-nif.cpp \
             physics/fo3-collision-runtime.cpp \
             player/fo3-player-controller.inc \
@@ -56,6 +58,12 @@ jobs:
           cmake -S tests/assets -B build/host-assets
           cmake --build build/host-assets --parallel 2
           ctest --test-dir build/host-assets --output-on-failure
+
+      - name: Test world residency planner on host
+        run: |
+          cmake -S tests/world -B build/host-world
+          cmake --build build/host-world --parallel 2
+          ctest --test-dir build/host-world --output-on-failure
 
       - name: Restore stable development signing key
         run: |

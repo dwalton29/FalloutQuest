@@ -1,6 +1,9 @@
 #include "fo3-transition.h"
 
-#include <android/log.h>
+#include "fo3-worldspace-runtime.h"
+#include "fo3-worldspace-data.h"
+#include "fo3-worldspace-log.h"
+#include "fo3-cell-traversal.h"
 
 #include <algorithm>
 #include <cmath>
@@ -17,38 +20,13 @@
 #include <vector>
 #include <zlib.h>
 
-namespace {
+namespace fo3world_detail {
 
-constexpr const char* TAG = "FalloutQuest";
-constexpr const char* ESM_PATH_Q75 =
-        "/data/user/0/com.falloutquest.app/files/Fallout3/Data/Fallout3.esm";
 constexpr uint32_t FLAG_COMPRESSED_Q75 = 0x00040000u;
 constexpr uint32_t FLAG_INITIALLY_DISABLED_Q75 = 0x00000800u;
 constexpr uint8_t ENABLE_PARENT_OPPOSITE_Q75 = 0x01u;
-constexpr uint64_t HEADER_SIZE_Q75 = 24u;
 constexpr uint32_t MAX_RECORD_BYTES_Q75 = 64u * 1024u * 1024u;
-constexpr float EXTERIOR_CELL_SIZE_Q75 = 4096.0f;
 constexpr int GRID_RADIUS_Q75 = 1; // Q16.7 temporary 3x3 exterior test window
-constexpr size_t SMALL_WORLDSPACE_CELL_LIMIT_Q75 = 64u;
-
-#define Q75_LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
-#define Q75_LOGW(...) __android_log_print(ANDROID_LOG_WARN, TAG, __VA_ARGS__)
-#define Q75_LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
-
-struct GroupFrameQ75 {
-    uint64_t end = 0;
-    uint32_t label = 0;
-    uint32_t type = 0;
-};
-
-struct CellInfoQ75 {
-    uint32_t formId = 0;
-    int32_t gridX = 0;
-    int32_t gridY = 0;
-    uint32_t forceHideLandQ720 = 0u;
-    bool hasGrid = false;
-    std::string editorId;
-};
 
 struct RawPlacementQ75 {
     uint32_t refFormId = 0;
@@ -749,18 +727,16 @@ void ConvertBethesdaRotationQ75(float rx, float ry, float rz,
     }
 }
 
-} // namespace
+} // namespace fo3world_detail
 
-thread_local int gQ1950WorldspaceGridRadiusOverride = -1;
+using namespace fo3world_detail;
 
-void SetFo3WorldspaceGridRadiusOverrideQ1950(int radius) {
-    gQ1950WorldspaceGridRadiusOverride = radius;
-}
-
-bool LoadFo3WorldspaceNeighborhoodQ75(uint32_t worldspaceFormId,
-                                     uint32_t persistentCellFormId,
-                                     float arrivalX, float arrivalY,
-                                     std::vector<Fo3WorldPlacement>& outPlacements) {
+bool LoadFo3WorldspacePlacements(const Fo3WorldspaceSelection& selection,
+                                 std::vector<Fo3WorldPlacement>& outPlacements) {
+    const uint32_t worldspaceFormId = selection.worldspace;
+    const uint32_t persistentCellFormId = selection.persistentCell;
+    const float arrivalX = selection.gameX;
+    const float arrivalY = selection.gameY;
     outPlacements.clear();
 
     const auto lookupStartedQ1800 = std::chrono::steady_clock::now();
@@ -790,12 +766,12 @@ bool LoadFo3WorldspaceNeighborhoodQ75(uint32_t worldspaceFormId,
     const int32_t targetGridX = static_cast<int32_t>(std::floor(arrivalX / EXTERIOR_CELL_SIZE_Q75));
     const int32_t targetGridY = static_cast<int32_t>(std::floor(arrivalY / EXTERIOR_CELL_SIZE_Q75));
     const bool q1950ExplicitRadius =
-        gQ1950WorldspaceGridRadiusOverride >= 0;
+        selection.gridRadius >= 0;
     const bool loadWholeWorldspace =
         !q1950ExplicitRadius &&
         gridCellCountQ1800 <= SMALL_WORLDSPACE_CELL_LIMIT_Q75;
     const int q1950SelectionRadius = q1950ExplicitRadius
-        ? gQ1950WorldspaceGridRadiusOverride : 2; // Q16.26 initial exterior 5x5 resident
+        ? selection.gridRadius : 2; // Q16.26 initial exterior 5x5 resident
 
     std::unordered_set<uint32_t> selectedCells;
     if (q1800Index) {
@@ -973,6 +949,33 @@ bool LoadFo3WorldspaceNeighborhoodQ75(uint32_t worldspaceFormId,
     }
     // Q19 radius-0 requests must also succeed for authored empty CELLs so
     // residency can advance without retrying a nonexistent visual payload.
-    if (gQ1950WorldspaceGridRadiusOverride == 0) return true;
+    if (selection.gridRadius == 0) return true;
     return !outPlacements.empty();
+}
+
+// Compatibility entry point for initial arrival and door transitions.
+bool LoadFo3WorldspaceNeighborhoodQ75(uint32_t worldspace, uint32_t persistentCell,
+                                     float gameX, float gameY,
+                                     std::vector<Fo3WorldPlacement>& out) {
+    return LoadFo3WorldspacePlacements(
+        {worldspace, persistentCell, gameX, gameY, -1}, out);
+}
+
+bool LookupFo3WastelandDoorTeleportQ1920(
+        uint32_t sourceDoorRef,
+        Fo3DoorTeleport* outTeleport,
+        bool* outIndexReady) {
+    if (outTeleport) *outTeleport = {};
+    if (outIndexReady) *outIndexReady = false;
+    if (sourceDoorRef == 0u || !outTeleport) return false;
+
+    const Q1800WorldspaceIndex* index =
+        GetWorldspaceIndexQ1800(WASTELAND_WORLDSPACE_Q1800);
+    if (!index) return false;
+    if (outIndexReady) *outIndexReady = true;
+
+    const auto found = index->doorTeleportsQ1920.find(sourceDoorRef);
+    if (found == index->doorTeleportsQ1920.end()) return false;
+    *outTeleport = found->second;
+    return outTeleport->valid;
 }
