@@ -1,8 +1,9 @@
 #pragma once
 
+#include "fo3-esm-reader.h"
+
 #include <GLES3/gl3.h>
 #include <android/log.h>
-#include <zlib.h>
 
 #include <algorithm>
 #include <cmath>
@@ -44,101 +45,9 @@ namespace fo3envq1000 {
 constexpr const char* TAG = "FalloutQuest";
 constexpr const char* ESM_PATH =
     "/data/user/0/com.falloutquest.app/files/Fallout3/Data/Fallout3.esm";
-constexpr uint32_t FLAG_COMPRESSED = 0x00040000u;
-constexpr uint64_t HEADER_SIZE = 24u;
-constexpr uint32_t MAX_RECORD_BYTES = 64u * 1024u * 1024u;
-
-inline uint16_t Read16(const uint8_t* p) {
-    return static_cast<uint16_t>(p[0]) |
-           static_cast<uint16_t>(static_cast<uint16_t>(p[1]) << 8u);
-}
-
-inline uint32_t Read32(const uint8_t* p) {
-    return static_cast<uint32_t>(p[0]) |
-           (static_cast<uint32_t>(p[1]) << 8u) |
-           (static_cast<uint32_t>(p[2]) << 16u) |
-           (static_cast<uint32_t>(p[3]) << 24u);
-}
 
 inline int32_t ReadI32(const uint8_t* p) {
-    return static_cast<int32_t>(Read32(p));
-}
-
-inline float ReadFloat(const uint8_t* p) {
-    const uint32_t bits = Read32(p);
-    float value = 0.0f;
-    std::memcpy(&value, &bits, sizeof(value));
-    return value;
-}
-
-inline bool ReadExact(FILE* file, void* dst, size_t size) {
-    return std::fread(dst, 1u, size, file) == size;
-}
-
-inline int64_t FileSize(FILE* file) {
-    const off_t current = ftello(file);
-    if (current < 0) return -1;
-    if (fseeko(file, 0, SEEK_END) != 0) return -1;
-    const off_t end = ftello(file);
-    fseeko(file, current, SEEK_SET);
-    return static_cast<int64_t>(end);
-}
-
-inline bool Inflate(const std::vector<uint8_t>& stored, std::vector<uint8_t>& out) {
-    if (stored.size() < 4u) return false;
-    const uint32_t inflatedSize = Read32(stored.data());
-    if (inflatedSize == 0u || inflatedSize > MAX_RECORD_BYTES) return false;
-    out.resize(inflatedSize);
-    uLongf destLen = static_cast<uLongf>(out.size());
-    const int result = uncompress(reinterpret_cast<Bytef*>(out.data()), &destLen,
-                                  reinterpret_cast<const Bytef*>(stored.data() + 4u),
-                                  static_cast<uLong>(stored.size() - 4u));
-    if (result != Z_OK || destLen != inflatedSize) {
-        out.clear();
-        return false;
-    }
-    return true;
-}
-
-inline bool ReadPayload(FILE* file, uint32_t storedSize, uint32_t flags,
-                        std::vector<uint8_t>& out) {
-    if (storedSize == 0u || storedSize > MAX_RECORD_BYTES) return false;
-    std::vector<uint8_t> stored(storedSize);
-    if (!ReadExact(file, stored.data(), stored.size())) return false;
-    if ((flags & FLAG_COMPRESSED) == 0u) {
-        out.swap(stored);
-        return true;
-    }
-    return Inflate(stored, out);
-}
-
-inline void WalkSubrecords(
-    const uint8_t* data, size_t size,
-    const std::function<void(const char*, const uint8_t*, uint32_t)>& visitor) {
-    size_t pos = 0u;
-    uint32_t extendedSize = 0u;
-    while (pos + 6u <= size) {
-        const char* type = reinterpret_cast<const char*>(data + pos);
-        const uint16_t size16 = Read16(data + pos + 4u);
-        pos += 6u;
-        if (std::memcmp(type, "XXXX", 4u) == 0) {
-            if (size16 != 4u || pos + 4u > size) return;
-            extendedSize = Read32(data + pos);
-            pos += 4u;
-            continue;
-        }
-        const uint32_t subSize = extendedSize ? extendedSize : size16;
-        extendedSize = 0u;
-        if (subSize > size - pos) return;
-        visitor(type, data + pos, subSize);
-        pos += subSize;
-    }
-}
-
-inline std::string CString(const uint8_t* data, uint32_t size) {
-    size_t len = 0u;
-    while (len < size && data[len] != 0u) ++len;
-    return std::string(reinterpret_cast<const char*>(data), len);
+    return static_cast<int32_t>(fo3esm::ReadU32(p));
 }
 
 inline bool FindRecord(const char wantedType[4], uint32_t wantedFormId,
@@ -146,8 +55,8 @@ inline bool FindRecord(const char wantedType[4], uint32_t wantedFormId,
     payload.clear();
     FILE* file = std::fopen(ESM_PATH, "rb");
     if (!file) return false;
-    const int64_t fileSize = FileSize(file);
-    if (fileSize < static_cast<int64_t>(HEADER_SIZE)) {
+    const int64_t fileSize = fo3esm::FileSize(file);
+    if (fileSize < static_cast<int64_t>(fo3esm::HEADER_SIZE)) {
         std::fclose(file);
         return false;
     }
@@ -157,23 +66,23 @@ inline bool FindRecord(const char wantedType[4], uint32_t wantedFormId,
         const off_t rawOffset = ftello(file);
         if (rawOffset < 0) break;
         const uint64_t offset = static_cast<uint64_t>(rawOffset);
-        if (offset + HEADER_SIZE > static_cast<uint64_t>(fileSize)) break;
+        if (offset + fo3esm::HEADER_SIZE > static_cast<uint64_t>(fileSize)) break;
 
-        uint8_t header[HEADER_SIZE]{};
-        if (!ReadExact(file, header, sizeof(header))) break;
-        const uint32_t sizeField = Read32(header + 4u);
+        uint8_t header[fo3esm::HEADER_SIZE]{};
+        if (!fo3esm::ReadExact(file, header, sizeof(header))) break;
+        const uint32_t sizeField = fo3esm::ReadU32(header + 4u);
         if (std::memcmp(header, "GRUP", 4u) == 0) {
-            if (sizeField < HEADER_SIZE ||
+            if (sizeField < fo3esm::HEADER_SIZE ||
                 offset + sizeField > static_cast<uint64_t>(fileSize)) break;
             continue;
         }
 
-        const uint64_t payloadEnd = offset + HEADER_SIZE + sizeField;
+        const uint64_t payloadEnd = offset + fo3esm::HEADER_SIZE + sizeField;
         if (payloadEnd > static_cast<uint64_t>(fileSize)) break;
-        const uint32_t flags = Read32(header + 8u);
-        const uint32_t formId = Read32(header + 12u);
+        const uint32_t flags = fo3esm::ReadU32(header + 8u);
+        const uint32_t formId = fo3esm::ReadU32(header + 12u);
         if (formId == wantedFormId && std::memcmp(header, wantedType, 4u) == 0) {
-            found = ReadPayload(file, sizeField, flags, payload);
+            found = fo3esm::ReadPayloadCurrent(file, sizeField, flags, payload);
             break;
         }
         if (fseeko(file, static_cast<off_t>(payloadEnd), SEEK_SET) != 0) break;
@@ -193,12 +102,12 @@ inline bool ReadWorldClimateLink(uint32_t worldspaceFormId, WorldClimateLink& ou
     out = {};
     std::vector<uint8_t> payload;
     if (!FindRecord("WRLD", worldspaceFormId, payload)) return false;
-    WalkSubrecords(payload.data(), payload.size(),
+    fo3esm::WalkSubrecords(payload.data(), payload.size(),
                    [&](const char* type, const uint8_t* bytes, uint32_t size) {
         if (std::memcmp(type, "CNAM", 4u) == 0 && size >= 4u) {
-            out.climate = Read32(bytes);
+            out.climate = fo3esm::ReadU32(bytes);
         } else if (std::memcmp(type, "WNAM", 4u) == 0 && size >= 4u) {
-            out.parent = Read32(bytes);
+            out.parent = fo3esm::ReadU32(bytes);
         } else if (std::memcmp(type, "PNAM", 4u) == 0 && size >= 1u) {
             out.parentFlags = bytes[0];
         }
@@ -232,13 +141,13 @@ inline bool ChooseClimateWeather(uint32_t climateFormId,
 
     int32_t bestChance = -1;
     uint32_t firstWeather = 0u;
-    WalkSubrecords(payload.data(), payload.size(),
+    fo3esm::WalkSubrecords(payload.data(), payload.size(),
                    [&](const char* type, const uint8_t* bytes, uint32_t size) {
         if (std::memcmp(type, "EDID", 4u) == 0 && climateEdid.empty()) {
-            climateEdid = CString(bytes, size);
+            climateEdid = fo3esm::ZString(bytes, size);
         } else if (std::memcmp(type, "WLST", 4u) == 0) {
             for (uint32_t pos = 0u; pos + 12u <= size; pos += 12u) {
-                const uint32_t weather = Read32(bytes + pos);
+                const uint32_t weather = fo3esm::ReadU32(bytes + pos);
                 const int32_t chance = ReadI32(bytes + pos + 4u);
                 if (weather == 0u) continue;
                 if (firstWeather == 0u) firstWeather = weather;
@@ -267,10 +176,10 @@ inline bool ReadWeather(uint32_t weatherFormId, Fo3EnvironmentQ1000& env) {
     if (!FindRecord("WTHR", weatherFormId, payload)) return false;
 
     bool haveColors = false;
-    WalkSubrecords(payload.data(), payload.size(),
+    fo3esm::WalkSubrecords(payload.data(), payload.size(),
                    [&](const char* type, const uint8_t* bytes, uint32_t size) {
         if (std::memcmp(type, "EDID", 4u) == 0 && env.weatherEditorId.empty()) {
-            env.weatherEditorId = CString(bytes, size);
+            env.weatherEditorId = fo3esm::ZString(bytes, size);
         } else if (std::memcmp(type, "NAM0", 4u) == 0 && size >= 160u) {
             // Fallout 3 WTHR NAM0: ten colour categories, each containing
             // Sunrise/Day/Sunset/Night RGBA. Q10.0 intentionally selects Day.
@@ -283,8 +192,8 @@ inline bool ReadWeather(uint32_t weatherFormId, Fo3EnvironmentQ1000& env) {
             ReadDayColor(bytes, size, 8, env.horizon);
             haveColors = true;
         } else if (std::memcmp(type, "FNAM", 4u) == 0 && size >= 24u) {
-            env.fogNear = ReadFloat(bytes + 0u);
-            env.fogFar = ReadFloat(bytes + 4u);
+            env.fogNear = fo3esm::ReadF32(bytes + 0u);
+            env.fogFar = fo3esm::ReadF32(bytes + 4u);
         }
     });
     return haveColors;
