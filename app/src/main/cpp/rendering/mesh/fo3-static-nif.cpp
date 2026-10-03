@@ -2034,3 +2034,5 @@ bool ProbeFo3NifSkin(const std::string& modelPath, Fo3NifSkinProbe& outProbe) {
              outProbe.boneNames.size(), summary.c_str());
     return true;
 }
+
+#include "fo3-actor-animation-decode.inc"

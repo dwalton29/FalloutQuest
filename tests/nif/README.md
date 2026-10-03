@@ -8,3 +8,14 @@ The regression test covers TileShaderProperty filenames, truncation and malforme
 lengths. To verify complete geometry/material decoding against extracted original
 game assets, pass paths to `loadinganim01.nif` and `loading01.nif` as arguments to
 `build/host-nif/loading_material_tests`. Original assets are not included.
+
+
+Actor tests additionally exercise skeleton/clip sampling and NPC record assembly.
+Optional local integration (user-supplied assets only):
+
+```sh
+./build/actor_animation_tests /path/to/skeleton.nif /path/to/mtidle.kf /path/to/mtforward.kf
+./build/npc_record_tests /path/to/Fallout3.esm
+```
+
+These inputs are never committed or needed for the synthetic CI tests.

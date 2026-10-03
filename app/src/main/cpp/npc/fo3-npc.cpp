@@ -4,6 +4,7 @@
 #include "fo3-esm-reader.h"
 
 #include <android/log.h>
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdint>
@@ -18,7 +19,7 @@ namespace {
 constexpr const char* TAG = "FalloutQuest";
 constexpr const char* ESM_PATH =
     "/data/user/0/com.falloutquest.app/files/Fallout3/Data/Fallout3.esm";
-constexpr uint32_t TARGET_MEGATON_CELL = 0x00000A96u;
+
 
 #define Q230_LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
 #define Q230_LOGW(...) __android_log_print(ANDROID_LOG_WARN, TAG, __VA_ARGS__)
@@ -43,6 +44,9 @@ struct RawActor {
 struct NpcBase {
     uint32_t formId = 0u;
     uint32_t baseFlags = 0u;
+    uint32_t templateId = 0u;
+    uint16_t templateFlags = 0u;
+    float height = 1.0f;
     uint32_t race = 0u;
     uint32_t hair = 0u;
     uint32_t eyes = 0u;
@@ -63,16 +67,16 @@ struct Linked {
     std::string editorId;
     std::string fullName;
     std::string model;
-    std::string model2;
+    std::string model3;
     std::string icon;
-    std::vector<std::string> maleHeadModels;
-    std::vector<std::string> maleHeadTextures;
-    std::vector<std::string> maleBodyModels;
-    std::vector<std::string> maleBodyTextures;
+    std::vector<std::string> headModels;
+    std::vector<std::string> headTextures;
+    std::vector<std::string> bodyModels;
+    std::vector<std::string> bodyTextures;
     uint32_t bipedMask = 0u;
-    std::vector<float> maleFaceSymmetric;
-    std::vector<float> maleFaceAsymmetric;
-    std::vector<float> maleFaceTextureSymmetric;
+    std::vector<float> faceSymmetric;
+    std::vector<float> faceAsymmetric;
+    std::vector<float> faceTextureSymmetric;
 };
 
 void FloatArray(const uint8_t* p, uint32_t n, std::vector<float>& out) {
@@ -83,9 +87,9 @@ void FloatArray(const uint8_t* p, uint32_t n, std::vector<float>& out) {
         out.push_back(fo3esm::ReadF32(p + at));
 }
 
-bool InMegatonCell(const std::vector<GroupFrame>& groups) {
+bool InActorCell(const std::vector<GroupFrame>& groups, uint32_t cell) {
     for(auto it=groups.rbegin();it!=groups.rend();++it){
-        if(it->label==TARGET_MEGATON_CELL &&
+        if(it->label==cell &&
            (it->type==6u || it->type==8u ||
             it->type==9u || it->type==10u)) return true;
     }
@@ -94,25 +98,28 @@ bool InMegatonCell(const std::vector<GroupFrame>& groups) {
 
 bool ParseActorPlacement(const std::vector<uint8_t>& data,
                          RawActor& out) {
-    bool base=false;
+    bool base=false, placement=false;
     fo3esm::WalkSubrecords(data,[&](const char* type,const uint8_t* p,uint32_t n){
         if(std::memcmp(type,"NAME",4u)==0 && n>=4u){
             out.baseFormId=fo3esm::ReadU32(p);
             base=out.baseFormId!=0u;
         } else if(std::memcmp(type,"DATA",4u)==0 && n>=24u){
+            placement=true;
             out.x=fo3esm::ReadF32(p+0u); out.y=fo3esm::ReadF32(p+4u); out.z=fo3esm::ReadF32(p+8u);
             out.rx=fo3esm::ReadF32(p+12u); out.ry=fo3esm::ReadF32(p+16u); out.rz=fo3esm::ReadF32(p+20u);
         } else if(std::memcmp(type,"XSCL",4u)==0 && n>=4u){
             out.scale=fo3esm::ReadF32(p);
         }
     });
-    return base;
+    return base && placement && std::isfinite(out.x) && std::isfinite(out.y) &&
+        std::isfinite(out.z) && std::isfinite(out.rx) && std::isfinite(out.ry) &&
+        std::isfinite(out.rz) && std::isfinite(out.scale) && out.scale>0;
 }
 
 bool ScanIndexAndActors(
         FILE* f,
         std::vector<RawActor>& actors,
-        std::unordered_map<uint32_t,Locator>& locators) {
+        std::unordered_map<uint32_t,Locator>& locators, uint32_t cell) {
     const int64_t fileSize=fo3esm::FileSize(f);
     if(fileSize<static_cast<int64_t>(fo3esm::HEADER_SIZE)) return false;
 
@@ -146,7 +153,7 @@ bool ScanIndexAndActors(
             locators[formId]={payloadOffset,size,flags,type};
         }
 
-        if(type=="ACHR" && InMegatonCell(groups)){
+        if(type=="ACHR" && InActorCell(groups,cell)){
             Locator loc{payloadOffset,size,flags,type};
             std::vector<uint8_t> payload;
             if(fo3esm::ReadPayload(f,loc,payload)){
@@ -174,8 +181,13 @@ bool ParseNpc(FILE* f, const Locator& loc,
             out.fullName=fo3esm::ZString(p,n);
         else if(std::memcmp(type,"MODL",4u)==0 && out.skeleton.empty())
             out.skeleton=fo3esm::ZString(p,n);
-        else if(std::memcmp(type,"ACBS",4u)==0 && n>=4u)
+        else if(std::memcmp(type,"ACBS",4u)==0 && n>=4u) {
             out.baseFlags=fo3esm::ReadU32(p);
+            if(n>=24u) out.templateFlags=fo3esm::ReadU16(p+22u);
+        } else if(std::memcmp(type,"TPLT",4u)==0 && n>=4u)
+            out.templateId=fo3esm::ReadU32(p);
+        else if(std::memcmp(type,"NAM6",4u)==0 && n>=4u)
+            out.height=fo3esm::ReadF32(p);
         else if(std::memcmp(type,"RNAM",4u)==0 && n>=4u)
             out.race=fo3esm::ReadU32(p);
         else if(std::memcmp(type,"HNAM",4u)==0 && n>=4u)
@@ -204,15 +216,50 @@ bool ParseNpc(FILE* f, const Locator& loc,
     return !out.editorId.empty() || !out.fullName.empty();
 }
 
-bool ParseLinked(FILE* f, const Locator& loc, Linked& out) {
+// xEdit FO3 ACBS template categories: traits=0, model/animation=6,
+// base data=7, inventory=8. Resolve only appearance categories we consume.
+bool ResolveNpc(FILE* f, uint32_t id,
+        const std::unordered_map<uint32_t,Locator>& locators,
+        std::unordered_set<uint32_t>& visiting, NpcBase& npc) {
+    if(!visiting.insert(id).second || visiting.size()>32u) return false;
+    auto it=locators.find(id);
+    if(it==locators.end() || it->second.type!="NPC_" ||
+       !ParseNpc(f,it->second,id,npc)) return false;
+    if(npc.templateId && (npc.templateFlags & (1u|64u|128u|256u))) {
+        NpcBase parent;
+        if(!ResolveNpc(f,npc.templateId,locators,visiting,parent)) {
+            Q230_LOGW("ACTOR TEMPLATE UNSUPPORTED: actor=%08X template=%08X",id,npc.templateId);
+            return false;
+        }
+        if(npc.templateFlags & 1u) {
+            npc.race=parent.race;
+            npc.height=parent.height;
+            npc.baseFlags=(npc.baseFlags & ~1u)|(parent.baseFlags & 1u);
+        }
+        if(npc.templateFlags & 64u) {
+            npc.skeleton=parent.skeleton; npc.hair=parent.hair; npc.eyes=parent.eyes;
+            npc.headParts=parent.headParts; npc.faceSymmetric=parent.faceSymmetric;
+            npc.faceAsymmetric=parent.faceAsymmetric;
+            npc.faceTextureSymmetric=parent.faceTextureSymmetric;
+            npc.faceGen=parent.faceGen;
+            std::copy_n(parent.hairColor,4,npc.hairColor);
+        }
+        if(npc.templateFlags & 128u) npc.fullName=parent.fullName;
+        if(npc.templateFlags & 256u) npc.inventory=parent.inventory;
+    }
+    visiting.erase(id);
+    return true;
+}
+
+bool ParseLinked(FILE* f, const Locator& loc, Linked& out, bool female) {
     std::vector<uint8_t> data;
     if(!fo3esm::ReadPayload(f,loc,data)) return false;
     out.type=loc.type;
 
     bool raceHeadData=false;
     bool raceBodyData=false;
-    bool raceMaleHead=false;
-    bool raceMaleBody=false;
+    bool raceSelectedHead=false;
+    bool raceSelectedBody=false;
     uint32_t raceHeadIndex=0xffffffffu;
     uint32_t raceBodyIndex=0xffffffffu;
     int raceFaceGender=0; // 1 male, 2 female
@@ -232,8 +279,8 @@ bool ParseLinked(FILE* f, const Locator& loc, Linked& out) {
             if(std::memcmp(type,"NAM0",4u)==0){
                 raceHeadData=true;
                 raceBodyData=false;
-                raceMaleHead=false;
-                raceMaleBody=false;
+                raceSelectedHead=false;
+                raceSelectedBody=false;
                 raceHeadIndex=0xffffffffu;
                 raceBodyIndex=0xffffffffu;
                 return;
@@ -241,8 +288,8 @@ bool ParseLinked(FILE* f, const Locator& loc, Linked& out) {
             if(std::memcmp(type,"NAM1",4u)==0){
                 raceHeadData=false;
                 raceBodyData=true;
-                raceMaleHead=false;
-                raceMaleBody=false;
+                raceSelectedHead=false;
+                raceSelectedBody=false;
                 raceHeadIndex=0xffffffffu;
                 raceBodyIndex=0xffffffffu;
                 return;
@@ -252,15 +299,15 @@ bool ParseLinked(FILE* f, const Locator& loc, Linked& out) {
             if((std::memcmp(type,"HNAM",4u)==0 ||
                 std::memcmp(type,"ENAM",4u)==0) && raceBodyData){
                 raceBodyData=false;
-                raceMaleBody=false;
+                raceSelectedBody=false;
                 raceBodyIndex=0xffffffffu;
             }
             if(std::memcmp(type,"MNAM",4u)==0){
                 if(raceHeadData){
-                    raceMaleHead=true;
+                    raceSelectedHead=!female;
                     raceHeadIndex=0xffffffffu;
                 } else if(raceBodyData){
-                    raceMaleBody=true;
+                    raceSelectedBody=!female;
                     raceBodyIndex=0xffffffffu;
                 } else {
                     raceFaceGender=1;
@@ -269,10 +316,10 @@ bool ParseLinked(FILE* f, const Locator& loc, Linked& out) {
             }
             if(std::memcmp(type,"FNAM",4u)==0){
                 if(raceHeadData){
-                    raceMaleHead=false;
+                    raceSelectedHead=female;
                     raceHeadIndex=0xffffffffu;
                 } else if(raceBodyData){
-                    raceMaleBody=false;
+                    raceSelectedBody=female;
                     raceBodyIndex=0xffffffffu;
                 } else {
                     raceFaceGender=2;
@@ -280,25 +327,25 @@ bool ParseLinked(FILE* f, const Locator& loc, Linked& out) {
                 return;
             }
             if(std::memcmp(type,"INDX",4u)==0 && n>=4u){
-                if(raceHeadData && raceMaleHead){
+                if(raceHeadData && raceSelectedHead){
                     raceHeadIndex=fo3esm::ReadU32(p);
                     return;
                 }
-                if(raceBodyData && raceMaleBody){
+                if(raceBodyData && raceSelectedBody){
                     raceBodyIndex=fo3esm::ReadU32(p);
                     return;
                 }
             }
-            if(std::memcmp(type,"FGGS",4u)==0 && raceFaceGender==1){
-                FloatArray(p,n,out.maleFaceSymmetric);
+            if(std::memcmp(type,"FGGS",4u)==0 && raceFaceGender==(female?2:1)){
+                FloatArray(p,n,out.faceSymmetric);
                 return;
             }
-            if(std::memcmp(type,"FGGA",4u)==0 && raceFaceGender==1){
-                FloatArray(p,n,out.maleFaceAsymmetric);
+            if(std::memcmp(type,"FGGA",4u)==0 && raceFaceGender==(female?2:1)){
+                FloatArray(p,n,out.faceAsymmetric);
                 return;
             }
-            if(std::memcmp(type,"FGTS",4u)==0 && raceFaceGender==1){
-                FloatArray(p,n,out.maleFaceTextureSymmetric);
+            if(std::memcmp(type,"FGTS",4u)==0 && raceFaceGender==(female?2:1)){
+                FloatArray(p,n,out.faceTextureSymmetric);
                 return;
             }
         }
@@ -306,36 +353,36 @@ bool ParseLinked(FILE* f, const Locator& loc, Linked& out) {
         if(std::memcmp(type,"MODL",4u)==0){
             const std::string path=fo3esm::ZString(p,n);
             if(out.model.empty()) out.model=path;
-            if(loc.type=="RACE" && raceHeadData && raceMaleHead &&
+            if(loc.type=="RACE" && raceHeadData && raceSelectedHead &&
                raceHeadIndex<8u && !path.empty()){
-                if(out.maleHeadModels.size()<8u)
-                    out.maleHeadModels.resize(8u);
-                out.maleHeadModels[raceHeadIndex]=path;
+                if(out.headModels.size()<8u)
+                    out.headModels.resize(8u);
+                out.headModels[raceHeadIndex]=path;
             }
-            if(loc.type=="RACE" && raceBodyData && raceMaleBody &&
+            if(loc.type=="RACE" && raceBodyData && raceSelectedBody &&
                raceBodyIndex<4u && !path.empty()){
-                if(out.maleBodyModels.size()<4u)
-                    out.maleBodyModels.resize(4u);
-                out.maleBodyModels[raceBodyIndex]=path;
+                if(out.bodyModels.size()<4u)
+                    out.bodyModels.resize(4u);
+                out.bodyModels[raceBodyIndex]=path;
             }
-        } else if(std::memcmp(type,"MOD2",4u)==0 && out.model2.empty()){
-            out.model2=fo3esm::ZString(p,n);
+        } else if(std::memcmp(type,"MOD3",4u)==0 && out.model3.empty()){
+            out.model3=fo3esm::ZString(p,n);
         } else if(std::memcmp(type,"ICON",4u)==0){
             const std::string path=fo3esm::ZString(p,n);
             if(out.icon.empty()) out.icon=path;
-            if(loc.type=="RACE" && raceHeadData && raceMaleHead &&
+            if(loc.type=="RACE" && raceHeadData && raceSelectedHead &&
                raceHeadIndex<8u && !path.empty()){
-                if(out.maleHeadTextures.size()<8u)
-                    out.maleHeadTextures.resize(8u);
-                if(out.maleHeadTextures[raceHeadIndex].empty())
-                    out.maleHeadTextures[raceHeadIndex]=path;
+                if(out.headTextures.size()<8u)
+                    out.headTextures.resize(8u);
+                if(out.headTextures[raceHeadIndex].empty())
+                    out.headTextures[raceHeadIndex]=path;
             }
-            if(loc.type=="RACE" && raceBodyData && raceMaleBody &&
+            if(loc.type=="RACE" && raceBodyData && raceSelectedBody &&
                raceBodyIndex<4u && !path.empty()){
-                if(out.maleBodyTextures.size()<4u)
-                    out.maleBodyTextures.resize(4u);
-                if(out.maleBodyTextures[raceBodyIndex].empty())
-                    out.maleBodyTextures[raceBodyIndex]=path;
+                if(out.bodyTextures.size()<4u)
+                    out.bodyTextures.resize(4u);
+                if(out.bodyTextures[raceBodyIndex].empty())
+                    out.bodyTextures[raceBodyIndex]=path;
             }
         }
     });
@@ -344,10 +391,11 @@ bool ParseLinked(FILE* f, const Locator& loc, Linked& out) {
 
 } // namespace
 
-bool LoadFo3MegatonExteriorActorsQ230(
-        std::vector<Fo3NpcActorQ230>& outActors) {
+bool LoadFo3CellActors(
+        uint32_t cellFormId, std::vector<Fo3NpcActorQ230>& outActors,
+        const std::string& esmPath) {
     outActors.clear();
-    FILE* f=std::fopen(ESM_PATH,"rb");
+    FILE* f=std::fopen(esmPath.empty()?ESM_PATH:esmPath.c_str(),"rb");
     if(!f){
         Q230_LOGW("Q23.0 NPC ESM OPEN FAILED: %s",ESM_PATH);
         return false;
@@ -355,19 +403,22 @@ bool LoadFo3MegatonExteriorActorsQ230(
 
     std::vector<RawActor> raw;
     std::unordered_map<uint32_t,Locator> locators;
-    const bool indexed=ScanIndexAndActors(f,raw,locators);
+    const bool indexed=ScanIndexAndActors(f,raw,locators,cellFormId);
     if(!indexed){
         std::fclose(f);
-        Q230_LOGW("Q23.0 NPC INDEX FAILED: targetCell=%08X",TARGET_MEGATON_CELL);
+        Q230_LOGW("Q23.0 NPC INDEX FAILED: targetCell=%08X",cellFormId);
         return false;
     }
 
     for(const RawActor& placed:raw){
+        // Deleted and initially disabled references need game-state evaluation.
+        if ((placed.flags & (0x20u | 0x800u)) != 0u) continue;
         const auto npcLoc=locators.find(placed.baseFormId);
         if(npcLoc==locators.end() || npcLoc->second.type!="NPC_") continue;
 
         NpcBase npc;
-        if(!ParseNpc(f,npcLoc->second,placed.baseFormId,npc)) continue;
+        std::unordered_set<uint32_t> visiting;
+        if(!ResolveNpc(f,placed.baseFormId,locators,visiting,npc)) continue;
 
         Fo3NpcActorQ230 actor;
         actor.refFormId=placed.refFormId;
@@ -389,26 +440,26 @@ bool LoadFo3MegatonExteriorActorsQ230(
         actor.hasFaceGenGeometry=npc.faceGen;
         actor.x=placed.x; actor.y=placed.y; actor.z=placed.z;
         actor.rx=placed.rx; actor.ry=placed.ry; actor.rz=placed.rz;
-        actor.scale=placed.scale;
+        actor.scale=placed.scale * (std::isfinite(npc.height) && npc.height>0.0f ? npc.height : 1.0f);
 
         auto resolve=[&](uint32_t id, Linked& linked){
             const auto it=locators.find(id);
-            return it!=locators.end() && ParseLinked(f,it->second,linked);
+            return it!=locators.end() && ParseLinked(f,it->second,linked,actor.female);
         };
 
         Linked race;
         if(npc.race!=0u && resolve(npc.race,race)){
             actor.raceEditorId=race.editorId;
-            actor.raceHeadModel=race.model;
-            actor.raceHeadModels=race.maleHeadModels;
-            actor.raceHeadTextures=race.maleHeadTextures;
-            actor.raceBodyModels=race.maleBodyModels;
-            actor.raceBodyTextures=race.maleBodyTextures;
-            if(race.maleBodyModels.size()>3u)
-                actor.raceBodyTextureModel=race.maleBodyModels[3u];
-            actor.raceFaceGenGeometrySymmetric=race.maleFaceSymmetric;
-            actor.raceFaceGenGeometryAsymmetric=race.maleFaceAsymmetric;
-            actor.raceFaceGenTextureSymmetric=race.maleFaceTextureSymmetric;
+            actor.raceHeadModel=race.headModels.empty()?std::string{}:race.headModels[0];
+            actor.raceHeadModels=race.headModels;
+            actor.raceHeadTextures=race.headTextures;
+            actor.raceBodyModels=race.bodyModels;
+            actor.raceBodyTextures=race.bodyTextures;
+            if(race.bodyModels.size()>3u)
+                actor.raceBodyTextureModel=race.bodyModels[3u];
+            actor.raceFaceGenGeometrySymmetric=race.faceSymmetric;
+            actor.raceFaceGenGeometryAsymmetric=race.faceAsymmetric;
+            actor.raceFaceGenTextureSymmetric=race.faceTextureSymmetric;
         }
 
         Linked hair;
@@ -434,14 +485,14 @@ bool LoadFo3MegatonExteriorActorsQ230(
             const auto it=locators.find(inv.first);
             if(it!=locators.end()){
                 Linked linked;
-                if(ParseLinked(f,it->second,linked)){
+                if(ParseLinked(f,it->second,linked,actor.female)){
                     item.recordType=linked.type;
                     item.editorId=linked.editorId;
                     item.fullName=linked.fullName;
                     if(linked.type=="ARMO"){
                         item.modelPath=
-                            actor.female && !linked.model2.empty()
-                                ? linked.model2
+                            actor.female && !linked.model3.empty()
+                                ? linked.model3
                                 : linked.model;
                         item.bipedMask=linked.bipedMask;
                     }
@@ -456,12 +507,12 @@ bool LoadFo3MegatonExteriorActorsQ230(
     std::fclose(f);
 
     Q230_LOGI("Q23.0 NPC CENSUS: cell=%08X actors=%zu source=Fallout3.esm ACHR->NPC_",
-              TARGET_MEGATON_CELL,outActors.size());
+              cellFormId,outActors.size());
     for(const Fo3NpcActorQ230& a:outActors){
         size_t armorModels=0u;
         for(const auto& item:a.inventory)
             if(item.recordType=="ARMO" && !item.modelPath.empty()) ++armorModels;
-        Q230_LOGI("Q23.6 NPC: ref=%08X base=%08X EDID=%s FULL=%s female=%d actorFlags=%08X race=%08X raceEDID=%s skeleton=%s maleRaceHeadParts=%zu maleRaceBodyParts=%zu hair=%s hairTex=%s npcHeadParts=%zu eyeTex=%s inventory=%zu armorModels=%zu npcFaceGen=(%zu,%zu,%zu) raceFaceGen=(%zu,%zu,%zu) hairRGB=(%u,%u,%u) pos=(%.1f %.1f %.1f) rot=(%.3f %.3f %.3f)",
+        Q230_LOGI("Q23.6 NPC: ref=%08X base=%08X EDID=%s FULL=%s female=%d actorFlags=%08X race=%08X raceEDID=%s skeleton=%s raceHeadParts=%zu raceBodyParts=%zu hair=%s hairTex=%s npcHeadParts=%zu eyeTex=%s inventory=%zu armorModels=%zu npcFaceGen=(%zu,%zu,%zu) raceFaceGen=(%zu,%zu,%zu) hairRGB=(%u,%u,%u) pos=(%.1f %.1f %.1f) rot=(%.3f %.3f %.3f)",
                   a.refFormId,a.baseFormId,
                   a.editorId.empty()?"<none>":a.editorId.c_str(),
                   a.fullName.empty()?"<none>":a.fullName.c_str(),
@@ -722,4 +773,9 @@ bool LoadFo3FaceGenTextureQ234(
               columns,rows,base.width,base.height,
               symModes,asymModes,symmetric.size(),basisVersion);
     return true;
+}
+
+
+bool LoadFo3MegatonExteriorActorsQ230(std::vector<Fo3NpcActorQ230>& actors) {
+    return LoadFo3CellActors(0x00000A96u, actors);
 }

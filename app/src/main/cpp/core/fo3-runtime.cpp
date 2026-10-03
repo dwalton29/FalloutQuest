@@ -21,6 +21,7 @@ extern void PumpFo3AndroidEventsQ1860();
 #include "ui/loading/fo3-loading-screen.h"
 #include "fo3-megaton-scene.h"
 #include "fo3-npc.h"
+#include "fo3-actor-animation.h"
 #include "rendering/mesh/fo3-static-nif.h"
 #include "fo3-bsa-reader.h"
 #include "fo3-texture-bsa.h"
@@ -541,9 +542,36 @@ std::vector<GpuObject> gObjects;
 
 // Q21.0: real Fallout actor geometry kept outside CELL ownership.
 std::vector<GpuObject> gQ210PlayerBody;
-std::vector<GpuObject> gQ230NpcActors;
-bool gQ230NpcAttempted = false;
-bool gQ230NpcReady = false;
+struct Q230RigPart {
+    CpuObject bind;
+    std::vector<float> work;
+    std::vector<std::array<float,12>> posed;
+    std::vector<fo3anim::Matrix> gameDeltas;
+    std::vector<int> bones;
+    fo3anim::Matrix placement{}, inversePlacement{};
+    int rigidBone = -1;
+    size_t gpuIndex = 0;
+    float centerX=0, centerY=0, floorZ=0;
+};
+struct Q230ActorVisual {
+    Fo3NpcActorQ230 source;
+    fo3anim::Skeleton skeleton;
+    fo3anim::Clip clip;
+    fo3anim::Pose pose;
+    std::vector<CpuObject> parts;
+    std::vector<GpuObject> objects;
+    std::vector<Q230RigPart> rigs;
+    std::unordered_map<std::string,Fo3RgbaTexture> generatedTextures;
+    std::chrono::steady_clock::time_point animationStart{};
+    uint64_t lastFrame = UINT64_MAX;
+};
+std::vector<Q230ActorVisual> gQ230NpcActors;
+void Q230DeleteNpcActors();
+void Q230PrepareActors(uint32_t cell, uint32_t worldspace,
+    std::vector<Q230ActorVisual>& out, const std::atomic<bool>& cancel);
+bool Q230UploadActorPart(Q230ActorVisual& actor, CpuObject& part,
+    float centerX, float centerY, float floorZ);
+
 bool gQ210PlayerBodyAttempted = false;
 bool gQ210PlayerBodyReady = false;
 uint64_t gQ210PlayerBodyFrames = 0u;
@@ -2668,6 +2696,7 @@ struct Fo3SceneCpuPreparation {
     std::vector<Fo3WorldPlacement> placements;
     std::vector<Fo3WorldPlacement> collisionPlacements;
     std::vector<CpuObject> selected;
+    std::vector<Q230ActorVisual> actors;
     size_t skipped = 0u;
     size_t unsupported = 0u;
     size_t preparedTextures = 0u;
@@ -2698,6 +2727,7 @@ struct Fo3SceneLoadWork {
     uint64_t uploadUs = 0u;
     uint64_t maxUploadSliceUs = 0u;
     size_t uploadIndex = 0u;
+    size_t npcActorIndex = 0u, npcPartIndex = 0u;
     bool active = false;
     bool boot = false;
     bool bootAttempted = false;
@@ -2720,6 +2750,11 @@ void AbortFo3SceneLoad(const char* reason) {
     gSceneLoad.collisionPreparation.Reset();
     if (gSceneLoad.contextApplied)
         Fo3DynamicOnlyCollisionModelsQ710() = std::move(gSceneLoad.previousCollisionPolicy);
+    if (gSceneLoad.preparation.Ready()) {
+        for (auto& actor : gSceneLoad.preparation.Get().actors)
+            Q74DeleteGpuObjects(actor.objects);
+    }
+    gQ234GeneratedTextures.clear();
     gSceneLoad.preparation.Reset();
     gSceneLoad.active = false;
     if (gSceneLoad.generation == GetFo3LoadingGeneration()) CancelFo3Loading();
@@ -2736,6 +2771,7 @@ bool BeginFo3SceneLoad(const Fo3CellTransitionRequestQ74& request, bool boot) {
     gSceneLoad.started = std::chrono::steady_clock::now();
     gSceneLoad.generation = GetFo3LoadingGeneration();
     gSceneLoad.uploadIndex = 0u;
+    gSceneLoad.npcActorIndex = gSceneLoad.npcPartIndex = 0u;
     gSceneLoad.uploadUs = 0u;
     gSceneLoad.maxUploadSliceUs = 0u;
     gSceneLoad.replacement.clear();
@@ -2765,6 +2801,8 @@ bool BeginFo3SceneLoad(const Fo3CellTransitionRequestQ74& request, bool boot) {
                 result.selected.push_back(std::move(part));
             }
         }
+        Q230PrepareActors(result.request.cellFormId, result.request.worldspaceFormId,
+            result.actors, cancel);
         result.cpuUs = Fo3SceneElapsedUs(phase);
         if (result.selected.size() < 2u) return false;
         phase = std::chrono::steady_clock::now();
@@ -2865,6 +2903,25 @@ bool ProcessQ74TransitionRequest() {
         gSceneLoad.maxUploadSliceUs = std::max(gSceneLoad.maxUploadSliceUs, sliceUs);
         return false; // collision/finalization starts on a clean following frame
     }
+    if (gSceneLoad.npcActorIndex < prepared.actors.size()) {
+        auto& actor = prepared.actors[gSceneLoad.npcActorIndex];
+        if (gSceneLoad.npcPartIndex == 0u) {
+            for (auto& entry : actor.generatedTextures)
+                gQ234GeneratedTextures[entry.first] = std::move(entry.second);
+        }
+        if (gSceneLoad.npcPartIndex < actor.parts.size()) {
+            auto& part = actor.parts[gSceneLoad.npcPartIndex++];
+            Q230UploadActorPart(actor, part, request.x, request.y, request.z);
+            return false;
+        }
+        for (const auto& entry : actor.generatedTextures)
+            gQ234GeneratedTextures.erase(entry.first);
+        actor.generatedTextures.clear();
+        actor.parts.clear();
+        ++gSceneLoad.npcActorIndex;
+        gSceneLoad.npcPartIndex = 0u;
+        return false;
+    }
     auto& replacement = gSceneLoad.replacement;
     if (replacement.size() < 2u) {
         AbortFo3SceneLoad("gpu-upload-too-small");
@@ -2944,6 +3001,10 @@ bool ProcessQ74TransitionRequest() {
     const auto finalizationStarted = std::chrono::steady_clock::now();
     const size_t oldObjects = gObjects.size();
     Q74DeleteGpuObjects(gObjects);
+    Q230DeleteNpcActors();
+    gQ230NpcActors = std::move(prepared.actors);
+    for (auto& actor : gQ230NpcActors)
+        actor.animationStart = std::chrono::steady_clock::now();
     gObjects = std::move(replacement);
     gSceneReady = !gObjects.empty();
     gSceneCenterXQ1730 = request.x;
@@ -9839,13 +9900,8 @@ size_t Q215SuppressPlayerGoreCaps(Fo3StaticNifMesh& mesh) {
 }
 
 void Q230DeleteNpcActors() {
-    for (GpuObject& object : gQ230NpcActors) {
-        if (object.vbo) glDeleteBuffers(1, &object.vbo);
-        if (object.vao) glDeleteVertexArrays(1, &object.vao);
-    }
+    for (auto& actor : gQ230NpcActors) Q74DeleteGpuObjects(actor.objects);
     gQ230NpcActors.clear();
-    gQ230NpcReady = false;
-    gQ230NpcAttempted = false;
 }
 
 void Q230ConvertBethesdaRotation(
@@ -9873,31 +9929,19 @@ void Q230ConvertBethesdaRotation(
     }
 }
 
-bool Q230EnsureNpcActors() {
-    if (gQ230NpcReady) return true;
-    if (gQ230NpcAttempted) return false;
-    if (!gExteriorStreamingActiveQ1890 ||
-        gExteriorWorldspaceQ1890 != 0x00000A74u) return false;
-    gQ230NpcAttempted = true;
-
-    std::vector<Fo3NpcActorQ230> actors;
-    if (!LoadFo3MegatonExteriorActorsQ230(actors)) {
-        Q6H_LOGW("Q23.0 NPC RENDER MISS: stage=esm-resolve");
-        return false;
-    }
-
-    const Fo3NpcActorQ230* lucas = nullptr;
-    for (const Fo3NpcActorQ230& actor : actors) {
-        if (actor.editorId == "LucasSimms") {
-            lucas = &actor;
-            break;
-        }
-    }
-    if (!lucas) {
-        Q6H_LOGW("Q23.0 NPC RENDER MISS: stage=LucasSimms-not-found");
-        return false;
-    }
-
+bool Q230BuildNpcActor(const Fo3NpcActorQ230& source, Q230ActorVisual& visual) {
+    visual.source = source;
+    const Fo3NpcActorQ230* npc = &visual.source;
+    std::vector<uint8_t> bytes;
+    if (LoadFalloutMeshFile(source.skeletonModel, bytes) &&
+        !fo3anim::DecodeSkeleton(bytes, visual.skeleton)) visual.skeleton = {};
+    std::string idle = source.skeletonModel;
+    const size_t slash = idle.find_last_of("\\/");
+    idle = slash == std::string::npos ? std::string{} : idle.substr(0, slash + 1u) + "locomotion\\mtidle.kf";
+    if (!idle.empty() && LoadFalloutMeshFile(idle, bytes))
+        fo3anim::DecodeClip(bytes, visual.clip);
+    if (!visual.skeleton.bones.empty() && !visual.clip.tracks.empty())
+        fo3anim::BindClip(visual.skeleton, visual.clip, visual.pose);
     std::vector<std::string> models;
     std::vector<std::string> faceGenModels;
     auto samePath=[](const std::string& a,const std::string& b){
@@ -9917,18 +9961,21 @@ bool Q230EnsureNpcActors() {
         faceGenModels.push_back(path);
     };
 
-    if(!lucas->raceHeadModels.empty()){
-        for(const std::string& path:lucas->raceHeadModels)
+    if(!npc->raceHeadModels.empty()){
+        for(const std::string& path:npc->raceHeadModels)
             addFaceGenModel(path);
     } else {
-        addFaceGenModel(lucas->raceHeadModel);
+        addFaceGenModel(npc->raceHeadModel);
     }
-    addFaceGenModel(lucas->hairModel);
-    for(const std::string& path:lucas->headPartModels)
+    addFaceGenModel(npc->hairModel);
+    for(const std::string& path:npc->headPartModels)
         addFaceGenModel(path);
     uint32_t q236EquippedMask=0u;
-    for(const Fo3NpcVisualItemQ230& item:lucas->inventory){
-        if(item.recordType=="ARMO"){
+    std::unordered_set<std::string> equippedModels;
+    for(const Fo3NpcVisualItemQ230& item:npc->inventory){
+        if(item.recordType=="ARMO" && item.count>0 && !item.modelPath.empty() &&
+           (q236EquippedMask & item.bipedMask)==0u){
+            equippedModels.insert(item.modelPath);
             addModel(item.modelPath);
             q236EquippedMask|=item.bipedMask;
         }
@@ -9936,27 +9983,27 @@ bool Q230EnsureNpcActors() {
 
     // Fallout equipment slots: 0x4 Upper Body, 0x8 Left Hand,
     // 0x10 Right Hand. Only add uncovered RACE body pieces.
-    if(lucas->raceBodyModels.size()>0u &&
+    if(npc->raceBodyModels.size()>0u &&
        (q236EquippedMask & 0x00000004u)==0u)
-        addFaceGenModel(lucas->raceBodyModels[0u]);
-    if(lucas->raceBodyModels.size()>1u &&
+        addFaceGenModel(npc->raceBodyModels[0u]);
+    if(npc->raceBodyModels.size()>1u &&
        (q236EquippedMask & 0x00000008u)==0u)
-        addFaceGenModel(lucas->raceBodyModels[1u]);
-    if(lucas->raceBodyModels.size()>2u &&
+        addFaceGenModel(npc->raceBodyModels[1u]);
+    if(npc->raceBodyModels.size()>2u &&
        (q236EquippedMask & 0x00000010u)==0u)
-        addFaceGenModel(lucas->raceBodyModels[2u]);
+        addFaceGenModel(npc->raceBodyModels[2u]);
 
     auto isArmorModel=[&](const std::string& path){
-        for(const Fo3NpcVisualItemQ230& item:lucas->inventory)
+        for(const Fo3NpcVisualItemQ230& item:npc->inventory)
             if(item.recordType=="ARMO" &&
-               !item.modelPath.empty() &&
+               equippedModels.count(item.modelPath)!=0u &&
                samePath(path,item.modelPath)) return true;
         return false;
     };
     auto isRaceBodyModel=[&](const std::string& path)->int {
-        for(size_t slot=0u;slot<lucas->raceBodyModels.size() && slot<3u;++slot)
-            if(!lucas->raceBodyModels[slot].empty() &&
-               samePath(path,lucas->raceBodyModels[slot]))
+        for(size_t slot=0u;slot<npc->raceBodyModels.size() && slot<3u;++slot)
+            if(!npc->raceBodyModels[slot].empty() &&
+               samePath(path,npc->raceBodyModels[slot]))
                 return static_cast<int>(slot);
         return -1;
     };
@@ -9967,25 +10014,25 @@ bool Q230EnsureNpcActors() {
         return false;
     };
     auto isEyeModel=[&](const std::string& path){
-        if(lucas->raceHeadModels.size()<8u) return false;
-        return (!lucas->raceHeadModels[6].empty() &&
-                samePath(path,lucas->raceHeadModels[6])) ||
-               (!lucas->raceHeadModels[7].empty() &&
-                samePath(path,lucas->raceHeadModels[7]));
+        if(npc->raceHeadModels.size()<8u) return false;
+        return (!npc->raceHeadModels[6].empty() &&
+                samePath(path,npc->raceHeadModels[6])) ||
+               (!npc->raceHeadModels[7].empty() &&
+                samePath(path,npc->raceHeadModels[7]));
     };
 
     auto q237RaceHeadSlot=[&](const std::string& path)->int {
-        for(size_t slot=0u;slot<lucas->raceHeadModels.size();++slot){
-            if(!lucas->raceHeadModels[slot].empty() &&
-               samePath(path,lucas->raceHeadModels[slot]))
+        for(size_t slot=0u;slot<npc->raceHeadModels.size();++slot){
+            if(!npc->raceHeadModels[slot].empty() &&
+               samePath(path,npc->raceHeadModels[slot]))
                 return static_cast<int>(slot);
         }
         return -1;
     };
     auto isHairTintModel=[&](const std::string& path){
-        if(!lucas->hairModel.empty() && samePath(path,lucas->hairModel))
+        if(!npc->hairModel.empty() && samePath(path,npc->hairModel))
             return true;
-        for(const std::string& hp:lucas->headPartModels)
+        for(const std::string& hp:npc->headPartModels)
             if(!hp.empty() && samePath(path,hp)) return true;
         return false;
     };
@@ -9997,28 +10044,28 @@ bool Q230EnsureNpcActors() {
     // EarsHuman.dds. The remaining model-bearing slots map one-to-one.
     auto q235RaceTextureForPart =
         [&](const std::string& path, uint32_t shapeIndex)->std::string {
-            if(lucas->raceHeadModels.empty() ||
-               lucas->raceHeadTextures.empty()) return {};
+            if(npc->raceHeadModels.empty() ||
+               npc->raceHeadTextures.empty()) return {};
 
-            if(lucas->raceHeadModels.size()>0u &&
-               !lucas->raceHeadModels[0].empty() &&
-               samePath(path,lucas->raceHeadModels[0])){
+            if(npc->raceHeadModels.size()>0u &&
+               !npc->raceHeadModels[0].empty() &&
+               samePath(path,npc->raceHeadModels[0])){
                 if(shapeIndex==0u &&
-                   lucas->raceHeadTextures.size()>0u)
-                    return lucas->raceHeadTextures[0];
+                   npc->raceHeadTextures.size()>0u)
+                    return npc->raceHeadTextures[0];
                 if(shapeIndex==1u &&
-                   lucas->raceHeadTextures.size()>1u)
-                    return lucas->raceHeadTextures[1];
+                   npc->raceHeadTextures.size()>1u)
+                    return npc->raceHeadTextures[1];
                 return {};
             }
 
             for(size_t slot=2u;
-                slot<lucas->raceHeadModels.size() &&
-                slot<lucas->raceHeadTextures.size();
+                slot<npc->raceHeadModels.size() &&
+                slot<npc->raceHeadTextures.size();
                 ++slot){
-                if(!lucas->raceHeadModels[slot].empty() &&
-                   samePath(path,lucas->raceHeadModels[slot]))
-                    return lucas->raceHeadTextures[slot];
+                if(!npc->raceHeadModels[slot].empty() &&
+                   samePath(path,npc->raceHeadModels[slot]))
+                    return npc->raceHeadTextures[slot];
             }
             return {};
         };
@@ -10034,37 +10081,37 @@ bool Q230EnsureNpcActors() {
     };
 
     const std::vector<float> q234FaceSym=
-        combineFaceGen(lucas->raceFaceGenGeometrySymmetric,
-                       lucas->faceGenGeometrySymmetric);
+        combineFaceGen(npc->raceFaceGenGeometrySymmetric,
+                       npc->faceGenGeometrySymmetric);
     const std::vector<float> q234FaceAsym=
-        combineFaceGen(lucas->raceFaceGenGeometryAsymmetric,
-                       lucas->faceGenGeometryAsymmetric);
+        combineFaceGen(npc->raceFaceGenGeometryAsymmetric,
+                       npc->faceGenGeometryAsymmetric);
     const std::vector<float> q234FaceTex=
-        combineFaceGen(lucas->raceFaceGenTextureSymmetric,
-                       lucas->faceGenTextureSymmetric);
+        combineFaceGen(npc->raceFaceGenTextureSymmetric,
+                       npc->faceGenTextureSymmetric);
 
     // Q23.7: evaluate the RACE Body Texture Model (.egt) against each
     // authored body/hand base map. FaceGen body statistics are designed to be
     // effectively constant below the neck, so the same body SCM coordinate is
     // valid across the actor's exposed skin maps.
     std::vector<std::string> q237RaceBodyGeneratedKeys(
-        lucas->raceBodyTextures.size());
+        npc->raceBodyTextures.size());
     size_t q237BodyEgtTextures=0u;
     size_t q237BodyEgtPixels=0u;
-    if(!lucas->raceBodyTextureModel.empty() && !q234FaceTex.empty()){
+    if(!npc->raceBodyTextureModel.empty() && !q234FaceTex.empty()){
         for(size_t slot=0u;
-            slot<lucas->raceBodyTextures.size() && slot<3u;
+            slot<npc->raceBodyTextures.size() && slot<3u;
             ++slot){
-            const std::string& base=lucas->raceBodyTextures[slot];
+            const std::string& base=npc->raceBodyTextures[slot];
             if(base.empty()) continue;
             Fo3FaceGenTextureQ234 generated;
             if(!LoadFo3FaceGenTextureQ234(
-                    lucas->raceBodyTextureModel,
+                    npc->raceBodyTextureModel,
                     base,q234FaceTex,generated)) continue;
 
             const std::string key=
                 "__q237_bodyfacegen__/"+
-                lucas->editorId+"/"+
+                std::to_string(npc->baseFormId)+"/"+
                 std::to_string(slot)+".dds";
             Fo3RgbaTexture rgba;
             rgba.width=generated.width;
@@ -10076,7 +10123,7 @@ bool Q230EnsureNpcActors() {
             q237BodyEgtPixels+=
                 static_cast<size_t>(rgba.width)*
                 static_cast<size_t>(rgba.height);
-            gQ234GeneratedTextures[key]=std::move(rgba);
+            visual.generatedTextures[key]=std::move(rgba);
             q237RaceBodyGeneratedKeys[slot]=key;
             ++q237BodyEgtTextures;
         }
@@ -10101,7 +10148,7 @@ bool Q230EnsureNpcActors() {
     size_t armorSkinFallbackOverrides=0u;
     float rx=0.0f, ry=0.0f, rz=0.0f;
     Q230ConvertBethesdaRotation(
-        lucas->rx,lucas->ry,lucas->rz,rx,ry,rz);
+        npc->rx,npc->ry,npc->rz,rx,ry,rz);
 
     auto q233RebuildBasis=[](CpuObject& part){
         const size_t vertexCount=part.positionsGame.size();
@@ -10214,31 +10261,31 @@ bool Q230EnsureNpcActors() {
     };
 
     const float q234HairR=
-        static_cast<float>(lucas->hairColor[0])/255.0f;
+        static_cast<float>(npc->hairColor[0])/255.0f;
     const float q234HairG=
-        static_cast<float>(lucas->hairColor[1])/255.0f;
+        static_cast<float>(npc->hairColor[1])/255.0f;
     const float q234HairB=
-        static_cast<float>(lucas->hairColor[2])/255.0f;
+        static_cast<float>(npc->hairColor[2])/255.0f;
 
     for(const std::string& path:models){
         Fo3WorldPlacement placement;
-        placement.refFormId=lucas->refFormId;
-        placement.baseFormId=lucas->baseFormId;
+        placement.refFormId=npc->refFormId;
+        placement.baseFormId=npc->baseFormId;
         placement.baseRecordType="NPC_";
-        placement.editorId=lucas->editorId;
+        placement.editorId=npc->editorId;
         placement.modelPath=path;
-        placement.x=lucas->x;
-        placement.y=lucas->y;
-        placement.z=lucas->z;
+        placement.x=npc->x;
+        placement.y=npc->y;
+        placement.z=npc->z;
         placement.rx=rx;
         placement.ry=ry;
         placement.rz=rz;
-        placement.scale=lucas->scale;
+        placement.scale=npc->scale;
 
         std::vector<CpuObject> parts;
         if(!BuildCpuObjects(placement,parts)){
             Q6H_LOGW("Q23.7 NPC PART MISS: actor=%s model=%s stage=cpu",
-                     lucas->editorId.c_str(),path.c_str());
+                     npc->editorId.c_str(),path.c_str());
             continue;
         }
         cpuShapes+=parts.size();
@@ -10277,8 +10324,8 @@ bool Q230EnsureNpcActors() {
 
             const int q236BodySlot=isRaceBodyModel(path);
             if(q236BodySlot>=0 &&
-               static_cast<size_t>(q236BodySlot)<lucas->raceBodyTextures.size() &&
-               !lucas->raceBodyTextures[static_cast<size_t>(q236BodySlot)].empty()){
+               static_cast<size_t>(q236BodySlot)<npc->raceBodyTextures.size() &&
+               !npc->raceBodyTextures[static_cast<size_t>(q236BodySlot)].empty()){
                 const size_t slot=static_cast<size_t>(q236BodySlot);
                 if(slot<q237RaceBodyGeneratedKeys.size() &&
                    !q237RaceBodyGeneratedKeys[slot].empty())
@@ -10286,7 +10333,7 @@ bool Q230EnsureNpcActors() {
                         q237RaceBodyGeneratedKeys[slot];
                 else
                     part.mesh.diffuseTexturePath=
-                        lucas->raceBodyTextures[slot];
+                        npc->raceBodyTextures[slot];
                 ++raceBodyTextureOverrides;
             }
 
@@ -10295,14 +10342,14 @@ bool Q230EnsureNpcActors() {
             // authored in the armor NIF. When that shape has no diffuse,
             // use the male RACE upper-body texture instead of the beige fallback.
             if(isArmorModel(path) &&
-               !lucas->raceBodyTextures.empty() &&
-               !lucas->raceBodyTextures[0u].empty()){
+               !npc->raceBodyTextures.empty() &&
+               !npc->raceBodyTextures[0u].empty()){
                 const bool q237EmptySkin=
                     part.mesh.diffuseTexturePath.empty();
                 const bool q237BaseSkin=
                     !q237EmptySkin &&
                     samePath(part.mesh.diffuseTexturePath,
-                             lucas->raceBodyTextures[0u]);
+                             npc->raceBodyTextures[0u]);
                 if(q237EmptySkin || q237BaseSkin){
                     if(!q237RaceBodyGeneratedKeys.empty() &&
                        !q237RaceBodyGeneratedKeys[0u].empty())
@@ -10310,42 +10357,42 @@ bool Q230EnsureNpcActors() {
                             q237RaceBodyGeneratedKeys[0u];
                     else
                         part.mesh.diffuseTexturePath=
-                            lucas->raceBodyTextures[0u];
+                            npc->raceBodyTextures[0u];
                     ++armorSkinFallbackOverrides;
                 }
             }
 
-            if(isEyeModel(path) && !lucas->eyeTexturePath.empty()){
-                part.mesh.diffuseTexturePath=lucas->eyeTexturePath;
+            if(isEyeModel(path) && !npc->eyeTexturePath.empty()){
+                part.mesh.diffuseTexturePath=npc->eyeTexturePath;
                 ++eyeTextureOverrides;
             }
 
-            if(!lucas->hairModel.empty() &&
-               samePath(path,lucas->hairModel) &&
-               !lucas->hairTexturePath.empty()){
-                part.mesh.diffuseTexturePath=lucas->hairTexturePath;
+            if(!npc->hairModel.empty() &&
+               samePath(path,npc->hairModel) &&
+               !npc->hairTexturePath.empty()){
+                part.mesh.diffuseTexturePath=npc->hairTexturePath;
                 ++hairTextureOverrides;
             }
 
             // Apply FGTS to the actual RACE Head slot, regardless of whatever
             // generic/default texture the NIF happened to contain internally.
             const bool q235PrimaryHeadShape=
-                !lucas->raceHeadModels.empty() &&
-                !lucas->raceHeadModels[0].empty() &&
-                samePath(path,lucas->raceHeadModels[0]) &&
+                !npc->raceHeadModels.empty() &&
+                !npc->raceHeadModels[0].empty() &&
+                samePath(path,npc->raceHeadModels[0]) &&
                 part.q2016ShapeIndex==0u &&
-                !lucas->raceHeadTextures.empty() &&
-                !lucas->raceHeadTextures[0].empty();
+                !npc->raceHeadTextures.empty() &&
+                !npc->raceHeadTextures[0].empty();
             if(q235PrimaryHeadShape && !q234FaceTex.empty()){
                 const std::string& q235BaseHeadTexture=
-                    lucas->raceHeadTextures[0];
+                    npc->raceHeadTextures[0];
                 Fo3FaceGenTextureQ234 generated;
                 if(LoadFo3FaceGenTextureQ234(
                         path,q235BaseHeadTexture,
                         q234FaceTex,generated)){
                     const std::string key=
                         "__q235_facegen__/"+
-                        lucas->editorId+"/head.dds";
+                        std::to_string(npc->baseFormId)+"/head.dds";
                     Fo3RgbaTexture rgba;
                     rgba.width=generated.width;
                     rgba.height=generated.height;
@@ -10353,7 +10400,7 @@ bool Q230EnsureNpcActors() {
                     rgba.sourcePath=
                         generated.baseTexturePath+" + "+generated.egtPath;
                     rgba.format="Q23.5-FaceGen-EGT";
-                    gQ234GeneratedTextures[key]=std::move(rgba);
+                    visual.generatedTextures[key]=std::move(rgba);
                     part.mesh.diffuseTexturePath=key;
                     ++faceGenTextureShapes;
                     faceGenTexturePixels+=
@@ -10376,31 +10423,18 @@ bool Q230EnsureNpcActors() {
             }
 
             Q215SuppressPlayerGoreCaps(part.mesh);
-            GpuObject gpu;
-            if(!UploadCpuObject(
-                    part,
-                    gExteriorOriginXQ1890,
-                    gExteriorOriginYQ1890,
-                    gExteriorOriginZQ1890,
-                    gpu)){
-                Q6H_LOGW("Q23.7 NPC PART MISS: actor=%s model=%s stage=gpu",
-                         lucas->editorId.c_str(),path.c_str());
-                continue;
-            }
-            gpu.q230NpcActor=true;
-            triangles+=static_cast<size_t>(gpu.vertexCount/3);
-            gQ230NpcActors.push_back(std::move(gpu));
-            ++gpuShapes;
+            triangles += part.mesh.indices.size()/3u;
+            visual.parts.push_back(std::move(part));
         }
     }
 
-    gQ230NpcReady=!gQ230NpcActors.empty();
-    Q6H_LOGI("Q23.7 NPC VISUAL READY: ready=%d actor=%s ref=%08X base=%08X assets=%zu cpuShapes=%zu gpuShapes=%zu triangles=%zu raceHeadParts=%zu egmAssets=%zu morphedShapes=%zu morphedVertices=%zu faceTextureShapes=%zu faceTexturePixels=%zu eyeTextureOverrides=%zu hairTextureOverrides=%zu hairTintShapes=%zu raceBodyTextureOverrides=%zu armorSkinFallbackOverrides=%zu bodyEgtTextures=%zu bodyEgtPixels=%zu rigidHeadAttachedShapes=%zu headAnchorReady=%d equippedMask=%08X faceGenGeometryApplied=%d faceGenTextureApplied=%d combinedCoeffs=(%zu,%zu,%zu) npcCoeffs=(%zu,%zu,%zu) raceCoeffs=(%zu,%zu,%zu) hairRGB=(%u,%u,%u) pose=bind source=RACE-head/body-slots+BMDT+BodyEGT+HeadBindAttach+RACE-baseline+NPC-FaceGen+EGM/EGT+HCLR",
-             gQ230NpcReady?1:0,
-             lucas->fullName.empty()?lucas->editorId.c_str():lucas->fullName.c_str(),
-             lucas->refFormId,lucas->baseFormId,
+    const bool ready=!visual.parts.empty();
+    Q6H_LOGI("Q23.7 NPC ASSEMBLY READY: ready=%d actor=%s ref=%08X base=%08X assets=%zu cpuShapes=%zu gpuShapes=%zu triangles=%zu raceHeadParts=%zu egmAssets=%zu morphedShapes=%zu morphedVertices=%zu faceTextureShapes=%zu faceTexturePixels=%zu eyeTextureOverrides=%zu hairTextureOverrides=%zu hairTintShapes=%zu raceBodyTextureOverrides=%zu armorSkinFallbackOverrides=%zu bodyEgtTextures=%zu bodyEgtPixels=%zu rigidHeadAttachedShapes=%zu headAnchorReady=%d equippedMask=%08X faceGenGeometryApplied=%d faceGenTextureApplied=%d combinedCoeffs=(%zu,%zu,%zu) npcCoeffs=(%zu,%zu,%zu) raceCoeffs=(%zu,%zu,%zu) hairRGB=(%u,%u,%u) pose=cpu-prepared source=RACE-head/body-slots+BMDT+BodyEGT+HeadBindAttach+RACE-baseline+NPC-FaceGen+EGM/EGT+HCLR",
+             ready?1:0,
+             npc->fullName.empty()?npc->editorId.c_str():npc->fullName.c_str(),
+             npc->refFormId,npc->baseFormId,
              models.size(),cpuShapes,gpuShapes,triangles,
-             lucas->raceHeadModels.size(),
+             npc->raceHeadModels.size(),
              faceGenEgmAssets,faceGenMorphedShapes,faceGenMorphedVertices,
              faceGenTextureShapes,faceGenTexturePixels,
              eyeTextureOverrides,hairTextureOverrides,hairTintShapes,
@@ -10411,38 +10445,23 @@ bool Q230EnsureNpcActors() {
              faceGenMorphedShapes>0u?1:0,
              faceGenTextureShapes>0u?1:0,
              q234FaceSym.size(),q234FaceAsym.size(),q234FaceTex.size(),
-             lucas->faceGenGeometrySymmetric.size(),
-             lucas->faceGenGeometryAsymmetric.size(),
-             lucas->faceGenTextureSymmetric.size(),
-             lucas->raceFaceGenGeometrySymmetric.size(),
-             lucas->raceFaceGenGeometryAsymmetric.size(),
-             lucas->raceFaceGenTextureSymmetric.size(),
-             static_cast<unsigned>(lucas->hairColor[0]),
-             static_cast<unsigned>(lucas->hairColor[1]),
-             static_cast<unsigned>(lucas->hairColor[2]));
-    if(!gQ230NpcReady) Q230DeleteNpcActors();
-    return gQ230NpcReady;
+             npc->faceGenGeometrySymmetric.size(),
+             npc->faceGenGeometryAsymmetric.size(),
+             npc->faceGenTextureSymmetric.size(),
+             npc->raceFaceGenGeometrySymmetric.size(),
+             npc->raceFaceGenGeometryAsymmetric.size(),
+             npc->raceFaceGenTextureSymmetric.size(),
+             static_cast<unsigned>(npc->hairColor[0]),
+             static_cast<unsigned>(npc->hairColor[1]),
+             static_cast<unsigned>(npc->hairColor[2]));
+    Q6H_LOGI("ACTOR CPU READY: actor=%s shapes=%zu skeletonBones=%zu tracks=%zu compressed=%zu ignoredCosmeticControllers=%zu animation=%s",
+        source.editorId.c_str(), visual.parts.size(), visual.skeleton.bones.size(),
+        visual.clip.tracks.size(), visual.clip.compressedTracks,
+        visual.clip.ignoredControllers, visual.clip.tracks.empty()?"bind-fallback":"original-idle");
+    return ready;
 }
 
-void Q230RenderNpcActors(bool alphaPass) {
-    if (!gExteriorStreamingActiveQ1890 ||
-        gExteriorWorldspaceQ1890 != 0x00000A74u) return;
-    if (!Q230EnsureNpcActors()) return;
-
-    for (const GpuObject& object : gQ230NpcActors) {
-        if (object.alphaBlend != alphaPass) continue;
-        if (object.zBufferTestQ1200) glEnable(GL_DEPTH_TEST);
-        else glDisable(GL_DEPTH_TEST);
-        glDepthMask(object.zBufferWriteQ1200 ? GL_TRUE : GL_FALSE);
-        if(alphaPass){
-            glEnable(GL_BLEND);
-            glBlendFunc(
-                Q1150BlendFactor(object.alphaSourceBlend,true),
-                Q1150BlendFactor(object.alphaDestBlend,false));
-        }
-        DrawSceneObject(object);
-    }
-}
+#include "fo3-npc-runtime.inc"
 
 bool Q210EnsurePlayerBody() {
     if (gQ210PlayerBodyReady) return true;
@@ -12382,6 +12401,10 @@ void Q1280ShutdownPostQ1280() {
 
 void Q6HDeleteFramebuffers(GLsizei n, const GLuint* framebuffers) {
     gSceneLoad.collisionPreparation.Reset();
+    if (gSceneLoad.preparation.Ready()) {
+        for (auto& actor : gSceneLoad.preparation.Get().actors)
+            Q74DeleteGpuObjects(actor.objects);
+    }
     gSceneLoad.preparation.Reset();
     Q74DeleteGpuObjects(gSceneLoad.replacement);
     gSceneLoad.active = false;

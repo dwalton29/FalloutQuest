@@ -2,11 +2,20 @@
 
 Experimental standalone Meta Quest runtime for user-supplied Fallout 3 game data.
 
-## Current milestone: 0.24.15 — Loading UI texture fix
+## Current milestone: 0.25.0 — Original NPC idle playback
 
-The original overlay and compass use `TileShaderProperty` texture filenames.
-These now decode correctly instead of rendering white fallback panels over the
-loading artwork. Loading UI shapes without resolved textures are skipped.
+Actors in Megaton and explicitly loaded interior CELLs now share an authored
+appearance assembly path instead of selecting only Lucas Simms. Female race
+parts and wearable armour slots resolve correctly; appearance template categories
+are inherited independently. Original skeletons and idle KFs drive weighted
+body/clothing meshes and rigid head attachments. Compressed cubic B-spline,
+linear, Hermite and XYZ rotation tracks are decoded from the supplied game data.
+
+NPC CPU preparation runs in the scene worker; GPU shapes upload one per frame
+behind the loading screen and publish with their scene. Old actor buffers retire
+on transition. Actors remain at authored initial placements: schedules, navigation,
+dialogue, combat, creature and levelled-actor resolution are later milestones.
+No synthetic movement or replacement character assets are included.
 
 FalloutQuest is a native ARM64/OpenXR reimplementation of the runtime needed to
 interpret Fallout 3's original data on Quest. It is not a port of the original

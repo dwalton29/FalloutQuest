@@ -1,0 +1,138 @@
+#include "fo3-npc.h"
+#include "fo3-texture-bsa.h"
+#include <cassert>
+#include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <iostream>
+bool LoadFalloutMeshFile(const std::string &, std::vector<uint8_t> &,
+                         std::string *) {
+  return false;
+}
+bool LoadFalloutTextureRgba(const std::string &, Fo3RgbaTexture &) {
+  return false;
+}
+using Bytes = std::vector<uint8_t>;
+static void U32(Bytes &b, uint32_t v) {
+  for (int i = 0; i < 4; ++i)
+    b.push_back(v >> (i * 8));
+}
+static Bytes Word(uint32_t v) {
+  Bytes b;
+  U32(b, v);
+  return b;
+}
+static Bytes Text(const char *s) { return Bytes(s, s + std::strlen(s) + 1); }
+static void Sub(Bytes &b, const char *t, const Bytes &v) {
+  b.insert(b.end(), t, t + 4);
+  b.push_back(v.size() & 255);
+  b.push_back((v.size() >> 8) & 255);
+  b.insert(b.end(), v.begin(), v.end());
+}
+static Bytes Record(const char *t, uint32_t id, const Bytes &data,
+                    uint32_t flags = 0) {
+  Bytes b;
+  b.insert(b.end(), t, t + 4);
+  U32(b, data.size());
+  U32(b, flags);
+  U32(b, id);
+  U32(b, 0);
+  U32(b, 0);
+  b.insert(b.end(), data.begin(), data.end());
+  return b;
+}
+static void Add(Bytes &b, const Bytes &v) {
+  b.insert(b.end(), v.begin(), v.end());
+}
+int main(int argc, char **argv) {
+  Bytes esm, race;
+  Sub(race, "EDID", Text("TestRace"));
+  Sub(race, "NAM0", {});
+  Sub(race, "MNAM", {});
+  Sub(race, "INDX", Word(0));
+  Sub(race, "MODL", Text("male-head.nif"));
+  Sub(race, "FNAM", {});
+  Sub(race, "INDX", Word(0));
+  Sub(race, "MODL", Text("female-head.nif"));
+  Sub(race, "NAM1", {});
+  Sub(race, "MNAM", {});
+  Sub(race, "INDX", Word(0));
+  Sub(race, "MODL", Text("male-body.nif"));
+  Sub(race, "FNAM", {});
+  Sub(race, "INDX", Word(0));
+  Sub(race, "MODL", Text("female-body.nif"));
+  Add(esm, Record("RACE", 10, race));
+  Bytes armor;
+  Sub(armor, "EDID", Text("Armor"));
+  Sub(armor, "MODL", Text("male-worn.nif"));
+  Sub(armor, "MOD2", Text("male-dropped.nif"));
+  Sub(armor, "MOD3", Text("female-worn.nif"));
+  Sub(armor, "BMDT", Word(4));
+  Add(esm, Record("ARMO", 20, armor));
+  auto npc = [&](uint32_t id, bool female, uint16_t templateFlags = 0) {
+    Bytes b, acbs(24);
+    acbs[0] = female ? 1 : 0;
+    acbs[22] = templateFlags & 255;
+    acbs[23] = templateFlags >> 8;
+    Sub(b, "EDID", Text(female ? "Female" : "Male"));
+    Sub(b, "ACBS", acbs);
+    Sub(b, "RNAM", Word(10));
+    Sub(b, "MODL", Text("skeleton.nif"));
+    Bytes inv = Word(20);
+    U32(inv, 1);
+    Sub(b, "CNTO", inv);
+    if (templateFlags)
+      Sub(b, "TPLT", Word(30));
+    Add(esm, Record("NPC_", id, b));
+  };
+  npc(30, false);
+  npc(31, true);
+  npc(32, true, 1 | 64 | 256);
+  Bytes refs;
+  for (uint32_t i = 0; i < 5; ++i) {
+    Bytes r;
+    Sub(r, "NAME", Word(30 + (i < 3 ? i : 0)));
+    Sub(r, "DATA", Bytes(24));
+    Add(refs, Record("ACHR", 100 + i, r, i == 3 ? 0x800 : i == 4 ? 0x20 : 0));
+  }
+  Bytes group;
+  group.insert(group.end(), {'G', 'R', 'U', 'P'});
+  U32(group, refs.size() + 24);
+  U32(group, 77);
+  U32(group, 6);
+  U32(group, 0);
+  U32(group, 0);
+  Add(group, refs);
+  Add(esm, group);
+  const auto path = std::filesystem::temp_directory_path() /
+                    "falloutquest-npc-record-tests.esm";
+  {
+    std::ofstream out(path, std::ios::binary);
+    out.write(reinterpret_cast<const char *>(esm.data()), esm.size());
+  }
+  std::vector<Fo3NpcActorQ230> actors;
+  assert(LoadFo3CellActors(77, actors, path.string()));
+  assert(actors.size() == 3);
+  assert(!actors[0].female && actors[0].raceHeadModels[0] == "male-head.nif");
+  assert(actors[1].female && actors[1].raceHeadModels[0] == "female-head.nif");
+  assert(actors[1].raceBodyModels[0] == "female-body.nif");
+  assert(actors[1].inventory[0].modelPath == "female-worn.nif");
+  assert(!actors[2].female && actors[2].raceHeadModels[0] == "male-head.nif");
+  assert(!LoadFo3CellActors(78, actors, path.string()) && actors.empty());
+  std::filesystem::remove(path);
+  if (argc > 1) {
+    assert(LoadFo3CellActors(0xa96, actors, argv[1]));
+    assert(actors.size() == 3);
+    bool lucas = false;
+    for (const auto &a : actors)
+      if (a.editorId == "LucasSimms") {
+        lucas = true;
+        assert(a.raceEditorId == "AfricanAmerican" &&
+               a.raceHeadModels.size() == 8);
+        assert(a.inventory[1].modelPath == "Armor\\LucasSimms\\M\\OutfitM.NIF");
+      }
+    assert(lucas);
+    std::cout << "Original ESM: 3 Megaton actors resolved\n";
+  }
+  std::cout << "NPC record tests passed\n";
+}

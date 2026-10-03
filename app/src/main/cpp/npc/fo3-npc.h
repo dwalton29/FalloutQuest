@@ -60,6 +60,10 @@ struct Fo3NpcActorQ230 {
     bool hasFaceGenGeometry = false;
 };
 
+bool LoadFo3CellActors(uint32_t cellFormId,
+    std::vector<Fo3NpcActorQ230>& outActors,
+    const std::string& esmPath = {});
+
 bool LoadFo3MegatonExteriorActorsQ230(
     std::vector<Fo3NpcActorQ230>& outActors);
 

@@ -267,3 +267,67 @@ require a resolved DDS before upload, including when a material has no filename.
 The originals decode into eight overlay shapes and two compass shapes, with
 all ten texture references and blend factors recovered. Tests cover truncated
 material blocks and optionally load both originals without redistributing them.
+
+
+## Original NPC idle runtime (0.25.0)
+
+`npc/fo3-npc.cpp` resolves explicit CELL ACHR references and appearance data.
+Deleted/initially-disabled references are excluded. NPC templates inherit only
+consumed appearance categories (traits, model/animation, base name, inventory);
+stat-only templates do not force appearance resolution through their unrelated
+levelled-template chain. Cycles, unresolved appearance templates and unsupported
+levelled actors are logged/skipped. RACE tables select the actor's gender,
+ARMO selects MODL/MOD3 wearable meshes, and NAM6 height combines with XSCL.
+The display-equipment policy takes positive-count, non-overlapping armour in
+inventory order. This is a provisional visual policy, not Bethesda's complete
+AI equipment scoring, levelled inventory or weapon-equipping implementation.
+
+`npc/fo3-actor-animation.*` owns portable transform/pose evaluation.
+`rendering/mesh/fo3-actor-animation-decode.inc` shares the existing bounds-checked
+NIF parser and exposes skeleton/KF decoding. The layouts are based on NifTools
+nifxml and verified with the supplied 20.2.0.7 / user 11 / Bethesda 34 files.
+Skeleton parents, rotations, translation and scale remain intact; complete
+inverse skeleton bind matrices produce bone deformation matrices. Mesh bone
+names map to this skeleton while the existing authored skin weights are retained.
+All Lucas outfit/head bone names matched the supplied skeleton in a host probe.
+
+KF playback supports ordinary transform channels, linear quaternion SLERP,
+linear/Hermite scalar/vector keys, XYZ Euler rotation groups, float and signed
+short compressed open uniform cubic B-splines. Compact controls expand with
+`offset + short/32767 * halfRange`; quaternion curves normalize after evaluation.
+The sequence's accumulation root starts at identity before controller evaluation,
+avoiding a second application of the skeleton's root translation. Sequence cycle
+and frequency are respected. TBC and quadratic quaternion tracks are explicitly
+rejected rather than approximated. Non-transform cosmetic float/visibility
+controllers are counted but not evaluated; facial expression and lip sync need
+TRI/controller support. Walking KFs decode in tests; root-motion extraction and
+locomotion scheduling are not connected to the actor runtime yet.
+
+`npc/fo3-npc-runtime.inc` bridges CPU staging to renderer-owned actor instances.
+Scene preparation builds meshes, FaceGen textures, skeleton and the original
+skeleton-directory `locomotion/mtidle.kf` on the existing joined worker. Temporary
+generated texture maps are request-local until GPU publication. Actor shapes
+upload one per submitted frame while the loading presentation remains visible.
+They publish atomically with the new scene; aborted/staged and retired resources
+are freed on the rendering thread. Generated CPU textures are released after
+upload, with decoded/uploaded texture caches retaining their usual ownership.
+
+Pose updates happen once per stereo frame, skin each source vertex once, and
+copy posed positions/normals/tangents into reusable expanded GPU buffers.
+Rigid eye/mouth/head parts use the same head-bone deformation as the body.
+The rig captures its scene origin explicitly. Scene replacement rebuilds actor
+resources, avoiding reuse of VBOs relative to a previous door-arrival origin.
+
+Current actor scope is Megaton plus explicitly loaded interiors; Wasteland
+persistent actor residency, ACRE/CREA, enable-parent/quest state, schedules,
+NAVM pathfinding, dialogue, scripts, actor collision and combat are not implemented.
+Actors play original idle poses at authored initial ACHR placements. This milestone
+provides a visual/animation foundation, not a claim of functioning Fallout AI.
+
+Host tests in `tests/nif` cover gender/wearable slot selection, selective template
+inheritance, deleted/disabled references, matrix inverses/hierarchy cycles,
+accumulation-root handling, linear/cubic sampling, cycle modes and invalid files.
+Optional integration arguments sample the original idle/walk for 360 frames each
+and resolve the supplied Megaton ESM; no game data is shipped in the repository.
+Headset stereo appearance, skin seams, door-return placement and performance
+still require an on-device pass.

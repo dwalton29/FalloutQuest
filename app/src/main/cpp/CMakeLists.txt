@@ -20,6 +20,7 @@ add_library(falloutquest SHARED
     data/fo3-texture-bsa.cpp
     rendering/water/fo3-water.cpp
     npc/fo3-npc.cpp
+    npc/fo3-actor-animation.cpp
     ${ANDROID_NDK}/sources/android/native_app_glue/android_native_app_glue.c
 )
 
