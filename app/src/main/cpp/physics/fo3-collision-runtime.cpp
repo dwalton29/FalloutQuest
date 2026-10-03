@@ -1,7 +1,7 @@
 extern void PumpFo3AndroidEventsQ1860();
 #include "fo3-collision-overlay.h"
 #include "fo3-nif-collision.h"
-#include "fo3-transition-q74.h"
+#include "fo3-transition.h"
 #include "fo3-nif-metadata.h"
 #include "fo3-terrain-q76.h"
 
