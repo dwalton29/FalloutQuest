@@ -1490,7 +1490,7 @@ bool ResolveFo3PlayerMotionLegacyQ716(float currentX, float currentZ,
 }
 
 
-#include "fo3-player-controller-runtime.inc"
+#include "player/fo3-player-controller.inc"
 
 // Q19.3 exterior collision snapshot. All expensive derived structures are built
 // from the prewarmed transformed REFR cache on the serialized asset worker.
