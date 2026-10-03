@@ -5,6 +5,7 @@
 // Fallout - Textures.bsa and interprets the exact vanilla FNT/TAI/TEX/DDS data.
 
 #include "fo3-texture-bsa.h"
+#include "fo3-asset-store.h"
 
 #include <GLES3/gl3.h>
 #include <android/log.h>
@@ -18,16 +19,10 @@
 #include <sstream>
 #include <string>
 #include <vector>
-#include <zlib.h>
 
 namespace fo3hudassets {
 
 constexpr const char* kTag = "FalloutQuest";
-constexpr const char* kTextureBsaPaths[] = {
-    "/data/user/0/com.falloutquest.app/files/Fallout3/Data/Fallout - Textures.bsa",
-    "/data/user/0/com.falloutquest.app/files/Fallout3/Data/textures.bsa",
-};
-constexpr uint32_t kBsaVersion = 104u;
 constexpr size_t kMaxRawBytes = 16u * 1024u * 1024u;
 
 inline uint32_t ReadU32(const uint8_t* p) {
@@ -42,182 +37,15 @@ inline float ReadF32(const uint8_t* p) {
     std::memcpy(&value, &raw, sizeof(value));
     return value;
 }
-inline bool ReadExact(FILE* f, void* dst, size_t bytes) {
-    return std::fread(dst, 1, bytes, f) == bytes;
-}
-inline std::string Normalize(std::string s) {
-    for (char& c : s) {
-        if (c == '/') c = '\\';
-        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    }
-    while (!s.empty() && (s.front() == '\\' || s.front() == '/')) s.erase(s.begin());
-    return s;
-}
-inline std::string StripTextures(std::string s) {
-    s = Normalize(std::move(s));
-    const std::string prefix = "textures\\";
-    if (s.rfind(prefix, 0) == 0) s.erase(0, prefix.size());
-    return s;
-}
-inline bool ReadCString(FILE* f, std::string& out) {
-    out.clear();
-    for (size_t i = 0; i < 8192u; ++i) {
-        const int ch = std::fgetc(f);
-        if (ch == EOF) return false;
-        if (ch == 0) return true;
-        out.push_back(static_cast<char>(ch));
-    }
-    return false;
-}
-
-struct BsaEntry {
-    uint32_t storedBytes = 0;
-    uint32_t offset = 0;
-    bool compressionToggle = false;
-};
-struct PendingEntry {
-    std::string folder;
-    BsaEntry entry;
-};
-
-inline bool FindRawEntry(FILE* f, const std::string& request,
-                         BsaEntry& out, uint32_t& outFlags, std::string& outPath) {
-    uint8_t hdr[36]{};
-    if (!ReadExact(f, hdr, sizeof(hdr)) || std::memcmp(hdr, "BSA\0", 4) != 0) return false;
-    const uint32_t version = ReadU32(hdr + 4);
-    const uint32_t foldersOffset = ReadU32(hdr + 8);
-    const uint32_t archiveFlags = ReadU32(hdr + 12);
-    const uint32_t folderCount = ReadU32(hdr + 16);
-    const uint32_t fileCount = ReadU32(hdr + 20);
-    if (version != kBsaVersion || (archiveFlags & 1u) == 0u || (archiveFlags & 2u) == 0u ||
-        folderCount == 0u || folderCount > 1000000u ||
-        fileCount == 0u || fileCount > 3000000u || foldersOffset < 36u) return false;
-    if (fseeko(f, static_cast<off_t>(foldersOffset), SEEK_SET) != 0) return false;
-
-    std::vector<uint32_t> folderCounts;
-    folderCounts.reserve(folderCount);
-    for (uint32_t i = 0; i < folderCount; ++i) {
-        uint8_t record[16]{};
-        if (!ReadExact(f, record, sizeof(record))) return false;
-        const uint32_t count = ReadU32(record + 8);
-        if (count > fileCount) return false;
-        folderCounts.push_back(count);
-    }
-
-    std::vector<PendingEntry> pending;
-    pending.reserve(fileCount);
-    for (uint32_t count : folderCounts) {
-        uint8_t len = 0;
-        if (!ReadExact(f, &len, 1) || len == 0u) return false;
-        std::vector<char> folderBytes(len);
-        if (!ReadExact(f, folderBytes.data(), folderBytes.size())) return false;
-        if (!folderBytes.empty() && folderBytes.back() == '\0') folderBytes.pop_back();
-        const std::string folder = Normalize(std::string(folderBytes.begin(), folderBytes.end()));
-        for (uint32_t j = 0; j < count; ++j) {
-            uint8_t rec[16]{};
-            if (!ReadExact(f, rec, sizeof(rec))) return false;
-            const uint32_t rawSize = ReadU32(rec + 8);
-            PendingEntry p;
-            p.folder = folder;
-            p.entry.storedBytes = rawSize & 0x3fffffffu;
-            p.entry.compressionToggle = (rawSize & 0x40000000u) != 0u;
-            p.entry.offset = ReadU32(rec + 12);
-            pending.push_back(std::move(p));
-        }
-    }
-
-    const std::string wanted = StripTextures(request);
-    for (PendingEntry& p : pending) {
-        std::string fileName;
-        if (!ReadCString(f, fileName)) return false;
-        std::string full = p.folder;
-        if (!full.empty() && !fileName.empty()) full += "\\";
-        full += Normalize(fileName);
-        if (StripTextures(full) == wanted) {
-            out = p.entry;
-            outFlags = archiveFlags;
-            outPath = full;
-            return true;
-        }
-    }
-    return true;
-}
-
-inline bool LoadRawFromOneBsa(const char* path, const std::string& request,
-                              std::vector<uint8_t>& out, std::string* resolved) {
-    FILE* f = std::fopen(path, "rb");
-    if (!f) return false;
-
-    BsaEntry entry;
-    uint32_t flags = 0;
-    std::string storedPath;
-    if (!FindRawEntry(f, request, entry, flags, storedPath) || storedPath.empty()) {
-        std::fclose(f);
-        return false;
-    }
-    if (entry.storedBytes == 0u || entry.storedBytes > kMaxRawBytes ||
-        fseeko(f, static_cast<off_t>(entry.offset), SEEK_SET) != 0) {
-        std::fclose(f);
-        return false;
-    }
-
-    size_t remaining = entry.storedBytes;
-    if ((flags & 0x100u) != 0u) {
-        uint8_t nameLen = 0;
-        if (!ReadExact(f, &nameLen, 1) || remaining < static_cast<size_t>(nameLen) + 1u) {
-            std::fclose(f);
-            return false;
-        }
-        if (fseeko(f, static_cast<off_t>(nameLen), SEEK_CUR) != 0) {
-            std::fclose(f);
-            return false;
-        }
-        remaining -= static_cast<size_t>(nameLen) + 1u;
-    }
-
-    const bool compressed = ((flags & 4u) != 0u) != entry.compressionToggle;
-    bool ok = false;
-    out.clear();
-    if (!compressed) {
-        if (remaining > 0u && remaining <= kMaxRawBytes) {
-            out.resize(remaining);
-            ok = ReadExact(f, out.data(), out.size());
-        }
-    } else if (remaining >= 4u) {
-        uint8_t sizeBytes[4]{};
-        if (ReadExact(f, sizeBytes, sizeof(sizeBytes))) {
-            const uint32_t originalSize = ReadU32(sizeBytes);
-            remaining -= 4u;
-            if (originalSize > 0u && originalSize <= kMaxRawBytes &&
-                remaining > 0u && remaining <= kMaxRawBytes) {
-                std::vector<uint8_t> packed(remaining);
-                if (ReadExact(f, packed.data(), packed.size())) {
-                    out.resize(originalSize);
-                    uLongf dstLen = static_cast<uLongf>(out.size());
-                    const int zr = uncompress(reinterpret_cast<Bytef*>(out.data()), &dstLen,
-                                              reinterpret_cast<const Bytef*>(packed.data()),
-                                              static_cast<uLong>(packed.size()));
-                    ok = zr == Z_OK && dstLen == originalSize;
-                }
-            }
-        }
-    }
-    std::fclose(f);
-    if (!ok) {
-        out.clear();
-        return false;
-    }
-    if (resolved) *resolved = storedPath;
-    __android_log_print(ANDROID_LOG_INFO, kTag,
-                        "RAW UI ASSET: path=%s bytes=%zu compressed=%d",
-                        storedPath.c_str(), out.size(), compressed ? 1 : 0);
-    return true;
-}
-
 inline bool LoadRaw(const std::string& request, std::vector<uint8_t>& out,
                     std::string* resolved = nullptr) {
-    for (const char* path : kTextureBsaPaths) {
-        if (LoadRawFromOneBsa(path, request, out, resolved)) return true;
+    fo3assets::BsaFileInfo info;
+    if (fo3assets::LoadTextureFile(request, out, &info, kMaxRawBytes)) {
+        if (resolved) *resolved = info.path;
+        __android_log_print(ANDROID_LOG_INFO, kTag,
+                            "RAW UI ASSET: path=%s bytes=%zu compressed=%d",
+                            info.path.c_str(), out.size(), info.compressed ? 1 : 0);
+        return true;
     }
     __android_log_print(ANDROID_LOG_ERROR, kTag,
                         "RAW UI ASSET MISS: %s", request.c_str());

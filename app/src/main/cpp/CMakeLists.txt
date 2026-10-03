@@ -12,6 +12,8 @@ add_library(falloutquest SHARED
     physics/fo3-nif-collision-parser.cpp
     physics/fo3-collision-runtime.cpp
     data/fo3-bsa-reader.cpp
+    data/fo3-bsa-archive.cpp
+    data/fo3-asset-store.cpp
     data/fo3-esm-reader.cpp
     data/fo3-texture-bsa.cpp
     rendering/water/fo3-water.cpp

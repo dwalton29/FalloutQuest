@@ -51,6 +51,12 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      - name: Test shared BSA reader on host
+        run: |
+          cmake -S tests/assets -B build/host-assets
+          cmake --build build/host-assets --parallel 2
+          ctest --test-dir build/host-assets --output-on-failure
+
       - name: Restore stable development signing key
         run: |
           base64 --decode app/falloutquest-dev.keystore.b64 > app/falloutquest-dev.keystore

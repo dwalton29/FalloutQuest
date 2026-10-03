@@ -19,11 +19,34 @@ generated-source patching for engine behaviour.
 - fo3-runtime.cpp: OpenXR lifecycle, renderer, scene/runtime streaming and frame loop.
 - fo3-runtime-loop.inc: mature runtime/frame implementation included by fo3-runtime.cpp.
 - fo3-cell-world.cpp: CELL/WRLD/LAND scene construction and terrain integration.
-- fo3-static-nif-runtime.cpp: static NIF render-mesh/material loading.
+- rendering/mesh/fo3-static-nif.cpp: static NIF render-mesh/material loading.
 - fo3-collision-runtime.cpp: authored collision world and collision entry points.
-- fo3-player-controller-runtime.inc: consolidated exterior player controller.
-- fo3-worldspace-runtime.inc and fo3-terrain-*-runtime.inc: consolidated world/terrain implementation.
+- player/fo3-player-controller.inc: consolidated exterior player controller.
+- world/fo3-worldspace-runtime.inc and rendering/terrain/fo3-terrain-*.inc: consolidated world/terrain implementation.
 - Existing BSA, ESM, NIF and texture helpers remain normal source files.
+
+## Shared assets: 0.24.9
+
+`data/fo3-bsa-archive.cpp` is the single BSA v104 index/extraction implementation.
+It has no Android/GL dependency. Index publication uses `std::call_once`; reads
+use independent file handles, and failed reads return empty output buffers.
+
+`data/fo3-asset-store.cpp` owns the archive registry and the existing data root
+and texture archive fallback order. Mesh loading, DDS/cubemap loading and raw
+HUD font/atlas loading use the same reader and shared indexes. DDS decoding
+remains in `fo3-texture-bsa.cpp`; mesh/NIF and HUD format interpretation remain
+with their existing consumers. No loose-file or plugin precedence is added.
+
+Archives (including unavailable archives) are cached for the process lifetime,
+as with the previous loaders. Restart after changing the supplied archive set.
+Mesh prefix probes now limit the sorted result rather than an arbitrary hash
+table iteration; full lists and rendering asset lookup are unchanged.
+
+Host tests in `tests/assets` validate compression, aliases, bounds and parallel
+reads without game assets. During this extraction, the adapters were compared
+with the previous loaders using the supplied 224 Megaton NIFs and 78 DDS files
+in temporary test archives, and the original supplied Misc BSA. The temporary
+archives and copyrighted data are not repository contents.
 
 ## Source-of-truth rule
 

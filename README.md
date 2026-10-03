@@ -2,7 +2,7 @@
 
 Experimental standalone Meta Quest runtime for user-supplied Fallout 3 game data.
 
-## Current milestone: Q18 — Wasteland cell residency
+## Current milestone: 0.24.9 — Shared asset access
 
 FalloutQuest is a native ARM64/OpenXR reimplementation of the runtime needed to
 interpret Fallout 3's original data on Quest. It is not a port of the original
@@ -17,7 +17,13 @@ infrastructure, and standalone OpenXR rendering.
 Q17 froze the mature generated Q16.27 runtime into ordinary C++ source files.
 The historical Q-series CMake text-rewrite chain is no longer part of the build.
 
-Q18 is focused on the Capital Wasteland streaming path. The runtime builds an
+The current consolidation adds one thread-safe BSA index/extraction layer for
+mesh, texture/cubemap and raw HUD assets. Existing loading APIs and DDS decoding
+remain in place. See `docs/ARCHITECTURE.md` and `tests/assets/README.md` for the
+ownership boundary and portable checks. Other world, player and renderer
+subsystems are being extracted incrementally.
+
+At the Q18 baseline, the Capital Wasteland streaming path built an
 immutable in-memory index of authored Wasteland CELL/REFR/base metadata once,
 then resolves rolling resident windows from that index instead of rescanning
 Fallout3.esm on every cell crossing. Full-detail objects/collision remain a 3x3

@@ -1,68 +1,19 @@
 #include "fo3-texture-bsa.h"
+#include "fo3-asset-store.h"
 
 #include <android/log.h>
 #include <algorithm>
-#include <cctype>
-#include <cstdio>
-#include <cstdint>
 #include <cstring>
-#include <string>
-#include <unordered_map>
-#include <vector>
-#include <zlib.h>
+#include <utility>
 
 namespace {
 
 constexpr const char* TAG = "FalloutQuest";
-constexpr const char* TEXTURE_BSA_PATHS[] = {
-    "/data/user/0/com.falloutquest.app/files/Fallout3/Data/Fallout - Textures.bsa",
-    "/data/user/0/com.falloutquest.app/files/Fallout3/Data/textures.bsa",
-};
-constexpr uint32_t BSA_VERSION_FO3 = 104u;
-constexpr uint32_t MAX_TARGET_BYTES = 128u * 1024u * 1024u;
 constexpr int MAX_TEXTURE_DIMENSION = 8192;
 
 #define FQ_LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
 #define FQ_LOGW(...) __android_log_print(ANDROID_LOG_WARN, TAG, __VA_ARGS__)
 #define FQ_LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
-
-struct FolderRecord {
-    uint32_t count = 0;
-};
-
-struct RawFileRecord {
-    std::string folder;
-    uint32_t size = 0;
-    uint32_t offset = 0;
-    bool compressionToggle = false;
-};
-
-struct BsaHeader {
-    uint32_t version = 0;
-    uint32_t foldersOffset = 0;
-    uint32_t archiveFlags = 0;
-    uint32_t folderCount = 0;
-    uint32_t fileCount = 0;
-    uint32_t totalFolderNameLength = 0;
-    uint32_t totalFileNameLength = 0;
-    uint32_t fileFlags = 0;
-};
-
-struct TargetEntry {
-    bool found = false;
-    std::string storedPath;
-    uint32_t size = 0;
-    uint32_t offset = 0;
-    bool compressionToggle = false;
-};
-
-struct TextureArchiveIndexQ1830 {
-    bool attempted = false;
-    bool ready = false;
-    BsaHeader header{};
-    std::unordered_map<std::string, TargetEntry> files;
-};
-std::unordered_map<std::string, TextureArchiveIndexQ1830> gTextureArchiveIndexesQ1830;
 
 uint16_t ReadLe16(const uint8_t* p) {
     return static_cast<uint16_t>(p[0]) |
@@ -81,222 +32,6 @@ constexpr uint32_t FourCC(char a, char b, char c, char d) {
            (static_cast<uint32_t>(static_cast<uint8_t>(b)) << 8) |
            (static_cast<uint32_t>(static_cast<uint8_t>(c)) << 16) |
            (static_cast<uint32_t>(static_cast<uint8_t>(d)) << 24);
-}
-
-bool ReadExact(FILE* file, void* dst, size_t size) {
-    return std::fread(dst, 1, size, file) == size;
-}
-
-std::string NormalizePath(std::string value) {
-    for (char& ch : value) {
-        if (ch == '/') ch = '\\';
-        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
-    }
-    while (!value.empty() && (value.front() == '\\' || value.front() == '/')) {
-        value.erase(value.begin());
-    }
-    return value;
-}
-
-std::string CanonicalTextureKeyQ1830(std::string value) {
-    value = NormalizePath(std::move(value));
-    // Bethesda-generated LOD NIFs commonly author full Data\\Textures paths,
-    // while BSA entries are stored as textures\\... . Treat all three forms
-    // (Data\\Textures, textures, bare relative) as the same archive key.
-    if (value.rfind("data\\", 0) == 0) value = value.substr(5);
-    if (value.rfind("textures\\", 0) == 0) value = value.substr(9);
-    return value;
-}
-
-bool ReadCString(FILE* file, std::string& out) {
-    out.clear();
-    for (size_t i = 0; i < 8192u; ++i) {
-        const int ch = std::fgetc(file);
-        if (ch == EOF) return false;
-        if (ch == 0) return true;
-        out.push_back(static_cast<char>(ch));
-    }
-    return false;
-}
-
-bool ReadHeader(FILE* file, BsaHeader& out) {
-    uint8_t header[36]{};
-    if (!ReadExact(file, header, sizeof(header))) return false;
-    if (std::memcmp(header, "BSA\0", 4) != 0) return false;
-
-    out.version = ReadLe32(header + 4);
-    out.foldersOffset = ReadLe32(header + 8);
-    out.archiveFlags = ReadLe32(header + 12);
-    out.folderCount = ReadLe32(header + 16);
-    out.fileCount = ReadLe32(header + 20);
-    out.totalFolderNameLength = ReadLe32(header + 24);
-    out.totalFileNameLength = ReadLe32(header + 28);
-    out.fileFlags = ReadLe32(header + 32);
-    return true;
-}
-
-bool BuildTextureArchiveIndexQ1830(const char* archivePath,
-                                      TextureArchiveIndexQ1830& index) {
-    if (index.attempted) return index.ready;
-    index.attempted = true;
-
-    FILE* file = std::fopen(archivePath, "rb");
-    if (!file) return false;
-
-    BsaHeader header;
-    if (!ReadHeader(file, header) ||
-        header.version != BSA_VERSION_FO3 ||
-        (header.archiveFlags & 1u) == 0u ||
-        (header.archiveFlags & 2u) == 0u ||
-        header.folderCount == 0u || header.folderCount > 1000000u ||
-        header.fileCount == 0u || header.fileCount > 3000000u ||
-        header.foldersOffset < 36u ||
-        fseeko(file, static_cast<off_t>(header.foldersOffset), SEEK_SET) != 0) {
-        std::fclose(file);
-        return false;
-    }
-
-    std::vector<FolderRecord> folders;
-    folders.reserve(header.folderCount);
-    for (uint32_t i = 0; i < header.folderCount; ++i) {
-        uint8_t record[16]{};
-        if (!ReadExact(file, record, sizeof(record))) {
-            std::fclose(file);
-            return false;
-        }
-        const uint32_t count = ReadLe32(record + 8);
-        if (count > header.fileCount) {
-            std::fclose(file);
-            return false;
-        }
-        folders.push_back(FolderRecord{count});
-    }
-
-    std::vector<RawFileRecord> rawFiles;
-    rawFiles.reserve(header.fileCount);
-    for (const FolderRecord& folder : folders) {
-        uint8_t nameLen = 0;
-        if (!ReadExact(file, &nameLen, 1) || nameLen == 0u) {
-            std::fclose(file);
-            return false;
-        }
-        std::vector<char> nameBytes(nameLen);
-        if (!ReadExact(file, nameBytes.data(), nameBytes.size())) {
-            std::fclose(file);
-            return false;
-        }
-        if (!nameBytes.empty() && nameBytes.back() == '\0') nameBytes.pop_back();
-        const std::string folderName =
-            NormalizePath(std::string(nameBytes.begin(), nameBytes.end()));
-
-        for (uint32_t j = 0; j < folder.count; ++j) {
-            uint8_t fileRecord[16]{};
-            if (!ReadExact(file, fileRecord, sizeof(fileRecord))) {
-                std::fclose(file);
-                return false;
-            }
-            const uint32_t sizeRaw = ReadLe32(fileRecord + 8);
-            RawFileRecord raw;
-            raw.folder = folderName;
-            raw.size = sizeRaw & 0x3fffffffu;
-            raw.offset = ReadLe32(fileRecord + 12);
-            raw.compressionToggle = (sizeRaw & 0x40000000u) != 0u;
-            rawFiles.push_back(std::move(raw));
-        }
-    }
-
-    index.files.reserve(rawFiles.size() * 2u);
-    for (RawFileRecord& raw : rawFiles) {
-        std::string fileName;
-        if (!ReadCString(file, fileName)) {
-            std::fclose(file);
-            return false;
-        }
-        std::string fullPath = raw.folder;
-        if (!fullPath.empty() && !fileName.empty()) fullPath += "\\";
-        fullPath += NormalizePath(fileName);
-        fullPath = NormalizePath(fullPath);
-
-        TargetEntry entry;
-        entry.found = true;
-        entry.storedPath = fullPath;
-        entry.size = raw.size;
-        entry.offset = raw.offset;
-        entry.compressionToggle = raw.compressionToggle;
-        index.files[CanonicalTextureKeyQ1830(fullPath)] = std::move(entry);
-    }
-
-    std::fclose(file);
-    index.header = header;
-    index.ready = true;
-    FQ_LOGI("Q18.3 TEXTURE BSA INDEX READY: path=%s textures=%zu flags=0x%08X",
-            archivePath, index.files.size(), header.archiveFlags);
-    return true;
-}
-
-const TargetEntry* FindTargetQ1830(const char* archivePath,
-                                   const std::string& requestedPath,
-                                   TextureArchiveIndexQ1830*& outIndex) {
-    TextureArchiveIndexQ1830& index = gTextureArchiveIndexesQ1830[archivePath];
-    outIndex = &index;
-    if (!BuildTextureArchiveIndexQ1830(archivePath, index)) return nullptr;
-
-    const std::string wanted = CanonicalTextureKeyQ1830(requestedPath);
-    const auto found = index.files.find(wanted);
-    if (found == index.files.end()) return nullptr;
-    return &found->second;
-}
-
-bool InflateZlib(const std::vector<uint8_t>& compressed, uint32_t originalSize,
-                 std::vector<uint8_t>& output) {
-    if (originalSize == 0 || originalSize > MAX_TARGET_BYTES) return false;
-    output.resize(originalSize);
-    uLongf outLen = static_cast<uLongf>(output.size());
-    const int result = uncompress(reinterpret_cast<Bytef*>(output.data()), &outLen,
-                                  reinterpret_cast<const Bytef*>(compressed.data()),
-                                  static_cast<uLong>(compressed.size()));
-    if (result != Z_OK) {
-        output.clear();
-        return false;
-    }
-    output.resize(static_cast<size_t>(outLen));
-    return outLen == originalSize;
-}
-
-bool ExtractTarget(FILE* file, const BsaHeader& header, const TargetEntry& entry,
-                   std::vector<uint8_t>& output, bool& wasCompressed) {
-    if (entry.size == 0 || entry.size > MAX_TARGET_BYTES) return false;
-    if (fseeko(file, static_cast<off_t>(entry.offset), SEEK_SET) != 0) return false;
-
-    size_t remaining = entry.size;
-    const bool embedNames = (header.archiveFlags & 0x100u) != 0;
-    if (embedNames) {
-        uint8_t nameLen = 0;
-        if (!ReadExact(file, &nameLen, 1)) return false;
-        if (remaining < static_cast<size_t>(nameLen) + 1u) return false;
-        if (fseeko(file, static_cast<off_t>(nameLen), SEEK_CUR) != 0) return false;
-        remaining -= static_cast<size_t>(nameLen) + 1u;
-    }
-
-    const bool compressedByDefault = (header.archiveFlags & 4u) != 0;
-    wasCompressed = compressedByDefault != entry.compressionToggle;
-
-    if (!wasCompressed) {
-        if (remaining == 0 || remaining > MAX_TARGET_BYTES) return false;
-        output.resize(remaining);
-        return ReadExact(file, output.data(), output.size());
-    }
-
-    if (remaining < 4u) return false;
-    uint8_t sizeBytes[4]{};
-    if (!ReadExact(file, sizeBytes, sizeof(sizeBytes))) return false;
-    const uint32_t originalSize = ReadLe32(sizeBytes);
-    remaining -= 4u;
-    if (remaining == 0 || remaining > MAX_TARGET_BYTES) return false;
-
-    std::vector<uint8_t> compressed(remaining);
-    if (!ReadExact(file, compressed.data(), compressed.size())) return false;
-    return InflateZlib(compressed, originalSize, output);
 }
 
 struct Rgba {
@@ -708,67 +443,44 @@ bool DecodeDdsCubeQ2050(const std::vector<uint8_t>& dds,
 bool TryArchiveCubeQ2050(const char* archivePath,
                          const std::string& texturePath,
                          Fo3RgbaCubeTexture& outTexture) {
-    TextureArchiveIndexQ1830* index = nullptr;
-    const TargetEntry* target = FindTargetQ1830(archivePath, texturePath, index);
-    if (!target || !index) return false;
-
-    FILE* file = std::fopen(archivePath, "rb");
-    if (!file) return false;
-
     std::vector<uint8_t> dds;
-    bool compressed = false;
-    if (!ExtractTarget(file, index->header, *target, dds, compressed)) {
-        std::fclose(file);
-        FQ_LOGE("Q20.5 CUBE extraction failed: %s", target->storedPath.c_str());
-        return false;
-    }
-    std::fclose(file);
+    fo3assets::BsaFileInfo info;
+    if (!fo3assets::GetBsaArchive(archivePath)->Read(
+            texturePath, dds, &info, fo3assets::BsaPathKind::Texture)) return false;
 
     if (!DecodeDdsCubeQ2050(dds, outTexture)) {
         FQ_LOGE("Q20.5 CUBE DDS decode failed: %s bytes=%zu",
-                target->storedPath.c_str(), dds.size());
+                info.path.c_str(), dds.size());
         return false;
     }
-    outTexture.sourcePath = target->storedPath;
+    outTexture.sourcePath = info.path;
     FQ_LOGI("Q20.5 CUBE DDS READY: %dx%d mips=%d format=%s path=%s compressed=%d",
             outTexture.width, outTexture.height, outTexture.mipLevels,
             outTexture.format.c_str(), outTexture.sourcePath.c_str(),
-            compressed ? 1 : 0);
+            info.compressed ? 1 : 0);
     return true;
 }
 
 bool TryArchive(const char* archivePath, const std::string& texturePath,
                 Fo3RgbaTexture& outTexture) {
-    TextureArchiveIndexQ1830* index = nullptr;
-    const TargetEntry* target = FindTargetQ1830(archivePath, texturePath, index);
-    if (!target || !index) {
-        FQ_LOGW("Q5H texture not found in %s: %s",
+    std::vector<uint8_t> dds;
+    fo3assets::BsaFileInfo info;
+    if (!fo3assets::GetBsaArchive(archivePath)->Read(
+            texturePath, dds, &info, fo3assets::BsaPathKind::Texture)) {
+        FQ_LOGW("Q5H texture not found or extraction failed in %s: %s",
                 archivePath, texturePath.c_str());
         return false;
     }
-
-    FILE* file = std::fopen(archivePath, "rb");
-    if (!file) return false;
-
-    std::vector<uint8_t> dds;
-    bool compressed = false;
-    if (!ExtractTarget(file, index->header, *target, dds, compressed)) {
-        std::fclose(file);
-        FQ_LOGE("Q5H texture extraction failed: %s", target->storedPath.c_str());
-        return false;
-    }
-    std::fclose(file);
-
     FQ_LOGI("Q5H TEXTURE FOUND: path=%s storedBytes=%u decodedArchiveBytes=%zu compressed=%d",
-            target->storedPath.c_str(), target->size, dds.size(), compressed ? 1 : 0);
+            info.path.c_str(), info.storedBytes, dds.size(), info.compressed ? 1 : 0);
 
     if (!DecodeDds(dds, outTexture)) {
         FQ_LOGE("Q5H DDS decode failed: %s bytes=%zu",
-                target->storedPath.c_str(), dds.size());
+                info.path.c_str(), dds.size());
         return false;
     }
 
-    outTexture.sourcePath = target->storedPath;
+    outTexture.sourcePath = info.path;
     FQ_LOGI("Q5H DDS READY: %dx%d format=%s rgbaBytes=%zu path=%s",
             outTexture.width, outTexture.height, outTexture.format.c_str(),
             outTexture.rgba.size(), outTexture.sourcePath.c_str());
@@ -781,8 +493,8 @@ bool LoadFalloutTextureRgba(const std::string& texturePath, Fo3RgbaTexture& outT
     outTexture = {};
     if (texturePath.empty()) return false;
 
-    for (const char* archivePath : TEXTURE_BSA_PATHS) {
-        if (TryArchive(archivePath, texturePath, outTexture)) return true;
+    for (const std::string& archivePath : fo3assets::TextureArchivePaths()) {
+        if (TryArchive(archivePath.c_str(), texturePath, outTexture)) return true;
     }
 
     FQ_LOGE("Q5H FAILED: diffuse texture could not be loaded from either texture BSA name: %s",
@@ -795,8 +507,8 @@ bool LoadFalloutCubeTextureRgba(const std::string& texturePath,
     outTexture = {};
     if (texturePath.empty()) return false;
 
-    for (const char* archivePath : TEXTURE_BSA_PATHS) {
-        if (TryArchiveCubeQ2050(archivePath, texturePath, outTexture)) return true;
+    for (const std::string& archivePath : fo3assets::TextureArchivePaths()) {
+        if (TryArchiveCubeQ2050(archivePath.c_str(), texturePath, outTexture)) return true;
     }
 
     FQ_LOGE("Q20.5 CUBE FAILED: texture could not be loaded from either texture BSA name: %s",
