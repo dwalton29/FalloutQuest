@@ -1,3 +1,4 @@
+#include "fo3-esm-reader.h"
 // Q16.15 authored XTEL interaction cache.
 //
 // Q16.3's first controller-ray miss called AnchorsForCell(), which collected the
@@ -81,8 +82,8 @@ const std::vector<Anchor>& AnchorsForCell(uint32_t cellFormId) {
         Q71_LOGE("Q16.15 XTEL CACHE FAILED: cell=%08X reason=open-esm", cellFormId);
         return cache.anchors;
     }
-    const int64_t fileSize = FileSize(file);
-    if (fileSize < static_cast<int64_t>(HEADER_SIZE)) {
+    const int64_t fileSize = fo3esm::FileSize(file);
+    if (fileSize < static_cast<int64_t>(fo3esm::HEADER_SIZE)) {
         std::fclose(file);
         Q71_LOGE("Q16.15 XTEL CACHE FAILED: cell=%08X reason=bad-esm-size", cellFormId);
         return cache.anchors;
@@ -100,31 +101,31 @@ const std::vector<Anchor>& AnchorsForCell(uint32_t cellFormId) {
         if (rawOffset < 0) break;
         const uint64_t offset = static_cast<uint64_t>(rawOffset);
         while (!groups.empty() && offset >= groups.back().end) groups.pop_back();
-        if (offset + HEADER_SIZE > static_cast<uint64_t>(fileSize)) break;
+        if (offset + fo3esm::HEADER_SIZE > static_cast<uint64_t>(fileSize)) break;
 
-        uint8_t header[HEADER_SIZE]{};
-        if (!ReadExact(file, header, sizeof(header))) break;
+        uint8_t header[fo3esm::HEADER_SIZE]{};
+        if (!fo3esm::ReadExact(file, header, sizeof(header))) break;
         ++records;
         if ((records & 0x1fffu) == 0u) PumpFo3AndroidEventsQ1860();
 
-        const uint32_t sizeField = ReadLe32(header + 4u);
+        const uint32_t sizeField = fo3esm::ReadU32(header + 4u);
         if (std::memcmp(header, "GRUP", 4u) == 0) {
-            if (sizeField < HEADER_SIZE ||
+            if (sizeField < fo3esm::HEADER_SIZE ||
                 offset + sizeField > static_cast<uint64_t>(fileSize)) break;
             groups.push_back(Q1870Frame{offset + sizeField,
-                                        ReadLe32(header + 8u),
-                                        ReadLe32(header + 12u)});
+                                        fo3esm::ReadU32(header + 8u),
+                                        fo3esm::ReadU32(header + 12u)});
             continue;
         }
 
-        const uint64_t payloadEnd = offset + HEADER_SIZE + sizeField;
+        const uint64_t payloadEnd = offset + fo3esm::HEADER_SIZE + sizeField;
         if (payloadEnd > static_cast<uint64_t>(fileSize)) break;
         if (std::memcmp(header, "REFR", 4u) != 0) {
             if (fseeko(file, static_cast<off_t>(payloadEnd), SEEK_SET) != 0) break;
             continue;
         }
 
-        const uint32_t refFormId = ReadLe32(header + 12u);
+        const uint32_t refFormId = fo3esm::ReadU32(header + 12u);
         uint32_t ownerCell = 0u;
         for (auto it = groups.rbegin(); it != groups.rend(); ++it) {
             if (it->type == 6u || it->type == 8u ||
@@ -140,23 +141,23 @@ const std::vector<Anchor>& AnchorsForCell(uint32_t cellFormId) {
             continue;
         }
 
-        const uint32_t recordFlags = ReadLe32(header + 8u);
+        const uint32_t recordFlags = fo3esm::ReadU32(header + 8u);
         std::vector<uint8_t> payload;
-        if (!ReadPayload(file, sizeField, recordFlags, payload)) break;
+        if (!fo3esm::ReadPayloadCurrent(file, sizeField, recordFlags, payload)) break;
 
         Fo3DoorTeleport teleport;
         bool foundXtel = false;
-        WalkSubrecords(payload.data(), payload.size(),
+        fo3esm::WalkSubrecords(payload.data(), payload.size(),
                        [&](const char* type, const uint8_t* bytes, uint32_t size) {
             if (foundXtel || std::memcmp(type, "XTEL", 4u) != 0 || size < 28u) return;
-            teleport.destinationDoorRefFormId = ReadLe32(bytes + 0u);
-            teleport.x = ReadLeFloat(bytes + 4u);
-            teleport.y = ReadLeFloat(bytes + 8u);
-            teleport.z = ReadLeFloat(bytes + 12u);
-            teleport.rx = ReadLeFloat(bytes + 16u);
-            teleport.ry = ReadLeFloat(bytes + 20u);
-            teleport.rz = ReadLeFloat(bytes + 24u);
-            teleport.flags = size >= 32u ? ReadLe32(bytes + 28u) : 0u;
+            teleport.destinationDoorRefFormId = fo3esm::ReadU32(bytes + 0u);
+            teleport.x = fo3esm::ReadF32(bytes + 4u);
+            teleport.y = fo3esm::ReadF32(bytes + 8u);
+            teleport.z = fo3esm::ReadF32(bytes + 12u);
+            teleport.rx = fo3esm::ReadF32(bytes + 16u);
+            teleport.ry = fo3esm::ReadF32(bytes + 20u);
+            teleport.rz = fo3esm::ReadF32(bytes + 24u);
+            teleport.flags = size >= 32u ? fo3esm::ReadU32(bytes + 28u) : 0u;
             foundXtel = teleport.destinationDoorRefFormId != 0u;
         });
         if (foundXtel) teleports.emplace(refFormId, teleport);
