@@ -2666,7 +2666,7 @@ bool ProcessQ74TransitionRequest() {
 
     const bool q2013HoldExteriorLoading =
         request.worldspaceFormId == 0x0000003Cu &&
-        IsFo3LoadingVisibleQ1700();
+        IsFo3LoadingVisible();
     gQ2013ExteriorWarmupPending = q2013HoldExteriorLoading;
     // Q20.25: ProcessQ74TransitionRequest performs substantial synchronous
     // CELL/NIF/GPU scene work. Starting the async horizon timeout here meant
@@ -3070,7 +3070,7 @@ bool QueryDoorInternalQ1700(float ox, float oy, float oz,
                             float dx, float dy, float dz,
                             Fo3DoorAimQ1700* outAim) {
     if (outAim) *outAim = {};
-    if (!gSceneReady || IsFo3LoadingVisibleQ1700()) return false;
+    if (!gSceneReady || IsFo3LoadingVisible()) return false;
     const float len = std::sqrt(dx * dx + dy * dy + dz * dz);
     if (len < 1e-5f) return false;
     dx /= len; dy /= len; dz /= len;
@@ -3169,7 +3169,7 @@ void Q1800AbortTransition(const char* reason) {
              static_cast<int>(gQ1800TransitionWork.stage),
              gQ1800TransitionWork.request.cellFormId,
              reason ? reason : "unknown");
-    CancelFo3LoadingQ1700();
+    CancelFo3Loading();
     gQ1800TransitionWork = {};
 }
 
@@ -3183,10 +3183,10 @@ bool ProcessQ74TransitionRequestExperimentalQ1800() {
         work = {};
         work.request = request;
         work.stage = Q1800_STAGE_LOAD_PLACEMENTS;
-        MarkFo3TransitionWorkStartedQ1700();
+        MarkFo3TransitionWorkStarted();
         Q6H_LOGI("Q16.10 PHASED LOAD BEGIN: door=%08X cell=%08X worldspace=%08X loadingFrames=%u",
                  request.destinationDoorRef, request.cellFormId, request.worldspaceFormId,
-                 GetFo3LoadingPresentedFramesQ1700());
+                 GetFo3LoadingPresentedFrames());
         return true;
     }
 
@@ -4184,7 +4184,7 @@ void Q1900AdvanceStream() {
 
     // Let explicit door/cell loading own the renderer while its loading state is
     // visible. A detached metadata read may finish meanwhile, but is not consumed.
-    if (IsFo3LoadingVisibleQ1700()) return;
+    if (IsFo3LoadingVisible()) return;
 
     const bool contextChanged =
         !gExteriorStreamingActiveQ1890 ||
@@ -4286,7 +4286,7 @@ void UpdateFo3ExteriorStreamingQ1890(float virtualHeadX, float virtualHeadZ) {
 
         if (gExteriorWorldspaceQ1890 == 0x0000003Cu) {
             if (gQ2013ExteriorWarmupPending &&
-                IsFo3LoadingVisibleQ1700() &&
+                IsFo3LoadingVisible() &&
                 gQ2013ExteriorWarmupStarted.time_since_epoch().count() == 0) {
                 gQ2013ExteriorWarmupStarted =
                     std::chrono::steady_clock::now();
@@ -4303,7 +4303,7 @@ void UpdateFo3ExteriorStreamingQ1890(float virtualHeadX, float virtualHeadZ) {
                 std::chrono::duration_cast<std::chrono::microseconds>(
                     std::chrono::steady_clock::now() - q1970LodStarted).count());
 
-            if (gQ2013ExteriorWarmupPending && IsFo3LoadingVisibleQ1700()) {
+            if (gQ2013ExteriorWarmupPending && IsFo3LoadingVisible()) {
                 size_t detailReady = 0u;
                 size_t lodReady = 0u;
                 const bool detailComplete =
@@ -4339,7 +4339,7 @@ void UpdateFo3ExteriorStreamingQ1890(float virtualHeadX, float virtualHeadZ) {
                              static_cast<unsigned long long>(warmupUs),
                              timeout ? 1 : 0);
                     gQ2013ExteriorWarmupPending = false;
-                    NotifyFo3TransitionCompleteQ1700();
+                    NotifyFo3TransitionComplete();
                 }
             }
         }
@@ -4382,7 +4382,7 @@ void UpdateFo3ExteriorStreamingQ1890(float virtualHeadX, float virtualHeadZ) {
 
     // Give a pending generation current player position before it advances.
     Q1900AdvanceStream();
-    if (gExteriorStreamBusyQ1890 || IsFo3LoadingVisibleQ1700()) return;
+    if (gExteriorStreamBusyQ1890 || IsFo3LoadingVisible()) return;
 
     static uint32_t q1920MotionWorldspace = 0u;
     static uint32_t q1920MotionPersistent = 0u;
@@ -6149,7 +6149,7 @@ void Q1970AdvanceLodGpuQ19() {
         std::iter_swap(best, gQ2013LodUploadsQ19.begin());
     }
 
-    const bool q2015Loading = IsFo3LoadingVisibleQ1700();
+    const bool q2015Loading = IsFo3LoadingVisible();
     const size_t q2015LodGpuBytes =
         q2015Loading ? 8u * 1024u * 1024u : 1024u * 1024u;
     const uint64_t q2015LodGpuBudgetUs =
@@ -6485,7 +6485,7 @@ void Q1970AdvanceNativeLodQ19(int32_t cellX, int32_t cellY,
             Q2013NativeLodBootstrapReadyQ19(
                 cellX, cellY, &bootstrapReady);
         const bool authoredAllowed = bootstrapReady >= 9u;
-        const bool q2024Loading = IsFo3LoadingVisibleQ1700();
+        const bool q2024Loading = IsFo3LoadingVisible();
         const bool preferAuthored =
             authoredAllowed &&
             (q2024Loading ? slot != 0u : ((slot & 1u) != 0u));

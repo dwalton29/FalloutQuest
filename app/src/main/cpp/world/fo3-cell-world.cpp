@@ -693,7 +693,7 @@ bool QueueFo3DoorTransitionQ1700(uint32_t sourceDoorRef,
     gPendingTransitionQ74.valid = true;
     gHasPendingTransitionQ74 = true;
 
-    BeginFo3LoadingQ1700(owner.cellFormId, owner.worldspaceFormId);
+    BeginFo3Loading(owner.cellFormId, owner.worldspaceFormId);
     Q71_LOGI("Q16.0 DOOR QUEUED: sourceDoor=%08X destinationDoor=%08X cell=%08X worldspace=%08X kind=%s XTEL=(%.2f %.2f %.2f) R=(%.4f %.4f %.4f) loading=PRESENT",
              sourceDoorRef, destinationDoorRef, owner.cellFormId,
              owner.worldspaceFormId,
@@ -1109,7 +1109,7 @@ bool ConsumeFo3CellTransitionRequestQ74(Fo3CellTransitionRequestQ74& outRequest)
     if (!gHasPendingTransitionQ74 || !gPendingTransitionQ74.valid) return false;
     // Initial direct boot has no loading state and remains immediate. User door
     // transitions wait until one LSCR frame has actually reached xrEndFrame.
-    if (ShouldDelayFo3TransitionConsumeQ1700()) return false;
+    if (ShouldDelayFo3TransitionConsume()) return false;
     outRequest = gPendingTransitionQ74;
     gHasPendingTransitionQ74 = false;
     return true;
@@ -1121,9 +1121,9 @@ void CompleteFo3CellTransitionQ74(uint32_t cellFormId) {
     const bool q2013DeferWastelandLoading =
         gPendingTransitionQ74.valid &&
         gPendingTransitionQ74.worldspaceFormId == 0x0000003Cu &&
-        IsFo3LoadingVisibleQ1700();
+        IsFo3LoadingVisible();
     if (!q2013DeferWastelandLoading) {
-        NotifyFo3TransitionCompleteQ1700();
+        NotifyFo3TransitionComplete();
     } else {
         Q71_LOGI("Q20.13 LOADING HOLD: worldspace=0000003C reason=warm-7x7+Level4-ring1 notification=deferred");
     }

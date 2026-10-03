@@ -1268,11 +1268,11 @@ private:
     }
 
     void UpdateDoorAimQ1700() {
-        if (IsFo3LoadingVisibleQ1700() || !handPoseValid_[1]) {
+        if (IsFo3LoadingVisible() || !handPoseValid_[1]) {
             if (doorAimActiveQ1700_) {
                 FQ_LOGI("Q16.13 HUD TARGET HIDE: sourceDoor=%08X reason=%s promptStorage=fixed-retained",
                         doorAimSourceQ1840_,
-                        IsFo3LoadingVisibleQ1700() ? "loading" : "invalid-hand-pose");
+                        IsFo3LoadingVisible() ? "loading" : "invalid-hand-pose");
             }
             doorAimActiveQ1700_ = false;
             doorAimSourceQ1840_ = 0u;
@@ -1330,9 +1330,9 @@ private:
     }
 
     void ApplyAuthoredDoorFacingQ1810(const XrView& view) {
-        if (!IsFo3LoadingVisibleQ1700()) return;
+        if (!IsFo3LoadingVisible()) return;
 
-        const uint64_t generation = GetFo3LoadingGenerationQ1700();
+        const uint64_t generation = GetFo3LoadingGeneration();
         if (generation == 0u || generation == doorFacingGenerationQ1810_) return;
 
         // Consume this generation first so a malformed/missing cached target
@@ -1363,7 +1363,7 @@ private:
         if (!CheckXr(xrWaitFrame(session_, &waitInfo, &frameState), "xrWaitFrame")) return;
         XrFrameBeginInfo beginInfo{XR_TYPE_FRAME_BEGIN_INFO};
         if (!CheckXr(xrBeginFrame(session_, &beginInfo), "xrBeginFrame")) return;
-        PrepareFo3LoadingScreensQ1700();
+        PrepareFo3LoadingScreens();
 
         std::array<XrCompositionLayerProjectionView, 2> projectionViews{
             XrCompositionLayerProjectionView{XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW},
@@ -1399,7 +1399,7 @@ private:
                         fo3todq1400::gRuntime.climate.sunsetBegin,
                         fo3todq1400::gRuntime.climate.sunsetEnd);
                 }
-                if (!IsFo3LoadingVisibleQ1700()) {
+                if (!IsFo3LoadingVisible()) {
                     UpdatePlayer(views[0], frameState.predictedDisplayTime);
                 } else {
                     lastFrameTime_ = 0;
@@ -1506,7 +1506,7 @@ private:
         endInfo.layers = layerCount ? layers : nullptr;
         const bool q1700FrameSubmitted =
             CheckXr(xrEndFrame(session_, &endInfo), "xrEndFrame");
-        if (q1700FrameSubmitted) MarkFo3LoadingFramePresentedQ1700();
+        if (q1700FrameSubmitted) MarkFo3LoadingFramePresented();
     }
 
     void SetMvpAndColor(const Mat4& mvp, float r, float g, float b) {
@@ -1659,8 +1659,8 @@ private:
                 }
             }
             Q1350CompositeEyePostQ1350(eyeIndex, framebuffer_, eye.width, eye.height);
-            if (IsFo3LoadingVisibleQ1700()) {
-                RenderFo3LoadingScreenQ1780(framebuffer_, eye.width, eye.height);
+            if (IsFo3LoadingVisible()) {
+                RenderFo3LoadingVr(framebuffer_, eye.width, eye.height);
             }
             glFlush();
         } else {
