@@ -15,7 +15,7 @@ extern void PumpFo3AndroidEventsQ1860();
 #include "fo3-loading-state-q1700.h"
 #include "fo3-transition.h"
 #include "rendering/environment/fo3-environment.h"
-#include "fo3-visual-depth-q1010.h"
+#include "rendering/environment/fo3-visual-depth.h"
 #include "fo3-authored-color-q1390.h"
 #include "fo3-terrain-q76.h"
 

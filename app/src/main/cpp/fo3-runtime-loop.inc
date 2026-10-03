@@ -26,7 +26,7 @@
 #include "fo3-weather-sky-q1330.h"
 #include "fo3-pc-sky-q1660.h"
 #include "fo3-weather-sky-color-q1390.h"
-#include "fo3-visual-depth-q1010.h"
+#include "rendering/environment/fo3-visual-depth.h"
 
 #include <algorithm>
 #include <array>

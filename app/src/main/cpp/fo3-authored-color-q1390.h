@@ -1,7 +1,7 @@
 #pragma once
 
 #include "rendering/environment/fo3-environment.h"
-#include "fo3-visual-depth-q1010.h"
+#include "rendering/environment/fo3-visual-depth.h"
 #include "fo3-external-emittance-q1380.h"
 
 #include <algorithm>

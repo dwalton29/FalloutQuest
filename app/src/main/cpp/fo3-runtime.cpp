@@ -39,7 +39,7 @@ extern void PumpFo3AndroidEventsQ1860();
 #include "fo3-weather-byte-staging-q1480.h"
 #undef FO3_Q1480_DEFINE_REFRESH
 #undef LoadFo3ImageSpaceQ1280
-#include "fo3-visual-depth-q1010.h"
+#include "rendering/environment/fo3-visual-depth.h"
 
 void SetFo3TerrainShadowQ1050(GLuint depthTexture, const float* lightMvp, bool enabled);
 void RenderFo3TerrainShadowQ1050(const float* lightMvp, GLuint program, GLint mvpLocation, GLint alphaTestLocation);

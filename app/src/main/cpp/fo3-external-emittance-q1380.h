@@ -1,6 +1,6 @@
 #pragma once
 
-#include "fo3-visual-depth-q1010.h"
+#include "rendering/environment/fo3-visual-depth.h"
 
 #include <array>
 #include <cstdint>
