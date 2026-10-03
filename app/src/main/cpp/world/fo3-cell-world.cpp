@@ -72,7 +72,7 @@ bool LookupFo3WastelandDoorTeleportQ1920(
 
 // Q7.11 resolves LAND BTXT -> LTEX -> TXST -> TX00 so the terrain renderer can
 // use Fallout 3's real landscape diffuse DDS instead of the brown debug colour.
-#include "fo3-terrain-texture-q711.cpp"
+#include "rendering/terrain/fo3-terrain-texture.cpp"
 #include "rendering/terrain/fo3-terrain-material.cpp"
 
 // Standalone GLES terrain renderer. Its internal symbols are Q76B-prefixed so
