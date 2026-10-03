@@ -31,6 +31,7 @@ target_include_directories(falloutquest PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/rendering/terrain
     ${CMAKE_CURRENT_SOURCE_DIR}/physics
     ${CMAKE_CURRENT_SOURCE_DIR}/player
+    ${CMAKE_CURRENT_SOURCE_DIR}/vr
     ${CMAKE_CURRENT_SOURCE_DIR}/npc
     ${CMAKE_CURRENT_SOURCE_DIR}/ui
     ${CMAKE_CURRENT_SOURCE_DIR}/ui/interaction
@@ -38,7 +39,7 @@ target_include_directories(falloutquest PRIVATE
 )
 
 target_compile_options(falloutquest PRIVATE
-    -include ${CMAKE_CURRENT_SOURCE_DIR}/openxr-platform-prelude.h
+    -include ${CMAKE_CURRENT_SOURCE_DIR}/vr/openxr-platform-prelude.h
 )
 
 find_library(android-lib android)
