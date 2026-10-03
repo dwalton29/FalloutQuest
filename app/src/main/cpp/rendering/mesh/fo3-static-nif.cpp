@@ -372,6 +372,24 @@ bool ParseShaderTextureRef(const uint8_t* data, size_t size,
     return c.U32(textureSetRef);
 }
 
+bool ParseTileShaderProperty(const uint8_t* data, size_t size,
+                             const NifHeader& header, std::string& fileName) {
+    // TileShaderProperty inherits BSShaderLightingProperty, then stores its
+    // texture as a SizedString (not a BSShaderTextureSet reference).
+    Cursor c(data, size);
+    uint16_t flags = 0;
+    uint32_t shaderType = 0, shaderFlags1 = 0, shaderFlags2 = 0, clamp = 0;
+    float environmentScale = 1;
+    std::string path;
+    if (!ParseObjectNetPrefix(c) || !c.U16(flags) || !c.U32(shaderType) ||
+        !c.U32(shaderFlags1) || !c.U32(shaderFlags2)) return false;
+    if (header.userVersion == 11u && !c.F32(environmentScale)) return false;
+    if (header.userVersion <= 11u && !c.U32(clamp)) return false;
+    if (!c.SizedString(path) || path.empty() || c.remaining() != 0u) return false;
+    fileName = std::move(path);
+    return true;
+}
+
 bool ParseNoLightingPropertyQ1020(const uint8_t* data, size_t size,
                                   const NifHeader& header,
                                   uint32_t& shaderFlags1, uint32_t& shaderFlags2,
@@ -1673,6 +1691,10 @@ bool TryLoadShape(const std::vector<uint8_t>& nif, const NifHeader& header,
                                       candidate.environmentMapScale, refOut)) {
                 textureSetRef = refOut;
             }
+        } else if (type == "TileShaderProperty") {
+            if (!ParseTileShaderProperty(prop, header.blockSizes[ref], header,
+                                         candidate.diffuseTexturePath)) return false;
+            candidate.noLighting = true;
         } else if (type == "BSShaderNoLightingProperty") {
             std::string directTexture;
             if (ParseNoLightingPropertyQ1020(prop, header.blockSizes[ref], header,

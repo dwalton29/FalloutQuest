@@ -252,7 +252,18 @@ This is the original-asset rendering path, not completed Gamebryo UI animation
 support. The static NIF decoder supplies the bind/static geometry; LoadingAnim01
 controllers and the compass Idle sequence are not evaluated. Compass rigid
 rotation is the existing VR adaptation. Projector movement, animated texture
-transforms and exact layering need the actual two NIFs and their textures for
-inspection. No artificial flicker or scanlines have been substituted for that
-missing evidence. Tests validate the supplied XML/INI definition, section
+transforms and exact layering still need controller playback and texture
+inspection. No artificial flicker or scanlines have been substituted. Tests validate the supplied XML/INI definition, section
 selection, invalid values, incomplete XML and fade/completion gating.
+
+### Loading UI textures (0.24.15)
+
+The supplied original LoadingAnim01 and loading01 NIFs use TileShaderProperty,
+whose BSShaderLightingProperty prefix is followed by a SizedString filename.
+The static decoder now reads that material as unlit and rejects malformed tile
+properties. Previously the unsupported property left the filename empty and
+the UI renderer uploaded a white fallback, obscuring the art. UI shapes now
+require a resolved DDS before upload, including when a material has no filename.
+The originals decode into eight overlay shapes and two compass shapes, with
+all ten texture references and blend factors recovered. Tests cover truncated
+material blocks and optionally load both originals without redistributing them.

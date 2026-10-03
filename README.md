@@ -2,7 +2,11 @@
 
 Experimental standalone Meta Quest runtime for user-supplied Fallout 3 game data.
 
-## Current milestone: 0.24.14 — Original loading-menu assets
+## Current milestone: 0.24.15 — Loading UI texture fix
+
+The original overlay and compass use `TileShaderProperty` texture filenames.
+These now decode correctly instead of rendering white fallback panels over the
+loading artwork. Loading UI shapes without resolved textures are skipped.
 
 FalloutQuest is a native ARM64/OpenXR reimplementation of the runtime needed to
 interpret Fallout 3's original data on Quest. It is not a port of the original

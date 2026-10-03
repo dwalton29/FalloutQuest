@@ -1,0 +1,8 @@
+cmake_minimum_required(VERSION 3.16)
+project(falloutquest_nif_tests LANGUAGES CXX)
+enable_testing()
+add_executable(loading_material_tests loading_material_tests.cpp)
+target_compile_features(loading_material_tests PRIVATE cxx_std_17)
+target_compile_options(loading_material_tests PRIVATE -Wall -Wextra -Werror -Wno-unused-function)
+target_include_directories(loading_material_tests PRIVATE . ../../app/src/main/cpp/data)
+add_test(NAME loading_material_tests COMMAND loading_material_tests)

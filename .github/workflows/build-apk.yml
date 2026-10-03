@@ -65,6 +65,12 @@ jobs:
           cmake --build build/host-world --parallel 2
           ctest --test-dir build/host-world --output-on-failure
 
+      - name: Test loading NIF materials on host
+        run: |
+          cmake -S tests/nif -B build/host-nif
+          cmake --build build/host-nif --parallel 2
+          ctest --test-dir build/host-nif --output-on-failure
+
       - name: Restore stable development signing key
         run: |
           base64 --decode app/falloutquest-dev.keystore.b64 > app/falloutquest-dev.keystore

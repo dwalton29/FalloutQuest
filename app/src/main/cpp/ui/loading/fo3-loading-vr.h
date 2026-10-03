@@ -83,7 +83,7 @@ inline bool ReadShapes(const std::string& path,std::vector<CpuShape>& out,
         CpuShape s;s.mesh=std::move(mesh);
         if(!s.mesh.diffuseTexturePath.empty() && imageBytes<32u*1024u*1024u)
             LoadFalloutTextureRgba(s.mesh.diffuseTexturePath,s.image);
-        if(originalUi && !s.mesh.diffuseTexturePath.empty() && s.image.rgba.empty()) {
+        if(originalUi && (s.mesh.diffuseTexturePath.empty() || s.image.rgba.empty())) {
             __android_log_print(ANDROID_LOG_WARN,"FalloutQuest","LOADING UI MATERIAL MISS: model=%s texture=%s; skipping unresolved shape",path.c_str(),s.mesh.diffuseTexturePath.c_str());
             continue;
         }
