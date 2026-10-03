@@ -1,6 +1,6 @@
 #pragma once
 
-#include "fo3-environment-q1000.h"
+#include "rendering/environment/fo3-environment.h"
 #include "fo3-visual-depth-q1010.h"
 #include "fo3-external-emittance-q1380.h"
 

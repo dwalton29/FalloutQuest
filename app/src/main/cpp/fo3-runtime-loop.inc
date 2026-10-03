@@ -22,7 +22,7 @@
 
 #include "fo3-collision-overlay.h"
 #include "fo3-megaton-scene.h"
-#include "fo3-environment-q1000.h"
+#include "rendering/environment/fo3-environment.h"
 #include "fo3-weather-sky-q1330.h"
 #include "fo3-pc-sky-q1660.h"
 #include "fo3-weather-sky-color-q1390.h"
