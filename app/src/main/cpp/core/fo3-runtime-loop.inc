@@ -1601,7 +1601,7 @@ private:
                     glDrawArrays(GL_TRIANGLES, controllerStartVertex_, controllerVertexCount_);
                     if (doorAimActiveQ1700_) {
                         if (doorPromptValidQ1850_) {
-                            RenderFo3InteractionHudQ1880(mvp.m, doorPromptQ1850_.data());
+                            RenderFo3InteractionHud(mvp.m, doorPromptQ1850_.data());
                         }
 
                     }

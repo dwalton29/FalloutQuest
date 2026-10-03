@@ -91,7 +91,7 @@ inline bool BuildPromptGeometry(const char* promptChars) {
     const float bu1 = s.button.u + s.button.w;
     const float bvTop = s.button.v;
     const float bvBottom = s.button.v + s.button.h;
-    fo3hudrenderer::AddQuad(
+    fo3hudrenderer::AppendPromptQuad(
         verts,
         X(buttonX0), Y(buttonY0),
         X(buttonX0 + 75.0f), Y(buttonY0 + 75.0f), anchorZ,
@@ -118,7 +118,7 @@ inline bool BuildPromptGeometry(const char* promptChars) {
             minGlyphBottom = std::min(minGlyphBottom, glyphBottomY);
             maxGlyphBottom = std::max(maxGlyphBottom, glyphBottomY);
 
-            fo3hudrenderer::AddQuad(
+            fo3hudrenderer::AppendPromptQuad(
                 verts, X(gx0), Y(gy0), X(gx1), Y(gy1), anchorZ,
                 g.uv[0], g.uv[1], g.uv[2], g.uv[3],
                 g.uv[4], g.uv[5], g.uv[6], g.uv[7]);

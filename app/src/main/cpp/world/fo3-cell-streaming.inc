@@ -1293,7 +1293,7 @@ void Q1900AdvanceGpuQ19(int32_t actualGridX, int32_t actualGridY) {
         return a->requestedAt < b->requestedAt;
     });
 
-    const bool q2015Loading = IsFo3LoadingVisibleQ1700();
+    const bool q2015Loading = IsFo3LoadingVisible();
     const uint64_t q2015GlobalGpuBudgetUs =
         q2015Loading ? 4200u : 1200u;
     const size_t q2015GlobalGpuBytes =

@@ -202,7 +202,7 @@ inline float TextWidth(const HudState& s,
     return width;
 }
 
-inline void AddQuad(std::vector<fo3hudassets::Vertex>& verts,
+inline void AppendPromptQuad(std::vector<fo3hudassets::Vertex>& verts,
                          float x0, float y0, float x1, float y1, float z,
                          float uTL, float vTL, float uTR, float vTR,
                          float uBL, float vBL, float uBR, float vBR) {
@@ -259,7 +259,7 @@ inline bool BuildPromptGeometry(const char* promptChars) {
     const float bu1 = s.button.u + s.button.w;
     const float bvTop = s.button.v;
     const float bvBottom = s.button.v + s.button.h;
-    AddQuad(verts,
+    AppendPromptQuad(verts,
                  X(buttonX0), Y(buttonY0),
                  X(buttonX0 + 75.0f), Y(buttonY0 + 75.0f), anchorZ,
                  bu0, bvTop, bu1, bvTop,
@@ -278,7 +278,7 @@ inline bool BuildPromptGeometry(const char* promptChars) {
             const float gy0 = textTopY + g.yOffset;
             const float gx1 = gx0 + g.width;
             const float gy1 = gy0 + g.height;
-            AddQuad(verts, X(gx0), Y(gy0), X(gx1), Y(gy1), anchorZ,
+            AppendPromptQuad(verts, X(gx0), Y(gy0), X(gx1), Y(gy1), anchorZ,
                          g.uv[0], g.uv[1], g.uv[2], g.uv[3],
                          g.uv[4], g.uv[5], g.uv[6], g.uv[7]);
         }
