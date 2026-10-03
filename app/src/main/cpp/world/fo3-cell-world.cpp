@@ -68,7 +68,7 @@ bool LookupFo3WastelandDoorTeleportQ1920(
 
 // Q7.6b reuses the exact same Q7.5 worldspace/group helpers, but only decodes
 // CPU LAND/VHGT data. No collision or player-grounding code is touched here.
-#include "fo3-terrain-data-runtime.inc"
+#include "rendering/terrain/fo3-terrain-data.inc"
 
 // Q7.11 resolves LAND BTXT -> LTEX -> TXST -> TX00 so the terrain renderer can
 // use Fallout 3's real landscape diffuse DDS instead of the brown debug colour.
