@@ -11,8 +11,8 @@
 //      REFR owner in memory.
 // The result is primed at scene activation and every live query is memory-only.
 
-#include "fo3-authored-door-query-q1730.h"
-#include "fo3-authored-door-query-q1870.h"
+#include "fo3-authored-door-query.h"
+#include "fo3-authored-door-cache.h"
 
 #include <algorithm>
 #include <chrono>

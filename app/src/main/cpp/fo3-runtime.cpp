@@ -9,11 +9,11 @@ void SetNextFo3CollisionExteriorModeQ1931(bool exterior);
 #include <unordered_set>
 #include "rendering/terrain/fo3-terrain.h"
 extern void SetFo3TerrainSelectionOverrideQ1890(bool enabled, float gameX, float gameY);
-#include "fo3-authored-door-query-q1870.h"
+#include "fo3-authored-door-cache.h"
 extern void PumpFo3AndroidEventsQ1860();
-#include "fo3-door-prompt-q1840.h"
+#include "fo3-door-prompt.h"
 #include <chrono>
-#include "fo3-authored-door-query-q1730.h"
+#include "fo3-authored-door-query.h"
 #include "fo3-cell-traversal.h"
 #include "fo3-loading-state-q1700.h"
 #include "fo3-loading-screen-q1700.h"

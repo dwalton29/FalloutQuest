@@ -1,5 +1,5 @@
 #include "fo3-interaction-hud-runtime.h"
-#include "fo3-door-prompt-q1840.h"
+#include "fo3-door-prompt.h"
 #include "fo3-interaction-hud-q1840.h"
 #include "fo3-interaction-hud-q1850.h"
 #include "fo3-interaction-hud-q1880.h"

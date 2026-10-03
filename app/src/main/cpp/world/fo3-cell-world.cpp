@@ -2,7 +2,7 @@
 #include "fo3-esm-reader.h"
 #include <unordered_map>
 extern void PumpFo3AndroidEventsQ1860();
-#include "fo3-door-prompt-q1840.h"
+#include "fo3-door-prompt.h"
 #include <algorithm>
 #include <cstring>
 #include <string>
@@ -31,7 +31,7 @@ extern void PumpFo3AndroidEventsQ1860();
 #include "fo3-cell-spawn.cpp"
 #undef ProbeMegatonPlayerHouseDoorQ71
 #include "fo3-cell-interior.inc"
-#include "fo3-authored-door-query-q1870.inc"
+#include "fo3-authored-door-cache.inc"
 
 bool LoadFo3CellPlacements(uint32_t cellFormId,
                            std::vector<Fo3WorldPlacement>& outPlacements) {
