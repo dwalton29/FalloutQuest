@@ -1,6 +1,7 @@
 #include "fo3-npc-q23.h"
 #include "fo3-bsa-reader.h"
 #include "fo3-texture-bsa.h"
+#include "fo3-esm-reader.h"
 
 #include <android/log.h>
 #include <cmath>
@@ -11,7 +12,6 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
-#include <zlib.h>
 
 namespace {
 
@@ -19,9 +19,6 @@ constexpr const char* TAG = "FalloutQuest";
 constexpr const char* ESM_PATH =
     "/data/user/0/com.falloutquest.app/files/Fallout3/Data/Fallout3.esm";
 constexpr uint32_t TARGET_MEGATON_CELL = 0x00000A96u;
-constexpr uint32_t FLAG_COMPRESSED = 0x00040000u;
-constexpr uint64_t HEADER_SIZE = 24u;
-constexpr uint32_t MAX_RECORD_BYTES = 64u * 1024u * 1024u;
 
 #define Q230_LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
 #define Q230_LOGW(...) __android_log_print(ANDROID_LOG_WARN, TAG, __VA_ARGS__)
@@ -32,12 +29,7 @@ struct GroupFrame {
     uint32_t type = 0u;
 };
 
-struct Locator {
-    uint64_t payloadOffset = 0u;
-    uint32_t storedSize = 0u;
-    uint32_t flags = 0u;
-    std::string type;
-};
+using Locator = fo3esm::RecordLocation;
 
 struct RawActor {
     uint32_t refFormId = 0u;
@@ -83,98 +75,12 @@ struct Linked {
     std::vector<float> maleFaceTextureSymmetric;
 };
 
-uint16_t U16(const uint8_t* p) {
-    return static_cast<uint16_t>(p[0]) |
-           static_cast<uint16_t>(static_cast<uint16_t>(p[1]) << 8u);
-}
-uint32_t U32(const uint8_t* p) {
-    return static_cast<uint32_t>(p[0]) |
-           (static_cast<uint32_t>(p[1]) << 8u) |
-           (static_cast<uint32_t>(p[2]) << 16u) |
-           (static_cast<uint32_t>(p[3]) << 24u);
-}
-float F32(const uint8_t* p) {
-    const uint32_t bits = U32(p);
-    float v = 0.0f;
-    std::memcpy(&v, &bits, sizeof(v));
-    return v;
-}
 void FloatArray(const uint8_t* p, uint32_t n, std::vector<float>& out) {
     out.clear();
     if ((n & 3u) != 0u) return;
     out.reserve(n / 4u);
-    for (uint32_t at = 0u; at < n; at += 4u) out.push_back(F32(p + at));
-}
-bool ReadExact(FILE* f, void* dst, size_t n) {
-    return std::fread(dst,1,n,f) == n;
-}
-int64_t FileSize(FILE* f) {
-    const off_t old = ftello(f);
-    if (old < 0) return -1;
-    if (fseeko(f,0,SEEK_END) != 0) return -1;
-    const off_t end = ftello(f);
-    fseeko(f,old,SEEK_SET);
-    return static_cast<int64_t>(end);
-}
-std::string FourCC(const uint8_t* p) {
-    char s[5]{static_cast<char>(p[0]),static_cast<char>(p[1]),
-              static_cast<char>(p[2]),static_cast<char>(p[3]),0};
-    return s;
-}
-std::string ZString(const uint8_t* p, uint32_t n) {
-    size_t len=0u;
-    while(len<n && p[len]!=0u) ++len;
-    return std::string(reinterpret_cast<const char*>(p),len);
-}
-
-bool Inflate(const std::vector<uint8_t>& stored,
-             std::vector<uint8_t>& out) {
-    if (stored.size()<4u) return false;
-    const uint32_t n=U32(stored.data());
-    if (n==0u || n>MAX_RECORD_BYTES) return false;
-    out.resize(n);
-    uLongf dest=n;
-    const int rc=uncompress(
-        reinterpret_cast<Bytef*>(out.data()),&dest,
-        reinterpret_cast<const Bytef*>(stored.data()+4u),
-        static_cast<uLong>(stored.size()-4u));
-    if(rc!=Z_OK || dest!=n){ out.clear(); return false; }
-    return true;
-}
-
-bool ReadPayload(FILE* f, const Locator& loc,
-                 std::vector<uint8_t>& out) {
-    if (loc.storedSize==0u || loc.storedSize>MAX_RECORD_BYTES) return false;
-    if (fseeko(f,static_cast<off_t>(loc.payloadOffset),SEEK_SET)!=0) return false;
-    std::vector<uint8_t> stored(loc.storedSize);
-    if(!ReadExact(f,stored.data(),stored.size())) return false;
-    if((loc.flags & FLAG_COMPRESSED)==0u){
-        out.swap(stored);
-        return true;
-    }
-    return Inflate(stored,out);
-}
-
-template <class Fn>
-void Walk(const std::vector<uint8_t>& data, Fn fn) {
-    size_t pos=0u;
-    uint32_t extended=0u;
-    while(pos+6u<=data.size()){
-        const char* type=reinterpret_cast<const char*>(data.data()+pos);
-        const uint16_t size16=U16(data.data()+pos+4u);
-        pos+=6u;
-        if(std::memcmp(type,"XXXX",4u)==0){
-            if(size16!=4u || pos+4u>data.size()) return;
-            extended=U32(data.data()+pos);
-            pos+=4u;
-            continue;
-        }
-        const uint32_t n=extended?extended:size16;
-        extended=0u;
-        if(n>data.size()-pos) return;
-        fn(type,data.data()+pos,n);
-        pos+=n;
-    }
+    for (uint32_t at = 0u; at < n; at += 4u)
+        out.push_back(fo3esm::ReadF32(p + at));
 }
 
 bool InMegatonCell(const std::vector<GroupFrame>& groups) {
@@ -189,15 +95,15 @@ bool InMegatonCell(const std::vector<GroupFrame>& groups) {
 bool ParseActorPlacement(const std::vector<uint8_t>& data,
                          RawActor& out) {
     bool base=false;
-    Walk(data,[&](const char* type,const uint8_t* p,uint32_t n){
+    fo3esm::WalkSubrecords(data,[&](const char* type,const uint8_t* p,uint32_t n){
         if(std::memcmp(type,"NAME",4u)==0 && n>=4u){
-            out.baseFormId=U32(p);
+            out.baseFormId=fo3esm::ReadU32(p);
             base=out.baseFormId!=0u;
         } else if(std::memcmp(type,"DATA",4u)==0 && n>=24u){
-            out.x=F32(p+0u); out.y=F32(p+4u); out.z=F32(p+8u);
-            out.rx=F32(p+12u); out.ry=F32(p+16u); out.rz=F32(p+20u);
+            out.x=fo3esm::ReadF32(p+0u); out.y=fo3esm::ReadF32(p+4u); out.z=fo3esm::ReadF32(p+8u);
+            out.rx=fo3esm::ReadF32(p+12u); out.ry=fo3esm::ReadF32(p+16u); out.rz=fo3esm::ReadF32(p+20u);
         } else if(std::memcmp(type,"XSCL",4u)==0 && n>=4u){
-            out.scale=F32(p);
+            out.scale=fo3esm::ReadF32(p);
         }
     });
     return base;
@@ -207,31 +113,31 @@ bool ScanIndexAndActors(
         FILE* f,
         std::vector<RawActor>& actors,
         std::unordered_map<uint32_t,Locator>& locators) {
-    const int64_t fileSize=FileSize(f);
-    if(fileSize<static_cast<int64_t>(HEADER_SIZE)) return false;
+    const int64_t fileSize=fo3esm::FileSize(f);
+    if(fileSize<static_cast<int64_t>(fo3esm::HEADER_SIZE)) return false;
 
     std::vector<GroupFrame> groups;
     uint64_t pos=0u;
-    while(pos+HEADER_SIZE<=static_cast<uint64_t>(fileSize)){
+    while(pos+fo3esm::HEADER_SIZE<=static_cast<uint64_t>(fileSize)){
         while(!groups.empty() && pos>=groups.back().end) groups.pop_back();
         if(fseeko(f,static_cast<off_t>(pos),SEEK_SET)!=0) break;
-        uint8_t h[HEADER_SIZE]{};
-        if(!ReadExact(f,h,sizeof(h))) break;
-        const uint32_t size=U32(h+4u);
+        uint8_t h[fo3esm::HEADER_SIZE]{};
+        if(!fo3esm::ReadExact(f,h,sizeof(h))) break;
+        const uint32_t size=fo3esm::ReadU32(h+4u);
 
         if(std::memcmp(h,"GRUP",4u)==0){
-            if(size<HEADER_SIZE || pos+size>static_cast<uint64_t>(fileSize)) break;
-            groups.push_back({pos+size,U32(h+8u),U32(h+12u)});
-            pos+=HEADER_SIZE;
+            if(size<fo3esm::HEADER_SIZE || pos+size>static_cast<uint64_t>(fileSize)) break;
+            groups.push_back({pos+size,fo3esm::ReadU32(h+8u),fo3esm::ReadU32(h+12u)});
+            pos+=fo3esm::HEADER_SIZE;
             continue;
         }
 
-        const uint32_t flags=U32(h+8u);
-        const uint32_t formId=U32(h+12u);
-        const uint64_t payloadOffset=pos+HEADER_SIZE;
+        const uint32_t flags=fo3esm::ReadU32(h+8u);
+        const uint32_t formId=fo3esm::ReadU32(h+12u);
+        const uint64_t payloadOffset=pos+fo3esm::HEADER_SIZE;
         const uint64_t end=payloadOffset+size;
         if(end>static_cast<uint64_t>(fileSize)) break;
-        const std::string type=FourCC(h);
+        const std::string type=fo3esm::FourCC(h);
 
         // Keep only actor-assembly record classes; this is tiny compared with a
         // full FormID index and lets later linked-record reads seek directly.
@@ -243,7 +149,7 @@ bool ScanIndexAndActors(
         if(type=="ACHR" && InMegatonCell(groups)){
             Locator loc{payloadOffset,size,flags,type};
             std::vector<uint8_t> payload;
-            if(ReadPayload(f,loc,payload)){
+            if(fo3esm::ReadPayload(f,loc,payload)){
                 RawActor a;
                 a.refFormId=formId;
                 a.flags=flags;
@@ -259,28 +165,28 @@ bool ScanIndexAndActors(
 bool ParseNpc(FILE* f, const Locator& loc,
               uint32_t formId, NpcBase& out) {
     std::vector<uint8_t> data;
-    if(!ReadPayload(f,loc,data)) return false;
+    if(!fo3esm::ReadPayload(f,loc,data)) return false;
     out.formId=formId;
-    Walk(data,[&](const char* type,const uint8_t* p,uint32_t n){
+    fo3esm::WalkSubrecords(data,[&](const char* type,const uint8_t* p,uint32_t n){
         if(std::memcmp(type,"EDID",4u)==0 && out.editorId.empty())
-            out.editorId=ZString(p,n);
+            out.editorId=fo3esm::ZString(p,n);
         else if(std::memcmp(type,"FULL",4u)==0 && out.fullName.empty())
-            out.fullName=ZString(p,n);
+            out.fullName=fo3esm::ZString(p,n);
         else if(std::memcmp(type,"MODL",4u)==0 && out.skeleton.empty())
-            out.skeleton=ZString(p,n);
+            out.skeleton=fo3esm::ZString(p,n);
         else if(std::memcmp(type,"ACBS",4u)==0 && n>=4u)
-            out.baseFlags=U32(p);
+            out.baseFlags=fo3esm::ReadU32(p);
         else if(std::memcmp(type,"RNAM",4u)==0 && n>=4u)
-            out.race=U32(p);
+            out.race=fo3esm::ReadU32(p);
         else if(std::memcmp(type,"HNAM",4u)==0 && n>=4u)
-            out.hair=U32(p);
+            out.hair=fo3esm::ReadU32(p);
         else if(std::memcmp(type,"ENAM",4u)==0 && n>=4u)
-            out.eyes=U32(p);
+            out.eyes=fo3esm::ReadU32(p);
         else if(std::memcmp(type,"PNAM",4u)==0 && n>=4u)
-            out.headParts.push_back(U32(p));
+            out.headParts.push_back(fo3esm::ReadU32(p));
         else if(std::memcmp(type,"CNTO",4u)==0 && n>=8u)
             out.inventory.push_back({
-                U32(p),static_cast<int32_t>(U32(p+4u))});
+                fo3esm::ReadU32(p),static_cast<int32_t>(fo3esm::ReadU32(p+4u))});
         else if(std::memcmp(type,"HCLR",4u)==0 && n>=4u) {
             out.hairColor[0]=p[0]; out.hairColor[1]=p[1];
             out.hairColor[2]=p[2]; out.hairColor[3]=p[3];
@@ -300,7 +206,7 @@ bool ParseNpc(FILE* f, const Locator& loc,
 
 bool ParseLinked(FILE* f, const Locator& loc, Linked& out) {
     std::vector<uint8_t> data;
-    if(!ReadPayload(f,loc,data)) return false;
+    if(!fo3esm::ReadPayload(f,loc,data)) return false;
     out.type=loc.type;
 
     bool raceHeadData=false;
@@ -311,15 +217,15 @@ bool ParseLinked(FILE* f, const Locator& loc, Linked& out) {
     uint32_t raceBodyIndex=0xffffffffu;
     int raceFaceGender=0; // 1 male, 2 female
 
-    Walk(data,[&](const char* type,const uint8_t* p,uint32_t n){
+    fo3esm::WalkSubrecords(data,[&](const char* type,const uint8_t* p,uint32_t n){
         if(std::memcmp(type,"EDID",4u)==0 && out.editorId.empty())
-            out.editorId=ZString(p,n);
+            out.editorId=fo3esm::ZString(p,n);
         else if(std::memcmp(type,"FULL",4u)==0 && out.fullName.empty())
-            out.fullName=ZString(p,n);
+            out.fullName=fo3esm::ZString(p,n);
 
         if(loc.type=="ARMO" &&
            std::memcmp(type,"BMDT",4u)==0 && n>=4u){
-            out.bipedMask=U32(p);
+            out.bipedMask=fo3esm::ReadU32(p);
         }
 
         if(loc.type=="RACE"){
@@ -375,11 +281,11 @@ bool ParseLinked(FILE* f, const Locator& loc, Linked& out) {
             }
             if(std::memcmp(type,"INDX",4u)==0 && n>=4u){
                 if(raceHeadData && raceMaleHead){
-                    raceHeadIndex=U32(p);
+                    raceHeadIndex=fo3esm::ReadU32(p);
                     return;
                 }
                 if(raceBodyData && raceMaleBody){
-                    raceBodyIndex=U32(p);
+                    raceBodyIndex=fo3esm::ReadU32(p);
                     return;
                 }
             }
@@ -398,7 +304,7 @@ bool ParseLinked(FILE* f, const Locator& loc, Linked& out) {
         }
 
         if(std::memcmp(type,"MODL",4u)==0){
-            const std::string path=ZString(p,n);
+            const std::string path=fo3esm::ZString(p,n);
             if(out.model.empty()) out.model=path;
             if(loc.type=="RACE" && raceHeadData && raceMaleHead &&
                raceHeadIndex<8u && !path.empty()){
@@ -413,9 +319,9 @@ bool ParseLinked(FILE* f, const Locator& loc, Linked& out) {
                 out.maleBodyModels[raceBodyIndex]=path;
             }
         } else if(std::memcmp(type,"MOD2",4u)==0 && out.model2.empty()){
-            out.model2=ZString(p,n);
+            out.model2=fo3esm::ZString(p,n);
         } else if(std::memcmp(type,"ICON",4u)==0){
-            const std::string path=ZString(p,n);
+            const std::string path=fo3esm::ZString(p,n);
             if(out.icon.empty()) out.icon=path;
             if(loc.type=="RACE" && raceHeadData && raceMaleHead &&
                raceHeadIndex<8u && !path.empty()){
@@ -615,10 +521,10 @@ bool LoadFo3FaceGenMorphQ233(
         return false;
     }
 
-    const uint32_t vertices=U32(bytes.data()+8u);
-    const uint32_t symModes=U32(bytes.data()+12u);
-    const uint32_t asymModes=U32(bytes.data()+16u);
-    const uint32_t basisVersion=U32(bytes.data()+20u);
+    const uint32_t vertices=fo3esm::ReadU32(bytes.data()+8u);
+    const uint32_t symModes=fo3esm::ReadU32(bytes.data()+12u);
+    const uint32_t asymModes=fo3esm::ReadU32(bytes.data()+16u);
+    const uint32_t basisVersion=fo3esm::ReadU32(bytes.data()+20u);
     if(vertices==0u || vertices>200000u ||
        symModes>256u || asymModes>256u){
         return false;
@@ -647,14 +553,14 @@ bool LoadFo3FaceGenMorphQ233(
     size_t at=64u;
     auto consume=[&](uint32_t modeCount,const std::vector<float>& coeffs){
         for(uint32_t mode=0u;mode<modeCount;++mode){
-            const float scale=F32(bytes.data()+at);
+            const float scale=fo3esm::ReadF32(bytes.data()+at);
             at+=4u;
             const float coefficient=
                 mode<coeffs.size()?coeffs[mode]:0.0f;
             for(uint32_t vertex=0u;vertex<vertices;++vertex){
-                const int16_t dx=static_cast<int16_t>(U16(bytes.data()+at+0u));
-                const int16_t dy=static_cast<int16_t>(U16(bytes.data()+at+2u));
-                const int16_t dz=static_cast<int16_t>(U16(bytes.data()+at+4u));
+                const int16_t dx=static_cast<int16_t>(fo3esm::ReadU16(bytes.data()+at+0u));
+                const int16_t dy=static_cast<int16_t>(fo3esm::ReadU16(bytes.data()+at+2u));
+                const int16_t dz=static_cast<int16_t>(fo3esm::ReadU16(bytes.data()+at+4u));
                 at+=6u;
                 if(std::fabs(coefficient)>1.0e-8f){
                     const float factor=coefficient*scale;
@@ -698,11 +604,11 @@ bool LoadFo3FaceGenTextureQ234(
         return false;
     }
 
-    const uint32_t rows=U32(bytes.data()+8u);
-    const uint32_t columns=U32(bytes.data()+12u);
-    const uint32_t symModes=U32(bytes.data()+16u);
-    const uint32_t asymModes=U32(bytes.data()+20u);
-    const uint32_t basisVersion=U32(bytes.data()+24u);
+    const uint32_t rows=fo3esm::ReadU32(bytes.data()+8u);
+    const uint32_t columns=fo3esm::ReadU32(bytes.data()+12u);
+    const uint32_t symModes=fo3esm::ReadU32(bytes.data()+16u);
+    const uint32_t asymModes=fo3esm::ReadU32(bytes.data()+20u);
+    const uint32_t basisVersion=fo3esm::ReadU32(bytes.data()+24u);
     if(rows==0u || columns==0u || rows>8192u || columns>8192u ||
        symModes==0u || symModes>256u || asymModes>256u){
         return false;
@@ -735,7 +641,7 @@ bool LoadFo3FaceGenTextureQ234(
     std::vector<float> delta(static_cast<size_t>(pixels)*3u,0.0f);
     size_t at=64u;
     for(uint32_t mode=0u;mode<symModes;++mode){
-        const float scale=F32(bytes.data()+at);
+        const float scale=fo3esm::ReadF32(bytes.data()+at);
         at+=4u;
         const uint8_t* r=bytes.data()+at;
         const uint8_t* g=r+pixels;

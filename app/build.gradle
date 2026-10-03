@@ -22,8 +22,8 @@ android {
         applicationId 'com.falloutquest.app'
         minSdk 29
         targetSdk 35
-        versionCode 116
-        versionName '0.24.4-q24.4-remove-lod-diagnostic'
+        versionCode 117
+        versionName '0.24.5-q24.5-shared-esm-reader'
 
         ndk {
             abiFilters 'arm64-v8a'

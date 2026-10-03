@@ -12,6 +12,7 @@ add_library(falloutquest SHARED
     fo3-nif-collision.cpp
     fo3-collision-runtime.cpp
     fo3-bsa-reader.cpp
+    fo3-esm-reader.cpp
     fo3-texture-bsa.cpp
     fo3-water-q2070.cpp
     fo3-npc-q23.cpp
