@@ -1,6 +1,8 @@
 #pragma once
 #include "fo3-loading-screen.h"
 #include "fo3-loading-pose.h"
+#include "fo3-loading-menu.h"
+#include "data/fo3-asset-store.h"
 #include "rendering/mesh/fo3-static-nif.h"
 #include "world/fo3-scene-preparation.h"
 #include <cmath>
@@ -18,33 +20,44 @@ struct Vertex { float p[3],n[3],uv[2],colour[4]; };
 struct CpuShape { Fo3StaticNifMesh mesh; Fo3RgbaTexture image; std::vector<Vertex> vertices; };
 struct CpuDisplay {
     Fo3RgbaTexture art;
-    std::vector<CpuShape> model, compass;
+    std::vector<CpuShape> model, compass, overlay;
     std::string modelPath, artPath;
 };
-struct Shape { GLuint vao=0,vbo=0,ibo=0,texture=0; GLsizei count=0; bool unlit=false; float alpha=1; };
-inline fo3scene::Preparation<int> gCatalog;
+struct Shape { GLuint vao=0,vbo=0,ibo=0,texture=0; GLsizei count=0; bool unlit=false,blend=false; uint8_t sourceBlend=6,destBlend=7; float alpha=1,cutoff=0.02f; };
+inline fo3scene::Preparation<fo3loadingmenu::Definition> gCatalog;
+inline fo3loadingmenu::Definition gMenu;
 inline fo3scene::Preparation<CpuDisplay> gPreparation;
 inline bool gCatalogStarted=false,gCatalogFailed=false,gJobStarted=false,gUploaded=false;
 inline uint64_t gGeneration=~uint64_t{0};
 inline uint64_t gSeed=fo3loadingpose::Mix(Fo3LoadingClockUs());
 inline Matrix gHead=fo3loadingpose::Identity(),gAnchor=fo3loadingpose::Identity();
-inline std::vector<Shape> gModel,gCompass,gNextModel,gNextCompass;
-inline size_t gModelUpload=0,gCompassUpload=0;
+inline std::vector<Shape> gModel,gCompass,gOverlay,gNextModel,gNextCompass,gNextOverlay;
+inline size_t gModelUpload=0,gCompassUpload=0,gOverlayUpload=0;
 inline bool gArtUploaded=false;
 inline GLuint gArt=0,gProgram=0,gQuad=0,gQuadBuffer=0;
 inline GLuint gFramebuffer=0,gColour=0,gDepth=0;
 inline int gWidth=0,gHeight=0;
 inline float gArtAspect=4.0f/3.0f;
-inline GLint gMvp=-1,gSampler=-1,gUnlit=-1,gTint=-1,gFade=-1;
+inline GLint gMvp=-1,gSampler=-1,gUnlit=-1,gTint=-1,gFade=-1,gCutoff=-1;
 inline uint64_t gVisibleStart=0,gRotationStart=0;
 inline float gFrameRotationSeconds=0;
 inline float gFrameSeconds=0;
 
 inline void PrepareCatalog() {
     if(gCatalogStarted || gCatalogFailed)return;
-    gCatalogStarted=gCatalog.Start([](int&,const std::atomic<bool>& cancelled){
+    gCatalogStarted=gCatalog.Start([](fo3loadingmenu::Definition& menu,const std::atomic<bool>& cancelled){
         if(cancelled.load())return false;
         fo3loading::Prepare(fo3loading::ESM_PATH,&cancelled);
+        std::vector<uint8_t> xml;
+        if(fo3assets::GetBsaArchive(fo3assets::FalloutDataPath("Fallout - Misc.bsa"))->Read("menus/loading_menu.xml",xml,nullptr,fo3assets::BsaPathKind::Exact,1024u*1024u))
+            fo3loadingmenu::ReadXml(std::string(xml.begin(),xml.end()),menu);
+        for(const char* filename:{"FALLOUT.INI","Fallout.ini"}) {
+            FILE* ini=std::fopen(fo3assets::FalloutDataPath(filename).c_str(),"rb");
+            if(!ini)continue;
+            std::string text;char buffer[4096];size_t size=0;
+            while((size=std::fread(buffer,1,sizeof(buffer),ini))>0 && text.size()<1024u*1024u)text.append(buffer,size);
+            std::fclose(ini);fo3loadingmenu::ReadIni(text,menu);break;
+        }
         __android_log_print(ANDROID_LOG_INFO,"FalloutQuest","LOADING CATALOG: pictures=%zu exhibits=%zu",fo3loading::gScreens.size(),fo3loading::gModels.size());
         return !cancelled.load();
     });
@@ -53,9 +66,9 @@ inline void PrepareCatalog() {
 inline void SetHead(float x,float y,float z,float qx,float qy,float qz,float qw) {
     gHead=fo3loadingpose::Anchor(x,y,z,qx,qy,qz,qw);
 }
-inline void PrepareVertices(std::vector<CpuShape>& source,bool compass);
+inline void PrepareVertices(std::vector<CpuShape>& source,bool compass,float uiExtent=0.17f);
 inline bool ReadShapes(const std::string& path,std::vector<CpuShape>& out,
-                       const std::atomic<bool>& cancelled) {
+                       const std::atomic<bool>& cancelled,bool originalUi=false) {
     std::vector<Fo3StaticNifMesh> meshes;
     if(cancelled.load() || !LoadFo3StaticNifMeshes(path,meshes))return false;
     size_t vertices=0;
@@ -70,6 +83,10 @@ inline bool ReadShapes(const std::string& path,std::vector<CpuShape>& out,
         CpuShape s;s.mesh=std::move(mesh);
         if(!s.mesh.diffuseTexturePath.empty() && imageBytes<32u*1024u*1024u)
             LoadFalloutTextureRgba(s.mesh.diffuseTexturePath,s.image);
+        if(originalUi && !s.mesh.diffuseTexturePath.empty() && s.image.rgba.empty()) {
+            __android_log_print(ANDROID_LOG_WARN,"FalloutQuest","LOADING UI MATERIAL MISS: model=%s texture=%s; skipping unresolved shape",path.c_str(),s.mesh.diffuseTexturePath.c_str());
+            continue;
+        }
         imageBytes+=s.image.rgba.size();
         out.push_back(std::move(s));
     }
@@ -94,7 +111,7 @@ inline GLuint UploadImage(const Fo3RgbaTexture& image) {
     glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA,image.width,image.height,0,GL_RGBA,GL_UNSIGNED_BYTE,image.rgba.data());
     return texture;
 }
-inline void PrepareVertices(std::vector<CpuShape>& source,bool compass) {
+inline void PrepareVertices(std::vector<CpuShape>& source,bool compass,float uiExtent) {
     float lo[3]={INFINITY,INFINITY,INFINITY},hi[3]={-INFINITY,-INFINITY,-INFINITY};
     for(const auto& s:source) for(size_t i=0;i+2<s.mesh.positions.size();i+=3)
         for(int a=0;a<3;++a) {lo[a]=std::min(lo[a],s.mesh.positions[i+a]);hi[a]=std::max(hi[a],s.mesh.positions[i+a]);}
@@ -109,7 +126,7 @@ inline void PrepareVertices(std::vector<CpuShape>& source,bool compass) {
         ax=az==0?1:0;ay=3-ax-az;
     }
     const float diagonal=std::sqrt(span[0]*span[0]+span[1]*span[1]+span[2]*span[2]);
-    const float scale=compass?0.17f/extent:0.72f/diagonal;
+    const float scale=compass?uiExtent/extent:0.72f/diagonal;
     for(auto& src:source) {
         auto& m=src.mesh;
         std::vector<Vertex> v(m.positions.size()/3);
@@ -131,7 +148,8 @@ inline void PrepareVertices(std::vector<CpuShape>& source,bool compass) {
 inline void UploadShape(CpuShape& src,std::vector<Shape>& target,bool compass) {
     auto& m=src.mesh;auto& v=src.vertices;
     if(v.empty() || m.indices.empty())return;
-    Shape s;s.count=static_cast<GLsizei>(m.indices.size());s.unlit=compass||m.noLighting;s.alpha=m.alpha;
+    Shape s;s.count=static_cast<GLsizei>(m.indices.size());s.unlit=compass||m.noLighting;s.alpha=m.alpha;s.blend=m.alphaBlend;s.sourceBlend=m.alphaSourceBlend;s.destBlend=m.alphaDestBlend;
+    s.cutoff=m.alphaTest?m.alphaThreshold:0.0f;
     s.texture=UploadImage(src.image);
     if(!s.texture) { Fo3RgbaTexture white;white.width=white.height=1;white.rgba={255,255,255,255};s.texture=UploadImage(white); }
     glGenVertexArrays(1,&s.vao);glBindVertexArray(s.vao);
@@ -163,11 +181,11 @@ inline bool EnsureProgram() {
     const char* fs=R"(#version 300 es
     precision highp float;
     in vec2 uv;in vec3 normal;in vec4 colour;
-    uniform sampler2D uImage;uniform float uUnlit;uniform vec4 uTint;uniform float uFade;
+    uniform sampler2D uImage;uniform float uUnlit;uniform vec4 uTint;uniform float uFade;uniform float uCutoff;
     out vec4 result;
     void main(){vec4 c=texture(uImage,uv)*colour*uTint;
-    if(c.a<0.02)discard;
-    float light=mix(0.35+0.65*max(dot(normalize(normal),normalize(vec3(-0.4,0.7,1))),0.0),1.0,uUnlit);
+    if(c.a<uCutoff)discard;
+    float light=uUnlit>0.5?1.0:0.35+0.65*max(dot(normalize(normal),normalize(vec3(-0.4,0.7,1))),0.0);
     result=vec4(c.rgb*light*uFade,c.a);})";
     GLuint v=fo3loading::Compile(GL_VERTEX_SHADER,vs),f=fo3loading::Compile(GL_FRAGMENT_SHADER,fs);
     if(!v||!f){if(v)glDeleteShader(v);if(f)glDeleteShader(f);return false;}
@@ -175,7 +193,7 @@ inline bool EnsureProgram() {
     glDeleteShader(v);glDeleteShader(f);GLint ok=0;glGetProgramiv(gProgram,GL_LINK_STATUS,&ok);
     if(!ok){glDeleteProgram(gProgram);gProgram=0;return false;}
     gMvp=glGetUniformLocation(gProgram,"uMvp");gSampler=glGetUniformLocation(gProgram,"uImage");
-    gUnlit=glGetUniformLocation(gProgram,"uUnlit");gTint=glGetUniformLocation(gProgram,"uTint");gFade=glGetUniformLocation(gProgram,"uFade");
+    gUnlit=glGetUniformLocation(gProgram,"uUnlit");gTint=glGetUniformLocation(gProgram,"uTint");gFade=glGetUniformLocation(gProgram,"uFade");gCutoff=glGetUniformLocation(gProgram,"uCutoff");
     const Vertex quad[]={{{-1,-1,0},{0,0,1},{0,1},{1,1,1,1}},{{1,-1,0},{0,0,1},{1,1},{1,1,1,1}},
         {{-1,1,0},{0,0,1},{0,0},{1,1,1,1}},{{1,1,0},{0,0,1},{1,0},{1,1,1,1}}};
     glGenVertexArrays(1,&gQuad);glBindVertexArray(gQuad);glGenBuffers(1,&gQuadBuffer);glBindBuffer(GL_ARRAY_BUFFER,gQuadBuffer);
@@ -190,19 +208,22 @@ inline bool EnsureProgram() {
 inline void AdvanceAssets() {
     const uint64_t generation=GetFo3LoadingGeneration();
     if(generation!=gGeneration) {
-        gPreparation.Reset();DeleteShapes(gNextModel);DeleteShapes(gNextCompass);
-        gModelUpload=gCompassUpload=0;gArtUploaded=false;
+        gPreparation.Reset();DeleteShapes(gNextModel);DeleteShapes(gNextCompass);DeleteShapes(gNextOverlay);
+        gModelUpload=gCompassUpload=gOverlayUpload=0;gArtUploaded=false;
         gGeneration=generation;gAnchor=gHead;gJobStarted=gUploaded=false;gVisibleStart=Fo3LoadingClockUs();gRotationStart=gVisibleStart;
     }
     PrepareCatalog();
     if(!gJobStarted && (gCatalog.Ready() || gCatalogFailed)) {
         const uint32_t cell=GetFo3LoadingCell(),world=GetFo3LoadingWorldspace();
         const uint64_t random=fo3loadingpose::Mix(gSeed^generation);
-        const bool needCompass=gCompass.empty();
-        gJobStarted=gPreparation.Start([cell,world,random,needCompass](CpuDisplay& out,const std::atomic<bool>& cancelled){
+        if(gCatalog.Ready())gMenu=gCatalog.Get();
+        const bool needCompass=gCompass.empty(),needOverlay=gOverlay.empty();
+        const auto menu=gMenu;
+        gJobStarted=gPreparation.Start([cell,world,random,needCompass,needOverlay,menu](CpuDisplay& out,const std::atomic<bool>& cancelled){
             const auto* art=fo3loading::Select(cell,world,random);
             if(art) {out.artPath=art->iconPath;LoadFalloutTextureRgba(art->iconPath,out.art);}
-            if(needCompass)ReadShapes("Interface\\Circular Loading\\loading01.nif",out.compass,cancelled);
+            if(needCompass)ReadShapes(menu.compassPath,out.compass,cancelled,true);
+            if(needOverlay)ReadShapes(menu.overlayPath,out.overlay,cancelled,true);
             if(!fo3loading::gModels.empty()) {
                 const size_t start=random%fo3loading::gModels.size();
                 for(size_t i=0;i<std::min<size_t>(8,fo3loading::gModels.size()) && !cancelled.load();++i) {
@@ -211,7 +232,7 @@ inline void AdvanceAssets() {
                     if(ReadShapes(path,out.model,cancelled)) {out.modelPath=path;break;}
                 }
             }
-            PrepareVertices(out.model,false);PrepareVertices(out.compass,true);
+            PrepareVertices(out.model,false);PrepareVertices(out.compass,true);PrepareVertices(out.overlay,true,2.4f);
             return !cancelled.load();
         });
         if(!gJobStarted)gUploaded=true; // Thread creation failure must not trap a transition.
@@ -229,19 +250,27 @@ inline void AdvanceAssets() {
             if(gCompassUpload<cpu.compass.size()) {
                 UploadShape(cpu.compass[gCompassUpload++],gNextCompass,true);return;
             }
+            if(gOverlayUpload<cpu.overlay.size()) {
+                UploadShape(cpu.overlay[gOverlayUpload++],gNextOverlay,true);return;
+            }
             if(gModelUpload<cpu.model.size()) {
                 UploadShape(cpu.model[gModelUpload++],gNextModel,false);return;
             }
             DeleteShapes(gModel);gModel.swap(gNextModel);
             if(!gNextCompass.empty()) {DeleteShapes(gCompass);gCompass.swap(gNextCompass);}
+            if(!gNextOverlay.empty()) {DeleteShapes(gOverlay);gOverlay.swap(gNextOverlay);}
             __android_log_print(ANDROID_LOG_INFO,"FalloutQuest",
                 "VR LOADING ASSETS: generation=%llu art=%s model=%s compassShapes=%zu panel=2.5m exhibit=1.6m offset=(-0.58,-0.33)",
                 static_cast<unsigned long long>(generation),cpu.artPath.c_str(),cpu.modelPath.c_str(),gCompass.size());
+            __android_log_print(ANDROID_LOG_INFO,"FalloutQuest","ORIGINAL LOADING MENU: overlay=%s shapes=%zu mainMenuRGB=(%d,%d,%d) fade=%.2fs compassAnimation=%s controllers=pending-inspection",
+                gMenu.overlayPath.c_str(),gOverlay.size(),gMenu.red,gMenu.green,gMenu.blue,gMenu.fadeSeconds,gMenu.compassAnimation.c_str());
+            if(gOverlay.empty())__android_log_print(ANDROID_LOG_WARN,"FalloutQuest","AUTHORED LOADING OVERLAY UNAVAILABLE: %s; check original mesh/texture archives",gMenu.overlayPath.c_str());
             if(gCompass.empty())__android_log_print(ANDROID_LOG_WARN,"FalloutQuest","AUTHORED LOADING COMPASS UNAVAILABLE: Interface/Circular Loading/loading01.nif; check original mesh/texture archives");
         }
         gPreparation.Reset();gUploaded=true;gVisibleStart=Fo3LoadingClockUs();
     }
 }
+inline bool FullyVisible() {return gFrameSeconds>=gMenu.fadeSeconds;}
 inline bool Ready() {return gUploaded && gGeneration==GetFo3LoadingGeneration();}
 inline bool EnsureTarget(int width,int height) {
     if(!gFramebuffer)glGenFramebuffers(1,&gFramebuffer);
@@ -259,25 +288,35 @@ inline bool EnsureTarget(int width,int height) {
     glFramebufferRenderbuffer(GL_FRAMEBUFFER,GL_DEPTH_ATTACHMENT,GL_RENDERBUFFER,gDepth);
     return glCheckFramebufferStatus(GL_FRAMEBUFFER)==GL_FRAMEBUFFER_COMPLETE;
 }
+inline GLenum BlendFactor(uint8_t blend) {
+    const GLenum factors[]={GL_ONE,GL_ZERO,GL_SRC_COLOR,GL_ONE_MINUS_SRC_COLOR,GL_DST_COLOR,GL_ONE_MINUS_DST_COLOR,
+        GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA,GL_DST_ALPHA,GL_ONE_MINUS_DST_ALPHA,GL_SRC_ALPHA_SATURATE};
+    return blend<11?factors[blend]:GL_ONE;
+}
 inline void Draw(const Shape& s,const Matrix& mvp,float green=0) {
     glUniformMatrix4fv(gMvp,1,GL_FALSE,mvp.m);glUniform1f(gUnlit,s.unlit?1:0);
-    glUniform4f(gTint,green>0?26.0f/255:1,1,green>0?128.0f/255:1,s.alpha);
+    glUniform4f(gTint,green>0?gMenu.red/255.0f:1,green>0?gMenu.green/255.0f:1,green>0?gMenu.blue/255.0f:1,s.alpha);
+    glUniform1f(gCutoff,s.cutoff);
+    if(s.blend) {glEnable(GL_BLEND);glBlendFunc(BlendFactor(s.sourceBlend),BlendFactor(s.destBlend));}
+    else glDisable(GL_BLEND);
     glBindTexture(GL_TEXTURE_2D,s.texture);glBindVertexArray(s.vao);
     glDrawElements(GL_TRIANGLES,s.count,GL_UNSIGNED_INT,nullptr);
 }
 inline void Render(GLuint framebuffer,GLsizei width,GLsizei height,const float* viewProjection,bool advance) {
     if(!IsFo3LoadingVisible() || width<=0 || height<=0)return;
-    GLint program,vao,buffer,active,texture,readFb,drawFb,rbo,viewport[4],depthFunc,blend[4];
+    GLint program,vao,buffer,active,texture,readFb,drawFb,rbo,viewport[4],depthFunc,blend[4],equation[2];
     GLfloat clear[4];GLboolean mask,colourMask[4];
     glGetIntegerv(GL_CURRENT_PROGRAM,&program);glGetIntegerv(GL_VERTEX_ARRAY_BINDING,&vao);glGetIntegerv(GL_ARRAY_BUFFER_BINDING,&buffer);
     glGetIntegerv(GL_ACTIVE_TEXTURE,&active);glActiveTexture(GL_TEXTURE0);glGetIntegerv(GL_TEXTURE_BINDING_2D,&texture);
     glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING,&readFb);glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING,&drawFb);
     glGetIntegerv(GL_RENDERBUFFER_BINDING,&rbo);glGetIntegerv(GL_VIEWPORT,viewport);glGetIntegerv(GL_DEPTH_FUNC,&depthFunc);
+    glGetIntegerv(GL_BLEND_EQUATION_RGB,&equation[0]);glGetIntegerv(GL_BLEND_EQUATION_ALPHA,&equation[1]);
     glGetIntegerv(GL_BLEND_SRC_RGB,&blend[0]);glGetIntegerv(GL_BLEND_DST_RGB,&blend[1]);
     glGetIntegerv(GL_BLEND_SRC_ALPHA,&blend[2]);glGetIntegerv(GL_BLEND_DST_ALPHA,&blend[3]);
     glGetFloatv(GL_COLOR_CLEAR_VALUE,clear);glGetBooleanv(GL_DEPTH_WRITEMASK,&mask);glGetBooleanv(GL_COLOR_WRITEMASK,colourMask);
     const GLenum caps[]={GL_DEPTH_TEST,GL_BLEND,GL_CULL_FACE,GL_SCISSOR_TEST,GL_STENCIL_TEST};GLboolean enabled[5];
     for(int i=0;i<5;++i){enabled[i]=glIsEnabled(caps[i]);glDisable(caps[i]);}
+    glBlendEquationSeparate(GL_FUNC_ADD,GL_FUNC_ADD);
     glColorMask(GL_TRUE,GL_TRUE,GL_TRUE,GL_TRUE);glDepthMask(GL_TRUE);glClearColor(0,0,0,1);
     if(advance) {
         AdvanceAssets();
@@ -293,15 +332,21 @@ inline void Render(GLuint framebuffer,GLsizei width,GLsizei height,const float* 
             Matrix panel=Multiply(vp,gAnchor);
             glUseProgram(gProgram);glUniform1i(gSampler,0);
             const float seconds=gFrameSeconds;
-            glUniform1f(gFade,std::clamp(seconds/0.35f,0.0f,1.0f));
+            glUniform1f(gFade,std::clamp(seconds/gMenu.fadeSeconds,0.0f,1.0f));
             glEnable(GL_DEPTH_TEST);glDepthFunc(GL_LEQUAL);
             if(gArt) {
                 Matrix size=fo3loadingpose::Identity();size.m[0]=1.2f;size.m[5]=1.2f/gArtAspect;
                 Matrix mvp=Multiply(panel,size);glUniformMatrix4fv(gMvp,1,GL_FALSE,mvp.m);
-                glUniform1f(gUnlit,1);glUniform4f(gTint,1,1,1,1);glBindTexture(GL_TEXTURE_2D,gArt);glBindVertexArray(gQuad);
+                glUniform1f(gUnlit,1);glUniform1f(gCutoff,0.02f);
+                glUniform4f(gTint,gMenu.red/255.0f,gMenu.green/255.0f,gMenu.blue/255.0f,1);glBindTexture(GL_TEXTURE_2D,gArt);glBindVertexArray(gQuad);
                 glDrawArrays(GL_TRIANGLE_STRIP,0,4);
             }
             glEnable(GL_BLEND);glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);
+            // loading_nif explicitly opts out of inherited system colour.
+            glDepthMask(GL_FALSE);
+            const Matrix overlay=Multiply(panel,Placement(0,0,0.02f,0));
+            for(const auto& shape:gOverlay)Draw(shape,overlay);
+            glDepthMask(GL_TRUE);
             Matrix model=Multiply(panel,Placement(fo3loadingpose::ModelX,fo3loadingpose::ModelY,fo3loadingpose::PanelDistance-fo3loadingpose::ModelDistance,gFrameRotationSeconds*fo3loadingpose::RotationRadiansPerSecond));
             for(const auto& s:gModel)Draw(s,model);
             // Bottom right of the artwork. Rotate the real mesh as a rigid UI
@@ -320,7 +365,7 @@ inline void Render(GLuint framebuffer,GLsizei width,GLsizei height,const float* 
     glBindFramebuffer(GL_READ_FRAMEBUFFER,readFb);glBindFramebuffer(GL_DRAW_FRAMEBUFFER,drawFb);glBindRenderbuffer(GL_RENDERBUFFER,rbo);
     glViewport(viewport[0],viewport[1],viewport[2],viewport[3]);glClearColor(clear[0],clear[1],clear[2],clear[3]);
     glColorMask(colourMask[0],colourMask[1],colourMask[2],colourMask[3]);glDepthMask(mask);glDepthFunc(depthFunc);
-    glBlendFuncSeparate(blend[0],blend[1],blend[2],blend[3]);
+    glBlendFuncSeparate(blend[0],blend[1],blend[2],blend[3]);glBlendEquationSeparate(equation[0],equation[1]);
     for(int i=0;i<5;++i)if(enabled[i])glEnable(caps[i]);else glDisable(caps[i]);
     glBindVertexArray(vao);glBindBuffer(GL_ARRAY_BUFFER,buffer);glUseProgram(program);
     glBindTexture(GL_TEXTURE_2D,texture);glActiveTexture(active);
@@ -328,8 +373,9 @@ inline void Render(GLuint framebuffer,GLsizei width,GLsizei height,const float* 
 inline void Shutdown() {
     gPreparation.Reset();gCatalog.Reset();
     fo3loading::gScreens.clear();fo3loading::gModels.clear();fo3loading::gScreensPrepared=false;
+    gMenu=fo3loadingmenu::Definition{};
     gCatalogStarted=gCatalogFailed=false;gJobStarted=gUploaded=false;
-    DeleteShapes(gModel);DeleteShapes(gCompass);DeleteShapes(gNextModel);DeleteShapes(gNextCompass);
+    DeleteShapes(gModel);DeleteShapes(gCompass);DeleteShapes(gOverlay);DeleteShapes(gNextModel);DeleteShapes(gNextCompass);DeleteShapes(gNextOverlay);
     if(gArt)glDeleteTextures(1,&gArt);
     if(gColour)glDeleteTextures(1,&gColour);
     if(gDepth)glDeleteRenderbuffers(1,&gDepth);

@@ -2,7 +2,7 @@
 
 Experimental standalone Meta Quest runtime for user-supplied Fallout 3 game data.
 
-## Current milestone: 0.24.13 — Loading polish
+## Current milestone: 0.24.14 — Original loading-menu assets
 
 FalloutQuest is a native ARM64/OpenXR reimplementation of the runtime needed to
 interpret Fallout 3's original data on Quest. It is not a port of the original
@@ -41,6 +41,11 @@ frame. The opaque loading target covers both eye images until scene completion.
 Hidden world, sky, shadow and reflection draws pause under the loading screen;
 Megaton/Wasteland initial collision snapshots prepare on a worker and publish
 before finalization. Loading artwork UVs are flipped independently of model UVs.
+The loading menu now reads its overlay and compass paths from the original
+Misc.bsa XML and uses MainMenu RGB (199,255,165) with its authored 0.75-second
+fade. LoadingAnim01.NIF geometry is composited over the artwork with authored
+alpha/blend settings, keeping its own colour rather than the menu tint.
+NIF controller animation playback remains pending inspection of the UI assets.
 Wasteland warmup no longer reveals unfinished detail/LOD after a time limit.
 
 See docs/ARCHITECTURE.md for the current source layout and development rules.

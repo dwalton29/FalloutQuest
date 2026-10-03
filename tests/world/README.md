@@ -25,3 +25,7 @@ location-specific LSCR priority, malformed subrecords and strict exterior
 completion. The loading test executable optionally accepts a local Fallout3.esm
 path to validate the supplied base game catalogue (150 pictures, 122 eligible
 weapon/prop paths). Those assets are not needed for CI.
+
+The loading test also accepts two arguments: a decoded loading_menu.xml and
+Fallout.ini, for verification of the original menu paths, Idle name, 0.75-second
+fade and MainMenu colour. CI fixtures check malformed inputs and section scoping.

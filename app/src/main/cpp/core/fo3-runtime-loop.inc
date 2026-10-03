@@ -1515,7 +1515,7 @@ private:
             CheckXr(xrEndFrame(session_, &endInfo), "xrEndFrame");
         if (q1700FrameSubmitted && layerCount > 0) {
             const bool wasLoading = IsFo3LoadingVisible();
-            if (fo3loadingvr::Ready()) MarkFo3LoadingFramePresented();
+            if (fo3loadingvr::Ready()) MarkFo3LoadingFramePresented(fo3loadingvr::FullyVisible());
             if (wasLoading && !IsFo3LoadingVisible()) {
                 FQ_LOGI("LOADING PRESENTATION COMPLETE: generation=%llu cell=%08X worldspace=%08X totalUs=%llu",
                         static_cast<unsigned long long>(GetFo3LoadingGeneration()),

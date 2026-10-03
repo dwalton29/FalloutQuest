@@ -1,4 +1,7 @@
 #include "../../app/src/main/cpp/ui/loading/fo3-loading-catalog.h"
+#include "../../app/src/main/cpp/ui/loading/fo3-loading-menu.h"
+#include "../../app/src/main/cpp/ui/loading/fo3-loading-state.h"
+#include <fstream>
 #include <cassert>
 #include <set>
 #include <iostream>
@@ -9,6 +12,24 @@ static std::vector<uint8_t> field(const char* type,const std::string& value) {
     b.insert(b.end(),value.begin(),value.end());b.push_back(0);return b;
 }
 int main(int argc,char**argv) {
+    fo3loadingmenu::Definition menu;
+    fo3loadingmenu::ReadIni("[Other]\niSystemColorMainMenuRed=12\n[Interface]\niSystemColorMainMenuRed=200 ; note\niSystemColorMainMenuGreen=999\niSystemColorMainMenuBlue=12junk\n",menu);
+    assert(menu.red==200 && menu.green==255 && menu.blue==165);
+    fo3loadingmenu::ReadXml("<menufade>0.9</menufade><nif name=\"loading_nif\"><filename>Interface\\Custom.NIF</filename></nif><nif name=\"loading_pinwheel\"><filename>Interface\\Wheel.NIF</filename><animation>AuthoredIdle</animation></nif>",menu);
+    assert(menu.overlayPath=="Interface\\Custom.NIF" && menu.compassPath=="Interface\\Wheel.NIF" && menu.compassAnimation=="AuthoredIdle" && near(menu.fadeSeconds,0.9f));
+    fo3loadingmenu::ReadXml("<menufade>nan</menufade><nif name=\"loading_nif\"><filename>bad</filename>",menu);
+    assert(near(menu.fadeSeconds,0.9f) && menu.overlayPath=="Interface\\Custom.NIF");
+    BeginFo3Loading(1,2);
+    for(unsigned i=0;i<FO3_LOADING_MIN_PRESENT_FRAMES+5;++i)MarkFo3LoadingFramePresented(false);
+    assert(ShouldDelayFo3TransitionConsume());
+    MarkFo3LoadingFramePresented(true);assert(!ShouldDelayFo3TransitionConsume());CancelFo3Loading();
+    if(argc==3) {
+        auto read=[](const char* path){std::ifstream f(path);assert(f.good());return std::string(std::istreambuf_iterator<char>(f),{});};
+        menu=fo3loadingmenu::Definition{};fo3loadingmenu::ReadXml(read(argv[1]),menu);fo3loadingmenu::ReadIni(read(argv[2]),menu);
+        assert(menu.overlayPath=="Interface\\Loading\\LoadingAnim01.NIF" && menu.compassPath=="Interface\\Circular Loading\\loading01.nif");
+        assert(menu.compassAnimation=="Idle" && menu.red==199 && menu.green==255 && menu.blue==165 && near(menu.fadeSeconds,0.75f));
+        std::cout<<"Original XML/INI loading definition verified\n";
+    }
     Matrix a=Anchor(1,1.6f,3,0,0,0,1);
     assert(near(a.m[12],1)&&near(a.m[13],1.6f)&&near(a.m[14],0.5f));
     Matrix right=Anchor(1,1.6f,3,0,std::sqrt(0.5f),0,std::sqrt(0.5f));

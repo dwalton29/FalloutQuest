@@ -225,3 +225,34 @@ Development parity against the supplied 224 Megaton NIFs compared the legacy
 initializer with fresh-cache prewarm/snapshot publication: 172 collidable
 placements and 32,889 triangles matched exactly, including transformed
 vertices/normals, surface/layer/material identities and Havok welding keys.
+
+### Original menu definition (0.24.14)
+
+`fo3-loading-menu.h` reads the overlay filename, compass filename/animation name
+and fade duration from original loading_menu.xml, plus MainMenu RGB from the
+Interface section of Fallout.ini. The supplied values remain the defaults when
+an installed INI/XML is unavailable. Catalogue publication also publishes this
+definition; readers never access a config while its worker mutates it.
+
+The artwork and compass inherit MainMenu colour (199,255,165 in the supplied
+INI). LoadingAnim01.NIF explicitly opts out in XML and uses its decoded texture
+and vertex colour. UI geometry is fit to the VR panel, preserving relative shape
+placement and depth, then composited before the independent rotating exhibit.
+Each shape preserves decoded NiAlphaProperty blend factors, alpha testing and
+material alpha. Unresolved UI texture shapes are skipped with a diagnostic,
+rather than drawn with the neutral fallback used for 3D exhibits. Transparent
+UI geometry does not write panel depth. Blend equations are set to FUNC_ADD and restored with the rest of the caller's GL state.
+
+Uploads retain one-shape-per-frame staging. Overlay/compass resources persist
+across transitions and are released on shutdown. Presented-frame counting still
+requires uploads to finish, and the minimum dwell cannot advance to WORK while
+the authored fade is incomplete. Both eyes share one animation/fade clock.
+
+This is the original-asset rendering path, not completed Gamebryo UI animation
+support. The static NIF decoder supplies the bind/static geometry; LoadingAnim01
+controllers and the compass Idle sequence are not evaluated. Compass rigid
+rotation is the existing VR adaptation. Projector movement, animated texture
+transforms and exact layering need the actual two NIFs and their textures for
+inspection. No artificial flicker or scanlines have been substituted for that
+missing evidence. Tests validate the supplied XML/INI definition, section
+selection, invalid values, incomplete XML and fade/completion gating.

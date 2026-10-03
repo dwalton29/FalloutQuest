@@ -108,12 +108,12 @@ inline void CancelFo3Loading() {
 // consumes the request. WORK remains visible for the entire phased build.
 // POST -> IDLE happens only after a submitted frame containing the finished
 // destination underneath the loading presentation.
-inline void MarkFo3LoadingFramePresented() {
+inline void MarkFo3LoadingFramePresented(bool fullyVisible = true) {
     const int phase = gFo3LoadingPhase.load(std::memory_order_acquire);
     if (phase == FO3_LOADING_PRESENT) {
         const uint32_t presented =
             gFo3LoadingPresentedFrames.fetch_add(1u, std::memory_order_acq_rel) + 1u;
-        if (presented >= FO3_LOADING_MIN_PRESENT_FRAMES) {
+        if (presented >= FO3_LOADING_MIN_PRESENT_FRAMES && fullyVisible) {
             int expected = FO3_LOADING_PRESENT;
             (void)gFo3LoadingPhase.compare_exchange_strong(
                 expected, FO3_LOADING_READY,
