@@ -29,12 +29,14 @@ jobs:
           fi
           for source in \
             core/fo3-runtime.cpp \
+            core/fo3-runtime-loop.inc \
             world/fo3-cell-world.cpp \
-            fo3-static-nif-runtime.cpp \
+            rendering/mesh/fo3-static-nif.cpp \
             physics/fo3-collision-runtime.cpp \
-            fo3-player-controller-runtime.inc \
+            player/fo3-player-controller.inc \
             data/fo3-esm-reader.cpp \
-            npc/fo3-npc.cpp; do
+            npc/fo3-npc.cpp \
+            vr/openxr-platform-prelude.h; do
             test -f "app/src/main/cpp/$source"
           done
           if grep -R -n '/home/runner/work/FalloutQuest' app/src/main/cpp \
