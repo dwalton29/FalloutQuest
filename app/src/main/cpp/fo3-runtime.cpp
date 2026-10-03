@@ -68,7 +68,6 @@ struct GpuObject;
 bool Q1970ShouldRenderFullDetail(const GpuObject& object);
 bool Q220IsLooseRecordType(const std::string& type);
 void Q1970ProbeNativeLod(float gameX, float gameY);
-void Q2022ProbeLodArchive(int32_t cellX, int32_t cellY);
 extern const float Q1890_EXTERIOR_CELL_SIZE;
 extern bool gExteriorStreamingActiveQ1890;
 extern bool gExteriorStreamBusyQ1890;
@@ -2826,16 +2825,6 @@ bool ProcessQ74TransitionRequest() {
                  gExteriorWindowGridXQ1890, gExteriorWindowGridYQ1890,
                  gExteriorOriginXQ1890, gExteriorOriginYQ1890,
                  gExteriorOriginZQ1890);
-        Q6H_LOGI("Q20.22B PROBE TRIGGER: phase=scene-transition worldspace=%08X grid=(%d,%d) wastelandExpected=0000003C willProbe=%d",
-                 gExteriorWorldspaceQ1890,
-                 gExteriorWindowGridXQ1890,
-                 gExteriorWindowGridYQ1890,
-                 gExteriorWorldspaceQ1890 == 0x0000003Cu ? 1 : 0);
-        if (gExteriorWorldspaceQ1890 == 0x0000003Cu) {
-            Q2022ProbeLodArchive(
-                gExteriorWindowGridXQ1890,
-                gExteriorWindowGridYQ1890);
-        }
     } else {
         gExteriorStreamingActiveQ1890 = false;
         gExteriorWorldspaceQ1890 = 0u;
@@ -4285,16 +4274,6 @@ void UpdateFo3ExteriorStreamingQ1890(float virtualHeadX, float virtualHeadZ) {
     gQ1920LatestGridValid = true;
     gQ1920LatestGridX = actualGridX;
     gQ1920LatestGridY = actualGridY;
-    if (gExteriorWorldspaceQ1890 == 0x0000003Cu) {
-        Q2022ProbeLodArchive(actualGridX, actualGridY);
-    } else {
-        static bool q2022LoggedNonWasteland = false;
-        if (!q2022LoggedNonWasteland) {
-            q2022LoggedNonWasteland = true;
-            Q6H_LOGI("Q20.22B PROBE WAIT: phase=runtime worldspace=%08X actual=(%d,%d) reason=not-wasteland-0000003C",
-                     gExteriorWorldspaceQ1890, actualGridX, actualGridY);
-        }
-    }
     if (gExteriorWorldspaceQ1890 != 0u) {
         // Q20.10: CELL-specific streaming now owns every exterior worldspace,
         // including child worlds such as MegatonWorld. Native Level4 LOD remains
@@ -5438,16 +5417,6 @@ Q1990NativeLodBlock* Q1990FindLodBlock(int32_t blockX, int32_t blockY) {
 
 constexpr int Q1840_LEVEL4_BLOCK_CELLS = 4;
 
-// Q20.22: authoritative Fallout - Meshes.bsa LOD hierarchy probe.
-// This is diagnostic only: no rendering/streaming behaviour is changed.
-bool gQ2022LodArchiveProbeDone = false;
-
-int32_t Q2022FloorToSpan(int32_t cell, int span) {
-    int32_t quotient = cell / span;
-    if (cell < 0 && (cell % span) != 0) --quotient;
-    return quotient * span;
-}
-
 bool Q2023ParseAxis(const std::string& path, const char* marker, int32_t& out) {
     const size_t markerPos = path.find(marker);
     if (markerPos == std::string::npos) return false;
@@ -5624,130 +5593,6 @@ bool Q2023TileFullyRefinedQ19(
         }
     }
     return true;
-}
-
-void Q2022ProbeLodArchive(int32_t cellX, int32_t cellY) {
-    if (gQ2022LodArchiveProbeDone) return;
-
-    Q6H_LOGI("Q20.22B LOD ARCHIVE PROBE BEGIN: playerCell=(%d,%d) worldspace=%08X source=scene-transition-or-runtime",
-             cellX, cellY, gExteriorWorldspaceQ1890);
-
-    std::vector<FalloutMeshIndexEntry> entries;
-    if (!ListFalloutMeshFilesByPrefix(
-            "Landscape\\LOD\\Wasteland\\", entries)) {
-        Q6H_LOGE("Q20.22B LOD ARCHIVE PROBE FAILED: reason=bsa-index-unavailable retry=1");
-        return;
-    }
-    gQ2022LodArchiveProbeDone = true;
-
-    struct Bucket {
-        const char* name;
-        const char* needle;
-        size_t count = 0u;
-        uint64_t bytes = 0u;
-        std::vector<const FalloutMeshIndexEntry*> samples;
-    };
-    Bucket buckets[] = {
-        {"Level4", "level4"},
-        {"Level8", "level8"},
-        {"Level16", "level16"},
-        {"Level32", "level32"},
-        {"Blocks", "\\blocks\\"},
-        {"Trees", "\\trees\\"},
-        {"High", "high"},
-    };
-
-    size_t nifCount = 0u;
-    size_t otherLevelCount = 0u;
-    for (const FalloutMeshIndexEntry& entry : entries) {
-        if (entry.path.size() < 4u ||
-            entry.path.substr(entry.path.size() - 4u) != ".nif") {
-            continue;
-        }
-        ++nifCount;
-        bool knownLevel = false;
-        for (Bucket& bucket : buckets) {
-            if (entry.path.find(bucket.needle) == std::string::npos) continue;
-            ++bucket.count;
-            bucket.bytes += entry.storedBytes;
-            if (bucket.samples.size() < 5u)
-                bucket.samples.push_back(&entry);
-            if (bucket.name[0] == 'L') knownLevel = true;
-        }
-        if (entry.path.find("level") != std::string::npos &&
-            !knownLevel) {
-            ++otherLevelCount;
-        }
-    }
-
-    Q6H_LOGI("Q20.22 LOD ARCHIVE SUMMARY: playerCell=(%d,%d) prefix=landscape\\lod\\wasteland entries=%zu nif=%zu level4=%zu level8=%zu level16=%zu level32=%zu blocks=%zu trees=%zu high=%zu otherLevel=%zu source=Fallout-Meshes.bsa-index renderChanges=0",
-             cellX, cellY, entries.size(), nifCount,
-             buckets[0].count, buckets[1].count,
-             buckets[2].count, buckets[3].count,
-             buckets[4].count, buckets[5].count,
-             buckets[6].count, otherLevelCount);
-
-    for (const Bucket& bucket : buckets) {
-        Q6H_LOGI("Q20.22 LOD ARCHIVE BUCKET: category=%s count=%zu storedMB=%.2f samples=%zu",
-                 bucket.name, bucket.count,
-                 static_cast<double>(bucket.bytes) /
-                     (1024.0 * 1024.0),
-                 bucket.samples.size());
-        for (const FalloutMeshIndexEntry* sample : bucket.samples) {
-            Q6H_LOGI("Q20.22 LOD ARCHIVE SAMPLE: category=%s path=%s storedBytes=%u compressed=%d",
-                     bucket.name, sample->path.c_str(),
-                     sample->storedBytes,
-                     sample->compressed ? 1 : 0);
-        }
-    }
-
-    const int spans[] = {4, 8, 16, 32};
-    for (int span : spans) {
-        const int32_t bx = Q2022FloorToSpan(cellX, span);
-        const int32_t by = Q2022FloorToSpan(cellY, span);
-        const std::string level =
-            "level" + std::to_string(span);
-        const std::string coord =
-            ".x" + std::to_string(bx) +
-            ".y" + std::to_string(by);
-
-        size_t localMatches = 0u;
-        for (const FalloutMeshIndexEntry& entry : entries) {
-            if (entry.path.find(level) == std::string::npos ||
-                entry.path.find(coord) == std::string::npos) {
-                continue;
-            }
-            ++localMatches;
-            if (localMatches <= 16u) {
-                Q6H_LOGI("Q20.22 LOD LOCAL: span=%d aligned=(%d,%d) path=%s storedBytes=%u compressed=%d",
-                         span, bx, by, entry.path.c_str(),
-                         entry.storedBytes,
-                         entry.compressed ? 1 : 0);
-            }
-        }
-        Q6H_LOGI("Q20.22 LOD LOCAL SUMMARY: span=%d playerCell=(%d,%d) aligned=(%d,%d) matches=%zu",
-                 span, cellX, cellY, bx, by, localMatches);
-    }
-
-    // Also surface exact archive conventions that do not fit our guessed
-    // Level4/8/16/32 vocabulary.
-    size_t unusualLogged = 0u;
-    for (const FalloutMeshIndexEntry& entry : entries) {
-        if (entry.path.size() < 4u ||
-            entry.path.substr(entry.path.size() - 4u) != ".nif" ||
-            entry.path.find("level") == std::string::npos) {
-            continue;
-        }
-        const bool known =
-            entry.path.find("level4") != std::string::npos ||
-            entry.path.find("level8") != std::string::npos ||
-            entry.path.find("level16") != std::string::npos ||
-            entry.path.find("level32") != std::string::npos;
-        if (known) continue;
-        Q6H_LOGI("Q20.22 LOD UNUSUAL LEVEL: path=%s storedBytes=%u",
-                 entry.path.c_str(), entry.storedBytes);
-        if (++unusualLogged >= 20u) break;
-    }
 }
 
 // Q20.24: separate terrain refinement from object-LOD range.
@@ -10745,37 +10590,6 @@ void RenderScene() {
     Q1970RenderStallScopeQ19 q1970RenderStallScope;
     if (!gSceneReady) Q1030BootMegatonOnRender();
     ProcessQ74TransitionRequest();
-
-    // Q20.22C: run the LOD archive diagnostic from the render path as well as
-    // transition/streaming. RenderScene is a proven heartbeat in captures, so
-    // this cannot disappear just because a one-shot transition message rolled
-    // out of logcat. Retry the archive query periodically while in Wasteland.
-    static uint64_t q2022cProbeHeartbeat = 0u;
-    ++q2022cProbeHeartbeat;
-    const bool q2022cPulse =
-        q2022cProbeHeartbeat == 1u ||
-        (q2022cProbeHeartbeat % 120u) == 0u;
-    const bool q2022cWasteland =
-        gExteriorStreamingActiveQ1890 &&
-        gExteriorWorldspaceQ1890 == 0x0000003Cu;
-    if (q2022cPulse && q2022cWasteland &&
-        !gQ2022LodArchiveProbeDone) {
-        Q2022ProbeLodArchive(
-            gExteriorWindowGridXQ1890,
-            gExteriorWindowGridYQ1890);
-    }
-    if (q2022cPulse) {
-        Q6H_LOGI("Q20.22C PROBE HEARTBEAT: frame=%llu sceneReady=%d exteriorActive=%d worldspace=%08X currentCell=%08X grid=(%d,%d) wasteland=%d probeDone=%d",
-                 static_cast<unsigned long long>(q2022cProbeHeartbeat),
-                 gSceneReady ? 1 : 0,
-                 gExteriorStreamingActiveQ1890 ? 1 : 0,
-                 gExteriorWorldspaceQ1890,
-                 gCurrentCellFormId,
-                 gExteriorWindowGridXQ1890,
-                 gExteriorWindowGridYQ1890,
-                 q2022cWasteland ? 1 : 0,
-                 gQ2022LodArchiveProbeDone ? 1 : 0);
-    }
 
     if (!gSceneReady || !gProgram || gObjects.empty()) return;
 
