@@ -1,7 +1,7 @@
 #pragma once
 
 #include "fo3-collision-metadata.h"
-#include "fo3-nif-collision-q6f.h"
+#include "fo3-nif-collision.h"
 
 #include <cstdint>
 #include <string>
