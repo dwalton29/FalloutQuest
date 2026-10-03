@@ -29,7 +29,7 @@ extern void PumpFo3AndroidEventsQ1860();
 #include "rendering/environment/fo3-imagespace.h"
 #include "rendering/environment/fo3-weather-imagespace.h"
 #include "rendering/environment/fo3-weather-light.h"
-#include "fo3-pc-sky-q1660.h"
+#include "rendering/environment/fo3-pc-sky.h"
 #include "rendering/environment/fo3-external-emittance.h"
 #include "rendering/environment/fo3-authored-color.h"
 #include "fo3-megaton-cell-environment-q1410.h"

@@ -24,7 +24,7 @@
 #include "fo3-megaton-scene.h"
 #include "rendering/environment/fo3-environment.h"
 #include "rendering/environment/fo3-weather-sky.h"
-#include "fo3-pc-sky-q1660.h"
+#include "rendering/environment/fo3-pc-sky.h"
 #include "rendering/environment/fo3-weather-sky-color.h"
 #include "rendering/environment/fo3-visual-depth.h"
 
