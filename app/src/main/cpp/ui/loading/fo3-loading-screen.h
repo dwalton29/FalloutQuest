@@ -2,6 +2,7 @@
 
 #include "fo3-loading-state.h"
 #include "fo3-texture-bsa.h"
+#include "fo3-loading-catalog.h"
 
 #include <GLES3/gl3.h>
 #include <android/log.h>
@@ -17,21 +18,6 @@
 namespace fo3loading {
 
 constexpr const char* TAG = "FalloutQuest";
-constexpr const char* ESM_PATH =
-    "/data/user/0/com.falloutquest.app/files/Fallout3/Data/Fallout3.esm";
-constexpr size_t RECORD_HEADER = 24u;
-constexpr uint32_t COMPRESSED_RECORD = 0x00040000u;
-
-struct LoadingScreen {
-    uint32_t formId = 0u;
-    std::string editorId;
-    std::string description;
-    std::string iconPath;
-    std::vector<uint32_t> locations;
-};
-
-inline std::vector<LoadingScreen> gScreens;
-inline bool gScreensPrepared = false;
 inline GLuint gProgram = 0u;
 inline GLuint gVao = 0u;
 inline GLuint gTexture = 0u;
@@ -43,159 +29,6 @@ inline uint64_t gLoadedGeneration = ~uint64_t{0};
 inline std::string gLoadedEditorId;
 inline std::string gLoadedDescription;
 inline std::string gLoadedIcon;
-
-inline uint16_t Read16(const uint8_t* p) {
-    return static_cast<uint16_t>(p[0]) |
-           (static_cast<uint16_t>(p[1]) << 8u);
-}
-
-inline uint32_t Read32(const uint8_t* p) {
-    return static_cast<uint32_t>(p[0]) |
-           (static_cast<uint32_t>(p[1]) << 8u) |
-           (static_cast<uint32_t>(p[2]) << 16u) |
-           (static_cast<uint32_t>(p[3]) << 24u);
-}
-
-inline std::string ReadString(const uint8_t* p, size_t n) {
-    while (n > 0u && p[n - 1u] == 0u) --n;
-    return std::string(reinterpret_cast<const char*>(p), n);
-}
-
-inline bool ReadExact(FILE* f, void* dst, size_t bytes) {
-    return f && std::fread(dst, 1u, bytes, f) == bytes;
-}
-
-inline bool InflateRecord(const std::vector<uint8_t>& stored,
-                          uint32_t flags,
-                          std::vector<uint8_t>& payload) {
-    if ((flags & COMPRESSED_RECORD) == 0u) {
-        payload = stored;
-        return true;
-    }
-    if (stored.size() < 5u) return false;
-    const uint32_t wanted = Read32(stored.data());
-    if (wanted == 0u || wanted > 8u * 1024u * 1024u) return false;
-    payload.resize(wanted);
-    uLongf outputBytes = static_cast<uLongf>(wanted);
-    const int z = uncompress(payload.data(), &outputBytes,
-                             stored.data() + 4u,
-                             static_cast<uLong>(stored.size() - 4u));
-    if (z != Z_OK || outputBytes != wanted) {
-        payload.clear();
-        return false;
-    }
-    return true;
-}
-
-inline void ParseLoadingRecord(uint32_t formId,
-                               const std::vector<uint8_t>& payload) {
-    LoadingScreen screen;
-    screen.formId = formId;
-    size_t pos = 0u;
-    while (pos + 6u <= payload.size()) {
-        char type[5]{
-            static_cast<char>(payload[pos]), static_cast<char>(payload[pos + 1u]),
-            static_cast<char>(payload[pos + 2u]), static_cast<char>(payload[pos + 3u]), 0};
-        uint32_t size = Read16(payload.data() + pos + 4u);
-        pos += 6u;
-
-        if (std::memcmp(type, "XXXX", 4u) == 0) {
-            if (size != 4u || pos + 4u + 6u > payload.size()) break;
-            const uint32_t extended = Read32(payload.data() + pos);
-            pos += 4u;
-            type[0] = static_cast<char>(payload[pos]);
-            type[1] = static_cast<char>(payload[pos + 1u]);
-            type[2] = static_cast<char>(payload[pos + 2u]);
-            type[3] = static_cast<char>(payload[pos + 3u]);
-            type[4] = 0;
-            pos += 6u; // next subrecord's 16-bit size is ignored by XXXX semantics
-            size = extended;
-        }
-
-        if (pos + size > payload.size()) break;
-        const uint8_t* data = payload.data() + pos;
-        if (std::memcmp(type, "EDID", 4u) == 0) {
-            screen.editorId = ReadString(data, size);
-        } else if (std::memcmp(type, "DESC", 4u) == 0) {
-            screen.description = ReadString(data, size);
-        } else if (std::memcmp(type, "ICON", 4u) == 0) {
-            screen.iconPath = ReadString(data, size);
-        } else if (std::memcmp(type, "LNAM", 4u) == 0 && size >= 4u) {
-            screen.locations.push_back(Read32(data));
-        }
-        pos += size;
-    }
-    if (!screen.iconPath.empty()) gScreens.push_back(std::move(screen));
-}
-
-inline void Prepare() {
-    if (gScreensPrepared) return;
-    gScreensPrepared = true;
-
-    FILE* f = std::fopen(ESM_PATH, "rb");
-    if (!f) {
-        __android_log_print(ANDROID_LOG_ERROR, TAG,
-                            "LSCR CACHE FAIL: Fallout3.esm open failed");
-        return;
-    }
-
-    uint8_t header[RECORD_HEADER]{};
-    size_t records = 0u;
-    while (ReadExact(f, header, sizeof(header))) {
-        const uint32_t sizeField = Read32(header + 4u);
-        if (std::memcmp(header, "GRUP", 4u) == 0) {
-            // Group size includes this 24-byte header. Children immediately
-            // follow, so continue sequentially instead of skipping the group.
-            continue;
-        }
-        if (sizeField > 64u * 1024u * 1024u) break;
-
-        const uint32_t flags = Read32(header + 8u);
-        const uint32_t formId = Read32(header + 12u);
-        if (std::memcmp(header, "LSCR", 4u) == 0) {
-            std::vector<uint8_t> stored(sizeField);
-            if (!ReadExact(f, stored.data(), stored.size())) break;
-            std::vector<uint8_t> payload;
-            if (InflateRecord(stored, flags, payload)) {
-                ParseLoadingRecord(formId, payload);
-                ++records;
-            }
-        } else if (std::fseek(f, static_cast<long>(sizeField), SEEK_CUR) != 0) {
-            break;
-        }
-    }
-    std::fclose(f);
-
-    __android_log_print(ANDROID_LOG_INFO, TAG,
-                        "LSCR CACHE READY: records=%zu usableIcons=%zu source=Fallout3.esm",
-                        records, gScreens.size());
-}
-
-inline bool ContainsLocation(const LoadingScreen& screen, uint32_t formId) {
-    return formId != 0u &&
-           std::find(screen.locations.begin(), screen.locations.end(), formId) !=
-               screen.locations.end();
-}
-
-inline const LoadingScreen* Select(uint32_t cellFormId, uint32_t worldspaceFormId) {
-    if (gScreens.empty()) return nullptr;
-    std::vector<const LoadingScreen*> exact;
-    std::vector<const LoadingScreen*> world;
-    std::vector<const LoadingScreen*> generic;
-    for (const LoadingScreen& screen : gScreens) {
-        if (ContainsLocation(screen, cellFormId)) exact.push_back(&screen);
-        else if (ContainsLocation(screen, worldspaceFormId)) world.push_back(&screen);
-        else if (screen.locations.empty()) generic.push_back(&screen);
-    }
-    const std::vector<const LoadingScreen*>* choices = nullptr;
-    if (!exact.empty()) choices = &exact;
-    else if (!world.empty()) choices = &world;
-    else if (!generic.empty()) choices = &generic;
-    if (!choices || choices->empty()) choices = nullptr;
-    if (!choices) return &gScreens[(cellFormId ^ worldspaceFormId) % gScreens.size()];
-    const uint32_t hash = cellFormId * 1664525u + worldspaceFormId * 1013904223u;
-    return (*choices)[hash % choices->size()];
-}
 
 inline GLuint Compile(GLenum type, const char* source) {
     const GLuint shader = glCreateShader(type);

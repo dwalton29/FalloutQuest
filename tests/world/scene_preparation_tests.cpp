@@ -24,6 +24,11 @@ struct Result { std::string text; int value = 0; };
 } // namespace
 
 int main() {
+    for(int bits=0;bits<8;++bits) {
+        Require(Fo3LoadingExteriorReady(bits&1,bits&2,bits&4)==(bits==7),
+                "loading revealed an incomplete exterior");
+    }
+
     BeginFo3Loading(0x151e3u, 0u);
     Require(ShouldDelayFo3TransitionConsume(), "loading presentation gate was skipped");
     for (uint32_t frame = 0u; frame < FO3_LOADING_MIN_PRESENT_FRAMES - 1u; ++frame)

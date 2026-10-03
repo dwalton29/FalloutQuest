@@ -123,3 +123,8 @@ inline void MarkFo3LoadingFramePresented() {
         gFo3LoadingPhase.store(FO3_LOADING_IDLE, std::memory_order_release);
     }
 }
+
+// Elapsed time diagnoses a stalled load; it must never expose incomplete cells.
+inline bool Fo3LoadingExteriorReady(bool detail, bool nearLod, bool horizon) {
+    return detail && nearLod && horizon;
+}

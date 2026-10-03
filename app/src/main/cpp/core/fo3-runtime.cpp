@@ -2660,6 +2660,7 @@ void Q74DeleteGpuObjects(std::vector<GpuObject>& objects) {
 }
 
 bool gQ2013ExteriorWarmupPending = false;
+bool gFo3LoadingWarmupWarned = false;
 std::chrono::steady_clock::time_point gQ2013ExteriorWarmupStarted{};
 
 struct Fo3SceneCpuPreparation {
@@ -2818,6 +2819,7 @@ bool ProcessQ74TransitionRequest() {
         if (request.worldspaceFormId != 0u) ConfigureFo3CollisionPolicyQ710(prepared.placements);
         gQ2013ExteriorWarmupPending = request.worldspaceFormId == 0x0000003Cu && IsFo3LoadingVisible();
         gQ2013ExteriorWarmupStarted = std::chrono::steady_clock::time_point{};
+        gFo3LoadingWarmupWarned = false;
         gSceneLoad.replacement.reserve(selected.size());
         gSceneLoad.contextApplied = true;
         Q6H_LOGI("SCENE CPU READY: boot=%d cell=%08X placements=%zu shapes=%zu resolveUs=%llu metadataUs=%llu cpuUs=%llu textureUs=%llu preparedTextures=%zu",
@@ -4474,8 +4476,12 @@ void UpdateFo3ExteriorStreamingQ1890(float virtualHeadX, float virtualHeadZ) {
                                 std::chrono::steady_clock::now() -
                                 gQ2013ExteriorWarmupStarted).count());
                 const bool timeout = warmupUs >= 25000000u;
-                if ((detailComplete && nearLodComplete && horizonComplete) ||
-                    timeout) {
+                if (timeout && !gFo3LoadingWarmupWarned) {
+                    gFo3LoadingWarmupWarned = true;
+                    Q6H_LOGW("LOADING WARMUP STILL PENDING: detail=%zu/49 nearLOD=%zu/9 level32=%zu/%zu high=%zu/%zu; presentation stays covered, check original archives if progress stops",
+                             detailReady, lodReady, level32Ready, level32Target, highReady, highTarget);
+                }
+                if (Fo3LoadingExteriorReady(detailComplete, nearLodComplete, horizonComplete)) {
                     Q6H_LOGI("Q20.25 EXTERIOR WARMUP COMPLETE: detailReady=%zu/49 nearLevel4=%zu/9 level32=%zu/%zu high=%zu/%zu elapsedUs=%llu timeout=%d action=release-loading-screen",
                              detailReady, lodReady,
                              level32Ready, level32Target,

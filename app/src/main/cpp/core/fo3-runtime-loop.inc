@@ -1363,7 +1363,7 @@ private:
         if (!CheckXr(xrWaitFrame(session_, &waitInfo, &frameState), "xrWaitFrame")) return;
         XrFrameBeginInfo beginInfo{XR_TYPE_FRAME_BEGIN_INFO};
         if (!CheckXr(xrBeginFrame(session_, &beginInfo), "xrBeginFrame")) return;
-        PrepareFo3LoadingScreens();
+        fo3loadingvr::PrepareCatalog();
 
         std::array<XrCompositionLayerProjectionView, 2> projectionViews{
             XrCompositionLayerProjectionView{XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW},
@@ -1388,6 +1388,12 @@ private:
                 (viewState.viewStateFlags & XR_VIEW_STATE_POSITION_VALID_BIT) &&
                 (viewState.viewStateFlags & XR_VIEW_STATE_ORIENTATION_VALID_BIT)) {
 
+                XrPosef loadingHead=views[0].pose;
+                loadingHead.position.x=(views[0].pose.position.x+views[1].pose.position.x)*0.5f;
+                loadingHead.position.y=(views[0].pose.position.y+views[1].pose.position.y)*0.5f;
+                loadingHead.position.z=(views[0].pose.position.z+views[1].pose.position.z)*0.5f;
+                fo3loadingvr::SetHead(loadingHead.position.x,loadingHead.position.y,loadingHead.position.z,
+                    loadingHead.orientation.x,loadingHead.orientation.y,loadingHead.orientation.z,loadingHead.orientation.w);
                 ++gSceneLoadFrame;
                 SyncInput(frameState.predictedDisplayTime);
                 UpdateFo3TimeOfDay(0.0f,
@@ -1507,9 +1513,9 @@ private:
         endInfo.layers = layerCount ? layers : nullptr;
         const bool q1700FrameSubmitted =
             CheckXr(xrEndFrame(session_, &endInfo), "xrEndFrame");
-        if (q1700FrameSubmitted) {
+        if (q1700FrameSubmitted && layerCount > 0) {
             const bool wasLoading = IsFo3LoadingVisible();
-            MarkFo3LoadingFramePresented();
+            if (fo3loadingvr::Ready()) MarkFo3LoadingFramePresented();
             if (wasLoading && !IsFo3LoadingVisible()) {
                 FQ_LOGI("LOADING PRESENTATION COMPLETE: generation=%llu cell=%08X worldspace=%08X totalUs=%llu",
                         static_cast<unsigned long long>(GetFo3LoadingGeneration()),
@@ -1670,7 +1676,8 @@ private:
             }
             Q1350CompositeEyePostQ1350(eyeIndex, framebuffer_, eye.width, eye.height);
             if (IsFo3LoadingVisible()) {
-                RenderFo3LoadingVr(framebuffer_, eye.width, eye.height);
+                const Mat4 loadingVp=Multiply(projection,ViewFromPose(view.pose));
+                RenderFo3LoadingVr(framebuffer_, eye.width, eye.height, loadingVp.m, eyeIndex == 0);
             }
             glFlush();
         } else {

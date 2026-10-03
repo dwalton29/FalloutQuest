@@ -158,3 +158,41 @@ The current hierarchy is intentionally unchanged while it is measured:
 Streaming logs include per-phase microsecond totals for metadata, CPU NIF work,
 GPU upload, collision, terrain and commit. Use these measurements before changing
 budgets or restructuring collision further.
+
+## Immersive loading presentation
+
+`ui/loading/fo3-loading-catalog.h` parses original LSCR pictures and WEAP/MISC
+MODL paths without Android/GL dependencies. A worker publishes the immutable
+catalogue; another worker prepares each random display, including NIF geometry,
+DDS textures and interleaved vertices. GL uploads occur one shape per frame.
+`fo3-loading-pose.h` defines tracking-space placement and generation selection.
+`fo3-loading-vr.h` draws into a reusable private colour/depth target and replaces
+the entire final eye image after world post-processing. The shared anchor is
+captured once per generation from the midpoint of the located eye poses. Each
+eye uses its physical tracking-space view/projection; door arrival yaw and
+locomotion do not move the loading panel. Prior art/model resources remain
+visible during later preparation, then staged meshes replace the old display.
+
+The panel is 2.5 metres away; the 0.72-metre exhibit is 2.1 metres away and
+rotates at 0.20 radians/second. Original LSCR selection retains CELL/worldspace
+priority with a per-session/per-generation random seed. Fallout 3 LSCR records
+have no model association: exhibits are original weapons and ordinary props,
+not a claim that Bethesda authored a Fallout 4 loading scene for Fallout 3.
+The compass loads `Interface\Circular Loading\loading01.nif`, confirmed by
+the supplied Misc.bsa loading_menu.xml. Geometry/textures use the existing NIF
+and DDS decoders. It rotates as a rigid emblem; Gamebryo's Idle controllers are
+not played. Missing/unsupported assets produce explicit logs and the opaque
+background remains; no synthetic compass substitutes for the original asset.
+The full UI mesh/texture archives are needed; those assets are not in the
+supplied Megaton subset and cannot be visually verified from that subset.
+
+Presented-frame dwell starts only after display uploads finish and a render
+layer is submitted. The existing WORK/POST gate covers scene upload and final
+commit; Wasteland release requires its complete detail, near-LOD and horizon
+warmup. The old 25-second forced reveal is now a diagnostic warning while
+coverage remains. Missing required world assets can therefore hold the loader
+until resolved. Background prefetch during ordinary seamless outdoor movement
+retains its existing behaviour; loading scenes cover explicit CELL transitions.
+Headset stereo comfort, compass orientation and frame timing still require an
+on-device pass with the full installed archives. Host tests cover anchor/eye
+separation, randomized location priority, malformed records and release gates.
