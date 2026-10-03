@@ -1,4 +1,5 @@
 #include "fo3-megaton-scene.h"
+#include "fo3-esm-reader.h"
 
 #include <android/log.h>
 #include <algorithm>
@@ -9,7 +10,6 @@
 #include <functional>
 #include <unordered_set>
 #include <vector>
-#include <zlib.h>
 
 namespace {
 
@@ -17,9 +17,6 @@ constexpr const char* TAG = "FalloutQuest";
 constexpr const char* ESM_PATH =
         "/data/user/0/com.falloutquest.app/files/Fallout3/Data/Fallout3.esm";
 constexpr uint32_t TARGET_CELL_FORM_ID = 0x000151E3u;
-constexpr uint32_t FLAG_COMPRESSED = 0x00040000u;
-constexpr uint64_t HEADER_SIZE = 24u;
-constexpr uint32_t MAX_RECORD_BYTES = 64u * 1024u * 1024u;
 constexpr float Q71_UNITS_PER_METRE = 70.0f;
 constexpr float Q71_FLOOR_Y = -1.55f;
 constexpr float Q71_SCENE_FORWARD = 0.0f;
@@ -67,88 +64,6 @@ struct DoorProbeCandidate {
     float teleportRz = 0.0f;
 };
 
-uint16_t ReadLe16(const uint8_t* p) {
-    return static_cast<uint16_t>(p[0]) |
-           static_cast<uint16_t>(static_cast<uint16_t>(p[1]) << 8);
-}
-
-uint32_t ReadLe32(const uint8_t* p) {
-    return static_cast<uint32_t>(p[0]) |
-           (static_cast<uint32_t>(p[1]) << 8) |
-           (static_cast<uint32_t>(p[2]) << 16) |
-           (static_cast<uint32_t>(p[3]) << 24);
-}
-
-float ReadLeFloat(const uint8_t* p) {
-    const uint32_t bits = ReadLe32(p);
-    float value = 0.0f;
-    std::memcpy(&value, &bits, sizeof(value));
-    return value;
-}
-
-bool ReadExact(FILE* file, void* dst, size_t size) {
-    return std::fread(dst, 1, size, file) == size;
-}
-
-int64_t FileSize(FILE* file) {
-    const off_t current = ftello(file);
-    if (current < 0) return -1;
-    if (fseeko(file, 0, SEEK_END) != 0) return -1;
-    const off_t end = ftello(file);
-    fseeko(file, current, SEEK_SET);
-    return static_cast<int64_t>(end);
-}
-
-bool InflateRecord(const std::vector<uint8_t>& stored, std::vector<uint8_t>& out) {
-    if (stored.size() < 4u) return false;
-    const uint32_t inflatedSize = ReadLe32(stored.data());
-    if (inflatedSize == 0u || inflatedSize > MAX_RECORD_BYTES) return false;
-    out.resize(inflatedSize);
-    uLongf destLen = static_cast<uLongf>(out.size());
-    const int result = uncompress(reinterpret_cast<Bytef*>(out.data()), &destLen,
-                                  reinterpret_cast<const Bytef*>(stored.data() + 4u),
-                                  static_cast<uLong>(stored.size() - 4u));
-    if (result != Z_OK || destLen != inflatedSize) {
-        out.clear();
-        return false;
-    }
-    return true;
-}
-
-bool ReadPayload(FILE* file, uint32_t storedSize, uint32_t flags,
-                 std::vector<uint8_t>& out) {
-    if (storedSize == 0u || storedSize > MAX_RECORD_BYTES) return false;
-    std::vector<uint8_t> stored(storedSize);
-    if (!ReadExact(file, stored.data(), stored.size())) return false;
-    if ((flags & FLAG_COMPRESSED) == 0u) {
-        out.swap(stored);
-        return true;
-    }
-    return InflateRecord(stored, out);
-}
-
-void WalkSubrecords(const uint8_t* data, size_t size,
-                    const std::function<void(const char*, const uint8_t*, uint32_t)>& visitor) {
-    size_t pos = 0u;
-    uint32_t extendedSize = 0u;
-    while (pos + 6u <= size) {
-        const char* type = reinterpret_cast<const char*>(data + pos);
-        const uint16_t size16 = ReadLe16(data + pos + 4u);
-        pos += 6u;
-        if (std::memcmp(type, "XXXX", 4u) == 0) {
-            if (size16 != 4u || pos + 4u > size) return;
-            extendedSize = ReadLe32(data + pos);
-            pos += 4u;
-            continue;
-        }
-        const uint32_t subSize = extendedSize ? extendedSize : size16;
-        extendedSize = 0u;
-        if (subSize > size - pos) return;
-        visitor(type, data + pos, subSize);
-        pos += subSize;
-    }
-}
-
 bool IsTargetChildGroup(uint32_t label, uint32_t type) {
     return label == TARGET_CELL_FORM_ID &&
            (type == 6u || type == 8u || type == 9u || type == 10u);
@@ -165,8 +80,8 @@ bool CollectTargetCellRefs(std::unordered_set<uint32_t>& refs) {
     refs.clear();
     FILE* file = std::fopen(ESM_PATH, "rb");
     if (!file) return false;
-    const int64_t fileSize = FileSize(file);
-    if (fileSize < static_cast<int64_t>(HEADER_SIZE)) {
+    const int64_t fileSize = fo3esm::FileSize(file);
+    if (fileSize < static_cast<int64_t>(fo3esm::HEADER_SIZE)) {
         std::fclose(file);
         return false;
     }
@@ -177,23 +92,23 @@ bool CollectTargetCellRefs(std::unordered_set<uint32_t>& refs) {
         if (rawOffset < 0) break;
         const uint64_t offset = static_cast<uint64_t>(rawOffset);
         while (!groups.empty() && offset >= groups.back().end) groups.pop_back();
-        if (offset + HEADER_SIZE > static_cast<uint64_t>(fileSize)) break;
+        if (offset + fo3esm::HEADER_SIZE > static_cast<uint64_t>(fileSize)) break;
 
-        uint8_t header[HEADER_SIZE]{};
-        if (!ReadExact(file, header, sizeof(header))) break;
-        const uint32_t sizeField = ReadLe32(header + 4u);
+        uint8_t header[fo3esm::HEADER_SIZE]{};
+        if (!fo3esm::ReadExact(file, header, sizeof(header))) break;
+        const uint32_t sizeField = fo3esm::ReadU32(header + 4u);
         if (std::memcmp(header, "GRUP", 4u) == 0) {
-            if (sizeField < HEADER_SIZE || offset + sizeField > static_cast<uint64_t>(fileSize)) break;
+            if (sizeField < fo3esm::HEADER_SIZE || offset + sizeField > static_cast<uint64_t>(fileSize)) break;
             groups.push_back(GroupFrame{offset + sizeField,
-                                        ReadLe32(header + 8u),
-                                        ReadLe32(header + 12u)});
+                                        fo3esm::ReadU32(header + 8u),
+                                        fo3esm::ReadU32(header + 12u)});
             continue;
         }
 
-        const uint64_t payloadEnd = offset + HEADER_SIZE + sizeField;
+        const uint64_t payloadEnd = offset + fo3esm::HEADER_SIZE + sizeField;
         if (payloadEnd > static_cast<uint64_t>(fileSize)) break;
         if (InTargetCell(groups) && std::memcmp(header, "REFR", 4u) == 0) {
-            refs.insert(ReadLe32(header + 12u));
+            refs.insert(fo3esm::ReadU32(header + 12u));
         }
         if (fseeko(file, static_cast<off_t>(payloadEnd), SEEK_SET) != 0) break;
     }
@@ -208,8 +123,8 @@ bool FindArrivalCandidates(const std::unordered_set<uint32_t>& targetRefs,
     candidates.clear();
     FILE* file = std::fopen(ESM_PATH, "rb");
     if (!file) return false;
-    const int64_t fileSize = FileSize(file);
-    if (fileSize < static_cast<int64_t>(HEADER_SIZE)) {
+    const int64_t fileSize = fo3esm::FileSize(file);
+    if (fileSize < static_cast<int64_t>(fo3esm::HEADER_SIZE)) {
         std::fclose(file);
         return false;
     }
@@ -218,19 +133,19 @@ bool FindArrivalCandidates(const std::unordered_set<uint32_t>& targetRefs,
         const off_t rawOffset = ftello(file);
         if (rawOffset < 0) break;
         const uint64_t offset = static_cast<uint64_t>(rawOffset);
-        if (offset + HEADER_SIZE > static_cast<uint64_t>(fileSize)) break;
+        if (offset + fo3esm::HEADER_SIZE > static_cast<uint64_t>(fileSize)) break;
 
-        uint8_t header[HEADER_SIZE]{};
-        if (!ReadExact(file, header, sizeof(header))) break;
-        const uint32_t sizeField = ReadLe32(header + 4u);
+        uint8_t header[fo3esm::HEADER_SIZE]{};
+        if (!fo3esm::ReadExact(file, header, sizeof(header))) break;
+        const uint32_t sizeField = fo3esm::ReadU32(header + 4u);
         if (std::memcmp(header, "GRUP", 4u) == 0) {
-            if (sizeField < HEADER_SIZE || offset + sizeField > static_cast<uint64_t>(fileSize)) break;
+            if (sizeField < fo3esm::HEADER_SIZE || offset + sizeField > static_cast<uint64_t>(fileSize)) break;
             continue;
         }
 
-        const uint32_t recordFlags = ReadLe32(header + 8u);
-        const uint32_t sourceRef = ReadLe32(header + 12u);
-        const uint64_t payloadEnd = offset + HEADER_SIZE + sizeField;
+        const uint32_t recordFlags = fo3esm::ReadU32(header + 8u);
+        const uint32_t sourceRef = fo3esm::ReadU32(header + 12u);
+        const uint64_t payloadEnd = offset + fo3esm::HEADER_SIZE + sizeField;
         if (payloadEnd > static_cast<uint64_t>(fileSize)) break;
 
         if (std::memcmp(header, "REFR", 4u) != 0) {
@@ -240,23 +155,23 @@ bool FindArrivalCandidates(const std::unordered_set<uint32_t>& targetRefs,
 
         std::vector<uint8_t> payload;
         if (!ReadPayload(file, sizeField, recordFlags, payload)) break;
-        WalkSubrecords(payload.data(), payload.size(),
+        fo3esm::WalkSubrecords(payload.data(), payload.size(),
                        [&](const char* type, const uint8_t* bytes, uint32_t size) {
             if (std::memcmp(type, "XTEL", 4u) != 0 || size < 28u) return;
-            const uint32_t destinationDoor = ReadLe32(bytes + 0u);
+            const uint32_t destinationDoor = fo3esm::ReadU32(bytes + 0u);
             if (targetRefs.find(destinationDoor) == targetRefs.end()) return;
 
             ArrivalCandidate candidate;
             candidate.sourceDoorRef = sourceRef;
             candidate.destinationDoorRef = destinationDoor;
             candidate.sourceInsideTargetCell = targetRefs.find(sourceRef) != targetRefs.end();
-            candidate.x = ReadLeFloat(bytes + 4u);
-            candidate.y = ReadLeFloat(bytes + 8u);
-            candidate.z = ReadLeFloat(bytes + 12u);
-            candidate.rx = ReadLeFloat(bytes + 16u);
-            candidate.ry = ReadLeFloat(bytes + 20u);
-            candidate.rz = ReadLeFloat(bytes + 24u);
-            if (size >= 32u) candidate.flags = ReadLe32(bytes + 28u);
+            candidate.x = fo3esm::ReadF32(bytes + 4u);
+            candidate.y = fo3esm::ReadF32(bytes + 8u);
+            candidate.z = fo3esm::ReadF32(bytes + 12u);
+            candidate.rx = fo3esm::ReadF32(bytes + 16u);
+            candidate.ry = fo3esm::ReadF32(bytes + 20u);
+            candidate.rz = fo3esm::ReadF32(bytes + 24u);
+            if (size >= 32u) candidate.flags = fo3esm::ReadU32(bytes + 28u);
             candidates.push_back(candidate);
         });
     }
@@ -269,8 +184,8 @@ bool CollectTargetCellDoorProbes(std::vector<DoorProbeCandidate>& doors) {
     doors.clear();
     FILE* file = std::fopen(ESM_PATH, "rb");
     if (!file) return false;
-    const int64_t fileSize = FileSize(file);
-    if (fileSize < static_cast<int64_t>(HEADER_SIZE)) {
+    const int64_t fileSize = fo3esm::FileSize(file);
+    if (fileSize < static_cast<int64_t>(fo3esm::HEADER_SIZE)) {
         std::fclose(file);
         return false;
     }
@@ -281,22 +196,22 @@ bool CollectTargetCellDoorProbes(std::vector<DoorProbeCandidate>& doors) {
         if (rawOffset < 0) break;
         const uint64_t offset = static_cast<uint64_t>(rawOffset);
         while (!groups.empty() && offset >= groups.back().end) groups.pop_back();
-        if (offset + HEADER_SIZE > static_cast<uint64_t>(fileSize)) break;
+        if (offset + fo3esm::HEADER_SIZE > static_cast<uint64_t>(fileSize)) break;
 
-        uint8_t header[HEADER_SIZE]{};
-        if (!ReadExact(file, header, sizeof(header))) break;
-        const uint32_t sizeField = ReadLe32(header + 4u);
+        uint8_t header[fo3esm::HEADER_SIZE]{};
+        if (!fo3esm::ReadExact(file, header, sizeof(header))) break;
+        const uint32_t sizeField = fo3esm::ReadU32(header + 4u);
         if (std::memcmp(header, "GRUP", 4u) == 0) {
-            if (sizeField < HEADER_SIZE || offset + sizeField > static_cast<uint64_t>(fileSize)) break;
+            if (sizeField < fo3esm::HEADER_SIZE || offset + sizeField > static_cast<uint64_t>(fileSize)) break;
             groups.push_back(GroupFrame{offset + sizeField,
-                                        ReadLe32(header + 8u),
-                                        ReadLe32(header + 12u)});
+                                        fo3esm::ReadU32(header + 8u),
+                                        fo3esm::ReadU32(header + 12u)});
             continue;
         }
 
-        const uint32_t recordFlags = ReadLe32(header + 8u);
-        const uint32_t sourceRef = ReadLe32(header + 12u);
-        const uint64_t payloadEnd = offset + HEADER_SIZE + sizeField;
+        const uint32_t recordFlags = fo3esm::ReadU32(header + 8u);
+        const uint32_t sourceRef = fo3esm::ReadU32(header + 12u);
+        const uint64_t payloadEnd = offset + fo3esm::HEADER_SIZE + sizeField;
         if (payloadEnd > static_cast<uint64_t>(fileSize)) break;
         if (!InTargetCell(groups) || std::memcmp(header, "REFR", 4u) != 0) {
             if (fseeko(file, static_cast<off_t>(payloadEnd), SEEK_SET) != 0) break;
@@ -309,22 +224,22 @@ bool CollectTargetCellDoorProbes(std::vector<DoorProbeCandidate>& doors) {
         candidate.sourceDoorRef = sourceRef;
         bool haveData = false;
         bool haveTeleport = false;
-        WalkSubrecords(payload.data(), payload.size(),
+        fo3esm::WalkSubrecords(payload.data(), payload.size(),
                        [&](const char* type, const uint8_t* bytes, uint32_t size) {
             if (std::memcmp(type, "DATA", 4u) == 0 && size >= 12u) {
-                candidate.gameX = ReadLeFloat(bytes + 0u);
-                candidate.gameY = ReadLeFloat(bytes + 4u);
-                candidate.gameZ = ReadLeFloat(bytes + 8u);
+                candidate.gameX = fo3esm::ReadF32(bytes + 0u);
+                candidate.gameY = fo3esm::ReadF32(bytes + 4u);
+                candidate.gameZ = fo3esm::ReadF32(bytes + 8u);
                 haveData = true;
             } else if (std::memcmp(type, "XTEL", 4u) == 0 && size >= 28u) {
-                candidate.destinationDoorRef = ReadLe32(bytes + 0u);
-                candidate.teleportX = ReadLeFloat(bytes + 4u);
-                candidate.teleportY = ReadLeFloat(bytes + 8u);
-                candidate.teleportZ = ReadLeFloat(bytes + 12u);
-                candidate.teleportRx = ReadLeFloat(bytes + 16u);
-                candidate.teleportRy = ReadLeFloat(bytes + 20u);
-                candidate.teleportRz = ReadLeFloat(bytes + 24u);
-                if (size >= 32u) candidate.flags = ReadLe32(bytes + 28u);
+                candidate.destinationDoorRef = fo3esm::ReadU32(bytes + 0u);
+                candidate.teleportX = fo3esm::ReadF32(bytes + 4u);
+                candidate.teleportY = fo3esm::ReadF32(bytes + 8u);
+                candidate.teleportZ = fo3esm::ReadF32(bytes + 12u);
+                candidate.teleportRx = fo3esm::ReadF32(bytes + 16u);
+                candidate.teleportRy = fo3esm::ReadF32(bytes + 20u);
+                candidate.teleportRz = fo3esm::ReadF32(bytes + 24u);
+                if (size >= 32u) candidate.flags = fo3esm::ReadU32(bytes + 28u);
                 haveTeleport = candidate.destinationDoorRef != 0u;
             }
         });
