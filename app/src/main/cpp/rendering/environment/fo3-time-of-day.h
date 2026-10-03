@@ -476,12 +476,12 @@ inline void ApplyEnvironment(TimeOfDayRuntime& runtime, const TimeWeights& weigh
 }
 
 inline void ApplySky(TimeOfDayRuntime& runtime, const TimeWeights& weights) {
-    using namespace fo3skyq1330;
-    if (!EnsureWeatherQ1330() || gWeatherSkyQ1330.weatherFormId != runtime.weather.formId) return;
+    using namespace fo3sky;
+    if (!EnsureWeather() || gWeatherSky.weatherFormId != runtime.weather.formId) return;
 
     float sun[3]{};
     SampleLinearRgb(runtime.weather, 5, weights, sun);
-    for (int c = 0; c < 3; ++c) gWeatherSkyQ1330.sunColor[c] = sun[c];
+    for (int c = 0; c < 3; ++c) gWeatherSky.sunColor[c] = sun[c];
 
     if (runtime.weather.havePnam) {
         for (int layer = 0; layer < 4; ++layer) {
@@ -494,8 +494,8 @@ inline void ApplySky(TimeOfDayRuntime& runtime, const TimeWeights& weights) {
                 }
                 alpha += runtime.weather.cloudEncoded[layer][tod][3] * weights.w[tod];
             }
-            for (int c = 0; c < 3; ++c) gWeatherSkyQ1330.clouds[layer].color[c] = rgb[c];
-            gWeatherSkyQ1330.clouds[layer].color[3] = Clamp01(alpha);
+            for (int c = 0; c < 3; ++c) gWeatherSky.clouds[layer].color[c] = rgb[c];
+            gWeatherSky.clouds[layer].color[3] = Clamp01(alpha);
         }
     }
 

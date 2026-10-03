@@ -6,7 +6,7 @@
 namespace fo3skycolor {
 
 inline bool PrepareFo3WeatherSkyColor() {
-    using namespace fo3colorq1390;
+    using namespace fo3color;
     using namespace fo3sky;
 
     if (!EnsureWeather()) return false;
