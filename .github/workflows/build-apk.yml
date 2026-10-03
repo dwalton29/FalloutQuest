@@ -28,7 +28,7 @@ jobs:
             exit 1
           fi
           for source in \
-            fo3-runtime.cpp \
+            core/fo3-runtime.cpp \
             world/fo3-cell-world.cpp \
             fo3-static-nif-runtime.cpp \
             physics/fo3-collision-runtime.cpp \

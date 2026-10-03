@@ -5,7 +5,7 @@ find_package(OpenXR REQUIRED CONFIG)
 
 # Native runtime sources.
 add_library(falloutquest SHARED
-    fo3-runtime.cpp
+    core/fo3-runtime.cpp
     world/fo3-megaton-scene.cpp
     world/fo3-cell-world.cpp
     fo3-static-nif-runtime.cpp
