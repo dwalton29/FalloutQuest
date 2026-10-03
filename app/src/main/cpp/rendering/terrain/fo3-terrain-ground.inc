@@ -1,4 +1,4 @@
-#include "fo3-terrain-q76.h"
+#include "rendering/terrain/fo3-terrain.h"
 
 #include <android/log.h>
 
