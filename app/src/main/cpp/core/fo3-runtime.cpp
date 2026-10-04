@@ -444,6 +444,8 @@ GLint gInstancingEnabledLocationQ2016 = -1;
 GLint gFastMaterialLocation = -1;
 float gOpaqueLodClipCells[25*4]{};
 int gOpaqueLodClipCount = 0;
+float gNativeLodOffsetFactor = 0, gNativeLodOffsetUnits = 0;
+bool gNativeLodOffsetActive = false;
 GLint gObjectTransformEnabledLocationQ2017 = -1;
 GLint gObjectTransformLocationQ2017 = -1;
 GLuint gInstanceBufferQ2016 = 0u;
@@ -5158,9 +5160,11 @@ void DrawSceneObject(const GpuObject& object, bool environmentPassQ2050 = false)
     if (object.decalQ1170) {
         glEnable(GL_POLYGON_OFFSET_FILL);
         glPolygonOffset(-0.65f, -1.0f);
+    } else if (object.q1990NativeLod && gNativeLodOffsetActive) {
+        glEnable(GL_POLYGON_OFFSET_FILL);
+        glPolygonOffset(gNativeLodOffsetFactor, gNativeLodOffsetUnits);
     } else if (!object.q1990NativeLod) {
-        // Native terrain LOD inherits its tier-specific positive offset from
-        // Q1990RenderNativeLod. Ordinary materials leave the decal class.
+        // Ordinary materials leave the decal class.
         glDisable(GL_POLYGON_OFFSET_FILL);
     }
 
@@ -6847,6 +6851,7 @@ void Q1990RenderNativeLod(bool alphaPass) {
     size_t drawnLevel32 = 0u;
     size_t drawnHigh = 0u;
 
+    gNativeLodOffsetActive = true;
     glEnable(GL_POLYGON_OFFSET_FILL);
 
     // Q20.23: draw the coarsest authored fallback first. A parent tile remains
@@ -6855,9 +6860,9 @@ void Q1990RenderNativeLod(bool alphaPass) {
     // polygon offsets and naturally win the depth test at overlap seams.
     const int levels[] = {32, 16, 8};
     for (int level : levels) {
-        if (level == 32) glPolygonOffset(8.0f, 14.0f);
-        else if (level == 16) glPolygonOffset(6.0f, 11.0f);
-        else glPolygonOffset(4.0f, 8.0f);
+        if (level == 32) { gNativeLodOffsetFactor=8.0f; gNativeLodOffsetUnits=14.0f; }
+        else if (level == 16) { gNativeLodOffsetFactor=6.0f; gNativeLodOffsetUnits=11.0f; }
+        else { gNativeLodOffsetFactor=4.0f; gNativeLodOffsetUnits=8.0f; }
 
         for (Q2023CoarseTerrainTile& tile : gQ2023CoarseTerrainTiles) {
             if (tile.levelCells != level ||
@@ -6883,7 +6888,7 @@ void Q1990RenderNativeLod(bool alphaPass) {
         }
     }
 
-    glPolygonOffset(2.0f, 6.0f);
+    gNativeLodOffsetFactor=2.0f; gNativeLodOffsetUnits=6.0f;
     for (Q1990NativeLodBlock& block : gQ1990NativeLodBlocks) {
         if (!Q1990LodBlockDesired(block.blockX, block.blockY)) continue;
         if (Q1990TerrainLodBlockDesired(block.blockX, block.blockY) &&
@@ -6923,6 +6928,7 @@ void Q1990RenderNativeLod(bool alphaPass) {
         }
     }
 
+    gNativeLodOffsetActive = false;
     glDisable(GL_POLYGON_OFFSET_FILL);
     if (!alphaPass && !gQ1990NativeLodDrawLogged) {
         gQ1990NativeLodDrawLogged = true;
