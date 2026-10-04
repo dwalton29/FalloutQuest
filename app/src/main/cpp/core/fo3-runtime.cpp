@@ -18,6 +18,7 @@ void SetNextFo3CollisionExteriorModeQ1931(bool exterior);
 #include "rendering/terrain/fo3-terrain.h"
 extern void SetFo3TerrainSelectionOverrideQ1890(bool enabled, float gameX, float gameY);
 #include "world/interaction/fo3-authored-door-cache.h"
+#include "world/interaction/fo3-door-nif-animation.h"
 extern void PumpFo3AndroidEventsQ1860();
 #include "world/interaction/fo3-door-prompt.h"
 #include <chrono>
@@ -265,6 +266,65 @@ bool Q2016RelativeMatrix(
     return true;
 }
 
+// Q24.1: decode embedded Open/Close controller sequences once per unique DOOR
+// model. The existing Gamebryo UI-animation decoder already understands FO3's
+// NiControllerSequence / NiTransformInterpolator / NiTransformData hierarchy.
+std::shared_ptr<const fo3dooranim::Asset>
+Q2401LoadDoorNifAnimation(const std::string& modelPath) {
+    using AssetPtr=std::shared_ptr<const fo3dooranim::Asset>;
+    static std::mutex mutex;
+    static std::unordered_map<std::string,AssetPtr> cache;
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        const auto found=cache.find(modelPath);
+        if(found!=cache.end()) return found->second;
+    }
+
+    AssetPtr decoded;
+    std::vector<uint8_t> bytes;
+    std::string resolved;
+    if(LoadFalloutMeshFile(modelPath,bytes,&resolved)) {
+        fo3anim::Skeleton hierarchy;
+        std::vector<int> blockBones;
+        std::vector<fo3anim::Clip> clips;
+        if(fo3anim::DecodeUiAnimation(bytes,hierarchy,blockBones,clips)) {
+            fo3dooranim::Asset asset;
+            if(fo3dooranim::Configure(
+                    std::move(hierarchy),std::move(blockBones),
+                    std::move(clips),asset)) {
+                decoded=std::make_shared<const fo3dooranim::Asset>(
+                    std::move(asset));
+            }
+        }
+    }
+
+    bool inserted=false;
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        const auto result=cache.emplace(modelPath,decoded);
+        decoded=result.first->second;
+        inserted=result.second;
+    }
+    if(inserted) {
+        if(decoded) {
+            const auto& open=decoded->clips[static_cast<size_t>(decoded->openClip)];
+            const auto& close=decoded->clips[static_cast<size_t>(decoded->closeClip)];
+            const char* target=decoded->collisionBone>=0
+                ? decoded->hierarchy.bones[static_cast<size_t>(decoded->collisionBone)].name.c_str()
+                : "<multi-track>";
+            Q6H_LOGI("Q24.1 DOOR NIF ANIM: model=%s resolved=%s open=%.4fs close=%.4fs target=%s openTracks=%zu closeTracks=%zu source=embedded-NiControllerSequence",
+                     modelPath.c_str(),resolved.c_str(),
+                     fo3dooranim::Duration(*decoded,true),
+                     fo3dooranim::Duration(*decoded,false),
+                     target,open.tracks.size(),close.tracks.size());
+        } else {
+            Q6H_LOGI("Q24.1 DOOR NIF ANIM: model=%s result=no-embedded-Open-Close fallback=legacy-rigid",
+                     modelPath.c_str());
+        }
+    }
+    return decoded;
+}
+
 struct CpuObject {
     Fo3WorldPlacement placement;
     Fo3StaticNifMesh mesh;
@@ -281,6 +341,8 @@ struct CpuObject {
     float q1960MinY = 0.0f, q1960MaxY = 0.0f;
     float q1960MinZ = 0.0f, q1960MaxZ = 0.0f;
     uint32_t q2016ShapeIndex = 0u;
+    std::shared_ptr<const fo3dooranim::Asset> q2401DoorAnimation;
+    int q2401AnimationBone = -1;
 };
 
 struct GpuObject {
@@ -344,6 +406,8 @@ struct GpuObject {
     bool q220LooseObject = false;
     bool q230NpcActor = false;
     bool q2400SwingDoor = false;
+    std::shared_ptr<const fo3dooranim::Asset> q2401DoorAnimation;
+    int q2401AnimationBone = -1;
     float q223PlacementScale = 1.0f;
     float q220DynamicTransform[16]{
         1,0,0,0,
@@ -351,8 +415,10 @@ struct GpuObject {
         0,0,1,0,
         0,0,0,1
     };
-    // Q24.0 DOOR geometry is already expanded in scene coordinates, so this is
-    // a scene-space hinge transform around the authored REFR/NIF origin.
+    // Door vertices are already expanded into scene coordinates. Q24.1 stores
+    // the conjugated NIF-node delta here, preserving the authored child pivot.
+    // Q24.0's whole-object hinge remains only as a fallback for door NIFs that
+    // genuinely have no embedded Open/Close controller sequence.
     float q2400DoorTransform[16]{
         1,0,0,0,
         0,1,0,0,
@@ -587,6 +653,10 @@ struct Q2400InteriorDoorState {
     int swingSign=1;
     uint64_t collisionSceneSerial=0u;
     std::chrono::steady_clock::time_point lastUpdate{};
+    bool q2401NifAnimation=false;
+    bool q2401Moving=false;
+    std::chrono::steady_clock::time_point q2401Started{};
+    fo3anim::Pose q2401Pose;
 };
 std::unordered_map<uint32_t,Q2400InteriorDoorState> gQ2400InteriorDoors;
 uint64_t gQ2400DoorSceneSerial=1u;
@@ -1743,6 +1813,11 @@ bool BuildCpuObjects(const Fo3WorldPlacement& placement, std::vector<CpuObject>&
         }
     }
 
+    const auto q2401DoorAnimation =
+        placement.baseRecordType=="DOOR"
+            ? Q2401LoadDoorNifAnimation(placement.modelPath)
+            : std::shared_ptr<const fo3dooranim::Asset>{};
+
     size_t shapeIndex = 0;
     for (const Fo3StaticNifMesh& cachedMesh : *cachedMeshes) {
         Fo3StaticNifMesh mesh = cachedMesh;
@@ -1766,6 +1841,11 @@ bool BuildCpuObjects(const Fo3WorldPlacement& placement, std::vector<CpuObject>&
         out.placement = placement;
         out.q2016ShapeIndex = static_cast<uint32_t>(shapeIndex);
         out.mesh = std::move(mesh);
+        out.q2401DoorAnimation=q2401DoorAnimation;
+        out.q2401AnimationBone=q2401DoorAnimation
+            ? fo3dooranim::ShapeBone(
+                *q2401DoorAnimation,out.mesh.shapeBlock)
+            : -1;
         out.positionsGame.resize(vertexCount);
         out.normalsGame.resize(vertexCount);
         out.tangentsGame.resize(vertexCount);
@@ -2047,6 +2127,8 @@ bool UploadCpuObject(CpuObject& cpu, float centerX, float centerY, float floorZ,
         (cpu.placement.referenceRecordFlags &
          Q2025_FLAG_HIGH_PRIORITY_LOD) != 0u;
     gpu.q2016ShapeIndex = cpu.q2016ShapeIndex;
+    gpu.q2401DoorAnimation=cpu.q2401DoorAnimation;
+    gpu.q2401AnimationBone=cpu.q2401AnimationBone;
     Q2016BuildPlacementMatrix(
         cpu.placement, centerX, centerY, floorZ,
         gpu.q2016PlacementMatrix);
@@ -3510,6 +3592,48 @@ const GpuObject* Q2400FindSwingDoorObject(uint32_t refFormId) {
            object.refFormId==refFormId) return &object;
     return nullptr;
 }
+void Q2401Identity(float out[16]) {
+    std::fill(out,out+16,0.0f);
+    out[0]=out[5]=out[10]=out[15]=1.0f;
+}
+bool Q2401ModelDeltaToScene(const GpuObject& object,
+                            const fo3anim::Matrix& modelDelta,
+                            float out[16]) {
+    float inversePlacement[16]{},placedDelta[16]{};
+    if(!Q2016InvertAffine(object.q2016PlacementMatrix,inversePlacement))
+        return false;
+    Q2016MulMat4(object.q2016PlacementMatrix,modelDelta.data(),placedDelta);
+    Q2016MulMat4(placedDelta,inversePlacement,out);
+    return true;
+}
+bool Q2401ApplyNifDoorVisual(uint32_t refFormId,
+                             Q2400InteriorDoorState& state,
+                             double elapsed) {
+    const GpuObject* first=Q2400FindSwingDoorObject(refFormId);
+    if(!first||!first->q2401DoorAnimation) return false;
+    const auto& asset=*first->q2401DoorAnimation;
+    if(!fo3dooranim::Sample(asset,state.targetOpen,elapsed,state.q2401Pose))
+        return false;
+    for(GpuObject& object:gObjects) {
+        if(!object.q2400SwingDoor||object.refFormId!=refFormId) continue;
+        const auto* delta=fo3dooranim::ShapeDelta(
+            asset,state.q2401Pose,object.q2401AnimationBone);
+        if(!delta||!Q2401ModelDeltaToScene(object,*delta,object.q2400DoorTransform))
+            Q2401Identity(object.q2400DoorTransform);
+    }
+    return true;
+}
+bool Q2401DoorCollisionTransform(const GpuObject& object,
+                                 const Q2400InteriorDoorState& state,
+                                 float out[16]) {
+    if(!object.q2401DoorAnimation) return false;
+    const auto* delta=fo3dooranim::CollisionDelta(
+        *object.q2401DoorAnimation,state.q2401Pose);
+    return delta&&Q2401ModelDeltaToScene(object,*delta,out);
+}
+
+// Q24.0 compatibility fallback for rigid DOOR NIFs with no embedded Open/Close
+// sequence. Authored Q24.1 animation always wins when present.
 void Q2400BuildDoorTransform(const GpuObject& object,float progress,int sign,float out[16]) {
     constexpr float HALF_PI=1.57079632679489661923f;
     const float a=HALF_PI*std::clamp(progress,0.0f,1.0f)*(sign<0?-1.0f:1.0f);
@@ -3547,9 +3671,42 @@ int Q2400ChooseDoorSwingSign(uint32_t refFormId,float activatorX,float activator
     return pdx*pdx+pdz*pdz>=mdx*mdx+mdz*mdz?1:-1;
 }
 bool Q2400ToggleInteriorDoor(uint32_t refFormId,float activatorX,float activatorZ) {
-    if(gExteriorWorldspaceQ1890!=0u||!Q2400FindSwingDoorObject(refFormId)) return false;
+    if(gExteriorWorldspaceQ1890!=0u) return false;
+    const GpuObject* first=Q2400FindSwingDoorObject(refFormId);
+    if(!first) return false;
     Q2400InteriorDoorState& state=gQ2400InteriorDoors[refFormId];
+
+    if(first->q2401DoorAnimation) {
+        if(state.q2401Moving) {
+            Q6H_LOGI("Q24.1 DOOR INPUT: ref=%08X ignored=sequence-in-flight target=%s",
+                     refFormId,state.targetOpen?"open":"closed");
+            return true;
+        }
+        const bool opening=!state.targetOpen;
+        state.targetOpen=opening;
+        state.q2401NifAnimation=true;
+        state.q2401Moving=true;
+        state.q2401Started=std::chrono::steady_clock::now();
+        state.q2401Pose={};
+        const auto* clip=fo3dooranim::Sequence(*first->q2401DoorAnimation,opening);
+        if(clip) fo3anim::BindClip(
+            first->q2401DoorAnimation->hierarchy,*clip,state.q2401Pose);
+        if(!state.collisionDisabled||
+           state.collisionSceneSerial!=gQ2400DoorSceneSerial) {
+            if(SetFo3DoorCollisionTransformQ2400(refFormId,nullptr,false)) {
+                state.collisionDisabled=true;
+                state.collisionSceneSerial=gQ2400DoorSceneSerial;
+            }
+        }
+        Q6H_LOGI("Q24.1 INTERIOR DOOR ACTIVATE: ref=%08X action=%s sequence=%s duration=%.4fs input=RIGHT_A pivot=NIF-node",
+                 refFormId,opening?"open":"close",
+                 clip?clip->name.c_str():"<missing>",
+                 fo3dooranim::Duration(*first->q2401DoorAnimation,opening));
+        return true;
+    }
+
     const bool opening=!state.targetOpen;
+    state.q2401NifAnimation=false;
     if(opening&&state.progress<=0.001f)
         state.swingSign=Q2400ChooseDoorSwingSign(refFormId,activatorX,activatorZ);
     state.targetOpen=opening;
@@ -3559,7 +3716,7 @@ bool Q2400ToggleInteriorDoor(uint32_t refFormId,float activatorX,float activator
             state.collisionDisabled=true;state.collisionSceneSerial=gQ2400DoorSceneSerial;
         }
     }
-    Q6H_LOGI("Q24.0 INTERIOR DOOR ACTIVATE: ref=%08X action=%s progress=%.3f swingSign=%d input=RIGHT_A pivot=authored-REFR",
+    Q6H_LOGI("Q24.0 INTERIOR DOOR ACTIVATE: ref=%08X action=%s progress=%.3f swingSign=%d input=RIGHT_A fallback=no-NIF-sequence",
              refFormId,opening?"open":"close",state.progress,state.swingSign);
     return true;
 }
@@ -3570,6 +3727,64 @@ void UpdateFo3InteriorDoorsQ2400() {
     for(auto& entry:gQ2400InteriorDoors) {
         const uint32_t ref=entry.first;Q2400InteriorDoorState& state=entry.second;
         const GpuObject* first=Q2400FindSwingDoorObject(ref);if(!first) continue;
+
+        if(state.q2401NifAnimation&&first->q2401DoorAnimation) {
+            const auto& asset=*first->q2401DoorAnimation;
+            const double duration=fo3dooranim::Duration(asset,state.targetOpen);
+            const bool sceneChanged=
+                state.collisionSceneSerial!=gQ2400DoorSceneSerial;
+            if(!state.q2401Moving&&!sceneChanged) continue;
+
+            if(sceneChanged) {
+                if(state.targetOpen) {
+                    if(SetFo3DoorCollisionTransformQ2400(ref,nullptr,false))
+                        state.collisionDisabled=true;
+                } else {
+                    // A freshly published closed CELL already owns its original
+                    // authored BHK; do not delete/rebuild it needlessly.
+                    state.collisionDisabled=false;
+                }
+                state.collisionSceneSerial=gQ2400DoorSceneSerial;
+            }
+
+            const double elapsed=state.q2401Moving
+                ? std::chrono::duration<double>(now-state.q2401Started).count()
+                : duration;
+            if(!Q2401ApplyNifDoorVisual(ref,state,elapsed)) {
+                Q6H_LOGW("Q24.1 DOOR NIF SAMPLE FAILED: ref=%08X model=%s fallbackVisual=bind",
+                         ref,first->modelPath.c_str());
+                state.q2401Moving=false;
+                continue;
+            }
+
+            if(state.q2401Moving&&elapsed+1.0e-6<duration) continue;
+            state.q2401Moving=false;
+
+            if(state.collisionDisabled) {
+                float transform[16]{};
+                bool haveTransform=Q2401DoorCollisionTransform(
+                    *first,state,transform);
+                if(!state.targetOpen&&!haveTransform) {
+                    Q2401Identity(transform);
+                    haveTransform=true;
+                }
+                if(haveTransform&&SetFo3DoorCollisionTransformQ2400(
+                        ref,transform,true)) {
+                    state.collisionDisabled=false;
+                    state.collisionSceneSerial=gQ2400DoorSceneSerial;
+                    Q6H_LOGI("Q24.1 INTERIOR DOOR SETTLED: ref=%08X state=%s duration=%.4fs collision=authored-bhk+nif-node-delta",
+                             ref,state.targetOpen?"open":"closed",duration);
+                } else if(state.targetOpen) {
+                    // Safer than moving unrelated frame collision when a rare
+                    // multi-track door has no single collision node.
+                    state.collisionDisabled=false;
+                    Q6H_LOGW("Q24.1 INTERIOR DOOR SETTLED: ref=%08X state=open collision=disabled reason=multi-track-no-single-bhk-node",
+                             ref);
+                }
+            }
+            continue;
+        }
+
         if(state.lastUpdate.time_since_epoch().count()==0) state.lastUpdate=now;
         const float dt=std::clamp(std::chrono::duration<float>(now-state.lastUpdate).count(),0.0f,0.10f);
         state.lastUpdate=now;
@@ -3588,7 +3803,7 @@ void UpdateFo3InteriorDoorsQ2400() {
             float transform[16]{};Q2400BuildDoorTransform(*first,state.progress,state.swingSign,transform);
             if(SetFo3DoorCollisionTransformQ2400(ref,transform,true)) {
                 state.collisionDisabled=false;state.collisionSceneSerial=gQ2400DoorSceneSerial;
-                Q6H_LOGI("Q24.0 INTERIOR DOOR SETTLED: ref=%08X state=%s progress=%.3f collision=authored-bhk-transformed",
+                Q6H_LOGI("Q24.0 INTERIOR DOOR SETTLED: ref=%08X state=%s progress=%.3f collision=legacy-rigid-fallback",
                          ref,opened?"open":"closed",state.progress);
             }
         }

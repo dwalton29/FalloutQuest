@@ -26,6 +26,8 @@ struct State {
     Value<bool> depth, blend, cull, offset, a2c;
     Value<GLfloat> offsetFactor, offsetUnits;
     Value<GLenum> srcRgb, dstRgb, srcAlpha, dstAlpha;
+    Value<GLenum> blendEquationRgb, blendEquationAlpha;
+    Value<GLint> unpackAlignment;
     std::array<Value<GLuint>,16> texture2d{}, textureCube{};
 };
 inline State state;
@@ -120,6 +122,16 @@ inline void BlendFuncSeparate(GLenum sr,GLenum dr,GLenum sa,GLenum da) {
     if(a || b || c || d) { glBlendFuncSeparate(sr,dr,sa,da); ++counters.state; }
 }
 inline void BlendFunc(GLenum src,GLenum dst) { BlendFuncSeparate(src,dst,src,dst); }
+inline void BlendEquationSeparate(GLenum rgb,GLenum alpha) {
+    const bool a=state.blendEquationRgb.Change(rgb);
+    const bool b=state.blendEquationAlpha.Change(alpha);
+    if(a || b) { glBlendEquationSeparate(rgb,alpha); ++counters.state; }
+}
+inline void PixelStorei(GLenum name,GLint value) {
+    if(name!=GL_UNPACK_ALIGNMENT || state.unpackAlignment.Change(value)) {
+        glPixelStorei(name,value); ++counters.state;
+    }
+}
 inline void GetIntegerv(GLenum name,GLint* out) {
     Value<GLuint>* id=nullptr; Value<GLenum>* value=nullptr;
     switch(name) {
@@ -134,6 +146,12 @@ inline void GetIntegerv(GLenum name,GLint* out) {
         case GL_BLEND_DST_RGB:value=&state.dstRgb;break;
         case GL_BLEND_SRC_ALPHA:value=&state.srcAlpha;break;
         case GL_BLEND_DST_ALPHA:value=&state.dstAlpha;break;
+        case GL_BLEND_EQUATION_RGB:value=&state.blendEquationRgb;break;
+        case GL_BLEND_EQUATION_ALPHA:value=&state.blendEquationAlpha;break;
+        case GL_UNPACK_ALIGNMENT:
+            if(state.unpackAlignment.known){*out=state.unpackAlignment.value;return;}
+            ++counters.queries;glGetIntegerv(name,out);
+            state.unpackAlignment.Change(*out);return;
         case GL_TEXTURE_BINDING_2D:id=Texture(GL_TEXTURE_2D);break;
         case GL_TEXTURE_BINDING_CUBE_MAP:id=Texture(GL_TEXTURE_CUBE_MAP);break;
     }
@@ -228,6 +246,8 @@ inline void DeleteVertexArrays(GLsizei n,const GLuint* ids) {
 #define glPolygonOffset fqgl::PolygonOffset
 #define glBlendFunc fqgl::BlendFunc
 #define glBlendFuncSeparate fqgl::BlendFuncSeparate
+#define glBlendEquationSeparate fqgl::BlendEquationSeparate
+#define glPixelStorei fqgl::PixelStorei
 #define glGetIntegerv fqgl::GetIntegerv
 #define glGetBooleanv fqgl::GetBooleanv
 #define glGetFloatv fqgl::GetFloatv

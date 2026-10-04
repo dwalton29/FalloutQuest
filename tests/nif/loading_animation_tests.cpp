@@ -1,5 +1,6 @@
 #include "../../app/src/main/cpp/rendering/mesh/fo3-static-nif.cpp"
 #include "../../app/src/main/cpp/ui/loading/fo3-loading-slideshow.h"
+#include "../../app/src/main/cpp/world/interaction/fo3-door-nif-animation.h"
 #include <cassert>
 #include <fstream>
 #include <iostream>
@@ -34,6 +35,41 @@ int main(int argc,char** argv) {
     assert(player.current==player.left && player.slots[1]==0);
     player.Reset(0,4);assert(player.Advance(scene,clips,99,4));
     assert(player.sounds.size()==1); // no backlog of cycles on a long frame
+    // Q24.1: object animation uses the same decoded hierarchy/clip semantics as
+    // the slideshow. A child shape inherits the authored target-node delta, so
+    // the hinge is the NIF pivot rather than the placed REFR origin.
+    {
+        Skeleton door;Bone root;root.name="DoorRoot";door.bones.push_back(root);
+        Bone hinge;hinge.name="DoorLeaf";hinge.parent=0;
+        hinge.bind.translation={8.00009155f,52.0f,0.07354069f};
+        door.bones.push_back(hinge);
+        Bone shape;shape.name="DoorShape";shape.parent=1;door.bones.push_back(shape);
+        assert(FinalizeSkeleton(door));
+        std::vector<int> doorMapping(8,-1);doorMapping[7]=2;
+        Clip open;open.name="Open";open.stop=0.5f;open.frequency=1;open.cycle=2;
+        Track ot;ot.bone="DoorLeaf";ot.hasRotation=true;ot.rotation.interpolation=4;
+        ot.xyzRotation[2].interpolation=1;ot.xyzRotation[2].dimensions=1;
+        Key o0,o1;o0.time=0;o0.value[0]=0;o1.time=0.5f;o1.value[0]=-1.658062696f;
+        ot.xyzRotation[2].keys={o0,o1};open.tracks.push_back(ot);
+        Clip close=open;close.name="Close";close.stop=0.46666664f;
+        close.tracks[0].xyzRotation[2].keys[0].value[0]=-1.658062696f;
+        close.tracks[0].xyzRotation[2].keys[1].time=0.46666664f;
+        close.tracks[0].xyzRotation[2].keys[1].value[0]=0;
+        fo3dooranim::Asset asset;
+        assert(fo3dooranim::Configure(door,doorMapping,{open,close},asset));
+        assert(std::fabs(fo3dooranim::Duration(asset,true)-0.5)<1e-6);
+        assert(std::fabs(fo3dooranim::Duration(asset,false)-0.46666664)<1e-6);
+        assert(asset.collisionBone==1&&fo3dooranim::ShapeBone(asset,7)==2);
+        Pose doorPose;assert(fo3dooranim::Sample(asset,true,1.0,doorPose));
+        const auto* delta=fo3dooranim::ShapeDelta(asset,doorPose,2);assert(delta);
+        const std::array<float,3> pivot{8.00009155f,52.0f,0.07354069f};
+        const auto pivotAfter=Point(*delta,pivot);
+        for(int axis=0;axis<3;++axis)assert(std::fabs(pivotAfter[axis]-pivot[axis])<1e-3f);
+        const auto pointAfter=Point(*delta,{108.00009155f,52.0f,0.07354069f});
+        assert(std::fabs(pointAfter[0]-108.00009155f)>50.0f);
+        assert(std::fabs(pointAfter[1]-52.0f)>50.0f);
+    }
+
     std::vector<int> mapping;std::vector<Clip> decoded;Skeleton hierarchy;
     assert(!DecodeUiAnimation(std::vector<uint8_t>(64),hierarchy,mapping,decoded));
     if(argc>1) {

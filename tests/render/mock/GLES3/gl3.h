@@ -34,6 +34,10 @@ inline constexpr GLenum GL_TEXTURE_BINDING_CUBE_MAP=22;
 inline constexpr GLenum GL_DEPTH_WRITEMASK=23;
 inline constexpr GLenum GL_POLYGON_OFFSET_FACTOR=24;
 inline constexpr GLenum GL_POLYGON_OFFSET_UNITS=25;
+inline constexpr GLenum GL_BLEND_EQUATION_RGB=39;
+inline constexpr GLenum GL_BLEND_EQUATION_ALPHA=40;
+inline constexpr GLenum GL_UNPACK_ALIGNMENT=41;
+inline constexpr GLenum GL_FUNC_ADD=42;
 inline constexpr GLenum GL_BACK=26;
 inline constexpr GLenum GL_FRONT=27;
 inline constexpr GLenum GL_CW=28;
@@ -60,6 +64,8 @@ template<class... T> inline void glCullFace(T...) { ++driverCalls["glCullFace"];
 template<class... T> inline void glFrontFace(T...) { ++driverCalls["glFrontFace"]; }
 template<class... T> inline void glPolygonOffset(T...) { ++driverCalls["glPolygonOffset"]; }
 template<class... T> inline void glBlendFuncSeparate(T...) { ++driverCalls["glBlendFuncSeparate"]; }
+template<class... T> inline void glBlendEquationSeparate(T...) { ++driverCalls["glBlendEquationSeparate"]; }
+template<class... T> inline void glPixelStorei(T...) { ++driverCalls["glPixelStorei"]; }
 template<class... T> inline void glUniform1f(T...) { ++driverCalls["glUniform1f"]; }
 template<class... T> inline void glUniform1i(T...) { ++driverCalls["glUniform1i"]; }
 template<class... T> inline void glUniform2f(T...) { ++driverCalls["glUniform2f"]; }

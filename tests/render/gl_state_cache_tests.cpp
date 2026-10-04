@@ -11,15 +11,25 @@ int main() {
         glEnable(GL_DEPTH_TEST);glDepthMask(GL_TRUE);glDepthFunc(GL_LEQUAL);
         glEnable(GL_CULL_FACE);glCullFace(GL_BACK);glFrontFace(GL_CCW);
         glDisable(GL_BLEND);glDisable(GL_POLYGON_OFFSET_FILL);
+        glBlendEquationSeparate(GL_FUNC_ADD,GL_FUNC_ADD);
+        glPixelStorei(GL_UNPACK_ALIGNMENT,4);
         glUniform1f(0,0.75f);glUniform3f(1,1,2,3);
     }
     assert(driverCalls["glUseProgram"]==1 && driverCalls["glBindVertexArray"]==1);
     assert(driverCalls["glBindBuffer"]==1 && driverCalls["glBindTexture"]==2);
     assert(driverCalls["glActiveTexture"]==2 && driverCalls["glUniform1f"]==1);
     assert(driverCalls["glUniform3f"]==1 && fqgl::counters.queries==0);
-    // Queries of known state return the tracked driver state with no driver read.
-    GLint front=0;glGetIntegerv(GL_FRONT_FACE,&front);
-    assert(front==GL_CCW && glIsEnabled(GL_CULL_FACE)==GL_TRUE);
+    assert(driverCalls["glBlendEquationSeparate"]==1);
+    assert(driverCalls["glPixelStorei"]==1);
+    // Queries used by the interaction HUD guard must all return tracked state
+    // without forcing an Adreno driver readback on every prompt/eye.
+    GLint front=0,eqRgb=0,eqAlpha=0,unpack=0;
+    glGetIntegerv(GL_FRONT_FACE,&front);
+    glGetIntegerv(GL_BLEND_EQUATION_RGB,&eqRgb);
+    glGetIntegerv(GL_BLEND_EQUATION_ALPHA,&eqAlpha);
+    glGetIntegerv(GL_UNPACK_ALIGNMENT,&unpack);
+    assert(front==GL_CCW && eqRgb==GL_FUNC_ADD && eqAlpha==GL_FUNC_ADD && unpack==4);
+    assert(glIsEnabled(GL_CULL_FACE)==GL_TRUE);
     assert(fqgl::counters.queries==0);
     // Authored two-sided/reversed and mirror transitions remain distinct.
     glDisable(GL_CULL_FACE);glDisable(GL_CULL_FACE);
