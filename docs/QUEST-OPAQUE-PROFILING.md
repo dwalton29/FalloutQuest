@@ -40,8 +40,10 @@ and object transforms still upload. Uniform arrays bypass value caching and inva
 `OPAQUE PERF` reports rolling means over up to 120 eye passes:
 
 - `prepCpuUs`: batch sorting, visibility, grouping and matrix preparation;
-- `submitCpuUs`: remaining opaque CPU wall time, including instancing buffer
-  upload, native LOD and actor/body updates;
+- `submitCpuUs`: CPU time inside draw submission (material/transform setup,
+  state/uniform/binding calls and draws) plus instance-buffer upload;
+- `otherCpuUs`: remaining opaque CPU work outside those measured scopes,
+  including native LOD selection, visibility checks and actor/body updates;
 - `gpuUs` and `gpuSamples`: asynchronously completed EXT timer-query samples;
 - draw calls, state changes, uniform uploads, texture/VAO binds, driver state
   queries, detailed visible placements, submitted vertices and triangles;

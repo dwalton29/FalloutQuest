@@ -5013,6 +5013,7 @@ void DrawSceneObject(const GpuObject& object, bool environmentPassQ2050 = false)
         !gInstancedDrawActiveQ2016 &&
         !Q2015AabbVisible(object)) return;
     if (environmentPassQ2050 && !object.environmentEnabledQ2050) return;
+    fqopaque::SubmissionScope submissionScope;
     if (gInstancingEnabledLocationQ2016 >= 0) {
         glUniform1f(gInstancingEnabledLocationQ2016,
                     gInstancedDrawActiveQ2016 ? 1.0f : 0.0f);
@@ -5326,6 +5327,7 @@ void Q2017RenderOpaqueDetailedInstanced() {
         }
         if (!gWaterReflectionPassQ2090) fqopaque::preparationUs += fqopaque::Micros(prepareStarted);
         if (!cache.matrices.empty()) {
+            fqopaque::SubmissionScope uploadScope;
             if (!cache.buffer) glGenBuffers(1, &cache.buffer);
             glBindBuffer(GL_ARRAY_BUFFER, cache.buffer);
             glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(cache.matrices.size()*sizeof(float)),
@@ -11037,8 +11039,8 @@ void RenderScene(const float* mvp) {
     fqopaque::End(static_cast<double>(q2017OpaqueUs), gMainBatches.visible);
     glUniform1f(gFastMaterialLocation, 0.0f);
     if ((fqopaque::passes % 120u) == 1u) {
-        Q6H_LOGI("OPAQUE PERF rollingEyePasses=%u prepCpuUs=%.1f submitCpuUs=%.1f gpuUs=%.1f gpuSamples=%u gpuSupported=%d gpuDisjoint=%llu gpuDropped=%llu draws=%.1f states=%.1f uniforms=%.1f textures=%.1f vaos=%.1f stateQueries=%.1f visibleDetailed=%.1f vertices=%.0f triangles=%.0f fastMaterial=%d renderScale=%.2f",
-            fqopaque::submission.count, fqopaque::preparation.Mean(), fqopaque::submission.Mean(),
+        Q6H_LOGI("OPAQUE PERF rollingEyePasses=%u prepCpuUs=%.1f submitCpuUs=%.1f otherCpuUs=%.1f gpuUs=%.1f gpuSamples=%u gpuSupported=%d gpuDisjoint=%llu gpuDropped=%llu draws=%.1f states=%.1f uniforms=%.1f textures=%.1f vaos=%.1f stateQueries=%.1f visibleDetailed=%.1f vertices=%.0f triangles=%.0f fastMaterial=%d renderScale=%.2f",
+            fqopaque::submission.count, fqopaque::preparation.Mean(), fqopaque::submission.Mean(), fqopaque::otherCpu.Mean(),
             fqopaque::timer.gpu.Mean(), fqopaque::timer.gpu.count, fqopaque::timer.supported,
             (unsigned long long)fqopaque::timer.disjoints, (unsigned long long)fqopaque::timer.dropped,
             fqopaque::drawCalls.Mean(), fqopaque::stateChanges.Mean(), fqopaque::uniformUploads.Mean(),

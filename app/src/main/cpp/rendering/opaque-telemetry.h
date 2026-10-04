@@ -102,17 +102,26 @@ struct GpuTimer {
     }
 };
 inline GpuTimer timer;
-inline Average preparation, submission, drawCalls, stateChanges, uniformUploads,
+inline Average preparation, submission, otherCpu, drawCalls, stateChanges, uniformUploads,
     textureBinds, vaoBinds, stateQueries, vertices, visible;
-inline double preparationUs=0;
+inline double preparationUs=0, submissionUs=0;
+inline bool measuring=false;
+struct SubmissionScope {
+    bool active=measuring;
+    Clock::time_point started=active ? Clock::now() : Clock::time_point{};
+    ~SubmissionScope() { if(active) submissionUs+=Micros(started); }
+};
 inline uint64_t passes=0;
 inline fqgl::Counters baseline;
 inline void Begin(uint64_t frame) {
-    timer.Poll(frame);preparationUs=0;baseline=fqgl::counters;timer.Begin(frame);
+    timer.Poll(frame);preparationUs=0;submissionUs=0;measuring=true;
+    baseline=fqgl::counters;timer.Begin(frame);
 }
 inline void End(double cpuUs,size_t count) {
     timer.End();
-    preparation.Add(preparationUs);submission.Add(std::max(0.0,cpuUs-preparationUs));
+    measuring=false;
+    preparation.Add(preparationUs);submission.Add(submissionUs);
+    otherCpu.Add(std::max(0.0,cpuUs-preparationUs-submissionUs));
     const auto& c=fqgl::counters;
     drawCalls.Add(c.draws-baseline.draws);stateChanges.Add(c.state-baseline.state);
     uniformUploads.Add(c.uniforms-baseline.uniforms);textureBinds.Add(c.textures-baseline.textures);
