@@ -23,3 +23,12 @@ target_compile_options(loading_presentation_tests PRIVATE -Wall -Wextra -Werror)
 find_package(ZLIB REQUIRED)
 target_link_libraries(loading_presentation_tests PRIVATE ZLIB::ZLIB)
 add_test(NAME loading_presentation_tests COMMAND loading_presentation_tests)
+
+add_executable(interior_lighting_tests interior_lighting_tests.cpp
+    ../../app/src/main/cpp/rendering/environment/fo3-interior-lighting.cpp
+    ../../app/src/main/cpp/data/fo3-esm-reader.cpp)
+target_compile_features(interior_lighting_tests PRIVATE cxx_std_17)
+target_compile_options(interior_lighting_tests PRIVATE -Wall -Wextra -Werror)
+target_include_directories(interior_lighting_tests PRIVATE ../../app/src/main/cpp ../../app/src/main/cpp/data)
+target_link_libraries(interior_lighting_tests PRIVATE ZLIB::ZLIB)
+add_test(NAME interior_lighting_tests COMMAND interior_lighting_tests)

@@ -1,4 +1,5 @@
 #pragma once
+#include "fo3-imagespace-data.h"
 
 #include "rendering/environment/fo3-environment.h"
 
@@ -8,49 +9,6 @@
 #include <cstring>
 #include <string>
 #include <vector>
-
-struct Fo3ImageSpace {
-    bool valid = false;
-    uint32_t cellFormId = 0u;
-    uint32_t worldspaceFormId = 0u;
-    uint32_t imageSpaceFormId = 0u;
-    uint32_t imageSpaceSourceWorldFormId = 0u;
-    uint32_t weatherDayImadFormId = 0u;
-    bool imageSpaceFromCell = false;
-    bool imageSpaceInheritedFromParent = false;
-    std::string editorId;
-
-    float hdrEyeAdaptSpeed = 0.5f;
-    float hdrBlurRadius = 1.0f;
-    float hdrBlurPasses = 1.0f;
-    float hdrEmissiveMultiplier = 1.0f;
-    float hdrTargetLum = 1.0f;
-    float hdrUpperLumClamp = 1.0f;
-    float hdrBrightScale = 1.0f;
-    float hdrBrightClamp = 1.0f;
-    float hdrLumRampNoTex = 1.0f;
-    float hdrLumRampMin = 1.0f;
-    float hdrLumRampMax = 1.0f;
-    float hdrSunlightDimmer = 1.0f;
-    float hdrGrassDimmer = 1.0f;
-    float hdrTreeDimmer = 1.0f;
-    float hdrSkinDimmer = 1.0f;
-
-    float bloomBlurRadius = 1.0f;
-    float bloomAlphaInterior = 0.0f;
-    float bloomAlphaExterior = 0.0f;
-
-    float nightEyeTint[3]{1.0f, 1.0f, 1.0f};
-    float nightEyeBrightness = 1.0f;
-
-    float cinematicSaturation = 1.0f;
-    float cinematicContrastAvgLum = 0.5f;
-    float cinematicContrast = 1.0f;
-    float cinematicTint[3]{1.0f, 1.0f, 1.0f};
-    float cinematicTintValue = 0.0f;
-    float cinematicBrightness = 1.0f;
-    uint8_t cinematicFlags = 0u;
-};
 
 inline Fo3ImageSpace gFo3ImageSpace;
 
@@ -145,6 +103,7 @@ inline uint32_t ResolveWeatherDayImad(uint32_t weatherFormId) {
     return dayImad;
 }
 
+
 } // namespace fo3imagespace
 
 inline bool LoadFo3ImageSpace(uint32_t cellFormId, uint32_t worldspaceFormId) {
@@ -190,7 +149,7 @@ inline bool LoadFo3ImageSpace(uint32_t cellFormId, uint32_t worldspaceFormId) {
 
     const Fo3Environment& env = GetFo3Environment();
     const uint32_t weatherDayImad =
-        fo3imagespace::ResolveWeatherDayImad(env.weatherFormId);
+        worldspaceFormId != 0u ? fo3imagespace::ResolveWeatherDayImad(env.weatherFormId) : 0u;
     __android_log_print(ANDROID_LOG_INFO, TAG,
                         "Q12.9 WEATHER IMAD: weather=%08X EDID=%s dayIMAD=%08X applied=0 auditOnly=1",
                         env.weatherFormId,
@@ -222,51 +181,7 @@ inline bool LoadFo3ImageSpace(uint32_t cellFormId, uint32_t worldspaceFormId) {
     image.imageSpaceInheritedFromParent = imageSpaceInheritedFromParent;
     bool haveDnam = false;
 
-    fo3esm::WalkSubrecords(imagePayload.data(), imagePayload.size(),
-                   [&](const char* type, const uint8_t* bytes, uint32_t size) {
-        if (std::memcmp(type, "EDID", 4u) == 0 && image.editorId.empty()) {
-            image.editorId = fo3esm::ZString(bytes, size);
-            return;
-        }
-        if (std::memcmp(type, "DNAM", 4u) != 0 || size < 148u) return;
-
-        auto f = [&](uint32_t offset) { return fo3esm::ReadF32(bytes + offset); };
-        image.hdrEyeAdaptSpeed = f(0u);
-        image.hdrBlurRadius = f(4u);
-        image.hdrBlurPasses = f(8u);
-        image.hdrEmissiveMultiplier = f(12u);
-        image.hdrTargetLum = f(16u);
-        image.hdrUpperLumClamp = f(20u);
-        image.hdrBrightScale = f(24u);
-        image.hdrBrightClamp = f(28u);
-        image.hdrLumRampNoTex = f(32u);
-        image.hdrLumRampMin = f(36u);
-        image.hdrLumRampMax = f(40u);
-        image.hdrSunlightDimmer = f(44u);
-        image.hdrGrassDimmer = f(48u);
-        image.hdrTreeDimmer = f(52u);
-        image.hdrSkinDimmer = f(56u);
-
-        image.bloomBlurRadius = f(60u);
-        image.bloomAlphaInterior = f(64u);
-        image.bloomAlphaExterior = f(68u);
-
-        image.nightEyeTint[0] = f(84u);
-        image.nightEyeTint[1] = f(88u);
-        image.nightEyeTint[2] = f(92u);
-        image.nightEyeBrightness = f(96u);
-
-        image.cinematicSaturation = f(100u);
-        image.cinematicContrastAvgLum = f(104u);
-        image.cinematicContrast = f(108u);
-        image.cinematicTint[0] = f(112u);
-        image.cinematicTint[1] = f(116u);
-        image.cinematicTint[2] = f(120u);
-        image.cinematicTintValue = f(124u);
-        image.cinematicBrightness = f(128u);
-        image.cinematicFlags = bytes[144u];
-        haveDnam = true;
-    });
+    haveDnam = fo3imagespace::ParseImageSpacePayload(imagePayload, image);
 
     if (!haveDnam) {
         __android_log_print(ANDROID_LOG_WARN, TAG,

@@ -1154,10 +1154,7 @@ void CompleteFo3CellTransitionQ74(uint32_t cellFormId) {
                                  gPendingTransitionQ74.x,
                                  gPendingTransitionQ74.y,
                                  gPendingTransitionQ74.z);
-    } else {
-        ResetFo3Environment();
-        ResetFo3PlacedLights();
-    }
+    } // Interior state is committed with Fo3SceneCpuPreparation by the renderer.
 
     if (gPendingTransitionQ74.valid &&
         gPendingTransitionQ74.cellFormId == cellFormId &&

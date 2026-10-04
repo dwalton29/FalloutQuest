@@ -29,3 +29,13 @@ weapon/prop paths). Those assets are not needed for CI.
 The loading test also accepts two arguments: a decoded loading_menu.xml and
 Fallout.ini, for verification of the original menu paths, Idle name, 0.75-second
 fade and MainMenu colour. CI fixtures check malformed inputs and section scoping.
+
+Interior lighting tests also accept an optional original master path:
+
+```sh
+./build/host-world/interior_lighting_tests /path/to/Fallout3.esm
+```
+
+This resolves the Brass Lantern and Player House by EDID and checks their CELL,
+LIGH and older ImageSpace layouts without embedding game data in git. See
+[the evidence and compatibility report](../../docs/INTERIOR-LIGHTING.md).

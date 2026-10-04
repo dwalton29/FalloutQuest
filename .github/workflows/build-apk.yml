@@ -58,6 +58,7 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y glslang-tools libegl1 libgl1-mesa-dri
           python3 tests/render/test_world_shader.py
+          python3 tests/render/test_interior_lighting.py
           python3 tests/render/test_gpu_skin_shader.py
           python3 tests/render/test_actor_skin_scope.py
           g++ -std=c++17 -Wall -Wextra -Werror -Iapp/src/main/cpp tests/render/actor_skinning_tests.cpp app/src/main/cpp/npc/fo3-actor-animation.cpp -o /tmp/actor-skin-tests

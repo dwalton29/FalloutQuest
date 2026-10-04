@@ -47,7 +47,7 @@ extern void PumpFo3AndroidEventsQ1860();
 #include "rendering/environment/fo3-external-emittance.h"
 #include "rendering/environment/fo3-authored-color.h"
 #include "rendering/environment/fo3-megaton-cell-environment.h"
-float GetFo3FogPower() { return fo3cellenv::GetFo3FogPower(); }
+float GetFo3FogPower() { return gFo3Environment.interior ? fo3cellenv::gFogPower : fo3cellenv::GetFo3FogPower(); }
 #define LoadFo3ImageSpace LoadFo3BaseImageSpaceForCell
 #include "rendering/environment/fo3-time-of-day.h"
 #define FO3_DEFINE_WEATHER_REFRESH 1
@@ -55,6 +55,8 @@ float GetFo3FogPower() { return fo3cellenv::GetFo3FogPower(); }
 #undef FO3_DEFINE_WEATHER_REFRESH
 #undef LoadFo3ImageSpace
 #include "rendering/environment/fo3-visual-depth.h"
+#include "rendering/environment/fo3-interior-lighting.h"
+#include "rendering/environment/fo3-interior-publication.h"
 
 void SetFo3TerrainShadowQ1050(GLuint depthTexture, const float* lightMvp, bool enabled);
 void RenderFo3TerrainShadowQ1050(const float* lightMvp, GLuint program, GLint mvpLocation, GLint alphaTestLocation);
@@ -80,6 +82,8 @@ bool QueueFo3MegatonEntryQ1860();
 #include <vector>
 
 namespace {
+void ResetFo3InteriorExposureHistory();
+void PrepareFo3InteriorSceneLights();
 struct GpuObject;
 bool Q1970ShouldRenderFullDetail(const GpuObject& object);
 bool Q220IsLooseRecordType(const std::string& type);
@@ -280,6 +284,8 @@ struct CpuObject {
 };
 
 struct GpuObject {
+    mutable uint64_t interiorLightFrame = UINT64_MAX;
+    mutable fo3interior::Selection interiorLights;
     GLuint skinAttributes=0, skinPalette=0;
     int skinMode=0;
     GLuint vao = 0;
@@ -530,6 +536,7 @@ GLint gFogFarVertexLocationQ1532 = -1;
 GLint gFogPowerVertexLocationQ1532 = -1;
 GLint gSunDirectionVertexLocationQ1540 = -1;
 GLint gEyePositionVertexLocationQ1630 = -1;
+GLint gInteriorModeLocation = -1;
 GLint gLocalLightCountLocationQ1010 = -1;
 GLint gLocalLightPosRadiusLocationQ1010 = -1;
 GLint gLocalLightColorFalloffLocationQ1010 = -1;
@@ -1139,6 +1146,7 @@ GLuint CreateQ6HProgram() {
         uniform vec2 uLodFadeRangeQ2021;
         uniform float uWaterReflectionClipEnabledQ2090;
         uniform float uWaterReflectionPlaneYQ2090;
+        uniform int uInteriorMode;
         uniform int uLocalLightCount;
         uniform vec4 uLocalLightPosRadius[8];
         uniform vec4 uLocalLightColorFalloff[8];
@@ -1289,7 +1297,7 @@ GLuint CreateQ6HProgram() {
 
             // Q15.6: Q15.4 tangent A/B retired; LEFT X is render-stage only.
             // Q15.11: PC SP17 diffuse is NormalMap dot tangent-space LightData.
-            float lambert = q1540Sp17Lambert;
+            float lambert = uInteriorMode != 0 ? q1540QuestLambert : q1540Sp17Lambert;
             // Q15.13: instruction-for-instruction SP17 specular structure from
             // the captured Megaton shader. No synthetic 0.32 attenuation and no
             // material RGB multiplier exist in this PC permutation.
@@ -1319,6 +1327,13 @@ GLuint CreateQ6HProgram() {
                     vec3(0.48 + 0.52 * q2024LandLambert);
             }
 
+            if (uInteriorMode != 0) {
+                vec3 H = normalize(lightDirection + normalize(uEyePosition-vPosition));
+                float ndl = dot(mappedNormal,lightDirection);
+                float sp = normalGloss.a * pow(max(dot(mappedNormal,H),0.0),q1630Exponent);
+                if (ndl <= 0.2) sp *= clamp(ndl+0.5,0.0,1.0);
+                q1630SpecularRgb = clamp(uSunlightColor*sp,0.0,1.0)*uSpecularEnabled;
+            }
             vec3 q1470WorldDiffuse = baseColor * q1630Sp17Lighting;
             vec3 lit = uNoLighting > 0.5
                 ? baseColor
@@ -1334,9 +1349,19 @@ GLuint CreateQ6HProgram() {
                 vec3 L = toLight / max(distanceToLight, 0.001);
                 float localLambert = max(dot(mappedNormal, L), 0.0);
                 float edge = clamp(1.0 - distanceToLight / radius, 0.0, 1.0);
-                float attenuation = pow(edge, max(uLocalLightColorFalloff[i].w, 0.25));
+                // FO3 SP17 SLS2034/2096: subtract saturated squared normalized distance.
+                float attenuation = uInteriorMode != 0
+                    ? clamp(1.0 - dot(toLight,toLight)/(radius*radius),0.0,1.0)
+                    : pow(edge, max(uLocalLightColorFalloff[i].w, 0.25));
                 vec3 localColor = uLocalLightColorFalloff[i].rgb;
                 lit += baseColor * localColor * localLambert * attenuation;
+                if (uInteriorMode != 0) {
+                    vec3 H = normalize(L + normalize(uEyePosition-vPosition));
+                    float ndl = dot(mappedNormal,L);
+                    float sp = normalGloss.a * pow(max(dot(mappedNormal,H),0.0),q1630Exponent);
+                    if (ndl <= 0.2) sp *= clamp(ndl+0.5,0.0,1.0);
+                    lit += localColor * sp * attenuation * uSpecularEnabled;
+                }
             }
             if (uExternalEmittanceEnabledQ1380 > 0.5) {
                 vec3 externalMaskQ1380 = uGlowEnabled > 0.5
@@ -2661,6 +2686,7 @@ bool InitializeScene() {
     gFogPowerVertexLocationQ1532 = glGetUniformLocation(gProgram, "uFogPowerVertexQ1532");
     gSunDirectionVertexLocationQ1540 = glGetUniformLocation(gProgram, "uSunDirectionVertexQ1540");
     gEyePositionVertexLocationQ1630 = glGetUniformLocation(gProgram, "uEyePositionVertexQ1630");
+    gInteriorModeLocation = glGetUniformLocation(gProgram, "uInteriorMode");
     gLocalLightCountLocationQ1010 = glGetUniformLocation(gProgram, "uLocalLightCount");
     gLocalLightPosRadiusLocationQ1010 = glGetUniformLocation(gProgram, "uLocalLightPosRadius[0]");
     gLocalLightColorFalloffLocationQ1010 = glGetUniformLocation(gProgram, "uLocalLightColorFalloff[0]");
@@ -2747,6 +2773,7 @@ std::chrono::steady_clock::time_point gQ2013ExteriorWarmupStarted{};
 
 struct Fo3SceneCpuPreparation {
     Fo3CellTransitionRequestQ74 request{};
+    fo3interior::Snapshot interiorLighting;
     std::vector<Fo3WorldPlacement> placements;
     std::vector<Fo3WorldPlacement> collisionPlacements;
     std::vector<CpuObject> selected;
@@ -2873,6 +2900,9 @@ bool BeginFo3SceneLoad(const Fo3CellTransitionRequestQ74& request, bool boot) {
         if (cancel.load(std::memory_order_acquire)) return false;
         phase = std::chrono::steady_clock::now();
         if (!LoadFo3ScenePlacements(result.request, result.placements)) return false;
+        if (result.request.worldspaceFormId == 0u)
+            fo3interior::Load(fo3assets::FalloutMasterPath(), result.request.cellFormId,
+                {result.request.x,result.request.y,result.request.z}, result.interiorLighting);
         result.metadataUs = Fo3SceneElapsedUs(phase);
         phase = std::chrono::steady_clock::now();
         result.selected.reserve(result.placements.size() * 2u);
@@ -3147,8 +3177,21 @@ bool ProcessQ74TransitionRequest() {
         gExteriorPersistentCellQ1890 = 0u;
         Q6H_LOGI("Q16.27 STREAM CONTEXT: active=0 reason=interior");
     }
-    LoadFo3CellEnvironment(request.cellFormId, request.worldspaceFormId,
-                                request.x, request.y);
+    if (request.worldspaceFormId != 0u) {
+        gFo3InteriorLighting = {};
+        LoadFo3CellEnvironment(request.cellFormId, request.worldspaceFormId, request.x, request.y);
+    } else {
+        PublishFo3InteriorLighting(std::move(prepared.interiorLighting));
+    }
+    for(auto& object:gQ210PlayerBody) object.interiorLightFrame=UINT64_MAX;
+    PrepareFo3InteriorSceneLights();
+    if (gFo3Environment.interior) {
+        int maximum=0;size_t zero=0;
+        for(const auto& object:gObjects){maximum=std::max(maximum,object.interiorLights.count);if(!object.interiorLights.count)++zero;}
+        Q6H_LOGI("INTERIOR LIGHT SHADER cell=%08X objectMaximum=%d budget=%d objectsWithoutLocal=%zu objects=%zu actorSelection=skinned-bounds stereoShared=1",
+            request.cellFormId,maximum,FO3_SHADER_LIGHTS,zero,gObjects.size());
+    }
+    ResetFo3InteriorExposureHistory();
     Q6H_LOGI("Q20.9A WATER TRANSITION DISPATCH: cell=%08X worldspace=%08X XTEL=(%.2f %.2f %.2f) exteriorStreaming=%d",
              request.cellFormId, request.worldspaceFormId,
              request.x, request.y, request.z,
@@ -5063,6 +5106,7 @@ int Q1900BuildNativeLodClipCells(float* bounds, bool objectLod) {
     return count;
 }
 
+extern uint64_t gStereoFrame;
 void DrawSceneObject(const GpuObject& object, bool environmentPassQ2050 = false) {
     if (gPlayerSession && gPlayerSession->player.IsCollected(object.refFormId)) return;
     if (!object.q210PlayerBody &&
@@ -5078,6 +5122,17 @@ void DrawSceneObject(const GpuObject& object, bool environmentPassQ2050 = false)
         return;
     }
     if (environmentPassQ2050 && !object.environmentEnabledQ2050) return;
+    if (gFo3Environment.interior) {
+        float positions[FO3_SHADER_LIGHTS*4]{}, colours[FO3_SHADER_LIGHTS*4]{};
+        for (int i=0;i<object.interiorLights.count;++i) {
+            const auto& l=gFo3InteriorLighting.lights[object.interiorLights.indices[i]];
+            for(int c=0;c<3;++c){positions[i*4+c]=l.position[c];colours[i*4+c]=l.colour[c];}
+            positions[i*4+3]=l.radius;
+        }
+        glUniform1i(gLocalLightCountLocationQ1010,object.interiorLights.count);
+        glUniform4fv(gLocalLightPosRadiusLocationQ1010,FO3_SHADER_LIGHTS,positions);
+        glUniform4fv(gLocalLightColorFalloffLocationQ1010,FO3_SHADER_LIGHTS,colours);
+    }
     fqopaque::SubmissionScope submissionScope;
     glUniform1i(gActorSkinMode,object.skinMode);
     if(object.skinMode) {
@@ -5364,7 +5419,7 @@ void Q2017RenderOpaqueDetailedInstanced() {
                 if (!Q2017ReflectionUseful(object) || !Q2015AabbVisible(object)) continue;
             } else if (!Q2017StereoVisible(object)) continue;
             ++cache.visible;
-            if (Q2017EligibleForInstancing(object)) cache.candidates.push_back(&object);
+            if (!gFo3Environment.interior && Q2017EligibleForInstancing(object)) cache.candidates.push_back(&object);
             else cache.singles.push_back(&object);
         }
         for (size_t first = 0; first < cache.candidates.size();) {
@@ -5525,6 +5580,7 @@ bool Q1030InitializeRenderProgramOnly() {
     gFogPowerVertexLocationQ1532 = glGetUniformLocation(gProgram, "uFogPowerVertexQ1532");
     gSunDirectionVertexLocationQ1540 = glGetUniformLocation(gProgram, "uSunDirectionVertexQ1540");
     gEyePositionVertexLocationQ1630 = glGetUniformLocation(gProgram, "uEyePositionVertexQ1630");
+    gInteriorModeLocation = glGetUniformLocation(gProgram, "uInteriorMode");
     gLocalLightCountLocationQ1010 = glGetUniformLocation(gProgram, "uLocalLightCount");
     gLocalLightPosRadiusLocationQ1010 = glGetUniformLocation(gProgram, "uLocalLightPosRadius[0]");
     gLocalLightColorFalloffLocationQ1010 = glGetUniformLocation(gProgram, "uLocalLightColorFalloff[0]");
@@ -10940,6 +10996,42 @@ void Q210RenderPlayerBody(bool alphaPass) {
     }
 }
 
+void PrepareFo3InteriorObjectLights(GpuObject& object, const QActorSkin* skin=nullptr) {
+    if (!gFo3Environment.interior) return;
+    if (!skin && !object.q220LooseObject && !object.q210PlayerBody && object.interiorLightFrame != UINT64_MAX) return;
+    std::array<float,3> mn{object.minX,object.minY,object.minZ},mx{object.maxX,object.maxY,object.maxZ};
+    if (skin || object.q220LooseObject || object.q210PlayerBody) {
+        std::array<float,3> lower{INFINITY,INFINITY,INFINITY},upper{-INFINITY,-INFINITY,-INFINITY};
+        const size_t bones=skin ? skin->palette.size() : 1;
+        for(size_t bone=0;bone<bones;++bone) for(int corner=0;corner<8;++corner) {
+            float p[3]{(corner&1)?mx[0]:mn[0],(corner&2)?mx[1]:mn[1],(corner&4)?mx[2]:mn[2]};
+            std::array<float,3> v{p[0],p[1],p[2]};
+            if(skin) v=fqskin::Transform(skin->palette[bone].data(),p,false);
+            const float* root=object.q210PlayerBody ? gQ210PlayerRoot :
+                (object.q220LooseObject ? object.q220DynamicTransform : nullptr);
+            if(root)v=fqskin::Transform(root,v.data(),false);
+            for(int c=0;c<3;++c){lower[c]=std::min(lower[c],v[c]);upper[c]=std::max(upper[c],v[c]);}
+        }
+        mn=lower;mx=upper;
+    }
+    object.interiorLights=fo3interior::Select(gFo3InteriorLighting.lights,mn,mx);
+    object.interiorLightFrame=gStereoFrame;
+}
+
+void PrepareFo3InteriorSceneLights() {
+    if (gFo3Environment.interior) {
+        for(auto& object:gObjects) PrepareFo3InteriorObjectLights(object);
+        for(auto& object:gQ210PlayerBody) PrepareFo3InteriorObjectLights(object);
+        for(auto& rig:gQ211PlayerRigParts) if(rig.gpuIndex<gQ210PlayerBody.size())
+            PrepareFo3InteriorObjectLights(gQ210PlayerBody[rig.gpuIndex],&rig.skin);
+        for(auto& actor:gQ230NpcActors) {
+            for(auto& object:actor.objects) PrepareFo3InteriorObjectLights(object);
+            for(auto& rig:actor.rigs) if(rig.gpuIndex<actor.objects.size())
+                PrepareFo3InteriorObjectLights(actor.objects[rig.gpuIndex],&rig.skin);
+        }
+    }
+}
+
 void QActorPrepareStereoFrame() {
     const auto started=fqopaque::Clock::now();
     fqactor::player={};fqactor::npc={};
@@ -10951,6 +11043,7 @@ void QActorPrepareStereoFrame() {
         actor.renderVisible=!actor.renderBoundsReady || Q2017StereoVisible(actor.renderBounds);
         if(actor.renderVisible) Q230UpdateActor(actor);
     }
+    PrepareFo3InteriorSceneLights();
     fqactor::framePrep.Add(fqopaque::Micros(started));
     if(gStereoFrame%60==0) Q6H_LOGI("ACTOR FRAME PREP frame=%llu playerPoseUs=%.1f fingersUs=%.1f playerBoneUs=%.1f playerSkinCpuUs=%.1f playerDirectionsUs=%.1f npcClipUs=%.1f npcPoseUs=%.1f npcBoneUs=%.1f npcSkinCpuUs=%.1f npcDirectionsUs=%.1f animatedUploadCpuUs=%.1f totalActorPrepUs=%.1f setupUs=%.1f animatedVertexUploadBytes=%llu animatedVboUploads=%llu bonePaletteUploadBytes=%llu playerParts=%llu npcParts=%llu actors=%llu cpuReference=%d",
         (unsigned long long)gStereoFrame,fqactor::player.pose,fqactor::player.fingers,fqactor::player.bones,
@@ -11072,7 +11165,8 @@ void RenderScene(const float* mvp) {
     const Fo3Environment& q1000Env = GetFo3Environment();
     float q203dPcLightDirection[3]{0.35f, 0.85f, 0.40f};
     const bool q203dPcLightReady =
-        GetFo3PcLightDirection(q203dPcLightDirection);
+        !q1000Env.interior && GetFo3PcLightDirection(q203dPcLightDirection);
+    glUniform1i(gInteriorModeLocation, q1000Env.interior ? 1 : 0);
     if (q1000Env.valid) {
         float q1500Ambient[3]{q1000Env.ambient[0], q1000Env.ambient[1], q1000Env.ambient[2]};
         glUniform3fv(gAmbientColorLocationQ1000, 1, q1500Ambient);
@@ -11093,7 +11187,7 @@ void RenderScene(const float* mvp) {
     glUniform4fv(gLocalLightColorFalloffLocationQ1010, FO3_SHADER_LIGHTS,
                  gFo3SelectedLightColorFalloff);
     if (gFogPowerLocationQ1410 >= 0) glUniform1f(gFogPowerLocationQ1410, GetFo3FogPower());
-    Q1590UploadPcSp17LightConstants();
+    if (!q1000Env.interior) Q1590UploadPcSp17LightConstants();
 
     const float q1532StaticFogNear =
         (q1000Env.valid && q1000Env.fogFar > q1000Env.fogNear + 1.0f)
@@ -11532,6 +11626,7 @@ GLint q1280ContrastLocation = -1;
 GLint q1280BrightnessLocation = -1;
 GLint q1280TintColorLocation = -1;
 GLint q1280TintValueLocation = -1;
+GLint q1280InteriorModeLocation = -1;
 GLint q1280BloomRadiusLocation = -1;
 GLint q1280BloomScaleLocation = -1;
 GLint q1280BloomThresholdLocation = -1;
@@ -11712,6 +11807,8 @@ bool Q1350EnsureAdaptationQ1350() {
     return true;
 }
 
+void ResetFo3InteriorExposureHistory() { q1350AdaptFrame = 0u; }
+
 void Q1350UpdateExposureQ1350() {
     if (!q1280PostColor || !Q1350EnsureAdaptationQ1350()) return;
 
@@ -11798,6 +11895,7 @@ void Q1350UpdateExposureQ1350() {
     glViewport(oldViewport[0], oldViewport[1], oldViewport[2], oldViewport[3]);
 }
 
+GLint q1670BrightThresholdLocation = -1, q1670BrightScaleLocation = -1;
 GLuint q1670BloomFbo = 0u;
 GLuint q1670BloomVao = 0u;
 GLuint q1670CopyProgram = 0u;
@@ -11873,11 +11971,13 @@ bool Q1670EnsureProgramsQ1670() {
         in vec2 vUv;
         uniform sampler2D uSrc;
         uniform sampler2D uAvgLum;
+        uniform float uBrightThreshold;
+        uniform float uBrightScale;
         out vec4 fragColor;
 
         vec3 q1670Tap(float y, float w) {
             vec3 c = texture(uSrc, vUv + vec2(0.0, y * 0.00390625)).rgb;
-            return max(c - vec3(0.55), vec3(0.0)) * w;
+            return max(c - vec3(uBrightThreshold), vec3(0.0)) * w * uBrightScale;
         }
 
         void main() {
@@ -11946,6 +12046,8 @@ bool Q1670EnsureProgramsQ1670() {
     if (!q1670CopyProgram || !q1670BrightVerticalProgram || !q1670HorizontalProgram) {
         return false;
     }
+    q1670BrightThresholdLocation=glGetUniformLocation(q1670BrightVerticalProgram,"uBrightThreshold");
+    q1670BrightScaleLocation=glGetUniformLocation(q1670BrightVerticalProgram,"uBrightScale");
     glGenVertexArrays(1, &q1670BloomVao);
 
     q1670CopySrcLocation = glGetUniformLocation(q1670CopyProgram, "uSrc");
@@ -12048,6 +12150,10 @@ bool Q1670RenderPcBloomQ1670() {
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
                                GL_TEXTURE_2D, q1670BloomTexture[2], 0);
         glUseProgram(q1670BrightVerticalProgram);
+        glUniform1f(q1670BrightThresholdLocation,
+            gFo3Environment.interior ? (gFo3ImageSpace.valid ? gFo3ImageSpace.hdrBrightClamp : 0.225f) : 0.55f);
+        glUniform1f(q1670BrightScaleLocation, gFo3Environment.interior
+            ? (gFo3ImageSpace.valid ? gFo3ImageSpace.hdrBrightScale : 0.0f) : 1.0f);
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, q1670BloomTexture[1]);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
@@ -12140,6 +12246,7 @@ bool Q1280EnsurePostProgram() {
         uniform float uBrightness;
         uniform vec3 uTintColor;
         uniform float uTintValue;
+        uniform int uInteriorMode;
         uniform float uBloomRadius;
         uniform float uBloomScale;
         uniform float uBloomThreshold;
@@ -12207,17 +12314,19 @@ bool Q1280EnsurePostProgram() {
                                  vec3(0.298999995, 0.587000012, 0.114));
 
             // lrp r1.xyz, c19.x, r0, r0.w ; c19.x = 0.875 saturation
-            q1640PcOutput = mix(vec3(q1640Lum), q1640PcOutput, 0.875);
+            q1640PcOutput = mix(vec3(q1640Lum), q1640PcOutput, uInteriorMode != 0 ? ((uFlags & 1) != 0 ? uSaturation : 1.0) : 0.875);
 
             // mad/mad tint pair with c20 =
             // (0.7399142, 0.5749559, 0.3128335, 0.6).
             vec3 q1640TintTarget = q1640Lum *
-                vec3(0.7399142, 0.5749559, 0.3128335);
-            q1640PcOutput = mix(q1640PcOutput, q1640TintTarget, 0.6);
+                (uInteriorMode != 0 ? uTintColor : vec3(0.7399142, 0.5749559, 0.3128335));
+            q1640PcOutput = mix(q1640PcOutput, q1640TintTarget, uInteriorMode != 0 ? ((uFlags & 4) != 0 ? uTintValue : 0.0) : 0.6);
 
             // c19.w brightness=1.1, c19.y contrastAverage=0,
             // c19.z contrast=1.02. Fade c22=(0,0,0,0), so Fade is identity.
-            q1640PcOutput = (q1640PcOutput * 1.1 - vec3(0.0)) * 1.02 + vec3(0.0);
+            q1640PcOutput = uInteriorMode != 0
+                ? (q1640PcOutput*((uFlags & 8) != 0 ? uBrightness : 1.0)-vec3(uContrastAvg))*((uFlags & 2) != 0 ? uContrast : 1.0)+vec3(uContrastAvg)
+                : (q1640PcOutput * 1.1 - vec3(0.0)) * 1.02 + vec3(0.0);
 
             // X8R8G8B8 clamps AND quantises the final shader result to an
             // 8-bit display code before the D3D9 gamma ramp is applied.
@@ -12281,6 +12390,7 @@ bool Q1280EnsurePostProgram() {
     q1280BrightnessLocation = glGetUniformLocation(q1280PostProgram, "uBrightness");
     q1280TintColorLocation = glGetUniformLocation(q1280PostProgram, "uTintColor");
     q1280TintValueLocation = glGetUniformLocation(q1280PostProgram, "uTintValue");
+    q1280InteriorModeLocation = glGetUniformLocation(q1280PostProgram, "uInteriorMode");
     q1280BloomRadiusLocation = glGetUniformLocation(q1280PostProgram, "uBloomRadius");
     q1280BloomScaleLocation = glGetUniformLocation(q1280PostProgram, "uBloomScale");
     q1280BloomThresholdLocation = glGetUniformLocation(q1280PostProgram, "uBloomThreshold");
@@ -12520,7 +12630,9 @@ void Q1280CompositeEyePostQ1280(GLuint swapchainFbo, GLsizei width, GLsizei heig
     glUniform1f(q1670PcBloomReadyLocation, q1670BloomReadyQ1670 ? 1.0f : 0.0f);
     glActiveTexture(GL_TEXTURE0);
     const Fo3ImageSpace& image = GetFo3ImageSpace();
-    glUniform1f(q1520TargetLumLocation, 1.2f);
+    glUniform1i(q1280InteriorModeLocation, gFo3Environment.interior ? 1 : 0);
+    glUniform1f(q1520TargetLumLocation, gFo3Environment.interior
+        ? (image.valid ? image.hdrTargetLum : 1.0f) : 1.2f);
     const int flags = image.valid
         ? static_cast<int>(image.cinematicFlags)
         : 0;
@@ -12536,7 +12648,7 @@ void Q1280CompositeEyePostQ1280(GLuint swapchainFbo, GLsizei width, GLsizei heig
     const float authoredRadius = image.valid
         ? std::max(image.hdrBlurRadius, image.bloomBlurRadius) : 1.0f;
     const float bloomAlpha = image.valid
-        ? std::clamp(image.bloomAlphaExterior, 0.0f, 1.0f) : 0.0f;
+        ? std::clamp(gFo3Environment.interior ? image.bloomAlphaInterior : image.bloomAlphaExterior, 0.0f, 1.0f) : 0.0f;
     glUniform1f(q1280BloomRadiusLocation, authoredRadius);
     glUniform1f(q1280BloomScaleLocation,
                 image.valid ? std::clamp(image.hdrBrightScale, 0.0f, 4.0f) : 0.0f);

@@ -267,26 +267,19 @@ inline void UpdateFo3VisualEye(float x, float y, float z) {
     gFo3EyePosition[1] = y;
     gFo3EyePosition[2] = z;
 
-    // Q12.2: rank all candidates then keep the true nearest/radius-weighted
-    // eight. The old fixed-array insertion stopped increasing `used` at eight,
-    // so later lights could overwrite the last slot even when they ranked worse.
-    std::vector<std::pair<float, size_t>> best;
-    best.reserve(gFo3PlacedLights.size());
-    for (size_t i = 0u; i < gFo3PlacedLights.size(); ++i) {
-        const Fo3PlacedLight& light = gFo3PlacedLights[i];
-        const float dx = x - light.position[0];
-        const float dy = y - light.position[1];
-        const float dz = z - light.position[2];
-        const float score = (dx*dx + dy*dy + dz*dz) /
-                            std::max(light.radius * light.radius, 0.25f);
-        best.emplace_back(score, i);
+    // Fixed top-N insertion: no per-eye allocation or global vector sort.
+    std::array<std::pair<float,size_t>,FO3_SHADER_LIGHTS> best{};
+    size_t used=0;
+    for(size_t i=0;i<gFo3PlacedLights.size();++i) {
+        const auto& l=gFo3PlacedLights[i];
+        float dx=x-l.position[0],dy=y-l.position[1],dz=z-l.position[2];
+        float score=(dx*dx+dy*dy+dz*dz)/std::max(l.radius*l.radius,0.25f);
+        size_t at=0;while(at<used&&best[at].first<=score)++at;
+        if(at==FO3_SHADER_LIGHTS)continue;
+        for(size_t j=std::min(used,static_cast<size_t>(FO3_SHADER_LIGHTS-1));j>at;--j)best[j]=best[j-1];
+        best[at]={score,i};used=std::min(used+1,static_cast<size_t>(FO3_SHADER_LIGHTS));
     }
-    std::sort(best.begin(), best.end(),
-              [](const auto& a, const auto& b) { return a.first < b.first; });
-    if (best.size() > static_cast<size_t>(FO3_SHADER_LIGHTS))
-        best.resize(static_cast<size_t>(FO3_SHADER_LIGHTS));
-
-    gFo3SelectedLightCount = static_cast<int>(best.size());
+    gFo3SelectedLightCount = static_cast<int>(used);
     std::fill(std::begin(gFo3SelectedLightPosRadius),
               std::end(gFo3SelectedLightPosRadius), 0.0f);
     std::fill(std::begin(gFo3SelectedLightColorFalloff),

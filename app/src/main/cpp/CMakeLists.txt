@@ -16,6 +16,7 @@ add_library(falloutquest SHARED
     data/fo3-bsa-reader.cpp
     data/fo3-bsa-archive.cpp
     data/fo3-asset-store.cpp
+    rendering/environment/fo3-interior-lighting.cpp
     data/fo3-esm-reader.cpp
     data/fo3-texture-bsa.cpp
     rendering/water/fo3-water.cpp

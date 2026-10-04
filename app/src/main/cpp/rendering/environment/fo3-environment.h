@@ -17,6 +17,8 @@
 
 struct Fo3Environment {
     bool valid = false;
+    bool interior = false;
+    uint32_t cellFormId = 0u;
     uint32_t worldspaceFormId = 0u;
     uint32_t climateFormId = 0u;
     uint32_t weatherFormId = 0u;

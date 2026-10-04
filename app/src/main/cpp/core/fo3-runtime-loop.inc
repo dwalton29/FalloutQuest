@@ -1443,9 +1443,9 @@ private:
                     loadingHead.orientation.x,loadingHead.orientation.y,loadingHead.orientation.z,loadingHead.orientation.w);
                 ++gSceneLoadFrame;
                 SyncInput(frameState.predictedDisplayTime);
-                UpdateFo3TimeOfDay(0.0f,
+                if (!gFo3Environment.interior) UpdateFo3TimeOfDay(0.0f,
                     static_cast<int64_t>(frameState.predictedDisplayTime));
-                if (fo3tod::gRuntime.ready) {
+                if (!gFo3Environment.interior && fo3tod::gRuntime.ready) {
                     UpdateFo3FogPower(
                         fo3tod::gTestHour,
                         fo3tod::gRuntime.climate.sunriseBegin,
@@ -1676,7 +1676,8 @@ private:
                         FO3_UNITS_PER_METRE_Q715);
             }
             const XrPosef virtualEyePose = ToVirtualPose(view.pose);
-            UpdateFo3VisualEye(virtualEyePose.position.x, virtualEyePose.position.y, virtualEyePose.position.z);
+            if (eyeIndex == 0u && !gFo3Environment.interior) UpdateFo3VisualEye(virtualEyePose.position.x, virtualEyePose.position.y, virtualEyePose.position.z);
+            else { gFo3EyePosition[0]=virtualEyePose.position.x; gFo3EyePosition[1]=virtualEyePose.position.y; gFo3EyePosition[2]=virtualEyePose.position.z; }
             const Mat4 camera = ViewFromPose(virtualEyePose);
             Mat4 skyView = camera;
             skyView.m[12] = 0.0f;
@@ -1684,7 +1685,7 @@ private:
             skyView.m[14] = 0.0f;
             const Mat4 skyMvp = Multiply(projection, skyView);
             SetFo3WaterSkyMvpQ2090(skyMvp.m);
-            if (!IsFo3LoadingVisible()) RenderFo3PcSky(skyMvp.m);
+            if (!IsFo3LoadingVisible() && !gFo3Environment.interior) RenderFo3PcSky(skyMvp.m);
             const Mat4 viewProjection = Multiply(projection, camera);
 
             glUseProgram(program_);
