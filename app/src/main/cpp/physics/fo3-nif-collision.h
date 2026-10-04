@@ -52,6 +52,7 @@ struct Fo3NifCollisionShapeQ6F {
     uint32_t sourceShapeBlock = 0xffffffffu;
     uint32_t dataBlock = 0xffffffffu;
 
+    uint8_t havokLayer = 0u; // rigid body filter, for non-packed primitives
     bool compressedVertices = false;
     bool bodyTransformApplied = false;
     bool nestedTransformApplied = false;
@@ -776,6 +777,7 @@ inline bool LoadFo3NifCollisionShapesQ6F(const std::string& modelPath,
             Mat4 local{}; std::memcpy(local.m,s.localToModel,sizeof(local.m));
             StoreMatrix(Mul(outer,local),s.localToModel);
             s.bodyTransformApplied=bodyApplied;
+            if (bodySize >= 8u) s.havokLayer = body[4u];
             totalTriangles+=s.indices.size()/3u;
             kinds[static_cast<size_t>(s.kind)]++;
             float mn[3],mx[3]; Bounds(s.positions,mn,mx);

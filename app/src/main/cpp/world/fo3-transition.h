@@ -53,10 +53,23 @@ bool LoadFo3WorldspaceNeighborhoodQ75(uint32_t worldspaceFormId,
                                      float arrivalX, float arrivalY,
                                      std::vector<Fo3WorldPlacement>& outPlacements);
 
+// Collision candidates retain the original REFR/MODL transform, independent of
+// visual support or how many visible parts the renderer expands from a NIF.
+inline std::vector<Fo3WorldPlacement> SelectFo3AuthoredCollisionPlacements(
+        const std::vector<Fo3WorldPlacement>& placements) {
+    std::vector<Fo3WorldPlacement> selected;
+    selected.reserve(placements.size());
+    std::unordered_set<uint32_t> refs;
+    for (const auto& placement : placements)
+        if (placement.refFormId != 0u && !placement.modelPath.empty() &&
+            refs.insert(placement.refFormId).second) selected.push_back(placement);
+    return selected;
+}
+
 // Q7.10 collision classification. Q7.8a proved that blindly welding every bhk
 // model into the static world makes Fallout's movable clutter behave like
 // concrete. Keep a small process-wide set of model paths used exclusively by
-// dynamic/item record types in the currently loaded exterior placement set.
+// dynamic/item record types in the currently loaded CELL placement set.
 inline std::string NormalizeFo3CollisionModelPathQ710(std::string path) {
     for (char& ch : path) {
         if (ch >= 'A' && ch <= 'Z') ch = static_cast<char>(ch - 'A' + 'a');

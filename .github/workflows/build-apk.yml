@@ -97,6 +97,13 @@ jobs:
           cmake --build build/host-world --parallel 2
           ctest --test-dir build/host-world --output-on-failure
 
+      - name: Test authored collision selection and publication on host
+        run: |
+          cmake -S tests/physics -B build/host-physics
+          cmake --build build/host-physics --parallel 2
+          ctest --test-dir build/host-physics --output-on-failure
+          python3 tests/physics/test_scene_collision_source.py
+
       - name: Test loading NIF materials on host
         run: |
           cmake -S tests/nif -B build/host-nif

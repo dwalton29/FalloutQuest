@@ -224,6 +224,7 @@ bool LoadFo3CellPlacementsQ74(uint32_t cellFormId,
                                        Q71_SCENE_FORWARD, Q71_FLOOR_Y,
                                        Q71_UNITS_PER_METRE);
         const bool loaded = LoadFo3CellPlacements(cellFormId, outPlacements);
+        if (loaded) ConfigureFo3CollisionPolicyQ710(outPlacements);
         Q71_LOGI("Q16.0 INTERIOR CELL LOAD: cell=%08X placements=%zu loaded=%d source=Fallout3.esm",
                  cellFormId, outPlacements.size(), loaded ? 1 : 0);
         return loaded;

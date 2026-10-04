@@ -299,6 +299,7 @@ bool LoadFo3InteriorCellPlacementsQ1700(uint32_t cellFormId,
 
         Fo3WorldPlacement world;
         world.refFormId = p->refFormId;
+        world.owningCellFormId = cellFormId;
         world.baseFormId = p->baseFormId;
         world.baseRecordType = base.recordType;
         world.editorId = base.editorId;

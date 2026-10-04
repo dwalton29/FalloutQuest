@@ -25,7 +25,7 @@ extern void PumpFo3AndroidEventsQ1860();
 namespace {
 
 constexpr const char* TAG = "FalloutQuest";
-constexpr size_t MAX_COLLISION_PLACEMENTS = 256u;
+// Interior selection is bounded by the active CELL, not a historical REFR cap.
 constexpr size_t MAX_EXTERIOR_COLLISION_PLACEMENTS_Q78A = 1024u;
 constexpr size_t MAX_EXTERIOR_COLLISION_TRIANGLES_Q78A = 250000u;
 constexpr size_t MAX_LINE_VERTICES = 800000u;
@@ -129,6 +129,7 @@ struct Q1990CachedCollisionPlacement {
     // Q18.2 uses this to rebuild the active source map without hashing every
     // triangle in the retained 3x3 on each CELL crossing.
     std::vector<uint64_t> surfaceKeys;
+    size_t filteredNonSolid = 0u;
     size_t shapeCount = 0u;
     std::array<size_t, 5> kindCounts{};
     uint64_t lastUse = 0u;
@@ -220,11 +221,6 @@ std::string NormalizeModelPathQ78A(const std::string& path) {
         if (ch == '/') ch = '\\';
     }
     return lower;
-}
-
-bool IsMegatonArchitecture(const std::string& path) {
-    const std::string lower = NormalizeModelPathQ78A(path);
-    return lower.find("architecture\\megaton") != std::string::npos;
 }
 
 bool IsWalkableModuleQ723(const Fo3WorldPlacement& placement) {
@@ -766,6 +762,13 @@ void AppendPoint(std::vector<float>& lines, const Vec3& p) {
 
 } // namespace
 
+void ResetFo3CollisionSceneCache() {
+    // Call only after serialized asset work drains. Active triangles stay live.
+    gQ1990CollisionPlacementCache.clear();
+    gQ1820NegativeCollisionPlacementCache.clear();
+    gQ1990CollisionCacheContextValid = false;
+}
+
 void SetNextFo3CollisionExteriorModeQ1931(bool exterior) {
     gNextCollisionExteriorOverrideQ1931 = exterior ? 1 : 0;
 }
@@ -785,6 +788,9 @@ bool PrimeFo3CollisionPlacementCacheQ1820(
         size_t* outTriangles) {
     if (outTriangles) *outTriangles = 0u;
     if (placement.refFormId == 0u || unitsPerMetre <= 0.0f) return true;
+    // Eligibility precedes every cache lookup; policy exclusions are never
+    // cached as missing assets (the same model can be static in the next CELL).
+    if (!ShouldLoadFo3StaticCollisionModelQ710(placement.modelPath)) return true;
 
     const bool sameContext = gQ1990CollisionCacheContextValid &&
         std::fabs(gQ1990CollisionCacheCenterX - centerX) < 0.01f &&
@@ -874,7 +880,11 @@ bool PrimeFo3CollisionPlacementCacheQ1820(
                     meta = &(*packedMetadata)[subShapeIndex];
                 }
             }
-            if (meta && !meta->BlocksPlayer()) continue;
+            if ((meta && !meta->BlocksPlayer()) ||
+                (!meta && !Fo3HavokLayerBlocksPlayerQ714(shape.havokLayer))) {
+                ++entry.filteredNonSolid;
+                continue;
+            }
 
             auto point = [&](uint32_t index) {
                 Vec3 p{
@@ -910,8 +920,12 @@ bool PrimeFo3CollisionPlacementCacheQ1820(
                 entry.surfaceKeys.push_back(tri.surfaceKeyQ714);
             entry.triangles.push_back(tri);
 
-            if (entry.triangles.size() > MAX_EXTERIOR_COLLISION_TRIANGLES_Q78A)
+            if (entry.triangles.size() > MAX_EXTERIOR_COLLISION_TRIANGLES_Q78A) {
+                Q6G_LOGW("COLLISION SAFETY CAP: ref=%08X model=%s triangles=%zu perPlacementTriangleLimit=%zu action=retain-old-world",
+                    placement.refFormId, placement.modelPath.c_str(), entry.triangles.size(),
+                    MAX_EXTERIOR_COLLISION_TRIANGLES_Q78A);
                 return false;
+            }
         }
         if (entry.triangles.size() > beforeShape) {
             ++entry.shapeCount;
@@ -919,10 +933,7 @@ bool PrimeFo3CollisionPlacementCacheQ1820(
         }
     }
 
-    if (entry.triangles.empty()) {
-        gQ1820NegativeCollisionPlacementCache.insert(placement.refFormId);
-        return true;
-    }
+    // Retain empty decoded chunks too, so filtered layers remain diagnosable.
 
     entry.lastUse = ++gQ1990CollisionCacheSerial;
     if (outTriangles) *outTriangles = entry.triangles.size();
@@ -979,7 +990,7 @@ bool InitializeFo3CollisionOverlay(const std::vector<Fo3WorldPlacement>& placeme
     gExteriorAllBhksQ78A = exteriorAllBhksQ78A;
     const size_t placementLimitQ78A = exteriorAllBhksQ78A
         ? MAX_EXTERIOR_COLLISION_PLACEMENTS_Q78A
-        : MAX_COLLISION_PLACEMENTS;
+        : placements.size();
 
     std::unordered_set<uint32_t> seenRefs;
     // Q18.2: shared with budgeted collision prewarming.
@@ -1019,7 +1030,7 @@ bool InitializeFo3CollisionOverlay(const std::vector<Fo3WorldPlacement>& placeme
             capped = true;
             break;
         }
-        if (!exteriorAllBhksQ78A && !IsMegatonArchitecture(placement.modelPath)) {
+        if (!ShouldLoadFo3StaticCollisionModelQ710(placement.modelPath)) {
             ++pathFilteredQ78A;
             continue;
         }
@@ -1136,7 +1147,8 @@ bool InitializeFo3CollisionOverlay(const std::vector<Fo3WorldPlacement>& placeme
                     }
                 }
 
-                if (exteriorAllBhksQ78A && metaQ714 && !metaQ714->BlocksPlayer()) {
+                if ((metaQ714 && !metaQ714->BlocksPlayer()) ||
+                    (!metaQ714 && !Fo3HavokLayerBlocksPlayerQ714(shape.havokLayer))) {
                     ++filteredNonSolidTrianglesQ714;
                     continue;
                 }
@@ -1229,7 +1241,7 @@ bool InitializeFo3CollisionOverlay(const std::vector<Fo3WorldPlacement>& placeme
                 q1990Entry.lastUse = ++gQ1990CollisionCacheSerial;
                 gQ1990CollisionPlacementCache[placement.refFormId] = std::move(q1990Entry);
             }
-            if (gPlacementCount <= 80u) {
+            if (gPlacementCount <= 8u) {
                 Q6F_LOGI("Q6F COLLISION OBJECT: ref=%08X EDID=%s model=%s shapes=%zu triangles=%zu packed=%zu convex=%zu box=%zu sphere=%zu capsule=%zu",
                          placement.refFormId,
                          placement.editorId.empty() ? "<none>" : placement.editorId.c_str(),
@@ -1240,20 +1252,20 @@ bool InitializeFo3CollisionOverlay(const std::vector<Fo3WorldPlacement>& placeme
         if (capped) break;
     }
 
-    Q6G_LOGI("Q7.8A COLLISION COVERAGE: exterior=%d policy=%s inputPlacements=%zu bhkAttempts=%zu successfulPlacements=%zu triangles=%zu uniqueCollisionModels=%zu noCollisionModels=%zu cacheHits=%zu negativeCacheHits=%zu pathFiltered=%zu placementLimit=%zu triangleLimit=%zu capped=%d",
+    Q6G_LOGI("Q7.8A COLLISION COVERAGE: exterior=%d policy=%s inputPlacements=%zu bhkAttempts=%zu successfulPlacements=%zu triangles=%zu uniqueCollisionModels=%zu noCollisionModels=%zu cacheHits=%zu negativeCacheHits=%zu dynamicExcluded=%zu placementLimit=%zu triangleLimit=%zu capped=%d",
              exteriorAllBhksQ78A ? 1 : 0,
-             exteriorAllBhksQ78A ? "all-authored-bhk" : "megaton-architecture-only",
+             exteriorAllBhksQ78A ? "all-authored-bhk" : "all-authored-static-bhk",
              placements.size(), bhkAttemptsQ78A, gPlacementCount, gWorldTriangles.size(),
              modelCache.size(), noCollisionModelsQ78A.size(), cacheHits,
              negativeCacheHitsQ78A, pathFilteredQ78A, placementLimitQ78A,
              exteriorAllBhksQ78A ? MAX_EXTERIOR_COLLISION_TRIANGLES_Q78A : 0u,
              capped ? 1 : 0);
 
-    Q6G_LOGI("Q7.14 HAVOK META READY: metadataBlocks=%zu taggedTriangles=%zu unmatchedPackedTriangles=%zu filteredNonSolidTriangles=%zu stairsTriangles=%zu platformTriangles=%zu exteriorFilter=%d",
+    Q6G_LOGI("Q7.14 HAVOK META READY: metadataBlocks=%zu taggedTriangles=%zu unmatchedPackedTriangles=%zu filteredNonSolidTriangles=%zu stairsTriangles=%zu platformTriangles=%zu allSceneLayerFilter=%d",
              metadataBlocksQ714, metadataTaggedTrianglesQ714,
              metadataUnmatchedTrianglesQ714, filteredNonSolidTrianglesQ714,
              stairTrianglesQ714, platformTrianglesQ714,
-             exteriorAllBhksQ78A ? 1 : 0);
+             1);
 
     // Bound the persistent transformed cache. A few thousand refs cover several
     // neighbouring 3x3 windows/backtracking without turning traversal into an
@@ -1504,6 +1516,11 @@ bool ResolveFo3PlayerMotionLegacyQ716(float currentX, float currentZ,
 // from the prewarmed transformed REFR cache on the serialized asset worker.
 // The live controller continues using the previous snapshot until publish.
 struct Q1930PreparedCollisionSnapshot {
+    bool exterior = true;
+    uint32_t cellFormId = 0u;
+    size_t inputPlacements = 0u, staticEligible = 0u, dynamicExcluded = 0u;
+    size_t bhkMissing = 0u, decodedPlacements = 0u, nonSolidFiltered = 0u;
+    bool capped = false;
     std::vector<CollisionTriangle> triangles;
     std::unordered_map<uint64_t, CollisionSurfaceSourceQ722> surfaceSources;
     size_t placementCount = 0u;
@@ -1550,23 +1567,32 @@ float Q1930WalkableThreshold(const CollisionTriangle& tri) {
         : EXTERIOR_WALKABLE_NORMAL_Y_Q713;
 }
 
-bool Q1930AssembleCachedExterior(
+bool Q1930AssembleCachedAuthored(
         const std::vector<Fo3WorldPlacement>& placements,
         Q1930PreparedCollisionSnapshot& snapshot) {
     std::unordered_set<uint32_t> seenRefs;
-    snapshot.triangles.reserve(140000u);
+    snapshot.triangles.reserve(snapshot.exterior ? 140000u : 8192u);
+    snapshot.inputPlacements = placements.size();
 
     for (const Fo3WorldPlacement& placement : placements) {
         if (placement.refFormId == 0u ||
             !seenRefs.insert(placement.refFormId).second) continue;
-        if (snapshot.placementCount >= MAX_EXTERIOR_COLLISION_PLACEMENTS_Q78A)
+        if (!ShouldLoadFo3StaticCollisionModelQ710(placement.modelPath)) {
+            ++snapshot.dynamicExcluded;
+            continue;
+        }
+        ++snapshot.staticEligible;
+        if (snapshot.exterior && snapshot.placementCount >= MAX_EXTERIOR_COLLISION_PLACEMENTS_Q78A) {
+            snapshot.capped = true;
             break;
+        }
 
         const auto cached =
             gQ1990CollisionPlacementCache.find(placement.refFormId);
         if (cached == gQ1990CollisionPlacementCache.end()) {
             if (gQ1820NegativeCollisionPlacementCache.find(placement.refFormId) !=
                 gQ1820NegativeCollisionPlacementCache.end()) {
+                ++snapshot.bhkMissing;
                 continue;
             }
             Q6G_LOGW("Q19.3 COLLISION SNAPSHOT MISS: ref=%08X model=%s reason=not-prewarmed",
@@ -1575,9 +1601,19 @@ bool Q1930AssembleCachedExterior(
         }
 
         Q1990CachedCollisionPlacement& entry = cached->second;
-        if (snapshot.triangles.size() + entry.triangles.size() >
+        ++snapshot.decodedPlacements;
+        snapshot.nonSolidFiltered += entry.filteredNonSolid;
+        if (entry.triangles.empty()) continue;
+        if (snapshot.exterior && snapshot.triangles.size() + entry.triangles.size() >
             MAX_EXTERIOR_COLLISION_TRIANGLES_Q78A) {
+            snapshot.capped = true;
             break;
+        }
+        if (!snapshot.exterior && snapshot.placementCount < 8u) {
+            Q6G_LOGI("INTERIOR COLLISION MODEL: cell=%08X ref=%08X model=%s shapes=%zu triangles=%zu nonSolidFiltered=%zu packed=%zu convex=%zu box=%zu sphere=%zu capsule=%zu",
+                snapshot.cellFormId, placement.refFormId, placement.modelPath.c_str(),
+                entry.shapeCount, entry.triangles.size(), entry.filteredNonSolid,
+                entry.kindCounts[0], entry.kindCounts[1], entry.kindCounts[2], entry.kindCounts[3], entry.kindCounts[4]);
         }
 
         snapshot.triangles.insert(snapshot.triangles.end(),
@@ -1798,7 +1834,7 @@ bool PrepareFo3CollisionSnapshotQ1930(
         const std::vector<Fo3WorldPlacement>& placements,
         float centerX, float centerY, float floorZ,
         float sceneForward, float floorY, float unitsPerMetre,
-        uint64_t* outToken) {
+        uint64_t* outToken, bool exterior, uint32_t cellFormId) {
     if (outToken) *outToken = 0u;
     if (!outToken || placements.empty() || unitsPerMetre <= 0.0f) return false;
 
@@ -1819,31 +1855,44 @@ bool PrepareFo3CollisionSnapshotQ1930(
     const auto totalStarted = std::chrono::steady_clock::now();
     auto snapshot = std::make_shared<Q1930PreparedCollisionSnapshot>();
     snapshot->floorY = floorY;
+    snapshot->exterior = exterior;
+    snapshot->cellFormId = cellFormId;
 
     auto phaseStarted = std::chrono::steady_clock::now();
-    if (!Q1930AssembleCachedExterior(placements, *snapshot)) return false;
+    const bool assembled = Q1930AssembleCachedAuthored(placements, *snapshot);
+    if (!exterior) Q6G_LOGI("INTERIOR COLLISION SOURCE: cell=%08X mode=interior policy=all-authored-static-bhk inputPlacements=%zu staticEligible=%zu dynamicExcluded=%zu bhkAttempts=%zu bhkSuccess=%zu bhkMissing=%zu successfulPlacements=%zu triangles=%zu nonSolidFiltered=%zu capped=%d ready=%d",
+        cellFormId, snapshot->inputPlacements, snapshot->staticEligible,
+        snapshot->dynamicExcluded, snapshot->staticEligible, snapshot->decodedPlacements,
+        snapshot->bhkMissing, snapshot->placementCount, snapshot->triangles.size(),
+        snapshot->nonSolidFiltered, snapshot->capped ? 1 : 0, assembled ? 1 : 0);
+    if (snapshot->capped) Q6G_LOGW("COLLISION SAFETY CAP: cell=%08X exterior=%d placements=%zu triangles=%zu", cellFormId, exterior ? 1 : 0, snapshot->placementCount, snapshot->triangles.size());
+    if (!assembled) return false;
     snapshot->assemblyUs = static_cast<uint64_t>(
         std::chrono::duration_cast<std::chrono::microseconds>(
             std::chrono::steady_clock::now() - phaseStarted).count());
 
-    phaseStarted = std::chrono::steady_clock::now();
-    Q1930BuildShapes(*snapshot);
-    snapshot->shapesUs = static_cast<uint64_t>(
-        std::chrono::duration_cast<std::chrono::microseconds>(
-            std::chrono::steady_clock::now() - phaseStarted).count());
+    // Preserve the legacy interior response. Exterior manifold structures are
+    // prepared only for exterior snapshots; interiors retain triangle queries.
+    if (exterior) {
+        phaseStarted = std::chrono::steady_clock::now();
+        Q1930BuildShapes(*snapshot);
+        snapshot->shapesUs = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::steady_clock::now() - phaseStarted).count());
 
-    phaseStarted = std::chrono::steady_clock::now();
-    Q1930BuildWeldAdjacency(*snapshot);
-    snapshot->weldUs = static_cast<uint64_t>(
-        std::chrono::duration_cast<std::chrono::microseconds>(
-            std::chrono::steady_clock::now() - phaseStarted).count());
+        phaseStarted = std::chrono::steady_clock::now();
+        Q1930BuildWeldAdjacency(*snapshot);
+        snapshot->weldUs = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::steady_clock::now() - phaseStarted).count());
 
-    phaseStarted = std::chrono::steady_clock::now();
-    Q1930BuildBroadphase(*snapshot);
-    snapshot->broadphaseUs = static_cast<uint64_t>(
-        std::chrono::duration_cast<std::chrono::microseconds>(
-            std::chrono::steady_clock::now() - phaseStarted).count());
+        phaseStarted = std::chrono::steady_clock::now();
+        Q1930BuildBroadphase(*snapshot);
+        snapshot->broadphaseUs = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::steady_clock::now() - phaseStarted).count());
 
+    }
     snapshot->totalUs = static_cast<uint64_t>(
         std::chrono::duration_cast<std::chrono::microseconds>(
             std::chrono::steady_clock::now() - totalStarted).count());
@@ -1892,18 +1941,18 @@ bool PublishFo3CollisionSnapshotQ1930(uint64_t token, uint64_t* outSwapUs) {
     gTriangleCount = snapshot->triangleCount;
     gKindCounts = snapshot->kindCounts;
     gCollisionFloorY = snapshot->floorY;
-    gExteriorAllBhksQ78A = true;
+    gExteriorAllBhksQ78A = snapshot->exterior;
     gPlayerCollisionReady = true;
 
     gHkWeldNeighboursQ801 = std::move(snapshot->weldNeighbours);
-    gHkWeldAdjacencyReadyQ801 = true;
+    gHkWeldAdjacencyReadyQ801 = snapshot->exterior;
     gHkWeldTriangleCountQ801 = gWorldTriangles.size();
     gHkWeldTriangleDataQ801 =
         gWorldTriangles.empty() ? nullptr : gWorldTriangles.data();
 
     gHkShapesQ900 = std::move(snapshot->shapes);
     gHkShapeIndexQ900 = std::move(snapshot->shapeIndex);
-    gHkShapesReadyQ900 = true;
+    gHkShapesReadyQ900 = snapshot->exterior;
     gHkShapeTriangleCountQ900 = gWorldTriangles.size();
     gHkShapeTriangleDataQ900 =
         gWorldTriangles.empty() ? nullptr : gWorldTriangles.data();
@@ -1918,10 +1967,20 @@ bool PublishFo3CollisionSnapshotQ1930(uint64_t token, uint64_t* outSwapUs) {
     gQ950QuerySerial = 1u;
     gQ950Data = gWorldTriangles.empty() ? nullptr : gWorldTriangles.data();
     gQ950TriangleCount = gWorldTriangles.size();
-    gQ950Ready = true;
+    gQ950Ready = snapshot->exterior;
     Q225RebuildDynamicGrid();
     SetFo3CollectedCollisionRefs(gCollectedCollisionRefs);
 
+    if (snapshot->cellFormId != 0u) {
+        gSafeSpawnResolved = false;
+        gContactLogCount = 0u;
+        gResolveCounter = 0u;
+        if (!snapshot->exterior) Q6G_LOGI("INTERIOR COLLISION READY: cell=%08X inputPlacements=%zu staticEligible=%zu dynamicExcluded=%zu bhkAttempts=%zu bhkSuccess=%zu bhkMissing=%zu successfulPlacements=%zu triangles=%zu nonSolidFiltered=%zu capped=%d ready=%d",
+            snapshot->cellFormId, snapshot->inputPlacements, snapshot->staticEligible,
+            snapshot->dynamicExcluded, snapshot->staticEligible, snapshot->decodedPlacements,
+            snapshot->bhkMissing, snapshot->placementCount, gWorldTriangles.size(),
+            snapshot->nonSolidFiltered, snapshot->capped ? 1 : 0, IsFo3PlayerCollisionReadyQ6G() ? 1 : 0);
+    }
     // A rolling exterior snapshot is not a teleport. Preserve the player's
     // already-resolved standing state, but discard contact manifold indices that
     // referred to the previous triangle vector.

@@ -11,12 +11,16 @@ bool HasFo3InteractionOccluder(float ox,float oy,float oz,float dx,float dy,floa
                               float distance,uint32_t targetRef);
 
 // Builds the shared authored-collision world from Bethesda NIF bhk shapes for
-// selected Megaton structural placements. Q6F can render it as a debug overlay;
+// active CELL static placements. Q6F can render it as a debug overlay;
 // Q6G consumes the exact same transformed triangles for locomotion.
 bool InitializeFo3CollisionOverlay(const std::vector<Fo3WorldPlacement>& placements,
                                    float centerX, float centerY, float floorZ,
                                    float sceneForward, float floorY,
                                    float unitsPerMetre);
+
+// Explicit CELL replacement clears transformed/negative REFR chunks without
+// retiring the live world. Call after background work drains, before preparation.
+void ResetFo3CollisionSceneCache();
 
 // Q18.2: prepare one exterior REFR's transformed authored bhk chunk without
 // replacing the currently active collision world. The streaming runtime calls
@@ -35,7 +39,7 @@ bool PrepareFo3CollisionSnapshotQ1930(
     const std::vector<Fo3WorldPlacement>& placements,
     float centerX, float centerY, float floorZ,
     float sceneForward, float floorY, float unitsPerMetre,
-    uint64_t* outToken);
+    uint64_t* outToken, bool exterior = true, uint32_t cellFormId = 0u);
 
 bool PublishFo3CollisionSnapshotQ1930(uint64_t token, uint64_t* outSwapUs);
 void DiscardFo3CollisionSnapshotQ1930(uint64_t token);

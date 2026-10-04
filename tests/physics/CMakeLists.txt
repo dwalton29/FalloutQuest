@@ -1,0 +1,8 @@
+cmake_minimum_required(VERSION 3.16)
+project(falloutquest_collision_tests LANGUAGES CXX)
+enable_testing()
+add_executable(collision_tests collision_tests.cpp)
+target_compile_features(collision_tests PRIVATE cxx_std_17)
+target_compile_options(collision_tests PRIVATE -Wall -Wextra -UNDEBUG -Wno-unused-function)
+target_include_directories(collision_tests PRIVATE mock ../../app/src/main/cpp ../../app/src/main/cpp/world ../../app/src/main/cpp/data ../../app/src/main/cpp/physics)
+add_test(NAME collision_tests COMMAND collision_tests)

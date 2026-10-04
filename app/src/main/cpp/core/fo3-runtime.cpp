@@ -2906,13 +2906,18 @@ bool BeginFo3SceneLoad(const Fo3CellTransitionRequestQ74& request, bool boot) {
         result.metadataUs = Fo3SceneElapsedUs(phase);
         phase = std::chrono::steady_clock::now();
         result.selected.reserve(result.placements.size() * 2u);
+        // Interiors select authored REFRs before visual filtering or expansion.
+        // Exterior selection/streaming remains unchanged.
+        if (result.request.worldspaceFormId == 0u)
+            result.collisionPlacements = SelectFo3AuthoredCollisionPlacements(result.placements);
         for (const Fo3WorldPlacement& placement : result.placements) {
             if (cancel.load(std::memory_order_acquire)) return false;
             if (Q74ShouldSkipPlacement(placement)) { ++result.skipped; continue; }
             std::vector<CpuObject> parts;
             if (!BuildCpuObjects(placement, parts)) { ++result.unsupported; continue; }
             for (CpuObject& part : parts) {
-                result.collisionPlacements.push_back(part.placement);
+                if (result.request.worldspaceFormId != 0u)
+                    result.collisionPlacements.push_back(part.placement);
                 result.selected.push_back(std::move(part));
             }
         }
@@ -2985,7 +2990,8 @@ bool ProcessQ74TransitionRequest() {
         gFo3LoadingWorldspace.store(request.worldspaceFormId, std::memory_order_release);
         gSceneLoad.previousCollisionPolicy = Fo3DynamicOnlyCollisionModelsQ710();
         ClearFo3CollisionPolicyQ710();
-        if (request.worldspaceFormId != 0u) ConfigureFo3CollisionPolicyQ710(prepared.placements);
+        ConfigureFo3CollisionPolicyQ710(prepared.placements);
+        ResetFo3CollisionSceneCache();
         gQ2013ExteriorWarmupPending = request.worldspaceFormId == 0x0000003Cu && IsFo3LoadingVisible();
         gQ2013ExteriorWarmupStarted = std::chrono::steady_clock::time_point{};
         gFo3LoadingWarmupWarned = false;
@@ -3046,7 +3052,7 @@ bool ProcessQ74TransitionRequest() {
     if (!gSceneLoad.collisionComplete) {
         const bool backgroundExterior = request.worldspaceFormId == 0x0000003Cu ||
                                         request.worldspaceFormId == 0x00000A74u;
-        if (backgroundExterior) {
+        if (backgroundExterior || request.worldspaceFormId == 0u) {
             if (!gSceneLoad.collisionStarted) {
                 // Existing CELL collision workers are drained before contextApplied.
                 // Player queries and hidden-world draws are paused under the loader;
@@ -3074,7 +3080,7 @@ bool ProcessQ74TransitionRequest() {
                     if (cancelled.load(std::memory_order_acquire)) return false;
                     const bool ready = PrepareFo3CollisionSnapshotQ1930(out.placements,
                         request.x, request.y, request.z, SCENE_FORWARD, FLOOR_Y,
-                        FO3_UNITS_PER_METRE, &out.token);
+                        FO3_UNITS_PER_METRE, &out.token, request.worldspaceFormId != 0u, request.cellFormId);
                     out.elapsedUs = Fo3SceneElapsedUs(started);
                     return ready;
                 });
@@ -3088,22 +3094,11 @@ bool ProcessQ74TransitionRequest() {
                 AbortFo3SceneLoad("collision-preparation");
                 return false;
             }
-            auto& collision = gSceneLoad.collisionPreparation.Get();
-            uint64_t swapUs = 0u;
-            gSceneLoad.collisionReady = PublishFo3CollisionSnapshotQ1930(collision.token, &swapUs);
-            collision.token = 0u;
-            gSceneLoad.collisionUs = collision.elapsedUs + swapUs;
-            if (!gSceneLoad.collisionReady) {
-                AbortFo3SceneLoad("collision-publication");
-                return false;
-            }
-            Q6H_LOGI("SCENE COLLISION READY: placements=%zu prepareUs=%llu swapUs=%llu background=1",
-                     collision.placements.size(),
-                     static_cast<unsigned long long>(collision.elapsedUs),
-                     static_cast<unsigned long long>(swapUs));
-            gSceneLoad.collisionPreparation.Reset();
+            // Keep the immutable token pending. Publish in the same render-thread
+            // turn as the visual swap, after the final generation check.
         } else {
-            // Retain authored interior selection until it has its own CPU snapshot.
+            // Other exterior worldspaces retain their existing synchronous path.
+            SetNextFo3CollisionExteriorModeQ1931(request.worldspaceFormId != 0u);
             const auto started = std::chrono::steady_clock::now();
             gSceneLoad.collisionReady = InitializeFo3CollisionOverlay(prepared.collisionPlacements,
                 request.x, request.y, request.z, SCENE_FORWARD, FLOOR_Y, FO3_UNITS_PER_METRE);
@@ -3111,6 +3106,22 @@ bool ProcessQ74TransitionRequest() {
         }
         gSceneLoad.collisionComplete = true;
         return false; // Commit/environment/terrain gets a separate submitted frame.
+    }
+    if (gSceneLoad.collisionStarted) {
+        auto& collision = gSceneLoad.collisionPreparation.Get();
+        uint64_t swapUs = 0u;
+        gSceneLoad.collisionReady = PublishFo3CollisionSnapshotQ1930(collision.token, &swapUs);
+        collision.token = 0u;
+        gSceneLoad.collisionUs = collision.elapsedUs + swapUs;
+        if (!gSceneLoad.collisionReady) {
+            AbortFo3SceneLoad("collision-publication");
+            return false;
+        }
+        Q6H_LOGI("SCENE COLLISION READY: placements=%zu prepareUs=%llu swapUs=%llu background=1",
+                 collision.placements.size(),
+                 static_cast<unsigned long long>(collision.elapsedUs),
+                 static_cast<unsigned long long>(swapUs));
+        gSceneLoad.collisionPreparation.Reset();
     }
     const bool collisionReady = gSceneLoad.collisionReady;
     const uint64_t collisionUs = gSceneLoad.collisionUs;
