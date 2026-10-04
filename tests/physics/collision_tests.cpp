@@ -96,6 +96,35 @@ int main(int argc,char**argv) {
     assert(ResolveFo3PlayerMotionQ6G(.65f,0,.95f,0,y,&x,&z,&y));
     assert(x<.8f && std::fabs(y)<.01f);
     assert(HasFo3InteractionOccluder(0,1,0,1,0,0,2,0));
+
+    assets["Door.nif"]=packedNif(1,true);
+    auto door=placement(10,"Door.nif","DOOR");
+    publish(prepare({b,door},false,107));
+    auto countRef=[&](uint32_t ref) {
+        size_t count=0;
+        for(const auto& tri:gWorldTriangles) {
+            const auto source=gSurfaceSourcesQ722.find(tri.surfaceKeyQ714);
+            if(source!=gSurfaceSourcesQ722.end()&&source->second.refFormId==ref) ++count;
+        }
+        return count;
+    };
+    assert(countRef(10)==2);
+    assert(SetFo3DoorCollisionTransformQ2400(10,nullptr,false));
+    assert(countRef(10)==0);
+    const float turn90[16]{0,0,-1,0, 0,1,0,0, 1,0,0,0, 0,0,0,1};
+    assert(SetFo3DoorCollisionTransformQ2400(10,turn90,true));
+    assert(countRef(10)==2);
+    bool rotatedDoor=false;
+    for(const auto& tri:gWorldTriangles) {
+        const auto source=gSurfaceSourcesQ722.find(tri.surfaceKeyQ714);
+        if(source!=gSurfaceSourcesQ722.end()&&source->second.refFormId==10)
+            rotatedDoor=rotatedDoor||(tri.maxZ < -0.10f && tri.minZ < -0.10f);
+    }
+    assert(rotatedDoor);
+    const float identity[16]{1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1};
+    assert(SetFo3DoorCollisionTransformQ2400(10,identity,true));
+    assert(countRef(10)==2);
+
     float dy,nx,ny,nz;uint32_t contacts,candidates;
     assert(ResolveFo3DynamicBoxQ225(3,0,.2f,0,0,.05f,0,.1f,.1f,.1f,
         1,0,0,0,1,0,0,0,1,.18f,&x,&dy,&z,&nx,&ny,&nz,&contacts,&candidates));

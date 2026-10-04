@@ -22,6 +22,8 @@ struct Fo3DoorAimQ1700 {
     bool valid = false;
     uint32_t sourceDoorRef = 0u;
     uint32_t destinationDoorRef = 0u;
+    bool localSwing = false;
+    bool open = false;
     float distance = 0.0f;
     float x = 0.0f;
     float y = 0.0f;

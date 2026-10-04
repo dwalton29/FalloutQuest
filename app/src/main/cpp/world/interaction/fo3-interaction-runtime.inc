@@ -67,7 +67,10 @@ bool QueryFo3Interaction(float ox, float oy, float oz, float dx, float dy,
         else if (!target.allowed && item.script) action = "Scripted ";
         std::snprintf(target.prompt.data(),target.prompt.size(),"%s%s",action,item.name.c_str());
     } else {
-        GetFo3DoorPromptQ1840(target.reference,target.prompt.data(),target.prompt.size());
+        if (!GetFo3DoorPromptQ1840(target.reference,target.prompt.data(),target.prompt.size())) {
+            std::snprintf(target.prompt.data(),target.prompt.size(),"%s Door",
+                target.door.localSwing && target.door.open ? "Close" : "Open");
+        }
         if (!target.allowed) {
             const auto ref=catalog.references.find(target.reference);
             if (ref!=catalog.references.end() && ref->second.locked)
@@ -137,12 +140,19 @@ bool ActivateFo3Interaction(float ox,float oy,float oz,float dx,float dy,float d
         return false;
     }
     if (!target.pickup) {
+        const bool localSwing=target.door.localSwing;
+        const bool wasOpen=target.door.open;
         const bool activated=ActivateDoorInternalQ1700(ox,oy,oz,dx,dy,dz);
         if (activated) {
             const auto ref=gPlayerSession->player.Definitions().references.find(target.reference);
-            if (ref!=gPlayerSession->player.Definitions().references.end()) fo3audio::Open(ref->second.base);
+            if (ref!=gPlayerSession->player.Definitions().references.end()) {
+                if(localSwing && wasOpen) fo3audio::Close(ref->second.base);
+                else fo3audio::Open(ref->second.base);
+            }
         }
-        return activated;
+        // Only XTEL doors reset the VR origin. A local swing activation is
+        // successful but remains in this CELL.
+        return activated && !localSwing;
     }
     if (!gPlayerSession->player.Pickup(target.reference)) return false;
     fo3audio::Pickup(gPlayerSession->player.Definitions().references.at(target.reference).base);

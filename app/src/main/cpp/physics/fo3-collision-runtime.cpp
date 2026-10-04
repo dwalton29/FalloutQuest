@@ -2027,6 +2027,34 @@ void SetFo3CollectedCollisionRefs(const std::unordered_set<uint32_t>& refs) {
     Q225RebuildDynamicGrid();
 }
 
+bool SetFo3DoorCollisionTransformQ2400(uint32_t refFormId,const float transform[16],bool enabled) {
+    if(refFormId==0u||gExteriorAllBhksQ78A||!gPlayerCollisionReady) return false;
+    const size_t before=gWorldTriangles.size();
+    gWorldTriangles.erase(std::remove_if(gWorldTriangles.begin(),gWorldTriangles.end(),
+        [&](const CollisionTriangle& tri){const auto s=gSurfaceSourcesQ722.find(tri.surfaceKeyQ714);
+            return s!=gSurfaceSourcesQ722.end()&&s->second.refFormId==refFormId;}),gWorldTriangles.end());
+    const size_t removed=before-gWorldTriangles.size();size_t restored=0u;
+    if(enabled) {
+        const auto cached=gQ1990CollisionPlacementCache.find(refFormId);
+        if(cached!=gQ1990CollisionPlacementCache.end()) {
+            auto apply=[&](Vec3 p){if(!transform)return p;return Vec3{
+                transform[0]*p.x+transform[4]*p.y+transform[8]*p.z+transform[12],
+                transform[1]*p.x+transform[5]*p.y+transform[9]*p.z+transform[13],
+                transform[2]*p.x+transform[6]*p.y+transform[10]*p.z+transform[14]};};
+            for(const CollisionTriangle& original:cached->second.triangles) {
+                CollisionTriangle moved=original;
+                if(!BuildTriangle(apply(original.a),apply(original.b),apply(original.c),moved)) continue;
+                gWorldTriangles.push_back(std::move(moved));++restored;
+            }
+        }
+    }
+    gTriangleCount=gWorldTriangles.size();InvalidateDerivedCollisionCachesQ17();
+    gHkManifoldValidQ800=false;Q225RebuildDynamicGrid();
+    Q6G_LOGI("Q24.0 DOOR COLLISION: ref=%08X enabled=%d removed=%zu restored=%zu triangles=%zu source=authored-bhk endpointOnly=1",
+             refFormId,enabled?1:0,removed,restored,gWorldTriangles.size());
+    return true;
+}
+
 bool HasFo3InteractionOccluder(float ox,float oy,float oz,float dx,float dy,float dz,
                               float distance,uint32_t targetRef) {
     if (distance<=0.01f) return false;

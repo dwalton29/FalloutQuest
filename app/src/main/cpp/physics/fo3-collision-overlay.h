@@ -7,6 +7,7 @@
 
 // Render-thread world removal; reapplied when a rolling snapshot publishes.
 void SetFo3CollectedCollisionRefs(const std::unordered_set<uint32_t>& refs);
+bool SetFo3DoorCollisionTransformQ2400(uint32_t refFormId,const float transform[16],bool enabled);
 bool HasFo3InteractionOccluder(float ox,float oy,float oz,float dx,float dy,float dz,
                               float distance,uint32_t targetRef);
 

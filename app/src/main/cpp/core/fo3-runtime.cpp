@@ -343,8 +343,17 @@ struct GpuObject {
     bool q210PlayerBody = false;
     bool q220LooseObject = false;
     bool q230NpcActor = false;
+    bool q2400SwingDoor = false;
     float q223PlacementScale = 1.0f;
     float q220DynamicTransform[16]{
+        1,0,0,0,
+        0,1,0,0,
+        0,0,1,0,
+        0,0,0,1
+    };
+    // Q24.0 DOOR geometry is already expanded in scene coordinates, so this is
+    // a scene-space hinge transform around the authored REFR/NIF origin.
+    float q2400DoorTransform[16]{
         1,0,0,0,
         0,1,0,0,
         0,0,1,0,
@@ -388,6 +397,33 @@ struct CachedGpuTexture {
 // These runtime objects are defined later in this translation unit.
 extern bool gWaterReflectionPassQ2090;
 extern std::vector<GpuObject> gObjects;
+
+Vec3 Q2400TransformPoint(const float m[16], Vec3 p) {
+    return {
+        m[0]*p.x + m[4]*p.y + m[8]*p.z + m[12],
+        m[1]*p.x + m[5]*p.y + m[9]*p.z + m[13],
+        m[2]*p.x + m[6]*p.y + m[10]*p.z + m[14],
+    };
+}
+void Q2400ObjectBounds(const GpuObject& object, Vec3& minimum, Vec3& maximum) {
+    if (!object.q2400SwingDoor) {
+        minimum={object.minX,object.minY,object.minZ};
+        maximum={object.maxX,object.maxY,object.maxZ};
+        return;
+    }
+    minimum={1e30f,1e30f,1e30f};
+    maximum={-1e30f,-1e30f,-1e30f};
+    for(int corner=0;corner<8;++corner) {
+        const Vec3 p=Q2400TransformPoint(object.q2400DoorTransform,
+            {corner&1?object.maxX:object.minX,
+             corner&2?object.maxY:object.minY,
+             corner&4?object.maxZ:object.minZ});
+        minimum.x=std::min(minimum.x,p.x);maximum.x=std::max(maximum.x,p.x);
+        minimum.y=std::min(minimum.y,p.y);maximum.y=std::max(maximum.y,p.y);
+        minimum.z=std::min(minimum.z,p.z);maximum.z=std::max(maximum.z,p.z);
+    }
+}
+
 float gFrustumPadding = 1.0f;
 bool gQ2015FrustumCullActive = false;
 float gQ2015FrustumMvp[16]{};
@@ -405,9 +441,11 @@ bool Q2015AabbVisible(const GpuObject& object) {
     if (object.minX > object.maxX || object.minY > object.maxY ||
         object.minZ > object.maxZ) return true;
 
+    Vec3 q2400Min{},q2400Max{};
+    Q2400ObjectBounds(object,q2400Min,q2400Max);
     ++gQ2015CullTested;
     const bool visible = questrender::Visible(gQ2015FrustumMvp,
-        {object.minX, object.maxX, object.minY, object.maxY, object.minZ, object.maxZ},
+        {q2400Min.x,q2400Max.x,q2400Min.y,q2400Max.y,q2400Min.z,q2400Max.z},
         gFrustumPadding);
     if (visible) ++gQ2015CullPassed; else ++gQ2015CullRejected;
     return visible;
@@ -541,6 +579,17 @@ GLint gLocalLightCountLocationQ1010 = -1;
 GLint gLocalLightPosRadiusLocationQ1010 = -1;
 GLint gLocalLightColorFalloffLocationQ1010 = -1;
 std::vector<GpuObject> gObjects;
+
+struct Q2400InteriorDoorState {
+    bool targetOpen=false;
+    bool collisionDisabled=false;
+    float progress=0.0f;
+    int swingSign=1;
+    uint64_t collisionSceneSerial=0u;
+    std::chrono::steady_clock::time_point lastUpdate{};
+};
+std::unordered_map<uint32_t,Q2400InteriorDoorState> gQ2400InteriorDoors;
+uint64_t gQ2400DoorSceneSerial=1u;
 
 // Q21.0: real Fallout actor geometry kept outside CELL ownership.
 std::vector<GpuObject> gQ210PlayerBody;
@@ -2029,6 +2078,7 @@ bool UploadCpuObject(CpuObject& cpu, float centerX, float centerY, float floorZ,
              cpu.placement.persistentExteriorRef);
         ResolveDoorTeleportCachedQ1698(
             gpu.refFormId, q1920WastelandExterior, gpu.teleport);
+        gpu.q2400SwingDoor = !gpu.teleport.valid;
         if (gpu.teleport.valid) {
             CacheFo3DoorPromptQ1840(gpu.refFormId,
                                     cpu.placement.baseFormId,
@@ -3143,6 +3193,7 @@ bool ProcessQ74TransitionRequest() {
     for (auto& actor : gQ230NpcActors)
         actor.animationStart = std::chrono::steady_clock::now();
     gObjects = std::move(replacement);
+    if(++gQ2400DoorSceneSerial==0u) gQ2400DoorSceneSerial=1u;
     gSceneReady = !gObjects.empty();
     gSceneCenterXQ1730 = request.x;
     gSceneCenterYQ1730 = request.y;
@@ -3429,8 +3480,10 @@ bool RayAabbQ7(float ox, float oy, float oz,
         object.modelPath.find("MegatonMainGate01") != std::string::npos ||
         object.modelPath.find("megatonmaingate01") != std::string::npos;
     const float PAD = q1740MegatonMainGate ? 6.50f : 0.08f;
-    const float mins[3]{object.minX - PAD, object.minY - PAD, object.minZ - PAD};
-    const float maxs[3]{object.maxX + PAD, object.maxY + PAD, object.maxZ + PAD};
+    Vec3 q2400Min{},q2400Max{};
+    Q2400ObjectBounds(object,q2400Min,q2400Max);
+    const float mins[3]{q2400Min.x-PAD,q2400Min.y-PAD,q2400Min.z-PAD};
+    const float maxs[3]{q2400Max.x+PAD,q2400Max.y+PAD,q2400Max.z+PAD};
     const float origins[3]{ox, oy, oz};
     const float dirs[3]{dx, dy, dz};
     float tMin = 0.0f;
@@ -3451,6 +3504,97 @@ bool RayAabbQ7(float ox, float oy, float oz,
     return tMax >= 0.0f && tMin <= 3.0f;
 }
 
+const GpuObject* Q2400FindSwingDoorObject(uint32_t refFormId) {
+    for(const GpuObject& object:gObjects)
+        if(object.q2400SwingDoor&&object.baseRecordType=="DOOR"&&
+           object.refFormId==refFormId) return &object;
+    return nullptr;
+}
+void Q2400BuildDoorTransform(const GpuObject& object,float progress,int sign,float out[16]) {
+    constexpr float HALF_PI=1.57079632679489661923f;
+    const float a=HALF_PI*std::clamp(progress,0.0f,1.0f)*(sign<0?-1.0f:1.0f);
+    const float c=std::cos(a),s=std::sin(a);
+    const float px=object.q2016PlacementMatrix[12],pz=object.q2016PlacementMatrix[14];
+    std::fill(out,out+16,0.0f);
+    out[0]=c;out[2]=-s;out[5]=1.0f;out[8]=s;out[10]=c;
+    out[12]=px-(c*px+s*pz);out[14]=pz-(-s*px+c*pz);out[15]=1.0f;
+}
+void Q2400ApplyDoorVisual(uint32_t refFormId,const Q2400InteriorDoorState& state) {
+    for(GpuObject& object:gObjects) {
+        if(!object.q2400SwingDoor||object.refFormId!=refFormId) continue;
+        Q2400BuildDoorTransform(object,state.progress,state.swingSign,object.q2400DoorTransform);
+    }
+}
+bool Q2400DoorOpen(uint32_t refFormId) {
+    const auto found=gQ2400InteriorDoors.find(refFormId);
+    return found!=gQ2400InteriorDoors.end()&&found->second.targetOpen;
+}
+int Q2400ChooseDoorSwingSign(uint32_t refFormId,float activatorX,float activatorZ) {
+    const GpuObject* first=Q2400FindSwingDoorObject(refFormId);
+    if(!first) return 1;
+    const float px=first->q2016PlacementMatrix[12],pz=first->q2016PlacementMatrix[14];
+    Vec3 lo{1e30f,1e30f,1e30f},hi{-1e30f,-1e30f,-1e30f};
+    for(const GpuObject& object:gObjects) {
+        if(!object.q2400SwingDoor||object.refFormId!=refFormId) continue;
+        lo.x=std::min(lo.x,object.minX);hi.x=std::max(hi.x,object.maxX);
+        lo.z=std::min(lo.z,object.minZ);hi.z=std::max(hi.z,object.maxZ);
+    }
+    float vx=(lo.x+hi.x)*0.5f-px,vz=(lo.z+hi.z)*0.5f-pz;
+    if(vx*vx+vz*vz<1.0e-5f) {vx=first->q2016PlacementMatrix[0];vz=first->q2016PlacementMatrix[2];}
+    const float plusX=px+vz,plusZ=pz-vx,minusX=px-vz,minusZ=pz+vx;
+    const float pdx=plusX-activatorX,pdz=plusZ-activatorZ;
+    const float mdx=minusX-activatorX,mdz=minusZ-activatorZ;
+    return pdx*pdx+pdz*pdz>=mdx*mdx+mdz*mdz?1:-1;
+}
+bool Q2400ToggleInteriorDoor(uint32_t refFormId,float activatorX,float activatorZ) {
+    if(gExteriorWorldspaceQ1890!=0u||!Q2400FindSwingDoorObject(refFormId)) return false;
+    Q2400InteriorDoorState& state=gQ2400InteriorDoors[refFormId];
+    const bool opening=!state.targetOpen;
+    if(opening&&state.progress<=0.001f)
+        state.swingSign=Q2400ChooseDoorSwingSign(refFormId,activatorX,activatorZ);
+    state.targetOpen=opening;
+    state.lastUpdate=std::chrono::steady_clock::now();
+    if(!state.collisionDisabled||state.collisionSceneSerial!=gQ2400DoorSceneSerial) {
+        if(SetFo3DoorCollisionTransformQ2400(refFormId,nullptr,false)) {
+            state.collisionDisabled=true;state.collisionSceneSerial=gQ2400DoorSceneSerial;
+        }
+    }
+    Q6H_LOGI("Q24.0 INTERIOR DOOR ACTIVATE: ref=%08X action=%s progress=%.3f swingSign=%d input=RIGHT_A pivot=authored-REFR",
+             refFormId,opening?"open":"close",state.progress,state.swingSign);
+    return true;
+}
+void UpdateFo3InteriorDoorsQ2400() {
+    if(gExteriorWorldspaceQ1890!=0u||gQ2400InteriorDoors.empty()) return;
+    const auto now=std::chrono::steady_clock::now();
+    constexpr float DURATION=0.60f,EPS=0.0001f;
+    for(auto& entry:gQ2400InteriorDoors) {
+        const uint32_t ref=entry.first;Q2400InteriorDoorState& state=entry.second;
+        const GpuObject* first=Q2400FindSwingDoorObject(ref);if(!first) continue;
+        if(state.lastUpdate.time_since_epoch().count()==0) state.lastUpdate=now;
+        const float dt=std::clamp(std::chrono::duration<float>(now-state.lastUpdate).count(),0.0f,0.10f);
+        state.lastUpdate=now;
+        state.progress=std::clamp(state.progress+(state.targetOpen?1.0f:-1.0f)*(dt/DURATION),0.0f,1.0f);
+        Q2400ApplyDoorVisual(ref,state);
+        const bool closed=state.progress<=EPS&&!state.targetOpen;
+        const bool opened=state.progress>=1.0f-EPS&&state.targetOpen;
+        const bool endpoint=closed||opened;
+        if(state.collisionSceneSerial!=gQ2400DoorSceneSerial) {
+            if(closed) {state.collisionDisabled=false;state.collisionSceneSerial=gQ2400DoorSceneSerial;}
+            else if(!endpoint&&SetFo3DoorCollisionTransformQ2400(ref,nullptr,false)) {
+                state.collisionDisabled=true;state.collisionSceneSerial=gQ2400DoorSceneSerial;
+            }
+        }
+        if(endpoint&&(state.collisionDisabled||state.collisionSceneSerial!=gQ2400DoorSceneSerial)) {
+            float transform[16]{};Q2400BuildDoorTransform(*first,state.progress,state.swingSign,transform);
+            if(SetFo3DoorCollisionTransformQ2400(ref,transform,true)) {
+                state.collisionDisabled=false;state.collisionSceneSerial=gQ2400DoorSceneSerial;
+                Q6H_LOGI("Q24.0 INTERIOR DOOR SETTLED: ref=%08X state=%s progress=%.3f collision=authored-bhk-transformed",
+                         ref,opened?"open":"closed",state.progress);
+            }
+        }
+    }
+}
+
 bool QueryDoorInternalQ1700(float ox, float oy, float oz,
                             float dx, float dy, float dz,
                             Fo3DoorAimQ1700* outAim) {
@@ -3463,7 +3607,9 @@ bool QueryDoorInternalQ1700(float ox, float oy, float oz,
     const GpuObject* hit = nullptr;
     float bestT = 3.0f;
     for (const GpuObject& object : gObjects) {
-        if (object.baseRecordType != "DOOR" || !object.teleport.valid) continue;
+        if (object.baseRecordType != "DOOR") continue;
+        const bool localSwing=object.q2400SwingDoor&&gExteriorWorldspaceQ1890==0u;
+        if(!object.teleport.valid&&!localSwing) continue;
         float t = 0.0f;
         if (RayAabbQ7(ox, oy, oz, dx, dy, dz, object, t) && t < bestT) {
             bestT = t;
@@ -3490,6 +3636,8 @@ bool QueryDoorInternalQ1700(float ox, float oy, float oz,
         outAim->valid = true;
         outAim->sourceDoorRef = hit->refFormId;
         outAim->destinationDoorRef = hit->teleport.destinationDoorRefFormId;
+        outAim->localSwing=!hit->teleport.valid&&hit->q2400SwingDoor;
+        outAim->open=outAim->localSwing&&Q2400DoorOpen(hit->refFormId);
         outAim->distance = bestT;
         outAim->x = hit->teleport.x;
         outAim->y = hit->teleport.y;
@@ -3512,6 +3660,7 @@ bool ActivateDoorInternalQ1700(float ox, float oy, float oz,
         Q6H_LOGI("DOOR BLOCKED: source=%08X authored lock/ownership/script policy",aim.sourceDoorRef);
         return false;
     }
+    if(aim.localSwing) return Q2400ToggleInteriorDoor(aim.sourceDoorRef,ox,oz);
     if (!QueueFo3DoorTransitionQ1700(aim.sourceDoorRef,
                                      aim.destinationDoorRef,
                                      aim.x, aim.y, aim.z,
@@ -5162,7 +5311,8 @@ void DrawSceneObject(const GpuObject& object, bool environmentPassQ2050 = false)
     const bool q2017UseObjectTransform =
         (object.q2017SharedGeometry ||
          object.q210PlayerBody ||
-         object.q220LooseObject) &&
+         object.q220LooseObject ||
+         object.q2400SwingDoor) &&
         !gInstancedDrawActiveQ2016;
     if (gObjectTransformEnabledLocationQ2017 >= 0) {
         glUniform1f(gObjectTransformEnabledLocationQ2017,
@@ -5175,7 +5325,9 @@ void DrawSceneObject(const GpuObject& object, bool environmentPassQ2050 = false)
                 ? gQ210PlayerRoot
                 : object.q220LooseObject
                     ? object.q220DynamicTransform
-                    : object.q2017RelativeMatrix;
+                    : object.q2400SwingDoor
+                        ? object.q2400DoorTransform
+                        : object.q2017RelativeMatrix;
         glUniformMatrix4fv(
             gObjectTransformLocationQ2017, 1, GL_FALSE,
             q220Transform);

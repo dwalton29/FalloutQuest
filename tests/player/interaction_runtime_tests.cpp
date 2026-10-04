@@ -32,6 +32,7 @@ struct GpuObject {
                                  0, 0, 1, 0, 0, 0, 0, 1};
 };
 bool gSceneReady = true, loading = false, occluded = false, doorPresent = false;
+bool doorLocalSwing = false, doorOpen = false, doorPromptAvailable = true;
 std::unique_ptr<fo3player::Session> gPlayerSession;
 std::vector<GpuObject> gObjects;
 struct Grab {
@@ -54,6 +55,8 @@ bool QueryDoorInternalQ1700(float, float, float, float, float, float,
     return false;
   out->valid = true;
   out->sourceDoorRef = 20;
+  out->localSwing = doorLocalSwing;
+  out->open = doorOpen;
   out->distance = 2;
   return true;
 }
@@ -66,6 +69,7 @@ bool HasFo3InteractionOccluder(float, float, float, float, float, float, float,
   return occluded;
 }
 bool GetFo3DoorPromptQ1840(uint32_t, char *p, size_t n) {
+  if (!doorPromptAvailable) return false;
   std::snprintf(p, n, "Open Door");
   return true;
 }
@@ -132,7 +136,28 @@ int main() {
     Check(stack.count == 3 && stack.condition == .4f,
           "authored quantities and condition");
     Check(query() && !t.pickup && activate() && doorActivations == 1,
-          "collected item no longer targets; door queues");
+          "collected item no longer targets; XTEL door queues");
+    const int doorOpenAudio = fo3audio::opens;
+    const int doorCloseAudio = fo3audio::closes;
+    doorLocalSwing = true;
+    doorPromptAvailable = false;
+    doorOpen = false;
+    Check(query() && t.door.localSwing && !t.door.open &&
+              std::strcmp(t.prompt.data(),"Open Door")==0,
+          "ordinary interior door gets local Open prompt");
+    Check(!activate() && doorActivations == 2 &&
+              fo3audio::opens == doorOpenAudio + 1,
+          "local opening does not request VR-origin reset");
+    doorOpen = true;
+    Check(query() && t.door.open &&
+              std::strcmp(t.prompt.data(),"Close Door")==0,
+          "open interior door gets Close prompt");
+    Check(!activate() && doorActivations == 3 &&
+              fo3audio::closes == doorCloseAudio + 1,
+          "local closing uses authored close effect");
+    doorLocalSwing = false;
+    doorOpen = false;
+    doorPromptAvailable = true;
     Check(gPlayerSession->player.Snapshot().inventory.front().count == 3,
           "repeat activation does not duplicate item");
     c.references[10].owner = 99;

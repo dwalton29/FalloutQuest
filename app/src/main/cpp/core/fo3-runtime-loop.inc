@@ -1508,6 +1508,8 @@ private:
                 const XrPosef q1890VirtualHead = q210VirtualHead;
                 UpdateFo3ExteriorStreamingQ1890(q1890VirtualHead.position.x,
                                                 q1890VirtualHead.position.z);
+                // Q24.0 local DOOR state advances once per gameplay frame, not per eye.
+                UpdateFo3InteriorDoorsQ2400();
                 UpdateDoorAimQ1700(static_cast<double>(frameState.predictedDisplayTime)*1e-9);
                 ApplyAuthoredDoorFacingQ1810(views[0]);
                 if (activateDownQ1700_ && !activateLatched_) {
