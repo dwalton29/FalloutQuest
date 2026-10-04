@@ -72,6 +72,9 @@ bool Q230UploadActorPart(Q230ActorVisual &actor, CpuObject &part, float centerX,
     // FaceGen/morphed bind geometry is uploaded once, never rebuilt in update.
 
   }
+  // UploadCpuObject consumes the expanded stream. Preserve a setup-time copy
+  // until CreateSkin has selected GPU mode or the explicit CPU fallback.
+  const std::vector<float> bindExpanded = deform ? part.q1960ExpandedVertices : std::vector<float>{};
   GpuObject gpu;
   if (!UploadCpuObject(part, centerX, centerY, floorZ, gpu))
     return false;
@@ -88,7 +91,7 @@ bool Q230UploadActorPart(Q230ActorVisual &actor, CpuObject &part, float centerX,
       indices.push_back(weighted ? part.mesh.skinBoneIndices[at] : 0);
       weights.push_back(weighted ? part.mesh.skinBoneWeights[at] : (rig.rigidBone>=0 && j==0 ? 1.0f : 0.0f));
     }
-    if(QActorCreateSkin(gpu,rig.skin,indices,weights,rig.bones.size(),false,part.q1960ExpandedVertices))
+    if(QActorCreateSkin(gpu,rig.skin,indices,weights,rig.bones.size(),false,bindExpanded))
       actor.rigs.push_back(std::move(rig));
   }
   GpuObject bounds=gpu;

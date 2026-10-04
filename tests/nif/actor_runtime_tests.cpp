@@ -117,11 +117,14 @@ bool PrepareExpandedVertexStreamQ1960(CpuObject &cpu, float centerX, float cente
 }
 bool UploadCpuObject(CpuObject &cpu, float, float, float, GpuObject &gpu) {
   gpu = {};gpu.vertexCount=cpu.mesh.indices.size();
+  cpu.q1960ExpandedVertices.clear(); // production upload consumes this stream
+  cpu.q1960ExpandedReady=false;
   return true;
 }
 bool QActorCreateSkin(GpuObject&,QActorSkin& skin,const std::vector<uint16_t>& indices,const std::vector<float>& weights,size_t bones,bool player,const std::vector<float>& bind) {
   skin.mapping=fqskin::Map(indices,weights,bones,player);skin.palette.resize(skin.mapping.sources.size()+1);
   for(auto& row:skin.palette) fqskin::Pack(row,fqskin::Identity(),fqskin::Identity());
+  assert(bind.size()==indices.size()/4*18);
   skin.bind=bind;return true;
 }
 void QActorUploadSkin(GpuObject&,QActorSkin& skin,fqactor::Cost&,bool player) {
