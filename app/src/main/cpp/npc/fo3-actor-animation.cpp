@@ -131,6 +131,7 @@ int FindBone(const Skeleton &s, const std::string &name) {
 }
 void BindClip(const Skeleton &s, const Clip &c, Pose &p) {
   p.accumulation=FindBone(s,c.accumulationRoot);
+  p.accumulationRoot=c.accumulationRoot;
   p.local.resize(s.bones.size());
   p.global.resize(s.bones.size());
   p.delta.resize(s.bones.size());
@@ -220,7 +221,8 @@ static std::array<float, 4> Evaluate(const Channel &c, float time, float start,
 bool Sample(const Skeleton &s, const Clip &c, double elapsed, Pose &p, SampleTimings* timings) {
   const auto started=std::chrono::steady_clock::now();
   if (p.trackBones.size() != c.tracks.size() ||
-      p.local.size() != s.bones.size())
+      p.local.size() != s.bones.size() ||
+      p.accumulationRoot != c.accumulationRoot)
     BindClip(s, c, p);
   double d = c.stop - c.start, t = elapsed * c.frequency;
   if (!std::isfinite(t) || d < 0)

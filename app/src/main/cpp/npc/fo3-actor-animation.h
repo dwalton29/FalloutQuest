@@ -54,6 +54,7 @@ struct Clip {
 struct SampleTimings { double clipUs=0,skeletonUs=0; };
 struct Pose {
   int accumulation=-1;
+  std::string accumulationRoot;
   std::vector<Transform> local;
   std::vector<Matrix> global, delta;
   std::vector<int> trackBones;
