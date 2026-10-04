@@ -1163,7 +1163,7 @@ GLuint CreateQ6HProgram() {
             // Developer A/B only: preserve alpha test, LOD fade/clip and all
             // geometry/visibility while bypassing normal/specular/local lights.
             if (uFastMaterial > 0.5) {
-                fragColor = vec4(baseColor, alpha);
+                fragColor = vec4(uFastMaterial > 1.5 ? mix(baseColor, uFogColor, vFogFactorQ1532) : baseColor, alpha);
                 return;
             }
             vec4 normalGloss = texture(uNormalGloss, vUv);
@@ -4421,6 +4421,10 @@ void Q1900CommitWindow() {
     }
 
     Q1900LogLifetimeQ19(enteringShapes, retiredShapes);
+    Q6H_LOGI("DETAIL COMMIT generation=%llu before=%zu retained=%zu entered=%zu retired=%zu finalLive=%zu balance=%d",
+        (unsigned long long)gPendingStreamQ1900.generation,oldShapes,oldShapes-retiredShapes,
+        enteringShapes,retiredShapes,gObjects.size(),
+        gObjects.size()==oldShapes-retiredShapes+enteringShapes);
 
     const uint64_t generation = gPendingStreamQ1900.generation;
     const size_t frames = gPendingStreamQ1900.frames;
@@ -5011,9 +5015,17 @@ void DrawSceneObject(const GpuObject& object, bool environmentPassQ2050 = false)
         !object.q230NpcActor &&
         !object.q220LooseObject &&
         !gInstancedDrawActiveQ2016 &&
-        !Q2015AabbVisible(object)) return;
+        !Q2015AabbVisible(object)) {
+        if (fqopaque::collectingNative) ++fqopaque::nativeWork.frustumRejectedShapes;
+        return;
+    }
     if (environmentPassQ2050 && !object.environmentEnabledQ2050) return;
     fqopaque::SubmissionScope submissionScope;
+    if (fqopaque::collectingNative) {
+        glUniform1f(gFastMaterialLocation,
+            fqopaque::nativeObjectMaterial && fqopaque::Options().lodMinimal ? 2.0f :
+            (fqopaque::Options().fastMaterial ? 1.0f : 0.0f));
+    }
     if (gInstancingEnabledLocationQ2016 >= 0) {
         glUniform1f(gInstancingEnabledLocationQ2016,
                     gInstancedDrawActiveQ2016 ? 1.0f : 0.0f);
@@ -5045,7 +5057,7 @@ void DrawSceneObject(const GpuObject& object, bool environmentPassQ2050 = false)
         object.modelPath.find("\\blocks\\") == std::string::npos ? gOpaqueLodClipCount : 0;
     if (gNativeLodClipEnabledLocationQ1810 >= 0) {
         glUniform1f(gNativeLodClipEnabledLocationQ1810,
-                    q1900LodClipCount > 0 ? 1.0f : 0.0f);
+                    q1900LodClipCount > 0 && !(fqopaque::collectingNative && fqopaque::Options().lodClipBypass) ? 1.0f : 0.0f);
     }
 
     if (gLodFadeModeLocationQ2021 >= 0) {
@@ -5351,18 +5363,21 @@ void Q2017RenderOpaqueDetailedInstanced() {
         if (object->zBufferTestQ1200) glEnable(GL_DEPTH_TEST);
         else glDisable(GL_DEPTH_TEST);
         glDepthMask(object->zBufferWriteQ1200 ? GL_TRUE : GL_FALSE);
+        const auto before=fqgl::counters.draws;
         DrawSceneObject(*object);
-        ++fallbackDraws;
+        fallbackDraws += fqgl::counters.draws-before;
     }
     for (const GpuObject* object : groupFallbacks) {
         if (!object) continue;
         if (object->zBufferTestQ1200) glEnable(GL_DEPTH_TEST);
         else glDisable(GL_DEPTH_TEST);
         glDepthMask(object->zBufferWriteQ1200 ? GL_TRUE : GL_FALSE);
+        const auto before=fqgl::counters.draws;
         DrawSceneObject(*object);
-        ++fallbackDraws;
+        fallbackDraws += fqgl::counters.draws-before;
     }
 
+    size_t actualInstancedDraws=0;
     for (const Q2017InstanceBatch& batch : batches) {
         if (!batch.representative || batch.count <= 0) continue;
         if (batch.representative->zBufferTestQ1200)
@@ -5376,10 +5391,15 @@ void Q2017RenderOpaqueDetailedInstanced() {
         gInstanceMatrixBaseFloatQ2017 = batch.matrixBaseFloat;
         gInstanceCountQ2017 = batch.count;
         gInstancedDrawActiveQ2016 = true;
+        const auto before=fqgl::counters.draws;
         DrawSceneObject(*batch.representative);
+        actualInstancedDraws += fqgl::counters.draws-before;
         gInstancedDrawActiveQ2016 = false;
     }
 
+    if (fqopaque::measuring && !gWaterReflectionPassQ2090) {
+        fqopaque::detailedWork = {visible, instancedObjects, actualInstancedDraws, fallbackDraws};
+    }
     static uint64_t q2017EyePasses = 0u;
     ++q2017EyePasses;
     if ((q2017EyePasses % 240u) == 1u) {
@@ -5885,15 +5905,13 @@ constexpr size_t Q1840_DISTANT_TARGET_BLOCKS =
     static_cast<size_t>((Q1840_DISTANT_BLOCK_RADIUS * 2 + 1) *
                         (Q1840_DISTANT_BLOCK_RADIUS * 2 + 1));
 
-constexpr int Q2024_OBJECT_LOD_RADIUS_CELLS = 31;
-constexpr int Q2024_OBJECT_LOD_BLOCK_RADIUS =
-    (Q2024_OBJECT_LOD_RADIUS_CELLS + Q1840_LEVEL4_BLOCK_CELLS - 1) /
-    Q1840_LEVEL4_BLOCK_CELLS;
-constexpr int Q2024_OBJECT_LOD_BLOCK_COORD_RADIUS =
-    Q2024_OBJECT_LOD_BLOCK_RADIUS * Q1840_LEVEL4_BLOCK_CELLS;
-constexpr size_t Q2024_OBJECT_LOD_TARGET_BLOCKS =
-    static_cast<size_t>((Q2024_OBJECT_LOD_BLOCK_RADIUS * 2 + 1) *
-                        (Q2024_OBJECT_LOD_BLOCK_RADIUS * 2 + 1));
+int Q2024ObjectRadiusCells() { return fqopaque::Options().lodRadius20 ? 20 : 31; }
+int Q2024ObjectBlockRadius() { return (Q2024ObjectRadiusCells()+3)/4; }
+int Q2024ObjectCoordRadius() { return Q2024ObjectBlockRadius()*4; }
+size_t Q2024ObjectTargetBlocks() {
+    const int width=Q2024ObjectBlockRadius()*2+1;
+    return static_cast<size_t>(width*width);
+}
 constexpr size_t Q1840_DISTANT_CACHE_BLOCKS = 324u;
 
 bool Q1990TerrainLodBlockDesired(int32_t blockX, int32_t blockY) {
@@ -5905,9 +5923,9 @@ bool Q1990TerrainLodBlockDesired(int32_t blockX, int32_t blockY) {
 
 bool Q1990LodBlockDesired(int32_t blockX, int32_t blockY) {
     return std::abs(blockX - gQ1990NativeLodCentreBlockX) <=
-               Q2024_OBJECT_LOD_BLOCK_COORD_RADIUS &&
+               Q2024ObjectCoordRadius() &&
            std::abs(blockY - gQ1990NativeLodCentreBlockY) <=
-               Q2024_OBJECT_LOD_BLOCK_COORD_RADIUS;
+               Q2024ObjectCoordRadius();
 }
 
 bool Q2013HasNativeObjectLodForCellQ19(int32_t cellX, int32_t cellY) {
@@ -6028,9 +6046,9 @@ void Q1990EnsureNativeLodForCell(int32_t cellX, int32_t cellY,
                  Q1840_DISTANT_GRID_RADIUS_CELLS,
                  Q1840_DISTANT_BLOCK_RADIUS,
                  Q1840_DISTANT_TARGET_BLOCKS,
-                 Q2024_OBJECT_LOD_RADIUS_CELLS,
-                 Q2024_OBJECT_LOD_BLOCK_RADIUS,
-                 Q2024_OBJECT_LOD_TARGET_BLOCKS);
+                 Q2024ObjectRadiusCells(),
+                 Q2024ObjectBlockRadius(),
+                 Q2024ObjectTargetBlocks());
     }
 
     // Q19.7: Level4 extraction/parse/texture decode and GPU publication are
@@ -6078,10 +6096,10 @@ void Q1990EnsureNativeLodForCell(int32_t cellX, int32_t cellY,
         q1840LastLoggedCentreY = centreBlockY;
         Q6H_LOGI("Q20.24 NATIVE LOD WINDOW: playerCell=(%d,%d) requestedCentre=(%d,%d) objectBlocksVisited=%zu/%zu cachedBlocks=%zu terrainRadiusCells=%d objectRadiusCells=%d progressiveVisibleBlocks=%zu publishPolicy=split-terrain-object-horizons",
                  cellX, cellY, centreBlockX, centreBlockY,
-                 desiredLoaded, Q2024_OBJECT_LOD_TARGET_BLOCKS,
+                 desiredLoaded, Q2024ObjectTargetBlocks(),
                  gQ1990NativeLodBlocks.size(),
                  Q1840_DISTANT_GRID_RADIUS_CELLS,
-                 Q2024_OBJECT_LOD_RADIUS_CELLS,
+                 Q2024ObjectRadiusCells(),
                  Q2013ProgressiveLodCountQ19());
     }
 }
@@ -6579,10 +6597,10 @@ bool Q1970ChooseMissingLodQ19(
     int bestManhattan = 1000000;
     bestRing = 1000000;
     bool foundMissing = false;
-    for (int dy = -Q2024_OBJECT_LOD_BLOCK_RADIUS;
-         dy <= Q2024_OBJECT_LOD_BLOCK_RADIUS; ++dy) {
-        for (int dx = -Q2024_OBJECT_LOD_BLOCK_RADIUS;
-             dx <= Q2024_OBJECT_LOD_BLOCK_RADIUS; ++dx) {
+    for (int dy = -Q2024ObjectBlockRadius();
+         dy <= Q2024ObjectBlockRadius(); ++dy) {
+        for (int dx = -Q2024ObjectBlockRadius();
+             dx <= Q2024ObjectBlockRadius(); ++dx) {
             const int32_t bx =
                 gQ1990NativeLodCentreBlockX +
                 dx * Q1840_LEVEL4_BLOCK_CELLS;
@@ -6832,6 +6850,8 @@ void Q1970AdvanceNativeLodQ19(int32_t cellX, int32_t cellY,
 }
 
 void Q1990RenderNativeLod(bool alphaPass) {
+    const bool profile = fqopaque::measuring && !alphaPass && !gWaterReflectionPassQ2090;
+    if (profile) fqopaque::nativeWork = {};
     if (gExteriorWorldspaceQ1890 != 0x0000003Cu) return;
     if (gQ1990NativeLodBlocks.empty() &&
         gQ2023CoarseTerrainTiles.empty() &&
@@ -6846,6 +6866,22 @@ void Q1990RenderNativeLod(bool alphaPass) {
             ? gQ1920LatestGridY
             : gExteriorWindowGridYQ1890;
 
+    fqopaque::collectingNative = profile;
+    auto& work = fqopaque::nativeWork;
+    if (profile) work.resident = gQ1990NativeLodBlocks.size()+gQ2023CoarseTerrainTiles.size()+gQ2023HighObjectBlocks.size();
+    auto submit = [&](const GpuObject& object, bool objectLod, uint64_t& tier) {
+        fqopaque::nativeObjectMaterial = objectLod;
+        const auto before = fqgl::counters.draws;
+        if (profile) ++work.eligibleShapes;
+        DrawSceneObject(object);
+        const bool drawn = fqgl::counters.draws != before;
+        if (profile && drawn) ++tier;
+        return drawn;
+    };
+    auto finishBlock = [&](uint64_t eligible, uint64_t rejected) {
+        if (profile && work.eligibleShapes > eligible &&
+            work.eligibleShapes-eligible == work.frustumRejectedShapes-rejected) ++work.frustumRejectedBlocks;
+    };
     size_t drawnShapes = 0u;
     size_t drawnTriangles = 0u;
     size_t drawnLevel8 = 0u;
@@ -6867,69 +6903,87 @@ void Q1990RenderNativeLod(bool alphaPass) {
         else { gNativeLodOffsetFactor=4.0f; gNativeLodOffsetUnits=8.0f; }
 
         for (Q2023CoarseTerrainTile& tile : gQ2023CoarseTerrainTiles) {
-            if (tile.levelCells != level ||
-                !Q2023TileDesiredQ19(
+            if (tile.levelCells != level) continue;
+            if (profile) ++work.considered;
+            if (!Q2023TileDesiredQ19(
                     tile.levelCells, tile.blockX, tile.blockY,
                     playerCellX, playerCellY)) {
+                if (profile) ++work.windowRejected;
                 continue;
             }
             if (Q2023TileFullyRefinedQ19(
                     tile.levelCells, tile.blockX, tile.blockY,
                     playerCellX, playerCellY)) {
+                if (profile) ++work.refinementRejected;
                 continue;
             }
+            const auto eligible=work.eligibleShapes, rejected=work.frustumRejectedShapes;
             for (const GpuObject& object : tile.terrain) {
                 if (object.alphaBlend != alphaPass) continue;
-                DrawSceneObject(object);
+                if (!submit(object, false, level==32 ? work.level32 : level==16 ? work.level16 : work.level8)) continue;
                 ++drawnShapes;
                 drawnTriangles += static_cast<size_t>(object.vertexCount / 3);
                 if (level == 8) ++drawnLevel8;
                 else if (level == 16) ++drawnLevel16;
                 else ++drawnLevel32;
             }
+            finishBlock(eligible,rejected);
         }
     }
 
     gNativeLodOffsetFactor=2.0f; gNativeLodOffsetUnits=6.0f;
     for (Q1990NativeLodBlock& block : gQ1990NativeLodBlocks) {
-        if (!Q1990LodBlockDesired(block.blockX, block.blockY)) continue;
+        if (profile) ++work.considered;
+        if (!Q1990LodBlockDesired(block.blockX, block.blockY)) {
+            if (profile) ++work.windowRejected;
+            continue;
+        }
+        const auto eligible=work.eligibleShapes, rejected=work.frustumRejectedShapes;
         if (Q1990TerrainLodBlockDesired(block.blockX, block.blockY) &&
             (block.blockX != gQ1990NativeLodCentreBlockX ||
              block.blockY != gQ1990NativeLodCentreBlockY)) {
             for (const GpuObject& object : block.terrain) {
                 if (object.alphaBlend != alphaPass) continue;
-                DrawSceneObject(object);
+                if (!submit(object, false, work.level4Terrain)) continue;
                 ++drawnShapes;
                 drawnTriangles += static_cast<size_t>(object.vertexCount / 3);
             }
         }
         for (const GpuObject& object : block.objects) {
             if (object.alphaBlend != alphaPass) continue;
-            DrawSceneObject(object);
+            if (!submit(object, true, work.level4Objects)) continue;
             ++drawnShapes;
             drawnTriangles += static_cast<size_t>(object.vertexCount / 3);
         }
+        finishBlock(eligible,rejected);
     }
 
     // The sparse .High VWD set is the long-distance landmark layer. Suppress a
     // high block whenever its normal Level4 object block is resident inside the
     // normal 20-cell horizon; outside that horizon the high mesh remains.
     for (Q2023HighObjectBlock& high : gQ2023HighObjectBlocks) {
+        if (profile) ++work.considered;
         Q1990NativeLodBlock* normal =
             Q1990FindLodBlock(high.blockX, high.blockY);
         if (normal && !normal->objects.empty() &&
             Q1990LodBlockDesired(high.blockX, high.blockY)) {
+            if (profile) ++work.refinementRejected;
             continue;
         }
+        const auto eligible=work.eligibleShapes, rejected=work.frustumRejectedShapes;
         for (const GpuObject& object : high.objects) {
             if (object.alphaBlend != alphaPass) continue;
-            DrawSceneObject(object);
+            if (!submit(object, true, work.high)) continue;
             ++drawnShapes;
             ++drawnHigh;
             drawnTriangles += static_cast<size_t>(object.vertexCount / 3);
         }
+        finishBlock(eligible,rejected);
     }
 
+    fqopaque::collectingNative = false;
+    fqopaque::nativeObjectMaterial = false;
+    if (profile) glUniform1f(gFastMaterialLocation, fqopaque::Options().fastMaterial ? 1.0f : 0.0f);
     gNativeLodOffsetActive = false;
     glDisable(GL_POLYGON_OFFSET_FILL);
     if (!alphaPass && !gQ1990NativeLodDrawLogged) {
@@ -11025,10 +11079,10 @@ void RenderScene(const float* mvp) {
     glDisable(GL_BLEND);
     if (q2060MsaaActive && q2060MsaaSamples > 1)
         glEnable(GL_SAMPLE_ALPHA_TO_COVERAGE);
-    Q1990RenderNativeLod(false);
-    Q2017RenderOpaqueDetailedInstanced();
-    Q230RenderNpcActors(false);
-    Q210RenderPlayerBody(false);
+    { fqopaque::PhaseScope scope(fqopaque::NativeLod,gStereoFrame); Q1990RenderNativeLod(false); }
+    { fqopaque::PhaseScope scope(fqopaque::DetailedWorld,gStereoFrame); Q2017RenderOpaqueDetailedInstanced(); }
+    { fqopaque::PhaseScope scope(fqopaque::Npc,gStereoFrame); Q230RenderNpcActors(false); }
+    { fqopaque::PhaseScope scope(fqopaque::Player,gStereoFrame); Q210RenderPlayerBody(false); }
     if (!q2021MainA2cWas)
         glDisable(GL_SAMPLE_ALPHA_TO_COVERAGE);
     const uint64_t q2017OpaqueUs = static_cast<uint64_t>(
@@ -11039,14 +11093,44 @@ void RenderScene(const float* mvp) {
     fqopaque::End(static_cast<double>(q2017OpaqueUs), gMainBatches.visible);
     glUniform1f(gFastMaterialLocation, 0.0f);
     if ((fqopaque::passes % 120u) == 1u) {
-        Q6H_LOGI("OPAQUE PERF rollingEyePasses=%u prepCpuUs=%.1f submitCpuUs=%.1f otherCpuUs=%.1f gpuUs=%.1f gpuSamples=%u gpuSupported=%d gpuDisjoint=%llu gpuDropped=%llu draws=%.1f states=%.1f uniforms=%.1f textures=%.1f vaos=%.1f stateQueries=%.1f visibleDetailed=%.1f vertices=%.0f triangles=%.0f fastMaterial=%d renderScale=%.2f",
-            fqopaque::submission.count, fqopaque::preparation.Mean(), fqopaque::submission.Mean(), fqopaque::otherCpu.Mean(),
+        Q6H_LOGI("OPAQUE PERF rollingEyePasses=%u totalCpuUs=%.1f prepCpuUs=%.1f submitCpuUs=%.1f otherCpuUs=%.1f gpuQueryMeanUs=%.1f gpuSamples=%u gpuSupported=%d gpuDisjoint=%llu gpuDropped=%llu draws=%.1f states=%.1f uniforms=%.1f textures=%.1f vaos=%.1f stateQueries=%.1f visibleDetailed=%.1f vertices=%.0f triangles=%.0f fastMaterial=%d renderScale=%.2f",
+            fqopaque::submission.count, fqopaque::totalCpu.Mean(), fqopaque::preparation.Mean(), fqopaque::submission.Mean(), fqopaque::otherCpu.Mean(),
             fqopaque::timer.gpu.Mean(), fqopaque::timer.gpu.count, fqopaque::timer.supported,
             (unsigned long long)fqopaque::timer.disjoints, (unsigned long long)fqopaque::timer.dropped,
             fqopaque::drawCalls.Mean(), fqopaque::stateChanges.Mean(), fqopaque::uniformUploads.Mean(),
             fqopaque::textureBinds.Mean(), fqopaque::vaoBinds.Mean(), fqopaque::stateQueries.Mean(),
             fqopaque::visible.Mean(), fqopaque::vertices.Mean(), fqopaque::vertices.Mean()/3.0,
             fqopaque::Options().fastMaterial, fqopaque::Options().scale);
+    }
+
+    // Emit a matched pair of per-eye snapshots every 60 stereo frames.
+    // CPU and geometry are from this pass; GPU means are delayed independent samples.
+    if (gStereoFrame % 60u == 0u) {
+        const auto& p=fqopaque::phases[fqopaque::eye];
+        const auto& gpu=fqopaque::timer.eyeGpu[fqopaque::eye];
+        const auto& lod=fqopaque::nativeWork;
+        const auto& detail=fqopaque::detailedWork;
+        Q6H_LOGI("OPAQUE BREAKDOWN frame=%llu eye=%u nativeLodUs=%.1f detailedWorldUs=%.1f npcUs=%.1f playerUs=%.1f totalUs=%llu nativeLodCpuUs=%.1f nativeLodGpuUs=%.1f nativeGpuSamples=%u detailedCpuUs=%.1f detailedGpuUs=%.1f detailedGpuSamples=%u gpuSupported=%d gpuDisjoint=%llu gpuDropped=%llu gpuWindow=delayed-rolling-per-eye cpuWindow=current-eye",
+            (unsigned long long)gStereoFrame,fqopaque::eye,
+            p[0].lastCpu,p[1].lastCpu,p[2].lastCpu,p[3].lastCpu,(unsigned long long)q2017OpaqueUs,
+            p[0].lastCpu,gpu[0].count ? gpu[0].Mean() : -1.0,gpu[0].count,
+            p[1].lastCpu,gpu[1].count ? gpu[1].Mean() : -1.0,gpu[1].count,
+            fqopaque::timer.supported,(unsigned long long)fqopaque::timer.disjoints,(unsigned long long)fqopaque::timer.dropped);
+        Q6H_LOGI("NATIVE LOD WORK frame=%llu eye=%u level32Terrain=%llu level16Terrain=%llu level8Terrain=%llu level4Terrain=%llu level4Objects=%llu highVwd=%llu draws=%llu vertices=%llu triangles=%llu residentLevel4=%zu residentCoarse=%zu residentHigh=%zu residentBlocks=%llu consideredBlocks=%llu windowRejectedBlocks=%llu refinementRejectedBlocks=%llu frustumRejectedBlocks=%llu frustumRejectedShapes=%llu eligibleShapes=%llu radiusCells=%d blockRadius=%d targetBlocks=%zu radiusMode=%s minimalObjectMaterial=%d clipBypass=%d",
+            (unsigned long long)gStereoFrame,fqopaque::eye,
+            (unsigned long long)lod.level32,(unsigned long long)lod.level16,(unsigned long long)lod.level8,
+            (unsigned long long)lod.level4Terrain,(unsigned long long)lod.level4Objects,(unsigned long long)lod.high,
+            (unsigned long long)p[0].lastDraws,(unsigned long long)p[0].lastVertices,(unsigned long long)(p[0].lastVertices/3),
+            gQ1990NativeLodBlocks.size(),gQ2023CoarseTerrainTiles.size(),gQ2023HighObjectBlocks.size(),
+            (unsigned long long)lod.resident,(unsigned long long)lod.considered,(unsigned long long)lod.windowRejected,
+            (unsigned long long)lod.refinementRejected,(unsigned long long)lod.frustumRejectedBlocks,
+            (unsigned long long)lod.frustumRejectedShapes,(unsigned long long)lod.eligibleShapes,
+            Q2024ObjectRadiusCells(),Q2024ObjectBlockRadius(),Q2024ObjectTargetBlocks(),
+            fqopaque::Options().lodRadius20 ? "diagnostic20" : "authored31",
+            fqopaque::Options().lodMinimal,fqopaque::Options().lodClipBypass);
+        Q6H_LOGI("DETAILED WORLD WORK frame=%llu eye=%u visibleObjects=%zu instancedObjects=%zu instancedDraws=%zu fallbackDraws=%zu draws=%llu vertices=%llu triangles=%llu",
+            (unsigned long long)gStereoFrame,fqopaque::eye,detail.visible,detail.instanced,detail.instancedDraws,detail.fallbackDraws,
+            (unsigned long long)p[1].lastDraws,(unsigned long long)p[1].lastVertices,(unsigned long long)(p[1].lastVertices/3));
     }
 
     const auto q2017AlphaStarted = std::chrono::steady_clock::now();

@@ -1614,6 +1614,7 @@ private:
 
     bool RenderEye(uint32_t eyeIndex, const XrView& view,
                    XrCompositionLayerProjectionView& projectionView) {
+        fqopaque::eye = eyeIndex;
         EyeSwapchain& eye = eyes_[eyeIndex];
         uint32_t imageIndex = 0;
         XrSwapchainImageAcquireInfo acquireInfo{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};

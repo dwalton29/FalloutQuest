@@ -1,3 +1,10 @@
+# Updated measurements
+
+APK 146 splits opaque phases and adds LOD-only diagnostics. See
+[Quest LOD diagnostics](QUEST-LOD-DIAGNOSTICS.md) for current log fields and A/B
+commands. The `gpuUs` aggregate described below was replaced with separate
+per-phase/per-eye results; `gpuQueryMeanUs` is not total opaque GPU time.
+
 # Quest opaque submission pass
 
 The supplied Wasteland run measured 45–49 ms CPU wall time in the opaque pass

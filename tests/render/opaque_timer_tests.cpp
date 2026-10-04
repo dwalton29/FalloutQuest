@@ -19,13 +19,21 @@ int main() {
     timer.Begin(1);timer.End();timer.Poll(5);
     assert(reads==0 && timer.slots[0].pending);
     ready=true;timer.Poll(6);
-    assert(reads==1 && timer.gpu.Mean()==45000);
-    timer.Begin(7);timer.End();driverDisjoint=1;timer.Poll(11);
-    assert(reads==1 && timer.gpu.count==0 && timer.disjoints==1);
+    assert(reads==1 && timer.gpu.Mean()==45000 && timer.phaseGpu[fqopaque::NativeLod].Mean()==45000);
+    fqopaque::eye=1;
+    timer.Begin(7,fqopaque::DetailedWorld);timer.End();
+    timer.Poll(9);assert(reads==1); // Even ready queries must wait for later frames.
+    timer.Poll(10);
+    assert(reads==2 && timer.eyeGpu[1][fqopaque::DetailedWorld].Mean()==45000);
+    assert(timer.eyeGpu[0][fqopaque::DetailedWorld].count==0);
+    assert(timer.eyeGpu[0][fqopaque::NativeLod].count==1);
+    timer.Begin(11);timer.End();driverDisjoint=1;timer.Poll(15);
+    assert(reads==2 && timer.gpu.count==0 && timer.disjoints==1);
+    assert(timer.eyeGpu[1][fqopaque::DetailedWorld].count==0 && timer.phaseGpu[0].count==0);
     driverDisjoint=0;ready=false;
-    for(unsigned i=0;i<8;++i) {timer.Begin(12);timer.End();}
-    timer.Begin(12);assert(timer.dropped==1 && begins==10 && ends==10);
-    timer.Shutdown();assert(deletes==8 && !timer.supported);
+    for(unsigned i=0;i<timer.slots.size();++i) {timer.Begin(16);timer.End();}
+    timer.Begin(16);assert(timer.dropped==1 && begins==timer.slots.size()+3 && ends==timer.slots.size()+3);
+    timer.Shutdown();assert(deletes==32 && !timer.supported);
     fqopaque::Average average;for(int i=1;i<=240;++i) average.Add(i);
     assert(average.count==120 && average.Mean()==180.5);
     std::cout << "Nonblocking timer/disjoint/ring regressions passed\n";

@@ -265,8 +265,16 @@ void Q1900LogLifetimeQ19(size_t added, size_t removed) {
         staged+=entry.second.stagedGpu.size();
     }
     for(const auto& entry:gQ2017SharedGeometry) sharedRefs+=entry.second.refs;
-    Q6H_LOGI("DETAIL LIFETIME activeDetailedCells=%zu gpuReadyCells=%zu added=%zu removed=%zu liveDetailed=%zu stagedDetailed=%zu deferredPlacements=%zu retainedSharedBuffers=%zu sharedPlacementRefs=%zu retainedTextures=%zu retainedCubes=%zu cacheRadius=%d ownership=live-staged-deferred-refs+texture-cache",
-        active, ready, added, removed, gObjects.size(), staged,
+    size_t outsideUnwanted=0;
+    for(const auto& object:gObjects) {
+        if(object.q1990NativeLod) continue;
+        const auto cell=gWorldStreaming.cells.find(Q1900CellKeyQ19(object.q1970GridX,object.q1970GridY));
+        if(std::max(std::abs(object.q1970GridX-gQ1920LatestGridX),
+                    std::abs(object.q1970GridY-gQ1920LatestGridY)) > Q1900_CACHE_RADIUS_Q19 &&
+           (cell==gWorldStreaming.cells.end() || !cell->second.wanted)) ++outsideUnwanted;
+    }
+    Q6H_LOGI("DETAIL LIFETIME activeDetailedCells=%zu detailedCellsResident=%zu outsideWarmUnwanted=%zu added=%zu removed=%zu liveDetailed=%zu stagedDetailed=%zu deferredPlacements=%zu retainedSharedBuffers=%zu sharedPlacementRefs=%zu retainedTextures=%zu retainedCubes=%zu cacheRadius=%d ownership=live-staged-deferred-refs+texture-cache",
+        active, ready, outsideUnwanted, added, removed, gObjects.size(), staged,
         gWorldStreaming.deferredGpuDeletes.size(), gQ2017SharedGeometry.size(), sharedRefs,
         gTextureCache.size(), gCubeTextureCacheQ2050.size(), Q1900_CACHE_RADIUS_Q19);
 }
@@ -1125,6 +1133,9 @@ void Q1900CommitCellVisualsQ19(Q1900CellStateQ19& state) {
     state.textures.clear();
     state.visualReady = true;
     Q1900LogLifetimeQ19(entering, retired);
+    Q6H_LOGI("DETAIL COMMIT cell=(%d,%d) before=%zu retained=%zu entered=%zu retired=%zu finalLive=%zu balance=%d",
+        state.gridX,state.gridY,oldLive,oldLive-retired,entering,retired,gObjects.size(),
+        gObjects.size()==oldLive-retired+entering);
     state.stage = Q1900CellStageQ19::Ready;
     gSceneReady = !gObjects.empty();
     gLoggedFirstDraw = false;
@@ -1521,6 +1532,8 @@ void Q1900RetireFarCellsQ19(int32_t actualGridX, int32_t actualGridY) {
         std::chrono::duration_cast<std::chrono::microseconds>(
             std::chrono::steady_clock::now() - retireStarted).count());
     Q1900LogLifetimeQ19(0, retiredShapes);
+    if (retiredShapes) Q6H_LOGI("DETAIL COMMIT kind=retire before=%zu retained=%zu entered=0 retired=%zu finalLive=%zu balance=%d",
+        oldLive,oldLive-retiredShapes,retiredShapes,gObjects.size(),gObjects.size()==oldLive-retiredShapes);
     if (retiredShapes > 0u || retiredStaged > 0u) {
         gSceneReady = !gObjects.empty();
         gShadowDirtyQ1050 = true;
