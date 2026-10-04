@@ -1,3 +1,4 @@
+#include "fo3-install-paths.h"
 #include "rendering/water/fo3-water.h"
 #include "world/fo3-worldspace-runtime.h"
 #include "world/fo3-scene-preparation.h"
@@ -2802,7 +2803,7 @@ bool BeginFo3SceneLoad(const Fo3CellTransitionRequestQ74& request, bool boot) {
         if (loadPlayer) {
             fo3player::Catalog catalog;
             std::string error;
-            if (fo3player::LoadCatalog("/data/user/0/com.falloutquest.app/files/Fallout3/Data/Fallout3.esm", catalog, error)) {
+            if (fo3player::LoadCatalog(fo3assets::FalloutMasterPath(), catalog, error)) {
                 result.playerSession = std::make_unique<fo3player::Session>(std::move(catalog));
                 auto& session = *result.playerSession;
                 session.savePath = "/data/user/0/com.falloutquest.app/files/player-state.fqps";

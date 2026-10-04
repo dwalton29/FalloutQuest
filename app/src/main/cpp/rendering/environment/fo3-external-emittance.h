@@ -1,4 +1,5 @@
 #pragma once
+#include "../../data/fo3-install-paths.h"
 
 #include "rendering/environment/fo3-visual-depth.h"
 
@@ -31,7 +32,7 @@ using fo3visual::GroupFrame;
 using fo3visual::InWorldspace;
 
 constexpr const char* TAG = "FalloutQuest";
-constexpr const char* ESM_PATH = fo3visual::ESM_PATH;
+
 constexpr uint32_t EXTERNAL_EMITTANCE_SHADER_FLAG = 0x20000000u;
 
 struct RawRef {
@@ -121,10 +122,10 @@ inline bool LoadFo3ExternalEmittance(uint32_t worldspaceFormId) {
     gFo3ExternalEmittanceLoaded = true;
     if (worldspaceFormId == 0u) return false;
 
-    FILE* file = std::fopen(ESM_PATH, "rb");
+    FILE* file = std::fopen(fo3assets::FalloutMasterPath().c_str(), "rb");
     if (!file) {
         __android_log_print(ANDROID_LOG_WARN, TAG,
-                            "Q13.8 XEMI ESM open failed: %s", ESM_PATH);
+                            "Q13.8 XEMI ESM open failed: %s", fo3assets::FalloutMasterPath().c_str());
         return false;
     }
     const int64_t fileSize = fo3esm::FileSize(file);

@@ -26,6 +26,16 @@ public final class FalloutNativeActivity extends NativeActivity {
     private static final float MUSIC_VOLUME = .3f; // Original supplied FALLOUT.INI.
 
     @Override public void onCreate(Bundle state) {
+        // Configure every native reader before NativeActivity loads the library.
+        String dataRoot = getIntent().getStringExtra("dataRoot");
+        if (dataRoot == null || !GameInstall.missing(new java.io.File(dataRoot),
+                GameInstall.Game.FALLOUT3).isEmpty())
+            throw new IllegalStateException("Launch through FalloutQuest game setup");
+        try {
+            android.system.Os.setenv("FALLOUTQUEST_DATA_ROOT", dataRoot, true);
+        } catch (android.system.ErrnoException e) {
+            throw new IllegalStateException("Unable to configure game folder", e);
+        }
         // Start before NativeActivity launches android_main.
         thread = new HandlerThread("FalloutAudio");
         thread.start();

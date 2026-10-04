@@ -1,3 +1,4 @@
+#include "fo3-install-paths.h"
 // Q7.18 landscape material resolver.
 // Textually included by fo3-cell-spawn-q74.cpp after the proven Q7.5/Q7.9 ESM
 // helpers. Q7.11 resolved only LAND BTXT base layers. Q7.18 also preserves the
@@ -54,7 +55,7 @@ bool BuildFo3TerrainTextureIndexQ711() {
     }
     q711TextureIndexAttempted = true;
 
-    FILE* file = std::fopen(ESM_PATH_Q75, "rb");
+    FILE* file = std::fopen(fo3assets::FalloutMasterPath().c_str(), "rb");
     if (!file) {
         Q75_LOGE("Q7.18 TERRAIN TEXTURE INDEX FAILED: reason=esm-open");
         return false;

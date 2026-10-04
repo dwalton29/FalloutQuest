@@ -2,7 +2,47 @@
 
 Experimental standalone Meta Quest runtime for user-supplied Fallout 3 game data.
 
-## Current milestone: 0.30.1 — Loading animation and audio fixes
+## Game installation: 0.31.0 — Public Steam install folders
+
+Copy your own Steam installation to Quest **Internal shared storage**:
+
+| Game | Folder | Expected master location |
+| --- | --- | --- |
+| Fallout 3 | `FalloutQuest/Fallout3/` | `Data/Fallout3.esm` |
+| New Vegas | `FalloutQuest/FalloutNV/` | `Data/FalloutNV.esm` |
+
+You can copy the contents of the Steam install into the game folder, or drag
+its entire named folder in unchanged. For example both
+`FalloutQuest/Fallout3/Data/Fallout3.esm` and
+`FalloutQuest/Fallout3/Fallout 3 goty/Data/Fallout3.esm` are detected.
+Keep only one installation inside each game folder. Preserve the full `Data`
+folder, including original archives, Music, Sound and subfolders; no extraction
+or conversion is needed. Windows executables are not run by FalloutQuest.
+
+The setup screen requests Android shared-storage access and checks the master,
+Meshes, Textures and Misc archives before starting. Android's native path is
+`/sdcard/FalloutQuest/`. New Vegas discovery and folder separation are reserved
+for future compatibility; the current runtime only launches Fallout 3.
+DLC and plugin execution are not enabled by copying additional files.
+
+On a sideloaded headset without an accessible permission settings screen:
+
+```bat
+adb shell appops set --uid com.falloutquest.app MANAGE_EXTERNAL_STORAGE allow
+```
+
+Example transfer in Windows CMD (shows ADB progress):
+
+```bat
+adb shell mkdir -p /sdcard/FalloutQuest/Fallout3 /sdcard/FalloutQuest/FalloutNV
+adb push "C:\Program Files (x86)\Steam\steamapps\common\Fallout 3 goty" /sdcard/FalloutQuest/Fallout3/
+```
+
+Restart FalloutQuest after moving/changing an installation: all ESM/BSA indexes
+use one immutable Data root per process. Player saves and decoded audio cache
+remain app-private. Existing private game files are not automatically moved.
+
+## Loading animation and audio fixes
 
 The runtime now plays original item pickup sounds (YNAM), door/container open
 and close sounds (SNAM/ANAM/QNAM), and the original menu focus sound while
@@ -13,9 +53,9 @@ DefaultExplore definition. Explicit no-music cells stay silent. Interior cells
 without a music override are left silent for now.
 
 Install your original **Data/Music/** directory and either **Data/Sound/** or
-**Data/Fallout - Sound.bsa** alongside the existing ESM in the app's
-`files/Fallout3/Data/` directory. Extracted Sound/Music folders directly inside
-`files/Fallout3/` are also accepted. Preserve subfolders. These assets are not bundled
+**Data/Fallout - Sound.bsa** alongside the existing ESM in the selected install's
+`Data/` directory. Extracted Sound/Music folders directly inside the selected
+install root are also accepted. Preserve subfolders. These assets are not bundled
 in the APK. Missing files log their original path and do not block gameplay.
 The extracted Sound folder is available in Dropbox; the separate Music folder
 was absent when this milestone was built.

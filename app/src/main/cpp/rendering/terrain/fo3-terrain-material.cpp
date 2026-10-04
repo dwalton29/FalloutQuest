@@ -1,3 +1,4 @@
+#include "fo3-install-paths.h"
 // Q10.6: Resolve the authored normal/specular partner for LAND diffuse textures.
 // This is textually included after fo3-terrain-texture-q711.cpp, so it reuses the
 // proven Fallout3.esm record/subrecord helpers from the exterior CELL runtime.
@@ -23,7 +24,7 @@ bool BuildFo3TerrainMaterialIndexQ1060() {
     if (q1060TerrainMaterialsAttempted) return !q1060TerrainMaterialByDiffuse.empty();
     q1060TerrainMaterialsAttempted = true;
 
-    FILE* file = std::fopen(ESM_PATH_Q75, "rb");
+    FILE* file = std::fopen(fo3assets::FalloutMasterPath().c_str(), "rb");
     if (!file) {
         Q75_LOGE("Q10.6 TERRAIN MATERIAL INDEX FAILED: reason=esm-open");
         return false;

@@ -1,4 +1,5 @@
 #include "fo3-asset-store.h"
+#include "fo3-install-paths.h"
 
 #include <mutex>
 #include <unordered_map>
@@ -15,7 +16,7 @@ std::shared_ptr<BsaArchive> GetBsaArchive(const std::string& path) {
 }
 
 std::string FalloutDataPath(const std::string& filename) {
-    return "/data/user/0/com.falloutquest.app/files/Fallout3/Data/" + filename;
+    return InstallFilePath(filename);
 }
 
 const std::array<std::string, 2>& TextureArchivePaths() {

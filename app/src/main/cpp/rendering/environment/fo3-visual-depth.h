@@ -1,4 +1,5 @@
 #pragma once
+#include "../../data/fo3-install-paths.h"
 
 #include "fo3-esm-reader.h"
 
@@ -39,8 +40,7 @@ inline float gFo3EyePosition[3]{0.0f, 0.0f, 0.0f};
 namespace fo3visual {
 
 constexpr const char* TAG = "FalloutQuest";
-constexpr const char* ESM_PATH =
-    "/data/user/0/com.falloutquest.app/files/Fallout3/Data/Fallout3.esm";
+
 constexpr uint32_t FLAG_INITIALLY_DISABLED = 0x00000800u;
 constexpr float FO3_UNITS_PER_METRE = 70.0f;
 constexpr float FLOOR_Y = -1.55f;
@@ -95,7 +95,7 @@ inline bool LoadFo3PlacedLights(uint32_t worldspaceFormId,
     ResetFo3PlacedLights();
     if (worldspaceFormId == 0u) return false;
 
-    FILE* file = std::fopen(ESM_PATH, "rb");
+    FILE* file = std::fopen(fo3assets::FalloutMasterPath().c_str(), "rb");
     if (!file) return false;
     const int64_t fileSize = fo3esm::FileSize(file);
     if (fileSize < static_cast<int64_t>(fo3esm::HEADER_SIZE)) {

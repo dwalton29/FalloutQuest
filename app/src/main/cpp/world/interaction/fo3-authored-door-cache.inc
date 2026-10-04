@@ -77,7 +77,7 @@ const std::vector<Anchor>& AnchorsForCell(uint32_t cellFormId) {
         }
     }
 
-    FILE* file = std::fopen(ESM_PATH, "rb");
+    FILE* file = std::fopen(fo3assets::FalloutMasterPath().c_str(), "rb");
     if (!file) {
         Q71_LOGE("Q16.15 XTEL CACHE FAILED: cell=%08X reason=open-esm", cellFormId);
         return cache.anchors;

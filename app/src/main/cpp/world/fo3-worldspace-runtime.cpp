@@ -1,3 +1,4 @@
+#include "fo3-install-paths.h"
 #include "fo3-transition.h"
 
 #include "fo3-worldspace-runtime.h"
@@ -162,7 +163,7 @@ uint32_t OwningSelectedCellQ75(const std::vector<GroupFrameQ75>& groups,
 bool DiscoverWorldspaceCellsQ75(uint32_t worldspaceFormId,
                                 std::vector<CellInfoQ75>& outCells) {
     outCells.clear();
-    FILE* file = std::fopen(ESM_PATH_Q75, "rb");
+    FILE* file = std::fopen(fo3assets::FalloutMasterPath().c_str(), "rb");
     if (!file) return false;
     const int64_t fileSize = FileSizeQ75(file);
     if (fileSize < static_cast<int64_t>(HEADER_SIZE_Q75)) {
@@ -256,7 +257,7 @@ bool CollectSelectedRefsQ75(uint32_t worldspaceFormId,
                             size_t& landRecords) {
     out.clear();
     landRecords = 0u;
-    FILE* file = std::fopen(ESM_PATH_Q75, "rb");
+    FILE* file = std::fopen(fo3assets::FalloutMasterPath().c_str(), "rb");
     if (!file) return false;
     const int64_t fileSize = FileSizeQ75(file);
     if (fileSize < static_cast<int64_t>(HEADER_SIZE_Q75)) {
@@ -346,7 +347,7 @@ bool ResolveInitialEnabledQ75(uint32_t refFormId,
 bool ResolveBasesQ75(const std::unordered_set<uint32_t>& wanted,
                      std::unordered_map<uint32_t, BaseRecordQ75>& out) {
     out.clear();
-    FILE* file = std::fopen(ESM_PATH_Q75, "rb");
+    FILE* file = std::fopen(fo3assets::FalloutMasterPath().c_str(), "rb");
     if (!file) return false;
     const int64_t fileSize = FileSizeQ75(file);
     if (fileSize < static_cast<int64_t>(HEADER_SIZE_Q75)) {
@@ -471,7 +472,7 @@ bool BuildWorldspaceIndexQ1800(uint32_t worldspaceFormId,
     const bool buildDoorIndex =
         worldspaceFormId == WASTELAND_WORLDSPACE_Q1800;
 
-    FILE* file = std::fopen(ESM_PATH_Q75, "rb");
+    FILE* file = std::fopen(fo3assets::FalloutMasterPath().c_str(), "rb");
     if (!file) return false;
     const int64_t fileSize = FileSizeQ75(file);
     if (fileSize < static_cast<int64_t>(HEADER_SIZE_Q75)) {

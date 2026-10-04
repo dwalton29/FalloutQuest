@@ -1,3 +1,4 @@
+#include "fo3-install-paths.h"
 #include <chrono>
 #include "fo3-worldspace-runtime.h"
 #include "fo3-esm-reader.h"
@@ -82,7 +83,7 @@ uint32_t gCurrentCellQ74 = TARGET_CELL_FORM_ID;
 
 bool Q74ResolveOwner(uint32_t targetDoorRef, Q74Owner& out) {
     out = {};
-    FILE* file = std::fopen(ESM_PATH, "rb");
+    FILE* file = std::fopen(fo3assets::FalloutMasterPath().c_str(), "rb");
     if (!file) return false;
     const int64_t fileSize = fo3esm::FileSize(file);
     if (fileSize < static_cast<int64_t>(fo3esm::HEADER_SIZE)) {
@@ -239,7 +240,7 @@ bool QueueFo3MegatonEntryQ1000() {
     constexpr uint32_t WASTELAND_WORLDSPACE = 0x0000003Cu;
 
     std::unordered_set<uint32_t> entranceRefs;
-    FILE* file = std::fopen(ESM_PATH, "rb");
+    FILE* file = std::fopen(fo3assets::FalloutMasterPath().c_str(), "rb");
     if (!file) {
         Q71_LOGE("Q10.0 MEGATON ENTRY FAILED: reason=open-esm");
         return false;
@@ -420,7 +421,7 @@ bool QueueFo3MegatonEntryQ1040() {
     constexpr uint32_t MEGATON_WORLDSPACE = 0x00000A74u;
     constexpr uint32_t PREFERRED_ENTRANCE_CELL = 0x00002DBDu;
 
-    FILE* file = std::fopen(ESM_PATH, "rb");
+    FILE* file = std::fopen(fo3assets::FalloutMasterPath().c_str(), "rb");
     if (!file) {
         Q71_LOGE("Q10.4 GATE LOCATOR FAILED: reason=open-esm");
         return false;
@@ -568,7 +569,7 @@ bool ResolveFo3DoorTeleportQ1700(uint32_t sourceDoorRef,
     *outTeleport = {};
     if (sourceDoorRef == 0u) return false;
 
-    FILE* file = std::fopen(ESM_PATH, "rb");
+    FILE* file = std::fopen(fo3assets::FalloutMasterPath().c_str(), "rb");
     if (!file) return false;
     const int64_t fileSize = fo3esm::FileSize(file);
     if (fileSize < static_cast<int64_t>(fo3esm::HEADER_SIZE)) {
@@ -720,7 +721,7 @@ bool EnsureIndex() {
     if (gIndexAttempted) return gIndexReady;
     gIndexAttempted = true;
 
-    FILE* file = std::fopen(ESM_PATH, "rb");
+    FILE* file = std::fopen(fo3assets::FalloutMasterPath().c_str(), "rb");
     if (!file) {
         Q71_LOGE("Q16.12 PROMPT INDEX FAILED: reason=open-esm");
         return false;
@@ -939,7 +940,7 @@ bool ResolveFo3MegatonEntryQ1860(Fo3CellTransitionRequestQ74& outRequest,
     };
 
     const auto started = std::chrono::steady_clock::now();
-    FILE* file = std::fopen(ESM_PATH, "rb");
+    FILE* file = std::fopen(fo3assets::FalloutMasterPath().c_str(), "rb");
     if (!file) {
         Q71_LOGE("Q16.14 FAST GATE SCAN FAILED: reason=open-esm");
         return false;

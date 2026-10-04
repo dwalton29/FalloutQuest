@@ -1,3 +1,4 @@
+#include "fo3-install-paths.h"
 #include "fo3-megaton-scene.h"
 #include "fo3-esm-reader.h"
 
@@ -18,8 +19,7 @@
 namespace {
 
 constexpr const char* TAG = "FalloutQuest";
-constexpr const char* ESM_PATH =
-        "/data/user/0/com.falloutquest.app/files/Fallout3/Data/Fallout3.esm";
+
 constexpr uint32_t TARGET_CELL_FORM_ID = 0x000151E3u;
 constexpr uint32_t FLAG_INITIALLY_DISABLED = 0x00000800u;
 constexpr uint8_t ENABLE_PARENT_OPPOSITE = 0x01u;
@@ -120,7 +120,7 @@ BaseRecord ParseBaseRecord(uint32_t formId, const std::string& recordType,
 }
 
 bool CollectReferences(std::vector<RawPlacement>& placements) {
-    FILE* file = std::fopen(ESM_PATH, "rb");
+    FILE* file = std::fopen(fo3assets::FalloutMasterPath().c_str(), "rb");
     if (!file) return false;
     const int64_t fileSize = fo3esm::FileSize(file);
     if (fileSize < static_cast<int64_t>(fo3esm::HEADER_SIZE)) {
@@ -178,7 +178,7 @@ bool CollectReferences(std::vector<RawPlacement>& placements) {
 
 bool ResolveBases(const std::unordered_set<uint32_t>& wanted,
                   std::unordered_map<uint32_t, BaseRecord>& out) {
-    FILE* file = std::fopen(ESM_PATH, "rb");
+    FILE* file = std::fopen(fo3assets::FalloutMasterPath().c_str(), "rb");
     if (!file) return false;
     const int64_t fileSize = fo3esm::FileSize(file);
     if (fileSize < static_cast<int64_t>(fo3esm::HEADER_SIZE)) {

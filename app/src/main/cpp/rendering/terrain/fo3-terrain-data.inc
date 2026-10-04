@@ -127,7 +127,7 @@ bool DecodeVnmlQ1010(const uint8_t* bytes, uint32_t size, std::vector<float>& no
 
 bool ReadParentWorldspaceQ79(uint32_t worldspaceFormId, ParentWorldspaceQ79& out) {
     out = {};
-    FILE* file = std::fopen(ESM_PATH_Q75, "rb");
+    FILE* file = std::fopen(fo3assets::FalloutMasterPath().c_str(), "rb");
     if (!file) return false;
     const int64_t fileSize = FileSizeQ75(file);
     if (fileSize < static_cast<int64_t>(HEADER_SIZE_Q75)) {
@@ -240,7 +240,7 @@ const std::vector<Q1910LandRecordIndex>* Q1910GetLandIndex(uint32_t worldspaceFo
     const auto cached = gQ1910LandIndex.find(worldspaceFormId);
     if (cached != gQ1910LandIndex.end()) return &cached->second;
 
-    FILE* file = std::fopen(ESM_PATH_Q75, "rb");
+    FILE* file = std::fopen(fo3assets::FalloutMasterPath().c_str(), "rb");
     if (!file) return nullptr;
     const int64_t fileSize = FileSizeQ75(file);
     if (fileSize < static_cast<int64_t>(HEADER_SIZE_Q75)) {
@@ -322,7 +322,7 @@ bool CollectSelectedLandQ1910(uint32_t worldspaceFormId,
         }
 
         if (!file) {
-            file = std::fopen(ESM_PATH_Q75, "rb");
+            file = std::fopen(fo3assets::FalloutMasterPath().c_str(), "rb");
             if (!file) return false;
         }
         if (fseeko(file, static_cast<off_t>(entry.payloadOffset), SEEK_SET) != 0) continue;
@@ -373,7 +373,7 @@ bool CollectSelectedLandQ76(uint32_t worldspaceFormId,
                             const std::unordered_map<uint32_t, CellInfoQ75>& cellsById,
                             std::vector<Fo3TerrainCellQ76>& out) {
     out.clear();
-    FILE* file = std::fopen(ESM_PATH_Q75, "rb");
+    FILE* file = std::fopen(fo3assets::FalloutMasterPath().c_str(), "rb");
     if (!file) return false;
     const int64_t fileSize = FileSizeQ75(file);
     if (fileSize < static_cast<int64_t>(HEADER_SIZE_Q75)) {

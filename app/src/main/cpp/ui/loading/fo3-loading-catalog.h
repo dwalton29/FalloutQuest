@@ -1,4 +1,5 @@
 #pragma once
+#include "../../data/fo3-install-paths.h"
 #include "fo3-loading-pose.h"
 #include <zlib.h>
 #include <algorithm>
@@ -13,8 +14,7 @@
 // CPU-only ESM loading catalogue. Owned by the presentation worker, published
 // through Preparation before any reader accesses these immutable vectors.
 namespace fo3loading {
-constexpr const char* ESM_PATH =
-    "/data/user/0/com.falloutquest.app/files/Fallout3/Data/Fallout3.esm";
+
 constexpr size_t RECORD_HEADER = 24u;
 constexpr uint32_t COMPRESSED_RECORD = 0x00040000u;
 
@@ -134,7 +134,7 @@ inline void ParseModelRecord(const std::vector<uint8_t>& payload) {
     }
 }
 
-inline void Prepare(const char* path = ESM_PATH, const std::atomic<bool>* cancelled = nullptr) {
+inline void Prepare(const char* path = fo3assets::FalloutMasterPath().c_str(), const std::atomic<bool>* cancelled = nullptr) {
     if (gScreensPrepared) return;
     gScreensPrepared = true;
 

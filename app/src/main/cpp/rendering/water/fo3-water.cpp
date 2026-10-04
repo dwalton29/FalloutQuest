@@ -1,3 +1,4 @@
+#include "fo3-install-paths.h"
 #include "fo3-water.h"
 #include "fo3-texture-bsa.h"
 #include "rendering/terrain/fo3-terrain.h"
@@ -20,8 +21,7 @@
 namespace {
 
 constexpr const char* TAG = "FalloutQuest";
-constexpr const char* ESM_PATH =
-    "/data/user/0/com.falloutquest.app/files/Fallout3/Data/Fallout3.esm";
+
 constexpr uint32_t FLAG_COMPRESSED = 0x00040000u;
 constexpr uint64_t HEADER_SIZE = 24u;
 constexpr uint32_t MAX_RECORD_BYTES = 64u * 1024u * 1024u;
@@ -321,7 +321,7 @@ bool ReadWorldDefaults(uint32_t worldspaceFormId,
     defaultWaterType = 0u;
     defaultWaterHeight = 0.0f;
     noiseTexture.clear();
-    FILE* file = std::fopen(ESM_PATH, "rb");
+    FILE* file = std::fopen(fo3assets::FalloutMasterPath().c_str(), "rb");
     if (!file) return false;
     const int64_t fileSize = FileSize(file);
     if (fileSize < static_cast<int64_t>(HEADER_SIZE)) {
@@ -403,7 +403,7 @@ bool CollectWaterCells(uint32_t worldspaceFormId,
                        float defaultWaterHeight,
                        std::vector<RawWaterCell>& out) {
     out.clear();
-    FILE* file = std::fopen(ESM_PATH, "rb");
+    FILE* file = std::fopen(fo3assets::FalloutMasterPath().c_str(), "rb");
     if (!file) return false;
     const int64_t fileSize = FileSize(file);
     if (fileSize < static_cast<int64_t>(HEADER_SIZE)) {
@@ -491,7 +491,7 @@ bool ResolveWaterTypes(const std::unordered_set<uint32_t>& wanted,
     out.clear();
     if (wanted.empty()) return true;
 
-    FILE* file = std::fopen(ESM_PATH, "rb");
+    FILE* file = std::fopen(fo3assets::FalloutMasterPath().c_str(), "rb");
     if (!file) return false;
     const int64_t fileSize = FileSize(file);
     if (fileSize < static_cast<int64_t>(HEADER_SIZE)) {

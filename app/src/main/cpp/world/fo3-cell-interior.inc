@@ -86,7 +86,7 @@ bool ParsePlacementPayload(const std::vector<uint8_t>& payload, RawPlacement& ou
 
 bool CollectCellReferences(uint32_t cellFormId, std::vector<RawPlacement>& out) {
     out.clear();
-    FILE* file = std::fopen(ESM_PATH, "rb");
+    FILE* file = std::fopen(fo3assets::FalloutMasterPath().c_str(), "rb");
     if (!file) return false;
     const int64_t fileSize = fo3esm::FileSize(file);
     if (fileSize < static_cast<int64_t>(fo3esm::HEADER_SIZE)) {
@@ -164,7 +164,7 @@ BaseRecord ParseBase(uint32_t formId, const char* recordType,
 bool ResolveBases(const std::unordered_set<uint32_t>& wanted,
                   std::unordered_map<uint32_t, BaseRecord>& out) {
     out.clear();
-    FILE* file = std::fopen(ESM_PATH, "rb");
+    FILE* file = std::fopen(fo3assets::FalloutMasterPath().c_str(), "rb");
     if (!file) return false;
     const int64_t fileSize = fo3esm::FileSize(file);
     if (fileSize < static_cast<int64_t>(fo3esm::HEADER_SIZE)) {

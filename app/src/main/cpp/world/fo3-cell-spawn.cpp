@@ -1,3 +1,4 @@
+#include "fo3-install-paths.h"
 #include "fo3-megaton-scene.h"
 #include "fo3-esm-reader.h"
 
@@ -14,8 +15,7 @@
 namespace {
 
 constexpr const char* TAG = "FalloutQuest";
-constexpr const char* ESM_PATH =
-        "/data/user/0/com.falloutquest.app/files/Fallout3/Data/Fallout3.esm";
+
 constexpr uint32_t TARGET_CELL_FORM_ID = 0x000151E3u;
 constexpr float Q71_UNITS_PER_METRE = 70.0f;
 constexpr float Q71_FLOOR_Y = -1.55f;
@@ -78,7 +78,7 @@ bool InTargetCell(const std::vector<GroupFrame>& groups) {
 
 bool CollectTargetCellRefs(std::unordered_set<uint32_t>& refs) {
     refs.clear();
-    FILE* file = std::fopen(ESM_PATH, "rb");
+    FILE* file = std::fopen(fo3assets::FalloutMasterPath().c_str(), "rb");
     if (!file) return false;
     const int64_t fileSize = fo3esm::FileSize(file);
     if (fileSize < static_cast<int64_t>(fo3esm::HEADER_SIZE)) {
@@ -121,7 +121,7 @@ bool CollectTargetCellRefs(std::unordered_set<uint32_t>& refs) {
 bool FindArrivalCandidates(const std::unordered_set<uint32_t>& targetRefs,
                            std::vector<ArrivalCandidate>& candidates) {
     candidates.clear();
-    FILE* file = std::fopen(ESM_PATH, "rb");
+    FILE* file = std::fopen(fo3assets::FalloutMasterPath().c_str(), "rb");
     if (!file) return false;
     const int64_t fileSize = fo3esm::FileSize(file);
     if (fileSize < static_cast<int64_t>(fo3esm::HEADER_SIZE)) {
@@ -182,7 +182,7 @@ bool FindArrivalCandidates(const std::unordered_set<uint32_t>& targetRefs,
 
 bool CollectTargetCellDoorProbes(std::vector<DoorProbeCandidate>& doors) {
     doors.clear();
-    FILE* file = std::fopen(ESM_PATH, "rb");
+    FILE* file = std::fopen(fo3assets::FalloutMasterPath().c_str(), "rb");
     if (!file) return false;
     const int64_t fileSize = fo3esm::FileSize(file);
     if (fileSize < static_cast<int64_t>(fo3esm::HEADER_SIZE)) {

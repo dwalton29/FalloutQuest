@@ -1,3 +1,4 @@
+#include "fo3-install-paths.h"
 #include "fo3-npc.h"
 #include "fo3-bsa-reader.h"
 #include "fo3-texture-bsa.h"
@@ -17,8 +18,7 @@
 namespace {
 
 constexpr const char* TAG = "FalloutQuest";
-constexpr const char* ESM_PATH =
-    "/data/user/0/com.falloutquest.app/files/Fallout3/Data/Fallout3.esm";
+
 
 
 #define Q230_LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
@@ -395,9 +395,9 @@ bool LoadFo3CellActors(
         uint32_t cellFormId, std::vector<Fo3NpcActorQ230>& outActors,
         const std::string& esmPath) {
     outActors.clear();
-    FILE* f=std::fopen(esmPath.empty()?ESM_PATH:esmPath.c_str(),"rb");
+    FILE* f=std::fopen(esmPath.empty()?fo3assets::FalloutMasterPath().c_str():esmPath.c_str(),"rb");
     if(!f){
-        Q230_LOGW("Q23.0 NPC ESM OPEN FAILED: %s",ESM_PATH);
+        Q230_LOGW("Q23.0 NPC ESM OPEN FAILED: %s",fo3assets::FalloutMasterPath().c_str());
         return false;
     }
 

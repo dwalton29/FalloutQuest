@@ -1,4 +1,5 @@
 #pragma once
+#include "../../data/fo3-install-paths.h"
 
 #include "rendering/environment/fo3-authored-color.h"
 #include "rendering/environment/fo3-weather-light.h"
@@ -62,7 +63,7 @@ inline bool FindSpatialCell(uint32_t worldspaceFormId,
     const int32_t wantedX = GameCoordToCell(gameX);
     const int32_t wantedY = GameCoordToCell(gameY);
 
-    FILE* file = std::fopen(ESM_PATH, "rb");
+    FILE* file = std::fopen(fo3assets::FalloutMasterPath().c_str(), "rb");
     if (!file) return false;
     const int64_t fileSize = fo3esm::FileSize(file);
     if (fileSize < static_cast<int64_t>(fo3esm::HEADER_SIZE)) {

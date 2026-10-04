@@ -1,4 +1,5 @@
 #pragma once
+#include "../../data/fo3-install-paths.h"
 #include "fo3-loading-screen.h"
 #include "fo3-loading-pose.h"
 #include "fo3-loading-menu.h"
@@ -76,7 +77,7 @@ inline void PrepareCatalog() {
     if(gCatalogStarted || gCatalogFailed)return;
     gCatalogStarted=gCatalog.Start([](fo3loadingmenu::Definition& menu,const std::atomic<bool>& cancelled){
         if(cancelled.load())return false;
-        fo3loading::Prepare(fo3loading::ESM_PATH,&cancelled);
+        fo3loading::Prepare(fo3assets::FalloutMasterPath().c_str(),&cancelled);
         std::vector<uint8_t> xml;
         if(fo3assets::GetBsaArchive(fo3assets::FalloutDataPath("Fallout - Misc.bsa"))->Read("menus/loading_menu.xml",xml,nullptr,fo3assets::BsaPathKind::Exact,1024u*1024u))
             fo3loadingmenu::ReadXml(std::string(xml.begin(),xml.end()),menu);

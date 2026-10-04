@@ -1,4 +1,5 @@
 #pragma once
+#include "../../data/fo3-install-paths.h"
 
 #include "fo3-esm-reader.h"
 
@@ -43,8 +44,7 @@ inline Fo3Environment gFo3Environment;
 namespace fo3env {
 
 constexpr const char* TAG = "FalloutQuest";
-constexpr const char* ESM_PATH =
-    "/data/user/0/com.falloutquest.app/files/Fallout3/Data/Fallout3.esm";
+
 
 inline int32_t ReadI32(const uint8_t* p) {
     return static_cast<int32_t>(fo3esm::ReadU32(p));
@@ -53,7 +53,7 @@ inline int32_t ReadI32(const uint8_t* p) {
 inline bool FindRecord(const char wantedType[4], uint32_t wantedFormId,
                        std::vector<uint8_t>& payload) {
     payload.clear();
-    FILE* file = std::fopen(ESM_PATH, "rb");
+    FILE* file = std::fopen(fo3assets::FalloutMasterPath().c_str(), "rb");
     if (!file) return false;
     const int64_t fileSize = fo3esm::FileSize(file);
     if (fileSize < static_cast<int64_t>(fo3esm::HEADER_SIZE)) {

@@ -1,4 +1,5 @@
 #pragma once
+#include "../data/fo3-install-paths.h"
 
 #include <cstdint>
 #include <cstdio>
@@ -11,8 +12,7 @@
 // The immutable placement/door index stays private to worldspace-runtime.cpp.
 namespace fo3world_detail {
 
-inline constexpr const char* ESM_PATH_Q75 =
-    "/data/user/0/com.falloutquest.app/files/Fallout3/Data/Fallout3.esm";
+
 inline constexpr uint64_t HEADER_SIZE_Q75 = 24u;
 inline constexpr float EXTERIOR_CELL_SIZE_Q75 = 4096.0f;
 inline constexpr size_t SMALL_WORLDSPACE_CELL_LIMIT_Q75 = 64u;

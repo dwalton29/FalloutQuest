@@ -53,6 +53,12 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      - name: Test Steam install discovery
+        run: |
+          mkdir -p build/host-install
+          javac -d build/host-install app/src/main/java/com/falloutquest/app/GameInstall.java tests/install/GameInstallTests.java
+          java -cp build/host-install com.falloutquest.app.GameInstallTests
+
       - name: Test shared BSA reader on host
         run: |
           cmake -S tests/assets -B build/host-assets

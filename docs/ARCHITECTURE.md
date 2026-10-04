@@ -540,3 +540,19 @@ there is no claim of original engine timing, 3D falloff, reverb or combat parity
 The supplied INI gives music gain 0.3 and effect/master gain 1.0. Runtime INI
 editing and a volume UI are not yet implemented. Audio assets must be installed
 in the app's original Data tree; Dropbox is a source, not streamed at runtime.
+
+## Public installation roots: 0.31.0
+
+MainActivity gates native startup on Android storage access and GameInstall
+validates a unique Fallout 3 Data directory directly below FalloutQuest/Fallout3
+or one Steam install subfolder. FalloutNV is scanned separately and cannot
+launch the Fallout 3 runtime. NativeActivity sets FALLOUTQUEST_DATA_ROOT before
+loading the native library. data/fo3-install-paths.h provides one immutable
+process root and lazy master path; every ESM reader and the shared asset store
+uses it. Top-level archive/master names resolve case-insensitively after a
+Windows copy. Restart after moving files; no hot-switching or shared cross-game
+indexes. The former private Data root remains a native test/development fallback,
+but the public launcher requires the public installation. Saves and audio cache
+stay private. Shared storage uses Android all-files access for direct native BSA
+random reads, with a settings request and sideload ADB fallback. A SAF-backed
+archive reader and headset permission/launch verification remain future work.
