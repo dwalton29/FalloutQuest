@@ -5,6 +5,7 @@
 #include <unordered_map>
 extern void PumpFo3AndroidEventsQ1860();
 #include "world/interaction/fo3-door-prompt.h"
+#include "ui/interaction/fo3-font-diagnostics.h"
 #include <algorithm>
 #include <cstring>
 #include <string>
@@ -863,6 +864,8 @@ bool BuildPrompt(uint32_t sourceDoorRef, std::string& out) {
         return false;
     }
 
+    fo3fontdebug::LogBytes("ESM-FULL-door",doorName);
+    fo3fontdebug::LogBytes("ESM-FULL-destination",destination);
     out = "Open";
     if (!doorName.empty()) {
         out += " ";

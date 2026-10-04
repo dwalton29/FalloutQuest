@@ -1,20 +1,9 @@
 #pragma once
 
-// stable Fallout 3 HUDMainMenu/Info renderer.
-//
-// proved the authored ESM wording path, but two runtime problems remained:
-//   - the OpenXR host and HUD renderer both mutated std::string objects while the
-//     interaction target appeared/disappeared;
-//   - Fallout's Baked-in_Monofonto_Large.fnt stores the space width specially.
-//     The space has no drawable quad, its ordinary advance field is zero, and the
-//     authored spacing value (13 px in the vanilla font) occupies the offset slot
-//     used only by non-rendering whitespace. Treating advance=0 literally collapsed
-//     every word boundary.
-//
-// This renderer keeps prompt identity in fixed storage, allocates geometry only
-// when the target text changes, and derives the whitespace width from the actual
-// FNT record. Bethesda's text_box.xml geometry remains unchanged: horbuf 20,
-// Info verbuf 10, centred text, glow correction -4/+7, 75x75 A button at left.
+// Single live prompt renderer and shared loot font resources. Metrics and
+// geometry are owned by fo3font; presentation remains HUDMainMenu/text_box.xml.
+#include "fo3-interaction-hud-assets.h"
+#include "fo3-font-diagnostics.h"
 
 #include <GLES3/gl3.h>
 #include <android/log.h>
@@ -31,7 +20,7 @@ namespace fo3hudrenderer {
 constexpr const char* kTag = "FalloutQuest";
 constexpr size_t kPromptCapacity = 512u;
 
-struct HudState {
+struct HudState : fo3font::Metrics {
     bool attempted = false;
     bool ready = false;
     GLuint program = 0u;
@@ -46,8 +35,6 @@ struct HudState {
     GLsizei buttonCount = 0;
     GLsizei textFirst = 0;
     GLsizei textCount = 0;
-    float lineHeight = 0.0f;
-    std::array<fo3hudassets::Glyph, 256> glyphs{};
     fo3hudassets::TaiSprite button{};
     std::array<char, kPromptCapacity> builtPrompt{};
     size_t builtPromptLength = 0u;
@@ -156,20 +143,14 @@ inline bool EnsureResources() {
     s.mvpLoc = glGetUniformLocation(s.program, "uMvp");
     s.tintLoc = glGetUniformLocation(s.program, "uTint");
     s.texLoc = glGetUniformLocation(s.program, "uTex");
-    s.lineHeight = font.lineHeight;
-    s.glyphs = font.glyphs;
+    static_cast<fo3font::Metrics&>(s) = std::move(static_cast<fo3font::Metrics&>(font));
     s.button = button;
     s.ready = s.vao != 0u && s.vbo != 0u &&
               s.mvpLoc >= 0 && s.tintLoc >= 0 && s.texLoc >= 0;
 
-    const fo3hudassets::Glyph& space = s.glyphs[static_cast<uint8_t>(' ')];
-    const float spaceAdvance =
-        (space.advance > 0.0f) ? space.advance : std::max(0.0f, space.yOffset);
-    __android_log_print(s.ready ? ANDROID_LOG_INFO : ANDROID_LOG_ERROR,
-                        kTag,
-                        "HUD ASSETS READY: ready=%d font=%s interface=%s lineHeight=%.1f space=(width=%.1f height=%.1f rawAdvance=%.1f authoredAdvance=%.1f) storage=fixed",
-                        s.ready ? 1 : 0, font.texPath.c_str(), button.atlasPath.c_str(),
-                        s.lineHeight, space.width, space.height, space.advance, spaceAdvance);
+    __android_log_print(s.ready ? ANDROID_LOG_INFO : ANDROID_LOG_ERROR,kTag,
+        "HUD ASSETS READY: ready=%d font=%s interface=%s baseLine=%.1f layout=Fallout-AddChar",
+        s.ready ? 1 : 0,font.texPath.c_str(),button.atlasPath.c_str(),s.baseLine);
     return s.ready;
 }
 
@@ -180,26 +161,8 @@ inline size_t PromptLength(const char* text) {
     return n;
 }
 
-inline float GlyphAdvance(const HudState& s, unsigned char ch) {
-    const fo3hudassets::Glyph& g = s.glyphs[ch];
-    if (ch == static_cast<unsigned char>(' ') &&
-        g.width <= 0.0f && g.height <= 0.0f && g.advance <= 0.0f) {
-        // Vanilla Baked-in_Monofonto_Large: the non-rendering space glyph stores
-        // its authored 13 px word gap in this slot while the ordinary advance is
-        // zero. Read the value from the FNT instead of inventing a VR constant.
-        return std::max(0.0f, g.yOffset);
-    }
-    return std::max(0.0f, g.advance);
-}
-
-inline float TextWidth(const HudState& s,
-                            const char* text,
-                            size_t length) {
-    float width = 0.0f;
-    for (size_t i = 0u; i < length; ++i) {
-        width += GlyphAdvance(s, static_cast<unsigned char>(text[i]));
-    }
-    return width;
+inline float TextWidth(const HudState& s,const char* text,size_t length) {
+    return fo3font::MeasureText(s,std::string_view(text,length));
 }
 
 inline void AppendPromptQuad(std::vector<fo3hudassets::Vertex>& verts,
@@ -222,6 +185,23 @@ inline bool SameBuiltPrompt(const HudState& s,
            std::memcmp(s.builtPrompt.data(), text, length) == 0;
 }
 
+inline void LogTextDiagnostics(const char* text,size_t length,float width) {
+#ifndef NDEBUG
+    if (!fo3fontdebug::LogBytes("emitted-glyphs",std::string_view(text,length))) return;
+    __android_log_print(ANDROID_LOG_INFO,kTag,"HUD TEXT LAYOUT: width=%.1f baseLine=%.1f",width,State().baseLine);
+    const auto& f=State();
+    for(size_t i=0;i<length;++i) {
+        const auto byte=static_cast<uint8_t>(text[i]);
+        if(byte!=0x20&&byte!=0x2d&&byte!=0x2e)continue;
+        const auto index=fo3font::GlyphIndex(byte);const auto& g=f.glyphs[index];
+        __android_log_print(ANDROID_LOG_INFO,kTag,"HUD TEXT GLYPH: offset=%zu byte=%02X index=%u quad=%d advance=%.1f topEdge=%.1f",
+            i,byte,index,fo3font::Drawable(f,g),fo3font::GlyphRenderAdvance(g),g.topEdge);
+    }
+#else
+    (void)text;(void)length;(void)width;
+#endif
+}
+
 inline bool BuildPromptGeometry(const char* promptChars) {
     HudState& s = State();
     if (!s.ready || !promptChars || !promptChars[0]) return false;
@@ -232,7 +212,7 @@ inline bool BuildPromptGeometry(const char* promptChars) {
     // Exact text_box.xml/HUDMainMenu Info layout values recovered from the
     // user's Fallout - Misc.bsa. Only pixel->metre scale and arm anchor are VR.
     const float textWidth = TextWidth(s, promptChars, length);
-    const float textHeight = s.lineHeight;
+    const float textHeight = s.baseLine;
     const float boxWidth = textWidth + 20.0f; // _horbuf
     const float boxHeight = textHeight + 10.0f; // Info _verbuf override
     const float boxX = 0.0f;
@@ -268,22 +248,11 @@ inline bool BuildPromptGeometry(const char* promptChars) {
 
     s.textFirst = static_cast<GLsizei>(verts.size());
     float penX = textCenterX - textWidth * 0.5f;
-    size_t spaces = 0u;
-    for (size_t i = 0u; i < length; ++i) {
-        const unsigned char ch = static_cast<unsigned char>(promptChars[i]);
-        const fo3hudassets::Glyph& g = s.glyphs[ch];
-        if (ch == static_cast<unsigned char>(' ')) ++spaces;
-        if (g.width > 0.0f && g.height > 0.0f) {
-            const float gx0 = penX + g.xOffset;
-            const float gy0 = textTopY + g.yOffset;
-            const float gx1 = gx0 + g.width;
-            const float gy1 = gy0 + g.height;
-            AppendPromptQuad(verts, X(gx0), Y(gy0), X(gx1), Y(gy1), anchorZ,
-                         g.uv[0], g.uv[1], g.uv[2], g.uv[3],
-                         g.uv[4], g.uv[5], g.uv[6], g.uv[7]);
-        }
-        penX += GlyphAdvance(s, ch);
-    }
+    fo3font::AppendText(s,std::string_view(promptChars,length),penX,textTopY,
+        [&](uint8_t, const fo3font::Glyph& g,const fo3font::Quad& q) {
+            AppendPromptQuad(verts,X(q.left),Y(q.top),X(q.right),Y(q.bottom),anchorZ,
+                g.uv[0],g.uv[1],g.uv[2],g.uv[3],g.uv[4],g.uv[5],g.uv[6],g.uv[7]);
+        });
     s.textCount = static_cast<GLsizei>(verts.size()) - s.textFirst;
     if (s.textCount <= 0) return false;
 
@@ -305,13 +274,7 @@ inline bool BuildPromptGeometry(const char* promptChars) {
     std::memcpy(s.builtPrompt.data(), promptChars, copyLength);
     s.builtPromptLength = copyLength;
 
-    const fo3hudassets::Glyph& space = s.glyphs[static_cast<uint8_t>(' ')];
-    const float spaceAdvance = GlyphAdvance(s, static_cast<unsigned char>(' '));
-    __android_log_print(ANDROID_LOG_INFO, kTag,
-                        "HUD TEXT GEOMETRY: text=\"%.*s\" chars=%zu spaces=%zu textWidth=%.1f box=(%.1fx%.1f) rawSpaceAdvance=%.1f authoredSpaceAdvance=%.1f singleLine=1 storage=fixed",
-                        static_cast<int>(copyLength), s.builtPrompt.data(), copyLength,
-                        spaces, textWidth, boxWidth, boxHeight,
-                        space.advance, spaceAdvance);
+    LogTextDiagnostics(promptChars,copyLength,textWidth);
     return true;
 }
 

@@ -6,6 +6,7 @@
 
 #include "fo3-texture-bsa.h"
 #include "fo3-asset-store.h"
+#include "fo3-font-layout.h"
 
 #include <GLES3/gl3.h>
 #include <android/log.h>
@@ -52,49 +53,30 @@ inline bool LoadRaw(const std::string& request, std::vector<uint8_t>& out,
     return false;
 }
 
-struct Glyph {
-    std::array<float, 8> uv{};
-    float width = 0.0f;
-    float height = 0.0f;
-    float xOffset = 0.0f;
-    float yOffset = 0.0f;
-    float advance = 0.0f;
-};
-struct Font {
-    float lineHeight = 0.0f;
-    std::array<Glyph, 256> glyphs{};
+using Glyph = fo3font::Glyph;
+struct Font : fo3font::Metrics {
     std::string texPath;
-    int textureWidth = 0;
-    int textureHeight = 0;
+    int textureWidth = 0, textureHeight = 0;
     std::vector<uint8_t> rgba;
 };
 
 inline bool ParseFont(Font& out) {
     std::vector<uint8_t> fnt;
     if (!LoadRaw("Textures\\Fonts\\Baked-in_Monofonto_Large.fnt", fnt)) return false;
-    constexpr size_t kHeaderBytes = 296u;
-    constexpr size_t kGlyphBytes = 56u;
-    if (fnt.size() < kHeaderBytes + 256u * kGlyphBytes) return false;
-
-    out.lineHeight = ReadF32(fnt.data());
-    const char* atlasChars = reinterpret_cast<const char*>(fnt.data() + 12);
-    size_t atlasLen = 0;
-    while (atlasLen < 284u && atlasChars[atlasLen] != '\0') ++atlasLen;
-    std::string atlasName(atlasChars, atlasLen);
-    if (atlasName.empty()) return false;
-    out.texPath = "Textures\\Fonts\\" + atlasName + ".tex";
-
-    for (size_t i = 0; i < 256u; ++i) {
-        const uint8_t* p = fnt.data() + kHeaderBytes + i * kGlyphBytes;
-        Glyph& g = out.glyphs[i];
-        for (int k = 0; k < 8; ++k) g.uv[static_cast<size_t>(k)] = ReadF32(p + 4u * static_cast<size_t>(k + 1));
-        g.width = ReadF32(p + 36);
-        g.height = ReadF32(p + 40);
-        g.xOffset = ReadF32(p + 44);
-        g.yOffset = ReadF32(p + 48);
-        g.advance = ReadF32(p + 52);
+    if (!fo3font::ParseFalloutFont(fnt, out)) return false;
+    // This UI's original baked font has one atlas. Fail explicitly for a font
+    // requiring multiple textures rather than sampling the wrong glyph atlas.
+    if (out.textureCount != 1) {
+        __android_log_print(ANDROID_LOG_ERROR, kTag, "FNT UNSUPPORTED: textures=%u", out.textureCount);
+        return false;
     }
-
+    const auto rawSpace = out.glyphs[0x20];
+    fo3font::ApplyFalloutLoadSemantics(out);
+    out.texPath = "Textures\\Fonts\\" + out.textureFiles[0] + ".tex";
+    __android_log_print(ANDROID_LOG_INFO,kTag,
+        "FNT METRICS: bytes=%zu record=0x38 table=0x128 count=256 baseLine=%.1f spaceRaw=(w=%.1f h=%.1f lead=%.1f spacing=%.1f top=%.1f) spaceRenderAdvance=%.1f",
+        fnt.size(),out.baseLine,rawSpace.width,rawSpace.height,rawSpace.leadingEdge,rawSpace.spacing,rawSpace.topEdge,
+        fo3font::GlyphRenderAdvance(out.glyphs[0x20]));
     std::vector<uint8_t> tex;
     if (!LoadRaw(out.texPath, tex) || tex.size() < 8u) return false;
     const uint32_t w = ReadU32(tex.data());
@@ -107,11 +89,12 @@ inline bool ParseFont(Font& out) {
     out.rgba.assign(tex.begin() + 8,
                     tex.begin() + 8 + static_cast<std::ptrdiff_t>(pixelBytes));
 
-    const Glyph& o = out.glyphs[static_cast<uint8_t>('O')];
-    __android_log_print(ANDROID_LOG_INFO, kTag,
-                        "FNT READY: lineHeight=%.1f atlas=%s %dx%d O=(%.0fx%.0f adv=%.0f)",
-                        out.lineHeight, out.texPath.c_str(), out.textureWidth, out.textureHeight,
-                        o.width, o.height, o.advance);
+    for (unsigned char ch : std::string(" .-01AMaegty")) {
+        const auto& g=out.glyphs[ch];
+        __android_log_print(ANDROID_LOG_INFO,kTag,
+            "FNT GLYPH: byte=%02X index=%u width=%.1f height=%.1f leading=%.1f spacing=%.1f top=%.1f advance=%.1f drawable=%d",
+            ch,ch,g.width,g.height,g.leadingEdge,g.spacing,g.topEdge,fo3font::GlyphRenderAdvance(g),fo3font::Drawable(out,g));
+    }
     return true;
 }
 
@@ -171,27 +154,6 @@ struct Vertex {
     float x, y, z;
     float u, v;
 };
-
-struct HudState {
-    bool attempted = false;
-    bool ready = false;
-    GLuint program = 0;
-    GLuint vao = 0;
-    GLuint vbo = 0;
-    GLuint fontTexture = 0;
-    GLuint interfaceTexture = 0;
-    GLint mvpLoc = -1;
-    GLint tintLoc = -1;
-    GLint texLoc = -1;
-    GLsizei buttonFirst = 0;
-    GLsizei buttonCount = 0;
-    GLsizei textFirst = 0;
-    GLsizei textCount = 0;
-};
-inline HudState& State() {
-    static HudState s;
-    return s;
-}
 
 inline GLuint CompileShader(GLenum type, const char* source) {
     const GLuint shader = glCreateShader(type);
@@ -277,215 +239,4 @@ inline GLuint UploadTexture(int w, int h, const uint8_t* rgba) {
     return tex;
 }
 
-inline void AddQuad(std::vector<Vertex>& verts,
-                    float x0, float y0, float x1, float y1, float z,
-                    float uTL, float vTL, float uTR, float vTR,
-                    float uBL, float vBL, float uBR, float vBR) {
-    verts.push_back({x0, y0, z, uTL, vTL});
-    verts.push_back({x0, y1, z, uBL, vBL});
-    verts.push_back({x1, y0, z, uTR, vTR});
-    verts.push_back({x1, y0, z, uTR, vTR});
-    verts.push_back({x0, y1, z, uBL, vBL});
-    verts.push_back({x1, y1, z, uBR, vBR});
-}
-
-inline float TextWidth(const Font& f, const char* text) {
-    float width = 0.0f;
-    for (const unsigned char* p = reinterpret_cast<const unsigned char*>(text); *p; ++p) {
-        width += f.glyphs[*p].advance;
-    }
-    return width;
-}
-
-inline bool Initialize() {
-    HudState& s = State();
-    if (s.attempted) return s.ready;
-    s.attempted = true;
-
-    Font font;
-    TaiSprite button;
-    if (!ParseFont(font) || !ParseButtonTai(button)) {
-        __android_log_print(ANDROID_LOG_ERROR, kTag,
-                            "REAL HUD UNAVAILABLE: vanilla FNT/TAI assets could not be read");
-        return false;
-    }
-
-    Fo3RgbaTexture interfaceAtlas;
-    if (!LoadFalloutTextureRgba(button.atlasPath, interfaceAtlas)) {
-        __android_log_print(ANDROID_LOG_ERROR, kTag,
-                            "REAL HUD UNAVAILABLE: InterfaceShared atlas failed: %s",
-                            button.atlasPath.c_str());
-        return false;
-    }
-
-    s.program = BuildProgram();
-    if (!s.program) return false;
-    s.fontTexture = UploadTexture(font.textureWidth, font.textureHeight, font.rgba.data());
-    s.interfaceTexture = UploadTexture(interfaceAtlas.width, interfaceAtlas.height,
-                                       interfaceAtlas.rgba.data());
-    if (!s.fontTexture || !s.interfaceTexture) return false;
-
-    // HUDMainMenu/Info -> text_box.xml, evaluated using the real font metrics:
-    // text_box horbuf=20, Info verbuf=10, centered text, glow correction -4/+7,
-    // 75x75 Xbox button placed on the left. Only the physical scale/arm anchor
-    // below are VR adaptations.
-    const float openWidth = TextWidth(font, "Open");
-    const float doorWidth = TextWidth(font, "Door");
-    const float textWidth = std::max(openWidth, doorWidth);
-    const float textHeight = font.lineHeight * 2.0f;
-    const float boxWidth = textWidth + 20.0f;
-    const float boxHeight = textHeight + 10.0f;
-    const float textCenterX = boxWidth * 0.5f - 4.0f;
-    const float textTopY = (boxHeight - textHeight) * 0.5f + 7.0f;
-    const float buttonX0 = -65.0f;
-    const float buttonY0 = (boxHeight - 75.0f) * 0.5f;
-
-    // Authored content bounds in Fallout UI pixels. Center these bounds on the
-    // controller-local X axis; place the widget ~12 cm above the controller.
-    const float contentMinX = -65.0f;
-    const float contentMaxX = std::max(boxWidth, textCenterX + textWidth * 0.5f);
-    const float contentCenterX = (contentMinX + contentMaxX) * 0.5f;
-    const float contentCenterY = boxHeight * 0.5f;
-    constexpr float metresPerPixel = 0.00080f;
-    constexpr float anchorY = 0.120f;
-    constexpr float anchorZ = 0.068f;
-    const auto X = [&](float px) { return (px - contentCenterX) * metresPerPixel; };
-    const auto Y = [&](float py) { return anchorY - (py - contentCenterY) * metresPerPixel; };
-
-    std::vector<Vertex> verts;
-    verts.reserve(6u * (1u + 8u));
-
-    // text_box.xml: 75x75 image, TAI alias glow_general_button_a.dds.
-    s.buttonFirst = static_cast<GLsizei>(verts.size());
-    const float bu0 = button.u;
-    const float bu1 = button.u + button.w;
-    // InterfaceShared.tai is top-row addressed for the raw atlas upload used by
-    // FalloutQuest. Use the authored values directly; do not invent a V flip.
-    const float bvTop = button.v;
-    const float bvBottom = button.v + button.h;
-    AddQuad(verts,
-            X(buttonX0), Y(buttonY0),
-            X(buttonX0 + 75.0f), Y(buttonY0 + 75.0f), anchorZ,
-            bu0, bvTop, bu1, bvTop, bu0, bvBottom, bu1, bvBottom);
-    s.buttonCount = static_cast<GLsizei>(verts.size()) - s.buttonFirst;
-
-    s.textFirst = static_cast<GLsizei>(verts.size());
-    auto addText = [&](const char* text, float lineY) {
-        const float width = TextWidth(font, text);
-        float penX = textCenterX - width * 0.5f;
-        for (const unsigned char* p = reinterpret_cast<const unsigned char*>(text); *p; ++p) {
-            const Glyph& g = font.glyphs[*p];
-            if (g.width > 0.0f && g.height > 0.0f) {
-                const float gx0 = penX + g.xOffset;
-                const float gy0 = lineY + g.yOffset;
-                const float gx1 = gx0 + g.width;
-                const float gy1 = gy0 + g.height;
-                // Baked-in_Monofonto_Large.fnt stores the four authored atlas
-                // UV corners directly. The raw .tex upload preserves that row
-                // convention, so use the V values exactly as stored.
-                const float uTL = g.uv[0], vTL = g.uv[1];
-                const float uTR = g.uv[2], vTR = g.uv[3];
-                const float uBL = g.uv[4], vBL = g.uv[5];
-                const float uBR = g.uv[6], vBR = g.uv[7];
-                AddQuad(verts, X(gx0), Y(gy0), X(gx1), Y(gy1), anchorZ,
-                        uTL, vTL, uTR, vTR, uBL, vBL, uBR, vBR);
-            }
-            penX += g.advance;
-        }
-    };
-    addText("Open", textTopY);
-    addText("Door", textTopY + font.lineHeight);
-    s.textCount = static_cast<GLsizei>(verts.size()) - s.textFirst;
-
-    glGenVertexArrays(1, &s.vao);
-    glGenBuffers(1, &s.vbo);
-    glBindVertexArray(s.vao);
-    glBindBuffer(GL_ARRAY_BUFFER, s.vbo);
-    glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(verts.size() * sizeof(Vertex)),
-                 verts.data(), GL_STATIC_DRAW);
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex),
-                          reinterpret_cast<const void*>(0));
-    glEnableVertexAttribArray(1);
-    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(Vertex),
-                          reinterpret_cast<const void*>(3u * sizeof(float)));
-    glBindBuffer(GL_ARRAY_BUFFER, 0);
-    glBindVertexArray(0);
-
-    s.mvpLoc = glGetUniformLocation(s.program, "uMvp");
-    s.tintLoc = glGetUniformLocation(s.program, "uTint");
-    s.texLoc = glGetUniformLocation(s.program, "uTex");
-    s.ready = s.vao && s.vbo && s.mvpLoc >= 0 && s.tintLoc >= 0 && s.texLoc >= 0;
-
-    __android_log_print(s.ready ? ANDROID_LOG_INFO : ANDROID_LOG_ERROR, kTag,
-                        "REAL HUD ASSETS READY: ready=%d font=%s interface=%s OpenWidth=%.1f DoorWidth=%.1f button=75x75 scale=%.6fm/px",
-                        s.ready ? 1 : 0, font.texPath.c_str(), button.atlasPath.c_str(),
-                        openWidth, doorWidth, metresPerPixel);
-    return s.ready;
-}
-
 } // namespace fo3hudassets
-
-inline void RenderFo3InteractionHudStatic(const float* mvp) {
-    using namespace fo3hudassets;
-    if (!mvp || !Initialize()) return;
-    HudState& s = State();
-
-    static bool logged = false;
-    if (!logged) {
-        logged = true;
-        __android_log_print(ANDROID_LOG_INFO, kTag,
-                            "REAL HUD DRAW: source=HUDMainMenu/Info button=glow_general_button_a.dds font=Baked-in_Monofonto_Large text=Open/Door uv=authored-no-flip");
-    }
-
-    GLint oldProgram = 0, oldVao = 0, oldBuffer = 0, oldActiveTexture = 0, oldTexture = 0;
-    GLint oldBlendSrcRgb = 0, oldBlendDstRgb = 0, oldBlendSrcAlpha = 0, oldBlendDstAlpha = 0;
-    glGetIntegerv(GL_CURRENT_PROGRAM, &oldProgram);
-    glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &oldVao);
-    glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &oldBuffer);
-    glGetIntegerv(GL_ACTIVE_TEXTURE, &oldActiveTexture);
-    glActiveTexture(GL_TEXTURE0);
-    glGetIntegerv(GL_TEXTURE_BINDING_2D, &oldTexture);
-    glGetIntegerv(GL_BLEND_SRC_RGB, &oldBlendSrcRgb);
-    glGetIntegerv(GL_BLEND_DST_RGB, &oldBlendDstRgb);
-    glGetIntegerv(GL_BLEND_SRC_ALPHA, &oldBlendSrcAlpha);
-    glGetIntegerv(GL_BLEND_DST_ALPHA, &oldBlendDstAlpha);
-    const GLboolean depthWas = glIsEnabled(GL_DEPTH_TEST);
-    const GLboolean blendWas = glIsEnabled(GL_BLEND);
-
-    glDisable(GL_DEPTH_TEST);
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    glUseProgram(s.program);
-    glUniformMatrix4fv(s.mvpLoc, 1, GL_FALSE, mvp);
-    // FalloutPrefs.ini uHUDColor=452952319 -> HUDMain RGB 26,255,128, alpha 255.
-    glUniform4f(s.tintLoc, 26.0f / 255.0f, 1.0f, 128.0f / 255.0f, 1.0f);
-    glUniform1i(s.texLoc, 0);
-    glBindVertexArray(s.vao);
-
-    glBindTexture(GL_TEXTURE_2D, s.interfaceTexture);
-    glDrawArrays(GL_TRIANGLES, s.buttonFirst, s.buttonCount);
-    glBindTexture(GL_TEXTURE_2D, s.fontTexture);
-    glDrawArrays(GL_TRIANGLES, s.textFirst, s.textCount);
-
-    glBindVertexArray(static_cast<GLuint>(oldVao));
-    glBindBuffer(GL_ARRAY_BUFFER, static_cast<GLuint>(oldBuffer));
-    glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(oldTexture));
-    glUseProgram(static_cast<GLuint>(oldProgram));
-    glBlendFuncSeparate(static_cast<GLenum>(oldBlendSrcRgb), static_cast<GLenum>(oldBlendDstRgb),
-                        static_cast<GLenum>(oldBlendSrcAlpha), static_cast<GLenum>(oldBlendDstAlpha));
-    if (!blendWas) glDisable(GL_BLEND);
-    if (depthWas) glEnable(GL_DEPTH_TEST); else glDisable(GL_DEPTH_TEST);
-    glActiveTexture(static_cast<GLenum>(oldActiveTexture));
-}
-
-inline void ShutdownFo3InteractionHudStatic() {
-    using namespace fo3hudassets;
-    HudState& s = State();
-    if (s.vbo) glDeleteBuffers(1, &s.vbo);
-    if (s.vao) glDeleteVertexArrays(1, &s.vao);
-    if (s.fontTexture) glDeleteTextures(1, &s.fontTexture);
-    if (s.interfaceTexture) glDeleteTextures(1, &s.interfaceTexture);
-    if (s.program) glDeleteProgram(s.program);
-    s = {};
-}

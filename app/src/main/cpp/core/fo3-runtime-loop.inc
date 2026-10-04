@@ -1,6 +1,5 @@
 #include "ui/interaction/fo3-interaction-hud-assets.h"
 #include "world/interaction/fo3-door-prompt.h"
-#include "ui/interaction/fo3-interaction-hud-dynamic.h"
 #include "ui/interaction/fo3-interaction-hud-renderer.h"
 #include "ui/interaction/fo3-interaction-hud-layout.h"
 #include "ui/interaction/fo3-loot-panel.h"
@@ -367,7 +366,7 @@ public:
     void Shutdown() {
         FlushFo3PlayerState();
         fo3lootui::Shutdown();
-        fo3huddynamic::Shutdown();
+        fo3hudrenderer::Shutdown();
         if (sessionRunning_) {
             xrEndSession(session_);
             sessionRunning_ = false;
@@ -1363,7 +1362,11 @@ private:
             }
             if (doorAimSourceQ1840_ != target.reference ||
                 std::strcmp(doorPromptQ1850_.data(),target.prompt.data()) != 0)
+            {
+                fo3fontdebug::LogBytes("Fo3InteractionTarget.prompt",target.prompt.data());
                 doorPromptQ1850_ = target.prompt;
+                fo3fontdebug::LogBytes("doorPrompt-buffer",doorPromptQ1850_.data());
+            }
             doorAimSourceQ1840_ = target.reference;
             doorPromptValidQ1850_ = target.prompt[0] != '\0';
         } else {

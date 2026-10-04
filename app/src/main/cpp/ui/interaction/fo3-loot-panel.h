@@ -1,5 +1,5 @@
 #pragma once
-#include "fo3-interaction-hud-dynamic.h"
+#include "fo3-interaction-hud-renderer.h"
 #include "world/interaction/fo3-interaction.h"
 
 // User-requested floating loot list. Original FO3 font/colour, explicit VR
@@ -28,11 +28,11 @@ inline void Shutdown() {
 inline void Render(const float *mvp, const Fo3LootPanel &panel) {
   if (!panel.reference || !mvp)
     return;
-  fo3huddynamic::GlStateGuard guard;
+  fo3hudrenderer::GlStateGuard guard;
   glActiveTexture(GL_TEXTURE0);
-  if (!fo3huddynamic::EnsureResources())
+  if (!fo3hudrenderer::EnsureResources())
     return;
-  auto &font = fo3huddynamic::State();
+  auto &font = fo3hudrenderer::State();
   auto &r = State();
   if (!r.vao) {
     glGenVertexArrays(1, &r.vao);
@@ -48,42 +48,33 @@ inline void Render(const float *mvp, const Fo3LootPanel &panel) {
     key += '\n' + panel.rows[i].name + std::to_string(panel.rows[i].count) +
            (panel.rows[i].allowed ? "1" : "0");
   if (key != r.key) {
-    using fo3huddynamic::AppendDynamicQuad;
+    using fo3hudrenderer::AppendPromptQuad;
     std::vector<fo3hudassets::Vertex> vertices;
-    AppendDynamicQuad(vertices, -.22f, .055f, .22f, -.25f, 0, 0, 0, 1, 0, 0, 1,
+    AppendPromptQuad(vertices, -.22f, .055f, .22f, -.25f, 0, 0, 0, 1, 0, 0, 1,
                       1, 1);
     r.highlight = !panel.rows.empty();
     if (r.highlight) {
       const float y =
           -.02f - static_cast<float>(panel.selected - start) * .037f;
-      AppendDynamicQuad(vertices, -.207f, y + .006f, .207f, y - .031f, .001f, 0,
+      AppendPromptQuad(vertices, -.207f, y + .006f, .207f, y - .031f, .001f, 0,
                         0, 1, 0, 0, 1, 1, 1);
     }
     r.buttonStart = static_cast<GLsizei>(vertices.size());
     const auto &b = font.button;
-    AppendDynamicQuad(vertices, -.20f, -.204f, -.167f, -.237f, .002f, b.u, b.v,
+    AppendPromptQuad(vertices, -.20f, -.204f, -.167f, -.237f, .002f, b.u, b.v,
                       b.u + b.w, b.v, b.u, b.v + b.h, b.u + b.w, b.v + b.h);
     r.textStart = static_cast<GLsizei>(vertices.size());
-    const float scale = .025f / std::max(1.0f, font.lineHeight);
+    const float scale = .025f / std::max(1.0f, font.baseLine);
     auto text = [&](std::string value, float x, float y) {
-      float width = 0;
-      std::string fitted;
-      for (unsigned char ch : value) {
-        if (width + font.glyphs[ch].advance > .38f / scale)
-          break;
-        width += font.glyphs[ch].advance;
-        fitted.push_back(ch);
-      }
-      for (unsigned char ch : fitted) {
-        const auto &g = font.glyphs[ch];
-        if (g.width > 0 && g.height > 0)
-          AppendDynamicQuad(
-              vertices, x + g.xOffset * scale, y - g.yOffset * scale,
-              x + (g.xOffset + g.width) * scale,
-              y - (g.yOffset + g.height) * scale, .002f, g.uv[0], g.uv[1],
-              g.uv[2], g.uv[3], g.uv[4], g.uv[5], g.uv[6], g.uv[7]);
-        x += g.advance * scale;
-      }
+      const size_t length=fo3font::FitText(font,value,.38f/scale);
+      fo3hudrenderer::LogTextDiagnostics(value.data(),length,
+          fo3font::MeasureText(font,std::string_view(value.data(),length)));
+      fo3font::AppendText(font,std::string_view(value.data(),length),0,0,
+          [&](uint8_t,const fo3font::Glyph& g,const fo3font::Quad& q) {
+              AppendPromptQuad(vertices,x+q.left*scale,y-q.top*scale,
+                  x+q.right*scale,y-q.bottom*scale,.002f,
+                  g.uv[0],g.uv[1],g.uv[2],g.uv[3],g.uv[4],g.uv[5],g.uv[6],g.uv[7]);
+          });
     };
     text(panel.title, -.20f, .038f);
     if (panel.rows.empty())
