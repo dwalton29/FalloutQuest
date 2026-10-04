@@ -76,15 +76,15 @@ int main(int argc,char** argv) {
             1,0,0,0,
             0,0,-1,0,
             0,1,0,0,
-            2,1,-3,1
+            0,0,0,1
         };
         fo3anim::Matrix sceneDelta{};
         assert(fo3dooranim::ModelDeltaToScene(
             placement,70.0f,*delta,sceneDelta));
         const std::array<float,3> scenePivot{
-            2.0f+8.00009155f/70.0f,
-            1.0f+0.07354069f/70.0f,
-            -3.0f-52.0f/70.0f
+            8.00009155f/70.0f,
+            0.07354069f/70.0f,
+            -52.0f/70.0f
         };
         const auto scenePivotAfter=Point(sceneDelta,scenePivot);
         for(int axis=0;axis<3;++axis)
