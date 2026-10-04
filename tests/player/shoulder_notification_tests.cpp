@@ -17,6 +17,8 @@ int main() {
     assert(z.Contains({1.24f,1.48f,1.86f},false)); // translated, 90-degree torso
     assert(!z.Contains({.95f,1.4f,2},true));
     z.ready=false;assert(!z.Contains({1.09f,1.4f,2},false));
+    // Restore the original torso frame before testing the gesture state machine.
+    z={};z.ready=true;z.shoulder={.2f,1.4f,0};
     Gesture gesture;
     assert(!gesture.Update(1,10,true,true,1.0f,z,palm,1.0));
     assert(gesture.inside && gesture.armed);
