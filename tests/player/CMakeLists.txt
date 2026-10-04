@@ -25,3 +25,21 @@ target_compile_features(shoulder_notification_tests PRIVATE cxx_std_17)
 target_compile_options(shoulder_notification_tests PRIVATE -Wall -Wextra -Werror)
 target_include_directories(shoulder_notification_tests PRIVATE ../../app/src/main/cpp)
 add_test(NAME shoulder_notification_tests COMMAND shoulder_notification_tests)
+add_executable(pipboy_tests pipboy_tests.cpp
+    ../../app/src/main/cpp/player/fo3-player-state.cpp
+    ../../app/src/main/cpp/player/fo3-container-state.cpp
+    ../../app/src/main/cpp/data/fo3-esm-reader.cpp)
+target_compile_features(pipboy_tests PRIVATE cxx_std_17)
+target_compile_options(pipboy_tests PRIVATE -Wall -Wextra -Werror)
+target_include_directories(pipboy_tests PRIVATE ../../app/src/main/cpp)
+target_link_libraries(pipboy_tests PRIVATE ZLIB::ZLIB)
+add_test(NAME pipboy_tests COMMAND pipboy_tests)
+add_executable(pipboy_render_tests pipboy_render_tests.cpp
+    ../../app/src/main/cpp/player/fo3-player-state.cpp
+    ../../app/src/main/cpp/player/fo3-container-state.cpp
+    ../../app/src/main/cpp/data/fo3-esm-reader.cpp)
+target_compile_features(pipboy_render_tests PRIVATE cxx_std_17)
+target_compile_options(pipboy_render_tests PRIVATE -Wall -Wextra -Werror)
+target_include_directories(pipboy_render_tests PRIVATE ../pipboy/mock ../render/mock ../nif ../../app/src/main/cpp ../../app/src/main/cpp/data)
+target_link_libraries(pipboy_render_tests PRIVATE ZLIB::ZLIB)
+add_test(NAME pipboy_render_tests COMMAND pipboy_render_tests)

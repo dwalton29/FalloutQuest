@@ -22,8 +22,8 @@ android {
         applicationId 'com.falloutquest.app'
         minSdk 29
         targetSdk 35
-        versionCode 156
-        versionName '0.36.8-door-units-prompt-shoulder-fix'
+        versionCode 157
+        versionName '0.37.0-physical-pipboy'
 
         ndk {
             abiFilters 'arm64-v8a'

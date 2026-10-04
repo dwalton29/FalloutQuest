@@ -54,6 +54,7 @@ jobs:
           g++ -std=c++17 -Wall -Wextra -Werror -Itests/render/mock -Iapp/src/main/cpp tests/render/opaque_timer_tests.cpp -o /tmp/opaque-timer-tests
           /tmp/opaque-timer-tests
           python3 tests/render/test_shoulder_inventory_source.py
+          python3 tests/render/test_pipboy_source.py
           python3 tests/render/test_opaque_hot_path.py
           python3 tests/render/test_lod_diagnostics.py
           sudo apt-get update -qq

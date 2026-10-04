@@ -60,9 +60,9 @@ struct Font : fo3font::Metrics {
     std::vector<uint8_t> rgba;
 };
 
-inline bool ParseFont(Font& out) {
+inline bool ParseFont(Font& out, const char* path = "Textures\\Fonts\\Baked-in_Monofonto_Large.fnt") {
     std::vector<uint8_t> fnt;
-    if (!LoadRaw("Textures\\Fonts\\Baked-in_Monofonto_Large.fnt", fnt)) return false;
+    if (!LoadRaw(path, fnt)) return false;
     if (!fo3font::ParseFalloutFont(fnt, out)) return false;
     // This UI's original baked font has one atlas. Fail explicitly for a font
     // requiring multiple textures rather than sampling the wrong glyph atlas.
@@ -113,13 +113,13 @@ inline std::string Trim(std::string s) {
     return s;
 }
 
-inline bool ParseButtonTai(TaiSprite& out) {
+inline bool ParseButtonTai(TaiSprite& out, const char* sprite = "glow_general_button_a.dds") {
     std::vector<uint8_t> raw;
     if (!LoadRaw("Textures\\Interface\\InterfaceShared.tai", raw)) return false;
     const std::string text(reinterpret_cast<const char*>(raw.data()), raw.size());
     std::istringstream lines(text);
     std::string line;
-    const std::string alias = "glow_general_button_a.dds";
+    const std::string alias = sprite;
     while (std::getline(lines, line)) {
         if (!line.empty() && line.back() == '\r') line.pop_back();
         if (line.rfind(alias, 0) != 0) continue;

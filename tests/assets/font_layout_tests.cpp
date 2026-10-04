@@ -59,6 +59,9 @@ int main(int argc,char**argv){
     assert(ParseFalloutFont(bytes,f));assert(f.textureFiles[0]==VanillaAtlas);
     bytes=Fixture();std::memset(bytes.data()+12,'x',32);
     assert(ParseFalloutFont(bytes,f));assert(f.textureFiles[0]==std::string(32,'x'));
+    constexpr char PipboyTitleAtlas[]="Monofonto_VeryLarge02_dialogs2_0_Lod_A";
+    bytes=Fixture();std::memcpy(bytes.data()+12,PipboyTitleAtlas,sizeof(PipboyTitleAtlas));
+    assert(ParseFalloutFont(bytes,f));assert(f.textureFiles[0]==PipboyTitleAtlas);
     bytes=Fixture();std::memset(bytes.data()+12,0,32);assert(!ParseFalloutFont(bytes,f));
     if(argc>1){
         std::ifstream file(argv[1],std::ios::binary);std::vector<uint8_t> original{std::istreambuf_iterator<char>(file),{}};

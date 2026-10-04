@@ -1,3 +1,5 @@
+#include "ui/pipboy/fo3-pipboy-mesh.h"
+#include "ui/pipboy/fo3-pipboy-renderer.h"
 #include "world/interaction/fo3-shoulder-zone.h"
 #include "npc/fo3-animation-bounds.h"
 #include "rendering/actor-skinning.h"
@@ -347,6 +349,8 @@ struct CpuObject {
 };
 
 struct GpuObject {
+    bool pipboy=false,pipScreen=false,pipEffect=false;
+    int pipButton=-1;
     mutable uint64_t interiorLightFrame = UINT64_MAX;
     mutable fo3interior::Selection interiorLights;
     GLuint skinAttributes=0, skinPalette=0;
@@ -703,6 +707,21 @@ float gQ210PlayerRoot[16]{
     0,0,1,0,
     0,0,0,1
 };
+fo3anim::Matrix gPipBind=fo3anim::Identity(),gPipWorld=fo3anim::Identity();
+fo3pip::Surface gPipSurface;
+fo3pip::Activation gPipActivation;
+fo3pip::Menu gPipMenu;
+fo3pip::Input gPipInput;
+bool gPipAnchorReady=false,gPipSolved=false;
+bool gPipEquipmentChanged=false;
+uint64_t gPipAppearanceRevision=UINT64_MAX;
+std::string gPipAppearanceModel;
+Vec3 gPipShoulder{},gPipHand{};
+double gPipUpdateUs=0,gPipScreenDrawUs=0;
+uint64_t gPipScreenQueries=0;
+GLint gPipGain=-1;
+void ResetFo3Pipboy(){gPipActivation.Reset();gPipSolved=false;gPipMenu.dirty=true;}
+bool Fo3PipboyFocus(){return gPipActivation.Focus();}
 float gQ210Head[4]{0.0f, 0.0f, 0.0f, 0.0f};
 float gQ210LeftHand[3]{0.0f, 0.0f, 0.0f};
 float gQ210RightHand[3]{0.0f, 0.0f, 0.0f};
@@ -1230,6 +1249,7 @@ GLuint CreateQ6HProgram() {
         uniform float uAlphaTest;
         uniform float uAlphaThreshold;
         uniform float uNoLighting;
+        uniform float uPipScreenGain;
         uniform float uNoLightingFalloff;
         uniform vec4 uNoLightingFalloffParams;
         uniform float uUseVertexColor;
@@ -1455,6 +1475,7 @@ GLuint CreateQ6HProgram() {
                 q1630SpecularRgb = clamp(uSunlightColor*sp,0.0,1.0)*uSpecularEnabled;
             }
             vec3 q1470WorldDiffuse = baseColor * q1630Sp17Lighting;
+            baseColor *= uPipScreenGain;
             vec3 lit = uNoLighting > 0.5
                 ? baseColor
                 : q1470WorldDiffuse + q1630SpecularRgb;
@@ -2766,6 +2787,7 @@ bool InitializeScene() {
     gAlphaThresholdLocation = glGetUniformLocation(gProgram, "uAlphaThreshold");
     gGlowLocationQ1020 = glGetUniformLocation(gProgram, "uGlow");
     gNoLightingLocationQ1020 = glGetUniformLocation(gProgram, "uNoLighting");
+    gPipGain=glGetUniformLocation(gProgram,"uPipScreenGain");
     gNoLightingFalloffLocationQ1160 = glGetUniformLocation(gProgram, "uNoLightingFalloff");
     gNoLightingFalloffParamsLocationQ1160 = glGetUniformLocation(gProgram, "uNoLightingFalloffParams");
     gUseVertexColorLocationQ1020 = glGetUniformLocation(gProgram, "uUseVertexColor");
@@ -5540,7 +5562,7 @@ void DrawSceneObject(const GpuObject& object, bool environmentPassQ2050 = false)
         gObjectTransformLocationQ2017 >= 0) {
         const float* q220Transform =
             object.q210PlayerBody
-                ? gQ210PlayerRoot
+                ? (object.pipboy ? gPipWorld.data() : gQ210PlayerRoot)
                 : object.q220LooseObject
                     ? object.q220DynamicTransform
                     : object.q2400SwingDoor
@@ -5597,6 +5619,7 @@ void DrawSceneObject(const GpuObject& object, bool environmentPassQ2050 = false)
     }
     glUniform1f(gGlossinessLocation, object.glossiness);
     glUniform1f(gNoLightingLocationQ1020, object.noLighting ? 1.0f : 0.0f);
+    glUniform1f(gPipGain,object.pipScreen ? (Fo3PipboyFocus()? .85f : .012f) : 1.f);
     glUniform1f(gNoLightingFalloffLocationQ1160, object.noLightingFalloff ? 1.0f : 0.0f);
     glUniform4fv(gNoLightingFalloffParamsLocationQ1160, 1, object.noLightingFalloffParams);
     // Q20.25: landscape-LOD NIF vertex colours are not the detailed LAND
@@ -5631,7 +5654,7 @@ void DrawSceneObject(const GpuObject& object, bool environmentPassQ2050 = false)
     glUniform1f(gMaterialAlphaLocation, object.materialAlpha);
     glUniform1f(gAlphaTestLocation, object.alphaTest ? 1.0f : 0.0f);
     glUniform1f(gAlphaThresholdLocation, object.alphaThreshold);
-    fqgl::BindTextureUnit(GL_TEXTURE0, GL_TEXTURE_2D, object.diffuse);
+    fqgl::BindTextureUnit(GL_TEXTURE0, GL_TEXTURE_2D, object.pipScreen && fo3pipui::State().ready ? fo3pipui::State().texture : object.diffuse);
     fqgl::BindTextureUnit(GL_TEXTURE1, GL_TEXTURE_2D, object.normal);
     fqgl::BindTextureUnit(GL_TEXTURE2, GL_TEXTURE_2D, object.glow);
     fqgl::BindTextureUnit(GL_TEXTURE4, GL_TEXTURE_CUBE_MAP,
@@ -5968,6 +5991,7 @@ bool Q1030InitializeRenderProgramOnly() {
 
     gGlowLocationQ1020 = glGetUniformLocation(gProgram, "uGlow");
     gNoLightingLocationQ1020 = glGetUniformLocation(gProgram, "uNoLighting");
+    gPipGain=glGetUniformLocation(gProgram,"uPipScreenGain");
     gNoLightingFalloffLocationQ1160 = glGetUniformLocation(gProgram, "uNoLightingFalloff");
     gNoLightingFalloffParamsLocationQ1160 = glGetUniformLocation(gProgram, "uNoLightingFalloffParams");
     gUseVertexColorLocationQ1020 = glGetUniformLocation(gProgram, "uUseVertexColor");
@@ -10076,6 +10100,134 @@ bool Q211FindAvatarHeadAnchor(Vec3& out) {
     return valid;
 }
 
+void SynchronizeFo3PipboyEquipment() {
+  auto *session = GetFo3PlayerSession();
+  if (!session)
+    return;
+  auto &player = session->player;
+  if (gPipAppearanceRevision == player.Revision())
+    return;
+  std::string model;
+  for (const auto &stack : player.Snapshot().inventory) {
+    auto item = player.Definitions().items.find(stack.formId);
+    if (stack.equipped && item != player.Definitions().items.end() &&
+        item->second.kind == fo3player::ItemKind::Armour &&
+        (item->second.bipedMask & 4u))
+      model = item->second.model;
+  }
+  if (gPipAppearanceRevision != UINT64_MAX && model != gPipAppearanceModel) {
+    gPipEquipmentChanged = true;
+    gQ210PlayerBodyAttempted = false;
+    gQ210PlayerBodyReady = false;
+  }
+  gPipAppearanceModel = model;
+  gPipAppearanceRevision = player.Revision();
+}
+void UpdateFo3PipboyMount(const Q213ArmPose &pose,
+                          const Q211PlayerRigPart *master) {
+  gPipSolved = false;
+  if (!gPipAnchorReady || !gPipSurface.valid || !pose.solved || !master)
+    return;
+  gPipShoulder = Q211BindBonePoint(master->bones[master->leftUpperArm]);
+  gPipHand = pose.hand;
+  const Vec3 axis = Q211NormalizeSafe(Q211Sub(pose.hand, pose.elbow));
+  // Extract wrist roll around the solved forearm axis, excluding wrist flex.
+  Vec3 reference =
+      std::fabs(pose.fore.stretchAxis.y) < .8f ? Vec3{0, 1, 0} : Vec3{0, 0, 1};
+  auto a = Q211ApplyDeltaVector(pose.fore, reference),
+       b = Q211ApplyDeltaVector(pose.handDelta, reference);
+  a = Q211NormalizeSafe(Q211Sub(a, Q211Mul(axis, Q211Dot(a, axis))));
+  b = Q211NormalizeSafe(Q211Sub(b, Q211Mul(axis, Q211Dot(b, axis))));
+  const float roll = std::atan2(Q211Dot(axis, Q211Cross(a, b)), Q211Dot(a, b));
+  const auto twist = Q218MakePivotRotation(pose.elbow, axis, roll);
+  auto rigid = Q218ComposeRigid(pose.fore, twist);
+  // Place the authored display centre with the existing axial arm retarget,
+  // then apply only rotation to the physical device. Its size never changes.
+  Vec3 modelCenter{gPipSurface.center.x / FO3_UNITS_PER_METRE,
+                   FLOOR_Y + gPipSurface.center.z / FO3_UNITS_PER_METRE,
+                   SCENE_FORWARD - gPipSurface.center.y / FO3_UNITS_PER_METRE};
+  const auto bindCenter = Q211TransformPoint(gPipBind.data(), modelCenter);
+  const auto centre =
+      Q211ApplyDelta(twist, Q211ApplyDelta(pose.fore, bindCenter));
+  rigid.t = Q211Sub(centre, Q211Rotate(rigid.r, bindCenter));
+  rigid.axialScale = 1;
+  rigid.active = true;
+  auto delta = fo3anim::Identity();
+  for (int c = 0; c < 3; ++c)
+    for (int r = 0; r < 3; ++r)
+      delta[c * 4 + r] = rigid.r[r * 3 + c];
+  delta[12] = rigid.t.x;
+  delta[13] = rigid.t.y;
+  delta[14] = rigid.t.z;
+  fo3anim::Matrix root;
+  std::copy(gQ210PlayerRoot, gQ210PlayerRoot + 16, root.begin());
+  gPipWorld = fo3anim::Multiply(root, fo3anim::Multiply(delta, gPipBind));
+  gPipSolved = true;
+}
+void UpdateFo3Pipboy(uint64_t frame, double now, const float *headPose,
+                     bool available, float x, float y, bool a, bool b) {
+  if (!gPipMenu.BeginFrame(frame))
+    return;
+  const auto started = fqopaque::Clock::now();
+  fo3hudrenderer::CachedStateGuard guard;
+  if (gSceneReady && !fo3pipui::State().attempted)
+    fo3pipui::Ensure();
+  auto *session = GetFo3PlayerSession();
+  fo3pip::View view;
+  if (gPipSolved) {
+    Vec3 c{gPipSurface.center.x / FO3_UNITS_PER_METRE,
+           FLOOR_Y + gPipSurface.center.z / FO3_UNITS_PER_METRE,
+           SCENE_FORWARD - gPipSurface.center.y / FO3_UNITS_PER_METRE};
+    Vec3 n{gPipSurface.normal.x, gPipSurface.normal.z, -gPipSurface.normal.y};
+    const auto centre = Q211TransformPoint(gPipWorld.data(), c);
+    const auto normal = Q218TransformVector(gPipWorld.data(), n);
+    float inverse[16];
+    if (Q2016InvertAffine(gQ210PlayerRoot, inverse)) {
+      auto body = Q211TransformPoint(inverse, centre);
+      view = fo3pip::Measure(
+          available && gQ210LeftHandValid && session && fo3pipui::State().ready,
+          {centre.x, centre.y, centre.z}, {normal.x, normal.y, normal.z},
+          {headPose[12], headPose[13], headPose[14]},
+          {-headPose[8], -headPose[9], -headPose[10]}, {body.x, body.y, body.z},
+          {gPipShoulder.x, gPipShoulder.y, gPipShoulder.z},
+          {gPipHand.x, gPipHand.y, gPipHand.z}, gPipSolved);
+    }
+  }
+  const auto old = gPipActivation.phase;
+  gPipActivation.Step(view, now);
+  if (old != gPipActivation.phase) {
+    Q6H_LOGI("PIPBOY VIEW: state=%d->%d distance=%.3f facingDeg=%.1f "
+             "viewDeg=%.1f raised=%d debounceMs=150",
+             int(old), int(gPipActivation.phase), view.distance,
+             std::acos(std::clamp(view.facing, -1.f, 1.f)) * 57.2958f,
+             std::acos(std::clamp(view.cone, -1.f, 1.f)) * 57.2958f,
+             view.raised);
+    if (old == fo3pip::Phase::Active || Fo3PipboyFocus()) {
+      gPipMenu.dirty = true;
+      fo3audio::NamedSound(Fo3PipboyFocus() ? "UIPipBoyAccessUp"
+                                            : "UIPipBoyAccessDown");
+    }
+  }
+  if (session) {
+    gPipMenu.Refresh(session->player);
+    gPipInput.Step(
+        Fo3PipboyFocus(), x, y, a, b, now, [&](fo3pip::Action action) {
+          bool mutation = gPipMenu.Invoke(action, session->player);
+          if (mutation) {
+            FlushFo3PlayerState();
+            SynchronizeFo3PipboyEquipment();
+          }
+          fo3audio::NamedSound(
+              action == fo3pip::Action::NextTab ||
+                      action == fo3pip::Action::PreviousTab
+                  ? "UIPipBoyMode"
+              : action == fo3pip::Action::Accept ? "UIPipBoySelect"
+              : action == fo3pip::Action::Back   ? "UIPipBoyTab"
+                                                 : "UIPipBoyHighlight");
+        });
+  }
+  gPipUpdateUs = fqopaque::Micros(started);
+}
 void Q211UpdatePlayerRig() {
     if (gQ211LastSkinnedSerial == gQ211TrackingSerial) return;
     gQ211LastSkinnedSerial = gQ211TrackingSerial;
@@ -10226,6 +10378,7 @@ void Q211UpdatePlayerRig() {
                 gQ219ArmLengthScale);
     }
 
+    UpdateFo3PipboyMount(q213LeftPose,q213LeftMaster);
     fqactor::player.pose+=fqopaque::Micros(poseStarted);
     const auto fingerStarted=fqopaque::Clock::now();
     static const std::unordered_map<std::string,Q211Delta> emptyFingerPose;
@@ -10482,7 +10635,8 @@ void Q211UpdatePlayerRig() {
     }
 }
 
-void Q210DeletePlayerBody() {
+void Q210DeletePlayerBody(bool equipmentChange=false) {
+    ResetFo3Pipboy();gPipAnchorReady=false;gPipSurface={};
     for (GpuObject& object : gQ210PlayerBody) {
         QActorDeleteSkin(object);
         if (Q2017ReleaseSharedGeometry(object)) continue;
@@ -10495,11 +10649,10 @@ void Q210DeletePlayerBody() {
     gQ211PlayerRigParts.clear();
     ++gQ211RigRevision;
     gQ211LastSkinnedSerial = ~0ull;
-    gQ219ArmLengthScale = Q219_ARM_BASE_SCALE;
-    gQ213TorsoYawReady = false;
+    if(!equipmentChange){gQ219ArmLengthScale = Q219_ARM_BASE_SCALE;gQ213TorsoYawReady = false;}
     gQ217FingerRig[0] = {};
     gQ217FingerRig[1] = {};
-    Q220ResetGrabState();
+    if(!equipmentChange)Q220ResetGrabState();
     gQ210PlayerBodyReady = false;
 }
 
@@ -11098,6 +11251,7 @@ bool Q230BuildNpcActor(const Fo3NpcActorQ230& source, Q230ActorVisual& visual) {
 bool Q210EnsurePlayerBody() {
     if (gQ210PlayerBodyReady) return true;
     if (gQ210PlayerBodyAttempted) return false;
+    if(!gQ210PlayerBody.empty())Q210DeletePlayerBody(true);
     gQ210PlayerBodyAttempted = true;
 
     std::vector<FalloutMeshIndexEntry> maleEntries;
@@ -11121,7 +11275,7 @@ bool Q210EnsurePlayerBody() {
     const std::string q216UpperBodyIk = q215FindMesh(
         "Characters\\_Male\\",
         "characters\\_male\\upperbody.nif");
-    const std::string q215Vault101 = q215FindMesh(
+    std::string q215Vault101 = q215FindMesh(
         "Armor\\VaultSuit\\M\\",
         "armor\\vaultsuit\\m\\outfit.nif");
     const std::string q215PipBoyGlove = q215FindMesh(
@@ -11134,6 +11288,16 @@ bool Q210EnsurePlayerBody() {
         "PipBoy3000\\",
         "pipboy3000\\pipboyarm.nif");
 
+    // Canonical equipped torso armour replaces the previous fixed Vault outfit.
+    // Unequipping through ITEMS exposes the authored body; no invented stack.
+    if(auto* player=GetFo3PlayerSession()) {
+        std::string equipped;
+        for(const auto& stack:player->player.Snapshot().inventory) {
+            auto item=player->player.Definitions().items.find(stack.formId);
+            if(stack.equipped&&item!=player->player.Definitions().items.end()&&item->second.kind==fo3player::ItemKind::Armour&&(item->second.bipedMask&4u))equipped=item->second.model;
+        }
+        if(!equipped.empty()||gPipEquipmentChanged)q215Vault101=equipped;
+    }
     // Put the hidden canonical body first: master-arm selection is intentionally
     // first-valid, preserving the exact Q21.14 authored arm lengths/pivots.
     for (const std::string* path :
@@ -11169,6 +11333,12 @@ bool Q210EnsurePlayerBody() {
 
     Fo3NifSkinProbe skeletonProbe;
     ProbeFo3NifSkin(skeletonPath, skeletonProbe);
+    std::vector<uint8_t> skeletonBytes;fo3anim::Skeleton pipSkeleton;
+    if(LoadFalloutMeshFile(skeletonPath,skeletonBytes)&&fo3anim::DecodeSkeleton(skeletonBytes,pipSkeleton)) {
+        const int bone=fo3anim::FindBone(pipSkeleton,"Bip01 L ForeTwist");
+        if(bone>=0){gPipBind=fo3pip::BindInRenderCoordinates(pipSkeleton.bindGlobal[bone],FO3_UNITS_PER_METRE,FLOOR_Y,SCENE_FORWARD);gPipAnchorReady=true;}
+    }
+
 
     size_t cpuShapes = 0u;
     size_t gpuShapes = 0u;
@@ -11198,6 +11368,10 @@ bool Q210EnsurePlayerBody() {
 
         size_t q215CapsRemovedForModel = 0u;
         for (CpuObject& part : parts) {
+            const bool pipboy=fo3appearance::SameModel(path,"PipBoy3000/PipBoyArm.NIF");
+            const bool screen=pipboy&&fo3pip::Screen(part.mesh);
+            if(screen){gPipSurface=fo3pip::Inspect(part.mesh);fo3pip::ScreenUvs(part.mesh,gPipSurface);
+                Q6H_LOGI("PIPBOY ASSET: model=%s screenBlock=%u screenName=%s texture=%s uv=(%.6f %.6f)-(%.6f %.6f) rigid=1 anchor=Bip01 L ForeTwist controllers=0",path.c_str(),part.mesh.shapeBlock,part.mesh.shapeName.c_str(),part.mesh.diffuseTexturePath.c_str(),gPipSurface.lo[0],gPipSurface.lo[1],gPipSurface.hi[0],gPipSurface.hi[1]);}
             q215CapsRemovedForModel +=
                 Q215SuppressPlayerGoreCaps(part.mesh);
             std::vector<float> q211BindExpanded;
@@ -11214,7 +11388,11 @@ bool Q210EnsurePlayerBody() {
                 continue;
             }
             gpu.q210PlayerBody = true;
-            gpu.q215IkReferenceOnly =
+            gpu.pipboy=pipboy;gpu.pipScreen=screen;
+            gpu.pipEffect=pipboy&&fo3appearance::SameModel(part.mesh.shapeName,"PipboyLightEffect:0");
+            if(pipboy){for(int i=0;i<3;++i)if(fo3appearance::SameModel(part.mesh.shapeName,i==0?"StatsGlow:0":i==1?"ItemsGlow:0":"DataGlow:0"))gpu.pipButton=i;}
+
+            gpu.q215IkReferenceOnly = !q215Vault101.empty() &&
                 Q210EndsWithInsensitive(
                     path, "characters\\_male\\upperbody.nif");
             triangles += static_cast<size_t>(gpu.vertexCount / 3);
@@ -11395,6 +11573,9 @@ void Q210RenderPlayerBody(bool alphaPass) {
     const auto drawStarted=fqopaque::Clock::now();
     for (const GpuObject& object : gQ210PlayerBody) {
         if (object.q215IkReferenceOnly) continue;
+        if(object.pipboy && (!gPipAnchorReady||!gPipSurface.valid))continue;
+        if(object.pipEffect)continue; // authored light cone requires engine animation; no fake world light
+        if(object.pipButton>=0&&(!Fo3PipboyFocus()||object.pipButton!=int(gPipMenu.tab)))continue;
         if (object.alphaBlend != alphaPass) continue;
         if (object.zBufferTestQ1200) glEnable(GL_DEPTH_TEST);
         else glDisable(GL_DEPTH_TEST);
@@ -11404,7 +11585,10 @@ void Q210RenderPlayerBody(bool alphaPass) {
             glBlendFunc(Q1150BlendFactor(object.alphaSourceBlend, true),
                         Q1150BlendFactor(object.alphaDestBlend, false));
         }
+        const auto screenQueries=fqgl::counters.queries;
+        const auto screenStarted=object.pipScreen?fqopaque::Clock::now():fqopaque::Clock::time_point{};
         DrawSceneObject(object);
+        if(object.pipScreen){gPipScreenDrawUs+=fqopaque::Micros(screenStarted);gPipScreenQueries+=fqgl::counters.queries-screenQueries;}
     }
 
     fqactor::player.draw+=fqopaque::Micros(drawStarted);
@@ -11433,7 +11617,7 @@ void PrepareFo3InteriorObjectLights(GpuObject& object, const QActorSkin* skin=nu
             float p[3]{(corner&1)?mx[0]:mn[0],(corner&2)?mx[1]:mn[1],(corner&4)?mx[2]:mn[2]};
             std::array<float,3> v{p[0],p[1],p[2]};
             if(skin) v=fqskin::Transform(skin->palette[bone].data(),p,false);
-            const float* root=object.q210PlayerBody ? gQ210PlayerRoot :
+            const float* root=object.q210PlayerBody ? (object.pipboy?gPipWorld.data():gQ210PlayerRoot) :
                 (object.q220LooseObject ? object.q220DynamicTransform : nullptr);
             if(root)v=fqskin::Transform(root,v.data(),false);
             for(int c=0;c<3;++c){lower[c]=std::min(lower[c],v[c]);upper[c]=std::max(upper[c],v[c]);}
@@ -11460,8 +11644,9 @@ void PrepareFo3InteriorSceneLights() {
 
 void QActorPrepareStereoFrame() {
     const auto started=fqopaque::Clock::now();
-    fqactor::player={};fqactor::npc={};
+    fqactor::npc={}; // Player pose has already been prepared before UI/world input.
     const auto setupStarted=fqopaque::Clock::now();
+    SynchronizeFo3PipboyEquipment();
     const bool ready=Q210EnsurePlayerBody();
     const double setupUs=fqopaque::Micros(setupStarted);
     if(ready) Q211UpdatePlayerRig();

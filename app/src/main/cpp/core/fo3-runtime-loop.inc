@@ -366,6 +366,7 @@ public:
 
     void Shutdown() {
         FlushFo3PlayerState();
+        fo3pipui::Shutdown();ResetFo3Pipboy();
         fo3notifyui::Shutdown();
         fo3lootui::Shutdown();
         fo3hudrenderer::Shutdown();
@@ -560,6 +561,9 @@ private:
         if (!CreateAction("activate_q160", "Activate", XR_ACTION_TYPE_BOOLEAN_INPUT,
                           1, &handPaths_[1], &activateAction_)) return false;
 
+        if (!CreateAction("pipboy_back", "Pip-Boy Back", XR_ACTION_TYPE_BOOLEAN_INPUT,
+                          1, &handPaths_[1], &pipBackAction_)) return false;
+
         // Q24.0 cleanup: controller triggers are gameplay input, not renderer
         // test controls. Keep one two-hand action for authored finger pose.
         if (!CreateAction("finger_trigger", "Finger Trigger",
@@ -589,6 +593,7 @@ private:
         XrPath rightStickX = XR_NULL_PATH;
         XrPath rightStickY = XR_NULL_PATH;
         XrPath rightA = XR_NULL_PATH;
+        XrPath rightB = XR_NULL_PATH;
         XrPath leftTriggerValue = XR_NULL_PATH;
         XrPath rightTriggerValue = XR_NULL_PATH;
         XrPath leftSqueezeValue = XR_NULL_PATH;
@@ -613,6 +618,7 @@ private:
             !Path("/user/hand/right/input/thumbstick/x", &rightStickX) ||
             !Path("/user/hand/right/input/thumbstick/y", &rightStickY) ||
             !Path("/user/hand/right/input/a/click", &rightA) ||
+            !Path("/user/hand/right/input/b/click", &rightB) ||
             !Path("/user/hand/left/input/trigger/value", &leftTriggerValue) ||
             !Path("/user/hand/right/input/trigger/value", &rightTriggerValue) ||
             !Path("/user/hand/left/input/squeeze/value", &leftSqueezeValue) ||
@@ -628,7 +634,7 @@ private:
             !Path("/user/hand/right/input/a/touch", &rightATouch) ||
             !Path("/user/hand/right/input/b/touch", &rightBTouch)) return false;
 
-        const std::array<XrActionSuggestedBinding, 23> bindings{{
+        const std::array<XrActionSuggestedBinding, 24> bindings{{
             {poseAction_, leftAim},
             {poseAction_, rightAim},
             {gripPoseAction_, leftGrip},
@@ -638,6 +644,7 @@ private:
             {turnXAction_, rightStickX},
             {lootScrollAction_, rightStickY},
             {activateAction_, rightA},
+            {pipBackAction_, rightB},
             {fingerTriggerAction_, leftTriggerValue},
             {fingerTriggerAction_, rightTriggerValue},
             {fingerGripAction_, leftSqueezeValue},
@@ -1117,7 +1124,7 @@ private:
                     FlushFo3PlayerState();
                 sessionState_ = changed->state;
                 SetFo3ShoulderInteractionFocused(sessionState_==XR_SESSION_STATE_FOCUSED);
-                if(sessionState_!=XR_SESSION_STATE_FOCUSED) fo3notify::Notifications().Clear();
+                if(sessionState_!=XR_SESSION_STATE_FOCUSED) {fo3notify::Notifications().Clear();ResetFo3Pipboy();}
                 fo3audio::Context(gCurrentCellFormId,sessionState_ == XR_SESSION_STATE_FOCUSED);
                 FQ_LOGI("OpenXR session state -> %d", static_cast<int>(sessionState_));
 
@@ -1177,8 +1184,9 @@ private:
         XrActionsSyncInfo sync{XR_TYPE_ACTIONS_SYNC_INFO};
         sync.countActiveActionSets = 1;
         sync.activeActionSets = &active;
-        if (!CheckXr(xrSyncActions(session_, &sync), "xrSyncActions")) return;
+        if (!CheckXr(xrSyncActions(session_, &sync), "xrSyncActions")) {ResetFo3Pipboy();activateDownQ1700_=false;return;}
 
+        pipLeftGripTracked_=pipLeftAimTracked_=false;
         const float rawMoveX = ReadFloatAction(moveXAction_, handPaths_[0]);
         const float rawMoveY = ReadFloatAction(moveYAction_, handPaths_[0]);
         RadialMoveDeadzoneQ715(rawMoveX, rawMoveY, moveX_, moveY_);
@@ -1206,6 +1214,7 @@ private:
             ReadBooleanActionQ1450(
                 fingerThumbContactAction_, handPaths_[1]);
         activateDownQ1700_ = ReadBoolActionQ1699(activateAction_, handPaths_[1]);
+        pipBackDown_=ReadBoolActionQ1699(pipBackAction_,handPaths_[1]);
 
         const XrSpaceLocationFlags required = XR_SPACE_LOCATION_POSITION_VALID_BIT |
                                               XR_SPACE_LOCATION_ORIENTATION_VALID_BIT;
@@ -1224,6 +1233,7 @@ private:
                     handPoseValid_[hand] =
                         (location.locationFlags & required) == required;
                     if (handPoseValid_[hand]) handLocalPoses_[hand] = location.pose;
+                    if(hand==0)pipLeftAimTracked_=(location.locationFlags & (XR_SPACE_LOCATION_POSITION_TRACKED_BIT|XR_SPACE_LOCATION_ORIENTATION_TRACKED_BIT))==(XR_SPACE_LOCATION_POSITION_TRACKED_BIT|XR_SPACE_LOCATION_ORIENTATION_TRACKED_BIT);
                 }
             }
 
@@ -1255,7 +1265,7 @@ private:
         }
         lastFrameTime_ = frameTime;
 
-        if (GetFo3LootPanel().reference) {
+        if (Fo3PipboyFocus() || gPipActivation.phase==fo3pip::Phase::Candidate || GetFo3LootPanel().reference) {
             // Releasing the list while the stick is held cannot cause an accidental turn.
             snapTurnLatched_ = std::fabs(turnX_) >= .30f;
         } else if (!snapTurnLatched_ && std::fabs(turnX_) > 0.65f) {
@@ -1358,7 +1368,7 @@ private:
         const bool active = QueryFo3Interaction(
             hand.position.x,hand.position.y,hand.position.z,
             -handMatrix.m[8],-handMatrix.m[9],-handMatrix.m[10],target);
-        UpdateFo3LootSelection(target,lootScrollY_,lootTime);
+        UpdateFo3LootSelection(target,Fo3PipboyFocus()?0:lootScrollY_,lootTime);
         if (active) {
             if (!target.pickup && !target.container) {
                 doorAimYawQ1800_ = target.door.rz;
@@ -1427,6 +1437,7 @@ private:
         const XrCompositionLayerBaseHeader* layers[1]{};
         uint32_t layerCount = 0;
 
+        bool pipPoseUpdated=false;
         if (frameState.shouldRender) {
             std::array<XrView, 2> views{XrView{XR_TYPE_VIEW}, XrView{XR_TYPE_VIEW}};
             XrViewState viewState{XR_TYPE_VIEW_STATE};
@@ -1460,7 +1471,6 @@ private:
                         fo3tod::gRuntime.climate.sunsetBegin,
                         fo3tod::gRuntime.climate.sunsetEnd);
                 }
-                UpdateDoorAimQ1700(static_cast<double>(frameState.predictedDisplayTime)*1e-9);
                 if (!IsFo3LoadingVisible()) {
                     UpdatePlayer(views[0], frameState.predictedDisplayTime);
                 } else {
@@ -1507,16 +1517,29 @@ private:
                     fingerTriggerValue_[1], fingerGripValue_[1],
                     fingerTriggerTouched_[1], fingerThumbTouched_[1]);
 
+                pipPoseUpdated=true;
+                ++gStereoFrame;
+                fqactor::player={};
+                SynchronizeFo3PipboyEquipment();
+                if(!IsFo3LoadingVisible() && Q210EnsurePlayerBody())Q211UpdatePlayerRig();
+                const auto pipHead=MatrixFromPose(ToVirtualPose(loadingHead));
+                UpdateFo3Pipboy(gStereoFrame,static_cast<double>(frameState.predictedDisplayTime)*1e-9,pipHead.m,
+                    gSceneReady&&!IsFo3LoadingVisible()&&sessionState_==XR_SESSION_STATE_FOCUSED&&q210RightValid
+                    &&(gripHandPoseValid_[0]?pipLeftGripTracked_:pipLeftAimTracked_)
+                    &&(viewState.viewStateFlags&(XR_VIEW_STATE_POSITION_TRACKED_BIT|XR_VIEW_STATE_ORIENTATION_TRACKED_BIT))==(XR_VIEW_STATE_POSITION_TRACKED_BIT|XR_VIEW_STATE_ORIENTATION_TRACKED_BIT),
+                    turnX_,lootScrollY_,activateDownQ1700_,pipBackDown_);
+                if(Fo3PipboyFocus())snapTurnLatched_=std::fabs(turnX_)>=.30f;
                 // Q20.13: loading freezes player motion, not world preparation.
                 // Keep CELL/terrain/LOD streaming alive beneath the overlay.
                 const XrPosef q1890VirtualHead = q210VirtualHead;
                 UpdateFo3ExteriorStreamingQ1890(q1890VirtualHead.position.x,
                                                 q1890VirtualHead.position.z);
+                if(IsFo3LoadingVisible())ResetFo3Pipboy();
                 // Q24.0 local DOOR state advances once per gameplay frame, not per eye.
                 UpdateFo3InteriorDoorsQ2400();
                 UpdateDoorAimQ1700(static_cast<double>(frameState.predictedDisplayTime)*1e-9);
                 ApplyAuthoredDoorFacingQ1810(views[0]);
-                if (activateDownQ1700_ && !activateLatched_) {
+                if (gPipInput.WorldA(activateDownQ1700_) && !activateLatched_) {
                     activateLatched_ = true;
                     if (handPoseValid_[1]) {
                         const XrPosef handQ1700 = ToVirtualPose(handLocalPoses_[1]);
@@ -1537,7 +1560,6 @@ private:
                 const auto lootViewer=ToVirtualPose(loadingHead);
                 const auto& lootPanel=GetFo3LootPanel();
                 lootPanelYaw_=std::atan2(lootViewer.position.x-lootPanel.anchor[0],lootViewer.position.z-lootPanel.anchor[2]);
-                ++gStereoFrame;
                 for (uint32_t eye = 0; eye < 2; ++eye) {
                     const auto pose = ToVirtualPose(views[eye].pose);
                     const auto vp = Multiply(ProjectionFromFov(views[eye].fov, 0.04f,
@@ -1568,6 +1590,10 @@ private:
                 gStereoReflectionEye[2]=centrePose.position.z;
                 gStereoMvpReady = true;
                 QActorPrepareStereoFrame();
+                if(auto* player=GetFo3PlayerSession())fo3pipui::Render(gPipMenu,player->player,Fo3PipboyFocus());
+                if(gStereoFrame%180==0){FQ_LOGI("PIPBOY UI: tab=%d page=%d rows=%zu revision=%llu redraws=%u",int(gPipMenu.tab),gPipMenu.page,gPipMenu.rows.size(),(unsigned long long)gPipMenu.revision,fo3pipui::State().redraws);
+                    FQ_LOGI("PIPBOY PERF: PipBoyUpdateUs=%.1f PipBoyUiRenderUs=%.1f PipBoyScreenDrawUs=%.1f glDriverQueries=%llu (guarded UI/screen paths)",gPipUpdateUs,fo3pipui::State().renderUs,gPipScreenDrawUs,(unsigned long long)(fo3pipui::State().renderQueries+gPipScreenQueries));}
+                gPipScreenDrawUs=0;gPipScreenQueries=0;
                 notificationHead_=ToVirtualPose(loadingHead);
                 fo3notifyui::Prepare(static_cast<double>(frameState.predictedDisplayTime)*1e-9,
                     gSceneReady && !IsFo3LoadingVisible() && sessionState_==XR_SESSION_STATE_FOCUSED,gSceneReady);
@@ -1604,6 +1630,7 @@ private:
             }
         }
 
+        if(!pipPoseUpdated){ResetFo3Pipboy();}
         XrFrameEndInfo endInfo{XR_TYPE_FRAME_END_INFO};
         endInfo.displayTime = frameState.predictedDisplayTime;
         endInfo.environmentBlendMode = blendMode_;
@@ -1864,6 +1891,8 @@ private:
     XrAction moveYAction_{XR_NULL_HANDLE};
     XrAction turnXAction_{XR_NULL_HANDLE};
     XrAction activateAction_{XR_NULL_HANDLE};
+    XrAction pipBackAction_{XR_NULL_HANDLE};
+    bool pipBackDown_=false,pipLeftGripTracked_=false,pipLeftAimTracked_=false;
     XrAction lootScrollAction_{XR_NULL_HANDLE};
     float lootScrollY_=0;
     float lootPanelYaw_=0;
