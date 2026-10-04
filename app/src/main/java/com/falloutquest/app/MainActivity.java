@@ -77,12 +77,14 @@ public final class MainActivity extends Activity {
             "Internal shared storage/FalloutQuest/Fallout3/\n" +
             "Internal shared storage/FalloutQuest/FalloutNV/\n\n";
         if (!storageAllowed()) {
+            android.util.Log.i("FalloutQuest", "SETUP waiting for shared storage permission");
             status.setText(instructions + "Allow game folder access, then check files.");
             return;
         }
         for (GameInstall.Game game : GameInstall.Game.values()) new File(root, game.folder).mkdirs();
         File data = GameInstall.findData(new File(root, "Fallout3"), GameInstall.Game.FALLOUT3);
         String missing = GameInstall.missing(data, GameInstall.Game.FALLOUT3);
+        android.util.Log.i("FalloutQuest", "SETUP data=" + data + " validation=" + missing);
         File nv = GameInstall.findData(new File(root, "FalloutNV"), GameInstall.Game.NEW_VEGAS);
         status.setText(instructions + (missing.isEmpty() ? "Fallout 3 ready: " + data : missing) +
             "\n\nNew Vegas: " + (nv == null ? "folder reserved" : "install detected") +
@@ -90,9 +92,12 @@ public final class MainActivity extends Activity {
         if (missing.isEmpty()) {
             launching = true;
             Intent intent = new Intent(this, FalloutNativeActivity.class);
+            intent.setAction(Intent.ACTION_MAIN);
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
             intent.putExtra("dataRoot", data.getAbsolutePath());
+            android.util.Log.i("FalloutQuest", "SETUP launching immersive activity");
             startActivity(intent);
-            finish();
+            finishAndRemoveTask();
         }
     }
 }
