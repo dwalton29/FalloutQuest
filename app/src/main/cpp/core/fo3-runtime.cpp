@@ -3600,11 +3600,13 @@ void Q2401Identity(float out[16]) {
 bool Q2401ModelDeltaToScene(const GpuObject& object,
                             const fo3anim::Matrix& modelDelta,
                             float out[16]) {
-    float inversePlacement[16]{},placedDelta[16]{};
-    if(!Q2016InvertAffine(object.q2016PlacementMatrix,inversePlacement))
-        return false;
-    Q2016MulMat4(object.q2016PlacementMatrix,modelDelta.data(),placedDelta);
-    Q2016MulMat4(placedDelta,inversePlacement,out);
+    fo3anim::Matrix sceneDelta{};
+    if(!fo3dooranim::ModelDeltaToScene(
+            object.q2016PlacementMatrix,
+            FO3_UNITS_PER_METRE,
+            modelDelta,
+            sceneDelta)) return false;
+    std::copy(sceneDelta.begin(),sceneDelta.end(),out);
     return true;
 }
 bool Q2401ApplyNifDoorVisual(uint32_t refFormId,

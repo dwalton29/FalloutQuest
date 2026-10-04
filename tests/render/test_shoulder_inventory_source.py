@@ -17,6 +17,15 @@ class ShoulderIntegration(unittest.TestCase):
         self.assertLess(f.index('CollectFo3WorldReference(ref)'),f.index('const uint32_t releasedRef'))
         self.assertIn('state.previousGrip=grip;return;',f)
         self.assertLess(f.index('const bool resident='),f.index('if (!handValid)'))
+    def test_prompt_renderer_has_no_driver_snapshot(self):
+        prompt=(ROOT/'app/src/main/cpp/ui/interaction/fo3-interaction-hud-renderer.h').read_text()
+        render=prompt[prompt.index('inline void Render('):prompt.index('inline void Shutdown()')]
+        self.assertIn('GlStateGuard guard;',render)
+        self.assertIn('using GlStateGuard = CachedStateGuard;',prompt)
+        self.assertNotIn('glGetIntegerv(',prompt)
+        self.assertNotIn('glGetBooleanv(',prompt)
+        self.assertNotIn('glIsEnabled(',prompt)
+
     def test_stereo_render_is_read_only(self):
         renderer=(ROOT/'app/src/main/cpp/ui/interaction/fo3-item-notification-renderer.h').read_text()
         render=renderer[renderer.index('inline void Render('):]

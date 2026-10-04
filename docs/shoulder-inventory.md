@@ -15,15 +15,19 @@ through `gQ210PlayerRoot`, which follows `gQ213TorsoYaw` (existing torso deadban
 and locomotion rotation), rather than raw HMD yaw. There is no average of mesh
 partitions and no guessed shoulder fallback: missing master disables stowing.
 
-The VR trigger is an ellipsoid centred 9 cm rearward of that shoulder. Enter
-radii are right/up/rear **18/20/18 cm**; the exit shell adds 3 cm per axis. A
-separate rear plane rejects palms more than 2.5 cm in front of the shoulder,
-even inside the shell. These dimensions are VR choices in the runtime's metre
-coordinates, not authored game geometry. Actual comfort must be tested on Quest.
-Arm after **80 ms** continuously inside with grip above the existing .25 release
-threshold. Release at or below .25 commits only an armed, currently tracked,
-right-hand-held loose REFR. Exiting, tracking loss, focus loss, ineligibility,
-reference change and scene reset disarm it. No consume-on-entry behaviour.
+The first headset implementation used a shoulder-centred 18/20/18 cm ellipsoid
+plus an 80 ms dwell. Real use showed that volume was too precise: a natural hand
+over the shoulder can sit 25-40 cm from the upper-arm pivot. The revised trigger
+is a broad rounded backpack-mouth volume centred slightly outward/up and 17 cm
+rearward, with approximate right/up/rear radii **27/30/28 cm** and a 5 cm exit
+shell. A rear plane still rejects ordinary chest/face motion. These dimensions
+remain VR interaction policy rather than authored game geometry.
+
+Because a REFR is already physically latched by the right-hand grab, entering
+the valid rear shoulder volume while grip is held arms immediately; releasing
+at or below the existing .25 threshold commits. There is no consume-on-entry.
+Exiting, tracking loss, focus loss, ineligibility, reference change and scene
+reset still disarm the gesture.
 
 ## Original UI evidence
 

@@ -6,7 +6,11 @@
 namespace fo3shoulder {
 using Point = std::array<float,3>;
 // VR adaptation in metres: local axes are right/up/rear in the inferred torso.
-// A small exit shell prevents edge chatter; the rear plane excludes the face.
+// The first headset pass used a small shoulder-centred ellipsoid and proved too
+// brittle in real use: a naturally raised hand often sits 25-40 cm from the
+// upper-arm pivot. Treat this as a forgiving backpack-mouth volume behind the
+// shoulder instead. Release still commits only a currently held eligible REFR,
+// so a generous volume is safer and more natural than precision targeting.
 struct Zone {
     Point shoulder{}, right{1,0,0}, rear{0,0,1};
     bool ready=false;
@@ -18,9 +22,15 @@ struct Zone {
         if (!ready) return false;
         for(float v:hand) if(!std::isfinite(v)) return false;
         const auto p=Coordinates(hand);
-        const float shell=entered ? .03f : 0;
-        const float x=p[0]/(.18f+shell),y=p[1]/(.20f+shell),z=(p[2]-.09f)/(.18f+shell);
-        return p[2]>=-.025f && x*x+y*y+z*z<=1;
+        const float shell=entered ? .05f : 0.0f;
+        // Broad rounded volume centred behind/slightly above the authored
+        // shoulder. The rear plane is the important false-positive guard:
+        // ordinary chest/face movement can never inventory an item.
+        const float x=(p[0]-.04f)/(.27f+shell);
+        const float y=(p[1]-.03f)/(.30f+shell);
+        const float z=(p[2]-.17f)/(.28f+shell);
+        return p[2]>=0.015f-shell*0.35f &&
+               x*x+y*y+z*z<=1.0f;
     }
 };
 struct Gesture {
@@ -37,9 +47,10 @@ struct Gesture {
         const bool next=zone.Contains(palm,inside);
         if(!next) {inside=armed=false;return false;}
         if(!inside) {inside=true;enteredAt=now;}
-        if(grip>.25f && now-enteredAt>=.08) armed=true;
-        // Release commits only an already armed gesture. Passing through with
-        // an open grip cannot arm it; exiting/untracked clears all intent.
+        // The object is already in a latched physical grab, so dwelling for
+        // 80 ms adds friction without adding useful intent. One tracked frame
+        // inside while grip is still held is enough to arm; release commits.
+        if(grip>.25f) armed=true;
         return grip<=.25f && armed;
     }
 };

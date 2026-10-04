@@ -113,4 +113,34 @@ inline const fo3anim::Matrix* CollisionDelta(const Asset& asset,
     return ShapeDelta(asset, pose, asset.collisionBone);
 }
 
+// q2016 placement matrices are affine scene placements with metre translations,
+// but their 3x3 basis is intentionally unitless because ordinary scene vertices
+// have already been converted from Fallout units to metres before rendering.
+// Embedded NIF controller deltas still contain translations/pivots in Fallout
+// game units. Build the true model(game-unit)->scene(metre) affine before
+// conjugating the authored node delta or a 52-unit hinge becomes ~52 metres.
+inline bool ModelDeltaToScene(const float placement[16],
+                              float unitsPerMetre,
+                              const fo3anim::Matrix& modelDelta,
+                              fo3anim::Matrix& out) {
+    if (!placement || !std::isfinite(unitsPerMetre) ||
+        unitsPerMetre <= 1.0e-6f) return false;
+
+    fo3anim::Matrix modelToScene{};
+    std::copy(placement, placement + 16, modelToScene.begin());
+    for (int col = 0; col < 3; ++col)
+        for (int row = 0; row < 3; ++row)
+            modelToScene[static_cast<size_t>(col) * 4u +
+                         static_cast<size_t>(row)] /= unitsPerMetre;
+
+    fo3anim::Matrix inverse{};
+    if (!fo3anim::Inverse(modelToScene, inverse)) return false;
+    out = fo3anim::Multiply(
+        fo3anim::Multiply(modelToScene, modelDelta),
+        inverse);
+    for (float value : out)
+        if (!std::isfinite(value)) return false;
+    return true;
+}
+
 } // namespace fo3dooranim

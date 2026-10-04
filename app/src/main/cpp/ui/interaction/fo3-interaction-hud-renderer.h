@@ -4,6 +4,7 @@
 // geometry are owned by fo3font; presentation remains HUDMainMenu/text_box.xml.
 #include "fo3-interaction-hud-assets.h"
 #include "fo3-font-diagnostics.h"
+#include "fo3-hud-cached-state.h"
 
 #include <GLES3/gl3.h>
 #include <android/log.h>
@@ -45,68 +46,10 @@ inline HudState& State() {
     return state;
 }
 
-struct GlStateGuard {
-    GLint program = 0;
-    GLint vao = 0;
-    GLint arrayBuffer = 0;
-    GLint activeTexture = GL_TEXTURE0;
-    GLint texture0 = 0;
-    GLint blendSrcRgb = GL_ONE;
-    GLint blendDstRgb = GL_ZERO;
-    GLint blendSrcAlpha = GL_ONE;
-    GLint blendDstAlpha = GL_ZERO;
-    GLint blendEquationRgb = GL_FUNC_ADD;
-    GLint blendEquationAlpha = GL_FUNC_ADD;
-    GLint depthFunc = GL_LESS;
-    GLint unpackAlignment = 4;
-    GLboolean depthEnabled = GL_FALSE;
-    GLboolean blendEnabled = GL_FALSE;
-    GLboolean depthMask = GL_TRUE;
-
-    GlStateGuard() {
-        glGetIntegerv(GL_CURRENT_PROGRAM, &program);
-        glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &vao);
-        glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &arrayBuffer);
-        glGetIntegerv(GL_ACTIVE_TEXTURE, &activeTexture);
-        glGetIntegerv(GL_BLEND_SRC_RGB, &blendSrcRgb);
-        glGetIntegerv(GL_BLEND_DST_RGB, &blendDstRgb);
-        glGetIntegerv(GL_BLEND_SRC_ALPHA, &blendSrcAlpha);
-        glGetIntegerv(GL_BLEND_DST_ALPHA, &blendDstAlpha);
-        glGetIntegerv(GL_BLEND_EQUATION_RGB, &blendEquationRgb);
-        glGetIntegerv(GL_BLEND_EQUATION_ALPHA, &blendEquationAlpha);
-        glGetIntegerv(GL_DEPTH_FUNC, &depthFunc);
-        glGetIntegerv(GL_UNPACK_ALIGNMENT, &unpackAlignment);
-        glGetBooleanv(GL_DEPTH_WRITEMASK, &depthMask);
-        depthEnabled = glIsEnabled(GL_DEPTH_TEST);
-        blendEnabled = glIsEnabled(GL_BLEND);
-
-        glActiveTexture(GL_TEXTURE0);
-        glGetIntegerv(GL_TEXTURE_BINDING_2D, &texture0);
-        glActiveTexture(static_cast<GLenum>(activeTexture));
-    }
-
-    ~GlStateGuard() {
-        glUseProgram(static_cast<GLuint>(program));
-        glBindVertexArray(static_cast<GLuint>(vao));
-        glBindBuffer(GL_ARRAY_BUFFER, static_cast<GLuint>(arrayBuffer));
-
-        glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(texture0));
-        glActiveTexture(static_cast<GLenum>(activeTexture));
-
-        glBlendFuncSeparate(static_cast<GLenum>(blendSrcRgb),
-                            static_cast<GLenum>(blendDstRgb),
-                            static_cast<GLenum>(blendSrcAlpha),
-                            static_cast<GLenum>(blendDstAlpha));
-        glBlendEquationSeparate(static_cast<GLenum>(blendEquationRgb),
-                                static_cast<GLenum>(blendEquationAlpha));
-        glDepthFunc(static_cast<GLenum>(depthFunc));
-        glDepthMask(depthMask);
-        glPixelStorei(GL_UNPACK_ALIGNMENT, unpackAlignment);
-        if (depthEnabled) glEnable(GL_DEPTH_TEST); else glDisable(GL_DEPTH_TEST);
-        if (blendEnabled) glEnable(GL_BLEND); else glDisable(GL_BLEND);
-    }
-};
+// The prompt is drawn after the world and before the post/composite path.
+// Restore only renderer-owned cached state; never synchronously query Adreno
+// merely because an Open/Close/Take prompt became visible.
+using GlStateGuard = CachedStateGuard;
 
 inline bool EnsureResources() {
     HudState& s = State();

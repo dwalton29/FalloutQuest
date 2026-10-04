@@ -68,6 +68,30 @@ int main(int argc,char** argv) {
         const auto pointAfter=Point(*delta,{108.00009155f,52.0f,0.07354069f});
         assert(std::fabs(pointAfter[0]-108.00009155f)>50.0f);
         assert(std::fabs(pointAfter[1]-52.0f)>50.0f);
+
+        // Runtime scene vertices are already metres, while controller pivots
+        // remain Fallout game units. Verify conjugation performs the 70u/m
+        // conversion instead of turning this ~0.75m hinge into ~52 metres.
+        const float placement[16]{
+            1,0,0,0,
+            0,0,-1,0,
+            0,1,0,0,
+            2,1,-3,1
+        };
+        fo3anim::Matrix sceneDelta{};
+        assert(fo3dooranim::ModelDeltaToScene(
+            placement,70.0f,*delta,sceneDelta));
+        const std::array<float,3> scenePivot{
+            2.0f+8.00009155f/70.0f,
+            1.0f+0.07354069f/70.0f,
+            -3.0f-52.0f/70.0f
+        };
+        const auto scenePivotAfter=Point(sceneDelta,scenePivot);
+        for(int axis=0;axis<3;++axis)
+            assert(std::fabs(scenePivotAfter[axis]-scenePivot[axis])<1e-3f);
+        assert(std::fabs(sceneDelta[12])<3.0f);
+        assert(std::fabs(sceneDelta[13])<3.0f);
+        assert(std::fabs(sceneDelta[14])<3.0f);
     }
 
     std::vector<int> mapping;std::vector<Clip> decoded;Skeleton hierarchy;
