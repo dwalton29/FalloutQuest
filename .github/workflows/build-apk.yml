@@ -50,6 +50,11 @@ jobs:
       - name: Verify scene render dispatch
         run: python3 tests/render/test_render_dispatch.py
 
+      - name: Verify stereo visibility and reflection reuse
+        run: |
+          g++ -std=c++17 -Wall -Wextra -Werror tests/render/render_policy_tests.cpp -o /tmp/render-policy-tests
+          /tmp/render-policy-tests
+
       - name: Set up Java 17
         uses: actions/setup-java@v4
         with:

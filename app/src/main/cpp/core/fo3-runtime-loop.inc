@@ -312,6 +312,9 @@ GLuint CreateProgram() {
 
 struct EyeSwapchain {
     XrSwapchain handle{XR_NULL_HANDLE};
+    XrSwapchain depthHandle{XR_NULL_HANDLE};
+    std::vector<XrSwapchainImageOpenGLESKHR> depthImages;
+    XrCompositionLayerDepthInfoKHR depthInfo{XR_TYPE_COMPOSITION_LAYER_DEPTH_INFO_KHR};
     int32_t width{0};
     int32_t height{0};
     std::vector<XrSwapchainImageOpenGLESKHR> images;
@@ -374,6 +377,7 @@ public:
         if (vbo_) glDeleteBuffers(1, &vbo_);
         if (vao_) glDeleteVertexArrays(1, &vao_);
         if (framebuffer_) glDeleteFramebuffers(1, &framebuffer_);
+        if (depthFramebuffer_) glDeleteFramebuffers(1, &depthFramebuffer_);
 
         for (XrSpace space : handSpaces_) {
             if (space != XR_NULL_HANDLE) xrDestroySpace(space);
@@ -382,6 +386,7 @@ public:
             if (space != XR_NULL_HANDLE) xrDestroySpace(space);
         }
         for (auto& eye : eyes_) {
+            if (eye.depthHandle != XR_NULL_HANDLE) xrDestroySwapchain(eye.depthHandle);
             if (eye.handle != XR_NULL_HANDLE) xrDestroySwapchain(eye.handle);
         }
         if (localSpace_ != XR_NULL_HANDLE) xrDestroySpace(localSpace_);
@@ -413,10 +418,24 @@ private:
     }
 
     bool CreateInstance() {
-        const char* extensions[] = {
+        std::vector<const char*> extensions{
             XR_KHR_ANDROID_CREATE_INSTANCE_EXTENSION_NAME,
             XR_KHR_OPENGL_ES_ENABLE_EXTENSION_NAME,
         };
+
+        uint32_t extensionCount = 0;
+        if (!CheckXr(xrEnumerateInstanceExtensionProperties(nullptr, 0, &extensionCount, nullptr),
+                     "xrEnumerateInstanceExtensionProperties(count)")) return false;
+        std::vector<XrExtensionProperties> available(extensionCount, {XR_TYPE_EXTENSION_PROPERTIES});
+        if (!CheckXr(xrEnumerateInstanceExtensionProperties(nullptr, extensionCount, &extensionCount, available.data()),
+                     "xrEnumerateInstanceExtensionProperties")) return false;
+        for (const auto& extension : available) {
+            if (std::strcmp(extension.extensionName, XR_KHR_COMPOSITION_LAYER_DEPTH_EXTENSION_NAME) == 0) {
+                depthSubmissionEnabled_ = true;
+                extensions.push_back(XR_KHR_COMPOSITION_LAYER_DEPTH_EXTENSION_NAME);
+            }
+        }
+        FQ_LOGI("XR compositor depth extension enabled=%d", depthSubmissionEnabled_);
 
         XrInstanceCreateInfoAndroidKHR androidInfo{XR_TYPE_INSTANCE_CREATE_INFO_ANDROID_KHR};
         androidInfo.applicationVM = app_->activity->vm;
@@ -429,8 +448,8 @@ private:
         std::strncpy(info.applicationInfo.engineName, "FalloutQuestNative", XR_MAX_ENGINE_NAME_SIZE - 1);
         info.applicationInfo.engineVersion = 1;
         info.applicationInfo.apiVersion = XR_MAKE_VERSION(1, 0, 0);
-        info.enabledExtensionCount = 2;
-        info.enabledExtensionNames = extensions;
+        info.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
+        info.enabledExtensionNames = extensions.data();
 
         if (!CheckXr(xrCreateInstance(&info, &instance_), "xrCreateInstance")) return false;
 
@@ -480,6 +499,19 @@ private:
         if (eglSurface_ == EGL_NO_SURFACE) return false;
         if (!eglMakeCurrent(eglDisplay_, eglSurface_, eglSurface_, eglContext_)) return false;
 
+        GLint extensionTotal = 0;
+        glGetIntegerv(GL_NUM_EXTENSIONS, &extensionTotal);
+        bool multiview2 = false, multiviewMsaa = false;
+        for (GLint i=0; i<extensionTotal; ++i) {
+            const auto* extension = reinterpret_cast<const char*>(glGetStringi(GL_EXTENSIONS, i));
+            if (!extension) continue;
+            multiview2 |= std::strcmp(extension, "GL_OVR_multiview2") == 0;
+            multiviewMsaa |= std::strcmp(extension, "GL_OVR_multiview_multisampled_render_to_texture") == 0;
+        }
+        const bool multiviewEntry = eglGetProcAddress("glFramebufferTextureMultiviewOVR") != nullptr;
+        const bool multiviewMsaaEntry = eglGetProcAddress("glFramebufferTextureMultisampleMultiviewOVR") != nullptr;
+        FQ_LOGI("Quest stereo capabilities: OVR_multiview2=%d entry=%d multiviewMSAA=%d entry=%d active=sequential-cached-batches",
+                multiview2, multiviewEntry, multiviewMsaa, multiviewMsaaEntry);
         FQ_LOGI("OpenGL ES renderer: %s", reinterpret_cast<const char*>(glGetString(GL_RENDERER)));
         return true;
     }
@@ -718,6 +750,10 @@ private:
                 static_cast<unsigned long long>(chosenFormat),
                 q204cHaveRgba8 ? 1 : 0, q204cHaveSrgb8 ? 1 : 0);
 
+        depthSubmissionEnabled_ = depthSubmissionEnabled_ &&
+            std::find(formats.begin(), formats.end(), int64_t{GL_DEPTH_COMPONENT24}) != formats.end();
+        FQ_LOGI("XR compositor depth format DEPTH_COMPONENT24 available=%d", depthSubmissionEnabled_);
+
         for (uint32_t i = 0; i < 2; ++i) {
             EyeSwapchain& eye = eyes_[i];
             eye.width = static_cast<int32_t>(configViews[i].recommendedImageRectWidth);
@@ -743,6 +779,32 @@ private:
                             eye.handle, imageCount, &imageCount,
                             reinterpret_cast<XrSwapchainImageBaseHeader*>(eye.images.data())),
                          "xrEnumerateSwapchainImages")) return false;
+            if (depthSubmissionEnabled_) {
+                const bool createdDepth = [&]() {
+                info.usageFlags = XR_SWAPCHAIN_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
+                                  XR_SWAPCHAIN_USAGE_TRANSFER_DST_BIT;
+                info.format = GL_DEPTH_COMPONENT24;
+                if (!CheckXr(xrCreateSwapchain(session_, &info, &eye.depthHandle), "xrCreateSwapchain(depth)")) return false;
+                uint32_t depthCount = 0;
+                if (!CheckXr(xrEnumerateSwapchainImages(eye.depthHandle, 0, &depthCount, nullptr),
+                             "xrEnumerateSwapchainImages(depth count)")) return false;
+                eye.depthImages.resize(depthCount, {XR_TYPE_SWAPCHAIN_IMAGE_OPENGL_ES_KHR});
+                if (!CheckXr(xrEnumerateSwapchainImages(eye.depthHandle, depthCount, &depthCount,
+                    reinterpret_cast<XrSwapchainImageBaseHeader*>(eye.depthImages.data())),
+                    "xrEnumerateSwapchainImages(depth)")) return false;
+                    return true;
+                }();
+                if (!createdDepth) {
+                    FQ_LOGE("XR depth swapchain setup failed; using color-only composition");
+                    depthSubmissionEnabled_ = false;
+                    for (auto& depthEye : eyes_) {
+                        if (depthEye.depthHandle != XR_NULL_HANDLE) xrDestroySwapchain(depthEye.depthHandle);
+                        depthEye.depthHandle = XR_NULL_HANDLE;
+                        depthEye.depthImages.clear();
+                    }
+                }
+            }
+
         }
 
         uint32_t blendCount = 0;
@@ -1474,15 +1536,49 @@ private:
                 const auto lootViewer=ToVirtualPose(loadingHead);
                 const auto& lootPanel=GetFo3LootPanel();
                 lootPanelYaw_=std::atan2(lootViewer.position.x-lootPanel.anchor[0],lootViewer.position.z-lootPanel.anchor[2]);
+                ++gStereoFrame;
                 for (uint32_t eye = 0; eye < 2; ++eye) {
-                    RenderEye(eye, views[eye], projectionViews[eye]);
+                    const auto pose = ToVirtualPose(views[eye].pose);
+                    const auto vp = Multiply(ProjectionFromFov(views[eye].fov, 0.04f,
+                        125000.0f / FO3_UNITS_PER_METRE_Q715), ViewFromPose(pose));
+                    std::copy(vp.m, vp.m+16, gStereoMvp[eye]);
+                }
+                auto centrePose = ToVirtualPose(views[0].pose);
+                const auto rightPose = ToVirtualPose(views[1].pose);
+                centrePose.position = {(centrePose.position.x+rightPose.position.x)*0.5f,
+                    (centrePose.position.y+rightPose.position.y)*0.5f,
+                    (centrePose.position.z+rightPose.position.z)*0.5f};
+                // Shared mirror uses the midpoint camera and the union of eye FOVs.
+                // Keep a small angular border for distortion at the water edge.
+                XrFovf mirrorFov{std::min(views[0].fov.angleLeft,views[1].fov.angleLeft)-0.02f,
+                    std::max(views[0].fov.angleRight,views[1].fov.angleRight)+0.02f,
+                    std::max(views[0].fov.angleUp,views[1].fov.angleUp)+0.02f,
+                    std::min(views[0].fov.angleDown,views[1].fov.angleDown)-0.02f};
+                const auto mirrorProjection = ProjectionFromFov(mirrorFov,0.04f,
+                    125000.0f / FO3_UNITS_PER_METRE_Q715);
+                auto mirrorCamera = ViewFromPose(centrePose);
+                const auto mirrorVp = Multiply(mirrorProjection,mirrorCamera);
+                std::copy(mirrorVp.m,mirrorVp.m+16,gStereoReflectionMvp);
+                mirrorCamera.m[12]=mirrorCamera.m[13]=mirrorCamera.m[14]=0;
+                const auto mirrorSky = Multiply(mirrorProjection,mirrorCamera);
+                std::copy(mirrorSky.m,mirrorSky.m+16,gStereoReflectionSkyMvp);
+                gStereoReflectionEye[0]=centrePose.position.x;
+                gStereoReflectionEye[1]=centrePose.position.y;
+                gStereoReflectionEye[2]=centrePose.position.z;
+                gStereoMvpReady = true;
+                bool rendered = true;
+                for (uint32_t eye = 0; eye < 2; ++eye) {
+                    rendered = RenderEye(eye, views[eye], projectionViews[eye]) && rendered;
+                }
+                if (!projectionViews[0].next || !projectionViews[1].next) {
+                    projectionViews[0].next = projectionViews[1].next = nullptr;
                 }
 
                 projectionLayer.space = localSpace_;
                 projectionLayer.viewCount = 2;
                 projectionLayer.views = projectionViews.data();
                 layers[0] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&projectionLayer);
-                layerCount = 1;
+                layerCount = rendered ? 1 : 0;
 
                 if ((frameCounter_++ % 180) == 0) {
                     FQ_LOGI("Q21.17 live: player %.2f %.2f %.2f collision=%d aim=(L%d,R%d) gripPose=(L%d,R%d) bodyHandSource=(L%s,R%s) move %.2f %.2f fingers=L[t%.2f g%.2f tt%d th%d] R[t%.2f g%.2f tt%d th%d]",
@@ -1527,16 +1623,32 @@ private:
         glUniform3f(colorLocation_, r, g, b);
     }
 
-    void RenderEye(uint32_t eyeIndex, const XrView& view,
+    bool RenderEye(uint32_t eyeIndex, const XrView& view,
                    XrCompositionLayerProjectionView& projectionView) {
         EyeSwapchain& eye = eyes_[eyeIndex];
         uint32_t imageIndex = 0;
         XrSwapchainImageAcquireInfo acquireInfo{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
         if (!CheckXr(xrAcquireSwapchainImage(eye.handle, &acquireInfo, &imageIndex),
-                     "xrAcquireSwapchainImage")) return;
+                     "xrAcquireSwapchainImage")) return false;
         XrSwapchainImageWaitInfo waitInfo{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};
         waitInfo.timeout = XR_INFINITE_DURATION;
-        if (!CheckXr(xrWaitSwapchainImage(eye.handle, &waitInfo), "xrWaitSwapchainImage")) return;
+        if (!CheckXr(xrWaitSwapchainImage(eye.handle, &waitInfo), "xrWaitSwapchainImage")) {
+            XrSwapchainImageReleaseInfo release{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
+            xrReleaseSwapchainImage(eye.handle, &release);
+            return false;
+        }
+        uint32_t depthIndex = 0;
+        bool depthReady = false;
+        if (eye.depthHandle != XR_NULL_HANDLE &&
+            CheckXr(xrAcquireSwapchainImage(eye.depthHandle, &acquireInfo, &depthIndex), "xrAcquireSwapchainImage(depth)")) {
+            depthReady = CheckXr(xrWaitSwapchainImage(eye.depthHandle, &waitInfo), "xrWaitSwapchainImage(depth)");
+            if (!depthReady) {
+                XrSwapchainImageReleaseInfo release{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
+                xrReleaseSwapchainImage(eye.depthHandle, &release);
+            }
+        }
+        bool rendered = false;
+        bool depthCopied = false;
 
         glBindFramebuffer(GL_FRAMEBUFFER, framebuffer_);
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
@@ -1664,6 +1776,30 @@ private:
                 }
             }
             Q1350CompositeEyePostQ1350(eyeIndex, framebuffer_, eye.width, eye.height);
+            if (depthReady) {
+                if (!depthFramebuffer_) glGenFramebuffers(1, &depthFramebuffer_);
+                glBindFramebuffer(GL_FRAMEBUFFER, depthFramebuffer_);
+                glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D,
+                                       eye.depthImages[depthIndex].image, 0);
+                const GLenum none = GL_NONE;
+                glDrawBuffers(1, &none); glReadBuffer(GL_NONE);
+                if (glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE) {
+                    if (q1280PostFbo && !IsFo3LoadingVisible()) {
+                        while (glGetError() != GL_NO_ERROR) {}
+                        glBindFramebuffer(GL_READ_FRAMEBUFFER, q1280PostFbo);
+                        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, depthFramebuffer_);
+                        glBlitFramebuffer(0,0,eye.width,eye.height,0,0,eye.width,eye.height,
+                                          GL_DEPTH_BUFFER_BIT,GL_NEAREST);
+                        const auto depthError = glGetError();
+                        depthCopied = depthError == GL_NO_ERROR;
+                        if (!depthCopied) FQ_LOGE("XR depth copy failed eye=%u error=0x%X", eyeIndex, depthError);
+                    }
+                    // Loading is drawn in a separate physical-pose camera;
+                    // omit depth metadata until that overlay has its own depth.
+                }
+                glBindFramebuffer(GL_FRAMEBUFFER, framebuffer_);
+            }
+            rendered = true;
             if (IsFo3LoadingVisible()) {
                 const Mat4 loadingVp=Multiply(projection,ViewFromPose(view.pose));
                 RenderFo3LoadingVr(framebuffer_, eye.width, eye.height, loadingVp.m, eyeIndex == 0);
@@ -1676,12 +1812,23 @@ private:
         XrSwapchainImageReleaseInfo releaseInfo{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
         CheckXr(xrReleaseSwapchainImage(eye.handle, &releaseInfo), "xrReleaseSwapchainImage");
 
+        if (depthReady) CheckXr(xrReleaseSwapchainImage(eye.depthHandle, &releaseInfo), "xrReleaseSwapchainImage(depth)");
+        if (depthCopied) {
+            eye.depthInfo.subImage.swapchain = eye.depthHandle;
+            eye.depthInfo.subImage.imageRect = {{0,0},{eye.width,eye.height}};
+            eye.depthInfo.subImage.imageArrayIndex = 0;
+            eye.depthInfo.minDepth = 0.0f; eye.depthInfo.maxDepth = 1.0f;
+            eye.depthInfo.nearZ = 0.04f;
+            eye.depthInfo.farZ = 125000.0f / FO3_UNITS_PER_METRE_Q715;
+            projectionView.next = &eye.depthInfo;
+        }
         projectionView.pose = view.pose;
         projectionView.fov = view.fov;
         projectionView.subImage.swapchain = eye.handle;
         projectionView.subImage.imageRect.offset = {0, 0};
         projectionView.subImage.imageRect.extent = {eye.width, eye.height};
         projectionView.subImage.imageArrayIndex = 0;
+        return rendered;
     }
 
 private:
@@ -1742,6 +1889,8 @@ private:
     GLuint vao_{0};
     GLuint vbo_{0};
     GLuint framebuffer_{0};
+    GLuint depthFramebuffer_{0};
+    bool depthSubmissionEnabled_{false};
     GLint mvpLocation_{-1};
     GLint colorLocation_{-1};
     GLint gridStartVertex_{0};
