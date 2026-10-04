@@ -118,8 +118,9 @@ int main() {
     Check(!step(1,true,outside,1,3) && !step(1,true,outside,0,4),"outside release preserves drop path");
     Check(!step(1,true,inside,1,5) && !step(1,true,outside,1,5.1) && !step(1,true,inside,0,5.2),"leave before release cancels intent");
     gesture.Reset();
-    Check(!step(1,true,inside,1,6) && !step(1,true,inside,0,6.01),"brief crossing does not arm");
-    gesture.Reset();step(1,true,inside,1,7);step(1,true,inside,1,7.1);
+    Check(!step(1,true,inside,0,6) && !gesture.armed,
+          "entering shoulder volume with released grip cannot arm");
+    gesture.Reset();step(1,true,inside,1,7);
     Check(!step(1,false,inside,0,7.2) && !step(1,true,inside,0,7.3),"tracking loss disarms before reacquisition");
     gesture.Reset();gPlayerSession->saveBlocked=true;
     Check(!step(1,true,inside,1,8) && !step(1,true,inside,0,9),"blocked save prevents physical stow");

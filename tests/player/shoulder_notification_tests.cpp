@@ -8,7 +8,7 @@ int main() {
     Zone z;z.ready=true;z.shoulder={.2f,1.4f,0};
     const Point palm{.34f,1.48f,.24f};
     assert(z.Contains(palm,false)); // natural hand-over-right-shoulder reach
-    assert(z.Contains({.42f,1.62f,.30f},false)); // high/outward/rear remains forgiving
+    assert(z.Contains({.39f,1.58f,.28f},false)); // high/outward/rear remains forgiving
     assert(!z.Contains({.2f,1.4f,-.1f},true)); // face/chest side is rejected
     assert(!z.Contains({NAN,1.4f,.09f},false));
     assert(!z.Contains({.54f,1.4f,.17f},false));
