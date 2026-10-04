@@ -37,8 +37,13 @@ inline bool ParseFalloutFont(const std::vector<uint8_t>& bytes, Metrics& out) {
     if(!std::isfinite(parsed.baseLine)||parsed.baseLine<=0||parsed.textureCount<1||parsed.textureCount>8)return false;
     for(size_t i=0;i<parsed.textureCount;++i) {
         const char* name=reinterpret_cast<const char*>(bytes.data()+12+i*36);
+        // Fallout's texture filename is a fixed 32-byte field. Vanilla
+        // Baked-in_Monofonto_Large uses all 32 bytes for
+        // "baked-in_monofonto_large_0_lod_a"; the following entry/padding
+        // supplies the terminating zero when Fallout3.exe formats %s.TEX.
+        // A full field is therefore valid and must not be rejected.
         size_t length=0;while(length<32&&name[length])++length;
-        if(length==0||length==32)return false;
+        if(length==0)return false;
         parsed.textureFiles[i].assign(name,length);
     }
     for(size_t i=0;i<GlyphCount;++i) {

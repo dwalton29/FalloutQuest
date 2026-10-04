@@ -51,7 +51,15 @@ int main(int argc,char**argv){
     bytes.pop_back();assert(!ParseFalloutFont(bytes,f));bytes=Fixture();bytes.push_back(0);assert(!ParseFalloutFont(bytes,f));
     bytes=Fixture();Float(bytes,GlyphTableOffset+44,std::numeric_limits<float>::quiet_NaN());assert(!ParseFalloutFont(bytes,f));
     bytes=Fixture();Put(bytes,4,9);assert(!ParseFalloutFont(bytes,f));
-    bytes=Fixture();std::memset(bytes.data()+12,'x',32);assert(!ParseFalloutFont(bytes,f));
+    // Fallout's real baked font fills the complete 32-byte filename field.
+    // This is valid fixed-width data, not a missing terminator.
+    constexpr char VanillaAtlas[]="baked-in_monofonto_large_0_lod_a";
+    static_assert(sizeof(VanillaAtlas)-1==32);
+    bytes=Fixture();std::memcpy(bytes.data()+12,VanillaAtlas,32);
+    assert(ParseFalloutFont(bytes,f));assert(f.textureFiles[0]==VanillaAtlas);
+    bytes=Fixture();std::memset(bytes.data()+12,'x',32);
+    assert(ParseFalloutFont(bytes,f));assert(f.textureFiles[0]==std::string(32,'x'));
+    bytes=Fixture();std::memset(bytes.data()+12,0,32);assert(!ParseFalloutFont(bytes,f));
     if(argc>1){
         std::ifstream file(argv[1],std::ios::binary);std::vector<uint8_t> original{std::istreambuf_iterator<char>(file),{}};
         assert(ParseFalloutFont(original,f));assert(f.textureCount==1);
