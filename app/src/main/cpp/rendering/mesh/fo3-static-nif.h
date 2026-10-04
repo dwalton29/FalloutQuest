@@ -46,6 +46,7 @@ struct Fo3StaticNifMesh {
     float emissiveMult = 1.0f;
     float environmentMapScale = 1.0f;
     uint32_t shaderFlags1 = 0u;
+    uint32_t shaderType = 0u;
     uint32_t shaderFlags2 = 0u;
     bool noLighting = false;
     bool alphaBlend = false;

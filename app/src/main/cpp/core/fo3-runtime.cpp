@@ -1,3 +1,4 @@
+#include "fo3-npc-appearance.h"
 #include "fo3-install-paths.h"
 #include "rendering/water/fo3-water.h"
 #include "world/fo3-worldspace-runtime.h"
@@ -9985,6 +9986,8 @@ void Q230ConvertBethesdaRotation(
     }
 }
 
+fo3anim::Matrix Q230PlacementMatrix(const Fo3WorldPlacement& placement);
+
 bool Q230BuildNpcActor(const Fo3NpcActorQ230& source, Q230ActorVisual& visual) {
     visual.source = source;
     const Fo3NpcActorQ230* npc = &visual.source;
@@ -10017,15 +10020,6 @@ bool Q230BuildNpcActor(const Fo3NpcActorQ230& source, Q230ActorVisual& visual) {
         faceGenModels.push_back(path);
     };
 
-    if(!npc->raceHeadModels.empty()){
-        for(const std::string& path:npc->raceHeadModels)
-            addFaceGenModel(path);
-    } else {
-        addFaceGenModel(npc->raceHeadModel);
-    }
-    addFaceGenModel(npc->hairModel);
-    for(const std::string& path:npc->headPartModels)
-        addFaceGenModel(path);
     uint32_t q236EquippedMask=0u;
     std::unordered_set<std::string> equippedModels;
     for(const Fo3NpcVisualItemQ230& item:npc->inventory){
@@ -10036,6 +10030,16 @@ bool Q230BuildNpcActor(const Fo3NpcActorQ230& source, Q230ActorVisual& visual) {
             q236EquippedMask|=item.bipedMask;
         }
     }
+
+    if(!npc->raceHeadModels.empty()){
+        for(const std::string& path:npc->raceHeadModels)
+            addFaceGenModel(path);
+    } else {
+        addFaceGenModel(npc->raceHeadModel);
+    }
+    if((q236EquippedMask & 2u)==0u) addFaceGenModel(npc->hairModel);
+    for(const std::string& path:npc->headPartModels)
+        addFaceGenModel(path);
 
     // Fallout equipment slots: 0x4 Upper Body, 0x8 Left Hand,
     // 0x10 Right Hand. Only add uncovered RACE body pieces.
@@ -10077,14 +10081,6 @@ bool Q230BuildNpcActor(const Fo3NpcActorQ230& source, Q230ActorVisual& visual) {
                 samePath(path,npc->raceHeadModels[7]));
     };
 
-    auto q237RaceHeadSlot=[&](const std::string& path)->int {
-        for(size_t slot=0u;slot<npc->raceHeadModels.size();++slot){
-            if(!npc->raceHeadModels[slot].empty() &&
-               samePath(path,npc->raceHeadModels[slot]))
-                return static_cast<int>(slot);
-        }
-        return -1;
-    };
     auto isHairTintModel=[&](const std::string& path){
         if(!npc->hairModel.empty() && samePath(path,npc->hairModel))
             return true;
@@ -10186,7 +10182,6 @@ bool Q230BuildNpcActor(const Fo3NpcActorQ230& source, Q230ActorVisual& visual) {
     }
 
     bool q237HeadAnchorReady=false;
-    Vec3 q237HeadBindGame{};
     size_t q237RigidHeadAttachedShapes=0u;
 
     size_t cpuShapes=0u;
@@ -10292,27 +10287,20 @@ bool Q230BuildNpcActor(const Fo3NpcActorQ230& source, Q230ActorVisual& visual) {
         return true;
     };
 
-    auto q237CaptureHeadAnchor=[&](const CpuObject& part){
-        if(q237HeadAnchorReady || !part.mesh.skinned) return;
-        for(const Fo3NifSkinBone& bone:part.mesh.skinBones){
-            const std::string lower=Q211Lower(bone.name);
-            if(lower=="bip01 head" ||
-               lower.find("bip01 head")!=std::string::npos){
-                q237HeadBindGame={
-                    bone.bindPosition[0],
-                    bone.bindPosition[1],
-                    bone.bindPosition[2]};
-                q237HeadAnchorReady=true;
-                return;
-            }
-        }
-    };
-
     auto q237AttachRigidHeadPart=[&](CpuObject& part){
-        if(!q237HeadAnchorReady || part.mesh.skinned) return false;
-        Vec3 offset=Q211Mul(q237HeadBindGame,part.placement.scale);
-        offset=ApplyEsmRotation(offset,part.placement);
-        for(Vec3& p:part.positionsGame) p=Q211Add(p,offset);
+        if(part.mesh.skinned) return false;
+        fo3anim::Matrix transform;
+        if(!fo3appearance::HeadBindTransform(visual.skeleton,
+                Q230PlacementMatrix(part.placement),transform)) return false;
+        q237HeadAnchorReady=true;
+        auto apply=[&](Vec3 value,bool direction){
+            const auto v=fo3anim::Point(transform,{value.x,value.y,value.z},direction);
+            return Vec3{v[0],v[1],v[2]};
+        };
+        for(Vec3& p:part.positionsGame) p=apply(p,false);
+        for(Vec3& n:part.normalsGame) n=Normalize(apply(n,true));
+        for(Vec3& t:part.tangentsGame) t=Normalize(apply(t,true));
+        for(Vec3& b:part.bitangentsGame) b=Normalize(apply(b,true));
         return true;
     };
 
@@ -10355,22 +10343,15 @@ bool Q230BuildNpcActor(const Fo3NpcActorQ230& source, Q230ActorVisual& visual) {
         if(haveMorph) ++faceGenEgmAssets;
 
         for(CpuObject& part:parts){
-            const int q237HeadSlot=q237RaceHeadSlot(path);
-            if(q237HeadSlot==0)
-                q237CaptureHeadAnchor(part);
-
-            // RACE mouth/teeth/tongue/eyes are actor head attachments. Some
-            // are rigid NIFs rather than NiSkinInstance meshes, so apply the
-            // authored Head bind offset instead of leaving them at actor root.
-            if(q237HeadSlot>=2 && q237HeadSlot<=7 &&
-               q237AttachRigidHeadPart(part)){
-                ++q237RigidHeadAttachedShapes;
-            }
-
             if(haveMorph && q233ApplyMorph(part,morph)){
                 ++faceGenMorphedShapes;
                 faceGenMorphedVertices+=part.positionsGame.size();
             }
+
+            // Rigid face parts, hair and worn headgear use the complete
+            // authored skeleton Head bind transform before animation deltas.
+            if(fo3appearance::HeadPart(*npc,path) && q237AttachRigidHeadPart(part))
+                ++q237RigidHeadAttachedShapes;
 
             const std::string q235RaceTexture=
                 q235RaceTextureForPart(path,part.q2016ShapeIndex);
@@ -10395,18 +10376,16 @@ bool Q230BuildNpcActor(const Fo3NpcActorQ230& source, Q230ActorVisual& visual) {
 
             // Equipped upper-body NIFs can contain exposed-skin shapes whose
             // texture is supplied dynamically by the actor race rather than
-            // authored in the armor NIF. When that shape has no diffuse,
-            // use the male RACE upper-body texture instead of the beige fallback.
+            // authored in the armor NIF. Skin shader type/FaceGen flags identify
+            // these shapes even when a generic diffuse texture is present.
             if(isArmorModel(path) &&
                !npc->raceBodyTextures.empty() &&
                !npc->raceBodyTextures[0u].empty()){
-                const bool q237EmptySkin=
-                    part.mesh.diffuseTexturePath.empty();
                 const bool q237BaseSkin=
-                    !q237EmptySkin &&
+                    !part.mesh.diffuseTexturePath.empty() &&
                     samePath(part.mesh.diffuseTexturePath,
                              npc->raceBodyTextures[0u]);
-                if(q237EmptySkin || q237BaseSkin){
+                if(fo3appearance::SkinMaterial(part.mesh.shaderType,part.mesh.shaderFlags1) || q237BaseSkin){
                     if(!q237RaceBodyGeneratedKeys.empty() &&
                        !q237RaceBodyGeneratedKeys[0u].empty())
                         part.mesh.diffuseTexturePath=

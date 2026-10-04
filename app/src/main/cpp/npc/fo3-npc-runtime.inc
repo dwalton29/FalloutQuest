@@ -50,11 +50,7 @@ bool Q230UploadActorPart(Q230ActorVisual &actor, CpuObject &part, float centerX,
     for (const auto &bone : part.mesh.skinBones)
       rig.bones.push_back(fo3anim::FindBone(actor.skeleton, bone.name));
     if (!part.mesh.skinned) {
-      bool headPart = part.placement.modelPath == actor.source.hairModel;
-      for (const auto &path : actor.source.raceHeadModels)
-        headPart |= path == part.placement.modelPath;
-      for (const auto &path : actor.source.headPartModels)
-        headPart |= path == part.placement.modelPath;
+      const bool headPart = fo3appearance::HeadPart(actor.source, part.placement.modelPath);
       if (headPart)
         rig.rigidBone = fo3anim::FindBone(actor.skeleton, "Bip01 Head");
     }

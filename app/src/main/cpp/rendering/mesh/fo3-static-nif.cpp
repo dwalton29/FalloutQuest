@@ -354,7 +354,8 @@ bool ParseAlphaProperty(const uint8_t* data, size_t size,
 bool ParseShaderTextureRef(const uint8_t* data, size_t size,
                            const NifHeader& header,
                            uint32_t& shaderFlags1, uint32_t& shaderFlags2,
-                           float& environmentMapScale, uint32_t& textureSetRef) {
+                           float& environmentMapScale, uint32_t& textureSetRef,
+                           uint32_t* shaderTypeOut = nullptr) {
     Cursor c(data, size);
     if (!ParseObjectNetPrefix(c)) return false;
 
@@ -362,6 +363,7 @@ bool ParseShaderTextureRef(const uint8_t* data, size_t size,
     uint32_t shaderType = 0;
     if (!c.U16(flags) || !c.U32(shaderType) ||
         !c.U32(shaderFlags1) || !c.U32(shaderFlags2)) return false;
+    if (shaderTypeOut) *shaderTypeOut = shaderType;
     if (header.userVersion == 11u) {
         if (!c.F32(environmentMapScale)) return false;
     }
@@ -1688,7 +1690,8 @@ bool TryLoadShape(const std::vector<uint8_t>& nif, const NifHeader& header,
             uint32_t refOut = INVALID_REF;
             if (ParseShaderTextureRef(prop, header.blockSizes[ref], header,
                                       candidate.shaderFlags1, candidate.shaderFlags2,
-                                      candidate.environmentMapScale, refOut)) {
+                                      candidate.environmentMapScale, refOut,
+                                      &candidate.shaderType)) {
                 textureSetRef = refOut;
             }
         } else if (type == "TileShaderProperty") {

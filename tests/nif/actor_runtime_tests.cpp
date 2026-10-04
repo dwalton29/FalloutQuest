@@ -2,6 +2,7 @@
 #include "../../app/src/main/cpp/rendering/mesh/fo3-static-nif.h"
 #include "fo3-actor-animation.h"
 #include "fo3-npc.h"
+#include "fo3-npc-appearance.h"
 #include "fo3-texture-bsa.h"
 #include <algorithm>
 #include <atomic>
@@ -101,6 +102,36 @@ bool UploadCpuObject(CpuObject &, float, float, float, GpuObject &gpu) {
 }
 #include "../../app/src/main/cpp/npc/fo3-npc-runtime.inc"
 int main() {
+  // Complete bind rotation/translation in a scaled, translated actor instance.
+  {
+    fo3anim::Skeleton skeleton;
+    fo3anim::Bone head;
+    head.name = "Bip01 Head";
+    head.bind.translation = {0, 0, 5};
+    const float half = std::sqrt(.5f);
+    head.bind.rotation = {half, 0, 0, half};
+    skeleton.bones.push_back(head);
+    assert(fo3anim::FinalizeSkeleton(skeleton));
+    fo3anim::Transform instance;
+    instance.translation = {20, 30, 40}; instance.scale = 2;
+    fo3anim::Matrix attachment;
+    assert(fo3appearance::HeadBindTransform(skeleton, fo3anim::ToMatrix(instance), attachment));
+    auto point = fo3anim::Point(attachment, {22, 30, 40});
+    assert(std::fabs(point[0]-20)<1e-5f && std::fabs(point[1]-32)<1e-5f && std::fabs(point[2]-50)<1e-5f);
+    auto normal = fo3anim::Point(attachment, {1, 0, 0}, true);
+    assert(std::fabs(normal[0])<1e-5f && std::fabs(normal[1]-1)<1e-5f);
+    assert(!fo3appearance::HeadBindTransform({}, fo3anim::Identity(), attachment));
+    Fo3NpcActorQ230 source;
+    Fo3NpcVisualItemQ230 hat;
+    hat.recordType="ARMO"; hat.count=1; hat.bipedMask=2; hat.modelPath="Armor\\Hat.nif";
+    source.inventory.push_back(hat);
+    assert(fo3appearance::HeadPart(source, "armor/hat.NIF"));
+    source.inventory[0].bipedMask=4;
+    assert(!fo3appearance::HeadPart(source, "armor/hat.NIF"));
+    assert(fo3appearance::SkinMaterial(14, 2));
+    assert(fo3appearance::SkinMaterial(1, 0x400));
+    assert(!fo3appearance::SkinMaterial(1, 2));
+  }
   Q230ActorVisual actor;
   fo3anim::Bone bone;
   bone.name = "Bip01 Head";
@@ -152,9 +183,20 @@ int main() {
   ++gSceneLoadFrame;
   Q230UpdateActor(actor);
   assert(std::fabs(recorded[0] - 0.12f) < 1e-5f);
+  // Worn rigid headgear is animated through the same production head path.
+  Fo3NpcVisualItemQ230 hat;
+  hat.recordType = "ARMO"; hat.count = 1; hat.bipedMask = 2;
+  hat.modelPath = "Armor\\Hat.nif";
+  actor.source.inventory.push_back(hat);
+  part.placement.modelPath = "armor/hat.NIF";
+  assert(Q230UploadActorPart(actor, part, 10, 30, 40));
+  assert(actor.rigs.back().rigidBone == 0);
+  ++gSceneLoadFrame;
+  Q230UpdateActor(actor);
+  assert(std::fabs(recorded[0] - 0.12f) < 1e-5f);
   gQ230NpcActors.push_back(std::move(actor));
   Q230RenderNpcActors(false);
   Q230RenderNpcActors(true);
-  assert(draws == 2);
+  assert(draws == 3);
   std::cout << "Actor runtime bridge tests passed\n";
 }
