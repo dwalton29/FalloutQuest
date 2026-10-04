@@ -1582,6 +1582,10 @@ private:
             glUseProgram(program_);
             glBindVertexArray(vao_);
 
+            // Scene boot/loading and world draws must run even with all
+            // prototype geometry hidden and no tracked controllers.
+            RenderScene(viewProjection.m);
+
             for (uint32_t hand = 0; hand < 2; ++hand) {
                 if (!handPoseValid_[hand]) continue;
                 const XrPosef virtualHandPose = ToVirtualPose(handLocalPoses_[hand]);

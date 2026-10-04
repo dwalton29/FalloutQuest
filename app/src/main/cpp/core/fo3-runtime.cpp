@@ -10832,7 +10832,7 @@ void Q210RenderPlayerBody(bool alphaPass) {
     }
 }
 
-void RenderScene() {
+void RenderScene(const float* mvp) {
     Q1970RenderStallScopeQ19 q1970RenderStallScope;
     if (!gSceneReady) Q1030BootMegatonOnRender();
     ProcessQ74TransitionRequest();
@@ -10862,10 +10862,6 @@ void RenderScene() {
     glGetIntegerv(GL_ACTIVE_TEXTURE, &previousActiveTexture);
     if (mainProgram == 0) return;
 
-    const GLint sourceMvp = glGetUniformLocation(static_cast<GLuint>(mainProgram), "uMvp");
-    if (sourceMvp < 0) return;
-    GLfloat mvp[16]{};
-    glGetUniformfv(static_cast<GLuint>(mainProgram), sourceMvp, mvp);
     Q2015FrustumCullScope q2015FrustumScope(mvp);
 
     GLint previousTexture0 = 0, previousTexture1 = 0, previousTexture2 = 0, previousTexture3 = 0;
@@ -12540,14 +12536,6 @@ void Q6HClear(GLbitfield mask) {
     glClear(mask | GL_DEPTH_BUFFER_BIT);
 }
 
-void Q6HDrawArrays(GLenum mode, GLint first, GLsizei count) {
-    if (mode == GL_TRIANGLES && count == 3 && (first == 0 || first == 3)) return;
-    if (mode == GL_TRIANGLES && count == 3 && first == 6) {
-        RenderScene();
-        return;
-    }
-    glDrawArrays(mode, first, count);
-}
 
 
 } // namespace
@@ -12703,9 +12691,7 @@ bool GetFo3PcLightDirection(float out[3]) {
 #define glViewport Q6HViewport
 #define glDisable Q6HDisable
 #define glClear Q6HClear
-#define glDrawArrays Q6HDrawArrays
 #include "fo3-runtime-loop.inc"
-#undef glDrawArrays
 #undef glClear
 #undef glDisable
 #undef glViewport
