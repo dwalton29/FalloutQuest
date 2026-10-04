@@ -1,3 +1,4 @@
+#include "rendering/multiview-shader-source.h"
 #include "rendering/quest-render-policy.h"
 #include "fo3-npc-appearance.h"
 #include "fo3-install-paths.h"
@@ -375,6 +376,15 @@ struct CachedGpuTexture {
 // These runtime objects are defined later in this translation unit.
 extern bool gWaterReflectionPassQ2090;
 extern std::vector<GpuObject> gObjects;
+uint64_t gStereoFrame = 0;
+float gStereoMvp[2][16]{};
+bool gStereoMvpReady = false;
+float gStereoReflectionMvp[16]{}, gStereoReflectionSkyMvp[16]{};
+float gStereoReflectionEye[3]{};
+float gStereoEye[2][3]{};
+bool gMultiviewDrawing = false;
+bool gMultiviewMonoSpecials = false;
+uint32_t gCurrentStereoEye = 0;
 float gFrustumPadding = 1.0f;
 bool gQ2015FrustumCullActive = false;
 float gQ2015FrustumMvp[16]{};
@@ -390,6 +400,10 @@ bool Q2015AabbVisible(const GpuObject& object) {
     if (object.minX > object.maxX || object.minY > object.maxY ||
         object.minZ > object.maxZ) return true;
 
+    if (gMultiviewDrawing && gStereoMvpReady) {
+        const questrender::Bounds bounds{object.minX,object.maxX,object.minY,object.maxY,object.minZ,object.maxZ};
+        return questrender::Visible(gStereoMvp[0],bounds) || questrender::Visible(gStereoMvp[1],bounds);
+    }
     ++gQ2015CullTested;
     const bool visible = questrender::Visible(gQ2015FrustumMvp,
         {object.minX, object.maxX, object.minY, object.maxY, object.minZ, object.maxZ},
@@ -436,6 +450,35 @@ struct Q2015FrustumCullScope {
 };
 
 GLuint gProgram = 0;
+struct QMVUniform { GLint source=-1,target=-1; GLenum type=0; };
+struct QMVState {
+    GLuint sourceProgram=0, program=0, fbo=0, color=0, depth=0, copyProgram=0, copyVao=0;
+    GLsizei width=0,height=0;
+    GLint mvp=-1,eye=-1,copyLayer=-1;
+    bool supported=false,failed=false;
+    uint64_t frame=~uint64_t{0},drawSubmissions=0,drawCalls=0,renderUs=0,importUs=0;
+    const GpuObject* storage=nullptr;
+    size_t objectCount=0;
+    std::vector<GLint> locations;
+    std::vector<QMVUniform> uniforms;
+    using Attach = void (GL_APIENTRY*)(GLenum,GLenum,GLuint,GLint,GLsizei,GLint,GLsizei);
+    Attach attach=nullptr;
+};
+QMVState gMultiview;
+GLint QMVUniformLocation(GLint location) {
+    if (!gMultiviewDrawing || location<0) return location;
+    return static_cast<size_t>(location)<gMultiview.locations.size() ? gMultiview.locations[location] : -1;
+}
+bool QMVRenderOpaque(GLsizei width, GLsizei height);
+void QMVShutdown();
+void QMVConfigure(bool supported, QMVState::Attach attach) {
+    gMultiview.supported=supported; gMultiview.attach=attach;
+}
+bool QMVSupportedObject(const GpuObject& object) {
+    return !object.alphaBlend && object.zBufferTestQ1200 && object.zBufferWriteQ1200 &&
+        !object.decalQ1170 && !object.q220LooseObject && !object.q230NpcActor && !object.q210PlayerBody &&
+        !object.alphaTest && object.materialAlpha>=0.999f && !object.useVertexAlpha;
+}
 GLint gMvpLocation = -1;
 GLint gInstancingEnabledLocationQ2016 = -1;
 GLint gObjectTransformEnabledLocationQ2017 = -1;
@@ -927,7 +970,7 @@ GLuint CompileQ6HShader(GLenum type, const char* source) {
     return shader;
 }
 
-GLuint CreateQ6HProgram() {
+GLuint CreateQ6HProgram(bool multiview = false) {
     static const char* vertexSource = R"(
         #version 300 es
         layout(location = 0) in vec3 aPosition;
@@ -1297,8 +1340,13 @@ GLuint CreateQ6HProgram() {
         }
     )";
 
-    GLuint vs = CompileQ6HShader(GL_VERTEX_SHADER, vertexSource);
-    GLuint fs = CompileQ6HShader(GL_FRAGMENT_SHADER, fragmentSource);
+    std::string vertex(vertexSource),fragment(fragmentSource);
+    questrender::TrimShaderPreamble(vertex);questrender::TrimShaderPreamble(fragment);
+    if (multiview && !questrender::WorldMultiviewSources(vertex,fragment)) {
+        Q6H_LOGE("Multiview shader conversion failed; retaining sequential renderer"); return 0;
+    }
+    GLuint vs = CompileQ6HShader(GL_VERTEX_SHADER, vertex.c_str());
+    GLuint fs = CompileQ6HShader(GL_FRAGMENT_SHADER, fragment.c_str());
     if (!vs || !fs) {
         if (vs) glDeleteShader(vs);
         if (fs) glDeleteShader(fs);
@@ -4984,6 +5032,8 @@ int Q1900BuildNativeLodClipCells(float* bounds, bool objectLod) {
 }
 
 void DrawSceneObject(const GpuObject& object, bool environmentPassQ2050 = false) {
+    if (gMultiviewDrawing && !QMVSupportedObject(object)) return;
+    if (gMultiviewMonoSpecials && QMVSupportedObject(object)) return;
     if (gPlayerSession && gPlayerSession->player.IsCollected(object.refFormId)) return;
     if (!object.q210PlayerBody &&
         !object.q230NpcActor &&
@@ -4996,7 +5046,7 @@ void DrawSceneObject(const GpuObject& object, bool environmentPassQ2050 = false)
         !Q2015AabbVisible(object)) return;
     if (environmentPassQ2050 && !object.environmentEnabledQ2050) return;
     if (gInstancingEnabledLocationQ2016 >= 0) {
-        glUniform1f(gInstancingEnabledLocationQ2016,
+        glUniform1f(QMVUniformLocation(gInstancingEnabledLocationQ2016),
                     gInstancedDrawActiveQ2016 ? 1.0f : 0.0f);
     }
     const bool q2017UseObjectTransform =
@@ -5005,7 +5055,7 @@ void DrawSceneObject(const GpuObject& object, bool environmentPassQ2050 = false)
          object.q220LooseObject) &&
         !gInstancedDrawActiveQ2016;
     if (gObjectTransformEnabledLocationQ2017 >= 0) {
-        glUniform1f(gObjectTransformEnabledLocationQ2017,
+        glUniform1f(QMVUniformLocation(gObjectTransformEnabledLocationQ2017),
                     q2017UseObjectTransform ? 1.0f : 0.0f);
     }
     if (q2017UseObjectTransform &&
@@ -5016,8 +5066,7 @@ void DrawSceneObject(const GpuObject& object, bool environmentPassQ2050 = false)
                 : object.q220LooseObject
                     ? object.q220DynamicTransform
                     : object.q2017RelativeMatrix;
-        glUniformMatrix4fv(
-            gObjectTransformLocationQ2017, 1, GL_FALSE,
+        glUniformMatrix4fv(QMVUniformLocation(gObjectTransformLocationQ2017), 1, GL_FALSE,
             q220Transform);
     }
 
@@ -5036,7 +5085,7 @@ void DrawSceneObject(const GpuObject& object, bool environmentPassQ2050 = false)
                   q1900LodClipCells, false);
     }
     if (gNativeLodClipEnabledLocationQ1810 >= 0) {
-        glUniform1f(gNativeLodClipEnabledLocationQ1810,
+        glUniform1f(QMVUniformLocation(gNativeLodClipEnabledLocationQ1810),
                     q1900LodClipCount > 0 ? 1.0f : 0.0f);
     }
 
@@ -5053,14 +5102,14 @@ void DrawSceneObject(const GpuObject& object, bool environmentPassQ2050 = false)
                 q2021Mode = 2.0f;
             }
         }
-        glUniform1f(gLodFadeModeLocationQ2021, q2021Mode);
+        glUniform1f(QMVUniformLocation(gLodFadeModeLocationQ2021), q2021Mode);
     }
     if (gTerrainLodModeLocationQ2024 >= 0) {
-        glUniform1f(gTerrainLodModeLocationQ2024,
+        glUniform1f(QMVUniformLocation(gTerrainLodModeLocationQ2024),
                     object.q2024TerrainLod ? 1.0f : 0.0f);
     }
     if (gLodFadePlayerLocationQ2021 >= 0) {
-        glUniform2f(gLodFadePlayerLocationQ2021,
+        glUniform2f(QMVUniformLocation(gLodFadePlayerLocationQ2021),
                     gQ2021PlayerSceneX, gQ2021PlayerSceneZ);
     }
     if (gLodFadeRangeLocationQ2021 >= 0) {
@@ -5068,7 +5117,7 @@ void DrawSceneObject(const GpuObject& object, bool environmentPassQ2050 = false)
             !object.q1990NativeLod &&
             object.q2025LandscapeRock &&
             !object.q2025VisibleWhenDistant;
-        glUniform2f(gLodFadeRangeLocationQ2021,
+        glUniform2f(QMVUniformLocation(gLodFadeRangeLocationQ2021),
                     q2025ExtendedRockFade
                         ? Q2025_ROCK_FADE_START_M
                         : Q2021_DETAIL_FADE_START_M,
@@ -5077,18 +5126,18 @@ void DrawSceneObject(const GpuObject& object, bool environmentPassQ2050 = false)
                         : Q2021_DETAIL_FADE_END_M);
     }
     if (gNativeLodClipCellCountLocationQ1900 >= 0) {
-        glUniform1i(gNativeLodClipCellCountLocationQ1900,
+        glUniform1i(QMVUniformLocation(gNativeLodClipCellCountLocationQ1900),
                     q1900LodClipCount);
     }
     if (q1900LodClipCount > 0 &&
         gNativeLodClipCellsLocationQ1900 >= 0) {
-        glUniform4fv(gNativeLodClipCellsLocationQ1900,
+        glUniform4fv(QMVUniformLocation(gNativeLodClipCellsLocationQ1900),
                      q1900LodClipCount, q1900LodClipCells);
     }
-    glUniform1f(gGlossinessLocation, object.glossiness);
-    glUniform1f(gNoLightingLocationQ1020, object.noLighting ? 1.0f : 0.0f);
-    glUniform1f(gNoLightingFalloffLocationQ1160, object.noLightingFalloff ? 1.0f : 0.0f);
-    glUniform4fv(gNoLightingFalloffParamsLocationQ1160, 1, object.noLightingFalloffParams);
+    glUniform1f(QMVUniformLocation(gGlossinessLocation), object.glossiness);
+    glUniform1f(QMVUniformLocation(gNoLightingLocationQ1020), object.noLighting ? 1.0f : 0.0f);
+    glUniform1f(QMVUniformLocation(gNoLightingFalloffLocationQ1160), object.noLightingFalloff ? 1.0f : 0.0f);
+    glUniform4fv(QMVUniformLocation(gNoLightingFalloffParamsLocationQ1160), 1, object.noLightingFalloffParams);
     // Q20.25: landscape-LOD NIF vertex colours are not the detailed LAND
     // material colour path. Multiplying them into the diffuse was driving far
     // terrain towards black. Keep the authored stream for diagnostics, but do
@@ -5097,30 +5146,30 @@ void DrawSceneObject(const GpuObject& object, bool environmentPassQ2050 = false)
         object.useVertexColor && !object.q2024TerrainLod;
     const bool q2025ApplyVertexAlpha =
         object.useVertexAlpha && !object.q2024TerrainLod;
-    glUniform1f(gUseVertexColorLocationQ1020,
+    glUniform1f(QMVUniformLocation(gUseVertexColorLocationQ1020),
                 q2025ApplyVertexColor ? 1.0f : 0.0f);
-    glUniform1f(gUseVertexAlphaLocationQ1020,
+    glUniform1f(QMVUniformLocation(gUseVertexAlphaLocationQ1020),
                 q2025ApplyVertexAlpha ? 1.0f : 0.0f);
-    glUniform1f(gSpecularEnabledLocationQ1020, object.specularEnabled ? 1.0f : 0.0f);
-    glUniform3fv(gSpecularColorLocationQ1020, 1, object.specularColor);
+    glUniform1f(QMVUniformLocation(gSpecularEnabledLocationQ1020), object.specularEnabled ? 1.0f : 0.0f);
+    glUniform3fv(QMVUniformLocation(gSpecularColorLocationQ1020), 1, object.specularColor);
     if (gEnvironmentPassLocationQ2050 >= 0)
-        glUniform1f(gEnvironmentPassLocationQ2050, environmentPassQ2050 ? 1.0f : 0.0f);
+        glUniform1f(QMVUniformLocation(gEnvironmentPassLocationQ2050), environmentPassQ2050 ? 1.0f : 0.0f);
     if (gEnvironmentScaleLocationQ2050 >= 0)
-        glUniform1f(gEnvironmentScaleLocationQ2050, object.environmentMapScaleQ2050);
+        glUniform1f(QMVUniformLocation(gEnvironmentScaleLocationQ2050), object.environmentMapScaleQ2050);
     if (gEnvironmentCustomMaskLocationQ2050 >= 0)
-        glUniform1f(gEnvironmentCustomMaskLocationQ2050,
+        glUniform1f(QMVUniformLocation(gEnvironmentCustomMaskLocationQ2050),
                     object.realEnvironmentMask ? 1.0f : 0.0f);
-    glUniform3fv(gEmissiveColorLocationQ1020, 1, object.emissiveColor);
-    glUniform1f(gEmissiveMultLocationQ1020, object.emissiveMult);
-    glUniform1f(gGlowEnabledLocationQ1020, object.realGlow ? 1.0f : 0.0f);
-    glUniform1f(gExternalEmittanceEnabledLocationQ1380,
+    glUniform3fv(QMVUniformLocation(gEmissiveColorLocationQ1020), 1, object.emissiveColor);
+    glUniform1f(QMVUniformLocation(gEmissiveMultLocationQ1020), object.emissiveMult);
+    glUniform1f(QMVUniformLocation(gGlowEnabledLocationQ1020), object.realGlow ? 1.0f : 0.0f);
+    glUniform1f(QMVUniformLocation(gExternalEmittanceEnabledLocationQ1380),
                 object.externalEmittanceEnabledQ1380 ? 1.0f : 0.0f);
-    glUniform3fv(gExternalEmittanceColorLocationQ1380, 1,
+    glUniform3fv(QMVUniformLocation(gExternalEmittanceColorLocationQ1380), 1,
                  object.externalEmittanceColorQ1380);
-    glUniform1f(gNormalStrengthLocation, object.realNormal ? 1.0f : 0.0f);
-    glUniform1f(gMaterialAlphaLocation, object.materialAlpha);
-    glUniform1f(gAlphaTestLocation, object.alphaTest ? 1.0f : 0.0f);
-    glUniform1f(gAlphaThresholdLocation, object.alphaThreshold);
+    glUniform1f(QMVUniformLocation(gNormalStrengthLocation), object.realNormal ? 1.0f : 0.0f);
+    glUniform1f(QMVUniformLocation(gMaterialAlphaLocation), object.materialAlpha);
+    glUniform1f(QMVUniformLocation(gAlphaTestLocation), object.alphaTest ? 1.0f : 0.0f);
+    glUniform1f(QMVUniformLocation(gAlphaThresholdLocation), object.alphaThreshold);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, object.diffuse);
     glActiveTexture(GL_TEXTURE1);
@@ -5204,6 +5253,7 @@ void DrawSceneObject(const GpuObject& object, bool environmentPassQ2050 = false)
 
     if (gInstancedDrawActiveQ2016 &&
         gInstanceCountQ2017 > 0) {
+        if (gMultiviewDrawing) ++gMultiview.drawCalls;
         glDrawArraysInstanced(
             GL_TRIANGLES, 0, object.vertexCount,
             gInstanceCountQ2017);
@@ -5213,6 +5263,7 @@ void DrawSceneObject(const GpuObject& object, bool environmentPassQ2050 = false)
             glDisableVertexAttribArray(location);
         }
     } else {
+        if (gMultiviewDrawing) ++gMultiview.drawCalls;
         glDrawArrays(GL_TRIANGLES, 0, object.vertexCount);
     }
 
@@ -5249,15 +5300,12 @@ struct Q2017InstanceBatch {
 
 // Frame-local pointers are valid only until the next scene preparation boundary.
 // Capacity is retained; no hash nodes or per-group vectors are allocated per eye.
-uint64_t gStereoFrame = 0;
-float gStereoMvp[2][16]{};
-bool gStereoMvpReady = false;
-float gStereoReflectionMvp[16]{}, gStereoReflectionSkyMvp[16]{};
-float gStereoReflectionEye[3]{};
+
 struct Q2017FrameBatches {
     uint64_t frame = ~uint64_t{0};
     const GpuObject* storage = nullptr;
     size_t objectCount = 0;
+    bool multiview = false;
     std::vector<const GpuObject*> candidates, singles, groupFallbacks;
     std::vector<Q2017InstanceBatch> batches;
     std::vector<float> matrices;
@@ -5309,10 +5357,11 @@ void Q2017RenderOpaqueDetailedInstanced() {
     // Mirrors have their own visibility set and buffer; they cannot overwrite
     // the main stereo instance upload between the two eyes.
     const bool rebuild = gWaterReflectionPassQ2090 || cache.frame != gStereoFrame ||
-        cache.storage != gObjects.data() || cache.objectCount != gObjects.size();
+        cache.storage != gObjects.data() || cache.objectCount != gObjects.size() ||
+        cache.multiview != gMultiviewDrawing;
     if (rebuild) {
         Q2017PrepareOpaqueOrder();
-        cache.frame = gStereoFrame;
+        cache.frame = gStereoFrame; cache.multiview = gMultiviewDrawing;
         cache.storage = gObjects.data(); cache.objectCount = gObjects.size();
         cache.candidates.clear(); cache.singles.clear(); cache.groupFallbacks.clear();
         cache.batches.clear(); cache.matrices.clear();
@@ -5322,6 +5371,7 @@ void Q2017RenderOpaqueDetailedInstanced() {
         cache.visible = cache.instancedObjects = cache.largestBatch = 0;
         for (const auto* pointer : gOpaqueFrameOrder) {
             const auto& object = *pointer;
+            if (gMultiviewDrawing && !QMVSupportedObject(object)) continue;
             if (object.alphaBlend ||
                 (gPlayerSession && gPlayerSession->player.IsCollected(object.refFormId)) ||
                 !Q1970ShouldRenderFullDetail(object)) continue;
@@ -11031,8 +11081,23 @@ void RenderScene(const float* mvp) {
         glIsEnabled(GL_SAMPLE_ALPHA_TO_COVERAGE);
     if (q2060MsaaActive && q2060MsaaSamples > 1)
         glEnable(GL_SAMPLE_ALPHA_TO_COVERAGE);
-    Q1990RenderNativeLod(false);
-    Q2017RenderOpaqueDetailedInstanced();
+    GLint opaqueViewport[4]{}; glGetIntegerv(GL_VIEWPORT,opaqueViewport);
+    const bool multiviewOpaque = QMVRenderOpaque(opaqueViewport[2],opaqueViewport[3]);
+    if (!multiviewOpaque) {
+        Q1990RenderNativeLod(false);
+        Q2017RenderOpaqueDetailedInstanced();
+    } else {
+        // Nonstandard depth/compositing objects retain their existing eye pass.
+        gMultiviewMonoSpecials=true;
+        Q1990RenderNativeLod(false);
+        for (const auto& object : gObjects) {
+            if (object.alphaBlend || QMVSupportedObject(object)) continue;
+            if (object.zBufferTestQ1200) glEnable(GL_DEPTH_TEST); else glDisable(GL_DEPTH_TEST);
+            glDepthMask(object.zBufferWriteQ1200 ? GL_TRUE : GL_FALSE);
+            DrawSceneObject(object);
+        }
+        gMultiviewMonoSpecials=false;
+    }
     Q230RenderNpcActors(false);
     Q210RenderPlayerBody(false);
     if (!q2021MainA2cWas)
@@ -12475,7 +12540,10 @@ void Q1280ShutdownPostQ1280() {
     q1280PostActive = false;
 }
 
+#include "rendering/quest-multiview.inc"
+
 void Q6HDeleteFramebuffers(GLsizei n, const GLuint* framebuffers) {
+    QMVShutdown();
     FlushFo3PlayerState();
     gSceneLoad.collisionPreparation.Reset();
     if (gSceneLoad.preparation.Ready()) {

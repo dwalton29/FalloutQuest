@@ -60,40 +60,59 @@ only its representative could discard all the visible objects in the batch when
 that representative is outside the current eye frustum. Singles retain per-eye
 culling. Matrix uploads and cached vectors are released during scene teardown.
 
-## P1: multiview investigation — not yet enabled
+## P1: enabled opaque-world multiview migration
 
-Quest supports multiview; the native GLES path to target is GL_OVR_multiview2 plus
-GL_OVR_multiview_multisampled_render_to_texture. Runtime startup now checks exact
-extension names and both framebuffer entry points and logs support. This confirms
-the actual driver capability when the next build is run, rather than inferring it
-from the device name. No new OpenXR instance extension enables GLES multiview.
+The native GLES path now checks GL_OVR_multiview2,
+GL_OVR_multiview_multisampled_render_to_texture, both attachment entry points and
+GL_MAX_VIEWS_OVR. Matching eye extents and a working 2x post target are required.
+A separate world shader variant enables GL_OVR_multiview2 and declares two views.
+It indexes both projection/view matrices and eye positions by gl_ViewID_OVR; the
+fragment eye position uses a flat view-index varying. Monoview shaders remain
+available for reflections, special materials and unsupported drivers.
 
-The renderer still submits main-world draws sequentially. A shader extension
-alone would be insufficient: current scene, LAND, sky and water programs have
-single uMvp/eye uniforms, post targets are GL_TEXTURE_2D, and depth/MSAA resolve,
-exposure and bloom operate on one eye at a time. No unverified single-pass path is
-advertised as active.
+Eligible opaque statics and native LOD render once per stereo frame into two-layer
+HDR color and DEPTH_COMPONENT24 array textures attached through
+FramebufferTextureMultisampleMultiviewOVR at 2 samples. A uniform map is built once
+per shader generation by name; per-material uniform updates are translated to the
+multiview program's locations. The visible set remains the union of both eye frusta.
 
-Migration sequence:
+Switching away from the layered framebuffer resolves its implicit multisample
+attachments. Each eye then imports its layer with a fullscreen color/depth shader
+into the existing 2x MSAA target. This uses gl_FragDepth rather than an illegal
+single-sample-to-multisample depth blit. Resolve coverage is imported using alpha to
+coverage; opaque sample color is recovered from the resolved geometric coverage.
+The existing eye passes, water refraction/depth inputs and compositor depth continue
+using their usual targets and projection conventions.
 
-1. Add separate multiview variants of the static-world and LAND shaders using
-   `#extension GL_OVR_multiview2 : require`, `layout(num_views=2) in`, per-view MVP
-   and eye-position uniforms selected with gl_ViewID_OVR. Keep monoview variants
-   for reflection passes and unsupported drivers.
-2. Allocate two-layer color/depth array targets and attach them through
-   glFramebufferTextureMultisampleMultiviewOVR with 2 samples. Validate shader link,
-   framebuffer completeness and GL_MAX_VIEWS_OVR before selecting this path.
-3. Submit opaque static/LOD/LAND batches once. Resolve/read each layer into the
-   existing per-eye post path as a first migration stage. The remaining alpha,
-   environment, NPC, water and HUD passes must use compatible depth/sample targets;
-   never blit single-sample depth into the current multisample renderbuffer.
-4. Migrate the remaining world passes, then bloom and composition. Keep exposure
-   updating once per frame and preserve the monoview mirror. Optionally submit
-   two-layer OpenXR swapchains with imageArrayIndex 0/1; these are not required
-   merely to produce multiview offscreen images.
-5. Compare GPU timestamps, CPU submission time, allocations and draw counts on
-   the same scene before enabling by default. Verify both eyes independently,
-   reflections, cell changes, loading, controller HUD and depth reprojection.
+Materials with alpha tests, vertex alpha, non-opaque material alpha, blending,
+decals, loose objects or unusual depth-write/test rules stay on their existing
+eye path. These need a later coverage-aware migration. Terrain, NPCs, player body,
+water, additive environment highlights, HUD, sky and post-processing also remain
+sequential. This is actual single-pass rendering for eligible world passes, not
+full-scene single-pass rendering. Ordinary non-multiview hardware retains all
+features through the existing renderer.
+
+Shader conversion/link, uniform-map validation, framebuffer validation or draw
+errors disable the multiview path and log the reason. Source-program/size changes
+rebuild resources; scene teardown deletes the layered target and shader programs.
+The persistent batch cache records its rendering mode so falling back cannot reuse
+a list that omitted the special-material objects.
+
+Runtime diagnostics report actual submitted world draw counts, CPU submission time,
+layer-import time and whether the path activated. These are CPU timings, not GPU
+timestamps. There is extra memory and fullscreen layer-copy bandwidth in this first
+migration stage; no performance gain is claimed before Quest measurements.
+
+Remaining migration:
+
+1. Convert LAND to a separate multiview shader and draw into the same stereo target.
+2. Move the other world/actor/sky/water passes and preserve their compositing order;
+   handle alpha-tested/translucent coverage without the current layer import.
+3. Convert bloom/composition to array sampling and optionally submit two-layer
+   OpenXR color/depth swapchains directly, removing the per-eye layer imports.
+4. Compare CPU/GPU frame times, peak memory and draw counts on the same scene.
+   Verify near geometry, both eye images, shoreline reflections, loading, HUD,
+   depth reprojection and cell changes on device before claiming an FPS improvement.
 
 Sources:
 * https://developers.meta.com/horizon/documentation/unity/enable-multiview/
@@ -113,7 +132,11 @@ bounds, mirror padding and reflection refresh/invalidation conditions. Existing
 scene dispatch and world residency/preparation/loading tests also pass. CI runs
 the render-policy regression test before assembling the APK.
 
+Monoview, multiview and layer-import GLSL variants pass offline compilation/linking,
+and shader-conversion failure cases are covered in the host tests. APK 144 includes
+the new path.
+
 No Quest frame-time measurements or headset visual verification have been made
 in this environment. Test near geometry while moving laterally, then water while
 stationary/turning/walking, and cell transitions. Check startup's compositor-depth
-and multiview logs and that MSAA chooses 2x. Single-pass stereo is remaining work.
+and multiview logs and that MSAA chooses 2x. Remaining work is migration of the other passes and removal of the layer-import stage.

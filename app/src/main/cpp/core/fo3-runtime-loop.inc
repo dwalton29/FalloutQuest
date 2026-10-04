@@ -510,8 +510,13 @@ private:
         }
         const bool multiviewEntry = eglGetProcAddress("glFramebufferTextureMultiviewOVR") != nullptr;
         const bool multiviewMsaaEntry = eglGetProcAddress("glFramebufferTextureMultisampleMultiviewOVR") != nullptr;
-        FQ_LOGI("Quest stereo capabilities: OVR_multiview2=%d entry=%d multiviewMSAA=%d entry=%d active=sequential-cached-batches",
-                multiview2, multiviewEntry, multiviewMsaa, multiviewMsaaEntry);
+        GLint maxViews=0;
+        if (multiview2) glGetIntegerv(0x9631 /* GL_MAX_VIEWS_OVR */, &maxViews);
+        const auto attach = reinterpret_cast<QMVState::Attach>(eglGetProcAddress("glFramebufferTextureMultisampleMultiviewOVR"));
+        QMVConfigure(multiview2 && multiviewEntry && multiviewMsaa && multiviewMsaaEntry && maxViews>=2,attach);
+        FQ_LOGI("Quest stereo capabilities: OVR_multiview2=%d entry=%d multiviewMSAA=%d entry=%d maxViews=%d opaquePath=%s",
+                multiview2,multiviewEntry,multiviewMsaa,multiviewMsaaEntry,maxViews,
+                gMultiview.supported ? "multiview-capable-pending-validation" : "sequential-fallback");
         FQ_LOGI("OpenGL ES renderer: %s", reinterpret_cast<const char*>(glGetString(GL_RENDERER)));
         return true;
     }
@@ -712,6 +717,12 @@ private:
         if (!CheckXr(xrEnumerateViewConfigurationViews(instance_, systemId_,
                         XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO, viewCount, &viewCount,
                         configViews.data()), "xrEnumerateViewConfigurationViews")) return false;
+
+        if (configViews[0].recommendedImageRectWidth != configViews[1].recommendedImageRectWidth ||
+            configViews[0].recommendedImageRectHeight != configViews[1].recommendedImageRectHeight) {
+            gMultiview.supported=false;
+            FQ_LOGI("Multiview disabled: stereo eye extents differ");
+        }
 
         const uint32_t q2060RecommendedSamples =
             std::min(configViews[0].recommendedSwapchainSampleCount,
@@ -1539,6 +1550,8 @@ private:
                 ++gStereoFrame;
                 for (uint32_t eye = 0; eye < 2; ++eye) {
                     const auto pose = ToVirtualPose(views[eye].pose);
+                    gStereoEye[eye][0]=pose.position.x; gStereoEye[eye][1]=pose.position.y;
+                    gStereoEye[eye][2]=pose.position.z;
                     const auto vp = Multiply(ProjectionFromFov(views[eye].fov, 0.04f,
                         125000.0f / FO3_UNITS_PER_METRE_Q715), ViewFromPose(pose));
                     std::copy(vp.m, vp.m+16, gStereoMvp[eye]);
@@ -1625,6 +1638,7 @@ private:
 
     bool RenderEye(uint32_t eyeIndex, const XrView& view,
                    XrCompositionLayerProjectionView& projectionView) {
+        gCurrentStereoEye = eyeIndex;
         EyeSwapchain& eye = eyes_[eyeIndex];
         uint32_t imageIndex = 0;
         XrSwapchainImageAcquireInfo acquireInfo{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
