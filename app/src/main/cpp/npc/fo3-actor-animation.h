@@ -51,7 +51,9 @@ struct Clip {
   std::vector<TextKey> textKeys;
   size_t compressedTracks = 0, ignoredControllers = 0;
 };
+struct SampleTimings { double clipUs=0,skeletonUs=0; };
 struct Pose {
+  int accumulation=-1;
   std::vector<Transform> local;
   std::vector<Matrix> global, delta;
   std::vector<int> trackBones;
@@ -70,7 +72,7 @@ void BindClip(const Skeleton &skeleton, const Clip &clip, Pose &pose);
 // Absolute sequence sampling; actor root motion is not applied to world
 // placement.
 bool Sample(const Skeleton &skeleton, const Clip &clip, double elapsed,
-            Pose &pose);
+            Pose &pose, SampleTimings* timings=nullptr);
 bool DecodeSkeleton(const std::vector<uint8_t> &bytes, Skeleton &out);
 bool DecodeClip(const std::vector<uint8_t> &bytes, Clip &out);
 // UI NIFs embed multiple sequences and animate an AVObject hierarchy, including

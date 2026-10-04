@@ -1,3 +1,4 @@
+#include <chrono>
 #include "fo3-actor-animation.h"
 #include <algorithm>
 #include <cmath>
@@ -129,6 +130,7 @@ int FindBone(const Skeleton &s, const std::string &name) {
   return -1;
 }
 void BindClip(const Skeleton &s, const Clip &c, Pose &p) {
+  p.accumulation=FindBone(s,c.accumulationRoot);
   p.local.resize(s.bones.size());
   p.global.resize(s.bones.size());
   p.delta.resize(s.bones.size());
@@ -215,7 +217,8 @@ static std::array<float, 4> Evaluate(const Channel &c, float time, float start,
   }
   return v;
 }
-bool Sample(const Skeleton &s, const Clip &c, double elapsed, Pose &p) {
+bool Sample(const Skeleton &s, const Clip &c, double elapsed, Pose &p, SampleTimings* timings) {
+  const auto started=std::chrono::steady_clock::now();
   if (p.trackBones.size() != c.tracks.size() ||
       p.local.size() != s.bones.size())
     BindClip(s, c, p);
@@ -236,7 +239,7 @@ bool Sample(const Skeleton &s, const Clip &c, double elapsed, Pose &p) {
   float time = c.start + static_cast<float>(t);
   for (size_t i = 0; i < s.bones.size(); ++i)
     p.local[i] = s.bones[i].bind;
-  int accumulation = FindBone(s, c.accumulationRoot);
+  const int accumulation=p.accumulation;
   if (accumulation >= 0)
     p.local[accumulation] = Transform{};
   for (size_t i = 0; i < c.tracks.size(); ++i) {
@@ -280,6 +283,8 @@ bool Sample(const Skeleton &s, const Clip &c, double elapsed, Pose &p) {
               ? track.base.scale
               : Evaluate(track.scale, time, track.start, track.stop, false)[0];
   }
+  const auto skeletonStarted=std::chrono::steady_clock::now();
+  if(timings) timings->clipUs=std::chrono::duration<double,std::micro>(skeletonStarted-started).count();
   // Skeleton decoder orders parents before children; externally built skeletons
   // are evaluated recursively too, so valid non-topological input is supported.
   std::fill(p.evaluated.begin(), p.evaluated.end(), 0);
@@ -301,6 +306,7 @@ bool Sample(const Skeleton &s, const Clip &c, double elapsed, Pose &p) {
     for (float v : m)
       if (!std::isfinite(v))
         return false;
+  if(timings) timings->skeletonUs=std::chrono::duration<double,std::micro>(std::chrono::steady_clock::now()-skeletonStarted).count();
   return true;
 }
 } // namespace fo3anim

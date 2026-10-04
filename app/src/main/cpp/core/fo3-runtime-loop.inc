@@ -1405,6 +1405,9 @@ private:
         XrFrameWaitInfo waitInfo{XR_TYPE_FRAME_WAIT_INFO};
         XrFrameState frameState{XR_TYPE_FRAME_STATE};
         if (!CheckXr(xrWaitFrame(session_, &waitInfo, &frameState), "xrWaitFrame")) return;
+        const auto appFrameStarted=fqopaque::Clock::now();
+        const double appCadenceUs=fqactor::lastFrame.time_since_epoch().count() ? std::chrono::duration<double,std::micro>(appFrameStarted-fqactor::lastFrame).count() : 0.0;
+        fqactor::lastFrame=appFrameStarted;
         XrFrameBeginInfo beginInfo{XR_TYPE_FRAME_BEGIN_INFO};
         if (!CheckXr(xrBeginFrame(session_, &beginInfo), "xrBeginFrame")) return;
         fo3loadingvr::PrepareCatalog();
@@ -1555,6 +1558,7 @@ private:
                 gStereoReflectionEye[1]=centrePose.position.y;
                 gStereoReflectionEye[2]=centrePose.position.z;
                 gStereoMvpReady = true;
+                QActorPrepareStereoFrame();
                 bool rendered = true;
                 for (uint32_t eye = 0; eye < 2; ++eye) {
                     rendered = RenderEye(eye, views[eye], projectionViews[eye]) && rendered;
@@ -1595,6 +1599,8 @@ private:
         endInfo.layers = layerCount ? layers : nullptr;
         const bool q1700FrameSubmitted =
             CheckXr(xrEndFrame(session_, &endInfo), "xrEndFrame");
+        if(gStereoMvpReady && layerCount>0 && !IsFo3LoadingVisible())
+            QActorReportFrame(fqopaque::Micros(appFrameStarted),appCadenceUs);
         if (q1700FrameSubmitted && layerCount > 0) {
             const bool wasLoading = IsFo3LoadingVisible();
             if (fo3loadingvr::Ready()) MarkFo3LoadingFramePresented(fo3loadingvr::FullyVisible());

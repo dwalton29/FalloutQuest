@@ -58,15 +58,19 @@ bool Q230UploadActorPart(Q230ActorVisual &actor, CpuObject &part, float centerX,
   const bool deform =
       animationReady && (part.mesh.skinned || rig.rigidBone >= 0);
   if (deform) {
+    auto scene=fo3anim::Identity();
+    scene[0]=1.0f/FO3_UNITS_PER_METRE;scene[5]=0;scene[10]=0;
+    scene[6]=-1.0f/FO3_UNITS_PER_METRE;scene[9]=1.0f/FO3_UNITS_PER_METRE;
+    scene[12]=-rig.centerX/FO3_UNITS_PER_METRE;
+    scene[13]=FLOOR_Y-rig.floorZ/FO3_UNITS_PER_METRE;
+    scene[14]=SCENE_FORWARD+rig.centerY/FO3_UNITS_PER_METRE;
+    fo3anim::Matrix inverseScene{};fo3anim::Inverse(scene,inverseScene);
+    rig.scenePlacement=fo3anim::Multiply(scene,rig.placement);
+    rig.inverseScenePlacement=fo3anim::Multiply(rig.inversePlacement,inverseScene);
     if (!PrepareExpandedVertexStreamQ1960(part, centerX, centerY, floorZ))
       return false;
-    rig.work = part.q1960ExpandedVertices;
-    rig.posed.resize(part.positionsGame.size());
-    rig.gameDeltas.resize(actor.skeleton.bones.size());
-    rig.bind = part; // retain morphed bind vertices, normals, weights and
-                     // material data
-    rig.bind.q1960ExpandedVertices.clear();
-    rig.bind.q1960ExpandedReady = false;
+    // FaceGen/morphed bind geometry is uploaded once, never rebuilt in update.
+
   }
   GpuObject gpu;
   if (!UploadCpuObject(part, centerX, centerY, floorZ, gpu))
@@ -74,98 +78,82 @@ bool Q230UploadActorPart(Q230ActorVisual &actor, CpuObject &part, float centerX,
   gpu.q230NpcActor = true;
   rig.gpuIndex = actor.objects.size();
   if (deform) {
-    glBindBuffer(GL_ARRAY_BUFFER, gpu.vbo);
-    glBufferData(GL_ARRAY_BUFFER,
-                 static_cast<GLsizeiptr>(rig.work.size() * sizeof(float)),
-                 rig.work.data(), GL_DYNAMIC_DRAW);
-    glBindBuffer(GL_ARRAY_BUFFER, 0);
-    actor.rigs.push_back(std::move(rig));
+    std::vector<uint16_t> indices;
+    std::vector<float> weights;
+    indices.reserve(part.mesh.indices.size()*4);weights.reserve(part.mesh.indices.size()*4);
+    if(!part.mesh.skinned && rig.rigidBone>=0) rig.bones={rig.rigidBone};
+    for(uint32_t vertex:part.mesh.indices) for(size_t j=0;j<4;++j) {
+      const size_t at=static_cast<size_t>(vertex)*4+j;
+      const bool weighted=part.mesh.skinned && at<part.mesh.skinBoneIndices.size() && at<part.mesh.skinBoneWeights.size();
+      indices.push_back(weighted ? part.mesh.skinBoneIndices[at] : 0);
+      weights.push_back(weighted ? part.mesh.skinBoneWeights[at] : (rig.rigidBone>=0 && j==0 ? 1.0f : 0.0f));
+    }
+    if(QActorCreateSkin(gpu,rig.skin,indices,weights,rig.bones.size(),false,part.q1960ExpandedVertices))
+      actor.rigs.push_back(std::move(rig));
+  }
+  GpuObject bounds=gpu;
+  if(deform && !actor.rigs.empty() && actor.rigs.back().gpuIndex==rig.gpuIndex) {
+    if(actor.renderEnvelope.empty()) actor.renderEnvelope=fo3anim::ClipEnvelope(actor.skeleton,actor.clip);
+    double bindRadius=0;
+    for(const auto& vertex:part.positionsGame) {
+      const auto local=fo3anim::Point(actor.rigs.back().inversePlacement,{vertex.x,vertex.y,vertex.z});
+      bindRadius=std::max(bindRadius,std::sqrt(double(local[0])*local[0]+double(local[1])*local[1]+double(local[2])*local[2]));
+    }
+    // rig was moved into actor.rigs; use its stable, cached bone association.
+    const auto& readyRig=actor.rigs.back();
+    double radius=bindRadius;
+    for(int bone:readyRig.bones) radius=std::max(radius,fo3anim::DeltaRadius(actor.skeleton,actor.renderEnvelope,bone,bindRadius));
+    radius=radius*fo3anim::LinearNormBound(readyRig.placement)/FO3_UNITS_PER_METRE;
+    const float x=(readyRig.placement[12]-centerX)/FO3_UNITS_PER_METRE;
+    const float y=FLOOR_Y+(readyRig.placement[14]-floorZ)/FO3_UNITS_PER_METRE;
+    const float z=SCENE_FORWARD-(readyRig.placement[13]-centerY)/FO3_UNITS_PER_METRE;
+    if(!std::isfinite(radius)) {
+      bounds.minX=bounds.minY=bounds.minZ=-1e30f;bounds.maxX=bounds.maxY=bounds.maxZ=1e30f;
+    } else {
+      const float r=static_cast<float>(radius)+0.01f;
+      bounds.minX=std::min(bounds.minX,x-r);bounds.maxX=std::max(bounds.maxX,x+r);
+      bounds.minY=std::min(bounds.minY,y-r);bounds.maxY=std::max(bounds.maxY,y+r);
+      bounds.minZ=std::min(bounds.minZ,z-r);bounds.maxZ=std::max(bounds.maxZ,z+r);
+    }
+  }
+  if(!actor.renderBoundsReady) { actor.renderBounds=bounds;actor.renderBoundsReady=true; }
+  else {
+    auto& a=actor.renderBounds;
+    a.minX=std::min(a.minX,bounds.minX);a.maxX=std::max(a.maxX,bounds.maxX);
+    a.minY=std::min(a.minY,bounds.minY);a.maxY=std::max(a.maxY,bounds.maxY);
+    a.minZ=std::min(a.minZ,bounds.minZ);a.maxZ=std::max(a.maxZ,bounds.maxZ);
   }
   actor.objects.push_back(std::move(gpu));
   return true;
 }
 
 void Q230UpdateActor(Q230ActorVisual &actor) {
-  if (actor.lastFrame == gSceneLoadFrame || actor.rigs.empty())
-    return;
-  actor.lastFrame = gSceneLoadFrame;
-  const double elapsed =
-      std::chrono::duration<double>(std::chrono::steady_clock::now() -
-                                    actor.animationStart)
-          .count();
-  if (!fo3anim::Sample(actor.skeleton, actor.clip, elapsed, actor.pose))
-    return;
-  for (auto &rig : actor.rigs) {
-    const auto &cpu = rig.bind;
-    // Form game-space deformation matrices once per bone, then skin each
-    // source vertex once. Triangle expansion copies the already posed stream.
-    for (size_t bone = 0; bone < actor.pose.delta.size(); ++bone)
-      rig.gameDeltas[bone] = fo3anim::Multiply(
-          rig.placement,
-          fo3anim::Multiply(actor.pose.delta[bone], rig.inversePlacement));
-    const auto identity = fo3anim::Identity();
-    for (size_t vertex = 0; vertex < cpu.positionsGame.size(); ++vertex) {
-      fo3anim::Matrix skin{};
-      float total = 0;
-      if (cpu.mesh.skinned &&
-          cpu.mesh.skinBoneIndices.size() > vertex * 4u + 3u &&
-          cpu.mesh.skinBoneWeights.size() > vertex * 4u + 3u) {
-        for (int influence = 0; influence < 4; ++influence) {
-          const size_t at = vertex * 4u + influence;
-          const uint16_t index = cpu.mesh.skinBoneIndices[at];
-          const float weight = cpu.mesh.skinBoneWeights[at];
-          if (weight <= 0)
-            continue;
-          const int bone = index < rig.bones.size() ? rig.bones[index] : -1;
-          const auto &delta = bone >= 0 ? rig.gameDeltas[bone] : identity;
-          for (size_t i = 0; i < skin.size(); ++i)
-            skin[i] += delta[i] * weight;
-          total += weight;
-        }
-      } else if (rig.rigidBone >= 0) {
-        skin = rig.gameDeltas[rig.rigidBone];
-        total = 1;
-      }
-      if (total <= 1e-8f)
-        skin = identity;
-      else
-        for (float &value : skin)
-          value /= total;
-      const Vec3 vectors[4] = {
-          cpu.positionsGame[vertex], cpu.normalsGame[vertex],
-          cpu.tangentsGame[vertex], cpu.bitangentsGame[vertex]};
-      for (int component = 0; component < 4; ++component) {
-        const auto game = fo3anim::Point(
-            skin,
-            {vectors[component].x, vectors[component].y, vectors[component].z},
-            component != 0);
-        Vec3 xr;
-        if (component == 0)
-          xr = {(game[0] - rig.centerX) / FO3_UNITS_PER_METRE,
-                FLOOR_Y + (game[2] - rig.floorZ) / FO3_UNITS_PER_METRE,
-                SCENE_FORWARD - (game[1] - rig.centerY) / FO3_UNITS_PER_METRE};
-        else
-          xr = GameDirectionToOpenXr(Normalize({game[0], game[1], game[2]}));
-        rig.posed[vertex][component * 3] = xr.x;
-        rig.posed[vertex][component * 3 + 1] = xr.y;
-        rig.posed[vertex][component * 3 + 2] = xr.z;
-      }
+  if (actor.lastFrame == gStereoFrame || actor.rigs.empty()) return;
+  actor.lastFrame=gStereoFrame;
+  ++fqactor::npc.actors;
+  const double elapsed=std::chrono::duration<double>(fqopaque::Clock::now()-actor.animationStart).count();
+  fo3anim::SampleTimings timings;
+  if(!fo3anim::Sample(actor.skeleton,actor.clip,elapsed,actor.pose,&timings)) return;
+  fqactor::npc.clip+=timings.clipUs;fqactor::npc.pose+=timings.skeletonUs;
+  for(auto& rig:actor.rigs) {
+    const auto started=fqopaque::Clock::now();
+    for(size_t slot=0;slot<rig.skin.mapping.sources.size();++slot) {
+      const int index=rig.skin.mapping.sources[slot];
+      const int bone=index<static_cast<int>(rig.bones.size()) ? rig.bones[index] : -1;
+      auto delta=fqskin::Identity();
+      if(bone>=0) delta=fo3anim::Multiply(rig.scenePlacement,fo3anim::Multiply(actor.pose.delta[bone],rig.inverseScenePlacement));
+      // Uniform game->scene scale cancels in this conjugation; direction w=0.
+      fqskin::Pack(rig.skin.palette[slot+1],delta,delta);
     }
-    for (size_t expanded = 0; expanded < cpu.mesh.indices.size(); ++expanded)
-      std::copy_n(rig.posed[cpu.mesh.indices[expanded]].begin(), 12,
-                  rig.work.begin() + expanded * 18u);
-    const auto &object = actor.objects[rig.gpuIndex];
-    glBindBuffer(GL_ARRAY_BUFFER, object.vbo);
-    glBufferSubData(GL_ARRAY_BUFFER, 0,
-                    static_cast<GLsizeiptr>(rig.work.size() * sizeof(float)),
-                    rig.work.data());
+    fqactor::npc.bones+=fqopaque::Micros(started);
+    QActorUploadSkin(actor.objects[rig.gpuIndex],rig.skin,fqactor::npc,false);
   }
-  glBindBuffer(GL_ARRAY_BUFFER, 0);
 }
 
 void Q230RenderNpcActors(bool alphaPass) {
+  const auto drawStarted=fqopaque::Clock::now();
   for (auto &actor : gQ230NpcActors) {
-    Q230UpdateActor(actor);
+    if(!actor.renderVisible) continue;
     for (const auto &object : actor.objects) {
       if (object.alphaBlend != alphaPass)
         continue;
@@ -182,4 +170,5 @@ void Q230RenderNpcActors(bool alphaPass) {
       DrawSceneObject(object);
     }
   }
+  fqactor::npc.draw+=fqopaque::Micros(drawStarted);
 }

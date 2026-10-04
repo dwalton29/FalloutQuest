@@ -1,3 +1,5 @@
+#include "npc/fo3-animation-bounds.h"
+#include "rendering/actor-skinning.h"
 #include "rendering/opaque-telemetry.h"
 #include "rendering/quest-render-policy.h"
 #include "fo3-npc-appearance.h"
@@ -278,6 +280,8 @@ struct CpuObject {
 };
 
 struct GpuObject {
+    GLuint skinAttributes=0, skinPalette=0;
+    int skinMode=0;
     GLuint vao = 0;
     GLuint vbo = 0;
     GLuint diffuse = 0;
@@ -385,6 +389,8 @@ uint64_t gQ2015CullTested = 0u;
 uint64_t gQ2015CullRejected = 0u;
 uint64_t gQ2015CullPassed = 0u;
 uint64_t gQ2015CullScopes = 0u;
+
+#include "rendering/actor-gpu-skin.inc"
 
 bool Q2015AabbVisible(const GpuObject& object) {
     // Q20.20: reflection passes now install their own reflected-camera frustum.
@@ -532,12 +538,9 @@ std::vector<GpuObject> gObjects;
 // Q21.0: real Fallout actor geometry kept outside CELL ownership.
 std::vector<GpuObject> gQ210PlayerBody;
 struct Q230RigPart {
-    CpuObject bind;
-    std::vector<float> work;
-    std::vector<std::array<float,12>> posed;
-    std::vector<fo3anim::Matrix> gameDeltas;
+    QActorSkin skin;
     std::vector<int> bones;
-    fo3anim::Matrix placement{}, inversePlacement{};
+    fo3anim::Matrix placement{}, inversePlacement{}, scenePlacement{}, inverseScenePlacement{};
     int rigidBone = -1;
     size_t gpuIndex = 0;
     float centerX=0, centerY=0, floorZ=0;
@@ -550,6 +553,9 @@ struct Q230ActorVisual {
     std::vector<CpuObject> parts;
     std::vector<GpuObject> objects;
     std::vector<Q230RigPart> rigs;
+    std::vector<fo3anim::Envelope> renderEnvelope;
+    GpuObject renderBounds;
+    bool renderBoundsReady=false, renderVisible=true;
     std::unordered_map<std::string,Fo3RgbaTexture> generatedTextures;
     std::chrono::steady_clock::time_point animationStart{};
     uint64_t lastFrame = UINT64_MAX;
@@ -608,13 +614,17 @@ float gQ213TorsoYaw = 0.0f;
 float gQ213LastLocomotionYaw = 0.0f;
 
 uint64_t gQ211TrackingSerial = 0u;
+uint64_t gQ211RigRevision = 0u;
 uint64_t gQ211LastSkinnedSerial = ~0ull;
 
 struct Q211PlayerRigPart {
     size_t gpuIndex = 0u;
     std::string sourceModelPath;
     std::vector<float> bindExpanded;
-    std::vector<float> workExpanded;
+    QActorSkin skin;
+    std::vector<int> roles;
+    std::vector<std::string> boneNames;
+
     std::vector<uint16_t> expandedBoneIndices; // 4 per expanded vertex
     std::vector<float> expandedBoneWeights;     // 4 per expanded vertex
     std::vector<Fo3NifSkinBone> bones;
@@ -678,8 +688,10 @@ bool Q2017CanShareGeometry(const GpuObject& gpu) {
         gpu.baseRecordType == "STAT" ||
         gpu.baseRecordType == "SCOL" ||
         gpu.baseRecordType == "TREE";
-    return gExteriorStreamingActiveQ1890 &&
-           authoredStatic &&
+    // Geometry is immutable independently of the previous committed scene.
+    // Initial exterior/child-world uploads precede the streaming-context commit.
+    // Draw batching still requires the active exterior context below.
+    return authoredStatic &&
            !gpu.q1990NativeLod &&
            !gpu.alphaBlend &&
            !gpu.decalQ1170 &&
@@ -948,6 +960,22 @@ GLuint CreateQ6HProgram() {
         layout(location = 7) in vec4 aInstance1Q2016;
         layout(location = 8) in vec4 aInstance2Q2016;
         layout(location = 9) in vec4 aInstance3Q2016;
+        layout(location = 10) in vec4 aBoneWeights;
+        layout(location = 11) in vec4 aBoneIndices;
+        uniform int uActorSkinMode;
+        uniform highp sampler2D uActorPalette;
+        mat4 actorBone(int index,int offset) {
+            return mat4(texelFetch(uActorPalette,ivec2(offset,index),0),
+                        texelFetch(uActorPalette,ivec2(offset+1,index),0),
+                        texelFetch(uActorPalette,ivec2(offset+2,index),0),
+                        texelFetch(uActorPalette,ivec2(offset+3,index),0));
+        }
+        vec3 actorDirection(mat3 matrix,vec3 bind) {
+            vec3 result=matrix*bind;
+            float magnitude=length(result);
+            if(uActorSkinMode==1) return magnitude>1e-6 ? result/magnitude : bind;
+            return magnitude>=1e-7 ? result/magnitude : vec3(0.0,0.0,-1.0);
+        }
         uniform mat4 uMvp;
         uniform float uInstancingEnabledQ2016;
         uniform float uObjectTransformEnabledQ2017;
@@ -978,12 +1006,39 @@ GLuint CreateQ6HProgram() {
             } else if (uObjectTransformEnabledQ2017 > 0.5) {
                 q2017Transform = uObjectTransformQ2017;
             }
+            vec3 actorPosition=aPosition, actorNormal=aNormal, actorTangent=aTangent, actorBitangent=aBitangent;
+            if (uActorSkinMode != 0) {
+                mat4 positionSkin=mat4(0.0), directionSkin=mat4(0.0);
+                float total=0.0;
+                for(int i=0;i<4;++i) {
+                    float weight=aBoneWeights[i];
+                    if(weight<=0.0) continue;
+                    int bone=int(aBoneIndices[i]);
+                    positionSkin+=actorBone(bone,0)*weight;
+                    directionSkin+=actorBone(bone,4)*weight;
+                    total+=weight;
+                }
+                if(uActorSkinMode==1) {
+                    if(total<0.999) {
+                        positionSkin+=mat4(1.0)*max(0.0,1.0-total);
+                        directionSkin+=mat4(1.0)*max(0.0,1.0-total);
+                    }
+                } else {
+                    if(total>1e-8) { positionSkin/=total;directionSkin/=total; }
+                    else { positionSkin=mat4(1.0);directionSkin=mat4(1.0); }
+                }
+                // Preserve CPU xyz semantics even for authored overweight vertices.
+                actorPosition=(positionSkin*vec4(aPosition,1.0)).xyz;
+                actorNormal=actorDirection(mat3(directionSkin),aNormal);
+                actorTangent=actorDirection(mat3(directionSkin),aTangent);
+                actorBitangent=actorDirection(mat3(directionSkin),aBitangent);
+            }
             vec4 q2016WorldPosition =
-                q2017Transform * vec4(aPosition, 1.0);
+                q2017Transform * vec4(actorPosition, 1.0);
             mat3 q2016Basis = mat3(q2017Transform);
-            vec3 q2016Normal = normalize(q2016Basis * aNormal);
-            vec3 q2016Tangent = normalize(q2016Basis * aTangent);
-            vec3 q2016Bitangent = normalize(q2016Basis * aBitangent);
+            vec3 q2016Normal = normalize(q2016Basis * actorNormal);
+            vec3 q2016Tangent = normalize(q2016Basis * actorTangent);
+            vec3 q2016Bitangent = normalize(q2016Basis * actorBitangent);
             vNormal = q2016Normal;
             vTangent = q2016Tangent;
             vBitangent = q2016Bitangent;
@@ -2535,6 +2590,8 @@ bool InitializeScene() {
     gProgram = CreateQ6HProgram();
     if (!gProgram) return false;
     gFastMaterialLocation = glGetUniformLocation(gProgram, "uFastMaterial");
+    gActorSkinMode=glGetUniformLocation(gProgram,"uActorSkinMode");
+    gActorPalette=glGetUniformLocation(gProgram,"uActorPalette");
     gMvpLocation = glGetUniformLocation(gProgram, "uMvp");
     gInstancingEnabledLocationQ2016 =
         glGetUniformLocation(gProgram, "uInstancingEnabledQ2016");
@@ -2674,6 +2731,7 @@ bool Q74ShouldSkipPlacement(const Fo3WorldPlacement& placement) {
 
 void Q74DeleteGpuObjects(std::vector<GpuObject>& objects) {
     for (GpuObject& object : objects) {
+        QActorDeleteSkin(object);
         if (Q2017ReleaseSharedGeometry(object)) continue;
         if (object.vbo) glDeleteBuffers(1, &object.vbo);
         if (object.vao) glDeleteVertexArrays(1, &object.vao);
@@ -5021,6 +5079,11 @@ void DrawSceneObject(const GpuObject& object, bool environmentPassQ2050 = false)
     }
     if (environmentPassQ2050 && !object.environmentEnabledQ2050) return;
     fqopaque::SubmissionScope submissionScope;
+    glUniform1i(gActorSkinMode,object.skinMode);
+    if(object.skinMode) {
+        glUniform1i(gActorPalette,6);glActiveTexture(GL_TEXTURE6);
+        glBindTexture(GL_TEXTURE_2D,object.skinPalette);glActiveTexture(GL_TEXTURE0);
+    }
     if (fqopaque::collectingNative) {
         glUniform1f(gFastMaterialLocation,
             fqopaque::nativeObjectMaterial && fqopaque::Options().lodMinimal ? 2.0f :
@@ -5431,6 +5494,8 @@ bool Q1030InitializeRenderProgramOnly() {
     }
 
     gFastMaterialLocation = glGetUniformLocation(gProgram, "uFastMaterial");
+    gActorSkinMode=glGetUniformLocation(gProgram,"uActorSkinMode");
+    gActorPalette=glGetUniformLocation(gProgram,"uActorPalette");
     gMvpLocation = glGetUniformLocation(gProgram, "uMvp");
     gInstancingEnabledLocationQ2016 =
         glGetUniformLocation(gProgram, "uInstancingEnabledQ2016");
@@ -8321,7 +8386,7 @@ int Q211FindHeadAnchorBone(
     return -1;
 }
 
-bool Q211FindAvatarHeadAnchor(Vec3& out) {
+bool Q211BuildAvatarHeadAnchor(Vec3& out) {
     // Prefer the authored Head node. Some body parts do not reference Head;
     // Neck is a stable fallback, then shoulder midpoint.
     for (const Q211PlayerRigPart& part : gQ211PlayerRigParts) {
@@ -8468,7 +8533,7 @@ bool Q222ExactBoneGeometryAnchor(
            std::isfinite(out.z);
 }
 
-bool Q222FindVisibleGrabPalmAnchor(
+bool Q222BuildVisibleGrabPalmAnchor(
         bool left,
         Vec3& out,
         float& outWeight,
@@ -8531,6 +8596,15 @@ bool Q222FindVisibleGrabPalmAnchor(
     }
 
     return false;
+}
+
+bool Q222FindVisibleGrabPalmAnchor(bool left,Vec3& out,float& weight,std::string& source) {
+    struct Cached { uint64_t revision=UINT64_MAX;Vec3 point{};float weight=0;std::string source;bool valid=false; };
+    static Cached anchors[2];auto& a=anchors[left?0:1];
+    if(a.revision!=gQ211RigRevision) {
+        a.valid=Q222BuildVisibleGrabPalmAnchor(left,a.point,a.weight,a.source);a.revision=gQ211RigRevision;
+    }
+    out=a.point;weight=a.weight;source=a.source;return a.valid;
 }
 
 Vec3 Q211BindBonePoint(const Fo3NifSkinBone& bone) {
@@ -8605,7 +8679,7 @@ bool Q221FindGlobalBonePoint(
     return found;
 }
 
-bool Q220FindAuthoredHandBasis(bool left, Q220HandBasis& out) {
+bool Q220BuildAuthoredHandBasis(bool left, Q220HandBasis& out) {
     out = {};
 
     Vec3 handPoint{}, middlePoint{}, littlePoint{};
@@ -8706,6 +8780,13 @@ struct Q217FingerRig {
 };
 
 Q217FingerRig gQ217FingerRig[2];
+
+bool Q220FindAuthoredHandBasis(bool left,Q220HandBasis& out) {
+    struct Cache { uint64_t revision=UINT64_MAX;Q220HandBasis basis;bool valid=false; };
+    static Cache cached[2];auto& c=cached[left?0:1];
+    if(c.revision!=gQ211RigRevision) { c.valid=Q220BuildAuthoredHandBasis(left,c.basis);c.revision=gQ211RigRevision; }
+    out=c.basis;return c.valid;
+}
 
 struct Q211Delta {
     float r[9]{
@@ -9111,14 +9192,16 @@ bool Q217EnsureFingerRig(
     return rig.ready;
 }
 
-std::unordered_map<std::string, Q211Delta> Q217BuildFingerPose(
+const std::unordered_map<std::string, Q211Delta>& Q217BuildFingerPose(
         bool left,
         const Q220HandBasis& basis,
         float trigger,
         bool triggerTouched,
         float grip,
         bool thumbTouched) {
-    std::unordered_map<std::string, Q211Delta> out;
+    static std::unordered_map<std::string,Q211Delta> poses[2];
+    auto& out=poses[left?0:1];
+    for(auto& entry:out) entry.second=Q211Delta{};
     if (!Q217EnsureFingerRig(left, basis)) return out;
 
     Q217FingerRig& rig = gQ217FingerRig[left ? 0 : 1];
@@ -9130,6 +9213,14 @@ std::unordered_map<std::string, Q211Delta> Q217BuildFingerPose(
                 n += c.joints.size();
             return n;
         }());
+
+    static uint64_t revision[2]={UINT64_MAX,UINT64_MAX};
+    if(revision[left?0:1]!=gQ211RigRevision) {
+        out.clear();
+        for(const auto& chain:rig.chains) for(const auto& joint:chain.joints) out.emplace(joint.name,Q211Delta{});
+        for(const auto& joint:rig.thumb) out.emplace(joint.name,Q211Delta{});
+        revision[left?0:1]=gQ211RigRevision;
+    }
 
     const float indexCurl = std::clamp(
         std::max(trigger, triggerTouched ? 0.16f : 0.0f),
@@ -9436,7 +9527,7 @@ void Q213AssignArmPoseToPart(
         const Q213ArmPose& right,
         std::vector<Q211Delta>& deltas) {
     for (size_t i = 0u; i < part.bones.size(); ++i) {
-        const int role = Q211BoneRole(part.bones[i].name);
+        const int role = part.roles[i];
         if (left.solved) {
             if (role == 1) deltas[i] = left.upper;
             else if (role == 2) deltas[i] = left.fore;
@@ -9494,7 +9585,7 @@ void Q211BuildArmDeltas(
         outElbow, Q211Sub(currentHand, outElbow));
 
     for (size_t i = 0u; i < part.bones.size(); ++i) {
-        const int role = Q211BoneRole(part.bones[i].name);
+        const int role = part.roles[i];
         if (left) {
             if (role == 1) deltas[i] = upperDelta;
             else if (role == 2 || role == 3) deltas[i] = foreDelta;
@@ -9506,11 +9597,19 @@ void Q211BuildArmDeltas(
     solved = true;
 }
 
+bool Q211FindAvatarHeadAnchor(Vec3& out) {
+    static uint64_t revision=UINT64_MAX;static Vec3 anchor;static bool valid=false;
+    if(revision!=gQ211RigRevision) { valid=Q211BuildAvatarHeadAnchor(anchor);revision=gQ211RigRevision; }
+    if(valid) out=anchor;
+    return valid;
+}
+
 void Q211UpdatePlayerRig() {
     if (gQ211LastSkinnedSerial == gQ211TrackingSerial) return;
     gQ211LastSkinnedSerial = gQ211TrackingSerial;
     if (gQ211PlayerRigParts.empty()) return;
 
+    const auto poseStarted=fqopaque::Clock::now();
     float invRoot[16]{};
     if (!Q2016InvertAffine(gQ210PlayerRoot, invRoot)) return;
 
@@ -9655,33 +9754,37 @@ void Q211UpdatePlayerRig() {
                 gQ219ArmLengthScale);
     }
 
-    const std::unordered_map<std::string, Q211Delta> q217LeftFingerPose =
+    fqactor::player.pose+=fqopaque::Micros(poseStarted);
+    const auto fingerStarted=fqopaque::Clock::now();
+    static const std::unordered_map<std::string,Q211Delta> emptyFingerPose;
+    const auto& q217LeftFingerPose =
         q213LeftPose.solved
             ? Q217BuildFingerPose(
                   true, q220LeftAuthoredBasis,
                   gQ217FingerTrigger[0], gQ217TriggerTouched[0],
                   gQ217FingerGrip[0], gQ217ThumbTouched[0])
-            : std::unordered_map<std::string, Q211Delta>{};
-    const std::unordered_map<std::string, Q211Delta> q217RightFingerPose =
+            : emptyFingerPose;
+    const auto& q217RightFingerPose =
         q213RightPose.solved
             ? Q217BuildFingerPose(
                   false, q220RightAuthoredBasis,
                   gQ217FingerTrigger[1], gQ217TriggerTouched[1],
                   gQ217FingerGrip[1], gQ217ThumbTouched[1])
-            : std::unordered_map<std::string, Q211Delta>{};
+            : emptyFingerPose;
 
+    fqactor::player.fingers+=fqopaque::Micros(fingerStarted);
     size_t q213LeftAffectedParts = 0u;
     size_t q213RightAffectedParts = 0u;
 
-    constexpr size_t STRIDE = 18u;
+    static std::vector<Q211Delta> deltas;
     for (Q211PlayerRigPart& part : gQ211PlayerRigParts) {
         if (part.gpuIndex >= gQ210PlayerBody.size() ||
-            part.bindExpanded.empty() ||
-            part.bindExpanded.size() != part.workExpanded.size()) {
+            part.skin.palette.empty()) {
             continue;
         }
 
-        std::vector<Q211Delta> deltas(part.bones.size());
+        const auto bonesStarted=fqopaque::Clock::now();
+        deltas.resize(part.bones.size());std::fill(deltas.begin(),deltas.end(),Q211Delta{});
         Q213AssignArmPoseToPart(
             part, q213LeftPose, q213RightPose, deltas);
 
@@ -9690,8 +9793,8 @@ void Q211UpdatePlayerRig() {
         for (size_t boneIndex = 0u;
              boneIndex < part.bones.size();
              ++boneIndex) {
-            const std::string lower =
-                Q211Lower(part.bones[boneIndex].name);
+            const std::string& lower =
+                part.boneNames[boneIndex];
             const auto leftFinger =
                 q217LeftFingerPose.find(lower);
             if (leftFinger != q217LeftFingerPose.end()) {
@@ -9709,8 +9812,7 @@ void Q211UpdatePlayerRig() {
 
         bool q213PartHasLeftArm = false;
         bool q213PartHasRightArm = false;
-        for (const Fo3NifSkinBone& bone : part.bones) {
-            const int role = Q211BoneRole(bone.name);
+        for (const int role : part.roles) {
             q213PartHasLeftArm =
                 q213PartHasLeftArm ||
                 role == 1 || role == 2 || role == 3;
@@ -9723,89 +9825,25 @@ void Q211UpdatePlayerRig() {
         if (q213RightPose.solved && q213PartHasRightArm)
             ++q213RightAffectedParts;
 
-        std::copy(
-            part.bindExpanded.begin(), part.bindExpanded.end(),
-            part.workExpanded.begin());
-
-        const size_t expandedVertices = part.bindExpanded.size() / STRIDE;
-        if (part.expandedBoneIndices.size() != expandedVertices * 4u ||
-            part.expandedBoneWeights.size() != expandedVertices * 4u) {
-            continue;
-        }
-
-        for (size_t v = 0u; v < expandedVertices; ++v) {
-            const size_t base = v * STRIDE;
-            const Vec3 bindP{
-                part.bindExpanded[base + 0u],
-                part.bindExpanded[base + 1u],
-                part.bindExpanded[base + 2u]};
-            const Vec3 bindN{
-                part.bindExpanded[base + 3u],
-                part.bindExpanded[base + 4u],
-                part.bindExpanded[base + 5u]};
-            const Vec3 bindT{
-                part.bindExpanded[base + 6u],
-                part.bindExpanded[base + 7u],
-                part.bindExpanded[base + 8u]};
-            const Vec3 bindB{
-                part.bindExpanded[base + 9u],
-                part.bindExpanded[base + 10u],
-                part.bindExpanded[base + 11u]};
-
-            Vec3 p{0,0,0}, n{0,0,0}, t{0,0,0}, b{0,0,0};
-            float sum = 0.0f;
-            for (size_t slot = 0u; slot < 4u; ++slot) {
-                const size_t at = v * 4u + slot;
-                const uint16_t bone = part.expandedBoneIndices[at];
-                const float weight = part.expandedBoneWeights[at];
-                if (weight <= 0.000001f || bone >= deltas.size()) continue;
-                p = Q211Add(p, Q211Mul(
-                    Q211ApplyDelta(deltas[bone], bindP), weight));
-                n = Q211Add(n, Q211Mul(
-                    Q211ApplyDeltaVector(deltas[bone], bindN), weight));
-                t = Q211Add(t, Q211Mul(
-                    Q211ApplyDeltaVector(deltas[bone], bindT), weight));
-                b = Q211Add(b, Q211Mul(
-                    Q211ApplyDeltaVector(deltas[bone], bindB), weight));
-                sum += weight;
+        // Position deltas retain axial stretch; directions retain the original
+        // rotation-only policy. Evaluate affine matrices once per palette bone.
+        for(size_t slot=0;slot<part.skin.mapping.sources.size();++slot) {
+            const auto& delta=deltas[part.skin.mapping.sources[slot]];
+            fqskin::Matrix position=fqskin::Identity(),direction=fqskin::Identity();
+            const auto origin=Q211ApplyDelta(delta,{0,0,0});
+            const Vec3 unit[3]={{1,0,0},{0,1,0},{0,0,1}};
+            for(int c=0;c<3;++c) {
+                const auto p=Q211Sub(Q211ApplyDelta(delta,unit[c]),origin);
+                const auto d=Q211ApplyDeltaVector(delta,unit[c]);
+                position[c*4]=p.x;position[c*4+1]=p.y;position[c*4+2]=p.z;
+                direction[c*4]=d.x;direction[c*4+1]=d.y;direction[c*4+2]=d.z;
             }
-            if (sum < 0.999f) {
-                const float remain = std::max(0.0f, 1.0f - sum);
-                p = Q211Add(p, Q211Mul(bindP, remain));
-                n = Q211Add(n, Q211Mul(bindN, remain));
-                t = Q211Add(t, Q211Mul(bindT, remain));
-                b = Q211Add(b, Q211Mul(bindB, remain));
-            }
-
-            n = Q211NormalizeSafe(n, bindN);
-            t = Q211NormalizeSafe(t, bindT);
-            b = Q211NormalizeSafe(b, bindB);
-
-            part.workExpanded[base + 0u] = p.x;
-            part.workExpanded[base + 1u] = p.y;
-            part.workExpanded[base + 2u] = p.z;
-            part.workExpanded[base + 3u] = n.x;
-            part.workExpanded[base + 4u] = n.y;
-            part.workExpanded[base + 5u] = n.z;
-            part.workExpanded[base + 6u] = t.x;
-            part.workExpanded[base + 7u] = t.y;
-            part.workExpanded[base + 8u] = t.z;
-            part.workExpanded[base + 9u] = b.x;
-            part.workExpanded[base + 10u] = b.y;
-            part.workExpanded[base + 11u] = b.z;
+            position[12]=origin.x;position[13]=origin.y;position[14]=origin.z;
+            fqskin::Pack(part.skin.palette[slot+1],position,direction);
         }
-
-        GpuObject& gpu = gQ210PlayerBody[part.gpuIndex];
-        if (gpu.vbo != 0u) {
-            glBindBuffer(GL_ARRAY_BUFFER, gpu.vbo);
-            glBufferSubData(
-                GL_ARRAY_BUFFER, 0,
-                static_cast<GLsizeiptr>(
-                    part.workExpanded.size() * sizeof(float)),
-                part.workExpanded.data());
-        }
+        fqactor::player.bones+=fqopaque::Micros(bonesStarted);
+        QActorUploadSkin(gQ210PlayerBody[part.gpuIndex],part.skin,fqactor::player,true);
     }
-    glBindBuffer(GL_ARRAY_BUFFER, 0);
 
     // Q22.2: Q21's hand endpoint is an arm-retarget anchor and is slightly
     // proximal for VR gripping. Derive a separate interaction centre from the
@@ -9815,8 +9853,7 @@ void Q211UpdatePlayerRig() {
     Vec3 q222RightGrabPalmRest{};
     float q222LeftGrabPalmWeight = 0.0f;
     float q222RightGrabPalmWeight = 0.0f;
-    std::string q222LeftGrabPalmSource;
-    std::string q222RightGrabPalmSource;
+    static std::string q222LeftGrabPalmSource,q222RightGrabPalmSource;
 
     const bool q222LeftGrabAnchorReady =
         Q222FindVisibleGrabPalmAnchor(
@@ -9965,6 +10002,7 @@ void Q211UpdatePlayerRig() {
 
 void Q210DeletePlayerBody() {
     for (GpuObject& object : gQ210PlayerBody) {
+        QActorDeleteSkin(object);
         if (Q2017ReleaseSharedGeometry(object)) continue;
         if (object.vbo) glDeleteBuffers(1, &object.vbo);
         if (object.vao) glDeleteVertexArrays(1, &object.vao);
@@ -9973,6 +10011,7 @@ void Q210DeletePlayerBody() {
     }
     gQ210PlayerBody.clear();
     gQ211PlayerRigParts.clear();
+    ++gQ211RigRevision;
     gQ211LastSkinnedSerial = ~0ull;
     gQ219ArmLengthScale = Q219_ARM_BASE_SCALE;
     gQ213TorsoYawReady = false;
@@ -10711,8 +10750,10 @@ bool Q210EnsurePlayerBody() {
                 rig.gpuIndex = q211GpuIndex;
                 rig.sourceModelPath = path;
                 rig.bindExpanded = std::move(q211BindExpanded);
-                rig.workExpanded = rig.bindExpanded;
+
                 rig.bones = part.mesh.skinBones;
+                for(const auto& bone:rig.bones) { rig.roles.push_back(Q211BoneRole(bone.name));rig.boneNames.push_back(Q211Lower(bone.name)); }
+
                 rig.expandedBoneIndices.reserve(
                     part.mesh.indices.size() * 4u);
                 rig.expandedBoneWeights.reserve(
@@ -10841,6 +10882,8 @@ bool Q210EnsurePlayerBody() {
 
                 if (rig.expandedBoneIndices.size() ==
                         (rig.bindExpanded.size() / 18u) * 4u) {
+                    QActorCreateSkin(gQ210PlayerBody[q211GpuIndex],rig.skin,rig.expandedBoneIndices,
+                        rig.expandedBoneWeights,rig.bones.size(),true,rig.bindExpanded);
                     gQ211PlayerRigParts.push_back(std::move(rig));
                 }
             }
@@ -10866,8 +10909,8 @@ bool Q210EnsurePlayerBody() {
 }
 
 void Q210RenderPlayerBody(bool alphaPass) {
-    if (!Q210EnsurePlayerBody()) return;
-    Q211UpdatePlayerRig();
+    if (!gQ210PlayerBodyReady) return;
+    const auto drawStarted=fqopaque::Clock::now();
     for (const GpuObject& object : gQ210PlayerBody) {
         if (object.q215IkReferenceOnly) continue;
         if (object.alphaBlend != alphaPass) continue;
@@ -10882,6 +10925,7 @@ void Q210RenderPlayerBody(bool alphaPass) {
         DrawSceneObject(object);
     }
 
+    fqactor::player.draw+=fqopaque::Micros(drawStarted);
     ++gQ210PlayerBodyFrames;
     if ((gQ210PlayerBodyFrames % 360u) == 1u) {
         Q6H_LOGI("Q21.0B PLAYER BODY HEARTBEAT: shapes=%zu head=(%.3f %.3f %.3f yaw=%.1fdeg) rootY=%.3f left=(%d %.3f %.3f %.3f) right=(%d %.3f %.3f %.3f) pose=bind rootFollowsHMDXZ=1 rootFollowsFloorY=1",
@@ -10894,6 +10938,49 @@ void Q210RenderPlayerBody(bool alphaPass) {
                  gQ210RightHandValid ? 1 : 0,
                  gQ210RightHand[0], gQ210RightHand[1], gQ210RightHand[2]);
     }
+}
+
+void QActorPrepareStereoFrame() {
+    const auto started=fqopaque::Clock::now();
+    fqactor::player={};fqactor::npc={};
+    const auto setupStarted=fqopaque::Clock::now();
+    const bool ready=Q210EnsurePlayerBody();
+    const double setupUs=fqopaque::Micros(setupStarted);
+    if(ready) Q211UpdatePlayerRig();
+    for(auto& actor:gQ230NpcActors) {
+        actor.renderVisible=!actor.renderBoundsReady || Q2017StereoVisible(actor.renderBounds);
+        if(actor.renderVisible) Q230UpdateActor(actor);
+    }
+    fqactor::framePrep.Add(fqopaque::Micros(started));
+    if(gStereoFrame%60==0) Q6H_LOGI("ACTOR FRAME PREP frame=%llu playerPoseUs=%.1f fingersUs=%.1f playerBoneUs=%.1f playerSkinCpuUs=%.1f playerDirectionsUs=%.1f npcClipUs=%.1f npcPoseUs=%.1f npcBoneUs=%.1f npcSkinCpuUs=%.1f npcDirectionsUs=%.1f animatedUploadCpuUs=%.1f totalActorPrepUs=%.1f setupUs=%.1f animatedVertexUploadBytes=%llu animatedVboUploads=%llu bonePaletteUploadBytes=%llu playerParts=%llu npcParts=%llu actors=%llu cpuReference=%d",
+        (unsigned long long)gStereoFrame,fqactor::player.pose,fqactor::player.fingers,fqactor::player.bones,
+        fqactor::player.skin,fqactor::player.directions,fqactor::npc.clip,fqactor::npc.pose,fqactor::npc.bones,
+        fqactor::npc.skin,fqactor::npc.directions,fqactor::player.upload+fqactor::npc.upload,
+        fqopaque::Micros(started),setupUs,
+        (unsigned long long)(fqactor::player.vertexBytes+fqactor::npc.vertexBytes),
+        (unsigned long long)(fqactor::player.vboUploads+fqactor::npc.vboUploads),
+        (unsigned long long)(fqactor::player.paletteBytes+fqactor::npc.paletteBytes),
+        (unsigned long long)fqactor::player.parts,(unsigned long long)fqactor::npc.parts,
+        (unsigned long long)fqactor::npc.actors,fqactor::CpuReference());
+}
+void QActorReportFrame(double workUs,double cadenceUs) {
+    fqactor::frameWork.Add(workUs);fqactor::frameCadence.Add(cadenceUs);
+    fqactor::playerRolling.Add(fqactor::player);fqactor::npcRolling.Add(fqactor::npc);
+    if(gStereoFrame%60!=0) return;
+    const auto log=[](const char* name,const fqactor::Cost& c,unsigned phase) {
+        const auto& a=fqopaque::timer.eyeGpu[0][phase];const auto& b=fqopaque::timer.eyeGpu[1][phase];
+        const auto& r=phase==fqopaque::Player ? fqactor::playerRolling : fqactor::npcRolling;
+        Q6H_LOGI("%s PERF ROLLING frames=%u poseCpuUs=%.1f fingerCpuUs=%.1f boneCpuUs=%.1f clipCpuUs=%.1f skinCpuUs=%.1f directionCpuUs=%.1f uploadCpuUs=%.1f drawCpuUs=%.1f",name,r.pose.count,r.pose.Mean(),r.fingers.Mean(),r.bones.Mean(),r.clip.Mean(),r.skin.Mean(),r.directions.Mean(),r.upload.Mean(),r.draw.Mean());
+        Q6H_LOGI("%s PERF frame=%llu actors=%llu poseCpuUs=%.1f fingerCpuUs=%.1f boneCpuUs=%.1f clipCpuUs=%.1f skinCpuUs=%.1f directionCpuUs=%.1f uploadCpuUs=%.1f drawCpuUs=%.1f skinnedVertices=%llu gpuPreparedVertices=%llu referenceFullMeshBytes=%llu parts=%llu animatedVertexUploadBytes=%llu animatedVboUploads=%llu bonePaletteUploadBytes=%llu gpuLeftUs=%.1f gpuRightUs=%.1f gpuSamplesLeft=%u gpuSamplesRight=%u",
+            name,(unsigned long long)gStereoFrame,(unsigned long long)c.actors,c.pose,c.fingers,c.bones,c.clip,c.skin,c.directions,c.upload,c.draw,
+            (unsigned long long)c.vertices,(unsigned long long)c.gpuVertices,(unsigned long long)c.referenceBytes,(unsigned long long)c.parts,(unsigned long long)c.vertexBytes,
+            (unsigned long long)c.vboUploads,(unsigned long long)c.paletteBytes,
+            a.count ? a.Mean() : -1.0,b.count ? b.Mean() : -1.0,a.count,b.count);
+    };
+    log("PLAYER",fqactor::player,fqopaque::Player);log("NPC",fqactor::npc,fqopaque::Npc);
+    Q6H_LOGI("APPLICATION FRAME PERF frame=%llu workCpuUs=%.1f rollingWorkCpuUs=%.1f cadenceUs=%.1f rollingCadenceUs=%.1f observedFrameRate=%.2f actorPrepRollingUs=%.1f includes=actions+tracking+streaming+actorPrep+bothEyes+endFrame excludes=xrWaitFrame",
+        (unsigned long long)gStereoFrame,workUs,fqactor::frameWork.Mean(),cadenceUs,fqactor::frameCadence.Mean(),
+        fqactor::frameCadence.Mean()>0 ? 1e6/fqactor::frameCadence.Mean() : 0,fqactor::framePrep.Mean());
 }
 
 void RenderScene(const float* mvp) {

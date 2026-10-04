@@ -1,3 +1,5 @@
+#include "../../app/src/main/cpp/rendering/actor-skinning.h"
+#include "../../app/src/main/cpp/npc/fo3-animation-bounds.h"
 // Execute the production actor/render bridge with a recording GL adapter.
 #include "../../app/src/main/cpp/rendering/mesh/fo3-static-nif.h"
 #include "fo3-actor-animation.h"
@@ -28,18 +30,19 @@ struct CpuObject {
 };
 using GLsizeiptr = ptrdiff_t;
 struct GpuObject {
+  int vertexCount=0;
+  bool renderVisible=true;
+  float minX=0,maxX=0,minY=0,maxY=0,minZ=0,maxZ=0;
   unsigned vbo = 1;
   bool q230NpcActor = false, alphaBlend = false, zBufferTestQ1200 = true,
        zBufferWriteQ1200 = true;
   uint8_t alphaSourceBlend = 6, alphaDestBlend = 7;
 };
+struct QActorSkin { fqskin::Mapping mapping;std::vector<fqskin::PaletteRow> palette;std::vector<float> bind; };
 struct Q230RigPart {
-  CpuObject bind;
-  std::vector<float> work;
-  std::vector<std::array<float, 12>> posed;
-  std::vector<fo3anim::Matrix> gameDeltas;
+  QActorSkin skin;
   std::vector<int> bones;
-  fo3anim::Matrix placement{}, inversePlacement{};
+  fo3anim::Matrix placement{}, inversePlacement{}, scenePlacement{}, inverseScenePlacement{};
   int rigidBone = -1;
   size_t gpuIndex = 0;
   float centerX = 0, centerY = 0, floorZ = 0;
@@ -52,12 +55,23 @@ struct Q230ActorVisual {
   std::vector<CpuObject> parts;
   std::vector<GpuObject> objects;
   std::vector<Q230RigPart> rigs;
+  std::vector<fo3anim::Envelope> renderEnvelope;
+  GpuObject renderBounds;
+  bool renderBoundsReady=false,renderVisible=true;
   std::unordered_map<std::string, Fo3RgbaTexture> generatedTextures;
   std::chrono::steady_clock::time_point animationStart{};
   uint64_t lastFrame = UINT64_MAX;
 };
 std::vector<Q230ActorVisual> gQ230NpcActors;
-uint64_t gSceneLoadFrame = 1;
+uint64_t gStereoFrame = 1;
+namespace fqopaque {
+using Clock=std::chrono::steady_clock;
+double Micros(Clock::time_point p) {return std::chrono::duration<double,std::micro>(Clock::now()-p).count();}
+}
+namespace fqactor {
+struct Cost { double pose=0,clip=0,bones=0,draw=0;int actors=0; };
+Cost npc;
+}
 constexpr float FO3_UNITS_PER_METRE = 100, FLOOR_Y = 0, SCENE_FORWARD = 0;
 constexpr int GL_ARRAY_BUFFER = 1, GL_DYNAMIC_DRAW = 2, GL_DEPTH_TEST = 3,
               GL_TRUE = 1, GL_FALSE = 0, GL_BLEND = 4;
@@ -89,16 +103,34 @@ bool LoadFo3CellActors(uint32_t, std::vector<Fo3NpcActorQ230> &,
 bool Q230BuildNpcActor(const Fo3NpcActorQ230 &, Q230ActorVisual &) {
   return false;
 }
-bool PrepareExpandedVertexStreamQ1960(CpuObject &cpu, float, float, float) {
+bool PrepareExpandedVertexStreamQ1960(CpuObject &cpu, float centerX, float centerY, float floorZ) {
   cpu.q1960ExpandedVertices.assign(cpu.mesh.indices.size() * 18, 0);
   cpu.q1960ExpandedReady = true;
-  for (size_t i = 0; i < cpu.mesh.indices.size(); ++i)
+  for (size_t i = 0; i < cpu.mesh.indices.size(); ++i) {
+    const auto vertex=cpu.positionsGame[cpu.mesh.indices[i]];
+    cpu.q1960ExpandedVertices[i*18]=(vertex.x-centerX)/FO3_UNITS_PER_METRE;
+    cpu.q1960ExpandedVertices[i*18+1]=FLOOR_Y+(vertex.z-floorZ)/FO3_UNITS_PER_METRE;
+    cpu.q1960ExpandedVertices[i*18+2]=SCENE_FORWARD-(vertex.y-centerY)/FO3_UNITS_PER_METRE;
     cpu.q1960ExpandedVertices[i * 18 + 12] = 0.25f;
+  }
   return true;
 }
-bool UploadCpuObject(CpuObject &, float, float, float, GpuObject &gpu) {
-  gpu = {};
+bool UploadCpuObject(CpuObject &cpu, float, float, float, GpuObject &gpu) {
+  gpu = {};gpu.vertexCount=cpu.mesh.indices.size();
   return true;
+}
+bool QActorCreateSkin(GpuObject&,QActorSkin& skin,const std::vector<uint16_t>& indices,const std::vector<float>& weights,size_t bones,bool player,const std::vector<float>& bind) {
+  skin.mapping=fqskin::Map(indices,weights,bones,player);skin.palette.resize(skin.mapping.sources.size()+1);
+  for(auto& row:skin.palette) fqskin::Pack(row,fqskin::Identity(),fqskin::Identity());
+  skin.bind=bind;return true;
+}
+void QActorUploadSkin(GpuObject&,QActorSkin& skin,fqactor::Cost&,bool player) {
+  ++uploads;recorded=skin.bind; // recording GPU adapter evaluates submitted palette
+  for(size_t v=0;v<recorded.size()/18;++v) {
+    const auto row=fqskin::Blend(skin.mapping.attributes.data()+v*8,skin.palette,player);
+    const auto p=fqskin::Transform(row.data(),skin.bind.data()+v*18,false);
+    std::copy(p.begin(),p.end(),recorded.begin()+v*18);
+  }
 }
 #include "../../app/src/main/cpp/npc/fo3-npc-runtime.inc"
 int main() {
@@ -190,7 +222,7 @@ int main() {
   }
   Q230UpdateActor(actor);
   assert(uploads == 1);
-  ++gSceneLoadFrame;
+  ++gStereoFrame;
   Q230UpdateActor(actor);
   assert(uploads == 2);
   // A rigid mouth/eye follows the same head deformation and captured origin.
@@ -198,7 +230,7 @@ int main() {
   part.placement.modelPath = "mouth.nif";
   actor.source.raceHeadModels = {"mouth.nif"};
   assert(Q230UploadActorPart(actor, part, 10, 30, 40));
-  ++gSceneLoadFrame;
+  ++gStereoFrame;
   Q230UpdateActor(actor);
   assert(std::fabs(recorded[0] - 0.12f) < 1e-5f);
   // Worn rigid headgear is animated through the same production head path.
@@ -209,7 +241,7 @@ int main() {
   part.placement.modelPath = "armor/hat.NIF";
   assert(Q230UploadActorPart(actor, part, 10, 30, 40));
   assert(actor.rigs.back().rigidBone == 0);
-  ++gSceneLoadFrame;
+  ++gStereoFrame;
   Q230UpdateActor(actor);
   assert(std::fabs(recorded[0] - 0.12f) < 1e-5f);
   gQ230NpcActors.push_back(std::move(actor));
