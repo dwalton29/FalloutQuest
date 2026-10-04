@@ -439,6 +439,9 @@ void Original(const std::string &path) {
   Check(p.Definitions().items.at(0x15038).editorId == "PipBoy" &&
             !p.Definitions().items.at(0x15038).playable,
         "original Pip-Boy record");
+  Check(c.defaultActivationDoors.count(0x41714) && p.CanOpenDoor(0x3a14),
+        "original Brass Lantern script allows entry");
+  Check(p.CanOpenDoor(0x3a37), "original owned Brass Lantern exit allows travel");
   size_t pickups = 0;
   for (const auto &ref : c.references)
     if (p.CanPickup(ref.first))

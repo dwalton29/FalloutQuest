@@ -7,8 +7,11 @@ no Bethesda asset bytes are included in this repository.
   Its ARMO BMDT mask is 0x600 (headband and hat), not the head/hair mask 0x3.
   Recognise head accessories for rigid attachment and FaceGen fitting.
 - The worn hat and hair geometry are already oriented in actor axes, around a
-  head-relative origin. Translate to the Head bind origin without reapplying
-  that bone's bind rotation; animation still uses the full Head pose delta.
+  head-relative origin. Translate hair/headwear to the Head bind origin without
+  reapplying that bone's bind rotation; animation still uses the full Head pose
+  delta. RACE slots 2..7 (mouth, teeth, tongue, eyes) instead use the full Head
+  bind transform: their original root rotation expresses bone-local coordinates.
+  Confirmed with EyeLeftHuman/EyeRightHuman and TeethUpper/LowerHuman originals.
   In the originals, the hat spans approximately Z 8.48..19.49 before attachment;
   HeadHuman's Head origin is Z 112.84.
 - HairBase.NIF contains authored Hat and NoHat shapes. Render only the variant

@@ -7403,7 +7403,9 @@ bool Q220IsLooseRecordType(const std::string& type) {
            type == "AMMO" ||
            type == "ALCH" ||
            type == "BOOK" ||
-           type == "KEYM";
+           type == "KEYM" ||
+           type == "INGR" ||
+           type == "NOTE";
 }
 
 void Q220Identity(float out[16]) {
@@ -10292,7 +10294,8 @@ bool Q230BuildNpcActor(const Fo3NpcActorQ230& source, Q230ActorVisual& visual) {
         if(part.mesh.skinned) return false;
         fo3anim::Matrix transform;
         if(!fo3appearance::HeadBindTransform(visual.skeleton,
-                Q230PlacementMatrix(part.placement),transform)) return false;
+                Q230PlacementMatrix(part.placement),transform,
+                fo3appearance::BoneLocalFacePart(*npc,part.placement.modelPath))) return false;
         q237HeadAnchorReady=true;
         auto apply=[&](Vec3 value,bool direction){
             const auto v=fo3anim::Point(transform,{value.x,value.y,value.z},direction);

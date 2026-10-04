@@ -121,6 +121,17 @@ int main() {
     assert(std::fabs(point[0]-22)<1e-5f && std::fabs(point[1]-30)<1e-5f && std::fabs(point[2]-50)<1e-5f);
     auto normal = fo3anim::Point(attachment, {1, 0, 0}, true);
     assert(std::fabs(normal[0]-1)<1e-5f && std::fabs(normal[1])<1e-5f);
+    assert(fo3appearance::HeadBindTransform(skeleton,fo3anim::Identity(),attachment,true));
+    auto facePoint = fo3anim::Point(attachment,{1,0,0});
+    assert(std::fabs(facePoint[0])<1e-5f && std::fabs(facePoint[1]-1)<1e-5f &&
+           std::fabs(facePoint[2]-5)<1e-5f);
+    Fo3NpcActorQ230 faceSource;
+    faceSource.raceHeadModels.resize(8);
+    faceSource.raceHeadModels[6]="Characters\\Head\\EyeLeftHuman.NIF";
+    faceSource.raceHeadModels[3]="Characters\\Head\\TeethLowerHuman.NIF";
+    assert(fo3appearance::BoneLocalFacePart(faceSource,"characters/head/eyelefthuman.nif"));
+    assert(fo3appearance::BoneLocalFacePart(faceSource,"characters/head/teethlowerhuman.nif"));
+    assert(!fo3appearance::BoneLocalFacePart(faceSource,"characters/hair/hairbase.nif"));
     assert(!fo3appearance::HeadBindTransform({}, fo3anim::Identity(), attachment));
     Fo3NpcActorQ230 source;
     Fo3NpcVisualItemQ230 hat;

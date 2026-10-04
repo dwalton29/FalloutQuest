@@ -26,6 +26,13 @@ inline bool HeadPart(const Fo3NpcActorQ230& actor, const std::string& model) {
             (item.bipedMask & HeadEquipmentMask) && SameModel(item.modelPath, model)) return true;
     return false;
 }
+inline bool BoneLocalFacePart(const Fo3NpcActorQ230& actor, const std::string& model) {
+    // RACE slots 2..7: mouth, lower/upper teeth, tongue and eyes. Their
+    // authored root transforms express geometry in the Head bone frame.
+    for (size_t slot = 2; slot < actor.raceHeadModels.size() && slot < 8; ++slot)
+        if (SameModel(actor.raceHeadModels[slot], model)) return true;
+    return false;
+}
 inline bool RenderHairShape(const std::string& name, uint32_t equipment) {
     if (SameModel(name, "NoHat")) return (equipment & 0x400u) == 0u;
     if (SameModel(name, "Hat")) return (equipment & 0x400u) != 0u;
@@ -44,14 +51,15 @@ inline bool SkinMaterial(uint32_t type, uint32_t flags) {
 }
 inline bool HeadBindTransform(const fo3anim::Skeleton& skeleton,
                               const fo3anim::Matrix& placement,
-                              fo3anim::Matrix& gameTransform) {
+                              fo3anim::Matrix& gameTransform,
+                              bool boneLocal = false) {
     const int head = fo3anim::FindBone(skeleton, "Bip01 Head");
     fo3anim::Matrix inverse;
     if (head < 0 || static_cast<size_t>(head) >= skeleton.bindGlobal.size() ||
         !fo3anim::Inverse(placement, inverse)) return false;
     // FO3 rigid face/hair/headwear NIFs are already in actor axes,
     // with the head origin removed. Keep their authored orientation.
-    auto anchor = fo3anim::Identity();
+    auto anchor = boneLocal ? skeleton.bindGlobal[head] : fo3anim::Identity();
     for (int axis = 0; axis < 3; ++axis)
         anchor[12 + axis] = skeleton.bindGlobal[head][12 + axis];
     gameTransform = fo3anim::Multiply(placement,

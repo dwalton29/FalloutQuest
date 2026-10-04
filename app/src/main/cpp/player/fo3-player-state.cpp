@@ -420,8 +420,15 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
         if (owner && owner->size == 4)
           cellOwners[form] = fo3esm::ReadU32(owner->data);
       } else if (type == "DOOR") {
-        if (Find(subs, "SCRI"))
+        const auto* script = Find(subs, "SCRI");
+        if (script) {
           next.scriptedBases.insert(form);
+          // Original MegBrassLanternFrontDoorSCRIPT calls activate in every
+          // branch; its time test only toggles the two customer references.
+          if (script->size == 4 && fo3esm::ReadU32(script->data) == 0x00041719u &&
+              Text(subs, "EDID") == "MegBrassLanternFrontDoor")
+            next.defaultActivationDoors.insert(form);
+        }
       } else if (type == "TES4") {
         if (tes4Found || Find(subs, "MAST"))
           return fail("Only standalone Fallout3.esm is supported");
@@ -656,8 +663,10 @@ bool Player::CanOpenDoor(uint32_t id) const {
   if (r == catalog_.references.end())
     return false;
   const auto &ref = r->second;
-  if (!ref.valid || (ref.owner && ref.owner != PlayerBase) ||
-      catalog_.scriptedBases.count(ref.base))
+  // Ownership controls trespass/crime, not whether an unlocked door opens.
+  if (!ref.valid || (ref.flags & 0x20u) ||
+      (catalog_.scriptedBases.count(ref.base) &&
+       !catalog_.defaultActivationDoors.count(ref.base)))
     return false;
   if (!ref.locked)
     return true;

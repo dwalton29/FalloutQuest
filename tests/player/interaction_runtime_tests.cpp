@@ -139,6 +139,9 @@ int main() {
     gPlayerSession = std::make_unique<fo3player::Session>(c);
     Check(query() && t.pickup && !t.allowed && !activate(),
           "owned item blocks action and does not activate door behind it");
+    c.references[20].owner = 99;
+    gPlayerSession = std::make_unique<fo3player::Session>(c);
+    Check(gPlayerSession->player.CanOpenDoor(20), "owned unlocked door permits entry");
     c.references[20].locked = true;
     c.references[20].key = 300;
     fo3player::Item key;
@@ -156,6 +159,19 @@ int main() {
     gPlayerSession = std::make_unique<fo3player::Session>(c);
     Check(!gPlayerSession->player.CanOpenDoor(20),
           "scripted door not bypassed");
+    c.defaultActivationDoors.insert(200);
+    gPlayerSession = std::make_unique<fo3player::Session>(c);
+    Check(gPlayerSession->player.Add(300,1) && gPlayerSession->player.CanOpenDoor(20), "verified activation script accepts authored key");
+    c.references[20].locked=false;
+    gPlayerSession = std::make_unique<fo3player::Session>(c);
+    Check(gPlayerSession->player.CanOpenDoor(20), "Brass Lantern passthrough permits unlocked entry");
+    for (const auto kind : {fo3player::ItemKind::Ingredient,fo3player::ItemKind::Note}) {
+      c.references[10].owner=0; c.items[100].kind=kind;
+      gPlayerSession = std::make_unique<fo3player::Session>(c);
+      gObjects.push_back({});gObjects.back().q220LooseObject=false;
+      Check(query() && t.pickup && t.allowed, "catalog item targets without loose physics flag");
+      gObjects.clear();
+    }
     fo3player::Container box;
     box.name = "Authored Box";
     box.entries.push_back({100, 0, 4, 1, .5f, true});

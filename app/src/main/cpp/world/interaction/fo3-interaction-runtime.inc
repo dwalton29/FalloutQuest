@@ -19,7 +19,9 @@ bool QueryFo3Interaction(float ox, float oy, float oz, float dx, float dy,
     }
     for (const auto& object : gObjects) {
         const bool container=catalog.containers.count(object.baseFormId)!=0;
-        if ((!object.q220LooseObject && !container) || player.IsCollected(object.refFormId) ||
+        // Inventory eligibility comes from the item catalog, independently
+        // of whether the physics runtime supports this loose-object type.
+        if (player.IsCollected(object.refFormId) ||
             (!container && !catalog.items.count(object.baseFormId))) continue;
         fo3interaction::Point lo{1e30f,1e30f,1e30f}, hi{-1e30f,-1e30f,-1e30f};
         for (int corner=0;corner<8;++corner) {
@@ -59,8 +61,11 @@ bool QueryFo3Interaction(float ox, float oy, float oz, float dx, float dy,
         const auto& item=catalog.items.at(ref->second.base);
         if (item.name.empty()) {target={};return false;}
         // Vanilla English action labels are present in the supplied Fallout3.exe.
-        std::snprintf(target.prompt.data(),target.prompt.size(),"%s%s",
-                      target.allowed ? "Take " : "",item.name.c_str());
+        const char* action = target.allowed ? "Take " : "Unavailable ";
+        if (!target.allowed && ref->second.owner && ref->second.owner != fo3player::PlayerBase)
+            action = "Owned ";
+        else if (!target.allowed && item.script) action = "Scripted ";
+        std::snprintf(target.prompt.data(),target.prompt.size(),"%s%s",action,item.name.c_str());
     } else {
         GetFo3DoorPromptQ1840(target.reference,target.prompt.data(),target.prompt.size());
         if (!target.allowed) {

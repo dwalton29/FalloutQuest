@@ -12,7 +12,8 @@ bool Player::CanLootContainer(uint32_t id) const {
   const auto c = catalog_.containers.find(r->second.base);
   return c != catalog_.containers.end() && c->second.valid &&
          !c->second.script &&
-         CanOpenDoor(id); // Shared authored ownership/key access, no travel.
+         (!r->second.owner || r->second.owner == PlayerBase) &&
+         CanOpenDoor(id); // Share lock/key access; container ownership is separate.
 }
 const std::vector<Stack> *Player::ContainerContents(uint32_t id) const {
   const auto c = state_.containers.find(id);

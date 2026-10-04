@@ -110,6 +110,7 @@ struct Catalog {
   std::unordered_map<uint32_t, Item> items;
   std::unordered_map<uint32_t, Reference> references;
   std::unordered_set<uint32_t> scriptedBases;
+  std::unordered_set<uint32_t> defaultActivationDoors; // verified script passthroughs
   std::unordered_map<std::string, std::string> strings;
   std::unordered_map<uint32_t, Container> containers;
   std::unordered_map<uint32_t, LootList> lootLists;
