@@ -16,6 +16,7 @@ class ShoulderIntegration(unittest.TestCase):
         f=after[after.index('void Q220UpdateLooseGrab('):after.index('void Q221UpdateLooseObjectsFromSolvedPalms(')]
         self.assertLess(f.index('CollectFo3WorldReference(ref)'),f.index('const uint32_t releasedRef'))
         self.assertIn('state.previousGrip=grip;return;',f)
+        self.assertLess(f.index('const bool resident='),f.index('if (!handValid)'))
     def test_stereo_render_is_read_only(self):
         renderer=(ROOT/'app/src/main/cpp/ui/interaction/fo3-item-notification-renderer.h').read_text()
         render=renderer[renderer.index('inline void Render('):]

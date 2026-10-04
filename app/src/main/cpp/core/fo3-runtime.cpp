@@ -8628,6 +8628,17 @@ void Q220UpdateLooseGrab(
     constexpr float PRESS = 0.65f;
     constexpr float RELEASE = 0.25f;
 
+    // Retirement is independent of tracking: an unloaded/collected held REFR
+    // must not stay latched merely because its controller is currently lost.
+    if(state.active) {
+        const auto ref=state.refFormId;
+        const bool resident=std::any_of(gObjects.begin(),gObjects.end(),[&](const GpuObject& o){return o.q220LooseObject && o.refFormId==ref;});
+        if(!resident || (gPlayerSession && gPlayerSession->player.IsCollected(ref))) {
+            gQ223DynamicBodies.erase(ref);state={};
+            if(handIndex==1) gShoulderGesture.Reset();
+            return;
+        }
+    }
     if (!handValid) {
         if(handIndex==1) gShoulderGesture.Reset();
         state.previousGrip = grip;
@@ -8706,12 +8717,6 @@ void Q220UpdateLooseGrab(
     if(handIndex==1 && !state.active) gShoulderGesture.Reset();
     if (state.active) {
         const auto ref=state.refFormId;
-        const bool resident=std::any_of(gObjects.begin(),gObjects.end(),[&](const GpuObject& o){return o.q220LooseObject && o.refFormId==ref;});
-        if(!resident || (gPlayerSession && gPlayerSession->player.IsCollected(ref))) {
-            gQ223DynamicBodies.erase(ref);state={};
-            if(handIndex==1) gShoulderGesture.Reset();
-            return;
-        }
         if(handIndex==1) {
             const bool eligible=gShoulderFocused && gSceneReady && !IsFo3LoadingVisible() &&
                 gPlayerSession && !gPlayerSession->saveBlocked && gPlayerSession->player.CanPickup(ref);
