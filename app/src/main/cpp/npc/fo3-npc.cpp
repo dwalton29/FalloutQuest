@@ -761,7 +761,9 @@ bool LoadFo3FaceGenTextureQ234(
             for(int c=0;c<3;++c){
                 const float value=
                     static_cast<float>(base.rgba[dst+c])+
-                    sampleDelta(sx,sy,c);
+                    // Supplied FO3 EGT images use the opposite vertical
+                    // convention to their DDS base maps.
+                    sampleDelta(sx,static_cast<float>(rows-1u)-sy,c);
                 out.rgba[dst+c]=static_cast<uint8_t>(
                     std::lround(std::clamp(value,0.0f,255.0f)));
             }

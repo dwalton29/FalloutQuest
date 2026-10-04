@@ -102,7 +102,7 @@ bool UploadCpuObject(CpuObject &, float, float, float, GpuObject &gpu) {
 }
 #include "../../app/src/main/cpp/npc/fo3-npc-runtime.inc"
 int main() {
-  // Complete bind rotation/translation in a scaled, translated actor instance.
+  // FO3 rigid parts keep actor axes despite a rotated head bone.
   {
     fo3anim::Skeleton skeleton;
     fo3anim::Bone head;
@@ -114,20 +114,27 @@ int main() {
     assert(fo3anim::FinalizeSkeleton(skeleton));
     fo3anim::Transform instance;
     instance.translation = {20, 30, 40}; instance.scale = 2;
+    instance.rotation = {half, 0, 0, half};
     fo3anim::Matrix attachment;
     assert(fo3appearance::HeadBindTransform(skeleton, fo3anim::ToMatrix(instance), attachment));
     auto point = fo3anim::Point(attachment, {22, 30, 40});
-    assert(std::fabs(point[0]-20)<1e-5f && std::fabs(point[1]-32)<1e-5f && std::fabs(point[2]-50)<1e-5f);
+    assert(std::fabs(point[0]-22)<1e-5f && std::fabs(point[1]-30)<1e-5f && std::fabs(point[2]-50)<1e-5f);
     auto normal = fo3anim::Point(attachment, {1, 0, 0}, true);
-    assert(std::fabs(normal[0])<1e-5f && std::fabs(normal[1]-1)<1e-5f);
+    assert(std::fabs(normal[0]-1)<1e-5f && std::fabs(normal[1])<1e-5f);
     assert(!fo3appearance::HeadBindTransform({}, fo3anim::Identity(), attachment));
     Fo3NpcActorQ230 source;
     Fo3NpcVisualItemQ230 hat;
-    hat.recordType="ARMO"; hat.count=1; hat.bipedMask=2; hat.modelPath="Armor\\Hat.nif";
+    hat.recordType="ARMO"; hat.count=1; hat.bipedMask=0x600; hat.modelPath="Armor\\Hat.nif";
     source.inventory.push_back(hat);
     assert(fo3appearance::HeadPart(source, "armor/hat.NIF"));
     source.inventory[0].bipedMask=4;
     assert(!fo3appearance::HeadPart(source, "armor/hat.NIF"));
+    assert(fo3appearance::RenderHairShape("Hat",0x600));
+    assert(!fo3appearance::RenderHairShape("NoHat",0x600));
+    assert(fo3appearance::RenderHairShape("NoHat",0));
+    assert(!fo3appearance::RenderHairShape("Hat",0));
+    assert(fo3appearance::HairMorphModel("HairBase.NIF","Hat")=="HairBasehat.NIF");
+    assert(fo3appearance::HairMorphModel("HairBase.NIF","NoHat")=="HairBasenohat.NIF");
     assert(fo3appearance::SkinMaterial(14, 2));
     assert(fo3appearance::SkinMaterial(1, 0x400));
     assert(!fo3appearance::SkinMaterial(1, 2));

@@ -16,6 +16,24 @@ static void U32(std::vector<uint8_t>& bytes, uint32_t value) {
     for (int i = 0; i < 4; ++i) bytes.push_back(static_cast<uint8_t>(value >> (i * 8)));
 }
 int main(int argc, char** argv) {
+    // Morph vectors must follow the same scaled/rotated ancestor chain as
+    // geometry, while excluding translations.
+    Fo3StaticNifMesh geometry;
+    geometry.positions = {1,2,3}; geometry.normals = {0,0,1};
+    geometry.tangents = {1,0,0}; geometry.bitangents = {0,1,0};
+    NifTransform shape; shape.valid = true; shape.scale = 2;
+    shape.translation[0] = 50;
+    NifTransform parent; parent.valid = true; parent.scale = 3;
+    const float rotated[9] = {0,-1,0, 1,0,0, 0,0,1};
+    std::copy(rotated,rotated+9,parent.rotation);
+    parent.translation[2] = 20;
+    ApplyTransforms(geometry,shape,{parent},nullptr);
+    assert(geometry.positions[0] == -12 && geometry.positions[1] == 156 &&
+           geometry.positions[2] == 38);
+    assert(geometry.geometryDeltaToModel[0] == 0 &&
+           geometry.geometryDeltaToModel[1] == -6 &&
+           geometry.geometryDeltaToModel[3] == 6 &&
+           geometry.geometryDeltaToModel[8] == 6);
     NifHeader header; header.userVersion = 11; header.bsVersion = 34;
     std::vector<uint8_t> property;
     U32(property, INVALID_REF); U32(property, 0); U32(property, INVALID_REF);

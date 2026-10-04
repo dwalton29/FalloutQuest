@@ -795,6 +795,25 @@ void ApplyTransforms(Fo3StaticNifMesh& mesh,
                      const std::vector<NifTransform>& ancestors,
                      const NifTransform* rootFallback) {
     const bool haveFullChain = !ancestors.empty();
+    // EGM deltas use raw geometry coordinates, just like the NIF vertices.
+    // Preserve the full linear chain (including scale), without translation.
+    for (int column = 0; column < 3; ++column) {
+        float x = column == 0 ? 1.0f : 0.0f;
+        float y = column == 1 ? 1.0f : 0.0f;
+        float z = column == 2 ? 1.0f : 0.0f;
+        auto linear = [&](const NifTransform& transform) {
+            if (!transform.valid) return;
+            x *= transform.scale; y *= transform.scale; z *= transform.scale;
+            ApplyVector(transform, x, y, z);
+        };
+        linear(shape);
+        if (haveFullChain) {
+            for (const auto& parent : ancestors) linear(parent);
+        } else if (rootFallback) linear(*rootFallback);
+        mesh.geometryDeltaToModel[column] = x;
+        mesh.geometryDeltaToModel[3 + column] = y;
+        mesh.geometryDeltaToModel[6 + column] = z;
+    }
     const size_t vertexCount = mesh.positions.size() / 3u;
     for (size_t i = 0; i < vertexCount; ++i) {
         float& px = mesh.positions[i * 3u];
@@ -1671,6 +1690,10 @@ bool TryLoadShape(const std::vector<uint8_t>& nif, const NifHeader& header,
     if (!data) return false;
 
     Fo3StaticNifMesh candidate;
+    Cursor shapeCursor(BlockData(nif, header, shape.block), header.blockSizes[shape.block]);
+    uint32_t nameIndex = INVALID_REF;
+    if (shapeCursor.U32(nameIndex) && nameIndex < header.strings.size())
+        candidate.shapeName = header.strings[nameIndex];
     bool geometryOk = false;
     if (dataType == "NiTriStripsData") {
         geometryOk = ParseTriStripsData(data, header.blockSizes[shape.dataRef], candidate);

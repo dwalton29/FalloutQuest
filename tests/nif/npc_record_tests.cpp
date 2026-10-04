@@ -5,12 +5,16 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
-bool LoadFalloutMeshFile(const std::string &, std::vector<uint8_t> &,
+static std::vector<uint8_t> testMesh;
+static Fo3RgbaTexture testTexture;
+bool LoadFalloutMeshFile(const std::string &, std::vector<uint8_t> &bytes,
                          std::string *) {
-  return false;
+  bytes = testMesh;
+  return !bytes.empty();
 }
-bool LoadFalloutTextureRgba(const std::string &, Fo3RgbaTexture &) {
-  return false;
+bool LoadFalloutTextureRgba(const std::string &, Fo3RgbaTexture &texture) {
+  texture = testTexture;
+  return texture.width > 0;
 }
 using Bytes = std::vector<uint8_t>;
 static void U32(Bytes &b, uint32_t v) {
@@ -45,6 +49,22 @@ static void Add(Bytes &b, const Bytes &v) {
   b.insert(b.end(), v.begin(), v.end());
 }
 int main(int argc, char **argv) {
+  // FO3's EGT colour image is vertically reversed relative to its DDS.
+  testMesh.assign(64, 0);
+  std::memcpy(testMesh.data(), "FREGT003", 8);
+  testMesh[8] = 2; testMesh[12] = 2; testMesh[16] = 1;
+  U32(testMesh, 0x3f800000); // scale 1
+  // Planar R/G/B: top row then bottom row in EGT storage.
+  const uint8_t channels[] = {1,2,10,20, 3,4,30,40, 5,6,50,60};
+  testMesh.insert(testMesh.end(), channels, channels+12);
+  testTexture.width = testTexture.height = 2;
+  testTexture.rgba = {100,100,100,7, 100,100,100,8,
+                      100,100,100,9, 100,100,100,10};
+  Fo3FaceGenTextureQ234 generated;
+  assert(LoadFo3FaceGenTextureQ234("head.nif", "base.dds", {1}, generated));
+  assert((generated.rgba == std::vector<uint8_t>{110,130,150,7,
+      120,140,160,8, 101,103,105,9, 102,104,106,10}));
+  testMesh.clear(); testTexture = {};
   Bytes esm, race;
   Sub(race, "EDID", Text("TestRace"));
   Sub(race, "NAM0", {});

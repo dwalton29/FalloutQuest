@@ -10026,7 +10026,8 @@ bool Q230BuildNpcActor(const Fo3NpcActorQ230& source, Q230ActorVisual& visual) {
         if(item.recordType=="ARMO" && item.count>0 && !item.modelPath.empty() &&
            (q236EquippedMask & item.bipedMask)==0u){
             equippedModels.insert(item.modelPath);
-            addModel(item.modelPath);
+            if(item.bipedMask & fo3appearance::HeadEquipmentMask) addFaceGenModel(item.modelPath);
+            else addModel(item.modelPath);
             q236EquippedMask|=item.bipedMask;
         }
     }
@@ -10343,13 +10344,24 @@ bool Q230BuildNpcActor(const Fo3NpcActorQ230& source, Q230ActorVisual& visual) {
         if(haveMorph) ++faceGenEgmAssets;
 
         for(CpuObject& part:parts){
-            if(haveMorph && q233ApplyMorph(part,morph)){
+            const bool hair = samePath(path,npc->hairModel);
+            if(hair && !fo3appearance::RenderHairShape(part.mesh.shapeName,q236EquippedMask))
+                continue;
+            Fo3FaceGenMorphQ233 hairMorph;
+            const bool haveHairMorph = hair && LoadFo3FaceGenMorphQ233(
+                fo3appearance::HairMorphModel(path,part.mesh.shapeName),
+                q234FaceSym,q234FaceAsym,hairMorph);
+            if(haveHairMorph && q233ApplyMorph(part,hairMorph)){
+                ++faceGenMorphedShapes;
+                faceGenMorphedVertices+=part.positionsGame.size();
+            }
+            if(!haveHairMorph && haveMorph && q233ApplyMorph(part,morph)){
                 ++faceGenMorphedShapes;
                 faceGenMorphedVertices+=part.positionsGame.size();
             }
 
-            // Rigid face parts, hair and worn headgear use the complete
-            // authored skeleton Head bind transform before animation deltas.
+            // Rigid face parts, hair and worn headgear retain their authored
+            // actor axes and are translated to the head origin before animation.
             if(fo3appearance::HeadPart(*npc,path) && q237AttachRigidHeadPart(part))
                 ++q237RigidHeadAttachedShapes;
 
