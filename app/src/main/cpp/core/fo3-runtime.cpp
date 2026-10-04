@@ -11301,7 +11301,7 @@ bool Q210EnsurePlayerBody() {
     // Put the hidden canonical body first: master-arm selection is intentionally
     // first-valid, preserving the exact Q21.14 authored arm lengths/pivots.
     for (const std::string* path :
-         {&q216UpperBodyIk, &q215Vault101, &q215PipBoyGlove,
+         std::array<const std::string*,5>{&q216UpperBodyIk, &q215Vault101, &q215PipBoyGlove,
           &q215RightHand, &q215PipBoy}) {
         if (!path->empty()) bodyPaths.push_back(*path);
     }
