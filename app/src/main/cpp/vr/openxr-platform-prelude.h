@@ -4,3 +4,7 @@
 // types to be visible before openxr_platform.h is parsed.
 #include <jni.h>
 #include <EGL/egl.h>
+
+#ifdef __cplusplus
+#include "rendering/gl-state-cache.h"
+#endif

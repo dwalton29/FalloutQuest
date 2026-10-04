@@ -1,3 +1,5 @@
+#include "rendering/opaque-telemetry.h"
+#include "rendering/quest-render-policy.h"
 #include "fo3-npc-appearance.h"
 #include "fo3-install-paths.h"
 #include "rendering/water/fo3-water.h"
@@ -43,6 +45,7 @@ extern void PumpFo3AndroidEventsQ1860();
 #include "rendering/environment/fo3-external-emittance.h"
 #include "rendering/environment/fo3-authored-color.h"
 #include "rendering/environment/fo3-megaton-cell-environment.h"
+float GetFo3FogPower() { return fo3cellenv::GetFo3FogPower(); }
 #define LoadFo3ImageSpace LoadFo3BaseImageSpaceForCell
 #include "rendering/environment/fo3-time-of-day.h"
 #define FO3_DEFINE_WEATHER_REFRESH 1
@@ -78,6 +81,8 @@ namespace {
 struct GpuObject;
 bool Q1970ShouldRenderFullDetail(const GpuObject& object);
 bool Q220IsLooseRecordType(const std::string& type);
+bool Q1900CellVisualReadyQ19(int32_t x, int32_t y);
+void Q1900LogLifetimeQ19(size_t added, size_t removed);
 void Q1970ProbeNativeLod(float gameX, float gameY);
 extern const float Q1890_EXTERIOR_CELL_SIZE;
 extern bool gExteriorStreamingActiveQ1890;
@@ -373,6 +378,7 @@ struct CachedGpuTexture {
 // These runtime objects are defined later in this translation unit.
 extern bool gWaterReflectionPassQ2090;
 extern std::vector<GpuObject> gObjects;
+float gFrustumPadding = 1.0f;
 bool gQ2015FrustumCullActive = false;
 float gQ2015FrustumMvp[16]{};
 uint64_t gQ2015CullTested = 0u;
@@ -388,50 +394,20 @@ bool Q2015AabbVisible(const GpuObject& object) {
         object.minZ > object.maxZ) return true;
 
     ++gQ2015CullTested;
-    const float cx = 0.5f * (object.minX + object.maxX);
-    const float cy = 0.5f * (object.minY + object.maxY);
-    const float cz = 0.5f * (object.minZ + object.maxZ);
-    const float ex = 0.5f * (object.maxX - object.minX);
-    const float ey = 0.5f * (object.maxY - object.minY);
-    const float ez = 0.5f * (object.maxZ - object.minZ);
-
-    const float* m = gQ2015FrustumMvp;
-    const float planes[6][4] = {
-        {m[3] + m[0],  m[7] + m[4],  m[11] + m[8],  m[15] + m[12]},
-        {m[3] - m[0],  m[7] - m[4],  m[11] - m[8],  m[15] - m[12]},
-        {m[3] + m[1],  m[7] + m[5],  m[11] + m[9],  m[15] + m[13]},
-        {m[3] - m[1],  m[7] - m[5],  m[11] - m[9],  m[15] - m[13]},
-        {m[3] + m[2],  m[7] + m[6],  m[11] + m[10], m[15] + m[14]},
-        {m[3] - m[2],  m[7] - m[6],  m[11] - m[10], m[15] - m[14]},
-    };
-
-    constexpr float Q2015_FRUSTUM_PADDING_METRES = 1.0f;
-    for (const auto& p : planes) {
-        const float len =
-            std::sqrt(p[0]*p[0] + p[1]*p[1] + p[2]*p[2]);
-        if (len < 1e-6f) continue;
-        const float inv = 1.0f / len;
-        const float a = p[0] * inv;
-        const float b = p[1] * inv;
-        const float c = p[2] * inv;
-        const float d = p[3] * inv;
-        const float distance = a*cx + b*cy + c*cz + d;
-        const float radius =
-            std::fabs(a)*ex + std::fabs(b)*ey + std::fabs(c)*ez;
-        if (distance + radius < -Q2015_FRUSTUM_PADDING_METRES) {
-            ++gQ2015CullRejected;
-            return false;
-        }
-    }
-    ++gQ2015CullPassed;
-    return true;
+    const bool visible = questrender::Visible(gQ2015FrustumMvp,
+        {object.minX, object.maxX, object.minY, object.maxY, object.minZ, object.maxZ},
+        gFrustumPadding);
+    if (visible) ++gQ2015CullPassed; else ++gQ2015CullRejected;
+    return visible;
 }
 
 struct Q2015FrustumCullScope {
+    float previousPadding = 1.0f;
     bool previousActive = false;
     float previousMvp[16]{};
 
-    explicit Q2015FrustumCullScope(const float* mvp) {
+    explicit Q2015FrustumCullScope(const float* mvp, float padding = 1.0f) {
+        previousPadding = gFrustumPadding; gFrustumPadding = padding;
         previousActive = gQ2015FrustumCullActive;
         if (previousActive)
             std::copy(gQ2015FrustumMvp, gQ2015FrustumMvp + 16, previousMvp);
@@ -439,6 +415,7 @@ struct Q2015FrustumCullScope {
         gQ2015FrustumCullActive = true;
     }
     ~Q2015FrustumCullScope() {
+        gFrustumPadding = previousPadding;
         if (previousActive) {
             std::copy(previousMvp, previousMvp + 16, gQ2015FrustumMvp);
             gQ2015FrustumCullActive = true;
@@ -464,13 +441,15 @@ struct Q2015FrustumCullScope {
 GLuint gProgram = 0;
 GLint gMvpLocation = -1;
 GLint gInstancingEnabledLocationQ2016 = -1;
+GLint gFastMaterialLocation = -1;
+float gOpaqueLodClipCells[25*4]{};
+int gOpaqueLodClipCount = 0;
 GLint gObjectTransformEnabledLocationQ2017 = -1;
 GLint gObjectTransformLocationQ2017 = -1;
 GLuint gInstanceBufferQ2016 = 0u;
 bool gInstancedDrawActiveQ2016 = false;
 size_t gInstanceMatrixBaseFloatQ2017 = 0u;
 GLsizei gInstanceCountQ2017 = 0;
-std::vector<float> gInstanceMatricesQ2016;
 GLint gDiffuseLocation = -1;
 GLint gNormalLocation = -1;
 GLint gGlossinessLocation = -1;
@@ -841,10 +820,9 @@ GLsizei gDepthWidth = 0;
 GLsizei gDepthHeight = 0;
 bool gSceneReady = false;
 
-// Q20.9 PC WATER000 planar ReflectionMap. FalloutPrefs requests a 1024x1024
-// reflection target. It is regenerated per eye because a single monoscopic
-// reflection is incorrect in stereo VR.
-constexpr GLsizei Q2090_REFLECTION_SIZE = 1024;
+// Quest planar reflection: 512px midpoint camera shared by stereo eyes.
+// Each water draw samples with the matrix that generated the cached image.
+constexpr GLsizei Q2090_REFLECTION_SIZE = 512;
 GLuint gWaterReflectionFboQ2090 = 0u;
 GLuint gWaterReflectionColorQ2090 = 0u;
 GLuint gWaterReflectionDepthQ2090 = 0u;
@@ -1061,6 +1039,7 @@ GLuint CreateQ6HProgram() {
         uniform sampler2D uDiffuse;
         uniform sampler2D uNormalGloss;
         uniform sampler2D uGlow;
+        uniform float uFastMaterial;
         uniform float uGlossiness;
         uniform float uNormalStrength;
         uniform float uMaterialAlpha;
@@ -1179,6 +1158,12 @@ GLuint CreateQ6HProgram() {
             if (uAlphaTest > 0.5 && alpha < uAlphaThreshold) discard;
             alpha *= q2021FadeAlpha;
 
+            // Developer A/B only: preserve alpha test, LOD fade/clip and all
+            // geometry/visibility while bypassing normal/specular/local lights.
+            if (uFastMaterial > 0.5) {
+                fragColor = vec4(baseColor, alpha);
+                return;
+            }
             vec4 normalGloss = texture(uNormalGloss, vUv);
             vec3 tangentNormal = normalGloss.rgb * 2.0 - 1.0;
             tangentNormal.xy *= uNormalStrength;
@@ -2547,6 +2532,7 @@ bool InitializeScene() {
 
     gProgram = CreateQ6HProgram();
     if (!gProgram) return false;
+    gFastMaterialLocation = glGetUniformLocation(gProgram, "uFastMaterial");
     gMvpLocation = glGetUniformLocation(gProgram, "uMvp");
     gInstancingEnabledLocationQ2016 =
         glGetUniformLocation(gProgram, "uInstancingEnabledQ2016");
@@ -4432,6 +4418,8 @@ void Q1900CommitWindow() {
         triangles += static_cast<size_t>(object.vertexCount / 3);
     }
 
+    Q1900LogLifetimeQ19(enteringShapes, retiredShapes);
+
     const uint64_t generation = gPendingStreamQ1900.generation;
     const size_t frames = gPendingStreamQ1900.frames;
     const size_t retainedShapes = gPendingStreamQ1900.retainedShapes;
@@ -5015,10 +5003,12 @@ void DrawSceneObject(const GpuObject& object, bool environmentPassQ2050 = false)
     if (gPlayerSession && gPlayerSession->player.IsCollected(object.refFormId)) return;
     if (!object.q210PlayerBody &&
         !object.q230NpcActor &&
+        !gInstancedDrawActiveQ2016 &&
         !Q1970ShouldRenderFullDetail(object)) return;
     if (!object.q210PlayerBody &&
         !object.q230NpcActor &&
         !object.q220LooseObject &&
+        !gInstancedDrawActiveQ2016 &&
         !Q2015AabbVisible(object)) return;
     if (environmentPassQ2050 && !object.environmentEnabledQ2050) return;
     if (gInstancingEnabledLocationQ2016 >= 0) {
@@ -5047,20 +5037,9 @@ void DrawSceneObject(const GpuObject& object, bool environmentPassQ2050 = false)
             q220Transform);
     }
 
-    float q1900LodClipCells[25 * 4]{};
-    int q1900LodClipCount = 0;
-    if (object.q1990NativeLod &&
-        gNativeLodClipEnabledLocationQ1810 >= 0 &&
-        gNativeLodClipCellCountLocationQ1900 >= 0 &&
-        gNativeLodClipCellsLocationQ1900 >= 0) {
-        const std::string q1900Path = object.modelPath;
-        const bool q1900ObjectLod =
-            q1900Path.find("\\blocks\\") != std::string::npos;
-        q1900LodClipCount = q1900ObjectLod
-            ? 0
-            : Q1900BuildNativeLodClipCells(
-                  q1900LodClipCells, false);
-    }
+    // Cell bounds and player position are eye/pass constants, prepared once.
+    const int q1900LodClipCount = object.q1990NativeLod &&
+        object.modelPath.find("\\blocks\\") == std::string::npos ? gOpaqueLodClipCount : 0;
     if (gNativeLodClipEnabledLocationQ1810 >= 0) {
         glUniform1f(gNativeLodClipEnabledLocationQ1810,
                     q1900LodClipCount > 0 ? 1.0f : 0.0f);
@@ -5085,10 +5064,6 @@ void DrawSceneObject(const GpuObject& object, bool environmentPassQ2050 = false)
         glUniform1f(gTerrainLodModeLocationQ2024,
                     object.q2024TerrainLod ? 1.0f : 0.0f);
     }
-    if (gLodFadePlayerLocationQ2021 >= 0) {
-        glUniform2f(gLodFadePlayerLocationQ2021,
-                    gQ2021PlayerSceneX, gQ2021PlayerSceneZ);
-    }
     if (gLodFadeRangeLocationQ2021 >= 0) {
         const bool q2025ExtendedRockFade =
             !object.q1990NativeLod &&
@@ -5105,11 +5080,6 @@ void DrawSceneObject(const GpuObject& object, bool environmentPassQ2050 = false)
     if (gNativeLodClipCellCountLocationQ1900 >= 0) {
         glUniform1i(gNativeLodClipCellCountLocationQ1900,
                     q1900LodClipCount);
-    }
-    if (q1900LodClipCount > 0 &&
-        gNativeLodClipCellsLocationQ1900 >= 0) {
-        glUniform4fv(gNativeLodClipCellsLocationQ1900,
-                     q1900LodClipCount, q1900LodClipCells);
     }
     glUniform1f(gGlossinessLocation, object.glossiness);
     glUniform1f(gNoLightingLocationQ1020, object.noLighting ? 1.0f : 0.0f);
@@ -5147,19 +5117,13 @@ void DrawSceneObject(const GpuObject& object, bool environmentPassQ2050 = false)
     glUniform1f(gMaterialAlphaLocation, object.materialAlpha);
     glUniform1f(gAlphaTestLocation, object.alphaTest ? 1.0f : 0.0f);
     glUniform1f(gAlphaThresholdLocation, object.alphaThreshold);
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, object.diffuse);
-    glActiveTexture(GL_TEXTURE1);
-    glBindTexture(GL_TEXTURE_2D, object.normal);
-    glActiveTexture(GL_TEXTURE2);
-    glBindTexture(GL_TEXTURE_2D, object.glow);
-    glActiveTexture(GL_TEXTURE4);
-    glBindTexture(GL_TEXTURE_CUBE_MAP,
-                  object.environmentEnabledQ2050 ? object.environmentCube : 0u);
-    glActiveTexture(GL_TEXTURE5);
-    glBindTexture(GL_TEXTURE_2D,
-                  object.realEnvironmentMask ? object.environmentMask : 0u);
-    glActiveTexture(GL_TEXTURE0);
+    fqgl::BindTextureUnit(GL_TEXTURE0, GL_TEXTURE_2D, object.diffuse);
+    fqgl::BindTextureUnit(GL_TEXTURE1, GL_TEXTURE_2D, object.normal);
+    fqgl::BindTextureUnit(GL_TEXTURE2, GL_TEXTURE_2D, object.glow);
+    fqgl::BindTextureUnit(GL_TEXTURE4, GL_TEXTURE_CUBE_MAP,
+        object.environmentEnabledQ2050 ? object.environmentCube : 0u);
+    fqgl::BindTextureUnit(GL_TEXTURE5, GL_TEXTURE_2D,
+        object.realEnvironmentMask ? object.environmentMask : 0u);
     glBindVertexArray(object.vao);
 
     if (gInstancedDrawActiveQ2016 &&
@@ -5181,51 +5145,23 @@ void DrawSceneObject(const GpuObject& object, bool environmentPassQ2050 = false)
                     q2016Column * 4u * sizeof(float)));
             glVertexAttribDivisor(location, 1u);
         }
-        glBindBuffer(GL_ARRAY_BUFFER, 0u);
     }
 
-    if (object.modelPath.find("megatonbrasslanternsign") != std::string::npos ||
-        object.modelPath.find("megatonchurchofatom") != std::string::npos ||
-        object.modelPath.find("signstop02") != std::string::npos) {
-        Q6H_LOGI("Q12.1 CULL TARGET: model=%s stencil=%d mode=%u",
-                 object.modelPath.c_str(), object.stencilDrawModePresent ? 1 : 0,
-                 static_cast<unsigned>(object.stencilDrawMode));
-    }
+    // Compute the final authored state before issuing any transition. Repeated
+    // two-sided/reversed shapes must not toggle through the ordinary defaults.
+    const bool cull = !(object.stencilDrawModePresent && object.stencilDrawMode == 3u);
+    GLenum front = object.stencilDrawModePresent && object.stencilDrawMode == 2u ? GL_CW : GL_CCW;
+    if(gWaterReflectionPassQ2090) front = front == GL_CW ? GL_CCW : GL_CW;
+    if(cull) glEnable(GL_CULL_FACE); else glDisable(GL_CULL_FACE);
+    glCullFace(GL_BACK); glFrontFace(front);
 
-    const GLboolean q1160CullWasEnabled = glIsEnabled(GL_CULL_FACE);
-    GLint q1160PreviousFrontFace = GL_CCW;
-    GLint q1160PreviousCullMode = GL_BACK;
-    glGetIntegerv(GL_FRONT_FACE, &q1160PreviousFrontFace);
-    glGetIntegerv(GL_CULL_FACE_MODE, &q1160PreviousCullMode);
-
-    // Gamebryo default: ordinary geometry is single-sided.
-    glEnable(GL_CULL_FACE);
-    glCullFace(GL_BACK);
-    glFrontFace(gWaterReflectionPassQ2090 ? GL_CW : GL_CCW);
-
-    // NiStencilProperty is FO3's authored override for two-sided / reversed
-    // face rendering. Preserve Q11.6's decoded draw mode exactly.
-    if (object.stencilDrawModePresent) {
-        if (object.stencilDrawMode == 3u) {
-            glDisable(GL_CULL_FACE);
-        } else {
-            GLenum q2090Front = object.stencilDrawMode == 2u ? GL_CW : GL_CCW;
-            if (gWaterReflectionPassQ2090) {
-                q2090Front = q2090Front == GL_CW ? GL_CCW : GL_CW;
-            }
-            glFrontFace(q2090Front);
-        }
-    }
-
-    const GLboolean q1170OffsetWasEnabled = glIsEnabled(GL_POLYGON_OFFSET_FILL);
-    GLfloat q1170OldFactor = 0.0f, q1170OldUnits = 0.0f;
     if (object.decalQ1170) {
-        glGetFloatv(GL_POLYGON_OFFSET_FACTOR, &q1170OldFactor);
-        glGetFloatv(GL_POLYGON_OFFSET_UNITS, &q1170OldUnits);
         glEnable(GL_POLYGON_OFFSET_FILL);
-        // Standard (non-reversed) depth: negative offset pulls the decal toward
-        // the viewer, matching the intent of Gamebryo's decal render state.
         glPolygonOffset(-0.65f, -1.0f);
+    } else if (!object.q1990NativeLod) {
+        // Native terrain LOD inherits its tier-specific positive offset from
+        // Q1990RenderNativeLod. Ordinary materials leave the decal class.
+        glDisable(GL_POLYGON_OFFSET_FILL);
     }
 
     if (gInstancedDrawActiveQ2016 &&
@@ -5242,15 +5178,7 @@ void DrawSceneObject(const GpuObject& object, bool environmentPassQ2050 = false)
         glDrawArrays(GL_TRIANGLES, 0, object.vertexCount);
     }
 
-    if (object.decalQ1170) {
-        glPolygonOffset(q1170OldFactor, q1170OldUnits);
-        if (q1170OffsetWasEnabled) glEnable(GL_POLYGON_OFFSET_FILL);
-        else glDisable(GL_POLYGON_OFFSET_FILL);
-    }
 
-    glFrontFace(static_cast<GLenum>(q1160PreviousFrontFace));
-    glCullFace(static_cast<GLenum>(q1160PreviousCullMode));
-    if (q1160CullWasEnabled) glEnable(GL_CULL_FACE); else glDisable(GL_CULL_FACE);
 }
 
 bool Q2017EligibleForInstancing(const GpuObject& object) {
@@ -5273,98 +5201,143 @@ struct Q2017InstanceBatch {
     GLsizei count = 0;
 };
 
-void Q2017RenderOpaqueDetailedInstanced() {
-    std::unordered_map<uint64_t, std::vector<const GpuObject*>> groups;
-    groups.reserve(gObjects.size() / 3u + 1u);
-    std::vector<const GpuObject*> singles;
-    singles.reserve(gObjects.size() / 4u + 1u);
-
-    size_t visible = 0u;
-    for (const GpuObject& object : gObjects) {
-        if (object.alphaBlend) continue;
-        if (gPlayerSession && gPlayerSession->player.IsCollected(object.refFormId)) continue;
-        if (!Q1970ShouldRenderFullDetail(object)) continue;
-        if (!Q2015AabbVisible(object)) continue;
-        ++visible;
-        if (Q2017EligibleForInstancing(object)) {
-            groups[object.q2016BatchKey].push_back(&object);
-        } else {
-            singles.push_back(&object);
-        }
-    }
-
+// Frame-local pointers are valid only until the next scene preparation boundary.
+// Capacity is retained; no hash nodes or per-group vectors are allocated per eye.
+uint64_t gStereoFrame = 0;
+float gStereoMvp[2][16]{};
+bool gStereoMvpReady = false;
+float gStereoReflectionMvp[16]{}, gStereoReflectionSkyMvp[16]{};
+float gStereoReflectionEye[3]{};
+struct Q2017FrameBatches {
+    uint64_t frame = ~uint64_t{0};
+    const GpuObject* storage = nullptr;
+    size_t objectCount = 0;
+    std::vector<const GpuObject*> candidates, singles, groupFallbacks;
     std::vector<Q2017InstanceBatch> batches;
-    batches.reserve(groups.size());
-    std::vector<const GpuObject*> groupFallbacks;
-    gInstanceMatricesQ2016.clear();
-    gInstanceMatricesQ2016.reserve(visible * 16u);
+    std::vector<float> matrices;
+    GLuint buffer = 0;
+    size_t visible = 0, instancedObjects = 0, largestBatch = 0;
+};
+Q2017FrameBatches gMainBatches, gMirrorBatches;
+std::vector<const GpuObject*> gOpaqueFrameOrder;
+uint64_t gOpaqueOrderFrame = ~uint64_t{0};
+const GpuObject* gOpaqueOrderStorage = nullptr;
+size_t gOpaqueOrderCount = 0;
 
-    size_t instancedObjects = 0u;
-    size_t largestBatch = 0u;
-    for (auto& entry : groups) {
-        std::vector<const GpuObject*>& group = entry.second;
-        if (group.empty()) continue;
-        const GpuObject* representative = group.front();
+void Q2017PrepareOpaqueOrder() {
+    if (gOpaqueOrderFrame == gStereoFrame && gOpaqueOrderStorage == gObjects.data() &&
+        gOpaqueOrderCount == gObjects.size()) return;
+    gOpaqueOrderFrame = gStereoFrame; gOpaqueOrderStorage = gObjects.data();
+    gOpaqueOrderCount = gObjects.size();
+    gOpaqueFrameOrder.clear(); gOpaqueFrameOrder.reserve(gObjects.size());
+    for (const auto& object : gObjects) if (!object.alphaBlend) gOpaqueFrameOrder.push_back(&object);
+    std::sort(gOpaqueFrameOrder.begin(), gOpaqueFrameOrder.end(),
+        [](const GpuObject* a, const GpuObject* b) { return a->q2016BatchKey < b->q2016BatchKey; });
+}
 
-        const size_t matrixStart = gInstanceMatricesQ2016.size();
-        size_t validCount = 0u;
-        for (const GpuObject* target : group) {
-            if (!target ||
-                target->q2017SharedMeshKey !=
-                    representative->q2017SharedMeshKey ||
-                target->vao != representative->vao ||
-                target->vbo != representative->vbo ||
-                target->vertexCount != representative->vertexCount ||
-                target->diffuse != representative->diffuse ||
-                target->normal != representative->normal ||
-                target->glow != representative->glow ||
-                target->environmentCube != representative->environmentCube ||
-                target->environmentMask != representative->environmentMask) {
-                if (target) groupFallbacks.push_back(target);
-                continue;
-            }
-            gInstanceMatricesQ2016.insert(
-                gInstanceMatricesQ2016.end(),
-                target->q2017RelativeMatrix,
-                target->q2017RelativeMatrix + 16);
-            ++validCount;
+bool Q2017StereoVisible(const GpuObject& object) {
+    if (!gStereoMvpReady) return Q2015AabbVisible(object);
+    for (const auto& mvp : gStereoMvp) {
+        Q2015FrustumCullScope scope(mvp);
+        if (Q2015AabbVisible(object)) return true;
+    }
+    return false;
+}
+
+bool Q2017ReflectionUseful(const GpuObject& object) {
+    if (object.minX > object.maxX || object.minY > object.maxY ||
+        object.minZ > object.maxZ) return true;
+    if (object.decalQ1170 || object.q230NpcActor || object.q210PlayerBody ||
+        object.q220LooseObject || object.maxY < gWaterReflectionPlaneYQ2090) return false;
+    const float dx = (object.minX + object.maxX)*0.5f - gFo3EyePosition[0];
+    const float dy = (object.minY + object.maxY)*0.5f - gFo3EyePosition[1];
+    const float dz = (object.minZ + object.maxZ)*0.5f - gFo3EyePosition[2];
+    const float extent = std::max({object.maxX-object.minX,
+                                   object.maxY-object.minY, object.maxZ-object.minZ});
+    // Keep silhouettes/large landmarks; discard sub-pixel clutter at 512px.
+    return extent*extent >= (dx*dx+dy*dy+dz*dz)*0.000016f;
+}
+
+void Q2017RenderOpaqueDetailedInstanced() {
+    const auto prepareStarted = fqopaque::Clock::now();
+    auto& cache = gWaterReflectionPassQ2090 ? gMirrorBatches : gMainBatches;
+    // Mirrors have their own visibility set and buffer; they cannot overwrite
+    // the main stereo instance upload between the two eyes.
+    const bool rebuild = gWaterReflectionPassQ2090 || cache.frame != gStereoFrame ||
+        cache.storage != gObjects.data() || cache.objectCount != gObjects.size();
+    if (rebuild) {
+        Q2017PrepareOpaqueOrder();
+        cache.frame = gStereoFrame;
+        cache.storage = gObjects.data(); cache.objectCount = gObjects.size();
+        cache.candidates.clear(); cache.singles.clear(); cache.groupFallbacks.clear();
+        cache.batches.clear(); cache.matrices.clear();
+        cache.candidates.reserve(gObjects.size()); cache.singles.reserve(gObjects.size());
+        cache.groupFallbacks.reserve(gObjects.size()); cache.batches.reserve(gObjects.size());
+        cache.matrices.reserve(gObjects.size()*16u);
+        cache.visible = cache.instancedObjects = cache.largestBatch = 0;
+        for (const auto* pointer : gOpaqueFrameOrder) {
+            const auto& object = *pointer;
+            if (object.alphaBlend ||
+                (gPlayerSession && gPlayerSession->player.IsCollected(object.refFormId)) ||
+                !Q1970ShouldRenderFullDetail(object)) continue;
+            if (gWaterReflectionPassQ2090) {
+                if (!Q2017ReflectionUseful(object) || !Q2015AabbVisible(object)) continue;
+            } else if (!Q2017StereoVisible(object)) continue;
+            ++cache.visible;
+            if (Q2017EligibleForInstancing(object)) cache.candidates.push_back(&object);
+            else cache.singles.push_back(&object);
         }
-
-        if (validCount < 2u) {
-            gInstanceMatricesQ2016.resize(matrixStart);
-            for (const GpuObject* target : group) {
-                if (target &&
-                    std::find(groupFallbacks.begin(),
-                              groupFallbacks.end(),
-                              target) == groupFallbacks.end()) {
-                    groupFallbacks.push_back(target);
+        for (size_t first = 0; first < cache.candidates.size();) {
+            const auto* representative = cache.candidates[first];
+            size_t end = first+1;
+            while (end < cache.candidates.size() &&
+                   cache.candidates[end]->q2016BatchKey == representative->q2016BatchKey) ++end;
+            const size_t matrixStart = cache.matrices.size();
+            size_t validCount = 0;
+            const GpuObject* onlyValid = nullptr;
+            for (size_t i = first; i < end; ++i) {
+                const auto* target = cache.candidates[i];
+                if (target->q2017SharedMeshKey != representative->q2017SharedMeshKey ||
+                    target->vao != representative->vao || target->vbo != representative->vbo ||
+                    target->vertexCount != representative->vertexCount ||
+                    target->diffuse != representative->diffuse || target->normal != representative->normal ||
+                    target->glow != representative->glow ||
+                    target->environmentCube != representative->environmentCube ||
+                    target->environmentMask != representative->environmentMask) {
+                    cache.groupFallbacks.push_back(target); continue;
                 }
+                cache.matrices.insert(cache.matrices.end(), target->q2017RelativeMatrix,
+                                      target->q2017RelativeMatrix+16);
+                onlyValid = target; ++validCount;
             }
-            continue;
+            if (validCount < 2) {
+                cache.matrices.resize(matrixStart);
+                if (onlyValid) cache.groupFallbacks.push_back(onlyValid);
+            } else {
+                cache.batches.push_back({representative, matrixStart, static_cast<GLsizei>(validCount)});
+                cache.instancedObjects += validCount;
+                cache.largestBatch = std::max(cache.largestBatch, validCount);
+            }
+            first = end;
         }
-
-        Q2017InstanceBatch batch;
-        batch.representative = representative;
-        batch.matrixBaseFloat = matrixStart;
-        batch.count = static_cast<GLsizei>(validCount);
-        batches.push_back(batch);
-        instancedObjects += validCount;
-        largestBatch = std::max(largestBatch, validCount);
+        if (!gWaterReflectionPassQ2090) fqopaque::preparationUs += fqopaque::Micros(prepareStarted);
+        if (!cache.matrices.empty()) {
+            if (!cache.buffer) glGenBuffers(1, &cache.buffer);
+            glBindBuffer(GL_ARRAY_BUFFER, cache.buffer);
+            glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(cache.matrices.size()*sizeof(float)),
+                         cache.matrices.data(), GL_STREAM_DRAW);
+            glBindBuffer(GL_ARRAY_BUFFER, 0);
+        }
     }
-
-    // One driver upload for every instance matrix used by this eye.
-    if (!gInstanceMatricesQ2016.empty()) {
-        if (gInstanceBufferQ2016 == 0u)
-            glGenBuffers(1, &gInstanceBufferQ2016);
-        glBindBuffer(GL_ARRAY_BUFFER, gInstanceBufferQ2016);
-        glBufferData(
-            GL_ARRAY_BUFFER,
-            static_cast<GLsizeiptr>(
-                gInstanceMatricesQ2016.size() * sizeof(float)),
-            gInstanceMatricesQ2016.data(),
-            GL_STREAM_DRAW);
-        glBindBuffer(GL_ARRAY_BUFFER, 0u);
-    }
+    if (!rebuild && !gWaterReflectionPassQ2090) fqopaque::preparationUs += fqopaque::Micros(prepareStarted);
+    // DrawSceneObject binds this buffer for matrix attributes.
+    gInstanceBufferQ2016 = cache.buffer;
+    const auto& singles = cache.singles;
+    const auto& groupFallbacks = cache.groupFallbacks;
+    const auto& batches = cache.batches;
+    const auto visible = cache.visible;
+    const auto instancedObjects = cache.instancedObjects;
+    const auto largestBatch = cache.largestBatch;
 
     size_t fallbackDraws = 0u;
     for (const GpuObject* object : singles) {
@@ -5408,20 +5381,19 @@ void Q2017RenderOpaqueDetailedInstanced() {
         const size_t saved =
             instancedObjects > instancedDraws
                 ? instancedObjects - instancedDraws : 0u;
-        Q6H_LOGI("Q20.17 SHARED INSTANCING: visibleOpaque=%zu sharedMeshes=%zu cacheHits=%llu cacheMisses=%llu avoidedVboMB=%.2f instancedObjects=%zu instancedDraws=%zu fallbackDraws=%zu drawsSaved=%zu largestBatch=%zu matrixUploadsPerEye=%d liveShapes=%zu orientationBasis=C*R*[X,Y,Z]",
+        Q6H_LOGI("Q20.17 SHARED INSTANCING: visibleOpaque=%zu sharedMeshes=%zu cacheHits=%llu cacheMisses=%llu avoidedVboMB=%.2f instancedObjects=%zu instancedDraws=%zu fallbackDraws=%zu drawsSaved=%zu largestBatch=%zu matrixUploadOnRebuild=%d liveShapes=%zu orientationBasis=C*R*[X,Y,Z]",
                  visible, gQ2017SharedGeometry.size(),
                  static_cast<unsigned long long>(gQ2017SharedHits),
                  static_cast<unsigned long long>(gQ2017SharedMisses),
                  static_cast<double>(gQ2017SharedAvoidedBytes) /
                      (1024.0 * 1024.0),
                  instancedObjects, instancedDraws, fallbackDraws,
-                 saved, largestBatch, 1, gObjects.size());
+                 saved, largestBatch, rebuild ? 1 : 0, gObjects.size());
     }
 
     gInstancedDrawActiveQ2016 = false;
     gInstanceMatrixBaseFloatQ2017 = 0u;
     gInstanceCountQ2017 = 0;
-    gInstanceMatricesQ2016.clear();
 }
 
 bool Q1030InitializeRenderProgramOnly() {
@@ -5432,6 +5404,7 @@ bool Q1030InitializeRenderProgramOnly() {
         return false;
     }
 
+    gFastMaterialLocation = glGetUniformLocation(gProgram, "uFastMaterial");
     gMvpLocation = glGetUniformLocation(gProgram, "uMvp");
     gInstancingEnabledLocationQ2016 =
         glGetUniformLocation(gProgram, "uInstancingEnabledQ2016");
@@ -7059,10 +7032,10 @@ bool Q2090EnsureReflectionTarget() {
     if (!gWaterReflectionTargetLoggedQ2090) {
         gWaterReflectionTargetLoggedQ2090 = true;
         if (gWaterReflectionTargetReadyQ2090) {
-            Q6H_LOGI("Q20.9 WATER MIRROR TARGET READY: size=1024x1024 color=%s depth=DEPTH_COMPONENT24 source=FalloutPrefs iWaterReflectWidth/Height=1024 blur=pending",
+            Q6H_LOGI("Q20.9 WATER MIRROR TARGET READY: size=512x512 color=%s depth=DEPTH_COMPONENT24 source=Quest-policy blur=pending",
                      chosenFormat == GL_RGBA16F ? "RGBA16F" : "RGBA8");
         } else {
-            Q6H_LOGW("Q20.9 WATER MIRROR TARGET FAILED: size=1024x1024 status=0x%X fallback=WATER001-authored-reflection",
+            Q6H_LOGW("Q20.9 WATER MIRROR TARGET FAILED: size=512x512 status=0x%X fallback=WATER001-authored-reflection",
                      status);
         }
     }
@@ -7112,9 +7085,30 @@ bool Q2090RenderWaterReflection(const float mainMvp[16],
         return false;
     }
 
+    if (gStereoMvpReady) mainMvp = gStereoReflectionMvp;
+    const float* reflectionEye = gStereoMvpReady ? gStereoReflectionEye : gFo3EyePosition;
+
     // Above-water WATER000 only. Underwater optics are a distinct renderer
     // state and remain a later milestone.
-    if (gFo3EyePosition[1] <= planeY + 0.001f) return false;
+    if (reflectionEye[1] <= planeY + 0.001f) return false;
+
+    static uint64_t cachedFrame = ~uint64_t{0};
+    static uint32_t cachedCell = 0;
+    static GLuint cachedTarget = 0;
+    static const GpuObject* cachedStorage = nullptr;
+    static size_t cachedObjectCount = 0;
+    static float cachedPlane = 0, cachedMain[16]{}, cachedReflection[16]{};
+    static float cachedEye[3]{};
+    float matrixDelta = 0, eyeDelta = 0;
+    for (int i=0;i<16;++i) matrixDelta = std::max(matrixDelta, std::fabs(mainMvp[i]-cachedMain[i]));
+    for (int i=0;i<3;++i) eyeDelta = std::max(eyeDelta, std::fabs(reflectionEye[i]-cachedEye[i]));
+    if (questrender::ReuseReflection(gStereoFrame, cachedFrame,
+            cachedCell == gCurrentCellFormId && cachedTarget == gWaterReflectionColorQ2090 &&
+            cachedStorage == gObjects.data() && cachedObjectCount == gObjects.size(),
+            planeY-cachedPlane, matrixDelta, eyeDelta)) {
+        std::copy(cachedReflection, cachedReflection+16, outReflectionMvp);
+        return true;
+    }
 
     float reflection[16]{};
     Q2090BuildReflectionMatrix(planeY, reflection);
@@ -7127,7 +7121,7 @@ bool Q2090RenderWaterReflection(const float mainMvp[16],
         0.0f,  0.0f, 0.0f, 1.0f
     };
     float reflectedSkyMvp[16]{};
-    Q2090MultiplyMatrix(gWaterSkyMvpQ2090, skyFlip, reflectedSkyMvp);
+    Q2090MultiplyMatrix(gStereoMvpReady ? gStereoReflectionSkyMvp : gWaterSkyMvpQ2090, skyFlip, reflectedSkyMvp);
 
     GLint previousFbo = 0;
     GLint previousViewport[4]{};
@@ -7141,6 +7135,13 @@ bool Q2090RenderWaterReflection(const float mainMvp[16],
     const GLboolean depthWasEnabled = glIsEnabled(GL_DEPTH_TEST);
     const GLboolean blendWasEnabled = glIsEnabled(GL_BLEND);
     const GLboolean cullWasEnabled = glIsEnabled(GL_CULL_FACE);
+    const GLboolean offsetWasEnabled = glIsEnabled(GL_POLYGON_OFFSET_FILL);
+    GLint previousFront=GL_CCW, previousCull=GL_BACK;
+    GLfloat previousOffsetFactor=0, previousOffsetUnits=0;
+    glGetIntegerv(GL_FRONT_FACE, &previousFront);
+    glGetIntegerv(GL_CULL_FACE_MODE, &previousCull);
+    glGetFloatv(GL_POLYGON_OFFSET_FACTOR, &previousOffsetFactor);
+    glGetFloatv(GL_POLYGON_OFFSET_UNITS, &previousOffsetUnits);
     glGetIntegerv(GL_FRAMEBUFFER_BINDING, &previousFbo);
     glGetIntegerv(GL_VIEWPORT, previousViewport);
     glGetIntegerv(GL_CURRENT_PROGRAM, &previousProgram);
@@ -7159,9 +7160,9 @@ bool Q2090RenderWaterReflection(const float mainMvp[16],
         gFo3EyePosition[2]
     };
     const float mirroredEye[3]{
-        originalEye[0],
-        2.0f * planeY - originalEye[1],
-        originalEye[2]
+        reflectionEye[0],
+        2.0f * planeY - reflectionEye[1],
+        reflectionEye[2]
     };
 
     glBindFramebuffer(GL_FRAMEBUFFER, gWaterReflectionFboQ2090);
@@ -7208,7 +7209,7 @@ bool Q2090RenderWaterReflection(const float mainMvp[16],
     // Install the reflected MVP as a nested frustum so native LOD, detailed
     // statics, alpha and environment passes only submit geometry the mirror
     // camera can actually see.
-    Q2015FrustumCullScope q2020ReflectionFrustum(outReflectionMvp);
+    Q2015FrustumCullScope q2020ReflectionFrustum(outReflectionMvp, 0.1f);
 
     const auto q2019ReflectionOpaqueStarted =
         std::chrono::steady_clock::now();
@@ -7235,7 +7236,7 @@ bool Q2090RenderWaterReflection(const float mainMvp[16],
     glEnable(GL_BLEND);
     Q1990RenderNativeLod(true);
     for (const GpuObject& object : gObjects) {
-        if (!object.alphaBlend) continue;
+        if (!object.alphaBlend || !Q2017ReflectionUseful(object) || !Q2015AabbVisible(object)) continue;
         if (object.zBufferTestQ1200) glEnable(GL_DEPTH_TEST); else glDisable(GL_DEPTH_TEST);
         glDepthMask(object.zBufferWriteQ1200 ? GL_TRUE : GL_FALSE);
         glBlendFunc(Q1150BlendFactor(object.alphaSourceBlend, true),
@@ -7250,20 +7251,8 @@ bool Q2090RenderWaterReflection(const float mainMvp[16],
 
     const auto q2019ReflectionEnvStarted =
         std::chrono::steady_clock::now();
-    // Preserve Q20.5 material reflections inside the planar reflection image.
-    glEnable(GL_DEPTH_TEST);
-    glDepthFunc(GL_EQUAL);
-    glDepthMask(GL_FALSE);
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_ONE, GL_ONE);
-    if (gEnvironmentPassEnabledQ205A) {
-        for (const GpuObject& object : gObjects) {
-            if (!object.environmentEnabledQ2050 ||
-                !object.zBufferWriteQ1200) continue;
-            DrawSceneObject(object, true);
-        }
-    }
-
+    // Keep authored water Fresnel/cubemap optics in the water shader, but
+    // omit a secondary additive material-highlight pass inside the mirror.
     q2019EnvUs = static_cast<uint64_t>(
         std::chrono::duration_cast<std::chrono::microseconds>(
             std::chrono::steady_clock::now() -
@@ -7307,6 +7296,10 @@ bool Q2090RenderWaterReflection(const float mainMvp[16],
     if (depthWasEnabled) glEnable(GL_DEPTH_TEST); else glDisable(GL_DEPTH_TEST);
     if (blendWasEnabled) glEnable(GL_BLEND); else glDisable(GL_BLEND);
     if (cullWasEnabled) glEnable(GL_CULL_FACE); else glDisable(GL_CULL_FACE);
+    glFrontFace(static_cast<GLenum>(previousFront));
+    glCullFace(static_cast<GLenum>(previousCull));
+    glPolygonOffset(previousOffsetFactor, previousOffsetUnits);
+    if(offsetWasEnabled) glEnable(GL_POLYGON_OFFSET_FILL); else glDisable(GL_POLYGON_OFFSET_FILL);
     glBindVertexArray(static_cast<GLuint>(previousVao));
     glUseProgram(static_cast<GLuint>(previousProgram));
 
@@ -7318,7 +7311,7 @@ bool Q2090RenderWaterReflection(const float mainMvp[16],
     if (gWaterReflectionFramesQ2090 == 1u ||
         (gWaterReflectionFramesQ2090 % 120u) == 0u ||
         q2019ReflectionTotalUs >= 35000u) {
-        Q6H_LOGI("Q20.19 WATER REFLECTION PHASES: totalUs=%llu opaqueUs=%llu alphaUs=%llu envUs=%llu landUs=%llu objects=%zu sharedMeshes=%zu target=1024x1024 instancedOpaque=1",
+        Q6H_LOGI("Q20.19 WATER REFLECTION PHASES: totalUs=%llu opaqueUs=%llu alphaUs=%llu envUs=%llu landUs=%llu objects=%zu sharedMeshes=%zu target=512x512 instancedOpaque=1",
                  static_cast<unsigned long long>(q2019ReflectionTotalUs),
                  static_cast<unsigned long long>(q2019OpaqueUs),
                  static_cast<unsigned long long>(q2019AlphaUs),
@@ -7328,14 +7321,20 @@ bool Q2090RenderWaterReflection(const float mainMvp[16],
     }
     if (gWaterReflectionFramesQ2090 == 1u ||
         (gWaterReflectionFramesQ2090 % 600u) == 0u) {
-        Q6H_LOGI("Q20.9 WATER MIRROR DRAW: frame=%llu planeY=%.5f eyeMain=(%.4f %.4f %.4f) eyeMirror=(%.4f %.4f %.4f) size=1024x1024 sky=PC-Q16.6 statics=%zu LAND=1 environmentPass=%d belowPlaneClip=1 stereoPerEye=1 blur=pending",
+        Q6H_LOGI("Q20.9 WATER MIRROR DRAW: frame=%llu planeY=%.5f eyeMain=(%.4f %.4f %.4f) eyeMirror=(%.4f %.4f %.4f) size=512x512 sky=PC-Q16.6 statics=%zu LAND=1 environmentPass=%d belowPlaneClip=1 stereoShared=1 blur=pending",
                  static_cast<unsigned long long>(gWaterReflectionFramesQ2090),
                  planeY,
                  originalEye[0], originalEye[1], originalEye[2],
                  mirroredEye[0], mirroredEye[1], mirroredEye[2],
                  gObjects.size(),
-                 gEnvironmentPassEnabledQ205A ? 1 : 0);
+                 0);
     }
+    cachedFrame = gStereoFrame; cachedCell = gCurrentCellFormId; cachedPlane = planeY;
+    cachedTarget = gWaterReflectionColorQ2090;
+    cachedStorage = gObjects.data(); cachedObjectCount = gObjects.size();
+    std::copy(mainMvp, mainMvp+16, cachedMain);
+    std::copy(outReflectionMvp, outReflectionMvp+16, cachedReflection);
+    std::copy(reflectionEye, reflectionEye+3, cachedEye);
     return true;
 }
 
@@ -10883,6 +10882,14 @@ void RenderScene(const float* mvp) {
     glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousTexture5Q2050);
     glActiveTexture(GL_TEXTURE0);
 
+    const GLboolean cullWasEnabled = glIsEnabled(GL_CULL_FACE);
+    const GLboolean offsetWasEnabled = glIsEnabled(GL_POLYGON_OFFSET_FILL);
+    GLint previousFront = GL_CCW, previousCull = GL_BACK;
+    GLfloat previousOffsetFactor=0, previousOffsetUnits=0;
+    glGetIntegerv(GL_FRONT_FACE, &previousFront);
+    glGetIntegerv(GL_CULL_FACE_MODE, &previousCull);
+    glGetFloatv(GL_POLYGON_OFFSET_FACTOR, &previousOffsetFactor);
+    glGetFloatv(GL_POLYGON_OFFSET_UNITS, &previousOffsetUnits);
     const GLboolean blendWasEnabled = glIsEnabled(GL_BLEND);
     const GLboolean depthTestWasEnabledQ1200 = glIsEnabled(GL_DEPTH_TEST);
     GLboolean previousDepthMask = GL_TRUE;
@@ -10898,6 +10905,11 @@ void RenderScene(const float* mvp) {
 
     glUseProgram(gProgram);
     glUniformMatrix4fv(gMvpLocation, 1, GL_FALSE, mvp);
+    glUniform2f(gLodFadePlayerLocationQ2021, gQ2021PlayerSceneX, gQ2021PlayerSceneZ);
+    gOpaqueLodClipCount = Q1900BuildNativeLodClipCells(gOpaqueLodClipCells, false);
+    if (gOpaqueLodClipCount > 0)
+        glUniform4fv(gNativeLodClipCellsLocationQ1900, gOpaqueLodClipCount, gOpaqueLodClipCells);
+    glUniform1f(gFastMaterialLocation, 0.0f);
     if (gWaterReflectionClipEnabledLocationQ2090 >= 0) {
         glUniform1f(gWaterReflectionClipEnabledLocationQ2090, 0.0f);
     }
@@ -10995,10 +11007,14 @@ void RenderScene(const float* mvp) {
     glActiveTexture(GL_TEXTURE3);
     glBindTexture(GL_TEXTURE_2D,q1050ShadowActive?gShadowDepthQ1050:0u);
     glActiveTexture(GL_TEXTURE0);
+    const GLboolean q2021MainA2cWas = glIsEnabled(GL_SAMPLE_ALPHA_TO_COVERAGE);
+    fqopaque::Begin(gStereoFrame);
     const auto q2017OpaqueStarted = std::chrono::steady_clock::now();
+    glEnable(GL_DEPTH_TEST); glDepthMask(GL_TRUE); glDepthFunc(GL_LEQUAL);
+    glEnable(GL_CULL_FACE); glCullFace(GL_BACK); glFrontFace(GL_CCW);
+    glDisable(GL_BLEND); glDisable(GL_POLYGON_OFFSET_FILL);
+    glUniform1f(gFastMaterialLocation, fqopaque::Options().fastMaterial ? 1.0f : 0.0f);
     glDisable(GL_BLEND);
-    const GLboolean q2021MainA2cWas =
-        glIsEnabled(GL_SAMPLE_ALPHA_TO_COVERAGE);
     if (q2060MsaaActive && q2060MsaaSamples > 1)
         glEnable(GL_SAMPLE_ALPHA_TO_COVERAGE);
     Q1990RenderNativeLod(false);
@@ -11011,6 +11027,19 @@ void RenderScene(const float* mvp) {
         std::chrono::duration_cast<std::chrono::microseconds>(
             std::chrono::steady_clock::now() -
             q2017OpaqueStarted).count());
+
+    fqopaque::End(static_cast<double>(q2017OpaqueUs), gMainBatches.visible);
+    glUniform1f(gFastMaterialLocation, 0.0f);
+    if ((fqopaque::passes % 120u) == 1u) {
+        Q6H_LOGI("OPAQUE PERF rollingEyePasses=%u prepCpuUs=%.1f submitCpuUs=%.1f gpuUs=%.1f gpuSamples=%u gpuSupported=%d gpuDisjoint=%llu gpuDropped=%llu draws=%.1f states=%.1f uniforms=%.1f textures=%.1f vaos=%.1f stateQueries=%.1f visibleDetailed=%.1f vertices=%.0f triangles=%.0f fastMaterial=%d renderScale=%.2f",
+            fqopaque::submission.count, fqopaque::preparation.Mean(), fqopaque::submission.Mean(),
+            fqopaque::timer.gpu.Mean(), fqopaque::timer.gpu.count, fqopaque::timer.supported,
+            (unsigned long long)fqopaque::timer.disjoints, (unsigned long long)fqopaque::timer.dropped,
+            fqopaque::drawCalls.Mean(), fqopaque::stateChanges.Mean(), fqopaque::uniformUploads.Mean(),
+            fqopaque::textureBinds.Mean(), fqopaque::vaoBinds.Mean(), fqopaque::stateQueries.Mean(),
+            fqopaque::visible.Mean(), fqopaque::vertices.Mean(), fqopaque::vertices.Mean()/3.0,
+            fqopaque::Options().fastMaterial, fqopaque::Options().scale);
+    }
 
     const auto q2017AlphaStarted = std::chrono::steady_clock::now();
     glEnable(GL_BLEND);
@@ -11081,7 +11110,6 @@ void RenderScene(const float* mvp) {
     static uint64_t q2017PhaseEye = 0u;
     ++q2017PhaseEye;
     if ((q2017PhaseEye % 240u) == 1u ||
-        q2017OpaqueUs >= 12000u ||
         q2017AlphaUs >= 12000u ||
         q2017EnvUs >= 12000u) {
         Q6H_LOGI("Q20.17 RENDER PHASES: opaqueUs=%llu alphaUs=%llu envUs=%llu sceneObjects=%zu lodBlocks=%zu",
@@ -11095,11 +11123,16 @@ void RenderScene(const float* mvp) {
     // RenderFo3CollisionOverlay is the historical hook name but currently
     // dispatches the real LAND terrain renderer. Q20.7A drew water first with
     // depthWrite=0, so LAND painted over nearly the entire water plane.
+    glFrontFace(static_cast<GLenum>(previousFront));
+    glCullFace(static_cast<GLenum>(previousCull));
+    if(cullWasEnabled) glEnable(GL_CULL_FACE); else glDisable(GL_CULL_FACE);
+    glPolygonOffset(previousOffsetFactor, previousOffsetUnits);
+    if(offsetWasEnabled) glEnable(GL_POLYGON_OFFSET_FILL); else glDisable(GL_POLYGON_OFFSET_FILL);
     RenderFo3CollisionOverlay(mvp);
 
     if (gExteriorStreamingActiveQ1890 && gExteriorWorldspaceQ1890 != 0u) {
         // Q20.9 WATER000: first render the current eye's mirrored world into
-        // FalloutPrefs' 1024x1024 ReflectionMap, then resolve the already-drawn
+        // shared 512x512 ReflectionMap, then resolve the already-drawn
         // main scene for WATER001's RefractionMap + DepthMap inputs.
         float q2090PlaneY = 0.0f;
         float q2090HeightGame = 0.0f;
@@ -11280,7 +11313,7 @@ GLuint q1280PostFbo = 0u;
 GLuint q1280PostColor = 0u;
 GLuint q1370PostDepth = 0u;
 
-// Q20.6: FalloutPrefs requests 8x MSAA. The Quest scene renders through an
+// Quest policy: 2x MSAA rather than the PC 8x preference. The Quest scene renders through an
 // off-screen HDR target before post processing, so multisampling must live
 // here rather than on the final OpenXR full-screen composite.
 GLuint q2060MsaaFbo = 0u;
@@ -11295,12 +11328,12 @@ bool q2060MsaaAttempted = false;
 uint64_t q2060MsaaHeartbeatFrame = 0u;
 uint32_t q2060OpenXrRecommendedSamples = 0u;
 uint32_t q2060OpenXrMaxSamples = 0u;
-constexpr GLsizei Q2060_PC_REQUESTED_MSAA = 8;
+constexpr GLsizei Q2060_QUEST_REQUESTED_MSAA = 2;
 
 void Q2060SetOpenXrSampleInfo(uint32_t recommendedSamples, uint32_t maxSamples) {
     q2060OpenXrRecommendedSamples = recommendedSamples;
     q2060OpenXrMaxSamples = maxSamples;
-    Q6H_LOGI("Q20.6 OPENXR SAMPLE INFO: recommended=%u max=%u sceneMsaaPolicy=offscreen-probe-up-to-PC8x",
+    Q6H_LOGI("Q20.6 OPENXR SAMPLE INFO: recommended=%u max=%u sceneMsaaPolicy=Quest2x",
              recommendedSamples, maxSamples);
 }
 
@@ -12113,9 +12146,9 @@ bool Q2060AllocateMsaaTargetQ2060(GLsizei width, GLsizei height,
     if (!q2060MsaaDepth) glGenRenderbuffers(1, &q2060MsaaDepth);
 
     const GLsizei capped =
-        std::min<GLsizei>(Q2060_PC_REQUESTED_MSAA,
+        std::min<GLsizei>(Q2060_QUEST_REQUESTED_MSAA,
                           static_cast<GLsizei>(q2060GlMaxSamples));
-    const GLsizei candidates[] = {8, 4, 2};
+    const GLsizei candidates[] = {2};
     GLenum finalStatus = 0u;
 
     for (GLsizei samples : candidates) {
@@ -12144,8 +12177,8 @@ bool Q2060AllocateMsaaTargetQ2060(GLsizei width, GLsizei height,
             q2060MsaaWidth = width;
             q2060MsaaHeight = height;
             q2060MsaaActive = true;
-            Q6H_LOGI("Q20.6 MSAA READY: pcRequested=%dx glMax=%d chosen=%dx size=%dx%d color=%s depth=DEPTH_COMPONENT24 sceneTarget=multisample-renderbuffer resolve=COLOR+DEPTH postPipeline=unchanged swapchainSamples=1 transparencyMsaa=pending",
-                     Q2060_PC_REQUESTED_MSAA, q2060GlMaxSamples,
+            Q6H_LOGI("Q20.6 MSAA READY: questRequested=%dx glMax=%d chosen=%dx size=%dx%d color=%s depth=DEPTH_COMPONENT24 sceneTarget=multisample-renderbuffer resolve=COLOR+DEPTH postPipeline=unchanged swapchainSamples=1 transparencyMsaa=pending",
+                     Q2060_QUEST_REQUESTED_MSAA, q2060GlMaxSamples,
                      q2060MsaaSamples, width, height,
                      colorFormat == GL_RGBA16F ? "RGBA16F" : "RGBA8");
             return true;
@@ -12154,8 +12187,8 @@ bool Q2060AllocateMsaaTargetQ2060(GLsizei width, GLsizei height,
 
     q2060MsaaWidth = width;
     q2060MsaaHeight = height;
-    Q6H_LOGW("Q20.6 MSAA FALLBACK: pcRequested=%dx glMax=%d chosen=1x status=0x%X color=%s reason=no-complete-multisample-target",
-             Q2060_PC_REQUESTED_MSAA, q2060GlMaxSamples, finalStatus,
+    Q6H_LOGW("Q20.6 MSAA FALLBACK: questRequested=%dx glMax=%d chosen=1x status=0x%X color=%s reason=no-complete-multisample-target",
+             Q2060_QUEST_REQUESTED_MSAA, q2060GlMaxSamples, finalStatus,
              colorFormat == GL_RGBA16F ? "RGBA16F" : "RGBA8");
     return true;
 }
@@ -12457,6 +12490,7 @@ void Q6HDeleteFramebuffers(GLsizei n, const GLuint* framebuffers) {
     gSceneLoad.active = false;
     gSceneLoad.bootAttempted = false;
     CancelFo3Loading();
+    fqopaque::timer.Shutdown();
     Q1280ShutdownPostQ1280();
     ShutdownFo3WaterQ2070();
     glDeleteFramebuffers(n, framebuffers);
@@ -12468,10 +12502,13 @@ void Q6HDeleteFramebuffers(GLsizei n, const GLuint* framebuffers) {
     Q230DeleteNpcActors();
     Q1910DrainDeferredGpuDeletesQ19(true);
     Q2017ForceClearSharedGeometry();
-    if (gInstanceBufferQ2016) {
-        glDeleteBuffers(1, &gInstanceBufferQ2016);
-        gInstanceBufferQ2016 = 0u;
+    for (auto* cache : {&gMainBatches, &gMirrorBatches}) {
+        if (cache->buffer) glDeleteBuffers(1, &cache->buffer);
+        *cache = Q2017FrameBatches{};
     }
+    gInstanceBufferQ2016 = 0u;
+    gStereoMvpReady = false;
+    gOpaqueFrameOrder.clear(); gOpaqueOrderFrame = ~uint64_t{0};
     for (const auto& entry : gTextureCache) {
         const GLuint id = entry.second.id;
         if (id) glDeleteTextures(1, &id);
@@ -12692,6 +12729,7 @@ bool GetFo3PcLightDirection(float out[3]) {
 #define glGenFramebuffers Q6HGenFramebuffers
 #define glDeleteFramebuffers Q6HDeleteFramebuffers
 #define glViewport Q6HViewport
+#undef glDisable
 #define glDisable Q6HDisable
 #define glClear Q6HClear
 #include "fo3-runtime-loop.inc"

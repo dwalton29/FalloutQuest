@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parents[2]
 class RenderDispatchTests(unittest.TestCase):
     def test_scene_dispatch_without_debug_geometry_or_controllers(self):
         loop = (ROOT / "app/src/main/cpp/core/fo3-runtime-loop.inc").read_text()
-        eye = loop[loop.index("    void RenderEye("):loop.index("\nprivate:", loop.index("    void RenderEye("))]
+        eye = loop[loop.index("    bool RenderEye("):loop.index("\nprivate:", loop.index("    bool RenderEye("))]
         before_controllers = eye[:eye.index("for (uint32_t hand")]
         self.assertIn("RenderScene(viewProjection.m);", before_controllers)
         self.assertNotIn("if (!IsFo3LoadingVisible()) RenderScene", before_controllers)

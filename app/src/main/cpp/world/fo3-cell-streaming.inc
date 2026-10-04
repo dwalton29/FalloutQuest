@@ -252,6 +252,25 @@ bool Q1900CellVisualReadyQ19(int32_t x, int32_t y) {
     return found != gWorldStreaming.cells.end() && found->second.visualReady;
 }
 
+// Published placements are bounded by the warm/cache window plus explicitly
+// wanted prefetch strips. Deferred deletes retain geometry refs only until drained.
+void Q1900LogLifetimeQ19(size_t added, size_t removed) {
+    static uint64_t updates=0;
+    if(!added && !removed && (++updates % 120u)!=1u) return;
+    size_t active=0, ready=0, staged=0, sharedRefs=0;
+    for(const auto& entry:gWorldStreaming.cells) {
+        if(entry.second.wanted && std::max(std::abs(entry.second.gridX-gQ1920LatestGridX),
+            std::abs(entry.second.gridY-gQ1920LatestGridY)) <= fo3world::ResidentRadius) ++active;
+        if(entry.second.visualReady) ++ready;
+        staged+=entry.second.stagedGpu.size();
+    }
+    for(const auto& entry:gQ2017SharedGeometry) sharedRefs+=entry.second.refs;
+    Q6H_LOGI("DETAIL LIFETIME activeDetailedCells=%zu gpuReadyCells=%zu added=%zu removed=%zu liveDetailed=%zu stagedDetailed=%zu deferredPlacements=%zu retainedSharedBuffers=%zu sharedPlacementRefs=%zu retainedTextures=%zu retainedCubes=%zu cacheRadius=%d ownership=live-staged-deferred-refs+texture-cache",
+        active, ready, added, removed, gObjects.size(), staged,
+        gWorldStreaming.deferredGpuDeletes.size(), gQ2017SharedGeometry.size(), sharedRefs,
+        gTextureCache.size(), gCubeTextureCacheQ2050.size(), Q1900_CACHE_RADIUS_Q19);
+}
+
 Q1900CellStateQ19& Q1900EnsureCellStateQ19(int32_t x, int32_t y) {
     const uint64_t key = Q1900CellKeyQ19(x, y);
     auto found = gWorldStreaming.cells.find(key);
@@ -1105,6 +1124,7 @@ void Q1900CommitCellVisualsQ19(Q1900CellStateQ19& state) {
     state.cpu.clear();
     state.textures.clear();
     state.visualReady = true;
+    Q1900LogLifetimeQ19(entering, retired);
     state.stage = Q1900CellStageQ19::Ready;
     gSceneReady = !gObjects.empty();
     gLoggedFirstDraw = false;
@@ -1500,6 +1520,7 @@ void Q1900RetireFarCellsQ19(int32_t actualGridX, int32_t actualGridY) {
     const uint64_t retireQueueUs = static_cast<uint64_t>(
         std::chrono::duration_cast<std::chrono::microseconds>(
             std::chrono::steady_clock::now() - retireStarted).count());
+    Q1900LogLifetimeQ19(0, retiredShapes);
     if (retiredShapes > 0u || retiredStaged > 0u) {
         gSceneReady = !gObjects.empty();
         gShadowDirtyQ1050 = true;

@@ -1,0 +1,14 @@
+#pragma once
+#include <GLES3/gl3.h>
+#define GL_TIME_ELAPSED_EXT 0x88BF
+#define GL_QUERY_COUNTER_BITS_EXT 0x8864
+#define GL_QUERY_RESULT_AVAILABLE_EXT 0x8867
+#define GL_QUERY_RESULT_EXT 0x8866
+#define GL_GPU_DISJOINT_EXT 0x8FBB
+using PFNGLGENQUERIESEXTPROC=void(*)(GLsizei,GLuint*);
+using PFNGLDELETEQUERIESEXTPROC=void(*)(GLsizei,const GLuint*);
+using PFNGLBEGINQUERYEXTPROC=void(*)(GLenum,GLuint);
+using PFNGLENDQUERYEXTPROC=void(*)(GLenum);
+using PFNGLGETQUERYOBJECTUIVEXTPROC=void(*)(GLuint,GLenum,GLuint*);
+using PFNGLGETQUERYOBJECTUI64VEXTPROC=void(*)(GLuint,GLenum,GLuint64*);
+using PFNGLGETQUERYIVEXTPROC=void(*)(GLenum,GLenum,GLint*);

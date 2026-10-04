@@ -464,6 +464,5 @@ inline void UpdateFo3FogPower(float hour,
         hour, sunriseBegin, sunriseEnd, sunsetBegin, sunsetEnd);
 }
 
-inline float GetFo3FogPower() {
-    return fo3cellenv::GetFo3FogPower();
-}
+// Exported by the runtime for the terrain translation unit.
+float GetFo3FogPower();
