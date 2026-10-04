@@ -1582,36 +1582,14 @@ private:
             glUseProgram(program_);
             glBindVertexArray(vao_);
 
-            SetMvpAndColor(viewProjection, 0.95f, 0.72f, 0.12f);
-            glDrawArrays(GL_TRIANGLES, 0, 3);
-            glUniform3f(colorLocation_, 0.30f, 0.80f, 0.42f);
-            glDrawArrays(GL_TRIANGLES, 3, 3);
-            glUniform3f(colorLocation_, 0.58f, 0.72f, 0.34f);
-            glDrawArrays(GL_TRIANGLES, 6, 3);
-
-            glUniform3f(colorLocation_, 0.13f, 0.30f, 0.17f);
-            glDrawArrays(GL_LINES, gridStartVertex_, gridVertexCount_);
-
             for (uint32_t hand = 0; hand < 2; ++hand) {
                 if (!handPoseValid_[hand]) continue;
                 const XrPosef virtualHandPose = ToVirtualPose(handLocalPoses_[hand]);
                 const Mat4 model = MatrixFromPose(virtualHandPose);
                 const Mat4 mvp = Multiply(viewProjection, model);
-                if (hand == 0) {
-                    SetMvpAndColor(mvp, 0.25f, 0.68f, 1.0f);
-                    glDrawArrays(GL_TRIANGLES, controllerStartVertex_, controllerVertexCount_);
-
-                    // A bright floating build ID above the left hand. Force the
-                    // label through depth only for these line vertices, then put
-                    // the normal world/controller depth function straight back.
-                    glDepthFunc(GL_ALWAYS);
-                    glLineWidth(2.0f);
-                    SetMvpAndColor(mvp, 1.0f, 0.86f, 0.10f);
-                    glDrawArrays(GL_LINES, versionStartVertex_, versionVertexCount_);
-                    glDepthFunc(GL_LEQUAL);
-                } else {
-                    SetMvpAndColor(mvp, 1.0f, 0.48f, 0.18f);
-                    glDrawArrays(GL_TRIANGLES, controllerStartVertex_, controllerVertexCount_);
+                // The right-hand interaction HUD remains; prototype controller
+                // markers, build labels and the world grid are no longer drawn.
+                if (hand == 1) {
                     if (doorAimActiveQ1700_) {
                         if (doorPromptValidQ1850_ && !GetFo3LootPanel().reference) {
                             RenderFo3InteractionHud(mvp.m, doorPromptQ1850_.data());
