@@ -1,3 +1,4 @@
+#include "ui/interaction/fo3-item-notification-renderer.h"
 #include "ui/interaction/fo3-interaction-hud-assets.h"
 #include "world/interaction/fo3-door-prompt.h"
 #include "ui/interaction/fo3-interaction-hud-renderer.h"
@@ -365,6 +366,7 @@ public:
 
     void Shutdown() {
         FlushFo3PlayerState();
+        fo3notifyui::Shutdown();
         fo3lootui::Shutdown();
         fo3hudrenderer::Shutdown();
         if (sessionRunning_) {
@@ -1114,6 +1116,8 @@ private:
                 if (sessionState_ == XR_SESSION_STATE_FOCUSED && changed->state != XR_SESSION_STATE_FOCUSED)
                     FlushFo3PlayerState();
                 sessionState_ = changed->state;
+                SetFo3ShoulderInteractionFocused(sessionState_==XR_SESSION_STATE_FOCUSED);
+                if(sessionState_!=XR_SESSION_STATE_FOCUSED) fo3notify::Notifications().Clear();
                 fo3audio::Context(gCurrentCellFormId,sessionState_ == XR_SESSION_STATE_FOCUSED);
                 FQ_LOGI("OpenXR session state -> %d", static_cast<int>(sessionState_));
 
@@ -1564,6 +1568,9 @@ private:
                 gStereoReflectionEye[2]=centrePose.position.z;
                 gStereoMvpReady = true;
                 QActorPrepareStereoFrame();
+                notificationHead_=ToVirtualPose(loadingHead);
+                fo3notifyui::Prepare(static_cast<double>(frameState.predictedDisplayTime)*1e-9,
+                    gSceneReady && !IsFo3LoadingVisible() && sessionState_==XR_SESSION_STATE_FOCUSED,gSceneReady);
                 bool rendered = true;
                 for (uint32_t eye = 0; eye < 2; ++eye) {
                     rendered = RenderEye(eye, views[eye], projectionViews[eye]) && rendered;
@@ -1700,6 +1707,10 @@ private:
             // prototype geometry hidden and no tracked controllers.
             RenderScene(viewProjection.m);
 
+            if(!IsFo3LoadingVisible()) {
+                const auto notificationMvp=Multiply(viewProjection,MatrixFromPose(notificationHead_));
+                fo3notifyui::Render(notificationMvp.m);
+            }
             for (uint32_t hand = 0; hand < 2; ++hand) {
                 if (!handPoseValid_[hand]) continue;
                 const XrPosef virtualHandPose = ToVirtualPose(handLocalPoses_[hand]);
@@ -1839,6 +1850,7 @@ private:
     XrSystemId systemId_{XR_NULL_SYSTEM_ID};
     XrSession session_{XR_NULL_HANDLE};
     XrSpace localSpace_{XR_NULL_HANDLE};
+    XrPosef notificationHead_{};
     XrSessionState sessionState_{XR_SESSION_STATE_UNKNOWN};
     bool sessionRunning_{false};
     bool exitRequested_{false};

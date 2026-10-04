@@ -1,4 +1,5 @@
 #include "rendering/gl-state-cache.h"
+#include "ui/interaction/fo3-hud-cached-state.h"
 #include <cassert>
 #include <iostream>
 
@@ -61,6 +62,22 @@ int main() {
     GLfloat values[8]{};glUniform1f(3,0.25f);
     glUniform4fv(2,2,values);glUniform1f(3,0.25f);
     assert(driverCalls["glUniform1f"]==6);
-    fqgl::Invalidate();glUseProgram(8);assert(driverCalls["glUseProgram"]==5);
+    // Visible notification uses a cache-only guard. Exercise both eyes over
+    // many frames, including a completely unknown cache; never query a driver.
+    for(int cold=0;cold<2;++cold) {
+        if(cold) fqgl::Invalidate();
+        auto queries=fqgl::counters.queries;
+        for(int eye=0;eye<200;++eye) {
+            fo3hudrenderer::CachedStateGuard guard;
+            glDisable(GL_DEPTH_TEST);glDepthMask(GL_FALSE);glDisable(GL_CULL_FACE);
+            glEnable(GL_BLEND);glBlendEquationSeparate(GL_FUNC_ADD,GL_FUNC_ADD);
+            glBlendFuncSeparate(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA,GL_ONE,GL_ONE_MINUS_SRC_ALPHA);
+            glUseProgram(99);glBindVertexArray(33);
+            glActiveTexture(GL_TEXTURE0);glBindTexture(GL_TEXTURE_2D,55);
+        }
+        assert(fqgl::counters.queries==queries);
+    }
+    const auto priorProgramCalls=driverCalls["glUseProgram"];
+    fqgl::Invalidate();glUseProgram(8);assert(driverCalls["glUseProgram"]==priorProgramCalls+1);
     std::cout << "GL state/uniform cache regressions passed\n";
 }

@@ -1,3 +1,37 @@
+#include "ui/interaction/fo3-item-notifications.h"
+
+void NotifyFo3ItemTransfer(uint32_t base,int32_t count) {
+    const auto& catalog=gPlayerSession->player.Definitions();
+    const auto item=catalog.items.find(base);
+    if(item==catalog.items.end()) return;
+    auto setting=[&](const char* key,const char* fallback) {
+        const auto it=catalog.strings.find(key);
+        return it==catalog.strings.end() ? std::string(fallback) : it->second;
+    };
+    fo3notify::Notifications().Enqueue(fo3notify::ItemText(item->second.name,count,
+        setting("sAddItemtoInventory","added"),setting("sPlural","(s)")));
+    fo3audio::Pickup(base);
+    FlushFo3PlayerState();
+    Q6H_LOGI("ITEM ADDED HUD: base=%08X count=%d queued=%zu",base,count,fo3notify::Notifications().Size());
+}
+
+// Render-thread transaction shared by A-button and physical shoulder release.
+// CanPickup/Pickup remain the only inventory/ownership/count/condition policy.
+bool CollectFo3WorldReference(uint32_t reference) {
+    if(!gSceneReady || IsFo3LoadingVisible() || !gPlayerSession || gPlayerSession->saveBlocked) return false;
+    auto& player=gPlayerSession->player;
+    if(!player.CanPickup(reference)) return false;
+    const auto ref=player.Definitions().references.at(reference);
+    if(!player.Pickup(reference)) return false;
+    for(auto& hand:gQ220Grab) if(hand.refFormId==reference) hand={};
+    gQ223DynamicBodies.erase(reference);
+    SetFo3CollectedCollisionRefs(player.Snapshot().collected);
+    NotifyFo3ItemTransfer(ref.base,ref.count);
+    Q6H_LOGI("ITEM PICKUP: reference=%08X base=%08X count=%d condition=%.3f weight=%.2f stacks=%zu",reference,ref.base,ref.count,ref.condition,
+        player.InventoryWeight(),player.Snapshot().inventory.size());
+    return true;
+}
+
 // Included after loose-object transforms: all operations run on the render thread.
 bool QueryFo3Interaction(float ox, float oy, float oz, float dx, float dy,
                          float dz, Fo3InteractionTarget &target) {
@@ -130,11 +164,11 @@ bool ActivateFo3Interaction(float ox,float oy,float oz,float dx,float dy,float d
         if (gLootPanel.reference!=target.reference || gLootPanel.rows.empty()) return false;
         const auto& row=gLootPanel.rows[gLootPanel.selected];
         uint32_t base=0;
+        int32_t count=0;
         for (const auto& stack:*gPlayerSession->player.ContainerContents(target.reference))
-            if (stack.id==row.stack) base=stack.formId;
+            if (stack.id==row.stack) {base=stack.formId;count=stack.count;}
         if (row.allowed && gPlayerSession->player.TakeContainerStack(target.reference,row.stack)) {
-            fo3audio::Pickup(base);
-            FlushFo3PlayerState();
+            NotifyFo3ItemTransfer(base,count);
             UpdateFo3LootSelection(target,NAN,0);
         }
         return false;
@@ -154,13 +188,6 @@ bool ActivateFo3Interaction(float ox,float oy,float oz,float dx,float dy,float d
         // successful but remains in this CELL.
         return activated && !localSwing;
     }
-    if (!gPlayerSession->player.Pickup(target.reference)) return false;
-    fo3audio::Pickup(gPlayerSession->player.Definitions().references.at(target.reference).base);
-    for (auto& hand : gQ220Grab) if (hand.refFormId==target.reference) hand={};
-    gQ223DynamicBodies.erase(target.reference);
-    SetFo3CollectedCollisionRefs(gPlayerSession->player.Snapshot().collected);
-    FlushFo3PlayerState();
-    Q6H_LOGI("ITEM PICKUP: reference=%08X weight=%.2f stacks=%zu",target.reference,
-        gPlayerSession->player.InventoryWeight(),gPlayerSession->player.Snapshot().inventory.size());
+    CollectFo3WorldReference(target.reference);
     return false;
 }

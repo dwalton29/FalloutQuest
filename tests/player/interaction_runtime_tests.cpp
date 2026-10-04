@@ -1,3 +1,5 @@
+#include "world/interaction/fo3-shoulder-zone.h"
+#include "ui/interaction/fo3-item-notifications.h"
 #include "player/fo3-player-state.h"
 // Reproduce the Android platform far macro that caused the native build
 // failure.
@@ -102,6 +104,38 @@ int main() {
     c.references[20] = ref;
     gPlayerSession = std::make_unique<fo3player::Session>(c);
     gObjects.push_back({});
+    fo3notify::Notifications().Clear();
+    // The physical gesture calls the very same runtime transaction as A.
+    fo3shoulder::Zone zone;zone.ready=true;zone.shoulder={.2f,1.4f,0};
+    fo3shoulder::Gesture gesture;
+    const fo3shoulder::Point inside{.2f,1.4f,.09f},outside{.2f,1.4f,-.4f};
+    auto step=[&](int hand,bool tracked,fo3shoulder::Point p,float grip,double now) {
+        bool intent=gesture.Update(hand,10,tracked,!gPlayerSession->saveBlocked &&
+            gPlayerSession->player.CanPickup(10),grip,zone,p,now);
+        return intent && CollectFo3WorldReference(10);
+    };
+    Check(!step(0,true,inside,1,1) && !step(0,true,inside,0,2),"left shoulder cannot stow");
+    Check(!step(1,true,outside,1,3) && !step(1,true,outside,0,4),"outside release preserves drop path");
+    Check(!step(1,true,inside,1,5) && !step(1,true,outside,1,5.1) && !step(1,true,inside,0,5.2),"leave before release cancels intent");
+    gesture.Reset();
+    Check(!step(1,true,inside,1,6) && !step(1,true,inside,0,6.01),"brief crossing does not arm");
+    gesture.Reset();step(1,true,inside,1,7);step(1,true,inside,1,7.1);
+    Check(!step(1,false,inside,0,7.2) && !step(1,true,inside,0,7.3),"tracking loss disarms before reacquisition");
+    gesture.Reset();gPlayerSession->saveBlocked=true;
+    Check(!step(1,true,inside,1,8) && !step(1,true,inside,0,9),"blocked save prevents physical stow");
+    gPlayerSession->saveBlocked=false;
+    gQ220Grab[1].refFormId=10;gQ223DynamicBodies[10]=1;
+    gesture.Reset();step(1,true,inside,1,10);step(1,true,inside,1,10.1);
+    Check(step(1,true,inside,0,10.2),"armed right release collects held reference");
+    Check(gPlayerSession->player.IsCollected(10) && !gQ220Grab[1].refFormId &&
+        gQ223DynamicBodies.empty() && removedCollision.count(10),"physical transfer retires grab physics and collision");
+    Check(fo3audio::pickups==1 && flushes==1 && fo3notify::Notifications().Size()==1,"one audio flush and notification");
+    const auto& physicalStack=gPlayerSession->player.Snapshot().inventory.front();
+    Check(physicalStack.count==3 && std::fabs(physicalStack.condition-.4f)<1e-5,"physical quantity and condition preserved");
+    Check(!CollectFo3WorldReference(10) && fo3audio::pickups==1 && fo3notify::Notifications().Size()==1,"cannot collect or notify twice");
+    // Restart fixture for existing A-button/containers/door tests.
+    gPlayerSession=std::make_unique<fo3player::Session>(c);
+    fo3audio::pickups=flushes=0;removedCollision.clear();fo3notify::Notifications().Clear();
     doorPresent = true;
     Fo3InteractionTarget t;
     auto query = [&] { return QueryFo3Interaction(0, 0, 0, 0, 0, -2, t); };
@@ -270,6 +304,7 @@ int main() {
     Check(!Triangle({0, 0, 0}, {0, 0, -1}, {-1, -1, -1}, {1, -1, -1},
                     {0, 1, -1}, .5f),
           "wall behind target does not occlude");
+    Check(fo3notify::Notifications().Size()==2,"A pickup and container transfer share item-added notifications");
     std::cout << "Interaction runtime tests passed\n";
     return 0;
   } catch (const std::exception &e) {

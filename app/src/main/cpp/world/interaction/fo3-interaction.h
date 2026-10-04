@@ -28,3 +28,6 @@ struct Fo3LootPanel {
 };
 const Fo3LootPanel& GetFo3LootPanel();
 void UpdateFo3LootSelection(const Fo3InteractionTarget& target,float stickY,double time);
+
+bool CollectFo3WorldReference(uint32_t reference);
+void SetFo3ShoulderInteractionFocused(bool focused);

@@ -1,3 +1,4 @@
+#include "world/interaction/fo3-shoulder-zone.h"
 #include "npc/fo3-animation-bounds.h"
 #include "rendering/actor-skinning.h"
 #include "rendering/opaque-telemetry.h"
@@ -8075,8 +8076,14 @@ struct Q220GrabState {
 };
 
 Q220GrabState gQ220Grab[2];
+fo3shoulder::Gesture gShoulderGesture;
+fo3shoulder::Zone gShoulderZone;
+bool gShoulderFocused=false;
+
 
 void Q220ResetGrabState() {
+    gShoulderGesture.Reset();
+    gShoulderZone.ready=false;
     gQ220Grab[0] = {};
     gQ220Grab[1] = {};
     gQ223DynamicBodies.clear();
@@ -8622,6 +8629,7 @@ void Q220UpdateLooseGrab(
     constexpr float RELEASE = 0.25f;
 
     if (!handValid) {
+        if(handIndex==1) gShoulderGesture.Reset();
         state.previousGrip = grip;
         return;
     }
@@ -8695,7 +8703,30 @@ void Q220UpdateLooseGrab(
         }
     }
 
+    if(handIndex==1 && !state.active) gShoulderGesture.Reset();
     if (state.active) {
+        const auto ref=state.refFormId;
+        const bool resident=std::any_of(gObjects.begin(),gObjects.end(),[&](const GpuObject& o){return o.q220LooseObject && o.refFormId==ref;});
+        if(!resident || (gPlayerSession && gPlayerSession->player.IsCollected(ref))) {
+            gQ223DynamicBodies.erase(ref);state={};
+            if(handIndex==1) gShoulderGesture.Reset();
+            return;
+        }
+        if(handIndex==1) {
+            const bool eligible=gShoulderFocused && gSceneReady && !IsFo3LoadingVisible() &&
+                gPlayerSession && !gPlayerSession->saveBlocked && gPlayerSession->player.CanPickup(ref);
+            const bool wasInside=gShoulderGesture.inside,wasArmed=gShoulderGesture.armed;
+            const double now=std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+            const bool commit=gShoulderGesture.Update(handIndex,ref,handValid,eligible,grip,gShoulderZone,{hand.x,hand.y,hand.z},now);
+            if(wasInside!=gShoulderGesture.inside || wasArmed!=gShoulderGesture.armed)
+                Q6H_LOGI("SHOULDER INVENTORY ZONE: rightHand=1 heldRef=%08X inside=%d armed=%d shoulder=(%.3f %.3f %.3f) hand=(%.3f %.3f %.3f) bodyYaw=%.3f",
+                    ref,gShoulderGesture.inside,gShoulderGesture.armed,gShoulderZone.shoulder[0],gShoulderZone.shoulder[1],gShoulderZone.shoulder[2],hand.x,hand.y,hand.z,gQ213TorsoYaw);
+            if(commit && CollectFo3WorldReference(ref)) {
+                Q6H_LOGI("SHOULDER INVENTORY COMMIT: ref=%08X notificationQueued=1",ref);
+                gShoulderGesture.Reset();state.previousGrip=grip;return;
+            }
+            if(grip<=RELEASE) gShoulderGesture.Reset();
+        }
         if (Q223DynamicBody* body =
                 Q223EnsureDynamicBody(state.refFormId)) {
             body->held = true;
@@ -10334,6 +10365,16 @@ void Q211UpdatePlayerRig() {
                 posedPalmRoot);
     }
 
+    // Same first-valid canonical master used by the arm solve. The shoulder
+    // pivot is not the hand endpoint and does not change with IK/wrist motion.
+    gShoulderZone.ready=q213RightMaster && q213RightMaster->rightUpperArm>=0;
+    if(gShoulderZone.ready) {
+        const auto anchor=Q211TransformPoint(gQ210PlayerRoot,
+            Q211BindBonePoint(q213RightMaster->bones[q213RightMaster->rightUpperArm]));
+        gShoulderZone.shoulder={anchor.x,anchor.y,anchor.z};
+        gShoulderZone.right={gQ210PlayerRoot[0],0,gQ210PlayerRoot[2]};
+        gShoulderZone.rear={gQ210PlayerRoot[8],0,gQ210PlayerRoot[10]};
+    }
     Q221UpdateLooseObjectsFromSolvedPalms(
         q221LeftPalmValid, q221LeftPalmWorld,
         q221RightPalmValid, q221RightPalmWorld);
@@ -13248,6 +13289,11 @@ void Q6HClear(GLbitfield mask) {
 
 
 } // namespace
+
+void SetFo3ShoulderInteractionFocused(bool focused) {
+    gShoulderFocused=focused;
+    if(!focused) gShoulderGesture.Reset();
+}
 
 fo3player::Session* GetFo3PlayerSession() { return gPlayerSession.get(); }
 
