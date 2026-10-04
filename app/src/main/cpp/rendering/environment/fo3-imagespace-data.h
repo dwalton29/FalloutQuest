@@ -73,9 +73,12 @@ inline bool ParseImageSpacePayload(const std::vector<uint8_t>& imagePayload, Fo3
         image.hdrSunlightDimmer = f(44u);
         image.hdrGrassDimmer = f(48u);
         image.hdrTreeDimmer = f(52u);
-        image.hdrSkinDimmer = size == 132u ? 1.0f : f(56u);
-        // Pre-v10 records omit Skin Dimmer; subsequent fields shift four bytes.
-        const uint32_t shift = size == 132u ? 4u : 0u;
+        // Fallout 3 has two legacy DNAM layouts without HDR Skin Dimmer:
+        // 132-byte and 148-byte. Only the 152-byte layout stores the float
+        // at offset 56; all following fields shift by four bytes otherwise.
+        const bool hasSkinDimmer = size == 152u;
+        image.hdrSkinDimmer = hasSkinDimmer ? f(56u) : 1.0f;
+        const uint32_t shift = hasSkinDimmer ? 0u : 4u;
 
         image.bloomBlurRadius = f(60u - shift);
         image.bloomAlphaInterior = f(64u - shift);

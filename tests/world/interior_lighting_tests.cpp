@@ -27,14 +27,27 @@ void fixtures(){
  const auto p=fo3interior::ToScene({140,210,280},{70,70,140});assert(p[0]==1&&std::abs(p[1]-0.45f)<1e-5&&p[2]==-2);
  assert(fo3interior::Attenuation(1,2)==0.75f&&fo3interior::Attenuation(2,2)==0&&fo3interior::Attenuation(0,2)==1);
  for(size_t n:{132u,148u,152u}) {
-   Bytes b,data(n);size_t shift=n==132?4:0;
-   f32(data,56-shift,1);f32(data,60-shift,3);f32(data,64-shift,0.8f);f32(data,68-shift,0.2f);
+   Bytes b,data(n);const size_t shift=n==152u?0u:4u;
+   if(n==152u)f32(data,56,1.25f);
+   f32(data,60-shift,3.0f);f32(data,64-shift,0.8f);f32(data,68-shift,0.2f);
+   f32(data,96-shift,2.5f);
    f32(data,100-shift,0.9f);f32(data,104-shift,0.14f);f32(data,108-shift,1.2f);
-   f32(data,112-shift,1.1f);f32(data,116-shift,0.7f);f32(data,128-shift,0.5f);
-   if(n==152)data[148]=7;
+   f32(data,112-shift,1.1f);f32(data,116-shift,0.7f);f32(data,120-shift,0.6f);
+   f32(data,124-shift,0.3f);f32(data,128-shift,0.5f);
+   if(n==152u)data[148]=7;
    sub(b,"DNAM",data);Fo3ImageSpace image;assert(fo3imagespace::ParseImageSpacePayload(b,image));
-   assert(image.valid&&std::abs(image.bloomAlphaInterior-0.8f)<1e-6&&std::abs(image.bloomAlphaExterior-0.2f)<1e-6);
-   assert(std::abs(image.cinematicBrightness-1.1f)<1e-6&&std::abs(image.cinematicTint[0]-0.7f)<1e-6);
+   assert(image.valid&&std::abs(image.bloomBlurRadius-3.0f)<1e-6&&
+          std::abs(image.bloomAlphaInterior-0.8f)<1e-6&&std::abs(image.bloomAlphaExterior-0.2f)<1e-6);
+   assert(std::abs(image.nightEyeBrightness-2.5f)<1e-6&&
+          std::abs(image.cinematicSaturation-0.9f)<1e-6&&
+          std::abs(image.cinematicContrastAvgLum-0.14f)<1e-6&&
+          std::abs(image.cinematicContrast-1.2f)<1e-6&&
+          std::abs(image.cinematicBrightness-1.1f)<1e-6&&
+          std::abs(image.cinematicTint[0]-0.7f)<1e-6&&
+          std::abs(image.cinematicTint[1]-0.6f)<1e-6&&
+          std::abs(image.cinematicTint[2]-0.3f)<1e-6&&
+          std::abs(image.cinematicTintValue-0.5f)<1e-6);
+   assert(std::abs(image.hdrSkinDimmer-(n==152u?1.25f:1.0f))<1e-6);
  }
  Bytes templated=cell(99);sub(templated,"LTMP",word(50));sub(templated,"LNAM",word(1));
  Bytes stream;append(stream,record("CELL",10,templated));Bytes templateData;auto templateLighting=lighting();templateLighting[0]=128;sub(templateData,"DATA",templateLighting);append(stream,record("LGTM",50,templateData));append(stream,record("CELL",11,cell()));append(stream,record("LIGH",20,base()));append(stream,record("LIGH",21,base(4)));
@@ -70,6 +83,29 @@ void original(const std::string& path){
   assert(std::abs(image.cinematicSaturation-0.9f)<1e-6&&std::abs(image.cinematicBrightness-1.1f)<1e-6&&std::abs(image.bloomAlphaInterior-0.8f)<1e-6);
   float lo=INFINITY,hi=0;for(const auto& l:s.lights){lo=std::min(lo,l.radius*70);hi=std::max(hi,l.radius*70);assert(l.fade==1&&l.flags==0);}
   std::cout<<edid<<" cell="<<std::hex<<s.cell.formId<<" XCIM="<<s.cell.imageSpace<<std::dec<<" lights="<<s.lights.size()<<" radius="<<lo<<".."<<hi<<" fade=1 flags=0 IMGS="<<image.editorId<<"\n";
+ }
+ assert(cells.count("SuperDuperMart"));
+ {
+  fo3interior::Snapshot s;assert(fo3interior::Load(path,cells.at("SuperDuperMart"),{100,200,300},s));
+  assert(s.cell.authored&&s.cell.lightingTemplate==0x0006532Eu&&s.cell.inherit==0x9Fu);
+  assert(s.total==47&&s.lights.size()==47&&s.unresolvedParents==0);
+  assert(std::abs(s.cell.ambient[0]-29.0f/255.0f)<1e-6&&
+         std::abs(s.cell.ambient[1]-31.0f/255.0f)<1e-6&&
+         std::abs(s.cell.ambient[2]-43.0f/255.0f)<1e-6);
+  Fo3ImageSpace image;assert(fo3imagespace::ParseImageSpacePayload(s.imagePayload,image));
+  assert(image.editorId=="OfficeDefaultImageSpace");
+  assert(std::abs(image.hdrSkinDimmer-1.0f)<1e-6&&std::abs(image.bloomBlurRadius-0.03f)<1e-6);
+  assert(std::abs(image.cinematicSaturation-0.75f)<1e-6&&
+         std::abs(image.cinematicContrastAvgLum-0.1f)<1e-6&&
+         std::abs(image.cinematicContrast-1.1f)<1e-6&&
+         std::abs(image.cinematicBrightness-1.1f)<1e-6&&
+         std::abs(image.cinematicTint[0]-46.0f/255.0f)<1e-5&&
+         std::abs(image.cinematicTint[1]-146.0f/255.0f)<1e-5&&
+         std::abs(image.cinematicTint[2]-96.0f/255.0f)<1e-5&&
+         std::abs(image.cinematicTintValue-0.3f)<1e-6);
+  std::cout<<"SuperDuperMart cell="<<std::hex<<s.cell.formId<<" LTMP="<<s.cell.lightingTemplate
+           <<" XCIM="<<s.cell.imageSpace<<std::dec<<" lights="<<s.lights.size()
+           <<" IMGS="<<image.editorId<<" brightness="<<image.cinematicBrightness<<"\n";
  }
 }
 int main(int argc,char** argv){fixtures();if(argc>1)original(argv[1]);std::cout<<"Interior lighting checks passed\n";}

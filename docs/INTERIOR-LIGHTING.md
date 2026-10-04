@@ -49,12 +49,18 @@ Coordinates use precisely `(x-originX, z-originZ, -(y-originY))/70`, with Y floo
 placement constants. Rotation, flags, falloff and FOV remain in the snapshot.
 
 IMGS has multiple actual FO3 formats: supplied master contains 11 DNAM records
-of 132 bytes, 12 of 148, and 25 of 152. Pre-v10 (132) omits HDR Skin Dimmer at 56;
-all later fields shift -4. Modern film offsets are saturation 100, contrast
-average/value 104/108, brightness 112, tint RGB 116/120/124, tint amount 128.
-The v13 152-byte record has cinematic flags at 148; older layouts have no v13
-flags. The shared CPU parser handles all three, with identity skin dimmer for
-pre-v10. Existing 152-byte exterior correction remains compatible.
+of 132 bytes, 12 of 148, and 25 of 152. Both legacy 132-byte and 148-byte layouts
+omit HDR Skin Dimmer at nominal offset 56; only the 152-byte layout stores that
+float. All following fields therefore shift -4 in both legacy layouts. This
+matches xEdit's FO3 `wbIMGSSkinDimmerDecider`, which explicitly selects the
+empty Skin Dimmer branch for subrecord sizes 132 and 148. The v13 152-byte
+record keeps the unshifted offsets and cinematic flags at 148.
+
+This distinction is visible in Super-Duper Mart: `OfficeDefaultImageSpace` is
+a 148-byte DNAM. Treating it as a 152-byte layout misreads authored cinematic
+brightness 1.1 as the tint-red value (~0.1804) and contrast-average 0.1 as 1.1.
+The final film equation then clamps most normal scene radiance to black despite
+the CELL's valid template ambient and 47 active authored LIGH references.
 
 ## Shader and attenuation evidence
 
@@ -195,11 +201,12 @@ shaders alone do not supply the runtime-selected constants/pass sequence.
 ## Verification
 
 Portable synthetic tests cover XCLL fields and malformed layout, all three IMGS
-sizes, enable parents inside/outside the cell, opposite and missing parents,
-initially-disabled sources, negative RGB/fade, coordinate conversion, multiple
-lights, empty/failed replacement and bounded affecting-light selection. Optional
-`interior_lighting_tests /path/to/Fallout3.esm` resolves both original room EDIDs
-and asserts their authored snapshots. Production world/skin/post/adaptation/bloom
+sizes (including the 148-byte no-Skin-Dimmer shift), enable parents inside/outside
+the cell, opposite and missing parents, initially-disabled sources, negative
+RGB/fade, coordinate conversion, multiple lights, empty/failed replacement and
+bounded affecting-light selection. Optional
+`interior_lighting_tests /path/to/Fallout3.esm` resolves the two Megaton rooms
+plus Super-Duper Mart and asserts their authored snapshots and image-space fields. Production world/skin/post/adaptation/bloom
 GLSL compile/link checks run in CI, including GPU skin transform-feedback parity.
 Lifecycle checks verify private CPU preparation, scene publication order, exit
 replacement, weather/sky exclusion and selection outside per-eye draw functions.
