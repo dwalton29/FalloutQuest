@@ -301,14 +301,14 @@ void WeaponUpdate(double now,bool backButton){
   if(blocked){
     if(held){held=false;if(s)Log("HOLSTER FOCUS",s->id,s->formId);}
     RetireReload();inside=false;
-    if(s&&gQ210PlayerBodyReady){Zones();const auto&zone=p.Definitions().items.at(s->formId).weapon.LongGun()?back:hip;const bool longGun=p.Definitions().items.at(s->formId).weapon.LongGun();pose=Rigid(fo3vr::Multiply(zone.body,fo3vr::Axis({0,0,1},longGun?fo3vr::Pi*.5f:-fo3vr::Pi*.5f)),zone.center);}
+    if(s&&gQ210PlayerBodyReady){Zones();const auto&zone=p.Definitions().items.at(s->formId).weapon.LongGun()?back:hip;const bool longGun=p.Definitions().items.at(s->formId).weapon.LongGun();const V display=longGun?zone.center:fo3weapon::HipDisplay(zone);pose=Rigid(fo3vr::Multiply(zone.body,fo3vr::Axis({0,0,1},longGun?fo3vr::Pi*.5f:-fo3vr::Pi*.5f)),display);}
     for(int hand=0;hand<2;hand++)gQ220Grab[hand].previousGrip=gQ217FingerGrip[hand];return;
   }
   Zones();
   AdvanceFlights(dt);
   Model*m=s?Ensure(s->formId):nullptr;
   if(s&&m){const auto&d=p.Definitions().items.at(s->formId).weapon;auto&zone=d.LongGun()?back:hip;
-    if(!held)pose=Rigid(fo3vr::Multiply(zone.body,fo3vr::Axis({0,0,1},d.LongGun()?fo3vr::Pi*.5f:-fo3vr::Pi*.5f)),zone.center);
+    if(!held){const V display=d.LongGun()?zone.center:fo3weapon::HipDisplay(zone);pose=Rigid(fo3vr::Multiply(zone.body,fo3vr::Axis({0,0,1},d.LongGun()?fo3vr::Pi*.5f:-fo3vr::Pi*.5f)),display);}
     else if(gWeaponPalmValid[1]){
       pose=HandPose(*m);
       const V right=VrPoint(gWeaponPalm[1]),left=VrPoint(gWeaponPalm[0]);
