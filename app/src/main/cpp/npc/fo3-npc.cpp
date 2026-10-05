@@ -549,6 +549,93 @@ bool LoadFo3CellActors(
     return !outActors.empty();
 }
 
+bool LoadFo3NpcNavigationQ240(
+        uint32_t cellFormId,
+        uint32_t worldspaceFormId,
+        std::vector<Fo3NpcNavMeshQ240>& outNavigation,
+        const std::string& esmPath) {
+    outNavigation.clear();
+    const std::string path=esmPath.empty()?fo3assets::FalloutMasterPath():esmPath;
+    FILE* f=std::fopen(path.c_str(),"rb");
+    if(!f) return false;
+    const int64_t fileSize=fo3esm::FileSize(f);
+    if(fileSize<static_cast<int64_t>(fo3esm::HEADER_SIZE)){
+        std::fclose(f);return false;
+    }
+    std::vector<GroupFrame> groups;
+    auto inWorld=[&](){
+        if(!worldspaceFormId) return true;
+        for(auto it=groups.rbegin();it!=groups.rend();++it)
+            if(it->type==1u&&it->label==worldspaceFormId)return true;
+        return false;
+    };
+    uint64_t pos=0u;
+    while(pos+fo3esm::HEADER_SIZE<=static_cast<uint64_t>(fileSize)){
+        while(!groups.empty()&&pos>=groups.back().end)groups.pop_back();
+        if(fseeko(f,static_cast<off_t>(pos),SEEK_SET)!=0)break;
+        uint8_t h[fo3esm::HEADER_SIZE]{};
+        if(!fo3esm::ReadExact(f,h,sizeof(h)))break;
+        const uint32_t size=fo3esm::ReadU32(h+4u);
+        if(std::memcmp(h,"GRUP",4u)==0){
+            if(size<fo3esm::HEADER_SIZE||pos+size>static_cast<uint64_t>(fileSize))break;
+            groups.push_back({pos+size,fo3esm::ReadU32(h+8u),fo3esm::ReadU32(h+12u)});
+            pos+=fo3esm::HEADER_SIZE;continue;
+        }
+        const uint64_t payloadOffset=pos+fo3esm::HEADER_SIZE,end=payloadOffset+size;
+        if(end>static_cast<uint64_t>(fileSize))break;
+        if(std::memcmp(h,"NAVM",4u)==0&&inWorld()){
+            const uint32_t flags=fo3esm::ReadU32(h+8u);
+            if((flags&0x20u)==0u){
+                std::vector<uint8_t> payload;
+                if(fo3esm::ReadPayload(f,{payloadOffset,size,flags,"NAVM"},payload)){
+                    Fo3NpcNavMeshQ240 mesh;
+                    mesh.formId=fo3esm::ReadU32(h+12u);
+                    uint32_t expectedVertices=0u,expectedTriangles=0u;
+                    bool malformed=false;
+                    fo3esm::WalkSubrecords(payload,[&](const char* type,const uint8_t* p,uint32_t n){
+                        if(std::memcmp(type,"DATA",4u)==0&&n>=12u){
+                            mesh.cellFormId=fo3esm::ReadU32(p);
+                            expectedVertices=fo3esm::ReadU32(p+4u);
+                            expectedTriangles=fo3esm::ReadU32(p+8u);
+                        } else if(std::memcmp(type,"NVVX",4u)==0){
+                            if(n%12u){malformed=true;return;}
+                            mesh.vertices.reserve(mesh.vertices.size()+n/12u);
+                            for(uint32_t at=0;at<n;at+=12u)
+                                mesh.vertices.push_back({fo3esm::ReadF32(p+at),fo3esm::ReadF32(p+at+4u),fo3esm::ReadF32(p+at+8u)});
+                        } else if(std::memcmp(type,"NVTR",4u)==0){
+                            if(n%16u){malformed=true;return;}
+                            mesh.triangles.reserve(mesh.triangles.size()+n/16u);
+                            for(uint32_t at=0;at<n;at+=16u){
+                                Fo3NpcNavTriangleQ240 triangle;
+                                for(int v=0;v<3;++v)triangle.vertex[v]=fo3esm::ReadU16(p+at+v*2u);
+                                for(int e=0;e<3;++e)triangle.neighbor[e]=static_cast<int16_t>(fo3esm::ReadU16(p+at+6u+e*2u));
+                                triangle.flags=fo3esm::ReadU32(p+at+12u);
+                                mesh.triangles.push_back(triangle);
+                            }
+                        }
+                    });
+                    if(!malformed&&(!cellFormId||worldspaceFormId||mesh.cellFormId==cellFormId)&&
+                       !mesh.vertices.empty()&&!mesh.triangles.empty()&&
+                       (!expectedVertices||mesh.vertices.size()==expectedVertices)&&
+                       (!expectedTriangles||mesh.triangles.size()==expectedTriangles)){
+                        for(const auto& tri:mesh.triangles){
+                            for(int v=0;v<3;++v)if(tri.vertex[v]>=mesh.vertices.size())malformed=true;
+                            for(int e=0;e<3;++e)if(tri.neighbor[e]>=static_cast<int16_t>(mesh.triangles.size()))malformed=true;
+                            if(malformed)break;
+                        }
+                        if(!malformed)outNavigation.push_back(std::move(mesh));
+                    }
+                }
+            }
+        }
+        pos=end;
+    }
+    std::fclose(f);
+    Q230_LOGI("Q24.0 NPC NAVM: cell=%08X world=%08X meshes=%zu source=Fallout3.esm",
+              cellFormId,worldspaceFormId,outNavigation.size());
+    return !outNavigation.empty();
+}
+
 
 bool LoadFo3FaceGenMorphQ233(
         const std::string& nifPath,
