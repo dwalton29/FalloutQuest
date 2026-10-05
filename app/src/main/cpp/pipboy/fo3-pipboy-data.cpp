@@ -71,9 +71,9 @@ std::string VoicePath(const Definitions &d, const Info &i, const Response &r,
 }
 } // namespace
 bool Relevant(const std::string &t) {
-  return t == "WRLD" || t == "PERK" || t == "QUST" || t == "MGEF" ||
-         t == "TACT" || t == "INFO" || t == "DIAL" || t == "SOUN" ||
-         t == "VTYP" || t == "SCPT" || t == "NPC_";
+  return t == "RADS" || t == "WRLD" || t == "PERK" || t == "QUST" ||
+         t == "MGEF" || t == "TACT" || t == "INFO" || t == "DIAL" ||
+         t == "SOUN" || t == "VTYP" || t == "SCPT" || t == "NPC_";
 }
 void Decode(Definitions &d, const std::string &t, uint32_t id, uint32_t flags,
             const std::vector<uint8_t> &bytes, uint32_t cell, uint32_t world,
@@ -83,7 +83,11 @@ void Decode(Definitions &d, const std::string &t, uint32_t id, uint32_t flags,
                          [&](const char *tag, const uint8_t *p, uint32_t n) {
                            s.push_back({std::string(tag, 4), p, n});
                          });
-  if (t == "DOOR")
+  if (t == "RADS") {
+    const auto data = Find(s, "DATA");
+    if (data && data->n == 8)
+      d.radiationStages[id] = {U(data), U(data, 4)};
+  } else if (t == "DOOR")
     d.doorBases.insert(id);
   else if (t == "WRLD") {
     World w;
@@ -363,8 +367,9 @@ std::vector<std::string> BroadcastAudio(const Definitions &d, const Info &i,
   for (auto &r : i.responses) {
     auto s = d.sounds.find(r.sound);
     auto path = s != d.sounds.end() ? s->second : VoicePath(d, i, r, voice);
-    if (!path.empty())
-      paths.push_back(path);
+    if (path.empty())
+      return {};
+    paths.push_back(path);
   }
   return paths;
 }

@@ -154,7 +154,7 @@ void UpdateFo3Pipboy(uint64_t frame, double now, const float *headPose,
                   int(std::floor(gameY / 4096)) &&
               !session->player.Snapshot().pipboy.discovered.count(m.first)) {
             session->player.Discover(m.first);
-            FQ_LOGI("PIPBOY MAP discovered=%08X name=%s", m.first,
+            Q6H_LOGI("PIPBOY MAP discovered=%08X name=%s", m.first,
                     m.second.name.c_str());
             FlushFo3PlayerState();
           }
@@ -186,7 +186,7 @@ void UpdateFo3Pipboy(uint64_t frame, double now, const float *headPose,
           lastMapCell = gCurrentCellFormId;
           lastMapGeneration = fo3pipdata::LocalMapGeometryRevision();
           gPipMenu.dirty = true;
-          FQ_LOGI("PIPBOY LOCAL MAP cell=%08X generation=%llu pixels=%zu",
+          Q6H_LOGI("PIPBOY LOCAL MAP cell=%08X generation=%llu pixels=%zu",
                   lastMapCell, (unsigned long long)lastMapGeneration,
                   gPipMenu.map.local->rgba.size());
         }
@@ -219,7 +219,7 @@ void UpdateFo3Pipboy(uint64_t frame, double now, const float *headPose,
             FlushFo3PlayerState();
             SynchronizeFo3PipboyEquipment();
           }
-          FQ_LOGI("PIPBOY ACTION tab=%d page=%d action=%d detail=%d error=%s",
+          Q6H_LOGI("PIPBOY ACTION tab=%d page=%d action=%d detail=%d error=%s",
                   int(gPipMenu.tab), gPipMenu.page, int(action),
                   gPipMenu.inPage, gPipMenu.actionError.c_str());
           fo3audio::NamedSound(action == fo3pip::Action::NextTab ||

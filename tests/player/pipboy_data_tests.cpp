@@ -75,6 +75,16 @@ static void MapTests() {
   d.worlds[2].parent = 1;
   d.worlds[2].parentFlags = 4;
   assert(MapWorld(d, 2) == 1);
+  d.worlds[2].scale = 2;
+  d.worlds[2].offsetX = 3;
+  d.worlds[2].offsetY = -4;
+  auto child = MapProject(d, 2, 4096, 8192), expected = w.Project(5 * 4096, 0);
+  assert(std::fabs(child.x - expected.x) < 1e-5 &&
+         std::fabs(child.y - expected.y) < 1e-5);
+  auto root = WorldPoint(d, 2, 4096, 8192);
+  assert(root.x == 5 * 4096 && root.y == 0);
+  d.worlds[2].scale = 1;
+  d.worlds[2].offsetX = d.worlds[2].offsetY = 0;
   d.worlds[1].parent = 2;
   d.worlds[1].parentFlags = 4;
   assert(!MapWorld(d, 2));
@@ -167,6 +177,9 @@ static void Original(const char *path) {
   auto &d = c.pipboy;
   assert(d.notes.size() == 840 && d.perks.size() == 87 &&
          d.quests.size() == 192);
+  assert(d.radiationStages.size() == 5);
+  assert(d.radiationStages.at(0x335a2).threshold == 200 &&
+         d.radiationStages.at(0x335a2).spell == 0x32dee);
   auto &w = d.worlds.at(0x3c);
   const auto &megaton = d.markers.at(0x62743);
   assert(megaton.name == "Megaton" && megaton.type == 1 &&

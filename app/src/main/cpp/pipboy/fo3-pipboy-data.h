@@ -114,7 +114,11 @@ struct Transmitter : Placement {
 struct Script {
   std::unordered_map<uint32_t, std::string> variables;
 };
+struct RadiationStage {
+  uint32_t threshold = 0, spell = 0;
+};
 struct Definitions {
+  std::unordered_map<uint32_t, RadiationStage> radiationStages;
   std::unordered_map<uint32_t, World> worlds;
   std::unordered_set<uint32_t> doorBases;
   std::unordered_map<uint32_t, std::vector<Placement>> doors;
