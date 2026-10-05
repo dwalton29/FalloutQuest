@@ -804,7 +804,12 @@ bool Player::Save(const std::string &path, std::string &error) const {
     for (float f : w.pose.velocity) PutFloat(payload, f);
     for (float f : w.pose.angularVelocity) PutFloat(payload, f);
   }
-  Put32(bytes, 5);
+  Put32(payload,static_cast<uint32_t>(state_.actorDamage.size()));
+  std::vector<uint32_t> damaged;
+  for(const auto&e:state_.actorDamage)damaged.push_back(e.first);
+  std::sort(damaged.begin(),damaged.end());
+  for(auto id:damaged){Put32(payload,id);PutFloat(payload,state_.actorDamage.at(id));}
+  Put32(bytes, 6);
   Put32(bytes, catalog_.fingerprint);
   Put32(bytes, static_cast<uint32_t>(payload.size()));
   Put32(bytes, Crc(payload));
@@ -863,7 +868,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
   const auto *h = bytes.data();
   const auto version = fo3esm::ReadU32(h + 4);
   if (std::memcmp(h, "FQPS", 4) ||
-      (version < 1 || version > 5))
+      (version < 1 || version > 6))
     return fail("Unsupported player save format");
   if (fo3esm::ReadU32(h + 8) != catalog_.fingerprint)
     return fail("Player save belongs to different game definitions");
@@ -875,6 +880,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
   const auto *p = payload.data();
   State next = catalog_.initial;
   next.worldWeapons.clear();
+  next.actorDamage.clear();
   next.developmentWeaponGranted = false;
   next.healthDamage = fo3esm::ReadF32(p);
   next.apSpent = fo3esm::ReadF32(p + 4);
@@ -903,7 +909,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
         (stack.equipped &&
          (stack.count != 1 || !CanEquip(item->second) ||
           (stack.condition == 0 && item->second.kind != ItemKind::Weapon))) ||
-        (version == 5 && item->second.kind == ItemKind::Weapon && stack.count != 1))
+        (version >= 5 && item->second.kind == ItemKind::Weapon && stack.count != 1))
       return fail("Invalid saved inventory stack");
     for (const auto &prior : next.inventory)
       if (prior.equipped && stack.equipped &&
@@ -962,14 +968,14 @@ bool Player::Restore(const std::string &path, std::string &error) {
             stack.count <= 0 || !std::isfinite(stack.condition) ||
             stack.condition < 0 || stack.condition > 1 ||
             (item->second.maxCondition == 0 && stack.condition != 1) ||
-            (version == 5 && item->second.kind == ItemKind::Weapon && stack.count != 1))
+            (version >= 5 && item->second.kind == ItemKind::Weapon && stack.count != 1))
           return fail("Invalid container stack");
         contents.push_back(stack);
       }
       next.containers.emplace(ref, std::move(contents));
     }
     if (version == 4 && !fo3pipdata::DecodeState(next.pipboy,catalog_.pipboy,p+at,payload.size()-at,error))return false;
-    if (version == 5) {
+    if (version >= 5) {
       if (payload.size() - at < 4) return fail("Missing Pip-Boy length");
       const uint32_t pipSize = fo3esm::ReadU32(p + at);
       at += 4;
@@ -1009,7 +1015,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
       if (payload.size() - at < 4) return fail("Missing world weapons");
       const uint32_t worldCount = fo3esm::ReadU32(p + at);
       at += 4;
-      if (worldCount > 10000 || payload.size() - at != 80ull * worldCount)
+      if (worldCount > 10000 || payload.size() - at < 80ull * worldCount)
         return fail("Invalid world weapon count");
       for (uint32_t i = 0; i < worldCount; ++i) {
         WorldWeapon w;
@@ -1038,6 +1044,18 @@ bool Player::Restore(const std::string &path, std::string &error) {
         next.worldWeapons.push_back(w);
         at += 80;
       }
+      if(version>=6){
+        if(payload.size()-at<4)return fail("Missing actor damage extension");
+        const auto n=fo3esm::ReadU32(p+at);at+=4;
+        if(n>100000||payload.size()-at!=8ull*n)return fail("Invalid actor damage count");
+        for(uint32_t i=0;i<n;++i,at+=8){
+          const auto id=fo3esm::ReadU32(p+at);const auto damage=fo3esm::ReadF32(p+at+4);
+          const auto actor=catalog_.pipboy.targets.find(id);
+          if(actor==catalog_.pipboy.targets.end()||!catalog_.weapons.actors.count(actor->second.base)||
+             !std::isfinite(damage)||damage<0||!next.actorDamage.emplace(id,damage).second)return fail("Invalid actor damage");
+        }
+      }
+      if(at!=payload.size())return fail("Trailing weapon save data");
     }
     if (version == 3 && at != payload.size())
       return fail("Trailing container save data");

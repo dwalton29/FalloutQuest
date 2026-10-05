@@ -117,6 +117,7 @@ struct State {
   std::unordered_map<uint32_t, std::vector<Stack>> containers;
   std::vector<WorldWeapon> worldWeapons;
   bool developmentWeaponGranted = false;
+  std::unordered_map<uint32_t,float> actorDamage;
 };
 struct Catalog {
   fo3weapon::Definitions weapons;
@@ -183,6 +184,10 @@ public:
   bool ChamberWeapon(uint64_t id);
   // Explicit development bootstrap; runtime enables only when presentation is ready.
   bool BootstrapDevelopmentWeapon();
+  float WeaponDamage(uint64_t instance) const;
+  float ActorHealth(uint32_t reference) const;
+  bool WeaponHit(uint64_t instance,uint32_t target,float fraction=1);
+  bool ApplyWeaponHit(uint32_t base,uint32_t target,float damage);
   bool CanPickup(uint32_t reference) const;
   bool Pickup(uint32_t reference);
   bool CanOpenDoor(uint32_t reference) const;

@@ -91,8 +91,12 @@ bool Q230UploadActorPart(Q230ActorVisual &actor, CpuObject &part, float centerX,
       indices.push_back(weighted ? part.mesh.skinBoneIndices[at] : 0);
       weights.push_back(weighted ? part.mesh.skinBoneWeights[at] : (rig.rigidBone>=0 && j==0 ? 1.0f : 0.0f));
     }
-    if(QActorCreateSkin(gpu,rig.skin,indices,weights,rig.bones.size(),false,bindExpanded))
+    if(QActorCreateSkin(gpu,rig.skin,indices,weights,rig.bones.size(),false,bindExpanded)) {
+      // Retain only position triplets for weapon-hit skinning, not a duplicate VBO.
+      rig.hitVertices.reserve(part.mesh.indices.size());
+      for(uint32_t index:part.mesh.indices){const auto&v=part.positionsGame[index];rig.hitVertices.push_back({(v.x-centerX)/FO3_UNITS_PER_METRE,FLOOR_Y+(v.z-floorZ)/FO3_UNITS_PER_METRE,SCENE_FORWARD-(v.y-centerY)/FO3_UNITS_PER_METRE});}
       actor.rigs.push_back(std::move(rig));
+    }
   }
   GpuObject bounds=gpu;
   if(deform && !actor.rigs.empty() && actor.rigs.back().gpuIndex==rig.gpuIndex) {

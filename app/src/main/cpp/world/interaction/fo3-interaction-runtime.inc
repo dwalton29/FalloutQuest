@@ -22,6 +22,7 @@ bool CollectFo3WorldReference(uint32_t reference) {
     auto& player=gPlayerSession->player;
     if(!player.CanPickup(reference)) return false;
     const auto ref=player.Definitions().references.at(reference);
+    if(player.Definitions().items.at(ref.base).weapon.Firearm())return false;
     if(!player.Pickup(reference)) return false;
     for(auto& hand:gQ220Grab) if(hand.refFormId==reference) hand={};
     gQ223DynamicBodies.erase(reference);
@@ -57,6 +58,7 @@ bool QueryFo3Interaction(float ox, float oy, float oz, float dx, float dy,
         // of whether the physics runtime supports this loose-object type.
         if (player.IsCollected(object.refFormId) ||
             (!container && !catalog.items.count(object.baseFormId))) continue;
+        if(!container&&catalog.items.at(object.baseFormId).weapon.Firearm())continue;
         fo3interaction::Point lo{1e30f,1e30f,1e30f}, hi{-1e30f,-1e30f,-1e30f};
         for (int corner=0;corner<8;++corner) {
             const auto p = Q220TransformPoint(object.q220DynamicTransform,

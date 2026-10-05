@@ -19,5 +19,8 @@ void Pickup(uint32_t base);
 void Open(uint32_t base);
 void Close(uint32_t base);
 void Scroll();
+void SoundEvent(uint32_t soundForm);
+void PreloadSound(uint32_t soundForm);
+void PreloadSound(const std::string& editorId);
 void NamedSound(const std::string &editorId);
 } // namespace fo3audio

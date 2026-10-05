@@ -33,9 +33,13 @@ struct Projectile {
   bool Hitscan() const {return flags&1;}
 };
 struct Definitions {
+  struct Actor {uint32_t flags=0,templateId=0;uint16_t templates=0,level=1,minLevel=1,maxLevel=0;int32_t health=0;uint8_t endurance=0;};
+  std::unordered_map<uint32_t,Actor> actors;
   std::unordered_map<uint32_t,Projectile> projectiles;
   std::unordered_map<uint32_t,std::string> models;
   float damageGun=0,damageEnergy=0,damageLauncher=0;
+  float skillBase=0,skillMult=0,conditionBase=0,conditionMult=0;
+  float npcHealthLevel=0,npcHealthEndurance=0;
 };
 struct WorldPose {
   uint32_t cell=0,world=0;

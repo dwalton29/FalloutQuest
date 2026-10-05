@@ -151,7 +151,7 @@ bool Player::BootstrapDevelopmentWeapon() {
   Player transaction = *this;
   uint64_t id = 0;
   for (const auto &s : transaction.state_.inventory)
-    if (s.formId == pistol) {id = s.id; break;}
+    if (s.formId == pistol && (!id || s.condition > transaction.Weapon(id)->condition)) id = s.id;
   if (!id) {
     id = transaction.state_.nextStackId;
     if (!transaction.Add(pistol, 1)) return false;
@@ -197,5 +197,48 @@ bool Player::MigrateWeaponInstances(State &state) const {
     if (total > 30000) return false;
   }
   return true;
+}
+}
+
+namespace fo3player {
+float Player::WeaponDamage(uint64_t id) const {
+  const auto*s=Weapon(id);if(!s)return 0;
+  const auto&d=catalog_.items.at(s->formId).weapon;const auto&r=catalog_.weapons;
+  const float skill=d.skill>=32&&d.skill<=45?std::min<float>(100,state_.skills[d.skill-32]):0;
+  return d.damage*(r.skillBase+r.skillMult*skill/100)*(r.conditionBase+r.conditionMult*s->condition);
+}
+float Player::ActorHealth(uint32_t reference) const {
+  const auto target=catalog_.pipboy.targets.find(reference);
+  if(target==catalog_.pipboy.targets.end())return -1;
+  auto actor=catalog_.weapons.actors.find(target->second.base);if(actor==catalog_.weapons.actors.end())return -1;
+  // Follow only authored statistic inheritance; levelled actor templates need
+  // a separate canonical spawn resolver and are deliberately unsupported.
+  for(int depth=0;(actor->second.templates&2)&&depth<16;++depth){actor=catalog_.weapons.actors.find(actor->second.templateId);if(actor==catalog_.weapons.actors.end())return -1;}
+  const auto&a=actor->second;if(a.templates&2)return -1;
+  float health=a.health;
+  if(a.flags&0x10){
+    float level=a.level;
+    if(a.flags&0x80){level=state_.level*(a.level/1000.f);level=std::max<float>(a.minLevel,level);if(a.maxLevel)level=std::min<float>(a.maxLevel,level);}
+    health+=a.endurance*catalog_.weapons.npcHealthEndurance+level*catalog_.weapons.npcHealthLevel;
+  }
+  const auto damage=state_.actorDamage.find(reference);
+  return std::max(0.f,health-(damage==state_.actorDamage.end()?0:damage->second));
+}
+bool Player::WeaponHit(uint64_t instance,uint32_t target,float fraction) {
+  const auto*s=Weapon(instance);
+  if(!s||!s->equipped||!std::isfinite(fraction)||fraction<=0||fraction>1)return false;
+  return ApplyWeaponHit(s->formId,target,WeaponDamage(instance)*fraction);
+}
+bool Player::ApplyWeaponHit(uint32_t base,uint32_t target,float damage) {
+  const auto weapon=catalog_.items.find(base);const float health=ActorHealth(target);
+  if(weapon==catalog_.items.end()||!weapon->second.weapon.Firearm()||health<=0||!std::isfinite(damage)||damage<=0)return false;
+  const auto t=catalog_.pipboy.targets.find(target);
+  auto a=catalog_.weapons.actors.find(t->second.base);
+  if(a==catalog_.weapons.actors.end())return false;
+  for(int depth=0;(a->second.templates&2)&&depth<16;++depth){a=catalog_.weapons.actors.find(a->second.templateId);if(a==catalog_.weapons.actors.end())return false;}
+  // Essential actors retain health until unconscious behaviour is supported.
+  const float applied=std::min(damage,std::max(0.f,health-((a->second.flags&2)?1.f:0.f)));
+  if(applied<=0)return false;
+  state_.actorDamage[target]+=applied;++revision_;return true;
 }
 }

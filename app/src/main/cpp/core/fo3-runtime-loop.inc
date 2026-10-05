@@ -561,6 +561,8 @@ private:
         if (!CreateAction("activate_q160", "Activate", XR_ACTION_TYPE_BOOLEAN_INPUT,
                           1, &handPaths_[1], &activateAction_)) return false;
 
+        if (!CreateAction("weapon_haptic", "Weapon Haptics", XR_ACTION_TYPE_VIBRATION_OUTPUT,
+                          2, handPaths_.data(), &weaponHapticAction_)) return false;
         if (!CreateAction("pipboy_back", "Pip-Boy Back", XR_ACTION_TYPE_BOOLEAN_INPUT,
                           1, &handPaths_[1], &pipBackAction_)) return false;
 
@@ -634,7 +636,10 @@ private:
             !Path("/user/hand/right/input/a/touch", &rightATouch) ||
             !Path("/user/hand/right/input/b/touch", &rightBTouch)) return false;
 
-        const std::array<XrActionSuggestedBinding, 24> bindings{{
+        XrPath leftHaptic=XR_NULL_PATH,rightHaptic=XR_NULL_PATH;
+        if(!Path("/user/hand/left/output/haptic",&leftHaptic)||!Path("/user/hand/right/output/haptic",&rightHaptic))return false;
+        const std::array<XrActionSuggestedBinding, 26> bindings{{
+            {weaponHapticAction_,leftHaptic}, {weaponHapticAction_,rightHaptic},
             {poseAction_, leftAim},
             {poseAction_, rightAim},
             {gripPoseAction_, leftGrip},
@@ -1545,6 +1550,12 @@ private:
                         static_cast<double>(frameState.predictedDisplayTime)*1e-9),
                     q210RightValid?turnX_:0,q210RightValid?lootScrollY_:0,
                     q210RightValid&&activateDownQ1700_,q210RightValid&&pipBackDown_,fingerGripValue_[0]);
+                WeaponUpdate(static_cast<double>(frameState.predictedDisplayTime)*1e-9,pipBackDown_);
+                for(int hand=0;hand<2;++hand)if(gWeaponHaptic[hand]>0){
+                    XrHapticActionInfo info{XR_TYPE_HAPTIC_ACTION_INFO};info.action=weaponHapticAction_;info.subactionPath=handPaths_[hand];
+                    XrHapticVibration pulse{XR_TYPE_HAPTIC_VIBRATION};pulse.amplitude=gWeaponHaptic[hand];pulse.duration=20000000;pulse.frequency=XR_FREQUENCY_UNSPECIFIED;
+                    xrApplyHapticFeedback(session_,&info,reinterpret_cast<XrHapticBaseHeader*>(&pulse));gWeaponHaptic[hand]=0;
+                }
                 if(Fo3PipboyFocus())snapTurnLatched_=std::fabs(turnX_)>=.30f;
                 // Q20.13: loading freezes player motion, not world preparation.
                 // Keep CELL/terrain/LOD streaming alive beneath the overlay.
@@ -1763,6 +1774,7 @@ private:
                 // The right-hand interaction HUD remains; prototype controller
                 // markers, build labels and the world grid are no longer drawn.
                 if (hand == 1) {
+                    if(WeaponHeld()&&!Fo3PipboyFocus()&&!IsFo3LoadingVisible())fo3ammoui::Render(mvp.m);
                     if (doorAimActiveQ1700_) {
                         if (doorPromptValidQ1850_ && !GetFo3LootPanel().reference) {
                             RenderFo3InteractionHud(mvp.m, doorPromptQ1850_.data());
@@ -1913,6 +1925,7 @@ private:
     XrAction lootScrollAction_{XR_NULL_HANDLE};
     float lootScrollY_=0;
     float lootPanelYaw_=0;
+    XrAction weaponHapticAction_{XR_NULL_HANDLE};
     XrAction fingerTriggerAction_{XR_NULL_HANDLE};
     XrAction fingerGripAction_{XR_NULL_HANDLE};
     XrAction fingerTriggerTouchAction_{XR_NULL_HANDLE};

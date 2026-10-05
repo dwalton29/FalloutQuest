@@ -42,6 +42,7 @@ struct QActorSkin { fqskin::Mapping mapping;std::vector<fqskin::PaletteRow> pale
 struct Q230RigPart {
   QActorSkin skin;
   std::vector<int> bones;
+  std::vector<std::array<float,3>> hitVertices;
   fo3anim::Matrix placement{}, inversePlacement{}, scenePlacement{}, inverseScenePlacement{};
   int rigidBone = -1;
   size_t gpuIndex = 0;

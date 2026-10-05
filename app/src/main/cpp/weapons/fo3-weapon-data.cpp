@@ -2,7 +2,7 @@
 #include "data/fo3-esm-reader.h"
 #include <cmath>
 namespace fo3weapon {
-bool Relevant(const std::string&t){return t=="PROJ"||t=="STAT";}
+bool Relevant(const std::string&t){return t=="PROJ"||t=="STAT"||t=="NPC_";}
 bool DecodeWeapon(const std::vector<uint8_t>&p,Definition&out){
   Definition o;bool data=false,dnam=false;
   fo3esm::WalkSubrecords(p,[&](const char*tag,const uint8_t*b,uint32_t n){
@@ -24,15 +24,26 @@ bool DecodeWeapon(const std::vector<uint8_t>&p,Definition&out){
   out=std::move(o);return out.valid;
 }
 void Decode(Definitions&o,const std::string&t,uint32_t id,const std::vector<uint8_t>&p){
-  Projectile q;bool valid=false;std::string model,editor;
+  Projectile q;Definitions::Actor actor;bool actorData=false;bool valid=false;std::string model,editor;
   fo3esm::WalkSubrecords(p,[&](const char*tag,const uint8_t*b,uint32_t n){const std::string k(tag,4);
     if(k=="EDID")editor=fo3esm::ZString(b,n);
+    if(t=="NPC_"&&k=="DATA"&&n>=11){actor.health=static_cast<int32_t>(fo3esm::ReadU32(b));actor.endurance=b[6];actorData=true;}
+    if(t=="NPC_"&&k=="ACBS"&&n==24){actor.flags=fo3esm::ReadU32(b);actor.level=fo3esm::ReadU16(b+8);actor.minLevel=fo3esm::ReadU16(b+10);actor.maxLevel=fo3esm::ReadU16(b+12);actor.templates=fo3esm::ReadU16(b+22);}
+    if(t=="NPC_"&&k=="TPLT"&&n==4)actor.templateId=fo3esm::ReadU32(b);
     if(k=="MODL")model=fo3esm::ZString(b,n);
     if(k=="NAM1")q.flashModel=fo3esm::ZString(b,n);
     if(t=="PROJ"&&k=="DATA"&&n>=68){q.flags=fo3esm::ReadU16(b);q.type=fo3esm::ReadU16(b+2);q.gravity=fo3esm::ReadF32(b+4);q.speed=fo3esm::ReadF32(b+8);q.range=fo3esm::ReadF32(b+12);q.explosion=fo3esm::ReadU32(b+36);q.flashDuration=fo3esm::ReadF32(b+44);q.impactForce=fo3esm::ReadF32(b+52);valid=true;}
-    if(t=="GMST"&&k=="DATA"&&n==4){float v=fo3esm::ReadF32(b);if(std::isfinite(v)&&v>=0){if(editor=="fDamageToWeaponGunMult")o.damageGun=v;if(editor=="fDamageToWeaponEnergyMult")o.damageEnergy=v;if(editor=="fDamageToWeaponLauncherMult")o.damageLauncher=v;}}
+    if(t=="GMST"&&k=="DATA"&&n==4){float v=fo3esm::ReadF32(b);if(std::isfinite(v)&&v>=0){if(editor=="fDamageToWeaponGunMult")o.damageGun=v;if(editor=="fDamageToWeaponEnergyMult")o.damageEnergy=v;if(editor=="fDamageToWeaponLauncherMult")o.damageLauncher=v;
+      if(editor=="fDamageSkillBase")o.skillBase=v;
+      if(editor=="fDamageSkillMult")o.skillMult=v;
+      if(editor=="fDamageGunWeapCondBase")o.conditionBase=v;
+      if(editor=="fDamageGunWeapCondMult")o.conditionMult=v;
+      if(editor=="fAVDNPCHealthLevelMult")o.npcHealthLevel=v;
+      if(editor=="fAVDNPCHealthEnduranceMult")o.npcHealthEndurance=v;
+    }}
   });
   if(t=="STAT")o.models[id]=model;
+  if(t=="NPC_"&&actorData&&actor.health>=0&&actor.endurance<=10)o.actors[id]=actor;
   for(float v:{q.gravity,q.speed,q.range,q.flashDuration,q.impactForce})if(!std::isfinite(v)||v<0)valid=false;
   if(t=="PROJ"&&valid){q.model=model;o.projectiles[id]=std::move(q);}
 }

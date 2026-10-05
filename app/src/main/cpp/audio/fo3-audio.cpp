@@ -57,7 +57,7 @@ bool Playable(const std::string &p) {
 void Push(Event e) {
   std::lock_guard<std::mutex> lock(runtime.mutex);
   if (!runtime.worker.joinable() || runtime.stop ||
-      (!runtime.lastActive && e.kind < 6))
+      (!runtime.lastActive && (e.kind < 6 || e.kind==11)))
     return;
   if (e.kind == 6 || e.kind == 7 || e.kind == 10)
     runtime.events.erase(
@@ -453,7 +453,7 @@ void Worker() {
       continue;
     }
     uint32_t id = 0;
-    if (e.kind == 5) {
+    if(e.kind==11||(e.kind==12&&e.name.empty())){id=e.id;} else if (e.kind == 5||e.kind==12) {
       auto n = catalog.names.find(e.name);
       if (n != catalog.names.end())
         id = n->second;
@@ -468,7 +468,12 @@ void Worker() {
              : e.kind == 2 ? o->second.open
                            : o->second.close;
     }
-    if (id)
+    if(e.kind==12){
+      const auto asset=catalog.sounds.find(id);if(asset!=catalog.sounds.end()){
+        const auto variants=choices(asset->second.path);
+        if(variants.empty())resolve(asset->second.path);else for(const auto&path:variants)resolve(path);
+      }
+    }else if (id)
       sound(id, effect);
   }
   playBroadcast({}, 0);
@@ -529,7 +534,7 @@ void Context(uint32_t cell, bool active) {
   if (!active)
     runtime.events.erase(
         std::remove_if(runtime.events.begin(), runtime.events.end(),
-                       [](const Event &e) { return e.kind < 6; }),
+                       [](const Event &e) { return e.kind < 6 || e.kind==11; }),
         runtime.events.end());
   runtime.events.erase(
       std::remove_if(runtime.events.begin(), runtime.events.end(),
@@ -560,6 +565,9 @@ uint32_t PlayingNote() { return runtime.playingNote.load(); }
 void BroadcastDone(int channel, uint32_t generation) {
   Push({channel == 0 ? 8 : 9, generation, true});
 }
+void PreloadSound(uint32_t soundForm){if(soundForm)Push({12,soundForm,false});}
+void PreloadSound(const std::string&editorId){if(!editorId.empty())Push({12,0,false,editorId});}
+void SoundEvent(uint32_t soundForm) { if(soundForm) Push({11,soundForm,true}); }
 void Pickup(uint32_t base) { Push({1, base, true}); }
 void Open(uint32_t base) { Push({2, base, true}); }
 void Close(uint32_t base) { Push({3, base, true}); }

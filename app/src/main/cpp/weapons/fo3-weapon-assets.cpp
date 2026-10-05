@@ -64,6 +64,7 @@ bool DecodeModelNodes(const std::vector<uint8_t> &bytes, ModelNodes &out) {
   if (!fo3anim::DecodeModelHierarchy(bytes, next.hierarchy, next.blockBones)) return false;
   next.muzzle = fo3anim::FindBone(next.hierarchy, "ProjectileNode");
   next.magazine = fo3anim::FindBone(next.hierarchy, "##Clip");
+  if(next.magazine<0)next.magazine=fo3anim::FindBone(next.hierarchy,"##Magazine");
   next.slide = fo3anim::FindBone(next.hierarchy, "##Slide");
   next.bolt = fo3anim::FindBone(next.hierarchy, "##Bolt");
   if (next.muzzle < 0) return false;

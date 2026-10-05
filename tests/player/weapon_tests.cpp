@@ -1,5 +1,6 @@
 #include "player/fo3-player-state.h"
 #include "weapons/fo3-weapon-interaction.h"
+#include "weapons/fo3-weapon-hit.h"
 #include <cassert>
 #include <cmath>
 #include <iostream>
@@ -87,7 +88,7 @@ void Ownership(Catalog c) {
   assert(loaded.Equip(other)&&!loaded.Weapon(id)->equipped&&loaded.Weapon(other)->equipped);
   assert(loaded.Equip(id)&&loaded.Save(path,error));
   const auto good=Read(path);
-  assert(U32(good,4)==5);
+  assert(U32(good,4)==6);
   Player overflow=loaded;
   assert(overflow.Add(0x4241,INT32_MAX-overflow.AmmoReserve(0x4241)));
   const auto overflowRevision=overflow.Revision();
@@ -127,17 +128,58 @@ void Ownership(Catalog c) {
   assert(!resumed.EquippedWeapon()&&resumed.Snapshot().worldWeapons[0].instance.id==seedId);
   // Malformed world pose and duplicate ownership are rejected atomically.
   const auto seededSave=Read(path);
-  bad=seededSave;Put(bad,bad.size()-4,0x7fc00000);Seal(bad);Write(path,bad);
+  bad=seededSave;Put(bad,bad.size()-8,0x7fc00000);Seal(bad);Write(path,bad);
   assert(!resumed.Restore(path,error)&&resumed.Revision()==seedRevision);
   bad=seededSave;
   const auto ownedId=resumed.Snapshot().inventory.front().id;
-  Put(bad,bad.size()-80,static_cast<uint32_t>(ownedId));
-  Put(bad,bad.size()-76,static_cast<uint32_t>(ownedId>>32));
+  Put(bad,bad.size()-84,static_cast<uint32_t>(ownedId));
+  Put(bad,bad.size()-80,static_cast<uint32_t>(ownedId>>32));
   Seal(bad);Write(path,bad);
   assert(!resumed.Restore(path,error)&&resumed.Revision()==seedRevision);
   std::remove(path.c_str());
 }
+void AmmoIsolation() {
+  auto c=Fixture();Item wrong=c.items.at(0x4241);wrong.formId=0x999;c.items.emplace(wrong.formId,wrong);
+  Player p(c);assert(p.Add(0x434f,1));const auto id=p.Snapshot().inventory.front().id;assert(p.Equip(id));
+  assert(p.Add(0x999,100)&&p.EjectMagazine(id));assert(!p.LoadMagazine(id));
+  assert(p.AmmoReserve(0x999)==100&&p.Weapon(id)->loadedRounds==0);
+  assert(p.Add(0x4241,7)&&p.LoadMagazine(id));assert(p.Weapon(id)->loadedRounds==7&&p.AmmoReserve(0x4241)==0);
+  assert(!p.LoadMagazine(id)&&!p.FireWeapon(id));assert(p.ChamberWeapon(id));
+  for(int shot=0;shot<7;shot++)assert(p.FireWeapon(id));
+  const auto revision=p.Revision();assert(!p.FireWeapon(id)&&p.Revision()==revision);
+  assert(p.Weapon(id)->loadedRounds==0&&p.AmmoReserve(0x999)==100);
+}
+void Combat() {
+  auto c=Fixture();c.weapons.skillBase=.5f;c.weapons.skillMult=.5f;
+  c.weapons.conditionBase=.66f;c.weapons.conditionMult=.34f;
+  c.weapons.actors[100].health=100;c.pipboy.targets[200].base=100;
+  c.weapons.actors[101].health=100;c.weapons.actors[101].flags=2;c.pipboy.targets[201].base=101;
+  Player p(c);assert(p.BootstrapDevelopmentWeapon());const auto id=p.EquippedWeapon()->id;
+  assert(p.ActorHealth(200)==100&&p.ActorHealth(201)==100);
+  const float amount=p.WeaponDamage(id);assert(amount>=4.5f&&amount<=9);
+  assert(!p.ApplyWeaponHit(0,200,amount)&&!p.ApplyWeaponHit(0x434f,0,amount));
+  assert(!p.ApplyWeaponHit(0x434f,200,NAN)&&!p.ApplyWeaponHit(0x434f,200,-1));
+  assert(p.WeaponHit(id,200));assert(std::fabs(p.ActorHealth(200)-(100-amount))<1e-5f);
+  fo3weapon::WorldPose pose;pose.cell=123;assert(p.DropWeapon(id,pose));
+  // A travelling shot retains the damage captured when fired after ownership changes.
+  assert(p.ApplyWeaponHit(0x434f,200,amount));assert(!p.WeaponHit(id,200));
+  assert(p.ApplyWeaponHit(0x434f,201,1000)&&p.ActorHealth(201)==1);
+  assert(p.ApplyWeaponHit(0x434f,200,1000)&&p.ActorHealth(200)==0);
+  assert(!p.ApplyWeaponHit(0x434f,200,1));
+  std::string error;const auto path="/tmp/fq-weapon-combat-"+std::to_string(getpid())+".fqps";
+  assert(p.Save(path,error));Player restored(c);assert(restored.Restore(path,error));
+  assert(restored.ActorHealth(200)==0&&restored.ActorHealth(201)==1);
+  auto bytes=Read(path);Put(bytes,bytes.size()-4,0x7fc00000);Seal(bytes);Write(path,bytes);
+  const auto revision=restored.Revision();assert(!restored.Restore(path,error)&&restored.Revision()==revision);
+  unlink(path.c_str());
+  float distance=10;
+  assert(fo3weapon::Surface({0,0,0},{0,0,1},{-1,-1,2},{1,-1,2},{0,1,2},distance)&&distance==2);
+  assert(!fo3weapon::Surface({2,0,0},{0,0,1},{-1,-1,2},{1,-1,2},{0,1,2},distance));
+  assert(!fo3weapon::Surface({0,0,0},{0,0,1},{0,0,2},{0,0,2},{0,0,2},distance));
+}
 int main(int argc,char**argv) {
+  Combat();
+  AmmoIsolation();
   Ownership(Fixture());
   {
     Player p(Fixture());
@@ -228,7 +270,17 @@ int main(int argc,char**argv) {
       assert(w.fire2D&&w.fire3D&&w.dry&&w.ammoUse==1&&w.pellets>0);
       std::cout<<item.editorId<<" clip="<<unsigned(w.clip)<<" damage="<<w.damage<<" ammo="<<std::hex<<w.ammo<<std::dec<<" hitscan="<<q.Hitscan()<<"\n";
     }
+    {
+      auto rifleCatalog=c;rifleCatalog.initial.inventory.clear();rifleCatalog.initial.nextStackId=1;Player rifle(rifleCatalog);
+      assert(rifle.Add(0x1ffec,1,.63f));const auto id=rifle.Snapshot().inventory.front().id;
+      assert(rifle.Equip(id)&&rifle.Add(0x4240,31)&&rifle.EjectMagazine(id)&&rifle.LoadMagazine(id));
+      assert(rifle.ChamberWeapon(id)&&rifle.FireWeapon(id)&&rifle.Weapon(id)->loadedRounds==23&&rifle.AmmoReserve(0x4240)==7);
+      const auto condition=rifle.Weapon(id)->condition;fo3weapon::WorldPose pose;pose.cell=0xa96;pose.velocity={1,2,3};
+      assert(rifle.DropWeapon(id,pose)&&rifle.PickupWorldWeapon(id));assert(rifle.Weapon(id)->condition==condition&&rifle.Weapon(id)->loadedRounds==23);
+    }
     const auto&w=c.items.at(0x434f);
+    std::cout<<"10mm weight="<<w.weight<<" value="<<w.value<<" condition="<<w.maxCondition<<" ammoName="<<c.items.at(0x4241).name<<"\n";
+    const auto&d=w.weapon;std::cout<<"rate="<<d.rate<<" shots="<<d.shotsPerSecond<<" minSpread="<<d.minSpread<<" spread="<<d.spread<<" reload="<<unsigned(d.reload)<<" reloadTime="<<d.reloadTime<<" delay="<<d.delayMin<<"/"<<d.delayMax<<" sounds="<<std::hex<<d.fire3D<<"/"<<d.fire2D<<"/"<<d.dry<<"/"<<d.equip<<"/"<<d.unequip<<std::dec<<"\n";
     assert(w.model=="Weapons\\1HandPistol\\10mmPistol.NIF");
     assert(w.weapon.fire2D==223962&&w.weapon.dry==127516);
     assert(std::fabs(w.weapon.shotsPerSecond-6.f)<.0001f);

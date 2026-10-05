@@ -39,14 +39,14 @@ inline V ClosestSupport(V palm,V begin,V end) {
 }
 // Right roll determines the transported plane. Left roll is not an input.
 // Reversed/degenerate hands retain the one-hand pose rather than flipping.
-inline R TwoHand(const R&one,V primary,V support,V axis) {
+inline R TwoHand(const R&one,V primary,V support,V axis,float weight=1) {
   auto direction=support-primary;
   if(fo3vr::Length(direction)<.08f)return one;
   auto oldAxis=fo3vr::Rotate(one,fo3vr::Unit(axis));
   auto newAxis=fo3vr::Unit(direction),cross=fo3vr::Cross(oldAxis,newAxis);
   float dot=std::clamp(fo3vr::Dot(oldAxis,newAxis),-1.f,1.f);
   if(fo3vr::Length(cross)<1e-5f||dot<-.85f)return one;
-  return fo3vr::Multiply(fo3vr::Axis(cross,std::acos(dot)),one);
+  return fo3vr::Multiply(fo3vr::Axis(cross,std::acos(dot)*std::clamp(weight,0.f,1.f)),one);
 }
 struct Trigger {
   double next=0;

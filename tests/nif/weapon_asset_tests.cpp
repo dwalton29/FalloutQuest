@@ -1,5 +1,6 @@
 #include "../../app/src/main/cpp/rendering/mesh/fo3-static-nif.cpp"
 #include "weapons/fo3-weapon-assets.h"
+#include "weapons/fo3-weapon-asset.h"
 #include <cassert>
 #include <fstream>
 #include <iostream>
@@ -44,13 +45,18 @@ int main(int argc, char **argv) {
     const std::string root = argv[1];
     fo3anim::Skeleton skeleton;
     assert(fo3anim::DecodeSkeleton(Read(root+"/skeleton.nif"),skeleton));
-    for (bool rifle : {false,true}) {
-      const std::string model = root+(rifle?"/huntingrifle.nif":"/10mmpistol.nif");
-      const std::string aim = root+(rifle?"/2hraim.kf":"/1hpaim.kf");
-      const std::string reload = root+(rifle?"/2hrreloada.kf":"/1hpreloada.kf");
+    for (int sample : {0,1,2}) {
+      const bool rifle=sample!=0,assault=sample==2;
+      const std::string model = root+(assault?"/assaultrifle.nif":rifle?"/huntingrifle.nif":"/10mmpistol.nif");
+      const std::string aim = root+(assault?"/2haaim.kf":rifle?"/2hraim.kf":"/1hpaim.kf");
+      const std::string reload = root+(assault?"/2hareloada.kf":rifle?"/2hrreloada.kf":"/1hpreloada.kf");
       fo3anim::Clip aimClip,reloadClip;
       assert(fo3anim::DecodeClip(Read(aim),aimClip));
       assert(fo3anim::DecodeClip(Read(reload),reloadClip));
+      fo3weapon::Asset runtime;assert(runtime.Decode(Read(model),Read(root+"/skeleton.nif"),Read(aim)));
+      if(assault){assert(runtime.Reload(Read(reload)));fo3weapon::Definition definition;definition.animation=6;definition.reload=0;assert(runtime.ReloadInteraction(definition)==fo3weapon::ReloadFamily::DetachableRifle);}
+      if(!rifle){assert(runtime.Reload(Read(reload)));assert(runtime.reloadSounds[0]=="WPNPistol10mmReloadOut");assert(runtime.reloadSounds[1]=="WPNPistol10mmReloadIn");assert(runtime.reloadSounds[2]=="WPNPistol10mmReloadChamber");}
+      const auto hip=fo3weapon::Hip({1,2,3},fo3vr::Identity());assert(hip.Contains(hip.center));
       fo3weapon::Attachment attachment;
       assert(fo3weapon::BuildAttachment(skeleton,aimClip,rifle,attachment));
       assert(attachment.support==rifle);
@@ -67,7 +73,7 @@ int main(int argc, char **argv) {
       const auto forward=nodes.MuzzleForward();
       assert(forward[0]>.999f&&std::fabs(forward[1])<1e-4f&&std::fabs(forward[2])<1e-4f);
       const auto &muzzle=nodes.hierarchy.bindGlobal.at(nodes.muzzle);
-      assert(std::fabs(muzzle[12]-(rifle?61.306103f:17.79352f))<.001f);
+      assert(std::fabs(muzzle[12]-(assault?45.7826f:rifle?61.306103f:17.79352f))<.001f);
       std::vector<Fo3StaticNifMesh> meshes;
       assert(LoadFo3StaticNifMeshes(model,meshes));
       size_t magazines=0,actions=0;

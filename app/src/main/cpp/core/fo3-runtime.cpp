@@ -7,6 +7,9 @@
 #include "ui/pipboy/fo3-pipboy-renderer.h"
 #include "pipboy/fo3-local-map-build.h"
 #include "world/interaction/fo3-shoulder-zone.h"
+#include "weapons/fo3-weapon-asset.h"
+#include "weapons/fo3-weapon-hit.h"
+#include "ui/interaction/fo3-weapon-ammo-hud.h"
 #include "npc/fo3-animation-bounds.h"
 #include "rendering/actor-skinning.h"
 #include "rendering/opaque-telemetry.h"
@@ -416,6 +419,7 @@ struct GpuObject {
     bool q2025HighPriorityLod = false;
     bool q210PlayerBody = false;
     bool q220LooseObject = false;
+    bool physicalWeapon = false;
     bool q230NpcActor = false;
     bool q2400SwingDoor = false;
     std::shared_ptr<const fo3dooranim::Asset> q2401DoorAnimation;
@@ -511,6 +515,7 @@ uint64_t gQ2015CullPassed = 0u;
 uint64_t gQ2015CullScopes = 0u;
 
 #include "rendering/actor-gpu-skin.inc"
+void PrepareFo3InteriorObjectLights(GpuObject&,const QActorSkin*);
 
 bool Q2015AabbVisible(const GpuObject& object) {
     // Q20.20: reflection passes now install their own reflected-camera frustum.
@@ -678,6 +683,7 @@ std::vector<GpuObject> gQ210PlayerBody;
 struct Q230RigPart {
     QActorSkin skin;
     std::vector<int> bones;
+    std::vector<std::array<float,3>> hitVertices;
     fo3anim::Matrix placement{}, inversePlacement{}, scenePlacement{}, inverseScenePlacement{};
     int rigidBone = -1;
     size_t gpuIndex = 0;
@@ -2960,9 +2966,18 @@ struct Fo3SceneLoadWork {
 Fo3SceneLoadWork gSceneLoad;
 uint64_t gSceneLoadFrame = 0u;
 std::unique_ptr<fo3player::Session> gPlayerSession;
+void WeaponUpdate(double now,bool back);
+void WeaponRender(bool alpha);
+void WeaponShutdown();
+void WeaponPersistWorld();
+bool WeaponHeld();
+float gWeaponHaptic[2]{};
+Vec3 gWeaponPalm[2]{};
+bool gWeaponPalmValid[2]{};
 
 void FlushFo3PlayerState() {
     if (!gPlayerSession) return;
+    WeaponPersistWorld();
     std::string error;
     if (!gPlayerSession->Flush(error)) Q6H_LOGE("PLAYER SAVE: %s", error.c_str());
 }
@@ -5495,11 +5510,11 @@ extern uint64_t gStereoFrame;
 void DrawSceneObject(const GpuObject& object, bool environmentPassQ2050 = false) {
     if (gPlayerSession && gPlayerSession->player.IsCollected(object.refFormId)) return;
     if (!object.q210PlayerBody &&
-        !object.q230NpcActor &&
+        !object.q230NpcActor && !object.physicalWeapon &&
         !gInstancedDrawActiveQ2016 &&
         !Q1970ShouldRenderFullDetail(object)) return;
     if (!object.q210PlayerBody &&
-        !object.q230NpcActor &&
+        !object.q230NpcActor && !object.physicalWeapon &&
         !object.q220LooseObject &&
         !gInstancedDrawActiveQ2016 &&
         !Q2015AabbVisible(object)) {
@@ -5536,7 +5551,7 @@ void DrawSceneObject(const GpuObject& object, bool environmentPassQ2050 = false)
     const bool q2017UseObjectTransform =
         (object.q2017SharedGeometry ||
          object.q210PlayerBody ||
-         object.q220LooseObject ||
+         object.q220LooseObject || object.physicalWeapon ||
          object.q2400SwingDoor) &&
         !gInstancedDrawActiveQ2016;
     if (gObjectTransformEnabledLocationQ2017 >= 0) {
@@ -5548,7 +5563,7 @@ void DrawSceneObject(const GpuObject& object, bool environmentPassQ2050 = false)
         const float* q220Transform =
             object.q210PlayerBody
                 ? (object.pipboy ? gPipWorld.data() : gQ210PlayerRoot)
-                : object.q220LooseObject
+                : (object.q220LooseObject || object.physicalWeapon)
                     ? object.q220DynamicTransform
                     : object.q2400SwingDoor
                         ? object.q2400DoorTransform
@@ -8664,6 +8679,13 @@ void Q220UpdateLooseGrab(
         float distance = 0.0f;
         if (Q220FindNearestLooseRef(
                 hand, ref, center, distance)) {
+            if(gPlayerSession){
+                const auto r=gPlayerSession->player.Definitions().references.find(ref);
+                if(r!=gPlayerSession->player.Definitions().references.end()){
+                    const auto i=gPlayerSession->player.Definitions().items.find(r->second.base);
+                    if(i!=gPlayerSession->player.Definitions().items.end()&&i->second.weapon.Firearm()){state.previousGrip=grip;return;}
+                }
+            }
             state.active = true;
             state.refFormId = ref;
             state.startPalm = hand;
@@ -9966,12 +9988,13 @@ void Q211UpdatePlayerRig() {
         gShoulderZone.right={gQ210PlayerRoot[0],0,gQ210PlayerRoot[2]};
         gShoulderZone.rear={gQ210PlayerRoot[8],0,gQ210PlayerRoot[10]};
     }
-    Q221UpdateLooseObjectsFromSolvedPalms(
-        q221LeftPalmValid, q221LeftPalmWorld,
-        q221RightPalmValid, q221RightPalmWorld);
+    gWeaponPalmValid[0]=q221LeftPalmValid;gWeaponPalm[0]=q221LeftPalmWorld;
+    gWeaponPalmValid[1]=q221RightPalmValid;gWeaponPalm[1]=q221RightPalmWorld;
 
 
 }
+
+#include "weapons/fo3-weapon-runtime.inc"
 
 void Q210DeletePlayerBody(bool equipmentChange=false) {
     ResetFo3Pipboy();gPipAnchorReady=false;gPipSurface={};
@@ -10803,6 +10826,7 @@ bool Q210EnsurePlayerBody() {
 }
 
 void Q210RenderPlayerBody(bool alphaPass) {
+    WeaponRender(alphaPass);
     if (!gQ210PlayerBodyReady) return;
     const auto drawStarted=fqopaque::Clock::now();
     for (const GpuObject& object : gQ210PlayerBody) {
@@ -10842,9 +10866,9 @@ void Q210RenderPlayerBody(bool alphaPass) {
 
 void PrepareFo3InteriorObjectLights(GpuObject& object, const QActorSkin* skin=nullptr) {
     if (!gFo3Environment.interior) return;
-    if (!skin && !object.q220LooseObject && !object.q210PlayerBody && object.interiorLightFrame != UINT64_MAX) return;
+    if (!skin && !object.q220LooseObject && !object.physicalWeapon && !object.q210PlayerBody && object.interiorLightFrame != UINT64_MAX) return;
     std::array<float,3> mn{object.minX,object.minY,object.minZ},mx{object.maxX,object.maxY,object.maxZ};
-    if (skin || object.q220LooseObject || object.q210PlayerBody) {
+    if (skin || object.q220LooseObject || object.physicalWeapon || object.q210PlayerBody) {
         std::array<float,3> lower{INFINITY,INFINITY,INFINITY},upper{-INFINITY,-INFINITY,-INFINITY};
         const size_t bones=skin ? skin->palette.size() : 1;
         for(size_t bone=0;bone<bones;++bone) for(int corner=0;corner<8;++corner) {
@@ -10852,7 +10876,7 @@ void PrepareFo3InteriorObjectLights(GpuObject& object, const QActorSkin* skin=nu
             std::array<float,3> v{p[0],p[1],p[2]};
             if(skin) v=fqskin::Transform(skin->palette[bone].data(),p,false);
             const float* root=object.q210PlayerBody ? (object.pipboy?gPipWorld.data():gQ210PlayerRoot) :
-                (object.q220LooseObject ? object.q220DynamicTransform : nullptr);
+                ((object.q220LooseObject || object.physicalWeapon) ? object.q220DynamicTransform : nullptr);
             if(root)v=fqskin::Transform(root,v.data(),false);
             for(int c=0;c<3;++c){lower[c]=std::min(lower[c],v[c]);upper[c]=std::max(upper[c],v[c]);}
         }
@@ -12629,6 +12653,7 @@ void Q6HDeleteFramebuffers(GLsizei n, const GLuint* framebuffers) {
     fqopaque::timer.Shutdown();
     Q1280ShutdownPostQ1280();
     ShutdownFo3WaterQ2070();
+    WeaponShutdown();
     glDeleteFramebuffers(n, framebuffers);
     ShutdownFo3CollisionOverlay();
     for (GpuObject& object : gObjects) {
