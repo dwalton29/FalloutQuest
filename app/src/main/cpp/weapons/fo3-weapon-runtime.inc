@@ -164,9 +164,10 @@ bool Hit(uint64_t instance,V origin,V direction,float limit,uint32_t base,float 
     if(p.ActorHealth(actor.source.refFormId)<=0)continue;
     // Visibility envelopes are broad phase only; actual skinned authored
     // surfaces determine whether a bullet hits the actor.
-    const auto&bounds=actor.renderBounds;float entry=0;
-    if(!actor.renderBoundsReady||!fo3interaction::Box({origin.x,origin.y,origin.z},{direction.x,direction.y,direction.z},
-      {bounds.minX,bounds.minY,bounds.minZ},{bounds.maxX,bounds.maxY,bounds.maxZ},nearest,entry))continue;
+    std::array<float,3> liveLo{},liveHi{};float entry=0;
+    if(!Q230LiveBounds(const_cast<Q230ActorVisual&>(actor),liveLo,liveHi)||
+       !fo3interaction::Box({origin.x,origin.y,origin.z},{direction.x,direction.y,direction.z},
+      {liveLo[0],liveLo[1],liveLo[2]},{liveHi[0],liveHi[1],liveHi[2]},nearest,entry))continue;
     const fo3interaction::Point o{origin.x,origin.y,origin.z},d{direction.x,direction.y,direction.z};
     for(const auto&rig:actor.rigs){
       for(size_t v=0;v+2<rig.hitVertices.size();v+=3){
