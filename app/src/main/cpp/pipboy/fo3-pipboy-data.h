@@ -106,6 +106,27 @@ struct ActorDefinition {
   std::vector<uint32_t> packages;
   std::vector<uint8_t> aiData;
 };
+struct PackageLocation {
+  uint32_t type=0xffffffffu,value=0;
+  int32_t radius=0;
+  bool valid=false;
+};
+struct PackageSchedule {
+  int8_t month=-1,weekday=-1,hour=-1;
+  uint8_t date=0;
+  int32_t duration=0;
+  bool valid=false;
+};
+struct PackageDefinition {
+  std::string editor;
+  uint32_t flags=0;
+  uint8_t type=0xff;
+  uint16_t behaviorFlags=0,typeFlags=0;
+  PackageLocation location,location2;
+  PackageSchedule schedule;
+  std::vector<Condition> conditions;
+  bool scripted=false;
+};
 struct Response {
   Response()=default;
   Response(uint32_t s,uint8_t n,std::string t):sound(s),number(n),text(std::move(t)){}
@@ -174,6 +195,7 @@ struct Definitions {
   std::unordered_map<uint32_t,std::array<uint32_t,2>> raceVoices;
   std::unordered_map<uint32_t,Topic> dialogueTopics;
   std::unordered_map<uint32_t,ActorDefinition> dialogueActors;
+  std::unordered_map<uint32_t,PackageDefinition> packages;
   std::unordered_map<uint32_t,std::pair<std::string,uint32_t>> referenceScripts;
   std::unordered_map<std::string,uint32_t> formNames;
   std::unordered_map<uint32_t,std::string> idleModels;
