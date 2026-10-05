@@ -11368,7 +11368,7 @@ bool Q210EnsurePlayerBody() {
 
         size_t q215CapsRemovedForModel = 0u;
         for (CpuObject& part : parts) {
-            const bool pipboy=fo3appearance::SameModel(path,"PipBoy3000/PipBoyArm.NIF");
+            const bool pipboy=Q210EndsWithInsensitive(path,"pipboy3000\\pipboyarm.nif");
             const bool screen=pipboy&&fo3pip::Screen(part.mesh);
             if(screen){gPipSurface=fo3pip::Inspect(part.mesh);fo3pip::ScreenUvs(part.mesh,gPipSurface);
                 Q6H_LOGI("PIPBOY ASSET: model=%s screenBlock=%u screenName=%s texture=%s uv=(%.6f %.6f)-(%.6f %.6f) rigid=1 anchor=Bip01 L ForeTwist controllers=0",path.c_str(),part.mesh.shapeBlock,part.mesh.shapeName.c_str(),part.mesh.diffuseTexturePath.c_str(),gPipSurface.lo[0],gPipSurface.lo[1],gPipSurface.hi[0],gPipSurface.hi[1]);}
