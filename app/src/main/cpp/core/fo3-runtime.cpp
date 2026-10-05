@@ -752,9 +752,10 @@ float gQ219ArmLengthScale = Q219_ARM_BASE_SCALE;
 // applied immediately so artificial turning stays coherent.
 constexpr float Q213_NECK_YAW_LIMIT = 0.6108652382f; // 35 degrees
 constexpr float Q213_TORSO_FOLLOW_MAX_STEP = 0.0261799388f; // 1.5 deg/frame
-// Q21.14 VR-specific controller-to-avatar calibration requested from in-headset
-// testing: move each solved hand 2.5 cm farther away from the body centreline.
-constexpr float Q214_HAND_OUTWARD_OFFSET = 0.025f;
+// Q21.21: the tracked OpenXR grip pose is the hand target. Do not add a
+// synthetic lateral hand offset; the visible palm anchor already supplies the
+// authored hand-to-controller relationship.
+constexpr float Q214_HAND_OUTWARD_OFFSET = 0.0f;
 bool gQ213TorsoYawReady = false;
 float gQ213TorsoYaw = 0.0f;
 float gQ213LastLocomotionYaw = 0.0f;
@@ -9869,17 +9870,27 @@ bool Q211SolveArm(
     dist = std::clamp(dist, minReach, maxReach);
     outHand = Q211Add(shoulder, Q211Mul(dir, dist));
 
-    Vec3 preferred{
-        left ? -0.75f : 0.75f,
-        -0.30f,
-        0.35f
-    };
+    // Choose the elbow plane from anatomy rather than a fixed diagonal pole.
+    // Gravity gives the natural hanging-elbow solution for ordinary VR poses.
+    // When the arm points almost vertically, fall back to Fallout's authored
+    // shoulder->elbow direction, then only to a side axis in the singular case.
+    Vec3 preferred{0.0f, -1.0f, 0.0f};
     preferred = Q211Sub(
         preferred, Q211Mul(dir, Q211Dot(preferred, dir)));
     if (Q211Length(preferred) < 0.05f) {
+        preferred = Q211Sub(restElbow, shoulder);
+        preferred = Q211Sub(
+            preferred, Q211Mul(dir, Q211Dot(preferred, dir)));
+    }
+    if (Q211Length(preferred) < 0.05f) {
+        preferred = Vec3{left ? -1.0f : 1.0f, 0.0f, 0.0f};
+        preferred = Q211Sub(
+            preferred, Q211Mul(dir, Q211Dot(preferred, dir)));
+    }
+    if (Q211Length(preferred) < 0.05f) {
         preferred = Q211Cross(
-            dir, std::fabs(dir.y) < 0.8f
-                ? Vec3{0.0f, 1.0f, 0.0f}
+            dir, std::fabs(dir.z) < 0.8f
+                ? Vec3{0.0f, 0.0f, 1.0f}
                 : Vec3{1.0f, 0.0f, 0.0f});
     }
     preferred = Q211NormalizeSafe(preferred);
@@ -9899,6 +9910,7 @@ bool Q211SolveArm(
 struct Q213ArmPose {
     Q211Delta upper;
     Q211Delta fore;
+    Q211Delta foreTwist;
     Q211Delta handDelta;
     Vec3 elbow{};
     Vec3 hand{};
@@ -9981,6 +9993,7 @@ Q213ArmPose Q213SolveMasterArm(
         restElbow, restFore,
         pose.elbow, Q211Sub(pose.hand, pose.elbow),
         armLengthScale);
+    pose.foreTwist = pose.fore;
 
     // Keep the hand itself at authored size: move/rotate it with the stretched
     // forearm endpoint, then layer controller roll around the current wrist axis.
@@ -10001,10 +10014,39 @@ Q213ArmPose Q213SolveMasterArm(
                 currentLittleToThumb, currentIntoPalm,
                 gripLittleToThumb, gripIntoPalm,
                 wristRotation)) {
-            const float trace =
-                wristRotation[0] + wristRotation[4] + wristRotation[8];
-            pose.wristTwist = std::acos(
-                std::clamp((trace - 1.0f) * 0.5f, -1.0f, 1.0f));
+            const Vec3 foreAxis =
+                Q211NormalizeSafe(Q211Sub(pose.hand, pose.elbow));
+            Vec3 currentReference = currentIntoPalm;
+            Vec3 targetReference = gripIntoPalm;
+            if (std::fabs(Q211Dot(currentReference, foreAxis)) >
+                std::fabs(Q211Dot(currentLittleToThumb, foreAxis))) {
+                currentReference = currentLittleToThumb;
+                targetReference = gripLittleToThumb;
+            }
+            currentReference = Q211Sub(
+                currentReference,
+                Q211Mul(foreAxis, Q211Dot(currentReference, foreAxis)));
+            targetReference = Q211Sub(
+                targetReference,
+                Q211Mul(foreAxis, Q211Dot(targetReference, foreAxis)));
+            if (Q211Length(currentReference) > 0.01f &&
+                Q211Length(targetReference) > 0.01f) {
+                currentReference = Q211NormalizeSafe(currentReference);
+                targetReference = Q211NormalizeSafe(targetReference);
+                pose.wristTwist = std::atan2(
+                    Q211Dot(
+                        foreAxis,
+                        Q211Cross(currentReference, targetReference)),
+                    Q211Dot(currentReference, targetReference));
+                const Q211Delta twist = Q218MakePivotRotation(
+                    pose.elbow, foreAxis, pose.wristTwist);
+                pose.foreTwist = Q218ComposeRigid(pose.fore, twist);
+                // Q218ComposeRigid composes the rigid portion. Preserve the
+                // authored forearm's axial retarget before that rigid motion.
+                pose.foreTwist.stretchPivot = pose.fore.stretchPivot;
+                pose.foreTwist.stretchAxis = pose.fore.stretchAxis;
+                pose.foreTwist.axialScale = pose.fore.axialScale;
+            }
             const Q211Delta wrist =
                 Q220MakePivotRotationMatrix(
                     pose.hand, wristRotation);
@@ -10024,14 +10066,19 @@ void Q213AssignArmPoseToPart(
         std::vector<Q211Delta>& deltas) {
     for (size_t i = 0u; i < part.bones.size(); ++i) {
         const int role = part.roles[i];
+        const bool foreTwist =
+            part.boneNames[i].find("foretwist") != std::string::npos ||
+            part.boneNames[i].find("forearmtwist") != std::string::npos;
         if (left.solved) {
             if (role == 1) deltas[i] = left.upper;
-            else if (role == 2) deltas[i] = left.fore;
+            else if (role == 2)
+                deltas[i] = foreTwist ? left.foreTwist : left.fore;
             else if (role == 3) deltas[i] = left.handDelta;
         }
         if (right.solved) {
             if (role == 4) deltas[i] = right.upper;
-            else if (role == 5) deltas[i] = right.fore;
+            else if (role == 5)
+                deltas[i] = foreTwist ? right.foreTwist : right.fore;
             else if (role == 6) deltas[i] = right.handDelta;
         }
     }
@@ -10130,25 +10177,15 @@ void UpdateFo3PipboyMount(const Q213ArmPose &pose,
     return;
   gPipShoulder = Q211BindBonePoint(master->bones[master->leftUpperArm]);
   gPipHand = pose.hand;
-  const Vec3 axis = Q211NormalizeSafe(Q211Sub(pose.hand, pose.elbow));
-  // Extract wrist roll around the solved forearm axis, excluding wrist flex.
-  Vec3 reference =
-      std::fabs(pose.fore.stretchAxis.y) < .8f ? Vec3{0, 1, 0} : Vec3{0, 0, 1};
-  auto a = Q211ApplyDeltaVector(pose.fore, reference),
-       b = Q211ApplyDeltaVector(pose.handDelta, reference);
-  a = Q211NormalizeSafe(Q211Sub(a, Q211Mul(axis, Q211Dot(a, axis))));
-  b = Q211NormalizeSafe(Q211Sub(b, Q211Mul(axis, Q211Dot(b, axis))));
-  const float roll = std::atan2(Q211Dot(axis, Q211Cross(a, b)), Q211Dot(a, b));
-  const auto twist = Q218MakePivotRotation(pose.elbow, axis, roll);
-  auto rigid = Q218ComposeRigid(pose.fore, twist);
-  // Place the authored display centre with the existing axial arm retarget,
-  // then apply only rotation to the physical device. Its size never changes.
+  // The device is authored on Bip01 L ForeTwist, so use the same solved
+  // forearm-twist transform as that bone. Keep the casing rigid while allowing
+  // its centre to inherit any arm-length retarget.
+  auto rigid = pose.foreTwist;
   Vec3 modelCenter{gPipSurface.center.x / FO3_UNITS_PER_METRE,
                    FLOOR_Y + gPipSurface.center.z / FO3_UNITS_PER_METRE,
                    SCENE_FORWARD - gPipSurface.center.y / FO3_UNITS_PER_METRE};
   const auto bindCenter = Q211TransformPoint(gPipBind.data(), modelCenter);
-  const auto centre =
-      Q211ApplyDelta(twist, Q211ApplyDelta(pose.fore, bindCenter));
+  const auto centre = Q211ApplyDelta(pose.foreTwist, bindCenter);
   rigid.t = Q211Sub(centre, Q211Rotate(rigid.r, bindCenter));
   rigid.axialScale = 1;
   rigid.active = true;
