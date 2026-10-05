@@ -726,6 +726,7 @@ void Q230PrepareActors(uint32_t cell, uint32_t worldspace,
 bool Fo3DialogueFocus();
 void EndFo3Dialogue(const char* reason);
 void Q230CacheDialogueAnimations(Q230ActorVisual&,const fo3pipdata::Definitions*);
+bool Q230LiveBounds(Q230ActorVisual& actor,std::array<float,3>& lo,std::array<float,3>& hi);
 bool Q230UploadActorPart(Q230ActorVisual& actor, CpuObject& part,
     float centerX, float centerY, float floorZ);
 
