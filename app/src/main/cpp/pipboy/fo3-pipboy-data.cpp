@@ -74,7 +74,7 @@ std::string VoicePath(const Definitions &d, const Info &i, const Response &r,
 bool Relevant(const std::string &t) {
   return t == "RADS" || t == "WRLD" || t == "PERK" || t == "QUST" ||
          t == "MGEF" || t == "TACT" || t == "INFO" || t == "DIAL" ||
-         t == "RACE" || t == "FLST" || t == "IDLE" || t == "SOUN" || t == "VTYP" || t == "SCPT" || t == "NPC_";
+         t == "RACE" || t == "FLST" || t == "IDLE" || t == "SOUN" || t == "VTYP" || t == "SCPT" || t == "NPC_" || t == "PACK";
 }
 void Decode(Definitions &d, const std::string &t, uint32_t id, uint32_t flags,
             const std::vector<uint8_t> &bytes, uint32_t cell, uint32_t world,
@@ -307,6 +307,34 @@ void Decode(Definitions &d, const std::string &t, uint32_t id, uint32_t flags,
     d.dialogueActors[id]=std::move(actor);
     if (id == 7)
       d.playerFemale = (U(Find(s, "ACBS")) & 1) != 0;
+  } else if (t == "PACK") {
+    PackageDefinition package;
+    package.editor=editor;
+    if(auto data=Find(s,"PKDT");data&&data->n>=8) {
+      package.flags=U(data);
+      package.type=data->p[4];
+      package.behaviorFlags=fo3esm::ReadU16(data->p+6);
+      if(data->n>=10) package.typeFlags=fo3esm::ReadU16(data->p+8);
+    }
+    auto location=[&](const Sub* v,PackageLocation& out){
+      if(!v||v->n<12)return;
+      out.type=U(v);out.value=U(v,4);out.radius=static_cast<int32_t>(U(v,8));out.valid=true;
+    };
+    location(Find(s,"PLDT"),package.location);
+    location(Find(s,"PLD2"),package.location2);
+    if(auto schedule=Find(s,"PSDT");schedule&&schedule->n==8) {
+      package.schedule.month=static_cast<int8_t>(schedule->p[0]);
+      package.schedule.weekday=static_cast<int8_t>(schedule->p[1]);
+      package.schedule.date=schedule->p[2];
+      package.schedule.hour=static_cast<int8_t>(schedule->p[3]);
+      package.schedule.duration=static_cast<int32_t>(U(schedule,4));
+      package.schedule.valid=true;
+    }
+    for(auto& v:s) {
+      if(v.type=="CTDA")package.conditions.push_back(Cond(v));
+      else if(v.type=="SCDA"||v.type=="SCTX"||v.type=="SCHR")package.scripted=true;
+    }
+    d.packages[id]=std::move(package);
   } else if (t == "DIAL") {
     auto name = Text(s, "EDID");
     d.topicNames[id] = name;
@@ -424,6 +452,13 @@ void Finalize(Definitions &d) {
   });
   std::unordered_set<uint32_t> retain;
   for(auto& actor:d.referenceScripts)retain.insert(actor.first);
+  for(const auto& entry:d.packages) {
+    const auto keep=[&](const PackageLocation& location) {
+      if(location.valid&&(location.type==0u||location.type==6u)&&location.value)
+        retain.insert(location.value);
+    };
+    keep(entry.second.location);keep(entry.second.location2);
+  }
   for (auto &p : d.targets)
     if (d.doorBases.count(p.second.base))
       d.doors[p.second.cell].push_back(p.second);
