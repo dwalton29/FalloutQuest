@@ -28,21 +28,27 @@ inline View Measure(bool valid, V screen, V normal, V head, V forward,
   v.cone = Dot(Unit(forward), Unit(Sub(screen, head)));
   // Body-root axes: +Y up, -Z forward. Shoulder/solved hand determine arm
   // placement; head rotation is used only by the view cone above.
+  // Height establishes the intentional wrist-raise gesture. Do not gate on
+  // torso-root Z: the head-facing/view-cone tests already prove the physical
+  // screen is in front of the user, while inferred torso yaw can legitimately
+  // lag a real upper-body turn.
   v.raised = screenBody.y > shoulderBody.y - .25f &&
-             handBody.y > shoulderBody.y - .30f && screenBody.z < .12f;
+             handBody.y > shoulderBody.y - .30f;
   v.keepRaised = screenBody.y > shoulderBody.y - .35f &&
-                 handBody.y > shoulderBody.y - .40f && screenBody.z < .18f;
+                 handBody.y > shoulderBody.y - .40f;
   v.valid = valid && solved && std::isfinite(v.distance) &&
             std::isfinite(v.facing) && std::isfinite(v.cone);
   return v;
 }
 inline bool Enter(const View &v) {
-  return v.valid && v.raised && v.distance >= .18f && v.distance <= .65f &&
-         v.facing >= .7660444f && v.cone >= .8191520f;
+  // Physical-wrist UI should tolerate the natural few degrees of controller
+  // and elbow variation produced while looking down at the display.
+  return v.valid && v.raised && v.distance >= .16f && v.distance <= .72f &&
+         v.facing >= .6427876f && v.cone >= .7071068f;
 }
 inline bool Stay(const View &v) {
   return v.valid && (v.raised || v.keepRaised) && v.distance >= .12f &&
-         v.distance <= .80f && v.facing >= .5735764f && v.cone >= .6427876f;
+         v.distance <= .85f && v.facing >= .4226183f && v.cone >= .5f;
 }
 enum class Phase { Dormant, Candidate, Active };
 struct Activation {
