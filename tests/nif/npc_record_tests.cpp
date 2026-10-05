@@ -130,14 +130,15 @@ int main(int argc, char **argv) {
   U32(group, 0);
   Add(group, refs);
   Add(esm, group);
-  Bytes nav,navData;U32(navData,77);U32(navData,3);U32(navData,1);
+  Bytes nav,navData;U32(navData,77);U32(navData,3);U32(navData,1);U32(navData,1);
   while(navData.size()<24)navData.push_back(0);
   Sub(nav,"DATA",navData);
   Bytes vertices;F32(vertices,0);F32(vertices,0);F32(vertices,0);
   F32(vertices,100);F32(vertices,0);F32(vertices,0);
   F32(vertices,0);F32(vertices,100);F32(vertices,0);Sub(nav,"NVVX",vertices);
   Bytes triangle;U16(triangle,0);U16(triangle,1);U16(triangle,2);
-  U16(triangle,0xffff);U16(triangle,0xffff);U16(triangle,0xffff);U32(triangle,0);Sub(nav,"NVTR",triangle);
+  U16(triangle,0);U16(triangle,0xffff);U16(triangle,0xffff);U32(triangle,1);Sub(nav,"NVTR",triangle);
+  Bytes external;U32(external,0);U32(external,201);U16(external,7);Sub(nav,"NVEX",external);
   Bytes navRecord=Record("NAVM",200,nav),worldGroup;
   worldGroup.insert(worldGroup.end(),{'G','R','U','P'});U32(worldGroup,navRecord.size()+24);U32(worldGroup,88);U32(worldGroup,1);U32(worldGroup,0);U32(worldGroup,0);
   Add(worldGroup,navRecord);Add(esm,worldGroup);
@@ -160,7 +161,9 @@ int main(int argc, char **argv) {
   assert(LoadFo3NpcNavigationQ240(77,88,navigation,path.string()));
   assert(navigation.size()==1&&navigation[0].formId==200&&navigation[0].cellFormId==77);
   assert(navigation[0].vertices.size()==3&&navigation[0].triangles.size()==1);
-  assert(navigation[0].triangles[0].vertex[2]==2&&navigation[0].triangles[0].neighbor[0]==-1);
+  assert(navigation[0].triangles[0].vertex[2]==2&&navigation[0].triangles[0].neighbor[0]==0);
+  assert((navigation[0].triangles[0].flags&1u)!=0u&&navigation[0].external.size()==1);
+  assert(navigation[0].external[0].navMeshFormId==201&&navigation[0].external[0].triangle==7);
   std::filesystem::remove(path);
   if (argc > 1) {
     assert(LoadFo3CellActors(0xa96, actors, argv[1]));
