@@ -70,14 +70,21 @@ bool LoadFo3MegatonExteriorActorsQ230(
 
 struct Fo3NpcNavTriangleQ240 {
     uint16_t vertex[3]{0u,0u,0u};
+    // Local triangle index, or NVEX index when the corresponding low flag bit
+    // (1 << edge) is set. 0xffff is no connection.
     int16_t neighbor[3]{-1,-1,-1};
     uint32_t flags=0u;
+};
+struct Fo3NpcNavExternalQ240 {
+    uint32_t navMeshFormId=0u;
+    uint16_t triangle=0u;
 };
 struct Fo3NpcNavMeshQ240 {
     uint32_t formId=0u;
     uint32_t cellFormId=0u;
     std::vector<std::array<float,3>> vertices;
     std::vector<Fo3NpcNavTriangleQ240> triangles;
+    std::vector<Fo3NpcNavExternalQ240> external;
 };
 bool LoadFo3NpcNavigationQ240(
     uint32_t cellFormId,
