@@ -91,11 +91,24 @@ void UpdateFo3Dialogue(double now,float stick,bool a,bool b,bool focused) {
       else
         head={actor->runtime.position[0],actor->runtime.position[1]+1.55f,actor->runtime.position[2]};
     }
-    const float distance=resident?std::sqrt((head[0]-gQ210Head[0])*(head[0]-gQ210Head[0])+(head[2]-gQ210Head[2])*(head[2]-gQ210Head[2])):INFINITY;
+    // Dialogue interruption must use the actor root, not an animated head
+    // sample. Head bones are presentation data and can jump during clip/blend
+    // changes; the runtime root is the stable scene-space actor position.
+    const float distance=resident?std::sqrt(
+      (actor->runtime.position[0]-gQ210Head[0])*(actor->runtime.position[0]-gQ210Head[0])+
+      (actor->runtime.position[2]-gQ210Head[2])*(actor->runtime.position[2]-gQ210Head[2])):INFINITY;
+    const bool alive=actor&&gPlayerSession&&gPlayerSession->player.ActorHealth(gDialogue.actor)>0;
+    const bool combat=actor&&actor->runtime.activity==fo3npc::Activity::Combat;
     if(Fo3PipboyFocus())EndFo3Dialogue("Pip-Boy takes focus");
-    else if(!focused||fo3npc::Interrupted(IsFo3LoadingVisible(),resident,actor&&gPlayerSession&&gPlayerSession->player.ActorHealth(gDialogue.actor)>0,
-      actor&&actor->runtime.activity==fo3npc::Activity::Combat,distance))EndFo3Dialogue("loading/unload/death/combat/walk-away/focus loss");
-    else if(pressB)EndFo3Dialogue("B exit");
+    else if(IsFo3LoadingVisible())EndFo3Dialogue("loading");
+    else if(!resident)EndFo3Dialogue("actor unloaded");
+    else if(!alive)EndFo3Dialogue("actor dead");
+    else if(combat)EndFo3Dialogue("actor combat");
+    else if(!std::isfinite(distance)||distance>fo3npc::DialoguePolicy::LeaveRange)EndFo3Dialogue("walk-away");
+    // OpenXR focus can transiently leave FOCUSED while the application remains
+    // visible (system UI/headset state). Do not destroy an authored conversation
+    // for that presentation-level event; input is already gated by focused below.
+    else if(focused&&pressB)EndFo3Dialogue("B exit");
     else {
       auto ctx=DialogueContext(*actor);
       const auto complete=fo3audio::DialogueCompletion();
@@ -106,7 +119,7 @@ void UpdateFo3Dialogue(double now,float stick,bool a,bool b,bool focused) {
         if(gDialogue.phase==fo3dialogue::Phase::Choices) {
           const auto before=gDialogueCursor.selected;gDialogueCursor.Scroll(stick,now,gDialogue.choices.size());
           if(before!=gDialogueCursor.selected)fo3audio::Scroll();gDialogue.selected=gDialogueCursor.selected;
-          if(pressA&&gDialogue.Choose(gDialogue.selected,ctx,gPlayerSession->player)){fo3audio::NamedSound("UIMenuOK");FlushFo3PlayerState();}
+          if(focused&&pressA&&gDialogue.Choose(gDialogue.selected,ctx,gPlayerSession->player)){fo3audio::NamedSound("UIMenuOK");FlushFo3PlayerState();}
         }
         if(!gDialogue.Active())CleanupFo3Dialogue(actor->source.refFormId,"choice result rejected");
         else {
