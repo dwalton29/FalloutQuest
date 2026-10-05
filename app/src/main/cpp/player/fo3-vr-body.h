@@ -32,11 +32,16 @@ struct Delta {
 inline Delta Segment(V rest,V restAxis,V current,const R&r,float scale=1){Delta d;d.rotation=r;d.translation=current-Rotate(r,rest);d.pivot=rest;d.axis=Unit(restAxis);d.scale=scale;return d;}
 inline Delta RigidMount(const Delta& bone,V bindCentre){Delta d=bone;d.translation=bone.Point(bindCentre)-Rotate(d.rotation,bindCentre);d.scale=1;return d;}
 inline Delta BodyRoot(V authoredEyes,V trackedHead,float torsoYaw){Delta d;d.rotation=Axis({0,1,0},torsoYaw);d.translation=trackedHead-Rotate(d.rotation,authoredEyes);return d;}
-struct ArmRig {V clavicle{},shoulder{},elbow{},wrist{},palm{};bool left=false,valid=false;};
+// Stable physical shoulder-to-wrist measurement, shared by both arms. The
+// configurable adult default is a calibration assumption, not Fallout data.
+constexpr float DefaultWristReach=.62f;
+inline float WristReach(float measured){return std::isfinite(measured)&&measured>=.40f&&measured<=.80f?measured:DefaultWristReach;}
+struct ArmRig {V clavicle{},shoulder{},elbow{},wrist{},palm{};bool left=false,valid=false;float wristReach=DefaultWristReach;};
 struct ArmState {V direction{},pole{};float roll=0;bool valid=false;};
 struct ArmPose {
  Delta clavicle,upper,upperTwist,fore,foreTwist,hand;
  V shoulder{},elbow{},wrist{},palm{};float stretch=1,roll=0,error=0;
+ float armScale=1,normalReach=0,targetDistance=0;bool clamped=false;
  bool valid=false;
 };
 // Extract the axial quaternion component, rather than projecting alternating
@@ -50,6 +55,17 @@ inline float AxialRoll(const R&r,V axis,float previous){
  float a=Dot({x,y,z},axis);if(w*w+a*a<1e-8f)return previous;
  return previous+Wrap(2*std::atan2(a,w)-previous);
 }
+// One canonical neck delta is used both for skin and final eye alignment.
+inline Delta NeckPose(V neck,float relativeYaw){return Segment(neck,{0,1,0},neck,Axis({0,1,0},relativeYaw));}
+inline Delta PosedBodyRoot(V eyes,V hmd,float torsoYaw,const Delta&neck){return BodyRoot(neck.Point(eyes),hmd,torsoYaw);}
+struct Q {float x=0,y=0,z=0,w=1;};
+inline Q CentreOrientation(Q a,Q b){
+ float dot=a.x*b.x+a.y*b.y+a.z*b.z+a.w*b.w,sign=dot<0?-1.f:1.f;
+ Q q{a.x+sign*b.x,a.y+sign*b.y,a.z+sign*b.z,a.w+sign*b.w};
+ float n=std::sqrt(q.x*q.x+q.y*q.y+q.z*q.z+q.w*q.w);
+ if(n<1e-6f||!std::isfinite(n))return {};
+ return {q.x/n,q.y/n,q.z/n,q.w/n}; // slerp at t=.5 for unit quaternions
+}
 inline ArmPose SolveArm(const ArmRig&rig,V target,const R&handRotation,ArmState&state,float dt){
  ArmPose p;if(!rig.valid||!Finite(target))return p;
  for(float f:handRotation)if(!std::isfinite(f))return p;
@@ -59,25 +75,44 @@ inline ArmPose SolveArm(const ArmRig&rig,V target,const R&handRotation,ArmState&
  // to obtain the anatomical wrist target. Never lengthen the forearm to palm.
  V wristTarget=target-Rotate(handRotation,rig.palm-rig.wrist);
  V clav=rig.shoulder-rig.clavicle,reach=wristTarget-rig.shoulder;
- float excess=std::max(0.f,Length(reach)-(ul+fl));
+ p.normalReach=WristReach(rig.wristReach);p.armScale=p.normalReach/(ul+fl);
+ float excess=std::max(0.f,Length(reach)-p.normalReach);
  // VR shoulder contribution: rotate the authored clavicle, preserving its
  // length. Twelve degrees bounds shoulder displacement (~3.3cm on this rig).
- V clavAxis=Cross(clav,reach);float ca=std::min(12*Pi/180,excess/std::max(.01f,Length(clav)));
+ V clavAxis=Cross(clav,reach);float ca=0;
+ if(excess>0){
+  V fromClav=wristTarget-rig.clavicle;float c=Length(clav),w=Length(fromClav);
+  if(c>1e-5f&&w>1e-5f){
+   // Law of cosines: use the minimum anatomical clavicle rotation needed
+   // to make normal wrist reach, rather than approximate translation/excess.
+   float angle=std::acos(std::clamp(Dot(clav,fromClav)/(c*w),-1.f,1.f));
+   float required=std::acos(std::clamp((c*c+w*w-p.normalReach*p.normalReach)/(2*c*w),-1.f,1.f));
+   ca=std::clamp(angle-required,0.f,12*Pi/180);
+  }
+ }
  R cr=Length(clavAxis)>1e-5f?Axis(clavAxis,ca):Identity();
  p.clavicle=Segment(rig.clavicle,clav,rig.clavicle,cr);
  p.shoulder=p.clavicle.Point(rig.shoulder);
  reach=wristTarget-p.shoulder;float d=Length(reach);
  V dir=Unit(reach,state.valid?state.direction:Unit(u));
- // A reversible, near-extension-only maximum 3% soft reach. There is no
- // session calibration, cumulative growth or non-anatomical permanent scale.
- p.stretch=std::clamp(d/(ul+fl),1.f,1.03f);
- float a=ul*p.stretch,b=fl*p.stretch;
+ // Stable symmetric calibration preserves authored upper/forearm ratio.
+ // Emergency reach is separate and reversible; tracking never changes scale.
+ p.targetDistance=d;p.stretch=std::clamp(d/p.normalReach,1.f,1.03f);
+ float scale=p.armScale*p.stretch,a=ul*scale,b=fl*scale;
+ p.clamped=d>a+b;
  d=std::clamp(d,std::fabs(a-b)+1e-5f,a+b-1e-5f);
  p.wrist=p.shoulder+dir*d;
  // Torso-relative down/out/back prior remains nonzero for hanging arms.
  // Transport the last pole into the new reach plane; then rotate toward the
  // prior at a bounded angular velocity. Controller roll never chooses elbow.
- V prior=Project({rig.left?-.45f:.45f,-1,.35f},dir);
+ // Soft gravity prior adapts to reach: hanging arms bend backwards, high
+ // reaches abduct outward, and cross-body/face reaches allow more abduction.
+ // Hand axial roll is deliberately excluded: pronation is a forearm DOF.
+ float side=rig.left?-1.f:1.f;
+ float high=std::max(0.f,dir.y),cross=std::clamp(-side*dir.x,0.f,1.f);
+ float folded=1-std::clamp(d/p.normalReach,0.f,1.f);
+ V prior=Project({side*(.25f+.65f*high+.45f*cross+.25f*folded),
+                  -1.f+.75f*high,.25f+.55f*std::max(0.f,-dir.y)},dir);
  V prev=state.valid?Project(state.pole,dir):prior;
  if(Length(prior)<1e-5f){
   // At exactly the prior direction, even the initial projected pole is zero.
@@ -86,7 +121,7 @@ inline ArmPose SolveArm(const ArmRig&rig,V target,const R&handRotation,ArmState&
  }
  V pole=Unit(prev,Unit(prior));V desired=Unit(prior,pole);
  float angle=std::atan2(Dot(dir,Cross(pole,desired)),std::clamp(Dot(pole,desired),-1.f,1.f));
- if(state.valid){float step=Pi*std::clamp(dt,0.f,.05f);pole=Rotate(Axis(dir,std::clamp(angle,-step,step)),pole);}else pole=desired;
+ if(state.valid){float step=angle*(1-std::exp(-4.f*std::clamp(dt,0.f,.05f)));step=std::clamp(step,-Pi*dt,Pi*dt);pole=Rotate(Axis(dir,step),pole);}else pole=desired;
  float along=(a*a+d*d-b*b)/(2*d),height=std::sqrt(std::max(0.f,a*a-along*along));
  p.elbow=p.shoulder+dir*along+pole*height;
  V normal=Unit(Cross(p.elbow-p.shoulder,p.wrist-p.elbow),Unit(Cross(pole,dir)));
@@ -95,45 +130,38 @@ inline ArmPose SolveArm(const ArmRig&rig,V target,const R&handRotation,ArmState&
  R fr=FrameRotation(f,restNormal,p.wrist-p.elbow,normal);
  V foreAxis=Unit(p.wrist-p.elbow);
  p.roll=AxialRoll(Multiply(handRotation,Transpose(fr)),foreAxis,state.valid?state.roll:0);
- p.upper=Segment(rig.shoulder,u,p.shoulder,ur,p.stretch);
+ p.upper=Segment(rig.shoulder,u,p.shoulder,ur,scale);
  // Upper twist shares half the humeral swing's axial component relative to
  // clavicle transport. These are absolute bind->pose deltas, not chained rolls.
  R swing=FrameRotation(u,Rotate(cr,restNormal),p.elbow-p.shoulder,Rotate(cr,restNormal));
  float upperRoll=AxialRoll(Multiply(ur,Transpose(swing)),Unit(p.elbow-p.shoulder),0);
- p.upperTwist=Segment(rig.shoulder,u,p.shoulder,Multiply(Axis(Unit(p.elbow-p.shoulder),upperRoll*.5f),swing),p.stretch);
- p.fore=Segment(rig.elbow,f,p.elbow,Multiply(Axis(foreAxis,p.roll*.5f),fr),p.stretch);
- p.foreTwist=Segment(rig.elbow,f,p.elbow,Multiply(Axis(foreAxis,p.roll),fr),p.stretch);
+ p.upperTwist=Segment(rig.shoulder,u,p.shoulder,Multiply(Axis(Unit(p.elbow-p.shoulder),upperRoll*.5f),swing),scale);
+ p.fore=Segment(rig.elbow,f,p.elbow,Multiply(Axis(foreAxis,p.roll*.5f),fr),scale);
+ p.foreTwist=Segment(rig.elbow,f,p.elbow,Multiply(Axis(foreAxis,p.roll),fr),scale);
  p.hand=Segment(rig.wrist,f,p.wrist,handRotation);
  p.palm=p.hand.Point(rig.palm);p.error=Length(p.palm-target);
  p.valid=Finite(p.elbow)&&Finite(p.palm);
  if(p.valid){state.direction=dir;state.pole=pole;state.roll=p.roll;state.valid=true;}
  return p;
 }
-struct TorsoState {float yaw=0,lastLocomotion=0,lastHeadYaw=0;V handOffset[2]{};bool handValid[2]{},valid=false;};
-// Torso yaw follows coherent physical head+two-hand turning. Looking around
-// with stationary hands leaves the torso fixed. Snap yaw transports history
-// immediately. No single-frame hand arrangement is treated as a torso sensor.
-inline float SolveTorso(TorsoState&s,V head,float headYaw,float locomotion,
-                       const V hands[2],const bool valid[2],float dt){
- if(!s.valid){s.yaw=locomotion;s.lastLocomotion=locomotion;s.lastHeadYaw=headYaw;s.valid=true;}
- float snap=Wrap(locomotion-s.lastLocomotion);s.yaw=Wrap(s.yaw+snap);
- float headChange=Wrap(headYaw-s.lastHeadYaw-snap);
- float turn[2]{};bool observed[2]{};R rot=Axis({0,1,0},snap);
- for(int i=0;i<2;i++){
-  V old=Rotate(rot,s.handOffset[i]),now=hands[i]-head;old.y=now.y=0;
-  if(valid[i]&&s.handValid[i]&&Length(old)>.12f&&Length(now)>.12f){turn[i]=std::atan2(Cross(old,now).y,Dot(old,now));observed[i]=true;}
- }
- if(observed[0]&&observed[1]&&std::fabs(Wrap(turn[0]-turn[1]))<.08f&&
-    std::fabs(Wrap((turn[0]+turn[1])*.5f-headChange))<.08f){
-  float common=(turn[0]+turn[1])*.5f;
-  // Require head agreement in magnitude as well as sign; arm gestures alone
-  // cannot drag the torso. This also avoids accumulating tracking noise.
-  if(common*headChange>0)s.yaw=Wrap(s.yaw+std::copysign(std::min(std::fabs(common),std::fabs(headChange)),common));
- }else if(!valid[0]&&!valid[1]){
-  float relative=Wrap(headYaw-s.yaw),limit=80*Pi/180;
-  if(std::fabs(relative)>limit)s.yaw=Wrap(s.yaw+std::clamp(relative-std::copysign(limit,relative),-dt,dt));
- }
- for(int i=0;i<2;i++){s.handOffset[i]=hands[i]-head;s.handValid[i]=valid[i];}
- s.lastLocomotion=locomotion;s.lastHeadYaw=headYaw;return s.yaw;
+struct TorsoState {float yaw=0,lastLocomotion=0,outsideTime=0;bool valid=false;};
+// Three-point tracking cannot uniquely observe torso yaw. A comfortable neck
+// deadzone plus sustained-head follow works even with gesturing/missing hands.
+// Hand gestures cannot inject yaw. Snap locomotion transports state once.
+inline float SolveTorso(TorsoState&s,V /*head*/,float headYaw,float locomotion,
+                       const V /*hands*/[2],const bool /*valid*/[2],float dt){
+ if(!s.valid){s.yaw=locomotion;s.lastLocomotion=locomotion;s.valid=true;}
+ const float snap=Wrap(locomotion-s.lastLocomotion);s.yaw=Wrap(s.yaw+snap);
+ s.lastLocomotion=locomotion;dt=std::clamp(dt,0.f,.05f);
+ const float relative=Wrap(headYaw-s.yaw),deadzone=35*Pi/180;
+ if(std::fabs(relative)>deadzone){
+  s.outsideTime+=dt;
+  if(s.outsideTime>=.20f){
+   float error=relative-std::copysign(deadzone,relative);
+   float step=error*(1-std::exp(-dt/.30f));
+   s.yaw=Wrap(s.yaw+std::clamp(step,-Pi*dt,Pi*dt));
+  }
+ }else s.outsideTime=0;
+ return s.yaw;
 }
 } // namespace fo3vr

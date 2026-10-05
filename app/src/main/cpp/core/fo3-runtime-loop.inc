@@ -1248,8 +1248,10 @@ private:
                 XrSpaceLocation gripLocation{XR_TYPE_SPACE_LOCATION};
                 if (CheckXr(xrLocateSpace(gripHandSpaces_[hand], localSpace_, time, &gripLocation),
                             "xrLocateSpace(gripHand)")) {
-                    gripHandPoseValid_[hand] =
-                        (gripLocation.locationFlags & required) == required;
+                    const auto gripTracking=fo3vr::LocationTracking(gripLocation.locationFlags,required,
+                        XR_SPACE_LOCATION_POSITION_TRACKED_BIT|XR_SPACE_LOCATION_ORIENTATION_TRACKED_BIT);
+                    gripHandPoseValid_[hand] = gripTracking.valid;
+                    if(hand==0)pipLeftGripTracked_=gripTracking.tracked;
                     if (gripHandPoseValid_[hand])
                         gripHandLocalPoses_[hand] = gripLocation.pose;
                 }
@@ -1479,6 +1481,10 @@ private:
                 // Q21.0: drive the Fallout body root from the exact virtual
                 // HMD/controller poses used by locomotion and interaction.
                 XrPosef q210HeadLocal=views[0].pose;
+                const auto centreOrientation=fo3vr::CentreOrientation(
+                    {views[0].pose.orientation.x,views[0].pose.orientation.y,views[0].pose.orientation.z,views[0].pose.orientation.w},
+                    {views[1].pose.orientation.x,views[1].pose.orientation.y,views[1].pose.orientation.z,views[1].pose.orientation.w});
+                q210HeadLocal.orientation={centreOrientation.x,centreOrientation.y,centreOrientation.z,centreOrientation.w};
                 q210HeadLocal.position.x=(views[0].pose.position.x+views[1].pose.position.x)*0.5f;
                 q210HeadLocal.position.y=(views[0].pose.position.y+views[1].pose.position.y)*0.5f;
                 q210HeadLocal.position.z=(views[0].pose.position.z+views[1].pose.position.z)*0.5f;
@@ -1524,12 +1530,15 @@ private:
                 fqactor::player={};
                 SynchronizeFo3PipboyEquipment();
                 if(!IsFo3LoadingVisible() && Q210EnsurePlayerBody())Q211UpdatePlayerRig();
-                const auto pipHead=MatrixFromPose(ToVirtualPose(loadingHead));
+                const auto pipHead=MatrixFromPose(q210VirtualHead);
+                const auto headTracking=fo3vr::LocationTracking(viewState.viewStateFlags,
+                    XR_VIEW_STATE_POSITION_VALID_BIT|XR_VIEW_STATE_ORIENTATION_VALID_BIT,
+                    XR_VIEW_STATE_POSITION_TRACKED_BIT|XR_VIEW_STATE_ORIENTATION_TRACKED_BIT);
                 UpdateFo3Pipboy(gStereoFrame,static_cast<double>(frameState.predictedDisplayTime)*1e-9,pipHead.m,
-                    gSceneReady&&!IsFo3LoadingVisible()&&sessionState_==XR_SESSION_STATE_FOCUSED&&q210RightValid
-                    &&(gripHandPoseValid_[0]?pipLeftGripTracked_:pipLeftAimTracked_)
-                    &&(viewState.viewStateFlags&(XR_VIEW_STATE_POSITION_TRACKED_BIT|XR_VIEW_STATE_ORIENTATION_TRACKED_BIT))==(XR_VIEW_STATE_POSITION_TRACKED_BIT|XR_VIEW_STATE_ORIENTATION_TRACKED_BIT),
-                    turnX_,lootScrollY_,activateDownQ1700_,pipBackDown_);
+                    fo3vr::PipboyAvailable(gSceneReady,IsFo3LoadingVisible(),sessionState_==XR_SESSION_STATE_FOCUSED,
+                        headTracking,{gripHandPoseValid_[0],pipLeftGripTracked_},{handPoseValid_[0],pipLeftAimTracked_}),
+                    q210RightValid?turnX_:0,q210RightValid?lootScrollY_:0,
+                    q210RightValid&&activateDownQ1700_,q210RightValid&&pipBackDown_);
                 if(Fo3PipboyFocus())snapTurnLatched_=std::fabs(turnX_)>=.30f;
                 // Q20.13: loading freezes player motion, not world preparation.
                 // Keep CELL/terrain/LOD streaming alive beneath the overlay.

@@ -1,4 +1,5 @@
 #include "player/fo3-vr-body.h"
+#include "player/fo3-vr-tracking.h"
 #include <cassert>
 #include <iostream>
 #include <limits>
@@ -19,8 +20,8 @@ static ArmRig Rig(bool left){
 }
 static void Check(const ArmRig&r,const ArmPose&p){
  assert(p.valid&&Finite(p.elbow)&&Finite(p.wrist)&&Finite(p.palm));
- assert(std::fabs(Length(p.elbow-p.shoulder)-Length(r.elbow-r.shoulder)*p.stretch)<2e-4f);
- assert(std::fabs(Length(p.wrist-p.elbow)-Length(r.wrist-r.elbow)*p.stretch)<2e-4f);
+ assert(std::fabs(Length(p.elbow-p.shoulder)-Length(r.elbow-r.shoulder)*p.armScale*p.stretch)<2e-4f);
+ assert(std::fabs(Length(p.wrist-p.elbow)-Length(r.wrist-r.elbow)*p.armScale*p.stretch)<2e-4f);
  assert(p.stretch>=1&&p.stretch<=1.03001f);
  assert(Near(p.upper.Point(r.elbow),p.elbow));
  assert(Near(p.fore.Point(r.wrist),p.wrist));
@@ -38,9 +39,9 @@ int main(){
  // cross chest, behind shoulder, and near the minimum reach singularity.
  V targets[]={{.2f,-.45f,.04f},{.2f,-.1f,-.32f},{.63f,-.1f,0},
               {.3f,-.22f,-.2f},{.12f,.03f,-.1f},{.1f,-.1f,-.2f},
-              {-.1f,-.15f,-.15f},{.23f,-.04f,.15f},r.shoulder};
+              {-.1f,-.15f,-.15f},{.23f,-.04f,.15f},{.2f,.4f,-.15f},{.2f,-.6f,-.05f},r.shoulder};
  for(V target:targets){auto p=SolveArm(r,target,Identity(),state,1.f/72);Check(r,p);
-  if(Length(target-r.shoulder)<.4f&&Length(target-r.shoulder)>.1f)assert(p.error<2e-4f);
+  if(Length(target-r.shoulder)>.1f)assert(p.error<2e-4f);
  }
  // Exact elbow-prior singularity on the first pose, without any history.
  for(bool left:{false,true}){
@@ -88,21 +89,85 @@ int main(){
  R hand=Multiply(Axis(axis,1.2f),unrolled);
  state={};auto rolled=SolveArm(r,wristTarget+Rotate(hand,r.palm-r.wrist),hand,state,.014f);Check(r,rolled);
  assert(std::fabs(rolled.roll-1.2f)<1e-3f);
+ assert(Near(base.elbow,rolled.elbow)); // wrist roll never drives the elbow
  R relative=Multiply(rolled.foreTwist.rotation,Transpose(rolled.fore.rotation));
  assert(std::fabs(AxialRoll(relative,Unit(rolled.wrist-rolled.elbow),.6f)-.6f)<1e-3f);
- // Torso does not follow independent head yaw. Snap turning transports history
- // exactly once; coherent physical turns reproduce the same root-relative pose.
- TorsoState torso;V head{0,1.6f,0},hands[2]={{-.2f,1.3f,-.3f},{.2f,1.3f,-.3f}};
- bool valid[2]={true,true};SolveTorso(torso,head,0,0,hands,valid,.014f);
- for(int i=1;i<=100;i++)assert(std::fabs(SolveTorso(torso,head,i*.012f,0,hands,valid,.014f))<1e-5f);
- torso=TorsoState{};SolveTorso(torso,head,0,0,hands,valid,.014f);
- R snap=Axis({0,1,0},Pi/4);V turned[2];for(int i=0;i<2;i++)turned[i]=head+Rotate(snap,hands[i]-head);
- assert(std::fabs(SolveTorso(torso,head,Pi/4,Pi/4,turned,valid,.014f)-Pi/4)<1e-5f);
- torso=TorsoState{};SolveTorso(torso,head,0,0,hands,valid,.014f);
- for(int n=1;n<=100;n++){float yaw=n*.01f;R rot=Axis({0,1,0},yaw);
-  for(int i=0;i<2;i++)turned[i]=head+Rotate(rot,hands[i]-head);
-  assert(std::fabs(SolveTorso(torso,head,yaw,0,turned,valid,.014f)-yaw)<1e-4f);
+ // Small independent looks preserve shoulders. Sustained large turns follow
+ // with identical results under independent/missing controller evidence.
+ V head{0,1.6f,0},hands[2]={{-.2f,1.3f,-.3f},{.2f,1.3f,-.3f}};
+ bool valid[2]={true,true};TorsoState torso;
+ for(int i=0;i<100;i++)assert(std::fabs(SolveTorso(torso,head,.5f,0,hands,valid,.014f))<1e-5f);
+ for(float speed:{.3f,2.f})for(int mode=0;mode<4;mode++){
+  torso={};bool tracked[2]={mode<3,mode<2};float old=0;
+  for(int i=0;i<400;i++){
+   float yaw=std::min(1.8f,i*.014f*speed);
+   V gesture[2]={{std::sin(i*.1f),1.4f,-.1f},{.1f,1+std::cos(i*.2f)*.2f,-.3f}};
+   float now=SolveTorso(torso,head,yaw,0,gesture,tracked,.014f);
+   assert(std::fabs(Wrap(now-old))<=Pi*.0141f);old=now;
+  }
+  for(int i=0;i<100;i++)SolveTorso(torso,head,1.8f,0,hands,tracked,.014f);
+  assert(std::fabs(Wrap(1.8f-torso.yaw))<.66f);
+  float before=torso.yaw;for(int i=0;i<100;i++)SolveTorso(torso,head,before,0,hands,tracked,.014f);
+  assert(std::fabs(torso.yaw-before)<1e-5f); // returning to torso centre
  }
+ torso={};SolveTorso(torso,head,0,0,hands,valid,.014f);
+ float snap=Pi/4;
+ assert(std::fabs(SolveTorso(torso,head,snap,snap,hands,valid,.014f)-snap)<1e-5f);
+ for(int i=0;i<100;i++)assert(std::fabs(SolveTorso(torso,head,snap,snap,hands,valid,.014f)-snap)<1e-5f);
+ // Real adult controller workspace, not only a short authored extension.
+ // Orient the measured palm offset along reach, then require precise tracking
+ // through the calibrated limit; only beyond emergency reach may clamp.
+ for(bool left:{false,true}){
+  auto rig=Rig(left);ArmState history;float side=left?-1.f:1.f;
+  R orientation=FrameRotation({side,0,0},{0,1,0},{0,0,-1},{0,1,0});
+  float palmOffset=Length(rig.palm-rig.wrist);
+  for(float distance:{.50f,.55f,.60f,.65f,rig.wristReach+palmOffset}){
+   V target=rig.shoulder+V{0,0,-distance};
+   auto p=SolveArm(rig,target,orientation,history,.014f);Check(rig,p);
+   assert(p.error<2e-4f&&!p.clamped);assert(p.stretch<1.0001f);
+   assert(std::fabs(p.armScale-rig.wristReach/(Length(rig.elbow-rig.shoulder)+Length(rig.wrist-rig.elbow)))<1e-6f);
+  }
+  auto justBeyond=SolveArm(rig,rig.shoulder+V{0,0,-(rig.wristReach+palmOffset+.01f)},orientation,history,.014f);
+  Check(rig,justBeyond);assert(justBeyond.error<2e-4f&&!justBeyond.clamped);
+  float scale=rig.wristReach/(Length(rig.elbow-rig.shoulder)+Length(rig.wrist-rig.elbow));
+  auto extreme=SolveArm(rig,rig.shoulder+V{0,0,-(rig.wristReach+palmOffset+.12f)},orientation,history,.014f);
+  Check(rig,extreme);assert(extreme.clamped&&extreme.stretch==1.03f);
+  auto returned=SolveArm(rig,rig.shoulder+V{0,0,-.50f},orientation,history,.014f);
+  assert(returned.stretch==1&&std::fabs(returned.armScale-scale)<1e-6f&&returned.error<2e-4f);
+ }
+ // Explicit deliberate calibration changes both sides identically and is
+ // independent of any tracking history; invalid measurements use the default.
+ assert(WristReach(-1)==DefaultWristReach);
+ for(float measured:{.50f,.62f,.70f}){
+  auto right=Rig(false),left=Rig(true);right.wristReach=left.wristReach=measured;
+  ArmState rs,ls;V target=right.shoulder+V{.15f,-.1f,-.3f};
+  auto rp=SolveArm(right,target,Identity(),rs,.014f);
+  auto lp=SolveArm(left,Mirror(target),Identity(),ls,.014f);
+  Check(right,rp);Check(left,lp);assert(Near(Mirror(rp.elbow),lp.elbow));
+  assert(rp.normalReach==measured&&rp.armScale==lp.armScale);
+ }
+ // Production tracking extraction and availability: valid is distinct from
+ // tracked; a valid untracked grip must not silently select tracked aim.
+ constexpr uint64_t validity=3,tracking=12;
+ auto yes=LocationTracking(15,validity,tracking),inferred=LocationTracking(3,validity,tracking);
+ assert(yes.valid&&yes.tracked&&inferred.valid&&!inferred.tracked);
+ assert(PipboyAvailable(true,false,true,yes,yes,{}));
+ assert(!PipboyAvailable(true,false,true,yes,inferred,yes));
+ assert(PipboyAvailable(true,false,true,yes,{},yes)); // aim fallback
+ assert(!PipboyAvailable(true,false,true,yes,{},{}));
+ assert(!PipboyAvailable(true,false,true,inferred,yes,yes));
+ assert(!PipboyAvailable(true,false,true,{},yes,yes));
+ assert(!PipboyAvailable(true,false,false,yes,yes,yes));
+ assert(!PipboyAvailable(true,true,true,yes,yes,yes));
+ // Right controller is absent from viewing policy, by design.
+ for(bool rightTracked:{false,true}){(void)rightTracked;assert(PipboyAvailable(true,false,true,yes,yes,{}));}
+ // Midpoint is symmetric, unit, and invariant to quaternion hemisphere.
+ Q a{0,std::sin(.1f),0,std::cos(.1f)},b{0,-std::sin(.1f),0,std::cos(.1f)};
+ auto centre=CentreOrientation(a,b),reverse=CentreOrientation(b,a);
+ assert(std::fabs(centre.y)<1e-6f&&std::fabs(centre.w-1)<1e-6f);
+ assert(std::fabs(reverse.y-centre.y)<1e-6f);
+ b={-b.x,-b.y,-b.z,-b.w};centre=CentreOrientation(a,b);
+ assert(std::fabs(centre.y)<1e-6f&&std::fabs(centre.w-1)<1e-6f);
  // Invalid inputs never overwrite continuity history or produce an active pose.
  assert(!SolveArm(r,{std::numeric_limits<float>::quiet_NaN(),0,0},Identity(),state,.014f).valid);
  // Production body-root mapping aligns all three eye coordinates and applies
@@ -110,6 +175,11 @@ int main(){
  V eyes{0,.162266f,-.0975711f},hmd{2,1.65f,3};
  for(float yaw:{-Pi,-Pi/2,0.f,Pi/4,Pi}){
   Delta root=BodyRoot(eyes,hmd,yaw);assert(Near(root.Point(eyes),hmd));
+  for(float neckYaw:{-Pi/2,-Pi/3,-Pi/6,0.f,Pi/6,Pi/3,Pi/2}){
+   auto neck=NeckPose({0,.03f,-.04f},neckYaw);
+   auto posedRoot=PosedBodyRoot(eyes,hmd,yaw,neck);
+   assert(Near(posedRoot.Point(neck.Point(eyes)),hmd,1e-6f));
+  }
   V controller=root.Point(normal.palm);
   V local=Rotate(Transpose(root.rotation),controller-root.translation);
   assert(Near(local,normal.palm));

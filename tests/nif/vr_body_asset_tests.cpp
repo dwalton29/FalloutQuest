@@ -1,6 +1,7 @@
 #include "../../app/src/main/cpp/rendering/mesh/fo3-static-nif.cpp"
 #include "player/fo3-vr-body.h"
 #include "ui/pipboy/fo3-pipboy-mesh.h"
+#include "ui/pipboy/fo3-pipboy-state.h"
 #include <cassert>
 #include <fstream>
 #include <iostream>
@@ -29,7 +30,13 @@ int main(int argc,char**argv){
   for(size_t i=0;i<m.positions.size();i+=3){V p{m.positions[i],m.positions[i+1],m.positions[i+2]};lo={std::min(lo.x,p.x),std::min(lo.y,p.y),std::min(lo.z,p.z)};hi={std::max(hi.x,p.x),std::max(hi.y,p.y),std::max(hi.z,p.z)};}
   V c=(lo+hi)*.5f;auto eye=fo3anim::Point(skeleton.bindGlobal[head],{c.x,c.y,c.z});eyeSum=eyeSum+Convert({eye[0],eye[1],eye[2]});
  }
- V anchor=eyeSum*.5f;assert(anchor.y>BonePoint(skeleton,head).y+.08f);
+ V anchor=eyeSum*.5f;
+ int neckIndex=fo3anim::FindBone(skeleton,"Bip01 Neck");assert(neckIndex>=0);
+ for(float torso:{-1.f,0.f,1.f})for(float yaw:{-Pi/2,-Pi/3,-Pi/6,0.f,Pi/6,Pi/3,Pi/2}){
+  auto neck=NeckPose(BonePoint(skeleton,neckIndex),yaw);V hmd{2,1.7f,3};
+  auto root=PosedBodyRoot(anchor,hmd,torso,neck);
+  assert(Length(root.Point(neck.Point(anchor))-hmd)<1e-6f);
+ }assert(anchor.y>BonePoint(skeleton,head).y+.08f);
  std::vector<Fo3StaticNifMesh>pip;assert(LoadFo3StaticNifMeshes(argv[4],pip));fo3pip::Surface screen;
  for(const auto&m:pip)if(fo3pip::Screen(m))screen=fo3pip::Inspect(m);
  assert(screen.valid);int mount=fo3anim::FindBone(skeleton,"Bip01 L ForeTwist");assert(mount>=0);
@@ -51,12 +58,38 @@ int main(int argc,char**argv){
   assert(Length(Rotate(mapping,inward)-gripInward)<1e-4f);
   V gripTarget{side==0?-.2f:.2f,anchor.y-.25f,anchor.z-.25f};
   auto gripPose=SolveArm(rig,gripTarget,mapping,state,.014f);assert(gripPose.valid&&gripPose.error<2e-4f);
+  // Actual mesh-derived grip basis at adult reach distances.
+  for(float distance:{.50f,.55f,.60f,.65f}){
+   V target=rig.shoulder+V{0,0,-distance};
+   auto extended=SolveArm(rig,target,mapping,state,.014f);
+   assert(extended.valid&&extended.error<2e-4f&&!extended.clamped);
+   assert(extended.stretch<1.0001f);
+  }
   for(float angle:{-Pi,-Pi/2,0.f,Pi/2,Pi}){
    R handRotation=Axis({0,0,1},angle);V target{side==0?-.2f:.2f,anchor.y-.25f,anchor.z-.3f};
    auto pose=SolveArm(rig,target,handRotation,state,.014f);assert(pose.valid&&pose.error<2e-4f);
    auto device=RigidMount(pose.foreTwist,bindCentre);assert(Length(device.Point(bindCentre)-pose.foreTwist.Point(bindCentre))<1e-5f);
    // The Pip-Boy is rigid even when near-extension forearm stretch is active.
    V a=device.Point(bindCentre),b=device.Point(bindCentre+V{0,.1f,0});assert(std::fabs(Length(b-a)-.1f)<1e-5f);
+  }
+  if(side==0){
+   V n{screen.normal.x,screen.normal.z,-screen.normal.y};
+   V bindNormal{bind[0]*n.x+bind[4]*n.y+bind[8]*n.z,
+                bind[1]*n.x+bind[5]*n.y+bind[9]*n.z,
+                bind[2]*n.x+bind[6]*n.y+bind[10]*n.z};
+   int presentations=0;float bestFacing=-1;
+   // Original screen presented in a natural raised left-wrist workspace.
+   // Sweep controller roll, rather than invent a device normal or forearm.
+   for(int degree=-180;degree<=180;degree+=5){
+    R rotation=Multiply(Axis({0,0,1},degree*Pi/180),mapping);ArmState fresh;
+    auto pose=SolveArm(rig,{-.12f,anchor.y-.18f,anchor.z-.30f},rotation,fresh,.014f);
+    auto device=RigidMount(pose.foreTwist,bindCentre);V c=device.Point(bindCentre),normal=Rotate(device.rotation,bindNormal);
+    auto view=fo3pip::Measure(true,{c.x,c.y,c.z},{normal.x,normal.y,normal.z},{anchor.x,anchor.y,anchor.z},{0,0,-1},
+        {c.x,c.y,c.z},{pose.shoulder.x,pose.shoulder.y,pose.shoulder.z},{pose.palm.x,pose.palm.y,pose.palm.z},pose.valid);
+    bestFacing=std::max(bestFacing,view.facing);if(fo3pip::Enter(view))++presentations;
+   }
+   std::cout<<"Original PipBoyArm raised-pose entry samples="<<presentations<<" bestFacing="<<bestFacing<<"\n";
+   assert(presentations>=3); // broad presentation, not one exact orientation
   }
   std::cout<<"Original "<<prefix<<" upper="<<Length(rig.elbow-rig.shoulder)<<" fore="<<Length(rig.wrist-rig.elbow)<<" palmOffset="<<Length(rig.palm-rig.wrist)<<" passed\n";
  }

@@ -20,6 +20,12 @@ class Pipboy(unittest.TestCase):
         self.assertNotIn('pose.handDelta',mount)
         self.assertNotIn('gQ218LeftHandQuat',mount)
         self.assertIn('gPipBind',mount);self.assertIn('gQ210PlayerRoot',mount)
+    def test_math_helpers_are_wired_to_xr(self):
+        loop=(ROOT/'core/fo3-runtime-loop.inc').read_text()
+        self.assertIn('pipLeftGripTracked_=gripTracking.tracked',loop)
+        self.assertIn('fo3vr::PipboyAvailable(',loop)
+        self.assertIn('fo3vr::CentreOrientation(',loop)
+        self.assertIn('MatrixFromPose(q210VirtualHead)',loop)
     def test_bsa_prefixed_pipboy_path_is_classified(self):
         core=(ROOT/'core/fo3-runtime.cpp').read_text()
         self.assertIn('const bool pipboy=Q210EndsWithInsensitive(',core)

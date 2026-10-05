@@ -21,21 +21,21 @@ struct View {
   bool keepRaised = false;
 };
 inline View Measure(bool valid, V screen, V normal, V head, V forward,
-                    V screenBody, V shoulderBody, V handBody, bool solved) {
+                    V screenBody, V shoulderBody, V /*handBody*/, bool solved) {
   View v;
   v.distance = Length(Sub(head, screen));
   v.facing = Dot(Unit(normal), Unit(Sub(head, screen)));
   v.cone = Dot(Unit(forward), Unit(Sub(screen, head)));
+  // The physical screen alone establishes raising; hand pivot height is
+  // redundant and can veto a correctly presented display during wrist flex.
   // Body-root axes: +Y up, -Z forward. Shoulder/solved hand determine arm
   // placement; head rotation is used only by the view cone above.
   // Height establishes the intentional wrist-raise gesture. Do not gate on
   // torso-root Z: the head-facing/view-cone tests already prove the physical
   // screen is in front of the user, while inferred torso yaw can legitimately
   // lag a real upper-body turn.
-  v.raised = screenBody.y > shoulderBody.y - .25f &&
-             handBody.y > shoulderBody.y - .30f;
-  v.keepRaised = screenBody.y > shoulderBody.y - .35f &&
-                 handBody.y > shoulderBody.y - .40f;
+  v.raised = screenBody.y > shoulderBody.y - .25f;
+  v.keepRaised = screenBody.y > shoulderBody.y - .35f;
   v.valid = valid && solved && std::isfinite(v.distance) &&
             std::isfinite(v.facing) && std::isfinite(v.cone);
   return v;
@@ -44,11 +44,11 @@ inline bool Enter(const View &v) {
   // Physical-wrist UI should tolerate the natural few degrees of controller
   // and elbow variation produced while looking down at the display.
   return v.valid && v.raised && v.distance >= .16f && v.distance <= .72f &&
-         v.facing >= .6427876f && v.cone >= .7071068f;
+         v.facing >= .5f && v.cone >= .5735764f;
 }
 inline bool Stay(const View &v) {
   return v.valid && (v.raised || v.keepRaised) && v.distance >= .12f &&
-         v.distance <= .85f && v.facing >= .4226183f && v.cone >= .5f;
+         v.distance <= .85f && v.facing >= .3420201f && v.cone >= .4226183f;
 }
 enum class Phase { Dormant, Candidate, Active };
 struct Activation {

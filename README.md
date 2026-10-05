@@ -194,4 +194,5 @@ Users supply files from their own legitimate Fallout 3 installation.
 
 This project is not affiliated with or endorsed by Bethesda Softworks or Meta.
 
-Player body v160: [authored VR rig architecture and validation](docs/VR-BODY-v160.md).
+Player body v161: [calibrated reach, posed-eye alignment and headset-feedback corrections](docs/VR-BODY-v161.md).
+The [v160 authored-rig audit](docs/VR-BODY-v160.md) records the original architectural rework.

@@ -1,4 +1,5 @@
 #include "ui/pipboy/fo3-pipboy-state.h"
+#include "player/fo3-vr-tracking.h"
 #include <cassert>
 #include <iostream>
 using namespace fo3pip;
@@ -97,6 +98,24 @@ int main() {
       Measure(true, {0, 1.3f, -.4f}, {0, 0, 1}, {0, 1.5f, 0}, {0, 0, -1},
               {0, 1.3f, -.4f}, {-.2f, 1.4f, 0}, {0, 1.35f, -.4f}, true);
   assert(Enter(view));
+  // The production XR flag extraction -> selection -> view -> activation path.
+  for(bool rightTracked:{false,true}){
+    (void)rightTracked;
+    auto tracked=fo3vr::LocationTracking(15,3,12);
+    bool available=fo3vr::PipboyAvailable(true,false,true,tracked,tracked,{});
+    auto presented=Measure(available,{0,1.3f,-.4f},{0,0,1},{0,1.5f,0},{0,0,-1},
+                           {0,1.3f,-.4f},{-.2f,1.4f,0},{0,.9f,-.4f},true);
+    Activation physical;physical.Step(presented,0);physical.Step(presented,.151);
+    assert(physical.Focus()); // low hand pivot does not veto a raised screen
+    presented.valid=fo3vr::PipboyAvailable(true,false,true,tracked,{true,false},tracked);
+    physical.Step(presented,.2);assert(!physical.Focus());
+  }
+  // Ordinary oblique screen presentation has a broad entry region and a
+  // wider stay region, with the existing temporal intentionality preserved.
+  for(float facing:{0.f,30.f,55.f})for(float cone:{0.f,25.f,50.f}){
+    auto oblique=view;oblique.facing=std::cos(facing*3.14159265f/180);
+    oblique.cone=std::cos(cone*3.14159265f/180);assert(Enter(oblique));
+  }
   auto torsoLag =
       Measure(true, {0, 1.3f, -.4f}, {0, 0, 1}, {0, 1.5f, 0}, {0, 0, -1},
               {0, 1.3f, .5f}, {-.2f, 1.4f, 0}, {0, 1.35f, .5f}, true);

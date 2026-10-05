@@ -1,4 +1,8 @@
 #include "player/fo3-vr-body.h"
+#include "player/fo3-vr-tracking.h"
+#ifdef __ANDROID__
+#include <sys/system_properties.h>
+#endif
 #include "ui/pipboy/fo3-pipboy-mesh.h"
 #include "ui/pipboy/fo3-pipboy-renderer.h"
 #include "world/interaction/fo3-shoulder-zone.h"
@@ -14,6 +18,7 @@
 #include "world/fo3-world-streaming.h"
 void SetNextFo3CollisionExteriorModeQ1931(bool exterior);
 #include <array>
+#include <cstdlib>
 #include <atomic>
 #include <memory>
 #include <mutex>
@@ -741,6 +746,7 @@ bool gQ217ThumbTouched[2]{false, false};
 
 // One authored skeleton and one mutable VR pose history. No session arm growth.
 fo3anim::Skeleton gVrSkeleton;
+fo3vr::Delta gVrNeckPose;fo3vr::ArmPose gVrSolvedArms[2];
 Vec3 gVrEyeAnchor{},gVrNeckAnchor{};bool gVrEyeAnchorValid=false;
 fo3vr::ArmRig gVrArms[2];
 fo3vr::ArmState gVrArmState[2];
@@ -9621,7 +9627,7 @@ Q211Delta RuntimeDelta(const fo3vr::Delta& d){
 struct Q213ArmPose {
     Q211Delta clavicle,upper,upperTwist,fore,foreTwist,handDelta;
     Vec3 shoulder{},elbow{},hand{};
-    float stretch=1,wristTwist=0,error=0;bool solved=false;
+    bool solved=false;
 };
 void BuildVrAuthoredArms(){
     // Original rigid eye NIFs are Head-bone-local. Their bounding-box centres
@@ -9659,6 +9665,13 @@ void BuildVrAuthoredArms(){
         Vec3 palm{};float weight=0;std::string source;
         if(!Q222FindVisibleGrabPalmAnchor(rig.left,palm,weight,source))continue;
         rig.palm=VrPoint(palm);rig.valid=true;
+        // Read only during rig construction. User measurement is stable across
+        // equipment rebuilds and never inferred from the longest live reach.
+#ifdef __ANDROID__
+        char reachProperty[PROP_VALUE_MAX]{};
+        if(__system_property_get("debug.falloutquest.wrist_reach_m",reachProperty)>0)
+            rig.wristReach=fo3vr::WristReach(std::strtof(reachProperty,nullptr));
+#endif
         Q6H_LOGI("VR RIG AUTHORED: side=%d upper=%.4f fore=%.4f palmOffset=%.4f source=%s",side,
             fo3vr::Length(rig.elbow-rig.shoulder),fo3vr::Length(rig.wrist-rig.elbow),fo3vr::Length(rig.palm-rig.wrist),source.c_str());
     }
@@ -9670,17 +9683,17 @@ Q213ArmPose Q213SolveMasterArm(bool left,Vec3 target,const Q220HandBasis& basis,
     fo3vr::R hand=fo3vr::Identity();
     if(!Q220BasisRotation(basis.littleToThumb,basis.intoPalm,across,inward,hand.data()))return pose;
     const auto solved=fo3vr::SolveArm(gVrArms[side],VrPoint(target),hand,gVrArmState[side],gVrPoseDt);
+    gVrSolvedArms[side]=solved;
     if(!solved.valid)return pose;
     pose.clavicle=RuntimeDelta(solved.clavicle);pose.upper=RuntimeDelta(solved.upper);
     pose.upperTwist=RuntimeDelta(solved.upperTwist);pose.fore=RuntimeDelta(solved.fore);
     pose.foreTwist=RuntimeDelta(solved.foreTwist);pose.handDelta=RuntimeDelta(solved.hand);
     pose.shoulder=RuntimePoint(solved.shoulder);pose.elbow=RuntimePoint(solved.elbow);
-    pose.hand=RuntimePoint(solved.palm);pose.stretch=solved.stretch;
-    pose.wristTwist=solved.roll;pose.error=solved.error;pose.solved=true;return pose;
+    pose.hand=RuntimePoint(solved.palm);pose.solved=true;return pose;
 }
 void Q213AssignArmPoseToPart(const Q211PlayerRigPart& part,const Q213ArmPose& left,
                            const Q213ArmPose& right,std::vector<Q211Delta>& deltas){
-    const Q211Delta neck=Q218MakePivotRotation(gVrNeckAnchor,{0,1,0},Q218WrapAngle(gQ210Head[3]-gQ213TorsoYaw));
+    const Q211Delta neck=RuntimeDelta(gVrNeckPose);
     for(size_t i=0;i<part.bones.size();i++){
         switch(part.roles[i]){
             case 1:if(left.solved)deltas[i]=left.upper;break;
@@ -9792,6 +9805,30 @@ void UpdateFo3Pipboy(uint64_t frame, double now, const float *headPose,
   }
   const auto old = gPipActivation.phase;
   gPipActivation.Step(view, now);
+  if ((gQ211TrackingSerial % 180u) == 1u) {
+    const auto eye=Q211TransformPoint(gQ210PlayerRoot,RuntimePoint(gVrNeckPose.Point(VrPoint(gVrEyeAnchor))));
+    Q6H_LOGI("VR BODY: HMD=(%.3f %.3f %.3f) posedEye=(%.3f %.3f %.3f) eyeError=%.5f torsoDeg=%.1f neckDeg=%.1f pipMount=%d pipAvailable=%d pipValid=%d distance=%.3f facingDeg=%.1f coneDeg=%.1f raised=%d phase=%d",
+        gQ210Head[0],gQ210Head[1],gQ210Head[2],eye.x,eye.y,eye.z,
+        fo3vr::Length(VrPoint(eye)-fo3vr::V{gQ210Head[0],gQ210Head[1],gQ210Head[2]}),
+        gQ213TorsoYaw*57.29578f,fo3vr::Wrap(gQ210Head[3]-gQ213TorsoYaw)*57.29578f,
+        gPipSolved,available,view.valid,view.distance,
+        std::acos(std::clamp(view.facing,-1.f,1.f))*57.29578f,
+        std::acos(std::clamp(view.cone,-1.f,1.f))*57.29578f,view.raised,int(gPipActivation.phase));
+    for(int i=0;i<2;i++){
+        const auto& p=gVrSolvedArms[i];
+        const auto shoulder=Q211TransformPoint(gQ210PlayerRoot,RuntimePoint(p.shoulder));
+        const auto elbow=Q211TransformPoint(gQ210PlayerRoot,RuntimePoint(p.elbow));
+        const auto palm=Q211TransformPoint(gQ210PlayerRoot,RuntimePoint(p.palm));
+        const float* target=i==0?gQ210LeftHand:gQ210RightHand;
+        const bool valid=i==0?gQ210LeftHandValid:gQ210RightHandValid;
+        Q6H_LOGI("VR BODY ARM: side=%d valid=%d shoulder=(%.3f %.3f %.3f) target=(%.3f %.3f %.3f) palm=(%.3f %.3f %.3f) error=%.4f elbow=(%.3f %.3f %.3f) armScale=%.4f stretch=%.4f wristDistance=%.3f palmDistance=%.3f upper=%.3f fore=%.3f normalWristReach=%.3f normalPalmReach=%.3f clamped=%d rollDeg=%.1f",
+            i,valid&&p.valid,shoulder.x,shoulder.y,shoulder.z,target[0],target[1],target[2],palm.x,palm.y,palm.z,p.error,
+            elbow.x,elbow.y,elbow.z,p.armScale,p.stretch,p.targetDistance,
+            fo3vr::Length(VrPoint(shoulder)-fo3vr::V{target[0],target[1],target[2]}),
+            fo3vr::Length(p.elbow-p.shoulder),fo3vr::Length(p.wrist-p.elbow),p.normalReach,
+            p.normalReach+fo3vr::Length(gVrArms[i].palm-gVrArms[i].wrist),p.clamped,p.roll*57.29578f);
+    }
+  }
   if (old != gPipActivation.phase) {
     Q6H_LOGI("PIPBOY VIEW: state=%d->%d distance=%.3f facingDeg=%.1f "
              "viewDeg=%.1f raised=%d debounceMs=150",
@@ -9870,6 +9907,7 @@ void Q211UpdatePlayerRig() {
         Q220FindAuthoredHandBasis(false, q220RightAuthoredBasis);
 
     Q213ArmPose q213LeftPose,q213RightPose;
+    gVrSolvedArms[0]={};gVrSolvedArms[1]={};
     if(gQ210LeftHandValid)q213LeftPose=Q213SolveMasterArm(true,leftTarget,q220LeftAuthoredBasis,leftAcrossRoot,leftPalmRoot,q220LeftBasisReady);
     else gVrArmState[0]={};
     if(gQ210RightHandValid)q213RightPose=Q213SolveMasterArm(false,rightTarget,q220RightAuthoredBasis,rightAcrossRoot,rightPalmRoot,q220RightBasisReady);
@@ -10016,18 +10054,7 @@ void Q211UpdatePlayerRig() {
         q221LeftPalmValid, q221LeftPalmWorld,
         q221RightPalmValid, q221RightPalmWorld);
 
-    if ((gQ211TrackingSerial % 180u) == 1u) {
-        const Q213ArmPose poses[2]={q213LeftPose,q213RightPose};const Vec3 targets[2]={leftTarget,rightTarget};
-        for(int i=0;i<2;i++){
-            const auto& p=poses[i];const auto& r=gVrArms[i];
-            Q6H_LOGI("VR BODY: side=%d valid=%d target=(%.3f %.3f %.3f) palm=(%.3f %.3f %.3f) error=%.4f shoulder=(%.3f %.3f %.3f) elbow=(%.3f %.3f %.3f) upper=%.4f fore=%.4f stretch=%.4f rollDeg=%.1f torsoDeg=%.1f neckDeg=%.1f pipMount=%d",
-                i,p.solved,targets[i].x,targets[i].y,targets[i].z,p.hand.x,p.hand.y,p.hand.z,p.error,
-                p.shoulder.x,p.shoulder.y,p.shoulder.z,p.elbow.x,p.elbow.y,p.elbow.z,
-                fo3vr::Length(r.elbow-r.shoulder)*p.stretch,fo3vr::Length(r.wrist-r.elbow)*p.stretch,
-                p.stretch,p.wristTwist*57.29578f,gQ213TorsoYaw*57.29578f,
-                Q218WrapAngle(gQ210Head[3]-gQ213TorsoYaw)*57.29578f,gPipSolved);
-        }
-    }
+
 }
 
 void Q210DeletePlayerBody(bool equipmentChange=false) {
@@ -12838,9 +12865,9 @@ void SetFo3PlayerBodyTrackingQ210(
     gQ213TorsoYawReady=true;
     const float c=std::cos(gQ213TorsoYaw),s=std::sin(gQ213TorsoYaw);
     Vec3 anchor{};const bool anchorReady=Q211FindAvatarHeadAnchor(anchor);
-    // Align the complete authored eye midpoint in XYZ. There is no separate
-    // positional re-anchor in arm solving and no invented body setback.
-    const auto root=fo3vr::BodyRoot(VrPoint(anchor),{headX,headY,headZ},gQ213TorsoYaw);
+    // Align the FINAL neck-posed eye midpoint in XYZ before solving arms.
+    gVrNeckPose=fo3vr::NeckPose(VrPoint(gVrNeckAnchor),fo3vr::Wrap(headYaw-gQ213TorsoYaw));
+    const auto root=fo3vr::PosedBodyRoot(VrPoint(anchor),{headX,headY,headZ},gQ213TorsoYaw,gVrNeckPose);
     const float rootX=root.translation.x,rootZ=root.translation.z;
     const float q217RootY=anchorReady?root.translation.y:headY-localHeadY;
 
