@@ -178,19 +178,39 @@ static const fo3pipdata::PackageDefinition* Q240SelectPackage(
 static bool Q240BuildPackagePath(Q230ActorVisual& actor,const fo3pipdata::PackageDefinition& package,
                                  const std::array<float,3>& anchor,float radius) {
   actor.aiPathGame.clear();actor.aiPathIndex=0;if(!actor.navigation)return false;
+  const auto current=Q240GamePosition(actor);
   std::array<float,3> destination=anchor;
   if(package.type==5||package.type==12) {
-    std::vector<size_t> choices;choices.reserve(actor.navigation->triangles.size());
-    for(size_t i=0;i<actor.navigation->triangles.size();++i) {
-      const auto point=Q240Centroid(*actor.navigation,i);
-      const float d=Q240PlanarDistance(point,anchor);
-      if(d<=radius&&d>150.f)choices.push_back(i);
+    // Wander/Sandbox may only choose destinations reachable from the actor's
+    // current NAVM component. Previously we sampled every triangle inside the
+    // authored radius, so one disconnected island could make an actor finish a
+    // short walk and then appear permanently idle while repeated A* attempts
+    // failed. Preserve the authored radius; filter only by authored adjacency.
+    float startDistance=0;
+    const int start=Q240NearestTriangle(*actor.navigation,current,&startDistance);
+    if(start<0||startDistance>350.f)return false;
+    const size_t n=actor.navigation->triangles.size();
+    std::vector<uint8_t> reachable(n,0);std::vector<int> queue;
+    queue.reserve(n);queue.push_back(start);reachable[start]=1;
+    for(size_t at=0;at<queue.size();++at) {
+      const int triangle=queue[at];
+      for(int edge=0;edge<3;++edge) {
+        const int next=actor.navigation->triangles[triangle].neighbor[edge];
+        if(next<0||size_t(next)>=n||reachable[next])continue;
+        reachable[next]=1;queue.push_back(next);
+      }
+    }
+    std::vector<size_t> choices;choices.reserve(queue.size());
+    for(int triangle:queue) {
+      if(triangle==start)continue;
+      const auto point=Q240Centroid(*actor.navigation,size_t(triangle));
+      if(Q240PlanarDistance(point,anchor)<=radius)choices.push_back(size_t(triangle));
     }
     if(choices.empty())return false;
     uint32_t hash=actor.source.refFormId*2654435761u ^ actor.aiPackage*2246822519u ^ (++actor.aiSequence)*3266489917u;
     destination=Q240Centroid(*actor.navigation,choices[hash%choices.size()]);
   }
-  return Q240Path(*actor.navigation,Q240GamePosition(actor),destination,actor.aiPathGame);
+  return Q240Path(*actor.navigation,current,destination,actor.aiPathGame);
 }
 void Q240UpdateNpcPackage(Q230ActorVisual& actor,double now) {
   if(!gPlayerSession||actor.rigs.empty()||!actor.navigation||actor.runtime.dialogue||
