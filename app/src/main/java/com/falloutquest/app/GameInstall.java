@@ -34,12 +34,24 @@ final class GameInstall {
     static boolean readable(File file) {
         return file.isFile() && file.canRead() && file.length() > 0;
     }
+    static boolean directory(File file) {
+        return file.isDirectory() && file.canRead();
+    }
+    static boolean fallout3VoicesPresent(File data) {
+        if (readable(child(data, "Fallout - Voices.bsa"))) return true;
+        File sound=child(data,"Sound");
+        File voice=child(sound,"Voice");
+        return directory(child(voice,"Fallout3.esm"));
+    }
     static String missing(File data, Game game) {
         if (data == null) return "No unique readable " + game.master +
             " found. Copy one Steam install into " + game.folder + ".";
         for (String name : new String[]{game.master, "Fallout - Meshes.bsa",
                 "Fallout - Textures.bsa", "Fallout - Misc.bsa"})
             if (!readable(child(data, name))) return "Missing or unreadable: " + name;
+        if (game == Game.FALLOUT3 && !fallout3VoicesPresent(data))
+            return "Missing Fallout 3 dialogue audio: copy Fallout - Voices.bsa " +
+                "or extracted Sound/Voice/Fallout3.esm into Data.";
         return "";
     }
 }
