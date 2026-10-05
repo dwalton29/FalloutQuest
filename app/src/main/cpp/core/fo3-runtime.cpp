@@ -3055,14 +3055,20 @@ bool BeginFo3SceneLoad(const Fo3CellTransitionRequestQ74& request, bool boot) {
                 result.playerSession = std::make_unique<fo3player::Session>(std::move(catalog));
                 auto& session = *result.playerSession;
                 session.savePath = "/data/user/0/com.falloutquest.app/files/player-state.fqps";
-                FILE* save = std::fopen(session.savePath.c_str(), "rb");
-                if (save) {
-                    std::fclose(save);
-                    if (session.player.Restore(session.savePath, error)) session.savedRevision = session.player.Revision();
-                    else { session.saveBlocked = true; Q6H_LOGE("PLAYER SAVE PRESERVED: %s", error.c_str()); }
+                // Development milestone policy: every application launch starts
+                // from Fallout3.esm's pristine player/world state. adb install -r
+                // intentionally preserves this private file across APK upgrades,
+                // which made inventory, collected REFRs, dropped weapons, actor
+                // damage and dialogue history leak between headset test builds.
+                // Delete only FalloutQuest's save; never touch files/Fallout3/.
+                errno = 0;
+                if (std::remove(session.savePath.c_str()) == 0) {
+                    Q6H_LOGI("DEVELOPMENT STATE RESET: removed %s; Fallout3 data preserved",
+                             session.savePath.c_str());
                 } else if (errno != ENOENT) {
                     session.saveBlocked = true;
-                    Q6H_LOGE("PLAYER SAVE PRESERVED: existing file cannot be read");
+                    Q6H_LOGE("DEVELOPMENT STATE RESET FAILED: %s errno=%d",
+                             session.savePath.c_str(), errno);
                 }
             } else Q6H_LOGE("PLAYER STATE UNAVAILABLE: %s", error.c_str());
         }
