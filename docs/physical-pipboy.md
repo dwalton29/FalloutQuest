@@ -1,3 +1,5 @@
+> v163 extends this foundation with contextual controls, maps, quests, notes and radio. See [Pip-Boy data/runtime v163](pipboy-data-v163.md) for current behavior and limitations.
+
 Current player body: [v160 authored VR retargeting](VR-BODY-v160.md). Historical Q21/v159 arm descriptions below are superseded.
 
 # Physical Pip-Boy foundation — Quest 159

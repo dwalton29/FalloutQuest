@@ -21,6 +21,42 @@ public final class FalloutNativeActivity extends NativeActivity {
     private final List<String> tracks = new ArrayList<>();
     private int track;
     private MediaPlayer music, ambience;
+    private final Broadcast[] broadcasts = {new Broadcast(),new Broadcast()};
+    private static final class Broadcast {
+        final List<String> paths = new ArrayList<>();
+        int index, generation; MediaPlayer player;
+        void release() { if (player != null) { player.release(); player = null; } }
+    }
+    public native void audioBroadcastDone(int channel,int generation);
+    public void audioBroadcast(String playlist, int channel,int generation) {
+        audio.post(() -> {
+            if (destroyed || channel < 0 || channel > 1) return;
+            Broadcast b = broadcasts[channel]; b.release(); b.paths.clear(); b.index = 0; b.generation = generation;
+            for (String path : playlist.split("\n")) if (!path.isEmpty()) b.paths.add(path);
+            // Vanilla radio displaces exploration music; ambience stays live.
+            if (channel == 0 && !b.paths.isEmpty()) releaseMusic();
+            refresh();
+        });
+    }
+    private void refreshBroadcast(int channel) {
+        Broadcast b = broadcasts[channel];
+        if (b.player != null || b.index >= b.paths.size()) return;
+        MediaPlayer player = new MediaPlayer(); b.player = player;
+        prepare(player,b.paths.get(b.index),1,false,() -> {
+            b.release(); ++b.index;
+            if (b.index >= b.paths.size()) { b.paths.clear(); b.index = 0; audioBroadcastDone(channel,b.generation); }
+            else refreshBroadcast(channel);
+        },() -> b.player == player);
+    }
+    private boolean failBroadcast(MediaPlayer player) {
+        for (int channel = 0; channel < broadcasts.length; ++channel) {
+            Broadcast b = broadcasts[channel];
+            if (b.player == player) { b.release(); b.paths.clear(); b.index = 0;
+                if (channel == 1) audioBroadcastDone(1,b.generation);
+                refresh(); return true; }
+        }
+        return false;
+    }
     private String ambientPath = "";
     private float ambientGain = 1;
     private static final float MUSIC_VOLUME = .3f; // Original supplied FALLOUT.INI.
@@ -88,7 +124,8 @@ public final class FalloutNativeActivity extends NativeActivity {
     private boolean enabled() { return resumed && focused && !destroyed; }
     private void refresh() {
         if (!enabled()) { stopAll(); return; }
-        if (music == null && !tracks.isEmpty()) {
+        for (int channel = 0; channel < 2; ++channel) refreshBroadcast(channel);
+        if (music == null && !tracks.isEmpty() && broadcasts[0].paths.isEmpty()) {
             MediaPlayer player = new MediaPlayer(); music = player;
             prepare(player, tracks.get(track), MUSIC_VOLUME, false, () -> {
                 if (music != player) return;
@@ -122,7 +159,7 @@ public final class FalloutNativeActivity extends NativeActivity {
                 if (current.check()) {
                     if (p == music) { tracks.clear(); releaseMusic(); }
                     else if (p == ambience) { ambientPath = ""; releaseAmbience(); }
-                    else { effects.remove(p); p.release(); }
+                    else if (!failBroadcast(p)) { effects.remove(p); p.release(); }
                 }
                 return true;
             });
@@ -132,7 +169,7 @@ public final class FalloutNativeActivity extends NativeActivity {
             if (current.check()) {
                 if (player == music) { tracks.clear(); releaseMusic(); }
                 else if (player == ambience) { ambientPath = ""; releaseAmbience(); }
-                else { effects.remove(player); player.release(); }
+                else if (!failBroadcast(player)) { effects.remove(player); player.release(); }
             }
         }
     }
@@ -140,6 +177,7 @@ public final class FalloutNativeActivity extends NativeActivity {
     private void releaseAmbience() { if (ambience != null) { ambience.release(); ambience = null; } }
     private void stopAll() {
         releaseMusic(); releaseAmbience();
+        for (Broadcast b : broadcasts) b.release();
         for (MediaPlayer player : effects) player.release();
         effects.clear();
     }

@@ -23,6 +23,10 @@ add_library(falloutquest SHARED
     npc/fo3-npc.cpp
     npc/fo3-actor-animation.cpp
     player/fo3-player-state.cpp
+    player/fo3-pipboy-player.cpp
+    pipboy/fo3-pipboy-data.cpp
+    pipboy/fo3-pipboy-session.cpp
+    pipboy/fo3-radio-runtime.cpp
     player/fo3-container-state.cpp
     audio/fo3-audio.cpp
     audio/fo3-audio-catalog.cpp

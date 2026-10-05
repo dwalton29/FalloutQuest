@@ -1,6 +1,6 @@
-#include "ui/pipboy/fo3-pipboy-state.h"
 #include "player/fo3-vr-tracking.h"
 #include "ui/pipboy/fo3-pipboy-assets.h"
+#include "ui/pipboy/fo3-pipboy-state.h"
 #include <cassert>
 #include <iostream>
 using namespace fo3pip;
@@ -18,8 +18,9 @@ static fo3player::Player Player() {
   return fo3player::Player(std::move(c));
 }
 int main() {
-  assert(MenuAssetValid("menus\\main\\map_menu.xml",R"(<menu name="MapMenu"><id> &pipboymenu; </id>)"));
-  assert(!MenuAssetValid("menus\\main\\map_menu.xml","&pipboy;"));
+  assert(MenuAssetValid("menus\\main\\map_menu.xml",
+                        R"(<menu name="MapMenu"><id> &pipboymenu; </id>)"));
+  assert(!MenuAssetValid("menus\\main\\map_menu.xml", "&pipboy;"));
   const View good{true, true, .4f, 1, 1};
   Activation a;
   auto down = good;
@@ -70,7 +71,6 @@ int main() {
   for (int i = 0; i < 100; ++i)
     m.Refresh(p);
   assert(n == m.rebuilds); // 12
-  m.Invoke(Action::Accept, p);
   for (int i = 0; i < 100; ++i)
     m.Invoke(Action::Down, p);
   assert(m.selected == 0); // 13
@@ -102,60 +102,128 @@ int main() {
               {0, 1.3f, -.4f}, {-.2f, 1.4f, 0}, {0, 1.35f, -.4f}, true);
   assert(Enter(view));
   // The production XR flag extraction -> selection -> view -> activation path.
-  for(bool rightTracked:{false,true}){
+  for (bool rightTracked : {false, true}) {
     (void)rightTracked;
-    auto tracked=fo3vr::LocationTracking(15,3,12);
+    auto tracked = fo3vr::LocationTracking(15, 3, 12);
     fo3vr::PipboyTracking tracking;
-    bool available=tracking.Step(true,false,true,tracked,tracked,{},0);
-    auto presented=Measure(available,{0,1.3f,-.4f},{0,0,1},{0,1.5f,0},{0,0,-1},
-                           {0,1.3f,-.4f},{-.2f,1.4f,0},{0,.9f,-.4f},true);
-    Activation physical;physical.Step(presented,0);physical.Step(presented,.151);
+    bool available = tracking.Step(true, false, true, tracked, tracked, {}, 0);
+    auto presented =
+        Measure(available, {0, 1.3f, -.4f}, {0, 0, 1}, {0, 1.5f, 0}, {0, 0, -1},
+                {0, 1.3f, -.4f}, {-.2f, 1.4f, 0}, {0, .9f, -.4f}, true);
+    Activation physical;
+    physical.Step(presented, 0);
+    physical.Step(presented, .151);
     assert(physical.Focus()); // low hand pivot does not veto a raised screen
-    presented.valid=tracking.Step(true,false,true,tracked,{true,false},tracked,.2);
-    physical.Step(presented,.2);assert(physical.Focus());
-    presented.valid=tracking.Step(true,false,true,tracked,{true,false},{},.39);
-    physical.Step(presented,.39);assert(physical.Focus());
-    presented.valid=tracking.Step(true,false,true,tracked,{true,false},{},.41);
-    physical.Step(presented,.41);assert(!physical.Focus());
+    presented.valid =
+        tracking.Step(true, false, true, tracked, {true, false}, tracked, .2);
+    physical.Step(presented, .2);
+    assert(physical.Focus());
+    presented.valid =
+        tracking.Step(true, false, true, tracked, {true, false}, {}, .39);
+    physical.Step(presented, .39);
+    assert(physical.Focus());
+    presented.valid =
+        tracking.Step(true, false, true, tracked, {true, false}, {}, .41);
+    physical.Step(presented, .41);
+    assert(!physical.Focus());
   }
   // Right stick/A/B -> production menu actions, rather than direct Invoke
   // tests alone. Entering focus requires neutral; world A remains consumed.
   {
-    fo3player::Catalog catalog;fo3player::Item item;item.formId=1;item.name="A";item.kind=fo3player::ItemKind::Weapon;
-    catalog.items[1]=item;item.formId=3;item.name="B";catalog.items[3]=item;
-    fo3player::Player player(std::move(catalog));player.Add(1,1);player.Add(3,1);Menu menu;menu.Refresh(player);
-    Input controls;double now=10;
-    auto invoke=[&](Action action){menu.Invoke(action,player);};
-    auto step=[&](float x,float y,bool a,bool b){now+=.02;controls.Step(true,x,y,a,b,now,invoke);};
-    auto neutral=[&](){step(0,0,false,false);};
-    neutral();assert(menu.tab==Tab::Stats);
-    step(1,0,false,false);assert(menu.tab==Tab::Items);neutral();
-    step(1,0,false,false);assert(menu.tab==Tab::Data);neutral();
-    step(-1,0,false,false);assert(menu.tab==Tab::Items);neutral();
-    step(0,-1,false,false);assert(menu.page==1);neutral();
-    step(0,1,false,false);assert(menu.page==0);neutral();
-    step(0,0,true,false);assert(menu.inPage);assert(!controls.WorldA(true));neutral();
-    step(0,0,true,false);assert(player.Snapshot().inventory[0].equipped);neutral();
-    step(0,0,true,false);assert(!player.Snapshot().inventory[0].equipped);neutral();
-    step(0,-1,false,false);assert(menu.selected==1);neutral();
-    step(0,0,true,false);assert(player.Snapshot().inventory[1].equipped);neutral();
-    step(0,1,false,false);assert(menu.selected==0);neutral();
-    step(0,0,false,true);assert(!menu.inPage);neutral();
-    step(-1,0,false,false);assert(menu.tab==Tab::Stats);neutral();
-    step(0,-1,false,false);assert(menu.page==1);neutral();
-    step(0,0,true,false);assert(menu.inPage);neutral();
-    step(0,-1,false,false);assert(menu.selected==1);neutral();
-    step(0,1,false,false);assert(menu.selected==0);neutral();
+    fo3player::Catalog catalog;
+    fo3player::Item item;
+    item.formId = 1;
+    item.name = "A";
+    item.kind = fo3player::ItemKind::Weapon;
+    catalog.items[1] = item;
+    item.formId = 3;
+    item.name = "B";
+    catalog.items[3] = item;
+    fo3player::Player player(std::move(catalog));
+    player.Add(1, 1);
+    player.Add(3, 1);
+    Menu menu;
+    menu.Refresh(player);
+    Input controls;
+    double now = 10;
+    auto invoke = [&](Action action) { menu.Invoke(action, player); };
+    auto step = [&](float x, float y, bool a, bool b, float grip = 0) {
+      now += .02;
+      controls.Step(true, x, y, a, b, grip, now, menu.MapInteraction(), invoke);
+    };
+    auto neutral = [&]() { step(0, 0, false, false); };
+    neutral();
+    assert(menu.tab == Tab::Stats);
+    step(0, 0, false, false, 1);
+    assert(menu.tab == Tab::Items);
+    for (int i = 0; i < 100; ++i)
+      step(0, 0, false, false, 1);
+    assert(menu.tab == Tab::Items);
+    neutral();
+    step(0, 0, false, false, 1);
+    assert(menu.tab == Tab::Data);
+    neutral();
+    step(0, 0, false, false, 1);
+    assert(menu.tab == Tab::Stats);
+    neutral();
+    step(1, 0, false, false);
+    assert(menu.tab == Tab::Stats && menu.page == 1);
+    for (int i = 0; i < 100; ++i)
+      step(1, 0, false, false);
+    assert(menu.page == 1);
+    neutral();
+    step(-1, 0, false, false);
+    assert(menu.page == 0);
+    neutral();
+    step(0, 0, false, false, 1);
+    assert(menu.tab == Tab::Items);
+    neutral();
+    step(0, 0, true, false);
+    assert(player.Snapshot().inventory[0].equipped);
+    assert(!controls.WorldA(true));
+    neutral();
+    step(0, 0, true, false);
+    assert(!player.Snapshot().inventory[0].equipped);
+    neutral();
+    step(0, -1, false, false);
+    assert(menu.selected == 1);
+    neutral();
+    step(0, 0, true, false);
+    assert(player.Snapshot().inventory[1].equipped);
+    neutral();
+    step(0, 0, false, false, 1);
+    assert(menu.tab == Tab::Data && menu.page == 0);
+    neutral();
+    step(0, 0, true, false);
+    assert(menu.MapInteraction());
+    neutral();
+    menu.map.centre = {.5f, .5f};
+    menu.Pan(.5f, .5f, .1f);
+    assert(menu.map.centre.x > .5f && menu.map.centre.y < .5f);
+    step(1, 0, false, false);
+    assert(menu.page == 0);
+    neutral();
+    step(0, 0, false, true);
+    assert(!menu.MapInteraction());
+    neutral();
+    step(1, 0, false, false);
+    assert(menu.page == 1);
+    neutral();
     // Closing while A held cannot trigger world A; release restores it.
-    controls.Step(false,0,0,true,false,++now,invoke);assert(!controls.WorldA(true));
-    controls.Step(false,0,0,false,false,++now,invoke);assert(controls.WorldA(true));
+    controls.Step(false, 0, 0, true, false, ++now, invoke);
+    assert(!controls.WorldA(true));
+    controls.Step(false, 0, 0, false, false, ++now, invoke);
+    assert(controls.WorldA(true));
   }
   // Ordinary oblique screen presentation has a broad entry region and a
   // wider stay region, with the existing temporal intentionality preserved.
-  for(float facing:{0.f,30.f,55.f})for(float cone:{0.f,25.f,50.f}){
-    auto oblique=view;oblique.facing=std::cos(facing*3.14159265f/180);
-    oblique.cone=std::cos(cone*3.14159265f/180);assert(Enter(oblique));
-  }
+  for (float facing : {0.f, 30.f, 55.f})
+    for (float cone : {0.f, 25.f, 50.f}) {
+      auto oblique = view;
+      oblique.facing = std::cos(facing * 3.14159265f / 180);
+      oblique.cone = std::cos(cone * 3.14159265f / 180);
+      assert(Enter(oblique));
+    }
   auto torsoLag =
       Measure(true, {0, 1.3f, -.4f}, {0, 0, 1}, {0, 1.5f, 0}, {0, 0, -1},
               {0, 1.3f, .5f}, {-.2f, 1.4f, 0}, {0, 1.35f, .5f}, true);
@@ -166,7 +234,7 @@ int main() {
   assert(!Enter(behind));
   m.Invoke(Action::Back, p);
   for (int i = 0; i < 3; ++i)
-    m.Invoke(Action::Down, p);
+    m.Invoke(Action::NextPage, p);
   assert(m.page == 3);
   p.Add(2, 2);
   m.Refresh(p);

@@ -258,7 +258,7 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
     return fail("Truncated ESM");
   Catalog next;
   std::vector<uint64_t> groups;
-  std::vector<uint32_t> groupCells;
+  std::vector<uint32_t> groupCells,groupWorlds,groupTopics;
   std::unordered_map<uint32_t, uint32_t> cellOwners;
   std::unordered_map<std::string, float> settings;
   struct StartingItem {
@@ -273,7 +273,7 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
   while (at < static_cast<uint64_t>(fileSize)) {
     while (!groups.empty() && at == groups.back()) {
       groups.pop_back();
-      groupCells.pop_back();
+      groupCells.pop_back();groupWorlds.pop_back();groupTopics.pop_back();
     }
     const uint64_t boundary =
         groups.empty() ? static_cast<uint64_t>(fileSize) : groups.back();
@@ -296,6 +296,8 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
       groupCells.push_back(cellGroup
                                ? fo3esm::ReadU32(h + 8)
                                : (groupCells.empty() ? 0 : groupCells.back()));
+      groupWorlds.push_back(groupType==1?fo3esm::ReadU32(h+8):(groupWorlds.empty()?0:groupWorlds.back()));
+      groupTopics.push_back(groupType==7?fo3esm::ReadU32(h+8):(groupTopics.empty()?0:groupTopics.back()));
       at += 24;
       continue;
     }
@@ -306,7 +308,8 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
     const bool item = Kind(type, kind);
     const bool worldRecord = type == "REFR" || type == "DOOR" || type == "CELL";
     const bool lootRecord = type == "CONT" || type == "LVLI" || type == "GLOB";
-    const bool selected = lootRecord || worldRecord || type == "TES4" ||
+    const bool extra = fo3pipdata::Relevant(type)||type=="ACHR"||type=="ACRE";
+    const bool selected = extra || lootRecord || worldRecord || type == "TES4" ||
                           type == "GMST" || item ||
                           (type == "NPC_" && form == PlayerBase);
     if (at == 0 && type != "TES4")
@@ -319,6 +322,7 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
       std::vector<Sub> subs;
       if (!Subs(payload, subs))
         return fail("Malformed ESM subrecord");
+      fo3pipdata::Decode(next.pipboy,type,form,flags,payload,groupCells.empty()?0:groupCells.back(),groupWorlds.empty()?0:groupWorlds.back(),groupTopics.empty()?0:groupTopics.back());
       // Keep the v1 catalog identity stable so existing player saves migrate.
       if (lootRecord) {
         next.lootFingerprint =
@@ -326,18 +330,20 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
         next.lootFingerprint =
             static_cast<uint32_t>(crc32(next.lootFingerprint, payload.data(),
                                         static_cast<uInt>(payload.size())));
-      } else if (!worldRecord) {
+      } else if (!worldRecord && (!extra || (type=="NPC_"&&form==PlayerBase))) {
         fingerprint = static_cast<uint32_t>(crc32(fingerprint, h, sizeof(h)));
         fingerprint = static_cast<uint32_t>(crc32(
             fingerprint, payload.data(), static_cast<uInt>(payload.size())));
-      } else {
+      } else if (worldRecord) {
         next.worldFingerprint =
             static_cast<uint32_t>(crc32(next.worldFingerprint, h, sizeof(h)));
         next.worldFingerprint =
             static_cast<uint32_t>(crc32(next.worldFingerprint, payload.data(),
                                         static_cast<uInt>(payload.size())));
       }
-      if (type == "CONT") {
+      if (extra && !(type=="NPC_"&&form==PlayerBase)) {
+        // Immutable Pip-Boy-only record; do not alter legacy fingerprints.
+      } else if (type == "CONT") {
         Container c;
         c.name = Text(subs, "FULL");
         if (const auto *script = Find(subs, "SCRI")) {
@@ -511,6 +517,7 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
       return fail("Missing/nonfinite player game setting");
     *entry.second = it->second;
   }
+  fo3pipdata::Finalize(next.pipboy);
   next.fingerprint = fingerprint;
   for (auto &entry : next.references)
     if (!entry.second.owner && cellOwners.count(entry.second.cell))
@@ -754,7 +761,8 @@ bool Player::Save(const std::string &path, std::string &error) const {
       PutFloat(payload, stack.condition);
     }
   }
-  Put32(bytes, 3);
+  fo3pipdata::EncodeState(state_.pipboy,payload);
+  Put32(bytes, 4);
   Put32(bytes, catalog_.fingerprint);
   Put32(bytes, static_cast<uint32_t>(payload.size()));
   Put32(bytes, Crc(payload));
@@ -813,7 +821,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
   const auto *h = bytes.data();
   const auto version = fo3esm::ReadU32(h + 4);
   if (std::memcmp(h, "FQPS", 4) ||
-      (version != 1 && version != 2 && version != 3))
+      (version != 1 && version != 2 && version != 3 && version != 4))
     return fail("Unsupported player save format");
   if (fo3esm::ReadU32(h + 8) != catalog_.fingerprint)
     return fail("Player save belongs to different game definitions");
@@ -878,7 +886,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
     }
   }
   next.containers.clear();
-  if (version == 3) {
+  if (version >= 3) {
     if (payload.size() - worldEnd < 8 ||
         fo3esm::ReadU32(p + worldEnd) != catalog_.lootFingerprint)
       return fail("Invalid container definitions");
@@ -913,7 +921,8 @@ bool Player::Restore(const std::string &path, std::string &error) {
       }
       next.containers.emplace(ref, std::move(contents));
     }
-    if (at != payload.size())
+    if (version == 4 && !fo3pipdata::DecodeState(next.pipboy,catalog_.pipboy,p+at,payload.size()-at,error))return false;
+    if (version == 3 && at != payload.size())
       return fail("Trailing container save data");
   }
   state_ = std::move(next);

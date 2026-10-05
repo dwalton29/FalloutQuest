@@ -1,5 +1,6 @@
 #pragma once
 // Physical device policy and canonical player view. No XR, GL, or asset I/O.
+#include "pipboy/fo3-map-runtime.h"
 #include "player/fo3-player-state.h"
 #include <algorithm>
 #include <cmath>
@@ -78,7 +79,16 @@ struct Activation {
     return old != Focus();
   }
 };
-enum class Action { NextTab, PreviousTab, Up, Down, Accept, Back };
+enum class Action {
+  NextTab,
+  PreviousTab,
+  PreviousPage,
+  NextPage,
+  Up,
+  Down,
+  Accept,
+  Back
+};
 enum class Tab { Stats, Items, Data };
 inline int Category(fo3player::ItemKind kind) {
   using K = fo3player::ItemKind;
@@ -105,6 +115,12 @@ struct Menu {
   int page = 0;
   size_t selected = 0;
   bool inPage = false, dirty = true;
+  size_t textScroll = 0;
+  uint32_t playingNote = 0, selectedMarker = 0;
+  std::vector<uint32_t> stations;
+  fo3pipdata::MapContext map;
+  float localX = 0, localY = 0;
+  std::string actionError;
   uint64_t revision = UINT64_MAX, lastFrame = UINT64_MAX;
   unsigned rebuilds = 0;
   // IDs only: stacks, quantities, equipment and conditions remain in Player.
@@ -124,14 +140,43 @@ struct Menu {
       for (const auto &s : p.Snapshot().inventory) {
         auto i = p.Definitions().items.find(s.formId);
         if (s.count > 0 && i != p.Definitions().items.end() &&
-            i->second.playable && Category(i->second.kind) == page)
+            i->second.playable && i->second.kind != fo3player::ItemKind::Note &&
+            Category(i->second.kind) == page)
           rows.push_back(s.id);
       }
-    std::stable_sort(rows.begin(), rows.end(), [&](uint64_t a, uint64_t b) {
-      auto sa = Stack(p, a), sb = Stack(p, b);
-      const auto &ia = p.Definitions().items.at(sa->formId);
-      const auto &ib = p.Definitions().items.at(sb->formId);
-      return ia.name == ib.name ? a < b : ia.name < ib.name;
+    if (tab == Tab::Stats && page == 3)
+      for (auto &i : p.Snapshot().pipboy.perks)
+        if (!p.Definitions().pipboy.perks.at(i.first).hidden)
+          rows.push_back(i.first);
+    if (tab == Tab::Data && page == 2)
+      for (auto &i : p.Snapshot().pipboy.quests)
+        rows.push_back(i.first);
+    if (tab == Tab::Data && page == 3)
+      for (auto &i : p.Snapshot().inventory)
+        if (p.Definitions().pipboy.notes.count(i.formId) &&
+            std::find(rows.begin(), rows.end(), i.formId) == rows.end())
+          rows.push_back(i.formId);
+    if (tab == Tab::Data && page == 4)
+      for (auto id : stations)
+        rows.push_back(id);
+    auto name = [&](uint64_t id) -> std::string {
+      if (tab == Tab::Items) {
+        auto stack = Stack(p, id);
+        return p.Definitions().items.at(stack->formId).name;
+      }
+      if (tab == Tab::Stats)
+        return p.Definitions().pipboy.perks.at(id).name;
+      if (page == 2)
+        return p.Definitions().pipboy.quests.at(id).name;
+      if (page == 3)
+        return p.Definitions().pipboy.notes.at(id).name;
+      return p.Definitions()
+          .pipboy.stations.at(p.Definitions().pipboy.transmitters.at(id).base)
+          .name;
+    };
+    std::stable_sort(rows.begin(), rows.end(), [&](auto a, auto b) {
+      auto x = name(a), y = name(b);
+      return x == y ? a < b : x < y;
     });
     auto it = std::find(rows.begin(), rows.end(), keep);
     selected =
@@ -152,48 +197,117 @@ struct Menu {
     lastFrame = frame;
     return true;
   }
-  // Return true only for a canonical persisted mutation.
+  bool MapInteraction() const { return tab == Tab::Data && page < 2 && inPage; }
+  void Pan(float x, float y, float seconds) {
+    if (!MapInteraction())
+      return;
+    if (std::max(std::fabs(x), std::fabs(y)) < .18f)
+      return;
+    float dx = x * seconds * .35f / map.zoom,
+          dy = -y * seconds * .35f / map.zoom;
+    map.centre.x = std::clamp(map.centre.x + dx, 0.f, 1.f);
+    map.centre.y = std::clamp(map.centre.y + dy, 0.f, 1.f);
+    dirty = true;
+  }
   bool Invoke(Action a, fo3player::Player &p) {
     bool mutation = false;
     dirty = true;
+    actionError.clear();
     if (a == Action::NextTab || a == Action::PreviousTab) {
       tab = Tab((int(tab) + (a == Action::NextTab ? 1 : 2)) % 3);
       page = 0;
       selected = 0;
       inPage = false;
+      textScroll = 0;
       RebuildRows(p);
+    } else if (a == Action::NextPage || a == Action::PreviousPage) {
+      if (!MapInteraction()) {
+        page = (page + (a == Action::NextPage ? 1 : 4)) % 5;
+        selected = 0;
+        textScroll = 0;
+        inPage = false;
+        RebuildRows(p);
+        map.centre = map.player;
+      }
     } else if (a == Action::Back) {
       inPage = false;
-      selected = 0;
+      textScroll = 0;
     } else if (a == Action::Up || a == Action::Down) {
       int delta = a == Action::Up ? -1 : 1;
-      if (!inPage) {
-        page = (page + delta + 5) % 5;
-        selected = 0;
-        RebuildRows(p);
-      } else if (tab == Tab::Items && !rows.empty()) {
-        if (delta < 0 && selected > 0)
-          --selected;
-        if (delta > 0 && selected + 1 < rows.size())
-          ++selected;
-      } else if (tab == Tab::Stats) {
-        size_t count = page == 1 ? 7 : page == 2 ? 13 : 1;
-        if (delta < 0 && selected > 0)
+      if (tab == Tab::Data && page == 3 && inPage) {
+        if (delta < 0 && textScroll)
+          --textScroll;
+        if (delta > 0)
+          ++textScroll;
+      } else if (tab == Tab::Data && page == 2 && inPage) {
+        if (delta < 0 && textScroll)
+          --textScroll;
+        if (delta > 0)
+          ++textScroll;
+      } else {
+        size_t count = rows.size();
+        if (tab == Tab::Stats)
+          count = page == 1 ? 7 : page == 2 ? 13 : page == 4 ? 2 : count;
+        if (delta < 0 && selected)
           --selected;
         if (delta > 0 && selected + 1 < count)
           ++selected;
       }
     } else if (a == Action::Accept) {
-      if (!inPage)
-        inPage = true;
-      else if (tab == Tab::Items && selected < rows.size()) {
-        const auto *s = Stack(p, rows[selected]);
-        if (s) {
-          auto i = p.Definitions().items.find(s->formId);
-          if (i != p.Definitions().items.end() && Equippable(i->second))
-            mutation = s->equipped ? p.Unequip(s->id) : p.Equip(s->id);
+      if (tab == Tab::Data && page < 2) {
+        if (!inPage)
+          inPage = true;
+        else if (page == 1 && map.mapWorld) {
+          auto w = p.Definitions().pipboy.worlds.find(map.mapWorld);
+          if (w != p.Definitions().pipboy.worlds.end()) {
+            auto v = w->second.Unproject(map.centre);
+            if (selectedMarker &&
+                p.Definitions().pipboy.markers.count(selectedMarker)) {
+              auto &m = p.Definitions().pipboy.markers.at(selectedMarker);
+              v = fo3pipdata::WorldPoint(p.Definitions().pipboy,m.world,m.x,m.y);
+            }
+            auto old = p.Snapshot().pipboy.waypoint;
+            mutation = old.world == map.mapWorld &&
+                               std::fabs(old.point.x - v.x) < 1 &&
+                               std::fabs(old.point.y - v.y) < 1
+                           ? p.SetWaypoint(0, 0, 0)
+                           : p.SetWaypoint(map.mapWorld, v.x, v.y);
+          }
         }
-      }
+      } else if (tab == Tab::Items && selected < rows.size()) {
+        auto s = Stack(p, rows[selected]);
+        if (s) {
+          auto &i = p.Definitions().items.at(s->formId);
+          if (Equippable(i))
+            mutation = s->equipped ? p.Unequip(s->id) : p.Equip(s->id);
+          else if (i.kind == fo3player::ItemKind::Aid ||
+                   i.kind == fo3player::ItemKind::Ingredient) {
+            if (p.CanUse(s->id, &actionError))
+              mutation = p.Use(s->id);
+          }
+        }
+      } else if (tab == Tab::Data && page == 4 && selected < rows.size()) {
+        auto id = uint32_t(rows[selected]);
+        mutation = p.TuneRadio(p.Snapshot().pipboy.tunedRadio == id ? 0 : id);
+      } else if (tab == Tab::Data && page == 2 && selected < rows.size()) {
+        inPage = true;
+        mutation = p.SelectQuest(uint32_t(rows[selected]));
+      } else if (tab == Tab::Data && page == 3 && selected < rows.size()) {
+        if (!inPage) {
+          inPage = true;
+          textScroll = 0;
+          auto id = uint32_t(rows[selected]);
+          auto &n = p.Definitions().pipboy.notes.at(id);
+          if (n.type == 0 || n.type == 3)
+            playingNote = id;
+        } else {
+          auto id = uint32_t(rows[selected]);
+          auto &n = p.Definitions().pipboy.notes.at(id);
+          if (n.type == 0 || n.type == 3)
+            playingNote = playingNote == id ? 0 : id;
+        }
+      } else
+        inPage = true;
     }
     if (mutation)
       Refresh(p);
@@ -205,16 +319,23 @@ struct Menu {
 // fall through to a world door/pickup; stick releases cannot snap-turn.
 struct Input {
   bool focus = false, aLatch = false, bLatch = false, stickLatch = false,
-       worldBlocked = false;
+       gripLatch = false, worldBlocked = false, mapMode = false;
   double repeat = 0;
   template <class Invoke>
   void Step(bool owns, float x, float y, bool a, bool b, double now,
             Invoke invoke) {
+    Step(owns, x, y, a, b, 0, now, false, invoke);
+  }
+  template <class Invoke>
+  void Step(bool owns, float x, float y, bool a, bool b, float grip, double now,
+            bool map, Invoke invoke) {
     if (owns != focus) {
       focus = owns;
+      mapMode = map;
       aLatch = a;
       bLatch = b;
       stickLatch = std::max(std::fabs(x), std::fabs(y)) > .30f;
+      gripLatch = grip > .30f;
       worldBlocked = a;
       repeat = now + .35;
       return;
@@ -223,27 +344,37 @@ struct Input {
       worldBlocked = false;
     if (!focus)
       return;
+    if (mapMode != map) {
+      mapMode = map;
+      stickLatch = std::max(std::fabs(x), std::fabs(y)) > .30f;
+      repeat = now + .35;
+    }
+    if (grip < .30f)
+      gripLatch = false;
+    if (grip > .70f && !gripLatch) {
+      gripLatch = true;
+      invoke(Action::NextTab);
+    }
     if (a && !aLatch)
       invoke(Action::Accept);
     if (b && !bLatch)
       invoke(Action::Back);
     aLatch = a;
     bLatch = b;
-    const float strength = std::max(std::fabs(x), std::fabs(y));
+    float strength = std::max(std::fabs(x), std::fabs(y));
     if (strength < .30f) {
       stickLatch = false;
       return;
     }
-    if (strength < .65f)
+    if (map || strength < .65f)
       return;
-    if (!stickLatch || now >= repeat) {
+    bool horizontal = std::fabs(x) > std::fabs(y);
+    if (!stickLatch || (!horizontal && now >= repeat)) {
       bool first = !stickLatch;
       stickLatch = true;
       repeat = now + (first ? .35 : .15);
-      if (std::fabs(x) > std::fabs(y))
-        invoke(x > 0 ? Action::NextTab : Action::PreviousTab);
-      else
-        invoke(y > 0 ? Action::Up : Action::Down);
+      invoke(horizontal ? (x > 0 ? Action::NextPage : Action::PreviousPage)
+                        : (y > 0 ? Action::Up : Action::Down));
     }
   }
   bool WorldA(bool down) const { return down && !focus && !worldBlocked; }

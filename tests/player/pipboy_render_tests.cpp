@@ -5,10 +5,12 @@ bool LoadFalloutTextureRgba(const std::string &, Fo3RgbaTexture &) {
   assert(false && "No asset I/O in a warm DATA render");
   return false;
 }
+namespace fo3assets { bool LoadTextureFile(const std::string&,std::vector<uint8_t>&,BsaFileInfo*,size_t){return false;} }
 int main() {
   fo3player::Player p(fo3player::Catalog{});
   fo3pip::Menu menu;
   menu.tab = fo3pip::Tab::Data;
+  menu.page=2;
   auto &resources = fo3pipui::State();
   resources.ready = true;
   resources.fbo = 10;

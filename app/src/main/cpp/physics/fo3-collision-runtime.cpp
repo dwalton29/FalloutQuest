@@ -117,6 +117,7 @@ struct CollisionSurfaceSourceQ722 {
     std::string modelPath;
 };
 std::vector<CollisionTriangle> gWorldTriangles;
+uint64_t gPipLocalMapRevision=0;
 std::unordered_map<uint64_t, CollisionSurfaceSourceQ722> gSurfaceSourcesQ722;
 
 // Q16.27: collision is represented by transformed authored triangles rather than
@@ -1935,6 +1936,7 @@ bool PublishFo3CollisionSnapshotQ1930(uint64_t token, uint64_t* outSwapUs) {
     // Debug collision GL is disabled in normal Quest builds. If enabled later,
     // rebuild its visual overlay separately; locomotion data below is complete.
     gWorldTriangles = std::move(snapshot->triangles);
+    ++gPipLocalMapRevision;
     gSurfaceSourcesQ722 = std::move(snapshot->surfaceSources);
     gPlacementCount = snapshot->placementCount;
     gCollisionShapeCount = snapshot->collisionShapeCount;
@@ -2308,6 +2310,7 @@ void ShutdownFo3CollisionOverlay() {
     gKindCounts.fill(0u);
     gLoggedVisible = false;
     gWorldTriangles.clear();
+    ++gPipLocalMapRevision;
     gSurfaceSourcesQ722.clear();
     gQ225DynamicGrid.clear();
     gQ225DynamicStamp.clear();
@@ -2320,3 +2323,83 @@ void ShutdownFo3CollisionOverlay() {
     gStepUpLogCountQ78B = 0;
     gManifoldLogCountQ714 = 0;
 }
+
+// Pip-Boy consumes a read-only raster of the published collision world. This
+// does not change collision, streaming or rendering policy.
+#include "pipboy/fo3-local-map-build.h"
+std::shared_ptr<const fo3pipdata::LocalMap>
+fo3pipdata::CaptureLocalMap(uint32_t cell, uint64_t generation, float headY) {
+  auto m = std::make_shared<LocalMap>();
+  m->cell = cell;
+  m->generation = generation;
+  if (gWorldTriangles.empty())
+    return m;
+  float minX = INFINITY, minZ = INFINITY, maxX = -INFINITY, maxZ = -INFINITY;
+  for (const auto &t : gWorldTriangles) {
+    if (t.minY > headY)
+      continue;
+    minX = std::min(minX, t.minX);
+    minZ = std::min(minZ, t.minZ);
+    maxX = std::max(maxX, t.maxX);
+    maxZ = std::max(maxZ, t.maxZ);
+  }
+  if (!std::isfinite(minX) || maxX <= minX || maxZ <= minZ)
+    return m;
+  m->minX = minX;
+  m->maxX = maxX;
+  m->minY = -maxZ;
+  m->maxY = -minZ;
+  constexpr int N = 256;
+  std::vector<float> heights(N * N, -INFINITY);
+  auto project = [&](const Vec3 &v) {
+    return fo3pipdata::Point{(v.x - minX) / (maxX - minX) * (N - 1),
+                             (v.z - minZ) / (maxZ - minZ) * (N - 1)};
+  };
+  auto edge = [](Point a, Point b, float x, float y) {
+    return (x - a.x) * (b.y - a.y) - (y - a.y) * (b.x - a.x);
+  };
+  for (const auto &t : gWorldTriangles) {
+    if (t.minY > headY)
+      continue;
+    auto a = project(t.a), b = project(t.b), c = project(t.c);
+    float area = edge(a, b, c.x, c.y);
+    if (std::fabs(area) < .001f)
+      continue;
+    int x0 = std::clamp(int(std::floor(std::min({a.x, b.x, c.x}))), 0, N - 1),
+        x1 = std::clamp(int(std::ceil(std::max({a.x, b.x, c.x}))), 0, N - 1);
+    int y0 = std::clamp(int(std::floor(std::min({a.y, b.y, c.y}))), 0, N - 1),
+        y1 = std::clamp(int(std::ceil(std::max({a.y, b.y, c.y}))), 0, N - 1);
+    for (int y = y0; y <= y1; ++y)
+      for (int x = x0; x <= x1; ++x) {
+        float wa = edge(b, c, x + .5f, y + .5f) / area,
+              wb = edge(c, a, x + .5f, y + .5f) / area, wc = 1 - wa - wb;
+        if (wa >= 0 && wb >= 0 && wc >= 0) {
+          float h = wa * t.a.y + wb * t.b.y + wc * t.c.y;
+          if (h <= headY)
+            heights[y * N + x] = std::max(heights[y * N + x], h);
+        }
+      }
+  }
+  m->rgba.resize(N * N * 4);
+  for (int y = 0; y < N; ++y)
+    for (int x = 0; x < N; ++x) {
+      int i = y * N + x;
+      bool valid = std::isfinite(heights[i]);
+      float gradient = 0;
+      if (valid) {
+        for (auto j :
+             {y * N + std::max(0, x - 1), y * N + std::min(N - 1, x + 1),
+              std::max(0, y - 1) * N + x, std::min(N - 1, y + 1) * N + x})
+          gradient = std::max(gradient, std::isfinite(heights[j])
+                                            ? std::fabs(heights[i] - heights[j])
+                                            : 1.f);
+      }
+      uint8_t v =
+          valid ? uint8_t(std::clamp(45.f + gradient * 180, 45.f, 255.f)) : 0;
+      m->rgba[4 * i] = m->rgba[4 * i + 1] = m->rgba[4 * i + 2] = v;
+      m->rgba[4 * i + 3] = 255;
+    }
+  return m;
+}
+
+uint64_t fo3pipdata::LocalMapGeometryRevision() { return gPipLocalMapRevision; }

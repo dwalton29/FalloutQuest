@@ -15,7 +15,7 @@ class Pipboy(unittest.TestCase):
     def test_authoritative_solved_mount(self):
         core=(ROOT/'core/fo3-runtime.cpp').read_text()
         self.assertIn('UpdateFo3PipboyMount(q213LeftPose);',core)
-        mount=core.split('void UpdateFo3PipboyMount(',1)[1].split('void UpdateFo3Pipboy(',1)[0]
+        mount=core.split('void UpdateFo3PipboyMount(',1)[1].split('#include "ui/pipboy/fo3-pipboy-runtime.inc"',1)[0]
         self.assertIn('pose.foreTwist',mount)
         self.assertNotIn('pose.handDelta',mount)
         self.assertNotIn('gQ218LeftHandQuat',mount)

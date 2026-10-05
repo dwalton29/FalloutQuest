@@ -22,6 +22,8 @@ struct Resources {
   std::unordered_map<std::string, GLuint> art;
   std::unordered_set<std::string> pinnedArt;
   std::vector<fo3hudassets::Vertex> vertices;
+  std::shared_ptr<const fo3pipdata::LocalMap> localMap;
+  GLuint localTexture=0;
   unsigned redraws = 0;
   double renderUs = 0;
 };
@@ -216,6 +218,9 @@ inline const char *Page(fo3pip::Tab tab, int page) {
       {"Local Map", "World Map", "Quests", "Notes", "Radio"}};
   return names[int(tab)][page];
 }
+} // namespace fo3pipui
+#include "fo3-pipboy-data-pages.h"
+namespace fo3pipui {
 // Only called before the eye renderers, which explicitly bind their framebuffer
 // and viewport. The FBO/viewport are owned here until this function returns.
 inline void Render(fo3pip::Menu &menu, const fo3player::Player &p, bool focus) {
@@ -329,9 +334,11 @@ inline void Render(fo3pip::Menu &menu, const fo3player::Player &p, bool focus) {
                  ? (stack->equipped ? "A  Unequip" : "A  Equip")
                  : "",
              540, 555);
+        if(item.kind==fo3player::ItemKind::Aid||item.kind==fo3player::ItemKind::Ingredient){std::string reason;Text(p.CanUse(stack->id,&reason)?"A  Use":reason,540,555,0,365);}
         Draw(r.fontTexture[0]);
       }
     }
+    if(!menu.actionError.empty()){Text(menu.actionError,80,605,0,840);Draw(r.fontTexture[0]);}
   } else if (menu.tab == fo3pip::Tab::Stats) {
     if (menu.page == 0) {
       GLuint art = Art("Textures\\Interface\\Icons\\PipboyImages\\Derived "
@@ -364,10 +371,10 @@ inline void Render(fo3pip::Menu &menu, const fo3player::Player &p, bool focus) {
         Text(Number(s.skills[i == 12 ? 13 : i]), 470, 145 + (i - first) * 51);
       }
     } else
-      Text("Unavailable", 120, 190);
+      ExtendedStats(menu,p);
     Draw(r.fontTexture[0]);
   } else {
-    Text("Unavailable", 120, 190);
+    DataPage(menu,p);
     Draw(r.fontTexture[0]);
   }
   if (r.buttonAtlas) {
@@ -408,7 +415,7 @@ inline void Shutdown() {
   for (auto &texture : r.fontTexture)
     if (texture)
       glDeleteTextures(1, &texture);
-  for (auto texture : {r.texture, r.white})
+  for (auto texture : {r.texture, r.white, r.localTexture})
     if (texture)
       glDeleteTextures(1, &texture);
   if (r.fbo)

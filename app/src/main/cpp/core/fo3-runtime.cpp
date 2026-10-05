@@ -5,6 +5,7 @@
 #endif
 #include "ui/pipboy/fo3-pipboy-mesh.h"
 #include "ui/pipboy/fo3-pipboy-renderer.h"
+#include "pipboy/fo3-local-map-build.h"
 #include "world/interaction/fo3-shoulder-zone.h"
 #include "npc/fo3-animation-bounds.h"
 #include "rendering/actor-skinning.h"
@@ -9776,103 +9777,7 @@ void UpdateFo3PipboyMount(const Q213ArmPose &pose) {
   gPipWorld = fo3anim::Multiply(root, fo3anim::Multiply(delta, gPipBind));
   gPipSolved = true;
 }
-void UpdateFo3Pipboy(uint64_t frame, double now, const float *headPose,
-                     bool available, float x, float y, bool a, bool b) {
-  if (!gPipMenu.BeginFrame(frame))
-    return;
-  const auto started = fqopaque::Clock::now();
-  fo3hudrenderer::CachedStateGuard guard;
-  if (gSceneReady && !fo3pipui::State().attempted)
-    fo3pipui::Ensure();
-  auto *session = GetFo3PlayerSession();
-  fo3pip::View view;
-  if (gPipSolved) {
-    Vec3 c{gPipSurface.center.x / FO3_UNITS_PER_METRE,
-           FLOOR_Y + gPipSurface.center.z / FO3_UNITS_PER_METRE,
-           SCENE_FORWARD - gPipSurface.center.y / FO3_UNITS_PER_METRE};
-    Vec3 n{gPipSurface.normal.x, gPipSurface.normal.z, -gPipSurface.normal.y};
-    const auto centre = Q211TransformPoint(gPipWorld.data(), c);
-    const auto normal = Q218TransformVector(gPipWorld.data(), n);
-    float inverse[16];
-    if (Q2016InvertAffine(gQ210PlayerRoot, inverse)) {
-      auto body = Q211TransformPoint(inverse, centre);
-      view = fo3pip::Measure(
-          available && gQ210LeftHandValid && session && fo3pipui::State().ready,
-          {centre.x, centre.y, centre.z}, {normal.x, normal.y, normal.z},
-          {headPose[12], headPose[13], headPose[14]},
-          {-headPose[8], -headPose[9], -headPose[10]}, {body.x, body.y, body.z},
-          {gPipShoulder.x, gPipShoulder.y, gPipShoulder.z},
-          {gPipHand.x, gPipHand.y, gPipHand.z}, gPipSolved);
-    }
-  }
-  const auto old = gPipActivation.phase;
-  gPipActivation.Step(view, now);
-  if ((gQ211TrackingSerial % 180u) == 1u) {
-    const auto eye=Q211TransformPoint(gQ210PlayerRoot,RuntimePoint(gVrNeckPose.Point(VrPoint(gVrEyeAnchor))));
-    Q6H_LOGI("VR BODY: HMD=(%.3f %.3f %.3f) posedEye=(%.3f %.3f %.3f) eyeError=%.5f torsoDeg=%.1f neckDeg=%.1f pipMount=%d pipAvailable=%d pipValid=%d uiReady=%d sessionReady=%d distance=%.3f facingDeg=%.1f coneDeg=%.1f raised=%d phase=%d",
-        gQ210Head[0],gQ210Head[1],gQ210Head[2],eye.x,eye.y,eye.z,
-        fo3vr::Length(VrPoint(eye)-fo3vr::V{gQ210Head[0],gQ210Head[1],gQ210Head[2]}),
-        gQ213TorsoYaw*57.29578f,fo3vr::Wrap(gQ210Head[3]-gQ213TorsoYaw)*57.29578f,
-        gPipSolved,available,view.valid,fo3pipui::State().ready,session!=nullptr,view.distance,
-        std::acos(std::clamp(view.facing,-1.f,1.f))*57.29578f,
-        std::acos(std::clamp(view.cone,-1.f,1.f))*57.29578f,view.raised,int(gPipActivation.phase));
-    Q6H_LOGI("VR BODY TRACKING: source=%d graceAgeMs=%.0f gripValid=%d gripTracked=%d aimValid=%d aimTracked=%d headValid=%d headTracked=%d",
-        int(gVrPipTracking.source),gVrPipTracking.graceAge*1000,
-        gVrLeftGripTracking.valid,gVrLeftGripTracking.tracked,gVrLeftAimTracking.valid,gVrLeftAimTracking.tracked,
-        gVrHeadTracking.valid,gVrHeadTracking.tracked);
-    for(int i=0;i<2;i++){
-        const auto& p=gVrSolvedArms[i];
-        const auto shoulder=Q211TransformPoint(gQ210PlayerRoot,RuntimePoint(p.shoulder));
-        const auto elbow=Q211TransformPoint(gQ210PlayerRoot,RuntimePoint(p.elbow));
-        const auto palm=Q211TransformPoint(gQ210PlayerRoot,RuntimePoint(p.palm));
-        const float* target=i==0?gQ210LeftHand:gQ210RightHand;
-        const bool valid=i==0?gQ210LeftHandValid:gQ210RightHandValid;
-        Q6H_LOGI("VR BODY ELBOW: side=%d handRelative=(%.3f %.3f %.3f) elbowRelative=(%.3f %.3f %.3f) elbowBelowPalm=%.3f bendDeg=%.1f raisedWeight=%.3f preferred=(%.3f %.3f %.3f) pole=(%.3f %.3f %.3f)",
-            i,p.palm.x-p.shoulder.x,p.palm.y-p.shoulder.y,p.palm.z-p.shoulder.z,
-            p.elbow.x-p.shoulder.x,p.elbow.y-p.shoulder.y,p.elbow.z-p.shoulder.z,
-            p.palm.y-p.elbow.y,p.flex*57.29578f,p.raisedWeight,
-            p.preferredPole.x,p.preferredPole.y,p.preferredPole.z,p.pole.x,p.pole.y,p.pole.z);
-        Q6H_LOGI("VR BODY ARM: side=%d valid=%d shoulder=(%.3f %.3f %.3f) target=(%.3f %.3f %.3f) palm=(%.3f %.3f %.3f) error=%.4f elbow=(%.3f %.3f %.3f) armScale=%.4f stretch=%.4f wristDistance=%.3f palmDistance=%.3f upper=%.3f fore=%.3f normalWristReach=%.3f normalPalmReach=%.3f clamped=%d rollDeg=%.1f",
-            i,valid&&p.valid,shoulder.x,shoulder.y,shoulder.z,target[0],target[1],target[2],palm.x,palm.y,palm.z,p.error,
-            elbow.x,elbow.y,elbow.z,p.armScale,p.stretch,p.targetDistance,
-            fo3vr::Length(VrPoint(shoulder)-fo3vr::V{target[0],target[1],target[2]}),
-            fo3vr::Length(p.elbow-p.shoulder),fo3vr::Length(p.wrist-p.elbow),p.normalReach,
-            p.normalReach+fo3vr::Length(gVrArms[i].palm-gVrArms[i].wrist),p.clamped,p.roll*57.29578f);
-    }
-  }
-  if (old != gPipActivation.phase) {
-    Q6H_LOGI("PIPBOY VIEW: state=%d->%d distance=%.3f facingDeg=%.1f "
-             "viewDeg=%.1f raised=%d debounceMs=150",
-             int(old), int(gPipActivation.phase), view.distance,
-             std::acos(std::clamp(view.facing, -1.f, 1.f)) * 57.2958f,
-             std::acos(std::clamp(view.cone, -1.f, 1.f)) * 57.2958f,
-             view.raised);
-    if (old == fo3pip::Phase::Active || Fo3PipboyFocus()) {
-      gPipMenu.dirty = true;
-      fo3audio::NamedSound(Fo3PipboyFocus() ? "UIPipBoyAccessUp"
-                                            : "UIPipBoyAccessDown");
-    }
-  }
-  if (session) {
-    gPipMenu.Refresh(session->player);
-    gPipInput.Step(
-        Fo3PipboyFocus(), x, y, a, b, now, [&](fo3pip::Action action) {
-          bool mutation = gPipMenu.Invoke(action, session->player);
-          if (mutation) {
-            FlushFo3PlayerState();
-            SynchronizeFo3PipboyEquipment();
-          }
-          fo3audio::NamedSound(
-              action == fo3pip::Action::NextTab ||
-                      action == fo3pip::Action::PreviousTab
-                  ? "UIPipBoyMode"
-              : action == fo3pip::Action::Accept ? "UIPipBoySelect"
-              : action == fo3pip::Action::Back   ? "UIPipBoyTab"
-                                                 : "UIPipBoyHighlight");
-        });
-  }
-  gPipUpdateUs = fqopaque::Micros(started);
-}
+#include "ui/pipboy/fo3-pipboy-runtime.inc"
 void Q211UpdatePlayerRig() {
     if (gQ211LastSkinnedSerial == gQ211TrackingSerial) return;
     gQ211LastSkinnedSerial = gQ211TrackingSerial;

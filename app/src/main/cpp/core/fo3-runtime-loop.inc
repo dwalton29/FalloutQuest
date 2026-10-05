@@ -1544,7 +1544,7 @@ private:
                         headTracking,{gripHandPoseValid_[0],pipLeftGripTracked_},{handPoseValid_[0],pipLeftAimTracked_},
                         static_cast<double>(frameState.predictedDisplayTime)*1e-9),
                     q210RightValid?turnX_:0,q210RightValid?lootScrollY_:0,
-                    q210RightValid&&activateDownQ1700_,q210RightValid&&pipBackDown_);
+                    q210RightValid&&activateDownQ1700_,q210RightValid&&pipBackDown_,fingerGripValue_[0]);
                 if(Fo3PipboyFocus())snapTurnLatched_=std::fabs(turnX_)>=.30f;
                 // Q20.13: loading freezes player motion, not world preparation.
                 // Keep CELL/terrain/LOD streaming alive beneath the overlay.

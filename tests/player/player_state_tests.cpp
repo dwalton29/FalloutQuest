@@ -326,8 +326,16 @@ void Synthetic(const std::string &root) {
   Check(p.Save(save, error) && restored.Restore(save, error),
         "restore v2 after migration check");
   const Bytes good = Read(save);
+  Bytes version3=good;
+  version3.resize(version3.size()-44); // empty v4 Pip-Boy extension
+  version3[4]=3;
+  const auto v3size=version3.size()-20;
+  for(int i=0;i<4;++i)version3[12+i]=(v3size>>(8*i))&255;
+  Rechecksum(version3);Write(save,version3);
+  Check(restored.Restore(save,error)&&restored.IsCollected(200)&&restored.Snapshot().inventory.size()==p.Snapshot().inventory.size(),"v3 migrates without losing legacy gameplay state");
   Bytes version2 = good;
-  version2.resize(version2.size() - 8);
+  const size_t v2worldStart=40+21*fo3esm::ReadU32(good.data()+36);
+  version2.resize(v2worldStart+8+4*fo3esm::ReadU32(good.data()+v2worldStart+4));
   version2[4] = 2;
   const auto v2size = version2.size() - 20;
   for (int i = 0; i < 4; ++i)

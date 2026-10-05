@@ -1,5 +1,6 @@
 #pragma once
 
+#include "pipboy/fo3-pipboy-session.h"
 #include <array>
 #include <cstdint>
 #include <string>
@@ -96,6 +97,7 @@ struct LootList {
   std::vector<LootEntry> entries;
 };
 struct State {
+  fo3pipdata::SessionState pipboy;
   std::array<uint8_t, 7> special{};
   std::array<uint8_t, 14> skills{}, skillOffsets{};
   uint16_t level = 1;
@@ -107,6 +109,7 @@ struct State {
   std::unordered_map<uint32_t, std::vector<Stack>> containers;
 };
 struct Catalog {
+  fo3pipdata::Definitions pipboy;
   std::unordered_map<uint32_t, Item> items;
   std::unordered_map<uint32_t, Reference> references;
   std::unordered_set<uint32_t> scriptedBases;
@@ -141,6 +144,17 @@ public:
   uint64_t Revision() const { return revision_; }
   // Invalid requests are atomic no-ops. Removal respects quest/cannot-drop
   // flags.
+  bool GrantPerk(uint32_t id, uint8_t rank);
+  bool StartQuest(uint32_t id);
+  bool SetQuestStage(uint32_t id,uint16_t stage);
+  bool SetObjective(uint32_t id,uint32_t index,bool displayed,fo3pipdata::Completion status);
+  bool FinishQuest(uint32_t id,fo3pipdata::Completion status);
+  bool SelectQuest(uint32_t id);
+  bool Discover(uint32_t id);
+  bool SetWaypoint(uint32_t world,float x,float y);
+  bool TuneRadio(uint32_t reference);
+  bool CanUse(uint64_t stack,std::string* reason=nullptr) const;
+  bool Use(uint64_t stack);
   bool Add(uint32_t formId, int32_t count, float condition = 1);
   bool Remove(uint64_t stackId, int32_t count);
   bool Equip(uint64_t stackId);
