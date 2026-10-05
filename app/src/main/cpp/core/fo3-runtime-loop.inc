@@ -4,6 +4,7 @@
 #include "ui/interaction/fo3-interaction-hud-renderer.h"
 #include "ui/interaction/fo3-interaction-hud-layout.h"
 #include "ui/interaction/fo3-loot-panel.h"
+#include "ui/interaction/fo3-dialogue-panel-renderer.h"
 #include <array>
 #include <string>
 #include "ui/loading/fo3-loading-vr.h"
@@ -368,6 +369,7 @@ public:
         FlushFo3PlayerState();
         fo3pipui::Shutdown();ResetFo3Pipboy();
         fo3notifyui::Shutdown();
+        fo3dialogueui::Shutdown();EndFo3Dialogue("renderer shutdown");
         fo3lootui::Shutdown();
         fo3hudrenderer::Shutdown();
         if (sessionRunning_) {
@@ -1274,7 +1276,7 @@ private:
         }
         lastFrameTime_ = frameTime;
 
-        if (Fo3PipboyFocus() || gPipActivation.phase==fo3pip::Phase::Candidate || GetFo3LootPanel().reference) {
+        if (Fo3DialogueFocus() || Fo3PipboyFocus() || gPipActivation.phase==fo3pip::Phase::Candidate || GetFo3LootPanel().reference) {
             // Releasing the list while the stick is held cannot cause an accidental turn.
             snapTurnLatched_ = std::fabs(turnX_) >= .30f;
         } else if (!snapTurnLatched_ && std::fabs(turnX_) > 0.65f) {
@@ -1359,7 +1361,7 @@ private:
     }
 
     void UpdateDoorAimQ1700(double lootTime) {
-        if (IsFo3LoadingVisible() || !handPoseValid_[1]) {
+        if (IsFo3LoadingVisible() || Fo3DialogueFocus() || Fo3PipboyFocus() || !handPoseValid_[1]) {
             if (doorAimActiveQ1700_) {
                 FQ_LOGI("Q16.13 HUD TARGET HIDE: sourceDoor=%08X reason=%s promptStorage=fixed-retained",
                         doorAimSourceQ1840_,
@@ -1379,7 +1381,7 @@ private:
             -handMatrix.m[8],-handMatrix.m[9],-handMatrix.m[10],target);
         UpdateFo3LootSelection(target,Fo3PipboyFocus()?0:lootScrollY_,lootTime);
         if (active) {
-            if (!target.pickup && !target.container) {
+            if (!target.pickup && !target.container && !target.talk) {
                 doorAimYawQ1800_ = target.door.rz;
                 doorAimDestinationQ1800_ = target.door.destinationDoorRef;
             }
@@ -1390,6 +1392,7 @@ private:
                 doorPromptQ1850_ = target.prompt;
                 fo3fontdebug::LogBytes("doorPrompt-buffer",doorPromptQ1850_.data());
             }
+            if(target.talk&&doorAimSourceQ1840_!=target.reference)FQ_LOGI("DIALOGUE TARGET actor=%08X prompt=%s",target.reference,target.prompt.data());
             doorAimSourceQ1840_ = target.reference;
             doorPromptValidQ1850_ = target.prompt[0] != '\0';
         } else {
@@ -1550,7 +1553,11 @@ private:
                         static_cast<double>(frameState.predictedDisplayTime)*1e-9),
                     q210RightValid?turnX_:0,q210RightValid?lootScrollY_:0,
                     q210RightValid&&activateDownQ1700_,q210RightValid&&pipBackDown_,fingerGripValue_[0]);
-                WeaponUpdate(static_cast<double>(frameState.predictedDisplayTime)*1e-9,pipBackDown_);
+                const bool dialogueControls=Fo3DialogueFocus();
+                UpdateFo3Dialogue(static_cast<double>(frameState.predictedDisplayTime)*1e-9,
+                    q210RightValid?lootScrollY_:0,q210RightValid&&activateDownQ1700_,q210RightValid&&pipBackDown_,sessionState_==XR_SESSION_STATE_FOCUSED);
+                if(dialogueControls&&activateDownQ1700_)activateLatched_=true;
+                WeaponUpdate(static_cast<double>(frameState.predictedDisplayTime)*1e-9,dialogueControls?false:pipBackDown_);
                 for(int hand=0;hand<2;++hand)if(gWeaponHaptic[hand]>0){
                     XrHapticActionInfo info{XR_TYPE_HAPTIC_ACTION_INFO};info.action=weaponHapticAction_;info.subactionPath=handPaths_[hand];
                     XrHapticVibration pulse{XR_TYPE_HAPTIC_VIBRATION};pulse.amplitude=gWeaponHaptic[hand];pulse.duration=20000000;pulse.frequency=XR_FREQUENCY_UNSPECIFIED;
@@ -1567,7 +1574,7 @@ private:
                 UpdateFo3InteriorDoorsQ2400();
                 UpdateDoorAimQ1700(static_cast<double>(frameState.predictedDisplayTime)*1e-9);
                 ApplyAuthoredDoorFacingQ1810(views[0]);
-                if (gPipInput.WorldA(activateDownQ1700_) && !activateLatched_) {
+                if (!dialogueControls && !Fo3DialogueFocus() && gPipInput.WorldA(activateDownQ1700_) && !activateLatched_) {
                     activateLatched_ = true;
                     if (handPoseValid_[1]) {
                         const XrPosef handQ1700 = ToVirtualPose(handLocalPoses_[1]);
@@ -1761,6 +1768,13 @@ private:
             // Scene boot/loading and world draws must run even with all
             // prototype geometry hidden and no tracked controllers.
             RenderScene(viewProjection.m);
+            if(gDialoguePanel.visible&&!IsFo3LoadingVisible()) {
+                const auto& panel=gDialoguePanel;Mat4 model{};const float yaw=panel.yaw;
+                model.m[0]=std::cos(yaw);model.m[2]=-std::sin(yaw);model.m[5]=1;
+                model.m[8]=std::sin(yaw);model.m[10]=std::cos(yaw);
+                model.m[12]=panel.anchor[0];model.m[13]=panel.anchor[1];model.m[14]=panel.anchor[2];model.m[15]=1;
+                const auto dialogueMvp=Multiply(viewProjection,model);fo3dialogueui::Render(dialogueMvp.m,panel);
+            }
 
             if(!IsFo3LoadingVisible()) {
                 const auto notificationMvp=Multiply(viewProjection,MatrixFromPose(notificationHead_));

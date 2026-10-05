@@ -156,6 +156,9 @@ public:
   uint64_t Revision() const { return revision_; }
   // Invalid requests are atomic no-ops. Removal respects quest/cannot-drop
   // flags.
+  bool RecordDialogue(uint32_t actor,uint32_t info,const std::vector<uint32_t>& topics);
+  bool SetDialogueVariable(uint64_t key,float value);
+  bool ExecuteDialogueResult(const fo3pipdata::ResultScript& script,std::string& error);
   bool GrantPerk(uint32_t id, uint8_t rank);
   bool StartQuest(uint32_t id);
   bool SetQuestStage(uint32_t id,uint16_t stage);

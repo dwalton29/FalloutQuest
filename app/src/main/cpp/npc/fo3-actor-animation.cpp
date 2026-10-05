@@ -287,6 +287,12 @@ bool Sample(const Skeleton &s, const Clip &c, double elapsed, Pose &p, SampleTim
   }
   const auto skeletonStarted=std::chrono::steady_clock::now();
   if(timings) timings->clipUs=std::chrono::duration<double,std::micro>(skeletonStarted-started).count();
+  if(!ComposePose(s,p))return false;
+  if(timings) timings->skeletonUs=std::chrono::duration<double,std::micro>(std::chrono::steady_clock::now()-skeletonStarted).count();
+  return true;
+}
+bool ComposePose(const Skeleton& s,Pose& p) {
+  if(p.local.size()!=s.bones.size())return false;
   // Skeleton decoder orders parents before children; externally built skeletons
   // are evaluated recursively too, so valid non-topological input is supported.
   std::fill(p.evaluated.begin(), p.evaluated.end(), 0);
@@ -308,7 +314,17 @@ bool Sample(const Skeleton &s, const Clip &c, double elapsed, Pose &p, SampleTim
     for (float v : m)
       if (!std::isfinite(v))
         return false;
-  if(timings) timings->skeletonUs=std::chrono::duration<double,std::micro>(std::chrono::steady_clock::now()-skeletonStarted).count();
   return true;
+}
+void LookYaw(const Skeleton& s,Pose& p,int bone,float radians) {
+  if(bone<0||size_t(bone)>=p.global.size()||!std::isfinite(radians))return;
+  auto turn=Identity();turn[0]=turn[5]=std::cos(radians);turn[1]=std::sin(radians);turn[4]=-turn[1];
+  auto pivot=p.global[bone];turn[12]=pivot[12]-turn[0]*pivot[12]-turn[4]*pivot[13];
+  turn[13]=pivot[13]-turn[1]*pivot[12]-turn[5]*pivot[13];
+  for(size_t i=0;i<s.bones.size();++i) {
+    int parent=int(i);bool affected=false;
+    while(parent>=0){if(parent==bone){affected=true;break;}parent=s.bones[parent].parent;}
+    if(affected){p.global[i]=Multiply(turn,p.global[i]);p.delta[i]=Multiply(p.global[i],s.inverseBind[i]);}
+  }
 }
 } // namespace fo3anim

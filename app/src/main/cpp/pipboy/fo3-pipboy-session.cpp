@@ -87,6 +87,15 @@ void EncodeState(const SessionState &s, std::vector<uint8_t> &b) {
       Put(b, (uint32_t(s.status) << 1) | s.displayed);
     }
   }
+  Put(b,0x444c4731);
+  for(const auto* set:{&s.talkedActors,&s.knownTopics}) {
+    std::vector<uint32_t> ids(set->begin(),set->end());std::sort(ids.begin(),ids.end());
+    Put(b,ids.size());for(auto id:ids)Put(b,id);
+  }
+  std::vector<uint64_t> said(s.saidInfos.begin(),s.saidInfos.end());std::sort(said.begin(),said.end());
+  Put(b,said.size());for(auto id:said){Put(b,uint32_t(id>>32));Put(b,uint32_t(id));}
+  std::vector<uint64_t> vars;for(auto& v:s.dialogueVariables)vars.push_back(v.first);std::sort(vars.begin(),vars.end());
+  Put(b,vars.size());for(auto id:vars){Put(b,uint32_t(id>>32));Put(b,uint32_t(id));Put(b,Bits(s.dialogueVariables.at(id)));}
 }
 bool DecodeState(SessionState &out, const Definitions &d, const uint8_t *p,
                  size_t n, std::string &error) {
@@ -153,6 +162,17 @@ bool DecodeState(SessionState &out, const Definitions &d, const uint8_t *p,
         return fail();
     }
     s.quests.emplace(id, std::move(q));
+  }
+  if(r.ok&&r.at<n) {
+    if(r.U()!=0x444c4731)return fail();
+    for(auto* set:{&s.talkedActors,&s.knownTopics}) {
+      const auto size=r.Count(100000);for(uint32_t i=0;i<size&&r.ok;++i){auto id=r.U();if(!id||!set->insert(id).second)return fail();}
+    }
+    const auto said=r.Count(100000);for(uint32_t i=0;i<said&&r.ok;++i){auto actor=r.U(),info=r.U();if(!actor||!info||!s.saidInfos.insert((uint64_t(actor)<<32)|info).second)return fail();}
+    const auto size=r.Count(100000);for(uint32_t i=0;i<size&&r.ok;++i) {
+      auto owner=r.U(),index=r.U();auto value=r.F();
+      if(!owner||!index||!std::isfinite(value)||!s.dialogueVariables.emplace((uint64_t(owner)<<32)|index,value).second)return fail();
+    }
   }
   if (!r.ok || r.at != n ||
       (s.selectedQuest &&

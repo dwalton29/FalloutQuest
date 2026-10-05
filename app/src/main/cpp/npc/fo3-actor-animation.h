@@ -74,6 +74,9 @@ void BindClip(const Skeleton &skeleton, const Clip &clip, Pose &pose);
 // placement.
 bool Sample(const Skeleton &skeleton, const Clip &clip, double elapsed,
             Pose &pose, SampleTimings* timings=nullptr);
+// Rebuild after local animation blending; one canonical skeleton composition.
+bool ComposePose(const Skeleton&,Pose&);
+void LookYaw(const Skeleton&,Pose&,int bone,float radians);
 bool DecodeSkeleton(const std::vector<uint8_t> &bytes, Skeleton &out);
 // Static model AVObject hierarchy, including geometry block mapping. Unlike
 // DecodeUiAnimation, no embedded controller sequence is required or evaluated.

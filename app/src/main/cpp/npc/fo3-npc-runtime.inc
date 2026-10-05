@@ -1,3 +1,25 @@
+void Q230CacheDialogueAnimations(Q230ActorVisual& actor,const fo3pipdata::Definitions* d) {
+  actor.animations[0]=actor.clip;
+  const auto root=actor.source.skeletonModel.substr(0,actor.source.skeletonModel.find_last_of("\\/")+1);
+  std::array<std::string,4> paths{"",root+"locomotion\\mtturnleft.kf",root+"locomotion\\mtturnright.kf",""};
+  if(d){std::string name=fo3npc::DialoguePolicy::ConversationIdle;for(auto& c:name)c=char(std::tolower((unsigned char)c));auto named=d->formNames.find(name);if(named!=d->formNames.end()){
+    auto model=d->idleModels.find(named->second);if(model!=d->idleModels.end())paths[3]=model->second;
+  }}
+  for(size_t i=1;i<paths.size();++i){std::vector<uint8_t> bytes;
+    if(!paths[i].empty()&&LoadFalloutMeshFile(paths[i],bytes))fo3anim::DecodeClip(bytes,actor.animations[i]);
+  }
+  actor.headBone=fo3anim::FindBone(actor.skeleton,"Bip01 Head");
+  actor.chestBone=fo3anim::FindBone(actor.skeleton,"Bip01 Spine2");
+  actor.blendFrom.resize(actor.skeleton.bones.size());
+}
+
+bool Q230LiveBone(const Q230ActorVisual& actor,int bone,std::array<float,3>& world) {
+  if(bone<0||size_t(bone)>=actor.pose.global.size()||actor.rigs.empty())return false;
+  world=fo3anim::Point(actor.rigs[0].scenePlacement,
+    {actor.pose.global[bone][12],actor.pose.global[bone][13],actor.pose.global[bone][14]});
+  world=fo3anim::Point(actor.dialogueRoot,world);return true;
+}
+
 // Render-thread ownership and CPU preparation bridge for authored actors.
 // Included by the runtime; all CPU data is request-local until scene commit.
 void Q230PrepareActors(uint32_t cell, uint32_t worldspace,
@@ -95,6 +117,18 @@ bool Q230UploadActorPart(Q230ActorVisual &actor, CpuObject &part, float centerX,
       // Retain only position triplets for weapon-hit skinning, not a duplicate VBO.
       rig.hitVertices.reserve(part.mesh.indices.size());
       for(uint32_t index:part.mesh.indices){const auto&v=part.positionsGame[index];rig.hitVertices.push_back({(v.x-centerX)/FO3_UNITS_PER_METRE,FLOOR_Y+(v.z-floorZ)/FO3_UNITS_PER_METRE,SCENE_FORWARD-(v.y-centerY)/FO3_UNITS_PER_METRE});}
+      rig.interactionBounds.resize(rig.skin.palette.size(),{{INFINITY,INFINITY,INFINITY},{-INFINITY,-INFINITY,-INFINITY}});
+      for(size_t v=0;v<rig.hitVertices.size();++v)for(size_t j=0;j<4;++j) {
+        const auto* attribute=rig.skin.mapping.attributes.data()+v*8;
+        if(attribute[j]<=0)continue;
+        const size_t slot=size_t(attribute[4+j]);
+        if(slot>=rig.interactionBounds.size())continue;
+        for(size_t c=0;c<3;++c){auto& bounds=rig.interactionBounds[slot];bounds.first[c]=std::min(bounds.first[c],rig.hitVertices[v][c]);bounds.second[c]=std::max(bounds.second[c],rig.hitVertices[v][c]);}
+      }
+      if(actor.rigs.empty()) {
+        actor.runtime.authoredYaw=actor.runtime.yaw=actor.runtime.returnYaw=std::atan2(-rig.scenePlacement[4],-rig.scenePlacement[6]);
+        actor.runtime.position={rig.scenePlacement[12],rig.scenePlacement[13],rig.scenePlacement[14]};
+      }
       actor.rigs.push_back(std::move(rig));
     }
   }
@@ -140,21 +174,65 @@ void Q230UpdateActor(Q230ActorVisual &actor) {
   ++fqactor::npc.actors;
   const double elapsed=std::chrono::duration<double>(fqopaque::Clock::now()-actor.animationStart).count();
   fo3anim::SampleTimings timings;
-  if(!fo3anim::Sample(actor.skeleton,actor.clip,elapsed,actor.pose,&timings)) return;
+  int selected=int(actor.runtime.animation);
+  if(actor.animations[selected].tracks.empty())selected=0;
+  if(selected!=actor.activeAnimation) {
+    actor.blendFrom=actor.pose.local;actor.blendStart=elapsed;actor.activeAnimation=selected;
+    fo3anim::BindClip(actor.skeleton,actor.animations[selected],actor.pose);
+    Q6H_LOGI("NPC ANIM actor=%08X clip=%s",actor.source.refFormId,actor.animations[selected].name.c_str());
+  }
+  const auto& clip=actor.animations[actor.activeAnimation].tracks.empty()?actor.clip:actor.animations[actor.activeAnimation];
+  const double clipTime=actor.blendStart<0?elapsed:elapsed-actor.blendStart;
+  if(!fo3anim::Sample(actor.skeleton,clip,clipTime,actor.pose,&timings)) return;
+  if(actor.blendStart>=0&&elapsed-actor.blendStart<fo3npc::DialoguePolicy::BlendSeconds&&actor.blendFrom.size()==actor.pose.local.size()) {
+    const float mix=float((elapsed-actor.blendStart)/fo3npc::DialoguePolicy::BlendSeconds);
+    for(size_t i=0;i<actor.pose.local.size();++i) {
+      auto& to=actor.pose.local[i];const auto& from=actor.blendFrom[i];
+      for(int j=0;j<3;++j)to.translation[j]=from.translation[j]*(1-mix)+to.translation[j]*mix;
+      float dot=0;for(int j=0;j<4;++j)dot+=from.rotation[j]*to.rotation[j];
+      float norm=0;for(int j=0;j<4;++j){to.rotation[j]=from.rotation[j]*(1-mix)+(dot<0?-1:1)*to.rotation[j]*mix;norm+=to.rotation[j]*to.rotation[j];}
+      norm=std::sqrt(norm);if(norm>1e-6f)for(auto& v:to.rotation)v/=norm;
+      to.scale=from.scale*(1-mix)+to.scale*mix;
+    }
+    fo3anim::ComposePose(actor.skeleton,actor.pose);
+  }
+  fo3anim::LookYaw(actor.skeleton,actor.pose,actor.headBone,actor.runtime.headYaw);
+  auto root=fo3anim::Identity();const float yaw=actor.runtime.yaw-actor.runtime.authoredYaw;
+  root[0]=root[10]=std::cos(yaw);root[2]=-std::sin(yaw);root[8]=-root[2];
+  if(!actor.rigs.empty()) {
+    const auto& placement=actor.rigs[0].scenePlacement;const float x=placement[12],z=placement[14];
+    root[12]=x-root[0]*x-root[8]*z;root[14]=z-root[2]*x-root[10]*z;
+  }
+  actor.dialogueRoot=root;
   fqactor::npc.clip+=timings.clipUs;fqactor::npc.pose+=timings.skeletonUs;
   for(auto& rig:actor.rigs) {
     const auto started=fqopaque::Clock::now();
+    fqskin::Pack(rig.skin.palette[0],actor.dialogueRoot,actor.dialogueRoot);
     for(size_t slot=0;slot<rig.skin.mapping.sources.size();++slot) {
       const int index=rig.skin.mapping.sources[slot];
       const int bone=index<static_cast<int>(rig.bones.size()) ? rig.bones[index] : -1;
       auto delta=fqskin::Identity();
       if(bone>=0) delta=fo3anim::Multiply(rig.scenePlacement,fo3anim::Multiply(actor.pose.delta[bone],rig.inverseScenePlacement));
+      delta=fo3anim::Multiply(actor.dialogueRoot,delta);
       // Uniform game->scene scale cancels in this conjugation; direction w=0.
       fqskin::Pack(rig.skin.palette[slot+1],delta,delta);
     }
     fqactor::npc.bones+=fqopaque::Micros(started);
     QActorUploadSkin(actor.objects[rig.gpuIndex],rig.skin,fqactor::npc,false);
   }
+}
+
+bool Q230LiveBounds(Q230ActorVisual& actor,std::array<float,3>& lo,std::array<float,3>& hi) {
+  Q230UpdateActor(actor);lo={INFINITY,INFINITY,INFINITY};hi={-INFINITY,-INFINITY,-INFINITY};
+  for(const auto& rig:actor.rigs)for(size_t slot=0;slot<rig.interactionBounds.size();++slot) {
+    const auto& b=rig.interactionBounds[slot];if(!std::isfinite(b.first[0]))continue;
+    for(int corner=0;corner<8;++corner) {
+      const std::array<float,3> p{corner&1?b.second[0]:b.first[0],corner&2?b.second[1]:b.first[1],corner&4?b.second[2]:b.first[2]};
+      const auto point=fqskin::Transform(rig.skin.palette[slot].data(),p.data(),false);
+      for(size_t c=0;c<3;++c){lo[c]=std::min(lo[c],point[c]);hi[c]=std::max(hi[c],point[c]);}
+    }
+  }
+  return std::isfinite(lo[0]);
 }
 
 void Q230RenderNpcActors(bool alphaPass) {

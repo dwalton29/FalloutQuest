@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <queue>
 namespace fo3pipdata {
 namespace {
 struct Sub {
@@ -58,6 +59,7 @@ Placement Place(uint32_t flags, const Subs &s, uint32_t cell, uint32_t world) {
   }
   return p;
 }
+} // namespace
 std::string VoicePath(const Definitions &d, const Info &i, const Response &r,
                       uint32_t voice) {
   auto v = d.voices.find(voice);
@@ -69,11 +71,10 @@ std::string VoicePath(const Definitions &d, const Info &i, const Response &r,
   // Never guess/truncate the authored filename prefix or synthesize a playlist.
   return "@voice:" + v->second + ":" + tail;
 }
-} // namespace
 bool Relevant(const std::string &t) {
   return t == "RADS" || t == "WRLD" || t == "PERK" || t == "QUST" ||
          t == "MGEF" || t == "TACT" || t == "INFO" || t == "DIAL" ||
-         t == "SOUN" || t == "VTYP" || t == "SCPT" || t == "NPC_";
+         t == "RACE" || t == "FLST" || t == "IDLE" || t == "SOUN" || t == "VTYP" || t == "SCPT" || t == "NPC_";
 }
 void Decode(Definitions &d, const std::string &t, uint32_t id, uint32_t flags,
             const std::vector<uint8_t> &bytes, uint32_t cell, uint32_t world,
@@ -83,7 +84,12 @@ void Decode(Definitions &d, const std::string &t, uint32_t id, uint32_t flags,
                          [&](const char *tag, const uint8_t *p, uint32_t n) {
                            s.push_back({std::string(tag, 4), p, n});
                          });
-  if (t == "RADS") {
+  const auto editor=Text(s,"EDID");
+  if(!editor.empty()) { auto key=editor; for(auto& c:key)c=char(std::tolower((unsigned char)c));d.formNames[key]=id; }
+  if(t=="FLST") {for(auto& v:s)if(v.type=="LNAM"&&v.n==4)d.formLists[id].push_back(U(&v));}
+  else if(t=="RACE"){auto voices=Find(s,"VTCK");if(voices&&voices->n>=8)d.raceVoices[id]={U(voices),U(voices,4)};}
+  else if(t=="IDLE") d.idleModels[id]=Text(s,"MODL");
+  else if (t == "RADS") {
     const auto data = Find(s, "DATA");
     if (data && data->n == 8)
       d.radiationStages[id] = {U(data), U(data, 4)};
@@ -122,6 +128,7 @@ void Decode(Definitions &d, const std::string &t, uint32_t id, uint32_t flags,
     d.cellWorlds[id] = world;
   else if (t == "REFR" || t == "ACHR" || t == "ACRE") {
     auto p = Place(flags, s, cell, world);
+    if(t=="ACHR") d.referenceScripts[id]={editor,p.base};
     if (p.base == 0x10 && Find(s, "XMRK")) {
       Marker m;
       static_cast<Placement &>(m) = p;
@@ -286,11 +293,29 @@ void Decode(Definitions &d, const std::string &t, uint32_t id, uint32_t flags,
     d.voices[id] = Text(s, "EDID");
   else if (t == "NPC_") {
     d.npcVoices[id] = U(Find(s, "VTCK"));
+    ActorDefinition actor;actor.editor=editor;actor.name=Text(s,"FULL");
+    actor.race=U(Find(s,"RNAM"));actor.actorClass=U(Find(s,"CNAM"));actor.voice=d.npcVoices[id];
+    actor.script=U(Find(s,"SCRI"));actor.templateActor=U(Find(s,"TPLT"));
+    actor.female=(U(Find(s,"ACBS"))&1)!=0;
+    auto acbs=Find(s,"ACBS");if(acbs&&acbs->n>=24){actor.templateFlags=fo3esm::ReadU16(acbs->p+22);actor.karma=fo3esm::ReadF32(acbs->p+16);actor.disposition=int16_t(fo3esm::ReadU16(acbs->p+20));}
+    actor.combatStyle=U(Find(s,"ZNAM"));
+    for(auto& v:s) {
+      if(v.type=="SNAM"&&v.n>=5)actor.factions[U(&v)]=int8_t(v.p[4]);
+      if(v.type=="PKID"&&v.n==4)actor.packages.push_back(U(&v));
+      if(v.type=="AIDT")actor.aiData.assign(v.p,v.p+v.n);
+    }
+    d.dialogueActors[id]=std::move(actor);
     if (id == 7)
       d.playerFemale = (U(Find(s, "ACBS")) & 1) != 0;
   } else if (t == "DIAL") {
     auto name = Text(s, "EDID");
     d.topicNames[id] = name;
+    Topic entry;entry.editor=name;entry.text=Text(s,"FULL");
+    auto data=Find(s,"DATA");if(data&&data->n)entry.type=data->p[0];
+    if(data&&data->n>=2)entry.flags=data->p[1];
+    auto priority=Find(s,"PNAM");if(priority&&priority->n==4)entry.priority=fo3esm::ReadF32(priority->p);
+    for(auto& v:s)if(v.type=="QSTI"&&v.n==4)entry.quests.push_back(U(&v));
+    d.dialogueTopics[id]=std::move(entry);
     if (name == "RadioHello")
       d.radioHello = id;
   } else if (t == "SCPT") {
@@ -306,37 +331,99 @@ void Decode(Definitions &d, const std::string &t, uint32_t id, uint32_t flags,
   } else if (t == "INFO") {
     Info i;
     i.id = id;
-    i.topic = topic;
+    i.topic = U(Find(s,"TPIC"));if(!i.topic)i.topic=topic;
+    i.recordFlags=flags;i.previous=U(Find(s,"PNAM"));i.prompt=Text(s,"RNAM");
+    i.challenge=U(Find(s,"KNAM"));i.challengeValue=U(Find(s,"DNAM"));
     i.quest = U(Find(s, "QSTI"));
     i.speaker = U(Find(s, "ANAM"));
     auto a = Find(s, "DATA");
     if (a && a->n >= 3) {
       i.type = a->p[0];
-      i.flags = a->p[2];
+      i.flags = a->p[2];i.nextSpeaker=a->p[1];if(a->n>=4)i.flags2=a->p[3];
     }
     bool compiled = false, source = false;
+    ResultScript* result=&i.begin;
     for (auto &v : s) {
-      if (v.type == "TRDT" && v.n >= 20)
-        i.responses.push_back({U(&v, 16), v.p[12], {}});
+      if (v.type == "TRDT" && v.n >= 16) {
+        Response r;r.sound=U(&v,16);r.number=v.p[12];r.emotion=U(&v);r.emotionValue=int32_t(U(&v,4));
+        if(v.n>=21)r.flags=v.p[20];
+        i.responses.push_back(std::move(r));
+      }
       else if (v.type == "NAM1" && !i.responses.empty())
         i.responses.back().text = fo3esm::ZString(v.p, v.n);
       else if (v.type == "CTDA")
         i.conditions.push_back(Cond(v));
       else if (v.type == "TCLT" && v.n == 4)
         i.links.push_back(U(&v));
-      else if (v.type == "SCDA" && v.n)
-        compiled = true;
+      else if(v.type=="NAME"&&v.n==4)i.addedTopics.push_back(U(&v));
+      else if(v.type=="TCLF"&&v.n==4)i.linksFrom.push_back(U(&v));
+      else if(v.type=="NAM2"&&!i.responses.empty())i.responses.back().notes=fo3esm::ZString(v.p,v.n);
+      else if(v.type=="NAM3"&&!i.responses.empty())i.responses.back().edits=fo3esm::ZString(v.p,v.n);
+      else if(v.type=="SNAM"&&!i.responses.empty())i.responses.back().speakerAnimation=U(&v);
+      else if(v.type=="LNAM"&&!i.responses.empty())i.responses.back().listenerAnimation=U(&v);
+      else if(v.type=="NEXT")result=&i.end;
+      else if(v.type=="SCHR")result->header.assign(v.p,v.p+v.n);
+      else if(v.type=="SCRO"&&v.n==4)result->references.push_back(U(&v));
+      else if (v.type == "SCDA" && v.n) {
+        compiled = true;result->compiled.assign(v.p,v.p+v.n);
+      }
       else if (v.type == "SCTX" && v.n) {
         source = true;
-        i.scripts.push_back(fo3esm::ZString(v.p, v.n));
+        i.scripts.push_back(fo3esm::ZString(v.p, v.n));result->source=i.scripts.back();
       }
     }
     i.compiledOnly = compiled && !source;
-    d.topics[topic].push_back(std::move(i));
+    i.compiledOnly=(!i.begin.compiled.empty()&&i.begin.source.empty())||(!i.end.compiled.empty()&&i.end.source.empty());
+    d.topics[i.topic].push_back(std::move(i));
   }
 }
 void Finalize(Definitions &d) {
+  // INFO editor ordering is a PNAM predecessor relation, not FormID order.
+  // Prepare it once. Radio keeps its existing authored playlist ordering.
+  for(auto& topic:d.topics) {
+    auto type=d.dialogueTopics.find(topic.first);
+    if(type==d.dialogueTopics.end()||(type->second.type!=0&&type->second.type!=3))continue;
+    auto& infos=topic.second;std::unordered_map<uint32_t,size_t> index;
+    for(size_t i=0;i<infos.size();++i)index[infos[i].id]=i;
+    std::vector<std::vector<size_t>> children(infos.size());std::vector<size_t> indegree(infos.size());
+    for(size_t i=0;i<infos.size();++i){auto prev=index.find(infos[i].previous);if(prev!=index.end()){children[prev->second].push_back(i);++indegree[i];}}
+    std::priority_queue<size_t,std::vector<size_t>,std::greater<size_t>> ready;
+    for(size_t i=0;i<infos.size();++i)if(!indegree[i])ready.push(i);
+    std::vector<size_t> order;order.reserve(infos.size());
+    while(!ready.empty()){auto i=ready.top();ready.pop();order.push_back(i);for(auto next:children[i])if(!--indegree[next])ready.push(next);}
+    if(order.size()==infos.size()){std::vector<Info> sorted;sorted.reserve(infos.size());for(auto i:order)sorted.push_back(std::move(infos[i]));infos=std::move(sorted);}
+    else infos.clear(); // Cyclic authored order is unusable, never guessed.
+  }
+  // PNAM is the authored Previous INFO relationship, not FormID order.
+  // Keep the existing radio sequencing policy separate from normal dialogue.
+  for(auto& topic:d.topics) {
+    auto td=d.dialogueTopics.find(topic.first);if(td==d.dialogueTopics.end()||td->second.type==7)continue;
+    auto& infos=topic.second;std::unordered_map<uint32_t,size_t> indices;
+    std::unordered_map<uint32_t,std::vector<size_t>> following;
+    for(size_t i=0;i<infos.size();++i)indices[infos[i].id]=i;
+    for(size_t i=0;i<infos.size();++i)if(infos[i].previous&&indices.count(infos[i].previous))following[infos[i].previous].push_back(i);
+    std::vector<size_t> order,stack;std::vector<bool> visited(infos.size(),false);
+    auto chain=[&](size_t first){stack.push_back(first);while(!stack.empty()){
+      const auto i=stack.back();stack.pop_back();if(visited[i])continue;visited[i]=true;order.push_back(i);
+      auto next=following.find(infos[i].id);if(next!=following.end())for(auto n=next->second.rbegin();n!=next->second.rend();++n)stack.push_back(*n);
+    }};
+    for(size_t i=0;i<infos.size();++i)if(!infos[i].previous||!indices.count(infos[i].previous))chain(i);
+    // Malformed cyclic ordering cannot participate in a canonical dialogue.
+    for(size_t i=0;i<infos.size();++i)if(!visited[i])infos[i].orderValid=false;
+    for(size_t i=0;i<infos.size();++i)if(!visited[i])chain(i);
+    std::vector<Info> sorted;sorted.reserve(infos.size());for(auto i:order)sorted.push_back(std::move(infos[i]));infos=std::move(sorted);
+  }
+  d.greetings.clear();d.topLevelTopics.clear();
+  for(auto& t:d.dialogueTopics) {
+    if(t.second.editor=="GREETING")d.greetings.push_back(t.first);
+    if(t.second.type==0&&(t.second.flags&2))d.topLevelTopics.push_back(t.first);
+  }
+  std::sort(d.topLevelTopics.begin(),d.topLevelTopics.end(),[&](auto a,auto b){
+    if(d.dialogueTopics.at(a).priority!=d.dialogueTopics.at(b).priority)return d.dialogueTopics.at(a).priority>d.dialogueTopics.at(b).priority;
+    return a<b;
+  });
   std::unordered_set<uint32_t> retain;
+  for(auto& actor:d.referenceScripts)retain.insert(actor.first);
   for (auto &p : d.targets)
     if (d.doorBases.count(p.second.base))
       d.doors[p.second.cell].push_back(p.second);
@@ -433,3 +520,20 @@ std::vector<std::string> NoteAudio(const Definitions &d, uint32_t id) {
   return paths;
 }
 } // namespace fo3pipdata
+
+namespace fo3pipdata {
+const ActorDefinition* ActorCategory(const Definitions& d,uint32_t base,uint16_t category) {
+  std::unordered_set<uint32_t> seen;
+  while(base&&seen.insert(base).second) {
+    auto actor=d.dialogueActors.find(base);if(actor==d.dialogueActors.end())return nullptr;
+    if(actor->second.templateActor&&(actor->second.templateFlags&category))base=actor->second.templateActor;
+    else return &actor->second;
+  }
+  return nullptr;
+}
+uint32_t ActorVoice(const Definitions& d,uint32_t base) {
+  const auto* actor=ActorCategory(d,base,1);if(!actor)return 0;
+  if(actor->voice)return actor->voice;
+  auto race=d.raceVoices.find(actor->race);return race==d.raceVoices.end()?0:race->second[actor->female?1:0];
+}
+}

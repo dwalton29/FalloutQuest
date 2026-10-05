@@ -287,7 +287,7 @@ static bool DecodeClips(const std::vector<uint8_t> &bytes, std::vector<fo3anim::
   using namespace fo3anim;
   out.clear();
   NifHeader h;
-  if (!ActorHeader(bytes, h) || h.userVersion != 11 || h.bsVersion != 34)
+  if (!ActorHeader(bytes, h) || h.userVersion != 11 || (h.bsVersion != 34 && h.bsVersion != 27))
     return false;
   for (uint32_t block = 0; block < h.numBlocks; ++block) {
     if (BlockType(h, block) != "NiControllerSequence")
@@ -330,12 +330,18 @@ static bool DecodeClips(const std::vector<uint8_t> &bytes, std::vector<fo3anim::
     uint16_t notes = 0;
     if (!c.F32(weight) || !c.U32(text) || !c.U32(clip.cycle) ||
         clip.cycle > 2 || !c.F32(clip.frequency) || !c.F32(clip.start) ||
-        !c.F32(clip.stop) || !c.U32(manager) || !c.U32(root) || !c.U16(notes) ||
-        !c.Skip(static_cast<size_t>(notes) * 4) || c.remaining() != 0 ||
+        !c.F32(clip.stop) || !c.U32(manager) || !c.U32(root) ||
         !ActorValid(clip.start) || !ActorValid(clip.stop) ||
         clip.stop < clip.start || !ActorValid(clip.frequency) ||
         clip.frequency <= 0)
       return false;
+    // Vanilla FO3 conversation idles include BS version 27: nifxml defines a
+    // single BSAnimNotes reference for 24..28, versus a ushort array after 28.
+    if(h.bsVersion==27) {
+      uint32_t note=INVALID_REF;
+      if(!c.U32(note)||(note!=INVALID_REF&&(note>=h.numBlocks||BlockType(h,note)!="BSAnimNotes")))return false;
+    } else if(!c.U16(notes)||!c.Skip(static_cast<size_t>(notes)*4))return false;
+    if(c.remaining())return false;
     if (root < h.strings.size())
       clip.accumulationRoot = h.strings[root];
     if (text != INVALID_REF) {

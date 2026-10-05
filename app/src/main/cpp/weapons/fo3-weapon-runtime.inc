@@ -180,7 +180,7 @@ bool Hit(uint64_t instance,V origin,V direction,float limit,uint32_t base,float 
     }
   }
   if(target&&!HasFo3InteractionOccluder(origin.x,origin.y,origin.z,direction.x,direction.y,direction.z,nearest,target)){
-    if(p.ApplyWeaponHit(base,target,damage))Q6H_LOGI("WEAPON HIT: instance=%llu target=%08X health=%.3f",(unsigned long long)instance,target,p.ActorHealth(target));
+    if(p.ApplyWeaponHit(base,target,damage)){if(Fo3DialogueFocus())EndFo3Dialogue("weapon damage");Q6H_LOGI("WEAPON HIT: instance=%llu target=%08X health=%.3f",(unsigned long long)instance,target,p.ActorHealth(target));}
     return true;
   }
   return HasFo3InteractionOccluder(origin.x,origin.y,origin.z,direction.x,direction.y,direction.z,limit,0);
@@ -277,6 +277,7 @@ void WeaponUpdate(double now,bool backButton){
   const float dt=std::clamp(float(now-last),0.f,.064f);last=now;
   const bool blocked=Fo3PipboyFocus()||IsFo3LoadingVisible()||!gSceneReady||!gShoulderFocused||!gPlayerSession||gPlayerSession->saveBlocked;
   inputs.Update(blocked,gQ217FingerGrip[1],gQ217FingerGrip[0],gQ217FingerTrigger[1],backButton);
+  if(Fo3DialogueFocus()){inputs.r=false;inputs.l=false;} // Dialogue suppresses new grabs; held trigger can interrupt.
   if(!gPlayerSession)return;auto&p=gPlayerSession->player;
   // Explicit milestone bootstrap, never part of authored starting inventory.
   if(!gPlayerSession->saveBlocked&&!p.Snapshot().developmentWeaponGranted){if(p.BootstrapDevelopmentWeapon()){auto*s=p.EquippedWeapon();if(s)Log("GRANT",s->id,s->formId);}}
@@ -363,6 +364,7 @@ void WeaponUpdate(double now,bool backButton){
         if(charging){chargeTravel=fo3weapon::RearwardPull(Rotation(pose),Position(pose),left,chargeStart);if(chargeTravel>=.045f&&p.ChamberWeapon(id)){charging=false;Pulse(0);fo3audio::NamedSound(m->asset.reloadSounds[2]);Log("RELOAD CHAMBER",id,form);s=p.Weapon(id);}if(gQ217FingerGrip[0]<=.25f)charging=false;}
       }
       if(s&&held&&gWeaponPalmValid[1]&&trigger.Ready(d,inputs,gQ217FingerTrigger[1],now)){
+        if(Fo3DialogueFocus())EndFo3Dialogue("player weapon fire");
         const auto id=s->id;const auto form=s->formId;
         const float shotDamage=p.WeaponDamage(id);
         if(p.FireWeapon(id)){const auto projectile=p.Definitions().weapons.projectiles.find(d.projectile);if(projectile!=p.Definitions().weapons.projectiles.end())flashUntil=now+projectile->second.flashDuration;Shoot(id,d,*m,shotDamage);fo3audio::SoundEvent(d.fire3D?d.fire3D:d.fire2D);Pulse(1,std::clamp(d.rumbleRight,.15f,.65f));recoil=1;Log("FIRE",id,form);}

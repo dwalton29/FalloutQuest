@@ -149,7 +149,8 @@ bool Broadcast::Conditions(const Definitions &d, const SessionState &s,
         known = false;
       else {
         auto v = variables.find(key);
-        value = v == variables.end() ? 0 : v->second;
+        auto persistent=s.dialogueVariables.find((uint64_t(c.a)<<32)|c.b);
+        value = persistent!=s.dialogueVariables.end()?persistent->second:(v == variables.end() ? 0 : v->second);
       }
       break;
     }

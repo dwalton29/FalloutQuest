@@ -25,6 +25,9 @@ struct SessionState {
   // Runtime-observed counters. Original General label comes from GMST/exe.
   uint32_t aidUsed = 0;
   float radiation = 0;
+  std::unordered_set<uint32_t> talkedActors, knownTopics;
+  std::unordered_set<uint64_t> saidInfos; // actor reference + INFO (Say Once is per actor)
+  std::unordered_map<uint64_t,float> dialogueVariables;
 };
 void EncodeState(const SessionState &, std::vector<uint8_t> &);
 bool DecodeState(SessionState &, const Definitions &, const uint8_t *, size_t,

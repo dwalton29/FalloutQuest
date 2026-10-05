@@ -4,6 +4,9 @@
 #include "../../app/src/main/cpp/rendering/mesh/fo3-static-nif.h"
 #include "fo3-actor-animation.h"
 #include "fo3-npc.h"
+#include "../..//app/src/main/cpp/npc/fo3-npc-state.h"
+#include "../..//app/src/main/cpp/pipboy/fo3-pipboy-data.h"
+#define Q6H_LOGI(...) ((void)0)
 #include "fo3-npc-appearance.h"
 #include "fo3-texture-bsa.h"
 #include <algorithm>
@@ -43,6 +46,7 @@ struct Q230RigPart {
   QActorSkin skin;
   std::vector<int> bones;
   std::vector<std::array<float,3>> hitVertices;
+  std::vector<std::pair<std::array<float,3>,std::array<float,3>>> interactionBounds;
   fo3anim::Matrix placement{}, inversePlacement{}, scenePlacement{}, inverseScenePlacement{};
   int rigidBone = -1;
   size_t gpuIndex = 0;
@@ -50,6 +54,12 @@ struct Q230RigPart {
 };
 struct Q230ActorVisual {
   Fo3NpcActorQ230 source;
+  fo3npc::RuntimeState runtime;
+  std::array<fo3anim::Clip,4> animations;
+  int activeAnimation=0,headBone=-1,chestBone=-1;
+  std::vector<fo3anim::Transform> blendFrom;
+  double blendStart=-1;
+  fo3anim::Matrix dialogueRoot=fo3anim::Identity();
   fo3anim::Skeleton skeleton;
   fo3anim::Clip clip;
   fo3anim::Pose pose;
@@ -136,6 +146,8 @@ void QActorUploadSkin(GpuObject&,QActorSkin& skin,fqactor::Cost&,bool player) {
     std::copy(p.begin(),p.end(),recorded.begin()+v*18);
   }
 }
+bool LoadFalloutMeshFile(const std::string&,std::vector<uint8_t>&){return false;}
+namespace fo3anim {bool DecodeClip(const std::vector<uint8_t>&,Clip&){return false;}}
 #include "../../app/src/main/cpp/npc/fo3-npc-runtime.inc"
 int main() {
   // FO3 rigid parts keep actor axes despite a rotated head bone.
@@ -248,6 +260,20 @@ int main() {
   ++gStereoFrame;
   Q230UpdateActor(actor);
   assert(std::fabs(recorded[0] - 0.12f) < 1e-5f);
+  std::array<float,3> lo{},hi{},anchor{};
+  assert(Q230LiveBounds(actor,lo,hi));
+  assert(lo[0]<=hi[0]&&lo[1]<=hi[1]&&lo[2]<=hi[2]);
+  actor.headBone=0;
+  assert(Q230LiveBone(actor,0,anchor));
+  const auto oldAnchor=anchor;
+  actor.runtime.BeginDialogue();actor.runtime.Face(actor.runtime.yaw+1.5f,.1f);
+  ++gStereoFrame;Q230UpdateActor(actor);
+  assert(Q230LiveBounds(actor,lo,hi)&&Q230LiveBone(actor,0,anchor));
+  assert(std::isfinite(anchor[0])&&std::fabs(fo3npc::Angle(actor.runtime.yaw-actor.runtime.authoredYaw))<.12f);
+  assert(!Q230LiveBone(actor,-1,anchor));
+  actor.runtime.EndDialogue();
+  assert(!actor.runtime.dialogue);
+  (void)oldAnchor;
   gQ230NpcActors.push_back(std::move(actor));
   Q230RenderNpcActors(false);
   Q230RenderNpcActors(true);

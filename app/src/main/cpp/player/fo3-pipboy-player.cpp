@@ -2,6 +2,18 @@
 #include <algorithm>
 #include <cmath>
 namespace fo3player {
+bool Player::RecordDialogue(uint32_t actor,uint32_t info,const std::vector<uint32_t>& topics) {
+  if(!catalog_.pipboy.referenceScripts.count(actor))return false;
+  bool changed=state_.pipboy.talkedActors.insert(actor).second;
+  if(info)changed=state_.pipboy.saidInfos.insert((uint64_t(actor)<<32)|info).second||changed;
+  for(auto topic:topics)if(catalog_.pipboy.dialogueTopics.count(topic))changed=state_.pipboy.knownTopics.insert(topic).second||changed;
+  if(changed)++revision_;
+  return true;
+}
+bool Player::SetDialogueVariable(uint64_t key,float value) {
+  if(!key||!std::isfinite(value))return false;
+  state_.pipboy.dialogueVariables[key]=value;++revision_;return true;
+}
 bool Player::GrantPerk(uint32_t id, uint8_t rank) {
   auto p = catalog_.pipboy.perks.find(id);
   if (p == catalog_.pipboy.perks.end() || !rank || rank > p->second.ranks)

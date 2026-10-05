@@ -30,6 +30,9 @@ add_library(falloutquest SHARED
     pipboy/fo3-pipboy-data.cpp
     pipboy/fo3-pipboy-session.cpp
     pipboy/fo3-radio-runtime.cpp
+    dialogue/fo3-dialogue-conditions.cpp
+    dialogue/fo3-dialogue-results.cpp
+    dialogue/fo3-dialogue-session.cpp
     player/fo3-container-state.cpp
     audio/fo3-audio.cpp
     audio/fo3-audio-catalog.cpp

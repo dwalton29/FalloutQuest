@@ -20,7 +20,31 @@ public final class FalloutNativeActivity extends NativeActivity {
     private final List<MediaPlayer> effects = new ArrayList<>();
     private final List<String> tracks = new ArrayList<>();
     private int track;
-    private MediaPlayer music, ambience;
+    private MediaPlayer music, ambience, dialogue;
+    private int dialogueToken;
+    private float dialogueGain=1;
+    public native void audioDialogueDone(int token,boolean success);
+    public void audioDialogue(String path,int token) {
+        audio.post(() -> {
+            releaseDialogue(false);dialogueToken=token;
+            if(destroyed || !enabled() || path.isEmpty()) { if(token!=0 && !path.isEmpty())audioDialogueDone(token,false);return; }
+            MediaPlayer player=new MediaPlayer();dialogue=player;
+            prepare(player,path,dialogueGain,false,() -> {
+                if(dialogue==player) { releaseDialogue(false);audioDialogueDone(token,true); }
+            },() -> dialogue==player);
+            duckSpeech();
+        });
+    }
+    public void audioDialogueGain(float gain) {
+        audio.post(() -> { dialogueGain=Math.max(0,Math.min(1,gain));if(dialogue!=null)try{dialogue.setVolume(dialogueGain,dialogueGain);}catch(IllegalStateException ignored){} });
+    }
+    private void duckSpeech() {
+        for(Broadcast b:broadcasts)if(b.player!=null)try{float gain=dialogue==null?1:.25f;b.player.setVolume(gain,gain);}catch(IllegalStateException ignored){}
+    }
+    private void releaseDialogue(boolean failed) {
+        if(dialogue!=null) {dialogue.release();dialogue=null;if(failed)audioDialogueDone(dialogueToken,false);}
+        duckSpeech();
+    }
     private final Broadcast[] broadcasts = {new Broadcast(),new Broadcast()};
     private static final class Broadcast {
         final List<String> paths = new ArrayList<>();
@@ -42,13 +66,14 @@ public final class FalloutNativeActivity extends NativeActivity {
         Broadcast b = broadcasts[channel];
         if (b.player != null || b.index >= b.paths.size()) return;
         MediaPlayer player = new MediaPlayer(); b.player = player;
-        prepare(player,b.paths.get(b.index),1,false,() -> {
+        prepare(player,b.paths.get(b.index),dialogue==null?1:.25f,false,() -> {
             b.release(); ++b.index;
             if (b.index >= b.paths.size()) { b.paths.clear(); b.index = 0; audioBroadcastDone(channel,b.generation); }
             else refreshBroadcast(channel);
         },() -> b.player == player);
     }
     private boolean failBroadcast(MediaPlayer player) {
+        if(player==dialogue){releaseDialogue(true);return true;}
         for (int channel = 0; channel < broadcasts.length; ++channel) {
             Broadcast b = broadcasts[channel];
             if (b.player == player) { b.release(); b.paths.clear(); b.index = 0;
@@ -176,7 +201,7 @@ public final class FalloutNativeActivity extends NativeActivity {
     private void releaseMusic() { if (music != null) { music.release(); music = null; } }
     private void releaseAmbience() { if (ambience != null) { ambience.release(); ambience = null; } }
     private void stopAll() {
-        releaseMusic(); releaseAmbience();
+        releaseDialogue(true);releaseMusic(); releaseAmbience();
         for (Broadcast b : broadcasts) b.release();
         for (MediaPlayer player : effects) player.release();
         effects.clear();

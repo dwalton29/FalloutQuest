@@ -1,6 +1,7 @@
 #include "world/interaction/fo3-shoulder-zone.h"
 #include "ui/interaction/fo3-item-notifications.h"
 #include "player/fo3-player-state.h"
+#include "npc/fo3-npc-state.h"
 // Reproduce the Android platform far macro that caused the native build
 // failure.
 #define far
@@ -80,6 +81,18 @@ void SetFo3CollectedCollisionRefs(const std::unordered_set<uint32_t> &r) {
 }
 void FlushFo3PlayerState() { ++flushes; }
 #define Q6H_LOGI(...) ((void)0)
+bool dialogueFocus=false,pipFocus=false;uint32_t talked=0;
+bool Fo3DialogueFocus(){return dialogueFocus;}
+bool Fo3PipboyFocus(){return pipFocus;}
+struct ActorTarget {
+  struct {uint32_t refFormId=0;std::string fullName;} source;
+  std::array<float,3> lo{},hi{};
+  bool eligible=true;
+};
+std::vector<ActorTarget> gQ230NpcActors;
+bool Q230LiveBounds(const ActorTarget& actor,std::array<float,3>& lo,std::array<float,3>& hi){lo=actor.lo;hi=actor.hi;return true;}
+bool DialogueCanStart(ActorTarget& actor){return actor.eligible;}
+bool StartFo3Dialogue(uint32_t actor){talked=actor;dialogueFocus=true;return true;}
 #include "world/interaction/fo3-interaction-runtime.inc"
 void Check(bool ok, const char *why) {
   if (!ok)
@@ -306,6 +319,22 @@ int main() {
                     {0, 1, -1}, .5f),
           "wall behind target does not occlude");
     Check(fo3notify::Notifications().Size()==2,"A pickup and container transfer share item-added notifications");
+    auto npcCatalog=c;
+    npcCatalog.pipboy.targets[80].base=800;npcCatalog.pipboy.targets[81].base=800;
+    npcCatalog.weapons.actors[800].health=100;
+    gPlayerSession=std::make_unique<fo3player::Session>(npcCatalog);
+    gObjects.clear();doorPresent=false;occluded=false;loading=false;
+    gQ230NpcActors={{{80,"Authored NPC"},{-.2f,-.2f,-2.1f},{.2f,.2f,-1.9f},true},
+                    {{81,"Near NPC"},{-.2f,-.2f,-1.1f},{.2f,.2f,-.9f},true}};
+    Fo3InteractionTarget talk;
+    Check(QueryFo3Interaction(0,0,0,0,0,-1,talk)&&talk.talk&&talk.reference==81,"nearest living NPC wins");
+    Check(std::string(talk.prompt.data())=="Talk Near NPC","Talk uses authored FULL name");
+    occluded=true;Check(!QueryFo3Interaction(0,0,0,0,0,-1,talk),"NPC behind wall rejected");occluded=false;
+    Check(!ActivateFo3Interaction(0,0,0,0,0,-1)&&talked==81,"Talk never queues camera/door transition");
+    Check(!QueryFo3Interaction(0,0,0,0,0,-1,talk),"dialogue owns interaction focus");dialogueFocus=false;
+    npcCatalog.initial.actorDamage[81]=100;gPlayerSession=std::make_unique<fo3player::Session>(npcCatalog);
+    Check(QueryFo3Interaction(0,0,0,0,0,-1,talk)&&talk.reference==80,"dead NPC cannot Talk");
+    gQ230NpcActors[0].eligible=false;Check(!QueryFo3Interaction(0,0,0,0,0,-1,talk),"empty/unsupported greeting cannot target");
     std::cout << "Interaction runtime tests passed\n";
     return 0;
   } catch (const std::exception &e) {

@@ -37,7 +37,7 @@ bool CollectFo3WorldReference(uint32_t reference) {
 bool QueryFo3Interaction(float ox, float oy, float oz, float dx, float dy,
                          float dz, Fo3InteractionTarget &target) {
     target = {};
-    if (!gSceneReady || IsFo3LoadingVisible() || !gPlayerSession) return false;
+    if (!gSceneReady || IsFo3LoadingVisible() || Fo3DialogueFocus() || Fo3PipboyFocus() || !gPlayerSession) return false;
     const float length = std::sqrt(dx*dx+dy*dy+dz*dz);
     if (!std::isfinite(length) || length < 1e-5f ||
         !std::isfinite(ox) || !std::isfinite(oy) || !std::isfinite(oz)) return false;
@@ -82,10 +82,19 @@ bool QueryFo3Interaction(float ox, float oy, float oz, float dx, float dy,
             target.door={};
         }
     }
+    for(auto& actor:gQ230NpcActors) {
+        if(player.ActorHealth(actor.source.refFormId)<=0||actor.source.fullName.empty())continue;
+        std::array<float,3> lo,hi;float distance=0;
+        if(Q230LiveBounds(actor,lo,hi)&&fo3interaction::Box({ox,oy,oz},{dx,dy,dz},lo,hi,fo3npc::DialoguePolicy::TalkRange,distance)&&distance<best&&DialogueCanStart(actor)) {
+            best=distance;target={};target.reference=actor.source.refFormId;target.talk=true;target.allowed=true;
+            std::snprintf(target.prompt.data(),target.prompt.size(),"Talk %s",actor.source.fullName.c_str());
+        }
+    }
     if (!target.reference || HasFo3InteractionOccluder(ox,oy,oz,dx,dy,dz,best,target.reference)) {
         target={}; return false;
     }
     target.distance=best;
+    if(target.talk)return true;
     if (target.container) {
         const auto& ref=catalog.references.at(target.reference);
         const auto& container=catalog.containers.at(ref.base);
@@ -161,6 +170,7 @@ void UpdateFo3LootSelection(const Fo3InteractionTarget& target,float stickY,doub
 bool ActivateFo3Interaction(float ox,float oy,float oz,float dx,float dy,float dz) {
     Fo3InteractionTarget target;
     if (!QueryFo3Interaction(ox,oy,oz,dx,dy,dz,target) || !target.allowed) return false;
+    if(target.talk){StartFo3Dialogue(target.reference);return false;}
     if (target.container) {
         // Selection comes from this frame's target; never use a previous container.
         if (gLootPanel.reference!=target.reference || gLootPanel.rows.empty()) return false;

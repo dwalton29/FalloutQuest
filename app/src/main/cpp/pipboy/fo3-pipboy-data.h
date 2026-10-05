@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdint>
+#include <array>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -89,10 +90,37 @@ struct Ingestible {
   std::vector<Effect> effects;
   uint32_t flags = 0;
 };
+struct Topic {
+  std::string editor, text;
+  uint8_t type=0, flags=0;
+  float priority=50;
+  std::vector<uint32_t> quests;
+};
+struct ActorDefinition {
+  std::string editor, name;
+  uint32_t race=0, actorClass=0, voice=0, script=0, templateActor=0,combatStyle=0;
+  float karma=0;int16_t disposition=0;
+  uint16_t templateFlags=0;
+  bool female=false;
+  std::unordered_map<uint32_t,int8_t> factions;
+  std::vector<uint32_t> packages;
+  std::vector<uint8_t> aiData;
+};
 struct Response {
+  Response()=default;
+  Response(uint32_t s,uint8_t n,std::string t):sound(s),number(n),text(std::move(t)){}
   uint32_t sound = 0;
   uint8_t number = 0;
   std::string text;
+  uint32_t emotion=0, speakerAnimation=0, listenerAnimation=0;
+  int32_t emotionValue=0;
+  uint8_t flags=0;
+  std::string notes, edits;
+};
+struct ResultScript {
+  std::string source;
+  std::vector<uint8_t> compiled, header;
+  std::vector<uint32_t> references;
 };
 struct Info {
   uint32_t id = 0, topic = 0, quest = 0, speaker = 0;
@@ -101,7 +129,12 @@ struct Info {
   std::vector<Response> responses;
   std::vector<uint32_t> links;
   std::vector<std::string> scripts;
-  bool compiledOnly = false;
+  bool compiledOnly = false, orderValid=true;
+  uint32_t previous=0, challenge=0, challengeValue=0, recordFlags=0;
+  uint8_t nextSpeaker=0, flags2=0;
+  std::string prompt;
+  std::vector<uint32_t> addedTopics, linksFrom;
+  ResultScript begin, end;
 };
 struct Station {
   std::string name;
@@ -137,6 +170,14 @@ struct Definitions {
   std::unordered_map<uint32_t, Script> scripts;
   std::unordered_map<std::string, uint32_t> questNames;
   bool playerFemale = false;
+  std::unordered_map<uint32_t,std::vector<uint32_t>> formLists;
+  std::unordered_map<uint32_t,std::array<uint32_t,2>> raceVoices;
+  std::unordered_map<uint32_t,Topic> dialogueTopics;
+  std::unordered_map<uint32_t,ActorDefinition> dialogueActors;
+  std::unordered_map<uint32_t,std::pair<std::string,uint32_t>> referenceScripts;
+  std::unordered_map<std::string,uint32_t> formNames;
+  std::unordered_map<uint32_t,std::string> idleModels;
+  std::vector<uint32_t> greetings, topLevelTopics;
   uint32_t radioHello = 0;
   float discoveryRadius = 0;
 };
@@ -147,3 +188,9 @@ void Decode(Definitions &, const std::string &, uint32_t id, uint32_t flags,
 void Finalize(Definitions &);
 std::vector<std::string> NoteAudio(const Definitions &, uint32_t note);
 } // namespace fo3pipdata
+
+namespace fo3pipdata {
+std::string VoicePath(const Definitions &, const Info &, const Response &, uint32_t voice);
+uint32_t ActorVoice(const Definitions &,uint32_t base);
+const ActorDefinition* ActorCategory(const Definitions&,uint32_t base,uint16_t category);
+}

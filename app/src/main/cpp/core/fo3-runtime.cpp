@@ -1,3 +1,6 @@
+#include "dialogue/fo3-dialogue-session.h"
+#include "dialogue/fo3-dialogue-panel.h"
+#include "npc/fo3-npc-state.h"
 #include "player/fo3-vr-body.h"
 #include "player/fo3-vr-tracking.h"
 #ifdef __ANDROID__
@@ -684,6 +687,7 @@ struct Q230RigPart {
     QActorSkin skin;
     std::vector<int> bones;
     std::vector<std::array<float,3>> hitVertices;
+    std::vector<std::pair<std::array<float,3>,std::array<float,3>>> interactionBounds;
     fo3anim::Matrix placement{}, inversePlacement{}, scenePlacement{}, inverseScenePlacement{};
     int rigidBone = -1;
     size_t gpuIndex = 0;
@@ -691,6 +695,12 @@ struct Q230RigPart {
 };
 struct Q230ActorVisual {
     Fo3NpcActorQ230 source;
+    fo3npc::RuntimeState runtime;
+    std::array<fo3anim::Clip,4> animations;
+    int activeAnimation=0,headBone=-1,chestBone=-1;
+    std::vector<fo3anim::Transform> blendFrom;
+    double blendStart=-1;
+    fo3anim::Matrix dialogueRoot=fo3anim::Identity();
     fo3anim::Skeleton skeleton;
     fo3anim::Clip clip;
     fo3anim::Pose pose;
@@ -708,6 +718,9 @@ std::vector<Q230ActorVisual> gQ230NpcActors;
 void Q230DeleteNpcActors();
 void Q230PrepareActors(uint32_t cell, uint32_t worldspace,
     std::vector<Q230ActorVisual>& out, const std::atomic<bool>& cancel);
+bool Fo3DialogueFocus();
+void EndFo3Dialogue(const char* reason);
+void Q230CacheDialogueAnimations(Q230ActorVisual&,const fo3pipdata::Definitions*);
 bool Q230UploadActorPart(Q230ActorVisual& actor, CpuObject& part,
     float centerX, float centerY, float floorZ);
 
@@ -3078,6 +3091,9 @@ bool BeginFo3SceneLoad(const Fo3CellTransitionRequestQ74& request, bool boot) {
         }
         Q230PrepareActors(result.request.cellFormId, result.request.worldspaceFormId,
             result.actors, cancel);
+        const auto* actorDefinitions=result.playerSession?&result.playerSession->player.Definitions().pipboy:
+            (gPlayerSession?&gPlayerSession->player.Definitions().pipboy:nullptr);
+        for(auto& actor:result.actors)Q230CacheDialogueAnimations(actor,actorDefinitions);
         result.cpuUs = Fo3SceneElapsedUs(phase);
         if (result.selected.size() < 2u) return false;
         phase = std::chrono::steady_clock::now();
@@ -8665,6 +8681,7 @@ void Q220UpdateLooseGrab(
             return;
         }
     }
+    if (Fo3DialogueFocus()&&!state.active){state.previousGrip=grip;return;}
     if (!handValid) {
         if(handIndex==1) gShoulderGesture.Reset();
         state.previousGrip = grip;
@@ -10056,6 +10073,7 @@ size_t Q215SuppressPlayerGoreCaps(Fo3StaticNifMesh& mesh) {
 }
 
 void Q230DeleteNpcActors() {
+    EndFo3Dialogue("actor unload");
     for (auto& actor : gQ230NpcActors) Q74DeleteGpuObjects(actor.objects);
     gQ230NpcActors.clear();
 }
@@ -10089,6 +10107,8 @@ fo3anim::Matrix Q230PlacementMatrix(const Fo3WorldPlacement& placement);
 
 bool Q230BuildNpcActor(const Fo3NpcActorQ230& source, Q230ActorVisual& visual) {
     visual.source = source;
+    visual.runtime.reference=source.refFormId;
+    visual.runtime.authoredYaw=visual.runtime.yaw=visual.runtime.returnYaw=source.rz;
     const Fo3NpcActorQ230* npc = &visual.source;
     std::vector<uint8_t> bytes;
     if (LoadFalloutMeshFile(source.skeletonModel, bytes) &&
@@ -12739,6 +12759,7 @@ void Q6HClear(GLbitfield mask) {
 
 
 
+#include "dialogue/fo3-dialogue-runtime.inc"
 } // namespace
 
 void SetFo3ShoulderInteractionFocused(bool focused) {

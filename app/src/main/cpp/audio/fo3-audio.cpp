@@ -42,6 +42,7 @@ struct Runtime {
   uint32_t lastCell = UINT32_MAX;
   bool lastActive = false;
   std::atomic<uint32_t> playingNote{0};
+  std::atomic<uint64_t> dialogueCompletion{0};
 } runtime;
 std::string Loose(const std::string &relative) {
   return FindAudioFile(fo3assets::FalloutDataPath(""), relative);
@@ -59,11 +60,12 @@ void Push(Event e) {
   if (!runtime.worker.joinable() || runtime.stop ||
       (!runtime.lastActive && (e.kind < 6 || e.kind==11)))
     return;
-  if (e.kind == 6 || e.kind == 7 || e.kind == 10)
+  if (e.kind == 6 || e.kind == 7 || e.kind == 10 || e.kind == 13 || e.kind == 14)
     runtime.events.erase(
         std::remove_if(runtime.events.begin(), runtime.events.end(),
                        [&](const Event &old) { return old.kind == e.kind; }),
         runtime.events.end());
+  if(e.kind==13&&runtime.events.size()>=32)runtime.events.pop_front(); // voice start/stop cannot be dropped
   if (runtime.events.size() < 32) {
     runtime.events.push_back(e);
     runtime.cv.notify_one();
@@ -83,9 +85,11 @@ void Worker() {
            env->GetMethodID(cls, "audioAmbient", "(Ljava/lang/String;F)V"),
        broadcast =
            env->GetMethodID(cls, "audioBroadcast", "(Ljava/lang/String;II)V"),
-       active = env->GetMethodID(cls, "audioActive", "(Z)V");
+       active = env->GetMethodID(cls, "audioActive", "(Z)V"),
+       dialogue=env->GetMethodID(cls,"audioDialogue","(Ljava/lang/String;I)V"),
+       dialogueGain=env->GetMethodID(cls,"audioDialogueGain","(F)V");
   if (env->ExceptionCheck() || !music || !effect || !ambient || !active ||
-      !broadcast) {
+      !broadcast || !dialogue || !dialogueGain) {
     __android_log_print(ANDROID_LOG_ERROR, "FalloutQuest",
                         "AUDIO JNI bridge unavailable");
     env->ExceptionClear();
@@ -128,7 +132,7 @@ void Worker() {
   std::unordered_map<std::string, size_t> extractedSizes;
   std::deque<std::string> recentFiles;
   std::vector<std::string> broadcastFiles[2];
-  std::string ambientFile;
+  std::string ambientFile,dialogueFile;
   size_t cacheBytes = 0;
   const auto archives = SoundArchives(fo3assets::FalloutDataPath(""));
   __android_log_print(ANDROID_LOG_INFO, "FalloutQuest",
@@ -284,7 +288,7 @@ void Worker() {
     if (!loaded)
       return std::string{};
     auto protectedFile = [&](const std::string &target) {
-      if (target == ambientFile ||
+      if (target == dialogueFile || target == ambientFile ||
           std::find(recentFiles.begin(), recentFiles.end(), target) !=
               recentFiles.end())
         return true;
@@ -386,6 +390,15 @@ void Worker() {
       e = runtime.events.front();
       runtime.events.pop_front();
     }
+    if(e.kind==13) {
+      dialogueFile=e.name.empty()?"":resolve(e.name);
+      if(!e.name.empty()&&dialogueFile.empty())DialogueDone(e.id,false);
+      auto str=env->NewStringUTF(dialogueFile.c_str());
+      env->CallVoidMethod(runtime.activity,dialogue,str,jint(e.id));env->DeleteLocalRef(str);
+      if(env->ExceptionCheck()){env->ExceptionClear();DialogueDone(e.id,false);}
+      continue;
+    }
+    if(e.kind==14) {float gain=0;std::memcpy(&gain,&e.id,4);env->CallVoidMethod(runtime.activity,dialogueGain,gain);if(env->ExceptionCheck())env->ExceptionClear();continue;}
     if (e.kind == 10) {
       broadcastState = std::move(e.state);
       continue;
@@ -543,6 +556,11 @@ void Context(uint32_t cell, bool active) {
   runtime.events.push_front({0, cell, active});
   runtime.cv.notify_one();
 }
+void Dialogue(const std::string& request,uint32_t token){runtime.dialogueCompletion=0;Push({13,token,true,request});}
+void DialogueStop(){Push({13,0,false,{}});runtime.dialogueCompletion=0;}
+void DialogueGain(float gain){gain=std::clamp(gain,0.f,1.f);uint32_t bits;std::memcpy(&bits,&gain,4);Push({14,bits,true});}
+uint64_t DialogueCompletion(){return runtime.dialogueCompletion.exchange(0);}
+void DialogueDone(uint32_t token,bool success){if(token)runtime.dialogueCompletion=(uint64_t(token)<<1)|(success?1:0);}
 void Radio(uint32_t transmitter, const fo3pipdata::Definitions &definitions,
            const fo3pipdata::SessionState &state) {
   Event e{6, transmitter, true};
@@ -583,3 +601,6 @@ Java_com_falloutquest_app_FalloutNativeActivity_audioBroadcastDone(
     JNIEnv *, jobject, jint channel, jint generation) {
   fo3audio::BroadcastDone(channel, uint32_t(generation));
 }
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_falloutquest_app_FalloutNativeActivity_audioDialogueDone(JNIEnv*,jobject,jint token,jboolean success){fo3audio::DialogueDone(uint32_t(token),success);}
