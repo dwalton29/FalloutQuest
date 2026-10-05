@@ -97,6 +97,10 @@ int main() {
       Measure(true, {0, 1.3f, -.4f}, {0, 0, 1}, {0, 1.5f, 0}, {0, 0, -1},
               {0, 1.3f, -.4f}, {-.2f, 1.4f, 0}, {0, 1.35f, -.4f}, true);
   assert(Enter(view));
+  auto torsoLag =
+      Measure(true, {0, 1.3f, -.4f}, {0, 0, 1}, {0, 1.5f, 0}, {0, 0, -1},
+              {0, 1.3f, .5f}, {-.2f, 1.4f, 0}, {0, 1.35f, .5f}, true);
+  assert(Enter(torsoLag));
   auto behind =
       Measure(true, {0, 1.3f, .4f}, {0, 0, -1}, {0, 1.5f, 0}, {0, 0, 1},
               {0, 1.3f, .4f}, {-.2f, 1.4f, 0}, {0, 1.35f, .4f}, true);
