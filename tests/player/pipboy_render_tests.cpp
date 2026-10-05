@@ -5,12 +5,17 @@ bool LoadFalloutTextureRgba(const std::string &, Fo3RgbaTexture &) {
   assert(false && "No asset I/O in a warm DATA render");
   return false;
 }
-namespace fo3assets { bool LoadTextureFile(const std::string&,std::vector<uint8_t>&,BsaFileInfo*,size_t){return false;} }
+namespace fo3assets {
+bool LoadTextureFile(const std::string &, std::vector<uint8_t> &, BsaFileInfo *,
+                     size_t) {
+  return false;
+}
+} // namespace fo3assets
 int main() {
   fo3player::Player p(fo3player::Catalog{});
   fo3pip::Menu menu;
   menu.tab = fo3pip::Tab::Data;
-  menu.page=2;
+  menu.page = 2;
   auto &resources = fo3pipui::State();
   resources.ready = true;
   resources.fbo = 10;
@@ -22,6 +27,17 @@ int main() {
   resources.scanlines = 90;
   resources.fontTexture[0] = 70;
   resources.fontTexture[1] = 80;
+  for (auto &glyph : resources.fonts[0].glyphs)
+    glyph.width = 10;
+  auto wrapped = fo3pipui::Wrap("abc def\r\nghi", 35);
+  assert(wrapped.size() == 3 && wrapped[0] == "abc" && wrapped[1] == "def" &&
+         wrapped[2] == "ghi");
+  const std::string longNote(10000, 'x');
+  wrapped = fo3pipui::Wrap(longNote, 100);
+  size_t retained = 0;
+  for (auto &line : wrapped)
+    retained += line.size();
+  assert(retained == longNote.size());
   // Prime exactly the renderer-owned state and verify it survives UI work.
   fqgl::Invalidate();
   glUseProgram(91);

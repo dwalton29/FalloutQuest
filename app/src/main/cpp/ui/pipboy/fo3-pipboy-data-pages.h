@@ -313,8 +313,13 @@ inline void DataPage(fo3pip::Menu &menu, const fo3player::Player &p) {
     std::string name;
     if (menu.page == 2) {
       name = d.quests.at(id).name;
-      if (s.selectedQuest == id)
+      auto status = s.quests.at(id).status;
+      if (status == fo3pipdata::Completion::Complete)
         name = "[+] " + name;
+      else if (status == fo3pipdata::Completion::Failed)
+        name = "[-] " + name;
+      else if (s.selectedQuest == id)
+        name = "> " + name;
     }
     if (menu.page == 3)
       name = d.notes.at(id).name;

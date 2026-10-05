@@ -167,6 +167,48 @@ static void RadioTests() {
   assert(b.Tune(d, 0));
   assert(b.Advance(d, state, error).empty());
 }
+static void MenuDataTests() {
+  auto c = Fixture();
+  fo3player::Item item;
+  item.formId = 100;
+  item.kind = fo3player::ItemKind::Note;
+  item.playable = true;
+  c.items[100] = item;
+  c.pipboy.notes[100].name = "Note fixture";
+  c.pipboy.notes[100].type = 1;
+  c.pipboy.notes[100].text = "Full text";
+  fo3player::Player p(c);
+  fo3pip::Menu menu;
+  menu.tab = fo3pip::Tab::Data;
+  menu.page = 3;
+  menu.Refresh(p);
+  assert(menu.rows.empty());
+  p.Add(100, 1);
+  menu.Refresh(p);
+  assert(menu.rows.size() == 1 && menu.rows[0] == 100);
+  menu.Invoke(fo3pip::Action::Accept, p);
+  assert(menu.inPage);
+  menu.Invoke(fo3pip::Action::Down, p);
+  assert(menu.textScroll == 1);
+  menu.Invoke(fo3pip::Action::Back, p);
+  assert(!menu.inPage);
+  menu.tab = fo3pip::Tab::Items;
+  menu.page = 3;
+  menu.RebuildRows(p);
+  assert(menu.rows.empty());
+  c.pipboy.quests[2].objectives[20].targets = {77};
+  c.pipboy.targets[77].world = 4;
+  fo3player::Player quest(c);
+  quest.StartQuest(2);
+  quest.SetObjective(2, 20, true, Completion::Active);
+  quest.SelectQuest(2);
+  assert(QuestTargets(c.pipboy, quest.Snapshot().pipboy) ==
+         std::vector<uint32_t>{77});
+  quest.SetObjective(2, 20, true, Completion::Complete);
+  assert(QuestTargets(c.pipboy, quest.Snapshot().pipboy).empty());
+  quest.FinishQuest(2, Completion::Complete);
+  assert(quest.Snapshot().pipboy.quests.at(2).status == Completion::Complete);
+}
 static void Original(const char *path) {
   fo3player::Catalog c;
   std::string error;
@@ -229,6 +271,7 @@ int main(int argc, char **argv) {
   MapTests();
   AidTests();
   RadioTests();
+  MenuDataTests();
   if (argc > 1)
     Original(argv[1]);
   if (argc > 2) {

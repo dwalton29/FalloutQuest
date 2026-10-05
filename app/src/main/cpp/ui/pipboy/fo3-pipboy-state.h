@@ -234,7 +234,7 @@ struct Menu {
       textScroll = 0;
     } else if (a == Action::Up || a == Action::Down) {
       int delta = a == Action::Up ? -1 : 1;
-      if (tab == Tab::Data && page == 3 && inPage) {
+      if (page == 3 && inPage && (tab == Tab::Data || tab == Tab::Stats)) {
         if (delta < 0 && textScroll)
           --textScroll;
         if (delta > 0)
@@ -247,7 +247,7 @@ struct Menu {
       } else {
         size_t count = rows.size();
         if (tab == Tab::Stats)
-          count = page == 1 ? 7 : page == 2 ? 13 : page == 4 ? 2 : count;
+          count = page == 1 ? 7 : page == 2 ? 13 : page == 4 ? 1 : count;
         if (delta < 0 && selected)
           --selected;
         if (delta > 0 && selected + 1 < count)
