@@ -123,6 +123,32 @@ static void AidTests() {
   assert(blocked.Revision() == rev &&
          blocked.Snapshot().inventory.front().count == 2);
 }
+static void PackageDecodeTests() {
+  Definitions d;
+  auto put32=[](std::vector<uint8_t>& b,uint32_t v){for(int i=0;i<4;++i)b.push_back(uint8_t(v>>(i*8)));};
+  auto sub=[&](std::vector<uint8_t>& b,const char* name,const std::vector<uint8_t>& value){
+    b.insert(b.end(),name,name+4);b.push_back(uint8_t(value.size()));b.push_back(uint8_t(value.size()>>8));
+    b.insert(b.end(),value.begin(),value.end());
+  };
+  std::vector<uint8_t> payload;
+  sub(payload,"EDID",std::vector<uint8_t>{'A','u','t','h','o','r','e','d',0});
+  std::vector<uint8_t> pkdt;put32(pkdt,0x600);pkdt.push_back(12);pkdt.push_back(0);pkdt.push_back(0xcd);pkdt.push_back(0);
+  put32(pkdt,0);sub(payload,"PKDT",pkdt);
+  std::vector<uint8_t> pldt;put32(pldt,3);put32(pldt,0);put32(pldt,4000);sub(payload,"PLDT",pldt);
+  std::vector<uint8_t> psdt{0xff,0xff,0,0xff};put32(psdt,0);sub(payload,"PSDT",psdt);
+  sub(payload,"SCHR",std::vector<uint8_t>(20,0));
+  Decode(d,"PACK",100,0,payload,0,0,0);
+  const auto& p=d.packages.at(100);
+  assert(p.editor=="Authored"&&p.type==12&&p.location.valid&&p.location.type==3&&
+         p.location.radius==4000&&p.schedule.valid&&p.schedule.hour==-1&&!p.scripted);
+  std::vector<uint8_t> scripted=payload;sub(scripted,"SCTX",std::vector<uint8_t>{'s','e','t',' ', 'x',0});
+  Decode(d,"PACK",101,0,scripted,0,0,0);
+  assert(d.packages.at(101).scripted);
+  d.targets[200].base=1;
+  d.packages[100].location.type=0;d.packages[100].location.value=200;
+  Finalize(d);
+  assert(d.targets.count(200));
+}
 static void RadioTests() {
   Definitions d;
   d.stations[30].name = "Fixture station";
@@ -270,6 +296,7 @@ int main(int argc, char **argv) {
   StateTests();
   MapTests();
   AidTests();
+  PackageDecodeTests();
   RadioTests();
   MenuDataTests();
   if (argc > 1)
