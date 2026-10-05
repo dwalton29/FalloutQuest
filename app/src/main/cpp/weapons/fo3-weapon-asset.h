@@ -79,6 +79,11 @@ struct Asset {
 // VR access policy, documented centrally in body space (Y up, Z rear).
 // Hip follows the authored right thigh origin; shoulder follows solved clavicle.
 inline Zone Hip(V thigh,const R&body){return {thigh+fo3vr::Rotate(body,{.10f,0,.035f}),body,{.16f,.20f,.16f}};}
+// Access and presentation are deliberately separate VR adaptations. Keep the
+// generous thigh access volume where the hand expects it, but render a holstered
+// sidearm slightly outward/up/forward so the authored model is visible beside
+// the player's body instead of being buried in the thigh mesh.
+inline V HipDisplay(const Zone& hip){return hip.center+fo3vr::Rotate(hip.body,{.045f,.055f,-.055f});}
 inline Zone Back(V shoulder,const R&body){return {shoulder+fo3vr::Rotate(body,{.04f,-.04f,.15f}),body,{.20f,.22f,.20f}};}
 inline Zone Pouch(V pelvis,const R&body){return {pelvis+fo3vr::Rotate(body,{-.22f,-.06f,.015f}),body,{.18f,.18f,.18f}};}
 }
