@@ -22,8 +22,8 @@ android {
         applicationId 'com.falloutquest.app'
         minSdk 29
         targetSdk 35
-        versionCode 165
-        versionName '0.43.0-world-dialogue-dev'
+        versionCode 166
+        versionName '0.43.1-dialogue-weapon-fixes-dev'
 
         ndk {
             abiFilters 'arm64-v8a'
