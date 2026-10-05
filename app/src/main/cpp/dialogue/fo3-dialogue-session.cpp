@@ -99,7 +99,7 @@ void Session::BuildChoices(const Context& ctx) {
 }
 bool Session::AudioDone(uint32_t token,bool success,const Context& ctx,fo3player::Player& p) {
   if(phase!=Phase::Speaking||token!=audioToken)return false;
-  if(!success){End("original voice unavailable/playback error");return false;}
+  if(!success&&diagnostic)diagnostic("DIALOGUE VOICE UNAVAILABLE actor="+Id(actor)+" info="+Id(info)+" response="+std::to_string(response)+" continuing without audio");
   auto i=Current(p.Definitions().pipboy);if(!i){End("INFO missing");return false;}
   if(++response<i->responses.size()){++audioToken;return true;}
   std::string error;if(!p.ExecuteDialogueResult(i->end,error)){if(diagnostic)diagnostic("DIALOGUE UNSUPPORTED SCRIPT info="+Id(i->id)+" "+error);End("end result rejected");return false;}
