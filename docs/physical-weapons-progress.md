@@ -92,7 +92,7 @@ surfaces after a broad phase. Damage captures weapon/skill/condition at firing,
 then uses a canonical actor-hit API and persistent actor damage. NPC base health,
 endurance and level use decoded original data/GMSTs; essential actors retain one
 health pending unconscious-state support. Armour/DR, perks, critical effects,
-difficulty, location multipliers, full AI/death/ragdoll reactions and levelled
+difficulty, movement/aim spread modifiers, location multipliers, full AI/death/ragdoll reactions and levelled
 spawn resolution remain separate combat layers. Explosive/heavy projectiles are
 not enabled without their own verified attachment/explosion integration. Moving
 energy missiles currently have collision/damage but no travelling visual effect.
@@ -106,7 +106,7 @@ For the 10mm (and audited normal assault rifle): hold right grip, press B to eje
 left grip at the belt pouch to retrieve the authentic magazine geometry, move it
 to the original magazine node and release within 8.5cm with matching alignment.
 Insertion transfers at most clip capacity from compatible reserve. Then left grip
-near the original slide/bolt and pull rearward 4.5cm to charge. B, access radii,
+near the original slide/bolt and pull rearward 4.5cm relative to the weapon to charge; the original slide/bolt geometry follows that pull. B, access radii,
 alignment and pull threshold are explicitly VR adaptations. Reload sounds come
 from the original reload KF Sound keys, not invented filenames.
 

@@ -29,7 +29,7 @@ float magQuat[4]{0,0,0,1};
 fo3weapon::Zone hip,back,pouch;
 Q223DynamicBody motion;
 double last=0,recoil=0,ejectUntil=0,flashUntil=0;
-float supportWeight=0;
+float supportWeight=0,chargeTravel=0;
 Matrix ejectPose=fo3anim::Identity();
 V ejectVelocity{};
 uint32_t ejectForm=0;
@@ -210,15 +210,17 @@ void AdvanceFlights(float dt){
     }
   }
 }
-void RetireReload(){magazine=charging=support=false;supportWeight=0;}
+void RetireReload(){magazine=charging=support=false;supportWeight=chargeTravel=0;}
 void Draw(uint64_t id,uint32_t form){active=id;held=true;inside=false;RetireReload();motion={};Pulse(1);fo3audio::SoundEvent(gPlayerSession->player.Definitions().items.at(form).weapon.equip);Log("DRAW",id,form);}
-void DrawModel(Model&m,const Matrix&root,bool alpha,bool onlyMag=false,bool removeMag=false){
+void DrawModel(Model&m,const Matrix&root,bool alpha,bool onlyMag=false,bool removeMag=false,float action=0){
   auto transform=root;
   // Uploaded vertices include the runtime's fixed model-space origin.
   auto offset=fo3anim::Identity();offset[13]=-FLOOR_Y;offset[14]=-SCENE_FORWARD;transform=fo3anim::Multiply(root,offset);
   for(size_t n=0;n<m.objects.size();n++){if((onlyMag&&!m.magazines[n])||(removeMag&&m.magazines[n]))continue;
     auto&o=m.objects[n];if(o.alphaBlend!=alpha)continue;
-    std::copy(transform.begin(),transform.end(),o.q220DynamicTransform);
+    auto partTransform=transform;
+    if(action>0&&m.slides[n]){auto travel=fo3anim::Identity();travel[12]=-action;partTransform=fo3anim::Multiply(transform,travel);}
+    std::copy(partTransform.begin(),partTransform.end(),o.q220DynamicTransform);
     PrepareFo3InteriorObjectLights(o,nullptr);
     glDepthMask(o.zBufferWriteQ1200?GL_TRUE:GL_FALSE);glEnable(GL_DEPTH_TEST);
     if(alpha){glEnable(GL_BLEND);glBlendFunc(Q1150BlendFactor(o.alphaSourceBlend,true),Q1150BlendFactor(o.alphaDestBlend,false));}
@@ -262,7 +264,7 @@ void WeaponShutdown(){
 void WeaponRender(bool alpha){
   using namespace weaponruntime;if(!gPlayerSession||IsFo3LoadingVisible())return;
   const auto&p=gPlayerSession->player;const auto*s=p.EquippedWeapon();
-  if(s&&s->id==active){auto m=models.find(s->formId);if(m!=models.end()&&m->second.ready){DrawModel(m->second,pose,alpha,false,s->needsAction&&s->loadedRounds==0);if(magazine)DrawModel(m->second,magPose,alpha,true);if(held&&flashUntil>last)DrawFlash(m->second,alpha);}}
+  if(s&&s->id==active){auto m=models.find(s->formId);if(m!=models.end()&&m->second.ready){DrawModel(m->second,pose,alpha,false,s->needsAction&&s->loadedRounds==0,charging?chargeTravel:0);if(magazine)DrawModel(m->second,magPose,alpha,true);if(held&&flashUntil>last)DrawFlash(m->second,alpha);}}
   for(const auto&w:p.Snapshot().worldWeapons){auto v=world.find(w.instance.id);auto m=models.find(w.instance.formId);if(v!=world.end()&&m!=models.end()&&m->second.ready)DrawModel(m->second,v->second.pose,alpha,false,w.instance.needsAction&&w.instance.loadedRounds==0);}
   if(ejectUntil>last){auto m=models.find(ejectForm);if(m!=models.end()&&m->second.ready)DrawModel(m->second,ejectPose,alpha,true);}
 }
@@ -308,7 +310,7 @@ void WeaponUpdate(double now,bool backButton){
       // Authored support palm with a 20cm sliding fore-end access segment.
       const V begin=Point(pose,supportAnchor+V{-.10f,0,0}),end=Point(pose,supportAnchor+V{.10f,0,0});
       if(support&&(!gWeaponPalmValid[0]||gQ217FingerGrip[0]<=.25f)){support=false;supportWeight=0;Log("SUPPORT RELEASE",s->id,s->formId);}
-      if(inputs.l&&gWeaponPalmValid[0]&&d.LongGun()&&m->asset.hasSupport&&!magazine&&!charging){
+      if(inputs.l&&!gQ220Grab[0].active&&gWeaponPalmValid[0]&&d.LongGun()&&m->asset.hasSupport&&!magazine&&!charging){
         const auto point=fo3weapon::ClosestSupport(left,begin,end);
         if(fo3vr::Length(left-point)<.12f){Matrix inverse;if(fo3anim::Inverse(pose,inverse)){supportLocal=Point(inverse,point);support=true;Pulse(0);Log("SUPPORT",s->id,s->formId);}}
       }
@@ -323,7 +325,9 @@ void WeaponUpdate(double now,bool backButton){
         (void)gripLocal;
       }
       if(support&&gWeaponPalmValid[0])AlignSupportHand(*m);
-      Q223SampleHeldMotion(motion,gWeaponPalm[1],gQ218RightHandQuat);
+      const auto sampledRotation=fo3anim::QuaternionFromMatrix(Rotation(pose).data());
+      const float sampledQuat[4]{sampledRotation[1],sampledRotation[2],sampledRotation[3],sampledRotation[0]};
+      Q223SampleHeldMotion(motion,RuntimePoint(Point(pose,m->centre)),sampledQuat);
       const bool next=zone.Contains(right,inside);if(next&&!inside)Pulse(1,.12f);inside=next;
       if(gQ217FingerGrip[1]<=.25f){
         if(inside){held=false;RetireReload();Pulse(1);fo3audio::SoundEvent(d.unequip);Log("HOLSTER",s->id,s->formId);}
@@ -339,10 +343,10 @@ void WeaponUpdate(double now,bool backButton){
         if(inputs.eject&&!support){
           if(p.EjectMagazine(id)){magazine=charging=false;ejectPose=pose;ejectVelocity={0,-.3f,0};ejectUntil=now+3;ejectForm=form;fo3audio::NamedSound(m->asset.reloadSounds[0]);Log("MAG OUT",id,form);s=p.Weapon(id);}
         }
-        if(inputs.l&&!support&&gWeaponPalmValid[0]){
+        if(inputs.l&&!gQ220Grab[0].active&&!support&&gWeaponPalmValid[0]){
           if(s->needsAction&&!s->loadedRounds&&!magazine&&p.AmmoReserve(d.ammo)>0&&pouch.Contains(left)){
             magazine=true;magStart=Rigid(Rotation(pose),left-fo3vr::Rotate(Rotation(pose),GamePoint(m->asset.clip)));magPalm=left;std::copy(gQ218LeftHandQuat,gQ218LeftHandQuat+4,magQuat);Pulse(0);Log("MAG POUCH",id,form);
-          }else if(s->needsAction&&s->loadedRounds&&fo3vr::Length(left-Point(pose,GamePoint(m->asset.slide)))<.10f){charging=true;chargeStart=left;Pulse(0,.12f);}
+          }else if(s->needsAction&&s->loadedRounds&&fo3vr::Length(left-Point(pose,GamePoint(m->asset.slide)))<.10f){Matrix inverse;if(fo3anim::Inverse(pose,inverse)){charging=true;chargeTravel=0;chargeStart=Point(inverse,left);Pulse(0,.12f);}}
         }
         if(magazine&&!gWeaponPalmValid[0])magazine=false;
         if(magazine){Matrix delta;Q220ControllerDeltaMatrix(RuntimePoint(magPalm),magQuat,gWeaponPalm[0],gQ218LeftHandQuat,delta.data());magPose=fo3anim::Multiply(delta,magStart);
@@ -351,7 +355,7 @@ void WeaponUpdate(double now,bool backButton){
           if(gQ217FingerGrip[0]<=.25f){magazine=false;if(distance<.085f&&alignment>.70f&&p.LoadMagazine(id)){Pulse(0);fo3audio::NamedSound(m->asset.reloadSounds[1]);Log("RELOAD INSERT",id,form);s=p.Weapon(id);}}
         }
         if(charging&&!gWeaponPalmValid[0])charging=false;
-        if(charging){const auto rear=Direction(pose,{-1,0,0});if(fo3vr::Dot(left-chargeStart,rear)>.045f&&p.ChamberWeapon(id)){charging=false;Pulse(0);fo3audio::NamedSound(m->asset.reloadSounds[2]);Log("RELOAD CHAMBER",id,form);s=p.Weapon(id);}if(gQ217FingerGrip[0]<=.25f)charging=false;}
+        if(charging){Matrix inverse;if(fo3anim::Inverse(pose,inverse))chargeTravel=std::clamp(chargeStart.x-Point(inverse,left).x,0.f,.045f);if(chargeTravel>=.045f&&p.ChamberWeapon(id)){charging=false;Pulse(0);fo3audio::NamedSound(m->asset.reloadSounds[2]);Log("RELOAD CHAMBER",id,form);s=p.Weapon(id);}if(gQ217FingerGrip[0]<=.25f)charging=false;}
       }
       if(s&&held&&gWeaponPalmValid[1]&&trigger.Ready(d,inputs,gQ217FingerTrigger[1],now)){
         const auto id=s->id;const auto form=s->formId;
