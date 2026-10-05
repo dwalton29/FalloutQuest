@@ -284,8 +284,17 @@ void Q240UpdateNpcPackage(Q230ActorVisual& actor,double now) {
     // keep selecting new NAVM destinations after their short pause.
     if(package->type==6&&actor.aiSequence>0)return;
     if(now<actor.aiRepathAt)return;
-    if(!Q240BuildPackagePath(actor,*package,anchor,radius)){actor.aiRepathAt=now+2;return;}
+    if(!Q240BuildPackagePath(actor,*package,anchor,radius)){
+      Q240AiLogOnce(actor.source.refFormId,packageId,
+        "path build failed on authored NAVM graph meshes="+std::to_string(actor.navigationGraph->meshes.size())+
+        " triangles="+std::to_string(actor.navigationGraph->triangleCount));
+      actor.aiRepathAt=now+2;return;
+    }
     if(package->type==6)actor.aiSequence=1;
+    if(actor.aiSequence<=2u||(actor.aiSequence%8u)==0u)
+      Q6H_LOGI("NPC PATH actor=%08X package=%08X type=%u waypoints=%zu graphMeshes=%zu graphTriangles=%zu sequence=%u",
+        actor.source.refFormId,packageId,unsigned(package->type),actor.aiPathGame.size(),
+        actor.navigationGraph->meshes.size(),actor.navigationGraph->triangleCount,actor.aiSequence);
     actor.aiRepathAt=now+1;
   }
   if(dt<=0||actor.aiPathIndex>=actor.aiPathGame.size())return;
