@@ -590,13 +590,14 @@ bool LoadFo3NpcNavigationQ240(
                 if(fo3esm::ReadPayload(f,{payloadOffset,size,flags,"NAVM"},payload)){
                     Fo3NpcNavMeshQ240 mesh;
                     mesh.formId=fo3esm::ReadU32(h+12u);
-                    uint32_t expectedVertices=0u,expectedTriangles=0u;
+                    uint32_t expectedVertices=0u,expectedTriangles=0u,expectedExternal=0u;
                     bool malformed=false;
                     fo3esm::WalkSubrecords(payload,[&](const char* type,const uint8_t* p,uint32_t n){
                         if(std::memcmp(type,"DATA",4u)==0&&n>=12u){
                             mesh.cellFormId=fo3esm::ReadU32(p);
                             expectedVertices=fo3esm::ReadU32(p+4u);
                             expectedTriangles=fo3esm::ReadU32(p+8u);
+                            if(n>=16u)expectedExternal=fo3esm::ReadU32(p+12u);
                         } else if(std::memcmp(type,"NVVX",4u)==0){
                             if(n%12u){malformed=true;return;}
                             mesh.vertices.reserve(mesh.vertices.size()+n/12u);
@@ -612,15 +613,29 @@ bool LoadFo3NpcNavigationQ240(
                                 triangle.flags=fo3esm::ReadU32(p+at+12u);
                                 mesh.triangles.push_back(triangle);
                             }
+                        } else if(std::memcmp(type,"NVEX",4u)==0){
+                            // Fallout 3 NVEX entries are 10 bytes:
+                            // unknown u32, target NAVM FormID u32, target triangle u16.
+                            if(n%10u){malformed=true;return;}
+                            mesh.external.reserve(mesh.external.size()+n/10u);
+                            for(uint32_t at=0;at<n;at+=10u)
+                                mesh.external.push_back({fo3esm::ReadU32(p+at+4u),fo3esm::ReadU16(p+at+8u)});
                         }
                     });
                     if(!malformed&&(!cellFormId||worldspaceFormId||mesh.cellFormId==cellFormId)&&
                        !mesh.vertices.empty()&&!mesh.triangles.empty()&&
                        (!expectedVertices||mesh.vertices.size()==expectedVertices)&&
-                       (!expectedTriangles||mesh.triangles.size()==expectedTriangles)){
+                       (!expectedTriangles||mesh.triangles.size()==expectedTriangles)&&
+                       (!expectedExternal||mesh.external.size()==expectedExternal)){
                         for(const auto& tri:mesh.triangles){
                             for(int v=0;v<3;++v)if(tri.vertex[v]>=mesh.vertices.size())malformed=true;
-                            for(int e=0;e<3;++e)if(tri.neighbor[e]>=static_cast<int16_t>(mesh.triangles.size()))malformed=true;
+                            for(int e=0;e<3;++e){
+                                if(tri.neighbor[e]<0)continue;
+                                const bool external=(tri.flags&(1u<<e))!=0u;
+                                if(external){
+                                    if(size_t(tri.neighbor[e])>=mesh.external.size())malformed=true;
+                                } else if(size_t(tri.neighbor[e])>=mesh.triangles.size())malformed=true;
+                            }
                             if(malformed)break;
                         }
                         if(!malformed)outNavigation.push_back(std::move(mesh));
