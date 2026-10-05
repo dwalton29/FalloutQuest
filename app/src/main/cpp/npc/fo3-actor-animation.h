@@ -75,6 +75,10 @@ void BindClip(const Skeleton &skeleton, const Clip &clip, Pose &pose);
 bool Sample(const Skeleton &skeleton, const Clip &clip, double elapsed,
             Pose &pose, SampleTimings* timings=nullptr);
 bool DecodeSkeleton(const std::vector<uint8_t> &bytes, Skeleton &out);
+// Static model AVObject hierarchy, including geometry block mapping. Unlike
+// DecodeUiAnimation, no embedded controller sequence is required or evaluated.
+bool DecodeModelHierarchy(const std::vector<uint8_t> &bytes, Skeleton &out,
+                          std::vector<int> &blockBones);
 bool DecodeClip(const std::vector<uint8_t> &bytes, Clip &out);
 // UI NIFs embed multiple sequences and animate an AVObject hierarchy, including
 // geometry. blockBones maps original NIF block IDs to that hierarchy.

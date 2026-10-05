@@ -275,6 +275,13 @@ static bool DecodeHierarchy(const std::vector<uint8_t> &bytes, fo3anim::Skeleton
 bool fo3anim::DecodeSkeleton(const std::vector<uint8_t> &bytes, Skeleton &out) {
   return DecodeHierarchy(bytes, out);
 }
+bool fo3anim::DecodeModelHierarchy(const std::vector<uint8_t> &bytes, Skeleton &out,
+                                  std::vector<int> &blockBones) {
+  blockBones.clear();
+  const bool ok = DecodeHierarchy(bytes, out, &blockBones);
+  if (!ok) blockBones.clear();
+  return ok;
+}
 
 static bool DecodeClips(const std::vector<uint8_t> &bytes, std::vector<fo3anim::Clip> &out) {
   using namespace fo3anim;

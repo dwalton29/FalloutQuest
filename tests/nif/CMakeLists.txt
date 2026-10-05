@@ -45,3 +45,10 @@ target_compile_options(vr_body_asset_tests PRIVATE -Wall -Wextra -Werror -Wno-un
 target_include_directories(vr_body_asset_tests PRIVATE . ../../app/src/main/cpp ../../app/src/main/cpp/data ../../app/src/main/cpp/npc)
 add_test(NAME vr_body_asset_tests COMMAND vr_body_asset_tests)
 set_tests_properties(vr_body_asset_tests PROPERTIES SKIP_RETURN_CODE 77)
+add_executable(weapon_asset_tests weapon_asset_tests.cpp
+    ../../app/src/main/cpp/npc/fo3-actor-animation.cpp
+    ../../app/src/main/cpp/weapons/fo3-weapon-assets.cpp)
+target_compile_features(weapon_asset_tests PRIVATE cxx_std_17)
+target_compile_options(weapon_asset_tests PRIVATE -Wall -Wextra -Werror -Wno-unused-function)
+target_include_directories(weapon_asset_tests PRIVATE . ../../app/src/main/cpp ../../app/src/main/cpp/data ../../app/src/main/cpp/npc)
+add_test(NAME weapon_asset_tests COMMAND weapon_asset_tests)

@@ -31,6 +31,12 @@ and verified. Do not infer headset verification from host tests or CI builds.
 - Production input/math helpers implement neutral-before-press focus blocking,
   authored semi/automatic timing, body-oriented reach volumes, and a two-hand
   swing that preserves the right-hand roll and rejects degenerate/reversed hands.
+- Original first-person skeleton/aim KFs now produce right-hand/weapon and
+  left-hand/weapon attachment matrices. Static NIF hierarchy inspection maps
+  magazine/slide/bolt meshes from their authored ancestors and extracts the
+  ProjectileNode's local +Y forward direction. The 10mm and hunting rifle are
+  verified against Dropbox source NIF/KFs, including the 10mm's reload sound keys
+  at 0.066667, 0.433333, and 0.8 seconds. Runtime asset caching is still pending.
 
 Broken weapons may remain equipped/carried, but cannot fire. This avoids rejecting
 a save solely because the last shot wore an equipped weapon down to zero condition.
@@ -46,12 +52,14 @@ conservation, instance identity, reload/action persistence, v4 migration, and
 malformed-save rejection. Assets remain outside git and the APK.
 
 The checkpoint `cf2c2a2` (parser/input math) passed the full GitHub Actions Quest
-APK workflow. Later ownership/save checks must be verified separately.
+APK workflow. `68b14b9` (ownership/save) also passed the full Quest APK workflow
+and all existing player/Pip-Boy host targets, plus original-ESM checks.
 
 ## Remaining before milestone completion
 
-1. Cache original NIF, skeleton/KF attachments and named slide/clip/bolt/muzzle
-   transforms. Confirm them against the Dropbox `/Fallout3` source assets.
+1. Integrate/cache the verified original NIF, skeleton/KF attachments and named
+   slide/clip/bolt/muzzle transforms in the runtime. Verify further families as
+   their asset paths are enabled; unsupported heavy/thrown weapons stay disabled.
 2. Present equipped weapons at torso-driven right hip or right shoulder/back
    anchors; implement right-grip draw and release-inside-holster behavior.
 3. Connect original-world right-grip pickup and dynamic-world physics/pickup.
