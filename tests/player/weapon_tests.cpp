@@ -3,8 +3,166 @@
 #include <cassert>
 #include <cmath>
 #include <iostream>
+#include <fstream>
+#include <iterator>
+#include <unistd.h>
+#include <zlib.h>
 using namespace fo3player;
+using Bytes = std::vector<uint8_t>;
+Bytes Read(const std::string &path) {
+  std::ifstream f(path, std::ios::binary);
+  return Bytes(std::istreambuf_iterator<char>(f), {});
+}
+void Write(const std::string &path, const Bytes &bytes) {
+  std::ofstream f(path, std::ios::binary);
+  f.write(reinterpret_cast<const char *>(bytes.data()), bytes.size());
+  assert(f.good());
+}
+uint32_t U32(const Bytes &b, size_t at) {
+  return uint32_t(b.at(at)) | uint32_t(b.at(at+1))<<8 |
+      uint32_t(b.at(at+2))<<16 | uint32_t(b.at(at+3))<<24;
+}
+void Put(Bytes &b, size_t at, uint32_t n) {
+  for (unsigned i=0;i<4;++i) b.at(at+i)=(n>>(8*i))&255;
+}
+void Seal(Bytes &b) {
+  Put(b,12,static_cast<uint32_t>(b.size()-20));
+  Put(b,16,crc32(0,b.data()+20,b.size()-20));
+}
+Catalog Fixture() {
+  Catalog c;
+  Item item;item.formId=0x434f;item.kind=ItemKind::Weapon;
+  item.editorId="Weap10mmPistol";item.name="10mm Pistol";item.maxCondition=150;
+  auto &d=item.weapon;d.valid=true;d.animation=3;d.ammo=0x4241;d.projectile=0x2cd5f;
+  d.clip=12;d.ammoUse=1;d.pellets=1;d.damage=9;d.shotsPerSecond=6;
+  c.items.emplace(item.formId,item);
+  item={};item.formId=0x4241;item.kind=ItemKind::Ammo;item.name="10mm Round";
+  c.items.emplace(item.formId,item);c.weapons.damageGun=.03f;
+  c.references[10].base=0x434f;
+  c.references[20].base=30;
+  c.containers[30].entries.push_back({0x434f,0,2,1,.5f,false});
+  return c;
+}
+void Ownership(Catalog c) {
+  // Isolate the test inventory, preserving original item/projectile/rule definitions.
+  c.initial.inventory.clear();c.initial.nextStackId=1;
+  c.initial.worldWeapons.clear();c.initial.containers.clear();c.initial.collected.clear();
+  c.initial.developmentWeaponGranted=false;
+  Player p(c);std::string error;
+  assert(p.Add(0x434f,2,.5f));
+  assert(p.Snapshot().inventory.size()==2);
+  const auto id=p.Snapshot().inventory[0].id;
+  const auto other=p.Snapshot().inventory[1].id;
+  assert(id!=other&&p.Equip(id));
+  assert(p.Add(0x4241,13)&&p.Add(0x4241,4));
+  assert(p.Snapshot().inventory.size()==3&&p.AmmoReserve(0x4241)==17);
+  assert(!p.FireWeapon(id)&&!p.LoadMagazine(id));
+  assert(p.EjectMagazine(id)&&p.LoadMagazine(id));
+  assert(p.Weapon(id)->loadedRounds==12&&p.AmmoReserve(0x4241)==5);
+  assert(p.Weapon(id)->needsAction&&!p.FireWeapon(id));
+  assert(p.ChamberWeapon(id)&&p.FireWeapon(id));
+  assert(p.Weapon(id)->loadedRounds==11&&p.Weapon(id)->condition<.5f);
+  const float condition=p.Weapon(id)->condition;
+  assert(p.EjectMagazine(id)&&p.AmmoReserve(0x4241)==16);
+  assert(p.LoadMagazine(id)&&p.AmmoReserve(0x4241)==4);
+  fo3weapon::WorldPose pose;pose.cell=123;pose.position={100,200,300};
+  pose.velocity={1,2,3};pose.angularVelocity={.1f,.2f,.3f};
+  const auto rev=p.Revision();
+  auto invalid=pose;invalid.rotation[0]=NAN;
+  assert(!p.DropWeapon(id,invalid)&&p.Revision()==rev);
+  assert(p.DropWeapon(id,pose)&&!p.Weapon(id)&&!p.EquippedWeapon());
+  assert(p.Snapshot().worldWeapons[0].instance.id==id);
+  assert(p.Snapshot().worldWeapons[0].instance.loadedRounds==12);
+  assert(p.Snapshot().worldWeapons[0].instance.needsAction);
+  const std::string path="/tmp/fq-weapon-state-"+std::to_string(getpid())+".fqps";
+  assert(p.Save(path,error));
+  Player loaded(c);assert(loaded.Restore(path,error));
+  assert(loaded.Snapshot().worldWeapons.size()==1);
+  assert(loaded.Snapshot().worldWeapons[0].pose.position==pose.position);
+  assert(loaded.Snapshot().worldWeapons[0].pose.velocity==pose.velocity);
+  assert(loaded.PickupWorldWeapon(id)&&!loaded.PickupWorldWeapon(id));
+  assert(loaded.Weapon(id)->condition==condition&&loaded.Weapon(id)->loadedRounds==12);
+  assert(loaded.Weapon(id)->needsAction&&!loaded.FireWeapon(id));
+  assert(loaded.ChamberWeapon(id)&&loaded.FireWeapon(id));
+  assert(loaded.Equip(other)&&!loaded.Weapon(id)->equipped&&loaded.Weapon(other)->equipped);
+  assert(loaded.Equip(id)&&loaded.Save(path,error));
+  const auto good=Read(path);
+  assert(U32(good,4)==5);
+  Player overflow=loaded;
+  assert(overflow.Add(0x4241,INT32_MAX-overflow.AmmoReserve(0x4241)));
+  const auto overflowRevision=overflow.Revision();
+  assert(!overflow.EjectMagazine(id)&&overflow.Revision()==overflowRevision);
+  assert(overflow.Weapon(id)->loadedRounds==11&&overflow.AmmoReserve(0x4241)==INT32_MAX);
+  auto bad=good;
+  // Collected/container tables are empty in this isolated fixture.
+  const size_t pipLength=40+21*U32(good,36)+16;
+  const size_t extension=pipLength+4+U32(good,pipLength);
+  Put(bad,extension+12+8,0xffffu);Seal(bad);Write(path,bad);
+  const auto unchanged=loaded.Revision();
+  assert(!loaded.Restore(path,error)&&loaded.Revision()==unchanged);
+  assert(loaded.Weapon(id)->loadedRounds==11);
+  // Real v4 layout: same legacy prefix, followed directly by the Pip-Boy blob.
+  Bytes v4(good.begin(),good.begin()+pipLength);
+  v4.insert(v4.end(),good.begin()+pipLength+4,good.begin()+extension);
+  Put(v4,4,4);Seal(v4);Write(path,v4);
+  Player migrated(c);assert(migrated.Restore(path,error));
+  assert(migrated.Weapon(id)&&!migrated.Weapon(id)->loadedRounds);
+  assert(migrated.AmmoReserve(0x4241)==4);
+  // Old, unequipped weapons could be count stacks. Split them on migration,
+  // preserving the original instance and assigning collision-free new IDs.
+  const size_t legacyWeapon=40; // The dropped/picked-up weapon moved to the end.
+  assert(U32(v4,legacyWeapon+8)==0x434f&&!v4.at(legacyWeapon+20));
+  Put(v4,legacyWeapon+12,3);Seal(v4);Write(path,v4);
+  assert(migrated.Restore(path,error));
+  assert(migrated.Snapshot().inventory.size()==loaded.Snapshot().inventory.size()+2);
+  assert(migrated.Weapon(other)->count==1);
+  assert(migrated.Snapshot().nextStackId==loaded.Snapshot().nextStackId+2);
+  Player seeded(c);assert(seeded.BootstrapDevelopmentWeapon());
+  const auto seedId=seeded.EquippedWeapon()->id;
+  assert(seeded.Weapon(seedId)->loadedRounds==12&&seeded.AmmoReserve(0x4241)==48);
+  assert(seeded.DropWeapon(seedId,pose)&&seeded.Save(path,error));
+  Player resumed(c);assert(resumed.Restore(path,error));
+  const auto seedRevision=resumed.Revision();
+  assert(resumed.BootstrapDevelopmentWeapon()&&resumed.Revision()==seedRevision);
+  assert(!resumed.EquippedWeapon()&&resumed.Snapshot().worldWeapons[0].instance.id==seedId);
+  // Malformed world pose and duplicate ownership are rejected atomically.
+  const auto seededSave=Read(path);
+  bad=seededSave;Put(bad,bad.size()-4,0x7fc00000);Seal(bad);Write(path,bad);
+  assert(!resumed.Restore(path,error)&&resumed.Revision()==seedRevision);
+  bad=seededSave;
+  const auto ownedId=resumed.Snapshot().inventory.front().id;
+  Put(bad,bad.size()-80,static_cast<uint32_t>(ownedId));
+  Put(bad,bad.size()-76,static_cast<uint32_t>(ownedId>>32));
+  Seal(bad);Write(path,bad);
+  assert(!resumed.Restore(path,error)&&resumed.Revision()==seedRevision);
+  std::remove(path.c_str());
+}
 int main(int argc,char**argv) {
+  Ownership(Fixture());
+  {
+    Player p(Fixture());
+    assert(p.PickupWeapon(10)&&!p.PickupWeapon(10)&&p.EquippedWeapon());
+    assert(p.PrepareContainer(20)&&p.ContainerContents(20)->size()==2);
+    const auto id=p.ContainerContents(20)->front().id;
+    assert(p.TakeContainerStack(20,id)&&p.Weapon(id)&&p.Weapon(id)->condition==.5f);
+    const auto rev=p.Revision();assert(!p.Add(0x434f,10000)&&p.Revision()==rev);
+  }
+  {
+    Player p(Fixture());assert(p.Add(0x434f,1,.25f));
+    const auto id=p.Snapshot().inventory.front().id;
+    assert(p.Add(0x4241,3)&&p.BootstrapDevelopmentWeapon());
+    assert(p.Weapon(id)->condition==.25f&&p.Weapon(id)->loadedRounds==3);
+    assert(p.Snapshot().inventory.size()==1&&!p.AmmoReserve(0x4241));
+    assert(p.FireWeapon(id)&&p.FireWeapon(id)&&p.FireWeapon(id)&&!p.FireWeapon(id));
+    assert(p.EjectMagazine(id)&&!p.LoadMagazine(id));
+  }
+  {
+    auto c=Fixture();c.items.at(0x434f).cannotDrop=true;
+    Player p(c);assert(p.PickupWeapon(10));
+    fo3weapon::WorldPose pose;pose.cell=123;
+    const auto rev=p.Revision();assert(!p.DropWeapon(p.EquippedWeapon()->id,pose));
+    assert(p.Revision()==rev&&p.Snapshot().worldWeapons.empty());
+  }
   fo3weapon::Definition malformed;
   assert(!fo3weapon::DecodeWeapon({},malformed));
   assert(!malformed.Firearm());
@@ -47,6 +205,7 @@ int main(int argc,char**argv) {
   if(argc>1) {
     Catalog c;std::string error;
     assert(LoadCatalog(argv[1],c,error));
+    Ownership(c);
     struct Expected {uint32_t id,ammo,projectile;const char*edid;uint8_t clip,animation;uint16_t damage;int health;};
     const Expected expected[]={
       {0x434f,0x4241,0x2cd5f,"Weap10mmPistol",12,3,9,150},

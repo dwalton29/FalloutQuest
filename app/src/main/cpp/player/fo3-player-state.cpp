@@ -577,6 +577,16 @@ bool Player::Add(uint32_t form, int32_t count, float condition) {
   const auto &item = catalog_.items.at(form);
   if (item.maxCondition == 0 && condition != 1)
     return false;
+  if (item.kind == ItemKind::Weapon) {
+    if (static_cast<size_t>(count) > MaxStacks - state_.inventory.size() ||
+        static_cast<uint64_t>(count) > UINT64_MAX - state_.nextStackId)
+      return false;
+    state_.inventory.reserve(state_.inventory.size() + count);
+    for (int32_t i = 0; i < count; ++i)
+      state_.inventory.push_back({state_.nextStackId++, form, 1, condition, false});
+    ++revision_;
+    return true;
+  }
   for (auto &s : state_.inventory)
     if (s.formId == form && s.condition == condition && !s.equipped) {
       if (count > INT32_MAX - s.count)
@@ -611,7 +621,7 @@ bool Player::Equip(uint64_t id) {
   const auto it = std::find_if(v.begin(), v.end(),
                                [&](const Stack &s) { return s.id == id; });
   if (it == v.end() || !CanEquip(catalog_.items.at(it->formId)) ||
-      it->condition <= 0)
+      (it->condition <= 0 && catalog_.items.at(it->formId).kind != ItemKind::Weapon))
     return false;
   if (it->equipped)
     return true;
@@ -764,8 +774,37 @@ bool Player::Save(const std::string &path, std::string &error) const {
       PutFloat(payload, stack.condition);
     }
   }
-  fo3pipdata::EncodeState(state_.pipboy,payload);
-  Put32(bytes, 4);
+  Bytes pipboy;
+  fo3pipdata::EncodeState(state_.pipboy, pipboy);
+  Put32(payload, static_cast<uint32_t>(pipboy.size()));
+  payload.insert(payload.end(), pipboy.begin(), pipboy.end());
+  Put32(payload, 0x57504e35); // WPN5 extension; runtime IDs, not Bethesda forms.
+  Put32(payload, state_.developmentWeaponGranted ? 1 : 0);
+  std::vector<const Stack *> weapons;
+  for (const auto &s : state_.inventory)
+    if (catalog_.items.at(s.formId).kind == ItemKind::Weapon) weapons.push_back(&s);
+  for (auto id : containerIds)
+    for (const auto &s : state_.containers.at(id))
+      if (catalog_.items.at(s.formId).kind == ItemKind::Weapon) weapons.push_back(&s);
+  Put32(payload, static_cast<uint32_t>(weapons.size()));
+  for (const auto *s : weapons) {
+    Put64(payload, s->id);
+    Put32(payload, s->loadedRounds | (s->needsAction ? 0x10000u : 0));
+  }
+  Put32(payload, static_cast<uint32_t>(state_.worldWeapons.size()));
+  for (const auto &w : state_.worldWeapons) {
+    Put64(payload, w.instance.id);
+    Put32(payload, w.instance.formId);
+    PutFloat(payload, w.instance.condition);
+    Put32(payload, w.instance.loadedRounds | (w.instance.needsAction ? 0x10000u : 0));
+    Put32(payload, w.pose.cell);
+    Put32(payload, w.pose.world);
+    for (float f : w.pose.position) PutFloat(payload, f);
+    for (float f : w.pose.rotation) PutFloat(payload, f);
+    for (float f : w.pose.velocity) PutFloat(payload, f);
+    for (float f : w.pose.angularVelocity) PutFloat(payload, f);
+  }
+  Put32(bytes, 5);
   Put32(bytes, catalog_.fingerprint);
   Put32(bytes, static_cast<uint32_t>(payload.size()));
   Put32(bytes, Crc(payload));
@@ -824,7 +863,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
   const auto *h = bytes.data();
   const auto version = fo3esm::ReadU32(h + 4);
   if (std::memcmp(h, "FQPS", 4) ||
-      (version != 1 && version != 2 && version != 3 && version != 4))
+      (version < 1 || version > 5))
     return fail("Unsupported player save format");
   if (fo3esm::ReadU32(h + 8) != catalog_.fingerprint)
     return fail("Player save belongs to different game definitions");
@@ -835,6 +874,8 @@ bool Player::Restore(const std::string &path, std::string &error) {
     return fail("Player save checksum failed");
   const auto *p = payload.data();
   State next = catalog_.initial;
+  next.worldWeapons.clear();
+  next.developmentWeaponGranted = false;
   next.healthDamage = fo3esm::ReadF32(p);
   next.apSpent = fo3esm::ReadF32(p + 4);
   next.nextStackId = U64(p + 8);
@@ -860,7 +901,9 @@ bool Player::Restore(const std::string &path, std::string &error) {
         stack.condition < 0 || stack.condition > 1 || s[20] > 1 ||
         (item->second.maxCondition == 0 && stack.condition != 1) ||
         (stack.equipped &&
-         (stack.count != 1 || !CanEquip(item->second) || stack.condition == 0)))
+         (stack.count != 1 || !CanEquip(item->second) ||
+          (stack.condition == 0 && item->second.kind != ItemKind::Weapon))) ||
+        (version == 5 && item->second.kind == ItemKind::Weapon && stack.count != 1))
       return fail("Invalid saved inventory stack");
     for (const auto &prior : next.inventory)
       if (prior.equipped && stack.equipped &&
@@ -918,16 +961,89 @@ bool Player::Restore(const std::string &path, std::string &error) {
             !ids.insert(stack.id).second || item == catalog_.items.end() ||
             stack.count <= 0 || !std::isfinite(stack.condition) ||
             stack.condition < 0 || stack.condition > 1 ||
-            (item->second.maxCondition == 0 && stack.condition != 1))
+            (item->second.maxCondition == 0 && stack.condition != 1) ||
+            (version == 5 && item->second.kind == ItemKind::Weapon && stack.count != 1))
           return fail("Invalid container stack");
         contents.push_back(stack);
       }
       next.containers.emplace(ref, std::move(contents));
     }
     if (version == 4 && !fo3pipdata::DecodeState(next.pipboy,catalog_.pipboy,p+at,payload.size()-at,error))return false;
+    if (version == 5) {
+      if (payload.size() - at < 4) return fail("Missing Pip-Boy length");
+      const uint32_t pipSize = fo3esm::ReadU32(p + at);
+      at += 4;
+      if (pipSize > payload.size() - at ||
+          !fo3pipdata::DecodeState(next.pipboy, catalog_.pipboy, p + at, pipSize, error))
+        return fail("Invalid Pip-Boy extension");
+      at += pipSize;
+      if (payload.size() - at < 12 || fo3esm::ReadU32(p + at) != 0x57504e35 ||
+          fo3esm::ReadU32(p + at + 4) > 1)
+        return fail("Invalid weapon extension");
+      next.developmentWeaponGranted = fo3esm::ReadU32(p + at + 4) != 0;
+      const uint32_t number = fo3esm::ReadU32(p + at + 8);
+      at += 12;
+      std::unordered_map<uint64_t, Stack *> weapons;
+      for (auto &s : next.inventory)
+        if (catalog_.items.at(s.formId).kind == ItemKind::Weapon) weapons.emplace(s.id, &s);
+      for (auto &c : next.containers)
+        for (auto &s : c.second)
+          if (catalog_.items.at(s.formId).kind == ItemKind::Weapon) weapons.emplace(s.id, &s);
+      if (number != weapons.size() || payload.size() - at < 12ull * number)
+        return fail("Invalid weapon instance count");
+      auto setRounds = [&](Stack &s, uint32_t packed) {
+        const auto &def = catalog_.items.at(s.formId).weapon;
+        if ((packed & ~0x1ffffu) || (packed & 0xffffu) > def.clip ||
+            (!def.Firearm() && packed)) return false;
+        s.loadedRounds = packed & 0xffffu;
+        s.needsAction = (packed & 0x10000u) != 0;
+        return true;
+      };
+      for (uint32_t i = 0; i < number; ++i, at += 12) {
+        const uint64_t id = U64(p + at);
+        const auto found = weapons.find(id);
+        if (found == weapons.end() || !setRounds(*found->second, fo3esm::ReadU32(p + at + 8)))
+          return fail("Invalid saved weapon ammunition");
+        weapons.erase(found);
+      }
+      if (payload.size() - at < 4) return fail("Missing world weapons");
+      const uint32_t worldCount = fo3esm::ReadU32(p + at);
+      at += 4;
+      if (worldCount > 10000 || payload.size() - at != 80ull * worldCount)
+        return fail("Invalid world weapon count");
+      for (uint32_t i = 0; i < worldCount; ++i) {
+        WorldWeapon w;
+        w.instance.id = U64(p + at);
+        w.instance.formId = fo3esm::ReadU32(p + at + 8);
+        w.instance.count = 1;
+        w.instance.condition = fo3esm::ReadF32(p + at + 12);
+        const auto item = catalog_.items.find(w.instance.formId);
+        if (!w.instance.id || w.instance.id >= next.nextStackId ||
+            !ids.insert(w.instance.id).second || item == catalog_.items.end() ||
+            item->second.kind != ItemKind::Weapon || !item->second.weapon.Firearm() ||
+            !item->second.playable || item->second.script || item->second.questItem ||
+            item->second.cannotDrop || !std::isfinite(w.instance.condition) ||
+            w.instance.condition < 0 || w.instance.condition > 1 ||
+            (item->second.maxCondition == 0 && w.instance.condition != 1) ||
+            !setRounds(w.instance, fo3esm::ReadU32(p + at + 16)))
+          return fail("Invalid saved world weapon");
+        w.pose.cell = fo3esm::ReadU32(p + at + 20);
+        w.pose.world = fo3esm::ReadU32(p + at + 24);
+        size_t field = at + 28;
+        for (float &f : w.pose.position) {f = fo3esm::ReadF32(p + field); field += 4;}
+        for (float &f : w.pose.rotation) {f = fo3esm::ReadF32(p + field); field += 4;}
+        for (float &f : w.pose.velocity) {f = fo3esm::ReadF32(p + field); field += 4;}
+        for (float &f : w.pose.angularVelocity) {f = fo3esm::ReadF32(p + field); field += 4;}
+        if (!fo3weapon::ValidPose(w.pose)) return fail("Invalid saved world weapon pose");
+        next.worldWeapons.push_back(w);
+        at += 80;
+      }
+    }
     if (version == 3 && at != payload.size())
       return fail("Trailing container save data");
   }
+  if (version < 5 && !MigrateWeaponInstances(next))
+    return fail("Legacy weapon inventory exceeds instance limits");
   state_ = std::move(next);
   ++revision_;
   return true;

@@ -46,6 +46,15 @@ bool Player::PrepareContainer(uint32_t id) {
     if (item != catalog_.items.end()) {
       if (item->second.maxCondition == 0 && condition != 1)
         return false;
+      if (item->second.kind == ItemKind::Weapon) {
+        if (static_cast<size_t>(count) > 10000 - contents.size() ||
+            total + contents.size() + count > 30000 ||
+            static_cast<uint64_t>(count) > UINT64_MAX - nextId)
+          return false;
+        for (int32_t i = 0; i < count; ++i)
+          contents.push_back({nextId++, form, 1, condition, false});
+        return true;
+      }
       for (auto &s : contents)
         if (s.formId == form && s.condition == condition) {
           if (count > INT32_MAX - s.count)
@@ -145,6 +154,14 @@ bool Player::TakeContainerStack(uint32_t id, uint64_t stack) {
   auto &contents = state_.containers.at(id);
   const auto s = std::find_if(contents.begin(), contents.end(),
                               [&](const Stack &s) { return s.id == stack; });
+  if (catalog_.items.at(s->formId).kind == ItemKind::Weapon) {
+    if (state_.inventory.size() >= 10000 || s->count != 1)
+      return false;
+    state_.inventory.push_back(*s);
+    contents.erase(s);
+    ++revision_;
+    return true;
+  }
   if (!Add(s->formId, s->count, s->condition))
     return false;
   contents.erase(s);

@@ -275,10 +275,13 @@ void Synthetic(const std::string &root) {
         "only overlapping armour displaced");
   Check(p.Add(107, 1) && !p.Equip(Id(p, 107)),
         "nonplayable armour not equippable");
-  Check(p.Add(100, 1, 0) && !p.Equip(p.Snapshot().inventory.back().id),
-        "broken weapon");
-  Check(p.Add(100, 1, 0.5f) && p.Add(100, 2, 0.5f), "same condition merge");
-  Check(p.Snapshot().inventory.back().count == 3, "condition stack count");
+  Check(p.Add(100, 1, 0) && p.Equip(p.Snapshot().inventory.back().id),
+        "broken weapon can be carried; firing is separately rejected");
+  Check(p.Equip(Id(p, 101)), "restore the original equipped instance after broken carry test");
+  const auto beforeWeapons = p.Snapshot().inventory.size();
+  Check(p.Add(100, 1, 0.5f) && p.Add(100, 2, 0.5f), "same condition instances");
+  Check(p.Snapshot().inventory.size() == beforeWeapons + 3 &&
+            p.Snapshot().inventory.back().count == 1, "weapons never merge");
   Check(p.Add(106, 1) && !p.Remove(Id(p, 106), 1), "quest item protected");
   const auto before = p.Revision();
   Check(!p.Remove(Id(p, 102, true), 2) && p.Revision() == before,
@@ -327,7 +330,13 @@ void Synthetic(const std::string &root) {
         "restore v2 after migration check");
   const Bytes good = Read(save);
   Bytes version3=good;
-  version3.resize(version3.size()-44); // empty v4 Pip-Boy extension
+  const size_t containersStart = 40 + 21 * fo3esm::ReadU32(good.data() + 36);
+  size_t legacyEnd = containersStart + 8 + 4 * fo3esm::ReadU32(good.data() + containersStart + 4);
+  const uint32_t containers = fo3esm::ReadU32(good.data() + legacyEnd + 4);
+  legacyEnd += 8;
+  for (uint32_t i = 0; i < containers; ++i)
+    legacyEnd += 8 + 20 * fo3esm::ReadU32(good.data() + legacyEnd + 4);
+  version3.resize(legacyEnd);
   version3[4]=3;
   const auto v3size=version3.size()-20;
   for(int i=0;i<4;++i)version3[12+i]=(v3size>>(8*i))&255;
@@ -487,7 +496,8 @@ void Containers(const std::string &root) {
         "CONT/LVLI decoded");
   fo3player::Player p(c);
   Check(p.PrepareContainer(300) &&
-            p.ContainerContents(300)->front().count == 2 &&
+            p.ContainerContents(300)->size() == 2 &&
+            p.ContainerContents(300)->front().count == 1 &&
             p.ContainerContents(300)->front().condition == .5f,
         "fixed authored contents and condition");
   const auto rev = p.Revision();
@@ -497,9 +507,12 @@ void Containers(const std::string &root) {
             p.ContainerContents(301)->front().count == 6,
         "use-all includes above-level entries and parent count");
   const auto id = p.ContainerContents(300)->front().id;
-  Check(p.TakeContainerStack(300, id) && p.ContainerContents(300)->empty() &&
+  Check(p.TakeContainerStack(300, id) && p.ContainerContents(300)->size() == 1 &&
+            p.Weapon(id) &&
             !p.TakeContainerStack(300, id),
         "transfer atomic and once-only");
+  Check(p.TakeContainerStack(300, p.ContainerContents(300)->front().id) &&
+            p.ContainerContents(300)->empty(), "second individual weapon transfers");
   Check(p.Save(save, error), error.c_str());
   fo3player::Player restored(c);
   Check(restored.Restore(save, error) &&

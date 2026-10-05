@@ -68,6 +68,12 @@ struct Stack {
   float condition =
       1; // normalized instance condition, never merged across conditions
   bool equipped = false;
+  uint16_t loadedRounds = 0;
+  bool needsAction = false;
+};
+struct WorldWeapon {
+  Stack instance;
+  fo3weapon::WorldPose pose;
 };
 struct Rules {
   float healthEnduranceMult = 0, healthEnduranceOffset = 0, healthLevelMult = 0;
@@ -109,6 +115,8 @@ struct State {
   std::vector<Stack> inventory;
   std::unordered_set<uint32_t> collected;
   std::unordered_map<uint32_t, std::vector<Stack>> containers;
+  std::vector<WorldWeapon> worldWeapons;
+  bool developmentWeaponGranted = false;
 };
 struct Catalog {
   fo3weapon::Definitions weapons;
@@ -162,6 +170,19 @@ public:
   bool Remove(uint64_t stackId, int32_t count);
   bool Equip(uint64_t stackId);
   bool Unequip(uint64_t stackId);
+  const Stack *Weapon(uint64_t id) const;
+  const Stack *EquippedWeapon() const;
+  int32_t AmmoReserve(uint32_t ammo) const;
+  bool PickupWeapon(uint32_t reference);
+  bool DropWeapon(uint64_t id, const fo3weapon::WorldPose &pose);
+  bool PickupWorldWeapon(uint64_t id);
+  bool UpdateWorldWeapon(uint64_t id, const fo3weapon::WorldPose &pose);
+  bool FireWeapon(uint64_t id);
+  bool EjectMagazine(uint64_t id);
+  bool LoadMagazine(uint64_t id);
+  bool ChamberWeapon(uint64_t id);
+  // Explicit development bootstrap; runtime enables only when presentation is ready.
+  bool BootstrapDevelopmentWeapon();
   bool CanPickup(uint32_t reference) const;
   bool Pickup(uint32_t reference);
   bool CanOpenDoor(uint32_t reference) const;
@@ -183,6 +204,7 @@ public:
   bool Restore(const std::string &path, std::string &error);
 
 private:
+  bool MigrateWeaponInstances(State &state) const;
   Catalog catalog_;
   State state_;
   uint64_t revision_ = 0;

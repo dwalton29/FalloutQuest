@@ -24,6 +24,7 @@ add_library(falloutquest SHARED
     npc/fo3-actor-animation.cpp
     player/fo3-player-state.cpp
     weapons/fo3-weapon-data.cpp
+    weapons/fo3-weapon-player.cpp
     player/fo3-pipboy-player.cpp
     pipboy/fo3-pipboy-data.cpp
     pipboy/fo3-pipboy-session.cpp
