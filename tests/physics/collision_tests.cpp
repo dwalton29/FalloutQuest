@@ -129,6 +129,12 @@ int main(int argc,char**argv) {
     assert(ResolveFo3DynamicBoxQ225(3,0,.2f,0,0,.05f,0,.1f,.1f,.1f,
         1,0,0,0,1,0,0,0,1,.18f,&x,&dy,&z,&nx,&ny,&nz,&contacts,&candidates));
     assert(dy>0 && contacts>0); // loose-object physics still contacts authored floor
+    // Reproduce a thin pistol crossing more than its vertical half-extent in a
+    // frame. The resolver must keep it above the authored floor.
+    contacts=candidates=0;nx=ny=nz=0;
+    assert(ResolveFo3DynamicBoxQ225(3,0,.20f,0,0,-.30f,0,.08f,.025f,.16f,
+        1,0,0,0,1,0,0,0,1,.20f,&x,&dy,&z,&nx,&ny,&nz,&contacts,&candidates));
+    assert(dy>0.020f && contacts>0 && ny>0.25f);
     // Failed/discarded replacements must retain the currently published world.
     auto oldTriangles=gWorldTriangles.size();
     token=prepare({a},false,106);DiscardFo3CollisionSnapshotQ1930(token);
