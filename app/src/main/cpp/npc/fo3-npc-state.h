@@ -13,7 +13,7 @@ struct DialoguePolicy {
   static constexpr const char* ConversationIdle="LooseListenToPlayerRelaxedB";
 };
 enum class Activity { Idle, Package, Dialogue, Combat };
-enum class Animation { Idle, TurnLeft, TurnRight, Conversation };
+enum class Animation { Idle, TurnLeft, TurnRight, Conversation, Walk };
 inline float Angle(float a){return std::atan2(std::sin(a),std::cos(a));}
 struct RuntimeState {
   uint32_t reference=0,package=0,combatTarget=0;
