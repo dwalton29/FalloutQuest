@@ -11,6 +11,8 @@ public final class GameInstallTests {
         for (String name : new String[]{master, "Fallout - Meshes.bsa",
                 "Fallout - Textures.bsa", "Fallout - Misc.bsa"})
             Files.write(data.resolve(name), new byte[]{1});
+        if (master.equalsIgnoreCase("Fallout3.esm"))
+            Files.write(data.resolve("Fallout - Voices.bsa"), new byte[]{1});
         return data.toFile();
     }
     public static void main(String[] args) throws Exception {
@@ -20,6 +22,10 @@ public final class GameInstallTests {
             require(GameInstall.findData(fo3, GameInstall.Game.FALLOUT3) == null);
             File nested = fixture(temp.resolve("Fallout3/Fallout 3 goty/data"), "fallout3.ESM");
             require(nested.equals(GameInstall.findData(fo3, GameInstall.Game.FALLOUT3)));
+            require(GameInstall.missing(nested, GameInstall.Game.FALLOUT3).isEmpty());
+            Files.delete(nested.toPath().resolve("Fallout - Voices.bsa"));
+            require(GameInstall.missing(nested, GameInstall.Game.FALLOUT3).contains("dialogue audio"));
+            Files.createDirectories(nested.toPath().resolve("Sound/Voice/Fallout3.esm"));
             require(GameInstall.missing(nested, GameInstall.Game.FALLOUT3).isEmpty());
             require(GameInstall.findData(fo3, GameInstall.Game.NEW_VEGAS) == null);
             fixture(temp.resolve("Fallout3/Data"), "Fallout3.esm");
