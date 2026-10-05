@@ -117,6 +117,11 @@ bool LoadFo3CellActors(uint32_t, std::vector<Fo3NpcActorQ230> &,
                        const std::string &) {
   return false;
 }
+bool LoadFo3NpcNavigationQ240(uint32_t,uint32_t,
+                             std::vector<Fo3NpcNavMeshQ240>&,
+                             const std::string&) {
+  return false;
+}
 bool Q230BuildNpcActor(const Fo3NpcActorQ230 &, Q230ActorVisual &) {
   return false;
 }
@@ -154,7 +159,9 @@ void QActorUploadSkin(GpuObject&,QActorSkin& skin,fqactor::Cost&,bool player) {
 }
 bool LoadFalloutMeshFile(const std::string&,std::vector<uint8_t>&){return false;}
 namespace fo3anim {bool DecodeClip(const std::vector<uint8_t>&,Clip&){return false;}}
+#define FO3_ACTOR_RUNTIME_HOST_TEST 1
 #include "../../app/src/main/cpp/npc/fo3-npc-runtime.inc"
+#undef FO3_ACTOR_RUNTIME_HOST_TEST
 int main() {
   // FO3 rigid parts keep actor axes despite a rotated head bone.
   {
