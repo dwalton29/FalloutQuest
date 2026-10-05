@@ -22,8 +22,8 @@ android {
         applicationId 'com.falloutquest.app'
         minSdk 29
         targetSdk 35
-        versionCode 159
-        versionName '0.37.2-arm-rig-pipboy-access'
+        versionCode 160
+        versionName '0.38.0-authored-vr-body'
 
         ndk {
             abiFilters 'arm64-v8a'

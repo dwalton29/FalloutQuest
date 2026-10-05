@@ -1,3 +1,5 @@
+Current player body: [v160 authored VR retargeting](VR-BODY-v160.md). Historical Q21/v159 arm descriptions below are superseded.
+
 # Quest actor skinning (APK 147)
 
 Based on main ce35c8a (APK 146). The supplied Megaton capture establishes that

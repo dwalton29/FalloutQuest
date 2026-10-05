@@ -1,3 +1,5 @@
+Current player body: [v160 authored VR retargeting](VR-BODY-v160.md). Historical Q21/v159 arm descriptions below are superseded.
+
 # Physical Pip-Boy foundation — Quest 159
 
 The original device is a rigid `PipBoy3000\PipBoyArm.NIF`, not a skinned mesh. Its attachment metadata names `Bip01 L ForeTwist`. All device shapes share `gPipWorld`: `gQ210PlayerRoot × solved rigid forearm/wrist-roll delta × authored Skeleton.NIF ForeTwist bind`. The canonical skeleton decoder supplies the bind matrix; coordinate conversion includes 70 game units/metre and the existing -1.55 m mesh floor offset. Display-centre placement inherits existing axial arm retargeting; the device itself is not stretched. Wrist flex is excluded; roll comes from the existing solved forearm and hand deltas. No separate controller attachment or altered arm targets.

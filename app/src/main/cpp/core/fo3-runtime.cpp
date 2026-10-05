@@ -1,3 +1,4 @@
+#include "player/fo3-vr-body.h"
 #include "ui/pipboy/fo3-pipboy-mesh.h"
 #include "ui/pipboy/fo3-pipboy-renderer.h"
 #include "world/interaction/fo3-shoulder-zone.h"
@@ -738,27 +739,15 @@ float gQ217FingerGrip[2]{0.0f, 0.0f};
 bool gQ217TriggerTouched[2]{false, false};
 bool gQ217ThumbTouched[2]{false, false};
 
-// Q21.9 VR-specific retarget calibration. Both arms share one scale so the
-// avatar stays symmetric. The scale only grows during a session, avoiding
-// visible arm-length "breathing" during ordinary controller motion.
-constexpr float Q219_ARM_BASE_SCALE = 1.12f;
-constexpr float Q219_ARM_MAX_SCALE = 1.22f;
-constexpr float Q219_TARGET_EXTENSION_RATIO = 0.93f;
-constexpr float Q219_SCALE_GROW_PER_FRAME = 0.0025f;
-float gQ219ArmLengthScale = Q219_ARM_BASE_SCALE;
-
-// Q21.13 VR torso inference: preserve independent head look inside a neck
-// dead-zone, then let the torso follow the excess yaw. Snap/locomotion yaw is
-// applied immediately so artificial turning stays coherent.
-constexpr float Q213_NECK_YAW_LIMIT = 0.6108652382f; // 35 degrees
-constexpr float Q213_TORSO_FOLLOW_MAX_STEP = 0.0261799388f; // 1.5 deg/frame
-// Q21.21: the tracked OpenXR grip pose is the hand target. Do not add a
-// synthetic lateral hand offset; the visible palm anchor already supplies the
-// authored hand-to-controller relationship.
-constexpr float Q214_HAND_OUTWARD_OFFSET = 0.0f;
+// One authored skeleton and one mutable VR pose history. No session arm growth.
+fo3anim::Skeleton gVrSkeleton;
+Vec3 gVrEyeAnchor{},gVrNeckAnchor{};bool gVrEyeAnchorValid=false;
+fo3vr::ArmRig gVrArms[2];
+fo3vr::ArmState gVrArmState[2];
+fo3vr::TorsoState gVrTorso;
+float gVrPoseDt = 1.0f / 72.0f;
 bool gQ213TorsoYawReady = false;
 float gQ213TorsoYaw = 0.0f;
-float gQ213LastLocomotionYaw = 0.0f;
 
 uint64_t gQ211TrackingSerial = 0u;
 uint64_t gQ211RigRevision = 0u;
@@ -775,22 +764,8 @@ struct Q211PlayerRigPart {
     std::vector<uint16_t> expandedBoneIndices; // 4 per expanded vertex
     std::vector<float> expandedBoneWeights;     // 4 per expanded vertex
     std::vector<Fo3NifSkinBone> bones;
-    int leftUpperArm = -1;
-    int leftForearm = -1;
     int leftHand = -1;
-    int rightUpperArm = -1;
-    int rightForearm = -1;
     int rightHand = -1;
-    Vec3 leftPalmAnchor{};
-    Vec3 rightPalmAnchor{};
-    Vec3 leftForearmCentroid{};
-    Vec3 rightForearmCentroid{};
-    bool leftPalmAnchorValid = false;
-    bool rightPalmAnchorValid = false;
-    bool leftForearmCentroidValid = false;
-    bool rightForearmCentroidValid = false;
-    bool leftChainReady = false;
-    bool rightChainReady = false;
 };
 
 std::vector<Q211PlayerRigPart> gQ211PlayerRigParts;
@@ -8861,123 +8836,28 @@ int Q211FindPrimaryBone(
 
 Vec3 Q211BindBonePoint(const Fo3NifSkinBone& bone);
 
-int Q211FindHeadAnchorBone(
-        const std::vector<Fo3NifSkinBone>& bones,
-        bool& isNeck) {
-    isNeck = false;
-    for (size_t i = 0u; i < bones.size(); ++i) {
-        const std::string lower = Q211Lower(bones[i].name);
-        if (lower == "bip01 head" ||
-            lower.find("bip01 head") != std::string::npos) {
-            return static_cast<int>(i);
-        }
-    }
-    for (size_t i = 0u; i < bones.size(); ++i) {
-        const std::string lower = Q211Lower(bones[i].name);
-        if (lower == "bip01 neck" ||
-            lower.find("bip01 neck") != std::string::npos) {
-            isNeck = true;
-            return static_cast<int>(i);
-        }
-    }
-    return -1;
+Vec3 VrSkeletonPoint(int bone) {
+    const auto& m=gVrSkeleton.bindGlobal[bone];
+    return {m[12]/FO3_UNITS_PER_METRE,FLOOR_Y+m[14]/FO3_UNITS_PER_METRE,
+            SCENE_FORWARD-m[13]/FO3_UNITS_PER_METRE};
 }
-
 bool Q211BuildAvatarHeadAnchor(Vec3& out) {
-    // Prefer the authored Head node. Some body parts do not reference Head;
-    // Neck is a stable fallback, then shoulder midpoint.
-    for (const Q211PlayerRigPart& part : gQ211PlayerRigParts) {
-        bool isNeck = false;
-        const int bone = Q211FindHeadAnchorBone(part.bones, isNeck);
-        if (bone >= 0) {
-            out = Q211BindBonePoint(part.bones[bone]);
-            if (isNeck) out.y += 0.14f;
-            return true;
-        }
-    }
-
-    for (const Q211PlayerRigPart& part : gQ211PlayerRigParts) {
-        if (part.leftUpperArm >= 0 && part.rightUpperArm >= 0) {
-            const Vec3 l = Q211BindBonePoint(
-                part.bones[part.leftUpperArm]);
-            const Vec3 r = Q211BindBonePoint(
-                part.bones[part.rightUpperArm]);
-            out = Q211Mul(Q211Add(l, r), 0.5f);
-            out.y += 0.23f;
-            return true;
-        }
-    }
-    return false;
+    if(!gVrEyeAnchorValid)return false;
+    out=gVrEyeAnchor;return true;
 }
 
 int Q211BoneRole(const std::string& authoredName) {
-    const std::string name = Q211Lower(authoredName);
-    const bool left =
-        name.find("bip01 l ") != std::string::npos ||
-        name.find(" l ") != std::string::npos;
-    const bool right =
-        name.find("bip01 r ") != std::string::npos ||
-        name.find(" r ") != std::string::npos;
-    if (!left && !right) return 0;
-
-    // Fallout 3's skeleton uses both the main limb bones and dedicated
-    // twist links. In particular FO3 assets commonly reference
-    // "Bip01 L/R ForeTwist" rather than spelling the twist as ForearmTwist.
-    // Those vertices must inherit the same solved limb transform or the
-    // distal arm remains in bind pose while the main UpperArm/Forearm moves.
-    if (name.find("upperarm") != std::string::npos ||
-        name.find("uparmtwist") != std::string::npos)
-        return left ? 1 : 4;
-    if (name.find("forearm") != std::string::npos ||
-        name.find("foretwist") != std::string::npos)
-        return left ? 2 : 5;
-    if (name.find("hand") != std::string::npos ||
-        name.find("finger") != std::string::npos ||
-        name.find("thumb") != std::string::npos)
-        return left ? 3 : 6;
+    const auto n=Q211Lower(authoredName);
+    const bool left=n.rfind("bip01 l",0)==0,right=n.rfind("bip01 r",0)==0;
+    if(n=="bip01 neck"||n=="bip01 neck1"||n=="bip01 head")return 13;
+    if(!left&&!right)return 0;
+    if(n.find("clavicle")!=std::string::npos)return left?7:8;
+    if(n.find("uparmtwist")!=std::string::npos)return left?9:10;
+    if(n.find("foretwist")!=std::string::npos)return left?11:12;
+    if(n.find("upperarm")!=std::string::npos)return left?1:4;
+    if(n.find("forearm")!=std::string::npos)return left?2:5;
+    if(n.find("hand")!=std::string::npos||n.find("finger")!=std::string::npos||n.find("thumb")!=std::string::npos)return left?3:6;
     return 0;
-}
-
-bool Q211WeightedGeometryAnchor(
-        const Q211PlayerRigPart& part,
-        int desiredRole,
-        Vec3& out,
-        float& outWeight) {
-    constexpr size_t STRIDE = 18u;
-    out = {};
-    outWeight = 0.0f;
-    const size_t vertices = part.bindExpanded.size() / STRIDE;
-    if (part.expandedBoneIndices.size() != vertices * 4u ||
-        part.expandedBoneWeights.size() != vertices * 4u) {
-        return false;
-    }
-
-    for (size_t v = 0u; v < vertices; ++v) {
-        float roleWeight = 0.0f;
-        for (size_t slot = 0u; slot < 4u; ++slot) {
-            const size_t at = v * 4u + slot;
-            const uint16_t bone = part.expandedBoneIndices[at];
-            if (bone >= part.bones.size()) continue;
-            if (Q211BoneRole(part.bones[bone].name) == desiredRole) {
-                roleWeight += part.expandedBoneWeights[at];
-            }
-        }
-        if (roleWeight <= 0.001f) continue;
-        const size_t base = v * STRIDE;
-        out.x += part.bindExpanded[base + 0u] * roleWeight;
-        out.y += part.bindExpanded[base + 1u] * roleWeight;
-        out.z += part.bindExpanded[base + 2u] * roleWeight;
-        outWeight += roleWeight;
-    }
-
-    if (outWeight <= 0.001f) return false;
-    const float inv = 1.0f / outWeight;
-    out.x *= inv;
-    out.y *= inv;
-    out.z *= inv;
-    return std::isfinite(out.x) &&
-           std::isfinite(out.y) &&
-           std::isfinite(out.z);
 }
 
 // Q22.2: grabbing needs the centre of the visible palm, not Q21's distal
@@ -9151,6 +9031,11 @@ bool Q221FindGlobalBonePoint(
         const std::string& authoredSuffix,
         Vec3& outPoint,
         std::string& outName) {
+    std::string suffix=authoredSuffix;
+    if(!suffix.empty())suffix[0]=static_cast<char>(std::toupper(static_cast<unsigned char>(suffix[0])));
+    const std::string exact=std::string("Bip01 ")+(left?"L ":"R ")+suffix;
+    const int canonical=fo3anim::FindBone(gVrSkeleton,exact);
+    if(canonical>=0){outPoint=VrSkeletonPoint(canonical);outName=exact;return true;}
     const std::string prefix =
         std::string("bip01 ") + (left ? "l " : "r ") + authoredSuffix;
     bool found = false;
@@ -9298,74 +9183,12 @@ struct Q211Delta {
     bool active = false;
 };
 
-void Q211RotationFromTo(Vec3 from, Vec3 to, float out[9]) {
-    const Vec3 a = Q211NormalizeSafe(from);
-    const Vec3 b = Q211NormalizeSafe(to, a);
-    const float d = std::clamp(Q211Dot(a, b), -1.0f, 1.0f);
-    Vec3 axis = Q211Cross(a, b);
-    float axisLen = Q211Length(axis);
-
-    if (axisLen < 1.0e-5f) {
-        if (d > 0.0f) {
-            out[0]=1; out[1]=0; out[2]=0;
-            out[3]=0; out[4]=1; out[5]=0;
-            out[6]=0; out[7]=0; out[8]=1;
-            return;
-        }
-        Vec3 helper =
-            std::fabs(a.y) < 0.9f ? Vec3{0,1,0} : Vec3{1,0,0};
-        axis = Q211NormalizeSafe(Q211Cross(a, helper));
-        axisLen = 1.0f;
-    } else {
-        axis = Q211Mul(axis, 1.0f / axisLen);
-    }
-
-    const float angle = std::acos(d);
-    const float c = std::cos(angle);
-    const float s = std::sin(angle);
-    const float one = 1.0f - c;
-    const float x = axis.x, y = axis.y, z = axis.z;
-
-    out[0] = c + x*x*one;
-    out[1] = x*y*one - z*s;
-    out[2] = x*z*one + y*s;
-    out[3] = y*x*one + z*s;
-    out[4] = c + y*y*one;
-    out[5] = y*z*one - x*s;
-    out[6] = z*x*one - y*s;
-    out[7] = z*y*one + x*s;
-    out[8] = c + z*z*one;
-}
-
 Vec3 Q211Rotate(const float r[9], Vec3 v) {
     return {
         r[0]*v.x + r[1]*v.y + r[2]*v.z,
         r[3]*v.x + r[4]*v.y + r[5]*v.z,
         r[6]*v.x + r[7]*v.y + r[8]*v.z
     };
-}
-
-Q211Delta Q211MakeDelta(
-        Vec3 restPivot, Vec3 restDirection,
-        Vec3 currentPivot, Vec3 currentDirection) {
-    Q211Delta out;
-    Q211RotationFromTo(restDirection, currentDirection, out.r);
-    out.t = Q211Sub(
-        currentPivot, Q211Rotate(out.r, restPivot));
-    out.stretchPivot = restPivot;
-    out.stretchAxis = Q211NormalizeSafe(restDirection);
-    out.active = true;
-    return out;
-}
-
-Q211Delta Q218MakeSegmentDelta(
-        Vec3 restPivot, Vec3 restDirection,
-        Vec3 currentPivot, Vec3 currentDirection,
-        float axialScale) {
-    Q211Delta out = Q211MakeDelta(
-        restPivot, restDirection, currentPivot, currentDirection);
-    out.axialScale = std::max(0.01f, axialScale);
-    return out;
 }
 
 void Q218AxisRotation(Vec3 axis, float angle, float out[9]) {
@@ -9429,70 +9252,11 @@ Vec3 Q211ApplyDeltaVector(const Q211Delta& d, Vec3 v) {
     return d.active ? Q211Rotate(d.r, v) : v;
 }
 
-bool Q220BasisRotation(
-        Vec3 currentAcross, Vec3 currentIntoPalm,
-        Vec3 targetAcross, Vec3 targetIntoPalm,
-        float out[9]) {
-    currentAcross = Q211NormalizeSafe(currentAcross);
-    currentIntoPalm = Q211Sub(
-        currentIntoPalm,
-        Q211Mul(currentAcross, Q211Dot(currentIntoPalm, currentAcross)));
-    targetAcross = Q211NormalizeSafe(targetAcross);
-    targetIntoPalm = Q211Sub(
-        targetIntoPalm,
-        Q211Mul(targetAcross, Q211Dot(targetIntoPalm, targetAcross)));
-
-    if (Q211Length(currentIntoPalm) < 0.03f ||
-        Q211Length(targetIntoPalm) < 0.03f) {
-        return false;
-    }
-
-    currentIntoPalm = Q211NormalizeSafe(currentIntoPalm);
-    targetIntoPalm = Q211NormalizeSafe(targetIntoPalm);
-    const Vec3 currentSide =
-        Q211NormalizeSafe(Q211Cross(currentAcross, currentIntoPalm));
-    const Vec3 targetSide =
-        Q211NormalizeSafe(Q211Cross(targetAcross, targetIntoPalm));
-
-    const Vec3 currentBasis[3]{
-        currentAcross, currentIntoPalm, currentSide};
-    const Vec3 targetBasis[3]{
-        targetAcross, targetIntoPalm, targetSide};
-
-    for (int row = 0; row < 3; ++row) {
-        for (int col = 0; col < 3; ++col) {
-            const float t0 = row == 0 ? targetBasis[0].x
-                           : row == 1 ? targetBasis[0].y
-                                      : targetBasis[0].z;
-            const float t1 = row == 0 ? targetBasis[1].x
-                           : row == 1 ? targetBasis[1].y
-                                      : targetBasis[1].z;
-            const float t2 = row == 0 ? targetBasis[2].x
-                           : row == 1 ? targetBasis[2].y
-                                      : targetBasis[2].z;
-            const float c0 = col == 0 ? currentBasis[0].x
-                           : col == 1 ? currentBasis[0].y
-                                      : currentBasis[0].z;
-            const float c1 = col == 0 ? currentBasis[1].x
-                           : col == 1 ? currentBasis[1].y
-                                      : currentBasis[1].z;
-            const float c2 = col == 0 ? currentBasis[2].x
-                           : col == 1 ? currentBasis[2].y
-                                      : currentBasis[2].z;
-            out[row * 3 + col] = t0*c0 + t1*c1 + t2*c2;
-        }
-    }
-    return true;
-}
-
-Q211Delta Q220MakePivotRotationMatrix(
-        Vec3 pivot, const float rotation[9]) {
-    Q211Delta out;
-    std::copy(rotation, rotation + 9, out.r);
-    out.t = Q211Sub(pivot, Q211Rotate(out.r, pivot));
-    out.stretchPivot = pivot;
-    out.active = true;
-    return out;
+bool Q220BasisRotation(Vec3 currentAcross,Vec3 currentIntoPalm,Vec3 targetAcross,Vec3 targetIntoPalm,float out[9]) {
+    const fo3vr::V a{currentAcross.x,currentAcross.y,currentAcross.z},n{currentIntoPalm.x,currentIntoPalm.y,currentIntoPalm.z};
+    const fo3vr::V b{targetAcross.x,targetAcross.y,targetAcross.z},m{targetIntoPalm.x,targetIntoPalm.y,targetIntoPalm.z};
+    if(fo3vr::Length(fo3vr::Project(n,fo3vr::Unit(a)))<.03f||fo3vr::Length(fo3vr::Project(m,fo3vr::Unit(b)))<.03f)return false;
+    const auto r=fo3vr::FrameRotation(a,n,b,m);std::copy(r.begin(),r.end(),out);return true;
 }
 
 bool Q218ParseDigitBoneName(
@@ -9846,298 +9610,94 @@ float Q218WrapAngle(float angle) {
     return angle;
 }
 
-bool Q211SolveArm(
-        bool left,
-        Vec3 shoulder, Vec3 restElbow, Vec3 restHand,
-        Vec3 target,
-        float lengthScale,
-        Vec3& outElbow,
-        Vec3& outHand) {
-    const float upperLen =
-        Q211Length(Q211Sub(restElbow, shoulder)) * lengthScale;
-    const float foreLen =
-        Q211Length(Q211Sub(restHand, restElbow)) * lengthScale;
-    if (upperLen < 0.05f || foreLen < 0.05f) return false;
-
-    Vec3 toTarget = Q211Sub(target, shoulder);
-    float dist = Q211Length(toTarget);
-    if (dist < 0.04f) return false;
-    const Vec3 dir = Q211Mul(toTarget, 1.0f / dist);
-
-    const float maxReach = std::max(0.05f, upperLen + foreLen - 0.015f);
-    const float minReach =
-        std::max(0.03f, std::fabs(upperLen - foreLen) + 0.01f);
-    dist = std::clamp(dist, minReach, maxReach);
-    outHand = Q211Add(shoulder, Q211Mul(dir, dist));
-
-    // Choose the elbow plane from anatomy rather than a fixed diagonal pole.
-    // Gravity gives the natural hanging-elbow solution for ordinary VR poses.
-    // When the arm points almost vertically, fall back to Fallout's authored
-    // shoulder->elbow direction, then only to a side axis in the singular case.
-    Vec3 preferred{0.0f, -1.0f, 0.0f};
-    preferred = Q211Sub(
-        preferred, Q211Mul(dir, Q211Dot(preferred, dir)));
-    if (Q211Length(preferred) < 0.05f) {
-        preferred = Q211Sub(restElbow, shoulder);
-        preferred = Q211Sub(
-            preferred, Q211Mul(dir, Q211Dot(preferred, dir)));
-    }
-    if (Q211Length(preferred) < 0.05f) {
-        preferred = Vec3{left ? -1.0f : 1.0f, 0.0f, 0.0f};
-        preferred = Q211Sub(
-            preferred, Q211Mul(dir, Q211Dot(preferred, dir)));
-    }
-    if (Q211Length(preferred) < 0.05f) {
-        preferred = Q211Cross(
-            dir, std::fabs(dir.z) < 0.8f
-                ? Vec3{0.0f, 0.0f, 1.0f}
-                : Vec3{1.0f, 0.0f, 0.0f});
-    }
-    preferred = Q211NormalizeSafe(preferred);
-
-    const float along =
-        (upperLen*upperLen + dist*dist - foreLen*foreLen) /
-        std::max(0.0001f, 2.0f * dist);
-    const float sideSq =
-        std::max(0.0f, upperLen*upperLen - along*along);
-    const float side = std::sqrt(sideSq);
-    outElbow = Q211Add(
-        Q211Add(shoulder, Q211Mul(dir, along)),
-        Q211Mul(preferred, side));
-    return true;
+// Boundary adapter only: the mathematical solver lives in fo3-vr-body.h.
+fo3vr::V VrPoint(Vec3 v){return {v.x,v.y,v.z};}
+Vec3 RuntimePoint(fo3vr::V v){return {v.x,v.y,v.z};}
+Q211Delta RuntimeDelta(const fo3vr::Delta& d){
+    Q211Delta out;std::copy(d.rotation.begin(),d.rotation.end(),out.r);
+    out.t=RuntimePoint(d.translation);out.stretchPivot=RuntimePoint(d.pivot);
+    out.stretchAxis=RuntimePoint(d.axis);out.axialScale=d.scale;out.active=true;return out;
 }
-
 struct Q213ArmPose {
-    Q211Delta upper;
-    Q211Delta fore;
-    Q211Delta foreTwist;
-    Q211Delta handDelta;
-    Vec3 elbow{};
-    Vec3 hand{};
-    float restReach = 0.0f;
-    float targetDistance = 0.0f;
-    float wristTwist = 0.0f;
-    bool solved = false;
+    Q211Delta clavicle,upper,upperTwist,fore,foreTwist,handDelta;
+    Vec3 shoulder{},elbow{},hand{};
+    float stretch=1,wristTwist=0,error=0;bool solved=false;
 };
-
-bool Q219MeasureArmReach(
-        const Q211PlayerRigPart& part,
-        bool left,
-        Vec3 target,
-        float& outRestReach,
-        float& outTargetDistance) {
-    const int upper = left ? part.leftUpperArm : part.rightUpperArm;
-    const int fore = left ? part.leftForearm : part.rightForearm;
-    const int hand = left ? part.leftHand : part.rightHand;
-    if (upper < 0 || fore < 0 || hand < 0) return false;
-
-    const Vec3 shoulder = Q211BindBonePoint(part.bones[upper]);
-    const Vec3 restElbow = Q211BindBonePoint(part.bones[fore]);
-    Vec3 restHand = Q211BindBonePoint(part.bones[hand]);
-    const bool palmAnchorValid =
-        left ? part.leftPalmAnchorValid : part.rightPalmAnchorValid;
-    if (palmAnchorValid) {
-        restHand = left ? part.leftPalmAnchor : part.rightPalmAnchor;
-    }
-
-    outRestReach =
-        Q211Length(Q211Sub(restElbow, shoulder)) +
-        Q211Length(Q211Sub(restHand, restElbow));
-    outTargetDistance = Q211Length(Q211Sub(target, shoulder));
-    return outRestReach > 0.05f &&
-           std::isfinite(outRestReach) &&
-           std::isfinite(outTargetDistance);
-}
-
-Q213ArmPose Q213SolveMasterArm(
-        const Q211PlayerRigPart& part,
-        bool left,
-        Vec3 target,
-        const Q220HandBasis& authoredHandBasis,
-        Vec3 gripLittleToThumb,
-        Vec3 gripIntoPalm,
-        bool gripOrientationValid,
-        float armLengthScale) {
-    Q213ArmPose pose;
-    const int upper = left ? part.leftUpperArm : part.rightUpperArm;
-    const int fore = left ? part.leftForearm : part.rightForearm;
-    const int hand = left ? part.leftHand : part.rightHand;
-    if (upper < 0 || fore < 0 || hand < 0) return pose;
-
-    const Vec3 shoulder = Q211BindBonePoint(part.bones[upper]);
-    const Vec3 restElbow = Q211BindBonePoint(part.bones[fore]);
-    Vec3 restHand = Q211BindBonePoint(part.bones[hand]);
-    const bool palmAnchorValid =
-        left ? part.leftPalmAnchorValid : part.rightPalmAnchorValid;
-    if (palmAnchorValid) {
-        restHand = left ? part.leftPalmAnchor : part.rightPalmAnchor;
-    }
-
-    const Vec3 restUpper = Q211Sub(restElbow, shoulder);
-    const Vec3 restFore = Q211Sub(restHand, restElbow);
-    pose.restReach = Q211Length(restUpper) + Q211Length(restFore);
-    pose.targetDistance = Q211Length(Q211Sub(target, shoulder));
-
-    if (!Q211SolveArm(
-            left, shoulder, restElbow, restHand,
-            target, armLengthScale,
-            pose.elbow, pose.hand)) {
-        return pose;
-    }
-
-    pose.upper = Q218MakeSegmentDelta(
-        shoulder, restUpper,
-        shoulder, Q211Sub(pose.elbow, shoulder),
-        armLengthScale);
-    pose.fore = Q218MakeSegmentDelta(
-        restElbow, restFore,
-        pose.elbow, Q211Sub(pose.hand, pose.elbow),
-        armLengthScale);
-    pose.foreTwist = pose.fore;
-
-    // Keep the hand itself at authored size: move/rotate it with the stretched
-    // forearm endpoint, then layer controller roll around the current wrist axis.
-    pose.handDelta = Q211MakeDelta(
-        restHand, restFore,
-        pose.hand, Q211Sub(pose.hand, pose.elbow));
-
-    if (gripOrientationValid && authoredHandBasis.ready) {
-        const Vec3 currentLittleToThumb =
-            Q211ApplyDeltaVector(
-                pose.handDelta, authoredHandBasis.littleToThumb);
-        const Vec3 currentIntoPalm =
-            Q211ApplyDeltaVector(
-                pose.handDelta, authoredHandBasis.intoPalm);
-
-        float wristRotation[9]{};
-        if (Q220BasisRotation(
-                currentLittleToThumb, currentIntoPalm,
-                gripLittleToThumb, gripIntoPalm,
-                wristRotation)) {
-            const Vec3 foreAxis =
-                Q211NormalizeSafe(Q211Sub(pose.hand, pose.elbow));
-            Vec3 currentReference = currentIntoPalm;
-            Vec3 targetReference = gripIntoPalm;
-            if (std::fabs(Q211Dot(currentReference, foreAxis)) >
-                std::fabs(Q211Dot(currentLittleToThumb, foreAxis))) {
-                currentReference = currentLittleToThumb;
-                targetReference = gripLittleToThumb;
-            }
-            currentReference = Q211Sub(
-                currentReference,
-                Q211Mul(foreAxis, Q211Dot(currentReference, foreAxis)));
-            targetReference = Q211Sub(
-                targetReference,
-                Q211Mul(foreAxis, Q211Dot(targetReference, foreAxis)));
-            if (Q211Length(currentReference) > 0.01f &&
-                Q211Length(targetReference) > 0.01f) {
-                currentReference = Q211NormalizeSafe(currentReference);
-                targetReference = Q211NormalizeSafe(targetReference);
-                pose.wristTwist = std::atan2(
-                    Q211Dot(
-                        foreAxis,
-                        Q211Cross(currentReference, targetReference)),
-                    Q211Dot(currentReference, targetReference));
-                const Q211Delta twist = Q218MakePivotRotation(
-                    pose.elbow, foreAxis, pose.wristTwist);
-                pose.foreTwist = Q218ComposeRigid(pose.fore, twist);
-                // Q218ComposeRigid composes the rigid portion. Preserve the
-                // authored forearm's axial retarget before that rigid motion.
-                pose.foreTwist.stretchPivot = pose.fore.stretchPivot;
-                pose.foreTwist.stretchAxis = pose.fore.stretchAxis;
-                pose.foreTwist.axialScale = pose.fore.axialScale;
-            }
-            const Q211Delta wrist =
-                Q220MakePivotRotationMatrix(
-                    pose.hand, wristRotation);
-            pose.handDelta =
-                Q218ComposeRigid(pose.handDelta, wrist);
+void BuildVrAuthoredArms(){
+    // Original rigid eye NIFs are Head-bone-local. Their bounding-box centres
+    // locate the eyes, unlike the Head bone origin (near the skull base).
+    const int head=fo3anim::FindBone(gVrSkeleton,"Bip01 Head");
+    Vec3 eyes{};int eyeCount=0;
+    for(const char* path:{"Characters\\Head\\EyeLeftHuman.NIF","Characters\\Head\\EyeRightHuman.NIF"}){
+        std::vector<Fo3StaticNifMesh> meshes;
+        if(head<0||!LoadFo3StaticNifMeshes(path,meshes))continue;
+        for(const auto& mesh:meshes){
+            if(mesh.positions.empty())continue;
+            float lo[3]={INFINITY,INFINITY,INFINITY},hi[3]={-INFINITY,-INFINITY,-INFINITY};
+            for(size_t i=0;i<mesh.positions.size();i++){const int c=i%3;lo[c]=std::min(lo[c],mesh.positions[i]);hi[c]=std::max(hi[c],mesh.positions[i]);}
+            const auto eye=fo3anim::Point(gVrSkeleton.bindGlobal[head],{(lo[0]+hi[0])*.5f,(lo[1]+hi[1])*.5f,(lo[2]+hi[2])*.5f});
+            eyes=Q211Add(eyes,{eye[0]/FO3_UNITS_PER_METRE,FLOOR_Y+eye[2]/FO3_UNITS_PER_METRE,SCENE_FORWARD-eye[1]/FO3_UNITS_PER_METRE});++eyeCount;
         }
     }
-
-    pose.solved = true;
-    return pose;
-}
-
-void Q213AssignArmPoseToPart(
-        const Q211PlayerRigPart& part,
-        const Q213ArmPose& left,
-        const Q213ArmPose& right,
-        std::vector<Q211Delta>& deltas) {
-    for (size_t i = 0u; i < part.bones.size(); ++i) {
-        const int role = part.roles[i];
-        const bool foreTwist =
-            part.boneNames[i].find("foretwist") != std::string::npos ||
-            part.boneNames[i].find("forearmtwist") != std::string::npos;
-        if (left.solved) {
-            if (role == 1) deltas[i] = left.upper;
-            else if (role == 2)
-                deltas[i] = foreTwist ? left.foreTwist : left.fore;
-            else if (role == 3) deltas[i] = left.handDelta;
-        }
-        if (right.solved) {
-            if (role == 4) deltas[i] = right.upper;
-            else if (role == 5)
-                deltas[i] = foreTwist ? right.foreTwist : right.fore;
-            else if (role == 6) deltas[i] = right.handDelta;
-        }
+    const int neck=fo3anim::FindBone(gVrSkeleton,"Bip01 Neck");
+    if(neck>=0)gVrNeckAnchor=VrSkeletonPoint(neck);
+    gVrEyeAnchorValid=eyeCount==2;
+    if(gVrEyeAnchorValid)gVrEyeAnchor=Q211Mul(eyes,.5f);
+    else Q6H_LOGW("VR BODY: original human eye anchors missing; tracked body unavailable");
+    for(int side=0;side<2;side++){
+        auto& rig=gVrArms[side];rig={};rig.left=side==0;
+        const std::string prefix=side==0?"Bip01 L ":"Bip01 R ";
+        const int clav=fo3anim::FindBone(gVrSkeleton,prefix+"Clavicle");
+        const int upper=fo3anim::FindBone(gVrSkeleton,prefix+"UpperArm");
+        const int fore=fo3anim::FindBone(gVrSkeleton,prefix+"Forearm");
+        const int hand=fo3anim::FindBone(gVrSkeleton,prefix+"Hand");
+        if(clav<0||upper<0||fore<0||hand<0)continue;
+        // Verify the original hierarchy, rather than interpreting names alone.
+        if(gVrSkeleton.bones[upper].parent!=clav||gVrSkeleton.bones[fore].parent!=upper||gVrSkeleton.bones[hand].parent!=fore)continue;
+        rig.clavicle=VrPoint(VrSkeletonPoint(clav));rig.shoulder=VrPoint(VrSkeletonPoint(upper));
+        rig.elbow=VrPoint(VrSkeletonPoint(fore));rig.wrist=VrPoint(VrSkeletonPoint(hand));
+        Vec3 palm{};float weight=0;std::string source;
+        if(!Q222FindVisibleGrabPalmAnchor(rig.left,palm,weight,source))continue;
+        rig.palm=VrPoint(palm);rig.valid=true;
+        Q6H_LOGI("VR RIG AUTHORED: side=%d upper=%.4f fore=%.4f palmOffset=%.4f source=%s",side,
+            fo3vr::Length(rig.elbow-rig.shoulder),fo3vr::Length(rig.wrist-rig.elbow),fo3vr::Length(rig.palm-rig.wrist),source.c_str());
     }
 }
-
-void Q211BuildArmDeltas(
-        const Q211PlayerRigPart& part,
-        bool left,
-        Vec3 target,
-        std::vector<Q211Delta>& deltas,
-        Vec3& outElbow,
-        bool& solved) {
-    const int upper = left ? part.leftUpperArm : part.rightUpperArm;
-    const int fore = left ? part.leftForearm : part.rightForearm;
-    const int hand = left ? part.leftHand : part.rightHand;
-    solved = false;
-    if (upper < 0 || fore < 0 || hand < 0) return;
-
-    const Vec3 shoulder = Q211BindBonePoint(part.bones[upper]);
-    const Vec3 restElbow = Q211BindBonePoint(part.bones[fore]);
-
-    // Q21.1D: use the actual weighted hand/finger vertex cloud as the distal
-    // endpoint. Some FO3 hand bone bind transforms point opposite the visible
-    // forearm geometry; using that pivot folded the forearm back toward the
-    // bicep even though the shoulder/elbow solve itself was correct.
-    Vec3 restHand = Q211BindBonePoint(part.bones[hand]);
-    const bool palmAnchorValid =
-        left ? part.leftPalmAnchorValid
-             : part.rightPalmAnchorValid;
-    if (palmAnchorValid) {
-        restHand = left ? part.leftPalmAnchor
-                        : part.rightPalmAnchor;
-    }
-
-    Vec3 currentHand{};
-    if (!Q211SolveArm(
-            left, shoulder, restElbow, restHand,
-            target, 1.0f, outElbow, currentHand)) {
-        return;
-    }
-
-    const Q211Delta upperDelta = Q211MakeDelta(
-        shoulder, Q211Sub(restElbow, shoulder),
-        shoulder, Q211Sub(outElbow, shoulder));
-    const Q211Delta foreDelta = Q211MakeDelta(
-        restElbow, Q211Sub(restHand, restElbow),
-        outElbow, Q211Sub(currentHand, outElbow));
-
-    for (size_t i = 0u; i < part.bones.size(); ++i) {
-        const int role = part.roles[i];
-        if (left) {
-            if (role == 1) deltas[i] = upperDelta;
-            else if (role == 2 || role == 3) deltas[i] = foreDelta;
-        } else {
-            if (role == 4) deltas[i] = upperDelta;
-            else if (role == 5 || role == 6) deltas[i] = foreDelta;
+Q213ArmPose Q213SolveMasterArm(bool left,Vec3 target,const Q220HandBasis& basis,
+                              Vec3 across,Vec3 inward,bool orientationValid){
+    Q213ArmPose pose;const int side=left?0:1;
+    if(!orientationValid||!basis.ready){gVrArmState[side]={};return pose;}
+    fo3vr::R hand=fo3vr::Identity();
+    if(!Q220BasisRotation(basis.littleToThumb,basis.intoPalm,across,inward,hand.data()))return pose;
+    const auto solved=fo3vr::SolveArm(gVrArms[side],VrPoint(target),hand,gVrArmState[side],gVrPoseDt);
+    if(!solved.valid)return pose;
+    pose.clavicle=RuntimeDelta(solved.clavicle);pose.upper=RuntimeDelta(solved.upper);
+    pose.upperTwist=RuntimeDelta(solved.upperTwist);pose.fore=RuntimeDelta(solved.fore);
+    pose.foreTwist=RuntimeDelta(solved.foreTwist);pose.handDelta=RuntimeDelta(solved.hand);
+    pose.shoulder=RuntimePoint(solved.shoulder);pose.elbow=RuntimePoint(solved.elbow);
+    pose.hand=RuntimePoint(solved.palm);pose.stretch=solved.stretch;
+    pose.wristTwist=solved.roll;pose.error=solved.error;pose.solved=true;return pose;
+}
+void Q213AssignArmPoseToPart(const Q211PlayerRigPart& part,const Q213ArmPose& left,
+                           const Q213ArmPose& right,std::vector<Q211Delta>& deltas){
+    const Q211Delta neck=Q218MakePivotRotation(gVrNeckAnchor,{0,1,0},Q218WrapAngle(gQ210Head[3]-gQ213TorsoYaw));
+    for(size_t i=0;i<part.bones.size();i++){
+        switch(part.roles[i]){
+            case 1:if(left.solved)deltas[i]=left.upper;break;
+            case 2:if(left.solved)deltas[i]=left.fore;break;
+            case 3:if(left.solved)deltas[i]=left.handDelta;break;
+            case 4:if(right.solved)deltas[i]=right.upper;break;
+            case 5:if(right.solved)deltas[i]=right.fore;break;
+            case 6:if(right.solved)deltas[i]=right.handDelta;break;
+            case 7:if(left.solved)deltas[i]=left.clavicle;break;
+            case 8:if(right.solved)deltas[i]=right.clavicle;break;
+            case 9:if(left.solved)deltas[i]=left.upperTwist;break;
+            case 10:if(right.solved)deltas[i]=right.upperTwist;break;
+            case 11:if(left.solved)deltas[i]=left.foreTwist;break;
+            case 12:if(right.solved)deltas[i]=right.foreTwist;break;
+            case 13:deltas[i]=neck;break;
         }
     }
-    solved = true;
 }
 
 bool Q211FindAvatarHeadAnchor(Vec3& out) {
@@ -10170,25 +9730,25 @@ void SynchronizeFo3PipboyEquipment() {
   gPipAppearanceModel = model;
   gPipAppearanceRevision = player.Revision();
 }
-void UpdateFo3PipboyMount(const Q213ArmPose &pose,
-                          const Q211PlayerRigPart *master) {
+void UpdateFo3PipboyMount(const Q213ArmPose &pose) {
   gPipSolved = false;
-  if (!gPipAnchorReady || !gPipSurface.valid || !pose.solved || !master)
+  if (!gPipAnchorReady || !gPipSurface.valid || !pose.solved)
     return;
-  gPipShoulder = Q211BindBonePoint(master->bones[master->leftUpperArm]);
+  gPipShoulder = pose.shoulder;
   gPipHand = pose.hand;
   // The device is authored on Bip01 L ForeTwist, so use the same solved
   // forearm-twist transform as that bone. Keep the casing rigid while allowing
   // its centre to inherit any arm-length retarget.
-  auto rigid = pose.foreTwist;
+  fo3vr::Delta mountBone;
+  std::copy(pose.foreTwist.r,pose.foreTwist.r+9,mountBone.rotation.begin());
+  mountBone.translation=VrPoint(pose.foreTwist.t);
+  mountBone.pivot=VrPoint(pose.foreTwist.stretchPivot);
+  mountBone.axis=VrPoint(pose.foreTwist.stretchAxis);mountBone.scale=pose.foreTwist.axialScale;
   Vec3 modelCenter{gPipSurface.center.x / FO3_UNITS_PER_METRE,
                    FLOOR_Y + gPipSurface.center.z / FO3_UNITS_PER_METRE,
                    SCENE_FORWARD - gPipSurface.center.y / FO3_UNITS_PER_METRE};
   const auto bindCenter = Q211TransformPoint(gPipBind.data(), modelCenter);
-  const auto centre = Q211ApplyDelta(pose.foreTwist, bindCenter);
-  rigid.t = Q211Sub(centre, Q211Rotate(rigid.r, bindCenter));
-  rigid.axialScale = 1;
-  rigid.active = true;
+  const auto rigid=RuntimeDelta(fo3vr::RigidMount(mountBone,VrPoint(bindCenter)));
   auto delta = fo3anim::Identity();
   for (int c = 0; c < 3; ++c)
     for (int r = 0; r < 3; ++r)
@@ -10274,19 +9834,13 @@ void Q211UpdatePlayerRig() {
     float invRoot[16]{};
     if (!Q2016InvertAffine(gQ210PlayerRoot, invRoot)) return;
 
-    const Vec3 headWorld{
-        gQ210Head[0], gQ210Head[1], gQ210Head[2]};
     const Vec3 leftTargetWorld{
         gQ210LeftHand[0], gQ210LeftHand[1], gQ210LeftHand[2]};
     const Vec3 rightTargetWorld{
         gQ210RightHand[0], gQ210RightHand[1], gQ210RightHand[2]};
 
-    const Vec3 trackedHeadRoot = Q211TransformPoint(invRoot, headWorld);
-    const Vec3 trackedLeftRoot =
-        Q211TransformPoint(invRoot, leftTargetWorld);
-    const Vec3 trackedRightRoot =
-        Q211TransformPoint(invRoot, rightTargetWorld);
-
+    const Vec3 leftTarget=Q211TransformPoint(invRoot,leftTargetWorld);
+    const Vec3 rightTarget=Q211TransformPoint(invRoot,rightTargetWorld);
     // Q21.11: match the actual OpenXR grip basis exactly.
     // +X is away from the left palm / into the right palm.
     // -Z is the across-hand direction from little finger to thumb.
@@ -10315,107 +9869,13 @@ void Q211UpdatePlayerRig() {
     const bool q220RightBasisReady =
         Q220FindAuthoredHandBasis(false, q220RightAuthoredBasis);
 
-    Vec3 avatarHeadAnchor = trackedHeadRoot;
-    const bool avatarHeadReady =
-        Q211FindAvatarHeadAnchor(avatarHeadAnchor);
+    Q213ArmPose q213LeftPose,q213RightPose;
+    if(gQ210LeftHandValid)q213LeftPose=Q213SolveMasterArm(true,leftTarget,q220LeftAuthoredBasis,leftAcrossRoot,leftPalmRoot,q220LeftBasisReady);
+    else gVrArmState[0]={};
+    if(gQ210RightHandValid)q213RightPose=Q213SolveMasterArm(false,rightTarget,q220RightAuthoredBasis,rightAcrossRoot,rightPalmRoot,q220RightBasisReady);
+    else gVrArmState[1]={};
 
-    // Q21.1B: Quest LOCAL space is session/HMD-relative, while Fallout's
-    // bones are actor-model-relative. Map the physical controller offset from
-    // the HMD onto Fallout's authored head/neck anchor. Feeding the raw LOCAL
-    // Y directly made targets ~0.4-0.8 m below the actor and pulled the
-    // forearm/hand geometry out of view.
-    Vec3 leftTarget = Q211Add(
-        avatarHeadAnchor,
-        Q211Sub(trackedLeftRoot, trackedHeadRoot));
-    Vec3 rightTarget = Q211Add(
-        avatarHeadAnchor,
-        Q211Sub(trackedRightRoot, trackedHeadRoot));
-
-    // Body-root X is the authored left/right axis (left < 0, right > 0).
-    // Keep the calibration symmetric so it cannot skew the avatar.
-    leftTarget.x -= Q214_HAND_OUTWARD_OFFSET;
-    rightTarget.x += Q214_HAND_OUTWARD_OFFSET;
-
-    // Q21.3: solve each arm once from a part that has the complete chain.
-    // Gamebryo skin partitions/shapes often reference only a subset of the
-    // shared skeleton. Requiring every individual shape to contain
-    // UpperArm+Forearm+Hand left forearm-heavy partitions frozen in bind pose.
-    const Q211PlayerRigPart* q213LeftMaster = nullptr;
-    const Q211PlayerRigPart* q213RightMaster = nullptr;
-    for (const Q211PlayerRigPart& candidate : gQ211PlayerRigParts) {
-        if (!q213LeftMaster && candidate.leftChainReady)
-            q213LeftMaster = &candidate;
-        if (!q213RightMaster && candidate.rightChainReady)
-            q213RightMaster = &candidate;
-    }
-
-    if ((gQ211TrackingSerial % 180u) == 1u) {
-        Q6H_LOGI("Q21.16 IK MASTER: left=%s right=%s expected=characters\\_male\\upperbody.nif",
-                 q213LeftMaster
-                     ? q213LeftMaster->sourceModelPath.c_str()
-                     : "<none>",
-                 q213RightMaster
-                     ? q213RightMaster->sourceModelPath.c_str()
-                     : "<none>");
-    }
-
-    float q219RequestedScale = Q219_ARM_BASE_SCALE;
-    float q219LRest = 0.0f, q219LDist = 0.0f;
-    float q219RRest = 0.0f, q219RDist = 0.0f;
-    if (gQ210LeftHandValid && q213LeftMaster &&
-        Q219MeasureArmReach(
-            *q213LeftMaster, true, leftTarget,
-            q219LRest, q219LDist)) {
-        q219RequestedScale = std::max(
-            q219RequestedScale,
-            q219LDist /
-                std::max(
-                    0.05f,
-                    q219LRest * Q219_TARGET_EXTENSION_RATIO));
-    }
-    if (gQ210RightHandValid && q213RightMaster &&
-        Q219MeasureArmReach(
-            *q213RightMaster, false, rightTarget,
-            q219RRest, q219RDist)) {
-        q219RequestedScale = std::max(
-            q219RequestedScale,
-            q219RDist /
-                std::max(
-                    0.05f,
-                    q219RRest * Q219_TARGET_EXTENSION_RATIO));
-    }
-    q219RequestedScale = std::clamp(
-        q219RequestedScale,
-        Q219_ARM_BASE_SCALE,
-        Q219_ARM_MAX_SCALE);
-    if (q219RequestedScale > gQ219ArmLengthScale) {
-        gQ219ArmLengthScale = std::min(
-            q219RequestedScale,
-            gQ219ArmLengthScale + Q219_SCALE_GROW_PER_FRAME);
-    }
-
-    Q213ArmPose q213LeftPose;
-    Q213ArmPose q213RightPose;
-    if (gQ210LeftHandValid && q213LeftMaster) {
-        q213LeftPose =
-            Q213SolveMasterArm(
-                *q213LeftMaster, true, leftTarget,
-                q220LeftAuthoredBasis,
-                leftAcrossRoot, leftPalmRoot,
-                q220LeftBasisReady,
-                gQ219ArmLengthScale);
-    }
-    if (gQ210RightHandValid && q213RightMaster) {
-        q213RightPose =
-            Q213SolveMasterArm(
-                *q213RightMaster, false, rightTarget,
-                q220RightAuthoredBasis,
-                rightAcrossRoot, rightPalmRoot,
-                q220RightBasisReady,
-                gQ219ArmLengthScale);
-    }
-
-    UpdateFo3PipboyMount(q213LeftPose,q213LeftMaster);
+    UpdateFo3PipboyMount(q213LeftPose);
     fqactor::player.pose+=fqopaque::Micros(poseStarted);
     const auto fingerStarted=fqopaque::Clock::now();
     static const std::unordered_map<std::string,Q211Delta> emptyFingerPose;
@@ -10435,8 +9895,6 @@ void Q211UpdatePlayerRig() {
             : emptyFingerPose;
 
     fqactor::player.fingers+=fqopaque::Micros(fingerStarted);
-    size_t q213LeftAffectedParts = 0u;
-    size_t q213RightAffectedParts = 0u;
 
     static std::vector<Q211Delta> deltas;
     for (Q211PlayerRigPart& part : gQ211PlayerRigParts) {
@@ -10451,7 +9909,7 @@ void Q211UpdatePlayerRig() {
             part, q213LeftPose, q213RightPose, deltas);
 
         // Layer authored-finger-space curls before the already-solved hand
-        // transform. This preserves the Q21.16 wrist/arm solution.
+        // transform. Finger articulation cannot alter the canonical arm solve.
         for (size_t boneIndex = 0u;
              boneIndex < part.bones.size();
              ++boneIndex) {
@@ -10471,21 +9929,6 @@ void Q211UpdatePlayerRig() {
                     rightFinger->second, deltas[boneIndex]);
             }
         }
-
-        bool q213PartHasLeftArm = false;
-        bool q213PartHasRightArm = false;
-        for (const int role : part.roles) {
-            q213PartHasLeftArm =
-                q213PartHasLeftArm ||
-                role == 1 || role == 2 || role == 3;
-            q213PartHasRightArm =
-                q213PartHasRightArm ||
-                role == 4 || role == 5 || role == 6;
-        }
-        if (q213LeftPose.solved && q213PartHasLeftArm)
-            ++q213LeftAffectedParts;
-        if (q213RightPose.solved && q213PartHasRightArm)
-            ++q213RightAffectedParts;
 
         // Position deltas retain axial stretch; directions retain the original
         // rotation-only policy. Evaluate affine matrices once per palette bone.
@@ -10507,10 +9950,8 @@ void Q211UpdatePlayerRig() {
         QActorUploadSkin(gQ210PlayerBody[part.gpuIndex],part.skin,fqactor::player,true);
     }
 
-    // Q22.2: Q21's hand endpoint is an arm-retarget anchor and is slightly
-    // proximal for VR gripping. Derive a separate interaction centre from the
-    // visible hand/glove mesh's exact Bip01 Hand vertex weights, then carry
-    // that point through the already-solved hand/wrist transform.
+    // Interaction uses the same exact Hand-weighted palm as the wrist solver,
+    // transformed by the canonical hand delta. There is no second hand solve.
     Vec3 q222LeftGrabPalmRest{};
     Vec3 q222RightGrabPalmRest{};
     float q222LeftGrabPalmWeight = 0.0f;
@@ -10562,12 +10003,11 @@ void Q211UpdatePlayerRig() {
                 posedPalmRoot);
     }
 
-    // Same first-valid canonical master used by the arm solve. The shoulder
-    // pivot is not the hand endpoint and does not change with IK/wrist motion.
-    gShoulderZone.ready=q213RightMaster && q213RightMaster->rightUpperArm>=0;
+    // Gameplay shoulder zone shares the canonical shoulder/clavicle solution.
+    gShoulderZone.ready=gVrArms[1].valid;
     if(gShoulderZone.ready) {
         const auto anchor=Q211TransformPoint(gQ210PlayerRoot,
-            Q211BindBonePoint(q213RightMaster->bones[q213RightMaster->rightUpperArm]));
+            q213RightPose.solved?q213RightPose.shoulder:RuntimePoint(gVrArms[1].shoulder));
         gShoulderZone.shoulder={anchor.x,anchor.y,anchor.z};
         gShoulderZone.right={gQ210PlayerRoot[0],0,gQ210PlayerRoot[2]};
         gShoulderZone.rear={gQ210PlayerRoot[8],0,gQ210PlayerRoot[10]};
@@ -10577,98 +10017,16 @@ void Q211UpdatePlayerRig() {
         q221RightPalmValid, q221RightPalmWorld);
 
     if ((gQ211TrackingSerial % 180u) == 1u) {
-        Q6H_LOGI("Q21.14 HAND BASIS: authored=(L%d,R%d) Lacross=(%.3f %.3f %.3f) Linward=(%.3f %.3f %.3f) Racross=(%.3f %.3f %.3f) Rinward=(%.3f %.3f %.3f) rightPalmMirror=1 outwardOffset=%.3fm source=global-authored-(Hand,Finger2,Finger4)",
-                 q220LeftBasisReady ? 1 : 0,
-                 q220RightBasisReady ? 1 : 0,
-                 q220LeftAuthoredBasis.littleToThumb.x,
-                 q220LeftAuthoredBasis.littleToThumb.y,
-                 q220LeftAuthoredBasis.littleToThumb.z,
-                 q220LeftAuthoredBasis.intoPalm.x,
-                 q220LeftAuthoredBasis.intoPalm.y,
-                 q220LeftAuthoredBasis.intoPalm.z,
-                 q220RightAuthoredBasis.littleToThumb.x,
-                 q220RightAuthoredBasis.littleToThumb.y,
-                 q220RightAuthoredBasis.littleToThumb.z,
-                 q220RightAuthoredBasis.intoPalm.x,
-                 q220RightAuthoredBasis.intoPalm.y,
-                 q220RightAuthoredBasis.intoPalm.z,
-                 Q214_HAND_OUTWARD_OFFSET);
-        Q6H_LOGI("Q22.5 PALM ANCHOR: L(valid=%d world=%.3f %.3f %.3f rest=%.3f %.3f %.3f weight=%.1f source=%s) R(valid=%d world=%.3f %.3f %.3f rest=%.3f %.3f %.3f weight=%.1f source=%s) mode=visible-exact-Hand-bone-weights",
-                 q221LeftPalmValid ? 1 : 0,
-                 q221LeftPalmWorld.x, q221LeftPalmWorld.y, q221LeftPalmWorld.z,
-                 q222LeftGrabPalmRest.x, q222LeftGrabPalmRest.y, q222LeftGrabPalmRest.z,
-                 q222LeftGrabPalmWeight,
-                 q222LeftGrabPalmSource.empty()
-                     ? "<none>"
-                     : q222LeftGrabPalmSource.c_str(),
-                 q221RightPalmValid ? 1 : 0,
-                 q221RightPalmWorld.x, q221RightPalmWorld.y, q221RightPalmWorld.z,
-                 q222RightGrabPalmRest.x, q222RightGrabPalmRest.y, q222RightGrabPalmRest.z,
-                 q222RightGrabPalmWeight,
-                 q222RightGrabPalmSource.empty()
-                     ? "<none>"
-                     : q222RightGrabPalmSource.c_str());
-        Q6H_LOGI("Q21.20 FINGER INPUT: L(trigger=%.2f triggerTouch=%d grip=%.2f thumbTouch=%d posedBones=%zu) R(trigger=%.2f triggerTouch=%d grip=%.2f thumbTouch=%d posedBones=%zu) mapping=index=trigger lower3=squeeze thumb=capacitive",
-                 gQ217FingerTrigger[0],
-                 gQ217TriggerTouched[0] ? 1 : 0,
-                 gQ217FingerGrip[0],
-                 gQ217ThumbTouched[0] ? 1 : 0,
-                 q217LeftFingerPose.size(),
-                 gQ217FingerTrigger[1],
-                 gQ217TriggerTouched[1] ? 1 : 0,
-                 gQ217FingerGrip[1],
-                 gQ217ThumbTouched[1] ? 1 : 0,
-                 q217RightFingerPose.size());
-        Q6H_LOGI("Q21.9 BODY/REACH: armScale=%.3f requested=%.3f base=%.3f max=%.3f targetExtension=%.2f measureL=(rest=%.3f dist=%.3f) measureR=(rest=%.3f dist=%.3f)",
-                 gQ219ArmLengthScale, q219RequestedScale,
-                 Q219_ARM_BASE_SCALE, Q219_ARM_MAX_SCALE,
-                 Q219_TARGET_EXTENSION_RATIO,
-                 q219LRest, q219LDist, q219RRest, q219RDist);
-        Q6H_LOGI("Q21.8 ARM RETARGET: scale=%.3f L(rest=%.3f scaled=%.3f targetDist=%.3f ratio=%.3f twistDeg=%.1f) R(rest=%.3f scaled=%.3f targetDist=%.3f ratio=%.3f twistDeg=%.1f) wristMode=authored-hand-finger2-4-to-openxr-grip",
-                 gQ219ArmLengthScale,
-                 q213LeftPose.restReach,
-                 q213LeftPose.restReach * gQ219ArmLengthScale,
-                 q213LeftPose.targetDistance,
-                 q213LeftPose.restReach > 0.001f
-                     ? q213LeftPose.targetDistance /
-                           (q213LeftPose.restReach * gQ219ArmLengthScale)
-                     : 0.0f,
-                 q213LeftPose.wristTwist * 57.2957795f,
-                 q213RightPose.restReach,
-                 q213RightPose.restReach * gQ219ArmLengthScale,
-                 q213RightPose.targetDistance,
-                 q213RightPose.restReach > 0.001f
-                     ? q213RightPose.targetDistance /
-                           (q213RightPose.restReach * gQ219ArmLengthScale)
-                     : 0.0f,
-                 q213RightPose.wristTwist * 57.2957795f);
-
-        Q6H_LOGI("Q21.5 ARM IK: serial=%llu rigParts=%zu masters=(L%d,R%d) affectedParts=(L%zu,R%zu) headAnchorReady=%d leftValid=%d leftSolved=%d targetL=(%.3f %.3f %.3f) elbowL=(%.3f %.3f %.3f) handL=(%.3f %.3f %.3f) rightValid=%d rightSolved=%d targetR=(%.3f %.3f %.3f) elbowR=(%.3f %.3f %.3f) handR=(%.3f %.3f %.3f) mode=global-skeleton-pose-across-skin-partitions",
-                 static_cast<unsigned long long>(gQ211TrackingSerial),
-                 gQ211PlayerRigParts.size(),
-                 q213LeftMaster ? 1 : 0,
-                 q213RightMaster ? 1 : 0,
-                 q213LeftAffectedParts,
-                 q213RightAffectedParts,
-                 avatarHeadReady ? 1 : 0,
-                 gQ210LeftHandValid ? 1 : 0,
-                 q213LeftPose.solved ? 1 : 0,
-                 leftTarget.x, leftTarget.y, leftTarget.z,
-                 q213LeftPose.elbow.x,
-                 q213LeftPose.elbow.y,
-                 q213LeftPose.elbow.z,
-                 q213LeftPose.hand.x,
-                 q213LeftPose.hand.y,
-                 q213LeftPose.hand.z,
-                 gQ210RightHandValid ? 1 : 0,
-                 q213RightPose.solved ? 1 : 0,
-                 rightTarget.x, rightTarget.y, rightTarget.z,
-                 q213RightPose.elbow.x,
-                 q213RightPose.elbow.y,
-                 q213RightPose.elbow.z,
-                 q213RightPose.hand.x,
-                 q213RightPose.hand.y,
-                 q213RightPose.hand.z);
+        const Q213ArmPose poses[2]={q213LeftPose,q213RightPose};const Vec3 targets[2]={leftTarget,rightTarget};
+        for(int i=0;i<2;i++){
+            const auto& p=poses[i];const auto& r=gVrArms[i];
+            Q6H_LOGI("VR BODY: side=%d valid=%d target=(%.3f %.3f %.3f) palm=(%.3f %.3f %.3f) error=%.4f shoulder=(%.3f %.3f %.3f) elbow=(%.3f %.3f %.3f) upper=%.4f fore=%.4f stretch=%.4f rollDeg=%.1f torsoDeg=%.1f neckDeg=%.1f pipMount=%d",
+                i,p.solved,targets[i].x,targets[i].y,targets[i].z,p.hand.x,p.hand.y,p.hand.z,p.error,
+                p.shoulder.x,p.shoulder.y,p.shoulder.z,p.elbow.x,p.elbow.y,p.elbow.z,
+                fo3vr::Length(r.elbow-r.shoulder)*p.stretch,fo3vr::Length(r.wrist-r.elbow)*p.stretch,
+                p.stretch,p.wristTwist*57.29578f,gQ213TorsoYaw*57.29578f,
+                Q218WrapAngle(gQ210Head[3]-gQ213TorsoYaw)*57.29578f,gPipSolved);
+        }
     }
 }
 
@@ -10686,7 +10044,8 @@ void Q210DeletePlayerBody(bool equipmentChange=false) {
     gQ211PlayerRigParts.clear();
     ++gQ211RigRevision;
     gQ211LastSkinnedSerial = ~0ull;
-    if(!equipmentChange){gQ219ArmLengthScale = Q219_ARM_BASE_SCALE;gQ213TorsoYawReady = false;}
+    gVrArms[0]={};gVrArms[1]={};gVrArmState[0]={};gVrArmState[1]={};gVrSkeleton={};gVrEyeAnchorValid=false;
+    if(!equipmentChange){gVrTorso=fo3vr::TorsoState{};gQ213TorsoYawReady=false;}
     gQ217FingerRig[0] = {};
     gQ217FingerRig[1] = {};
     if(!equipmentChange)Q220ResetGrabState();
@@ -11370,7 +10729,7 @@ bool Q210EnsurePlayerBody() {
 
     Fo3NifSkinProbe skeletonProbe;
     ProbeFo3NifSkin(skeletonPath, skeletonProbe);
-    std::vector<uint8_t> skeletonBytes;fo3anim::Skeleton pipSkeleton;
+    std::vector<uint8_t> skeletonBytes;auto& pipSkeleton=gVrSkeleton;
     if(LoadFalloutMeshFile(skeletonPath,skeletonBytes)&&fo3anim::DecodeSkeleton(skeletonBytes,pipSkeleton)) {
         const int bone=fo3anim::FindBone(pipSkeleton,"Bip01 L ForeTwist");
         if(bone>=0){gPipBind=fo3pip::BindInRenderCoordinates(pipSkeleton.bindGlobal[bone],FO3_UNITS_PER_METRE,FLOOR_Y,SCENE_FORWARD);gPipAnchorReady=true;}
@@ -11468,114 +10827,8 @@ bool Q210EnsurePlayerBody() {
                     }
                 }
 
-                rig.leftUpperArm = Q211FindPrimaryBone(
-                    rig.bones, "bip01 l upperarm", "l upperarm");
-                rig.leftForearm = Q211FindPrimaryBone(
-                    rig.bones, "bip01 l forearm", "l forearm");
-                rig.leftHand = Q211FindPrimaryBone(
-                    rig.bones, "bip01 l hand", "l hand");
-                rig.rightUpperArm = Q211FindPrimaryBone(
-                    rig.bones, "bip01 r upperarm", "r upperarm");
-                rig.rightForearm = Q211FindPrimaryBone(
-                    rig.bones, "bip01 r forearm", "r forearm");
-                rig.rightHand = Q211FindPrimaryBone(
-                    rig.bones, "bip01 r hand", "r hand");
-                rig.leftChainReady =
-                    rig.leftUpperArm >= 0 &&
-                    rig.leftForearm >= 0 &&
-                    rig.leftHand >= 0;
-
-                if (rig.leftChainReady || rig.rightChainReady) {
-                    std::string q214ArmBones;
-                    for (const Fo3NifSkinBone& bone : rig.bones) {
-                        const int role = Q211BoneRole(bone.name);
-                        if (role == 0) continue;
-                        if (!q214ArmBones.empty()) q214ArmBones += ",";
-                        q214ArmBones += bone.name;
-                        q214ArmBones += ":";
-                        q214ArmBones += std::to_string(role);
-                    }
-                    Q6H_LOGI("Q21.5 ARM BONE MAP: model=%s shape=%u bones=%s",
-                             path.c_str(), part.q2016ShapeIndex,
-                             q214ArmBones.empty()
-                                 ? "<none>"
-                                 : q214ArmBones.c_str());
-                }
-                rig.rightChainReady =
-                    rig.rightUpperArm >= 0 &&
-                    rig.rightForearm >= 0 &&
-                    rig.rightHand >= 0;
-
-                float q211dLHandWeight = 0.0f;
-                float q211dRHandWeight = 0.0f;
-                float q211dLForeWeight = 0.0f;
-                float q211dRForeWeight = 0.0f;
-                rig.leftPalmAnchorValid =
-                    Q211WeightedGeometryAnchor(
-                        rig, 3, rig.leftPalmAnchor, q211dLHandWeight);
-                rig.rightPalmAnchorValid =
-                    Q211WeightedGeometryAnchor(
-                        rig, 6, rig.rightPalmAnchor, q211dRHandWeight);
-                rig.leftForearmCentroidValid =
-                    Q211WeightedGeometryAnchor(
-                        rig, 2, rig.leftForearmCentroid, q211dLForeWeight);
-                rig.rightForearmCentroidValid =
-                    Q211WeightedGeometryAnchor(
-                        rig, 5, rig.rightForearmCentroid, q211dRForeWeight);
-
-                Vec3 q211cLUpper{}, q211cLFore{}, q211cLHand{};
-                Vec3 q211cRUpper{}, q211cRFore{}, q211cRHand{};
-                if (rig.leftChainReady) {
-                    q211cLUpper = Q211BindBonePoint(rig.bones[rig.leftUpperArm]);
-                    q211cLFore = Q211BindBonePoint(rig.bones[rig.leftForearm]);
-                    q211cLHand = Q211BindBonePoint(rig.bones[rig.leftHand]);
-                }
-                if (rig.rightChainReady) {
-                    q211cRUpper = Q211BindBonePoint(rig.bones[rig.rightUpperArm]);
-                    q211cRFore = Q211BindBonePoint(rig.bones[rig.rightForearm]);
-                    q211cRHand = Q211BindBonePoint(rig.bones[rig.rightHand]);
-                }
-
-                const Vec3 q211dLRestBoneDir =
-                    Q211Sub(q211cLHand, q211cLFore);
-                const Vec3 q211dRRestBoneDir =
-                    Q211Sub(q211cRHand, q211cRFore);
-                const Vec3 q211dLGeomDir =
-                    Q211Sub(rig.leftPalmAnchor, q211cLFore);
-                const Vec3 q211dRGeomDir =
-                    Q211Sub(rig.rightPalmAnchor, q211cRFore);
-                const float q211dLDot =
-                    rig.leftPalmAnchorValid
-                        ? Q211Dot(
-                              Q211NormalizeSafe(q211dLRestBoneDir),
-                              Q211NormalizeSafe(q211dLGeomDir))
-                        : 0.0f;
-                const float q211dRDot =
-                    rig.rightPalmAnchorValid
-                        ? Q211Dot(
-                              Q211NormalizeSafe(q211dRRestBoneDir),
-                              Q211NormalizeSafe(q211dRGeomDir))
-                        : 0.0f;
-
-                Q6H_LOGI("Q21.5 RIG PART: model=%s shape=%u gpuIndex=%zu expandedVertices=%zu leftChain=%d palmL=%d anchorL=(%.3f %.3f %.3f) boneHandL=(%.3f %.3f %.3f) distalDotL=%.3f rightChain=%d palmR=%d anchorR=(%.3f %.3f %.3f) boneHandR=(%.3f %.3f %.3f) distalDotR=%.3f handWeight=(%.1f,%.1f) foreWeight=(%.1f,%.1f)",
-                         path.c_str(), part.q2016ShapeIndex,
-                         q211GpuIndex, rig.bindExpanded.size() / 18u,
-                         rig.leftChainReady ? 1 : 0,
-                         rig.leftPalmAnchorValid ? 1 : 0,
-                         rig.leftPalmAnchor.x,
-                         rig.leftPalmAnchor.y,
-                         rig.leftPalmAnchor.z,
-                         q211cLHand.x, q211cLHand.y, q211cLHand.z,
-                         q211dLDot,
-                         rig.rightChainReady ? 1 : 0,
-                         rig.rightPalmAnchorValid ? 1 : 0,
-                         rig.rightPalmAnchor.x,
-                         rig.rightPalmAnchor.y,
-                         rig.rightPalmAnchor.z,
-                         q211cRHand.x, q211cRHand.y, q211cRHand.z,
-                         q211dRDot,
-                         q211dLHandWeight, q211dRHandWeight,
-                         q211dLForeWeight, q211dRForeWeight);
+                rig.leftHand = Q211FindPrimaryBone(rig.bones,"bip01 l hand","l hand");
+                rig.rightHand = Q211FindPrimaryBone(rig.bones,"bip01 r hand","r hand");
 
                 if (rig.expandedBoneIndices.size() ==
                         (rig.bindExpanded.size() / 18u) * 4u) {
@@ -11594,7 +10847,8 @@ bool Q210EnsurePlayerBody() {
                  q215CapsRemovedForModel);
     }
 
-    gQ210PlayerBodyReady = !gQ210PlayerBody.empty();
+    BuildVrAuthoredArms();
+    gQ210PlayerBodyReady = !gQ210PlayerBody.empty() && gVrEyeAnchorValid && gVrArms[0].valid && gVrArms[1].valid;
     Q6H_LOGI("Q21.16 PLAYER BODY READY: ready=%d archiveMaleEntries=%zu bodyPartsFound=%zu cpuShapes=%zu gpuShapes=%zu rigParts=%zu triangles=%zu skinInstances=%zu referencedBonesAcrossParts=%zu skeletonNodes=%u skeletonNamedNodes=%zu mode=real-FO3-weighted-skinning armIK=two-bone",
              gQ210PlayerBodyReady ? 1 : 0,
              maleEntries.size(), bodyPaths.size(),
@@ -13576,57 +12830,19 @@ void SetFo3PlayerBodyTrackingQ210(
 
     ++gQ211TrackingSerial;
 
-    // Q21.13: infer torso yaw with a neck dead-zone. Looking around within
-    // +/-35 degrees leaves the shoulders alone. Beyond that, the torso follows
-    // only the excess angle. Artificial snap/locomotion yaw is applied
-    // immediately so the body does not lag behind snap turns.
-    if (!gQ213TorsoYawReady) {
-        gQ213TorsoYaw = bodyYaw;
-        gQ213LastLocomotionYaw = bodyYaw;
-        gQ213TorsoYawReady = true;
-    } else {
-        const float locomotionDelta =
-            Q218WrapAngle(bodyYaw - gQ213LastLocomotionYaw);
-        gQ213TorsoYaw =
-            Q218WrapAngle(gQ213TorsoYaw + locomotionDelta);
-        gQ213LastLocomotionYaw = bodyYaw;
-    }
-
-    const float headRelative =
-        Q218WrapAngle(headYaw - gQ213TorsoYaw);
-    if (std::fabs(headRelative) > Q213_NECK_YAW_LIMIT) {
-        const float desiredTorso =
-            Q218WrapAngle(
-                headYaw -
-                std::copysign(Q213_NECK_YAW_LIMIT, headRelative));
-        const float followDelta =
-            Q218WrapAngle(desiredTorso - gQ213TorsoYaw);
-        gQ213TorsoYaw = Q218WrapAngle(
-            gQ213TorsoYaw +
-            std::clamp(
-                followDelta,
-                -Q213_TORSO_FOLLOW_MAX_STEP,
-                Q213_TORSO_FOLLOW_MAX_STEP));
-    }
-
-    const float resolvedBodyYaw = gQ213TorsoYaw;
-    const float c = std::cos(resolvedBodyYaw);
-    const float s = std::sin(resolvedBodyYaw);
-    const float rootX = headX + s * 0.08f;
-    const float rootZ = headZ + c * 0.08f;
-
-    // Q21.7: align the authored Fallout head/neck anchor to the real HMD
-    // vertically. Previously the body root stayed on the legacy LOCAL-space
-    // floor while the arm targets were re-anchored to the authored head.
-    // Any difference between those two head heights therefore shifted BOTH
-    // virtual hands by that amount and left the camera sunk into the torso.
-    Vec3 q217AvatarHeadAnchor{};
-    const bool q217HeadAnchorReady =
-        Q211FindAvatarHeadAnchor(q217AvatarHeadAnchor);
-    const float q217LegacyRootY = headY - localHeadY;
-    const float q217RootY = q217HeadAnchorReady
-        ? headY - q217AvatarHeadAnchor.y
-        : q217LegacyRootY;
+    static auto lastTracking=fqopaque::Clock::now();const auto now=fqopaque::Clock::now();
+    gVrPoseDt=std::clamp(std::chrono::duration<float>(now-lastTracking).count(),0.001f,0.05f);lastTracking=now;
+    const fo3vr::V hands[2]={{leftX,leftY,leftZ},{rightX,rightY,rightZ}};
+    const bool valid[2]={leftValid,rightValid};
+    gQ213TorsoYaw=fo3vr::SolveTorso(gVrTorso,{headX,headY,headZ},headYaw,bodyYaw,hands,valid,gVrPoseDt);
+    gQ213TorsoYawReady=true;
+    const float c=std::cos(gQ213TorsoYaw),s=std::sin(gQ213TorsoYaw);
+    Vec3 anchor{};const bool anchorReady=Q211FindAvatarHeadAnchor(anchor);
+    // Align the complete authored eye midpoint in XYZ. There is no separate
+    // positional re-anchor in arm solving and no invented body setback.
+    const auto root=fo3vr::BodyRoot(VrPoint(anchor),{headX,headY,headZ},gQ213TorsoYaw);
+    const float rootX=root.translation.x,rootZ=root.translation.z;
+    const float q217RootY=anchorReady?root.translation.y:headY-localHeadY;
 
     std::fill(gQ210PlayerRoot, gQ210PlayerRoot + 16, 0.0f);
     gQ210PlayerRoot[0] = c;
@@ -13639,18 +12855,7 @@ void SetFo3PlayerBodyTrackingQ210(
     gQ210PlayerRoot[14] = rootZ;
     gQ210PlayerRoot[15] = 1.0f;
 
-    if ((gQ211TrackingSerial % 180u) == 1u) {
-        Q6H_LOGI("Q21.13 BODY HEAD ALIGN: ready=%d headYaw=%.1fdeg locomotionYaw=%.1fdeg torsoYaw=%.1fdeg neckYaw=%.1fdeg neckLimit=35deg headWorldY=%.3f localHeadY=%.3f authoredHeadY=%.3f legacyRootY=%.3f alignedRootY=%.3f correction=%.3f",
-                 q217HeadAnchorReady ? 1 : 0,
-                 headYaw * 57.2957795f,
-                 bodyYaw * 57.2957795f,
-                 resolvedBodyYaw * 57.2957795f,
-                 Q218WrapAngle(headYaw - resolvedBodyYaw) * 57.2957795f,
-                 headY, localHeadY,
-                 q217HeadAnchorReady ? q217AvatarHeadAnchor.y : localHeadY,
-                 q217LegacyRootY, q217RootY,
-                 q217RootY - q217LegacyRootY);
-    }
+
 }
 
 bool QueryFo3DoorAimQ1700(float originX, float originY, float originZ,

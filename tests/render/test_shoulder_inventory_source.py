@@ -39,6 +39,6 @@ class ShoulderIntegration(unittest.TestCase):
         self.assertNotIn('glIsEnabled',guard)
     def test_authored_master_anchor(self):
         runtime=(ROOT/'app/src/main/cpp/core/fo3-runtime.cpp').read_text()
-        self.assertIn('Q211BindBonePoint(q213RightMaster->bones[q213RightMaster->rightUpperArm])',runtime)
+        self.assertIn('q213RightPose.solved?q213RightPose.shoulder:RuntimePoint(gVrArms[1].shoulder)',runtime)
         self.assertIn('gShoulderZone.rear={gQ210PlayerRoot[8],0,gQ210PlayerRoot[10]}',runtime)
 if __name__=='__main__':unittest.main()

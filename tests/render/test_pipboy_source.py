@@ -14,20 +14,12 @@ class Pipboy(unittest.TestCase):
         self.assertIn('gPipActivation.phase==fo3pip::Phase::Candidate',loop)
     def test_authoritative_solved_mount(self):
         core=(ROOT/'core/fo3-runtime.cpp').read_text()
-        self.assertIn('UpdateFo3PipboyMount(q213LeftPose,q213LeftMaster);',core)
+        self.assertIn('UpdateFo3PipboyMount(q213LeftPose);',core)
         mount=core.split('void UpdateFo3PipboyMount(',1)[1].split('void UpdateFo3Pipboy(',1)[0]
         self.assertIn('pose.foreTwist',mount)
         self.assertNotIn('pose.handDelta',mount)
         self.assertNotIn('gQ218LeftHandQuat',mount)
         self.assertIn('gPipBind',mount);self.assertIn('gQ210PlayerRoot',mount)
-    def test_arm_rig_uses_anatomical_elbow_and_fore_twist(self):
-        core=(ROOT/'core/fo3-runtime.cpp').read_text()
-        self.assertIn('Vec3 preferred{0.0f, -1.0f, 0.0f};',core)
-        self.assertIn('Q214_HAND_OUTWARD_OFFSET = 0.0f',core)
-        self.assertIn('Q211Delta foreTwist;',core)
-        self.assertIn('foreTwist ? left.foreTwist : left.fore',core)
-        self.assertIn('foreTwist ? right.foreTwist : right.fore',core)
-        self.assertIn('pose.foreTwist = Q218ComposeRigid(pose.fore, twist);',core)
     def test_bsa_prefixed_pipboy_path_is_classified(self):
         core=(ROOT/'core/fo3-runtime.cpp').read_text()
         self.assertIn('const bool pipboy=Q210EndsWithInsensitive(',core)

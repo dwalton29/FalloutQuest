@@ -193,3 +193,5 @@ BSA archives, textures, meshes, sounds, or other copyrighted Fallout 3 data.
 Users supply files from their own legitimate Fallout 3 installation.
 
 This project is not affiliated with or endorsed by Bethesda Softworks or Meta.
+
+Player body v160: [authored VR rig architecture and validation](docs/VR-BODY-v160.md).

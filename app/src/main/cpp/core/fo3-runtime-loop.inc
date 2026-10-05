@@ -1478,25 +1478,27 @@ private:
                 }
                 // Q21.0: drive the Fallout body root from the exact virtual
                 // HMD/controller poses used by locomotion and interaction.
-                const XrPosef q210VirtualHead = ToVirtualPose(views[0].pose);
+                XrPosef q210HeadLocal=views[0].pose;
+                q210HeadLocal.position.x=(views[0].pose.position.x+views[1].pose.position.x)*0.5f;
+                q210HeadLocal.position.y=(views[0].pose.position.y+views[1].pose.position.y)*0.5f;
+                q210HeadLocal.position.z=(views[0].pose.position.z+views[1].pose.position.z)*0.5f;
+                const XrPosef q210VirtualHead = ToVirtualPose(q210HeadLocal);
                 XrPosef q210Left{};
                 XrPosef q210Right{};
                 const bool q210LeftValid =
-                    gripHandPoseValid_[0] || handPoseValid_[0];
+                    gripHandPoseValid_[0];
                 const bool q210RightValid =
-                    gripHandPoseValid_[1] || handPoseValid_[1];
+                    gripHandPoseValid_[1];
                 if (q210LeftValid) {
                     q210Left = ToVirtualPose(
-                        gripHandPoseValid_[0]
-                            ? gripHandLocalPoses_[0]
-                            : handLocalPoses_[0]);
+                        gripHandLocalPoses_[0]);
                 }
                 if (q210RightValid) {
                     q210Right = ToVirtualPose(
-                        gripHandPoseValid_[1]
-                            ? gripHandLocalPoses_[1]
-                            : handLocalPoses_[1]);
+                        gripHandLocalPoses_[1]);
                 }
+                SynchronizeFo3PipboyEquipment();
+                if(!IsFo3LoadingVisible())Q210EnsurePlayerBody();
                 SetFo3PlayerBodyTrackingQ210(
                     q210VirtualHead.position.x,
                     q210VirtualHead.position.y,
