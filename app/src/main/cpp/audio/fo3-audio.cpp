@@ -135,11 +135,13 @@ void Worker() {
   std::string ambientFile,dialogueFile;
   size_t cacheBytes = 0;
   const auto archives = SoundArchives(fo3assets::FalloutDataPath(""));
+  const auto voiceArchive=FindAudioFile(fo3assets::FalloutDataPath(""),"Fallout - Voices.bsa");
   __android_log_print(ANDROID_LOG_INFO, "FalloutQuest",
-                      "AUDIO FILES: Sound=%s Music=%s archives=%zu dataRoot=%s",
+                      "AUDIO FILES: Sound=%s Music=%s archives=%zu voices=%s dataRoot=%s",
                       Loose("sound/").empty() ? "missing" : "present",
                       Loose("music/").empty() ? "missing" : "present",
-                      archives.size(), fo3assets::FalloutDataPath("").c_str());
+                      archives.size(), voiceArchive.empty() ? "missing" : voiceArchive.c_str(),
+                      fo3assets::FalloutDataPath("").c_str());
   if (Loose("sound/").empty() && archives.empty())
     __android_log_print(
         ANDROID_LOG_WARN, "FalloutQuest",
@@ -250,8 +252,21 @@ void Worker() {
     }
     for (auto &path : directory->second)
       consider(path);
-    if (ambiguous)
+    if (ambiguous) {
+      __android_log_print(ANDROID_LOG_WARN,"FalloutQuest",
+                          "DIALOGUE VOICE AMBIGUOUS request=%s prefix=%s candidates=%zu",
+                          request.c_str(),prefix.c_str(),directory->second.size());
       match.clear();
+    } else if(match.empty()) {
+      __android_log_print(ANDROID_LOG_WARN,"FalloutQuest",
+                          "DIALOGUE VOICE MISS request=%s prefix=%s candidates=%zu archives=%zu voicesArchive=%s",
+                          request.c_str(),prefix.c_str(),directory->second.size(),archives.size(),
+                          voiceArchive.empty()?"missing":voiceArchive.c_str());
+    } else {
+      __android_log_print(ANDROID_LOG_INFO,"FalloutQuest",
+                          "DIALOGUE VOICE RESOLVED request=%s path=%s",
+                          request.c_str(),match.c_str());
+    }
     voiceCache.emplace(request, match);
     return match;
   };
