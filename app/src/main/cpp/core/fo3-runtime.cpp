@@ -10933,8 +10933,18 @@ void QActorPrepareStereoFrame() {
     const bool ready=Q210EnsurePlayerBody();
     const double setupUs=fqopaque::Micros(setupStarted);
     if(ready) Q211UpdatePlayerRig();
+    const double npcNow=std::chrono::duration<double>(fqopaque::Clock::now().time_since_epoch()).count();
     for(auto& actor:gQ230NpcActors) {
-        actor.renderVisible=!actor.renderBoundsReady || Q2017StereoVisible(actor.renderBounds);
+        Q240UpdateNpcPackage(actor,npcNow);
+        GpuObject bounds=actor.renderBounds;
+        if(actor.renderBoundsReady&&!actor.rigs.empty()) {
+            const auto& origin=actor.rigs[0].scenePlacement;
+            const float dx=actor.runtime.position[0]-origin[12],
+                        dy=actor.runtime.position[1]-origin[13],
+                        dz=actor.runtime.position[2]-origin[14];
+            bounds.minX+=dx;bounds.maxX+=dx;bounds.minY+=dy;bounds.maxY+=dy;bounds.minZ+=dz;bounds.maxZ+=dz;
+        }
+        actor.renderVisible=!actor.renderBoundsReady || Q2017StereoVisible(bounds);
         if(actor.renderVisible) Q230UpdateActor(actor);
     }
     PrepareFo3InteriorSceneLights();
