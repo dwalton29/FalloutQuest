@@ -42,6 +42,13 @@ int main(){
  for(V target:targets){auto p=SolveArm(r,target,Identity(),state,1.f/72);Check(r,p);
   if(Length(target-r.shoulder)<.4f&&Length(target-r.shoulder)>.1f)assert(p.error<2e-4f);
  }
+ // Exact elbow-prior singularity on the first pose, without any history.
+ for(bool left:{false,true}){
+  auto rig=Rig(left);ArmState initial;
+  V wrist=rig.shoulder+Unit({left?-.45f:.45f,-1,.35f})*.3f;
+  auto p=SolveArm(rig,wrist+rig.palm-rig.wrist,Identity(),initial,.014f);Check(rig,p);
+  assert(Near(p.wrist,wrist));
+ }
  // Palm compensation is independent of the wrist pivot and hand rotation.
  for(float angle:{-Pi,-Pi/2,0.f,Pi/2,Pi}){
   R hand=Multiply(Axis({0,0,1},angle),Axis({0,1,0},.3f));

@@ -79,7 +79,11 @@ inline ArmPose SolveArm(const ArmRig&rig,V target,const R&handRotation,ArmState&
  // prior at a bounded angular velocity. Controller roll never chooses elbow.
  V prior=Project({rig.left?-.45f:.45f,-1,.35f},dir);
  V prev=state.valid?Project(state.pole,dir):prior;
- if(Length(prior)<1e-5f)prior=prev;
+ if(Length(prior)<1e-5f){
+  // At exactly the prior direction, even the initial projected pole is zero.
+  // Choose a torso-forward tangent, never an axis along the reach direction.
+  prior=Length(prev)>1e-5f?prev:Project({0,0,1},dir);
+ }
  V pole=Unit(prev,Unit(prior));V desired=Unit(prior,pole);
  float angle=std::atan2(Dot(dir,Cross(pole,desired)),std::clamp(Dot(pole,desired),-1.f,1.f));
  if(state.valid){float step=Pi*std::clamp(dt,0.f,.05f);pole=Rotate(Axis(dir,std::clamp(angle,-step,step)),pole);}else pole=desired;
