@@ -53,6 +53,12 @@ struct Q230RigPart {
   size_t gpuIndex = 0;
   float centerX = 0, centerY = 0, floorZ = 0;
 };
+struct Q240NavigationGraph {
+  std::vector<std::shared_ptr<const Fo3NpcNavMeshQ240>> meshes;
+  std::unordered_map<uint32_t,size_t> byForm;
+  std::vector<size_t> triangleOffsets;
+  size_t triangleCount=0u;
+};
 struct Q230ActorVisual {
   Fo3NpcActorQ230 source;
   fo3npc::RuntimeState runtime;
@@ -69,6 +75,7 @@ struct Q230ActorVisual {
   std::vector<Q230RigPart> rigs;
   std::vector<fo3anim::Envelope> renderEnvelope;
   std::shared_ptr<const Fo3NpcNavMeshQ240> navigation;
+  std::shared_ptr<const Q240NavigationGraph> navigationGraph;
   std::vector<std::array<float,3>> aiPathGame;
   size_t aiPathIndex=0u;
   uint32_t aiPackage=0u,aiSequence=0u;
