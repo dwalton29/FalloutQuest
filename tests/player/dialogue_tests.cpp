@@ -110,9 +110,13 @@ static void Lifecycle() {
   assert(session.Choose(0,ctx,p));session.AudioDone(session.audioToken,true,ctx,p);
   assert(!session.Active()&&session.actor==0&&session.choices.empty());
   assert(!session.CanStart(ctx));ctx.speaker.reference=101;assert(session.Start(ctx,p));
-  session.AudioDone(session.audioToken,false,ctx,p);assert(!session.Active());
-  assert(!p.Snapshot().pipboy.saidInfos.count((uint64_t(101)<<32)|50));
-  assert(session.Start(ctx,p));session.End("B");assert(!session.Active());
+  auto failedToken=session.audioToken;
+  assert(session.AudioDone(failedToken,false,ctx,p));
+  assert(session.Active()&&session.phase==Phase::Speaking&&session.response==1&&session.audioToken!=failedToken);
+  session.AudioDone(session.audioToken,false,ctx,p);
+  assert(session.Active()&&session.phase==Phase::Choices);
+  assert(p.Snapshot().pipboy.saidInfos.count((uint64_t(101)<<32)|50));
+  session.End("B");assert(!session.Active());
   fo3pipdata::SessionState encoded;std::vector<uint8_t> bytes;
   fo3pipdata::EncodeState(p.Snapshot().pipboy,bytes);std::string error;
   assert(fo3pipdata::DecodeState(encoded,p.Definitions().pipboy,bytes.data(),bytes.size(),error));
