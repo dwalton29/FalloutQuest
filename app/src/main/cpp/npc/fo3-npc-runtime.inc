@@ -214,9 +214,13 @@ void Q240UpdateNpcPackage(Q230ActorVisual& actor,double now) {
   actor.runtime.package=packageId;actor.runtime.packageKnown=true;actor.runtime.activity=fo3npc::Activity::Package;
   if(actor.aiPathIndex>=actor.aiPathGame.size()) {
     actor.runtime.speed=0;actor.runtime.animation=fo3npc::Animation::Idle;
-    if(package->type==6)return;
+    // Travel builds one authored route when the package becomes active, then
+    // remains at the destination for the rest of that package. Wander/Sandbox
+    // keep selecting new NAVM destinations after their short pause.
+    if(package->type==6&&actor.aiSequence>0)return;
     if(now<actor.aiRepathAt)return;
     if(!Q240BuildPackagePath(actor,*package,anchor,radius)){actor.aiRepathAt=now+2;return;}
+    if(package->type==6)actor.aiSequence=1;
     actor.aiRepathAt=now+1;
   }
   if(dt<=0||actor.aiPathIndex>=actor.aiPathGame.size())return;
