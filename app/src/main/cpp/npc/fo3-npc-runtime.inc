@@ -1,7 +1,8 @@
 void Q230CacheDialogueAnimations(Q230ActorVisual& actor,const fo3pipdata::Definitions* d) {
   actor.animations[0]=actor.clip;
   const auto root=actor.source.skeletonModel.substr(0,actor.source.skeletonModel.find_last_of("\\/")+1);
-  std::array<std::string,4> paths{"",root+"locomotion\\mtturnleft.kf",root+"locomotion\\mtturnright.kf",""};
+  std::array<std::string,5> paths{"",root+"locomotion\\mtturnleft.kf",root+"locomotion\\mtturnright.kf","",
+    root+"locomotion\\"+(actor.source.female?std::string("female\\"):std::string("male\\"))+"mtforward.kf"};
   if(d){std::string name=fo3npc::DialoguePolicy::ConversationIdle;for(auto& c:name)c=char(std::tolower((unsigned char)c));auto named=d->formNames.find(name);if(named!=d->formNames.end()){
     auto model=d->idleModels.find(named->second);if(model!=d->idleModels.end())paths[3]=model->second;
   }}
@@ -32,14 +33,222 @@ void Q230PrepareActors(uint32_t cell, uint32_t worldspace,
   std::vector<Fo3NpcActorQ230> actors;
   if (!LoadFo3CellActors(cell, actors))
     return;
+  std::vector<Fo3NpcNavMeshQ240> rawNavigation;
+  LoadFo3NpcNavigationQ240(cell,worldspace,rawNavigation);
+  std::vector<std::shared_ptr<const Fo3NpcNavMeshQ240>> navigation;
+  navigation.reserve(rawNavigation.size());
+  for(auto& mesh:rawNavigation)
+    navigation.push_back(std::make_shared<const Fo3NpcNavMeshQ240>(std::move(mesh)));
   for (const auto &source : actors) {
     if (cancel.load(std::memory_order_acquire))
       return;
     Q230ActorVisual visual;
-    if (Q230BuildNpcActor(source, visual))
+    if (Q230BuildNpcActor(source, visual)) {
+      float nearest=INFINITY;
+      for(const auto& mesh:navigation) {
+        float candidate=INFINITY;
+        for(const auto& vertex:mesh->vertices) {
+          const float dx=vertex[0]-source.x,dy=vertex[1]-source.y,dz=vertex[2]-source.z;
+          candidate=std::min(candidate,dx*dx+dy*dy+dz*dz);
+        }
+        if(candidate<nearest){nearest=candidate;visual.navigation=mesh;}
+      }
       out.push_back(std::move(visual));
+    }
   }
 }
+
+
+#ifndef FO3_ACTOR_RUNTIME_HOST_TEST
+static std::unordered_set<std::string> gQ240AiDiagnostics;
+static void Q240AiLogOnce(uint32_t actor,uint32_t package,const std::string& why) {
+  char prefix[40];std::snprintf(prefix,sizeof(prefix),"%08X:%08X:",actor,package);
+  const std::string key=std::string(prefix)+why;
+  if(gQ240AiDiagnostics.insert(key).second)
+    Q6H_LOGI("NPC PACKAGE UNSUPPORTED actor=%08X package=%08X reason=%s",actor,package,why.c_str());
+}
+static std::array<float,3> Q240GamePosition(const Q230ActorVisual& actor) {
+  return {gSceneCenterXQ1730+actor.runtime.position[0]*FO3_UNITS_PER_METRE,
+          gSceneCenterYQ1730-(actor.runtime.position[2]-SCENE_FORWARD)*FO3_UNITS_PER_METRE,
+          gSceneFloorZQ1730+(actor.runtime.position[1]-FLOOR_Y)*FO3_UNITS_PER_METRE};
+}
+static std::array<float,3> Q240ScenePosition(const std::array<float,3>& game) {
+  return {(game[0]-gSceneCenterXQ1730)/FO3_UNITS_PER_METRE,
+          FLOOR_Y+(game[2]-gSceneFloorZQ1730)/FO3_UNITS_PER_METRE,
+          SCENE_FORWARD-(game[1]-gSceneCenterYQ1730)/FO3_UNITS_PER_METRE};
+}
+static float Q240PlanarDistance(const std::array<float,3>& a,const std::array<float,3>& b) {
+  const float dx=a[0]-b[0],dy=a[1]-b[1];return std::sqrt(dx*dx+dy*dy);
+}
+static std::array<float,3> Q240Centroid(const Fo3NpcNavMeshQ240& mesh,size_t triangle) {
+  const auto& t=mesh.triangles[triangle];std::array<float,3> out{};
+  for(int v=0;v<3;++v)for(int c=0;c<3;++c)out[c]+=mesh.vertices[t.vertex[v]][c]/3.f;
+  return out;
+}
+static int Q240NearestTriangle(const Fo3NpcNavMeshQ240& mesh,const std::array<float,3>& point,float* distance=nullptr) {
+  int best=-1;float nearest=INFINITY;
+  for(size_t i=0;i<mesh.triangles.size();++i) {
+    const auto c=Q240Centroid(mesh,i);const float dx=c[0]-point[0],dy=c[1]-point[1],dz=c[2]-point[2];
+    const float d=dx*dx+dy*dy+dz*dz;
+    if(d<nearest){nearest=d;best=int(i);}
+  }
+  if(distance)*distance=std::sqrt(nearest);return best;
+}
+static bool Q240Path(const Fo3NpcNavMeshQ240& mesh,const std::array<float,3>& from,
+                     const std::array<float,3>& to,std::vector<std::array<float,3>>& path) {
+  path.clear();float startDistance=0,goalDistance=0;
+  const int start=Q240NearestTriangle(mesh,from,&startDistance),goal=Q240NearestTriangle(mesh,to,&goalDistance);
+  if(start<0||goal<0||startDistance>350.f||goalDistance>500.f)return false;
+  const size_t n=mesh.triangles.size();
+  std::vector<float> cost(n,INFINITY),score(n,INFINITY);
+  std::vector<int> previous(n,-1);std::vector<uint8_t> open(n,0),closed(n,0);
+  cost[start]=0;score[start]=Q240PlanarDistance(Q240Centroid(mesh,start),Q240Centroid(mesh,goal));open[start]=1;
+  for(size_t pass=0;pass<n;++pass) {
+    int current=-1;float best=INFINITY;
+    for(size_t i=0;i<n;++i)if(open[i]&&score[i]<best){best=score[i];current=int(i);}
+    if(current<0)break;if(current==goal)break;open[current]=0;closed[current]=1;
+    const auto here=Q240Centroid(mesh,current);
+    for(int edge=0;edge<3;++edge) {
+      const int next=mesh.triangles[current].neighbor[edge];
+      if(next<0||size_t(next)>=n||closed[next])continue;
+      const auto there=Q240Centroid(mesh,next);
+      const float tentative=cost[current]+Q240PlanarDistance(here,there);
+      if(tentative>=cost[next])continue;
+      previous[next]=current;cost[next]=tentative;
+      score[next]=tentative+Q240PlanarDistance(there,Q240Centroid(mesh,goal));open[next]=1;
+    }
+  }
+  if(start!=goal&&previous[goal]<0)return false;
+  std::vector<int> reverse;for(int at=goal;at>=0&&at!=start;at=previous[at])reverse.push_back(at);
+  std::reverse(reverse.begin(),reverse.end());
+  for(int triangle:reverse)path.push_back(Q240Centroid(mesh,triangle));
+  if(path.empty()||Q240PlanarDistance(path.back(),Q240Centroid(mesh,goal))>.01f)
+    path.push_back(Q240Centroid(mesh,goal));
+  return true;
+}
+static bool Q240ScheduleActive(const fo3pipdata::PackageSchedule& schedule,float hour) {
+  if(!schedule.valid)return true;
+  if(schedule.month!=-1||schedule.weekday!=-1||schedule.date!=0)return false;
+  if(schedule.hour<0)return true;
+  if(schedule.duration<=0)return false;
+  const float start=float(schedule.hour),end=start+float(schedule.duration);
+  hour=fo3tod::WrapHour(hour);
+  if(end<=24.f)return hour>=start&&hour<end;
+  return hour>=start||hour<end-24.f;
+}
+static const fo3pipdata::PackageDefinition* Q240SelectPackage(
+    Q230ActorVisual& actor,uint32_t& id,std::array<float,3>& anchor,float& radius) {
+  id=0;radius=0;if(!gPlayerSession)return nullptr;
+  const auto& definitions=gPlayerSession->player.Definitions().pipboy;
+  const auto actorDef=definitions.dialogueActors.find(actor.source.baseFormId);
+  if(actorDef==definitions.dialogueActors.end())return nullptr;
+  const float hour=GetFo3TimeOfDayHour();
+  for(uint32_t packageId:actorDef->second.packages) {
+    const auto found=definitions.packages.find(packageId);if(found==definitions.packages.end())continue;
+    const auto& package=found->second;
+    if(package.type!=5&&package.type!=6&&package.type!=12)continue;
+    if(package.scripted){Q240AiLogOnce(actor.source.refFormId,packageId,"package script");continue;}
+    if(!Q240ScheduleActive(package.schedule,hour))continue;
+    if(!package.location.valid){Q240AiLogOnce(actor.source.refFormId,packageId,"missing PLDT");continue;}
+    fo3dialogue::Context ctx;ctx.player=&gPlayerSession->player;
+    const auto game=Q240GamePosition(actor);
+    ctx.speaker={actor.source.refFormId,actor.source.baseFormId,gCurrentCellFormId,gExteriorWorldspaceQ1890,
+      actor.runtime.package,game[0],game[1],game[2],actor.runtime.activity==fo3npc::Activity::Combat,actor.runtime.packageKnown};
+    ctx.target={0x14,7,gCurrentCellFormId,gExteriorWorldspaceQ1890,0,
+      gSceneCenterXQ1730+gQ210Head[0]*FO3_UNITS_PER_METRE,
+      gSceneCenterYQ1730-(gQ210Head[2]-SCENE_FORWARD)*FO3_UNITS_PER_METRE,
+      gSceneFloorZQ1730+(gQ210Head[1]-FLOOR_Y)*FO3_UNITS_PER_METRE,false,false};
+    std::string error;
+    if(!fo3dialogue::Conditions(package.conditions,ctx,error)) {
+      if(!error.empty())Q240AiLogOnce(actor.source.refFormId,packageId,error);
+      continue;
+    }
+    if(package.location.type==0u) {
+      const auto target=definitions.targets.find(package.location.value);
+      if(target==definitions.targets.end()){Q240AiLogOnce(actor.source.refFormId,packageId,"location reference unavailable");continue;}
+      if(target->second.world&&gExteriorWorldspaceQ1890&&target->second.world!=gExteriorWorldspaceQ1890)continue;
+      anchor={target->second.x,target->second.y,target->second.z};
+    } else if(package.location.type==2u) anchor=game;
+    else if(package.location.type==3u) anchor={actor.source.x,actor.source.y,actor.source.z};
+    else {Q240AiLogOnce(actor.source.refFormId,packageId,"PLDT type "+std::to_string(package.location.type));continue;}
+    radius=float(std::max(0,package.location.radius));id=packageId;return &package;
+  }
+  return nullptr;
+}
+static bool Q240BuildPackagePath(Q230ActorVisual& actor,const fo3pipdata::PackageDefinition& package,
+                                 const std::array<float,3>& anchor,float radius) {
+  actor.aiPathGame.clear();actor.aiPathIndex=0;if(!actor.navigation)return false;
+  std::array<float,3> destination=anchor;
+  if(package.type==5||package.type==12) {
+    std::vector<size_t> choices;choices.reserve(actor.navigation->triangles.size());
+    for(size_t i=0;i<actor.navigation->triangles.size();++i) {
+      const auto point=Q240Centroid(*actor.navigation,i);
+      const float d=Q240PlanarDistance(point,anchor);
+      if(d<=radius&&d>150.f)choices.push_back(i);
+    }
+    if(choices.empty())return false;
+    uint32_t hash=actor.source.refFormId*2654435761u ^ actor.aiPackage*2246822519u ^ (++actor.aiSequence)*3266489917u;
+    destination=Q240Centroid(*actor.navigation,choices[hash%choices.size()]);
+  }
+  return Q240Path(*actor.navigation,Q240GamePosition(actor),destination,actor.aiPathGame);
+}
+void Q240UpdateNpcPackage(Q230ActorVisual& actor,double now) {
+  if(!gPlayerSession||actor.rigs.empty()||!actor.navigation||actor.runtime.dialogue||
+     actor.runtime.activity==fo3npc::Activity::Combat||
+     gPlayerSession->player.ActorHealth(actor.source.refFormId)<=0)return;
+  float dt=0;if(actor.aiLastUpdate>=0)dt=std::clamp(float(now-actor.aiLastUpdate),0.f,.10f);
+  actor.aiLastUpdate=now;
+  uint32_t packageId=0;std::array<float,3> anchor{};float radius=0;
+  const auto* package=Q240SelectPackage(actor,packageId,anchor,radius);
+  if(!package) {
+    actor.aiPackage=actor.runtime.package=0;actor.runtime.packageKnown=false;
+    actor.runtime.activity=fo3npc::Activity::Idle;actor.runtime.speed=0;
+    actor.runtime.animation=fo3npc::Animation::Idle;actor.aiPathGame.clear();return;
+  }
+  if(packageId!=actor.aiPackage) {
+    actor.aiPackage=packageId;actor.aiSequence=0;actor.aiPathGame.clear();actor.aiPathIndex=0;actor.aiRepathAt=0;
+    Q6H_LOGI("NPC PACKAGE actor=%08X package=%08X EDID=%s type=%u locationType=%u radius=%d hour=%.2f",
+      actor.source.refFormId,packageId,package->editor.c_str(),unsigned(package->type),
+      package->location.type,package->location.radius,GetFo3TimeOfDayHour());
+  }
+  actor.runtime.package=packageId;actor.runtime.packageKnown=true;actor.runtime.activity=fo3npc::Activity::Package;
+  if(actor.aiPathIndex>=actor.aiPathGame.size()) {
+    actor.runtime.speed=0;actor.runtime.animation=fo3npc::Animation::Idle;
+    if(package->type==6)return;
+    if(now<actor.aiRepathAt)return;
+    if(!Q240BuildPackagePath(actor,*package,anchor,radius)){actor.aiRepathAt=now+2;return;}
+    actor.aiRepathAt=now+1;
+  }
+  if(dt<=0||actor.aiPathIndex>=actor.aiPathGame.size())return;
+  const auto targetScene=Q240ScenePosition(actor.aiPathGame[actor.aiPathIndex]);
+  actor.runtime.destination=targetScene;
+  const float dx=targetScene[0]-actor.runtime.position[0],dy=targetScene[1]-actor.runtime.position[1],
+              dz=targetScene[2]-actor.runtime.position[2];
+  const float distance=std::sqrt(dx*dx+dz*dz);
+  if(distance<.08f) {
+    actor.runtime.position=targetScene;++actor.aiPathIndex;actor.runtime.speed=0;
+    actor.runtime.animation=fo3npc::Animation::Idle;actor.aiRepathAt=now+.35;return;
+  }
+  const float desired=std::atan2(-dx,-dz),error=fo3npc::Angle(desired-actor.runtime.yaw);
+  actor.runtime.yaw=fo3npc::Angle(actor.runtime.yaw+
+    std::clamp(error,-fo3npc::DialoguePolicy::BodySpeed*dt,fo3npc::DialoguePolicy::BodySpeed*dt));
+  actor.runtime.returnYaw=actor.runtime.yaw;
+  actor.runtime.headYaw+=std::clamp(-actor.runtime.headYaw,
+    -fo3npc::DialoguePolicy::HeadSpeed*dt,fo3npc::DialoguePolicy::HeadSpeed*dt);
+  if(std::fabs(error)>.70f) {
+    actor.runtime.speed=0;
+    actor.runtime.animation=error>0?fo3npc::Animation::TurnLeft:fo3npc::Animation::TurnRight;return;
+  }
+  // Fallout's movement-speed actor values are not yet decoded. 1.05 m/s is an
+  // explicit standalone-VR locomotion bridge; path, schedule, radius and clip
+  // remain authored data.
+  constexpr float WALK_METRES_PER_SECOND=1.05f;
+  const float step=std::min(distance,WALK_METRES_PER_SECOND*dt),fraction=step/std::max(distance,.001f);
+  actor.runtime.position[0]+=dx*fraction;actor.runtime.position[2]+=dz*fraction;
+  actor.runtime.position[1]+=dy*fraction;actor.runtime.speed=WALK_METRES_PER_SECOND;
+  actor.runtime.animation=fo3npc::Animation::Walk;
+}
+#endif
 
 fo3anim::Matrix Q230PlacementMatrix(const Fo3WorldPlacement &placement) {
   auto matrix = fo3anim::Identity();
@@ -200,8 +409,10 @@ void Q230UpdateActor(Q230ActorVisual &actor) {
   auto root=fo3anim::Identity();const float yaw=actor.runtime.yaw-actor.runtime.authoredYaw;
   root[0]=root[10]=std::cos(yaw);root[2]=-std::sin(yaw);root[8]=-root[2];
   if(!actor.rigs.empty()) {
-    const auto& placement=actor.rigs[0].scenePlacement;const float x=placement[12],z=placement[14];
-    root[12]=x-root[0]*x-root[8]*z;root[14]=z-root[2]*x-root[10]*z;
+    const auto& placement=actor.rigs[0].scenePlacement;const float x=placement[12],y=placement[13],z=placement[14];
+    root[12]=actor.runtime.position[0]-root[0]*x-root[8]*z;
+    root[13]=actor.runtime.position[1]-y;
+    root[14]=actor.runtime.position[2]-root[2]*x-root[10]*z;
   }
   actor.dialogueRoot=root;
   fqactor::npc.clip+=timings.clipUs;fqactor::npc.pose+=timings.skeletonUs;
