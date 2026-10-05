@@ -2187,10 +2187,14 @@ bool ResolveFo3DynamicBoxQ225(
     const Vec3 desired{desiredX,desiredY,desiredZ};
     const Vec3 total=Sub(desired,p);
     const float travel=Length(total);
-    const float stepLength=std::max(0.012f,broadRadius*0.35f);
+    // Thin dropped weapons must not move farther than their smallest OBB
+    // support extent between collision samples. Broad-radius stepping allowed a
+    // pistol to skip cleanly through a floor once its fall velocity increased.
+    const float thinHalf=std::max(0.004f,std::min({halfX,halfY,halfZ}));
+    const float stepLength=std::max(0.006f,std::min(broadRadius*0.25f,thinHalf*0.50f));
     const int steps=std::clamp(
         static_cast<int>(std::ceil(
-            travel/std::max(stepLength,0.001f))),1,16);
+            travel/std::max(stepLength,0.001f))),1,48);
     const Vec3 perStep=
         mul3(total,1.0f/static_cast<float>(steps));
 
@@ -2199,6 +2203,7 @@ bool ResolveFo3DynamicBoxQ225(
     constexpr float CONTACT_SKIN=0.0010f;
 
     for(int step=0;step<steps;++step){
+        const Vec3 previous=p;
         p=add3(p,perStep);
         for(int iteration=0;iteration<4;++iteration){
             float deepest=0.0f;
@@ -2220,7 +2225,15 @@ bool ResolveFo3DynamicBoxQ225(
                 Vec3 separation=Sub(p,q);
                 const float distance=Length(separation);
                 Vec3 normal=tri.normal;
-                if(distance>1.0e-6f){
+                // Resolve back toward the side occupied at the beginning of
+                // the sweep step. After crossing a plane, current separation
+                // points to the wrong side and would push the body through it.
+                const Vec3 previousQ=closestPointTriangle(previous,tri);
+                const Vec3 previousSeparation=Sub(previous,previousQ);
+                const float previousDistance=Length(previousSeparation);
+                if(previousDistance>1.0e-6f){
+                    normal=mul3(previousSeparation,1.0f/previousDistance);
+                } else if(distance>1.0e-6f){
                     normal=mul3(separation,1.0f/distance);
                 } else if(dot3(normal,perStep)>0.0f){
                     normal=mul3(normal,-1.0f);
