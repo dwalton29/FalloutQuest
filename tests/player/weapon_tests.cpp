@@ -240,6 +240,20 @@ int main(int argc,char**argv) {
   auto two=fo3weapon::TwoHand(one,{0,0,0},{.5f,.5f,0},{1,0,0});
   auto axis=fo3vr::Rotate(two,{1,0,0});
   assert(fo3vr::Dot(axis,fo3vr::Unit({1,1,0}))>.9999f);
+  {
+    fo3weapon::WorldPose location;location.position={4095,0,0};assert(fo3weapon::CollisionResident(location,0,0));
+    location.position[0]=8192;assert(!fo3weapon::CollisionResident(location,0,0));
+    location.position[0]=-4096;assert(fo3weapon::CollisionResident(location,0,0));
+    location.position[0]=-4096.5f;assert(!fo3weapon::CollisionResident(location,0,0));
+    location.position[0]=NAN;assert(!fo3weapon::CollisionResident(location,0,0));
+    const auto rotation=fo3vr::Axis({0,1,0},fo3vr::Pi*.5f);const fo3vr::V origin{5,2,3},local{.1f,.2f,.3f};
+    const auto hand=origin+fo3vr::Rotate(rotation,local);
+    assert(fo3weapon::RearwardPull(rotation,origin,hand,local)<1e-5f);
+    assert(fo3weapon::RearwardPull(rotation,origin+fo3vr::V{1,2,3},hand+fo3vr::V{1,2,3},local)<1e-5f);
+    assert(std::fabs(fo3weapon::RearwardPull(rotation,origin,hand+fo3vr::Rotate(rotation,{-.05f,0,0}),local)-.045f)<1e-5f);
+    assert(fo3weapon::BoxDistance(rotation,origin,hand,local,{.1f,.1f,.1f})<1e-5f);
+    assert(std::fabs(fo3weapon::BoxDistance(rotation,origin,hand+fo3vr::Rotate(rotation,{.2f,0,0}),local,{.1f,.1f,.1f})-.1f)<1e-5f);
+  }
   pose.cell=123;
   assert(fo3weapon::ValidPose(pose));
   pose.velocity[0]=NAN;

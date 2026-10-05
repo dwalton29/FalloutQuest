@@ -58,7 +58,7 @@ instance equipped and owned; releasing elsewhere drops it with sampled linear
 and angular velocity. Runtime weapons use the existing dynamic-box collision
 query, SI gravity, short substeps, damping and settling policy. They never become
 fake ESM references. Absolute world positions and cell/world identity survive
-scene-origin changes; inactive cells retain their saved poses. A non-droppable
+scene-origin changes; inactive cells retain their saved poses. Wasteland dynamic physics freezes outside the existing 3×3 collision window and resumes on residency, rather than allowing weapons to fall through unloaded geometry. Floor grabbing measures distance to the oriented weapon bounds. A non-droppable
 quest/script weapon safely returns to its holster when transfer is denied.
 
 Original FP skeleton/aim KFs supply the primary attachment. Original NIF ancestors

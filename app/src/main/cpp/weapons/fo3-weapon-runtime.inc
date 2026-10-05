@@ -130,7 +130,11 @@ void Advance(World&w,const Model&model,float dt){
     Matrix delta;Q223BuildMotionDelta(RuntimePoint(centre),RuntimePoint(resolved),b.angularVelocity,step,delta.data());w.pose=fo3anim::Multiply(delta,w.pose);
   }
 }
-bool Resident(const fo3weapon::WorldPose&p){return gExteriorWorldspaceQ1890?p.world==gExteriorWorldspaceQ1890:p.world==0&&p.cell==gCurrentCellFormId;}
+bool Resident(const fo3weapon::WorldPose&p){
+  if(!gExteriorWorldspaceQ1890)return p.world==0&&p.cell==gCurrentCellFormId;
+  if(p.world!=gExteriorWorldspaceQ1890)return false;
+  return p.world!=0x3c||fo3weapon::CollisionResident(p,gExteriorWindowGridXQ1890,gExteriorWindowGridYQ1890);
+}
 Matrix HandPose(const Model&m){
   const int hand=fo3anim::FindBone(gVrSkeleton,"Bip01 R Hand");
   if(hand<0)return pose;
@@ -288,10 +292,11 @@ void WeaponUpdate(double now,bool backButton){
     auto*m=Ensure(w.instance.formId);if(!m)continue;
     auto found=world.find(w.instance.id);if(found==world.end()){
       World v;v.pose=ToScene(w.pose);v.cell=w.pose.cell;v.world=w.pose.world;v.motion.linearVelocity={w.pose.velocity[0],w.pose.velocity[1],w.pose.velocity[2]};v.motion.angularVelocity={w.pose.angularVelocity[0],w.pose.angularVelocity[1],w.pose.angularVelocity[2]};world.emplace(w.instance.id,v);
-    }else if(!blocked)Advance(found->second,*m,dt);
+    }else if(!Resident(ToSave(found->second)))p.UpdateWorldWeapon(w.instance.id,ToSave(found->second));
+    else if(!blocked)Advance(found->second,*m,dt);
   }
   // A CELL origin change is handled by persisted world positions at transition.
-  for(auto it=world.begin();it!=world.end();){bool keep=false;for(const auto&w:p.Snapshot().worldWeapons)if(w.instance.id==it->first&&Resident(w.pose)){keep=true;break;}if(!keep)it=world.erase(it);else ++it;}
+  for(auto it=world.begin();it!=world.end();){bool keep=false;for(const auto&w:p.Snapshot().worldWeapons)if(w.instance.id==it->first&&Resident(w.pose)){keep=true;break;}if(!keep){p.UpdateWorldWeapon(it->first,ToSave(it->second));it=world.erase(it);}else ++it;}
   if(blocked){
     if(held){held=false;if(s)Log("HOLSTER FOCUS",s->id,s->formId);}
     RetireReload();inside=false;
@@ -355,7 +360,7 @@ void WeaponUpdate(double now,bool backButton){
           if(gQ217FingerGrip[0]<=.25f){magazine=false;if(distance<.085f&&alignment>.70f&&p.LoadMagazine(id)){Pulse(0);fo3audio::NamedSound(m->asset.reloadSounds[1]);Log("RELOAD INSERT",id,form);s=p.Weapon(id);}}
         }
         if(charging&&!gWeaponPalmValid[0])charging=false;
-        if(charging){Matrix inverse;if(fo3anim::Inverse(pose,inverse))chargeTravel=std::clamp(chargeStart.x-Point(inverse,left).x,0.f,.045f);if(chargeTravel>=.045f&&p.ChamberWeapon(id)){charging=false;Pulse(0);fo3audio::NamedSound(m->asset.reloadSounds[2]);Log("RELOAD CHAMBER",id,form);s=p.Weapon(id);}if(gQ217FingerGrip[0]<=.25f)charging=false;}
+        if(charging){chargeTravel=fo3weapon::RearwardPull(Rotation(pose),Position(pose),left,chargeStart);if(chargeTravel>=.045f&&p.ChamberWeapon(id)){charging=false;Pulse(0);fo3audio::NamedSound(m->asset.reloadSounds[2]);Log("RELOAD CHAMBER",id,form);s=p.Weapon(id);}if(gQ217FingerGrip[0]<=.25f)charging=false;}
       }
       if(s&&held&&gWeaponPalmValid[1]&&trigger.Ready(d,inputs,gQ217FingerTrigger[1],now)){
         const auto id=s->id;const auto form=s->formId;
@@ -376,7 +381,7 @@ void WeaponUpdate(double now,bool backButton){
     if(s&&m&&(p.Definitions().items.at(s->formId).weapon.LongGun()?back:hip).Contains(hand))Draw(s->id,s->formId);
     else{
       uint64_t best=0;float distance=.16f;
-      for(const auto&w:p.Snapshot().worldWeapons){auto v=world.find(w.instance.id);if(v==world.end())continue;auto model=models.find(w.instance.formId);if(model==models.end())continue;float d=std::max(0.f,fo3vr::Length(hand-Point(v->second.pose,model->second.centre))-fo3vr::Length(model->second.half));if(d<distance){best=w.instance.id;distance=d;}}
+      for(const auto&w:p.Snapshot().worldWeapons){auto v=world.find(w.instance.id);if(v==world.end())continue;auto model=models.find(w.instance.formId);if(model==models.end())continue;float d=fo3weapon::BoxDistance(Rotation(v->second.pose),Position(v->second.pose),hand,model->second.centre,model->second.half);if(d<distance){best=w.instance.id;distance=d;}}
       if(best&&p.PickupWorldWeapon(best)){world.erase(best);s=p.EquippedWeapon();Draw(s->id,s->formId);Log("PICKUP",s->id,s->formId,best);}
       else {uint32_t ref=0;Vec3 centre;float surface=0;if(Q220FindNearestLooseRef(gWeaponPalm[1],ref,centre,surface)){
         const auto r=p.Definitions().references.find(ref);

@@ -1,6 +1,7 @@
 #pragma once
 #include "fo3-weapon-data.h"
 #include "player/fo3-vr-body.h"
+#include "world/fo3-world-streaming.h"
 namespace fo3weapon {
 using V=fo3vr::V;
 using R=fo3vr::R;
@@ -47,6 +48,21 @@ inline R TwoHand(const R&one,V primary,V support,V axis,float weight=1) {
   float dot=std::clamp(fo3vr::Dot(oldAxis,newAxis),-1.f,1.f);
   if(fo3vr::Length(cross)<1e-5f||dot<-.85f)return one;
   return fo3vr::Multiply(fo3vr::Axis(cross,std::acos(dot)*std::clamp(weight,0.f,1.f)),one);
+}
+// Physics only advances where the existing exterior collision window exists.
+inline bool CollisionResident(const WorldPose&pose,int32_t gridX,int32_t gridY) {
+  if(!std::isfinite(pose.position[0])||!std::isfinite(pose.position[1]))return false;
+  return std::fabs(std::floor(pose.position[0]/fo3world::CellSize)-gridX)<=1 &&
+         std::fabs(std::floor(pose.position[1]/fo3world::CellSize)-gridY)<=1;
+}
+inline float RearwardPull(const R&rotation,V origin,V palm,V startLocal) {
+  const auto local=fo3vr::Rotate(fo3vr::Transpose(rotation),palm-origin);
+  return std::clamp(startLocal.x-local.x,0.f,.045f);
+}
+inline float BoxDistance(const R&rotation,V origin,V palm,V centre,V half) {
+  const auto local=fo3vr::Rotate(fo3vr::Transpose(rotation),palm-origin)-centre;
+  const V outside{std::max(0.f,std::fabs(local.x)-half.x),std::max(0.f,std::fabs(local.y)-half.y),std::max(0.f,std::fabs(local.z)-half.z)};
+  return fo3vr::Length(outside);
 }
 struct Trigger {
   double next=0;
