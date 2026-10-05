@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -66,6 +67,23 @@ bool LoadFo3CellActors(uint32_t cellFormId,
 
 bool LoadFo3MegatonExteriorActorsQ230(
     std::vector<Fo3NpcActorQ230>& outActors);
+
+struct Fo3NpcNavTriangleQ240 {
+    uint16_t vertex[3]{0u,0u,0u};
+    int16_t neighbor[3]{-1,-1,-1};
+    uint32_t flags=0u;
+};
+struct Fo3NpcNavMeshQ240 {
+    uint32_t formId=0u;
+    uint32_t cellFormId=0u;
+    std::vector<std::array<float,3>> vertices;
+    std::vector<Fo3NpcNavTriangleQ240> triangles;
+};
+bool LoadFo3NpcNavigationQ240(
+    uint32_t cellFormId,
+    uint32_t worldspaceFormId,
+    std::vector<Fo3NpcNavMeshQ240>& outNavigation,
+    const std::string& esmPath = {});
 
 
 struct Fo3FaceGenMorphQ233 {
