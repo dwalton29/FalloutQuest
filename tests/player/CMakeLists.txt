@@ -77,3 +77,20 @@ target_compile_options(pipboy_data_tests PRIVATE -Wall -Wextra -Werror)
 target_include_directories(pipboy_data_tests PRIVATE ../../app/src/main/cpp)
 target_link_libraries(pipboy_data_tests PRIVATE ZLIB::ZLIB)
 add_test(NAME pipboy_data_tests COMMAND pipboy_data_tests)
+foreach(target player_state_tests interaction_runtime_tests pipboy_tests pipboy_render_tests pipboy_data_tests)
+    target_sources(${target} PRIVATE ../../app/src/main/cpp/weapons/fo3-weapon-data.cpp)
+endforeach()
+add_executable(weapon_tests weapon_tests.cpp
+    ../../app/src/main/cpp/player/fo3-player-state.cpp
+    ../../app/src/main/cpp/player/fo3-pipboy-player.cpp
+    ../../app/src/main/cpp/player/fo3-container-state.cpp
+    ../../app/src/main/cpp/pipboy/fo3-pipboy-data.cpp
+    ../../app/src/main/cpp/pipboy/fo3-pipboy-session.cpp
+    ../../app/src/main/cpp/pipboy/fo3-radio-runtime.cpp
+    ../../app/src/main/cpp/weapons/fo3-weapon-data.cpp
+    ../../app/src/main/cpp/data/fo3-esm-reader.cpp)
+target_compile_features(weapon_tests PRIVATE cxx_std_17)
+target_compile_options(weapon_tests PRIVATE -Wall -Wextra -Werror)
+target_include_directories(weapon_tests PRIVATE ../../app/src/main/cpp)
+target_link_libraries(weapon_tests PRIVATE ZLIB::ZLIB)
+add_test(NAME weapon_tests COMMAND weapon_tests)

@@ -308,7 +308,7 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
     const bool item = Kind(type, kind);
     const bool worldRecord = type == "REFR" || type == "DOOR" || type == "CELL";
     const bool lootRecord = type == "CONT" || type == "LVLI" || type == "GLOB";
-    const bool extra = fo3pipdata::Relevant(type)||type=="ACHR"||type=="ACRE";
+    const bool extra = fo3pipdata::Relevant(type)||type=="ACHR"||type=="ACRE"||fo3weapon::Relevant(type);
     const bool selected = extra || lootRecord || worldRecord || type == "TES4" ||
                           type == "GMST" || item ||
                           (type == "NPC_" && form == PlayerBase);
@@ -323,6 +323,7 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
       if (!Subs(payload, subs))
         return fail("Malformed ESM subrecord");
       fo3pipdata::Decode(next.pipboy,type,form,flags,payload,groupCells.empty()?0:groupCells.back(),groupWorlds.empty()?0:groupWorlds.back(),groupTopics.empty()?0:groupTopics.back());
+      fo3weapon::Decode(next.weapons,type,form,payload);
       // Keep the v1 catalog identity stable so existing player saves migrate.
       if (lootRecord) {
         next.lootFingerprint =
@@ -452,6 +453,8 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
         Item definition;
         if (!form || !DecodeItem(form, flags, kind, subs, definition))
           return fail("Invalid inventory item definition");
+        if (kind == ItemKind::Weapon)
+          fo3weapon::DecodeWeapon(payload, definition.weapon);
         next.items[form] = std::move(definition);
       } else {
         if (playerFound)

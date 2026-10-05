@@ -1,6 +1,7 @@
 #pragma once
 
 #include "pipboy/fo3-pipboy-session.h"
+#include "weapons/fo3-weapon-data.h"
 #include <array>
 #include <cstdint>
 #include <string>
@@ -50,6 +51,7 @@ enum class ItemKind : uint8_t {
 };
 
 struct Item {
+  fo3weapon::Definition weapon;
   uint32_t formId = 0, recordFlags = 0, bipedMask = 0, script = 0,
            enchantment = 0;
   ItemKind kind = ItemKind::Misc;
@@ -109,6 +111,7 @@ struct State {
   std::unordered_map<uint32_t, std::vector<Stack>> containers;
 };
 struct Catalog {
+  fo3weapon::Definitions weapons;
   fo3pipdata::Definitions pipboy;
   std::unordered_map<uint32_t, Item> items;
   std::unordered_map<uint32_t, Reference> references;
