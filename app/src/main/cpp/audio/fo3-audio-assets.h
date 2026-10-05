@@ -40,7 +40,8 @@ inline std::string FindAudioFile(const std::string& data,const std::string& rela
 inline std::vector<std::string> SoundArchives(const std::string& data) {
     std::vector<std::string> result;
     for(const auto& root:AudioRoots(data))
-        for(const char* name:{"Fallout - Sound.bsa","sound.bsa","sounds.bsa","Fallout - Voices.bsa","voices.bsa"}) {
+        for(const char* name:{"Fallout - Sound.bsa","Fallout - Sounds.bsa","sound.bsa","sounds.bsa",
+                              "Fallout - Voices.bsa","voices.bsa","Fallout - MenuVoices.bsa"}) {
             auto path=LooseAt(root,name);if(!path.empty())result.push_back(path);
         }
     return result;
