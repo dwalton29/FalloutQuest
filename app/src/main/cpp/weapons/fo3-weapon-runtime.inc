@@ -160,12 +160,12 @@ float Random(){randomState^=randomState<<13;randomState^=randomState>>17;randomS
 bool Hit(uint64_t instance,V origin,V direction,float limit,uint32_t base,float damage){
   if(!gPlayerSession)return false;
   auto&p=gPlayerSession->player;uint32_t target=0;float nearest=limit;
-  for(const auto&actor:gQ230NpcActors){
+  for(auto&actor:gQ230NpcActors){
     if(p.ActorHealth(actor.source.refFormId)<=0)continue;
     // Visibility envelopes are broad phase only; actual skinned authored
     // surfaces determine whether a bullet hits the actor.
     std::array<float,3> liveLo{},liveHi{};float entry=0;
-    if(!Q230LiveBounds(const_cast<Q230ActorVisual&>(actor),liveLo,liveHi)||
+    if(!Q230LiveBounds(actor,liveLo,liveHi)||
        !fo3interaction::Box({origin.x,origin.y,origin.z},{direction.x,direction.y,direction.z},
       {liveLo[0],liveLo[1],liveLo[2]},{liveHi[0],liveHi[1],liveHi[2]},nearest,entry))continue;
     const fo3interaction::Point o{origin.x,origin.y,origin.z},d{direction.x,direction.y,direction.z};
