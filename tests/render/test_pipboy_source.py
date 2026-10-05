@@ -19,6 +19,11 @@ class Pipboy(unittest.TestCase):
         self.assertIn('pose.fore',mount);self.assertIn('pose.handDelta',mount)
         self.assertNotIn('gQ218LeftHandQuat',mount)
         self.assertIn('gPipBind',mount);self.assertIn('gQ210PlayerRoot',mount)
+    def test_bsa_prefixed_pipboy_path_is_classified(self):
+        core=(ROOT/'core/fo3-runtime.cpp').read_text()
+        self.assertIn('const bool pipboy=Q210EndsWithInsensitive(',core)
+        self.assertIn('"pipboy3000\\\\pipboyarm.nif"',core)
+        self.assertNotIn('const bool pipboy=fo3appearance::SameModel(path,"PipBoy3000/PipBoyArm.NIF")',core)
     def test_no_steady_queries_or_pause(self):
         ui=(ROOT/'ui/pipboy/fo3-pipboy-renderer.h').read_text()
         render=ui.split('inline void Render(',1)[1].split('inline void Shutdown(',1)[0]
