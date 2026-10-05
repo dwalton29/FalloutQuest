@@ -21,6 +21,12 @@ static void U32(Bytes &b, uint32_t v) {
   for (int i = 0; i < 4; ++i)
     b.push_back(v >> (i * 8));
 }
+static void U16(Bytes &b, uint16_t v) {
+  b.push_back(v & 255); b.push_back(v >> 8);
+}
+static void F32(Bytes &b, float v) {
+  uint32_t bits=0;std::memcpy(&bits,&v,4);U32(b,bits);
+}
 static Bytes Word(uint32_t v) {
   Bytes b;
   U32(b, v);
@@ -124,6 +130,17 @@ int main(int argc, char **argv) {
   U32(group, 0);
   Add(group, refs);
   Add(esm, group);
+  Bytes nav,navData;U32(navData,77);U32(navData,3);U32(navData,1);
+  while(navData.size()<24)navData.push_back(0);
+  Sub(nav,"DATA",navData);
+  Bytes vertices;F32(vertices,0);F32(vertices,0);F32(vertices,0);
+  F32(vertices,100);F32(vertices,0);F32(vertices,0);
+  F32(vertices,0);F32(vertices,100);F32(vertices,0);Sub(nav,"NVVX",vertices);
+  Bytes triangle;U16(triangle,0);U16(triangle,1);U16(triangle,2);
+  U16(triangle,0xffff);U16(triangle,0xffff);U16(triangle,0xffff);U32(triangle,0);Sub(nav,"NVTR",triangle);
+  Bytes navRecord=Record("NAVM",200,nav),worldGroup;
+  worldGroup.insert(worldGroup.end(),{'G','R','U','P'});U32(worldGroup,navRecord.size()+24);U32(worldGroup,88);U32(worldGroup,1);U32(worldGroup,0);U32(worldGroup,0);
+  Add(worldGroup,navRecord);Add(esm,worldGroup);
   const auto path = std::filesystem::temp_directory_path() /
                     "falloutquest-npc-record-tests.esm";
   {
@@ -139,6 +156,11 @@ int main(int argc, char **argv) {
   assert(actors[1].inventory[0].modelPath == "female-worn.nif");
   assert(!actors[2].female && actors[2].raceHeadModels[0] == "male-head.nif");
   assert(!LoadFo3CellActors(78, actors, path.string()) && actors.empty());
+  std::vector<Fo3NpcNavMeshQ240> navigation;
+  assert(LoadFo3NpcNavigationQ240(77,88,navigation,path.string()));
+  assert(navigation.size()==1&&navigation[0].formId==200&&navigation[0].cellFormId==77);
+  assert(navigation[0].vertices.size()==3&&navigation[0].triangles.size()==1);
+  assert(navigation[0].triangles[0].vertex[2]==2&&navigation[0].triangles[0].neighbor[0]==-1);
   std::filesystem::remove(path);
   if (argc > 1) {
     assert(LoadFo3CellActors(0xa96, actors, argv[1]));
