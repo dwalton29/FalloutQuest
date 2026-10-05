@@ -41,7 +41,8 @@ struct ArmState {V direction{},pole{};float roll=0;bool valid=false;};
 struct ArmPose {
  Delta clavicle,upper,upperTwist,fore,foreTwist,hand;
  V shoulder{},elbow{},wrist{},palm{};float stretch=1,roll=0,error=0;
- float armScale=1,normalReach=0,targetDistance=0;bool clamped=false;
+ float armScale=1,normalReach=0,targetDistance=0,flex=0,raisedWeight=0;
+ V preferredPole{},pole{};bool clamped=false;
  bool valid=false;
 };
 // Extract the axial quaternion component, rather than projecting alternating
@@ -102,17 +103,18 @@ inline ArmPose SolveArm(const ArmRig&rig,V target,const R&handRotation,ArmState&
  p.clamped=d>a+b;
  d=std::clamp(d,std::fabs(a-b)+1e-5f,a+b-1e-5f);
  p.wrist=p.shoulder+dir*d;
- // Torso-relative down/out/back prior remains nonzero for hanging arms.
- // Transport the last pole into the new reach plane; then rotate toward the
- // prior at a bounded angular velocity. Controller roll never chooses elbow.
- // Soft gravity prior adapts to reach: hanging arms bend backwards, high
- // reaches abduct outward, and cross-body/face reaches allow more abduction.
- // Hand axial roll is deliberately excluded: pronation is a forearm DOF.
+ // Generic raised-arm inference, independent of device/UI state. Wrist
+ // height is normalized by the calibrated humerus, so users of different
+ // reach use the same smooth regions: half a humerus below the shoulder
+ // blends gravity; a quarter humerus above it fully lifts/abducts the elbow.
  float side=rig.left?-1.f:1.f;
- float high=std::max(0.f,dir.y),cross=std::clamp(-side*dir.x,0.f,1.f);
- float folded=1-std::clamp(d/p.normalReach,0.f,1.f);
- V prior=Project({side*(.25f+.65f*high+.45f*cross+.25f*folded),
-                  -1.f+.75f*high,.25f+.55f*std::max(0.f,-dir.y)},dir);
+ float t=std::clamp((wristTarget.y-p.shoulder.y+a*.5f)/(a*.75f),0.f,1.f);
+ p.raisedWeight=t*t*(3-2*t);
+ V low=Unit({side,-2.f,2.f*std::max(0.f,-dir.y)});
+ // Twenty-degree upward tilt favours abduction over shrugging the elbow
+ // above the wrist; this is VR anatomy inference, not an authored offset.
+ V lifted=Unit({side,std::tan(20*Pi/180),0});
+ V prior=Project(low*(1-p.raisedWeight)+lifted*p.raisedWeight,dir);
  V prev=state.valid?Project(state.pole,dir):prior;
  if(Length(prior)<1e-5f){
   // At exactly the prior direction, even the initial projected pole is zero.
@@ -122,8 +124,10 @@ inline ArmPose SolveArm(const ArmRig&rig,V target,const R&handRotation,ArmState&
  V pole=Unit(prev,Unit(prior));V desired=Unit(prior,pole);
  float angle=std::atan2(Dot(dir,Cross(pole,desired)),std::clamp(Dot(pole,desired),-1.f,1.f));
  if(state.valid){float step=angle*(1-std::exp(-4.f*std::clamp(dt,0.f,.05f)));step=std::clamp(step,-Pi*dt,Pi*dt);pole=Rotate(Axis(dir,step),pole);}else pole=desired;
+ p.preferredPole=desired;p.pole=pole;
  float along=(a*a+d*d-b*b)/(2*d),height=std::sqrt(std::max(0.f,a*a-along*along));
  p.elbow=p.shoulder+dir*along+pole*height;
+ p.flex=std::acos(std::clamp((a*a+b*b-d*d)/(2*a*b),-1.f,1.f));
  V normal=Unit(Cross(p.elbow-p.shoulder,p.wrist-p.elbow),Unit(Cross(pole,dir)));
  V restNormal=Unit(Cross(u,f),{0,0,1});
  R ur=FrameRotation(u,restNormal,p.elbow-p.shoulder,normal);

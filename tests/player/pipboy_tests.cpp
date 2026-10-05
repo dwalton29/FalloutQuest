@@ -1,5 +1,6 @@
 #include "ui/pipboy/fo3-pipboy-state.h"
 #include "player/fo3-vr-tracking.h"
+#include "ui/pipboy/fo3-pipboy-assets.h"
 #include <cassert>
 #include <iostream>
 using namespace fo3pip;
@@ -17,6 +18,8 @@ static fo3player::Player Player() {
   return fo3player::Player(std::move(c));
 }
 int main() {
+  assert(MenuAssetValid("menus\\main\\map_menu.xml",R"(<menu name="MapMenu"><id> &pipboymenu; </id>)"));
+  assert(!MenuAssetValid("menus\\main\\map_menu.xml","&pipboy;"));
   const View good{true, true, .4f, 1, 1};
   Activation a;
   auto down = good;
@@ -102,13 +105,50 @@ int main() {
   for(bool rightTracked:{false,true}){
     (void)rightTracked;
     auto tracked=fo3vr::LocationTracking(15,3,12);
-    bool available=fo3vr::PipboyAvailable(true,false,true,tracked,tracked,{});
+    fo3vr::PipboyTracking tracking;
+    bool available=tracking.Step(true,false,true,tracked,tracked,{},0);
     auto presented=Measure(available,{0,1.3f,-.4f},{0,0,1},{0,1.5f,0},{0,0,-1},
                            {0,1.3f,-.4f},{-.2f,1.4f,0},{0,.9f,-.4f},true);
     Activation physical;physical.Step(presented,0);physical.Step(presented,.151);
     assert(physical.Focus()); // low hand pivot does not veto a raised screen
-    presented.valid=fo3vr::PipboyAvailable(true,false,true,tracked,{true,false},tracked);
-    physical.Step(presented,.2);assert(!physical.Focus());
+    presented.valid=tracking.Step(true,false,true,tracked,{true,false},tracked,.2);
+    physical.Step(presented,.2);assert(physical.Focus());
+    presented.valid=tracking.Step(true,false,true,tracked,{true,false},{},.39);
+    physical.Step(presented,.39);assert(physical.Focus());
+    presented.valid=tracking.Step(true,false,true,tracked,{true,false},{},.41);
+    physical.Step(presented,.41);assert(!physical.Focus());
+  }
+  // Right stick/A/B -> production menu actions, rather than direct Invoke
+  // tests alone. Entering focus requires neutral; world A remains consumed.
+  {
+    fo3player::Catalog catalog;fo3player::Item item;item.formId=1;item.name="A";item.kind=fo3player::ItemKind::Weapon;
+    catalog.items[1]=item;item.formId=3;item.name="B";catalog.items[3]=item;
+    fo3player::Player player(std::move(catalog));player.Add(1,1);player.Add(3,1);Menu menu;menu.Refresh(player);
+    Input controls;double now=10;
+    auto invoke=[&](Action action){menu.Invoke(action,player);};
+    auto step=[&](float x,float y,bool a,bool b){now+=.02;controls.Step(true,x,y,a,b,now,invoke);};
+    auto neutral=[&](){step(0,0,false,false);};
+    neutral();assert(menu.tab==Tab::Stats);
+    step(1,0,false,false);assert(menu.tab==Tab::Items);neutral();
+    step(1,0,false,false);assert(menu.tab==Tab::Data);neutral();
+    step(-1,0,false,false);assert(menu.tab==Tab::Items);neutral();
+    step(0,-1,false,false);assert(menu.page==1);neutral();
+    step(0,1,false,false);assert(menu.page==0);neutral();
+    step(0,0,true,false);assert(menu.inPage);assert(!controls.WorldA(true));neutral();
+    step(0,0,true,false);assert(player.Snapshot().inventory[0].equipped);neutral();
+    step(0,0,true,false);assert(!player.Snapshot().inventory[0].equipped);neutral();
+    step(0,-1,false,false);assert(menu.selected==1);neutral();
+    step(0,0,true,false);assert(player.Snapshot().inventory[1].equipped);neutral();
+    step(0,1,false,false);assert(menu.selected==0);neutral();
+    step(0,0,false,true);assert(!menu.inPage);neutral();
+    step(-1,0,false,false);assert(menu.tab==Tab::Stats);neutral();
+    step(0,-1,false,false);assert(menu.page==1);neutral();
+    step(0,0,true,false);assert(menu.inPage);neutral();
+    step(0,-1,false,false);assert(menu.selected==1);neutral();
+    step(0,1,false,false);assert(menu.selected==0);neutral();
+    // Closing while A held cannot trigger world A; release restores it.
+    controls.Step(false,0,0,true,false,++now,invoke);assert(!controls.WorldA(true));
+    controls.Step(false,0,0,false,false,++now,invoke);assert(controls.WorldA(true));
   }
   // Ordinary oblique screen presentation has a broad entry region and a
   // wider stay region, with the existing temporal intentionality preserved.

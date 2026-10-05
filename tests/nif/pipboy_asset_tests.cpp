@@ -2,6 +2,7 @@
 #include "data/fo3-bsa-archive.h"
 #include "ui/interaction/fo3-font-layout.h"
 #include "ui/pipboy/fo3-pipboy-mesh.h"
+#include "ui/pipboy/fo3-pipboy-assets.h"
 #include <cassert>
 #include <fstream>
 #include <iostream>
@@ -81,7 +82,10 @@ int main(int argc, char **argv) {
           "menus\\main\\inventory_menu.xml", "menus\\main\\map_menu.xml",
           "menus\\prefabs\\card_info.xml",
           "menus\\prefabs\\list_box_template.xml"})
-      assert(misc.Read(path, bytes));
+      {assert(misc.Read(path, bytes));
+       if(std::string(path).find("prefabs")==std::string::npos)
+        assert(fo3pip::MenuAssetValid(path,std::string(bytes.begin(),bytes.end())));
+      }
     for (int i = 4; i < argc; ++i) {
       LoadFalloutMeshFile(argv[i], bytes, nullptr);
       fo3font::Metrics font;

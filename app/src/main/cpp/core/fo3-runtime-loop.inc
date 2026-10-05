@@ -1184,9 +1184,11 @@ private:
         XrActionsSyncInfo sync{XR_TYPE_ACTIONS_SYNC_INFO};
         sync.countActiveActionSets = 1;
         sync.activeActionSets = &active;
-        if (!CheckXr(xrSyncActions(session_, &sync), "xrSyncActions")) {ResetFo3Pipboy();activateDownQ1700_=false;return;}
-
         pipLeftGripTracked_=pipLeftAimTracked_=false;
+        if (!CheckXr(xrSyncActions(session_, &sync), "xrSyncActions")) {
+            for(int hand=0;hand<2;hand++)handPoseValid_[hand]=gripHandPoseValid_[hand]=false;
+            ResetFo3Pipboy();activateDownQ1700_=false;return;
+        }
         const float rawMoveX = ReadFloatAction(moveXAction_, handPaths_[0]);
         const float rawMoveY = ReadFloatAction(moveYAction_, handPaths_[0]);
         RadialMoveDeadzoneQ715(rawMoveX, rawMoveY, moveX_, moveY_);
@@ -1534,9 +1536,13 @@ private:
                 const auto headTracking=fo3vr::LocationTracking(viewState.viewStateFlags,
                     XR_VIEW_STATE_POSITION_VALID_BIT|XR_VIEW_STATE_ORIENTATION_VALID_BIT,
                     XR_VIEW_STATE_POSITION_TRACKED_BIT|XR_VIEW_STATE_ORIENTATION_TRACKED_BIT);
+                gVrHeadTracking=headTracking;
+                gVrLeftGripTracking={gripHandPoseValid_[0],pipLeftGripTracked_};
+                gVrLeftAimTracking={handPoseValid_[0],pipLeftAimTracked_};
                 UpdateFo3Pipboy(gStereoFrame,static_cast<double>(frameState.predictedDisplayTime)*1e-9,pipHead.m,
-                    fo3vr::PipboyAvailable(gSceneReady,IsFo3LoadingVisible(),sessionState_==XR_SESSION_STATE_FOCUSED,
-                        headTracking,{gripHandPoseValid_[0],pipLeftGripTracked_},{handPoseValid_[0],pipLeftAimTracked_}),
+                    gVrPipTracking.Step(gSceneReady,IsFo3LoadingVisible(),sessionState_==XR_SESSION_STATE_FOCUSED,
+                        headTracking,{gripHandPoseValid_[0],pipLeftGripTracked_},{handPoseValid_[0],pipLeftAimTracked_},
+                        static_cast<double>(frameState.predictedDisplayTime)*1e-9),
                     q210RightValid?turnX_:0,q210RightValid?lootScrollY_:0,
                     q210RightValid&&activateDownQ1700_,q210RightValid&&pipBackDown_);
                 if(Fo3PipboyFocus())snapTurnLatched_=std::fabs(turnX_)>=.30f;

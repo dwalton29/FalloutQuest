@@ -92,6 +92,65 @@ int main(){
  assert(Near(base.elbow,rolled.elbow)); // wrist roll never drives the elbow
  R relative=Multiply(rolled.foreTwist.rotation,Transpose(rolled.fore.rotation));
  assert(std::fabs(AxialRoll(relative,Unit(rolled.wrist-rolled.elbow),.6f)-.6f)<1e-3f);
+ // Pose quality is distinct from endpoint accuracy. A representative
+ // face target gives a ~90deg triangle at calibrated .62m wrist reach;
+ // the plane should lift/abduct rather than droop under that triangle.
+ for(bool left:{false,true}){
+  auto rig=Rig(left);float side=left?-1.f:1.f;
+  V wrist=rig.shoulder+V{-side*.12f,.12f,-.40f};ArmState fresh;
+  auto face=SolveArm(rig,wrist+rig.palm-rig.wrist,Identity(),fresh,.014f);Check(rig,face);
+  assert(face.error<2e-4f);
+  assert(face.elbow.y>face.shoulder.y-.05f);
+  assert(wrist.y-face.elbow.y<.15f);
+  assert(side*(face.elbow.x-face.shoulder.x)>.10f);
+  assert(face.flex>65*Pi/180&&face.flex<115*Pi/180);
+  std::cout<<"Raised side="<<left<<" elbowHeight="<<face.elbow.y-face.shoulder.y
+      <<" outward="<<side*(face.elbow.x-face.shoulder.x)<<" wristGap="<<wrist.y-face.elbow.y
+      <<" bend="<<face.flex*180/Pi<<"\n";
+  // Shoulder-height, above, cross-body and opposite-shoulder poses: each
+  // keeps the elbow raised while reaching, without assigning an exact point.
+  for(V offset:{V{-side*.05f,0,-.35f},V{-side*.08f,.25f,-.3f},V{-side*.35f,.07f,-.25f},V{-side*.38f,.03f,-.12f}}){
+   fresh={};auto p=SolveArm(rig,rig.shoulder+offset+rig.palm-rig.wrist,Identity(),fresh,.014f);Check(rig,p);
+   assert(p.error<2e-4f&&p.elbow.y>=p.shoulder.y-.08f);
+  }
+  // Same wrist location, whole pronation/supination sweep: no elbow shift.
+  V axis=Unit(face.wrist-face.elbow);
+  for(int i=-180;i<=180;i++){
+   R rot=Axis(axis,i*Pi/180);fresh={};
+   auto p=SolveArm(rig,wrist+Rotate(rot,rig.palm-rig.wrist),rot,fresh,.014f);
+   assert(Near(p.elbow,face.elbow));
+  }
+  // Fixed physical palm, rather than fixed wrist: rotating the authored
+  // palm offset moves the anatomical wrist, but must not yank the elbow.
+  fresh={};V fixedPalm=wrist+rig.palm-rig.wrist;
+  auto held=SolveArm(rig,fixedPalm,Identity(),fresh,.014f);
+  V previousRollElbow=held.elbow;
+  for(int n=0;n<=360;n++){
+   R rot=Axis(axis,n*Pi/180);
+   auto p=SolveArm(rig,fixedPalm,rot,fresh,1.f/72);
+   assert(p.error<2e-4f);
+   assert(Length(p.elbow-held.elbow)<.06f);
+   assert(Length(p.elbow-previousRollElbow)<.015f);previousRollElbow=p.elbow;
+  }
+  // Low -> forward -> face -> slightly across -> forward -> low at 72Hz.
+  V path[]={rig.shoulder+V{0,-.50f,0},rig.shoulder+V{0,-.1f,-.35f},wrist,
+            wrist+V{-side*.05f,.03f,.02f},rig.shoulder+V{0,-.1f,-.35f},rig.shoulder+V{0,-.50f,0}};
+  fresh={};V previous{};bool seen=false;
+  for(int segment=0;segment<5;segment++)for(int n=0;n<180;n++){
+   float t=float(n)/179;V w=path[segment]*(1-t)+path[segment+1]*t;
+   auto p=SolveArm(rig,w+rig.palm-rig.wrist,Identity(),fresh,1.f/72);Check(rig,p);
+   if(seen)assert(Length(p.elbow-previous)<.015f);
+   if(segment==0&&n==0)assert(p.elbow.y<p.shoulder.y-.2f);
+   previous=p.elbow;seen=true;
+  }
+  // Settled sweep isolates anatomical prior from deliberate continuity lag.
+  float last=-10;
+  for(int n=0;n<=100;n++){
+   V w=rig.shoulder+V{-side*.1f,-.25f+n*.005f,-.35f};fresh={};
+   auto p=SolveArm(rig,w+rig.palm-rig.wrist,Identity(),fresh,.014f);
+   assert(p.elbow.y>=last-.002f);last=p.elbow.y;
+  }
+ }
  // Small independent looks preserve shoulders. Sustained large turns follow
  // with identical results under independent/missing controller evidence.
  V head{0,1.6f,0},hands[2]={{-.2f,1.3f,-.3f},{.2f,1.3f,-.3f}};
@@ -146,21 +205,25 @@ int main(){
   Check(right,rp);Check(left,lp);assert(Near(Mirror(rp.elbow),lp.elbow));
   assert(rp.normalReach==measured&&rp.armScale==lp.armScale);
  }
- // Production tracking extraction and availability: valid is distinct from
- // tracked; a valid untracked grip must not silently select tracked aim.
+ // Runtime availability is now temporal and requires the canonical valid
+ // grip even when tracked aim supplies same-controller tracking evidence.
  constexpr uint64_t validity=3,tracking=12;
  auto yes=LocationTracking(15,validity,tracking),inferred=LocationTracking(3,validity,tracking);
- assert(yes.valid&&yes.tracked&&inferred.valid&&!inferred.tracked);
- assert(PipboyAvailable(true,false,true,yes,yes,{}));
- assert(!PipboyAvailable(true,false,true,yes,inferred,yes));
- assert(PipboyAvailable(true,false,true,yes,{},yes)); // aim fallback
- assert(!PipboyAvailable(true,false,true,yes,{},{}));
- assert(!PipboyAvailable(true,false,true,inferred,yes,yes));
- assert(!PipboyAvailable(true,false,true,{},yes,yes));
- assert(!PipboyAvailable(true,false,false,yes,yes,yes));
- assert(!PipboyAvailable(true,true,true,yes,yes,yes));
- // Right controller is absent from viewing policy, by design.
- for(bool rightTracked:{false,true}){(void)rightTracked;assert(PipboyAvailable(true,false,true,yes,yes,{}));}
+ PipboyTracking evidence;
+ assert(evidence.Step(true,false,true,yes,yes,{},0));
+ assert(evidence.source==TrackingSource::Grip);
+ assert(evidence.Step(true,false,true,yes,inferred,yes,.1));
+ assert(evidence.source==TrackingSource::AimEvidence);
+ assert(evidence.Step(true,false,true,yes,inferred,{},.299));
+ assert(evidence.source==TrackingSource::Grace);
+ assert(!evidence.Step(true,false,true,yes,inferred,{},.301));
+ assert(!evidence.Step(true,false,true,yes,inferred,{},.302));
+ assert(!evidence.Step(true,false,true,yes,{},yes,.303));
+ assert(evidence.Step(true,false,true,yes,yes,{},.4));
+ assert(!evidence.Step(true,false,true,inferred,yes,yes,.41));
+ assert(!evidence.Step(true,false,false,yes,yes,yes,.42));
+ assert(!evidence.Step(true,true,true,yes,yes,yes,.43));
+ assert(!evidence.Step(true,false,true,yes,inferred,{},.44));
  // Midpoint is symmetric, unit, and invariant to quaternion hemisphere.
  Q a{0,std::sin(.1f),0,std::cos(.1f)},b{0,-std::sin(.1f),0,std::cos(.1f)};
  auto centre=CentreOrientation(a,b),reverse=CentreOrientation(b,a);

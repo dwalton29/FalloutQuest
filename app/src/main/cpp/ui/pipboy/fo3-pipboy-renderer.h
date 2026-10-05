@@ -1,4 +1,5 @@
 #pragma once
+#include "ui/pipboy/fo3-pipboy-assets.h"
 #include "fo3-pipboy-state.h"
 #include "ui/interaction/fo3-hud-cached-state.h"
 #include "ui/interaction/fo3-interaction-hud-renderer.h"
@@ -64,9 +65,7 @@ inline bool MenuAssets() {
     if (!archive->Read(path, bytes))
       return false;
     std::string xml(bytes.begin(), bytes.end());
-    if (xml.find(path == std::string("menus\\globals.xml")
-                     ? "<_pipboy_width> 1024"
-                     : "&pipboy;") == std::string::npos)
+    if (!fo3pip::MenuAssetValid(path,xml))
       return false;
   }
   return true;

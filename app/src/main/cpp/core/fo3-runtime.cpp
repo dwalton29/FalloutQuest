@@ -726,7 +726,8 @@ Vec3 gPipShoulder{},gPipHand{};
 double gPipUpdateUs=0,gPipScreenDrawUs=0;
 uint64_t gPipScreenQueries=0;
 GLint gPipGain=-1;
-void ResetFo3Pipboy(){gPipActivation.Reset();gPipSolved=false;gPipMenu.dirty=true;}
+fo3vr::PipboyTracking gVrPipTracking;
+void ResetFo3Pipboy(){gVrPipTracking.Reset();gPipActivation.Reset();gPipSolved=false;gPipMenu.dirty=true;}
 bool Fo3PipboyFocus(){return gPipActivation.Focus();}
 float gQ210Head[4]{0.0f, 0.0f, 0.0f, 0.0f};
 float gQ210LeftHand[3]{0.0f, 0.0f, 0.0f};
@@ -746,6 +747,7 @@ bool gQ217ThumbTouched[2]{false, false};
 
 // One authored skeleton and one mutable VR pose history. No session arm growth.
 fo3anim::Skeleton gVrSkeleton;
+fo3vr::Tracking gVrHeadTracking,gVrLeftGripTracking,gVrLeftAimTracking;
 fo3vr::Delta gVrNeckPose;fo3vr::ArmPose gVrSolvedArms[2];
 Vec3 gVrEyeAnchor{},gVrNeckAnchor{};bool gVrEyeAnchorValid=false;
 fo3vr::ArmRig gVrArms[2];
@@ -9807,13 +9809,17 @@ void UpdateFo3Pipboy(uint64_t frame, double now, const float *headPose,
   gPipActivation.Step(view, now);
   if ((gQ211TrackingSerial % 180u) == 1u) {
     const auto eye=Q211TransformPoint(gQ210PlayerRoot,RuntimePoint(gVrNeckPose.Point(VrPoint(gVrEyeAnchor))));
-    Q6H_LOGI("VR BODY: HMD=(%.3f %.3f %.3f) posedEye=(%.3f %.3f %.3f) eyeError=%.5f torsoDeg=%.1f neckDeg=%.1f pipMount=%d pipAvailable=%d pipValid=%d distance=%.3f facingDeg=%.1f coneDeg=%.1f raised=%d phase=%d",
+    Q6H_LOGI("VR BODY: HMD=(%.3f %.3f %.3f) posedEye=(%.3f %.3f %.3f) eyeError=%.5f torsoDeg=%.1f neckDeg=%.1f pipMount=%d pipAvailable=%d pipValid=%d uiReady=%d sessionReady=%d distance=%.3f facingDeg=%.1f coneDeg=%.1f raised=%d phase=%d",
         gQ210Head[0],gQ210Head[1],gQ210Head[2],eye.x,eye.y,eye.z,
         fo3vr::Length(VrPoint(eye)-fo3vr::V{gQ210Head[0],gQ210Head[1],gQ210Head[2]}),
         gQ213TorsoYaw*57.29578f,fo3vr::Wrap(gQ210Head[3]-gQ213TorsoYaw)*57.29578f,
-        gPipSolved,available,view.valid,view.distance,
+        gPipSolved,available,view.valid,fo3pipui::State().ready,session!=nullptr,view.distance,
         std::acos(std::clamp(view.facing,-1.f,1.f))*57.29578f,
         std::acos(std::clamp(view.cone,-1.f,1.f))*57.29578f,view.raised,int(gPipActivation.phase));
+    Q6H_LOGI("VR BODY TRACKING: source=%d graceAgeMs=%.0f gripValid=%d gripTracked=%d aimValid=%d aimTracked=%d headValid=%d headTracked=%d",
+        int(gVrPipTracking.source),gVrPipTracking.graceAge*1000,
+        gVrLeftGripTracking.valid,gVrLeftGripTracking.tracked,gVrLeftAimTracking.valid,gVrLeftAimTracking.tracked,
+        gVrHeadTracking.valid,gVrHeadTracking.tracked);
     for(int i=0;i<2;i++){
         const auto& p=gVrSolvedArms[i];
         const auto shoulder=Q211TransformPoint(gQ210PlayerRoot,RuntimePoint(p.shoulder));
@@ -9821,6 +9827,11 @@ void UpdateFo3Pipboy(uint64_t frame, double now, const float *headPose,
         const auto palm=Q211TransformPoint(gQ210PlayerRoot,RuntimePoint(p.palm));
         const float* target=i==0?gQ210LeftHand:gQ210RightHand;
         const bool valid=i==0?gQ210LeftHandValid:gQ210RightHandValid;
+        Q6H_LOGI("VR BODY ELBOW: side=%d handRelative=(%.3f %.3f %.3f) elbowRelative=(%.3f %.3f %.3f) elbowBelowPalm=%.3f bendDeg=%.1f raisedWeight=%.3f preferred=(%.3f %.3f %.3f) pole=(%.3f %.3f %.3f)",
+            i,p.palm.x-p.shoulder.x,p.palm.y-p.shoulder.y,p.palm.z-p.shoulder.z,
+            p.elbow.x-p.shoulder.x,p.elbow.y-p.shoulder.y,p.elbow.z-p.shoulder.z,
+            p.palm.y-p.elbow.y,p.flex*57.29578f,p.raisedWeight,
+            p.preferredPole.x,p.preferredPole.y,p.preferredPole.z,p.pole.x,p.pole.y,p.pole.z);
         Q6H_LOGI("VR BODY ARM: side=%d valid=%d shoulder=(%.3f %.3f %.3f) target=(%.3f %.3f %.3f) palm=(%.3f %.3f %.3f) error=%.4f elbow=(%.3f %.3f %.3f) armScale=%.4f stretch=%.4f wristDistance=%.3f palmDistance=%.3f upper=%.3f fore=%.3f normalWristReach=%.3f normalPalmReach=%.3f clamped=%d rollDeg=%.1f",
             i,valid&&p.valid,shoulder.x,shoulder.y,shoulder.z,target[0],target[1],target[2],palm.x,palm.y,palm.z,p.error,
             elbow.x,elbow.y,elbow.z,p.armScale,p.stretch,p.targetDistance,

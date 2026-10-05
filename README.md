@@ -194,5 +194,6 @@ Users supply files from their own legitimate Fallout 3 installation.
 
 This project is not affiliated with or endorsed by Bethesda Softworks or Meta.
 
-Player body v161: [calibrated reach, posed-eye alignment and headset-feedback corrections](docs/VR-BODY-v161.md).
+Player body v162: [raised-arm planes, Pip-Boy runtime readiness and validation](docs/VR-BODY-v162.md).
+The [v161 calibration and eye-alignment notes](docs/VR-BODY-v161.md) describe the preserved head/reach architecture.
 The [v160 authored-rig audit](docs/VR-BODY-v160.md) records the original architectural rework.

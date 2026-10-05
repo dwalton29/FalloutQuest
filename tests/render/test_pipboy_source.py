@@ -23,9 +23,12 @@ class Pipboy(unittest.TestCase):
     def test_math_helpers_are_wired_to_xr(self):
         loop=(ROOT/'core/fo3-runtime-loop.inc').read_text()
         self.assertIn('pipLeftGripTracked_=gripTracking.tracked',loop)
-        self.assertIn('fo3vr::PipboyAvailable(',loop)
+        self.assertIn('gVrPipTracking.Step(',loop)
         self.assertIn('fo3vr::CentreOrientation(',loop)
         self.assertIn('MatrixFromPose(q210VirtualHead)',loop)
+        sync=loop.split('void SyncInput(',1)[1].split('void UpdatePlayer(',1)[0]
+        self.assertLess(sync.index('pipLeftGripTracked_=pipLeftAimTracked_=false'),sync.index('xrSyncActions('))
+        self.assertIn('handPoseValid_[hand]=gripHandPoseValid_[hand]=false',sync)
     def test_bsa_prefixed_pipboy_path_is_classified(self):
         core=(ROOT/'core/fo3-runtime.cpp').read_text()
         self.assertIn('const bool pipboy=Q210EndsWithInsensitive(',core)

@@ -2,6 +2,7 @@
 #include "player/fo3-vr-body.h"
 #include "ui/pipboy/fo3-pipboy-mesh.h"
 #include "ui/pipboy/fo3-pipboy-state.h"
+#include "player/fo3-vr-tracking.h"
 #include <cassert>
 #include <fstream>
 #include <iostream>
@@ -77,19 +78,44 @@ int main(int argc,char**argv){
    V bindNormal{bind[0]*n.x+bind[4]*n.y+bind[8]*n.z,
                 bind[1]*n.x+bind[5]*n.y+bind[9]*n.z,
                 bind[2]*n.x+bind[6]*n.y+bind[10]*n.z};
-   int presentations=0;float bestFacing=-1;
-   // Original screen presented in a natural raised left-wrist workspace.
-   // Sweep controller roll, rather than invent a device normal or forearm.
-   for(int degree=-180;degree<=180;degree+=5){
-    R rotation=Multiply(Axis({0,0,1},degree*Pi/180),mapping);ArmState fresh;
-    auto pose=SolveArm(rig,{-.12f,anchor.y-.18f,anchor.z-.30f},rotation,fresh,.014f);
-    auto device=RigidMount(pose.foreTwist,bindCentre);V c=device.Point(bindCentre),normal=Rotate(device.rotation,bindNormal);
-    auto view=fo3pip::Measure(true,{c.x,c.y,c.z},{normal.x,normal.y,normal.z},{anchor.x,anchor.y,anchor.z},{0,0,-1},
-        {c.x,c.y,c.z},{pose.shoulder.x,pose.shoulder.y,pose.shoulder.z},{pose.palm.x,pose.palm.y,pose.palm.z},pose.valid);
-    bestFacing=std::max(bestFacing,view.facing);if(fo3pip::Enter(view))++presentations;
+   // Several adjacent natural wrist-viewing locations, using original mesh
+   // grip basis, screen normal, bind and canonical ForeTwist. Pronation is
+   // swept about the solved forearm axis, not an arbitrary world wrist axis.
+   int minimumWindow=360;
+   for(V target:{V{-.12f,anchor.y-.10f,anchor.z-.35f},V{-.08f,anchor.y-.07f,anchor.z-.32f},V{-.16f,anchor.y-.13f,anchor.z-.38f}}){
+    ArmState initial;auto base=SolveArm(rig,target,mapping,initial,.014f);
+    V axis=Unit(base.wrist-base.elbow);
+    int run=0,best=0,bestStart=0,currentStart=0;fo3pip::View representative;
+    // Two revolutions account for windows crossing the +/-180 seam.
+    for(int degree=-180;degree<=540;degree++){
+     R rotation=Multiply(Axis(axis,degree*Pi/180),mapping);ArmState fresh;
+     auto pose=SolveArm(rig,target,rotation,fresh,.014f);
+     assert(pose.valid&&pose.error<2e-4f);
+     assert(pose.elbow.y>pose.shoulder.y-.05f);
+     auto device=RigidMount(pose.foreTwist,bindCentre);V c=device.Point(bindCentre),normal=Rotate(device.rotation,bindNormal);
+     auto view=fo3pip::Measure(true,{c.x,c.y,c.z},{normal.x,normal.y,normal.z},{anchor.x,anchor.y,anchor.z},{0,0,-1},
+         {c.x,c.y,c.z},{pose.shoulder.x,pose.shoulder.y,pose.shoulder.z},{pose.palm.x,pose.palm.y,pose.palm.z},pose.valid);
+     if(fo3pip::Enter(view)){
+      if(run==0)currentStart=degree;
+      ++run;if(run>best){best=run;bestStart=currentStart;representative=view;}
+     }else run=0;
+    }
+    int window=best-1;minimumWindow=std::min(minimumWindow,window);
+    std::cout<<"Original PipBoyArm target="<<target.x<<","<<target.y<<","<<target.z
+       <<" continuousWindowDeg="<<window<<" interval="<<bestStart<<".."<<bestStart+window<<"\n";
+    assert(window>=60); // at least +/-30deg tolerance, no isolated magic angle
+    fo3vr::PipboyTracking tracking;fo3vr::Tracking tracked{true,true},validOnly{true,false};
+    fo3pip::Activation activation;
+    for(int n=0;n<14;n++){
+     double now=n/72.;representative.valid=tracking.Step(true,false,true,tracked,validOnly,tracked,now);
+     activation.Step(representative,now);
+     if(n==1)assert(activation.phase==fo3pip::Phase::Candidate);
+    }
+    assert(activation.Focus()); // no right controller; original physical screen
+    auto lowered=representative;lowered.raised=lowered.keepRaised=false;
+    activation.Step(lowered,.3);assert(!activation.Focus());
    }
-   std::cout<<"Original PipBoyArm raised-pose entry samples="<<presentations<<" bestFacing="<<bestFacing<<"\n";
-   assert(presentations>=3); // broad presentation, not one exact orientation
+   assert(minimumWindow>=60);
   }
   std::cout<<"Original "<<prefix<<" upper="<<Length(rig.elbow-rig.shoulder)<<" fore="<<Length(rig.wrist-rig.elbow)<<" palmOffset="<<Length(rig.palm-rig.wrist)<<" passed\n";
  }
