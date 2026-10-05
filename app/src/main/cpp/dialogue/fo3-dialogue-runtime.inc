@@ -79,7 +79,18 @@ void UpdateFo3Dialogue(double now,float stick,bool a,bool b,bool focused) {
   if(gDialogue.Active()) {
     auto* actor=DialogueActor(gDialogue.actor);
     std::array<float,3> head{};
-    const bool resident=actor&&Q230LiveBone(*actor,actor->headBone,head);
+    // Actor residency is a scene-lifetime fact. A temporarily unavailable head
+    // bone/pose is not an unload signal: newly uploaded or culled actors can
+    // legitimately miss one live-bone sample while their stable root remains.
+    const bool resident=actor&&!actor->rigs.empty();
+    const bool liveHead=resident&&Q230LiveBone(*actor,actor->headBone,head);
+    if(resident&&!liveHead){
+      std::array<float,3> lo{},hi{};
+      if(Q230LiveBounds(*actor,lo,hi))
+        head={(lo[0]+hi[0])*.5f,lo[1]+(hi[1]-lo[1])*.82f,(lo[2]+hi[2])*.5f};
+      else
+        head={actor->runtime.position[0],actor->runtime.position[1]+1.55f,actor->runtime.position[2]};
+    }
     const float distance=resident?std::sqrt((head[0]-gQ210Head[0])*(head[0]-gQ210Head[0])+(head[2]-gQ210Head[2])*(head[2]-gQ210Head[2])):INFINITY;
     if(Fo3PipboyFocus())EndFo3Dialogue("Pip-Boy takes focus");
     else if(!focused||fo3npc::Interrupted(IsFo3LoadingVisible(),resident,actor&&gPlayerSession&&gPlayerSession->player.ActorHealth(gDialogue.actor)>0,
