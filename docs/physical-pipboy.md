@@ -1,4 +1,4 @@
-# Physical Pip-Boy foundation — Quest 157
+# Physical Pip-Boy foundation — Quest 159
 
 The original device is a rigid `PipBoy3000\PipBoyArm.NIF`, not a skinned mesh. Its attachment metadata names `Bip01 L ForeTwist`. All device shapes share `gPipWorld`: `gQ210PlayerRoot × solved rigid forearm/wrist-roll delta × authored Skeleton.NIF ForeTwist bind`. The canonical skeleton decoder supplies the bind matrix; coordinate conversion includes 70 game units/metre and the existing -1.55 m mesh floor offset. Display-centre placement inherits existing axial arm retargeting; the device itself is not stretched. Wrist flex is excluded; roll comes from the existing solved forearm and hand deltas. No separate controller attachment or altered arm targets.
 
@@ -21,12 +21,13 @@ Initial thresholds require headset tuning; these are not claimed as physically v
 
 | Signal | Enter | Remain active |
 |---|---|---|
-| Screen distance | 0.18–0.65 m | 0.12–0.80 m |
-| Screen normal toward head | within 40° | within 55° |
-| Head forward view cone | within 35° | within 50° |
+| Screen distance | 0.16–0.72 m | 0.12–0.85 m |
+| Screen normal toward head | within 50° | within 65° |
+| Head forward view cone | within 45° | within 60° |
 | Screen height vs authored shoulder | above shoulder −0.25 m | above shoulder −0.35 m |
 | Solved hand height vs shoulder | above shoulder −0.30 m | above shoulder −0.40 m |
-| Screen rear coordinate in torso root | less than 0.12 m | less than 0.18 m |
+
+Quest 159 arm-rig pass removes the synthetic 2.5 cm hand offset, uses a gravity/authored fallback elbow plane instead of a fixed diagonal pole, drives Fallout's authored ForeTwist bones with signed controller forearm roll, and mounts the Pip-Boy from that same solved ForeTwist transform. Torso-root rear-coordinate gating was removed because the actual head-facing and view-cone tests already establish that the display is in front of the user.
 
 Dormant → Candidate → Active after 150 ms continuously valid enter pose. Exceeding wider exit limits releases focus immediately and dims the screen. Invalid tracked left/HMD poses, invalid right hand, application focus loss, hidden/invalid XR frames, loading and body reinitialization close focus. Tracking resumes through a fresh debounce. Viewing state is not saved.
 
