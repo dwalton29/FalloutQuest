@@ -687,6 +687,7 @@ struct Q230RigPart {
     QActorSkin skin;
     std::vector<int> bones;
     std::vector<std::array<float,3>> hitVertices;
+    std::vector<uint8_t> hitRegions;
     std::vector<std::pair<std::array<float,3>,std::array<float,3>>> interactionBounds;
     fo3anim::Matrix placement{}, inversePlacement{}, scenePlacement{}, inverseScenePlacement{};
     int rigidBone = -1;
@@ -698,6 +699,15 @@ struct Q240NavigationGraph {
     std::unordered_map<uint32_t,size_t> byForm;
     std::vector<size_t> triangleOffsets;
     size_t triangleCount=0u;
+};
+struct Q230CombatWeapon {
+    fo3weapon::Definition definition;
+    fo3anim::Skeleton model;
+    std::vector<int> modelBlocks;
+    std::array<fo3anim::Clip,4> clips; // aim, attack, reload, recoil
+    std::vector<size_t> gpu;
+    std::array<float,3> muzzle{};
+    bool ready=false;
 };
 struct Q230ActorVisual {
     Fo3NpcActorQ230 source;
@@ -722,6 +732,9 @@ struct Q230ActorVisual {
     size_t aiPathIndex=0u;
     uint32_t aiPackage=0u,aiSequence=0u;
     double aiLastUpdate=-1.0,aiRepathAt=0.0;
+    std::unordered_map<uint32_t,Q230CombatWeapon> combatWeapons;
+    bool stateRestored=false;
+    uint64_t animationSerial=0;
     GpuObject renderBounds;
     bool renderBoundsReady=false, renderVisible=true;
     std::unordered_map<std::string,Fo3RgbaTexture> generatedTextures;
@@ -734,7 +747,9 @@ void Q230PrepareActors(uint32_t cell, uint32_t worldspace,
     std::vector<Q230ActorVisual>& out, const std::atomic<bool>& cancel);
 bool Fo3DialogueFocus();
 void EndFo3Dialogue(const char* reason);
+void Q230UpdateActor(Q230ActorVisual&);
 void Q230CacheDialogueAnimations(Q230ActorVisual&,const fo3pipdata::Definitions*);
+void Q230CacheCombat(Q230ActorVisual&,const fo3player::Catalog*);
 bool Q230LiveBounds(Q230ActorVisual& actor,std::array<float,3>& lo,std::array<float,3>& hi);
 bool Q230UploadActorPart(Q230ActorVisual& actor, CpuObject& part,
     float centerX, float centerY, float floorZ);
@@ -3115,6 +3130,9 @@ bool BeginFo3SceneLoad(const Fo3CellTransitionRequestQ74& request, bool boot) {
         const auto* actorDefinitions=result.playerSession?&result.playerSession->player.Definitions().pipboy:
             (gPlayerSession?&gPlayerSession->player.Definitions().pipboy:nullptr);
         for(auto& actor:result.actors)Q230CacheDialogueAnimations(actor,actorDefinitions);
+        const auto* actorCatalog=result.playerSession?&result.playerSession->player.Definitions():
+            (gPlayerSession?&gPlayerSession->player.Definitions():nullptr);
+        for(auto& actor:result.actors)Q230CacheCombat(actor,actorCatalog);
         result.cpuUs = Fo3SceneElapsedUs(phase);
         if (result.selected.size() < 2u) return false;
         phase = std::chrono::steady_clock::now();
@@ -10951,7 +10969,9 @@ void QActorPrepareStereoFrame() {
     if(ready) Q211UpdatePlayerRig();
     const double npcNow=std::chrono::duration<double>(fqopaque::Clock::now().time_since_epoch()).count();
     for(auto& actor:gQ230NpcActors) {
+        Q230SimulateActor(actor,npcNow);
         Q240UpdateNpcPackage(actor,npcNow);
+        Q230PersistActor(actor);
         GpuObject bounds=actor.renderBounds;
         if(actor.renderBoundsReady&&!actor.rigs.empty()) {
             const auto& origin=actor.rigs[0].scenePlacement;

@@ -5,6 +5,9 @@
 
 namespace fo3player {
 namespace {
+float Damage(const fo3weapon::Definition& d,const fo3weapon::Definitions& r,float skill,float condition) {
+  return d.damage*(r.skillBase+r.skillMult*std::clamp(skill,0.f,100.f)/100)*(r.conditionBase+r.conditionMult*condition);
+}
 Stack *Find(State &state, uint64_t id) {
   for (auto &s : state.inventory)
     if (s.id == id) return &s;
@@ -205,9 +208,10 @@ float Player::WeaponDamage(uint64_t id) const {
   const auto*s=Weapon(id);if(!s)return 0;
   const auto&d=catalog_.items.at(s->formId).weapon;const auto&r=catalog_.weapons;
   const float skill=d.skill>=32&&d.skill<=45?std::min<float>(100,state_.skills[d.skill-32]):0;
-  return d.damage*(r.skillBase+r.skillMult*skill/100)*(r.conditionBase+r.conditionMult*s->condition);
+  return Damage(d,r,skill,s->condition);
 }
 float Player::ActorHealth(uint32_t reference) const {
+  if(reference==0x14)return Health();
   const auto target=catalog_.pipboy.targets.find(reference);
   if(target==catalog_.pipboy.targets.end())return -1;
   auto actor=catalog_.weapons.actors.find(target->second.base);if(actor==catalog_.weapons.actors.end())return -1;
@@ -230,15 +234,106 @@ bool Player::WeaponHit(uint64_t instance,uint32_t target,float fraction) {
   return ApplyWeaponHit(s->formId,target,WeaponDamage(instance)*fraction);
 }
 bool Player::ApplyWeaponHit(uint32_t base,uint32_t target,float damage) {
-  const auto weapon=catalog_.items.find(base);const float health=ActorHealth(target);
-  if(weapon==catalog_.items.end()||!weapon->second.weapon.Firearm()||health<=0||!std::isfinite(damage)||damage<=0)return false;
-  const auto t=catalog_.pipboy.targets.find(target);
+  return ApplyAttack(0x14,base,target,damage);
+}
+bool Player::Essential(uint32_t reference) const {
+  const auto t=catalog_.pipboy.targets.find(reference);if(t==catalog_.pipboy.targets.end())return false;
+  // Essential belongs to the actor's Traits category, not inherited Stats.
   auto a=catalog_.weapons.actors.find(t->second.base);
-  if(a==catalog_.weapons.actors.end())return false;
-  for(int depth=0;(a->second.templates&2)&&depth<16;++depth){a=catalog_.weapons.actors.find(a->second.templateId);if(a==catalog_.weapons.actors.end())return false;}
+  for(int depth=0;a!=catalog_.weapons.actors.end()&&(a->second.templates&1)&&depth<16;++depth)
+    a=catalog_.weapons.actors.find(a->second.templateId);
+  return a!=catalog_.weapons.actors.end()&&!(a->second.templates&1)&&(a->second.flags&2);
+}
+float Player::DamageResistance(uint32_t target) const {
+  const auto* contents=target==0x14?&state_.inventory:ContainerContents(target);
+  if(!contents)return 0;
+  float dr=0;uint32_t mask=0;
+  for(const auto& s:*contents){const auto& i=catalog_.items.at(s.formId);
+    if(i.kind!=ItemKind::Armour||(target==0x14&&!s.equipped)||(mask&i.bipedMask))continue;
+    const auto found=catalog_.weapons.armourDR.find(s.formId);
+    if(found!=catalog_.weapons.armourDR.end()){mask|=i.bipedMask;dr+=found->second;}
+  }
+  // Condition/skill/effects modifying armour rating are not yet supported.
+  return std::clamp(dr,0.f,catalog_.weapons.drMax);
+}
+bool Player::ApplyAttack(uint32_t attacker,uint32_t base,uint32_t target,float damage) {
+  const auto weapon=catalog_.items.find(base);const float health=ActorHealth(target);
+  if(attacker==target||weapon==catalog_.items.end()||!weapon->second.weapon.valid||health<=0||!std::isfinite(damage)||damage<=0)return false;
+  if(attacker!=0x14&&ActorHealth(attacker)<0)return false;
+  damage*=1-DamageResistance(target)/100;
   // Essential actors retain health until unconscious behaviour is supported.
-  const float applied=std::min(damage,std::max(0.f,health-((a->second.flags&2)?1.f:0.f)));
+  const float applied=std::min(damage,std::max(0.f,health-(Essential(target)?1.f:0.f)));
   if(applied<=0)return false;
-  state_.actorDamage[target]+=applied;++revision_;return true;
+  if(target==0x14)return DamageHealth(applied);
+  state_.actorDamage[target]+=applied;
+  SetActorHostile(target,attacker);++revision_;return true;
+}
+bool Player::UpdateActor(uint32_t reference,const ActorState& a) {
+  const auto t=catalog_.pipboy.targets.find(reference);
+  if(t==catalog_.pipboy.targets.end()||!catalog_.weapons.actors.count(t->second.base)||
+     (!a.cell&&!a.world)||!std::isfinite(a.yaw)||
+     !std::all_of(a.position.begin(),a.position.end(),[](float v){return std::isfinite(v);})||
+     (a.package&&!catalog_.pipboy.packages.count(a.package))||
+     (a.hostile&&a.hostile!=0x14&&!catalog_.pipboy.targets.count(a.hostile)))return false;
+  const auto old=state_.actors.find(reference);
+  if(old!=state_.actors.end()){const auto& o=old->second;
+    if(o.cell==a.cell&&o.world==a.world&&o.position==a.position&&o.yaw==a.yaw&&o.package==a.package&&o.sequence==a.sequence&&o.hostile==a.hostile&&o.equippedWeapon==a.equippedWeapon)return true;
+  }else if(state_.actors.size()>=10000)return false;
+  state_.actors[reference]=a;++revision_;return true;
+}
+bool Player::SetActorHostile(uint32_t reference,uint32_t target) {
+  const auto t=catalog_.pipboy.targets.find(reference);if(t==catalog_.pipboy.targets.end())return false;
+  ActorState a;const auto old=state_.actors.find(reference);
+  if(old!=state_.actors.end())a=old->second;
+  else {a.cell=t->second.cell;a.world=t->second.world;a.position={t->second.x,t->second.y,t->second.z};}
+  a.hostile=target;return UpdateActor(reference,a);
+}
+const Stack* Player::ActorWeapon(uint32_t reference) const {
+  const auto* c=ContainerContents(reference);if(!c)return nullptr;
+  for(const auto& s:*c)if(s.equipped&&catalog_.items.at(s.formId).kind==ItemKind::Weapon)return &s;
+  return nullptr;
+}
+bool Player::EquipActorWeapon(uint32_t reference,uint64_t instance) {
+  if(ActorHealth(reference)<=0)return false;
+  auto c=state_.containers.find(reference);if(c==state_.containers.end())return false;
+  auto s=std::find_if(c->second.begin(),c->second.end(),[&](const Stack& v){return v.id==instance;});
+  if(s==c->second.end()||catalog_.items.at(s->formId).kind!=ItemKind::Weapon||s->condition<=0)return false;
+  for(auto& v:c->second)if(catalog_.items.at(v.formId).kind==ItemKind::Weapon)v.equipped=v.id==instance;
+  ActorState a;const auto old=state_.actors.find(reference);
+  if(old!=state_.actors.end())a=old->second;else{const auto& t=catalog_.pipboy.targets.at(reference);a.cell=t.cell;a.world=t.world;a.position={t.x,t.y,t.z};}
+  a.equippedWeapon=instance;UpdateActor(reference,a);++revision_;return true;
+}
+float Player::ActorWeaponDamage(uint32_t reference) const {
+  const auto* s=ActorWeapon(reference);const auto t=catalog_.pipboy.targets.find(reference);
+  if(!s||t==catalog_.pipboy.targets.end())return 0;
+  auto a=catalog_.weapons.actors.find(t->second.base);
+  for(int depth=0;a!=catalog_.weapons.actors.end()&&(a->second.templates&2)&&depth<16;++depth)a=catalog_.weapons.actors.find(a->second.templateId);
+  if(a==catalog_.weapons.actors.end()||(a->second.templates&2))return 0;
+  const auto& d=catalog_.items.at(s->formId).weapon;const auto& r=catalog_.weapons;
+  const float skill=d.skill>=32&&d.skill<=45?std::min<float>(100,a->second.skills[d.skill-32]):0;
+  return Damage(d,r,skill,s->condition);
+}
+bool Player::ReloadActorWeapon(uint32_t reference,uint64_t instance) {
+  const auto* w=ActorWeapon(reference);if(!w||w->id!=instance||ActorHealth(reference)<=0)return false;
+  const auto& d=catalog_.items.at(w->formId).weapon;if(!d.Firearm()||w->loadedRounds>=d.clip)return false;
+  auto& contents=state_.containers.at(reference);int reserve=0;
+  for(const auto& s:contents)if(s.formId==d.ammo)reserve+=std::min(s.count,10000);
+  // WEAP DNAM Flags2 bit 1 explicitly opts NPCs into finite ammunition.
+  // Otherwise at least one compatible round authorizes an engine magazine;
+  // those virtual rounds never become lootable inventory ammunition.
+  const bool finite=(d.flags2&2)!=0;
+  int remaining=finite?std::min<int>(d.clip-w->loadedRounds,reserve):(reserve?d.clip-w->loadedRounds:0);
+  const int loaded=remaining;if(!loaded)return false;
+  if(finite)for(auto& s:contents)if(s.formId==d.ammo){int used=std::min(remaining,s.count);s.count-=used;remaining-=used;}
+  for(auto& s:contents)if(s.id==instance){s.loadedRounds+=loaded;s.needsAction=false;}
+  contents.erase(std::remove_if(contents.begin(),contents.end(),[](const Stack&s){return s.count==0;}),contents.end());
+  ++revision_;return true;
+}
+bool Player::FireActorWeapon(uint32_t reference,uint64_t instance) {
+  const auto* w=ActorWeapon(reference);if(!w||w->id!=instance||w->condition<=0||w->needsAction||ActorHealth(reference)<=0)return false;
+  const auto& d=catalog_.items.at(w->formId).weapon;
+  if(!d.Firearm()||w->loadedRounds<d.ammoUse)return false;
+  for(auto& s:state_.containers.at(reference))if(s.id==instance){s.loadedRounds-=d.ammoUse;++revision_;return true;}
+  return false;
 }
 }

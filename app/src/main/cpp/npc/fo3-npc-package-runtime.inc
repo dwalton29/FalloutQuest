@@ -219,10 +219,10 @@ static const fo3pipdata::PackageDefinition* Q240SelectPackage(
   for(uint32_t packageId:actorDef->second.packages) {
     const auto found=definitions.packages.find(packageId);if(found==definitions.packages.end())continue;
     const auto& package=found->second;
-    if(package.type!=5&&package.type!=6&&package.type!=12){Q240AiLogOnce(actor.source.refFormId,packageId,"package type "+std::to_string(package.type));continue;}
+    if(package.type!=1&&package.type!=6&&package.type!=9&&package.type!=5&&package.type!=12){Q240AiLogOnce(actor.source.refFormId,packageId,"package type "+std::to_string(package.type));continue;}
     if(package.scripted){Q240AiLogOnce(actor.source.refFormId,packageId,"package script");continue;}
     if(!Q240ScheduleActive(package.schedule,hour))continue;
-    if(!package.location.valid){Q240AiLogOnce(actor.source.refFormId,packageId,"missing PLDT");continue;}
+    if(!package.location.valid&&package.type!=1){Q240AiLogOnce(actor.source.refFormId,packageId,"missing PLDT");continue;}
     fo3dialogue::Context ctx;ctx.player=&gPlayerSession->player;
     const auto game=Q240GamePosition(actor);
     ctx.speaker={actor.source.refFormId,actor.source.baseFormId,gCurrentCellFormId,gExteriorWorldspaceQ1890,
@@ -236,7 +236,17 @@ static const fo3pipdata::PackageDefinition* Q240SelectPackage(
       if(!error.empty())Q240AiLogOnce(actor.source.refFormId,packageId,error);
       continue;
     }
-    if(package.location.type==0u) {
+    if(package.type==1) {
+      if(!package.target.valid||package.target.type!=0){Q240AiLogOnce(actor.source.refFormId,packageId,"Follow target resolver unsupported");continue;}
+      const auto target=definitions.targets.find(package.target.value);
+      if(target==definitions.targets.end()&&package.target.value!=0x14)continue;
+      if(package.target.value==0x14)anchor={ctx.target.x,ctx.target.y,ctx.target.z};
+      else {
+        if(target->second.world!=gExteriorWorldspaceQ1890||(!gExteriorWorldspaceQ1890&&target->second.cell!=gCurrentCellFormId))continue;
+        const auto live=gPlayerSession->player.Snapshot().actors.find(package.target.value);
+        anchor=live==gPlayerSession->player.Snapshot().actors.end()?std::array<float,3>{target->second.x,target->second.y,target->second.z}:live->second.position;
+      }
+    } else if(package.location.type==0u) {
       const auto target=definitions.targets.find(package.location.value);
       if(target==definitions.targets.end()){Q240AiLogOnce(actor.source.refFormId,packageId,"location reference unavailable");continue;}
       if(target->second.world!=gExteriorWorldspaceQ1890||
@@ -309,47 +319,7 @@ static bool Q240BuildPackagePath(Q230ActorVisual& actor,const fo3pipdata::Packag
   }
   return success;
 }
-static void Q240AdvanceNpcPackage(Q230ActorVisual& actor,double now) {
-  if(!gPlayerSession||actor.rigs.empty()||!actor.navigationGraph||actor.navigationGraph->triangleCount==0||actor.runtime.dialogue||
-     actor.runtime.activity==fo3npc::Activity::Combat||
-     gPlayerSession->player.ActorHealth(actor.source.refFormId)<=0)return;
-  float dt=0;if(actor.aiLastUpdate>=0)dt=std::clamp(float(now-actor.aiLastUpdate),0.f,.10f);
-  actor.aiLastUpdate=now;
-  uint32_t packageId=0;std::array<float,3> anchor{};float radius=0;
-  const auto* package=Q240SelectPackage(actor,packageId,anchor,radius);
-  if(!package) {
-    actor.aiPackage=actor.runtime.package=0;actor.runtime.packageKnown=false;
-    actor.runtime.activity=fo3npc::Activity::Idle;actor.runtime.speed=0;
-    actor.runtime.animation=fo3npc::Animation::Idle;actor.aiPathGame.clear();return;
-  }
-  if(packageId!=actor.aiPackage) {
-    actor.aiPackage=packageId;actor.aiAnchorGame=anchor;actor.aiSequence=0;actor.aiPathGame.clear();actor.aiPathIndex=0;actor.aiRepathAt=0;
-    Q6H_LOGI("NPC PACKAGE actor=%08X package=%08X EDID=%s type=%u locationType=%u radius=%d hour=%.2f",
-      actor.source.refFormId,packageId,package->editor.c_str(),unsigned(package->type),
-      package->location.type,package->location.radius,GetFo3TimeOfDayHour());
-  }
-  if(package->location.type==2u)anchor=actor.aiAnchorGame;
-  actor.runtime.package=packageId;actor.runtime.packageKnown=true;actor.runtime.activity=fo3npc::Activity::Package;
-  if(actor.aiPathIndex>=actor.aiPathGame.size()) {
-    actor.runtime.speed=0;actor.runtime.animation=fo3npc::Animation::Idle;
-    // Travel builds one authored route when the package becomes active, then
-    // remains at the destination for the rest of that package. Wander/Sandbox
-    // keep selecting new NAVM destinations after their short pause.
-    if(package->type==6&&actor.aiSequence>0)return;
-    if(now<actor.aiRepathAt)return;
-    if(!Q240BuildPackagePath(actor,*package,anchor,radius)){
-      Q240AiLogOnce(actor.source.refFormId,packageId,
-        "path build failed on authored NAVM graph meshes="+std::to_string(actor.navigationGraph->meshes.size())+
-        " triangles="+std::to_string(actor.navigationGraph->triangleCount));
-      actor.aiRepathAt=now+2;return;
-    }
-    if(package->type==6)actor.aiSequence=1;
-    if(actor.aiSequence<=2u||(actor.aiSequence%8u)==0u)
-      Q6H_LOGI("NPC PATH actor=%08X package=%08X type=%u waypoints=%zu graphMeshes=%zu graphTriangles=%zu sequence=%u",
-        actor.source.refFormId,packageId,unsigned(package->type),actor.aiPathGame.size(),
-        actor.navigationGraph->meshes.size(),actor.navigationGraph->triangleCount,actor.aiSequence);
-    actor.aiRepathAt=now+1;
-  }
+static void Q240AdvancePath(Q230ActorVisual& actor,float dt,double now) {
   if(dt<=0||actor.aiPathIndex>=actor.aiPathGame.size())return;
   const auto targetScene=Q240ScenePosition(actor.aiPathGame[actor.aiPathIndex]);
   actor.runtime.destination=targetScene;
@@ -375,6 +345,13 @@ static void Q240AdvanceNpcPackage(Q230ActorVisual& actor,double now) {
   // remain authored data.
   constexpr float WALK_METRES_PER_SECOND=1.05f;
   const float step=std::min(distance,WALK_METRES_PER_SECOND*dt),fraction=step/std::max(distance,.001f);
+#ifdef FO3_NPC_PATH_BLOCKED
+  const float length=std::sqrt(dx*dx+dy*dy+dz*dz);
+  if(length>0&&FO3_NPC_PATH_BLOCKED(actor,dx/length,dy/length,dz/length,length*fraction)){
+    actor.runtime.speed=0;actor.runtime.animation=fo3npc::Animation::Idle;
+    Q240AiLogOnce(actor.source.refFormId,actor.aiPackage,"route blocked by resident collision; NPC door activation unavailable");return;
+  }
+#endif
   actor.runtime.position[0]+=dx*fraction;actor.runtime.position[2]+=dz*fraction;
   actor.runtime.position[1]+=dy*fraction;
   if(actor.aiPathIndex<actor.aiPathSurfaces.size()) {
@@ -383,6 +360,51 @@ static void Q240AdvanceNpcPackage(Q230ActorVisual& actor,double now) {
   }
   actor.runtime.speed=WALK_METRES_PER_SECOND;
   actor.runtime.animation=fo3npc::Animation::Walk;
+}
+static void Q240AdvanceNpcPackage(Q230ActorVisual& actor,double now) {
+  if(!gPlayerSession||actor.rigs.empty()||!actor.navigationGraph||actor.navigationGraph->triangleCount==0||actor.runtime.dialogue||
+     actor.runtime.activity==fo3npc::Activity::Combat||
+     gPlayerSession->player.ActorHealth(actor.source.refFormId)<=0)return;
+  float dt=0;if(actor.aiLastUpdate>=0)dt=std::clamp(float(now-actor.aiLastUpdate),0.f,.10f);
+  actor.aiLastUpdate=now;
+  uint32_t packageId=0;std::array<float,3> anchor{};float radius=0;
+  const auto* package=Q240SelectPackage(actor,packageId,anchor,radius);
+  if(!package) {
+    actor.aiPackage=actor.runtime.package=0;actor.runtime.packageKnown=false;
+    actor.runtime.activity=fo3npc::Activity::Idle;actor.runtime.speed=0;
+    actor.runtime.animation=fo3npc::Animation::Idle;actor.aiPathGame.clear();return;
+  }
+  if(packageId!=actor.aiPackage) {
+    actor.aiPackage=packageId;actor.aiAnchorGame=anchor;actor.aiSequence=0;actor.aiPathGame.clear();actor.aiPathIndex=0;actor.aiRepathAt=0;
+    Q6H_LOGI("NPC PACKAGE actor=%08X package=%08X EDID=%s type=%u locationType=%u radius=%d hour=%.2f",
+      actor.source.refFormId,packageId,package->editor.c_str(),unsigned(package->type),
+      package->location.type,package->location.radius,GetFo3TimeOfDayHour());
+  }
+  if(package->location.type==2u&&package->type!=1)anchor=actor.aiAnchorGame;
+  if(package->type==1&&Q240PlanarDistance(Q240GamePosition(actor),anchor)<=std::max(0,package->target.radius)){actor.runtime.speed=0;actor.runtime.animation=fo3npc::Animation::Idle;actor.aiPathGame.clear();return;}
+  if(package->type==1&&Q240PlanarDistance(actor.aiAnchorGame,anchor)>16.f&&now>=actor.aiRepathAt){actor.aiPathGame.clear();actor.aiPathIndex=0;actor.aiAnchorGame=anchor;}
+  actor.runtime.package=packageId;actor.runtime.packageKnown=true;actor.runtime.activity=fo3npc::Activity::Package;
+  if(actor.aiPathIndex>=actor.aiPathGame.size()) {
+    actor.runtime.speed=0;actor.runtime.animation=fo3npc::Animation::Idle;
+    // Travel builds one authored route when the package becomes active, then
+    // remains at the destination for the rest of that package. Wander/Sandbox
+    // keep selecting new NAVM destinations after their short pause.
+    if((package->type==6||package->type==9)&&actor.aiSequence>0)return;
+    if(now<actor.aiRepathAt)return;
+    if(!Q240BuildPackagePath(actor,*package,anchor,radius)){
+      Q240AiLogOnce(actor.source.refFormId,packageId,
+        "path build failed on authored NAVM graph meshes="+std::to_string(actor.navigationGraph->meshes.size())+
+        " triangles="+std::to_string(actor.navigationGraph->triangleCount));
+      actor.aiRepathAt=now+2;return;
+    }
+    if(package->type==6||package->type==9)actor.aiSequence=1;
+    if(actor.aiSequence<=2u||(actor.aiSequence%8u)==0u)
+      Q6H_LOGI("NPC PATH actor=%08X package=%08X type=%u waypoints=%zu graphMeshes=%zu graphTriangles=%zu sequence=%u",
+        actor.source.refFormId,packageId,unsigned(package->type),actor.aiPathGame.size(),
+        actor.navigationGraph->meshes.size(),actor.navigationGraph->triangleCount,actor.aiSequence);
+    actor.aiRepathAt=now+1;
+  }
+  Q240AdvancePath(actor,dt,now);
 }
 void Q240UpdateNpcPackage(Q230ActorVisual& actor,double now) {
   const auto position=actor.runtime.position;

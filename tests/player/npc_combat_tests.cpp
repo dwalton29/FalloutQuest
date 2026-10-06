@@ -1,0 +1,84 @@
+#include "npc/fo3-npc-combat.h"
+#include "weapons/fo3-weapon-hit.h"
+#include <cassert>
+#include <iostream>
+#include <fstream>
+#include <unistd.h>
+#include <zlib.h>
+using namespace fo3player;
+static Catalog Fixture(bool finite=true) {
+  Catalog c;c.initial.baseHealth=100;c.weapons.skillBase=1;c.weapons.conditionBase=1;
+  Item w;w.formId=10;w.kind=ItemKind::Weapon;w.name="Authored weapon";w.maxCondition=100;
+  auto& d=w.weapon;d.valid=true;d.animation=3;d.ammo=11;d.clip=3;d.ammoUse=1;d.pellets=1;d.damage=20;d.shotsPerSecond=4;d.flags2=finite?2:0;
+  c.items[10]=w;Item ammo;ammo.formId=11;ammo.kind=ItemKind::Ammo;ammo.name="Ammo";c.items[11]=ammo;
+  Item armour;armour.formId=12;armour.kind=ItemKind::Armour;armour.bipedMask=4;c.items[12]=armour;c.weapons.armourDR[12]=50;
+  for(uint32_t ref:{100,101}){c.references[ref].base=ref+100;c.pipboy.targets[ref].base=ref+100;c.pipboy.targets[ref].cell=1;
+    c.weapons.actors[ref+100].health=100;
+    auto& inventory=c.actorInventories[ref+100];inventory.entries={{10,0,1,1,1,false},{11,0,4,1,1,false},{12,0,1,1,1,false}};
+    auto& actor=c.pipboy.dialogueActors[ref+100];actor.aiData.resize(20);actor.aiData[0]=1;actor.aiData[1]=3;actor.aiData[14]=1;actor.factions[500+ref]=0;
+  }
+  c.pipboy.packages[77].type=6;c.weapons.relations[600][601]=1;return c;
+}
+static void StateAndPerception() {
+  using namespace fo3npc;RuntimeState s;s.activity=Activity::Package;s.package=77;s.position={1,2,3};s.speed=2;
+  s.BeginDialogue();assert(s.activity==Activity::Dialogue&&s.speed==0);s.BeginCombat(101);
+  assert(s.activity==Activity::Combat&&!s.CanTalk()&&!s.dialogue&&s.suspendedPackage==77);
+  s.EndCombat();assert(s.activity==Activity::Package&&s.package==77&&s.position[0]==1);
+  s.BeginCombat(101);s.Die(2);assert(s.activity==Activity::Dying&&!s.Alive()&&!s.CanTalk()&&s.combatTarget==0);
+  s.BeginDialogue();assert(!s.dialogue);s.BeginCombat(100);assert(s.activity==Activity::Dying);
+  assert(fo3weapon::BoneRegion("Bip01 Head")==fo3weapon::Region::Head&&fo3weapon::BoneRegion("Bip01 L Forearm")==fo3weapon::Region::LeftArm&&fo3weapon::BoneRegion("Bip01 R Calf")==fo3weapon::Region::RightLeg&&fo3weapon::BoneRegion("CreatureLeg")==fo3weapon::Region::Unknown);
+  auto c=Fixture();auto ai=AI(c.pipboy,200);assert(ai.valid&&ai.aggression==1&&ai.confidence==3);
+  assert(Relationship(c,200,201)==Reaction::Enemy&&Acquires(ai,Reaction::Enemy)&&!Acquires(ai,Reaction::Ally)&&!Acquires(ai,Reaction::Neutral));
+  ai.aggression=2;assert(Acquires(ai,Reaction::Neutral)&&!Acquires(ai,Reaction::Friend));
+  ai.aggression=0;assert(!Acquires(ai,Reaction::Enemy));assert(Assists(ai,Reaction::Ally)&&!Assists(ai,Reaction::Neutral));
+  c.pipboy.dialogueActors[200].aiData.resize(19);assert(!AI(c.pipboy,200).valid);
+  s={};s.BeginCombat(101);auto d=c.items.at(10).weapon;
+  assert(FireReady(s,d,1)&&!FireReady(s,d,1.1)&&FireReady(s,d,1.25));s.reloadUntil=5;assert(!FireReady(s,d,8));s.reloadUntil=0;
+  assert(FireReady(s,d,9)&&!FireReady(s,d,9));
+}
+static void InventoryDamagePersistence(bool finite) {
+  auto c=Fixture(finite);Player p(c);assert(p.PrepareActorInventory(100)&&p.PrepareActorInventory(101));
+  const auto id=p.ContainerContents(100)->at(0).id;assert(!p.FireActorWeapon(100,id));assert(p.EquipActorWeapon(100,id));
+  assert(p.ReloadActorWeapon(100,id)&&p.ActorWeapon(100)->loadedRounds==3);
+  assert(p.ContainerContents(100)->at(1).count==(finite?1:4));
+  for(int i=0;i<3;++i)assert(p.FireActorWeapon(100,id));assert(!p.FireActorWeapon(100,id));
+  assert(p.ReloadActorWeapon(100,id)&&p.ActorWeapon(100)->loadedRounds==(finite?1:3));
+  assert(p.DamageResistance(101)==50&&p.ApplyAttack(100,10,101,20)&&p.ActorHealth(101)==90);
+  assert(p.Snapshot().actors.at(101).hostile==100);
+  const float before=p.Health();assert(p.ApplyAttack(100,10,0x14,20)&&p.Health()==before-20);
+  assert(!p.ApplyAttack(100,10,100,20)&&!p.ApplyAttack(100,10,101,NAN));
+  c.weapons.actors[201].flags=2;Player essential(c);assert(essential.PrepareActorInventory(101));
+  assert(essential.ApplyAttack(0x14,10,101,10000)&&essential.ActorHealth(101)==1&&!essential.CanLootContainer(101));
+  ActorState a=p.Snapshot().actors.at(100);a.position={123,456,789};a.yaw=.7f;a.package=77;a.sequence=4;
+  assert(p.UpdateActor(100,a));a.position[1]=NAN;assert(!p.UpdateActor(100,a));
+  const std::string path="/tmp/fq-npc-combat-"+std::to_string(getpid());std::string error;assert(p.Save(path,error));
+  Player restored(c);assert(restored.Restore(path,error));assert(restored.ActorWeapon(100)->id==id&&restored.Snapshot().actors.at(100).position[0]==123&&restored.ActorHealth(101)==90);
+  assert(p.ApplyAttack(0x14,10,100,10000)&&p.ActorHealth(100)==0&&p.PrepareContainer(100));
+  if(!finite)assert(p.ContainerContents(100)->at(0).loadedRounds==0);
+  assert(p.TakeContainerStack(100,id)&&p.Weapon(id)&&!p.Weapon(id)->equipped);
+  assert(p.Save(path,error));Player corpse(c);assert(corpse.Restore(path,error));assert(corpse.ActorHealth(100)==0&&corpse.Weapon(id)&&!corpse.ActorWeapon(100));
+  {
+    std::ifstream f(path,std::ios::binary);std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(f)),{});f.close();
+    auto put=[&](size_t at,uint32_t n){for(int i=0;i<4;++i)bytes[at+i]=(n>>(8*i))&255;};
+    put(bytes.size()-24,0x7fc00000);put(16,crc32(0,bytes.data()+20,bytes.size()-20));
+    std::ofstream out(path,std::ios::binary);out.write((const char*)bytes.data(),bytes.size());out.close();
+    assert(!corpse.Restore(path,error)&&corpse.ActorHealth(100)==0&&corpse.Weapon(id));
+  }
+  // v6 has no actor extension: preserve older damage/inventory, rebuild routes.
+  Player empty(c);assert(empty.Save(path,error));std::ifstream f(path,std::ios::binary);std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(f)),{});f.close();bytes.resize(bytes.size()-4);
+  auto put=[&](size_t at,uint32_t n){for(int i=0;i<4;++i)bytes[at+i]=(n>>(8*i))&255;};put(4,6);put(12,bytes.size()-20);put(16,crc32(0,bytes.data()+20,bytes.size()-20));
+  std::ofstream out(path,std::ios::binary);out.write((const char*)bytes.data(),bytes.size());out.close();assert(corpse.Restore(path,error)&&corpse.Snapshot().actors.empty());
+  unlink(path.c_str());
+}
+static void Original(const char* path) {
+  Catalog c;std::string error;assert(LoadCatalog(path,c,error));assert(c.weapons.styles.size()==48&&c.weapons.detectionDistance==2500&&c.weapons.drMax==85);
+  size_t count=0;for(const auto& r:c.references){if(count==5)break;if(!c.actorInventories.count(r.second.base))continue;
+    Player p(c);if(!p.PrepareActorInventory(r.first))continue;
+    const auto* contents=p.ContainerContents(r.first);uint64_t id=0;uint32_t form=0;
+    for(const auto& s:*contents){const auto& d=c.items.at(s.formId).weapon;if(d.Firearm()&&d.animation<8){id=s.id;form=s.formId;break;}}
+    if(!id||!p.EquipActorWeapon(r.first,id)||!p.ReloadActorWeapon(r.first,id))continue;
+    assert(p.ActorWeapon(r.first)->loadedRounds<=c.items.at(form).weapon.clip&&p.FireActorWeapon(r.first,id));
+    assert(fo3npc::AI(c.pipboy,r.second.base).valid);std::cout<<"Original NPC "<<std::hex<<r.first<<" base="<<r.second.base<<" weapon="<<form<<std::dec<<"\n";++count;
+  }assert(count==5);
+}
+int main(int argc,char** argv){StateAndPerception();InventoryDamagePersistence(true);InventoryDamagePersistence(false);if(argc>1)Original(argv[1]);std::cout<<"NPC combat state tests passed\n";}

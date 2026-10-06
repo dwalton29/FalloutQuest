@@ -324,6 +324,16 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
         return fail("Malformed ESM subrecord");
       fo3pipdata::Decode(next.pipboy,type,form,flags,payload,groupCells.empty()?0:groupCells.back(),groupWorlds.empty()?0:groupWorlds.back(),groupTopics.empty()?0:groupTopics.back());
       fo3weapon::Decode(next.weapons,type,form,payload);
+      if(type=="NPC_") {
+        Container inventory;inventory.name=Text(subs,"FULL");
+        inventory.valid=DecodeLoot(subs,false,inventory.entries);
+        next.actorInventories[form]=std::move(inventory);
+      }
+      if(type=="ACHR") {
+        Reference ref;ref.flags=flags;ref.cell=groupCells.empty()?0:groupCells.back();
+        const auto* base=Find(subs,"NAME");if(base&&base->size==4)ref.base=fo3esm::ReadU32(base->data);
+        ref.valid=ref.base!=0;next.references[form]=ref;
+      }
       // Keep the v1 catalog identity stable so existing player saves migrate.
       if (lootRecord) {
         next.lootFingerprint =
@@ -809,7 +819,15 @@ bool Player::Save(const std::string &path, std::string &error) const {
   for(const auto&e:state_.actorDamage)damaged.push_back(e.first);
   std::sort(damaged.begin(),damaged.end());
   for(auto id:damaged){Put32(payload,id);PutFloat(payload,state_.actorDamage.at(id));}
-  Put32(bytes, 6);
+  Put32(payload,static_cast<uint32_t>(state_.actors.size()));
+  std::vector<uint32_t> actorIds;for(const auto& e:state_.actors)actorIds.push_back(e.first);
+  std::sort(actorIds.begin(),actorIds.end());
+  for(auto id:actorIds){const auto& a=state_.actors.at(id);Put32(payload,id);
+    for(auto v:{a.cell,a.world,a.package,a.sequence,a.hostile})Put32(payload,v);
+    for(float v:a.position)PutFloat(payload,v);
+    PutFloat(payload,a.yaw);Put64(payload,a.equippedWeapon);
+  }
+  Put32(bytes, 7);
   Put32(bytes, catalog_.fingerprint);
   Put32(bytes, static_cast<uint32_t>(payload.size()));
   Put32(bytes, Crc(payload));
@@ -868,7 +886,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
   const auto *h = bytes.data();
   const auto version = fo3esm::ReadU32(h + 4);
   if (std::memcmp(h, "FQPS", 4) ||
-      (version < 1 || version > 6))
+      (version < 1 || version > 7))
     return fail("Unsupported player save format");
   if (fo3esm::ReadU32(h + 8) != catalog_.fingerprint)
     return fail("Player save belongs to different game definitions");
@@ -881,6 +899,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
   State next = catalog_.initial;
   next.worldWeapons.clear();
   next.actorDamage.clear();
+  next.actors.clear();
   next.developmentWeaponGranted = false;
   next.healthDamage = fo3esm::ReadF32(p);
   next.apSpent = fo3esm::ReadF32(p + 4);
@@ -954,7 +973,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
       at += 8;
       const auto found = catalog_.references.find(ref);
       if (found == catalog_.references.end() ||
-          !catalog_.containers.count(found->second.base) ||
+          (!catalog_.containers.count(found->second.base)&&!catalog_.actorInventories.count(found->second.base)) ||
           next.containers.count(ref) || size > 10000 ||
           (totalStacks += size) > 30000 || payload.size() - at < 20ull * size)
         return fail("Invalid saved container");
@@ -1047,12 +1066,36 @@ bool Player::Restore(const std::string &path, std::string &error) {
       if(version>=6){
         if(payload.size()-at<4)return fail("Missing actor damage extension");
         const auto n=fo3esm::ReadU32(p+at);at+=4;
-        if(n>100000||payload.size()-at!=8ull*n)return fail("Invalid actor damage count");
+        if(n>100000||payload.size()-at<8ull*n)return fail("Invalid actor damage count");
         for(uint32_t i=0;i<n;++i,at+=8){
           const auto id=fo3esm::ReadU32(p+at);const auto damage=fo3esm::ReadF32(p+at+4);
           const auto actor=catalog_.pipboy.targets.find(id);
           if(actor==catalog_.pipboy.targets.end()||!catalog_.weapons.actors.count(actor->second.base)||
              !std::isfinite(damage)||damage<0||!next.actorDamage.emplace(id,damage).second)return fail("Invalid actor damage");
+        }
+      }
+      if(version>=7){
+        if(payload.size()-at<4)return fail("Missing actor state count");
+        const auto n=fo3esm::ReadU32(p+at);at+=4;
+        if(n>10000||payload.size()-at!=48ull*n)return fail("Invalid actor state count");
+        for(uint32_t i=0;i<n;++i,at+=48){
+          const auto id=fo3esm::ReadU32(p+at);ActorState a;
+          a.cell=fo3esm::ReadU32(p+at+4);a.world=fo3esm::ReadU32(p+at+8);
+          a.package=fo3esm::ReadU32(p+at+12);a.sequence=fo3esm::ReadU32(p+at+16);a.hostile=fo3esm::ReadU32(p+at+20);
+          for(size_t j=0;j<3;++j)a.position[j]=fo3esm::ReadF32(p+at+24+j*4);
+          a.yaw=fo3esm::ReadF32(p+at+36);a.equippedWeapon=U64(p+at+40);
+          if(a.equippedWeapon){
+            auto contents=next.containers.find(id);bool found=false;
+            if(contents!=next.containers.end())for(auto& s:contents->second)if(s.id==a.equippedWeapon&&catalog_.items.at(s.formId).kind==ItemKind::Weapon){s.equipped=true;found=true;}
+            if(!found)return fail("Invalid actor equipped weapon");
+          }
+          const auto ref=catalog_.pipboy.targets.find(id);
+          if(ref==catalog_.pipboy.targets.end()||!catalog_.weapons.actors.count(ref->second.base)||
+             (!a.cell&&!a.world)||!std::isfinite(a.yaw)||
+             !std::all_of(a.position.begin(),a.position.end(),[](float v){return std::isfinite(v);})||
+             (a.package&&!catalog_.pipboy.packages.count(a.package))||
+             (a.hostile&&a.hostile!=0x14&&!catalog_.pipboy.targets.count(a.hostile))||
+             !next.actors.emplace(id,a).second)return fail("Invalid actor state");
         }
       }
       if(at!=payload.size())return fail("Trailing weapon save data");

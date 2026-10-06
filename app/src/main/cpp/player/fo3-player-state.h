@@ -104,6 +104,14 @@ struct LootList {
   bool valid = true;
   std::vector<LootEntry> entries;
 };
+// Scene-independent game coordinates. Nonresident actors freeze here rather
+// than moving through unavailable geometry. No tracking/render pointers.
+struct ActorState {
+  uint32_t cell=0,world=0,package=0,sequence=0,hostile=0;
+  std::array<float,3> position{};
+  float yaw=0;
+  uint64_t equippedWeapon=0;
+};
 struct State {
   fo3pipdata::SessionState pipboy;
   std::array<uint8_t, 7> special{};
@@ -118,6 +126,7 @@ struct State {
   std::vector<WorldWeapon> worldWeapons;
   bool developmentWeaponGranted = false;
   std::unordered_map<uint32_t,float> actorDamage;
+  std::unordered_map<uint32_t,ActorState> actors;
 };
 struct Catalog {
   fo3weapon::Definitions weapons;
@@ -128,6 +137,7 @@ struct Catalog {
   std::unordered_set<uint32_t> defaultActivationDoors; // verified script passthroughs
   std::unordered_map<std::string, std::string> strings;
   std::unordered_map<uint32_t, Container> containers;
+  std::unordered_map<uint32_t, Container> actorInventories;
   std::unordered_map<uint32_t, LootList> lootLists;
   std::unordered_map<uint32_t, float> globals;
   int32_t lootLevelDifference = 0;
@@ -191,6 +201,17 @@ public:
   float ActorHealth(uint32_t reference) const;
   bool WeaponHit(uint64_t instance,uint32_t target,float fraction=1);
   bool ApplyWeaponHit(uint32_t base,uint32_t target,float damage);
+  bool ApplyAttack(uint32_t attacker,uint32_t weapon,uint32_t target,float damage);
+  bool Essential(uint32_t reference) const;
+  bool PrepareActorInventory(uint32_t reference);
+  bool EquipActorWeapon(uint32_t reference,uint64_t instance);
+  bool FireActorWeapon(uint32_t reference,uint64_t instance);
+  bool ReloadActorWeapon(uint32_t reference,uint64_t instance);
+  const Stack* ActorWeapon(uint32_t reference) const;
+  float ActorWeaponDamage(uint32_t reference) const;
+  float DamageResistance(uint32_t reference) const;
+  bool UpdateActor(uint32_t reference,const ActorState& state);
+  bool SetActorHostile(uint32_t reference,uint32_t target);
   bool CanPickup(uint32_t reference) const;
   bool Pickup(uint32_t reference);
   bool CanOpenDoor(uint32_t reference) const;
@@ -212,6 +233,7 @@ public:
   bool Restore(const std::string &path, std::string &error);
 
 private:
+  bool PrepareInventory(uint32_t reference,bool actor);
   bool MigrateWeaponInstances(State &state) const;
   Catalog catalog_;
   State state_;

@@ -9,6 +9,7 @@
 #include "../..//app/src/main/cpp/pipboy/fo3-pipboy-data.h"
 #define Q6H_LOGI(...) ((void)0)
 #include "fo3-npc-appearance.h"
+#include "../../app/src/main/cpp/weapons/fo3-weapon-hit.h"
 #include "fo3-texture-bsa.h"
 #include <algorithm>
 #include <atomic>
@@ -47,6 +48,7 @@ struct Q230RigPart {
   QActorSkin skin;
   std::vector<int> bones;
   std::vector<std::array<float,3>> hitVertices;
+  std::vector<uint8_t> hitRegions;
   std::vector<std::pair<std::array<float,3>,std::array<float,3>>> interactionBounds;
   fo3anim::Matrix placement{}, inversePlacement{}, scenePlacement{}, inverseScenePlacement{};
   int rigidBone = -1;

@@ -83,11 +83,14 @@ bool QueryFo3Interaction(float ox, float oy, float oz, float dx, float dy,
         }
     }
     for(auto& actor:gQ230NpcActors) {
-        if(player.ActorHealth(actor.source.refFormId)<=0||actor.source.fullName.empty())continue;
+        if(actor.source.fullName.empty())continue;
+        const bool corpse=player.ActorHealth(actor.source.refFormId)==0&&player.CanLootContainer(actor.source.refFormId);
+        if(player.ActorHealth(actor.source.refFormId)<=0&&!corpse)continue;
         std::array<float,3> lo,hi;float distance=0;
-        if(Q230LiveBounds(actor,lo,hi)&&fo3interaction::Box({ox,oy,oz},{dx,dy,dz},lo,hi,fo3npc::DialoguePolicy::TalkRange,distance)&&distance<best&&DialogueCanStart(actor)) {
-            best=distance;target={};target.reference=actor.source.refFormId;target.talk=true;target.allowed=true;
-            std::snprintf(target.prompt.data(),target.prompt.size(),"Talk %s",actor.source.fullName.c_str());
+        if(Q230LiveBounds(actor,lo,hi)&&fo3interaction::Box({ox,oy,oz},{dx,dy,dz},lo,hi,fo3npc::DialoguePolicy::TalkRange,distance)&&distance<best&&(corpse||DialogueCanStart(actor))) {
+            best=distance;target={};target.reference=actor.source.refFormId;target.talk=!corpse;target.container=corpse;target.allowed=true;
+            target.anchor={ox+dx*distance,oy+dy*distance+.22f,oz+dz*distance};
+            std::snprintf(target.prompt.data(),target.prompt.size(),corpse?"%s":"Talk %s",actor.source.fullName.c_str());
         }
     }
     if (!target.reference || HasFo3InteractionOccluder(ox,oy,oz,dx,dy,dz,best,target.reference)) {
@@ -95,6 +98,7 @@ bool QueryFo3Interaction(float ox, float oy, float oz, float dx, float dy,
     }
     target.distance=best;
     if(target.talk)return true;
+    if (target.container&&catalog.pipboy.targets.count(target.reference)&&catalog.actorInventories.count(catalog.pipboy.targets.at(target.reference).base))return true;
     if (target.container) {
         const auto& ref=catalog.references.at(target.reference);
         const auto& container=catalog.containers.at(ref.base);
@@ -150,7 +154,8 @@ void UpdateFo3LootSelection(const Fo3InteractionTarget& target,float stickY,doub
     const auto& catalog=player.Definitions();
     if (gLootPanel.reference!=target.reference || gLootPanelRevision!=player.Revision()) {
         gLootPanel.rows.clear();
-        gLootPanel.title=catalog.containers.at(catalog.references.at(target.reference).base).name;
+        const auto base=catalog.references.at(target.reference).base;
+        gLootPanel.title=catalog.actorInventories.count(base)?catalog.actorInventories.at(base).name:catalog.containers.at(base).name;
         for (const auto& stack:*player.ContainerContents(target.reference)) {
             const auto& item=catalog.items.at(stack.formId);
             if (!item.name.empty()) gLootPanel.rows.push_back({stack.id,item.name,stack.count,
@@ -180,6 +185,7 @@ bool ActivateFo3Interaction(float ox,float oy,float oz,float dx,float dy,float d
         for (const auto& stack:*gPlayerSession->player.ContainerContents(target.reference))
             if (stack.id==row.stack) {base=stack.formId;count=stack.count;}
         if (row.allowed && gPlayerSession->player.TakeContainerStack(target.reference,row.stack)) {
+            if(gPlayerSession->player.ActorHealth(target.reference)==0)Q6H_LOGI("NPC LOOT actor=%08X item=%08X count=%d",target.reference,base,count);
             NotifyFo3ItemTransfer(base,count);
             UpdateFo3LootSelection(target,NAN,0);
         }

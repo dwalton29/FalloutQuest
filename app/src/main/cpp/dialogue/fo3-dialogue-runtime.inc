@@ -37,7 +37,7 @@ void DialogueDiagnostic(const std::string& message) {
   Q6H_LOGI("%s",message.c_str());
 }
 bool DialogueCanStart(Q230ActorVisual& actor) {
-  if(!gPlayerSession||gPlayerSession->saveBlocked||gPlayerSession->player.ActorHealth(actor.source.refFormId)<=0)return false;
+  if(!gPlayerSession||gPlayerSession->saveBlocked||!actor.runtime.CanTalk()||gPlayerSession->player.ActorHealth(actor.source.refFormId)<=0)return false;
   auto& cached=gDialogueEligibility[actor.source.refFormId];
   const auto revision=gPlayerSession->player.Revision();
   if(cached.revision!=revision||cached.until<gDialogueTime) {

@@ -9,7 +9,7 @@ enum class Family { Unarmed, Melee, Pistol, EnergyPistol, Rifle, EnergyRifle, He
 struct Definition {
   uint32_t animation=0,ammo=0,projectile=0,firstPerson=0,flags2=0,skill=0;
   uint32_t fire3D=0,fire2D=0,dry=0,equip=0,unequip=0,criticalEffect=0;
-  uint8_t flags=0,grip=255,reload=255,ammoUse=0,pellets=0,clip=0;
+  uint8_t flags=0,grip=255,reload=255,attackAnimation=255,ammoUse=0,pellets=0,clip=0;
   uint16_t damage=0,criticalDamage=0;
   float animationMult=1,attackMult=1,minSpread=0,spread=0,minRange=0,maxRange=0;
   float rate=0,shotsPerSecond=0,reloadTime=0,delayMin=0,delayMax=0;
@@ -33,13 +33,26 @@ struct Projectile {
   bool Hitscan() const {return flags&1;}
 };
 struct Definitions {
-  struct Actor {uint32_t flags=0,templateId=0;uint16_t templates=0,level=1,minLevel=1,maxLevel=0;int32_t health=0;uint8_t endurance=0;};
+  struct Actor {
+    uint32_t flags=0,templateId=0;uint16_t templates=0,level=1,minLevel=1,maxLevel=0;
+    int32_t health=0;uint8_t endurance=0;
+    std::array<uint8_t,14> skills{};
+  };
+  // FO3 CSSD, not the shorter/different FNV combat-style layout.
+  struct CombatStyle {
+    float waitMin=0,waitMax=0,fireMin=0,fireMax=0,rangeMin=0,rangeMax=0,radius=0,delayMin=0,delayMax=0;
+    uint32_t restrictions=0;uint16_t flags=0;bool valid=false;
+  };
   std::unordered_map<uint32_t,Actor> actors;
+  std::unordered_map<uint32_t,CombatStyle> styles;
+  std::unordered_map<uint32_t,std::unordered_map<uint32_t,int32_t>> relations;
+  std::unordered_map<uint32_t,float> armourDR;
   std::unordered_map<uint32_t,Projectile> projectiles;
   std::unordered_map<uint32_t,std::string> models;
   float damageGun=0,damageEnergy=0,damageLauncher=0;
   float skillBase=0,skillMult=0,conditionBase=0,conditionMult=0;
   float npcHealthLevel=0,npcHealthEndurance=0;
+  float detectionDistance=0,drMax=85;
 };
 struct WorldPose {
   uint32_t cell=0,world=0;

@@ -6,6 +6,10 @@
 
 namespace fo3player {
 bool Player::CanLootContainer(uint32_t id) const {
+  if(id!=0x14&&catalog_.pipboy.targets.count(id)&&
+     catalog_.weapons.actors.count(catalog_.pipboy.targets.at(id).base))
+    return ActorHealth(id)==0&&!Essential(id)&&catalog_.references.count(id)&&
+      catalog_.actorInventories.count(catalog_.references.at(id).base);
   const auto r = catalog_.references.find(id);
   if (r == catalog_.references.end())
     return false;
@@ -22,6 +26,24 @@ const std::vector<Stack> *Player::ContainerContents(uint32_t id) const {
 bool Player::PrepareContainer(uint32_t id) {
   if (!CanLootContainer(id))
     return false;
+  const bool actor=catalog_.actorInventories.count(catalog_.references.at(id).base)!=0;
+  if(!PrepareInventory(id,actor))return false;
+  if(actor){
+    auto saved=state_.actors.find(id);if(saved!=state_.actors.end())saved->second.equippedWeapon=0;
+  }
+  if(actor)for(auto& s:state_.containers.at(id)) {
+    const auto& d=catalog_.items.at(s.formId).weapon;
+    if(d.Firearm()&&!(d.flags2&2)&&s.loadedRounds){s.loadedRounds=0;++revision_;}
+    if(s.equipped){s.equipped=false;++revision_;}
+  }
+  return true;
+}
+bool Player::PrepareActorInventory(uint32_t id) {
+  const auto ref=catalog_.references.find(id);
+  if(ref==catalog_.references.end()||!catalog_.actorInventories.count(ref->second.base))return false;
+  return PrepareInventory(id,true);
+}
+bool Player::PrepareInventory(uint32_t id,bool actor) {
   if (state_.containers.count(id))
     return true;
   if (state_.containers.size() >= 10000)
@@ -126,7 +148,17 @@ bool Player::PrepareContainer(uint32_t id) {
     path.erase(form);
     return ok;
   };
-  const auto &c = catalog_.containers.at(catalog_.references.at(id).base);
+  uint32_t base=catalog_.references.at(id).base;
+  if(actor) {
+    for(int depth=0;depth<16;++depth){const auto a=catalog_.weapons.actors.find(base);
+      if(a==catalog_.weapons.actors.end())return false;
+      if(!(a->second.templates&0x100))break;
+      base=a->second.templateId;if(depth==15)return false;
+    }
+  }
+  const auto found=(actor?catalog_.actorInventories:catalog_.containers).find(base);
+  if(found==(actor?catalog_.actorInventories:catalog_.containers).end()||!found->second.valid)return false;
+  const auto &c=found->second;
   for (const auto &e : c.entries)
     if (!expand(e.form, e.count, e.condition, e.owner, 0))
       return false;
@@ -157,7 +189,9 @@ bool Player::TakeContainerStack(uint32_t id, uint64_t stack) {
   if (catalog_.items.at(s->formId).kind == ItemKind::Weapon) {
     if (state_.inventory.size() >= 10000 || s->count != 1)
       return false;
+    auto actor=state_.actors.find(id);if(actor!=state_.actors.end()&&actor->second.equippedWeapon==stack)actor->second.equippedWeapon=0;
     state_.inventory.push_back(*s);
+    state_.inventory.back().equipped=false;
     contents.erase(s);
     ++revision_;
     return true;

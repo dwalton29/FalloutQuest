@@ -288,7 +288,7 @@ static bool DecodeClips(const std::vector<uint8_t> &bytes, std::vector<fo3anim::
   out.clear();
   NifHeader h;
   if (!ActorHeader(bytes, h) || h.userVersion != 11 ||
-      (h.bsVersion != 34 && (h.bsVersion < 24 || h.bsVersion > 28)))
+      (h.bsVersion < 24 || h.bsVersion > 34))
     return false;
   for (uint32_t block = 0; block < h.numBlocks; ++block) {
     if (BlockType(h, block) != "NiControllerSequence")

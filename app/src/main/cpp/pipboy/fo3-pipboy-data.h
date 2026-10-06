@@ -122,7 +122,7 @@ struct PackageDefinition {
   uint32_t flags=0;
   uint8_t type=0xff;
   uint16_t behaviorFlags=0,typeFlags=0;
-  PackageLocation location,location2;
+  PackageLocation location,location2,target,target2;
   PackageSchedule schedule;
   std::vector<Condition> conditions;
   bool scripted=false;

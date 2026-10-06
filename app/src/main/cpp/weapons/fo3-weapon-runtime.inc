@@ -153,15 +153,15 @@ void Zones(){
   back=fo3weapon::Back(VrPoint(Q211TransformPoint(gQ210PlayerRoot,RuntimePoint(gVrSolvedArms[1].shoulder))),body);
   pouch=fo3weapon::Pouch(VrPoint(Q211TransformPoint(gQ210PlayerRoot,VrSkeletonPoint(pelvis))),body);
 }
-struct Flight {bool active=false;uint64_t instance=0;uint32_t projectile=0,base=0;V position{},velocity{};float distance=0,limit=0,damage=0;};
+struct Flight {bool active=false;uint64_t instance=0;uint32_t projectile=0,base=0,attacker=0x14;V position{},velocity{};float distance=0,limit=0,damage=0;};
 std::array<Flight,64> flights{};
 uint32_t randomState=0x463351;
 float Random(){randomState^=randomState<<13;randomState^=randomState>>17;randomState^=randomState<<5;return (randomState&0xffffff)/float(0x1000000);}
-bool Hit(uint64_t instance,V origin,V direction,float limit,uint32_t base,float damage){
+bool Hit(uint64_t instance,V origin,V direction,float limit,uint32_t base,float damage,uint32_t attacker=0x14){
   if(!gPlayerSession)return false;
-  auto&p=gPlayerSession->player;uint32_t target=0;float nearest=limit;
+  auto&p=gPlayerSession->player;uint32_t target=0;uint8_t region=0;float nearest=limit;
   for(auto&actor:gQ230NpcActors){
-    if(p.ActorHealth(actor.source.refFormId)<=0)continue;
+    if(actor.source.refFormId==attacker||p.ActorHealth(actor.source.refFormId)<=0)continue;
     // Visibility envelopes are broad phase only; actual skinned authored
     // surfaces determine whether a bullet hits the actor.
     std::array<float,3> liveLo{},liveHi{};float entry=0;
@@ -176,31 +176,50 @@ bool Hit(uint64_t instance,V origin,V direction,float limit,uint32_t base,float 
           const auto blended=fqskin::Blend(rig.skin.mapping.attributes.data()+(v+corner)*8,rig.skin.palette,false);
           triangle[corner]=fqskin::Transform(blended.data(),rig.hitVertices[v+corner].data(),false);
         }
-        if(fo3weapon::Surface(o,d,triangle[0],triangle[1],triangle[2],nearest))target=actor.source.refFormId;
+        if(fo3weapon::Surface(o,d,triangle[0],triangle[1],triangle[2],nearest)){target=actor.source.refFormId;region=v/3<rig.hitRegions.size()?rig.hitRegions[v/3]:0;}
       }
     }
   }
+  if(attacker!=0x14&&p.Health()>0) {
+    // Exact current VR skin, then the canonical player root. No combat-only
+    // player capsule or separately-owned health.
+    for(const auto& part:gQ211PlayerRigParts)for(size_t v=0;v+2<part.bindExpanded.size()/18;v+=3){
+      std::array<fo3interaction::Point,3> triangle;
+      for(size_t corner=0;corner<3;++corner){
+        const auto blended=fqskin::Blend(part.skin.mapping.attributes.data()+(v+corner)*8,part.skin.palette,true);
+        const auto local=fqskin::Transform(blended.data(),part.bindExpanded.data()+(v+corner)*18,false);
+        const auto point=Q211TransformPoint(gQ210PlayerRoot,{local[0],local[1],local[2]});triangle[corner]={point.x,point.y,point.z};
+      }
+      if(fo3weapon::Surface({origin.x,origin.y,origin.z},{direction.x,direction.y,direction.z},triangle[0],triangle[1],triangle[2],nearest)){target=0x14;region=0;}
+    }
+  }
   if(target&&!HasFo3InteractionOccluder(origin.x,origin.y,origin.z,direction.x,direction.y,direction.z,nearest,target)){
-    if(p.ApplyWeaponHit(base,target,damage)){if(Fo3DialogueFocus())EndFo3Dialogue("weapon damage");Q6H_LOGI("WEAPON HIT: instance=%llu target=%08X health=%.3f",(unsigned long long)instance,target,p.ActorHealth(target));}
+    if(p.ApplyAttack(attacker,base,target,damage)){if(Fo3DialogueFocus())EndFo3Dialogue("weapon damage");Q6H_LOGI("NPC DAMAGE attacker=%08X weapon=%08X target=%08X region=%u damage=%.3f health=%.3f",attacker,base,target,unsigned(region),damage,p.ActorHealth(target));}
     return true;
   }
   return HasFo3InteractionOccluder(origin.x,origin.y,origin.z,direction.x,direction.y,direction.z,limit,0);
 }
-void Shoot(uint64_t instance,const fo3weapon::Definition&d,const Model&model,float shotDamage){
-  const auto&defs=gPlayerSession->player.Definitions().weapons;const auto q=defs.projectiles.find(d.projectile);if(q==defs.projectiles.end())return;
-  const auto&projectile=q->second;const auto muzzle=Point(pose,GamePoint(model.asset.muzzle));
-  // Models are authored with their barrel along local X. Named muzzle anchor
-  // supplies origin; the original minimum spread supplies the angular cone.
-  auto forward=fo3vr::Unit(Direction(pose,GamePoint(model.asset.muzzleForward)));auto right=fo3vr::Unit(Direction(pose,{0,0,1})),up=fo3vr::Unit(Direction(pose,{0,0,-1}));
+void EmitShot(uint64_t instance,uint32_t attacker,uint32_t base,const fo3weapon::Definition&d,V muzzle,V forward,V right,V up,float shotDamage){
+  const auto& defs=gPlayerSession->player.Definitions().weapons;
+  const auto q=defs.projectiles.find(d.projectile);if(q==defs.projectiles.end())return;
+  const auto& projectile=q->second;
   for(unsigned pellet=0;pellet<d.pellets;++pellet){
     const float angle=Random()*2*fo3vr::Pi,spread=std::tan(d.minSpread*fo3vr::Pi/180)*std::sqrt(Random());
     const auto direction=fo3vr::Unit(forward+right*(std::cos(angle)*spread)+up*(std::sin(angle)*spread));
     const float limit=projectile.range/FO3_UNITS_PER_METRE;
-    const auto*owned=gPlayerSession->player.Weapon(instance);if(!owned)return;
-    const uint32_t base=owned->formId;const float damage=shotDamage/d.pellets;
-    if(projectile.Hitscan())Hit(instance,muzzle,direction,limit,base,damage);
-    else for(auto&f:flights)if(!f.active){f={true,instance,d.projectile,base,muzzle,direction*(projectile.speed/FO3_UNITS_PER_METRE),0,limit,damage};break;}
+    const float damage=shotDamage/d.pellets;
+    if(projectile.Hitscan())Hit(instance,muzzle,direction,limit,base,damage,attacker);
+    else for(auto&f:flights)if(!f.active){f={true,instance,d.projectile,base,attacker,muzzle,direction*(projectile.speed/FO3_UNITS_PER_METRE),0,limit,damage};break;}
   }
+}
+void Shoot(uint64_t instance,const fo3weapon::Definition&d,const Model&model,float shotDamage){
+  const auto&defs=gPlayerSession->player.Definitions().weapons;const auto q=defs.projectiles.find(d.projectile);if(q==defs.projectiles.end())return;
+  const auto muzzle=Point(pose,GamePoint(model.asset.muzzle));
+  // Models are authored with their barrel along local X. Named muzzle anchor
+  // supplies origin; the original minimum spread supplies the angular cone.
+  auto forward=fo3vr::Unit(Direction(pose,GamePoint(model.asset.muzzleForward)));auto right=fo3vr::Unit(Direction(pose,{0,0,1})),up=fo3vr::Unit(Direction(pose,{0,0,-1}));
+  const auto* owned=gPlayerSession->player.Weapon(instance);if(!owned)return;
+  EmitShot(instance,0x14,owned->formId,d,muzzle,forward,right,up,shotDamage);
 }
 void AdvanceFlights(float dt){
   for(auto&f:flights){if(!f.active)continue;
@@ -210,7 +229,7 @@ void AdvanceFlights(float dt){
     while(remaining>1e-5f&&f.active){const float step=std::min(remaining,.016f);remaining-=step;
       f.velocity.y-=q->second.gravity*9.80665f*step;const auto move=f.velocity*step;const float distance=fo3vr::Length(move);
       const float travel=std::min(distance,f.limit-f.distance);
-      if(travel<=0||Hit(f.instance,f.position,fo3vr::Unit(move),travel,f.base,f.damage)){f.active=false;break;}
+      if(travel<=0||Hit(f.instance,f.position,fo3vr::Unit(move),travel,f.base,f.damage,f.attacker)){f.active=false;break;}
       f.position=f.position+move;f.distance+=distance;if(f.distance>=f.limit)f.active=false;
     }
   }

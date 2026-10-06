@@ -1,4 +1,5 @@
 #include "npc/fo3-npc.h"
+#include "npc/fo3-actor-animation.h"
 #include "data/fo3-texture-bsa.h"
 #include "npc/fo3-npc-state.h"
 #include "player/fo3-player-state.h"
@@ -23,7 +24,7 @@ float gSceneCenterXQ1730=1000,gSceneCenterYQ1730=2000,gSceneFloorZQ1730=20;
 constexpr float FO3_UNITS_PER_METRE=100,FLOOR_Y=-1,SCENE_FORWARD=-3;
 std::array<float,3> gQ210Head{};
 uint32_t gCurrentCellFormId=1,gExteriorWorldspaceQ1890=2;
-struct Session {fo3player::Player player;explicit Session(fo3player::Catalog c):player(std::move(c)) {}};
+struct Session {bool saveBlocked=false;fo3player::Player player;explicit Session(fo3player::Catalog c):player(std::move(c)) {}};
 std::unique_ptr<Session> gPlayerSession;
 struct Q240NavigationGraph {
   std::vector<std::shared_ptr<const Fo3NpcNavMeshQ240>> meshes;
@@ -31,7 +32,11 @@ struct Q240NavigationGraph {
   std::vector<size_t> triangleOffsets;
   size_t triangleCount=0;
 };
+struct Q230CombatWeapon {fo3weapon::Definition definition;std::array<fo3anim::Clip,4> clips;std::vector<size_t> gpu;std::array<float,3> muzzle{};bool ready=false;};
 struct Q230ActorVisual {
+  std::unordered_map<uint32_t,Q230CombatWeapon> combatWeapons;
+  std::array<fo3anim::Clip,size_t(fo3npc::Animation::Count)> animations;
+  bool stateRestored=false;int headBone=0,chestBone=1;
   Fo3NpcActorQ230 source;
   fo3npc::RuntimeState runtime;
   std::vector<int> rigs{1};
@@ -177,4 +182,5 @@ int main(int argc,char** argv) {
   }
   if(argc>1)Original(argv[1]);
   std::cout<<"Production NPC package traversal, surface projection, shared portals, Travel and repathing passed\n";
+  return 0;
 }

@@ -18,6 +18,59 @@ void Q230CacheDialogueAnimations(Q230ActorVisual& actor,const fo3pipdata::Defini
   actor.blendFrom.resize(actor.skeleton.bones.size());
 }
 
+#ifndef FO3_ACTOR_RUNTIME_HOST_TEST
+#include "fo3-npc-combat.h"
+void Q230CacheCombat(Q230ActorVisual& actor,const fo3player::Catalog* catalog) {
+  if(!catalog)return;
+  const auto root=actor.source.skeletonModel.substr(0,actor.source.skeletonModel.find_last_of("\\/")+1);
+  for(const auto& source:actor.source.inventory) {
+    const auto item=catalog->items.find(source.formId);if(item==catalog->items.end()||source.count<=0)continue;
+    const auto& d=item->second.weapon;
+    const bool melee=d.valid&&(d.animation==1||d.animation==2);
+    if(!melee&&!d.Firearm())continue;
+    if((d.flags2&0x41)||d.animation>=8)continue;
+    const auto proj=catalog->weapons.projectiles.find(d.projectile);
+    if(!melee&&(proj==catalog->weapons.projectiles.end()||proj->second.type!=1||proj->second.explosion||proj->second.range<=0))continue;
+    const std::string group=d.animation==1?"1hm":d.animation==2?"2hm":d.animation<=4?"1hp":d.animation==6?"2ha":"2hr";
+    Q230CombatWeapon ready;ready.definition=d;std::vector<uint8_t> bytes;
+    // WEAP DNAM byte 41 is the authored animation-group enum (xEdit FO3).
+    std::string attack;
+    switch(d.attackAnimation){case 26:attack="AttackLeft";break;case 32:attack="AttackRight";break;case 38:attack="Attack3";break;case 44:attack="Attack4";break;case 50:attack="Attack5";break;case 56:attack="Attack6";break;case 62:attack="Attack7";break;case 68:attack="Attack8";break;case 74:attack="AttackLoop";break;case 80:attack="AttackSpin";break;case 86:attack="AttackSpin2";break;case 255:if(melee)attack="AttackRight_A";break;}
+    if(attack.empty())continue; // Undecoded engine default/group, never fake it.
+    std::string attackPath=attack;for(auto& ch:attackPath)ch=char(std::tolower((unsigned char)ch));
+    const std::array<std::string,4> names{group+"aim.kf",group+attackPath+".kf",
+      d.reload<26?group+"reload"+char('a'+d.reload)+".kf":"",group+"recoil.kf"};
+    bool valid=true;
+    for(size_t i=0;i<names.size();++i){
+      bool ok=!names[i].empty()&&LoadFalloutMeshFile(root+names[i],bytes)&&fo3anim::DecodeClip(bytes,ready.clips[i]);
+      if(ok&&i==1)ok=ready.clips[i].name==attack;
+      if(ok&&i==0)ok=ready.clips[i].name=="Aim";
+      if(ok&&i==2)ok=ready.clips[i].name==std::string("Reload")+char('A'+d.reload);
+      if(i<2||(!melee&&i==2))valid=valid&&ok;
+      if(ok)for(const auto& key:ready.clips[i].textKeys)if(key.text.rfind("Sound: ",0)==0)fo3audio::PreloadSound(key.text.substr(7));
+    }
+    if(!valid||!LoadFalloutMeshFile(item->second.model,bytes)||!fo3anim::DecodeModelHierarchy(bytes,ready.model,ready.modelBlocks)) {
+      Q6H_LOGI("NPC EQUIP UNSUPPORTED actor=%08X weapon=%08X reason=missing original animation/model",actor.source.refFormId,source.formId);continue;
+    }
+    if(!melee){const int muzzle=fo3anim::FindBone(ready.model,"ProjectileNode");if(muzzle<0)continue;ready.muzzle=fo3anim::Point(ready.model.bindGlobal[muzzle],{});}
+    if(fo3anim::FindBone(actor.skeleton,"Weapon")<0)continue;
+    Fo3WorldPlacement placement;placement.modelPath=item->second.model;placement.baseFormId=source.formId;
+    placement.baseRecordType="WEAP";placement.scale=1;
+    std::vector<CpuObject> parts;if(!BuildCpuObjects(placement,parts))continue;
+    for(auto& part:parts)actor.parts.push_back(std::move(part));
+    ready.ready=true;actor.combatWeapons.emplace(source.formId,std::move(ready));
+    fo3audio::PreloadSound(d.fire3D);fo3audio::PreloadSound(d.equip);
+  }
+  for(const auto& idle:catalog->pipboy.idleModels) {
+    std::string path=idle.second;for(auto& c:path)c=char(std::tolower((unsigned char)c));
+    if(path.find("deathpose1.kf")==std::string::npos)continue;
+    std::vector<uint8_t> bytes;
+    if(LoadFalloutMeshFile(idle.second,bytes))fo3anim::DecodeClip(bytes,actor.animations[size_t(fo3npc::Animation::Death)]);
+    break;
+  }
+}
+#endif
+
 bool Q230LiveBone(const Q230ActorVisual& actor,int bone,std::array<float,3>& world) {
   if(bone<0||size_t(bone)>=actor.pose.global.size()||actor.rigs.empty())return false;
   world=fo3anim::Point(actor.rigs[0].scenePlacement,
@@ -71,7 +124,14 @@ void Q230PrepareActors(uint32_t cell, uint32_t worldspace,
 
 
 #ifndef FO3_ACTOR_RUNTIME_HOST_TEST
+static bool Q230PathBlocked(Q230ActorVisual& actor,float dx,float dy,float dz,float length) {
+  Q230UpdateActor(actor);std::array<float,3> origin{};
+  if(!Q230LiveBone(actor,actor.chestBone,origin))return true;
+  return HasFo3InteractionOccluder(origin[0],origin[1],origin[2],dx,dy,dz,length,actor.source.refFormId);
+}
+#define FO3_NPC_PATH_BLOCKED Q230PathBlocked
 #include "fo3-npc-package-runtime.inc"
+#undef FO3_NPC_PATH_BLOCKED
 #endif
 
 fo3anim::Matrix Q230PlacementMatrix(const Fo3WorldPlacement &placement) {
@@ -92,6 +152,14 @@ fo3anim::Matrix Q230PlacementMatrix(const Fo3WorldPlacement &placement) {
 
 bool Q230UploadActorPart(Q230ActorVisual &actor, CpuObject &part, float centerX,
                          float centerY, float floorZ) {
+#ifndef FO3_ACTOR_RUNTIME_HOST_TEST
+  if(part.placement.baseRecordType=="WEAP") {
+    GpuObject gpu;if(!UploadCpuObject(part,0,0,0,gpu))return false;
+    gpu.q230NpcActor=true;
+    actor.combatWeapons.at(part.placement.baseFormId).gpu.push_back(actor.objects.size());
+    actor.objects.push_back(std::move(gpu));return true;
+  }
+#endif
   Q230RigPart rig;
   rig.centerX = centerX;
   rig.centerY = centerY;
@@ -150,6 +218,17 @@ bool Q230UploadActorPart(Q230ActorVisual &actor, CpuObject &part, float centerX,
       // Retain only position triplets for weapon-hit skinning, not a duplicate VBO.
       rig.hitVertices.reserve(part.mesh.indices.size());
       for(uint32_t index:part.mesh.indices){const auto&v=part.positionsGame[index];rig.hitVertices.push_back({(v.x-centerX)/FO3_UNITS_PER_METRE,FLOOR_Y+(v.z-floorZ)/FO3_UNITS_PER_METRE,SCENE_FORWARD-(v.y-centerY)/FO3_UNITS_PER_METRE});}
+      for(size_t v=0;v+2<rig.hitVertices.size();v+=3){
+        std::array<float,7> regions{};
+        for(size_t corner=0;corner<3;++corner)for(size_t j=0;j<4;++j){
+          const auto* a=rig.skin.mapping.attributes.data()+(v+corner)*8;const size_t slot=size_t(a[4+j]);
+          if(a[j]<=0||slot==0||slot>rig.skin.mapping.sources.size())continue;
+          const int source=rig.skin.mapping.sources[slot-1];if(source<0||size_t(source)>=rig.bones.size())continue;
+          const int bone=rig.bones[source];if(bone<0||size_t(bone)>=actor.skeleton.bones.size())continue;
+          regions[size_t(fo3weapon::BoneRegion(actor.skeleton.bones[bone].name))]+=a[j];
+        }
+        rig.hitRegions.push_back(uint8_t(std::max_element(regions.begin(),regions.end())-regions.begin()));
+      }
       rig.interactionBounds.resize(rig.skin.palette.size(),{{INFINITY,INFINITY,INFINITY},{-INFINITY,-INFINITY,-INFINITY}});
       for(size_t v=0;v<rig.hitVertices.size();++v)for(size_t j=0;j<4;++j) {
         const auto* attribute=rig.skin.mapping.attributes.data()+v*8;
@@ -210,14 +289,22 @@ void Q230UpdateActor(Q230ActorVisual &actor) {
   int selected=int(actor.runtime.animation);
   if(selected<0||size_t(selected)>=actor.animations.size())selected=0;
   if(actor.animations[selected].tracks.empty())selected=0;
-  if(selected!=actor.activeAnimation) {
+  if(selected!=actor.activeAnimation
+#ifndef FO3_ACTOR_RUNTIME_HOST_TEST
+     ||actor.animationSerial!=actor.runtime.actionSerial
+#endif
+     ) {
+#ifndef FO3_ACTOR_RUNTIME_HOST_TEST
+    actor.animationSerial=actor.runtime.actionSerial;
+#endif
     actor.blendFrom=actor.pose.local;actor.blendStart=elapsed;actor.activeAnimation=selected;
     fo3anim::BindClip(actor.skeleton,actor.animations[selected],actor.pose);
-    Q6H_LOGI("NPC ANIM actor=%08X clip=%s",actor.source.refFormId,actor.animations[selected].name.c_str());
+    if(actor.runtime.activity!=fo3npc::Activity::Combat)Q6H_LOGI("NPC ANIM actor=%08X clip=%s",actor.source.refFormId,actor.animations[selected].name.c_str());
   }
   const auto& clip=actor.animations[actor.activeAnimation].tracks.empty()?actor.clip:actor.animations[actor.activeAnimation];
   const double clipTime=actor.blendStart<0?elapsed:elapsed-actor.blendStart;
-  if(!fo3anim::Sample(actor.skeleton,clip,clipTime,actor.pose,&timings)) return;
+  const double sampleTime=actor.runtime.activity==fo3npc::Activity::Dead?std::max(0.f,clip.stop-clip.start):clipTime;
+  if(!fo3anim::Sample(actor.skeleton,clip,sampleTime,actor.pose,&timings)) return;
   if(actor.blendStart>=0&&elapsed-actor.blendStart<fo3npc::DialoguePolicy::BlendSeconds&&actor.blendFrom.size()==actor.pose.local.size()) {
     const float mix=float((elapsed-actor.blendStart)/fo3npc::DialoguePolicy::BlendSeconds);
     for(size_t i=0;i<actor.pose.local.size();++i) {
@@ -271,11 +358,20 @@ bool Q230LiveBounds(Q230ActorVisual& actor,std::array<float,3>& lo,std::array<fl
   return std::isfinite(lo[0]);
 }
 
+#ifndef FO3_ACTOR_RUNTIME_HOST_TEST
+#include "fo3-npc-combat-runtime.inc"
+#endif
 void Q230RenderNpcActors(bool alphaPass) {
   const auto drawStarted=fqopaque::Clock::now();
   for (auto &actor : gQ230NpcActors) {
     if(!actor.renderVisible) continue;
-    for (const auto &object : actor.objects) {
+    for (size_t objectIndex=0;objectIndex<actor.objects.size();++objectIndex) {
+      auto& object=actor.objects[objectIndex];
+#ifndef FO3_ACTOR_RUNTIME_HOST_TEST
+      bool weaponPart=false;for(const auto& w:actor.combatWeapons)
+        if(std::find(w.second.gpu.begin(),w.second.gpu.end(),objectIndex)!=w.second.gpu.end()){weaponPart=true;break;}
+      if(weaponPart)continue;
+#endif
       if (object.alphaBlend != alphaPass)
         continue;
       if (object.zBufferTestQ1200)
@@ -290,6 +386,9 @@ void Q230RenderNpcActors(bool alphaPass) {
       }
       DrawSceneObject(object);
     }
+#ifndef FO3_ACTOR_RUNTIME_HOST_TEST
+    Q230RenderWeapon(actor,alphaPass);
+#endif
   }
   fqactor::npc.draw+=fqopaque::Micros(drawStarted);
 }

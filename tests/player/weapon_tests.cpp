@@ -88,7 +88,7 @@ void Ownership(Catalog c) {
   assert(loaded.Equip(other)&&!loaded.Weapon(id)->equipped&&loaded.Weapon(other)->equipped);
   assert(loaded.Equip(id)&&loaded.Save(path,error));
   const auto good=Read(path);
-  assert(U32(good,4)==6);
+  assert(U32(good,4)==7);
   Player overflow=loaded;
   assert(overflow.Add(0x4241,INT32_MAX-overflow.AmmoReserve(0x4241)));
   const auto overflowRevision=overflow.Revision();
@@ -128,12 +128,12 @@ void Ownership(Catalog c) {
   assert(!resumed.EquippedWeapon()&&resumed.Snapshot().worldWeapons[0].instance.id==seedId);
   // Malformed world pose and duplicate ownership are rejected atomically.
   const auto seededSave=Read(path);
-  bad=seededSave;Put(bad,bad.size()-8,0x7fc00000);Seal(bad);Write(path,bad);
+  bad=seededSave;Put(bad,bad.size()-12,0x7fc00000);Seal(bad);Write(path,bad);
   assert(!resumed.Restore(path,error)&&resumed.Revision()==seedRevision);
   bad=seededSave;
   const auto ownedId=resumed.Snapshot().inventory.front().id;
-  Put(bad,bad.size()-84,static_cast<uint32_t>(ownedId));
-  Put(bad,bad.size()-80,static_cast<uint32_t>(ownedId>>32));
+  Put(bad,bad.size()-88,static_cast<uint32_t>(ownedId));
+  Put(bad,bad.size()-84,static_cast<uint32_t>(ownedId>>32));
   Seal(bad);Write(path,bad);
   assert(!resumed.Restore(path,error)&&resumed.Revision()==seedRevision);
   std::remove(path.c_str());

@@ -322,6 +322,8 @@ void Decode(Definitions &d, const std::string &t, uint32_t id, uint32_t flags,
     };
     location(Find(s,"PLDT"),package.location);
     location(Find(s,"PLD2"),package.location2);
+    location(Find(s,"PTDT"),package.target);
+    location(Find(s,"PTD2"),package.target2);
     if(auto schedule=Find(s,"PSDT");schedule&&schedule->n==8) {
       package.schedule.month=static_cast<int8_t>(schedule->p[0]);
       package.schedule.weekday=static_cast<int8_t>(schedule->p[1]);
@@ -462,6 +464,8 @@ void Finalize(Definitions &d) {
         retain.insert(location.value);
     };
     keep(entry.second.location);keep(entry.second.location2);
+    if(entry.second.target.valid&&entry.second.target.type==0)retain.insert(entry.second.target.value);
+    if(entry.second.target2.valid&&entry.second.target2.type==0)retain.insert(entry.second.target2.value);
   }
   for (auto &p : d.targets)
     if (d.doorBases.count(p.second.base))
