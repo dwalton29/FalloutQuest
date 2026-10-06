@@ -461,28 +461,44 @@ void Finalize(Definitions &d) {
     if(d.dialogueTopics.at(a).priority!=d.dialogueTopics.at(b).priority)return d.dialogueTopics.at(a).priority>d.dialogueTopics.at(b).priority;
     return a<b;
   });
-  // Compile bounded authored chains once, before reference pruning. Runtime
-  // never scans ESM or builds a linked-reference route each frame.
+  // Compile bounded authored chains once, before reference pruning.
+  const auto compile=[&](uint32_t start,std::vector<PatrolPoint>& points,bool& circular,std::string& error) {
+    points.clear();circular=false;error.clear();uint32_t ref=start;std::unordered_set<uint32_t> visited;
+    while(ref) {
+      if(!visited.insert(ref).second){if(ref==start)circular=true;else error="Patrol chain loops into an intermediate marker";break;}
+      if(visited.size()>256){error="Patrol chain exceeds bounded marker count";break;}
+      const auto i=d.targets.find(ref);
+      if(i==d.targets.end()){error="Patrol marker unavailable";break;}
+      const auto& marker=i->second;
+      if(marker.patrolAction||!std::isfinite(marker.patrolWait)||marker.patrolWait<0){error="Patrol marker action/script or invalid wait unsupported";break;}
+      if(!points.empty()&&(marker.cell!=points.front().placement.cell||marker.world!=points.front().placement.world)){error="Patrol requires cell traversal";break;}
+      points.push_back({ref,marker});ref=marker.linkedReference;
+    }
+    if(points.empty()&&error.empty())error="Patrol has no markers";
+    if(!error.empty())points.clear();
+  };
+  d.actorPatrols.clear();d.actorPatrolUnsupported.clear();d.actorPatrolCircular.clear();
   for(auto& entry:d.packages) {
     auto& p=entry.second;if(p.type!=13)continue;
     p.patrol.clear();p.patrolCircular=false;p.patrolUnsupported.clear();
-    if(!p.location.valid||p.location.type!=0){p.patrolUnsupported="Patrol starting location resolver unsupported";continue;}
-    uint32_t ref=p.location.value;std::unordered_set<uint32_t> visited;
-    while(ref) {
-      if(!visited.insert(ref).second){if(ref==p.location.value)p.patrolCircular=true;else p.patrolUnsupported="Patrol chain loops into an intermediate marker";break;}
-      if(visited.size()>256){p.patrolUnsupported="Patrol chain exceeds bounded marker count";break;}
-      const auto i=d.targets.find(ref);
-      if(i==d.targets.end()){p.patrolUnsupported="Patrol marker unavailable";break;}
-      const auto& marker=i->second;
-      if(marker.patrolAction||!std::isfinite(marker.patrolWait)||marker.patrolWait<0){p.patrolUnsupported="Patrol marker action/script or invalid wait unsupported";break;}
-      if(!p.patrol.empty()&&(marker.cell!=p.patrol.front().placement.cell||marker.world!=p.patrol.front().placement.world)){p.patrolUnsupported="Patrol requires cell traversal";break;}
-      p.patrol.push_back({ref,marker});ref=marker.linkedReference;
-    }
-    if(p.patrol.empty()&&p.patrolUnsupported.empty())p.patrolUnsupported="Patrol has no markers";
-    if(!p.patrolUnsupported.empty())p.patrol.clear();
+    if(p.location.valid&&p.location.type==0)compile(p.location.value,p.patrol,p.patrolCircular,p.patrolUnsupported);
+    else if(p.location.valid&&p.location.type==6) {
+      // Linked Ref is the actor's XLKR, not the unused PLDT value. Resolve
+      // only actual actor PKID lists (including authored template inheritance).
+      for(const auto& actor:d.referenceScripts) {
+        const auto* def=ActorCategory(d,actor.second.second,16);
+        if(!def||std::find(def->packages.begin(),def->packages.end(),entry.first)==def->packages.end())continue;
+        const uint64_t key=(uint64_t(actor.first)<<32)|entry.first;bool circular=false;std::string error;
+        const auto placement=d.targets.find(actor.first);
+        compile(placement==d.targets.end()?0:placement->second.linkedReference,d.actorPatrols[key],circular,error);
+        if(circular)d.actorPatrolCircular.insert(key);
+        if(!error.empty())d.actorPatrolUnsupported[key]=error;
+      }
+    } else p.patrolUnsupported="Patrol starting location resolver unsupported";
   }
   std::unordered_set<uint32_t> retain;
   for(auto& actor:d.referenceScripts)retain.insert(actor.first);
+  for(const auto& route:d.actorPatrols)for(const auto& point:route.second)retain.insert(point.reference);
   for(const auto& entry:d.packages) {
     const auto keep=[&](const PackageLocation& location) {
       if(location.valid&&(location.type==0u||location.type==6u)&&location.value)

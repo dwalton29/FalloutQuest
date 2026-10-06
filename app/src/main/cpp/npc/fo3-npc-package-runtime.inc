@@ -209,6 +209,13 @@ static bool Q240ScheduleActive(const fo3pipdata::PackageSchedule& schedule,float
   if(end<=24.f)return hour>=start&&hour<end;
   return hour>=start||hour<end-24.f;
 }
+static const std::vector<fo3pipdata::PatrolPoint>* Q240PatrolRoute(const Q230ActorVisual& actor,uint32_t id,const fo3pipdata::PackageDefinition& package,bool* circular=nullptr,std::string* error=nullptr) {
+  if(package.location.type!=6){if(circular)*circular=package.patrolCircular;if(error)*error=package.patrolUnsupported;return &package.patrol;}
+  const auto& d=gPlayerSession->player.Definitions().pipboy;const uint64_t key=(uint64_t(actor.source.refFormId)<<32)|id;
+  const auto i=d.actorPatrols.find(key);if(circular)*circular=d.actorPatrolCircular.count(key)!=0;
+  if(error){const auto e=d.actorPatrolUnsupported.find(key);*error=e==d.actorPatrolUnsupported.end()?"":e->second;}
+  return i==d.actorPatrols.end()?nullptr:&i->second;
+}
 static const fo3pipdata::PackageDefinition* Q240SelectPackage(
     Q230ActorVisual& actor,uint32_t& id,std::array<float,3>& anchor,float& radius) {
   id=0;radius=0;if(!gPlayerSession)return nullptr;
@@ -220,7 +227,7 @@ static const fo3pipdata::PackageDefinition* Q240SelectPackage(
     const auto found=definitions.packages.find(packageId);if(found==definitions.packages.end())continue;
     const auto& package=found->second;
     if(package.type!=1&&package.type!=6&&package.type!=14&&package.type!=13&&package.type!=5&&package.type!=12){Q240AiLogOnce(actor.source.refFormId,packageId,"package type "+std::to_string(package.type));continue;}
-    if(package.type==13&&(package.patrol.empty()||!package.patrolUnsupported.empty())){Q240AiLogOnce(actor.source.refFormId,packageId,package.patrolUnsupported.empty()?"Patrol route unavailable":package.patrolUnsupported);continue;}
+    if(package.type==13){std::string error;const auto* route=Q240PatrolRoute(actor,packageId,package,nullptr,&error);if(!route||route->empty()||!error.empty()){Q240AiLogOnce(actor.source.refFormId,packageId,error.empty()?"Patrol route unavailable":error);continue;}}
     if(package.scripted){Q240AiLogOnce(actor.source.refFormId,packageId,"package script");continue;}
     if(!Q240ScheduleActive(package.schedule,hour))continue;
     if(!package.location.valid&&package.type!=1){Q240AiLogOnce(actor.source.refFormId,packageId,"missing PLDT");continue;}
@@ -247,6 +254,10 @@ static const fo3pipdata::PackageDefinition* Q240SelectPackage(
         const auto live=gPlayerSession->player.Snapshot().actors.find(package.target.value);
         anchor=live==gPlayerSession->player.Snapshot().actors.end()?std::array<float,3>{target->second.x,target->second.y,target->second.z}:live->second.position;
       }
+    } else if(package.type==13&&package.location.type==6u) {
+      const auto& p=Q240PatrolRoute(actor,packageId,package)->front().placement;
+      if(p.world!=gExteriorWorldspaceQ1890||(!p.world&&p.cell!=gCurrentCellFormId)){Q240AiLogOnce(actor.source.refFormId,packageId,"Patrol requires another resident scene");continue;}
+      anchor={p.x,p.y,p.z};
     } else if(package.location.type==0u) {
       const auto target=definitions.targets.find(package.location.value);
       if(target==definitions.targets.end()){Q240AiLogOnce(actor.source.refFormId,packageId,"location reference unavailable");continue;}
@@ -382,7 +393,7 @@ static void Q240AdvanceNpcPackage(Q230ActorVisual& actor,double now) {
       package->location.type,package->location.radius,GetFo3TimeOfDayHour());
   }
   if(package->type==13) {
-    const auto& points=package->patrol;const size_t n=points.size();
+    bool circular=false;const auto& points=*Q240PatrolRoute(actor,packageId,*package,&circular);const size_t n=points.size();
     // Sequence is the current leg (one-based), and is saved in the existing
     // canonical actor progress record. Open repeat routes reverse at each end.
     if(actor.aiSequence==0) {
@@ -390,9 +401,9 @@ static void Q240AdvanceNpcPackage(Q230ActorVisual& actor,double now) {
       if(package->patrolRepeat){float nearest=INFINITY;const auto here=Q240GamePosition(actor);for(size_t i=0;i<n;++i){const auto& p=points[i].placement;const float d=Q240PlanarDistance(here,{p.x,p.y,p.z});if(d<nearest){nearest=d;first=i;}}}
       actor.aiSequence=uint32_t(first+1);
     }
-    const auto index=[&](uint32_t sequence){const size_t leg=sequence-1;if(!package->patrolRepeat)return std::min(leg,n-1);if(package->patrolCircular||n==1)return leg%n;const size_t at=leg%(2*n-2);return at<n?at:2*n-2-at;};
+    const auto index=[&](uint32_t sequence){const size_t leg=sequence-1;if(!package->patrolRepeat)return std::min(leg,n-1);if(circular||n==1)return leg%n;const size_t at=leg%(2*n-2);return at<n?at:2*n-2-at;};
     if(!actor.aiPathGame.empty()&&actor.aiPathIndex>=actor.aiPathGame.size()) {
-      const size_t reached=!package->patrolRepeat&&package->patrolCircular&&actor.aiSequence==n+1?0:index(actor.aiSequence);
+      const size_t reached=!package->patrolRepeat&&circular&&actor.aiSequence==n+1?0:index(actor.aiSequence);
       const auto& arrived=points[reached].placement;
       actor.aiPathGame.clear();actor.aiPathSurfaces.clear();actor.aiPathIndex=0;
       actor.aiRepathAt=now+arrived.patrolWait;++actor.aiSequence;
@@ -400,10 +411,10 @@ static void Q240AdvanceNpcPackage(Q230ActorVisual& actor,double now) {
     actor.runtime.package=packageId;actor.runtime.packageKnown=true;actor.runtime.activity=fo3npc::Activity::Package;
     actor.runtime.speed=0;actor.runtime.animation=fo3npc::Animation::Idle;
     if(now<actor.aiRepathAt)return;
-    const size_t legs=n+(package->patrolCircular?1:0);
+    const size_t legs=n+(circular?1:0);
     if(!package->patrolRepeat&&actor.aiSequence>legs){if(package->schedule.duration>0)return;actor.aiSequence=1;}
     size_t next=index(actor.aiSequence);
-    if(!package->patrolRepeat&&package->patrolCircular&&actor.aiSequence==n+1)next=0;
+    if(!package->patrolRepeat&&circular&&actor.aiSequence==n+1)next=0;
     const auto& point=points[next].placement;anchor={point.x,point.y,point.z};
   }
   if(package->location.type==2u&&package->type!=1)anchor=actor.aiAnchorGame;

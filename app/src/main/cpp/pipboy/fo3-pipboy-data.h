@@ -204,6 +204,9 @@ struct Definitions {
   std::unordered_map<uint32_t,Topic> dialogueTopics;
   std::unordered_map<uint32_t,ActorDefinition> dialogueActors;
   std::unordered_map<uint32_t,PackageDefinition> packages;
+  std::unordered_map<uint64_t,std::vector<PatrolPoint>> actorPatrols;
+  std::unordered_map<uint64_t,std::string> actorPatrolUnsupported;
+  std::unordered_set<uint64_t> actorPatrolCircular;
   std::unordered_map<uint32_t,std::pair<std::string,uint32_t>> referenceScripts;
   std::unordered_map<std::string,uint32_t> formNames;
   std::unordered_map<uint32_t,std::string> idleModels;

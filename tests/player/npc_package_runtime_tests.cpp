@@ -79,6 +79,8 @@ static Q230ActorVisual Actor(uint8_t type) {
 static void Original(const char* path) {
   originalLogs=true;
   fo3player::Catalog catalog;std::string error;assert(fo3player::LoadCatalog(path,catalog,error));
+  size_t linkedRoutes=0;for(const auto& r:catalog.pipboy.actorPatrols)if(!r.second.empty())++linkedRoutes;
+  std::cout<<"Original valid actor-linked Patrol routes="<<linkedRoutes<<'\n';assert(linkedRoutes>10);
   assert(catalog.pipboy.packages.at(0x7e6dd).patrol.size()==4);
   assert(!catalog.pipboy.packages.at(0x7e6dd).patrolRepeat);
   assert(catalog.pipboy.packages.at(0x7e6dd).patrol.back().placement.patrolWait==20);
@@ -217,6 +219,14 @@ int main(int argc,char** argv) {
     Q240UpdateNpcPackage(patrol,180.1);assert(patrol.aiSequence==3);
     const auto waiting=patrol.runtime.position;Q240UpdateNpcPackage(patrol,181);assert(patrol.runtime.position==waiting);
     Q240UpdateNpcPackage(patrol,183);assert(patrol.aiPathGame.back()[0]==1900);
+    c.pipboy.packages[50].location.type=6;c.pipboy.packages[50].location.value=0;c.pipboy.targets[42].linkedReference=60;
+    fo3pipdata::Finalize(c.pipboy);assert(c.pipboy.actorPatrols.at((uint64_t(42)<<32)|50).size()==2);
+    gPlayerSession=std::make_unique<Session>(c);uint32_t id=0;std::array<float,3> start{};float radius=0;
+    assert(Q240SelectPackage(patrol,id,start,radius)&&id==50&&start[0]==1900);
+    // Missing own linked reference invalidates this package rather than using
+    // a fabricated destination or the unused PLDT value.
+    c.pipboy.targets[42].linkedReference=0;fo3pipdata::Finalize(c.pipboy);
+    gPlayerSession=std::make_unique<Session>(c);assert(!Q240SelectPackage(patrol,id,start,radius));
   }
   if(argc>1)Original(argv[1]);
   std::cout<<"Production NPC package traversal, surface projection, shared portals, Travel and repathing passed\n";
