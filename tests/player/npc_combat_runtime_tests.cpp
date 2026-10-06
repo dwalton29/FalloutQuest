@@ -47,5 +47,7 @@ int main(){
   auto c=gPlayerSession->player.Definitions();c.pipboy.dialogueActors[43].aiData[1]=0;gPlayerSession=std::make_unique<Session>(c);a.stateRestored=false;blocked=false;a.runtime.BeginCombat(0x14);a.runtime.nextPath=0;
   Q230SimulateActor(a,22);assert(a.runtime.action==fo3npc::CombatAction::Flee&&!a.aiPathGame.empty());
   assert(gPlayerSession->player.ApplyAttack(0x14,10,42,1000));Q230SimulateActor(a,23);assert(a.runtime.activity==fo3npc::Activity::Dying&&!a.runtime.pendingAttack);Q230SimulateActor(a,24);assert(a.runtime.activity==fo3npc::Activity::Dead&&gPlayerSession->player.CanLootContainer(42));
+  a.runtime.position=Q240ScenePosition({2000,3000,20});a.runtime.nextPath=0;a.aiPathGame.clear();
+  assert(!Q230CombatRoute(a,{1000,2000,20},true,30)&&a.aiPathGame.empty());
   std::cout<<"Production NPC combat pursuit/flee, LOS, reload, firing, death and restore passed\n";
 }

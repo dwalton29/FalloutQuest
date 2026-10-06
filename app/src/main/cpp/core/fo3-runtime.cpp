@@ -1,6 +1,7 @@
 #include "dialogue/fo3-dialogue-session.h"
 #include "dialogue/fo3-dialogue-panel.h"
 #include "npc/fo3-npc-state.h"
+#include "npc/fo3-npc-combat.h"
 #include "player/fo3-vr-body.h"
 #include "player/fo3-vr-tracking.h"
 #ifdef __ANDROID__

@@ -27,7 +27,26 @@ static void Q230RenderWeapon(Q230ActorVisual& actor,bool alpha) {
 #endif
 static bool Q230Target(uint32_t reference,std::array<float,3>& point,uint32_t& base) {
   if(!gPlayerSession||gPlayerSession->player.ActorHealth(reference)<=0)return false;
-  if(reference==0x14){point={gQ210Head[0],gQ210Head[1],gQ210Head[2]};base=7;return true;}
+  if(reference==0x14){base=7;
+#ifdef FO3_NPC_COMBAT_HOST_TEST
+    point={gQ210Head[0],gQ210Head[1],gQ210Head[2]};return true;
+#else
+    // VR has no rendered player head. Aim at the original posed torso bone,
+    // which is inside the same authored skin used by canonical shot collision.
+    for(const auto& part:gQ211PlayerRigParts)for(size_t i=0;i<part.boneNames.size();++i){
+      if(part.boneNames[i]!="bip01 spine2")continue;
+      const auto mapped=std::find(part.skin.mapping.sources.begin(),part.skin.mapping.sources.end(),int(i));
+      if(mapped==part.skin.mapping.sources.end())continue;
+      const size_t slot=size_t(mapped-part.skin.mapping.sources.begin())+1;
+      if(slot>=part.skin.palette.size())continue;
+      const auto bind=Q211BindBonePoint(part.bones[i]);const std::array<float,3> pivot{bind.x,bind.y,bind.z};
+      const auto posed=fqskin::Transform(part.skin.palette[slot].data(),pivot.data(),false);
+      const auto world=Q211TransformPoint(gQ210PlayerRoot,{posed[0],posed[1],posed[2]});
+      point={world.x,world.y,world.z};return true;
+    }
+    return false; // Missing canonical player skin is not an invisible combat target.
+#endif
+  }
   for(auto& target:gQ230NpcActors)if(target.source.refFormId==reference&&target.runtime.Alive()){
     Q230UpdateActor(target);base=target.source.baseFormId;
     return Q230LiveBone(target,target.chestBone,point);
@@ -52,6 +71,7 @@ static void Q230PersistActor(Q230ActorVisual& actor) {
   saved.package=actor.aiPackage;saved.sequence=actor.aiSequence;
   const auto old=p.Snapshot().actors.find(actor.source.refFormId);
   saved.hostile=old==p.Snapshot().actors.end()?0:old->second.hostile;
+  saved.dead=(old!=p.Snapshot().actors.end()&&old->second.dead)||(p.ActorHealth(actor.source.refFormId)==0&&!p.Essential(actor.source.refFormId));
   const auto* weapon=p.ActorWeapon(actor.source.refFormId);saved.equippedWeapon=weapon?weapon->id:0;
   p.UpdateActor(actor.source.refFormId,saved);
 }
@@ -92,11 +112,12 @@ static void Q230ActionSounds(Q230ActorVisual& actor,double now) {
 }
 static bool Q230CombatRoute(Q230ActorVisual& actor,const std::array<float,3>& target,bool flee,double now) {
   if(!actor.navigationGraph||actor.navigationGraph->triangleCount==0||now<actor.runtime.nextPath)return false;
-  if(!flee&&actor.aiPathIndex<actor.aiPathGame.size()&&Q240PlanarDistance(actor.runtime.pathDestinationGame,target)<16.f)return false;
+  if(actor.aiPathIndex<actor.aiPathGame.size()&&Q240PlanarDistance(actor.runtime.pathDestinationGame,target)<16.f)return false;
   actor.runtime.pathDestinationGame=target;
   actor.runtime.nextPath=now+.75; // bounded resident replanning policy
   auto destination=target;const auto current=Q240GamePosition(actor);const auto& graph=*actor.navigationGraph;
   if(flee){
+    destination=current;
     const auto start=Q240NearestNode(graph,current);if(!start.Valid())return false;
     std::vector<uint8_t> seen(graph.triangleCount,0);std::vector<Q240Node> nodes{start};seen[Q240Flat(graph,start)]=1;
     float best=Q240PlanarDistance(current,target);
@@ -108,6 +129,7 @@ static bool Q230CombatRoute(Q230ActorVisual& actor,const std::array<float,3>& ta
       });
     }
   }
+  if(flee&&destination==current){actor.aiPathGame.clear();actor.runtime.speed=0;Q240AiLogOnce(actor.source.refFormId,actor.aiPackage,"no farther reachable flee endpoint");return false;}
   std::string failure;actor.aiPathIndex=0;
   if(!Q240Path(graph,current,destination,actor.aiPathGame,&failure,&actor.aiPathSurfaces)){
     Q240AiLogOnce(actor.source.refFormId,actor.aiPackage,"combat route: "+failure);return false;

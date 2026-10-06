@@ -13,7 +13,7 @@ It contains 1,647 NPC_, 3,266 PACK, 48 CSTY, 160 WEAP, 237 ARMO, 326 FACT and
 1,247 IDLE records. Layouts were checked against
 [xEdit's Fallout 3 definitions](https://github.com/TES5Edit/TES5Edit/blob/dev-4.1.6/Core/wbDefinitionsFO3.pas),
 its shared enums, and [NifTools nif.xml](https://github.com/niftools/nifxml/blob/develop/nif.xml).
-New Vegas combat-style layouts were not used.
+New Vegas combat-style layouts were not used. The repeatable `tools/npc/audit_ai_combat.py` command reports record/package counts, script-bearing families, AIDT/CSTY lengths and relevant GMSTs.
 
 | Original data | Consumption and boundary |
 | --- | --- |
@@ -32,8 +32,8 @@ New Vegas combat-style layouts were not used.
 | Levelled records | Existing LVLI rolls become persistent actor inventory once generated. LVLN/LVLC actor spawning and inherited levelled actor templates remain unsupported |
 
 CSTY observations: all 48 original records have CSTD 92, CSAD 84 and CSSD 64
-bytes. PACK types observed include Follow 30, Escort 115, Eat 296, Sleep 246,
-Wander 42, Travel 907, Flee 20, Guard 25, Sandbox 681 and Patrol 172. An
+bytes. PACK types observed include Follow 115, Escort 30, Eat 296, Sleep 246,
+Wander 42, Travel 907, Flee Not Combat 8, Guard 172, Sandbox 681 and Patrol 180. An
 unsupported package is not silently marked complete; lower-priority supported
 packages can still execute. Begin/end/change compiled or source scripts reject
 that package. Full procedure flags, result scripts and idle/furniture selection
@@ -142,7 +142,7 @@ semi-auto delay without catch-up volleys. Reload blocks firing and waits for the
 larger of authored WEAP time and original clip duration; original Sound text keys
 are preloaded and played. NPC gun degradation, jamming and exact animation event
 cadence/attack-speed parity remain unfinished. Muzzle direction targets the threat;
-full pitch retargeting of authored arm aim is still required on headset.
+full pitch retargeting of authored arm aim is still required on headset. Player targeting uses the original posed Spine2 torso bone because the VR body has no rendered head; missing canonical player skin disables that target.
 
 WEAP NPCs Use Ammo consumes reserve rounds into finite clips. Otherwise a compatible
 inventory round authorizes effectively unlimited NPC magazines; virtual magazine
@@ -195,10 +195,10 @@ crime/search ownership and respawn/cleanup are follow-ups.
 
 ## Saves, verification and diagnostics
 
-FQPS revision 7 appends sorted, validated actor records: FormID, cell/world,
+FQPS revision 8 appends sorted, validated actor records: FormID, cell/world,
 package/progress, explicit hostile reference, game coordinates, yaw and equipped
-weapon instance. Existing actorDamage and container stack/weapon extensions retain
-health, corpse contents and magazines. Revisions 1–6 remain readable; existing
+weapon instance and permanent death flag (so later level-derived health cannot resurrect a corpse). Existing actorDamage and container stack/weapon extensions retain
+health, corpse contents and magazines. Revisions 1–7 remain readable; existing
 catalog fingerprints stay unchanged. Invalid counts, duplicate actors, nonfinite
 positions, dangling equipment and malformed data reject the restore transaction.
 No render state, tracking transform, transient clip or raw pointer is serialized.

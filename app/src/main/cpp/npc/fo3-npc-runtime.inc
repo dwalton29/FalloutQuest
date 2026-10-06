@@ -19,11 +19,11 @@ void Q230CacheDialogueAnimations(Q230ActorVisual& actor,const fo3pipdata::Defini
 }
 
 #ifndef FO3_ACTOR_RUNTIME_HOST_TEST
-#include "fo3-npc-combat.h"
 void Q230CacheCombat(Q230ActorVisual& actor,const fo3player::Catalog* catalog) {
   if(!catalog)return;
   const auto root=actor.source.skeletonModel.substr(0,actor.source.skeletonModel.find_last_of("\\/")+1);
   for(const auto& source:actor.source.inventory) {
+    if(actor.combatWeapons.count(source.formId))continue;
     const auto item=catalog->items.find(source.formId);if(item==catalog->items.end()||source.count<=0)continue;
     const auto& d=item->second.weapon;
     const bool melee=d.valid&&(d.animation==1||d.animation==2);
@@ -155,7 +155,7 @@ bool Q230UploadActorPart(Q230ActorVisual &actor, CpuObject &part, float centerX,
 #ifndef FO3_ACTOR_RUNTIME_HOST_TEST
   if(part.placement.baseRecordType=="WEAP") {
     GpuObject gpu;if(!UploadCpuObject(part,0,0,0,gpu))return false;
-    gpu.q230NpcActor=true;
+    gpu.q230NpcActor=true;gpu.physicalWeapon=true;
     actor.combatWeapons.at(part.placement.baseFormId).gpu.push_back(actor.objects.size());
     actor.objects.push_back(std::move(gpu));return true;
   }

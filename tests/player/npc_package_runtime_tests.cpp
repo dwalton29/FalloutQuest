@@ -180,6 +180,16 @@ int main(int argc,char** argv) {
     Q240UpdateNpcPackage(actor,151);assert(actor.runtime.position==held);
     actor.runtime.EndDialogue();Q240UpdateNpcPackage(actor,152);assert(!actor.runtime.dialogue);
   }
+  {
+    auto guard=Actor(14);Q240UpdateNpcPackage(guard,1);assert(guard.aiPackage==50);
+    auto ambush=Actor(9);Q240UpdateNpcPackage(ambush,1);assert(ambush.aiPackage==0);
+  }
+  {
+    auto inherited=Actor(6);auto c=gPlayerSession->player.Definitions();
+    c.pipboy.dialogueActors[44].templateActor=43;c.pipboy.dialogueActors[44].templateFlags=16;
+    inherited.source.baseFormId=44;gPlayerSession=std::make_unique<Session>(std::move(c));
+    Q240UpdateNpcPackage(inherited,1);assert(inherited.aiPackage==50);
+  }
   if(argc>1)Original(argv[1]);
   std::cout<<"Production NPC package traversal, surface projection, shared portals, Travel and repathing passed\n";
   return 0;

@@ -566,8 +566,10 @@ std::vector<std::string> NoteAudio(const Definitions &d, uint32_t id) {
 
 namespace fo3pipdata {
 const ActorDefinition* ActorCategory(const Definitions& d,uint32_t base,uint16_t category) {
-  std::unordered_set<uint32_t> seen;
-  while(base&&seen.insert(base).second) {
+  std::array<uint32_t,16> seen{};size_t depth=0;
+  while(base&&depth<seen.size()) {
+    if(std::find(seen.begin(),seen.begin()+depth,base)!=seen.begin()+depth)return nullptr;
+    seen[depth++]=base;
     auto actor=d.dialogueActors.find(base);if(actor==d.dialogueActors.end())return nullptr;
     if(actor->second.templateActor&&(actor->second.templateFlags&category))base=actor->second.templateActor;
     else return &actor->second;

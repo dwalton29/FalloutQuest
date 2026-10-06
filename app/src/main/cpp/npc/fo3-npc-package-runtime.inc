@@ -213,13 +213,13 @@ static const fo3pipdata::PackageDefinition* Q240SelectPackage(
     Q230ActorVisual& actor,uint32_t& id,std::array<float,3>& anchor,float& radius) {
   id=0;radius=0;if(!gPlayerSession)return nullptr;
   const auto& definitions=gPlayerSession->player.Definitions().pipboy;
-  const auto actorDef=definitions.dialogueActors.find(actor.source.baseFormId);
-  if(actorDef==definitions.dialogueActors.end())return nullptr;
+  const auto* actorDef=fo3pipdata::ActorCategory(definitions,actor.source.baseFormId,16);
+  if(!actorDef){Q240AiLogOnce(actor.source.refFormId,0,"invalid AI package template");return nullptr;}
   const float hour=GetFo3TimeOfDayHour();
-  for(uint32_t packageId:actorDef->second.packages) {
+  for(uint32_t packageId:actorDef->packages) {
     const auto found=definitions.packages.find(packageId);if(found==definitions.packages.end())continue;
     const auto& package=found->second;
-    if(package.type!=1&&package.type!=6&&package.type!=9&&package.type!=5&&package.type!=12){Q240AiLogOnce(actor.source.refFormId,packageId,"package type "+std::to_string(package.type));continue;}
+    if(package.type!=1&&package.type!=6&&package.type!=14&&package.type!=5&&package.type!=12){Q240AiLogOnce(actor.source.refFormId,packageId,"package type "+std::to_string(package.type));continue;}
     if(package.scripted){Q240AiLogOnce(actor.source.refFormId,packageId,"package script");continue;}
     if(!Q240ScheduleActive(package.schedule,hour))continue;
     if(!package.location.valid&&package.type!=1){Q240AiLogOnce(actor.source.refFormId,packageId,"missing PLDT");continue;}

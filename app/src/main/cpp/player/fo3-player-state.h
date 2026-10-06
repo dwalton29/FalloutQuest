@@ -111,6 +111,7 @@ struct ActorState {
   std::array<float,3> position{};
   float yaw=0;
   uint64_t equippedWeapon=0;
+  bool dead=false;
 };
 struct State {
   fo3pipdata::SessionState pipboy;
