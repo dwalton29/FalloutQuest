@@ -22,8 +22,8 @@ android {
         applicationId 'com.falloutquest.app'
         minSdk 29
         targetSdk 35
-        versionCode 169
-        versionName '0.45.0-nav-voice-dev'
+        versionCode 170
+        versionName '0.45.1-nav-voice-runtime'
 
         ndk {
             abiFilters 'arm64-v8a'

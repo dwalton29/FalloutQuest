@@ -1,4 +1,5 @@
 #include "fo3-audio.h"
+#include "fo3-dialogue-completion.h"
 #include "data/fo3-asset-store.h"
 #include "fo3-audio-assets.h"
 #include "fo3-audio-catalog.h"
@@ -42,7 +43,7 @@ struct Runtime {
   uint32_t lastCell = UINT32_MAX;
   bool lastActive = false;
   std::atomic<uint32_t> playingNote{0};
-  std::atomic<uint64_t> dialogueCompletion{0};
+  DialogueCompletionMailbox dialogueCompletion;
 } runtime;
 std::string Loose(const std::string &relative) {
   return FindAudioFile(fo3assets::FalloutDataPath(""), relative);
@@ -193,82 +194,14 @@ void Worker() {
     return result;
   };
   std::unordered_map<std::string, std::string> voiceCache;
-  std::unordered_map<std::string, std::vector<std::string>> voiceDirectories;
+  VoiceResolver voiceResolver;
   auto voicePath = [&](const std::string &request) {
-    auto found = voiceCache.find(request);
-    if (found != voiceCache.end())
-      return found->second;
-    auto colon = request.find(':', 7);
-    if (colon == std::string::npos)
-      return std::string{};
-    std::string voice = request.substr(7, colon - 7),
-                suffix = request.substr(colon + 1);
-    std::transform(voice.begin(), voice.end(), voice.begin(), ::tolower);
-    const std::string prefix = "sound/voice/fallout3.esm/" + voice + "/";
-    std::string match;
-    bool ambiguous = false;
-    auto consider = [&](const std::string &path) {
-      auto lower = path;
-      std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
-      auto dot = lower.rfind('.');
-      if (dot == std::string::npos || !Playable(lower))
-        return;
-      auto stem = lower.substr(0, dot);
-      if (stem.size() >= suffix.size() &&
-          stem.compare(stem.size() - suffix.size(), suffix.size(), suffix) ==
-              0) {
-        if (!match.empty() && match != path)
-          ambiguous = true;
-        match = path;
-      }
-    };
-    auto directory = voiceDirectories.find(prefix);
-    if (directory == voiceDirectories.end()) {
-      std::vector<std::string> paths;
-      for (auto &root : AudioRoots(fo3assets::FalloutDataPath(""))) {
-        auto folder = LooseAt(root, prefix);
-        DIR *dir = folder.empty() ? nullptr : opendir(folder.c_str());
-        if (dir) {
-          while (auto *entry = readdir(dir))
-            if (Playable(entry->d_name) && paths.size() < 65536)
-              paths.push_back(prefix + entry->d_name);
-          closedir(dir);
-        }
-        if (!paths.empty())
-          break;
-      }
-      if (paths.empty())
-        for (auto &archive : archives) {
-          std::vector<fo3assets::BsaFileInfo> files;
-          fo3assets::GetBsaArchive(archive)->List(
-              prefix, files, fo3assets::BsaPathKind::Exact, 65536);
-          for (auto &f : files)
-            if (Playable(f.path))
-              paths.push_back(f.path);
-          if (!paths.empty())
-            break;
-        }
-      directory = voiceDirectories.emplace(prefix, std::move(paths)).first;
-    }
-    for (auto &path : directory->second)
-      consider(path);
-    if (ambiguous) {
-      __android_log_print(ANDROID_LOG_WARN,"FalloutQuest",
-                          "DIALOGUE VOICE AMBIGUOUS request=%s prefix=%s candidates=%zu",
-                          request.c_str(),prefix.c_str(),directory->second.size());
-      match.clear();
-    } else if(match.empty()) {
-      __android_log_print(ANDROID_LOG_WARN,"FalloutQuest",
-                          "DIALOGUE VOICE MISS request=%s prefix=%s candidates=%zu archives=%zu voicesArchive=%s",
-                          request.c_str(),prefix.c_str(),directory->second.size(),archives.size(),
-                          voiceArchive.empty()?"missing":voiceArchive.c_str());
-    } else {
-      __android_log_print(ANDROID_LOG_INFO,"FalloutQuest",
-                          "DIALOGUE VOICE RESOLVED request=%s path=%s",
-                          request.c_str(),match.c_str());
-    }
-    voiceCache.emplace(request, match);
-    return match;
+    auto cached=voiceCache.find(request);if(cached!=voiceCache.end())return cached->second;
+    const auto resolved=voiceResolver.Resolve(fo3assets::FalloutDataPath(""),archives,request);
+    __android_log_print(resolved.path.empty()?ANDROID_LOG_WARN:ANDROID_LOG_INFO,"FalloutQuest",
+      "DIALOGUE VOICE LOOKUP request=%s prefix=%s path=%s candidates=%zu ambiguous=%d archives=%zu",
+      request.c_str(),resolved.prefix.c_str(),resolved.path.c_str(),resolved.candidates,resolved.ambiguous,archives.size());
+    voiceCache.emplace(request,resolved.path);return resolved.path;
   };
   auto remember = [&](const std::string &path) {
     recentFiles.push_back(path);
@@ -293,15 +226,21 @@ void Worker() {
       return std::string{};
     std::vector<uint8_t> bytes;
     bool loaded = false;
+    std::string sourceArchive;
     for (const auto &archive : archives)
       if (fo3assets::GetBsaArchive(archive)->Read(path, bytes, nullptr,
                                                   fo3assets::BsaPathKind::Exact,
                                                   8 * 1024 * 1024)) {
-        loaded = true;
+        loaded = true;sourceArchive=archive;
         break;
       }
-    if (!loaded)
+    if (!loaded) {
+      __android_log_print(ANDROID_LOG_WARN,"FalloutQuest","AUDIO extraction failed path=%s archives=%zu",path.c_str(),archives.size());
       return std::string{};
+    }
+    __android_log_print(ANDROID_LOG_INFO,"FalloutQuest","AUDIO extracted path=%s archive=%s bytes=%zu ogg=%d",
+      path.c_str(),sourceArchive.c_str(),bytes.size(),bytes.size()>=4&&std::memcmp(bytes.data(),"OggS",4)==0);
+
     auto protectedFile = [&](const std::string &target) {
       if (target == dialogueFile || target == ambientFile ||
           std::find(recentFiles.begin(), recentFiles.end(), target) !=
@@ -571,11 +510,11 @@ void Context(uint32_t cell, bool active) {
   runtime.events.push_front({0, cell, active});
   runtime.cv.notify_one();
 }
-void Dialogue(const std::string& request,uint32_t token){runtime.dialogueCompletion=0;Push({13,token,true,request});}
-void DialogueStop(){Push({13,0,false,{}});runtime.dialogueCompletion=0;}
+void Dialogue(const std::string& request,uint32_t token){runtime.dialogueCompletion.Start(token);Push({13,token,true,request});}
+void DialogueStop(){runtime.dialogueCompletion.Stop();Push({13,0,false,{}});}
 void DialogueGain(float gain){gain=std::clamp(gain,0.f,1.f);uint32_t bits;std::memcpy(&bits,&gain,4);Push({14,bits,true});}
-uint64_t DialogueCompletion(){return runtime.dialogueCompletion.exchange(0);}
-void DialogueDone(uint32_t token,bool success){if(token)runtime.dialogueCompletion=(uint64_t(token)<<1)|(success?1:0);}
+uint64_t DialogueCompletion(){return runtime.dialogueCompletion.Take();}
+void DialogueDone(uint32_t token,bool success){runtime.dialogueCompletion.Done(token,success);}
 void Radio(uint32_t transmitter, const fo3pipdata::Definitions &definitions,
            const fo3pipdata::SessionState &state) {
   Event e{6, transmitter, true};

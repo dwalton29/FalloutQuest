@@ -610,7 +610,8 @@ bool LoadFo3NpcNavigationQ240(
                                 Fo3NpcNavTriangleQ240 triangle;
                                 for(int v=0;v<3;++v)triangle.vertex[v]=fo3esm::ReadU16(p+at+v*2u);
                                 for(int e=0;e<3;++e)triangle.neighbor[e]=static_cast<int16_t>(fo3esm::ReadU16(p+at+6u+e*2u));
-                                triangle.flags=fo3esm::ReadU32(p+at+12u);
+                                triangle.flags=fo3esm::ReadU16(p+at+12u);
+                                triangle.coverFlags=fo3esm::ReadU16(p+at+14u);
                                 mesh.triangles.push_back(triangle);
                             }
                         } else if(std::memcmp(type,"NVEX",4u)==0){

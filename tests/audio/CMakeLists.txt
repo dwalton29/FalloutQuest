@@ -18,3 +18,5 @@ target_compile_options(audio_assets_tests PRIVATE -Wall -Wextra -Werror)
 target_include_directories(audio_assets_tests PRIVATE ../../app/src/main/cpp)
 target_link_libraries(audio_assets_tests PRIVATE ZLIB::ZLIB)
 add_test(NAME audio_assets_tests COMMAND audio_assets_tests)
+
+target_sources(audio_assets_tests PRIVATE ../../app/src/main/cpp/data/fo3-bsa-archive.cpp ../../app/src/main/cpp/data/fo3-asset-store.cpp)

@@ -27,10 +27,17 @@ public final class FalloutNativeActivity extends NativeActivity {
     public void audioDialogue(String path,int token) {
         audio.post(() -> {
             releaseDialogue(false);dialogueToken=token;
-            if(destroyed || !enabled() || path.isEmpty()) { if(token!=0 && !path.isEmpty())audioDialogueDone(token,false);return; }
+            if(destroyed || !enabled() || path.isEmpty()) {
+                Log.w("FalloutQuest", "DIALOGUE rejected token="+token+" path="+path+" resumed="+resumed+" focused="+focused+" destroyed="+destroyed);
+                if(token!=0 && !path.isEmpty())audioDialogueDone(token,false);return;
+            }
+            Log.i("FalloutQuest", "DIALOGUE preparing token="+token+" path="+path);
             MediaPlayer player=new MediaPlayer();dialogue=player;
             prepare(player,path,dialogueGain,false,() -> {
-                if(dialogue==player) { releaseDialogue(false);audioDialogueDone(token,true); }
+                if(dialogue==player) {
+                    Log.i("FalloutQuest", "DIALOGUE completed token="+token+" positionMs="+player.getCurrentPosition()+" durationMs="+player.getDuration());
+                    releaseDialogue(false);audioDialogueDone(token,true);
+                }
             },() -> dialogue==player);
             duckSpeech();
         });
@@ -174,6 +181,7 @@ public final class FalloutNativeActivity extends NativeActivity {
             player.setOnPreparedListener(p -> {
                 if (enabled() && current.check()) {
                     p.setVolume(gain, gain); p.setLooping(loop); p.start();
+                    if(p==dialogue)Log.i("FalloutQuest", "DIALOGUE started token="+dialogueToken+" durationMs="+p.getDuration());
                     Log.i("FalloutQuest", "AUDIO playing: " + path + " gain=" + gain + " loop=" + loop);
                 }
             });

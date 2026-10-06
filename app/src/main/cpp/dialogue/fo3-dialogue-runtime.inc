@@ -146,7 +146,7 @@ void UpdateFo3Dialogue(double now,float stick,bool a,bool b,bool focused) {
   for(auto& actor:gQ230NpcActors) {
     if(actor.runtime.activity!=fo3npc::Activity::Combat&&(actor.runtime.dialogue||std::fabs(actor.runtime.headYaw)>.01f||std::fabs(fo3npc::Angle(actor.runtime.yaw-actor.runtime.returnYaw))>.01f)) {
       // Humanoid authored forward is +Y game space; scene Z is -game Y.
-      const auto& rig=actor.rigs;const float x=rig.empty()?0:rig[0].scenePlacement[12],z=rig.empty()?0:rig[0].scenePlacement[14];
+      const float x=actor.runtime.position[0],z=actor.runtime.position[2];
       const float desired=std::atan2(-(gQ210Head[0]-x),-(gQ210Head[2]-z));
       actor.runtime.Face(desired,dt);actor.lastFrame=UINT64_MAX;Q230UpdateActor(actor);
     }

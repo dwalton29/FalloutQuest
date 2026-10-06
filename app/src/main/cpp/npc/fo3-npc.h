@@ -73,7 +73,7 @@ struct Fo3NpcNavTriangleQ240 {
     // Local triangle index, or NVEX index when the corresponding low flag bit
     // (1 << edge) is set. 0xffff is no connection.
     int16_t neighbor[3]{-1,-1,-1};
-    uint32_t flags=0u;
+    uint16_t flags=0u,coverFlags=0u;
 };
 struct Fo3NpcNavExternalQ240 {
     uint32_t navMeshFormId=0u;
