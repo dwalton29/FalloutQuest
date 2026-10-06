@@ -287,7 +287,8 @@ static bool DecodeClips(const std::vector<uint8_t> &bytes, std::vector<fo3anim::
   using namespace fo3anim;
   out.clear();
   NifHeader h;
-  if (!ActorHeader(bytes, h) || h.userVersion != 11 || (h.bsVersion != 34 && h.bsVersion != 27))
+  if (!ActorHeader(bytes, h) || h.userVersion != 11 ||
+      (h.bsVersion != 34 && (h.bsVersion < 24 || h.bsVersion > 28)))
     return false;
   for (uint32_t block = 0; block < h.numBlocks; ++block) {
     if (BlockType(h, block) != "NiControllerSequence")
@@ -335,9 +336,9 @@ static bool DecodeClips(const std::vector<uint8_t> &bytes, std::vector<fo3anim::
         clip.stop < clip.start || !ActorValid(clip.frequency) ||
         clip.frequency <= 0)
       return false;
-    // Vanilla FO3 conversation idles include BS version 27: nifxml defines a
+    // Vanilla FO3 talking/conversation idles include BS versions 25 and 27: nifxml defines a
     // single BSAnimNotes reference for 24..28, versus a ushort array after 28.
-    if(h.bsVersion==27) {
+    if(h.bsVersion>=24&&h.bsVersion<=28) {
       uint32_t note=INVALID_REF;
       if(!c.U32(note)||(note!=INVALID_REF&&(note>=h.numBlocks||BlockType(h,note)!="BSAnimNotes")))return false;
     } else if(!c.U16(notes)||!c.Skip(static_cast<size_t>(notes)*4))return false;

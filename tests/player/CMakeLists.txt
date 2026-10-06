@@ -110,9 +110,10 @@ list(REMOVE_ITEM dialogue_shared player_state_tests.cpp)
 target_sources(dialogue_tests PRIVATE ${dialogue_shared})
 add_test(NAME dialogue_tests COMMAND dialogue_tests)
 
-add_executable(npc_package_runtime_tests npc_package_runtime_tests.cpp ${dialogue_shared})
+add_executable(npc_package_runtime_tests npc_package_runtime_tests.cpp ${dialogue_shared}
+    ../../app/src/main/cpp/npc/fo3-npc.cpp)
 target_compile_features(npc_package_runtime_tests PRIVATE cxx_std_17)
 target_compile_options(npc_package_runtime_tests PRIVATE -Wall -Wextra -Werror -Wno-misleading-indentation)
-target_include_directories(npc_package_runtime_tests PRIVATE ../../app/src/main/cpp)
+target_include_directories(npc_package_runtime_tests PRIVATE ../nif ../../app/src/main/cpp ../../app/src/main/cpp/data)
 target_link_libraries(npc_package_runtime_tests PRIVATE ZLIB::ZLIB)
 add_test(NAME npc_package_runtime_tests COMMAND npc_package_runtime_tests)

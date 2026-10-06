@@ -1,7 +1,9 @@
 #include "npc/fo3-npc.h"
+#include "data/fo3-texture-bsa.h"
 #include "npc/fo3-npc-state.h"
 #include "player/fo3-player-state.h"
 #include "dialogue/fo3-dialogue-conditions.h"
+#include "dialogue/fo3-dialogue-session.h"
 #include <memory>
 #include <unordered_set>
 #include <algorithm>
@@ -10,7 +12,10 @@
 #include <string>
 #include <vector>
 #include <iostream>
-template<class... T> void TestLog(const char*,T...){ }
+bool LoadFalloutMeshFile(const std::string&,std::vector<uint8_t>&,std::string*) {return false;}
+bool LoadFalloutTextureRgba(const std::string&,Fo3RgbaTexture&) {return false;}
+bool originalLogs=false;
+template<class... T> void TestLog(const char* fmt,T... args){if(originalLogs){std::printf(fmt,args...);std::puts("");}}
 #define Q6H_LOGI(...) TestLog(__VA_ARGS__)
 namespace fo3tod {float WrapHour(float h){return std::fmod(h+24.f,24.f);}}
 float GetFo3TimeOfDayHour(){return 12;}
@@ -32,6 +37,8 @@ struct Q230ActorVisual {
   std::vector<int> rigs{1};
   std::shared_ptr<const Q240NavigationGraph> navigationGraph;
   std::vector<std::array<float,3>> aiPathGame;
+    std::vector<std::pair<size_t,size_t>> aiPathSurfaces;
+    std::array<float,3> aiAnchorGame{};
   size_t aiPathIndex=0;
   uint32_t aiPackage=0,aiSequence=0;
   double aiLastUpdate=-1,aiRepathAt=0;
@@ -64,7 +71,55 @@ static Q230ActorVisual Actor(uint8_t type) {
   Q230ActorVisual actor;actor.source.refFormId=42;actor.source.baseFormId=43;
   actor.runtime.position=Q240ScenePosition({1010,2010,20});actor.navigationGraph=Graph();return actor;
 }
-int main() {
+static void Original(const char* path) {
+  originalLogs=true;
+  fo3player::Catalog catalog;std::string error;assert(fo3player::LoadCatalog(path,catalog,error));
+  gPlayerSession=std::make_unique<Session>(std::move(catalog));
+  std::vector<Fo3NpcActorQ230> actors;assert(LoadFo3CellActors(0xa96,actors,path));
+  std::vector<Fo3NpcNavMeshQ240> meshes;assert(LoadFo3NpcNavigationQ240(0xa96,0xa74,meshes,path));
+  auto graph=std::make_shared<Q240NavigationGraph>();
+  for(auto& mesh:meshes){graph->triangleOffsets.push_back(graph->triangleCount);graph->triangleCount+=mesh.triangles.size();graph->byForm[mesh.formId]=graph->meshes.size();graph->meshes.push_back(std::make_shared<Fo3NpcNavMeshQ240>(std::move(mesh)));}
+  gCurrentCellFormId=0xa96;gExteriorWorldspaceQ1890=0xa74;
+  std::cout<<"Original Megaton NAVM meshes="<<graph->meshes.size()<<" triangles="<<graph->triangleCount<<'\n';
+  size_t edges=0,rejected=0;
+  for(size_t m=0;m<graph->meshes.size();++m)for(size_t t=0;t<graph->meshes[m]->triangles.size();++t)Q240Neighbors(*graph,{m,t},[&](const Q240Node& to){++edges;std::array<float,3> p{};if(!Q240Portal(*graph,{m,t},to,p))++rejected;});
+  std::cout<<"Original Megaton links="<<edges<<" rejected portals="<<rejected<<'\n';
+  for(const auto& source:actors){
+    Q230ActorVisual actor;actor.source=source;actor.runtime.position=Q240ScenePosition({source.x,source.y,source.z});actor.navigationGraph=graph;
+    uint32_t id=0;std::array<float,3> anchor{};float radius=0;
+    const auto* p=Q240SelectPackage(actor,id,anchor,radius);
+    std::cout<<source.editorId<<" selected="<<std::hex<<id<<std::dec<<" type="<<(p?int(p->type):-1)<<" radius="<<radius<<'\n';
+    if(!p)continue;actor.aiPackage=id;
+    assert(Q240BuildPackagePath(actor,*p,anchor,radius));
+    actor.aiPackage=0;auto before=actor.runtime.position;for(int frame=0;frame<2400;++frame)Q240UpdateNpcPackage(actor,frame*.016);
+    if(source.baseFormId==0xa60){
+      assert(actor.aiPathIndex==actor.aiPathGame.size()); // Authored WaitForGreeting Travel.
+      fo3dialogue::Context ctx;ctx.player=&gPlayerSession->player;ctx.speaker={source.refFormId,source.baseFormId};ctx.target={0x14,7};
+      fo3dialogue::Session dialogue;assert(dialogue.Start(ctx,gPlayerSession->player));
+      while(dialogue.phase==fo3dialogue::Phase::Speaking)dialogue.AudioDone(dialogue.audioToken,true,ctx,gPlayerSession->player);
+      assert(dialogue.choices.size()==3);
+      assert(dialogue.Choose(0,ctx,gPlayerSession->player));
+      while(dialogue.phase==fo3dialogue::Phase::Speaking)dialogue.AudioDone(dialogue.audioToken,true,ctx,gPlayerSession->player);
+      assert(dialogue.Choose(0,ctx,gPlayerSession->player));
+      while(dialogue.phase==fo3dialogue::Phase::Speaking)dialogue.AudioDone(dialogue.audioToken,true,ctx,gPlayerSession->player);
+      Q240UpdateNpcPackage(actor,40);
+      assert(actor.aiPackage!=0x3dbce);
+      const auto released=actor.runtime.position;
+      for(int frame=1;frame<1200;++frame) {
+        Q240UpdateNpcPackage(actor,40+frame*.016);
+        if(actor.runtime.animation==fo3npc::Animation::Walk&&actor.aiPathIndex<actor.aiPathSurfaces.size()) {
+          const auto face=actor.aiPathSurfaces[actor.aiPathIndex];const auto game=Q240GamePosition(actor);
+          const auto onSurface=Q240GroundPoint(*graph->meshes[face.first],face.second,game);
+          assert(std::fabs(game[2]-onSurface[2])<.01f);
+        }
+      }
+      assert(actor.runtime.position!=released);
+      std::cout<<"Lucas after greeting package="<<std::hex<<actor.aiPackage<<std::dec<<" sequence="<<actor.aiSequence<<'\n';
+    }
+    std::cout<<"Actor update complete; sequence="<<actor.aiSequence<<" waypoints="<<actor.aiPathGame.size()<<" next="<<actor.aiPathIndex<<" deltaY="<<actor.runtime.position[1]-before[1]<<'\n';
+  }
+}
+int main(int argc,char** argv) {
   fo3pipdata::PackageSchedule schedule;schedule.valid=true;schedule.hour=22;schedule.duration=4;
   assert(Q240ScheduleActive(schedule,23)&&Q240ScheduleActive(schedule,1)&&!Q240ScheduleActive(schedule,12));
   auto graph=Graph();float distance=0;
@@ -83,6 +138,27 @@ int main() {
   auto disconnected=Graph();auto altered=std::make_shared<Fo3NpcNavMeshQ240>(*disconnected->meshes[1]);
   for(auto& v:altered->vertices)v[0]+=100;disconnected->meshes[1]=altered;
   assert(!Q240Path(*disconnected,{1010,2010,20},{2000,2900,20},path));
+  // A sloped surface must determine the new root height immediately, even
+  // when an authored actor placement starts 150 units above/below that surface.
+  auto sloped=std::make_shared<Fo3NpcNavMeshQ240>(*graph->meshes[0]);
+  sloped->vertices[0][2]=20;sloped->vertices[1][2]=120;sloped->vertices[2][2]=220;
+  auto ground=Q240GroundPoint(*sloped,0,{1250,2250,170});
+  assert(std::fabs(ground[2]-95)<.001f);
+  ground=Q240GroundPoint(*sloped,0,{1250,2250,-170});assert(std::fabs(ground[2]-95)<.001f);
+  auto grounded=Actor(6);
+  auto single=std::make_shared<Q240NavigationGraph>();single->meshes={sloped};single->byForm[100]=0;single->triangleOffsets={0};single->triangleCount=1;
+  grounded.navigationGraph=single;
+  auto& target=gPlayerSession->player; (void)target;
+  grounded.aiPackage=50;grounded.aiSequence=1;grounded.aiPathGame={{1400,2200,100}};grounded.aiPathSurfaces={{0,0}};
+  grounded.runtime.position=Q240ScenePosition({1250,2250,245});grounded.runtime.yaw=std::atan2(-150.f,50.f);grounded.aiLastUpdate=0;
+  Q240UpdateNpcPackage(grounded,.1);
+  const auto actual=Q240GamePosition(grounded);
+  const auto expected=Q240GroundPoint(*sloped,0,actual);assert(std::fabs(actual[2]-expected[2])<.001f);
+  // Wander must keep walking within one large authored triangle.
+  auto lone=Actor(5);lone.navigationGraph=single;
+  std::array<float,3> anchor{1250,2250,95};
+  assert(Q240BuildPackagePath(lone,gPlayerSession->player.Definitions().pipboy.packages.at(50),anchor,300));
+  assert(lone.aiPathGame.size()==1&&Q240PlanarDistance(lone.aiPathGame.back(),anchor)<=300);
   auto actor=Actor(6);
   const auto game=Q240GamePosition(actor);assert(game[0]==1010&&game[1]==2010&&game[2]==20);
   Q240UpdateNpcPackage(actor,0);actor.lastFrame=1;
@@ -99,5 +175,6 @@ int main() {
     Q240UpdateNpcPackage(actor,151);assert(actor.runtime.position==held);
     actor.runtime.EndDialogue();Q240UpdateNpcPackage(actor,152);assert(!actor.runtime.dialogue);
   }
+  if(argc>1)Original(argv[1]);
   std::cout<<"Production NPC package traversal, surface projection, shared portals, Travel and repathing passed\n";
 }

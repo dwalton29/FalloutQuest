@@ -166,6 +166,7 @@ struct Transmitter : Placement {
   uint32_t range = 0, position = 0;
 };
 struct Script {
+  std::string source;
   std::unordered_map<uint32_t, std::string> variables;
 };
 struct RadiationStage {

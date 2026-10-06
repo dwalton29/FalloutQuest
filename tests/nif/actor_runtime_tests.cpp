@@ -62,7 +62,7 @@ struct Q240NavigationGraph {
 struct Q230ActorVisual {
   Fo3NpcActorQ230 source;
   fo3npc::RuntimeState runtime;
-  std::array<fo3anim::Clip,5> animations;
+  std::array<fo3anim::Clip,size_t(fo3npc::Animation::Count)> animations;
   int activeAnimation=0,headBone=-1,chestBone=-1;
   std::vector<fo3anim::Transform> blendFrom;
   double blendStart=-1;

@@ -353,6 +353,7 @@ void Decode(Definitions &d, const std::string &t, uint32_t id, uint32_t flags,
     Script script;
     uint32_t index = 0;
     for (auto &a : s) {
+      if(a.type=="SCTX")script.source=fo3esm::ZString(a.p,a.n);
       if (a.type == "SLSD" && a.n >= 4)
         index = U(&a);
       if (a.type == "SCVR")

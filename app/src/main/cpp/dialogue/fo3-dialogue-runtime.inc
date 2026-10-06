@@ -112,7 +112,12 @@ void UpdateFo3Dialogue(double now,float stick,bool a,bool b,bool focused) {
     else {
       auto ctx=DialogueContext(*actor);
       const auto complete=fo3audio::DialogueCompletion();
-      if(complete){gDialogue.AudioDone(uint32_t(complete>>1),(complete&1)!=0,ctx,gPlayerSession->player);if(!gDialogue.Active()){CleanupFo3Dialogue(actor->source.refFormId,"voice/goodbye complete");}}
+      if(complete){
+        Q6H_LOGI("DIALOGUE TRANSITION actor=%08X info=%08X token=%u stage=audio-complete",gDialogue.actor,gDialogue.info,uint32_t(complete>>1));
+        gDialogue.AudioDone(uint32_t(complete>>1),(complete&1)!=0,ctx,gPlayerSession->player);
+        Q6H_LOGI("DIALOGUE TRANSITION actor=%08X info=%08X stage=choices-built phase=%d choices=%zu",gDialogue.actor,gDialogue.info,int(gDialogue.phase),gDialogue.choices.size());
+        if(!gDialogue.Active()){CleanupFo3Dialogue(actor->source.refFormId,"voice/goodbye complete");}
+      }
       if(gDialogue.Active()) {
         if(gDialogue.phase==fo3dialogue::Phase::Choices&&(gDialoguePanelPhase!=gDialogue.phase||gDialoguePanelInfo!=gDialogue.info))gDialogueCursor.Target(0,0);
         gDialogueCursor.Target(gDialogue.actor,gDialogue.choices.size());
@@ -135,6 +140,7 @@ void UpdateFo3Dialogue(double now,float stick,bool a,bool b,bool focused) {
           gDialoguePanelInfo=gDialogue.info;gDialoguePanelResponse=gDialogue.response;gDialoguePanelPhase=gDialogue.phase;
           gDialoguePanel.title=actor->source.fullName;gDialoguePanel.subtitle=gDialogue.Subtitle(gPlayerSession->player.Definitions().pipboy);
           gDialoguePanel.choices.clear();for(const auto& choice:gDialogue.choices)gDialoguePanel.choices.push_back(choice.text);++gDialoguePanel.revision;
+          Q6H_LOGI("DIALOGUE TRANSITION actor=%08X info=%08X stage=panel-ready choices=%zu",gDialogue.actor,gDialogue.info,gDialoguePanel.choices.size());
           fo3audio::RadioState(gPlayerSession->player.Snapshot().pipboy);FlushFo3PlayerState();
         }
         gDialoguePanel.selected=gDialogue.selected;
@@ -144,6 +150,7 @@ void UpdateFo3Dialogue(double now,float stick,bool a,bool b,bool focused) {
     }
   }
   for(auto& actor:gQ230NpcActors) {
+    actor.runtime.speaking=actor.runtime.dialogue&&gDialogue.actor==actor.source.refFormId&&gDialogue.phase==fo3dialogue::Phase::Speaking;
     if(actor.runtime.activity!=fo3npc::Activity::Combat&&(actor.runtime.dialogue||std::fabs(actor.runtime.headYaw)>.01f||std::fabs(fo3npc::Angle(actor.runtime.yaw-actor.runtime.returnYaw))>.01f)) {
       // Humanoid authored forward is +Y game space; scene Z is -game Y.
       const float x=actor.runtime.position[0],z=actor.runtime.position[2];

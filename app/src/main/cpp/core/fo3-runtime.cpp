@@ -702,7 +702,7 @@ struct Q240NavigationGraph {
 struct Q230ActorVisual {
     Fo3NpcActorQ230 source;
     fo3npc::RuntimeState runtime;
-    std::array<fo3anim::Clip,5> animations;
+    std::array<fo3anim::Clip,size_t(fo3npc::Animation::Count)> animations;
     int activeAnimation=0,headBone=-1,chestBone=-1;
     std::vector<fo3anim::Transform> blendFrom;
     double blendStart=-1;
@@ -717,6 +717,8 @@ struct Q230ActorVisual {
     std::shared_ptr<const Fo3NpcNavMeshQ240> navigation;
     std::shared_ptr<const Q240NavigationGraph> navigationGraph;
     std::vector<std::array<float,3>> aiPathGame;
+    std::vector<std::pair<size_t,size_t>> aiPathSurfaces;
+    std::array<float,3> aiAnchorGame{};
     size_t aiPathIndex=0u;
     uint32_t aiPackage=0u,aiSequence=0u;
     double aiLastUpdate=-1.0,aiRepathAt=0.0;

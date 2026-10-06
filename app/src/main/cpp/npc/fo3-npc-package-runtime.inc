@@ -80,6 +80,31 @@ static std::array<float,3> Q240ClosestPoint(const Fo3NpcNavMeshQ240& mesh,size_t
   const float v=vb/sum,w=vc/sum;
   return {a[0]+ab[0]*v+ac[0]*w,a[1]+ab[1]*v+ac[1]*w,a[2]+ab[2]*v+ac[2]*w};
 }
+// Project vertically onto this route segment's triangle. A segment can start
+// above/below NAVM; interpolating its old root height toward the next portal
+// preserves that error for seconds. Ground every step on the authored surface.
+static std::array<float,3> Q240GroundPoint(const Fo3NpcNavMeshQ240& mesh,size_t triangle,
+                                         const std::array<float,3>& point) {
+  const auto& t=mesh.triangles[triangle];
+  const auto &a=mesh.vertices[t.vertex[0]],&b=mesh.vertices[t.vertex[1]],&c=mesh.vertices[t.vertex[2]];
+  const float det=(b[1]-c[1])*(a[0]-c[0])+(c[0]-b[0])*(a[1]-c[1]);
+  if(std::fabs(det)>1e-6f) {
+    const float u=((b[1]-c[1])*(point[0]-c[0])+(c[0]-b[0])*(point[1]-c[1]))/det;
+    const float v=((c[1]-a[1])*(point[0]-c[0])+(a[0]-c[0])*(point[1]-c[1]))/det;
+    const float w=1-u-v;
+    if(u>=-1e-5f&&v>=-1e-5f&&w>=-1e-5f)return {point[0],point[1],u*a[2]+v*b[2]+w*c[2]};
+  }
+  float nearest=INFINITY;std::array<float,3> out=a;
+  for(int edge=0;edge<3;++edge) {
+    const auto &x=mesh.vertices[t.vertex[edge]],&y=mesh.vertices[t.vertex[(edge+1)%3]];
+    const float dx=y[0]-x[0],dy=y[1]-x[1],length=dx*dx+dy*dy;
+    const float f=length>1e-6f?std::clamp(((point[0]-x[0])*dx+(point[1]-x[1])*dy)/length,0.f,1.f):0.f;
+    std::array<float,3> q{};for(int axis=0;axis<3;++axis)q[axis]=x[axis]+(y[axis]-x[axis])*f;
+    const float d=(q[0]-point[0])*(q[0]-point[0])+(q[1]-point[1])*(q[1]-point[1]);
+    if(d<nearest){nearest=d;out=q;}
+  }
+  return out;
+}
 static Q240Node Q240NearestNode(const Q240NavigationGraph& graph,const std::array<float,3>& point,float* distance=nullptr) {
   Q240Node best;float nearest=INFINITY;
   for(size_t mesh=0;mesh<graph.meshes.size();++mesh)for(size_t triangle=0;triangle<graph.meshes[mesh]->triangles.size();++triangle) {
@@ -96,7 +121,11 @@ static bool Q240Portal(const Q240NavigationGraph& graph,const Q240Node& from,con
                        std::array<float,3>& midpoint) {
   const auto& a=*graph.meshes[from.mesh];const auto& b=*graph.meshes[to.mesh];
   const auto& ta=a.triangles[from.triangle];const auto& tb=b.triangles[to.triangle];
-  auto same=[](const auto& x,const auto& y){float d=0;for(int c=0;c<3;++c)d+=(x[c]-y[c])*(x[c]-y[c]);return d<=.01f*.01f;};
+  // Original Megaton reciprocal NVEX links differ by up to 14.274 units
+  // between cell boundary vertices. Allow that authored seam (16 game units),
+  // while requiring the target's reciprocal link; internal edges stay exact.
+  const float tolerance=from.mesh==to.mesh?.01f:16.f;
+  auto same=[&](const auto& x,const auto& y){float d=0;for(int c=0;c<3;++c)d+=(x[c]-y[c])*(x[c]-y[c]);return d<=tolerance*tolerance;};
   for(int edge=0;edge<3;++edge) {
     const int link=ta.neighbor[edge];if(link<0)continue;
     bool connects=false;
@@ -109,6 +138,12 @@ static bool Q240Portal(const Q240NavigationGraph& graph,const Q240Node& from,con
     const auto &p=a.vertices[ta.vertex[edge]],&q=a.vertices[ta.vertex[(edge+1)%3]];
     for(int targetEdge=0;targetEdge<3;++targetEdge) {
       const auto &u=b.vertices[tb.vertex[targetEdge]],&v=b.vertices[tb.vertex[(targetEdge+1)%3]];
+      if(from.mesh!=to.mesh) {
+        const int back=tb.neighbor[targetEdge];
+        if(!(tb.flags&(1u<<targetEdge))||back<0||size_t(back)>=b.external.size())continue;
+        const auto& reciprocal=b.external[back];
+        if(reciprocal.navMeshFormId!=a.formId||reciprocal.triangle!=from.triangle)continue;
+      }
       if((same(p,u)&&same(q,v))||(same(p,v)&&same(q,u))) {
         for(int c=0;c<3;++c)midpoint[c]=(p[c]+q[c])*.5f;
         return true;
@@ -118,8 +153,9 @@ static bool Q240Portal(const Q240NavigationGraph& graph,const Q240Node& from,con
   return false;
 }
 static bool Q240Path(const Q240NavigationGraph& graph,const std::array<float,3>& from,
-                     const std::array<float,3>& to,std::vector<std::array<float,3>>& path,std::string* failure=nullptr) {
-  path.clear();if(failure)failure->clear();
+                     const std::array<float,3>& to,std::vector<std::array<float,3>>& path,std::string* failure=nullptr,
+                     std::vector<std::pair<size_t,size_t>>* surfaces=nullptr) {
+  path.clear();if(surfaces)surfaces->clear();if(failure)failure->clear();
   auto fail=[&](const char* why){if(failure)*failure=why;return false;};
   float startDistance=0,goalDistance=0;
   const Q240Node start=Q240NearestNode(graph,from,&startDistance),goal=Q240NearestNode(graph,to,&goalDistance);
@@ -155,11 +191,12 @@ static bool Q240Path(const Q240NavigationGraph& graph,const std::array<float,3>&
   for(size_t flat:reverse) {
     const auto node=Q240NodeAt(graph,flat);std::array<float,3> portal{};
     if(!node.Valid()||!Q240Portal(graph,prior,node,portal)){path.clear();return fail("invalid shared NAVM portal");}
-    path.push_back(portal);prior=node;
+    path.push_back(portal);if(surfaces)surfaces->push_back({prior.mesh,prior.triangle});prior=node;
   }
   // Preserve the requested destination inside the terminal triangle. Travel
   // must not declare completion just because it reached that triangle's centre.
-  path.push_back(Q240ClosestPoint(*graph.meshes[goal.mesh],goal.triangle,to));
+  path.push_back(Q240GroundPoint(*graph.meshes[goal.mesh],goal.triangle,to));
+  if(surfaces)surfaces->push_back({goal.mesh,goal.triangle});
   return true;
 }
 static bool Q240ScheduleActive(const fo3pipdata::PackageSchedule& schedule,float hour) {
@@ -202,7 +239,10 @@ static const fo3pipdata::PackageDefinition* Q240SelectPackage(
     if(package.location.type==0u) {
       const auto target=definitions.targets.find(package.location.value);
       if(target==definitions.targets.end()){Q240AiLogOnce(actor.source.refFormId,packageId,"location reference unavailable");continue;}
-      if(target->second.world&&gExteriorWorldspaceQ1890&&target->second.world!=gExteriorWorldspaceQ1890)continue;
+      if(target->second.world!=gExteriorWorldspaceQ1890||
+         (!gExteriorWorldspaceQ1890&&target->second.cell!=gCurrentCellFormId)) {
+        Q240AiLogOnce(actor.source.refFormId,packageId,"destination requires another scene/cell");continue;
+      }
       anchor={target->second.x,target->second.y,target->second.z};
     } else if(package.location.type==2u) anchor=game;
     else if(package.location.type==3u) anchor={actor.source.x,actor.source.y,actor.source.z};
@@ -213,7 +253,7 @@ static const fo3pipdata::PackageDefinition* Q240SelectPackage(
 }
 static bool Q240BuildPackagePath(Q230ActorVisual& actor,const fo3pipdata::PackageDefinition& package,
                                  const std::array<float,3>& anchor,float radius) {
-  actor.aiPathGame.clear();actor.aiPathIndex=0;if(!actor.navigationGraph||actor.navigationGraph->triangleCount==0)return false;
+  actor.aiPathGame.clear();actor.aiPathSurfaces.clear();actor.aiPathIndex=0;if(!actor.navigationGraph||actor.navigationGraph->triangleCount==0)return false;
   const auto& graph=*actor.navigationGraph;
   const auto current=Q240GamePosition(actor);
   std::array<float,3> destination=anchor;
@@ -236,20 +276,29 @@ static bool Q240BuildPackagePath(Q230ActorVisual& actor,const fo3pipdata::Packag
         if(next<n&&!reachable[next]&&Q240Portal(graph,node,nextNode,portal)){reachable[next]=1;queue.push_back(next);}
       });
     }
-    std::vector<size_t> choices;choices.reserve(queue.size());
+    std::vector<std::array<float,3>> choices;choices.reserve(queue.size());
+    uint32_t hash=actor.source.refFormId*2654435761u ^ actor.aiPackage*2246822519u ^ (++actor.aiSequence)*3266489917u;
+    auto random=[&](){hash=hash*1664525u+1013904223u;return float(hash>>8)/16777216.f;};
     for(size_t flat:queue) {
-      if(flat==startFlat)continue;
       const auto node=Q240NodeAt(graph,flat);if(!node.Valid())continue;
-      if(Q240PlanarDistance(Q240Centroid(graph,node),anchor)<=radius)choices.push_back(flat);
+      const auto& mesh=*graph.meshes[node.mesh];const auto& tri=mesh.triangles[node.triangle];
+      auto candidate=Q240GroundPoint(mesh,node.triangle,anchor);
+      if(Q240PlanarDistance(candidate,anchor)>radius)continue;
+      // Include a large current triangle and the portion of boundary triangles
+      // inside PLDT. Centroid-only selection can exhaust a perfectly walkable area.
+      for(int attempt=0;attempt<16;++attempt) {
+        float u=random(),v=random();if(u+v>1){u=1-u;v=1-v;}
+        std::array<float,3> point{};
+        for(int axis=0;axis<3;++axis)point[axis]=mesh.vertices[tri.vertex[0]][axis]*(1-u-v)+mesh.vertices[tri.vertex[1]][axis]*u+mesh.vertices[tri.vertex[2]][axis]*v;
+        if(Q240PlanarDistance(point,anchor)<=radius&&Q240PlanarDistance(point,current)>16.f){candidate=point;break;}
+      }
+      if(Q240PlanarDistance(candidate,current)>16.f)choices.push_back(candidate);
     }
     if(choices.empty()) {Q240AiLogOnce(actor.source.refFormId,actor.aiPackage,"no reachable destination in PLDT radius="+std::to_string(radius));return false;}
-    uint32_t hash=actor.source.refFormId*2654435761u ^ actor.aiPackage*2246822519u ^ (++actor.aiSequence)*3266489917u;
-    const auto goal=Q240NodeAt(graph,choices[hash%choices.size()]);
-    if(!goal.Valid())return false;
-    destination=Q240Centroid(graph,goal);
+    destination=choices[hash%choices.size()];
   }
   std::string failure;
-  const bool success=Q240Path(graph,current,destination,actor.aiPathGame,&failure);
+  const bool success=Q240Path(graph,current,destination,actor.aiPathGame,&failure,&actor.aiPathSurfaces);
   if(!success)Q240AiLogOnce(actor.source.refFormId,actor.aiPackage,failure);
   if(!success||actor.aiSequence<=2u||(actor.aiSequence%8u)==0u) {
     const auto start=Q240NearestNode(graph,current),goal=Q240NearestNode(graph,destination);
@@ -274,11 +323,12 @@ static void Q240AdvanceNpcPackage(Q230ActorVisual& actor,double now) {
     actor.runtime.animation=fo3npc::Animation::Idle;actor.aiPathGame.clear();return;
   }
   if(packageId!=actor.aiPackage) {
-    actor.aiPackage=packageId;actor.aiSequence=0;actor.aiPathGame.clear();actor.aiPathIndex=0;actor.aiRepathAt=0;
+    actor.aiPackage=packageId;actor.aiAnchorGame=anchor;actor.aiSequence=0;actor.aiPathGame.clear();actor.aiPathIndex=0;actor.aiRepathAt=0;
     Q6H_LOGI("NPC PACKAGE actor=%08X package=%08X EDID=%s type=%u locationType=%u radius=%d hour=%.2f",
       actor.source.refFormId,packageId,package->editor.c_str(),unsigned(package->type),
       package->location.type,package->location.radius,GetFo3TimeOfDayHour());
   }
+  if(package->location.type==2u)anchor=actor.aiAnchorGame;
   actor.runtime.package=packageId;actor.runtime.packageKnown=true;actor.runtime.activity=fo3npc::Activity::Package;
   if(actor.aiPathIndex>=actor.aiPathGame.size()) {
     actor.runtime.speed=0;actor.runtime.animation=fo3npc::Animation::Idle;
@@ -326,7 +376,12 @@ static void Q240AdvanceNpcPackage(Q230ActorVisual& actor,double now) {
   constexpr float WALK_METRES_PER_SECOND=1.05f;
   const float step=std::min(distance,WALK_METRES_PER_SECOND*dt),fraction=step/std::max(distance,.001f);
   actor.runtime.position[0]+=dx*fraction;actor.runtime.position[2]+=dz*fraction;
-  actor.runtime.position[1]+=dy*fraction;actor.runtime.speed=WALK_METRES_PER_SECOND;
+  actor.runtime.position[1]+=dy*fraction;
+  if(actor.aiPathIndex<actor.aiPathSurfaces.size()) {
+    const auto surface=actor.aiPathSurfaces[actor.aiPathIndex];
+    actor.runtime.position=Q240ScenePosition(Q240GroundPoint(*actor.navigationGraph->meshes[surface.first],surface.second,Q240GamePosition(actor)));
+  }
+  actor.runtime.speed=WALK_METRES_PER_SECOND;
   actor.runtime.animation=fo3npc::Animation::Walk;
 }
 void Q240UpdateNpcPackage(Q230ActorVisual& actor,double now) {

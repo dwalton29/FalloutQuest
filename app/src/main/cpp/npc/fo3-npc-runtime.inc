@@ -1,13 +1,17 @@
 void Q230CacheDialogueAnimations(Q230ActorVisual& actor,const fo3pipdata::Definitions* d) {
   actor.animations[0]=actor.clip;
   const auto root=actor.source.skeletonModel.substr(0,actor.source.skeletonModel.find_last_of("\\/")+1);
-  std::array<std::string,5> paths{"",root+"locomotion\\mtturnleft.kf",root+"locomotion\\mtturnright.kf","",
-    root+"locomotion\\"+(actor.source.female?std::string("female\\"):std::string("male\\"))+"mtforward.kf"};
-  if(d){std::string name=fo3npc::DialoguePolicy::ConversationIdle;for(auto& c:name)c=char(std::tolower((unsigned char)c));auto named=d->formNames.find(name);if(named!=d->formNames.end()){
-    auto model=d->idleModels.find(named->second);if(model!=d->idleModels.end())paths[3]=model->second;
-  }}
+  std::array<std::string,size_t(fo3npc::Animation::Count)> paths{"",root+"locomotion\\mtturnleft.kf",root+"locomotion\\mtturnright.kf","",
+    root+"locomotion\\"+(actor.source.female?std::string("female\\"):std::string("male\\"))+"mtforward.kf",
+    ""};
+  if(d)for(const auto& entry:std::array<std::pair<size_t,const char*>,2>{{{3,fo3npc::DialoguePolicy::ConversationIdle},{5,fo3npc::DialoguePolicy::SpeakingIdle}}}) {
+    std::string name=entry.second;for(auto& c:name)c=char(std::tolower((unsigned char)c));
+    const auto named=d->formNames.find(name);if(named==d->formNames.end())continue;
+    const auto model=d->idleModels.find(named->second);if(model!=d->idleModels.end())paths[entry.first]=model->second;
+  }
   for(size_t i=1;i<paths.size();++i){std::vector<uint8_t> bytes;
-    if(!paths[i].empty()&&LoadFalloutMeshFile(paths[i],bytes))fo3anim::DecodeClip(bytes,actor.animations[i]);
+    const bool ready=!paths[i].empty()&&LoadFalloutMeshFile(paths[i],bytes)&&fo3anim::DecodeClip(bytes,actor.animations[i]);
+    (void)ready;Q6H_LOGI("NPC CLIP actor=%08X slot=%zu ready=%d path=%s",actor.source.refFormId,i,ready,paths[i].c_str());
   }
   actor.headBone=fo3anim::FindBone(actor.skeleton,"Bip01 Head");
   actor.chestBone=fo3anim::FindBone(actor.skeleton,"Bip01 Spine2");
@@ -204,6 +208,7 @@ void Q230UpdateActor(Q230ActorVisual &actor) {
   const double elapsed=std::chrono::duration<double>(fqopaque::Clock::now()-actor.animationStart).count();
   fo3anim::SampleTimings timings;
   int selected=int(actor.runtime.animation);
+  if(selected<0||size_t(selected)>=actor.animations.size())selected=0;
   if(actor.animations[selected].tracks.empty())selected=0;
   if(selected!=actor.activeAnimation) {
     actor.blendFrom=actor.pose.local;actor.blendStart=elapsed;actor.activeAnimation=selected;

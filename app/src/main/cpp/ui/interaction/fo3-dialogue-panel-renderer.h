@@ -44,6 +44,7 @@ inline void Render(const float* mvp,const fo3dialogue::Panel& panel) {
     glEnableVertexAttribArray(0);glVertexAttribPointer(0,3,GL_FLOAT,GL_FALSE,sizeof(fo3hudassets::Vertex),nullptr);
     glEnableVertexAttribArray(1);glVertexAttribPointer(1,2,GL_FLOAT,GL_FALSE,sizeof(fo3hudassets::Vertex),reinterpret_cast<const void*>(3*sizeof(float)));
     r.revision=panel.revision;r.selected=panel.selected;
+    __android_log_print(ANDROID_LOG_INFO,"FalloutQuest","DIALOGUE PANEL uploaded choices=%zu vertices=%zu textCount=%d",panel.choices.size(),vertices.size(),int(r.textCount));
   }
   glEnable(GL_DEPTH_TEST);glDepthMask(GL_FALSE);glEnable(GL_BLEND);
   glBlendEquationSeparate(GL_FUNC_ADD,GL_FUNC_ADD);glBlendFuncSeparate(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA,GL_ONE,GL_ONE_MINUS_SRC_ALPHA);

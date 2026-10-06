@@ -19,6 +19,7 @@ static void Original(const char* path) {
   Context ctx;ctx.player=&player;ctx.speaker.reference=0x3b46;ctx.speaker.base=0xa60;ctx.target.reference=0x14;ctx.target.base=7;
   Session s;size_t diagnostics=0;s.diagnostic=[&](const std::string& m){if(++diagnostics<8)std::cerr<<m<<'\n';};
   assert(s.Start(ctx,player));
+  assert(player.Snapshot().pipboy.dialogueVariables.at((uint64_t(0x3b46)<<32)|2)==1);
   auto i=s.Current(player.Definitions().pipboy);assert(i);
   std::cout<<"GREETING info="<<std::hex<<i->id<<" quest="<<i->quest<<" voice="<<s.voice<<std::dec<<" responses="<<i->responses.size()<<" conditions="<<i->conditions.size()<<'\n';
   assert(i->responses[0].text.find("Name's Lucas Simms, town sheriff.")==0);
@@ -135,6 +136,18 @@ static void ResultConsequences() {
   assert(!p.ExecuteDialogueResult(result,error)&&p.Revision()==before&&p.Snapshot().inventory[0].count==2);
   result.source.clear();result.compiled={1,2};assert(!p.ExecuteDialogueResult(result,error)&&p.Revision()==before);
 }
+static void ActivationEvent() {
+  fo3player::Catalog c;c.pipboy.dialogueActors[10].script=20;
+  c.pipboy.referenceScripts[100]={"actor",10};c.pipboy.scripts[20].variables[1]="Greet";
+  c.pipboy.scripts[20].source="Begin GameMode\nuseWeapon unsupported\nEnd\nBegin OnActivate\nif Greet == 0\nif GetActionRef == player\nset Greet to 1\nendif\nendif\nactivate\nEnd";
+  fo3player::Player p(c);Context ctx;ctx.player=&p;ctx.speaker={100,10};ctx.target={0x14,7};std::string error;
+  assert(Activate(ctx,p,error));assert(p.Snapshot().pipboy.dialogueVariables.at((uint64_t(100)<<32)|1)==1);
+  auto revision=p.Revision();assert(Activate(ctx,p,error)&&p.Revision()==revision);
+  fo3player::Player other(c);ctx.player=&other;ctx.target.reference=101;assert(Activate(ctx,other,error));assert(other.Snapshot().pipboy.dialogueVariables.empty());
+  c.pipboy.scripts[20].source="Begin OnActivate\nset Greet to 1\nuseWeapon unsupported\nEnd";
+  fo3player::Player unsupported(c);ctx.player=&unsupported;ctx.target.reference=0x14;
+  assert(!Activate(ctx,unsupported,error)&&unsupported.Snapshot().pipboy.dialogueVariables.empty());
+}
 static void PresentationAndOverride() {
   fo3font::Metrics font;font.baseLine=10;
   for(auto& g:font.glyphs){g.width=1;g.spacing=1;}
@@ -153,14 +166,16 @@ static void PresentationAndOverride() {
   npc.BeginDialogue();assert(npc.dialogue&&npc.speed==0&&npc.package==99);
   npc.Face(1.5f,.1f);assert(npc.animation==fo3npc::Animation::TurnLeft&&npc.yaw>.2f&&npc.yaw<.32f);
   npc.Face(npc.yaw+.1f,.1f);assert(npc.animation==fo3npc::Animation::Conversation&&npc.headYaw>0);
-  npc.EndDialogue();assert(!npc.dialogue&&npc.activity==fo3npc::Activity::Package&&npc.package==99&&npc.speed==1);
+  npc.speaking=true;npc.Face(npc.yaw+.1f,.1f);assert(npc.animation==fo3npc::Animation::Speaking);
+  npc.speaking=false;npc.Face(npc.yaw+.1f,.1f);assert(npc.animation==fo3npc::Animation::Conversation);
+  npc.EndDialogue();assert(!npc.speaking);assert(!npc.dialogue&&npc.activity==fo3npc::Activity::Package&&npc.package==99&&npc.speed==1);
   assert(npc.authoredYaw==.2f);for(int n=0;n<20;++n)npc.Face(0,.1f);assert(std::fabs(npc.yaw-.2f)<.01f);
   npc.BeginDialogue();npc.activity=fo3npc::Activity::Combat;npc.EndDialogue();assert(npc.activity==fo3npc::Activity::Combat);
   assert(!fo3npc::Interrupted(false,true,true,false,4));
   assert(fo3npc::Interrupted(false,true,true,false,6));assert(fo3npc::Interrupted(false,true,false,false,2));
   assert(fo3npc::Interrupted(false,false,true,false,2));assert(fo3npc::Interrupted(true,true,true,false,2));assert(fo3npc::Interrupted(false,true,true,true,2));
 }
-int main(int argc,char** argv){Isolated();ConsequencesAndOrder();Lifecycle();ResultConsequences();PresentationAndOverride();if(argc>1)Original(argv[1]);
+int main(int argc,char** argv){Isolated();ConsequencesAndOrder();Lifecycle();ResultConsequences();ActivationEvent();PresentationAndOverride();if(argc>1)Original(argv[1]);
   if(argc>2){std::ifstream voice(std::string(argv[2])+"/ms11_greeting_0003da20_3.ogg",std::ios::binary);char header[4]{};voice.read(header,4);assert(std::string(header,4)=="OggS");
     std::ifstream lip(std::string(argv[2])+"/ms11_greeting_0003da20_3.lip",std::ios::binary);assert(lip&&lip.peek()==1);std::cout<<"Original Lucas voice and companion LIP exist\n";}
   std::cout<<"Dialogue tests passed\n";}

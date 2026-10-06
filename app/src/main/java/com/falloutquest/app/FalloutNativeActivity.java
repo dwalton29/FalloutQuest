@@ -35,7 +35,14 @@ public final class FalloutNativeActivity extends NativeActivity {
             MediaPlayer player=new MediaPlayer();dialogue=player;
             prepare(player,path,dialogueGain,false,() -> {
                 if(dialogue==player) {
-                    Log.i("FalloutQuest", "DIALOGUE completed token="+token+" positionMs="+player.getCurrentPosition()+" durationMs="+player.getDuration());
+                    // Some Android decoders have already left PlaybackCompleted
+                    // when delivering this callback. Diagnostics must never abort
+                    // the UI thread before the native choice transition.
+                    try {
+                        Log.i("FalloutQuest", "DIALOGUE completed token="+token+" positionMs="+player.getCurrentPosition()+" durationMs="+player.getDuration());
+                    } catch (IllegalStateException e) {
+                        Log.w("FalloutQuest", "DIALOGUE completed token="+token+" timing unavailable",e);
+                    }
                     releaseDialogue(false);audioDialogueDone(token,true);
                 }
             },() -> dialogue==player);

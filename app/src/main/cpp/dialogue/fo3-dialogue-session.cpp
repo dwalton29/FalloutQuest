@@ -64,6 +64,8 @@ bool Session::CanStart(const Context& ctx)const {
 }
 bool Session::Start(const Context& ctx,fo3player::Player& p) {
   if(!CanStart(ctx))return false;
+  std::string activationError;
+  if(!Activate(ctx,p,activationError)){if(diagnostic)diagnostic("DIALOGUE UNSUPPORTED SCRIPT actor="+Id(ctx.speaker.reference)+" "+activationError);return false;}
   interruption.clear();const float dx=ctx.speaker.x-ctx.target.x,dy=ctx.speaker.y-ctx.target.y,dz=ctx.speaker.z-ctx.target.z;
   startDistanceGameUnits=std::sqrt(dx*dx+dy*dy+dz*dz);
   startDistance=std::sqrt((ctx.speaker.x-ctx.target.x)*(ctx.speaker.x-ctx.target.x)+(ctx.speaker.y-ctx.target.y)*(ctx.speaker.y-ctx.target.y)+(ctx.speaker.z-ctx.target.z)*(ctx.speaker.z-ctx.target.z))/100.f;endReason.clear();
@@ -102,6 +104,7 @@ bool Session::AudioDone(uint32_t token,bool success,const Context& ctx,fo3player
   if(!success&&diagnostic)diagnostic("DIALOGUE VOICE UNAVAILABLE actor="+Id(actor)+" info="+Id(info)+" response="+std::to_string(response)+" continuing without audio");
   auto i=Current(p.Definitions().pipboy);if(!i){End("INFO missing");return false;}
   if(++response<i->responses.size()){++audioToken;return true;}
+  if(diagnostic)diagnostic("DIALOGUE TRANSITION info="+Id(i->id)+" stage=end-result");
   std::string error;if(!p.ExecuteDialogueResult(i->end,error)){if(diagnostic)diagnostic("DIALOGUE UNSUPPORTED SCRIPT info="+Id(i->id)+" "+error);End("end result rejected");return false;}
   if(diagnostic&&!i->end.source.empty())diagnostic("DIALOGUE RESULT info="+Id(i->id)+" phase=end");
   p.RecordDialogue(actor,(i->flags&4)?i->id:0,i->addedTopics);
