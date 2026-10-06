@@ -49,5 +49,10 @@ int main(){
   assert(gPlayerSession->player.ApplyAttack(0x14,10,42,1000));Q230SimulateActor(a,23);assert(a.runtime.activity==fo3npc::Activity::Dying&&!a.runtime.pendingAttack);Q230SimulateActor(a,24);assert(a.runtime.activity==fo3npc::Activity::Dead&&gPlayerSession->player.CanLootContainer(42));
   a.runtime.position=Q240ScenePosition({2000,3000,20});a.runtime.nextPath=0;a.aiPathGame.clear();
   assert(!Q230CombatRoute(a,{1000,2000,20},true,30)&&a.aiPathGame.empty());
+  Prepare();auto& patrol=gQ230NpcActors[0];auto pc=gPlayerSession->player.Definitions();
+  pc.pipboy.packages[50].type=13;pc.pipboy.packages[50].patrol={{60,pc.pipboy.targets.at(60)},{61,pc.pipboy.targets.at(60)}};
+  gPlayerSession=std::make_unique<Session>(pc);fo3player::ActorState progress;progress.cell=1;progress.world=2;progress.package=50;progress.sequence=2;progress.position=Q240GamePosition(patrol);
+  assert(gPlayerSession->player.UpdateActor(42,progress));patrol.stateRestored=false;blocked=true;Q230SimulateActor(patrol,31);assert(patrol.aiSequence==2);
+  patrol.runtime.EndDialogue();patrol.runtime.BeginCombat(999);Q230SimulateActor(patrol,32);assert(patrol.runtime.activity==fo3npc::Activity::Package&&patrol.aiSequence==2);
   std::cout<<"Production NPC combat pursuit/flee, LOS, reload, firing, death and restore passed\n";
 }

@@ -79,6 +79,9 @@ static Q230ActorVisual Actor(uint8_t type) {
 static void Original(const char* path) {
   originalLogs=true;
   fo3player::Catalog catalog;std::string error;assert(fo3player::LoadCatalog(path,catalog,error));
+  assert(catalog.pipboy.packages.at(0x7e6dd).patrol.size()==4);
+  assert(!catalog.pipboy.packages.at(0x7e6dd).patrolRepeat);
+  assert(catalog.pipboy.packages.at(0x7e6dd).patrol.back().placement.patrolWait==20);
   gPlayerSession=std::make_unique<Session>(std::move(catalog));
   std::vector<Fo3NpcActorQ230> actors;assert(LoadFo3CellActors(0xa96,actors,path));
   std::vector<Fo3NpcNavMeshQ240> meshes;assert(LoadFo3NpcNavigationQ240(0xa96,0xa74,meshes,path));
@@ -181,7 +184,8 @@ int main(int argc,char** argv) {
     actor.runtime.EndDialogue();Q240UpdateNpcPackage(actor,152);assert(!actor.runtime.dialogue);
   }
   {
-    auto guard=Actor(14);Q240UpdateNpcPackage(guard,1);assert(guard.aiPackage==50);
+    auto guard=Actor(14);for(int i=0;i<1500;++i)Q240UpdateNpcPackage(guard,i*.1);assert(guard.aiPackage==50&&guard.aiSequence==1);
+    const auto held=guard.runtime.position;Q240UpdateNpcPackage(guard,160);assert(guard.runtime.position==held&&guard.runtime.speed==0);
     auto ambush=Actor(9);Q240UpdateNpcPackage(ambush,1);assert(ambush.aiPackage==0);
   }
   {
@@ -189,6 +193,30 @@ int main(int argc,char** argv) {
     c.pipboy.dialogueActors[44].templateActor=43;c.pipboy.dialogueActors[44].templateFlags=16;
     inherited.source.baseFormId=44;gPlayerSession=std::make_unique<Session>(std::move(c));
     Q240UpdateNpcPackage(inherited,1);assert(inherited.aiPackage==50);
+  }
+  {
+    auto patrol=Actor(13);auto c=gPlayerSession->player.Definitions();
+    c.pipboy.referenceScripts[42]={"actor",43};
+    c.pipboy.packages[50].schedule.duration=24;c.pipboy.packages[50].patrolRepeat=false;
+    c.pipboy.targets[60].linkedReference=61;c.pipboy.targets[60].patrolWait=2;
+    c.pipboy.targets[61]=c.pipboy.targets[60];c.pipboy.targets[61].linkedReference=0;c.pipboy.targets[61].x=1100;c.pipboy.targets[61].y=2100;
+    fo3pipdata::Finalize(c.pipboy);assert(c.pipboy.packages.at(50).patrol.size()==2);
+    gPlayerSession=std::make_unique<Session>(c);
+    for(int i=0;i<1600;++i)Q240UpdateNpcPackage(patrol,i*.1);
+    assert(patrol.aiSequence==3&&Q240PlanarDistance(Q240GamePosition(patrol),{1100,2100,20})<.01f);
+    // Saved leg progress must build a route to its next authored marker.
+    patrol.aiSequence=2;patrol.aiPathGame.clear();patrol.aiRepathAt=0;Q240UpdateNpcPackage(patrol,170);
+    assert(patrol.aiPathGame.back()[0]==1100);
+    // Unsupported marker behavior rejects the whole high-priority route.
+    c.pipboy.targets[60].patrolAction=true;fo3pipdata::Finalize(c.pipboy);
+    assert(c.pipboy.packages.at(50).patrol.empty()&&!c.pipboy.packages.at(50).patrolUnsupported.empty());
+    // Open repeat routes start at the closest marker, then reverse at endpoints.
+    c.pipboy.targets[60].patrolAction=false;c.pipboy.targets[61]=c.pipboy.targets[60];c.pipboy.targets[61].linkedReference=0;c.pipboy.targets[61].x=1100;c.pipboy.targets[61].y=2100;c.pipboy.packages[50].patrolRepeat=true;fo3pipdata::Finalize(c.pipboy);
+    gPlayerSession=std::make_unique<Session>(c);patrol.runtime.position=Q240ScenePosition({1100,2100,20});patrol.aiSequence=0;patrol.aiPathGame.clear();
+    Q240UpdateNpcPackage(patrol,180);assert(patrol.aiSequence==2);
+    Q240UpdateNpcPackage(patrol,180.1);assert(patrol.aiSequence==3);
+    const auto waiting=patrol.runtime.position;Q240UpdateNpcPackage(patrol,181);assert(patrol.runtime.position==waiting);
+    Q240UpdateNpcPackage(patrol,183);assert(patrol.aiPathGame.back()[0]==1900);
   }
   if(argc>1)Original(argv[1]);
   std::cout<<"Production NPC package traversal, surface projection, shared portals, Travel and repathing passed\n";

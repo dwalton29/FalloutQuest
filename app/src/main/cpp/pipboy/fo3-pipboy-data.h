@@ -36,6 +36,9 @@ struct World {
 struct Placement {
   uint32_t base = 0, cell = 0, world = 0, flags = 0, parent = 0;
   bool opposite = false;
+  uint32_t linkedReference=0;
+  float patrolWait=0;
+  bool patrolAction=false;
   float x = 0, y = 0, z = 0;
 };
 struct Marker : Placement {
@@ -117,6 +120,7 @@ struct PackageSchedule {
   int32_t duration=0;
   bool valid=false;
 };
+struct PatrolPoint { uint32_t reference=0; Placement placement; };
 struct PackageDefinition {
   std::string editor;
   uint32_t flags=0;
@@ -124,6 +128,9 @@ struct PackageDefinition {
   uint16_t behaviorFlags=0,typeFlags=0;
   PackageLocation location,location2,target,target2;
   PackageSchedule schedule;
+  bool patrolRepeat=true,patrolCircular=false;
+  std::vector<PatrolPoint> patrol;
+  std::string patrolUnsupported;
   std::vector<Condition> conditions;
   bool scripted=false;
 };

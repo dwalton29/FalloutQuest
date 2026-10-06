@@ -128,6 +128,10 @@ void Decode(Definitions &d, const std::string &t, uint32_t id, uint32_t flags,
     d.cellWorlds[id] = world;
   else if (t == "REFR" || t == "ACHR" || t == "ACRE") {
     auto p = Place(flags, s, cell, world);
+    p.linkedReference=U(Find(s,"XLKR"));
+    if(auto wait=Find(s,"XPRD");wait&&wait->n==4)p.patrolWait=fo3esm::ReadF32(wait->p);
+    p.patrolAction=U(Find(s,"INAM"))||U(Find(s,"TNAM"));
+    for(const auto& v:s)if((v.type=="SCDA"&&v.n)||(v.type=="SCTX"&&v.n>1))p.patrolAction=true;
     if(t=="ACHR") d.referenceScripts[id]={editor,p.base};
     if (p.base == 0x10 && Find(s, "XMRK")) {
       Marker m;
@@ -324,6 +328,7 @@ void Decode(Definitions &d, const std::string &t, uint32_t id, uint32_t flags,
     location(Find(s,"PLD2"),package.location2);
     location(Find(s,"PTDT"),package.target);
     location(Find(s,"PTD2"),package.target2);
+    if(auto repeat=Find(s,"PKPT");repeat&&repeat->n)package.patrolRepeat=repeat->p[0]!=0;
     if(auto schedule=Find(s,"PSDT");schedule&&schedule->n==8) {
       package.schedule.month=static_cast<int8_t>(schedule->p[0]);
       package.schedule.weekday=static_cast<int8_t>(schedule->p[1]);
@@ -456,6 +461,26 @@ void Finalize(Definitions &d) {
     if(d.dialogueTopics.at(a).priority!=d.dialogueTopics.at(b).priority)return d.dialogueTopics.at(a).priority>d.dialogueTopics.at(b).priority;
     return a<b;
   });
+  // Compile bounded authored chains once, before reference pruning. Runtime
+  // never scans ESM or builds a linked-reference route each frame.
+  for(auto& entry:d.packages) {
+    auto& p=entry.second;if(p.type!=13)continue;
+    p.patrol.clear();p.patrolCircular=false;p.patrolUnsupported.clear();
+    if(!p.location.valid||p.location.type!=0){p.patrolUnsupported="Patrol starting location resolver unsupported";continue;}
+    uint32_t ref=p.location.value;std::unordered_set<uint32_t> visited;
+    while(ref) {
+      if(!visited.insert(ref).second){if(ref==p.location.value)p.patrolCircular=true;else p.patrolUnsupported="Patrol chain loops into an intermediate marker";break;}
+      if(visited.size()>256){p.patrolUnsupported="Patrol chain exceeds bounded marker count";break;}
+      const auto i=d.targets.find(ref);
+      if(i==d.targets.end()){p.patrolUnsupported="Patrol marker unavailable";break;}
+      const auto& marker=i->second;
+      if(marker.patrolAction||!std::isfinite(marker.patrolWait)||marker.patrolWait<0){p.patrolUnsupported="Patrol marker action/script or invalid wait unsupported";break;}
+      if(!p.patrol.empty()&&(marker.cell!=p.patrol.front().placement.cell||marker.world!=p.patrol.front().placement.world)){p.patrolUnsupported="Patrol requires cell traversal";break;}
+      p.patrol.push_back({ref,marker});ref=marker.linkedReference;
+    }
+    if(p.patrol.empty()&&p.patrolUnsupported.empty())p.patrolUnsupported="Patrol has no markers";
+    if(!p.patrolUnsupported.empty())p.patrol.clear();
+  }
   std::unordered_set<uint32_t> retain;
   for(auto& actor:d.referenceScripts)retain.insert(actor.first);
   for(const auto& entry:d.packages) {
@@ -464,6 +489,7 @@ void Finalize(Definitions &d) {
         retain.insert(location.value);
     };
     keep(entry.second.location);keep(entry.second.location2);
+    for(const auto& point:entry.second.patrol)retain.insert(point.reference);
     if(entry.second.target.valid&&entry.second.target.type==0)retain.insert(entry.second.target.value);
     if(entry.second.target2.valid&&entry.second.target2.type==0)retain.insert(entry.second.target2.value);
   }

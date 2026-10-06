@@ -146,7 +146,8 @@ static void Q230SimulateActor(Q230ActorVisual& actor,double now) {
       s.position=Q240ScenePosition(saved->second.position);s.yaw=s.returnYaw=saved->second.yaw;
       actor.aiPackage=s.package=saved->second.package;actor.aiSequence=saved->second.sequence;
       // Rebuild a route to the authored destination after restoration.
-      actor.aiSequence=0;
+      const auto package=c.pipboy.packages.find(actor.aiPackage);
+      if(package==c.pipboy.packages.end()||package->second.type!=13)actor.aiSequence=0;
     }
     actor.stateRestored=true;p.PrepareActorInventory(actor.source.refFormId);Q230PersistActor(actor);actor.lastFrame=UINT64_MAX;
   }
@@ -193,7 +194,7 @@ static void Q230SimulateActor(Q230ActorVisual& actor,double now) {
   // Bethesda's complete detection/search state is not decoded. This bounded
   // loaded-scene bridge searches for 15 seconds; absence/death ends immediately.
   if(!valid||(!visible&&now-s.lastSeen>15)){
-    const auto old=s.combatTarget;s.EndCombat();s.pendingAttack=false;actor.aiPathGame.clear();actor.aiPathIndex=0;actor.aiSequence=0;actor.aiRepathAt=0;
+    const auto old=s.combatTarget;s.EndCombat();s.pendingAttack=false;actor.aiPathGame.clear();actor.aiPathIndex=0;const auto package=c.pipboy.packages.find(actor.aiPackage);if(package==c.pipboy.packages.end()||package->second.type!=13)actor.aiSequence=0;actor.aiRepathAt=0;
     p.SetActorHostile(actor.source.refFormId,0);Q6H_LOGI("NPC COMBAT END actor=%08X target=%08X",actor.source.refFormId,old);return;
   }
   const float dt=actor.aiLastUpdate<0?0:std::clamp(float(now-actor.aiLastUpdate),0.f,.1f);actor.aiLastUpdate=now;

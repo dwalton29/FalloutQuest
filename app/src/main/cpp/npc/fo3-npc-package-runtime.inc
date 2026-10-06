@@ -219,7 +219,8 @@ static const fo3pipdata::PackageDefinition* Q240SelectPackage(
   for(uint32_t packageId:actorDef->packages) {
     const auto found=definitions.packages.find(packageId);if(found==definitions.packages.end())continue;
     const auto& package=found->second;
-    if(package.type!=1&&package.type!=6&&package.type!=14&&package.type!=5&&package.type!=12){Q240AiLogOnce(actor.source.refFormId,packageId,"package type "+std::to_string(package.type));continue;}
+    if(package.type!=1&&package.type!=6&&package.type!=14&&package.type!=13&&package.type!=5&&package.type!=12){Q240AiLogOnce(actor.source.refFormId,packageId,"package type "+std::to_string(package.type));continue;}
+    if(package.type==13&&(package.patrol.empty()||!package.patrolUnsupported.empty())){Q240AiLogOnce(actor.source.refFormId,packageId,package.patrolUnsupported.empty()?"Patrol route unavailable":package.patrolUnsupported);continue;}
     if(package.scripted){Q240AiLogOnce(actor.source.refFormId,packageId,"package script");continue;}
     if(!Q240ScheduleActive(package.schedule,hour))continue;
     if(!package.location.valid&&package.type!=1){Q240AiLogOnce(actor.source.refFormId,packageId,"missing PLDT");continue;}
@@ -380,7 +381,33 @@ static void Q240AdvanceNpcPackage(Q230ActorVisual& actor,double now) {
       actor.source.refFormId,packageId,package->editor.c_str(),unsigned(package->type),
       package->location.type,package->location.radius,GetFo3TimeOfDayHour());
   }
+  if(package->type==13) {
+    const auto& points=package->patrol;const size_t n=points.size();
+    // Sequence is the current leg (one-based), and is saved in the existing
+    // canonical actor progress record. Open repeat routes reverse at each end.
+    if(actor.aiSequence==0) {
+      size_t first=0;
+      if(package->patrolRepeat){float nearest=INFINITY;const auto here=Q240GamePosition(actor);for(size_t i=0;i<n;++i){const auto& p=points[i].placement;const float d=Q240PlanarDistance(here,{p.x,p.y,p.z});if(d<nearest){nearest=d;first=i;}}}
+      actor.aiSequence=uint32_t(first+1);
+    }
+    const auto index=[&](uint32_t sequence){const size_t leg=sequence-1;if(!package->patrolRepeat)return std::min(leg,n-1);if(package->patrolCircular||n==1)return leg%n;const size_t at=leg%(2*n-2);return at<n?at:2*n-2-at;};
+    if(!actor.aiPathGame.empty()&&actor.aiPathIndex>=actor.aiPathGame.size()) {
+      const size_t reached=!package->patrolRepeat&&package->patrolCircular&&actor.aiSequence==n+1?0:index(actor.aiSequence);
+      const auto& arrived=points[reached].placement;
+      actor.aiPathGame.clear();actor.aiPathSurfaces.clear();actor.aiPathIndex=0;
+      actor.aiRepathAt=now+arrived.patrolWait;++actor.aiSequence;
+    }
+    actor.runtime.package=packageId;actor.runtime.packageKnown=true;actor.runtime.activity=fo3npc::Activity::Package;
+    actor.runtime.speed=0;actor.runtime.animation=fo3npc::Animation::Idle;
+    if(now<actor.aiRepathAt)return;
+    const size_t legs=n+(package->patrolCircular?1:0);
+    if(!package->patrolRepeat&&actor.aiSequence>legs){if(package->schedule.duration>0)return;actor.aiSequence=1;}
+    size_t next=index(actor.aiSequence);
+    if(!package->patrolRepeat&&package->patrolCircular&&actor.aiSequence==n+1)next=0;
+    const auto& point=points[next].placement;anchor={point.x,point.y,point.z};
+  }
   if(package->location.type==2u&&package->type!=1)anchor=actor.aiAnchorGame;
+  actor.runtime.package=packageId;actor.runtime.packageKnown=true;actor.runtime.activity=fo3npc::Activity::Package;
   if(package->type==1&&Q240PlanarDistance(Q240GamePosition(actor),anchor)<=std::max(0,package->target.radius)){actor.runtime.speed=0;actor.runtime.animation=fo3npc::Animation::Idle;actor.aiPathGame.clear();return;}
   if(package->type==1&&Q240PlanarDistance(actor.aiAnchorGame,anchor)>16.f&&now>=actor.aiRepathAt){actor.aiPathGame.clear();actor.aiPathIndex=0;actor.aiAnchorGame=anchor;}
   actor.runtime.package=packageId;actor.runtime.packageKnown=true;actor.runtime.activity=fo3npc::Activity::Package;
@@ -389,7 +416,7 @@ static void Q240AdvanceNpcPackage(Q230ActorVisual& actor,double now) {
     // Travel builds one authored route when the package becomes active, then
     // remains at the destination for the rest of that package. Wander/Sandbox
     // keep selecting new NAVM destinations after their short pause.
-    if((package->type==6||package->type==9)&&actor.aiSequence>0)return;
+    if((package->type==6||package->type==14)&&actor.aiSequence>0)return;
     if(now<actor.aiRepathAt)return;
     if(!Q240BuildPackagePath(actor,*package,anchor,radius)){
       Q240AiLogOnce(actor.source.refFormId,packageId,
@@ -397,7 +424,7 @@ static void Q240AdvanceNpcPackage(Q230ActorVisual& actor,double now) {
         " triangles="+std::to_string(actor.navigationGraph->triangleCount));
       actor.aiRepathAt=now+2;return;
     }
-    if(package->type==6||package->type==9)actor.aiSequence=1;
+    if(package->type==6||package->type==14)actor.aiSequence=1;
     if(actor.aiSequence<=2u||(actor.aiSequence%8u)==0u)
       Q6H_LOGI("NPC PATH actor=%08X package=%08X type=%u waypoints=%zu graphMeshes=%zu graphTriangles=%zu sequence=%u",
         actor.source.refFormId,packageId,unsigned(package->type),actor.aiPathGame.size(),
