@@ -79,15 +79,39 @@ static void Q230PersistActor(Q230ActorVisual& actor) {
   const auto* weapon=p.ActorWeapon(actor.source.refFormId);saved.equippedWeapon=weapon?weapon->id:0;
   p.UpdateActor(actor.source.refFormId,saved);
 }
+static const fo3pipdata::PackageDefinition* Q230CurrentPackage(const Q230ActorVisual& actor) {
+  const auto& packages=gPlayerSession->player.Definitions().pipboy.packages;
+  const uint32_t id=actor.aiPackage?actor.aiPackage:actor.runtime.package;
+  const auto found=packages.find(id);return found==packages.end()?nullptr:&found->second;
+}
+static const fo3pipdata::PackageDefinition* Q230PerceptionPackage(Q230ActorVisual& actor,uint32_t& id,std::array<float,3>& anchor) {
+  if(actor.runtime.dialogue||actor.runtime.activity==fo3npc::Activity::Combat){id=actor.aiPackage?actor.aiPackage:actor.runtime.package;return Q230CurrentPackage(actor);}
+  float radius=0;return Q240SelectPackage(actor,id,anchor,radius);
+}
 static const fo3weapon::Definitions::CombatStyle* Q230Style(const Q230ActorVisual& actor) {
-  const auto& c=gPlayerSession->player.Definitions();
-  const auto* traits=fo3pipdata::ActorCategory(c.pipboy,actor.source.baseFormId,1);
-  if(!traits)return nullptr;const auto s=c.weapons.styles.find(traits->combatStyle);
-  return s==c.weapons.styles.end()||!s->second.valid?nullptr:&s->second;
+  const auto& c=gPlayerSession->player.Definitions();const auto* package=Q230CurrentPackage(actor);
+  uint32_t id=package?package->combatStyle:0;
+  if(!id){const auto* traits=fo3pipdata::ActorCategory(c.pipboy,actor.source.baseFormId,1);if(!traits)return nullptr;id=traits->combatStyle;}
+  const auto style=c.weapons.styles.find(id);return style==c.weapons.styles.end()||!style->second.valid?nullptr:&style->second;
+}
+// Only the supported actor-reference Follow/Escort families have a leader.
+// The evidence is canonical damage hostility or a resident actor currently
+// targeting that leader. Ordinary faction assistance does not bypass Defensive.
+static bool Q230DefendsLeader(const Q230ActorVisual& actor,const fo3pipdata::PackageDefinition* package,uint32_t attacker) {
+  if(!package||(package->type!=1&&package->type!=2)||!package->target.valid||package->target.type!=0)return false;
+  const uint32_t leader=package->target.value;if(!leader||leader==actor.source.refFormId||attacker==leader)return false;
+  std::array<float,3> position{};if(!Q240PackageActorTarget(actor,leader,position))return false;
+  const auto& states=gPlayerSession->player.Snapshot().actors;const auto state=states.find(leader);
+  if(state!=states.end()&&state->second.hostile==attacker)return true;
+  for(const auto& threat:gQ230NpcActors)if(threat.source.refFormId==attacker&&threat.runtime.Alive()&&
+      threat.runtime.activity==fo3npc::Activity::Combat&&threat.runtime.combatTarget==leader)return true;
+  return false;
 }
 static bool Q230SelectWeapon(Q230ActorVisual& actor) {
   auto& p=gPlayerSession->player;const auto* contents=p.ContainerContents(actor.source.refFormId);if(!contents)return false;
-  const auto* style=Q230Style(actor);float best=-1;uint64_t selected=0;uint32_t form=0;
+  const auto* style=Q230Style(actor);const auto* package=Q230CurrentPackage(actor);
+  if(package&&(!package->combatStyleValid||(package->combatStyle&&!style))){Q240AiLogOnce(actor.source.refFormId,actor.aiPackage,"unsupported package CSTY "+std::to_string(package->combatStyle));return false;}
+  float best=-1;uint64_t selected=0;uint32_t form=0;
   for(const auto& s:*contents){const auto prepared=actor.combatWeapons.find(s.formId);
     if(prepared==actor.combatWeapons.end()||!prepared->second.ready||prepared->second.gpu.empty()||s.condition<=0)continue;
     const auto& d=prepared->second.definition;const bool ranged=d.Firearm();
@@ -162,6 +186,9 @@ static void Q230SimulateActor(Q230ActorVisual& actor,double now) {
   if(!ai.valid){Q240AiLogOnce(actor.source.refFormId,actor.aiPackage,"unsupported AIDT");return;}
   if(now>=s.nextThink){
     s.nextThink=now+.25;
+    uint32_t policyId=0;std::array<float,3> policyAnchor{};
+    const auto* policy=Q230PerceptionPackage(actor,policyId,policyAnchor);
+    const bool defensive=fo3npc::Defensive(policy);
     uint32_t acquire=0;std::array<float,3> point{};uint32_t base=0;
     const auto saved=p.Snapshot().actors.find(actor.source.refFormId);
     if(saved!=p.Snapshot().actors.end()&&saved->second.hostile&&Q230Target(saved->second.hostile,point,base))acquire=saved->second.hostile;
@@ -169,8 +196,8 @@ static void Q230SimulateActor(Q230ActorVisual& actor,double now) {
       float nearest=ai.radiusEnabled?float(ai.radius):c.weapons.detectionDistance;
       auto candidate=[&](uint32_t ref){
         if(ref==actor.source.refFormId||!Q230Target(ref,point,base))return;
-        bool hostile=fo3npc::Acquires(ai,fo3npc::Relationship(c,actor.source.baseFormId,base));
-        if(!hostile&&ref!=0x14){for(const auto& ally:gQ230NpcActors)if(ally.runtime.combatTarget==ref&&fo3npc::Assists(ai,fo3npc::Relationship(c,actor.source.baseFormId,ally.source.baseFormId)))hostile=true;}
+        bool hostile=defensive?Q230DefendsLeader(actor,policy,ref):fo3npc::Acquires(ai,fo3npc::Relationship(c,actor.source.baseFormId,base));
+        if(!defensive&&!hostile&&ref!=0x14){for(const auto& ally:gQ230NpcActors)if(ally.runtime.combatTarget==ref&&fo3npc::Assists(ai,fo3npc::Relationship(c,actor.source.baseFormId,ally.source.baseFormId)))hostile=true;}
         const float dx=point[0]-s.position[0],dy=point[1]-s.position[1],dz=point[2]-s.position[2];
         const float range=std::sqrt(dx*dx+dy*dy+dz*dz)*FO3_UNITS_PER_METRE;
         if(hostile&&range<nearest&&Q230Sight(actor,ref,point)){nearest=range;acquire=ref;}
@@ -178,6 +205,7 @@ static void Q230SimulateActor(Q230ActorVisual& actor,double now) {
       candidate(0x14);for(const auto& other:gQ230NpcActors)candidate(other.source.refFormId);
     }
     if(acquire&&acquire!=s.combatTarget){
+      if(policy&&s.activity!=fo3npc::Activity::Combat&&!s.dialogue)Q240AdoptPackage(actor,policyId,*policy,policyAnchor);
       if(s.activity!=fo3npc::Activity::Combat){const auto package=c.pipboy.packages.find(actor.aiPackage);s.suspendedPackageWait=package!=c.pipboy.packages.end()&&package->second.type==13&&actor.aiPathGame.empty()?float(std::max(0.,actor.aiRepathAt-now)):0;}
       if(s.dialogue)EndFo3Dialogue("combat threat");s.BeginCombat(acquire);s.lastSeen=now;s.nextPath=0;actor.aiPathGame.clear();actor.aiPathIndex=0;
       Q6H_LOGI("NPC COMBAT START actor=%08X target=%08X",actor.source.refFormId,acquire);

@@ -314,6 +314,9 @@ int main(int argc,char** argv) {
     std::array<float,3> endpoint{};auto cut=Graph(true);assert(!Q240FleeDestination(*cut,Q240Centroid(*cut->meshes[0],0),{1010,2010,20},2000,endpoint)); // Disconnected safer mesh is unavailable.
     assert(!Q240FleeDestination(*Graph(),{1010,2010,2000},{1010,2010,20},500,endpoint)); // Off-surface actor cannot teleport onto NAVM.
   }
+  {
+    auto malformed=Actor(6);auto c=gPlayerSession->player.Definitions();c.pipboy.packages[50].combatStyleValid=false;c.pipboy.packages[52]=c.pipboy.packages[50];c.pipboy.packages[52].combatStyleValid=true;c.pipboy.dialogueActors[43].packages={50,52};gPlayerSession=std::make_unique<Session>(c);Q240UpdateNpcPackage(malformed,1);assert(malformed.aiPackage==52);
+  }
   if(argc>1)Original(argv[1]);
   std::cout<<"Production NPC package traversal, surface projection, shared portals, Travel and repathing passed\n";
   return 0;

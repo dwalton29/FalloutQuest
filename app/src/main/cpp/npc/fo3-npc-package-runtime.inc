@@ -280,6 +280,7 @@ static const fo3pipdata::PackageDefinition* Q240SelectPackage(
     if(package.type==10&&(package.location.valid||!package.target.valid||package.target.type!=0||package.target.radius<=0||package.procedureActions)){
       Q240AiLogOnce(actor.source.refFormId,packageId,"Flee requires an actor reference, positive minimum distance, no start location or procedure action");continue;
     }
+    if(!package.combatStyleValid){Q240AiLogOnce(actor.source.refFormId,packageId,"malformed package combat style");continue;}
     if(package.scripted){Q240AiLogOnce(actor.source.refFormId,packageId,"package script");continue;}
     if(!Q240ScheduleActive(package.schedule,hour))continue;
     if(!package.location.valid&&package.type!=1&&package.type!=10){Q240AiLogOnce(actor.source.refFormId,packageId,"missing PLDT");continue;}
@@ -320,6 +321,18 @@ static const fo3pipdata::PackageDefinition* Q240SelectPackage(
     radius=float(std::max(0,package.location.radius));id=packageId;return &package;
   }
   return nullptr;
+}
+// One package owner for ordinary updates and a pre-movement combat override.
+// Adopting a newly selected package changes its intent/progress, never its root.
+static void Q240AdoptPackage(Q230ActorVisual& actor,uint32_t packageId,const fo3pipdata::PackageDefinition& package,
+                             const std::array<float,3>& anchor) {
+  if(packageId!=actor.aiPackage) {
+    actor.aiPackage=packageId;actor.aiAnchorGame=anchor;actor.aiSequence=0;actor.aiPathGame.clear();actor.aiPathSurfaces.clear();actor.aiPathIndex=0;actor.runtime.navigationDoor=0;actor.aiRepathAt=0;
+    Q6H_LOGI("NPC PACKAGE actor=%08X package=%08X EDID=%s type=%u locationType=%u radius=%d flags=%08X style=%08X hour=%.2f",
+      actor.source.refFormId,packageId,package.editor.c_str(),unsigned(package.type),
+      package.location.type,package.location.radius,package.flags,package.combatStyle,GetFo3TimeOfDayHour());
+  }
+  actor.runtime.package=packageId;actor.runtime.packageKnown=true;
 }
 static bool Q240BuildPackagePath(Q230ActorVisual& actor,const fo3pipdata::PackageDefinition& package,
                                  const std::array<float,3>& anchor,float radius) {
@@ -488,12 +501,7 @@ static void Q240AdvanceNpcPackage(Q230ActorVisual& actor,double now) {
     actor.runtime.activity=fo3npc::Activity::Idle;actor.runtime.speed=0;
     actor.runtime.animation=fo3npc::Animation::Idle;actor.aiPathGame.clear();return;
   }
-  if(packageId!=actor.aiPackage) {
-    actor.aiPackage=packageId;actor.aiAnchorGame=anchor;actor.aiSequence=0;actor.aiPathGame.clear();actor.aiPathSurfaces.clear();actor.aiPathIndex=0;actor.runtime.navigationDoor=0;actor.aiRepathAt=0;
-    Q6H_LOGI("NPC PACKAGE actor=%08X package=%08X EDID=%s type=%u locationType=%u radius=%d hour=%.2f",
-      actor.source.refFormId,packageId,package->editor.c_str(),unsigned(package->type),
-      package->location.type,package->location.radius,GetFo3TimeOfDayHour());
-  }
+  Q240AdoptPackage(actor,packageId,*package,anchor);
   if(package->type==13) {
     bool circular=false;const auto& points=*Q240PatrolRoute(actor,packageId,*package,&circular);const size_t n=points.size();
     // Sequence is the current leg (one-based), and is saved in the existing

@@ -31,6 +31,7 @@ static void StateAndPerception() {
   assert(Relationship(c,200,201)==Reaction::Enemy&&Acquires(ai,Reaction::Enemy)&&!Acquires(ai,Reaction::Ally)&&!Acquires(ai,Reaction::Neutral));
   ai.aggression=2;assert(Acquires(ai,Reaction::Neutral)&&!Acquires(ai,Reaction::Friend));
   ai.aggression=0;assert(!Acquires(ai,Reaction::Enemy));assert(Assists(ai,Reaction::Ally)&&!Assists(ai,Reaction::Neutral));
+  fo3pipdata::PackageDefinition defensive;assert(!Defensive(&defensive)&&!Defensive(nullptr));defensive.flags=1u<<22;assert(Defensive(&defensive));defensive.flags=1u<<26;assert(!Defensive(&defensive));
   c.pipboy.dialogueActors[200].aiData.resize(19);assert(!AI(c.pipboy,200).valid);
   s={};s.BeginCombat(101);auto d=c.items.at(10).weapon;
   assert(FireReady(s,d,1)&&!FireReady(s,d,1.1)&&FireReady(s,d,1.25));s.reloadUntil=5;assert(!FireReady(s,d,8));s.reloadUntil=0;

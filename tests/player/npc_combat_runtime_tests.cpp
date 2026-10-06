@@ -5,6 +5,7 @@
 #undef main
 #include "npc/fo3-npc-combat.h"
 #include "player/fo3-vr-body.h"
+#include <unistd.h>
 std::vector<Q230ActorVisual> gQ230NpcActors;
 bool blocked=false,loading=false;int dialogueEnds=0,shots=0;double emittedDamage=0;
 bool IsFo3LoadingVisible(){return loading;}
@@ -34,7 +35,56 @@ static void Prepare() {
   gQ210Head=actor.runtime.position;gQ210Head[1]+=1;gQ210Head[2]-=1;
   shots=0;blocked=false;loading=false;dialogueEnds=0;
 }
-int main(){
+static void AddNpc(fo3player::Catalog& c,uint32_t ref,uint32_t base,uint32_t target=0) {
+  auto actor=gQ230NpcActors.front();actor.source.refFormId=ref;actor.source.baseFormId=base;actor.runtime={};actor.runtime.position=gQ230NpcActors.front().runtime.position;actor.runtime.position[2]-=.5f;
+  actor.aiPackage=actor.aiSequence=0;actor.stateRestored=false;if(target)actor.runtime.BeginCombat(target);
+  c.references[ref].base=base;c.pipboy.targets[ref].base=base;c.pipboy.targets[ref].cell=1;c.pipboy.targets[ref].world=2;const auto root=Q240GamePosition(actor);c.pipboy.targets[ref].x=root[0];c.pipboy.targets[ref].y=root[1];c.pipboy.targets[ref].z=root[2];c.weapons.actors[base].health=100;
+  c.pipboy.dialogueActors[base]=c.pipboy.dialogueActors[43];c.pipboy.dialogueActors[base].packages.clear();
+  gQ230NpcActors.push_back(actor);packageTargets.push_back(actor);
+}
+static void PackageCombatPolicyTests() {
+  Prepare();auto c=gPlayerSession->player.Definitions();c.pipboy.packages[50].flags=1u<<22;gPlayerSession=std::make_unique<Session>(c);
+  gQ230NpcActors[0].runtime.EndDialogue();Q230SimulateActor(gQ230NpcActors[0],1);assert(gQ230NpcActors[0].runtime.activity!=fo3npc::Activity::Combat); // No first-frame aggression before package movement.
+  Q240UpdateNpcPackage(gQ230NpcActors[0],1.1);gQ230NpcActors[0].runtime.BeginDialogue();Q230SimulateActor(gQ230NpcActors[0],1.5);assert(gQ230NpcActors[0].runtime.dialogue&&dialogueEnds==0);
+  assert(gPlayerSession->player.ApplyAttack(0x14,10,42,10));Q230SimulateActor(gQ230NpcActors[0],2);assert(gQ230NpcActors[0].runtime.activity==fo3npc::Activity::Combat&&gQ230NpcActors[0].runtime.combatTarget==0x14&&dialogueEnds==1); // Canonical damage still interrupts dialogue.
+
+  Prepare();c=gPlayerSession->player.Definitions();c.pipboy.packages[50].flags=1u<<22;c.pipboy.dialogueActors[43].aiData[14]=2;c.pipboy.dialogueActors[43].factions[100]=0;AddNpc(c,70,71,0x14);gPlayerSession=std::make_unique<Session>(c);
+  gQ230NpcActors[0].runtime.EndDialogue();Q230SimulateActor(gQ230NpcActors[0],1);assert(gQ230NpcActors[0].runtime.activity!=fo3npc::Activity::Combat); // Shared-faction assistance does not bypass a defensive Travel package.
+  assert(gPlayerSession->player.ApplyAttack(70,10,42,5));Q230SimulateActor(gQ230NpcActors[0],2);assert(gQ230NpcActors[0].runtime.combatTarget==70); // NPC damage remains a valid retaliation.
+
+  for(uint8_t type:{1,2}) {
+    Prepare();c=gPlayerSession->player.Definitions();auto& p=c.pipboy.packages[50];p.type=type;p.flags=1u<<22;p.target.valid=true;p.target.type=0;p.target.value=type==1?70:0x14;p.target.radius=100;p.escortDistanceValid=true;p.escortDistance=300;
+    if(type==1)AddNpc(c,70,71);AddNpc(c,80,81,p.target.value);gPlayerSession=std::make_unique<Session>(c);
+    gQ230NpcActors[0].runtime.EndDialogue();Q230SimulateActor(gQ230NpcActors[0],1);assert(gQ230NpcActors[0].runtime.activity==fo3npc::Activity::Combat&&gQ230NpcActors[0].runtime.combatTarget==80&&gQ230NpcActors[0].aiPackage==50);
+  }
+  Prepare();c=gPlayerSession->player.Definitions();auto& p=c.pipboy.packages[50];p.type=1;p.flags=1u<<22;p.target.valid=true;p.target.type=0;p.target.value=70;p.target.radius=100;AddNpc(c,70,71);gPlayerSession=std::make_unique<Session>(c);
+  assert(gPlayerSession->player.ApplyAttack(0x14,10,70,5));gQ230NpcActors[0].runtime.EndDialogue();blocked=true;Q230SimulateActor(gQ230NpcActors[0],1);assert(gQ230NpcActors[0].runtime.activity!=fo3npc::Activity::Combat);blocked=false;Q230SimulateActor(gQ230NpcActors[0],2);assert(gQ230NpcActors[0].runtime.combatTarget==0x14); // Leader damage evidence, still bounded by LOS.
+
+  Prepare();c=gPlayerSession->player.Definitions();c.pipboy.packages[50].flags=1u<<22;c.pipboy.packages[50].schedule.valid=true;c.pipboy.packages[50].schedule.hour=12;c.pipboy.packages[50].schedule.duration=1;
+  c.pipboy.packages[52]=c.pipboy.packages[50];c.pipboy.packages[52].flags=0;c.pipboy.packages[52].schedule.valid=false;c.pipboy.dialogueActors[43].packages={50,52};gPlayerSession=std::make_unique<Session>(c);gQ230NpcActors[0].runtime.EndDialogue();
+  Q240UpdateNpcPackage(gQ230NpcActors[0],1);packageHour=14;Q230SimulateActor(gQ230NpcActors[0],2);assert(gQ230NpcActors[0].runtime.activity==fo3npc::Activity::Combat&&gQ230NpcActors[0].aiPackage==52&&gQ230NpcActors[0].runtime.suspendedPackage==52);packageHour=12; // Policy resolves a newly scheduled package before perception.
+
+  Prepare();c=gPlayerSession->player.Definitions();c.pipboy.packages[50].combatStyle=200;c.pipboy.dialogueActors[43].combatStyle=201;
+  c.weapons.styles[200].valid=true;c.weapons.styles[200].restrictions=1;c.weapons.styles[200].delayMin=2;
+  c.weapons.styles[201].valid=true;c.weapons.styles[201].restrictions=2;
+  auto melee=c.items[10];melee.formId=20;melee.weapon.animation=1;melee.weapon.ammo=0;melee.weapon.damage=1;c.items[20]=melee;c.actorInventories[43].entries.push_back({20,0,1,1,1,false});
+  auto prepared=gQ230NpcActors[0].combatWeapons.at(10);prepared.definition=melee.weapon;gQ230NpcActors[0].combatWeapons[20]=prepared;gQ230NpcActors[0].aiPackage=50;gPlayerSession=std::make_unique<Session>(c);assert(gPlayerSession->player.PrepareActorInventory(42));
+  assert(Q230Style(gQ230NpcActors[0])==&gPlayerSession->player.Definitions().weapons.styles.at(200));assert(Q230SelectWeapon(gQ230NpcActors[0])&&gPlayerSession->player.ActorWeapon(42)->formId==20);
+  fo3player::ActorState progress;progress.world=2;progress.cell=1;progress.package=50;progress.position=Q240GamePosition(gQ230NpcActors[0]);assert(gPlayerSession->player.UpdateActor(42,progress));
+  const auto save="/tmp/fq-package-style-"+std::to_string(getpid());std::string error;assert(gPlayerSession->player.Save(save,error));gPlayerSession=std::make_unique<Session>(c);assert(gPlayerSession->player.Restore(save,error));std::remove(save.c_str());gQ230NpcActors[0].stateRestored=false;gQ230NpcActors[0].runtime.EndDialogue();blocked=true;Q230SimulateActor(gQ230NpcActors[0],4);assert(Q230Style(gQ230NpcActors[0])==&gPlayerSession->player.Definitions().weapons.styles.at(200));gQ230NpcActors[0].runtime.BeginCombat(999);Q230SimulateActor(gQ230NpcActors[0],5);assert(gQ230NpcActors[0].runtime.activity!=fo3npc::Activity::Combat&&Q230Style(gQ230NpcActors[0])==&gPlayerSession->player.Definitions().weapons.styles.at(200));
+  auto d=c.items[10].weapon;d.delayMin=.25f;fo3npc::RuntimeState timing;timing.BeginCombat(0x14);assert(fo3npc::FireReady(timing,d,1,Q230Style(gQ230NpcActors[0]))&&!fo3npc::FireReady(timing,d,1.25,Q230Style(gQ230NpcActors[0]))&&fo3npc::FireReady(timing,d,1.5,Q230Style(gQ230NpcActors[0])));
+  c.pipboy.packages[50].combatStyle=0;gPlayerSession=std::make_unique<Session>(c);assert(gPlayerSession->player.PrepareActorInventory(42));assert(Q230SelectWeapon(gQ230NpcActors[0])&&gPlayerSession->player.ActorWeapon(42)->formId==10); // Null CNAM falls back to NPC ZNAM.
+  c.pipboy.packages[50].combatStyle=999;gPlayerSession=std::make_unique<Session>(c);assert(gPlayerSession->player.PrepareActorInventory(42));assert(!Q230SelectWeapon(gQ230NpcActors[0])); // Unavailable override never becomes a default style.
+}
+static void OriginalCombatPolicies(const char* path) {
+  fo3player::Catalog c;std::string error;assert(fo3player::LoadCatalog(path,c,error));gPlayerSession=std::make_unique<Session>(std::move(c));const auto& catalog=gPlayerSession->player.Definitions();
+  size_t defensive=0,overrides=0;Q230ActorVisual actor;actor.source.baseFormId=7;
+  for(const auto& entry:catalog.pipboy.packages){const auto& p=entry.second;if(fo3npc::Defensive(&p))++defensive;if(!p.combatStyle)continue;
+    ++overrides;actor.aiPackage=entry.first;assert(p.combatStyleValid);const auto style=catalog.weapons.styles.find(p.combatStyle);assert(style!=catalog.weapons.styles.end()&&style->second.valid);assert(Q230Style(actor)==&style->second);
+  }
+  assert(defensive==161&&overrides==17);std::cout<<"Original Defensive packages="<<defensive<<" CNAM combat styles="<<overrides<<'\n';
+}
+int main(int argc,char** argv){
   Prepare();auto& a=gQ230NpcActors[0];blocked=true;Q230SimulateActor(a,1);assert(a.runtime.activity==fo3npc::Activity::Dialogue&&shots==0);
   blocked=false;Q230SimulateActor(a,1.3);assert(a.runtime.activity==fo3npc::Activity::Combat&&dialogueEnds==1&&a.runtime.equippedWeapon);
   assert(a.runtime.reloadUntil>0&&!a.runtime.pendingAttack);Q230SimulateActor(a,1.4);assert(shots==0);
@@ -69,5 +119,6 @@ int main(){
   const char* save="/tmp/fq-flee-package-runtime-save";std::string error;assert(gPlayerSession->player.Save(save,error));gPlayerSession=std::make_unique<Session>(fc);assert(gPlayerSession->player.Restore(save,error));std::remove(save);
   fleeing.runtime.EndDialogue();fleeing.stateRestored=false;blocked=true;Q230SimulateActor(fleeing,50);assert(fleeing.aiPackage==50&&fleeing.aiSequence==1);Q240UpdateNpcPackage(fleeing,50.1);assert(fleeing.runtime.activity==fo3npc::Activity::Package&&fleeing.aiPackage==50);
   fleeing.runtime.BeginCombat(999);Q230SimulateActor(fleeing,51);assert(fleeing.runtime.activity==fo3npc::Activity::Package&&fleeing.aiSequence==1);Q240UpdateNpcPackage(fleeing,51.1);assert(fleeing.aiPackage==50); // False entry condition does not undo a resumed Flee phase.
+  PackageCombatPolicyTests();if(argc>1)OriginalCombatPolicies(argv[1]);
   std::cout<<"Production NPC combat pursuit/flee, LOS, reload, firing, death and restore passed\n";
 }

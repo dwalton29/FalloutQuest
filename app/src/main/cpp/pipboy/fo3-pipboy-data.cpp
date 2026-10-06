@@ -328,6 +328,7 @@ void Decode(Definitions &d, const std::string &t, uint32_t id, uint32_t flags,
     location(Find(s,"PLD2"),package.location2);
     location(Find(s,"PTDT"),package.target);
     location(Find(s,"PTD2"),package.target2);
+    if(auto style=Find(s,"CNAM")){package.combatStyleValid=style->n==4;if(package.combatStyleValid)package.combatStyle=U(style);}
     if(auto repeat=Find(s,"PKPT");repeat&&repeat->n)package.patrolRepeat=repeat->p[0]!=0;
     if(auto distance=Find(s,"PKE2");distance&&distance->n==4){package.escortDistance=U(distance);package.escortDistanceValid=true;}
     if(auto schedule=Find(s,"PSDT");schedule&&schedule->n==8) {

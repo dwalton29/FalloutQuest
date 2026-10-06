@@ -123,7 +123,8 @@ struct PackageSchedule {
 struct PatrolPoint { uint32_t reference=0; Placement placement; };
 struct PackageDefinition {
   std::string editor;
-  uint32_t flags=0;
+  uint32_t flags=0,combatStyle=0;
+  bool combatStyleValid=true;
   uint8_t type=0xff;
   uint16_t behaviorFlags=0,typeFlags=0;
   PackageLocation location,location2,target,target2;

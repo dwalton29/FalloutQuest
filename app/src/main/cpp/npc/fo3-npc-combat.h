@@ -38,6 +38,8 @@ inline bool Acquires(const AiData& a,Reaction reaction){
 inline bool Assists(const AiData& a,Reaction reaction){
   return a.valid&&((a.assistance>=1&&reaction==Reaction::Ally)||(a.assistance==2&&reaction==Reaction::Friend));
 }
+// xEdit FO3 PKDT general bit 22: defensive actors do not initiate combat.
+inline bool Defensive(const fo3pipdata::PackageDefinition* package){return package&&(package->flags&(1u<<22));}
 // Timing derives from WEAP/CSTY; no catch-up volley after a long frame.
 inline float ShotInterval(const fo3weapon::Definition& d,const fo3weapon::Definitions::CombatStyle* style){
   const float rate=d.Automatic()?d.rate:d.shotsPerSecond;
