@@ -88,7 +88,7 @@ void Ownership(Catalog c) {
   assert(loaded.Equip(other)&&!loaded.Weapon(id)->equipped&&loaded.Weapon(other)->equipped);
   assert(loaded.Equip(id)&&loaded.Save(path,error));
   const auto good=Read(path);
-  assert(U32(good,4)==8);
+  assert(U32(good,4)==9);
   Player overflow=loaded;
   assert(overflow.Add(0x4241,INT32_MAX-overflow.AmmoReserve(0x4241)));
   const auto overflowRevision=overflow.Revision();

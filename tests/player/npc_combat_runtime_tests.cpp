@@ -51,8 +51,17 @@ int main(){
   assert(!Q230CombatRoute(a,{1000,2000,20},true,30)&&a.aiPathGame.empty());
   Prepare();auto& patrol=gQ230NpcActors[0];auto pc=gPlayerSession->player.Definitions();
   pc.pipboy.packages[50].type=13;pc.pipboy.packages[50].patrol={{60,pc.pipboy.targets.at(60)},{61,pc.pipboy.targets.at(60)}};
-  gPlayerSession=std::make_unique<Session>(pc);fo3player::ActorState progress;progress.cell=1;progress.world=2;progress.package=50;progress.sequence=2;progress.position=Q240GamePosition(patrol);
-  assert(gPlayerSession->player.UpdateActor(42,progress));patrol.stateRestored=false;blocked=true;Q230SimulateActor(patrol,31);assert(patrol.aiSequence==2);
-  patrol.runtime.EndDialogue();patrol.runtime.BeginCombat(999);Q230SimulateActor(patrol,32);assert(patrol.runtime.activity==fo3npc::Activity::Package&&patrol.aiSequence==2);
+  gPlayerSession=std::make_unique<Session>(pc);fo3player::ActorState progress;progress.cell=1;progress.world=2;progress.package=50;progress.sequence=2;progress.packageWaitSeconds=5;progress.position=Q240GamePosition(patrol);
+  assert(gPlayerSession->player.UpdateActor(42,progress));patrol.stateRestored=false;blocked=true;Q230SimulateActor(patrol,31);assert(patrol.aiSequence==2&&patrol.aiRepathAt==36);
+  patrol.runtime.EndDialogue();patrol.runtime.suspendedPackageWait=4;patrol.runtime.BeginCombat(999);Q230SimulateActor(patrol,32);assert(patrol.runtime.activity==fo3npc::Activity::Package&&patrol.aiSequence==2&&patrol.aiRepathAt==36);
+  Prepare();auto& escort=gQ230NpcActors[0];auto ec=gPlayerSession->player.Definitions();ec.pipboy.packages[50].type=2;ec.pipboy.packages[50].target.valid=true;ec.pipboy.packages[50].target.type=0;ec.pipboy.packages[50].target.value=0x14;ec.pipboy.packages[50].escortDistance=300;ec.pipboy.packages[50].escortDistanceValid=true;
+  gPlayerSession=std::make_unique<Session>(ec);progress.sequence=2;assert(gPlayerSession->player.UpdateActor(42,progress));escort.stateRestored=false;blocked=true;Q230SimulateActor(escort,40);assert(escort.aiSequence==2);
+  escort.runtime.EndDialogue();escort.runtime.BeginCombat(999);Q230SimulateActor(escort,41);assert(escort.aiSequence==2&&escort.runtime.activity==fo3npc::Activity::Package);
+  Prepare();auto& waiting=gQ230NpcActors[0];auto wc=gPlayerSession->player.Definitions();wc.pipboy.packages[50].type=13;wc.pipboy.packages[50].patrol={{60,wc.pipboy.targets.at(60)}};
+  gPlayerSession=std::make_unique<Session>(wc);assert(gPlayerSession->player.PrepareActorInventory(42));waiting.aiPackage=50;waiting.aiSequence=2;waiting.aiRepathAt=10;
+  Q230SimulateActor(waiting,2);assert(waiting.runtime.activity==fo3npc::Activity::Combat&&waiting.runtime.suspendedPackageWait==8);
+  Q230PersistActor(waiting);assert(gPlayerSession->player.Snapshot().actors.at(42).packageWaitSeconds==8);
+  blocked=true;Q230SimulateActor(waiting,20);assert(waiting.runtime.activity==fo3npc::Activity::Package&&waiting.aiRepathAt==28);
+  Q230PersistActor(waiting);assert(gPlayerSession->player.Snapshot().actors.at(42).packageWaitSeconds==8);
   std::cout<<"Production NPC combat pursuit/flee, LOS, reload, firing, death and restore passed\n";
 }

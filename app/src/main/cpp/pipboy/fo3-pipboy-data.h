@@ -129,6 +129,7 @@ struct PackageDefinition {
   PackageLocation location,location2,target,target2;
   PackageSchedule schedule;
   bool patrolRepeat=true,patrolCircular=false;
+  uint32_t escortDistance=0;bool escortDistanceValid=false;
   std::vector<PatrolPoint> patrol;
   std::string patrolUnsupported;
   std::vector<Condition> conditions;

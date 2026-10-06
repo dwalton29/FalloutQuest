@@ -269,19 +269,19 @@ bool Player::ApplyAttack(uint32_t attacker,uint32_t base,uint32_t target,float d
   if(target==0x14)return DamageHealth(applied);
   state_.actorDamage[target]+=applied;
   SetActorHostile(target,attacker);
-  if(applied>=health&&!Essential(target)){auto actor=state_.actors.find(target);if(actor!=state_.actors.end())actor->second.dead=true;}
+  if(applied>=health&&!Essential(target)){auto actor=state_.actors.find(target);if(actor!=state_.actors.end()){actor->second.dead=true;actor->second.packageWaitSeconds=0;}}
   ++revision_;return true;
 }
 bool Player::UpdateActor(uint32_t reference,const ActorState& a) {
   const auto t=catalog_.pipboy.targets.find(reference);
   if(t==catalog_.pipboy.targets.end()||!catalog_.weapons.actors.count(t->second.base)||
-     (!a.cell&&!a.world)||!std::isfinite(a.yaw)||
+     (!a.cell&&!a.world)||!std::isfinite(a.yaw)||!std::isfinite(a.packageWaitSeconds)||a.packageWaitSeconds<0||
      !std::all_of(a.position.begin(),a.position.end(),[](float v){return std::isfinite(v);})||
      (a.package&&!catalog_.pipboy.packages.count(a.package))||
      (a.hostile&&a.hostile!=0x14&&!catalog_.pipboy.targets.count(a.hostile)))return false;
   const auto old=state_.actors.find(reference);
   if(old!=state_.actors.end()){const auto& o=old->second;
-    if(o.cell==a.cell&&o.world==a.world&&o.position==a.position&&o.yaw==a.yaw&&o.package==a.package&&o.sequence==a.sequence&&o.hostile==a.hostile&&o.equippedWeapon==a.equippedWeapon&&o.dead==a.dead)return true;
+    if(o.cell==a.cell&&o.world==a.world&&o.position==a.position&&o.yaw==a.yaw&&o.package==a.package&&o.sequence==a.sequence&&o.hostile==a.hostile&&o.equippedWeapon==a.equippedWeapon&&o.dead==a.dead&&o.packageWaitSeconds==a.packageWaitSeconds)return true;
   }else if(state_.actors.size()>=10000)return false;
   state_.actors[reference]=a;++revision_;return true;
 }

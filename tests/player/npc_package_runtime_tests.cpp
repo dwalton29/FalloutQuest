@@ -49,7 +49,14 @@ struct Q230ActorVisual {
   double aiLastUpdate=-1,aiRepathAt=0;
   uint64_t lastFrame=1;
 };
+#ifdef FO3_NPC_DOOR_HOST_TEST
+static bool Q230PathBlocked(Q230ActorVisual&,float,float,float,float,float);
+#define FO3_NPC_PATH_BLOCKED Q230PathBlocked
+#endif
 #include "npc/fo3-npc-package-runtime.inc"
+#ifdef FO3_NPC_DOOR_HOST_TEST
+#undef FO3_NPC_PATH_BLOCKED
+#endif
 static std::shared_ptr<Q240NavigationGraph> Graph(bool invalid=false) {
   auto graph=std::make_shared<Q240NavigationGraph>();
   // Two original-format triangles sharing edge 1 -> 2 on the first mesh.
@@ -81,6 +88,8 @@ static void Original(const char* path) {
   fo3player::Catalog catalog;std::string error;assert(fo3player::LoadCatalog(path,catalog,error));
   size_t linkedRoutes=0;for(const auto& r:catalog.pipboy.actorPatrols)if(!r.second.empty())++linkedRoutes;
   std::cout<<"Original valid actor-linked Patrol routes="<<linkedRoutes<<'\n';assert(linkedRoutes>10);
+  assert(catalog.pipboy.packages.at(0xc2f11).escortDistance==300&&catalog.pipboy.packages.at(0xc2f11).escortDistanceValid);
+  assert(!catalog.pipboy.packages.at(0xc2f11).scripted&&catalog.pipboy.packages.at(0xc2f11).target.value==0x14);
   assert(catalog.pipboy.packages.at(0x7e6dd).patrol.size()==4);
   assert(!catalog.pipboy.packages.at(0x7e6dd).patrolRepeat);
   assert(catalog.pipboy.packages.at(0x7e6dd).patrol.back().placement.patrolWait==20);
@@ -227,6 +236,18 @@ int main(int argc,char** argv) {
     // a fabricated destination or the unused PLDT value.
     c.pipboy.targets[42].linkedReference=0;fo3pipdata::Finalize(c.pipboy);
     gPlayerSession=std::make_unique<Session>(c);assert(!Q240SelectPackage(patrol,id,start,radius));
+  }
+  {
+    auto escort=Actor(2);auto c=gPlayerSession->player.Definitions();auto& p=c.pipboy.packages[50];p.target={};p.target.valid=true;p.target.type=0;p.target.value=0x14;p.escortDistance=300;p.escortDistanceValid=true;
+    gPlayerSession=std::make_unique<Session>(c);gQ210Head=Q240ScenePosition({1010,2010,20});
+    Q240UpdateNpcPackage(escort,0);assert(escort.aiPackage==50&&escort.aiSequence==1&&!escort.aiPathGame.empty());
+    gQ210Head=Q240ScenePosition({500,1500,20});const auto held=escort.runtime.position;Q240UpdateNpcPackage(escort,1);assert(escort.runtime.position==held&&escort.runtime.speed==0);
+    const auto leadPoint=Q240ScenePosition(escort.aiPathGame.front());escort.runtime.yaw=std::atan2(-(leadPoint[0]-held[0]),-(leadPoint[2]-held[2]));gQ210Head=Q240ScenePosition({1800,2800,20});Q240UpdateNpcPackage(escort,2);assert(escort.runtime.position!=held); // Player ahead does not stall leader.
+    for(int i=0;i<1300;++i){gQ210Head=escort.runtime.position;Q240UpdateNpcPackage(escort,3+i*.1);}
+    assert(escort.aiSequence==2&&Q240PlanarDistance(Q240GamePosition(escort),{1900,2900,20})<.01f);
+    c.pipboy.packages[50].target.value=60;gPlayerSession=std::make_unique<Session>(c);uint32_t id=0;std::array<float,3> point{};float radius=0;assert(!Q240SelectPackage(escort,id,point,radius));
+    c.pipboy.packages[50].target.value=0x14;gPlayerSession=std::make_unique<Session>(c);escort.aiSequence=0;escort.aiPathGame.clear();escort.aiPathIndex=0;escort.aiRepathAt=0;escort.runtime.position=Q240ScenePosition({1010,2010,20});gQ210Head=Q240ScenePosition({1900,2900,20});
+    Q240UpdateNpcPackage(escort,140);assert(escort.aiSequence==0&&!escort.aiPathGame.empty()); // First approach an out-of-range escorted player.
   }
   if(argc>1)Original(argv[1]);
   std::cout<<"Production NPC package traversal, surface projection, shared portals, Travel and repathing passed\n";

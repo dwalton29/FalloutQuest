@@ -124,14 +124,11 @@ void Q230PrepareActors(uint32_t cell, uint32_t worldspace,
 
 
 #ifndef FO3_ACTOR_RUNTIME_HOST_TEST
-static bool Q230PathBlocked(Q230ActorVisual& actor,float dx,float dy,float dz,float length) {
-  Q230UpdateActor(actor);std::array<float,3> origin{};
-  if(!Q230LiveBone(actor,actor.chestBone,origin))return true;
-  return HasFo3InteractionOccluder(origin[0],origin[1],origin[2],dx,dy,dz,length,actor.source.refFormId);
-}
+static bool Q230PathBlocked(Q230ActorVisual&,float,float,float,float,float);
 #define FO3_NPC_PATH_BLOCKED Q230PathBlocked
 #include "fo3-npc-package-runtime.inc"
 #undef FO3_NPC_PATH_BLOCKED
+#include "fo3-npc-door-runtime.inc"
 #endif
 
 fo3anim::Matrix Q230PlacementMatrix(const Fo3WorldPlacement &placement) {

@@ -12,6 +12,7 @@
 
 namespace fo3player {
 constexpr uint32_t PlayerBase = 0x7u;
+constexpr uint32_t PlayerRef = 0x14u;
 enum class Special : uint8_t {
   Strength,
   Perception,
@@ -109,7 +110,7 @@ struct LootList {
 struct ActorState {
   uint32_t cell=0,world=0,package=0,sequence=0,hostile=0;
   std::array<float,3> position{};
-  float yaw=0;
+  float yaw=0,packageWaitSeconds=0;
   uint64_t equippedWeapon=0;
   bool dead=false;
 };
@@ -216,6 +217,7 @@ public:
   bool CanPickup(uint32_t reference) const;
   bool Pickup(uint32_t reference);
   bool CanOpenDoor(uint32_t reference) const;
+  bool CanActorOpenDoor(uint32_t actor,uint32_t reference) const;
   bool CanLootContainer(uint32_t reference) const;
   bool PrepareContainer(uint32_t reference);
   const std::vector<Stack> *ContainerContents(uint32_t reference) const;

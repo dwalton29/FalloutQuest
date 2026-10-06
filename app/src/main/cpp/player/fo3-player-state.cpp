@@ -688,7 +688,8 @@ bool Player::Pickup(uint32_t id) {
   }
   return true;
 }
-bool Player::CanOpenDoor(uint32_t id) const {
+bool Player::CanOpenDoor(uint32_t id) const {return CanActorOpenDoor(PlayerRef,id);}
+bool Player::CanActorOpenDoor(uint32_t actor,uint32_t id) const {
   const auto r = catalog_.references.find(id);
   if (r == catalog_.references.end())
     return false;
@@ -696,13 +697,16 @@ bool Player::CanOpenDoor(uint32_t id) const {
   // Ownership controls trespass/crime, not whether an unlocked door opens.
   if (!ref.valid || (ref.flags & 0x20u) ||
       (catalog_.scriptedBases.count(ref.base) &&
-       !catalog_.defaultActivationDoors.count(ref.base)))
+       (actor!=PlayerRef||!catalog_.defaultActivationDoors.count(ref.base))))
     return false;
+  if(actor!=PlayerRef&&ActorHealth(actor)<=0)return false;
   if (!ref.locked)
     return true;
   if (!ref.key)
     return false;
-  for (const auto &s : state_.inventory)
+  const auto* inventory=actor==PlayerRef?&state_.inventory:ContainerContents(actor);
+  if(!inventory)return false;
+  for (const auto &s : *inventory)
     if (s.formId == ref.key && s.count > 0)
       return true;
   return false;
@@ -825,9 +829,9 @@ bool Player::Save(const std::string &path, std::string &error) const {
   for(auto id:actorIds){const auto& a=state_.actors.at(id);Put32(payload,id);
     for(auto v:{a.cell,a.world,a.package,a.sequence,a.hostile})Put32(payload,v);
     for(float v:a.position)PutFloat(payload,v);
-    PutFloat(payload,a.yaw);Put64(payload,a.equippedWeapon);Put32(payload,a.dead?1:0);
+    PutFloat(payload,a.yaw);Put64(payload,a.equippedWeapon);Put32(payload,a.dead?1:0);PutFloat(payload,a.packageWaitSeconds);
   }
-  Put32(bytes, 8);
+  Put32(bytes, 9);
   Put32(bytes, catalog_.fingerprint);
   Put32(bytes, static_cast<uint32_t>(payload.size()));
   Put32(bytes, Crc(payload));
@@ -886,7 +890,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
   const auto *h = bytes.data();
   const auto version = fo3esm::ReadU32(h + 4);
   if (std::memcmp(h, "FQPS", 4) ||
-      (version < 1 || version > 8))
+      (version < 1 || version > 9))
     return fail("Unsupported player save format");
   if (fo3esm::ReadU32(h + 8) != catalog_.fingerprint)
     return fail("Player save belongs to different game definitions");
@@ -1077,14 +1081,17 @@ bool Player::Restore(const std::string &path, std::string &error) {
       if(version>=7){
         if(payload.size()-at<4)return fail("Missing actor state count");
         const auto n=fo3esm::ReadU32(p+at);at+=4;
-        if(n>10000||payload.size()-at!=(version>=8?52ull:48ull)*n)return fail("Invalid actor state count");
-        for(uint32_t i=0;i<n;++i,at+=(version>=8?52:48)){
+        const size_t actorBytes=version>=9?56:version>=8?52:48;
+        if(n>10000||payload.size()-at!=actorBytes*n)return fail("Invalid actor state count");
+        for(uint32_t i=0;i<n;++i,at+=actorBytes){
           const auto id=fo3esm::ReadU32(p+at);ActorState a;
           a.cell=fo3esm::ReadU32(p+at+4);a.world=fo3esm::ReadU32(p+at+8);
           a.package=fo3esm::ReadU32(p+at+12);a.sequence=fo3esm::ReadU32(p+at+16);a.hostile=fo3esm::ReadU32(p+at+20);
           for(size_t j=0;j<3;++j)a.position[j]=fo3esm::ReadF32(p+at+24+j*4);
           a.yaw=fo3esm::ReadF32(p+at+36);a.equippedWeapon=U64(p+at+40);
           if(version>=8){const auto life=fo3esm::ReadU32(p+at+48);if(life>1)return fail("Invalid actor lifecycle");a.dead=life!=0;if(a.dead&&Essential(id))return fail("Essential actor cannot be a corpse");}
+          if(version>=9)a.packageWaitSeconds=fo3esm::ReadF32(p+at+52);
+          if(!std::isfinite(a.packageWaitSeconds)||a.packageWaitSeconds<0)return fail("Invalid actor package wait");
           if(a.equippedWeapon){
             auto contents=next.containers.find(id);bool found=false;
             if(contents!=next.containers.end())for(auto& s:contents->second)if(s.id==a.equippedWeapon&&catalog_.items.at(s.formId).kind==ItemKind::Weapon){s.equipped=true;found=true;}

@@ -329,6 +329,7 @@ void Decode(Definitions &d, const std::string &t, uint32_t id, uint32_t flags,
     location(Find(s,"PTDT"),package.target);
     location(Find(s,"PTD2"),package.target2);
     if(auto repeat=Find(s,"PKPT");repeat&&repeat->n)package.patrolRepeat=repeat->p[0]!=0;
+    if(auto distance=Find(s,"PKE2");distance&&distance->n==4){package.escortDistance=U(distance);package.escortDistanceValid=true;}
     if(auto schedule=Find(s,"PSDT");schedule&&schedule->n==8) {
       package.schedule.month=static_cast<int8_t>(schedule->p[0]);
       package.schedule.weekday=static_cast<int8_t>(schedule->p[1]);

@@ -18,17 +18,18 @@ enum class Animation { Idle, TurnLeft, TurnRight, Conversation, Walk, Speaking, 
 enum class CombatAction { Acquire, Pursue, Aim, Attack, Reload, Flee, Search };
 inline float Angle(float a){return std::atan2(std::sin(a),std::cos(a));}
 struct RuntimeState {
-  uint32_t reference=0,package=0,combatTarget=0;
+  uint32_t reference=0,package=0,combatTarget=0,navigationDoor=0;
   Activity activity=Activity::Idle,suspended=Activity::Idle;
   Animation animation=Animation::Idle;
   std::array<float,3> position{},destination{};
   float yaw=0,authoredYaw=0,returnYaw=0,speed=0,headYaw=0,suspendedSpeed=0;
   bool dialogue=false,speaking=false,packageKnown=false;
   uint32_t suspendedPackage=0;
+  float suspendedPackageWait=0;
   CombatAction action=CombatAction::Acquire;
   uint64_t equippedWeapon=0,actionSerial=0;
   std::array<float,3> lastThreat{},pathDestinationGame{};
-  double nextThink=0,nextPath=0,nextAttack=0,reloadUntil=0,lastSeen=0,deathAt=0,actionUntil=0;
+  double nextDoorQuery=0,nextThink=0,nextPath=0,nextAttack=0,reloadUntil=0,lastSeen=0,deathAt=0,actionUntil=0;
   double actionStart=0,lastActionTime=0,pendingHit=0;
   bool pendingAttack=false;
   bool Alive() const {return activity!=Activity::Dying&&activity!=Activity::Dead&&activity!=Activity::Unconscious;}

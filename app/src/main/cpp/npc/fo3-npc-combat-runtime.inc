@@ -69,6 +69,10 @@ static void Q230PersistActor(Q230ActorVisual& actor) {
   }
   saved.position=Q240GamePosition(actor);saved.yaw=actor.runtime.yaw;
   saved.package=actor.aiPackage;saved.sequence=actor.aiSequence;
+  const auto package=p.Definitions().pipboy.packages.find(actor.aiPackage);
+  if(package!=p.Definitions().pipboy.packages.end()&&package->second.type==13&&actor.runtime.Alive())
+    saved.packageWaitSeconds=actor.runtime.activity==fo3npc::Activity::Combat?actor.runtime.suspendedPackageWait:
+      (actor.aiPathGame.empty()?float(std::max(0.,actor.aiRepathAt-std::max(0.,actor.aiLastUpdate))):0);
   const auto old=p.Snapshot().actors.find(actor.source.refFormId);
   saved.hostile=old==p.Snapshot().actors.end()?0:old->second.hostile;
   saved.dead=(old!=p.Snapshot().actors.end()&&old->second.dead)||(p.ActorHealth(actor.source.refFormId)==0&&!p.Essential(actor.source.refFormId));
@@ -113,7 +117,7 @@ static void Q230ActionSounds(Q230ActorVisual& actor,double now) {
 static bool Q230CombatRoute(Q230ActorVisual& actor,const std::array<float,3>& target,bool flee,double now) {
   if(!actor.navigationGraph||actor.navigationGraph->triangleCount==0||now<actor.runtime.nextPath)return false;
   if(actor.aiPathIndex<actor.aiPathGame.size()&&Q240PlanarDistance(actor.runtime.pathDestinationGame,target)<16.f)return false;
-  actor.runtime.pathDestinationGame=target;
+  actor.runtime.nextDoorQuery=0;actor.runtime.navigationDoor=0;actor.runtime.pathDestinationGame=target;
   actor.runtime.nextPath=now+.75; // bounded resident replanning policy
   auto destination=target;const auto current=Q240GamePosition(actor);const auto& graph=*actor.navigationGraph;
   if(flee){
@@ -145,11 +149,12 @@ static void Q230SimulateActor(Q230ActorVisual& actor,double now) {
     if(saved!=p.Snapshot().actors.end()){
       s.position=Q240ScenePosition(saved->second.position);s.yaw=s.returnYaw=saved->second.yaw;
       actor.aiPackage=s.package=saved->second.package;actor.aiSequence=saved->second.sequence;
+      actor.aiRepathAt=now+saved->second.packageWaitSeconds;
       // Rebuild a route to the authored destination after restoration.
       const auto package=c.pipboy.packages.find(actor.aiPackage);
-      if(package==c.pipboy.packages.end()||package->second.type!=13)actor.aiSequence=0;
+      if(package==c.pipboy.packages.end()||(package->second.type!=13&&package->second.type!=2))actor.aiSequence=0;
     }
-    actor.stateRestored=true;p.PrepareActorInventory(actor.source.refFormId);Q230PersistActor(actor);actor.lastFrame=UINT64_MAX;
+    actor.stateRestored=true;actor.aiLastUpdate=now;p.PrepareActorInventory(actor.source.refFormId);Q230PersistActor(actor);actor.lastFrame=UINT64_MAX;
   }
   if(p.ActorHealth(actor.source.refFormId)<=0){
     if(s.activity!=fo3npc::Activity::Dying&&s.activity!=fo3npc::Activity::Dead){
@@ -183,6 +188,7 @@ static void Q230SimulateActor(Q230ActorVisual& actor,double now) {
       candidate(0x14);for(const auto& other:gQ230NpcActors)candidate(other.source.refFormId);
     }
     if(acquire&&acquire!=s.combatTarget){
+      if(s.activity!=fo3npc::Activity::Combat){const auto package=c.pipboy.packages.find(actor.aiPackage);s.suspendedPackageWait=package!=c.pipboy.packages.end()&&package->second.type==13&&actor.aiPathGame.empty()?float(std::max(0.,actor.aiRepathAt-now)):0;}
       if(s.dialogue)EndFo3Dialogue("combat threat");s.BeginCombat(acquire);s.lastSeen=now;s.nextPath=0;actor.aiPathGame.clear();actor.aiPathIndex=0;
       Q6H_LOGI("NPC COMBAT START actor=%08X target=%08X",actor.source.refFormId,acquire);
     }
@@ -194,7 +200,7 @@ static void Q230SimulateActor(Q230ActorVisual& actor,double now) {
   // Bethesda's complete detection/search state is not decoded. This bounded
   // loaded-scene bridge searches for 15 seconds; absence/death ends immediately.
   if(!valid||(!visible&&now-s.lastSeen>15)){
-    const auto old=s.combatTarget;s.EndCombat();s.pendingAttack=false;actor.aiPathGame.clear();actor.aiPathIndex=0;const auto package=c.pipboy.packages.find(actor.aiPackage);if(package==c.pipboy.packages.end()||package->second.type!=13)actor.aiSequence=0;actor.aiRepathAt=0;
+    const auto old=s.combatTarget;s.EndCombat();s.pendingAttack=false;actor.aiPathGame.clear();actor.aiPathIndex=0;const auto package=c.pipboy.packages.find(actor.aiPackage);if(package==c.pipboy.packages.end()||(package->second.type!=13&&package->second.type!=2))actor.aiSequence=0;actor.aiRepathAt=now+s.suspendedPackageWait;s.suspendedPackageWait=0;actor.aiLastUpdate=now;
     p.SetActorHostile(actor.source.refFormId,0);Q6H_LOGI("NPC COMBAT END actor=%08X target=%08X",actor.source.refFormId,old);return;
   }
   const float dt=actor.aiLastUpdate<0?0:std::clamp(float(now-actor.aiLastUpdate),0.f,.1f);actor.aiLastUpdate=now;
