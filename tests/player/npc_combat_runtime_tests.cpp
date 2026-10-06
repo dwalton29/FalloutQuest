@@ -63,5 +63,11 @@ int main(){
   Q230PersistActor(waiting);assert(gPlayerSession->player.Snapshot().actors.at(42).packageWaitSeconds==8);
   blocked=true;Q230SimulateActor(waiting,20);assert(waiting.runtime.activity==fo3npc::Activity::Package&&waiting.aiRepathAt==28);
   Q230PersistActor(waiting);assert(gPlayerSession->player.Snapshot().actors.at(42).packageWaitSeconds==8);
+  Prepare();auto& fleeing=gQ230NpcActors[0];auto fc=gPlayerSession->player.Definitions();auto& fp=fc.pipboy.packages[50];fp.type=10;fp.location={};fp.target.valid=true;fp.target.type=0;fp.target.value=0x14;fp.target.radius=500;
+  fo3pipdata::Condition falseGate;falseGate.function=72;falseGate.a=44;falseGate.value=1;fp.conditions={falseGate};
+  gPlayerSession=std::make_unique<Session>(fc);progress.packageWaitSeconds=0;progress.sequence=1;progress.position=Q240GamePosition(fleeing);assert(gPlayerSession->player.UpdateActor(42,progress));
+  const char* save="/tmp/fq-flee-package-runtime-save";std::string error;assert(gPlayerSession->player.Save(save,error));gPlayerSession=std::make_unique<Session>(fc);assert(gPlayerSession->player.Restore(save,error));std::remove(save);
+  fleeing.runtime.EndDialogue();fleeing.stateRestored=false;blocked=true;Q230SimulateActor(fleeing,50);assert(fleeing.aiPackage==50&&fleeing.aiSequence==1);Q240UpdateNpcPackage(fleeing,50.1);assert(fleeing.runtime.activity==fo3npc::Activity::Package&&fleeing.aiPackage==50);
+  fleeing.runtime.BeginCombat(999);Q230SimulateActor(fleeing,51);assert(fleeing.runtime.activity==fo3npc::Activity::Package&&fleeing.aiSequence==1);Q240UpdateNpcPackage(fleeing,51.1);assert(fleeing.aiPackage==50); // False entry condition does not undo a resumed Flee phase.
   std::cout<<"Production NPC combat pursuit/flee, LOS, reload, firing, death and restore passed\n";
 }

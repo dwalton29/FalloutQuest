@@ -120,20 +120,10 @@ static bool Q230CombatRoute(Q230ActorVisual& actor,const std::array<float,3>& ta
   actor.runtime.nextDoorQuery=0;actor.runtime.navigationDoor=0;actor.runtime.pathDestinationGame=target;
   actor.runtime.nextPath=now+.75; // bounded resident replanning policy
   auto destination=target;const auto current=Q240GamePosition(actor);const auto& graph=*actor.navigationGraph;
-  if(flee){
-    destination=current;
-    const auto start=Q240NearestNode(graph,current);if(!start.Valid())return false;
-    std::vector<uint8_t> seen(graph.triangleCount,0);std::vector<Q240Node> nodes{start};seen[Q240Flat(graph,start)]=1;
-    float best=Q240PlanarDistance(current,target);
-    for(size_t at=0;at<nodes.size();++at){const auto point=Q240Centroid(graph,nodes[at]);
-      const float distance=Q240PlanarDistance(point,target);
-      if(distance>best){best=distance;destination=point;}
-      Q240Neighbors(graph,nodes[at],[&](Q240Node n){const auto flat=Q240Flat(graph,n);std::array<float,3> portal{};
-        if(flat<seen.size()&&!seen[flat]&&Q240Portal(graph,nodes[at],n,portal)){seen[flat]=1;nodes.push_back(n);}
-      });
-    }
+  if(flee&&!Q240FleeDestination(graph,current,target,INFINITY,destination)){
+    actor.aiPathGame.clear();actor.aiPathSurfaces.clear();actor.aiPathIndex=0;actor.runtime.speed=0;
+    Q240AiLogOnce(actor.source.refFormId,actor.aiPackage,"no farther reachable flee endpoint");return false;
   }
-  if(flee&&destination==current){actor.aiPathGame.clear();actor.runtime.speed=0;Q240AiLogOnce(actor.source.refFormId,actor.aiPackage,"no farther reachable flee endpoint");return false;}
   std::string failure;actor.aiPathIndex=0;
   if(!Q240Path(graph,current,destination,actor.aiPathGame,&failure,&actor.aiPathSurfaces)){
     Q240AiLogOnce(actor.source.refFormId,actor.aiPackage,"combat route: "+failure);return false;
@@ -152,7 +142,7 @@ static void Q230SimulateActor(Q230ActorVisual& actor,double now) {
       actor.aiRepathAt=now+saved->second.packageWaitSeconds;
       // Rebuild a route to the authored destination after restoration.
       const auto package=c.pipboy.packages.find(actor.aiPackage);
-      if(package==c.pipboy.packages.end()||(package->second.type!=13&&package->second.type!=2))actor.aiSequence=0;
+      if(package==c.pipboy.packages.end()||(package->second.type!=13&&package->second.type!=2&&package->second.type!=10))actor.aiSequence=0;
     }
     actor.stateRestored=true;actor.aiLastUpdate=now;p.PrepareActorInventory(actor.source.refFormId);Q230PersistActor(actor);actor.lastFrame=UINT64_MAX;
   }
@@ -200,7 +190,7 @@ static void Q230SimulateActor(Q230ActorVisual& actor,double now) {
   // Bethesda's complete detection/search state is not decoded. This bounded
   // loaded-scene bridge searches for 15 seconds; absence/death ends immediately.
   if(!valid||(!visible&&now-s.lastSeen>15)){
-    const auto old=s.combatTarget;s.EndCombat();s.pendingAttack=false;actor.aiPathGame.clear();actor.aiPathIndex=0;const auto package=c.pipboy.packages.find(actor.aiPackage);if(package==c.pipboy.packages.end()||(package->second.type!=13&&package->second.type!=2))actor.aiSequence=0;actor.aiRepathAt=now+s.suspendedPackageWait;s.suspendedPackageWait=0;actor.aiLastUpdate=now;
+    const auto old=s.combatTarget;s.EndCombat();s.pendingAttack=false;actor.aiPathGame.clear();actor.aiPathIndex=0;const auto package=c.pipboy.packages.find(actor.aiPackage);if(package==c.pipboy.packages.end()||(package->second.type!=13&&package->second.type!=2&&package->second.type!=10))actor.aiSequence=0;actor.aiRepathAt=now+s.suspendedPackageWait;s.suspendedPackageWait=0;actor.aiLastUpdate=now;
     p.SetActorHostile(actor.source.refFormId,0);Q6H_LOGI("NPC COMBAT END actor=%08X target=%08X",actor.source.refFormId,old);return;
   }
   const float dt=actor.aiLastUpdate<0?0:std::clamp(float(now-actor.aiLastUpdate),0.f,.1f);actor.aiLastUpdate=now;

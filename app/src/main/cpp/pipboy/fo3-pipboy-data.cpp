@@ -340,6 +340,7 @@ void Decode(Definitions &d, const std::string &t, uint32_t id, uint32_t flags,
     }
     for(auto& v:s) {
       if(v.type=="CTDA")package.conditions.push_back(Cond(v));
+      else if((v.type=="INAM"||v.type=="TNAM")&&v.n==4&&U(&v))package.procedureActions=true;
       else if(v.type=="SCDA"&&v.n)package.scripted=true;
       else if(v.type=="SCTX"&&v.n>1)package.scripted=true;
       // PACK procedure blocks routinely carry an all-zero SCHR header even

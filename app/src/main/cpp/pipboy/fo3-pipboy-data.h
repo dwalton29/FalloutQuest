@@ -133,7 +133,7 @@ struct PackageDefinition {
   std::vector<PatrolPoint> patrol;
   std::string patrolUnsupported;
   std::vector<Condition> conditions;
-  bool scripted=false;
+  bool scripted=false,procedureActions=false;
 };
 struct Response {
   Response()=default;

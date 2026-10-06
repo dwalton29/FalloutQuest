@@ -19,7 +19,8 @@ bool originalLogs=false;
 template<class... T> void TestLog(const char* fmt,T... args){if(originalLogs){std::printf(fmt,args...);std::puts("");}}
 #define Q6H_LOGI(...) TestLog(__VA_ARGS__)
 namespace fo3tod {float WrapHour(float h){return std::fmod(h+24.f,24.f);}}
-float GetFo3TimeOfDayHour(){return 12;}
+float packageHour=12;
+float GetFo3TimeOfDayHour(){return packageHour;}
 float gSceneCenterXQ1730=1000,gSceneCenterYQ1730=2000,gSceneFloorZQ1730=20;
 constexpr float FO3_UNITS_PER_METRE=100,FLOOR_Y=-1,SCENE_FORWARD=-3;
 std::array<float,3> gQ210Head{};
@@ -49,11 +50,14 @@ struct Q230ActorVisual {
   double aiLastUpdate=-1,aiRepathAt=0;
   uint64_t lastFrame=1;
 };
+std::vector<Q230ActorVisual> packageTargets;
+#define FO3_NPC_PACKAGE_ACTOR_TARGET(reference,point) Q240ResidentPackageTarget(packageTargets,reference,point)
 #ifdef FO3_NPC_DOOR_HOST_TEST
 static bool Q230PathBlocked(Q230ActorVisual&,float,float,float,float,float);
 #define FO3_NPC_PATH_BLOCKED Q230PathBlocked
 #endif
 #include "npc/fo3-npc-package-runtime.inc"
+#undef FO3_NPC_PACKAGE_ACTOR_TARGET
 #ifdef FO3_NPC_DOOR_HOST_TEST
 #undef FO3_NPC_PATH_BLOCKED
 #endif
@@ -72,6 +76,7 @@ static std::shared_ptr<Q240NavigationGraph> Graph(bool invalid=false) {
   return graph;
 }
 static Q230ActorVisual Actor(uint8_t type) {
+  packageTargets.clear();
   fo3player::Catalog c;c.initial.baseHealth=100;
   c.pipboy.targets[42].base=43;c.weapons.actors[43].health=100;
   auto& d=c.pipboy;d.dialogueActors[43].packages={51,50};
@@ -95,6 +100,15 @@ static void Original(const char* path) {
   assert(catalog.pipboy.packages.at(0x7e6dd).patrol.back().placement.patrolWait==20);
   gPlayerSession=std::make_unique<Session>(std::move(catalog));
   std::vector<Fo3NpcActorQ230> actors;assert(LoadFo3CellActors(0xa96,actors,path));
+  for(const auto& source:actors){Q230ActorVisual target;target.source=source;target.runtime.position=Q240ScenePosition({source.x,source.y,source.z});packageTargets.push_back(target);}
+  size_t fleeFrom=0;for(const auto& entry:gPlayerSession->player.Definitions().pipboy.packages){const auto& p=entry.second;
+    if(p.type==10&&!p.scripted&&!p.procedureActions&&!p.location.valid&&p.target.valid&&p.target.type==0&&p.target.radius>0)++fleeFrom;
+  }
+  assert(fleeFrom==4);std::cout<<"Original script-free Flee From definitions="<<fleeFrom<<'\n';
+  const auto& originalFlee=gPlayerSession->player.Definitions().pipboy.packages.at(0x58a13);
+  assert(originalFlee.type==10&&originalFlee.target.value==0x14&&originalFlee.target.radius==2000&&!originalFlee.scripted);
+  const auto& npcFlee=gPlayerSession->player.Definitions().pipboy.packages.at(0x4e5de);
+  assert(npcFlee.target.value==0x4e5c3&&npcFlee.target.radius==256&&!npcFlee.location.valid);
   std::vector<Fo3NpcNavMeshQ240> meshes;assert(LoadFo3NpcNavigationQ240(0xa96,0xa74,meshes,path));
   auto graph=std::make_shared<Q240NavigationGraph>();
   for(auto& mesh:meshes){graph->triangleOffsets.push_back(graph->triangleCount);graph->triangleCount+=mesh.triangles.size();graph->byForm[mesh.formId]=graph->meshes.size();graph->meshes.push_back(std::make_shared<Fo3NpcNavMeshQ240>(std::move(mesh)));}
@@ -103,6 +117,15 @@ static void Original(const char* path) {
   size_t edges=0,rejected=0;
   for(size_t m=0;m<graph->meshes.size();++m)for(size_t t=0;t<graph->meshes[m]->triangles.size();++t)Q240Neighbors(*graph,{m,t},[&](const Q240Node& to){++edges;std::array<float,3> p{};if(!Q240Portal(*graph,{m,t},to,p))++rejected;});
   std::cout<<"Original Megaton links="<<edges<<" rejected portals="<<rejected<<'\n';
+  // Execute an original Flee From definition on the original resident NAVM,
+  // independently of its quest-specific condition/PKID selection. No IDs enter
+  // runtime behavior, and no authored conditions are bypassed in the game.
+  assert(!actors.empty());Q230ActorVisual escaping;escaping.source=actors.front();escaping.navigationGraph=graph;
+  escaping.runtime.position=Q240ScenePosition({escaping.source.x,escaping.source.y,escaping.source.z});escaping.aiPackage=0x58a13;
+  const auto origin=Q240GamePosition(escaping);
+  for(int i=0;i<5000;++i)Q240AdvanceFleePackage(escaping,originalFlee,origin,.016f,i*.016);
+  assert(Q240PlanarDistance(Q240GamePosition(escaping),origin)>=originalFlee.target.radius);
+  std::cout<<"Original Flee From minimum maintained on resident NAVM="<<originalFlee.target.radius<<'\n';
   for(const auto& source:actors){
     Q230ActorVisual actor;actor.source=source;actor.runtime.position=Q240ScenePosition({source.x,source.y,source.z});actor.navigationGraph=graph;
     uint32_t id=0;std::array<float,3> anchor{};float radius=0;
@@ -248,6 +271,48 @@ int main(int argc,char** argv) {
     c.pipboy.packages[50].target.value=60;gPlayerSession=std::make_unique<Session>(c);uint32_t id=0;std::array<float,3> point{};float radius=0;assert(!Q240SelectPackage(escort,id,point,radius));
     c.pipboy.packages[50].target.value=0x14;gPlayerSession=std::make_unique<Session>(c);escort.aiSequence=0;escort.aiPathGame.clear();escort.aiPathIndex=0;escort.aiRepathAt=0;escort.runtime.position=Q240ScenePosition({1010,2010,20});gQ210Head=Q240ScenePosition({1900,2900,20});
     Q240UpdateNpcPackage(escort,140);assert(escort.aiSequence==0&&!escort.aiPathGame.empty()); // First approach an out-of-range escorted player.
+  }
+  {
+    // Real actor targets use the resident root, including before persistence.
+    auto follower=Actor(1);auto c=gPlayerSession->player.Definitions();auto& p=c.pipboy.packages[50];p.target.valid=true;p.target.type=0;p.target.value=70;p.target.radius=100;
+    c.pipboy.targets[70].base=71;c.weapons.actors[71].health=100;c.pipboy.targets[70].world=2;c.pipboy.targets[70].x=99999;
+    c.pipboy.packages[52]=c.pipboy.packages[50];c.pipboy.packages[52].type=6;c.pipboy.dialogueActors[43].packages={50,52};
+    gPlayerSession=std::make_unique<Session>(c);packageTargets.emplace_back();auto& leader=packageTargets.back();leader.source.refFormId=70;leader.source.baseFormId=71;leader.runtime.position=Q240ScenePosition({1900,2900,20});
+    Q240UpdateNpcPackage(follower,0);assert(follower.aiPackage==50&&follower.aiPathGame.back()[0]==1900);
+    leader.runtime.position=Q240ScenePosition({1400,2200,20});Q240UpdateNpcPackage(follower,2);assert(follower.aiPathGame.back()[0]==1400);
+    fo3player::ActorState savedLeader;savedLeader.world=2;savedLeader.cell=1;savedLeader.position={1700,2700,20};assert(gPlayerSession->player.UpdateActor(70,savedLeader));
+    Q240UpdateNpcPackage(follower,3);assert(follower.aiPathGame.back()[0]==1700); // Canonical restore precedes the leader's first simulation.
+    leader.stateRestored=true;Q240UpdateNpcPackage(follower,4);assert(follower.aiPathGame.back()[0]==1400); // Live root wins over last persisted root.
+    leader.runtime.activity=fo3npc::Activity::Dead;Q240UpdateNpcPackage(follower,5);assert(follower.aiPackage==52); // Lower priority valid route, never a corpse's spawn.
+    leader.runtime.activity=fo3npc::Activity::Package;Q240UpdateNpcPackage(follower,6);assert(follower.aiPackage==50);
+    c.pipboy.packages[50].type=10;c.pipboy.packages[50].location={};c.pipboy.packages[50].target.radius=500;gPlayerSession=std::make_unique<Session>(c);
+    follower.aiPackage=0;follower.aiSequence=0;leader.runtime.position=follower.runtime.position;Q240UpdateNpcPackage(follower,7);assert(follower.aiPackage==50&&!follower.aiPathGame.empty());
+    leader.rigs.clear();Q240UpdateNpcPackage(follower,8);assert(follower.aiPackage==52);leader.rigs={1};
+    packageTargets.clear();Q240UpdateNpcPackage(follower,9);assert(follower.aiPackage==52);
+  }
+  {
+    auto flee=Actor(10);auto c=gPlayerSession->player.Definitions();auto& p=c.pipboy.packages[50];p.location={};p.target.valid=true;p.target.type=0;p.target.value=0x14;p.target.radius=500;
+    fo3pipdata::Condition gate;gate.function=72;gate.a=43;gate.value=1;p.conditions={gate};
+    c.pipboy.packages[52]=c.pipboy.packages[50];c.pipboy.packages[52].type=6;c.pipboy.packages[52].conditions.clear();c.pipboy.packages[52].location.valid=true;c.pipboy.packages[52].location.type=0;c.pipboy.packages[52].location.value=60;
+    c.pipboy.dialogueActors[43].packages={50,52};gPlayerSession=std::make_unique<Session>(c);gQ210Head=flee.runtime.position;
+    Q240UpdateNpcPackage(flee,0);assert(flee.aiPackage==50&&flee.aiSequence==1&&flee.runtime.activity==fo3npc::Activity::Package&&!flee.aiPathGame.empty());
+    assert(Q240PlanarDistance(flee.aiPathGame.back(),Q240GamePosition(flee))>=500);
+    c.pipboy.packages[50].conditions[0].a=44;gPlayerSession=std::make_unique<Session>(c);Q240UpdateNpcPackage(flee,.1);assert(flee.aiPackage==50); // Valid false condition does not terminate an entered Flee.
+    auto fresh=flee;fresh.aiPackage=0;fresh.aiSequence=0;Q240UpdateNpcPackage(fresh,.2);assert(fresh.aiPackage==52); // Same false condition prevents entry.
+    for(int i=2;i<400;++i)Q240UpdateNpcPackage(flee,i*.1);
+    const auto safe=flee.runtime.position;assert(Q240PlanarDistance(Q240GamePosition(flee),{1010,2010,20})>=500);Q240UpdateNpcPackage(flee,41);assert(flee.runtime.position==safe&&flee.runtime.speed==0&&flee.aiPathGame.empty());
+    gQ210Head=flee.runtime.position;Q240UpdateNpcPackage(flee,42);assert(!flee.aiPathGame.empty()); // Threat approaches; resume avoidance.
+    const auto route=flee.aiPathGame;gQ210Head=flee.runtime.position;gQ210Head[0]+=.5f;Q240UpdateNpcPackage(flee,42.1);assert(flee.aiPathGame==route); // No per-frame rebuild.
+    flee.runtime.BeginDialogue();const auto held=flee.runtime.position;Q240UpdateNpcPackage(flee,43);assert(flee.runtime.position==held);flee.runtime.EndDialogue();
+    flee.runtime.BeginCombat(0x14);Q240UpdateNpcPackage(flee,44);assert(flee.runtime.position==held&&flee.runtime.activity==fo3npc::Activity::Combat);flee.runtime.EndCombat();Q240UpdateNpcPackage(flee,45);assert(flee.aiPackage==50&&flee.aiSequence==1);
+    flee.runtime.activity=fo3npc::Activity::Unconscious;const auto unconscious=flee.runtime.position;Q240UpdateNpcPackage(flee,45.1);assert(flee.runtime.position==unconscious&&flee.runtime.activity==fo3npc::Activity::Unconscious);flee.runtime.activity=fo3npc::Activity::Package;
+    c.pipboy.packages[50].conditions[0].function=9999;gPlayerSession=std::make_unique<Session>(c);Q240UpdateNpcPackage(flee,46);assert(flee.aiPackage==52); // Unsupported condition never becomes success, even after entry.
+    c.pipboy.packages[50].conditions.clear();c.pipboy.packages[50].location.valid=true;gPlayerSession=std::make_unique<Session>(c);Q240UpdateNpcPackage(flee,47);assert(flee.aiPackage==52); // Start-location/cower variant explicitly rejected.
+    c.pipboy.packages[50].location={};c.pipboy.packages[50].schedule.valid=true;c.pipboy.packages[50].schedule.hour=12;c.pipboy.packages[50].schedule.duration=1;
+    gPlayerSession=std::make_unique<Session>(c);Q240UpdateNpcPackage(flee,48);assert(flee.aiPackage==50);packageHour=14;Q240UpdateNpcPackage(flee,49);assert(flee.aiPackage==52);packageHour=12;
+    c.pipboy.packages[50].location={};c.pipboy.packages[50].procedureActions=true;gPlayerSession=std::make_unique<Session>(c);Q240UpdateNpcPackage(flee,50);assert(flee.aiPackage==52);
+    std::array<float,3> endpoint{};auto cut=Graph(true);assert(!Q240FleeDestination(*cut,Q240Centroid(*cut->meshes[0],0),{1010,2010,20},2000,endpoint)); // Disconnected safer mesh is unavailable.
+    assert(!Q240FleeDestination(*Graph(),{1010,2010,2000},{1010,2010,20},500,endpoint)); // Off-surface actor cannot teleport onto NAVM.
   }
   if(argc>1)Original(argv[1]);
   std::cout<<"Production NPC package traversal, surface projection, shared portals, Travel and repathing passed\n";

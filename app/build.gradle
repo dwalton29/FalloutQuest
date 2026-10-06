@@ -22,8 +22,8 @@ android {
         applicationId 'com.falloutquest.app'
         minSdk 29
         targetSdk 35
-        versionCode 174
-        versionName '0.46.2-npc-doors-escort'
+        versionCode 175
+        versionName '0.46.3-authored-flee'
 
         ndk {
             abiFilters 'arm64-v8a'

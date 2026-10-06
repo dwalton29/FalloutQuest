@@ -144,6 +144,10 @@ static void PackageDecodeTests() {
   std::vector<uint8_t> scripted=payload;sub(scripted,"SCTX",std::vector<uint8_t>{'s','e','t',' ', 'x',0});
   Decode(d,"PACK",101,0,scripted,0,0,0);
   assert(d.packages.at(101).scripted);
+  std::vector<uint8_t> actions=payload;std::vector<uint8_t> actionId;put32(actionId,123);sub(actions,"INAM",actionId);
+  Decode(d,"PACK",102,0,actions,0,0,0);assert(d.packages.at(102).procedureActions&&!d.packages.at(102).scripted);
+  actions=payload;sub(actions,"TNAM",actionId);Decode(d,"PACK",103,0,actions,0,0,0);assert(d.packages.at(103).procedureActions);
+  actions=payload;sub(actions,"INAM",std::vector<uint8_t>(4,0));sub(actions,"TNAM",std::vector<uint8_t>(4,0));Decode(d,"PACK",104,0,actions,0,0,0);assert(!d.packages.at(104).procedureActions);
   d.targets[200].base=1;
   d.packages[100].location.type=0;d.packages[100].location.value=200;
   Finalize(d);
