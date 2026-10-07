@@ -107,6 +107,20 @@ void Q230PrepareActors(uint32_t cell, uint32_t worldspace,
       return;
     Q230ActorVisual visual;
     if (Q230BuildNpcActor(source, visual)) {
+#ifndef FO3_ACTOR_RUNTIME_HOST_TEST
+      // Original differential targets are decoded on the scene worker, like
+      // the existing FaceGen/animation preparation, never during a draw.
+      for(const auto& part:visual.parts) {
+        const auto& path=part.placement.modelPath;
+        if(!fo3appearance::HeadPart(source,path)||visual.facialAssets.count(path))continue;
+        const auto dot=path.rfind('.');if(dot==std::string::npos)continue;
+        std::vector<uint8_t> bytes;auto tri=std::make_shared<fo3face::Tri>();std::string error;
+        if(LoadFalloutMeshFile(path.substr(0,dot)+".tri",bytes)&&fo3face::DecodeTri(bytes,*tri,error)) {
+          Q6H_LOGI("NPC TRI actor=%08X path=%s vertices=%u morphs=%zu",source.refFormId,path.c_str(),tri->vertices,tri->morphs.size());
+          visual.facialAssets.emplace(path,std::move(tri));
+        }else Q6H_LOGI("NPC TRI MISSING actor=%08X path=%s reason=%s",source.refFormId,path.c_str(),error.c_str());
+      }
+#endif
       float nearest=INFINITY;
       for(const auto& mesh:navigation->meshes) {
         float candidate=INFINITY;
@@ -199,6 +213,30 @@ bool Q230UploadActorPart(Q230ActorVisual &actor, CpuObject &part, float centerX,
   // UploadCpuObject consumes the expanded stream. Preserve a setup-time copy
   // until CreateSkin has selected GPU mode or the explicit CPU fallback.
   const std::vector<float> bindExpanded = deform ? part.q1960ExpandedVertices : std::vector<float>{};
+#ifndef FO3_ACTOR_RUNTIME_HOST_TEST
+  const auto facial=actor.facialAssets.find(part.placement.modelPath);
+  if(deform&&facial!=actor.facialAssets.end()&&facial->second->vertices==part.positionsGame.size()) {
+    fo3anim::Matrix headAttach=fo3anim::Identity();
+    if(!part.mesh.skinned&&rig.rigidBone>=0)
+      fo3appearance::HeadBindTransform(actor.skeleton,Q230PlacementMatrix(part.placement),headAttach,
+        fo3appearance::BoneLocalFacePart(actor.source,part.placement.modelPath));
+    for(size_t channel=0;channel<16;++channel) {
+      const auto morph=facial->second->morphs.find(fo3face::SpeechNames[channel]);
+      if(morph==facial->second->morphs.end())continue; // No invented target aliases.
+      auto& expanded=rig.facialDeltas[channel];expanded.reserve(part.mesh.indices.size());
+      const auto* m=part.mesh.geometryDeltaToModel;
+      for(auto vertex:part.mesh.indices) {
+        const auto& d=morph->second[vertex];
+        Vec3 model{m[0]*d[0]+m[1]*d[1]+m[2]*d[2],m[3]*d[0]+m[4]*d[1]+m[5]*d[2],m[6]*d[0]+m[7]*d[1]+m[8]*d[2]};
+        model=ApplyEsmRotation(Q211Mul(model,part.placement.scale),part.placement);
+        const auto game=fo3anim::Point(headAttach,{model.x,model.y,model.z},true);
+        expanded.push_back({game[0]/FO3_UNITS_PER_METRE,game[2]/FO3_UNITS_PER_METRE,-game[1]/FO3_UNITS_PER_METRE});
+      }
+    }
+    if(std::any_of(rig.facialDeltas.begin(),rig.facialDeltas.end(),[](const auto& d){return !d.empty();}))
+      rig.facialBind=rig.facialWork=bindExpanded;
+  }
+#endif
   GpuObject gpu;
   if (!UploadCpuObject(part, centerX, centerY, floorZ, gpu))
     return false;
@@ -281,6 +319,23 @@ bool Q230UploadActorPart(Q230ActorVisual &actor, CpuObject &part, float centerX,
   return true;
 }
 
+#ifndef FO3_ACTOR_RUNTIME_HOST_TEST
+// Only TRI-bearing head parts upload differential bind geometry. Body skinning
+// continues to update bone palettes without rebuilding its vertices.
+void Q230UpdateFacialPart(Q230ActorVisual& actor,Q230RigPart& rig) {
+    if(!rig.facialBind.empty()&&rig.facialPublished!=actor.facialWeights) {
+      if(!fo3face::BlendExpanded(rig.facialBind,rig.facialDeltas,actor.facialWeights,rig.facialWork))return;
+      auto& object=actor.objects[rig.gpuIndex];
+      if(object.skinMode) {
+        glBindBuffer(GL_ARRAY_BUFFER,object.vbo);
+        glBufferSubData(GL_ARRAY_BUFFER,0,rig.facialWork.size()*sizeof(float),rig.facialWork.data());
+        glBindBuffer(GL_ARRAY_BUFFER,0);
+      }else rig.skin.bind=rig.facialWork;
+      rig.facialPublished=actor.facialWeights;
+    }
+}
+#endif
+
 void Q230UpdateActor(Q230ActorVisual &actor) {
   if (actor.lastFrame == gStereoFrame || actor.rigs.empty()) return;
   actor.lastFrame=gStereoFrame;
@@ -335,6 +390,9 @@ void Q230UpdateActor(Q230ActorVisual &actor) {
   fqactor::npc.clip+=timings.clipUs;fqactor::npc.pose+=timings.skeletonUs;
   for(auto& rig:actor.rigs) {
     const auto started=fqopaque::Clock::now();
+#ifndef FO3_ACTOR_RUNTIME_HOST_TEST
+    Q230UpdateFacialPart(actor,rig);
+#endif
     fqskin::Pack(rig.skin.palette[0],actor.dialogueRoot,actor.dialogueRoot);
     for(size_t slot=0;slot<rig.skin.mapping.sources.size();++slot) {
       const int index=rig.skin.mapping.sources[slot];

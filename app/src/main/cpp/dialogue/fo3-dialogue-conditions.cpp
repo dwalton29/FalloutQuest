@@ -58,6 +58,7 @@ static bool Value(const fo3pipdata::Condition& c,const Context& ctx,float& value
     value=0;for(auto& s:state.inventory)if(s.formId==c.a)value+=s.count;return true;
   case 50:value=state.pipboy.talkedActors.count(who.reference);return true;
   case 53:case 79: {auto key=VariableKey(d,c.a,c.b,c.function==79);if(!key){error="script variable unavailable";return false;}
+    if(ctx.activationVariables){auto v=ctx.activationVariables->find(key);if(v!=ctx.activationVariables->end()){value=v->second;return true;}}
     auto v=state.pipboy.dialogueVariables.find(key);value=v==state.pipboy.dialogueVariables.end()?0:v->second;return true;}
   case 56:{auto q=d.quests.find(c.a);if(q==d.quests.end()){error="quest unavailable";return false;}value=quest==state.pipboy.quests.end()?(q->second.flags&1)!=0:quest->second.status==fo3pipdata::Completion::Active;return true;}
   case 58:value=quest==state.pipboy.quests.end()?0:quest->second.stage;return d.quests.count(c.a)!=0;

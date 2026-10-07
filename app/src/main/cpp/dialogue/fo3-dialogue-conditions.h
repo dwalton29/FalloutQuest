@@ -11,6 +11,7 @@ struct Context {
   const fo3player::Player* player=nullptr;
   ActorContext speaker, target;
   bool talking=false;
+  const std::unordered_map<uint64_t,float>* activationVariables=nullptr;
 };
 using Diagnostic=std::function<void(const std::string&)>;
 bool Compare(float,float,uint8_t);

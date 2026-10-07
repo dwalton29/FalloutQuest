@@ -16,6 +16,7 @@ struct DialoguePolicy {
 enum class Activity { Idle, Package, Dialogue, Combat, Dying, Dead, Unconscious };
 enum class Animation { Idle, TurnLeft, TurnRight, Conversation, Walk, Speaking, Aim, Attack, Reload, Hit, Death, Count };
 enum class CombatAction { Acquire, Pursue, Aim, Attack, Reload, Flee, Search };
+enum class Procedure { None, Executing, Waiting, Completed, Blocked, InvalidTarget, RouteFailed, Unsupported, Interrupted };
 inline float Angle(float a){return std::atan2(std::sin(a),std::cos(a));}
 struct RuntimeState {
   uint32_t reference=0,package=0,combatTarget=0,navigationDoor=0;
@@ -32,6 +33,13 @@ struct RuntimeState {
   double nextDoorQuery=0,nextThink=0,nextPath=0,nextAttack=0,reloadUntil=0,lastSeen=0,deathAt=0,actionUntil=0;
   double actionStart=0,lastActionTime=0,pendingHit=0;
   bool pendingAttack=false;
+  Procedure procedure=Procedure::None;
+  double blockedSince=-1,nextPackageEvaluation=0;
+  uint64_t packageRevision=UINT64_MAX;
+  int packageMinute=-1;
+  uint32_t evaluatedPackage=0;
+  std::array<float,3> evaluatedAnchor{};
+  float evaluatedRadius=0;
   bool Alive() const {return activity!=Activity::Dying&&activity!=Activity::Dead&&activity!=Activity::Unconscious;}
   bool CanTalk() const {return Alive()&&activity!=Activity::Combat;}
   void BeginCombat(uint32_t target){
@@ -39,10 +47,10 @@ struct RuntimeState {
     if(activity!=Activity::Combat){if(!dialogue){suspended=activity;suspendedPackage=package;}dialogue=false;speaking=false;}
     combatTarget=target;activity=Activity::Combat;speed=0;animation=Animation::Aim;action=CombatAction::Acquire;
   }
-  void EndCombat(){if(activity!=Activity::Combat)return;combatTarget=0;activity=suspended;package=suspendedPackage;speed=0;animation=Animation::Idle;reloadUntil=0;}
+  void EndCombat(){if(activity!=Activity::Combat)return;combatTarget=0;activity=suspended;package=suspendedPackage;speed=0;animation=Animation::Idle;reloadUntil=0;blockedSince=-1;procedure=Procedure::Interrupted;nextPackageEvaluation=0;}
   void Die(double now){if(activity==Activity::Dying||activity==Activity::Dead)return;dialogue=speaking=false;combatTarget=0;activity=Activity::Dying;speed=0;animation=Animation::Death;deathAt=now;++actionSerial;}
   void BeginDialogue(){if(dialogue||!CanTalk())return;suspended=activity;suspendedPackage=package;suspendedSpeed=speed;returnYaw=yaw;dialogue=true;activity=Activity::Dialogue;speed=0;}
-  void EndDialogue(){if(!dialogue)return;dialogue=false;speaking=false;if(activity!=Activity::Combat){activity=suspended;package=suspendedPackage;speed=suspendedSpeed;}animation=Animation::Idle;}
+  void EndDialogue(){if(!dialogue)return;dialogue=false;speaking=false;if(activity!=Activity::Combat){activity=suspended;package=suspendedPackage;speed=suspendedSpeed;}animation=Animation::Idle;blockedSince=-1;procedure=Procedure::Interrupted;nextPackageEvaluation=0;}
   void Face(float desired,float dt){
     const float error=Angle((dialogue?desired:returnYaw)-yaw);
     const bool turn=dialogue?std::fabs(error)>DialoguePolicy::BodyThreshold:std::fabs(error)>.01f;

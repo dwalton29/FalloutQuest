@@ -42,3 +42,17 @@ neutral arming, edge/hold repeat and target changes. Original-data integration
 loads 535 containers and generates 9,000 accessible placed references at the
 authored baseline level (one unsupported result rejected). This is not a headset
 visual check or full quest/respawn/RNG parity.
+
+Authored speech and reusable NPC integration:
+
+```
+build/host-player/dialogue_tests /path/to/Fallout3.esm
+build/host-player/npc_package_runtime_tests /path/to/Fallout3.esm
+build/host-player/facial_tests /path/to/headhuman.tri /path/to/line1.lip /path/to/line2.lip
+build/host-nif/facial_mesh_tests /path/to/headhuman.nif /path/to/headhuman.tri /path/to/line1.lip
+python3 tools/npc/audit_residents.py /path/to/Fallout3.esm
+```
+
+The package integration includes exterior actors simultaneously and all 34
+Megaton interior placements in their separate CELLs. See
+`docs/npc-runtime-v179.md` for exact test scope and unsupported semantics.

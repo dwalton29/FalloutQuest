@@ -24,6 +24,13 @@ public final class FalloutNativeActivity extends NativeActivity {
     private int dialogueToken;
     private float dialogueGain=1;
     public native void audioDialogueDone(int token,boolean success);
+    public native void audioDialoguePosition(int token,int milliseconds);
+    private void publishDialoguePosition(MediaPlayer player,int token) {
+        if(dialogue!=player||dialogueToken!=token)return;
+        try {if(player.isPlaying())audioDialoguePosition(token,player.getCurrentPosition());}
+        catch(IllegalStateException ignored) {}
+        audio.postDelayed(() -> publishDialoguePosition(player,token),33);
+    }
     public void audioDialogue(String path,int token) {
         audio.post(() -> {
             releaseDialogue(false);dialogueToken=token;
@@ -58,6 +65,7 @@ public final class FalloutNativeActivity extends NativeActivity {
                     });
                 }
             },() -> dialogue==player);
+            audio.postDelayed(() -> publishDialoguePosition(player,token),33);
             duckSpeech();
         });
     }

@@ -62,6 +62,10 @@ int main(int argc,char** argv){
   a=Prepare();Q240AdvancePath(a,.1f,5);stepBlocked=false;a.runtime.navigationDoor=0;before=a.runtime.position;Q240AdvancePath(a,.1f,6);assert(a.runtime.position==before&&toggles==1); // Replanning cannot bypass an opening animation.
   a=Prepare();gQ2400InteriorDoors[20].targetOpen=false;gQ2400InteriorDoors[20].q2401Moving=true;
   assert(Q230PathBlocked(a,1,0,0,.1f,1)&&toggles==0); // Closing sequence is never reversed mid-flight.
+  a=Prepare();wallBlocked=true;a.aiPackage=50;a.aiSequence=1;
+  Q240AdvancePath(a,.1f,10);assert(a.runtime.procedure==fo3npc::Procedure::Blocked);
+  Q240AdvancePath(a,.1f,13.1);assert(a.runtime.procedure==fo3npc::Procedure::RouteFailed&&a.aiPathGame.empty()&&a.aiSequence==0);
+  wallBlocked=false;stepBlocked=false;Q240UpdateNpcPackage(a,14.2);assert(!a.aiPathGame.empty());
   if(argc>1)OriginalDoors(argv[1]);
   std::cout<<"NPC local door animation wait, collision, keys, script rejection and XTEL isolation passed\n";
 }

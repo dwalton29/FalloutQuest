@@ -134,6 +134,19 @@ static void Original(const char* path) {
   for(int i=0;i<5000;++i)Q240AdvanceFleePackage(escaping,originalFlee,origin,.016f,i*.016);
   assert(Q240PlanarDistance(Q240GamePosition(escaping),origin)>=originalFlee.target.radius);
   std::cout<<"Original Flee From minimum maintained on resident NAVM="<<originalFlee.target.radius<<'\n';
+  // Every exterior ACHR shares NAVM ownership but owns its route/progress.
+  std::vector<Q230ActorVisual> residents;
+  for(const auto& source:actors){Q230ActorVisual actor;actor.source=source;actor.runtime.position=Q240ScenePosition({source.x,source.y,source.z});actor.navigationGraph=graph;residents.push_back(std::move(actor));}
+  assert(residents.size()==3);std::vector<std::array<float,3>> initial;
+  for(const auto& actor:residents)initial.push_back(actor.runtime.position);
+  for(int frame=0;frame<7500;++frame)for(auto& actor:residents)Q240UpdateNpcPackage(actor,frame*.016);
+  size_t executable=0,moved=0;
+  for(size_t i=0;i<residents.size();++i){const auto& actor=residents[i];executable+=actor.aiPackage!=0;moved+=actor.runtime.position!=initial[i];assert(actor.runtime.Alive()&&!actor.runtime.dialogue);}
+  // Stockholm's statistics inherit VarWastelander LVLN, whose canonical spawn
+  // selection is not implemented. Never pretend an arbitrary template is valid.
+  assert(gPlayerSession->player.ActorHealth(0x1942f)<0);
+  assert(executable==2);assert(moved>=1);
+  std::cout<<"Simultaneous exterior residents="<<residents.size()<<" executable="<<executable<<" moved="<<moved<<" seconds=120\n";
   for(const auto& source:actors){
     Q230ActorVisual actor;actor.source=source;actor.runtime.position=Q240ScenePosition({source.x,source.y,source.z});actor.navigationGraph=graph;
     uint32_t id=0;std::array<float,3> anchor{};float radius=0;
@@ -168,6 +181,22 @@ static void Original(const char* path) {
     }
     std::cout<<"Actor update complete; sequence="<<actor.aiSequence<<" waypoints="<<actor.aiPathGame.size()<<" next="<<actor.aiPathIndex<<" deltaY="<<actor.runtime.position[1]-before[1]<<'\n';
   }
+  size_t interiorLoaded=0,interiorExecutable=0,interiorMoved=0;
+  for(uint32_t cell:{0x3a29u,0x3a2au,0x3a2cu,0x3a2du,0x3a2eu,0x3a2fu,0x3a31u,0x3a32u,0x3a33u,0x3a34u,0x3a35u,0x4357u}) {
+    gCurrentCellFormId=cell;gExteriorWorldspaceQ1890=0;packageHour=12;
+    std::vector<Fo3NpcActorQ230> sources;assert(LoadFo3CellActors(cell,sources,path));
+    std::vector<Fo3NpcNavMeshQ240> raw;assert(LoadFo3NpcNavigationQ240(cell,0,raw,path));
+    auto nav=std::make_shared<Q240NavigationGraph>();
+    for(auto& mesh:raw){nav->triangleOffsets.push_back(nav->triangleCount);nav->triangleCount+=mesh.triangles.size();nav->byForm[mesh.formId]=nav->meshes.size();nav->meshes.push_back(std::make_shared<Fo3NpcNavMeshQ240>(std::move(mesh)));}
+    std::vector<Q230ActorVisual> population;std::vector<std::array<float,3>> initialPositions;
+    for(const auto& source:sources){Q230ActorVisual actor;actor.source=source;actor.runtime.position=Q240ScenePosition({source.x,source.y,source.z});actor.navigationGraph=nav;initialPositions.push_back(actor.runtime.position);population.push_back(std::move(actor));}
+    interiorLoaded+=population.size();
+    for(int frame=0;frame<3600;++frame){packageHour=frame<1200?12.f:frame<2400?20.f:7.f;for(auto& actor:population)Q240UpdateNpcPackage(actor,frame*.016);}
+    for(size_t i=0;i<population.size();++i){const auto& actor=population[i];interiorExecutable+=actor.aiPackage!=0;interiorMoved+=Q240PlanarDistance(Q240GamePosition(actor),{actor.source.x,actor.source.y,actor.source.z})>16;
+      std::cout<<"RESIDENT ref="<<std::hex<<actor.source.refFormId<<" cell="<<cell<<" selected="<<actor.aiPackage<<std::dec<<" health="<<gPlayerSession->player.ActorHealth(actor.source.refFormId)<<" changed="<<(actor.runtime.position!=initialPositions[i])<<'\n';}
+  }
+  assert(interiorLoaded==34);assert(interiorMoved>=3);
+  std::cout<<"Original interiors loaded="<<interiorLoaded<<" executableAt07="<<interiorExecutable<<" movedPlanar="<<interiorMoved<<'\n';
 }
 int main(int argc,char** argv) {
   fo3pipdata::PackageSchedule schedule;schedule.valid=true;schedule.hour=22;schedule.duration=4;

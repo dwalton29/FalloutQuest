@@ -4,6 +4,7 @@
 #include <unistd.h>
 #include <fstream>
 #include "dialogue/fo3-dialogue-panel.h"
+#include "npc/fo3-npc-state.h"
 using namespace fo3dialogue;
 static void Original(const char* path) {
   fo3player::Catalog catalog;std::string error;
@@ -43,7 +44,22 @@ static void Original(const char* path) {
   const auto save="/tmp/fq-dialogue-"+std::to_string(getpid());assert(player.Save(save,error));
   fo3player::Catalog original;assert(fo3player::LoadCatalog(path,original,error));fo3player::Player restored(std::move(original));assert(restored.Restore(save,error));
   assert(restored.Snapshot().pipboy.talkedActors.count(0x3b46));assert(!restored.Snapshot().pipboy.dialogueVariables.empty());std::remove(save.c_str());
-  ctx.player=&restored;assert(s.Start(ctx,restored));assert(s.info!=0x3da20);s.End("repeat greeting checked");
+  ctx.player=&restored;
+  fo3npc::RuntimeState actor;actor.reference=0x3b46;actor.activity=fo3npc::Activity::Package;actor.package=0x55471;actor.packageKnown=true;
+  ctx.speaker.package=actor.package;ctx.speaker.packageKnown=true;ctx.speaker.cell=0xa96;ctx.speaker.world=0xa74;
+  for(int repeat=0;repeat<3;++repeat) {
+    assert(s.CanStart(ctx));assert(s.Start(ctx,restored));assert(s.info!=0x3da20);
+    actor.BeginDialogue();assert(actor.dialogue);const auto stale=s.audioToken;
+    assert(!s.Start(ctx,restored)); // An active session cannot be replaced.
+    while(s.phase==Phase::Speaking)s.AudioDone(s.audioToken,true,ctx,restored);
+    s.End("repeat original conversation complete");actor.EndDialogue();
+    assert(!actor.dialogue&&!actor.speaking&&actor.activity==fo3npc::Activity::Package&&actor.package==0x55471);
+    assert(!s.Active()&&s.choices.empty()&&s.info==0&&s.response==0);
+    assert(!s.AudioDone(stale,true,ctx,restored));
+    assert(restored.Snapshot().pipboy.talkedActors.count(0x3b46));
+  }
+  actor.BeginCombat(0x14);actor.EndCombat();assert(actor.activity==fo3npc::Activity::Package);
+  assert(s.Start(ctx,restored));s.End("reentry after nonlethal combat");
 }
 static void Isolated() {
   fo3player::Catalog c;c.initial.baseHealth=100;c.initial.karma=50;c.initial.skills[11]=60;c.initial.special[0]=5;
@@ -140,7 +156,13 @@ static void ActivationEvent() {
   fo3player::Catalog c;c.pipboy.dialogueActors[10].script=20;
   c.pipboy.referenceScripts[100]={"actor",10};c.pipboy.scripts[20].variables[1]="Greet";
   c.pipboy.scripts[20].source="Begin GameMode\nuseWeapon unsupported\nEnd\nBegin OnActivate\nif Greet == 0\nif GetActionRef == player\nset Greet to 1\nendif\nendif\nactivate\nEnd";
+  c.initial.baseHealth=100;c.pipboy.targets[100].base=10;c.weapons.actors[10].health=100;c.pipboy.greetings={40};c.pipboy.quests[30].priority=50;c.pipboy.quests[30].flags=1;
+  fo3pipdata::Info greeting;greeting.id=50;greeting.topic=40;greeting.quest=30;greeting.responses={{1,1,"Activation greeting"}};
+  fo3pipdata::Condition gate;gate.function=53;gate.a=100;gate.b=1;gate.value=1;greeting.conditions={gate};c.pipboy.topics[40]={greeting};
   fo3player::Player p(c);Context ctx;ctx.player=&p;ctx.speaker={100,10};ctx.target={0x14,7};std::string error;
+  Session session;assert(!session.CanStart(ctx));auto previewRevision=p.Revision();
+  assert(session.CanActivate(ctx)&&p.Revision()==previewRevision&&p.Snapshot().pipboy.dialogueVariables.empty());
+  assert(session.Start(ctx,p));session.End("activation regression");
   assert(Activate(ctx,p,error));assert(p.Snapshot().pipboy.dialogueVariables.at((uint64_t(100)<<32)|1)==1);
   auto revision=p.Revision();assert(Activate(ctx,p,error)&&p.Revision()==revision);
   fo3player::Player other(c);ctx.player=&other;ctx.target.reference=101;assert(Activate(ctx,other,error));assert(other.Snapshot().pipboy.dialogueVariables.empty());

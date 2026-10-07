@@ -1,6 +1,7 @@
 #include "dialogue/fo3-dialogue-session.h"
 #include "dialogue/fo3-dialogue-panel.h"
 #include "npc/fo3-npc-state.h"
+#include "npc/fo3-facial-data.h"
 #include "npc/fo3-npc-combat.h"
 #include "player/fo3-vr-body.h"
 #include "player/fo3-vr-tracking.h"
@@ -685,6 +686,9 @@ uint64_t gQ2400DoorSceneSerial=1u;
 // Q21.0: real Fallout actor geometry kept outside CELL ownership.
 std::vector<GpuObject> gQ210PlayerBody;
 struct Q230RigPart {
+    std::array<std::vector<std::array<float,3>>,16> facialDeltas;
+    std::vector<float> facialBind,facialWork;
+    fo3face::Weights facialPublished{};
     QActorSkin skin;
     std::vector<int> bones;
     std::vector<std::array<float,3>> hitVertices;
@@ -711,6 +715,8 @@ struct Q230CombatWeapon {
     bool ready=false;
 };
 struct Q230ActorVisual {
+    std::unordered_map<std::string,std::shared_ptr<const fo3face::Tri>> facialAssets;
+    fo3face::Weights facialWeights{};
     Fo3NpcActorQ230 source;
     fo3npc::RuntimeState runtime;
     std::array<fo3anim::Clip,size_t(fo3npc::Animation::Count)> animations;

@@ -44,6 +44,7 @@ struct Runtime {
   bool lastActive = false;
   std::atomic<uint32_t> playingNote{0};
   DialogueCompletionMailbox dialogueCompletion;
+  DialogueFaceMailbox dialogueFace;
 } runtime;
 
 void JNICALL DialogueDoneNative(JNIEnv*, jobject, jint token, jboolean success) {
@@ -51,6 +52,9 @@ void JNICALL DialogueDoneNative(JNIEnv*, jobject, jint token, jboolean success) 
 }
 void JNICALL BroadcastDoneNative(JNIEnv*, jobject, jint channel, jint generation) {
   BroadcastDone(channel, uint32_t(generation));
+}
+void JNICALL DialoguePositionNative(JNIEnv*, jobject, jint token,jint milliseconds) {
+  runtime.dialogueFace.Position(uint32_t(token),milliseconds);
 }
 bool RegisterActivityNatives(JNIEnv* env, jobject activity) {
   if (!env || !activity) return false;
@@ -62,6 +66,8 @@ bool RegisterActivityNatives(JNIEnv* env, jobject activity) {
     return false;
   }
   JNINativeMethod methods[] = {
+      {const_cast<char*>("audioDialoguePosition"), const_cast<char*>("(II)V"),
+       reinterpret_cast<void*>(DialoguePositionNative)},
       {const_cast<char*>("audioDialogueDone"), const_cast<char*>("(IZ)V"),
        reinterpret_cast<void*>(DialogueDoneNative)},
       {const_cast<char*>("audioBroadcastDone"), const_cast<char*>("(II)V"),
@@ -381,6 +387,24 @@ void Worker() {
       runtime.events.pop_front();
     }
     if(e.kind==13) {
+      if(e.id&&!e.name.empty()) {
+        auto path=e.name.rfind("@voice:",0)==0?voicePath(e.name):e.name;
+        const auto dot=path.rfind('.');
+        if(dot!=std::string::npos)path.replace(dot,std::string::npos,".lip");else path.clear();
+        std::vector<uint8_t> bytes;const auto loose=Loose(path);
+        if(!loose.empty()) {
+          std::ifstream file(loose,std::ios::binary|std::ios::ate);
+          const auto size=file.tellg();
+          if(size>0&&size<=8*1024*1024){bytes.resize(size);file.seekg(0);if(!file.read(reinterpret_cast<char*>(bytes.data()),bytes.size()))bytes.clear();}
+        }
+        if(bytes.empty()&&!path.empty())for(const auto& archive:archives)
+          if(fo3assets::GetBsaArchive(archive)->Read(path,bytes,nullptr,fo3assets::BsaPathKind::Exact,8*1024*1024))break;
+        auto lip=std::make_shared<fo3face::Lip>();std::string error;
+        if(fo3face::DecodeLip(bytes,*lip,error)) {
+          __android_log_print(ANDROID_LOG_INFO,"FalloutQuest","NPC LIP START token=%u frames=%zu firstFrame=%d path=%s",e.id,lip->frames.size(),lip->firstFrame,path.c_str());
+          runtime.dialogueFace.Asset(e.id,std::move(lip));
+        }else __android_log_print(ANDROID_LOG_WARN,"FalloutQuest","NPC LIP MISSING token=%u path=%s reason=%s",e.id,path.c_str(),error.c_str());
+      }
       dialogueFile=e.name.empty()?"":resolve(e.name);
       if(!e.name.empty()&&dialogueFile.empty())DialogueDone(e.id,false);
       auto str=env->NewStringUTF(dialogueFile.c_str());
@@ -553,11 +577,12 @@ void Context(uint32_t cell, bool active) {
   runtime.events.push_front({0, cell, active});
   runtime.cv.notify_one();
 }
-void Dialogue(const std::string& request,uint32_t token){runtime.dialogueCompletion.Start(token);Push({13,token,true,request});}
-void DialogueStop(){runtime.dialogueCompletion.Stop();Push({13,0,false,{}});}
+void Dialogue(const std::string& request,uint32_t token){runtime.dialogueCompletion.Start(token);runtime.dialogueFace.Start(token);Push({13,token,true,request});}
+void DialogueStop(){runtime.dialogueCompletion.Stop();runtime.dialogueFace.Start(0);Push({13,0,false,{}});}
+DialogueFaceSample DialogueFace(uint32_t token){return runtime.dialogueFace.Read(token);}
 void DialogueGain(float gain){gain=std::clamp(gain,0.f,1.f);uint32_t bits;std::memcpy(&bits,&gain,4);Push({14,bits,true});}
 uint64_t DialogueCompletion(){return runtime.dialogueCompletion.Take();}
-void DialogueDone(uint32_t token,bool success){runtime.dialogueCompletion.Done(token,success);}
+void DialogueDone(uint32_t token,bool success){__android_log_print(ANDROID_LOG_INFO,"FalloutQuest","NPC LIP END token=%u audioSuccess=%d",token,int(success));runtime.dialogueCompletion.Done(token,success);}
 void Radio(uint32_t transmitter, const fo3pipdata::Definitions &definitions,
            const fo3pipdata::SessionState &state) {
   Event e{6, transmitter, true};

@@ -2,7 +2,6 @@
 #include <algorithm>
 #include <cstdio>
 #include <cmath>
-#include <cmath>
 namespace fo3dialogue {
 static std::string Id(uint32_t id){char b[16];std::snprintf(b,sizeof(b),"%08X",id);return b;}
 const fo3pipdata::Info* Session::Current(const fo3pipdata::Definitions& d)const {
@@ -62,10 +61,20 @@ bool Session::CanStart(const Context& ctx)const {
   for(auto t:ctx.player->Definitions().pipboy.greetings)if(Resolve(t,ctx))return true;
   return false;
 }
+bool Session::CanActivate(const Context& ctx)const {
+  if(!ctx.player)return false;
+  std::unordered_map<uint64_t,float> pending;std::string error;
+  if(!ActivationVariables(ctx,*ctx.player,pending,error))return false;
+  Context activated=ctx;activated.activationVariables=&pending;
+  return CanStart(activated);
+}
 bool Session::Start(const Context& ctx,fo3player::Player& p) {
-  if(!CanStart(ctx))return false;
+  if(Active()||!ctx.player||ctx.speaker.combat||p.ActorHealth(ctx.speaker.reference)<=0)return false;
   std::string activationError;
   if(!Activate(ctx,p,activationError)){if(diagnostic)diagnostic("DIALOGUE UNSUPPORTED SCRIPT actor="+Id(ctx.speaker.reference)+" "+activationError);return false;}
+  // OnActivate can change local variables used by the next GREETING. Resolve
+  // against the resulting state, not the pre-activation eligibility snapshot.
+  if(!CanStart(ctx))return false;
   interruption.clear();const float dx=ctx.speaker.x-ctx.target.x,dy=ctx.speaker.y-ctx.target.y,dz=ctx.speaker.z-ctx.target.z;
   startDistanceGameUnits=std::sqrt(dx*dx+dy*dy+dz*dz);
   startDistance=std::sqrt((ctx.speaker.x-ctx.target.x)*(ctx.speaker.x-ctx.target.x)+(ctx.speaker.y-ctx.target.y)*(ctx.speaker.y-ctx.target.y)+(ctx.speaker.z-ctx.target.z)*(ctx.speaker.z-ctx.target.z))/100.f;endReason.clear();

@@ -7,7 +7,8 @@ namespace fo3dialogue {
 // The player's explicit Talk action dispatches the NPC's OnActivate event.
 // Interpret only a validated local-variable/player-activator subset. GameMode,
 // combat and death events remain outside this dialogue bridge.
-bool Activate(const Context& ctx,fo3player::Player& player,std::string& error) {
+bool ActivationVariables(const Context& ctx,const fo3player::Player& player,std::unordered_map<uint64_t,float>& pending,std::string& error) {
+  pending.clear();
   error.clear();const auto& d=player.Definitions().pipboy;
   auto actor=d.dialogueActors.find(ctx.speaker.base);if(actor==d.dialogueActors.end())return true;
   auto script=d.scripts.find(actor->second.script);if(script==d.scripts.end()||script->second.source.empty())return true;
@@ -15,7 +16,7 @@ bool Activate(const Context& ctx,fo3player::Player& player,std::string& error) {
   auto variable=[&](const std::string& name){for(const auto& v:script->second.variables)if(lower(v.second)==name)return VariableKey(d,ctx.speaker.reference,v.first,false);return uint64_t(0);};
   auto number=[](const std::string& s,float& value){char* end=nullptr;value=std::strtof(s.c_str(),&end);return end&&end!=s.c_str()&&!*end&&std::isfinite(value);};
   std::istringstream lines(lower(script->second.source));std::string line;bool event=false,found=false;
-  std::vector<bool> gates{true};std::unordered_map<uint64_t,float> pending;
+  std::vector<bool> gates{true};
   auto fail=[&](){error="unsupported OnActivate: "+line;return false;};
   while(std::getline(lines,line)) {
     auto comment=line.find(';');if(comment!=std::string::npos)line.resize(comment);
@@ -43,6 +44,11 @@ bool Activate(const Context& ctx,fo3player::Player& player,std::string& error) {
     return fail();
   }
   if(event||gates.size()!=1)return fail();
+  return true;
+}
+bool Activate(const Context& ctx,fo3player::Player& player,std::string& error) {
+  std::unordered_map<uint64_t,float> pending;
+  if(!ActivationVariables(ctx,player,pending,error))return false;
   for(const auto& v:pending)if(!player.SetDialogueVariable(v.first,v.second))return false;
   return true;
 }

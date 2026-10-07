@@ -1,6 +1,11 @@
 cmake_minimum_required(VERSION 3.16)
 project(falloutquest_player_tests LANGUAGES CXX)
 enable_testing()
+add_executable(facial_tests facial_tests.cpp)
+target_compile_features(facial_tests PRIVATE cxx_std_17)
+target_compile_options(facial_tests PRIVATE -Wall -Wextra -Werror)
+target_include_directories(facial_tests PRIVATE ../../app/src/main/cpp)
+add_test(NAME facial_tests COMMAND facial_tests)
 find_package(ZLIB REQUIRED)
 add_executable(player_state_tests player_state_tests.cpp
     ../../app/src/main/cpp/player/fo3-player-state.cpp

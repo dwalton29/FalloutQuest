@@ -42,7 +42,7 @@ bool DialogueCanStart(Q230ActorVisual& actor) {
   auto& cached=gDialogueEligibility[actor.source.refFormId];
   const auto revision=gPlayerSession->player.Revision();
   if(cached.revision!=revision||cached.until<gDialogueTime) {
-    gDialogue.diagnostic=DialogueDiagnostic;cached.valid=gDialogue.CanStart(DialogueContext(actor));cached.revision=revision;cached.until=gDialogueTime+1;
+    gDialogue.diagnostic=DialogueDiagnostic;cached.valid=gDialogue.CanActivate(DialogueContext(actor));cached.revision=revision;cached.until=gDialogueTime+1;
   }
   return cached.valid;
 }
@@ -58,6 +58,7 @@ void CleanupFo3Dialogue(uint32_t previous,const char* reason) {
   if(auto* actor=DialogueActor(previous)){actor->runtime.EndDialogue();Q6H_LOGI("NPC DIALOGUE OVERRIDE actor=%08X restore=1 package=%08X",previous,actor->runtime.package);}
   if(gDialogue.Active())gDialogue.End(reason);gDialoguePanel.visible=false;gDialoguePanel.choices.clear();gDialoguePanel.subtitle.clear();++gDialoguePanel.revision;
   gDialogueCursor.Target(0,0);gDialogueEligibility.clear();gDialoguePanelPhase=fo3dialogue::Phase::Inactive;gDialogueChoicesVisibleFrame=0;
+  gDialoguePublishedToken=0;gDialoguePanelInfo=0;gDialoguePanelResponse=SIZE_MAX;
   fo3audio::DialogueStop();
   if(previous&&gPlayerSession){fo3audio::RadioState(gPlayerSession->player.Snapshot().pipboy);FlushFo3PlayerState();}
 }
@@ -66,8 +67,11 @@ bool StartFo3Dialogue(uint32_t reference) {
   if(Fo3PipboyFocus()||Fo3DialogueFocus()||IsFo3LoadingVisible()||!gPlayerSession||gPlayerSession->saveBlocked)return false;
   auto* actor=DialogueActor(reference);if(!actor)return false;
   gDialogue.diagnostic=DialogueDiagnostic;
-  if(!gDialogue.Start(DialogueContext(*actor),gPlayerSession->player))return false;
+  if(!actor->runtime.CanTalk()||!gDialogue.Start(DialogueContext(*actor),gPlayerSession->player)) {
+    Q6H_LOGI("NPC DIALOGUE REENTER actor=%08X success=0 package=%08X activity=%d dialogue=%d reason=%s",reference,actor->runtime.package,int(actor->runtime.activity),actor->runtime.dialogue,gDialogue.endReason.c_str());return false;
+  }
   actor->runtime.BeginDialogue();gDialoguePanel.visible=false;
+  Q6H_LOGI("NPC DIALOGUE BEGIN actor=%08X token=%u package=%08X",reference,gDialogue.audioToken,actor->runtime.package);
   Q6H_LOGI("DIALOGUE START actor=%08X base=%08X name=%s dial=%08X info=%08X",reference,actor->source.baseFormId,actor->source.fullName.c_str(),gDialogue.topic,gDialogue.info);
   Q6H_LOGI("DIALOGUE GREETING actor=%08X info=%08X",reference,gDialogue.info);
   Q6H_LOGI("NPC DIALOGUE OVERRIDE actor=%08X begin=1 package=%08X",reference,actor->runtime.package);
@@ -157,6 +161,16 @@ void UpdateFo3Dialogue(double now,float stick,bool a,bool b,bool focused) {
   }
   for(auto& actor:gQ230NpcActors) {
     actor.runtime.speaking=actor.runtime.dialogue&&gDialogue.actor==actor.source.refFormId&&gDialogue.phase==fo3dialogue::Phase::Speaking;
+    fo3face::Weights weights{};
+    if(actor.runtime.speaking) {
+      const auto facial=fo3audio::DialogueFace(gDialogue.audioToken);
+      if(facial.lip)weights=fo3face::Sample(*facial.lip,facial.seconds);
+    }else for(size_t c=0;c<16;++c) {
+      const float old=actor.facialWeights[c];
+      weights[c]=old*std::max(0.f,1-dt/.1f);
+      if(std::fabs(weights[c])<.001f)weights[c]=0;
+    }
+    if(actor.facialWeights!=weights){actor.facialWeights=weights;actor.lastFrame=UINT64_MAX;}
     if(actor.runtime.activity!=fo3npc::Activity::Combat&&(actor.runtime.dialogue||std::fabs(actor.runtime.headYaw)>.01f||std::fabs(fo3npc::Angle(actor.runtime.yaw-actor.runtime.returnYaw))>.01f)) {
       // Humanoid authored forward is +Y game space; scene Z is -game Y.
       const float x=actor.runtime.position[0],z=actor.runtime.position[2];
