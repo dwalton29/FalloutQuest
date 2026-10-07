@@ -72,7 +72,7 @@ inline Weights Sample(const Lip& lip,double seconds) {
   return out;
 }
 struct Tri {
-  uint32_t vertices=0;
+  uint32_t vertices=0,differentialCount=0,sparseCount=0;
   std::unordered_map<std::string,std::vector<std::array<float,3>>> morphs;
 };
 // FRTRI003 differential targets. Statistical EGM FaceGen stays in the bind
@@ -83,9 +83,16 @@ inline bool DecodeTri(const std::vector<uint8_t>& b,Tri& out,std::string& error)
   const auto nv=U32(b.data()+8),nf=U32(b.data()+12),nq=U32(b.data()+16),uv=U32(b.data()+28),flags=U32(b.data()+32);
   const auto nm=U32(b.data()+36),mods=U32(b.data()+40),extra=U32(b.data()+44);
   if(!nv||nv>100000||nf>200000||nq||nm>256||mods>256||extra>100000||flags!=1||uv!=nv)return fail("TRI unsupported layout");
+  if((size_t(nm)+mods)*nv>64*1024*1024/sizeof(std::array<float,3>))return fail("TRI decoded morph budget");
   size_t at=64+(size_t(nv)+extra)*12+size_t(nf)*12+size_t(uv)*8+size_t(nf)*12;
   if(at>b.size())return fail("TRI geometry truncated");
-  Tri decoded;decoded.vertices=nv;
+  Tri decoded;decoded.vertices=nv;decoded.differentialCount=nm;decoded.sparseCount=mods;
+  std::vector<std::array<float,3>> base(nv),absolute(extra);
+  size_t geometry=64;
+  for(auto* points:{&base,&absolute})for(auto& point:*points)for(auto& c:point) {
+    c=F32(b.data()+geometry);geometry+=4;
+    if(!std::isfinite(c)||std::fabs(c)>1000000)return fail("TRI base/modifier coordinate");
+  }
   auto name=[&](std::string& s){
     if(b.size()-at<4)return false;
     const auto n=U32(b.data()+at);at+=4;
@@ -102,10 +109,15 @@ inline bool DecodeTri(const std::vector<uint8_t>& b,Tri& out,std::string& error)
   // the absolute modifier vertices preceding the triangle/UV arrays.
   size_t used=0;
   for(uint32_t m=0;m<mods;++m) {
-    std::string s;if(!name(s)||b.size()-at<4)return fail("TRI modifier name/count");
+    std::string s;if(!name(s)||b.size()-at<4||decoded.morphs.count(s))return fail("TRI modifier name/count/duplicate");
     const auto count=U32(b.data()+at);at+=4;
     if(count>extra-used||size_t(count)*4>b.size()-at)return fail("TRI modifier vertices");
-    for(uint32_t i=0;i<count;++i){if(U32(b.data()+at)>=nv)return fail("TRI modifier index");at+=4;}
+    auto& delta=decoded.morphs[s];delta.resize(nv);std::vector<bool> seen(nv,false);
+    for(uint32_t i=0;i<count;++i){const auto vertex=U32(b.data()+at);at+=4;
+      if(vertex>=nv||seen[vertex])return fail("TRI modifier index");
+      seen[vertex]=true;
+      for(size_t axis=0;axis<3;++axis)delta[vertex][axis]=absolute[used+i][axis]-base[vertex][axis];
+    }
     used+=count;
   }
   if(used!=extra||at!=b.size())return fail("TRI trailing bytes/modifier count");

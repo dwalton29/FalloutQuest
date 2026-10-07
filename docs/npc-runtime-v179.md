@@ -73,6 +73,16 @@ Travel is DefaultStayAtCurrentLocationSkipFallout, so his stationary destination
 is authored. Lucas switches WaitForGreeting to PatrolBomb after the handshake.
 The exterior integration runs all three simultaneously for 120 seconds.
 
+Furniture investigation confirms Moira's Sleep package `00004156` targets
+`MegMoiraBedRef` (`00003D75`), base FURN `BedTwin01L` (`00015838`), model
+`Furniture/BedTwin01.NIF`, MNAM `0x80000002`. Its original NIF has an FRN
+BSFurnitureMarker with two authored positions. Eat package `00004155` targets
+`MoiraBrownFoodChair` (`00015882`), FURN `Chair01R` (`00015840`), model
+`Furniture/Chair01.NIF`, MNAM `0x40000002`. The runtime does not yet decode these
+marker orientations/actions or reserve/use their furniture. It rejects these
+procedures and continues priority selection; it does not substitute arbitrary
+seats, beds, food or animation clips.
+
 The interior integration loads all 34 actors, shares each CELL's original NAVM,
 simulates 57.6 seconds with schedule checks at 12:00, 20:00 and 07:00, and logs
 every final selection. At 07:00, 23 have executable packages; 24 actors moved
@@ -126,14 +136,21 @@ silently aliased; its correspondence still needs engine-side confirmation.
 The original human head is FRTRI003 with 1,211 vertices, 2,294 triangles,
 38 differential targets and 8 sparse absolute modifiers referencing 238 extra
 vertices. The actual NIF matches the 1,211 vertices and expands to 6,882 indices.
-The parser validates named scaled i16 differential vectors, sparse modifier
-indices and end-of-file. Sparse modifiers are not applied to speech geometry.
+The parser validates named scaled i16 differential vectors, sparse absolute
+modifier coordinates/indices and end-of-file. Sparse target offsets are computed
+as each authored absolute modifier vertex minus its original TRI base vertex,
+then layered on the FaceGen bind result. Thus the head exposes 46 named targets
+(38 differential and 8 sparse), with neutral restoring the unchanged bind.
 
 Targets include the speech names above (with Ee), Anger, Disgust, Fear, Happy,
 Sad, Surprise, brow targets, MoodNeutral/MoodAfraid/MoodAnnoyed/Cocky/MoodDrugged/
-MoodPleasant/MoodAngry/MoodSad, Pained and CombatAnger. Head TRI has no blink
-morph. INFO emotion fields already decode, but their application, blink/eye
-semantics and non-dialogue facial tracks remain unsupported rather than random.
+MoodPleasant/MoodAngry/MoodSad, Pained and CombatAnger. The head's eight sparse targets are BlinkLeft, BlinkRight, SquintLeft,
+SquintRight, LookDown, LookLeft, LookRight and LookUp. The adult left-eye TRI has
+49 vertices and four sparse Look targets; lower teeth have 14 vertices and 12
+differential targets. Original head, lower-teeth and left-eye NIF/TRI/LIP
+integration confirms deformation and neutral restoration. INFO emotion fields
+already decode, but their application and non-dialogue facial tracks remain
+unsupported rather than random.
 
 Scene preparation loads matching TRI files for the actor's actual head parts.
 Only vertex-count-matching shapes receive differential offsets. The offsets
@@ -143,7 +160,7 @@ Existing bone palettes, body KF talking/listening and head-look remain active.
 Only TRI-bearing face parts update bind vertices; body skinning retains its
 palette-only path. Normal/tangent vectors remain the bind vectors, so speech
 lighting is approximate. Race/sex variants use their own resolved model/TRI;
-asset validation here covers the adult human head, not every race or head part.
+asset validation here covers the adult human head, lower teeth and left eye, not every race or head part.
 
 Audio resolves the original voice filename, loads its same-stem LIP from loose
 files/BSA on the audio worker, and publishes an immutable token-specific asset.
@@ -165,7 +182,7 @@ attributes; it does not replace a rendered Quest check.
 Remaining major work: canonical LVLN actor statistics/spawn resolution; Eat/Sleep
 and authored furniture marker decoding/reservation/animation; Accompany, Use Item
 At and dialogue package procedures; cross-cell NPC travel; remaining CTDA/scripts;
-LIP head rotation channels and Eee/Ee correspondence; complete teeth/eyes/variant validation,
+LIP head rotation channels and Eee/Ee correspondence; remaining teeth/eye/variant validation,
 normal deformation and original idle/blink/emotion semantics. Unsupported package
 entries continue down the selector and log their reason. These limitations mean
 the full requested settlement-life milestone is not complete in v179.

@@ -36,10 +36,22 @@ int main(int argc,char** argv) {
   assert(fo3face::BlendExpanded(bind,deltas,{},deformed)&&deformed==bind);
   deltas[0].pop_back();assert(!fo3face::BlendExpanded(bind,deltas,weights,deformed));
   fo3face::Tri tri;assert(!fo3face::DecodeTri({},tri,error));
+  // FRTRI003 sparse targets are absolute vertices, not i16 differentials.
+  std::vector<uint8_t> sparse{'F','R','T','R','I','0','0','3'};
+  for(uint32_t v:{3u,1u,0u,0u,0u,3u,1u,0u,1u,1u,0u,0u,0u,0u})Put(sparse,v);
+  for(int v=0;v<4;++v){Put(sparse,v==1||v==3?0x3f800000:v==2?0x40000000:0);Put(sparse,0);Put(sparse,v==3?0x3f800000:0);}
+  for(uint32_t v:{0u,1u,2u})Put(sparse,v);
+  for(int i=0;i<6;++i)Put(sparse,0);
+  for(uint32_t v:{0u,1u,2u})Put(sparse,v);
+  Put(sparse,10);for(char c:std::string("BlinkLeft"))sparse.push_back(c);sparse.push_back(0);Put(sparse,1);Put(sparse,1);
+  assert(fo3face::DecodeTri(sparse,tri,error)&&tri.differentialCount==0&&tri.sparseCount==1);
+  assert(tri.morphs.at("BlinkLeft")[1][2]==1&&tri.morphs.at("BlinkLeft")[1][0]==0);
+  bad=sparse;bad.back()=127;assert(!fo3face::DecodeTri(bad,tri,error));
+  bad=sparse;bad[64]=0xff;bad[65]=0xff;bad[66]=0xff;bad[67]=0x7f;assert(!fo3face::DecodeTri(bad,tri,error));
   if(argc>1) {
     auto original=Read(argv[1]);assert(fo3face::DecodeTri(original,tri,error));
-    assert(tri.vertices==1211&&tri.morphs.size()==38&&tri.morphs.count("N")&&tri.morphs.count("BMP"));
-    assert(tri.morphs.count("Ee")&&!tri.morphs.count("Eee"));
+    assert(tri.vertices==1211&&tri.differentialCount==38&&tri.sparseCount==8&&tri.morphs.size()==46&&tri.morphs.count("N")&&tri.morphs.count("BMP"));
+    assert(tri.morphs.count("Ee")&&!tri.morphs.count("Eee")&&tri.morphs.count("BlinkLeft")&&tri.morphs.count("LookUp"));
     std::cout<<"Original head TRI vertices="<<tri.vertices<<" morphs="<<tri.morphs.size()<<'\n';
     for(int i=2;i<argc;++i) {
       auto line=Read(argv[i]);assert(fo3face::DecodeLip(line,lip,error));
