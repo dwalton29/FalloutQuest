@@ -160,6 +160,7 @@ static void Q230SimulateActor(Q230ActorVisual& actor,double now) {
   auto& p=gPlayerSession->player;const auto& c=p.Definitions();auto& s=actor.runtime;
   if(!actor.stateRestored){
     const auto saved=p.Snapshot().actors.find(actor.source.refFormId);
+    const bool restored=saved!=p.Snapshot().actors.end();
     if(saved!=p.Snapshot().actors.end()){
       s.position=Q240ScenePosition(saved->second.position);s.yaw=s.returnYaw=saved->second.yaw;
       actor.aiPackage=s.package=saved->second.package;actor.aiSequence=saved->second.sequence;
@@ -169,8 +170,14 @@ static void Q230SimulateActor(Q230ActorVisual& actor,double now) {
       if(package==c.pipboy.packages.end()||(package->second.type!=13&&package->second.type!=2&&package->second.type!=10))actor.aiSequence=0;
     }
     actor.stateRestored=true;actor.aiLastUpdate=now;p.PrepareActorInventory(actor.source.refFormId);Q230PersistActor(actor);actor.lastFrame=UINT64_MAX;
+    const auto* packages=fo3pipdata::ActorCategory(c.pipboy,actor.source.baseFormId,16);
+    Q6H_LOGI("NPC AI START actor=%08X base=%08X packages=%zu navTriangles=%zu health=%.1f restored=%d",
+      actor.source.refFormId,actor.source.baseFormId,packages?packages->packages.size():0u,
+      actor.navigationGraph?actor.navigationGraph->triangleCount:0u,p.ActorHealth(actor.source.refFormId),restored);
   }
-  if(p.ActorHealth(actor.source.refFormId)<=0){
+  const float health=p.ActorHealth(actor.source.refFormId);
+  if(health<0){Q240AiLogOnce(actor.source.refFormId,actor.aiPackage,"actor statistics unresolved; AI suspended, not dead");return;}
+  if(health==0){
     if(s.activity!=fo3npc::Activity::Dying&&s.activity!=fo3npc::Activity::Dead){
       if(s.dialogue)EndFo3Dialogue("actor death");s.Die(now);actor.lastFrame=UINT64_MAX;
       actor.aiPathGame.clear();s.pendingAttack=false;s.reloadUntil=0;

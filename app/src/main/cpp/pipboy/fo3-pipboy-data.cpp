@@ -1,11 +1,13 @@
 #include "fo3-pipboy-data.h"
 #include "data/fo3-esm-reader.h"
+#include "weapons/fo3-weapon-data.h"
 #include <algorithm>
 #include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <queue>
+#include <functional>
 namespace fo3pipdata {
 namespace {
 struct Sub {
@@ -610,12 +612,42 @@ std::vector<std::string> NoteAudio(const Definitions &d, uint32_t id) {
 } // namespace fo3pipdata
 
 namespace fo3pipdata {
+void FinalizeLevelledCategories(Definitions& d,const fo3weapon::Definitions& records) {
+  d.invariantActorCategories.clear();
+  // Only resolve categories needed by resident AI. Every variant must inherit
+  // the SAME original source record, rather than picking a random variant.
+  for(uint16_t category:{4,8,16})for(const auto& list:records.levelledActors) {
+    std::unordered_set<uint32_t> visiting;unsigned budget=0;
+    std::function<uint32_t(uint32_t,unsigned)> source=[&](uint32_t id,unsigned depth)->uint32_t {
+      if(depth>=16||budget++>=65536||!visiting.insert(id).second)return 0;
+      uint32_t result=0;const auto npc=d.dialogueActors.find(id);
+      if(npc!=d.dialogueActors.end())result=npc->second.templateActor&&(npc->second.templateFlags&category)?source(npc->second.templateActor,depth+1):id;
+      else {
+        const auto l=records.levelledActors.find(id);
+        if(l!=records.levelledActors.end()&&l->second.valid&&!l->second.chanceNone&&!l->second.chanceGlobal&&l->second.flags<=1) {
+          for(const auto& entry:l->second.entries) {
+            if(entry.level!=1||entry.count!=1){result=0;break;}
+            const auto at=source(entry.actor,depth+1);
+            if(!at||(result&&result!=at)){result=0;break;}
+            result=at;
+          }
+        }
+      }
+      visiting.erase(id);return result;
+    };
+    if(const auto id=source(list.first,0))d.invariantActorCategories[(uint64_t(list.first)<<16)|category]=id;
+  }
+}
 const ActorDefinition* ActorCategory(const Definitions& d,uint32_t base,uint16_t category) {
   std::array<uint32_t,16> seen{};size_t depth=0;
   while(base&&depth<seen.size()) {
     if(std::find(seen.begin(),seen.begin()+depth,base)!=seen.begin()+depth)return nullptr;
     seen[depth++]=base;
-    auto actor=d.dialogueActors.find(base);if(actor==d.dialogueActors.end())return nullptr;
+    auto actor=d.dialogueActors.find(base);if(actor==d.dialogueActors.end()){
+      const auto shared=d.invariantActorCategories.find((uint64_t(base)<<16)|category);
+      if(shared==d.invariantActorCategories.end())return nullptr;
+      base=shared->second;continue;
+    }
     if(actor->second.templateActor&&(actor->second.templateFlags&category))base=actor->second.templateActor;
     else return &actor->second;
   }

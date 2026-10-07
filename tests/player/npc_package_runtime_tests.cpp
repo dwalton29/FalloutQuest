@@ -142,10 +142,17 @@ static void Original(const char* path) {
   for(int frame=0;frame<7500;++frame)for(auto& actor:residents)Q240UpdateNpcPackage(actor,frame*.016);
   size_t executable=0,moved=0;
   for(size_t i=0;i<residents.size();++i){const auto& actor=residents[i];executable+=actor.aiPackage!=0;moved+=actor.runtime.position!=initial[i];assert(actor.runtime.Alive()&&!actor.runtime.dialogue);}
-  // Stockholm's statistics inherit VarWastelander LVLN, whose canonical spawn
-  // selection is not implemented. Never pretend an arbitrary template is valid.
-  assert(gPlayerSession->player.ActorHealth(0x1942f)<0);
-  assert(executable==2);assert(moved>=1);
+  // All 27 original VarWastelander entries inherit identical statistics.
+  // Health is therefore independent of a random spawn choice.
+  const auto& statistics=gPlayerSession->player.Definitions().weapons;
+  assert(statistics.levelledActors.at(0x2e2a4).entries.size()==27);
+  assert(fo3weapon::ActorStatistics(statistics,0x3b1c)==fo3weapon::ActorStatistics(statistics,0x2e29b));
+  assert(gPlayerSession->player.ActorHealth(0x1942f)==35);
+  assert(fo3pipdata::ActorCategory(gPlayerSession->player.Definitions().pipboy,0x3b1c,8)==
+    &gPlayerSession->player.Definitions().pipboy.dialogueActors.at(0x3b1c));
+  assert(fo3pipdata::ActorCategory(gPlayerSession->player.Definitions().pipboy,0x2e2a4,8)==
+    fo3pipdata::ActorCategory(gPlayerSession->player.Definitions().pipboy,0x2e29b,8));
+  assert(executable==3);assert(moved>=1);
   std::cout<<"Simultaneous exterior residents="<<residents.size()<<" executable="<<executable<<" moved="<<moved<<" seconds=120\n";
   for(const auto& source:actors){
     Q230ActorVisual actor;actor.source=source;actor.runtime.position=Q240ScenePosition({source.x,source.y,source.z});actor.navigationGraph=graph;
@@ -251,6 +258,35 @@ int main(int argc,char** argv) {
   assert(actor.aiPackage==50&&actor.aiSequence==1&&actor.aiPathIndex==actor.aiPathGame.size());
   auto final=Q240GamePosition(actor);assert(std::fabs(final[0]-1900)<.01&&std::fabs(final[1]-2900)<.01);
   Q240UpdateNpcPackage(actor,101);assert(actor.aiSequence==1&&actor.runtime.speed==0);
+  // Arrival must survive dialogue, but a displaced root must rebuild after
+  // combat. A saved leg number without an ephemeral route is never arrival.
+  actor.runtime.BeginDialogue();actor.runtime.EndDialogue();Q240UpdateNpcPackage(actor,101.1);
+  assert(actor.runtime.procedure==fo3npc::Procedure::Completed);
+  actor.runtime.BeginCombat(0x14);actor.runtime.position=Q240ScenePosition({1010,2010,20});
+  actor.runtime.EndCombat();Q240UpdateNpcPackage(actor,101.2);
+  assert(actor.aiPathIndex<actor.aiPathGame.size());
+  for(int i=0;i<1500;++i)Q240UpdateNpcPackage(actor,102+i*.1);
+  assert(Q240PlanarDistance(Q240GamePosition(actor),{1900,2900,20})<.01f);
+  actor.aiPathGame.clear();actor.aiPathSurfaces.clear();actor.aiPathIndex=0;actor.aiSequence=1;
+  actor.runtime.position=Q240ScenePosition({1010,2010,20});Q240UpdateNpcPackage(actor,260);
+  assert(!actor.aiPathGame.empty()&&actor.aiPathIndex<actor.aiPathGame.size());
+  {
+    // An unreachable priority package backs off per actor/package. The lower
+    // authored package runs, then the first package is reconsidered on time.
+    auto recovering=Actor(6);recovering.navigationGraph=Graph(true);
+    auto c=gPlayerSession->player.Definitions();auto& d=c.pipboy;
+    d.packages[52]=d.packages[50];d.packages[52].location.value=61;
+    d.targets[61]=d.targets[60];d.targets[61].x=1100;d.targets[61].y=2100;
+    d.dialogueActors[43].packages={50,52};gPlayerSession=std::make_unique<Session>(c);
+    Q240UpdateNpcPackage(recovering,0);assert(recovering.runtime.procedure==fo3npc::Procedure::RouteFailed);
+    Q240UpdateNpcPackage(recovering,.1);assert(recovering.aiPackage==52&&!recovering.aiPathGame.empty());
+    uint32_t id=0;std::array<float,3> target{};float radius=0;
+    auto independent=recovering;independent.runtime.packageRetryAfter.clear();
+    assert(Q240SelectPackage(independent,id,target,radius)&&id==50);
+    Q240UpdateNpcPackage(recovering,1.9);assert(recovering.aiPackage==52);
+    recovering.navigationGraph=Graph();Q240UpdateNpcPackage(recovering,2.2);
+    assert(recovering.aiPackage==50&&!recovering.aiPathGame.empty());
+  }
   for(uint8_t type:{5,12}) {
     actor=Actor(type);
     for(int i=0;i<1500;++i)Q240UpdateNpcPackage(actor,i*.1);
@@ -258,6 +294,16 @@ int main(int argc,char** argv) {
     actor.runtime.BeginDialogue();auto held=actor.runtime.position;
     Q240UpdateNpcPackage(actor,151);assert(actor.runtime.position==held);
     actor.runtime.EndDialogue();Q240UpdateNpcPackage(actor,152);assert(!actor.runtime.dialogue);
+  }
+  {
+    // The original Stockholm package has Wander PLDT radius zero: reach its
+    // authored point and stay there, rather than fail to find another point.
+    auto stationary=Actor(5);auto c=gPlayerSession->player.Definitions();c.pipboy.packages[50].location.radius=0;
+    gPlayerSession=std::make_unique<Session>(c);
+    for(int i=0;i<1500;++i)Q240UpdateNpcPackage(stationary,i*.1);
+    assert(stationary.aiPackage==50&&stationary.aiSequence==1&&stationary.runtime.procedure==fo3npc::Procedure::Completed);
+    assert(Q240PlanarDistance(Q240GamePosition(stationary),{1900,2900,20})<.01f);
+    assert(stationary.runtime.packageRetryAfter.empty());
   }
   {
     auto guard=Actor(14);for(int i=0;i<1500;++i)Q240UpdateNpcPackage(guard,i*.1);assert(guard.aiPackage==50&&guard.aiSequence==1);
@@ -269,6 +315,21 @@ int main(int argc,char** argv) {
     c.pipboy.dialogueActors[44].templateActor=43;c.pipboy.dialogueActors[44].templateFlags=16;
     inherited.source.baseFormId=44;gPlayerSession=std::make_unique<Session>(std::move(c));
     Q240UpdateNpcPackage(inherited,1);assert(inherited.aiPackage==50);
+  }
+  {
+    auto c=gPlayerSession->player.Definitions();
+    c.pipboy.dialogueActors[80].templateActor=82;c.pipboy.dialogueActors[80].templateFlags=8|16;
+    c.pipboy.dialogueActors[81].templateActor=43;c.pipboy.dialogueActors[81].templateFlags=8|16;
+    c.weapons.levelledActors[82].valid=true;c.weapons.levelledActors[82].entries={{1,1,43},{1,1,81}};
+    fo3pipdata::FinalizeLevelledCategories(c.pipboy,c.weapons);
+    assert(fo3pipdata::ActorCategory(c.pipboy,80,16)==&c.pipboy.dialogueActors.at(43));
+    c.pipboy.dialogueActors[81].templateFlags=8;
+    fo3pipdata::FinalizeLevelledCategories(c.pipboy,c.weapons);
+    assert(!fo3pipdata::ActorCategory(c.pipboy,80,16));
+    assert(fo3pipdata::ActorCategory(c.pipboy,80,8)==&c.pipboy.dialogueActors.at(43));
+    c.pipboy.dialogueActors[81].templateActor=80;
+    fo3pipdata::FinalizeLevelledCategories(c.pipboy,c.weapons);
+    assert(!fo3pipdata::ActorCategory(c.pipboy,80,8));
   }
   {
     auto patrol=Actor(13);auto c=gPlayerSession->player.Definitions();

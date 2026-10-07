@@ -530,6 +530,8 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
       return fail("Missing/nonfinite player game setting");
     *entry.second = it->second;
   }
+  fo3weapon::FinalizeStatistics(next.weapons);
+  fo3pipdata::FinalizeLevelledCategories(next.pipboy,next.weapons);
   fo3pipdata::Finalize(next.pipboy);
   next.fingerprint = fingerprint;
   for (auto &entry : next.references)

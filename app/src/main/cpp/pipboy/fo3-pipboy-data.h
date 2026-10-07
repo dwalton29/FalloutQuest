@@ -205,6 +205,7 @@ struct Definitions {
   std::unordered_map<uint32_t,std::array<uint32_t,2>> raceVoices;
   std::unordered_map<uint32_t,Topic> dialogueTopics;
   std::unordered_map<uint32_t,ActorDefinition> dialogueActors;
+  std::unordered_map<uint64_t,uint32_t> invariantActorCategories;
   std::unordered_map<uint32_t,PackageDefinition> packages;
   std::unordered_map<uint64_t,std::vector<PatrolPoint>> actorPatrols;
   std::unordered_map<uint64_t,std::string> actorPatrolUnsupported;
@@ -223,6 +224,9 @@ void Decode(Definitions &, const std::string &, uint32_t id, uint32_t flags,
 void Finalize(Definitions &);
 std::vector<std::string> NoteAudio(const Definitions &, uint32_t note);
 } // namespace fo3pipdata
+
+namespace fo3weapon {struct Definitions;}
+namespace fo3pipdata {void FinalizeLevelledCategories(Definitions&,const fo3weapon::Definitions&);}
 
 namespace fo3pipdata {
 std::string VoicePath(const Definitions &, const Info &, const Response &, uint32_t voice);

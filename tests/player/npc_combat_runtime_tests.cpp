@@ -119,6 +119,21 @@ int main(int argc,char** argv){
   const char* save="/tmp/fq-flee-package-runtime-save";std::string error;assert(gPlayerSession->player.Save(save,error));gPlayerSession=std::make_unique<Session>(fc);assert(gPlayerSession->player.Restore(save,error));std::remove(save);
   fleeing.runtime.EndDialogue();fleeing.stateRestored=false;blocked=true;Q230SimulateActor(fleeing,50);assert(fleeing.aiPackage==50&&fleeing.aiSequence==1);Q240UpdateNpcPackage(fleeing,50.1);assert(fleeing.runtime.activity==fo3npc::Activity::Package&&fleeing.aiPackage==50);
   fleeing.runtime.BeginCombat(999);Q230SimulateActor(fleeing,51);assert(fleeing.runtime.activity==fo3npc::Activity::Package&&fleeing.aiSequence==1);Q240UpdateNpcPackage(fleeing,51.1);assert(fleeing.aiPackage==50); // False entry condition does not undo a resumed Flee phase.
+  {
+    Prepare();auto c=gPlayerSession->player.Definitions();c.weapons.actors[43].templates=2;c.weapons.actors[43].templateId=999;
+    gPlayerSession=std::make_unique<Session>(c);auto& unknown=gQ230NpcActors[0];unknown.runtime.EndDialogue();
+    Q230SimulateActor(unknown,1);Q230SimulateActor(unknown,2);
+    assert(gPlayerSession->player.ActorHealth(42)<0&&unknown.runtime.Alive());
+    assert(!gPlayerSession->player.Snapshot().actors.at(42).dead&&shots==0);
+    // Pure persistent movement dirties the save but does not invalidate the
+    // entire population's package conditions each rendered frame.
+    auto saved=gPlayerSession->player.Snapshot().actors.at(42);
+    const auto saveRevision=gPlayerSession->player.Revision(),packageRevision=gPlayerSession->player.PackageRevision();
+    saved.position[0]+=1;assert(gPlayerSession->player.UpdateActor(42,saved));
+    assert(gPlayerSession->player.Revision()>saveRevision&&gPlayerSession->player.PackageRevision()==packageRevision);
+    saved.hostile=0x14;assert(gPlayerSession->player.UpdateActor(42,saved));
+    assert(gPlayerSession->player.PackageRevision()>packageRevision);
+  }
   PackageCombatPolicyTests();if(argc>1)OriginalCombatPolicies(argv[1]);
   std::cout<<"Production NPC combat pursuit/flee, LOS, reload, firing, death and restore passed\n";
 }

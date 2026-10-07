@@ -100,7 +100,8 @@ static void Original(const char* path) {
     for(const auto& s:*contents){const auto& d=c.items.at(s.formId).weapon;if(d.Firearm()&&d.animation<8){id=s.id;form=s.formId;break;}}
     if(!id||!p.EquipActorWeapon(r.first,id)||!p.ReloadActorWeapon(r.first,id))continue;
     assert(p.ActorWeapon(r.first)->loadedRounds<=c.items.at(form).weapon.clip&&p.FireActorWeapon(r.first,id));
-    assert(fo3npc::AI(c.pipboy,r.second.base).valid);std::cout<<"Original NPC "<<std::hex<<r.first<<" base="<<r.second.base<<" weapon="<<form<<std::dec<<"\n";++count;
+    std::cout<<"Original NPC "<<std::hex<<r.first<<" base="<<r.second.base<<" weapon="<<form<<std::dec<<std::endl;
+    assert(fo3npc::AI(c.pipboy,r.second.base).valid);++count;
   }assert(count==5);
 }
 int main(int argc,char** argv){StateAndPerception();InventoryDamagePersistence(true);InventoryDamagePersistence(false);if(argc>1)Original(argv[1]);std::cout<<"NPC combat state tests passed\n";}

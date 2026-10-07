@@ -216,11 +216,8 @@ float Player::ActorHealth(uint32_t reference) const {
   if(saved!=state_.actors.end()&&saved->second.dead&&!Essential(reference))return 0;
   const auto target=catalog_.pipboy.targets.find(reference);
   if(target==catalog_.pipboy.targets.end())return -1;
-  auto actor=catalog_.weapons.actors.find(target->second.base);if(actor==catalog_.weapons.actors.end())return -1;
-  // Follow only authored statistic inheritance; levelled actor templates need
-  // a separate canonical spawn resolver and are deliberately unsupported.
-  for(int depth=0;(actor->second.templates&2)&&depth<16;++depth){actor=catalog_.weapons.actors.find(actor->second.templateId);if(actor==catalog_.weapons.actors.end())return -1;}
-  const auto&a=actor->second;if(a.templates&2)return -1;
+  const auto* actor=fo3weapon::ActorStatistics(catalog_.weapons,target->second.base);if(!actor)return -1;
+  const auto&a=*actor;
   float health=a.health;
   if(a.flags&0x10){
     float level=a.level;
@@ -280,10 +277,12 @@ bool Player::UpdateActor(uint32_t reference,const ActorState& a) {
      (a.package&&!catalog_.pipboy.packages.count(a.package))||
      (a.hostile&&a.hostile!=0x14&&!catalog_.pipboy.targets.count(a.hostile)))return false;
   const auto old=state_.actors.find(reference);
+  bool poseOnly=false;
   if(old!=state_.actors.end()){const auto& o=old->second;
     if(o.cell==a.cell&&o.world==a.world&&o.position==a.position&&o.yaw==a.yaw&&o.package==a.package&&o.sequence==a.sequence&&o.hostile==a.hostile&&o.equippedWeapon==a.equippedWeapon&&o.dead==a.dead&&o.packageWaitSeconds==a.packageWaitSeconds)return true;
+    poseOnly=o.cell==a.cell&&o.world==a.world&&o.package==a.package&&o.hostile==a.hostile&&o.equippedWeapon==a.equippedWeapon&&o.dead==a.dead;
   }else if(state_.actors.size()>=10000)return false;
-  state_.actors[reference]=a;++revision_;return true;
+  state_.actors[reference]=a;++revision_;if(poseOnly)++actorPoseRevisions_;return true;
 }
 bool Player::SetActorHostile(uint32_t reference,uint32_t target) {
   const auto t=catalog_.pipboy.targets.find(reference);if(t==catalog_.pipboy.targets.end())return false;
@@ -310,11 +309,9 @@ bool Player::EquipActorWeapon(uint32_t reference,uint64_t instance) {
 float Player::ActorWeaponDamage(uint32_t reference) const {
   const auto* s=ActorWeapon(reference);const auto t=catalog_.pipboy.targets.find(reference);
   if(!s||t==catalog_.pipboy.targets.end())return 0;
-  auto a=catalog_.weapons.actors.find(t->second.base);
-  for(int depth=0;a!=catalog_.weapons.actors.end()&&(a->second.templates&2)&&depth<16;++depth)a=catalog_.weapons.actors.find(a->second.templateId);
-  if(a==catalog_.weapons.actors.end()||(a->second.templates&2))return 0;
+  const auto* a=fo3weapon::ActorStatistics(catalog_.weapons,t->second.base);if(!a)return 0;
   const auto& d=catalog_.items.at(s->formId).weapon;const auto& r=catalog_.weapons;
-  const float skill=d.skill>=32&&d.skill<=45?std::min<float>(100,a->second.skills[d.skill-32]):0;
+  const float skill=d.skill>=32&&d.skill<=45?std::min<float>(100,a->skills[d.skill-32]):0;
   return Damage(d,r,skill,s->condition);
 }
 bool Player::ReloadActorWeapon(uint32_t reference,uint64_t instance) {

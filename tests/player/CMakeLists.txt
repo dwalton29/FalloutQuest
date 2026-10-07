@@ -7,6 +7,13 @@ target_compile_options(facial_tests PRIVATE -Wall -Wextra -Werror)
 target_include_directories(facial_tests PRIVATE ../../app/src/main/cpp)
 add_test(NAME facial_tests COMMAND facial_tests)
 find_package(ZLIB REQUIRED)
+add_executable(npc_statistics_tests npc_statistics_tests.cpp
+    ../../app/src/main/cpp/weapons/fo3-weapon-data.cpp ../../app/src/main/cpp/data/fo3-esm-reader.cpp)
+target_compile_features(npc_statistics_tests PRIVATE cxx_std_17)
+target_compile_options(npc_statistics_tests PRIVATE -Wall -Wextra -Werror)
+target_include_directories(npc_statistics_tests PRIVATE ../../app/src/main/cpp)
+target_link_libraries(npc_statistics_tests PRIVATE ZLIB::ZLIB)
+add_test(NAME npc_statistics_tests COMMAND npc_statistics_tests)
 add_executable(player_state_tests player_state_tests.cpp
     ../../app/src/main/cpp/player/fo3-player-state.cpp
     ../../app/src/main/cpp/player/fo3-pipboy-player.cpp

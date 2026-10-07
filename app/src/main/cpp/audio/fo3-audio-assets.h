@@ -17,18 +17,33 @@ inline std::string LooseAt(std::string base, const std::string& relative) {
     std::replace(normalized.begin(),normalized.end(),'\\','/');
     if(!SafePath(normalized))return {};
     if(base.empty() || base.back()!='/')base+='/';
+    std::vector<std::string> candidates{base};
     size_t at=0;
     while(at<normalized.size()) {
         const auto end=normalized.find('/',at);
         const auto part=normalized.substr(at,end-at);
-        DIR* dir=opendir(base.c_str());if(!dir)return {};
-        std::string found;
-        while(auto* entry=readdir(dir))if(strcasecmp(entry->d_name,part.c_str())==0){found=entry->d_name;break;}
-        closedir(dir);if(found.empty())return {};
-        base+=found;if(end==std::string::npos)break;
-        base+='/';at=end+1;
+        std::vector<std::string> next;
+        for(const auto& directory:candidates) {
+            DIR* dir=opendir(directory.c_str());if(!dir)continue;
+            std::vector<std::string> names;
+            while(auto* entry=readdir(dir))if(strcasecmp(entry->d_name,part.c_str())==0)names.emplace_back(entry->d_name);
+            closedir(dir);
+            std::sort(names.begin(),names.end(),[&](const auto& a,const auto& b){
+                if((a==part)!=(b==part))return a==part;
+                return a<b;
+            });
+            for(const auto& name:names) {
+                if(next.size()>=256)return {}; // Bound ambiguous extracted trees.
+                next.push_back(directory+name+(end==std::string::npos?"":"/"));
+            }
+        }
+        if(next.empty())return {};
+        candidates=std::move(next);if(end==std::string::npos)break;
+        at=end+1;
     }
-    return base;
+    // Extracted installs may contain both Sound and sound. A matching first
+    // component is insufficient: select a complete original voice/LIP path.
+    return candidates.front();
 }
 inline std::vector<std::string> AudioRoots(std::string data) {
     while(!data.empty() && data.back()=='/')data.pop_back();

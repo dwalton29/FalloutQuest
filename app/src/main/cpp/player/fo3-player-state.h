@@ -166,6 +166,9 @@ public:
   double InventoryWeight() const;
   bool Overencumbered() const { return InventoryWeight() > CarryCapacity(); }
   uint64_t Revision() const { return revision_; }
+  // Persisted motion/procedure progress still dirties saves, but is sampled
+  // by AI's cadence rather than invalidating every actor's conditions per step.
+  uint64_t PackageRevision() const { return revision_ - actorPoseRevisions_; }
   // Invalid requests are atomic no-ops. Removal respects quest/cannot-drop
   // flags.
   bool RecordDialogue(uint32_t actor,uint32_t info,const std::vector<uint32_t>& topics);
@@ -241,6 +244,7 @@ private:
   Catalog catalog_;
   State state_;
   uint64_t revision_ = 0;
+  uint64_t actorPoseRevisions_ = 0;
 };
 
 // Native integration owns one session for the application, across CELL/GL

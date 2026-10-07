@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <unordered_map>
 namespace fo3npc {
 // Spatial policy for VR, not Bethesda package or animation semantics.
 struct DialoguePolicy {
@@ -40,6 +41,9 @@ struct RuntimeState {
   uint32_t evaluatedPackage=0;
   std::array<float,3> evaluatedAnchor{};
   float evaluatedRadius=0;
+  // Ephemeral route backoff, owned per actor and per package. A failed
+  // priority entry must let other authored entries run until its next retry.
+  std::unordered_map<uint32_t,double> packageRetryAfter;
   bool Alive() const {return activity!=Activity::Dying&&activity!=Activity::Dead&&activity!=Activity::Unconscious;}
   bool CanTalk() const {return Alive()&&activity!=Activity::Combat;}
   void BeginCombat(uint32_t target){

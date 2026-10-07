@@ -44,6 +44,12 @@ struct Definitions {
     uint32_t restrictions=0;uint16_t flags=0;bool valid=false;
   };
   std::unordered_map<uint32_t,Actor> actors;
+  struct LevelledActorEntry {uint16_t level=0,count=0;uint32_t actor=0;};
+  struct LevelledActor {uint8_t chanceNone=0,flags=0;uint32_t chanceGlobal=0;bool valid=false;std::vector<LevelledActorEntry> entries;};
+  std::unordered_map<uint32_t,LevelledActor> levelledActors;
+  // A source exists only if every authored list entry resolves to identical
+  // statistics. This is not a random spawn/appearance/inventory selection.
+  std::unordered_map<uint32_t,uint32_t> invariantStatistics;
   std::unordered_map<uint32_t,CombatStyle> styles;
   std::unordered_map<uint32_t,std::unordered_map<uint32_t,int32_t>> relations;
   std::unordered_map<uint32_t,float> armourDR;
@@ -63,5 +69,7 @@ struct WorldPose {
 bool Relevant(const std::string& type);
 bool DecodeWeapon(const std::vector<uint8_t>& payload,Definition& out);
 void Decode(Definitions& out,const std::string& type,uint32_t id,const std::vector<uint8_t>& payload);
+void FinalizeStatistics(Definitions& out);
+const Definitions::Actor* ActorStatistics(const Definitions&,uint32_t base);
 bool ValidPose(const WorldPose& pose);
 }

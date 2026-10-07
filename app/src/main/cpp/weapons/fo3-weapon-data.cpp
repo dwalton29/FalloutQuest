@@ -1,8 +1,10 @@
 #include "fo3-weapon-data.h"
 #include "data/fo3-esm-reader.h"
 #include <cmath>
+#include <unordered_set>
+#include <functional>
 namespace fo3weapon {
-bool Relevant(const std::string&t){return t=="PROJ"||t=="STAT"||t=="NPC_"||t=="FACT"||t=="CSTY";}
+bool Relevant(const std::string&t){return t=="PROJ"||t=="STAT"||t=="NPC_"||t=="LVLN"||t=="FACT"||t=="CSTY";}
 bool DecodeWeapon(const std::vector<uint8_t>&p,Definition&out){
   Definition o;bool data=false,dnam=false;
   fo3esm::WalkSubrecords(p,[&](const char*tag,const uint8_t*b,uint32_t n){
@@ -26,7 +28,17 @@ bool DecodeWeapon(const std::vector<uint8_t>&p,Definition&out){
 void Decode(Definitions&o,const std::string&t,uint32_t id,const std::vector<uint8_t>&p){
   Projectile q;Definitions::Actor actor;Definitions::CombatStyle style;
   bool actorData=false;bool valid=false;std::string model,editor;
+  Definitions::LevelledActor levelled;bool chance=false,listFlags=false,listValid=true;
   fo3esm::WalkSubrecords(p,[&](const char*tag,const uint8_t*b,uint32_t n){const std::string k(tag,4);
+    if(t=="LVLN") {
+      if(k=="LVLD"){if(n!=1||chance)listValid=false;else{levelled.chanceNone=b[0];chance=true;}}
+      if(k=="LVLF"){if(n!=1||listFlags)listValid=false;else{levelled.flags=b[0];listFlags=true;}}
+      if(k=="LVLG"){if(n!=4)listValid=false;else levelled.chanceGlobal=fo3esm::ReadU32(b);}
+      if(k=="LVLO") {
+        if(n!=12||levelled.entries.size()>=4096)listValid=false;
+        else levelled.entries.push_back({fo3esm::ReadU16(b),fo3esm::ReadU16(b+8),fo3esm::ReadU32(b+4)});
+      }
+    }
     if(k=="EDID")editor=fo3esm::ZString(b,n);
     if(t=="NPC_"&&k=="DATA"&&n>=11){actor.health=static_cast<int32_t>(fo3esm::ReadU32(b));actor.endurance=b[6];actorData=true;}
     if(t=="NPC_"&&k=="ACBS"&&n==24){actor.flags=fo3esm::ReadU32(b);actor.level=fo3esm::ReadU16(b+8);actor.minLevel=fo3esm::ReadU16(b+10);actor.maxLevel=fo3esm::ReadU16(b+12);actor.templates=fo3esm::ReadU16(b+22);}
@@ -61,8 +73,52 @@ void Decode(Definitions&o,const std::string&t,uint32_t id,const std::vector<uint
   if(t=="STAT")o.models[id]=model;
   if(t=="CSTY")o.styles[id]=style;
   if(t=="NPC_"&&actorData&&actor.health>=0&&actor.endurance<=10)o.actors[id]=actor;
+  if(t=="LVLN"){levelled.valid=listValid&&chance&&listFlags&&!levelled.entries.empty();o.levelledActors[id]=std::move(levelled);}
   for(float v:{q.gravity,q.speed,q.range,q.flashDuration,q.impactForce})if(!std::isfinite(v)||v<0)valid=false;
   if(t=="PROJ"&&valid){q.model=model;o.projectiles[id]=std::move(q);}
+}
+static bool SameStatistics(const Definitions::Actor& a,const Definitions::Actor& b) {
+  // Sex/essential/AI flags are Traits, not Statistics. Only the health/level
+  // calculation flags are consumed with DATA/DNAM by the existing runtime.
+  return (a.flags&0x90)==(b.flags&0x90)&&a.level==b.level&&a.minLevel==b.minLevel&&
+    a.maxLevel==b.maxLevel&&a.health==b.health&&a.endurance==b.endurance&&a.skills==b.skills;
+}
+void FinalizeStatistics(Definitions& d) {
+  d.invariantStatistics.clear();
+  std::unordered_set<uint32_t> visiting;
+  unsigned budget=0;
+  std::function<uint32_t(uint32_t,unsigned)> resolve=[&](uint32_t id,unsigned depth)->uint32_t {
+    if(depth>=16||budget++>=65536||!visiting.insert(id).second)return 0;
+    uint32_t source=0;
+    const auto npc=d.actors.find(id);
+    if(npc!=d.actors.end())source=(npc->second.templates&2)?resolve(npc->second.templateId,depth+1):id;
+    else {
+      const auto list=d.levelledActors.find(id);
+      if(list!=d.levelledActors.end()&&list->second.valid&&list->second.chanceNone==0&&
+         list->second.chanceGlobal==0&&list->second.flags<=1) {
+        bool identical=true;
+        for(const auto& entry:list->second.entries) {
+          // Restrict to always-eligible, single-actor entries. Lists whose
+          // eligibility changes with level still require a spawn resolver.
+          if(entry.level!=1||entry.count!=1){identical=false;break;}
+          const auto leaf=resolve(entry.actor,depth+1);
+          if(!leaf||(source&&!SameStatistics(d.actors.at(source),d.actors.at(leaf)))){identical=false;break;}
+          source=leaf;
+        }
+        if(!identical)source=0;
+      }
+    }
+    visiting.erase(id);return source;
+  };
+  for(const auto& list:d.levelledActors){budget=0;if(const auto source=resolve(list.first,0))d.invariantStatistics[list.first]=source;}
+}
+const Definitions::Actor* ActorStatistics(const Definitions& d,uint32_t id) {
+  for(unsigned depth=0;depth<16;++depth) {
+    const auto a=d.actors.find(id);
+    if(a!=d.actors.end()){if(!(a->second.templates&2))return &a->second;id=a->second.templateId;}
+    else {const auto source=d.invariantStatistics.find(id);if(source==d.invariantStatistics.end())return nullptr;id=source->second;}
+  }
+  return nullptr;
 }
 bool ValidPose(const WorldPose&p){
   if(!p.cell&&!p.world)return false;
