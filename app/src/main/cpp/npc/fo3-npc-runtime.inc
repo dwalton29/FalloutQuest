@@ -316,6 +316,10 @@ void Q230UpdateActor(Q230ActorVisual &actor) {
       norm=std::sqrt(norm);if(norm>1e-6f)for(auto& v:to.rotation)v/=norm;
       to.scale=from.scale*(1-mix)+to.scale*mix;
     }
+    // Blending must preserve Sample()'s in-place accumulation-root invariant.
+    // Otherwise a previous clip's root motion can leak back for the blend.
+    if(actor.pose.accumulation>=0&&size_t(actor.pose.accumulation)<actor.pose.local.size())
+      actor.pose.local[size_t(actor.pose.accumulation)]=fo3anim::Transform{};
     fo3anim::ComposePose(actor.skeleton,actor.pose);
   }
   fo3anim::LookYaw(actor.skeleton,actor.pose,actor.headBone,actor.runtime.headYaw);

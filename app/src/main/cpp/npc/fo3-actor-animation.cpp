@@ -248,6 +248,11 @@ bool Sample(const Skeleton &s, const Clip &c, double elapsed, Pose &p, SampleTim
     int bone = p.trackBones[i];
     if (bone < 0)
       continue;
+    // KF accumulation belongs to the engine's actor/world motion. FalloutQuest
+    // drives the resident actor root from NAVM + collision, so reapplying this
+    // track would double root translation/rotation and lift/offset the skeleton.
+    if (bone == accumulation)
+      continue;
     const Track &track = c.tracks[i];
     Transform &local = p.local[bone];
     if (track.hasTranslation) {

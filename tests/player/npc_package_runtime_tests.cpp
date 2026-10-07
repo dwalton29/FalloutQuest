@@ -51,12 +51,20 @@ struct Q230ActorVisual {
   uint64_t lastFrame=1;
 };
 std::vector<Q230ActorVisual> packageTargets;
+bool q240GroundProbe=false;
+float q240GroundReference=0,q240GroundResult=0;
+static bool TestNpcWorldGround(float,float,float referenceY,float* outY) {
+  if(!q240GroundProbe||!outY)return false;
+  q240GroundReference=referenceY;*outY=q240GroundResult;return true;
+}
 #define FO3_NPC_PACKAGE_ACTOR_TARGET(reference,point) Q240ResidentPackageTarget(packageTargets,reference,point)
+#define FO3_NPC_WORLD_GROUND(x,z,referenceY,outY) TestNpcWorldGround(x,z,referenceY,outY)
 #ifdef FO3_NPC_DOOR_HOST_TEST
 static bool Q230PathBlocked(Q230ActorVisual&,float,float,float,float,float);
 #define FO3_NPC_PATH_BLOCKED Q230PathBlocked
 #endif
 #include "npc/fo3-npc-package-runtime.inc"
+#undef FO3_NPC_WORLD_GROUND
 #undef FO3_NPC_PACKAGE_ACTOR_TARGET
 #ifdef FO3_NPC_DOOR_HOST_TEST
 #undef FO3_NPC_PATH_BLOCKED
@@ -193,10 +201,14 @@ int main(int argc,char** argv) {
   auto& target=gPlayerSession->player; (void)target;
   grounded.aiPackage=50;grounded.aiSequence=1;grounded.aiPathGame={{1400,2200,100}};grounded.aiPathSurfaces={{0,0}};
   grounded.runtime.position=Q240ScenePosition({1250,2250,245});grounded.runtime.yaw=std::atan2(-150.f,50.f)+3.14159265f;grounded.aiLastUpdate=0;
+  const auto navGame=Q240GroundPoint(*sloped,0,Q240GamePosition(grounded));
+  const auto navScene=Q240ScenePosition(navGame);
+  q240GroundProbe=true;q240GroundResult=navScene[1]+.13f;q240GroundReference=999.f;
   Q240UpdateNpcPackage(grounded,.1);
   assert(grounded.runtime.animation==fo3npc::Animation::TurnLeft||grounded.runtime.animation==fo3npc::Animation::TurnRight);
-  const auto actual=Q240GamePosition(grounded);
-  const auto expected=Q240GroundPoint(*sloped,0,actual);assert(std::fabs(actual[2]-expected[2])<.001f);
+  assert(std::fabs(q240GroundReference-navScene[1])<.001f);
+  assert(std::fabs(grounded.runtime.position[1]-q240GroundResult)<.001f);
+  q240GroundProbe=false;
   // Wander must keep walking within one large authored triangle.
   auto lone=Actor(5);lone.navigationGraph=single;
   std::array<float,3> anchor{1250,2250,95};

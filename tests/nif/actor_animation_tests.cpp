@@ -69,9 +69,19 @@ int main(int argc, char **argv) {
   assert(Near(pose.global[1][12], 1));
   assert(Sample(skeleton, clip, 1, pose));
   assert(Near(pose.global[1][12], 8));
-  // Accumulation roots start at identity, avoiding double skeleton-root height.
+  // Accumulation roots stay at identity even when the KF contains an
+  // explicit root track. World locomotion consumes that motion separately.
   clip.accumulationRoot = "root";
+  Track rootMotion;
+  rootMotion.bone = "root";
+  rootMotion.hasTranslation = true;
+  rootMotion.base.translation = {100, 200, 300};
+  rootMotion.hasRotation = true;
+  rootMotion.base.rotation = {0.70710678f, 0, 0, 0.70710678f};
+  clip.tracks.push_back(rootMotion);
   assert(Sample(skeleton, clip, 0, pose));
+  assert(Near(pose.global[0][12], 0) && Near(pose.global[0][13], 0) &&
+         Near(pose.global[0][14], 0));
   assert(Near(pose.global[1][14], 5));
   Skeleton cycle = skeleton;
   cycle.bones[0].parent = 1;

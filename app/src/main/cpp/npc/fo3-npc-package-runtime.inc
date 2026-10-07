@@ -397,20 +397,28 @@ static void Q240GroundPathRoot(Q230ActorVisual& actor) {
   const auto surface=actor.aiPathSurfaces[actor.aiPathIndex];
   if(surface.first>=actor.navigationGraph->meshes.size()||
      surface.second>=actor.navigationGraph->meshes[surface.first]->triangles.size())return;
+  // NAVM supplies a stable vertical neighbourhood for stacked Megaton
+  // geometry, but the exact visible floor comes from resident collision/LAND.
+  // Do not seed the physical query from an already-wrong actor root.
+  const auto game=Q240GamePosition(actor);
+  const auto navScene=Q240ScenePosition(
+    Q240GroundPoint(*actor.navigationGraph->meshes[surface.first],
+                    surface.second,game));
 #ifdef FO3_NPC_WORLD_GROUND
-  float physicalY=actor.runtime.position[1];
+  float physicalY=navScene[1];
   if(FO3_NPC_WORLD_GROUND(actor.runtime.position[0],actor.runtime.position[2],
-                          actor.runtime.position[1],&physicalY)) {
+                          navScene[1],&physicalY)) {
+    const float oldY=actor.runtime.position[1];
     actor.runtime.position[1]=physicalY;
+    if(std::fabs(physicalY-oldY)>.05f)
+      Q6H_LOGI("NPC GROUND actor=%08X oldY=%.3f navY=%.3f physicalY=%.3f",
+        actor.source.refFormId,oldY,navScene[1],physicalY);
     return;
   }
 #endif
-  // NAVM is a route-topology fallback only when no resident collision surface
-  // can be sampled (including host tests without the world collision runtime).
-  const auto game=Q240GamePosition(actor);
-  actor.runtime.position[1]=Q240ScenePosition(
-    Q240GroundPoint(*actor.navigationGraph->meshes[surface.first],
-                    surface.second,game))[1];
+  // Host/no-collision fallback: use the current route surface rather than
+  // preserving an authored ACHR height error.
+  actor.runtime.position[1]=navScene[1];
 }
 static void Q240AdvancePath(Q230ActorVisual& actor,float dt,double now) {
   if(dt<=0||actor.aiPathIndex>=actor.aiPathGame.size())return;

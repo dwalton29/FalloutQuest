@@ -22,8 +22,8 @@ android {
         applicationId 'com.falloutquest.app'
         minSdk 29
         targetSdk 35
-        versionCode 177
-        versionName '0.46.5-headset-dialogue-grounding'
+        versionCode 178
+        versionName '0.46.6-jni-root-grounding'
 
         ndk {
             abiFilters 'arm64-v8a'

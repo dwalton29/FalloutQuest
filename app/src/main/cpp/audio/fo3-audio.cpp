@@ -45,6 +45,42 @@ struct Runtime {
   std::atomic<uint32_t> playingNote{0};
   DialogueCompletionMailbox dialogueCompletion;
 } runtime;
+
+void JNICALL DialogueDoneNative(JNIEnv*, jobject, jint token, jboolean success) {
+  DialogueDone(uint32_t(token), success == JNI_TRUE);
+}
+void JNICALL BroadcastDoneNative(JNIEnv*, jobject, jint channel, jint generation) {
+  BroadcastDone(channel, uint32_t(generation));
+}
+bool RegisterActivityNatives(JNIEnv* env, jobject activity) {
+  if (!env || !activity) return false;
+  jclass cls = env->GetObjectClass(activity);
+  if (!cls) {
+    if (env->ExceptionCheck()) env->ExceptionClear();
+    __android_log_print(ANDROID_LOG_ERROR, "FalloutQuest",
+                        "AUDIO JNI GetObjectClass failed");
+    return false;
+  }
+  JNINativeMethod methods[] = {
+      {const_cast<char*>("audioDialogueDone"), const_cast<char*>("(IZ)V"),
+       reinterpret_cast<void*>(DialogueDoneNative)},
+      {const_cast<char*>("audioBroadcastDone"), const_cast<char*>("(II)V"),
+       reinterpret_cast<void*>(BroadcastDoneNative)},
+  };
+  const jint status = env->RegisterNatives(
+      cls, methods, static_cast<jint>(sizeof(methods) / sizeof(methods[0])));
+  env->DeleteLocalRef(cls);
+  if (status != JNI_OK || env->ExceptionCheck()) {
+    if (env->ExceptionCheck()) env->ExceptionClear();
+    __android_log_print(ANDROID_LOG_ERROR, "FalloutQuest",
+                        "AUDIO JNI RegisterNatives failed status=%d", int(status));
+    return false;
+  }
+  __android_log_print(ANDROID_LOG_INFO, "FalloutQuest",
+                      "AUDIO JNI callbacks registered");
+  return true;
+}
+
 std::string Loose(const std::string &relative) {
   return FindAudioFile(fo3assets::FalloutDataPath(""), relative);
 }
@@ -462,6 +498,13 @@ void Start(JavaVM *vm, jobject activity) {
       vm->GetEnv(reinterpret_cast<void **>(&env), JNI_VERSION_1_6) != JNI_OK;
   if (attach && vm->AttachCurrentThread(&env, nullptr) != JNI_OK)
     return;
+  // NativeActivity loads the .so for android_main, but that does not guarantee
+  // ART associates it with this Java subclass for name-based native lookup.
+  // Register the callbacks explicitly against the live activity class.
+  if (!RegisterActivityNatives(env, activity)) {
+    if (attach) vm->DetachCurrentThread();
+    return;
+  }
   runtime.vm = vm;
   runtime.activity = env->NewGlobalRef(activity);
   runtime.stop = false;
@@ -550,11 +593,19 @@ void NamedSound(const std::string &editorId) {
 }
 } // namespace fo3audio
 
+// Keep conventional exports as a fallback/debug surface. Production binding
+// is explicit RegisterNatives above, which is independent of class-loader
+// library association.
 extern "C" JNIEXPORT void JNICALL
 Java_com_falloutquest_app_FalloutNativeActivity_audioBroadcastDone(
-    JNIEnv *, jobject, jint channel, jint generation) {
+    JNIEnv *env, jobject activity, jint channel, jint generation) {
+  (void)env;(void)activity;
   fo3audio::BroadcastDone(channel, uint32_t(generation));
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_falloutquest_app_FalloutNativeActivity_audioDialogueDone(JNIEnv*,jobject,jint token,jboolean success){fo3audio::DialogueDone(uint32_t(token),success);}
+Java_com_falloutquest_app_FalloutNativeActivity_audioDialogueDone(
+    JNIEnv *env, jobject activity, jint token, jboolean success) {
+  (void)env;(void)activity;
+  fo3audio::DialogueDone(uint32_t(token), success == JNI_TRUE);
+}
