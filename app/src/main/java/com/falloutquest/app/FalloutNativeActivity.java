@@ -43,7 +43,19 @@ public final class FalloutNativeActivity extends NativeActivity {
                     } catch (IllegalStateException e) {
                         Log.w("FalloutQuest", "DIALOGUE completed token="+token+" timing unavailable",e);
                     }
-                    releaseDialogue(false);audioDialogueDone(token,true);
+                    // Leave MediaPlayer's completion callback before crossing
+                    // into JNI. This removes callback/release/native re-entrancy
+                    // from the exact headset failure boundary.
+                    dialogue=null;
+                    try { player.release(); } catch (RuntimeException e) {
+                        Log.w("FalloutQuest", "DIALOGUE release token="+token+" failed",e);
+                    }
+                    duckSpeech();
+                    audio.post(() -> {
+                        Log.i("FalloutQuest", "DIALOGUE native-dispatch token="+token);
+                        audioDialogueDone(token,true);
+                        Log.i("FalloutQuest", "DIALOGUE native-return token="+token);
+                    });
                 }
             },() -> dialogue==player);
             duckSpeech();

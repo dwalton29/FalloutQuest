@@ -57,6 +57,11 @@ bool ResolveFo3PlayerMotionQ6G(float currentX, float currentZ,
 
 bool IsFo3PlayerCollisionReadyQ6G();
 
+// Resident actors use NAVM for route topology but the visible root height must
+// follow the same authored Havok/LAND surfaces as player locomotion.
+bool SampleFo3ActorGroundQ240(float x, float z, float referenceY,
+                              float* outGroundY);
+
 // Q22.3: resolve a moving loose object's authored-collision bounding sphere
 // against the currently active authored Fallout collision world. The moving
 // REFR is excluded from contact tests so its original static bhk placement

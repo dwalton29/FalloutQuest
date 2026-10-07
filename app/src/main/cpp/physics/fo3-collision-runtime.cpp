@@ -2280,6 +2280,38 @@ bool IsFo3PlayerCollisionReadyQ6G() {
     return gPlayerCollisionReady && !gWorldTriangles.empty();
 }
 
+bool SampleFo3ActorGroundQ240(float x, float z, float referenceY,
+                              float* outGroundY) {
+    if (!outGroundY || !std::isfinite(x) || !std::isfinite(z) ||
+        !std::isfinite(referenceY) || !gPlayerCollisionReady ||
+        gWorldTriangles.empty()) return false;
+
+    bool found = false;
+    float bestY = referenceY;
+    float bestDistance = std::numeric_limits<float>::max();
+    auto consider = [&](float y) {
+        if (!std::isfinite(y)) return;
+        const float distance = std::fabs(y - referenceY);
+        if (!found || distance < bestDistance - 0.0001f ||
+            (std::fabs(distance - bestDistance) <= 0.0001f && y > bestY)) {
+            found = true;
+            bestY = y;
+            bestDistance = distance;
+        }
+    };
+
+    float authoredY = referenceY;
+    if (FindGroundWide(x, z, referenceY, authoredY)) consider(authoredY);
+
+    float terrainOffset = 0.0f;
+    if (SampleFo3TerrainGroundQ77(x, z, &terrainOffset))
+        consider(gCollisionFloorY + terrainOffset);
+
+    if (!found) return false;
+    *outGroundY = bestY;
+    return true;
+}
+
 void RenderFo3CollisionOverlay(const float* mvp16) {
     if (!SHOW_COLLISION_DEBUG_Q6G) return;
     if (!mvp16 || !gProgram || !gVao || gVertexCount <= 0) return;

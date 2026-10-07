@@ -8,6 +8,7 @@ double gDialogueTime=0,gDialogueGainTime=0;
 uint32_t gDialoguePublishedToken=0,gDialoguePanelInfo=0;
 size_t gDialoguePanelResponse=SIZE_MAX;
 fo3dialogue::Phase gDialoguePanelPhase=fo3dialogue::Phase::Inactive;
+uint64_t gDialogueChoicesVisibleFrame=0;
 struct DialogueEligibility {uint64_t revision=UINT64_MAX;double until=0;bool valid=false;};
 std::unordered_map<uint32_t,DialogueEligibility> gDialogueEligibility;
 std::unordered_set<std::string> gDialogueDiagnostics;
@@ -56,7 +57,7 @@ void DialoguePublishAudio() {
 void CleanupFo3Dialogue(uint32_t previous,const char* reason) {
   if(auto* actor=DialogueActor(previous)){actor->runtime.EndDialogue();Q6H_LOGI("NPC DIALOGUE OVERRIDE actor=%08X restore=1 package=%08X",previous,actor->runtime.package);}
   if(gDialogue.Active())gDialogue.End(reason);gDialoguePanel.visible=false;gDialoguePanel.choices.clear();gDialoguePanel.subtitle.clear();++gDialoguePanel.revision;
-  gDialogueCursor.Target(0,0);gDialogueEligibility.clear();gDialoguePanelPhase=fo3dialogue::Phase::Inactive;
+  gDialogueCursor.Target(0,0);gDialogueEligibility.clear();gDialoguePanelPhase=fo3dialogue::Phase::Inactive;gDialogueChoicesVisibleFrame=0;
   fo3audio::DialogueStop();
   if(previous&&gPlayerSession){fo3audio::RadioState(gPlayerSession->player.Snapshot().pipboy);FlushFo3PlayerState();}
 }
@@ -115,13 +116,15 @@ void UpdateFo3Dialogue(double now,float stick,bool a,bool b,bool focused) {
       if(complete){
         Q6H_LOGI("DIALOGUE TRANSITION actor=%08X info=%08X token=%u stage=audio-complete",gDialogue.actor,gDialogue.info,uint32_t(complete>>1));
         gDialogue.AudioDone(uint32_t(complete>>1),(complete&1)!=0,ctx,gPlayerSession->player);
-        Q6H_LOGI("DIALOGUE TRANSITION actor=%08X info=%08X stage=choices-built phase=%d choices=%zu",gDialogue.actor,gDialogue.info,int(gDialogue.phase),gDialogue.choices.size());
+        if(gDialogue.phase==fo3dialogue::Phase::Choices)gDialogueChoicesVisibleFrame=gStereoFrame+1;
+        Q6H_LOGI("DIALOGUE TRANSITION actor=%08X info=%08X stage=choices-built phase=%d choices=%zu publishFrame=%llu",gDialogue.actor,gDialogue.info,int(gDialogue.phase),gDialogue.choices.size(),(unsigned long long)gDialogueChoicesVisibleFrame);
         if(!gDialogue.Active()){CleanupFo3Dialogue(actor->source.refFormId,"voice/goodbye complete");}
       }
       if(gDialogue.Active()) {
+        const bool choicesDeferred=gDialogue.phase==fo3dialogue::Phase::Choices&&gStereoFrame<gDialogueChoicesVisibleFrame;
         if(gDialogue.phase==fo3dialogue::Phase::Choices&&(gDialoguePanelPhase!=gDialogue.phase||gDialoguePanelInfo!=gDialogue.info))gDialogueCursor.Target(0,0);
         gDialogueCursor.Target(gDialogue.actor,gDialogue.choices.size());
-        if(gDialogue.phase==fo3dialogue::Phase::Choices) {
+        if(gDialogue.phase==fo3dialogue::Phase::Choices&&!choicesDeferred) {
           const auto before=gDialogueCursor.selected;gDialogueCursor.Scroll(stick,now,gDialogue.choices.size());
           if(before!=gDialogueCursor.selected)fo3audio::Scroll();gDialogue.selected=gDialogueCursor.selected;
           if(focused&&pressA&&gDialogue.Choose(gDialogue.selected,ctx,gPlayerSession->player)){fo3audio::NamedSound("UIMenuOK");FlushFo3PlayerState();}
@@ -136,12 +139,15 @@ void UpdateFo3Dialogue(double now,float stick,bool a,bool b,bool focused) {
         const float desired=std::atan2(dx,dz);
         gDialoguePanel.yaw=first?desired:gDialoguePanel.yaw+fo3npc::Angle(desired-gDialoguePanel.yaw)*(1-std::exp(-dt/.25f));
         gDialoguePanel.visible=true;
-        if(gDialoguePanelInfo!=gDialogue.info||gDialoguePanelResponse!=gDialogue.response||gDialoguePanelPhase!=gDialogue.phase||first) {
+        if(!choicesDeferred&&(gDialoguePanelInfo!=gDialogue.info||gDialoguePanelResponse!=gDialogue.response||gDialoguePanelPhase!=gDialogue.phase||first)) {
           gDialoguePanelInfo=gDialogue.info;gDialoguePanelResponse=gDialogue.response;gDialoguePanelPhase=gDialogue.phase;
           gDialoguePanel.title=actor->source.fullName;gDialoguePanel.subtitle=gDialogue.Subtitle(gPlayerSession->player.Definitions().pipboy);
           gDialoguePanel.choices.clear();for(const auto& choice:gDialogue.choices)gDialoguePanel.choices.push_back(choice.text);++gDialoguePanel.revision;
-          Q6H_LOGI("DIALOGUE TRANSITION actor=%08X info=%08X stage=panel-ready choices=%zu",gDialogue.actor,gDialogue.info,gDialoguePanel.choices.size());
-          fo3audio::RadioState(gPlayerSession->player.Snapshot().pipboy);FlushFo3PlayerState();
+          Q6H_LOGI("DIALOGUE TRANSITION actor=%08X info=%08X stage=panel-ready choices=%zu frame=%llu",gDialogue.actor,gDialogue.info,gDialoguePanel.choices.size(),(unsigned long long)gStereoFrame);
+          fo3audio::RadioState(gPlayerSession->player.Snapshot().pipboy);
+          Q6H_LOGI("DIALOGUE TRANSITION actor=%08X info=%08X stage=flush-begin",gDialogue.actor,gDialogue.info);
+          FlushFo3PlayerState();
+          Q6H_LOGI("DIALOGUE TRANSITION actor=%08X info=%08X stage=flush-end",gDialogue.actor,gDialogue.info);
         }
         gDialoguePanel.selected=gDialogue.selected;
         if(now>=gDialogueGainTime){fo3audio::DialogueGain(1.f/std::max(1.f,distance*.5f));gDialogueGainTime=now+.1;}

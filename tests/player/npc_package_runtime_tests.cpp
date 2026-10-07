@@ -192,8 +192,9 @@ int main(int argc,char** argv) {
   grounded.navigationGraph=single;
   auto& target=gPlayerSession->player; (void)target;
   grounded.aiPackage=50;grounded.aiSequence=1;grounded.aiPathGame={{1400,2200,100}};grounded.aiPathSurfaces={{0,0}};
-  grounded.runtime.position=Q240ScenePosition({1250,2250,245});grounded.runtime.yaw=std::atan2(-150.f,50.f);grounded.aiLastUpdate=0;
+  grounded.runtime.position=Q240ScenePosition({1250,2250,245});grounded.runtime.yaw=std::atan2(-150.f,50.f)+3.14159265f;grounded.aiLastUpdate=0;
   Q240UpdateNpcPackage(grounded,.1);
+  assert(grounded.runtime.animation==fo3npc::Animation::TurnLeft||grounded.runtime.animation==fo3npc::Animation::TurnRight);
   const auto actual=Q240GamePosition(grounded);
   const auto expected=Q240GroundPoint(*sloped,0,actual);assert(std::fabs(actual[2]-expected[2])<.001f);
   // Wander must keep walking within one large authored triangle.

@@ -392,24 +392,48 @@ static bool Q240BuildPackagePath(Q230ActorVisual& actor,const fo3pipdata::Packag
   }
   return success;
 }
+static void Q240GroundPathRoot(Q230ActorVisual& actor) {
+  if(!actor.navigationGraph||actor.aiPathIndex>=actor.aiPathSurfaces.size())return;
+  const auto surface=actor.aiPathSurfaces[actor.aiPathIndex];
+  if(surface.first>=actor.navigationGraph->meshes.size()||
+     surface.second>=actor.navigationGraph->meshes[surface.first]->triangles.size())return;
+#ifdef FO3_NPC_WORLD_GROUND
+  float physicalY=actor.runtime.position[1];
+  if(FO3_NPC_WORLD_GROUND(actor.runtime.position[0],actor.runtime.position[2],
+                          actor.runtime.position[1],&physicalY)) {
+    actor.runtime.position[1]=physicalY;
+    return;
+  }
+#endif
+  // NAVM is a route-topology fallback only when no resident collision surface
+  // can be sampled (including host tests without the world collision runtime).
+  const auto game=Q240GamePosition(actor);
+  actor.runtime.position[1]=Q240ScenePosition(
+    Q240GroundPoint(*actor.navigationGraph->meshes[surface.first],
+                    surface.second,game))[1];
+}
 static void Q240AdvancePath(Q230ActorVisual& actor,float dt,double now) {
   if(dt<=0||actor.aiPathIndex>=actor.aiPathGame.size())return;
+  // Ground before turn-in-place. Previously an off-surface ACHR root remained
+  // untouched until the first forward step, causing the visible delayed snap.
+  Q240GroundPathRoot(actor);
   const auto targetScene=Q240ScenePosition(actor.aiPathGame[actor.aiPathIndex]);
-  actor.runtime.destination=targetScene;
-  const float dx=targetScene[0]-actor.runtime.position[0],dy=targetScene[1]-actor.runtime.position[1],
+  actor.runtime.destination={targetScene[0],actor.runtime.position[1],targetScene[2]};
+  const float dx=targetScene[0]-actor.runtime.position[0],
               dz=targetScene[2]-actor.runtime.position[2];
   const float distance=std::sqrt(dx*dx+dz*dz);
   const auto blocked=[&](float step){
 #ifdef FO3_NPC_PATH_BLOCKED
-    const float length=std::sqrt(dx*dx+dy*dy+dz*dz);
-    return length>0&&FO3_NPC_PATH_BLOCKED(actor,dx/length,dy/length,dz/length,step,length);
+    return distance>0&&FO3_NPC_PATH_BLOCKED(actor,dx/distance,0,dz/distance,step,distance);
 #else
     (void)step;return false;
 #endif
   };
   if(distance<.08f) {
-    if(blocked(std::sqrt(dx*dx+dy*dy+dz*dz))){actor.runtime.speed=0;actor.runtime.animation=fo3npc::Animation::Idle;return;}
-    actor.runtime.position=targetScene;++actor.aiPathIndex;actor.runtime.speed=0;
+    if(blocked(distance)){actor.runtime.speed=0;actor.runtime.animation=fo3npc::Animation::Idle;return;}
+    actor.runtime.position[0]=targetScene[0];actor.runtime.position[2]=targetScene[2];
+    Q240GroundPathRoot(actor);
+    ++actor.aiPathIndex;actor.runtime.speed=0;
     actor.runtime.animation=fo3npc::Animation::Idle;actor.aiRepathAt=now+.35;return;
   }
   const float desired=std::atan2(-dx,-dz),error=fo3npc::Angle(desired-actor.runtime.yaw);
@@ -422,20 +446,13 @@ static void Q240AdvancePath(Q230ActorVisual& actor,float dt,double now) {
     actor.runtime.speed=0;
     actor.runtime.animation=error>0?fo3npc::Animation::TurnLeft:fo3npc::Animation::TurnRight;return;
   }
-  // Fallout's movement-speed actor values are not yet decoded. 1.05 m/s is an
-  // explicit standalone-VR locomotion bridge; path, schedule, radius and clip
-  // remain authored data.
   constexpr float WALK_METRES_PER_SECOND=1.05f;
   const float step=std::min(distance,WALK_METRES_PER_SECOND*dt),fraction=step/std::max(distance,.001f);
-  if(blocked(std::sqrt(dx*dx+dy*dy+dz*dz)*fraction)){
+  if(blocked(step)){
     actor.runtime.speed=0;actor.runtime.animation=fo3npc::Animation::Idle;return;
   }
   actor.runtime.position[0]+=dx*fraction;actor.runtime.position[2]+=dz*fraction;
-  actor.runtime.position[1]+=dy*fraction;
-  if(actor.aiPathIndex<actor.aiPathSurfaces.size()) {
-    const auto surface=actor.aiPathSurfaces[actor.aiPathIndex];
-    actor.runtime.position=Q240ScenePosition(Q240GroundPoint(*actor.navigationGraph->meshes[surface.first],surface.second,Q240GamePosition(actor)));
-  }
+  Q240GroundPathRoot(actor);
   actor.runtime.speed=WALK_METRES_PER_SECOND;
   actor.runtime.animation=fo3npc::Animation::Walk;
 }
