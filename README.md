@@ -197,3 +197,11 @@ This project is not affiliated with or endorsed by Bethesda Softworks or Meta.
 Player body v162: [raised-arm planes, Pip-Boy runtime readiness and validation](docs/VR-BODY-v162.md).
 The [v161 calibration and eye-alignment notes](docs/VR-BODY-v161.md) describe the preserved head/reach architecture.
 The [v160 authored-rig audit](docs/VR-BODY-v160.md) records the original architectural rework.
+
+## NPC runtime validation: v181
+
+The reusable dialogue bridge, Patrol/Escort/Follow interruption recovery and
+LIP/TRI facial deformation are exercised with original Fallout 3 data.
+See [the v181 technical report](docs/npc-runtime-v181.md) for changes, exact
+tests, resident counts and outstanding Eat/Sleep/furniture and cross-cell
+limitations. This remains an implementation checkpoint requiring Quest testing.

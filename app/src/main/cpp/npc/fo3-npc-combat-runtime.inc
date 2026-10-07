@@ -213,8 +213,9 @@ static void Q230SimulateActor(Q230ActorVisual& actor,double now) {
     }
     if(acquire&&acquire!=s.combatTarget){
       if(policy&&s.activity!=fo3npc::Activity::Combat&&!s.dialogue)Q240AdoptPackage(actor,policyId,*policy,policyAnchor);
-      if(s.activity!=fo3npc::Activity::Combat){const auto package=c.pipboy.packages.find(actor.aiPackage);s.suspendedPackageWait=package!=c.pipboy.packages.end()&&package->second.type==13&&actor.aiPathGame.empty()?float(std::max(0.,actor.aiRepathAt-now)):0;}
-      if(s.dialogue)EndFo3Dialogue("combat threat");s.BeginCombat(acquire);s.lastSeen=now;s.nextPath=0;actor.aiPathGame.clear();actor.aiPathIndex=0;
+      if(s.dialogue)EndFo3Dialogue("combat threat");
+      if(s.activity!=fo3npc::Activity::Combat)Q240SuspendPackageWait(actor,now);
+      s.BeginCombat(acquire);s.lastSeen=now;s.nextPath=0;actor.aiPathGame.clear();actor.aiPathSurfaces.clear();actor.aiPathIndex=0;s.navigationDoor=0;
       Q6H_LOGI("NPC COMBAT START actor=%08X target=%08X",actor.source.refFormId,acquire);
     }
   }
@@ -225,7 +226,7 @@ static void Q230SimulateActor(Q230ActorVisual& actor,double now) {
   // Bethesda's complete detection/search state is not decoded. This bounded
   // loaded-scene bridge searches for 15 seconds; absence/death ends immediately.
   if(!valid||(!visible&&now-s.lastSeen>15)){
-    const auto old=s.combatTarget;s.EndCombat();s.pendingAttack=false;actor.aiPathGame.clear();actor.aiPathIndex=0;const auto package=c.pipboy.packages.find(actor.aiPackage);if(package==c.pipboy.packages.end()||(package->second.type!=13&&package->second.type!=2&&package->second.type!=10))actor.aiSequence=0;actor.aiRepathAt=now+s.suspendedPackageWait;s.suspendedPackageWait=0;actor.aiLastUpdate=now;
+    const auto old=s.combatTarget;s.EndCombat();s.pendingAttack=false;actor.aiPathGame.clear();actor.aiPathSurfaces.clear();actor.aiPathIndex=0;s.navigationDoor=0;const auto package=c.pipboy.packages.find(actor.aiPackage);if(package==c.pipboy.packages.end()||(package->second.type!=13&&package->second.type!=2&&package->second.type!=10))actor.aiSequence=0;Q240ResumePackageWait(actor,now);
     p.SetActorHostile(actor.source.refFormId,0);Q6H_LOGI("NPC COMBAT END actor=%08X target=%08X",actor.source.refFormId,old);return;
   }
   const float dt=actor.aiLastUpdate<0?0:std::clamp(float(now-actor.aiLastUpdate),0.f,.1f);actor.aiLastUpdate=now;

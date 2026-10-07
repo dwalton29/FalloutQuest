@@ -55,7 +55,13 @@ void DialoguePublishAudio() {
   fo3audio::Dialogue(gDialogue.Audio(gPlayerSession->player.Definitions().pipboy),gDialogue.audioToken);
 }
 void CleanupFo3Dialogue(uint32_t previous,const char* reason) {
-  if(auto* actor=DialogueActor(previous)){actor->runtime.EndDialogue();Q6H_LOGI("NPC DIALOGUE OVERRIDE actor=%08X restore=1 package=%08X",previous,actor->runtime.package);}
+  if(auto* actor=DialogueActor(previous)){
+    const bool returning=actor->runtime.dialogue;
+    actor->runtime.EndDialogue();
+    if(returning)Q240ResumePackageWait(*actor,gDialogueTime);
+    actor->lastFrame=UINT64_MAX;
+    Q6H_LOGI("NPC DIALOGUE END actor=%08X package=%08X reason=%s",previous,actor->runtime.package,reason);
+  }
   if(gDialogue.Active())gDialogue.End(reason);gDialoguePanel.visible=false;gDialoguePanel.choices.clear();gDialoguePanel.subtitle.clear();++gDialoguePanel.revision;
   gDialogueCursor.Target(0,0);gDialogueEligibility.clear();gDialoguePanelPhase=fo3dialogue::Phase::Inactive;gDialogueChoicesVisibleFrame=0;
   gDialoguePublishedToken=0;gDialoguePanelInfo=0;gDialoguePanelResponse=SIZE_MAX;
@@ -70,6 +76,7 @@ bool StartFo3Dialogue(uint32_t reference) {
   if(!actor->runtime.CanTalk()||!gDialogue.Start(DialogueContext(*actor),gPlayerSession->player)) {
     Q6H_LOGI("NPC DIALOGUE REENTER actor=%08X success=0 package=%08X activity=%d dialogue=%d reason=%s",reference,actor->runtime.package,int(actor->runtime.activity),actor->runtime.dialogue,gDialogue.endReason.c_str());return false;
   }
+  Q240SuspendPackageWait(*actor,gDialogueTime);
   actor->runtime.BeginDialogue();gDialoguePanel.visible=false;
   Q6H_LOGI("NPC DIALOGUE BEGIN actor=%08X token=%u package=%08X",reference,gDialogue.audioToken,actor->runtime.package);
   Q6H_LOGI("DIALOGUE START actor=%08X base=%08X name=%s dial=%08X info=%08X",reference,actor->source.baseFormId,actor->source.fullName.c_str(),gDialogue.topic,gDialogue.info);
@@ -165,7 +172,7 @@ void UpdateFo3Dialogue(double now,float stick,bool a,bool b,bool focused) {
     if(actor.runtime.speaking) {
       const auto facial=fo3audio::DialogueFace(gDialogue.audioToken);
       if(facial.lip)weights=fo3face::Sample(*facial.lip,facial.seconds);
-    }else for(size_t c=0;c<16;++c) {
+    }else for(size_t c=0;c<weights.size();++c) {
       const float old=actor.facialWeights[c];
       weights[c]=old*std::max(0.f,1-dt/.1f);
       if(std::fabs(weights[c])<.001f)weights[c]=0;

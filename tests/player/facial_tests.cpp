@@ -35,6 +35,21 @@ int main(int argc,char** argv) {
   for(size_t i=0;i<36;++i)if(i%18>=3)assert(deformed[i]==bind[i]);
   assert(fo3face::BlendExpanded(bind,deltas,{},deformed)&&deformed==bind);
   deltas[0].pop_back();assert(!fo3face::BlendExpanded(bind,deltas,weights,deformed));
+  {
+    std::vector<float> base(54,0),shape;
+    base[18]=1;base[37]=1;
+    for(size_t v=0;v<3;++v){base[v*18+5]=1;base[v*18+6]=1;base[v*18+10]=1;base[v*18+12]=.25f;}
+    shape=base;shape[38]=1;
+    assert(fo3face::UpdateDirections(base,{0,1,2},shape));
+    for(size_t v=0;v<3;++v){
+      assert(std::fabs(shape[v*18+4]+std::sqrt(.5f))<.001f&&std::fabs(shape[v*18+5]-std::sqrt(.5f))<.001f);
+      assert(shape[v*18+12]==.25f);
+      for(size_t d=3;d<12;d+=3){float length=0;for(size_t c=0;c<3;++c)length+=shape[v*18+d+c]*shape[v*18+d+c];assert(std::fabs(length-1)<.001f);}
+    }
+    shape=base;assert(fo3face::UpdateDirections(base,{0,1,2},shape)&&shape==base);
+    assert(!fo3face::UpdateDirections(base,{0,1},shape));
+    shape[38]=1;assert(!fo3face::UpdateDirections(base,{0,100000,2},shape));
+  }
   fo3face::Tri tri;assert(!fo3face::DecodeTri({},tri,error));
   // FRTRI003 sparse targets are absolute vertices, not i16 differentials.
   std::vector<uint8_t> sparse{'F','R','T','R','I','0','0','3'};

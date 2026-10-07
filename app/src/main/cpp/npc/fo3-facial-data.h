@@ -29,6 +29,51 @@ inline bool BlendExpanded(const std::vector<float>& bind,const ExpandedDeltas& d
     for(size_t v=0;v<deltas[c].size();++v)for(size_t axis=0;axis<3;++axis)out[v*18+axis]+=deltas[c][v][axis]*weights[c];
   return true;
 }
+// Transport each original tangent frame through the deformed triangle's
+// affine differential. Average by original NIF vertex, so expanded triangle
+// corners keep the mesh's authored smoothing/UV seams. Neutral is exact bind.
+inline bool UpdateDirections(const std::vector<float>& bind,const std::vector<uint32_t>& indices,std::vector<float>& out) {
+  if(bind.size()!=out.size()||bind.size()!=indices.size()*18||indices.size()%3)return false;
+  if(out==bind)return true;
+  uint32_t count=0;for(auto i:indices){if(i>=100000)return false;count=std::max(count,i+1);}
+  using V=std::array<float,3>;
+  auto dot=[](V a,V b){return a[0]*b[0]+a[1]*b[1]+a[2]*b[2];};
+  auto cross=[](V a,V b){return V{a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]};};
+  auto read=[](const auto& b,size_t v,size_t c){return V{b[v*18+c],b[v*18+c+1],b[v*18+c+2]};};
+  auto edge=[&](const auto& b,size_t v,size_t w){auto a=read(b,v,0),z=read(b,w,0);for(size_t c=0;c<3;++c)z[c]-=a[c];return z;};
+  auto unit=[&](V v){float length=std::sqrt(dot(v,v));if(!std::isfinite(length)||length<1e-12f)return V{};for(float& x:v)x/=length;return v;};
+  std::vector<std::array<V,3>> directions(count);std::vector<float> area(count,0);
+  for(size_t t=0;t<indices.size();t+=3) {
+    auto a=edge(bind,t,t+1),b=edge(bind,t,t+2),u=edge(out,t,t+1),v=edge(out,t,t+2);
+    auto n=cross(a,b),m=cross(u,v);const float weight=std::sqrt(dot(n,n));
+    if(!std::isfinite(weight)||weight<1e-12f||dot(m,m)<1e-24f)continue;
+    n=unit(n);m=unit(m);
+    // Columns of each inverse basis are its reciprocal (dual) vectors.
+    const float det=dot(a,cross(b,n)),changed=dot(u,cross(v,m));
+    if(!std::isfinite(changed)||changed<1e-12f)continue;
+    std::array<V,3> dual{cross(b,n),cross(n,a),cross(a,b)},newDual{cross(v,m),cross(m,u),cross(u,v)};
+    for(auto& c:dual)for(float& x:c)x/=det;
+    for(auto& c:newDual)for(float& x:c)x/=changed;
+    for(size_t corner=0;corner<3;++corner)for(size_t direction=0;direction<3;++direction) {
+      const auto authored=read(bind,t+corner,3+direction*3);V result{};
+      if(direction==0) { // Inverse transpose for the original shading normal.
+        const std::array<float,3> coefficients{dot(a,authored),dot(b,authored),dot(n,authored)};
+        for(size_t axis=0;axis<3;++axis)for(size_t c=0;c<3;++c)result[axis]+=newDual[c][axis]*coefficients[c];
+      } else {
+        const std::array<V,3> basis{u,v,m};
+        for(size_t axis=0;axis<3;++axis)for(size_t c=0;c<3;++c)result[axis]+=basis[c][axis]*dot(dual[c],authored);
+      }
+      result=unit(result);
+      for(size_t axis=0;axis<3;++axis)directions[indices[t+corner]][direction][axis]+=result[axis]*weight;
+      if(direction==0)area[indices[t+corner]]+=weight;
+    }
+  }
+  for(size_t vertex=0;vertex<indices.size();++vertex)if(area[indices[vertex]]>0)for(size_t direction=0;direction<3;++direction){
+    const auto result=unit(directions[indices[vertex]][direction]);
+    if(dot(result,result)>0)for(size_t axis=0;axis<3;++axis)out[vertex*18+3+direction*3+axis]=result[axis];
+  }
+  return true;
+}
 struct LipFrame { std::array<float,16> speech{};std::array<float,17> modifiers{}; };
 struct Lip { int32_t firstFrame=0;std::vector<LipFrame> frames; };
 inline uint32_t U32(const uint8_t* p){return uint32_t(p[0])|(uint32_t(p[1])<<8)|(uint32_t(p[2])<<16)|(uint32_t(p[3])<<24);}

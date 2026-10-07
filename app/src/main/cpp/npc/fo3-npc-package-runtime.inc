@@ -333,6 +333,19 @@ static void Q240PackageRouteFailed(Q230ActorVisual& actor,double now,const char*
   actor.runtime.navigationDoor=0;actor.aiRepathAt=now+delay;
   Q6H_LOGI("NPC PACKAGE FAIL actor=%08X package=%08X reason=%s retry=%.2f selectorContinues=1",actor.source.refFormId,actor.aiPackage,reason,delay);
 }
+static void Q240SuspendPackageWait(Q230ActorVisual& actor,double now) {
+  actor.runtime.suspendedPackageWait=0;
+  if(!gPlayerSession)return;
+  const auto& packages=gPlayerSession->player.Definitions().pipboy.packages;
+  const auto found=packages.find(actor.aiPackage);
+  if(found!=packages.end()&&found->second.type==13&&actor.aiPathGame.empty())
+    actor.runtime.suspendedPackageWait=float(std::max(0.,actor.aiRepathAt-now));
+}
+static void Q240ResumePackageWait(Q230ActorVisual& actor,double now) {
+  actor.aiRepathAt=now+actor.runtime.suspendedPackageWait;
+  actor.runtime.suspendedPackageWait=0;actor.aiLastUpdate=now;
+  actor.runtime.nextPackageEvaluation=0;
+}
 // One package owner for ordinary updates and a pre-movement combat override.
 // Adopting a newly selected package changes its intent/progress, never its root.
 static void Q240AdoptPackage(Q230ActorVisual& actor,uint32_t packageId,const fo3pipdata::PackageDefinition& package,
@@ -502,14 +515,24 @@ static void Q240AdvancePlayerEscort(Q230ActorVisual& actor,const fo3pipdata::Pac
     gSceneFloorZQ1730+(gQ210Head[1]-FLOOR_Y)*FO3_UNITS_PER_METRE};
   const float separation=Q240PlanarDistance(current,player);
   if(actor.aiSequence==0&&separation<=package.escortDistance){actor.aiSequence=1;actor.aiPathGame.clear();actor.aiPathSurfaces.clear();actor.aiPathIndex=0;actor.runtime.navigationDoor=0;actor.aiRepathAt=0;}
-  if(actor.aiSequence>=2){actor.runtime.speed=0;actor.runtime.animation=fo3npc::Animation::Idle;return;}
+  if(actor.aiSequence>=2) {
+    // The phase is persisted, the route is not. Combat/relocation can also
+    // move a previously arrived actor away from its authored destination.
+    if(!actor.aiPathGame.empty()&&Q240PlanarDistance(current,actor.aiPathGame.back())<=8.f) {
+      actor.runtime.procedure=fo3npc::Procedure::Completed;
+      actor.runtime.speed=0;actor.runtime.animation=fo3npc::Animation::Idle;return;
+    }
+    actor.aiSequence=1;actor.aiPathGame.clear();actor.aiPathSurfaces.clear();actor.aiPathIndex=0;
+    actor.runtime.navigationDoor=0;actor.aiRepathAt=0;
+    actor.runtime.procedure=fo3npc::Procedure::Executing;
+  }
   if(actor.aiSequence==1&&separation>package.escortDistance&&Q240PlanarDistance(player,destination)>=Q240PlanarDistance(current,destination)) {
     actor.runtime.speed=0;actor.runtime.animation=fo3npc::Animation::Idle;return;
   }
   const auto target=actor.aiSequence==0?player:destination;
   if(actor.aiSequence==0&&Q240PlanarDistance(actor.runtime.pathDestinationGame,target)>16.f&&now>=actor.aiRepathAt){actor.aiPathGame.clear();actor.aiPathSurfaces.clear();actor.aiPathIndex=0;actor.runtime.navigationDoor=0;}
   if(actor.aiPathIndex>=actor.aiPathGame.size()) {
-    if(actor.aiSequence==1&&!actor.aiPathGame.empty()){actor.aiSequence=2;actor.runtime.speed=0;actor.runtime.animation=fo3npc::Animation::Idle;return;}
+    if(actor.aiSequence==1&&!actor.aiPathGame.empty()&&Q240PlanarDistance(current,actor.aiPathGame.back())<=8.f){actor.aiSequence=2;actor.runtime.procedure=fo3npc::Procedure::Completed;actor.runtime.nextPackageEvaluation=0;actor.runtime.speed=0;actor.runtime.animation=fo3npc::Animation::Idle;return;}
     if(now<actor.aiRepathAt)return;
     if(!Q240BuildPackagePath(actor,package,target,0)){Q240PackageRouteFailed(actor,now,"Escort route unavailable");return;}
     actor.runtime.pathDestinationGame=target;actor.aiRepathAt=now+.75;
@@ -542,8 +565,13 @@ static void Q240AdvanceFleePackage(Q230ActorVisual& actor,const fo3pipdata::Pack
   Q240AdvancePath(actor,dt,now);
 }
 static void Q240AdvanceNpcPackage(Q230ActorVisual& actor,double now) {
-  if(!gPlayerSession||!actor.runtime.Alive()||actor.rigs.empty()||!actor.navigationGraph||actor.navigationGraph->triangleCount==0||actor.runtime.dialogue||
+  if(!gPlayerSession||!actor.runtime.Alive()||actor.rigs.empty()||actor.runtime.dialogue||
      actor.runtime.activity==fo3npc::Activity::Combat)return;
+  if(!actor.navigationGraph||actor.navigationGraph->triangleCount==0) {
+    Q240AiLogOnce(actor.source.refFormId,actor.aiPackage,"resident actor has no authored NAVM graph");
+    actor.runtime.procedure=fo3npc::Procedure::Unsupported;
+    actor.runtime.speed=0;actor.runtime.animation=fo3npc::Animation::Idle;return;
+  }
   const float health=gPlayerSession->player.ActorHealth(actor.source.refFormId);
   if(health<=0){if(health<0)Q240AiLogOnce(actor.source.refFormId,0,"actor statistics unresolved (including levelled templates)");return;}
   float dt=0;if(actor.aiLastUpdate>=0)dt=std::clamp(float(now-actor.aiLastUpdate),0.f,.10f);
@@ -586,13 +614,21 @@ static void Q240AdvanceNpcPackage(Q230ActorVisual& actor,double now) {
     }
     const auto index=[&](uint32_t sequence){const size_t leg=sequence-1;if(!package->patrolRepeat)return std::min(leg,n-1);if(circular||n==1)return leg%n;const size_t at=leg%(2*n-2);return at<n?at:2*n-2-at;};
     if(!actor.aiPathGame.empty()&&actor.aiPathIndex>=actor.aiPathGame.size()) {
-      const size_t reached=!package->patrolRepeat&&circular&&actor.aiSequence==n+1?0:index(actor.aiSequence);
-      const auto& arrived=points[reached].placement;
-      actor.aiPathGame.clear();actor.aiPathSurfaces.clear();actor.aiPathIndex=0;
-      actor.aiRepathAt=now+arrived.patrolWait;++actor.aiSequence;
-      actor.runtime.procedure=fo3npc::Procedure::Waiting;
-      actor.runtime.nextPackageEvaluation=0;
-      Q6H_LOGI("NPC PACKAGE WAIT actor=%08X package=%08X marker=%08X seconds=%.2f",actor.source.refFormId,packageId,points[reached].reference,double(arrived.patrolWait));
+      // A reached leg index can survive displacement, but is not evidence
+      // that the actor is still at this marker. Rebuild the same leg instead
+      // of advancing and silently skipping its authored wait/action.
+      if(Q240PlanarDistance(Q240GamePosition(actor),actor.aiPathGame.back())>8.f) {
+        actor.aiPathGame.clear();actor.aiPathSurfaces.clear();actor.aiPathIndex=0;
+        actor.runtime.navigationDoor=0;actor.aiRepathAt=0;
+      } else {
+        const size_t reached=!package->patrolRepeat&&circular&&actor.aiSequence==n+1?0:index(actor.aiSequence);
+        const auto& arrived=points[reached].placement;
+        actor.aiPathGame.clear();actor.aiPathSurfaces.clear();actor.aiPathIndex=0;
+        actor.aiRepathAt=now+arrived.patrolWait;++actor.aiSequence;
+        actor.runtime.procedure=fo3npc::Procedure::Waiting;
+        actor.runtime.nextPackageEvaluation=0;
+        Q6H_LOGI("NPC PACKAGE WAIT actor=%08X package=%08X marker=%08X seconds=%.2f",actor.source.refFormId,packageId,points[reached].reference,double(arrived.patrolWait));
+      }
     }
     actor.runtime.package=packageId;actor.runtime.packageKnown=true;actor.runtime.activity=fo3npc::Activity::Package;
     actor.runtime.speed=0;actor.runtime.animation=fo3npc::Animation::Idle;
@@ -607,8 +643,11 @@ static void Q240AdvanceNpcPackage(Q230ActorVisual& actor,double now) {
   actor.runtime.package=packageId;actor.runtime.packageKnown=true;actor.runtime.activity=fo3npc::Activity::Package;
   if(package->type==10){Q240AdvanceFleePackage(actor,*package,anchor,dt,now);return;}
   if(package->type==2){Q240AdvancePlayerEscort(actor,*package,anchor,dt,now);return;}
-  if(package->type==1&&Q240PlanarDistance(Q240GamePosition(actor),anchor)<=std::max(0,package->target.radius)){actor.runtime.speed=0;actor.runtime.animation=fo3npc::Animation::Idle;actor.aiPathGame.clear();return;}
-  if(package->type==1&&Q240PlanarDistance(actor.aiAnchorGame,anchor)>16.f&&now>=actor.aiRepathAt){actor.aiPathGame.clear();actor.aiPathIndex=0;actor.aiAnchorGame=anchor;}
+  if(package->type==1&&Q240PlanarDistance(Q240GamePosition(actor),anchor)<=std::max(0,package->target.radius)){
+    actor.runtime.speed=0;actor.runtime.animation=fo3npc::Animation::Idle;actor.runtime.procedure=fo3npc::Procedure::Waiting;
+    actor.aiPathGame.clear();actor.aiPathSurfaces.clear();actor.aiPathIndex=0;actor.runtime.navigationDoor=0;actor.runtime.blockedSince=-1;return;
+  }
+  if(package->type==1&&Q240PlanarDistance(actor.aiAnchorGame,anchor)>16.f&&now>=actor.aiRepathAt){actor.aiPathGame.clear();actor.aiPathSurfaces.clear();actor.aiPathIndex=0;actor.runtime.navigationDoor=0;actor.runtime.blockedSince=-1;actor.aiAnchorGame=anchor;}
   actor.runtime.package=packageId;actor.runtime.packageKnown=true;actor.runtime.activity=fo3npc::Activity::Package;
   if(actor.aiPathIndex>=actor.aiPathGame.size()) {
     actor.runtime.speed=0;actor.runtime.animation=fo3npc::Animation::Idle;

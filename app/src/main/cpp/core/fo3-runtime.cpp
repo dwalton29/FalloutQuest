@@ -688,6 +688,7 @@ std::vector<GpuObject> gQ210PlayerBody;
 struct Q230RigPart {
     fo3face::ExpandedDeltas facialDeltas;
     std::vector<float> facialBind,facialWork;
+    std::vector<uint32_t> facialIndices;
     fo3face::Weights facialPublished{};
     QActorSkin skin;
     std::vector<int> bones;

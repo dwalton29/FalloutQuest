@@ -233,8 +233,10 @@ bool Q230UploadActorPart(Q230ActorVisual &actor, CpuObject &part, float centerX,
         expanded.push_back({game[0]/FO3_UNITS_PER_METRE,game[2]/FO3_UNITS_PER_METRE,-game[1]/FO3_UNITS_PER_METRE});
       }
     }
-    if(std::any_of(rig.facialDeltas.begin(),rig.facialDeltas.end(),[](const auto& d){return !d.empty();}))
+    if(std::any_of(rig.facialDeltas.begin(),rig.facialDeltas.end(),[](const auto& d){return !d.empty();})) {
       rig.facialBind=rig.facialWork=bindExpanded;
+      rig.facialIndices.assign(part.mesh.indices.begin(),part.mesh.indices.end());
+    }
   }
 #endif
   GpuObject gpu;
@@ -325,6 +327,7 @@ bool Q230UploadActorPart(Q230ActorVisual &actor, CpuObject &part, float centerX,
 void Q230UpdateFacialPart(Q230ActorVisual& actor,Q230RigPart& rig) {
     if(!rig.facialBind.empty()&&rig.facialPublished!=actor.facialWeights) {
       if(!fo3face::BlendExpanded(rig.facialBind,rig.facialDeltas,actor.facialWeights,rig.facialWork))return;
+      if(!fo3face::UpdateDirections(rig.facialBind,rig.facialIndices,rig.facialWork))return;
       auto& object=actor.objects[rig.gpuIndex];
       if(object.skinMode) {
         glBindBuffer(GL_ARRAY_BUFFER,object.vbo);

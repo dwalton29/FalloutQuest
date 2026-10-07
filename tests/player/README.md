@@ -47,6 +47,7 @@ Authored speech and reusable NPC integration:
 
 ```
 build/host-player/dialogue_tests /path/to/Fallout3.esm
+build/host-player/dialogue_runtime_tests /path/to/Fallout3.esm
 build/host-player/npc_package_runtime_tests /path/to/Fallout3.esm
 build/host-player/facial_tests /path/to/headhuman.tri /path/to/line1.lip /path/to/line2.lip
 build/host-nif/facial_mesh_tests /path/to/headhuman.nif /path/to/headhuman.tri /path/to/line1.lip
@@ -56,3 +57,9 @@ python3 tools/npc/audit_residents.py /path/to/Fallout3.esm
 The package integration includes exterior actors simultaneously and all 34
 Megaton interior placements in their separate CELLs. See
 `docs/npc-runtime-v179.md` for exact test scope and unsupported semantics.
+
+`dialogue_runtime_tests` exercises the production activation/audio/UI bridge
+and package executor, with recording platform adapters. It covers four fresh
+goodbye sessions, stale tokens, loading/Pip-Boy/walk-away/combat/B interruption,
+authored speech/modifier decay, and an original Lucas handshake followed by
+three reentries, result preservation, package movement and post-combat dialogue.

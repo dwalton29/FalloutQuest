@@ -5,6 +5,7 @@
 #include "player/fo3-player-state.h"
 #include "dialogue/fo3-dialogue-conditions.h"
 #include "dialogue/fo3-dialogue-session.h"
+#include "npc/fo3-facial-data.h"
 #include <memory>
 #include <unordered_set>
 #include <algorithm>
@@ -35,6 +36,7 @@ struct Q240NavigationGraph {
 };
 struct Q230CombatWeapon {fo3weapon::Definition definition;std::array<fo3anim::Clip,4> clips;std::vector<size_t> gpu;std::array<float,3> muzzle{};bool ready=false;};
 struct Q230ActorVisual {
+  fo3face::Weights facialWeights{};
   std::unordered_map<uint32_t,Q230CombatWeapon> combatWeapons;
   std::array<fo3anim::Clip,size_t(fo3npc::Animation::Count)> animations;
   bool stateRestored=false;int headBone=0,chestBone=1;
@@ -51,13 +53,14 @@ struct Q230ActorVisual {
   uint64_t lastFrame=1;
 };
 std::vector<Q230ActorVisual> packageTargets;
+std::vector<Q230ActorVisual>* activePackageTargets=&packageTargets;
 bool q240GroundProbe=false;
 float q240GroundReference=0,q240GroundResult=0;
 static bool TestNpcWorldGround(float,float,float referenceY,float* outY) {
   if(!q240GroundProbe||!outY)return false;
   q240GroundReference=referenceY;*outY=q240GroundResult;return true;
 }
-#define FO3_NPC_PACKAGE_ACTOR_TARGET(reference,point) Q240ResidentPackageTarget(packageTargets,reference,point)
+#define FO3_NPC_PACKAGE_ACTOR_TARGET(reference,point) Q240ResidentPackageTarget(*activePackageTargets,reference,point)
 #define FO3_NPC_WORLD_GROUND(x,z,referenceY,outY) TestNpcWorldGround(x,z,referenceY,outY)
 #ifdef FO3_NPC_DOOR_HOST_TEST
 static bool Q230PathBlocked(Q230ActorVisual&,float,float,float,float,float);
@@ -84,6 +87,7 @@ static std::shared_ptr<Q240NavigationGraph> Graph(bool invalid=false) {
   return graph;
 }
 static Q230ActorVisual Actor(uint8_t type) {
+  activePackageTargets=&packageTargets;
   packageTargets.clear();
   fo3player::Catalog c;c.initial.baseHealth=100;
   c.pipboy.targets[42].base=43;c.weapons.actors[43].health=100;
@@ -138,6 +142,7 @@ static void Original(const char* path) {
   std::vector<Q230ActorVisual> residents;
   for(const auto& source:actors){Q230ActorVisual actor;actor.source=source;actor.runtime.position=Q240ScenePosition({source.x,source.y,source.z});actor.navigationGraph=graph;residents.push_back(std::move(actor));}
   assert(residents.size()==3);std::vector<std::array<float,3>> initial;
+  activePackageTargets=&residents;
   for(const auto& actor:residents)initial.push_back(actor.runtime.position);
   for(int frame=0;frame<7500;++frame)for(auto& actor:residents)Q240UpdateNpcPackage(actor,frame*.016);
   size_t executable=0,moved=0;
@@ -197,12 +202,14 @@ static void Original(const char* path) {
     for(auto& mesh:raw){nav->triangleOffsets.push_back(nav->triangleCount);nav->triangleCount+=mesh.triangles.size();nav->byForm[mesh.formId]=nav->meshes.size();nav->meshes.push_back(std::make_shared<Fo3NpcNavMeshQ240>(std::move(mesh)));}
     std::vector<Q230ActorVisual> population;std::vector<std::array<float,3>> initialPositions;
     for(const auto& source:sources){Q230ActorVisual actor;actor.source=source;actor.runtime.position=Q240ScenePosition({source.x,source.y,source.z});actor.navigationGraph=nav;initialPositions.push_back(actor.runtime.position);population.push_back(std::move(actor));}
+    activePackageTargets=&population;
     interiorLoaded+=population.size();
     for(int frame=0;frame<3600;++frame){packageHour=frame<1200?12.f:frame<2400?20.f:7.f;for(auto& actor:population)Q240UpdateNpcPackage(actor,frame*.016);}
     for(size_t i=0;i<population.size();++i){const auto& actor=population[i];interiorExecutable+=actor.aiPackage!=0;interiorMoved+=Q240PlanarDistance(Q240GamePosition(actor),{actor.source.x,actor.source.y,actor.source.z})>16;
       std::cout<<"RESIDENT ref="<<std::hex<<actor.source.refFormId<<" cell="<<cell<<" selected="<<actor.aiPackage<<std::dec<<" health="<<gPlayerSession->player.ActorHealth(actor.source.refFormId)<<" changed="<<(actor.runtime.position!=initialPositions[i])<<'\n';}
   }
   assert(interiorLoaded==34);assert(interiorMoved>=3);
+  activePackageTargets=&packageTargets;
   std::cout<<"Original interiors loaded="<<interiorLoaded<<" executableAt07="<<interiorExecutable<<" movedPlanar="<<interiorMoved<<'\n';
 }
 int main(int argc,char** argv) {
@@ -354,6 +361,18 @@ int main(int argc,char** argv) {
     Q240UpdateNpcPackage(patrol,180.1);assert(patrol.aiSequence==3);
     const auto waiting=patrol.runtime.position;Q240UpdateNpcPackage(patrol,181);assert(patrol.runtime.position==waiting);
     Q240UpdateNpcPackage(patrol,183);assert(patrol.aiPathGame.back()[0]==1900);
+    const auto leg=patrol.aiSequence;
+    patrol.aiPathIndex=patrol.aiPathGame.size();
+    Q240UpdateNpcPackage(patrol,183.1);
+    assert(patrol.aiSequence==leg&&patrol.aiPathIndex<patrol.aiPathGame.size());
+    // The reached index with a displaced root must not skip a marker wait.
+    patrol.runtime.position=Q240ScenePosition(patrol.aiPathGame.back());patrol.aiPathIndex=patrol.aiPathGame.size();
+    Q240UpdateNpcPackage(patrol,183.2);assert(patrol.aiSequence==leg+1&&patrol.aiPathGame.empty());
+    Q240SuspendPackageWait(patrol,184.2);assert(std::fabs(patrol.runtime.suspendedPackageWait-1.f)<.001f);
+    patrol.runtime.BeginDialogue();patrol.runtime.EndDialogue();Q240ResumePackageWait(patrol,200);
+    const auto atMarker=patrol.runtime.position;Q240UpdateNpcPackage(patrol,200.5);
+    assert(patrol.runtime.position==atMarker&&patrol.aiPathGame.empty());
+    Q240UpdateNpcPackage(patrol,201.1);assert(!patrol.aiPathGame.empty());
     c.pipboy.packages[50].location.type=6;c.pipboy.packages[50].location.value=0;c.pipboy.targets[42].linkedReference=60;
     fo3pipdata::Finalize(c.pipboy);assert(c.pipboy.actorPatrols.at((uint64_t(42)<<32)|50).size()==2);
     gPlayerSession=std::make_unique<Session>(c);uint32_t id=0;std::array<float,3> start{};float radius=0;
@@ -371,6 +390,13 @@ int main(int argc,char** argv) {
     const auto leadPoint=Q240ScenePosition(escort.aiPathGame.front());escort.runtime.yaw=std::atan2(-(leadPoint[0]-held[0]),-(leadPoint[2]-held[2]));gQ210Head=Q240ScenePosition({1800,2800,20});Q240UpdateNpcPackage(escort,2);assert(escort.runtime.position!=held); // Player ahead does not stall leader.
     for(int i=0;i<1300;++i){gQ210Head=escort.runtime.position;Q240UpdateNpcPackage(escort,3+i*.1);}
     assert(escort.aiSequence==2&&Q240PlanarDistance(Q240GamePosition(escort),{1900,2900,20})<.01f);
+    escort.runtime.BeginDialogue();escort.runtime.EndDialogue();Q240UpdateNpcPackage(escort,134);
+    assert(escort.aiSequence==2&&escort.runtime.procedure==fo3npc::Procedure::Completed);
+    escort.runtime.BeginCombat(0x14);escort.runtime.position=Q240ScenePosition({1010,2010,20});escort.runtime.EndCombat();
+    gQ210Head=escort.runtime.position;Q240UpdateNpcPackage(escort,135);
+    assert(escort.aiSequence==1&&escort.aiPathIndex<escort.aiPathGame.size());
+    escort.aiSequence=2;escort.aiPathGame.clear();escort.aiPathSurfaces.clear();escort.aiPathIndex=0;
+    Q240UpdateNpcPackage(escort,136);assert(escort.aiSequence==1&&!escort.aiPathGame.empty());
     c.pipboy.packages[50].target.value=60;gPlayerSession=std::make_unique<Session>(c);uint32_t id=0;std::array<float,3> point{};float radius=0;assert(!Q240SelectPackage(escort,id,point,radius));
     c.pipboy.packages[50].target.value=0x14;gPlayerSession=std::make_unique<Session>(c);escort.aiSequence=0;escort.aiPathGame.clear();escort.aiPathIndex=0;escort.aiRepathAt=0;escort.runtime.position=Q240ScenePosition({1010,2010,20});gQ210Head=Q240ScenePosition({1900,2900,20});
     Q240UpdateNpcPackage(escort,140);assert(escort.aiSequence==0&&!escort.aiPathGame.empty()); // First approach an out-of-range escorted player.
@@ -386,7 +412,13 @@ int main(int argc,char** argv) {
     fo3player::ActorState savedLeader;savedLeader.world=2;savedLeader.cell=1;savedLeader.position={1700,2700,20};assert(gPlayerSession->player.UpdateActor(70,savedLeader));
     Q240UpdateNpcPackage(follower,3);assert(follower.aiPathGame.back()[0]==1700); // Canonical restore precedes the leader's first simulation.
     leader.stateRestored=true;Q240UpdateNpcPackage(follower,4);assert(follower.aiPathGame.back()[0]==1400); // Live root wins over last persisted root.
-    leader.runtime.activity=fo3npc::Activity::Dead;Q240UpdateNpcPackage(follower,5);assert(follower.aiPackage==52); // Lower priority valid route, never a corpse's spawn.
+    follower.runtime.navigationDoor=123;follower.runtime.blockedSince=3;
+    leader.runtime.position=follower.runtime.position;Q240UpdateNpcPackage(follower,4.1);
+    assert(follower.aiPathGame.empty()&&follower.aiPathSurfaces.empty()&&follower.aiPathIndex==0&&follower.runtime.navigationDoor==0);
+    assert(follower.runtime.procedure==fo3npc::Procedure::Waiting&&follower.runtime.blockedSince<0);
+    leader.runtime.position=Q240ScenePosition({1800,2800,20});Q240UpdateNpcPackage(follower,5.1);
+    assert(!follower.aiPathGame.empty()&&follower.aiPathIndex<follower.aiPathGame.size());
+    leader.runtime.activity=fo3npc::Activity::Dead;Q240UpdateNpcPackage(follower,5.4);assert(follower.aiPackage==52); // Lower priority valid route, never a corpse's spawn.
     leader.runtime.activity=fo3npc::Activity::Package;Q240UpdateNpcPackage(follower,6);assert(follower.aiPackage==50);
     c.pipboy.packages[50].type=10;c.pipboy.packages[50].location={};c.pipboy.packages[50].target.radius=500;gPlayerSession=std::make_unique<Session>(c);
     follower.aiPackage=0;follower.aiSequence=0;leader.runtime.position=follower.runtime.position;Q240UpdateNpcPackage(follower,7);assert(follower.aiPackage==50&&!follower.aiPathGame.empty());
