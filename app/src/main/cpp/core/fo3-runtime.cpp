@@ -686,7 +686,7 @@ uint64_t gQ2400DoorSceneSerial=1u;
 // Q21.0: real Fallout actor geometry kept outside CELL ownership.
 std::vector<GpuObject> gQ210PlayerBody;
 struct Q230RigPart {
-    std::array<std::vector<std::array<float,3>>,16> facialDeltas;
+    fo3face::ExpandedDeltas facialDeltas;
     std::vector<float> facialBind,facialWork;
     fo3face::Weights facialPublished{};
     QActorSkin skin;

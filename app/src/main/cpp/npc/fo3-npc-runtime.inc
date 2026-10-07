@@ -220,8 +220,8 @@ bool Q230UploadActorPart(Q230ActorVisual &actor, CpuObject &part, float centerX,
     if(!part.mesh.skinned&&rig.rigidBone>=0)
       fo3appearance::HeadBindTransform(actor.skeleton,Q230PlacementMatrix(part.placement),headAttach,
         fo3appearance::BoneLocalFacePart(actor.source,part.placement.modelPath));
-    for(size_t channel=0;channel<16;++channel) {
-      const auto morph=facial->second->morphs.find(fo3face::SpeechNames[channel]);
+    for(size_t channel=0;channel<fo3face::MorphNames.size();++channel) {
+      const auto morph=facial->second->morphs.find(fo3face::MorphNames[channel]);
       if(morph==facial->second->morphs.end())continue; // No invented target aliases.
       auto& expanded=rig.facialDeltas[channel];expanded.reserve(part.mesh.indices.size());
       const auto* m=part.mesh.geometryDeltaToModel;

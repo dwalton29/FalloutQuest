@@ -98,8 +98,15 @@ speech frames using the matching MediaPlayer playback position.
 
 Input, decoded size, frame counts and channels are bounded; bad versions,
 truncation, inconsistent sizes, zero-run overflow and nonfinite values reject.
-The 17 modifier channels are decoded and retained but not applied: their exact
-FaceGen channel correspondence is not established here.
+The 17 modifier names are established by executable table `0x10FE1E8`, the
+17-entry TRI matching loops at `0x5FE222`/`0x5FE652` and the playback modifier
+submission at `0x62D0AA`: BlinkLeft, BlinkRight, BrowDownLeft, BrowDownRight,
+BrowInLeft, BrowInRight, BrowUpLeft, BrowUpRight, LookDown, LookLeft, LookRight,
+LookUp, SquintLeft, SquintRight, HeadPitch, HeadRoll, HeadYaw. Exact matching TRI
+targets layer on the bind geometry. Tested lines have authored blink/brow tracks;
+no random facial behavior is introduced. Head rotation channels have no matching
+head TRI target and remain unapplied; their rotation units/composition are not
+established here.
 
 | Original line | Frames | First frame |
 | --- | ---: | ---: |
@@ -158,7 +165,7 @@ attributes; it does not replace a rendered Quest check.
 Remaining major work: canonical LVLN actor statistics/spawn resolution; Eat/Sleep
 and authored furniture marker decoding/reservation/animation; Accompany, Use Item
 At and dialogue package procedures; cross-cell NPC travel; remaining CTDA/scripts;
-17 LIP modifiers and Eee/Ee correspondence; complete teeth/eyes/variant validation,
+LIP head rotation channels and Eee/Ee correspondence; complete teeth/eyes/variant validation,
 normal deformation and original idle/blink/emotion semantics. Unsupported package
 entries continue down the selector and log their reason. These limitations mean
 the full requested settlement-life milestone is not complete in v179.

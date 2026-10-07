@@ -12,18 +12,24 @@ namespace fo3face {
 // frame reader 0x62D510, playback 0x62CFB0 (1/30 second per frame).
 inline constexpr std::array<const char*,16> SpeechNames{
   "Aah","BigAah","BMP","ChJSh","DST","Eee","Eh","FV","I","K","N","Oh","OohQ","R","Th","W"};
-using Weights=std::array<float,16>;
-using ExpandedDeltas=std::array<std::vector<std::array<float,3>>,16>;
+// Original modifier table 0x10FE1E8, matched by 0x5FE222/0x5FE652
+// (17 entries); LIP playback submits the separate 17-float block at 0x62D0AA.
+inline constexpr std::array<const char*,33> MorphNames{
+  "Aah","BigAah","BMP","ChJSh","DST","Eee","Eh","FV","I","K","N","Oh","OohQ","R","Th","W",
+  "BlinkLeft","BlinkRight","BrowDownLeft","BrowDownRight","BrowInLeft","BrowInRight","BrowUpLeft","BrowUpRight",
+  "LookDown","LookLeft","LookRight","LookUp","SquintLeft","SquintRight","HeadPitch","HeadRoll","HeadYaw"};
+using Weights=std::array<float,MorphNames.size()>;
+using ExpandedDeltas=std::array<std::vector<std::array<float,3>>,MorphNames.size()>;
 // Only position components change; normals, UVs and skin attributes remain.
 inline bool BlendExpanded(const std::vector<float>& bind,const ExpandedDeltas& deltas,const Weights& weights,std::vector<float>& out) {
   if(bind.size()%18)return false;
-  for(size_t c=0;c<16;++c)if(!std::isfinite(weights[c])||(!deltas[c].empty()&&deltas[c].size()!=bind.size()/18))return false;
+  for(size_t c=0;c<MorphNames.size();++c)if(!std::isfinite(weights[c])||(!deltas[c].empty()&&deltas[c].size()!=bind.size()/18))return false;
   out=bind;
-  for(size_t c=0;c<16;++c)if(weights[c]!=0)
+  for(size_t c=0;c<MorphNames.size();++c)if(weights[c]!=0)
     for(size_t v=0;v<deltas[c].size();++v)for(size_t axis=0;axis<3;++axis)out[v*18+axis]+=deltas[c][v][axis]*weights[c];
   return true;
 }
-struct LipFrame { Weights speech{};std::array<float,17> modifiers{}; };
+struct LipFrame { std::array<float,16> speech{};std::array<float,17> modifiers{}; };
 struct Lip { int32_t firstFrame=0;std::vector<LipFrame> frames; };
 inline uint32_t U32(const uint8_t* p){return uint32_t(p[0])|(uint32_t(p[1])<<8)|(uint32_t(p[2])<<16)|(uint32_t(p[3])<<24);}
 inline float F32(const uint8_t* p){auto u=U32(p);float f;std::memcpy(&f,&u,4);return f;}
@@ -62,6 +68,7 @@ inline Weights Sample(const Lip& lip,double seconds) {
   if(frame<0||frame>=lip.frames.size())return out;
   const size_t a=size_t(frame),b=std::min(a+1,lip.frames.size()-1);const float f=float(frame-a);
   for(size_t c=0;c<16;++c)out[c]=lip.frames[a].speech[c]*(1-f)+lip.frames[b].speech[c]*f;
+  for(size_t c=0;c<17;++c)out[16+c]=lip.frames[a].modifiers[c]*(1-f)+lip.frames[b].modifiers[c]*f;
   return out;
 }
 struct Tri {

@@ -7,9 +7,9 @@ static std::vector<uint8_t> Read(const char* path){std::ifstream f(path,std::ios
 static void Put(std::vector<uint8_t>& b,uint32_t v){for(int i=0;i<4;++i)b.push_back(uint8_t(v>>(i*8)));}
 int main(int argc,char** argv) {
   std::vector<uint8_t> bytes;Put(bytes,1);Put(bytes,156);Put(bytes,0);Put(bytes,1);Put(bytes,0);
-  for(int i=0;i<33;++i)Put(bytes,i==10?0x3f800000:0);
+  for(int i=0;i<33;++i)Put(bytes,(i==10||i==16||i==22)?0x3f800000:0);
   fo3face::Lip lip;std::string error;assert(fo3face::DecodeLip(bytes,lip,error));assert(lip.frames.size()==1);
-  assert(fo3face::Sample(lip,0)[10]==1&&fo3face::Sample(lip,1)[10]==0);
+  assert(fo3face::Sample(lip,0)[16]==1&&fo3face::Sample(lip,0)[22]==1&&fo3face::Sample(lip,0)[10]==1&&fo3face::Sample(lip,1)[10]==0);
   auto bad=bytes;bad.pop_back();assert(!fo3face::DecodeLip(bad,lip,error)&&lip.frames.empty());
   bad=bytes;bad[0]=2;assert(!fo3face::DecodeLip(bad,lip,error));
   bad=bytes;bad[12]=255;assert(!fo3face::DecodeLip(bad,lip,error));
@@ -47,7 +47,7 @@ int main(int argc,char** argv) {
       float displacement=0;
       for(double time=0;time<lip.frames.size()/30.;time+=.1) {
         const auto weights=fo3face::Sample(lip,time);
-        for(size_t c=0;c<16;++c){const auto morph=tri.morphs.find(fo3face::SpeechNames[c]);if(morph==tri.morphs.end())continue;
+        for(size_t c=0;c<fo3face::MorphNames.size();++c){const auto morph=tri.morphs.find(fo3face::MorphNames[c]);if(morph==tri.morphs.end())continue;
           for(const auto& d:morph->second)for(float axis:d)displacement+=std::fabs(weights[c]*axis);}
       }
       assert(displacement>0);const auto neutral=fo3face::Sample(lip,lip.frames.size()/30.+1);for(float w:neutral)assert(w==0);

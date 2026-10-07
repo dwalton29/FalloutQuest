@@ -19,7 +19,7 @@ int main(int argc,char** argv) {
     ++matched;
     std::vector<float> bind(mesh.indices.size()*18,0),output;fo3face::ExpandedDeltas deltas;
     for(size_t v=0;v<mesh.indices.size();++v)for(size_t axis=0;axis<3;++axis)bind[v*18+axis]=mesh.positions[mesh.indices[v]*3+axis];
-    for(size_t c=0;c<16;++c){auto m=tri.morphs.find(fo3face::SpeechNames[c]);if(m==tri.morphs.end())continue;
+    for(size_t c=0;c<fo3face::MorphNames.size();++c){auto m=tri.morphs.find(fo3face::MorphNames[c]);if(m==tri.morphs.end())continue;
       for(auto vertex:mesh.indices){const auto& d=m->second[vertex];const auto* t=mesh.geometryDeltaToModel;
         deltas[c].push_back({t[0]*d[0]+t[1]*d[1]+t[2]*d[2],t[3]*d[0]+t[4]*d[1]+t[5]*d[2],t[6]*d[0]+t[7]*d[1]+t[8]*d[2]});}}
     bool moved=false;
