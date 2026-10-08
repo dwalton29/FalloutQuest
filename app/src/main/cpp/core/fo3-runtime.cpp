@@ -11216,9 +11216,14 @@ void QActorPrepareStereoFrame() {
     const double setupUs=fqopaque::Micros(setupStarted);
     if(ready) Q211UpdatePlayerRig();
     const double npcNow=std::chrono::duration<double>(fqopaque::Clock::now().time_since_epoch()).count();
+    const uint32_t pathQueriesBefore=gQ240PathsPlanned;
+    const uint32_t pathExpandedBefore=gQ240PathNodesExpanded;
+    double npcAiUs=0.;
     for(auto& actor:gQ230NpcActors) {
         Q230SimulateActor(actor,npcNow);
+        const auto npcAiStart=fqopaque::Clock::now();
         Q240UpdateNpcPackage(actor,npcNow);
+        npcAiUs+=fqopaque::Micros(npcAiStart);
         Q230PersistActor(actor);
         GpuObject bounds=actor.renderBounds;
         if(actor.renderBoundsReady&&!actor.rigs.empty()) {
@@ -11233,6 +11238,13 @@ void QActorPrepareStereoFrame() {
     }
     Q230TickUnloadedActors(GetFo3TimeOfDayHour());
     Q230PumpNpcArrivals();
+    const auto npcPaths=gQ240PathsPlanned-pathQueriesBefore;
+    const auto npcExpanded=gQ240PathNodesExpanded-pathExpandedBefore;
+    // Separates AI route spikes from actor skinning, uploads and GPU draw.
+    if(gStereoFrame%60==0||(npcPaths>=4&&npcAiUs>2000.))
+        Q6H_LOGI("NPC AI PERF frame=%llu residents=%zu packageUs=%.0f paths=%u expanded=%u",
+            (unsigned long long)gStereoFrame,gQ230NpcActors.size(),npcAiUs,
+            unsigned(npcPaths),unsigned(npcExpanded));
     PrepareFo3InteriorSceneLights();
     fqactor::framePrep.Add(fqopaque::Micros(started));
     if(gStereoFrame%60==0) Q6H_LOGI("ACTOR FRAME PREP frame=%llu playerPoseUs=%.1f fingersUs=%.1f playerBoneUs=%.1f playerSkinCpuUs=%.1f playerDirectionsUs=%.1f npcClipUs=%.1f npcPoseUs=%.1f npcBoneUs=%.1f npcSkinCpuUs=%.1f npcDirectionsUs=%.1f animatedUploadCpuUs=%.1f totalActorPrepUs=%.1f setupUs=%.1f animatedVertexUploadBytes=%llu animatedVboUploads=%llu bonePaletteUploadBytes=%llu playerParts=%llu npcParts=%llu actors=%llu cpuReference=%d",
