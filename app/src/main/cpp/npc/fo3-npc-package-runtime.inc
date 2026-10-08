@@ -1,4 +1,5 @@
 #include <limits>
+#include "fo3-package-schedule.h"
 static std::unordered_set<std::string> gQ240AiDiagnostics;
 static void Q240AiLogOnce(uint32_t actor,uint32_t package,const std::string& why) {
   char prefix[40];std::snprintf(prefix,sizeof(prefix),"%08X:%08X:",actor,package);
@@ -272,14 +273,12 @@ static bool Q240AccompanyDestination(const Q230ActorVisual& actor,const fo3pipda
 #endif
 }
 static bool Q240ScheduleActive(const fo3pipdata::PackageSchedule& schedule,float hour) {
-  if(!schedule.valid)return true;
-  if(schedule.month!=-1||schedule.weekday!=-1||schedule.date!=0)return false;
-  if(schedule.hour<0)return true;
-  if(schedule.duration<=0)return false;
-  const float start=float(schedule.hour),end=start+float(schedule.duration);
-  hour=fo3tod::WrapHour(hour);
-  if(end<=24.f)return hour>=start&&hour<end;
-  return hour>=start||hour<end-24.f;
+  fo3schedule::Calendar calendar{};
+  if(gPlayerSession) {
+    const auto& state=gPlayerSession->player.Snapshot();
+    calendar={int(state.gameYear),int(state.gameMonth),int(state.gameDay)};
+  }
+  return fo3schedule::Active(schedule,hour,calendar);
 }
 static const std::vector<fo3pipdata::PatrolPoint>* Q240PatrolRoute(const Q230ActorVisual& actor,uint32_t id,const fo3pipdata::PackageDefinition& package,bool* circular=nullptr,std::string* error=nullptr) {
   if(package.location.type!=6){if(circular)*circular=package.patrolCircular;if(error)*error=package.patrolUnsupported;return &package.patrol;}
