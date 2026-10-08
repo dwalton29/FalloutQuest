@@ -1,5 +1,7 @@
 #include "data/fo3-esm-reader.h"
 #include "player/fo3-player-state.h"
+#include "player/fo3-development-clock.h"
+#include "npc/fo3-package-schedule.h"
 #include <cmath>
 #include <cstring>
 #include <fstream>
@@ -298,6 +300,25 @@ void Synthetic(const std::string &root) {
   Check(!p.DamageHealth(INFINITY) && !p.RestoreActionPoints(NAN) &&
             p.RestoreActionPoints(500) && p.ActionPoints() == 75,
         "resource guards");
+  // Development session starts at 09:50 for Megaton's authentic 10:00
+  // Common House schedule. Once focused, regular original TimeScale still
+  // advances the authoritative shared clock (no fabricated time skip).
+  Check(fo3devclock::kStartupHour==9&&fo3devclock::kStartupMinute==50,
+        "Megaton development boot clock is 09:50");
+  fo3player::Catalog morningCatalog=c;
+  morningCatalog.initial.gameHour=fo3devclock::kStartupGameHour;
+  fo3player::Player morning(morningCatalog);
+  Check(std::fabs(morning.Snapshot().gameHour-(9.0f+50.0f/60.0f))<0.0001f,
+        "fresh session begins at 09:50");
+  fo3pipdata::PackageSchedule morningPatrol;
+  morningPatrol.valid=true;morningPatrol.hour=10;morningPatrol.duration=4;
+  Check(!fo3schedule::Active(morningPatrol,morning.Snapshot().gameHour),
+        "10:00 settler routine is not active at 09:50");
+  for(int second=0;second<20;++second)
+    Check(morning.AdvanceGameClock(1.0),"real time advances test clock");
+  Check(std::fabs(morning.Snapshot().gameHour-10.0f)<.0002f &&
+        fo3schedule::Active(morningPatrol,morning.Snapshot().gameHour+.0002f),
+        "original TimeScale reaches 10:00 schedule after 20 real seconds");
   // Authored default TimeScale is 30 game minutes per real minute. The
   // player's clock advances while alive, crosses midnight, and survives v10 saves.
   const float previousHour=p.Snapshot().gameHour;

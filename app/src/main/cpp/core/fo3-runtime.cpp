@@ -52,6 +52,7 @@ extern void PumpFo3AndroidEventsQ1860();
 #include "fo3-npc.h"
 #include "fo3-actor-animation.h"
 #include "player/fo3-player-state.h"
+#include "player/fo3-development-clock.h"
 #include "audio/fo3-audio.h"
 #include "world/interaction/fo3-interaction.h"
 #include "world/interaction/fo3-interaction-ray.h"
@@ -3127,8 +3128,15 @@ bool BeginFo3SceneLoad(const Fo3CellTransitionRequestQ74& request, bool boot) {
             fo3player::Catalog catalog;
             std::string error;
             if (fo3player::LoadCatalog(fo3assets::FalloutMasterPath(), catalog, error)) {
+                // Development NPC daytime-routing test: start ten in-game
+                // minutes before the original 10:00 Common House routine.
+                // Do not alter Bethesda's ESM, calendar or TimeScale.
+                catalog.initial.gameHour=fo3devclock::kStartupGameHour;
                 result.playerSession = std::make_unique<fo3player::Session>(std::move(catalog));
                 auto& session = *result.playerSession;
+                Q6H_LOGI("DEVELOPMENT GAME START time=%02d:%02d gameHour=%.6f timeScale=%.1f",
+                    fo3devclock::kStartupHour,fo3devclock::kStartupMinute,
+                    session.player.Snapshot().gameHour,session.player.Definitions().gameTimeScale);
                 session.savePath = "/data/user/0/com.falloutquest.app/files/player-state.fqps";
                 // Development milestone policy: every application launch starts
                 // from Fallout3.esm's pristine player/world state. adb install -r
