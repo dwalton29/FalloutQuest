@@ -72,3 +72,21 @@ resolve through their actual schedules and perform three entry/sleep/exit
 cycles with stable marker roots. Production package executor host tests cover
 dialogue and combat exit, death release and changing to ordinary Travel.
 These are original-data host simulations, not headset validation.
+
+## Checkpoint 3 — verified seated Eat
+
+Eat type 3 reuses the original furniture executor. Moira 00004155 and Billy
+Creel 00003FEE pass original schedule selection, chair approach, original
+entry/DynamicIdle_ChairSit/exit and repeated cycles. A 69-assignment original
+resident audit proves 26/36 Sleep and 8/33 seated Eat lifecycles, with blocked
+assignments reported explicitly. Food consumption/props and conditioned eating
+gestures remain unsupported; see v182 for the exact original MeatFood condition.
+
+Alternative entrance markers now share reference occupancy; independently
+reserving both sides of one chair/bed was incorrect. Tests enforce conflict
+across alternative entrances and independence across different references.
+Loading/save-blocked suspension releases furniture. Entry interruption retains
+ownership until the matching exit can start. Exit preserves authored residual
+yaw and invalidates ordinary animation binding. Original clip envelopes account
+for accumulated furniture poses. These are directly required furniture
+integrations; unrelated NPC/rendering behavior is unchanged.

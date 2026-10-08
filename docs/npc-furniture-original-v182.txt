@@ -1,0 +1,87 @@
+Furniture ownership, dialogue/combat exits and death cleanup passed
+Cell 3a2a verified furniture slots=2
+Moira Brown original package 4156 furniture 3d75 three Sleep cycles without root drift passed
+Cell 3a33 verified furniture slots=2
+Billy Creel original package 3ff9 furniture 3cbf three Sleep cycles without root drift passed
+Cell 3a2a verified furniture slots=5
+Moira Brown original package 4155 furniture 15882 three seated Eat cycles without root drift passed
+Cell 3a33 verified furniture slots=9
+Billy Creel original package 3fee furniture 3fe5 three seated Eat cycles without root drift passed
+Unverified Mister Burke 3b66 condition=false in tested state
+Unverified Mister Burke 3b65 condition=unsupported function 0
+Unverified Lucas Simms 3bc2 location=0:3b52 no available verified marker
+Unverified Lucas Simms 3f88 location=0:3f81 no available verified marker
+Unverified Lucas Simms 3f87 location=0:3ea2 no available verified marker
+Unverified Stockholm 1953b location=0:19534 no available verified marker
+Schedule simulation cell=a96 hour=12 population=3 occupied=0
+Schedule simulation cell=a96 hour=20 population=3 occupied=0
+Schedule simulation cell=a96 hour=1 population=3 occupied=0
+Unverified Harden Simms 4007 location=0:3e96 no available verified marker
+Unverified Harden Simms 400a location=0:3e96 no available verified marker
+Unverified Harden Simms 400c location=0:3e87 no available verified marker
+Schedule simulation cell=3a29 hour=12 population=1 occupied=0
+Schedule simulation cell=3a29 hour=20 population=1 occupied=0
+Schedule simulation cell=3a29 hour=1 population=1 occupied=0
+Schedule simulation cell=3a2a hour=12 population=2 occupied=0
+Schedule simulation cell=3a2a hour=20 population=2 occupied=0
+Schedule simulation cell=3a2a hour=1 population=2 occupied=1
+Unverified Jericho 400f location=0:157f8 no available verified marker
+Unverified Jericho 4011 location=0:1952b no available verified marker
+Unverified Jericho 4015 location=0:3f92 no available verified marker
+Schedule simulation cell=3a2c hour=12 population=1 occupied=0
+Schedule simulation cell=3a2c hour=20 population=1 occupied=0
+Schedule simulation cell=3a2c hour=1 population=1 occupied=0
+Unverified Mother Maya 3fda location=0:3f21 no available verified marker
+Unverified Mother Maya 3fdc location=0:3d66 no available verified marker
+Schedule simulation cell=3a2d hour=12 population=4 occupied=0
+Schedule simulation cell=3a2d hour=20 population=4 occupied=0
+Schedule simulation cell=3a2d hour=1 population=4 occupied=1
+Unverified Doc Church 414d condition=false in tested state
+Schedule simulation cell=3a2e hour=12 population=4 occupied=3
+Schedule simulation cell=3a2e hour=20 population=4 occupied=3
+Schedule simulation cell=3a2e hour=1 population=4 occupied=4
+Schedule simulation cell=3a2f hour=12 population=3 occupied=1
+Schedule simulation cell=3a2f hour=20 population=3 occupied=0
+Schedule simulation cell=3a2f hour=1 population=3 occupied=2
+Schedule simulation cell=3a31 hour=12 population=1 occupied=0
+Schedule simulation cell=3a31 hour=20 population=1 occupied=0
+Schedule simulation cell=3a31 hour=1 population=1 occupied=0
+Schedule simulation cell=3a32 hour=12 population=2 occupied=0
+Schedule simulation cell=3a32 hour=20 population=2 occupied=0
+Schedule simulation cell=3a32 hour=1 population=2 occupied=1
+Unverified Maggie 3ffb location=0:3fe6 no available verified marker
+Unverified Maggie 4001 location=0:3f21 no available verified marker
+Unverified Maggie 4002 location=0:3cda no available verified marker
+Unverified Billy Creel 3ff0 location=0:3b6c no available verified marker
+Unverified Billy Creel 3ff5 location=0:3b52 no available verified marker
+Schedule simulation cell=3a33 hour=12 population=2 occupied=0
+Schedule simulation cell=3a33 hour=20 population=2 occupied=0
+Schedule simulation cell=3a33 hour=1 population=2 occupied=0
+Unverified Walter 3ffa location=0:3b6c no available verified marker
+Schedule simulation cell=3a34 hour=12 population=1 occupied=0
+Schedule simulation cell=3a34 hour=20 population=1 occupied=0
+Schedule simulation cell=3a34 hour=1 population=1 occupied=0
+Unverified Gob 3fa0 condition=false in tested state
+Unverified Colin Moriarty 3f9f condition=false in tested state
+Unverified Nova 3fc6 condition=false in tested state
+Unverified Nova 6a075 condition=false in tested state
+Schedule simulation cell=3a35 hour=12 population=3 occupied=0
+Schedule simulation cell=3a35 hour=20 population=3 occupied=0
+Schedule simulation cell=3a35 hour=1 population=3 occupied=0
+Unverified Megaton Settler 43da location=0:1952b no available verified marker
+Unverified Megaton Settler 43da location=0:1952b no available verified marker
+Unverified Megaton Settler 43da location=0:1952b no available verified marker
+Unverified Megaton Settler 43da location=0:1952b no available verified marker
+Unverified Megaton Settler 43da location=0:1952b no available verified marker
+Unverified Megaton Settler 43da location=0:1952b no available verified marker
+Unverified Megaton Settler 43da location=0:1952b no available verified marker
+Unverified Megaton Settler 43da location=0:1952b no available verified marker
+Unverified Megaton Settler 43da location=0:1952b no available verified marker
+Schedule simulation cell=4357 hour=12 population=10 occupied=0
+Schedule simulation cell=4357 hour=20 population=10 occupied=4
+Schedule simulation cell=4357 hour=1 population=10 occupied=4
+Original-data lifecycle coverage Sleep=26/36 Eat seating=8/33
+Coverage blocker conditions unverified/false=7
+Coverage blocker no resident supported marker/ownership/child=27
+Coverage blocker schedule/script=1
+Furniture package runtime tests passed

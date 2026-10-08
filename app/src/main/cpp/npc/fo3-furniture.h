@@ -32,7 +32,7 @@ public:
   ~Lease(){Release();}
   bool Acquire(const std::shared_ptr<Reservations>& pool,uint32_t reference,size_t marker,uint32_t actor) {
     if(!pool||!reference||!actor||marker>=30)return false;
-    const uint64_t key=(uint64_t(reference)<<32)|marker;
+    const uint64_t key=uint64_t(reference)<<32; // Side markers are alternative entries to one object.
     if(pool_&&pool_==pool&&key_==key&&owner_==actor)return true;
     if(pool->owners.count(key))return false;
     Release();pool_=pool;key_=key;owner_=actor;pool_->owners[key]=actor;return true;

@@ -8,7 +8,7 @@ static std::vector<uint8_t> Read(const std::string& p){std::ifstream f(p,std::io
 int main(int argc,char** argv){
  using namespace fo3furniture;
  auto pool=std::make_shared<Reservations>();
- {Lease a,b;assert(a.Acquire(pool,100,1,10));assert(!b.Acquire(pool,100,1,20));assert(b.Acquire(pool,100,0,20));a.Release();assert(a.Acquire(pool,100,1,10));}
+ {Lease a,b;assert(a.Acquire(pool,100,1,10));assert(!b.Acquire(pool,100,1,20));assert(!b.Acquire(pool,100,0,20));assert(b.Acquire(pool,101,0,20));a.Release();assert(a.Acquire(pool,100,1,10));}
  assert(pool->owners.empty());
  fo3pipdata::Placement p;p.x=100;p.y=200;p.z=30;p.rz=1.57079632679f;p.scale=2;
  Marker marker;marker.position={10,0,5};auto world=Alignment(p,marker);

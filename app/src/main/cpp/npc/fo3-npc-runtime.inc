@@ -104,7 +104,7 @@ void Q230PrepareActors(uint32_t cell, uint32_t worldspace,
   }
   std::shared_ptr<fo3furniture::Scene> furniture;
 #ifndef FO3_ACTOR_RUNTIME_HOST_TEST
-  if(gPlayerSession)furniture=fo3furniture::BuildScene(gPlayerSession->player.Definitions().pipboy,cell,worldspace,[](const std::string& path,std::vector<uint8_t>& bytes){return LoadFalloutMeshFile(path,bytes);});
+  if(gPlayerSession)furniture=fo3furniture::BuildScene(gPlayerSession->player.Definitions().pipboy,cell,worldspace,[](const std::string& path,std::vector<uint8_t>& bytes){return LoadFalloutMeshFile(path,bytes);},true);
 #endif
   for (const auto &source : actors) {
     if (cancel.load(std::memory_order_acquire))
@@ -135,6 +135,13 @@ void Q230PrepareActors(uint32_t cell, uint32_t worldspace,
         if(candidate<nearest){nearest=candidate;visual.navigation=mesh;}
       }
       visual.navigationGraph=navigation;visual.runtime.furniture.scene=furniture;
+      if(furniture){
+        if(visual.renderEnvelope.empty())visual.renderEnvelope=fo3anim::ClipEnvelope(visual.skeleton,visual.clip);
+        for(const auto& slot:furniture->slots)for(const auto* clip:{&slot.program->enter,&slot.program->loop,&slot.program->exit}){
+          const auto envelope=fo3anim::ClipEnvelope(visual.skeleton,*clip);
+          for(size_t i=0;i<envelope.size()&&i<visual.renderEnvelope.size();++i){visual.renderEnvelope[i].translation=std::max(visual.renderEnvelope[i].translation,envelope[i].translation);visual.renderEnvelope[i].scale=std::max(visual.renderEnvelope[i].scale,envelope[i].scale);}
+        }
+      }
       out.push_back(std::move(visual));
     }
   }
@@ -146,7 +153,9 @@ static bool Q230PathBlocked(Q230ActorVisual&,float,float,float,float,float);
 #define FO3_NPC_PACKAGE_ACTOR_TARGET(reference,point) Q240ResidentPackageTarget(gQ230NpcActors,reference,point)
 #define FO3_NPC_PATH_BLOCKED Q230PathBlocked
 #define FO3_NPC_WORLD_GROUND(x,z,referenceY,outY) SampleFo3ActorGroundQ240(x,z,referenceY,outY)
+#define FO3_NPC_FURNITURE_LOADING IsFo3LoadingVisible()
 #include "fo3-npc-package-runtime.inc"
+#undef FO3_NPC_FURNITURE_LOADING
 #undef FO3_NPC_WORLD_GROUND
 #undef FO3_NPC_PATH_BLOCKED
 #undef FO3_NPC_PACKAGE_ACTOR_TARGET
