@@ -11799,8 +11799,6 @@ void RenderScene(const float* mvp) {
     // depth writes disabled and use the original Fallout HUD solid sprite.
     Q230RenderHealthHud(mvp);
     glActiveTexture(GL_TEXTURE5);
-    glBindTexture(GL_TEXTURE_CUBE_MAP, static_cast<GLuint>(previousTexture4CubeQ2050));
-    glActiveTexture(GL_TEXTURE5);
     glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture5Q2050));
     glActiveTexture(GL_TEXTURE4);
     glBindTexture(GL_TEXTURE_CUBE_MAP, static_cast<GLuint>(previousTexture4CubeQ2050));
