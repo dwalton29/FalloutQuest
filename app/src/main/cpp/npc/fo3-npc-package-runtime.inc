@@ -444,6 +444,7 @@ static const fo3pipdata::PackageDefinition* Q240SelectPackage(
     if(locationProcedure&&package.location.valid&&package.location.type==0){
       const auto remote=definitions.targets.find(package.location.value);
       if(remote!=definitions.targets.end()&&
+         (remote->second.world!=0||remote->second.cell!=0)&&
          (remote->second.world!=gExteriorWorldspaceQ1890||
           (!gExteriorWorldspaceQ1890&&remote->second.cell!=gCurrentCellFormId))){
         uint32_t door=0;std::array<float,3> approach{};

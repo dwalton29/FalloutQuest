@@ -34,11 +34,25 @@ static void ActorCrossCellHandoff() {
   catalog.references[0x101].cell=0x200;
   gPlayerSession=std::make_unique<Session>(std::move(catalog));
   gCurrentCellFormId=0x200;gExteriorWorldspaceQ1890=0;
+  uint32_t chosenDoor=0;std::array<float,3> approach{};
+  const bool eligibleDoor=Q240NpcRemoteDoor(actor,0x300,chosenDoor,approach);
+  if(!eligibleDoor)std::cerr<<"No XTEL candidate: ref="<<std::hex<<chosenDoor
+    <<" actor="<<actor.source.refFormId<<std::dec
+    <<" health="<<gPlayerSession->player.ActorHealth(actor.source.refFormId)
+    <<" doorAccess="<<gPlayerSession->player.CanActorOpenDoor(actor.source.refFormId,0x101)
+    <<" graph="<<actor.navigationGraph->triangleCount<<"\n";
+  assert(eligibleDoor&&chosenDoor==0x101);
   bool handedOff=false;
   for(int i=0;i<600&&!handedOff;++i){
     Q240UpdateNpcPackage(actor,double(i)*.1);
     handedOff=actor.runtime.offScene;
   }
+  if(!handedOff)std::cerr<<"No handoff: selected="<<std::hex<<actor.aiPackage
+    <<" xtelDoor="<<actor.runtime.xtelDoor
+    <<" xtelCell="<<actor.runtime.xtelCell<<std::dec
+    <<" procedure="<<int(actor.runtime.procedure)
+    <<" pathIndex="<<actor.aiPathIndex<<" pathCount="<<actor.aiPathGame.size()
+    <<" savedRetry="<<actor.runtime.packageRetryAfter.size()<<"\n";
   assert(handedOff&&actor.aiPackage==50);
   const auto& saved=gPlayerSession->player.Snapshot().actors.at(actor.source.refFormId);
   assert(saved.cell==0x300&&saved.world==0x700);
