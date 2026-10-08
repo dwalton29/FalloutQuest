@@ -10,17 +10,23 @@
 namespace fo3healthui {
 struct State {
   GLuint vao=0,vbo=0,texture=0;
-  bool ownsTexture=false,ready=false;
+  bool ownsTexture=false,ready=false,attempted=false;
   fo3hudassets::TaiSprite sprite;
 };
 inline State& Get(){static State s;return s;}
 inline bool Ensure(){
   auto& s=Get();
   if(s.ready)return true;
+  if(s.attempted)return false;
+  s.attempted=true;
   if(!fo3hudrenderer::EnsureResources())return false;
   fo3hudassets::TaiSprite shared;
   if(!fo3hudassets::ParseButtonTai(s.sprite,"solid.dds")||
-     !fo3hudassets::ParseButtonTai(shared,"glow_general_button_a.dds"))return false;
+     !fo3hudassets::ParseButtonTai(shared,"glow_general_button_a.dds")){
+    __android_log_print(ANDROID_LOG_WARN,fo3hudrenderer::kTag,
+        "HEALTH HUD ORIGINAL ASSET MISSING: InterfaceShared.tai solid.dds");
+    return false;
+  }
   if(s.sprite.atlasPath==shared.atlasPath)
     s.texture=fo3hudrenderer::State().interfaceTexture;
   else {
