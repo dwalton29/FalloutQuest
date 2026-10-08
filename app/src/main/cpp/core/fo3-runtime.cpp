@@ -12884,7 +12884,9 @@ void Q6HClear(GLbitfield mask) {
 
 
 
+#define FO3_NPC_CHAT_RUNTIME 1
 #include "dialogue/fo3-dialogue-runtime.inc"
+#undef FO3_NPC_CHAT_RUNTIME
 #include "npc/fo3-npc-chat-runtime.inc"
 } // namespace
 
