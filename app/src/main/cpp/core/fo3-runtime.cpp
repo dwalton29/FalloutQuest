@@ -45,6 +45,9 @@ extern void SetFo3TerrainSelectionOverrideQ1890(bool enabled, float gameX, float
 extern void PumpFo3AndroidEventsQ1860();
 #include "world/interaction/fo3-door-prompt.h"
 #include <chrono>
+// Must be included at global scope before the fo3runtime namespace embeds NPC .inc files.
+#include <queue>
+#include <functional>
 #include "world/interaction/fo3-authored-door-query.h"
 #include "fo3-cell-traversal.h"
 #include "ui/loading/fo3-loading-state.h"
