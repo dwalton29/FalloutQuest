@@ -11024,8 +11024,10 @@ static void Q230TickUnloadedActors(float hour) {
     cb.persist=[&](uint32_t actor,const fo3player::ActorState& state){
         return player.UpdateActor(actor,state);
     };
+    const auto& clock=player.Snapshot();
     const auto report=gQ230UnloadedScheduler.Tick(hour,gCurrentCellFormId,
-        gExteriorWorldspaceQ1890,player.Snapshot().actors,defs,*index,cb);
+        gExteriorWorldspaceQ1890,clock.actors,defs,*index,cb,
+        {int(clock.gameYear),int(clock.gameMonth),int(clock.gameDay)});
     if(report.doorHops||report.packageChanges||report.blocked)
         Q6H_LOGI("NPC UNLOADED TICK visited=%zu packageChanged=%zu doorHops=%zu blocked=%zu unsupported=%zu residentSkipped=%zu",
             report.visited,report.packageChanges,report.doorHops,report.blocked,
