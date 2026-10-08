@@ -84,7 +84,7 @@ bool SupportedLocalProcedure(const fo3pipdata::PackageDefinition& p) {
   return p.combatStyleValid&&!p.scripted&&!p.procedureActions&&
          p.location.valid&&p.location.type==0&&!p.location2.valid;
 }
-void Scheduler::Reset(){minute_=-1;previousMinute_=-1;cursor_=0;pending_.clear();lastTransferredMinute_.clear();}
+void Scheduler::Reset(){minute_=-1;previousMinute_=-1;batchHour_=0.f;cursor_=0;pending_.clear();lastTransferredMinute_.clear();}
 Report Scheduler::Tick(float hour,uint32_t residentCell,uint32_t residentWorld,
   const std::unordered_map<uint32_t,fo3player::ActorState>& tracked,
   const fo3pipdata::Definitions& defs,const fo3xtel::Index& graph,
@@ -95,7 +95,7 @@ Report Scheduler::Tick(float hour,uint32_t residentCell,uint32_t residentWorld,
   if(minute_<0){minute_=now;previousMinute_=now;return out;}
   if(pending_.empty()&&now==minute_)return out;
   if(pending_.empty()) {
-    previousMinute_=minute_;minute_=now;cursor_=0;
+    previousMinute_=minute_;minute_=now;batchHour_=hour;cursor_=0;
     pending_.reserve(tracked.size());
     for(const auto& a:tracked)pending_.push_back(a.first);
     std::sort(pending_.begin(),pending_.end());
@@ -117,9 +117,9 @@ Report Scheduler::Tick(float hour,uint32_t residentCell,uint32_t residentWorld,
     if(!state.cell){++out.unsupported;continue;}
     // A persisted XTEL hop must not repeat on the same game minute (including
     // a new scheduler batch following scene transition).
-    if(lastTransferredMinute_[id]==uint32_t(now+1))continue;
+    if(lastTransferredMinute_[id]==uint32_t(minute_+1))continue;
     const auto base=defs.targets.find(id);if(base==defs.targets.end())continue;
-    const Candidate chosen=Select(id,base->second.base,state,hour,defs,cb);
+    const Candidate chosen=Select(id,base->second.base,state,batchHour_,defs,cb);
     if(!chosen.id||!chosen.targetCell){++out.unsupported;continue;}
     fo3player::ActorState next=state;
     if(state.package!=chosen.id){next.package=chosen.id;next.sequence=0;next.packageWaitSeconds=0;}
@@ -135,7 +135,7 @@ Report Scheduler::Tick(float hour,uint32_t residentCell,uint32_t residentWorld,
     if(next.cell==state.cell&&next.world==state.world&&next.package==state.package)continue;
     if(cb.persist(id,next)){
       if(next.package!=state.package)++out.packageChanges;
-      if(next.cell!=state.cell||next.world!=state.world){++out.doorHops;lastTransferredMinute_[id]=uint32_t(now+1);}
+      if(next.cell!=state.cell||next.world!=state.world){++out.doorHops;lastTransferredMinute_[id]=uint32_t(minute_+1);}
     }else ++out.blocked;
   }
   if(cursor_>=pending_.size()){pending_.clear();cursor_=0;}

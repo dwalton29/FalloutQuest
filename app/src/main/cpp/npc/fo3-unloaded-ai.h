@@ -42,6 +42,8 @@ public:
               const fo3xtel::Index& graph,const Callbacks& callbacks);
 private:
   int minute_=-1,previousMinute_=-1;
+  // Freeze the game clock for each capped actor batch.
+  float batchHour_=0.f;
   size_t cursor_=0;
   std::vector<uint32_t> pending_;
   // Stores cell of the first observed actor state at this game minute; the

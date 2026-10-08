@@ -174,8 +174,64 @@ void TestBatchBudget() {
   assert(a.visited==0&&a.doorHops==0&&f.writes==130);
   std::cout<<"130 tracked actors processed in bounded 64/64/2 batches without duplicates\\n";
 }
+
+void TestMegatonCohortDay(){
+  Fixture f;const auto initial=f.tracked.at(f.actor);
+  // 37 identities exercise the authored-format XTEL API. Their two synthetic
+  // PACKs are NOT represented as an original-data parity claim.
+  for(uint32_t i=1;i<37;++i){
+    const uint32_t id=0x30000u+i;
+    f.tracked.emplace(id,initial);
+    f.defs.targets.emplace(id,f.defs.targets.at(f.actor));
+  }
+  assert(f.tracked.size()==37);
+  f.Tick(0.f);
+  auto r=f.Tick(.02f);
+  assert(r.visited==37&&r.packageChanges==37&&r.doorHops==0);
+  r=f.Tick(8.02f);
+  assert(r.visited==37&&r.packageChanges==37&&r.doorHops==37);
+  for(const auto& entry:f.tracked)
+    assert(entry.second.cell==0x300&&entry.second.world==0x700&&entry.second.package==0x900);
+  const auto before=f.writes;
+  r=f.Tick(8.04f,0x300,0x700);
+  assert(r.residentSkipped==37&&f.writes==before);
+  r=f.Tick(20.02f);
+  assert(r.visited==37&&r.packageChanges==37&&r.doorHops==37);
+  for(const auto& entry:f.tracked)
+    assert(entry.second.cell==0x200&&entry.second.package==0x901);
+  f.Tick(23.99f);r=f.Tick(.02f);
+  assert(r.doorHops==0);
+  r=f.Tick(8.02f);
+  assert(r.doorHops==37&&r.packageChanges==37&&f.tracked.size()==37);
+  std::cout<<"37 distinct synthetic actors: day/night, return XTEL, resident exclusion passed\n";
+}
+void TestCappedBatchClockIsolation(){
+  Fixture f;const auto initial=f.tracked.at(f.actor);
+  for(uint32_t i=0;i<129;++i){
+    const uint32_t id=0x40000u+i;
+    f.tracked.emplace(id,initial);
+    f.defs.targets.emplace(id,f.defs.targets.at(f.actor));
+  }
+  f.Tick(7.99f);
+  auto r=f.Tick(8.02f);
+  assert(r.visited==64&&r.doorHops==64);
+  // The game clock moves to evening mid-batch. Finish every morning actor
+  // against its original batch time BEFORE starting the new evening batch.
+  r=f.Tick(20.02f);
+  assert(r.visited==64&&r.doorHops==64);
+  r=f.Tick(20.02f);
+  assert(r.visited==2&&r.doorHops==2);
+  r=f.Tick(20.02f);
+  assert(r.visited==64&&r.doorHops==64&&r.packageChanges==64);
+  r=f.Tick(20.02f);
+  assert(r.visited==64&&r.doorHops==64);
+  r=f.Tick(20.02f);
+  assert(r.visited==2&&r.doorHops==2);
+  std::cout<<"130-actor clock-change isolation across capped 64/64/2 batches passed\n";
+}
 }
 int main(){
   TestDayNight();TestGuards();TestUnsupported();TestBatchBudget();
+  TestMegatonCohortDay();TestCappedBatchClockIsolation();
   return 0;
 }
