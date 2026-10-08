@@ -22,8 +22,8 @@ android {
         applicationId 'com.falloutquest.app'
         minSdk 29
         targetSdk 35
-        versionCode 185
-        versionName '0.51.0-xtel-cell-index'
+        versionCode 186
+        versionName '0.52.0-npc-xtel-traversal'
 
         ndk {
             abiFilters 'arm64-v8a'

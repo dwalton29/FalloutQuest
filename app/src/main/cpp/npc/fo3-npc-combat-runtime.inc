@@ -60,7 +60,7 @@ static bool Q230Sight(Q230ActorVisual& actor,uint32_t target,const std::array<fl
   return length>.01f&&!HasFo3InteractionOccluder(eye[0],eye[1],eye[2],dx/length,dy/length,dz/length,length,target);
 }
 static void Q230PersistActor(Q230ActorVisual& actor) {
-  if(!gPlayerSession||!actor.stateRestored)return;
+  if(!gPlayerSession||!actor.stateRestored||actor.runtime.offScene)return;
   auto& p=gPlayerSession->player;fo3player::ActorState saved;
   saved.cell=gCurrentCellFormId;saved.world=gExteriorWorldspaceQ1890;
   if(actor.navigationGraph&&actor.aiPathIndex<actor.aiPathSurfaces.size()){
@@ -156,7 +156,7 @@ static bool Q230CombatRoute(Q230ActorVisual& actor,const std::array<float,3>& ta
   return true;
 }
 static void Q230SimulateActor(Q230ActorVisual& actor,double now) {
-  if(!gPlayerSession||gPlayerSession->saveBlocked||actor.rigs.empty()||IsFo3LoadingVisible())return;
+  if(!gPlayerSession||gPlayerSession->saveBlocked||actor.runtime.offScene||actor.rigs.empty()||IsFo3LoadingVisible())return;
   auto& p=gPlayerSession->player;const auto& c=p.Definitions();auto& s=actor.runtime;
   if(!actor.stateRestored){
     const auto saved=p.Snapshot().actors.find(actor.source.refFormId);

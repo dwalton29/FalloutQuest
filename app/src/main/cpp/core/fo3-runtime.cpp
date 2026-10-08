@@ -1,6 +1,7 @@
 #include "dialogue/fo3-dialogue-session.h"
 #include "dialogue/fo3-dialogue-panel.h"
 #include "npc/fo3-npc-state.h"
+#include "data/fo3-xtel-index.h"
 #include "npc/fo3-facial-data.h"
 #include "npc/fo3-npc-combat.h"
 #include "player/fo3-vr-body.h"
@@ -10988,7 +10989,7 @@ void QActorPrepareStereoFrame() {
                         dz=actor.runtime.position[2]-origin[14];
             bounds.minX+=dx;bounds.maxX+=dx;bounds.minY+=dy;bounds.maxY+=dy;bounds.minZ+=dz;bounds.maxZ+=dz;
         }
-        actor.renderVisible=!actor.renderBoundsReady || Q2017StereoVisible(bounds);
+        actor.renderVisible=!actor.runtime.offScene&&(!actor.renderBoundsReady || Q2017StereoVisible(bounds));
         if(actor.renderVisible) Q230UpdateActor(actor);
     }
     PrepareFo3InteriorSceneLights();

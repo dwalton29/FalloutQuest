@@ -25,6 +25,9 @@ struct RuntimeState {
   uint32_t sandboxLastTarget=0,sandboxCycles=0;
   double sandboxNext=0;
   uint32_t reference=0,package=0,combatTarget=0,navigationDoor=0;
+  // One active XTEL approach. No player scene transition is ever queued.
+  uint32_t xtelDoor=0,xtelCell=0;
+  bool offScene=false;
   Activity activity=Activity::Idle,suspended=Activity::Idle;
   Animation animation=Animation::Idle;
   std::array<float,3> position{},destination{};

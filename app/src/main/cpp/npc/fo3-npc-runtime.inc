@@ -80,6 +80,13 @@ bool Q230LiveBone(const Q230ActorVisual& actor,int bone,std::array<float,3>& wor
 
 // Render-thread ownership and CPU preparation bridge for authored actors.
 // Included by the runtime; all CPU data is request-local until scene commit.
+// Built only on the scene preparation worker. Atomic shared_ptr publication
+// prevents render-frame ESM scans and races with live package evaluation.
+static std::shared_ptr<const fo3xtel::Index> gQ230NpcXtelIndex;
+static std::mutex gQ230NpcXtelMutex;
+static std::shared_ptr<const fo3xtel::Index> Q230NpcXtelIndex(){
+  return std::atomic_load(&gQ230NpcXtelIndex);
+}
 void Q230PrepareActors(uint32_t cell, uint32_t worldspace,
                        std::vector<Q230ActorVisual> &out,
                        const std::atomic<bool> &cancel) {
@@ -87,9 +94,28 @@ void Q230PrepareActors(uint32_t cell, uint32_t worldspace,
   // milestone. Megaton and explicit interior CELLs can be represented now.
   if (worldspace != 0u && worldspace != 0x00000A74u)
     return;
+  if(!Q230NpcXtelIndex()){
+    std::lock_guard<std::mutex> lock(gQ230NpcXtelMutex);
+    if(!Q230NpcXtelIndex()){
+      auto graph=std::make_shared<fo3xtel::Index>();std::string reason;
+      if(graph->Build(fo3assets::FalloutMasterPath(),reason)){
+        std::shared_ptr<const fo3xtel::Index> ready=graph;
+        std::atomic_store(&gQ230NpcXtelIndex,ready);
+        Q6H_LOGI("NPC XTEL INDEX READY edges=%zu",graph->Size());
+      }else Q6H_LOGI("NPC XTEL INDEX FAILED reason=%s",reason.c_str());
+    }
+  }
+  // Actors moved by XTEL still have original ACHR references in their home
+  // GRUP. Include those refs when preparing the destination, never double
+  // spawning the original placement after the actor has left it.
+  std::unordered_set<uint32_t> arrivals;
+  if(gPlayerSession)for(const auto& entry:gPlayerSession->player.Snapshot().actors){
+    const auto& saved=entry.second;
+    if(!saved.dead&&saved.world==worldspace&&
+       (worldspace?worldspace==0x00000A74u:saved.cell==cell))arrivals.insert(entry.first);
+  }
   std::vector<Fo3NpcActorQ230> actors;
-  if (!LoadFo3CellActors(cell, actors))
-    return;
+  if(!LoadFo3CellActors(cell,actors,{},arrivals.empty()?nullptr:&arrivals))return;
   std::vector<Fo3NpcNavMeshQ240> rawNavigation;
   LoadFo3NpcNavigationQ240(cell,worldspace,rawNavigation);
   auto navigation=std::make_shared<Q240NavigationGraph>();
@@ -106,9 +132,20 @@ void Q230PrepareActors(uint32_t cell, uint32_t worldspace,
 #ifndef FO3_ACTOR_RUNTIME_HOST_TEST
   if(gPlayerSession)furniture=fo3furniture::BuildScene(gPlayerSession->player.Definitions().pipboy,cell,worldspace,[](const std::string& path,std::vector<uint8_t>& bytes){return LoadFalloutMeshFile(path,bytes);},true);
 #endif
-  for (const auto &source : actors) {
-    if (cancel.load(std::memory_order_acquire))
-      return;
+  for(auto source:actors) {
+    if(cancel.load(std::memory_order_acquire))return;
+    if(gPlayerSession){
+      const auto& saved=gPlayerSession->player.Snapshot().actors;
+      const auto it=saved.find(source.refFormId);
+      if(it!=saved.end()){
+        const auto& pose=it->second;
+        if(pose.dead||pose.world!=worldspace||(!worldspace&&pose.cell!=cell))continue;
+        // Use the canonical arrival root when constructing the new rig;
+        // later Q230SimulateActor restores its package and remaining state.
+        source.x=pose.position[0];source.y=pose.position[1];source.z=pose.position[2];
+        source.rz=pose.yaw;
+      }
+    }
     Q230ActorVisual visual;
     if (Q230BuildNpcActor(source, visual)) {
 #ifndef FO3_ACTOR_RUNTIME_HOST_TEST
@@ -155,7 +192,9 @@ static bool Q230PathBlocked(Q230ActorVisual&,float,float,float,float,float);
 #define FO3_NPC_PATH_BLOCKED Q230PathBlocked
 #define FO3_NPC_WORLD_GROUND(x,z,referenceY,outY) SampleFo3ActorGroundQ240(x,z,referenceY,outY)
 #define FO3_NPC_FURNITURE_LOADING IsFo3LoadingVisible()
+#define FO3_NPC_XTEL_INDEX() Q230NpcXtelIndex()
 #include "fo3-npc-package-runtime.inc"
+#undef FO3_NPC_XTEL_INDEX
 #undef FO3_NPC_FURNITURE_LOADING
 #undef FO3_NPC_WORLD_GROUND
 #undef FO3_NPC_PATH_BLOCKED
@@ -435,6 +474,7 @@ void Q230UpdateActor(Q230ActorVisual &actor) {
 }
 
 bool Q230LiveBounds(Q230ActorVisual& actor,std::array<float,3>& lo,std::array<float,3>& hi) {
+  if(actor.runtime.offScene)return false;
   Q230UpdateActor(actor);lo={INFINITY,INFINITY,INFINITY};hi={-INFINITY,-INFINITY,-INFINITY};
   for(const auto& rig:actor.rigs)for(size_t slot=0;slot<rig.interactionBounds.size();++slot) {
     const auto& b=rig.interactionBounds[slot];if(!std::isfinite(b.first[0]))continue;

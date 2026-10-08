@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdint>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 struct Fo3NpcVisualItemQ230 {
@@ -63,7 +64,8 @@ struct Fo3NpcActorQ230 {
 
 bool LoadFo3CellActors(uint32_t cellFormId,
     std::vector<Fo3NpcActorQ230>& outActors,
-    const std::string& esmPath = {});
+    const std::string& esmPath = {},
+    const std::unordered_set<uint32_t>* relocatedRefs = nullptr);
 
 bool LoadFo3MegatonExteriorActorsQ230(
     std::vector<Fo3NpcActorQ230>& outActors);

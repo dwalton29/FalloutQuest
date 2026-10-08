@@ -119,7 +119,8 @@ bool ParseActorPlacement(const std::vector<uint8_t>& data,
 bool ScanIndexAndActors(
         FILE* f,
         std::vector<RawActor>& actors,
-        std::unordered_map<uint32_t,Locator>& locators, uint32_t cell) {
+        std::unordered_map<uint32_t,Locator>& locators, uint32_t cell,
+        const std::unordered_set<uint32_t>* relocatedRefs) {
     const int64_t fileSize=fo3esm::FileSize(f);
     if(fileSize<static_cast<int64_t>(fo3esm::HEADER_SIZE)) return false;
 
@@ -153,7 +154,8 @@ bool ScanIndexAndActors(
             locators[formId]={payloadOffset,size,flags,type};
         }
 
-        if(type=="ACHR" && InActorCell(groups,cell)){
+        if(type=="ACHR" && (InActorCell(groups,cell)||
+            (relocatedRefs&&relocatedRefs->count(formId)!=0))){
             Locator loc{payloadOffset,size,flags,type};
             std::vector<uint8_t> payload;
             if(fo3esm::ReadPayload(f,loc,payload)){
@@ -393,7 +395,8 @@ bool ParseLinked(FILE* f, const Locator& loc, Linked& out, bool female) {
 
 bool LoadFo3CellActors(
         uint32_t cellFormId, std::vector<Fo3NpcActorQ230>& outActors,
-        const std::string& esmPath) {
+        const std::string& esmPath,
+        const std::unordered_set<uint32_t>* relocatedRefs) {
     outActors.clear();
     FILE* f=std::fopen(esmPath.empty()?fo3assets::FalloutMasterPath().c_str():esmPath.c_str(),"rb");
     if(!f){
@@ -403,7 +406,7 @@ bool LoadFo3CellActors(
 
     std::vector<RawActor> raw;
     std::unordered_map<uint32_t,Locator> locators;
-    const bool indexed=ScanIndexAndActors(f,raw,locators,cellFormId);
+    const bool indexed=ScanIndexAndActors(f,raw,locators,cellFormId,relocatedRefs);
     if(!indexed){
         std::fclose(f);
         Q230_LOGW("Q23.0 NPC INDEX FAILED: targetCell=%08X",cellFormId);

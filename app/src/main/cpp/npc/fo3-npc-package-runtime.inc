@@ -345,9 +345,46 @@ static size_t Q240SandboxTarget(const Q230ActorVisual& actor,const fo3pipdata::P
     if(actor.navigationGraph&&Q240Path(*actor.navigationGraph,Q240GamePosition(actor),{a[12],a[13],a[14]},route)&&!route.empty()&&Q240PlanarDistance(route.back(),{a[12],a[13],a[14]})<=8.f)return i;
   }return SIZE_MAX;
 }
+// Use the immutable v185 graph to find an accessible original load door
+// toward a remote PLDT reference. NPCs never call the player XTEL queue.
+static bool Q240NpcRemoteDoor(const Q230ActorVisual& actor,uint32_t targetCell,
+    uint32_t& doorRef,std::array<float,3>& doorPosition){
+#ifndef FO3_NPC_XTEL_INDEX
+  (void)actor;(void)targetCell;(void)doorRef;(void)doorPosition;return false;
+#else
+  const auto index=FO3_NPC_XTEL_INDEX();
+  if(!index||!gPlayerSession||!actor.navigationGraph||!targetCell)return false;
+  const auto& d=gPlayerSession->player.Definitions().pipboy;
+  const auto* exits=index->Outgoing(gCurrentCellFormId);if(!exits)return false;
+  const auto here=Q240GamePosition(actor);
+  size_t minLegs=SIZE_MAX;float minDistance=INFINITY;
+  for(uint32_t ref:*exits){
+    const auto* edge=index->Find(ref);
+    if(!edge||edge->sourceWorld!=gExteriorWorldspaceQ1890||
+       (edge->sourceRecordFlags&0x820u)||(edge->destinationRecordFlags&0x820u))
+      continue;
+    const auto placement=d.targets.find(ref);
+    if(placement==d.targets.end()||(placement->second.flags&0x820u)||
+       placement->second.parent||!gPlayerSession->player.CanActorOpenDoor(actor.source.refFormId,ref))
+      continue;
+    std::vector<uint32_t> remainder;
+    if(!index->CellRoute(edge->destinationCell,targetCell,remainder))continue;
+    std::array<float,3> point{placement->second.x,placement->second.y,placement->second.z};
+    std::vector<std::array<float,3>> route;
+    if(!Q240Path(*actor.navigationGraph,here,point,route)||route.empty()||
+       Q240PlanarDistance(route.back(),point)>96.f)continue;
+    const float distance=Q240PlanarDistance(here,point);
+    if(remainder.size()+1<minLegs||(remainder.size()+1==minLegs&&distance<minDistance)){
+      minLegs=remainder.size()+1;minDistance=distance;doorRef=ref;doorPosition=point;
+    }
+  }
+  return doorRef!=0;
+#endif
+}
 static const fo3pipdata::PackageDefinition* Q240SelectPackage(
     Q230ActorVisual& actor,uint32_t& id,std::array<float,3>& anchor,float& radius) {
-  id=0;radius=0;if(!gPlayerSession)return nullptr;
+  id=0;radius=0;actor.runtime.xtelDoor=0;actor.runtime.xtelCell=0;
+  if(!gPlayerSession)return nullptr;
   const auto& definitions=gPlayerSession->player.Definitions().pipboy;
   const auto* actorDef=fo3pipdata::ActorCategory(definitions,actor.source.baseFormId,16);
   if(!actorDef){Q240AiLogOnce(actor.source.refFormId,0,"invalid AI package template");return nullptr;}
@@ -397,6 +434,27 @@ static const fo3pipdata::PackageDefinition* Q240SelectPackage(
     if(!error.empty()||(!continuingFlee&&!conditionsPass)) {
       if(!error.empty())Q240AiLogOnce(actor.source.refFormId,packageId,error);
       continue;
+    }
+    // Only location-directed, locally executable package families may cross
+    // XTEL in this checkpoint. Target/follower and script procedures require
+    // a separate unloaded-scheduler implementation.
+    const bool locationProcedure=package.type==3||package.type==4||
+      package.type==5||package.type==6||package.type==8||
+      package.type==12||package.type==14;
+    if(locationProcedure&&package.location.valid&&package.location.type==0){
+      const auto remote=definitions.targets.find(package.location.value);
+      if(remote!=definitions.targets.end()&&
+         (remote->second.world!=gExteriorWorldspaceQ1890||
+          (!gExteriorWorldspaceQ1890&&remote->second.cell!=gCurrentCellFormId))){
+        uint32_t door=0;std::array<float,3> approach{};
+        if(!Q240NpcRemoteDoor(actor,remote->second.cell,door,approach)){
+          Q240AiLogOnce(actor.source.refFormId,packageId,"remote PLDT needs an accessible reachable XTEL door");
+          continue;
+        }
+        actor.runtime.xtelDoor=door;actor.runtime.xtelCell=remote->second.cell;
+        id=packageId;anchor=approach;radius=0;
+        return &package;
+      }
     }
     if(package.type==7){std::array<float,3> current{};if(!Q240AccompanyDestination(actor,package,current,anchor)){Q240AccompanyOnce(actor.source.refFormId,packageId,package.target.value,"UNSUPPORTED","target/destination unavailable in resident scene; cross-cell continuation requires XTEL milestone");continue;}}
     else if(package.type==1||package.type==10) {
@@ -623,6 +681,67 @@ static void Q240AdvancePath(Q230ActorVisual& actor,float dt,double now) {
   actor.runtime.speed=WALK_METRES_PER_SECOND;
   actor.runtime.animation=fo3npc::Animation::Walk;
 }
+// A door handoff is an atomic canonical state change. The actor stays
+// frozen/hidden in the source scene until that scene is torn down. On the next
+// scene load its original ACHR is restored in the target CELL (no teleport of
+// the player, no loading screen, no off-scene AI simulation).
+static void Q240AdvanceNpcXtel(Q230ActorVisual& actor,float dt,double now){
+#ifndef FO3_NPC_XTEL_INDEX
+  (void)actor;(void)dt;(void)now;return;
+#else
+  auto index=FO3_NPC_XTEL_INDEX();auto& state=actor.runtime;
+  const auto* edge=index?index->Find(state.xtelDoor):nullptr;
+  if(!edge||edge->sourceCell!=gCurrentCellFormId||
+     edge->sourceWorld!=gExteriorWorldspaceQ1890||
+     edge->destinationCell!=state.xtelCell||
+     (edge->sourceRecordFlags&0x820u)||(edge->destinationRecordFlags&0x820u)){
+    Q240PackageRouteFailed(actor,now,"XTEL link no longer valid");return;
+  }
+  auto& player=gPlayerSession->player;const auto& defs=player.Definitions().pipboy;
+  const auto original=defs.targets.find(edge->sourceRef);
+  if(original==defs.targets.end()||(original->second.flags&0x820u)||
+     original->second.parent||!player.CanActorOpenDoor(actor.source.refFormId,edge->sourceRef)){
+    Q240PackageRouteFailed(actor,now,"XTEL door disabled, locked or scripted");return;
+  }
+  const std::array<float,3> target{original->second.x,original->second.y,original->second.z};
+  const auto here=Q240GamePosition(actor);
+  if(!actor.aiPathGame.empty()&&actor.aiPathIndex>0&&
+     Q240PlanarDistance(here,target)<=96.f){
+    fo3player::ActorState moved;
+    const auto saved=player.Snapshot().actors.find(actor.source.refFormId);
+    if(saved!=player.Snapshot().actors.end())moved=saved->second;
+    moved.cell=edge->destinationCell;moved.world=edge->destinationWorld;
+    moved.position=edge->arrival;moved.yaw=edge->rotation[2];
+    moved.package=actor.aiPackage;moved.sequence=0;moved.packageWaitSeconds=0;
+    if(!player.UpdateActor(actor.source.refFormId,moved)){
+      Q240PackageRouteFailed(actor,now,"XTEL canonical actor transfer rejected");return;
+    }
+    actor.runtime.furniture.Clear();actor.runtime.offScene=true;
+    actor.runtime.speed=0;actor.runtime.animation=fo3npc::Animation::Idle;
+    actor.aiPathGame.clear();actor.aiPathSurfaces.clear();actor.aiPathIndex=0;
+    actor.runtime.navigationDoor=0;
+    Q6H_LOGI("NPC XTEL TRANSFER actor=%08X package=%08X door=%08X toDoor=%08X cell=%08X world=%08X",
+      actor.source.refFormId,actor.aiPackage,edge->sourceRef,edge->destinationRef,
+      edge->destinationCell,edge->destinationWorld);
+    return;
+  }
+  if(actor.aiPathGame.empty()||actor.aiPathIndex>=actor.aiPathGame.size()){
+    actor.aiPathGame.clear();actor.aiPathSurfaces.clear();actor.aiPathIndex=0;
+    if(now<actor.aiRepathAt)return;
+    std::string failure;
+    if(!Q240Path(*actor.navigationGraph,here,target,actor.aiPathGame,&failure,&actor.aiPathSurfaces)||
+       actor.aiPathGame.empty()||
+       Q240PlanarDistance(actor.aiPathGame.back(),target)>96.f){
+      Q240PackageRouteFailed(actor,now,"XTEL NAVM approach unavailable");return;
+    }
+    actor.aiRepathAt=now+1.0;
+    Q6H_LOGI("NPC XTEL APPROACH actor=%08X package=%08X door=%08X cell=%08X waypoints=%zu",
+      actor.source.refFormId,actor.aiPackage,edge->sourceRef,edge->destinationCell,
+      actor.aiPathGame.size());
+  }
+  Q240AdvancePath(actor,dt,now);
+#endif
+}
 // Script-free player Escort: approach the escorted player, then travel to the
 // authored destination while respecting PKE2 distance. Sequence is a persistent
 // procedure phase: 0 approach, 1 lead, 2 arrived. Other target families reject.
@@ -787,7 +906,7 @@ static bool Q240AdvanceFurniture(Q230ActorVisual& actor,const fo3pipdata::Packag
   actor.runtime.procedure=f.phase==fo3furniture::Phase::Loop?fo3npc::Procedure::Waiting:fo3npc::Procedure::Executing;return true;
 }
 static void Q240AdvanceNpcPackage(Q230ActorVisual& actor,double now) {
-  if(!gPlayerSession||actor.rigs.empty())return;
+  if(!gPlayerSession||actor.rigs.empty()||actor.runtime.offScene)return;
 #ifdef FO3_NPC_FURNITURE_LOADING
   if(FO3_NPC_FURNITURE_LOADING||gPlayerSession->saveBlocked){
     const auto active=gPlayerSession->player.Definitions().pipboy.packages.find(actor.aiPackage);
@@ -852,6 +971,12 @@ static void Q240AdvanceNpcPackage(Q230ActorVisual& actor,double now) {
   }
   const bool newlySelected=actor.aiPackage!=packageId;
   Q240AdoptPackage(actor,packageId,*package,anchor);
+  if(state.xtelDoor){
+    state.activity=fo3npc::Activity::Package;state.package=packageId;
+    state.packageKnown=true;
+    Q240AdvanceNpcXtel(actor,dt,now);
+    return;
+  }
   if(newlySelected&&package->type==8){
     // The original POBA script is executed exactly once per adoption through
     // the canonical, atomic dialogue-result interpreter. Failed scripts do not
