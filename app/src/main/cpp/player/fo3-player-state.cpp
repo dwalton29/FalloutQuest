@@ -405,19 +405,24 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
           next.globals[form] = globalValue;
           const std::string editor = Text(subs, "EDID");
           // Original named engine globals, not guessed package schedules.
-          if (editor == "TimeScale" && globalValue > 0.0f && globalValue <= 1000.0f)
-            next.gameTimeScale = globalValue;
-          if (editor == "GameHour" && globalValue >= 0.0f && globalValue < 24.0f)
-            next.initial.gameHour = globalValue;
+          if (editor == "TimeScale" && globalValue > 0.0f && globalValue <= 1000.0f) {
+            next.gameTimeScale = globalValue;next.timeScaleGlobal=form;
+          }
+          if (editor == "GameHour" && globalValue >= 0.0f && globalValue < 24.0f) {
+            next.initial.gameHour = globalValue;next.hourGlobal=form;
+          }
           if (editor == "GameDaysPassed" && globalValue >= 0.0f &&
               globalValue < 1000000.0f)
-            next.initial.gameDaysPassed = static_cast<uint32_t>(globalValue);
-          if (editor == "GameYear" && globalValue>=1&&globalValue<=9999)
-            next.initial.gameYear = static_cast<uint32_t>(globalValue);
-          if (editor == "GameMonth" && globalValue>=0&&globalValue<12)
-            next.initial.gameMonth = static_cast<uint32_t>(globalValue);
-          if (editor == "GameDay" && globalValue>=1&&globalValue<=31)
-            next.initial.gameDay = static_cast<uint32_t>(globalValue);
+            {next.initial.gameDaysPassed = static_cast<uint32_t>(globalValue);next.daysPassedGlobal=form;}
+          if (editor == "GameYear" && globalValue>=1&&globalValue<=9999) {
+            next.initial.gameYear = static_cast<uint32_t>(globalValue);next.yearGlobal=form;
+          }
+          if (editor == "GameMonth" && globalValue>=0&&globalValue<12) {
+            next.initial.gameMonth = static_cast<uint32_t>(globalValue);next.monthGlobal=form;
+          }
+          if (editor == "GameDay" && globalValue>=1&&globalValue<=31) {
+            next.initial.gameDay = static_cast<uint32_t>(globalValue);next.dayGlobal=form;
+          }
         }
       } else if (type == "REFR") {
         Reference ref;
@@ -615,6 +620,19 @@ bool Player::AdvanceGameClock(double realSeconds) {
       if(++state_.gameMonth>=12){state_.gameMonth=0;++state_.gameYear;}
     }
   }
+  return true;
+}
+bool Player::GlobalValue(uint32_t form,float& value) const {
+  const auto found=catalog_.globals.find(form);
+  if(found==catalog_.globals.end())return false;
+  if(form==catalog_.hourGlobal)value=state_.gameHour;
+  else if(form==catalog_.dayGlobal)value=float(state_.gameDay);
+  else if(form==catalog_.monthGlobal)value=float(state_.gameMonth);
+  else if(form==catalog_.yearGlobal)value=float(state_.gameYear);
+  else if(form==catalog_.daysPassedGlobal)
+    value=float(double(state_.gameDaysPassed)+(double(state_.gameHour)-double(catalog_.initial.gameHour))/24.);
+  else if(form==catalog_.timeScaleGlobal)value=catalog_.gameTimeScale;
+  else value=found->second;
   return true;
 }
 ActorCensusReport Player::RegisterOriginalActors() {
