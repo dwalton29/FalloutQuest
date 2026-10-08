@@ -333,6 +333,13 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
         Reference ref;ref.flags=flags;ref.cell=groupCells.empty()?0:groupCells.back();
         const auto* base=Find(subs,"NAME");if(base&&base->size==4)ref.base=fo3esm::ReadU32(base->data);
         ref.valid=ref.base!=0;next.references[form]=ref;
+        // Preserve the decoded authored placement before Pip-Boy's target
+        // finalizer retains only quest/navigation references.
+        const auto original=next.pipboy.targets.find(form);
+        const auto* authoredPose=Find(subs,"DATA");
+        if(ref.valid&&authoredPose&&authoredPose->size==24u&&
+           original!=next.pipboy.targets.end())
+          next.actorPlacements.emplace(form,original->second);
       }
       // Keep the v1 catalog identity stable so existing player saves migrate.
       if (lootRecord) {
@@ -533,6 +540,16 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
   fo3weapon::FinalizeStatistics(next.weapons);
   fo3pipdata::FinalizeLevelledCategories(next.pipboy,next.weapons);
   fo3pipdata::Finalize(next.pipboy);
+  // All eligible original ACHR identities must remain resolvable by actor
+  // health, hostility, persistence and the unloaded scheduler. Keep their
+  // full authored pose even if no quest, patrol or door currently points here.
+  for(const auto& entry:next.actorPlacements){
+    const auto& placement=entry.second;
+    if((placement.flags&0x820u)||placement.parent||
+       !next.weapons.actors.count(placement.base)||
+       !fo3weapon::ActorStatistics(next.weapons,placement.base))continue;
+    next.pipboy.targets.emplace(entry.first,placement);
+  }
   next.fingerprint = fingerprint;
   for (auto &entry : next.references)
     if (!entry.second.owner && cellOwners.count(entry.second.cell))
@@ -557,6 +574,37 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
 
 Player::Player(Catalog catalog)
     : catalog_(std::move(catalog)), state_(catalog_.initial) {}
+ActorCensusReport Player::RegisterOriginalActors() {
+  ActorCensusReport report;
+  report.authored=catalog_.actorPlacements.size();
+  // Original FormID order makes seeding deterministic independent of hash
+  // iteration order, device/compiler, or scene-entry timing.
+  std::vector<uint32_t> refs;refs.reserve(report.authored);
+  for(const auto& entry:catalog_.actorPlacements)refs.push_back(entry.first);
+  std::sort(refs.begin(),refs.end());
+  for(uint32_t id:refs){
+    if(state_.actors.count(id)){++report.alreadyTracked;continue;}
+    const auto& p=catalog_.actorPlacements.at(id);
+    // Deleted/initially-disabled and XESP-controlled actors must not be
+    // spontaneously activated before their enabling quest/script fires.
+    if((p.flags&0x820u)||p.parent){++report.disabledOrConditional;continue;}
+    if(!p.base||!catalog_.weapons.actors.count(p.base)||
+       !fo3weapon::ActorStatistics(catalog_.weapons,p.base)||
+       !catalog_.pipboy.targets.count(id)||
+       ActorHealth(id)<=0){++report.unsupportedBase;continue;}
+    if((!p.cell&&!p.world)||!std::isfinite(p.x)||!std::isfinite(p.y)||
+       !std::isfinite(p.z)||!std::isfinite(p.rx)||!std::isfinite(p.ry)||
+       !std::isfinite(p.rz)||!std::isfinite(p.scale)||
+       p.scale<=0){++report.unsupportedPlacement;continue;}
+    if(state_.actors.size()>=10000u){++report.limitReached;continue;}
+    ActorState a;
+    a.cell=p.cell;a.world=p.world;
+    a.position={p.x,p.y,p.z};a.yaw=p.rz;
+    if(UpdateActor(id,a))++report.registered;
+    else ++report.unsupportedBase;
+  }
+  return report;
+}
 float Player::MaxHealth() const {
   const auto &r = catalog_.rules;
   return state_.baseHealth +

@@ -35,7 +35,7 @@ using Locator = fo3esm::RecordLocation;
 struct RawActor {
     uint32_t refFormId = 0u;
     uint32_t baseFormId = 0u;
-    uint32_t flags = 0u;
+    uint32_t flags = 0u, enableParent = 0u;
     float x = 0.0f, y = 0.0f, z = 0.0f;
     float rx = 0.0f, ry = 0.0f, rz = 0.0f;
     float scale = 1.0f;
@@ -109,6 +109,8 @@ bool ParseActorPlacement(const std::vector<uint8_t>& data,
             out.rx=fo3esm::ReadF32(p+12u); out.ry=fo3esm::ReadF32(p+16u); out.rz=fo3esm::ReadF32(p+20u);
         } else if(std::memcmp(type,"XSCL",4u)==0 && n>=4u){
             out.scale=fo3esm::ReadF32(p);
+        } else if(std::memcmp(type,"XESP",4u)==0 && n>=5u){
+            out.enableParent=fo3esm::ReadU32(p);
         }
     });
     return base && placement && std::isfinite(out.x) && std::isfinite(out.y) &&
@@ -415,7 +417,7 @@ bool LoadFo3CellActors(
 
     for(const RawActor& placed:raw){
         // Deleted and initially disabled references need game-state evaluation.
-        if ((placed.flags & (0x20u | 0x800u)) != 0u) continue;
+        if ((placed.flags & (0x20u | 0x800u)) != 0u || placed.enableParent) continue;
         const auto npcLoc=locators.find(placed.baseFormId);
         if(npcLoc==locators.end() || npcLoc->second.type!="NPC_") continue;
 

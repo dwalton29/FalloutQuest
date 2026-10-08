@@ -459,6 +459,17 @@ void Original(const std::string &path) {
   Check(c.defaultActivationDoors.count(0x41714) && p.CanOpenDoor(0x3a14),
         "original Brass Lantern script allows entry");
   Check(p.CanOpenDoor(0x3a37), "original owned Brass Lantern exit allows travel");
+  const auto registered=p.RegisterOriginalActors();
+  Check(registered.authored>0&&registered.registered>0,
+        "original Fallout3.esm ACHR registration");
+  Check(p.RegisterOriginalActors().registered==0,
+        "original census idempotence");
+  std::cout<<"Original ACHR census: authored="<<registered.authored
+           <<" registered="<<registered.registered
+           <<" conditional="<<registered.disabledOrConditional
+           <<" unsupportedBase="<<registered.unsupportedBase
+           <<" unsupportedPose="<<registered.unsupportedPlacement
+           <<" capped="<<registered.limitReached<<"\\n";
   size_t pickups = 0;
   for (const auto &ref : c.references)
     if (p.CanPickup(ref.first))
@@ -557,10 +568,67 @@ void Containers(const std::string &root) {
   std::remove(esm.c_str());
   std::remove(save.c_str());
 }
+
+void OriginalActorCensus(const std::string& root){
+  const auto esm=root+".esm",save=root+".fqps";
+  Write(esm,Fixture());
+  fo3player::Catalog c;std::string error;
+  Check(fo3player::LoadCatalog(esm,c,error),error.c_str());
+  constexpr uint32_t npc=0x9000;
+  c.weapons.actors[npc].health=80;
+  auto authored=[&](uint32_t ref,uint32_t cell,uint32_t world,float x){
+    fo3pipdata::Placement p;
+    p.base=npc;p.cell=cell;p.world=world;p.x=x;p.y=250;p.z=18;
+    p.rz=0.75f;
+    c.actorPlacements[ref]=p;
+    c.pipboy.targets[ref]=p;
+  };
+  authored(0xa001,0x200,0,100);
+  authored(0xa002,0xa96,0xa74,200);
+  authored(0xa003,0x200,0,300);
+  c.actorPlacements[0xa003].flags=0x800;
+  authored(0xa004,0x200,0,400);
+  c.actorPlacements[0xa004].parent=0xabcdef;
+  authored(0xa005,0x200,0,500);
+  c.actorPlacements[0xa005].base=0xbeef;
+  authored(0xa006,0x200,0,600);
+  c.actorPlacements[0xa006].x=NAN;
+  authored(0xa007,0,0,700);
+  authored(0xa008,0x200,0,800);
+  fo3player::Player p(c);
+  fo3player::ActorState transferred;transferred.cell=0x333;
+  transferred.position={1000,2000,3000};transferred.package=0;
+  Check(p.UpdateActor(0xa008,transferred),"preexisting transferred state");
+  const auto first=p.RegisterOriginalActors();
+  Check(first.authored==8&&first.registered==2&&first.alreadyTracked==1&&
+      first.disabledOrConditional==2&&first.unsupportedBase==1&&
+      first.unsupportedPlacement==2,"ACHR census preserves eligibility");
+  Check(p.Snapshot().actors.size()==3&&
+      p.Snapshot().actors.at(0xa001).cell==0x200&&
+      p.Snapshot().actors.at(0xa002).world==0xa74&&
+      p.Snapshot().actors.at(0xa002).position[0]==200&&
+      p.Snapshot().actors.at(0xa008).cell==0x333,
+      "source poses and previously moved actor");
+  const auto revision=p.Revision();
+  const auto again=p.RegisterOriginalActors();
+  Check(again.registered==0&&again.alreadyTracked==3&&
+      p.Revision()==revision,"idempotent actor census");
+  Check(p.Save(save,error),error.c_str());
+  fo3player::Player restored(c);
+  Check(restored.Restore(save,error),error.c_str());
+  Check(restored.Snapshot().actors.size()==3&&
+        restored.Snapshot().actors.at(0xa008).cell==0x333,
+        "census actor persistence");
+  Check(restored.RegisterOriginalActors().registered==0,
+        "no reactivation after save restore");
+  std::remove(esm.c_str());std::remove(save.c_str());
+}
+
 } // namespace
 int main(int argc, char **argv) {
   try {
     Synthetic("/tmp/falloutquest-player-" + std::to_string(getpid()));
+    OriginalActorCensus("/tmp/falloutquest-achr-" + std::to_string(getpid()));
     Containers("/tmp/falloutquest-containers-" + std::to_string(getpid()));
     if (argc > 1)
       Original(argv[1]);

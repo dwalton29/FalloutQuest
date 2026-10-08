@@ -114,8 +114,8 @@ void Q230PrepareActors(uint32_t cell, uint32_t worldspace,
   std::unordered_set<uint32_t> arrivals;
   if(gPlayerSession)for(const auto& entry:gPlayerSession->player.Snapshot().actors){
     const auto& saved=entry.second;
-    if(!saved.dead&&saved.world==worldspace&&
-       (worldspace?worldspace==0x00000A74u:saved.cell==cell))arrivals.insert(entry.first);
+    if(!saved.dead&&saved.world==worldspace&&saved.cell==cell)
+      arrivals.insert(entry.first);
   }
   std::vector<Fo3NpcActorQ230> actors;
   if(!LoadFo3CellActors(cell,actors,{},arrivals.empty()?nullptr:&arrivals))return;
@@ -147,7 +147,7 @@ void Q230PrepareActors(uint32_t cell, uint32_t worldspace,
       const auto it=saved.find(source.refFormId);
       if(it!=saved.end()){
         const auto& pose=it->second;
-        if(pose.dead||pose.world!=worldspace||(!worldspace&&pose.cell!=cell))continue;
+        if(pose.dead||pose.world!=worldspace||pose.cell!=cell)continue;
         // Use the canonical arrival root when constructing the new rig;
         // later Q230SimulateActor restores its package and remaining state.
         source.x=pose.position[0];source.y=pose.position[1];source.z=pose.position[2];

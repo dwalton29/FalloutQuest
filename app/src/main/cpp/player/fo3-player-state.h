@@ -132,6 +132,9 @@ struct State {
 };
 struct Catalog {
   fo3weapon::Definitions weapons;
+  // Immutable original ACHR census. This is a source data catalogue, not a
+  // request to build actor visuals or simulate every world CELL.
+  std::unordered_map<uint32_t,fo3pipdata::Placement> actorPlacements;
   fo3pipdata::Definitions pipboy;
   std::unordered_map<uint32_t, Item> items;
   std::unordered_map<uint32_t, Reference> references;
@@ -153,9 +156,16 @@ struct Catalog {
 // save import.
 bool LoadCatalog(const std::string &esmPath, Catalog &out, std::string &error);
 
+struct ActorCensusReport {
+  size_t authored=0,registered=0,alreadyTracked=0,disabledOrConditional=0;
+  size_t unsupportedBase=0,unsupportedPlacement=0,limitReached=0;
+};
 class Player {
 public:
   explicit Player(Catalog catalog);
+  // Idempotent, bounded source-record registration; only initial/root state,
+  // never replaces an existing actor's saved cell, health or package.
+  ActorCensusReport RegisterOriginalActors();
   const Catalog &Definitions() const { return catalog_; }
   const State &Snapshot() const { return state_; }
   float MaxHealth() const;

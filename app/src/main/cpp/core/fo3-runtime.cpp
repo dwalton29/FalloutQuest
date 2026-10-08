@@ -3105,6 +3105,13 @@ bool BeginFo3SceneLoad(const Fo3CellTransitionRequestQ74& request, bool boot) {
                     Q6H_LOGE("DEVELOPMENT STATE RESET FAILED: %s errno=%d",
                              session.savePath.c_str(), errno);
                 }
+                if(!session.saveBlocked){
+                    const auto census=session.player.RegisterOriginalActors();
+                    Q6H_LOGI("NPC ACHR CENSUS authored=%zu registered=%zu existing=%zu conditional=%zu unsupportedBase=%zu unsupportedPose=%zu cap=%zu",
+                        census.authored,census.registered,census.alreadyTracked,
+                        census.disabledOrConditional,census.unsupportedBase,
+                        census.unsupportedPlacement,census.limitReached);
+                }
             } else Q6H_LOGE("PLAYER STATE UNAVAILABLE: %s", error.c_str());
         }
         if (cancel.load(std::memory_order_acquire)) return false;
