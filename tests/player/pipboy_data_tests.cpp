@@ -151,6 +151,13 @@ static void PackageDecodeTests() {
   std::vector<uint8_t> styled=payload;std::vector<uint8_t> styleId;put32(styleId,1234);sub(styled,"CNAM",styleId);Decode(d,"PACK",105,0,styled,0,0,0);assert(d.packages.at(105).combatStyleValid&&d.packages.at(105).combatStyle==1234);
   styled=payload;sub(styled,"CNAM",std::vector<uint8_t>(3,0));Decode(d,"PACK",106,0,styled,0,0,0);assert(!d.packages.at(106).combatStyleValid);
   styled=payload;sub(styled,"CNAM",std::vector<uint8_t>(4,0));Decode(d,"PACK",107,0,styled,0,0,0);assert(d.packages.at(107).combatStyleValid&&!d.packages.at(107).combatStyle);
+  // Original Nathan PACK 00019542 uses the legacy 20-byte CTDA layout.
+  std::vector<uint8_t> legacy{0xa0,0,0,0,0,0,4,0x42,77,0,0,0,0,0,0,0,0,0,0,0};
+  auto conditioned=payload;sub(conditioned,"CTDA",legacy);Decode(d,"PACK",108,0,conditioned,0,0,0);
+  const auto& condition=d.packages.at(108).conditions.at(0);
+  assert(condition.flags==0xa0&&condition.value==33&&condition.function==77&&condition.run==0&&condition.reference==0);
+  legacy.resize(19);conditioned=payload;sub(conditioned,"CTDA",legacy);Decode(d,"PACK",109,0,conditioned,0,0,0);
+  assert(d.packages.at(109).conditions.at(0).function==0);
   d.targets[200].base=1;
   d.packages[100].location.type=0;d.packages[100].location.value=200;
   Finalize(d);

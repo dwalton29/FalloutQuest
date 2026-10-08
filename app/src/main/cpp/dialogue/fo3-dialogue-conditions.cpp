@@ -73,6 +73,7 @@ static bool Value(const fo3pipdata::Condition& c,const Context& ctx,float& value
     if(c.function==73){auto rank=def->factions.find(c.a);value=rank==def->factions.end()?-1:rank->second;}return true;
   case 72:value=(pc?7:who.base)==c.a;return true;
   case 74:{auto global=p.Definitions().globals.find(c.a);if(global==p.Definitions().globals.end()){error="global unavailable";return false;}value=global->second;return true;}
+  case 77:if(!std::isfinite(ctx.randomPercent)||ctx.randomPercent<0||ctx.randomPercent>99){error="random percent sample unavailable";return false;}value=ctx.randomPercent;return true;
   case 80:if(!pc){error="NPC effective level unavailable";return false;}value=state.level;return true;
   case 131:value=uint32_t(d.playerFemale)==c.a;return true;
   case 136:value=who.reference==c.a;return true;

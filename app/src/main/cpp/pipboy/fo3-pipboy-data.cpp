@@ -31,14 +31,14 @@ std::string Text(const Subs &s, const char *t) {
 }
 Condition Cond(const Sub &s) {
   Condition c;
-  if (s.n >= 28) {
+  if (s.n == 20 || s.n == 24 || s.n >= 28) {
     c.flags = s.p[0];
     c.value = fo3esm::ReadF32(s.p + 4);
     c.function = fo3esm::ReadU16(s.p + 8);
     c.a = fo3esm::ReadU32(s.p + 12);
     c.b = fo3esm::ReadU32(s.p + 16);
-    c.run = fo3esm::ReadU32(s.p + 20);
-    c.reference = fo3esm::ReadU32(s.p + 24);
+    if (s.n >= 24) c.run = fo3esm::ReadU32(s.p + 20);
+    if (s.n >= 28) c.reference = fo3esm::ReadU32(s.p + 24);
   }
   return c;
 }

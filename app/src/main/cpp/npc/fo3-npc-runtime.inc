@@ -150,6 +150,7 @@ void Q230PrepareActors(uint32_t cell, uint32_t worldspace,
 
 #ifndef FO3_ACTOR_RUNTIME_HOST_TEST
 static bool Q230PathBlocked(Q230ActorVisual&,float,float,float,float,float);
+#define FO3_NPC_ACCOMPANY_TARGET(reference,point) Q240ResidentAccompanyTarget(gQ230NpcActors,reference,point)
 #define FO3_NPC_PACKAGE_ACTOR_TARGET(reference,point) Q240ResidentPackageTarget(gQ230NpcActors,reference,point)
 #define FO3_NPC_PATH_BLOCKED Q230PathBlocked
 #define FO3_NPC_WORLD_GROUND(x,z,referenceY,outY) SampleFo3ActorGroundQ240(x,z,referenceY,outY)
@@ -158,6 +159,7 @@ static bool Q230PathBlocked(Q230ActorVisual&,float,float,float,float,float);
 #undef FO3_NPC_FURNITURE_LOADING
 #undef FO3_NPC_WORLD_GROUND
 #undef FO3_NPC_PATH_BLOCKED
+#undef FO3_NPC_ACCOMPANY_TARGET
 #undef FO3_NPC_PACKAGE_ACTOR_TARGET
 #include "fo3-npc-door-runtime.inc"
 #endif

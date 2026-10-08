@@ -106,6 +106,41 @@ static void Coverage(const char* esm){
   for(const auto& b:blockers)std::cout<<"Coverage blocker "<<b.first<<"="<<b.second<<'\n';
   assert(assigned[0]==36&&assigned[1]==33);activePackageTargets=&packageTargets;
 }
+static void OriginalAccompany(const char* esm){
+ const auto& d=gPlayerSession->player.Definitions().pipboy;
+ const auto& harden=d.packages.at(0x4009);const auto& nathan=d.packages.at(0x19542);
+ assert(harden.type==7&&harden.target.value==0x3b5c&&harden.target.radius==200&&!harden.location.valid);
+ assert(nathan.type==7&&nathan.target.value==0x3b58&&nathan.target.radius==210&&!nathan.location.valid);
+ gCurrentCellFormId=0x3a32;gExteriorWorldspaceQ1890=0;auto nav=Navigation(gCurrentCellFormId,0,esm);
+ std::vector<Fo3NpcActorQ230> sources;assert(LoadFo3CellActors(gCurrentCellFormId,sources,esm));std::vector<Q230ActorVisual> population;
+ for(const auto& source:sources){Q230ActorVisual a;a.source=source;a.runtime.reference=source.refFormId;a.runtime.position=Q240ScenePosition({source.x,source.y,source.z});a.navigationGraph=nav;population.push_back(std::move(a));}
+ activePackageTargets=&population;Q230ActorVisual *follower=nullptr,*leader=nullptr;for(auto& a:population){if(a.source.refFormId==0x3b57)follower=&a;if(a.source.refFormId==0x3b58)leader=&a;}assert(follower&&leader);
+ const auto& lp=d.packages.at(0x4162);const auto& placement=d.targets.at(lp.location.value);const std::array<float,3> anchor{placement.x,placement.y,placement.z};
+ Q240AdoptPackage(*leader,0x4162,lp,anchor);leader->runtime.activity=fo3npc::Activity::Package;assert(Q240BuildPackagePath(*leader,lp,anchor,float(lp.location.radius)));
+
+ bool eligible=false;for(int minute=0;minute<1440;++minute){packageHour=minute/60.f;uint32_t id=0;std::array<float,3> goal{};float radius=0;
+  if(Q240SelectPackage(*follower,id,goal,radius)&&id==0x19542){eligible=true;break;}}
+ assert(eligible);for(int i=0;i<1200;++i)Q240UpdateNpcPackage(*follower,i*.1);
+ assert(follower->aiPackage==0x19542);assert(Q240PlanarDistance(Q240GamePosition(*follower),Q240GamePosition(*leader))<=218.f);
+ follower->runtime.BeginDialogue();follower->runtime.EndDialogue();Q240UpdateNpcPackage(*follower,121);assert(follower->aiPackage==0x19542);
+ follower->runtime.BeginCombat(0x14);follower->runtime.EndCombat();Q240UpdateNpcPackage(*follower,122);assert(follower->aiPackage==0x19542);
+ leader->runtime.Die(123);Q240UpdateNpcPackage(*follower,123);assert(follower->aiPackage!=0x19542);
+ std::cout<<"Original Nathan/Manya Accompany selection, NAVM destination intent, distance, interruptions and target loss passed; Harden/Maggie blocked by separate resident cells\n";
+ // Harden's original assignment is rejected in its authored separate-cell state.
+ gCurrentCellFormId=0x3a29;gExteriorWorldspaceQ1890=0;nav=Navigation(gCurrentCellFormId,0,esm);sources.clear();assert(LoadFo3CellActors(gCurrentCellFormId,sources,esm));population.clear();
+ for(const auto& source:sources){Q230ActorVisual a;a.source=source;a.runtime.reference=source.refFormId;a.runtime.position=Q240ScenePosition({source.x,source.y,source.z});a.navigationGraph=nav;population.push_back(std::move(a));}
+ size_t h=SIZE_MAX;for(size_t i=0;i<population.size();++i)if(population[i].source.refFormId==0x3b45)h=i;assert(h!=SIZE_MAX);packageHour=10;
+ uint32_t selected=0;std::array<float,3> destination{};float radius=0;Q240SelectPackage(population[h],selected,destination,radius);assert(selected!=0x4009);
+ // Controlled canonical scene dependency, not an edited PACK/ACHR or teleport implementation.
+ sources.clear();assert(LoadFo3CellActors(0x3a33,sources,esm));Q230ActorVisual maggie;bool found=false;for(const auto& source:sources)if(source.refFormId==0x3b5c){maggie.source=source;found=true;}assert(found);
+ const auto root=Q240Centroid(*nav->meshes.front(),0);fo3player::ActorState target;target.cell=gCurrentCellFormId;target.position=root;assert(gPlayerSession->player.UpdateActor(0x3b5c,target));
+ maggie.runtime.reference=0x3b5c;maggie.runtime.position=Q240ScenePosition(root);maggie.runtime.activity=fo3npc::Activity::Package;maggie.stateRestored=true;maggie.aiPathGame={nav->meshes.front()->vertices[nav->meshes.front()->triangles.front().vertex[0]]};population.push_back(std::move(maggie));
+ assert(Q240SelectPackage(population[h],selected,destination,radius)&&selected==0x4009);
+ for(int i=0;i<1200;++i)Q240UpdateNpcPackage(population[h],i*.1);assert(population[h].aiPackage==0x4009);assert(Q240PlanarDistance(Q240GamePosition(population[h]),root)<=208.f);
+ packageHour=17;Q240UpdateNpcPackage(population[h],121);assert(population[h].aiPackage!=0x4009);
+ std::cout<<"Original Harden/Maggie Accompany: separate-cell rejection, unchanged original PACK with controlled co-residency, distance and schedule expiration passed\n";
+ activePackageTargets=&packageTargets;
+}
 static void SandboxCoverage(const char* esm){
  const auto& d=gPlayerSession->player.Definitions().pipboy;size_t assigned=0,activities=0,wander=0,blocked=0;
  for(uint32_t cell:{0xa96u,0x3a29u,0x3a2au,0x3a2cu,0x3a2du,0x3a2eu,0x3a2fu,0x3a31u,0x3a32u,0x3a33u,0x3a34u,0x3a35u,0x4357u}){
@@ -160,4 +195,4 @@ static void SandboxActivities(){
  a.runtime.Die(210);assert(scene->reservations->owners.empty());
  std::cout<<"Sandbox repeated chair activity, authored No Wandering/No Furniture, dialogue/combat release passed\n";
 }
-int main(int argc,char** argv){SandboxActivities();SyntheticFurniture();if(argc>2){meshRoot=argv[2];OriginalFurniture(argv[1]);OriginalFurniture(argv[1],true);Coverage(argv[1]);SandboxCoverage(argv[1]);}std::cout<<"Furniture package runtime tests passed\n";}
+int main(int argc,char** argv){AccompanyTests();AccompanyRecoveryTests();SandboxActivities();SyntheticFurniture();if(argc>2){meshRoot=argv[2];OriginalFurniture(argv[1]);OriginalFurniture(argv[1],true);Coverage(argv[1]);SandboxCoverage(argv[1]);OriginalAccompany(argv[1]);}std::cout<<"Furniture package runtime tests passed\n";}

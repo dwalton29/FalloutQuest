@@ -66,6 +66,10 @@ int main(int argc,char** argv){
   Q240AdvancePath(a,.1f,10);assert(a.runtime.procedure==fo3npc::Procedure::Blocked);
   Q240AdvancePath(a,.1f,13.1);assert(a.runtime.procedure==fo3npc::Procedure::RouteFailed&&a.aiPathGame.empty()&&a.aiSequence==0);
   wallBlocked=false;stepBlocked=false;Q240UpdateNpcPackage(a,14.2);assert(!a.aiPathGame.empty());
+  a=Prepare();c=gPlayerSession->player.Definitions();c.pipboy.packages[50].type=7;c.pipboy.packages[50].location={};c.pipboy.packages[50].target={0,60,20,true};c.weapons.actors[61].health=100;c.pipboy.targets[60].base=61;gPlayerSession=std::make_unique<Session>(c);
+  Q230ActorVisual accompanied;accompanied.source.refFormId=60;accompanied.source.baseFormId=61;accompanied.runtime.position=Q240ScenePosition({1100,2010,20});packageTargets.push_back(accompanied);a.runtime.yaw=-1.5707963f;wallBlocked=true;
+  for(int i=0;i<40;++i)Q240UpdateNpcPackage(a,i*.1);assert(a.runtime.packageRetryAfter.count(50)&&a.aiPathGame.empty());
+  wallBlocked=false;stepBlocked=false;Q240UpdateNpcPackage(a,6);assert(a.aiPackage==50&&!a.aiPathGame.empty()); // Accompany uses the same obstruction backoff and recovery.
   if(argc>1)OriginalDoors(argv[1]);
   std::cout<<"NPC local door animation wait, collision, keys, script rejection and XTEL isolation passed\n";
 }

@@ -12,6 +12,7 @@ struct Context {
   ActorContext speaker, target;
   bool talking=false;
   const std::unordered_map<uint64_t,float>* activationVariables=nullptr;
+  float randomPercent=-1; // Optional bounded caller sample for original CTDA 77.
 };
 using Diagnostic=std::function<void(const std::string&)>;
 bool Compare(float,float,uint8_t);

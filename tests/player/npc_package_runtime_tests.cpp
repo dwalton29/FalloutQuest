@@ -62,6 +62,7 @@ static bool TestNpcWorldGround(float,float,float referenceY,float* outY) {
   if(!q240GroundProbe||!outY)return false;
   q240GroundReference=referenceY;*outY=q240GroundResult;return true;
 }
+#define FO3_NPC_ACCOMPANY_TARGET(reference,point) Q240ResidentAccompanyTarget(*activePackageTargets,reference,point)
 #define FO3_NPC_PACKAGE_ACTOR_TARGET(reference,point) Q240ResidentPackageTarget(*activePackageTargets,reference,point)
 #define FO3_NPC_WORLD_GROUND(x,z,referenceY,outY) TestNpcWorldGround(x,z,referenceY,outY)
 #ifdef FO3_NPC_DOOR_HOST_TEST
@@ -70,6 +71,7 @@ static bool Q230PathBlocked(Q230ActorVisual&,float,float,float,float,float);
 #endif
 #include "npc/fo3-npc-package-runtime.inc"
 #undef FO3_NPC_WORLD_GROUND
+#undef FO3_NPC_ACCOMPANY_TARGET
 #undef FO3_NPC_PACKAGE_ACTOR_TARGET
 #ifdef FO3_NPC_DOOR_HOST_TEST
 #undef FO3_NPC_PATH_BLOCKED
@@ -214,7 +216,57 @@ static void Original(const char* path) {
   activePackageTargets=&packageTargets;
   std::cout<<"Original interiors loaded="<<interiorLoaded<<" executableAt07="<<interiorExecutable<<" movedPlanar="<<interiorMoved<<'\n';
 }
+static void AccompanyTests(){
+ auto a=Actor(7);auto c=gPlayerSession->player.Definitions();auto& p=c.pipboy.packages[50];p.location.valid=false;p.target={0,60,200,true};c.weapons.actors[61].health=100;c.pipboy.targets[60].base=61;
+ gPlayerSession=std::make_unique<Session>(std::move(c));Q230ActorVisual leader;leader.source.refFormId=60;leader.source.baseFormId=61;leader.runtime.reference=60;leader.runtime.position=Q240ScenePosition({1100,2100,20});leader.runtime.activity=fo3npc::Activity::Package;leader.aiPathGame={{1700,2700,20}};packageTargets.push_back(leader);
+ Q240UpdateNpcPackage(a,0);assert(a.aiPackage==50);const auto first=a.runtime.pathDestinationGame;
+ assert(Q240PlanarDistance(first,{1100,2100,20})>100&&Q240PlanarDistance(first,{1100,2100,20})<=200.01f);
+ packageTargets[0].aiPathGame={{1700,2100,20}};Q240UpdateNpcPackage(a,1);assert(a.runtime.pathDestinationGame!=first);
+ a.runtime.BeginDialogue();const auto root=a.runtime.position;Q240UpdateNpcPackage(a,2);assert(a.runtime.position==root);const auto priorIntent=a.runtime.pathDestinationGame;packageTargets[0].aiPathGame.back()[1]+=5;a.runtime.EndDialogue();Q240UpdateNpcPackage(a,2.1);assert(a.aiPackage==50&&a.runtime.pathDestinationGame!=priorIntent);
+ a.runtime.BeginCombat(0x14);Q240UpdateNpcPackage(a,3);a.runtime.EndCombat();Q240UpdateNpcPackage(a,3.1);assert(a.aiPackage==50);
+#ifdef FO3_NPC_FURNITURE_LOADING
+ gPlayerSession->saveBlocked=true;const auto paused=a.runtime.position;Q240UpdateNpcPackage(a,3.2);assert(a.runtime.position==paused&&a.aiPathGame.empty()&&a.runtime.procedure==fo3npc::Procedure::Interrupted);gPlayerSession->saveBlocked=false;Q240UpdateNpcPackage(a,3.3);assert(a.aiPackage==50&&!a.aiPathGame.empty());
+ FO3_NPC_FURNITURE_LOADING=true;Q240UpdateNpcPackage(a,3.4);assert(a.aiPathGame.empty());FO3_NPC_FURNITURE_LOADING=false;Q240UpdateNpcPackage(a,3.5);assert(a.aiPackage==50&&!a.aiPathGame.empty());
+#endif
+ packageTargets[0].runtime.Die(4);Q240UpdateNpcPackage(a,4);assert(a.aiPackage==0&&a.aiPathGame.empty());
+ // Restored targets use canonical roots until their live simulation is ready.
+ packageTargets[0].runtime.activity=fo3npc::Activity::Package;packageTargets[0].aiPathGame.clear();
+ fo3player::ActorState saved;saved.world=2;saved.cell=1;saved.position={1700,2700,20};assert(gPlayerSession->player.UpdateActor(60,saved));
+ std::array<float,3> current{},goal{};assert(Q240AccompanyDestination(a,gPlayerSession->player.Definitions().pipboy.packages.at(50),current,goal));assert(current==saved.position&&goal==saved.position);
+ packageTargets[0].stateRestored=true;assert(Q240AccompanyDestination(a,gPlayerSession->player.Definitions().pipboy.packages.at(50),current,goal));assert(current!=saved.position);
+ c=gPlayerSession->player.Definitions();c.pipboy.packages[50].schedule.valid=true;c.pipboy.packages[50].schedule.hour=12;c.pipboy.packages[50].schedule.duration=1;gPlayerSession=std::make_unique<Session>(c);
+ packageHour=14;Q240UpdateNpcPackage(a,5);assert(a.aiPackage==0);packageHour=12;Q240UpdateNpcPackage(a,6);assert(a.aiPackage==50);
+ packageTargets.clear();Q240UpdateNpcPackage(a,7);assert(a.aiPackage==0&&a.aiPathGame.empty());
+ c.pipboy.packages[50].target.value=0x14;gPlayerSession=std::make_unique<Session>(c);Q240UpdateNpcPackage(a,8);assert(a.aiPackage==0); // No invented player destination.
+ fo3dialogue::Context ctx;ctx.player=&gPlayerSession->player;fo3pipdata::Condition condition;condition.function=77;condition.flags=0xa0;condition.value=33;std::string error;
+ assert(!fo3dialogue::Conditions({condition},ctx,error)&&!error.empty());ctx.randomPercent=20;assert(fo3dialogue::Conditions({condition},ctx,error));ctx.randomPercent=70;assert(!fo3dialogue::Conditions({condition},ctx,error)&&error.empty());
+ std::cout<<"Accompany destination awareness, distance envelope, target changes/death and interruptions passed\n";
+}
+static void AccompanyRecoveryTests(){
+ auto a=Actor(7);auto c=gPlayerSession->player.Definitions();auto& p=c.pipboy.packages[50];p.location={};p.target={0,60,200,true};c.weapons.actors[61].health=100;c.pipboy.targets[60].base=61;
+ c.pipboy.targets[44].base=43;c.pipboy.packages[52]=c.pipboy.packages[50];c.pipboy.packages[52].type=6;c.pipboy.packages[52].location={0,60,0,true};c.pipboy.dialogueActors[43].packages={50,52};
+ gPlayerSession=std::make_unique<Session>(c);Q230ActorVisual leader;leader.source.refFormId=60;leader.source.baseFormId=61;leader.runtime.position=Q240ScenePosition({1100,2100,20});leader.runtime.activity=fo3npc::Activity::Package;leader.aiPathGame={{1700,2700,20}};packageTargets.push_back(leader);
+ auto b=a;b.source.refFormId=44;const auto untouched=packageTargets[0].runtime.position;
+ Q240UpdateNpcPackage(a,0);Q240UpdateNpcPackage(b,0);assert(a.aiPackage==50&&b.aiPackage==50&&packageTargets[0].runtime.position==untouched);
+ const auto bRoute=b.aiPathGame;packageTargets[0].aiPathGame={{1700,2100,20}};Q240UpdateNpcPackage(a,1);assert(b.aiPathGame==bRoute); // Independent intent and route ownership.
+ a.runtime.position=packageTargets[0].runtime.position;packageTargets[0].aiPathGame.clear();Q240UpdateNpcPackage(a,2);assert(a.runtime.procedure==fo3npc::Procedure::Waiting&&a.aiPathGame.empty());
+ packageTargets[0].runtime.position=Q240ScenePosition({1700,2700,20});Q240UpdateNpcPackage(a,3);assert(!a.aiPathGame.empty()); // Stopped target moved beyond distance: catch up.
+ a.runtime.position=packageTargets[0].runtime.position;packageTargets[0].aiPathGame={{1100,2100,20}};Q240UpdateNpcPackage(a,4);assert(a.runtime.pathDestinationGame[0]<1700); // Reverse destination.
+ a.aiPathIndex=a.aiPathGame.size();a.runtime.position=Q240ScenePosition({1010,2010,20});Q240UpdateNpcPackage(a,5);assert(a.aiPathIndex<a.aiPathGame.size()); // Displacement invalidates exhausted route.
+ packageTargets[0].runtime.position=Q240ScenePosition({9000,9000,20});packageTargets[0].aiPathGame.clear();Q240UpdateNpcPackage(a,6);assert(a.runtime.procedure==fo3npc::Procedure::RouteFailed&&a.aiPathGame.empty());Q240UpdateNpcPackage(a,6.1);assert(a.aiPackage==52);
+ packageTargets[0].runtime.position=untouched;Q240UpdateNpcPackage(a,9);assert(a.aiPackage==50); // Bounded retry recovers when NAVM target returns.
+ fo3player::ActorState target;target.cell=999;target.position={1100,2100,20};assert(gPlayerSession->player.UpdateActor(60,target));Q240UpdateNpcPackage(a,10);assert(a.aiPackage==52); // Canonical cell transition, no local retry loop.
+ target.world=2;target.cell=1;assert(gPlayerSession->player.UpdateActor(60,target));Q240UpdateNpcPackage(a,11);assert(a.aiPackage==50);
+ fo3player::ActorState saved;saved.world=2;saved.cell=1;saved.package=50;saved.position={1900,2900,20};assert(gPlayerSession->player.UpdateActor(42,saved));
+ const char* path="/tmp/fq-accompany-host-save";std::string error;assert(gPlayerSession->player.Save(path,error));auto restored=std::make_unique<Session>(c);assert(restored->player.Restore(path,error));std::remove(path);gPlayerSession=std::move(restored);
+ Q230ActorVisual fresh;fresh.source=a.source;fresh.navigationGraph=a.navigationGraph;const auto& canonical=gPlayerSession->player.Snapshot().actors.at(42);fresh.aiPackage=fresh.runtime.package=canonical.package;fresh.runtime.position=Q240ScenePosition(canonical.position);fresh.stateRestored=true;
+ Q240UpdateNpcPackage(fresh,12);assert(fresh.aiPackage==50&&!fresh.aiPathGame.empty()); // No ephemeral route survives save restoration.
+ auto dying=fresh;dying.runtime.Die(13);const auto dead=dying.runtime.position;Q240UpdateNpcPackage(dying,14);assert(dying.runtime.position==dead&&dying.aiPathGame.empty());
+ fo3pipdata::Condition gate;gate.function=72;gate.a=99;gate.value=1;c.pipboy.packages[50].conditions={gate};gPlayerSession=std::make_unique<Session>(c);Q240UpdateNpcPackage(fresh,15);assert(fresh.aiPackage==52);
+ std::cout<<"Accompany stop/reverse, two actors, exhausted routes, retry, cross-cell fallback, save/load and condition invalidation passed\n";
+}
 int main(int argc,char** argv) {
+  AccompanyTests();AccompanyRecoveryTests();
   fo3pipdata::PackageSchedule schedule;schedule.valid=true;schedule.hour=22;schedule.duration=4;
   assert(Q240ScheduleActive(schedule,23)&&Q240ScheduleActive(schedule,1)&&!Q240ScheduleActive(schedule,12));
   auto graph=Graph();float distance=0;

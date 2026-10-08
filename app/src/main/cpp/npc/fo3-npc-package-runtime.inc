@@ -6,6 +6,11 @@ static void Q240AiLogOnce(uint32_t actor,uint32_t package,const std::string& why
   if(gQ240AiDiagnostics.insert(key).second)
     Q6H_LOGI("NPC PACKAGE UNSUPPORTED actor=%08X package=%08X reason=%s",actor,package,why.c_str());
 }
+static void Q240AccompanyOnce(uint32_t actor,uint32_t package,uint32_t target,const char* event,const std::string& reason) {
+  const std::string key="Accompany:"+std::to_string(actor)+":"+std::to_string(package)+":"+event+":"+reason;
+  if(gQ240AiDiagnostics.insert(key).second)
+    Q6H_LOGI("NPC ACCOMPANY %s actor=%08X package=%08X target=%08X reason=%s",event,actor,package,target,reason.c_str());
+}
 static std::array<float,3> Q240GamePosition(const Q230ActorVisual& actor) {
   return {gSceneCenterXQ1730+actor.runtime.position[0]*FO3_UNITS_PER_METRE,
           gSceneCenterYQ1730-(actor.runtime.position[2]-SCENE_FORWARD)*FO3_UNITS_PER_METRE,
@@ -232,6 +237,16 @@ static bool Q240ResidentPackageTarget(const ResidentActors& actors,uint32_t refe
   }
   return false;
 }
+// Accompany knows a resident target's current package route destination,
+// whereas Follow resolves only its current root. Never predict player intent.
+template<class ResidentActors>
+static bool Q240ResidentAccompanyTarget(const ResidentActors& actors,uint32_t reference,std::array<float,3>& goal) {
+  std::array<float,3> current{};if(!Q240ResidentPackageTarget(actors,reference,current))return false;
+  for(const auto& target:actors)if(target.source.refFormId==reference){
+    goal=target.runtime.activity==fo3npc::Activity::Package&&target.aiPathIndex<target.aiPathGame.size()?target.aiPathGame.back():current;
+    return std::all_of(goal.begin(),goal.end(),[](float c){return std::isfinite(c);});
+  }return false;
+}
 static bool Q240PackageActorTarget(const Q230ActorVisual& actor,uint32_t reference,std::array<float,3>& point) {
   if(!gPlayerSession||reference==actor.source.refFormId||gPlayerSession->player.ActorHealth(reference)<=0)return false;
   if(reference==0x14)point={gSceneCenterXQ1730+gQ210Head[0]*FO3_UNITS_PER_METRE,
@@ -245,6 +260,14 @@ static bool Q240PackageActorTarget(const Q230ActorVisual& actor,uint32_t referen
 #endif
   }
   return std::all_of(point.begin(),point.end(),[](float coordinate){return std::isfinite(coordinate);});
+}
+static bool Q240AccompanyDestination(const Q230ActorVisual& actor,const fo3pipdata::PackageDefinition& p,std::array<float,3>& current,std::array<float,3>& goal) {
+  if(!Q240PackageActorTarget(actor,p.target.value,current)||p.target.value==0x14)return false;
+#ifdef FO3_NPC_ACCOMPANY_TARGET
+  return FO3_NPC_ACCOMPANY_TARGET(p.target.value,goal);
+#else
+  (void)goal;return false;
+#endif
 }
 static bool Q240ScheduleActive(const fo3pipdata::PackageSchedule& schedule,float hour) {
   if(!schedule.valid)return true;
@@ -334,10 +357,13 @@ static const fo3pipdata::PackageDefinition* Q240SelectPackage(
     if(retry!=actor.runtime.packageRetryAfter.end()&&actor.aiLastUpdate<retry->second)continue;
     const auto found=definitions.packages.find(packageId);if(found==definitions.packages.end())continue;
     const auto& package=found->second;
-    if(package.type!=3&&package.type!=4&&package.type!=1&&package.type!=2&&package.type!=6&&package.type!=14&&package.type!=13&&package.type!=5&&package.type!=12&&package.type!=10){Q240AiLogOnce(actor.source.refFormId,packageId,"package type "+std::to_string(package.type));continue;}
+    if(package.type!=7&&package.type!=3&&package.type!=4&&package.type!=1&&package.type!=2&&package.type!=6&&package.type!=14&&package.type!=13&&package.type!=5&&package.type!=12&&package.type!=10){Q240AiLogOnce(actor.source.refFormId,packageId,"package type "+std::to_string(package.type));continue;}
     if(package.type==13){std::string error;const auto* route=Q240PatrolRoute(actor,packageId,package,nullptr,&error);if(!route||route->empty()||!error.empty()){Q240AiLogOnce(actor.source.refFormId,packageId,error.empty()?"Patrol route unavailable":error);continue;}}
     if(package.type==2&&((package.location.type!=0&&package.location.type!=3)||!package.escortDistanceValid||!package.target.valid||package.target.type!=0||package.target.value!=0x14)){
       Q240AiLogOnce(actor.source.refFormId,packageId,"Escort requires authored distance and supported player reference target");continue;
+    }
+    if(package.type==7&&(package.location.valid||package.location2.valid||!package.target.valid||package.target.type!=0||package.target.radius<=0||package.target2.valid||package.typeFlags||package.procedureActions)){
+      Q240AccompanyOnce(actor.source.refFormId,packageId,package.target.value,"UNSUPPORTED","requires one resident actor reference and positive distance without location/action");continue;
     }
     if(package.type==10&&(package.location.valid||!package.target.valid||package.target.type!=0||package.target.radius<=0||package.procedureActions)){
       Q240AiLogOnce(actor.source.refFormId,packageId,"Flee requires an actor reference, positive minimum distance, no start location or procedure action");continue;
@@ -345,7 +371,7 @@ static const fo3pipdata::PackageDefinition* Q240SelectPackage(
     if(!package.combatStyleValid){Q240AiLogOnce(actor.source.refFormId,packageId,"malformed package combat style");continue;}
     if(package.scripted){Q240AiLogOnce(actor.source.refFormId,packageId,"package script");continue;}
     if(!Q240ScheduleActive(package.schedule,hour))continue;
-    if(!package.location.valid&&package.type!=1&&package.type!=10){Q240AiLogOnce(actor.source.refFormId,packageId,"missing PLDT");continue;}
+    if(!package.location.valid&&package.type!=1&&package.type!=7&&package.type!=10){Q240AiLogOnce(actor.source.refFormId,packageId,"missing PLDT");continue;}
     fo3dialogue::Context ctx;ctx.player=&gPlayerSession->player;
     const auto game=Q240GamePosition(actor);
     ctx.speaker={actor.source.refFormId,actor.source.baseFormId,gCurrentCellFormId,gExteriorWorldspaceQ1890,
@@ -354,6 +380,8 @@ static const fo3pipdata::PackageDefinition* Q240SelectPackage(
       gSceneCenterXQ1730+gQ210Head[0]*FO3_UNITS_PER_METRE,
       gSceneCenterYQ1730-(gQ210Head[2]-SCENE_FORWARD)*FO3_UNITS_PER_METRE,
       gSceneFloorZQ1730+(gQ210Head[1]-FLOOR_Y)*FO3_UNITS_PER_METRE,false,false};
+    // Quest policy: a stable Accompany random gate per actor/package/game minute.
+    if(package.type==7)ctx.randomPercent=float((actor.source.refFormId*2654435761u^packageId*2246822519u^uint32_t(fo3tod::WrapHour(hour)*60)*3266489917u)%100);
     std::string error;
     // GECK: Flee conditions gate entry but do not terminate an active package.
     const bool continuingFlee=package.type==10&&actor.aiPackage==packageId&&actor.aiSequence==1;
@@ -362,7 +390,8 @@ static const fo3pipdata::PackageDefinition* Q240SelectPackage(
       if(!error.empty())Q240AiLogOnce(actor.source.refFormId,packageId,error);
       continue;
     }
-    if(package.type==1||package.type==10) {
+    if(package.type==7){std::array<float,3> current{};if(!Q240AccompanyDestination(actor,package,current,anchor)){Q240AccompanyOnce(actor.source.refFormId,packageId,package.target.value,"UNSUPPORTED","target/destination unavailable in resident scene; cross-cell continuation requires XTEL milestone");continue;}}
+    else if(package.type==1||package.type==10) {
       if(!package.target.valid||package.target.type!=0){Q240AiLogOnce(actor.source.refFormId,packageId,"actor target resolver unsupported");continue;}
       if(!Q240PackageActorTarget(actor,package.target.value,anchor)){Q240AiLogOnce(actor.source.refFormId,packageId,"actor target is not alive and resident");continue;}
     } else if(package.type==13&&package.location.type==6u) {
@@ -416,6 +445,13 @@ static void Q240ResumePackageWait(Q230ActorVisual& actor,double now) {
 static void Q240AdoptPackage(Q230ActorVisual& actor,uint32_t packageId,const fo3pipdata::PackageDefinition& package,
                              const std::array<float,3>& anchor) {
   if(packageId!=actor.aiPackage) {
+    const auto previous=gPlayerSession->player.Definitions().pipboy.packages.find(actor.aiPackage);
+    if(previous!=gPlayerSession->player.Definitions().pipboy.packages.end()&&previous->second.type==7)
+      Q6H_LOGI("NPC ACCOMPANY COMPLETE actor=%08X package=%08X target=%08X reason=reselection",actor.source.refFormId,actor.aiPackage,previous->second.target.value);
+    if(package.type==7){
+      Q6H_LOGI("NPC ACCOMPANY BEGIN actor=%08X package=%08X target=%08X",actor.source.refFormId,packageId,package.target.value);
+      Q6H_LOGI("NPC ACCOMPANY TARGET actor=%08X package=%08X target=%08X distance=%d",actor.source.refFormId,packageId,package.target.value,package.target.radius);
+    }
     actor.runtime.blockedSince=-1;actor.runtime.procedure=fo3npc::Procedure::Executing;
     actor.runtime.sandboxLastTarget=0;actor.runtime.sandboxCycles=0;actor.runtime.sandboxNext=0;
     actor.aiPackage=packageId;actor.aiAnchorGame=anchor;actor.aiSequence=0;actor.aiPathGame.clear();actor.aiPathSurfaces.clear();actor.aiPathIndex=0;actor.runtime.navigationDoor=0;actor.aiRepathAt=0;
@@ -630,6 +666,34 @@ static void Q240AdvanceFleePackage(Q230ActorVisual& actor,const fo3pipdata::Pack
   if(actor.aiPathIndex>=actor.aiPathGame.size()){stop();return;}
   Q240AdvancePath(actor,dt,now);
 }
+static void Q240ClearAccompanyRoute(Q230ActorVisual& actor) {
+  actor.aiPathGame.clear();actor.aiPathSurfaces.clear();actor.aiPathIndex=0;
+  actor.runtime.navigationDoor=0;actor.runtime.nextDoorQuery=0;actor.runtime.blockedSince=-1;
+  actor.aiRepathAt=0;actor.runtime.nextPackageEvaluation=0;
+}
+static void Q240AdvanceAccompany(Q230ActorVisual& actor,const fo3pipdata::PackageDefinition& p,float dt,double now) {
+  if(actor.runtime.procedure==fo3npc::Procedure::Interrupted){Q240ClearAccompanyRoute(actor);actor.runtime.procedure=fo3npc::Procedure::Executing;}
+  std::array<float,3> leader{},goal{};
+  if(!Q240AccompanyDestination(actor,p,leader,goal)){Q240PackageRouteFailed(actor,now,"Accompany target/destination unavailable");return;}
+  const auto here=Q240GamePosition(actor);const float distance=float(p.target.radius);
+  // Quest policy: clip destination intent to the authored distance envelope
+  // around the leader. Outside it, first catch up to the leader's live root.
+  auto destination=goal;const float separation=Q240PlanarDistance(here,leader),intent=Q240PlanarDistance(goal,leader);
+  if(separation>distance)destination=leader;
+  else if(intent>distance){const float f=distance/intent;for(int i=0;i<3;++i)destination[i]=leader[i]+(goal[i]-leader[i])*f;}
+  if(Q240PlanarDistance(here,destination)<=8.f||(intent<=8.f&&separation<=distance)){
+    actor.runtime.speed=0;actor.runtime.animation=fo3npc::Animation::Idle;actor.runtime.procedure=fo3npc::Procedure::Waiting;
+    actor.aiPathGame.clear();actor.aiPathSurfaces.clear();actor.aiPathIndex=0;actor.runtime.navigationDoor=0;actor.runtime.blockedSince=-1;return;
+  }
+  if(now>=actor.aiRepathAt&&(actor.aiPathIndex>=actor.aiPathGame.size()||Q240PlanarDistance(actor.runtime.pathDestinationGame,destination)>16.f)){
+    const bool firstRoute=actor.aiRepathAt==0;
+    actor.aiRepathAt=now+.75;actor.runtime.pathDestinationGame=destination;actor.runtime.navigationDoor=0;actor.runtime.nextDoorQuery=0;actor.aiPathIndex=0;
+    std::string failure;
+    if(!Q240Path(*actor.navigationGraph,here,destination,actor.aiPathGame,&failure,&actor.aiPathSurfaces)||actor.aiPathGame.empty()||Q240PlanarDistance(actor.aiPathGame.back(),destination)>8.f){Q240AccompanyOnce(actor.source.refFormId,actor.aiPackage,p.target.value,"UNSUPPORTED","NAVM endpoint unavailable");Q240PackageRouteFailed(actor,now,"Accompany NAVM endpoint unavailable");return;}
+    Q6H_LOGI("NPC ACCOMPANY %s actor=%08X package=%08X target=%08X destination=(%.1f,%.1f,%.1f) distance=%d",firstRoute?"ROUTE":"REPATH",actor.source.refFormId,actor.aiPackage,p.target.value,destination[0],destination[1],destination[2],p.target.radius);
+  }
+  Q240AdvancePath(actor,dt,now);
+}
 static void Q240FurnitureExit(Q230ActorVisual& actor,double now) {
   auto& f=actor.runtime.furniture;const auto* slot=f.Selected();if(!slot){f.Clear();return;}
   if(slot->idleMarker){f.Clear();++actor.runtime.actionSerial;actor.aiPathGame.clear();actor.aiPathSurfaces.clear();actor.aiPathIndex=0;actor.runtime.navigationDoor=0;actor.runtime.sandboxNext=now+.5;actor.lastFrame=UINT64_MAX;return;}
@@ -706,10 +770,23 @@ static bool Q240AdvanceFurniture(Q230ActorVisual& actor,const fo3pipdata::Packag
 static void Q240AdvanceNpcPackage(Q230ActorVisual& actor,double now) {
   if(!gPlayerSession||actor.rigs.empty())return;
 #ifdef FO3_NPC_FURNITURE_LOADING
-  if(FO3_NPC_FURNITURE_LOADING||gPlayerSession->saveBlocked){if(actor.runtime.furniture.Active()){actor.runtime.furniture.Clear();++actor.runtime.actionSerial;actor.runtime.nextPackageEvaluation=0;actor.lastFrame=UINT64_MAX;}return;}
+  if(FO3_NPC_FURNITURE_LOADING||gPlayerSession->saveBlocked){
+    const auto active=gPlayerSession->player.Definitions().pipboy.packages.find(actor.aiPackage);
+    if(active!=gPlayerSession->player.Definitions().pipboy.packages.end()&&active->second.type==7){
+      Q240AccompanyOnce(actor.source.refFormId,actor.aiPackage,active->second.target.value,"INTERRUPT","loading/save suspension");
+      Q240ClearAccompanyRoute(actor);actor.runtime.procedure=fo3npc::Procedure::Interrupted;actor.runtime.speed=0;actor.runtime.animation=fo3npc::Animation::Idle;actor.aiLastUpdate=now;
+    }
+    if(actor.runtime.furniture.Active()){actor.runtime.furniture.Clear();++actor.runtime.actionSerial;actor.runtime.nextPackageEvaluation=0;actor.lastFrame=UINT64_MAX;}return;}
 #endif
-  if(!actor.runtime.Alive()){actor.runtime.furniture.Clear();return;}
+  if(!actor.runtime.Alive()){
+    const auto active=gPlayerSession->player.Definitions().pipboy.packages.find(actor.aiPackage);
+    if(active!=gPlayerSession->player.Definitions().pipboy.packages.end()&&active->second.type==7)Q240ClearAccompanyRoute(actor);
+    actor.runtime.furniture.Clear();return;
+  }
   if(actor.runtime.dialogue||actor.runtime.activity==fo3npc::Activity::Combat){
+    const auto active=gPlayerSession->player.Definitions().pipboy.packages.find(actor.aiPackage);
+    if(active!=gPlayerSession->player.Definitions().pipboy.packages.end()&&active->second.type==7)
+      Q240AccompanyOnce(actor.source.refFormId,actor.aiPackage,active->second.target.value,"INTERRUPT",actor.runtime.dialogue?"dialogue":"combat");
     if(actor.runtime.furniture.Active()){actor.runtime.furniture.RequestExit();Q240AdvanceFurniture(actor,nullptr,0,0,now);}return;
   }
   if(!actor.navigationGraph||actor.navigationGraph->triangleCount==0) {
@@ -737,13 +814,16 @@ static void Q240AdvanceNpcPackage(Q230ActorVisual& actor,double now) {
     if(found!=definitions.packages.end()){package=&found->second;packageId=found->first;anchor=state.evaluatedAnchor;radius=state.evaluatedRadius;}
   }
   // Actor targets remain live between condition scans, including death/unload.
-  if(package&&(package->type==1||package->type==10)&&!Q240PackageActorTarget(actor,package->target.value,anchor)) {
+  if(package&&(package->type==1||package->type==7||package->type==10)&&!Q240PackageActorTarget(actor,package->target.value,anchor)) {
     state.nextPackageEvaluation=0;state.procedure=fo3npc::Procedure::InvalidTarget;package=nullptr;
   }
   if(actor.runtime.furniture.Active()&&(actor.runtime.furniture.interrupted||!package||packageId!=actor.runtime.furniture.package)){
     if(Q240AdvanceFurniture(actor,package,packageId,dt,now))return;
   }
   if(!package) {
+    const auto previous=gPlayerSession->player.Definitions().pipboy.packages.find(actor.aiPackage);
+    if(previous!=gPlayerSession->player.Definitions().pipboy.packages.end()&&previous->second.type==7)
+      Q6H_LOGI("NPC ACCOMPANY COMPLETE actor=%08X package=%08X target=%08X reason=ineligible-or-unavailable",actor.source.refFormId,actor.aiPackage,previous->second.target.value);
     if(actor.runtime.procedure!=fo3npc::Procedure::Unsupported)
       Q6H_LOGI("NPC AI IDLE actor=%08X base=%08X reason=no-executable-package",actor.source.refFormId,actor.source.baseFormId);
     actor.runtime.procedure=fo3npc::Procedure::Unsupported;
@@ -801,6 +881,7 @@ static void Q240AdvanceNpcPackage(Q230ActorVisual& actor,double now) {
     }
   }
   if(package->type==4||package->type==3){Q240AdvanceFurniture(actor,package,packageId,dt,now);return;}
+  if(package->type==7){Q240AdvanceAccompany(actor,*package,dt,now);return;}
   if(package->type==10){Q240AdvanceFleePackage(actor,*package,anchor,dt,now);return;}
   if(package->type==2){Q240AdvancePlayerEscort(actor,*package,anchor,dt,now);return;}
   if(package->type==1&&Q240PlanarDistance(Q240GamePosition(actor),anchor)<=std::max(0,package->target.radius)){
