@@ -26,7 +26,7 @@ inline bool Ensure(){
   else {
     Fo3RgbaTexture atlas;
     if(!LoadFalloutTextureRgba(s.sprite.atlasPath,atlas))return false;
-    s.texture=fo3hudassets::UploadTexture(atlas.width,atlas.height,atlas.pixels.data());
+    s.texture=fo3hudassets::UploadTexture(atlas.width,atlas.height,atlas.rgba.data());
     s.ownsTexture=true;
   }
   if(!s.texture)return false;
