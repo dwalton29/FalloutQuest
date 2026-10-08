@@ -724,6 +724,7 @@ struct Q230ActorVisual {
     Fo3NpcActorQ230 source;
     fo3npc::RuntimeState runtime;
     std::array<fo3anim::Clip,size_t(fo3npc::Animation::Count)> animations;
+    std::array<fo3anim::Clip,6> authoredHitClips; // Head, torso, arms, legs; loaded before scene publish.
     int activeAnimation=0,headBone=-1,chestBone=-1;
     std::vector<fo3anim::Transform> blendFrom;
     double blendStart=-1;
@@ -760,6 +761,7 @@ void Q230PrepareActors(uint32_t cell, uint32_t worldspace,
 bool Fo3DialogueFocus();
 void EndFo3Dialogue(const char* reason);
 void Q230UpdateActor(Q230ActorVisual&);
+void Q230ActorHitReaction(uint32_t target,uint8_t region);
 void Q230CacheDialogueAnimations(Q230ActorVisual&,const fo3pipdata::Definitions*);
 void Q230CacheCombat(Q230ActorVisual&,const fo3player::Catalog*);
 bool Q230LiveBounds(Q230ActorVisual& actor,std::array<float,3>& lo,std::array<float,3>& hi);
