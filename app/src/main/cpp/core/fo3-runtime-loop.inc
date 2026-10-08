@@ -1473,8 +1473,20 @@ private:
                     loadingHead.orientation.x,loadingHead.orientation.y,loadingHead.orientation.z,loadingHead.orientation.w);
                 ++gSceneLoadFrame;
                 SyncInput(frameState.predictedDisplayTime);
-                if (!gFo3Environment.interior) UpdateFo3TimeOfDay(0.0f,
-                    static_cast<int64_t>(frameState.predictedDisplayTime));
+                // One world clock shared by exterior lighting, resident PACK
+                // selection and unloaded XTEL scheduling. Never fast-forward
+                // across a loading screen or headset focus interruption.
+                const int64_t clockNs=static_cast<int64_t>(frameState.predictedDisplayTime);
+                static int64_t previousWorldClockNs=0;
+                if (gPlayerSession && !gPlayerSession->saveBlocked && gSceneReady &&
+                    !IsFo3LoadingVisible() && sessionState_==XR_SESSION_STATE_FOCUSED &&
+                    previousWorldClockNs>0 && clockNs>previousWorldClockNs) {
+                    const double seconds=std::clamp(double(clockNs-previousWorldClockNs)*1e-9,0.0,0.25);
+                    gPlayerSession->player.AdvanceGameClock(seconds);
+                }
+                previousWorldClockNs=clockNs;
+                if (gPlayerSession) fo3tod::gTestHour=gPlayerSession->player.Snapshot().gameHour;
+                if (!gFo3Environment.interior) UpdateFo3TimeOfDay(0.0f,clockNs);
                 if (!gFo3Environment.interior && fo3tod::gRuntime.ready) {
                     UpdateFo3FogPower(
                         fo3tod::gTestHour,
