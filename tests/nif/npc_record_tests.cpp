@@ -95,6 +95,28 @@ int main(int argc, char **argv) {
   Sub(armor, "MOD3", Text("female-worn.nif"));
   Sub(armor, "BMDT", Word(4));
   Add(esm, Record("ARMO", 20, armor));
+  // Original-format nested LVLI clothing: source -> child list -> worn ARMO.
+  Bytes extraArmor;
+  Sub(extraArmor, "EDID", Text("LevelledOutfit"));
+  Sub(extraArmor, "MODL", Text("levelled-male.nif"));
+  Sub(extraArmor, "MOD3", Text("levelled-female.nif"));
+  Sub(extraArmor, "BMDT", Word(0x600));
+  Add(esm, Record("ARMO", 21, extraArmor));
+  auto levelList=[&](uint32_t id,uint8_t none,uint8_t flags,
+                     const std::vector<std::pair<uint16_t,uint32_t>>& entries){
+    Bytes b;
+    Sub(b,"LVLD",Bytes{none});Sub(b,"LVLF",Bytes{flags});
+    for(const auto& [level,form]:entries){
+      Bytes e;U16(e,level);U16(e,0);U32(e,form);U16(e,1);U16(e,0);
+      Sub(b,"LVLO",e);
+    }
+    Add(esm,Record("LVLI",id,b));
+  };
+  levelList(40,0,3,{{1,41}}); // linked nested LVLI
+  levelList(41,0,3,{{1,21}});
+  levelList(42,100,3,{{1,21}}); // authored always-no-choice
+  levelList(43,0,3,{{5,21}}); // unsupported higher-level outfit
+  levelList(44,0,3,{{1,44}}); // cyclic list must terminate
   auto npc = [&](uint32_t id, bool female, uint16_t templateFlags = 0) {
     Bytes b, acbs(24);
     acbs[0] = female ? 1 : 0;
@@ -107,6 +129,11 @@ int main(int argc, char **argv) {
     Bytes inv = Word(20);
     U32(inv, 1);
     Sub(b, "CNTO", inv);
+    if(id==30||id==31){
+      for(uint32_t list: {40u,42u,43u,44u}){
+        Bytes source=Word(list);U32(source,1);Sub(b,"CNTO",source);
+      }
+    }
     if (templateFlags)
       Sub(b, "TPLT", Word(30));
     Add(esm, Record("NPC_", id, b));
@@ -155,6 +182,25 @@ int main(int argc, char **argv) {
   assert(actors[1].female && actors[1].raceHeadModels[0] == "female-head.nif");
   assert(actors[1].raceBodyModels[0] == "female-body.nif");
   assert(actors[1].inventory[0].modelPath == "female-worn.nif");
+  auto findOutfit=[](const Fo3NpcActorQ230& actor,uint32_t form){
+    for(const auto& item:actor.inventory)
+      if(item.formId==form&&item.recordType=="ARMO")return item.modelPath;
+    return std::string{};
+  };
+  assert(findOutfit(actors[0],21)=="levelled-male.nif");
+  assert(findOutfit(actors[1],21)=="levelled-female.nif");
+  for(const auto& actor: {actors[0],actors[1]}){
+    assert(actor.inventory.size()==9); // direct, four LVLI sources, one resolved
+    assert(findOutfit(actor,21).size()>0);
+    for(const auto& item:actor.inventory)
+      if(item.recordType=="ARMO") assert(item.formId==20||item.formId==21);
+  }
+  const auto firstSelection=actors[1].inventory;
+  std::vector<Fo3NpcActorQ230> repeated;
+  assert(LoadFo3CellActors(77,repeated,path.string()));
+  assert(repeated.size()==3&&repeated[1].inventory.size()==firstSelection.size());
+  for(size_t i=0;i<firstSelection.size();++i)
+    assert(repeated[1].inventory[i].formId==firstSelection[i].formId);
   assert(!actors[2].female && actors[2].raceHeadModels[0] == "male-head.nif");
   assert(!LoadFo3CellActors(78, actors, path.string()) && actors.empty());
   std::vector<Fo3NpcNavMeshQ240> navigation;
