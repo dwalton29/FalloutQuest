@@ -524,6 +524,20 @@ int main(int argc,char** argv) {
     assert(!Q240AlternatePortalWaypoint(walker));
     assert(walker.aiPathGame.back()==home);
   }
+  {
+    auto dated=Actor(6);
+    fo3pipdata::PackageSchedule calendar;
+    calendar.valid=true;calendar.hour=12;calendar.duration=2;
+    calendar.month=7;calendar.date=17;
+    calendar.weekday=fo3schedule::Weekday({2277,7,17});
+    assert(Q240ScheduleActive(calendar,12.5f));
+    assert(!Q240ScheduleActive(calendar,14.5f));
+    calendar.month=8;assert(!Q240ScheduleActive(calendar,12.5f));calendar.month=7;
+    calendar.date=18;assert(!Q240ScheduleActive(calendar,12.5f));calendar.date=17;
+    calendar.weekday=(calendar.weekday+1)%7;
+    assert(!Q240ScheduleActive(calendar,12.5f));
+    (void)dated;
+  }
   if(argc>1)Original(argv[1]);
   std::cout<<"Production NPC package traversal, surface projection, shared portals, Travel and repathing passed\n";
   return 0;
