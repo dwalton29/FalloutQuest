@@ -1071,7 +1071,18 @@ static bool Q240AdvanceFurniture(Q230ActorVisual& actor,const fo3pipdata::Packag
     const auto& slot=f.scene->slots[target];auto lease=std::make_shared<fo3furniture::Lease>();
     if(!lease->Acquire(f.scene->reservations,slot.reference,slot.index,actor.source.refFormId)){Q240PackageRouteFailed(actor,now,"furniture reservation conflict");return true;}
     f.slot=target;f.lease=std::move(lease);f.phase=fo3furniture::Phase::Approach;f.started=now;f.package=id;
-    if(slot.idleMarker){for(size_t i=0;i<slot.idles.size();++i)if(Q240MarkerIdleEligible(actor,slot.idles[i].form)){f.idleIndex=i;break;}}
+    if(slot.idleMarker){
+      // The marker may reference several original Bethesda IDLE sequences.
+      // Select among those passing their CTDA gates instead of always using
+      // the first eligible animation on every Sandbox visit.
+      std::vector<size_t> eligible;
+      for(size_t i=0;i<slot.idles.size();++i)
+        if(Q240MarkerIdleEligible(actor,slot.idles[i].form))eligible.push_back(i);
+      if(eligible.empty()){f.Clear();Q240PackageRouteFailed(actor,now,"sandbox idle conditions no longer eligible");return true;}
+      const uint32_t choice=actor.source.refFormId*2654435761u ^
+        slot.reference*2246822519u ^ actor.runtime.sandboxCycles*3266489917u;
+      f.idleIndex=eligible[choice%eligible.size()];
+    }
     Q6H_LOGI("NPC ACTIVITY SELECT actor=%08X package=%08X target=%08X marker=%d reservation=1",actor.source.refFormId,id,slot.reference,slot.idleMarker);
     f.anchor={slot.alignment[12],slot.alignment[13],slot.alignment[14]};f.yaw=std::atan2(-slot.alignment[4],slot.alignment[5]);
     std::string failure;
