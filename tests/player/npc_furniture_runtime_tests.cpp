@@ -190,8 +190,17 @@ static void SandboxActivities(){
  // Marker shares the same lease and approach/orientation owner, with original clip duration.
  auto markerCatalog=gPlayerSession->player.Definitions();markerCatalog.pipboy.packages[50].typeFlags=48;gPlayerSession=std::make_unique<Session>(std::move(markerCatalog));
  fo3furniture::Slot marker=slot;marker.reference=56;marker.idleMarker=true;marker.program.reset();marker.idleTimer=2;
- fo3furniture::MarkerIdle idle;idle.form=70;idle.clip.stop=1;idle.clip.frequency=1;idle.clip.cycle=2;idle.clip.tracks={t};marker.idles={idle};scene->slots.push_back(marker);
- a.runtime.nextPackageEvaluation=0;for(int i=1900;i<2100;++i)Q240UpdateNpcPackage(a,i*.1);assert(a.runtime.sandboxLastTarget==56);
+ fo3furniture::MarkerIdle idle;idle.form=70;idle.clip.stop=1;idle.clip.frequency=1;idle.clip.cycle=2;idle.clip.tracks={t};
+ auto alternate=idle;alternate.form=71;marker.idles={idle,alternate};scene->slots.push_back(marker);
+ bool seenIdles[2]{};
+ a.runtime.nextPackageEvaluation=0;
+ for(int i=1900;i<2140;++i){
+   Q240UpdateNpcPackage(a,i*.1);
+   const auto& state=a.runtime.furniture;
+   if(state.Active()&&state.Selected()&&state.Selected()->reference==56&&state.phase==fo3furniture::Phase::Loop)
+     if(state.idleIndex<2)seenIdles[state.idleIndex]=true;
+ }
+ assert(a.runtime.sandboxLastTarget==56&&seenIdles[0]&&seenIdles[1]);
  a.runtime.Die(210);assert(scene->reservations->owners.empty());
  std::cout<<"Sandbox repeated chair activity, authored No Wandering/No Furniture, dialogue/combat release passed\n";
 }
