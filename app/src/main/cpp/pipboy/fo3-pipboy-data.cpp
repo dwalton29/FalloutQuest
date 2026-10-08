@@ -77,7 +77,7 @@ std::string VoicePath(const Definitions &d, const Info &i, const Response &r,
   return "@voice:" + v->second + ":" + tail;
 }
 bool Relevant(const std::string &t) {
-  return t == "FURN" || t == "RADS" || t == "WRLD" || t == "PERK" || t == "QUST" ||
+  return t == "ANIO" || t == "IDLM" || t == "FURN" || t == "RADS" || t == "WRLD" || t == "PERK" || t == "QUST" ||
          t == "MGEF" || t == "TACT" || t == "INFO" || t == "DIAL" ||
          t == "RACE" || t == "FLST" || t == "IDLE" || t == "SOUN" || t == "VTYP" || t == "SCPT" || t == "NPC_" || t == "PACK";
 }
@@ -94,7 +94,15 @@ void Decode(Definitions &d, const std::string &t, uint32_t id, uint32_t flags,
   if(t=="FLST") {for(auto& v:s)if(v.type=="LNAM"&&v.n==4)d.formLists[id].push_back(U(&v));}
   else if(t=="RACE"){auto voices=Find(s,"VTCK");if(voices&&voices->n>=8)d.raceVoices[id]={U(voices),U(voices,4)};auto data=Find(s,"DATA");if(data&&data->n==36&&(U(data,32)&4))d.childRaces.insert(id);}
   else if(t=="FURN") {auto& f=d.furniture[id];f.model=Text(s,"MODL");f.editor=editor;auto m=Find(s,"MNAM");f.markers=U(m);f.valid=m&&m->n==4&&!f.model.empty();}
-  else if(t=="IDLE") d.idleModels[id]=Text(s,"MODL");
+  else if(t=="IDLE") { d.idleModels[id]=Text(s,"MODL");d.idleParents[id]=U(Find(s,"ANAM")); for(const auto& v:s)if(v.type=="CTDA")d.idleConditions[id].push_back(Cond(v)); }
+  else if(t=="ANIO") {const auto idle=U(Find(s,"DATA"));if(idle)d.idleAnimationObjects.insert(idle);}
+  else if(t=="IDLM") {
+    auto& m=d.idleMarkers[id];const auto f=Find(s,"IDLF"),c=Find(s,"IDLC"),timer=Find(s,"IDLT"),a=Find(s,"IDLA");
+    if(f&&f->n==1&&c&&(c->n==1||c->n==4)&&timer&&timer->n==4&&a&&a->n==uint32_t(c->p[0])*4){
+      m.flags=f->p[0];m.timer=fo3esm::ReadF32(timer->p);m.valid=std::isfinite(m.timer)&&m.timer>=0&&(m.flags&~5u)==0;
+      for(uint32_t off=0;off<a->n;off+=4)m.animations.push_back(U(a,off));
+    }
+  }
   else if (t == "RADS") {
     const auto data = Find(s, "DATA");
     if (data && data->n == 8)
@@ -519,7 +527,7 @@ void Finalize(Definitions &d) {
     if(entry.second.target2.valid&&entry.second.target2.type==0)retain.insert(entry.second.target2.value);
   }
   for (auto &p : d.targets)
-    if(d.furniture.count(p.second.base))retain.insert(p.first);
+    if(d.furniture.count(p.second.base)||d.idleMarkers.count(p.second.base))retain.insert(p.first);
   for (auto &p : d.targets)
     if (d.doorBases.count(p.second.base))
       d.doors[p.second.cell].push_back(p.second);

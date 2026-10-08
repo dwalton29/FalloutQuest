@@ -184,7 +184,12 @@ struct RadiationStage {
   uint32_t threshold = 0, spell = 0;
 };
 struct FurnitureDefinition { std::string model,editor; uint32_t markers=0; bool valid=false; };
+struct IdleMarkerDefinition { uint8_t flags=0; float timer=0; bool valid=false; std::vector<uint32_t> animations; };
 struct Definitions {
+  std::unordered_map<uint32_t,IdleMarkerDefinition> idleMarkers;
+  std::unordered_map<uint32_t,std::vector<Condition>> idleConditions;
+  std::unordered_map<uint32_t,uint32_t> idleParents;
+  std::unordered_set<uint32_t> idleAnimationObjects;
   std::unordered_map<uint32_t,FurnitureDefinition> furniture;
   std::unordered_set<uint32_t> childRaces;
   std::unordered_map<uint32_t, RadiationStage> radiationStages;

@@ -48,7 +48,8 @@ inline fo3anim::Transform Root(const fo3anim::Clip& clip,double time,const fo3an
   if(!fo3anim::Sample(s,clip,time,p,nullptr,fo3anim::RootPolicy::Furniture,retained)||p.local.empty())return {};
   return p.local[0];
 }
-struct Slot {uint32_t reference=0,base=0;size_t index=0;Marker marker;fo3pipdata::Placement placement;fo3anim::Matrix alignment=fo3anim::Identity();std::shared_ptr<const Program> program;bool sleep=false;};
+struct MarkerIdle { uint32_t form=0; fo3anim::Clip clip; };
+struct Slot { bool idleMarker=false; float idleTimer=0; std::vector<MarkerIdle> idles; uint32_t reference=0,base=0;size_t index=0;Marker marker;fo3pipdata::Placement placement;fo3anim::Matrix alignment=fo3anim::Identity();std::shared_ptr<const Program> program;bool sleep=false;};
 struct Scene {std::vector<Slot> slots;std::shared_ptr<Reservations> reservations=std::make_shared<Reservations>();};
 template<class Loader>
 inline std::shared_ptr<Scene> BuildScene(const fo3pipdata::Definitions& d,uint32_t cell,uint32_t world,Loader&& load,bool includeEat=false) {
@@ -72,15 +73,35 @@ inline std::shared_ptr<Scene> BuildScene(const fo3pipdata::Definitions& d,uint32
       Slot slot;slot.reference=r.first;slot.base=p.base;slot.index=i;slot.marker=m;slot.placement=p;slot.alignment=Alignment(p,m);slot.program=program;slot.sleep=sleep;scene->slots.push_back(std::move(slot));
     }
   }
+  // Cache decoded marker clips once per resident scene. Conditions are checked
+  // by the canonical dialogue evaluator at selection time, never bypassed.
+  std::unordered_map<uint32_t,std::vector<MarkerIdle>> markerClips;
+  for(const auto& r:d.targets){const auto& p=r.second;
+    if(p.world!=world||(!world&&p.cell!=cell)||(p.flags&0x820)||p.parent||std::fabs(p.rx)>1e-5f||std::fabs(p.ry)>1e-5f||std::fabs(p.scale-1)>1e-5f)continue;
+    const auto m=d.idleMarkers.find(p.base);if(m==d.idleMarkers.end()||!m->second.valid||m->second.flags)continue; // Sequenced/do-once markers need separate semantics.
+    auto cached=markerClips.find(p.base);
+    if(cached==markerClips.end()){
+      std::vector<MarkerIdle> ready;
+      for(auto id:m->second.animations){if(d.idleAnimationObjects.count(id))continue;auto model=d.idleModels.find(id);if(model==d.idleModels.end())continue;
+        std::vector<uint8_t> bytes;MarkerIdle idle;idle.form=id;
+        if(!load(model->second,bytes)||!fo3anim::DecodeClip(bytes,idle.clip)||idle.clip.tracks.empty()||idle.clip.frequency<=0||idle.clip.stop<=idle.clip.start||(idle.clip.stop-idle.clip.start)/idle.clip.frequency>60)continue;
+        bool props=false;for(const auto& event:idle.clip.textKeys){auto key=event.text;for(auto& c:key)c=char(std::tolower((unsigned char)c));if(key.find("animobject")!=std::string::npos||key.find("attach")!=std::string::npos||key.find("detach")!=std::string::npos)props=true;}
+        if(!props)ready.push_back(std::move(idle));
+      }
+      cached=markerClips.emplace(p.base,std::move(ready)).first;
+    }
+    if(cached->second.empty())continue;
+    Slot slot;slot.reference=r.first;slot.base=p.base;slot.placement=p;slot.alignment=Placement(p);slot.idleMarker=true;slot.idleTimer=m->second.timer;slot.idles=cached->second;scene->slots.push_back(std::move(slot));
+  }
   std::sort(scene->slots.begin(),scene->slots.end(),[](const Slot& a,const Slot& b){return a.reference<b.reference||(a.reference==b.reference&&a.index<b.index);});return scene;
 }
 enum class Phase {None,Approach,Enter,Loop,Exit};
 struct State {
   std::shared_ptr<const Scene> scene;std::shared_ptr<Lease> lease;size_t slot=SIZE_MAX;Phase phase=Phase::None;double started=0;bool interrupted=false;
-  fo3anim::Transform retainedRoot;std::array<float,3> anchor{};float yaw=0;uint32_t package=0;
+  fo3anim::Transform retainedRoot;std::array<float,3> anchor{};float yaw=0;uint32_t package=0;size_t idleIndex=SIZE_MAX;double until=0;
   bool Active()const{return phase!=Phase::None;}
   const Slot* Selected()const{return scene&&slot<scene->slots.size()?&scene->slots[slot]:nullptr;}
   void RequestExit(){if(Active())interrupted=true;}
-  void Clear(){interrupted=false;lease.reset();slot=SIZE_MAX;phase=Phase::None;retainedRoot={};package=0;}
+  void Clear(){interrupted=false;lease.reset();slot=SIZE_MAX;phase=Phase::None;retainedRoot={};package=0;idleIndex=SIZE_MAX;until=0;}
 };
 }

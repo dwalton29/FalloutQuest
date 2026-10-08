@@ -1,3 +1,4 @@
+#include <limits>
 static std::unordered_set<std::string> gQ240AiDiagnostics;
 static void Q240AiLogOnce(uint32_t actor,uint32_t package,const std::string& why) {
   char prefix[40];std::snprintf(prefix,sizeof(prefix),"%08X:%08X:",actor,package);
@@ -275,7 +276,7 @@ static size_t Q240FurnitureTarget(const Q230ActorVisual& actor,const fo3pipdata:
   else if(p.location.type==3)anchor={actor.source.x,actor.source.y,actor.source.z};
   else return SIZE_MAX;
   size_t best=SIZE_MAX;float distance=INFINITY;
-  for(size_t i=0;i<f.scene->slots.size();++i){const auto& slot=f.scene->slots[i];if(slot.sleep!=(p.type==4))continue;
+  for(size_t i=0;i<f.scene->slots.size();++i){const auto& slot=f.scene->slots[i];if(slot.idleMarker||slot.sleep!=(p.type==4))continue;
     if(exact&&slot.reference!=p.location.value)continue;
     if(!exact&&p.location.type!=1&&Q240PlanarDistance(anchor,{slot.placement.x,slot.placement.y,slot.placement.z})>std::max(0,p.location.radius))continue;
     if(slot.placement.owner&&slot.placement.owner!=actor.source.baseFormId&&(!def||!def->factions.count(slot.placement.owner)))continue;
@@ -283,6 +284,43 @@ static size_t Q240FurnitureTarget(const Q230ActorVisual& actor,const fo3pipdata:
     if(owner!=f.scene->reservations->owners.end()&&owner->second!=actor.source.refFormId)continue;
     const float candidate=Q240PlanarDistance(here,{slot.alignment[12],slot.alignment[13],slot.alignment[14]});if(candidate<distance){distance=candidate;best=i;}
   }return best;
+}
+// Canonical CTDA evaluation includes every parent IDLE gate. Unsupported
+// conditions exclude that animation rather than treating it as unconditional.
+static bool Q240MarkerIdleEligible(const Q230ActorVisual& actor,uint32_t idle) {
+  const auto& d=gPlayerSession->player.Definitions().pipboy;
+  fo3dialogue::Context ctx;ctx.player=&gPlayerSession->player;const auto game=Q240GamePosition(actor);
+  ctx.speaker={actor.source.refFormId,actor.source.baseFormId,gCurrentCellFormId,gExteriorWorldspaceQ1890,actor.aiPackage,game[0],game[1],game[2],false,true};
+  std::unordered_set<uint32_t> seen;
+  while(idle){if(!seen.insert(idle).second||seen.size()>64)return false;
+    auto c=d.idleConditions.find(idle);std::string error;
+    if(c!=d.idleConditions.end()&&(!fo3dialogue::Conditions(c->second,ctx,error)||!error.empty()))return false;
+    const auto parent=d.idleParents.find(idle);idle=parent==d.idleParents.end()?0:parent->second;
+  }return true;
+}
+static size_t Q240SandboxTarget(const Q230ActorVisual& actor,const fo3pipdata::PackageDefinition& p,const std::array<float,3>& anchor,float radius) {
+  const auto& f=actor.runtime.furniture;if(!f.scene)return SIZE_MAX;
+  const auto& d=gPlayerSession->player.Definitions().pipboy;const auto* def=fo3pipdata::ActorCategory(d,actor.source.baseFormId,1);
+  std::vector<size_t> choices;
+  for(size_t i=0;i<f.scene->slots.size();++i){const auto& slot=f.scene->slots[i];
+    if(slot.sleep||(slot.idleMarker?(p.typeFlags&8u)||(p.flags&0x01000000u):(p.typeFlags&16u)))continue;
+    if(!slot.idleMarker&&def&&d.childRaces.count(def->race))continue;
+    if(Q240PlanarDistance(anchor,{slot.placement.x,slot.placement.y,slot.placement.z})>radius)continue;
+    if(slot.placement.owner&&slot.placement.owner!=actor.source.baseFormId&&(!def||!def->factions.count(slot.placement.owner)))continue;
+    const auto owner=f.scene->reservations->owners.find(uint64_t(slot.reference)<<32);
+    if(owner!=f.scene->reservations->owners.end()&&owner->second!=actor.source.refFormId)continue;
+    if(slot.idleMarker&&!std::any_of(slot.idles.begin(),slot.idles.end(),[&](const auto& idle){return Q240MarkerIdleEligible(actor,idle.form);}))continue;
+    choices.push_back(i);
+  }
+  if(choices.size()>1)choices.erase(std::remove_if(choices.begin(),choices.end(),[&](size_t i){return f.scene->slots[i].reference==actor.runtime.sandboxLastTarget;}),choices.end());
+  if(choices.empty())return SIZE_MAX;
+  const uint32_t hash=actor.source.refFormId*2654435761u^actor.aiPackage*2246822519u^actor.runtime.sandboxCycles*3266489917u;
+  // Bound route probes on the existing activity-selection cadence. A bad marker
+  // cannot monopolise selection or strand actors that have other activities.
+  for(size_t attempt=0;attempt<std::min(size_t(8),choices.size());++attempt){const size_t i=choices[(hash+attempt)%choices.size()];const auto& a=f.scene->slots[i].alignment;
+    std::vector<std::array<float,3>> route;
+    if(actor.navigationGraph&&Q240Path(*actor.navigationGraph,Q240GamePosition(actor),{a[12],a[13],a[14]},route)&&!route.empty()&&Q240PlanarDistance(route.back(),{a[12],a[13],a[14]})<=8.f)return i;
+  }return SIZE_MAX;
 }
 static const fo3pipdata::PackageDefinition* Q240SelectPackage(
     Q230ActorVisual& actor,uint32_t& id,std::array<float,3>& anchor,float& radius) {
@@ -342,10 +380,11 @@ static const fo3pipdata::PackageDefinition* Q240SelectPackage(
         Q240AiLogOnce(actor.source.refFormId,packageId,"destination requires another scene/cell");continue;
       }
       anchor={target->second.x,target->second.y,target->second.z};
-    } else if(package.location.type==2u) anchor=game;
+    } else if(package.location.type==1u&&package.type==12&&package.location.value==gCurrentCellFormId) anchor=game;
+    else if(package.location.type==2u) anchor=game;
     else if(package.location.type==3u) anchor={actor.source.x,actor.source.y,actor.source.z};
     else {Q240AiLogOnce(actor.source.refFormId,packageId,"PLDT type "+std::to_string(package.location.type));continue;}
-    radius=float(std::max(0,package.location.radius));id=packageId;return &package;
+    radius=package.type==12&&package.location.type==1?std::numeric_limits<float>::max():float(std::max(0,package.location.radius));id=packageId;return &package;
   }
   return nullptr;
 }
@@ -378,6 +417,7 @@ static void Q240AdoptPackage(Q230ActorVisual& actor,uint32_t packageId,const fo3
                              const std::array<float,3>& anchor) {
   if(packageId!=actor.aiPackage) {
     actor.runtime.blockedSince=-1;actor.runtime.procedure=fo3npc::Procedure::Executing;
+    actor.runtime.sandboxLastTarget=0;actor.runtime.sandboxCycles=0;actor.runtime.sandboxNext=0;
     actor.aiPackage=packageId;actor.aiAnchorGame=anchor;actor.aiSequence=0;actor.aiPathGame.clear();actor.aiPathSurfaces.clear();actor.aiPathIndex=0;actor.runtime.navigationDoor=0;actor.aiRepathAt=0;
     Q6H_LOGI("NPC PACKAGE actor=%08X package=%08X EDID=%s type=%u locationType=%u radius=%d flags=%08X style=%08X hour=%.2f",
       actor.source.refFormId,packageId,package.editor.c_str(),unsigned(package.type),
@@ -592,6 +632,7 @@ static void Q240AdvanceFleePackage(Q230ActorVisual& actor,const fo3pipdata::Pack
 }
 static void Q240FurnitureExit(Q230ActorVisual& actor,double now) {
   auto& f=actor.runtime.furniture;const auto* slot=f.Selected();if(!slot){f.Clear();return;}
+  if(slot->idleMarker){f.Clear();++actor.runtime.actionSerial;actor.aiPathGame.clear();actor.aiPathSurfaces.clear();actor.aiPathIndex=0;actor.runtime.navigationDoor=0;actor.runtime.sandboxNext=now+.5;actor.lastFrame=UINT64_MAX;return;}
   if(f.phase==fo3furniture::Phase::Approach){f.Clear();return;}
   if(f.phase==fo3furniture::Phase::Enter){
     // Finish entry before using the exit's authored accumulated starting pose.
@@ -618,12 +659,14 @@ static bool Q240AdvanceFurniture(Q230ActorVisual& actor,const fo3pipdata::Packag
       f.Clear();++actor.runtime.actionSerial;actor.aiPathGame.clear();actor.aiPathSurfaces.clear();actor.aiPathIndex=0;actor.runtime.navigationDoor=0;actor.aiSequence=0;actor.aiRepathAt=0;actor.runtime.nextPackageEvaluation=0;actor.aiLastUpdate=now;actor.lastFrame=UINT64_MAX;
     }return true;
   }
-  if(!p||(p->type!=4&&p->type!=3))return false;
+  if(!p||(p->type!=4&&p->type!=3&&p->type!=12))return false;
   if(!f.Active()){
-    const size_t target=Q240FurnitureTarget(actor,*p);if(target==SIZE_MAX){Q240PackageRouteFailed(actor,now,"furniture unavailable");return true;}
+    const size_t target=p->type==12?Q240SandboxTarget(actor,*p,actor.runtime.evaluatedAnchor,actor.runtime.evaluatedRadius):Q240FurnitureTarget(actor,*p);if(target==SIZE_MAX){Q240PackageRouteFailed(actor,now,"furniture unavailable");return true;}
     const auto& slot=f.scene->slots[target];auto lease=std::make_shared<fo3furniture::Lease>();
     if(!lease->Acquire(f.scene->reservations,slot.reference,slot.index,actor.source.refFormId)){Q240PackageRouteFailed(actor,now,"furniture reservation conflict");return true;}
     f.slot=target;f.lease=std::move(lease);f.phase=fo3furniture::Phase::Approach;f.started=now;f.package=id;
+    if(slot.idleMarker){for(size_t i=0;i<slot.idles.size();++i)if(Q240MarkerIdleEligible(actor,slot.idles[i].form)){f.idleIndex=i;break;}}
+    Q6H_LOGI("NPC ACTIVITY SELECT actor=%08X package=%08X target=%08X marker=%d reservation=1",actor.source.refFormId,id,slot.reference,slot.idleMarker);
     f.anchor={slot.alignment[12],slot.alignment[13],slot.alignment[14]};f.yaw=std::atan2(-slot.alignment[4],slot.alignment[5]);
     std::string failure;
     if(!Q240Path(*actor.navigationGraph,Q240GamePosition(actor),f.anchor,actor.aiPathGame,&failure,&actor.aiPathSurfaces)){Q240PackageRouteFailed(actor,now,"furniture NAVM approach unavailable");return true;}
@@ -639,10 +682,22 @@ static bool Q240AdvanceFurniture(Q230ActorVisual& actor,const fo3pipdata::Packag
     actor.runtime.speed=0;actor.runtime.animation=fo3npc::Animation::Idle;
     if(std::fabs(angle)>.01f)return true;
     actor.runtime.position=Q240ScenePosition(f.anchor);actor.runtime.yaw=actor.runtime.returnYaw=f.yaw;actor.runtime.headYaw=0;
-    f.phase=fo3furniture::Phase::Enter;f.started=now;actor.lastFrame=UINT64_MAX;
+    const auto* selected=f.Selected();
+    f.phase=selected->idleMarker?fo3furniture::Phase::Loop:fo3furniture::Phase::Enter;f.started=now;actor.lastFrame=UINT64_MAX;
+    if(p->type==12){const uint32_t hash=actor.source.refFormId*2654435761u^++actor.runtime.sandboxCycles*3266489917u;
+      f.until=now+(selected->idleMarker?std::clamp(double(selected->idleTimer),1.,60.):12.+double(hash%13));
+      if(selected->idleMarker){const auto& clip=selected->idles[f.idleIndex].clip;const double cycle=(clip.stop-clip.start)/clip.frequency;f.until=now+std::ceil((f.until-now)/cycle)*cycle;}
+      actor.runtime.sandboxLastTarget=selected->reference;
+    }
+    Q6H_LOGI("NPC ACTIVITY BEGIN actor=%08X package=%08X target=%08X",actor.source.refFormId,id,selected->reference);
   }
   const auto* slot=f.Selected();if(!slot){f.Clear();return true;}
   actor.runtime.speed=0;actor.runtime.animation=fo3npc::Animation::Idle;actor.lastFrame=UINT64_MAX;
+  if(p->type==12&&f.until>0&&now>=f.until){
+    actor.runtime.sandboxNext=now+1.;Q6H_LOGI("NPC ACTIVITY END actor=%08X package=%08X target=%08X",actor.source.refFormId,id,slot->reference);
+    Q240FurnitureExit(actor,now);return true;
+  }
+  if(slot->idleMarker){actor.runtime.procedure=fo3npc::Procedure::Waiting;return true;}
   if(f.phase==fo3furniture::Phase::Enter){const double duration=(slot->program->enter.stop-slot->program->enter.start)/slot->program->enter.frequency;
     if(now-f.started>=duration){f.retainedRoot=fo3furniture::Root(slot->program->enter,duration);f.phase=fo3furniture::Phase::Loop;f.started=now;}
   }
@@ -735,6 +790,16 @@ static void Q240AdvanceNpcPackage(Q230ActorVisual& actor,double now) {
   }
   if(package->location.type==2u&&package->type!=1&&package->type!=10)anchor=actor.aiAnchorGame;
   actor.runtime.package=packageId;actor.runtime.packageKnown=true;actor.runtime.activity=fo3npc::Activity::Package;
+  if(package->type==12){
+    if(actor.runtime.furniture.Active()){Q240AdvanceFurniture(actor,package,packageId,dt,now);return;}
+    if(now<state.sandboxNext){actor.runtime.speed=0;actor.runtime.animation=fo3npc::Animation::Idle;return;}
+    if(actor.aiPathIndex>=actor.aiPathGame.size()&&now>=actor.aiRepathAt){
+      const bool wander=(package->typeFlags&32u)==0;
+      if((!wander||(state.sandboxCycles%2)==0)&&Q240SandboxTarget(actor,*package,anchor,radius)!=SIZE_MAX){Q240AdvanceFurniture(actor,package,packageId,dt,now);return;}
+      if(!wander){Q240PackageRouteFailed(actor,now,"Sandbox has no available permitted resident activity",2);return;}
+      ++state.sandboxCycles;
+    }
+  }
   if(package->type==4||package->type==3){Q240AdvanceFurniture(actor,package,packageId,dt,now);return;}
   if(package->type==10){Q240AdvanceFleePackage(actor,*package,anchor,dt,now);return;}
   if(package->type==2){Q240AdvancePlayerEscort(actor,*package,anchor,dt,now);return;}

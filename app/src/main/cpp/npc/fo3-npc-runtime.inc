@@ -137,7 +137,7 @@ void Q230PrepareActors(uint32_t cell, uint32_t worldspace,
       visual.navigationGraph=navigation;visual.runtime.furniture.scene=furniture;
       if(furniture){
         if(visual.renderEnvelope.empty())visual.renderEnvelope=fo3anim::ClipEnvelope(visual.skeleton,visual.clip);
-        for(const auto& slot:furniture->slots)for(const auto* clip:{&slot.program->enter,&slot.program->loop,&slot.program->exit}){
+        for(const auto& slot:furniture->slots)if(slot.program)for(const auto* clip:{&slot.program->enter,&slot.program->loop,&slot.program->exit}){
           const auto envelope=fo3anim::ClipEnvelope(visual.skeleton,*clip);
           for(size_t i=0;i<envelope.size()&&i<visual.renderEnvelope.size();++i){visual.renderEnvelope[i].translation=std::max(visual.renderEnvelope[i].translation,envelope[i].translation);visual.renderEnvelope[i].scale=std::max(visual.renderEnvelope[i].scale,envelope[i].scale);}
         }
@@ -380,10 +380,10 @@ void Q230UpdateActor(Q230ActorVisual &actor) {
   const auto* slot=furniture.Selected();
   const bool furniturePose=slot&&(furniture.phase==fo3furniture::Phase::Enter||furniture.phase==fo3furniture::Phase::Loop||furniture.phase==fo3furniture::Phase::Exit);
   if(furniturePose){
-    const auto& authored=furniture.phase==fo3furniture::Phase::Enter?slot->program->enter:furniture.phase==fo3furniture::Phase::Exit?slot->program->exit:slot->program->loop;
+    const auto& authored=slot->idleMarker?slot->idles[furniture.idleIndex].clip:furniture.phase==fo3furniture::Phase::Enter?slot->program->enter:furniture.phase==fo3furniture::Phase::Exit?slot->program->exit:slot->program->loop;
     const double now=std::chrono::duration<double>(fqopaque::Clock::now().time_since_epoch()).count();
     fo3anim::BindClip(actor.skeleton,authored,actor.pose);
-    if(!fo3anim::Sample(actor.skeleton,authored,now-furniture.started,actor.pose,&timings,fo3anim::RootPolicy::Furniture,&furniture.retainedRoot))return;
+    if(!fo3anim::Sample(actor.skeleton,authored,now-furniture.started,actor.pose,&timings,slot->idleMarker?fo3anim::RootPolicy::Locomotion:fo3anim::RootPolicy::Furniture,&furniture.retainedRoot))return;
   }else if(!fo3anim::Sample(actor.skeleton,clip,sampleTime,actor.pose,&timings)) return;
   if(!furniturePose&&actor.blendStart>=0&&elapsed-actor.blendStart<fo3npc::DialoguePolicy::BlendSeconds&&actor.blendFrom.size()==actor.pose.local.size()) {
     const float mix=float((elapsed-actor.blendStart)/fo3npc::DialoguePolicy::BlendSeconds);

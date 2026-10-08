@@ -22,6 +22,8 @@ enum class Procedure { None, Executing, Waiting, Completed, Blocked, InvalidTarg
 inline float Angle(float a){return std::atan2(std::sin(a),std::cos(a));}
 struct RuntimeState {
   fo3furniture::State furniture;
+  uint32_t sandboxLastTarget=0,sandboxCycles=0;
+  double sandboxNext=0;
   uint32_t reference=0,package=0,combatTarget=0,navigationDoor=0;
   Activity activity=Activity::Idle,suspended=Activity::Idle;
   Animation animation=Animation::Idle;
