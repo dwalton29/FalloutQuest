@@ -7,11 +7,11 @@
 #include "player/fo3-vr-body.h"
 #include <unistd.h>
 std::vector<Q230ActorVisual> gQ230NpcActors;
-bool blocked=false,loading=false;int dialogueEnds=0,shots=0;double emittedDamage=0;
+bool blocked=false,loading=false,blockSecondSightRay=false;int sightRayCount=0,dialogueEnds=0,shots=0;double emittedDamage=0;
 bool IsFo3LoadingVisible(){return loading;}
 void Q230UpdateActor(Q230ActorVisual&){}
 bool Q230LiveBone(const Q230ActorVisual& actor,int,std::array<float,3>& p){p=actor.runtime.position;p[1]+=1;return true;}
-bool HasFo3InteractionOccluder(float,float,float,float,float,float,float,uint32_t){return blocked;}
+bool HasFo3InteractionOccluder(float,float,float,float,float,float,float,uint32_t){return blocked||(blockSecondSightRay&&++sightRayCount==2);}
 void EndFo3Dialogue(const char*){++dialogueEnds;}
 namespace fo3audio {void SoundEvent(uint32_t){}void NamedSound(const std::string&) {}}
 static fo3anim::Matrix Q230WeaponMatrix(Q230ActorVisual& actor){auto m=fo3anim::Identity();m[12]=actor.runtime.position[0];m[13]=actor.runtime.position[1]+1;m[14]=actor.runtime.position[2];return m;}
@@ -144,6 +144,17 @@ int main(int argc,char** argv){
   assert(shots==0&&!interrupted.runtime.pendingAttack);
   Q230SimulateActor(interrupted,2.3);assert(interrupted.runtime.pendingAttack);
   Q230SimulateActor(interrupted,2.31);assert(shots==1);
+  // The eye may still see the target while the actual firing muzzle is
+  // obstructed at the animation hit event; do not spend ammo or emit a shot.
+  Prepare();auto& muzzleInterrupted=gQ230NpcActors[0];
+  Q230SimulateActor(muzzleInterrupted,1.3);Q230SimulateActor(muzzleInterrupted,1.9);
+  Q230SimulateActor(muzzleInterrupted,2);assert(muzzleInterrupted.runtime.pendingAttack);
+  const auto roundsBefore=gPlayerSession->player.ActorWeapon(42)->loadedRounds;
+  blockSecondSightRay=true;sightRayCount=0;
+  Q230SimulateActor(muzzleInterrupted,2.01);
+  assert(shots==0&&!muzzleInterrupted.runtime.pendingAttack&&
+         gPlayerSession->player.ActorWeapon(42)->loadedRounds==roundsBefore);
+  blockSecondSightRay=false;sightRayCount=0;
   PackageCombatPolicyTests();if(argc>1)OriginalCombatPolicies(argv[1]);
   std::cout<<"Production NPC combat pursuit/flee, LOS, reload, firing, death and restore passed\n";
 }
