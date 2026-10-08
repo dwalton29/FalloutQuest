@@ -22,7 +22,7 @@ std::unordered_map<uint64_t,World> world;
 fo3weapon::Inputs inputs;
 fo3weapon::Trigger trigger;
 uint64_t active=0;
-bool held=false,support=false,inside=false,magazine=false,charging=false;
+bool held=false,support=false,inside=false,magazine=false,charging=false,pouchNearby=false;
 Matrix pose=fo3anim::Identity(),magPose=fo3anim::Identity(),magStart=fo3anim::Identity();
 V supportLocal{},chargeStart{},magPalm{};
 float magQuat[4]{0,0,0,1};
@@ -94,7 +94,10 @@ Model* Ensure(uint32_t form){
   for(auto sound:{item.weapon.fire3D,item.weapon.fire2D,item.weapon.dry,item.weapon.equip,item.weapon.unequip})fo3audio::PreloadSound(sound);
   for(const auto&sound:out.asset.reloadSounds)fo3audio::PreloadSound(sound);
   out.ready=!out.objects.empty()&&fo3vr::Finite(out.half);
-  Q6H_LOGI("WEAPON ASSET: base=%08X shapes=%zu grip=original-fp-%saim clipNode=%d slideNode=%d muzzle=(%.4f %.4f %.4f)",form,out.objects.size(),group,out.asset.clipNode,out.asset.slideNode,out.asset.muzzle[0],out.asset.muzzle[1],out.asset.muzzle[2]);
+  const size_t magazineShapes=std::count(out.magazines.begin(),out.magazines.end(),uint8_t(1));
+  Q6H_LOGI("WEAPON ASSET: base=%08X shapes=%zu grip=original-fp-%saim clipNode=%d slideNode=%d magazineShapes=%zu reloadFamily=%d muzzle=(%.4f %.4f %.4f)",
+    form,out.objects.size(),group,out.asset.clipNode,out.asset.slideNode,magazineShapes,
+    int(out.asset.ReloadInteraction(item.weapon)),out.asset.muzzle[0],out.asset.muzzle[1],out.asset.muzzle[2]);
   return out.ready?&out:nullptr;
 }
 Matrix ToScene(const fo3weapon::WorldPose&p){
@@ -234,7 +237,7 @@ void AdvanceFlights(float dt){
     }
   }
 }
-void RetireReload(){magazine=charging=support=false;supportWeight=chargeTravel=0;}
+void RetireReload(){magazine=charging=support=pouchNearby=false;supportWeight=chargeTravel=0;}
 void Draw(uint64_t id,uint32_t form){active=id;held=true;inside=false;RetireReload();motion={};Pulse(1);fo3audio::SoundEvent(gPlayerSession->player.Definitions().items.at(form).weapon.equip);Log("DRAW",id,form);}
 void DrawModel(Model&m,const Matrix&root,bool alpha,bool onlyMag=false,bool removeMag=false,float action=0){
   auto transform=root;
@@ -288,7 +291,22 @@ void WeaponShutdown(){
 void WeaponRender(bool alpha){
   using namespace weaponruntime;if(!gPlayerSession||IsFo3LoadingVisible())return;
   const auto&p=gPlayerSession->player;const auto*s=p.EquippedWeapon();
-  if(s&&s->id==active){auto m=models.find(s->formId);if(m!=models.end()&&m->second.ready){DrawModel(m->second,pose,alpha,false,s->needsAction&&s->loadedRounds==0,charging?chargeTravel:0);if(magazine)DrawModel(m->second,magPose,alpha,true);if(held&&flashUntil>last)DrawFlash(m->second,alpha);}}
+  if(s&&s->id==active){auto m=models.find(s->formId);if(m!=models.end()&&m->second.ready){
+    DrawModel(m->second,pose,alpha,false,s->needsAction&&s->loadedRounds==0,charging?chargeTravel:0);
+    if(magazine)DrawModel(m->second,magPose,alpha,true);
+    else if(held&&s->needsAction&&!s->loadedRounds&&
+            p.AmmoReserve(p.Definitions().items.at(s->formId).weapon.ammo)>0&&
+            (m->second.asset.ReloadInteraction(p.Definitions().items.at(s->formId).weapon)==fo3weapon::ReloadFamily::DetachablePistol||
+             m->second.asset.ReloadInteraction(p.Definitions().items.at(s->formId).weapon)==fo3weapon::ReloadFamily::DetachableRifle)) {
+      // Render the exact detachable mesh from the original WEAP NIF at the
+      // physical left-waist pouch. No invented magazine mesh or orientation.
+      const auto orientation=pouch.body;
+      const auto clip=GamePoint(m->second.asset.clip);
+      const auto waistPose=Rigid(orientation,pouch.center-fo3vr::Rotate(orientation,clip));
+      DrawModel(m->second,waistPose,alpha,true);
+    }
+    if(held&&flashUntil>last)DrawFlash(m->second,alpha);
+  }}
   for(const auto&w:p.Snapshot().worldWeapons){auto v=world.find(w.instance.id);auto m=models.find(w.instance.formId);if(v!=world.end()&&m!=models.end()&&m->second.ready)DrawModel(m->second,v->second.pose,alpha,false,w.instance.needsAction&&w.instance.loadedRounds==0);}
   if(ejectUntil>last){auto m=models.find(ejectForm);if(m!=models.end()&&m->second.ready)DrawModel(m->second,ejectPose,alpha,true);}
 }
@@ -373,8 +391,13 @@ void WeaponUpdate(double now,bool backButton){
         if(inputs.eject&&!support){
           if(p.EjectMagazine(id)){magazine=charging=false;ejectPose=pose;ejectVelocity={0,-.3f,0};ejectUntil=now+3;ejectForm=form;fo3audio::NamedSound(m->asset.reloadSounds[0]);Log("MAG OUT",id,form);s=p.Weapon(id);}
         }
+        const bool needsPouch=s->needsAction&&!s->loadedRounds&&!magazine&&
+          p.AmmoReserve(d.ammo)>0&&!support;
+        const bool handInPouch=needsPouch&&gWeaponPalmValid[0]&&pouch.Contains(left);
+        if(handInPouch&&!pouchNearby)Pulse(0,.12f);
+        pouchNearby=handInPouch;
         if(inputs.l&&!gQ220Grab[0].active&&!support&&gWeaponPalmValid[0]){
-          if(s->needsAction&&!s->loadedRounds&&!magazine&&p.AmmoReserve(d.ammo)>0&&pouch.Contains(left)){
+          if(handInPouch){
             magazine=true;magStart=Rigid(Rotation(pose),left-fo3vr::Rotate(Rotation(pose),GamePoint(m->asset.clip)));magPalm=left;std::copy(gQ218LeftHandQuat,gQ218LeftHandQuat+4,magQuat);Pulse(0);Log("MAG POUCH",id,form);
           }else if(s->needsAction&&s->loadedRounds&&fo3vr::Length(left-Point(pose,GamePoint(m->asset.slide)))<.10f){Matrix inverse;if(fo3anim::Inverse(pose,inverse)){charging=true;chargeTravel=0;chargeStart=Point(inverse,left);Pulse(0,.12f);}}
         }
@@ -424,6 +447,15 @@ void WeaponUpdate(double now,bool backButton){
   if(!support&&!magazine&&!charging)Q220UpdateLooseGrab(0,gWeaponPalmValid[0],gWeaponPalm[0],gQ218LeftHandQuat,gQ217FingerGrip[0]);
   if(!held)Q220UpdateLooseGrab(1,gWeaponPalmValid[1],gWeaponPalm[1],gQ218RightHandQuat,gQ217FingerGrip[1]);
   else gQ220Grab[1].previousGrip=gQ217FingerGrip[1];
-  s=p.EquippedWeapon();ammoText[0]=0;if(s&&held){const auto&d=p.Definitions().items.at(s->formId).weapon;std::snprintf(ammoText,sizeof(ammoText),"%u / %d",s->loadedRounds,p.AmmoReserve(d.ammo));}
+  s=p.EquippedWeapon();ammoText[0]=0;if(s&&held){
+    const auto&d=p.Definitions().items.at(s->formId).weapon;
+    if(s->needsAction&&!s->loadedRounds)
+      std::snprintf(ammoText,sizeof(ammoText),"LEFT WAIST  GRIP  %d",p.AmmoReserve(d.ammo));
+    else if(s->needsAction)
+      std::snprintf(ammoText,sizeof(ammoText),"PULL SLIDE  %u / %d",s->loadedRounds,p.AmmoReserve(d.ammo));
+    else if(!s->loadedRounds)
+      std::snprintf(ammoText,sizeof(ammoText),"B: EJECT  %u / %d",s->loadedRounds,p.AmmoReserve(d.ammo));
+    else std::snprintf(ammoText,sizeof(ammoText),"%u / %d",s->loadedRounds,p.AmmoReserve(d.ammo));
+  }
   fo3ammoui::Prepare(ammoText);
 }
