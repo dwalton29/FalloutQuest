@@ -485,7 +485,7 @@ static const fo3pipdata::PackageDefinition* Q240SelectPackage(
       if(!Q240PackageActorTarget(actor,package.target.value,anchor))continue;
 #endif
     }
-    else if(package.type==7){std::array<float,3> current{}if(!Q240AccompanyDestination(actor,package,current,anchor)){Q240AccompanyOnce(actor.source.refFormId,packageId,package.target.value,"UNSUPPORTED","target/destination unavailable in resident scene; cross-cell continuation requires XTEL milestone");continue;}}
+    else if(package.type==7){std::array<float,3> current{};if(!Q240AccompanyDestination(actor,package,current,anchor)){Q240AccompanyOnce(actor.source.refFormId,packageId,package.target.value,"UNSUPPORTED","target/destination unavailable in resident scene; cross-cell continuation requires XTEL milestone");continue;}}
     else if(package.type==1||package.type==10) {
       if(!package.target.valid||package.target.type!=0){Q240AiLogOnce(actor.source.refFormId,packageId,"actor target resolver unsupported");continue;}
       if(!Q240PackageActorTarget(actor,package.target.value,anchor)){Q240AiLogOnce(actor.source.refFormId,packageId,"actor target is not alive and resident");continue;}
