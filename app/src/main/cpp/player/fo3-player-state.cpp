@@ -1,5 +1,6 @@
 #include "fo3-player-state.h"
 #include "data/fo3-esm-reader.h"
+#include "npc/fo3-package-schedule.h"
 
 #include <algorithm>
 #include <cmath>
@@ -411,6 +412,12 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
           if (editor == "GameDaysPassed" && globalValue >= 0.0f &&
               globalValue < 1000000.0f)
             next.initial.gameDaysPassed = static_cast<uint32_t>(globalValue);
+          if (editor == "GameYear" && globalValue>=1&&globalValue<=9999)
+            next.initial.gameYear = static_cast<uint32_t>(globalValue);
+          if (editor == "GameMonth" && globalValue>=0&&globalValue<12)
+            next.initial.gameMonth = static_cast<uint32_t>(globalValue);
+          if (editor == "GameDay" && globalValue>=1&&globalValue<=31)
+            next.initial.gameDay = static_cast<uint32_t>(globalValue);
         }
       } else if (type == "REFR") {
         Reference ref;
@@ -602,6 +609,12 @@ bool Player::AdvanceGameClock(double realSeconds) {
   if (beforeMinute != afterMinute || days) ++revision_;
   state_.gameHour = nextHour;
   state_.gameDaysPassed += days;
+  for(uint32_t i=0;i<days;++i) {
+    if(++state_.gameDay>uint32_t(fo3schedule::Days(int(state_.gameYear),int(state_.gameMonth)))) {
+      state_.gameDay=1;
+      if(++state_.gameMonth>=12){state_.gameMonth=0;++state_.gameYear;}
+    }
+  }
   return true;
 }
 ActorCensusReport Player::RegisterOriginalActors() {
@@ -914,7 +927,10 @@ bool Player::Save(const std::string &path, std::string &error) const {
   // v10: appended after v9 actor records. v1-v9 remain readable verbatim.
   PutFloat(payload,state_.gameHour);
   Put32(payload,state_.gameDaysPassed);
-  Put32(bytes, 10);
+  Put32(payload,state_.gameYear);
+  Put32(payload,state_.gameMonth);
+  Put32(payload,state_.gameDay);
+  Put32(bytes, 11);
   Put32(bytes, catalog_.fingerprint);
   Put32(bytes, static_cast<uint32_t>(payload.size()));
   Put32(bytes, Crc(payload));
@@ -973,7 +989,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
   const auto *h = bytes.data();
   const auto version = fo3esm::ReadU32(h + 4);
   if (std::memcmp(h, "FQPS", 4) ||
-      (version < 1 || version > 10))
+      (version < 1 || version > 11))
     return fail("Unsupported player save format");
   if (fo3esm::ReadU32(h + 8) != catalog_.fingerprint)
     return fail("Player save belongs to different game definitions");
@@ -1165,7 +1181,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
         if(payload.size()-at<4)return fail("Missing actor state count");
         const auto n=fo3esm::ReadU32(p+at);at+=4;
         const size_t actorBytes=version>=9?56:version>=8?52:48;
-        const size_t tailBytes = version >= 10 ? 8u : 0u;
+        const size_t tailBytes = version >= 11 ? 20u : version >= 10 ? 8u : 0u;
         if(n>10000||payload.size()-at!=actorBytes*n+tailBytes)return fail("Invalid actor state count");
         for(uint32_t i=0;i<n;++i,at+=actorBytes){
           const auto id=fo3esm::ReadU32(p+at);ActorState a;
@@ -1198,6 +1214,16 @@ bool Player::Restore(const std::string &path, std::string &error) {
             next.gameHour >= 24.0f || next.gameDaysPassed > 1000000u)
           return fail("Invalid saved game clock");
         at += 8;
+      }
+      if (version >= 11) {
+        if (payload.size()-at != 12u) return fail("Missing game calendar");
+        next.gameYear = fo3esm::ReadU32(p+at);
+        next.gameMonth = fo3esm::ReadU32(p+at+4);
+        next.gameDay = fo3esm::ReadU32(p+at+8);
+        if (next.gameYear>9999u ||
+            !fo3schedule::Valid({int(next.gameYear),int(next.gameMonth),int(next.gameDay)}))
+          return fail("Invalid saved game calendar");
+        at += 12;
       }
       if(at!=payload.size())return fail("Trailing weapon save data");
     }
