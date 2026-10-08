@@ -1,4 +1,5 @@
 #include "npc/fo3-npc-combat.h"
+#include "npc/fo3-npc-combat-assets.h"
 #include "weapons/fo3-weapon-hit.h"
 #include <cassert>
 #include <iostream>
@@ -33,9 +34,36 @@ static void StateAndPerception() {
   ai.aggression=0;assert(!Acquires(ai,Reaction::Enemy));assert(Assists(ai,Reaction::Ally)&&!Assists(ai,Reaction::Neutral));
   fo3pipdata::PackageDefinition defensive;assert(!Defensive(&defensive)&&!Defensive(nullptr));defensive.flags=1u<<22;assert(Defensive(&defensive));defensive.flags=1u<<26;assert(!Defensive(&defensive));
   c.pipboy.dialogueActors[200].aiData.resize(19);assert(!AI(c.pipboy,200).valid);
+  s={};s.BeginCombat(0x14);
+  assert(MayPlayHitReaction(s));
+  s.pendingAttack=true;assert(!MayPlayHitReaction(s));
+  s.pendingAttack=false;s.reloadUntil=2.5;assert(!MayPlayHitReaction(s));
+  s.reloadUntil=0;assert(MayPlayHitReaction(s));
+  s.activity=Activity::Package;s.pendingAttack=true;assert(MayPlayHitReaction(s));
   s={};s.BeginCombat(101);auto d=c.items.at(10).weapon;
   assert(FireReady(s,d,1)&&!FireReady(s,d,1.1)&&FireReady(s,d,1.25));s.reloadUntil=5;assert(!FireReady(s,d,8));s.reloadUntil=0;
   assert(FireReady(s,d,9)&&!FireReady(s,d,9));
+}
+static void CombatAssetCandidates() {
+  auto c=Fixture();
+  Fo3NpcActorQ230 npc;npc.refFormId=100;npc.baseFormId=200;
+  npc.inventory.push_back({10,1,"WEAP"});
+  npc.inventory.push_back({301,1,"LVLI"});
+  npc.inventory.push_back({302,1,"LVLI"});
+  fo3player::Item ranged=c.items.at(10);ranged.formId=20;c.items[20]=ranged;
+  c.lootLists[301].valid=true;c.lootLists[301].entries.push_back({302,0,1,1,1,false});
+  c.lootLists[302].valid=true;c.lootLists[302].entries.push_back({20,0,1,1,1,false});
+  c.lootLists[302].entries.push_back({301,0,1,1,1,false}); // Cycle must terminate.
+  const auto forms=fo3npc::CombatWeaponCandidates(npc,c);
+  assert(forms.size()==2&&forms[0]==10&&forms[1]==20);
+  assert(fo3npc::CombatWeaponCandidates(npc,c,1).size()==1);
+  assert(fo3npc::HitRegionSlot(0)==1&&fo3npc::HitRegionSlot(1)==0&&
+         fo3npc::HitRegionSlot(6)==5);
+  const std::array<bool,3> all{true,true,true},partial{false,true,true},none{};
+  assert(fo3npc::HitVariant(all,0)==0&&fo3npc::HitVariant(all,1)==1&&
+         fo3npc::HitVariant(all,2)==2&&fo3npc::HitVariant(all,3)==0);
+  assert(fo3npc::HitVariant(partial,0)==1&&fo3npc::HitVariant(partial,2)==2&&
+         fo3npc::HitVariant(none,1)==-1);
 }
 static void InventoryDamagePersistence(bool finite) {
   auto c=Fixture(finite);Player p(c);assert(p.PrepareActorInventory(100)&&p.PrepareActorInventory(101));
@@ -94,6 +122,17 @@ static void InventoryDamagePersistence(bool finite) {
 }
 static void Original(const char* path) {
   Catalog c;std::string error;assert(LoadCatalog(path,c,error));assert(c.weapons.styles.size()==48&&c.weapons.detectionDistance==2500&&c.weapons.drMax==85);
+  // Original Fallout3.esm has fMoveRunMult=4.0; only active combat Flee uses it.
+  assert(std::fabs(c.npcRunMultiplier-4.f)<.001f);
+  // Canonical MegatonSettlerWeapon and WithAmmoAssaultRifleNPC LVLI records.
+  // These were previously invisible to the combat asset-preparation loop.
+  for(uint32_t list:{0x0006C36Bu,0x00029367u}){
+    assert(c.lootLists.count(list));
+    Fo3NpcActorQ230 source;source.inventory.push_back({list,1,"LVLI"});
+    const auto candidates=fo3npc::CombatWeaponCandidates(source,c);
+    assert(!candidates.empty());
+    for(uint32_t weapon:candidates)assert(c.items.at(weapon).kind==ItemKind::Weapon);
+  }
   size_t count=0;for(const auto& r:c.references){if(count==5)break;if(!c.actorInventories.count(r.second.base))continue;
     Player p(c);if(!p.PrepareActorInventory(r.first))continue;
     const auto* contents=p.ContainerContents(r.first);uint64_t id=0;uint32_t form=0;
@@ -104,4 +143,4 @@ static void Original(const char* path) {
     assert(fo3npc::AI(c.pipboy,r.second.base).valid);++count;
   }assert(count==5);
 }
-int main(int argc,char** argv){StateAndPerception();InventoryDamagePersistence(true);InventoryDamagePersistence(false);if(argc>1)Original(argv[1]);std::cout<<"NPC combat state tests passed\n";}
+int main(int argc,char** argv){StateAndPerception();CombatAssetCandidates();InventoryDamagePersistence(true);InventoryDamagePersistence(false);if(argc>1)Original(argv[1]);std::cout<<"NPC combat state tests passed\n";}

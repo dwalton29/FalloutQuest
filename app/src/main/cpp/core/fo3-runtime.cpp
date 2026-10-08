@@ -7,6 +7,7 @@
 #include "data/fo3-xtel-index.h"
 #include "npc/fo3-facial-data.h"
 #include "npc/fo3-npc-combat.h"
+#include "npc/fo3-npc-combat-assets.h"
 #include "player/fo3-vr-body.h"
 #include "player/fo3-vr-tracking.h"
 #ifdef __ANDROID__
@@ -726,7 +727,7 @@ struct Q230ActorVisual {
     Fo3NpcActorQ230 source;
     fo3npc::RuntimeState runtime;
     std::array<fo3anim::Clip,size_t(fo3npc::Animation::Count)> animations;
-    std::array<fo3anim::Clip,6> authoredHitClips; // Head, torso, arms, legs; loaded before scene publish.
+    std::array<std::array<fo3anim::Clip,3>,6> authoredHitClips; // 18 original IDLE hit variants.
     int activeAnimation=0,headBone=-1,chestBone=-1;
     std::vector<fo3anim::Transform> blendFrom;
     double blendStart=-1;

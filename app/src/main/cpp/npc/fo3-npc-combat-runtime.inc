@@ -44,7 +44,23 @@ static bool Q230Target(uint32_t reference,std::array<float,3>& point,uint32_t& b
       const auto world=Q211TransformPoint(gQ210PlayerRoot,{posed[0],posed[1],posed[2]});
       point={world.x,world.y,world.z};return true;
     }
-    return false; // Missing canonical player skin is not an invisible combat target.
+    // Actual tracked headset pose is a truthful perception/aiming target even
+    // when the optional posed torso mapping is unavailable. Projectile
+    // damage still requires collision with the canonical skinned player body.
+    static bool loggedFallback=false;
+    if(std::isfinite(gQ210Head[0])&&std::isfinite(gQ210Head[1])&&
+       std::isfinite(gQ210Head[2])&&gSceneReady){
+      point={gQ210Head[0],gQ210Head[1],gQ210Head[2]};
+      if(!loggedFallback){loggedFallback=true;
+        Q6H_LOGI("NPC COMBAT PLAYER TARGET source=tracked-head reason=spine2-unavailable rigParts=%zu",
+                 gQ211PlayerRigParts.size());}
+      return true;
+    }
+    static bool loggedMissing=false;
+    if(!loggedMissing){loggedMissing=true;
+      Q6H_LOGI("NPC COMBAT PLAYER TARGET UNAVAILABLE reason=no-posed-torso-or-tracked-head rigParts=%zu",
+               gQ211PlayerRigParts.size());}
+    return false;
 #endif
   }
   for(auto& target:gQ230NpcActors)if(target.source.refFormId==reference&&target.runtime.Alive()){
@@ -55,7 +71,10 @@ static bool Q230Target(uint32_t reference,std::array<float,3>& point,uint32_t& b
 }
 static bool Q230Sight(Q230ActorVisual& actor,uint32_t target,const std::array<float,3>& point) {
   Q230UpdateActor(actor);std::array<float,3> eye{};
-  if(!Q230LiveBone(actor,actor.headBone,eye))return false;
+  if(!Q230LiveBone(actor,actor.headBone,eye)){
+    Q240AiLogOnce(actor.source.refFormId,actor.aiPackage,"combat perception: no skinned head bone");
+    return false;
+  }
   const float dx=point[0]-eye[0],dy=point[1]-eye[1],dz=point[2]-eye[2],length=std::sqrt(dx*dx+dy*dy+dz*dz);
   return length>.01f&&!HasFo3InteractionOccluder(eye[0],eye[1],eye[2],dx/length,dy/length,dz/length,length,target);
 }
@@ -218,7 +237,8 @@ static void Q230SimulateActor(Q230ActorVisual& actor,double now) {
       if(s.dialogue)EndFo3Dialogue("combat threat");
       if(s.activity!=fo3npc::Activity::Combat)Q240SuspendPackageWait(actor,now);
       s.BeginCombat(acquire);s.lastSeen=now;s.nextPath=0;actor.aiPathGame.clear();actor.aiPathSurfaces.clear();actor.aiPathIndex=0;s.navigationDoor=0;
-      Q6H_LOGI("NPC COMBAT START actor=%08X target=%08X",actor.source.refFormId,acquire);
+      Q6H_LOGI("NPC COMBAT START actor=%08X target=%08X confidence=%u assets=%zu",
+        actor.source.refFormId,acquire,unsigned(ai.confidence),actor.combatWeapons.size());
     }
   }
   if(s.activity!=fo3npc::Activity::Combat)return;
@@ -236,10 +256,15 @@ static void Q230SimulateActor(Q230ActorVisual& actor,double now) {
   if(ai.confidence==0){
     if(s.action!=fo3npc::CombatAction::Flee){Q6H_LOGI("NPC FLEE actor=%08X target=%08X",actor.source.refFormId,s.combatTarget);s.action=fo3npc::CombatAction::Flee;}
     const auto threat=std::array<float,3>{gSceneCenterXQ1730+s.lastThreat[0]*FO3_UNITS_PER_METRE,gSceneCenterYQ1730-(s.lastThreat[2]-SCENE_FORWARD)*FO3_UNITS_PER_METRE,gSceneFloorZQ1730+(s.lastThreat[1]-FLOOR_Y)*FO3_UNITS_PER_METRE};
-    Q230CombatRoute(actor,threat,true,now);
+    if(!Q230CombatRoute(actor,threat,true,now)&&actor.aiPathGame.empty())
+      Q240AiLogOnce(actor.source.refFormId,actor.aiPackage,"coward combat flee has no reachable NAVM escape");
     Q240AdvancePath(actor,dt,now);return;
   }
-  if(!Q230SelectWeapon(actor)){Q240AiLogOnce(actor.source.refFormId,actor.aiPackage,"no usable supported combat weapon");return;}
+  if(!Q230SelectWeapon(actor)){
+    Q240AiLogOnce(actor.source.refFormId,actor.aiPackage,
+      "no usable supported combat weapon: check NPC COMBAT CANDIDATES / NPC EQUIP UNSUPPORTED");
+    return;
+  }
   const auto* owned=p.ActorWeapon(actor.source.refFormId);if(!owned)return;
   const uint64_t instance=owned->id;const uint32_t form=owned->formId;
   const auto& weapon=actor.combatWeapons.at(form);const auto& d=weapon.definition;

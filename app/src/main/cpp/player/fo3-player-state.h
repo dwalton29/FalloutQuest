@@ -151,6 +151,7 @@ struct Catalog {
   std::unordered_map<uint32_t, LootList> lootLists;
   std::unordered_map<uint32_t, float> globals;
   float gameTimeScale = 30.0f; // Fallout 3 TimeScale GLOB, default 30 game min / real min.
+  float npcRunMultiplier = 1.0f; // Optional original fMoveRunMult GMST; do not invent.
   uint32_t hourGlobal=0,dayGlobal=0,monthGlobal=0,yearGlobal=0,daysPassedGlobal=0,timeScaleGlobal=0;
   int32_t lootLevelDifference = 0;
   Rules rules;

@@ -40,6 +40,10 @@ inline bool Assists(const AiData& a,Reaction reaction){
 }
 // xEdit FO3 PKDT general bit 22: defensive actors do not initiate combat.
 inline bool Defensive(const fo3pipdata::PackageDefinition* package){return package&&(package->flags&(1u<<22));}
+// A received hit should not erase a committed attack or restart a reload.
+inline bool MayPlayHitReaction(const RuntimeState& s){
+  return s.activity!=Activity::Combat||(!s.pendingAttack&&s.reloadUntil<=0);
+}
 // Timing derives from WEAP/CSTY; no catch-up volley after a long frame.
 inline float ShotInterval(const fo3weapon::Definition& d,const fo3weapon::Definitions::CombatStyle* style){
   const float rate=d.Automatic()?d.rate:d.shotsPerSecond;

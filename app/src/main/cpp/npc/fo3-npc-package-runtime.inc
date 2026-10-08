@@ -777,15 +777,20 @@ static void Q240AdvancePath(Q230ActorVisual& actor,float dt,double now) {
     actor.runtime.animation=error>0?fo3npc::Animation::TurnLeft:fo3npc::Animation::TurnRight;return;
   }
   constexpr float WALK_METRES_PER_SECOND=1.05f;
-  const float step=std::min(distance,WALK_METRES_PER_SECOND*dt),fraction=step/std::max(distance,.001f);
+  const bool combatEscape=actor.runtime.activity==fo3npc::Activity::Combat&&
+                          actor.runtime.action==fo3npc::CombatAction::Flee;
+  const float velocity=WALK_METRES_PER_SECOND*
+      (combatEscape?gPlayerSession->player.Definitions().npcRunMultiplier:1.f);
+  const float step=std::min(distance,velocity*dt),fraction=step/std::max(distance,.001f);
   if(blocked(step)){
     waitOrRecover();return;
   }
   actor.runtime.blockedSince=-1;actor.runtime.procedure=fo3npc::Procedure::Executing;
   actor.runtime.position[0]+=dx*fraction;actor.runtime.position[2]+=dz*fraction;
   Q240GroundPathRoot(actor);
-  actor.runtime.speed=WALK_METRES_PER_SECOND;
-  actor.runtime.animation=fo3npc::Animation::Walk;
+  actor.runtime.speed=velocity;
+  actor.runtime.animation=combatEscape&&!actor.animations[size_t(fo3npc::Animation::Run)].tracks.empty()?
+      fo3npc::Animation::Run:fo3npc::Animation::Walk;
 }
 // A door handoff is an atomic canonical state change. The actor stays
 // frozen/hidden in the source scene until that scene is torn down. On the next

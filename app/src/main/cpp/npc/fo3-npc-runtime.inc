@@ -9,6 +9,9 @@ void Q230CacheDialogueAnimations(Q230ActorVisual& actor,const fo3pipdata::Defini
     const auto named=d->formNames.find(name);if(named==d->formNames.end())continue;
     const auto model=d->idleModels.find(named->second);if(model!=d->idleModels.end())paths[entry.first]=model->second;
   }
+  paths[size_t(fo3npc::Animation::Run)]=root+"locomotion\\"+
+      (actor.source.female?std::string("female\\"):std::string("male\\"))+
+      "mtfastforward.kf";
   for(size_t i=1;i<paths.size();++i){std::vector<uint8_t> bytes;
     const bool ready=!paths[i].empty()&&LoadFalloutMeshFile(paths[i],bytes)&&fo3anim::DecodeClip(bytes,actor.animations[i]);
     (void)ready;Q6H_LOGI("NPC CLIP actor=%08X slot=%zu ready=%d path=%s",actor.source.refFormId,i,ready,paths[i].c_str());
@@ -22,9 +25,12 @@ void Q230CacheDialogueAnimations(Q230ActorVisual& actor,const fo3pipdata::Defini
 void Q230CacheCombat(Q230ActorVisual& actor,const fo3player::Catalog* catalog) {
   if(!catalog)return;
   const auto root=actor.source.skeletonModel.substr(0,actor.source.skeletonModel.find_last_of("\\/")+1);
-  for(const auto& source:actor.source.inventory) {
-    if(actor.combatWeapons.count(source.formId))continue;
-    const auto item=catalog->items.find(source.formId);if(item==catalog->items.end()||source.count<=0)continue;
+  const auto candidates=fo3npc::CombatWeaponCandidates(actor.source,*catalog);
+  Q6H_LOGI("NPC COMBAT CANDIDATES actor=%08X source=%zu weapons=%zu",
+    actor.source.refFormId,actor.source.inventory.size(),candidates.size());
+  for(const uint32_t form:candidates) {
+    if(actor.combatWeapons.count(form))continue;
+    const auto item=catalog->items.find(form);if(item==catalog->items.end())continue;
     const auto& d=item->second.weapon;
     const bool melee=d.valid&&(d.animation==1||d.animation==2);
     if(!melee&&!d.Firearm())continue;
@@ -50,34 +56,32 @@ void Q230CacheCombat(Q230ActorVisual& actor,const fo3player::Catalog* catalog) {
       if(ok)for(const auto& key:ready.clips[i].textKeys)if(key.text.rfind("Sound: ",0)==0)fo3audio::PreloadSound(key.text.substr(7));
     }
     if(!valid||!LoadFalloutMeshFile(item->second.model,bytes)||!fo3anim::DecodeModelHierarchy(bytes,ready.model,ready.modelBlocks)) {
-      Q6H_LOGI("NPC EQUIP UNSUPPORTED actor=%08X weapon=%08X reason=missing original animation/model",actor.source.refFormId,source.formId);continue;
+      Q6H_LOGI("NPC EQUIP UNSUPPORTED actor=%08X weapon=%08X reason=missing original animation/model",actor.source.refFormId,form);continue;
     }
     if(!melee){const int muzzle=fo3anim::FindBone(ready.model,"ProjectileNode");if(muzzle<0)continue;ready.muzzle=fo3anim::Point(ready.model.bindGlobal[muzzle],{});}
     if(fo3anim::FindBone(actor.skeleton,"Weapon")<0)continue;
-    Fo3WorldPlacement placement;placement.modelPath=item->second.model;placement.baseFormId=source.formId;
+    Fo3WorldPlacement placement;placement.modelPath=item->second.model;placement.baseFormId=form;
     placement.baseRecordType="WEAP";placement.scale=1;
     std::vector<CpuObject> parts;if(!BuildCpuObjects(placement,parts))continue;
     for(auto& part:parts)actor.parts.push_back(std::move(part));
-    ready.ready=true;actor.combatWeapons.emplace(source.formId,std::move(ready));
+    ready.ready=true;actor.combatWeapons.emplace(form,std::move(ready));
     fo3audio::PreloadSound(d.fire3D);fo3audio::PreloadSound(d.equip);
   }
-  // Fallout3.esm IDLE records supply the actual damage responses. There are
-  // no stock Stagger AnimGroup KFs; resolve each source IDLE to its authored KF.
-  const std::array<const char*,6> hitNames{
-    "mthitheada","mthittorsoa","mthitarmleft","mthitarmright",
-    "mthitlegleft","mthitlegright"};
-  for(size_t slot=0;slot<hitNames.size();++slot) {
-    const auto named=catalog->pipboy.formNames.find(hitNames[slot]);
-    if(named==catalog->pipboy.formNames.end())continue;
-    const auto model=catalog->pipboy.idleModels.find(named->second);
-    if(model==catalog->pipboy.idleModels.end())continue;
-    std::vector<uint8_t> hitBytes;
-    if(LoadFalloutMeshFile(model->second,hitBytes)&&
-       fo3anim::DecodeClip(hitBytes,actor.authoredHitClips[slot])&&
-       !actor.authoredHitClips[slot].tracks.empty())
-      Q6H_LOGI("NPC HIT CLIP actor=%08X region=%zu form=%08X path=%s",
-        actor.source.refFormId,slot,named->second,model->second.c_str());
-  }
+  // All original A/B/C hit IDLEs. Skip missing clips without inventing
+  // stand-ins; choose among loaded siblings on an actual nonfatal impact.
+  for(size_t slot=0;slot<fo3npc::HitIdleNames.size();++slot)
+    for(size_t variant=0;variant<fo3npc::HitIdleNames[slot].size();++variant){
+      const auto named=catalog->pipboy.formNames.find(fo3npc::HitIdleNames[slot][variant]);
+      if(named==catalog->pipboy.formNames.end())continue;
+      const auto model=catalog->pipboy.idleModels.find(named->second);
+      if(model==catalog->pipboy.idleModels.end())continue;
+      std::vector<uint8_t> bytes;
+      auto& clip=actor.authoredHitClips[slot][variant];
+      if(LoadFalloutMeshFile(model->second,bytes)&&fo3anim::DecodeClip(bytes,clip)&&
+         !clip.tracks.empty())
+        Q6H_LOGI("NPC HIT CLIP actor=%08X region=%zu variant=%zu form=%08X path=%s",
+          actor.source.refFormId,slot,variant,named->second,model->second.c_str());
+    }
   for(const auto& idle:catalog->pipboy.idleModels) {
     std::string path=idle.second;for(auto& c:path)c=char(std::tolower((unsigned char)c));
     if(path.find("deathpose1.kf")==std::string::npos)continue;
@@ -538,19 +542,30 @@ void Q230ActorHitReaction(uint32_t target,uint8_t region) {
     if(actor.source.refFormId!=target||actor.runtime.offScene||
        !actor.runtime.Alive()||now<actor.runtime.hitUntil)continue;
     // fo3weapon::Region is source geometry, never a guessed hit location.
-    const size_t slot=region==1?0:region>=2&&region<=6?size_t(region-1):1;
-    if(actor.authoredHitClips[slot].tracks.empty())return;
+    const size_t slot=fo3npc::HitRegionSlot(region);
     auto& s=actor.runtime;
-    const auto& clip=actor.authoredHitClips[slot];
+    // A hit cannot indefinitely cancel a wind-up or restart a reload.
+    // Let the original combat event finish; the damage and hostility still apply.
+    if(!fo3npc::MayPlayHitReaction(s)){
+      Q6H_LOGI("NPC HIT REACTION SKIP actor=%08X reason=attack-or-reload",target);
+      return;
+    }
+    std::array<bool,3> available{};
+    for(size_t i=0;i<3;++i)available[i]=!actor.authoredHitClips[slot][i].tracks.empty();
+    const int variant=fo3npc::HitVariant(available,s.hitSequence++);
+    if(variant<0)return;
+    const auto& clip=actor.authoredHitClips[slot][size_t(variant)];
     const double duration=(clip.stop-clip.start)/std::max(.01f,clip.frequency);
     if(!std::isfinite(duration)||duration<=0)return;
     actor.animations[size_t(fo3npc::Animation::Hit)]=clip;
-    s.furniture.Clear();s.speed=0;s.pendingAttack=false;
-    s.pendingHit=0;s.actionUntil=0;s.reloadUntil=0;
-    s.hitUntil=now+std::clamp(duration,.08,1.5);
+    s.furniture.Clear();s.speed=0;
+    // Outside combat the reaction may interrupt movement, not erase damage
+    // attribution or a paused combat reload.
+    s.hitUntil=now+std::min(std::clamp(duration,.08,1.5),
+                             s.activity==fo3npc::Activity::Combat?.15:.35);
     s.animation=fo3npc::Animation::Hit;++s.actionSerial;actor.lastFrame=UINT64_MAX;
-    Q6H_LOGI("NPC HIT REACTION actor=%08X region=%u duration=%.3f clip=%s",
-      target,unsigned(region),s.hitUntil-now,clip.name.c_str());
+    Q6H_LOGI("NPC HIT REACTION actor=%08X region=%u variant=%d duration=%.3f clip=%s",
+      target,unsigned(region),variant,s.hitUntil-now,clip.name.c_str());
     return;
   }
 }

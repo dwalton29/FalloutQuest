@@ -16,7 +16,7 @@ struct DialoguePolicy {
   static constexpr const char* ConversationIdle="LooseListenToPlayerRelaxedB";
 };
 enum class Activity { Idle, Package, Dialogue, Combat, Dying, Dead, Unconscious };
-enum class Animation { Idle, TurnLeft, TurnRight, Conversation, Walk, Speaking, Aim, Attack, Reload, Hit, Death, Count };
+enum class Animation { Idle, TurnLeft, TurnRight, Conversation, Walk, Speaking, Aim, Attack, Reload, Hit, Death, Run, Count };
 enum class CombatAction { Acquire, Pursue, Aim, Attack, Reload, Flee, Search };
 enum class Procedure { None, Executing, Waiting, Completed, Blocked, InvalidTarget, RouteFailed, Unsupported, Interrupted };
 inline float Angle(float a){return std::atan2(std::sin(a),std::cos(a));}
@@ -41,6 +41,7 @@ struct RuntimeState {
   double nextDoorQuery=0,nextThink=0,nextPath=0,nextAttack=0,reloadUntil=0,lastSeen=0,deathAt=0,actionUntil=0;
   double actionStart=0,lastActionTime=0,pendingHit=0,hitUntil=0; // Nonlethal authored IDLE reaction gate.
   bool pendingAttack=false;
+  uint32_t hitSequence=0; // Per-actor original hit IDLE A/B/C rotation, transient.
   Procedure procedure=Procedure::None;
   double blockedSince=-1,nextPackageEvaluation=0;
   uint64_t packageRevision=UINT64_MAX;

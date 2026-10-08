@@ -560,6 +560,12 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
       return fail("Missing/nonfinite player game setting");
     *entry.second = it->second;
   }
+  // Fast NPC flee locomotion uses the actual Fallout3.esm run multiplier;
+  // absent/invalid source fails closed to current walk speed.
+  const auto runSetting=settings.find("fMoveRunMult");
+  if(runSetting!=settings.end()&&std::isfinite(runSetting->second)&&
+     runSetting->second>=1.f&&runSetting->second<=10.f)
+    next.npcRunMultiplier=runSetting->second;
   fo3weapon::FinalizeStatistics(next.weapons);
   fo3pipdata::FinalizeLevelledCategories(next.pipboy,next.weapons);
   fo3pipdata::Finalize(next.pipboy);
