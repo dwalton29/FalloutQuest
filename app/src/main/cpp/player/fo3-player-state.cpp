@@ -399,8 +399,19 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
       } else if (type == "GLOB") {
         const auto *value = Find(subs, "FLTV");
         if (value && value->size == 4 &&
-            std::isfinite(fo3esm::ReadF32(value->data)))
-          next.globals[form] = fo3esm::ReadF32(value->data);
+            std::isfinite(fo3esm::ReadF32(value->data))) {
+          const float globalValue = fo3esm::ReadF32(value->data);
+          next.globals[form] = globalValue;
+          const std::string editor = Text(subs, "EDID");
+          // Original named engine globals, not guessed package schedules.
+          if (editor == "TimeScale" && globalValue > 0.0f && globalValue <= 1000.0f)
+            next.gameTimeScale = globalValue;
+          if (editor == "GameHour" && globalValue >= 0.0f && globalValue < 24.0f)
+            next.initial.gameHour = globalValue;
+          if (editor == "GameDaysPassed" && globalValue >= 0.0f &&
+              globalValue < 1000000.0f)
+            next.initial.gameDaysPassed = static_cast<uint32_t>(globalValue);
+        }
       } else if (type == "REFR") {
         Reference ref;
         ref.flags = flags;
@@ -574,6 +585,25 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
 
 Player::Player(Catalog catalog)
     : catalog_(std::move(catalog)), state_(catalog_.initial) {}
+bool Player::AdvanceGameClock(double realSeconds) {
+  if (!std::isfinite(realSeconds) || realSeconds <= 0.0 || realSeconds > 1.0 ||
+      !std::isfinite(catalog_.gameTimeScale) || catalog_.gameTimeScale <= 0.0f)
+    return false;
+  const double total = double(state_.gameHour) +
+      realSeconds * double(catalog_.gameTimeScale) / 3600.0;
+  if (!std::isfinite(total)) return false;
+  const uint32_t days = static_cast<uint32_t>(std::floor(total / 24.0));
+  if (days > UINT32_MAX - state_.gameDaysPassed) return false;
+  const float nextHour = static_cast<float>(total - double(days) * 24.0);
+  if (!std::isfinite(nextHour) || nextHour < 0.0f || nextHour >= 24.0f)
+    return false;
+  const int beforeMinute = int(state_.gameHour * 60.0f);
+  const int afterMinute = int(nextHour * 60.0f);
+  if (beforeMinute != afterMinute || days) ++revision_;
+  state_.gameHour = nextHour;
+  state_.gameDaysPassed += days;
+  return true;
+}
 ActorCensusReport Player::RegisterOriginalActors() {
   ActorCensusReport report;
   report.authored=catalog_.actorPlacements.size();
@@ -881,7 +911,10 @@ bool Player::Save(const std::string &path, std::string &error) const {
     for(float v:a.position)PutFloat(payload,v);
     PutFloat(payload,a.yaw);Put64(payload,a.equippedWeapon);Put32(payload,a.dead?1:0);PutFloat(payload,a.packageWaitSeconds);
   }
-  Put32(bytes, 9);
+  // v10: appended after v9 actor records. v1-v9 remain readable verbatim.
+  PutFloat(payload,state_.gameHour);
+  Put32(payload,state_.gameDaysPassed);
+  Put32(bytes, 10);
   Put32(bytes, catalog_.fingerprint);
   Put32(bytes, static_cast<uint32_t>(payload.size()));
   Put32(bytes, Crc(payload));
@@ -940,7 +973,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
   const auto *h = bytes.data();
   const auto version = fo3esm::ReadU32(h + 4);
   if (std::memcmp(h, "FQPS", 4) ||
-      (version < 1 || version > 9))
+      (version < 1 || version > 10))
     return fail("Unsupported player save format");
   if (fo3esm::ReadU32(h + 8) != catalog_.fingerprint)
     return fail("Player save belongs to different game definitions");
@@ -1132,7 +1165,8 @@ bool Player::Restore(const std::string &path, std::string &error) {
         if(payload.size()-at<4)return fail("Missing actor state count");
         const auto n=fo3esm::ReadU32(p+at);at+=4;
         const size_t actorBytes=version>=9?56:version>=8?52:48;
-        if(n>10000||payload.size()-at!=actorBytes*n)return fail("Invalid actor state count");
+        const size_t tailBytes = version >= 10 ? 8u : 0u;
+        if(n>10000||payload.size()-at!=actorBytes*n+tailBytes)return fail("Invalid actor state count");
         for(uint32_t i=0;i<n;++i,at+=actorBytes){
           const auto id=fo3esm::ReadU32(p+at);ActorState a;
           a.cell=fo3esm::ReadU32(p+at+4);a.world=fo3esm::ReadU32(p+at+8);
@@ -1155,6 +1189,15 @@ bool Player::Restore(const std::string &path, std::string &error) {
              (a.hostile&&a.hostile!=0x14&&!catalog_.pipboy.targets.count(a.hostile))||
              !next.actors.emplace(id,a).second)return fail("Invalid actor state");
         }
+      }
+      if (version >= 10) {
+        if (payload.size()-at != 8u) return fail("Missing game clock");
+        next.gameHour = fo3esm::ReadF32(p+at);
+        next.gameDaysPassed = fo3esm::ReadU32(p+at+4);
+        if (!std::isfinite(next.gameHour) || next.gameHour < 0.0f ||
+            next.gameHour >= 24.0f || next.gameDaysPassed > 1000000u)
+          return fail("Invalid saved game clock");
+        at += 8;
       }
       if(at!=payload.size())return fail("Trailing weapon save data");
     }
