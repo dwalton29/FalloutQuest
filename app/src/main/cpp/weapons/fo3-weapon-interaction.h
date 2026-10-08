@@ -13,6 +13,11 @@ inline FrameAccess FrameAccessFor(bool sceneReady,bool loading,bool saveBlocked,
   const bool worldActive=sceneReady&&!loading&&!saveBlocked;
   return {worldActive,worldActive&&!pipboyFocus&&interactionFocused};
 }
+// A hand holding a detached magazine, charging the slide, or operating an
+// empty, unchambered weapon owns left-hand focus ahead of raised-arm Pip-Boy.
+inline bool ReloadOwnsLeftHand(bool spareHeld,bool charging,bool weaponHeld,bool needsAction){
+  return spareHeld||charging||(weaponHeld&&needsAction);
+}
 struct Edge {
   bool latched=true,armed=false;
   bool Press(float value) {

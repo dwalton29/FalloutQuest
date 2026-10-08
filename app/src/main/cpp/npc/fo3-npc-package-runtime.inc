@@ -471,6 +471,8 @@ static const fo3pipdata::PackageDefinition* Q240SelectPackage(
           continue;
         }
         actor.runtime.xtelDoor=door;actor.runtime.xtelCell=remote->second.cell;
+        Q6H_LOGI("NPC XTEL INTENT actor=%08X package=%08X sourceCell=%08X targetCell=%08X door=%08X hour=%.2f",
+          actor.source.refFormId,packageId,gCurrentCellFormId,remote->second.cell,door,hour);
         id=packageId;anchor=approach;radius=0;
         return &package;
       }
@@ -681,6 +683,32 @@ static void Q240GroundPathRoot(Q230ActorVisual& actor) {
   // Host/no-collision fallback: use the current route surface rather than
   // preserving an authored ACHR height error.
   actor.runtime.position[1]=navScene[1];
+}
+// One-time/static standing root and authored idle-marker alignment. Existing
+// locomotion already grounds each NAVM step. Original beds/chairs keep their
+// FURN matrices and must NEVER be snapped to standing collision.
+static void Q240GroundStandingRoot(Q230ActorVisual& actor,const char* reason){
+#ifdef FO3_NPC_WORLD_GROUND
+  if(!actor.navigationGraph||!actor.navigationGraph->triangleCount)return;
+  const auto game=Q240GamePosition(actor);float nearest=INFINITY;
+  const auto node=Q240NearestNode(*actor.navigationGraph,game,&nearest);
+  // Stay on the closest plausible authored NAVM layer; do not pull an actor
+  // down to the ground below a legitimate upper Megaton walkway.
+  if(!node.Valid()||nearest>160.f)return;
+  const auto nav=Q240GroundPoint(*actor.navigationGraph->meshes[node.mesh],
+    node.triangle,game);
+  const auto scene=Q240ScenePosition(nav);
+  float physicalY=scene[1];
+  if(!FO3_NPC_WORLD_GROUND(actor.runtime.position[0],actor.runtime.position[2],
+                           scene[1],&physicalY) || !std::isfinite(physicalY))return;
+  const float delta=physicalY-actor.runtime.position[1];
+  if(std::fabs(delta)<.015f||std::fabs(delta)>2.f)return;
+  Q6H_LOGI("NPC STANCE GROUND actor=%08X reason=%s oldY=%.3f navY=%.3f physicalY=%.3f",
+    actor.source.refFormId,reason,actor.runtime.position[1],scene[1],physicalY);
+  actor.runtime.position[1]=physicalY;
+#else
+  (void)actor;(void)reason;
+#endif
 }
 static void Q240AdvancePath(Q230ActorVisual& actor,float dt,double now) {
   if(dt<=0||actor.aiPathIndex>=actor.aiPathGame.size())return;
@@ -989,6 +1017,8 @@ static bool Q240AdvanceFurniture(Q230ActorVisual& actor,const fo3pipdata::Packag
     if(std::fabs(angle)>.01f)return true;
     actor.runtime.position=Q240ScenePosition(f.anchor);actor.runtime.yaw=actor.runtime.returnYaw=f.yaw;actor.runtime.headYaw=0;
     const auto* selected=f.Selected();
+    if(selected&&selected->idleMarker)
+      Q240GroundStandingRoot(actor,"original-idle-marker");
     f.phase=selected->idleMarker?fo3furniture::Phase::Loop:fo3furniture::Phase::Enter;f.started=now;actor.lastFrame=UINT64_MAX;
     if(p->type==12){const uint32_t hash=actor.source.refFormId*2654435761u^++actor.runtime.sandboxCycles*3266489917u;
       f.until=now+(selected->idleMarker?std::clamp(double(selected->idleTimer),1.,60.):12.+double(hash%13));
@@ -1034,6 +1064,10 @@ static void Q240AdvanceNpcPackage(Q230ActorVisual& actor,double now) {
       Q240AccompanyOnce(actor.source.refFormId,actor.aiPackage,active->second.target.value,"INTERRUPT",actor.runtime.dialogue?"dialogue":"combat");
     if(actor.runtime.furniture.Active()){actor.runtime.furniture.RequestExit();Q240AdvanceFurniture(actor,nullptr,0,0,now);}return;
   }
+  // ACHR z and original marker coordinates may not land exactly on the
+  // rendered floor. Only on first resident update: no per-frame NAVM scan.
+  if(actor.aiLastUpdate<0&&!actor.runtime.furniture.Active())
+    Q240GroundStandingRoot(actor,"initial-standing");
   if(!actor.navigationGraph||actor.navigationGraph->triangleCount==0) {
     actor.runtime.furniture.Clear();
     Q240AiLogOnce(actor.source.refFormId,actor.aiPackage,"resident actor has no authored NAVM graph");

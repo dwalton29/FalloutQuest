@@ -282,7 +282,11 @@ void AlignSupportHand(const Model&m){
 bool WeaponHeld(){return weaponruntime::held;}
 // The left hand owns the spare magazine/charging gesture; arm raise must not
 // switch to Pip-Boy focus and retire its reload state.
-bool WeaponReloadActive(){return weaponruntime::magazine||weaponruntime::charging;}
+bool WeaponReloadActive(){
+  const auto* gun=gPlayerSession?gPlayerSession->player.EquippedWeapon():nullptr;
+  return fo3weapon::ReloadOwnsLeftHand(weaponruntime::magazine,
+    weaponruntime::charging,weaponruntime::held,gun&&gun->needsAction);
+}
 void WeaponPersistWorld(){
   using namespace weaponruntime;if(!gPlayerSession)return;
   for(const auto&e:world)gPlayerSession->player.UpdateWorldWeapon(e.first,ToSave(e.second));

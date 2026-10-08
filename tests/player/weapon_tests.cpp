@@ -190,6 +190,12 @@ int main(int argc,char**argv) {
     fo3weapon::FrameAccessFor(true,true,false,false,true),  // Loading
     fo3weapon::FrameAccessFor(true,false,true,false,true)  // Save blocked
   })assert(!paused.advanceProjectiles&&!paused.weaponControls);
+  // Left-wrist Pip-Boy cannot steal a detached spare or slide cycle.
+  assert(!fo3weapon::ReloadOwnsLeftHand(false,false,true,false));
+  assert(fo3weapon::ReloadOwnsLeftHand(true,false,false,false));
+  assert(fo3weapon::ReloadOwnsLeftHand(false,true,false,false));
+  assert(fo3weapon::ReloadOwnsLeftHand(false,false,true,true));
+  assert(!fo3weapon::ReloadOwnsLeftHand(false,false,false,true));
   Combat();
   AmmoIsolation();
   Ownership(Fixture());
