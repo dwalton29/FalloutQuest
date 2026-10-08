@@ -72,7 +72,7 @@ static bool Value(const fo3pipdata::Condition& c,const Context& ctx,float& value
     if(c.function==71)value=def->factions.count(c.a);
     if(c.function==73){auto rank=def->factions.find(c.a);value=rank==def->factions.end()?-1:rank->second;}return true;
   case 72:value=(pc?7:who.base)==c.a;return true;
-  case 74:{auto global=p.Definitions().globals.find(c.a);if(global==p.Definitions().globals.end()){error="global unavailable";return false;}value=global->second;return true;}
+  case 74:if(!p.GlobalValue(c.a,value)){error="global unavailable";return false;}return true;
   case 77:if(!std::isfinite(ctx.randomPercent)||ctx.randomPercent<0||ctx.randomPercent>99){error="random percent sample unavailable";return false;}value=ctx.randomPercent;return true;
   case 80:if(!pc){error="NPC effective level unavailable";return false;}value=state.level;return true;
   case 131:value=uint32_t(d.playerFemale)==c.a;return true;
@@ -92,7 +92,7 @@ bool Conditions(const std::vector<fo3pipdata::Condition>& list,const Context& ct
   for(const auto& c:list) {
     float value=0,comparison=c.value;
     if((c.flags&0x1a)||!Value(c,ctx,value,error)){if(error.empty())error="unsupported CTDA flags";return false;}
-    if(c.flags&4){uint32_t id;std::memcpy(&id,&c.value,4);auto g=ctx.player->Definitions().globals.find(id);if(g==ctx.player->Definitions().globals.end()){error="comparison global unavailable";return false;}comparison=g->second;}
+    if(c.flags&4){uint32_t id;std::memcpy(&id,&c.value,4);if(!ctx.player->GlobalValue(id,comparison)){error="comparison global unavailable";return false;}}
     group=group||Compare(value,comparison,c.flags);
     if(!(c.flags&1)){if(!group)return false;group=false;}
   }
