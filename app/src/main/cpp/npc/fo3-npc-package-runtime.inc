@@ -1027,6 +1027,7 @@ static void Q240AdvanceNpcPackage(Q230ActorVisual& actor,double now) {
     if(active!=gPlayerSession->player.Definitions().pipboy.packages.end()&&active->second.type==7)Q240ClearAccompanyRoute(actor);
     actor.runtime.furniture.Clear();return;
   }
+  if(now<actor.runtime.hitUntil){actor.runtime.speed=0;actor.runtime.animation=fo3npc::Animation::Hit;actor.aiLastUpdate=now;return;}
   if(actor.runtime.dialogue||actor.runtime.activity==fo3npc::Activity::Combat){
     const auto active=gPlayerSession->player.Definitions().pipboy.packages.find(actor.aiPackage);
     if(active!=gPlayerSession->player.Definitions().pipboy.packages.end()&&active->second.type==7)
