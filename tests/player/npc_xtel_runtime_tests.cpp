@@ -12,7 +12,18 @@ static std::shared_ptr<const fo3xtel::Index> activeTestXtels;
 #undef main
 
 static void ActorCrossCellHandoff() {
-  const std::string path=Write(Master());
+  // The world-index fixture intentionally sets the destination door's
+  // initially disabled flag. For the positive traversal case, clear only
+  // that source-record flag; test the disabled case separately below.
+  Bytes master=Master();bool patched=false;
+  for(size_t at=0;at+24<=master.size();++at){
+    if(std::memcmp(master.data()+at,"REFR",4)!=0)continue;
+    const uint32_t id=uint32_t(master[at+12])|(uint32_t(master[at+13])<<8u)|
+      (uint32_t(master[at+14])<<16u)|(uint32_t(master[at+15])<<24u);
+    if(id==0x102){U32(master,at+8,0);patched=true;break;}
+  }
+  assert(patched);
+  const std::string path=Write(master);
   fo3xtel::Index index;std::string error;
   assert(index.Build(path,error));std::remove(path.c_str());
   activeTestXtels=std::make_shared<const fo3xtel::Index>(std::move(index));
