@@ -506,6 +506,24 @@ int main(int argc,char** argv) {
   {
     auto malformed=Actor(6);auto c=gPlayerSession->player.Definitions();c.pipboy.packages[50].combatStyleValid=false;c.pipboy.packages[52]=c.pipboy.packages[50];c.pipboy.packages[52].combatStyleValid=true;c.pipboy.dialogueActors[43].packages={50,52};gPlayerSession=std::make_unique<Session>(c);Q240UpdateNpcPackage(malformed,1);assert(malformed.aiPackage==52);
   }
+  {
+    // Two original-format linked NAVM triangles provide a real shared portal.
+    // After its midpoint is blocked, alternate only the existing authored
+    // edge; do not invent a path or allow unlimited oscillation.
+    auto walker=Actor(6);
+    const auto& pack=gPlayerSession->player.Definitions().pipboy.packages.at(50);
+    const std::array<float,3> home{1900,2900,20};
+    assert(Q240BuildPackagePath(walker,pack,home,0));
+    assert(walker.aiPathSurfaces.size()>1);
+    const auto midpoint=walker.aiPathGame.front();
+    assert(Q240AlternatePortalWaypoint(walker));
+    const auto quarter=walker.aiPathGame.front();
+    assert(Q240PlanarDistance(midpoint,quarter)>.01f);
+    assert(Q240AlternatePortalWaypoint(walker));
+    assert(Q240PlanarDistance(walker.aiPathGame.front(),quarter)>.01f);
+    assert(!Q240AlternatePortalWaypoint(walker));
+    assert(walker.aiPathGame.back()==home);
+  }
   if(argc>1)Original(argv[1]);
   std::cout<<"Production NPC package traversal, surface projection, shared portals, Travel and repathing passed\n";
   return 0;
