@@ -274,7 +274,13 @@ static void Q230SimulateActor(Q230ActorVisual& actor,double now) {
     s.pendingAttack=false;
     const auto matrix=Q230WeaponMatrix(actor);
     const auto local=std::array<float,3>{weapon.muzzle[0]/FO3_UNITS_PER_METRE,FLOOR_Y+weapon.muzzle[2]/FO3_UNITS_PER_METRE,SCENE_FORWARD-weapon.muzzle[1]/FO3_UNITS_PER_METRE};
-    const auto muzzle=fo3anim::Point(matrix,local);const auto aim=fo3vr::Unit(fo3vr::V{target[0]-muzzle[0],target[1]-muzzle[1],target[2]-muzzle[2]});
+    const auto muzzle=fo3anim::Point(matrix,local);
+    const float mx=target[0]-muzzle[0],my=target[1]-muzzle[1],mz=target[2]-muzzle[2];
+    const float ml=std::sqrt(mx*mx+my*my+mz*mz);
+    // Revalidate the actual muzzle at the authored hit key: geometry or the
+    // target may have moved since the attack wind-up began.
+    if(ml<=.01f||HasFo3InteractionOccluder(muzzle[0],muzzle[1],muzzle[2],mx/ml,my/ml,mz/ml,ml,s.combatTarget))return;
+    const auto aim=fo3vr::Unit(fo3vr::V{mx,my,mz});
     const float damage=p.ActorWeaponDamage(actor.source.refFormId);
     if(ranged){
       if(p.FireActorWeapon(actor.source.refFormId,instance)){
