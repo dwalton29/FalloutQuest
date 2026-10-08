@@ -649,7 +649,7 @@ inline void UpdateFo3TimeOfDay(float leftTriggerValue, int64_t predictedDisplayT
     // The actual game clock is now owned by Player. Its time changes even
     // with the old debug trigger held at zero; never leave the sky at noon.
     const bool clockChanged = gLastAppliedHour < 0 ||
-        std::fabs(WrapHour(gTestHour - gLastAppliedHour)) >= (1.0f / 360.0f);
+        std::fabs(std::remainder(gTestHour - gLastAppliedHour, 24.0f)) >= (1.0f / 360.0f);
     if (!gAppliedOnce || moved || clockChanged) {
         ApplyCurrentTime(!gAppliedOnce);
         gLastAppliedHour = gTestHour;
