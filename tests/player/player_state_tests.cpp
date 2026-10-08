@@ -311,13 +311,29 @@ void Synthetic(const std::string &root) {
   midnightCatalog.initial.gameHour=23.999f;
   fo3player::Player midnight(midnightCatalog);
   Check(midnight.AdvanceGameClock(1.0) && midnight.Snapshot().gameDaysPassed==1 &&
-        midnight.Snapshot().gameHour<.02f, "clock midnight rollover");
+        midnight.Snapshot().gameHour<.02f && midnight.Snapshot().gameDay==18,
+        "clock midnight and calendar rollover");
+  fo3player::Catalog endOfMonth=c;
+  endOfMonth.initial.gameHour=23.999f;endOfMonth.initial.gameYear=2277;
+  endOfMonth.initial.gameMonth=7;endOfMonth.initial.gameDay=31;
+  fo3player::Player monthTick(endOfMonth);
+  Check(monthTick.AdvanceGameClock(1.0)&&monthTick.Snapshot().gameMonth==8&&
+        monthTick.Snapshot().gameDay==1,"original month rollover");
+  fo3player::Catalog leapYear=c;
+  leapYear.initial.gameHour=23.999f;leapYear.initial.gameYear=2280;
+  leapYear.initial.gameMonth=1;leapYear.initial.gameDay=28;
+  fo3player::Player leapTick(leapYear);
+  Check(leapTick.AdvanceGameClock(1.0)&&leapTick.Snapshot().gameDay==29&&
+        leapTick.Snapshot().gameMonth==1,"Gregorian leap-year February rollover");
   Check(p.Save(save, error), error.c_str());
   fo3player::Player restored(c);
   Check(restored.Restore(save, error), error.c_str());
   Check(restored.Snapshot().gameDaysPassed==p.Snapshot().gameDaysPassed &&
-        std::fabs(restored.Snapshot().gameHour-p.Snapshot().gameHour)<.00001f,
-        "game clock roundtrip");
+        std::fabs(restored.Snapshot().gameHour-p.Snapshot().gameHour)<.00001f &&
+        restored.Snapshot().gameYear==p.Snapshot().gameYear &&
+        restored.Snapshot().gameMonth==p.Snapshot().gameMonth &&
+        restored.Snapshot().gameDay==p.Snapshot().gameDay,
+        "game clock/calendar roundtrip");
   Check(restored.Health() == p.Health() &&
             restored.InventoryWeight() == p.InventoryWeight() &&
             restored.Snapshot().inventory.size() ==
@@ -346,6 +362,14 @@ void Synthetic(const std::string &root) {
   Check(p.Save(save, error) && restored.Restore(save, error),
         "restore v2 after migration check");
   const Bytes good = Read(save);
+  // The v10 clock extension lacked calendar fields; retain the hour and
+  // migrate the starting date from the original GLOB records.
+  Bytes version10=good;version10.resize(version10.size()-12);
+  version10[4]=10;Rechecksum(version10);Write(save,version10);
+  Check(restored.Restore(save,error) &&
+        std::fabs(restored.Snapshot().gameHour-p.Snapshot().gameHour)<.00001f &&
+        restored.Snapshot().gameDay==c.initial.gameDay,
+        "v10 clock migration restores original calendar");
   Bytes version3=good;
   const size_t containersStart = 40 + 21 * fo3esm::ReadU32(good.data() + 36);
   size_t legacyEnd = containersStart + 8 + 4 * fo3esm::ReadU32(good.data() + containersStart + 4);
