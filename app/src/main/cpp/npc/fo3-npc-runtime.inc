@@ -229,9 +229,11 @@ void Q230PrepareActors(uint32_t cell, uint32_t worldspace,
 
 #ifndef FO3_ACTOR_RUNTIME_HOST_TEST
 static bool Q230PathBlocked(Q230ActorVisual&,float,float,float,float,float);
+static bool Q230RoamEndpointOccupied(uint32_t,const std::array<float,3>&);
 #define FO3_NPC_ACCOMPANY_TARGET(reference,point) Q240ResidentAccompanyTarget(gQ230NpcActors,reference,point)
 #define FO3_NPC_PACKAGE_ACTOR_TARGET(reference,point) Q240ResidentPackageTarget(gQ230NpcActors,reference,point)
 #define FO3_NPC_PATH_BLOCKED Q230PathBlocked
+#define FO3_NPC_ROAM_ENDPOINT_OCCUPIED(actor,point) Q230RoamEndpointOccupied(actor,point)
 #define FO3_NPC_STAGGER_ROUTING
 #define FO3_NPC_WORLD_GROUND(x,z,referenceY,outY) SampleFo3ActorGroundQ240(x,z,referenceY,outY)
 #define FO3_NPC_FURNITURE_LOADING IsFo3LoadingVisible()
@@ -246,8 +248,24 @@ static bool Q230PathBlocked(Q230ActorVisual&,float,float,float,float,float);
 #undef FO3_NPC_WORLD_GROUND
 #undef FO3_NPC_PATH_BLOCKED
 #undef FO3_NPC_STAGGER_ROUTING
+#undef FO3_NPC_ROAM_ENDPOINT_OCCUPIED
 #undef FO3_NPC_ACCOMPANY_TARGET
 #undef FO3_NPC_PACKAGE_ACTOR_TARGET
+// Local VR crowd-preference only. Does not change authored package locations,
+// fixed Patrol marker order, furniture reservation or nonresident actors.
+static bool Q230RoamEndpointOccupied(uint32_t self,const std::array<float,3>& point){
+  for(const auto& other:gQ230NpcActors){
+    if(other.source.refFormId==self||other.runtime.offScene||!other.runtime.Alive())continue;
+    const auto here=Q240GamePosition(other);
+    if(std::fabs(here[2]-point[2])>90.f)continue; // Megaton's stacked walkways
+    if(Q240PlanarDistance(point,here)<70.f)return true;
+    if(other.runtime.activity==fo3npc::Activity::Package &&
+       other.aiPathIndex<other.aiPathGame.size() &&
+       std::fabs(other.aiPathGame.back()[2]-point[2])<90.f &&
+       Q240PlanarDistance(point,other.aiPathGame.back())<70.f)return true;
+  }
+  return false;
+}
 #include "fo3-npc-door-runtime.inc"
 #endif
 
