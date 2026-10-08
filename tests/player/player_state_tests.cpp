@@ -325,6 +325,29 @@ void Synthetic(const std::string &root) {
   fo3player::Player leapTick(leapYear);
   Check(leapTick.AdvanceGameClock(1.0)&&leapTick.Snapshot().gameDay==29&&
         leapTick.Snapshot().gameMonth==1,"Gregorian leap-year February rollover");
+  // Original engine globals are live for CTDA functions 74 and comparisons.
+  fo3player::Catalog withGlobals=c;
+  withGlobals.hourGlobal=0x101u;withGlobals.dayGlobal=0x102u;
+  withGlobals.monthGlobal=0x103u;withGlobals.yearGlobal=0x104u;
+  withGlobals.daysPassedGlobal=0x105u;withGlobals.timeScaleGlobal=0x106u;
+  for(uint32_t id=0x101u;id<=0x106u;++id)withGlobals.globals[id]=99.f;
+  fo3player::Player liveGlobals(withGlobals);
+  float globalValue=0;
+  Check(liveGlobals.GlobalValue(0x101u,globalValue)&&
+        globalValue==withGlobals.initial.gameHour,"dynamic GameHour global");
+  Check(liveGlobals.GlobalValue(0x102u,globalValue)&&
+        globalValue==float(withGlobals.initial.gameDay),"dynamic GameDay global");
+  Check(liveGlobals.GlobalValue(0x103u,globalValue)&&globalValue==7.f,
+        "GameMonth stays GECK zero-based");
+  Check(liveGlobals.GlobalValue(0x104u,globalValue)&&globalValue==2277.f,
+        "dynamic GameYear global");
+  Check(liveGlobals.GlobalValue(0x106u,globalValue)&&globalValue==c.gameTimeScale,
+        "authoritative TimeScale GLOB");
+  Check(!liveGlobals.GlobalValue(0x999u,globalValue),"missing GLOB rejected");
+  const float originalGlobalHour=liveGlobals.Snapshot().gameHour;
+  Check(liveGlobals.AdvanceGameClock(1)&&
+        liveGlobals.GlobalValue(0x101u,globalValue)&&globalValue>originalGlobalHour,
+        "time-dependent original CTDA sees current hour");
   Check(p.Save(save, error), error.c_str());
   fo3player::Player restored(c);
   Check(restored.Restore(save, error), error.c_str());
