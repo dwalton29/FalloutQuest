@@ -20,6 +20,7 @@
 #include "weapons/fo3-weapon-asset.h"
 #include "weapons/fo3-weapon-hit.h"
 #include "ui/interaction/fo3-weapon-ammo-hud.h"
+#include "ui/interaction/fo3-health-bar-hud.h"
 #include "npc/fo3-animation-bounds.h"
 #include "rendering/actor-skinning.h"
 #include "rendering/opaque-telemetry.h"
@@ -760,6 +761,7 @@ struct Q230ActorVisual {
     uint64_t lastFrame = UINT64_MAX;
 };
 std::vector<Q230ActorVisual> gQ230NpcActors;
+fo3health::Tracker gQ230HealthBars;
 static fo3unloaded::Scheduler gQ230UnloadedScheduler;
 void Q230DeleteNpcActors();
 void Q230PrepareActors(uint32_t cell, uint32_t worldspace,
@@ -10185,6 +10187,8 @@ void Q230DeleteNpcActors() {
     EndFo3Dialogue("actor unload");
     for (auto& actor : gQ230NpcActors) Q74DeleteGpuObjects(actor.objects);
     gQ230NpcActors.clear();
+    gQ230HealthBars.Clear();
+    fo3healthui::Shutdown();
 }
 
 void Q230ConvertBethesdaRotation(
@@ -11228,6 +11232,24 @@ void QActorPrepareStereoFrame() {
         Q240UpdateNpcPackage(actor,npcNow);
         npcAiUs+=fqopaque::Micros(npcAiStart);
         Q230PersistActor(actor);
+        // Sample canonical damage once per stereo frame, never during each eye.
+        // For actors, previous damage plus current HP reconstructs the original
+        // maximum derived by ActorHealth (NPC_ stats + level/endurance rules).
+        if(gPlayerSession){
+            const auto& player=gPlayerSession->player;
+            const auto health=player.ActorHealth(actor.source.refFormId);
+            if(health>=0){
+                float maxHealth=health;
+                const auto damage=player.Snapshot().actorDamage.find(actor.source.refFormId);
+                if(damage!=player.Snapshot().actorDamage.end())
+                    maxHealth+=std::max(0.f,damage->second);
+                if(health==0){
+                    const auto* previous=gQ230HealthBars.Actor(actor.source.refFormId);
+                    if(previous&&previous->valid)maxHealth=previous->maximum;
+                }
+                gQ230HealthBars.ObserveActor(actor.source.refFormId,health,maxHealth,npcNow);
+            }
+        }
         GpuObject bounds=actor.renderBounds;
         if(actor.renderBoundsReady&&!actor.rigs.empty()) {
             const auto& origin=actor.rigs[0].scenePlacement;
@@ -11239,6 +11261,9 @@ void QActorPrepareStereoFrame() {
         actor.renderVisible=!actor.runtime.offScene&&(!actor.renderBoundsReady || Q2017StereoVisible(bounds));
         if(actor.renderVisible) Q230UpdateActor(actor);
     }
+    if(gPlayerSession)
+        gQ230HealthBars.player.Observe(gPlayerSession->player.Health(),
+                                      gPlayerSession->player.MaxHealth(),npcNow);
     Q230TickUnloadedActors(GetFo3TimeOfDayHour());
     Q230PumpNpcArrivals();
     const auto npcPaths=gQ240PathsPlanned-pathQueriesBefore;
@@ -11281,6 +11306,33 @@ void QActorReportFrame(double workUs,double cadenceUs) {
         fqactor::frameCadence.Mean()>0 ? 1e6/fqactor::frameCadence.Mean() : 0,fqactor::framePrep.Mean());
 }
 
+// Damage-only HUD from Fallout's own HP values. No new damage authority,
+// scripted target health or persistent per-actor HUD state.
+void Q230RenderHealthHud(const float* mvp) {
+    if(!mvp||!gPlayerSession||gPlayerSession->saveBlocked)return;
+    const double now=std::chrono::duration<double>(fqopaque::Clock::now().time_since_epoch()).count();
+    const std::array<float,3> eye{gQ210Head[0],gQ210Head[1],gQ210Head[2]};
+    for(const auto& actor:gQ230NpcActors){
+        const auto* bar=gQ230HealthBars.Actor(actor.source.refFormId);
+        if(!bar||bar->Alpha(now)<=0||!actor.renderVisible||actor.runtime.offScene||actor.rigs.empty())continue;
+        std::array<float,3> anchor{};
+        if(Q230LiveBone(actor,actor.headBone,anchor))
+            anchor[1]+=.20f; // VR: clear the animated authored head mesh.
+        else if(actor.renderBoundsReady){
+            const float oldY=actor.rigs[0].scenePlacement[13];
+            anchor={actor.runtime.position[0],
+                actor.runtime.position[1]+std::max(0.f,actor.renderBounds.maxY-oldY)+.12f,
+                actor.runtime.position[2]};
+        }else continue;
+        fo3healthui::RenderBar(mvp,anchor,eye,.28f,*bar,now,true);
+    }
+    // The left hand is tracked in world metres; hide when tracking drops or
+    // when the physical Pip-Boy is in focus to avoid covering its controls.
+    if(gQ210LeftHandValid&&!Fo3PipboyFocus()){
+        const auto anchor=std::array<float,3>{gQ210LeftHand[0],gQ210LeftHand[1]+.16f,gQ210LeftHand[2]};
+        fo3healthui::RenderBar(mvp,anchor,eye,.18f,gQ230HealthBars.player,now,false);
+    }
+}
 void RenderScene(const float* mvp) {
     Q1970RenderStallScopeQ19 q1970RenderStallScope;
     if (!gSceneReady) Q1030BootMegatonOnRender();
@@ -11743,6 +11795,11 @@ void RenderScene(const float* mvp) {
         }
     }
 
+    // Draw per-eye after world/water depth has been populated; meters have
+    // depth writes disabled and use the original Fallout HUD solid sprite.
+    Q230RenderHealthHud(mvp);
+    glActiveTexture(GL_TEXTURE5);
+    glBindTexture(GL_TEXTURE_CUBE_MAP, static_cast<GLuint>(previousTexture4CubeQ2050));
     glActiveTexture(GL_TEXTURE5);
     glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture5Q2050));
     glActiveTexture(GL_TEXTURE4);
