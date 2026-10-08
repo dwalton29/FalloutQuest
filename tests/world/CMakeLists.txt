@@ -2,6 +2,19 @@ cmake_minimum_required(VERSION 3.16)
 project(falloutquest_world_tests LANGUAGES CXX)
 enable_testing()
 find_package(Threads REQUIRED)
+# Immutable authored CELL / XTEL adjacency, independent of any player or NPC
+# scene-transition runtime. Synthetic inputs run in CI; installed Fallout3.esm
+# additionally enables original-data Megaton and whole-master verification.
+find_package(ZLIB REQUIRED)
+add_executable(xtel_index_tests xtel_index_tests.cpp
+    ../../app/src/main/cpp/data/fo3-xtel-index.cpp
+    ../../app/src/main/cpp/data/fo3-esm-reader.cpp)
+target_compile_features(xtel_index_tests PRIVATE cxx_std_17)
+target_compile_options(xtel_index_tests PRIVATE -Wall -Wextra -Werror)
+target_include_directories(xtel_index_tests PRIVATE ../../app/src/main/cpp)
+target_link_libraries(xtel_index_tests PRIVATE ZLIB::ZLIB)
+add_test(NAME xtel_index_tests COMMAND xtel_index_tests)
+
 add_executable(world_streaming_tests
     world_streaming_tests.cpp
     ../../app/src/main/cpp/world/fo3-world-streaming.cpp)
