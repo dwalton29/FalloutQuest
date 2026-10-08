@@ -82,6 +82,14 @@ static void OriginalCombatPolicies(const char* path) {
   for(const auto& entry:catalog.pipboy.packages){const auto& p=entry.second;if(fo3npc::Defensive(&p))++defensive;if(!p.combatStyle)continue;
     ++overrides;actor.aiPackage=entry.first;assert(p.combatStyleValid);const auto style=catalog.weapons.styles.find(p.combatStyle);assert(style!=catalog.weapons.styles.end()&&style->second.valid);assert(Q230Style(actor)==&style->second);
   }
+  // These are actual IDLE records in the shipped master, not synthetic
+  // stagger KF names. Resource loading occurs on the scene-prep worker.
+  for(const char* name:{"mthitheada","mthittorsoa","mthitarmleft","mthitarmright","mthitlegleft","mthitlegright"}) {
+    const auto id=catalog.pipboy.formNames.find(name);
+    assert(id!=catalog.pipboy.formNames.end());
+    const auto asset=catalog.pipboy.idleModels.find(id->second);
+    assert(asset!=catalog.pipboy.idleModels.end()&&!asset->second.empty());
+  }
   assert(defensive==161&&overrides==17);std::cout<<"Original Defensive packages="<<defensive<<" CNAM combat styles="<<overrides<<'\n';
 }
 int main(int argc,char** argv){
@@ -155,6 +163,17 @@ int main(int argc,char** argv){
   assert(shots==0&&!muzzleInterrupted.runtime.pendingAttack&&
          gPlayerSession->player.ActorWeapon(42)->loadedRounds==roundsBefore);
   blockSecondSightRay=false;sightRayCount=0;
+  // A nonlethal authored hit owns the pose temporarily; navigation and AI
+  // must not instantly overwrite the reaction, and must resume afterwards.
+  Prepare();auto& reacted=gQ230NpcActors[0];
+  reacted.runtime.EndDialogue();reacted.runtime.hitUntil=2.5;
+  reacted.runtime.animation=fo3npc::Animation::Hit;
+  Q230SimulateActor(reacted,2);
+  assert(reacted.runtime.animation==fo3npc::Animation::Hit&&shots==0);
+  Q240UpdateNpcPackage(reacted,2.1);
+  assert(reacted.runtime.animation==fo3npc::Animation::Hit&&reacted.runtime.speed==0);
+  Q230SimulateActor(reacted,2.6);
+  assert(reacted.runtime.animation!=fo3npc::Animation::Hit);
   PackageCombatPolicyTests();if(argc>1)OriginalCombatPolicies(argv[1]);
   std::cout<<"Production NPC combat pursuit/flee, LOS, reload, firing, death and restore passed\n";
 }
