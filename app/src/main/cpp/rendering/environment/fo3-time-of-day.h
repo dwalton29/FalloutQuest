@@ -89,6 +89,7 @@ struct TimeOfDayRuntime {
 
 inline TimeOfDayRuntime gRuntime;
 inline float gTestHour = 12.0f;
+inline float gLastAppliedHour = -1.0f; // Detect authoritative game-clock updates.
 inline int64_t gLastPredictedNs = 0;
 inline int gLastLoggedHour = -1;
 inline std::string gLastLoggedPhase;
@@ -645,7 +646,14 @@ inline void UpdateFo3TimeOfDay(float leftTriggerValue, int64_t predictedDisplayT
         moved = true;
     }
 
-    if (!gAppliedOnce || moved) ApplyCurrentTime(!gAppliedOnce);
+    // The actual game clock is now owned by Player. Its time changes even
+    // with the old debug trigger held at zero; never leave the sky at noon.
+    const bool clockChanged = gLastAppliedHour < 0 ||
+        std::fabs(WrapHour(gTestHour - gLastAppliedHour)) >= (1.0f / 360.0f);
+    if (!gAppliedOnce || moved || clockChanged) {
+        ApplyCurrentTime(!gAppliedOnce);
+        gLastAppliedHour = gTestHour;
+    }
 }
 
 inline float GetFo3TimeOfDayHour() {
