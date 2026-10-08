@@ -194,7 +194,7 @@ bool Hit(uint64_t instance,V origin,V direction,float limit,uint32_t base,float 
     }
   }
   if(target&&!HasFo3InteractionOccluder(origin.x,origin.y,origin.z,direction.x,direction.y,direction.z,nearest,target)){
-    if(p.ApplyAttack(attacker,base,target,damage)){if(Fo3DialogueFocus())EndFo3Dialogue("weapon damage");Q6H_LOGI("NPC DAMAGE attacker=%08X weapon=%08X target=%08X region=%u damage=%.3f health=%.3f",attacker,base,target,unsigned(region),damage,p.ActorHealth(target));}
+    if(p.ApplyAttack(attacker,base,target,damage)){if(Fo3DialogueFocus())EndFo3Dialogue("weapon damage");if(target!=0x14)Q230ActorHitReaction(target,region);Q6H_LOGI("NPC DAMAGE attacker=%08X weapon=%08X target=%08X region=%u damage=%.3f health=%.3f",attacker,base,target,unsigned(region),damage,p.ActorHealth(target));}
     return true;
   }
   return HasFo3InteractionOccluder(origin.x,origin.y,origin.z,direction.x,direction.y,direction.z,limit,0);
