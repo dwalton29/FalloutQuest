@@ -178,6 +178,18 @@ void Combat() {
   assert(!fo3weapon::Surface({0,0,0},{0,0,1},{0,0,2},{0,0,2},{0,0,2},distance));
 }
 int main(int argc,char**argv) {
+  // Gameplay bullets do not pause merely because VR weapon input is blocked.
+  const auto normal=fo3weapon::FrameAccessFor(true,false,false,false,true);
+  assert(normal.advanceProjectiles&&normal.weaponControls);
+  for(const auto suppressed:{
+    fo3weapon::FrameAccessFor(true,false,false,true,true), // Pip-Boy
+    fo3weapon::FrameAccessFor(true,false,false,false,false) // Shoulder interaction disabled
+  })assert(suppressed.advanceProjectiles&&!suppressed.weaponControls);
+  for(const auto paused:{
+    fo3weapon::FrameAccessFor(false,false,false,false,true), // No active scene
+    fo3weapon::FrameAccessFor(true,true,false,false,true),  // Loading
+    fo3weapon::FrameAccessFor(true,false,true,false,true)  // Save blocked
+  })assert(!paused.advanceProjectiles&&!paused.weaponControls);
   Combat();
   AmmoIsolation();
   Ownership(Fixture());
