@@ -298,9 +298,26 @@ void Synthetic(const std::string &root) {
   Check(!p.DamageHealth(INFINITY) && !p.RestoreActionPoints(NAN) &&
             p.RestoreActionPoints(500) && p.ActionPoints() == 75,
         "resource guards");
+  // Authored default TimeScale is 30 game minutes per real minute. The
+  // player's clock advances while alive, crosses midnight, and survives v10 saves.
+  const float previousHour=p.Snapshot().gameHour;
+  Check(p.AdvanceGameClock(1.0), "clock accepts focused gameplay delta");
+  Check(std::fabs(p.Snapshot().gameHour-(previousHour+c.gameTimeScale/3600.f))<.0001f,
+        "game clock obeys original TimeScale");
+  Check(!p.AdvanceGameClock(NAN) && !p.AdvanceGameClock(-1) &&
+        !p.AdvanceGameClock(60), "game clock rejects invalid/unpaused wall time");
+  // Use a full in-game day by repeated legal frame steps, without test-only state injection.
+  fo3player::Catalog midnightCatalog=c;
+  midnightCatalog.initial.gameHour=23.999f;
+  fo3player::Player midnight(midnightCatalog);
+  Check(midnight.AdvanceGameClock(1.0) && midnight.Snapshot().gameDaysPassed==1 &&
+        midnight.Snapshot().gameHour<.02f, "clock midnight rollover");
   Check(p.Save(save, error), error.c_str());
   fo3player::Player restored(c);
   Check(restored.Restore(save, error), error.c_str());
+  Check(restored.Snapshot().gameDaysPassed==p.Snapshot().gameDaysPassed &&
+        std::fabs(restored.Snapshot().gameHour-p.Snapshot().gameHour)<.00001f,
+        "game clock roundtrip");
   Check(restored.Health() == p.Health() &&
             restored.InventoryWeight() == p.InventoryWeight() &&
             restored.Snapshot().inventory.size() ==
