@@ -39,7 +39,7 @@ struct RuntimeState {
   uint64_t equippedWeapon=0,actionSerial=0;
   std::array<float,3> lastThreat{},pathDestinationGame{};
   double nextDoorQuery=0,nextThink=0,nextPath=0,nextAttack=0,reloadUntil=0,lastSeen=0,deathAt=0,actionUntil=0;
-  double actionStart=0,lastActionTime=0,pendingHit=0;
+  double actionStart=0,lastActionTime=0,pendingHit=0,hitUntil=0; // Nonlethal authored IDLE reaction gate.
   bool pendingAttack=false;
   Procedure procedure=Procedure::None;
   double blockedSince=-1,nextPackageEvaluation=0;
