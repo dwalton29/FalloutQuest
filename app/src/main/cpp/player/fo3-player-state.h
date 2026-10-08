@@ -121,6 +121,10 @@ struct State {
   uint16_t level = 1;
   int32_t baseHealth = 0;
   float karma = 0, healthDamage = 0, apSpent = 0;
+  // One authoritative 24-hour clock shared by lighting and authored AI PACKs.
+  // GameDaysPassed tracks midnight boundaries; dated calendar gates remain unsupported.
+  float gameHour = 12.0f;
+  uint32_t gameDaysPassed = 0;
   uint64_t nextStackId = 1;
   std::vector<Stack> inventory;
   std::unordered_set<uint32_t> collected;
@@ -145,6 +149,7 @@ struct Catalog {
   std::unordered_map<uint32_t, Container> actorInventories;
   std::unordered_map<uint32_t, LootList> lootLists;
   std::unordered_map<uint32_t, float> globals;
+  float gameTimeScale = 30.0f; // Fallout 3 TimeScale GLOB, default 30 game min / real min.
   int32_t lootLevelDifference = 0;
   Rules rules;
   State initial;
@@ -179,6 +184,8 @@ public:
   // Persisted motion/procedure progress still dirties saves, but is sampled
   // by AI's cadence rather than invalidating every actor's conditions per step.
   uint64_t PackageRevision() const { return revision_ - actorPoseRevisions_; }
+  // The caller owns pause/loading policy; this mutates only canonical game time.
+  bool AdvanceGameClock(double realSeconds);
   // Invalid requests are atomic no-ops. Removal respects quest/cannot-drop
   // flags.
   bool RecordDialogue(uint32_t actor,uint32_t info,const std::vector<uint32_t>& topics);
