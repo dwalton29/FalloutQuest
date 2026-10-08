@@ -108,9 +108,12 @@ static std::shared_ptr<const fo3xtel::Index> Q230NpcXtelIndex(){
 #endif
 void Q230PrepareActors(uint32_t cell, uint32_t worldspace,
                        std::vector<Q230ActorVisual> &out,
-                       const std::atomic<bool> &cancel,
-                       const std::unordered_map<uint32_t,fo3player::ActorState>* savedOverride,
-                       const std::unordered_set<uint32_t>* onlyRefs) {
+                       const std::atomic<bool> &cancel
+#ifndef FO3_ACTOR_RUNTIME_HOST_TEST
+                       ,const std::unordered_map<uint32_t,fo3player::ActorState>* savedOverride,
+                       const std::unordered_set<uint32_t>* onlyRefs
+#endif
+                       ) {
   // Wasteland roaming/persistent actor residency requires the AI/streaming
   // milestone. Megaton and explicit interior CELLs can be represented now.
   if (worldspace != 0u && worldspace != 0x00000A74u)
@@ -165,8 +168,8 @@ void Q230PrepareActors(uint32_t cell, uint32_t worldspace,
 #endif
   for(auto source:actors) {
     if(cancel.load(std::memory_order_acquire))return;
-    if(onlyRefs&&!onlyRefs->count(source.refFormId))continue;
 #ifndef FO3_ACTOR_RUNTIME_HOST_TEST
+    if(onlyRefs&&!onlyRefs->count(source.refFormId))continue;
     if(savedActors){
       const auto it=savedActors->find(source.refFormId);
       if(it!=savedActors->end()){
