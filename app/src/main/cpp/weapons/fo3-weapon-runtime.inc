@@ -295,7 +295,9 @@ void WeaponRender(bool alpha){
 void WeaponUpdate(double now,bool backButton){
   using namespace weaponruntime;
   const float dt=std::clamp(float(now-last),0.f,.064f);last=now;
-  const bool blocked=Fo3PipboyFocus()||IsFo3LoadingVisible()||!gSceneReady||!gShoulderFocused||!gPlayerSession||gPlayerSession->saveBlocked;
+  const auto frame=fo3weapon::FrameAccessFor(gSceneReady,IsFo3LoadingVisible(),
+    gPlayerSession&&gPlayerSession->saveBlocked,Fo3PipboyFocus(),gShoulderFocused);
+  const bool blocked=!gPlayerSession||!frame.weaponControls;
   inputs.Update(blocked,gQ217FingerGrip[1],gQ217FingerGrip[0],gQ217FingerTrigger[1],backButton);
   if(Fo3DialogueFocus()){inputs.r=false;inputs.l=false;} // Dialogue suppresses new grabs; held trigger can interrupt.
   if(!gPlayerSession)return;auto&p=gPlayerSession->player;
@@ -318,6 +320,9 @@ void WeaponUpdate(double now,bool backButton){
   }
   // A CELL origin change is handled by persisted world positions at transition.
   for(auto it=world.begin();it!=world.end();){bool keep=false;for(const auto&w:p.Snapshot().worldWeapons)if(w.instance.id==it->first&&Resident(w.pose)){keep=true;break;}if(!keep){p.UpdateWorldWeapon(it->first,ToSave(it->second));it=world.erase(it);}else ++it;}
+  // Flights are owned by the world, not by whether VR hands can use a weapon.
+  // Run after scene-origin retirement, including during Pip-Boy and holster focus.
+  if(frame.advanceProjectiles)AdvanceFlights(dt);
   if(blocked){
     if(held){held=false;if(s)Log("HOLSTER FOCUS",s->id,s->formId);}
     RetireReload();inside=false;
@@ -325,7 +330,6 @@ void WeaponUpdate(double now,bool backButton){
     for(int hand=0;hand<2;hand++)gQ220Grab[hand].previousGrip=gQ217FingerGrip[hand];return;
   }
   Zones();
-  AdvanceFlights(dt);
   Model*m=s?Ensure(s->formId):nullptr;
   if(s&&m){const auto&d=p.Definitions().items.at(s->formId).weapon;auto&zone=d.LongGun()?back:hip;
     if(!held){const V display=d.LongGun()?zone.center:fo3weapon::HipDisplay(zone);pose=Rigid(fo3vr::Multiply(zone.body,fo3vr::Axis({0,0,1},d.LongGun()?fo3vr::Pi*.5f:-fo3vr::Pi*.5f)),display);}
