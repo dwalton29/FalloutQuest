@@ -217,3 +217,10 @@ target_compile_options(npc_furniture_runtime_tests PRIVATE -Wall -Wextra -Werror
 target_include_directories(npc_furniture_runtime_tests PRIVATE ../nif ../../app/src/main/cpp ../../app/src/main/cpp/data ../../app/src/main/cpp/npc)
 target_link_libraries(npc_furniture_runtime_tests PRIVATE ZLIB::ZLIB)
 add_test(NAME npc_furniture_runtime_tests COMMAND npc_furniture_runtime_tests)
+
+# HUD reveal timing is independent of OpenGL and uses canonical health samples.
+add_executable(health_bar_state_tests health_bar_state_tests.cpp)
+target_compile_features(health_bar_state_tests PRIVATE cxx_std_17)
+target_compile_options(health_bar_state_tests PRIVATE -Wall -Wextra -Werror)
+target_include_directories(health_bar_state_tests PRIVATE ../../app/src/main/cpp)
+add_test(NAME health_bar_state_tests COMMAND health_bar_state_tests)
