@@ -1207,7 +1207,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
         }
       }
       if (version >= 10) {
-        if (payload.size()-at != 8u) return fail("Missing game clock");
+        if (payload.size()-at != (version>=11 ? 20u : 8u)) return fail("Missing game clock");
         next.gameHour = fo3esm::ReadF32(p+at);
         next.gameDaysPassed = fo3esm::ReadU32(p+at+4);
         if (!std::isfinite(next.gameHour) || next.gameHour < 0.0f ||
