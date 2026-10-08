@@ -1,6 +1,7 @@
 #include "dialogue/fo3-dialogue-session.h"
 #include "dialogue/fo3-dialogue-panel.h"
 #include "npc/fo3-npc-state.h"
+#include "npc/fo3-unloaded-ai.h"
 #include "data/fo3-xtel-index.h"
 #include "npc/fo3-facial-data.h"
 #include "npc/fo3-npc-combat.h"
@@ -751,6 +752,7 @@ struct Q230ActorVisual {
     uint64_t lastFrame = UINT64_MAX;
 };
 std::vector<Q230ActorVisual> gQ230NpcActors;
+static fo3unloaded::Scheduler gQ230UnloadedScheduler;
 void Q230DeleteNpcActors();
 void Q230PrepareActors(uint32_t cell, uint32_t worldspace,
     std::vector<Q230ActorVisual>& out, const std::atomic<bool>& cancel);
@@ -10968,6 +10970,51 @@ void PrepareFo3InteriorSceneLights() {
     }
 }
 
+// v187: Advance *tracked* nonresident actors only when the existing game
+// clock reaches a new minute. No off-scene scene graph, animation or NAVM.
+static void Q230TickUnloadedActors(float hour) {
+    if(!gPlayerSession||gPlayerSession->saveBlocked||IsFo3LoadingVisible())return;
+    const auto index=Q230NpcXtelIndex();
+    if(!index)return;
+    auto& player=gPlayerSession->player;
+    const auto& defs=player.Definitions().pipboy;
+    fo3unloaded::Callbacks cb;
+    cb.packages=[&](uint32_t base) {
+        const auto* actor=fo3pipdata::ActorCategory(defs,base,16);
+        return actor?actor->packages:std::vector<uint32_t>{};
+    };
+    cb.alive=[&](uint32_t actor) {return player.ActorHealth(actor)>0;};
+    cb.canUseDoor=[&](uint32_t actor,uint32_t door) {
+        const auto ref=defs.targets.find(door);
+        return ref!=defs.targets.end()&&!ref->second.parent&&
+            player.CanActorOpenDoor(actor,door);
+    };
+    cb.eligible=[&](uint32_t actor,uint32_t base,
+                    const fo3player::ActorState& saved,
+                    const fo3pipdata::PackageDefinition& p,float atHour) {
+        fo3dialogue::Context ctx;ctx.player=&player;
+        ctx.speaker={actor,base,saved.cell,saved.world,saved.package,
+            saved.position[0],saved.position[1],saved.position[2],false,saved.package!=0};
+        ctx.target={0x14,7,gCurrentCellFormId,gExteriorWorldspaceQ1890,0,
+            gSceneCenterXQ1730+gQ210Head[0]*FO3_UNITS_PER_METRE,
+            gSceneCenterYQ1730-(gQ210Head[2]-SCENE_FORWARD)*FO3_UNITS_PER_METRE,
+            gSceneFloorZQ1730+(gQ210Head[1]-FLOOR_Y)*FO3_UNITS_PER_METRE,false,false};
+        const uint32_t minute=uint32_t(fo3tod::WrapHour(atHour)*60.f);
+        ctx.randomPercent=float((actor*2654435761u^minute*3266489917u)%100u);
+        std::string error;
+        return fo3dialogue::Conditions(p.conditions,ctx,error)&&error.empty();
+    };
+    cb.persist=[&](uint32_t actor,const fo3player::ActorState& state){
+        return player.UpdateActor(actor,state);
+    };
+    const auto report=gQ230UnloadedScheduler.Tick(hour,gCurrentCellFormId,
+        gExteriorWorldspaceQ1890,player.Snapshot().actors,defs,*index,cb);
+    if(report.doorHops||report.packageChanges||report.blocked)
+        Q6H_LOGI("NPC UNLOADED TICK visited=%zu packageChanged=%zu doorHops=%zu blocked=%zu unsupported=%zu residentSkipped=%zu",
+            report.visited,report.packageChanges,report.doorHops,report.blocked,
+            report.unsupported,report.residentSkipped);
+}
+
 void QActorPrepareStereoFrame() {
     const auto started=fqopaque::Clock::now();
     fqactor::npc={}; // Player pose has already been prepared before UI/world input.
@@ -10992,6 +11039,7 @@ void QActorPrepareStereoFrame() {
         actor.renderVisible=!actor.runtime.offScene&&(!actor.renderBoundsReady || Q2017StereoVisible(bounds));
         if(actor.renderVisible) Q230UpdateActor(actor);
     }
+    Q230TickUnloadedActors(GetFo3TimeOfDayHour());
     PrepareFo3InteriorSceneLights();
     fqactor::framePrep.Add(fqopaque::Micros(started));
     if(gStereoFrame%60==0) Q6H_LOGI("ACTOR FRAME PREP frame=%llu playerPoseUs=%.1f fingersUs=%.1f playerBoneUs=%.1f playerSkinCpuUs=%.1f playerDirectionsUs=%.1f npcClipUs=%.1f npcPoseUs=%.1f npcBoneUs=%.1f npcSkinCpuUs=%.1f npcDirectionsUs=%.1f animatedUploadCpuUs=%.1f totalActorPrepUs=%.1f setupUs=%.1f animatedVertexUploadBytes=%llu animatedVboUploads=%llu bonePaletteUploadBytes=%llu playerParts=%llu npcParts=%llu actors=%llu cpuReference=%d",

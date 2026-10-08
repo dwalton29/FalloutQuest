@@ -19,6 +19,7 @@ add_library(falloutquest SHARED
     rendering/environment/fo3-interior-lighting.cpp
     data/fo3-esm-reader.cpp
     data/fo3-xtel-index.cpp
+    npc/fo3-unloaded-ai.cpp
     data/fo3-texture-bsa.cpp
     rendering/water/fo3-water.cpp
     npc/fo3-npc.cpp

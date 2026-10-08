@@ -133,6 +133,18 @@ add_test(NAME npc_package_runtime_tests COMMAND npc_package_runtime_tests)
 
 # Full production package executor using a synthetic canonical ESM
 # with two XTEL doors; checks a real host-side actor handoff and lock denial.
+# Pure tracked-unloaded scheduler uses authored-format XTEL fixtures, with
+# game-time schedule/door/condition gating and no render or player transition.
+add_executable(npc_unloaded_runtime_tests npc_unloaded_runtime_tests.cpp
+    ../../app/src/main/cpp/npc/fo3-unloaded-ai.cpp
+    ../../app/src/main/cpp/data/fo3-xtel-index.cpp
+    ../../app/src/main/cpp/data/fo3-esm-reader.cpp)
+target_compile_features(npc_unloaded_runtime_tests PRIVATE cxx_std_17)
+target_compile_options(npc_unloaded_runtime_tests PRIVATE -Wall -Wextra -Werror)
+target_include_directories(npc_unloaded_runtime_tests PRIVATE ../../app/src/main/cpp)
+target_link_libraries(npc_unloaded_runtime_tests PRIVATE ZLIB::ZLIB)
+add_test(NAME npc_unloaded_runtime_tests COMMAND npc_unloaded_runtime_tests)
+
 add_executable(npc_xtel_runtime_tests npc_xtel_runtime_tests.cpp ${dialogue_shared}
     ../../app/src/main/cpp/npc/fo3-npc.cpp
     ../../app/src/main/cpp/npc/fo3-actor-animation.cpp
