@@ -151,6 +151,7 @@ struct Catalog {
   std::unordered_map<uint32_t, LootList> lootLists;
   std::unordered_map<uint32_t, float> globals;
   float gameTimeScale = 30.0f; // Fallout 3 TimeScale GLOB, default 30 game min / real min.
+  uint32_t hourGlobal=0,dayGlobal=0,monthGlobal=0,yearGlobal=0,daysPassedGlobal=0,timeScaleGlobal=0;
   int32_t lootLevelDifference = 0;
   Rules rules;
   State initial;
@@ -187,6 +188,8 @@ public:
   uint64_t PackageRevision() const { return revision_ - actorPoseRevisions_; }
   // The caller owns pause/loading policy; this mutates only canonical game time.
   bool AdvanceGameClock(double realSeconds);
+  // Mutable engine GLOB values must not resolve through immutable ESM defaults.
+  bool GlobalValue(uint32_t form,float& value) const;
   // Invalid requests are atomic no-ops. Removal respects quest/cannot-drop
   // flags.
   bool RecordDialogue(uint32_t actor,uint32_t info,const std::vector<uint32_t>& topics);
