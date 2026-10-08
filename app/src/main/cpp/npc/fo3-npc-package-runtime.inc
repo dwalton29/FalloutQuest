@@ -1,5 +1,7 @@
 #include <limits>
 #include "fo3-package-schedule.h"
+#include <queue>
+#include <functional>
 static std::unordered_set<std::string> gQ240AiDiagnostics;
 static void Q240AiLogOnce(uint32_t actor,uint32_t package,const std::string& why) {
   char prefix[40];std::snprintf(prefix,sizeof(prefix),"%08X:%08X:",actor,package);
@@ -173,13 +175,20 @@ static bool Q240Path(const Q240NavigationGraph& graph,const std::array<float,3>&
   if(goalDistance>500.f)return fail("destination too far from NAVM surface");
   const size_t startFlat=Q240Flat(graph,start),goalFlat=Q240Flat(graph,goal),n=graph.triangleCount;
   if(startFlat>=n||goalFlat>=n)return fail("invalid NAVM graph index");
+  // The original full-frontier scan visited every NAVM triangle for each A*
+  // expansion (quadratic work on Megaton's connected meshes). Keep the same
+  // centroids, portal validation, costs and endpoint, but use a min-heap.
+  using FrontierEntry=std::pair<float,size_t>;
+  std::priority_queue<FrontierEntry,std::vector<FrontierEntry>,std::greater<FrontierEntry>> frontier;
   std::vector<float> cost(n,INFINITY),score(n,INFINITY);
-  std::vector<size_t> previous(n,SIZE_MAX);std::vector<uint8_t> open(n,0),closed(n,0);
-  cost[startFlat]=0;score[startFlat]=Q240PlanarDistance(Q240Centroid(graph,start),Q240Centroid(graph,goal));open[startFlat]=1;
-  for(size_t pass=0;pass<n;++pass) {
-    size_t current=SIZE_MAX;float best=INFINITY;
-    for(size_t i=0;i<n;++i)if(open[i]&&score[i]<best){best=score[i];current=i;}
-    if(current==SIZE_MAX)break;if(current==goalFlat)break;open[current]=0;closed[current]=1;
+  std::vector<size_t> previous(n,SIZE_MAX);std::vector<uint8_t> closed(n,0);
+  cost[startFlat]=0;score[startFlat]=Q240PlanarDistance(Q240Centroid(graph,start),Q240Centroid(graph,goal));
+  frontier.emplace(score[startFlat],startFlat);
+  while(!frontier.empty()) {
+    const auto [priority,current]=frontier.top();frontier.pop();
+    if(closed[current]||priority>score[current])continue; // stale queued priority
+    if(current==goalFlat)break;
+    closed[current]=1;
     const auto currentNode=Q240NodeAt(graph,current);if(!currentNode.Valid())continue;
     const auto here=Q240Centroid(graph,currentNode);
     Q240Neighbors(graph,currentNode,[&](const Q240Node& nextNode){
@@ -189,7 +198,8 @@ static bool Q240Path(const Q240NavigationGraph& graph,const std::array<float,3>&
       const float tentative=cost[current]+Q240PlanarDistance(here,there);
       if(tentative>=cost[next])return;
       previous[next]=current;cost[next]=tentative;
-      score[next]=tentative+Q240PlanarDistance(there,Q240Centroid(graph,goal));open[next]=1;
+      score[next]=tentative+Q240PlanarDistance(there,Q240Centroid(graph,goal));
+      frontier.emplace(score[next],next);
     });
   }
   if(startFlat!=goalFlat&&previous[goalFlat]==SIZE_MAX)return fail("no connected portal route");
@@ -572,7 +582,16 @@ static void Q240AdoptPackage(Q230ActorVisual& actor,uint32_t packageId,const fo3
     }
     actor.runtime.blockedSince=-1;actor.runtime.procedure=fo3npc::Procedure::Executing;
     actor.runtime.sandboxLastTarget=0;actor.runtime.sandboxCycles=0;actor.runtime.sandboxNext=0;
+    actor.runtime.hasLastRoamDestination=false;
     actor.aiPackage=packageId;actor.aiAnchorGame=anchor;actor.aiSequence=0;actor.aiPathGame.clear();actor.aiPathSurfaces.clear();actor.aiPathIndex=0;actor.runtime.navigationDoor=0;actor.aiRepathAt=0;
+#ifdef FO3_NPC_STAGGER_ROUTING
+    // Megaton's 10:00 schedules may all change on the same stereo frame.
+    // Delay only the first locally-planned civilian route by <= 0.5 seconds;
+    // never defer authored package selection, combat or dialogue decisions.
+    if(package.type==5||package.type==6||package.type==12||package.type==14)
+      actor.aiRepathAt=actor.aiLastUpdate+
+        .04*double((actor.source.refFormId*2654435761u)%13u);
+#endif
     Q6H_LOGI("NPC PACKAGE actor=%08X package=%08X EDID=%s type=%u locationType=%u radius=%d flags=%08X style=%08X hour=%.2f",
       actor.source.refFormId,packageId,package.editor.c_str(),unsigned(package.type),
       package.location.type,package.location.radius,package.flags,package.combatStyle,GetFo3TimeOfDayHour());
@@ -623,10 +642,36 @@ static bool Q240BuildPackagePath(Q230ActorVisual& actor,const fo3pipdata::Packag
       if(Q240PlanarDistance(candidate,current)>16.f)choices.push_back(candidate);
     }
     if(choices.empty()) {Q240AiLogOnce(actor.source.refFormId,actor.aiPackage,"no reachable destination in PLDT radius="+std::to_string(radius));return false;}
-    destination=choices[hash%choices.size()];
+    // Avoid repeating the previous roaming endpoint when the authored radius
+    // includes alternatives. Never expand PLDT or introduce fake destinations.
+    std::vector<size_t> fresh;
+    for(size_t i=0;i<choices.size();++i)
+      if(!actor.runtime.hasLastRoamDestination||
+         Q240PlanarDistance(choices[i],actor.runtime.lastRoamDestination)>96.f)
+        fresh.push_back(i);
+    destination=choices[fresh.empty()?hash%choices.size():fresh[hash%fresh.size()]];
   }
   std::string failure;
   const bool success=Q240Path(graph,current,destination,actor.aiPathGame,&failure,&actor.aiPathSurfaces);
+  if(success && ((package.type==5&&radius>0)||package.type==12)) {
+    actor.runtime.lastRoamDestination=destination;
+    actor.runtime.hasLastRoamDestination=true;
+    // Non-authoritative crowd variety: choose slightly different positions on
+    // the SAME original NAVM portals for roaming only, not fixed patrols,
+    // travel destinations, XTEL approaches, furniture or combat.
+    for(size_t i=0;i+1<actor.aiPathSurfaces.size()&&i<actor.aiPathGame.size();++i) {
+      const auto from=actor.aiPathSurfaces[i],to=actor.aiPathSurfaces[i+1];
+      const Q240Node a{from.first,from.second},b{to.first,to.second};
+      std::array<float,3> midpoint{};
+      std::array<std::array<float,3>,2> edge{};
+      if(!Q240Portal(graph,a,b,midpoint,&edge))continue;
+      const uint32_t seed=actor.source.refFormId*2654435761u ^
+        uint32_t(i+1)*2246822519u ^ actor.aiSequence*3266489917u;
+      const float f=.35f+float(seed%31u)*.01f;
+      for(int axis=0;axis<3;++axis)
+        actor.aiPathGame[i][axis]=edge[0][axis]*(1.f-f)+edge[1][axis]*f;
+    }
+  }
   if(!success)Q240AiLogOnce(actor.source.refFormId,actor.aiPackage,failure);
   if(!success||actor.aiSequence<=2u||(actor.aiSequence%8u)==0u) {
     const auto start=Q240NearestNode(graph,current),goal=Q240NearestNode(graph,destination);
@@ -659,7 +704,14 @@ static bool Q240AlternatePortalWaypoint(Q230ActorVisual& actor) {
   for(int axis=0;axis<3;++axis)first[axis]=edge[0][axis]*.75f+edge[1][axis]*.25f;
   if(Q240PlanarDistance(current,middle)<.01f)fraction=.25f;
   else if(Q240PlanarDistance(current,first)<.01f)fraction=.75f;
-  else return false;
+  else {
+    // A roaming actor may start at its own seeded portal crossing, rather
+    // than the midpoint. Recovery must still offer the two validated edges.
+    std::array<float,3> last{};
+    for(int axis=0;axis<3;++axis)last[axis]=edge[0][axis]*.25f+edge[1][axis]*.75f;
+    if(Q240PlanarDistance(current,last)<.01f)return false;
+    fraction=.25f;
+  }
   for(int axis=0;axis<3;++axis)next[axis]=edge[0][axis]*(1-fraction)+edge[1][axis]*fraction;
   actor.aiPathGame[i]=next;
   Q6H_LOGI("NPC PORTAL RECOVERY actor=%08X package=%08X waypoint=%zu portal=(%08X:%zu -> %08X:%zu) fraction=%.2f",
@@ -1190,7 +1242,9 @@ static void Q240AdvanceNpcPackage(Q230ActorVisual& actor,double now) {
   actor.runtime.package=packageId;actor.runtime.packageKnown=true;actor.runtime.activity=fo3npc::Activity::Package;
   if(package->type==12){
     if(actor.runtime.furniture.Active()){Q240AdvanceFurniture(actor,package,packageId,dt,now);return;}
-    if(now<state.sandboxNext){actor.runtime.speed=0;actor.runtime.animation=fo3npc::Animation::Idle;return;}
+    if(now<state.sandboxNext||(actor.aiPathGame.empty()&&now<actor.aiRepathAt)){
+      actor.runtime.speed=0;actor.runtime.animation=fo3npc::Animation::Idle;return;
+    }
     if(actor.aiPathIndex>=actor.aiPathGame.size()&&now>=actor.aiRepathAt){
       const bool wander=(package->typeFlags&32u)==0;
       if((!wander||(state.sandboxCycles%2)==0)&&Q240SandboxTarget(actor,*package,anchor,radius)!=SIZE_MAX){Q240AdvanceFurniture(actor,package,packageId,dt,now);return;}
