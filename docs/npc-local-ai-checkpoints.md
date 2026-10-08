@@ -175,3 +175,33 @@ independent state and reservations. No physical Quest test was performed;
 visual formation, child locomotion, physical door approach, grounding,
 dialogue/combat return and save/scene restoration still need headset acceptance.
 Android CI status and APK are reported separately with delivery.
+
+## Checkpoint 3 — Use Item At (seated verified subset)
+
+Original PACK 0003E5DA MS03EntryMegaton belongs to Moira Brown. Decoded
+PKDT type 8, type flag 0002 (Sit Down), PLDT near MegMoiraWriteChair
+REFR 0003E5D0 within 110 units (FURN ComputerOfficeChairRuined01R),
+and PTDT specific MoiraTerminalREF 00003DAE (TERM MegCratersideSupplyTerminal).
+The OnBegin script is the actual compiled/source pair
+`Set MS03.MoiraDataEntry to 0`; OnEnd/OnChange are empty. CTDA functions
+79 GetQuestVariable require MS03.MoiraDataEntry == 1 and a second
+MS03 quest variable == 0. The Begin assignment can invalidate the same
+package on the next ordinary 0.25-second condition reevaluation; this is
+preserved rather than silently ignoring quest state.
+
+The verified procedure admits only a resident placed TERM plus Sit Down
+and an original supported adult chair marker. It uses the v182 reservation,
+NAVM, authored chair enter/loop/exit and interruption handling; the terminal
+is validated but no NPC terminal UI, typing animation, or scripted terminal
+activation is fabricated. PACK POBA/POEA/POCA ownership is retained during
+catalog decoding; only an OnBegin script accepted by the existing atomic
+result-command interpreter executes. Compiled-only, OnEnd/OnChange script,
+nonzero procedure action/idle, other item types and unverified activation
+are explicit unsupported boundaries. This is not generic inventory-item
+consumption or complete terminal-use simulation.
+
+The local implementation does not alter the existing Sleep/Eat/Sandbox,
+Accompany, dialogue or locomotion owners. Quest-specific form IDs are not
+hard-coded into the generic executor; they occur only in original-data tests
+and this documentation. Quest headset chair/terminal visual acceptance remains
+outstanding.

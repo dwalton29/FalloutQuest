@@ -77,7 +77,7 @@ std::string VoicePath(const Definitions &d, const Info &i, const Response &r,
   return "@voice:" + v->second + ":" + tail;
 }
 bool Relevant(const std::string &t) {
-  return t == "ANIO" || t == "IDLM" || t == "FURN" || t == "RADS" || t == "WRLD" || t == "PERK" || t == "QUST" ||
+  return t == "ANIO" || t == "IDLM" || t == "FURN" || t == "TERM" || t == "RADS" || t == "WRLD" || t == "PERK" || t == "QUST" ||
          t == "MGEF" || t == "TACT" || t == "INFO" || t == "DIAL" ||
          t == "RACE" || t == "FLST" || t == "IDLE" || t == "SOUN" || t == "VTYP" || t == "SCPT" || t == "NPC_" || t == "PACK";
 }
@@ -95,6 +95,7 @@ void Decode(Definitions &d, const std::string &t, uint32_t id, uint32_t flags,
   else if(t=="RACE"){auto voices=Find(s,"VTCK");if(voices&&voices->n>=8)d.raceVoices[id]={U(voices),U(voices,4)};auto data=Find(s,"DATA");if(data&&data->n==36&&(U(data,32)&4))d.childRaces.insert(id);}
   else if(t=="FURN") {auto& f=d.furniture[id];f.model=Text(s,"MODL");f.editor=editor;auto m=Find(s,"MNAM");f.markers=U(m);f.valid=m&&m->n==4&&!f.model.empty();}
   else if(t=="IDLE") { d.idleModels[id]=Text(s,"MODL");d.idleParents[id]=U(Find(s,"ANAM")); for(const auto& v:s)if(v.type=="CTDA")d.idleConditions[id].push_back(Cond(v)); }
+  else if(t=="TERM") {d.terminalBases.insert(id);}
   else if(t=="ANIO") {const auto idle=U(Find(s,"DATA"));if(idle)d.idleAnimationObjects.insert(idle);}
   else if(t=="IDLM") {
     auto& m=d.idleMarkers[id];const auto f=Find(s,"IDLF"),c=Find(s,"IDLC"),timer=Find(s,"IDLT"),a=Find(s,"IDLA");
@@ -353,13 +354,24 @@ void Decode(Definitions &d, const std::string &t, uint32_t id, uint32_t flags,
       package.schedule.duration=static_cast<int32_t>(U(schedule,4));
       package.schedule.valid=true;
     }
+    // PACK POBA/POEA/POCA delimit OnBegin/OnEnd/OnChange. Never treat a
+    // script in one event as permission to silently skip the others.
+    int event=0;
     for(auto& v:s) {
+      if(v.type=="POBA"){event=1;continue;}
+      if(v.type=="POEA"){event=2;continue;}
+      if(v.type=="POCA"){event=3;continue;}
       if(v.type=="CTDA")package.conditions.push_back(Cond(v));
       else if((v.type=="INAM"||v.type=="TNAM")&&v.n==4&&U(&v))package.procedureActions=true;
-      else if(v.type=="SCDA"&&v.n)package.scripted=true;
-      else if(v.type=="SCTX"&&v.n>1)package.scripted=true;
-      // PACK procedure blocks routinely carry an all-zero SCHR header even
-      // when there is no executable script. SCHR alone is not script content.
+      else if(v.type=="SCDA"&&v.n){package.scripted=true;if(event!=1)package.otherProcedureScript=true;}
+      else if(v.type=="SCTX"&&v.n>1) {
+        package.scripted=true;
+        if(event==1) {
+          if(!package.onBeginScript.empty())package.onBeginScript+="\n";
+          package.onBeginScript+=fo3esm::ZString(v.p,v.n);
+        }else package.otherProcedureScript=true;
+      }
+      // Empty SCHR script headers are not executable actions.
     }
     d.packages[id]=std::move(package);
   } else if (t == "DIAL") {

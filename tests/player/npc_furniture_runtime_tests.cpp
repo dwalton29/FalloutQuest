@@ -195,4 +195,73 @@ static void SandboxActivities(){
  a.runtime.Die(210);assert(scene->reservations->owners.empty());
  std::cout<<"Sandbox repeated chair activity, authored No Wandering/No Furniture, dialogue/combat release passed\n";
 }
-int main(int argc,char** argv){AccompanyTests();AccompanyRecoveryTests();SandboxActivities();SyntheticFurniture();if(argc>2){meshRoot=argv[2];OriginalFurniture(argv[1]);OriginalFurniture(argv[1],true);Coverage(argv[1]);SandboxCoverage(argv[1]);OriginalAccompany(argv[1]);}std::cout<<"Furniture package runtime tests passed\n";}
+
+static void SyntheticUseItemAt(){
+  auto actor=Actor(8);
+  auto catalog=gPlayerSession->player.Definitions();
+  auto& p=catalog.pipboy.packages[50];p.typeFlags=2;
+  p.target={0,61,0,true};p.location.value=60;
+  catalog.pipboy.targets[60].base=99;catalog.pipboy.furniture[99].valid=true;
+  catalog.pipboy.targets[61].base=100;
+  catalog.pipboy.targets[61].world=gExteriorWorldspaceQ1890;
+  catalog.pipboy.targets[61].cell=gCurrentCellFormId;
+  catalog.pipboy.terminalBases.insert(100);
+  gPlayerSession=std::make_unique<Session>(std::move(catalog));
+  auto scene=std::make_shared<fo3furniture::Scene>();
+  auto program=std::make_shared<fo3furniture::Program>();
+  program->enter.cycle=program->exit.cycle=2;
+  program->enter.stop=program->exit.stop=1;
+  fo3anim::Track track;track.bone="Bip01";track.hasTranslation=true;
+  track.base.translation={0,20,0};
+  program->enter.accumulationRoot=program->exit.accumulationRoot="Bip01";
+  program->enter.tracks={track};program->exit.tracks={track};program->loop.tracks={track};
+  fo3furniture::Slot slot;slot.reference=60;slot.program=program;
+  slot.alignment=fo3anim::Identity();slot.alignment[12]=1900;slot.alignment[13]=2900;slot.alignment[14]=20;
+  scene->slots.push_back(std::move(slot));actor.runtime.furniture.scene=scene;
+  Q240UpdateNpcPackage(actor,0);
+  assert(actor.aiPackage==50&&actor.runtime.furniture.Active());
+  for(int i=1;i<800&&actor.runtime.furniture.phase!=fo3furniture::Phase::Loop;++i)
+    Q240UpdateNpcPackage(actor,i*.1);
+  assert(actor.runtime.furniture.phase==fo3furniture::Phase::Loop);
+  assert(scene->reservations->owners.size()==1);
+  actor.runtime.BeginDialogue();
+  for(int i=800;i<860;++i)Q240UpdateNpcPackage(actor,i*.1);
+  assert(!actor.runtime.furniture.Active()&&scene->reservations->owners.empty());
+  actor.runtime.EndDialogue();
+  auto invalid=gPlayerSession->player.Definitions();
+  invalid.pipboy.packages[50].typeFlags=0; // Unverified nonseated behavior rejected.
+  gPlayerSession=std::make_unique<Session>(std::move(invalid));
+  actor.runtime.nextPackageEvaluation=0;
+  Q240UpdateNpcPackage(actor,90);
+  assert(actor.aiPackage!=50);
+  std::cout<<"Use Item At seated interaction and unsupported fallback passed\\n";
+}
+static void OriginalUseItemAt(const char* esm){
+  fo3player::Catalog catalog;std::string error;
+  assert(fo3player::LoadCatalog(esm,catalog,error));
+  const auto& d=catalog.pipboy;
+  const auto& p=d.packages.at(0x3e5da);
+  assert(p.editor=="MS03EntryMegaton"&&p.type==8&&p.typeFlags==2);
+  assert(p.location.valid&&p.location.type==0&&p.location.value==0x3e5d0&&p.location.radius==110);
+  assert(p.target.valid&&p.target.type==0&&p.target.value==0x3dae);
+  assert(d.targets.at(0x3e5d0).base==0xab475);
+  assert(d.targets.at(0x3dae).base==0x58823&&d.terminalBases.count(0x58823));
+  assert(p.scripted&&!p.otherProcedureScript&&!p.procedureActions);
+  assert(p.onBeginScript=="Set MS03.MoiraDataEntry to 0");
+  assert(p.conditions.size()==2&&p.conditions[0].function==79&&p.conditions[1].function==79);
+  gPlayerSession=std::make_unique<Session>(std::move(catalog));
+  const auto& live=gPlayerSession->player.Definitions().pipboy;
+  const auto& original=live.packages.at(0x3e5da);
+  const auto key=fo3dialogue::VariableKey(live,"MS03.MoiraDataEntry");
+  assert(key&&gPlayerSession->player.SetDialogueVariable(key,1));
+  fo3dialogue::Context ctx;ctx.player=&gPlayerSession->player;
+  std::string conditionError;
+  assert(fo3dialogue::Conditions(original.conditions,ctx,conditionError)&&conditionError.empty());
+  fo3pipdata::ResultScript begin;begin.source=original.onBeginScript;
+  assert(gPlayerSession->player.ExecuteDialogueResult(begin,error));
+  assert(gPlayerSession->player.Snapshot().pipboy.dialogueVariables.at(key)==0);
+  assert(!fo3dialogue::Conditions(p.conditions,ctx,conditionError));
+  std::cout<<"Original MS03 seated target, condition, and POBA result passed\\n";
+}
+
+int main(int argc,char** argv){AccompanyTests();SyntheticUseItemAt();AccompanyRecoveryTests();SandboxActivities();SyntheticFurniture();if(argc>2){meshRoot=argv[2];OriginalUseItemAt(argv[1]);OriginalFurniture(argv[1]);OriginalFurniture(argv[1],true);Coverage(argv[1]);SandboxCoverage(argv[1]);OriginalAccompany(argv[1]);}std::cout<<"Furniture package runtime tests passed\n";}

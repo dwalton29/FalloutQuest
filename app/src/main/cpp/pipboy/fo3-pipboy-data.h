@@ -136,7 +136,9 @@ struct PackageDefinition {
   std::vector<PatrolPoint> patrol;
   std::string patrolUnsupported;
   std::vector<Condition> conditions;
-  bool scripted=false,procedureActions=false;
+  bool scripted=false,procedureActions=false,otherProcedureScript=false;
+  // Source of authored PACK OnBegin block; only whitelisted script subsets execute.
+  std::string onBeginScript;
 };
 struct Response {
   Response()=default;
@@ -191,6 +193,7 @@ struct Definitions {
   std::unordered_map<uint32_t,uint32_t> idleParents;
   std::unordered_set<uint32_t> idleAnimationObjects;
   std::unordered_map<uint32_t,FurnitureDefinition> furniture;
+  std::unordered_set<uint32_t> terminalBases;
   std::unordered_set<uint32_t> childRaces;
   std::unordered_map<uint32_t, RadiationStage> radiationStages;
   std::unordered_map<uint32_t, World> worlds;

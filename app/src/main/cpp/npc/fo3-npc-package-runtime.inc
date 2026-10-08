@@ -357,7 +357,7 @@ static const fo3pipdata::PackageDefinition* Q240SelectPackage(
     if(retry!=actor.runtime.packageRetryAfter.end()&&actor.aiLastUpdate<retry->second)continue;
     const auto found=definitions.packages.find(packageId);if(found==definitions.packages.end())continue;
     const auto& package=found->second;
-    if(package.type!=7&&package.type!=3&&package.type!=4&&package.type!=1&&package.type!=2&&package.type!=6&&package.type!=14&&package.type!=13&&package.type!=5&&package.type!=12&&package.type!=10){Q240AiLogOnce(actor.source.refFormId,packageId,"package type "+std::to_string(package.type));continue;}
+    if(package.type!=7&&package.type!=3&&package.type!=4&&package.type!=1&&package.type!=2&&package.type!=6&&package.type!=14&&package.type!=13&&package.type!=5&&package.type!=12&&package.type!=10&&package.type!=8){Q240AiLogOnce(actor.source.refFormId,packageId,"package type "+std::to_string(package.type));continue;}
     if(package.type==13){std::string error;const auto* route=Q240PatrolRoute(actor,packageId,package,nullptr,&error);if(!route||route->empty()||!error.empty()){Q240AiLogOnce(actor.source.refFormId,packageId,error.empty()?"Patrol route unavailable":error);continue;}}
     if(package.type==2&&((package.location.type!=0&&package.location.type!=3)||!package.escortDistanceValid||!package.target.valid||package.target.type!=0||package.target.value!=0x14)){
       Q240AiLogOnce(actor.source.refFormId,packageId,"Escort requires authored distance and supported player reference target");continue;
@@ -365,11 +365,19 @@ static const fo3pipdata::PackageDefinition* Q240SelectPackage(
     if(package.type==7&&(package.location.valid||package.location2.valid||!package.target.valid||package.target.type!=0||package.target.radius<=0||package.target2.valid||package.typeFlags||package.procedureActions)){
       Q240AccompanyOnce(actor.source.refFormId,packageId,package.target.value,"UNSUPPORTED","requires one resident actor reference and positive distance without location/action");continue;
     }
+    // Verified Use Item At subset: a placed TERM with Sit Down, plus a
+    // resident authored chair. Other item/activator semantics remain unsupported.
+    if(package.type==8&&(!package.location.valid||package.location.type!=0||package.location2.valid||
+       !package.target.valid||package.target.type!=0||package.target2.valid||
+       package.typeFlags!=2||package.procedureActions||package.otherProcedureScript||
+       (package.scripted&&package.onBeginScript.empty()))){
+      Q240AiLogOnce(actor.source.refFormId,packageId,"Use Item At requires original seated reference target with supported OnBegin only");continue;
+    }
     if(package.type==10&&(package.location.valid||!package.target.valid||package.target.type!=0||package.target.radius<=0||package.procedureActions)){
       Q240AiLogOnce(actor.source.refFormId,packageId,"Flee requires an actor reference, positive minimum distance, no start location or procedure action");continue;
     }
     if(!package.combatStyleValid){Q240AiLogOnce(actor.source.refFormId,packageId,"malformed package combat style");continue;}
-    if(package.scripted){Q240AiLogOnce(actor.source.refFormId,packageId,"package script");continue;}
+    if(package.scripted&&package.type!=8){Q240AiLogOnce(actor.source.refFormId,packageId,"package script");continue;}
     if(!Q240ScheduleActive(package.schedule,hour))continue;
     if(!package.location.valid&&package.type!=1&&package.type!=7&&package.type!=10){Q240AiLogOnce(actor.source.refFormId,packageId,"missing PLDT");continue;}
     fo3dialogue::Context ctx;ctx.player=&gPlayerSession->player;
@@ -398,7 +406,16 @@ static const fo3pipdata::PackageDefinition* Q240SelectPackage(
       const auto& p=Q240PatrolRoute(actor,packageId,package)->front().placement;
       if(p.world!=gExteriorWorldspaceQ1890||(!p.world&&p.cell!=gCurrentCellFormId)){Q240AiLogOnce(actor.source.refFormId,packageId,"Patrol requires another resident scene");continue;}
       anchor={p.x,p.y,p.z};
-    } else if(package.type==3||package.type==4) {
+    } else if(package.type==3||package.type==4||package.type==8) {
+      if(package.type==8){
+        const auto target=definitions.targets.find(package.target.value);
+        if(target==definitions.targets.end()||!definitions.terminalBases.count(target->second.base)||
+            (target->second.flags&0x820u)||target->second.parent||
+            target->second.world!=gExteriorWorldspaceQ1890||
+            (!gExteriorWorldspaceQ1890&&target->second.cell!=gCurrentCellFormId)){
+          Q240AiLogOnce(actor.source.refFormId,packageId,"Use Item At terminal target unavailable in resident cell");continue;
+        }
+      }
       const size_t slot=Q240FurnitureTarget(actor,package);if(slot==SIZE_MAX){Q240AiLogOnce(actor.source.refFormId,packageId,"no available verified resident furniture marker");continue;}
       const auto& a=actor.runtime.furniture.scene->slots[slot].alignment;anchor={a[12],a[13],a[14]};
     } else if(package.location.type==0u) {
@@ -723,7 +740,7 @@ static bool Q240AdvanceFurniture(Q230ActorVisual& actor,const fo3pipdata::Packag
       f.Clear();++actor.runtime.actionSerial;actor.aiPathGame.clear();actor.aiPathSurfaces.clear();actor.aiPathIndex=0;actor.runtime.navigationDoor=0;actor.aiSequence=0;actor.aiRepathAt=0;actor.runtime.nextPackageEvaluation=0;actor.aiLastUpdate=now;actor.lastFrame=UINT64_MAX;
     }return true;
   }
-  if(!p||(p->type!=4&&p->type!=3&&p->type!=12))return false;
+  if(!p||(p->type!=4&&p->type!=3&&p->type!=8&&p->type!=12))return false;
   if(!f.Active()){
     const size_t target=p->type==12?Q240SandboxTarget(actor,*p,actor.runtime.evaluatedAnchor,actor.runtime.evaluatedRadius):Q240FurnitureTarget(actor,*p);if(target==SIZE_MAX){Q240PackageRouteFailed(actor,now,"furniture unavailable");return true;}
     const auto& slot=f.scene->slots[target];auto lease=std::make_shared<fo3furniture::Lease>();
@@ -754,6 +771,8 @@ static bool Q240AdvanceFurniture(Q230ActorVisual& actor,const fo3pipdata::Packag
       actor.runtime.sandboxLastTarget=selected->reference;
     }
     Q6H_LOGI("NPC ACTIVITY BEGIN actor=%08X package=%08X target=%08X",actor.source.refFormId,id,selected->reference);
+    if(p->type==8)Q6H_LOGI("NPC USEITEM ACTION actor=%08X package=%08X item=%08X furniture=%08X action=authored-sit",
+      actor.source.refFormId,id,p->target.value,selected->reference);
   }
   const auto* slot=f.Selected();if(!slot){f.Clear();return true;}
   actor.runtime.speed=0;actor.runtime.animation=fo3npc::Animation::Idle;actor.lastFrame=UINT64_MAX;
@@ -831,7 +850,24 @@ static void Q240AdvanceNpcPackage(Q230ActorVisual& actor,double now) {
     actor.runtime.activity=fo3npc::Activity::Idle;actor.runtime.speed=0;
     actor.runtime.animation=fo3npc::Animation::Idle;actor.aiPathGame.clear();actor.aiPathSurfaces.clear();actor.aiPathIndex=0;actor.runtime.navigationDoor=0;return;
   }
+  const bool newlySelected=actor.aiPackage!=packageId;
   Q240AdoptPackage(actor,packageId,*package,anchor);
+  if(newlySelected&&package->type==8){
+    // The original POBA script is executed exactly once per adoption through
+    // the canonical, atomic dialogue-result interpreter. Failed scripts do not
+    // simulate an item-use success or apply guessed quest effects.
+    if(!package->onBeginScript.empty()){
+      fo3pipdata::ResultScript begin;begin.source=package->onBeginScript;
+      std::string error;
+      if(!gPlayerSession->player.ExecuteDialogueResult(begin,error)){
+        Q240AiLogOnce(actor.source.refFormId,packageId,"Use Item At OnBegin: "+error);
+        Q240PackageRouteFailed(actor,now,"unsupported Use Item At OnBegin");return;
+      }
+    }
+    Q6H_LOGI("NPC USEITEM BEGIN actor=%08X package=%08X item=%08X location=%08X",
+      actor.source.refFormId,packageId,package->target.value,package->location.value);
+    state.nextPackageEvaluation=0; // OnBegin may change its own CTDA gates.
+  }
   if(package->type==13) {
     bool circular=false;const auto& points=*Q240PatrolRoute(actor,packageId,*package,&circular);const size_t n=points.size();
     // Sequence is the current leg (one-based), and is saved in the existing
@@ -880,7 +916,7 @@ static void Q240AdvanceNpcPackage(Q230ActorVisual& actor,double now) {
       ++state.sandboxCycles;
     }
   }
-  if(package->type==4||package->type==3){Q240AdvanceFurniture(actor,package,packageId,dt,now);return;}
+  if(package->type==4||package->type==3||package->type==8){Q240AdvanceFurniture(actor,package,packageId,dt,now);return;}
   if(package->type==7){Q240AdvanceAccompany(actor,*package,dt,now);return;}
   if(package->type==10){Q240AdvanceFleePackage(actor,*package,anchor,dt,now);return;}
   if(package->type==2){Q240AdvancePlayerEscort(actor,*package,anchor,dt,now);return;}
