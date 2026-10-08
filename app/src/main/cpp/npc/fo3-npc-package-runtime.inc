@@ -653,7 +653,22 @@ static bool Q240BuildPackagePath(Q230ActorVisual& actor,const fo3pipdata::Packag
       if(!actor.runtime.hasLastRoamDestination||
          Q240PlanarDistance(choices[i],actor.runtime.lastRoamDestination)>96.f)
         fresh.push_back(i);
-    destination=choices[fresh.empty()?hash%choices.size():fresh[hash%fresh.size()]];
+    const auto& pool=fresh;
+    size_t selected=pool.empty()?hash%choices.size():pool[hash%pool.size()];
+#ifdef FO3_NPC_ROAM_ENDPOINT_OCCUPIED
+    // Prefer available points INSIDE the authored Sandbox/Wander radius when
+    // other residents occupy/approach this one. Eight bounded probes avoid
+    // a population-sized search on every reachable NAVM triangle.
+    const size_t probes=std::min(size_t(8),pool.empty()?choices.size():pool.size());
+    for(size_t attempt=0;attempt<probes;++attempt){
+      const size_t candidate=pool.empty()?(hash+attempt)%choices.size():
+        pool[(hash+attempt)%pool.size()];
+      if(!FO3_NPC_ROAM_ENDPOINT_OCCUPIED(actor.source.refFormId,choices[candidate])){
+        selected=candidate;break;
+      }
+    }
+#endif
+    destination=choices[selected];
   }
   std::string failure;
   const bool success=Q240Path(graph,current,destination,actor.aiPathGame,&failure,&actor.aiPathSurfaces);
