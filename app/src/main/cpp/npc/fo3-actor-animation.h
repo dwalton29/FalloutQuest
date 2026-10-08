@@ -70,10 +70,12 @@ std::array<float, 3> Point(const Matrix &m, const std::array<float, 3> &p,
 bool FinalizeSkeleton(Skeleton &skeleton);
 int FindBone(const Skeleton &skeleton, const std::string &name);
 void BindClip(const Skeleton &skeleton, const Clip &clip, Pose &pose);
+enum class RootPolicy { Locomotion, Furniture };
 // Absolute sequence sampling; actor root motion is not applied to world
 // placement.
 bool Sample(const Skeleton &skeleton, const Clip &clip, double elapsed,
-            Pose &pose, SampleTimings* timings=nullptr);
+            Pose &pose, SampleTimings* timings=nullptr, RootPolicy rootPolicy=RootPolicy::Locomotion,
+            const Transform* retainedRoot=nullptr);
 // Rebuild after local animation blending; one canonical skeleton composition.
 bool ComposePose(const Skeleton&,Pose&);
 void LookYaw(const Skeleton&,Pose&,int bone,float radians);

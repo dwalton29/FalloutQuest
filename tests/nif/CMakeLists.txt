@@ -64,3 +64,8 @@ target_compile_options(npc_combat_asset_tests PRIVATE -Wall -Wextra -Werror -Wno
 target_include_directories(npc_combat_asset_tests PRIVATE . ../../app/src/main/cpp/data ../../app/src/main/cpp/npc)
 add_test(NAME npc_combat_asset_tests COMMAND npc_combat_asset_tests)
 set_tests_properties(npc_combat_asset_tests PROPERTIES SKIP_RETURN_CODE 77)
+
+add_executable(furniture_asset_tests furniture_asset_tests.cpp ../../app/src/main/cpp/npc/fo3-actor-animation.cpp)
+target_compile_features(furniture_asset_tests PRIVATE cxx_std_17)
+target_include_directories(furniture_asset_tests PRIVATE . ../../app/src/main/cpp ../../app/src/main/cpp/data ../../app/src/main/cpp/npc)
+add_test(NAME furniture_asset_tests COMMAND furniture_asset_tests)

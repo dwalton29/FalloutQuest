@@ -40,6 +40,8 @@ struct Placement {
   float patrolWait=0;
   bool patrolAction=false;
   float x = 0, y = 0, z = 0;
+  float rx=0,ry=0,rz=0,scale=1;
+  uint32_t owner=0;
 };
 struct Marker : Placement {
   std::string name;
@@ -181,7 +183,9 @@ struct Script {
 struct RadiationStage {
   uint32_t threshold = 0, spell = 0;
 };
+struct FurnitureDefinition { std::string model,editor; uint32_t markers=0; bool valid=false; };
 struct Definitions {
+  std::unordered_map<uint32_t,FurnitureDefinition> furniture;
   std::unordered_map<uint32_t, RadiationStage> radiationStages;
   std::unordered_map<uint32_t, World> worlds;
   std::unordered_set<uint32_t> doorBases;

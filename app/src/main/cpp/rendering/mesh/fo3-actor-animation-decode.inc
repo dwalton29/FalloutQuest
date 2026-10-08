@@ -391,3 +391,21 @@ bool fo3anim::DecodeUiAnimation(const std::vector<uint8_t> &bytes, Skeleton &out
   out = std::move(hierarchy); blockBones = std::move(mapping); clips = std::move(sequences);
   return true;
 }
+
+#include "fo3-furniture.h"
+bool fo3furniture::DecodeMarkers(const std::vector<uint8_t>& bytes,std::vector<Marker>& out) {
+  out.clear();NifHeader h;if(!ActorHeader(bytes,h)||h.userVersion!=11||h.bsVersion!=34)return false;
+  std::vector<Marker> decoded;
+  for(uint32_t block=0;block<h.numBlocks;++block) {
+    if(BlockType(h,block)!="BSFurnitureMarker")continue;
+    Cursor c(BlockData(bytes,h,block),h.blockSizes[block]);uint32_t name=0,count=0;
+    if(!c.U32(name)||name>=h.strings.size()||h.strings[name]!="FRN"||!c.U32(count)||count>30||c.remaining()!=size_t(count)*16)return false;
+    if(!decoded.empty())return false; // Ambiguous duplicated FRN blocks.
+    for(uint32_t i=0;i<count;++i){Marker m;for(auto& v:m.position)if(!c.F32(v)||!std::isfinite(v))return false;
+      if(!c.U16(m.orientation)||!c.U8(m.reference)||!c.U8(m.reference2)||m.reference!=m.reference2)return false;
+      decoded.push_back(m);
+    }
+  }
+  if(decoded.empty())return false;
+  out=std::move(decoded);return true;
+}

@@ -218,7 +218,7 @@ static std::array<float, 4> Evaluate(const Channel &c, float time, float start,
   }
   return v;
 }
-bool Sample(const Skeleton &s, const Clip &c, double elapsed, Pose &p, SampleTimings* timings) {
+bool Sample(const Skeleton &s, const Clip &c, double elapsed, Pose &p, SampleTimings* timings, RootPolicy rootPolicy, const Transform* retainedRoot) {
   const auto started=std::chrono::steady_clock::now();
   if (p.trackBones.size() != c.tracks.size() ||
       p.local.size() != s.bones.size() ||
@@ -243,7 +243,7 @@ bool Sample(const Skeleton &s, const Clip &c, double elapsed, Pose &p, SampleTim
     p.local[i] = s.bones[i].bind;
   const int accumulation=p.accumulation;
   if (accumulation >= 0)
-    p.local[accumulation] = Transform{};
+    p.local[accumulation] = rootPolicy==RootPolicy::Furniture&&retainedRoot?*retainedRoot:Transform{};
   for (size_t i = 0; i < c.tracks.size(); ++i) {
     int bone = p.trackBones[i];
     if (bone < 0)
@@ -251,7 +251,7 @@ bool Sample(const Skeleton &s, const Clip &c, double elapsed, Pose &p, SampleTim
     // KF accumulation belongs to the engine's actor/world motion. FalloutQuest
     // drives the resident actor root from NAVM + collision, so reapplying this
     // track would double root translation/rotation and lift/offset the skeleton.
-    if (bone == accumulation)
+    if (bone == accumulation && rootPolicy==RootPolicy::Locomotion)
       continue;
     const Track &track = c.tracks[i];
     Transform &local = p.local[bone];

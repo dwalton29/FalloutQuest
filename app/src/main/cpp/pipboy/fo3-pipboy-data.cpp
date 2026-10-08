@@ -53,7 +53,10 @@ Placement Place(uint32_t flags, const Subs &s, uint32_t cell, uint32_t world) {
     p.x = fo3esm::ReadF32(d->p);
     p.y = fo3esm::ReadF32(d->p + 4);
     p.z = fo3esm::ReadF32(d->p + 8);
+    p.rx=fo3esm::ReadF32(d->p+12);p.ry=fo3esm::ReadF32(d->p+16);p.rz=fo3esm::ReadF32(d->p+20);
   }
+  if(auto scale=Find(s,"XSCL");scale&&scale->n==4)p.scale=fo3esm::ReadF32(scale->p);
+  p.owner=U(Find(s,"XOWN"));
   auto e = Find(s, "XESP");
   if (e && e->n >= 5) {
     p.parent = U(e);
@@ -74,7 +77,7 @@ std::string VoicePath(const Definitions &d, const Info &i, const Response &r,
   return "@voice:" + v->second + ":" + tail;
 }
 bool Relevant(const std::string &t) {
-  return t == "RADS" || t == "WRLD" || t == "PERK" || t == "QUST" ||
+  return t == "FURN" || t == "RADS" || t == "WRLD" || t == "PERK" || t == "QUST" ||
          t == "MGEF" || t == "TACT" || t == "INFO" || t == "DIAL" ||
          t == "RACE" || t == "FLST" || t == "IDLE" || t == "SOUN" || t == "VTYP" || t == "SCPT" || t == "NPC_" || t == "PACK";
 }
@@ -90,6 +93,7 @@ void Decode(Definitions &d, const std::string &t, uint32_t id, uint32_t flags,
   if(!editor.empty()) { auto key=editor; for(auto& c:key)c=char(std::tolower((unsigned char)c));d.formNames[key]=id; }
   if(t=="FLST") {for(auto& v:s)if(v.type=="LNAM"&&v.n==4)d.formLists[id].push_back(U(&v));}
   else if(t=="RACE"){auto voices=Find(s,"VTCK");if(voices&&voices->n>=8)d.raceVoices[id]={U(voices),U(voices,4)};}
+  else if(t=="FURN") {auto& f=d.furniture[id];f.model=Text(s,"MODL");f.editor=editor;auto m=Find(s,"MNAM");f.markers=U(m);f.valid=m&&m->n==4&&!f.model.empty();}
   else if(t=="IDLE") d.idleModels[id]=Text(s,"MODL");
   else if (t == "RADS") {
     const auto data = Find(s, "DATA");
@@ -514,6 +518,8 @@ void Finalize(Definitions &d) {
     if(entry.second.target.valid&&entry.second.target.type==0)retain.insert(entry.second.target.value);
     if(entry.second.target2.valid&&entry.second.target2.type==0)retain.insert(entry.second.target2.value);
   }
+  for (auto &p : d.targets)
+    if(d.furniture.count(p.second.base))retain.insert(p.first);
   for (auto &p : d.targets)
     if (d.doorBases.count(p.second.base))
       d.doors[p.second.cell].push_back(p.second);
