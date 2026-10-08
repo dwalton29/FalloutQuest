@@ -232,6 +232,7 @@ static bool Q230PathBlocked(Q230ActorVisual&,float,float,float,float,float);
 #define FO3_NPC_ACCOMPANY_TARGET(reference,point) Q240ResidentAccompanyTarget(gQ230NpcActors,reference,point)
 #define FO3_NPC_PACKAGE_ACTOR_TARGET(reference,point) Q240ResidentPackageTarget(gQ230NpcActors,reference,point)
 #define FO3_NPC_PATH_BLOCKED Q230PathBlocked
+#define FO3_NPC_STAGGER_ROUTING
 #define FO3_NPC_WORLD_GROUND(x,z,referenceY,outY) SampleFo3ActorGroundQ240(x,z,referenceY,outY)
 #define FO3_NPC_FURNITURE_LOADING IsFo3LoadingVisible()
 #define FO3_NPC_XTEL_INDEX() Q230NpcXtelIndex()
