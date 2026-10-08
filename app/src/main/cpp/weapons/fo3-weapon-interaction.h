@@ -5,6 +5,14 @@
 namespace fo3weapon {
 using V=fo3vr::V;
 using R=fo3vr::R;
+// World-owned shots must continue through Pip-Boy/holster input suppression.
+// Loading and save mutation still suspend flight simulation.
+struct FrameAccess {bool advanceProjectiles=false,weaponControls=false;};
+inline FrameAccess FrameAccessFor(bool sceneReady,bool loading,bool saveBlocked,
+                                 bool pipboyFocus,bool interactionFocused) {
+  const bool worldActive=sceneReady&&!loading&&!saveBlocked;
+  return {worldActive,worldActive&&!pipboyFocus&&interactionFocused};
+}
 struct Edge {
   bool latched=true,armed=false;
   bool Press(float value) {
