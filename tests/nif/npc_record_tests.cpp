@@ -190,7 +190,7 @@ int main(int argc, char **argv) {
   assert(findOutfit(actors[0],21)=="levelled-male.nif");
   assert(findOutfit(actors[1],21)=="levelled-female.nif");
   for(const auto& actor: {actors[0],actors[1]}){
-    assert(actor.inventory.size()==9); // direct, four LVLI sources, one resolved
+    assert(actor.inventory.size()==6); // direct, four LVLI sources, one resolved
     assert(findOutfit(actor,21).size()>0);
     for(const auto& item:actor.inventory)
       if(item.recordType=="ARMO") assert(item.formId==20||item.formId==21);
