@@ -245,6 +245,7 @@ static bool Q230PathBlocked(Q230ActorVisual&,float,float,float,float,float);
 #undef FO3_NPC_FURNITURE_LOADING
 #undef FO3_NPC_WORLD_GROUND
 #undef FO3_NPC_PATH_BLOCKED
+#undef FO3_NPC_STAGGER_ROUTING
 #undef FO3_NPC_ACCOMPANY_TARGET
 #undef FO3_NPC_PACKAGE_ACTOR_TARGET
 #include "fo3-npc-door-runtime.inc"
