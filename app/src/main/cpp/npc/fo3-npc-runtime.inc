@@ -202,7 +202,11 @@ static bool Q230PathBlocked(Q230ActorVisual&,float,float,float,float,float);
 #define FO3_NPC_WORLD_GROUND(x,z,referenceY,outY) SampleFo3ActorGroundQ240(x,z,referenceY,outY)
 #define FO3_NPC_FURNITURE_LOADING IsFo3LoadingVisible()
 #define FO3_NPC_XTEL_INDEX() Q230NpcXtelIndex()
+#define FO3_NPC_CHAT_AVAILABLE(actor,reference) Q230ChatEligible(actor,reference)
+#define FO3_NPC_CHAT_REQUEST(speaker,listener,now) Q230ChatBegin(speaker,listener,now)
 #include "fo3-npc-package-runtime.inc"
+#undef FO3_NPC_CHAT_REQUEST
+#undef FO3_NPC_CHAT_AVAILABLE
 #undef FO3_NPC_XTEL_INDEX
 #undef FO3_NPC_FURNITURE_LOADING
 #undef FO3_NPC_WORLD_GROUND

@@ -72,6 +72,7 @@ void EndFo3Dialogue(const char* reason){CleanupFo3Dialogue(gDialogue.actor,reaso
 bool StartFo3Dialogue(uint32_t reference) {
   if(Fo3PipboyFocus()||Fo3DialogueFocus()||IsFo3LoadingVisible()||!gPlayerSession||gPlayerSession->saveBlocked)return false;
   auto* actor=DialogueActor(reference);if(!actor)return false;
+  Q230ChatStop("player interaction takes priority");
   gDialogue.diagnostic=DialogueDiagnostic;
   if(!actor->runtime.CanTalk()||!gDialogue.Start(DialogueContext(*actor),gPlayerSession->player)) {
     Q6H_LOGI("NPC DIALOGUE REENTER actor=%08X success=0 package=%08X activity=%d dialogue=%d reason=%s",reference,actor->runtime.package,int(actor->runtime.activity),actor->runtime.dialogue,gDialogue.endReason.c_str());return false;
@@ -166,12 +167,17 @@ void UpdateFo3Dialogue(double now,float stick,bool a,bool b,bool focused) {
       }
     }
   }
+  Q230ChatTick(now);
   for(auto& actor:gQ230NpcActors) {
-    actor.runtime.speaking=actor.runtime.dialogue&&gDialogue.actor==actor.source.refFormId&&gDialogue.phase==fo3dialogue::Phase::Speaking;
+    const bool npcSpeaking=Q230ChatSpeaking(actor.source.refFormId);
+    actor.runtime.speaking=npcSpeaking||(actor.runtime.dialogue&&gDialogue.actor==actor.source.refFormId&&gDialogue.phase==fo3dialogue::Phase::Speaking);
     fo3face::Weights weights{};
     if(actor.runtime.speaking) {
-      const auto facial=fo3audio::DialogueFace(gDialogue.audioToken);
-      if(facial.lip)weights=fo3face::Sample(*facial.lip,facial.seconds);
+      if(npcSpeaking)weights=Q230ChatWeights(actor.source.refFormId);
+      else {
+        const auto facial=fo3audio::DialogueFace(gDialogue.audioToken);
+        if(facial.lip)weights=fo3face::Sample(*facial.lip,facial.seconds);
+      }
     }else for(size_t c=0;c<weights.size();++c) {
       const float old=actor.facialWeights[c];
       weights[c]=old*std::max(0.f,1-dt/.1f);
@@ -181,7 +187,11 @@ void UpdateFo3Dialogue(double now,float stick,bool a,bool b,bool focused) {
     if(actor.runtime.activity!=fo3npc::Activity::Combat&&(actor.runtime.dialogue||std::fabs(actor.runtime.headYaw)>.01f||std::fabs(fo3npc::Angle(actor.runtime.yaw-actor.runtime.returnYaw))>.01f)) {
       // Humanoid authored forward is +Y game space; scene Z is -game Y.
       const float x=actor.runtime.position[0],z=actor.runtime.position[2];
-      const float desired=std::atan2(-(gQ210Head[0]-x),-(gQ210Head[2]-z));
+      std::array<float,3> chatPartner{};
+      const bool chat=Q230ChatLook(actor.source.refFormId,chatPartner);
+      const float targetX=chat?chatPartner[0]:gQ210Head[0];
+      const float targetZ=chat?chatPartner[2]:gQ210Head[2];
+      const float desired=std::atan2(-(targetX-x),-(targetZ-z));
       actor.runtime.Face(desired,dt);actor.lastFrame=UINT64_MAX;Q230UpdateActor(actor);
     }
   }

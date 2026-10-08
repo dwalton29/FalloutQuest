@@ -20,6 +20,7 @@ add_library(falloutquest SHARED
     data/fo3-esm-reader.cpp
     data/fo3-xtel-index.cpp
     npc/fo3-unloaded-ai.cpp
+    npc/fo3-npc-conversation.cpp
     data/fo3-texture-bsa.cpp
     rendering/water/fo3-water.cpp
     npc/fo3-npc.cpp

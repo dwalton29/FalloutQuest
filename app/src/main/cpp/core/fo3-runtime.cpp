@@ -1,6 +1,7 @@
 #include "dialogue/fo3-dialogue-session.h"
 #include "dialogue/fo3-dialogue-panel.h"
 #include "npc/fo3-npc-state.h"
+#include "npc/fo3-npc-conversation.h"
 #include "npc/fo3-unloaded-ai.h"
 #include "data/fo3-xtel-index.h"
 #include "npc/fo3-facial-data.h"
@@ -10685,6 +10686,15 @@ bool Q230BuildNpcActor(const Fo3NpcActorQ230& source, Q230ActorVisual& visual) {
     return ready;
 }
 
+// Forward declarations: resident package execution precedes player-dialogue
+// runtime inclusion, but its conversation owner is resolved later in this TU.
+static bool Q230ChatEligible(const Q230ActorVisual&,uint32_t);
+static bool Q230ChatBegin(uint32_t,uint32_t,double);
+static void Q230ChatStop(const char*);
+static void Q230ChatTick(double);
+static bool Q230ChatSpeaking(uint32_t);
+static fo3face::Weights Q230ChatWeights(uint32_t);
+static bool Q230ChatLook(uint32_t,std::array<float,3>&);
 #include "fo3-npc-runtime.inc"
 
 bool Q210EnsurePlayerBody() {
@@ -12875,6 +12885,7 @@ void Q6HClear(GLbitfield mask) {
 
 
 #include "dialogue/fo3-dialogue-runtime.inc"
+#include "npc/fo3-npc-chat-runtime.inc"
 } // namespace
 
 void SetFo3ShoulderInteractionFocused(bool focused) {
