@@ -125,6 +125,7 @@ struct State {
   // GameDaysPassed tracks midnight boundaries; dated calendar gates remain unsupported.
   float gameHour = 12.0f;
   uint32_t gameDaysPassed = 0;
+  uint32_t gameYear=2277,gameMonth=7,gameDay=17; // Original GLOB default: 17 August 2277 (GameMonth 0-based).
   uint64_t nextStackId = 1;
   std::vector<Stack> inventory;
   std::unordered_set<uint32_t> collected;
