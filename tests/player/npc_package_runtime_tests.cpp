@@ -14,6 +14,8 @@
 #include <string>
 #include <vector>
 #include <iostream>
+#include <queue>
+#include <functional>
 #ifndef FO3_NPC_FURNITURE_HOST_TEST
 bool LoadFalloutMeshFile(const std::string&,std::vector<uint8_t>&,std::string*) {return false;}
 #endif
