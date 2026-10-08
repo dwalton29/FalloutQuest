@@ -507,6 +507,36 @@ int main(int argc,char** argv) {
     auto malformed=Actor(6);auto c=gPlayerSession->player.Definitions();c.pipboy.packages[50].combatStyleValid=false;c.pipboy.packages[52]=c.pipboy.packages[50];c.pipboy.packages[52].combatStyleValid=true;c.pipboy.dialogueActors[43].packages={50,52};gPlayerSession=std::make_unique<Session>(c);Q240UpdateNpcPackage(malformed,1);assert(malformed.aiPackage==52);
   }
   {
+    // Repeated Sandbox routes must stay on authored NAVM and have different
+    // endpoints when alternatives exist. Fixed Travel is covered below.
+    auto wanderer=Actor(12);
+    const auto& pack=gPlayerSession->player.Definitions().pipboy.packages.at(50);
+    std::vector<std::array<float,3>> endpoints;
+    bool variedPortal=false;
+    for(int i=0;i<12;++i){
+      assert(Q240BuildPackagePath(wanderer,pack,{1900,2900,20},2000));
+      assert(!wanderer.aiPathGame.empty());
+      const auto endpoint=wanderer.aiPathGame.back();
+      assert(Q240PlanarDistance(endpoint,{1900,2900,20})<=2000);
+      endpoints.push_back(endpoint);
+      for(size_t j=0;j+1<wanderer.aiPathSurfaces.size();++j){
+        const auto from=wanderer.aiPathSurfaces[j],to=wanderer.aiPathSurfaces[j+1];
+        std::array<float,3> midpoint{};
+        std::array<std::array<float,3>,2> edges{};
+        assert(Q240Portal(*wanderer.navigationGraph,{from.first,from.second},
+          {to.first,to.second},midpoint,&edges));
+        const auto point=wanderer.aiPathGame[j];
+        const float edgeLength=Q240PlanarDistance(edges[0],edges[1]);
+        assert(Q240PlanarDistance(point,edges[0])<=edgeLength+.01f);
+        assert(Q240PlanarDistance(point,edges[1])<=edgeLength+.01f);
+        if(Q240PlanarDistance(point,midpoint)>.01f)variedPortal=true;
+      }
+      if(i>0)assert(Q240PlanarDistance(endpoints[i],endpoints[i-1])>96.f);
+    }
+    assert(variedPortal);
+    std::cout<<"Sandbox endpoint memory and in-portal route variety passed\\n";
+  }
+  {
     // Two original-format linked NAVM triangles provide a real shared portal.
     // After its midpoint is blocked, alternate only the existing authored
     // edge; do not invent a path or allow unlimited oscillation.
