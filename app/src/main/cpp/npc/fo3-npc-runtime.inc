@@ -61,6 +61,23 @@ void Q230CacheCombat(Q230ActorVisual& actor,const fo3player::Catalog* catalog) {
     ready.ready=true;actor.combatWeapons.emplace(source.formId,std::move(ready));
     fo3audio::PreloadSound(d.fire3D);fo3audio::PreloadSound(d.equip);
   }
+  // Fallout3.esm IDLE records supply the actual damage responses. There are
+  // no stock Stagger AnimGroup KFs; resolve each source IDLE to its authored KF.
+  const std::array<const char*,6> hitNames{
+    "mthitheada","mthittorsoa","mthitarmleft","mthitarmright",
+    "mthitlegleft","mthitlegright"};
+  for(size_t slot=0;slot<hitNames.size();++slot) {
+    const auto named=catalog->pipboy.formNames.find(hitNames[slot]);
+    if(named==catalog->pipboy.formNames.end())continue;
+    const auto model=catalog->pipboy.idleModels.find(named->second);
+    if(model==catalog->pipboy.idleModels.end())continue;
+    std::vector<uint8_t> hitBytes;
+    if(LoadFalloutMeshFile(model->second,hitBytes)&&
+       fo3anim::DecodeClip(hitBytes,actor.authoredHitClips[slot])&&
+       !actor.authoredHitClips[slot].tracks.empty())
+      Q6H_LOGI("NPC HIT CLIP actor=%08X region=%zu form=%08X path=%s",
+        actor.source.refFormId,slot,named->second,model->second.c_str());
+  }
   for(const auto& idle:catalog->pipboy.idleModels) {
     std::string path=idle.second;for(auto& c:path)c=char(std::tolower((unsigned char)c));
     if(path.find("deathpose1.kf")==std::string::npos)continue;
@@ -501,6 +518,30 @@ bool Q230LiveBounds(Q230ActorVisual& actor,std::array<float,3>& lo,std::array<fl
 }
 
 #ifndef FO3_ACTOR_RUNTIME_HOST_TEST
+void Q230ActorHitReaction(uint32_t target,uint8_t region) {
+  if(!gPlayerSession||gPlayerSession->player.ActorHealth(target)<=0)return;
+  const double now=std::chrono::duration<double>(
+    fqopaque::Clock::now().time_since_epoch()).count();
+  for(auto& actor:gQ230NpcActors) {
+    if(actor.source.refFormId!=target||actor.runtime.offScene||
+       !actor.runtime.Alive()||now<actor.runtime.hitUntil)continue;
+    // fo3weapon::Region is source geometry, never a guessed hit location.
+    const size_t slot=region==1?0:region>=2&&region<=6?size_t(region-1):1;
+    if(actor.authoredHitClips[slot].tracks.empty())return;
+    auto& s=actor.runtime;
+    const auto& clip=actor.authoredHitClips[slot];
+    const double duration=(clip.stop-clip.start)/std::max(.01f,clip.frequency);
+    if(!std::isfinite(duration)||duration<=0)return;
+    actor.animations[size_t(fo3npc::Animation::Hit)]=clip;
+    s.furniture.Clear();s.speed=0;s.pendingAttack=false;
+    s.pendingHit=0;s.actionUntil=0;s.reloadUntil=0;
+    s.hitUntil=now+std::clamp(duration,.08,1.5);
+    s.animation=fo3npc::Animation::Hit;++s.actionSerial;actor.lastFrame=UINT64_MAX;
+    Q6H_LOGI("NPC HIT REACTION actor=%08X region=%u duration=%.3f clip=%s",
+      target,unsigned(region),s.hitUntil-now,clip.name.c_str());
+    return;
+  }
+}
 #include "fo3-npc-combat-runtime.inc"
 #endif
 void Q230RenderNpcActors(bool alphaPass) {
