@@ -189,6 +189,8 @@ static void Q230SimulateActor(Q230ActorVisual& actor,double now) {
     }
     return;
   }
+  // Preserve an authored short hit response before selecting the next combat action.
+  if(now<s.hitUntil){s.speed=0;s.animation=fo3npc::Animation::Hit;return;}
   const auto ai=fo3npc::AI(c.pipboy,actor.source.baseFormId);
   if(!ai.valid){Q240AiLogOnce(actor.source.refFormId,actor.aiPackage,"unsupported AIDT");return;}
   if(now>=s.nextThink){
