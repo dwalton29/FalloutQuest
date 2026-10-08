@@ -67,7 +67,7 @@ inline void RenderBar(const float* mvp,const std::array<float,3>& center,
   std::array<fo3hudassets::Vertex,12> vertices{};
   Quad(vertices,0,center,right,-half,half,-halfHeight,halfHeight,s.sprite);
   Quad(vertices,6,center,right,-half,filled,-halfHeight,halfHeight,s.sprite);
-  if(depthTest){glEnable(GL_DEPTH_TEST);glDepthFunc(GL_LEQUAL);}
+  if(depthTest)glEnable(GL_DEPTH_TEST);
   else glDisable(GL_DEPTH_TEST);
   glDepthMask(GL_FALSE);glDisable(GL_CULL_FACE);glEnable(GL_BLEND);
   glBlendEquationSeparate(GL_FUNC_ADD,GL_FUNC_ADD);
