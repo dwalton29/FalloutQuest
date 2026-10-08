@@ -123,7 +123,7 @@ Vec3 Normalize(Vec3 v) {
 Vec3 GameDirectionToOpenXr(Vec3 v) { return {v.x, v.z, -v.y}; }
 Vec3 ApplyEsmRotation(Vec3 v, const Placement &) { return v; }
 bool LoadFo3CellActors(uint32_t, std::vector<Fo3NpcActorQ230> &,
-                       const std::string &) {
+                       const std::string &,const std::unordered_set<uint32_t>*) {
   return false;
 }
 bool LoadFo3NpcNavigationQ240(uint32_t,uint32_t,

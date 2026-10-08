@@ -82,11 +82,13 @@ bool Q230LiveBone(const Q230ActorVisual& actor,int bone,std::array<float,3>& wor
 // Included by the runtime; all CPU data is request-local until scene commit.
 // Built only on the scene preparation worker. Atomic shared_ptr publication
 // prevents render-frame ESM scans and races with live package evaluation.
+#ifndef FO3_ACTOR_RUNTIME_HOST_TEST
 static std::shared_ptr<const fo3xtel::Index> gQ230NpcXtelIndex;
 static std::mutex gQ230NpcXtelMutex;
 static std::shared_ptr<const fo3xtel::Index> Q230NpcXtelIndex(){
   return std::atomic_load(&gQ230NpcXtelIndex);
 }
+#endif
 void Q230PrepareActors(uint32_t cell, uint32_t worldspace,
                        std::vector<Q230ActorVisual> &out,
                        const std::atomic<bool> &cancel) {
@@ -94,6 +96,7 @@ void Q230PrepareActors(uint32_t cell, uint32_t worldspace,
   // milestone. Megaton and explicit interior CELLs can be represented now.
   if (worldspace != 0u && worldspace != 0x00000A74u)
     return;
+#ifndef FO3_ACTOR_RUNTIME_HOST_TEST
   if(!Q230NpcXtelIndex()){
     std::lock_guard<std::mutex> lock(gQ230NpcXtelMutex);
     if(!Q230NpcXtelIndex()){
@@ -116,6 +119,10 @@ void Q230PrepareActors(uint32_t cell, uint32_t worldspace,
   }
   std::vector<Fo3NpcActorQ230> actors;
   if(!LoadFo3CellActors(cell,actors,{},arrivals.empty()?nullptr:&arrivals))return;
+#else
+  std::vector<Fo3NpcActorQ230> actors;
+  if(!LoadFo3CellActors(cell,actors))return;
+#endif
   std::vector<Fo3NpcNavMeshQ240> rawNavigation;
   LoadFo3NpcNavigationQ240(cell,worldspace,rawNavigation);
   auto navigation=std::make_shared<Q240NavigationGraph>();
@@ -134,6 +141,7 @@ void Q230PrepareActors(uint32_t cell, uint32_t worldspace,
 #endif
   for(auto source:actors) {
     if(cancel.load(std::memory_order_acquire))return;
+#ifndef FO3_ACTOR_RUNTIME_HOST_TEST
     if(gPlayerSession){
       const auto& saved=gPlayerSession->player.Snapshot().actors;
       const auto it=saved.find(source.refFormId);
@@ -146,6 +154,7 @@ void Q230PrepareActors(uint32_t cell, uint32_t worldspace,
         source.rz=pose.yaw;
       }
     }
+#endif
     Q230ActorVisual visual;
     if (Q230BuildNpcActor(source, visual)) {
 #ifndef FO3_ACTOR_RUNTIME_HOST_TEST
