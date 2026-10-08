@@ -134,6 +134,16 @@ int main(int argc,char** argv){
     saved.hostile=0x14;assert(gPlayerSession->player.UpdateActor(42,saved));
     assert(gPlayerSession->player.PackageRevision()>packageRevision);
   }
+  // An attack started before losing LOS must not fire later as a stale hit.
+  Prepare();auto& interrupted=gQ230NpcActors[0];Q230SimulateActor(interrupted,1.3);
+  Q230SimulateActor(interrupted,1.9);Q230SimulateActor(interrupted,2);
+  assert(interrupted.runtime.pendingAttack&&shots==0);
+  blocked=true;Q230SimulateActor(interrupted,2.01);
+  assert(!interrupted.runtime.pendingAttack&&shots==0&&interrupted.runtime.action==fo3npc::CombatAction::Search);
+  blocked=false;Q230SimulateActor(interrupted,2.02);
+  assert(shots==0&&!interrupted.runtime.pendingAttack);
+  Q230SimulateActor(interrupted,2.3);assert(interrupted.runtime.pendingAttack);
+  Q230SimulateActor(interrupted,2.31);assert(shots==1);
   PackageCombatPolicyTests();if(argc>1)OriginalCombatPolicies(argv[1]);
   std::cout<<"Production NPC combat pursuit/flee, LOS, reload, firing, death and restore passed\n";
 }
