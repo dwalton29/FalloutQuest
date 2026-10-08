@@ -30,6 +30,7 @@ static void ActorCrossCellHandoff() {
   auto actor=Actor(6);
   auto catalog=gPlayerSession->player.Definitions();
   auto& p=catalog.pipboy.packages[50];
+  p.schedule.valid=true;p.schedule.hour=13;p.schedule.duration=1;
   p.location={0,777,0,true};
   catalog.pipboy.targets[777].cell=0x300;
   catalog.pipboy.targets[777].world=0x700;
@@ -53,6 +54,12 @@ static void ActorCrossCellHandoff() {
     <<" doorAccess="<<gPlayerSession->player.CanActorOpenDoor(actor.source.refFormId,0x101)
     <<" graph="<<actor.navigationGraph->triangleCount<<"\n";
   assert(eligibleDoor&&chosenDoor==0x101);
+  // No building transition is authorised before the original PACK hour.
+  packageHour=12;
+  Q240UpdateNpcPackage(actor,0);
+  assert(!actor.runtime.offScene&&actor.aiPackage!=50);
+  // Clock transition makes the same source-record door eligible.
+  packageHour=13;
   bool handedOff=false;
   for(int i=0;i<600&&!handedOff;++i){
     Q240UpdateNpcPackage(actor,double(i)*.1);
@@ -82,6 +89,7 @@ static void ActorCrossCellHandoff() {
   Q240UpdateNpcPackage(second,0);
   assert(!second.runtime.offScene&&second.aiPackage!=50);
   activeTestXtels.reset();
+  packageHour=12;
   gCurrentCellFormId=1;gExteriorWorldspaceQ1890=2;
   std::cout<<"NPC XTEL route/door permission/atomic actor CELL transfer passed\n";
 }
