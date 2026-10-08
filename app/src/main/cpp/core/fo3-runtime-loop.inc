@@ -1559,8 +1559,16 @@ private:
                 gVrHeadTracking=headTracking;
                 gVrLeftGripTracking={gripHandPoseValid_[0],pipLeftGripTracked_};
                 gVrLeftAimTracking={handPoseValid_[0],pipLeftAimTracked_};
+                // Reload takes precedence over the left-wrist Pip-Boy gesture.
+                // Cancel even a primed activation so the physical magazine can
+                // pass in front of the player's face without being holstered.
+                const bool reloadingInHand=WeaponReloadActive();
+                if(reloadingInHand&&gPipActivation.phase!=fo3pip::Phase::Inactive){
+                    gPipActivation.Reset();gPipMenu.dirty=true;
+                    Q6H_LOGI("PIPBOY SUPPRESS reason=held-physical-magazine-or-slide");
+                }
                 UpdateFo3Pipboy(gStereoFrame,static_cast<double>(frameState.predictedDisplayTime)*1e-9,pipHead.m,
-                    gVrPipTracking.Step(gSceneReady,IsFo3LoadingVisible(),sessionState_==XR_SESSION_STATE_FOCUSED,
+                    gVrPipTracking.Step(gSceneReady&&!reloadingInHand,IsFo3LoadingVisible(),sessionState_==XR_SESSION_STATE_FOCUSED,
                         headTracking,{gripHandPoseValid_[0],pipLeftGripTracked_},{handPoseValid_[0],pipLeftAimTracked_},
                         static_cast<double>(frameState.predictedDisplayTime)*1e-9),
                     q210RightValid?turnX_:0,q210RightValid?lootScrollY_:0,
