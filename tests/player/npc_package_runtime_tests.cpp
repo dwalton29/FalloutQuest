@@ -14,7 +14,9 @@
 #include <string>
 #include <vector>
 #include <iostream>
+#ifndef FO3_NPC_FURNITURE_HOST_TEST
 bool LoadFalloutMeshFile(const std::string&,std::vector<uint8_t>&,std::string*) {return false;}
+#endif
 bool LoadFalloutTextureRgba(const std::string&,Fo3RgbaTexture&) {return false;}
 bool originalLogs=false;
 template<class... T> void TestLog(const char* fmt,T... args){if(originalLogs){std::printf(fmt,args...);std::puts("");}}

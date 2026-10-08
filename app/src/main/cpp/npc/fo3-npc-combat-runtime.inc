@@ -220,6 +220,7 @@ static void Q230SimulateActor(Q230ActorVisual& actor,double now) {
     }
   }
   if(s.activity!=fo3npc::Activity::Combat)return;
+  if(s.furniture.Active())return; // Original exit owns the pose before combat movement/fire.
   std::array<float,3> target{};uint32_t targetBase=0;
   const bool valid=Q230Target(s.combatTarget,target,targetBase),visible=valid&&Q230Sight(actor,s.combatTarget,target);
   if(visible){s.lastThreat=target;s.lastSeen=now;}

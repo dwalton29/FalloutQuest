@@ -1,5 +1,6 @@
 #pragma once
 #include <array>
+#include "fo3-furniture.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -20,6 +21,7 @@ enum class CombatAction { Acquire, Pursue, Aim, Attack, Reload, Flee, Search };
 enum class Procedure { None, Executing, Waiting, Completed, Blocked, InvalidTarget, RouteFailed, Unsupported, Interrupted };
 inline float Angle(float a){return std::atan2(std::sin(a),std::cos(a));}
 struct RuntimeState {
+  fo3furniture::State furniture;
   uint32_t reference=0,package=0,combatTarget=0,navigationDoor=0;
   Activity activity=Activity::Idle,suspended=Activity::Idle;
   Animation animation=Animation::Idle;
@@ -49,11 +51,11 @@ struct RuntimeState {
   void BeginCombat(uint32_t target){
     if(!Alive())return;
     if(activity!=Activity::Combat){if(!dialogue){suspended=activity;suspendedPackage=package;}dialogue=false;speaking=false;}
-    combatTarget=target;activity=Activity::Combat;speed=0;animation=Animation::Aim;action=CombatAction::Acquire;
+    furniture.RequestExit();combatTarget=target;activity=Activity::Combat;speed=0;animation=Animation::Aim;action=CombatAction::Acquire;
   }
   void EndCombat(){if(activity!=Activity::Combat)return;combatTarget=0;activity=suspended;package=suspendedPackage;speed=0;animation=Animation::Idle;reloadUntil=0;blockedSince=-1;procedure=Procedure::Interrupted;nextPackageEvaluation=0;}
-  void Die(double now){if(activity==Activity::Dying||activity==Activity::Dead)return;dialogue=speaking=false;combatTarget=0;activity=Activity::Dying;speed=0;animation=Animation::Death;deathAt=now;++actionSerial;}
-  void BeginDialogue(){if(dialogue||!CanTalk())return;suspended=activity;suspendedPackage=package;suspendedSpeed=speed;returnYaw=yaw;dialogue=true;activity=Activity::Dialogue;speed=0;}
+  void Die(double now){if(activity==Activity::Dying||activity==Activity::Dead)return;furniture.Clear();dialogue=speaking=false;combatTarget=0;activity=Activity::Dying;speed=0;animation=Animation::Death;deathAt=now;++actionSerial;}
+  void BeginDialogue(){if(dialogue||!CanTalk())return;furniture.RequestExit();suspended=activity;suspendedPackage=package;suspendedSpeed=speed;returnYaw=yaw;dialogue=true;activity=Activity::Dialogue;speed=0;}
   void EndDialogue(){if(!dialogue)return;dialogue=false;speaking=false;if(activity!=Activity::Combat){activity=suspended;package=suspendedPackage;speed=suspendedSpeed;}animation=Animation::Idle;blockedSince=-1;procedure=Procedure::Interrupted;nextPackageEvaluation=0;}
   void Face(float desired,float dt){
     const float error=Angle((dialogue?desired:returnYaw)-yaw);

@@ -186,6 +186,7 @@ struct RadiationStage {
 struct FurnitureDefinition { std::string model,editor; uint32_t markers=0; bool valid=false; };
 struct Definitions {
   std::unordered_map<uint32_t,FurnitureDefinition> furniture;
+  std::unordered_set<uint32_t> childRaces;
   std::unordered_map<uint32_t, RadiationStage> radiationStages;
   std::unordered_map<uint32_t, World> worlds;
   std::unordered_set<uint32_t> doorBases;

@@ -92,7 +92,7 @@ void Decode(Definitions &d, const std::string &t, uint32_t id, uint32_t flags,
   const auto editor=Text(s,"EDID");
   if(!editor.empty()) { auto key=editor; for(auto& c:key)c=char(std::tolower((unsigned char)c));d.formNames[key]=id; }
   if(t=="FLST") {for(auto& v:s)if(v.type=="LNAM"&&v.n==4)d.formLists[id].push_back(U(&v));}
-  else if(t=="RACE"){auto voices=Find(s,"VTCK");if(voices&&voices->n>=8)d.raceVoices[id]={U(voices),U(voices,4)};}
+  else if(t=="RACE"){auto voices=Find(s,"VTCK");if(voices&&voices->n>=8)d.raceVoices[id]={U(voices),U(voices,4)};auto data=Find(s,"DATA");if(data&&data->n==36&&(U(data,32)&4))d.childRaces.insert(id);}
   else if(t=="FURN") {auto& f=d.furniture[id];f.model=Text(s,"MODL");f.editor=editor;auto m=Find(s,"MNAM");f.markers=U(m);f.valid=m&&m->n==4&&!f.model.empty();}
   else if(t=="IDLE") d.idleModels[id]=Text(s,"MODL");
   else if (t == "RADS") {

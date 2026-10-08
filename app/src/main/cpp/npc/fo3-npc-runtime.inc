@@ -102,6 +102,10 @@ void Q230PrepareActors(uint32_t cell, uint32_t worldspace,
     navigation->byForm[stored->formId]=navigation->meshes.size();
     navigation->meshes.push_back(std::move(stored));
   }
+  std::shared_ptr<fo3furniture::Scene> furniture;
+#ifndef FO3_ACTOR_RUNTIME_HOST_TEST
+  if(gPlayerSession)furniture=fo3furniture::BuildScene(gPlayerSession->player.Definitions().pipboy,cell,worldspace,[](const std::string& path,std::vector<uint8_t>& bytes){return LoadFalloutMeshFile(path,bytes);});
+#endif
   for (const auto &source : actors) {
     if (cancel.load(std::memory_order_acquire))
       return;
@@ -130,7 +134,7 @@ void Q230PrepareActors(uint32_t cell, uint32_t worldspace,
         }
         if(candidate<nearest){nearest=candidate;visual.navigation=mesh;}
       }
-      visual.navigationGraph=navigation;
+      visual.navigationGraph=navigation;visual.runtime.furniture.scene=furniture;
       out.push_back(std::move(visual));
     }
   }
@@ -363,8 +367,16 @@ void Q230UpdateActor(Q230ActorVisual &actor) {
   const auto& clip=actor.animations[actor.activeAnimation].tracks.empty()?actor.clip:actor.animations[actor.activeAnimation];
   const double clipTime=actor.blendStart<0?elapsed:elapsed-actor.blendStart;
   const double sampleTime=actor.runtime.activity==fo3npc::Activity::Dead?std::max(0.f,clip.stop-clip.start):clipTime;
-  if(!fo3anim::Sample(actor.skeleton,clip,sampleTime,actor.pose,&timings)) return;
-  if(actor.blendStart>=0&&elapsed-actor.blendStart<fo3npc::DialoguePolicy::BlendSeconds&&actor.blendFrom.size()==actor.pose.local.size()) {
+  const auto& furniture=actor.runtime.furniture;
+  const auto* slot=furniture.Selected();
+  const bool furniturePose=slot&&(furniture.phase==fo3furniture::Phase::Enter||furniture.phase==fo3furniture::Phase::Loop||furniture.phase==fo3furniture::Phase::Exit);
+  if(furniturePose){
+    const auto& authored=furniture.phase==fo3furniture::Phase::Enter?slot->program->enter:furniture.phase==fo3furniture::Phase::Exit?slot->program->exit:slot->program->loop;
+    const double now=std::chrono::duration<double>(fqopaque::Clock::now().time_since_epoch()).count();
+    fo3anim::BindClip(actor.skeleton,authored,actor.pose);
+    if(!fo3anim::Sample(actor.skeleton,authored,now-furniture.started,actor.pose,&timings,fo3anim::RootPolicy::Furniture,&furniture.retainedRoot))return;
+  }else if(!fo3anim::Sample(actor.skeleton,clip,sampleTime,actor.pose,&timings)) return;
+  if(!furniturePose&&actor.blendStart>=0&&elapsed-actor.blendStart<fo3npc::DialoguePolicy::BlendSeconds&&actor.blendFrom.size()==actor.pose.local.size()) {
     const float mix=float((elapsed-actor.blendStart)/fo3npc::DialoguePolicy::BlendSeconds);
     for(size_t i=0;i<actor.pose.local.size();++i) {
       auto& to=actor.pose.local[i];const auto& from=actor.blendFrom[i];
@@ -380,7 +392,7 @@ void Q230UpdateActor(Q230ActorVisual &actor) {
       actor.pose.local[size_t(actor.pose.accumulation)]=fo3anim::Transform{};
     fo3anim::ComposePose(actor.skeleton,actor.pose);
   }
-  fo3anim::LookYaw(actor.skeleton,actor.pose,actor.headBone,actor.runtime.headYaw);
+  if(!furniturePose)fo3anim::LookYaw(actor.skeleton,actor.pose,actor.headBone,actor.runtime.headYaw);
   auto root=fo3anim::Identity();const float yaw=actor.runtime.yaw-actor.runtime.authoredYaw;
   root[0]=root[10]=std::cos(yaw);root[2]=-std::sin(yaw);root[8]=-root[2];
   if(!actor.rigs.empty()) {

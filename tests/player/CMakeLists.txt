@@ -123,6 +123,7 @@ target_sources(dialogue_tests PRIVATE ${dialogue_shared})
 add_test(NAME dialogue_tests COMMAND dialogue_tests)
 
 add_executable(npc_package_runtime_tests npc_package_runtime_tests.cpp ${dialogue_shared}
+    ../../app/src/main/cpp/npc/fo3-actor-animation.cpp
     ../../app/src/main/cpp/npc/fo3-npc.cpp)
 target_compile_features(npc_package_runtime_tests PRIVATE cxx_std_17)
 target_compile_options(npc_package_runtime_tests PRIVATE -Wall -Wextra -Werror -Wno-misleading-indentation)
@@ -146,6 +147,7 @@ target_link_libraries(npc_combat_runtime_tests PRIVATE ZLIB::ZLIB)
 add_test(NAME npc_combat_runtime_tests COMMAND npc_combat_runtime_tests)
 
 add_executable(npc_door_runtime_tests npc_door_runtime_tests.cpp ${dialogue_shared}
+    ../../app/src/main/cpp/npc/fo3-actor-animation.cpp
     ../../app/src/main/cpp/npc/fo3-npc.cpp)
 target_compile_features(npc_door_runtime_tests PRIVATE cxx_std_17)
 target_compile_options(npc_door_runtime_tests PRIVATE -Wall -Wextra -Werror -Wno-misleading-indentation)
@@ -154,9 +156,18 @@ target_link_libraries(npc_door_runtime_tests PRIVATE ZLIB::ZLIB)
 add_test(NAME npc_door_runtime_tests COMMAND npc_door_runtime_tests)
 
 add_executable(dialogue_runtime_tests dialogue_runtime_tests.cpp ${dialogue_shared}
+    ../../app/src/main/cpp/npc/fo3-actor-animation.cpp
     ../../app/src/main/cpp/npc/fo3-npc.cpp)
 target_compile_features(dialogue_runtime_tests PRIVATE cxx_std_17)
 target_compile_options(dialogue_runtime_tests PRIVATE -Wall -Wextra -Werror -Wno-misleading-indentation -Wno-unused-function)
 target_include_directories(dialogue_runtime_tests PRIVATE ../nif ../../app/src/main/cpp ../../app/src/main/cpp/data)
 target_link_libraries(dialogue_runtime_tests PRIVATE ZLIB::ZLIB)
 add_test(NAME dialogue_runtime_tests COMMAND dialogue_runtime_tests)
+
+add_executable(npc_furniture_runtime_tests npc_furniture_runtime_tests.cpp ${dialogue_shared}
+    ../../app/src/main/cpp/npc/fo3-npc.cpp ../../app/src/main/cpp/npc/fo3-actor-animation.cpp)
+target_compile_features(npc_furniture_runtime_tests PRIVATE cxx_std_17)
+target_compile_options(npc_furniture_runtime_tests PRIVATE -Wall -Wextra -Werror -Wno-misleading-indentation -Wno-unused-function)
+target_include_directories(npc_furniture_runtime_tests PRIVATE ../nif ../../app/src/main/cpp ../../app/src/main/cpp/data ../../app/src/main/cpp/npc)
+target_link_libraries(npc_furniture_runtime_tests PRIVATE ZLIB::ZLIB)
+add_test(NAME npc_furniture_runtime_tests COMMAND npc_furniture_runtime_tests)

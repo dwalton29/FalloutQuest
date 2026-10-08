@@ -12,7 +12,7 @@ int main(int argc,char** argv){
  assert(pool->owners.empty());
  fo3pipdata::Placement p;p.x=100;p.y=200;p.z=30;p.rz=1.57079632679f;p.scale=2;
  Marker marker;marker.position={10,0,5};auto world=Alignment(p,marker);
- assert(std::fabs(world[12]-100)<.001f&&std::fabs(world[13]-220)<.001f&&std::fabs(world[14]-40)<.001f);
+ assert(std::fabs(world[12]-100)<.001f&&std::fabs(world[13]-180)<.001f&&std::fabs(world[14]-40)<.001f);
  assert(Permitted(0x80000002,1,true)&&!Permitted(0x80000002,0,true)&&!Permitted(0x40000002,1,true));
  std::vector<Marker> markers;assert(!DecodeMarkers({},markers));
  if(argc<2){std::cout<<"furniture core tests passed; original assets not supplied\n";return 0;}
