@@ -107,7 +107,9 @@ Report Scheduler::Tick(float hour,uint32_t residentCell,uint32_t residentWorld,
   for(size_t processed=0;cursor_<pending_.size()&&processed<BATCH;++cursor_,++processed){
     const uint32_t id=pending_[cursor_];
     const auto it=tracked.find(id);if(it==tracked.end())continue;
-    const auto& state=it->second;
+    // Snapshot before invoking persist(): the canonical Player callback may
+    // update the tracked unordered_map in-place and invalidate comparisons.
+    const fo3player::ActorState state=it->second;
     ++out.visited;
     if(state.dead||!cb.alive(id))continue;
     if(state.hostile){++out.hostileSkipped;continue;}
