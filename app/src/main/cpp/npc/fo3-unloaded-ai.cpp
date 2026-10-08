@@ -20,14 +20,14 @@ bool Locatable(const fo3pipdata::Placement& t) {
 }
 struct Candidate {uint32_t id=0,targetCell=0,targetWorld=0;};
 Candidate Select(uint32_t id,uint32_t base,const fo3player::ActorState& state,float hour,
-                 const fo3pipdata::Definitions& defs,const Callbacks& callbacks) {
+                 const fo3pipdata::Definitions& defs,const Callbacks& callbacks,fo3schedule::Calendar calendar) {
   if(!callbacks.packages||!callbacks.eligible)return {};
   const auto authored=callbacks.packages(base);
   for(uint32_t packageId:authored){
     const auto it=defs.packages.find(packageId);
     if(it==defs.packages.end())continue;
     const auto& p=it->second;
-    if(!SupportedLocalProcedure(p)||!ScheduleActive(p.schedule,hour))continue;
+    if(!SupportedLocalProcedure(p)||!ScheduleActive(p.schedule,hour,calendar))continue;
     if(!callbacks.eligible(id,base,state,p,hour))continue;
     const auto target=defs.targets.find(p.location.value);
     if(target==defs.targets.end()||!Locatable(target->second))continue;
@@ -66,16 +66,8 @@ const fo3xtel::DoorLink* FirstDoor(const fo3xtel::Index& graph,
   return graph.Find(first);
 }
 }
-bool ScheduleActive(const fo3pipdata::PackageSchedule& s,float hour) {
-  if(!s.valid)return true;
-  // Without a date/month/day-of-week clock, don't claim dated packages fire.
-  if(s.month!=-1||s.weekday!=-1||s.date!=0)return false;
-  if(s.hour<0)return true;
-  if(s.duration<=0)return false;
-  hour=std::fmod(hour,24.f);if(hour<0)hour+=24.f;
-  const float end=float(s.hour)+float(s.duration);
-  if(end<=24.f)return hour>=s.hour&&hour<end;
-  return hour>=s.hour||hour<end-24.f;
+bool ScheduleActive(const fo3pipdata::PackageSchedule& s,float hour,fo3schedule::Calendar calendar) {
+  return fo3schedule::Active(s,hour,calendar);
 }
 bool SupportedLocalProcedure(const fo3pipdata::PackageDefinition& p) {
   // Pure location intents only; no result scripts, NPC interaction, uncertain
@@ -84,18 +76,18 @@ bool SupportedLocalProcedure(const fo3pipdata::PackageDefinition& p) {
   return p.combatStyleValid&&!p.scripted&&!p.procedureActions&&
          p.location.valid&&p.location.type==0&&!p.location2.valid;
 }
-void Scheduler::Reset(){minute_=-1;previousMinute_=-1;batchHour_=0.f;cursor_=0;pending_.clear();lastTransferredMinute_.clear();}
+void Scheduler::Reset(){minute_=-1;previousMinute_=-1;batchHour_=0.f;batchCalendar_={};cursor_=0;pending_.clear();lastTransferredMinute_.clear();}
 Report Scheduler::Tick(float hour,uint32_t residentCell,uint32_t residentWorld,
   const std::unordered_map<uint32_t,fo3player::ActorState>& tracked,
   const fo3pipdata::Definitions& defs,const fo3xtel::Index& graph,
-  const Callbacks& cb) {
+  const Callbacks& cb,fo3schedule::Calendar calendar) {
   Report out;
   const int now=Minute(hour);
   if(now<0||!cb.persist||!cb.alive)return out;
   if(minute_<0){minute_=now;previousMinute_=now;return out;}
   if(pending_.empty()&&now==minute_)return out;
   if(pending_.empty()) {
-    previousMinute_=minute_;minute_=now;batchHour_=hour;cursor_=0;
+    previousMinute_=minute_;minute_=now;batchHour_=hour;batchCalendar_=calendar;cursor_=0;
     pending_.reserve(tracked.size());
     for(const auto& a:tracked)pending_.push_back(a.first);
     std::sort(pending_.begin(),pending_.end());
@@ -119,7 +111,7 @@ Report Scheduler::Tick(float hour,uint32_t residentCell,uint32_t residentWorld,
     // a new scheduler batch following scene transition).
     if(lastTransferredMinute_[id]==uint32_t(minute_+1))continue;
     const auto base=defs.targets.find(id);if(base==defs.targets.end())continue;
-    const Candidate chosen=Select(id,base->second.base,state,batchHour_,defs,cb);
+    const Candidate chosen=Select(id,base->second.base,state,batchHour_,defs,cb,batchCalendar_);
     if(!chosen.id||!chosen.targetCell){++out.unsupported;continue;}
     fo3player::ActorState next=state;
     if(state.package!=chosen.id){next.package=chosen.id;next.sequence=0;next.packageWaitSeconds=0;}
