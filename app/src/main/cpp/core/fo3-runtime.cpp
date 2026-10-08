@@ -3028,6 +3028,7 @@ void WeaponRender(bool alpha);
 void WeaponShutdown();
 void WeaponPersistWorld();
 bool WeaponHeld();
+bool WeaponReloadActive();
 float gWeaponHaptic[2]{};
 Vec3 gWeaponPalm[2]{};
 bool gWeaponPalmValid[2]{};
