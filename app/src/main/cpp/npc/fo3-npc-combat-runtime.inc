@@ -247,6 +247,9 @@ static void Q230SimulateActor(Q230ActorVisual& actor,double now) {
   s.yaw=fo3npc::Angle(s.yaw+std::clamp(error,-fo3npc::DialoguePolicy::BodySpeed*dt,fo3npc::DialoguePolicy::BodySpeed*dt));s.returnYaw=s.yaw;actor.lastFrame=UINT64_MAX;
   const float maxRange=d.maxRange*(ranged&&style?style->rangeMax:1.f);
   if(!visible||distance>maxRange){
+    // A wind-up belongs to the current line of fire. Never carry a queued
+    // attack into search/pursuit and release it after regaining visibility.
+    if(s.pendingAttack){s.pendingAttack=false;s.pendingHit=0;s.actionUntil=0;s.animation=fo3npc::Animation::Aim;++s.actionSerial;}
     s.action=visible?fo3npc::CombatAction::Pursue:fo3npc::CombatAction::Search;
     const auto& point=visible?target:s.lastThreat;
     const std::array<float,3> game{gSceneCenterXQ1730+point[0]*FO3_UNITS_PER_METRE,gSceneCenterYQ1730-(point[2]-SCENE_FORWARD)*FO3_UNITS_PER_METRE,gSceneFloorZQ1730+(point[1]-FLOOR_Y)*FO3_UNITS_PER_METRE};
