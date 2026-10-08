@@ -388,7 +388,10 @@ void Synthetic(const std::string &root) {
   // The v10 clock extension lacked calendar fields; retain the hour and
   // migrate the starting date from the original GLOB records.
   Bytes version10=good;version10.resize(version10.size()-12);
-  version10[4]=10;Rechecksum(version10);Write(save,version10);
+  version10[4]=10;
+  const auto legacyClockSize=uint32_t(version10.size()-20);
+  for(int i=0;i<4;++i)version10[12+i]=uint8_t(legacyClockSize>>(8*i));
+  Rechecksum(version10);Write(save,version10);
   Check(restored.Restore(save,error) &&
         std::fabs(restored.Snapshot().gameHour-p.Snapshot().gameHour)<.00001f &&
         restored.Snapshot().gameDay==c.initial.gameDay,
