@@ -1563,7 +1563,7 @@ private:
                 // Cancel even a primed activation so the physical magazine can
                 // pass in front of the player's face without being holstered.
                 const bool reloadingInHand=WeaponReloadActive();
-                if(reloadingInHand&&gPipActivation.phase!=fo3pip::Phase::Inactive){
+                if(reloadingInHand&&gPipActivation.phase!=fo3pip::Phase::Dormant){
                     gPipActivation.Reset();gPipMenu.dirty=true;
                     Q6H_LOGI("PIPBOY SUPPRESS reason=held-physical-magazine-or-slide");
                 }
