@@ -152,8 +152,30 @@ void TestUnsupported() {
   f.Tick(8.03f);assert(f.writes==0);
   std::cout<<"Scripts, dated schedules, unknown locations fail closed\n";
 }
+void TestBatchBudget() {
+  Fixture f;const auto initial=f.tracked.at(f.actor);
+  // 130 independent original-type ACHR identities share the same authored
+  // PACK target, and must be drained in deterministic capped batches.
+  for(uint32_t n=0;n<129;++n){
+    const uint32_t ref=0x10000u+n;
+    f.tracked.emplace(ref,initial);
+    auto placement=f.defs.targets.at(f.actor);
+    f.defs.targets.emplace(ref,placement);
+  }
+  assert(f.tracked.size()==130);
+  f.Tick(7.99f);
+  auto a=f.Tick(8.01f);
+  assert(a.visited==64&&a.doorHops==64&&f.writes==64);
+  a=f.Tick(8.01f);
+  assert(a.visited==64&&a.doorHops==64&&f.writes==128);
+  a=f.Tick(8.01f);
+  assert(a.visited==2&&a.doorHops==2&&f.writes==130);
+  a=f.Tick(8.01f);
+  assert(a.visited==0&&a.doorHops==0&&f.writes==130);
+  std::cout<<"130 tracked actors processed in bounded 64/64/2 batches without duplicates\\n";
+}
 }
 int main(){
-  TestDayNight();TestGuards();TestUnsupported();
+  TestDayNight();TestGuards();TestUnsupported();TestBatchBudget();
   return 0;
 }
