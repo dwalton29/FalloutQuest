@@ -1,7 +1,5 @@
 #include <limits>
 #include "fo3-package-schedule.h"
-#include <queue>
-#include <functional>
 static std::unordered_set<std::string> gQ240AiDiagnostics;
 // Frame diagnostics only; the actual topology and algorithm remain pure.
 static uint32_t gQ240PathsPlanned=0,gQ240PathNodesExpanded=0;
