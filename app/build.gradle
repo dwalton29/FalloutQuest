@@ -22,8 +22,8 @@ android {
         applicationId 'com.falloutquest.app'
         minSdk 29
         targetSdk 35
-        versionCode 190
-        versionName '0.56.0-npc-conversation'
+        versionCode 191
+        versionName '0.57.0-npc-clock-nav-xtel'
 
         ndk {
             abiFilters 'arm64-v8a'
