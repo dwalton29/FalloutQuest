@@ -47,9 +47,14 @@ static void StateAndPerception() {
 static void CombatAssetCandidates() {
   auto c=Fixture();
   Fo3NpcActorQ230 npc;npc.refFormId=100;npc.baseFormId=200;
-  npc.inventory.push_back({10,1,"WEAP"});
-  npc.inventory.push_back({301,1,"LVLI"});
-  npc.inventory.push_back({302,1,"LVLI"});
+  auto addSource=[&](uint32_t form,const char* type){
+    Fo3NpcVisualItemQ230 item;
+    item.formId=form;item.count=1;item.recordType=type;
+    npc.inventory.push_back(std::move(item));
+  };
+  addSource(10,"WEAP");
+  addSource(301,"LVLI");
+  addSource(302,"LVLI");
   fo3player::Item ranged=c.items.at(10);ranged.formId=20;c.items[20]=ranged;
   c.lootLists[301].valid=true;c.lootLists[301].entries.push_back({302,0,1,1,1,false});
   c.lootLists[302].valid=true;c.lootLists[302].entries.push_back({20,0,1,1,1,false});
@@ -128,7 +133,10 @@ static void Original(const char* path) {
   // These were previously invisible to the combat asset-preparation loop.
   for(uint32_t list:{0x0006C36Bu,0x00029367u}){
     assert(c.lootLists.count(list));
-    Fo3NpcActorQ230 source;source.inventory.push_back({list,1,"LVLI"});
+    Fo3NpcActorQ230 source;
+    Fo3NpcVisualItemQ230 entry;
+    entry.formId=list;entry.count=1;entry.recordType="LVLI";
+    source.inventory.push_back(std::move(entry));
     const auto candidates=fo3npc::CombatWeaponCandidates(source,c);
     assert(!candidates.empty());
     for(uint32_t weapon:candidates)assert(c.items.at(weapon).kind==ItemKind::Weapon);
