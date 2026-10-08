@@ -3,6 +3,8 @@
 #include <queue>
 #include <functional>
 static std::unordered_set<std::string> gQ240AiDiagnostics;
+// Frame diagnostics only; the actual topology and algorithm remain pure.
+static uint32_t gQ240PathsPlanned=0,gQ240PathNodesExpanded=0;
 static void Q240AiLogOnce(uint32_t actor,uint32_t package,const std::string& why) {
   char prefix[40];std::snprintf(prefix,sizeof(prefix),"%08X:%08X:",actor,package);
   const std::string key=std::string(prefix)+why;
@@ -166,6 +168,7 @@ static bool Q240Portal(const Q240NavigationGraph& graph,const Q240Node& from,con
 static bool Q240Path(const Q240NavigationGraph& graph,const std::array<float,3>& from,
                      const std::array<float,3>& to,std::vector<std::array<float,3>>& path,std::string* failure=nullptr,
                      std::vector<std::pair<size_t,size_t>>* surfaces=nullptr) {
+  ++gQ240PathsPlanned;
   path.clear();if(surfaces)surfaces->clear();if(failure)failure->clear();
   auto fail=[&](const char* why){if(failure)*failure=why;return false;};
   float startDistance=0,goalDistance=0;
@@ -188,6 +191,7 @@ static bool Q240Path(const Q240NavigationGraph& graph,const std::array<float,3>&
     const auto [priority,current]=frontier.top();frontier.pop();
     if(closed[current]||priority>score[current])continue; // stale queued priority
     if(current==goalFlat)break;
+    ++gQ240PathNodesExpanded;
     closed[current]=1;
     const auto currentNode=Q240NodeAt(graph,current);if(!currentNode.Valid())continue;
     const auto here=Q240Centroid(graph,currentNode);
