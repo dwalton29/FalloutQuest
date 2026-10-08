@@ -3,6 +3,7 @@
 #include "data/fo3-xtel-index.h"
 #include "pipboy/fo3-pipboy-data.h"
 #include "player/fo3-player-state.h"
+#include "fo3-package-schedule.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -29,7 +30,7 @@ struct Report {
   size_t visited=0,packageChanges=0,doorHops=0,blocked=0,unsupported=0;
   size_t residentSkipped=0,hostileSkipped=0;
 };
-bool ScheduleActive(const fo3pipdata::PackageSchedule&,float hour);
+bool ScheduleActive(const fo3pipdata::PackageSchedule&,float hour,fo3schedule::Calendar calendar={});
 bool SupportedLocalProcedure(const fo3pipdata::PackageDefinition&);
 class Scheduler {
 public:
@@ -39,11 +40,13 @@ public:
   Report Tick(float hour,uint32_t residentCell,uint32_t residentWorld,
               const std::unordered_map<uint32_t,fo3player::ActorState>& tracked,
               const fo3pipdata::Definitions& definitions,
-              const fo3xtel::Index& graph,const Callbacks& callbacks);
+              const fo3xtel::Index& graph,const Callbacks& callbacks,
+              fo3schedule::Calendar calendar={});
 private:
   int minute_=-1,previousMinute_=-1;
   // Freeze the game clock for each capped actor batch.
   float batchHour_=0.f;
+  fo3schedule::Calendar batchCalendar_{};
   size_t cursor_=0;
   std::vector<uint32_t> pending_;
   // Stores cell of the first observed actor state at this game minute; the
