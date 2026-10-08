@@ -1,6 +1,7 @@
 #include "dialogue/fo3-dialogue-session.h"
 #include "dialogue/fo3-dialogue-panel.h"
 #include "npc/fo3-npc-state.h"
+#include "npc/fo3-npc-residency.h"
 #include "npc/fo3-npc-conversation.h"
 #include "npc/fo3-unloaded-ai.h"
 #include "data/fo3-xtel-index.h"
@@ -757,7 +758,9 @@ std::vector<Q230ActorVisual> gQ230NpcActors;
 static fo3unloaded::Scheduler gQ230UnloadedScheduler;
 void Q230DeleteNpcActors();
 void Q230PrepareActors(uint32_t cell, uint32_t worldspace,
-    std::vector<Q230ActorVisual>& out, const std::atomic<bool>& cancel);
+    std::vector<Q230ActorVisual>& out, const std::atomic<bool>& cancel,
+    const std::unordered_map<uint32_t,fo3player::ActorState>* savedOverride=nullptr,
+    const std::unordered_set<uint32_t>* onlyRefs=nullptr);
 bool Fo3DialogueFocus();
 void EndFo3Dialogue(const char* reason);
 void Q230UpdateActor(Q230ActorVisual&);
@@ -2970,6 +2973,8 @@ void Q74DeleteGpuObjects(std::vector<GpuObject>& objects) {
     objects.clear();
 }
 
+// Called while the original GL context is still current, before scene teardown.
+// The worker is joined before the owning player session can be replaced.
 bool gQ2013ExteriorWarmupPending = false;
 bool gFo3LoadingWarmupWarned = false;
 std::chrono::steady_clock::time_point gQ2013ExteriorWarmupStarted{};
@@ -3023,6 +3028,36 @@ struct Fo3SceneLoadWork {
 Fo3SceneLoadWork gSceneLoad;
 uint64_t gSceneLoadFrame = 0u;
 std::unique_ptr<fo3player::Session> gPlayerSession;
+
+// Dynamic NPC arrivals use the same original ESM/NIF/KF scene-worker pipeline
+// as normal actors, but upload only missing actors and never rebuild the world.
+struct Q230NpcArrivalBatch {
+    std::vector<Q230ActorVisual> actors;
+};
+struct Q230NpcArrivalWork {
+    fo3scene::Preparation<Q230NpcArrivalBatch> preparation;
+    std::unordered_set<uint32_t> pending;
+    size_t actorIndex=0,partIndex=0;
+    uint32_t cell=0,world=0;
+    bool active=false;
+};
+static Q230NpcArrivalWork gQ230NpcArrival;
+void Q230ResetNpcArrivals() {
+    if(gQ230NpcArrival.preparation.Ready()){
+        for(auto& actor:gQ230NpcArrival.preparation.Get().actors){
+            Q74DeleteGpuObjects(actor.objects);
+            for(const auto& entry:actor.generatedTextures)
+                gQ234GeneratedTextures.erase(entry.first);
+        }
+    }
+    gQ230NpcArrival.preparation.Reset();
+    gQ230NpcArrival.pending.clear();
+    gQ230NpcArrival.actorIndex=0;
+    gQ230NpcArrival.partIndex=0;
+    gQ230NpcArrival.active=false;
+}
+void Q230PumpNpcArrivals();
+
 void WeaponUpdate(double now,bool back);
 void WeaponRender(bool alpha);
 void WeaponShutdown();
@@ -3065,6 +3100,7 @@ void AbortFo3SceneLoad(const char* reason) {
 
 bool BeginFo3SceneLoad(const Fo3CellTransitionRequestQ74& request, bool boot) {
     if (gSceneLoad.active) return false;
+    Q230ResetNpcArrivals();
     gSceneLoad.active = true;
     gSceneLoad.boot = boot;
     gSceneLoad.contextApplied = false;
@@ -11009,6 +11045,10 @@ static void Q230TickUnloadedActors(float hour) {
         return ref!=defs.targets.end()&&!ref->second.parent&&
             player.CanActorOpenDoor(actor,door);
     };
+    cb.isResidentCell=[&](uint32_t cell,uint32_t world){
+        return fo3npc::SceneOwnsCell(gCurrentCellFormId,gExteriorWorldspaceQ1890,
+                                    cell,world,defs.cellWorlds);
+    };
     cb.eligible=[&](uint32_t actor,uint32_t base,
                     const fo3player::ActorState& saved,
                     const fo3pipdata::PackageDefinition& p,float atHour) {
@@ -11025,7 +11065,22 @@ static void Q230TickUnloadedActors(float hour) {
         return fo3dialogue::Conditions(p.conditions,ctx,error)&&error.empty();
     };
     cb.persist=[&](uint32_t actor,const fo3player::ActorState& state){
-        return player.UpdateActor(actor,state);
+        // Enqueue only successful off-scene -> active-scene XTEL arrivals.
+        // The queued actor is subsequently prepared on a CPU worker and
+        // uploaded on the render thread, never spawned on this scheduler call.
+        const auto old=player.Snapshot().actors.find(actor);
+        const bool wasResident=old!=player.Snapshot().actors.end()&&
+            fo3npc::SceneOwnsCell(gCurrentCellFormId,gExteriorWorldspaceQ1890,
+              old->second.cell,old->second.world,defs.cellWorlds);
+        const bool isResident=fo3npc::SceneOwnsCell(
+            gCurrentCellFormId,gExteriorWorldspaceQ1890,state.cell,state.world,defs.cellWorlds);
+        if(!player.UpdateActor(actor,state))return false;
+        if(isResident&&!wasResident){
+            gQ230NpcArrival.pending.insert(actor);
+            Q6H_LOGI("NPC LIVE ARRIVAL QUEUED actor=%08X cell=%08X world=%08X pending=%zu",
+              actor,state.cell,state.world,gQ230NpcArrival.pending.size());
+        }
+        return true;
     };
     const auto& clock=player.Snapshot();
     const auto report=gQ230UnloadedScheduler.Tick(hour,gCurrentCellFormId,
@@ -11035,6 +11090,112 @@ static void Q230TickUnloadedActors(float hour) {
         Q6H_LOGI("NPC UNLOADED TICK visited=%zu packageChanged=%zu doorHops=%zu blocked=%zu unsupported=%zu residentSkipped=%zu",
             report.visited,report.packageChanges,report.doorHops,report.blocked,
             report.unsupported,report.residentSkipped);
+}
+
+
+// New NPC residents are built from original ACHR, NPC_, race, outfit, NIF,
+// NAVM, KF and furniture data off-thread. Do not touch OpenGL or gQ230NpcActors
+// in the worker: all GPU upload and vector publication stay on the main frame.
+void Q230PumpNpcArrivals(){
+    if(!gSceneReady||gSceneLoad.active||!gPlayerSession||
+       gPlayerSession->saveBlocked||IsFo3LoadingVisible())return;
+    auto& work=gQ230NpcArrival;
+    const auto& player=gPlayerSession->player;
+    const auto& definitions=player.Definitions().pipboy;
+    const auto isResident=[&](const fo3player::ActorState& s){
+        return !s.dead&&fo3npc::SceneOwnsCell(gCurrentCellFormId,
+            gExteriorWorldspaceQ1890,s.cell,s.world,definitions.cellWorlds);
+    };
+    const auto alreadyVisible=[&](uint32_t id){
+        return std::any_of(gQ230NpcActors.begin(),gQ230NpcActors.end(),
+            [id](const Q230ActorVisual& v){return v.source.refFormId==id;});
+    };
+    if(work.active){
+        if(!work.preparation.Ready())return;
+        if(!work.preparation.Successful()){
+            Q6H_LOGI("NPC LIVE ARRIVAL FAILED cell=%08X world=%08X reason=cpu-worker",work.cell,work.world);
+            Q230ResetNpcArrivals();return;
+        }
+        auto& actors=work.preparation.Get().actors;
+        if(work.actorIndex<actors.size()){
+            auto& actor=actors[work.actorIndex];
+            const auto saved=player.Snapshot().actors.find(actor.source.refFormId);
+            if(saved==player.Snapshot().actors.end()||!isResident(saved->second)||
+                alreadyVisible(actor.source.refFormId)){
+                Q74DeleteGpuObjects(actor.objects);
+                for(const auto& entry:actor.generatedTextures)
+                    gQ234GeneratedTextures.erase(entry.first);
+                Q6H_LOGI("NPC LIVE ARRIVAL SKIP actor=%08X reason=departed-or-already-present",
+                    actor.source.refFormId);
+                ++work.actorIndex;work.partIndex=0;
+                return;
+            }
+            if(work.partIndex==0)
+                for(auto& entry:actor.generatedTextures)
+                    gQ234GeneratedTextures[entry.first]=std::move(entry.second);
+            if(work.partIndex<actor.parts.size()){
+                auto& part=actor.parts[work.partIndex++];
+                Q230UploadActorPart(actor,part,gSceneCenterXQ1730,
+                    gSceneCenterYQ1730,gSceneFloorZQ1730);
+                part=CpuObject{};
+                return; // Bound GPU work to one NPC part per frame.
+            }
+            for(const auto& entry:actor.generatedTextures)
+                gQ234GeneratedTextures.erase(entry.first);
+            actor.generatedTextures.clear();actor.parts.clear();
+            if(!actor.objects.empty()&&!actor.rigs.empty()){
+                actor.animationStart=std::chrono::steady_clock::now();
+                const uint32_t id=actor.source.refFormId;
+                gQ230NpcActors.push_back(std::move(actor));
+                Q6H_LOGI("NPC LIVE ARRIVAL READY actor=%08X cell=%08X world=%08X actors=%zu",
+                    id,saved->second.cell,saved->second.world,gQ230NpcActors.size());
+            }else {
+                Q74DeleteGpuObjects(actor.objects);
+                Q6H_LOGI("NPC LIVE ARRIVAL FAILED actor=%08X reason=no-renderable-rig",
+                    actor.source.refFormId);
+            }
+            ++work.actorIndex;work.partIndex=0;
+            return;
+        }
+        Q6H_LOGI("NPC LIVE ARRIVAL COMPLETE cell=%08X actors=%zu",
+            work.cell,actors.size());
+        work.preparation.Reset();
+        work.actorIndex=work.partIndex=0;work.active=false;
+        return;
+    }
+    if(work.pending.empty())return;
+    // Freeze *only* requested, newly resident actor states. This snapshot
+    // prevents the asset worker reading mutable player state while the game
+    // clock advances on the main thread.
+    std::unordered_map<uint32_t,fo3player::ActorState> saved;
+    std::unordered_set<uint32_t> refs;
+    for(uint32_t id:work.pending){
+        const auto it=player.Snapshot().actors.find(id);
+        if(it==player.Snapshot().actors.end()||!isResident(it->second)||alreadyVisible(id))continue;
+        saved.emplace(id,it->second);refs.insert(id);
+    }
+    work.pending.clear();
+    if(refs.empty())return;
+    const uint32_t cell=gCurrentCellFormId,world=gExteriorWorldspaceQ1890;
+    const size_t count=refs.size();
+    if(work.preparation.Start([cell,world,saved=std::move(saved),refs=std::move(refs)](
+            Q230NpcArrivalBatch& batch,const std::atomic<bool>& cancelled){
+        Q230PrepareActors(cell,world,batch.actors,cancelled,&saved,&refs);
+        if(cancelled.load(std::memory_order_acquire))return false;
+        // The immutable catalog remains alive until scene teardown drains us.
+        const auto* catalog=gPlayerSession?&gPlayerSession->player.Definitions():nullptr;
+        if(!catalog)return false;
+        for(auto& actor:batch.actors){
+            if(cancelled.load(std::memory_order_acquire))return false;
+            Q230CacheDialogueAnimations(actor,&catalog->pipboy);
+            Q230CacheCombat(actor,catalog);
+        }
+        return true;
+    })){
+        work.active=true;work.cell=cell;work.world=world;
+        Q6H_LOGI("NPC LIVE ARRIVAL PREPARE cell=%08X world=%08X requested=%zu",
+            cell,world,count);
+    }else Q6H_LOGI("NPC LIVE ARRIVAL FAILED reason=worker-start requested=%zu",count);
 }
 
 void QActorPrepareStereoFrame() {
@@ -11062,6 +11223,7 @@ void QActorPrepareStereoFrame() {
         if(actor.renderVisible) Q230UpdateActor(actor);
     }
     Q230TickUnloadedActors(GetFo3TimeOfDayHour());
+    Q230PumpNpcArrivals();
     PrepareFo3InteriorSceneLights();
     fqactor::framePrep.Add(fqopaque::Micros(started));
     if(gStereoFrame%60==0) Q6H_LOGI("ACTOR FRAME PREP frame=%llu playerPoseUs=%.1f fingersUs=%.1f playerBoneUs=%.1f playerSkinCpuUs=%.1f playerDirectionsUs=%.1f npcClipUs=%.1f npcPoseUs=%.1f npcBoneUs=%.1f npcSkinCpuUs=%.1f npcDirectionsUs=%.1f animatedUploadCpuUs=%.1f totalActorPrepUs=%.1f setupUs=%.1f animatedVertexUploadBytes=%llu animatedVboUploads=%llu bonePaletteUploadBytes=%llu playerParts=%llu npcParts=%llu actors=%llu cpuReference=%d",
@@ -12810,6 +12972,7 @@ void Q6HDeleteFramebuffers(GLsizei n, const GLuint* framebuffers) {
         Q1900DeleteGpuShape(object);
     }
     gObjects.clear();
+    Q230ResetNpcArrivals();
     Q230DeleteNpcActors();
     Q1910DrainDeferredGpuDeletesQ19(true);
     Q2017ForceClearSharedGeometry();

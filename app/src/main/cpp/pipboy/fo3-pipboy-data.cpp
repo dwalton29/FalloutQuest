@@ -541,8 +541,13 @@ void Finalize(Definitions &d) {
   for (auto &p : d.targets)
     if(d.furniture.count(p.second.base)||d.idleMarkers.count(p.second.base))retain.insert(p.first);
   for (auto &p : d.targets)
-    if (d.doorBases.count(p.second.base))
+    if (d.doorBases.count(p.second.base)) {
       d.doors[p.second.cell].push_back(p.second);
+      // The XTEL graph and npc door permission checker both require this
+      // authored REFR after quest-target pruning. A valid DOOR must never
+      // become unreachable only because it is not a quest objective.
+      retain.insert(p.first);
+    }
   for (auto &q : d.quests)
     for (auto &o : q.second.objectives)
       for (auto id : o.second.targets)

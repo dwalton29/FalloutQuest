@@ -356,10 +356,21 @@ static bool Q240NpcRemoteDoor(const Q230ActorVisual& actor,uint32_t targetCell,
   const auto index=FO3_NPC_XTEL_INDEX();
   if(!index||!gPlayerSession||!actor.navigationGraph||!targetCell)return false;
   const auto& d=gPlayerSession->player.Definitions().pipboy;
-  const auto* exits=index->Outgoing(gCurrentCellFormId);if(!exits)return false;
+  std::vector<uint32_t> doors;
+  if(gExteriorWorldspaceQ1890==0x00000A74u){
+    // The Megaton scene is loaded via its persistent WRLD CELL, but authored
+    // XTEL doors actually belong to individual exterior grid CELLs.
+    for(const auto& cell:d.cellWorlds)if(cell.second==gExteriorWorldspaceQ1890){
+      if(const auto* exits=index->Outgoing(cell.first))
+        doors.insert(doors.end(),exits->begin(),exits->end());
+    }
+  } else if(const auto* exits=index->Outgoing(gCurrentCellFormId)){
+    doors=*exits;
+  }
+  if(doors.empty())return false;
   const auto here=Q240GamePosition(actor);
   size_t minLegs=SIZE_MAX;float minDistance=INFINITY;
-  for(uint32_t ref:*exits){
+  for(uint32_t ref:doors){
     const auto* edge=index->Find(ref);
     if(!edge||edge->sourceWorld!=gExteriorWorldspaceQ1890||
        (edge->sourceRecordFlags&0x820u)||(edge->destinationRecordFlags&0x820u))

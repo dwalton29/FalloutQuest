@@ -1,5 +1,6 @@
 #include "player/fo3-player-state.h"
 #include "ui/pipboy/fo3-pipboy-state.h"
+#include "npc/fo3-package-schedule.h"
 #include <cassert>
 #include <cmath>
 #include <cstdio>
@@ -160,8 +161,13 @@ static void PackageDecodeTests() {
   assert(d.packages.at(109).conditions.at(0).function==0);
   d.targets[200].base=1;
   d.packages[100].location.type=0;d.packages[100].location.value=200;
+  d.doorBases.insert(0xF00);
+  d.targets[201].base=0xF00;d.targets[201].cell=0x9;
+  d.targets[202].base=0xF01;
   Finalize(d);
   assert(d.targets.count(200));
+  assert(d.targets.count(201)&&d.doors.count(0x9));
+  assert(!d.targets.count(202));
 }
 static void RadioTests() {
   Definitions d;
@@ -257,6 +263,26 @@ static void Original(const char *path) {
     std::abort();
   }
   auto &d = c.pipboy;
+  // Both reciprocal Common House doors must survive target finalization.
+  assert(d.targets.count(0x435C)&&d.targets.count(0x43AD));
+  assert(d.doorBases.count(d.targets.at(0x435C).base));
+  assert(d.doorBases.count(d.targets.at(0x43AD).base));
+  assert(c.references.count(0x435C)&&c.references.count(0x43AD));
+  // Real original-data package and XTEL anchors at midday.
+  assert(d.targets.at(0x43AD).cell==0x4357);
+  assert(d.targets.at(0x435C).world==0xA74);
+  assert(!c.references.at(0x43AD).locked&&!c.references.at(0x435C).locked);
+  assert(d.targets.count(0x1FB87)&&d.targets.at(0x1FB87).world==0xA74);
+  assert(d.targets.count(0x66F1E)&&d.targets.at(0x66F1E).world==0xA74);
+  assert(d.packages.count(0x1944C)&&d.packages.count(0x2594A));
+  const auto& day=d.packages.at(0x1944C);
+  const auto& brahmin=d.packages.at(0x2594A);
+  assert(day.type==12&&day.location.valid&&day.location.type==0&&
+         day.location.value==0x1FB87&&day.schedule.hour==10&&day.schedule.duration==4);
+  assert(brahmin.type==12&&brahmin.location.valid&&brahmin.location.type==0&&
+         brahmin.location.value==0x66F1E&&brahmin.schedule.hour==8&&brahmin.schedule.duration==12);
+  assert(fo3schedule::Active(day.schedule,12.f,{2277,7,17}));
+  assert(fo3schedule::Active(brahmin.schedule,12.f,{2277,7,17}));
   assert(d.notes.size() == 840 && d.perks.size() == 87 &&
          d.quests.size() == 192);
   assert(d.radiationStages.size() == 5);

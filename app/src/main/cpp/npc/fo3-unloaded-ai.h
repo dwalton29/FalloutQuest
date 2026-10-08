@@ -22,6 +22,10 @@ struct Callbacks {
   std::function<bool(uint32_t actor,uint32_t base,const fo3player::ActorState&,
                      const fo3pipdata::PackageDefinition&,float hour)> eligible;
   std::function<bool(uint32_t actor,uint32_t door)> canUseDoor;
+  // The active Megaton exterior renders all its authored WRLD grid CELLs.
+  // These are resident even though the scene entry CELL is the persistent
+  // worldspace CELL. Interior scenes retain exact-CELL residency.
+  std::function<bool(uint32_t cell,uint32_t world)> isResidentCell;
   std::function<bool(uint32_t actor)> alive;
   // Commit atomically through Player::UpdateActor, not Snapshot mutation.
   std::function<bool(uint32_t actor,const fo3player::ActorState&)> persist;

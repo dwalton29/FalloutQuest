@@ -105,7 +105,10 @@ Report Scheduler::Tick(float hour,uint32_t residentCell,uint32_t residentWorld,
     ++out.visited;
     if(state.dead||!cb.alive(id))continue;
     if(state.hostile){++out.hostileSkipped;continue;}
-    if(state.cell==residentCell&&state.world==residentWorld){++out.residentSkipped;continue;}
+    if(cb.isResidentCell?cb.isResidentCell(state.cell,state.world):
+        (state.cell==residentCell&&state.world==residentWorld)){
+      ++out.residentSkipped;continue;
+    }
     if(!state.cell){++out.unsupported;continue;}
     // A persisted XTEL hop must not repeat on the same game minute (including
     // a new scheduler batch following scene transition).

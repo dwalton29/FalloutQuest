@@ -1,4 +1,5 @@
 #include "npc/fo3-unloaded-ai.h"
+#include "npc/fo3-npc-residency.h"
 #include <algorithm>
 #include <cassert>
 #include <cstdio>
@@ -37,7 +38,7 @@ struct Fixture {
   std::unordered_map<uint32_t,fo3player::ActorState> tracked;
   fo3unloaded::Scheduler scheduler;
   uint32_t base=0x3000,actor=0x22;
-  bool doorOpen=true,eligible=true,alive=true;
+  bool doorOpen=true,eligible=true,alive=true,megatonResident=false;
   int writes=0;
   Fixture() {
     fo3pipdata::Placement ref;
@@ -73,6 +74,9 @@ struct Fixture {
     cb.eligible=[&](uint32_t,uint32_t,const fo3player::ActorState&,
                     const fo3pipdata::PackageDefinition&,float){return eligible;};
     cb.canUseDoor=[&](uint32_t,uint32_t){return doorOpen;};
+    if(megatonResident)cb.isResidentCell=[&](uint32_t cell,uint32_t world){
+      return fo3npc::SceneOwnsCell(0x900,0x700,cell,world,defs.cellWorlds);
+    };
     cb.alive=[&](uint32_t){return alive;};
     cb.persist=[&](uint32_t who,const fo3player::ActorState& s){
       ++writes;tracked[who]=s;return true;
@@ -116,6 +120,33 @@ void TestDayNight() {
   assert(f.tracked.at(f.actor).package==0x901);
   r=f.Tick(8.01f);assert(r.doorHops==1&&r.packageChanges==1);
   std::cout<<"Original-format doors and 08:00/20:00 overnight package changes passed\n";
+}
+void TestMegatonSceneCell(){
+  std::unordered_map<uint32_t,uint32_t> worlds{{0x300,0x700},{0x301,0x700},{0x400,0x7FF}};
+  assert(fo3npc::SceneOwnsCell(0x900,0x700,0x900,0x700,worlds));
+  assert(!fo3npc::SceneOwnsCell(0x900,0x700,0x300,0x700,worlds));
+  worlds[0x300]=0x00000A74u;
+  assert(fo3npc::SceneOwnsCell(0xA96,0xA74,0x300,0xA74,worlds));
+  assert(!fo3npc::SceneOwnsCell(0xA96,0xA74,0x400,0x7FF,worlds));
+  assert(!fo3npc::SceneOwnsCell(0xA96,0xA74,0x300,0,worlds));
+  assert(!fo3npc::SceneOwnsCell(0x99,0,0x300,0,worlds));
+  // Resident callback excludes a newly transferred actor, even though the
+  // persistent scene cell differs from its authored exterior grid cell.
+  Fixture f;
+  f.defs.cellWorlds[0x300]=0xA74;
+  f.megatonResident=true;
+  // In the fixture, 0x700 is a non-Megaton WRLD. Override callback explicitly.
+  auto cb=f.Callbacks();
+  cb.isResidentCell=[&](uint32_t cell,uint32_t world){
+    return world==0x700&&cell==0x300;
+  };
+  auto first=f.scheduler.Tick(7.99f,0x900,0x700,f.tracked,f.defs,f.graph,cb);
+  assert(first.visited==0);
+  auto arrival=f.scheduler.Tick(8.01f,0x900,0x700,f.tracked,f.defs,f.graph,cb);
+  assert(arrival.doorHops==1&&f.tracked.at(f.actor).cell==0x300);
+  auto resident=f.scheduler.Tick(8.03f,0x900,0x700,f.tracked,f.defs,f.graph,cb);
+  assert(resident.residentSkipped==1&&resident.doorHops==0);
+  std::cout<<"Megaton worldspace grid ownership and resident arrival passed\n";
 }
 void TestGuards() {
   Fixture f;
@@ -239,7 +270,7 @@ int main(){
   assert(!fo3unloaded::ScheduleActive(dated,9.5f,{2277,8,17}));
   assert(!fo3unloaded::ScheduleActive(dated,12.f,{2277,7,17}));
   assert(!fo3unloaded::ScheduleActive(dated,9.5f)); // No verified calendar.
-  TestDayNight();TestGuards();TestUnsupported();TestBatchBudget();
+  TestDayNight();TestMegatonSceneCell();TestGuards();TestUnsupported();TestBatchBudget();
   TestMegatonCohortDay();TestCappedBatchClockIsolation();
   return 0;
 }

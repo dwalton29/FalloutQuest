@@ -108,7 +108,9 @@ static std::shared_ptr<const fo3xtel::Index> Q230NpcXtelIndex(){
 #endif
 void Q230PrepareActors(uint32_t cell, uint32_t worldspace,
                        std::vector<Q230ActorVisual> &out,
-                       const std::atomic<bool> &cancel) {
+                       const std::atomic<bool> &cancel,
+                       const std::unordered_map<uint32_t,fo3player::ActorState>* savedOverride,
+                       const std::unordered_set<uint32_t>* onlyRefs) {
   // Wasteland roaming/persistent actor residency requires the AI/streaming
   // milestone. Megaton and explicit interior CELLs can be represented now.
   if (worldspace != 0u && worldspace != 0x00000A74u)
@@ -125,13 +127,18 @@ void Q230PrepareActors(uint32_t cell, uint32_t worldspace,
       }else Q6H_LOGI("NPC XTEL INDEX FAILED reason=%s",reason.c_str());
     }
   }
-  // Actors moved by XTEL still have original ACHR references in their home
-  // GRUP. Include those refs when preparing the destination, never double
-  // spawning the original placement after the actor has left it.
+  // Include original ACHR records moved through XTEL into any grid CELL
+  // belonging to Megaton's fully resident exterior worldspace.
+  // For background arrival preparation use an immutable actor-state snapshot,
+  // rather than reading mutable Player actor states from the worker thread.
+  const auto* savedActors=savedOverride?savedOverride:
+      (gPlayerSession?&gPlayerSession->player.Snapshot().actors:nullptr);
+  const auto* defs=gPlayerSession?&gPlayerSession->player.Definitions().pipboy:nullptr;
   std::unordered_set<uint32_t> arrivals;
-  if(gPlayerSession)for(const auto& entry:gPlayerSession->player.Snapshot().actors){
+  if(savedActors&&defs)for(const auto& entry:*savedActors){
     const auto& saved=entry.second;
-    if(!saved.dead&&saved.world==worldspace&&saved.cell==cell)
+    if(!saved.dead&&fo3npc::SceneOwnsCell(cell,worldspace,saved.cell,saved.world,defs->cellWorlds) &&
+       (!onlyRefs||onlyRefs->count(entry.first)))
       arrivals.insert(entry.first);
   }
   std::vector<Fo3NpcActorQ230> actors;
@@ -158,13 +165,15 @@ void Q230PrepareActors(uint32_t cell, uint32_t worldspace,
 #endif
   for(auto source:actors) {
     if(cancel.load(std::memory_order_acquire))return;
+    if(onlyRefs&&!onlyRefs->count(source.refFormId))continue;
 #ifndef FO3_ACTOR_RUNTIME_HOST_TEST
-    if(gPlayerSession){
-      const auto& saved=gPlayerSession->player.Snapshot().actors;
-      const auto it=saved.find(source.refFormId);
-      if(it!=saved.end()){
+    if(savedActors){
+      const auto it=savedActors->find(source.refFormId);
+      if(it!=savedActors->end()){
         const auto& pose=it->second;
-        if(pose.dead||pose.world!=worldspace||pose.cell!=cell)continue;
+        if(pose.dead||
+           (defs&&!fo3npc::SceneOwnsCell(cell,worldspace,pose.cell,pose.world,defs->cellWorlds)))
+          continue;
         // Use the canonical arrival root when constructing the new rig;
         // later Q230SimulateActor restores its package and remaining state.
         source.x=pose.position[0];source.y=pose.position[1];source.z=pose.position[2];
