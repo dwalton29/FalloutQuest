@@ -124,7 +124,8 @@ static Q240Node Q240NearestNode(const Q240NavigationGraph& graph,const std::arra
 // Resolve the actual common edge, rather than drawing a line between centres.
 // Reject malformed external links that do not join the same physical boundary.
 static bool Q240Portal(const Q240NavigationGraph& graph,const Q240Node& from,const Q240Node& to,
-                       std::array<float,3>& midpoint) {
+                       std::array<float,3>& midpoint,
+                       std::array<std::array<float,3>,2>* endpoints=nullptr) {
   const auto& a=*graph.meshes[from.mesh];const auto& b=*graph.meshes[to.mesh];
   const auto& ta=a.triangles[from.triangle];const auto& tb=b.triangles[to.triangle];
   // Original Megaton reciprocal NVEX links differ by up to 14.274 units
@@ -152,6 +153,7 @@ static bool Q240Portal(const Q240NavigationGraph& graph,const Q240Node& from,con
       }
       if((same(p,u)&&same(q,v))||(same(p,v)&&same(q,u))) {
         for(int c=0;c<3;++c)midpoint[c]=(p[c]+q[c])*.5f;
+        if(endpoints){(*endpoints)[0]=p;(*endpoints)[1]=q;}
         return true;
       }
     }
@@ -623,6 +625,36 @@ static bool Q240BuildPackagePath(Q230ActorVisual& actor,const fo3pipdata::Packag
   }
   return success;
 }
+// A physical wall or furniture may block the middle of a valid original
+// NAVM portal. Try its other authored crossing positions, rather than
+// repeatedly issuing the same blocked midpoint route. The fractions are
+// explicitly a bounded Quest avoidance policy; vertices are original NAVM.
+static bool Q240AlternatePortalWaypoint(Q230ActorVisual& actor) {
+  const size_t i=actor.aiPathIndex;
+  if(!actor.navigationGraph||i+1>=actor.aiPathSurfaces.size()||
+     i>=actor.aiPathGame.size())return false;
+  const auto& graph=*actor.navigationGraph;
+  const auto from=actor.aiPathSurfaces[i],to=actor.aiPathSurfaces[i+1];
+  const Q240Node a{from.first,from.second},b{to.first,to.second};
+  if(!a.Valid()||!b.Valid())return false;
+  std::array<float,3> middle{};
+  std::array<std::array<float,3>,2> edge{};
+  if(!Q240Portal(graph,a,b,middle,&edge))return false;
+  const auto& current=actor.aiPathGame[i];
+  std::array<float,3> next{};
+  float fraction=0.0f;
+  std::array<float,3> first{};
+  for(int axis=0;axis<3;++axis)first[axis]=edge[0][axis]*.75f+edge[1][axis]*.25f;
+  if(Q240PlanarDistance(current,middle)<.01f)fraction=.25f;
+  else if(Q240PlanarDistance(current,first)<.01f)fraction=.75f;
+  else return false;
+  for(int axis=0;axis<3;++axis)next[axis]=edge[0][axis]*(1-fraction)+edge[1][axis]*fraction;
+  actor.aiPathGame[i]=next;
+  Q6H_LOGI("NPC PORTAL RECOVERY actor=%08X package=%08X waypoint=%zu portal=(%08X:%zu -> %08X:%zu) fraction=%.2f",
+    actor.source.refFormId,actor.aiPackage,i,
+    graph.meshes[a.mesh]->formId,a.triangle,graph.meshes[b.mesh]->formId,b.triangle,fraction);
+  return true;
+}
 static void Q240GroundPathRoot(Q230ActorVisual& actor) {
   if(!actor.navigationGraph||actor.aiPathIndex>=actor.aiPathSurfaces.size())return;
   const auto surface=actor.aiPathSurfaces[actor.aiPathIndex];
@@ -672,6 +704,13 @@ static void Q240AdvancePath(Q230ActorVisual& actor,float dt,double now) {
     actor.runtime.speed=0;actor.runtime.animation=fo3npc::Animation::Idle;
     actor.runtime.procedure=fo3npc::Procedure::Blocked;
     if(actor.runtime.blockedSince<0)actor.runtime.blockedSince=now;
+    // The original connected NAVM corridor may still offer another position
+    // on the same authenticated portal. Do not detour while opening a door.
+    if(!actor.runtime.navigationDoor&&now-actor.runtime.blockedSince>=.5 &&
+       Q240AlternatePortalWaypoint(actor)){
+      actor.runtime.blockedSince=now;
+      return;
+    }
     // Give local authored door animations time to finish. A persistent wall,
     // unavailable door or transient blocker must not hold this route forever.
     if(now-actor.runtime.blockedSince>=3) {
