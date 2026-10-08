@@ -231,6 +231,14 @@ void TestCappedBatchClockIsolation(){
 }
 }
 int main(){
+  fo3pipdata::PackageSchedule dated;
+  dated.valid=true;dated.month=7;dated.date=17;dated.weekday=fo3schedule::Weekday({2277,7,17});
+  dated.hour=9;dated.duration=2;
+  assert(fo3unloaded::ScheduleActive(dated,9.5f,{2277,7,17}));
+  assert(!fo3unloaded::ScheduleActive(dated,9.5f,{2277,7,18}));
+  assert(!fo3unloaded::ScheduleActive(dated,9.5f,{2277,8,17}));
+  assert(!fo3unloaded::ScheduleActive(dated,12.f,{2277,7,17}));
+  assert(!fo3unloaded::ScheduleActive(dated,9.5f)); // No verified calendar.
   TestDayNight();TestGuards();TestUnsupported();TestBatchBudget();
   TestMegatonCohortDay();TestCappedBatchClockIsolation();
   return 0;
