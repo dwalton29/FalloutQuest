@@ -88,6 +88,16 @@ void TestDayNight() {
   Fixture f;
   assert(f.Tick(7.99f).doorHops==0); // Startup does not fabricate elapsed time.
   auto r=f.Tick(8.01f);
+  if(r.doorHops!=1||r.packageChanges!=1)
+    std::cerr<<"UNLOADED DIAG visited="<<r.visited<<" hops="<<r.doorHops
+      <<" changes="<<r.packageChanges<<" blocked="<<r.blocked
+      <<" unsupported="<<r.unsupported<<" resident="<<r.residentSkipped
+      <<" writes="<<f.writes<<" cell="<<std::hex<<f.tracked.at(f.actor).cell
+      <<" package="<<f.tracked.at(f.actor).package<<std::dec
+      <<" srcDoor="<<(f.graph.Find(0x101)!=nullptr)
+      <<" schedule="<<fo3unloaded::ScheduleActive(f.defs.packages.at(0x900).schedule,8.01f)
+      <<" supported="<<fo3unloaded::SupportedLocalProcedure(f.defs.packages.at(0x900))
+      <<"\n";
   assert(r.doorHops==1&&r.packageChanges==1);
   auto s=f.tracked.at(f.actor);
   assert(s.cell==0x300&&s.world==0x700&&s.package==0x900);
