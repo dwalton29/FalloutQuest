@@ -22,8 +22,8 @@ android {
         applicationId 'com.falloutquest.app'
         minSdk 29
         targetSdk 35
-        versionCode 191
-        versionName '0.57.0-npc-clock-nav-xtel'
+        versionCode 192
+        versionName '0.58.0-npc-hit-vr-reload'
 
         ndk {
             abiFilters 'arm64-v8a'
