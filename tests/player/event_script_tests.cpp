@@ -1,5 +1,6 @@
 #include "player/fo3-player-state.h"
 #include <cassert>
+#include <cstdio>
 #include <iostream>
 
 static void Parsing() {
