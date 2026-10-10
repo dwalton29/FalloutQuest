@@ -52,8 +52,11 @@ This remains a bounded event dispatcher rather than a complete Bethesda VM.
   rewards and scripted effects.
 - Exact Fallout 3 GameMode timing, additional death sources and event priority.
 
-The original MS11BombScript OnActivate can now be reached via an available
-bomb ACTI reference, but cannot yet disarm it: required menu and skill
+Verified against the supplied Fallout3.esm: placed MegatonBombRef
+00014BC8 uses ACTI MegatonBomb 00003BC8 (FULL: Undetonated Atomic Bomb),
+whose SCRI is MS11BombScript 00078CB3. The original OnActivate can now be
+reached when that authored reference is interactable, but cannot yet disarm
+it: required menu and skill
 operations are unsupported and the event must reject atomically. Nothing
 should simulate a successful disarm.
 
