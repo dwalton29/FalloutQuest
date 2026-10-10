@@ -122,6 +122,24 @@ static void BombMenuAndInventory() {
   assert(p.ItemCount(400)==0&&p.ScriptButton()==-1);
   uint32_t sound=0;assert(p.PollScriptSound(sound)&&sound==600&&!p.PollScriptSound(sound));
   assert(!p.SubmitScriptMessageButton(100,-1));
+  // A failed gameplay event must preserve inventory and local variables,
+  // and must not repeatedly retry the same button at every script tick.
+  auto broken=Catalog();
+  broken.pipboy.scripts[102].variables={{1,"capturebutton"}};
+  broken.pipboy.scripts[102].source=
+    "scn B\\nshort captureButton\\nBegin GameMode\\n"
+    "if getButtonPressed == 1\\n"
+    "set captureButton to 7\\nplayer.removeitem TestCharge 1\\n"
+    "Enable\\nendif\\nEnd\\n";
+  broken.pipboy.formNames["testcharge"]=400;
+  broken.items[400].formId=400;
+  broken.eventPrograms[102]=fo3script::ParseEvents(broken.pipboy.scripts[102]);
+  fo3player::Player rejected(std::move(broken));
+  assert(rejected.Add(400,1)&&rejected.SubmitScriptMessageButton(100,1));
+  const auto previous=rejected.Revision();
+  rejected.PumpReferenceGameMode(.25,{100});
+  assert(rejected.ItemCount(400)==1&&rejected.ScriptButton()==-1);
+  assert(rejected.Snapshot().pipboy.dialogueVariables.empty()&&rejected.Revision()==previous);
 }
 
 static void DisarmStagePersistence() {

@@ -404,7 +404,12 @@ void Player::PumpReferenceGameMode(double realSeconds,const std::vector<uint32_t
     if(ref==catalog_.references.end()||(ref->second.flags&0x820u))continue;
     std::string error;
     const auto sid=catalog_.eventBaseScripts.at(ref->second.base);
-    if(!RunSourceEvent(sid,"GameMode",id,0,error))LogScriptEventError(sid,"GameMode",error);
+    if(!RunSourceEvent(sid,"GameMode",id,0,error)){
+      // Reject the side effects, but consume the delivered input exactly once.
+      // Otherwise unsupported stage/world commands repeat on every 4 Hz tick.
+      scriptButtons_.erase(id);
+      LogScriptEventError(sid,"GameMode",error);
+    }
   }
 }
 } // namespace fo3player

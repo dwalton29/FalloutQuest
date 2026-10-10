@@ -186,10 +186,10 @@ void UpdateFo3ScriptMessage(double now,float scroll,bool pressA,bool pressB,bool
         if(panel.choices.empty()){
             panel.visible=false;gScriptMessageOwner=0;fo3audio::NamedSound("UIMenuOK");
         } else {
-            // An authored first "Do nothing" button is the cancel choice.
-            const bool cancel=b && panel.choices.front()=="Do nothing.";
-            if(a||cancel){
-                const int index=cancel?0:int(panel.selected);
+            // No generic Escape-to-button mapping is authored by MESG.
+            // Multi-choice messages require an explicit A selection.
+            if(a){
+                const int index=int(panel.selected);
                 if(player.SubmitScriptMessageButton(gScriptMessageOwner,index)){
                     panel.visible=false;gScriptMessageOwner=0;
                     fo3audio::NamedSound("UIMenuOK");
