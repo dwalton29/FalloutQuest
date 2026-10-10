@@ -290,7 +290,7 @@ private:
   void LogScriptEventError(uint32_t scriptId,const char* event,const std::string& error);
   bool PrepareInventory(uint32_t reference,bool actor);
   bool MigrateWeaponInstances(State &state) const;
-  bool RunScript(const fo3pipdata::ResultScript&,uint32_t owner,unsigned depth,unsigned& budget,std::string&);
+  bool RunScript(const fo3pipdata::ResultScript&,uint32_t owner,unsigned depth,unsigned& budget,std::string&,uint32_t scriptId=0);
   bool RunQuestStage(uint32_t,uint16_t,unsigned depth,unsigned& budget,std::string&);
   bool EnsureQuestInstance(uint32_t);
   Catalog catalog_;
