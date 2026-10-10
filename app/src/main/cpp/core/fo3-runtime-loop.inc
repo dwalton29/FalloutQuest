@@ -1483,6 +1483,7 @@ private:
                     previousWorldClockNs>0 && clockNs>previousWorldClockNs) {
                     const double seconds=std::clamp(double(clockNs-previousWorldClockNs)*1e-9,0.0,0.25);
                     gPlayerSession->player.AdvanceGameClock(seconds);
+                    gPlayerSession->player.PumpQuestGameMode(seconds);
                 }
                 previousWorldClockNs=clockNs;
                 if (gPlayerSession) fo3tod::gTestHour=gPlayerSession->player.Snapshot().gameHour;
