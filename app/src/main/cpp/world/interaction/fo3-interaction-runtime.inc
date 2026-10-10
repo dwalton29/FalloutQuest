@@ -37,7 +37,7 @@ bool CollectFo3WorldReference(uint32_t reference) {
 bool QueryFo3Interaction(float ox, float oy, float oz, float dx, float dy,
                          float dz, Fo3InteractionTarget &target) {
     target = {};
-    if (!gSceneReady || IsFo3LoadingVisible() || Fo3DialogueFocus() || Fo3PipboyFocus() || !gPlayerSession) return false;
+    if (!gSceneReady || IsFo3LoadingVisible() || Fo3DialogueFocus() || Fo3PipboyFocus() || Fo3ScriptMessageFocus() || !gPlayerSession) return false;
     const float length = std::sqrt(dx*dx+dy*dy+dz*dz);
     if (!std::isfinite(length) || length < 1e-5f ||
         !std::isfinite(ox) || !std::isfinite(oy) || !std::isfinite(oz)) return false;
@@ -141,6 +141,65 @@ bool QueryFo3Interaction(float ox, float oy, float oz, float dx, float dy,
     return true;
 }
 
+
+fo3dialogue::Panel gScriptMessagePanel;
+fo3loot::Cursor gScriptMessageCursor;
+uint32_t gScriptMessageOwner=0;
+uint64_t gScriptMessageSequence=1000000;
+bool gScriptMessageLastA=false,gScriptMessageLastB=false;
+bool Fo3ScriptMessageFocus(){return gScriptMessagePanel.visible;}
+void UpdateFo3ScriptMessage(double now,float scroll,bool pressA,bool pressB,bool focused) {
+    const bool a=pressA&&!gScriptMessageLastA,b=pressB&&!gScriptMessageLastB;
+    gScriptMessageLastA=pressA;gScriptMessageLastB=pressB;
+    if(!gPlayerSession||gPlayerSession->saveBlocked||IsFo3LoadingVisible()) {
+        gScriptMessagePanel.visible=false;gScriptMessageOwner=0;return;
+    }
+    auto& player=gPlayerSession->player;
+    if(!gScriptMessagePanel.visible){
+        fo3player::ScriptMessage request;
+        if(!player.PollScriptMessage(request))return;
+        gScriptMessageOwner=request.owner;
+        gScriptMessagePanel.title=std::move(request.title);
+        gScriptMessagePanel.subtitle=std::move(request.text);
+        gScriptMessagePanel.choices=std::move(request.buttons);
+        gScriptMessagePanel.selected=0;
+        gScriptMessagePanel.visible=true;
+        gScriptMessagePanel.revision=++gScriptMessageSequence;
+        gScriptMessageCursor.Target(0,0);
+        gScriptMessageCursor.Target(request.owner,gScriptMessagePanel.choices.size());
+        fo3audio::NamedSound("UIMenuOK");
+        return; // Never accept the same A press which opened the menu.
+    }
+    if(!focused)return;
+    auto& panel=gScriptMessagePanel;
+    gScriptMessageCursor.Target(gScriptMessageOwner,panel.choices.size());
+    if(!panel.choices.empty()){
+        const auto before=gScriptMessageCursor.selected;
+        gScriptMessageCursor.Scroll(scroll,now,panel.choices.size());
+        if(before!=gScriptMessageCursor.selected)fo3audio::Scroll();
+        panel.selected=gScriptMessageCursor.selected;
+    }
+    if(a||b){
+        if(panel.choices.empty()){
+            panel.visible=false;gScriptMessageOwner=0;fo3audio::NamedSound("UIMenuOK");
+        } else {
+            // An authored first "Do nothing" button is the cancel choice.
+            const bool cancel=b && panel.choices.front()=="Do nothing.";
+            if(a||cancel){
+                const int index=cancel?0:int(panel.selected);
+                if(player.SubmitScriptMessageButton(gScriptMessageOwner,index)){
+                    panel.visible=false;gScriptMessageOwner=0;
+                    fo3audio::NamedSound("UIMenuOK");
+                }
+            }
+        }
+    }
+}
+void DeliverFo3ScriptSounds(){
+    if(!gPlayerSession)return;
+    uint32_t sound=0;
+    while(gPlayerSession->player.PollScriptSound(sound))fo3audio::SoundEvent(sound);
+}
 fo3loot::Cursor gLootCursor;
 Fo3LootPanel gLootPanel;
 uint64_t gLootPanelRevision=UINT64_MAX;
@@ -212,8 +271,10 @@ bool ActivateFo3Interaction(float ox,float oy,float oz,float dx,float dy,float d
             target.reference,"OnActivate",fo3player::PlayerRef,error);
         // No synthesized follow-up, message panel, or door activation. The
         // source script must complete successfully to change gameplay state.
-        if(status==fo3player::ScriptEventResult::Executed)
+        if(status==fo3player::ScriptEventResult::Executed) {
             Q6H_LOGI("SCRIPT ACTIVATE: reference=%08X source=ACTI",target.reference);
+            FlushFo3PlayerState();
+        }
         return false;
     }
     if (target.container) {

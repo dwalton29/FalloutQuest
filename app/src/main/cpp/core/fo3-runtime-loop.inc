@@ -1276,7 +1276,7 @@ private:
         }
         lastFrameTime_ = frameTime;
 
-        if (Fo3DialogueFocus() || Fo3PipboyFocus() || gPipActivation.phase==fo3pip::Phase::Candidate || GetFo3LootPanel().reference) {
+        if (Fo3DialogueFocus() || Fo3ScriptMessageFocus() || Fo3PipboyFocus() || gPipActivation.phase==fo3pip::Phase::Candidate || GetFo3LootPanel().reference) {
             // Releasing the list while the stick is held cannot cause an accidental turn.
             snapTurnLatched_ = std::fabs(turnX_) >= .30f;
         } else if (!snapTurnLatched_ && std::fabs(turnX_) > 0.65f) {
@@ -1361,7 +1361,7 @@ private:
     }
 
     void UpdateDoorAimQ1700(double lootTime) {
-        if (IsFo3LoadingVisible() || Fo3DialogueFocus() || Fo3PipboyFocus() || !handPoseValid_[1]) {
+        if (IsFo3LoadingVisible() || Fo3DialogueFocus() || Fo3ScriptMessageFocus() || Fo3PipboyFocus() || !handPoseValid_[1]) {
             if (doorAimActiveQ1700_) {
                 FQ_LOGI("Q16.13 HUD TARGET HIDE: sourceDoor=%08X reason=%s promptStorage=fixed-retained",
                         doorAimSourceQ1840_,
@@ -1483,7 +1483,21 @@ private:
                     previousWorldClockNs>0 && clockNs>previousWorldClockNs) {
                     const double seconds=std::clamp(double(clockNs-previousWorldClockNs)*1e-9,0.0,0.25);
                     gPlayerSession->player.AdvanceGameClock(seconds);
-                    gPlayerSession->player.PumpQuestGameMode(seconds);
+                    auto& scriptPlayer=gPlayerSession->player;
+                    scriptPlayer.SetScriptPlayerLocation(
+                        gSceneCenterXQ1730+gQ210Head[0]*FO3_UNITS_PER_METRE_Q715,
+                        gSceneCenterYQ1730-(gQ210Head[2]-SCENE_FORWARD)*FO3_UNITS_PER_METRE_Q715,
+                        gSceneFloorZQ1730+(gQ210Head[1]-FLOOR_Y)*FO3_UNITS_PER_METRE_Q715,
+                        gCurrentCellFormId,gExteriorWorldspaceQ1890);
+                    const auto beforeScripts=scriptPlayer.Revision();
+                    scriptPlayer.PumpQuestGameMode(seconds);
+                    std::vector<uint32_t> scriptedResidents;
+                    for(const auto& object:gObjects)
+                        if(object.baseRecordType=="ACTI" && object.refFormId &&
+                            scriptPlayer.HasReferenceEvent(object.refFormId,"GameMode"))
+                            scriptedResidents.push_back(object.refFormId);
+                    scriptPlayer.PumpReferenceGameMode(seconds,scriptedResidents);
+                    if(beforeScripts!=scriptPlayer.Revision())FlushFo3PlayerState();
                 }
                 previousWorldClockNs=clockNs;
                 if (gPlayerSession) fo3tod::gTestHour=gPlayerSession->player.Snapshot().gameHour;
@@ -1574,11 +1588,17 @@ private:
                         static_cast<double>(frameState.predictedDisplayTime)*1e-9),
                     q210RightValid?turnX_:0,q210RightValid?lootScrollY_:0,
                     q210RightValid&&activateDownQ1700_,q210RightValid&&pipBackDown_,fingerGripValue_[0]);
-                const bool dialogueControls=Fo3DialogueFocus();
+                const bool scriptControls=Fo3ScriptMessageFocus();
+                UpdateFo3ScriptMessage(static_cast<double>(frameState.predictedDisplayTime)*1e-9,
+                    q210RightValid?lootScrollY_:0,q210RightValid&&activateDownQ1700_,
+                    q210RightValid&&pipBackDown_,sessionState_==XR_SESSION_STATE_FOCUSED);
+                if(Fo3ScriptMessageFocus())ResetFo3Pipboy();
+                const bool dialogueControls=Fo3DialogueFocus()||scriptControls||Fo3ScriptMessageFocus();
                 UpdateFo3Dialogue(static_cast<double>(frameState.predictedDisplayTime)*1e-9,
                     q210RightValid?lootScrollY_:0,q210RightValid&&activateDownQ1700_,q210RightValid&&pipBackDown_,sessionState_==XR_SESSION_STATE_FOCUSED);
                 if(dialogueControls&&activateDownQ1700_)activateLatched_=true;
                 WeaponUpdate(static_cast<double>(frameState.predictedDisplayTime)*1e-9,dialogueControls?false:pipBackDown_);
+                DeliverFo3ScriptSounds();
                 for(int hand=0;hand<2;++hand)if(gWeaponHaptic[hand]>0){
                     XrHapticActionInfo info{XR_TYPE_HAPTIC_ACTION_INFO};info.action=weaponHapticAction_;info.subactionPath=handPaths_[hand];
                     XrHapticVibration pulse{XR_TYPE_HAPTIC_VIBRATION};pulse.amplitude=gWeaponHaptic[hand];pulse.duration=20000000;pulse.frequency=XR_FREQUENCY_UNSPECIFIED;
@@ -1595,7 +1615,7 @@ private:
                 UpdateFo3InteriorDoorsQ2400();
                 UpdateDoorAimQ1700(static_cast<double>(frameState.predictedDisplayTime)*1e-9);
                 ApplyAuthoredDoorFacingQ1810(views[0]);
-                if (!dialogueControls && !Fo3DialogueFocus() && gPipInput.WorldA(activateDownQ1700_) && !activateLatched_) {
+                if (!dialogueControls && !Fo3DialogueFocus() && !Fo3ScriptMessageFocus() && gPipInput.WorldA(activateDownQ1700_) && !activateLatched_) {
                     activateLatched_ = true;
                     if (handPoseValid_[1]) {
                         const XrPosef handQ1700 = ToVirtualPose(handLocalPoses_[1]);
@@ -1789,6 +1809,18 @@ private:
             // Scene boot/loading and world draws must run even with all
             // prototype geometry hidden and no tracked controllers.
             RenderScene(viewProjection.m);
+            if(gScriptMessagePanel.visible&&!IsFo3LoadingVisible()) {
+                const float yaw=gQ210Head[3];
+                Mat4 model{};
+                model.m[0]=std::cos(yaw);model.m[2]=-std::sin(yaw);model.m[5]=1;
+                model.m[8]=std::sin(yaw);model.m[10]=std::cos(yaw);
+                model.m[12]=gQ210Head[0]-std::sin(yaw)*1.1f;
+                model.m[13]=gQ210Head[1]+0.12f;
+                model.m[14]=gQ210Head[2]-std::cos(yaw)*1.1f;
+                model.m[15]=1;
+                const auto mvp=Multiply(viewProjection,model);
+                fo3dialogueui::Render(mvp.m,gScriptMessagePanel);
+            }
             if(gDialoguePanel.visible&&!IsFo3LoadingVisible()) {
                 const auto& panel=gDialoguePanel;Mat4 model{};const float yaw=panel.yaw;
                 model.m[0]=std::cos(yaw);model.m[2]=-std::sin(yaw);model.m[5]=1;
