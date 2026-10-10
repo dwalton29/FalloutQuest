@@ -566,6 +566,16 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
   if(runSetting!=settings.end()&&std::isfinite(runSetting->second)&&
      runSetting->second>=1.f&&runSetting->second<=10.f)
     next.npcRunMultiplier=runSetting->second;
+  const auto baseSpeed=settings.find("fMoveBaseSpeed");
+  if(baseSpeed!=settings.end()&&std::isfinite(baseSpeed->second)&&baseSpeed->second>0)
+    next.npcBaseSpeed=baseSpeed->second;
+  for(const char* name:{"fConfidenceCautious","fConfidenceAverage","fConfidenceBrave",
+      "fCombatFleeNormalDistance","fCombatFleeWaitTime","fCombatFleeMaxCoverDistance",
+      "fCombatFleeMaxAllyDistance","fCombatFleeMinAllyDistance"}) {
+    const auto setting=settings.find(name);
+    if(setting!=settings.end()&&std::isfinite(setting->second)&&setting->second>=0)
+      next.npcCombatSettings.emplace(name,setting->second);
+  }
   fo3weapon::FinalizeStatistics(next.weapons);
   fo3pipdata::FinalizeLevelledCategories(next.pipboy,next.weapons);
   fo3pipdata::Finalize(next.pipboy);

@@ -68,6 +68,9 @@ std::array<float, 4> QuaternionFromMatrix(const float *rowMajor);
 std::array<float, 3> Point(const Matrix &m, const std::array<float, 3> &p,
                            bool direction = false);
 bool FinalizeSkeleton(Skeleton &skeleton);
+// Compose independently authored upper/lower pose branches. Root/world motion
+// stays with navigation; the source skeleton supplies the branch topology.
+bool OverlayBranch(const Skeleton&,Pose& base,const Pose& overlay,int branch);
 int FindBone(const Skeleton &skeleton, const std::string &name);
 void BindClip(const Skeleton &skeleton, const Clip &clip, Pose &pose);
 enum class RootPolicy { Locomotion, Furniture };

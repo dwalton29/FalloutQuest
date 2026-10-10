@@ -111,6 +111,7 @@ static const fo3weapon::Definitions::CombatStyle* Q230Style(const Q230ActorVisua
   const auto& c=gPlayerSession->player.Definitions();const auto* package=Q230CurrentPackage(actor);
   uint32_t id=package?package->combatStyle:0;
   if(!id){const auto* traits=fo3pipdata::ActorCategory(c.pipboy,actor.source.baseFormId,1);if(!traits)return nullptr;id=traits->combatStyle;}
+  if(!id)id=c.weapons.defaultCombatStyle;
   const auto style=c.weapons.styles.find(id);return style==c.weapons.styles.end()||!style->second.valid?nullptr:&style->second;
 }
 // Only the supported actor-reference Follow/Escort families have a leader.
@@ -173,6 +174,88 @@ static bool Q230CombatRoute(Q230ActorVisual& actor,const std::array<float,3>& ta
   }
   Q6H_LOGI("NPC PATH actor=%08X target=%08X flee=%d waypoints=%zu",actor.source.refFormId,actor.runtime.combatTarget,flee,actor.aiPathGame.size());
   return true;
+}
+// Bounded Quest tactical selection over reachable original NAVM surfaces.
+// Cover is tested against live geometry; no cover markers or animations are
+// fabricated. Endpoint scoring is a standalone policy, not Bethesda parity.
+static bool Q230TacticalRoute(Q230ActorVisual& actor,const std::array<float,3>& threat,
+                             float minimum,float maximum,bool escape,bool seekCover,double now){
+  auto& state=actor.runtime;
+  if(!actor.navigationGraph||!actor.navigationGraph->triangleCount)return false;
+  if((state.action==fo3npc::CombatAction::Flee||state.action==fo3npc::CombatAction::Cover||state.action==fo3npc::CombatAction::Reposition)&&actor.aiPathIndex<actor.aiPathGame.size()&&
+     Q240PlanarDistance(state.pathDestinationGame,threat)<70.f)return true;
+  if(now<state.nextPath)return false;
+  actor.aiPathGame.clear();actor.aiPathSurfaces.clear();actor.aiPathIndex=0;
+  state.nextPath=now+.75;
+  const auto& graph=*actor.navigationGraph;const auto current=Q240GamePosition(actor);
+  const auto start=Q240NearestNode(graph,current);if(!start.Valid())return false;
+  const auto& catalog=gPlayerSession->player.Definitions();const auto* style=Q230Style(actor);
+  const float search=seekCover&&style&&style->coverRadius>0?style->coverRadius:
+    fo3npc::CombatSetting(catalog,"fCombatFleeMaxCoverDistance",0);
+  const float before=Q240PlanarDistance(current,threat);
+  std::vector<uint8_t> visited(graph.triangleCount,0);std::vector<Q240Node> connected{start};
+  visited[Q240Flat(graph,start)]=1;
+  std::vector<std::pair<float,std::array<float,3>>> candidates;
+  for(size_t i=0;i<connected.size();++i){
+    const auto node=connected[i];
+    Q240Neighbors(graph,node,[&](Q240Node next){const size_t flat=Q240Flat(graph,next);std::array<float,3> portal{};
+      if(flat<visited.size()&&!visited[flat]&&Q240Portal(graph,node,next,portal)){visited[flat]=1;connected.push_back(next);}
+    });
+    const auto point=Q240Centroid(graph,node);const float travel=Q240PlanarDistance(current,point);
+    if(travel<70.f||(search>0&&travel>search))continue;
+    const float separation=Q240PlanarDistance(point,threat);
+    if(escape&&separation<=before+16.f)continue;
+    if(!escape&&(separation<minimum||separation>maximum))continue;
+    // Occupancy is a strict exclusion, including another selected destination.
+    bool occupied=false;
+    for(const auto& other:gQ230NpcActors){
+      if(other.source.refFormId==actor.source.refFormId||other.runtime.offScene||!other.runtime.Alive())continue;
+      const auto at=Q240GamePosition(other);
+      if(std::fabs(at[2]-point[2])<90.f&&Q240PlanarDistance(at,point)<70.f){occupied=true;break;}
+      if(other.aiPathIndex<other.aiPathGame.size()&&std::fabs(other.aiPathGame.back()[2]-point[2])<90.f&&Q240PlanarDistance(other.aiPathGame.back(),point)<70.f){occupied=true;break;}
+    }
+    if(occupied)continue;
+    float score=travel;
+    if(escape)score+=std::max(0.f,minimum-separation)*4;
+    // Source assistance/relations permit retreat towards real living allies.
+    if(escape)for(const auto& ally:gQ230NpcActors){
+      if(ally.source.refFormId==actor.source.refFormId||ally.runtime.offScene||!ally.runtime.Alive())continue;
+      if(fo3npc::Relationship(catalog,actor.source.baseFormId,ally.source.baseFormId)!=fo3npc::Reaction::Ally)continue;
+      const float d=Q240PlanarDistance(point,Q240GamePosition(ally));
+      const float maximumAlly=fo3npc::CombatSetting(catalog,"fCombatFleeMaxAllyDistance");
+      const float minimumAlly=fo3npc::CombatSetting(catalog,"fCombatFleeMinAllyDistance");
+      if(maximumAlly>0&&d>=minimumAlly&&d<=maximumAlly)score-=std::min(travel,minimum)*.25f;
+    }
+    candidates.push_back({score,point});
+  }
+  std::sort(candidates.begin(),candidates.end(),[](const auto& a,const auto& b){return a.first<b.first;});
+  // Bound expensive world rays to the best geometric candidates per replan.
+  // This is a Quest work budget, not an original combat-style setting.
+  candidates.resize(std::min(size_t(32),candidates.size()));
+  const auto enemy=Q240ScenePosition(threat);std::array<float,3> chest{};
+  const bool hasChest=Q230LiveBone(actor,actor.chestBone,chest);
+  for(auto& candidate:candidates){
+    const auto scene=Q240ScenePosition(candidate.second);
+    const float height=hasChest?chest[1]-state.position[1]:0;
+    const float dx=scene[0]-enemy[0],dy=scene[1]-enemy[1],dz=scene[2]-enemy[2];
+    const float length=std::sqrt(dx*dx+dy*dy+dz*dz);
+    const bool cover=hasChest&&length>.01f&&HasFo3InteractionOccluder(enemy[0],enemy[1]+height,enemy[2],dx/length,dy/length,dz/length,length,actor.source.refFormId);
+    if(seekCover&&!cover)candidate.first=INFINITY;
+    if(escape&&cover)candidate.first-=std::min(Q240PlanarDistance(current,candidate.second),minimum)*.5f;
+  }
+  std::sort(candidates.begin(),candidates.end(),[](const auto& a,const auto& b){return a.first<b.first;});
+  for(size_t i=0;i<std::min(size_t(12),candidates.size());++i){
+    if(!std::isfinite(candidates[i].first))break;
+    std::vector<std::array<float,3>> route;std::vector<std::pair<size_t,size_t>> surfaces;
+    if(!Q240Path(graph,current,candidates[i].second,route,nullptr,&surfaces)||route.empty())continue;
+    // Reject escapes that initially walk toward the threat, even when their
+    // endpoint is farther away. Another reachable candidate may be safer.
+    if(escape&&route.size()>1&&Q240PlanarDistance(route.front(),threat)+16.f<before)continue;
+    actor.aiPathGame=std::move(route);actor.aiPathSurfaces=std::move(surfaces);actor.aiPathIndex=0;
+    state.pathDestinationGame=threat;state.navigationDoor=0;state.blockedSince=-1;
+    Q6H_LOGI("NPC TACTIC actor=%08X target=%08X escape=%d cover=%d waypoints=%zu",actor.source.refFormId,state.combatTarget,escape,seekCover,actor.aiPathGame.size());return true;
+  }
+  return false;
 }
 static void Q230SimulateActor(Q230ActorVisual& actor,double now) {
   if(!gPlayerSession||gPlayerSession->saveBlocked||actor.runtime.offScene||actor.rigs.empty()||IsFo3LoadingVisible())return;
@@ -253,17 +336,36 @@ static void Q230SimulateActor(Q230ActorVisual& actor,double now) {
     p.SetActorHostile(actor.source.refFormId,0);Q6H_LOGI("NPC COMBAT END actor=%08X target=%08X",actor.source.refFormId,old);return;
   }
   const float dt=actor.aiLastUpdate<0?0:std::clamp(float(now-actor.aiLastUpdate),0.f,.1f);actor.aiLastUpdate=now;
-  if(ai.confidence==0){
+  const bool armed=ai.confidence!=0&&Q230SelectWeapon(actor);
+  if(now>=s.nextTactic){
+    s.nextTactic=now+1;
+    const auto damage=p.Snapshot().actorDamage.find(actor.source.refFormId);
+    const float maximum=health+(damage==p.Snapshot().actorDamage.end()?0:damage->second);
+    const bool wantsFlee=fo3npc::ShouldFlee(ai,c,health,maximum,armed);
+    if(wantsFlee&&!s.moraleFlee){
+      s.moraleFlee=true;s.fleeUntil=now+fo3npc::CombatSetting(c,"fCombatFleeWaitTime");
+      s.nextPath=0;actor.aiPathGame.clear();actor.aiPathSurfaces.clear();actor.aiPathIndex=0;
+      Q6H_LOGI("NPC MORALE actor=%08X confidence=%u health=%.3f max=%.3f armed=%d flee=1",actor.source.refFormId,unsigned(ai.confidence),health,maximum,armed);
+    }else if(!wantsFlee&&now>=s.fleeUntil)s.moraleFlee=false;
+  }
+  if(s.moraleFlee&&!s.pendingAttack&&s.reloadUntil<=0){
     if(s.action!=fo3npc::CombatAction::Flee){Q6H_LOGI("NPC FLEE actor=%08X target=%08X",actor.source.refFormId,s.combatTarget);s.action=fo3npc::CombatAction::Flee;}
     const auto threat=std::array<float,3>{gSceneCenterXQ1730+s.lastThreat[0]*FO3_UNITS_PER_METRE,gSceneCenterYQ1730-(s.lastThreat[2]-SCENE_FORWARD)*FO3_UNITS_PER_METRE,gSceneFloorZQ1730+(s.lastThreat[1]-FLOOR_Y)*FO3_UNITS_PER_METRE};
-    if(!Q230CombatRoute(actor,threat,true,now)&&actor.aiPathGame.empty())
-      Q240AiLogOnce(actor.source.refFormId,actor.aiPackage,"coward combat flee has no reachable NAVM escape");
+    const float safe=fo3npc::CombatSetting(c,"fCombatFleeNormalDistance",INFINITY);
+    if(Q240PlanarDistance(Q240GamePosition(actor),threat)>=safe){
+      actor.aiPathGame.clear();actor.aiPathSurfaces.clear();actor.aiPathIndex=0;s.speed=0;s.animation=fo3npc::Animation::Idle;return;
+    }
+    // Source-aware escape selection; preserve the existing farthest route only
+    // when the optional source distance settings are absent.
+    const bool routed=std::isfinite(safe)?Q230TacticalRoute(actor,threat,safe,INFINITY,true,false,now):Q230CombatRoute(actor,threat,true,now);
+    if(!routed&&actor.aiPathGame.empty())Q240AiLogOnce(actor.source.refFormId,actor.aiPackage,"combat flee has no safe reachable NAVM escape");
     Q240AdvancePath(actor,dt,now);return;
   }
-  if(!Q230SelectWeapon(actor)){
-    Q240AiLogOnce(actor.source.refFormId,actor.aiPackage,
-      "no usable supported combat weapon: check NPC COMBAT CANDIDATES / NPC EQUIP UNSUPPORTED");
-    return;
+  if(!armed){
+    Q240AiLogOnce(actor.source.refFormId,actor.aiPackage,"no usable supported combat weapon; attempting real NAVM cover");
+    const std::array<float,3> game{gSceneCenterXQ1730+target[0]*FO3_UNITS_PER_METRE,gSceneCenterYQ1730-(target[2]-SCENE_FORWARD)*FO3_UNITS_PER_METRE,gSceneFloorZQ1730+(target[1]-FLOOR_Y)*FO3_UNITS_PER_METRE};
+    s.action=fo3npc::CombatAction::Cover;
+    Q230TacticalRoute(actor,game,0,INFINITY,false,true,now);Q240AdvancePath(actor,dt,now);return;
   }
   const auto* owned=p.ActorWeapon(actor.source.refFormId);if(!owned)return;
   const uint64_t instance=owned->id;const uint32_t form=owned->formId;
@@ -281,6 +383,30 @@ static void Q230SimulateActor(Q230ActorVisual& actor,double now) {
     const auto& point=visible?target:s.lastThreat;
     const std::array<float,3> game{gSceneCenterXQ1730+point[0]*FO3_UNITS_PER_METRE,gSceneCenterYQ1730-(point[2]-SCENE_FORWARD)*FO3_UNITS_PER_METRE,gSceneFloorZQ1730+(point[1]-FLOOR_Y)*FO3_UNITS_PER_METRE};
     Q230CombatRoute(actor,game,false,now);Q240AdvancePath(actor,dt,now);return;
+  }
+  if(!s.pendingAttack&&s.reloadUntil<=0){
+    const float minimum=d.minRange*(ranged&&style?style->rangeMin:1.f);
+    const std::array<float,3> game{gSceneCenterXQ1730+target[0]*FO3_UNITS_PER_METRE,gSceneCenterYQ1730-(target[2]-SCENE_FORWARD)*FO3_UNITS_PER_METRE,gSceneFloorZQ1730+(target[1]-FLOOR_Y)*FO3_UNITS_PER_METRE};
+    const bool tooClose=ranged&&minimum>0&&distance<minimum;
+    const bool waiting=now<s.burstWaitUntil;
+    const bool active=actor.aiPathIndex<actor.aiPathGame.size()&&
+      (s.action==fo3npc::CombatAction::Reposition||s.action==fo3npc::CombatAction::Cover);
+    if(!active&&(s.action==fo3npc::CombatAction::Reposition||s.action==fo3npc::CombatAction::Cover))s.action=fo3npc::CombatAction::Aim;
+    if(tooClose||waiting||active){
+      if(active){Q240AdvancePath(actor,dt,now);return;}
+      if(now>=s.nextPath){
+        const bool cover=waiting&&style&&style->coverChance>
+          fo3npc::CombatChoice(actor.source.refFormId,s.tacticSequence++,0,100);
+        if(Q230TacticalRoute(actor,game,minimum,maxRange,false,cover,now)){
+          s.action=cover?fo3npc::CombatAction::Cover:fo3npc::CombatAction::Reposition;
+          Q240AdvancePath(actor,dt,now);return;
+        }
+      }
+      if(waiting){s.speed=0;s.animation=fo3npc::Animation::Aim;s.action=fo3npc::CombatAction::Wait;return;}
+    }
+  }
+  if(s.action==fo3npc::CombatAction::Acquire&&style){
+    s.nextAttack=std::max(s.nextAttack,now+fo3npc::CombatChoice(actor.source.refFormId,s.fireSequence++,style->waitMin,style->waitMax));
   }
   s.speed=0;
   if(s.reloadUntil>0){

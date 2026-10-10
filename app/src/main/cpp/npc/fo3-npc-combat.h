@@ -44,6 +44,27 @@ inline bool Defensive(const fo3pipdata::PackageDefinition* package){return packa
 inline bool MayPlayHitReaction(const RuntimeState& s){
   return s.activity!=Activity::Combat||(!s.pendingAttack&&s.reloadUntil<=0);
 }
+inline float CombatSetting(const fo3player::Catalog& c,const char* key,float fallback=0){
+  const auto it=c.npcCombatSettings.find(key);return it==c.npcCombatSettings.end()?fallback:it->second;
+}
+// Quest morale bridge: source confidence determines the source threshold;
+// comparing remaining health to it is an explicit approximation, not the
+// recovered Bethesda relative combat-strength algorithm.
+inline bool ShouldFlee(const AiData& ai,const fo3player::Catalog& c,
+                       float health,float maximum,bool armed){
+  if(!ai.valid||health<=0)return false;
+  if(ai.confidence==0)return true;
+  if(ai.confidence==4)return false;
+  if(!armed&&ai.confidence<=2)return true;
+  const char* key=ai.confidence==1?"fConfidenceCautious":
+                  ai.confidence==2?"fConfidenceAverage":"fConfidenceBrave";
+  const float threshold=CombatSetting(c,key);
+  return threshold>0&&maximum>0&&health/maximum<=threshold;
+}
+inline float CombatChoice(uint32_t reference,uint32_t serial,float minimum,float maximum){
+  const uint32_t hash=reference*2654435761u^serial*2246822519u;
+  return minimum+(std::max(minimum,maximum)-minimum)*float(hash%1000u)/999.f;
+}
 // Timing derives from WEAP/CSTY; no catch-up volley after a long frame.
 inline float ShotInterval(const fo3weapon::Definition& d,const fo3weapon::Definitions::CombatStyle* style){
   const float rate=d.Automatic()?d.rate:d.shotsPerSecond;
@@ -54,6 +75,19 @@ inline float ShotInterval(const fo3weapon::Definition& d,const fo3weapon::Defini
 inline bool FireReady(RuntimeState& s,const fo3weapon::Definition& d,double now,const fo3weapon::Definitions::CombatStyle* style=nullptr){
   const auto interval=ShotInterval(d,style);
   if(s.activity!=Activity::Combat||!std::isfinite(now)||interval<=0||s.reloadUntil>0||now<s.nextAttack)return false;
-  s.nextAttack=now+interval;return true;
+  if(style&&style->valid&&style->fireMax>0){
+    if(now<s.burstWaitUntil)return false;
+    if(s.burstUntil>0&&now>=s.burstUntil){
+      s.burstUntil=0;s.burstWaitUntil=now+CombatChoice(s.reference,s.fireSequence++,style->pauseMin,style->pauseMax);
+      return false;
+    }
+    if(s.burstUntil<=0)s.burstUntil=now+std::max(.01f,CombatChoice(s.reference,s.fireSequence++,style->fireMin,style->fireMax));
+  }
+  float delay=d.delayMin;
+  if(!d.Automatic()){
+    delay=CombatChoice(s.reference,s.fireSequence++,d.delayMin,d.delayMax);
+    if(style&&style->valid)delay*=CombatChoice(s.reference,s.fireSequence++,style->delayMin,style->delayMax);
+  }
+  s.nextAttack=now+std::max(interval,delay);return true;
 }
 }

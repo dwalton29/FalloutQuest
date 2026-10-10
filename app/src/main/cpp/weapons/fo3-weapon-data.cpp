@@ -48,12 +48,15 @@ void Decode(Definitions&o,const std::string&t,uint32_t id,const std::vector<uint
     if(t=="FACT"&&k=="XNAM"&&n==12)o.relations[id][fo3esm::ReadU32(b)]=int32_t(fo3esm::ReadU32(b+8));
     if(t=="CSTY"&&k=="CSTD"&&n>=82)style.flags=fo3esm::ReadU16(b+80);
     if(t=="CSTY"&&k=="CSSD"&&n==64){
+      style.coverRadius=fo3esm::ReadF32(b);style.coverChance=fo3esm::ReadF32(b+4);
+      style.pauseMin=fo3esm::ReadF32(b+8);style.pauseMax=fo3esm::ReadF32(b+12);
       style.waitMin=fo3esm::ReadF32(b+16);style.waitMax=fo3esm::ReadF32(b+20);
       style.fireMin=fo3esm::ReadF32(b+24);style.fireMax=fo3esm::ReadF32(b+28);
       style.rangeMin=fo3esm::ReadF32(b+32);style.restrictions=fo3esm::ReadU32(b+40);
       style.rangeMax=fo3esm::ReadF32(b+44);style.radius=fo3esm::ReadF32(b+52);
       style.delayMin=fo3esm::ReadF32(b+56);style.delayMax=fo3esm::ReadF32(b+60);style.valid=true;
-      for(float v:{style.waitMin,style.waitMax,style.fireMin,style.fireMax,style.rangeMin,style.rangeMax,style.radius,style.delayMin,style.delayMax})if(!std::isfinite(v)||v<0)style.valid=false;
+      for(float v:{style.waitMin,style.waitMax,style.fireMin,style.fireMax,style.rangeMin,style.rangeMax,style.radius,style.delayMin,style.delayMax,style.pauseMin,style.pauseMax,style.coverRadius,style.coverChance})if(!std::isfinite(v)||v<0)style.valid=false;
+      if(style.coverChance>100)style.valid=false;
       if(style.restrictions>2)style.valid=false;
     }
     if(k=="MODL")model=fo3esm::ZString(b,n);
@@ -71,7 +74,7 @@ void Decode(Definitions&o,const std::string&t,uint32_t id,const std::vector<uint
     }}
   });
   if(t=="STAT")o.models[id]=model;
-  if(t=="CSTY")o.styles[id]=style;
+  if(t=="CSTY"){o.styles[id]=style;if(editor=="DefaultCombatstyle"&&style.valid)o.defaultCombatStyle=id;}
   if(t=="NPC_"&&actorData&&actor.health>=0&&actor.endurance<=10)o.actors[id]=actor;
   if(t=="LVLN"){levelled.valid=listValid&&chance&&listFlags&&!levelled.entries.empty();o.levelledActors[id]=std::move(levelled);}
   for(float v:{q.gravity,q.speed,q.range,q.flashDuration,q.impactForce})if(!std::isfinite(v)||v<0)valid=false;

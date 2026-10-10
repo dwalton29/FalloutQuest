@@ -41,6 +41,7 @@ struct Definitions {
   // FO3 CSSD, not the shorter/different FNV combat-style layout.
   struct CombatStyle {
     float waitMin=0,waitMax=0,fireMin=0,fireMax=0,rangeMin=0,rangeMax=0,radius=0,delayMin=0,delayMax=0;
+    float pauseMin=0,pauseMax=0,coverRadius=0,coverChance=0;
     uint32_t restrictions=0;uint16_t flags=0;bool valid=false;
   };
   std::unordered_map<uint32_t,Actor> actors;
@@ -51,6 +52,7 @@ struct Definitions {
   // statistics. This is not a random spawn/appearance/inventory selection.
   std::unordered_map<uint32_t,uint32_t> invariantStatistics;
   std::unordered_map<uint32_t,CombatStyle> styles;
+  uint32_t defaultCombatStyle=0; // Resolve original DefaultCombatstyle EDID.
   std::unordered_map<uint32_t,std::unordered_map<uint32_t,int32_t>> relations;
   std::unordered_map<uint32_t,float> armourDR;
   std::unordered_map<uint32_t,Projectile> projectiles;

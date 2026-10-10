@@ -49,6 +49,14 @@ int main(int argc, char **argv) {
   clip.tracks.push_back(track);
   Pose pose;
   assert(Sample(skeleton, clip, 0.5, pose));
+  {
+    auto upper=pose;upper.local[1].translation[0]=7;upper.local[0].translation[0]=123;
+    const auto rootBefore=pose.local[0];
+    assert(OverlayBranch(skeleton,pose,upper,1));
+    assert(pose.local[1].translation[0]==7&&pose.local[0].translation==rootBefore.translation);
+    assert(!OverlayBranch(skeleton,pose,upper,-1));
+    assert(Sample(skeleton,clip,.5,pose));
+  }
   auto p = Point(pose.delta[1], {0, 0, 15});
   assert(Near(p[0], 1) && Near(p[2], 15));
   assert(Sample(skeleton, clip, 1.5, pose));

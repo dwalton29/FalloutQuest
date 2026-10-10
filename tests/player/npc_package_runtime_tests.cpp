@@ -58,6 +58,8 @@ struct Q230ActorVisual {
 };
 std::vector<Q230ActorVisual> packageTargets;
 std::vector<Q230ActorVisual>* activePackageTargets=&packageTargets;
+bool allRoamEndpointsOccupied=false;
+#define FO3_NPC_ROAM_ENDPOINT_OCCUPIED(actor,point) (allRoamEndpointsOccupied)
 bool q240GroundProbe=false;
 float q240GroundReference=0,q240GroundResult=0;
 static bool TestNpcWorldGround(float,float,float referenceY,float* outY) {
@@ -72,6 +74,7 @@ static bool Q230PathBlocked(Q230ActorVisual&,float,float,float,float,float);
 #define FO3_NPC_PATH_BLOCKED Q230PathBlocked
 #endif
 #include "npc/fo3-npc-package-runtime.inc"
+#undef FO3_NPC_ROAM_ENDPOINT_OCCUPIED
 #undef FO3_NPC_WORLD_GROUND
 #undef FO3_NPC_ACCOMPANY_TARGET
 #undef FO3_NPC_PACKAGE_ACTOR_TARGET
@@ -537,6 +540,42 @@ int main(int argc,char** argv) {
     }
     assert(variedPortal);
     std::cout<<"Sandbox endpoint memory and in-portal route variety passed\\n";
+  }
+  {
+    auto walker=Actor(6);walker.stateRestored=true;
+    const auto& pack=gPlayerSession->player.Definitions().pipboy.packages.at(50);
+    assert(Q240BuildPackagePath(walker,pack,{1900,2900,20},0));
+    walker.runtime.yaw=-.785398163f;
+    bool crossed=false;
+    for(int i=0;i<500&&walker.aiPathIndex<walker.aiPathGame.size();++i){
+      const size_t before=walker.aiPathIndex;
+      Q240AdvancePath(walker,.05f,i*.05);
+      if(before==0&&walker.aiPathIndex==1){
+        crossed=true;assert(walker.runtime.speed>0&&walker.runtime.animation==fo3npc::Animation::Walk);
+      }
+    }
+    assert(crossed&&walker.aiPathIndex==walker.aiPathGame.size());
+    assert(Q240PlanarDistance(Q240GamePosition(walker),{1900,2900,20})<.01f);
+    assert(walker.runtime.locomotionTime>0);
+    // A shortcut whose line never crosses the mandatory portal is rejected.
+    walker.aiPathIndex=0;walker.aiPathGame.back()={1050,2050,20};
+    assert(!Q240CorridorLine(walker,{1010,2010,20},1));
+    auto other=walker;other.source.refFormId=99;other.stateRestored=true;
+    other.runtime.position=Q240ScenePosition({1200,2200,20});
+    walker.runtime.position=Q240ScenePosition({1100,2200,20});
+    assert(!Q240CrowdStepAllowed(walker,{1150,2200,20},std::vector<Q230ActorVisual>{other}));
+    assert(Q240CrowdStepAllowed(walker,{1100,2250,20},std::vector<Q230ActorVisual>{other}));
+    other.runtime.position=walker.runtime.position;
+    assert(Q240CrowdStepAllowed(walker,{1105,2200,20},std::vector<Q230ActorVisual>{other}));
+    other.source.refFormId=1;
+    assert(!Q240CrowdStepAllowed(walker,{1105,2200,20},std::vector<Q230ActorVisual>{other}));
+    other.runtime.position=Q240ScenePosition({1100,2200,200});
+    assert(Q240CrowdStepAllowed(walker,{1105,2200,20},std::vector<Q230ActorVisual>{other}));
+    auto roaming=Actor(12);allRoamEndpointsOccupied=true;roaming.aiLastUpdate=10;
+    assert(!Q240BuildPackagePath(roaming,gPlayerSession->player.Definitions().pipboy.packages.at(50),{1900,2900,20},2000));
+    assert(roaming.runtime.roamWaitUntil==10.5&&roaming.aiPathGame.empty());
+    allRoamEndpointsOccupied=false;
+    assert(Q240BuildPackagePath(roaming,gPlayerSession->player.Definitions().pipboy.packages.at(50),{1900,2900,20},2000));
   }
   {
     // Two original-format linked NAVM triangles provide a real shared portal.

@@ -321,6 +321,17 @@ bool ComposePose(const Skeleton& s,Pose& p) {
         return false;
   return true;
 }
+bool OverlayBranch(const Skeleton& s,Pose& base,const Pose& overlay,int branch){
+  if(branch<0||size_t(branch)>=s.bones.size()||base.local.size()!=s.bones.size()||overlay.local.size()!=s.bones.size())return false;
+  for(size_t i=0;i<s.bones.size();++i){
+    int parent=int(i);size_t depth=0;
+    while(parent>=0&&size_t(parent)<s.bones.size()&&depth++<s.bones.size()){
+      if(parent==branch){if(int(i)!=base.accumulation)base.local[i]=overlay.local[i];break;}
+      parent=s.bones[size_t(parent)].parent;
+    }
+  }
+  return ComposePose(s,base);
+}
 void LookYaw(const Skeleton& s,Pose& p,int bone,float radians) {
   if(bone<0||size_t(bone)>=p.global.size()||!std::isfinite(radians))return;
   auto turn=Identity();turn[0]=turn[5]=std::cos(radians);turn[1]=std::sin(radians);turn[4]=-turn[1];

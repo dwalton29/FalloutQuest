@@ -46,6 +46,8 @@ int main(int argc,char** argv){
   assert(a.runtime.position==before&&toggles==1&&openSounds==1&&a.runtime.navigationDoor==20);
   stepBlocked=false;Q240AdvancePath(a,.1f,2);assert(a.runtime.position==before&&toggles==1&&queries==1); // Collision may disappear mid-animation; NPC still waits.
   gQ2400InteriorDoors[20].q2401Moving=false;Q240AdvancePath(a,.1f,3);
+  assert(a.runtime.navigationDoor==0&&toggles==1&&a.runtime.position!=before);
+  for(int i=1;i<20&&a.aiPathIndex<a.aiPathGame.size();++i)Q240AdvancePath(a,.1f,3+i*.1);
   assert(a.aiPathIndex==1&&a.runtime.navigationDoor==0&&toggles==1); // Short waypoint cannot bypass closed door.
   a=Prepare();wallBlocked=true;a.aiLastUpdate=1;assert(Q230PathBlocked(a,1,0,0,.1f,1)&&toggles==0);
   a.aiLastUpdate=1.1;assert(Q230PathBlocked(a,1,0,0,.1f,1)&&queries==1);
@@ -58,8 +60,9 @@ int main(int argc,char** argv){
   gPlayerSession=std::make_unique<Session>(c);assert(gPlayerSession->player.CanOpenDoor(20));
   assert(!gPlayerSession->player.CanActorOpenDoor(42,20)&&Q230PathBlocked(a,1,0,0,.1f,1)&&toggles==0);
   a=Prepare();stepBlocked=false;gQ2400InteriorDoors[20].q2401Moving=true;gQ2400InteriorDoors[20].collisionSceneSerial=gQ2400DoorSceneSerial;
+  a.runtime.speed=1.05f; // Reach the animated door bounds on this step.
   before=a.runtime.position;Q240AdvancePath(a,.1f,4);assert(a.runtime.position==before&&toggles==0&&queries==0); // Another activator's closing door still blocks absent world collision.
-  a=Prepare();Q240AdvancePath(a,.1f,5);stepBlocked=false;a.runtime.navigationDoor=0;before=a.runtime.position;Q240AdvancePath(a,.1f,6);assert(a.runtime.position==before&&toggles==1); // Replanning cannot bypass an opening animation.
+  a=Prepare();Q240AdvancePath(a,.1f,5);stepBlocked=false;a.runtime.navigationDoor=0;a.runtime.speed=1.05f;before=a.runtime.position;Q240AdvancePath(a,.1f,6);assert(a.runtime.position==before&&toggles==1); // Replanning cannot bypass an opening animation.
   a=Prepare();gQ2400InteriorDoors[20].targetOpen=false;gQ2400InteriorDoors[20].q2401Moving=true;
   assert(Q230PathBlocked(a,1,0,0,.1f,1)&&toggles==0); // Closing sequence is never reversed mid-flight.
   a=Prepare();wallBlocked=true;a.aiPackage=50;a.aiSequence=1;

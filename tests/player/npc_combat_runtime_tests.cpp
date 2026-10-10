@@ -93,6 +93,18 @@ static void OriginalCombatPolicies(const char* path) {
   assert(defensive==161&&overrides==17);std::cout<<"Original Defensive packages="<<defensive<<" CNAM combat styles="<<overrides<<'\n';
 }
 int main(int argc,char** argv){
+  {
+    Prepare();auto& actor=gQ230NpcActors[0];actor.runtime.EndDialogue();actor.runtime.BeginCombat(0x14);
+    const auto start=Q240GamePosition(actor);const std::array<float,3> threat{1000,2000,20};
+    assert(Q230TacticalRoute(actor,threat,800,INFINITY,true,false,1));
+    assert(!actor.aiPathGame.empty()&&Q240PlanarDistance(actor.aiPathGame.back(),threat)>Q240PlanarDistance(start,threat));
+    actor.runtime.action=fo3npc::CombatAction::Flee;
+    const auto route=actor.aiPathGame;assert(Q230TacticalRoute(actor,threat,800,INFINITY,true,false,1.1)&&actor.aiPathGame==route);
+    actor.aiPathGame.clear();actor.aiPathSurfaces.clear();actor.aiPathIndex=0;actor.runtime.nextPath=0;
+    assert(!Q230TacticalRoute(actor,threat,0,INFINITY,false,true,2)&&actor.aiPathGame.empty()); // Clear sight is not cover.
+    blocked=true;actor.runtime.nextPath=0;
+    assert(Q230TacticalRoute(actor,threat,0,INFINITY,false,true,3)&&!actor.aiPathGame.empty());
+  }
   Prepare();auto& a=gQ230NpcActors[0];blocked=true;Q230SimulateActor(a,1);assert(a.runtime.activity==fo3npc::Activity::Dialogue&&shots==0);
   blocked=false;Q230SimulateActor(a,1.3);assert(a.runtime.activity==fo3npc::Activity::Combat&&dialogueEnds==1&&a.runtime.equippedWeapon);
   assert(a.runtime.reloadUntil>0&&!a.runtime.pendingAttack);Q230SimulateActor(a,1.4);assert(shots==0);

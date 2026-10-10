@@ -739,6 +739,7 @@ struct Q230ActorVisual {
     fo3anim::Skeleton skeleton;
     fo3anim::Clip clip;
     fo3anim::Pose pose;
+    fo3anim::Pose weaponAimPose;
     std::vector<CpuObject> parts;
     std::vector<GpuObject> objects;
     std::vector<Q230RigPart> rigs;
@@ -11160,6 +11161,10 @@ void Q230PumpNpcArrivals(){
                 gQ234GeneratedTextures.erase(entry.first);
             actor.generatedTextures.clear();actor.parts.clear();
             if(!actor.objects.empty()&&!actor.rigs.empty()){
+                // Publish at the original XTEL arrival only after the previous
+                // resident has cleared it. No invented spawn offsets and no
+                // simultaneous actors on the exact same door root.
+                if(Q230RoamEndpointOccupied(actor.source.refFormId,saved->second.position))return;
                 actor.animationStart=std::chrono::steady_clock::now();
                 const uint32_t id=actor.source.refFormId;
                 gQ230NpcActors.push_back(std::move(actor));

@@ -43,6 +43,21 @@ static void StateAndPerception() {
   s={};s.BeginCombat(101);auto d=c.items.at(10).weapon;
   assert(FireReady(s,d,1)&&!FireReady(s,d,1.1)&&FireReady(s,d,1.25));s.reloadUntil=5;assert(!FireReady(s,d,8));s.reloadUntil=0;
   assert(FireReady(s,d,9)&&!FireReady(s,d,9));
+  c.npcCombatSettings={{"fConfidenceCautious",.375f},{"fConfidenceAverage",.1875f},{"fConfidenceBrave",.0375f}};
+  for(uint8_t confidence=0;confidence<=4;++confidence){
+    ai.confidence=confidence;
+    assert(ShouldFlee(ai,c,100,100,true)==(confidence==0));
+    assert(ShouldFlee(ai,c,100,100,false)==(confidence<=2));
+    assert(ShouldFlee(ai,c,1,100,true)==(confidence<4));
+    assert(!ShouldFlee(ai,c,0,100,false));
+  }
+  ai.confidence=2;assert(!ShouldFlee(ai,c,20,100,true)&&ShouldFlee(ai,c,18,100,true));
+  fo3weapon::Definitions::CombatStyle burst;burst.valid=true;burst.fireMin=burst.fireMax=1;burst.pauseMin=burst.pauseMax=2;burst.delayMin=burst.delayMax=1;
+  s={};s.BeginCombat(101);
+  assert(FireReady(s,d,1,&burst)&&FireReady(s,d,1.25,&burst));
+  assert(!FireReady(s,d,2,&burst)&&s.burstWaitUntil==4);
+  assert(!FireReady(s,d,3.99,&burst)&&FireReady(s,d,4,&burst));
+  s.EndCombat();s.BeginCombat(101);assert(s.burstUntil==0&&s.burstWaitUntil==0);
 }
 static void CombatAssetCandidates() {
   auto c=Fixture();
@@ -129,6 +144,11 @@ static void Original(const char* path) {
   Catalog c;std::string error;assert(LoadCatalog(path,c,error));assert(c.weapons.styles.size()==48&&c.weapons.detectionDistance==2500&&c.weapons.drMax==85);
   // Original Fallout3.esm has fMoveRunMult=4.0; only active combat Flee uses it.
   assert(std::fabs(c.npcRunMultiplier-4.f)<.001f);
+  assert(c.npcBaseSpeed==77&&c.weapons.defaultCombatStyle==0x3d);
+  assert(c.npcCombatSettings.at("fCombatFleeNormalDistance")==1400);
+  assert(std::fabs(c.npcCombatSettings.at("fConfidenceAverage")-.1875f)<.0001f);
+  const auto& style=c.weapons.styles.at(c.weapons.defaultCombatStyle);
+  assert(style.coverRadius==2048&&style.coverChance==100&&style.pauseMin==2&&style.pauseMax==2);
   // Canonical MegatonSettlerWeapon and WithAmmoAssaultRifleNPC LVLI records.
   // These were previously invisible to the combat asset-preparation loop.
   for(uint32_t list:{0x0006C36Bu,0x00029367u}){

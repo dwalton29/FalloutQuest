@@ -152,6 +152,9 @@ struct Catalog {
   std::unordered_map<uint32_t, float> globals;
   float gameTimeScale = 30.0f; // Fallout 3 TimeScale GLOB, default 30 game min / real min.
   float npcRunMultiplier = 1.0f; // Optional original fMoveRunMult GMST; do not invent.
+  float npcBaseSpeed = 0.f; // Original fMoveBaseSpeed, in game units/second.
+  // Optional original GMSTs. Missing data disables the added morale/range policy.
+  std::unordered_map<std::string,float> npcCombatSettings;
   uint32_t hourGlobal=0,dayGlobal=0,monthGlobal=0,yearGlobal=0,daysPassedGlobal=0,timeScaleGlobal=0;
   int32_t lootLevelDifference = 0;
   Rules rules;

@@ -12,6 +12,12 @@ void Q230CacheDialogueAnimations(Q230ActorVisual& actor,const fo3pipdata::Defini
   paths[size_t(fo3npc::Animation::Run)]=root+"locomotion\\"+
       (actor.source.female?std::string("female\\"):std::string("male\\"))+
       "mtfastforward.kf";
+  paths[size_t(fo3npc::Animation::StepLeft)]=root+"locomotion\\"+
+      (actor.source.female?std::string("female\\"):std::string("male\\"))+"mtleft.kf";
+  paths[size_t(fo3npc::Animation::StepRight)]=root+"locomotion\\"+
+      (actor.source.female?std::string("female\\"):std::string("male\\"))+"mtright.kf";
+  paths[size_t(fo3npc::Animation::StepBack)]=root+"locomotion\\"+
+      (actor.source.female?std::string("female\\"):std::string("male\\"))+"mtbackward.kf";
   for(size_t i=1;i<paths.size();++i){std::vector<uint8_t> bytes;
     const bool ready=!paths[i].empty()&&LoadFalloutMeshFile(paths[i],bytes)&&fo3anim::DecodeClip(bytes,actor.animations[i]);
     (void)ready;Q6H_LOGI("NPC CLIP actor=%08X slot=%zu ready=%d path=%s",actor.source.refFormId,i,ready,paths[i].c_str());
@@ -230,10 +236,12 @@ void Q230PrepareActors(uint32_t cell, uint32_t worldspace,
 #ifndef FO3_ACTOR_RUNTIME_HOST_TEST
 static bool Q230PathBlocked(Q230ActorVisual&,float,float,float,float,float);
 static bool Q230RoamEndpointOccupied(uint32_t,const std::array<float,3>&);
+static bool Q230CrowdStep(const Q230ActorVisual&,const std::array<float,3>&);
 #define FO3_NPC_ACCOMPANY_TARGET(reference,point) Q240ResidentAccompanyTarget(gQ230NpcActors,reference,point)
 #define FO3_NPC_PACKAGE_ACTOR_TARGET(reference,point) Q240ResidentPackageTarget(gQ230NpcActors,reference,point)
 #define FO3_NPC_PATH_BLOCKED Q230PathBlocked
 #define FO3_NPC_ROAM_ENDPOINT_OCCUPIED(actor,point) Q230RoamEndpointOccupied(actor,point)
+#define FO3_NPC_CROWD_STEP(actor,point) Q230CrowdStep(actor,point)
 #define FO3_NPC_STAGGER_ROUTING
 #define FO3_NPC_WORLD_GROUND(x,z,referenceY,outY) SampleFo3ActorGroundQ240(x,z,referenceY,outY)
 #define FO3_NPC_FURNITURE_LOADING IsFo3LoadingVisible()
@@ -249,6 +257,7 @@ static bool Q230RoamEndpointOccupied(uint32_t,const std::array<float,3>&);
 #undef FO3_NPC_PATH_BLOCKED
 #undef FO3_NPC_STAGGER_ROUTING
 #undef FO3_NPC_ROAM_ENDPOINT_OCCUPIED
+#undef FO3_NPC_CROWD_STEP
 #undef FO3_NPC_ACCOMPANY_TARGET
 #undef FO3_NPC_PACKAGE_ACTOR_TARGET
 // Local VR crowd-preference only. Does not change authored package locations,
@@ -265,6 +274,9 @@ static bool Q230RoamEndpointOccupied(uint32_t self,const std::array<float,3>& po
        Q240PlanarDistance(point,other.aiPathGame.back())<70.f)return true;
   }
   return false;
+}
+static bool Q230CrowdStep(const Q230ActorVisual& actor,const std::array<float,3>& point){
+  return Q240CrowdStepAllowed(actor,point,gQ230NpcActors);
 }
 #include "fo3-npc-door-runtime.inc"
 #endif
@@ -482,7 +494,13 @@ void Q230UpdateActor(Q230ActorVisual &actor) {
   }
   const auto& clip=actor.animations[actor.activeAnimation].tracks.empty()?actor.clip:actor.animations[actor.activeAnimation];
   const double clipTime=actor.blendStart<0?elapsed:elapsed-actor.blendStart;
-  const double sampleTime=actor.runtime.activity==fo3npc::Activity::Dead?std::max(0.f,clip.stop-clip.start):clipTime;
+  const bool locomotion=actor.runtime.animation==fo3npc::Animation::Walk||
+      actor.runtime.animation==fo3npc::Animation::Run||
+      actor.runtime.animation==fo3npc::Animation::StepLeft||
+      actor.runtime.animation==fo3npc::Animation::StepRight||
+      actor.runtime.animation==fo3npc::Animation::StepBack;
+  const double sampleTime=actor.runtime.activity==fo3npc::Activity::Dead?
+      std::max(0.f,clip.stop-clip.start):locomotion?actor.runtime.locomotionTime:clipTime;
   const auto& furniture=actor.runtime.furniture;
   const auto* slot=furniture.Selected();
   const bool furniturePose=slot&&(furniture.phase==fo3furniture::Phase::Enter||furniture.phase==fo3furniture::Phase::Loop||furniture.phase==fo3furniture::Phase::Exit);
@@ -508,6 +526,19 @@ void Q230UpdateActor(Q230ActorVisual &actor) {
       actor.pose.local[size_t(actor.pose.accumulation)]=fo3anim::Transform{};
     fo3anim::ComposePose(actor.skeleton,actor.pose);
   }
+#ifndef FO3_ACTOR_RUNTIME_HOST_TEST
+  // Use the equipped weapon's original Aim pose above the source Spine2,
+  // leaving the original movement clip's hips/legs and in-place root intact.
+  // This branch-composition rule is a Quest bridge, not Bethesda's full graph.
+  if(locomotion&&!furniturePose&&actor.runtime.activity==fo3npc::Activity::Combat&&
+     actor.runtime.action!=fo3npc::CombatAction::Flee&&actor.runtime.equippedWeapon&&
+     !actor.animations[size_t(fo3npc::Animation::Aim)].tracks.empty()){
+    const auto& aim=actor.animations[size_t(fo3npc::Animation::Aim)];
+    fo3anim::BindClip(actor.skeleton,aim,actor.weaponAimPose);
+    if(fo3anim::Sample(actor.skeleton,aim,0,actor.weaponAimPose))
+      fo3anim::OverlayBranch(actor.skeleton,actor.pose,actor.weaponAimPose,actor.chestBone);
+  }
+#endif
   if(!furniturePose)fo3anim::LookYaw(actor.skeleton,actor.pose,actor.headBone,actor.runtime.headYaw);
   auto root=fo3anim::Identity();const float yaw=actor.runtime.yaw-actor.runtime.authoredYaw;
   root[0]=root[10]=std::cos(yaw);root[2]=-std::sin(yaw);root[8]=-root[2];
