@@ -152,6 +152,13 @@ target_compile_options(npc_package_runtime_tests PRIVATE -Wall -Wextra -Werror -
 target_include_directories(npc_package_runtime_tests PRIVATE ../nif ../../app/src/main/cpp ../../app/src/main/cpp/data)
 target_link_libraries(npc_package_runtime_tests PRIVATE ZLIB::ZLIB)
 add_test(NAME npc_package_runtime_tests COMMAND npc_package_runtime_tests)
+add_executable(npc_crowd_runtime_tests npc_crowd_runtime_tests.cpp ${dialogue_shared}
+    ../../app/src/main/cpp/npc/fo3-actor-animation.cpp ../../app/src/main/cpp/npc/fo3-npc.cpp)
+target_compile_features(npc_crowd_runtime_tests PRIVATE cxx_std_17)
+target_compile_options(npc_crowd_runtime_tests PRIVATE -Wall -Wextra -Werror -Wno-misleading-indentation)
+target_include_directories(npc_crowd_runtime_tests PRIVATE ../nif ../../app/src/main/cpp ../../app/src/main/cpp/data)
+target_link_libraries(npc_crowd_runtime_tests PRIVATE ZLIB::ZLIB)
+add_test(NAME npc_crowd_runtime_tests COMMAND npc_crowd_runtime_tests)
 
 # Full production package executor using a synthetic canonical ESM
 # with two XTEL doors; checks a real host-side actor handoff and lock denial.

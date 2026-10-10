@@ -73,6 +73,9 @@ static bool TestNpcWorldGround(float,float,float referenceY,float* outY) {
 static bool Q230PathBlocked(Q230ActorVisual&,float,float,float,float,float);
 #define FO3_NPC_PATH_BLOCKED Q230PathBlocked
 #endif
+#ifdef FO3_NPC_CROWD_HOST_TEST
+#define FO3_NPC_CROWD_STEP(actor,point) Q240CrowdStepAllowed(actor,point,*activePackageTargets)
+#endif
 #include "npc/fo3-npc-package-runtime.inc"
 #undef FO3_NPC_ROAM_ENDPOINT_OCCUPIED
 #undef FO3_NPC_WORLD_GROUND

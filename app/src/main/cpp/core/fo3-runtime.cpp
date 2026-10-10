@@ -11165,6 +11165,9 @@ void Q230PumpNpcArrivals(){
                 // resident has cleared it. No invented spawn offsets and no
                 // simultaneous actors on the exact same door root.
                 if(Q230RoamEndpointOccupied(actor.source.refFormId,saved->second.position))return;
+                for(const auto& resident:gQ230NpcActors)if(resident.runtime.furniture.Pool()){
+                    fo3furniture::JoinResidentActivities(actor.runtime.furniture,resident.runtime.furniture);break;
+                }
                 actor.animationStart=std::chrono::steady_clock::now();
                 const uint32_t id=actor.source.refFormId;
                 gQ230NpcActors.push_back(std::move(actor));

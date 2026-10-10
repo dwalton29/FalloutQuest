@@ -63,7 +63,7 @@ static bool Q230Target(uint32_t reference,std::array<float,3>& point,uint32_t& b
     return false;
 #endif
   }
-  for(auto& target:gQ230NpcActors)if(target.source.refFormId==reference&&target.runtime.Alive()){
+  for(auto& target:gQ230NpcActors)if(target.source.refFormId==reference&&!target.runtime.offScene&&target.runtime.Alive()){
     Q230UpdateActor(target);base=target.source.baseFormId;
     return Q230LiveBone(target,target.chestBone,point);
   }
@@ -152,7 +152,7 @@ static bool Q230SelectWeapon(Q230ActorVisual& actor) {
   Q6H_LOGI("NPC EQUIP actor=%08X weapon=%08X instance=%llu",actor.source.refFormId,form,(unsigned long long)selected);return true;
 }
 static void Q230ActionSounds(Q230ActorVisual& actor,double now) {
-  const auto slot=size_t(actor.runtime.animation);if(slot>=actor.animations.size())return;
+  const auto slot=size_t(actor.runtime.animation!=fo3npc::Animation::Reload&&(actor.runtime.pendingAttack||now<actor.runtime.actionUntil)?fo3npc::Animation::Attack:actor.runtime.animation);if(slot>=actor.animations.size())return;
   const float previous=float(actor.runtime.lastActionTime-actor.runtime.actionStart),current=float(now-actor.runtime.actionStart);
   for(const auto& key:actor.animations[slot].textKeys)if(key.time>previous&&key.time<=current&&key.text.rfind("Sound: ",0)==0)
     fo3audio::NamedSound(key.text.substr(7));
@@ -179,10 +179,10 @@ static bool Q230CombatRoute(Q230ActorVisual& actor,const std::array<float,3>& ta
 // Cover is tested against live geometry; no cover markers or animations are
 // fabricated. Endpoint scoring is a standalone policy, not Bethesda parity.
 static bool Q230TacticalRoute(Q230ActorVisual& actor,const std::array<float,3>& threat,
-                             float minimum,float maximum,bool escape,bool seekCover,double now){
+                             float minimum,float maximum,bool escape,bool seekCover,double now,int direction=0){
   auto& state=actor.runtime;
   if(!actor.navigationGraph||!actor.navigationGraph->triangleCount)return false;
-  if((state.action==fo3npc::CombatAction::Flee||state.action==fo3npc::CombatAction::Cover||state.action==fo3npc::CombatAction::Reposition)&&actor.aiPathIndex<actor.aiPathGame.size()&&
+  if((state.action==fo3npc::CombatAction::Flee||state.combatMovement==fo3npc::CombatAction::Cover||state.combatMovement==fo3npc::CombatAction::Reposition)&&actor.aiPathIndex<actor.aiPathGame.size()&&
      Q240PlanarDistance(state.pathDestinationGame,threat)<70.f)return true;
   if(now<state.nextPath)return false;
   actor.aiPathGame.clear();actor.aiPathSurfaces.clear();actor.aiPathIndex=0;
@@ -204,6 +204,11 @@ static bool Q230TacticalRoute(Q230ActorVisual& actor,const std::array<float,3>& 
     const auto point=Q240Centroid(graph,node);const float travel=Q240PlanarDistance(current,point);
     if(travel<70.f||(search>0&&travel>search))continue;
     const float separation=Q240PlanarDistance(point,threat);
+    if(direction){
+      const float tx=threat[0]-current[0],ty=threat[1]-current[1],px=point[0]-current[0],py=point[1]-current[1];
+      const float side=std::abs(direction)==1?px*ty-py*tx:px*tx+py*ty;
+      if(side*(direction>0?1.f:-1.f)<=0)continue;
+    }
     if(escape&&separation<=before+16.f)continue;
     if(!escape&&(separation<minimum||separation>maximum))continue;
     // Occupancy is a strict exclusion, including another selected destination.
@@ -240,7 +245,7 @@ static bool Q230TacticalRoute(Q230ActorVisual& actor,const std::array<float,3>& 
     const float dx=scene[0]-enemy[0],dy=scene[1]-enemy[1],dz=scene[2]-enemy[2];
     const float length=std::sqrt(dx*dx+dy*dy+dz*dz);
     const bool cover=hasChest&&length>.01f&&HasFo3InteractionOccluder(enemy[0],enemy[1]+height,enemy[2],dx/length,dy/length,dz/length,length,actor.source.refFormId);
-    if(seekCover&&!cover)candidate.first=INFINITY;
+    if((seekCover&&!cover)||(!escape&&!seekCover&&cover))candidate.first=INFINITY;
     if(escape&&cover)candidate.first-=std::min(Q240PlanarDistance(current,candidate.second),minimum)*.5f;
   }
   std::sort(candidates.begin(),candidates.end(),[](const auto& a,const auto& b){return a.first<b.first;});
@@ -331,7 +336,7 @@ static void Q230SimulateActor(Q230ActorVisual& actor,double now) {
   if(visible){s.lastThreat=target;s.lastSeen=now;}
   // Bethesda's complete detection/search state is not decoded. This bounded
   // loaded-scene bridge searches for 15 seconds; absence/death ends immediately.
-  if(!valid||(!visible&&now-s.lastSeen>15)){
+  if(!valid||(!visible&&now-s.lastSeen>15&&!(s.moraleFlee&&now<s.fleeUntil)&&s.combatMovement!=fo3npc::CombatAction::Cover)){
     const auto old=s.combatTarget;s.EndCombat();s.pendingAttack=false;actor.aiPathGame.clear();actor.aiPathSurfaces.clear();actor.aiPathIndex=0;s.navigationDoor=0;const auto package=c.pipboy.packages.find(actor.aiPackage);if(package==c.pipboy.packages.end()||(package->second.type!=13&&package->second.type!=2&&package->second.type!=10))actor.aiSequence=0;Q240ResumePackageWait(actor,now);
     p.SetActorHostile(actor.source.refFormId,0);Q6H_LOGI("NPC COMBAT END actor=%08X target=%08X",actor.source.refFormId,old);return;
   }
@@ -373,16 +378,53 @@ static void Q230SimulateActor(Q230ActorVisual& actor,double now) {
   const auto* style=Q230Style(actor);const bool ranged=d.Firearm();
   const float dx=target[0]-s.position[0],dz=target[2]-s.position[2],distance=std::sqrt(dx*dx+dz*dz)*FO3_UNITS_PER_METRE;
   const float desired=std::atan2(-dx,-dz),error=fo3npc::Angle(desired-s.yaw);
-  s.yaw=fo3npc::Angle(s.yaw+std::clamp(error,-fo3npc::DialoguePolicy::BodySpeed*dt,fo3npc::DialoguePolicy::BodySpeed*dt));s.returnYaw=s.yaw;actor.lastFrame=UINT64_MAX;
+  s.yaw=fo3npc::Angle(s.yaw+std::clamp(error,-fo3npc::MovementPolicy::TurnSpeed*dt,fo3npc::MovementPolicy::TurnSpeed*dt));s.returnYaw=s.yaw;actor.lastFrame=UINT64_MAX;
   const float maxRange=d.maxRange*(ranged&&style?style->rangeMax:1.f);
+  if(s.combatMovement==fo3npc::CombatAction::Reposition&&s.manoeuvreUntil>0&&now>=s.manoeuvreUntil){
+    actor.aiPathGame.clear();actor.aiPathSurfaces.clear();actor.aiPathIndex=0;s.combatMovement=fo3npc::CombatAction::Acquire;s.manoeuvreUntil=0;
+  }
+  // Decode original CSTD probabilities/timers. Mapping the selected direction
+  // onto reachable NAVM endpoints is a Quest bridge, not Bethesda's solver.
+  if(ranged&&visible&&style&&style->manoeuvresValid&&s.combatMovement==fo3npc::CombatAction::Acquire&&
+     !s.pendingAttack&&s.reloadUntil<=0&&now>=s.nextManoeuvre&&now>=s.burstWaitUntil){
+    const auto& timers=style->manoeuvreTimers;
+    s.nextManoeuvre=now+std::max(.1f,fo3npc::CombatChoice(actor.source.refFormId,s.tacticSequence++,timers[6],timers[7]));
+    if(fo3npc::CombatChoice(actor.source.refFormId,s.tacticSequence++,0,100)<style->dodgeChance){
+      const bool lateral=fo3npc::CombatChoice(actor.source.refFormId,s.tacticSequence++,0,100)<style->leftRightChance;
+      const int direction=(fo3npc::CombatChoice(actor.source.refFormId,s.tacticSequence++,0,100)<50?1:-1)*(lateral?1:2);
+      const size_t timer=lateral?0:direction>0?2:4;
+      const std::array<float,3> threat{gSceneCenterXQ1730+target[0]*FO3_UNITS_PER_METRE,gSceneCenterYQ1730-(target[2]-SCENE_FORWARD)*FO3_UNITS_PER_METRE,gSceneFloorZQ1730+(target[1]-FLOOR_Y)*FO3_UNITS_PER_METRE};
+      if(Q230TacticalRoute(actor,threat,d.minRange,maxRange,false,false,now,direction)){
+        s.combatMovement=fo3npc::CombatAction::Reposition;s.action=s.combatMovement;
+        s.manoeuvreUntil=now+std::max(.1f,fo3npc::CombatChoice(actor.source.refFormId,s.tacticSequence++,timers[timer],timers[timer+1]));
+      }
+    }
+  }
+  // Cover owns temporary loss of sight. Do not replace its route with Search.
+  if(s.combatMovement==fo3npc::CombatAction::Cover&&!s.pendingAttack&&s.reloadUntil<=0){
+    if(actor.aiPathIndex<actor.aiPathGame.size()){s.action=fo3npc::CombatAction::Cover;Q240AdvancePath(actor,dt,now);return;}
+    if(s.coverUntil<0)s.coverUntil=now+(style?fo3npc::CombatChoice(actor.source.refFormId,s.tacticSequence++,style->waitMin,style->waitMax):0);
+    if(now<s.coverUntil){s.speed=0;s.animation=fo3npc::Animation::Aim;return;}
+    const std::array<float,3> threat{gSceneCenterXQ1730+s.lastThreat[0]*FO3_UNITS_PER_METRE,gSceneCenterYQ1730-(s.lastThreat[2]-SCENE_FORWARD)*FO3_UNITS_PER_METRE,gSceneFloorZQ1730+(s.lastThreat[1]-FLOOR_Y)*FO3_UNITS_PER_METRE};
+    s.combatMovement=fo3npc::CombatAction::Reposition;s.action=s.combatMovement;s.coverUntil=-1;s.manoeuvreUntil=0;
+    actor.aiPathGame.clear();actor.aiPathSurfaces.clear();actor.aiPathIndex=0;s.nextPath=0;
+    Q230TacticalRoute(actor,threat,d.minRange,maxRange,false,false,now);
+  }
+  bool movingFire=false;
+  if(ranged&&s.combatMovement==fo3npc::CombatAction::Reposition&&actor.aiPathIndex<actor.aiPathGame.size()&&s.reloadUntil<=0){
+    Q240AdvancePath(actor,dt,now);movingFire=s.speed>0;
+    if(!visible){if(s.pendingAttack){s.pendingAttack=false;++s.actionSerial;}return;}
+  }
+  if(s.combatMovement==fo3npc::CombatAction::Reposition&&actor.aiPathIndex>=actor.aiPathGame.size())s.combatMovement=fo3npc::CombatAction::Acquire;
   if(!visible||distance>maxRange){
     // A wind-up belongs to the current line of fire. Never carry a queued
     // attack into search/pursuit and release it after regaining visibility.
     if(s.pendingAttack){s.pendingAttack=false;s.pendingHit=0;s.actionUntil=0;s.animation=fo3npc::Animation::Aim;++s.actionSerial;}
+    s.combatMovement=fo3npc::CombatAction::Acquire;s.coverUntil=-1;s.manoeuvreUntil=0;
     s.action=visible?fo3npc::CombatAction::Pursue:fo3npc::CombatAction::Search;
     const auto& point=visible?target:s.lastThreat;
     const std::array<float,3> game{gSceneCenterXQ1730+point[0]*FO3_UNITS_PER_METRE,gSceneCenterYQ1730-(point[2]-SCENE_FORWARD)*FO3_UNITS_PER_METRE,gSceneFloorZQ1730+(point[1]-FLOOR_Y)*FO3_UNITS_PER_METRE};
-    Q230CombatRoute(actor,game,false,now);Q240AdvancePath(actor,dt,now);return;
+    Q230CombatRoute(actor,game,false,now);if(!movingFire)Q240AdvancePath(actor,dt,now);return;
   }
   if(!s.pendingAttack&&s.reloadUntil<=0){
     const float minimum=d.minRange*(ranged&&style?style->rangeMin:1.f);
@@ -390,25 +432,25 @@ static void Q230SimulateActor(Q230ActorVisual& actor,double now) {
     const bool tooClose=ranged&&minimum>0&&distance<minimum;
     const bool waiting=now<s.burstWaitUntil;
     const bool active=actor.aiPathIndex<actor.aiPathGame.size()&&
-      (s.action==fo3npc::CombatAction::Reposition||s.action==fo3npc::CombatAction::Cover);
+      (s.combatMovement==fo3npc::CombatAction::Reposition||s.combatMovement==fo3npc::CombatAction::Cover);
     if(!active&&(s.action==fo3npc::CombatAction::Reposition||s.action==fo3npc::CombatAction::Cover))s.action=fo3npc::CombatAction::Aim;
     if(tooClose||waiting||active){
-      if(active){Q240AdvancePath(actor,dt,now);return;}
-      if(now>=s.nextPath){
+      if(!active&&now>=s.nextPath){
         const bool cover=waiting&&style&&style->coverChance>
           fo3npc::CombatChoice(actor.source.refFormId,s.tacticSequence++,0,100);
         if(Q230TacticalRoute(actor,game,minimum,maxRange,false,cover,now)){
           s.action=cover?fo3npc::CombatAction::Cover:fo3npc::CombatAction::Reposition;
+          s.combatMovement=s.action;s.coverUntil=-1;s.manoeuvreUntil=0;
           Q240AdvancePath(actor,dt,now);return;
         }
       }
-      if(waiting){s.speed=0;s.animation=fo3npc::Animation::Aim;s.action=fo3npc::CombatAction::Wait;return;}
+      if(waiting&&!active){s.speed=0;s.animation=fo3npc::Animation::Aim;s.action=fo3npc::CombatAction::Wait;return;}
     }
   }
   if(s.action==fo3npc::CombatAction::Acquire&&style){
     s.nextAttack=std::max(s.nextAttack,now+fo3npc::CombatChoice(actor.source.refFormId,s.fireSequence++,style->waitMin,style->waitMax));
   }
-  s.speed=0;
+  if(!movingFire)s.speed=0;
   if(s.reloadUntil>0){
     s.animation=fo3npc::Animation::Reload;Q230ActionSounds(actor,now);
     if(now>=s.reloadUntil){p.ReloadActorWeapon(actor.source.refFormId,instance);s.reloadUntil=0;s.animation=fo3npc::Animation::Aim;++s.actionSerial;
@@ -422,7 +464,7 @@ static void Q230SimulateActor(Q230ActorVisual& actor,double now) {
     Q6H_LOGI("NPC RELOAD actor=%08X weapon=%08X seconds=%.3f",actor.source.refFormId,form,float(s.reloadUntil-now));return;
   }
   if(s.pendingAttack){
-    s.animation=fo3npc::Animation::Attack;Q230ActionSounds(actor,now);
+    if(!movingFire)s.animation=fo3npc::Animation::Attack;Q230ActionSounds(actor,now);
     if(now<s.pendingHit)return;
     s.pendingAttack=false;
     const auto matrix=Q230WeaponMatrix(actor);
@@ -445,8 +487,8 @@ static void Q230SimulateActor(Q230ActorVisual& actor,double now) {
       Q6H_LOGI("NPC HIT actor=%08X target=%08X weapon=%08X damage=%.3f",actor.source.refFormId,s.combatTarget,form,damage);
     return;
   }
-  if(now<s.actionUntil){s.animation=fo3npc::Animation::Attack;Q230ActionSounds(actor,now);return;}
-  s.animation=fo3npc::Animation::Aim;s.action=fo3npc::CombatAction::Aim;
+  if(now<s.actionUntil){if(!movingFire)s.animation=fo3npc::Animation::Attack;Q230ActionSounds(actor,now);return;}
+  if(!movingFire)s.animation=fo3npc::Animation::Aim;s.action=fo3npc::CombatAction::Aim;
   const auto matrix=Q230WeaponMatrix(actor);
   const auto muzzle=fo3anim::Point(matrix,{weapon.muzzle[0]/FO3_UNITS_PER_METRE,FLOOR_Y+weapon.muzzle[2]/FO3_UNITS_PER_METRE,SCENE_FORWARD-weapon.muzzle[1]/FO3_UNITS_PER_METRE});
   const float mx=target[0]-muzzle[0],my=target[1]-muzzle[1],mz=target[2]-muzzle[2],ml=std::sqrt(mx*mx+my*my+mz*mz);
@@ -457,6 +499,6 @@ static void Q230SimulateActor(Q230ActorVisual& actor,double now) {
     s.actionStart=s.lastActionTime=now;s.pendingHit=now+hit;s.pendingAttack=true;
     s.actionUntil=now+(ranged?std::max(hit,fo3npc::ShotInterval(d,style)):(clip.stop-clip.start)/std::max(.01f,d.attackMult));
     if(!ranged)s.nextAttack=s.actionUntil;
-    s.animation=fo3npc::Animation::Attack;s.action=fo3npc::CombatAction::Attack;++s.actionSerial;
+    if(!movingFire)s.animation=fo3npc::Animation::Attack;s.action=fo3npc::CombatAction::Attack;++s.actionSerial;
   }
 }

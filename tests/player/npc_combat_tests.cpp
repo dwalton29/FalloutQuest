@@ -148,6 +148,8 @@ static void Original(const char* path) {
   assert(c.npcCombatSettings.at("fCombatFleeNormalDistance")==1400);
   assert(std::fabs(c.npcCombatSettings.at("fConfidenceAverage")-.1875f)<.0001f);
   const auto& style=c.weapons.styles.at(c.weapons.defaultCombatStyle);
+  assert(style.manoeuvresValid&&style.dodgeChance==75&&style.leftRightChance==50);
+  assert((style.manoeuvreTimers==std::array<float,8>{.5f,1.5f,.5f,1.f,.25f,.75f,.5f,1.5f}));
   assert(style.coverRadius==2048&&style.coverChance==100&&style.pauseMin==2&&style.pauseMax==2);
   // Canonical MegatonSettlerWeapon and WithAmmoAssaultRifleNPC LVLI records.
   // These were previously invisible to the combat asset-preparation loop.

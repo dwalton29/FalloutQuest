@@ -97,6 +97,10 @@ inline std::shared_ptr<Scene> BuildScene(const fo3pipdata::Definitions& d,uint32
 }
 enum class Phase {None,Approach,Enter,Loop,Exit};
 struct State {
+  // Asset scenes can belong to different preparation batches. Ownership must
+  // instead belong to the complete resident population.
+  std::shared_ptr<Reservations> residentReservations;
+  std::shared_ptr<Reservations> Pool()const{return residentReservations?residentReservations:(scene?scene->reservations:nullptr);}
   std::shared_ptr<const Scene> scene;std::shared_ptr<Lease> lease;size_t slot=SIZE_MAX;Phase phase=Phase::None;double started=0;bool interrupted=false;
   fo3anim::Transform retainedRoot;std::array<float,3> anchor{};float yaw=0;uint32_t package=0;size_t idleIndex=SIZE_MAX;double until=0;
   bool Active()const{return phase!=Phase::None;}
@@ -104,4 +108,5 @@ struct State {
   void RequestExit(){if(Active())interrupted=true;}
   void Clear(){interrupted=false;lease.reset();slot=SIZE_MAX;phase=Phase::None;retainedRoot={};package=0;idleIndex=SIZE_MAX;until=0;}
 };
+inline void JoinResidentActivities(State& arrival,const State& resident){arrival.residentReservations=resident.Pool();}
 }

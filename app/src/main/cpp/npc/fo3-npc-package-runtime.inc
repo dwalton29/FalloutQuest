@@ -338,8 +338,8 @@ static size_t Q240FurnitureTarget(const Q230ActorVisual& actor,const fo3pipdata:
     if(exact&&slot.reference!=p.location.value)continue;
     if(!exact&&p.location.type!=1&&Q240PlanarDistance(anchor,{slot.placement.x,slot.placement.y,slot.placement.z})>std::max(0,p.location.radius))continue;
     if(slot.placement.owner&&slot.placement.owner!=actor.source.baseFormId&&(!def||!def->factions.count(slot.placement.owner)))continue;
-    const uint64_t key=uint64_t(slot.reference)<<32;const auto owner=f.scene->reservations->owners.find(key);
-    if(owner!=f.scene->reservations->owners.end()&&owner->second!=actor.source.refFormId)continue;
+    const uint64_t key=uint64_t(slot.reference)<<32;const auto owner=f.Pool()->owners.find(key);
+    if(owner!=f.Pool()->owners.end()&&owner->second!=actor.source.refFormId)continue;
     const float candidate=Q240PlanarDistance(here,{slot.alignment[12],slot.alignment[13],slot.alignment[14]});if(candidate<distance){distance=candidate;best=i;}
   }return best;
 }
@@ -361,12 +361,13 @@ static size_t Q240SandboxTarget(const Q230ActorVisual& actor,const fo3pipdata::P
   const auto& d=gPlayerSession->player.Definitions().pipboy;const auto* def=fo3pipdata::ActorCategory(d,actor.source.baseFormId,1);
   std::vector<size_t> choices;
   for(size_t i=0;i<f.scene->slots.size();++i){const auto& slot=f.scene->slots[i];
+    if(slot.reference==actor.runtime.sandboxBlockedTarget&&actor.aiLastUpdate<actor.runtime.sandboxBlockedUntil)continue;
     if(slot.sleep||(slot.idleMarker?(p.typeFlags&8u)||(p.flags&0x01000000u):(p.typeFlags&16u)))continue;
     if(!slot.idleMarker&&def&&d.childRaces.count(def->race))continue;
     if(Q240PlanarDistance(anchor,{slot.placement.x,slot.placement.y,slot.placement.z})>radius)continue;
     if(slot.placement.owner&&slot.placement.owner!=actor.source.baseFormId&&(!def||!def->factions.count(slot.placement.owner)))continue;
-    const auto owner=f.scene->reservations->owners.find(uint64_t(slot.reference)<<32);
-    if(owner!=f.scene->reservations->owners.end()&&owner->second!=actor.source.refFormId)continue;
+    const auto owner=f.Pool()->owners.find(uint64_t(slot.reference)<<32);
+    if(owner!=f.Pool()->owners.end()&&owner->second!=actor.source.refFormId)continue;
     if(slot.idleMarker&&!std::any_of(slot.idles.begin(),slot.idles.end(),[&](const auto& idle){return Q240MarkerIdleEligible(actor,idle.form);}))continue;
     choices.push_back(i);
   }
@@ -893,7 +894,8 @@ static void Q240AdvancePath(Q230ActorVisual& actor,float dt,double now) {
   };
   const float movementYaw=std::atan2(-dx,-dz);
   const bool tactical=actor.runtime.activity==fo3npc::Activity::Combat&&actor.runtime.equippedWeapon&&
-    (actor.runtime.action==fo3npc::CombatAction::Reposition||actor.runtime.action==fo3npc::CombatAction::Cover);
+    (actor.runtime.action==fo3npc::CombatAction::Reposition||actor.runtime.action==fo3npc::CombatAction::Cover||
+     actor.runtime.combatMovement==fo3npc::CombatAction::Reposition||actor.runtime.combatMovement==fo3npc::CombatAction::Cover);
   const float desired=tactical?std::atan2(-(actor.runtime.lastThreat[0]-actor.runtime.position[0]),
                                         -(actor.runtime.lastThreat[2]-actor.runtime.position[2])):movementYaw;
   const float error=fo3npc::Angle(desired-actor.runtime.yaw);
@@ -927,7 +929,28 @@ static void Q240AdvancePath(Q230ActorVisual& actor,float dt,double now) {
   nextGame[1]+=(actor.aiPathGame[goal][1]-current[1])*fraction;
   int lateral=0;
 #ifdef FO3_NPC_CROWD_STEP
+  const float remaining=Q240PlanarDistance(current,actor.aiPathGame.back());
+  // Small forward steps between sidesteps must not hide a stalled endpoint.
+  if(actor.runtime.crowdBlockedSince>=0&&(remaining+16<actor.runtime.crowdProgressDistance||
+     Q240PlanarDistance(actor.runtime.crowdDestination,actor.aiPathGame.back())>1))actor.runtime.crowdBlockedSince=-1;
   if(!FO3_NPC_CROWD_STEP(actor,nextGame)){
+    if(actor.runtime.crowdBlockedSince<0){actor.runtime.crowdBlockedSince=now;actor.runtime.crowdProgressDistance=remaining;actor.runtime.crowdDestination=actor.aiPathGame.back();}
+    if(now-actor.runtime.crowdBlockedSince>=2){
+      auto& state=actor.runtime;
+      if(state.activity==fo3npc::Activity::Combat){
+        actor.aiPathGame.clear();actor.aiPathSurfaces.clear();actor.aiPathIndex=0;
+        state.nextPath=0;state.combatMovement=fo3npc::CombatAction::Acquire;state.coverUntil=-1;
+      }else{
+        const auto p=catalog.pipboy.packages.find(actor.aiPackage);
+        if(p!=catalog.pipboy.packages.end()&&(p->second.type==12||(p->second.type==5&&p->second.location.radius>0))){
+          const auto* slot=state.furniture.Selected();
+          if(slot){state.sandboxBlockedTarget=slot->reference;state.sandboxBlockedUntil=now+5;state.furniture.Clear();}
+          state.lastRoamDestination=actor.aiPathGame.back();state.hasLastRoamDestination=true;
+          actor.aiPathGame.clear();actor.aiPathSurfaces.clear();actor.aiPathIndex=0;actor.aiRepathAt=now+.5;
+        }
+      }
+      state.crowdBlockedSince=-1;state.speed=0;state.animation=fo3npc::Animation::Idle;state.procedure=fo3npc::Procedure::Waiting;return;
+    }
     // Yield around a resident only on this original corridor surface, with a
     // real world-collision check. Per-actor side preference prevents mirrored
     // head-on actors from both picking the same physical side.
@@ -1207,7 +1230,7 @@ static bool Q240AdvanceFurniture(Q230ActorVisual& actor,const fo3pipdata::Packag
   if(!f.Active()){
     const size_t target=p->type==12?Q240SandboxTarget(actor,*p,actor.runtime.evaluatedAnchor,actor.runtime.evaluatedRadius):Q240FurnitureTarget(actor,*p);if(target==SIZE_MAX){Q240PackageRouteFailed(actor,now,"furniture unavailable");return true;}
     const auto& slot=f.scene->slots[target];auto lease=std::make_shared<fo3furniture::Lease>();
-    if(!lease->Acquire(f.scene->reservations,slot.reference,slot.index,actor.source.refFormId)){Q240PackageRouteFailed(actor,now,"furniture reservation conflict");return true;}
+    if(!lease->Acquire(f.Pool(),slot.reference,slot.index,actor.source.refFormId)){Q240PackageRouteFailed(actor,now,"furniture reservation conflict");return true;}
     f.slot=target;f.lease=std::move(lease);f.phase=fo3furniture::Phase::Approach;f.started=now;f.package=id;
     if(slot.idleMarker){
       // The marker may reference several original Bethesda IDLE sequences.

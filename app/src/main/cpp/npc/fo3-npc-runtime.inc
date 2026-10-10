@@ -533,9 +533,11 @@ void Q230UpdateActor(Q230ActorVisual &actor) {
   if(locomotion&&!furniturePose&&actor.runtime.activity==fo3npc::Activity::Combat&&
      actor.runtime.action!=fo3npc::CombatAction::Flee&&actor.runtime.equippedWeapon&&
      !actor.animations[size_t(fo3npc::Animation::Aim)].tracks.empty()){
-    const auto& aim=actor.animations[size_t(fo3npc::Animation::Aim)];
+    const double actionNow=std::chrono::duration<double>(fqopaque::Clock::now().time_since_epoch()).count();
+    const bool attacking=actor.runtime.pendingAttack||actionNow<actor.runtime.actionUntil;
+    const auto& aim=actor.animations[size_t(attacking?fo3npc::Animation::Attack:fo3npc::Animation::Aim)];
     fo3anim::BindClip(actor.skeleton,aim,actor.weaponAimPose);
-    if(fo3anim::Sample(actor.skeleton,aim,0,actor.weaponAimPose))
+    if(fo3anim::Sample(actor.skeleton,aim,attacking?std::max(0.,actionNow-actor.runtime.actionStart):0,actor.weaponAimPose))
       fo3anim::OverlayBranch(actor.skeleton,actor.pose,actor.weaponAimPose,actor.chestBone);
   }
 #endif

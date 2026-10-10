@@ -46,7 +46,11 @@ void Decode(Definitions&o,const std::string&t,uint32_t id,const std::vector<uint
     if(t=="NPC_"&&k=="DNAM"&&n==28)for(size_t i=0;i<14;++i)actor.skills[i]=b[i];
     if(t=="ARMO"&&k=="DNAM"&&n==4)o.armourDR[id]=std::max(0.f,float(int16_t(fo3esm::ReadU16(b)))/100.f);
     if(t=="FACT"&&k=="XNAM"&&n==12)o.relations[id][fo3esm::ReadU32(b)]=int32_t(fo3esm::ReadU32(b+8));
-    if(t=="CSTY"&&k=="CSTD"&&n>=82)style.flags=fo3esm::ReadU16(b+80);
+    if(t=="CSTY"&&k=="CSTD"&&n>=82){
+      style.flags=fo3esm::ReadU16(b+80);style.dodgeChance=b[0];style.leftRightChance=b[1];
+      style.manoeuvresValid=style.dodgeChance<=100&&style.leftRightChance<=100;
+      for(size_t i=0;i<8;++i){style.manoeuvreTimers[i]=fo3esm::ReadF32(b+4+i*4);if(!std::isfinite(style.manoeuvreTimers[i])||style.manoeuvreTimers[i]<0)style.manoeuvresValid=false;}
+    }
     if(t=="CSTY"&&k=="CSSD"&&n==64){
       style.coverRadius=fo3esm::ReadF32(b);style.coverChance=fo3esm::ReadF32(b+4);
       style.pauseMin=fo3esm::ReadF32(b+8);style.pauseMax=fo3esm::ReadF32(b+12);
