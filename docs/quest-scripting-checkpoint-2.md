@@ -32,8 +32,11 @@ blocks selected through original base SCRI and placed reference identities.
   location. Compiled-only content is never treated as source.
 - Launcher restores a valid FQPS save rather than silently deleting it.
   Invalid saves remain untouched and writes are blocked.
+- Numeric short/int/long/float locals declared in original SCPT source now resolve
+  per owning reference/quest into the existing persistent variable store.
+  Ref-valued locals remain explicitly unsupported.
 - Added synthetic tests/player/event_script_tests.cpp with parsing,
-  transaction rollback, filters, event routing and GameMode cadence cases.
+  transaction rollback, filters, numeric-local safety, event routing and cadence cases.
 
 ## Not implemented
 
@@ -42,7 +45,7 @@ This remains a bounded event dispatcher rather than a complete Bethesda VM.
 - General OnLoad, OnTriggerEnter/Leave, OnAdd, OnEquip, SayToDone,
   package/script-effect events and SetScript.
 - GameMode on resident NPCs/objects, unloaded reference simulation.
-- Most SCPT instance-local and ref-valued variables; arbitrary event filters.
+- Ref-valued SCPT locals, unrecognised source declarations and arbitrary event filters.
 - Bytecode, compiled-only event execution, full expression/command semantics.
 - World operations such as Enable, Disable, MoveTo, EVP, Kill, scripted packages;
   UI and inventory actions such as ShowMessage, GetButtonPressed, RemoveItem;
