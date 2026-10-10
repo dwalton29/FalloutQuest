@@ -2,7 +2,7 @@
 // Compiled-only bytecode and event blocks are retained, never guessed or skipped.
 namespace fo3script {
 class Expression {
-  const fo3player::Player& p; uint32_t owner;
+  const fo3player::Player& p; uint32_t owner,scriptId;
   std::vector<std::string> tokens; size_t at=0; std::string& error;
   bool Fail(const std::string& text){if(error.empty())error=text;return false;}
   bool Atom(float& value) {
@@ -29,6 +29,7 @@ class Expression {
     }
     uint64_t key=fo3dialogue::VariableKey(d,t);
     if(!key&&owner&&t.find('.')==std::string::npos){auto q=d.quests.find(owner);if(q!=d.quests.end())key=fo3dialogue::VariableKey(d,q->second.editor+"."+t);}
+    if(!key)key=fo3script::NumericLocalKey(d,owner,scriptId,t);
     if(key){auto v=p.Snapshot().pipboy.dialogueVariables.find(key);value=v==p.Snapshot().pipboy.dialogueVariables.end()?0:v->second;return true;}
     const auto id=form(t);if(id&&p.GlobalValue(id,value))return true;
     return Fail("unsupported expression operand: "+t);
@@ -38,7 +39,7 @@ class Expression {
   bool And(float& value){if(!Compare(value))return false;while(at<tokens.size()&&tokens[at]=="&&"){++at;float b;if(!Compare(b))return false;value=value!=0&&b!=0;}return true;}
   bool Or(float& value){if(!And(value))return false;while(at<tokens.size()&&tokens[at]=="||"){++at;float b;if(!And(b))return false;value=value!=0||b!=0;}return true;}
 public:
-  Expression(const fo3player::Player& player,uint32_t o,const std::string& text,std::string& e):p(player),owner(o),error(e) {
+  Expression(const fo3player::Player& player,uint32_t o,const std::string& text,std::string& e,uint32_t sid=0):p(player),owner(o),scriptId(sid),error(e) {
     for(size_t i=0;i<text.size();) {
       if(std::isspace((unsigned char)text[i])){++i;continue;}
       const size_t start=i;const auto c=text[i];
@@ -101,10 +102,14 @@ bool Player::RunQuestStage(uint32_t id,uint16_t index,unsigned depth,unsigned& b
   }
   return true;
 }
-bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,unsigned depth,unsigned& budget,std::string& error) {
+bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,unsigned depth,unsigned& budget,std::string& error,uint32_t scriptId) {
   if(depth>=32){error="script nesting exceeded";return false;}
+  if(!scriptId && owner){
+    const auto quest=catalog_.pipboy.quests.find(owner);
+    if(quest!=catalog_.pipboy.quests.end())scriptId=quest->second.script;
+  }
   std::vector<fo3dialogue::Command> commands;
-  if(!fo3dialogue::CompileResult(catalog_.pipboy,script,commands,error))return false;
+  if(!fo3dialogue::CompileResult(catalog_.pipboy,script,commands,error,owner,scriptId))return false;
   using C=fo3dialogue::CommandType;
   // Validate all expressions and block structure, including unreachable branches.
   struct Gate {bool parent,taken,active,hasElse;};std::vector<Gate> gates;
@@ -112,7 +117,7 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
     if(c.type==C::If)gates.push_back({true,false,false,false});
     if(c.type==C::ElseIf||c.type==C::Else){if(gates.empty()||gates.back().hasElse){error="invalid else/elseif";return false;}if(c.type==C::Else)gates.back().hasElse=true;}
     if(c.type==C::EndIf){if(gates.empty()){error="orphan endif";return false;}gates.pop_back();}
-    if(c.type==C::If||c.type==C::ElseIf||c.type==C::Variable||c.type==C::Global){float v;if(!fo3script::Expression(*this,owner,c.expression,error).Evaluate(v))return false;}
+    if(c.type==C::If||c.type==C::ElseIf||c.type==C::Variable||c.type==C::Global){float v;if(!fo3script::Expression(*this,owner,c.expression,error,scriptId).Evaluate(v))return false;}
   }
   if(!gates.empty()){error="unterminated if";return false;}
   for(const auto& c:commands) {
@@ -120,7 +125,7 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
     const bool active=gates.empty()||gates.back().active;
     float value=0;
     if(c.type==C::If||c.type==C::ElseIf) {
-      if(!fo3script::Expression(*this,owner,c.expression,error).Evaluate(value))return false;
+      if(!fo3script::Expression(*this,owner,c.expression,error,scriptId).Evaluate(value))return false;
       if(c.type==C::If)gates.push_back({active,value!=0,active&&value!=0,false});
       else {auto& g=gates.back();g.active=g.parent&&!g.taken&&value!=0;g.taken|=value!=0;}
       continue;
@@ -131,7 +136,7 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
     bool ok=true;
     switch(c.type) {
     case C::Variable:case C::Global:
-      ok=fo3script::Expression(*this,owner,c.expression,error).Evaluate(value);
+      ok=fo3script::Expression(*this,owner,c.expression,error,scriptId).Evaluate(value);
       if(ok)ok=c.type==C::Variable?SetDialogueVariable(c.variable,value):SetGlobalValue(c.form,value);
       break;
     case C::EnableControls:break; // Existing VR interaction keeps controls enabled.
@@ -194,7 +199,7 @@ bool Player::RunSourceEvent(uint32_t scriptId,const char* event,uint32_t owner,
       state_=before;revision_=revision;return false;
     }
     fo3pipdata::ResultScript body;body.source=block.body;
-    if(!RunScript(body,owner,0,budget,error)){
+    if(!RunScript(body,owner,0,budget,error,scriptId)){
       error="line "+std::to_string(block.sourceLine)+": "+error;
       state_=before;revision_=revision;return false;
     }
