@@ -3141,6 +3141,9 @@ bool BeginFo3SceneLoad(const Fo3CellTransitionRequestQ74& request, bool boot) {
                 catalog.initial.gameHour=fo3devclock::kStartupGameHour;
                 result.playerSession = std::make_unique<fo3player::Session>(std::move(catalog));
                 auto& session = *result.playerSession;
+                session.player.SetScriptEventDiagnostic([](const std::string& message) {
+                    Q6H_LOGI("SCRIPT EVENT: %s",message.c_str());
+                });
                 Q6H_LOGI("DEVELOPMENT GAME START time=%02d:%02d gameHour=%.6f timeScale=%.1f",
                     fo3devclock::kStartupHour,fo3devclock::kStartupMinute,
                     session.player.Snapshot().gameHour,session.player.Definitions().gameTimeScale);
