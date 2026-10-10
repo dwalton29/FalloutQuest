@@ -310,7 +310,12 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
     const bool worldRecord = type == "REFR" || type == "DOOR" || type == "CELL";
     const bool lootRecord = type == "CONT" || type == "LVLI" || type == "GLOB";
     const bool extra = fo3pipdata::Relevant(type)||type=="ACHR"||type=="ACRE"||fo3weapon::Relevant(type);
-    const bool selected = extra || lootRecord || worldRecord || type == "TES4" ||
+    // Decode scripted base objects even if they have no other runtime data.
+    // SCRI is on the base definition; the placed REFR/ACHR/ACRE supplies identity.
+    const bool eventBase = type=="ACTI"||type=="CREA"||type=="FURN"||
+        type=="MSTT"||type=="CONT"||type=="LIGH"||type=="FLOR"||
+        type=="STAT"||type=="TERM"||type=="DOOR";
+    const bool selected = extra || eventBase || lootRecord || worldRecord || type == "TES4" ||
                           type == "GMST" || item ||
                           (type == "NPC_" && form == PlayerBase);
     if (at == 0 && type != "TES4")
@@ -325,12 +330,19 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
         return fail("Malformed ESM subrecord");
       fo3pipdata::Decode(next.pipboy,type,form,flags,payload,groupCells.empty()?0:groupCells.back(),groupWorlds.empty()?0:groupWorlds.back(),groupTopics.empty()?0:groupTopics.back());
       fo3weapon::Decode(next.weapons,type,form,payload);
+      if(eventBase||type=="NPC_"||type=="WEAP"||type=="ARMO"||
+         type=="BOOK"||type=="MISC"||type=="ALCH"||type=="KEYM"){
+        if(const auto* script=Find(subs,"SCRI");script&&script->size==4)
+          next.eventBaseScripts[form]=fo3esm::ReadU32(script->data);
+        if(type=="ACTI"||type=="TERM"||type=="FURN"||type=="DOOR")
+          next.eventBaseNames[form]=Text(subs,"FULL");
+      }
       if(type=="NPC_") {
         Container inventory;inventory.name=Text(subs,"FULL");
         inventory.valid=DecodeLoot(subs,false,inventory.entries);
         next.actorInventories[form]=std::move(inventory);
       }
-      if(type=="ACHR") {
+      if(type=="ACHR"||type=="ACRE") {
         Reference ref;ref.flags=flags;ref.cell=groupCells.empty()?0:groupCells.back();
         const auto* base=Find(subs,"NAME");if(base&&base->size==4)ref.base=fo3esm::ReadU32(base->data);
         ref.valid=ref.base!=0;next.references[form]=ref;
@@ -579,6 +591,10 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
   fo3weapon::FinalizeStatistics(next.weapons);
   fo3pipdata::FinalizeLevelledCategories(next.pipboy,next.weapons);
   fo3pipdata::Finalize(next.pipboy);
+  // Immutable event indices are generated once from source definitions.
+  // The original compiled bytes remain attached and are never inferred.
+  for(const auto& script:next.pipboy.scripts)
+    next.eventPrograms.emplace(script.first,fo3script::ParseEvents(script.second));
   // All eligible original ACHR identities must remain resolvable by actor
   // health, hostility, persistence and the unloaded scheduler. Keep their
   // full authored pose even if no quest, patrol or door currently points here.
