@@ -96,16 +96,16 @@ static void BombMenuAndInventory() {
   c.initial.skills[static_cast<size_t>(fo3player::Skill::Explosives)]=25;
   c.pipboy.scripts[102].variables={{1,"capturebutton"},{2,"button"}};
   c.pipboy.scripts[102].source=
-    "scn TestBomb\\nshort captureButton\\nshort button\\n"
-    "Begin OnActivate\\nif IsActionRef player == 1\\n"
-    "set captureButton to 1\\nshowmessage TestBombMessage\\n"
-    "endif\\nEnd\\n"
-    "Begin GameMode\\nif captureButton == 1\\n"
-    "set button to getButtonPressed\\nif button > -1\\n"
-    "set captureButton to 0\\nif button == 1\\n"
-    "if player.getItemCount TestCharge >= 1\\n"
-    "player.removeitem TestCharge 1\\nplaysound TestSound\\n"
-    "endif\\nendif\\nendif\\nendif\\nEnd\\n";
+    "scn TestBomb\nshort captureButton\nshort button\n"
+    "Begin OnActivate\nif IsActionRef player == 1\n"
+    "set captureButton to 1\nshowmessage TestBombMessage\n"
+    "endif\nEnd\n"
+    "Begin GameMode\nif captureButton == 1\n"
+    "set button to getButtonPressed\nif button > -1\n"
+    "set captureButton to 0\nif button == 1\n"
+    "if player.getItemCount TestCharge >= 1\n"
+    "player.removeitem TestCharge 1\nplaysound TestSound\n"
+    "endif\nendif\nendif\nendif\nEnd\n";
   c.eventPrograms[102]=fo3script::ParseEvents(c.pipboy.scripts[102]);
   assert(c.eventPrograms[102].error.empty());
   fo3player::Player p(std::move(c));std::string error;
@@ -122,7 +122,33 @@ static void BombMenuAndInventory() {
   uint32_t sound=0;assert(p.PollScriptSound(sound)&&sound==600&&!p.PollScriptSound(sound));
   assert(!p.SubmitScriptMessageButton(100,-1));
 }
+
+static void DisarmStagePersistence() {
+  auto c=Catalog();
+  c.pipboy.formNames["testcharge"]=400;
+  c.pipboy.formNames["simmsref"]=201;
+  c.items[400].formId=400;c.items[400].name="Fusion test charge";
+  c.items[400].questItem=true;
+  c.actorPlacements[201].base=300;
+  c.weapons.actors[300].health=100;
+  c.pipboy.quests[20].stages[30].items.push_back({});
+  c.pipboy.quests[20].stages[30].items[0].result.source=
+      "SetQuestObject TestCharge 0\n"
+      "simmsref.evp\n"
+      "RewardKarma 200\n";
+  fo3player::Player p(c);std::string error;
+  assert(p.IsQuestObject(400));
+  assert(p.ExecuteQuestStage(20,30,error)&&error.empty());
+  assert(!p.IsQuestObject(400)&&p.Snapshot().karma==200);
+  assert(p.Snapshot().pipboy.quests.at(20).stage==30);
+  const std::string path="/tmp/fq-script-stage-test.fqps";
+  assert(p.Save(path,error));
+  fo3player::Player loaded(std::move(c));
+  assert(loaded.Restore(path,error)&&!loaded.IsQuestObject(400));
+  assert(loaded.Snapshot().karma==200);
+  std::remove(path.c_str());
+}
 int main(){
-  Parsing();Dispatch();UnsupportedIsAtomic();Filter();NumericLocalsAndRefSafety();BombMenuAndInventory();
+  Parsing();Dispatch();UnsupportedIsAtomic();Filter();NumericLocalsAndRefSafety();BombMenuAndInventory();DisarmStagePersistence();
   std::cout<<"Original event source indexing, dispatch, scheduler and rollback passed\n";
 }
