@@ -87,6 +87,16 @@ bool CompileResult(const fo3pipdata::Definitions& d,const fo3pipdata::ResultScri
         else {cmd.type=op=="setobjectivedisplayed"?CommandType::ObjectiveDisplay:CommandType::ObjectiveComplete;
           if(!(in>>c)||!number(c,cmd.value)||(cmd.value!=0&&cmd.value!=1)){error="invalid objective flag";return false;}}
       }
+    } else if(op=="showmessage") {
+      cmd.type=CommandType::ShowMessage;
+      if(!(in>>a)||(cmd.form=form(a))==0){error="invalid showmessage form";return false;}
+      std::getline(in,cmd.expression);
+    } else if(op=="playsound") {
+      cmd.type=CommandType::PlaySound;
+      if(!(in>>a)||(cmd.form=form(a))==0){error="invalid playsound form";return false;}
+    } else if(op=="player.removeitem") {
+      cmd.type=CommandType::RemoveItem;
+      if(!(in>>a>>b)||(cmd.form=form(a))==0||!number(b,cmd.value)||cmd.value<1||cmd.value>100000||std::floor(cmd.value)!=cmd.value){error="invalid removeitem";return false;}
     } else if(op=="player.additem") {
       cmd.type=CommandType::AddItem;if(!(in>>a>>b)||!(cmd.form=form(a))||!number(b,cmd.value)||cmd.value<1||cmd.value>100000||std::floor(cmd.value)!=cmd.value){error="invalid additem";return false;}
     } else {error="unsupported command: "+op;return false;}

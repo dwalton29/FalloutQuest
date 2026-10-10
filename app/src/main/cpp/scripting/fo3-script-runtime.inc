@@ -27,6 +27,27 @@ class Expression {
       if(!def->second.objectives.count(uint32_t(n)))return Fail("invalid objective query");
       value=0;if(q!=qs.end()){auto o=q->second.objectives.find(uint32_t(n));if(o!=q->second.objectives.end())value=t=="getobjectivedisplayed"?o->second.displayed:o->second.status==fo3pipdata::Completion::Complete;}return true;
     }
+    if(t=="isactionref"){
+      if(at==tokens.size()||tokens[at++]!="player")return Fail("unsupported action reference");
+      value=p.ScriptActivator()==fo3player::PlayerRef;return true;
+    }
+    if(t=="player.getav"){
+      if(at==tokens.size())return Fail("missing actor value");
+      const auto name=tokens[at++];
+      static const char* skills[]={"barter","bigguns","energyweapons","explosives","lockpick","medicine","meleeweapons","repair","science","smallguns","sneak","speech","throwing","unarmed"};
+      for(size_t i=0;i<14;++i)if(name==skills[i]){value=p.Snapshot().skills[i];return true;}
+      return Fail("unsupported player actor value "+name);
+    }
+    if(t=="player.getitemcount"){
+      if(at==tokens.size())return Fail("missing item form");
+      const auto id=form(tokens[at++]);if(!id)return Fail("unresolved item form");
+      value=p.ItemCount(id);return true;
+    }
+    if(t=="getbuttonpressed"){value=p.ScriptButton();return true;}
+    if(t=="getdistance"){
+      if(at==tokens.size()||tokens[at++]!="player")return Fail("unsupported distance target");
+      return p.ScriptDistance(value)||Fail("player/reference distance unavailable");
+    }
     uint64_t key=fo3dialogue::VariableKey(d,t);
     if(!key&&owner&&t.find('.')==std::string::npos){auto q=d.quests.find(owner);if(q!=d.quests.end())key=fo3dialogue::VariableKey(d,q->second.editor+"."+t);}
     if(!key)key=fo3script::NumericLocalKey(d,owner,scriptId,t);
@@ -117,7 +138,7 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
     if(c.type==C::If)gates.push_back({true,false,false,false});
     if(c.type==C::ElseIf||c.type==C::Else){if(gates.empty()||gates.back().hasElse){error="invalid else/elseif";return false;}if(c.type==C::Else)gates.back().hasElse=true;}
     if(c.type==C::EndIf){if(gates.empty()){error="orphan endif";return false;}gates.pop_back();}
-    if(c.type==C::If||c.type==C::ElseIf||c.type==C::Variable||c.type==C::Global){float v;if(!fo3script::Expression(*this,owner,c.expression,error,scriptId).Evaluate(v))return false;}
+    if(c.type==C::If||c.type==C::ElseIf||c.type==C::Variable||c.type==C::Global||(c.type==C::ShowMessage&&!c.expression.empty())){float v;if(!fo3script::Expression(*this,owner,c.expression,error,scriptId).Evaluate(v))return false;}
   }
   if(!gates.empty()){error="unterminated if";return false;}
   for(const auto& c:commands) {
@@ -151,6 +172,13 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
         c.type==C::ObjectiveComplete?(c.value?fo3pipdata::Completion::Complete:fo3pipdata::Completion::Active):existing.status);break;
     }
     case C::AddItem:ok=Add(c.form,int32_t(c.value));break;
+    case C::RemoveItem:ok=ScriptRemoveItem(c.form,int32_t(c.value));break;
+    case C::ShowMessage: {
+      if(!c.expression.empty())ok=fo3script::Expression(*this,owner,c.expression,error,scriptId).Evaluate(value);
+      if(ok)ok=QueueScriptMessage(c.form,value,!c.expression.empty());
+      break;
+    }
+    case C::PlaySound:ok=QueueScriptSound(c.form);break;
     case C::AddTopic:if(!catalog_.pipboy.dialogueTopics.count(c.form))ok=false;else if(state_.pipboy.knownTopics.insert(c.form).second)++revision_;break;
     default:ok=false;break;
     }
@@ -189,6 +217,11 @@ bool Player::RunSourceEvent(uint32_t scriptId,const char* event,uint32_t owner,
   if(!program.error.empty()) {error=program.error;return false;}
   if(program.compiledOnly) {error="compiled-only event not supported";return false;}
   const auto before=state_;const auto revision=revision_;
+  const auto messageCount=pendingScriptMessages_.size(),soundCount=pendingScriptSounds_.size();
+  const auto previousActivator=scriptActivator_,previousReference=scriptReference_;
+  scriptActivator_=activator;scriptReference_=owner;
+  struct RestoreContext {Player& p;uint32_t activator,reference;
+    ~RestoreContext(){p.scriptActivator_=activator;p.scriptReference_=reference;}} context{*this,previousActivator,previousReference};
   unsigned budget=4096;
   for(const auto& block:program.blocks){
     if(block.event!=fo3script::Lower(event))continue;
@@ -196,14 +229,17 @@ bool Player::RunSourceEvent(uint32_t scriptId,const char* event,uint32_t owner,
     // Other filter forms need their original reference/context evaluator.
     if(!block.filter.empty() && !(block.filter=="player"&&activator==PlayerRef)){
       error="unresolved event filter '"+block.filter+"' at line "+std::to_string(block.sourceLine);
-      state_=before;revision_=revision;return false;
+      state_=before;revision_=revision;
+      pendingScriptMessages_.resize(messageCount);pendingScriptSounds_.resize(soundCount);return false;
     }
     fo3pipdata::ResultScript body;body.source=block.body;
     if(!RunScript(body,owner,0,budget,error,scriptId)){
       error="line "+std::to_string(block.sourceLine)+": "+error;
-      state_=before;revision_=revision;return false;
+      state_=before;revision_=revision;
+      pendingScriptMessages_.resize(messageCount);pendingScriptSounds_.resize(soundCount);return false;
     }
   }
+  if(fo3script::Lower(event)=="gamemode")scriptButtons_.erase(owner);
   return true;
 }
 ScriptEventResult Player::DispatchReferenceEvent(uint32_t reference,const char* event,
@@ -247,6 +283,88 @@ void Player::PumpQuestGameMode(double realSeconds) {
     std::string error;
     if(!RunSourceEvent(q->second.script,"GameMode",id,0,error))
       LogScriptEventError(q->second.script,"GameMode",error);
+  }
+}
+} // namespace fo3player
+
+namespace fo3player {
+void Player::SetScriptPlayerLocation(float x,float y,float z,uint32_t cell,uint32_t world){
+  if(!std::isfinite(x)||!std::isfinite(y)||!std::isfinite(z))return;
+  scriptPlayerPosition_={x,y,z};scriptPlayerCell_=cell;scriptPlayerWorld_=world;scriptPlayerPositionKnown_=true;
+}
+bool Player::ScriptDistance(float& distance) const {
+  const auto found=catalog_.pipboy.targets.find(scriptReference_);
+  if(!scriptPlayerPositionKnown_||found==catalog_.pipboy.targets.end())return false;
+  const auto& ref=found->second;
+  if(ref.cell!=scriptPlayerCell_ && (!ref.world||ref.world!=scriptPlayerWorld_))return false;
+  const double dx=double(ref.x)-scriptPlayerPosition_[0],dy=double(ref.y)-scriptPlayerPosition_[1],dz=double(ref.z)-scriptPlayerPosition_[2];
+  const double d=std::sqrt(dx*dx+dy*dy+dz*dz);
+  if(!std::isfinite(d)||d>std::numeric_limits<float>::max())return false;
+  distance=float(d);return true;
+}
+int Player::ScriptButton() const {
+  const auto i=scriptButtons_.find(scriptReference_);
+  return i==scriptButtons_.end()?-1:i->second;
+}
+int32_t Player::ItemCount(uint32_t form) const {
+  int64_t n=0;for(const auto& stack:state_.inventory)if(stack.formId==form)n+=stack.count;
+  return int32_t(std::min<int64_t>(INT32_MAX,n));
+}
+bool Player::ScriptRemoveItem(uint32_t form,int32_t count){
+  if(count<=0||!catalog_.items.count(form)||ItemCount(form)<count)return false;
+  // Script-origin quest item consumption is explicitly distinct from player Drop.
+  int32_t remaining=count;
+  for(auto it=state_.inventory.begin();it!=state_.inventory.end()&&remaining;){
+    if(it->formId!=form||it->equipped){++it;continue;}
+    const int32_t n=std::min(remaining,it->count);remaining-=n;it->count-=n;
+    if(!it->count)it=state_.inventory.erase(it);else ++it;
+  }
+  if(remaining)return false; // caller's event transaction restores partial removal.
+  ++revision_;return true;
+}
+bool Player::QueueScriptMessage(uint32_t form,float argument,bool hasArgument){
+  const auto m=catalog_.pipboy.messages.find(form);
+  if(m==catalog_.pipboy.messages.end()||pendingScriptMessages_.size()>=16||!scriptReference_)return false;
+  ScriptMessage request;request.form=form;request.owner=scriptReference_;request.title=m->second.title;
+  request.text=m->second.text;request.buttons=m->second.buttons;
+  if(hasArgument){
+    const auto marker=request.text.find("%.0f");
+    if(marker==std::string::npos||!std::isfinite(argument))return false;
+    char number[48];std::snprintf(number,sizeof(number),"%.0f",double(argument));
+    request.text.replace(marker,4,number);
+  }
+  if(request.text.find('%')!=std::string::npos)return false; // unknown formatting cannot be guessed
+  pendingScriptMessages_.push_back(std::move(request));return true;
+}
+bool Player::QueueScriptSound(uint32_t form){
+  if(!form||pendingScriptSounds_.size()>=16)return false;
+  pendingScriptSounds_.push_back(form);return true;
+}
+bool Player::PollScriptMessage(ScriptMessage& out){
+  if(pendingScriptMessages_.empty())return false;
+  out=std::move(pendingScriptMessages_.front());pendingScriptMessages_.erase(pendingScriptMessages_.begin());return true;
+}
+bool Player::SubmitScriptMessageButton(uint32_t owner,int index){
+  if(!owner||index<0||index>31||scriptButtons_.count(owner))return false;
+  scriptButtons_.emplace(owner,index);return true;
+}
+bool Player::PollScriptSound(uint32_t& out){
+  if(pendingScriptSounds_.empty())return false;
+  out=pendingScriptSounds_.front();pendingScriptSounds_.erase(pendingScriptSounds_.begin());return true;
+}
+void Player::PumpReferenceGameMode(double realSeconds,const std::vector<uint32_t>& resident){
+  if(!std::isfinite(realSeconds)||realSeconds<=0||realSeconds>1)return;
+  referenceScriptAccumulator_=std::min(.5,referenceScriptAccumulator_+realSeconds);
+  if(referenceScriptAccumulator_<.25)return;
+  referenceScriptAccumulator_-=.25;
+  auto ids=resident;std::sort(ids.begin(),ids.end());ids.erase(std::unique(ids.begin(),ids.end()),ids.end());
+  for(uint32_t id:ids){
+    if(!HasReferenceEvent(id,"GameMode"))continue;
+    const auto ref=catalog_.references.find(id);
+    if(ref==catalog_.references.end()||(ref->second.flags&0x820u))continue;
+    std::string error;
+    const auto sid=catalog_.eventBaseScripts.at(ref->second.base);
+    if(!RunSourceEvent(sid,"GameMode",id,0,error))LogScriptEventError(sid,"GameMode",error);
   }
 }
 } // namespace fo3player

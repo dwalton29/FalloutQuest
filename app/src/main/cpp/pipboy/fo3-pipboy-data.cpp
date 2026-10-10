@@ -77,7 +77,7 @@ std::string VoicePath(const Definitions &d, const Info &i, const Response &r,
   return "@voice:" + v->second + ":" + tail;
 }
 bool Relevant(const std::string &t) {
-  return t == "ANIO" || t == "IDLM" || t == "FURN" || t == "TERM" || t == "RADS" || t == "WRLD" || t == "PERK" || t == "QUST" ||
+  return t == "MESG" || t == "ANIO" || t == "IDLM" || t == "FURN" || t == "TERM" || t == "RADS" || t == "WRLD" || t == "PERK" || t == "QUST" ||
          t == "MGEF" || t == "TACT" || t == "INFO" || t == "DIAL" ||
          t == "RACE" || t == "FLST" || t == "IDLE" || t == "SOUN" || t == "VTYP" || t == "SCPT" || t == "NPC_" || t == "PACK";
 }
@@ -232,6 +232,13 @@ void Decode(Definitions &d, const std::string &t, uint32_t id, uint32_t flags,
     }
     d.questNames[q.editor] = id;
     d.quests[id] = std::move(q);
+  } else if (t == "MESG") {
+    MessageDefinition message;
+    message.title=Text(s,"FULL");
+    message.text=Text(s,"DESC");
+    for(const auto& sub:s)if(sub.type=="ITXT")message.buttons.push_back(fo3esm::ZString(sub.p,sub.n));
+    message.displayFlags=U(Find(s,"DNAM"));
+    d.messages[id]=std::move(message);
   } else if (t == "PERK") {
     Perk p;
     p.name = Text(s, "FULL");

@@ -116,6 +116,11 @@ struct ActorState {
   uint64_t equippedWeapon=0;
   bool dead=false;
 };
+struct ScriptMessage {
+  uint32_t form=0, owner=0;
+  std::string title,text;
+  std::vector<std::string> buttons;
+};
 struct State {
   fo3pipdata::SessionState pipboy;
   std::array<uint8_t, 7> special{};
@@ -212,6 +217,19 @@ public:
                                             uint32_t activator,std::string& error);
   bool HasReferenceEvent(uint32_t reference,const char* event) const;
   void PumpQuestGameMode(double realSeconds);
+  void PumpReferenceGameMode(double realSeconds,const std::vector<uint32_t>& resident);
+  void SetScriptPlayerLocation(float x,float y,float z,uint32_t cell,uint32_t world);
+  bool ScriptDistance(float& distance) const;
+  uint32_t ScriptActivator() const { return scriptActivator_; }
+  uint32_t ScriptReference() const { return scriptReference_; }
+  int ScriptButton() const;
+  int32_t ItemCount(uint32_t form) const;
+  bool ScriptRemoveItem(uint32_t form,int32_t count);
+  bool QueueScriptMessage(uint32_t form,float argument,bool hasArgument);
+  bool QueueScriptSound(uint32_t form);
+  bool PollScriptMessage(ScriptMessage& out);
+  bool SubmitScriptMessageButton(uint32_t owner,int index);
+  bool PollScriptSound(uint32_t& out);
   void SetScriptEventDiagnostic(std::function<void(const std::string&)> diagnostic) {
     eventDiagnostic_=std::move(diagnostic);
   }
@@ -297,7 +315,13 @@ private:
   mutable State state_;
   mutable uint64_t revision_ = 0;
   uint64_t actorPoseRevisions_ = 0;
-  double questScriptAccumulator_=0;
+  double questScriptAccumulator_=0,referenceScriptAccumulator_=0;
+  uint32_t scriptActivator_=0,scriptReference_=0,scriptPlayerCell_=0,scriptPlayerWorld_=0;
+  std::array<float,3> scriptPlayerPosition_{};
+  bool scriptPlayerPositionKnown_=false;
+  std::unordered_map<uint32_t,int> scriptButtons_;
+  std::vector<ScriptMessage> pendingScriptMessages_;
+  std::vector<uint32_t> pendingScriptSounds_;
   std::function<void(const std::string&)> eventDiagnostic_;
   std::unordered_set<std::string> reportedScriptEvents_;
 };

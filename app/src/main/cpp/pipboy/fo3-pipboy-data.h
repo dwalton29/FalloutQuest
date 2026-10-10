@@ -187,6 +187,11 @@ struct Info {
   std::vector<uint32_t> addedTopics, linksFrom;
   ResultScript begin, end;
 };
+struct MessageDefinition {
+  std::string title, text;
+  std::vector<std::string> buttons;
+  uint32_t displayFlags = 0;
+};
 struct Station {
   std::string name;
   uint32_t voice = 0, sound = 0;
@@ -220,6 +225,7 @@ struct Definitions {
   std::unordered_map<uint32_t, Quest> quests;
   std::unordered_map<uint32_t, Perk> perks;
   std::unordered_map<uint32_t, Note> notes;
+  std::unordered_map<uint32_t, MessageDefinition> messages;
   std::unordered_map<uint32_t, Ingestible> aid;
   std::unordered_map<uint32_t, Magic> magic;
   std::unordered_map<uint32_t, Station> stations;
