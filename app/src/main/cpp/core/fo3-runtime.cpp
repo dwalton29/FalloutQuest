@@ -3148,20 +3148,23 @@ bool BeginFo3SceneLoad(const Fo3CellTransitionRequestQ74& request, bool boot) {
                     fo3devclock::kStartupHour,fo3devclock::kStartupMinute,
                     session.player.Snapshot().gameHour,session.player.Definitions().gameTimeScale);
                 session.savePath = "/data/user/0/com.falloutquest.app/files/player-state.fqps";
-                // Development milestone policy: every application launch starts
-                // from Fallout3.esm's pristine player/world state. adb install -r
-                // intentionally preserves this private file across APK upgrades,
-                // which made inventory, collected REFRs, dropped weapons, actor
-                // damage and dialogue history leak between headset test builds.
-                // Delete only FalloutQuest's save; never touch files/Fallout3/.
-                errno = 0;
-                if (std::remove(session.savePath.c_str()) == 0) {
-                    Q6H_LOGI("DEVELOPMENT STATE RESET: removed %s; Fallout3 data preserved",
-                             session.savePath.c_str());
-                } else if (errno != ENOENT) {
-                    session.saveBlocked = true;
-                    Q6H_LOGE("DEVELOPMENT STATE RESET FAILED: %s errno=%d",
-                             session.savePath.c_str(), errno);
+                // Persist authored script/quest state across Quest restarts and
+                // update-compatible APK installs. Invalid saves are retained,
+                // never silently erased or replaced by pristine ESM state.
+                errno=0;
+                if(FILE* existing=std::fopen(session.savePath.c_str(),"rb")){
+                    std::fclose(existing);
+                    std::string restoreError;
+                    if(!session.player.Restore(session.savePath,restoreError)){
+                        session.saveBlocked=true;
+                        Q6H_LOGE("PLAYER RESTORE FAILED (save retained): %s",restoreError.c_str());
+                    } else {
+                        Q6H_LOGI("PLAYER RESTORED: %s",session.savePath.c_str());
+                    }
+                } else if(errno!=ENOENT){
+                    session.saveBlocked=true;
+                    Q6H_LOGE("PLAYER SAVE ACCESS FAILED: %s errno=%d",
+                             session.savePath.c_str(),errno);
                 }
                 if(!session.saveBlocked){
                     const auto census=session.player.RegisterOriginalActors();
