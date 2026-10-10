@@ -54,11 +54,15 @@ bool QueryFo3Interaction(float ox, float oy, float oz, float dx, float dy,
     }
     for (const auto& object : gObjects) {
         const bool container=catalog.containers.count(object.baseFormId)!=0;
+        // Scripted activators use their original ACTI SCRI rather than being
+        // treated as pickup items or a fabricated FalloutQuest interaction.
+        const bool scripted=object.baseRecordType=="ACTI" &&
+            player.HasReferenceEvent(object.refFormId,"OnActivate");
         // Inventory eligibility comes from the item catalog, independently
         // of whether the physics runtime supports this loose-object type.
         if (player.IsCollected(object.refFormId) ||
-            (!container && !catalog.items.count(object.baseFormId))) continue;
-        if(!container&&catalog.items.at(object.baseFormId).weapon.Firearm())continue;
+            (!container && !scripted && !catalog.items.count(object.baseFormId))) continue;
+        if(!container&&!scripted&&catalog.items.at(object.baseFormId).weapon.Firearm())continue;
         fo3interaction::Point lo{1e30f,1e30f,1e30f}, hi{-1e30f,-1e30f,-1e30f};
         for (int corner=0;corner<8;++corner) {
             const auto p = Q220TransformPoint(object.q220DynamicTransform,
@@ -73,12 +77,14 @@ bool QueryFo3Interaction(float ox, float oy, float oz, float dx, float dy,
         for (int i=0;i<3;++i) {lo[i]-=0.015f;hi[i]+=0.015f;}
         float distance;
         if (fo3interaction::Box({ox,oy,oz},{dx,dy,dz},lo,hi,3,distance) && distance<best) {
-            best=distance; target.reference=object.refFormId; target.pickup=!container;
-            target.container=container;
+            best=distance; target.reference=object.refFormId; target.pickup=!container&&!scripted;
+            target.container=container;target.scripted=scripted;
             const float panelDistance=std::max(0.0f,distance-.15f);
             target.anchor={ox+dx*panelDistance,oy+dy*panelDistance+.22f,oz+dz*panelDistance};
             target.allowed=!gPlayerSession->saveBlocked &&
-                (container ? player.CanLootContainer(target.reference) : player.CanPickup(target.reference));
+                (scripted ? (catalog.references.count(target.reference)!=0 &&
+                   (catalog.references.at(target.reference).flags&0x820u)==0)
+                  : (container ? player.CanLootContainer(target.reference) : player.CanPickup(target.reference)));
             target.door={};
         }
     }
@@ -104,6 +110,12 @@ bool QueryFo3Interaction(float ox, float oy, float oz, float dx, float dy,
         const auto& container=catalog.containers.at(ref.base);
         std::snprintf(target.prompt.data(),target.prompt.size(),"%s%s",
             ref.locked&&!target.allowed ? "Locked " : "",container.name.c_str());
+    } else if(target.scripted) {
+        const auto ref=catalog.references.find(target.reference);
+        if(ref==catalog.references.end()){target={};return false;}
+        const auto name=catalog.eventBaseNames.find(ref->second.base);
+        const auto label=name==catalog.eventBaseNames.end()?"":name->second.c_str();
+        std::snprintf(target.prompt.data(),target.prompt.size(),"Activate %s",label);
     } else if (target.pickup) {
         const auto& ref=catalog.references.find(target.reference);
         if (ref==catalog.references.end()) {target={};return false;}
@@ -176,6 +188,16 @@ bool ActivateFo3Interaction(float ox,float oy,float oz,float dx,float dy,float d
     Fo3InteractionTarget target;
     if (!QueryFo3Interaction(ox,oy,oz,dx,dy,dz,target) || !target.allowed) return false;
     if(target.talk){StartFo3Dialogue(target.reference);return false;}
+    if(target.scripted){
+        std::string error;
+        const auto status=gPlayerSession->player.DispatchReferenceEvent(
+            target.reference,"OnActivate",fo3player::PlayerRef,error);
+        // No synthesized follow-up, message panel, or door activation. The
+        // source script must complete successfully to change gameplay state.
+        if(status==fo3player::ScriptEventResult::Executed)
+            Q6H_LOGI("SCRIPT ACTIVATE: reference=%08X source=ACTI",target.reference);
+        return false;
+    }
     if (target.container) {
         // Selection comes from this frame's target; never use a previous container.
         if (gLootPanel.reference!=target.reference || gLootPanel.rows.empty()) return false;
