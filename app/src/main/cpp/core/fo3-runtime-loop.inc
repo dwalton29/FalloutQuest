@@ -1295,8 +1295,8 @@ private:
         }
 
         const float headYaw = YawFromQuaternion(headView.pose.orientation) + playerYaw_;
-        const float forward = moveY_;
-        const float strafe = moveX_;
+        const float forward = Fo3ScriptMessageFocus()?0.f:moveY_;
+        const float strafe = Fo3ScriptMessageFocus()?0.f:moveX_;
         const float c = std::cos(headYaw);
         const float s = std::sin(headYaw);
         const float velocity = MOVE_SPEED_METRES_PER_SECOND * static_cast<float>(dt);
@@ -1602,7 +1602,10 @@ private:
                 if(Fo3ScriptMessageFocus())ResetFo3Pipboy();
                 const bool dialogueControls=Fo3DialogueFocus()||scriptControls||Fo3ScriptMessageFocus();
                 UpdateFo3Dialogue(static_cast<double>(frameState.predictedDisplayTime)*1e-9,
-                    q210RightValid?lootScrollY_:0,q210RightValid&&activateDownQ1700_,q210RightValid&&pipBackDown_,sessionState_==XR_SESSION_STATE_FOCUSED);
+                    !Fo3ScriptMessageFocus()&&q210RightValid?lootScrollY_:0,
+                    !Fo3ScriptMessageFocus()&&q210RightValid&&activateDownQ1700_,
+                    !Fo3ScriptMessageFocus()&&q210RightValid&&pipBackDown_,
+                    sessionState_==XR_SESSION_STATE_FOCUSED);
                 if(dialogueControls&&activateDownQ1700_)activateLatched_=true;
                 WeaponUpdate(static_cast<double>(frameState.predictedDisplayTime)*1e-9,dialogueControls?false:pipBackDown_);
                 DeliverFo3ScriptSounds();
@@ -1828,7 +1831,7 @@ private:
                 const auto mvp=Multiply(viewProjection,model);
                 fo3dialogueui::Render(mvp.m,gScriptMessagePanel);
             }
-            if(gDialoguePanel.visible&&!IsFo3LoadingVisible()) {
+            if(gDialoguePanel.visible&&!gScriptMessagePanel.visible&&!IsFo3LoadingVisible()) {
                 const auto& panel=gDialoguePanel;Mat4 model{};const float yaw=panel.yaw;
                 model.m[0]=std::cos(yaw);model.m[2]=-std::sin(yaw);model.m[5]=1;
                 model.m[8]=std::sin(yaw);model.m[10]=std::cos(yaw);
