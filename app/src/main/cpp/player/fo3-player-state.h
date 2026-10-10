@@ -1,9 +1,11 @@
 #pragma once
 
 #include "pipboy/fo3-pipboy-session.h"
+#include "scripting/fo3-event-scripts.h"
 #include "weapons/fo3-weapon-data.h"
 #include <array>
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -143,6 +145,10 @@ struct Catalog {
   fo3pipdata::Definitions pipboy;
   std::unordered_map<uint32_t, Item> items;
   std::unordered_map<uint32_t, Reference> references;
+  // Authored base SCRI associations (actor/activator/door/other object).
+  std::unordered_map<uint32_t,uint32_t> eventBaseScripts;
+  std::unordered_map<uint32_t,std::string> eventBaseNames;
+  std::unordered_map<uint32_t,fo3script::EventProgram> eventPrograms;
   std::unordered_set<uint32_t> scriptedBases;
   std::unordered_set<uint32_t> defaultActivationDoors; // verified script passthroughs
   std::unordered_map<std::string, std::string> strings;
@@ -171,6 +177,7 @@ struct ActorCensusReport {
   size_t authored=0,registered=0,alreadyTracked=0,disabledOrConditional=0;
   size_t unsupportedBase=0,unsupportedPlacement=0,limitReached=0;
 };
+enum class ScriptEventResult : uint8_t { NoHandler, Executed, Unsupported };
 class Player {
 public:
   explicit Player(Catalog catalog);
@@ -199,6 +206,15 @@ public:
   bool RecordDialogue(uint32_t actor,uint32_t info,const std::vector<uint32_t>& topics);
   bool SetDialogueVariable(uint64_t key,float value);
   bool ExecuteDialogueResult(const fo3pipdata::ResultScript& script,std::string& error);
+  // Event scripts dispatch through the same bounded transactional interpreter.
+  // A rejected event does not roll back the preceding physical hit/activation.
+  ScriptEventResult DispatchReferenceEvent(uint32_t reference,const char* event,
+                                            uint32_t activator,std::string& error);
+  bool HasReferenceEvent(uint32_t reference,const char* event) const;
+  void PumpQuestGameMode(double realSeconds);
+  void SetScriptEventDiagnostic(std::function<void(const std::string&)> diagnostic) {
+    eventDiagnostic_=std::move(diagnostic);
+  }
   bool PreviewDialogueResult(const fo3pipdata::ResultScript&,std::string&) const;
   bool PreviewDialogueResults(const fo3pipdata::ResultScript&,const fo3pipdata::ResultScript&,std::string&) const;
   bool ExecuteQuestStage(uint32_t,uint16_t,std::string&);
@@ -269,6 +285,9 @@ public:
   bool Restore(const std::string &path, std::string &error);
 
 private:
+  bool RunSourceEvent(uint32_t scriptId,const char* event,uint32_t owner,
+                      uint32_t activator,std::string& error);
+  void LogScriptEventError(uint32_t scriptId,const char* event,const std::string& error);
   bool PrepareInventory(uint32_t reference,bool actor);
   bool MigrateWeaponInstances(State &state) const;
   bool RunScript(const fo3pipdata::ResultScript&,uint32_t owner,unsigned depth,unsigned& budget,std::string&);
@@ -278,6 +297,9 @@ private:
   mutable State state_;
   mutable uint64_t revision_ = 0;
   uint64_t actorPoseRevisions_ = 0;
+  double questScriptAccumulator_=0;
+  std::function<void(const std::string&)> eventDiagnostic_;
+  std::unordered_set<std::string> reportedScriptEvents_;
 };
 
 // Native integration owns one session for the application, across CELL/GL
