@@ -127,10 +127,10 @@ static void BombMenuAndInventory() {
   auto broken=Catalog();
   broken.pipboy.scripts[102].variables={{1,"capturebutton"}};
   broken.pipboy.scripts[102].source=
-    "scn B\\nshort captureButton\\nBegin GameMode\\n"
-    "if getButtonPressed == 1\\n"
-    "set captureButton to 7\\nplayer.removeitem TestCharge 1\\n"
-    "Enable\\nendif\\nEnd\\n";
+    "scn B\nshort captureButton\nBegin GameMode\n"
+    "if getButtonPressed == 1\n"
+    "set captureButton to 7\nplayer.removeitem TestCharge 1\n"
+    "Enable\nendif\nEnd\n";
   broken.pipboy.formNames["testcharge"]=400;
   broken.items[400].formId=400;
   broken.eventPrograms[102]=fo3script::ParseEvents(broken.pipboy.scripts[102]);
