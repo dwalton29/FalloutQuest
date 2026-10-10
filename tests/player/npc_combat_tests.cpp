@@ -105,7 +105,7 @@ static void InventoryDamagePersistence(bool finite) {
   Player restored(c);assert(restored.Restore(path,error));assert(restored.ActorWeapon(100)->id==id&&restored.Snapshot().actors.at(100).position[0]==123&&restored.ActorHealth(101)==90&&restored.Snapshot().actors.at(100).packageWaitSeconds==7.5f);
   { // Migrate the initial v7 actor extension without lifecycle flags.
     std::ifstream f(path,std::ios::binary);std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(f)),{});f.close();
-    const size_t start=bytes.size()-112-20;std::vector<uint8_t> legacy(bytes.begin(),bytes.begin()+start);
+    const size_t start=bytes.size()-112-20-8; // v12 quest extension follows the actor/calendar payloadstd::vector<uint8_t> legacy(bytes.begin(),bytes.begin()+start);
     for(size_t i=0;i<2;++i)legacy.insert(legacy.end(),bytes.begin()+start+i*56,bytes.begin()+start+i*56+48);
     auto put=[&](size_t at,uint32_t n){for(int i=0;i<4;++i)legacy[at+i]=(n>>(8*i))&255;};put(4,7);put(12,legacy.size()-20);put(16,crc32(0,legacy.data()+20,legacy.size()-20));
     std::ofstream out(path,std::ios::binary);out.write((const char*)legacy.data(),legacy.size());out.close();
@@ -113,14 +113,14 @@ static void InventoryDamagePersistence(bool finite) {
   }
   { // Revision 8 retained lifecycle but had no package-wait duration.
     assert(p.Save(path,error));std::ifstream f(path,std::ios::binary);std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(f)),{});f.close();
-    const size_t start=bytes.size()-112-20;std::vector<uint8_t> legacy(bytes.begin(),bytes.begin()+start);
+    const size_t start=bytes.size()-112-20-8; // v12 quest extension follows the actor/calendar payloadstd::vector<uint8_t> legacy(bytes.begin(),bytes.begin()+start);
     for(size_t i=0;i<2;++i)legacy.insert(legacy.end(),bytes.begin()+start+i*56,bytes.begin()+start+i*56+52);
     auto put=[&](size_t at,uint32_t n){for(int i=0;i<4;++i)legacy[at+i]=(n>>(8*i))&255;};put(4,8);put(12,legacy.size()-20);put(16,crc32(0,legacy.data()+20,legacy.size()-20));
     std::ofstream out(path,std::ios::binary);out.write((const char*)legacy.data(),legacy.size());out.close();Player v8(c);assert(v8.Restore(path,error)&&v8.Snapshot().actors.at(100).packageWaitSeconds==0);
   }
   { // Valid CRC does not authorize a NaN duration. Restore stays transactional.
     assert(p.Save(path,error));std::ifstream f(path,std::ios::binary);std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(f)),{});f.close();
-    auto put=[&](size_t at,uint32_t n){for(int i=0;i<4;++i)bytes[at+i]=(n>>(8*i))&255;};put(bytes.size()-24,0x7fc00000);put(16,crc32(0,bytes.data()+20,bytes.size()-20));
+    auto put=[&](size_t at,uint32_t n){for(int i=0;i<4;++i)bytes[at+i]=(n>>(8*i))&255;};put(bytes.size()-32,0x7fc00000);put(16,crc32(0,bytes.data()+20,bytes.size()-20));
     std::ofstream out(path,std::ios::binary);out.write((const char*)bytes.data(),bytes.size());out.close();assert(!restored.Restore(path,error)&&restored.Snapshot().actors.at(100).packageWaitSeconds==7.5f);
   }
   assert(p.ApplyAttack(0x14,10,100,10000)&&p.ActorHealth(100)==0&&p.PrepareContainer(100));

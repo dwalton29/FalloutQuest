@@ -80,12 +80,13 @@ bool Player::PreviewDialogueResults(const fo3pipdata::ResultScript& begin,const 
   // Session APIs are render-thread owned. Only mutable state/revision are touched
   // by the admitted commands. RAII restores them even if compilation throws.
   // Do not copy the immutable ESM catalogue for every visible dialogue INFO.
+  auto& preview=*const_cast<Player*>(this);
   struct Restore {State& state;uint64_t& revision;State before;uint64_t old;
     std::vector<fo3player::ScriptMessage>& messages;std::vector<uint32_t>& sounds;size_t messageCount,soundCount;
     ~Restore(){state=std::move(before);revision=old;messages.resize(messageCount);sounds.resize(soundCount);}}
-    restore{state_,revision_,state_,revision_,pendingScriptMessages_,pendingScriptSounds_,
-      pendingScriptMessages_.size(),pendingScriptSounds_.size()};
-  auto& preview=*const_cast<Player*>(this);error.clear();unsigned budget=4096;
+    restore{state_,revision_,state_,revision_,preview.pendingScriptMessages_,preview.pendingScriptSounds_,
+      preview.pendingScriptMessages_.size(),preview.pendingScriptSounds_.size()};
+  error.clear();unsigned budget=4096;
   return preview.RunScript(begin,0,0,budget,error)&&preview.RunScript(end,0,0,budget,error);
 }
 bool Player::ExecuteDialogueResult(const fo3pipdata::ResultScript& script,std::string& error) {
