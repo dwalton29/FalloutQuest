@@ -126,6 +126,10 @@ void UpdateFo3Dialogue(double now,float stick,bool a,bool b,bool focused) {
     else if(focused&&pressB)EndFo3Dialogue("B exit");
     else {
       auto ctx=DialogueContext(*actor);
+      // A is a skip request while a response is speaking, not a menu choice.
+      // Capture its phase before consuming a possible natural audio completion;
+      // one button edge may advance at most one authored response.
+      const bool skipPressed=focused&&pressA&&gDialogue.phase==fo3dialogue::Phase::Speaking;
       const auto complete=fo3audio::DialogueCompletion();
       if(complete){
         Q6H_LOGI("DIALOGUE TRANSITION actor=%08X info=%08X token=%u stage=audio-complete",gDialogue.actor,gDialogue.info,uint32_t(complete>>1));
@@ -133,6 +137,16 @@ void UpdateFo3Dialogue(double now,float stick,bool a,bool b,bool focused) {
         if(gDialogue.phase==fo3dialogue::Phase::Choices)gDialogueChoicesVisibleFrame=gStereoFrame+1;
         Q6H_LOGI("DIALOGUE TRANSITION actor=%08X info=%08X stage=choices-built phase=%d choices=%zu publishFrame=%llu",gDialogue.actor,gDialogue.info,int(gDialogue.phase),gDialogue.choices.size(),(unsigned long long)gDialogueChoicesVisibleFrame);
         if(!gDialogue.Active()){CleanupFo3Dialogue(actor->source.refFormId,"voice/goodbye complete");}
+      } else if(skipPressed){
+        const uint32_t skipped=gDialogue.audioToken;
+        // Stop the Android MediaPlayer/LIP for this token before publishing
+        // the next voice. Late Android completion callbacks are token-gated.
+        fo3audio::DialogueStop();
+        Q6H_LOGI("DIALOGUE SKIP actor=%08X info=%08X response=%zu token=%u",
+          gDialogue.actor,gDialogue.info,gDialogue.response,skipped);
+        gDialogue.AudioDone(skipped,true,ctx,gPlayerSession->player);
+        if(gDialogue.phase==fo3dialogue::Phase::Choices)gDialogueChoicesVisibleFrame=gStereoFrame+1;
+        if(!gDialogue.Active())CleanupFo3Dialogue(actor->source.refFormId,"skipped authored goodbye");
       }
       if(gDialogue.Active()) {
         const bool choicesDeferred=gDialogue.phase==fo3dialogue::Phase::Choices&&gStereoFrame<gDialogueChoicesVisibleFrame;
@@ -141,7 +155,7 @@ void UpdateFo3Dialogue(double now,float stick,bool a,bool b,bool focused) {
         if(gDialogue.phase==fo3dialogue::Phase::Choices&&!choicesDeferred) {
           const auto before=gDialogueCursor.selected;gDialogueCursor.Scroll(stick,now,gDialogue.choices.size());
           if(before!=gDialogueCursor.selected)fo3audio::Scroll();gDialogue.selected=gDialogueCursor.selected;
-          if(focused&&pressA&&gDialogue.Choose(gDialogue.selected,ctx,gPlayerSession->player)){fo3audio::NamedSound("UIMenuOK");FlushFo3PlayerState();}
+          if(focused&&pressA&&!skipPressed&&gDialogue.Choose(gDialogue.selected,ctx,gPlayerSession->player)){fo3audio::NamedSound("UIMenuOK");FlushFo3PlayerState();}
         }
         if(!gDialogue.Active())CleanupFo3Dialogue(actor->source.refFormId,"choice result rejected");
         else {
