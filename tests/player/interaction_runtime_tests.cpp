@@ -2,6 +2,7 @@
 #include "ui/interaction/fo3-item-notifications.h"
 #include "player/fo3-player-state.h"
 #include "npc/fo3-npc-state.h"
+#include "dialogue/fo3-dialogue-panel.h"
 // Reproduce the Android platform far macro that caused the native build
 // failure.
 #define far
@@ -17,6 +18,8 @@
 #include <stdexcept>
 namespace fo3audio {
 int pickups = 0, opens = 0, closes = 0, scrolls = 0;
+void SoundEvent(uint32_t) {}
+void NamedSound(const std::string&) {}
 void Pickup(uint32_t) { ++pickups; }
 void Open(uint32_t) { ++opens; }
 void Close(uint32_t) { ++closes; }
@@ -28,6 +31,7 @@ struct Vec3 {
 };
 struct GpuObject {
   bool q220LooseObject = true;
+  std::string baseRecordType;
   uint32_t refFormId = 10, baseFormId = 100;
   float minX = -.1f, maxX = .1f, minY = -.1f, maxY = .1f, minZ = -1.1f,
         maxZ = -.9f;

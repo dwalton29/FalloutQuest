@@ -82,7 +82,47 @@ static void NumericLocalsAndRefSafety() {
   assert(r.DispatchReferenceEvent(100,"OnActivate",0x14,error)==fo3player::ScriptEventResult::Unsupported);
   assert(r.Snapshot().pipboy.dialogueVariables.empty());
 }
+static void BombMenuAndInventory() {
+  auto c=Catalog();
+  c.pipboy.messages[500].title="Original test bomb";
+  c.pipboy.messages[500].text="Select a response.";
+  c.pipboy.messages[500].buttons={"Leave","Consume charge"};
+  c.pipboy.formNames["testbombmessage"]=500;
+  c.pipboy.formNames["testcharge"]=400;
+  c.pipboy.formNames["testsound"]=600;
+  c.items[400].formId=400;c.items[400].name="Test charge";
+  c.items[400].kind=fo3player::ItemKind::Misc;
+  c.items[400].questItem=true;
+  c.initial.skills[static_cast<size_t>(fo3player::Skill::Explosives)]=25;
+  c.pipboy.scripts[102].variables={{1,"capturebutton"},{2,"button"}};
+  c.pipboy.scripts[102].source=
+    "scn TestBomb\\nshort captureButton\\nshort button\\n"
+    "Begin OnActivate\\nif IsActionRef player == 1\\n"
+    "set captureButton to 1\\nshowmessage TestBombMessage\\n"
+    "endif\\nEnd\\n"
+    "Begin GameMode\\nif captureButton == 1\\n"
+    "set button to getButtonPressed\\nif button > -1\\n"
+    "set captureButton to 0\\nif button == 1\\n"
+    "if player.getItemCount TestCharge >= 1\\n"
+    "player.removeitem TestCharge 1\\nplaysound TestSound\\n"
+    "endif\\nendif\\nendif\\nendif\\nEnd\\n";
+  c.eventPrograms[102]=fo3script::ParseEvents(c.pipboy.scripts[102]);
+  assert(c.eventPrograms[102].error.empty());
+  fo3player::Player p(std::move(c));std::string error;
+  assert(p.Add(400,1));
+  assert(p.DispatchReferenceEvent(100,"OnActivate",fo3player::PlayerRef,error)==fo3player::ScriptEventResult::Executed);
+  fo3player::ScriptMessage m;
+  assert(p.PollScriptMessage(m)&&m.form==500&&m.owner==100&&m.buttons.size()==2);
+  assert(p.ItemCount(400)==1);
+  p.PumpReferenceGameMode(.25,{100});
+  assert(p.ItemCount(400)==1&&!p.PollScriptMessage(m));
+  assert(p.SubmitScriptMessageButton(100,1));
+  p.PumpReferenceGameMode(.25,{100});
+  assert(p.ItemCount(400)==0&&p.ScriptButton()==-1);
+  uint32_t sound=0;assert(p.PollScriptSound(sound)&&sound==600&&!p.PollScriptSound(sound));
+  assert(!p.SubmitScriptMessageButton(100,-1));
+}
 int main(){
-  Parsing();Dispatch();UnsupportedIsAtomic();Filter();NumericLocalsAndRefSafety();
+  Parsing();Dispatch();UnsupportedIsAtomic();Filter();NumericLocalsAndRefSafety();BombMenuAndInventory();
   std::cout<<"Original event source indexing, dispatch, scheduler and rollback passed\n";
 }

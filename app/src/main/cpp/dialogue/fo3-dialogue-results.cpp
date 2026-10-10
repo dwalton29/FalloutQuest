@@ -5,6 +5,8 @@
 #include <cmath>
 #include <functional>
 #include <algorithm>
+#include <cstdio>
+#include <limits>
 namespace fo3dialogue {
 // The player's explicit Talk action dispatches the NPC's OnActivate event.
 // Interpret only a validated local-variable/player-activator subset. GameMode,
