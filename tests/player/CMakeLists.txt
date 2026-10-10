@@ -121,6 +121,13 @@ get_target_property(dialogue_shared player_state_tests SOURCES)
 list(REMOVE_ITEM dialogue_shared player_state_tests.cpp)
 target_sources(dialogue_tests PRIVATE ${dialogue_shared})
 add_test(NAME dialogue_tests COMMAND dialogue_tests)
+add_executable(event_script_tests event_script_tests.cpp ${dialogue_shared})
+target_compile_features(event_script_tests PRIVATE cxx_std_17)
+target_compile_options(event_script_tests PRIVATE -Wall -Wextra -Werror)
+target_include_directories(event_script_tests PRIVATE ../../app/src/main/cpp)
+target_link_libraries(event_script_tests PRIVATE ZLIB::ZLIB)
+add_test(NAME event_script_tests COMMAND event_script_tests)
+
 
 # Authored NPC-to-NPC ambient HELLO selector, without executing quest
 # results or substituting the player as the conversation partner.
