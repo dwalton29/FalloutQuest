@@ -154,3 +154,94 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
   return true;
 }
 }
+
+
+namespace fo3player {
+bool Player::HasReferenceEvent(uint32_t reference,const char* event) const {
+  if(!event||!reference)return false;
+  const auto placed=catalog_.references.find(reference);
+  if(placed==catalog_.references.end())return false;
+  const auto script=catalog_.eventBaseScripts.find(placed->second.base);
+  if(script==catalog_.eventBaseScripts.end())return false;
+  const auto program=catalog_.eventPrograms.find(script->second);
+  if(program==catalog_.eventPrograms.end())return false;
+  const auto name=fo3script::Lower(event);
+  for(const auto& b:program->second.blocks)if(b.event==name)return true;
+  return false;
+}
+void Player::LogScriptEventError(uint32_t scriptId,const char* event,const std::string& error) {
+  const auto key=std::to_string(scriptId)+":"+fo3script::Lower(event?event:"")+":"+error;
+  if(reportedScriptEvents_.size()<4096 && !reportedScriptEvents_.insert(key).second)return;
+  if(eventDiagnostic_)
+    eventDiagnostic_("SCPT "+std::to_string(scriptId)+" event="+(event?event:"")+" rejected: "+error);
+}
+bool Player::RunSourceEvent(uint32_t scriptId,const char* event,uint32_t owner,
+                            uint32_t activator,std::string& error) {
+  error.clear();
+  const auto def=catalog_.eventPrograms.find(scriptId);
+  if(def==catalog_.eventPrograms.end()) {error="script definition unavailable";return false;}
+  const auto& program=def->second;
+  if(!program.error.empty()) {error=program.error;return false;}
+  if(program.compiledOnly) {error="compiled-only event not supported";return false;}
+  const auto before=state_;const auto revision=revision_;
+  unsigned budget=4096;
+  for(const auto& block:program.blocks){
+    if(block.event!=fo3script::Lower(event))continue;
+    // A filtered event must not execute without a correctly resolved actor.
+    // Other filter forms need their original reference/context evaluator.
+    if(!block.filter.empty() && !(block.filter=="player"&&activator==PlayerRef)){
+      error="unresolved event filter '"+block.filter+"' at line "+std::to_string(block.sourceLine);
+      state_=before;revision_=revision;return false;
+    }
+    fo3pipdata::ResultScript body;body.source=block.body;
+    if(!RunScript(body,owner,0,budget,error)){
+      error="line "+std::to_string(block.sourceLine)+": "+error;
+      state_=before;revision_=revision;return false;
+    }
+  }
+  return true;
+}
+ScriptEventResult Player::DispatchReferenceEvent(uint32_t reference,const char* event,
+                                                  uint32_t activator,std::string& error) {
+  error.clear();
+  if(!HasReferenceEvent(reference,event))return ScriptEventResult::NoHandler;
+  const auto& ref=catalog_.references.at(reference);
+  const auto scriptId=catalog_.eventBaseScripts.at(ref.base);
+  if(!RunSourceEvent(scriptId,event,reference,activator,error)){
+    LogScriptEventError(scriptId,event,error);
+    return ScriptEventResult::Unsupported;
+  }
+  return ScriptEventResult::Executed;
+}
+void Player::PumpQuestGameMode(double realSeconds) {
+  if(!std::isfinite(realSeconds)||realSeconds<=0||realSeconds>1)return;
+  // Script cadence belongs to the simulation, never each stereo eye.
+  // 4 Hz is a bounded Quest adaptation, not a claim of PC GameMode parity.
+  questScriptAccumulator_=std::min(0.5,questScriptAccumulator_+realSeconds);
+  if(questScriptAccumulator_<0.25)return;
+  questScriptAccumulator_-=0.25;
+  std::vector<uint32_t> ids;
+  for(const auto& q:catalog_.pipboy.quests){
+    if(!q.second.script)continue;
+    const auto script=catalog_.eventPrograms.find(q.second.script);
+    if(script==catalog_.eventPrograms.end())continue;
+    bool hasGameMode=false;
+    for(const auto& b:script->second.blocks)if(b.event=="gamemode"){hasGameMode=true;break;}
+    if(!hasGameMode)continue;
+    const auto saved=state_.pipboy.quests.find(q.first);
+    if(saved!=state_.pipboy.quests.end()?saved->second.running:bool(q.second.flags&1))
+      ids.push_back(q.first);
+  }
+  std::sort(ids.begin(),ids.end());
+  for(const auto id:ids){
+    const auto q=catalog_.pipboy.quests.find(id);
+    if(q==catalog_.pipboy.quests.end())continue;
+    // Nested result scripts can stop another quest in the selected set.
+    const auto saved=state_.pipboy.quests.find(id);
+    if(!(saved!=state_.pipboy.quests.end()?saved->second.running:bool(q->second.flags&1)))continue;
+    std::string error;
+    if(!RunSourceEvent(q->second.script,"GameMode",id,0,error))
+      LogScriptEventError(q->second.script,"GameMode",error);
+  }
+}
+} // namespace fo3player
