@@ -57,6 +57,60 @@ static void PrepareSynthetic(){
   gPlayerSession=std::make_unique<Session>(c);gQ230NpcActors={actor};gQ210Head=actor.runtime.position;
   Q240UpdateNpcPackage(gQ230NpcActors[0],clockTime);Tick();
 }
+static void SkipWithA(){
+  PrepareSynthetic();
+  auto catalog=gPlayerSession->player.Definitions();
+  auto& greeting=catalog.pipboy.topics.at(80).front();
+  greeting.flags=0; // Continue to one authored player option after the responses.
+  greeting.responses.push_back({0,2,"Second authored spoken response"});
+  greeting.links={91};
+  catalog.pipboy.dialogueTopics[91].text="Authored follow-up";
+  fo3pipdata::Info followup=greeting;
+  followup.id=92;followup.topic=91;followup.flags=1;
+  followup.responses.resize(1);followup.links.clear();
+  catalog.pipboy.topics[91]={followup};
+  gPlayerSession=std::make_unique<Session>(catalog);
+  auto& actor=gQ230NpcActors[0];
+  Tick(false);
+  assert(StartFo3Dialogue(42));
+  const auto first=gDialogue.audioToken;
+  const int initialStops=stopped;
+  Tick(true); // A stops the first response and publishes the second.
+  assert(stopped==initialStops+1&&gDialogue.Active());
+  assert(gDialogue.phase==fo3dialogue::Phase::Speaking);
+  assert(gDialogue.info==82&&gDialogue.response==1&&gDialogue.audioToken!=first);
+  assert(fo3audio::published==gDialogue.audioToken);
+  assert(!fo3audio::completion.Done(first,true)); // old platform callback is stale
+  const auto second=gDialogue.audioToken;
+  Tick(true); // Holding A is not another button edge.
+  assert(gDialogue.response==1&&gDialogue.audioToken==second);
+  Tick(false);
+  Tick(true); // Skip last response: do not also pick the first choice.
+  assert(gDialogue.Active()&&gDialogue.phase==fo3dialogue::Phase::Choices);
+  assert(gDialogue.choices.size()==1&&gDialogue.choices[0].topic==91);
+  assert(gDialogue.info==82&&gDialogueChoicesVisibleFrame>gStereoFrame);
+  assert(!fo3audio::completion.Done(second,true));
+  Tick(true);
+  assert(gDialogue.info==82&&gDialogue.phase==fo3dialogue::Phase::Choices);
+  Tick(false); // Reveal options after the transition frame.
+  assert(gDialoguePanel.choices.size()==1);
+  Tick(true); // A in Choices should continue behaving as selection.
+  assert(gDialogue.info==92&&gDialogue.phase==fo3dialogue::Phase::Speaking);
+  Tick(false);
+  const auto last=gDialogue.audioToken;
+  Tick(true); // Skipping authored GOODBYE runs its normal end transition.
+  assert(!gDialogue.Active()&&!fo3audio::completion.Done(last,true));
+  Clean();assert(actor.runtime.activity==fo3npc::Activity::Package);
+  Tick(false);
+  // A and natural audio completion on the same frame must not double-skip.
+  assert(StartFo3Dialogue(42));
+  const auto natural=gDialogue.audioToken;
+  assert(fo3audio::completion.Done(natural,true));
+  Tick(true);
+  assert(gDialogue.phase==fo3dialogue::Phase::Speaking);
+  assert(gDialogue.response==1&&gDialogue.audioToken!=natural);
+  Tick(false,true);Tick();Clean();
+}
 static void Synthetic(){
   PrepareSynthetic();auto& actor=gQ230NpcActors[0];
   uint32_t old=0;
@@ -109,4 +163,4 @@ static void OriginalBridge(const char* path){
   assert(StartFo3Dialogue(0x3b46));Speak();Tick(false,true);Tick();Clean();
   std::cout<<"Original Lucas production bridge: handshake, three reentries, package movement and post-combat reentry passed\n";
 }
-int main(int argc,char** argv){Synthetic();if(argc>1)OriginalBridge(argv[1]);std::cout<<"Dialogue bridge lifecycle tests passed\n";}
+int main(int argc,char** argv){Synthetic();SkipWithA();if(argc>1)OriginalBridge(argv[1]);std::cout<<"Dialogue bridge lifecycle tests passed\n";}
