@@ -73,6 +73,7 @@ bool CompileResult(const fo3pipdata::Definitions& d,const fo3pipdata::ResultScri
     else if(op=="set") {
       if(!(in>>a>>b)||b!="to"){error="invalid assignment: "+line;return false;}
       std::getline(in,cmd.expression);cmd.variable=VariableKey(d,a);
+      if(!cmd.variable)cmd.variable=fo3script::NumericLocalKey(d,owner,scriptId,a);
       if(!cmd.variable){cmd.form=form(a);cmd.type=CommandType::Global;if(!cmd.form){error="unresolved assignment: "+a;return false;}}
     } else if(op=="stopquest"||op=="startquest"||op=="setstage"||op=="completequest"||op=="setobjectivedisplayed"||op=="setobjectivecompleted"||op=="addtopic") {
       if(!(in>>a)||(cmd.form=form(a))==0){error="unresolved form: "+line;return false;}
