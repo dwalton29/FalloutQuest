@@ -266,8 +266,15 @@ bool Player::ApplyAttack(uint32_t attacker,uint32_t base,uint32_t target,float d
   if(target==0x14)return DamageHealth(applied);
   state_.actorDamage[target]+=applied;
   SetActorHostile(target,attacker);
-  if(applied>=health&&!Essential(target)){auto actor=state_.actors.find(target);if(actor!=state_.actors.end()){actor->second.dead=true;actor->second.packageWaitSeconds=0;}}
-  ++revision_;return true;
+  const bool died=applied>=health&&!Essential(target);
+  if(died){auto actor=state_.actors.find(target);if(actor!=state_.actors.end()){actor->second.dead=true;actor->second.packageWaitSeconds=0;}}
+  ++revision_;
+  // Source scripts receive gameplay events once, after the canonical damage
+  // transition. Unsupported scripts never undo physical combat damage.
+  std::string scriptError;
+  DispatchReferenceEvent(target,"OnHit",attacker,scriptError);
+  if(died)DispatchReferenceEvent(target,"OnDeath",attacker,scriptError);
+  return true;
 }
 bool Player::UpdateActor(uint32_t reference,const ActorState& a) {
   const auto t=catalog_.pipboy.targets.find(reference);
