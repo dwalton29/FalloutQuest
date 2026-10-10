@@ -81,19 +81,26 @@ bool Player::PreviewDialogueResults(const fo3pipdata::ResultScript& begin,const 
   // by the admitted commands. RAII restores them even if compilation throws.
   // Do not copy the immutable ESM catalogue for every visible dialogue INFO.
   struct Restore {State& state;uint64_t& revision;State before;uint64_t old;
-    ~Restore(){state=std::move(before);revision=old;}} restore{state_,revision_,state_,revision_};
+    std::vector<fo3player::ScriptMessage>& messages;std::vector<uint32_t>& sounds;size_t messageCount,soundCount;
+    ~Restore(){state=std::move(before);revision=old;messages.resize(messageCount);sounds.resize(soundCount);}}
+    restore{state_,revision_,state_,revision_,pendingScriptMessages_,pendingScriptSounds_,
+      pendingScriptMessages_.size(),pendingScriptSounds_.size()};
   auto& preview=*const_cast<Player*>(this);error.clear();unsigned budget=4096;
   return preview.RunScript(begin,0,0,budget,error)&&preview.RunScript(end,0,0,budget,error);
 }
 bool Player::ExecuteDialogueResult(const fo3pipdata::ResultScript& script,std::string& error) {
   error.clear();const auto before=state_;const auto revision=revision_;unsigned budget=4096;
+  const auto messages=pendingScriptMessages_.size(),sounds=pendingScriptSounds_.size();
   if(RunScript(script,0,0,budget,error))return true;
-  state_=before;revision_=revision;return false;
+  state_=before;revision_=revision;pendingScriptMessages_.resize(messages);
+  pendingScriptSounds_.resize(sounds);return false;
 }
 bool Player::ExecuteQuestStage(uint32_t id,uint16_t stage,std::string& error) {
   error.clear();const auto before=state_;const auto revision=revision_;unsigned budget=4096;
+  const auto messages=pendingScriptMessages_.size(),sounds=pendingScriptSounds_.size();
   if(RunQuestStage(id,stage,0,budget,error))return true;
-  state_=before;revision_=revision;return false;
+  state_=before;revision_=revision;pendingScriptMessages_.resize(messages);
+  pendingScriptSounds_.resize(sounds);return false;
 }
 bool Player::RunQuestStage(uint32_t id,uint16_t index,unsigned depth,unsigned& budget,std::string& error) {
   auto fail=[&](const std::string& s){error="QUST "+std::to_string(id)+" stage "+std::to_string(index)+": "+s;return false;};
@@ -178,7 +185,7 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
     case C::EvaluatePackage:ok=ReevaluatePackage(c.form);break;
     case C::ShowMessage: {
       if(!c.expression.empty())ok=fo3script::Expression(*this,owner,c.expression,error,scriptId).Evaluate(value);
-      if(ok)ok=QueueScriptMessage(c.form,value,!c.expression.empty());
+      if(ok)ok=QueueScriptMessage(c.form,value,!c.expression.empty(),owner);
       break;
     }
     case C::PlaySound:ok=QueueScriptSound(c.form);break;
@@ -353,10 +360,11 @@ bool Player::ScriptRemoveItem(uint32_t form,int32_t count){
   if(remaining)return false; // caller's event transaction restores partial removal.
   ++revision_;return true;
 }
-bool Player::QueueScriptMessage(uint32_t form,float argument,bool hasArgument){
+bool Player::QueueScriptMessage(uint32_t form,float argument,bool hasArgument,uint32_t owner){
   const auto m=catalog_.pipboy.messages.find(form);
-  if(m==catalog_.pipboy.messages.end()||pendingScriptMessages_.size()>=16||!scriptReference_)return false;
-  ScriptMessage request;request.form=form;request.owner=scriptReference_;request.title=m->second.title;
+  if(m==catalog_.pipboy.messages.end()||pendingScriptMessages_.size()>=16||
+     (!scriptReference_&&!owner))return false;
+  ScriptMessage request;request.form=form;request.owner=scriptReference_?scriptReference_:owner;request.title=m->second.title;
   request.text=m->second.text;request.buttons=m->second.buttons;
   if(hasArgument){
     const auto marker=request.text.find("%.0f");

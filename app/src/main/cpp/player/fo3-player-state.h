@@ -231,7 +231,7 @@ public:
   bool SetQuestObject(uint32_t form,bool quest);
   bool RewardKarma(float amount);
   bool ReevaluatePackage(uint32_t reference);
-  bool QueueScriptMessage(uint32_t form,float argument,bool hasArgument);
+  bool QueueScriptMessage(uint32_t form,float argument,bool hasArgument,uint32_t owner);
   bool QueueScriptSound(uint32_t form);
   bool PollScriptMessage(ScriptMessage& out);
   bool SubmitScriptMessageButton(uint32_t owner,int index);
