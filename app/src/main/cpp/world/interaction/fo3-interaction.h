@@ -7,7 +7,7 @@
 struct Fo3InteractionTarget {
   uint32_t reference = 0;
   bool pickup = false, allowed = false;
-  bool container = false,talk=false;
+  bool container = false,talk=false,scripted=false;
   std::array<float,3> anchor{};
   float distance = 0;
   Fo3DoorAimQ1700 door;
