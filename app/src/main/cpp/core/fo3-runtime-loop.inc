@@ -1491,12 +1491,19 @@ private:
                         gCurrentCellFormId,gExteriorWorldspaceQ1890);
                     const auto beforeScripts=scriptPlayer.Revision();
                     scriptPlayer.PumpQuestGameMode(seconds);
-                    std::vector<uint32_t> scriptedResidents;
-                    for(const auto& object:gObjects)
-                        if(object.baseRecordType=="ACTI" && object.refFormId &&
-                            scriptPlayer.HasReferenceEvent(object.refFormId,"GameMode"))
-                            scriptedResidents.push_back(object.refFormId);
-                    scriptPlayer.PumpReferenceGameMode(seconds,scriptedResidents);
+                    // Build the authored resident set only on the 4 Hz script
+                    // cadence; never scan scene meshes at the OpenXR frame rate.
+                    static double scriptResidenceElapsed=0;
+                    scriptResidenceElapsed=std::min(.5,scriptResidenceElapsed+seconds);
+                    if(scriptResidenceElapsed>=.25){
+                        std::vector<uint32_t> scriptedResidents;
+                        for(const auto& object:gObjects)
+                            if(object.baseRecordType=="ACTI" && object.refFormId &&
+                                scriptPlayer.HasReferenceEvent(object.refFormId,"GameMode"))
+                                scriptedResidents.push_back(object.refFormId);
+                        scriptPlayer.PumpReferenceGameMode(scriptResidenceElapsed,scriptedResidents);
+                        scriptResidenceElapsed=0;
+                    }
                     if(beforeScripts!=scriptPlayer.Revision())FlushFo3PlayerState();
                 }
                 previousWorldClockNs=clockNs;
