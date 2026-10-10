@@ -361,7 +361,7 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
         next.lootFingerprint =
             static_cast<uint32_t>(crc32(next.lootFingerprint, payload.data(),
                                         static_cast<uInt>(payload.size())));
-      } else if (!worldRecord && (!extra || (type=="NPC_"&&form==PlayerBase))) {
+      } else if (!worldRecord && !eventBase && (!extra || (type=="NPC_"&&form==PlayerBase))) {
         fingerprint = static_cast<uint32_t>(crc32(fingerprint, h, sizeof(h)));
         fingerprint = static_cast<uint32_t>(crc32(
             fingerprint, payload.data(), static_cast<uInt>(payload.size())));
