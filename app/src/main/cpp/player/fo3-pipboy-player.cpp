@@ -22,6 +22,13 @@ bool Player::GrantPerk(uint32_t id, uint8_t rank) {
   ++revision_;
   return true;
 }
+bool Player::EnsureQuestInstance(uint32_t id) {
+  auto def=catalog_.pipboy.quests.find(id);if(def==catalog_.pipboy.quests.end())return false;
+  if(!state_.pipboy.quests.count(id)) {
+    state_.pipboy.quests[id]={};state_.pipboy.quests.at(id).running=bool(def->second.flags&1);++revision_;
+  }
+  return true;
+}
 bool Player::StartQuest(uint32_t id) {
   if (!catalog_.pipboy.quests.count(id))
     return false;
@@ -29,18 +36,24 @@ bool Player::StartQuest(uint32_t id) {
     state_.pipboy.quests[id] = {};
     ++revision_;
   }
+  if(!state_.pipboy.quests.at(id).running){state_.pipboy.quests.at(id).running=true;++revision_;}
   return true;
 }
-bool Player::SetQuestStage(uint32_t id, uint16_t stage) {
-  auto q = catalog_.pipboy.quests.find(id);
-  if (q == catalog_.pipboy.quests.end() || !q->second.stages.count(stage) ||
-      !state_.pipboy.quests.count(id))
-    return false;
-  auto &s = state_.pipboy.quests.at(id);
-  s.stage = stage;
-  s.stages.insert(stage);
-  ++revision_;
-  return true;
+bool Player::SetQuestStage(uint32_t id,uint16_t stage) {
+  // Compatibility API remains explicit about needing a running instance.
+  if(!state_.pipboy.quests.count(id))return false;
+  std::string error;return ExecuteQuestStage(id,stage,error);
+}
+bool Player::StopQuest(uint32_t id) {
+  if(!catalog_.pipboy.quests.count(id))return false;
+  if(!state_.pipboy.quests.count(id))state_.pipboy.quests[id]={};
+  state_.pipboy.quests.at(id).running=false;++revision_;return true;
+}
+bool Player::SetGlobalValue(uint32_t id,float value) {
+  if(!catalog_.globals.count(id)||!std::isfinite(value))return false;
+  // Clock globals have canonical clock setters; do not shadow those systems.
+  if(id==catalog_.hourGlobal||id==catalog_.dayGlobal||id==catalog_.monthGlobal||id==catalog_.yearGlobal||id==catalog_.daysPassedGlobal||id==catalog_.timeScaleGlobal)return false;
+  state_.pipboy.mutableGlobals[id]=value;++revision_;return true;
 }
 bool Player::SetObjective(uint32_t id, uint32_t index, bool displayed,
                           fo3pipdata::Completion status) {

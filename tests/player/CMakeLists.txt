@@ -231,3 +231,12 @@ target_compile_features(health_bar_state_tests PRIVATE cxx_std_17)
 target_compile_options(health_bar_state_tests PRIVATE -Wall -Wextra -Werror)
 target_include_directories(health_bar_state_tests PRIVATE ../../app/src/main/cpp)
 add_test(NAME health_bar_state_tests COMMAND health_bar_state_tests)
+
+# Every consumer of the quest Player API links the shared script implementation.
+get_property(player_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
+foreach(target IN LISTS player_targets)
+ get_target_property(sources ${target} SOURCES)
+ if("../../app/src/main/cpp/player/fo3-pipboy-player.cpp" IN_LIST sources AND NOT "../../app/src/main/cpp/dialogue/fo3-dialogue-results.cpp" IN_LIST sources)
+  target_sources(${target} PRIVATE ../../app/src/main/cpp/dialogue/fo3-dialogue-conditions.cpp ../../app/src/main/cpp/dialogue/fo3-dialogue-results.cpp)
+ endif()
+endforeach()

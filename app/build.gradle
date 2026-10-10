@@ -22,8 +22,8 @@ android {
         applicationId 'com.falloutquest.app'
         minSdk 29
         targetSdk 35
-        versionCode 201
-        versionName '0.65.0-npc-tactics-congestion'
+        versionCode 202
+        versionName '0.66.0-quest-script-foundation'
 
         ndk {
             abiFilters 'arm64-v8a'

@@ -199,6 +199,11 @@ public:
   bool RecordDialogue(uint32_t actor,uint32_t info,const std::vector<uint32_t>& topics);
   bool SetDialogueVariable(uint64_t key,float value);
   bool ExecuteDialogueResult(const fo3pipdata::ResultScript& script,std::string& error);
+  bool PreviewDialogueResult(const fo3pipdata::ResultScript&,std::string&) const;
+  bool PreviewDialogueResults(const fo3pipdata::ResultScript&,const fo3pipdata::ResultScript&,std::string&) const;
+  bool ExecuteQuestStage(uint32_t,uint16_t,std::string&);
+  bool StopQuest(uint32_t);
+  bool SetGlobalValue(uint32_t,float);
   bool GrantPerk(uint32_t id, uint8_t rank);
   bool StartQuest(uint32_t id);
   bool SetQuestStage(uint32_t id,uint16_t stage);
@@ -266,9 +271,12 @@ public:
 private:
   bool PrepareInventory(uint32_t reference,bool actor);
   bool MigrateWeaponInstances(State &state) const;
+  bool RunScript(const fo3pipdata::ResultScript&,uint32_t owner,unsigned depth,unsigned& budget,std::string&);
+  bool RunQuestStage(uint32_t,uint16_t,unsigned depth,unsigned& budget,std::string&);
+  bool EnsureQuestInstance(uint32_t);
   Catalog catalog_;
-  State state_;
-  uint64_t revision_ = 0;
+  mutable State state_;
+  mutable uint64_t revision_ = 0;
   uint64_t actorPoseRevisions_ = 0;
 };
 

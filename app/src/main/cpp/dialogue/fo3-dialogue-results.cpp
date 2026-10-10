@@ -3,6 +3,8 @@
 #include <cctype>
 #include <cstdlib>
 #include <cmath>
+#include <functional>
+#include <algorithm>
 namespace fo3dialogue {
 // The player's explicit Talk action dispatches the NPC's OnActivate event.
 // Interpret only a validated local-variable/player-activator subset. GameMode,
@@ -61,14 +63,21 @@ bool CompileResult(const fo3pipdata::Definitions& d,const fo3pipdata::ResultScri
   std::istringstream lines(lower(script.source));std::string line;
   while(std::getline(lines,line)) {
     auto comment=line.find(';');if(comment!=std::string::npos)line.resize(comment);
-    std::istringstream in(line);std::string op,a,b,c,extra;Command cmd{CommandType::Variable};
+    std::istringstream in(line);std::string op,a,b,c,extra;Command cmd{};cmd.type=CommandType::Variable;
     if(!(in>>op))continue;
-    if(op=="enableplayercontrols")cmd.type=CommandType::EnableControls; // VR keeps controls live throughout.
+    if(op=="if"||op=="elseif") {
+      cmd.type=op=="if"?CommandType::If:CommandType::ElseIf;
+      std::getline(in,cmd.expression);if(cmd.expression.empty()){error="missing conditional expression";return false;}
+    } else if(op=="else"||op=="endif")cmd.type=op=="else"?CommandType::Else:CommandType::EndIf;
+    else if(op=="enableplayercontrols")cmd.type=CommandType::EnableControls; // VR keeps controls live throughout.
     else if(op=="set") {
-      if(!(in>>a>>b>>c)||b!="to"||!number(c,cmd.value)||(cmd.variable=VariableKey(d,a))==0){error="unsupported variable assignment: "+line;return false;}
-    } else if(op=="startquest"||op=="setstage"||op=="completequest"||op=="setobjectivedisplayed"||op=="setobjectivecompleted"||op=="addtopic") {
+      if(!(in>>a>>b)||b!="to"){error="invalid assignment: "+line;return false;}
+      std::getline(in,cmd.expression);cmd.variable=VariableKey(d,a);
+      if(!cmd.variable){cmd.form=form(a);cmd.type=CommandType::Global;if(!cmd.form){error="unresolved assignment: "+a;return false;}}
+    } else if(op=="stopquest"||op=="startquest"||op=="setstage"||op=="completequest"||op=="setobjectivedisplayed"||op=="setobjectivecompleted"||op=="addtopic") {
       if(!(in>>a)||(cmd.form=form(a))==0){error="unresolved form: "+line;return false;}
       if(op=="startquest")cmd.type=CommandType::StartQuest;
+      if(op=="stopquest")cmd.type=CommandType::StopQuest;
       if(op=="completequest")cmd.type=CommandType::CompleteQuest;
       if(op=="addtopic")cmd.type=CommandType::AddTopic;
       if(op=="setstage"||op=="setobjectivedisplayed"||op=="setobjectivecompleted") {
@@ -86,33 +95,5 @@ bool CompileResult(const fo3pipdata::Definitions& d,const fo3pipdata::ResultScri
   return true;
 }
 }
-namespace fo3player {
-bool Player::ExecuteDialogueResult(const fo3pipdata::ResultScript& script,std::string& error) {
-  std::vector<fo3dialogue::Command> commands;
-  if(!fo3dialogue::CompileResult(catalog_.pipboy,script,commands,error))return false;
-  const auto before=state_;const auto revision=revision_;
-  for(auto& c:commands) {
-    bool ok=true;using C=fo3dialogue::CommandType;
-    switch(c.type) {
-    case C::Variable:ok=SetDialogueVariable(c.variable,c.value);break;
-    case C::EnableControls:break;
-    case C::StartQuest:ok=StartQuest(c.form);break;
-    case C::Stage:
-      // Stage scripts cannot be skipped. Accept only unconditionally script-free stages.
-      {auto q=catalog_.pipboy.quests.find(c.form);
-      if(q==catalog_.pipboy.quests.end()||!q->second.stages.count(c.index)||q->second.stages.at(c.index).scripted||q->second.stages.at(c.index).conditional)ok=false;
-      else ok=StartQuest(c.form)&&SetQuestStage(c.form,uint16_t(c.index));}break;
-    case C::CompleteQuest:ok=StartQuest(c.form)&&FinishQuest(c.form,fo3pipdata::Completion::Complete);break;
-    case C::ObjectiveDisplay:case C::ObjectiveComplete:
-      {const auto q=state_.pipboy.quests.find(c.form);fo3pipdata::ObjectiveState existing;
-      if(q!=state_.pipboy.quests.end()){auto o=q->second.objectives.find(c.index);if(o!=q->second.objectives.end())existing=o->second;}
-      ok=StartQuest(c.form)&&SetObjective(c.form,c.index,c.type==C::ObjectiveDisplay?bool(c.value):existing.displayed,
-        c.type==C::ObjectiveComplete?(c.value?fo3pipdata::Completion::Complete:fo3pipdata::Completion::Active):existing.status);}break;
-    case C::AddItem:ok=Add(c.form,int32_t(c.value));break;
-    case C::AddTopic:if(!catalog_.pipboy.dialogueTopics.count(c.form))ok=false;else if(state_.pipboy.knownTopics.insert(c.form).second)++revision_;break;
-    }
-    if(!ok){state_=before;revision_=revision;error="result rejected by canonical Player API";return false;}
-  }
-  return true;
-}
-}
+
+#include "scripting/fo3-script-runtime.inc"

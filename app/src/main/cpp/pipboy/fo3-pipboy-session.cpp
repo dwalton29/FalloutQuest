@@ -96,6 +96,15 @@ void EncodeState(const SessionState &s, std::vector<uint8_t> &b) {
   Put(b,said.size());for(auto id:said){Put(b,uint32_t(id>>32));Put(b,uint32_t(id));}
   std::vector<uint64_t> vars;for(auto& v:s.dialogueVariables)vars.push_back(v.first);std::sort(vars.begin(),vars.end());
   Put(b,vars.size());for(auto id:vars){Put(b,uint32_t(id>>32));Put(b,uint32_t(id));Put(b,Bits(s.dialogueVariables.at(id)));}
+  Put(b,0x51535431); // Optional QST1 extension; old saves end after DLG1.
+  Put(b,s.quests.size());
+  for(auto id:Keys(s.quests)) {
+    const auto& q=s.quests.at(id);Put(b,id);Put(b,q.running);Put(b,q.journal.size());
+    for(auto entry:q.journal){Put(b,entry.first);Put(b,entry.second);}
+  }
+  Put(b,s.mutableGlobals.size());
+  for(auto id:Keys(s.mutableGlobals)){Put(b,id);Put(b,Bits(s.mutableGlobals.at(id)));}
+
 }
 bool DecodeState(SessionState &out, const Definitions &d, const uint8_t *p,
                  size_t n, std::string &error) {
@@ -145,6 +154,7 @@ bool DecodeState(SessionState &out, const Definitions &d, const uint8_t *p,
       return fail();
     q.stage = stage;
     q.status = Completion(status);
+    q.running = q.status == Completion::Active; // Legacy format had no stopped state.
     auto stages = r.Count(10000);
     for (uint32_t j = 0; j < stages && r.ok; ++j) {
       auto v = r.U();
@@ -173,6 +183,24 @@ bool DecodeState(SessionState &out, const Definitions &d, const uint8_t *p,
       auto owner=r.U(),index=r.U();auto value=r.F();
       if(!owner||!index||!std::isfinite(value)||!s.dialogueVariables.emplace((uint64_t(owner)<<32)|index,value).second)return fail();
     }
+  }
+  if(r.ok&&r.at<n) {
+    if(r.U()!=0x51535431)return fail();
+    auto size=r.Count(1000);if(size!=s.quests.size())return fail();
+    std::unordered_set<uint32_t> seen;
+    for(uint32_t i=0;i<size&&r.ok;++i) {
+      auto id=r.U(),running=r.U();if(!s.quests.count(id)||running>1||!seen.insert(id).second)return fail();
+      auto& q=s.quests.at(id);q.running=running!=0;
+      auto entries=r.Count(100000);
+      for(uint32_t j=0;j<entries&&r.ok;++j) {
+        auto stage=r.U(),item=r.U();const auto& def=d.quests.at(id);
+        auto st=def.stages.find(uint16_t(stage));
+        if(stage>65535||st==def.stages.end()||item>=st->second.items.size()||!q.stages.count(uint16_t(stage)))return fail();
+        q.journal.push_back({uint16_t(stage),item});
+      }
+    }
+    size=r.Count(100000);
+    for(uint32_t i=0;i<size&&r.ok;++i){auto id=r.U();float value=r.F();if(!id||!std::isfinite(value)||!s.mutableGlobals.emplace(id,value).second)return fail();}
   }
   if (!r.ok || r.at != n ||
       (s.selectedQuest &&

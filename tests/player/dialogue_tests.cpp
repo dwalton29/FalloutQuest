@@ -40,6 +40,15 @@ static void Original(const char* path) {
   assert(s.Choose(0,ctx,player));assert(s.info==0x3da07);
   while(s.phase==Phase::Speaking)s.AudioDone(s.audioToken,true,ctx,player);
   std::cout<<"AFTER acknowledgement eligible topics="<<s.choices.size()<<'\n';
+  auto choose=[&](uint32_t topic) {
+    auto choice=std::find_if(s.choices.begin(),s.choices.end(),[&](const auto& v){return v.topic==topic;});
+    if(choice==s.choices.end()){std::cerr<<"Missing quest choice "<<std::hex<<topic<<std::dec<<" available:";for(auto v:s.choices)std::cerr<<" "<<v.text;std::cerr<<'\n';assert(false);}
+    assert(s.Choose(size_t(choice-s.choices.begin()),ctx,player));
+    while(s.phase==Phase::Speaking)s.AudioDone(s.audioToken,true,ctx,player);
+  };
+  choose(0x3b77);choose(0x1e35d);choose(0x3d9e0);choose(0x3d9dd);choose(0x1e355);
+  assert(player.Snapshot().pipboy.quests.at(0x14e9e).objectives.at(10).displayed);
+  std::cout<<"Full original Lucas dialogue acceptance path passed\n";
   s.End("test B exit");assert(!s.Active());
   const auto save="/tmp/fq-dialogue-"+std::to_string(getpid());assert(player.Save(save,error));
   fo3player::Catalog original;assert(fo3player::LoadCatalog(path,original,error));fo3player::Player restored(std::move(original));assert(restored.Restore(save,error));
@@ -78,7 +87,7 @@ static void Isolated() {
   assert(p.StartQuest(20));cond.function=56;cond.value=1;assert(Conditions({cond},ctx,error));
   cond.function=136;cond.a=0x14;cond.value=1;cond.run=2;cond.reference=0x14;assert(Conditions({cond},ctx,error));
   cond.reference=999;assert(!Conditions({cond},ctx,error)&&!error.empty());
-  cond.function=72;cond.a=10;cond.value=1;cond.run=0;cond.flags=1;assert(!Conditions({cond},ctx,error)&&!error.empty());
+  cond.function=72;cond.a=10;cond.value=1;cond.run=0;cond.flags=1;assert(Conditions({cond},ctx,error)&&error.empty());
 
   fo3pipdata::ResultScript script;script.source="player.additem unknown 1";auto revision=p.Revision();assert(!p.ExecuteDialogueResult(script,error)&&p.Revision()==revision);
   Session session;assert(!session.Choose(0,ctx,p));assert(!session.AudioDone(5,true,ctx,p));
@@ -197,7 +206,95 @@ static void PresentationAndOverride() {
   assert(fo3npc::Interrupted(false,true,true,false,6));assert(fo3npc::Interrupted(false,true,false,false,2));
   assert(fo3npc::Interrupted(false,false,true,false,2));assert(fo3npc::Interrupted(true,true,true,false,2));assert(fo3npc::Interrupted(false,true,true,true,2));
 }
-int main(int argc,char** argv){Isolated();ConsequencesAndOrder();Lifecycle();ResultConsequences();ActivationEvent();PresentationAndOverride();if(argc>1)Original(argv[1]);
+static void QuestParser() {
+  std::vector<uint8_t> bytes;
+  auto sub=[&](const char* tag,std::vector<uint8_t> payload){bytes.insert(bytes.end(),tag,tag+4);bytes.push_back(uint8_t(payload.size()));bytes.push_back(uint8_t(payload.size()>>8));bytes.insert(bytes.end(),payload.begin(),payload.end());};
+  sub("EDID",{'q',0});sub("DATA",{8,50});sub("INDX",{10,0});sub("QSDT",{0});sub("CNAM",{'a',0});
+  sub("SCHR",std::vector<uint8_t>(20));sub("SCDA",{1,2});sub("SCTX",{'s','e','t',0});sub("SCRO",{1,0,0,0});
+  sub("QSDT",{1});std::vector<uint8_t> condition(28);condition[8]=58;condition[12]=1;sub("CTDA",condition);sub("CNAM",{'b',0});
+  sub("QOBJ",{1,0,0,0});sub("NNAM",{'o',0});sub("QSTA",{4,0,0,0,1,2,3,4});sub("CTDA",condition);
+  sub("QSTA",{5,0,0,0,0,0,0,0});
+  fo3pipdata::Definitions d;fo3pipdata::Decode(d,"QUST",1,0,bytes,0,0,0);
+  const auto& q=d.quests.at(1);assert(q.diagnostics.empty()&&q.stageOrder==std::vector<uint16_t>{10});
+  const auto& items=q.stages.at(10).items;assert(items.size()==2&&items[0].log=="a"&&items[1].log=="b");
+  assert(items[0].result.compiled==std::vector<uint8_t>({1,2})&&items[0].result.references==std::vector<uint32_t>{1});
+  assert(items[0].conditions.empty()&&items[1].conditions.size()==1&&items[1].flags==1);
+  const auto& targets=q.objectives.at(1).targetItems;assert(targets.size()==2&&targets[0].conditions.size()==1&&targets[1].conditions.empty());
+  sub("QSDT",{});fo3pipdata::Decode(d,"QUST",2,0,bytes,0,0,0);assert(!d.quests.at(2).diagnostics.empty());
+  fo3player::Catalog c;c.pipboy=d;fo3player::Player p(c);std::string error;assert(!p.ExecuteQuestStage(2,10,error)&&!error.empty());
+}
+static void QuestFoundation() {
+  fo3player::Catalog c;c.initial.baseHealth=100;
+  c.pipboy.formNames={{"q",1},{"other",2},{"global",3}};c.globals[3]=5;
+  auto& q=c.pipboy.quests[1];q.editor="q";q.script=10;q.objectives[1].text="authored objective";
+  c.pipboy.scripts[10].variables[1]="value";
+  fo3pipdata::StageItem first;first.log="authored journal";
+  first.result.source="set q.value to ( global + 2 )\nSetStage other 20";
+  q.stages[10].items={first};
+  fo3pipdata::StageItem second;second.result.source="SetObjectiveDisplayed q 1 1";
+  fo3pipdata::Condition cond;cond.function=79;cond.a=1;cond.b=1;cond.value=7;second.conditions={cond};
+  q.stages[10].items.push_back(second);
+  c.pipboy.quests[2].stages[20].items.push_back({});
+  c.pipboy.quests[2].stages[20].items[0].result.source="if GetStageDone q 10 == 1 && GetQuestRunning q == 1\nset global to 9\nelse\nset global to 100\nendif";
+  fo3player::Player p(c);std::string error;
+  assert(p.ExecuteQuestStage(1,10,error));
+  assert(p.Snapshot().pipboy.quests.at(1).objectives.at(1).displayed);
+  assert(p.Snapshot().pipboy.quests.at(1).journal.size()==1);
+  float global;assert(p.GlobalValue(3,global)&&global==9);
+  auto revision=p.Revision();assert(p.ExecuteQuestStage(1,10,error)&&p.Revision()==revision);
+  assert(p.StopQuest(1));assert(!p.Snapshot().pipboy.quests.at(1).running);
+  assert(p.FinishQuest(1,fo3pipdata::Completion::Complete));assert(!p.Snapshot().pipboy.quests.at(1).running);
+  fo3pipdata::ResultScript completed;completed.source="CompleteQuest q\nSetObjectiveDisplayed q 1 0\nSetObjectiveCompleted q 1 1";
+  assert(p.ExecuteDialogueResult(completed,error)&&!p.Snapshot().pipboy.quests.at(1).running);
+  completed.source="SetObjectiveDisplayed q 1 1";assert(p.ExecuteDialogueResult(completed,error)&&p.Snapshot().pipboy.quests.at(1).running);assert(p.StopQuest(1));
+  std::vector<uint8_t> encoded;fo3pipdata::EncodeState(p.Snapshot().pipboy,encoded);
+  fo3pipdata::SessionState restored;assert(fo3pipdata::DecodeState(restored,c.pipboy,encoded.data(),encoded.size(),error));
+  assert(!restored.quests.at(1).running&&restored.quests.at(1).journal.size()==1&&restored.mutableGlobals.at(3)==9);
+  // Read the previous extension format without resetting existing objectives/variables.
+  const std::vector<uint8_t> tag{0x31,0x54,0x53,0x51};
+  auto marker=std::search(encoded.begin(),encoded.end(),tag.begin(),tag.end());assert(marker!=encoded.end());
+  assert(fo3pipdata::DecodeState(restored,c.pipboy,encoded.data(),size_t(marker-encoded.begin()),error));
+  assert(restored.quests.at(1).objectives.at(1).displayed&&!restored.dialogueVariables.empty());
+  q.flags|=8;q.stages[10].items[0].result.source="SetStage q 10";
+  fo3player::Player recursive(c);assert(!recursive.ExecuteQuestStage(1,10,error)&&recursive.Snapshot().pipboy.quests.empty());
+  q.stages[10].items[0].result.source="set q.value to 4\nunsupportedCommand";
+  fo3player::Player unsupported(c);assert(!unsupported.ExecuteQuestStage(1,10,error)&&unsupported.Snapshot().pipboy.dialogueVariables.empty());
+  q.stages[10].items[0].result.source.clear();q.stages[10].items[0].result.compiled={1};
+  fo3player::Player compiled(c);assert(!compiled.ExecuteQuestStage(1,10,error)&&compiled.Snapshot().pipboy.quests.empty());
+  fo3pipdata::ResultScript bad;bad.source="if 1 == 1\nset global to 2";
+  assert(!p.ExecuteDialogueResult(bad,error)&&p.GlobalValue(3,global)&&global==9);
+  bad.source="SetStage missing 10";assert(!p.ExecuteDialogueResult(bad,error));
+  std::cout<<"Quest transaction, conditions, nesting, journal, globals, stop/completion and rejection passed\n";
+}
+static void OriginalQuest(const char* path) {
+  fo3player::Catalog c;std::string error;assert(fo3player::LoadCatalog(path,c,error));
+  const auto& d=c.pipboy;
+  assert(d.quests.at(0x14e9e).stages.at(10).items.size()==1);
+  assert(d.quests.at(0xc0f66).stages.at(11).items.size()==15);
+  assert(d.quests.at(0x14e9e).stages.at(60).items.size()==7);
+  assert(d.quests.at(0x14e9e).diagnostics.empty());
+  fo3player::Player p(c);
+  const auto& infos=d.topics.at(0x1e355);
+  const auto info=std::find_if(infos.begin(),infos.end(),[](const auto& i){return i.id==0x1e367;});assert(info!=infos.end());
+  const auto revision=p.Revision();
+  if(!p.PreviewDialogueResult(info->begin,error)||!p.PreviewDialogueResult(info->end,error)){std::cerr<<"MS11 PREVIEW "<<error<<'\n';assert(false);}
+  assert(p.Revision()==revision&&p.Snapshot().pipboy.quests.empty());
+  if(!p.ExecuteDialogueResult(info->begin,error)||!p.ExecuteDialogueResult(info->end,error)){std::cerr<<"MS11 EXECUTION "<<error<<'\n';assert(false);}
+  const auto& q=p.Snapshot().pipboy.quests.at(0x14e9e);
+  assert(q.stage==10&&q.stages.count(10)&&q.running);
+  assert(q.objectives.at(10).displayed);
+  assert(d.quests.at(0x14e9e).objectives.at(10).text=="Disarm Megaton's atomic bomb.");
+  assert(d.quests.at(0x14e9e).objectives.at(10).targets==std::vector<uint32_t>{0x14bc8});
+  assert(p.SelectQuest(0x14e9e));
+  auto save="/tmp/fq-ms11-"+std::to_string(getpid());assert(p.Save(save,error));
+  fo3player::Player restored(c);assert(restored.Restore(save,error));unlink(save.c_str());
+  assert(restored.Snapshot().pipboy.quests.at(0x14e9e).objectives.at(10).displayed);
+  assert(restored.Snapshot().pipboy.dialogueVariables==p.Snapshot().pipboy.dialogueVariables);
+  assert(restored.ExecuteDialogueResult(info->end,error));
+  assert(restored.Snapshot().pipboy.quests.at(0x14e9e).stage==10);
+  std::cout<<"Original MS11 acceptance, nested MSObjectives, target and save/reload passed\n";
+}
+int main(int argc,char** argv){Isolated();ConsequencesAndOrder();Lifecycle();ResultConsequences();ActivationEvent();PresentationAndOverride();QuestParser();QuestFoundation();if(argc>1){Original(argv[1]);OriginalQuest(argv[1]);}
   if(argc>2){std::ifstream voice(std::string(argv[2])+"/ms11_greeting_0003da20_3.ogg",std::ios::binary);char header[4]{};voice.read(header,4);assert(std::string(header,4)=="OggS");
     std::ifstream lip(std::string(argv[2])+"/ms11_greeting_0003da20_3.lip",std::ios::binary);assert(lip&&lip.peek()==1);std::cout<<"Original Lucas voice and companion LIP exist\n";}
   std::cout<<"Dialogue tests passed\n";}

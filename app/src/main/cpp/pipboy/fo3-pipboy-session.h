@@ -8,6 +8,8 @@ struct ObjectiveState {
 };
 struct QuestState {
   uint16_t stage = 0;
+  bool running = true;
+  std::vector<std::pair<uint16_t,uint32_t>> journal;
   Completion status = Completion::Active;
   std::unordered_set<uint16_t> stages;
   std::unordered_map<uint32_t, ObjectiveState> objectives;
@@ -28,6 +30,7 @@ struct SessionState {
   std::unordered_set<uint32_t> talkedActors, knownTopics;
   std::unordered_set<uint64_t> saidInfos; // actor reference + INFO (Say Once is per actor)
   std::unordered_map<uint64_t,float> dialogueVariables;
+  std::unordered_map<uint32_t,float> mutableGlobals;
 };
 void EncodeState(const SessionState &, std::vector<uint8_t> &);
 bool DecodeState(SessionState &, const Definitions &, const uint8_t *, size_t,

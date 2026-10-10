@@ -47,12 +47,31 @@ struct Marker : Placement {
   std::string name;
   uint8_t type = 0, mapFlags = 0;
 };
+struct ResultScript {
+  std::string source;
+  std::vector<uint8_t> compiled, header;
+  std::vector<uint32_t> references;
+  std::vector<std::pair<std::string,std::vector<uint8_t>>> records;
+};
+struct ObjectiveTarget {
+  uint32_t reference=0;
+  std::vector<uint8_t> metadata;
+  std::vector<Condition> conditions;
+};
+struct StageItem {
+  uint8_t flags=0;
+  std::string log;
+  std::vector<Condition> conditions;
+  ResultScript result;
+};
 struct Objective {
   std::string text;
   std::vector<uint32_t> targets;
   bool conditionalTargets = false;
+  std::vector<ObjectiveTarget> targetItems;
 };
 struct Stage {
+  std::vector<StageItem> items;
   uint8_t flags = 0;
   std::vector<std::string> logs;
   bool scripted = false, conditional = false;
@@ -61,6 +80,9 @@ struct Quest {
   std::string name, editor, icon;
   uint32_t script = 0;
   uint8_t flags = 0, priority = 0;
+  std::vector<uint16_t> stageOrder;
+  std::vector<uint32_t> objectiveOrder;
+  std::vector<std::string> diagnostics;
   std::unordered_map<uint16_t, Stage> stages;
   std::unordered_map<uint32_t, Objective> objectives;
   std::vector<Condition> conditions;
@@ -151,11 +173,6 @@ struct Response {
   uint8_t flags=0;
   std::string notes, edits;
 };
-struct ResultScript {
-  std::string source;
-  std::vector<uint8_t> compiled, header;
-  std::vector<uint32_t> references;
-};
 struct Info {
   uint32_t id = 0, topic = 0, quest = 0, speaker = 0;
   uint8_t type = 0, flags = 0;
@@ -178,8 +195,7 @@ struct Transmitter : Placement {
   float radius = 0, staticPercent = 0;
   uint32_t range = 0, position = 0;
 };
-struct Script {
-  std::string source;
+struct Script : ResultScript {
   std::unordered_map<uint32_t, std::string> variables;
 };
 struct RadiationStage {

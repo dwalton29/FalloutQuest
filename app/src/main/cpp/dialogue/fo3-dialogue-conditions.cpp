@@ -35,7 +35,11 @@ static bool Value(const fo3pipdata::Condition& c,const Context& ctx,float& value
   const auto& p=*ctx.player;const auto& d=p.Definitions().pipboy;const auto& state=p.Snapshot();
   ActorContext who=ctx.speaker;
   if(c.run==1)who=ctx.target;
-  else if(c.run==2){if(c.reference==0x14)who=ctx.target;else if(c.reference!=ctx.speaker.reference){error="reference context unavailable";return false;}}
+  else if(c.run==2){if(c.reference==0x14)who=ctx.target;else if(c.reference!=ctx.speaker.reference){
+    auto ref=d.targets.find(c.reference);
+    if(ref==d.targets.end()||(c.function!=35&&c.function!=46)){error="reference context unavailable";return false;}
+    who.reference=c.reference;who.base=ref->second.base;
+  }}
   else if(c.run!=0){error="unsupported run-on context";return false;}
   const bool pc=who.reference==0x14;
   const auto* def=fo3pipdata::ActorCategory(d,pc?7:who.base,(c.function==71||c.function==73)?4:1);
@@ -52,6 +56,20 @@ static bool Value(const fo3pipdata::Condition& c,const Context& ctx,float& value
     else if(c.a==12)value=p.ActionPoints();
     else if(c.a==46)value=float(p.InventoryWeight());
     else {error="actor value unsupported";return false;}return true;
+  case 35: {auto ref=d.targets.find(who.reference);
+    if(ref==d.targets.end()){error="GetDisabled reference unavailable";return false;}
+    if(ref->second.parent){error="GetDisabled enable-parent state unsupported";return false;}
+    value=bool(ref->second.flags&0x800);return true;}
+  case 84: {
+    if(!d.dialogueActors.count(c.a)){error="GetDeadCount actor base unavailable";return false;}
+    // Count canonical original ACHRs and persisted deaths, independently of residency.
+    // Respawning actors require a cumulative death counter and remain unsupported.
+    auto a=p.Definitions().weapons.actors.find(c.a);
+    if(a==p.Definitions().weapons.actors.end()||(a->second.flags&8)){error="GetDeadCount respawning/unknown actor unsupported";return false;}
+    value=0;for(const auto& ref:p.Definitions().actorPlacements)if(ref.second.base==c.a&&!(ref.second.flags&0x20)) {
+      const auto health=p.ActorHealth(ref.first);if(health<0){error="GetDeadCount actor health unavailable";return false;}if(health==0)++value;
+    }
+    return true;}
   case 46:{const float health=pc?p.Health():p.ActorHealth(who.reference);if(health<0){error="actor health unavailable";return false;}value=health<=0;return true;}
   case 47:
     if(!pc){error="NPC inventory state unavailable";return false;}
@@ -60,7 +78,7 @@ static bool Value(const fo3pipdata::Condition& c,const Context& ctx,float& value
   case 53:case 79: {auto key=VariableKey(d,c.a,c.b,c.function==79);if(!key){error="script variable unavailable";return false;}
     if(ctx.activationVariables){auto v=ctx.activationVariables->find(key);if(v!=ctx.activationVariables->end()){value=v->second;return true;}}
     auto v=state.pipboy.dialogueVariables.find(key);value=v==state.pipboy.dialogueVariables.end()?0:v->second;return true;}
-  case 56:{auto q=d.quests.find(c.a);if(q==d.quests.end()){error="quest unavailable";return false;}value=quest==state.pipboy.quests.end()?(q->second.flags&1)!=0:quest->second.status==fo3pipdata::Completion::Active;return true;}
+  case 56:{auto q=d.quests.find(c.a);if(q==d.quests.end()){error="quest unavailable";return false;}value=quest==state.pipboy.quests.end()?(q->second.flags&1)!=0:quest->second.running;return true;}
   case 58:value=quest==state.pipboy.quests.end()?0:quest->second.stage;return d.quests.count(c.a)!=0;
   case 59:value=quest!=state.pipboy.quests.end()&&quest->second.stages.count(c.b);return d.quests.count(c.a)!=0;
   case 67:value=who.cell==c.a;return who.cell!=0;
@@ -80,7 +98,7 @@ static bool Value(const fo3pipdata::Condition& c,const Context& ctx,float& value
   case 141:value=ctx.talking&&who.reference==ctx.speaker.reference;return true;
   case 161:if(!who.packageKnown){error="package not executing";return false;}value=who.package==c.a;return true;
   case 289:value=who.combat;return true;
-  case 546:value=quest!=state.pipboy.quests.end()&&quest->second.status==fo3pipdata::Completion::Complete;return true;
+  case 546:if(!d.quests.count(c.a)){error="quest unavailable";return false;}value=quest!=state.pipboy.quests.end()&&quest->second.status!=fo3pipdata::Completion::Active;return true;
   case 310:value=who.world==c.a;return who.world!=0;
   case 372:{auto list=d.formLists.find(c.a);if(list==d.formLists.end()){error="form list unavailable";return false;}value=std::find(list->second.begin(),list->second.end(),pc?7:who.base)!=list->second.end();return true;}
   case 427:{auto voice=fo3pipdata::ActorVoice(d,who.base);if(!voice){error="voice type unavailable";return false;}value=voice==c.a;return true;}
@@ -96,7 +114,9 @@ bool Conditions(const std::vector<fo3pipdata::Condition>& list,const Context& ct
     group=group||Compare(value,comparison,c.flags);
     if(!(c.flags&1)){if(!group)return false;group=false;}
   }
-  if(!list.empty()&&(list.back().flags&1)){error="unterminated OR group";return false;}
+  // The record boundary closes the final OR group. Original MSObjectives
+  // has valid items with every condition marked OR, including the last one.
+  if(!list.empty()&&(list.back().flags&1))return group;
   return true;
 }
 }

@@ -21,21 +21,11 @@ bool Session::Eligible(const fo3pipdata::Info& i,const Context& ctx)const {
   if(!Conditions(quest->second.conditions,ctx,error)){if(!error.empty()&&diagnostic)diagnostic("DIALOGUE UNSUPPORTED CONDITION info="+Id(i.id)+" quest="+Id(i.quest)+" "+error);return false;}
   auto qs=p.Snapshot().pipboy.quests.find(i.quest);
   if(qs==p.Snapshot().pipboy.quests.end()&&!(quest->second.flags&1))return false;
-  if(qs!=p.Snapshot().pipboy.quests.end()&&qs->second.status!=fo3pipdata::Completion::Active)return false;
-  std::vector<Command> plan;
-  for(const auto* script:{&i.begin,&i.end}) {
-    if(!CompileResult(d,*script,plan,error)){if(diagnostic)diagnostic("DIALOGUE UNSUPPORTED SCRIPT info="+Id(i.id)+" "+error);return false;}
-    for(auto& c:plan) {
-      bool valid=true;
-      if(c.type==CommandType::AddItem)valid=p.Definitions().items.count(c.form);
-      if(c.type==CommandType::AddTopic)valid=d.dialogueTopics.count(c.form);
-      if(c.type==CommandType::StartQuest||c.type==CommandType::CompleteQuest||c.type==CommandType::ObjectiveDisplay||c.type==CommandType::ObjectiveComplete){
-        auto q=d.quests.find(c.form);valid=q!=d.quests.end();
-        if(valid&&(c.type==CommandType::ObjectiveDisplay||c.type==CommandType::ObjectiveComplete))valid=q->second.objectives.count(c.index);
-      }
-      if(!valid){if(diagnostic)diagnostic("DIALOGUE UNSUPPORTED SCRIPT info="+Id(i.id)+" result form/type unavailable");return false;}
-    }
-    for(auto& c:plan)if(c.type==CommandType::Stage){auto q=d.quests.find(c.form);if(q==d.quests.end()||!q->second.stages.count(c.index)||q->second.stages.at(c.index).scripted||q->second.stages.at(c.index).conditional)return false;}
+  if(qs!=p.Snapshot().pipboy.quests.end()&&!qs->second.running)return false;
+  // Transactional preflight includes nested QUST dependencies and both phases.
+  if(!p.PreviewDialogueResults(i.begin,i.end,error)) {
+    if(diagnostic)diagnostic("DIALOGUE UNSUPPORTED SCRIPT info="+Id(i.id)+" "+error);
+    return false;
   }
   for(auto& r:i.responses)if(!r.sound&&!fo3pipdata::ActorVoice(d,ctx.speaker.base))return false;
   return true;

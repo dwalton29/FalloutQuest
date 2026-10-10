@@ -182,32 +182,52 @@ void Decode(Definitions &d, const std::string &t, uint32_t id, uint32_t flags,
       q.flags = v->p[0];
       q.priority = v->p[1];
     }
+    if(!v||v->n<2)q.diagnostics.push_back("QUST "+std::to_string(id)+" malformed DATA");
     Stage *stage = nullptr;
+    StageItem *item=nullptr;
     Objective *obj = nullptr;
+    ObjectiveTarget *target=nullptr;
+    auto invalid=[&](const Sub& a){q.diagnostics.push_back("QUST "+std::to_string(id)+" malformed/orphan "+a.type);};
     for (auto &a : s) {
-      if (a.type == "INDX" && a.n == 2) {
-        stage = &q.stages[fo3esm::ReadU16(a.p)];
-        obj = nullptr;
-      } else if (a.type == "QOBJ" && a.n == 4) {
-        obj = &q.objectives[U(&a)];
-        stage = nullptr;
-      } else if (a.type == "NNAM" && obj)
-        obj->text = fo3esm::ZString(a.p, a.n);
-      else if (a.type == "QSTA" && obj && a.n >= 4)
-        obj->targets.push_back(U(&a));
-      else if (a.type == "QSDT" && stage && a.n)
-        stage->flags |= a.p[0];
-      else if (a.type == "CNAM" && stage)
-        stage->logs.push_back(fo3esm::ZString(a.p, a.n));
-      else if (a.type == "SCDA" && stage && a.n)
-        stage->scripted = true;
-      else if (a.type == "CTDA") {
-        if (obj)
-          obj->conditionalTargets = true;
-        else if (stage)
-          stage->conditional = true;
-        else
-          q.conditions.push_back(Cond(a));
+      if (a.type == "INDX") {
+        if(a.n!=2){invalid(a);stage=nullptr;}else {
+          auto index=fo3esm::ReadU16(a.p);
+          if(q.stages.count(index))invalid(a);
+          q.stageOrder.push_back(index);stage=&q.stages[index];
+        }
+        obj=nullptr;item=nullptr;target=nullptr;
+      } else if (a.type == "QOBJ") {
+        if(a.n!=4){invalid(a);obj=nullptr;}else {
+          auto index=U(&a);if(q.objectives.count(index))invalid(a);
+          q.objectiveOrder.push_back(index);obj=&q.objectives[index];
+        }
+        stage=nullptr;item=nullptr;target=nullptr;
+      } else if (a.type == "QSDT") {
+        if(!stage||a.n!=1){invalid(a);item=nullptr;}else {
+          stage->items.push_back({});item=&stage->items.back();item->flags=a.p[0];stage->flags|=item->flags;
+        }
+      } else if (a.type == "NNAM" && obj) obj->text=fo3esm::ZString(a.p,a.n);
+      else if (a.type == "QSTA") {
+        if(!obj||a.n!=8){invalid(a);target=nullptr;}else {
+          obj->targets.push_back(U(&a));obj->targetItems.push_back({});target=&obj->targetItems.back();
+          target->reference=U(&a);target->metadata.assign(a.p+4,a.p+a.n);
+        }
+      } else if (a.type == "CNAM") {
+        if(!item)invalid(a);else {item->log=fo3esm::ZString(a.p,a.n);stage->logs.push_back(item->log);}
+      } else if(a.type=="CTDA") {
+        if(a.n!=20&&a.n!=24&&a.n!=28){invalid(a);continue;}
+        if(obj){if(!target)invalid(a);else {target->conditions.push_back(Cond(a));obj->conditionalTargets=true;}}
+        else if(stage){if(!item)invalid(a);else {item->conditions.push_back(Cond(a));stage->conditional=true;}}
+        else q.conditions.push_back(Cond(a));
+      } else if(a.type=="SCHR"||a.type=="SCDA"||a.type=="SCTX"||a.type=="SCRO"||a.type=="SCRV"||a.type=="SLSD"||a.type=="SCVR") {
+        if(!item){invalid(a);continue;}
+        auto& r=item->result;
+        if(a.type=="SCHR"){if(a.n!=20)invalid(a);r.header.assign(a.p,a.p+a.n);}
+        else if(a.type=="SCDA"){r.compiled.assign(a.p,a.p+a.n);stage->scripted|=a.n!=0;}
+        else if(a.type=="SCTX"){r.source=fo3esm::ZString(a.p,a.n);stage->scripted|=!r.source.empty();}
+        else if(a.type=="SCRO"||a.type=="SCRV"){if(a.n!=4)invalid(a);else r.references.push_back(U(&a));}
+        // Retain every script subrecord, including reference kind and local metadata.
+        r.records.push_back({a.type,std::vector<uint8_t>(a.p,a.p+a.n)});
       }
     }
     d.questNames[q.editor] = id;
@@ -390,6 +410,10 @@ void Decode(Definitions &d, const std::string &t, uint32_t id, uint32_t flags,
     uint32_t index = 0;
     for (auto &a : s) {
       if(a.type=="SCTX")script.source=fo3esm::ZString(a.p,a.n);
+      if(a.type=="SCDA")script.compiled.assign(a.p,a.p+a.n);
+      if(a.type=="SCHR")script.header.assign(a.p,a.p+a.n);
+      if((a.type=="SCRO"||a.type=="SCRV")&&a.n==4)script.references.push_back(U(&a));
+      script.records.push_back({a.type,std::vector<uint8_t>(a.p,a.p+a.n)});
       if (a.type == "SLSD" && a.n >= 4)
         index = U(&a);
       if (a.type == "SCVR")
