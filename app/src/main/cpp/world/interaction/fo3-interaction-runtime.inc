@@ -1,4 +1,7 @@
 #include "ui/interaction/fo3-item-notifications.h"
+#include "dialogue/fo3-dialogue-panel.h"
+// Shared menu focus is defined below the world interaction query functions.
+bool Fo3ScriptMessageFocus();
 
 void NotifyFo3ItemTransfer(uint32_t base,int32_t count) {
     const auto& catalog=gPlayerSession->player.Definitions();
