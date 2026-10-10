@@ -408,7 +408,7 @@ void Synthetic(const std::string &root) {
   const Bytes good = Read(save);
   // The v10 clock extension lacked calendar fields; retain the hour and
   // migrate the starting date from the original GLOB records.
-  Bytes version10=good;version10.resize(version10.size()-12);
+  Bytes version10=good;version10.resize(version10.size()-20); // remove v12 extension and v11 calendar
   version10[4]=10;
   const auto legacyClockSize=uint32_t(version10.size()-20);
   for(int i=0;i<4;++i)version10[12+i]=uint8_t(legacyClockSize>>(8*i));

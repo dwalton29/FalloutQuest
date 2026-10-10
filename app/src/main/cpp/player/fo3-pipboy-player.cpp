@@ -121,7 +121,7 @@ bool Player::CanUse(uint64_t id, std::string *why) const {
   auto item = catalog_.items.find(s->formId);
   auto a = catalog_.pipboy.aid.find(s->formId);
   if (item == catalog_.items.end() || item->second.script ||
-      item->second.questItem || item->second.cannotDrop ||
+      IsQuestObject(s->formId) || item->second.cannotDrop ||
       a == catalog_.pipboy.aid.end() || a->second.effects.empty())
     return reject("Requires item script/effect runtime");
   for (auto &e : a->second.effects) {

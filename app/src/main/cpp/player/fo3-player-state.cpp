@@ -760,7 +760,7 @@ bool Player::Remove(uint64_t id, int32_t count) {
   const auto it = std::find_if(v.begin(), v.end(),
                                [&](const Stack &s) { return s.id == id; });
   if (it == v.end() || count <= 0 || count > it->count ||
-      (catalog_.items.at(it->formId).questItem ||
+      (IsQuestObject(it->formId) ||
        catalog_.items.at(it->formId).cannotDrop))
     return false;
   it->count -= count;
@@ -980,7 +980,17 @@ bool Player::Save(const std::string &path, std::string &error) const {
   Put32(payload,state_.gameYear);
   Put32(payload,state_.gameMonth);
   Put32(payload,state_.gameDay);
-  Put32(bytes, 11);
+  // v12: karma and mutable quest-object flags; older FQPS saves remain readable.
+  PutFloat(payload,state_.karma);
+  Put32(payload,static_cast<uint32_t>(state_.questObjectFlags.size()));
+  std::vector<uint32_t> questFlagIds;
+  for(const auto& kv:state_.questObjectFlags)questFlagIds.push_back(kv.first);
+  std::sort(questFlagIds.begin(),questFlagIds.end());
+  for(uint32_t form:questFlagIds) {
+    Put32(payload,form);
+    payload.push_back(state_.questObjectFlags.at(form)?1u:0u);
+  }
+  Put32(bytes, 12);
   Put32(bytes, catalog_.fingerprint);
   Put32(bytes, static_cast<uint32_t>(payload.size()));
   Put32(bytes, Crc(payload));
@@ -1039,7 +1049,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
   const auto *h = bytes.data();
   const auto version = fo3esm::ReadU32(h + 4);
   if (std::memcmp(h, "FQPS", 4) ||
-      (version < 1 || version > 11))
+      (version < 1 || version > 12))
     return fail("Unsupported player save format");
   if (fo3esm::ReadU32(h + 8) != catalog_.fingerprint)
     return fail("Player save belongs to different game definitions");
@@ -1231,8 +1241,8 @@ bool Player::Restore(const std::string &path, std::string &error) {
         if(payload.size()-at<4)return fail("Missing actor state count");
         const auto n=fo3esm::ReadU32(p+at);at+=4;
         const size_t actorBytes=version>=9?56:version>=8?52:48;
-        const size_t tailBytes = version >= 11 ? 20u : version >= 10 ? 8u : 0u;
-        if(n>10000||payload.size()-at!=actorBytes*n+tailBytes)return fail("Invalid actor state count");
+        const size_t tailBytes = version >= 12 ? 28u : version >= 11 ? 20u : version >= 10 ? 8u : 0u;
+        if(n>10000||(version>=12 ? payload.size()-at<actorBytes*n+tailBytes : payload.size()-at!=actorBytes*n+tailBytes))return fail("Invalid actor state count");
         for(uint32_t i=0;i<n;++i,at+=actorBytes){
           const auto id=fo3esm::ReadU32(p+at);ActorState a;
           a.cell=fo3esm::ReadU32(p+at+4);a.world=fo3esm::ReadU32(p+at+8);
@@ -1257,7 +1267,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
         }
       }
       if (version >= 10) {
-        if (payload.size()-at != (version>=11 ? 20u : 8u)) return fail("Missing game clock");
+        if (version>=12 ? payload.size()-at<28u : payload.size()-at != (version>=11 ? 20u : 8u)) return fail("Missing game clock");
         next.gameHour = fo3esm::ReadF32(p+at);
         next.gameDaysPassed = fo3esm::ReadU32(p+at+4);
         if (!std::isfinite(next.gameHour) || next.gameHour < 0.0f ||
@@ -1266,7 +1276,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
         at += 8;
       }
       if (version >= 11) {
-        if (payload.size()-at != 12u) return fail("Missing game calendar");
+        if (version>=12 ? payload.size()-at<20u : payload.size()-at != 12u) return fail("Missing game calendar");
         next.gameYear = fo3esm::ReadU32(p+at);
         next.gameMonth = fo3esm::ReadU32(p+at+4);
         next.gameDay = fo3esm::ReadU32(p+at+8);
@@ -1274,6 +1284,21 @@ bool Player::Restore(const std::string &path, std::string &error) {
             !fo3schedule::Valid({int(next.gameYear),int(next.gameMonth),int(next.gameDay)}))
           return fail("Invalid saved game calendar");
         at += 12;
+      }
+      if(version>=12){
+        if(payload.size()-at<8u)return fail("Missing quest scripting save extension");
+        next.karma=fo3esm::ReadF32(p+at);at+=4;
+        if(!std::isfinite(next.karma)||next.karma<-1000.f||next.karma>1000.f)
+          return fail("Invalid saved karma");
+        const auto n=fo3esm::ReadU32(p+at);at+=4;
+        if(n>10000||payload.size()-at!=5ull*n)return fail("Invalid quest-object override count");
+        for(uint32_t i=0;i<n;++i,at+=5){
+          const uint32_t form=fo3esm::ReadU32(p+at),flag=p[at+4];
+          const auto item=catalog_.items.find(form);
+          if(item==catalog_.items.end()||flag>1||item->second.questItem==bool(flag)||
+             !next.questObjectFlags.emplace(form,flag!=0).second)
+            return fail("Invalid quest-object override");
+        }
       }
       if(at!=payload.size())return fail("Trailing weapon save data");
     }

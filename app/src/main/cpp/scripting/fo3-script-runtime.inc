@@ -173,6 +173,9 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
     }
     case C::AddItem:ok=Add(c.form,int32_t(c.value));break;
     case C::RemoveItem:ok=ScriptRemoveItem(c.form,int32_t(c.value));break;
+    case C::SetQuestObject:ok=SetQuestObject(c.form,c.value!=0);break;
+    case C::RewardKarma:ok=RewardKarma(c.value);break;
+    case C::EvaluatePackage:ok=ReevaluatePackage(c.form);break;
     case C::ShowMessage: {
       if(!c.expression.empty())ok=fo3script::Expression(*this,owner,c.expression,error,scriptId).Evaluate(value);
       if(ok)ok=QueueScriptMessage(c.form,value,!c.expression.empty());
@@ -306,12 +309,40 @@ int Player::ScriptButton() const {
   const auto i=scriptButtons_.find(scriptReference_);
   return i==scriptButtons_.end()?-1:i->second;
 }
+bool Player::IsQuestObject(uint32_t form) const {
+  const auto item=catalog_.items.find(form);if(item==catalog_.items.end())return false;
+  const auto override=state_.questObjectFlags.find(form);
+  return override==state_.questObjectFlags.end()?item->second.questItem:override->second;
+}
+bool Player::SetQuestObject(uint32_t form,bool quest) {
+  const auto item=catalog_.items.find(form);if(item==catalog_.items.end())return false;
+  if(IsQuestObject(form)==quest)return true;
+  if(item->second.questItem==quest)state_.questObjectFlags.erase(form);
+  else state_.questObjectFlags[form]=quest;
+  ++revision_;return true;
+}
+bool Player::RewardKarma(float amount) {
+  if(!std::isfinite(amount)||!std::isfinite(state_.karma))return false;
+  const float karma=std::clamp(state_.karma+amount,-1000.f,1000.f);
+  if(karma!=state_.karma){state_.karma=karma;++revision_;}
+  return true;
+}
+bool Player::ReevaluatePackage(uint32_t reference){
+  const auto p=catalog_.actorPlacements.find(reference);
+  if(p==catalog_.actorPlacements.end()||!catalog_.weapons.actors.count(p->second.base))return false;
+  // Q240's existing PackageRevision cache is invalidated by this revision.
+  // The actual authored PACK selection happens in Q240SelectPackage.
+  ++revision_;return true;
+}
 int32_t Player::ItemCount(uint32_t form) const {
   int64_t n=0;for(const auto& stack:state_.inventory)if(stack.formId==form)n+=stack.count;
   return int32_t(std::min<int64_t>(INT32_MAX,n));
 }
 bool Player::ScriptRemoveItem(uint32_t form,int32_t count){
   if(count<=0||!catalog_.items.count(form)||ItemCount(form)<count)return false;
+  int64_t available=0;
+  for(const auto& stack:state_.inventory)if(stack.formId==form&&!stack.equipped)available+=stack.count;
+  if(available<count)return false;
   // Script-origin quest item consumption is explicitly distinct from player Drop.
   int32_t remaining=count;
   for(auto it=state_.inventory.begin();it!=state_.inventory.end()&&remaining;){

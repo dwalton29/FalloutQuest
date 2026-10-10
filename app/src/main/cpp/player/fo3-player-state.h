@@ -136,6 +136,8 @@ struct State {
   uint64_t nextStackId = 1;
   std::vector<Stack> inventory;
   std::unordered_set<uint32_t> collected;
+  // Per-save SetQuestObject overrides; original ESM item metadata remains immutable.
+  std::unordered_map<uint32_t,bool> questObjectFlags;
   std::unordered_map<uint32_t, std::vector<Stack>> containers;
   std::vector<WorldWeapon> worldWeapons;
   bool developmentWeaponGranted = false;
@@ -225,6 +227,10 @@ public:
   int ScriptButton() const;
   int32_t ItemCount(uint32_t form) const;
   bool ScriptRemoveItem(uint32_t form,int32_t count);
+  bool IsQuestObject(uint32_t form) const;
+  bool SetQuestObject(uint32_t form,bool quest);
+  bool RewardKarma(float amount);
+  bool ReevaluatePackage(uint32_t reference);
   bool QueueScriptMessage(uint32_t form,float argument,bool hasArgument);
   bool QueueScriptSound(uint32_t form);
   bool PollScriptMessage(ScriptMessage& out);

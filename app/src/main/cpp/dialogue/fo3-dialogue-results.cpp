@@ -93,6 +93,16 @@ bool CompileResult(const fo3pipdata::Definitions& d,const fo3pipdata::ResultScri
       cmd.type=CommandType::ShowMessage;
       if(!(in>>a)||(cmd.form=form(a))==0){error="invalid showmessage form";return false;}
       std::getline(in,cmd.expression);
+    } else if(op=="setquestobject") {
+      cmd.type=CommandType::SetQuestObject;
+      if(!(in>>a>>b)||(cmd.form=form(a))==0||!number(b,cmd.value)||(cmd.value!=0&&cmd.value!=1)){error="invalid SetQuestObject";return false;}
+    } else if(op=="rewardkarma") {
+      cmd.type=CommandType::RewardKarma;
+      if(!(in>>a)||!number(a,cmd.value)){error="invalid RewardKarma";return false;}
+    } else if(op.size()>4&&op.compare(op.size()-4,4,".evp")==0) {
+      cmd.type=CommandType::EvaluatePackage;
+      cmd.form=form(op.substr(0,op.size()-4));
+      if(!cmd.form){error="unresolved EVP reference";return false;}
     } else if(op=="playsound") {
       cmd.type=CommandType::PlaySound;
       if(!(in>>a)||(cmd.form=form(a))==0){error="invalid playsound form";return false;}
