@@ -67,7 +67,22 @@ static void Filter() {
   assert(p.DispatchReferenceEvent(100,"OnActivate",0x14,error)==fo3player::ScriptEventResult::Executed);
   assert(p.Snapshot().pipboy.quests.count(20));
 }
+static void NumericLocalsAndRefSafety() {
+  auto c=Catalog();
+  c.pipboy.scripts[102].variables[1]="counter";
+  c.pipboy.scripts[102].source="scn Sample\\nshort counter\\nref other\\nBegin OnActivate\\nset counter to 7\\nEnd";
+  c.eventPrograms[102]=fo3script::ParseEvents(c.pipboy.scripts[102]);
+  fo3player::Player p(c);std::string error;
+  assert(p.DispatchReferenceEvent(100,"OnActivate",0x14,error)==fo3player::ScriptEventResult::Executed);
+  assert(p.Snapshot().pipboy.dialogueVariables.at((uint64_t(100)<<32)|1)==7);
+  c.pipboy.scripts[102].variables[2]="other";
+  c.pipboy.scripts[102].source="scn Sample\\nref other\\nBegin OnActivate\\nset other to 1\\nEnd";
+  c.eventPrograms[102]=fo3script::ParseEvents(c.pipboy.scripts[102]);
+  fo3player::Player r(std::move(c));
+  assert(r.DispatchReferenceEvent(100,"OnActivate",0x14,error)==fo3player::ScriptEventResult::Unsupported);
+  assert(r.Snapshot().pipboy.dialogueVariables.empty());
+}
 int main(){
-  Parsing();Dispatch();UnsupportedIsAtomic();Filter();
+  Parsing();Dispatch();UnsupportedIsAtomic();Filter();NumericLocalsAndRefSafety();
   std::cout<<"Original event source indexing, dispatch, scheduler and rollback passed\n";
 }
