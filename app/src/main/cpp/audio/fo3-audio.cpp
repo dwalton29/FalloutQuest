@@ -103,12 +103,22 @@ void Push(Event e) {
   if (!runtime.worker.joinable() || runtime.stop ||
       (!runtime.lastActive && (e.kind < 6 || e.kind==11)))
     return;
-  if (e.kind == 6 || e.kind == 7 || e.kind == 10 || e.kind == 13 || e.kind == 14)
+  if (e.kind == 6 || e.kind == 7 || e.kind == 10 || e.kind == 14)
     runtime.events.erase(
         std::remove_if(runtime.events.begin(), runtime.events.end(),
                        [&](const Event &old) { return old.kind == e.kind; }),
         runtime.events.end());
-  if(e.kind==13&&runtime.events.size()>=32)runtime.events.pop_front(); // voice start/stop cannot be dropped
+  if(e.kind==13) {
+    // A skipped response queues a stop followed by the next authored voice.
+    // Coalesce obsolete voice starts but retain the stop as a barrier, so
+    // Android releases the old MediaPlayer BEFORE starting its successor.
+    runtime.events.erase(
+        std::remove_if(runtime.events.begin(),runtime.events.end(),
+                       [&](const Event& old){
+                         return old.kind==13 && (e.id==0 || old.id!=0);
+                       }),runtime.events.end());
+    if(runtime.events.size()>=32)runtime.events.pop_front(); // preserve voice dispatch
+  }
   if (runtime.events.size() < 32) {
     runtime.events.push_back(e);
     runtime.cv.notify_one();
