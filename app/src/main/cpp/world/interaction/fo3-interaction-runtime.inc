@@ -186,7 +186,25 @@ void UpdateFo3LootSelection(const Fo3InteractionTarget& target,float stickY,doub
 
 bool ActivateFo3Interaction(float ox,float oy,float oz,float dx,float dy,float dz) {
     Fo3InteractionTarget target;
-    if (!QueryFo3Interaction(ox,oy,oz,dx,dy,dz,target) || !target.allowed) return false;
+    if (!QueryFo3Interaction(ox,oy,oz,dx,dy,dz,target)) return false;
+    if(!target.allowed){
+        // Existing scripted doors and scripted item bases were deliberately
+        // blocked by their legacy default-action policies. Still deliver an
+        // actual activation event, but never invent a door transition/pickup.
+        if(gPlayerSession && !gPlayerSession->saveBlocked && !target.talk &&
+           !target.container &&
+           gPlayerSession->player.HasReferenceEvent(target.reference,"OnActivate")){
+            const auto& refs=gPlayerSession->player.Definitions().references;
+            const auto ref=refs.find(target.reference);
+            if(ref!=refs.end() && ref->second.valid && !ref->second.locked &&
+               !(ref->second.flags&0x820u)){
+                std::string error;
+                gPlayerSession->player.DispatchReferenceEvent(
+                    target.reference,"OnActivate",fo3player::PlayerRef,error);
+            }
+        }
+        return false;
+    }
     if(target.talk){StartFo3Dialogue(target.reference);return false;}
     if(target.scripted){
         std::string error;
