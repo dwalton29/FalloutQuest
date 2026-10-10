@@ -44,6 +44,8 @@ struct Definitions {
     float pauseMin=0,pauseMax=0,coverRadius=0,coverChance=0;
     uint8_t dodgeChance=0,leftRightChance=0;
     std::array<float,8> manoeuvreTimers{};bool manoeuvresValid=false;
+    uint8_t meleeAttackChance=0;float meleeHoldMin=0,meleeHoldMax=0,recoilAttackBonus=0,unarmedAttackBonus=0;
+    bool meleeValid=false;std::array<float,21> advanced{};bool advancedValid=false;
     uint32_t restrictions=0;uint16_t flags=0;bool valid=false;
   };
   std::unordered_map<uint32_t,Actor> actors;

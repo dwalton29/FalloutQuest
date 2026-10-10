@@ -242,6 +242,7 @@ static bool Q230CrowdStep(const Q230ActorVisual&,const std::array<float,3>&);
 #define FO3_NPC_PATH_BLOCKED Q230PathBlocked
 #define FO3_NPC_ROAM_ENDPOINT_OCCUPIED(actor,point) Q230RoamEndpointOccupied(actor,point)
 #define FO3_NPC_CROWD_STEP(actor,point) Q230CrowdStep(actor,point)
+#define FO3_NPC_ROUTE_RESIDENTS gQ230NpcActors
 #define FO3_NPC_STAGGER_ROUTING
 #define FO3_NPC_WORLD_GROUND(x,z,referenceY,outY) SampleFo3ActorGroundQ240(x,z,referenceY,outY)
 #define FO3_NPC_FURNITURE_LOADING IsFo3LoadingVisible()
@@ -255,6 +256,7 @@ static bool Q230CrowdStep(const Q230ActorVisual&,const std::array<float,3>&);
 #undef FO3_NPC_FURNITURE_LOADING
 #undef FO3_NPC_WORLD_GROUND
 #undef FO3_NPC_PATH_BLOCKED
+#undef FO3_NPC_ROUTE_RESIDENTS
 #undef FO3_NPC_STAGGER_ROUTING
 #undef FO3_NPC_ROAM_ENDPOINT_OCCUPIED
 #undef FO3_NPC_CROWD_STEP
@@ -268,7 +270,7 @@ static bool Q230RoamEndpointOccupied(uint32_t self,const std::array<float,3>& po
     const auto here=Q240GamePosition(other);
     if(std::fabs(here[2]-point[2])>90.f)continue; // Megaton's stacked walkways
     if(Q240PlanarDistance(point,here)<70.f)return true;
-    if(other.runtime.activity==fo3npc::Activity::Package &&
+    if((other.runtime.activity==fo3npc::Activity::Package||other.runtime.activity==fo3npc::Activity::Combat) &&
        other.aiPathIndex<other.aiPathGame.size() &&
        std::fabs(other.aiPathGame.back()[2]-point[2])<90.f &&
        Q240PlanarDistance(point,other.aiPathGame.back())<70.f)return true;

@@ -7,11 +7,12 @@
 #include "player/fo3-vr-body.h"
 #include <unistd.h>
 std::vector<Q230ActorVisual> gQ230NpcActors;
+bool partialCover=false,captureCoverRays=false;std::vector<float> coverRayOrigins;
 bool blocked=false,loading=false,blockSecondSightRay=false;int sightRayCount=0,dialogueEnds=0,shots=0;double emittedDamage=0;
 bool IsFo3LoadingVisible(){return loading;}
 void Q230UpdateActor(Q230ActorVisual&){}
-bool Q230LiveBone(const Q230ActorVisual& actor,int,std::array<float,3>& p){p=actor.runtime.position;p[1]+=1;return true;}
-bool HasFo3InteractionOccluder(float,float,float,float,float,float,float,uint32_t){return blocked||(blockSecondSightRay&&++sightRayCount==2);}
+bool Q230LiveBone(const Q230ActorVisual& actor,int bone,std::array<float,3>& p){p=actor.runtime.position;p[1]+=bone==actor.headBone?1.7f:1.f;return true;}
+bool HasFo3InteractionOccluder(float,float y,float,float,float dy,float,float length,uint32_t){if(captureCoverRays)coverRayOrigins.push_back(y);if(partialCover)return y+dy*length<.3f;return blocked||(blockSecondSightRay&&++sightRayCount==2);}
 void EndFo3Dialogue(const char*){++dialogueEnds;}
 namespace fo3audio {void SoundEvent(uint32_t){}void NamedSound(const std::string&) {}}
 static fo3anim::Matrix Q230WeaponMatrix(Q230ActorVisual& actor){auto m=fo3anim::Identity();m[12]=actor.runtime.position[0];m[13]=actor.runtime.position[1]+1;m[14]=actor.runtime.position[2];return m;}
@@ -33,7 +34,7 @@ static void Prepare() {
   actor.combatWeapons[10]=weapon;actor.runtime.yaw=0;actor.runtime.activity=fo3npc::Activity::Package;actor.runtime.package=50;
   actor.runtime.BeginDialogue();gQ230NpcActors={actor};
   gQ210Head=actor.runtime.position;gQ210Head[1]+=1;gQ210Head[2]-=1;
-  shots=0;blocked=false;loading=false;dialogueEnds=0;
+  shots=0;blocked=false;partialCover=captureCoverRays=false;coverRayOrigins.clear();loading=false;dialogueEnds=0;
 }
 static void AddNpc(fo3player::Catalog& c,uint32_t ref,uint32_t base,uint32_t target=0) {
   auto actor=gQ230NpcActors.front();actor.source.refFormId=ref;actor.source.baseFormId=base;actor.runtime={};actor.runtime.position=gQ230NpcActors.front().runtime.position;actor.runtime.position[2]-=.5f;
@@ -92,7 +93,43 @@ static void OriginalCombatPolicies(const char* path) {
   }
   assert(defensive==161&&overrides==17);std::cout<<"Original Defensive packages="<<defensive<<" CNAM combat styles="<<overrides<<'\n';
 }
+static void WeaponCommitAndMeleeTests(){
+  Prepare();auto& actor=gQ230NpcActors[0];auto c=gPlayerSession->player.Definitions();
+  auto melee=c.items.at(10);melee.formId=20;melee.weapon.animation=1;melee.weapon.ammo=0;melee.weapon.clip=0;
+  melee.weapon.maxRange=30;melee.weapon.damage=50;c.items[20]=melee;c.actorInventories[43].entries.push_back({20,0,1,1,1,false});
+  auto prepared=actor.combatWeapons.at(10);prepared.definition=melee.weapon;actor.combatWeapons[20]=prepared;
+  gPlayerSession=std::make_unique<Session>(c);assert(gPlayerSession->player.PrepareActorInventory(42));
+  assert(Q230SelectWeapon(actor,100)&&gPlayerSession->player.ActorWeapon(42)->formId==10);
+  actor.runtime.pendingAttack=true;assert(Q230SelectWeapon(actor,10)&&gPlayerSession->player.ActorWeapon(42)->formId==10);
+  actor.runtime.pendingAttack=false;actor.runtime.reloadUntil=12;
+  assert(Q230SelectWeapon(actor,10)&&gPlayerSession->player.ActorWeapon(42)->formId==10);
+  actor.runtime.reloadUntil=0;actor.runtime.actionUntil=12;actor.aiLastUpdate=11;
+  assert(Q230SelectWeapon(actor,10)&&gPlayerSession->player.ActorWeapon(42)->formId==10);
+  actor.runtime.actionUntil=0;assert(Q230SelectWeapon(actor,10)&&gPlayerSession->player.ActorWeapon(42)->formId==20);
+
+  c.items[20].weapon.maxRange=200;actor.combatWeapons[20].definition.maxRange=200;
+  auto& style=c.weapons.styles[200];style.valid=style.meleeValid=true;style.restrictions=1;
+  style.flags=1;style.meleeAttackChance=0;style.meleeHoldMin=style.meleeHoldMax=1;c.weapons.defaultCombatStyle=200;
+  gPlayerSession=std::make_unique<Session>(c);assert(gPlayerSession->player.PrepareActorInventory(42));
+  actor.runtime.equippedWeapon=0;actor.stateRestored=true;actor.runtime.EndDialogue();actor.runtime.BeginCombat(0x14);actor.aiLastUpdate=0;
+  Q230SimulateActor(actor,1);assert(actor.runtime.action==fo3npc::CombatAction::Wait&&!actor.runtime.pendingAttack&&actor.runtime.nextMeleeDecision==2);
+  Q230SimulateActor(actor,1.5);assert(!actor.runtime.pendingAttack&&actor.runtime.nextMeleeDecision==2);
+  c.weapons.styles[200].meleeAttackChance=100;gPlayerSession=std::make_unique<Session>(c);
+  assert(gPlayerSession->player.PrepareActorInventory(42));actor.runtime.equippedWeapon=0;
+  Q230SimulateActor(actor,2.1);assert(actor.runtime.pendingAttack);
+  const float health=gPlayerSession->player.Health();Q230SimulateActor(actor,2.2);
+  assert(!actor.runtime.pendingAttack&&gPlayerSession->player.Health()<health&&shots==0);
+}
+static void CoverGeometryTests(){
+  Prepare();auto& actor=gQ230NpcActors[0];const std::array<float,3> threat{1000,2000,120};
+  partialCover=true;actor.runtime.nextPath=0;
+  assert(!Q230TacticalRoute(actor,threat,0,INFINITY,false,true,1)); // Torso hidden, head exposed.
+  partialCover=false;blocked=true;captureCoverRays=true;actor.runtime.nextPath=0;
+  assert(Q230TacticalRoute(actor,threat,0,INFINITY,false,true,2));
+  assert(!coverRayOrigins.empty());for(float y:coverRayOrigins)assert(y==Q240ScenePosition(threat)[1]);
+}
 int main(int argc,char** argv){
+  WeaponCommitAndMeleeTests();CoverGeometryTests();
   {
     Prepare();auto& actor=gQ230NpcActors[0];assert(gPlayerSession->player.PrepareActorInventory(42));
     assert(Q230SelectWeapon(actor));assert(gPlayerSession->player.ReloadActorWeapon(42,actor.runtime.equippedWeapon));
@@ -123,7 +160,7 @@ int main(int argc,char** argv){
     assert(!actor.aiPathGame.empty()&&Q240PlanarDistance(actor.aiPathGame.back(),threat)>Q240PlanarDistance(start,threat));
     actor.runtime.action=fo3npc::CombatAction::Flee;
     const auto route=actor.aiPathGame;assert(Q230TacticalRoute(actor,threat,800,INFINITY,true,false,1.1)&&actor.aiPathGame==route);
-    actor.aiPathGame.clear();actor.aiPathSurfaces.clear();actor.aiPathIndex=0;actor.runtime.nextPath=0;
+    actor.runtime.nextPath=0;
     assert(!Q230TacticalRoute(actor,threat,0,INFINITY,false,true,2)&&actor.aiPathGame.empty()); // Clear sight is not cover.
     blocked=true;actor.runtime.nextPath=0;
     assert(Q230TacticalRoute(actor,threat,0,INFINITY,false,true,3)&&!actor.aiPathGame.empty());

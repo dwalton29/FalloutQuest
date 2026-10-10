@@ -2,6 +2,7 @@
 #include "npc/fo3-npc-combat-assets.h"
 #include "weapons/fo3-weapon-hit.h"
 #include <cassert>
+#include <cstring>
 #include <iostream>
 #include <fstream>
 #include <unistd.h>
@@ -140,6 +141,32 @@ static void InventoryDamagePersistence(bool finite) {
   std::ofstream out(path,std::ios::binary);out.write((const char*)bytes.data(),bytes.size());out.close();assert(corpse.Restore(path,error)&&corpse.Snapshot().actors.empty());
   unlink(path.c_str());
 }
+static void StyleDecodeValidation(){
+  std::vector<uint8_t> standard(82),advanced(84),simple(64),payload;
+  const auto put=[](std::vector<uint8_t>& bytes,size_t at,float value){std::memcpy(bytes.data()+at,&value,4);};
+  standard[37]=100;standard[80]=1;put(standard,72,.5f);put(standard,76,1.5f);
+  for(size_t i=0;i<21;++i)put(advanced,i*4,1);put(advanced,0,-20); // Signed fatigue coefficient is legal.
+  const auto decode=[&](){payload.clear();for(const auto& entry:std::array<std::pair<const char*,const std::vector<uint8_t>*>,3>{{{"CSTD",&standard},{"CSAD",&advanced},{"CSSD",&simple}}}){
+      payload.insert(payload.end(),entry.first,entry.first+4);const size_t size=entry.second->size();payload.push_back(uint8_t(size));payload.push_back(uint8_t(size>>8));payload.insert(payload.end(),entry.second->begin(),entry.second->end());}
+    fo3weapon::Definitions definitions;fo3weapon::Decode(definitions,"CSTY",200,payload);return definitions.styles.at(200);};
+  auto style=decode();assert(style.meleeValid&&style.advancedValid&&style.meleeHoldMin==.5f);
+  put(standard,72,-1);style=decode();assert(!style.meleeValid&&style.advancedValid);
+  put(advanced,16,NAN);assert(!decode().advancedValid);
+}
+static void SourceContext(){
+  fo3weapon::Definitions::CombatStyle style;style.dodgeChance=80;
+  style.meleeAttackChance=40;style.flags=1;style.recoilAttackBonus=5;style.unarmedAttackBonus=5;
+  style.advancedValid=true;style.advanced[4]=1;style.advanced[5]=.75f;
+  style.advanced[6]=1;style.advanced[7]=.7f;style.advanced[8]=1;style.advanced[9]=.5f;
+  style.advanced[16]=.75f;style.advanced[17]=1;
+  assert(fo3npc::DodgeChance(style,true)==80&&fo3npc::DodgeChance(style,false)==60);
+  assert(fo3npc::ForwardDodgeChance(style,true,true)==50);
+  assert(fo3npc::ForwardDodgeChance(style,false,false)<50);
+  assert(fo3npc::MeleeAttackChance(style,false,true,true)==50);
+  assert(fo3npc::MeleeAttackChance(style,true,false,false)==30);
+  style.flags=0;assert(fo3npc::MeleeAttackChance(style,true,false,false)==100);
+  for(unsigned i=0;i<1000;++i){assert(fo3npc::CombatChance(42,i,100));assert(!fo3npc::CombatChance(42,i,0));}
+}
 static void Original(const char* path) {
   Catalog c;std::string error;assert(LoadCatalog(path,c,error));assert(c.weapons.styles.size()==48&&c.weapons.detectionDistance==2500&&c.weapons.drMax==85);
   // Original Fallout3.esm has fMoveRunMult=4.0; only active combat Flee uses it.
@@ -149,6 +176,8 @@ static void Original(const char* path) {
   assert(std::fabs(c.npcCombatSettings.at("fConfidenceAverage")-.1875f)<.0001f);
   const auto& style=c.weapons.styles.at(c.weapons.defaultCombatStyle);
   assert(style.manoeuvresValid&&style.dodgeChance==75&&style.leftRightChance==50);
+  assert(style.meleeValid&&style.meleeAttackChance==40&&style.meleeHoldMin==.5f&&style.meleeHoldMax==1.5f);
+  assert(style.advancedValid&&style.advanced[4]==1&&style.advanced[5]==.75f&&style.advanced[16]==.75f);
   assert((style.manoeuvreTimers==std::array<float,8>{.5f,1.5f,.5f,1.f,.25f,.75f,.5f,1.5f}));
   assert(style.coverRadius==2048&&style.coverChance==100&&style.pauseMin==2&&style.pauseMax==2);
   // Canonical MegatonSettlerWeapon and WithAmmoAssaultRifleNPC LVLI records.
@@ -173,4 +202,4 @@ static void Original(const char* path) {
     assert(fo3npc::AI(c.pipboy,r.second.base).valid);++count;
   }assert(count==5);
 }
-int main(int argc,char** argv){StateAndPerception();CombatAssetCandidates();InventoryDamagePersistence(true);InventoryDamagePersistence(false);if(argc>1)Original(argv[1]);std::cout<<"NPC combat state tests passed\n";}
+int main(int argc,char** argv){StyleDecodeValidation();SourceContext();StateAndPerception();CombatAssetCandidates();InventoryDamagePersistence(true);InventoryDamagePersistence(false);if(argc>1)Original(argv[1]);std::cout<<"NPC combat state tests passed\n";}

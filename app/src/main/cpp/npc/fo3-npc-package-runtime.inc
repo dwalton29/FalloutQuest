@@ -185,9 +185,45 @@ static bool Q240Portal(const Q240NavigationGraph& graph,const Q240Node& from,con
   }
   return false;
 }
+// Soft local congestion costs. Original topology and fixed destinations remain
+// authoritative; an occupied sole passage still has a route and can yield.
+struct Q240RouteCosts {
+  std::vector<std::array<float,3>> points;
+  std::unordered_map<uint64_t,std::vector<size_t>> buckets;
+  static constexpr float radius=fo3npc::MovementPolicy::CrowdRadius*2;
+  static uint64_t Key(int32_t x,int32_t y){return (uint64_t(uint32_t(x))<<32)|uint32_t(y);}
+  void Add(const std::array<float,3>& point){
+    for(float value:point)if(!std::isfinite(value))return;
+    if(std::fabs(point[0]/radius)>=INT32_MAX||std::fabs(point[1]/radius)>=INT32_MAX)return;
+    buckets[Key(int32_t(std::floor(point[0]/radius)),int32_t(std::floor(point[1]/radius)))].push_back(points.size());points.push_back(point);
+  }
+  float Penalty(const std::array<float,3>& portal)const{
+    float cost=0;
+    if(!std::isfinite(portal[0])||!std::isfinite(portal[1])||std::fabs(portal[0]/radius)>=INT32_MAX-1||std::fabs(portal[1]/radius)>=INT32_MAX-1)return cost;
+    const int32_t x=int32_t(std::floor(portal[0]/radius)),y=int32_t(std::floor(portal[1]/radius));
+    for(int dx=-1;dx<=1;++dx)for(int dy=-1;dy<=1;++dy){
+      const auto bucket=buckets.find(Key(x+dx,y+dy));if(bucket==buckets.end())continue;
+      for(size_t index:bucket->second){const auto& point=points[index];if(std::fabs(point[2]-portal[2])<fo3npc::MovementPolicy::CrowdHeight)
+        cost+=std::max(0.f,1-Q240PlanarDistance(point,portal)/radius)*radius*2;}
+    }
+    return cost;
+  }
+};
+template<class Actors>
+static Q240RouteCosts Q240ResidentRouteCosts(uint32_t self,const Actors& actors){
+  Q240RouteCosts costs;costs.points.reserve(128);
+  for(const auto& other:actors){
+    if(other.source.refFormId==self||other.runtime.offScene||!other.runtime.Alive())continue;
+    if(costs.points.size()+2>128)break; // Bounded Quest route snapshot.
+    costs.Add(other.stateRestored?Q240GamePosition(other):
+      std::array<float,3>{other.source.x,other.source.y,other.source.z});
+    if(other.aiPathIndex<other.aiPathGame.size())costs.Add(other.aiPathGame[other.aiPathIndex]);
+  }
+  return costs;
+}
 static bool Q240Path(const Q240NavigationGraph& graph,const std::array<float,3>& from,
                      const std::array<float,3>& to,std::vector<std::array<float,3>>& path,std::string* failure=nullptr,
-                     std::vector<std::pair<size_t,size_t>>* surfaces=nullptr) {
+                     std::vector<std::pair<size_t,size_t>>* surfaces=nullptr,const Q240RouteCosts* routeCosts=nullptr) {
   ++gQ240PathsPlanned;
   path.clear();if(surfaces)surfaces->clear();if(failure)failure->clear();
   auto fail=[&](const char* why){if(failure)*failure=why;return false;};
@@ -219,7 +255,7 @@ static bool Q240Path(const Q240NavigationGraph& graph,const std::array<float,3>&
       const size_t next=Q240Flat(graph,nextNode);if(next>=n||closed[next])return;
       std::array<float,3> portal{};if(!Q240Portal(graph,currentNode,nextNode,portal))return;
       const auto there=Q240Centroid(graph,nextNode);
-      const float tentative=cost[current]+Q240PlanarDistance(here,there);
+      const float tentative=cost[current]+Q240PlanarDistance(here,there)+(routeCosts?routeCosts->Penalty(portal):0);
       if(tentative>=cost[next])return;
       previous[next]=current;cost[next]=tentative;
       score[next]=tentative+Q240PlanarDistance(there,Q240Centroid(graph,goal));
@@ -241,6 +277,17 @@ static bool Q240Path(const Q240NavigationGraph& graph,const std::array<float,3>&
   path.push_back(Q240GroundPoint(*graph.meshes[goal.mesh],goal.triangle,to));
   if(surfaces)surfaces->push_back({goal.mesh,goal.triangle});
   return true;
+}
+static bool Q240ActorPath(const Q230ActorVisual& actor,const Q240NavigationGraph& graph,
+    const std::array<float,3>& from,const std::array<float,3>& to,
+    std::vector<std::array<float,3>>& path,std::string* failure=nullptr,
+    std::vector<std::pair<size_t,size_t>>* surfaces=nullptr){
+#ifdef FO3_NPC_ROUTE_RESIDENTS
+  const auto costs=Q240ResidentRouteCosts(actor.source.refFormId,FO3_NPC_ROUTE_RESIDENTS);
+  return Q240Path(graph,from,to,path,failure,surfaces,&costs);
+#else
+  (void)actor;return Q240Path(graph,from,to,path,failure,surfaces);
+#endif
 }
 // Shared bounded escape endpoint search. Only reciprocal authored NAVM portals
 // are visited. For a package, prefer a nearby surface that meets its actual
@@ -378,7 +425,7 @@ static size_t Q240SandboxTarget(const Q230ActorVisual& actor,const fo3pipdata::P
   // cannot monopolise selection or strand actors that have other activities.
   for(size_t attempt=0;attempt<std::min(size_t(8),choices.size());++attempt){const size_t i=choices[(hash+attempt)%choices.size()];const auto& a=f.scene->slots[i].alignment;
     std::vector<std::array<float,3>> route;
-    if(actor.navigationGraph&&Q240Path(*actor.navigationGraph,Q240GamePosition(actor),{a[12],a[13],a[14]},route)&&!route.empty()&&Q240PlanarDistance(route.back(),{a[12],a[13],a[14]})<=8.f)return i;
+    if(actor.navigationGraph&&Q240ActorPath(actor,*actor.navigationGraph,Q240GamePosition(actor),{a[12],a[13],a[14]},route)&&!route.empty()&&Q240PlanarDistance(route.back(),{a[12],a[13],a[14]})<=8.f)return i;
   }return SIZE_MAX;
 }
 // Use the immutable v185 graph to find an accessible original load door
@@ -418,7 +465,7 @@ static bool Q240NpcRemoteDoor(const Q230ActorVisual& actor,uint32_t targetCell,
     if(!index->CellRoute(edge->destinationCell,targetCell,remainder))continue;
     std::array<float,3> point{placement->second.x,placement->second.y,placement->second.z};
     std::vector<std::array<float,3>> route;
-    if(!Q240Path(*actor.navigationGraph,here,point,route)||route.empty()||
+    if(!Q240ActorPath(actor,*actor.navigationGraph,here,point,route)||route.empty()||
        Q240PlanarDistance(route.back(),point)>96.f)continue;
     const float distance=Q240PlanarDistance(here,point);
     if(remainder.size()+1<minLegs||(remainder.size()+1==minLegs&&distance<minDistance)){
@@ -696,7 +743,7 @@ static bool Q240BuildPackagePath(Q230ActorVisual& actor,const fo3pipdata::Packag
     destination=choices[selected];
   }
   std::string failure;
-  const bool success=Q240Path(graph,current,destination,actor.aiPathGame,&failure,&actor.aiPathSurfaces);
+  const bool success=Q240ActorPath(actor,graph,current,destination,actor.aiPathGame,&failure,&actor.aiPathSurfaces);
   if(success && ((package.type==5&&radius>0)||package.type==12)) {
     actor.runtime.lastRoamDestination=destination;
     actor.runtime.hasLastRoamDestination=true;
@@ -1057,7 +1104,7 @@ static void Q240AdvanceNpcXtel(Q230ActorVisual& actor,float dt,double now){
     actor.aiPathGame.clear();actor.aiPathSurfaces.clear();actor.aiPathIndex=0;
     if(now<actor.aiRepathAt)return;
     std::string failure;
-    if(!Q240Path(*actor.navigationGraph,here,target,actor.aiPathGame,&failure,&actor.aiPathSurfaces)||
+    if(!Q240ActorPath(actor,*actor.navigationGraph,here,target,actor.aiPathGame,&failure,&actor.aiPathSurfaces)||
        actor.aiPathGame.empty()||
        Q240PlanarDistance(actor.aiPathGame.back(),target)>96.f){
       Q240PackageRouteFailed(actor,now,"XTEL NAVM approach unavailable");return;
@@ -1121,7 +1168,7 @@ static void Q240AdvanceFleePackage(Q230ActorVisual& actor,const fo3pipdata::Pack
     actor.aiPathGame.clear();actor.aiPathSurfaces.clear();actor.aiPathIndex=0;actor.runtime.navigationDoor=0;actor.runtime.nextDoorQuery=0;
     std::array<float,3> destination{};std::string failure;
     if(!Q240FleeDestination(*actor.navigationGraph,current,threat,float(package.target.radius),destination)||
-       !Q240Path(*actor.navigationGraph,current,destination,actor.aiPathGame,&failure,&actor.aiPathSurfaces)) {
+       !Q240ActorPath(actor,*actor.navigationGraph,current,destination,actor.aiPathGame,&failure,&actor.aiPathSurfaces)) {
       Q240AiLogOnce(actor.source.refFormId,actor.aiPackage,failure.empty()?"no farther reachable Flee endpoint":failure);
       Q240PackageRouteFailed(actor,now,"Flee route unavailable");return;
     }
@@ -1153,7 +1200,7 @@ static void Q240AdvanceAccompany(Q230ActorVisual& actor,const fo3pipdata::Packag
     const bool firstRoute=actor.aiRepathAt==0;
     actor.aiRepathAt=now+.75;actor.runtime.pathDestinationGame=destination;actor.runtime.navigationDoor=0;actor.runtime.nextDoorQuery=0;actor.aiPathIndex=0;
     std::string failure;
-    if(!Q240Path(*actor.navigationGraph,here,destination,actor.aiPathGame,&failure,&actor.aiPathSurfaces)||actor.aiPathGame.empty()||Q240PlanarDistance(actor.aiPathGame.back(),destination)>8.f){Q240AccompanyOnce(actor.source.refFormId,actor.aiPackage,p.target.value,"UNSUPPORTED","NAVM endpoint unavailable");Q240PackageRouteFailed(actor,now,"Accompany NAVM endpoint unavailable");return;}
+    if(!Q240ActorPath(actor,*actor.navigationGraph,here,destination,actor.aiPathGame,&failure,&actor.aiPathSurfaces)||actor.aiPathGame.empty()||Q240PlanarDistance(actor.aiPathGame.back(),destination)>8.f){Q240AccompanyOnce(actor.source.refFormId,actor.aiPackage,p.target.value,"UNSUPPORTED","NAVM endpoint unavailable");Q240PackageRouteFailed(actor,now,"Accompany NAVM endpoint unavailable");return;}
     Q6H_LOGI("NPC ACCOMPANY %s actor=%08X package=%08X target=%08X destination=(%.1f,%.1f,%.1f) distance=%d",firstRoute?"ROUTE":"REPATH",actor.source.refFormId,actor.aiPackage,p.target.value,destination[0],destination[1],destination[2],p.target.radius);
   }
   Q240AdvancePath(actor,dt,now);
@@ -1189,7 +1236,7 @@ static void Q240AdvanceNpcTalk(Q230ActorVisual& actor,const fo3pipdata::PackageD
     actor.runtime.navigationDoor=0;actor.runtime.pathDestinationGame=listener;
     actor.aiRepathAt=now+.75;
     std::string error;
-    if(!actor.navigationGraph||!Q240Path(*actor.navigationGraph,here,listener,actor.aiPathGame,
+    if(!actor.navigationGraph||!Q240ActorPath(actor,*actor.navigationGraph,here,listener,actor.aiPathGame,
           &error,&actor.aiPathSurfaces)||actor.aiPathGame.empty()||
        Q240PlanarDistance(actor.aiPathGame.back(),listener)>talkingDistance){
       Q240PackageRouteFailed(actor,now,"Dialogue partner NAVM approach unavailable");return;
@@ -1247,7 +1294,7 @@ static bool Q240AdvanceFurniture(Q230ActorVisual& actor,const fo3pipdata::Packag
     Q6H_LOGI("NPC ACTIVITY SELECT actor=%08X package=%08X target=%08X marker=%d reservation=1",actor.source.refFormId,id,slot.reference,slot.idleMarker);
     f.anchor={slot.alignment[12],slot.alignment[13],slot.alignment[14]};f.yaw=std::atan2(-slot.alignment[4],slot.alignment[5]);
     std::string failure;
-    if(!Q240Path(*actor.navigationGraph,Q240GamePosition(actor),f.anchor,actor.aiPathGame,&failure,&actor.aiPathSurfaces)){Q240PackageRouteFailed(actor,now,"furniture NAVM approach unavailable");return true;}
+    if(!Q240ActorPath(actor,*actor.navigationGraph,Q240GamePosition(actor),f.anchor,actor.aiPathGame,&failure,&actor.aiPathSurfaces)){Q240PackageRouteFailed(actor,now,"furniture NAVM approach unavailable");return true;}
     actor.aiPathIndex=0;actor.runtime.blockedSince=-1;
   }
   if(f.phase==fo3furniture::Phase::Approach){

@@ -65,6 +65,25 @@ inline float CombatChoice(uint32_t reference,uint32_t serial,float minimum,float
   const uint32_t hash=reference*2654435761u^serial*2246822519u;
   return minimum+(std::max(minimum,maximum)-minimum)*float(hash%1000u)/999.f;
 }
+inline bool CombatChance(uint32_t reference,uint32_t serial,float percent){
+  return percent>=100||(percent>0&&CombatChoice(reference,serial,0,100)<percent);
+}
+// Source context multipliers only. Fatigue/encumbrance/skill formulas remain
+// undecoded; no guessed formula is substituted for them.
+inline float DodgeChance(const fo3weapon::Definitions::CombatStyle& style,bool underAttack){
+  return std::clamp(float(style.dodgeChance)*(style.advancedValid?style.advanced[underAttack?4:5]:1.f),0.f,100.f);
+}
+inline float ForwardDodgeChance(const fo3weapon::Definitions::CombatStyle& style,bool underAttack,bool attacking){
+  if(!style.advancedValid)return 50;
+  const float forward=style.advanced[attacking?8:9],back=style.advanced[underAttack?6:7];
+  return forward+back>0?forward/(forward+back)*100:0;
+}
+inline float MeleeAttackChance(const fo3weapon::Definitions::CombatStyle& style,bool underAttack,bool recoiling,bool unarmed){
+  if(!(style.flags&1))return 100; // CSTD Choose Attack using % Chance.
+  float chance=style.meleeAttackChance+(recoiling?style.recoilAttackBonus:0)+(unarmed?style.unarmedAttackBonus:0);
+  if(style.advancedValid)chance*=style.advanced[underAttack?16:17];
+  return std::clamp(chance,0.f,100.f);
+}
 // Timing derives from WEAP/CSTY; no catch-up volley after a long frame.
 inline float ShotInterval(const fo3weapon::Definition& d,const fo3weapon::Definitions::CombatStyle* style){
   const float rate=d.Automatic()?d.rate:d.shotsPerSecond;

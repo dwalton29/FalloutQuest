@@ -51,6 +51,17 @@ void Decode(Definitions&o,const std::string&t,uint32_t id,const std::vector<uint
       style.manoeuvresValid=style.dodgeChance<=100&&style.leftRightChance<=100;
       for(size_t i=0;i<8;++i){style.manoeuvreTimers[i]=fo3esm::ReadF32(b+4+i*4);if(!std::isfinite(style.manoeuvreTimers[i])||style.manoeuvreTimers[i]<0)style.manoeuvresValid=false;}
     }
+    if(t=="CSTY"&&k=="CSTD"&&n>=82){
+      style.meleeAttackChance=b[37];style.recoilAttackBonus=fo3esm::ReadF32(b+40);style.unarmedAttackBonus=fo3esm::ReadF32(b+48);
+      style.meleeHoldMin=fo3esm::ReadF32(b+72);style.meleeHoldMax=fo3esm::ReadF32(b+76);
+      style.meleeValid=style.meleeAttackChance<=100&&style.meleeHoldMin>=0&&style.meleeHoldMax>=style.meleeHoldMin;
+      for(float value:{style.meleeHoldMin,style.meleeHoldMax,style.recoilAttackBonus,style.unarmedAttackBonus})if(!std::isfinite(value))style.meleeValid=false;
+    }
+    if(t=="CSTY"&&k=="CSAD"&&n==84){
+      style.advancedValid=true;
+      for(size_t i=0;i<style.advanced.size();++i){style.advanced[i]=fo3esm::ReadF32(b+i*4);if(!std::isfinite(style.advanced[i]))style.advancedValid=false;}
+      for(size_t i:{4u,5u,6u,7u,8u,9u,12u,13u,16u,17u,18u})if(style.advanced[i]<0)style.advancedValid=false;
+    }
     if(t=="CSTY"&&k=="CSSD"&&n==64){
       style.coverRadius=fo3esm::ReadF32(b);style.coverChance=fo3esm::ReadF32(b+4);
       style.pauseMin=fo3esm::ReadF32(b+8);style.pauseMax=fo3esm::ReadF32(b+12);
