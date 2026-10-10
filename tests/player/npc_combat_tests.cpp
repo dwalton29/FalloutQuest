@@ -133,12 +133,12 @@ static void InventoryDamagePersistence(bool finite) {
   {
     std::ifstream f(path,std::ios::binary);std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(f)),{});f.close();
     auto put=[&](size_t at,uint32_t n){for(int i=0;i<4;++i)bytes[at+i]=(n>>(8*i))&255;};
-    put(bytes.size()-24,0x7fc00000);put(16,crc32(0,bytes.data()+20,bytes.size()-20));
+    put(bytes.size()-32,0x7fc00000);put(16,crc32(0,bytes.data()+20,bytes.size()-20));
     std::ofstream out(path,std::ios::binary);out.write((const char*)bytes.data(),bytes.size());out.close();
     assert(!corpse.Restore(path,error)&&corpse.ActorHealth(100)==0&&corpse.Weapon(id));
   }
   // v6 has no actor extension: preserve older damage/inventory, rebuild routes.
-  Player empty(c);assert(empty.Save(path,error));std::ifstream f(path,std::ios::binary);std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(f)),{});f.close();bytes.resize(bytes.size()-24);
+  Player empty(c);assert(empty.Save(path,error));std::ifstream f(path,std::ios::binary);std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(f)),{});f.close();bytes.resize(bytes.size()-32); // v12 adds eight bytes after the v11 clock/calendar
   auto put=[&](size_t at,uint32_t n){for(int i=0;i<4;++i)bytes[at+i]=(n>>(8*i))&255;};put(4,6);put(12,bytes.size()-20);put(16,crc32(0,bytes.data()+20,bytes.size()-20));
   std::ofstream out(path,std::ios::binary);out.write((const char*)bytes.data(),bytes.size());out.close();assert(corpse.Restore(path,error)&&corpse.Snapshot().actors.empty());
   unlink(path.c_str());
