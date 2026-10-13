@@ -221,7 +221,7 @@ inline bool BuildPromptGeometry(const char* promptChars) {
     return true;
 }
 
-inline void Render(const float* mvp, const char* promptChars) {
+inline void Render(const float* mvp, const char* promptChars,bool crime=false) {
     if (!mvp || !promptChars || !promptChars[0]) return;
 
     GlStateGuard guard;
@@ -239,7 +239,8 @@ inline void Render(const float* mvp, const char* promptChars) {
 
     glUseProgram(s.program);
     glUniformMatrix4fv(s.mvpLoc, 1, GL_FALSE, mvp);
-    glUniform4f(s.tintLoc, 26.0f / 255.0f, 1.0f, 128.0f / 255.0f, 1.0f);
+    // FALLOUT.INI Interface HUDMain/HUDAlt; engine selects HUDAlt for crime.
+    glUniform4f(s.tintLoc, crime?1.0f:26.0f/255, crime?67.0f/255:1.0f, crime?42.0f/255:128.0f/255, 1.0f);
     glUniform1i(s.texLoc, 0);
     glBindVertexArray(s.vao);
     glActiveTexture(GL_TEXTURE0);
@@ -261,8 +262,8 @@ inline void Shutdown() {
 
 } // namespace fo3hudrenderer
 
-inline void RenderFo3InteractionHudBase(const float* mvp, const char* prompt) {
-    fo3hudrenderer::Render(mvp, prompt);
+inline void RenderFo3InteractionHudBase(const float* mvp, const char* prompt,bool crime=false) {
+    fo3hudrenderer::Render(mvp, prompt,crime);
 }
 
 inline void ShutdownFo3InteractionHudBase() {

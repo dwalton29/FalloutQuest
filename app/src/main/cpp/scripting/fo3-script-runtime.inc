@@ -82,26 +82,27 @@ bool Player::PreviewDialogueResults(const fo3pipdata::ResultScript& begin,const 
   // Do not copy the immutable ESM catalogue for every visible dialogue INFO.
   auto& preview=*const_cast<Player*>(this);
   struct Restore {State& state;uint64_t& revision;State before;uint64_t old;
+    std::vector<fo3player::KarmaEvent>& karma;size_t karmaCount;
     std::vector<fo3player::ScriptMessage>& messages;std::vector<uint32_t>& sounds;size_t messageCount,soundCount;
-    ~Restore(){state=std::move(before);revision=old;messages.resize(messageCount);sounds.resize(soundCount);}}
-    restore{state_,revision_,state_,revision_,preview.pendingScriptMessages_,preview.pendingScriptSounds_,
+    ~Restore(){state=std::move(before);revision=old;messages.resize(messageCount);sounds.resize(soundCount);karma.resize(karmaCount);}}
+    restore{state_,revision_,state_,revision_,preview.pendingKarmaEvents_,preview.pendingKarmaEvents_.size(),preview.pendingScriptMessages_,preview.pendingScriptSounds_,
       preview.pendingScriptMessages_.size(),preview.pendingScriptSounds_.size()};
   error.clear();unsigned budget=4096;
   return preview.RunScript(begin,0,0,budget,error)&&preview.RunScript(end,0,0,budget,error);
 }
 bool Player::ExecuteDialogueResult(const fo3pipdata::ResultScript& script,std::string& error) {
   error.clear();const auto before=state_;const auto revision=revision_;unsigned budget=4096;
-  const auto messages=pendingScriptMessages_.size(),sounds=pendingScriptSounds_.size();
+  const auto messages=pendingScriptMessages_.size(),sounds=pendingScriptSounds_.size(),karma=pendingKarmaEvents_.size();
   if(RunScript(script,0,0,budget,error))return true;
   state_=before;revision_=revision;pendingScriptMessages_.resize(messages);
-  pendingScriptSounds_.resize(sounds);return false;
+  pendingScriptSounds_.resize(sounds);pendingKarmaEvents_.resize(karma);return false;
 }
 bool Player::ExecuteQuestStage(uint32_t id,uint16_t stage,std::string& error) {
   error.clear();const auto before=state_;const auto revision=revision_;unsigned budget=4096;
-  const auto messages=pendingScriptMessages_.size(),sounds=pendingScriptSounds_.size();
+  const auto messages=pendingScriptMessages_.size(),sounds=pendingScriptSounds_.size(),karma=pendingKarmaEvents_.size();
   if(RunQuestStage(id,stage,0,budget,error))return true;
   state_=before;revision_=revision;pendingScriptMessages_.resize(messages);
-  pendingScriptSounds_.resize(sounds);return false;
+  pendingScriptSounds_.resize(sounds);pendingKarmaEvents_.resize(karma);return false;
 }
 bool Player::RunQuestStage(uint32_t id,uint16_t index,unsigned depth,unsigned& budget,std::string& error) {
   auto fail=[&](const std::string& s){error="QUST "+std::to_string(id)+" stage "+std::to_string(index)+": "+s;return false;};
@@ -228,7 +229,7 @@ bool Player::RunSourceEvent(uint32_t scriptId,const char* event,uint32_t owner,
   if(!program.error.empty()) {error=program.error;return false;}
   if(program.compiledOnly) {error="compiled-only event not supported";return false;}
   const auto before=state_;const auto revision=revision_;
-  const auto messageCount=pendingScriptMessages_.size(),soundCount=pendingScriptSounds_.size();
+  const auto messageCount=pendingScriptMessages_.size(),soundCount=pendingScriptSounds_.size(),karmaCount=pendingKarmaEvents_.size();
   const auto previousActivator=scriptActivator_,previousReference=scriptReference_;
   scriptActivator_=activator;scriptReference_=owner;
   struct RestoreContext {Player& p;uint32_t activator,reference;
@@ -241,13 +242,13 @@ bool Player::RunSourceEvent(uint32_t scriptId,const char* event,uint32_t owner,
     if(!block.filter.empty() && !(block.filter=="player"&&activator==PlayerRef)){
       error="unresolved event filter '"+block.filter+"' at line "+std::to_string(block.sourceLine);
       state_=before;revision_=revision;
-      pendingScriptMessages_.resize(messageCount);pendingScriptSounds_.resize(soundCount);return false;
+      pendingScriptMessages_.resize(messageCount);pendingScriptSounds_.resize(soundCount);pendingKarmaEvents_.resize(karmaCount);return false;
     }
     fo3pipdata::ResultScript body;body.source=block.body;
     if(!RunScript(body,owner,0,budget,error,scriptId)){
       error="line "+std::to_string(block.sourceLine)+": "+error;
       state_=before;revision_=revision;
-      pendingScriptMessages_.resize(messageCount);pendingScriptSounds_.resize(soundCount);return false;
+      pendingScriptMessages_.resize(messageCount);pendingScriptSounds_.resize(soundCount);pendingKarmaEvents_.resize(karmaCount);return false;
     }
   }
   if(fo3script::Lower(event)=="gamemode")scriptButtons_.erase(owner);
@@ -332,7 +333,9 @@ bool Player::SetQuestObject(uint32_t form,bool quest) {
 bool Player::RewardKarma(float amount) {
   if(!std::isfinite(amount)||!std::isfinite(state_.karma))return false;
   const float karma=std::clamp(state_.karma+amount,-1000.f,1000.f);
+  const float change=karma-state_.karma;
   if(karma!=state_.karma){state_.karma=karma;++revision_;}
+  if(amount!=0)pendingKarmaEvents_.push_back({change,amount});
   return true;
 }
 bool Player::ReevaluatePackage(uint32_t reference){

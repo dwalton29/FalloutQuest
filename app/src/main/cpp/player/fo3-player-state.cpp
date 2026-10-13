@@ -200,9 +200,7 @@ bool DecodeLoot(const std::vector<Sub> &subs, bool levelled,
       auto &e = out.back();
       e.owner = fo3esm::ReadU32(sub.data);
       e.extra = true;
-      // Rank/global ownership is not evaluated by this milestone.
-      if (fo3esm::ReadU32(sub.data + 4))
-        return false;
+      e.ownerParameter=fo3esm::ReadU32(sub.data + 4);
       e.condition = fo3esm::ReadF32(sub.data + 8);
       if (!std::isfinite(e.condition) || e.condition < 0 || e.condition > 1)
         return false;
@@ -260,7 +258,6 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
   Catalog next;
   std::vector<uint64_t> groups;
   std::vector<uint32_t> groupCells,groupWorlds,groupTopics;
-  std::unordered_map<uint32_t, uint32_t> cellOwners;
   std::unordered_map<std::string, float> settings;
   struct StartingItem {
     uint32_t form;
@@ -309,7 +306,7 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
     const bool item = Kind(type, kind);
     const bool worldRecord = type == "REFR" || type == "DOOR" || type == "CELL";
     const bool lootRecord = type == "CONT" || type == "LVLI" || type == "GLOB";
-    const bool extra = fo3pipdata::Relevant(type)||type=="ACHR"||type=="ACRE"||fo3weapon::Relevant(type);
+    const bool extra = type=="FACT"||fo3pipdata::Relevant(type)||type=="ACHR"||type=="ACRE"||fo3weapon::Relevant(type);
     // Decode scripted base objects even if they have no other runtime data.
     // SCRI is on the base definition; the placed REFR/ACHR/ACRE supplies identity.
     const bool eventBase = type=="ACTI"||type=="CREA"||type=="FURN"||
@@ -336,6 +333,10 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
           next.eventBaseScripts[form]=fo3esm::ReadU32(script->data);
         if(type=="ACTI"||type=="TERM"||type=="FURN"||type=="DOOR")
           next.eventBaseNames[form]=Text(subs,"FULL");
+      }
+      if(type=="FACT") {
+        const auto* data=Find(subs,"DATA");
+        if(data&&data->size>=1&&data->size<=4){uint32_t bits=0;for(size_t i=0;i<data->size;++i)bits|=uint32_t(data->data[i])<<(8*i);next.factionFlags[form]=bits;}
       }
       if(type=="NPC_") {
         Container inventory;inventory.name=Text(subs,"FULL");
@@ -460,6 +461,13 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
               ref.valid = false;
             else
               ref.owner = fo3esm::ReadU32(sub.data);
+            ref.ownership.owner=ref.owner;ref.ownership.explicitOwner=true;
+          } else if(sub.type=="XRNK") {
+            if(sub.size!=4)ref.ownership.valid=false;
+            else ref.ownership.rank=I32(sub.data);
+          } else if(sub.type=="XGLB") {
+            if(sub.size!=4)ref.ownership.valid=false;
+            else ref.ownership.global=fo3esm::ReadU32(sub.data);
           } else if (sub.type == "XLOC") {
             if (sub.size < 12)
               ref.valid = false;
@@ -475,9 +483,13 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
                     ref.condition <= 1;
         next.references[form] = ref;
       } else if (type == "CELL") {
-        const auto *owner = Find(subs, "XOWN");
-        if (owner && owner->size == 4)
-          cellOwners[form] = fo3esm::ReadU32(owner->data);
+        CellOwnership cell;cell.editor=Text(subs,"EDID");
+        const auto *owner=Find(subs,"XOWN"),*rank=Find(subs,"XRNK"),*global=Find(subs,"XGLB"),*data=Find(subs,"DATA");
+        if(owner){cell.data.explicitOwner=true;cell.data.valid=owner->size==4;if(cell.data.valid)cell.data.owner=fo3esm::ReadU32(owner->data);}
+        if(rank){if(rank->size==4)cell.data.rank=I32(rank->data);else cell.data.valid=false;}
+        if(global){if(global->size==4)cell.data.global=fo3esm::ReadU32(global->data);else cell.data.valid=false;}
+        if(data&&data->size)cell.flags=data->data[0];
+        next.cellOwnership[form]=cell;
       } else if (type == "DOOR") {
         const auto* script = Find(subs, "SCRI");
         if (script) {
@@ -499,6 +511,7 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
           settings[id] = fo3esm::ReadF32(d->data);
         if (!id.empty() && id[0] == 's' && d)
           next.strings[id] = fo3esm::ZString(d->data, d->size);
+        if(id=="iKarmaChangeThreshold"&&d&&d->size==4&&I32(d->data)>0)next.karmaMajorThreshold=I32(d->data);
         if (id == "iLevItemLevelDifferenceMax" && d && d->size == 4)
           next.lootLevelDifference = std::max(0, I32(d->data));
       } else if (item) {
@@ -508,7 +521,7 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
         if (kind == ItemKind::Weapon)
           fo3weapon::DecodeWeapon(payload, definition.weapon);
         next.items[form] = std::move(definition);
-      } else {
+      } else if(type=="NPC_"&&form==PlayerBase) {
         if (playerFound)
           return fail("Duplicate player record");
         playerFound = true;
@@ -606,9 +619,8 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
     next.pipboy.targets.emplace(entry.first,placement);
   }
   next.fingerprint = fingerprint;
-  for (auto &entry : next.references)
-    if (!entry.second.owner && cellOwners.count(entry.second.cell))
-      entry.second.owner = cellOwners.at(entry.second.cell);
+  if(settings.count("fKarmaModStealing")&&std::isfinite(settings.at("fKarmaModStealing")))next.theftKarma=settings.at("fKarmaModStealing");
+  if(settings.count("fAlignEvilMaxKarma")&&std::isfinite(settings.at("fAlignEvilMaxKarma")))next.evilMaxKarma=settings.at("fAlignEvilMaxKarma");
   Player initial(std::move(next));
   if (!std::isfinite(initial.MaxHealth()) || initial.MaxHealth() <= 0 ||
       !std::isfinite(initial.MaxActionPoints()) ||
@@ -815,7 +827,7 @@ bool Player::CanPickup(uint32_t id) const {
   const auto &ref = r->second;
   const auto i = catalog_.items.find(ref.base);
   return ref.valid && !(ref.flags & 0x20) &&
-         (!ref.owner || ref.owner == PlayerBase) && !ref.locked &&
+         ResolveOwnership(id).known && !ref.locked &&
          i != catalog_.items.end() && i->second.playable && !i->second.script &&
          (i->second.maxCondition > 0 || ref.condition == 1);
 }
@@ -829,6 +841,7 @@ bool Player::Pickup(uint32_t id) {
     state_.collected.erase(id);
     return false;
   }
+  CommitTheft(id,ref.base,ref.count,0,ResolveOwnership(id));
   return true;
 }
 bool Player::CanOpenDoor(uint32_t id) const {return CanActorOpenDoor(PlayerRef,id);}
@@ -990,7 +1003,14 @@ bool Player::Save(const std::string &path, std::string &error) const {
     Put32(payload,form);
     payload.push_back(state_.questObjectFlags.at(form)?1u:0u);
   }
-  Put32(bytes, 12);
+  // v13 sparse ownership metadata belongs only to still-uncollected contents.
+  std::vector<const Stack*> ownedContents;
+  for(uint32_t id:containerIds)for(const auto& stack:state_.containers.at(id))
+    if(stack.ownership.explicitOwner)ownedContents.push_back(&stack);
+  Put32(payload,static_cast<uint32_t>(ownedContents.size()));
+  for(const auto* stack:ownedContents){Put64(payload,stack->id);Put32(payload,stack->ownership.owner);
+    Put32(payload,static_cast<uint32_t>(stack->ownership.rank));Put32(payload,stack->ownership.global);}
+  Put32(bytes, 13);
   Put32(bytes, catalog_.fingerprint);
   Put32(bytes, static_cast<uint32_t>(payload.size()));
   Put32(bytes, Crc(payload));
@@ -1049,7 +1069,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
   const auto *h = bytes.data();
   const auto version = fo3esm::ReadU32(h + 4);
   if (std::memcmp(h, "FQPS", 4) ||
-      (version < 1 || version > 12))
+      (version < 1 || version > 13))
     return fail("Unsupported player save format");
   if (fo3esm::ReadU32(h + 8) != catalog_.fingerprint)
     return fail("Player save belongs to different game definitions");
@@ -1291,13 +1311,30 @@ bool Player::Restore(const std::string &path, std::string &error) {
         if(!std::isfinite(next.karma)||next.karma<-1000.f||next.karma>1000.f)
           return fail("Invalid saved karma");
         const auto n=fo3esm::ReadU32(p+at);at+=4;
-        if(n>10000||payload.size()-at!=5ull*n)return fail("Invalid quest-object override count");
+        if(n>10000||(version>=13 ? payload.size()-at<5ull*n+4 : payload.size()-at!=5ull*n))return fail("Invalid quest-object override count");
         for(uint32_t i=0;i<n;++i,at+=5){
           const uint32_t form=fo3esm::ReadU32(p+at),flag=p[at+4];
           const auto item=catalog_.items.find(form);
           if(item==catalog_.items.end()||flag>1||item->second.questItem==bool(flag)||
              !next.questObjectFlags.emplace(form,flag!=0).second)
             return fail("Invalid quest-object override");
+        }
+      }
+      if(version>=13){
+        if(payload.size()-at<4)return fail("Missing ownership extension");
+        const auto n=fo3esm::ReadU32(p+at);at+=4;
+        if(n>30000||payload.size()-at!=20ull*n)return fail("Invalid ownership extension size");
+        std::unordered_map<uint64_t,Stack*> stacks;
+        for(auto& container:next.containers)for(auto& stack:container.second)stacks.emplace(stack.id,&stack);
+        std::unordered_set<uint64_t> seen;
+        for(uint32_t i=0;i<n;++i,at+=20){
+          const auto id=U64(p+at);auto found=stacks.find(id);
+          if(found==stacks.end()||!seen.insert(id).second)return fail("Invalid ownership stack identity");
+          OwnershipData owner;owner.owner=fo3esm::ReadU32(p+at+8);owner.rank=I32(p+at+12);owner.global=fo3esm::ReadU32(p+at+16);owner.explicitOwner=true;
+          if(!owner.owner||(!catalog_.factionFlags.count(owner.owner)&&!catalog_.pipboy.dialogueActors.count(owner.owner))||
+             (owner.global&&!catalog_.globals.count(owner.global))||
+             (catalog_.factionFlags.count(owner.owner)&&owner.global))return fail("Invalid saved item ownership");
+          found->second->ownership=owner;
         }
       }
       if(at!=payload.size())return fail("Trailing weapon save data");
@@ -1312,6 +1349,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
   if (version < 5 && !MigrateWeaponInstances(next))
     return fail("Legacy weapon inventory exceeds instance limits");
   state_ = std::move(next);
+  pendingKarmaEvents_.clear();pendingTheftEvents_.clear();EndContainerInteraction();
   ++revision_;
   return true;
 }
@@ -1329,3 +1367,5 @@ bool Session::Flush(std::string &error) {
   return true;
 }
 } // namespace fo3player
+
+#include "fo3-ownership-state.inc"

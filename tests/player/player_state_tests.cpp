@@ -76,6 +76,9 @@ Bytes Fixture(bool levelled = false, bool missingRule = false,
   Bytes hedr(12, 0);
   Sub(header, "HEDR", hedr);
   Record(b, "TES4", 0, header);
+  // Event-only base records must not enter the player NPC-stat decoder.
+  Bytes activator;Text(activator,"EDID","AuthoredActivator");
+  Record(b,"ACTI",900,activator);
   const std::pair<const char *, float> rules[] = {
       {"fAVDHealthEnduranceMult", 20}, {"fAVDHealthEnduranceOffset", 0},
       {"fAVDHealthLevelMult", 10},     {"fAVDActionPointsBase", 65},
@@ -408,7 +411,7 @@ void Synthetic(const std::string &root) {
   const Bytes good = Read(save);
   // The v10 clock extension lacked calendar fields; retain the hour and
   // migrate the starting date from the original GLOB records.
-  Bytes version10=good;version10.resize(version10.size()-20); // remove v12 extension and v11 calendar
+  Bytes version10=good;version10.resize(version10.size()-24); // remove v12 extension and v11 calendar
   version10[4]=10;
   const auto legacyClockSize=uint32_t(version10.size()-20);
   for(int i=0;i<4;++i)version10[12+i]=uint8_t(legacyClockSize>>(8*i));
@@ -632,7 +635,7 @@ void Containers(const std::string &root) {
         "failed transfer leaves loot intact");
   c.references[300].owner = 99;
   fo3player::Player owned(c);
-  Check(!owned.PrepareContainer(300), "owned container blocked");
+  Check(owned.PrepareContainer(300), "owned container can be viewed without taking");
   c.references[300].owner = 0;
   c.containers[400].script = 123;
   fo3player::Player scripted(c);

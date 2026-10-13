@@ -1394,6 +1394,7 @@ private:
             }
             if(target.talk&&doorAimSourceQ1840_!=target.reference)FQ_LOGI("DIALOGUE TARGET actor=%08X prompt=%s",target.reference,target.prompt.data());
             doorAimSourceQ1840_ = target.reference;
+            doorPromptCrime_=target.crime;
             doorPromptValidQ1850_ = target.prompt[0] != '\0';
         } else {
             doorAimSourceQ1840_ = 0;
@@ -1854,7 +1855,7 @@ private:
                     if(WeaponHeld()&&!Fo3PipboyFocus()&&!IsFo3LoadingVisible())fo3ammoui::Render(mvp.m);
                     if (doorAimActiveQ1700_) {
                         if (doorPromptValidQ1850_ && !GetFo3LootPanel().reference) {
-                            RenderFo3InteractionHud(mvp.m, doorPromptQ1850_.data());
+                            RenderFo3InteractionHud(mvp.m, doorPromptQ1850_.data(),doorPromptCrime_);
                         }
 
                     }
@@ -2057,6 +2058,7 @@ private:
     uint32_t doorAimSourceQ1840_{0u};
     std::array<char, 512> doorPromptQ1850_{};
     bool doorPromptValidQ1850_{false};
+    bool doorPromptCrime_{false};
     uint64_t doorFacingGenerationQ1810_{0u};
 
     uint64_t frameCounter_{0};

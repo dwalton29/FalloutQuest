@@ -16,7 +16,6 @@ bool Player::CanLootContainer(uint32_t id) const {
   const auto c = catalog_.containers.find(r->second.base);
   return c != catalog_.containers.end() && c->second.valid &&
          !c->second.script &&
-         (!r->second.owner || r->second.owner == PlayerBase) &&
          CanOpenDoor(id); // Share lock/key access; container ownership is separate.
 }
 const std::vector<Stack> *Player::ContainerContents(uint32_t id) const {
@@ -58,12 +57,15 @@ bool Player::PrepareInventory(uint32_t id,bool actor) {
                       catalog_.worldFingerprint ^ state_.level);
   std::unordered_set<uint32_t> path;
   size_t work = 0;
-  std::function<bool(uint32_t, int32_t, float, uint32_t, unsigned)> expand;
-  expand = [&](uint32_t form, int32_t count, float condition, uint32_t owner,
+  std::function<bool(uint32_t, int32_t, float, uint32_t, uint32_t, unsigned)> expand;
+  expand = [&](uint32_t form, int32_t count, float condition, uint32_t owner,uint32_t parameter,
                unsigned depth) {
-    if (++work > 10000 || depth > 32 || count <= 0 ||
-        (owner && owner != PlayerBase))
+    if (++work > 10000 || depth > 32 || count <= 0)
       return false;
+    if(owner&&!catalog_.factionFlags.count(owner)&&!catalog_.pipboy.dialogueActors.count(owner))return false;
+    OwnershipData ownership;ownership.owner=owner;ownership.explicitOwner=owner!=0;
+    if(owner){if(catalog_.factionFlags.count(owner))ownership.rank=static_cast<int32_t>(parameter);
+      else ownership.global=parameter;}
     const auto item = catalog_.items.find(form);
     if (item != catalog_.items.end()) {
       if (item->second.maxCondition == 0 && condition != 1)
@@ -74,11 +76,12 @@ bool Player::PrepareInventory(uint32_t id,bool actor) {
             static_cast<uint64_t>(count) > UINT64_MAX - nextId)
           return false;
         for (int32_t i = 0; i < count; ++i)
-          contents.push_back({nextId++, form, 1, condition, false});
+          {contents.push_back({nextId++, form, 1, condition, false});contents.back().ownership=ownership;}
         return true;
       }
       for (auto &s : contents)
-        if (s.formId == form && s.condition == condition) {
+        if (s.formId == form && s.condition == condition && s.ownership.owner==owner &&
+            s.ownership.rank==ownership.rank && s.ownership.global==ownership.global) {
           if (count > INT32_MAX - s.count)
             return false;
           s.count += count;
@@ -88,6 +91,7 @@ bool Player::PrepareInventory(uint32_t id,bool actor) {
           nextId == UINT64_MAX)
         return false;
       contents.push_back({nextId++, form, count, condition, false});
+      contents.back().ownership=ownership;
       return true;
     }
     const auto found = catalog_.lootLists.find(form);
@@ -133,7 +137,8 @@ bool Player::PrepareInventory(uint32_t id,bool actor) {
           return false;
         return expand(e.form, static_cast<int32_t>(amount),
                       e.extra ? e.condition : condition,
-                      e.extra ? e.owner : owner, depth + 1);
+                      e.extra && e.owner ? e.owner : owner,
+                      e.extra && e.owner ? e.ownerParameter : parameter, depth + 1);
       };
       if (list.flags & 4) {
         for (const auto *e : eligible)
@@ -160,7 +165,7 @@ bool Player::PrepareInventory(uint32_t id,bool actor) {
   if(found==(actor?catalog_.actorInventories:catalog_.containers).end()||!found->second.valid)return false;
   const auto &c=found->second;
   for (const auto &e : c.entries)
-    if (!expand(e.form, e.count, e.condition, e.owner, 0))
+    if (!expand(e.form, e.count, e.condition, e.owner, e.ownerParameter, 0))
       return false;
   state_.containers.emplace(id, std::move(contents));
   state_.nextStackId = nextId;
@@ -176,7 +181,7 @@ bool Player::CanTakeContainerStack(uint32_t id, uint64_t stack) const {
   for (const auto &s : *contents)
     if (s.id == stack) {
       const auto &item = catalog_.items.at(s.formId);
-      return item.playable && !item.script && !item.name.empty();
+      return item.playable && !item.script && !item.name.empty() && ContainerStackOwnership(id,stack).known;
     }
   return false;
 }
@@ -186,19 +191,25 @@ bool Player::TakeContainerStack(uint32_t id, uint64_t stack) {
   auto &contents = state_.containers.at(id);
   const auto s = std::find_if(contents.begin(), contents.end(),
                               [&](const Stack &s) { return s.id == stack; });
+  const Stack transferred=*s;
+  const auto ownership=ContainerStackOwnership(id,stack);
+  BeginContainerInteraction(id);
   if (catalog_.items.at(s->formId).kind == ItemKind::Weapon) {
     if (state_.inventory.size() >= 10000 || s->count != 1)
       return false;
     auto actor=state_.actors.find(id);if(actor!=state_.actors.end()&&actor->second.equippedWeapon==stack)actor->second.equippedWeapon=0;
     state_.inventory.push_back(*s);
     state_.inventory.back().equipped=false;
+    state_.inventory.back().ownership={};
     contents.erase(s);
     ++revision_;
+    CommitTheft(id,transferred.formId,transferred.count,id,ownership);
     return true;
   }
   if (!Add(s->formId, s->count, s->condition))
     return false;
   contents.erase(s);
+  CommitTheft(id,transferred.formId,transferred.count,id,ownership);
   return true;
 }
 } // namespace fo3player

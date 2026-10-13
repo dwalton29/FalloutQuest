@@ -18,14 +18,14 @@ class FontConsumers(unittest.TestCase):
         self.assertIn('GlStateGuard guard;',renderer)
         self.assertIn('SameBuiltPrompt(s, promptChars, length)',renderer)
         self.assertIn('if (key != r.key)',loot)
-        self.assertIn('RenderFo3InteractionHud(mvp.m, doorPromptQ1850_.data())',loop)
+        self.assertIn('RenderFo3InteractionHud(mvp.m, doorPromptQ1850_.data(),doorPromptCrime_)',loop)
         self.assertIn('fo3lootui::Render(panelMvp.m,loot)',loop)
         self.assertNotIn('fo3huddynamic::',loot+loop)
         for path in ui.glob('*.h'):
             source=path.read_text()
             for obsolete in ('.xOffset','.yOffset','.advance','lineHeight','maxDrawableHeight','referenceYOffset'):
                 self.assertNotIn(obsolete,source,str(path))
-        self.assertIn('fo3hudrenderer::Render(mvp,prompt)',(ui/'fo3-interaction-hud-layout.h').read_text())
+        self.assertIn('fo3hudrenderer::Render(mvp,prompt,crime)',(ui/'fo3-interaction-hud-layout.h').read_text())
     def test_diagnostics_do_not_mutate_or_run_per_eye(self):
         ui=CPP/'ui/interaction'
         diagnostics=(ui/'fo3-font-diagnostics.h').read_text()

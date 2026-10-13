@@ -64,6 +64,30 @@ struct Item {
   bool playable = true, questItem = false, cannotDrop = false,
        valueKnown = true;
 };
+// Original XOWN/XRNK or COED owner + rank/global union. A missing owner
+// inherits CELL ownership. A null owner is not an ownership exemption.
+struct OwnershipData {
+  uint32_t owner=0, global=0;
+  int32_t rank=0;
+  bool explicitOwner=false, valid=true;
+};
+enum class OwnershipKind { Unowned, Player, NPC, Faction, Unknown };
+struct OwnershipResult {
+  OwnershipData data;
+  OwnershipKind kind=OwnershipKind::Unowned;
+  uint32_t cell=0;
+  bool inherited=false, permitted=true, known=true, karmaEligible=false;
+  bool Theft() const {return known && !permitted;}
+};
+struct TheftEvent {
+  uint32_t reference=0,item=0,container=0,owner=0,player=PlayerRef,cell=0,world=0;
+  int32_t count=0;
+  float karmaDelta=0;
+  std::array<float,3> position{};
+  bool positionKnown=false;
+  // No fabricated witness/detection result; later crime perception consumes this.
+};
+struct KarmaEvent {float amount=0,requested=0;};
 struct Stack {
   uint64_t id = 0;
   uint32_t formId = 0;
@@ -73,6 +97,7 @@ struct Stack {
   bool equipped = false;
   uint16_t loadedRounds = 0;
   bool needsAction = false;
+  OwnershipData ownership{};
 };
 struct WorldWeapon {
   Stack instance;
@@ -87,6 +112,7 @@ struct Reference {
   int32_t count = 1;
   float condition = 1;
   bool locked = false, valid = true;
+  OwnershipData ownership{};
 };
 struct LootEntry {
   uint32_t form = 0, owner = 0;
@@ -94,6 +120,7 @@ struct LootEntry {
   uint16_t level = 1;
   float condition = 1;
   bool extra = false;
+  uint32_t ownerParameter=0;
 };
 struct Container {
   std::string name;
@@ -144,6 +171,7 @@ struct State {
   std::unordered_map<uint32_t,float> actorDamage;
   std::unordered_map<uint32_t,ActorState> actors;
 };
+struct CellOwnership {OwnershipData data;uint8_t flags=0;std::string editor;};
 struct Catalog {
   fo3weapon::Definitions weapons;
   // Immutable original ACHR census. This is a source data catalogue, not a
@@ -163,6 +191,12 @@ struct Catalog {
   std::unordered_map<uint32_t, Container> actorInventories;
   std::unordered_map<uint32_t, LootList> lootLists;
   std::unordered_map<uint32_t, float> globals;
+  std::unordered_map<uint32_t,CellOwnership> cellOwnership;
+  std::unordered_map<uint32_t,uint32_t> factionFlags;
+  float theftKarma=0;
+  // FO3 executable defaults; optional GMST overrides. Not FNV reputation.
+  float evilMaxKarma=-250;
+  int32_t karmaMajorThreshold=250;
   float gameTimeScale = 30.0f; // Fallout 3 TimeScale GLOB, default 30 game min / real min.
   float npcRunMultiplier = 1.0f; // Optional original fMoveRunMult GMST; do not invent.
   float npcBaseSpeed = 0.f; // Original fMoveBaseSpeed, in game units/second.
@@ -287,6 +321,12 @@ public:
   float DamageResistance(uint32_t reference) const;
   bool UpdateActor(uint32_t reference,const ActorState& state);
   bool SetActorHostile(uint32_t reference,uint32_t target);
+  OwnershipResult ResolveOwnership(uint32_t reference, const OwnershipData* item=nullptr) const;
+  OwnershipResult ContainerStackOwnership(uint32_t reference,uint64_t stack) const;
+  void BeginContainerInteraction(uint32_t reference);
+  void EndContainerInteraction();
+  bool PollTheftEvent(TheftEvent& out);
+  bool PollKarmaEvent(KarmaEvent& out);
   bool CanPickup(uint32_t reference) const;
   bool Pickup(uint32_t reference);
   bool CanOpenDoor(uint32_t reference) const;
@@ -309,6 +349,7 @@ public:
   bool Restore(const std::string &path, std::string &error);
 
 private:
+  void CommitTheft(uint32_t reference,uint32_t item,int32_t count,uint32_t container,const OwnershipResult& ownership);
   bool RunSourceEvent(uint32_t scriptId,const char* event,uint32_t owner,
                       uint32_t activator,std::string& error);
   void LogScriptEventError(uint32_t scriptId,const char* event,const std::string& error);
@@ -328,6 +369,10 @@ private:
   std::unordered_map<uint32_t,int> scriptButtons_;
   std::vector<ScriptMessage> pendingScriptMessages_;
   std::vector<uint32_t> pendingScriptSounds_;
+  std::vector<KarmaEvent> pendingKarmaEvents_;
+  std::vector<TheftEvent> pendingTheftEvents_;
+  uint32_t containerInteraction_=0;
+  bool containerKarmaCommitted_=false;
   std::function<void(const std::string&)> eventDiagnostic_;
   std::unordered_set<std::string> reportedScriptEvents_;
 };

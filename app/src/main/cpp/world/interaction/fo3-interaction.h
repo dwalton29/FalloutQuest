@@ -7,7 +7,7 @@
 struct Fo3InteractionTarget {
   uint32_t reference = 0;
   bool pickup = false, allowed = false;
-  bool container = false,talk=false,scripted=false;
+  bool container = false,talk=false,scripted=false,crime=false;
   std::array<float,3> anchor{};
   float distance = 0;
   Fo3DoorAimQ1700 door;
@@ -18,11 +18,12 @@ bool QueryFo3Interaction(float ox, float oy, float oz, float dx, float dy,
 // Returns true only for a queued door transition (caller resets VR origin).
 bool ActivateFo3Interaction(float ox, float oy, float oz, float dx, float dy,
                             float dz);
-struct Fo3LootRow {uint64_t stack=0;std::string name;int32_t count=0;bool allowed=false;};
+struct Fo3LootRow {uint64_t stack=0;std::string name;int32_t count=0;bool allowed=false,crime=false;};
 struct Fo3LootPanel {
   uint32_t reference=0;
   std::array<float,3> anchor{};
   std::string title;
+  bool crime=false;
   std::vector<Fo3LootRow> rows;
   size_t selected=0;
 };

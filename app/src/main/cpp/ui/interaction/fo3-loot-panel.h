@@ -10,6 +10,8 @@ struct Resources {
   std::string key;
   GLsizei textStart = 0, textCount = 0, buttonStart = 0;
   bool highlight = false;
+  struct Run {GLsizei first=0,count=0;bool crime=false;};
+  std::vector<Run> runs;
 };
 inline Resources &State() {
   static Resources r;
@@ -43,10 +45,10 @@ inline void Render(const float *mvp, const Fo3LootPanel &panel) {
   if (!r.vao || !r.vbo || !r.solid)
     return;
   const size_t start = panel.selected >= 5 ? panel.selected - 4 : 0;
-  std::string key = panel.title + "\n" + std::to_string(panel.selected);
+  std::string key = panel.title + "\n" + std::to_string(panel.selected)+(panel.crime?"crime":"legal");
   for (size_t i = start; i < panel.rows.size() && i < start + 5; ++i)
     key += '\n' + panel.rows[i].name + std::to_string(panel.rows[i].count) +
-           (panel.rows[i].allowed ? "1" : "0");
+           (panel.rows[i].allowed ? "1" : "0")+(panel.rows[i].crime?"red":"green");
   if (key != r.key) {
     using fo3hudrenderer::AppendPromptQuad;
     std::vector<fo3hudassets::Vertex> vertices;
@@ -64,8 +66,10 @@ inline void Render(const float *mvp, const Fo3LootPanel &panel) {
     AppendPromptQuad(vertices, -.20f, -.204f, -.167f, -.237f, .002f, b.u, b.v,
                       b.u + b.w, b.v, b.u, b.v + b.h, b.u + b.w, b.v + b.h);
     r.textStart = static_cast<GLsizei>(vertices.size());
+    r.runs.clear();
     const float scale = .025f / std::max(1.0f, font.baseLine);
-    auto text = [&](std::string value, float x, float y) {
+    auto text = [&](std::string value, float x, float y,bool crime=false) {
+      const auto first=static_cast<GLsizei>(vertices.size());
       const size_t length=fo3font::FitText(font,value,.38f/scale);
       fo3hudrenderer::LogTextDiagnostics(value.data(),length,
           fo3font::MeasureText(font,std::string_view(value.data(),length)));
@@ -75,18 +79,20 @@ inline void Render(const float *mvp, const Fo3LootPanel &panel) {
                   x+q.right*scale,y-q.bottom*scale,.002f,
                   g.uv[0],g.uv[1],g.uv[2],g.uv[3],g.uv[4],g.uv[5],g.uv[6],g.uv[7]);
           });
+      r.runs.push_back({first,static_cast<GLsizei>(vertices.size())-first,crime});
     };
-    text(panel.title, -.20f, .038f);
+    text(panel.title, -.20f, .038f,panel.crime);
     if (panel.rows.empty())
       text("Empty", -.20f, -.025f);
     for (size_t i = start; i < panel.rows.size() && i < start + 5; ++i) {
       const auto &row = panel.rows[i];
       text(row.name +
                (row.count > 1 ? " (" + std::to_string(row.count) + ")" : ""),
-           -.20f, -.02f - static_cast<float>(i - start) * .037f);
+           -.20f, -.02f - static_cast<float>(i - start) * .037f,row.crime);
     }
     const bool take = !panel.rows.empty() && panel.rows[panel.selected].allowed;
-    text(take ? "Take" : "", -.15f, -.209f);
+    const bool crime=!panel.rows.empty()&&panel.rows[panel.selected].crime;
+    text(take ? (crime?"Steal":"Take") : "", -.15f, -.209f,crime);
     r.textCount = static_cast<GLsizei>(vertices.size()) - r.textStart;
     glBindVertexArray(r.vao);
     glBindBuffer(GL_ARRAY_BUFFER, r.vbo);
@@ -115,16 +121,18 @@ inline void Render(const float *mvp, const Fo3LootPanel &panel) {
   glBindTexture(GL_TEXTURE_2D, r.solid);
   glUniform4f(font.tintLoc, .015f, .035f, .025f, .87f);
   glDrawArrays(GL_TRIANGLES, 0, 6);
+  const bool selectedCrime=!panel.rows.empty()&&panel.rows[panel.selected].crime;
+  auto tint=[&](bool crime,float alpha){glUniform4f(font.tintLoc,crime?1.f:26.f/255,crime?67.f/255:1.f,crime?42.f/255:128.f/255,alpha);};
   if (r.highlight) {
-    glUniform4f(font.tintLoc, 26.0f / 255, 1, 128.0f / 255, .22f);
+    tint(selectedCrime,.22f);
     glDrawArrays(GL_TRIANGLES, 6, 6);
   }
-  glUniform4f(font.tintLoc, 26.0f / 255, 1, 128.0f / 255, 1);
+  tint(selectedCrime,1);
   if (!panel.rows.empty() && panel.rows[panel.selected].allowed) {
     glBindTexture(GL_TEXTURE_2D, font.interfaceTexture);
     glDrawArrays(GL_TRIANGLES, r.buttonStart, 6);
   }
   glBindTexture(GL_TEXTURE_2D, font.fontTexture);
-  glDrawArrays(GL_TRIANGLES, r.textStart, r.textCount);
+  for(const auto& run:r.runs){tint(run.crime,1);glDrawArrays(GL_TRIANGLES,run.first,run.count);}
 }
 } // namespace fo3lootui

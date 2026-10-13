@@ -25,7 +25,6 @@ bool CollectFo3WorldReference(uint32_t reference) {
     auto& player=gPlayerSession->player;
     if(!player.CanPickup(reference)) return false;
     const auto ref=player.Definitions().references.at(reference);
-    if(player.Definitions().items.at(ref.base).weapon.Firearm())return false;
     if(!player.Pickup(reference)) return false;
     for(auto& hand:gQ220Grab) if(hand.refFormId==reference) hand={};
     gQ223DynamicBodies.erase(reference);
@@ -65,7 +64,6 @@ bool QueryFo3Interaction(float ox, float oy, float oz, float dx, float dy,
         // of whether the physics runtime supports this loose-object type.
         if (player.IsCollected(object.refFormId) ||
             (!container && !scripted && !catalog.items.count(object.baseFormId))) continue;
-        if(!container&&!scripted&&catalog.items.at(object.baseFormId).weapon.Firearm())continue;
         fo3interaction::Point lo{1e30f,1e30f,1e30f}, hi{-1e30f,-1e30f,-1e30f};
         for (int corner=0;corner<8;++corner) {
             const auto p = Q220TransformPoint(object.q220DynamicTransform,
@@ -107,12 +105,14 @@ bool QueryFo3Interaction(float ox, float oy, float oz, float dx, float dy,
     }
     target.distance=best;
     if(target.talk)return true;
+    const auto ownership=player.ResolveOwnership(target.reference);
+    target.crime=ownership.Theft();
     if (target.container&&catalog.pipboy.targets.count(target.reference)&&catalog.actorInventories.count(catalog.pipboy.targets.at(target.reference).base))return true;
     if (target.container) {
         const auto& ref=catalog.references.at(target.reference);
         const auto& container=catalog.containers.at(ref.base);
         std::snprintf(target.prompt.data(),target.prompt.size(),"%s%s",
-            ref.locked&&!target.allowed ? "Locked " : "",container.name.c_str());
+            ref.locked&&!target.allowed ? "Locked " : "Open ",container.name.c_str());
     } else if(target.scripted) {
         const auto ref=catalog.references.find(target.reference);
         if(ref==catalog.references.end()){target={};return false;}
@@ -126,8 +126,7 @@ bool QueryFo3Interaction(float ox, float oy, float oz, float dx, float dy,
         if (item.name.empty()) {target={};return false;}
         // Vanilla English action labels are present in the supplied Fallout3.exe.
         const char* action = target.allowed ? "Take " : "Unavailable ";
-        if (!target.allowed && ref->second.owner && ref->second.owner != fo3player::PlayerBase)
-            action = "Owned ";
+        if(target.allowed&&target.crime)action="Steal ";
         else if (!target.allowed && item.script) action = "Scripted ";
         std::snprintf(target.prompt.data(),target.prompt.size(),"%s%s",action,item.name.c_str());
     } else {
@@ -202,6 +201,26 @@ void DeliverFo3ScriptSounds(){
     if(!gPlayerSession)return;
     uint32_t sound=0;
     while(gPlayerSession->player.PollScriptSound(sound))fo3audio::SoundEvent(sound);
+    // Once per logical frame, never in either eye renderer. Script previews
+    // and failed scripts truncate this same queue at their rollback boundary.
+    fo3player::KarmaEvent event;
+    const auto& strings=gPlayerSession->player.Definitions().strings;
+    while(gPlayerSession->player.PollKarmaEvent(event)){
+        const bool gain=event.requested>0;
+        const auto threshold=gPlayerSession->player.Definitions().karmaMajorThreshold;
+        // Original Fallout3.exe 0x8C2B30: positive >= threshold, negative < -threshold.
+        const bool major=gain?event.amount>=threshold:event.amount<-threshold;
+        const std::string key=std::string("sKarma")+(major?"Major":"Minor")+(gain?"Gained":"Lost");
+        const auto text=strings.find(key);
+        const auto icon=strings.find(key+"Image");
+        if(text!=strings.end())fo3notify::Notifications().Enqueue(text->second,icon==strings.end()?"":icon->second);
+        fo3audio::NamedSound(gain?"UIKarmaUp":"UIKarmaDown");
+    }
+    fo3player::TheftEvent theft;
+    while(gPlayerSession->player.PollTheftEvent(theft)){
+        Q6H_LOGI("THEFT COMMITTED: ref=%08X item=%08X owner=%08X container=%08X count=%d karma=%.1f witness=unresolved",
+            theft.reference,theft.item,theft.owner,theft.container,theft.count,theft.karmaDelta);
+    }
 }
 fo3loot::Cursor gLootCursor;
 Fo3LootPanel gLootPanel;
@@ -215,6 +234,7 @@ void UpdateFo3LootSelection(const Fo3InteractionTarget& target,float stickY,doub
         if (ref!=gPlayerSession->player.Definitions().references.end()) fo3audio::Close(ref->second.base);
     }
     if (!valid) {
+        if(gPlayerSession)gPlayerSession->player.EndContainerInteraction();
         gLootPanel.reference=0;gLootPanel.rows.clear();gLootPanel.title.clear();
         gLootCursor.Target(0,0);return;
     }
@@ -224,6 +244,7 @@ void UpdateFo3LootSelection(const Fo3InteractionTarget& target,float stickY,doub
         if (previousReference==target.reference) fo3audio::Close(player.Definitions().references.at(target.reference).base);
         gLootPanel.reference=0;gLootPanel.rows.clear();gLootCursor.Target(0,0);return;
     }
+    if(previousReference!=target.reference){player.EndContainerInteraction();player.BeginContainerInteraction(target.reference);}
     if (revision!=player.Revision()) FlushFo3PlayerState();
     const auto& catalog=player.Definitions();
     if (gLootPanel.reference!=target.reference || gLootPanelRevision!=player.Revision()) {
@@ -233,12 +254,12 @@ void UpdateFo3LootSelection(const Fo3InteractionTarget& target,float stickY,doub
         for (const auto& stack:*player.ContainerContents(target.reference)) {
             const auto& item=catalog.items.at(stack.formId);
             if (!item.name.empty()) gLootPanel.rows.push_back({stack.id,item.name,stack.count,
-                player.CanTakeContainerStack(target.reference,stack.id)});
+                player.CanTakeContainerStack(target.reference,stack.id),player.ContainerStackOwnership(target.reference,stack.id).Theft()});
         }
         gLootPanelRevision=player.Revision();
     }
     if (previousReference!=target.reference) fo3audio::Open(catalog.references.at(target.reference).base);
-    gLootPanel.reference=target.reference;gLootPanel.anchor=target.anchor;
+    gLootPanel.reference=target.reference;gLootPanel.anchor=target.anchor;gLootPanel.crime=target.crime;
     gLootCursor.Target(target.reference,gLootPanel.rows.size());
     const auto previousSelection=gLootCursor.selected;
     gLootCursor.Scroll(stickY,time,gLootPanel.rows.size());

@@ -2,10 +2,13 @@
 #include "fo3-interaction-hud-renderer.h"
 #include "fo3-item-notifications.h"
 #include "fo3-hud-cached-state.h"
+#include <unordered_map>
 
 namespace fo3notifyui {
 struct Resources {
-    GLuint vao=0,vbo=0;
+    GLuint vao=0,vbo=0,iconTexture=0;
+    std::unordered_map<std::string,GLuint> icons;
+    GLsizei iconFirst=0;
     GLsizei count=0;
     uint64_t revision=UINT64_MAX;
 };
@@ -14,6 +17,7 @@ inline void Shutdown() {
     auto& r=State();
     if(r.vao)glDeleteVertexArrays(1,&r.vao);
     if(r.vbo)glDeleteBuffers(1,&r.vbo);
+    for(const auto& icon:r.icons)if(icon.second)glDeleteTextures(1,&icon.second);
     r={};fo3notify::Notifications().Clear();
 }
 // Once per logical frame, outside stereo eyes. Existing font assets are warmed
@@ -30,7 +34,17 @@ inline void Prepare(double now,bool available,bool sceneReady) {
     auto& r=State();auto& font=fo3hudrenderer::State();
     if(!r.vao) {glGenVertexArrays(1,&r.vao);glGenBuffers(1,&r.vbo);}
     if(r.revision==queue.Revision()) return;
-    r.revision=queue.Revision();r.count=0;
+    r.revision=queue.Revision();r.count=0;r.iconTexture=0;
+    if(!queue.Icon().empty()){
+        auto found=r.icons.find(queue.Icon());
+        if(found==r.icons.end()){
+            Fo3RgbaTexture texture;GLuint handle=0;
+            if(LoadFalloutTextureRgba(queue.Icon(),texture))handle=fo3hudassets::UploadTexture(texture.width,texture.height,texture.rgba.data());
+            found=r.icons.emplace(queue.Icon(),handle).first;
+            if(!handle)__android_log_print(ANDROID_LOG_WARN,"FalloutQuest","KARMA HUD missing original icon: %s",queue.Icon().c_str());
+        }
+        r.iconTexture=found->second;
+    }
     const std::string_view text(queue.Text());
     if(text.empty())return;
     std::vector<fo3hudassets::Vertex> vertices;vertices.reserve(text.size()*6);
@@ -47,13 +61,14 @@ inline void Prepare(double now,bool available,bool sceneReady) {
         }
         fo3font::AppendText(font,text.substr(begin,n),0,0,
             [&](uint8_t,const fo3font::Glyph& g,const fo3font::Quad& q) {
-                fo3hudrenderer::AppendPromptQuad(vertices,.22f+q.left*scale,.43f-(q.top+line*45)*scale,
-                    .22f+q.right*scale,.43f-(q.bottom+line*45)*scale,-2.0f,
+                fo3hudrenderer::AppendPromptQuad(vertices,(r.iconTexture?.30f:.22f)+q.left*scale,.43f-(q.top+line*45)*scale,
+                    (r.iconTexture?.30f:.22f)+q.right*scale,.43f-(q.bottom+line*45)*scale,-2.0f,
                     g.uv[0],g.uv[1],g.uv[2],g.uv[3],g.uv[4],g.uv[5],g.uv[6],g.uv[7]);
             });
         begin+=n;while(begin<text.size() && text[begin]==' ')++begin;++line;
     }
-    r.count=static_cast<GLsizei>(vertices.size());
+    r.count=static_cast<GLsizei>(vertices.size());r.iconFirst=r.count;
+    if(r.iconTexture)fo3hudrenderer::AppendPromptQuad(vertices,.22f,.43f,.29f,.36f,-2.f,0,0,1,0,0,1,1,1);
     glBindVertexArray(r.vao);glBindBuffer(GL_ARRAY_BUFFER,r.vbo);
     glBufferData(GL_ARRAY_BUFFER,vertices.size()*sizeof(fo3hudassets::Vertex),vertices.data(),GL_DYNAMIC_DRAW);
     glEnableVertexAttribArray(0);glVertexAttribPointer(0,3,GL_FLOAT,GL_FALSE,sizeof(fo3hudassets::Vertex),nullptr);
@@ -73,6 +88,7 @@ inline void Render(const float* mvp) {
         glUniform4f(font.tintLoc,26.0f/255,1,128.0f/255,alpha);glUniform1i(font.texLoc,0);
         glActiveTexture(GL_TEXTURE0);glBindTexture(GL_TEXTURE_2D,font.fontTexture);
         glBindVertexArray(r.vao);glDrawArrays(GL_TRIANGLES,0,r.count);
+        if(r.iconTexture){glBindTexture(GL_TEXTURE_2D,r.iconTexture);glDrawArrays(GL_TRIANGLES,r.iconFirst,6);}
     }
     if(fqgl::counters.queries!=queries)
         __android_log_print(ANDROID_LOG_ERROR,"FalloutQuest","ITEM ADDED HUD: unexpected driver query");

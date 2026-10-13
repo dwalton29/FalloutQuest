@@ -17,9 +17,9 @@
 #include <memory>
 #include <stdexcept>
 namespace fo3audio {
-int pickups = 0, opens = 0, closes = 0, scrolls = 0;
+int pickups = 0, opens = 0, closes = 0, scrolls = 0,karmaSounds=0;
 void SoundEvent(uint32_t) {}
-void NamedSound(const std::string&) {}
+void NamedSound(const std::string& name) {if(name=="UIKarmaDown"||name=="UIKarmaUp")++karmaSounds;}
 void Pickup(uint32_t) { ++pickups; }
 void Open(uint32_t) { ++opens; }
 void Close(uint32_t) { ++closes; }
@@ -216,6 +216,25 @@ int main() {
     gPlayerSession = std::make_unique<fo3player::Session>(c);
     Check(query() && t.pickup && !t.allowed && !activate(),
           "owned item blocks action and does not activate door behind it");
+    // Valid original-format owner: A, physical shoulder commit and prompt share legality.
+    c.pipboy.dialogueActors[99].karma=0;c.theftKarma=-5;
+    c.strings["sKarmaMinorLost"]="You've lost Karma!";
+    c.strings["sKarmaMinorLostImage"]="Interface/Icons/PipboyImages_small/Karma icons/glow_karma_bad.dds";
+    gPlayerSession = std::make_unique<fo3player::Session>(c);
+    Check(query()&&t.allowed&&t.crime&&std::string(t.prompt.data())=="Steal "+c.items.at(100).name,
+          "NPC-owned property has red Steal prompt");
+    const auto notificationsBeforeTheft=fo3notify::Notifications();
+    fo3notify::Notifications().Clear();const auto soundCount=fo3audio::karmaSounds;
+    Check(CollectFo3WorldReference(10)&&gPlayerSession->player.Snapshot().karma==-5,
+          "physical shoulder commit uses theft transaction");
+    DeliverFo3ScriptSounds();
+    Check(fo3audio::karmaSounds==soundCount+1&&fo3notify::Notifications().Size()==2,
+          "one item and original Karma notification plus sound");
+    DeliverFo3ScriptSounds();
+    Check(fo3audio::karmaSounds==soundCount+1&&!CollectFo3WorldReference(10),
+          "held input and repeated frames cannot replay feedback");
+    Check(query()&&!t.crime,"prompt returns to legal target immediately");
+    fo3notify::Notifications()=notificationsBeforeTheft;
     c.references[20].owner = 99;
     gPlayerSession = std::make_unique<fo3player::Session>(c);
     Check(gPlayerSession->player.CanOpenDoor(20), "owned unlocked door permits entry");
