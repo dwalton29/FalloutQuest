@@ -36,21 +36,17 @@ OwnershipResult Player::ResolveOwnership(uint32_t id,const OwnershipData* item) 
     out.kind=OwnershipKind::Faction;
     const auto* pc=OwnershipActor(catalog_,PlayerBase,2);
     if(pc){const auto rank=pc->factions.find(owner);out.permitted=rank!=pc->factions.end()&&rank->second>=0&&rank->second>=out.data.rank;}
-    // FACT DATA byte 0 bit 1 Evil; byte 1 bit 0 Track Crime (FO3).
-    out.karmaEligible=!out.permitted&&!(faction->second&2)&&(faction->second&0x100);
+    // Fallout3.exe 0x7F6707..0x7F678F tests Evil independently of
+    // witness lookup/Track Crime; moral consequences do not need a witness.
+    out.karmaEligible=!out.permitted&&!(faction->second&2);
   } else {
     const auto* actor=OwnershipActor(catalog_,owner,0x80); // Use Base Data (Karma)
-    const auto* memberships=OwnershipActor(catalog_,owner,2); // Use Factions
-    if(!actor||!memberships||!std::isfinite(actor->karma)){
+    if(!actor||!std::isfinite(actor->karma)){
       out.kind=OwnershipKind::Unknown;out.known=false;return out;
     }
     out.kind=OwnershipKind::NPC;
-    bool evilFaction=false;
-    for(const auto& member:memberships->factions) {
-      const auto f=catalog_.factionFlags.find(member.first);
-      if(member.second>=0&&f!=catalog_.factionFlags.end()&&(f->second&2))evilFaction=true;
-    }
-    out.karmaEligible=actor->karma>catalog_.evilMaxKarma&&!evilFaction;
+    // The NPC-owner branch tests the owner's alignment, not all memberships.
+    out.karmaEligible=actor->karma>catalog_.evilMaxKarma;
   }
   // XGLB/COED NPC global permission semantics are not established. Keep
   // unresolved interactions blocked rather than charge or exempt arbitrarily.

@@ -86,7 +86,9 @@ void Synthetic(){
  c=Fixture();c.references[3].ownership.global=500;Player unresolved(c);Check(!unresolved.CanPickup(3),"unknown global permissions blocked");
  c=Fixture();c.items[100].playable=false;Player failed(c);Check(!failed.Pickup(3)&&!failed.IsCollected(3)&&failed.Snapshot().karma==10&&!failed.PollKarmaEvent(k),"failed action atomic");
  c=Fixture();c.references[5].owner=81;Player evil(c);Check(evil.Pickup(5)&&evil.Snapshot().karma==10,"evil faction no karma loss");
- c.references[5].owner=82;Player untracked(c);Check(untracked.Pickup(5)&&untracked.Snapshot().karma==10,"untracked faction no karma modifier");
+ c.references[5].owner=82;Player untracked(c);Check(untracked.Pickup(5)&&untracked.Snapshot().karma==5,"Track Crime is not a moral exemption");
+ c=Fixture();c.pipboy.dialogueActors[90].factions[81]=0;Player individual(c);
+ Check(individual.Pickup(3)&&individual.Snapshot().karma==5,"explicit NPC owner uses own karma, not faction flag");
  fo3pipdata::ResultScript reward;reward.source="RewardKarma 5\n";
  Player scripted(Fixture());Check(scripted.PreviewDialogueResult(reward,error)&&!scripted.PollKarmaEvent(k)&&scripted.Snapshot().karma==10,"preview feedback rollback");
  Check(scripted.ExecuteDialogueResult(reward,error)&&scripted.PollKarmaEvent(k)&&k.amount==5&&!scripted.PollKarmaEvent(k),"script reward one feedback event");
