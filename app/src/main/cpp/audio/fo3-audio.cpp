@@ -132,6 +132,7 @@ void Worker() {
     return;
   }
   auto cls = env->GetObjectClass(runtime.activity);
+  auto menuLoop = env->GetMethodID(cls,"audioMenuLoop","(Ljava/lang/String;F)V");
   auto music = env->GetMethodID(cls, "audioMusic", "(Ljava/lang/String;)V"),
        effect = env->GetMethodID(cls, "audioEffect", "(Ljava/lang/String;F)V"),
        ambient =
@@ -142,7 +143,7 @@ void Worker() {
        dialogue=env->GetMethodID(cls,"audioDialogue","(Ljava/lang/String;I)V"),
        dialogueGain=env->GetMethodID(cls,"audioDialogueGain","(F)V");
   if (env->ExceptionCheck() || !music || !effect || !ambient || !active ||
-      !broadcast || !dialogue || !dialogueGain) {
+      !broadcast || !dialogue || !dialogueGain || !menuLoop) {
     __android_log_print(ANDROID_LOG_ERROR, "FalloutQuest",
                         "AUDIO JNI bridge unavailable");
     env->ExceptionClear();
@@ -489,6 +490,12 @@ void Worker() {
       }
       continue;
     }
+    if(e.kind==15){
+      auto named=catalog.names.find(e.name);auto asset=named==catalog.names.end()?catalog.sounds.end():catalog.sounds.find(named->second);
+      std::string path;float gain=1;if(asset!=catalog.sounds.end()){path=resolve(asset->second.path);gain=asset->second.gain;
+        if(path.empty()&&missing.insert(asset->second.path).second)__android_log_print(ANDROID_LOG_WARN,"FalloutQuest","AUDIO missing menu loop: %s",asset->second.path.c_str());}
+      call(menuLoop,path,gain,true);continue;
+    }
     uint32_t id = 0;
     if(e.kind==11||(e.kind==12&&e.name.empty())){id=e.id;} else if (e.kind == 5||e.kind==12) {
       auto n = catalog.names.find(e.name);
@@ -622,6 +629,7 @@ void Pickup(uint32_t base) { Push({1, base, true}); }
 void Open(uint32_t base) { Push({2, base, true}); }
 void Close(uint32_t base) { Push({3, base, true}); }
 void Scroll() { Push({4, 0, true}); }
+void MenuLoop(const std::string& editorId){Push({15,0,false,editorId});}
 void NamedSound(const std::string &editorId) {
   if (!editorId.empty() && editorId.size() <= 128)
     Push({5, 0, true, editorId});

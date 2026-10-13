@@ -8799,6 +8799,7 @@ void Q220UpdateLooseGrab(
             return;
         }
     }
+    if(Fo3LockpickInputBlocked()){state.previousGrip=grip;return;}
     if (Fo3DialogueFocus()&&!state.active){state.previousGrip=grip;return;}
     if (!handValid) {
         if(handIndex==1) gShoulderGesture.Reset();
@@ -8886,7 +8887,7 @@ void Q220UpdateLooseGrab(
     if (state.active) {
         const auto ref=state.refFormId;
         if(handIndex==1) {
-            const bool eligible=gShoulderFocused && gSceneReady && !IsFo3LoadingVisible() &&
+            const bool eligible=!Fo3LockpickFocus() && gShoulderFocused && gSceneReady && !IsFo3LoadingVisible() &&
                 gPlayerSession && !gPlayerSession->saveBlocked && gPlayerSession->player.CanPickup(ref);
             const bool wasInside=gShoulderGesture.inside,wasArmed=gShoulderGesture.armed;
             const double now=std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
@@ -13158,6 +13159,7 @@ void SetFo3ShoulderInteractionFocused(bool focused) {
 
 fo3player::Session* GetFo3PlayerSession() { return gPlayerSession.get(); }
 
+#include "ui/lockpick/fo3-lockpick-runtime.inc"
 #include "world/interaction/fo3-interaction-runtime.inc"
 
 void SetFo3PlayerBodyTrackingQ210(

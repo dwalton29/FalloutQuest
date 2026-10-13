@@ -367,7 +367,7 @@ public:
 
     void Shutdown() {
         FlushFo3PlayerState();
-        fo3pipui::Shutdown();ResetFo3Pipboy();
+        fo3pipui::Shutdown();ResetFo3Pipboy();fo3lockui::Shutdown();CancelFo3Lockpick();
         fo3notifyui::Shutdown();
         fo3dialogueui::Shutdown();EndFo3Dialogue("renderer shutdown");
         fo3lootui::Shutdown();
@@ -1131,7 +1131,7 @@ private:
                     FlushFo3PlayerState();
                 sessionState_ = changed->state;
                 SetFo3ShoulderInteractionFocused(sessionState_==XR_SESSION_STATE_FOCUSED);
-                if(sessionState_!=XR_SESSION_STATE_FOCUSED) {fo3notify::Notifications().Clear();ResetFo3Pipboy();}
+                if(sessionState_!=XR_SESSION_STATE_FOCUSED) {fo3notify::Notifications().Clear();ResetFo3Pipboy();CancelFo3Lockpick();}
                 fo3audio::Context(gCurrentCellFormId,sessionState_ == XR_SESSION_STATE_FOCUSED);
                 FQ_LOGI("OpenXR session state -> %d", static_cast<int>(sessionState_));
 
@@ -1276,7 +1276,7 @@ private:
         }
         lastFrameTime_ = frameTime;
 
-        if (Fo3DialogueFocus() || Fo3ScriptMessageFocus() || Fo3PipboyFocus() || gPipActivation.phase==fo3pip::Phase::Candidate || GetFo3LootPanel().reference) {
+        if (Fo3LockpickFocus() || Fo3DialogueFocus() || Fo3ScriptMessageFocus() || Fo3PipboyFocus() || gPipActivation.phase==fo3pip::Phase::Candidate || GetFo3LootPanel().reference) {
             // Releasing the list while the stick is held cannot cause an accidental turn.
             snapTurnLatched_ = std::fabs(turnX_) >= .30f;
         } else if (!snapTurnLatched_ && std::fabs(turnX_) > 0.65f) {
@@ -1295,8 +1295,8 @@ private:
         }
 
         const float headYaw = YawFromQuaternion(headView.pose.orientation) + playerYaw_;
-        const float forward = Fo3ScriptMessageFocus()?0.f:moveY_;
-        const float strafe = Fo3ScriptMessageFocus()?0.f:moveX_;
+        const float forward = (Fo3ScriptMessageFocus()||Fo3LockpickFocus())?0.f:moveY_;
+        const float strafe = (Fo3ScriptMessageFocus()||Fo3LockpickFocus())?0.f:moveX_;
         const float c = std::cos(headYaw);
         const float s = std::sin(headYaw);
         const float velocity = MOVE_SPEED_METRES_PER_SECOND * static_cast<float>(dt);
@@ -1361,7 +1361,7 @@ private:
     }
 
     void UpdateDoorAimQ1700(double lootTime) {
-        if (IsFo3LoadingVisible() || Fo3DialogueFocus() || Fo3ScriptMessageFocus() || Fo3PipboyFocus() || !handPoseValid_[1]) {
+        if (IsFo3LoadingVisible() || Fo3LockpickFocus() || Fo3DialogueFocus() || Fo3ScriptMessageFocus() || Fo3PipboyFocus() || !handPoseValid_[1]) {
             if (doorAimActiveQ1700_) {
                 FQ_LOGI("Q16.13 HUD TARGET HIDE: sourceDoor=%08X reason=%s promptStorage=fixed-retained",
                         doorAimSourceQ1840_,
@@ -1591,21 +1591,25 @@ private:
                     Q6H_LOGI("PIPBOY SUPPRESS reason=held-physical-magazine-or-slide");
                 }
                 UpdateFo3Pipboy(gStereoFrame,static_cast<double>(frameState.predictedDisplayTime)*1e-9,pipHead.m,
-                    gVrPipTracking.Step(gSceneReady&&!reloadingInHand,IsFo3LoadingVisible(),sessionState_==XR_SESSION_STATE_FOCUSED,
+                    gVrPipTracking.Step(gSceneReady&&!reloadingInHand&&!Fo3LockpickFocus(),IsFo3LoadingVisible(),sessionState_==XR_SESSION_STATE_FOCUSED,
                         headTracking,{gripHandPoseValid_[0],pipLeftGripTracked_},{handPoseValid_[0],pipLeftAimTracked_},
                         static_cast<double>(frameState.predictedDisplayTime)*1e-9),
                     q210RightValid?turnX_:0,q210RightValid?lootScrollY_:0,
                     q210RightValid&&activateDownQ1700_,q210RightValid&&pipBackDown_,fingerGripValue_[0]);
+                const bool lockControls=Fo3LockpickFocus();
+                UpdateFo3Lockpick(static_cast<double>(frameState.predictedDisplayTime)*1e-9,
+                    q210RightValid?turnX_:0,q210RightValid?fingerTriggerValue_[1]:0,
+                    activateDownQ1700_,pipBackDown_,sessionState_==XR_SESSION_STATE_FOCUSED&&q210RightValid,pipHead.m,fingerGripValue_[0]>.25f||fingerGripValue_[1]>.25f);
                 const bool scriptControls=Fo3ScriptMessageFocus();
                 UpdateFo3ScriptMessage(static_cast<double>(frameState.predictedDisplayTime)*1e-9,
                     q210RightValid?lootScrollY_:0,q210RightValid&&activateDownQ1700_,
                     q210RightValid&&pipBackDown_,sessionState_==XR_SESSION_STATE_FOCUSED);
                 if(Fo3ScriptMessageFocus())ResetFo3Pipboy();
-                const bool dialogueControls=Fo3DialogueFocus()||scriptControls||Fo3ScriptMessageFocus();
+                const bool dialogueControls=lockControls||Fo3LockpickFocus()||Fo3DialogueFocus()||scriptControls||Fo3ScriptMessageFocus();
                 UpdateFo3Dialogue(static_cast<double>(frameState.predictedDisplayTime)*1e-9,
-                    !Fo3ScriptMessageFocus()&&q210RightValid?lootScrollY_:0,
-                    !Fo3ScriptMessageFocus()&&q210RightValid&&activateDownQ1700_,
-                    !Fo3ScriptMessageFocus()&&q210RightValid&&pipBackDown_,
+                    !Fo3LockpickFocus()&&!Fo3ScriptMessageFocus()&&q210RightValid?lootScrollY_:0,
+                    !Fo3LockpickFocus()&&!Fo3ScriptMessageFocus()&&q210RightValid&&activateDownQ1700_,
+                    !Fo3LockpickFocus()&&!Fo3ScriptMessageFocus()&&q210RightValid&&pipBackDown_,
                     sessionState_==XR_SESSION_STATE_FOCUSED);
                 if(dialogueControls&&activateDownQ1700_)activateLatched_=true;
                 WeaponUpdate(static_cast<double>(frameState.predictedDisplayTime)*1e-9,dialogueControls?false:pipBackDown_);
@@ -1840,6 +1844,7 @@ private:
                 const auto dialogueMvp=Multiply(viewProjection,model);fo3dialogueui::Render(dialogueMvp.m,panel);
             }
 
+            if(Fo3LockpickFocus()&&gPlayerSession)fo3lockui::Render(viewProjection.m,gLockpick,gPlayerSession->player);
             if(!IsFo3LoadingVisible()) {
                 const auto notificationMvp=Multiply(viewProjection,MatrixFromPose(notificationHead_));
                 fo3notifyui::Render(notificationMvp.m);
@@ -1852,7 +1857,7 @@ private:
                 // The right-hand interaction HUD remains; prototype controller
                 // markers, build labels and the world grid are no longer drawn.
                 if (hand == 1) {
-                    if(WeaponHeld()&&!Fo3PipboyFocus()&&!IsFo3LoadingVisible())fo3ammoui::Render(mvp.m);
+                    if(WeaponHeld()&&!Fo3LockpickFocus()&&!Fo3PipboyFocus()&&!IsFo3LoadingVisible())fo3ammoui::Render(mvp.m);
                     if (doorAimActiveQ1700_) {
                         if (doorPromptValidQ1850_ && !GetFo3LootPanel().reference) {
                             RenderFo3InteractionHud(mvp.m, doorPromptQ1850_.data(),doorPromptCrime_);

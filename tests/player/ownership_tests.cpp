@@ -69,7 +69,7 @@ void Synthetic(){
 
  // Original v12 shape: remove only the empty v13 sparse-table count.
  std::ifstream input("/tmp/fq-theft.fqps",std::ios::binary);
- std::vector<unsigned char> bytes((std::istreambuf_iterator<char>(input)),{});bytes.resize(bytes.size()-4);bytes[4]=12;
+ std::vector<unsigned char> bytes((std::istreambuf_iterator<char>(input)),{});bytes.resize(bytes.size()-12);bytes[4]=12;
  auto put=[&](size_t at,uint32_t value){for(size_t j=0;j<4;++j)bytes[at+j]=static_cast<unsigned char>(value>>(8*j));};
  put(12,static_cast<uint32_t>(bytes.size()-20));put(16,static_cast<uint32_t>(crc32(0,bytes.data()+20,bytes.size()-20)));
  std::ofstream legacy("/tmp/fq-theft-v12.fqps",std::ios::binary);legacy.write(reinterpret_cast<const char*>(bytes.data()),bytes.size());legacy.close();
@@ -77,7 +77,7 @@ void Synthetic(){
  std::ifstream ownedInput("/tmp/fq-ownership.fqps",std::ios::binary);
  bytes.assign(std::istreambuf_iterator<char>(ownedInput),{});
  // Two explicitly owned remaining rows, each 20 bytes. Invalid owner, valid CRC.
- put(bytes.size()-32,9999);put(16,static_cast<uint32_t>(crc32(0,bytes.data()+20,bytes.size()-20)));
+ put(bytes.size()-40,9999);put(16,static_cast<uint32_t>(crc32(0,bytes.data()+20,bytes.size()-20)));
  std::ofstream corrupt("/tmp/fq-ownership-corrupt.fqps",std::ios::binary);corrupt.write(reinterpret_cast<const char*>(bytes.data()),bytes.size());corrupt.close();
  const auto restoredRevision=restored.Revision();const auto restoredKarma=restored.Snapshot().karma;
  Check(!restored.Restore("/tmp/fq-ownership-corrupt.fqps",error)&&restored.Revision()==restoredRevision&&restored.Snapshot().karma==restoredKarma,"corrupt ownership restore atomic");

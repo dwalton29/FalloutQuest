@@ -475,6 +475,8 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
               ref.locked =
                   true; // XLOC authors a lock, including key-only locks.
               ref.key = fo3esm::ReadU32(sub.data + 4);
+              ref.lockLevel=sub.data[0];ref.lockFlags=sub.data[8];
+              if(sub.size>=20)std::copy_n(sub.data+12,8,ref.lockMetadata.begin());
             }
           }
         }
@@ -491,6 +493,7 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
         if(data&&data->size)cell.flags=data->data[0];
         next.cellOwnership[form]=cell;
       } else if (type == "DOOR") {
+        next.doorBases.insert(form);
         const auto* script = Find(subs, "SCRI");
         if (script) {
           next.scriptedBases.insert(form);
@@ -512,6 +515,9 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
         if (!id.empty() && id[0] == 's' && d)
           next.strings[id] = fo3esm::ZString(d->data, d->size);
         if(id=="iKarmaChangeThreshold"&&d&&d->size==4&&I32(d->data)>0)next.karmaMajorThreshold=I32(d->data);
+        if(!id.empty() && d && d->size==4 && (id[0]=='i'||id[0]=='f') &&
+           (id.find("Lock")!=std::string::npos||id.find("SweetSpot")!=std::string::npos||id.find("Concentric")!=std::string::npos||id=="fPickBreakSecs"))
+          next.lockSettings[id]=id[0]=='f'?fo3esm::ReadF32(d->data):float(I32(d->data));
         if (id == "iLevItemLevelDifferenceMax" && d && d->size == 4)
           next.lootLevelDifference = std::max(0, I32(d->data));
       } else if (item) {
@@ -520,6 +526,7 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
           return fail("Invalid inventory item definition");
         if (kind == ItemKind::Weapon)
           fo3weapon::DecodeWeapon(payload, definition.weapon);
+        if(Text(subs,"EDID")=="Lockpick")next.bobbyPin=form;
         next.items[form] = std::move(definition);
       } else if(type=="NPC_"&&form==PlayerBase) {
         if (playerFound)
@@ -640,7 +647,10 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
 }
 
 Player::Player(Catalog catalog)
-    : catalog_(std::move(catalog)), state_(catalog_.initial) {}
+    : catalog_(std::move(catalog)), state_(catalog_.initial) {
+  auto perk=catalog_.pipboy.formNames.find("infiltrator");
+  if(perk!=catalog_.pipboy.formNames.end())catalog_.infiltrator=perk->second;
+}
 bool Player::AdvanceGameClock(double realSeconds) {
   if (!std::isfinite(realSeconds) || realSeconds <= 0.0 || realSeconds > 1.0 ||
       !std::isfinite(catalog_.gameTimeScale) || catalog_.gameTimeScale <= 0.0f)
@@ -856,7 +866,7 @@ bool Player::CanActorOpenDoor(uint32_t actor,uint32_t id) const {
        (actor!=PlayerRef||!catalog_.defaultActivationDoors.count(ref.base))))
     return false;
   if(actor!=PlayerRef&&ActorHealth(actor)<=0)return false;
-  if (!ref.locked)
+  if (!GetLock(id).locked)
     return true;
   if (!ref.key)
     return false;
@@ -1010,7 +1020,14 @@ bool Player::Save(const std::string &path, std::string &error) const {
   Put32(payload,static_cast<uint32_t>(ownedContents.size()));
   for(const auto* stack:ownedContents){Put64(payload,stack->id);Put32(payload,stack->ownership.owner);
     Put32(payload,static_cast<uint32_t>(stack->ownership.rank));Put32(payload,stack->ownership.global);}
-  Put32(bytes, 13);
+  // v14: sparse lock overlays, XP. Interrupted minigames have no overlay.
+  Put32(payload,state_.experience);
+  std::vector<uint32_t> lockIds;for(const auto& kv:state_.locks)lockIds.push_back(kv.first);
+  std::sort(lockIds.begin(),lockIds.end());Put32(payload,uint32_t(lockIds.size()));
+  for(auto id:lockIds){const auto& l=state_.locks.at(id);Put32(payload,id);
+    payload.push_back(uint8_t(l.change));payload.push_back(l.level);
+    payload.push_back(l.forceFailures);payload.push_back(l.rewarded?1:0);}
+  Put32(bytes, 14);
   Put32(bytes, catalog_.fingerprint);
   Put32(bytes, static_cast<uint32_t>(payload.size()));
   Put32(bytes, Crc(payload));
@@ -1069,7 +1086,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
   const auto *h = bytes.data();
   const auto version = fo3esm::ReadU32(h + 4);
   if (std::memcmp(h, "FQPS", 4) ||
-      (version < 1 || version > 13))
+      (version < 1 || version > 14))
     return fail("Unsupported player save format");
   if (fo3esm::ReadU32(h + 8) != catalog_.fingerprint)
     return fail("Player save belongs to different game definitions");
@@ -1323,7 +1340,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
       if(version>=13){
         if(payload.size()-at<4)return fail("Missing ownership extension");
         const auto n=fo3esm::ReadU32(p+at);at+=4;
-        if(n>30000||payload.size()-at!=20ull*n)return fail("Invalid ownership extension size");
+        if(n>30000||(version>=14 ? payload.size()-at<20ull*n+8 : payload.size()-at!=20ull*n))return fail("Invalid ownership extension size");
         std::unordered_map<uint64_t,Stack*> stacks;
         for(auto& container:next.containers)for(auto& stack:container.second)stacks.emplace(stack.id,&stack);
         std::unordered_set<uint64_t> seen;
@@ -1335,6 +1352,19 @@ bool Player::Restore(const std::string &path, std::string &error) {
              (owner.global&&!catalog_.globals.count(owner.global))||
              (catalog_.factionFlags.count(owner.owner)&&owner.global))return fail("Invalid saved item ownership");
           found->second->ownership=owner;
+        }
+      }
+      if(version>=14){
+        if(payload.size()-at<8)return fail("Missing lock extension");
+        next.experience=fo3esm::ReadU32(p+at);const auto n=fo3esm::ReadU32(p+at+4);at+=8;
+        if(n>100000||payload.size()-at!=8ull*n)return fail("Invalid lock extension");
+        next.locks.clear();
+        for(uint32_t i=0;i<n;++i,at+=8){const auto id=fo3esm::ReadU32(p+at);
+          LockOverride l;l.change=LockChange(p[at+4]);l.level=p[at+5];l.forceFailures=p[at+6];l.rewarded=p[at+7]!=0;
+          auto ref=catalog_.references.find(id);
+          if(ref==catalog_.references.end()||!ref->second.valid||p[at+4]>uint8_t(LockChange::ScriptUnlocked)||l.forceFailures>2||p[at+7]>1||
+             (l.change==LockChange::Broken&&!l.forceFailures)||(l.change==LockChange::Key&&!ref->second.key)||
+             ((l.change==LockChange::Picked||l.change==LockChange::Forced)&&l.level>100)||!next.locks.emplace(id,l).second)return fail("Invalid saved lock");
         }
       }
       if(at!=payload.size())return fail("Trailing weapon save data");
@@ -1369,3 +1399,4 @@ bool Session::Flush(std::string &error) {
 } // namespace fo3player
 
 #include "fo3-ownership-state.inc"
+#include "fo3-lock-state.inc"

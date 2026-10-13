@@ -97,6 +97,8 @@ std::vector<ActorTarget> gQ230NpcActors;
 bool Q230LiveBounds(const ActorTarget& actor,std::array<float,3>& lo,std::array<float,3>& hi){lo=actor.lo;hi=actor.hi;return true;}
 bool DialogueCanStart(ActorTarget& actor){return actor.eligible;}
 bool StartFo3Dialogue(uint32_t actor){talked=actor;dialogueFocus=true;return true;}
+bool Fo3LockpickFocus(){return false;}
+bool BeginFo3Lockpick(uint32_t){return false;}
 #include "world/interaction/fo3-interaction-runtime.inc"
 void Check(bool ok, const char *why) {
   if (!ok)

@@ -32,3 +32,7 @@ void UpdateFo3LootSelection(const Fo3InteractionTarget& target,float stickY,doub
 
 bool CollectFo3WorldReference(uint32_t reference);
 void SetFo3ShoulderInteractionFocused(bool focused);
+
+bool Fo3LockpickFocus();
+void CancelFo3Lockpick();
+bool Fo3LockpickInputBlocked();

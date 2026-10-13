@@ -79,7 +79,9 @@ struct OwnershipResult {
   bool inherited=false, permitted=true, known=true, karmaEligible=false;
   bool Theft() const {return known && !permitted;}
 };
+enum class CrimeAction : uint8_t { Take, PickLock, ForceLock };
 struct TheftEvent {
+  CrimeAction action=CrimeAction::Take;
   uint32_t reference=0,item=0,container=0,owner=0,player=PlayerRef,cell=0,world=0;
   int32_t count=0;
   float karmaDelta=0;
@@ -107,12 +109,18 @@ struct Rules {
   float healthEnduranceMult = 0, healthEnduranceOffset = 0, healthLevelMult = 0;
   float apBase = 0, apMult = 0, carryBase = 0, carryMult = 0;
 };
+enum class LockChange : uint8_t { Locked, Key, Picked, Forced, Broken, ScriptUnlocked };
+struct LockOverride { LockChange change=LockChange::Locked; uint8_t level=0,forceFailures=0; bool rewarded=false; };
+struct LockInfo { bool known=false,locked=false,broken=false,leveled=false; uint8_t level=0,flags=0,forceFailures=0; uint32_t key=0; };
+enum class PickAccess { Ready, Unlocked, Unsupported, RequiresKey, Skill, NoPins, Broken };
 struct Reference {
   uint32_t base = 0, flags = 0, owner = 0, key = 0, cell = 0;
   int32_t count = 1;
   float condition = 1;
   bool locked = false, valid = true;
   OwnershipData ownership{};
+  uint8_t lockLevel=0,lockFlags=0;
+  std::array<uint8_t,8> lockMetadata{};
 };
 struct LootEntry {
   uint32_t form = 0, owner = 0;
@@ -160,6 +168,8 @@ struct State {
   float gameHour = 12.0f;
   uint32_t gameDaysPassed = 0;
   uint32_t gameYear=2277,gameMonth=7,gameDay=17; // Original GLOB default: 17 August 2277 (GameMonth 0-based).
+  uint32_t experience=0; // Canonical earned XP; level-up allocation remains a separate subsystem.
+  std::unordered_map<uint32_t,LockOverride> locks;
   uint64_t nextStackId = 1;
   std::vector<Stack> inventory;
   std::unordered_set<uint32_t> collected;
@@ -184,6 +194,7 @@ struct Catalog {
   std::unordered_map<uint32_t,uint32_t> eventBaseScripts;
   std::unordered_map<uint32_t,std::string> eventBaseNames;
   std::unordered_map<uint32_t,fo3script::EventProgram> eventPrograms;
+  std::unordered_set<uint32_t> doorBases;
   std::unordered_set<uint32_t> scriptedBases;
   std::unordered_set<uint32_t> defaultActivationDoors; // verified script passthroughs
   std::unordered_map<std::string, std::string> strings;
@@ -194,6 +205,8 @@ struct Catalog {
   std::unordered_map<uint32_t,CellOwnership> cellOwnership;
   std::unordered_map<uint32_t,uint32_t> factionFlags;
   float theftKarma=0;
+  uint32_t bobbyPin=0,infiltrator=0;
+  std::unordered_map<std::string,float> lockSettings;
   // FO3 executable defaults; optional GMST overrides. Not FNV reputation.
   float evilMaxKarma=-250;
   int32_t karmaMajorThreshold=250;
@@ -329,6 +342,17 @@ public:
   bool PollKarmaEvent(KarmaEvent& out);
   bool CanPickup(uint32_t reference) const;
   bool Pickup(uint32_t reference);
+  LockInfo GetLock(uint32_t reference) const;
+  int LockRequirement(uint32_t reference) const;
+  PickAccess CanPickLock(uint32_t reference) const;
+  int ForceLockChance(uint32_t reference) const;
+  bool UnlockByKey(uint32_t reference);
+  bool CompleteLockpick(uint32_t reference,bool forced=false);
+  bool ForceLock(uint32_t reference,uint32_t roll);
+  bool BreakBobbyPin(uint32_t reference);
+  bool ScriptLock(uint32_t reference,int level);
+  bool ScriptUnlock(uint32_t reference);
+  float LockSetting(const std::string& key,float fallback) const;
   bool CanOpenDoor(uint32_t reference) const;
   bool CanActorOpenDoor(uint32_t actor,uint32_t reference) const;
   bool CanLootContainer(uint32_t reference) const;

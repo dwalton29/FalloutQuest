@@ -96,6 +96,12 @@ bool CompileResult(const fo3pipdata::Definitions& d,const fo3pipdata::ResultScri
     } else if(op=="setquestobject") {
       cmd.type=CommandType::SetQuestObject;
       if(!(in>>a>>b)||(cmd.form=form(a))==0||!number(b,cmd.value)||(cmd.value!=0&&cmd.value!=1)){error="invalid SetQuestObject";return false;}
+    } else if(op=="lock"||op=="unlock"|| (op.size()>5&&op.compare(op.size()-5,5,".lock")==0)|| (op.size()>7&&op.compare(op.size()-7,7,".unlock")==0)) {
+      const auto dot=op.find('.');const auto verb=dot==std::string::npos?op:op.substr(dot+1);
+      cmd.form=dot==std::string::npos?owner:form(op.substr(0,dot));
+      cmd.type=verb=="lock"?CommandType::Lock:CommandType::Unlock;
+      if(!cmd.form){error="missing lock reference";return false;}
+      if(verb=="lock"){if(in>>a){if(!number(a,cmd.value)||cmd.value<0||cmd.value>255||std::floor(cmd.value)!=cmd.value){error="invalid lock level";return false;}}else {in.clear();cmd.value=0;}}
     } else if(op=="rewardkarma") {
       cmd.type=CommandType::RewardKarma;
       if(!(in>>a)||!number(a,cmd.value)){error="invalid RewardKarma";return false;}

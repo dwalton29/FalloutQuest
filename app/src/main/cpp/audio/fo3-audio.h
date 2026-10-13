@@ -30,5 +30,6 @@ void Scroll();
 void SoundEvent(uint32_t soundForm);
 void PreloadSound(uint32_t soundForm);
 void PreloadSound(const std::string& editorId);
+void MenuLoop(const std::string& editorId); // Dedicated UI loop, empty stops.
 void NamedSound(const std::string &editorId);
 } // namespace fo3audio

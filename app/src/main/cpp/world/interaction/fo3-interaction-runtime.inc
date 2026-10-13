@@ -1,7 +1,9 @@
 #include "ui/interaction/fo3-item-notifications.h"
+
 #include "dialogue/fo3-dialogue-panel.h"
 // Shared menu focus is defined below the world interaction query functions.
 bool Fo3ScriptMessageFocus();
+bool BeginFo3Lockpick(uint32_t reference);
 
 void NotifyFo3ItemTransfer(uint32_t base,int32_t count) {
     const auto& catalog=gPlayerSession->player.Definitions();
@@ -39,7 +41,7 @@ bool CollectFo3WorldReference(uint32_t reference) {
 bool QueryFo3Interaction(float ox, float oy, float oz, float dx, float dy,
                          float dz, Fo3InteractionTarget &target) {
     target = {};
-    if (!gSceneReady || IsFo3LoadingVisible() || Fo3DialogueFocus() || Fo3PipboyFocus() || Fo3ScriptMessageFocus() || !gPlayerSession) return false;
+    if (!gSceneReady || IsFo3LoadingVisible() || Fo3DialogueFocus() || Fo3PipboyFocus() || Fo3ScriptMessageFocus() || Fo3LockpickFocus() || !gPlayerSession) return false;
     const float length = std::sqrt(dx*dx+dy*dy+dz*dz);
     if (!std::isfinite(length) || length < 1e-5f ||
         !std::isfinite(ox) || !std::isfinite(oy) || !std::isfinite(oz)) return false;
@@ -112,7 +114,7 @@ bool QueryFo3Interaction(float ox, float oy, float oz, float dx, float dy,
         const auto& ref=catalog.references.at(target.reference);
         const auto& container=catalog.containers.at(ref.base);
         std::snprintf(target.prompt.data(),target.prompt.size(),"%s%s",
-            ref.locked&&!target.allowed ? "Locked " : "Open ",container.name.c_str());
+            player.GetLock(target.reference).locked&&!target.allowed ? "Locked " : "Open ",container.name.c_str());
     } else if(target.scripted) {
         const auto ref=catalog.references.find(target.reference);
         if(ref==catalog.references.end()){target={};return false;}
@@ -136,7 +138,7 @@ bool QueryFo3Interaction(float ox, float oy, float oz, float dx, float dy,
         }
         if (!target.allowed) {
             const auto ref=catalog.references.find(target.reference);
-            if (ref!=catalog.references.end() && ref->second.locked)
+            if (ref!=catalog.references.end() && player.GetLock(target.reference).locked)
                 std::snprintf(target.prompt.data(),target.prompt.size(),"Locked");
         }
     }
@@ -271,6 +273,7 @@ bool ActivateFo3Interaction(float ox,float oy,float oz,float dx,float dy,float d
     Fo3InteractionTarget target;
     if (!QueryFo3Interaction(ox,oy,oz,dx,dy,dz,target)) return false;
     if(!target.allowed){
+        if(gPlayerSession&&gPlayerSession->player.GetLock(target.reference).locked){BeginFo3Lockpick(target.reference);return false;}
         // Existing scripted doors and scripted item bases were deliberately
         // blocked by their legacy default-action policies. Still deliver an
         // actual activation event, but never invent a door transition/pickup.
@@ -279,7 +282,7 @@ bool ActivateFo3Interaction(float ox,float oy,float oz,float dx,float dy,float d
            gPlayerSession->player.HasReferenceEvent(target.reference,"OnActivate")){
             const auto& refs=gPlayerSession->player.Definitions().references;
             const auto ref=refs.find(target.reference);
-            if(ref!=refs.end() && ref->second.valid && !ref->second.locked &&
+            if(ref!=refs.end() && ref->second.valid && !gPlayerSession->player.GetLock(target.reference).locked &&
                !(ref->second.flags&0x820u)){
                 std::string error;
                 gPlayerSession->player.DispatchReferenceEvent(
@@ -287,6 +290,9 @@ bool ActivateFo3Interaction(float ox,float oy,float oz,float dx,float dy,float d
             }
         }
         return false;
+    }
+    if(!target.talk&&!target.pickup&&!target.scripted&&gPlayerSession->player.GetLock(target.reference).locked){
+        if(gPlayerSession->player.UnlockByKey(target.reference)){FlushFo3PlayerState();if(target.container)return false;}
     }
     if(target.talk){StartFo3Dialogue(target.reference);return false;}
     if(target.scripted){

@@ -43,6 +43,12 @@ class Expression {
       const auto id=form(tokens[at++]);if(!id)return Fail("unresolved item form");
       value=p.ItemCount(id);return true;
     }
+    const auto dot=t.find('.');const auto query=dot==std::string::npos?t:t.substr(dot+1);
+    if(query=="getlocked"||query=="getlocklevel"||query=="getislockbroken") {
+      const auto id=dot==std::string::npos?owner:form(t.substr(0,dot));auto lock=p.GetLock(id);
+      if(!lock.known||lock.leveled)return Fail("unresolved lock query");
+      value=query=="getlocked"?float(lock.locked):query=="getlocklevel"?float(lock.level):float(lock.broken);return true;
+    }
     if(t=="getbuttonpressed"){value=p.ScriptButton();return true;}
     if(t=="getdistance"){
       if(at==tokens.size()||tokens[at++]!="player")return Fail("unsupported distance target");
@@ -183,6 +189,8 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
     case C::AddItem:ok=Add(c.form,int32_t(c.value));break;
     case C::RemoveItem:ok=ScriptRemoveItem(c.form,int32_t(c.value));break;
     case C::SetQuestObject:ok=SetQuestObject(c.form,c.value!=0);break;
+    case C::Lock:ok=ScriptLock(c.form,int(c.value));break;
+    case C::Unlock:ok=ScriptUnlock(c.form);break;
     case C::RewardKarma:ok=RewardKarma(c.value);break;
     case C::EvaluatePackage:ok=ReevaluatePackage(c.form);break;
     case C::ShowMessage: {

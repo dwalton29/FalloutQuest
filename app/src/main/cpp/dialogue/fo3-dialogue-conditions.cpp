@@ -37,7 +37,7 @@ static bool Value(const fo3pipdata::Condition& c,const Context& ctx,float& value
   if(c.run==1)who=ctx.target;
   else if(c.run==2){if(c.reference==0x14)who=ctx.target;else if(c.reference!=ctx.speaker.reference){
     auto ref=d.targets.find(c.reference);
-    if(ref==d.targets.end()||(c.function!=35&&c.function!=46)){error="reference context unavailable";return false;}
+    if(ref==d.targets.end()||(c.function!=35&&c.function!=46&&c.function!=5&&c.function!=65&&c.function!=522)){error="reference context unavailable";return false;}
     who.reference=c.reference;who.base=ref->second.base;
   }}
   else if(c.run!=0){error="unsupported run-on context";return false;}
@@ -45,6 +45,9 @@ static bool Value(const fo3pipdata::Condition& c,const Context& ctx,float& value
   const auto* def=fo3pipdata::ActorCategory(d,pc?7:who.base,(c.function==71||c.function==73)?4:1);
   auto quest=state.pipboy.quests.find(c.a);
   switch(c.function) {
+  case 5:case 65:case 522: {auto lock=p.GetLock(who.reference);
+    if(!lock.known||lock.leveled){error="lock state unavailable";return false;}
+    value=c.function==5?float(lock.locked):c.function==65?float(lock.level):float(lock.broken);return true;}
   case 1: {ActorContext other;if(c.a==ctx.speaker.reference)other=ctx.speaker;else if(c.a==ctx.target.reference)other=ctx.target;else {error="distance reference unavailable";return false;}
     value=std::sqrt((who.x-other.x)*(who.x-other.x)+(who.y-other.y)*(who.y-other.y)+(who.z-other.z)*(who.z-other.z));return true;}
   case 14:
