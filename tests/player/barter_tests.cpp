@@ -106,11 +106,33 @@ void RestockAndModifiers(){
  Check(discounted.BarterPrice(item,true,0,price)&&price==100,"price lower bound after perk");
  Check(discounted.BarterPrice(item,false,0,price)&&price==90,"sell hundred skill");
 }
+void AuthoredServices(){
+ auto c=Fixture();c.pipboy.packages[77].flags=0;
+ c.pipboy.voices[90]="Voice";c.pipboy.dialogueActors[200].voice=90;c.pipboy.quests[9].flags=1;
+ fo3pipdata::Info info;info.id=10;info.topic=8;info.quest=9;info.responses={{0,1,"Authored response"}};info.begin.source="ShowBarterMenu";
+ c.pipboy.topics[8]={info};Player p(c);ActorState actor;actor.cell=11;actor.package=77;
+ Check(p.UpdateActor(1,actor),"saved merchant nonservice package");
+ fo3dialogue::Context ctx;ctx.player=&p;ctx.speaker={1,200,11,0,77,0,0,0,false,true};ctx.target={PlayerRef,PlayerBase,11};
+ fo3dialogue::Session session;
+ Check(session.Resolve(8,ctx)!=nullptr,"authored ShowBarterMenu survives ordinary nonservice package");
+ fo3pipdata::Condition service;service.function=255;service.value=1;
+ std::string error;Check(!fo3dialogue::Conditions({service},ctx,error)&&error.empty(),"original nonservice condition remains false");
+ c.pipboy.topics[8][0].conditions={service};Player gated(c);Check(gated.UpdateActor(1,actor),"saved restricted merchant");ctx.player=&gated;
+ Check(session.Resolve(8,ctx)==nullptr,"authored GetOffersServicesNow still gates topics");
+ c.pipboy.packages[77].flags=1;Player offering(c);Check(offering.UpdateActor(1,actor),"saved offering merchant");ctx.player=&offering;
+ Check(session.Resolve(8,ctx)!=nullptr,"authored service condition succeeds when offering");
+ actor.hostile=PlayerRef;Check(offering.UpdateActor(1,actor)&&!offering.MerchantAvailable(1),"hostile merchant still blocked");
+}
 void Original(const char* path){
  Catalog c;std::string e;Check(LoadCatalog(path,c,e),e.c_str());
  Check(c.merchantContainers.at(0x2d2bc)==0xb4207&&c.merchantContainers.at(0x3b3d)==0x20478,"original XMRC");
  Check(c.containers.at(c.references.at(0xb4207).base).respawns,"original respawn flag");
- Player p(std::move(c));
+ Player p(std::move(c));p.RegisterOriginalActors();
+ // Production daytime selection: Moira's original shop Sandbox, not the
+ // vendor-follow interrupt chosen by the previous test's flag shortcut.
+ auto moira=p.Snapshot().actors.at(0x2d2bc);moira.package=0x4153;
+ Check(p.UpdateActor(0x2d2bc,moira),"original daytime shop package");
+ Check(!(p.Definitions().pipboy.packages.at(0x4153).flags&1),"actual shop lacks Offers Services flag");
  for(auto actor:{0x2d2bcu,0x3b3du}){BarterSession s;Check(p.OpenBarter(actor,0,s),"original merchant opens");
   size_t eligible=0;for(const auto& x:s.merchant)if(p.BarterItemAllowed(actor,x))++eligible;
   std::cout<<"merchant "<<std::hex<<actor<<std::dec<<" stock="<<s.merchant.size()<<" eligible="<<eligible<<" caps=";
@@ -122,7 +144,8 @@ void Original(const char* path){
   ctx.speaker.cell=p.Definitions().references.at(actor).cell;
   ctx.target.reference=PlayerRef;ctx.target.base=PlayerBase;ctx.target.cell=ctx.speaker.cell;
   const auto& npc=p.Definitions().pipboy.dialogueActors.at(ctx.speaker.base);
-  for(auto id:npc.packages){const auto& pack=p.Definitions().pipboy.packages.at(id);
+  if(actor==0x2d2bc){ctx.speaker.package=0x4153;ctx.speaker.packageKnown=true;}
+  else for(auto id:npc.packages){const auto& pack=p.Definitions().pipboy.packages.at(id);
     if(pack.flags&1){ctx.speaker.package=id;ctx.speaker.packageKnown=true;break;}}
   fo3dialogue::Session dialogue;
   dialogue.diagnostic=[](const std::string&){};
@@ -164,4 +187,4 @@ void Original(const char* path){
   BarterSession persisted;Check(restored.OpenBarter(actor,s.discount,persisted)&&persisted.merchant.size()==s.merchant.size(),"original merchant restore");
  }
 }
-int main(int argc,char** argv){try{Synthetic();Safety();RestockAndModifiers();if(argc>1)Original(argv[1]);std::cout<<"barter tests passed\n";}catch(const std::exception& e){std::cerr<<e.what()<<"\n";return 1;}}
+int main(int argc,char** argv){try{Synthetic();Safety();RestockAndModifiers();AuthoredServices();if(argc>1)Original(argv[1]);std::cout<<"barter tests passed\n";}catch(const std::exception& e){std::cerr<<e.what()<<"\n";return 1;}}

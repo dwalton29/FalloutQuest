@@ -31,8 +31,9 @@ bool Player::MerchantAvailable(uint32_t actor) const {
   if(!ReferenceDisabled(actor,disabled,error)||disabled||ActorHealth(actor)<=0)return false;
   auto saved=state_.actors.find(actor);if(saved!=state_.actors.end()){
     if(saved->second.dead||saved->second.hostile)return false;
-    if(saved->second.package){const auto package=catalog_->pipboy.packages.find(saved->second.package);
-      if(package==catalog_->pipboy.packages.end()||!(package->second.flags&1))return false;}
+    // ShowBarterMenu is an explicit authored script command. Package service
+    // restrictions belong to GetOffersServicesNow CTDAs where the ESM uses
+    // them, not an extra gate that hides Moira's unconditionally scripted trade.
   }
   const auto chest=catalog_->references.find(m->second);
   if(chest==catalog_->references.end()||!chest->second.valid)return false;

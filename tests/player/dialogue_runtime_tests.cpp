@@ -175,7 +175,7 @@ static void OriginalBridge(const char* path){
 static void BarterBridge(){
   PrepareSynthetic();auto c=gPlayerSession->player.Definitions();
   c.references[42].base=43;c.references[99].base=333;
-  c.merchantContainers[42]=99;c.merchantServices[43]=0x400;c.pipboy.packages[50].flags|=1;
+  c.merchantContainers[42]=99;c.merchantServices[43]=0x400;c.pipboy.packages[50].flags&=~1u;
   c.barterSettings={{"fBarterBuyBase",1.55f},{"fBarterBuyMult",-.45f},{"fBarterSellBase",.45f},{"fBarterSellMult",.45f}};
   fo3player::Item caps;caps.formId=0xf;caps.name="Bottle Caps";caps.value=1;c.items[0xf]=caps;
   fo3player::Item item;item.formId=100;item.name="Original-format merchandise";item.value=100;c.items[100]=item;
@@ -184,7 +184,9 @@ static void BarterBridge(){
   c.pipboy.dialogueTopics[91].text="Authored merchant topic";c.pipboy.topLevelTopics={91};
   auto trade=greeting;trade.id=92;trade.topic=91;trade.links.clear();trade.begin.source="ShowBarterMenu 50";
   c.pipboy.topics[91]={trade};gPlayerSession=std::make_unique<Session>(c);
-  assert(gPlayerSession->player.Add(0xf,1000));Tick();
+  assert(gPlayerSession->player.Add(0xf,1000));
+  fo3player::ActorState merchant;merchant.cell=gCurrentCellFormId;merchant.world=gExteriorWorldspaceQ1890;merchant.package=50;
+  assert(gPlayerSession->player.UpdateActor(42,merchant));Tick();
   assert(StartFo3Dialogue(42));assert(!gBarter.active);Speak();
   assert(gDialogue.phase==fo3dialogue::Phase::Choices&&gDialogue.choices.size()==1);
   Tick(true);assert(gDialogue.phase==fo3dialogue::Phase::Speaking&&!gBarter.active);Tick(false);
