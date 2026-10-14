@@ -9,3 +9,7 @@ Tests: max-stat persistence, 100-count extra inventory stack, invalid SPECIAL/sk
 ## CI correction
 
 GitHub Actions run #1179 compiled but 9/27 player tests failed because many valid synthetic test catalogues intentionally use zero-initialised SPECIAL attributes. Writing every save as v15 rejected their unchanged baseline values. The writer now emits v14 whenever SPECIAL/skills equal the catalogue baseline, emits v15 and strictly validates values only for genuine attribute overrides, and preserves the existing optional RFE1 handling for v14. The legacy v10 regression fixture uses the original 32-byte tail removal. Custom boosted saves still require v15 and are unaffected.
+
+## CI follow-up: v14 resource bounds
+
+GitHub Actions #1180 advanced to 24/27 player host tests. The remaining weapon, ownership, and lockpick synthetic fixtures use a minimal default catalogue with max health 0. New restore-time `maxHealth<=0` validation incorrectly rejected those previously supported v14 fixtures. Preserve the historic v1-v14 acceptance rule (nonnegative saved damage no greater than derived maximum), while requiring strictly positive derived max health for v15 explicit attribute overrides. Added a zero-health minimal-catalogue v14 roundtrip regression test. No v15 file layout or max-stat save bytes change.

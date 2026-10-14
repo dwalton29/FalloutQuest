@@ -258,6 +258,22 @@ void Synthetic(const std::string &root) {
   Check(p.MaxHealth() == 200 && p.MaxActionPoints() == 75 &&
             p.CarryCapacity() == 200 && p.InventoryWeight() == 10,
         "derived baseline");
+  // v14 regression: actor/weapon/ownership tests legitimately construct
+  // minimal catalogues with zero-valued HP/AP and SPECIAL fields. Legacy
+  // restore must not reject them after new v15-only stat validation.
+  {
+    fo3player::Catalog minimal;
+    minimal.fingerprint=0xF209u;
+    fo3player::Player bare(minimal);
+    const auto legacyPath=root+"-minimal-v14.fqps";
+    Check(bare.Save(legacyPath,error)&&Read(legacyPath)[4]==14,
+          "unchanged minimal catalogue writes legacy v14");
+    fo3player::Player bareReload(minimal);
+    Check(bareReload.Restore(legacyPath,error)&&
+          bareReload.Snapshot().special==minimal.initial.special,
+          "legacy v14 zero-health synthetic save roundtrips");
+    std::remove(legacyPath.c_str());
+  }
   Check(!p.Add(900, 1) && !p.Add(100, -1) && !p.Add(100, 1, NAN),
         "reject bad add");
   Check(p.Equip(Id(p, 100)) && p.Snapshot().inventory.size() == 2,

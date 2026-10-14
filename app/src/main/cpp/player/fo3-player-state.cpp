@@ -1502,7 +1502,10 @@ bool Player::Restore(const std::string &path, std::string &error) {
       const float maxHealth=next.baseHealth+(next.special[2]+rule.healthEnduranceOffset)*rule.healthEnduranceMult+
           (next.level-1)*rule.healthLevelMult;
       const float maxAp=rule.apBase+next.special[5]*rule.apMult;
-      if(!std::isfinite(maxHealth)||maxHealth<=0||next.healthDamage>maxHealth||
+      // Historic saves and lightweight test catalogues can have a zero
+      // maximum health value. Preserve the v1-v14 resource acceptance rule;
+      // only v15 attribute overrides require a positive derived maximum.
+      if(!std::isfinite(maxHealth)||(version>=15&&maxHealth<=0)||next.healthDamage>maxHealth||
          !std::isfinite(maxAp)||maxAp<0||next.apSpent>maxAp)
         return fail("Invalid saved player resources");
       if(at!=payload.size())return fail("Trailing player save data");
