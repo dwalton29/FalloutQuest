@@ -1,11 +1,11 @@
 // Original definitions are immutable. All world/UI/script consumers use this overlay.
 namespace fo3player {
 float Player::LockSetting(const std::string& name,float fallback) const {
-  auto s=catalog_.lockSettings.find(name);
-  return s!=catalog_.lockSettings.end()&&std::isfinite(s->second)?s->second:fallback;
+  auto s=catalog_->lockSettings.find(name);
+  return s!=catalog_->lockSettings.end()&&std::isfinite(s->second)?s->second:fallback;
 }
 LockInfo Player::GetLock(uint32_t id) const {
-  LockInfo out;auto r=catalog_.references.find(id);if(r==catalog_.references.end()||!r->second.valid)return out;
+  LockInfo out;auto r=catalog_->references.find(id);if(r==catalog_->references.end()||!r->second.valid)return out;
   const auto& ref=r->second;out.known=true;out.locked=ref.locked;out.level=ref.lockLevel;out.flags=ref.lockFlags;out.key=ref.key;
   auto o=state_.locks.find(id);
   if(o!=state_.locks.end()) {const auto& l=o->second;out.level=l.level;out.forceFailures=l.forceFailures;
@@ -20,20 +20,20 @@ int Player::LockRequirement(uint32_t id) const {
   return -1;
 }
 PickAccess Player::CanPickLock(uint32_t id) const {
-  auto r=catalog_.references.find(id);if(r==catalog_.references.end()||!r->second.valid||(r->second.flags&0x20u)||
-    catalog_.scriptedBases.count(r->second.base)||
-    (catalog_.containers.count(r->second.base)&&(!catalog_.containers.at(r->second.base).valid||catalog_.containers.at(r->second.base).script))||
-    (!catalog_.containers.count(r->second.base)&&!catalog_.doorBases.count(r->second.base)))return PickAccess::Unsupported;
+  auto r=catalog_->references.find(id);if(r==catalog_->references.end()||!r->second.valid||(r->second.flags&0x20u)||
+    catalog_->scriptedBases.count(r->second.base)||
+    (catalog_->containers.count(r->second.base)&&(!catalog_->containers.at(r->second.base).valid||catalog_->containers.at(r->second.base).script))||
+    (!catalog_->containers.count(r->second.base)&&!catalog_->doorBases.count(r->second.base)))return PickAccess::Unsupported;
   bool disabled=false;std::string error;
   if(!ReferenceDisabled(id,disabled,error)||disabled)return PickAccess::Unsupported;
   if(!ResolveOwnership(id).known)return PickAccess::Unsupported;
   auto l=GetLock(id);if(!l.locked)return PickAccess::Unlocked;
   if(l.leveled)return PickAccess::Unsupported;
   if(LockRequirement(id)<0)return PickAccess::RequiresKey;
-  auto perk=state_.pipboy.perks.find(catalog_.infiltrator);
+  auto perk=state_.pipboy.perks.find(catalog_->infiltrator);
   if(l.broken&&(l.forceFailures>=2||perk==state_.pipboy.perks.end()||!perk->second))return PickAccess::Broken;
   if(state_.skills[4]<LockRequirement(id))return PickAccess::Skill;
-  if(!catalog_.bobbyPin||ItemCount(catalog_.bobbyPin)<=0)return PickAccess::NoPins;
+  if(!catalog_->bobbyPin||ItemCount(catalog_->bobbyPin)<=0)return PickAccess::NoPins;
   return PickAccess::Ready;
 }
 int Player::ForceLockChance(uint32_t id) const {
@@ -70,7 +70,7 @@ bool Player::ForceLock(uint32_t id,uint32_t roll) {
 }
 bool Player::BreakBobbyPin(uint32_t id) {
   if(CanPickLock(id)!=PickAccess::Ready)return false;
-  for(const auto& s:state_.inventory)if(s.formId==catalog_.bobbyPin&&s.count>0)return Remove(s.id,1);
+  for(const auto& s:state_.inventory)if(s.formId==catalog_->bobbyPin&&s.count>0)return Remove(s.id,1);
   return false;
 }
 bool Player::ScriptLock(uint32_t id,int level) {

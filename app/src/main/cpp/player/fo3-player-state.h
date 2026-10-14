@@ -244,6 +244,7 @@ struct ActorCensusReport {
 };
 enum class ScriptEventResult : uint8_t { NoHandler, Executed, Unsupported };
 class Player;
+class ScriptTransactionPlan;
 struct ReferenceEnableChange { uint32_t reference=0; bool enabled=false; };
 // Owned reference-only input for the future scene coordinator. It neither runs
 // scripts nor publishes world resources. Workers capture the immutable snapshots,
@@ -275,7 +276,7 @@ public:
   // Idempotent, bounded source-record registration; only initial/root state,
   // never replaces an existing actor's saved cell, health or package.
   ActorCensusReport RegisterOriginalActors();
-  const Catalog &Definitions() const { return catalog_; }
+  const Catalog &Definitions() const { return *catalog_; }
   const State &Snapshot() const { return state_; }
   float MaxHealth() const;
   float Health() const;
@@ -301,6 +302,19 @@ public:
   bool RecordDialogue(uint32_t actor,uint32_t info,const std::vector<uint32_t>& topics);
   bool SetDialogueVariable(uint64_t key,float value);
   bool ExecuteDialogueResult(const fo3pipdata::ResultScript& script,std::string& error);
+  // Evaluate against a private Player candidate sharing the immutable catalogue.
+  // No live state/queues/callbacks change during preparation or previews.
+  std::unique_ptr<ScriptTransactionPlan> PrepareDialogueTransaction(
+      const fo3pipdata::ResultScript& begin,const fo3pipdata::ResultScript& end,std::string& error) const;
+  std::unique_ptr<ScriptTransactionPlan> PrepareQuestStageTransaction(
+      uint32_t quest,uint16_t stage,std::string& error) const;
+  std::unique_ptr<ScriptTransactionPlan> PrepareReferenceEventTransaction(
+      uint32_t reference,const char* event,uint32_t activator,std::string& error) const;
+  bool CanCommitScriptTransaction(const ScriptTransactionPlan& plan) const noexcept;
+  bool CanRollbackScriptTransaction(const ScriptTransactionPlan& plan) const noexcept;
+  bool CommitScriptTransaction(ScriptTransactionPlan& plan) noexcept;
+  bool RollbackScriptTransaction(ScriptTransactionPlan& plan) noexcept;
+
   // Event scripts dispatch through the same bounded transactional interpreter.
   // A rejected event does not roll back the preceding physical hit/activation.
   ScriptEventResult DispatchReferenceEvent(uint32_t reference,const char* event,
@@ -432,6 +446,14 @@ public:
   bool Restore(const std::string &path, std::string &error);
 
 private:
+  struct ScriptCandidateTag {};
+  Player(const Player& source,ScriptCandidateTag);
+  std::unique_ptr<ScriptTransactionPlan> PrepareScriptTransaction(
+      const std::function<bool(Player&,std::string&)>& execute,std::string& error) const;
+  void SwapScriptPayload(Player& other) noexcept;
+  bool ScriptPlanContextMatches(const ScriptTransactionPlan& plan) const noexcept;
+  bool RunSourceEventDirect(uint32_t scriptId,const char* event,uint32_t owner,
+                            uint32_t activator,std::string& error);
   bool ReferenceDisabledWith(const std::unordered_map<uint32_t,bool>& roots,
                             uint32_t reference,bool& disabled,std::string& error) const;
   bool StageReferenceEnableIn(std::unordered_map<uint32_t,bool>& roots,
@@ -448,7 +470,7 @@ private:
   bool RunScript(const fo3pipdata::ResultScript&,uint32_t owner,unsigned depth,unsigned& budget,std::string&,uint32_t scriptId=0);
   bool RunQuestStage(uint32_t,uint16_t,unsigned depth,unsigned& budget,std::string&);
   bool EnsureQuestInstance(uint32_t);
-  Catalog catalog_;
+  std::shared_ptr<const Catalog> catalog_;
   mutable State state_;
   mutable uint64_t revision_ = 0;
   uint64_t actorPoseRevisions_ = 0;
@@ -456,6 +478,7 @@ private:
   uint32_t scriptActivator_=0,scriptReference_=0,scriptPlayerCell_=0,scriptPlayerWorld_=0;
   std::array<float,3> scriptPlayerPosition_{};
   bool scriptPlayerPositionKnown_=false;
+  uint64_t scriptEffectRevision_=0;
   std::unordered_map<uint32_t,int> scriptButtons_;
   std::vector<ScriptMessage> pendingScriptMessages_;
   std::vector<QuestNotice> pendingQuestNotices_;
@@ -466,6 +489,38 @@ private:
   bool containerKarmaCommitted_=false;
   std::function<void(const std::string&)> eventDiagnostic_;
   std::unordered_set<std::string> reportedScriptEvents_;
+};
+
+// Candidate state is read-only; queued effects become visible only on commit.
+// All preparation/publication belongs to the render thread. Workers receive
+// owned reference snapshots, not the candidate Player or this mutable plan.
+class ScriptTransactionPlan {
+public:
+  ScriptTransactionPlan(const ScriptTransactionPlan&)=delete;
+  ScriptTransactionPlan& operator=(const ScriptTransactionPlan&)=delete;
+  // Valid only while prepared; applied plans instead hold the displaced payload.
+  const State* CandidateState() const {return phase_==Phase::Prepared?&candidate_->Snapshot():nullptr;}
+  bool HasReferenceChanges() const {return references_&&references_->HasChanges();}
+  std::shared_ptr<const fo3world::ReferenceStateSnapshot> CandidateReferences() const {
+    return references_?references_->CandidateSnapshot():nullptr;
+  }
+  std::shared_ptr<const fo3world::ReferenceStateSnapshot> RollbackReferences() const {
+    return references_?references_->RollbackSnapshot():nullptr;
+  }
+  const std::vector<uint32_t>& AffectedReferences() const {
+    return references_?references_->AffectedReferences():emptyAffected_;
+  }
+private:
+  friend class Player;
+  ScriptTransactionPlan()=default;
+  enum class Phase : uint8_t {Prepared,Applied,RolledBack};
+  Phase phase_=Phase::Prepared;
+  const Player* owner_=nullptr;
+  std::shared_ptr<const uint8_t> ownerIdentity_;
+  uint64_t expectedRevision_=0,expectedEffects_=0;
+  std::unique_ptr<Player> candidate_;
+  std::unique_ptr<ReferenceEnablePlan> references_;
+  std::vector<uint32_t> emptyAffected_;
 };
 
 // Native integration owns one session for the application, across CELL/GL

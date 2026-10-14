@@ -83,44 +83,35 @@ public:
   bool Evaluate(float& value){return Or(value)&&(at==tokens.size()||Fail("unsupported expression syntax"));}
 };
 }
+#include "fo3-script-transaction.inc"
 namespace fo3player {
 bool Player::PreviewDialogueResult(const fo3pipdata::ResultScript& script,std::string& error) const {
   return PreviewDialogueResults(script,{},error);
 }
 bool Player::PreviewDialogueResults(const fo3pipdata::ResultScript& begin,const fo3pipdata::ResultScript& end,std::string& error) const {
-  // Session APIs are render-thread owned. Only mutable state/revision are touched
-  // by the admitted commands. RAII restores them even if compilation throws.
-  // Do not copy the immutable ESM catalogue for every visible dialogue INFO.
-  auto& preview=*const_cast<Player*>(this);
-  struct Restore {State& state;uint64_t& revision;State before;uint64_t old;
-    std::vector<fo3player::KarmaEvent>& karma;size_t karmaCount;
-    std::vector<fo3player::QuestNotice>& notices;size_t noticeCount;
-    std::vector<fo3player::ScriptMessage>& messages;std::vector<uint32_t>& sounds;size_t messageCount,soundCount;
-    ~Restore(){state=std::move(before);revision=old;messages.resize(messageCount);sounds.resize(soundCount);karma.resize(karmaCount);notices.resize(noticeCount);}}
-    restore{state_,revision_,state_,revision_,preview.pendingKarmaEvents_,preview.pendingKarmaEvents_.size(),preview.pendingQuestNotices_,preview.pendingQuestNotices_.size(),preview.pendingScriptMessages_,preview.pendingScriptSounds_,
-      preview.pendingScriptMessages_.size(),preview.pendingScriptSounds_.size()};
-  error.clear();unsigned budget=4096;
-  return preview.RunScript(begin,0,0,budget,error)&&preview.RunScript(end,0,0,budget,error);
+  auto plan=PrepareDialogueTransaction(begin,end,error);
+  if(plan&&plan->HasReferenceChanges()){error="world mutation requires resident coordinator";return false;}
+  return bool(plan);
 }
 bool Player::ExecuteDialogueResult(const fo3pipdata::ResultScript& script,std::string& error) {
-  error.clear();const auto before=state_;const auto revision=revision_;unsigned budget=4096;
-  const auto messages=pendingScriptMessages_.size(),sounds=pendingScriptSounds_.size(),karma=pendingKarmaEvents_.size(),notices=pendingQuestNotices_.size();
-  if(RunScript(script,0,0,budget,error))return true;
-  state_=before;revision_=revision;pendingScriptMessages_.resize(messages);
-  pendingScriptSounds_.resize(sounds);pendingKarmaEvents_.resize(karma);pendingQuestNotices_.resize(notices);return false;
+  auto plan=PrepareDialogueTransaction(script,{},error);
+  if(!plan)return false;
+  if(plan->HasReferenceChanges()){error="world mutation requires resident coordinator";return false;}
+  if(CommitScriptTransaction(*plan))return true;
+  error="script transaction changed before publication";return false;
 }
 bool Player::ExecuteQuestStage(uint32_t id,uint16_t stage,std::string& error) {
-  error.clear();const auto before=state_;const auto revision=revision_;unsigned budget=4096;
-  const auto messages=pendingScriptMessages_.size(),sounds=pendingScriptSounds_.size(),karma=pendingKarmaEvents_.size(),notices=pendingQuestNotices_.size();
-  if(RunQuestStage(id,stage,0,budget,error))return true;
-  state_=before;revision_=revision;pendingScriptMessages_.resize(messages);
-  pendingScriptSounds_.resize(sounds);pendingKarmaEvents_.resize(karma);pendingQuestNotices_.resize(notices);return false;
+  auto plan=PrepareQuestStageTransaction(id,stage,error);
+  if(!plan)return false;
+  if(plan->HasReferenceChanges()){error="world mutation requires resident coordinator";return false;}
+  if(CommitScriptTransaction(*plan))return true;
+  error="quest transaction changed before publication";return false;
 }
 bool Player::RunQuestStage(uint32_t id,uint16_t index,unsigned depth,unsigned& budget,std::string& error) {
   auto fail=[&](const std::string& s){error="QUST "+std::to_string(id)+" stage "+std::to_string(index)+": "+s;return false;};
   if(depth>=32||!budget)return fail("stage recursion/budget exceeded");
-  --budget;auto q=catalog_.pipboy.quests.find(id);
-  if(q==catalog_.pipboy.quests.end()||!q->second.stages.count(index))return fail("unresolved stage");
+  --budget;auto q=catalog_->pipboy.quests.find(id);
+  if(q==catalog_->pipboy.quests.end()||!q->second.stages.count(index))return fail("unresolved stage");
   if(!q->second.diagnostics.empty())return fail(q->second.diagnostics.front());
   auto previous=state_.pipboy.quests.find(id);
   if(previous!=state_.pipboy.quests.end()&&previous->second.stages.count(index)&&!(q->second.flags&8))return true;
@@ -147,11 +138,11 @@ bool Player::RunQuestStage(uint32_t id,uint16_t index,unsigned depth,unsigned& b
 bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,unsigned depth,unsigned& budget,std::string& error,uint32_t scriptId) {
   if(depth>=32){error="script nesting exceeded";return false;}
   if(!scriptId && owner){
-    const auto quest=catalog_.pipboy.quests.find(owner);
-    if(quest!=catalog_.pipboy.quests.end())scriptId=quest->second.script;
+    const auto quest=catalog_->pipboy.quests.find(owner);
+    if(quest!=catalog_->pipboy.quests.end())scriptId=quest->second.script;
   }
   std::vector<fo3dialogue::Command> commands;
-  if(!fo3dialogue::CompileResult(catalog_.pipboy,script,commands,error,owner,scriptId))return false;
+  if(!fo3dialogue::CompileResult(catalog_->pipboy,script,commands,error,owner,scriptId))return false;
   using C=fo3dialogue::CommandType;
   // Validate all expressions and block structure, including unreachable branches.
   struct Gate {bool parent,taken,active,hasElse;};std::vector<Gate> gates;
@@ -205,7 +196,7 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
       break;
     }
     case C::PlaySound:ok=QueueScriptSound(c.form);break;
-    case C::AddTopic:if(!catalog_.pipboy.dialogueTopics.count(c.form))ok=false;else if(state_.pipboy.knownTopics.insert(c.form).second)++revision_;break;
+    case C::AddTopic:if(!catalog_->pipboy.dialogueTopics.count(c.form))ok=false;else if(state_.pipboy.knownTopics.insert(c.form).second)++revision_;break;
     default:ok=false;break;
     }
     if(!ok){if(error.empty())error="script command rejected by canonical Player API";return false;}
@@ -218,12 +209,12 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
 namespace fo3player {
 bool Player::HasReferenceEvent(uint32_t reference,const char* event) const {
   if(!event||!reference)return false;
-  const auto placed=catalog_.references.find(reference);
-  if(placed==catalog_.references.end())return false;
-  const auto script=catalog_.eventBaseScripts.find(placed->second.base);
-  if(script==catalog_.eventBaseScripts.end())return false;
-  const auto program=catalog_.eventPrograms.find(script->second);
-  if(program==catalog_.eventPrograms.end())return false;
+  const auto placed=catalog_->references.find(reference);
+  if(placed==catalog_->references.end())return false;
+  const auto script=catalog_->eventBaseScripts.find(placed->second.base);
+  if(script==catalog_->eventBaseScripts.end())return false;
+  const auto program=catalog_->eventPrograms.find(script->second);
+  if(program==catalog_->eventPrograms.end())return false;
   const auto name=fo3script::Lower(event);
   for(const auto& b:program->second.blocks)if(b.event==name)return true;
   return false;
@@ -236,14 +227,22 @@ void Player::LogScriptEventError(uint32_t scriptId,const char* event,const std::
 }
 bool Player::RunSourceEvent(uint32_t scriptId,const char* event,uint32_t owner,
                             uint32_t activator,std::string& error) {
+  auto plan=PrepareScriptTransaction([=](Player& candidate,std::string& e){
+    return candidate.RunSourceEventDirect(scriptId,event,owner,activator,e);
+  },error);
+  if(!plan)return false;
+  if(plan->HasReferenceChanges()){error="world mutation requires resident coordinator";return false;}
+  if(CommitScriptTransaction(*plan))return true;
+  error="event transaction changed before publication";return false;
+}
+bool Player::RunSourceEventDirect(uint32_t scriptId,const char* event,uint32_t owner,
+                            uint32_t activator,std::string& error) {
   error.clear();
-  const auto def=catalog_.eventPrograms.find(scriptId);
-  if(def==catalog_.eventPrograms.end()) {error="script definition unavailable";return false;}
+  const auto def=catalog_->eventPrograms.find(scriptId);
+  if(def==catalog_->eventPrograms.end()) {error="script definition unavailable";return false;}
   const auto& program=def->second;
   if(!program.error.empty()) {error=program.error;return false;}
   if(program.compiledOnly) {error="compiled-only event not supported";return false;}
-  const auto before=state_;const auto revision=revision_;
-  const auto messageCount=pendingScriptMessages_.size(),soundCount=pendingScriptSounds_.size(),karmaCount=pendingKarmaEvents_.size(),noticeCount=pendingQuestNotices_.size();
   const auto previousActivator=scriptActivator_,previousReference=scriptReference_;
   scriptActivator_=activator;scriptReference_=owner;
   struct RestoreContext {Player& p;uint32_t activator,reference;
@@ -255,14 +254,12 @@ bool Player::RunSourceEvent(uint32_t scriptId,const char* event,uint32_t owner,
     // Other filter forms need their original reference/context evaluator.
     if(!block.filter.empty() && !(block.filter=="player"&&activator==PlayerRef)){
       error="unresolved event filter '"+block.filter+"' at line "+std::to_string(block.sourceLine);
-      state_=before;revision_=revision;
-      pendingScriptMessages_.resize(messageCount);pendingScriptSounds_.resize(soundCount);pendingKarmaEvents_.resize(karmaCount);pendingQuestNotices_.resize(noticeCount);return false;
+      return false;
     }
     fo3pipdata::ResultScript body;body.source=block.body;
     if(!RunScript(body,owner,0,budget,error,scriptId)){
       error="line "+std::to_string(block.sourceLine)+": "+error;
-      state_=before;revision_=revision;
-      pendingScriptMessages_.resize(messageCount);pendingScriptSounds_.resize(soundCount);pendingKarmaEvents_.resize(karmaCount);pendingQuestNotices_.resize(noticeCount);return false;
+      return false;
     }
   }
   if(fo3script::Lower(event)=="gamemode")scriptButtons_.erase(owner);
@@ -272,8 +269,8 @@ ScriptEventResult Player::DispatchReferenceEvent(uint32_t reference,const char* 
                                                   uint32_t activator,std::string& error) {
   error.clear();
   if(!HasReferenceEvent(reference,event))return ScriptEventResult::NoHandler;
-  const auto& ref=catalog_.references.at(reference);
-  const auto scriptId=catalog_.eventBaseScripts.at(ref.base);
+  const auto& ref=catalog_->references.at(reference);
+  const auto scriptId=catalog_->eventBaseScripts.at(ref.base);
   if(!RunSourceEvent(scriptId,event,reference,activator,error)){
     LogScriptEventError(scriptId,event,error);
     return ScriptEventResult::Unsupported;
@@ -288,10 +285,10 @@ void Player::PumpQuestGameMode(double realSeconds) {
   if(questScriptAccumulator_<0.25)return;
   questScriptAccumulator_-=0.25;
   std::vector<uint32_t> ids;
-  for(const auto& q:catalog_.pipboy.quests){
+  for(const auto& q:catalog_->pipboy.quests){
     if(!q.second.script)continue;
-    const auto script=catalog_.eventPrograms.find(q.second.script);
-    if(script==catalog_.eventPrograms.end())continue;
+    const auto script=catalog_->eventPrograms.find(q.second.script);
+    if(script==catalog_->eventPrograms.end())continue;
     bool hasGameMode=false;
     for(const auto& b:script->second.blocks)if(b.event=="gamemode"){hasGameMode=true;break;}
     if(!hasGameMode)continue;
@@ -301,8 +298,8 @@ void Player::PumpQuestGameMode(double realSeconds) {
   }
   std::sort(ids.begin(),ids.end());
   for(const auto id:ids){
-    const auto q=catalog_.pipboy.quests.find(id);
-    if(q==catalog_.pipboy.quests.end())continue;
+    const auto q=catalog_->pipboy.quests.find(id);
+    if(q==catalog_->pipboy.quests.end())continue;
     // Nested result scripts can stop another quest in the selected set.
     const auto saved=state_.pipboy.quests.find(id);
     if(!(saved!=state_.pipboy.quests.end()?saved->second.running:bool(q->second.flags&1)))continue;
@@ -319,8 +316,8 @@ void Player::SetScriptPlayerLocation(float x,float y,float z,uint32_t cell,uint3
   scriptPlayerPosition_={x,y,z};scriptPlayerCell_=cell;scriptPlayerWorld_=world;scriptPlayerPositionKnown_=true;
 }
 bool Player::ScriptDistance(float& distance) const {
-  const auto found=catalog_.pipboy.targets.find(scriptReference_);
-  if(!scriptPlayerPositionKnown_||found==catalog_.pipboy.targets.end())return false;
+  const auto found=catalog_->pipboy.targets.find(scriptReference_);
+  if(!scriptPlayerPositionKnown_||found==catalog_->pipboy.targets.end())return false;
   const auto& ref=found->second;
   if(ref.cell!=scriptPlayerCell_ && (!ref.world||ref.world!=scriptPlayerWorld_))return false;
   const double dx=double(ref.x)-scriptPlayerPosition_[0],dy=double(ref.y)-scriptPlayerPosition_[1],dz=double(ref.z)-scriptPlayerPosition_[2];
@@ -333,12 +330,12 @@ int Player::ScriptButton() const {
   return i==scriptButtons_.end()?-1:i->second;
 }
 bool Player::IsQuestObject(uint32_t form) const {
-  const auto item=catalog_.items.find(form);if(item==catalog_.items.end())return false;
+  const auto item=catalog_->items.find(form);if(item==catalog_->items.end())return false;
   const auto override=state_.questObjectFlags.find(form);
   return override==state_.questObjectFlags.end()?item->second.questItem:override->second;
 }
 bool Player::SetQuestObject(uint32_t form,bool quest) {
-  const auto item=catalog_.items.find(form);if(item==catalog_.items.end())return false;
+  const auto item=catalog_->items.find(form);if(item==catalog_->items.end())return false;
   if(IsQuestObject(form)==quest)return true;
   if(item->second.questItem==quest)state_.questObjectFlags.erase(form);
   else state_.questObjectFlags[form]=quest;
@@ -349,12 +346,12 @@ bool Player::RewardKarma(float amount) {
   const float karma=std::clamp(state_.karma+amount,-1000.f,1000.f);
   const float change=karma-state_.karma;
   if(karma!=state_.karma){state_.karma=karma;++revision_;}
-  if(amount!=0)pendingKarmaEvents_.push_back({change,amount});
+  if(amount!=0){pendingKarmaEvents_.push_back({change,amount});++scriptEffectRevision_;}
   return true;
 }
 bool Player::ReevaluatePackage(uint32_t reference){
-  const auto p=catalog_.actorPlacements.find(reference);
-  if(p==catalog_.actorPlacements.end()||!catalog_.weapons.actors.count(p->second.base))return false;
+  const auto p=catalog_->actorPlacements.find(reference);
+  if(p==catalog_->actorPlacements.end()||!catalog_->weapons.actors.count(p->second.base))return false;
   // Q240's existing PackageRevision cache is invalidated by this revision.
   // The actual authored PACK selection happens in Q240SelectPackage.
   ++revision_;return true;
@@ -364,7 +361,7 @@ int32_t Player::ItemCount(uint32_t form) const {
   return int32_t(std::min<int64_t>(INT32_MAX,n));
 }
 bool Player::ScriptRemoveItem(uint32_t form,int32_t count){
-  if(count<=0||!catalog_.items.count(form)||ItemCount(form)<count)return false;
+  if(count<=0||!catalog_->items.count(form)||ItemCount(form)<count)return false;
   int64_t available=0;
   for(const auto& stack:state_.inventory)if(stack.formId==form&&!stack.equipped)available+=stack.count;
   if(available<count)return false;
@@ -379,8 +376,8 @@ bool Player::ScriptRemoveItem(uint32_t form,int32_t count){
   ++revision_;return true;
 }
 bool Player::QueueScriptMessage(uint32_t form,float argument,bool hasArgument,uint32_t owner){
-  const auto m=catalog_.pipboy.messages.find(form);
-  if(m==catalog_.pipboy.messages.end()||pendingScriptMessages_.size()>=16||
+  const auto m=catalog_->pipboy.messages.find(form);
+  if(m==catalog_->pipboy.messages.end()||pendingScriptMessages_.size()>=16||
      (!scriptReference_&&!owner))return false;
   ScriptMessage request;request.form=form;request.owner=scriptReference_?scriptReference_:owner;request.title=m->second.title;
   request.text=m->second.text;request.buttons=m->second.buttons;
@@ -391,23 +388,23 @@ bool Player::QueueScriptMessage(uint32_t form,float argument,bool hasArgument,ui
     request.text.replace(marker,4,number);
   }
   if(request.text.find('%')!=std::string::npos)return false; // unknown formatting cannot be guessed
-  pendingScriptMessages_.push_back(std::move(request));return true;
+  pendingScriptMessages_.push_back(std::move(request));++scriptEffectRevision_;return true;
 }
 bool Player::QueueScriptSound(uint32_t form){
   if(!form||pendingScriptSounds_.size()>=16)return false;
-  pendingScriptSounds_.push_back(form);return true;
+  pendingScriptSounds_.push_back(form);++scriptEffectRevision_;return true;
 }
 bool Player::PollScriptMessage(ScriptMessage& out){
   if(pendingScriptMessages_.empty())return false;
-  out=std::move(pendingScriptMessages_.front());pendingScriptMessages_.erase(pendingScriptMessages_.begin());return true;
+  out=std::move(pendingScriptMessages_.front());pendingScriptMessages_.erase(pendingScriptMessages_.begin());++scriptEffectRevision_;return true;
 }
 bool Player::SubmitScriptMessageButton(uint32_t owner,int index){
   if(!owner||index<0||index>31||scriptButtons_.count(owner))return false;
-  scriptButtons_.emplace(owner,index);return true;
+  scriptButtons_.emplace(owner,index);++scriptEffectRevision_;return true;
 }
 bool Player::PollScriptSound(uint32_t& out){
   if(pendingScriptSounds_.empty())return false;
-  out=pendingScriptSounds_.front();pendingScriptSounds_.erase(pendingScriptSounds_.begin());return true;
+  out=pendingScriptSounds_.front();pendingScriptSounds_.erase(pendingScriptSounds_.begin());++scriptEffectRevision_;return true;
 }
 void Player::PumpReferenceGameMode(double realSeconds,const std::vector<uint32_t>& resident){
   if(!std::isfinite(realSeconds)||realSeconds<=0||realSeconds>1)return;
@@ -417,14 +414,14 @@ void Player::PumpReferenceGameMode(double realSeconds,const std::vector<uint32_t
   auto ids=resident;std::sort(ids.begin(),ids.end());ids.erase(std::unique(ids.begin(),ids.end()),ids.end());
   for(uint32_t id:ids){
     if(!HasReferenceEvent(id,"GameMode"))continue;
-    const auto ref=catalog_.references.find(id);
-    if(ref==catalog_.references.end()||(ref->second.flags&0x820u))continue;
+    const auto ref=catalog_->references.find(id);
+    if(ref==catalog_->references.end()||(ref->second.flags&0x820u))continue;
     std::string error;
-    const auto sid=catalog_.eventBaseScripts.at(ref->second.base);
+    const auto sid=catalog_->eventBaseScripts.at(ref->second.base);
     if(!RunSourceEvent(sid,"GameMode",id,0,error)){
       // Reject the side effects, but consume the delivered input exactly once.
       // Otherwise unsupported stage/world commands repeat on every 4 Hz tick.
-      scriptButtons_.erase(id);
+      if(scriptButtons_.erase(id))++scriptEffectRevision_;
       LogScriptEventError(sid,"GameMode",error);
     }
   }

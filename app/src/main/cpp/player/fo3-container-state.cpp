@@ -8,15 +8,15 @@ namespace fo3player {
 bool Player::CanLootContainer(uint32_t id) const {
   bool disabled=false;std::string error;
   if(!ReferenceDisabled(id,disabled,error)||disabled)return false;
-  if(id!=0x14&&catalog_.pipboy.targets.count(id)&&
-     catalog_.weapons.actors.count(catalog_.pipboy.targets.at(id).base))
-    return ActorHealth(id)==0&&!Essential(id)&&catalog_.references.count(id)&&
-      catalog_.actorInventories.count(catalog_.references.at(id).base);
-  const auto r = catalog_.references.find(id);
-  if (r == catalog_.references.end())
+  if(id!=0x14&&catalog_->pipboy.targets.count(id)&&
+     catalog_->weapons.actors.count(catalog_->pipboy.targets.at(id).base))
+    return ActorHealth(id)==0&&!Essential(id)&&catalog_->references.count(id)&&
+      catalog_->actorInventories.count(catalog_->references.at(id).base);
+  const auto r = catalog_->references.find(id);
+  if (r == catalog_->references.end())
     return false;
-  const auto c = catalog_.containers.find(r->second.base);
-  return c != catalog_.containers.end() && c->second.valid &&
+  const auto c = catalog_->containers.find(r->second.base);
+  return c != catalog_->containers.end() && c->second.valid &&
          !c->second.script &&
          CanOpenDoor(id); // Share lock/key access; container ownership is separate.
 }
@@ -27,21 +27,21 @@ const std::vector<Stack> *Player::ContainerContents(uint32_t id) const {
 bool Player::PrepareContainer(uint32_t id) {
   if (!CanLootContainer(id))
     return false;
-  const bool actor=catalog_.actorInventories.count(catalog_.references.at(id).base)!=0;
+  const bool actor=catalog_->actorInventories.count(catalog_->references.at(id).base)!=0;
   if(!PrepareInventory(id,actor))return false;
   if(actor){
     auto saved=state_.actors.find(id);if(saved!=state_.actors.end())saved->second.equippedWeapon=0;
   }
   if(actor)for(auto& s:state_.containers.at(id)) {
-    const auto& d=catalog_.items.at(s.formId).weapon;
+    const auto& d=catalog_->items.at(s.formId).weapon;
     if(d.Firearm()&&!(d.flags2&2)&&s.loadedRounds){s.loadedRounds=0;++revision_;}
     if(s.equipped){s.equipped=false;++revision_;}
   }
   return true;
 }
 bool Player::PrepareActorInventory(uint32_t id) {
-  const auto ref=catalog_.references.find(id);
-  if(ref==catalog_.references.end()||!catalog_.actorInventories.count(ref->second.base))return false;
+  const auto ref=catalog_->references.find(id);
+  if(ref==catalog_->references.end()||!catalog_->actorInventories.count(ref->second.base))return false;
   return PrepareInventory(id,true);
 }
 bool Player::PrepareInventory(uint32_t id,bool actor) {
@@ -55,8 +55,8 @@ bool Player::PrepareInventory(uint32_t id,bool actor) {
   std::vector<Stack> contents;
   uint64_t nextId = state_.nextStackId;
   // Runtime-owned RNG; outcomes persist once. Not Bethesda save/RNG parity.
-  std::mt19937 random(id ^ catalog_.lootFingerprint ^
-                      catalog_.worldFingerprint ^ state_.level);
+  std::mt19937 random(id ^ catalog_->lootFingerprint ^
+                      catalog_->worldFingerprint ^ state_.level);
   std::unordered_set<uint32_t> path;
   size_t work = 0;
   std::function<bool(uint32_t, int32_t, float, uint32_t, uint32_t, unsigned)> expand;
@@ -64,12 +64,12 @@ bool Player::PrepareInventory(uint32_t id,bool actor) {
                unsigned depth) {
     if (++work > 10000 || depth > 32 || count <= 0)
       return false;
-    if(owner&&!catalog_.factionFlags.count(owner)&&!catalog_.pipboy.dialogueActors.count(owner))return false;
+    if(owner&&!catalog_->factionFlags.count(owner)&&!catalog_->pipboy.dialogueActors.count(owner))return false;
     OwnershipData ownership;ownership.owner=owner;ownership.explicitOwner=owner!=0;
-    if(owner){if(catalog_.factionFlags.count(owner))ownership.rank=static_cast<int32_t>(parameter);
+    if(owner){if(catalog_->factionFlags.count(owner))ownership.rank=static_cast<int32_t>(parameter);
       else ownership.global=parameter;}
-    const auto item = catalog_.items.find(form);
-    if (item != catalog_.items.end()) {
+    const auto item = catalog_->items.find(form);
+    if (item != catalog_->items.end()) {
       if (item->second.maxCondition == 0 && condition != 1)
         return false;
       if (item->second.kind == ItemKind::Weapon) {
@@ -96,15 +96,15 @@ bool Player::PrepareInventory(uint32_t id,bool actor) {
       contents.back().ownership=ownership;
       return true;
     }
-    const auto found = catalog_.lootLists.find(form);
-    if (found == catalog_.lootLists.end() || !found->second.valid ||
+    const auto found = catalog_->lootLists.find(form);
+    if (found == catalog_->lootLists.end() || !found->second.valid ||
         path.count(form))
       return false;
     const auto &list = found->second;
     float chance = list.chanceNone;
     if (list.global) {
-      const auto g = catalog_.globals.find(list.global);
-      if (g == catalog_.globals.end() || g->second < 0 || g->second > 100)
+      const auto g = catalog_->globals.find(list.global);
+      if (g == catalog_->globals.end() || g->second < 0 || g->second > 100)
         return false;
       chance = g->second;
     }
@@ -126,8 +126,8 @@ bool Player::PrepareInventory(uint32_t id,bool actor) {
         if ((list.flags & 4) ||
             (e.level <= state_.level &&
              ((list.flags & 1)
-                  ? (!catalog_.lootLevelDifference ||
-                     highest - e.level <= catalog_.lootLevelDifference)
+                  ? (!catalog_->lootLevelDifference ||
+                     highest - e.level <= catalog_->lootLevelDifference)
                   : e.level == highest)))
           eligible.push_back(&e);
       }
@@ -155,16 +155,16 @@ bool Player::PrepareInventory(uint32_t id,bool actor) {
     path.erase(form);
     return ok;
   };
-  uint32_t base=catalog_.references.at(id).base;
+  uint32_t base=catalog_->references.at(id).base;
   if(actor) {
-    for(int depth=0;depth<16;++depth){const auto a=catalog_.weapons.actors.find(base);
-      if(a==catalog_.weapons.actors.end())return false;
+    for(int depth=0;depth<16;++depth){const auto a=catalog_->weapons.actors.find(base);
+      if(a==catalog_->weapons.actors.end())return false;
       if(!(a->second.templates&0x100))break;
       base=a->second.templateId;if(depth==15)return false;
     }
   }
-  const auto found=(actor?catalog_.actorInventories:catalog_.containers).find(base);
-  if(found==(actor?catalog_.actorInventories:catalog_.containers).end()||!found->second.valid)return false;
+  const auto found=(actor?catalog_->actorInventories:catalog_->containers).find(base);
+  if(found==(actor?catalog_->actorInventories:catalog_->containers).end()||!found->second.valid)return false;
   const auto &c=found->second;
   for (const auto &e : c.entries)
     if (!expand(e.form, e.count, e.condition, e.owner, e.ownerParameter, 0))
@@ -182,7 +182,7 @@ bool Player::CanTakeContainerStack(uint32_t id, uint64_t stack) const {
     return false;
   for (const auto &s : *contents)
     if (s.id == stack) {
-      const auto &item = catalog_.items.at(s.formId);
+      const auto &item = catalog_->items.at(s.formId);
       return item.playable && !item.script && !item.name.empty() && ContainerStackOwnership(id,stack).known;
     }
   return false;
@@ -196,7 +196,7 @@ bool Player::TakeContainerStack(uint32_t id, uint64_t stack) {
   const Stack transferred=*s;
   const auto ownership=ContainerStackOwnership(id,stack);
   BeginContainerInteraction(id);
-  if (catalog_.items.at(s->formId).kind == ItemKind::Weapon) {
+  if (catalog_->items.at(s->formId).kind == ItemKind::Weapon) {
     if (state_.inventory.size() >= 10000 || s->count != 1)
       return false;
     auto actor=state_.actors.find(id);if(actor!=state_.actors.end()&&actor->second.equippedWeapon==stack)actor->second.equippedWeapon=0;

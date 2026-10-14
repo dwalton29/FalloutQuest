@@ -3,10 +3,10 @@
 #include <cmath>
 namespace fo3player {
 bool Player::RecordDialogue(uint32_t actor,uint32_t info,const std::vector<uint32_t>& topics) {
-  if(!catalog_.pipboy.referenceScripts.count(actor))return false;
+  if(!catalog_->pipboy.referenceScripts.count(actor))return false;
   bool changed=state_.pipboy.talkedActors.insert(actor).second;
   if(info)changed=state_.pipboy.saidInfos.insert((uint64_t(actor)<<32)|info).second||changed;
-  for(auto topic:topics)if(catalog_.pipboy.dialogueTopics.count(topic))changed=state_.pipboy.knownTopics.insert(topic).second||changed;
+  for(auto topic:topics)if(catalog_->pipboy.dialogueTopics.count(topic))changed=state_.pipboy.knownTopics.insert(topic).second||changed;
   if(changed)++revision_;
   return true;
 }
@@ -15,22 +15,22 @@ bool Player::SetDialogueVariable(uint64_t key,float value) {
   state_.pipboy.dialogueVariables[key]=value;++revision_;return true;
 }
 bool Player::GrantPerk(uint32_t id, uint8_t rank) {
-  auto p = catalog_.pipboy.perks.find(id);
-  if (p == catalog_.pipboy.perks.end() || !rank || rank > p->second.ranks)
+  auto p = catalog_->pipboy.perks.find(id);
+  if (p == catalog_->pipboy.perks.end() || !rank || rank > p->second.ranks)
     return false;
   state_.pipboy.perks[id] = rank;
   ++revision_;
   return true;
 }
 bool Player::EnsureQuestInstance(uint32_t id) {
-  auto def=catalog_.pipboy.quests.find(id);if(def==catalog_.pipboy.quests.end())return false;
+  auto def=catalog_->pipboy.quests.find(id);if(def==catalog_->pipboy.quests.end())return false;
   if(!state_.pipboy.quests.count(id)) {
     state_.pipboy.quests[id]={};state_.pipboy.quests.at(id).running=bool(def->second.flags&1);++revision_;
   }
   return true;
 }
 bool Player::StartQuest(uint32_t id) {
-  if (!catalog_.pipboy.quests.count(id))
+  if (!catalog_->pipboy.quests.count(id))
     return false;
   if (!state_.pipboy.quests.count(id)) {
     state_.pipboy.quests[id] = {};
@@ -45,20 +45,20 @@ bool Player::SetQuestStage(uint32_t id,uint16_t stage) {
   std::string error;return ExecuteQuestStage(id,stage,error);
 }
 bool Player::StopQuest(uint32_t id) {
-  if(!catalog_.pipboy.quests.count(id))return false;
+  if(!catalog_->pipboy.quests.count(id))return false;
   if(!state_.pipboy.quests.count(id))state_.pipboy.quests[id]={};
   state_.pipboy.quests.at(id).running=false;++revision_;return true;
 }
 bool Player::SetGlobalValue(uint32_t id,float value) {
-  if(!catalog_.globals.count(id)||!std::isfinite(value))return false;
+  if(!catalog_->globals.count(id)||!std::isfinite(value))return false;
   // Clock globals have canonical clock setters; do not shadow those systems.
-  if(id==catalog_.hourGlobal||id==catalog_.dayGlobal||id==catalog_.monthGlobal||id==catalog_.yearGlobal||id==catalog_.daysPassedGlobal||id==catalog_.timeScaleGlobal)return false;
+  if(id==catalog_->hourGlobal||id==catalog_->dayGlobal||id==catalog_->monthGlobal||id==catalog_->yearGlobal||id==catalog_->daysPassedGlobal||id==catalog_->timeScaleGlobal)return false;
   state_.pipboy.mutableGlobals[id]=value;++revision_;return true;
 }
 bool Player::SetObjective(uint32_t id, uint32_t index, bool displayed,
                           fo3pipdata::Completion status) {
-  auto q = catalog_.pipboy.quests.find(id);
-  if (q == catalog_.pipboy.quests.end() || !q->second.objectives.count(index) ||
+  auto q = catalog_->pipboy.quests.find(id);
+  if (q == catalog_->pipboy.quests.end() || !q->second.objectives.count(index) ||
       !state_.pipboy.quests.count(id) || int(status) > 2)
     return false;
   auto& instance=state_.pipboy.quests.at(id);
@@ -90,6 +90,7 @@ bool Player::FinishQuest(uint32_t id, fo3pipdata::Completion status) {
 bool Player::PollQuestNotice(QuestNotice& out) {
   if(pendingQuestNotices_.empty())return false;
   out=pendingQuestNotices_.front();pendingQuestNotices_.erase(pendingQuestNotices_.begin());
+  ++scriptEffectRevision_;
   for(auto it=pendingQuestNotices_.begin();it!=pendingQuestNotices_.end();) {
     if(it->quest!=out.quest){++it;continue;}
     if(it->kind==QuestNoticeKind::Updated||it->kind==out.kind)it=pendingQuestNotices_.erase(it);
@@ -107,14 +108,14 @@ bool Player::SelectQuest(uint32_t id) {
   return true;
 }
 bool Player::Discover(uint32_t id) {
-  if (!catalog_.pipboy.markers.count(id))
+  if (!catalog_->pipboy.markers.count(id))
     return false;
   if (state_.pipboy.discovered.insert(id).second)
     ++revision_;
   return true;
 }
 bool Player::SetWaypoint(uint32_t world, float x, float y) {
-  if (world && (!catalog_.pipboy.worlds.count(world) || !std::isfinite(x) ||
+  if (world && (!catalog_->pipboy.worlds.count(world) || !std::isfinite(x) ||
                 !std::isfinite(y)))
     return false;
   state_.pipboy.waypoint = {world, {x, y}};
@@ -122,7 +123,7 @@ bool Player::SetWaypoint(uint32_t world, float x, float y) {
   return true;
 }
 bool Player::TuneRadio(uint32_t ref) {
-  if (ref && !catalog_.pipboy.transmitters.count(ref))
+  if (ref && !catalog_->pipboy.transmitters.count(ref))
     return false;
   if (state_.pipboy.tunedRadio != ref) {
     state_.pipboy.tunedRadio = ref;
@@ -140,15 +141,15 @@ bool Player::CanUse(uint64_t id, std::string *why) const {
                         [&](const Stack &s) { return s.id == id; });
   if (s == state_.inventory.end())
     return reject("Item absent");
-  auto item = catalog_.items.find(s->formId);
-  auto a = catalog_.pipboy.aid.find(s->formId);
-  if (item == catalog_.items.end() || item->second.script ||
+  auto item = catalog_->items.find(s->formId);
+  auto a = catalog_->pipboy.aid.find(s->formId);
+  if (item == catalog_->items.end() || item->second.script ||
       IsQuestObject(s->formId) || item->second.cannotDrop ||
-      a == catalog_.pipboy.aid.end() || a->second.effects.empty())
+      a == catalog_->pipboy.aid.end() || a->second.effects.empty())
     return reject("Requires item script/effect runtime");
   for (auto &e : a->second.effects) {
-    auto m = catalog_.pipboy.magic.find(e.id);
-    if (m == catalog_.pipboy.magic.end() || e.conditional || e.area ||
+    auto m = catalog_->pipboy.magic.find(e.id);
+    if (m == catalog_->pipboy.magic.end() || e.conditional || e.area ||
         e.duration || e.range || m->second.archetype != 0 ||
         (m->second.flags & 0x100000) ||
         ((m->second.av != 16) && (m->second.av != 12)))
@@ -161,10 +162,10 @@ bool Player::Use(uint64_t id) {
     return false;
   auto s = std::find_if(state_.inventory.begin(), state_.inventory.end(),
                         [&](const Stack &s) { return s.id == id; });
-  auto effects = catalog_.pipboy.aid.at(s->formId)
+  auto effects = catalog_->pipboy.aid.at(s->formId)
                      .effects; // validate all before consuming
   for (auto &e : effects) {
-    auto &m = catalog_.pipboy.magic.at(e.id);
+    auto &m = catalog_->pipboy.magic.at(e.id);
     float amount = float(e.magnitude);
     if (m.av == 16) {
       if (m.flags & 4)

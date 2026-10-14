@@ -656,16 +656,18 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
   return true;
 }
 
-Player::Player(Catalog catalog)
-    : catalog_(std::move(catalog)), state_(catalog_.initial) {
-  auto perk=catalog_.pipboy.formNames.find("infiltrator");
-  if(perk!=catalog_.pipboy.formNames.end())catalog_.infiltrator=perk->second;
+static std::shared_ptr<const Catalog> SharePlayerCatalog(Catalog catalog) {
+  const auto perk=catalog.pipboy.formNames.find("infiltrator");
+  if(perk!=catalog.pipboy.formNames.end())catalog.infiltrator=perk->second;
+  return std::make_shared<const Catalog>(std::move(catalog));
 }
+Player::Player(Catalog catalog)
+    : catalog_(SharePlayerCatalog(std::move(catalog))), state_(catalog_->initial) {}
 bool Player::SetPlayerAttributes(const std::array<uint8_t,7>& special,
                                  const std::array<uint8_t,14>& skills) {
   if(std::any_of(special.begin(),special.end(),[](uint8_t value){return value<1||value>10;}) ||
      std::any_of(skills.begin(),skills.end(),[](uint8_t value){return value>100;}))return false;
-  const auto& r=catalog_.rules;
+  const auto& r=catalog_->rules;
   const float maxHealth=state_.baseHealth+
       (special[2]+r.healthEnduranceOffset)*r.healthEnduranceMult+
       (state_.level-1)*r.healthLevelMult;
@@ -678,10 +680,10 @@ bool Player::SetPlayerAttributes(const std::array<uint8_t,7>& special,
 }
 bool Player::AdvanceGameClock(double realSeconds) {
   if (!std::isfinite(realSeconds) || realSeconds <= 0.0 || realSeconds > 1.0 ||
-      !std::isfinite(catalog_.gameTimeScale) || catalog_.gameTimeScale <= 0.0f)
+      !std::isfinite(catalog_->gameTimeScale) || catalog_->gameTimeScale <= 0.0f)
     return false;
   const double total = double(state_.gameHour) +
-      realSeconds * double(catalog_.gameTimeScale) / 3600.0;
+      realSeconds * double(catalog_->gameTimeScale) / 3600.0;
   if (!std::isfinite(total)) return false;
   const uint32_t days = static_cast<uint32_t>(std::floor(total / 24.0));
   if (days > UINT32_MAX - state_.gameDaysPassed) return false;
@@ -702,35 +704,35 @@ bool Player::AdvanceGameClock(double realSeconds) {
   return true;
 }
 bool Player::GlobalValue(uint32_t form,float& value) const {
-  const auto found=catalog_.globals.find(form);
-  if(found==catalog_.globals.end())return false;
-  if(form==catalog_.hourGlobal)value=state_.gameHour;
-  else if(form==catalog_.dayGlobal)value=float(state_.gameDay);
-  else if(form==catalog_.monthGlobal)value=float(state_.gameMonth);
-  else if(form==catalog_.yearGlobal)value=float(state_.gameYear);
-  else if(form==catalog_.daysPassedGlobal)
-    value=float(double(state_.gameDaysPassed)+(double(state_.gameHour)-double(catalog_.initial.gameHour))/24.);
-  else if(form==catalog_.timeScaleGlobal)value=catalog_.gameTimeScale;
+  const auto found=catalog_->globals.find(form);
+  if(found==catalog_->globals.end())return false;
+  if(form==catalog_->hourGlobal)value=state_.gameHour;
+  else if(form==catalog_->dayGlobal)value=float(state_.gameDay);
+  else if(form==catalog_->monthGlobal)value=float(state_.gameMonth);
+  else if(form==catalog_->yearGlobal)value=float(state_.gameYear);
+  else if(form==catalog_->daysPassedGlobal)
+    value=float(double(state_.gameDaysPassed)+(double(state_.gameHour)-double(catalog_->initial.gameHour))/24.);
+  else if(form==catalog_->timeScaleGlobal)value=catalog_->gameTimeScale;
   else {auto v=state_.pipboy.mutableGlobals.find(form);value=v==state_.pipboy.mutableGlobals.end()?found->second:v->second;}
   return true;
 }
 ActorCensusReport Player::RegisterOriginalActors() {
   ActorCensusReport report;
-  report.authored=catalog_.actorPlacements.size();
+  report.authored=catalog_->actorPlacements.size();
   // Original FormID order makes seeding deterministic independent of hash
   // iteration order, device/compiler, or scene-entry timing.
   std::vector<uint32_t> refs;refs.reserve(report.authored);
-  for(const auto& entry:catalog_.actorPlacements)refs.push_back(entry.first);
+  for(const auto& entry:catalog_->actorPlacements)refs.push_back(entry.first);
   std::sort(refs.begin(),refs.end());
   for(uint32_t id:refs){
     if(state_.actors.count(id)){++report.alreadyTracked;continue;}
-    const auto& p=catalog_.actorPlacements.at(id);
+    const auto& p=catalog_->actorPlacements.at(id);
     // Deleted/initially-disabled and XESP-controlled actors must not be
     // spontaneously activated before their enabling quest/script fires.
     if((p.flags&0x820u)||p.parent){++report.disabledOrConditional;continue;}
-    if(!p.base||!catalog_.weapons.actors.count(p.base)||
-       !fo3weapon::ActorStatistics(catalog_.weapons,p.base)||
-       !catalog_.pipboy.targets.count(id)||
+    if(!p.base||!catalog_->weapons.actors.count(p.base)||
+       !fo3weapon::ActorStatistics(catalog_->weapons,p.base)||
+       !catalog_->pipboy.targets.count(id)||
        ActorHealth(id)<=0){++report.unsupportedBase;continue;}
     if((!p.cell&&!p.world)||!std::isfinite(p.x)||!std::isfinite(p.y)||
        !std::isfinite(p.z)||!std::isfinite(p.rx)||!std::isfinite(p.ry)||
@@ -746,7 +748,7 @@ ActorCensusReport Player::RegisterOriginalActors() {
   return report;
 }
 float Player::MaxHealth() const {
-  const auto &r = catalog_.rules;
+  const auto &r = catalog_->rules;
   return state_.baseHealth +
          (state_.special[2] + r.healthEnduranceOffset) * r.healthEnduranceMult +
          (state_.level - 1) * r.healthLevelMult;
@@ -755,26 +757,26 @@ float Player::Health() const {
   return std::max(0.0f, MaxHealth() - state_.healthDamage);
 }
 float Player::MaxActionPoints() const {
-  return catalog_.rules.apBase + state_.special[5] * catalog_.rules.apMult;
+  return catalog_->rules.apBase + state_.special[5] * catalog_->rules.apMult;
 }
 float Player::ActionPoints() const {
   return std::max(0.0f, MaxActionPoints() - state_.apSpent);
 }
 float Player::CarryCapacity() const {
-  return catalog_.rules.carryBase +
-         state_.special[0] * catalog_.rules.carryMult;
+  return catalog_->rules.carryBase +
+         state_.special[0] * catalog_->rules.carryMult;
 }
 double Player::InventoryWeight() const {
   double result = 0;
   for (const auto &s : state_.inventory)
-    result += static_cast<double>(catalog_.items.at(s.formId).weight) * s.count;
+    result += static_cast<double>(catalog_->items.at(s.formId).weight) * s.count;
   return result;
 }
 bool Player::Add(uint32_t form, int32_t count, float condition) {
   if (count <= 0 || !std::isfinite(condition) || condition < 0 ||
-      condition > 1 || !catalog_.items.count(form))
+      condition > 1 || !catalog_->items.count(form))
     return false;
-  const auto &item = catalog_.items.at(form);
+  const auto &item = catalog_->items.at(form);
   if (item.maxCondition == 0 && condition != 1)
     return false;
   if (item.kind == ItemKind::Weapon) {
@@ -808,7 +810,7 @@ bool Player::Remove(uint64_t id, int32_t count) {
                                [&](const Stack &s) { return s.id == id; });
   if (it == v.end() || count <= 0 || count > it->count ||
       (IsQuestObject(it->formId) ||
-       catalog_.items.at(it->formId).cannotDrop))
+       catalog_->items.at(it->formId).cannotDrop))
     return false;
   it->count -= count;
   if (!it->count)
@@ -820,12 +822,12 @@ bool Player::Equip(uint64_t id) {
   auto &v = state_.inventory;
   const auto it = std::find_if(v.begin(), v.end(),
                                [&](const Stack &s) { return s.id == id; });
-  if (it == v.end() || !CanEquip(catalog_.items.at(it->formId)) ||
-      (it->condition <= 0 && catalog_.items.at(it->formId).kind != ItemKind::Weapon))
+  if (it == v.end() || !CanEquip(catalog_->items.at(it->formId)) ||
+      (it->condition <= 0 && catalog_->items.at(it->formId).kind != ItemKind::Weapon))
     return false;
   if (it->equipped)
     return true;
-  const Item &item = catalog_.items.at(it->formId);
+  const Item &item = catalog_->items.at(it->formId);
   const bool split = it->count > 1;
   if (split && (v.size() >= MaxStacks || state_.nextStackId == UINT64_MAX))
     return false;
@@ -836,7 +838,7 @@ bool Player::Equip(uint64_t id) {
     it->count = 1;
   }
   for (auto &s : v)
-    if (s.equipped && Conflicts(item, catalog_.items.at(s.formId)))
+    if (s.equipped && Conflicts(item, catalog_->items.at(s.formId)))
       s.equipped = false;
   it->equipped = true;
   if (split)
@@ -865,13 +867,13 @@ bool Player::ReferenceDisabledWith(const std::unordered_map<uint32_t,bool>& root
   std::array<uint32_t,128> visited{};size_t count=0;bool opposite=false;
   auto fail=[&](const char* why){error=std::string("GetDisabled reference ")+std::to_string(reference)+": "+why;return false;};
   while(reference){
-    const auto ref=catalog_.references.find(reference);
-    if(ref==catalog_.references.end()||(ref->second.flags&0x20))return fail("reference unavailable/deleted");
+    const auto ref=catalog_->references.find(reference);
+    if(ref==catalog_->references.end()||(ref->second.flags&0x20))return fail("reference unavailable/deleted");
     if(count==visited.size())return fail("enable-parent depth exceeded");
     for(size_t i=0;i<count;++i)if(visited[i]==reference)return fail("enable-parent cycle");
     visited[count++]=reference;
-    const auto parent=catalog_.enableParents.find(reference);
-    if(parent==catalog_.enableParents.end()){
+    const auto parent=catalog_->enableParents.find(reference);
+    if(parent==catalog_->enableParents.end()){
       const auto changed=roots.find(reference);
       const bool enabled=changed==roots.end()?!(ref->second.flags&0x800):changed->second;
       disabled=(!enabled)^opposite;return true;
@@ -890,8 +892,8 @@ bool Player::StageReferenceEnableIn(std::unordered_map<uint32_t,bool>& roots,
   if(!ReferenceDisabledWith(roots,reference,disabled,error))return false;
   // Original enable-parent children cannot be independently toggled. A valid
   // parent-controlled request is a no-op, not a separate shadow flag.
-  if(catalog_.enableParents.count(reference)||enabled==!disabled)return true;
-  const bool initial=!(catalog_.references.at(reference).flags&0x800);
+  if(catalog_->enableParents.count(reference)||enabled==!disabled)return true;
+  const bool initial=!(catalog_->references.at(reference).flags&0x800);
   if(enabled==initial)roots.erase(reference);
   else {
     if(roots.size()>=100000&&!roots.count(reference)){
@@ -910,13 +912,13 @@ bool Player::StageReferenceEnable(uint32_t reference,bool enabled,std::string& e
 fo3world::ReferenceStateSnapshot Player::CaptureReferenceStateWith(
     const std::unordered_map<uint32_t,bool>& roots,uint64_t revision) const {
   fo3world::ReferenceStateSnapshot out;out.revision=revision;
-  out.states.reserve(catalog_.enableParents.size()+roots.size());
+  out.states.reserve(catalog_->enableParents.size()+roots.size());
   auto capture=[&](uint32_t id){bool disabled=false;std::string error;
     const bool valid=ReferenceDisabledWith(roots,id,disabled,error);
     out.states[id]=!valid?fo3world::ReferenceEnableState::Unavailable:
       disabled?fo3world::ReferenceEnableState::Disabled:fo3world::ReferenceEnableState::Enabled;
   };
-  for(const auto& child:catalog_.enableParents)capture(child.first);
+  for(const auto& child:catalog_->enableParents)capture(child.first);
   for(const auto& changed:roots)capture(changed.first);
   return out;
 }
@@ -954,8 +956,8 @@ std::unique_ptr<ReferenceEnablePlan> Player::PrepareReferenceEnablePlan(
   std::sort(candidates.begin(),candidates.end());
   candidates.erase(std::unique(candidates.begin(),candidates.end()),candidates.end());
   for(uint32_t id:candidates){
-    const auto ref=catalog_.references.find(id);
-    const bool authored=ref!=catalog_.references.end() && !(ref->second.flags&0x800);
+    const auto ref=catalog_->references.find(id);
+    const bool authored=ref!=catalog_->references.end() && !(ref->second.flags&0x800);
     if(plan->candidate_->Enabled(id,authored)!=plan->rollback_->Enabled(id,authored))
       plan->affected_.push_back(id);
   }
@@ -988,13 +990,13 @@ bool Player::RollbackReferenceEnablePlan(ReferenceEnablePlan& plan) noexcept {
   plan.phase_=ReferenceEnablePlan::Phase::RolledBack;return true;
 }
 bool Player::CanPickup(uint32_t id) const {
-  const auto r = catalog_.references.find(id);
-  if (r == catalog_.references.end() || IsCollected(id))
+  const auto r = catalog_->references.find(id);
+  if (r == catalog_->references.end() || IsCollected(id))
     return false;
   const auto &ref = r->second;
-  const auto i = catalog_.items.find(ref.base);
+  const auto i = catalog_->items.find(ref.base);
   if(!ref.valid || (ref.flags & 0x20) || !ResolveOwnership(id).known || ref.locked ||
-     i==catalog_.items.end() || !i->second.playable || i->second.script ||
+     i==catalog_->items.end() || !i->second.playable || i->second.script ||
      !(i->second.maxCondition>0 || ref.condition==1))return false;
   bool disabled=false;std::string error;
   return ReferenceDisabled(id,disabled,error)&&!disabled;
@@ -1002,7 +1004,7 @@ bool Player::CanPickup(uint32_t id) const {
 bool Player::Pickup(uint32_t id) {
   if (!CanPickup(id) || state_.collected.size() >= 100000)
     return false;
-  const auto &ref = catalog_.references.at(id);
+  const auto &ref = catalog_->references.at(id);
   // Record before Add (which can allocate); undo on an invalid Add.
   state_.collected.insert(id);
   if (!Add(ref.base, ref.count, ref.condition)) {
@@ -1014,14 +1016,14 @@ bool Player::Pickup(uint32_t id) {
 }
 bool Player::CanOpenDoor(uint32_t id) const {return CanActorOpenDoor(PlayerRef,id);}
 bool Player::CanActorOpenDoor(uint32_t actor,uint32_t id) const {
-  const auto r = catalog_.references.find(id);
-  if (r == catalog_.references.end())
+  const auto r = catalog_->references.find(id);
+  if (r == catalog_->references.end())
     return false;
   const auto &ref = r->second;
   // Ownership controls trespass/crime, not whether an unlocked door opens.
   if (!ref.valid || (ref.flags & 0x20u) ||
-      (catalog_.scriptedBases.count(ref.base) &&
-       (actor!=PlayerRef||!catalog_.defaultActivationDoors.count(ref.base))))
+      (catalog_->scriptedBases.count(ref.base) &&
+       (actor!=PlayerRef||!catalog_->defaultActivationDoors.count(ref.base))))
     return false;
   bool disabled=false;std::string error;
   if(!ReferenceDisabled(id,disabled,error)||disabled)return false;
@@ -1089,7 +1091,7 @@ bool Player::Save(const std::string &path, std::string &error) const {
     PutFloat(payload, s.condition);
     payload.push_back(s.equipped ? 1 : 0);
   }
-  Put32(payload, catalog_.worldFingerprint);
+  Put32(payload, catalog_->worldFingerprint);
   Put32(payload, static_cast<uint32_t>(state_.collected.size()));
   std::vector<uint32_t> collected(state_.collected.begin(),
                                   state_.collected.end());
@@ -1097,7 +1099,7 @@ bool Player::Save(const std::string &path, std::string &error) const {
   for (auto id : collected)
     Put32(payload, id);
   Bytes bytes{'F', 'Q', 'P', 'S'};
-  Put32(payload, catalog_.lootFingerprint);
+  Put32(payload, catalog_->lootFingerprint);
   Put32(payload, static_cast<uint32_t>(state_.containers.size()));
   std::vector<uint32_t> containerIds;
   for (const auto &entry : state_.containers)
@@ -1122,10 +1124,10 @@ bool Player::Save(const std::string &path, std::string &error) const {
   Put32(payload, state_.developmentWeaponGranted ? 1 : 0);
   std::vector<const Stack *> weapons;
   for (const auto &s : state_.inventory)
-    if (catalog_.items.at(s.formId).kind == ItemKind::Weapon) weapons.push_back(&s);
+    if (catalog_->items.at(s.formId).kind == ItemKind::Weapon) weapons.push_back(&s);
   for (auto id : containerIds)
     for (const auto &s : state_.containers.at(id))
-      if (catalog_.items.at(s.formId).kind == ItemKind::Weapon) weapons.push_back(&s);
+      if (catalog_->items.at(s.formId).kind == ItemKind::Weapon) weapons.push_back(&s);
   Put32(payload, static_cast<uint32_t>(weapons.size()));
   for (const auto *s : weapons) {
     Put64(payload, s->id);
@@ -1189,16 +1191,16 @@ bool Player::Save(const std::string &path, std::string &error) const {
     payload.push_back(l.forceFailures);payload.push_back(l.rewarded?1:0);}
   // Optional RFE1 after the v14 lock tail. Empty overlays keep existing v14
   // bytes unchanged; older supported saves do not require this extension.
-  const bool hasPlayerAttributeOverrides=state_.special!=catalog_.initial.special ||
-      state_.skills!=catalog_.initial.skills;
+  const bool hasPlayerAttributeOverrides=state_.special!=catalog_->initial.special ||
+      state_.skills!=catalog_->initial.skills;
   // An overriding v15 save requires RFE1 (including the empty case) before
   // PST1. Unmodified characters retain v14, including synthetic test actors.
   if(hasPlayerAttributeOverrides||!state_.referenceEnabled.empty()) {
     if(state_.referenceEnabled.size()>100000){error="Too many reference overrides";return false;}
     std::vector<uint32_t> ids;
     for(const auto& entry:state_.referenceEnabled){
-      const auto ref=catalog_.references.find(entry.first);
-      if(ref==catalog_.references.end()||(ref->second.flags&0x20)||catalog_.enableParents.count(entry.first)){
+      const auto ref=catalog_->references.find(entry.first);
+      if(ref==catalog_->references.end()||(ref->second.flags&0x20)||catalog_->enableParents.count(entry.first)){
         error="Invalid reference override";return false;
       }
       ids.push_back(entry.first);
@@ -1218,7 +1220,7 @@ bool Player::Save(const std::string &path, std::string &error) const {
     payload.insert(payload.end(),state_.skills.begin(),state_.skills.end());
   }
   Put32(bytes, hasPlayerAttributeOverrides ? 15 : 14);
-  Put32(bytes, catalog_.fingerprint);
+  Put32(bytes, catalog_->fingerprint);
   Put32(bytes, static_cast<uint32_t>(payload.size()));
   Put32(bytes, Crc(payload));
   bytes.insert(bytes.end(), payload.begin(), payload.end());
@@ -1278,7 +1280,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
   if (std::memcmp(h, "FQPS", 4) ||
       (version < 1 || version > 15))
     return fail("Unsupported player save format");
-  if (fo3esm::ReadU32(h + 8) != catalog_.fingerprint)
+  if (fo3esm::ReadU32(h + 8) != catalog_->fingerprint)
     return fail("Player save belongs to different game definitions");
   if (fo3esm::ReadU32(h + 12) != bytes.size() - 20)
     return fail("Invalid player save payload size");
@@ -1286,7 +1288,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
   if (fo3esm::ReadU32(h + 16) != Crc(payload))
     return fail("Player save checksum failed");
   const auto *p = payload.data();
-  State next = catalog_.initial;
+  State next = catalog_->initial;
   next.referenceEnabled.clear();
   next.referenceStateRevision=state_.referenceStateRevision+1;
   next.worldWeapons.clear();
@@ -1310,9 +1312,9 @@ bool Player::Restore(const std::string &path, std::string &error) {
     const auto *s = p + 20 + i * 21;
     Stack stack{U64(s), fo3esm::ReadU32(s + 8), I32(s + 12),
                 fo3esm::ReadF32(s + 16), s[20] != 0};
-    const auto item = catalog_.items.find(stack.formId);
+    const auto item = catalog_->items.find(stack.formId);
     if (!stack.id || stack.id >= next.nextStackId ||
-        !ids.insert(stack.id).second || item == catalog_.items.end() ||
+        !ids.insert(stack.id).second || item == catalog_->items.end() ||
         stack.count <= 0 || !std::isfinite(stack.condition) ||
         stack.condition < 0 || stack.condition > 1 || s[20] > 1 ||
         (item->second.maxCondition == 0 && stack.condition != 1) ||
@@ -1323,7 +1325,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
       return fail("Invalid saved inventory stack");
     for (const auto &prior : next.inventory)
       if (prior.equipped && stack.equipped &&
-          Conflicts(catalog_.items.at(prior.formId), item->second))
+          Conflicts(catalog_->items.at(prior.formId), item->second))
         return fail("Conflicting saved equipment");
     next.inventory.push_back(stack);
   }
@@ -1332,7 +1334,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
   if (version >= 2) {
     if (payload.size() - inventoryEnd < 8)
       return fail("Missing collected references");
-    if (fo3esm::ReadU32(p + inventoryEnd) != catalog_.worldFingerprint)
+    if (fo3esm::ReadU32(p + inventoryEnd) != catalog_->worldFingerprint)
       return fail("Collected references belong to different world definitions");
     const auto n = fo3esm::ReadU32(p + inventoryEnd + 4);
     worldEnd = inventoryEnd + 8ull + 4ull * n;
@@ -1341,8 +1343,8 @@ bool Player::Restore(const std::string &path, std::string &error) {
       return fail("Invalid collected reference count");
     for (uint32_t i = 0; i < n; ++i) {
       const auto id = fo3esm::ReadU32(p + inventoryEnd + 8 + i * 4);
-      if (!id || !catalog_.references.count(id) ||
-          !catalog_.items.count(catalog_.references.at(id).base) ||
+      if (!id || !catalog_->references.count(id) ||
+          !catalog_->items.count(catalog_->references.at(id).base) ||
           !next.collected.insert(id).second)
         return fail("Invalid collected reference");
     }
@@ -1350,7 +1352,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
   next.containers.clear();
   if (version >= 3) {
     if (payload.size() - worldEnd < 8 ||
-        fo3esm::ReadU32(p + worldEnd) != catalog_.lootFingerprint)
+        fo3esm::ReadU32(p + worldEnd) != catalog_->lootFingerprint)
       return fail("Invalid container definitions");
     const auto number = fo3esm::ReadU32(p + worldEnd + 4);
     if (number > 10000)
@@ -1362,9 +1364,9 @@ bool Player::Restore(const std::string &path, std::string &error) {
       const auto ref = fo3esm::ReadU32(p + at),
                  size = fo3esm::ReadU32(p + at + 4);
       at += 8;
-      const auto found = catalog_.references.find(ref);
-      if (found == catalog_.references.end() ||
-          (!catalog_.containers.count(found->second.base)&&!catalog_.actorInventories.count(found->second.base)) ||
+      const auto found = catalog_->references.find(ref);
+      if (found == catalog_->references.end() ||
+          (!catalog_->containers.count(found->second.base)&&!catalog_->actorInventories.count(found->second.base)) ||
           next.containers.count(ref) || size > 10000 ||
           (totalStacks += size) > 30000 || payload.size() - at < 20ull * size)
         return fail("Invalid saved container");
@@ -1372,9 +1374,9 @@ bool Player::Restore(const std::string &path, std::string &error) {
       for (uint32_t i = 0; i < size; ++i, at += 20) {
         Stack stack{U64(p + at), fo3esm::ReadU32(p + at + 8), I32(p + at + 12),
                     fo3esm::ReadF32(p + at + 16), false};
-        const auto item = catalog_.items.find(stack.formId);
+        const auto item = catalog_->items.find(stack.formId);
         if (!stack.id || stack.id >= next.nextStackId ||
-            !ids.insert(stack.id).second || item == catalog_.items.end() ||
+            !ids.insert(stack.id).second || item == catalog_->items.end() ||
             stack.count <= 0 || !std::isfinite(stack.condition) ||
             stack.condition < 0 || stack.condition > 1 ||
             (item->second.maxCondition == 0 && stack.condition != 1) ||
@@ -1384,13 +1386,13 @@ bool Player::Restore(const std::string &path, std::string &error) {
       }
       next.containers.emplace(ref, std::move(contents));
     }
-    if (version == 4 && !fo3pipdata::DecodeState(next.pipboy,catalog_.pipboy,p+at,payload.size()-at,error))return false;
+    if (version == 4 && !fo3pipdata::DecodeState(next.pipboy,catalog_->pipboy,p+at,payload.size()-at,error))return false;
     if (version >= 5) {
       if (payload.size() - at < 4) return fail("Missing Pip-Boy length");
       const uint32_t pipSize = fo3esm::ReadU32(p + at);
       at += 4;
       if (pipSize > payload.size() - at ||
-          !fo3pipdata::DecodeState(next.pipboy, catalog_.pipboy, p + at, pipSize, error))
+          !fo3pipdata::DecodeState(next.pipboy, catalog_->pipboy, p + at, pipSize, error))
         return fail("Invalid Pip-Boy extension");
       at += pipSize;
       if (payload.size() - at < 12 || fo3esm::ReadU32(p + at) != 0x57504e35 ||
@@ -1401,14 +1403,14 @@ bool Player::Restore(const std::string &path, std::string &error) {
       at += 12;
       std::unordered_map<uint64_t, Stack *> weapons;
       for (auto &s : next.inventory)
-        if (catalog_.items.at(s.formId).kind == ItemKind::Weapon) weapons.emplace(s.id, &s);
+        if (catalog_->items.at(s.formId).kind == ItemKind::Weapon) weapons.emplace(s.id, &s);
       for (auto &c : next.containers)
         for (auto &s : c.second)
-          if (catalog_.items.at(s.formId).kind == ItemKind::Weapon) weapons.emplace(s.id, &s);
+          if (catalog_->items.at(s.formId).kind == ItemKind::Weapon) weapons.emplace(s.id, &s);
       if (number != weapons.size() || payload.size() - at < 12ull * number)
         return fail("Invalid weapon instance count");
       auto setRounds = [&](Stack &s, uint32_t packed) {
-        const auto &def = catalog_.items.at(s.formId).weapon;
+        const auto &def = catalog_->items.at(s.formId).weapon;
         if ((packed & ~0x1ffffu) || (packed & 0xffffu) > def.clip ||
             (!def.Firearm() && packed)) return false;
         s.loadedRounds = packed & 0xffffu;
@@ -1433,9 +1435,9 @@ bool Player::Restore(const std::string &path, std::string &error) {
         w.instance.formId = fo3esm::ReadU32(p + at + 8);
         w.instance.count = 1;
         w.instance.condition = fo3esm::ReadF32(p + at + 12);
-        const auto item = catalog_.items.find(w.instance.formId);
+        const auto item = catalog_->items.find(w.instance.formId);
         if (!w.instance.id || w.instance.id >= next.nextStackId ||
-            !ids.insert(w.instance.id).second || item == catalog_.items.end() ||
+            !ids.insert(w.instance.id).second || item == catalog_->items.end() ||
             item->second.kind != ItemKind::Weapon || !item->second.weapon.Firearm() ||
             !item->second.playable || item->second.script || item->second.questItem ||
             item->second.cannotDrop || !std::isfinite(w.instance.condition) ||
@@ -1460,8 +1462,8 @@ bool Player::Restore(const std::string &path, std::string &error) {
         if(n>100000||payload.size()-at<8ull*n)return fail("Invalid actor damage count");
         for(uint32_t i=0;i<n;++i,at+=8){
           const auto id=fo3esm::ReadU32(p+at);const auto damage=fo3esm::ReadF32(p+at+4);
-          const auto actor=catalog_.pipboy.targets.find(id);
-          if(actor==catalog_.pipboy.targets.end()||!catalog_.weapons.actors.count(actor->second.base)||
+          const auto actor=catalog_->pipboy.targets.find(id);
+          if(actor==catalog_->pipboy.targets.end()||!catalog_->weapons.actors.count(actor->second.base)||
              !std::isfinite(damage)||damage<0||!next.actorDamage.emplace(id,damage).second)return fail("Invalid actor damage");
         }
       }
@@ -1482,15 +1484,15 @@ bool Player::Restore(const std::string &path, std::string &error) {
           if(!std::isfinite(a.packageWaitSeconds)||a.packageWaitSeconds<0)return fail("Invalid actor package wait");
           if(a.equippedWeapon){
             auto contents=next.containers.find(id);bool found=false;
-            if(contents!=next.containers.end())for(auto& s:contents->second)if(s.id==a.equippedWeapon&&catalog_.items.at(s.formId).kind==ItemKind::Weapon){s.equipped=true;found=true;}
+            if(contents!=next.containers.end())for(auto& s:contents->second)if(s.id==a.equippedWeapon&&catalog_->items.at(s.formId).kind==ItemKind::Weapon){s.equipped=true;found=true;}
             if(!found)return fail("Invalid actor equipped weapon");
           }
-          const auto ref=catalog_.pipboy.targets.find(id);
-          if(ref==catalog_.pipboy.targets.end()||!catalog_.weapons.actors.count(ref->second.base)||
+          const auto ref=catalog_->pipboy.targets.find(id);
+          if(ref==catalog_->pipboy.targets.end()||!catalog_->weapons.actors.count(ref->second.base)||
              (!a.cell&&!a.world)||!std::isfinite(a.yaw)||
              !std::all_of(a.position.begin(),a.position.end(),[](float v){return std::isfinite(v);})||
-             (a.package&&!catalog_.pipboy.packages.count(a.package))||
-             (a.hostile&&a.hostile!=0x14&&!catalog_.pipboy.targets.count(a.hostile))||
+             (a.package&&!catalog_->pipboy.packages.count(a.package))||
+             (a.hostile&&a.hostile!=0x14&&!catalog_->pipboy.targets.count(a.hostile))||
              !next.actors.emplace(id,a).second)return fail("Invalid actor state");
         }
       }
@@ -1522,8 +1524,8 @@ bool Player::Restore(const std::string &path, std::string &error) {
         if(n>10000||(version>=13 ? payload.size()-at<5ull*n+4 : payload.size()-at!=5ull*n))return fail("Invalid quest-object override count");
         for(uint32_t i=0;i<n;++i,at+=5){
           const uint32_t form=fo3esm::ReadU32(p+at),flag=p[at+4];
-          const auto item=catalog_.items.find(form);
-          if(item==catalog_.items.end()||flag>1||item->second.questItem==bool(flag)||
+          const auto item=catalog_->items.find(form);
+          if(item==catalog_->items.end()||flag>1||item->second.questItem==bool(flag)||
              !next.questObjectFlags.emplace(form,flag!=0).second)
             return fail("Invalid quest-object override");
         }
@@ -1539,9 +1541,9 @@ bool Player::Restore(const std::string &path, std::string &error) {
           const auto id=U64(p+at);auto found=stacks.find(id);
           if(found==stacks.end()||!seen.insert(id).second)return fail("Invalid ownership stack identity");
           OwnershipData owner;owner.owner=fo3esm::ReadU32(p+at+8);owner.rank=I32(p+at+12);owner.global=fo3esm::ReadU32(p+at+16);owner.explicitOwner=true;
-          if(!owner.owner||(!catalog_.factionFlags.count(owner.owner)&&!catalog_.pipboy.dialogueActors.count(owner.owner))||
-             (owner.global&&!catalog_.globals.count(owner.global))||
-             (catalog_.factionFlags.count(owner.owner)&&owner.global))return fail("Invalid saved item ownership");
+          if(!owner.owner||(!catalog_->factionFlags.count(owner.owner)&&!catalog_->pipboy.dialogueActors.count(owner.owner))||
+             (owner.global&&!catalog_->globals.count(owner.global))||
+             (catalog_->factionFlags.count(owner.owner)&&owner.global))return fail("Invalid saved item ownership");
           found->second->ownership=owner;
         }
       }
@@ -1552,8 +1554,8 @@ bool Player::Restore(const std::string &path, std::string &error) {
         next.locks.clear();
         for(uint32_t i=0;i<n;++i,at+=8){const auto id=fo3esm::ReadU32(p+at);
           LockOverride l;l.change=LockChange(p[at+4]);l.level=p[at+5];l.forceFailures=p[at+6];l.rewarded=p[at+7]!=0;
-          auto ref=catalog_.references.find(id);
-          if(ref==catalog_.references.end()||!ref->second.valid||p[at+4]>uint8_t(LockChange::ScriptUnlocked)||l.forceFailures>2||p[at+7]>1||
+          auto ref=catalog_->references.find(id);
+          if(ref==catalog_->references.end()||!ref->second.valid||p[at+4]>uint8_t(LockChange::ScriptUnlocked)||l.forceFailures>2||p[at+7]>1||
              (l.change==LockChange::Broken&&!l.forceFailures)||(l.change==LockChange::Key&&!ref->second.key)||
              ((l.change==LockChange::Picked||l.change==LockChange::Forced)&&l.level>100)||!next.locks.emplace(id,l).second)return fail("Invalid saved lock");
         }
@@ -1563,8 +1565,8 @@ bool Player::Restore(const std::string &path, std::string &error) {
         const auto n=fo3esm::ReadU32(p+at+4);at+=8;
         if(n>100000||(version>=15 ? payload.size()-at!=5ull*n+25u : payload.size()-at!=5ull*n))return fail("Invalid reference-state extension size");
         for(uint32_t i=0;i<n;++i,at+=5){
-          const auto id=fo3esm::ReadU32(p+at);const auto ref=catalog_.references.find(id);
-          if(ref==catalog_.references.end()||(ref->second.flags&0x20)||catalog_.enableParents.count(id)||p[at+4]>1||
+          const auto id=fo3esm::ReadU32(p+at);const auto ref=catalog_->references.find(id);
+          if(ref==catalog_->references.end()||(ref->second.flags&0x20)||catalog_->enableParents.count(id)||p[at+4]>1||
              !next.referenceEnabled.emplace(id,p[at+4]!=0).second)return fail("Invalid saved reference state");
         }
       }
@@ -1586,7 +1588,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
   }
   // Resource validation must use the restored SPECIAL values, not the ESM
   // baseline. A character with 10 END/AGI may have higher HP/AP limits.
-  const auto& rule=catalog_.rules;
+  const auto& rule=catalog_->rules;
   const float maxHealth=next.baseHealth+(next.special[2]+rule.healthEnduranceOffset)*rule.healthEnduranceMult+
       (next.level-1)*rule.healthLevelMult;
   const float maxAp=rule.apBase+next.special[5]*rule.apMult;
@@ -1595,7 +1597,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
      !std::isfinite(maxAp)||maxAp<0||next.apSpent>maxAp)
     return fail("Invalid saved player resources");
   for(const auto& global:next.pipboy.mutableGlobals) {
-    if(!catalog_.globals.count(global.first)||global.first==catalog_.hourGlobal||global.first==catalog_.dayGlobal||global.first==catalog_.monthGlobal||global.first==catalog_.yearGlobal||global.first==catalog_.daysPassedGlobal||global.first==catalog_.timeScaleGlobal)
+    if(!catalog_->globals.count(global.first)||global.first==catalog_->hourGlobal||global.first==catalog_->dayGlobal||global.first==catalog_->monthGlobal||global.first==catalog_->yearGlobal||global.first==catalog_->daysPassedGlobal||global.first==catalog_->timeScaleGlobal)
       return fail("Invalid mutable script global");
   }
   if (version < 5 && !MigrateWeaponInstances(next))

@@ -4,10 +4,10 @@
 
 - Starting canonical main: `2987d911f318b92d1041257868067851a09d16f0` (v208).
 - Resumed from published `6469dbb872889a79a0682501b75f6ac6577ab547`.
-- Current implementation checkpoint: M1B3c detached reference mutation plans.
+- Current implementation checkpoint: M1B3d whole-script candidate transactions.
   Use canonical main history for the publication SHA; the previous published
-  implementation is M1B3b `61d1481b8a9bd75a78dc1ea37192da1fc2a6665b`.
-- Previous M1B3b Android CI: https://github.com/dwalton29/FalloutQuest/actions/runs/38614606380 (in progress at publication).
+  implementation is M1B3c `0e9dd258701f9aca48de66acae3994129d20c6d3`.
+- Previous M1B3c Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38616664379.
 - M1B2 scene-load/stream-in integration is host-validated and pushed; the remote
   tree matches the tested tree `20c0e9cd4d5206190925d30a68408400c6fb1923`. Newer v209 is preserved: 209 / 0.72.0-persistent-player-stats.
 
@@ -22,6 +22,7 @@
 | M1B2 scene/streaming snapshots | `aa8ba6d56c4eda4e39fdb92e3c6d591a8ef63268` | Confirmed |
 | M1B3a scene publication admission | `86ddd9c407482207aab7799760259a8f643dfcd6` | Confirmed |
 | M1B3b reversible collision exchange | `61d1481b8a9bd75a78dc1ea37192da1fc2a6665b` | Confirmed |
+| M1B3c detached reference plans | `0e9dd258701f9aca48de66acae3994129d20c6d3` | Confirmed |
 
 The user directly confirmed permission to push to main on 2026-10-14. The old
 approval blocker is resolved. Command-line Git cannot authenticate for writes;
@@ -94,7 +95,7 @@ OnPackageEnd and OnPackageDone both occur (20 each); do not conflate them.
 | Scene / streaming | Async geometry/texture/collision preparation, atomic publication, NPC cell handoff | Saved enable state now selects placements/lights/collision inputs on scene load and stream-in; live script mutation publication and cross-cell relocation remain unfinished |
 | Audio / UI | Transactional MESG, sounds, Karma and quest notices | Narrow formatting; no Say/SayTo or PlayGroup/IsAnimPlaying scripting interface |
 | Persistence | FQPS v14 for unchanged attributes, v15 with RFE1/PST1 for attribute overrides; QST1 globals/running/journal; QNF1 reveal history; locks, XP, actors, inventory, ownership | M1B1 RFE1 root-enable overlay; level allocation absent |
-| Transactions | State/revision and pending queues restored on result/stage/event failure and previews | External scene/physics/audio effects must publish only after transaction success |
+| Transactions | Result/stage/event execution and const previews evaluate private candidates; guarded allocation-free publication/rollback includes saved state, buttons and queued effects | Resident scene/physics/actor coordinator remains unfinished; delivered effects forbid rollback |
 
 Read `quest-scripting-checkpoint-{1,2,3}.md` and `bomb-quest-hud-v208.md`
 for previous work and deliberate limitations. Preserve existing systems.
@@ -142,8 +143,9 @@ flowchart TD
    See `world-reference-m1b2.md`. The **first unfinished implementation is M1B3**:
    resident outer-transaction/resource coordinator and actor/held-object/
    navigation coordination. M1B3a adds stale-work admission; M1B3b adds reversible
-   collision; M1B3c adds detached reference plans. Whole-script candidate effects
-   and runtime resource integration are still unfinished. Only then admit source
+   collision; M1B3c adds detached reference plans; M1B3d stages whole-script state
+   and queued effects (see `world-reference-m1b3d.md`). Runtime resource integration
+   remains unfinished. Only then admit source
    Enable/Disable; no success-only handlers are allowed.
 4. M1C+: cross-cell MoveTo/MoveToMarker with original placements/actor handoff,
    spawn identity/lifecycle and Delete; transaction/persistence tests.
@@ -327,3 +329,12 @@ are not invoked by any source handler or runtime render path. Preserve all M1B3a
 admission and M1B3b exchange guards while integrating the real coordinator.
 Version/schema remain unchanged. Android/headset validation is outstanding;
 check the latest main workflow after publication.
+
+## M1B3d validation
+
+Whole-script candidate transactions pass all 29 rebuilt player cases, six world
+cases and one collision case (36 total). Original bomb/event, 5,502-child enable
+graph, Lucas/MS11 dialogue and catalogue/census/save regressions pass. The two
+plan suites pass ASan/UBSan with LeakSanitizer disabled for this traced runtime.
+Scene publication source checks and four scripting audit tests pass. See
+`world-reference-m1b3d.md` for the remaining resident coordinator boundary.
