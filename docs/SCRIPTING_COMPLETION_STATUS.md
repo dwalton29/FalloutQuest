@@ -241,3 +241,22 @@ and collision snapshots also need the same publication epoch. Existing CELL
 reset seeds the old visible window as ready, so it cannot be reused blindly as
 a live state refresh. Enable/Disable must remain unavailable until these paths
 are coordinated and tested. No physical Quest or frame-time validation yet.
+
+## M1B3a continuation (2026-10-14)
+
+Implemented scene publication stamps separating the live-player projection from
+the successfully published scene. CELL workers, reused metadata, GPU slices,
+collision snapshots and NPC arrivals now reject stale scene/reference identities.
+Same-CELL reloads invalidate old work even when origin/revision are unchanged.
+Staged resources are retired before CELL metadata reset. Uncoordinated live-state
+changes stop streaming admission rather than marking the old scene ready under
+a new revision. Rollback requeues discarded work safely.
+
+See `world-reference-m1b3a.md` for implementation, validation and exact boundary.
+Host result: 49 passed, two asset-dependent NIF cases skipped, zero failures.
+This corrects earlier wording which counted 51 registered cases as all passed.
+Scene/publication and NPC ordering source checks pass. Android runtime compilation
+and headset tests remain outstanding. No source Enable/Disable commands admitted;
+no version change. First unfinished M1B3 work is still the resident outer-transaction
+coordinator and reversible collision/physics/navigation plus actor/held-object
+coordination. Stale-work rejection alone is not live world mutation support.

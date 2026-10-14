@@ -1,4 +1,5 @@
 #include "fo3-scene-preparation.h"
+#include "fo3-scene-publication.h"
 #include "../../app/src/main/cpp/ui/loading/fo3-loading-state.h"
 
 #include <atomic>
@@ -104,5 +105,49 @@ int main() {
         Wait([&] { return entered.load(std::memory_order_acquire); });
     }
     Require(exited.load(std::memory_order_acquire), "destruction did not join the worker");
+    // Publication regression: slow workers, reused metadata and staged uploads
+    // all retain the scene identity which produced their placement selection.
+    fo3scene::ReferencePublication publication;
+    Require(!publication.Accepts(publication.Stamp(), 0), "unpublished scene accepted work");
+    auto source = std::make_shared<fo3world::ReferenceStateSnapshot>();
+    source->revision = 7;
+    source->states[42] = fo3world::ReferenceEnableState::Enabled;
+    publication.Publish(source);
+    source.reset();
+    const auto oldStamp = publication.Stamp();
+    const auto oldSnapshot = publication.Snapshot();
+    fo3scene::Preparation<Result> staleJob;
+    release.store(false);
+    entered.store(false);
+    Require(staleJob.Start([&, oldSnapshot](Result& out, const std::atomic<bool>&) {
+        entered.store(true, std::memory_order_release);
+        while (!release.load(std::memory_order_acquire)) std::this_thread::yield();
+        out.value = oldSnapshot->Enabled(42, false) ? 1 : 0;
+        return true;
+    }), "publication worker failed to start");
+    Wait([&] { return entered.load(std::memory_order_acquire); });
+    Require(publication.Accepts(oldStamp, 7), "current scene rejected its own metadata");
+    Require(!publication.Accepts(oldStamp, 8), "new live revision accepted stale GPU/collision work");
+    Require(publication.Stamp() == oldStamp && publication.Snapshot() == oldSnapshot,
+            "a live revision query relabelled old scene resources");
+    // A failed script may roll back before publication. Its old scene remains
+    // usable, whereas a successful same-CELL load must invalidate the old job.
+    Require(publication.Accepts(oldStamp, 7), "rollback invalidated the unchanged scene");
+    auto replacement = std::make_shared<fo3world::ReferenceStateSnapshot>();
+    replacement->revision = 8;
+    replacement->states[42] = fo3world::ReferenceEnableState::Disabled;
+    publication.Publish(replacement);
+    release.store(true, std::memory_order_release);
+    Wait([&] { return staleJob.Ready(); });
+    Require(staleJob.Successful() && staleJob.Get().value == 1,
+            "worker lost its owned old projection");
+    Require(!publication.Accepts(oldStamp, 8), "completed stale worker admitted after replacement");
+    Require(publication.Accepts(publication.Stamp(), 8) &&
+            !publication.Snapshot()->Enabled(42, true), "new projection not admitted");
+    const auto sameCellStamp = publication.Stamp();
+    publication.Publish(replacement); // same CELL, same revision, different scene load
+    Require(!publication.Accepts(sameCellStamp, 8), "same-CELL reload reused a stale scene identity");
+    Require(!publication.Accepts(oldStamp, 7), "restored revision resurrected an old scene job");
+    staleJob.Reset();
     std::cout << "scene preparation tests passed\n";
 }

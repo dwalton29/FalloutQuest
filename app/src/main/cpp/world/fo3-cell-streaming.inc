@@ -42,6 +42,7 @@ struct Q1960ShapeUploadQ19 {
 };
 
 struct Q1900CellWorkerTaskQ19 {
+    fo3scene::PublicationStamp publication;
     std::shared_ptr<const fo3world::ReferenceStateSnapshot> referenceState;
     uint64_t contextSerial = 0u;
     uint32_t worldspace = 0u;
@@ -73,6 +74,7 @@ struct Q1900CellWorkerTaskQ19 {
 };
 
 struct Q1900CellStateQ19 {
+    fo3scene::PublicationStamp publication;
     int32_t gridX = 0;
     int32_t gridY = 0;
     Q1900CellStageQ19 stage = Q1900CellStageQ19::Requested;
@@ -103,6 +105,7 @@ struct Q1900CellStateQ19 {
 constexpr size_t Q2012_CELL_WORKER_SLOTS = 3u;
 
 struct Q1930CollisionSnapshotTaskQ19 {
+    fo3scene::PublicationStamp publication;
     uint64_t contextSerial = 0u;
     int32_t centreX = 0;
     int32_t centreY = 0;
@@ -118,6 +121,7 @@ struct Q1930CollisionSnapshotTaskQ19 {
 // One owner for the live CELL pipeline. Mutated on the render thread; detached
 // workers publish only into their captured task payloads through ready atomics.
 struct Fo3WorldStreamingState {
+    fo3scene::PublicationStamp publication;
     std::unordered_map<uint64_t, Q1900CellStateQ19> cells;
     std::array<std::shared_ptr<Q1900CellWorkerTaskQ19>, Q2012_CELL_WORKER_SLOTS> workers;
     std::shared_ptr<Q1930CollisionSnapshotTaskQ19> collisionTask;
@@ -285,6 +289,7 @@ Q1900CellStateQ19& Q1900EnsureCellStateQ19(int32_t x, int32_t y) {
     auto found = gWorldStreaming.cells.find(key);
     if (found != gWorldStreaming.cells.end()) return found->second;
     Q1900CellStateQ19 state;
+    state.publication = gWorldStreaming.publication;
     state.gridX = x;
     state.gridY = y;
     state.stage = Q1900CellStageQ19::Requested;
@@ -300,10 +305,17 @@ void Q1900SeedTextureKnowledgeQ19() {
         gQ1900KnownGpuTextureKeysQ19.insert(entry.first);
 }
 
+void Q2015DiscardCellUploadQ19(Q1900CellStateQ19& state);
+
 void Q1900ResetCellsQ19(int32_t actualGridX, int32_t actualGridY) {
     ++gWorldStreaming.contextSerial;
     ResetFo3TerrainStreamingQ2000();
+    // GL resources are not RAII: even a same-CELL scene replacement must retire
+    // partially uploaded VBOs/textures before dropping the old metadata epoch.
+    for (auto& entry : gWorldStreaming.cells)
+        Q2015DiscardCellUploadQ19(entry.second);
     gWorldStreaming.cells.clear();
+    gWorldStreaming.publication = gFo3ScenePublication.Stamp();
     gWorldStreaming.contextReady = true;
     gWorldStreaming.worldspace = gExteriorWorldspaceQ1890;
     gWorldStreaming.persistentCell = gExteriorPersistentCellQ1890;
@@ -327,6 +339,7 @@ void Q1900ResetCellsQ19(int32_t actualGridX, int32_t actualGridY) {
         for (int dx = -Q1900_RESIDENT_RADIUS_Q19;
              dx <= Q1900_RESIDENT_RADIUS_Q19; ++dx) {
             Q1900CellStateQ19 state;
+            state.publication = gWorldStreaming.publication;
             state.gridX = gExteriorWindowGridXQ1890 + dx;
             state.gridY = gExteriorWindowGridYQ1890 + dy;
             state.stage = Q1900CellStageQ19::Requested;
@@ -354,6 +367,7 @@ void Q1900ResetCellsQ19(int32_t actualGridX, int32_t actualGridY) {
 
 bool Q1900ContextChangedQ19() {
     return !gWorldStreaming.contextReady ||
+        !(gWorldStreaming.publication == gFo3ScenePublication.Stamp()) ||
         gWorldStreaming.worldspace != gExteriorWorldspaceQ1890 ||
         gWorldStreaming.persistentCell != gExteriorPersistentCellQ1890 ||
         std::fabs(gWorldStreaming.originX - gExteriorOriginXQ1890) > 0.01f ||
@@ -591,9 +605,21 @@ void Q1900ConsumeWorkerSlotQ19(size_t slot) {
 
     const auto task = worker;
     worker.reset();
-    if (task->contextSerial != gWorldStreaming.contextSerial ||
+    if (!Fo3AcceptsScenePublication(task->publication) ||
+        !(task->publication == gWorldStreaming.publication) ||
+        task->contextSerial != gWorldStreaming.contextSerial ||
         task->worldspace != gExteriorWorldspaceQ1890 ||
         task->persistentCell != gExteriorPersistentCellQ1890) {
+        // A rolled-back transaction can restore this same scene revision.
+        // Requeue its cell instead of leaving it permanently owned by a worker
+        // whose result has just been discarded. Never touch a newer context.
+        if (task->contextSerial == gWorldStreaming.contextSerial &&
+            task->publication == gWorldStreaming.publication) {
+            auto found = gWorldStreaming.cells.find(Q1900CellKeyQ19(task->gridX, task->gridY));
+            if (found != gWorldStreaming.cells.end() &&
+                found->second.stage == Q1900CellStageQ19::Worker)
+                found->second.stage = Q1900CellStageQ19::Requested;
+        }
         Q6H_LOGW("Q19 WORKER DROP: cell=(%d,%d) workerContext=%llu liveContext=%llu reason=context-changed",
                  task->gridX, task->gridY,
                  static_cast<unsigned long long>(task->contextSerial),
@@ -692,7 +718,8 @@ void Q1900LaunchWorkerQ19(int32_t actualGridX, int32_t actualGridY) {
         if (!best || bestPriority >= 1000000) break;
 
         auto task = std::make_shared<Q1900CellWorkerTaskQ19>();
-        task->referenceState=CaptureFo3ReferenceState();
+        task->publication = gWorldStreaming.publication;
+        task->referenceState = gFo3ScenePublication.Snapshot();
         task->contextSerial = gWorldStreaming.contextSerial;
         task->worldspace = gExteriorWorldspaceQ1890;
         task->persistentCell = gExteriorPersistentCellQ1890;
@@ -704,7 +731,7 @@ void Q1900LaunchWorkerQ19(int32_t actualGridX, int32_t actualGridY) {
         task->needVisual = !best->visualReady;
         task->primeCollision =
             best->visualReady && !best->collisionPrimed;
-        if (best->metadataReady) {
+        if (best->metadataReady && best->publication == task->publication) {
             task->placements = best->placements;
             task->placementsProvided = true;
         }
@@ -1097,6 +1124,7 @@ Q1960UploadStepQ19 Q1960AdvanceShapeQ19(
 }
 
 void Q1900CommitCellVisualsQ19(Q1900CellStateQ19& state) {
+    if (!Fo3AcceptsScenePublication(state.publication)) return;
     const auto retireStarted = std::chrono::steady_clock::now();
     size_t retired = 0u;
     size_t write = 0u;
@@ -1164,6 +1192,7 @@ bool Q2013AdvanceCellGpuSliceQ19(
         Q1900CellStateQ19& state,
         int32_t actualGridX, int32_t actualGridY,
         size_t& globalBytes) {
+    if (!Fo3AcceptsScenePublication(state.publication)) return false;
     const auto sliceStarted = std::chrono::steady_clock::now();
     const size_t sliceStartBytes = globalBytes;
     bool didWork = false;
@@ -1270,6 +1299,7 @@ bool Q1900CollectCollisionWindowQ19(
             const auto found = gWorldStreaming.cells.find(
                 Q1900CellKeyQ19(centreX + dx, centreY + dy));
             if (found == gWorldStreaming.cells.end() ||
+                !Fo3AcceptsScenePublication(found->second.publication) ||
                 !found->second.metadataReady ||
                 !found->second.collisionPrimed) {
                 return false;
@@ -1317,6 +1347,7 @@ void Q1900TryPublishCollisionQ19(int32_t actualGridX, int32_t actualGridY) {
         gWorldStreaming.collisionTask.reset();
 
         const bool stale =
+            !Fo3AcceptsScenePublication(task->publication) ||
             task->contextSerial != gWorldStreaming.contextSerial ||
             task->centreX != actualGridX ||
             task->centreY != actualGridY;
@@ -1372,6 +1403,7 @@ void Q1900TryPublishCollisionQ19(int32_t actualGridX, int32_t actualGridY) {
             actualGridX, actualGridY, placements)) return;
 
     auto task = std::make_shared<Q1930CollisionSnapshotTaskQ19>();
+    task->publication = gWorldStreaming.publication;
     task->contextSerial = gWorldStreaming.contextSerial;
     task->centreX = actualGridX;
     task->centreY = actualGridY;
@@ -1561,6 +1593,27 @@ const char* Q1900CellStageNameQ19(Q1900CellStageQ19 stage) {
 void Q1900UpdateCellStreamingQ19(
         float gameX, float gameY,
         int32_t actualGridX, int32_t actualGridY) {
+    // Until the live mutation coordinator can prepare the entire replacement,
+    // fail closed. Do not seed the old visible window as a new revision or mix
+    // current-state metadata with old visuals/collision. Existing live resources
+    // stay owned by their published scene; finished stale work is reclaimed.
+    if (!Fo3AcceptsScenePublication(gFo3ScenePublication.Stamp())) {
+        Q1900ConsumeWorkerQ19();
+        for (auto& entry : gWorldStreaming.cells) {
+            auto& state = entry.second;
+            if (state.stage != Q1900CellStageQ19::Uploading) continue;
+            Q2015DiscardCellUploadQ19(state);
+            state.textureCursor = state.gpuCursor = 0u;
+            state.stage = Q1900CellStageQ19::Requested;
+        }
+        if (gWorldStreaming.collisionTask &&
+            gWorldStreaming.collisionTask->ready.load(std::memory_order_acquire)) {
+            DiscardFo3CollisionSnapshotQ1930(gWorldStreaming.collisionTask->snapshotToken);
+            gWorldStreaming.collisionTask.reset();
+        }
+        Q1910DrainDeferredGpuDeletesQ19(false);
+        return;
+    }
     if (Q1900ContextChangedQ19())
         Q1900ResetCellsQ19(actualGridX, actualGridY);
 

@@ -30,6 +30,7 @@
 #include "rendering/water/fo3-water.h"
 #include "world/fo3-worldspace-runtime.h"
 #include "world/fo3-scene-preparation.h"
+#include "world/fo3-scene-publication.h"
 #include "world/fo3-world-streaming.h"
 void SetNextFo3CollisionExteriorModeQ1931(bool exterior);
 #include <array>
@@ -3038,6 +3039,12 @@ Fo3SceneLoadWork gSceneLoad;
 uint64_t gSceneLoadFrame = 0u;
 std::unique_ptr<fo3player::Session> gPlayerSession;
 std::shared_ptr<const fo3world::ReferenceStateSnapshot> gFo3ReferenceState;
+fo3scene::ReferencePublication gFo3ScenePublication;
+bool Fo3AcceptsScenePublication(fo3scene::PublicationStamp stamp) {
+    const uint64_t revision = gPlayerSession
+        ? gPlayerSession->player.Snapshot().referenceStateRevision : 0;
+    return gFo3ScenePublication.Accepts(stamp, revision);
+}
 // Render-thread cache: the bounded XESP projection is built once per committed
 // world-state revision, never scanned for each eye or streaming worker.
 std::shared_ptr<const fo3world::ReferenceStateSnapshot> CaptureFo3ReferenceState() {
@@ -3054,6 +3061,7 @@ struct Q230NpcArrivalBatch {
     std::vector<Q230ActorVisual> actors;
 };
 struct Q230NpcArrivalWork {
+    fo3scene::PublicationStamp publication;
     fo3scene::Preparation<Q230NpcArrivalBatch> preparation;
     std::unordered_set<uint32_t> pending;
     size_t actorIndex=0,partIndex=0;
@@ -3282,6 +3290,13 @@ bool ProcessQ74TransitionRequest() {
         return false;
     }
     Fo3SceneCpuPreparation& prepared = gSceneLoad.preparation.Get();
+    // Recheck every frame, including between GPU slices and the collision swap.
+    // A prepared projection must never publish over a newer committed save state.
+    if (gPlayerSession && (!prepared.referenceState ||
+        prepared.referenceState->revision != gPlayerSession->player.Snapshot().referenceStateRevision)) {
+        AbortFo3SceneLoad("reference-state-changed");
+        return false;
+    }
     const Fo3CellTransitionRequestQ74 request = prepared.request;
     auto& selected = prepared.selected;
     const size_t skipped = prepared.skipped;
@@ -3440,6 +3455,7 @@ bool ProcessQ74TransitionRequest() {
             gPlayerSession->saveBlocked ? 1 : 0);
     }
     gFo3ReferenceState=prepared.referenceState;
+    gFo3ScenePublication.Publish(prepared.referenceState);
     if (gPlayerSession) SetFo3CollectedCollisionRefs(gPlayerSession->player.Snapshot().collected);
     FlushFo3PlayerState();
     Q74DeleteGpuObjects(gObjects);
@@ -11140,6 +11156,18 @@ void Q230PumpNpcArrivals(){
     if(!gSceneReady||gSceneLoad.active||!gPlayerSession||
        gPlayerSession->saveBlocked||IsFo3LoadingVisible())return;
     auto& work=gQ230NpcArrival;
+    if(work.active && !Fo3AcceptsScenePublication(work.publication)) {
+        // Do not stall a render frame joining asset work. Reclaim only once the
+        // worker is ready, before any further part uploads or actor registration.
+        if(!work.preparation.Ready())return;
+        auto pending=std::move(work.pending);
+        for(const auto& actor:work.preparation.Get().actors)
+            pending.insert(actor.source.refFormId);
+        Q230ResetNpcArrivals();
+        work.pending=std::move(pending);
+        return;
+    }
+    if(!Fo3AcceptsScenePublication(gFo3ScenePublication.Stamp()))return;
     const auto& player=gPlayerSession->player;
     const auto& definitions=player.Definitions().pipboy;
     const auto isResident=[&](const fo3player::ActorState& s){
@@ -11239,6 +11267,7 @@ void Q230PumpNpcArrivals(){
         }
         return true;
     })){
+        work.publication=gFo3ScenePublication.Stamp();
         work.active=true;work.cell=cell;work.world=world;
         Q6H_LOGI("NPC LIVE ARRIVAL PREPARE cell=%08X world=%08X requested=%zu",
             cell,world,count);
