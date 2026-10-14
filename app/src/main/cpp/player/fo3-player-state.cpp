@@ -1106,7 +1106,11 @@ bool Player::Save(const std::string &path, std::string &error) const {
     payload.push_back(l.forceFailures);payload.push_back(l.rewarded?1:0);}
   // Optional RFE1 after the v14 lock tail. Empty overlays keep existing v14
   // bytes unchanged; older supported saves do not require this extension.
-  if(true) { // v15 always encodes RFE1 (even empty) before mandatory PST1.
+  const bool hasPlayerAttributeOverrides=state_.special!=catalog_.initial.special ||
+      state_.skills!=catalog_.initial.skills;
+  // An overriding v15 save requires RFE1 (including the empty case) before
+  // PST1. Unmodified characters retain v14, including synthetic test actors.
+  if(hasPlayerAttributeOverrides||!state_.referenceEnabled.empty()) {
     if(state_.referenceEnabled.size()>100000){error="Too many reference overrides";return false;}
     std::vector<uint32_t> ids;
     for(const auto& entry:state_.referenceEnabled){
@@ -1121,14 +1125,16 @@ bool Player::Save(const std::string &path, std::string &error) const {
   }
   // v15: player stats are save-owned overrides. Earlier saves inherit original
   // Fallout3.esm NPC_ 00000007 values. Do not mutate the ESM catalogue.
-  if(std::any_of(state_.special.begin(),state_.special.end(),[](uint8_t v){return v<1||v>10;})||
-     std::any_of(state_.skills.begin(),state_.skills.end(),[](uint8_t v){return v>100;})){
-    error="Invalid player attributes";return false;
+  if(hasPlayerAttributeOverrides){
+    if(std::any_of(state_.special.begin(),state_.special.end(),[](uint8_t v){return v<1||v>10;})||
+       std::any_of(state_.skills.begin(),state_.skills.end(),[](uint8_t v){return v>100;})){
+      error="Invalid player attributes";return false;
+    }
+    Put32(payload,0x31545350); // PST1: 7 SPECIAL bytes, 14 base skill bytes.
+    payload.insert(payload.end(),state_.special.begin(),state_.special.end());
+    payload.insert(payload.end(),state_.skills.begin(),state_.skills.end());
   }
-  Put32(payload,0x31545350); // PST1: 7 SPECIAL bytes, 14 base skill bytes.
-  payload.insert(payload.end(),state_.special.begin(),state_.special.end());
-  payload.insert(payload.end(),state_.skills.begin(),state_.skills.end());
-  Put32(bytes, 15);
+  Put32(bytes, hasPlayerAttributeOverrides ? 15 : 14);
   Put32(bytes, catalog_.fingerprint);
   Put32(bytes, static_cast<uint32_t>(payload.size()));
   Put32(bytes, Crc(payload));

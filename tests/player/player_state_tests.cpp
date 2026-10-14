@@ -426,8 +426,8 @@ void Synthetic(const std::string &root) {
         boostedRestore.Snapshot().special==c.initial.special&&
         boostedRestore.Snapshot().skills==c.initial.skills,
         "v14 saves inherit original stats and remain compatible");
-  Check(p.Save(save,error)&&restored.Restore(save,error),
-        "restore regular v15 save after attribute regression tests");
+  Check(p.Save(save,error)&&restored.Restore(save,error)&&Read(save)[4]==14,
+        "baseline player keeps backward-compatible v14 save format");
   Check(c.references.at(200).count == 3 &&
             c.references.at(200).condition == .5f,
         "placed count and health decode");
@@ -452,7 +452,7 @@ void Synthetic(const std::string &root) {
   const Bytes good = Read(save);
   // The v10 clock extension lacked calendar fields; retain the hour and
   // migrate the starting date from the original GLOB records.
-  Bytes version10=good;version10.resize(version10.size()-65); // v15 RFE1/PST1, v14/v13/v12, v11 calendar
+  Bytes version10=good;version10.resize(version10.size()-32); // remove v12-v14 tail and v11 calendar
   version10[4]=10;
   const auto legacyClockSize=uint32_t(version10.size()-20);
   for(int i=0;i<4;++i)version10[12+i]=uint8_t(legacyClockSize>>(8*i));
