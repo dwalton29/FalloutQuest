@@ -69,7 +69,7 @@ assert 'cache.visualRevision != gFo3VisualPublication.Revision()' in s
 assert 'cachedVisualRevision != 0 && cachedVisualRevision == gFo3VisualPublication.Revision()' in s
 print('Visual ownership epochs precede scene/CELL/retirement teardown and invalidate frame caches')
 
-worker=s[s.index('bool PrepareFo3ResidentCpuResources('):s.index('// Dynamic NPC arrivals')]
+worker=s[s.index('bool PrepareFo3ResidentCpuResources('):s.index('// Render-thread-only private GPU preparation.')]
 for forbidden in ('gPlayerSession','gObjects','ConfigureFo3CollisionPolicyQ710',
                   'ResetFo3CollisionSceneCache','PrimeFo3Collision','UploadCpuObject','glGen'):
     assert forbidden not in worker
@@ -83,3 +83,32 @@ nif=Path('app/src/main/cpp/rendering/mesh/fo3-static-nif.cpp').read_text()
 assert 'requireComplete && (!q970SelectionReady || q970Scene.fallbackAll)' in nif
 assert 'requireComplete && (q1060ShapeObjectFailures || q1060ShapeLoadFailures)' in nif
 print('Resident CPU packet uses value inputs, strict decode/cache admission and no live resource publication')
+
+# Resident texture decode is completed on the worker, before packet publication.
+assert worker.index('PrepareExpandedVertexStreamQ1960(') < worker.index('PrepareResidentTextures(') < worker.index('out=std::move(next)')
+assert 'next.publication=publication; next.visualRevision=visualRevision' in worker
+assert 'publication.references!=published->revision' in worker
+for forbidden in ('gTextureCache','gCubeTextureCacheQ2050','glBind','glTexImage'):
+    assert forbidden not in worker
+for signature,ordinary in [('bool UploadTexture(', 'gTextureCache.find('),
+                           ('bool UploadCubeTextureQ2050(', 'gCubeTextureCacheQ2050.find(')]:
+    upload=s[s.index(signature):]
+    assert upload.index('if(gFo3ResidentTextureUpload)') < upload.index(ordinary)
+private=s[s.index('bool UploadFo3ResidentTexture('):s.index('bool UploadTexture(')]
+assert 'work.decoded->cubes.count(decodedKey)' in private
+assert private.index('work.decoded->images.count(decodedKey)') < private.index('global.find(key)')
+for forbidden in ('LoadFallout','gTextureCache.emplace','gCubeTextureCacheQ2050.emplace','Q1900MarkGpuTextureKnown'):
+    assert forbidden not in private
+assert 'gpu.teleport.valid && !gFo3ResidentTextureUpload' in s
+stamp=s[s.index('bool Fo3ResidentPacketCurrent('):s.index('void DeleteFo3ResidentTexture(')]
+for guard in ('Fo3AcceptsScenePublication(cpu.publication)', 'gFo3VisualPublication.Revision()',
+              'gCurrentCellFormId','gExteriorWorldspaceQ1890','gSceneCenterXQ1730','gSceneCenterYQ1730','gSceneFloorZQ1730'):
+    assert guard in stamp
+advance=s[s.index('fo3scene::GpuStageResult AdvanceFo3ResidentGpuStage('):s.index('// Dynamic NPC arrivals')]
+assert advance.index('!Fo3ResidentPacketCurrent(*work.cpu)') < advance.index('UploadCpuObject(')
+assert advance.index('UploadCpuObject(') < advance.index('PrepareFo3ResidentVisualPlan(')
+assert 'CommitFo3ResidentVisualPlan' not in advance
+for region in (begin,teardown):
+    assert region.index('DiscardFo3ResidentGpuStage()') < region.index('DiscardFo3ResidentVisualPlan()')
+assert 'object.residentTextures.reset();' in s[s.index('void Q1900DeleteGpuShape('):s.index('void Q1900CancelPending(')]
+print('Resident texture isolation, worker stamps, private upload admission and context teardown passed')

@@ -33,6 +33,8 @@
 #include "world/fo3-scene-publication.h"
 #include "world/fo3-visual-exchange.h"
 #include "world/fo3-resident-resources.h"
+#include "world/fo3-resident-texture-upload.h"
+#include "world/fo3-resident-gpu-stage.h"
 #include "world/fo3-world-streaming.h"
 void SetNextFo3CollisionExteriorModeQ1931(bool exterior);
 #include <array>
@@ -377,6 +379,7 @@ struct CpuObject {
 };
 
 struct GpuObject {
+    std::shared_ptr<const fo3scene::ResidentTextureOwnership> residentTextures;
     bool pipboy=false,pipScreen=false,pipEffect=false;
     int pipButton=-1;
     mutable uint64_t interiorLightFrame = UINT64_MAX;
@@ -1647,10 +1650,52 @@ void Q1070ApplyStaticAnisotropy() {
     }
 }
 
+// Render-thread override used only by detached resident uploads. Borrowed
+// real cache handles remain cache-owned; new handles belong to the batch lease.
+struct Fo3ResidentTextureUpload {
+    const fo3scene::ResidentTextures* decoded=nullptr;
+    std::shared_ptr<fo3scene::ResidentTextureOwnership> ownership;
+    std::unordered_map<std::string,CachedGpuTexture> images,cubes;
+};
+Fo3ResidentTextureUpload* gFo3ResidentTextureUpload=nullptr;
+bool UploadFo3ResidentTexture(const std::string& path,const std::vector<uint8_t>& fallback,
+        GLuint& id,bool& real,const char* label,bool cube) {
+    id=0;real=false;
+    auto& work=*gFo3ResidentTextureUpload;
+    if(cube&&path.empty())return true;
+    const auto key=cube?"cube:"+TextureCacheKey(path,label):TextureCacheKey(path,label);
+    auto& cache=cube?work.cubes:work.images;
+    const auto found=cache.find(key);
+    if(found!=cache.end()){id=found->second.id;real=found->second.real;return true;}
+    const auto decodedKey=fo3scene::ResidentTextureKey(path);
+    // Require the validated packet even when borrowing an existing real image.
+    if(!path.empty()&&(cube?work.decoded->cubes.count(decodedKey):
+                               work.decoded->images.count(decodedKey))==0)return false;
+    const auto& global=cube?gCubeTextureCacheQ2050:gTextureCache;
+    const auto borrowed=global.find(key);
+    if(borrowed!=global.end()&&borrowed->second.id&&borrowed->second.real) {
+        id=borrowed->second.id;real=true;
+    } else if(cube) {
+        if(!fo3scene::UploadResidentCube(work.decoded->cubes.at(decodedKey),*work.ownership,id))return false;
+        real=true;
+    } else {
+        Fo3RgbaTexture neutral;
+        const Fo3RgbaTexture* image=nullptr;
+        if(path.empty()){neutral.width=neutral.height=1;neutral.rgba=fallback;image=&neutral;}
+        else image=&work.decoded->images.at(decodedKey);
+        if(!fo3scene::UploadResidentImage(*image,*work.ownership,id,Q1070ApplyStaticAnisotropy))return false;
+        real=!path.empty();
+    }
+    cache.emplace(key,CachedGpuTexture{id,real});
+    return true;
+}
+
 bool UploadTexture(const std::string& path,
                    const std::vector<uint8_t>& fallback,
                    GLuint& textureId, bool& real, const char* label,
                    uint32_t refFormId) {
+    if(gFo3ResidentTextureUpload)
+        return UploadFo3ResidentTexture(path,fallback,textureId,real,label,false);
     const std::string cacheKey = TextureCacheKey(path, label);
     const auto cached = gTextureCache.find(cacheKey);
     if (cached != gTextureCache.end()) {
@@ -1767,6 +1812,8 @@ bool UploadTexture(const std::string& path,
 bool UploadCubeTextureQ2050(const std::string& path,
                             GLuint& textureId, bool& real,
                             const char* label, uint32_t refFormId) {
+    if(gFo3ResidentTextureUpload)
+        return UploadFo3ResidentTexture(path,{},textureId,real,label,true);
     textureId = 0u;
     real = false;
     if (path.empty()) return true;
@@ -2085,6 +2132,7 @@ bool UploadCpuObject(CpuObject& cpu, float centerX, float centerY, float floorZ,
     Vec3 objectMaximum{cpu.q1960MaxX, cpu.q1960MaxY, cpu.q1960MaxZ};
 
     gpu = {};
+    if(gFo3ResidentTextureUpload)gpu.residentTextures=gFo3ResidentTextureUpload->ownership;
     gpu.glossiness = std::max(2.0f, cpu.mesh.glossiness);
     gpu.materialAlpha = std::clamp(cpu.mesh.alpha, 0.0f, 1.0f);
     gpu.alphaThreshold = std::clamp(cpu.mesh.alphaThreshold, 0.0f, 1.0f);
@@ -2250,7 +2298,7 @@ bool UploadCpuObject(CpuObject& cpu, float centerX, float centerY, float floorZ,
         ResolveDoorTeleportCachedQ1698(
             gpu.refFormId, q1920WastelandExterior, gpu.teleport);
         gpu.q2400SwingDoor = !gpu.teleport.valid;
-        if (gpu.teleport.valid) {
+        if (gpu.teleport.valid && !gFo3ResidentTextureUpload) {
             CacheFo3DoorPromptQ1840(gpu.refFormId,
                                     cpu.placement.baseFormId,
                                     gpu.teleport);
@@ -3106,17 +3154,22 @@ struct Fo3ResidentCpuPreparation {
     Fo3WorldspaceSelection exteriorScope;
     std::shared_ptr<const fo3world::ReferenceStateSnapshot> published, candidate;
     fo3scene::ResidentResourceSelection selection;
+    fo3scene::PublicationStamp publication;
+    uint64_t visualRevision=0;
+    fo3scene::ResidentTextures textures;
     std::vector<CpuObject> incoming;
 };
 bool PrepareFo3ResidentCpuResources(const Fo3CellTransitionRequestQ74& request,
         const Fo3WorldspaceSelection& exteriorScope,
+        fo3scene::PublicationStamp publication, uint64_t visualRevision,
         std::shared_ptr<const fo3world::ReferenceStateSnapshot> published,
         std::shared_ptr<const fo3world::ReferenceStateSnapshot> candidate,
         const std::vector<fo3scene::ResidentVisualRecord>& live,
         const std::vector<uint32_t>& affected, Fo3ResidentCpuPreparation& out,
         const std::atomic<bool>& cancelled, std::string& error) {
     error.clear();
-    if (!request.valid || !published || !candidate ||
+    if (!request.valid || !published || !candidate || !publication.scene ||
+        !visualRevision || publication.references!=published->revision ||
         !std::isfinite(request.x) || !std::isfinite(request.y) || !std::isfinite(request.z)) {
         error="invalid resident preparation input"; return false;
     }
@@ -3125,6 +3178,7 @@ bool PrepareFo3ResidentCpuResources(const Fo3CellTransitionRequestQ74& request,
         !std::isfinite(exteriorScope.gameY))) { error="invalid resident exterior scope"; return false; }
     if (cancelled.load(std::memory_order_acquire)) { error="resident preparation cancelled"; return false; }
     Fo3ResidentCpuPreparation next;
+    next.publication=publication; next.visualRevision=visualRevision;
     next.request=request; next.published=std::move(published); next.candidate=std::move(candidate);
     next.exteriorScope=exteriorScope; next.exteriorScope.candidateSelection=true;
     // Streaming selection can move independently of the fixed scene/GPU origin.
@@ -3142,8 +3196,106 @@ bool PrepareFo3ResidentCpuResources(const Fo3CellTransitionRequestQ74& request,
             [](const Fo3WorldPlacement& placement,std::vector<CpuObject>& parts) {
                 return BuildCpuObjects(placement,parts,true);
             }, Q74ShouldSkipPlacement, cancelled,error)) return false;
+    std::vector<fo3scene::ResidentTextureRequest> textures;
+    for(auto& part:next.incoming) {
+        if(cancelled.load(std::memory_order_acquire)) {error="resident preparation cancelled";return false;}
+        if(!PrepareExpandedVertexStreamQ1960(part,request.x,request.y,request.z)) {
+            error="resident vertex expansion failed";return false;
+        }
+        for(const auto* path:{&part.mesh.diffuseTexturePath,&part.mesh.normalTexturePath,
+                &part.mesh.glowTexturePath,&part.mesh.environmentMaskTexturePath})
+            textures.push_back({*path,false});
+        textures.push_back({part.mesh.environmentCubeTexturePath,true});
+    }
+    if(!fo3scene::PrepareResidentTextures(textures,next.textures,
+            [](const std::string& path,Fo3RgbaTexture& image) {
+                std::lock_guard<std::mutex> lock(gQ2012TextureDecodeMutexQ19);
+                return LoadFalloutTextureRgba(path,image);
+            },[](const std::string& path,Fo3RgbaCubeTexture& cube) {
+                std::lock_guard<std::mutex> lock(gQ2012TextureDecodeMutexQ19);
+                return LoadFalloutCubeTextureRgba(path,cube);
+            },cancelled,64u*1024u*1024u,error))return false;
     out=std::move(next);
     return true;
+}
+
+// Render-thread-only private GPU preparation. The outer coordinator supplies
+// stamps captured with the input visual inventory, before worker preparation.
+struct Fo3ResidentGpuWork {
+    std::unique_ptr<Fo3ResidentCpuPreparation> cpu;
+    fo3scene::ResidentGpuStage<GpuObject> stage;
+    Fo3ResidentTextureUpload textures;
+    explicit Fo3ResidentGpuWork(size_t count):stage(count,DisposeFo3ResidentVisuals){}
+};
+std::unique_ptr<Fo3ResidentGpuWork> gFo3ResidentGpuWork;
+void DiscardFo3ResidentGpuStage() noexcept {gFo3ResidentGpuWork.reset();}
+bool Fo3ResidentPacketCurrent(const Fo3ResidentCpuPreparation& cpu) {
+    return gSceneReady&&!gSceneLoad.active&&!gFo3ResidentVisualPlan&&
+        Fo3AcceptsScenePublication(cpu.publication)&&cpu.visualRevision!=0&&
+        cpu.visualRevision==gFo3VisualPublication.Revision()&&
+        cpu.request.cellFormId==gCurrentCellFormId&&
+        cpu.request.worldspaceFormId==gExteriorWorldspaceQ1890&&
+        cpu.request.x==gSceneCenterXQ1730&&cpu.request.y==gSceneCenterYQ1730&&
+        cpu.request.z==gSceneFloorZQ1730;
+}
+void DeleteFo3ResidentTexture(uint32_t id) noexcept {glDeleteTextures(1,&id);}
+bool BeginFo3ResidentGpuStage(std::unique_ptr<Fo3ResidentCpuPreparation>& packet) {
+    if(!packet||gFo3ResidentGpuWork||gFo3ResidentTextureUpload||gQ1960CaptureVboQ19||
+        gQ1960CapturedVboVerticesQ19||!Fo3ResidentPacketCurrent(*packet))return false;
+    try {
+        auto work=std::make_unique<Fo3ResidentGpuWork>(packet->incoming.size());
+        work->textures.ownership=std::make_shared<fo3scene::ResidentTextureOwnership>(DeleteFo3ResidentTexture);
+        work->textures.ownership->Reserve(packet->textures.images.size()+packet->textures.cubes.size()+5);
+        work->cpu=std::move(packet);
+        work->textures.decoded=&work->cpu->textures;
+        gFo3ResidentGpuWork=std::move(work);
+        return true;
+    }catch(...){return false;}
+}
+struct Fo3ResidentUploadScope {
+    GLint active=0,image=0,cube=0,vao=0,buffer=0,unpack=0;
+    Fo3ResidentTextureUpload* previous;
+    explicit Fo3ResidentUploadScope(Fo3ResidentTextureUpload& textures):previous(gFo3ResidentTextureUpload) {
+        glGetIntegerv(GL_ACTIVE_TEXTURE,&active);
+        glGetIntegerv(GL_TEXTURE_BINDING_2D,&image);
+        glGetIntegerv(GL_TEXTURE_BINDING_CUBE_MAP,&cube);
+        glGetIntegerv(GL_VERTEX_ARRAY_BINDING,&vao);
+        glGetIntegerv(GL_ARRAY_BUFFER_BINDING,&buffer);
+        glGetIntegerv(GL_UNPACK_ALIGNMENT,&unpack);
+        gFo3ResidentTextureUpload=&textures;
+    }
+    ~Fo3ResidentUploadScope() {
+        gFo3ResidentTextureUpload=previous;
+        glActiveTexture(active);
+        glBindTexture(GL_TEXTURE_2D,image);glBindTexture(GL_TEXTURE_CUBE_MAP,cube);
+        glBindVertexArray(vao);glBindBuffer(GL_ARRAY_BUFFER,buffer);
+        glPixelStorei(GL_UNPACK_ALIGNMENT,unpack);
+    }
+};
+fo3scene::GpuStageResult AdvanceFo3ResidentGpuStage(
+        std::unique_ptr<Fo3ResidentCpuPreparation>& completed) {
+    using Result=fo3scene::GpuStageResult;
+    if(!gFo3ResidentGpuWork)return Result::Failed;
+    auto& work=*gFo3ResidentGpuWork;
+    if(gFo3ResidentTextureUpload||gQ1960CaptureVboQ19||gQ1960CapturedVboVerticesQ19||
+        !Fo3ResidentPacketCurrent(*work.cpu)) {
+        DiscardFo3ResidentGpuStage();return Result::Failed;
+    }
+    // One complete part per call. No maximum frame-time guarantee is claimed.
+    const auto result=work.stage.Advance([&](size_t i,GpuObject& gpu) {
+        Fo3ResidentUploadScope scope(work.textures);
+        return UploadCpuObject(work.cpu->incoming[i],work.cpu->request.x,
+            work.cpu->request.y,work.cpu->request.z,gpu)&&gpu.vao&&gpu.vbo&&gpu.vertexCount>0;
+    });
+    if(result==Result::Pending)return result;
+    if(result==Result::Failed){DiscardFo3ResidentGpuStage();return result;}
+    bool prepared=false;
+    try {
+        prepared=PrepareFo3ResidentVisualPlan(work.cpu->selection.retainedSlots,*work.stage.ReadyObjects());
+    }catch(...){prepared=false;}
+    if(prepared)completed=std::move(work.cpu);
+    DiscardFo3ResidentGpuStage();
+    return prepared?Result::Ready:Result::Failed;
 }
 
 // Dynamic NPC arrivals use the same original ESM/NIF/KF scene-worker pipeline
@@ -3220,6 +3372,7 @@ void AbortFo3SceneLoad(const char* reason) {
 
 bool BeginFo3SceneLoad(const Fo3CellTransitionRequestQ74& request, bool boot) {
     if (gSceneLoad.active) return false;
+    DiscardFo3ResidentGpuStage();
     DiscardFo3ResidentVisualPlan();
     Q230ResetNpcArrivals();
     gSceneLoad.active = true;
@@ -4641,6 +4794,7 @@ constexpr size_t Q1900_GPU_SHAPES_PER_FRAME = 1u; // Q18.3 one geometry/texture 
 constexpr uint64_t Q1820_COLLISION_PRIME_BUDGET_US = 2500u;
 
 void Q1900DeleteGpuShape(GpuObject& object) {
+    object.residentTextures.reset();
     // Q20.17 shared STAT/SCOL/TREE VBOs live until their final REFR leaves.
     if (Q2017ReleaseSharedGeometry(object)) return;
     // diffuse/normal are shared texture-cache handles and must survive a REFR
@@ -13200,6 +13354,7 @@ void Q1280ShutdownPostQ1280() {
 void Q6HDeleteFramebuffers(GLsizei n, const GLuint* framebuffers) {
     // Release staged/displaced ownership while this GL context and its shared
     // geometry/texture caches are still alive.
+    DiscardFo3ResidentGpuStage();
     DiscardFo3ResidentVisualPlan();
     FlushFo3PlayerState();
     gSceneLoad.collisionPreparation.Reset();

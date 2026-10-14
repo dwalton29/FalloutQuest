@@ -1,3 +1,9 @@
+// Match renderer order: value-only resident resources must not import the
+// transition collision-policy macro before the original parser definition.
+#include "world/fo3-resident-resources.h"
+#ifdef LoadFo3NifCollisionShapesQ6F
+#error Resident resource DTOs must not define collision policy macros
+#endif
 #include <chrono>
 #include <cassert>
 #include <fstream>

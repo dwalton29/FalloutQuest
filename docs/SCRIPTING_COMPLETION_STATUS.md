@@ -4,10 +4,12 @@
 
 - Starting canonical main: `2987d911f318b92d1041257868067851a09d16f0` (v208).
 - Resumed from published `6469dbb872889a79a0682501b75f6ac6577ab547`.
-- Current implementation checkpoint: M1B3g candidate placement/CPU resources.
+- Current implementation checkpoint: M1B3h private texture/GPU preparation.
   Use canonical main history for the publication SHA; the previous published
-  implementation is M1B3f `5fe5c76d72eb09869df8f479df6781a4f6bd83ba`.
-- Previous M1B3f Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38623116736.
+  implementation is M1B3g `ecbd98b85fd3c8979022c2b563f8aa3b6663de5a`.
+- Previous M1B3g Android CI failed on collision-policy macro include order;
+  M1B3h removes that dependency and adds a real collision-TU regression.
+  Last earlier successful Android CI (M1B3f): https://github.com/dwalton29/FalloutQuest/actions/runs/38623116736.
 - M1B2 scene-load/stream-in integration is host-validated and pushed; the remote
   tree matches the tested tree `20c0e9cd4d5206190925d30a68408400c6fb1923`. Newer v209 is preserved: 209 / 0.72.0-persistent-player-stats.
 
@@ -26,6 +28,7 @@
 | M1B3d whole-script candidates | `bff707b126122bb9853f855fc7ba72e65f82722f` | Confirmed |
 | M1B3e empty collision worlds | `fb8e4024a53cc3d265bed752929d9c9f22dbab62` | Confirmed |
 | M1B3f visual ownership exchange | `5fe5c76d72eb09869df8f479df6781a4f6bd83ba` | Confirmed |
+| M1B3g candidate CPU resources | `ecbd98b85fd3c8979022c2b563f8aa3b6663de5a` | Confirmed; Android include fix in h |
 
 The user directly confirmed permission to push to main on 2026-10-14. The old
 approval blocker is resolved. Command-line Git cannot authenticate for writes;
@@ -151,8 +154,9 @@ flowchart TD
    collision mutations and queries (see `world-reference-m1b3e.md`); M1B3f adds
    reversible visual ownership and cache/lifetime guards (see `world-reference-m1b3f.md`).
    M1B3g adds immutable placement deltas and strict incoming CPU resource packets
-   (see `world-reference-m1b3g.md`). Texture/GPU staging, scheduler isolation and
-   the outer runtime/resource/actor coordinator remain unfinished. Only then admit source
+   (see `world-reference-m1b3g.md`). M1B3h adds strict named-texture decode, private
+   GPU staging and transfer to a reversible visual plan (see `world-reference-m1b3h.md`).
+   Scheduler isolation and the outer runtime/resource/actor coordinator remain unfinished. Only then admit source
    Enable/Disable; no success-only handlers are allowed.
 4. M1C+: cross-cell MoveTo/MoveToMarker with original placements/actor handoff,
    spawn identity/lifecycle and Delete; transaction/persistence tests.
@@ -376,3 +380,18 @@ with LeakSanitizer disabled. Relevant scene/CPU/opaque/dispatch source checks pa
 See `world-reference-m1b3g.md`; no candidate GPU publication or world-command
 admission is claimed. Continue with texture/GPU staging and the scheduler/outer
 coordinator, preserving the fixed scene origin and explicit current residency scope.
+
+
+## M1B3h validation
+
+Private texture/GPU preparation passes nine world, 29 player and one physics
+case (39 core host cases), including the previous Android include-order failure
+as a real collision-TU regression. Production image/cube upload helpers pass
+recorded GL failure injection and lease/partial-upload/exchange lifetime tests.
+The new case passes ASan/UBSan with LeakSanitizer disabled. Source guards verify
+worker-only decode, captured publication/visual stamps, isolated texture uploads,
+door-prompt suppression and disposal before context caches. Relevant existing
+body/Pip-Boy/inventory/skin/opaque/dispatch checks pass. No physical Quest or
+performance claim is made. See `world-reference-m1b3h.md`; scheduling and the
+outer collision/light/interaction/actor/held-object/navigation/LOD coordinator
+remain unfinished, and source world mutation commands remain blocked.
