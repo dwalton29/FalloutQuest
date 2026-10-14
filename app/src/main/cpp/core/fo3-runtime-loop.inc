@@ -1295,8 +1295,8 @@ private:
         }
 
         const float headYaw = YawFromQuaternion(headView.pose.orientation) + playerYaw_;
-        const float forward = (Fo3ScriptMessageFocus()||Fo3LockpickFocus())?0.f:moveY_;
-        const float strafe = (Fo3ScriptMessageFocus()||Fo3LockpickFocus())?0.f:moveX_;
+        const float forward = (Fo3BarterFocus()||Fo3ScriptMessageFocus()||Fo3LockpickFocus())?0.f:moveY_;
+        const float strafe = (Fo3BarterFocus()||Fo3ScriptMessageFocus()||Fo3LockpickFocus())?0.f:moveX_;
         const float c = std::cos(headYaw);
         const float s = std::sin(headYaw);
         const float velocity = MOVE_SPEED_METRES_PER_SECOND * static_cast<float>(dt);
