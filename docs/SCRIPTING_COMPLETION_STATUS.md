@@ -3,23 +3,26 @@
 ## Recovery point
 
 - Starting canonical main: `2987d911f318b92d1041257868067851a09d16f0` (v208).
-- M0 committed locally: `2310bbe9028c583053d846bf762039a8ce1d1a1a` (version remains v208).
-- Latest completed implementation: **M1A** `4670209591a3a36b2c2c2caf0847521982988049`.
-- Version remains v208; no APK/version bump or full M1 completion is claimed.
+- Resumed from published `6469dbb872889a79a0682501b75f6ac6577ab547`.
+- Latest implemented checkpoint: M1B1 persistent enable overlays/snapshots,
+  validated locally; publication follows this commit. Version remains v208.
 
-| Checkpoint | Local main commit | Push |
+| Checkpoint | Canonical published main commit | Publication |
 | --- | --- | --- |
-| M0 audit | `2310bbe9028c583053d846bf762039a8ce1d1a1a` | Rejected by automatic approval review |
-| M1A queries | `4670209591a3a36b2c2c2caf0847521982988049` | Not attempted after rejection; waiting for direct user confirmation |
+| M0 audit | `a3324a2a104babdf057258e24b41977d88292e3b` | Confirmed |
+| M1A queries | `1246a9a23c092e53fb29ee91059ebd826de62745` | Confirmed |
+| Previous recovery report | `6469dbb872889a79a0682501b75f6ac6577ab547` | Confirmed |
 
+The user directly confirmed permission to push to main on 2026-10-14. The old
+approval blocker is resolved. Command-line Git cannot authenticate for writes;
+publication uses the connected GitHub Git-data API. Every published tree was
+checked byte-for-byte by Git tree SHA against its tested local checkpoint.
+GitHub generates new commit identities; prior local M0/M1A/report SHAs were
+2310bbe9028c583053d846bf762039a8ce1d1a1a,
+4670209591a3a36b2c2c2caf0847521982988049 and
+a8a6a19f7b8a92c67e66c6d1a0a41a030777f6f0 respectively. These are provenance,
+not current recovery commits. Fetch and use canonical published main.
 
-- Remote recovery point is still v208 `2987d911f318b92d1041257868067851a09d16f0`.
-- **Push blocked:** automatic approval review rejected both attempts, including
-  after the GitHub connector confirmed owner `dwalton29`, admin/push permission,
-  matching clone URL and main. It requires direct user confirmation to publish
-  the code and game-derived metadata reports to this public repository. Do not
-  bypass this through another API or transport. No push or new Android CI run is
-  claimed. Complete local tests and obtain that confirmation before retrying.
 - No engine completion claimed.
 - This document and `SCRIPTING_ORIGINAL_INVENTORY.json` describe actual support,
   not a promise that all listed functions execute.
@@ -77,10 +80,10 @@ OnPackageEnd and OnPackageDone both occur (20 each); do not conflate them.
 | Events | Reference OnActivate, weapon OnHit/OnDeath, quest/resident ACTI GameMode | NPC activation uses separate narrow dialogue bridge; most events indexed but undelivered |
 | Scheduling | 4 Hz bounded quest/ACTI dispatch on simulation thread | No resident NPC GameMode, trigger/package/effect lifecycle; no PC timing parity claim |
 | Actor control | EVP increments package revision; physical damage/death exist | Kill/resurrect/combat/faction/AV/equipment commands mostly missing |
-| World control | Lock/unlock through canonical persistent APIs; M1A GetDisabled follows complete original enable-parent chains | Enable/disable/move/spawn/delete absent; no mutable reference overlay |
+| World control | Lock/unlock through canonical persistent APIs; M1A GetDisabled follows complete original enable-parent chains | M1B1 persists staged enable overlays; script Enable/Disable, move/spawn/delete remain unavailable |
 | Scene / streaming | Async geometry/texture/collision preparation, atomic publication, NPC cell handoff | Disabled placements discarded before loading; no script mutation publication or cross-cell reference relocation |
 | Audio / UI | Transactional MESG, sounds, Karma and quest notices | Narrow formatting; no Say/SayTo or PlayGroup/IsAnimPlaying scripting interface |
-| Persistence | FQPS v14; QST1 globals/running/journal; QNF1 reveal history; locks, XP, actors, inventory, ownership | No reference mutation overlay; level allocation absent |
+| Persistence | FQPS v14; QST1 globals/running/journal; QNF1 reveal history; locks, XP, actors, inventory, ownership | M1B1 RFE1 root-enable overlay; level allocation absent |
 | Transactions | State/revision and pending queues restored on result/stage/event failure and previews | External scene/physics/audio effects must publish only after transaction success |
 
 Read `quest-scripting-checkpoint-{1,2,3}.md` and `bomb-quest-hud-v208.md`
@@ -120,18 +123,14 @@ flowchart TD
 
 ## Next checkpoints
 
-1. Publishing is blocked. Obtain direct user confirmation for these code and
-   extracted-metadata commits to public `dwalton29/FalloutQuest/main`; then push,
-   verify remote SHAs, and inspect the Android CI build. Do not claim completion
-   of the requested pushed-recovery checkpoints until that succeeds.
-   M0 deeper bytecode operands/control flow remain M5 work, not a completed VM.
-2. M1A implemented: sparse XESP catalogue and bounded fail-closed GetDisabled
-   shared by CTDA/source, independent of residency/target pruning. All 5,502
-   original children resolve. No mutable state, save version or fingerprint
-   changes. See `world-reference-m1a.md`. This is **not** Enable/Disable support.
-3. M1B: saved enable overlays, immutable scene-worker snapshots, retain disabled
-   placements for materialization, atomic render/collision/interaction/physics/AI
-   publication. No commands until loaded/unloaded/restart and rollback tests pass.
+1. M0/M1A/recovery report are published; verify Android CI for canonical main.
+2. M1B1 backend implemented: canonical saved root-enable overrides, graph queries,
+   bounded RFE1 validation, owned immutable projections, and regression tests.
+   See `world-reference-m1b1.md`. No source Enable/Disable handler exists.
+3. M1B2: thread snapshots into scene and streaming workers, interior/exterior
+   placements and lights before model/collision preparation. Then M1B3 must
+   handle live publication, stale worker/cache invalidation, interaction/physics/
+   navigation and actor coordination. Only then admit script mutation commands.
 4. M1C+: cross-cell MoveTo/MoveToMarker with original placements/actor handoff,
    spawn identity/lifecycle and Delete; transaction/persistence tests.
 5. M2–M11 in task order, subdividing independently testable checkpoints.
@@ -152,7 +151,7 @@ flowchart TD
 - M1A original bomb, 5,502 enable-parent queries and Lucas dialogue acceptance/
   stage/save-reload pass; all 27 updated player CTest cases pass.
 - Shader compile/link tests not run: glslangValidator absent. Renderer unchanged.
-- Android CI cannot start while the push is blocked; no Android build is claimed.
+- Android CI is running on published 6469dbb; no final APK result claimed yet.
 - Android toolchain absent locally. Existing push workflow provisions Java 17,
   Gradle 8.9, SDK 35, NDK 27, CMake 3.22.1. No Gradle wrapper exists.
 - Original master player catalogue/ACHR census/inventory/save-reload regression also passes.
@@ -179,3 +178,9 @@ Additional host suites use the same configure/build/ctest pattern for world,
 physics, assets, nif and audio. Original XTEL validation takes the master path
 as the first argument to `xtel_index_tests`. No original game assets are stored
 in the repository or reports. All reports contain metadata, never binary code.
+
+## M1B1 validation
+
+All 27 player host cases pass. Original ESM root/inverted-child changes and
+save/reload pass. RFE1 malformed-state tests retain live state/revisions; legacy
+save fixtures remain unchanged. No script mutations or headset validation yet.

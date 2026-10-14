@@ -4,6 +4,9 @@
 #include <iostream>
 #include <fstream>
 #include <map>
+#include <iterator>
+#include <unistd.h>
+#include <zlib.h>
 #include "dialogue/fo3-dialogue-results.h"
 
 static void Parsing() {
@@ -243,6 +246,55 @@ static void EnableParentQueries() {
   assert(bad.DispatchReferenceEvent(100,"OnActivate",0x14,error)==fo3player::ScriptEventResult::Unsupported);
   assert(bad.Revision()==before&&bad.Snapshot().pipboy.quests.empty());
 }
+static void PersistentReferenceState() {
+  auto c=Catalog();c.references[200].flags=0x800;c.references[300].flags=0;
+  c.enableParents[100]={200,1,true};c.references[201].flags=0;
+  c.enableParents[201]={999,0,true};c.items[400].formId=400;
+  c.pipboy.formNames["missingitem"]=400;
+  fo3player::Player p(c);std::string error;bool disabled=false;
+  const auto path="/tmp/fq-reference-state-"+std::to_string(getpid())+".fqps";
+  auto read=[&](){std::ifstream in(path,std::ios::binary);return std::vector<uint8_t>(std::istreambuf_iterator<char>(in),{});};
+  auto u32=[](const std::vector<uint8_t>& b,size_t at){uint32_t n=0;for(unsigned i=0;i<4;++i)n|=uint32_t(b[at+i])<<(i*8);return n;};
+  auto put=[](std::vector<uint8_t>& b,size_t at,uint32_t n){for(unsigned i=0;i<4;++i)b[at+i]=uint8_t(n>>(i*8));};
+  auto write=[&](std::vector<uint8_t> b){put(b,12,uint32_t(b.size()-20));put(b,16,uint32_t(crc32(0,b.data()+20,b.size()-20)));
+    std::ofstream out(path,std::ios::binary);out.write(reinterpret_cast<const char*>(b.data()),b.size());assert(out);};
+  assert(p.Save(path,error));const auto legacy=read();assert(u32(legacy,4)==14);
+  const auto revision=p.Revision();
+  assert(p.StageReferenceEnable(200,false,error)&&p.Revision()==revision);
+  assert(!p.StageReferenceEnable(999,true,error)&&p.Revision()==revision);
+  assert(!p.StageReferenceEnable(201,true,error)&&p.Revision()==revision);
+  assert(p.StageReferenceEnable(100,false,error)&&p.Revision()==revision); // Parent-controlled no-op.
+  assert(p.StageReferenceEnable(200,true,error)&&p.StageReferenceEnable(300,false,error));
+  auto immutable=p.CaptureReferenceState();
+  assert(immutable.Enabled(200,false)&&!immutable.Enabled(300,true)&&!immutable.Enabled(100,true));
+  assert(!immutable.Enabled(201,true)); // Invalid graph fails closed.
+  assert(immutable.Enabled(987,true)&&!immutable.Enabled(987,false)); // Authored fallback.
+  const auto worldRevision=p.Snapshot().referenceStateRevision;
+  assert(!p.ExecuteDialogueResult({"StartQuest ExampleQuest\nplayer.removeitem missingitem 1",{},{},{},{}},error));
+  assert(p.Snapshot().referenceEnabled.size()==2&&p.Snapshot().referenceStateRevision==worldRevision&&p.Snapshot().pipboy.quests.empty());
+  assert(p.PreviewDialogueResult({"StartQuest ExampleQuest",{},{},{},{}},error));
+  assert(p.Snapshot().referenceEnabled.size()==2&&p.Snapshot().pipboy.quests.empty());
+  assert(p.Save(path,error));const auto good=read();
+  assert(good.size()==legacy.size()+18&&u32(good,legacy.size())==0x31454652&&u32(good,legacy.size()+4)==2);
+  assert(p.StageReferenceEnable(200,false,error)&&p.StageReferenceEnable(300,true,error));
+  assert(p.Snapshot().referenceEnabled.empty()&&immutable.Enabled(200,false));
+  assert(p.Restore(path,error)&&p.Snapshot().referenceEnabled.size()==2);
+  assert(p.ReferenceDisabled(200,disabled,error)&&!disabled);
+  assert(p.ReferenceDisabled(100,disabled,error)&&disabled);
+  const auto before=p.Revision();const auto beforeState=p.Snapshot().referenceEnabled;
+  const size_t ext=legacy.size();
+  auto bad=good;bad[ext+12]=2;write(bad);assert(!p.Restore(path,error)); // Invalid bool.
+  bad=good;put(bad,ext+13,u32(good,ext+8));write(bad);assert(!p.Restore(path,error)); // Duplicate ID.
+  bad=good;put(bad,ext+8,999);write(bad);assert(!p.Restore(path,error)); // Unknown reference.
+  bad=good;put(bad,ext+8,100);write(bad);assert(!p.Restore(path,error)); // Child override.
+  bad=good;put(bad,ext+4,100001);write(bad);assert(!p.Restore(path,error)); // Oversized count.
+  bad=good;bad.pop_back();write(bad);assert(!p.Restore(path,error)); // Truncation.
+  bad=good;put(bad,ext,0);write(bad);assert(!p.Restore(path,error)); // Unknown extension.
+  assert(p.Revision()==before&&p.Snapshot().referenceEnabled==beforeState);
+  write(legacy);assert(p.Restore(path,error)&&p.Snapshot().referenceEnabled.empty());
+  assert(p.ReferenceDisabled(200,disabled,error)&&disabled);
+  std::remove(path.c_str());
+}
 static void OriginalBomb(const char* path) {
   fo3player::Catalog c;std::string error;assert(fo3player::LoadCatalog(path,c,error));
   assert(c.eventBaseScripts.at(0x3bc8)==0x78cb3);
@@ -258,6 +310,15 @@ static void OriginalBomb(const char* path) {
     ++checked;
   }
   assert(checked==5502);
+  assert(graph.StageReferenceEnable(0x1e99f,true,error));
+  assert(graph.StageReferenceEnable(0x4e325,true,error));
+  const auto snapshot=graph.CaptureReferenceState();
+  assert(snapshot.Enabled(0x1e99f,false)&&!snapshot.Enabled(0x37ef7,true));
+  const char* referenceSave="/tmp/fq-original-reference-enable.fqps";
+  assert(graph.Save(referenceSave,error));
+  assert(graph.StageReferenceEnable(0x1e99f,false,error));
+  assert(graph.Restore(referenceSave,error)&&graph.ReferenceDisabled(0x1e99f,disabled,error)&&!disabled);
+  assert(c.references.at(0x1e99f).flags&0x800);std::remove(referenceSave);
   std::cout<<"Original master enable graph: "<<checked<<" children resolved independently of residency\n";
   // Preserve the actual ESM source (including CRLF), message text, and scripts.
   assert(c.pipboy.scripts.at(0x78cb3).source.find("\r\n")!=std::string::npos);
@@ -348,7 +409,7 @@ static void OriginalCompileInventory(const char* path,const char* report) {
            <<" command-compiled blocks; this is not execution coverage\n";
 }
 int main(int argc,char** argv){
-  Parsing();EnableParentQueries();Dispatch();UnsupportedIsAtomic();Filter();NumericLocalsAndRefSafety();BombMenuAndInventory();DisarmStagePersistence();NoticeTransactions();
+  Parsing();EnableParentQueries();PersistentReferenceState();Dispatch();UnsupportedIsAtomic();Filter();NumericLocalsAndRefSafety();BombMenuAndInventory();DisarmStagePersistence();NoticeTransactions();
   if(argc>1)OriginalBomb(argv[1]);
   if(argc>2)OriginalCompileInventory(argv[1],argv[2]);
   std::cout<<"Original event source indexing, dispatch, scheduler and rollback passed\n";

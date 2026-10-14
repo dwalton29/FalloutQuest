@@ -2,6 +2,7 @@
 
 #include "pipboy/fo3-pipboy-session.h"
 #include "scripting/fo3-event-scripts.h"
+#include "world/fo3-reference-state.h"
 #include "weapons/fo3-weapon-data.h"
 #include <array>
 #include <cstdint>
@@ -172,6 +173,10 @@ struct State {
   uint32_t gameYear=2277,gameMonth=7,gameDay=17; // Original GLOB default: 17 August 2277 (GameMonth 0-based).
   uint32_t experience=0; // Canonical earned XP; level-up allocation remains a separate subsystem.
   std::unordered_map<uint32_t,LockOverride> locks;
+  // Staged world state. Script Enable/Disable stays unavailable until scene
+  // publication is integrated; this overlay is never a success-only command.
+  std::unordered_map<uint32_t,bool> referenceEnabled;
+  uint64_t referenceStateRevision=0;
   uint64_t nextStackId = 1;
   std::vector<Stack> inventory;
   std::unordered_set<uint32_t> collected;
@@ -285,6 +290,8 @@ public:
   bool ReevaluatePackage(uint32_t reference);
   // Returns false for an unknown/deleted reference or malformed/cyclic graph.
   bool ReferenceDisabled(uint32_t reference,bool& disabled,std::string& error) const;
+  bool StageReferenceEnable(uint32_t reference,bool enabled,std::string& error);
+  fo3world::ReferenceStateSnapshot CaptureReferenceState() const;
   bool QueueScriptMessage(uint32_t form,float argument,bool hasArgument,uint32_t owner);
   bool QueueScriptSound(uint32_t form);
   bool PollScriptMessage(ScriptMessage& out);

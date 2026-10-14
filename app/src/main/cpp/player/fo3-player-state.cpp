@@ -853,7 +853,9 @@ bool Player::ReferenceDisabled(uint32_t reference,bool& disabled,std::string& er
     visited[count++]=reference;
     const auto parent=catalog_.enableParents.find(reference);
     if(parent==catalog_.enableParents.end()){
-      disabled=bool(ref->second.flags&0x800)^opposite;return true;
+      const auto changed=state_.referenceEnabled.find(reference);
+      const bool enabled=changed==state_.referenceEnabled.end()?!(ref->second.flags&0x800):changed->second;
+      disabled=(!enabled)^opposite;return true;
     }
     const auto& link=parent->second;
     if(!link.valid||!link.reference||(link.flags&~3u))return fail("malformed enable parent");
@@ -861,6 +863,34 @@ bool Player::ReferenceDisabled(uint32_t reference,bool& disabled,std::string& er
     opposite^=bool(link.flags&1);reference=link.reference;
   }
   return fail("null reference");
+}
+bool Player::StageReferenceEnable(uint32_t reference,bool enabled,std::string& error) {
+  bool disabled=false;
+  if(!ReferenceDisabled(reference,disabled,error))return false;
+  // Original enable-parent children cannot be independently toggled. A valid
+  // parent-controlled request is a documented no-op, not a separate shadow flag.
+  if(catalog_.enableParents.count(reference)||enabled==!disabled)return true;
+  const bool initial=!(catalog_.references.at(reference).flags&0x800);
+  if(enabled==initial)state_.referenceEnabled.erase(reference);
+  else {
+    if(state_.referenceEnabled.size()>=100000&&!state_.referenceEnabled.count(reference)){
+      error="reference override limit exceeded";return false;
+    }
+    state_.referenceEnabled[reference]=enabled;
+  }
+  ++state_.referenceStateRevision;++revision_;return true;
+}
+fo3world::ReferenceStateSnapshot Player::CaptureReferenceState() const {
+  fo3world::ReferenceStateSnapshot out;out.revision=state_.referenceStateRevision;
+  out.states.reserve(catalog_.enableParents.size()+state_.referenceEnabled.size());
+  auto capture=[&](uint32_t id){bool disabled=false;std::string error;
+    const bool valid=ReferenceDisabled(id,disabled,error);
+    out.states[id]=!valid?fo3world::ReferenceEnableState::Unavailable:
+      disabled?fo3world::ReferenceEnableState::Disabled:fo3world::ReferenceEnableState::Enabled;
+  };
+  for(const auto& child:catalog_.enableParents)capture(child.first);
+  for(const auto& changed:state_.referenceEnabled)capture(changed.first);
+  return out;
 }
 bool Player::CanPickup(uint32_t id) const {
   const auto r = catalog_.references.find(id);
@@ -1059,6 +1089,21 @@ bool Player::Save(const std::string &path, std::string &error) const {
   for(auto id:lockIds){const auto& l=state_.locks.at(id);Put32(payload,id);
     payload.push_back(uint8_t(l.change));payload.push_back(l.level);
     payload.push_back(l.forceFailures);payload.push_back(l.rewarded?1:0);}
+  // Optional RFE1 after the v14 lock tail. Empty overlays keep existing v14
+  // bytes unchanged; older supported saves do not require this extension.
+  if(!state_.referenceEnabled.empty()) {
+    if(state_.referenceEnabled.size()>100000){error="Too many reference overrides";return false;}
+    std::vector<uint32_t> ids;
+    for(const auto& entry:state_.referenceEnabled){
+      const auto ref=catalog_.references.find(entry.first);
+      if(ref==catalog_.references.end()||(ref->second.flags&0x20)||catalog_.enableParents.count(entry.first)){
+        error="Invalid reference override";return false;
+      }
+      ids.push_back(entry.first);
+    }
+    std::sort(ids.begin(),ids.end());Put32(payload,0x31454652);Put32(payload,uint32_t(ids.size()));
+    for(auto id:ids){Put32(payload,id);payload.push_back(state_.referenceEnabled.at(id)?1:0);}
+  }
   Put32(bytes, 14);
   Put32(bytes, catalog_.fingerprint);
   Put32(bytes, static_cast<uint32_t>(payload.size()));
@@ -1129,6 +1174,8 @@ bool Player::Restore(const std::string &path, std::string &error) {
     return fail("Player save checksum failed");
   const auto *p = payload.data();
   State next = catalog_.initial;
+  next.referenceEnabled.clear();
+  next.referenceStateRevision=state_.referenceStateRevision+1;
   next.worldWeapons.clear();
   next.actorDamage.clear();
   next.actors.clear();
@@ -1389,7 +1436,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
       if(version>=14){
         if(payload.size()-at<8)return fail("Missing lock extension");
         next.experience=fo3esm::ReadU32(p+at);const auto n=fo3esm::ReadU32(p+at+4);at+=8;
-        if(n>100000||payload.size()-at!=8ull*n)return fail("Invalid lock extension");
+        if(n>100000||payload.size()-at<8ull*n)return fail("Invalid lock extension");
         next.locks.clear();
         for(uint32_t i=0;i<n;++i,at+=8){const auto id=fo3esm::ReadU32(p+at);
           LockOverride l;l.change=LockChange(p[at+4]);l.level=p[at+5];l.forceFailures=p[at+6];l.rewarded=p[at+7]!=0;
@@ -1397,6 +1444,16 @@ bool Player::Restore(const std::string &path, std::string &error) {
           if(ref==catalog_.references.end()||!ref->second.valid||p[at+4]>uint8_t(LockChange::ScriptUnlocked)||l.forceFailures>2||p[at+7]>1||
              (l.change==LockChange::Broken&&!l.forceFailures)||(l.change==LockChange::Key&&!ref->second.key)||
              ((l.change==LockChange::Picked||l.change==LockChange::Forced)&&l.level>100)||!next.locks.emplace(id,l).second)return fail("Invalid saved lock");
+        }
+      }
+      if(version>=14&&at<payload.size()){
+        if(payload.size()-at<8||fo3esm::ReadU32(p+at)!=0x31454652)return fail("Invalid reference-state extension");
+        const auto n=fo3esm::ReadU32(p+at+4);at+=8;
+        if(n>100000||payload.size()-at!=5ull*n)return fail("Invalid reference-state extension size");
+        for(uint32_t i=0;i<n;++i,at+=5){
+          const auto id=fo3esm::ReadU32(p+at);const auto ref=catalog_.references.find(id);
+          if(ref==catalog_.references.end()||(ref->second.flags&0x20)||catalog_.enableParents.count(id)||p[at+4]>1||
+             !next.referenceEnabled.emplace(id,p[at+4]!=0).second)return fail("Invalid saved reference state");
         }
       }
       if(at!=payload.size())return fail("Trailing weapon save data");
