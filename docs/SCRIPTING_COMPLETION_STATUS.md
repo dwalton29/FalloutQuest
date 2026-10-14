@@ -4,7 +4,8 @@
 
 - Starting canonical main: `2987d911f318b92d1041257868067851a09d16f0` (v208).
 - Resumed from published `6469dbb872889a79a0682501b75f6ac6577ab547`.
-- Latest published implementation: M1B2 `aa8ba6d56c4eda4e39fdb92e3c6d591a8ef63268`.
+- Latest published implementation: M1B3a `86ddd9c407482207aab7799760259a8f643dfcd6`.
+- M1B3a Android CI: https://github.com/dwalton29/FalloutQuest/actions/runs/38612088401 (in progress at publication).
 - M1B2 scene-load/stream-in integration is host-validated and pushed; the remote
   tree matches the tested tree `20c0e9cd4d5206190925d30a68408400c6fb1923`. Newer v209 is preserved: 209 / 0.72.0-persistent-player-stats.
 
@@ -17,6 +18,7 @@
 | Concurrent player stats v209 | `377b5be0251be3bf9e78efd6055325aa2e2b3a8d` | Preserved |
 | v209 compatibility | `29a0c614313b948a70508aab1213204e8117d153` and `fe798c051a41648c46b9e300d6949da8da71838c` | Preserved |
 | M1B2 scene/streaming snapshots | `aa8ba6d56c4eda4e39fdb92e3c6d591a8ef63268` | Confirmed |
+| M1B3a scene publication admission | `86ddd9c407482207aab7799760259a8f643dfcd6` | Confirmed |
 
 The user directly confirmed permission to push to main on 2026-10-14. The old
 approval blocker is resolved. Command-line Git cannot authenticate for writes;
@@ -260,3 +262,8 @@ and headset tests remain outstanding. No source Enable/Disable commands admitted
 no version change. First unfinished M1B3 work is still the resident outer-transaction
 coordinator and reversible collision/physics/navigation plus actor/held-object
 coordination. Stale-work rejection alone is not live world mutation support.
+
+M1B3a follow-up retains the complete requested NPC arrival ID set while workers
+run. Stale/partially failed preparation therefore requeues all requested actors,
+including those for which no visual was produced. This avoids losing an arrival
+when its old preparation is discarded. Source-ordering checks pass after the fix.

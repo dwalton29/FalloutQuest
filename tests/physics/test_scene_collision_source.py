@@ -30,5 +30,7 @@ print('Scene reference epoch admission and staged-resource retirement passed')
 arrival=s[s.index('void Q230PumpNpcArrivals(){'):s.index('void QActorPrepareStereoFrame()')]
 assert arrival.index('!Fo3AcceptsScenePublication(work.publication)') < arrival.index('Q230UploadActorPart(')
 assert arrival.index('if(!work.preparation.Ready())return') < arrival.index('Q230ResetNpcArrivals()')
-assert 'pending.insert(actor.source.refFormId)' in arrival
+assert 'pending.insert(work.requested.begin(),work.requested.end())' in arrival
+assert arrival.index('auto requested=refs') < arrival.index('work.preparation.Start(')
+assert 'work.requested=std::move(requested)' in arrival
 print('NPC arrival epoch guard precedes part uploads and actor registration')

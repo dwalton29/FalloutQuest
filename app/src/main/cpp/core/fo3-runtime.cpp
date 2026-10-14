@@ -3064,6 +3064,7 @@ struct Q230NpcArrivalWork {
     fo3scene::PublicationStamp publication;
     fo3scene::Preparation<Q230NpcArrivalBatch> preparation;
     std::unordered_set<uint32_t> pending;
+    std::unordered_set<uint32_t> requested;
     size_t actorIndex=0,partIndex=0;
     uint32_t cell=0,world=0;
     bool active=false;
@@ -3079,6 +3080,7 @@ void Q230ResetNpcArrivals() {
     }
     gQ230NpcArrival.preparation.Reset();
     gQ230NpcArrival.pending.clear();
+    gQ230NpcArrival.requested.clear();
     gQ230NpcArrival.actorIndex=0;
     gQ230NpcArrival.partIndex=0;
     gQ230NpcArrival.active=false;
@@ -11161,8 +11163,7 @@ void Q230PumpNpcArrivals(){
         // worker is ready, before any further part uploads or actor registration.
         if(!work.preparation.Ready())return;
         auto pending=std::move(work.pending);
-        for(const auto& actor:work.preparation.Get().actors)
-            pending.insert(actor.source.refFormId);
+        pending.insert(work.requested.begin(),work.requested.end());
         Q230ResetNpcArrivals();
         work.pending=std::move(pending);
         return;
@@ -11236,6 +11237,7 @@ void Q230PumpNpcArrivals(){
             work.cell,actors.size());
         work.preparation.Reset();
         work.actorIndex=work.partIndex=0;work.active=false;
+        work.requested.clear();
         return;
     }
     if(work.pending.empty())return;
@@ -11253,6 +11255,7 @@ void Q230PumpNpcArrivals(){
     if(refs.empty())return;
     const uint32_t cell=gCurrentCellFormId,world=gExteriorWorldspaceQ1890;
     const size_t count=refs.size();
+    auto requested=refs;
     if(work.preparation.Start([cell,world,saved=std::move(saved),refs=std::move(refs)](
             Q230NpcArrivalBatch& batch,const std::atomic<bool>& cancelled){
         Q230PrepareActors(cell,world,batch.actors,cancelled,&saved,&refs);
@@ -11268,6 +11271,7 @@ void Q230PumpNpcArrivals(){
         return true;
     })){
         work.publication=gFo3ScenePublication.Stamp();
+        work.requested=std::move(requested);
         work.active=true;work.cell=cell;work.world=world;
         Q6H_LOGI("NPC LIVE ARRIVAL PREPARE cell=%08X world=%08X requested=%zu",
             cell,world,count);
