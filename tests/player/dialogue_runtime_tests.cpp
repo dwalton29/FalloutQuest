@@ -163,4 +163,33 @@ static void OriginalBridge(const char* path){
   assert(StartFo3Dialogue(0x3b46));Speak();Tick(false,true);Tick();Clean();
   std::cout<<"Original Lucas production bridge: handshake, three reentries, package movement and post-combat reentry passed\n";
 }
-int main(int argc,char** argv){Synthetic();SkipWithA();if(argc>1)OriginalBridge(argv[1]);std::cout<<"Dialogue bridge lifecycle tests passed\n";}
+static void BarterBridge(){
+  PrepareSynthetic();auto c=gPlayerSession->player.Definitions();
+  c.references[42].base=43;c.references[99].base=333;
+  c.merchantContainers[42]=99;c.merchantServices[43]=0x400;c.pipboy.packages[50].flags|=1;
+  c.barterSettings={{"fBarterBuyBase",1.55f},{"fBarterBuyMult",-.45f},{"fBarterSellBase",.45f},{"fBarterSellMult",.45f}};
+  fo3player::Item caps;caps.formId=0xf;caps.name="Bottle Caps";caps.value=1;c.items[0xf]=caps;
+  fo3player::Item item;item.formId=100;item.name="Original-format merchandise";item.value=100;c.items[100]=item;
+  c.containers[333].entries={{100,0,10},{0xf,0,1000}};
+  auto& greeting=c.pipboy.topics.at(80).front();greeting.flags=0;greeting.links={91};
+  c.pipboy.dialogueTopics[91].text="Authored merchant topic";c.pipboy.topLevelTopics={91};
+  auto trade=greeting;trade.id=92;trade.topic=91;trade.links.clear();trade.begin.source="ShowBarterMenu 50";
+  c.pipboy.topics[91]={trade};gPlayerSession=std::make_unique<Session>(c);
+  assert(gPlayerSession->player.Add(0xf,1000));Tick();
+  assert(StartFo3Dialogue(42));assert(!gBarter.active);Speak();
+  assert(gDialogue.phase==fo3dialogue::Phase::Choices&&gDialogue.choices.size()==1);
+  Tick(true);assert(gDialogue.phase==fo3dialogue::Phase::Speaking&&!gBarter.active);Tick(false);
+  Speak();assert(gBarter.active&&gBarter.session.actor==42&&Fo3DialogueFocus());
+  assert(gBarter.playerPanel.visible&&gBarter.merchantPanel.visible&&gBarter.rows.size()==1);
+  Tick(true);Tick(false);assert(gBarter.session.selections.size()==1&&gPlayerSession->player.ItemCount(100)==0);
+  gBarter.cursor.selected=gBarter.rows.size();Tick(true);Tick(false);
+  assert(gPlayerSession->player.ItemCount(100)==1&&gPlayerSession->player.ItemCount(0xf)==900);
+  assert(gBarter.session.selections.empty());
+  Tick(false,true);Tick();assert(!gBarter.active&&gDialogue.Active());
+  Choose(0);assert(gBarter.active);Tick(true);Tick(false);assert(gBarter.session.selections.size()==1);
+  const auto capsBefore=gPlayerSession->player.ItemCount(0xf);
+  gQ230NpcActors[0].runtime.position[0]+=fo3npc::DialoguePolicy::LeaveRange+1;Tick();Clean();
+  assert(!gBarter.active&&gPlayerSession->player.ItemCount(0xf)==capsBefore);
+  std::cout<<"Barter bridge: authored voice phases, input focus, pending selection, commit, return and walk-away passed\n";
+}
+int main(int argc,char** argv){Synthetic();SkipWithA();BarterBridge();if(argc>1)OriginalBridge(argv[1]);std::cout<<"Dialogue bridge lifecycle tests passed\n";}

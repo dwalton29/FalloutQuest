@@ -322,7 +322,7 @@ void WeaponUpdate(double now,bool backButton){
   const float dt=std::clamp(float(now-last),0.f,.064f);last=now;
   const auto frame=fo3weapon::FrameAccessFor(gSceneReady,IsFo3LoadingVisible(),
     gPlayerSession&&gPlayerSession->saveBlocked,Fo3PipboyFocus(),gShoulderFocused);
-  const bool blocked=Fo3LockpickInputBlocked()||!gPlayerSession||!frame.weaponControls;
+  const bool blocked=Fo3BarterFocus()||Fo3LockpickInputBlocked()||!gPlayerSession||!frame.weaponControls;
   inputs.Update(blocked,gQ217FingerGrip[1],gQ217FingerGrip[0],gQ217FingerTrigger[1],backButton);
   if(Fo3DialogueFocus()){inputs.r=false;inputs.l=false;} // Dialogue suppresses new grabs; held trigger can interrupt.
   if(!gPlayerSession)return;auto&p=gPlayerSession->player;

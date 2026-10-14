@@ -369,7 +369,7 @@ public:
         FlushFo3PlayerState();
         fo3pipui::Shutdown();ResetFo3Pipboy();fo3lockui::Shutdown();CancelFo3Lockpick();
         fo3notifyui::Shutdown();
-        fo3dialogueui::Shutdown();EndFo3Dialogue("renderer shutdown");
+        fo3barterui::Shutdown();fo3dialogueui::Shutdown();EndFo3Dialogue("renderer shutdown");
         fo3lootui::Shutdown();
         fo3hudrenderer::Shutdown();
         if (sessionRunning_) {
@@ -1610,7 +1610,7 @@ private:
                     !Fo3LockpickFocus()&&!Fo3ScriptMessageFocus()&&q210RightValid?lootScrollY_:0,
                     !Fo3LockpickFocus()&&!Fo3ScriptMessageFocus()&&q210RightValid&&activateDownQ1700_,
                     !Fo3LockpickFocus()&&!Fo3ScriptMessageFocus()&&q210RightValid&&pipBackDown_,
-                    sessionState_==XR_SESSION_STATE_FOCUSED);
+                    sessionState_==XR_SESSION_STATE_FOCUSED,q210RightValid?turnX_:0,q210RightValid?fingerTriggerValue_[1]:0);
                 if(dialogueControls&&activateDownQ1700_)activateLatched_=true;
                 WeaponUpdate(static_cast<double>(frameState.predictedDisplayTime)*1e-9,dialogueControls?false:pipBackDown_);
                 DeliverFo3ScriptSounds();
@@ -1840,7 +1840,7 @@ private:
                 const auto mvp=Multiply(viewProjection,model);
                 fo3dialogueui::Render(mvp.m,gScriptMessagePanel);
             }
-            if(gDialoguePanel.visible&&!gScriptMessagePanel.visible&&!IsFo3LoadingVisible()) {
+            if(gDialoguePanel.visible&&!gBarter.active&&!gScriptMessagePanel.visible&&!IsFo3LoadingVisible()) {
                 const auto& panel=gDialoguePanel;Mat4 model{};const float yaw=panel.yaw;
                 model.m[0]=std::cos(yaw);model.m[2]=-std::sin(yaw);model.m[5]=1;
                 model.m[8]=std::sin(yaw);model.m[10]=std::cos(yaw);
@@ -1848,6 +1848,17 @@ private:
                 const auto dialogueMvp=Multiply(viewProjection,model);fo3dialogueui::Render(dialogueMvp.m,panel);
             }
 
+            if(gBarter.active&&!gScriptMessagePanel.visible&&!IsFo3LoadingVisible()) {
+                auto* barterResources=fo3barterui::State();
+                for(int side=0;side<2;++side){const auto& panel=side?gBarter.merchantPanel:gBarter.playerPanel;
+                    Mat4 model{};const float yaw=panel.yaw,offset=side?.37f:-.37f;
+                    model.m[0]=std::cos(yaw);model.m[2]=-std::sin(yaw);model.m[5]=1;
+                    model.m[8]=std::sin(yaw);model.m[10]=std::cos(yaw);
+                    model.m[12]=panel.anchor[0]+std::cos(yaw)*offset;model.m[13]=panel.anchor[1];
+                    model.m[14]=panel.anchor[2]-std::sin(yaw)*offset;model.m[15]=1;
+                    const auto mvp=Multiply(viewProjection,model);fo3dialogueui::Render(mvp.m,panel,&barterResources[side]);
+                }
+            }
             if(Fo3LockpickFocus()&&gPlayerSession)fo3lockui::Render(viewProjection.m,gLockpick,gPlayerSession->player);
             for (uint32_t hand = 0; hand < 2; ++hand) {
                 if (!handPoseValid_[hand]) continue;

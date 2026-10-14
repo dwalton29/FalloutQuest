@@ -284,3 +284,10 @@ target_compile_options(lockpick_runtime_tests PRIVATE -Wall -Wextra -Werror -Wno
 target_include_directories(lockpick_runtime_tests PRIVATE ../../app/src/main/cpp)
 target_link_libraries(lockpick_runtime_tests PRIVATE ZLIB::ZLIB)
 add_test(NAME lockpick_runtime_tests COMMAND lockpick_runtime_tests)
+
+add_executable(barter_tests barter_tests.cpp ${dialogue_shared})
+target_compile_features(barter_tests PRIVATE cxx_std_17)
+target_compile_options(barter_tests PRIVATE -Wall -Wextra -Werror)
+target_include_directories(barter_tests PRIVATE ../../app/src/main/cpp)
+target_link_libraries(barter_tests PRIVATE ZLIB::ZLIB)
+add_test(NAME barter_tests COMMAND barter_tests)

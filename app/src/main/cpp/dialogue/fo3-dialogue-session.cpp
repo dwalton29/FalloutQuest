@@ -12,7 +12,7 @@ const fo3pipdata::Info* Session::Current(const fo3pipdata::Definitions& d)const 
 bool Session::Eligible(const fo3pipdata::Info& i,const Context& ctx)const {
   const auto& p=*ctx.player;const auto& d=p.Definitions().pipboy;
   if(!i.orderValid){if(diagnostic)diagnostic("DIALOGUE UNSUPPORTED SCRIPT info="+Id(i.id)+" cyclic Previous INFO order");return false;}
-  if((i.type!=0&&i.type!=3)||(i.recordFlags&0x20)||i.nextSpeaker||i.flags2||(i.flags&0x90)||i.responses.empty()||(i.speaker&&i.speaker!=ctx.speaker.base))return false;
+  if((i.type!=0&&i.type!=3)||(i.recordFlags&0x20)||i.nextSpeaker||i.flags2||(i.flags&0x80)||i.responses.empty()||(i.speaker&&i.speaker!=ctx.speaker.base))return false;
   if((i.flags&4)&&p.Snapshot().pipboy.saidInfos.count((uint64_t(ctx.speaker.reference)<<32)|i.id))return false;
   std::string error;
   if(!Conditions(i.conditions,ctx,error)){if(!error.empty()&&diagnostic)diagnostic("DIALOGUE UNSUPPORTED CONDITION actor="+Id(ctx.speaker.reference)+" base="+Id(ctx.speaker.base)+" dial="+Id(i.topic)+" info="+Id(i.id)+" "+error);return false;}
@@ -23,7 +23,7 @@ bool Session::Eligible(const fo3pipdata::Info& i,const Context& ctx)const {
   if(qs==p.Snapshot().pipboy.quests.end()&&!(quest->second.flags&1))return false;
   if(qs!=p.Snapshot().pipboy.quests.end()&&!qs->second.running)return false;
   // Transactional preflight includes nested QUST dependencies and both phases.
-  if(!p.PreviewDialogueResults(i.begin,i.end,error)) {
+  if(!p.PreviewDialogueResults(i.begin,i.end,error,ctx.speaker.reference)) {
     if(diagnostic)diagnostic("DIALOGUE UNSUPPORTED SCRIPT info="+Id(i.id)+" "+error);
     return false;
   }
@@ -73,7 +73,7 @@ bool Session::Start(const Context& ctx,fo3player::Player& p) {
   return false;
 }
 bool Session::Enter(const fo3pipdata::Info& i,const Context&,fo3player::Player& p) {
-  std::string error;if(!p.ExecuteDialogueResult(i.begin,error)){if(diagnostic)diagnostic("DIALOGUE UNSUPPORTED SCRIPT info="+Id(i.id)+" "+error);End("result rejected");return false;}
+  std::string error;if(!p.ExecuteDialogueResult(i.begin,error,actor)){if(diagnostic)diagnostic("DIALOGUE UNSUPPORTED SCRIPT info="+Id(i.id)+" "+error);End("result rejected");return false;}
   if(diagnostic&&!i.begin.source.empty())diagnostic("DIALOGUE RESULT info="+Id(i.id)+" phase=begin");
   topic=i.topic;info=i.id;response=selected=0;choices.clear();phase=Phase::Speaking;++audioToken;
   if(diagnostic)diagnostic("DIALOGUE INFO actor="+Id(actor)+" base="+Id(base)+" topic="+Id(topic)+" info="+Id(info)+" voice="+Id(voice));
@@ -104,7 +104,7 @@ bool Session::AudioDone(uint32_t token,bool success,const Context& ctx,fo3player
   auto i=Current(p.Definitions().pipboy);if(!i){End("INFO missing");return false;}
   if(++response<i->responses.size()){++audioToken;return true;}
   if(diagnostic)diagnostic("DIALOGUE TRANSITION info="+Id(i->id)+" stage=end-result");
-  std::string error;if(!p.ExecuteDialogueResult(i->end,error)){if(diagnostic)diagnostic("DIALOGUE UNSUPPORTED SCRIPT info="+Id(i->id)+" "+error);End("end result rejected");return false;}
+  std::string error;if(!p.ExecuteDialogueResult(i->end,error,actor)){if(diagnostic)diagnostic("DIALOGUE UNSUPPORTED SCRIPT info="+Id(i->id)+" "+error);End("end result rejected");return false;}
   if(diagnostic&&!i->end.source.empty())diagnostic("DIALOGUE RESULT info="+Id(i->id)+" phase=end");
   p.RecordDialogue(actor,(i->flags&4)?i->id:0,i->addedTopics);
   if(i->flags&1){End("authored goodbye");return false;}

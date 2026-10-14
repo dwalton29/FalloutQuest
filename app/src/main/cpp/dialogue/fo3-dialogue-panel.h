@@ -9,7 +9,7 @@ struct Panel {
   bool visible=false;
   std::array<float,3> anchor{};
   float yaw=0;
-  std::string title,subtitle;
+  std::string title,subtitle,footer;
   std::vector<std::string> choices;
   size_t selected=0;
   uint64_t revision=0;

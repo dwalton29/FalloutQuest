@@ -105,6 +105,20 @@ static bool Value(const fo3pipdata::Condition& c,const Context& ctx,float& value
   case 136:value=who.reference==c.a;return true;
   case 141:value=ctx.talking&&who.reference==ctx.speaker.reference;return true;
   case 161:if(!who.packageKnown){error="package not executing";return false;}value=who.package==c.a;return true;
+  case 182:{
+    if(!d.formNames.empty()&&!p.Definitions().items.count(c.a)){error="equipped item unavailable";return false;}
+    value=0;
+    if(pc){for(const auto& s:state.inventory)if(s.formId==c.a&&s.equipped){value=1;break;}return true;}
+    const auto* contents=p.ContainerContents(who.reference);if(!contents){error="NPC equipped inventory unavailable";return false;}
+    for(const auto& s:*contents){if(s.formId==c.a&&s.equipped){value=1;break;}}
+    return true;
+  }
+  case 255:{
+    if(!who.packageKnown){error="service package unavailable";return false;}
+    const auto package=d.packages.find(who.package);
+    if(package==d.packages.end()){error="service package missing";return false;}
+    value=(package->second.flags&1)!=0&&!who.combat;return true;
+  }
   case 289:value=who.combat;return true;
   case 546:if(!d.quests.count(c.a)){error="quest unavailable";return false;}value=quest!=state.pipboy.quests.end()&&quest->second.status!=fo3pipdata::Completion::Active;return true;
   case 310:value=who.world==c.a;return who.world!=0;

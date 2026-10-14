@@ -12,6 +12,8 @@ uint64_t gDialogueChoicesVisibleFrame=0;
 struct DialogueEligibility {uint64_t revision=UINT64_MAX;double until=0;bool valid=false;};
 std::unordered_map<uint32_t,DialogueEligibility> gDialogueEligibility;
 std::unordered_set<std::string> gDialogueDiagnostics;
+#include "fo3-barter-runtime.inc"
+bool Fo3BarterFocus(){return gBarter.active;}
 bool Fo3DialogueFocus(){return gDialogue.Active();}
 Q230ActorVisual* DialogueActor(uint32_t reference) {
   for(auto& actor:gQ230NpcActors)if(actor.source.refFormId==reference)return &actor;
@@ -55,6 +57,8 @@ void DialoguePublishAudio() {
   fo3audio::Dialogue(gDialogue.Audio(gPlayerSession->player.Definitions().pipboy),gDialogue.audioToken);
 }
 void CleanupFo3Dialogue(uint32_t previous,const char* reason) {
+  CloseFo3Barter();
+  if(gPlayerSession){fo3player::BarterRequest discarded;while(gPlayerSession->player.PollBarter(discarded)){}}
   if(auto* actor=DialogueActor(previous)){
     const bool returning=actor->runtime.dialogue;
     actor->runtime.EndDialogue();
@@ -87,7 +91,7 @@ bool StartFo3Dialogue(uint32_t reference) {
   Q6H_LOGI("NPC DIALOGUE OVERRIDE actor=%08X begin=1 package=%08X",reference,actor->runtime.package);
   fo3audio::NamedSound("UIMenuOK");DialoguePublishAudio();FlushFo3PlayerState();return true;
 }
-void UpdateFo3Dialogue(double now,float stick,bool a,bool b,bool focused) {
+void UpdateFo3Dialogue(double now,float stick,bool a,bool b,bool focused,float horizontal=0,float trigger=0) {
   const float dt=std::clamp(float(now-gDialogueTime),0.f,.1f);gDialogueTime=now;
   const bool pressA=a&&!gDialoguePreviousA,pressB=b&&!gDialoguePreviousB;
   gDialoguePreviousA=a;gDialoguePreviousB=b;
@@ -123,6 +127,7 @@ void UpdateFo3Dialogue(double now,float stick,bool a,bool b,bool focused) {
     // OpenXR focus can transiently leave FOCUSED while the application remains
     // visible (system UI/headset state). Do not destroy an authored conversation
     // for that presentation-level event; input is already gated by focused below.
+    else if(gBarter.active)UpdateFo3Barter(now,stick,horizontal,trigger,pressA,pressB,focused);
     else if(focused&&pressB)EndFo3Dialogue("B exit");
     else {
       auto ctx=DialogueContext(*actor);
@@ -183,6 +188,15 @@ void UpdateFo3Dialogue(double now,float stick,bool a,bool b,bool focused) {
       }
     }
   }
+  if(gPlayerSession&&gDialogue.Active()&&gDialogue.phase!=fo3dialogue::Phase::Speaking&&!gBarter.active){
+    fo3player::BarterRequest request;
+    if(gPlayerSession->player.PollBarter(request)&&request.actor==gDialogue.actor&&
+       gPlayerSession->player.OpenBarter(request.actor,request.discount,gBarter.session)){
+      gBarter.active=true;gBarter.buying=true;gBarter.status.clear();gBarter.cursor.Target(0,0);
+      fo3audio::DialogueStop();BarterBuildPanels();
+    }
+  }
+
 #ifdef FO3_NPC_CHAT_RUNTIME
   Q230ChatTick(now);
 #endif

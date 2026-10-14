@@ -85,16 +85,16 @@ public:
 }
 #include "fo3-script-transaction.inc"
 namespace fo3player {
-bool Player::PreviewDialogueResult(const fo3pipdata::ResultScript& script,std::string& error) const {
-  return PreviewDialogueResults(script,{},error);
+bool Player::PreviewDialogueResult(const fo3pipdata::ResultScript& script,std::string& error,uint32_t speaker) const {
+  return PreviewDialogueResults(script,{},error,speaker);
 }
-bool Player::PreviewDialogueResults(const fo3pipdata::ResultScript& begin,const fo3pipdata::ResultScript& end,std::string& error) const {
-  auto plan=PrepareDialogueTransaction(begin,end,error);
+bool Player::PreviewDialogueResults(const fo3pipdata::ResultScript& begin,const fo3pipdata::ResultScript& end,std::string& error,uint32_t speaker) const {
+  auto plan=PrepareDialogueTransaction(begin,end,error,speaker);
   if(plan&&plan->HasReferenceChanges()){error="world mutation requires resident coordinator";return false;}
   return bool(plan);
 }
-bool Player::ExecuteDialogueResult(const fo3pipdata::ResultScript& script,std::string& error) {
-  auto plan=PrepareDialogueTransaction(script,{},error);
+bool Player::ExecuteDialogueResult(const fo3pipdata::ResultScript& script,std::string& error,uint32_t speaker) {
+  auto plan=PrepareDialogueTransaction(script,{},error,speaker);
   if(!plan)return false;
   if(plan->HasReferenceChanges()){error="world mutation requires resident coordinator";return false;}
   if(CommitScriptTransaction(*plan))return true;
@@ -150,7 +150,7 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
     if(c.type==C::If)gates.push_back({true,false,false,false});
     if(c.type==C::ElseIf||c.type==C::Else){if(gates.empty()||gates.back().hasElse){error="invalid else/elseif";return false;}if(c.type==C::Else)gates.back().hasElse=true;}
     if(c.type==C::EndIf){if(gates.empty()){error="orphan endif";return false;}gates.pop_back();}
-    if(c.type==C::If||c.type==C::ElseIf||c.type==C::Variable||c.type==C::Global||(c.type==C::ShowMessage&&!c.expression.empty())){float v;if(!fo3script::Expression(*this,owner,c.expression,error,scriptId).Evaluate(v))return false;}
+    if(c.type==C::If||c.type==C::ElseIf||c.type==C::Variable||c.type==C::Global||((c.type==C::ShowMessage||c.type==C::ShowBarterMenu)&&!c.expression.empty())){float v;if(!fo3script::Expression(*this,owner,c.expression,error,scriptId).Evaluate(v))return false;}
   }
   if(!gates.empty()){error="unterminated if";return false;}
   for(const auto& c:commands) {
@@ -195,6 +195,11 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
       if(ok)ok=QueueScriptMessage(c.form,value,!c.expression.empty(),owner);
       break;
     }
+    case C::ModDisposition:ok=ModActorDisposition(c.form,int32_t(c.value));break;
+    case C::ShowBarterMenu:
+      if(!c.expression.empty())ok=fo3script::Expression(*this,owner,c.expression,error,scriptId).Evaluate(value);
+      if(ok)ok=std::isfinite(value)&&value>=-100&&value<=100&&std::floor(value)==value&&QueueBarter(c.form,int(value));
+      break;
     case C::PlaySound:ok=QueueScriptSound(c.form);break;
     case C::AddTopic:if(!catalog_->pipboy.dialogueTopics.count(c.form))ok=false;else if(state_.pipboy.knownTopics.insert(c.form).second)++revision_;break;
     default:ok=false;break;
@@ -313,7 +318,7 @@ void Player::PumpQuestGameMode(double realSeconds) {
 namespace fo3player {
 void Player::SetScriptPlayerLocation(float x,float y,float z,uint32_t cell,uint32_t world){
   if(!std::isfinite(x)||!std::isfinite(y)||!std::isfinite(z))return;
-  scriptPlayerPosition_={x,y,z};scriptPlayerCell_=cell;scriptPlayerWorld_=world;scriptPlayerPositionKnown_=true;
+  scriptPlayerPosition_={x,y,z};scriptPlayerCell_=cell;scriptPlayerWorld_=world;scriptPlayerPositionKnown_=true;TouchMerchantCells(cell);
 }
 bool Player::ScriptDistance(float& distance) const {
   const auto found=catalog_->pipboy.targets.find(scriptReference_);

@@ -787,6 +787,7 @@ void Q230PrepareActors(uint32_t cell, uint32_t worldspace,
     const std::unordered_map<uint32_t,fo3player::ActorState>* savedOverride=nullptr,
     const std::unordered_set<uint32_t>* onlyRefs=nullptr);
 bool Fo3DialogueFocus();
+bool Fo3BarterFocus();
 void EndFo3Dialogue(const char* reason);
 void Q230UpdateActor(Q230ActorVisual&);
 void Q230ActorHitReaction(uint32_t target,uint8_t region);

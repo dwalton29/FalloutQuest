@@ -92,6 +92,7 @@ bool DecodeItem(uint32_t form, uint32_t flags, ItemKind kind,
   item.kind = kind;
   item.questItem = (flags & (1u << 10)) != 0;
   item.editorId = Text(subs, "EDID");
+  if(const auto* et=Find(subs,"ETYP");et&&et->size==4)item.equipType=I32(et->data);
   item.name = Text(subs, "FULL");
   item.model = Text(subs, "MODL");
   item.femaleModel = Text(subs, "MOD3");
@@ -149,6 +150,7 @@ bool DecodeItem(uint32_t form, uint32_t flags, ItemKind kind,
     if (!en || en->size < 8)
       return false;
     item.value = I32(en->data);
+    item.ingestibleFlags=en->data[4];
     item.valueKnown = (en->data[4] & 1) != 0;
     // Auto-calculated effect values require the magic-effect runtime.
     break;
@@ -328,6 +330,7 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
       fo3pipdata::Decode(next.pipboy,type,form,flags,payload,groupCells.empty()?0:groupCells.back(),groupWorlds.empty()?0:groupWorlds.back(),groupTopics.empty()?0:groupTopics.back());
       fo3weapon::Decode(next.weapons,type,form,payload);
       if(type=="REFR"||type=="ACHR"||type=="ACRE") {
+        if(Find(subs,"XEZN"))next.encounterZoneReferences.insert(form);
         // Keep the complete graph, including parents outside the resident cell.
         // Do not expand each of the hundreds of thousands of Reference objects.
         const auto* parent=Find(subs,"XESP");
@@ -349,11 +352,15 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
         if(data&&data->size>=1&&data->size<=4){uint32_t bits=0;for(size_t i=0;i<data->size;++i)bits|=uint32_t(data->data[i])<<(8*i);next.factionFlags[form]=bits;}
       }
       if(type=="NPC_") {
+        if(const auto* ai=Find(subs,"AIDT");ai&&ai->size==20)next.merchantServices[form]=fo3esm::ReadU32(ai->data+8);
         Container inventory;inventory.name=Text(subs,"FULL");
         inventory.valid=DecodeLoot(subs,false,inventory.entries);
         next.actorInventories[form]=std::move(inventory);
       }
       if(type=="ACHR"||type=="ACRE") {
+        if(const auto* merchant=Find(subs,"XMRC")){
+          next.merchantContainers[form]=merchant->size==4?fo3esm::ReadU32(merchant->data):0;
+        }
         Reference ref;ref.flags=flags;ref.cell=groupCells.empty()?0:groupCells.back();
         const auto* base=Find(subs,"NAME");if(base&&base->size==4)ref.base=fo3esm::ReadU32(base->data);
         ref.valid=ref.base!=0;next.references[form]=ref;
@@ -521,9 +528,10 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
         const auto id = Text(subs, "EDID");
         const auto *d = Find(subs, "DATA");
         if (!id.empty() && id[0] == 'f' && d && d->size == 4)
-          settings[id] = fo3esm::ReadF32(d->data);
+          {settings[id] = fo3esm::ReadF32(d->data);next.barterSettings[id]=settings[id];}
         if (!id.empty() && id[0] == 's' && d)
           next.strings[id] = fo3esm::ZString(d->data, d->size);
+        if(id=="iHoursToRespawnCell"&&d&&d->size==4&&I32(d->data)>0)next.merchantRespawnHours=uint32_t(I32(d->data));
         if(id=="iKarmaChangeThreshold"&&d&&d->size==4&&I32(d->data)>0)next.karmaMajorThreshold=I32(d->data);
         if(!id.empty() && d && d->size==4 && (id[0]=='i'||id[0]=='f') &&
            (id.find("Lock")!=std::string::npos||id.find("SweetSpot")!=std::string::npos||id.find("Concentric")!=std::string::npos||id=="fPickBreakSecs"))
@@ -1191,11 +1199,12 @@ bool Player::Save(const std::string &path, std::string &error) const {
     payload.push_back(l.forceFailures);payload.push_back(l.rewarded?1:0);}
   // Optional RFE1 after the v14 lock tail. Empty overlays keep existing v14
   // bytes unchanged; older supported saves do not require this extension.
+  const bool hasMerchantVisits=!state_.merchantVisits.empty()||!state_.actorDispositionModifiers.empty();
   const bool hasPlayerAttributeOverrides=state_.special!=catalog_->initial.special ||
       state_.skills!=catalog_->initial.skills;
   // An overriding v15 save requires RFE1 (including the empty case) before
   // PST1. Unmodified characters retain v14, including synthetic test actors.
-  if(hasPlayerAttributeOverrides||!state_.referenceEnabled.empty()) {
+  if(hasMerchantVisits||hasPlayerAttributeOverrides||!state_.referenceEnabled.empty()) {
     if(state_.referenceEnabled.size()>100000){error="Too many reference overrides";return false;}
     std::vector<uint32_t> ids;
     for(const auto& entry:state_.referenceEnabled){
@@ -1210,7 +1219,7 @@ bool Player::Save(const std::string &path, std::string &error) const {
   }
   // v15: player stats are save-owned overrides. Earlier saves inherit original
   // Fallout3.esm NPC_ 00000007 values. Do not mutate the ESM catalogue.
-  if(hasPlayerAttributeOverrides){
+  if(hasMerchantVisits||hasPlayerAttributeOverrides){
     if(std::any_of(state_.special.begin(),state_.special.end(),[](uint8_t v){return v<1||v>10;})||
        std::any_of(state_.skills.begin(),state_.skills.end(),[](uint8_t v){return v>100;})){
       error="Invalid player attributes";return false;
@@ -1219,7 +1228,32 @@ bool Player::Save(const std::string &path, std::string &error) const {
     payload.insert(payload.end(),state_.special.begin(),state_.special.end());
     payload.insert(payload.end(),state_.skills.begin(),state_.skills.end());
   }
-  Put32(bytes, hasPlayerAttributeOverrides ? 15 : 14);
+  if(hasMerchantVisits){
+    if(state_.merchantVisits.size()>10000){error="Too many merchant visits";return false;}
+    Put32(payload,0x31524d42); // BMR1: last observed game time for merchant storage.
+    std::vector<uint32_t> refs;for(const auto& visit:state_.merchantVisits)refs.push_back(visit.first);
+    std::sort(refs.begin(),refs.end());Put32(payload,uint32_t(refs.size()));
+    for(auto ref:refs){const auto& visit=state_.merchantVisits.at(ref);
+      const auto placed=catalog_->references.find(ref);
+      if(placed==catalog_->references.end()||!catalog_->containers.count(placed->second.base)||
+         !state_.containers.count(ref)||!std::isfinite(visit.hour)||visit.hour<0||visit.hour>=24||
+         visit.day>state_.gameDaysPassed||(visit.day==state_.gameDaysPassed&&visit.hour>state_.gameHour)){
+        error="Invalid merchant visit";return false;}
+      Put32(payload,ref);Put32(payload,visit.day);PutFloat(payload,visit.hour);
+    }
+  }
+  if(hasMerchantVisits){
+    if(state_.actorDispositionModifiers.size()>10000){error="Too many disposition modifiers";return false;}
+    Put32(payload,0x31524442); // BDR1: authored ModDisposition instance deltas.
+    std::vector<uint32_t> refs;for(const auto& entry:state_.actorDispositionModifiers)refs.push_back(entry.first);
+    std::sort(refs.begin(),refs.end());Put32(payload,uint32_t(refs.size()));
+    for(auto id:refs){const auto actor=catalog_->references.find(id);
+      if(actor==catalog_->references.end()||!catalog_->pipboy.dialogueActors.count(actor->second.base)){
+        error="Invalid disposition actor";return false;}
+      Put32(payload,id);Put32(payload,uint32_t(state_.actorDispositionModifiers.at(id)));
+    }
+  }
+  Put32(bytes, hasMerchantVisits ? 16 : hasPlayerAttributeOverrides ? 15 : 14);
   Put32(bytes, catalog_->fingerprint);
   Put32(bytes, static_cast<uint32_t>(payload.size()));
   Put32(bytes, Crc(payload));
@@ -1278,7 +1312,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
   const auto *h = bytes.data();
   const auto version = fo3esm::ReadU32(h + 4);
   if (std::memcmp(h, "FQPS", 4) ||
-      (version < 1 || version > 15))
+      (version < 1 || version > 16))
     return fail("Unsupported player save format");
   if (fo3esm::ReadU32(h + 8) != catalog_->fingerprint)
     return fail("Player save belongs to different game definitions");
@@ -1349,7 +1383,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
         return fail("Invalid collected reference");
     }
   }
-  next.containers.clear();
+  next.containers.clear();next.merchantVisits.clear();next.actorDispositionModifiers.clear();
   if (version >= 3) {
     if (payload.size() - worldEnd < 8 ||
         fo3esm::ReadU32(p + worldEnd) != catalog_->lootFingerprint)
@@ -1563,7 +1597,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
       if(version>=14&&at<payload.size()){
         if(payload.size()-at<8||fo3esm::ReadU32(p+at)!=0x31454652)return fail("Invalid reference-state extension");
         const auto n=fo3esm::ReadU32(p+at+4);at+=8;
-        if(n>100000||(version>=15 ? payload.size()-at!=5ull*n+25u : payload.size()-at!=5ull*n))return fail("Invalid reference-state extension size");
+        if(n>100000||(version>=16 ? payload.size()-at<5ull*n+41u : version>=15 ? payload.size()-at!=5ull*n+25u : payload.size()-at!=5ull*n))return fail("Invalid reference-state extension size");
         for(uint32_t i=0;i<n;++i,at+=5){
           const auto id=fo3esm::ReadU32(p+at);const auto ref=catalog_->references.find(id);
           if(ref==catalog_->references.end()||(ref->second.flags&0x20)||catalog_->enableParents.count(id)||p[at+4]>1||
@@ -1572,7 +1606,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
       }
       if(version>=15){
         // Explicit stats extension follows the required RFE1 reference block.
-        if(payload.size()-at!=25u||fo3esm::ReadU32(p+at)!=0x31545350)
+        if((version>=16?payload.size()-at<41u:payload.size()-at!=25u)||fo3esm::ReadU32(p+at)!=0x31545350)
           return fail("Missing/invalid player attributes extension");
         at+=4;
         std::copy_n(p+at,7,next.special.begin());at+=7;
@@ -1580,6 +1614,30 @@ bool Player::Restore(const std::string &path, std::string &error) {
         if(std::any_of(next.special.begin(),next.special.end(),[](uint8_t v){return v<1||v>10;})||
            std::any_of(next.skills.begin(),next.skills.end(),[](uint8_t v){return v>100;}))
           return fail("Invalid saved player attributes");
+      }
+      if(version>=16){
+        if(payload.size()-at<8||fo3esm::ReadU32(p+at)!=0x31524d42)return fail("Missing merchant visit extension");
+        const auto n=fo3esm::ReadU32(p+at+4);at+=8;
+        if(n>10000||payload.size()-at<12ull*n+8u)return fail("Invalid merchant visit extension");
+        next.merchantVisits.clear();
+        for(uint32_t i=0;i<n;++i,at+=12){const auto ref=fo3esm::ReadU32(p+at);
+          MerchantVisit visit{fo3esm::ReadU32(p+at+4),fo3esm::ReadF32(p+at+8)};
+          const auto placed=catalog_->references.find(ref);
+          if(placed==catalog_->references.end()||!catalog_->containers.count(placed->second.base)||
+             !next.containers.count(ref)||!std::isfinite(visit.hour)||visit.hour<0||visit.hour>=24||
+             visit.day>next.gameDaysPassed||(visit.day==next.gameDaysPassed&&visit.hour>next.gameHour)||
+             !next.merchantVisits.emplace(ref,visit).second)return fail("Invalid saved merchant visit");
+        }
+      }
+      if(version>=16){
+        if(payload.size()-at<8||fo3esm::ReadU32(p+at)!=0x31524442)return fail("Missing disposition extension");
+        const auto n=fo3esm::ReadU32(p+at+4);at+=8;
+        if(n>10000||payload.size()-at!=8ull*n)return fail("Invalid disposition extension");
+        next.actorDispositionModifiers.clear();
+        for(uint32_t i=0;i<n;++i,at+=8){const auto id=fo3esm::ReadU32(p+at);const auto actor=catalog_->references.find(id);
+          if(actor==catalog_->references.end()||!catalog_->pipboy.dialogueActors.count(actor->second.base)||
+             !next.actorDispositionModifiers.emplace(id,I32(p+at+4)).second)return fail("Invalid saved disposition actor");
+        }
       }
       if(at!=payload.size())return fail("Trailing player save data");
     }
@@ -1604,7 +1662,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
     return fail("Legacy weapon inventory exceeds instance limits");
   state_ = std::move(next);
   pendingKarmaEvents_.clear();pendingTheftEvents_.clear();pendingQuestNotices_.clear();
-  pendingScriptMessages_.clear();pendingScriptSounds_.clear();scriptButtons_.clear();EndContainerInteraction();
+  pendingScriptMessages_.clear();pendingScriptSounds_.clear();pendingBarters_.clear();scriptButtons_.clear();EndContainerInteraction();
   ++revision_;
   return true;
 }

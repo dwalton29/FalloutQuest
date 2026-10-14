@@ -9,7 +9,7 @@ Player::Player(const Player& source,ScriptCandidateTag)
       scriptPlayerPosition_(source.scriptPlayerPosition_),scriptPlayerPositionKnown_(source.scriptPlayerPositionKnown_),
       scriptEffectRevision_(source.scriptEffectRevision_),scriptButtons_(source.scriptButtons_),
       pendingScriptMessages_(source.pendingScriptMessages_),pendingQuestNotices_(source.pendingQuestNotices_),
-      pendingScriptSounds_(source.pendingScriptSounds_),pendingKarmaEvents_(source.pendingKarmaEvents_),
+      pendingScriptSounds_(source.pendingScriptSounds_),pendingBarters_(source.pendingBarters_),pendingKarmaEvents_(source.pendingKarmaEvents_),
       pendingTheftEvents_(source.pendingTheftEvents_),containerInteraction_(source.containerInteraction_),
       containerKarmaCommitted_(source.containerKarmaCommitted_) {}
 std::unique_ptr<ScriptTransactionPlan> Player::PrepareScriptTransaction(
@@ -48,10 +48,10 @@ std::unique_ptr<ScriptTransactionPlan> Player::PrepareScriptTransaction(
   return plan;
 }
 std::unique_ptr<ScriptTransactionPlan> Player::PrepareDialogueTransaction(
-    const fo3pipdata::ResultScript& begin,const fo3pipdata::ResultScript& end,std::string& error) const {
+    const fo3pipdata::ResultScript& begin,const fo3pipdata::ResultScript& end,std::string& error,uint32_t speaker) const {
   return PrepareScriptTransaction([&](Player& candidate,std::string& e){
     unsigned budget=4096;
-    return candidate.RunScript(begin,0,0,budget,e)&&candidate.RunScript(end,0,0,budget,e);
+    return candidate.RunScript(begin,speaker,0,budget,e)&&candidate.RunScript(end,speaker,0,budget,e);
   },error);
 }
 std::unique_ptr<ScriptTransactionPlan> Player::PrepareQuestStageTransaction(
@@ -93,6 +93,7 @@ void Player::SwapScriptPayload(Player& other) noexcept {
   scriptButtons_.swap(other.scriptButtons_);
   pendingScriptMessages_.swap(other.pendingScriptMessages_);
   pendingScriptSounds_.swap(other.pendingScriptSounds_);
+  pendingBarters_.swap(other.pendingBarters_);
   pendingQuestNotices_.swap(other.pendingQuestNotices_);
   pendingKarmaEvents_.swap(other.pendingKarmaEvents_);
   pendingTheftEvents_.swap(other.pendingTheftEvents_);

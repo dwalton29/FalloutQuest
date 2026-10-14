@@ -7,12 +7,12 @@ struct Resources {
   GLsizei textStart=0,textCount=0;bool highlight=false;
 };
 inline Resources& State(){static Resources r;return r;}
-inline void Shutdown(){auto& r=State();if(r.vbo)glDeleteBuffers(1,&r.vbo);if(r.vao)glDeleteVertexArrays(1,&r.vao);if(r.solid)glDeleteTextures(1,&r.solid);r={};}
-inline void Render(const float* mvp,const fo3dialogue::Panel& panel) {
+inline void Shutdown(Resources* resources=nullptr){auto& r=resources?*resources:State();if(r.vbo)glDeleteBuffers(1,&r.vbo);if(r.vao)glDeleteVertexArrays(1,&r.vao);if(r.solid)glDeleteTextures(1,&r.solid);r={};}
+inline void Render(const float* mvp,const fo3dialogue::Panel& panel,Resources* resources=nullptr) {
   if(!panel.visible||!mvp)return;
   fo3hudrenderer::GlStateGuard guard;glActiveTexture(GL_TEXTURE0);
   if(!fo3hudrenderer::EnsureResources())return;
-  auto& font=fo3hudrenderer::State();auto& r=State();
+  auto& font=fo3hudrenderer::State();auto& r=resources?*resources:State();
   if(!r.vao){glGenVertexArrays(1,&r.vao);glGenBuffers(1,&r.vbo);const uint8_t white[]{255,255,255,255};r.solid=fo3hudassets::UploadTexture(1,1,white);}
   if(!r.vao||!r.vbo||!r.solid)return;
   if(r.revision!=panel.revision||r.selected!=panel.selected) {
@@ -23,15 +23,16 @@ inline void Render(const float* mvp,const fo3dialogue::Panel& panel) {
     auto append=[&](const std::string& text){for(auto& line:fo3dialogue::Wrap(font,text,width/scale)){lines.push_back({line,y});y-=rowStep;}};
     append(panel.title);y-=.01f;
     if(!panel.subtitle.empty()){append(panel.subtitle);y-=.01f;}
-    const size_t start=panel.selected>=4?panel.selected-3:0;
+    const size_t selected=panel.selected==SIZE_MAX?0:panel.selected;
+    const size_t start=selected>=4?selected-3:0;
     for(size_t i=start;i<panel.choices.size()&&i<start+4;++i){
       if(i==panel.selected)selectedTop=y+.007f;
       append(panel.choices[i]);if(i==panel.selected)selectedBottom=y+.002f;y-=.012f;
     }
-    append(panel.choices.empty()?"B Exit":"A Select    B Exit");
+    append(panel.footer.empty()?(panel.choices.empty()?"B Exit":"A Select    B Exit"):panel.footer);
     std::vector<fo3hudassets::Vertex> vertices;
     AppendPromptQuad(vertices,-.35f,.018f,.35f,y-.01f,0,0,0,1,0,0,1,1,1);
-    r.highlight=!panel.choices.empty();
+    r.highlight=!panel.choices.empty()&&panel.selected!=SIZE_MAX;
     if(r.highlight)AppendPromptQuad(vertices,-.34f,selectedTop,.34f,selectedBottom,.001f,0,0,1,0,0,1,1,1);
     r.textStart=GLsizei(vertices.size());
     for(auto& line:lines)fo3font::AppendText(font,line.text,0,0,[&](uint8_t,const fo3font::Glyph& g,const fo3font::Quad& q){
@@ -53,4 +54,9 @@ inline void Render(const float* mvp,const fo3dialogue::Panel& panel) {
   if(r.highlight){glUniform4f(font.tintLoc,26.f/255,1,128.f/255,.22f);glDrawArrays(GL_TRIANGLES,6,6);}
   glBindTexture(GL_TEXTURE_2D,font.fontTexture);glUniform4f(font.tintLoc,26.f/255,1,128.f/255,1);glDrawArrays(GL_TRIANGLES,r.textStart,r.textCount);
 }
+}
+
+namespace fo3barterui {
+inline fo3dialogueui::Resources* State(){static fo3dialogueui::Resources resources[2];return resources;}
+inline void Shutdown(){for(int side=0;side<2;++side)fo3dialogueui::Shutdown(&State()[side]);}
 }

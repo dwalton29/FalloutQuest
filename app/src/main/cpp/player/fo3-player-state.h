@@ -63,6 +63,8 @@ struct Item {
   std::string editorId, name, model, femaleModel, icon, femaleIcon;
   int32_t value = 0, maxCondition = 0;
   float weight = 0;
+  uint8_t ingestibleFlags=0;
+  int32_t equipType=-1;
   bool playable = true, questItem = false, cannotDrop = false,
        valueKnown = true;
 };
@@ -160,6 +162,7 @@ struct ScriptMessage {
   std::string title,text;
   std::vector<std::string> buttons;
 };
+struct MerchantVisit {uint32_t day=0;float hour=0;};
 struct State {
   fo3pipdata::SessionState pipboy;
   std::array<uint8_t, 7> special{};
@@ -184,6 +187,8 @@ struct State {
   // Per-save SetQuestObject overrides; original ESM item metadata remains immutable.
   std::unordered_map<uint32_t,bool> questObjectFlags;
   std::unordered_map<uint32_t, std::vector<Stack>> containers;
+  std::unordered_map<uint32_t,MerchantVisit> merchantVisits;
+  std::unordered_map<uint32_t,int32_t> actorDispositionModifiers;
   std::vector<WorldWeapon> worldWeapons;
   bool developmentWeaponGranted = false;
   std::unordered_map<uint32_t,float> actorDamage;
@@ -192,8 +197,21 @@ struct State {
 struct CellOwnership {OwnershipData data;uint8_t flags=0;std::string editor;};
 // Sparse immutable XESP graph, independent of Pip-Boy target pruning.
 struct EnableParent {uint32_t reference=0;uint8_t flags=0;bool valid=true;};
+struct BarterRequest {uint32_t actor=0;int discount=0;};
+struct BarterSelection {uint64_t stack=0;int32_t count=0;bool buying=false;};
+struct BarterSession {
+  uint32_t actor=0,container=0;int discount=0;
+  const void* owner=nullptr;uint8_t skill=0;
+  std::unordered_map<uint32_t,uint8_t> perks;
+  std::vector<Stack> player,merchant;
+  std::vector<BarterSelection> selections;
+};
 struct Catalog {
   fo3weapon::Definitions weapons;
+  std::unordered_map<uint32_t,uint32_t> merchantContainers,merchantServices;
+  std::unordered_map<std::string,float> barterSettings;
+  uint32_t merchantRespawnHours=72; // Fallout3.exe iHoursToRespawnCell default.
+  std::unordered_set<uint32_t> encounterZoneReferences;
   // Immutable original ACHR census. This is a source data catalogue, not a
   // request to build actor visuals or simulate every world CELL.
   std::unordered_map<uint32_t,fo3pipdata::Placement> actorPlacements;
@@ -301,11 +319,11 @@ public:
   // flags.
   bool RecordDialogue(uint32_t actor,uint32_t info,const std::vector<uint32_t>& topics);
   bool SetDialogueVariable(uint64_t key,float value);
-  bool ExecuteDialogueResult(const fo3pipdata::ResultScript& script,std::string& error);
+  bool ExecuteDialogueResult(const fo3pipdata::ResultScript& script,std::string& error,uint32_t speaker=0);
   // Evaluate against a private Player candidate sharing the immutable catalogue.
   // No live state/queues/callbacks change during preparation or previews.
   std::unique_ptr<ScriptTransactionPlan> PrepareDialogueTransaction(
-      const fo3pipdata::ResultScript& begin,const fo3pipdata::ResultScript& end,std::string& error) const;
+      const fo3pipdata::ResultScript& begin,const fo3pipdata::ResultScript& end,std::string& error,uint32_t speaker=0) const;
   std::unique_ptr<ScriptTransactionPlan> PrepareQuestStageTransaction(
       uint32_t quest,uint16_t stage,std::string& error) const;
   std::unique_ptr<ScriptTransactionPlan> PrepareReferenceEventTransaction(
@@ -359,8 +377,8 @@ public:
   void SetScriptEventDiagnostic(std::function<void(const std::string&)> diagnostic) {
     eventDiagnostic_=std::move(diagnostic);
   }
-  bool PreviewDialogueResult(const fo3pipdata::ResultScript&,std::string&) const;
-  bool PreviewDialogueResults(const fo3pipdata::ResultScript&,const fo3pipdata::ResultScript&,std::string&) const;
+  bool PreviewDialogueResult(const fo3pipdata::ResultScript&,std::string&,uint32_t speaker=0) const;
+  bool PreviewDialogueResults(const fo3pipdata::ResultScript&,const fo3pipdata::ResultScript&,std::string&,uint32_t speaker=0) const;
   bool ExecuteQuestStage(uint32_t,uint16_t,std::string&);
   bool StopQuest(uint32_t);
   bool SetGlobalValue(uint32_t,float);
@@ -430,6 +448,15 @@ public:
   bool CanActorOpenDoor(uint32_t actor,uint32_t reference) const;
   bool CanLootContainer(uint32_t reference) const;
   bool PrepareContainer(uint32_t reference);
+  bool MerchantAvailable(uint32_t actor) const;
+  bool OpenBarter(uint32_t actor,int discount,BarterSession& out);
+  bool BarterItemAllowed(uint32_t actor,const Stack& item) const;
+  bool BarterPrice(const Stack& item,bool buying,int discount,float& out) const;
+  bool BarterBalance(const BarterSession&,int64_t& net,std::string& error) const;
+  bool ConfirmBarter(BarterSession&,std::string& error);
+  bool QueueBarter(uint32_t actor,int discount);
+  bool ModActorDisposition(uint32_t actor,int32_t amount);
+  bool PollBarter(BarterRequest& out);
   const std::vector<Stack> *ContainerContents(uint32_t reference) const;
   bool CanTakeContainerStack(uint32_t reference, uint64_t stack) const;
   bool TakeContainerStack(uint32_t reference, uint64_t stack);
@@ -466,6 +493,8 @@ private:
                       uint32_t activator,std::string& error);
   void LogScriptEventError(uint32_t scriptId,const char* event,const std::string& error);
   bool PrepareInventory(uint32_t reference,bool actor);
+  void TouchMerchantCells(uint32_t cell);
+  bool RestockMerchant(uint32_t actor,uint32_t chest);
   bool MigrateWeaponInstances(State &state) const;
   bool RunScript(const fo3pipdata::ResultScript&,uint32_t owner,unsigned depth,unsigned& budget,std::string&,uint32_t scriptId=0);
   bool RunQuestStage(uint32_t,uint16_t,unsigned depth,unsigned& budget,std::string&);
@@ -483,6 +512,7 @@ private:
   std::vector<ScriptMessage> pendingScriptMessages_;
   std::vector<QuestNotice> pendingQuestNotices_;
   std::vector<uint32_t> pendingScriptSounds_;
+  std::vector<BarterRequest> pendingBarters_;
   std::vector<KarmaEvent> pendingKarmaEvents_;
   std::vector<TheftEvent> pendingTheftEvents_;
   uint32_t containerInteraction_=0;

@@ -56,7 +56,8 @@ bool Player::PrepareInventory(uint32_t id,bool actor) {
   uint64_t nextId = state_.nextStackId;
   // Runtime-owned RNG; outcomes persist once. Not Bethesda save/RNG parity.
   std::mt19937 random(id ^ catalog_->lootFingerprint ^
-                      catalog_->worldFingerprint ^ state_.level);
+                      catalog_->worldFingerprint ^ state_.level ^
+                      (state_.merchantVisits.count(id)?state_.merchantVisits.at(id).day:0));
   std::unordered_set<uint32_t> path;
   size_t work = 0;
   std::function<bool(uint32_t, int32_t, float, uint32_t, uint32_t, unsigned)> expand;
@@ -215,3 +216,4 @@ bool Player::TakeContainerStack(uint32_t id, uint64_t stack) {
   return true;
 }
 } // namespace fo3player
+#include "fo3-barter-state.inc"

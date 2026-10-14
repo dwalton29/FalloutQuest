@@ -89,6 +89,17 @@ bool CompileResult(const fo3pipdata::Definitions& d,const fo3pipdata::ResultScri
         else {cmd.type=op=="setobjectivedisplayed"?CommandType::ObjectiveDisplay:CommandType::ObjectiveComplete;
           if(!(in>>c)||!number(c,cmd.value)||(cmd.value!=0&&cmd.value!=1)){error="invalid objective flag";return false;}}
       }
+    } else if(op=="moddisposition"||(op.size()>15&&op.compare(op.size()-15,15,".moddisposition")==0)) {
+      const auto dot=op.find('.');cmd.form=dot==std::string::npos?owner:form(op.substr(0,dot));
+      cmd.type=CommandType::ModDisposition;
+      if(!cmd.form||!(in>>a)||!number(a,cmd.value)||std::floor(cmd.value)!=cmd.value||cmd.value<-2147483648.0||double(cmd.value)>2147483647.0){error="invalid ModDisposition";return false;}
+    } else if(op=="showbartermenu"||op=="sbm"||
+        (op.size()>15&&op.compare(op.size()-15,15,".showbartermenu")==0)||
+        (op.size()>4&&op.compare(op.size()-4,4,".sbm")==0)) {
+      const auto dot=op.find('.');cmd.form=dot==std::string::npos?owner:form(op.substr(0,dot));
+      if(!cmd.form){error="ShowBarterMenu requires actor reference";return false;}
+      cmd.type=CommandType::ShowBarterMenu;std::getline(in,cmd.expression);
+      cmd.expression=fo3script::Trim(cmd.expression);
     } else if(op=="showmessage") {
       cmd.type=CommandType::ShowMessage;
       if(!(in>>a)||(cmd.form=form(a))==0){error="invalid showmessage form";return false;}
