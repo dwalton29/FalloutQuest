@@ -31,7 +31,7 @@ void Seal(Bytes &b) {
   Put(b,16,crc32(0,b.data()+20,b.size()-20));
 }
 Catalog Fixture() {
-  Catalog c;
+  Catalog c;c.initial.baseHealth=100;c.initial.special.fill(1);
   Item item;item.formId=0x434f;item.kind=ItemKind::Weapon;
   item.editorId="Weap10mmPistol";item.name="10mm Pistol";item.maxCondition=150;
   auto &d=item.weapon;d.valid=true;d.animation=3;d.ammo=0x4241;d.projectile=0x2cd5f;

@@ -10,7 +10,7 @@
 using namespace fo3player;
 void Check(bool ok,const char* why){if(!ok)throw std::runtime_error(why);}
 Catalog Fixture(){
- Catalog c;c.theftKarma=-5;c.initial.karma=10;c.fingerprint=123;
+ Catalog c;c.initial.baseHealth=100;c.initial.special.fill(1);c.theftKarma=-5;c.initial.karma=10;c.fingerprint=123;
  Item i;i.formId=100;i.name="Cup";c.items[100]=i;i.formId=101;i.name="Plate";c.items[101]=i;
  c.pipboy.dialogueActors[PlayerBase]={};c.pipboy.dialogueActors[90].karma=0;
  c.pipboy.dialogueActors[91].karma=-250;

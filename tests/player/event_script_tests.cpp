@@ -28,7 +28,7 @@ static void Parsing() {
 }
 static fo3player::Catalog Catalog() {
   fo3player::Catalog c;
-  c.initial.baseHealth=100;
+  c.initial.baseHealth=100;c.initial.special.fill(1);
   c.pipboy.quests[20].editor="ExampleQuest";
   c.pipboy.quests[20].stages[10]={};
   c.pipboy.formNames["examplequest"]=20;
@@ -251,6 +251,7 @@ static void PersistentReferenceState() {
   c.enableParents[100]={200,1,true};c.references[201].flags=0;
   c.enableParents[201]={999,0,true};c.items[400].formId=400;
   c.pipboy.formNames["missingitem"]=400;
+  c.references[200].base=400;c.references[300].base=500;c.containers[500].valid=true;
   fo3player::Player p(c);std::string error;bool disabled=false;
   const auto path="/tmp/fq-reference-state-"+std::to_string(getpid())+".fqps";
   auto read=[&](){std::ifstream in(path,std::ios::binary);return std::vector<uint8_t>(std::istreambuf_iterator<char>(in),{});};
@@ -258,6 +259,8 @@ static void PersistentReferenceState() {
   auto put=[](std::vector<uint8_t>& b,size_t at,uint32_t n){for(unsigned i=0;i<4;++i)b[at+i]=uint8_t(n>>(i*8));};
   auto write=[&](std::vector<uint8_t> b){put(b,12,uint32_t(b.size()-20));put(b,16,uint32_t(crc32(0,b.data()+20,b.size()-20)));
     std::ofstream out(path,std::ios::binary);out.write(reinterpret_cast<const char*>(b.data()),b.size());assert(out);};
+  assert(!p.CanPickup(200)&&p.CanOpenDoor(300)&&p.CanLootContainer(300));
+  assert(p.CanPickLock(300)==fo3player::PickAccess::Unlocked);
   assert(p.Save(path,error));const auto legacy=read();assert(u32(legacy,4)==14);
   const auto revision=p.Revision();
   assert(p.StageReferenceEnable(200,false,error)&&p.Revision()==revision);
@@ -265,20 +268,28 @@ static void PersistentReferenceState() {
   assert(!p.StageReferenceEnable(201,true,error)&&p.Revision()==revision);
   assert(p.StageReferenceEnable(100,false,error)&&p.Revision()==revision); // Parent-controlled no-op.
   assert(p.StageReferenceEnable(200,true,error)&&p.StageReferenceEnable(300,false,error));
+  assert(p.CanPickup(200)&&!p.CanOpenDoor(300)&&!p.CanLootContainer(300));
+  assert(p.CanPickLock(300)==fo3player::PickAccess::Unsupported);
   auto immutable=p.CaptureReferenceState();
   assert(immutable.Enabled(200,false)&&!immutable.Enabled(300,true)&&!immutable.Enabled(100,true));
   assert(!immutable.Enabled(201,true)); // Invalid graph fails closed.
   assert(immutable.Enabled(987,true)&&!immutable.Enabled(987,false)); // Authored fallback.
+  std::array<uint8_t,7> special;special.fill(10);std::array<uint8_t,14> skills;skills.fill(100);
+  assert(p.SetPlayerAttributes(special,skills));
   const auto worldRevision=p.Snapshot().referenceStateRevision;
   assert(!p.ExecuteDialogueResult({"StartQuest ExampleQuest\nplayer.removeitem missingitem 1",{},{},{},{}},error));
   assert(p.Snapshot().referenceEnabled.size()==2&&p.Snapshot().referenceStateRevision==worldRevision&&p.Snapshot().pipboy.quests.empty());
   assert(p.PreviewDialogueResult({"StartQuest ExampleQuest",{},{},{},{}},error));
   assert(p.Snapshot().referenceEnabled.size()==2&&p.Snapshot().pipboy.quests.empty());
   assert(p.Save(path,error));const auto good=read();
-  assert(good.size()==legacy.size()+18&&u32(good,legacy.size())==0x31454652&&u32(good,legacy.size()+4)==2);
+  assert(good.size()==legacy.size()+43&&u32(good,legacy.size())==0x31454652&&u32(good,legacy.size()+4)==2);
   assert(p.StageReferenceEnable(200,false,error)&&p.StageReferenceEnable(300,true,error));
   assert(p.Snapshot().referenceEnabled.empty()&&immutable.Enabled(200,false));
   assert(p.Restore(path,error)&&p.Snapshot().referenceEnabled.size()==2);
+  assert(p.Snapshot().special==special&&p.Snapshot().skills==skills);
+  auto legacyOverlay=good;legacyOverlay.resize(legacyOverlay.size()-25);put(legacyOverlay,4,14);write(legacyOverlay);
+  assert(p.Restore(path,error)&&p.Snapshot().referenceEnabled.size()==2&&p.Snapshot().special==c.initial.special);
+  write(good);assert(p.Restore(path,error)&&p.Snapshot().special==special);
   assert(p.ReferenceDisabled(200,disabled,error)&&!disabled);
   assert(p.ReferenceDisabled(100,disabled,error)&&disabled);
   const auto before=p.Revision();const auto beforeState=p.Snapshot().referenceEnabled;
@@ -293,6 +304,7 @@ static void PersistentReferenceState() {
   assert(p.Revision()==before&&p.Snapshot().referenceEnabled==beforeState);
   write(legacy);assert(p.Restore(path,error)&&p.Snapshot().referenceEnabled.empty());
   assert(p.ReferenceDisabled(200,disabled,error)&&disabled);
+  assert(!p.CanPickup(200)&&p.CanLootContainer(300));
   std::remove(path.c_str());
 }
 static void OriginalBomb(const char* path) {

@@ -37,8 +37,9 @@ extern void PumpFo3AndroidEventsQ1860();
 #include "fo3-authored-door-cache.inc"
 
 bool LoadFo3CellPlacements(uint32_t cellFormId,
-                           std::vector<Fo3WorldPlacement>& outPlacements) {
-    return LoadFo3InteriorCellPlacementsQ1700(cellFormId, outPlacements);
+                           std::vector<Fo3WorldPlacement>& outPlacements,
+                           const fo3world::ReferenceStateSnapshot* referenceState = nullptr) {
+    return LoadFo3InteriorCellPlacementsQ1700(cellFormId, outPlacements, referenceState);
 }
 
 // Placement metadata is compiled separately; LAND shares only explicit CPU
@@ -188,7 +189,8 @@ void RenderFo3CollisionOverlay(const float* mvp16) {
 }
 
 bool LoadFo3CellPlacementsQ74(uint32_t cellFormId,
-                             std::vector<Fo3WorldPlacement>& outPlacements) {
+                             std::vector<Fo3WorldPlacement>& outPlacements,
+                             const fo3world::ReferenceStateSnapshot* referenceState) {
     // For exterior load doors, the linked REFR often belongs to the WRLD's
     // persistent CELL. Rendering only that CELL produces the Q7.4 random-prop
     // soup. Q7.5 instead merges it with the actual XCLC exterior grid cells.
@@ -201,7 +203,7 @@ bool LoadFo3CellPlacementsQ74(uint32_t cellFormId,
             cellFormId,
             gPendingTransitionQ74.x,
             gPendingTransitionQ74.y,
-            outPlacements);
+            outPlacements, referenceState);
         if (loaded) {
             const size_t dynamicOnlyModels = ConfigureFo3CollisionPolicyQ710(outPlacements);
             size_t dynamicPlacements = 0u;
@@ -223,7 +225,7 @@ bool LoadFo3CellPlacementsQ74(uint32_t cellFormId,
         ActivateFo3TerrainGroundingQ77(0u, 0.0f, 0.0f, 0.0f,
                                        Q71_SCENE_FORWARD, Q71_FLOOR_Y,
                                        Q71_UNITS_PER_METRE);
-        const bool loaded = LoadFo3CellPlacements(cellFormId, outPlacements);
+        const bool loaded = LoadFo3CellPlacements(cellFormId, outPlacements, referenceState);
         if (loaded) ConfigureFo3CollisionPolicyQ710(outPlacements);
         Q71_LOGI("Q16.0 INTERIOR CELL LOAD: cell=%08X placements=%zu loaded=%d source=Fallout3.esm",
                  cellFormId, outPlacements.size(), loaded ? 1 : 0);
@@ -1107,15 +1109,16 @@ void SetFo3TransitionContextQ74(const Fo3CellTransitionRequestQ74& request) {
 }
 
 bool LoadFo3ScenePlacements(const Fo3CellTransitionRequestQ74& request,
-                           std::vector<Fo3WorldPlacement>& outPlacements) {
+                           std::vector<Fo3WorldPlacement>& outPlacements,
+                           const fo3world::ReferenceStateSnapshot* referenceState) {
     outPlacements.clear();
     if (!request.valid) return false;
     if (request.worldspaceFormId != 0u) {
         return LoadFo3WorldspacePlacements(
             {request.worldspaceFormId, request.cellFormId, request.x, request.y, -1},
-            outPlacements);
+            outPlacements, referenceState);
     }
-    return LoadFo3CellPlacements(request.cellFormId, outPlacements);
+    return LoadFo3CellPlacements(request.cellFormId, outPlacements, referenceState);
 }
 
 bool ConsumeFo3CellTransitionRequestQ74(Fo3CellTransitionRequestQ74& outRequest) {

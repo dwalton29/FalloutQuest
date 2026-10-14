@@ -5,6 +5,11 @@
 bool Fo3ScriptMessageFocus();
 bool BeginFo3Lockpick(uint32_t reference);
 
+bool IsFo3ReferenceEnabled(const fo3player::Player& player,uint32_t reference) {
+    bool disabled=false;std::string error;
+    return player.ReferenceDisabled(reference,disabled,error)&&!disabled;
+}
+
 void NotifyFo3ItemTransfer(uint32_t base,int32_t count) {
     const auto& catalog=gPlayerSession->player.Definitions();
     const auto item=catalog.items.find(base);
@@ -50,7 +55,7 @@ bool QueryFo3Interaction(float ox, float oy, float oz, float dx, float dy,
     const auto& catalog = player.Definitions();
     float best = 3.001f;
     Fo3DoorAimQ1700 door;
-    if (QueryDoorInternalQ1700(ox,oy,oz,dx,dy,dz,&door)) {
+    if (QueryDoorInternalQ1700(ox,oy,oz,dx,dy,dz,&door) && IsFo3ReferenceEnabled(player,door.sourceDoorRef)) {
         best = door.distance;
         target.reference = door.sourceDoorRef;
         target.door = door;
@@ -65,7 +70,8 @@ bool QueryFo3Interaction(float ox, float oy, float oz, float dx, float dy,
         // Inventory eligibility comes from the item catalog, independently
         // of whether the physics runtime supports this loose-object type.
         if (player.IsCollected(object.refFormId) ||
-            (!container && !scripted && !catalog.items.count(object.baseFormId))) continue;
+            (!container && !scripted && !catalog.items.count(object.baseFormId)) ||
+            !IsFo3ReferenceEnabled(player,object.refFormId)) continue;
         fo3interaction::Point lo{1e30f,1e30f,1e30f}, hi{-1e30f,-1e30f,-1e30f};
         for (int corner=0;corner<8;++corner) {
             const auto p = Q220TransformPoint(object.q220DynamicTransform,
@@ -85,8 +91,7 @@ bool QueryFo3Interaction(float ox, float oy, float oz, float dx, float dy,
             const float panelDistance=std::max(0.0f,distance-.15f);
             target.anchor={ox+dx*panelDistance,oy+dy*panelDistance+.22f,oz+dz*panelDistance};
             target.allowed=!gPlayerSession->saveBlocked &&
-                (scripted ? (catalog.references.count(target.reference)!=0 &&
-                   (catalog.references.at(target.reference).flags&0x820u)==0)
+                (scripted ? IsFo3ReferenceEnabled(player,target.reference)
                   : (container ? player.CanLootContainer(target.reference) : player.CanPickup(target.reference)));
             target.door={};
         }
@@ -305,7 +310,7 @@ bool ActivateFo3Interaction(float ox,float oy,float oz,float dx,float dy,float d
             const auto& refs=gPlayerSession->player.Definitions().references;
             const auto ref=refs.find(target.reference);
             if(ref!=refs.end() && ref->second.valid && !gPlayerSession->player.GetLock(target.reference).locked &&
-               !(ref->second.flags&0x820u)){
+               IsFo3ReferenceEnabled(gPlayerSession->player,target.reference)){
                 std::string error;
                 gPlayerSession->player.DispatchReferenceEvent(
                     target.reference,"OnActivate",fo3player::PlayerRef,error);

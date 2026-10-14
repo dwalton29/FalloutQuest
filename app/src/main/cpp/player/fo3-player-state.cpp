@@ -913,10 +913,11 @@ bool Player::CanPickup(uint32_t id) const {
     return false;
   const auto &ref = r->second;
   const auto i = catalog_.items.find(ref.base);
-  return ref.valid && !(ref.flags & 0x20) &&
-         ResolveOwnership(id).known && !ref.locked &&
-         i != catalog_.items.end() && i->second.playable && !i->second.script &&
-         (i->second.maxCondition > 0 || ref.condition == 1);
+  if(!ref.valid || (ref.flags & 0x20) || !ResolveOwnership(id).known || ref.locked ||
+     i==catalog_.items.end() || !i->second.playable || i->second.script ||
+     !(i->second.maxCondition>0 || ref.condition==1))return false;
+  bool disabled=false;std::string error;
+  return ReferenceDisabled(id,disabled,error)&&!disabled;
 }
 bool Player::Pickup(uint32_t id) {
   if (!CanPickup(id) || state_.collected.size() >= 100000)
@@ -942,6 +943,8 @@ bool Player::CanActorOpenDoor(uint32_t actor,uint32_t id) const {
       (catalog_.scriptedBases.count(ref.base) &&
        (actor!=PlayerRef||!catalog_.defaultActivationDoors.count(ref.base))))
     return false;
+  bool disabled=false;std::string error;
+  if(!ReferenceDisabled(id,disabled,error)||disabled)return false;
   if(actor!=PlayerRef&&ActorHealth(actor)<=0)return false;
   if (!GetLock(id).locked)
     return true;
@@ -1496,23 +1499,21 @@ bool Player::Restore(const std::string &path, std::string &error) {
            std::any_of(next.skills.begin(),next.skills.end(),[](uint8_t v){return v>100;}))
           return fail("Invalid saved player attributes");
       }
-      // Resource validation must use the restored SPECIAL values, not the ESM
-      // baseline. A character with 10 END/AGI may have higher HP/AP limits.
-      const auto& rule=catalog_.rules;
-      const float maxHealth=next.baseHealth+(next.special[2]+rule.healthEnduranceOffset)*rule.healthEnduranceMult+
-          (next.level-1)*rule.healthLevelMult;
-      const float maxAp=rule.apBase+next.special[5]*rule.apMult;
-      // Historic saves and lightweight test catalogues can have a zero
-      // maximum health value. Preserve the v1-v14 resource acceptance rule;
-      // only v15 attribute overrides require a positive derived maximum.
-      if(!std::isfinite(maxHealth)||(version>=15&&maxHealth<=0)||next.healthDamage>maxHealth||
-         !std::isfinite(maxAp)||maxAp<0||next.apSpent>maxAp)
-        return fail("Invalid saved player resources");
       if(at!=payload.size())return fail("Trailing player save data");
     }
     if (version == 3 && at != payload.size())
       return fail("Trailing container save data");
   }
+  // Resource validation must use the restored SPECIAL values, not the ESM
+  // baseline. A character with 10 END/AGI may have higher HP/AP limits.
+  const auto& rule=catalog_.rules;
+  const float maxHealth=next.baseHealth+(next.special[2]+rule.healthEnduranceOffset)*rule.healthEnduranceMult+
+      (next.level-1)*rule.healthLevelMult;
+  const float maxAp=rule.apBase+next.special[5]*rule.apMult;
+  // Legacy v1-v14 catalogues may have zero maximum health.
+  if(!std::isfinite(maxHealth)||(version>=15&&maxHealth<=0)||next.healthDamage>maxHealth||
+     !std::isfinite(maxAp)||maxAp<0||next.apSpent>maxAp)
+    return fail("Invalid saved player resources");
   for(const auto& global:next.pipboy.mutableGlobals) {
     if(!catalog_.globals.count(global.first)||global.first==catalog_.hourGlobal||global.first==catalog_.dayGlobal||global.first==catalog_.monthGlobal||global.first==catalog_.yearGlobal||global.first==catalog_.daysPassedGlobal||global.first==catalog_.timeScaleGlobal)
       return fail("Invalid mutable script global");

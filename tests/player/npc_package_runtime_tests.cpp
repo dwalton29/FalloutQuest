@@ -103,7 +103,7 @@ static std::shared_ptr<Q240NavigationGraph> Graph(bool invalid=false) {
 static Q230ActorVisual Actor(uint8_t type) {
   activePackageTargets=&packageTargets;
   packageTargets.clear();
-  fo3player::Catalog c;c.initial.baseHealth=100;
+  fo3player::Catalog c;c.initial.baseHealth=100;c.initial.special.fill(1);
   c.pipboy.targets[42].base=43;c.weapons.actors[43].health=100;
   auto& d=c.pipboy;d.dialogueActors[43].packages={51,50};
   d.packages[51].type=3; // Unsupported higher priority must not block the route.

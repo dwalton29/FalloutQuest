@@ -733,7 +733,8 @@ void ConvertBethesdaRotationQ75(float rx, float ry, float rz,
 using namespace fo3world_detail;
 
 bool LoadFo3WorldspacePlacements(const Fo3WorldspaceSelection& selection,
-                                 std::vector<Fo3WorldPlacement>& outPlacements) {
+                                 std::vector<Fo3WorldPlacement>& outPlacements,
+                                 const fo3world::ReferenceStateSnapshot* referenceState) {
     const uint32_t worldspaceFormId = selection.worldspace;
     const uint32_t persistentCellFormId = selection.persistentCell;
     const float arrivalX = selection.gameX;
@@ -860,7 +861,9 @@ bool LoadFo3WorldspacePlacements(const Fo3WorldspaceSelection& selection,
     size_t disabled = 0u;
     for (const RawPlacementQ75& p : raw) {
         std::unordered_set<uint32_t> visiting;
-        if (ResolveInitialEnabledQ75(p.refFormId, refs, memo, visiting)) active.push_back(&p);
+        const bool authored=ResolveInitialEnabledQ75(p.refFormId, refs, memo, visiting);
+        const bool enabled=referenceState?referenceState->Enabled(p.refFormId,authored):authored;
+        if (enabled && !(p.recordFlags & 0x20u)) active.push_back(&p);
         else ++disabled;
     }
 
@@ -957,9 +960,10 @@ bool LoadFo3WorldspacePlacements(const Fo3WorldspaceSelection& selection,
 // Compatibility entry point for initial arrival and door transitions.
 bool LoadFo3WorldspaceNeighborhoodQ75(uint32_t worldspace, uint32_t persistentCell,
                                      float gameX, float gameY,
-                                     std::vector<Fo3WorldPlacement>& out) {
+                                     std::vector<Fo3WorldPlacement>& out,
+                                     const fo3world::ReferenceStateSnapshot* referenceState) {
     return LoadFo3WorldspacePlacements(
-        {worldspace, persistentCell, gameX, gameY, -1}, out);
+        {worldspace, persistentCell, gameX, gameY, -1}, out, referenceState);
 }
 
 bool LookupFo3WastelandDoorTeleportQ1920(

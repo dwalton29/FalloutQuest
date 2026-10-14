@@ -9,7 +9,7 @@
 #include <zlib.h>
 using namespace fo3player;
 static Catalog Fixture(bool finite=true) {
-  Catalog c;c.initial.baseHealth=100;c.weapons.skillBase=1;c.weapons.conditionBase=1;
+  Catalog c;c.initial.baseHealth=100;c.initial.special.fill(1);c.weapons.skillBase=1;c.weapons.conditionBase=1;
   Item w;w.formId=10;w.kind=ItemKind::Weapon;w.name="Authored weapon";w.maxCondition=100;
   auto& d=w.weapon;d.valid=true;d.animation=3;d.ammo=11;d.clip=3;d.ammoUse=1;d.pellets=1;d.damage=20;d.shotsPerSecond=4;d.flags2=finite?2:0;
   c.items[10]=w;Item ammo;ammo.formId=11;ammo.kind=ItemKind::Ammo;ammo.name="Ammo";c.items[11]=ammo;

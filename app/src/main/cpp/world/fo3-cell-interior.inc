@@ -260,7 +260,8 @@ void ConvertBethesdaRotation(float rx, float ry, float rz,
 } // namespace Q1700Interior
 
 bool LoadFo3InteriorCellPlacementsQ1700(uint32_t cellFormId,
-                                        std::vector<Fo3WorldPlacement>& outPlacements) {
+                                        std::vector<Fo3WorldPlacement>& outPlacements,
+                                        const fo3world::ReferenceStateSnapshot* referenceState) {
     outPlacements.clear();
     std::vector<Q1700Interior::RawPlacement> raw;
     if (!Q1700Interior::CollectCellReferences(cellFormId, raw)) {
@@ -277,9 +278,9 @@ bool LoadFo3InteriorCellPlacementsQ1700(uint32_t cellFormId,
     active.reserve(raw.size());
     for (const auto& p : raw) {
         std::unordered_set<uint32_t> visiting;
-        if (Q1700Interior::ResolveEnabled(p.refFormId, refs, enabledMemo, visiting)) {
-            active.push_back(&p);
-        }
+        const bool authored=Q1700Interior::ResolveEnabled(p.refFormId, refs, enabledMemo, visiting);
+        const bool enabled=referenceState?referenceState->Enabled(p.refFormId,authored):authored;
+        if (enabled && !(p.recordFlags & 0x20u)) active.push_back(&p);
     }
 
     std::unordered_set<uint32_t> wanted;

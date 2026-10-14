@@ -42,6 +42,7 @@ struct Q1960ShapeUploadQ19 {
 };
 
 struct Q1900CellWorkerTaskQ19 {
+    std::shared_ptr<const fo3world::ReferenceStateSnapshot> referenceState;
     uint64_t contextSerial = 0u;
     uint32_t worldspace = 0u;
     uint32_t persistentCell = 0u;
@@ -471,7 +472,7 @@ void Q1900RunCellWorkerQ19(
             (static_cast<float>(task->gridY) + 0.5f) * fo3world::CellSize;
         const bool loaded = LoadFo3WorldspacePlacements(
             {task->worldspace, task->persistentCell, selectionX, selectionY, 0},
-            neighborhood);
+            neighborhood, task->referenceState.get());
         task->metadataUs = static_cast<uint64_t>(
             std::chrono::duration_cast<std::chrono::microseconds>(
                 std::chrono::steady_clock::now() - metadataStarted).count());
@@ -691,6 +692,7 @@ void Q1900LaunchWorkerQ19(int32_t actualGridX, int32_t actualGridY) {
         if (!best || bestPriority >= 1000000) break;
 
         auto task = std::make_shared<Q1900CellWorkerTaskQ19>();
+        task->referenceState=CaptureFo3ReferenceState();
         task->contextSerial = gWorldStreaming.contextSerial;
         task->worldspace = gExteriorWorldspaceQ1890;
         task->persistentCell = gExteriorPersistentCellQ1890;

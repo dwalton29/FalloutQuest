@@ -9,7 +9,7 @@
 using namespace fo3pipdata;
 static fo3player::Catalog Fixture() {
   fo3player::Catalog c;
-  c.initial.baseHealth = 100;
+  c.initial.baseHealth = 100;c.initial.special.fill(1);
   c.rules.apBase = 50;
   c.pipboy.perks[1].ranks = 2;
   c.pipboy.quests[2].name = "Authored fixture";

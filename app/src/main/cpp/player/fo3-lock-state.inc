@@ -20,10 +20,12 @@ int Player::LockRequirement(uint32_t id) const {
   return -1;
 }
 PickAccess Player::CanPickLock(uint32_t id) const {
-  auto r=catalog_.references.find(id);if(r==catalog_.references.end()||!r->second.valid||(r->second.flags&0x820u)||
+  auto r=catalog_.references.find(id);if(r==catalog_.references.end()||!r->second.valid||(r->second.flags&0x20u)||
     catalog_.scriptedBases.count(r->second.base)||
     (catalog_.containers.count(r->second.base)&&(!catalog_.containers.at(r->second.base).valid||catalog_.containers.at(r->second.base).script))||
     (!catalog_.containers.count(r->second.base)&&!catalog_.doorBases.count(r->second.base)))return PickAccess::Unsupported;
+  bool disabled=false;std::string error;
+  if(!ReferenceDisabled(id,disabled,error)||disabled)return PickAccess::Unsupported;
   if(!ResolveOwnership(id).known)return PickAccess::Unsupported;
   auto l=GetLock(id);if(!l.locked)return PickAccess::Unlocked;
   if(l.leveled)return PickAccess::Unsupported;

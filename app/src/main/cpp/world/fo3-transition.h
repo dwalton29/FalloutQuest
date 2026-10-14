@@ -1,6 +1,7 @@
 #pragma once
 
 #include "fo3-megaton-scene.h"
+#include "fo3-reference-state.h"
 
 #include <atomic>
 #include <cstddef>
@@ -26,7 +27,8 @@ struct Fo3CellTransitionRequestQ74 {
 bool ResolveFo3MegatonEntryQ1860(Fo3CellTransitionRequestQ74& outRequest,
                                const std::atomic<bool>* cancelled = nullptr);
 bool LoadFo3ScenePlacements(const Fo3CellTransitionRequestQ74& request,
-                           std::vector<Fo3WorldPlacement>& outPlacements);
+                           std::vector<Fo3WorldPlacement>& outPlacements,
+                           const fo3world::ReferenceStateSnapshot* referenceState = nullptr);
 // Render thread publishes a resolved startup context before finalization.
 void SetFo3TransitionContextQ74(const Fo3CellTransitionRequestQ74& request);
 
@@ -42,7 +44,8 @@ bool ConsumeFo3PlayerResetQ74();
 // Generic ESM4 CELL loader used by Q7.4 after the door has resolved its owning
 // destination CELL. Only active, model-bearing REFRs are returned.
 bool LoadFo3CellPlacementsQ74(uint32_t cellFormId,
-                             std::vector<Fo3WorldPlacement>& outPlacements);
+                             std::vector<Fo3WorldPlacement>& outPlacements,
+                           const fo3world::ReferenceStateSnapshot* referenceState = nullptr);
 
 // Q7.5 exterior loader. The XTEL-linked CELL can be a worldspace persistent
 // cell, so this discovers the WRLD's XCLC grid cells, merges the persistent
@@ -51,7 +54,8 @@ bool LoadFo3CellPlacementsQ74(uint32_t cellFormId,
 bool LoadFo3WorldspaceNeighborhoodQ75(uint32_t worldspaceFormId,
                                      uint32_t persistentCellFormId,
                                      float arrivalX, float arrivalY,
-                                     std::vector<Fo3WorldPlacement>& outPlacements);
+                                     std::vector<Fo3WorldPlacement>& outPlacements,
+                           const fo3world::ReferenceStateSnapshot* referenceState = nullptr);
 
 // Collision candidates retain the original REFR/MODL transform, independent of
 // visual support or how many visible parts the renderer expands from a NIF.

@@ -8,7 +8,7 @@
 #include <zlib.h>
 using namespace fo3player;
 void Check(bool ok,const char* why){if(!ok)throw std::runtime_error(why);}
-Catalog Fixture(){Catalog c;c.fingerprint=207;c.bobbyPin=10;c.infiltrator=77;c.theftKarma=-5;c.initial.skills[4]=100;
+Catalog Fixture(){Catalog c;c.initial.baseHealth=100;c.initial.special.fill(1);c.fingerprint=207;c.bobbyPin=10;c.infiltrator=77;c.theftKarma=-5;c.initial.skills[4]=100;
  Item pin;pin.formId=10;pin.name="Bobby Pin";c.items[10]=pin;Item key;key.formId=11;key.kind=ItemKind::Key;c.items[11]=key;
  c.initial.inventory={{1,10,3,1,false}};c.initial.nextStackId=2;
  c.pipboy.perks[77].ranks=1;c.pipboy.dialogueActors[90].karma=0;

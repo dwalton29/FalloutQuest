@@ -2989,6 +2989,7 @@ std::chrono::steady_clock::time_point gQ2013ExteriorWarmupStarted{};
 
 struct Fo3SceneCpuPreparation {
     Fo3CellTransitionRequestQ74 request{};
+    std::shared_ptr<const fo3world::ReferenceStateSnapshot> referenceState;
     fo3interior::Snapshot interiorLighting;
     std::vector<Fo3WorldPlacement> placements;
     std::vector<Fo3WorldPlacement> collisionPlacements;
@@ -3036,6 +3037,16 @@ struct Fo3SceneLoadWork {
 Fo3SceneLoadWork gSceneLoad;
 uint64_t gSceneLoadFrame = 0u;
 std::unique_ptr<fo3player::Session> gPlayerSession;
+std::shared_ptr<const fo3world::ReferenceStateSnapshot> gFo3ReferenceState;
+// Render-thread cache: the bounded XESP projection is built once per committed
+// world-state revision, never scanned for each eye or streaming worker.
+std::shared_ptr<const fo3world::ReferenceStateSnapshot> CaptureFo3ReferenceState() {
+    if(!gPlayerSession) return {};
+    if(!gFo3ReferenceState || gFo3ReferenceState->revision!=gPlayerSession->player.Snapshot().referenceStateRevision)
+        gFo3ReferenceState=std::make_shared<const fo3world::ReferenceStateSnapshot>(gPlayerSession->player.CaptureReferenceState());
+    return gFo3ReferenceState;
+}
+
 
 // Dynamic NPC arrivals use the same original ESM/NIF/KF scene-worker pipeline
 // as normal actors, but upload only missing actors and never rebuild the world.
@@ -3127,9 +3138,11 @@ bool BeginFo3SceneLoad(const Fo3CellTransitionRequestQ74& request, bool boot) {
              boot ? 1 : 0, request.cellFormId, request.worldspaceFormId,
              static_cast<unsigned long long>(gSceneLoad.generation));
     const bool loadPlayer = !gPlayerSession;
+    const auto referenceState=CaptureFo3ReferenceState();
     if (!gSceneLoad.preparation.Start(
-            [request, boot, loadPlayer](Fo3SceneCpuPreparation& result, const std::atomic<bool>& cancel) {
+            [request, boot, loadPlayer, referenceState](Fo3SceneCpuPreparation& result, const std::atomic<bool>& cancel) {
         result.request = request;
+        result.referenceState=referenceState;
         auto phase = std::chrono::steady_clock::now();
         if (loadPlayer) {
             fo3player::Catalog catalog;
@@ -3176,16 +3189,18 @@ bool BeginFo3SceneLoad(const Fo3CellTransitionRequestQ74& request, bool boot) {
             } else Q6H_LOGE("PLAYER STATE UNAVAILABLE: %s", error.c_str());
         }
         if (cancel.load(std::memory_order_acquire)) return false;
+        if(result.playerSession)
+            result.referenceState=std::make_shared<const fo3world::ReferenceStateSnapshot>(result.playerSession->player.CaptureReferenceState());
         result.playerUs = Fo3SceneElapsedUs(phase);
         phase = std::chrono::steady_clock::now();
         if (boot && !ResolveFo3MegatonEntryQ1860(result.request, &cancel)) return false;
         result.resolveUs = Fo3SceneElapsedUs(phase);
         if (cancel.load(std::memory_order_acquire)) return false;
         phase = std::chrono::steady_clock::now();
-        if (!LoadFo3ScenePlacements(result.request, result.placements)) return false;
+        if (!LoadFo3ScenePlacements(result.request, result.placements, result.referenceState.get())) return false;
         if (result.request.worldspaceFormId == 0u)
             fo3interior::Load(fo3assets::FalloutMasterPath(), result.request.cellFormId,
-                {result.request.x,result.request.y,result.request.z}, result.interiorLighting);
+                {result.request.x,result.request.y,result.request.z}, result.interiorLighting, result.referenceState.get());
         result.metadataUs = Fo3SceneElapsedUs(phase);
         phase = std::chrono::steady_clock::now();
         result.selected.reserve(result.placements.size() * 2u);
@@ -3424,6 +3439,7 @@ bool ProcessQ74TransitionRequest() {
             p.InventoryWeight(), p.CarryCapacity(), p.Snapshot().inventory.size(), p.Definitions().items.size(),
             gPlayerSession->saveBlocked ? 1 : 0);
     }
+    gFo3ReferenceState=prepared.referenceState;
     if (gPlayerSession) SetFo3CollectedCollisionRefs(gPlayerSession->player.Snapshot().collected);
     FlushFo3PlayerState();
     Q74DeleteGpuObjects(gObjects);
@@ -4313,7 +4329,7 @@ bool RebuildExteriorWindowQ1890(float selectionGameX, float selectionGameY,
             gExteriorWorldspaceQ1890,
             gExteriorPersistentCellQ1890,
             selectionGameX, selectionGameY,
-            placements)) {
+            placements, CaptureFo3ReferenceState().get())) {
         Q6H_LOGE("Q16.17 WINDOW BUILD FAILED: generation=%llu phase=worldspace-load targetGrid=(%d,%d) oldSceneRetained=1",
                  static_cast<unsigned long long>(generation), targetGridX, targetGridY);
         gExteriorStreamBusyQ1890 = false;

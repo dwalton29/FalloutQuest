@@ -45,3 +45,12 @@ target_compile_options(interior_lighting_tests PRIVATE -Wall -Wextra -Werror)
 target_include_directories(interior_lighting_tests PRIVATE ../../app/src/main/cpp ../../app/src/main/cpp/data)
 target_link_libraries(interior_lighting_tests PRIVATE ZLIB::ZLIB)
 add_test(NAME interior_lighting_tests COMMAND interior_lighting_tests)
+
+add_executable(reference_placement_tests reference_placement_tests.cpp
+    ../../app/src/main/cpp/world/fo3-worldspace-runtime.cpp
+    ../../app/src/main/cpp/data/fo3-esm-reader.cpp)
+target_compile_features(reference_placement_tests PRIVATE cxx_std_17)
+target_compile_options(reference_placement_tests PRIVATE -Wall -Wextra -Werror)
+target_include_directories(reference_placement_tests PRIVATE ../../app/src/main/cpp ../../app/src/main/cpp/data)
+target_link_libraries(reference_placement_tests PRIVATE ZLIB::ZLIB Threads::Threads)
+add_test(NAME reference_placement_tests COMMAND reference_placement_tests)

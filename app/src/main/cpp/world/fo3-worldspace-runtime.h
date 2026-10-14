@@ -1,6 +1,7 @@
 #pragma once
 
 #include "fo3-megaton-scene.h"
+#include "fo3-reference-state.h"
 
 // Negative radius preserves the initial-arrival policy: whole small worldspaces
 // or a 5x5 window. Streaming workers explicitly request one CELL (radius 0).
@@ -15,4 +16,5 @@ struct Fo3WorldspaceSelection {
 
 bool LoadFo3WorldspacePlacements(
     const Fo3WorldspaceSelection& selection,
-    std::vector<Fo3WorldPlacement>& outPlacements);
+    std::vector<Fo3WorldPlacement>& outPlacements,
+    const fo3world::ReferenceStateSnapshot* referenceState = nullptr);

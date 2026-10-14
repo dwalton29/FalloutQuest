@@ -64,7 +64,7 @@ float Attenuation(float d,float r) {
     if(r<=0)return 0;
     return std::clamp(1.0f-(d*d)/(r*r),0.0f,1.0f);
 }
-bool Load(const std::string& path,uint32_t cell,const std::array<float,3>& origin,Snapshot& out) {
+bool Load(const std::string& path,uint32_t cell,const std::array<float,3>& origin,Snapshot& out,const fo3world::ReferenceStateSnapshot* referenceState) {
     out={};out.cell.formId=cell;
     struct Close { void operator()(FILE* f) const { std::fclose(f); } };
     std::unique_ptr<FILE,Close> file(std::fopen(path.c_str(),"rb"));
@@ -150,7 +150,9 @@ bool Load(const std::string& path,uint32_t cell,const std::array<float,3>& origi
             base=bases.emplace(r.base,ParseLight(r.base,payload)).first;
         }
         ++out.total;
-        if(!enabled(id)||(base->second.flags&0x20u)||!r.transform){++out.disabled;continue;}
+        const bool authored=enabled(id);
+        const bool live=referenceState?referenceState->Enabled(id,authored):authored;
+        if(!live||(r.flags&0x20u)||(base->second.flags&0x20u)||!r.transform){++out.disabled;continue;}
         Light l=base->second;l.ref=id;l.position=ToScene(r.position,origin);l.rotation=r.rotation;
         if(!std::isfinite(l.fade)||l.fade<0||l.radius<=0){++out.unsupported;continue;}
         l.radius/=70.0f;

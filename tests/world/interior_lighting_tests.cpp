@@ -59,6 +59,15 @@ void fixtures(){
  assert(snapshot.lights[0].position==p&&std::abs(snapshot.lights[0].colour[0]-256.0f/255)<1e-6);
  auto selection=fo3interior::Select(snapshot.lights,{0,-1,-3},{2,1,-1});assert(selection.count==2);
  assert(fo3interior::Select(snapshot.lights,{100,100,100},{101,101,101}).count==0);
+ // A committed world snapshot selects light references before renderer publication.
+ fo3world::ReferenceStateSnapshot worldState;
+ worldState.states[30]=fo3world::ReferenceEnableState::Disabled;
+ worldState.states[31]=fo3world::ReferenceEnableState::Enabled;
+ worldState.states[32]=fo3world::ReferenceEnableState::Disabled;
+ worldState.states[33]=fo3world::ReferenceEnableState::Enabled;
+ assert(fo3interior::Load(path,10,{70,70,140},snapshot,&worldState));
+ assert(snapshot.lights.size()==2&&snapshot.lights[0].ref==31&&snapshot.lights[1].ref==33);
+ assert(snapshot.lights[0].position==p);
  // Same destination container reused: previous room's environment/lights cannot survive.
  assert(fo3interior::Load(path,11,{0,0,0},snapshot)&&snapshot.lights.empty()&&snapshot.total==0);
  assert(!fo3interior::Load(path,999,{0,0,0},snapshot)&&snapshot.lights.empty()&&!snapshot.cell.authored);

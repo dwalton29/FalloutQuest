@@ -6,6 +6,8 @@
 
 namespace fo3player {
 bool Player::CanLootContainer(uint32_t id) const {
+  bool disabled=false;std::string error;
+  if(!ReferenceDisabled(id,disabled,error)||disabled)return false;
   if(id!=0x14&&catalog_.pipboy.targets.count(id)&&
      catalog_.weapons.actors.count(catalog_.pipboy.targets.at(id).base))
     return ActorHealth(id)==0&&!Essential(id)&&catalog_.references.count(id)&&

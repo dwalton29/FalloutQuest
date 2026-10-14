@@ -463,6 +463,13 @@ void Synthetic(const std::string &root) {
   Write(save, legacy);
   Check(restored.Restore(save, error) && !restored.IsCollected(200),
         "v1 player saves migrate without losing inventory");
+  // Resource limits must still reject malformed old formats after v15 moved
+  // validation behind the player-stat tail parser.
+  auto overdamagedLegacy=legacy;const float overDamage=p.MaxHealth()+1;
+  std::memcpy(overdamagedLegacy.data()+20,&overDamage,4);Rechecksum(overdamagedLegacy);Write(save,overdamagedLegacy);
+  const auto legacyRevision=restored.Revision();
+  Check(!restored.Restore(save,error)&&restored.Revision()==legacyRevision,
+        "v1 resource bounds reject atomically after v15 stat integration");
   Check(p.Save(save, error) && restored.Restore(save, error),
         "restore v2 after migration check");
   const Bytes good = Read(save);

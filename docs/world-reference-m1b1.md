@@ -2,6 +2,10 @@
 
 Starting canonical main: 6469dbb872889a79a0682501b75f6ac6577ab547 (v208).
 
+Historical format note: this file describes the M1B1/v208 checkpoint. Newer
+v209 writes RFE1 plus PST1 for attribute overrides while retaining baseline v14; see world-reference-m1b2.md and
+player-attributes-save-v209.md for the current format.
+
 This is a backend checkpoint of M1B, not a completed Enable/Disable command.
 No source command handler is admitted yet. Scene publication and actor state
 must be connected before scripts can claim real world effects.

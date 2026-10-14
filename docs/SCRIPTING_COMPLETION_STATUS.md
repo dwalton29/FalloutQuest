@@ -4,14 +4,18 @@
 
 - Starting canonical main: `2987d911f318b92d1041257868067851a09d16f0` (v208).
 - Resumed from published `6469dbb872889a79a0682501b75f6ac6577ab547`.
-- Latest implemented checkpoint: M1B1 persistent enable overlays/snapshots,
-  validated locally; publication follows this commit. Version remains v208.
+- Latest published backend checkpoint: M1B1 `5f99428df64c8df1fa62c625bfc5c08461c1f5e2`.
+- M1B2 scene-load/stream-in integration is host-validated; publication follows
+  this checkpoint. Newer v209 is preserved: 209 / 0.72.0-persistent-player-stats.
 
 | Checkpoint | Canonical published main commit | Publication |
 | --- | --- | --- |
 | M0 audit | `a3324a2a104babdf057258e24b41977d88292e3b` | Confirmed |
 | M1A queries | `1246a9a23c092e53fb29ee91059ebd826de62745` | Confirmed |
 | Previous recovery report | `6469dbb872889a79a0682501b75f6ac6577ab547` | Confirmed |
+| M1B1 overlays/snapshots | `5f99428df64c8df1fa62c625bfc5c08461c1f5e2` | Confirmed |
+| Concurrent player stats v209 | `377b5be0251be3bf9e78efd6055325aa2e2b3a8d` | Preserved |
+| v209 format compatibility | `fe798c0 (v209 legacy zero-health compatibility)` | Preserved as M1B2 parent |
 
 The user directly confirmed permission to push to main on 2026-10-14. The old
 approval blocker is resolved. Command-line Git cannot authenticate for writes;
@@ -83,7 +87,7 @@ OnPackageEnd and OnPackageDone both occur (20 each); do not conflate them.
 | World control | Lock/unlock through canonical persistent APIs; M1A GetDisabled follows complete original enable-parent chains | M1B1 persists staged enable overlays; script Enable/Disable, move/spawn/delete remain unavailable |
 | Scene / streaming | Async geometry/texture/collision preparation, atomic publication, NPC cell handoff | Disabled placements discarded before loading; no script mutation publication or cross-cell reference relocation |
 | Audio / UI | Transactional MESG, sounds, Karma and quest notices | Narrow formatting; no Say/SayTo or PlayGroup/IsAnimPlaying scripting interface |
-| Persistence | FQPS v14; QST1 globals/running/journal; QNF1 reveal history; locks, XP, actors, inventory, ownership | M1B1 RFE1 root-enable overlay; level allocation absent |
+| Persistence | FQPS v15 with RFE1/PST1; QST1 globals/running/journal; QNF1 reveal history; locks, XP, actors, inventory, ownership | M1B1 RFE1 root-enable overlay; level allocation absent |
 | Transactions | State/revision and pending queues restored on result/stage/event failure and previews | External scene/physics/audio effects must publish only after transaction success |
 
 Read `quest-scripting-checkpoint-{1,2,3}.md` and `bomb-quest-hud-v208.md`
@@ -127,10 +131,12 @@ flowchart TD
 2. M1B1 backend implemented: canonical saved root-enable overrides, graph queries,
    bounded RFE1 validation, owned immutable projections, and regression tests.
    See `world-reference-m1b1.md`. No source Enable/Disable handler exists.
-3. M1B2: thread snapshots into scene and streaming workers, interior/exterior
-   placements and lights before model/collision preparation. Then M1B3 must
-   handle live publication, stale worker/cache invalidation, interaction/physics/
-   navigation and actor coordination. Only then admit script mutation commands.
+3. M1B2 implemented and validated: saved snapshots feed scene/stream-in
+   placements, lights, collision inputs and canonical interaction permissions.
+   See `world-reference-m1b2.md`. The **first unfinished implementation is M1B3**:
+   resident-resource preflight, atomic live publication, stale worker/cache
+   invalidation, reversible collision/physics/navigation and actor coordination.
+   Only then admit source Enable/Disable; no success-only handlers are allowed.
 4. M1C+: cross-cell MoveTo/MoveToMarker with original placements/actor handoff,
    spawn identity/lifecycle and Delete; transaction/persistence tests.
 5. M2–M11 in task order, subdividing independently testable checkpoints.
@@ -151,7 +157,13 @@ flowchart TD
 - M1A original bomb, 5,502 enable-parent queries and Lucas dialogue acceptance/
   stage/save-reload pass; all 27 updated player CTest cases pass.
 - Shader compile/link tests not run: glslangValidator absent. Renderer unchanged.
-- Android CI is running on published 6469dbb; no final APK result claimed yet.
+- Published M0/M1A/recovery Android workflows succeeded, including complete
+  shader/render checks, host suites, native APK compilation and artifact upload.
+  Recovery run: https://github.com/dwalton29/FalloutQuest/actions/runs/38602460533
+- M1B1 Android workflow succeeded, including APK/artifact upload (run 38604051145).
+- Incoming v209 CI failed nine synthetic save tests; merged fixtures/offsets and
+  legacy resource-bound fixes now pass all 27 player tests locally. The combined
+  M1B2/v209 checkpoint triggers a fresh Android build at publication.
 - Android toolchain absent locally. Existing push workflow provisions Java 17,
   Gradle 8.9, SDK 35, NDK 27, CMake 3.22.1. No Gradle wrapper exists.
 - Original master player catalogue/ACHR census/inventory/save-reload regression also passes.
@@ -184,3 +196,28 @@ in the repository or reports. All reports contain metadata, never binary code.
 All 27 player host cases pass. Original ESM root/inverted-child changes and
 save/reload pass. RFE1 malformed-state tests retain live state/revisions; legacy
 save fixtures remain unchanged. No script mutations or headset validation yet.
+
+## M1B2 validation and next recovery step
+
+51 host cases pass. Original event/bomb, catalogue/census, Lucas/MS11 dialogue,
+ownership and lockpick regressions pass. Production placement selection validates
+original Tenpenny detonator identity/model/pose and collision input. Concurrent
+snapshot fixtures and saved-state interaction/light tests pass. Native/headset
+validation of the current integration must not be inferred from these tests.
+
+The legacy Wasteland gate suppression and missing ACRE/ACTI qualified-variable
+ownership are additional M3/M4/M6 blockers; see `world-reference-m1b2.md`.
+
+## Concurrent-main recovery
+
+Publication of the pre-v209 M1B2 tree was rejected by the expected-head lease.
+Fetched and preserved 377b5be0251be3bf9e78efd6055325aa2e2b3a8d, replayed the
+scene changes, and validated RFE1/PST1 coexistence plus all legacy migrations.
+The old local b605ec8ed591c4e5efb0a53f94a618b043683eeb is superseded and was
+never published. Do not reset main to it. The current M1B2 checkpoint is based on
+v209, not the earlier v208 tree.
+
+The subsequent fe798c0 (v209 legacy zero-health compatibility) follow-up also landed
+before publication. Its conditional format policy is preserved: unchanged
+characters still write v14; attribute overrides write v15 with RFE1/PST1. The
+superseded local 37582503d72231d7e8b3d8768dde2a89bf9c1cfb was not published.

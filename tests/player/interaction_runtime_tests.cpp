@@ -382,6 +382,16 @@ int main() {
     UpdateFo3ScriptMessage(103,0,true,false,true);Check(!Fo3ScriptMessageFocus(),"new A selects authored row");
     gPlayerSession->player.PumpReferenceGameMode(.25,{10});Check(gPlayerSession->player.Snapshot().karma==7,"button consumed by original GameMode");
     gPlayerSession->player.PumpReferenceGameMode(.25,{10});Check(gPlayerSession->player.Snapshot().karma==7,"selected button does not repeat");
+    // Model-bearing ACTIs restored as enabled must use the saved state, not
+    // their immutable initial-disabled bit, for ray targeting and activation.
+    auto dormant=scripted;dormant.references[10].flags|=0x800;
+    gPlayerSession=std::make_unique<fo3player::Session>(dormant);std::string worldError;
+    Fo3InteractionTarget restoredTarget;
+    Check(!QueryFo3Interaction(0,0,0,0,0,-1,restoredTarget),"disabled ACTI is not a target");
+    Check(gPlayerSession->player.StageReferenceEnable(10,true,worldError),"stage original reference enable state");
+    Check(QueryFo3Interaction(0,0,0,0,0,-1,restoredTarget)&&restoredTarget.scripted&&restoredTarget.allowed,"enabled ACTI uses saved state for interaction");
+    Check(gPlayerSession->player.StageReferenceEnable(10,false,worldError),"restore disabled state");
+    Check(!QueryFo3Interaction(0,0,0,0,0,-1,restoredTarget),"disabled state prevents stale object targeting");
     std::cout << "Interaction runtime tests passed\n";
     return 0;
   } catch (const std::exception &e) {
