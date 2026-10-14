@@ -1125,6 +1125,7 @@ Q1960UploadStepQ19 Q1960AdvanceShapeQ19(
 
 void Q1900CommitCellVisualsQ19(Q1900CellStateQ19& state) {
     if (!Fo3AcceptsScenePublication(state.publication)) return;
+    gFo3VisualPublication.Changed();
     const auto retireStarted = std::chrono::steady_clock::now();
     size_t retired = 0u;
     size_t write = 0u;
@@ -1507,6 +1508,7 @@ void Q1900RetireFarCellsQ19(int32_t actualGridX, int32_t actualGridY) {
     const size_t oldLive = gObjects.size();
     size_t write = 0u;
 
+    gFo3VisualPublication.Changed();
     // Q19.1: one O(n) compaction. Outgoing shapes stop drawing immediately,
     // but their GL objects are destroyed later under a tiny frame budget.
     for (size_t read = 0u; read < oldLive; ++read) {

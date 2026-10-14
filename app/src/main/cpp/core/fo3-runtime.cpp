@@ -31,6 +31,7 @@
 #include "world/fo3-worldspace-runtime.h"
 #include "world/fo3-scene-preparation.h"
 #include "world/fo3-scene-publication.h"
+#include "world/fo3-visual-exchange.h"
 #include "world/fo3-world-streaming.h"
 void SetNextFo3CollisionExteriorModeQ1931(bool exterior);
 #include <array>
@@ -678,6 +679,7 @@ GLint gLocalLightCountLocationQ1010 = -1;
 GLint gLocalLightPosRadiusLocationQ1010 = -1;
 GLint gLocalLightColorFalloffLocationQ1010 = -1;
 std::vector<GpuObject> gObjects;
+fo3scene::VisualPublication gFo3VisualPublication;
 
 struct Q2400InteriorDoorState {
     bool targetOpen=false;
@@ -2692,6 +2694,7 @@ bool Q1050UpdateSunShadow() {
 
 bool InitializeScene() {
     if (gSceneReady) return true;
+    gFo3VisualPublication.Changed();
 
     std::vector<Fo3WorldPlacement> placements;
     if (!LoadMegatonPlayerHousePlacements(placements)) {
@@ -2971,6 +2974,7 @@ bool Q74ShouldSkipPlacement(const Fo3WorldPlacement& placement) {
 }
 
 void Q74DeleteGpuObjects(std::vector<GpuObject>& objects) {
+    if (&objects == &gObjects) gFo3VisualPublication.Changed();
     for (GpuObject& object : objects) {
         QActorDeleteSkin(object);
         if (Q2017ReleaseSharedGeometry(object)) continue;
@@ -3055,6 +3059,40 @@ std::shared_ptr<const fo3world::ReferenceStateSnapshot> CaptureFo3ReferenceState
 }
 
 
+// Reserved ownership layer for the resident outer coordinator. Staged objects
+// must already own their GL/shared-buffer references; the live slots are never
+// copied. Actor/light/door/held-object/resource preflight belongs to the caller.
+using Fo3ResidentVisualPlan = fo3scene::VisualExchange<GpuObject>;
+std::unique_ptr<Fo3ResidentVisualPlan> gFo3ResidentVisualPlan;
+void DisposeFo3ResidentVisuals(std::vector<GpuObject>& objects) noexcept {
+    Q74DeleteGpuObjects(objects);
+}
+void DiscardFo3ResidentVisualPlan() noexcept { gFo3ResidentVisualPlan.reset(); }
+bool PrepareFo3ResidentVisualPlan(
+        const std::vector<size_t>& retain, std::vector<GpuObject>& staged) {
+    if (!gSceneReady || gSceneLoad.active || gFo3ResidentVisualPlan) return false;
+    gFo3ResidentVisualPlan = Fo3ResidentVisualPlan::Prepare(gObjects, gFo3VisualPublication,
+        retain, staged, DisposeFo3ResidentVisuals);
+    return bool(gFo3ResidentVisualPlan);
+}
+bool CommitFo3ResidentVisualPlan() noexcept {
+    if (gSceneLoad.active || !gFo3ResidentVisualPlan ||
+        !gFo3ResidentVisualPlan->Commit(gObjects, gFo3VisualPublication)) return false;
+    // Frame-local pointer caches also compare the visual ownership epoch.
+    gShadowDirtyQ1050 = true;
+    gShadowReadyQ1050 = false;
+    SetFo3TerrainShadowQ1050(gShadowDepthQ1050, gLightMvpQ1050, false);
+    return true;
+}
+bool RollbackFo3ResidentVisualPlan() noexcept {
+    if (gSceneLoad.active || !gFo3ResidentVisualPlan ||
+        !gFo3ResidentVisualPlan->Rollback(gObjects, gFo3VisualPublication)) return false;
+    gShadowDirtyQ1050 = true;
+    gShadowReadyQ1050 = false;
+    SetFo3TerrainShadowQ1050(gShadowDepthQ1050, gLightMvpQ1050, false);
+    return true;
+}
+
 // Dynamic NPC arrivals use the same original ESM/NIF/KF scene-worker pipeline
 // as normal actors, but upload only missing actors and never rebuild the world.
 struct Q230NpcArrivalBatch {
@@ -3129,6 +3167,7 @@ void AbortFo3SceneLoad(const char* reason) {
 
 bool BeginFo3SceneLoad(const Fo3CellTransitionRequestQ74& request, bool boot) {
     if (gSceneLoad.active) return false;
+    DiscardFo3ResidentVisualPlan();
     Q230ResetNpcArrivals();
     gSceneLoad.active = true;
     gSceneLoad.boot = boot;
@@ -5047,6 +5086,7 @@ void Q1900CommitWindow() {
     replacement.reserve(gPendingStreamQ1900.retainedShapes + enteringShapes);
 
     size_t retiredShapes = 0u;
+    gFo3VisualPublication.Changed();
     for (GpuObject& object : gObjects) {
         if (gPendingStreamQ1900.targetRefs.find(object.refFormId) !=
             gPendingStreamQ1900.targetRefs.end()) {
@@ -5916,6 +5956,7 @@ bool gStereoMvpReady = false;
 float gStereoReflectionMvp[16]{}, gStereoReflectionSkyMvp[16]{};
 float gStereoReflectionEye[3]{};
 struct Q2017FrameBatches {
+    uint64_t visualRevision = 0;
     uint64_t frame = ~uint64_t{0};
     const GpuObject* storage = nullptr;
     size_t objectCount = 0;
@@ -5930,12 +5971,16 @@ std::vector<const GpuObject*> gOpaqueFrameOrder;
 uint64_t gOpaqueOrderFrame = ~uint64_t{0};
 const GpuObject* gOpaqueOrderStorage = nullptr;
 size_t gOpaqueOrderCount = 0;
+uint64_t gOpaqueOrderVisualRevision = 0;
 
 void Q2017PrepareOpaqueOrder() {
-    if (gOpaqueOrderFrame == gStereoFrame && gOpaqueOrderStorage == gObjects.data() &&
-        gOpaqueOrderCount == gObjects.size()) return;
+    if (gFo3VisualPublication.Revision() != 0 &&
+        gOpaqueOrderFrame == gStereoFrame && gOpaqueOrderStorage == gObjects.data() &&
+        gOpaqueOrderCount == gObjects.size() &&
+        gOpaqueOrderVisualRevision == gFo3VisualPublication.Revision()) return;
     gOpaqueOrderFrame = gStereoFrame; gOpaqueOrderStorage = gObjects.data();
     gOpaqueOrderCount = gObjects.size();
+    gOpaqueOrderVisualRevision = gFo3VisualPublication.Revision();
     gOpaqueFrameOrder.clear(); gOpaqueFrameOrder.reserve(gObjects.size());
     for (const auto& object : gObjects) if (!object.alphaBlend) gOpaqueFrameOrder.push_back(&object);
     std::sort(gOpaqueFrameOrder.begin(), gOpaqueFrameOrder.end(),
@@ -5970,11 +6015,14 @@ void Q2017RenderOpaqueDetailedInstanced() {
     auto& cache = gWaterReflectionPassQ2090 ? gMirrorBatches : gMainBatches;
     // Mirrors have their own visibility set and buffer; they cannot overwrite
     // the main stereo instance upload between the two eyes.
-    const bool rebuild = gWaterReflectionPassQ2090 || cache.frame != gStereoFrame ||
-        cache.storage != gObjects.data() || cache.objectCount != gObjects.size();
+    const bool rebuild = gFo3VisualPublication.Revision() == 0 ||
+        gWaterReflectionPassQ2090 || cache.frame != gStereoFrame ||
+        cache.storage != gObjects.data() || cache.objectCount != gObjects.size() ||
+        cache.visualRevision != gFo3VisualPublication.Revision();
     if (rebuild) {
         Q2017PrepareOpaqueOrder();
         cache.frame = gStereoFrame;
+        cache.visualRevision = gFo3VisualPublication.Revision();
         cache.storage = gObjects.data(); cache.objectCount = gObjects.size();
         cache.candidates.clear(); cache.singles.clear(); cache.groupFallbacks.clear();
         cache.batches.clear(); cache.matrices.clear();
@@ -7852,6 +7900,7 @@ bool Q2090RenderWaterReflection(const float mainMvp[16],
     static uint32_t cachedCell = 0;
     static GLuint cachedTarget = 0;
     static const GpuObject* cachedStorage = nullptr;
+    static uint64_t cachedVisualRevision = 0;
     static size_t cachedObjectCount = 0;
     static float cachedPlane = 0, cachedMain[16]{}, cachedReflection[16]{};
     static float cachedEye[3]{};
@@ -7860,7 +7909,8 @@ bool Q2090RenderWaterReflection(const float mainMvp[16],
     for (int i=0;i<3;++i) eyeDelta = std::max(eyeDelta, std::fabs(reflectionEye[i]-cachedEye[i]));
     if (questrender::ReuseReflection(gStereoFrame, cachedFrame,
             cachedCell == gCurrentCellFormId && cachedTarget == gWaterReflectionColorQ2090 &&
-            cachedStorage == gObjects.data() && cachedObjectCount == gObjects.size(),
+            cachedStorage == gObjects.data() && cachedObjectCount == gObjects.size() &&
+            cachedVisualRevision != 0 && cachedVisualRevision == gFo3VisualPublication.Revision(),
             planeY-cachedPlane, matrixDelta, eyeDelta)) {
         std::copy(cachedReflection, cachedReflection+16, outReflectionMvp);
         return true;
@@ -8088,6 +8138,7 @@ bool Q2090RenderWaterReflection(const float mainMvp[16],
     cachedFrame = gStereoFrame; cachedCell = gCurrentCellFormId; cachedPlane = planeY;
     cachedTarget = gWaterReflectionColorQ2090;
     cachedStorage = gObjects.data(); cachedObjectCount = gObjects.size();
+    cachedVisualRevision = gFo3VisualPublication.Revision();
     std::copy(mainMvp, mainMvp+16, cachedMain);
     std::copy(outReflectionMvp, outReflectionMvp+16, cachedReflection);
     std::copy(reflectionEye, reflectionEye+3, cachedEye);
@@ -13094,6 +13145,9 @@ void Q1280ShutdownPostQ1280() {
 }
 
 void Q6HDeleteFramebuffers(GLsizei n, const GLuint* framebuffers) {
+    // Release staged/displaced ownership while this GL context and its shared
+    // geometry/texture caches are still alive.
+    DiscardFo3ResidentVisualPlan();
     FlushFo3PlayerState();
     gSceneLoad.collisionPreparation.Reset();
     if (gSceneLoad.preparation.Ready()) {
@@ -13111,6 +13165,7 @@ void Q6HDeleteFramebuffers(GLsizei n, const GLuint* framebuffers) {
     WeaponShutdown();
     glDeleteFramebuffers(n, framebuffers);
     ShutdownFo3CollisionOverlay();
+    gFo3VisualPublication.Changed();
     for (GpuObject& object : gObjects) {
         Q1900DeleteGpuShape(object);
     }

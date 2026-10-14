@@ -34,3 +34,37 @@ assert 'pending.insert(work.requested.begin(),work.requested.end())' in arrival
 assert arrival.index('auto requested=refs') < arrival.index('work.preparation.Start(')
 assert 'work.requested=std::move(requested)' in arrival
 print('NPC arrival epoch guard precedes part uploads and actor registration')
+
+# GPU ownership plans must use the real shared/unique deletion path, and every
+# legacy structural publication must invalidate plans before moving live slots.
+assert 'using Fo3ResidentVisualPlan = fo3scene::VisualExchange<GpuObject>' in s
+dispose=s[s.index('void DisposeFo3ResidentVisuals('):s.index('void DiscardFo3ResidentVisualPlan()')]
+assert 'Q74DeleteGpuObjects(objects)' in dispose
+deletion=s[s.index('void Q74DeleteGpuObjects('):s.index('struct Fo3SceneCpuPreparation')]
+assert deletion.index('&objects == &gObjects') < deletion.index('QActorDeleteSkin(object)')
+assert deletion.index('QActorDeleteSkin(object)') < deletion.index('Q2017ReleaseSharedGeometry(object)')
+for source,start,end,mutation in [
+    (s,'bool InitializeScene()','bool Q74ShouldSkipPlacement(', 'gObjects.push_back('),
+    (s,'void Q1900CommitWindow()','struct Q1970', 'replacement.push_back(std::move(object))'),
+    (s,'void Q6HDeleteFramebuffers(',None, 'Q1900DeleteGpuShape(object)'),
+    (c,'void Q1900CommitCellVisualsQ19(','bool Q2013AdvanceCellGpuSliceQ19(', 'Q1910QueueGpuDeleteQ19(object)'),
+    (c,'void Q1900RetireFarCellsQ19(',None, 'Q1910QueueGpuDeleteQ19(object)'),
+]:
+    region=source[source.index(start):]
+    if end: region=region[:region.index(end)]
+    assert region.index('gFo3VisualPublication.Changed()') < region.index(mutation)
+for assignment in ('gObjects = std::move(replacement)', 'gObjects = std::move(work.replacement)'):
+    # Whole-scene replacements destroy the previous layout through the marked
+    # helper, except the separately marked Q18 retained/incoming composition.
+    for part in s.split(assignment)[:-1]:
+        assert ('Q74DeleteGpuObjects(gObjects)' in part[-250:] or
+                'void Q1900CommitWindow()' in part and
+                'gFo3VisualPublication.Changed()' in part[part.rindex('void Q1900CommitWindow()'):])
+teardown=s[s.index('void Q6HDeleteFramebuffers('):]
+assert teardown.index('DiscardFo3ResidentVisualPlan()') < teardown.index('Q2017ForceClearSharedGeometry()')
+assert teardown.index('DiscardFo3ResidentVisualPlan()') < teardown.index('gTextureCache.clear()')
+assert begin.index('DiscardFo3ResidentVisualPlan()') < begin.index('gSceneLoad.preparation.Start(')
+assert 'gOpaqueOrderVisualRevision == gFo3VisualPublication.Revision()' in s
+assert 'cache.visualRevision != gFo3VisualPublication.Revision()' in s
+assert 'cachedVisualRevision != 0 && cachedVisualRevision == gFo3VisualPublication.Revision()' in s
+print('Visual ownership epochs precede scene/CELL/retirement teardown and invalidate frame caches')
