@@ -4,10 +4,10 @@
 
 - Starting canonical main: `2987d911f318b92d1041257868067851a09d16f0` (v208).
 - Resumed from published `6469dbb872889a79a0682501b75f6ac6577ab547`.
-- Current implementation checkpoint: M1B3j private candidate collision resources.
+- Current implementation checkpoint: M1B3k reversible interior light resources.
   Use canonical main history for the publication SHA; the previous published
-  implementation is M1B3i `b57842aeb7e39c34f182f6debc3e44efd6146196`.
-- Previous M1B3i Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38629731659.
+  implementation is M1B3j `98ad9cbd3e4c0ece6188e2108f3e76a391772f65`.
+- Previous M1B3j Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38631613450.
   Earlier M1B3h CI confirmed the collision-policy include-order failure from g is fixed.
 - M1B2 scene-load/stream-in integration is host-validated and pushed; the remote
   tree matches the tested tree `20c0e9cd4d5206190925d30a68408400c6fb1923`. Newer v209 is preserved: 209 / 0.72.0-persistent-player-stats.
@@ -30,6 +30,7 @@
 | M1B3g candidate CPU resources | `ecbd98b85fd3c8979022c2b563f8aa3b6663de5a` | Confirmed; Android include fix in h |
 | M1B3h private texture/GPU preparation | `25a7be3006e5eb2b16eaf6d48ffb9319b4f95f71` | Confirmed |
 | M1B3i reserved resident asset lane | `b57842aeb7e39c34f182f6debc3e44efd6146196` | Confirmed |
+| M1B3j private collision resources | `98ad9cbd3e4c0ece6188e2108f3e76a391772f65` | Confirmed |
 
 The user directly confirmed permission to push to main on 2026-10-14. The old
 approval blocker is resolved. Command-line Git cannot authenticate for writes;
@@ -161,7 +162,9 @@ flowchart TD
    owns cancellable CPU preparation through ticketed GPU staging (see `world-reference-m1b3i.md`).
    M1B3j adds strict private collision chunks, policy exchange and owned collision
    tokens to the worker/GPU packet (see `world-reference-m1b3j.md`).
-   Queue reconciliation and the outer runtime/resource/actor coordinator remain unfinished. Only then admit source
+   M1B3k adds strict interior point-light projections, coupled reversible light
+   resources and cache epochs (see `world-reference-m1b3k.md`).
+   Exterior lights, interactions, queue reconciliation and the outer runtime/resource/actor coordinator remain unfinished. Only then admit source
    Enable/Disable; no success-only handlers are allowed.
 4. M1C+: cross-cell MoveTo/MoveToMarker with original placements/actor handoff,
    spawn identity/lifecycle and Delete; transaction/persistence tests.
@@ -433,3 +436,20 @@ render-thread state capture and token validation before GPU work. See
 `world-reference-m1b3j.md`; lighting/interaction/actor/held-object/navigation/LOD
 admission and the final logical/resource publication/queue reconciliation remain
 unfinished. World commands remain rejected; v209 is preserved.
+
+
+## M1B3k validation
+
+Reversible interior light resources pass eleven world, 29 player and one physics
+CTest cases (41 core host cases). Tests cover strict original point-light
+projection, unchanged environment/image-space metadata, malformed/unsupported
+inputs and coupled resource ownership with allocation-free commit/rollback.
+Original Brass Lantern/Player House 11-to-10 light projections pass; existing
+SuperDuperMart template checks remain valid. Interior/resource/lane/GPU tests
+and original ESM checks pass ASan/UBSan with LeakSanitizer disabled. Source
+checks verify worker isolation, resource cleanup and static/actor/reflection
+light cache epochs. The local shader compile subtest is unavailable because
+this runtime lacks glslangValidator; CI performs it. See
+`world-reference-m1b3k.md`; exterior light changes, interaction/actor/held-object/
+navigation/LOD admission and the final logical/resource/queue coordinator remain
+unfinished. World commands remain rejected; v209 is unchanged.

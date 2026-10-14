@@ -36,6 +36,8 @@
 #include "world/fo3-resident-texture-upload.h"
 #include "world/fo3-resident-gpu-stage.h"
 #include "world/fo3-resident-preparation-lane.h"
+#include "world/fo3-resource-exchange.h"
+#include "world/fo3-resident-lighting.h"
 #include "world/fo3-world-streaming.h"
 void SetNextFo3CollisionExteriorModeQ1931(bool exterior);
 #include <array>
@@ -390,6 +392,7 @@ struct GpuObject {
     int pipButton=-1;
     mutable uint64_t interiorLightFrame = UINT64_MAX;
     mutable fo3interior::Selection interiorLights;
+    mutable uint64_t interiorLightRevision=0;
     GLuint skinAttributes=0, skinPalette=0;
     int skinMode=0;
     GLuint vao = 0;
@@ -3162,8 +3165,10 @@ struct Fo3ResidentCpuPreparation {
     fo3scene::ResidentResourceSelection selection;
     fo3scene::PublicationStamp publication;
     uint64_t visualRevision=0;
-    uint64_t assetTicket=0;
+    uint64_t assetTicket=0,lightRevision=0;
     fo3scene::ResidentTextures textures;
+    fo3scene::ResidentInteriorLighting lighting;
+    std::vector<Fo3PlacedLight> placedLights;
     Fo3CollisionSnapshotOwner collision;
     Fo3WorldspaceSelection collisionScope;
     std::vector<Fo3WorldPlacement> collisionPlacements;
@@ -3280,14 +3285,20 @@ bool StartFo3ResidentCpuPreparation(uint64_t ticket,const Fo3WorldspaceSelection
         !std::isfinite(collisionScope.gameY)))return false;
     collisionScope.candidateSelection=true;
     const auto collisionState=CaptureFo3CollisionMutationState();
-    return gFo3ResidentLane.Start(ticket,[context,scope,publication,visualRevision,ticket,collisionScope,collisionState,
+    const auto lightRevision=gFo3LightPublication.Revision();
+    return gFo3ResidentLane.Start(ticket,[context,scope,publication,visualRevision,ticket,collisionScope,collisionState,lightRevision,
             published=std::move(published),candidate=std::move(candidate),
             live=std::move(live),affected=std::move(affected)](
             Fo3ResidentCpuPreparation& result,const std::atomic<bool>& cancelled) {
         std::string error;
         if(!PrepareFo3ResidentCpuResources(context,scope,publication,visualRevision,
                 published,candidate,live,affected,result,cancelled,error))return false;
-        result.assetTicket=ticket;result.collisionScope=collisionScope;
+        result.assetTicket=ticket;result.collisionScope=collisionScope;result.lightRevision=lightRevision;
+        if(!context.worldspaceFormId) {
+            if(!fo3scene::PrepareResidentInteriorLighting(fo3assets::FalloutMasterPath(),context.cellFormId,
+                    {context.x,context.y,context.z},*published,*candidate,affected,result.lighting,cancelled,error))return false;
+            result.placedLights=PrepareFo3PlacedInteriorLights(result.lighting.candidate);
+        }
         if(context.worldspaceFormId) {
             if(!LoadFo3WorldspacePlacements(collisionScope,result.collisionPlacements,candidate.get()))return false;
         } else result.collisionPlacements=result.selection.collisionPlacements;
@@ -3304,6 +3315,33 @@ bool TakeFo3ResidentCpuPreparation(uint64_t ticket,std::unique_ptr<Fo3ResidentCp
     return gFo3ResidentLane.Take(ticket,packet);
 }
 
+using Fo3ResidentLightPlan=fo3scene::ResourceExchange<fo3interior::Snapshot,std::vector<Fo3PlacedLight>>;
+std::unique_ptr<Fo3ResidentLightPlan> gFo3ResidentLightPlan;
+uint64_t gFo3ResidentLightTicket=0;
+void DiscardFo3ResidentLightPlan() noexcept {gFo3ResidentLightPlan.reset();gFo3ResidentLightTicket=0;}
+bool PrepareFo3ResidentLightPlan(Fo3ResidentCpuPreparation& cpu) {
+    if(cpu.request.worldspaceFormId)return true; // Exterior light admission remains separate.
+    if(gFo3ResidentLightPlan||!gFo3ResidentLane.Exclusive(cpu.assetTicket)||
+        !cpu.lightRevision||cpu.lightRevision!=gFo3LightPublication.Revision()||
+        !fo3scene::SameResidentLighting(gFo3InteriorLighting,cpu.lighting.before)||
+        !MatchesFo3PlacedInteriorLights(gFo3InteriorLighting,gFo3PlacedLights))return false;
+    Fo3ResidentLightPlan::Payload payload{std::move(cpu.lighting.candidate),std::move(cpu.placedLights)};
+    auto plan=Fo3ResidentLightPlan::Prepare(gFo3LightPublication,
+        std::tie(gFo3InteriorLighting,gFo3PlacedLights),payload);
+    if(!plan)return false;
+    gFo3ResidentLightTicket=cpu.assetTicket;gFo3ResidentLightPlan=std::move(plan);return true;
+}
+bool CommitFo3ResidentLightPlan() noexcept {
+    if(gSceneLoad.active||!gFo3ResidentLane.Exclusive(gFo3ResidentLightTicket)||!gFo3ResidentLightPlan||
+        !gFo3ResidentLightPlan->Commit(gFo3LightPublication,std::tie(gFo3InteriorLighting,gFo3PlacedLights)))return false;
+    ResetFo3SelectedLights();return true;
+}
+bool RollbackFo3ResidentLightPlan() noexcept {
+    if(gSceneLoad.active||!gFo3ResidentLane.Exclusive(gFo3ResidentLightTicket)||!gFo3ResidentLightPlan||
+        !gFo3ResidentLightPlan->Rollback(gFo3LightPublication,std::tie(gFo3InteriorLighting,gFo3PlacedLights)))return false;
+    ResetFo3SelectedLights();return true;
+}
+
 // Render-thread-only private GPU preparation. The outer coordinator supplies
 // stamps captured with the input visual inventory, before worker preparation.
 struct Fo3ResidentGpuWork {
@@ -3316,6 +3354,7 @@ std::unique_ptr<Fo3ResidentGpuWork> gFo3ResidentGpuWork;
 void DiscardFo3ResidentGpuStage() noexcept {gFo3ResidentGpuWork.reset();}
 bool Fo3ResidentPacketCurrent(const Fo3ResidentCpuPreparation& cpu) {
     return gFo3ResidentLane.Exclusive(cpu.assetTicket)&&Fo3ResidentLaneContextCurrent()&&
+        (cpu.request.worldspaceFormId||(cpu.lightRevision&&cpu.lightRevision==gFo3LightPublication.Revision()))&&
         cpu.collision.Get()&&CanExchangeFo3CollisionMutationSnapshot(cpu.collision.Get())&&
         gSceneReady&&!gSceneLoad.active&&!gFo3ResidentVisualPlan&&
         Fo3AcceptsScenePublication(cpu.publication)&&cpu.visualRevision!=0&&
@@ -3378,20 +3417,23 @@ fo3scene::GpuStageResult AdvanceFo3ResidentGpuStage(
     if(result==Result::Failed){DiscardFo3ResidentGpuStage();return result;}
     bool prepared=false;
     try {
-        prepared=PrepareFo3ResidentVisualPlan(work.cpu->selection.retainedSlots,*work.stage.ReadyObjects());
+        prepared=PrepareFo3ResidentLightPlan(*work.cpu)&&
+            PrepareFo3ResidentVisualPlan(work.cpu->selection.retainedSlots,*work.stage.ReadyObjects());
     }catch(...){prepared=false;}
     if(prepared)completed=std::move(work.cpu);
+    else DiscardFo3ResidentLightPlan();
     DiscardFo3ResidentGpuStage();
     return prepared?Result::Ready:Result::Failed;
 }
 
 bool ReleaseFo3ResidentAssetLane(uint64_t ticket) {
-    if(gFo3ResidentGpuWork||gFo3ResidentVisualPlan)return false;
+    if(gFo3ResidentGpuWork||gFo3ResidentVisualPlan||gFo3ResidentLightPlan)return false;
     return gFo3ResidentLane.Release(ticket);
 }
 bool CancelFo3ResidentPreparation(uint64_t ticket) {
-    if(!gFo3ResidentLane.Owns(ticket)||(gFo3ResidentVisualPlan&&gFo3ResidentVisualPlan->Applied()))return false;
-    DiscardFo3ResidentGpuStage();DiscardFo3ResidentVisualPlan();
+    if(!gFo3ResidentLane.Owns(ticket)||(gFo3ResidentVisualPlan&&gFo3ResidentVisualPlan->Applied())||
+        (gFo3ResidentLightPlan&&gFo3ResidentLightPlan->Applied()))return false;
+    DiscardFo3ResidentGpuStage();DiscardFo3ResidentVisualPlan();DiscardFo3ResidentLightPlan();
     return gFo3ResidentLane.Cancel(ticket);
 }
 
@@ -3472,6 +3514,7 @@ bool BeginFo3SceneLoad(const Fo3CellTransitionRequestQ74& request, bool boot) {
     ResetFo3ResidentPreparationLane();
     DiscardFo3ResidentGpuStage();
     DiscardFo3ResidentVisualPlan();
+    DiscardFo3ResidentLightPlan();
     Q230ResetNpcArrivals();
     gSceneLoad.active = true;
     gSceneLoad.boot = boot;
@@ -3856,6 +3899,7 @@ bool ProcessQ74TransitionRequest() {
         Q6H_LOGI("Q16.27 STREAM CONTEXT: active=0 reason=interior");
     }
     if (request.worldspaceFormId != 0u) {
+        gFo3LightPublication.Changed();
         gFo3InteriorLighting = {};
         LoadFo3CellEnvironment(request.cellFormId, request.worldspaceFormId, request.x, request.y);
     } else {
@@ -8241,7 +8285,7 @@ bool Q2090RenderWaterReflection(const float mainMvp[16],
     static uint32_t cachedCell = 0;
     static GLuint cachedTarget = 0;
     static const GpuObject* cachedStorage = nullptr;
-    static uint64_t cachedVisualRevision = 0;
+    static uint64_t cachedVisualRevision = 0, cachedLightRevision = 0;
     static size_t cachedObjectCount = 0;
     static float cachedPlane = 0, cachedMain[16]{}, cachedReflection[16]{};
     static float cachedEye[3]{};
@@ -8251,7 +8295,8 @@ bool Q2090RenderWaterReflection(const float mainMvp[16],
     if (questrender::ReuseReflection(gStereoFrame, cachedFrame,
             cachedCell == gCurrentCellFormId && cachedTarget == gWaterReflectionColorQ2090 &&
             cachedStorage == gObjects.data() && cachedObjectCount == gObjects.size() &&
-            cachedVisualRevision != 0 && cachedVisualRevision == gFo3VisualPublication.Revision(),
+            cachedVisualRevision != 0 && cachedVisualRevision == gFo3VisualPublication.Revision() &&
+            cachedLightRevision != 0 && cachedLightRevision == gFo3LightPublication.Revision(),
             planeY-cachedPlane, matrixDelta, eyeDelta)) {
         std::copy(cachedReflection, cachedReflection+16, outReflectionMvp);
         return true;
@@ -8480,6 +8525,7 @@ bool Q2090RenderWaterReflection(const float mainMvp[16],
     cachedTarget = gWaterReflectionColorQ2090;
     cachedStorage = gObjects.data(); cachedObjectCount = gObjects.size();
     cachedVisualRevision = gFo3VisualPublication.Revision();
+    cachedLightRevision = gFo3LightPublication.Revision();
     std::copy(mainMvp, mainMvp+16, cachedMain);
     std::copy(outReflectionMvp, outReflectionMvp+16, cachedReflection);
     std::copy(reflectionEye, reflectionEye+3, cachedEye);
@@ -11442,7 +11488,8 @@ void Q210RenderPlayerBody(bool alphaPass) {
 
 void PrepareFo3InteriorObjectLights(GpuObject& object, const QActorSkin* skin=nullptr) {
     if (!gFo3Environment.interior) return;
-    if (!skin && !object.q220LooseObject && !object.physicalWeapon && !object.q210PlayerBody && object.interiorLightFrame != UINT64_MAX) return;
+    if (!skin && !object.q220LooseObject && !object.physicalWeapon && !object.q210PlayerBody && object.interiorLightFrame != UINT64_MAX &&
+        object.interiorLightRevision!=0&&object.interiorLightRevision==gFo3LightPublication.Revision()) return;
     std::array<float,3> mn{object.minX,object.minY,object.minZ},mx{object.maxX,object.maxY,object.maxZ};
     if (skin || object.q220LooseObject || object.physicalWeapon || object.q210PlayerBody) {
         std::array<float,3> lower{INFINITY,INFINITY,INFINITY},upper{-INFINITY,-INFINITY,-INFINITY};
@@ -11460,6 +11507,7 @@ void PrepareFo3InteriorObjectLights(GpuObject& object, const QActorSkin* skin=nu
     }
     object.interiorLights=fo3interior::Select(gFo3InteriorLighting.lights,mn,mx);
     object.interiorLightFrame=gStereoFrame;
+    object.interiorLightRevision=gFo3LightPublication.Revision();
 }
 
 void PrepareFo3InteriorSceneLights() {
@@ -13492,6 +13540,7 @@ void Q6HDeleteFramebuffers(GLsizei n, const GLuint* framebuffers) {
     ResetFo3ResidentPreparationLane();
     DiscardFo3ResidentGpuStage();
     DiscardFo3ResidentVisualPlan();
+    DiscardFo3ResidentLightPlan();
     FlushFo3PlayerState();
     gSceneLoad.collisionPreparation.Reset();
     if (gSceneLoad.preparation.Ready()) {

@@ -27,6 +27,7 @@ public:
     }
 private:
     template<class Object> friend class VisualExchange;
+    template<class... Values> friend class ResourceExchange;
     std::shared_ptr<const uint8_t> identity_ = std::make_shared<const uint8_t>(0);
     uint64_t revision_;
     bool exhausted_ = false;

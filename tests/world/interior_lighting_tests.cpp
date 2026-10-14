@@ -1,4 +1,7 @@
 #include "rendering/environment/fo3-interior-lighting.h"
+#include "rendering/environment/fo3-placed-light-data.h"
+#include "world/fo3-resident-lighting.h"
+#include "world/fo3-resource-exchange.h"
 #include "rendering/environment/fo3-imagespace-data.h"
 #include <cassert>
 #include <cmath>
@@ -77,6 +80,68 @@ void fixtures(){
  auto top=fo3interior::Select(lights,{-1,-1,-1},{1,1,1});assert(top.count==8&&top.indices[0]==19&&top.indices[7]==12);
  lights[19].flags=0x200;assert(fo3interior::Select(lights,{-1,-1,-1},{1,1,1}).indices[0]==18);
 }
+void residentFixtures(){
+ const std::string path="/tmp/falloutquest-resident-lighting.esm";
+ auto stream=[&](Bytes light=base(),Bytes c=cell(),Bytes lightRef=ref(20)){
+  Bytes data;append(data,record("CELL",10,c));append(data,record("LIGH",20,light));
+  append(data,record("LIGH",21,base(4)));append(data,record("STAT",100,{}));
+  Bytes children;append(children,record("REFR",30,lightRef));
+  append(children,record("REFR",31,ref(20),0x800));append(children,record("REFR",32,ref(20,31)));
+  append(children,record("REFR",33,ref(21)));append(children,record("REFR",40,ref(100)));
+  append(data,group(10,6,group(10,9,children)));return data;
+ };
+ auto write=[&](Bytes data){std::ofstream f(path,std::ios::binary);f.write(reinterpret_cast<const char*>(data.data()),data.size());};
+ write(stream());fo3world::ReferenceStateSnapshot published,candidate;published.revision=1;candidate.revision=2;
+ candidate.states[30]=fo3world::ReferenceEnableState::Disabled;
+ candidate.states[31]=candidate.states[32]=fo3world::ReferenceEnableState::Enabled;
+ std::atomic<bool> cancelled{false};std::string error;fo3scene::ResidentInteriorLighting out;
+ assert(fo3scene::PrepareResidentInteriorLighting(path,10,{70,70,140},published,candidate,{30,31,32},out,cancelled,error));
+ assert(out.before.lights.size()==2&&out.candidate.lights.size()==3&&out.before.total==4);
+ assert(out.before.lights[1].ref==33&&out.before.lights[1].colour[0]<0);
+ assert(fo3scene::SameResidentCellLighting(out.before.cell,out.candidate.cell));
+ assert(fo3scene::SameResidentLight(out.before.lights[1],out.candidate.lights.back()));
+ auto placed=PrepareFo3PlacedInteriorLights(out.before);assert(MatchesFo3PlacedInteriorLights(out.before,placed));
+ auto mismatch=placed;mismatch[0].color[0]+=1;assert(!MatchesFo3PlacedInteriorLights(out.before,mismatch));
+ const auto old=out;auto unchanged=[&]{assert(fo3scene::SameResidentLighting(old.before,out.before)&&fo3scene::SameResidentLighting(old.candidate,out.candidate));};
+ assert(!fo3scene::PrepareResidentInteriorLighting(path,10,{70,70,140},published,candidate,{},out,cancelled,error));unchanged();
+ cancelled=true;assert(!fo3scene::PrepareResidentInteriorLighting(path,10,{70,70,140},published,candidate,{30,31,32},out,cancelled,error));unchanged();cancelled=false;
+ assert(!fo3scene::PrepareResidentInteriorLighting(path,999,{70,70,140},published,candidate,{30,31,32},out,cancelled,error));unchanged();
+ for(int invalid=0;invalid<8;++invalid){
+  Bytes light=base(),c=cell(),r=ref(20);
+  switch(invalid){
+   case 0:light=base(0x200);break;
+   case 1:{Bytes bad;f32(bad,0,NAN);sub(light,"FNAM",bad);break;}
+   case 2:sub(light,"DATA",Bytes(31));break;
+   case 3:sub(c,"XCLL",Bytes(39));break;
+   case 4:r=ref(20,999,true);break;
+   case 5:sub(c,"XCIM",word(99));break;
+   case 6:sub(r,"DATA",Bytes(23));break;
+   case 7:light.push_back(0);break;
+  }
+  write(stream(light,c,r));
+  assert(!fo3scene::PrepareResidentInteriorLighting(path,10,{70,70,140},published,candidate,{30,31,32},out,cancelled,error));unchanged();
+ }
+ write(stream());
+ auto changed=out.candidate;changed.lights[0].radius+=1;
+ assert(!fo3scene::ValidateResidentLightDelta(out.candidate,changed,{},error));
+ changed=out.candidate;changed.cell.fogFar+=1;assert(!fo3scene::ValidateResidentLightDelta(out.candidate,changed,{31},error));
+ changed=out.candidate;changed.lights.push_back(changed.lights.front());assert(!fo3scene::ValidateResidentLightDelta(out.candidate,changed,{31},error));
+ using Plan=fo3scene::ResourceExchange<fo3interior::Snapshot,std::vector<Fo3PlacedLight>>;
+ auto live=out.before;placed=PrepareFo3PlacedInteriorLights(live);const auto liveData=live.lights.data();
+ const auto placedData=placed.data();fo3scene::VisualPublication epoch;
+ Plan::Payload incoming{out.candidate,PrepareFo3PlacedInteriorLights(out.candidate)};
+ auto plan=Plan::Prepare(epoch,std::tie(live,placed),incoming);assert(plan);
+ assert(plan->Commit(epoch,std::tie(live,placed))&&MatchesFo3PlacedInteriorLights(live,placed));
+ assert(fo3interior::Select(live.lights,{-1,-1,-3},{2,2,0}).count==3);
+ assert(plan->Rollback(epoch,std::tie(live,placed))&&live.lights.data()==liveData&&placed.data()==placedData);
+ assert(fo3interior::Select(live.lights,{-1,-1,-3},{2,2,0}).count==2);
+ // Valid dark/empty interiors are supported; malformed or missing source data
+ // cannot be interpreted as that deliberately authored absence.
+ Bytes dark;sub(dark,"DATA",{1});write(record("CELL",10,dark));
+ assert(fo3scene::PrepareResidentInteriorLighting(path,10,{0,0,0},published,candidate,{},out,cancelled,error));
+ assert(out.candidate.lights.empty()&&!out.candidate.cell.authored);
+ std::remove(path.c_str());
+}
 void original(const std::string& path){
  // Resolve by original EDID, not guessed runtime cell IDs.
  FILE* f=std::fopen(path.c_str(),"rb");assert(f);std::unordered_map<std::string,uint32_t> cells;
@@ -87,6 +152,12 @@ void original(const std::string& path){
  for(const char* edid:{"MegatonTheBrassLantern","MegatonPlayerHouse"}){
   assert(cells.count(edid));fo3interior::Snapshot s;assert(fo3interior::Load(path,cells.at(edid),{100,200,300},s));
   assert(s.cell.authored&&s.total==11&&s.lights.size()==11&&s.unsupported==0&&s.unresolvedParents==0);
+  fo3world::ReferenceStateSnapshot published,candidate;candidate.states[s.lights.front().ref]=fo3world::ReferenceEnableState::Disabled;
+  fo3scene::ResidentInteriorLighting projected;std::atomic<bool> cancelled{false};std::string error;
+  assert(fo3scene::PrepareResidentInteriorLighting(path,cells.at(edid),{100,200,300},published,candidate,
+      {s.lights.front().ref},projected,cancelled,error));
+  assert(projected.before.lights.size()==11&&projected.candidate.lights.size()==10&&
+      fo3scene::SameResidentCellLighting(projected.before.cell,projected.candidate.cell));
   assert(s.cell.ambient[0]==47.0f/255&&s.cell.ambient[1]==70.0f/255&&s.cell.fogNear==100&&s.cell.fogFar==1500);
   Fo3ImageSpace image;assert(fo3imagespace::ParseImageSpacePayload(s.imagePayload,image));assert(image.editorId=="ShackInterior01");
   assert(std::abs(image.cinematicSaturation-0.9f)<1e-6&&std::abs(image.cinematicBrightness-1.1f)<1e-6&&std::abs(image.bloomAlphaInterior-0.8f)<1e-6);
@@ -117,4 +188,4 @@ void original(const std::string& path){
            <<" IMGS="<<image.editorId<<" brightness="<<image.cinematicBrightness<<"\n";
  }
 }
-int main(int argc,char** argv){fixtures();if(argc>1)original(argv[1]);std::cout<<"Interior lighting checks passed\n";}
+int main(int argc,char** argv){fixtures();residentFixtures();if(argc>1)original(argv[1]);std::cout<<"Interior lighting checks passed\n";}

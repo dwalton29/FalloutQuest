@@ -40,7 +40,7 @@ Cell ParseCell(uint32_t formId, const std::vector<uint8_t>& payload);
 Reference ParseReference(uint32_t id, uint32_t flags, const std::vector<uint8_t>& payload);
 Light ParseLight(uint32_t id, const std::vector<uint8_t>& payload);
 std::array<float,3> ToScene(const std::array<float,3>& game, const std::array<float,3>& origin);
-bool Load(const std::string& path, uint32_t cell, const std::array<float,3>& origin, Snapshot& out, const fo3world::ReferenceStateSnapshot* referenceState=nullptr);
+bool Load(const std::string& path, uint32_t cell, const std::array<float,3>& origin, Snapshot& out, const fo3world::ReferenceStateSnapshot* referenceState=nullptr,bool requireComplete=false);
 constexpr size_t Budget=8; // Quest budget, not a universal PC permutation limit.
 struct Selection { int count=0; std::array<size_t,Budget> indices{}; };
 Selection Select(const std::vector<Light>& lights, const std::array<float,3>& minimum,

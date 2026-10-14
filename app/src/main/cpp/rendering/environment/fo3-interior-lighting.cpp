@@ -64,7 +64,22 @@ float Attenuation(float d,float r) {
     if(r<=0)return 0;
     return std::clamp(1.0f-(d*d)/(r*r),0.0f,1.0f);
 }
-bool Load(const std::string& path,uint32_t cell,const std::array<float,3>& origin,Snapshot& out,const fo3world::ReferenceStateSnapshot* referenceState) {
+static bool CompleteSubrecords(const std::vector<uint8_t>& payload) {
+    size_t pos=0;uint32_t extended=0;
+    while(pos<payload.size()) {
+        if(payload.size()-pos<6)return false;
+        const auto* tag=payload.data()+pos;const uint16_t shortSize=fo3esm::ReadU16(tag+4);pos+=6;
+        if(Is(reinterpret_cast<const char*>(tag),"XXXX")) {
+            if(extended||shortSize!=4||payload.size()-pos<4)return false;
+            extended=fo3esm::ReadU32(payload.data()+pos);pos+=4;if(!extended)return false;continue;
+        }
+        const uint32_t size=extended?extended:shortSize;extended=0;
+        if(size>payload.size()-pos)return false;
+        pos+=size;
+    }
+    return !extended;
+}
+bool Load(const std::string& path,uint32_t cell,const std::array<float,3>& origin,Snapshot& out,const fo3world::ReferenceStateSnapshot* referenceState,bool requireComplete) {
     out={};out.cell.formId=cell;
     struct Close { void operator()(FILE* f) const { std::fclose(f); } };
     std::unique_ptr<FILE,Close> file(std::fopen(path.c_str(),"rb"));
@@ -75,7 +90,10 @@ bool Load(const std::string& path,uint32_t cell,const std::array<float,3>& origi
     std::unordered_map<uint32_t,fo3esm::RecordLocation> index;
     std::vector<uint32_t> children;
     while(true) {
-        const auto offset=ftello(file.get());if(offset<0||offset+24>size)break;
+        const auto offset=ftello(file.get());
+        if(offset<0)return false;
+        if(offset==size)break;
+        if(offset+24>size){if(requireComplete)return false;break;}
         while(!groups.empty()&&static_cast<uint64_t>(offset)>=groups.back().end)groups.pop_back();
         uint8_t h[24];if(!fo3esm::ReadExact(file.get(),h,24))return false;
         uint32_t n=fo3esm::ReadU32(h+4),flags=fo3esm::ReadU32(h+8),id=fo3esm::ReadU32(h+12);
@@ -85,7 +103,7 @@ bool Load(const std::string& path,uint32_t cell,const std::array<float,3>& origi
         }
         const auto end=offset+24+n;if(end>size)return false;
         std::string type(reinterpret_cast<char*>(h),4);
-        if(type=="CELL"||type=="LGTM"||type=="IMGS"||type=="LIGH"||type=="REFR"||type=="ACHR")
+        if(requireComplete||type=="CELL"||type=="LGTM"||type=="IMGS"||type=="LIGH"||type=="REFR"||type=="ACHR")
             index[id]={static_cast<uint64_t>(offset)+24,n,flags,type};
         if(type=="REFR")for(auto it=groups.rbegin();it!=groups.rend();++it) {
             if(it->type==6){if(it->label==cell)children.push_back(id);break;}
@@ -93,11 +111,19 @@ bool Load(const std::string& path,uint32_t cell,const std::array<float,3>& origi
         if(fseeko(file.get(),end,SEEK_SET)!=0)return false;
     }
     auto read=[&](uint32_t id,const char* type,std::vector<uint8_t>& b){
-        auto it=index.find(id);return it!=index.end()&&it->second.type==type&&fo3esm::ReadPayload(file.get(),it->second,b);
+        auto it=index.find(id);return it!=index.end()&&it->second.type==type&&fo3esm::ReadPayload(file.get(),it->second,b)&&(!requireComplete||CompleteSubrecords(b));
     };
     std::vector<uint8_t> payload;
     if(!read(cell,"CELL",payload))return false;
     out.cell=ParseCell(cell,payload);
+    if(requireComplete) {
+        bool malformed=false;
+        fo3esm::WalkSubrecords(payload,[&](const char* tag,const uint8_t* bytes,uint32_t size){
+            if(Is(tag,"XCLL")){Cell test;if(!Lighting(bytes,size,test))malformed=true;}
+            if((Is(tag,"XCIM")||Is(tag,"LTMP")||Is(tag,"LNAM"))&&size!=4)malformed=true;
+        });
+        if(malformed)return false;
+    }
     if((out.cell.flags&1)==0)return false;
     if(out.cell.lightingTemplate && out.cell.inherit) {
         Cell t;bool have=false;
@@ -120,7 +146,7 @@ bool Load(const std::string& path,uint32_t cell,const std::array<float,3>& origi
         } else ++out.unsupported;
     }
     if(out.cell.flags&0x80)++out.unsupported; // Behave Like Exterior: explicit diagnostic.
-    if(out.cell.imageSpace)read(out.cell.imageSpace,"IMGS",out.imagePayload);
+    if(out.cell.imageSpace&&!read(out.cell.imageSpace,"IMGS",out.imagePayload)&&requireComplete)return false;
     std::unordered_map<uint32_t,Reference> references;
     std::unordered_map<uint32_t,bool> memo;
     std::unordered_set<uint32_t> visiting, unknown;
@@ -130,7 +156,8 @@ bool Load(const std::string& path,uint32_t cell,const std::array<float,3>& origi
         auto it=references.find(id);
         if(it==references.end()) {
             auto ix=index.find(id);std::vector<uint8_t> b;
-            if(ix==index.end()||!fo3esm::ReadPayload(file.get(),ix->second,b)){
+            if(ix==index.end()||(requireComplete&&ix->second.type!="REFR"&&ix->second.type!="ACHR")||
+               !fo3esm::ReadPayload(file.get(),ix->second,b)||(requireComplete&&!CompleteSubrecords(b))){
                 visiting.erase(id);unknown.insert(id);++out.unresolvedParents;return false;
             }
             it=references.emplace(id,ParseReference(id,ix->second.flags,b)).first;
@@ -144,14 +171,31 @@ bool Load(const std::string& path,uint32_t cell,const std::array<float,3>& origi
     for(uint32_t id:children) {
         if(!read(id,"REFR",payload))return false;
         Reference r=ParseReference(id,index.at(id).flags,payload);references[id]=r;
+        bool referenceLayout=true;
+        if(requireComplete)fo3esm::WalkSubrecords(payload,[&](const char* tag,const uint8_t*,uint32_t n){
+            if((Is(tag,"NAME")&&n!=4)||(Is(tag,"DATA")&&n!=24)||(Is(tag,"XESP")&&n!=8))referenceLayout=false;
+        });
+        if(requireComplete&&(!r.base||!index.count(r.base)))return false;
         auto base=bases.find(r.base);
         if(base==bases.end()) {
-            if(!read(r.base,"LIGH",payload))continue;
+            if(!read(r.base,"LIGH",payload)) {
+                if(requireComplete&&index.at(r.base).type=="LIGH")return false;
+                continue;
+            }
+            if(requireComplete) {
+                bool valid=true;
+                fo3esm::WalkSubrecords(payload,[&](const char* tag,const uint8_t*,uint32_t n){
+                    if((Is(tag,"DATA")&&n!=32)||(Is(tag,"FNAM")&&n!=4))valid=false;
+                });
+                if(!valid)return false;
+            }
             base=bases.emplace(r.base,ParseLight(r.base,payload)).first;
         }
+        if(requireComplete&&(!referenceLayout||(r.parentFlags&~3u)))return false;
         ++out.total;
         const bool authored=enabled(id);
         const bool live=referenceState?referenceState->Enabled(id,authored):authored;
+        if(requireComplete&&live&&!(r.flags&0x20u)&&!r.transform)return false;
         if(!live||(r.flags&0x20u)||(base->second.flags&0x20u)||!r.transform){++out.disabled;continue;}
         Light l=base->second;l.ref=id;l.position=ToScene(r.position,origin);l.rotation=r.rotation;
         if(!std::isfinite(l.fade)||l.fade<0||l.radius<=0){++out.unsupported;continue;}

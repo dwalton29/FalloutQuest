@@ -79,3 +79,9 @@ target_compile_options(resident_lane_tests PRIVATE -Wall -Wextra -Werror -UNDEBU
 target_include_directories(resident_lane_tests PRIVATE ../../app/src/main/cpp/world)
 target_link_libraries(resident_lane_tests PRIVATE Threads::Threads)
 add_test(NAME resident_lane_tests COMMAND resident_lane_tests)
+
+add_executable(resource_exchange_tests resource_exchange_tests.cpp)
+target_compile_features(resource_exchange_tests PRIVATE cxx_std_17)
+target_compile_options(resource_exchange_tests PRIVATE -Wall -Wextra -Werror -UNDEBUG)
+target_include_directories(resource_exchange_tests PRIVATE ../../app/src/main/cpp/world)
+add_test(NAME resource_exchange_tests COMMAND resource_exchange_tests)

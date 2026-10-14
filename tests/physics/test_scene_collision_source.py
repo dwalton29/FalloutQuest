@@ -180,3 +180,34 @@ assert 'collisionScope,collisionState' in immutable
 assert immutable.index('LoadFo3WorldspacePlacements(collisionScope') < immutable.index('PrepareFo3ResidentCollisionSnapshot(')
 assert 'result.collision=Fo3CollisionSnapshotOwner(collisionToken)' in immutable
 print('Resident collision preparation owns private policy/chunks/token and validates collision inputs before GPU admission')
+
+# Interior light resources are decoded off-thread and exchanged as a coupled
+# snapshot/placed-light bundle without reloading room environment or image space.
+assert 'collisionState,lightRevision' in immutable
+assert 'PrepareResidentInteriorLighting(' in immutable
+for forbidden in ('gFo3InteriorLighting','gFo3PlacedLights','gFo3LightPublication'):
+    assert forbidden not in immutable
+assert 'cpu.lightRevision==gFo3LightPublication.Revision()' in stamp
+light_plan=s[s.index('bool PrepareFo3ResidentLightPlan('):s.index('// Render-thread-only private GPU preparation.')]
+assert light_plan.index('SameResidentLighting(gFo3InteriorLighting,cpu.lighting.before)') < light_plan.index('Fo3ResidentLightPlan::Prepare(')
+assert 'MatchesFo3PlacedInteriorLights(gFo3InteriorLighting,gFo3PlacedLights)' in light_plan
+for forbidden in ('PublishFo3InteriorLighting(','gFo3Environment=','gFo3ImageSpace=','LoadFo3CellEnvironment('):
+    assert forbidden not in light_plan
+assert advance.index('PrepareFo3ResidentLightPlan(') < advance.index('PrepareFo3ResidentVisualPlan(')
+assert 'else DiscardFo3ResidentLightPlan()' in advance
+assert 'gFo3ResidentLightPlan' in release
+assert cancel.index('gFo3ResidentLightPlan->Applied()') < cancel.index('DiscardFo3ResidentLightPlan()')
+for region in (begin,teardown):
+    assert region.index('DiscardFo3ResidentVisualPlan()') < region.index('DiscardFo3ResidentLightPlan()')
+static_lights=s[s.index('void PrepareFo3InteriorObjectLights('):s.index('void PrepareFo3InteriorSceneLights() {')]
+assert 'object.interiorLightRevision==gFo3LightPublication.Revision()' in static_lights
+assert 'object.interiorLightRevision=gFo3LightPublication.Revision()' in static_lights
+publication=Path('app/src/main/cpp/rendering/environment/fo3-interior-publication.h').read_text()
+assert publication.index('gFo3LightPublication.Changed()') < publication.index('gFo3InteriorLighting=')
+visual_depth=Path('app/src/main/cpp/rendering/environment/fo3-visual-depth.h').read_text()
+reset_lights=visual_depth[visual_depth.index('inline void ResetFo3PlacedLights() {'):visual_depth.index('inline bool LoadFo3PlacedLights(')]
+assert reset_lights.index('gFo3LightPublication.Changed()') < reset_lights.index('gFo3PlacedLights.clear()')
+print('Interior light resources capture privately, exchange without environment resets and invalidate static/actor light selection')
+
+assert "cachedLightRevision != 0 && cachedLightRevision == gFo3LightPublication.Revision()" in s
+assert "cachedLightRevision = gFo3LightPublication.Revision()" in s

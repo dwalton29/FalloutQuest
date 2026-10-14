@@ -18,19 +18,9 @@
 #include <utility>
 #include <vector>
 
-struct Fo3PlacedLight {
-    uint32_t refFormId = 0u;
-    uint32_t baseFormId = 0u;
-    std::string editorId;
-    float position[3]{0.0f, 0.0f, 0.0f};
-    float color[3]{1.0f, 1.0f, 1.0f};
-    float radius = 1.0f;
-    float falloff = 1.0f;
-    float fade = 1.0f;
-    uint32_t flags = 0u;
-};
-
-constexpr int FO3_SHADER_LIGHTS = 8;
+#include "fo3-placed-light-data.h"
+#include "world/fo3-visual-exchange.h"
+inline fo3scene::VisualPublication gFo3LightPublication;
 inline std::vector<Fo3PlacedLight> gFo3PlacedLights;
 inline int gFo3SelectedLightCount = 0;
 inline float gFo3SelectedLightPosRadius[FO3_SHADER_LIGHTS * 4]{};
@@ -80,13 +70,17 @@ inline bool InWorldspace(const std::vector<GroupFrame>& groups, uint32_t worldsp
 
 } // namespace fo3visual
 
-inline void ResetFo3PlacedLights() {
-    gFo3PlacedLights.clear();
+inline void ResetFo3SelectedLights() {
     gFo3SelectedLightCount = 0;
     std::fill(std::begin(gFo3SelectedLightPosRadius),
               std::end(gFo3SelectedLightPosRadius), 0.0f);
     std::fill(std::begin(gFo3SelectedLightColorFalloff),
               std::end(gFo3SelectedLightColorFalloff), 0.0f);
+}
+
+inline void ResetFo3PlacedLights() {
+    gFo3LightPublication.Changed();
+    gFo3PlacedLights.clear();ResetFo3SelectedLights();
 }
 
 inline bool LoadFo3PlacedLights(uint32_t worldspaceFormId,
