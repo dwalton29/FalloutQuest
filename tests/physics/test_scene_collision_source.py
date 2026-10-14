@@ -194,7 +194,7 @@ assert 'MatchesFo3PlacedInteriorLights(gFo3InteriorLighting,gFo3PlacedLights)' i
 for forbidden in ('PublishFo3InteriorLighting(','gFo3Environment=','gFo3ImageSpace=','LoadFo3CellEnvironment('):
     assert forbidden not in light_plan
 assert advance.index('PrepareFo3ResidentLightPlan(') < advance.index('PrepareFo3ResidentVisualPlan(')
-assert 'else DiscardFo3ResidentLightPlan()' in advance
+assert 'else {DiscardFo3ResidentLightPlan();DiscardFo3ResidentDoorInteractionPlan();}' in advance
 assert 'gFo3ResidentLightPlan' in release
 assert cancel.index('gFo3ResidentLightPlan->Applied()') < cancel.index('DiscardFo3ResidentLightPlan()')
 for region in (begin,teardown):
@@ -211,3 +211,37 @@ print('Interior light resources capture privately, exchange without environment 
 
 assert "cachedLightRevision != 0 && cachedLightRevision == gFo3LightPublication.Revision()" in s
 assert "cachedLightRevision = gFo3LightPublication.Revision()" in s
+
+# Load-door fallback anchors and prompt metadata/text share one revisioned owner.
+doors=Path('app/src/main/cpp/world/interaction/fo3-door-resources.cpp').read_text()
+legacy=Path('app/src/main/cpp/world/interaction/fo3-authored-door-cache.inc').read_text()
+cell_world=Path('app/src/main/cpp/world/fo3-cell-world.cpp').read_text()
+assert 'auto& gCellCaches = Fo3LiveDoorResources().cells' in legacy
+anchor_build=legacy[legacy.index('const std::vector<Anchor>& AnchorsForCell('):]
+assert anchor_build.index('cached->second.attempted') < anchor_build.index('MarkFo3DoorResourcesChanged()') < anchor_build.index('gCellCaches[cellFormId]')
+assert 'QueryFo3DoorAnchorResources(Q1730Door::AnchorsForCell(cellFormId)' in legacy
+assert 'auto& gDoorMetadata = Fo3LiveDoorResources().metadata' in cell_world
+assert 'auto& gPrompts = Fo3LiveDoorResources().prompts' in cell_world
+for signature,mutation in [('bool EnsureDoorMetadata(', 'gDoorMetadata[sourceDoorRef] = meta'),
+                            ('void CacheFo3DoorPromptQ1840(', 'Q1840Prompt::gDoorMetadata[sourceDoorRef] = meta'),
+                            ('bool GetFo3DoorPromptQ1840(', 'Q1840Prompt::gPrompts.emplace')]:
+    region=cell_world[cell_world.index(signature):]
+    assert region.index('MarkFo3DoorResourcesChanged()') < region.index(mutation)
+assert 'FormatFo3DoorPrompt(doorName,destination,out)' in cell_world
+assert lane_start.index('CaptureFo3DoorResources()') < lane_start.index('gFo3ResidentLane.Start(ticket,')
+assert 'capturedDoors=std::move(capturedDoors)' in immutable and 'PrepareFo3ResidentDoorResources(' in immutable
+for forbidden in ('Fo3LiveDoorResources','GetFo3DoorResourceRevision','gCellCaches','gDoorMetadata','gPrompts'):
+    assert forbidden not in immutable
+assert 'cpu.doorRevision==GetFo3DoorResourceRevision()' in stamp
+assert advance.index('PrepareFo3ResidentDoorInteractionPlan(') < advance.index('PrepareFo3ResidentLightPlan(')
+assert 'HasFo3ResidentDoorPlan()' in release
+assert cancel.index('Fo3ResidentDoorPlanApplied()') < cancel.index('DiscardFo3ResidentDoorInteractionPlan()')
+for region in (begin,teardown):
+    assert region.index('ResetFo3ResidentPreparationLane()') < region.index('DiscardFo3ResidentDoorInteractionPlan()')
+for signature in ('bool CommitFo3ResidentDoorInteractionPlan()', 'bool RollbackFo3ResidentDoorInteractionPlan()'):
+    region=s[s.index(signature):].split('\n}',1)[0]
+    assert '!gSceneLoad.active' in region and 'gFo3ResidentLane.Exclusive(gFo3ResidentDoorTicket)' in region
+prepare=doors[doors.index('bool PrepareFo3ResidentDoorResources('):doors.index('bool PrepareFo3ResidentDoorPlan(')]
+for forbidden in ('Fo3LiveDoorResources','Publication()','Pending()','PlayerSession','glGen'):
+    assert forbidden not in prepare
+print('Load-door resources capture privately, guard epochs and couple targeting/prompts through lifecycle checks')

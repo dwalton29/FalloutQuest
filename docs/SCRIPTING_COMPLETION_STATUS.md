@@ -4,10 +4,10 @@
 
 - Starting canonical main: `2987d911f318b92d1041257868067851a09d16f0` (v208).
 - Resumed from published `6469dbb872889a79a0682501b75f6ac6577ab547`.
-- Current implementation checkpoint: M1B3k reversible interior light resources.
+- Current implementation checkpoint: M1B3l reversible interior load-door resources.
   Use canonical main history for the publication SHA; the previous published
-  implementation is M1B3j `98ad9cbd3e4c0ece6188e2108f3e76a391772f65`.
-- Previous M1B3j Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38631613450.
+  implementation is M1B3k `7f97e3f062609847e972cdf34f32133896410028`.
+- Previous M1B3k Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38633472657.
   Earlier M1B3h CI confirmed the collision-policy include-order failure from g is fixed.
 - M1B2 scene-load/stream-in integration is host-validated and pushed; the remote
   tree matches the tested tree `20c0e9cd4d5206190925d30a68408400c6fb1923`. Newer v209 is preserved: 209 / 0.72.0-persistent-player-stats.
@@ -31,6 +31,7 @@
 | M1B3h private texture/GPU preparation | `25a7be3006e5eb2b16eaf6d48ffb9319b4f95f71` | Confirmed |
 | M1B3i reserved resident asset lane | `b57842aeb7e39c34f182f6debc3e44efd6146196` | Confirmed |
 | M1B3j private collision resources | `98ad9cbd3e4c0ece6188e2108f3e76a391772f65` | Confirmed |
+| M1B3k reversible interior lights | `7f97e3f062609847e972cdf34f32133896410028` | Confirmed |
 
 The user directly confirmed permission to push to main on 2026-10-14. The old
 approval blocker is resolved. Command-line Git cannot authenticate for writes;
@@ -164,7 +165,9 @@ flowchart TD
    tokens to the worker/GPU packet (see `world-reference-m1b3j.md`).
    M1B3k adds strict interior point-light projections, coupled reversible light
    resources and cache epochs (see `world-reference-m1b3k.md`).
-   Exterior lights, interactions, queue reconciliation and the outer runtime/resource/actor coordinator remain unfinished. Only then admit source
+   M1B3l couples authored interior XTEL targeting anchors with prompt metadata/text,
+   immutable worker preparation and reversible cache ownership (see `world-reference-m1b3l.md`).
+   Exterior lights, remaining interactions, queue reconciliation and the outer runtime/resource/actor coordinator remain unfinished. Only then admit source
    Enable/Disable; no success-only handlers are allowed.
 4. M1C+: cross-cell MoveTo/MoveToMarker with original placements/actor handoff,
    spawn identity/lifecycle and Delete; transaction/persistence tests.
@@ -453,3 +456,25 @@ this runtime lacks glslangValidator; CI performs it. See
 `world-reference-m1b3k.md`; exterior light changes, interaction/actor/held-object/
 navigation/LOD admission and the final logical/resource/queue coordinator remain
 unfinished. World commands remain rejected; v209 is unchanged.
+
+
+## M1B3l validation
+
+Reversible interior load-door resources pass twelve world, 29 player and one
+physics CTest cases (42 core host cases). Targeting anchors, prompt metadata and
+original FULL bytes share one bundle/epoch; unchanged out-of-scope cache entries
+survive preparation. Tests cover enable-parent projections including presentation
+and inverted flags, model-free authored targeting, missing/malformed sources,
+undeclared deltas, cancellation, stale cache writes and allocation failure.
+Commit/rollback allocate nothing and restore exact previous anchor buffers and
+prompt nodes. Original Brass Lantern 1-to-0-to-1 load-door exchange/rollback passes,
+also under ASan/UBSan with LeakSanitizer disabled. Source guards verify real
+legacy-cache aliases and mutation epochs, immutable captures, GPU admission,
+asset-ticket guards and teardown/cancellation order. Existing rendering/body/
+Pip-Boy/inventory/skin source checks pass. See `world-reference-m1b3l.md`.
+
+This owns interior authored XTEL resources only. Local swing-door poses, active
+interaction/loot/lock UI, actors, held/loose objects, navigation, exterior light/
+interaction scope, baked LOD admission and final canonical/resource publication
+with queue reconciliation still need coordination. World commands remain
+rejected; v209 is unchanged. No physical Quest/performance claim is made.

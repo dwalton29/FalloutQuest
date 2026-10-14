@@ -12,6 +12,7 @@
 // The result is primed at scene activation and every live query is memory-only.
 
 #include "fo3-authored-door-query.h"
+#include "fo3-door-resources.h"
 #include "fo3-authored-door-cache.h"
 
 #include <algorithm>
@@ -26,18 +27,8 @@ extern void PumpFo3AndroidEventsQ1860();
 
 namespace Q1730Door {
 
-struct Anchor {
-    uint32_t sourceDoorRef = 0u;
-    float sourceX = 0.0f;
-    float sourceY = 0.0f;
-    float sourceZ = 0.0f;
-    Fo3DoorTeleport teleport;
-};
-
-struct CellCache {
-    bool attempted = false;
-    std::vector<Anchor> anchors;
-};
+using Anchor = Fo3DoorAnchor;
+using CellCache = Fo3DoorCellCache;
 
 struct Q1870Frame {
     uint64_t end = 0u;
@@ -45,11 +36,13 @@ struct Q1870Frame {
     uint32_t type = 0u;
 };
 
-std::unordered_map<uint32_t, CellCache> gCellCaches;
+auto& gCellCaches = Fo3LiveDoorResources().cells;
 
 const std::vector<Anchor>& AnchorsForCell(uint32_t cellFormId) {
+    const auto cached = gCellCaches.find(cellFormId);
+    if (cached != gCellCaches.end() && cached->second.attempted) return cached->second.anchors;
+    MarkFo3DoorResourcesChanged();
     CellCache& cache = gCellCaches[cellFormId];
-    if (cache.attempted) return cache.anchors;
     cache.attempted = true;
 
     const auto started = std::chrono::steady_clock::now();
@@ -218,58 +211,14 @@ bool QueryFo3AuthoredDoorAnchorQ1730(uint32_t cellFormId,
     if (outAim) *outAim = {};
     if (cellFormId == 0u || unitsPerMetre <= 1e-4f) return false;
 
-    const float length = std::sqrt(dirX * dirX + dirY * dirY + dirZ * dirZ);
-    if (length < 1e-5f) return false;
-    dirX /= length;
-    dirY /= length;
-    dirZ /= length;
-
-    const std::vector<Q1730Door::Anchor>& anchors = Q1730Door::AnchorsForCell(cellFormId);
-    if (anchors.empty()) return false;
-
-    // Preserve Q16.3's authored focus geometry exactly; only cache construction
-    // changed. Rendered DOOR AABBs still win before this fallback is queried.
-    constexpr float kMaxDistance = 4.0f;
-    constexpr float kAnchorRadius = 1.35f;
-    constexpr float kRadiusSq = kAnchorRadius * kAnchorRadius;
-
-    const Q1730Door::Anchor* best = nullptr;
-    float bestScore = 1e30f;
-    float bestT = 0.0f;
-    for (const Q1730Door::Anchor& anchor : anchors) {
-        const float px = (anchor.sourceX - sceneCenterX) / unitsPerMetre;
-        const float py = floorY + (anchor.sourceZ - sceneFloorZ) / unitsPerMetre;
-        const float pz = sceneForward - (anchor.sourceY - sceneCenterY) / unitsPerMetre;
-
-        const float vx = px - originX;
-        const float vy = py - originY;
-        const float vz = pz - originZ;
-        const float t = vx * dirX + vy * dirY + vz * dirZ;
-        if (t < 0.05f || t > kMaxDistance) continue;
-
-        const float distanceSq = vx * vx + vy * vy + vz * vz;
-        const float perpendicularSq = std::max(0.0f, distanceSq - t * t);
-        if (perpendicularSq > kRadiusSq) continue;
-
-        const float score = perpendicularSq * 3.0f + t * 0.05f;
-        if (score >= bestScore) continue;
-        bestScore = score;
-        bestT = t;
-        best = &anchor;
+    // Reject invalid rays before a first-use cache build, as the legacy path did.
+    for (float value : {sceneCenterX,sceneCenterY,sceneFloorZ,unitsPerMetre,floorY,
+            sceneForward,originX,originY,originZ,dirX,dirY,dirZ}) {
+        if (!std::isfinite(value)) return false;
     }
-
-    if (!best) return false;
-    if (outAim) {
-        outAim->valid = true;
-        outAim->sourceDoorRef = best->sourceDoorRef;
-        outAim->destinationDoorRef = best->teleport.destinationDoorRefFormId;
-        outAim->distance = bestT;
-        outAim->x = best->teleport.x;
-        outAim->y = best->teleport.y;
-        outAim->z = best->teleport.z;
-        outAim->rx = best->teleport.rx;
-        outAim->ry = best->teleport.ry;
-        outAim->rz = best->teleport.rz;
-    }
-    return true;
+    const float length = std::sqrt(dirX*dirX+dirY*dirY+dirZ*dirZ);
+    if (!std::isfinite(length) || length < 1e-5f) return false;
+    return QueryFo3DoorAnchorResources(Q1730Door::AnchorsForCell(cellFormId),
+        sceneCenterX,sceneCenterY,sceneFloorZ,unitsPerMetre,floorY,sceneForward,
+        originX,originY,originZ,dirX,dirY,dirZ,outAim);
 }

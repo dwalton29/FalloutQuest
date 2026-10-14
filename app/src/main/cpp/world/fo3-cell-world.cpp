@@ -695,18 +695,15 @@ struct GroupFrame {
     uint32_t type = 0u;
 };
 
-struct Metadata {
-    uint32_t sourceBase = 0u;
-    Fo3DoorTeleport teleport;
-};
+using Metadata = Fo3DoorPromptMetadata;
 
 bool gIndexAttempted = false;
 bool gIndexReady = false;
 std::unordered_map<uint32_t, std::string> gFullNames;
 std::unordered_map<uint32_t, uint32_t> gCellWorldspaces;
 std::unordered_map<uint32_t, uint32_t> gRefBases;
-std::unordered_map<uint32_t, Metadata> gDoorMetadata;
-std::unordered_map<uint32_t, std::string> gPrompts;
+auto& gDoorMetadata = Fo3LiveDoorResources().metadata;
+auto& gPrompts = Fo3LiveDoorResources().prompts;
 
 std::string SubrecordString(const uint8_t* bytes, uint32_t size) {
     if (!bytes || size == 0u) return {};
@@ -846,6 +843,7 @@ bool EnsureDoorMetadata(uint32_t sourceDoorRef) {
     Metadata meta;
     meta.sourceBase = baseIt->second;
     meta.teleport = teleport;
+    MarkFo3DoorResourcesChanged();
     gDoorMetadata[sourceDoorRef] = meta;
     Q71_LOGI("Q16.12 PROMPT METADATA LAZY: sourceDoor=%08X sourceBase=%08X destinationDoor=%08X destinationCell=%08X source=Fallout3.esm",
              sourceDoorRef, meta.sourceBase,
@@ -870,15 +868,7 @@ bool BuildPrompt(uint32_t sourceDoorRef, std::string& out) {
 
     fo3fontdebug::LogBytes("ESM-FULL-door",doorName);
     fo3fontdebug::LogBytes("ESM-FULL-destination",destination);
-    out = "Open";
-    if (!doorName.empty()) {
-        out += " ";
-        out += doorName;
-    }
-    if (!destination.empty()) {
-        out += " to ";
-        out += destination;
-    }
+    if (!FormatFo3DoorPrompt(doorName,destination,out)) return false;
 
     Q71_LOGI("Q16.12 AUTHORED DOOR PROMPT: sourceDoor=%08X sourceBase=%08X destinationDoor=%08X destinationCell=%08X door=\"%s\" destination=\"%s\" text=\"%s\"",
              sourceDoorRef, meta.sourceBase,
@@ -897,6 +887,7 @@ void CacheFo3DoorPromptQ1840(uint32_t sourceDoorRef,
     Q1840Prompt::Metadata meta;
     meta.sourceBase = sourceDoorBase;
     meta.teleport = teleport;
+    MarkFo3DoorResourcesChanged();
     Q1840Prompt::gDoorMetadata[sourceDoorRef] = meta;
     Q1840Prompt::gPrompts.erase(sourceDoorRef);
     // Build the one-time authored-name index during scene preparation rather
@@ -916,6 +907,7 @@ bool GetFo3DoorPromptQ1840(uint32_t sourceDoorRef,
         if (!Q1840Prompt::BuildPrompt(sourceDoorRef, prompt) || prompt.empty()) {
             return false;
         }
+        MarkFo3DoorResourcesChanged();
         cached = Q1840Prompt::gPrompts.emplace(sourceDoorRef, std::move(prompt)).first;
     }
 
