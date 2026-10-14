@@ -167,7 +167,99 @@ static void DisarmStagePersistence() {
   assert(loaded.Snapshot().karma==200);
   std::remove(path.c_str());
 }
-int main(){
-  Parsing();Dispatch();UnsupportedIsAtomic();Filter();NumericLocalsAndRefSafety();BombMenuAndInventory();DisarmStagePersistence();
+
+static void NoticeTransactions() {
+  auto c=Catalog();c.pipboy.quests[20].name="Quest name";
+  c.pipboy.quests[20].objectives[1].text="Authored objective";
+  c.pipboy.formNames["examplequest"]=20;
+  c.pipboy.formNames["testcharge"]=400;c.items[400].formId=400;
+  c.pipboy.quests[20].stages[10].items.push_back({});
+  c.pipboy.quests[20].stages[10].items[0].result.source="SetObjectiveDisplayed ExampleQuest 1 1\r\n";
+  fo3player::Player p(c);std::string error;fo3player::QuestNotice n;
+  assert(p.StartQuest(20)&&!p.PollQuestNotice(n));
+  const auto revision=p.Revision();
+  fo3pipdata::ResultScript r;r.source="SetStage ExampleQuest 10\r\n";
+  assert(p.PreviewDialogueResult(r,error)&&p.Revision()==revision&&!p.PollQuestNotice(n));
+  // A later rejected command rolls back a previously queued fanfare.
+  r.source="SetStage ExampleQuest 10\r\nPlayer.RemoveItem TestCharge 1\r\n";
+  assert(!p.ExecuteDialogueResult(r,error)&&!p.PollQuestNotice(n));
+  assert(!p.Snapshot().pipboy.quests.at(20).announced);
+  assert(p.ExecuteQuestStage(20,10,error)&&p.PollQuestNotice(n));
+  assert(n.kind==fo3player::QuestNoticeKind::Added&&n.quest==20&&!p.PollQuestNotice(n));
+  assert(p.ExecuteQuestStage(20,10,error)&&!p.PollQuestNotice(n));
+  assert(p.SetObjective(20,1,true,fo3pipdata::Completion::Complete)&&p.PollQuestNotice(n));
+  assert(n.kind==fo3player::QuestNoticeKind::Updated);
+  assert(p.SetObjective(20,1,true,fo3pipdata::Completion::Complete)&&!p.PollQuestNotice(n));
+  assert(p.SetObjective(20,1,false,fo3pipdata::Completion::Complete));
+  assert(p.SetObjective(20,1,true,fo3pipdata::Completion::Complete));
+  assert(p.PollQuestNotice(n)&&n.kind==fo3player::QuestNoticeKind::Updated&&!p.PollQuestNotice(n));
+  const char* path="/tmp/fq-quest-notice.fqps";assert(p.Save(path,error));
+  fo3player::Player restored(c);assert(restored.Restore(path,error)&&!restored.PollQuestNotice(n));
+  assert(restored.Snapshot().pipboy.quests.at(20).announced);
+  assert(restored.FinishQuest(20,fo3pipdata::Completion::Complete)&&restored.PollQuestNotice(n));
+  assert(n.kind==fo3player::QuestNoticeKind::Completed&&!restored.PollQuestNotice(n));
+  assert(restored.FinishQuest(20,fo3pipdata::Completion::Complete)&&!restored.PollQuestNotice(n));
+  std::remove(path);
+}
+static void OriginalBomb(const char* path) {
+  fo3player::Catalog c;std::string error;assert(fo3player::LoadCatalog(path,c,error));
+  assert(c.eventBaseScripts.at(0x3bc8)==0x78cb3);
+  // Preserve the actual ESM source (including CRLF), message text, and scripts.
+  assert(c.pipboy.scripts.at(0x78cb3).source.find("\r\n")!=std::string::npos);
+  fo3player::Player low(c);fo3player::ScriptMessage message;
+  assert(low.DispatchReferenceEvent(0x14bc8,"OnActivate",0x14,error)==fo3player::ScriptEventResult::Executed);
+  assert(low.PollScriptMessage(message)&&message.form==0x78cb1&&message.text.find("25")!=std::string::npos);
+  assert(!low.PollScriptMessage(message));
+  assert(low.DispatchReferenceEvent(0x14bc8,"OnActivate",111,error)==fo3player::ScriptEventResult::Executed);
+  assert(!low.PollScriptMessage(message)); // IsActionRef gate is false.
+  c.initial.skills[static_cast<size_t>(fo3player::Skill::Explosives)]=25;
+  fo3player::Player p(c);p.RegisterOriginalActors();
+  const auto& target=c.pipboy.targets.at(0x14bc8);
+  p.SetScriptPlayerLocation(target.x,target.y,target.z,target.cell,target.world);
+  p.SetScriptEventDiagnostic([](const std::string& diagnostic){std::cerr<<diagnostic<<"\n";});
+  assert(p.ExecuteQuestStage(0x14e9e,10,error));
+  fo3player::QuestNotice notice;assert(p.PollQuestNotice(notice)&&notice.kind==fo3player::QuestNoticeKind::Added);
+  assert(p.DispatchReferenceEvent(0x14bc8,"OnActivate",0x14,error)==fo3player::ScriptEventResult::Executed);
+  assert(p.PollScriptMessage(message)&&message.form==0x78cb2&&message.buttons.size()==3);
+  assert(message.buttons==c.pipboy.messages.at(0x78cb2).buttons);
+  assert(p.SubmitScriptMessageButton(0x14bc8,0));p.PumpReferenceGameMode(.25,{0x14bc8});
+  assert(p.Snapshot().pipboy.quests.at(0x14e9e).stage==10&&!p.PollScriptMessage(message));
+  assert(p.DispatchReferenceEvent(0x14bc8,"OnActivate",0x14,error)==fo3player::ScriptEventResult::Executed);
+  assert(p.PollScriptMessage(message)&&message.form==0x78cb2);
+  assert(p.SubmitScriptMessageButton(0x14bc8,1));p.PumpReferenceGameMode(.25,{0x14bc8});
+  assert(p.Snapshot().pipboy.quests.at(0x14e9e).stage==30);
+  assert(p.Snapshot().karma==200);
+  assert(p.PollScriptMessage(message)&&message.text==c.pipboy.messages.at(message.form).text);
+  uint32_t sound;assert(p.PollScriptSound(sound)&&sound==c.pipboy.formNames.at("objmegatonbombtamperarm"));
+  assert(p.PollQuestNotice(notice)&&notice.kind==fo3player::QuestNoticeKind::Updated);
+  assert(!p.PollQuestNotice(notice));
+  const auto revision=p.Revision();p.PumpReferenceGameMode(.25,{0x14bc8});assert(p.Revision()==revision);
+  const char* save="/tmp/fq-original-bomb.fqps";assert(p.Save(save,error));
+  fo3player::Player restored(c);assert(restored.Restore(save,error));
+  assert(restored.Snapshot().pipboy.quests.at(0x14e9e).stage==30&&restored.Snapshot().karma==200);
+  assert(!restored.PollQuestNotice(notice));std::remove(save);
+
+  fo3player::Player rig(c);rig.RegisterOriginalActors();
+  rig.SetScriptPlayerLocation(target.x,target.y,target.z,target.cell,target.world);
+  assert(rig.ExecuteQuestStage(0x14e9e,10,error));
+  assert(rig.PollQuestNotice(notice));
+  assert(rig.DispatchReferenceEvent(0x14bc8,"OnActivate",0x14,error)==fo3player::ScriptEventResult::Executed);
+  assert(rig.PollScriptMessage(message)&&message.form==0x78cb2);
+  assert(rig.SubmitScriptMessageButton(0x14bc8,2));rig.PumpReferenceGameMode(.25,{0x14bc8});
+  assert(rig.Snapshot().pipboy.quests.at(0x14e9e).stage==10&&rig.PollScriptMessage(message));
+  assert(message.text==c.pipboy.messages.at(message.form).text&&!rig.PollQuestNotice(notice));
+  const auto charge=c.pipboy.formNames.at("fusionpulsecharge");assert(rig.Add(charge,1));
+  assert(rig.DispatchReferenceEvent(0x14bc8,"OnActivate",0x14,error)==fo3player::ScriptEventResult::Executed);
+  assert(rig.PollScriptMessage(message)&&message.form==0x78cb2);
+  assert(rig.SubmitScriptMessageButton(0x14bc8,2));
+  assert(rig.DispatchReferenceEvent(0x14bc8,"GameMode",0,error)==fo3player::ScriptEventResult::Unsupported);
+  assert(error.find(".enable")!=std::string::npos);
+  assert(rig.ItemCount(charge)==1&&rig.Snapshot().pipboy.quests.at(0x14e9e).stage==10);
+  assert(!rig.PollScriptMessage(message)&&!rig.PollQuestNotice(notice));
+  std::cout<<"Original ESM bomb activation, cancel, disarm, Karma, notices and persistence passed\n";
+}
+int main(int argc,char** argv){
+  Parsing();Dispatch();UnsupportedIsAtomic();Filter();NumericLocalsAndRefSafety();BombMenuAndInventory();DisarmStagePersistence();NoticeTransactions();
+  if(argc>1)OriginalBomb(argv[1]);
   std::cout<<"Original event source indexing, dispatch, scheduler and rollback passed\n";
 }

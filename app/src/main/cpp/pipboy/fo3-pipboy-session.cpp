@@ -105,6 +105,9 @@ void EncodeState(const SessionState &s, std::vector<uint8_t> &b) {
   Put(b,s.mutableGlobals.size());
   for(auto id:Keys(s.mutableGlobals)){Put(b,id);Put(b,Bits(s.mutableGlobals.at(id)));}
 
+  Put(b,0x514e4631); // QNF1: optional notice history; no queued HUD events saved.
+  Put(b,s.quests.size());
+  for(auto id:Keys(s.quests)){Put(b,id);Put(b,s.quests.at(id).announced);}
 }
 bool DecodeState(SessionState &out, const Definitions &d, const uint8_t *p,
                  size_t n, std::string &error) {
@@ -171,6 +174,8 @@ bool DecodeState(SessionState &out, const Definitions &d, const uint8_t *p,
                .second)
         return fail();
     }
+    // Legacy saves: existing objectives already belong to the player's history.
+    q.announced=!q.objectives.empty();
     s.quests.emplace(id, std::move(q));
   }
   if(r.ok&&r.at<n) {
@@ -201,6 +206,15 @@ bool DecodeState(SessionState &out, const Definitions &d, const uint8_t *p,
     }
     size=r.Count(100000);
     for(uint32_t i=0;i<size&&r.ok;++i){auto id=r.U();float value=r.F();if(!id||!std::isfinite(value)||!s.mutableGlobals.emplace(id,value).second)return fail();}
+  }
+  if(r.ok&&r.at<n) {
+    if(r.U()!=0x514e4631)return fail();
+    auto count=r.Count(1000);if(count!=s.quests.size())return fail();
+    std::unordered_set<uint32_t> seen;
+    for(uint32_t i=0;i<count&&r.ok;++i){auto id=r.U(),flag=r.U();
+      if(!s.quests.count(id)||flag>1||!seen.insert(id).second)return fail();
+      s.quests.at(id).announced=flag!=0;
+    }
   }
   if (!r.ok || r.at != n ||
       (s.selectedQuest &&

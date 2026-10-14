@@ -85,6 +85,7 @@ void SetFo3CollectedCollisionRefs(const std::unordered_set<uint32_t> &r) {
 }
 void FlushFo3PlayerState() { ++flushes; }
 #define Q6H_LOGI(...) ((void)0)
+#define Q6H_LOGW(...) ((void)0)
 bool dialogueFocus=false,pipFocus=false;uint32_t talked=0;
 bool Fo3DialogueFocus(){return dialogueFocus;}
 bool Fo3PipboyFocus(){return pipFocus;}
@@ -360,6 +361,27 @@ int main() {
     npcCatalog.initial.actorDamage[81]=100;gPlayerSession=std::make_unique<fo3player::Session>(npcCatalog);
     Check(QueryFo3Interaction(0,0,0,0,0,-1,talk)&&talk.reference==80,"dead NPC cannot Talk");
     gQ230NpcActors[0].eligible=false;Check(!QueryFo3Interaction(0,0,0,0,0,-1,talk),"empty/unsupported greeting cannot target");
+
+    // Real ACTI bridge and modal-input latch, including original CRLF source.
+    auto scripted=c;scripted.references[10].owner=0;
+    scripted.eventBaseScripts[100]=102;
+    scripted.pipboy.formNames["testmessage"]=500;
+    scripted.pipboy.messages[500].title="Authored title";
+    scripted.pipboy.messages[500].text="Authored description";
+    scripted.pipboy.messages[500].buttons={"Cancel","Other choice"};
+    scripted.pipboy.scripts[102].source="Begin OnActivate\r\nShowMessage TestMessage\r\nEnd\r\nBegin GameMode\r\nif GetButtonPressed == 0\r\nRewardKarma 7\r\nendif\r\nEnd\r\n";
+    scripted.eventPrograms[102]=fo3script::ParseEvents(scripted.pipboy.scripts[102]);
+    gPlayerSession=std::make_unique<fo3player::Session>(scripted);
+    gQ230NpcActors.clear();gObjects={GpuObject{}};gObjects[0].baseRecordType="ACTI";
+    occluded=true;Check(!ActivateFo3Interaction(0,0,0,0,0,-1)&&gPlayerSession->player.PendingScriptMessageCount()==0,"occlusion prevents scripted activation");
+    occluded=false;Check(!ActivateFo3Interaction(0,0,0,0,0,-1)&&gPlayerSession->player.PendingScriptMessageCount()==1,"ACTI queues authored menu without door transition");
+    UpdateFo3ScriptMessage(100,0,true,false,true);Check(Fo3ScriptMessageFocus(),"message acquires focus");
+    UpdateFo3ScriptMessage(101,0,true,false,true);Check(Fo3ScriptMessageFocus(),"held opening A does not select");
+    gPlayerSession->player.PumpReferenceGameMode(.25,{10});Check(gPlayerSession->player.Snapshot().karma==0,"opening press delivers no menu button");
+    UpdateFo3ScriptMessage(102,0,false,false,true);
+    UpdateFo3ScriptMessage(103,0,true,false,true);Check(!Fo3ScriptMessageFocus(),"new A selects authored row");
+    gPlayerSession->player.PumpReferenceGameMode(.25,{10});Check(gPlayerSession->player.Snapshot().karma==7,"button consumed by original GameMode");
+    gPlayerSession->player.PumpReferenceGameMode(.25,{10});Check(gPlayerSession->player.Snapshot().karma==7,"selected button does not repeat");
     std::cout << "Interaction runtime tests passed\n";
     return 0;
   } catch (const std::exception &e) {

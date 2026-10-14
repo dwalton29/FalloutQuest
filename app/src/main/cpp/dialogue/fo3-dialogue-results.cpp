@@ -93,6 +93,9 @@ bool CompileResult(const fo3pipdata::Definitions& d,const fo3pipdata::ResultScri
       cmd.type=CommandType::ShowMessage;
       if(!(in>>a)||(cmd.form=form(a))==0){error="invalid showmessage form";return false;}
       std::getline(in,cmd.expression);
+      // ESM SCTX uses CRLF: a bare ShowMessage leaves a trailing CR.
+      // It is whitespace, not a formatting argument/expression.
+      cmd.expression=fo3script::Trim(cmd.expression);
     } else if(op=="setquestobject") {
       cmd.type=CommandType::SetQuestObject;
       if(!(in>>a>>b)||(cmd.form=form(a))==0||!number(b,cmd.value)||(cmd.value!=0&&cmd.value!=1)){error="invalid SetQuestObject";return false;}

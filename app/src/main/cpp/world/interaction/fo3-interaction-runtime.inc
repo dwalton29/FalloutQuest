@@ -162,6 +162,7 @@ void UpdateFo3ScriptMessage(double now,float scroll,bool pressA,bool pressB,bool
     if(!gScriptMessagePanel.visible){
         fo3player::ScriptMessage request;
         if(!player.PollScriptMessage(request))return;
+        Q6H_LOGI("SCRIPT MESSAGE PRESENT: form=%08X owner=%08X buttons=%zu remaining=%zu",request.form,request.owner,request.buttons.size(),player.PendingScriptMessageCount());
         gScriptMessageOwner=request.owner;
         gScriptMessagePanel.title=std::move(request.title);
         gScriptMessagePanel.subtitle=std::move(request.text);
@@ -201,6 +202,20 @@ void UpdateFo3ScriptMessage(double now,float scroll,bool pressA,bool pressB,bool
 }
 void DeliverFo3ScriptSounds(){
     if(!gPlayerSession)return;
+    fo3player::QuestNotice notice;
+    auto& player=gPlayerSession->player;
+    while(player.PollQuestNotice(notice)) {
+        const auto& def=player.Definitions();const auto quest=def.pipboy.quests.find(notice.quest);
+        if(quest==def.pipboy.quests.end())continue;
+        const bool added=notice.kind==fo3player::QuestNoticeKind::Added;
+        const bool complete=notice.kind==fo3player::QuestNoticeKind::Completed;
+        const auto key=added?"sQuestAddedText":complete?"sQuestCompletedText":"sQuestUpdatedText";
+        const auto heading=def.strings.find(key);
+        // Original executable's English defaults, overridden by authored GMST.
+        std::string text=(heading==def.strings.end()?std::string(added?"Quest added":complete?"Quest completed":"Quest updated"):heading->second)+"\n"+quest->second.name;
+        fo3notify::Notifications().EnqueueQuest(text,added?"UIPopUpQuestNew":complete?"UIPopUpQuestComplete":"UIQuestUpdate");
+        Q6H_LOGI("QUEST FANFARE: quest=%08X kind=%d queued=%zu",notice.quest,int(notice.kind),fo3notify::Notifications().Size());
+    }
     uint32_t sound=0;
     while(gPlayerSession->player.PollScriptSound(sound))fo3audio::SoundEvent(sound);
     // Once per logical frame, never in either eye renderer. Script previews
@@ -272,6 +287,13 @@ void UpdateFo3LootSelection(const Fo3InteractionTarget& target,float stickY,doub
 bool ActivateFo3Interaction(float ox,float oy,float oz,float dx,float dy,float dz) {
     Fo3InteractionTarget target;
     if (!QueryFo3Interaction(ox,oy,oz,dx,dy,dz,target)) return false;
+    if(target.scripted){
+        const auto& catalog=gPlayerSession->player.Definitions();
+        const auto ref=catalog.references.find(target.reference);
+        const auto script=ref==catalog.references.end()?catalog.eventBaseScripts.end():catalog.eventBaseScripts.find(ref->second.base);
+        Q6H_LOGI("SCRIPT ACTIVATE REQUEST: reference=%08X script=%08X allowed=%d",target.reference,script==catalog.eventBaseScripts.end()?0:script->second,target.allowed);
+        (void)script;
+    }
     if(!target.allowed){
         if(gPlayerSession&&gPlayerSession->player.GetLock(target.reference).locked){BeginFo3Lockpick(target.reference);return false;}
         // Existing scripted doors and scripted item bases were deliberately
@@ -302,9 +324,11 @@ bool ActivateFo3Interaction(float ox,float oy,float oz,float dx,float dy,float d
         // No synthesized follow-up, message panel, or door activation. The
         // source script must complete successfully to change gameplay state.
         if(status==fo3player::ScriptEventResult::Executed) {
-            Q6H_LOGI("SCRIPT ACTIVATE: reference=%08X source=ACTI",target.reference);
+            Q6H_LOGI("SCRIPT ACTIVATE: reference=%08X status=%d queued=%zu source=ACTI",target.reference,int(status),gPlayerSession->player.PendingScriptMessageCount());
             FlushFo3PlayerState();
         }
+        if(status!=fo3player::ScriptEventResult::Executed)
+            Q6H_LOGW("SCRIPT ACTIVATE FAILED: reference=%08X status=%d queued=%zu reason=%s",target.reference,int(status),gPlayerSession->player.PendingScriptMessageCount(),error.c_str());
         return false;
     }
     if (target.container) {

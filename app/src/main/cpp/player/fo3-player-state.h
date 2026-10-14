@@ -151,6 +151,8 @@ struct ActorState {
   uint64_t equippedWeapon=0;
   bool dead=false;
 };
+enum class QuestNoticeKind : uint8_t { Added, Updated, Completed };
+struct QuestNotice { uint32_t quest=0; QuestNoticeKind kind=QuestNoticeKind::Updated; };
 struct ScriptMessage {
   uint32_t form=0, owner=0;
   std::string title,text;
@@ -281,6 +283,8 @@ public:
   bool QueueScriptMessage(uint32_t form,float argument,bool hasArgument,uint32_t owner);
   bool QueueScriptSound(uint32_t form);
   bool PollScriptMessage(ScriptMessage& out);
+  bool PollQuestNotice(QuestNotice& out);
+  size_t PendingScriptMessageCount() const {return pendingScriptMessages_.size();}
   bool SubmitScriptMessageButton(uint32_t owner,int index);
   bool PollScriptSound(uint32_t& out);
   void SetScriptEventDiagnostic(std::function<void(const std::string&)> diagnostic) {
@@ -392,6 +396,7 @@ private:
   bool scriptPlayerPositionKnown_=false;
   std::unordered_map<uint32_t,int> scriptButtons_;
   std::vector<ScriptMessage> pendingScriptMessages_;
+  std::vector<QuestNotice> pendingQuestNotices_;
   std::vector<uint32_t> pendingScriptSounds_;
   std::vector<KarmaEvent> pendingKarmaEvents_;
   std::vector<TheftEvent> pendingTheftEvents_;

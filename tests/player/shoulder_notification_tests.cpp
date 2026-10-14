@@ -43,5 +43,13 @@ int main() {
     assert(q.Size()==Queue::Capacity && std::strcmp(q.Text(),"24")==0);
     q.Advance(151);assert(q.Size()==0); // bounded backlog expires after suspension
     q.Enqueue("clear on transition");q.Clear();assert(q.Size()==0);
+    q.Advance(200);q.EnqueueQuest("Quest added\nAuthored title","UIPopUpQuestNew");
+    assert(q.Quest()&&q.Alpha()==0&&q.TakeSound()=="UIPopUpQuestNew");
+    assert(q.TakeSound().empty());q.Advance(201);assert(q.Alpha()==.5f);
+    const auto pausedRevision=q.Revision();q.Advance(230,false);assert(q.Revision()==pausedRevision&&q.Alpha()==.5f);
+    q.Advance(231);assert(q.Alpha()==1);q.Advance(235);assert(q.Alpha()==1);
+    const double end=229+q.Duration();q.Advance(end-1);assert(q.Alpha()==.5f);q.Advance(end+.001);assert(q.Size()==0);
+    assert(Queue::CharacterAlpha(1,0)==.5f&&Queue::CharacterAlpha(1,1)==0);
+    assert(Queue::CharacterAlpha(3,1)==1&&Queue::CharacterAlpha(8,1)==.5f);
     std::cout<<"Shoulder geometry and notification queue regressions passed\n";
 }

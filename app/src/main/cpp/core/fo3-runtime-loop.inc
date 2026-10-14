@@ -1686,8 +1686,12 @@ private:
                     FQ_LOGI("PIPBOY PERF: PipBoyUpdateUs=%.1f PipBoyUiRenderUs=%.1f PipBoyScreenDrawUs=%.1f glDriverQueries=%llu (guarded UI/screen paths)",gPipUpdateUs,fo3pipui::State().renderUs,gPipScreenDrawUs,(unsigned long long)(fo3pipui::State().renderQueries+gPipScreenQueries));}
                 gPipScreenDrawUs=0;gPipScreenQueries=0;
                 notificationHead_=ToVirtualPose(loadingHead);
-                fo3notifyui::Prepare(static_cast<double>(frameState.predictedDisplayTime)*1e-9,
-                    gSceneReady && !IsFo3LoadingVisible() && sessionState_==XR_SESSION_STATE_FOCUSED,gSceneReady);
+                const bool notificationAvailable=gSceneReady && !IsFo3LoadingVisible() && !Fo3DialogueFocus() && !Fo3ScriptMessageFocus() && !Fo3PipboyFocus() && !Fo3LockpickFocus() && sessionState_==XR_SESSION_STATE_FOCUSED;
+                fo3notifyui::Prepare(static_cast<double>(frameState.predictedDisplayTime)*1e-9,notificationAvailable,gSceneReady);
+                if(notificationAvailable&&fo3hudrenderer::State().ready&&fo3notifyui::State().program){
+                    const auto sound=fo3notify::Notifications().TakeSound();
+                    if(!sound.empty())fo3audio::NamedSound(sound);
+                }
                 bool rendered = true;
                 for (uint32_t eye = 0; eye < 2; ++eye) {
                     rendered = RenderEye(eye, views[eye], projectionViews[eye]) && rendered;
@@ -1845,10 +1849,6 @@ private:
             }
 
             if(Fo3LockpickFocus()&&gPlayerSession)fo3lockui::Render(viewProjection.m,gLockpick,gPlayerSession->player);
-            if(!IsFo3LoadingVisible()) {
-                const auto notificationMvp=Multiply(viewProjection,MatrixFromPose(notificationHead_));
-                fo3notifyui::Render(notificationMvp.m);
-            }
             for (uint32_t hand = 0; hand < 2; ++hand) {
                 if (!handPoseValid_[hand]) continue;
                 const XrPosef virtualHandPose = ToVirtualPose(handLocalPoses_[hand]);
@@ -1928,6 +1928,12 @@ private:
                 }
             }
             Q1350CompositeEyePostQ1350(eyeIndex, framebuffer_, eye.width, eye.height);
+            // Final colour HUD pass, after world, hands, prompts, loot and post.
+            // One head-relative pose/queue snapshot shared by both stereo eyes.
+            if(!IsFo3LoadingVisible()&&!Fo3DialogueFocus()&&!Fo3ScriptMessageFocus()&&!Fo3PipboyFocus()&&!Fo3LockpickFocus()) {
+                const auto notificationMvp=Multiply(viewProjection,MatrixFromPose(notificationHead_));
+                fo3notifyui::Render(notificationMvp.m);
+            }
             if (depthReady) {
                 if (!depthFramebuffer_) glGenFramebuffers(1, &depthFramebuffer_);
                 glBindFramebuffer(GL_FRAMEBUFFER, depthFramebuffer_);

@@ -1379,7 +1379,8 @@ bool Player::Restore(const std::string &path, std::string &error) {
   if (version < 5 && !MigrateWeaponInstances(next))
     return fail("Legacy weapon inventory exceeds instance limits");
   state_ = std::move(next);
-  pendingKarmaEvents_.clear();pendingTheftEvents_.clear();EndContainerInteraction();
+  pendingKarmaEvents_.clear();pendingTheftEvents_.clear();pendingQuestNotices_.clear();
+  pendingScriptMessages_.clear();pendingScriptSounds_.clear();scriptButtons_.clear();EndContainerInteraction();
   ++revision_;
   return true;
 }

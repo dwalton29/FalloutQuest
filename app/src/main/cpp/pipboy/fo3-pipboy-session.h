@@ -9,6 +9,7 @@ struct ObjectiveState {
 struct QuestState {
   uint16_t stage = 0;
   bool running = true;
+  bool announced = false; // First player-visible objective, independent of StartQuest.
   std::vector<std::pair<uint16_t,uint32_t>> journal;
   Completion status = Completion::Active;
   std::unordered_set<uint16_t> stages;

@@ -61,7 +61,15 @@ bool Player::SetObjective(uint32_t id, uint32_t index, bool displayed,
   if (q == catalog_.pipboy.quests.end() || !q->second.objectives.count(index) ||
       !state_.pipboy.quests.count(id) || int(status) > 2)
     return false;
-  state_.pipboy.quests.at(id).objectives[index] = {displayed, status};
+  auto& instance=state_.pipboy.quests.at(id);
+  const auto old=instance.objectives.find(index);
+  if(old!=instance.objectives.end()&&old->second.displayed==displayed&&old->second.status==status)return true;
+  const bool wasDisplayed=old!=instance.objectives.end()&&old->second.displayed;
+  instance.objectives[index] = {displayed, status};
+  if(displayed&&!q->second.name.empty()) {
+    pendingQuestNotices_.push_back({id,instance.announced?QuestNoticeKind::Updated:QuestNoticeKind::Added});
+    instance.announced=true;
+  } else if(wasDisplayed&&instance.announced)pendingQuestNotices_.push_back({id,QuestNoticeKind::Updated});
   ++revision_;
   return true;
 }
@@ -69,10 +77,24 @@ bool Player::FinishQuest(uint32_t id, fo3pipdata::Completion status) {
   if (!state_.pipboy.quests.count(id) ||
       status == fo3pipdata::Completion::Active || int(status) > 2)
     return false;
-  state_.pipboy.quests.at(id).status = status;
+  auto& quest=state_.pipboy.quests.at(id);
+  if(quest.status==status)return true;
+  if(status==fo3pipdata::Completion::Complete&&quest.announced)
+    pendingQuestNotices_.push_back({id,QuestNoticeKind::Completed});
+  quest.status = status;
   if (state_.pipboy.selectedQuest == id)
     state_.pipboy.selectedQuest = 0;
   ++revision_;
+  return true;
+}
+bool Player::PollQuestNotice(QuestNotice& out) {
+  if(pendingQuestNotices_.empty())return false;
+  out=pendingQuestNotices_.front();pendingQuestNotices_.erase(pendingQuestNotices_.begin());
+  for(auto it=pendingQuestNotices_.begin();it!=pendingQuestNotices_.end();) {
+    if(it->quest!=out.quest){++it;continue;}
+    if(it->kind==QuestNoticeKind::Updated||it->kind==out.kind)it=pendingQuestNotices_.erase(it);
+    else ++it;
+  }
   return true;
 }
 bool Player::SelectQuest(uint32_t id) {
