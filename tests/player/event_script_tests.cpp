@@ -2,6 +2,9 @@
 #include <cassert>
 #include <cstdio>
 #include <iostream>
+#include <fstream>
+#include <map>
+#include "dialogue/fo3-dialogue-results.h"
 
 static void Parsing() {
   fo3pipdata::Script source;
@@ -258,8 +261,43 @@ static void OriginalBomb(const char* path) {
   assert(!rig.PollScriptMessage(message)&&!rig.PollQuestNotice(notice));
   std::cout<<"Original ESM bomb activation, cancel, disarm, Karma, notices and persistence passed\n";
 }
+// Compile original event bodies without claiming execution compatibility.
+static void OriginalCompileInventory(const char* path,const char* report) {
+  fo3player::Catalog c;std::string error;assert(fo3player::LoadCatalog(path,c,error));
+  size_t parsed=0,blocks=0,accepted=0;std::map<std::string,size_t> failures;
+  for(const auto& entry:c.pipboy.scripts){
+    auto program=fo3script::ParseEvents(entry.second);
+    if(!program.error.empty()){++failures[program.error];continue;}
+    ++parsed;
+    for(const auto& block:program.blocks){
+      ++blocks;fo3pipdata::ResultScript result;result.source=block.body;
+      std::vector<fo3dialogue::Command> commands;
+      if(fo3dialogue::CompileResult(c.pipboy,result,commands,error,entry.first,entry.first))++accepted;
+      else {
+        const auto colon=error.find(":");
+        const auto key=error.rfind("unsupported command:",0)==0?error:error.substr(0,colon);
+        ++failures[key];
+      }
+    }
+  }
+  auto quote=[](const std::string& s){std::string out="\"";for(unsigned char ch:s){
+    if(ch=='\\'||ch=='\"'){out+='\\';out+=char(ch);}
+    else if(ch=='\n')out+="\\n";else if(ch=='\r')out+="\\r";
+    else if(ch=='\t')out+="\\t";else if(ch>=32)out+=char(ch);
+  }return out+"\"";};
+  std::ofstream out(report);assert(out);
+  out<<"{\n  \"schema\": 1,\n  \"scpt_records\": "<<c.pipboy.scripts.size()
+     <<",\n  \"event_programs_parsed\": "<<parsed<<",\n  \"event_blocks\": "<<blocks
+     <<",\n  \"blocks_command_compiled\": "<<accepted
+     <<",\n  \"executed_by_inventory\": 0,\n  \"gameplay_validated\": 0,\n  \"first_failures\": {";
+  bool first=true;for(const auto& f:failures){if(!first)out<<",";first=false;out<<"\n    "<<quote(f.first)<<": "<<f.second;}
+  out<<"\n  }\n}\n";out.close();assert(out);
+  std::cout<<"SCPT corpus: "<<parsed<<" parsed programs, "<<accepted<<"/"<<blocks
+           <<" command-compiled blocks; this is not execution coverage\n";
+}
 int main(int argc,char** argv){
   Parsing();Dispatch();UnsupportedIsAtomic();Filter();NumericLocalsAndRefSafety();BombMenuAndInventory();DisarmStagePersistence();NoticeTransactions();
   if(argc>1)OriginalBomb(argv[1]);
+  if(argc>2)OriginalCompileInventory(argv[1],argv[2]);
   std::cout<<"Original event source indexing, dispatch, scheduler and rollback passed\n";
 }
