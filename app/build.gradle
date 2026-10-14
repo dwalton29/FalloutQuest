@@ -22,8 +22,8 @@ android {
         applicationId 'com.falloutquest.app'
         minSdk 29
         targetSdk 35
-        versionCode 208
-        versionName '0.71.0-bomb-quest-hud'
+        versionCode 209
+        versionName '0.72.0-persistent-player-stats'
 
         ndk {
             abiFilters 'arm64-v8a'

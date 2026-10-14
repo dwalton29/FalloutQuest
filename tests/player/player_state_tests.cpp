@@ -387,6 +387,47 @@ void Synthetic(const std::string &root) {
                 p.Snapshot().inventory.size(),
         "save roundtrip");
   Check(Id(restored, 101, true) == Id(p, 101, true), "equipment restored");
+  // v15 player-stat overrides roundtrip without modifying the authored ESM.
+  fo3player::Player boosted(c);
+  std::array<uint8_t,7> special{};special.fill(10);
+  std::array<uint8_t,14> skills{};skills.fill(100);
+  skills[12]=c.initial.skills[12]; // unused Throwing slot stays original.
+  auto invalidSpecial=special;invalidSpecial[2]=11;
+  Check(!boosted.SetPlayerAttributes(invalidSpecial,skills)&&boosted.Revision()==0,
+        "invalid SPECIAL rejected without mutation");
+  Check(boosted.SetPlayerAttributes(special,skills)&&
+        boosted.Snapshot().special==special&&boosted.Snapshot().skills==skills,
+        "maximum character attributes accepted");
+  Check(boosted.Add(104,100)&&boosted.Save(save,error),error.c_str());
+  const Bytes statsSave=Read(save);
+  Check(statsSave[4]==15, "v15 player-state save version");
+  fo3player::Player boostedRestore(c);
+  Check(boostedRestore.Restore(save,error)&&
+        boostedRestore.Snapshot().special==special&&boostedRestore.Snapshot().skills==skills,
+        "v15 max SPECIAL and skill overrides roundtrip");
+  Check(boostedRestore.Snapshot().inventory.back().count==100,
+        "v15 inventory still roundtrips");
+  Bytes badStat=statsSave;badStat[badStat.size()-21]=11;
+  Rechecksum(badStat);Write(save,badStat);
+  const auto statsRevision=boostedRestore.Revision();
+  Check(!boostedRestore.Restore(save,error)&&boostedRestore.Revision()==statsRevision&&
+        boostedRestore.Snapshot().special==special,
+        "out-of-range SPECIAL rejected atomically with correct CRC");
+  badStat=statsSave;badStat[badStat.size()-14]=101;
+  Rechecksum(badStat);Write(save,badStat);
+  Check(!boostedRestore.Restore(save,error)&&boostedRestore.Revision()==statsRevision,
+        "out-of-range skill rejected atomically");
+  // An actual v14 tail (without RFE1/PST1) must still load original ESM stats.
+  Bytes legacy14=statsSave;legacy14.resize(legacy14.size()-33);
+  legacy14[4]=14;const uint32_t old14Size=uint32_t(legacy14.size()-20);
+  for(int i=0;i<4;++i)legacy14[12+i]=uint8_t(old14Size>>(8*i));
+  Rechecksum(legacy14);Write(save,legacy14);
+  Check(boostedRestore.Restore(save,error)&&
+        boostedRestore.Snapshot().special==c.initial.special&&
+        boostedRestore.Snapshot().skills==c.initial.skills,
+        "v14 saves inherit original stats and remain compatible");
+  Check(p.Save(save,error)&&restored.Restore(save,error),
+        "restore regular v15 save after attribute regression tests");
   Check(c.references.at(200).count == 3 &&
             c.references.at(200).condition == .5f,
         "placed count and health decode");
@@ -411,7 +452,7 @@ void Synthetic(const std::string &root) {
   const Bytes good = Read(save);
   // The v10 clock extension lacked calendar fields; retain the hour and
   // migrate the starting date from the original GLOB records.
-  Bytes version10=good;version10.resize(version10.size()-32); // remove v12 extension and v11 calendar
+  Bytes version10=good;version10.resize(version10.size()-65); // v15 RFE1/PST1, v14/v13/v12, v11 calendar
   version10[4]=10;
   const auto legacyClockSize=uint32_t(version10.size()-20);
   for(int i=0;i<4;++i)version10[12+i]=uint8_t(legacyClockSize>>(8*i));

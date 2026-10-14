@@ -258,6 +258,10 @@ public:
   double InventoryWeight() const;
   bool Overencumbered() const { return InventoryWeight() > CarryCapacity(); }
   uint64_t Revision() const { return revision_; }
+  // Mutable player attributes are authoritative save state, not ESM edits.
+  // SPECIAL 1..10, base skill ratings 0..100 (including unused Throwing slot).
+  bool SetPlayerAttributes(const std::array<uint8_t,7>& special,
+                           const std::array<uint8_t,14>& skills);
   // Persisted motion/procedure progress still dirties saves, but is sampled
   // by AI's cadence rather than invalidating every actor's conditions per step.
   uint64_t PackageRevision() const { return revision_ - actorPoseRevisions_; }

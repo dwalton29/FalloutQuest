@@ -661,6 +661,21 @@ Player::Player(Catalog catalog)
   auto perk=catalog_.pipboy.formNames.find("infiltrator");
   if(perk!=catalog_.pipboy.formNames.end())catalog_.infiltrator=perk->second;
 }
+bool Player::SetPlayerAttributes(const std::array<uint8_t,7>& special,
+                                 const std::array<uint8_t,14>& skills) {
+  if(std::any_of(special.begin(),special.end(),[](uint8_t value){return value<1||value>10;}) ||
+     std::any_of(skills.begin(),skills.end(),[](uint8_t value){return value>100;}))return false;
+  const auto& r=catalog_.rules;
+  const float maxHealth=state_.baseHealth+
+      (special[2]+r.healthEnduranceOffset)*r.healthEnduranceMult+
+      (state_.level-1)*r.healthLevelMult;
+  const float maxAp=r.apBase+special[5]*r.apMult;
+  if(!std::isfinite(maxHealth)||maxHealth<=0||state_.healthDamage>maxHealth||
+     !std::isfinite(maxAp)||maxAp<0||state_.apSpent>maxAp)return false;
+  if(state_.special==special&&state_.skills==skills)return true;
+  state_.special=special;state_.skills=skills;++revision_;
+  return true;
+}
 bool Player::AdvanceGameClock(double realSeconds) {
   if (!std::isfinite(realSeconds) || realSeconds <= 0.0 || realSeconds > 1.0 ||
       !std::isfinite(catalog_.gameTimeScale) || catalog_.gameTimeScale <= 0.0f)
@@ -1091,7 +1106,7 @@ bool Player::Save(const std::string &path, std::string &error) const {
     payload.push_back(l.forceFailures);payload.push_back(l.rewarded?1:0);}
   // Optional RFE1 after the v14 lock tail. Empty overlays keep existing v14
   // bytes unchanged; older supported saves do not require this extension.
-  if(!state_.referenceEnabled.empty()) {
+  if(true) { // v15 always encodes RFE1 (even empty) before mandatory PST1.
     if(state_.referenceEnabled.size()>100000){error="Too many reference overrides";return false;}
     std::vector<uint32_t> ids;
     for(const auto& entry:state_.referenceEnabled){
@@ -1104,7 +1119,16 @@ bool Player::Save(const std::string &path, std::string &error) const {
     std::sort(ids.begin(),ids.end());Put32(payload,0x31454652);Put32(payload,uint32_t(ids.size()));
     for(auto id:ids){Put32(payload,id);payload.push_back(state_.referenceEnabled.at(id)?1:0);}
   }
-  Put32(bytes, 14);
+  // v15: player stats are save-owned overrides. Earlier saves inherit original
+  // Fallout3.esm NPC_ 00000007 values. Do not mutate the ESM catalogue.
+  if(std::any_of(state_.special.begin(),state_.special.end(),[](uint8_t v){return v<1||v>10;})||
+     std::any_of(state_.skills.begin(),state_.skills.end(),[](uint8_t v){return v>100;})){
+    error="Invalid player attributes";return false;
+  }
+  Put32(payload,0x31545350); // PST1: 7 SPECIAL bytes, 14 base skill bytes.
+  payload.insert(payload.end(),state_.special.begin(),state_.special.end());
+  payload.insert(payload.end(),state_.skills.begin(),state_.skills.end());
+  Put32(bytes, 15);
   Put32(bytes, catalog_.fingerprint);
   Put32(bytes, static_cast<uint32_t>(payload.size()));
   Put32(bytes, Crc(payload));
@@ -1163,7 +1187,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
   const auto *h = bytes.data();
   const auto version = fo3esm::ReadU32(h + 4);
   if (std::memcmp(h, "FQPS", 4) ||
-      (version < 1 || version > 14))
+      (version < 1 || version > 15))
     return fail("Unsupported player save format");
   if (fo3esm::ReadU32(h + 8) != catalog_.fingerprint)
     return fail("Player save belongs to different game definitions");
@@ -1189,8 +1213,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
       (version == 1 && payload.size() != inventoryEnd) || !next.nextStackId)
     return fail("Invalid player save inventory size");
   if (!std::isfinite(next.healthDamage) || next.healthDamage < 0 ||
-      next.healthDamage > MaxHealth() || !std::isfinite(next.apSpent) ||
-      next.apSpent < 0 || next.apSpent > MaxActionPoints())
+      !std::isfinite(next.apSpent) || next.apSpent < 0)
     return fail("Invalid saved player resources");
   next.inventory.clear();
   std::unordered_set<uint64_t> ids;
@@ -1449,14 +1472,34 @@ bool Player::Restore(const std::string &path, std::string &error) {
       if(version>=14&&at<payload.size()){
         if(payload.size()-at<8||fo3esm::ReadU32(p+at)!=0x31454652)return fail("Invalid reference-state extension");
         const auto n=fo3esm::ReadU32(p+at+4);at+=8;
-        if(n>100000||payload.size()-at!=5ull*n)return fail("Invalid reference-state extension size");
+        if(n>100000||(version>=15 ? payload.size()-at!=5ull*n+25u : payload.size()-at!=5ull*n))return fail("Invalid reference-state extension size");
         for(uint32_t i=0;i<n;++i,at+=5){
           const auto id=fo3esm::ReadU32(p+at);const auto ref=catalog_.references.find(id);
           if(ref==catalog_.references.end()||(ref->second.flags&0x20)||catalog_.enableParents.count(id)||p[at+4]>1||
              !next.referenceEnabled.emplace(id,p[at+4]!=0).second)return fail("Invalid saved reference state");
         }
       }
-      if(at!=payload.size())return fail("Trailing weapon save data");
+      if(version>=15){
+        // Explicit stats extension follows the required RFE1 reference block.
+        if(payload.size()-at!=25u||fo3esm::ReadU32(p+at)!=0x31545350)
+          return fail("Missing/invalid player attributes extension");
+        at+=4;
+        std::copy_n(p+at,7,next.special.begin());at+=7;
+        std::copy_n(p+at,14,next.skills.begin());at+=14;
+        if(std::any_of(next.special.begin(),next.special.end(),[](uint8_t v){return v<1||v>10;})||
+           std::any_of(next.skills.begin(),next.skills.end(),[](uint8_t v){return v>100;}))
+          return fail("Invalid saved player attributes");
+      }
+      // Resource validation must use the restored SPECIAL values, not the ESM
+      // baseline. A character with 10 END/AGI may have higher HP/AP limits.
+      const auto& rule=catalog_.rules;
+      const float maxHealth=next.baseHealth+(next.special[2]+rule.healthEnduranceOffset)*rule.healthEnduranceMult+
+          (next.level-1)*rule.healthLevelMult;
+      const float maxAp=rule.apBase+next.special[5]*rule.apMult;
+      if(!std::isfinite(maxHealth)||maxHealth<=0||next.healthDamage>maxHealth||
+         !std::isfinite(maxAp)||maxAp<0||next.apSpent>maxAp)
+        return fail("Invalid saved player resources");
+      if(at!=payload.size())return fail("Trailing player save data");
     }
     if (version == 3 && at != payload.size())
       return fail("Trailing container save data");
