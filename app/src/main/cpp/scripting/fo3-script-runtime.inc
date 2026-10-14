@@ -44,6 +44,12 @@ class Expression {
       value=p.ItemCount(id);return true;
     }
     const auto dot=t.find('.');const auto query=dot==std::string::npos?t:t.substr(dot+1);
+    if(query=="getinsamecell") {
+      if(at==tokens.size()||tokens[at++]!="player")return Fail("unsupported GetInSameCell target");
+      const auto id=dot==std::string::npos?owner:form(t.substr(0,dot));bool same=false;
+      if(!p.ScriptInSameCell(id,same,error))return false;
+      value=same;return true;
+    }
     if(query=="getdisabled"){
       const auto id=dot==std::string::npos?owner:form(t.substr(0,dot));bool disabled=false;
       if(!p.ReferenceDisabled(id,disabled,error))return false;
@@ -183,12 +189,20 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
       ok=EnsureQuestInstance(c.form)&&(!(c.type==C::ObjectiveDisplay&&c.value)||StartQuest(c.form))&&SetObjective(c.form,c.index,c.type==C::ObjectiveDisplay?bool(c.value):existing.displayed,
         c.type==C::ObjectiveComplete?(c.value?fo3pipdata::Completion::Complete:fo3pipdata::Completion::Active):existing.status);break;
     }
-    case C::AddItem:ok=Add(c.form,int32_t(c.value));break;
+    case C::AddItem:
+      ok=pendingScriptItems_.size()<128&&Add(c.form,int32_t(c.value));
+      if(ok){pendingScriptItems_.push_back({c.form,int32_t(c.value)});++scriptEffectRevision_;}
+      break;
     case C::RemoveItem:ok=ScriptRemoveItem(c.form,int32_t(c.value));break;
     case C::SetQuestObject:ok=SetQuestObject(c.form,c.value!=0);break;
     case C::Lock:ok=ScriptLock(c.form,int(c.value));break;
     case C::Unlock:ok=ScriptUnlock(c.form);break;
     case C::RewardKarma:ok=RewardKarma(c.value);break;
+    case C::RewardXP:ok=RewardExperience(uint32_t(c.value));break;
+    case C::CompleteAllObjectives:ok=CompleteAllObjectives(c.form);break;
+    case C::SetCellFullName:ok=SetCellFullName(c.form,c.index);break;
+    case C::AddAchievement:ok=AddAchievement(uint32_t(c.value));break;
+    case C::Disable:ok=StageReferenceEnable(c.form,false,error);break;
     case C::EvaluatePackage:ok=ReevaluatePackage(c.form);break;
     case C::ShowMessage: {
       if(!c.expression.empty())ok=fo3script::Expression(*this,owner,c.expression,error,scriptId).Evaluate(value);

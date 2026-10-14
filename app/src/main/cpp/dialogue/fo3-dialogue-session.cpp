@@ -23,7 +23,12 @@ bool Session::Eligible(const fo3pipdata::Info& i,const Context& ctx)const {
   if(qs==p.Snapshot().pipboy.quests.end()&&!(quest->second.flags&1))return false;
   if(qs!=p.Snapshot().pipboy.quests.end()&&!qs->second.running)return false;
   // Transactional preflight includes nested QUST dependencies and both phases.
-  if(!p.PreviewDialogueResults(i.begin,i.end,error,ctx.speaker.reference)) {
+  auto plan=p.PrepareDialogueTransaction(i.begin,i.end,error,ctx.speaker.reference);
+  if(plan&&plan->HasReferenceChanges()&&(!previewReferences||!previewReferences(p,*plan,error))){
+    if(error.empty())error="world mutation requires resident coordinator";
+    plan.reset();
+  }
+  if(!plan) {
     if(diagnostic)diagnostic("DIALOGUE UNSUPPORTED SCRIPT info="+Id(i.id)+" "+error);
     return false;
   }
@@ -72,8 +77,18 @@ bool Session::Start(const Context& ctx,fo3player::Player& p) {
   for(auto t:p.Definitions().pipboy.greetings)if(auto i=Resolve(t,ctx,true))return Enter(*i,ctx,p);
   return false;
 }
+bool Session::Execute(const fo3pipdata::ResultScript& script,fo3player::Player& p,std::string& error) {
+  auto plan=p.PrepareDialogueTransaction(script,{},error,actor);
+  if(!plan)return false;
+  if(plan->HasReferenceChanges()){
+    if(publishReferences)return publishReferences(p,*plan,error);
+    error="world mutation requires resident coordinator";return false;
+  }
+  if(p.CommitScriptTransaction(*plan))return true;
+  error="dialogue transaction changed before publication";return false;
+}
 bool Session::Enter(const fo3pipdata::Info& i,const Context&,fo3player::Player& p) {
-  std::string error;if(!p.ExecuteDialogueResult(i.begin,error,actor)){if(diagnostic)diagnostic("DIALOGUE UNSUPPORTED SCRIPT info="+Id(i.id)+" "+error);End("result rejected");return false;}
+  std::string error;if(!Execute(i.begin,p,error)){if(diagnostic)diagnostic("DIALOGUE UNSUPPORTED SCRIPT info="+Id(i.id)+" "+error);End("result rejected");return false;}
   if(diagnostic&&!i.begin.source.empty())diagnostic("DIALOGUE RESULT info="+Id(i.id)+" phase=begin");
   topic=i.topic;info=i.id;response=selected=0;choices.clear();phase=Phase::Speaking;++audioToken;
   if(diagnostic)diagnostic("DIALOGUE INFO actor="+Id(actor)+" base="+Id(base)+" topic="+Id(topic)+" info="+Id(info)+" voice="+Id(voice));
@@ -104,7 +119,7 @@ bool Session::AudioDone(uint32_t token,bool success,const Context& ctx,fo3player
   auto i=Current(p.Definitions().pipboy);if(!i){End("INFO missing");return false;}
   if(++response<i->responses.size()){++audioToken;return true;}
   if(diagnostic)diagnostic("DIALOGUE TRANSITION info="+Id(i->id)+" stage=end-result");
-  std::string error;if(!p.ExecuteDialogueResult(i->end,error,actor)){if(diagnostic)diagnostic("DIALOGUE UNSUPPORTED SCRIPT info="+Id(i->id)+" "+error);End("end result rejected");return false;}
+  std::string error;if(!Execute(i->end,p,error)){if(diagnostic)diagnostic("DIALOGUE UNSUPPORTED SCRIPT info="+Id(i->id)+" "+error);End("end result rejected");return false;}
   if(diagnostic&&!i->end.source.empty())diagnostic("DIALOGUE RESULT info="+Id(i->id)+" phase=end");
   p.RecordDialogue(actor,(i->flags&4)?i->id:0,i->addedTopics);
   if(i->flags&1){End("authored goodbye");return false;}

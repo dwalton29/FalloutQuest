@@ -156,6 +156,7 @@ struct ActorState {
   bool dead=false;
 };
 enum class QuestNoticeKind : uint8_t { Added, Updated, Completed };
+struct ScriptItemNotice {uint32_t form=0;int32_t count=0;};
 struct QuestNotice { uint32_t quest=0; QuestNoticeKind kind=QuestNoticeKind::Updated; };
 struct ScriptMessage {
   uint32_t form=0, owner=0;
@@ -189,12 +190,14 @@ struct State {
   std::unordered_map<uint32_t, std::vector<Stack>> containers;
   std::unordered_map<uint32_t,MerchantVisit> merchantVisits;
   std::unordered_map<uint32_t,int32_t> actorDispositionModifiers;
+  std::unordered_map<uint32_t,uint32_t> cellNameMessages; // CELL -> original MESG FULL
+  std::unordered_set<uint32_t> achievements; // local authored events, no platform unlock
   std::vector<WorldWeapon> worldWeapons;
   bool developmentWeaponGranted = false;
   std::unordered_map<uint32_t,float> actorDamage;
   std::unordered_map<uint32_t,ActorState> actors;
 };
-struct CellOwnership {OwnershipData data;uint8_t flags=0;std::string editor;};
+struct CellOwnership {OwnershipData data;uint8_t flags=0;std::string editor,name;};
 // Sparse immutable XESP graph, independent of Pip-Boy target pruning.
 struct EnableParent {uint32_t reference=0;uint8_t flags=0;bool valid=true;};
 struct BarterRequest {uint32_t actor=0;int discount=0;};
@@ -350,6 +353,12 @@ public:
   bool IsQuestObject(uint32_t form) const;
   bool SetQuestObject(uint32_t form,bool quest);
   bool RewardKarma(float amount);
+  bool RewardExperience(uint32_t amount);
+  bool CompleteAllObjectives(uint32_t quest);
+  bool SetCellFullName(uint32_t cell,uint32_t message);
+  std::string CellFullName(uint32_t cell) const;
+  bool AddAchievement(uint32_t id);
+  bool ScriptInSameCell(uint32_t reference,bool& result,std::string& error) const;
   bool ReevaluatePackage(uint32_t reference);
   // Returns false for an unknown/deleted reference or malformed/cyclic graph.
   bool ReferenceDisabled(uint32_t reference,bool& disabled,std::string& error) const;
@@ -371,6 +380,7 @@ public:
   bool QueueScriptSound(uint32_t form);
   bool PollScriptMessage(ScriptMessage& out);
   bool PollQuestNotice(QuestNotice& out);
+  bool PollScriptItemNotice(ScriptItemNotice& out);
   size_t PendingScriptMessageCount() const {return pendingScriptMessages_.size();}
   bool SubmitScriptMessageButton(uint32_t owner,int index);
   bool PollScriptSound(uint32_t& out);
@@ -511,6 +521,7 @@ private:
   std::unordered_map<uint32_t,int> scriptButtons_;
   std::vector<ScriptMessage> pendingScriptMessages_;
   std::vector<QuestNotice> pendingQuestNotices_;
+  std::vector<ScriptItemNotice> pendingScriptItems_;
   std::vector<uint32_t> pendingScriptSounds_;
   std::vector<BarterRequest> pendingBarters_;
   std::vector<KarmaEvent> pendingKarmaEvents_;

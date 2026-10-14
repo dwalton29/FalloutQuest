@@ -262,6 +262,7 @@ inline void Render(fo3pip::Menu &menu, const fo3player::Player &p, bool focus) {
     Text("LVL " + Number(s.level), 270, 50);
     Text("HP " + Pair(p.Health(), p.MaxHealth()), 380, 50, 0, 155);
     Text("AP " + Pair(p.ActionPoints(), p.MaxActionPoints()), 545, 50, 0, 155);
+    Text("XP " + std::to_string(s.experience), 730, 50, 0, 190);
   }
   if (menu.tab == fo3pip::Tab::Items) {
     Text("Wg " + WeightPair(p), 265, 50, 0, 155);

@@ -77,11 +77,12 @@ bool CompileResult(const fo3pipdata::Definitions& d,const fo3pipdata::ResultScri
       std::getline(in,cmd.expression);cmd.variable=VariableKey(d,a);
       if(!cmd.variable)cmd.variable=fo3script::NumericLocalKey(d,owner,scriptId,a);
       if(!cmd.variable){cmd.form=form(a);cmd.type=CommandType::Global;if(!cmd.form){error="unresolved assignment: "+a;return false;}}
-    } else if(op=="stopquest"||op=="startquest"||op=="setstage"||op=="completequest"||op=="setobjectivedisplayed"||op=="setobjectivecompleted"||op=="addtopic") {
+    } else if(op=="stopquest"||op=="startquest"||op=="setstage"||op=="completequest"||op=="completeallobjectives"||op=="setobjectivedisplayed"||op=="setobjectivecompleted"||op=="addtopic") {
       if(!(in>>a)||(cmd.form=form(a))==0){error="unresolved form: "+line;return false;}
       if(op=="startquest")cmd.type=CommandType::StartQuest;
       if(op=="stopquest")cmd.type=CommandType::StopQuest;
       if(op=="completequest")cmd.type=CommandType::CompleteQuest;
+      if(op=="completeallobjectives")cmd.type=CommandType::CompleteAllObjectives;
       if(op=="addtopic")cmd.type=CommandType::AddTopic;
       if(op=="setstage"||op=="setobjectivedisplayed"||op=="setobjectivecompleted") {
         float n;if(!(in>>b)||!number(b,n)||n<0||n>65535||std::floor(n)!=n){error="invalid index: "+line;return false;}cmd.index=uint32_t(n);
@@ -92,7 +93,9 @@ bool CompileResult(const fo3pipdata::Definitions& d,const fo3pipdata::ResultScri
     } else if(op=="moddisposition"||(op.size()>15&&op.compare(op.size()-15,15,".moddisposition")==0)) {
       const auto dot=op.find('.');cmd.form=dot==std::string::npos?owner:form(op.substr(0,dot));
       cmd.type=CommandType::ModDisposition;
-      if(!cmd.form||!(in>>a)||!number(a,cmd.value)||std::floor(cmd.value)!=cmd.value||cmd.value<-2147483648.0||double(cmd.value)>2147483647.0){error="invalid ModDisposition";return false;}
+      if(!(in>>a)){error="missing ModDisposition target/value";return false;}
+      if(a=="player"){if(!(in>>a)){error="missing ModDisposition value";return false;}}
+      if(!cmd.form||!number(a,cmd.value)||std::floor(cmd.value)!=cmd.value||cmd.value<-2147483648.0||double(cmd.value)>2147483647.0){error="invalid ModDisposition";return false;}
     } else if(op=="showbartermenu"||op=="sbm"||
         (op.size()>15&&op.compare(op.size()-15,15,".showbartermenu")==0)||
         (op.size()>4&&op.compare(op.size()-4,4,".sbm")==0)) {
@@ -116,6 +119,17 @@ bool CompileResult(const fo3pipdata::Definitions& d,const fo3pipdata::ResultScri
       cmd.type=verb=="lock"?CommandType::Lock:CommandType::Unlock;
       if(!cmd.form){error="missing lock reference";return false;}
       if(verb=="lock"){if(in>>a){if(!number(a,cmd.value)||cmd.value<0||cmd.value>255||std::floor(cmd.value)!=cmd.value){error="invalid lock level";return false;}}else {in.clear();cmd.value=0;}}
+    } else if(op=="setcellfullname") {
+      cmd.type=CommandType::SetCellFullName;
+      if(!(in>>a>>b)||!(cmd.form=form(a))||!(cmd.index=form(b))){error="invalid SetCellFullName";return false;}
+    } else if(op=="rewardxp"||op=="addachievement") {
+      cmd.type=op=="rewardxp"?CommandType::RewardXP:CommandType::AddAchievement;
+      if(!(in>>a)||!number(a,cmd.value)||cmd.value<0||double(cmd.value)>2147483647.0||std::floor(cmd.value)!=cmd.value){error="invalid XP/achievement integer";return false;}
+    } else if(op=="disable"||(op.size()>8&&op.compare(op.size()-8,8,".disable")==0)) {
+      const auto dot=op.find('.');cmd.form=dot==std::string::npos?owner:form(op.substr(0,dot));
+      cmd.type=CommandType::Disable;
+      if(!cmd.form){error="missing Disable reference";return false;}
+      // Fade-out semantics require resident publication; do not silently ignore.
     } else if(op=="rewardkarma") {
       cmd.type=CommandType::RewardKarma;
       if(!(in>>a)||!number(a,cmd.value)){error="invalid RewardKarma";return false;}

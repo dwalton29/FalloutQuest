@@ -502,7 +502,7 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
                     ref.condition <= 1;
         next.references[form] = ref;
       } else if (type == "CELL") {
-        CellOwnership cell;cell.editor=Text(subs,"EDID");
+        CellOwnership cell;cell.editor=Text(subs,"EDID");cell.name=Text(subs,"FULL");
         const auto *owner=Find(subs,"XOWN"),*rank=Find(subs,"XRNK"),*global=Find(subs,"XGLB"),*data=Find(subs,"DATA");
         if(owner){cell.data.explicitOwner=true;cell.data.valid=owner->size==4;if(cell.data.valid)cell.data.owner=fo3esm::ReadU32(owner->data);}
         if(rank){if(rank->size==4)cell.data.rank=I32(rank->data);else cell.data.valid=false;}
@@ -1199,7 +1199,8 @@ bool Player::Save(const std::string &path, std::string &error) const {
     payload.push_back(l.forceFailures);payload.push_back(l.rewarded?1:0);}
   // Optional RFE1 after the v14 lock tail. Empty overlays keep existing v14
   // bytes unchanged; older supported saves do not require this extension.
-  const bool hasMerchantVisits=!state_.merchantVisits.empty()||!state_.actorDispositionModifiers.empty();
+  const bool hasCompletionState=!state_.cellNameMessages.empty()||!state_.achievements.empty();
+  const bool hasMerchantVisits=hasCompletionState||!state_.merchantVisits.empty()||!state_.actorDispositionModifiers.empty();
   const bool hasPlayerAttributeOverrides=state_.special!=catalog_->initial.special ||
       state_.skills!=catalog_->initial.skills;
   // An overriding v15 save requires RFE1 (including the empty case) before
@@ -1253,7 +1254,20 @@ bool Player::Save(const std::string &path, std::string &error) const {
       Put32(payload,id);Put32(payload,uint32_t(state_.actorDispositionModifiers.at(id)));
     }
   }
-  Put32(bytes, hasMerchantVisits ? 16 : hasPlayerAttributeOverrides ? 15 : 14);
+  if(hasCompletionState){
+    if(state_.cellNameMessages.size()>10000||state_.achievements.size()>256){error="Too many completion overrides";return false;}
+    Put32(payload,0x314E4D43);Put32(payload,uint32_t(state_.cellNameMessages.size())); // CMN1
+    std::vector<uint32_t> cells;for(const auto& e:state_.cellNameMessages)cells.push_back(e.first);
+    std::sort(cells.begin(),cells.end());
+    for(auto cell:cells){const auto message=state_.cellNameMessages.at(cell);
+      if(!catalog_->cellOwnership.count(cell)||!catalog_->pipboy.messages.count(message)||catalog_->pipboy.messages.at(message).title.empty()){error="Invalid cell name override";return false;}
+      Put32(payload,cell);Put32(payload,message);
+    }
+    std::vector<uint32_t> achievements(state_.achievements.begin(),state_.achievements.end());
+    std::sort(achievements.begin(),achievements.end());Put32(payload,uint32_t(achievements.size()));
+    for(auto id:achievements){if(id>255){error="Invalid achievement";return false;}Put32(payload,id);}
+  }
+  Put32(bytes, hasCompletionState ? 17 : hasMerchantVisits ? 16 : hasPlayerAttributeOverrides ? 15 : 14);
   Put32(bytes, catalog_->fingerprint);
   Put32(bytes, static_cast<uint32_t>(payload.size()));
   Put32(bytes, Crc(payload));
@@ -1312,7 +1326,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
   const auto *h = bytes.data();
   const auto version = fo3esm::ReadU32(h + 4);
   if (std::memcmp(h, "FQPS", 4) ||
-      (version < 1 || version > 16))
+      (version < 1 || version > 17))
     return fail("Unsupported player save format");
   if (fo3esm::ReadU32(h + 8) != catalog_->fingerprint)
     return fail("Player save belongs to different game definitions");
@@ -1383,7 +1397,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
         return fail("Invalid collected reference");
     }
   }
-  next.containers.clear();next.merchantVisits.clear();next.actorDispositionModifiers.clear();
+  next.containers.clear();next.merchantVisits.clear();next.actorDispositionModifiers.clear();next.cellNameMessages.clear();next.achievements.clear();
   if (version >= 3) {
     if (payload.size() - worldEnd < 8 ||
         fo3esm::ReadU32(p + worldEnd) != catalog_->lootFingerprint)
@@ -1632,12 +1646,24 @@ bool Player::Restore(const std::string &path, std::string &error) {
       if(version>=16){
         if(payload.size()-at<8||fo3esm::ReadU32(p+at)!=0x31524442)return fail("Missing disposition extension");
         const auto n=fo3esm::ReadU32(p+at+4);at+=8;
-        if(n>10000||payload.size()-at!=8ull*n)return fail("Invalid disposition extension");
+        if(n>10000||(version>=17?payload.size()-at<8ull*n+12u:payload.size()-at!=8ull*n))return fail("Invalid disposition extension");
         next.actorDispositionModifiers.clear();
         for(uint32_t i=0;i<n;++i,at+=8){const auto id=fo3esm::ReadU32(p+at);const auto actor=catalog_->references.find(id);
           if(actor==catalog_->references.end()||!catalog_->pipboy.dialogueActors.count(actor->second.base)||
              !next.actorDispositionModifiers.emplace(id,I32(p+at+4)).second)return fail("Invalid saved disposition actor");
         }
+      }
+      if(version>=17){
+        if(payload.size()-at<12||fo3esm::ReadU32(p+at)!=0x314E4D43)return fail("Missing cell-name extension");
+        const auto n=fo3esm::ReadU32(p+at+4);at+=8;
+        if(n>10000||payload.size()-at<8ull*n+4u)return fail("Invalid cell-name count");
+        for(uint32_t i=0;i<n;++i,at+=8){const auto cell=fo3esm::ReadU32(p+at),message=fo3esm::ReadU32(p+at+4);
+          if(!catalog_->cellOwnership.count(cell)||!catalog_->pipboy.messages.count(message)||catalog_->pipboy.messages.at(message).title.empty()||!next.cellNameMessages.emplace(cell,message).second)return fail("Invalid saved cell name");
+        }
+        const auto achievements=fo3esm::ReadU32(p+at);at+=4;
+        if(achievements>256||payload.size()-at!=4ull*achievements)return fail("Invalid achievement count");
+        for(uint32_t i=0;i<achievements;++i,at+=4){const auto id=fo3esm::ReadU32(p+at);
+          if(id>255||!next.achievements.insert(id).second)return fail("Invalid saved achievement");}
       }
       if(at!=payload.size())return fail("Trailing player save data");
     }
@@ -1661,7 +1687,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
   if (version < 5 && !MigrateWeaponInstances(next))
     return fail("Legacy weapon inventory exceeds instance limits");
   state_ = std::move(next);
-  pendingKarmaEvents_.clear();pendingTheftEvents_.clear();pendingQuestNotices_.clear();
+  pendingKarmaEvents_.clear();pendingTheftEvents_.clear();pendingQuestNotices_.clear();pendingScriptItems_.clear();
   pendingScriptMessages_.clear();pendingScriptSounds_.clear();pendingBarters_.clear();scriptButtons_.clear();EndContainerInteraction();
   ++revision_;
   return true;

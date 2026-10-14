@@ -918,6 +918,20 @@ bool GetFo3DoorPromptQ1840(uint32_t sourceDoorRef,
     return count > 0u;
 }
 
+uint32_t GetFo3DoorDestinationCellQ1840(uint32_t sourceDoorRef) {
+    const auto it=Q1840Prompt::gDoorMetadata.find(sourceDoorRef);
+    return it==Q1840Prompt::gDoorMetadata.end()?0:it->second.teleport.destinationCellFormId;
+}
+bool GetFo3NamedDoorPromptQ1840(uint32_t sourceDoorRef,const std::string& destination,
+    char* outText,size_t capacity) {
+    const auto it=Q1840Prompt::gDoorMetadata.find(sourceDoorRef);
+    if(it==Q1840Prompt::gDoorMetadata.end()||!outText||!capacity||destination.empty())return false;
+    std::string prompt;
+    if(!FormatFo3DoorPrompt(Q1840Prompt::FullName(it->second.sourceBase),destination,prompt))return false;
+    const auto count=std::min(prompt.size(),capacity-1);std::memcpy(outText,prompt.data(),count);outText[count]='\0';
+    return count>0;
+}
+
 bool ResolveFo3MegatonEntryQ1860(Fo3CellTransitionRequestQ74& outRequest,
                                const std::atomic<bool>* cancelled) {
     outRequest = {};

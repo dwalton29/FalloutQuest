@@ -1,4 +1,5 @@
 #include "dialogue/fo3-dialogue-panel.h"
+#include "scripting/fo3-nonresident-script.h"
 // Render-thread bridge only. Authored graph/conditions/results live in host-testable modules.
 fo3dialogue::Session gDialogue;
 fo3dialogue::Panel gDialoguePanel;
@@ -39,12 +40,36 @@ void DialogueDiagnostic(const std::string& message) {
   if(message.find("UNSUPPORTED")!=std::string::npos&&!gDialogueDiagnostics.insert(message).second)return;
   Q6H_LOGI("%s",message.c_str());
 }
+bool PreviewFo3DialogueReferences(const fo3player::Player& player,
+    const fo3player::ScriptTransactionPlan& plan,std::string& error) {
+  if(!gSceneReady||gSceneLoad.active||IsFo3LoadingVisible()||Fo3ResidentAssetLaneBlocked()||
+     gQ230NpcArrival.active||!Fo3AcceptsScenePublication(gFo3ScenePublication.Stamp())){
+    error="reference publication scene/background work busy";return false;
+  }
+  std::vector<uint32_t> live;
+  for(const auto& a:gQ230NpcActors)live.push_back(a.source.refFormId);
+  return fo3script::NonresidentActorRemoval(player,plan,gCurrentCellFormId,gExteriorWorldspaceQ1890,live,error);
+}
+bool PublishFo3DialogueReferences(fo3player::Player& player,
+    fo3player::ScriptTransactionPlan& plan,std::string& error) {
+  // Single render-thread turn; validate and allocate before logical publication.
+  if(!PreviewFo3DialogueReferences(player,plan,error)||!player.CanCommitScriptTransaction(plan))return false;
+  auto snapshot=plan.CandidateReferences();
+  if(!player.CommitScriptTransaction(plan)){error="reference transaction changed";return false;}
+  gFo3ReferenceState=snapshot;gFo3ScenePublication.Publish(std::move(snapshot));
+  return true;
+}
+void ConfigureFo3Dialogue() {
+  gDialogue.diagnostic=DialogueDiagnostic;
+  gDialogue.previewReferences=PreviewFo3DialogueReferences;
+  gDialogue.publishReferences=PublishFo3DialogueReferences;
+}
 bool DialogueCanStart(Q230ActorVisual& actor) {
   if(!gPlayerSession||gPlayerSession->saveBlocked||!actor.runtime.CanTalk()||gPlayerSession->player.ActorHealth(actor.source.refFormId)<=0)return false;
   auto& cached=gDialogueEligibility[actor.source.refFormId];
   const auto revision=gPlayerSession->player.Revision();
   if(cached.revision!=revision||cached.until<gDialogueTime) {
-    gDialogue.diagnostic=DialogueDiagnostic;cached.valid=gDialogue.CanActivate(DialogueContext(actor));cached.revision=revision;cached.until=gDialogueTime+1;
+    ConfigureFo3Dialogue();cached.valid=gDialogue.CanActivate(DialogueContext(actor));cached.revision=revision;cached.until=gDialogueTime+1;
   }
   return cached.valid;
 }
@@ -79,7 +104,7 @@ bool StartFo3Dialogue(uint32_t reference) {
 #ifdef FO3_NPC_CHAT_RUNTIME
   Q230ChatStop("player interaction takes priority");
 #endif
-  gDialogue.diagnostic=DialogueDiagnostic;
+  ConfigureFo3Dialogue();
   if(!actor->runtime.CanTalk()||!gDialogue.Start(DialogueContext(*actor),gPlayerSession->player)) {
     Q6H_LOGI("NPC DIALOGUE REENTER actor=%08X success=0 package=%08X activity=%d dialogue=%d reason=%s",reference,actor->runtime.package,int(actor->runtime.activity),actor->runtime.dialogue,gDialogue.endReason.c_str());return false;
   }

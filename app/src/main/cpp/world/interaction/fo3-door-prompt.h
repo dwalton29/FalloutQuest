@@ -4,6 +4,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <string>
 
 // Q16.12 engine-compatibility surface for Fallout 3's load-door interaction
 // string. The nouns come from the user's Fallout3.esm FULL fields; this cache is
@@ -16,3 +17,6 @@ void CacheFo3DoorPromptQ1840(uint32_t sourceDoorRef,
 bool GetFo3DoorPromptQ1840(uint32_t sourceDoorRef,
                            char* outText,
                            size_t outCapacity);
+
+uint32_t GetFo3DoorDestinationCellQ1840(uint32_t sourceDoorRef);
+bool GetFo3NamedDoorPromptQ1840(uint32_t sourceDoorRef,const std::string& destination,char* outText,size_t outCapacity);

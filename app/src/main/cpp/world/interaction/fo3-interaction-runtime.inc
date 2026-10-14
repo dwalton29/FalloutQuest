@@ -141,6 +141,11 @@ bool QueryFo3Interaction(float ox, float oy, float oz, float dx, float dy,
             std::snprintf(target.prompt.data(),target.prompt.size(),"%s Door",
                 target.door.localSwing && target.door.open ? "Close" : "Open");
         }
+        if(!player.Snapshot().cellNameMessages.empty()){
+            const auto cell=GetFo3DoorDestinationCellQ1840(target.reference);
+            if(player.Snapshot().cellNameMessages.count(cell))
+                GetFo3NamedDoorPromptQ1840(target.reference,player.CellFullName(cell),target.prompt.data(),target.prompt.size());
+        }
         if (!target.allowed) {
             const auto ref=catalog.references.find(target.reference);
             if (ref!=catalog.references.end() && player.GetLock(target.reference).locked)
@@ -221,6 +226,8 @@ void DeliverFo3ScriptSounds(){
         fo3notify::Notifications().EnqueueQuest(text,added?"UIPopUpQuestNew":complete?"UIPopUpQuestComplete":"UIQuestUpdate");
         Q6H_LOGI("QUEST FANFARE: quest=%08X kind=%d queued=%zu",notice.quest,int(notice.kind),fo3notify::Notifications().Size());
     }
+    fo3player::ScriptItemNotice item;
+    while(player.PollScriptItemNotice(item))NotifyFo3ItemTransfer(item.form,item.count);
     uint32_t sound=0;
     while(gPlayerSession->player.PollScriptSound(sound))fo3audio::SoundEvent(sound);
     // Once per logical frame, never in either eye renderer. Script previews

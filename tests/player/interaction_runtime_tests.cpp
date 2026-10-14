@@ -75,6 +75,8 @@ bool HasFo3InteractionOccluder(float, float, float, float, float, float, float,
                                uint32_t) {
   return occluded;
 }
+uint32_t GetFo3DoorDestinationCellQ1840(uint32_t){return 0;}
+bool GetFo3NamedDoorPromptQ1840(uint32_t,const std::string&,char*,size_t){return false;}
 bool GetFo3DoorPromptQ1840(uint32_t, char *p, size_t n) {
   if (!doorPromptAvailable) return false;
   std::snprintf(p, n, "Open Door");

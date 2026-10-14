@@ -15,6 +15,8 @@ struct Session {
   std::string interruption;
   std::vector<Choice> choices;
   Diagnostic diagnostic;
+  std::function<bool(const fo3player::Player&,const fo3player::ScriptTransactionPlan&,std::string&)> previewReferences;
+  std::function<bool(fo3player::Player&,fo3player::ScriptTransactionPlan&,std::string&)> publishReferences;
   mutable std::mt19937 random{std::random_device{}()};
   bool Active()const{return phase!=Phase::Inactive;}
   const fo3pipdata::Info* Current(const fo3pipdata::Definitions&)const;
@@ -28,6 +30,7 @@ struct Session {
   std::string Subtitle(const fo3pipdata::Definitions&)const;
   void End(const std::string&);
 private:
+  bool Execute(const fo3pipdata::ResultScript&,fo3player::Player&,std::string&);
   bool Enter(const fo3pipdata::Info&,const Context&,fo3player::Player&);
   bool Eligible(const fo3pipdata::Info&,const Context&)const;
   void BuildChoices(const Context&);

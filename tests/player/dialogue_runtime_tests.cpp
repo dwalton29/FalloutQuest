@@ -29,6 +29,15 @@ void Scroll(){}
 void DialogueGain(float){}
 template<class T> void RadioState(const T&){}
 }
+#include "world/fo3-scene-publication.h"
+bool gSceneReady=true;
+struct {bool active=false;} gSceneLoad,gQ230NpcArrival;
+std::shared_ptr<const fo3world::ReferenceStateSnapshot> gFo3ReferenceState;
+fo3scene::ReferencePublication gFo3ScenePublication;
+bool Fo3ResidentAssetLaneBlocked(){return false;}
+bool Fo3AcceptsScenePublication(fo3scene::PublicationStamp stamp){
+  return gPlayerSession&&gFo3ScenePublication.Accepts(stamp,gPlayerSession->player.Snapshot().referenceStateRevision);
+}
 #include "dialogue/fo3-dialogue-runtime.inc"
 static double clockTime=0;
 static void Tick(bool a=false,bool b=false){++gStereoFrame;clockTime+=.05;UpdateFo3Dialogue(clockTime,0,a,b,true);}
@@ -192,4 +201,22 @@ static void BarterBridge(){
   assert(!gBarter.active&&gPlayerSession->player.ItemCount(0xf)==capsBefore);
   std::cout<<"Barter bridge: authored voice phases, input focus, pending selection, commit, return and walk-away passed\n";
 }
-int main(int argc,char** argv){Synthetic();SkipWithA();BarterBridge();if(argc>1)OriginalBridge(argv[1]);std::cout<<"Dialogue bridge lifecycle tests passed\n";}
+static void NonresidentPublication(){
+  PrepareSynthetic();auto c=gPlayerSession->player.Definitions();
+  c.pipboy.formNames["offscene"]=400;c.references[400].base=43;c.references[400].cell=1234;
+  c.actorInventories[43].valid=true;c.cellOwnership[1234]={};
+  gPlayerSession=std::make_unique<Session>(c);auto& player=gPlayerSession->player;
+  gCurrentCellFormId=10;gExteriorWorldspaceQ1890=0;
+  gFo3ReferenceState=std::make_shared<const fo3world::ReferenceStateSnapshot>(player.CaptureReferenceState());
+  gFo3ScenePublication.Publish(gFo3ReferenceState);
+  fo3pipdata::ResultScript script;script.source="RewardXP 7\nOffscene.Disable";std::string error;
+  auto plan=player.PrepareDialogueTransaction(script,{},error);assert(plan&&plan->HasReferenceChanges());
+  const auto stamp=gFo3ScenePublication.Stamp();
+  assert(PreviewFo3DialogueReferences(player,*plan,error)&&player.Snapshot().experience==0);
+  gSceneLoad.active=true;assert(!PublishFo3DialogueReferences(player,*plan,error)&&player.Snapshot().experience==0);gSceneLoad.active=false;
+  assert(PublishFo3DialogueReferences(player,*plan,error)&&player.Snapshot().experience==7);
+  assert(!gFo3ReferenceState->Enabled(400,true)&&gFo3ScenePublication.Stamp().scene!=stamp.scene);
+  assert(Fo3AcceptsScenePublication(gFo3ScenePublication.Stamp()));
+  std::cout<<"Production nonresident dialogue publication and busy-scene rejection passed\n";
+}
+int main(int argc,char** argv){Synthetic();SkipWithA();BarterBridge();NonresidentPublication();if(argc>1)OriginalBridge(argv[1]);std::cout<<"Dialogue bridge lifecycle tests passed\n";}

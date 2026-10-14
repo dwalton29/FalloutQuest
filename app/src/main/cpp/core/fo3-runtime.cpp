@@ -3648,6 +3648,8 @@ bool BeginFo3SceneLoad(const Fo3CellTransitionRequestQ74& request, bool boot) {
         }
         Q230PrepareActors(result.request.cellFormId, result.request.worldspaceFormId,
             result.actors, cancel);
+        if(result.referenceState)result.actors.erase(std::remove_if(result.actors.begin(),result.actors.end(),
+            [&](const Q230ActorVisual& actor){return !result.referenceState->Enabled(actor.source.refFormId,true);}),result.actors.end());
         const auto* actorDefinitions=result.playerSession?&result.playerSession->player.Definitions().pipboy:
             (gPlayerSession?&gPlayerSession->player.Definitions().pipboy:nullptr);
         for(auto& actor:result.actors)Q230CacheDialogueAnimations(actor,actorDefinitions);
@@ -11568,7 +11570,7 @@ static void Q230TickUnloadedActors(float hour) {
         const auto* actor=fo3pipdata::ActorCategory(defs,base,16);
         return actor?actor->packages:std::vector<uint32_t>{};
     };
-    cb.alive=[&](uint32_t actor) {return player.ActorHealth(actor)>0;};
+    cb.alive=[&](uint32_t actor) {bool disabled=true;std::string error;return player.ReferenceDisabled(actor,disabled,error)&&!disabled&&player.ActorHealth(actor)>0;};
     cb.canUseDoor=[&](uint32_t actor,uint32_t door) {
         const auto ref=defs.targets.find(door);
         return ref!=defs.targets.end()&&!ref->second.parent&&
@@ -11647,6 +11649,7 @@ void Q230PumpNpcArrivals(){
         return !s.dead&&fo3npc::SceneOwnsCell(gCurrentCellFormId,
             gExteriorWorldspaceQ1890,s.cell,s.world,definitions.cellWorlds);
     };
+    const auto enabled=[&](uint32_t id){bool disabled=true;std::string error;return player.ReferenceDisabled(id,disabled,error)&&!disabled;};
     const auto alreadyVisible=[&](uint32_t id){
         return std::any_of(gQ230NpcActors.begin(),gQ230NpcActors.end(),
             [id](const Q230ActorVisual& v){return v.source.refFormId==id;});
@@ -11661,7 +11664,7 @@ void Q230PumpNpcArrivals(){
         if(work.actorIndex<actors.size()){
             auto& actor=actors[work.actorIndex];
             const auto saved=player.Snapshot().actors.find(actor.source.refFormId);
-            if(saved==player.Snapshot().actors.end()||!isResident(saved->second)||
+            if(saved==player.Snapshot().actors.end()||!isResident(saved->second)||!enabled(actor.source.refFormId)||
                 alreadyVisible(actor.source.refFormId)){
                 Q74DeleteGpuObjects(actor.objects);
                 for(const auto& entry:actor.generatedTextures)
@@ -11720,7 +11723,7 @@ void Q230PumpNpcArrivals(){
     std::unordered_set<uint32_t> refs;
     for(uint32_t id:work.pending){
         const auto it=player.Snapshot().actors.find(id);
-        if(it==player.Snapshot().actors.end()||!isResident(it->second)||alreadyVisible(id))continue;
+        if(it==player.Snapshot().actors.end()||!isResident(it->second)||!enabled(id)||alreadyVisible(id))continue;
         saved.emplace(id,it->second);refs.insert(id);
     }
     work.pending.clear();

@@ -8,7 +8,7 @@ Player::Player(const Player& source,ScriptCandidateTag)
       scriptPlayerCell_(source.scriptPlayerCell_),scriptPlayerWorld_(source.scriptPlayerWorld_),
       scriptPlayerPosition_(source.scriptPlayerPosition_),scriptPlayerPositionKnown_(source.scriptPlayerPositionKnown_),
       scriptEffectRevision_(source.scriptEffectRevision_),scriptButtons_(source.scriptButtons_),
-      pendingScriptMessages_(source.pendingScriptMessages_),pendingQuestNotices_(source.pendingQuestNotices_),
+      pendingScriptMessages_(source.pendingScriptMessages_),pendingQuestNotices_(source.pendingQuestNotices_),pendingScriptItems_(source.pendingScriptItems_),
       pendingScriptSounds_(source.pendingScriptSounds_),pendingBarters_(source.pendingBarters_),pendingKarmaEvents_(source.pendingKarmaEvents_),
       pendingTheftEvents_(source.pendingTheftEvents_),containerInteraction_(source.containerInteraction_),
       containerKarmaCommitted_(source.containerKarmaCommitted_) {}
@@ -95,6 +95,7 @@ void Player::SwapScriptPayload(Player& other) noexcept {
   pendingScriptSounds_.swap(other.pendingScriptSounds_);
   pendingBarters_.swap(other.pendingBarters_);
   pendingQuestNotices_.swap(other.pendingQuestNotices_);
+  pendingScriptItems_.swap(other.pendingScriptItems_);
   pendingKarmaEvents_.swap(other.pendingKarmaEvents_);
   pendingTheftEvents_.swap(other.pendingTheftEvents_);
 }
