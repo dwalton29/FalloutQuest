@@ -3,7 +3,23 @@
 #include <fstream>
 #include <iostream>
 #include <map>
+#include <cstdlib>
+#include <new>
 #include "../../app/src/main/cpp/physics/fo3-collision-runtime.cpp"
+// Mutation publication must consist only of swaps: simulate allocation failure
+// during both forward publication and rollback in the real collision runtime.
+static bool forbidAllocations = false;
+void* operator new(std::size_t size) {
+    if (forbidAllocations) throw std::bad_alloc();
+    if (void* p = std::malloc(size ? size : 1u)) return p;
+    throw std::bad_alloc();
+}
+void* operator new[](std::size_t size) { return ::operator new(size); }
+void operator delete(void* p) noexcept { std::free(p); }
+void operator delete[](void* p) noexcept { std::free(p); }
+void operator delete(void* p, std::size_t) noexcept { std::free(p); }
+void operator delete[](void* p, std::size_t) noexcept { std::free(p); }
+
 // Test the real parser, assembly, publication, resolver and occlusion paths.
 // Only platform GL, LAND and asset IO are replaced; no Bethesda fixtures ship.
 static std::map<std::string,std::vector<uint8_t>> assets;
@@ -57,6 +73,16 @@ static uint64_t prepare(const std::vector<Fo3WorldPlacement>& ps,bool exterior,u
     for(auto& p:ps){size_t tris;assert(PrimeFo3CollisionPlacementCacheQ1820(p,0,0,0,0,0,70,&tris));}
     uint64_t token=0;assert(PrepareFo3CollisionSnapshotQ1930(ps,0,0,0,0,0,70,&token,exterior,cell));return token;
 }
+// Capture on the render thread before a worker sees the immutable input. Tests
+// can override the revision/collection input to exercise rejection paths.
+static bool prepareMutation(const std::vector<Fo3WorldPlacement>& ps,
+        float x,float y,float z,float forward,float floor,float units,
+        const std::unordered_set<uint32_t>& collected,uint64_t revision,
+        uint64_t* token,bool exterior,uint32_t cell) {
+    auto state=CaptureFo3CollisionMutationState();
+    state.collected=collected;state.revision=revision;
+    return PrepareFo3CollisionMutationSnapshot(ps,x,y,z,forward,floor,units,state,token,exterior,cell);
+}
 static void publish(uint64_t t){assert(PublishFo3CollisionSnapshotQ1930(t,nullptr));assert(IsFo3PlayerCollisionReadyQ6G());}
 int main(int argc,char**argv) {
     const std::string nonMegaton="Dungeons\\Office\\Room\\Wall.NIF",megaton="Architecture\\Megaton\\interior\\Wall.NIF",item="Clutter\\Bottle.NIF",trigger="Effects\\Trigger.NIF";
@@ -67,6 +93,7 @@ int main(int argc,char**argv) {
     auto selected=SelectFo3AuthoredCollisionPlacements({a,a,b,d,t});
     assert(selected.size()==4 && selected[0].modelPath==nonMegaton);
     auto token=prepare(selected,false,100);
+    assert(!ExchangeFo3CollisionMutationSnapshot(token)); // ordinary token is not reversible
     assert(!IsFo3PlayerCollisionReadyQ6G());publish(token);
     assert(!gExteriorAllBhksQ78A && gWorldTriangles.size()==4 && gPlacementCount==2);
     assert(gQ1820NoCollisionModels.count(item)==0); // policy must not poison asset cache
@@ -143,6 +170,155 @@ int main(int argc,char**argv) {
     // Synchronous legacy entry points are generic too.
     ConfigureFo3CollisionPolicyQ710({a,d});SetNextFo3CollisionExteriorModeQ1931(false);
     assert(InitializeFo3CollisionOverlay({a,d},0,0,0,0,0,70));assert(gWorldTriangles.size()==2);
+    // Reversible in-place collision publication. This uses real prepared bhk
+    // geometry, broadphases, door transforms, motion and interaction queries.
+    const auto registeredBefore = gQ1930PreparedSnapshots.size();
+    SetFo3CollectedCollisionRefs({});
+    publish(prepare({b,door},false,107));
+    assert(SetFo3DoorCollisionTransformQ2400(10,turn90,true));
+    gSafeSpawnResolved=true;
+    const auto oldData=gWorldTriangles.data();
+    const auto oldGrid=gQ225DynamicGrid;
+    const auto oldTriangle=gWorldTriangles.back();
+    const auto oldMapRevision=gPipLocalMapRevision;
+    const auto oldCollisionRevision=GetFo3CollisionPublicationRevision();
+    uint64_t mutation=0;
+    assert(prepareMutation({b},0,0,0,0,0,70,{},
+        oldCollisionRevision,&mutation,false,107));
+    assert(GetFo3CollisionPublicationRevision()==oldCollisionRevision);
+    assert(gWorldTriangles.data()==oldData && countRef(10)==2);
+    // Legacy consuming publication must not consume a reversible handle.
+    assert(!PublishFo3CollisionSnapshotQ1930(mutation,nullptr));
+    forbidAllocations=true;
+    const bool exchanged=ExchangeFo3CollisionMutationSnapshot(mutation);
+    forbidAllocations=false;
+    assert(exchanged && countRef(10)==0 && countRef(2)==2);
+    assert(gSafeSpawnResolved && !gHkManifoldValidQ800 && gHkManifoldQ800.empty());
+    assert(gPipLocalMapRevision>oldMapRevision && GetFo3CollisionPublicationRevision()>oldCollisionRevision);
+    assert(!HasFo3InteractionOccluder(0,1,0,1,0,0,2,0));
+    contacts=candidates=0;
+    assert(ResolveFo3DynamicBoxQ225(3,0,.2f,0,0,-.3f,0,.1f,.1f,.1f,
+        1,0,0,0,1,0,0,0,1,.18f,&x,&dy,&z,&nx,&ny,&nz,&contacts,&candidates));
+    assert(contacts>0 && dy>0);
+    forbidAllocations=true;
+    const bool rolledBack=ExchangeFo3CollisionMutationSnapshot(mutation);
+    forbidAllocations=false;
+    assert(rolledBack && countRef(10)==2 && gWorldTriangles.data()==oldData);
+    assert(gQ225DynamicGrid==oldGrid && gSafeSpawnResolved);
+    assert(gWorldTriangles.back().a.x==oldTriangle.a.x &&
+           gWorldTriangles.back().a.z==oldTriangle.a.z); // authored rotated door restored exactly
+    DiscardFo3CollisionSnapshotQ1930(mutation);
+    assert(!ExchangeFo3CollisionMutationSnapshot(mutation));
+
+    // Successful finalization retains the new world and releases the old one.
+    assert(prepareMutation({b},0,0,0,0,0,70,{},
+        GetFo3CollisionPublicationRevision(),&mutation,false,107));
+    assert(ExchangeFo3CollisionMutationSnapshot(mutation));
+    const auto newData=gWorldTriangles.data();
+    DiscardFo3CollisionSnapshotQ1930(mutation);
+    assert(gWorldTriangles.data()==newData && countRef(10)==0);
+
+    // Re-enable uses unchanged original cache data; it does not undo collection
+    // or fabricate replacement geometry. Repeated exchanges do not duplicate it.
+    assert(prepareMutation({b,door},0,0,0,0,0,70,{},
+        GetFo3CollisionPublicationRevision(),&mutation,false,107));
+    assert(ExchangeFo3CollisionMutationSnapshot(mutation) && countRef(10)==2);
+    assert(gWorldTriangles.back().a.x==oldTriangle.a.x && gWorldTriangles.back().a.z==oldTriangle.a.z);
+    DiscardFo3CollisionSnapshotQ1930(mutation);
+    // A door made nonsolid during its authored animation must stay nonsolid
+    // when an unrelated reference mutation rebuilds the collision world.
+    assert(SetFo3DoorCollisionTransformQ2400(10,nullptr,false));
+    assert(prepareMutation({b,door},0,0,0,0,0,70,{},
+        GetFo3CollisionPublicationRevision(),&mutation,false,107));
+    assert(ExchangeFo3CollisionMutationSnapshot(mutation) && countRef(10)==0);
+    assert(ExchangeFo3CollisionMutationSnapshot(mutation) && countRef(10)==0);
+    DiscardFo3CollisionSnapshotQ1930(mutation);
+    assert(SetFo3DoorCollisionTransformQ2400(10,identity,true));
+    SetFo3CollectedCollisionRefs({10});
+    assert(countRef(10)==0);
+    assert(prepareMutation({b,door},0,0,0,0,0,70,{10},
+        GetFo3CollisionPublicationRevision(),&mutation,false,107));
+    assert(ExchangeFo3CollisionMutationSnapshot(mutation) && countRef(10)==0);
+    assert(ExchangeFo3CollisionMutationSnapshot(mutation) && countRef(10)==0);
+    DiscardFo3CollisionSnapshotQ1930(mutation);
+
+    // Collection changes invalidate pending candidates even if they remove no
+    // active triangle. A changed live door also prevents stale rollback.
+    assert(prepareMutation({b},0,0,0,0,0,70,{10},
+        GetFo3CollisionPublicationRevision(),&mutation,false,107));
+    const auto unchangedData=gWorldTriangles.data();
+    SetFo3CollectedCollisionRefs({10,9999});
+    assert(!ExchangeFo3CollisionMutationSnapshot(mutation) && gWorldTriangles.data()==unchangedData);
+    DiscardFo3CollisionSnapshotQ1930(mutation);
+    SetFo3CollectedCollisionRefs({});
+    publish(prepare({b,door},false,108));
+    assert(prepareMutation({b},0,0,0,0,0,70,{},
+        GetFo3CollisionPublicationRevision(),&mutation,false,108));
+    assert(ExchangeFo3CollisionMutationSnapshot(mutation));
+    assert(SetFo3DoorCollisionTransformQ2400(10,identity,true));
+    const auto doorChangedData=gWorldTriangles.data();
+    assert(!ExchangeFo3CollisionMutationSnapshot(mutation) && gWorldTriangles.data()==doorChangedData);
+    DiscardFo3CollisionSnapshotQ1930(mutation);
+
+    // A later scene publication invalidates both unapplied and rollback tokens.
+    assert(prepareMutation({b},0,0,0,0,0,70,{},
+        GetFo3CollisionPublicationRevision(),&mutation,false,108));
+    assert(ExchangeFo3CollisionMutationSnapshot(mutation));
+    publish(prepare({a},false,109));
+    const auto newerSceneData=gWorldTriangles.data();
+    assert(!ExchangeFo3CollisionMutationSnapshot(mutation) && gWorldTriangles.data()==newerSceneData);
+    DiscardFo3CollisionSnapshotQ1930(mutation);
+
+    // Exterior exchange has prebuilt weld/shape/player and loose-object grids.
+    publish(prepare({a,b},true,110));
+    const auto exteriorData=gWorldTriangles.data();
+    const auto exteriorGrid=gQ950Grid.size();
+    assert(prepareMutation({b},0,0,0,0,0,70,{},
+        GetFo3CollisionPublicationRevision(),&mutation,true,110));
+    forbidAllocations=true;
+    const bool exteriorExchanged=ExchangeFo3CollisionMutationSnapshot(mutation);
+    forbidAllocations=false;
+    assert(exteriorExchanged && gQ950Ready && gHkShapesReadyQ900 && gHkWeldAdjacencyReadyQ801);
+    assert(gQ950Data==gWorldTriangles.data() && gHkShapeTriangleDataQ900==gWorldTriangles.data() &&
+           gHkWeldTriangleDataQ801==gWorldTriangles.data());
+    assert(gQ950TriangleCount==gWorldTriangles.size() && gQ225DynamicStamp.size()==gWorldTriangles.size());
+    assert(HasFo3InteractionOccluder(0,1,0,0,-1,0,2,0));
+    forbidAllocations=true;
+    const bool exteriorRolledBack=ExchangeFo3CollisionMutationSnapshot(mutation);
+    forbidAllocations=false;
+    assert(exteriorRolledBack && gWorldTriangles.data()==exteriorData && gQ950Grid.size()==exteriorGrid);
+    DiscardFo3CollisionSnapshotQ1930(mutation);
+
+    // Bad preflight never touches the published world or yields a usable token.
+    mutation=123;
+    assert(!prepareMutation({},0,0,0,0,0,70,{},
+        GetFo3CollisionPublicationRevision(),&mutation,true,110) && mutation==0);
+    assert(!prepareMutation({b},0,0,0,0,0,70,{2},
+        GetFo3CollisionPublicationRevision(),&mutation,true,110)); // all geometry filtered
+    assert(!prepareMutation({placement(9998,nonMegaton)},0,0,0,0,0,70,{},
+        GetFo3CollisionPublicationRevision(),&mutation,true,110)); // not prewarmed
+    assert(!prepareMutation({b},1,0,0,0,0,70,{},
+        GetFo3CollisionPublicationRevision(),&mutation,true,110)); // different transform context
+    assert(!prepareMutation({b},0,0,0,0,0,70,{},0,&mutation,true,110));
+    assert(gWorldTriangles.data()==exteriorData && gQ1930PreparedSnapshots.size()==registeredBefore);
+    assert(!ExchangeFo3CollisionMutationSnapshot(0));
+
+    // A prewarmed cache for a different origin is not the current live scene.
+    ResetFo3CollisionSceneCache();
+    size_t primedTriangles=0;
+    assert(PrimeFo3CollisionPlacementCacheQ1820(b,100,0,0,0,0,70,&primedTriangles));
+    assert(prepareMutation({b},100,0,0,0,0,70,{},
+        GetFo3CollisionPublicationRevision(),&mutation,true,110));
+    assert(!ExchangeFo3CollisionMutationSnapshot(mutation) && gWorldTriangles.data()==exteriorData);
+    DiscardFo3CollisionSnapshotQ1930(mutation);
+    // Exterior cap is a preflight failure, never a partially published mutation.
+    large.clear();
+    for(unsigned i=0;i<1025;++i)large.push_back(placement(20000+i,nonMegaton,"STAT",i*2000.f));
+    ResetFo3CollisionSceneCache();
+    for(const auto& p:large)assert(PrimeFo3CollisionPlacementCacheQ1820(p,0,0,0,0,0,70,&primedTriangles));
+    assert(!prepareMutation(large,0,0,0,0,0,70,{},
+        GetFo3CollisionPublicationRevision(),&mutation,true,110) && mutation==0);
+    assert(gWorldTriangles.data()==exteriorData && gQ1930PreparedSnapshots.size()==registeredBefore);
     if(argc==3 || argc==4) {
         assetRoot=argv[1];std::ifstream manifest(argv[2]);std::vector<Fo3WorldPlacement> ps;Fo3WorldPlacement p;
         while(manifest>>p.refFormId>>p.baseRecordType>>p.x>>p.y>>p.z>>p.rx>>p.ry>>p.rz>>p.scale){manifest.get();std::getline(manifest,p.modelPath);ps.push_back(p);}
@@ -150,6 +326,27 @@ int main(int argc,char**argv) {
         auto ms=std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-start).count();
         std::cout<<"ORIGINAL CELL input="<<ps.size()<<" static="<<gPlacementCount<<" triangles="<<gWorldTriangles.size()<<" ready="<<IsFo3PlayerCollisionReadyQ6G()<<" hostMs="<<ms<<"\n";
         assert(!gWorldTriangles.empty() && gPlacementCount>0);
+        const auto originalData=gWorldTriangles.data();
+        const uint32_t target=gSurfaceSourcesQ722.begin()->second.refFormId;
+        const auto targetTriangles=countRef(target);
+        assert(targetTriangles>0);
+        auto withoutTarget=ps;
+        withoutTarget.erase(std::remove_if(withoutTarget.begin(),withoutTarget.end(),
+            [target](const Fo3WorldPlacement& p){return p.refFormId==target;}),withoutTarget.end());
+        assert(prepareMutation(withoutTarget,0,0,0,0,0,70,{},
+            GetFo3CollisionPublicationRevision(),&mutation,false,0));
+        assert(countRef(target)==targetTriangles && gWorldTriangles.data()==originalData);
+        forbidAllocations=true;
+        const bool originalExchanged=ExchangeFo3CollisionMutationSnapshot(mutation);
+        forbidAllocations=false;
+        assert(originalExchanged && countRef(target)==0);
+        forbidAllocations=true;
+        const bool originalRolledBack=ExchangeFo3CollisionMutationSnapshot(mutation);
+        forbidAllocations=false;
+        assert(originalRolledBack && countRef(target)==targetTriangles && gWorldTriangles.data()==originalData);
+        DiscardFo3CollisionSnapshotQ1930(mutation);
+        std::cout<<"Original CELL authored reference "<<std::hex<<target<<std::dec
+                 <<" removed/restored triangles="<<targetTriangles<<" without allocation\n";
     }
     std::cout<<"Authored collision tests passed\n";
 }

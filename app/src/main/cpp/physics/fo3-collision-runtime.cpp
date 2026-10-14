@@ -118,6 +118,10 @@ struct CollisionSurfaceSourceQ722 {
 };
 std::vector<CollisionTriangle> gWorldTriangles;
 uint64_t gPipLocalMapRevision=0;
+uint64_t gCollisionPublicationRevision = 1u;
+void AdvanceFo3CollisionPublicationRevision() {
+    if (++gCollisionPublicationRevision == 0u) ++gCollisionPublicationRevision;
+}
 std::unordered_map<uint64_t, CollisionSurfaceSourceQ722> gSurfaceSourcesQ722;
 
 // Q16.27: collision is represented by transformed authored triangles rather than
@@ -153,6 +157,17 @@ float gQ1990CollisionCacheFloorZ = 0.0f;
 float gQ1990CollisionCacheSceneForward = 0.0f;
 float gQ1990CollisionCacheFloorY = 0.0f;
 float gQ1990CollisionCacheUnitsPerMetre = 0.0f;
+struct CollisionTransformContext {
+    float x=0, y=0, z=0, forward=0, floor=0, units=0;
+    bool valid=false;
+    bool Matches(const CollisionTransformContext& other) const {
+        return valid && other.valid && std::fabs(x-other.x)<0.01f &&
+            std::fabs(y-other.y)<0.01f && std::fabs(z-other.z)<0.01f &&
+            std::fabs(forward-other.forward)<0.0001f &&
+            std::fabs(floor-other.floor)<0.0001f && std::fabs(units-other.units)<0.0001f;
+    }
+};
+CollisionTransformContext gLiveCollisionContext;
 float gCollisionFloorY = -1.55f;
 bool gPlayerCollisionReady = false;
 bool gSafeSpawnResolved = false;
@@ -172,6 +187,7 @@ std::unordered_map<uint64_t, std::vector<uint32_t>> gQ225DynamicGrid;
 std::vector<uint32_t> gQ225DynamicStamp;
 std::vector<uint32_t> gInteractionLargeTriangles;
 std::unordered_set<uint32_t> gCollectedCollisionRefs;
+std::unordered_map<uint32_t,Fo3DoorCollisionPose> gDoorCollisionPoses;
 uint32_t gQ225DynamicSerial = 1u;
 
 int Q225CellCoord(float value) {
@@ -183,36 +199,37 @@ uint64_t Q225CellKey(int x, int z) {
            static_cast<uint32_t>(z);
 }
 
-void Q225RebuildDynamicGrid() {
-    gQ225DynamicGrid.clear();
-    gInteractionLargeTriangles.clear();
-    gQ225DynamicStamp.assign(gWorldTriangles.size(), 0u);
-    gQ225DynamicSerial = 1u;
-
-    for (uint32_t i = 0u;
-         i < static_cast<uint32_t>(gWorldTriangles.size());
-         ++i) {
-        const CollisionTriangle& tri = gWorldTriangles[i];
-        const int minX = Q225CellCoord(tri.minX);
-        const int maxX = Q225CellCoord(tri.maxX);
-        const int minZ = Q225CellCoord(tri.minZ);
-        const int maxZ = Q225CellCoord(tri.maxZ);
+// Shared by legacy live rebuilds and immutable mutation preparation. The latter
+// performs every allocation on the serialized worker before a render-thread swap.
+void Q225BuildDynamicGrid(
+        const std::vector<CollisionTriangle>& triangles,
+        std::unordered_map<uint64_t, std::vector<uint32_t>>& grid,
+        std::vector<uint32_t>& large, std::vector<uint32_t>& stamps) {
+    grid.clear();
+    large.clear();
+    stamps.assign(triangles.size(), 0u);
+    for (uint32_t i = 0u; i < static_cast<uint32_t>(triangles.size()); ++i) {
+        const CollisionTriangle& tri = triangles[i];
+        const int minX = Q225CellCoord(tri.minX), maxX = Q225CellCoord(tri.maxX);
+        const int minZ = Q225CellCoord(tri.minZ), maxZ = Q225CellCoord(tri.maxZ);
         const int64_t span =
-            static_cast<int64_t>(maxX - minX + 1) *
-            static_cast<int64_t>(maxZ - minZ + 1);
+            (static_cast<int64_t>(maxX) - minX + 1) *
+            (static_cast<int64_t>(maxZ) - minZ + 1);
         if (span <= 0 || span > 64) {
-            gInteractionLargeTriangles.push_back(i);
+            large.push_back(i);
             continue;
         }
         for (int x = minX; x <= maxX; ++x)
             for (int z = minZ; z <= maxZ; ++z)
-                gQ225DynamicGrid[Q225CellKey(x,z)].push_back(i);
+                grid[Q225CellKey(x,z)].push_back(i);
     }
-
+}
+void Q225RebuildDynamicGrid() {
+    Q225BuildDynamicGrid(gWorldTriangles, gQ225DynamicGrid,
+                         gInteractionLargeTriangles, gQ225DynamicStamp);
+    gQ225DynamicSerial = 1u;
     Q6H_LOGI("Q22.5 DYNAMIC GRID: triangles=%zu cells=%zu cellSize=%.2fm",
-             gWorldTriangles.size(),
-             gQ225DynamicGrid.size(),
-             Q225_DYNAMIC_GRID_CELL);
+             gWorldTriangles.size(), gQ225DynamicGrid.size(), Q225_DYNAMIC_GRID_CELL);
 }
 
 std::string NormalizeModelPathQ78A(const std::string& path) {
@@ -1292,6 +1309,7 @@ bool InitializeFo3CollisionOverlay(const std::vector<Fo3WorldPlacement>& placeme
     }
 
     InvalidateDerivedCollisionCachesQ17();
+    gLiveCollisionContext = {centerX,centerY,floorZ,sceneForward,floorY,unitsPerMetre,true};
     gPlayerCollisionReady = true;
     Q225RebuildDynamicGrid();
     SetFo3CollectedCollisionRefs(gCollectedCollisionRefs);
@@ -1517,6 +1535,17 @@ bool ResolveFo3PlayerMotionLegacyQ716(float currentX, float currentZ,
 // from the prewarmed transformed REFR cache on the serialized asset worker.
 // The live controller continues using the previous snapshot until publish.
 struct Q1930PreparedCollisionSnapshot {
+    CollisionTransformContext context;
+    // Only explicit mutation candidates may be exchanged, never legacy tokens.
+    bool exchangeReady = false, exchanged = false;
+    uint64_t expectedRevision = 0u;
+    std::unordered_set<uint32_t> collectedRefs;
+    std::unordered_map<uint32_t,Fo3DoorCollisionPose> doorPoses;
+    bool playerReady = true, safeSpawnResolved = false;
+    bool weldReady = false, shapesReady = false, broadphaseReady = false;
+    uint32_t q950QuerySerial = 1u, dynamicQuerySerial = 1u;
+    std::unordered_map<uint64_t, std::vector<uint32_t>> dynamicGrid;
+    std::vector<uint32_t> dynamicLarge, dynamicStamp;
     bool exterior = true;
     uint32_t cellFormId = 0u;
     size_t inputPlacements = 0u, staticEligible = 0u, dynamicExcluded = 0u;
@@ -1617,9 +1646,23 @@ bool Q1930AssembleCachedAuthored(
                 entry.kindCounts[0], entry.kindCounts[1], entry.kindCounts[2], entry.kindCounts[3], entry.kindCounts[4]);
         }
 
-        snapshot.triangles.insert(snapshot.triangles.end(),
-                                  entry.triangles.begin(),
-                                  entry.triangles.end());
+        const auto pose = snapshot.doorPoses.find(placement.refFormId);
+        if (pose == snapshot.doorPoses.end()) {
+            snapshot.triangles.insert(snapshot.triangles.end(),
+                                      entry.triangles.begin(), entry.triangles.end());
+        } else {
+            if (!pose->second.enabled) continue;
+            const auto& m = pose->second.transform;
+            auto apply = [&](Vec3 p) { return Vec3{
+                m[0]*p.x+m[4]*p.y+m[8]*p.z+m[12],
+                m[1]*p.x+m[5]*p.y+m[9]*p.z+m[13],
+                m[2]*p.x+m[6]*p.y+m[10]*p.z+m[14]}; };
+            for (const auto& original : entry.triangles) {
+                CollisionTriangle moved = original;
+                if (!BuildTriangle(apply(original.a),apply(original.b),apply(original.c),moved)) return false;
+                snapshot.triangles.push_back(std::move(moved));
+            }
+        }
         for (uint64_t surfaceKey : entry.surfaceKeys) {
             snapshot.surfaceSources.emplace(
                 surfaceKey,
@@ -1831,11 +1874,12 @@ void Q1930BuildBroadphase(Q1930PreparedCollisionSnapshot& snapshot) {
     snapshot.q950TriangleStamp.assign(snapshot.triangles.size(), 0u);
 }
 
-bool PrepareFo3CollisionSnapshotQ1930(
+static bool PrepareFo3CollisionSnapshotInternal(
         const std::vector<Fo3WorldPlacement>& placements,
         float centerX, float centerY, float floorZ,
         float sceneForward, float floorY, float unitsPerMetre,
-        uint64_t* outToken, bool exterior, uint32_t cellFormId) {
+        uint64_t* outToken, bool exterior, uint32_t cellFormId,
+        const Fo3CollisionMutationState* mutation = nullptr) {
     if (outToken) *outToken = 0u;
     if (!outToken || placements.empty() || unitsPerMetre <= 0.0f) return false;
 
@@ -1855,9 +1899,11 @@ bool PrepareFo3CollisionSnapshotQ1930(
 
     const auto totalStarted = std::chrono::steady_clock::now();
     auto snapshot = std::make_shared<Q1930PreparedCollisionSnapshot>();
+    snapshot->context = {centerX,centerY,floorZ,sceneForward,floorY,unitsPerMetre,true};
     snapshot->floorY = floorY;
     snapshot->exterior = exterior;
     snapshot->cellFormId = cellFormId;
+    if (mutation) snapshot->doorPoses = mutation->doors;
 
     auto phaseStarted = std::chrono::steady_clock::now();
     const bool assembled = Q1930AssembleCachedAuthored(placements, *snapshot);
@@ -1867,7 +1913,25 @@ bool PrepareFo3CollisionSnapshotQ1930(
         snapshot->bhkMissing, snapshot->placementCount, snapshot->triangles.size(),
         snapshot->nonSolidFiltered, snapshot->capped ? 1 : 0, assembled ? 1 : 0);
     if (snapshot->capped) Q6G_LOGW("COLLISION SAFETY CAP: cell=%08X exterior=%d placements=%zu triangles=%zu", cellFormId, exterior ? 1 : 0, snapshot->placementCount, snapshot->triangles.size());
-    if (!assembled) return false;
+    if (!assembled || (mutation && snapshot->capped)) return false;
+    if (mutation) {
+        snapshot->collectedRefs = mutation->collected;
+        auto& triangles = snapshot->triangles;
+        triangles.erase(std::remove_if(triangles.begin(), triangles.end(),
+            [&](const CollisionTriangle& tri) {
+                const auto source = snapshot->surfaceSources.find(tri.surfaceKeyQ714);
+                return source != snapshot->surfaceSources.end() &&
+                       mutation->collected.count(source->second.refFormId);
+            }), triangles.end());
+        // Do not represent an unavailable/empty controller as a working world.
+        if (triangles.empty()) return false;
+        snapshot->triangleCount = triangles.size();
+        snapshot->expectedRevision = mutation->revision;
+        snapshot->exchangeReady = true;
+        snapshot->weldReady = snapshot->shapesReady = snapshot->broadphaseReady = exterior;
+        Q225BuildDynamicGrid(triangles, snapshot->dynamicGrid,
+                             snapshot->dynamicLarge, snapshot->dynamicStamp);
+    }
     snapshot->assemblyUs = static_cast<uint64_t>(
         std::chrono::duration_cast<std::chrono::microseconds>(
             std::chrono::steady_clock::now() - phaseStarted).count());
@@ -1919,13 +1983,103 @@ bool PrepareFo3CollisionSnapshotQ1930(
     return true;
 }
 
+bool PrepareFo3CollisionSnapshotQ1930(
+        const std::vector<Fo3WorldPlacement>& placements,
+        float centerX, float centerY, float floorZ,
+        float sceneForward, float floorY, float unitsPerMetre,
+        uint64_t* outToken, bool exterior, uint32_t cellFormId) {
+    return PrepareFo3CollisionSnapshotInternal(placements, centerX, centerY, floorZ,
+        sceneForward, floorY, unitsPerMetre, outToken, exterior, cellFormId);
+}
+
+uint64_t GetFo3CollisionPublicationRevision() { return gCollisionPublicationRevision; }
+Fo3CollisionMutationState CaptureFo3CollisionMutationState() {
+    return {gCollisionPublicationRevision, gCollectedCollisionRefs, gDoorCollisionPoses};
+}
+
+bool PrepareFo3CollisionMutationSnapshot(
+        const std::vector<Fo3WorldPlacement>& placements,
+        float centerX, float centerY, float floorZ,
+        float sceneForward, float floorY, float unitsPerMetre,
+        const Fo3CollisionMutationState& state,
+        uint64_t* outToken, bool exterior, uint32_t cellFormId) {
+    if (outToken) *outToken = 0u;
+    if (!state.revision || !std::isfinite(centerX) || !std::isfinite(centerY) ||
+        !std::isfinite(floorZ) || !std::isfinite(sceneForward) ||
+        !std::isfinite(floorY) || !std::isfinite(unitsPerMetre)) return false;
+    for (const auto& entry : state.doors) {
+        if (!entry.first) return false;
+        for (float value : entry.second.transform) if (!std::isfinite(value)) return false;
+    }
+    return PrepareFo3CollisionSnapshotInternal(placements, centerX, centerY, floorZ,
+        sceneForward, floorY, unitsPerMetre, outToken, exterior, cellFormId, &state);
+}
+
+bool ExchangeFo3CollisionMutationSnapshot(uint64_t token) {
+    // All live collision readers/writers run on the render thread. The registry
+    // lock protects worker token insertion, not concurrent gameplay simulation.
+    std::lock_guard<std::mutex> lock(gQ1930SnapshotMutex);
+    const auto found = gQ1930PreparedSnapshots.find(token);
+    if (found == gQ1930PreparedSnapshots.end() || !found->second) return false;
+    auto& snapshot = *found->second;
+    if (!snapshot.exchangeReady || !gPlayerCollisionReady ||
+        !snapshot.context.Matches(gLiveCollisionContext) ||
+        snapshot.exterior != gExteriorAllBhksQ78A ||
+        snapshot.expectedRevision != gCollisionPublicationRevision ||
+        snapshot.collectedRefs != gCollectedCollisionRefs ||
+        snapshot.doorPoses != gDoorCollisionPoses) return false;
+    if (!snapshot.exchanged) snapshot.safeSpawnResolved = gSafeSpawnResolved;
+    using std::swap;
+    gWorldTriangles.swap(snapshot.triangles);
+    gSurfaceSourcesQ722.swap(snapshot.surfaceSources);
+    swap(gPlacementCount, snapshot.placementCount);
+    swap(gCollisionShapeCount, snapshot.collisionShapeCount);
+    swap(gTriangleCount, snapshot.triangleCount);
+    swap(gKindCounts, snapshot.kindCounts);
+    swap(gCollisionFloorY, snapshot.floorY);
+    swap(gExteriorAllBhksQ78A, snapshot.exterior);
+    swap(gPlayerCollisionReady, snapshot.playerReady);
+    swap(gSafeSpawnResolved, snapshot.safeSpawnResolved);
+    gHkWeldNeighboursQ801.swap(snapshot.weldNeighbours);
+    swap(gHkWeldAdjacencyReadyQ801, snapshot.weldReady);
+    gHkShapesQ900.swap(snapshot.shapes);
+    gHkShapeIndexQ900.swap(snapshot.shapeIndex);
+    swap(gHkShapesReadyQ900, snapshot.shapesReady);
+    gQ950Objects.swap(snapshot.q950Objects);
+    gQ950TriangleObject.swap(snapshot.q950TriangleObject);
+    gQ950Grid.swap(snapshot.q950Grid);
+    gQ950LargeObjects.swap(snapshot.q950LargeObjects);
+    gQ950LargeLegacy.swap(snapshot.q950LargeLegacy);
+    gQ950ObjectStamp.swap(snapshot.q950ObjectStamp);
+    gQ950TriangleStamp.swap(snapshot.q950TriangleStamp);
+    swap(gQ950QuerySerial, snapshot.q950QuerySerial);
+    swap(gQ950Ready, snapshot.broadphaseReady);
+    gQ225DynamicGrid.swap(snapshot.dynamicGrid);
+    gInteractionLargeTriangles.swap(snapshot.dynamicLarge);
+    gQ225DynamicStamp.swap(snapshot.dynamicStamp);
+    swap(gQ225DynamicSerial, snapshot.dynamicQuerySerial);
+    // Pointer sentinels refer to the *new* live vectors; stale manifold triangle
+    // indices are invalid on both forward exchange and rollback.
+    gHkWeldTriangleCountQ801 = gHkShapeTriangleCountQ900 = gQ950TriangleCount = gWorldTriangles.size();
+    gHkWeldTriangleDataQ801 = gHkShapeTriangleDataQ900 = gQ950Data =
+        gWorldTriangles.empty() ? nullptr : gWorldTriangles.data();
+    gHkManifoldQ800.clear();
+    gHkManifoldValidQ800 = false;
+    ++gPipLocalMapRevision;
+    AdvanceFo3CollisionPublicationRevision();
+    snapshot.expectedRevision = gCollisionPublicationRevision;
+    snapshot.exchanged = true;
+    return true;
+}
+
 bool PublishFo3CollisionSnapshotQ1930(uint64_t token, uint64_t* outSwapUs) {
     if (outSwapUs) *outSwapUs = 0u;
     std::shared_ptr<Q1930PreparedCollisionSnapshot> snapshot;
     {
         std::lock_guard<std::mutex> lock(gQ1930SnapshotMutex);
         const auto found = gQ1930PreparedSnapshots.find(token);
-        if (found == gQ1930PreparedSnapshots.end()) return false;
+        if (found == gQ1930PreparedSnapshots.end() ||
+            (found->second && found->second->exchangeReady)) return false;
         snapshot = std::move(found->second);
         gQ1930PreparedSnapshots.erase(found);
     }
@@ -1936,6 +2090,9 @@ bool PublishFo3CollisionSnapshotQ1930(uint64_t token, uint64_t* outSwapUs) {
     // Debug collision GL is disabled in normal Quest builds. If enabled later,
     // rebuild its visual overlay separately; locomotion data below is complete.
     gWorldTriangles = std::move(snapshot->triangles);
+    gLiveCollisionContext = snapshot->context;
+    gDoorCollisionPoses.clear();
+    AdvanceFo3CollisionPublicationRevision();
     ++gPipLocalMapRevision;
     gSurfaceSourcesQ722 = std::move(snapshot->surfaceSources);
     gPlacementCount = snapshot->placementCount;
@@ -2014,6 +2171,8 @@ void InvalidateDerivedCollisionCachesQ17() {
 }
 
 void SetFo3CollectedCollisionRefs(const std::unordered_set<uint32_t>& refs) {
+    const bool changed = refs != gCollectedCollisionRefs;
+    if (changed) AdvanceFo3CollisionPublicationRevision();
     gCollectedCollisionRefs=refs;
     if (refs.empty()) return;
     const auto before=gWorldTriangles.size();
@@ -2023,6 +2182,8 @@ void SetFo3CollectedCollisionRefs(const std::unordered_set<uint32_t>& refs) {
             return source!=gSurfaceSourcesQ722.end() && refs.count(source->second.refFormId);
         }),gWorldTriangles.end());
     if (before==gWorldTriangles.size()) return;
+    if (!changed) AdvanceFo3CollisionPublicationRevision();
+    ++gPipLocalMapRevision;
     gTriangleCount=gWorldTriangles.size();
     InvalidateDerivedCollisionCachesQ17();
     gHkManifoldValidQ800=false;
@@ -2031,6 +2192,12 @@ void SetFo3CollectedCollisionRefs(const std::unordered_set<uint32_t>& refs) {
 
 bool SetFo3DoorCollisionTransformQ2400(uint32_t refFormId,const float transform[16],bool enabled) {
     if(refFormId==0u||gExteriorAllBhksQ78A||!gPlayerCollisionReady) return false;
+    Fo3DoorCollisionPose pose;
+    pose.enabled = enabled;
+    if (transform) std::copy(transform,transform+16,pose.transform.begin());
+    gDoorCollisionPoses[refFormId] = std::move(pose);
+    AdvanceFo3CollisionPublicationRevision();
+    ++gPipLocalMapRevision;
     const size_t before=gWorldTriangles.size();
     gWorldTriangles.erase(std::remove_if(gWorldTriangles.begin(),gWorldTriangles.end(),
         [&](const CollisionTriangle& tri){const auto s=gSurfaceSourcesQ722.find(tri.surfaceKeyQ714);
@@ -2341,6 +2508,9 @@ void RenderFo3CollisionOverlay(const float* mvp16) {
 }
 
 void ShutdownFo3CollisionOverlay() {
+    AdvanceFo3CollisionPublicationRevision();
+    gLiveCollisionContext.valid = false;
+    gDoorCollisionPoses.clear();
     if (gVbo) glDeleteBuffers(1, &gVbo);
     if (gVao) glDeleteVertexArrays(1, &gVao);
     if (gProgram) glDeleteProgram(gProgram);

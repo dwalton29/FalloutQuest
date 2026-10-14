@@ -267,3 +267,24 @@ M1B3a follow-up retains the complete requested NPC arrival ID set while workers
 run. Stale/partially failed preparation therefore requeues all requested actors,
 including those for which no visual was produced. This avoids losing an arrival
 when its old preparation is discarded. Source-ordering checks pass after the fix.
+
+## M1B3b — reversible collision dependency (2026-10-14)
+
+Continues canonical f6068e57afa335638246089ef0a765b8c9c89ff0. Added owned
+collision mutation inputs, prebuilt collision/query structures and reversible
+render-thread exchanges retaining the exact displaced world. Scene, door and
+collected-reference changes reject stale candidates/rollbacks. Current rotated
+and nonsolid animated doors survive candidate preparation. See
+`world-reference-m1b3b.md` for API ownership, validation and limitations.
+
+34 relevant host cases pass (physics 1, world 6, player 27), plus original Common
+House geometry removal/rollback and ASan/UBSan synthetic/original checks. Exchange
+and rollback succeed while allocations are prohibited. The archive fixture has
+335 input placements, 77 available decoded placements and 1,715 triangles; missing
+models make it a partial original-data check. No Android/headset result claimed.
+
+No source Enable/Disable handler or version bump. Empty/fully filtered worlds
+still fail preflight pending query semantics; capped exterior candidates reject
+atomically. The first unfinished integration remains the resident outer-transaction
+coordinator across save/script effects, visuals, collision/navigation, actors and
+held/loose objects. This new collision primitive is not yet invoked by scripts.

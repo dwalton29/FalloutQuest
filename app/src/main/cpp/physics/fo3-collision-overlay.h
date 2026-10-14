@@ -3,6 +3,8 @@
 #include "fo3-megaton-scene.h"
 
 #include <vector>
+#include <array>
+#include <unordered_map>
 #include <unordered_set>
 
 // Render-thread world removal; reapplied when a rolling snapshot publishes.
@@ -44,6 +46,42 @@ bool PrepareFo3CollisionSnapshotQ1930(
 
 bool PublishFo3CollisionSnapshotQ1930(uint64_t token, uint64_t* outSwapUs);
 void DiscardFo3CollisionSnapshotQ1930(uint64_t token);
+
+// M1B3: render-thread collision publication generation. Capture this together
+// with the scene stamp before scheduling serialized asset-worker preparation.
+uint64_t GetFo3CollisionPublicationRevision();
+struct Fo3DoorCollisionPose {
+    std::array<float,16> transform{{1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1}};
+    bool enabled = true;
+    bool operator==(const Fo3DoorCollisionPose& other) const {
+        return enabled == other.enabled && transform == other.transform;
+    }
+};
+struct Fo3CollisionMutationState {
+    uint64_t revision = 0u;
+    std::unordered_set<uint32_t> collected;
+    std::unordered_map<uint32_t,Fo3DoorCollisionPose> doors;
+};
+// Render-thread capture. The returned value owns all mutable inputs needed by
+// the asset worker, including open/moving/rotated interior-door collision.
+Fo3CollisionMutationState CaptureFo3CollisionMutationState();
+// Prepare a reversible candidate without touching the live collision world.
+// Placements must already reflect the candidate enable-parent projection and
+// have prewarmed authored bhk data in the current transform context. Collected
+// references are a copied transaction input, never read from live Player state.
+// Empty/capped worlds are rejected pending complete empty-world query support.
+bool PrepareFo3CollisionMutationSnapshot(
+    const std::vector<Fo3WorldPlacement>& placements,
+    float centerX, float centerY, float floorZ,
+    float sceneForward, float floorY, float unitsPerMetre,
+    const Fo3CollisionMutationState& state,
+    uint64_t* outToken, bool exterior = true, uint32_t cellFormId = 0u);
+// Same render-thread turn as the other scene exchanges. On success the token
+// owns the displaced world, so call again to roll back, or Discard to finalize.
+// No allocations/derived rebuilds occur in the exchange. Any intervening live
+// collision mutation invalidates the token's expected revision; stale tokens
+// fail without touching either world and may still be discarded safely.
+bool ExchangeFo3CollisionMutationSnapshot(uint64_t token);
 
 // Resolves a standing player capsule against the Q6F-authored Fallout collision
 // world. X/Z are the virtual headset/body centre in metres. playerYOffset is the
