@@ -799,6 +799,97 @@ bool IsFo3CollisionPlacementCachedQ1820(uint32_t refFormId) {
                gQ1820NegativeCollisionPlacementCache.end();
 }
 
+bool BuildFo3CollisionPlacementChunk(const Fo3WorldPlacement& placement,
+        const std::vector<Fo3NifCollisionShapeQ6F>& shapes,const Fo3PackedMetadataMapQ714& modelMetadata,
+        float centerX,float centerY,float floorZ,float sceneForward,float floorY,float unitsPerMetre,
+        Q1990CachedCollisionPlacement& entry,bool requireComplete=false) {
+    std::unordered_set<uint64_t> uniqueSurfaceKeys;
+    for (const Fo3NifCollisionShapeQ6F& shape : shapes) {
+        const size_t vertexCount = shape.positions.size() / 3u;
+        if(requireComplete&&(shape.positions.size()%3||shape.indices.size()%3||!vertexCount||shape.indices.empty()))return false;
+        if(requireComplete)for(float value:shape.positions)if(!std::isfinite(value))return false;
+        if (vertexCount == 0u || shape.indices.empty()) continue;
+
+        const std::vector<Fo3PackedSubShapeMetadataQ714>* packedMetadata = nullptr;
+        if (shape.dataBlock != 0xffffffffu) {
+            const auto metaIt = modelMetadata.find(shape.dataBlock);
+            if (metaIt != modelMetadata.end()) packedMetadata = &metaIt->second;
+        }
+
+        const size_t beforeShape = entry.triangles.size();
+        for (size_t i = 0; i + 2u < shape.indices.size(); i += 3u) {
+            const uint32_t ia = shape.indices[i];
+            const uint32_t ib = shape.indices[i + 1u];
+            const uint32_t ic = shape.indices[i + 2u];
+            if (ia >= vertexCount || ib >= vertexCount || ic >= vertexCount) {if(requireComplete)return false;continue;}
+
+            uint16_t subShapeIndex = 0xffffu;
+            const Fo3PackedSubShapeMetadataQ714* meta = nullptr;
+            if (packedMetadata) {
+                subShapeIndex = FindFo3PackedSubShapeForTriangleQ714(
+                    *packedMetadata, ia, ib, ic);
+                if (subShapeIndex != 0xffffu &&
+                    subShapeIndex < packedMetadata->size()) {
+                    meta = &(*packedMetadata)[subShapeIndex];
+                }
+            }
+            if(requireComplete&&shape.dataBlock!=0xffffffffu&&!meta)return false;
+            if ((meta && !meta->BlocksPlayer()) ||
+                (!meta && !Fo3HavokLayerBlocksPlayerQ714(shape.havokLayer))) {
+                ++entry.filteredNonSolid;
+                continue;
+            }
+
+            auto point = [&](uint32_t index) {
+                Vec3 p{
+                    shape.positions[index * 3u],
+                    shape.positions[index * 3u + 1u],
+                    shape.positions[index * 3u + 2u],
+                };
+                return ToVr(ApplyPlacement(p, placement),
+                            centerX, centerY, floorZ,
+                            sceneForward, floorY, unitsPerMetre);
+            };
+
+            CollisionTriangle tri;
+            if (!BuildTriangle(point(ia), point(ib), point(ic), tri)) {if(requireComplete)return false;continue;}
+            tri.walkableModuleQ723 = IsWalkableModuleQ723(placement);
+            tri.surfaceKeyQ714 = MakeSurfaceKeyQ714(
+                placement.refFormId, shape.sourceShapeBlock, subShapeIndex);
+            tri.meshKeyQ801 = MakeSurfaceKeyQ714(
+                placement.refFormId, shape.sourceShapeBlock, 0xfffeu);
+            tri.vertexAQ801 = ia;
+            tri.vertexBQ801 = ib;
+            tri.vertexCQ801 = ic;
+            const size_t ordinal = i / 3u;
+            if (ordinal < shape.triangleWeldingInfo.size())
+                tri.weldingInfoQ801 = shape.triangleWeldingInfo[ordinal];
+            if (meta) {
+                tri.havokLayerQ714 = meta->layer;
+                tri.havokMaterialQ714 = meta->material;
+                tri.stairsQ714 = meta->IsStairs();
+                tri.platformQ714 = meta->IsPlatform();
+            }
+            if (uniqueSurfaceKeys.insert(tri.surfaceKeyQ714).second)
+                entry.surfaceKeys.push_back(tri.surfaceKeyQ714);
+            entry.triangles.push_back(tri);
+
+            if (entry.triangles.size() > MAX_EXTERIOR_COLLISION_TRIANGLES_Q78A) {
+                Q6G_LOGW("COLLISION SAFETY CAP: ref=%08X model=%s triangles=%zu perPlacementTriangleLimit=%zu action=retain-old-world",
+                    placement.refFormId, placement.modelPath.c_str(), entry.triangles.size(),
+                    MAX_EXTERIOR_COLLISION_TRIANGLES_Q78A);
+                return false;
+            }
+        }
+        if (entry.triangles.size() > beforeShape) {
+            ++entry.shapeCount;
+            ++entry.kindCounts[static_cast<size_t>(shape.kind)];
+        }
+    }
+
+    return true;
+}
+
 bool PrimeFo3CollisionPlacementCacheQ1820(
         const Fo3WorldPlacement& placement,
         float centerX, float centerY, float floorZ,
@@ -870,86 +961,8 @@ bool PrimeFo3CollisionPlacementCacheQ1820(
     const Fo3PackedMetadataMapQ714& modelMetadata = metadataIt->second;
 
     Q1990CachedCollisionPlacement entry;
-    std::unordered_set<uint64_t> uniqueSurfaceKeys;
-    for (const Fo3NifCollisionShapeQ6F& shape : modelIt->second) {
-        const size_t vertexCount = shape.positions.size() / 3u;
-        if (vertexCount == 0u || shape.indices.empty()) continue;
-
-        const std::vector<Fo3PackedSubShapeMetadataQ714>* packedMetadata = nullptr;
-        if (shape.dataBlock != 0xffffffffu) {
-            const auto metaIt = modelMetadata.find(shape.dataBlock);
-            if (metaIt != modelMetadata.end()) packedMetadata = &metaIt->second;
-        }
-
-        const size_t beforeShape = entry.triangles.size();
-        for (size_t i = 0; i + 2u < shape.indices.size(); i += 3u) {
-            const uint32_t ia = shape.indices[i];
-            const uint32_t ib = shape.indices[i + 1u];
-            const uint32_t ic = shape.indices[i + 2u];
-            if (ia >= vertexCount || ib >= vertexCount || ic >= vertexCount) continue;
-
-            uint16_t subShapeIndex = 0xffffu;
-            const Fo3PackedSubShapeMetadataQ714* meta = nullptr;
-            if (packedMetadata) {
-                subShapeIndex = FindFo3PackedSubShapeForTriangleQ714(
-                    *packedMetadata, ia, ib, ic);
-                if (subShapeIndex != 0xffffu &&
-                    subShapeIndex < packedMetadata->size()) {
-                    meta = &(*packedMetadata)[subShapeIndex];
-                }
-            }
-            if ((meta && !meta->BlocksPlayer()) ||
-                (!meta && !Fo3HavokLayerBlocksPlayerQ714(shape.havokLayer))) {
-                ++entry.filteredNonSolid;
-                continue;
-            }
-
-            auto point = [&](uint32_t index) {
-                Vec3 p{
-                    shape.positions[index * 3u],
-                    shape.positions[index * 3u + 1u],
-                    shape.positions[index * 3u + 2u],
-                };
-                return ToVr(ApplyPlacement(p, placement),
-                            centerX, centerY, floorZ,
-                            sceneForward, floorY, unitsPerMetre);
-            };
-
-            CollisionTriangle tri;
-            if (!BuildTriangle(point(ia), point(ib), point(ic), tri)) continue;
-            tri.walkableModuleQ723 = IsWalkableModuleQ723(placement);
-            tri.surfaceKeyQ714 = MakeSurfaceKeyQ714(
-                placement.refFormId, shape.sourceShapeBlock, subShapeIndex);
-            tri.meshKeyQ801 = MakeSurfaceKeyQ714(
-                placement.refFormId, shape.sourceShapeBlock, 0xfffeu);
-            tri.vertexAQ801 = ia;
-            tri.vertexBQ801 = ib;
-            tri.vertexCQ801 = ic;
-            const size_t ordinal = i / 3u;
-            if (ordinal < shape.triangleWeldingInfo.size())
-                tri.weldingInfoQ801 = shape.triangleWeldingInfo[ordinal];
-            if (meta) {
-                tri.havokLayerQ714 = meta->layer;
-                tri.havokMaterialQ714 = meta->material;
-                tri.stairsQ714 = meta->IsStairs();
-                tri.platformQ714 = meta->IsPlatform();
-            }
-            if (uniqueSurfaceKeys.insert(tri.surfaceKeyQ714).second)
-                entry.surfaceKeys.push_back(tri.surfaceKeyQ714);
-            entry.triangles.push_back(tri);
-
-            if (entry.triangles.size() > MAX_EXTERIOR_COLLISION_TRIANGLES_Q78A) {
-                Q6G_LOGW("COLLISION SAFETY CAP: ref=%08X model=%s triangles=%zu perPlacementTriangleLimit=%zu action=retain-old-world",
-                    placement.refFormId, placement.modelPath.c_str(), entry.triangles.size(),
-                    MAX_EXTERIOR_COLLISION_TRIANGLES_Q78A);
-                return false;
-            }
-        }
-        if (entry.triangles.size() > beforeShape) {
-            ++entry.shapeCount;
-            ++entry.kindCounts[static_cast<size_t>(shape.kind)];
-        }
-    }
+    if(!BuildFo3CollisionPlacementChunk(placement,modelIt->second,modelMetadata,
+            centerX,centerY,floorZ,sceneForward,floorY,unitsPerMetre,entry))return false;
 
     // Retain empty decoded chunks too, so filtered layers remain diagnosable.
 
@@ -1551,6 +1564,8 @@ struct Q1930PreparedCollisionSnapshot {
     CollisionTransformContext context;
     // Only explicit mutation candidates may be exchanged, never legacy tokens.
     bool exchangeReady = false, exchanged = false;
+    bool ownsPolicy=false,policyApplied=false;
+    std::unordered_set<std::string> expectedPolicy,candidatePolicyIdentity,policyPayload;
     uint64_t expectedRevision = 0u;
     std::unordered_set<uint32_t> collectedRefs;
     std::unordered_map<uint32_t,Fo3DoorCollisionPose> doorPoses;
@@ -1612,7 +1627,10 @@ float Q1930WalkableThreshold(const CollisionTriangle& tri) {
 
 bool Q1930AssembleCachedAuthored(
         const std::vector<Fo3WorldPlacement>& placements,
-        Q1930PreparedCollisionSnapshot& snapshot) {
+        Q1930PreparedCollisionSnapshot& snapshot,
+        std::unordered_map<uint32_t,Q1990CachedCollisionPlacement>* privateChunks=nullptr,
+        const std::unordered_set<std::string>* privatePolicy=nullptr) {
+    auto& chunks=privateChunks?*privateChunks:gQ1990CollisionPlacementCache;
     std::unordered_set<uint32_t> seenRefs;
     snapshot.triangles.reserve(snapshot.exterior ? 140000u : 8192u);
     snapshot.inputPlacements = placements.size();
@@ -1620,7 +1638,8 @@ bool Q1930AssembleCachedAuthored(
     for (const Fo3WorldPlacement& placement : placements) {
         if (placement.refFormId == 0u ||
             !seenRefs.insert(placement.refFormId).second) continue;
-        if (!ShouldLoadFo3StaticCollisionModelQ710(placement.modelPath)) {
+        if ((privatePolicy?privatePolicy->count(NormalizeFo3CollisionModelPathQ710(placement.modelPath))!=0:
+                            !ShouldLoadFo3StaticCollisionModelQ710(placement.modelPath))) {
             ++snapshot.dynamicExcluded;
             continue;
         }
@@ -1631,9 +1650,9 @@ bool Q1930AssembleCachedAuthored(
         }
 
         const auto cached =
-            gQ1990CollisionPlacementCache.find(placement.refFormId);
-        if (cached == gQ1990CollisionPlacementCache.end()) {
-            if (gQ1820NegativeCollisionPlacementCache.find(placement.refFormId) !=
+            chunks.find(placement.refFormId);
+        if (cached == chunks.end()) {
+            if (!privateChunks && gQ1820NegativeCollisionPlacementCache.find(placement.refFormId) !=
                 gQ1820NegativeCollisionPlacementCache.end()) {
                 ++snapshot.bhkMissing;
                 continue;
@@ -1689,7 +1708,7 @@ bool Q1930AssembleCachedAuthored(
         snapshot.triangleCount += entry.triangles.size();
         for (size_t i = 0u; i < snapshot.kindCounts.size(); ++i)
             snapshot.kindCounts[i] += entry.kindCounts[i];
-        entry.lastUse = ++gQ1990CollisionCacheSerial;
+        if(!privateChunks)entry.lastUse = ++gQ1990CollisionCacheSerial;
     }
     // Completion is separate from surface count: all references may be disabled.
     return true;
@@ -1893,20 +1912,22 @@ static bool PrepareFo3CollisionSnapshotInternal(
         float centerX, float centerY, float floorZ,
         float sceneForward, float floorY, float unitsPerMetre,
         uint64_t* outToken, bool exterior, uint32_t cellFormId,
-        const Fo3CollisionMutationState* mutation = nullptr) {
+        const Fo3CollisionMutationState* mutation = nullptr,
+        std::unordered_map<uint32_t,Q1990CachedCollisionPlacement>* privateChunks=nullptr,
+        const std::unordered_set<std::string>* privatePolicy=nullptr) {
     if (outToken) *outToken = 0u;
     if (!outToken || (!mutation && placements.empty()) || unitsPerMetre <= 0.0f) return false;
 
     // Priming and snapshot construction are serialized by Q19.3's scheduler.
     // Guard against a context mismatch rather than rebuilding transformed data.
-    const bool sameContext = gQ1990CollisionCacheContextValid &&
+    const bool sameContext = privateChunks || (gQ1990CollisionCacheContextValid &&
         std::fabs(gQ1990CollisionCacheCenterX - centerX) < 0.01f &&
         std::fabs(gQ1990CollisionCacheCenterY - centerY) < 0.01f &&
         std::fabs(gQ1990CollisionCacheFloorZ - floorZ) < 0.01f &&
         std::fabs(gQ1990CollisionCacheSceneForward - sceneForward) < 0.0001f &&
         std::fabs(gQ1990CollisionCacheFloorY - floorY) < 0.0001f &&
-        std::fabs(gQ1990CollisionCacheUnitsPerMetre - unitsPerMetre) < 0.0001f;
-    if (!sameContext) {
+        std::fabs(gQ1990CollisionCacheUnitsPerMetre - unitsPerMetre) < 0.0001f);
+    if (!privateChunks && !sameContext) {
         Q6G_LOGW("Q19.3 COLLISION SNAPSHOT FAILED: reason=cache-context-mismatch");
         return false;
     }
@@ -1917,10 +1938,18 @@ static bool PrepareFo3CollisionSnapshotInternal(
     snapshot->floorY = floorY;
     snapshot->exterior = exterior;
     snapshot->cellFormId = cellFormId;
-    if (mutation) snapshot->doorPoses = mutation->doors;
+    if (mutation) {
+        snapshot->doorPoses = mutation->doors;
+        snapshot->expectedPolicy=mutation->dynamicOnlyModels;
+    }
+    if(privatePolicy) {
+        snapshot->ownsPolicy=true;
+        snapshot->candidatePolicyIdentity=*privatePolicy;
+        snapshot->policyPayload=*privatePolicy;
+    }
 
     auto phaseStarted = std::chrono::steady_clock::now();
-    const bool assembled = Q1930AssembleCachedAuthored(placements, *snapshot);
+    const bool assembled = Q1930AssembleCachedAuthored(placements, *snapshot,privateChunks,privatePolicy);
     const bool usable = assembled && (mutation ? !snapshot->capped : !snapshot->triangles.empty());
     if (!exterior) Q6G_LOGI("INTERIOR COLLISION SOURCE: cell=%08X mode=interior policy=all-authored-static-bhk inputPlacements=%zu staticEligible=%zu dynamicExcluded=%zu bhkAttempts=%zu bhkSuccess=%zu bhkMissing=%zu successfulPlacements=%zu triangles=%zu nonSolidFiltered=%zu capped=%d ready=%d",
         cellFormId, snapshot->inputPlacements, snapshot->staticEligible,
@@ -2007,7 +2036,8 @@ bool PrepareFo3CollisionSnapshotQ1930(
 
 uint64_t GetFo3CollisionPublicationRevision() { return gCollisionPublicationRevision; }
 Fo3CollisionMutationState CaptureFo3CollisionMutationState() {
-    return {gCollisionPublicationRevision, gCollectedCollisionRefs, gDoorCollisionPoses};
+    return {gCollisionPublicationRevision, gCollectedCollisionRefs, gDoorCollisionPoses,
+            Fo3DynamicOnlyCollisionModelsQ710()};
 }
 
 bool PrepareFo3CollisionMutationSnapshot(
@@ -2028,6 +2058,68 @@ bool PrepareFo3CollisionMutationSnapshot(
         sceneForward, floorY, unitsPerMetre, outToken, exterior, cellFormId, &state);
 }
 
+bool PrepareFo3ResidentCollisionSnapshot(
+        const std::vector<Fo3WorldPlacement>& placements,
+        float centerX,float centerY,float floorZ,float sceneForward,float floorY,float unitsPerMetre,
+        const Fo3CollisionMutationState& published,const std::atomic<bool>& cancelled,
+        uint64_t* outToken,bool exterior,uint32_t cellFormId) {
+    if(outToken)*outToken=0;
+    if(!outToken||!published.revision||!std::isfinite(centerX)||!std::isfinite(centerY)||
+        !std::isfinite(floorZ)||!std::isfinite(sceneForward)||!std::isfinite(floorY)||
+        !std::isfinite(unitsPerMetre)||unitsPerMetre<=0||cancelled.load(std::memory_order_acquire))return false;
+    for(const auto& door:published.doors) {
+        if(!door.first)return false;
+        for(float value:door.second.transform)if(!std::isfinite(value))return false;
+    }
+    std::unordered_set<uint32_t> identities;
+    for(const auto& p:placements) {
+        if(!p.refFormId||p.modelPath.empty()||!identities.insert(p.refFormId).second||p.scale<=0)return false;
+        for(float value:{p.x,p.y,p.z,p.rx,p.ry,p.rz,p.scale})if(!std::isfinite(value))return false;
+    }
+    const auto policy=BuildFo3CollisionPolicyQ710(placements);
+    struct Model {std::vector<Fo3NifCollisionShapeQ6F> shapes;Fo3PackedMetadataMapQ714 metadata;};
+    std::unordered_map<std::string,Model> models;
+    std::unordered_map<uint32_t,Q1990CachedCollisionPlacement> chunks;
+    for(const auto& p:placements) {
+        if(cancelled.load(std::memory_order_acquire))return false;
+        const auto key=NormalizeFo3CollisionModelPathQ710(p.modelPath);
+        if(policy.count(key))continue;
+        auto found=models.find(key);
+        if(found==models.end()) {
+            Model next;
+            if(!LoadFo3NifCollisionShapesComplete(p.modelPath,next.shapes)||
+               !LoadFo3PackedMetadataQ714(p.modelPath,next.metadata,true))return false;
+            found=models.emplace(key,std::move(next)).first;
+        }
+        Q1990CachedCollisionPlacement chunk;
+        if(!BuildFo3CollisionPlacementChunk(p,found->second.shapes,found->second.metadata,
+                centerX,centerY,floorZ,sceneForward,floorY,unitsPerMetre,chunk,true))return false;
+        chunks.emplace(p.refFormId,std::move(chunk));
+    }
+    if(cancelled.load(std::memory_order_acquire))return false;
+    uint64_t token=0;
+    if(!PrepareFo3CollisionSnapshotInternal(placements,centerX,centerY,floorZ,
+            sceneForward,floorY,unitsPerMetre,&token,exterior,cellFormId,&published,&chunks,&policy))return false;
+    if(cancelled.load(std::memory_order_acquire)){DiscardFo3CollisionSnapshotQ1930(token);return false;}
+    *outToken=token;return true;
+}
+
+static bool Q1930CanExchangeMutation(const Q1930PreparedCollisionSnapshot& snapshot) {
+    return !(!snapshot.exchangeReady || !gPlayerCollisionReady ||
+        !snapshot.context.Matches(gLiveCollisionContext) ||
+        snapshot.exterior != gExteriorAllBhksQ78A ||
+        snapshot.expectedRevision != gCollisionPublicationRevision ||
+        snapshot.collectedRefs != gCollectedCollisionRefs ||
+        snapshot.doorPoses != gDoorCollisionPoses ||
+        (snapshot.ownsPolicy&&snapshot.policyApplied?snapshot.candidatePolicyIdentity:snapshot.expectedPolicy)
+            !=Fo3DynamicOnlyCollisionModelsQ710());
+}
+bool CanExchangeFo3CollisionMutationSnapshot(uint64_t token) {
+    std::lock_guard<std::mutex> lock(gQ1930SnapshotMutex);
+    const auto found=gQ1930PreparedSnapshots.find(token);
+    return found!=gQ1930PreparedSnapshots.end()&&found->second&&Q1930CanExchangeMutation(*found->second);
+}
+
 bool ExchangeFo3CollisionMutationSnapshot(uint64_t token) {
     // All live collision readers/writers run on the render thread. The registry
     // lock protects worker token insertion, not concurrent gameplay simulation.
@@ -2035,14 +2127,13 @@ bool ExchangeFo3CollisionMutationSnapshot(uint64_t token) {
     const auto found = gQ1930PreparedSnapshots.find(token);
     if (found == gQ1930PreparedSnapshots.end() || !found->second) return false;
     auto& snapshot = *found->second;
-    if (!snapshot.exchangeReady || !gPlayerCollisionReady ||
-        !snapshot.context.Matches(gLiveCollisionContext) ||
-        snapshot.exterior != gExteriorAllBhksQ78A ||
-        snapshot.expectedRevision != gCollisionPublicationRevision ||
-        snapshot.collectedRefs != gCollectedCollisionRefs ||
-        snapshot.doorPoses != gDoorCollisionPoses) return false;
+    if(!Q1930CanExchangeMutation(snapshot))return false;
     if (!snapshot.exchanged) snapshot.safeSpawnResolved = gSafeSpawnResolved;
     using std::swap;
+    if(snapshot.ownsPolicy) {
+        Fo3DynamicOnlyCollisionModelsQ710().swap(snapshot.policyPayload);
+        snapshot.policyApplied=!snapshot.policyApplied;
+    }
     gWorldTriangles.swap(snapshot.triangles);
     gSurfaceSourcesQ722.swap(snapshot.surfaceSources);
     swap(gPlacementCount, snapshot.placementCount);

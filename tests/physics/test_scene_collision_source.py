@@ -156,3 +156,27 @@ for region in (begin,teardown):
 assert 'gFo3LegacyMetadataWorkers.push_back(task)' in s
 assert 'const auto worker=weak.lock()' in activity
 print('Resident asset reservation gates consumers/launches and acquires all six worker families before CPU/GPU use')
+
+# Candidate collision uses immutable policy/door/collection inputs and private
+# model/chunk storage; global transformed/negative caches stay untouched.
+physics=Path('app/src/main/cpp/physics/fo3-collision-runtime.cpp').read_text()
+private_collision=physics[physics.index('bool PrepareFo3ResidentCollisionSnapshot('):physics.index('static bool Q1930CanExchangeMutation(')]
+for forbidden in ('ConfigureFo3CollisionPolicyQ710','PrimeFo3CollisionPlacementCacheQ1820',
+                  'ResetFo3CollisionSceneCache','gQ1990CollisionPlacementCache',
+                  'gQ1820NegativeCollisionPlacementCache','gQ1820NoCollisionModels',
+                  'gDoorCollisionPoses','gCollectedCollisionRefs'):
+    assert forbidden not in private_collision
+assert 'BuildFo3CollisionPolicyQ710(placements)' in private_collision
+assert 'LoadFo3NifCollisionShapesComplete(p.modelPath' in private_collision
+assert 'LoadFo3PackedMetadataQ714(p.modelPath,next.metadata,true)' in private_collision
+assert 'DiscardFo3CollisionSnapshotQ1930(token)' in private_collision
+assert '&published,&chunks,&policy' in private_collision
+exchange=physics[physics.index('bool ExchangeFo3CollisionMutationSnapshot('):physics.index('bool PublishFo3CollisionSnapshotQ1930(')]
+assert exchange.index('Q1930CanExchangeMutation(snapshot)') < exchange.index('Fo3DynamicOnlyCollisionModelsQ710().swap(snapshot.policyPayload)') < exchange.index('gWorldTriangles.swap(')
+assert 'snapshot.policyApplied=!snapshot.policyApplied' in exchange
+assert 'CanExchangeFo3CollisionMutationSnapshot(cpu.collision.Get())' in stamp
+assert lane_start.index('CaptureFo3CollisionMutationState()') < lane_start.index('gFo3ResidentLane.Start(ticket,')
+assert 'collisionScope,collisionState' in immutable
+assert immutable.index('LoadFo3WorldspacePlacements(collisionScope') < immutable.index('PrepareFo3ResidentCollisionSnapshot(')
+assert 'result.collision=Fo3CollisionSnapshotOwner(collisionToken)' in immutable
+print('Resident collision preparation owns private policy/chunks/token and validates collision inputs before GPU admission')

@@ -3,6 +3,7 @@
 #include "fo3-megaton-scene.h"
 
 #include <vector>
+#include <atomic>
 #include <array>
 #include <unordered_map>
 #include <unordered_set>
@@ -61,6 +62,7 @@ struct Fo3CollisionMutationState {
     uint64_t revision = 0u;
     std::unordered_set<uint32_t> collected;
     std::unordered_map<uint32_t,Fo3DoorCollisionPose> doors;
+    std::unordered_set<std::string> dynamicOnlyModels;
 };
 // Render-thread capture. The returned value owns all mutable inputs needed by
 // the asset worker, including open/moving/rotated interior-door collision.
@@ -76,11 +78,21 @@ bool PrepareFo3CollisionMutationSnapshot(
     float sceneForward, float floorY, float unitsPerMetre,
     const Fo3CollisionMutationState& state,
     uint64_t* outToken, bool exterior = true, uint32_t cellFormId = 0u);
+// Private resident candidate: decodes complete supported collision chains into
+// local chunks; never reads/writes transformed/negative caches or changes the
+// live model policy. Candidate policy is computed from this collision scope.
+// Must run on the exclusive asset lane. Caller owns the returned registry token.
+bool PrepareFo3ResidentCollisionSnapshot(
+    const std::vector<Fo3WorldPlacement>& placements,
+    float centerX,float centerY,float floorZ,float sceneForward,float floorY,float unitsPerMetre,
+    const Fo3CollisionMutationState& published,const std::atomic<bool>& cancelled,
+    uint64_t* outToken,bool exterior=true,uint32_t cellFormId=0u);
 // Same render-thread turn as the other scene exchanges. On success the token
 // owns the displaced world, so call again to roll back, or Discard to finalize.
 // No allocations/derived rebuilds occur in the exchange. Any intervening live
 // collision mutation invalidates the token's expected revision; stale tokens
 // fail without touching either world and may still be discarded safely.
+bool CanExchangeFo3CollisionMutationSnapshot(uint64_t token);
 bool ExchangeFo3CollisionMutationSnapshot(uint64_t token);
 
 // Resolves a standing player capsule against the Q6F-authored Fallout collision

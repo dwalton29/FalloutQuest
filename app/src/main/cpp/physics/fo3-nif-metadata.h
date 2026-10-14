@@ -78,7 +78,7 @@ inline bool ParseFo3PackedSubShapeMetadataQ714(
 }
 
 inline bool LoadFo3PackedMetadataQ714(const std::string& modelPath,
-                                      Fo3PackedMetadataMapQ714& out) {
+                                      Fo3PackedMetadataMapQ714& out,bool requireComplete=false) {
     using namespace fo3_q6f_collision_detail;
     out.clear();
 
@@ -93,13 +93,12 @@ inline bool LoadFo3PackedMetadataQ714(const std::string& modelPath,
     for (uint32_t block = 0u; block < header.numBlocks; ++block) {
         if (BlockType(header, block) != "hkPackedNiTriStripsData") continue;
         std::vector<Fo3PackedSubShapeMetadataQ714> metadata;
-        if (ParseFo3PackedSubShapeMetadataQ714(
-                BlockData(nif, header, block), header.blockSizes[block], metadata) &&
-            !metadata.empty()) {
-            out.emplace(block, std::move(metadata));
-        }
+        const bool parsed=ParseFo3PackedSubShapeMetadataQ714(
+                BlockData(nif, header, block), header.blockSizes[block], metadata);
+        if(requireComplete&&!parsed)return false;
+        if(parsed&&!metadata.empty())out.emplace(block,std::move(metadata));
     }
-    return !out.empty();
+    return requireComplete||!out.empty();
 }
 
 inline uint16_t FindFo3PackedSubShapeForTriangleQ714(

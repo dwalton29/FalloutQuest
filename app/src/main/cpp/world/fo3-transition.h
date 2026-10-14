@@ -87,7 +87,7 @@ inline void ClearFo3CollisionPolicyQ710() {
     Fo3DynamicOnlyCollisionModelsQ710().clear();
 }
 
-inline size_t ConfigureFo3CollisionPolicyQ710(
+inline std::unordered_set<std::string> BuildFo3CollisionPolicyQ710(
         const std::vector<Fo3WorldPlacement>& placements) {
     std::unordered_set<std::string> dynamicModels;
     std::unordered_set<std::string> staticModels;
@@ -101,12 +101,17 @@ inline size_t ConfigureFo3CollisionPolicyQ710(
         }
     }
 
-    auto& dynamicOnly = Fo3DynamicOnlyCollisionModelsQ710();
-    dynamicOnly.clear();
+    std::unordered_set<std::string> dynamicOnly;
     for (const std::string& model : dynamicModels) {
         if (staticModels.find(model) == staticModels.end()) dynamicOnly.insert(model);
     }
-    return dynamicOnly.size();
+    return dynamicOnly;
+}
+
+inline size_t ConfigureFo3CollisionPolicyQ710(const std::vector<Fo3WorldPlacement>& placements) {
+    auto next=BuildFo3CollisionPolicyQ710(placements);
+    Fo3DynamicOnlyCollisionModelsQ710().swap(next);
+    return Fo3DynamicOnlyCollisionModelsQ710().size();
 }
 
 inline bool ShouldLoadFo3StaticCollisionModelQ710(const std::string& modelPath) {

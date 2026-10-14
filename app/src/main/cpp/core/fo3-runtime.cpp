@@ -72,6 +72,7 @@ extern void PumpFo3AndroidEventsQ1860();
 #include "fo3-bsa-reader.h"
 #include "fo3-texture-bsa.h"
 #include "fo3-collision-overlay.h"
+#include "physics/fo3-collision-token.h"
 #include "fo3-nif-collision.h"
 #include "fo3-transition.h"
 #include "rendering/environment/fo3-environment.h"
@@ -3163,6 +3164,9 @@ struct Fo3ResidentCpuPreparation {
     uint64_t visualRevision=0;
     uint64_t assetTicket=0;
     fo3scene::ResidentTextures textures;
+    Fo3CollisionSnapshotOwner collision;
+    Fo3WorldspaceSelection collisionScope;
+    std::vector<Fo3WorldPlacement> collisionPlacements;
     std::vector<CpuObject> incoming;
 };
 bool PrepareFo3ResidentCpuResources(const Fo3CellTransitionRequestQ74& request,
@@ -3261,6 +3265,7 @@ bool PollFo3ResidentAssetLane(uint64_t ticket) {
     return gFo3ResidentLane.Poll(ticket,CaptureFo3ResidentAssetActivity());
 }
 bool StartFo3ResidentCpuPreparation(uint64_t ticket,const Fo3WorldspaceSelection& scope,
+        Fo3WorldspaceSelection collisionScope,
         std::shared_ptr<const fo3world::ReferenceStateSnapshot> candidate,
         std::vector<uint32_t> affected) {
     if(!gFo3ResidentLane.Exclusive(ticket)||!Fo3ResidentLaneContextCurrent()||!candidate)return false;
@@ -3270,18 +3275,33 @@ bool StartFo3ResidentCpuPreparation(uint64_t ticket,const Fo3WorldspaceSelection
     const auto context=gFo3ResidentLaneContext;
     const auto publication=gFo3ResidentLanePublication;
     const auto visualRevision=gFo3ResidentLaneVisualRevision;
-    return gFo3ResidentLane.Start(ticket,[context,scope,publication,visualRevision,ticket,
+    if(context.worldspaceFormId&&(collisionScope.worldspace!=context.worldspaceFormId||
+        collisionScope.persistentCell!=context.cellFormId||!std::isfinite(collisionScope.gameX)||
+        !std::isfinite(collisionScope.gameY)))return false;
+    collisionScope.candidateSelection=true;
+    const auto collisionState=CaptureFo3CollisionMutationState();
+    return gFo3ResidentLane.Start(ticket,[context,scope,publication,visualRevision,ticket,collisionScope,collisionState,
             published=std::move(published),candidate=std::move(candidate),
             live=std::move(live),affected=std::move(affected)](
             Fo3ResidentCpuPreparation& result,const std::atomic<bool>& cancelled) {
         std::string error;
         if(!PrepareFo3ResidentCpuResources(context,scope,publication,visualRevision,
                 published,candidate,live,affected,result,cancelled,error))return false;
-        result.assetTicket=ticket;return true;
+        result.assetTicket=ticket;result.collisionScope=collisionScope;
+        if(context.worldspaceFormId) {
+            if(!LoadFo3WorldspacePlacements(collisionScope,result.collisionPlacements,candidate.get()))return false;
+        } else result.collisionPlacements=result.selection.collisionPlacements;
+        uint64_t collisionToken=0;
+        if(!PrepareFo3ResidentCollisionSnapshot(result.collisionPlacements,context.x,context.y,context.z,
+                SCENE_FORWARD,FLOOR_Y,FO3_UNITS_PER_METRE,collisionState,cancelled,&collisionToken,
+                context.worldspaceFormId!=0,context.cellFormId))return false;
+        result.collision=Fo3CollisionSnapshotOwner(collisionToken);
+        return !cancelled.load(std::memory_order_acquire);
     });
 }
 bool TakeFo3ResidentCpuPreparation(uint64_t ticket,std::unique_ptr<Fo3ResidentCpuPreparation>& packet) {
-    return Fo3ResidentLaneContextCurrent()&&gFo3ResidentLane.Take(ticket,packet);
+    if(!Fo3ResidentLaneContextCurrent()||!gFo3ResidentLane.Successful(ticket))return false;
+    return gFo3ResidentLane.Take(ticket,packet);
 }
 
 // Render-thread-only private GPU preparation. The outer coordinator supplies
@@ -3296,6 +3316,7 @@ std::unique_ptr<Fo3ResidentGpuWork> gFo3ResidentGpuWork;
 void DiscardFo3ResidentGpuStage() noexcept {gFo3ResidentGpuWork.reset();}
 bool Fo3ResidentPacketCurrent(const Fo3ResidentCpuPreparation& cpu) {
     return gFo3ResidentLane.Exclusive(cpu.assetTicket)&&Fo3ResidentLaneContextCurrent()&&
+        cpu.collision.Get()&&CanExchangeFo3CollisionMutationSnapshot(cpu.collision.Get())&&
         gSceneReady&&!gSceneLoad.active&&!gFo3ResidentVisualPlan&&
         Fo3AcceptsScenePublication(cpu.publication)&&cpu.visualRevision!=0&&
         cpu.visualRevision==gFo3VisualPublication.Revision()&&

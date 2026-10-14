@@ -12,6 +12,8 @@
 #include <cstdlib>
 #include <new>
 #include "../../app/src/main/cpp/physics/fo3-collision-runtime.cpp"
+#include "physics/fo3-collision-token.h"
+#include "world/fo3-resident-preparation-lane.h"
 // Mutation publication must consist only of swaps: simulate allocation failure
 // during both forward publication and rollback in the real collision runtime.
 static bool forbidAllocations = false;
@@ -30,7 +32,9 @@ void operator delete[](void* p, std::size_t) noexcept { std::free(p); }
 // Only platform GL, LAND and asset IO are replaced; no Bethesda fixtures ship.
 static std::map<std::string,std::vector<uint8_t>> assets;
 static std::string assetRoot;
+static std::atomic<bool>* cancelPrivateAsset=nullptr;
 bool LoadFalloutMeshFile(const std::string& model,std::vector<uint8_t>& bytes,std::string* resolved) {
+    if(cancelPrivateAsset){cancelPrivateAsset->store(true,std::memory_order_release);cancelPrivateAsset=nullptr;}
     auto it=assets.find(model);
     if(it!=assets.end()) bytes=it->second;
     else {
@@ -118,6 +122,8 @@ static void emptyQueries(bool exterior) {
     assert(gSafeSpawnResolved==safeSpawn);
     terrainAvailable=false;
 }
+#include "resident_collision_tests.inc"
+
 int main(int argc,char**argv) {
     const std::string nonMegaton="Dungeons\\Office\\Room\\Wall.NIF",megaton="Architecture\\Megaton\\interior\\Wall.NIF",item="Clutter\\Bottle.NIF",trigger="Effects\\Trigger.NIF";
     assets[nonMegaton]=packedNif();assets[megaton]=packedNif();assets[item]=packedNif();assets[trigger]=packedNif(12);
@@ -422,6 +428,29 @@ int main(int argc,char**argv) {
         auto ms=std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-start).count();
         std::cout<<"ORIGINAL CELL input="<<ps.size()<<" static="<<gPlacementCount<<" triangles="<<gWorldTriangles.size()<<" ready="<<IsFo3PlayerCollisionReadyQ6G()<<" hostMs="<<ms<<"\n";
         assert(!gWorldTriangles.empty() && gPlacementCount>0);
+        uint64_t privateToken=0;std::atomic<bool> privateCancel{false};
+        const bool originalPrivate=PrepareFo3ResidentCollisionSnapshot(ps,0,0,0,0,0,70,
+            CaptureFo3CollisionMutationState(),privateCancel,&privateToken,false,0);
+        std::cout<<"Original private whole-CELL candidate complete="<<originalPrivate<<" token="<<privateToken<<"\n";
+        Fo3CollisionSnapshotOwner fullPrivateOwner(privateToken);
+        std::vector<Fo3WorldPlacement> available;size_t missing=0;
+        for(const auto& original:ps){std::vector<uint8_t> source;
+            if(LoadFalloutMeshFile(original.modelPath,source,nullptr))available.push_back(original);else ++missing;}
+        assert(!available.empty());
+        assert(PrepareFo3ResidentCollisionSnapshot(available,0,0,0,0,0,70,
+            CaptureFo3CollisionMutationState(),privateCancel,&privateToken,false,0));
+        {Fo3CollisionSnapshotOwner owner(privateToken);
+            assert(CanExchangeFo3CollisionMutationSnapshot(privateToken));
+            const auto before=gWorldTriangles.data();const auto triangles=gWorldTriangles.size();
+            forbidAllocations=true;
+            const bool forward=ExchangeFo3CollisionMutationSnapshot(privateToken);
+            const auto candidateTriangles=gWorldTriangles.size();
+            const bool backward=ExchangeFo3CollisionMutationSnapshot(privateToken);
+            forbidAllocations=false;
+            assert(forward&&backward&&gWorldTriangles.data()==before&&gWorldTriangles.size()==triangles);
+            std::cout<<"Original available private candidate refs="<<available.size()<<" missingSources="<<missing
+                     <<" triangles="<<candidateTriangles<<" exchange/rollback passed\n";
+        }
         const auto originalData=gWorldTriangles.data();
         const uint32_t target=gSurfaceSourcesQ722.begin()->second.refFormId;
         const auto targetTriangles=countRef(target);
@@ -456,6 +485,7 @@ int main(int argc,char**argv) {
         std::cout<<"Original CELL authored reference "<<std::hex<<target<<std::dec
                  <<" removed/restored triangles="<<targetTriangles<<" without allocation\n";
     }
+    privateCollisionTests(a,b,d,door);
     ShutdownFo3CollisionOverlay();
     assert(!IsFo3PlayerCollisionReadyQ6G());
     assert(!ResolveFo3PlayerMotionQ6G(0,0,1,2,3,&x,&z,&y));

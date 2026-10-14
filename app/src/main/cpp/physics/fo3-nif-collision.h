@@ -667,7 +667,8 @@ inline bool ParseListRefs(const uint8_t* data,size_t size,std::vector<uint32_t>&
 
 inline bool DecodeShape(const std::vector<uint8_t>& nif,const NifHeader& h,const std::string& resolved,
                         uint32_t shapeRef,const Mat4& accumulated,uint32_t coBlock,uint32_t targetBlock,uint32_t bodyBlock,
-                        int depth,std::vector<uint32_t>& stack,std::vector<Fo3NifCollisionShapeQ6F>& out){
+                        int depth,std::vector<uint32_t>& stack,std::vector<Fo3NifCollisionShapeQ6F>& out,
+                        bool requireComplete=false){
     if(shapeRef>=h.numBlocks||depth>32) return false;
     if(std::find(stack.begin(),stack.end(),shapeRef)!=stack.end()) return false;
     stack.push_back(shapeRef);
@@ -677,19 +678,23 @@ inline bool DecodeShape(const std::vector<uint8_t>& nif,const NifHeader& h,const
     bool any=false;
 
     if(type=="bhkMoppBvTreeShape"){
-        if(data&&size>=4u){ uint32_t child=ReadLe32(data); any=DecodeShape(nif,h,resolved,child,accumulated,coBlock,targetBlock,bodyBlock,depth+1,stack,out); }
+        if(data&&size>=4u){ uint32_t child=ReadLe32(data); any=DecodeShape(nif,h,resolved,child,accumulated,coBlock,targetBlock,bodyBlock,depth+1,stack,out,requireComplete); }
     } else if(type=="bhkListShape"||type=="bhkConvexListShape"){
         std::vector<uint32_t> refs;
         if(ParseListRefs(data,size,refs,type=="bhkConvexListShape")){
             Q6F_LOGI("Q6F COLLISION LIST: model=%s shape=%u type=%s children=%zu",resolved.c_str(),shapeRef,type.c_str(),refs.size());
-            for(uint32_t child:refs) any=DecodeShape(nif,h,resolved,child,accumulated,coBlock,targetBlock,bodyBlock,depth+1,stack,out)||any;
+            for(uint32_t child:refs) {
+                const bool decoded=DecodeShape(nif,h,resolved,child,accumulated,coBlock,targetBlock,bodyBlock,depth+1,stack,out,requireComplete);
+                if(requireComplete&&!decoded){stack.pop_back();return false;}
+                any=decoded||any;
+            }
         }
     } else if(type=="bhkTransformShape"||type=="bhkConvexTransformShape"){
         uint32_t child=INVALID_REF; Mat4 t;
         if(ParseTransformShape(data,size,child,t)){
             Mat4 next=Mul(accumulated,t);
             Q6F_LOGI("Q6F COLLISION TRANSFORM: model=%s shape=%u type=%s child=%u",resolved.c_str(),shapeRef,type.c_str(),child);
-            any=DecodeShape(nif,h,resolved,child,next,coBlock,targetBlock,bodyBlock,depth+1,stack,out);
+            any=DecodeShape(nif,h,resolved,child,next,coBlock,targetBlock,bodyBlock,depth+1,stack,out,requireComplete);
             if(any){ for(auto& s:out) if(s.collisionObjectBlock==coBlock) s.nestedTransformApplied=true; }
         }
     } else {
@@ -734,8 +739,8 @@ inline void Bounds(const std::vector<float>& positions,float mn[3],float mx[3]){
 
 } // namespace fo3_q6f_collision_detail
 
-inline bool LoadFo3NifCollisionShapesQ6F(const std::string& modelPath,
-                                         std::vector<Fo3NifCollisionShapeQ6F>& outShapes) {
+inline bool LoadFo3NifCollisionShapesImpl(const std::string& modelPath,
+        std::vector<Fo3NifCollisionShapeQ6F>& outShapes,bool requireComplete) {
     using namespace fo3_q6f_collision_detail;
     outShapes.clear();
     std::vector<uint8_t> nif; std::string resolved;
@@ -747,21 +752,25 @@ inline bool LoadFo3NifCollisionShapesQ6F(const std::string& modelPath,
     std::array<size_t,5> kinds{};
     for(uint32_t co=0;co<h.numBlocks;++co){
         const std::string& cot=BlockType(h,co);
-        if(cot!="bhkCollisionObject"&&cot!="bhkBlendCollisionObject"&&cot!="bhkPCollisionObject"&&cot!="bhkSPCollisionObject") continue;
+        if(cot!="bhkCollisionObject"&&cot!="bhkBlendCollisionObject"&&cot!="bhkPCollisionObject"&&cot!="bhkSPCollisionObject") {
+            if(requireComplete&&cot.rfind("bhk",0)==0&&cot.find("CollisionObject")!=std::string::npos)return false;
+            continue;
+        }
         const uint8_t* cod=BlockData(nif,h,co); size_t cos=h.blockSizes[co];
-        if(!cod||cos<10u) continue;
+        if(!cod||cos<10u){if(requireComplete)return false;continue;}
         uint32_t target=ReadLe32(cod+0u), bodyRef=ReadLe32(cod+6u);
-        if(bodyRef>=h.numBlocks) continue;
+        if(bodyRef>=h.numBlocks){if(requireComplete)return false;continue;}
         const std::string& bodyType=BlockType(h,bodyRef);
-        if(bodyType!="bhkRigidBody"&&bodyType!="bhkRigidBodyT") continue;
+        if(bodyType!="bhkRigidBody"&&bodyType!="bhkRigidBodyT"){if(requireComplete)return false;continue;}
         const uint8_t* body=BlockData(nif,h,bodyRef); size_t bodySize=h.blockSizes[bodyRef];
-        if(!body||bodySize<4u) continue;
+        if(!body||bodySize<4u){if(requireComplete)return false;continue;}
         uint32_t rootShape=ReadLe32(body+0u);
-        if(rootShape>=h.numBlocks) continue;
+        if(rootShape>=h.numBlocks){if(requireComplete)return false;continue;}
 
         const size_t before=outShapes.size();
         std::vector<uint32_t> stack;
-        DecodeShape(nif,h,resolved,rootShape,Identity(),co,target,bodyRef,0,stack,outShapes);
+        const bool decoded=DecodeShape(nif,h,resolved,rootShape,Identity(),co,target,bodyRef,0,stack,outShapes,requireComplete);
+        if(requireComplete&&!decoded)return false;
         if(outShapes.size()==before) continue;
         ++collisionObjects;
 
@@ -769,6 +778,8 @@ inline bool LoadFo3NifCollisionShapesQ6F(const std::string& modelPath,
         if(bodyType=="bhkRigidBodyT") bodyApplied=ParseRigidBodyTMatrix(body,bodySize,bodyM);
         Mat4 targetM=Identity(); bool targetApplied=false;
         if(target<h.numBlocks) targetApplied=ParseTargetMatrix(BlockData(nif,h,target),h.blockSizes[target],h,targetM);
+        if(requireComplete&&((bodyType=="bhkRigidBodyT"&&!bodyApplied)||
+                (target!=INVALID_REF&&(target>=h.numBlocks||!targetApplied))))return false;
         const Mat4 outer=Mul(targetApplied?targetM:Identity(),bodyApplied?bodyM:Identity());
 
         for(size_t i=before;i<outShapes.size();++i){
@@ -786,8 +797,22 @@ inline bool LoadFo3NifCollisionShapesQ6F(const std::string& modelPath,
                      mn[0],mn[1],mn[2],mx[0],mx[1],mx[2]);
         }
     }
+    if(requireComplete&&outShapes.empty())return true; // Valid NIF with no authored collision objects.
     if(outShapes.empty()){ Q6F_LOGW("Q6F COLLISION MODEL MISS: model=%s blocks=%u",resolved.c_str(),h.numBlocks); return false; }
     Q6F_LOGI("Q6F COLLISION MODEL READY: model=%s collisionObjects=%zu shapes=%zu triangles=%zu packed=%zu convex=%zu box=%zu sphere=%zu capsule=%zu",
              resolved.c_str(),collisionObjects,outShapes.size(),totalTriangles,kinds[0],kinds[1],kinds[2],kinds[3],kinds[4]);
     return true;
+}
+
+// Ordinary callers retain their permissive supported-shape behavior. Candidate
+// decode distinguishes authored absence from failure and rejects partial chains.
+inline bool LoadFo3NifCollisionShapesQ6F(const std::string& modelPath,
+        std::vector<Fo3NifCollisionShapeQ6F>& out) {
+    return LoadFo3NifCollisionShapesImpl(modelPath,out,false);
+}
+inline bool LoadFo3NifCollisionShapesComplete(const std::string& modelPath,
+        std::vector<Fo3NifCollisionShapeQ6F>& out) {
+    std::vector<Fo3NifCollisionShapeQ6F> next;
+    if(!LoadFo3NifCollisionShapesImpl(modelPath,next,true))return false;
+    out=std::move(next);return true;
 }
