@@ -55,6 +55,8 @@ bool IsFo3TerrainGroundingActiveQ77();
 // Q7.20 renderer; exterior movement promotes one seven-cell strip at a time.
 void ResetFo3TerrainStreamingQ2000();
 bool IsFo3TerrainStreamingCpuBusyQ2000();
+// Read-only acquire probe: parks completed CPU output without consuming/publishing.
+bool IsFo3TerrainStreamingCpuQuiescentQ2000();
 bool IsFo3TerrainStreamingBusyQ2000();
 bool GetFo3TerrainResidentCentreQ2000(int32_t* outGridX, int32_t* outGridY);
 const Fo3TerrainCellQ76* FindFo3TerrainGroundCellQ2000(int32_t gridX, int32_t gridY);

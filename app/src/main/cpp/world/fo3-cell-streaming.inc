@@ -683,11 +683,13 @@ void Q1900ConsumeWorkerSlotQ19(size_t slot) {
 }
 
 void Q1900ConsumeWorkerQ19() {
+    if(Fo3ResidentAssetLaneBlocked())return;
     for (size_t slot = 0u; slot < Q2012_CELL_WORKER_SLOTS; ++slot)
         Q1900ConsumeWorkerSlotQ19(slot);
 }
 
 void Q1900LaunchWorkerQ19(int32_t actualGridX, int32_t actualGridY) {
+    if(Fo3ResidentAssetLaneBlocked())return;
     // Collision/terrain mutate shared caches and remain serialized. Distant
     // LOD is allowed to coexist with visual CELL preparation in Q20.12.
     if (gWorldStreaming.collisionTask || IsFo3TerrainStreamingCpuBusyQ2000()) return;
@@ -1334,6 +1336,7 @@ void Q1930RunCollisionSnapshotTaskQ19(
 }
 
 void Q1900TryPublishCollisionQ19(int32_t actualGridX, int32_t actualGridY) {
+    if(Fo3ResidentAssetLaneBlocked())return;
     if (gWorldStreaming.collisionCentreValid &&
         gWorldStreaming.collisionCentreX == actualGridX &&
         gWorldStreaming.collisionCentreY == actualGridY) {
@@ -1420,6 +1423,7 @@ void Q1900TryPublishCollisionQ19(int32_t actualGridX, int32_t actualGridY) {
 }
 
 void Q1900MaintainTerrainQ19(int32_t actualGridX, int32_t actualGridY) {
+    if(Fo3ResidentAssetLaneBlocked())return;
     int32_t residentX = actualGridX;
     int32_t residentY = actualGridY;
     const bool haveResident =
@@ -1595,6 +1599,7 @@ const char* Q1900CellStageNameQ19(Q1900CellStageQ19 stage) {
 void Q1900UpdateCellStreamingQ19(
         float gameX, float gameY,
         int32_t actualGridX, int32_t actualGridY) {
+    if(Fo3ResidentAssetLaneBlocked())return;
     // Until the live mutation coordinator can prepare the entire replacement,
     // fail closed. Do not seed the old visible window as a new revision or mix
     // current-state metadata with old visuals/collision. Existing live resources

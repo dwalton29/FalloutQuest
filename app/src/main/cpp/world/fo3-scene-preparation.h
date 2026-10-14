@@ -41,8 +41,15 @@ public:
     bool Successful() const { return Ready() && success_; }
     Result& Get() { return *result_; } // render thread only, after Ready()
 
+    bool Active() const { return bool(result_); } // render thread only
+    void RequestCancel() { cancelled_.store(true, std::memory_order_release); }
+    bool TryReset() {
+        RequestCancel();
+        if (Active() && !Ready()) return false;
+        Reset(); return true;
+    }
     void Reset() {
-        cancelled_.store(true, std::memory_order_release);
+        RequestCancel();
         if (worker_.joinable()) worker_.join();
         result_.reset();
         ready_.store(false, std::memory_order_release);

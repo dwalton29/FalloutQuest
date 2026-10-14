@@ -1097,6 +1097,10 @@ bool DrainFo3TerrainStreamingCpuQ2000() {
     return gQ2000Worker == nullptr;
 }
 
+bool IsFo3TerrainStreamingCpuQuiescentQ2000() {
+    return !gQ2000Worker || gQ2000Worker->ready.load(std::memory_order_acquire);
+}
+
 bool IsFo3TerrainStreamingCpuBusyQ2000() {
     return gQ2000Worker != nullptr;
 }

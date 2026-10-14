@@ -4,12 +4,11 @@
 
 - Starting canonical main: `2987d911f318b92d1041257868067851a09d16f0` (v208).
 - Resumed from published `6469dbb872889a79a0682501b75f6ac6577ab547`.
-- Current implementation checkpoint: M1B3h private texture/GPU preparation.
+- Current implementation checkpoint: M1B3i reserved resident asset lane.
   Use canonical main history for the publication SHA; the previous published
-  implementation is M1B3g `ecbd98b85fd3c8979022c2b563f8aa3b6663de5a`.
-- Previous M1B3g Android CI failed on collision-policy macro include order;
-  M1B3h removes that dependency and adds a real collision-TU regression.
-  Last earlier successful Android CI (M1B3f): https://github.com/dwalton29/FalloutQuest/actions/runs/38623116736.
+  implementation is M1B3h `25a7be3006e5eb2b16eaf6d48ffb9319b4f95f71`.
+- Previous M1B3h Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38628279870.
+  It confirms the collision-policy include-order failure from M1B3g is fixed.
 - M1B2 scene-load/stream-in integration is host-validated and pushed; the remote
   tree matches the tested tree `20c0e9cd4d5206190925d30a68408400c6fb1923`. Newer v209 is preserved: 209 / 0.72.0-persistent-player-stats.
 
@@ -29,6 +28,7 @@
 | M1B3e empty collision worlds | `fb8e4024a53cc3d265bed752929d9c9f22dbab62` | Confirmed |
 | M1B3f visual ownership exchange | `5fe5c76d72eb09869df8f479df6781a4f6bd83ba` | Confirmed |
 | M1B3g candidate CPU resources | `ecbd98b85fd3c8979022c2b563f8aa3b6663de5a` | Confirmed; Android include fix in h |
+| M1B3h private texture/GPU preparation | `25a7be3006e5eb2b16eaf6d48ffb9319b4f95f71` | Confirmed |
 
 The user directly confirmed permission to push to main on 2026-10-14. The old
 approval blocker is resolved. Command-line Git cannot authenticate for writes;
@@ -156,7 +156,9 @@ flowchart TD
    M1B3g adds immutable placement deltas and strict incoming CPU resource packets
    (see `world-reference-m1b3g.md`). M1B3h adds strict named-texture decode, private
    GPU staging and transfer to a reversible visual plan (see `world-reference-m1b3h.md`).
-   Scheduler isolation and the outer runtime/resource/actor coordinator remain unfinished. Only then admit source
+   M1B3i reserves the asset lane, drains running jobs, parks ordinary consumers and
+   owns cancellable CPU preparation through ticketed GPU staging (see `world-reference-m1b3i.md`).
+   Queue reconciliation and the outer runtime/resource/actor coordinator remain unfinished. Only then admit source
    Enable/Disable; no success-only handlers are allowed.
 4. M1C+: cross-cell MoveTo/MoveToMarker with original placements/actor handoff,
    spawn identity/lifecycle and Delete; transaction/persistence tests.
@@ -395,3 +397,19 @@ body/Pip-Boy/inventory/skin/opaque/dispatch checks pass. No physical Quest or
 performance claim is made. See `world-reference-m1b3h.md`; scheduling and the
 outer collision/light/interaction/actor/held-object/navigation/LOD coordinator
 remain unfinished, and source world mutation commands remain blocked.
+
+
+## M1B3i validation
+
+The reserved asset lane passes ten world, 29 player and one physics CTest cases
+(40 core host cases). It tests six-family activity drain, owner/stale-ticket
+checks, complete result transfer and allocation failure, nonblocking cooperative
+cancellation, finish races, teardown joins and exhausted ticket rejection. Lane,
+scene preparation, visual exchange and private GPU tests pass ASan/UBSan with
+LeakSanitizer disabled. Source checks verify real scheduler gates, read-only
+readiness probes, immutable worker captures, ticketed GPU admission and release/
+cancellation/context-teardown order. Existing body/Pip-Boy/inventory/skin/opaque/
+render-dispatch/LOD checks pass. See `world-reference-m1b3i.md`; the outer
+collision/light/interaction/actor/held-object/navigation/LOD transaction and
+post-publication queue reconciliation remain unfinished. Enable/Disable remain
+rejected, and no Quest performance claim is made.

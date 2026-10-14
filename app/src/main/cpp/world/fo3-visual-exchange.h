@@ -75,6 +75,7 @@ public:
         return plan;
     }
 
+    bool Applied() const noexcept { return phase_ == Phase::Applied; }
     bool CanCommit(const Objects& live, const VisualPublication& publication) const noexcept {
         return phase_ == Phase::Prepared && Matches(live, publication) && publication.CanAdvance(2);
     }

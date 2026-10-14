@@ -69,7 +69,7 @@ assert 'cache.visualRevision != gFo3VisualPublication.Revision()' in s
 assert 'cachedVisualRevision != 0 && cachedVisualRevision == gFo3VisualPublication.Revision()' in s
 print('Visual ownership epochs precede scene/CELL/retirement teardown and invalidate frame caches')
 
-worker=s[s.index('bool PrepareFo3ResidentCpuResources('):s.index('// Render-thread-only private GPU preparation.')]
+worker=s[s.index('bool PrepareFo3ResidentCpuResources('):s.index('using Fo3ResidentLane=')]
 for forbidden in ('gPlayerSession','gObjects','ConfigureFo3CollisionPolicyQ710',
                   'ResetFo3CollisionSceneCache','PrimeFo3Collision','UploadCpuObject','glGen'):
     assert forbidden not in worker
@@ -112,3 +112,47 @@ for region in (begin,teardown):
     assert region.index('DiscardFo3ResidentGpuStage()') < region.index('DiscardFo3ResidentVisualPlan()')
 assert 'object.residentTextures.reset();' in s[s.index('void Q1900DeleteGpuShape('):s.index('void Q1900CancelPending(')]
 print('Resident texture isolation, worker stamps, private upload admission and context teardown passed')
+
+# The reservation stops ordinary consumers as well as launches. Completed work
+# remains parked rather than advancing collision/visual/terrain publications.
+for source,signature in [
+    (s,'void UpdateFo3ExteriorStreamingQ1890('),
+    (s,'void Q230PumpNpcArrivals(){'),
+    (s,'bool Q1900BeginStream('),
+    (s,'void Q1900AdvanceStream() {'),
+    (s,'void Q1970ConsumeLodWorkersQ19() {'),
+    (s,'void Q1970AdvanceLodGpuQ19() {'),
+    (c,'void Q1900ConsumeWorkerQ19() {'),
+    (c,'void Q1900LaunchWorkerQ19('),
+    (c,'void Q1900TryPublishCollisionQ19('),
+    (c,'void Q1900MaintainTerrainQ19('),
+    (c,'void Q1900UpdateCellStreamingQ19('),
+]:
+    body=source[source.index(signature):].split('{',1)[1]
+    assert 'Fo3ResidentAssetLaneBlocked()' in body[:200],signature
+activity=s[s.index('fo3scene::ResidentAssetActivity CaptureFo3ResidentAssetActivity() {'):s.index('void Q1990RenderNativeLod(bool alphaPass) {')]
+for busy in ('activity.cells','activity.collision','activity.lod','activity.terrain','activity.npc','activity.legacy'):
+    assert busy in activity
+assert 'memory_order_acquire' in activity
+for forbidden in ('Consume','PublishFo3','Reset','glDelete','join('):
+    assert forbidden not in activity
+terrain=Path('app/src/main/cpp/rendering/terrain/fo3-terrain-stream.inc').read_text()
+probe=terrain[terrain.index('bool IsFo3TerrainStreamingCpuQuiescentQ2000() {'):terrain.index('bool IsFo3TerrainStreamingCpuBusyQ2000() {')]
+assert 'memory_order_acquire' in probe and 'Consume' not in probe and 'join(' not in probe
+lane_start=s[s.index('bool StartFo3ResidentCpuPreparation('):s.index('bool TakeFo3ResidentCpuPreparation(')]
+assert lane_start.index('gFo3ResidentLane.Exclusive(ticket)') < lane_start.index('live.reserve(gObjects.size())') < lane_start.index('gFo3ResidentLane.Start(ticket,')
+immutable=lane_start[lane_start.index('[context,scope,publication,visualRevision,ticket,'):]
+for forbidden in ('gObjects','gPlayerSession','gFo3ScenePublication','gFo3VisualPublication','gWorldStreaming'):
+    assert forbidden not in immutable
+assert 'result.assetTicket=ticket' in immutable
+assert 'gFo3ResidentLane.Exclusive(cpu.assetTicket)' in stamp
+cancel=s[s.index('bool CancelFo3ResidentPreparation('):s.index('// Dynamic NPC arrivals use')]
+assert cancel.index('gFo3ResidentLane.Owns(ticket)') < cancel.index('DiscardFo3ResidentGpuStage()') < cancel.index('gFo3ResidentLane.Cancel(ticket)')
+assert cancel.index('gFo3ResidentVisualPlan->Applied()') < cancel.index('DiscardFo3ResidentVisualPlan()')
+release=s[s.index('bool ReleaseFo3ResidentAssetLane('):s.index('bool CancelFo3ResidentPreparation(')]
+assert release.index('gFo3ResidentGpuWork||gFo3ResidentVisualPlan') < release.index('gFo3ResidentLane.Release(ticket)')
+for region in (begin,teardown):
+    assert region.index('ResetFo3ResidentPreparationLane()') < region.index('DiscardFo3ResidentGpuStage()')
+assert 'gFo3LegacyMetadataWorkers.push_back(task)' in s
+assert 'const auto worker=weak.lock()' in activity
+print('Resident asset reservation gates consumers/launches and acquires all six worker families before CPU/GPU use')

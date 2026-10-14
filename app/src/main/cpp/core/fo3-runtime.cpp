@@ -35,6 +35,7 @@
 #include "world/fo3-resident-resources.h"
 #include "world/fo3-resident-texture-upload.h"
 #include "world/fo3-resident-gpu-stage.h"
+#include "world/fo3-resident-preparation-lane.h"
 #include "world/fo3-world-streaming.h"
 void SetNextFo3CollisionExteriorModeQ1931(bool exterior);
 #include <array>
@@ -116,6 +117,10 @@ bool QueueFo3MegatonEntryQ1860();
 #include <vector>
 
 namespace {
+bool Fo3ResidentAssetLaneBlocked();
+bool Fo3ResidentLegacyStreamActive();
+fo3scene::ResidentAssetActivity CaptureFo3ResidentAssetActivity();
+void ResetFo3ResidentPreparationLane();
 void ResetFo3InteriorExposureHistory();
 void PrepareFo3InteriorSceneLights();
 struct GpuObject;
@@ -3156,6 +3161,7 @@ struct Fo3ResidentCpuPreparation {
     fo3scene::ResidentResourceSelection selection;
     fo3scene::PublicationStamp publication;
     uint64_t visualRevision=0;
+    uint64_t assetTicket=0;
     fo3scene::ResidentTextures textures;
     std::vector<CpuObject> incoming;
 };
@@ -3219,6 +3225,65 @@ bool PrepareFo3ResidentCpuResources(const Fo3CellTransitionRequestQ74& request,
     return true;
 }
 
+using Fo3ResidentLane=fo3scene::ResidentPreparationLane<Fo3ResidentCpuPreparation>;
+Fo3ResidentLane gFo3ResidentLane;
+Fo3CellTransitionRequestQ74 gFo3ResidentLaneContext;
+fo3scene::PublicationStamp gFo3ResidentLanePublication;
+uint64_t gFo3ResidentLaneVisualRevision=0;
+bool Fo3ResidentAssetLaneBlocked(){return gFo3ResidentLane.Blocked();}
+void ResetFo3ResidentPreparationLane(){gFo3ResidentLane.Reset();}
+bool Fo3ResidentLaneContextCurrent() {
+    return gSceneReady&&!gSceneLoad.active&&!IsFo3LoadingVisible()&&
+        Fo3AcceptsScenePublication(gFo3ResidentLanePublication)&&
+        gFo3ResidentLaneVisualRevision!=0&&gFo3ResidentLaneVisualRevision==gFo3VisualPublication.Revision()&&
+        gFo3ResidentLaneContext.cellFormId==gCurrentCellFormId&&
+        gFo3ResidentLaneContext.worldspaceFormId==gExteriorWorldspaceQ1890&&
+        gFo3ResidentLaneContext.x==gSceneCenterXQ1730&&gFo3ResidentLaneContext.y==gSceneCenterYQ1730&&
+        gFo3ResidentLaneContext.z==gSceneFloorZQ1730;
+}
+uint64_t AcquireFo3ResidentAssetLane() {
+    if(!gSceneReady||gSceneLoad.active||IsFo3LoadingVisible()||gFo3ResidentVisualPlan||
+        Fo3ResidentLegacyStreamActive()||!gFo3VisualPublication.Revision()||
+        !Fo3AcceptsScenePublication(gFo3ScenePublication.Stamp()))return 0;
+    const auto ticket=gFo3ResidentLane.Acquire();
+    if(!ticket)return 0;
+    gFo3ResidentLaneContext={};gFo3ResidentLaneContext.valid=true;
+    gFo3ResidentLaneContext.cellFormId=gCurrentCellFormId;
+    gFo3ResidentLaneContext.worldspaceFormId=gExteriorWorldspaceQ1890;
+    gFo3ResidentLaneContext.x=gSceneCenterXQ1730;gFo3ResidentLaneContext.y=gSceneCenterYQ1730;
+    gFo3ResidentLaneContext.z=gSceneFloorZQ1730;
+    gFo3ResidentLanePublication=gFo3ScenePublication.Stamp();
+    gFo3ResidentLaneVisualRevision=gFo3VisualPublication.Revision();
+    return ticket;
+}
+bool PollFo3ResidentAssetLane(uint64_t ticket) {
+    if(!gFo3ResidentLane.Owns(ticket)||!Fo3ResidentLaneContextCurrent())return false;
+    return gFo3ResidentLane.Poll(ticket,CaptureFo3ResidentAssetActivity());
+}
+bool StartFo3ResidentCpuPreparation(uint64_t ticket,const Fo3WorldspaceSelection& scope,
+        std::shared_ptr<const fo3world::ReferenceStateSnapshot> candidate,
+        std::vector<uint32_t> affected) {
+    if(!gFo3ResidentLane.Exclusive(ticket)||!Fo3ResidentLaneContextCurrent()||!candidate)return false;
+    auto published=gFo3ScenePublication.Snapshot();
+    std::vector<fo3scene::ResidentVisualRecord> live;live.reserve(gObjects.size());
+    for(const auto& object:gObjects)live.push_back({object.refFormId,object.q1990NativeLod});
+    const auto context=gFo3ResidentLaneContext;
+    const auto publication=gFo3ResidentLanePublication;
+    const auto visualRevision=gFo3ResidentLaneVisualRevision;
+    return gFo3ResidentLane.Start(ticket,[context,scope,publication,visualRevision,ticket,
+            published=std::move(published),candidate=std::move(candidate),
+            live=std::move(live),affected=std::move(affected)](
+            Fo3ResidentCpuPreparation& result,const std::atomic<bool>& cancelled) {
+        std::string error;
+        if(!PrepareFo3ResidentCpuResources(context,scope,publication,visualRevision,
+                published,candidate,live,affected,result,cancelled,error))return false;
+        result.assetTicket=ticket;return true;
+    });
+}
+bool TakeFo3ResidentCpuPreparation(uint64_t ticket,std::unique_ptr<Fo3ResidentCpuPreparation>& packet) {
+    return Fo3ResidentLaneContextCurrent()&&gFo3ResidentLane.Take(ticket,packet);
+}
+
 // Render-thread-only private GPU preparation. The outer coordinator supplies
 // stamps captured with the input visual inventory, before worker preparation.
 struct Fo3ResidentGpuWork {
@@ -3230,7 +3295,8 @@ struct Fo3ResidentGpuWork {
 std::unique_ptr<Fo3ResidentGpuWork> gFo3ResidentGpuWork;
 void DiscardFo3ResidentGpuStage() noexcept {gFo3ResidentGpuWork.reset();}
 bool Fo3ResidentPacketCurrent(const Fo3ResidentCpuPreparation& cpu) {
-    return gSceneReady&&!gSceneLoad.active&&!gFo3ResidentVisualPlan&&
+    return gFo3ResidentLane.Exclusive(cpu.assetTicket)&&Fo3ResidentLaneContextCurrent()&&
+        gSceneReady&&!gSceneLoad.active&&!gFo3ResidentVisualPlan&&
         Fo3AcceptsScenePublication(cpu.publication)&&cpu.visualRevision!=0&&
         cpu.visualRevision==gFo3VisualPublication.Revision()&&
         cpu.request.cellFormId==gCurrentCellFormId&&
@@ -3296,6 +3362,16 @@ fo3scene::GpuStageResult AdvanceFo3ResidentGpuStage(
     if(prepared)completed=std::move(work.cpu);
     DiscardFo3ResidentGpuStage();
     return prepared?Result::Ready:Result::Failed;
+}
+
+bool ReleaseFo3ResidentAssetLane(uint64_t ticket) {
+    if(gFo3ResidentGpuWork||gFo3ResidentVisualPlan)return false;
+    return gFo3ResidentLane.Release(ticket);
+}
+bool CancelFo3ResidentPreparation(uint64_t ticket) {
+    if(!gFo3ResidentLane.Owns(ticket)||(gFo3ResidentVisualPlan&&gFo3ResidentVisualPlan->Applied()))return false;
+    DiscardFo3ResidentGpuStage();DiscardFo3ResidentVisualPlan();
+    return gFo3ResidentLane.Cancel(ticket);
 }
 
 // Dynamic NPC arrivals use the same original ESM/NIF/KF scene-worker pipeline
@@ -3372,6 +3448,7 @@ void AbortFo3SceneLoad(const char* reason) {
 
 bool BeginFo3SceneLoad(const Fo3CellTransitionRequestQ74& request, bool boot) {
     if (gSceneLoad.active) return false;
+    ResetFo3ResidentPreparationLane();
     DiscardFo3ResidentGpuStage();
     DiscardFo3ResidentVisualPlan();
     Q230ResetNpcArrivals();
@@ -4735,6 +4812,8 @@ struct Q1900MetadataTask {
     std::atomic<bool> ready{false};
 };
 
+std::vector<std::weak_ptr<Q1900MetadataTask>> gFo3LegacyMetadataWorkers;
+
 struct Q1900PendingStream {
     bool active = false;
     uint64_t generation = 0u;
@@ -4785,6 +4864,7 @@ struct Q1900PendingStream {
 };
 
 Q1900PendingStream gPendingStreamQ1900;
+bool Fo3ResidentLegacyStreamActive(){return gPendingStreamQ1900.active;}
 bool gQ1920LatestGridValid = false;
 int32_t gQ1920LatestGridX = 0;
 int32_t gQ1920LatestGridY = 0;
@@ -4827,6 +4907,7 @@ void Q1900CancelPending(const char* reason) {
 
 bool Q1900BeginStream(float selectionGameX, float selectionGameY,
                       int32_t targetGridX, int32_t targetGridY) {
+    if(Fo3ResidentAssetLaneBlocked())return false;
     if (!gExteriorStreamingActiveQ1890 || gExteriorStreamBusyQ1890 ||
         gPendingStreamQ1900.active) return false;
 
@@ -4851,6 +4932,11 @@ bool Q1900BeginStream(float selectionGameX, float selectionGameY,
     task->persistentCell = gExteriorPersistentCellQ1890;
     task->selectionGameX = selectionGameX;
     task->selectionGameY = selectionGameY;
+    gFo3LegacyMetadataWorkers.erase(std::remove_if(gFo3LegacyMetadataWorkers.begin(),
+        gFo3LegacyMetadataWorkers.end(),[](const auto& weak){
+            auto job=weak.lock();return !job||job->ready.load(std::memory_order_acquire);
+        }),gFo3LegacyMetadataWorkers.end());
+    gFo3LegacyMetadataWorkers.push_back(task);
     gPendingStreamQ1900.metadata = task;
 
     Q6H_LOGI("Q16.27 STREAM QUEUED: generation=%llu worldspace=%08X persistent=%08X fromGrid=(%d,%d) toGrid=(%d,%d) selection=(%.2f %.2f) retainedWindowLive=1 metadataThread=worker cpuBudget=%zu gpuBudget=%zu",
@@ -4935,6 +5021,7 @@ void Q1900PrepareMetadata() {
 }
 
 void Q1900AdvanceCpu() {
+    if(Fo3ResidentAssetLaneBlocked())return;
     const auto q1800CpuStarted = std::chrono::steady_clock::now();
     size_t budget = Q1900_CPU_PLACEMENTS_PER_FRAME;
     while (budget-- > 0u &&
@@ -4974,6 +5061,7 @@ void Q1900AdvanceCpu() {
 }
 
 void Q1900AdvanceGpu() {
+    if(Fo3ResidentAssetLaneBlocked())return;
     const auto q1800GpuStarted = std::chrono::steady_clock::now();
     size_t budget = Q1900_GPU_SHAPES_PER_FRAME;
     while (budget-- > 0u &&
@@ -5009,6 +5097,7 @@ void Q1900AdvanceGpu() {
 }
 
 void Q1900AdvanceCollision() {
+    if(Fo3ResidentAssetLaneBlocked())return;
     if (gExteriorWorldspaceQ1890 == 0x0000003Cu && gQ1920LatestGridValid &&
         (std::abs(gPendingStreamQ1900.targetGridX - gQ1920LatestGridX) > 1 ||
          std::abs(gPendingStreamQ1900.targetGridY - gQ1920LatestGridY) > 1)) {
@@ -5189,6 +5278,7 @@ void Q1900AdvanceCollision() {
 }
 
 void Q1900AdvanceTerrain() {
+    if(Fo3ResidentAssetLaneBlocked())return;
     const auto q1800TerrainStarted = std::chrono::steady_clock::now();
     static bool q1950TerrainWindowValid = false;
     static uint32_t q1950TerrainWorldspace = 0u;
@@ -5276,6 +5366,7 @@ void Q1900AdvanceTerrain() {
 }
 
 void Q1900CommitWindow() {
+    if(Fo3ResidentAssetLaneBlocked())return;
     const auto q1800CommitStarted = std::chrono::steady_clock::now();
     if (gExteriorWorldspaceQ1890 == 0x0000003Cu && gQ1920LatestGridValid &&
         (std::abs(gPendingStreamQ1900.targetGridX - gQ1920LatestGridX) > 1 ||
@@ -5376,6 +5467,7 @@ void Q1900CommitWindow() {
 }
 
 void Q1900AdvanceStream() {
+    if(Fo3ResidentAssetLaneBlocked())return;
     if (!gPendingStreamQ1900.active) return;
     ++gPendingStreamQ1900.frames;
 
@@ -5441,7 +5533,7 @@ bool DrainFo3TransitionBackgroundWork() {
 }
 
 void UpdateFo3ExteriorStreamingQ1890(float virtualHeadX, float virtualHeadZ) {
-    if (gSceneLoad.active ||
+    if (Fo3ResidentAssetLaneBlocked() || gSceneLoad.active ||
         (IsFo3LoadingVisible() && !gQ2013ExteriorWarmupPending)) return;
     static std::chrono::steady_clock::time_point q1970PreviousUpdate{};
     static uint64_t q1970PreviousLodUs = 0u;
@@ -6962,6 +7054,7 @@ void Q2010AdvanceVisibleNativeLodWindow() {
 
 void Q1990EnsureNativeLodForCell(int32_t cellX, int32_t cellY,
                                  float centerX, float centerY, float floorZ) {
+    if(Fo3ResidentAssetLaneBlocked())return;
     const bool sameOrigin = gQ1990NativeLodOriginValid &&
         std::fabs(gQ1990NativeLodCenterX - centerX) < 0.01f &&
         std::fabs(gQ1990NativeLodCenterY - centerY) < 0.01f &&
@@ -7271,6 +7364,7 @@ void Q1970RunLodWorkerQ19(
 }
 
 void Q1970ConsumeLodWorkersQ19() {
+    if(Fo3ResidentAssetLaneBlocked())return;
     for (size_t slot = 0u; slot < Q2013_LOD_WORKER_SLOTS; ++slot) {
         auto& worker = gQ2013LodWorkersQ19[slot];
         if (!worker || !worker->ready.load(std::memory_order_acquire)) continue;
@@ -7333,6 +7427,7 @@ void Q1970ConsumeLodWorkersQ19() {
 }
 
 void Q1970AdvanceLodGpuQ19() {
+    if(Fo3ResidentAssetLaneBlocked())return;
     if (gQ2013LodUploadsQ19.empty()) return;
 
     // Drop work that fell outside the current authored horizon before it can
@@ -7612,6 +7707,7 @@ bool Q2023ChooseMissingAuthoredLodQ19(
 
 void Q1970AdvanceNativeLodQ19(int32_t cellX, int32_t cellY,
                               float centerX, float centerY, float floorZ) {
+    if(Fo3ResidentAssetLaneBlocked())return;
     // Q20.23A: persistent gate telemetry. Previous LOD diagnostics were mostly
     // transition/change driven, so by the time logcat was inspected the useful
     // lines could already have rolled out of the buffer.
@@ -7796,6 +7892,23 @@ void Q1970AdvanceNativeLodQ19(int32_t cellX, int32_t cellY,
                  bootstrapReady);
         std::thread([task]() { Q1970RunLodWorkerQ19(task); }).detach();
     }
+}
+
+fo3scene::ResidentAssetActivity CaptureFo3ResidentAssetActivity() {
+    fo3scene::ResidentAssetActivity activity;
+    for(const auto& worker:gWorldStreaming.workers)
+        if(worker&&!worker->ready.load(std::memory_order_acquire))activity.cells=true;
+    activity.collision=gWorldStreaming.collisionTask&&
+        !gWorldStreaming.collisionTask->ready.load(std::memory_order_acquire);
+    for(const auto& worker:gQ2013LodWorkersQ19)
+        if(worker&&!worker->ready.load(std::memory_order_acquire))activity.lod=true;
+    activity.terrain=!IsFo3TerrainStreamingCpuQuiescentQ2000();
+    activity.npc=gQ230NpcArrival.active&&!gQ230NpcArrival.preparation.Ready();
+    for(const auto& weak:gFo3LegacyMetadataWorkers) {
+        const auto worker=weak.lock();
+        if(worker&&!worker->ready.load(std::memory_order_acquire))activity.legacy=true;
+    }
+    return activity;
 }
 
 void Q1990RenderNativeLod(bool alphaPass) {
@@ -11413,6 +11526,7 @@ static void Q230TickUnloadedActors(float hour) {
 // NAVM, KF and furniture data off-thread. Do not touch OpenGL or gQ230NpcActors
 // in the worker: all GPU upload and vector publication stay on the main frame.
 void Q230PumpNpcArrivals(){
+    if(Fo3ResidentAssetLaneBlocked())return;
     if(!gSceneReady||gSceneLoad.active||!gPlayerSession||
        gPlayerSession->saveBlocked||IsFo3LoadingVisible())return;
     auto& work=gQ230NpcArrival;
@@ -13354,6 +13468,7 @@ void Q1280ShutdownPostQ1280() {
 void Q6HDeleteFramebuffers(GLsizei n, const GLuint* framebuffers) {
     // Release staged/displaced ownership while this GL context and its shared
     // geometry/texture caches are still alive.
+    ResetFo3ResidentPreparationLane();
     DiscardFo3ResidentGpuStage();
     DiscardFo3ResidentVisualPlan();
     FlushFo3PlayerState();
