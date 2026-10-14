@@ -4,7 +4,15 @@
 
 - Starting canonical main: `2987d911f318b92d1041257868067851a09d16f0` (v208).
 - M0 committed locally: `2310bbe9028c583053d846bf762039a8ce1d1a1a` (version remains v208).
-- M1A query checkpoint: implemented and host-validated; commit SHA is recorded after committing below.
+- Latest completed implementation: **M1A** `4670209591a3a36b2c2c2caf0847521982988049`.
+- Version remains v208; no APK/version bump or full M1 completion is claimed.
+
+| Checkpoint | Local main commit | Push |
+| --- | --- | --- |
+| M0 audit | `2310bbe9028c583053d846bf762039a8ce1d1a1a` | Rejected by automatic approval review |
+| M1A queries | `4670209591a3a36b2c2c2caf0847521982988049` | Not attempted after rejection; waiting for direct user confirmation |
+
+
 - Remote recovery point is still v208 `2987d911f318b92d1041257868067851a09d16f0`.
 - **Push blocked:** automatic approval review rejected both attempts, including
   after the GitHub connector confirmed owner `dwalton29`, admin/push permission,
@@ -112,8 +120,11 @@ flowchart TD
 
 ## Next checkpoints
 
-1. M0 audit checkpoint validated; commit records its recovery SHA in the next checkpoint.
-   Deeper operand/control-flow semantics remain M5, not completed VM support.
+1. Publishing is blocked. Obtain direct user confirmation for these code and
+   extracted-metadata commits to public `dwalton29/FalloutQuest/main`; then push,
+   verify remote SHAs, and inspect the Android CI build. Do not claim completion
+   of the requested pushed-recovery checkpoints until that succeeds.
+   M0 deeper bytecode operands/control flow remain M5 work, not a completed VM.
 2. M1A implemented: sparse XESP catalogue and bounded fail-closed GetDisabled
    shared by CTDA/source, independent of residency/target pruning. All 5,502
    original children resolve. No mutable state, save version or fingerprint
@@ -149,3 +160,22 @@ flowchart TD
 - Original dependencies supplied: Fallout3.esm, executable, INIs, shader/mesh/
   texture archives and Misc BSA. Inspect original assets as commands need them;
   never add their binaries to GitHub.
+
+## Reproduce this checkpoint
+
+```sh
+cmake -S tests/player -B /tmp/fq-player
+cmake --build /tmp/fq-player --parallel 4
+ctest --test-dir /tmp/fq-player --output-on-failure
+/tmp/fq-player/event_script_tests <Fallout3.esm> /tmp/source-inventory.json
+/tmp/fq-player/dialogue_tests <Fallout3.esm>
+/tmp/fq-player/player_state_tests <Fallout3.esm>
+python3 tests/player/test_scripting_audit.py
+```
+
+The original-data arguments are mandatory to rerun the 5,502-reference, bomb,
+Lucas and real catalogue regressions; plain CTest uses synthetic fixtures.
+Additional host suites use the same configure/build/ctest pattern for world,
+physics, assets, nif and audio. Original XTEL validation takes the master path
+as the first argument to `xtel_index_tests`. No original game assets are stored
+in the repository or reports. All reports contain metadata, never binary code.
