@@ -1367,7 +1367,20 @@ bool ResolveFo3PlayerMotionLegacyQ716(float currentX, float currentZ,
                  gPlayerCollisionReady ? 1 : 0);
         return true;
     }
-    if (!gPlayerCollisionReady || gWorldTriangles.empty()) return false;
+    if (!gPlayerCollisionReady) return false;
+    // An admitted in-place mutation may remove the last authored surface. Keep
+    // the established no-ground height policy, allow horizontal motion and use
+    // actual LAND when available. Do not run CELL arrival rescue in this state.
+    if (gWorldTriangles.empty()) {
+        *outX = desiredX;
+        *outZ = desiredZ;
+        *outPlayerYOffset = currentPlayerYOffset;
+        float terrainOffset = currentPlayerYOffset;
+        if (gExteriorAllBhksQ78A &&
+            SampleFo3TerrainGroundQ77(desiredX, desiredZ, &terrainOffset) &&
+            std::isfinite(terrainOffset)) *outPlayerYOffset = terrainOffset;
+        return true;
+    }
 
     ++gResolveCounter;
 
@@ -1678,7 +1691,8 @@ bool Q1930AssembleCachedAuthored(
             snapshot.kindCounts[i] += entry.kindCounts[i];
         entry.lastUse = ++gQ1990CollisionCacheSerial;
     }
-    return !snapshot.triangles.empty();
+    // Completion is separate from surface count: all references may be disabled.
+    return true;
 }
 
 void Q1930BuildShapes(Q1930PreparedCollisionSnapshot& snapshot) {
@@ -1881,7 +1895,7 @@ static bool PrepareFo3CollisionSnapshotInternal(
         uint64_t* outToken, bool exterior, uint32_t cellFormId,
         const Fo3CollisionMutationState* mutation = nullptr) {
     if (outToken) *outToken = 0u;
-    if (!outToken || placements.empty() || unitsPerMetre <= 0.0f) return false;
+    if (!outToken || (!mutation && placements.empty()) || unitsPerMetre <= 0.0f) return false;
 
     // Priming and snapshot construction are serialized by Q19.3's scheduler.
     // Guard against a context mismatch rather than rebuilding transformed data.
@@ -1907,13 +1921,14 @@ static bool PrepareFo3CollisionSnapshotInternal(
 
     auto phaseStarted = std::chrono::steady_clock::now();
     const bool assembled = Q1930AssembleCachedAuthored(placements, *snapshot);
+    const bool usable = assembled && (mutation ? !snapshot->capped : !snapshot->triangles.empty());
     if (!exterior) Q6G_LOGI("INTERIOR COLLISION SOURCE: cell=%08X mode=interior policy=all-authored-static-bhk inputPlacements=%zu staticEligible=%zu dynamicExcluded=%zu bhkAttempts=%zu bhkSuccess=%zu bhkMissing=%zu successfulPlacements=%zu triangles=%zu nonSolidFiltered=%zu capped=%d ready=%d",
         cellFormId, snapshot->inputPlacements, snapshot->staticEligible,
         snapshot->dynamicExcluded, snapshot->staticEligible, snapshot->decodedPlacements,
         snapshot->bhkMissing, snapshot->placementCount, snapshot->triangles.size(),
-        snapshot->nonSolidFiltered, snapshot->capped ? 1 : 0, assembled ? 1 : 0);
+        snapshot->nonSolidFiltered, snapshot->capped ? 1 : 0, usable ? 1 : 0);
     if (snapshot->capped) Q6G_LOGW("COLLISION SAFETY CAP: cell=%08X exterior=%d placements=%zu triangles=%zu", cellFormId, exterior ? 1 : 0, snapshot->placementCount, snapshot->triangles.size());
-    if (!assembled || (mutation && snapshot->capped)) return false;
+    if (!usable) return false;
     if (mutation) {
         snapshot->collectedRefs = mutation->collected;
         auto& triangles = snapshot->triangles;
@@ -1923,8 +1938,6 @@ static bool PrepareFo3CollisionSnapshotInternal(
                 return source != snapshot->surfaceSources.end() &&
                        mutation->collected.count(source->second.refFormId);
             }), triangles.end());
-        // Do not represent an unavailable/empty controller as a working world.
-        if (triangles.empty()) return false;
         snapshot->triangleCount = triangles.size();
         snapshot->expectedRevision = mutation->revision;
         snapshot->exchangeReady = true;
@@ -2226,7 +2239,7 @@ bool SetFo3DoorCollisionTransformQ2400(uint32_t refFormId,const float transform[
 
 bool HasFo3InteractionOccluder(float ox,float oy,float oz,float dx,float dy,float dz,
                               float distance,uint32_t targetRef) {
-    if (distance<=0.01f) return false;
+    if (distance<=0.01f || !gPlayerCollisionReady || gWorldTriangles.empty()) return false;
     const fo3interaction::Point origin{ox,oy,oz},direction{dx,dy,dz};
     const float endX=ox+dx*distance,endZ=oz+dz*distance;
     auto blocked=[&](uint32_t index) {
@@ -2264,8 +2277,17 @@ bool ResolveFo3DynamicBoxQ225(
         !outNormalX || !outNormalY || !outNormalZ ||
         !outContacts || !outCandidates ||
         !(broadRadius > 0.0f) ||
-        !gPlayerCollisionReady || gWorldTriangles.empty()) {
+        !gPlayerCollisionReady) {
         return false;
+    }
+
+    if (gWorldTriangles.empty()) {
+        // The integrator supplies gravity and the desired pose. An empty world
+        // resolves that pose without contacts, normals or broadphase candidates.
+        *outX = desiredX; *outY = desiredY; *outZ = desiredZ;
+        *outNormalX = *outNormalY = *outNormalZ = 0.0f;
+        *outContacts = *outCandidates = 0u;
+        return true;
     }
 
     auto dot3 = [](Vec3 a, Vec3 b) {
@@ -2444,14 +2466,13 @@ bool ResolveFo3DynamicBoxQ225(
 }
 
 bool IsFo3PlayerCollisionReadyQ6G() {
-    return gPlayerCollisionReady && !gWorldTriangles.empty();
+    return gPlayerCollisionReady;
 }
 
 bool SampleFo3ActorGroundQ240(float x, float z, float referenceY,
                               float* outGroundY) {
     if (!outGroundY || !std::isfinite(x) || !std::isfinite(z) ||
-        !std::isfinite(referenceY) || !gPlayerCollisionReady ||
-        gWorldTriangles.empty()) return false;
+        !std::isfinite(referenceY) || !gPlayerCollisionReady) return false;
 
     bool found = false;
     float bestY = referenceY;
@@ -2471,7 +2492,8 @@ bool SampleFo3ActorGroundQ240(float x, float z, float referenceY,
     if (FindGroundWide(x, z, referenceY, authoredY)) consider(authoredY);
 
     float terrainOffset = 0.0f;
-    if (SampleFo3TerrainGroundQ77(x, z, &terrainOffset))
+    if ((!gWorldTriangles.empty() || gExteriorAllBhksQ78A) &&
+        SampleFo3TerrainGroundQ77(x, z, &terrainOffset))
         consider(gCollisionFloorY + terrainOffset);
 
     if (!found) return false;

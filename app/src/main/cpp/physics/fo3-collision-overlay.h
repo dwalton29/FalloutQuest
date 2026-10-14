@@ -69,7 +69,7 @@ Fo3CollisionMutationState CaptureFo3CollisionMutationState();
 // Placements must already reflect the candidate enable-parent projection and
 // have prewarmed authored bhk data in the current transform context. Collected
 // references are a copied transaction input, never read from live Player state.
-// Empty/capped worlds are rejected pending complete empty-world query support.
+// Empty selections are valid prepared worlds; capped/unprimed worlds reject.
 bool PrepareFo3CollisionMutationSnapshot(
     const std::vector<Fo3WorldPlacement>& placements,
     float centerX, float centerY, float floorZ,
@@ -93,6 +93,8 @@ bool ResolveFo3PlayerMotionQ6G(float currentX, float currentZ,
                                float* outX, float* outZ,
                                float* outPlayerYOffset);
 
+// Ready means a world was published, including an intentionally empty world.
+// It does not imply a ground surface exists. Shutdown/uninitialized stays false.
 bool IsFo3PlayerCollisionReadyQ6G();
 
 // Resident actors use NAVM for route topology but the visible root height must

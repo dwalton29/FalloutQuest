@@ -4399,8 +4399,8 @@ bool ResolveFo3PlayerMotionQ6G(float currentX, float currentZ,
                  gPlayerCollisionReady ? 1 : 0);
         return true;
     }
-    if (!gPlayerCollisionReady || gWorldTriangles.empty()) return false;
-    if (!gExteriorAllBhksQ78A || !gSafeSpawnResolved) {
+    if (!gPlayerCollisionReady) return false;
+    if (gWorldTriangles.empty() || !gExteriorAllBhksQ78A || !gSafeSpawnResolved) {
         return ResolveFo3PlayerMotionLegacyQ716(currentX, currentZ, desiredX, desiredZ,
                                                 currentPlayerYOffset, outX, outZ, outPlayerYOffset);
     }

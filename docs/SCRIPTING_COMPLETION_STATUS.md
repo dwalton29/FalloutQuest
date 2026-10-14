@@ -4,10 +4,10 @@
 
 - Starting canonical main: `2987d911f318b92d1041257868067851a09d16f0` (v208).
 - Resumed from published `6469dbb872889a79a0682501b75f6ac6577ab547`.
-- Current implementation checkpoint: M1B3d whole-script candidate transactions.
+- Current implementation checkpoint: M1B3e empty collision worlds.
   Use canonical main history for the publication SHA; the previous published
-  implementation is M1B3c `0e9dd258701f9aca48de66acae3994129d20c6d3`.
-- Previous M1B3c Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38616664379.
+  implementation is M1B3d `bff707b126122bb9853f855fc7ba72e65f82722f`.
+- Previous M1B3d Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38619791950.
 - M1B2 scene-load/stream-in integration is host-validated and pushed; the remote
   tree matches the tested tree `20c0e9cd4d5206190925d30a68408400c6fb1923`. Newer v209 is preserved: 209 / 0.72.0-persistent-player-stats.
 
@@ -23,6 +23,7 @@
 | M1B3a scene publication admission | `86ddd9c407482207aab7799760259a8f643dfcd6` | Confirmed |
 | M1B3b reversible collision exchange | `61d1481b8a9bd75a78dc1ea37192da1fc2a6665b` | Confirmed |
 | M1B3c detached reference plans | `0e9dd258701f9aca48de66acae3994129d20c6d3` | Confirmed |
+| M1B3d whole-script candidates | `bff707b126122bb9853f855fc7ba72e65f82722f` | Confirmed |
 
 The user directly confirmed permission to push to main on 2026-10-14. The old
 approval blocker is resolved. Command-line Git cannot authenticate for writes;
@@ -144,7 +145,8 @@ flowchart TD
    resident outer-transaction/resource coordinator and actor/held-object/
    navigation coordination. M1B3a adds stale-work admission; M1B3b adds reversible
    collision; M1B3c adds detached reference plans; M1B3d stages whole-script state
-   and queued effects (see `world-reference-m1b3d.md`). Runtime resource integration
+   and queued effects (see `world-reference-m1b3d.md`); M1B3e supports empty
+   collision mutations and queries (see `world-reference-m1b3e.md`). Runtime resource integration
    remains unfinished. Only then admit source
    Enable/Disable; no success-only handlers are allowed.
 4. M1C+: cross-cell MoveTo/MoveToMarker with original placements/actor handoff,
@@ -338,3 +340,12 @@ graph, Lucas/MS11 dialogue and catalogue/census/save regressions pass. The two
 plan suites pass ASan/UBSan with LeakSanitizer disabled for this traced runtime.
 Scene publication source checks and four scripting audit tests pass. See
 `world-reference-m1b3d.md` for the remaining resident coordinator boundary.
+
+## M1B3e validation
+
+Rebuilt collision tests, six world and 29 player cases pass (36 total). Empty
+interior/exterior queries, re-enable, stale-token rejection and allocation-free
+exchange/rollback pass. Original Common House whole-world removal/restoration
+retains all 1,715 fixture triangles and the exact prior buffers. Synthetic and
+original collision cases pass ASan/UBSan with LeakSanitizer disabled. See
+`world-reference-m1b3e.md` for query behavior and the remaining coordinator.
