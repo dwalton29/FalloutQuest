@@ -1809,7 +1809,8 @@ bool TryLoadShape(const std::vector<uint8_t>& nif, const NifHeader& header,
 } // namespace
 
 bool LoadFo3StaticNifMeshes(const std::string& modelPath,
-                            std::vector<Fo3StaticNifMesh>& outMeshes) {
+                            std::vector<Fo3StaticNifMesh>& outMeshes,
+                            bool requireComplete) {
     outMeshes.clear();
 
     std::vector<uint8_t> nif;
@@ -1834,6 +1835,7 @@ bool LoadFo3StaticNifMeshes(const std::string& modelPath,
              q970Scene.hiddenShapes, q970Scene.unparentedShapes,
              q970Scene.fallbackAll ? 1 : 0);
 
+    if (requireComplete && (!q970SelectionReady || q970Scene.fallbackAll)) return false;
     NifTransform rootTransform;
     std::vector<uint32_t> rootChildren;
     bool haveRoot = false;
@@ -1931,6 +1933,10 @@ bool LoadFo3StaticNifMeshes(const std::string& modelPath,
     }
 
     Q6H_LOGI("Q10.9 NIF COVERAGE: model=%s shapeBlocks=%zu rendered=%zu shapeObjectReject=%zu shapeLoadReject=%zu fallbackDiffuse=%zu", resolved.c_str(), q1060ShapeBlocks, outMeshes.size(), q1060ShapeObjectFailures, q1060ShapeLoadFailures, q1060FallbackDiffuse);
+    if (requireComplete && (q1060ShapeObjectFailures || q1060ShapeLoadFailures)) {
+        outMeshes.clear();
+        return false;
+    }
     if (outMeshes.empty()) {
         Q6H_LOGW("Q6H NIF NO SUPPORTED STATIC SHAPE: %s blocks=%u", resolved.c_str(), header.numBlocks);
         return false;

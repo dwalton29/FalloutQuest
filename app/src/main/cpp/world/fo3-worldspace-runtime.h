@@ -12,6 +12,8 @@ struct Fo3WorldspaceSelection {
     float gameX = 0.0f;
     float gameY = 0.0f;
     int gridRadius = -1;
+    // In-place selection allows empty results and requires all active base IDs.
+    bool candidateSelection = false;
 };
 
 bool LoadFo3WorldspacePlacements(

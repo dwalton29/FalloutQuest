@@ -85,8 +85,11 @@ struct Fo3StaticNifMesh {
 // Loads every fully renderable NiTriStrips/NiTriShape geometry block in an
 // arbitrary Fallout 3 NIF, preserving each shape as its own material draw.
 // Unsupported shapes are skipped without discarding the rest of the model.
+// Candidate resources require a validated scenegraph and every selected known
+// geometry block to decode. Ordinary rendering preserves its permissive mode.
 bool LoadFo3StaticNifMeshes(const std::string& modelPath,
-                            std::vector<Fo3StaticNifMesh>& outMeshes);
+                            std::vector<Fo3StaticNifMesh>& outMeshes,
+                            bool requireComplete = false);
 
 // Compatibility helper used by earlier milestones: returns the first supported
 // renderable shape from the same generalized loader.

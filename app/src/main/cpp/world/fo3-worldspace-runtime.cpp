@@ -867,6 +867,7 @@ bool LoadFo3WorldspacePlacements(const Fo3WorldspaceSelection& selection,
         else ++disabled;
     }
 
+    if (selection.candidateSelection && active.empty()) return true;
     std::unordered_set<uint32_t> wanted;
     for (const RawPlacementQ75* p : active) if (p->baseFormId != 0u) wanted.insert(p->baseFormId);
     std::unordered_map<uint32_t, BaseRecordQ75> bases;
@@ -878,6 +879,10 @@ bool LoadFo3WorldspacePlacements(const Fo3WorldspaceSelection& selection,
         return false;
     }
 
+    if (selection.candidateSelection && bases.size() != wanted.size()) {
+        Q75_LOGE("RESIDENT PLACEMENT FAILED: unresolved active base records");
+        return false;
+    }
     std::unordered_map<uint32_t, const CellInfoQ75*> cellInfoByFormQ1800;
     cellInfoByFormQ1800.reserve(cells.size());
     for (const CellInfoQ75& cell : cells) cellInfoByFormQ1800[cell.formId] = &cell;
@@ -953,7 +958,7 @@ bool LoadFo3WorldspacePlacements(const Fo3WorldspaceSelection& selection,
     }
     // Q19 radius-0 requests must also succeed for authored empty CELLs so
     // residency can advance without retrying a nonexistent visual payload.
-    if (selection.gridRadius == 0) return true;
+    if (selection.gridRadius == 0 || selection.candidateSelection) return true;
     return !outPlacements.empty();
 }
 

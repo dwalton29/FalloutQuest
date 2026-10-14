@@ -24,11 +24,13 @@ struct Fo3CellTransitionRequestQ74 {
 };
 
 // CPU-only entry points: no terrain teardown or collision-policy mutation.
+// Candidate selection permits empty results and rejects unresolved active bases.
 bool ResolveFo3MegatonEntryQ1860(Fo3CellTransitionRequestQ74& outRequest,
                                const std::atomic<bool>* cancelled = nullptr);
 bool LoadFo3ScenePlacements(const Fo3CellTransitionRequestQ74& request,
                            std::vector<Fo3WorldPlacement>& outPlacements,
-                           const fo3world::ReferenceStateSnapshot* referenceState = nullptr);
+                           const fo3world::ReferenceStateSnapshot* referenceState = nullptr,
+                           bool candidateSelection = false);
 // Render thread publishes a resolved startup context before finalization.
 void SetFo3TransitionContextQ74(const Fo3CellTransitionRequestQ74& request);
 

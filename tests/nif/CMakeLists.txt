@@ -69,3 +69,10 @@ add_executable(furniture_asset_tests furniture_asset_tests.cpp ../../app/src/mai
 target_compile_features(furniture_asset_tests PRIVATE cxx_std_17)
 target_include_directories(furniture_asset_tests PRIVATE . ../../app/src/main/cpp ../../app/src/main/cpp/data ../../app/src/main/cpp/npc)
 add_test(NAME furniture_asset_tests COMMAND furniture_asset_tests)
+
+add_executable(strict_original_nif_tests strict_original_nif_tests.cpp ../../app/src/main/cpp/npc/fo3-actor-animation.cpp)
+target_compile_features(strict_original_nif_tests PRIVATE cxx_std_17)
+target_compile_options(strict_original_nif_tests PRIVATE -Wall -Wextra -Werror -Wno-unused-function -UNDEBUG)
+target_include_directories(strict_original_nif_tests PRIVATE . ../../app/src/main/cpp/data ../../app/src/main/cpp/npc)
+add_test(NAME strict_original_nif_tests COMMAND strict_original_nif_tests)
+set_tests_properties(strict_original_nif_tests PROPERTIES SKIP_RETURN_CODE 77)

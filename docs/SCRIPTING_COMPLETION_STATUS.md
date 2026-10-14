@@ -4,10 +4,10 @@
 
 - Starting canonical main: `2987d911f318b92d1041257868067851a09d16f0` (v208).
 - Resumed from published `6469dbb872889a79a0682501b75f6ac6577ab547`.
-- Current implementation checkpoint: M1B3f reversible resident visual ownership.
+- Current implementation checkpoint: M1B3g candidate placement/CPU resources.
   Use canonical main history for the publication SHA; the previous published
-  implementation is M1B3e `fb8e4024a53cc3d265bed752929d9c9f22dbab62`.
-- Previous M1B3e Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38621251834.
+  implementation is M1B3f `5fe5c76d72eb09869df8f479df6781a4f6bd83ba`.
+- Previous M1B3f Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38623116736.
 - M1B2 scene-load/stream-in integration is host-validated and pushed; the remote
   tree matches the tested tree `20c0e9cd4d5206190925d30a68408400c6fb1923`. Newer v209 is preserved: 209 / 0.72.0-persistent-player-stats.
 
@@ -25,6 +25,7 @@
 | M1B3c detached reference plans | `0e9dd258701f9aca48de66acae3994129d20c6d3` | Confirmed |
 | M1B3d whole-script candidates | `bff707b126122bb9853f855fc7ba72e65f82722f` | Confirmed |
 | M1B3e empty collision worlds | `fb8e4024a53cc3d265bed752929d9c9f22dbab62` | Confirmed |
+| M1B3f visual ownership exchange | `5fe5c76d72eb09869df8f479df6781a4f6bd83ba` | Confirmed |
 
 The user directly confirmed permission to push to main on 2026-10-14. The old
 approval blocker is resolved. Command-line Git cannot authenticate for writes;
@@ -149,8 +150,9 @@ flowchart TD
    and queued effects (see `world-reference-m1b3d.md`); M1B3e supports empty
    collision mutations and queries (see `world-reference-m1b3e.md`); M1B3f adds
    reversible visual ownership and cache/lifetime guards (see `world-reference-m1b3f.md`).
-   Candidate resource preparation and runtime integration remain unfinished.
-   Only then admit source
+   M1B3g adds immutable placement deltas and strict incoming CPU resource packets
+   (see `world-reference-m1b3g.md`). Texture/GPU staging, scheduler isolation and
+   the outer runtime/resource/actor coordinator remain unfinished. Only then admit source
    Enable/Disable; no success-only handlers are allowed.
 4. M1C+: cross-cell MoveTo/MoveToMarker with original placements/actor handoff,
    spawn identity/lifecycle and Delete; transaction/persistence tests.
@@ -362,3 +364,15 @@ scene/CELL/teardown epoch ordering and cache invalidation source checks pass,
 along with opaque/LOD/dispatch checks and C++ GL-cache/reflection policy tests.
 Actual native GL/headset validation remains separate. See `world-reference-m1b3f.md`;
 the full candidate resource/actor/held-object coordinator is still unfinished.
+
+## M1B3g validation
+
+Candidate placement/CPU preparation passes eight world, 29 player and one physics
+case (38 core host cases). Ten NIF no-argument cases pass; three original-data
+cases skip in bare CTest. Original MS11 detonator planning and the separate Common
+House multi-part NIF/CPU test pass, including rejection of in-memory partial
+geometry corruption. Selector/placement and original ESM/NIF cases pass ASan/UBSan
+with LeakSanitizer disabled. Relevant scene/CPU/opaque/dispatch source checks pass.
+See `world-reference-m1b3g.md`; no candidate GPU publication or world-command
+admission is claimed. Continue with texture/GPU staging and the scheduler/outer
+coordinator, preserving the fixed scene origin and explicit current residency scope.

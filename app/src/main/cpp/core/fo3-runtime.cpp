@@ -32,6 +32,7 @@
 #include "world/fo3-scene-preparation.h"
 #include "world/fo3-scene-publication.h"
 #include "world/fo3-visual-exchange.h"
+#include "world/fo3-resident-resources.h"
 #include "world/fo3-world-streaming.h"
 void SetNextFo3CollisionExteriorModeQ1931(bool exterior);
 #include <array>
@@ -1857,7 +1858,8 @@ float MaxModelExtent(const Fo3StaticNifMesh& mesh) {
     return std::max({maximum.x - minimum.x, maximum.y - minimum.y, maximum.z - minimum.z});
 }
 
-bool BuildCpuObjects(const Fo3WorldPlacement& placement, std::vector<CpuObject>& outs) {
+bool BuildCpuObjects(const Fo3WorldPlacement& placement, std::vector<CpuObject>& outs,
+                     bool requireComplete = false) {
     outs.clear();
 
     // Q20.12: detailed CELLs can build in parallel. Keep parsed NIFs immutable
@@ -1866,18 +1868,19 @@ bool BuildCpuObjects(const Fo3WorldPlacement& placement, std::vector<CpuObject>&
     using Q2012CachedMeshes =
         std::shared_ptr<const std::vector<Fo3StaticNifMesh>>;
     static std::mutex modelCacheMutex;
-    static std::unordered_map<std::string, Q2012CachedMeshes> modelCache;
-
+    static std::unordered_map<std::string, Q2012CachedMeshes> ordinaryCache, completeCache;
+    auto& modelCache = requireComplete ? completeCache : ordinaryCache;
+    const std::string& cacheKey = placement.modelPath;
     Q2012CachedMeshes cachedMeshes;
     {
         std::lock_guard<std::mutex> lock(modelCacheMutex);
-        const auto cached = modelCache.find(placement.modelPath);
+        const auto cached = modelCache.find(cacheKey);
         if (cached != modelCache.end()) cachedMeshes = cached->second;
     }
 
     if (!cachedMeshes) {
         std::vector<Fo3StaticNifMesh> meshes;
-        if (!LoadFo3StaticNifMeshes(placement.modelPath, meshes)) return false;
+        if (!LoadFo3StaticNifMeshes(placement.modelPath, meshes, requireComplete)) return false;
         auto candidate = std::make_shared<const std::vector<Fo3StaticNifMesh>>(
             std::move(meshes));
         bool inserted = false;
@@ -1885,7 +1888,7 @@ bool BuildCpuObjects(const Fo3WorldPlacement& placement, std::vector<CpuObject>&
         {
             std::lock_guard<std::mutex> lock(modelCacheMutex);
             const auto result =
-                modelCache.emplace(placement.modelPath, candidate);
+                modelCache.emplace(cacheKey, candidate);
             cachedMeshes = result.first->second;
             inserted = result.second;
             uniqueModels = modelCache.size();
@@ -1909,6 +1912,7 @@ bool BuildCpuObjects(const Fo3WorldPlacement& placement, std::vector<CpuObject>&
         if (!(extent >= 1.0f && extent <= MAX_MODEL_EXTENT_UNITS)) {
             Q6H_LOGW("Q7.16 STATIC SKIP SIZE: ref=%08X model=%s shape=%zu extent=%.1f",
                      placement.refFormId, placement.modelPath.c_str(), shapeIndex++, extent);
+            if (requireComplete) { outs.clear(); return false; }
             continue;
         }
 
@@ -1918,6 +1922,7 @@ bool BuildCpuObjects(const Fo3WorldPlacement& placement, std::vector<CpuObject>&
             mesh.bitangents.size() / 3u != vertexCount ||
             mesh.texcoords.size() / 2u != vertexCount) {
             ++shapeIndex;
+            if (requireComplete) { outs.clear(); return false; }
             continue;
         }
 
@@ -3090,6 +3095,54 @@ bool RollbackFo3ResidentVisualPlan() noexcept {
     gShadowDirtyQ1050 = true;
     gShadowReadyQ1050 = false;
     SetFo3TerrainShadowQ1050(gShadowDepthQ1050, gLightMvpQ1050, false);
+    return true;
+}
+
+// Value-only asset-worker entry point for the outer resident coordinator.
+// The coordinator must isolate/drain the asset lane before invoking it and
+// revalidate all live scene/Player/resource stamps before consuming the packet.
+struct Fo3ResidentCpuPreparation {
+    Fo3CellTransitionRequestQ74 request;
+    Fo3WorldspaceSelection exteriorScope;
+    std::shared_ptr<const fo3world::ReferenceStateSnapshot> published, candidate;
+    fo3scene::ResidentResourceSelection selection;
+    std::vector<CpuObject> incoming;
+};
+bool PrepareFo3ResidentCpuResources(const Fo3CellTransitionRequestQ74& request,
+        const Fo3WorldspaceSelection& exteriorScope,
+        std::shared_ptr<const fo3world::ReferenceStateSnapshot> published,
+        std::shared_ptr<const fo3world::ReferenceStateSnapshot> candidate,
+        const std::vector<fo3scene::ResidentVisualRecord>& live,
+        const std::vector<uint32_t>& affected, Fo3ResidentCpuPreparation& out,
+        const std::atomic<bool>& cancelled, std::string& error) {
+    error.clear();
+    if (!request.valid || !published || !candidate ||
+        !std::isfinite(request.x) || !std::isfinite(request.y) || !std::isfinite(request.z)) {
+        error="invalid resident preparation input"; return false;
+    }
+    if (request.worldspaceFormId && (exteriorScope.worldspace != request.worldspaceFormId ||
+        exteriorScope.persistentCell != request.cellFormId || !std::isfinite(exteriorScope.gameX) ||
+        !std::isfinite(exteriorScope.gameY))) { error="invalid resident exterior scope"; return false; }
+    if (cancelled.load(std::memory_order_acquire)) { error="resident preparation cancelled"; return false; }
+    Fo3ResidentCpuPreparation next;
+    next.request=request; next.published=std::move(published); next.candidate=std::move(candidate);
+    next.exteriorScope=exteriorScope; next.exteriorScope.candidateSelection=true;
+    // Streaming selection can move independently of the fixed scene/GPU origin.
+    auto load=[&](auto& placements,const auto& state) {
+        return request.worldspaceFormId
+            ?LoadFo3WorldspacePlacements(next.exteriorScope,placements,state.get())
+            :LoadFo3ScenePlacements(request,placements,state.get(),true);
+    };
+    std::vector<Fo3WorldPlacement> before, after;
+    if (!load(before,next.published) || !load(after,next.candidate)) {
+        error="resident placement selection failed"; return false;
+    }
+    if (!fo3scene::SelectResidentResources(before,after,live,affected,next.selection,error)) return false;
+    if (!fo3scene::PrepareResidentCpuParts(next.selection,next.incoming,
+            [](const Fo3WorldPlacement& placement,std::vector<CpuObject>& parts) {
+                return BuildCpuObjects(placement,parts,true);
+            }, Q74ShouldSkipPlacement, cancelled,error)) return false;
+    out=std::move(next);
     return true;
 }
 

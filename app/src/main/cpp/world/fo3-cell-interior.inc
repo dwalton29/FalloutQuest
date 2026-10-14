@@ -261,7 +261,8 @@ void ConvertBethesdaRotation(float rx, float ry, float rz,
 
 bool LoadFo3InteriorCellPlacementsQ1700(uint32_t cellFormId,
                                         std::vector<Fo3WorldPlacement>& outPlacements,
-                                        const fo3world::ReferenceStateSnapshot* referenceState) {
+                                        const fo3world::ReferenceStateSnapshot* referenceState,
+                                        bool candidateSelection = false) {
     outPlacements.clear();
     std::vector<Q1700Interior::RawPlacement> raw;
     if (!Q1700Interior::CollectCellReferences(cellFormId, raw)) {
@@ -283,11 +284,16 @@ bool LoadFo3InteriorCellPlacementsQ1700(uint32_t cellFormId,
         if (enabled && !(p.recordFlags & 0x20u)) active.push_back(&p);
     }
 
+    if (active.empty()) {
+        Q71_LOGI("INTERIOR PLACEMENT SELECTION EMPTY: cell=%08X candidateAllowed=%d",cellFormId,candidateSelection?1:0);
+        return candidateSelection;
+    }
     std::unordered_set<uint32_t> wanted;
     wanted.reserve(active.size());
     for (const auto* p : active) wanted.insert(p->baseFormId);
     std::unordered_map<uint32_t, Q1700Interior::BaseRecord> bases;
-    if (!Q1700Interior::ResolveBases(wanted, bases)) {
+    if (!Q1700Interior::ResolveBases(wanted, bases) ||
+        (candidateSelection && bases.size() != wanted.size())) {
         Q71_LOGE("Q16.0 INTERIOR CELL FAILED: cell=%08X reason=base-resolve", cellFormId);
         return false;
     }
@@ -314,5 +320,5 @@ bool LoadFo3InteriorCellPlacementsQ1700(uint32_t cellFormId,
 
     Q71_LOGI("Q16.0 INTERIOR CELL READY: cell=%08X raw=%zu active=%zu modelPlacements=%zu source=Fallout3.esm",
              cellFormId, raw.size(), active.size(), outPlacements.size());
-    return !outPlacements.empty();
+    return candidateSelection || !outPlacements.empty();
 }
