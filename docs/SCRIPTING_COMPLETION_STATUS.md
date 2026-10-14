@@ -4,8 +4,10 @@
 
 - Starting canonical main: `2987d911f318b92d1041257868067851a09d16f0` (v208).
 - Resumed from published `6469dbb872889a79a0682501b75f6ac6577ab547`.
-- Latest published implementation: M1B3b `61d1481b8a9bd75a78dc1ea37192da1fc2a6665b`.
-- M1B3b Android CI: https://github.com/dwalton29/FalloutQuest/actions/runs/38614606380 (in progress at publication).
+- Current implementation checkpoint: M1B3c detached reference mutation plans.
+  Use canonical main history for the publication SHA; the previous published
+  implementation is M1B3b `61d1481b8a9bd75a78dc1ea37192da1fc2a6665b`.
+- Previous M1B3b Android CI: https://github.com/dwalton29/FalloutQuest/actions/runs/38614606380 (in progress at publication).
 - M1B2 scene-load/stream-in integration is host-validated and pushed; the remote
   tree matches the tested tree `20c0e9cd4d5206190925d30a68408400c6fb1923`. Newer v209 is preserved: 209 / 0.72.0-persistent-player-stats.
 
@@ -138,9 +140,11 @@ flowchart TD
 3. M1B2 implemented and validated: saved snapshots feed scene/stream-in
    placements, lights, collision inputs and canonical interaction permissions.
    See `world-reference-m1b2.md`. The **first unfinished implementation is M1B3**:
-   resident-resource preflight, atomic live publication, stale worker/cache
-   invalidation, reversible collision/physics/navigation and actor coordination.
-   Only then admit source Enable/Disable; no success-only handlers are allowed.
+   resident outer-transaction/resource coordinator and actor/held-object/
+   navigation coordination. M1B3a adds stale-work admission; M1B3b adds reversible
+   collision; M1B3c adds detached reference plans. Whole-script candidate effects
+   and runtime resource integration are still unfinished. Only then admit source
+   Enable/Disable; no success-only handlers are allowed.
 4. M1C+: cross-cell MoveTo/MoveToMarker with original placements/actor handoff,
    spawn identity/lifecycle and Delete; transaction/persistence tests.
 5. M2–M11 in task order, subdividing independently testable checkpoints.
@@ -295,3 +299,31 @@ was fetched and its complete tree verified against the tested local tree
 726f76760c75ea054bf3ddb689bedf0d4474de67. Android workflow 38614606380
 is in progress; native completion and headset results are not inferred. The
 original archive/ESM manifest export helper is committed under tools/physics.
+
+## M1B3c — detached reference-state planning (2026-10-14)
+
+Continues canonical main 30e18f9219748b2d9133b0824b8d9a1f097fd99e. Owned
+reference plans validate whole ordered batches without live staging, precompute
+immutable candidate/rollback projections and list all effective descendant/root
+changes. Revision/session-bound map commits and immediate rollbacks allocate
+nothing. Rollback advances revisions, so older plans/work are not re-admitted.
+See `world-reference-m1b3c.md` for the conservative full-Player revision guard,
+snapshot ownership and coordinator contract. No script handler is admitted.
+
+Validation: full rebuilt player suite 28, world six and collision one pass (35
+host cases); scene/epoch/NPC publication source checks pass. New plan tests cover
+unchanged save bytes during preparation, cancelled/invalid/no-op batches, exact
+descendant lists, stale plans/rollback, session/address reuse, save/reload and
+allocation-free commit/rollback. ASan/UBSan plan tests pass with LeakSanitizer
+disabled due the environment. Original ESM projection/commit/rollback checks all
+5,502 XESP children, plus bomb activation/cancel/disarm/Karma/notices/persistence
+and Lucas/MS11 dialogue acceptance/save. Corpus command compilation remains
+597/2,053 indexed event blocks, not execution coverage.
+
+This is a reference-only payload. Complete script state/effect-queue candidates,
+resident GPU/interaction publication, actor/held-object/navigation coordination
+and empty-world collision query semantics remain unfinished. The new methods
+are not invoked by any source handler or runtime render path. Preserve all M1B3a
+admission and M1B3b exchange guards while integrating the real coordinator.
+Version/schema remain unchanged. Android/headset validation is outstanding;
+check the latest main workflow after publication.

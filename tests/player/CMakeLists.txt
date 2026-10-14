@@ -128,6 +128,14 @@ target_include_directories(event_script_tests PRIVATE ../../app/src/main/cpp)
 target_link_libraries(event_script_tests PRIVATE ZLIB::ZLIB)
 add_test(NAME event_script_tests COMMAND event_script_tests)
 
+add_executable(reference_mutation_plan_tests reference_mutation_plan_tests.cpp ${dialogue_shared})
+target_compile_features(reference_mutation_plan_tests PRIVATE cxx_std_17)
+target_compile_options(reference_mutation_plan_tests PRIVATE -Wall -Wextra -Werror)
+target_include_directories(reference_mutation_plan_tests PRIVATE ../../app/src/main/cpp)
+target_link_libraries(reference_mutation_plan_tests PRIVATE ZLIB::ZLIB)
+add_test(NAME reference_mutation_plan_tests COMMAND reference_mutation_plan_tests)
+
+
 
 # Authored NPC-to-NPC ambient HELLO selector, without executing quest
 # results or substituting the player as the conversation partner.

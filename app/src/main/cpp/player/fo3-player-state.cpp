@@ -856,6 +856,10 @@ bool Player::Unequip(uint64_t id) {
   return false;
 }
 bool Player::ReferenceDisabled(uint32_t reference,bool& disabled,std::string& error) const {
+  return ReferenceDisabledWith(state_.referenceEnabled,reference,disabled,error);
+}
+bool Player::ReferenceDisabledWith(const std::unordered_map<uint32_t,bool>& roots,
+                                  uint32_t reference,bool& disabled,std::string& error) const {
   error.clear();disabled=false;
   // Bounded stack-only traversal. No hot-frame scan, allocation or mutable ESM state.
   std::array<uint32_t,128> visited{};size_t count=0;bool opposite=false;
@@ -868,8 +872,8 @@ bool Player::ReferenceDisabled(uint32_t reference,bool& disabled,std::string& er
     visited[count++]=reference;
     const auto parent=catalog_.enableParents.find(reference);
     if(parent==catalog_.enableParents.end()){
-      const auto changed=state_.referenceEnabled.find(reference);
-      const bool enabled=changed==state_.referenceEnabled.end()?!(ref->second.flags&0x800):changed->second;
+      const auto changed=roots.find(reference);
+      const bool enabled=changed==roots.end()?!(ref->second.flags&0x800):changed->second;
       disabled=(!enabled)^opposite;return true;
     }
     const auto& link=parent->second;
@@ -879,33 +883,109 @@ bool Player::ReferenceDisabled(uint32_t reference,bool& disabled,std::string& er
   }
   return fail("null reference");
 }
-bool Player::StageReferenceEnable(uint32_t reference,bool enabled,std::string& error) {
+bool Player::StageReferenceEnableIn(std::unordered_map<uint32_t,bool>& roots,
+                                    uint32_t reference,bool enabled,bool& changed,std::string& error) const {
+  changed=false;
   bool disabled=false;
-  if(!ReferenceDisabled(reference,disabled,error))return false;
+  if(!ReferenceDisabledWith(roots,reference,disabled,error))return false;
   // Original enable-parent children cannot be independently toggled. A valid
-  // parent-controlled request is a documented no-op, not a separate shadow flag.
+  // parent-controlled request is a no-op, not a separate shadow flag.
   if(catalog_.enableParents.count(reference)||enabled==!disabled)return true;
   const bool initial=!(catalog_.references.at(reference).flags&0x800);
-  if(enabled==initial)state_.referenceEnabled.erase(reference);
+  if(enabled==initial)roots.erase(reference);
   else {
-    if(state_.referenceEnabled.size()>=100000&&!state_.referenceEnabled.count(reference)){
+    if(roots.size()>=100000&&!roots.count(reference)){
       error="reference override limit exceeded";return false;
     }
-    state_.referenceEnabled[reference]=enabled;
+    roots[reference]=enabled;
   }
-  ++state_.referenceStateRevision;++revision_;return true;
+  changed=true;return true;
 }
-fo3world::ReferenceStateSnapshot Player::CaptureReferenceState() const {
-  fo3world::ReferenceStateSnapshot out;out.revision=state_.referenceStateRevision;
-  out.states.reserve(catalog_.enableParents.size()+state_.referenceEnabled.size());
+bool Player::StageReferenceEnable(uint32_t reference,bool enabled,std::string& error) {
+  bool changed=false;
+  if(!StageReferenceEnableIn(state_.referenceEnabled,reference,enabled,changed,error))return false;
+  if(changed){++state_.referenceStateRevision;++revision_;}
+  return true;
+}
+fo3world::ReferenceStateSnapshot Player::CaptureReferenceStateWith(
+    const std::unordered_map<uint32_t,bool>& roots,uint64_t revision) const {
+  fo3world::ReferenceStateSnapshot out;out.revision=revision;
+  out.states.reserve(catalog_.enableParents.size()+roots.size());
   auto capture=[&](uint32_t id){bool disabled=false;std::string error;
-    const bool valid=ReferenceDisabled(id,disabled,error);
+    const bool valid=ReferenceDisabledWith(roots,id,disabled,error);
     out.states[id]=!valid?fo3world::ReferenceEnableState::Unavailable:
       disabled?fo3world::ReferenceEnableState::Disabled:fo3world::ReferenceEnableState::Enabled;
   };
   for(const auto& child:catalog_.enableParents)capture(child.first);
-  for(const auto& changed:state_.referenceEnabled)capture(changed.first);
+  for(const auto& changed:roots)capture(changed.first);
   return out;
+}
+fo3world::ReferenceStateSnapshot Player::CaptureReferenceState() const {
+  return CaptureReferenceStateWith(state_.referenceEnabled,state_.referenceStateRevision);
+}
+std::unique_ptr<ReferenceEnablePlan> Player::PrepareReferenceEnablePlan(
+    const std::vector<ReferenceEnableChange>& changes,std::string& error) const {
+  error.clear();
+  if(changes.size()>100000){error="reference mutation batch limit exceeded";return {};}
+  auto plan=std::unique_ptr<ReferenceEnablePlan>(new ReferenceEnablePlan());
+  plan->owner_=this;plan->ownerIdentity_=referencePlanIdentity_;
+  plan->expectedRevision_=revision_;
+  plan->expectedReferenceRevision_=state_.referenceStateRevision;
+  plan->roots_=state_.referenceEnabled;
+  for(const auto& change:changes){bool changed=false;
+    if(!StageReferenceEnableIn(plan->roots_,change.reference,change.enabled,changed,error))return {};
+  }
+  plan->changed_=plan->roots_!=state_.referenceEnabled;
+  if(plan->changed_ && (revision_>UINT64_MAX-2 || state_.referenceStateRevision>UINT64_MAX-2)){
+    error="reference mutation revision exhausted";return {};
+  }
+  const uint64_t candidateRevision=state_.referenceStateRevision+(plan->changed_?1:0);
+  plan->candidate_=std::make_shared<const fo3world::ReferenceStateSnapshot>(
+      CaptureReferenceStateWith(plan->roots_,candidateRevision));
+  if(!plan->changed_){plan->rollback_=plan->candidate_;return plan;}
+  plan->rollback_=std::make_shared<const fo3world::ReferenceStateSnapshot>(
+      CaptureReferenceStateWith(state_.referenceEnabled,state_.referenceStateRevision+2));
+  // Both projections include every XESP child, not just resident references.
+  // Include old and new root overrides so removal of an override is not missed.
+  std::vector<uint32_t> candidates;
+  candidates.reserve(plan->candidate_->states.size()+plan->rollback_->states.size());
+  for(const auto& entry:plan->candidate_->states)candidates.push_back(entry.first);
+  for(const auto& entry:plan->rollback_->states)candidates.push_back(entry.first);
+  std::sort(candidates.begin(),candidates.end());
+  candidates.erase(std::unique(candidates.begin(),candidates.end()),candidates.end());
+  for(uint32_t id:candidates){
+    const auto ref=catalog_.references.find(id);
+    const bool authored=ref!=catalog_.references.end() && !(ref->second.flags&0x800);
+    if(plan->candidate_->Enabled(id,authored)!=plan->rollback_->Enabled(id,authored))
+      plan->affected_.push_back(id);
+  }
+  return plan;
+}
+bool Player::CanCommitReferenceEnablePlan(const ReferenceEnablePlan& plan) const noexcept {
+  return plan.owner_==this && plan.ownerIdentity_==referencePlanIdentity_ &&
+    plan.phase_==ReferenceEnablePlan::Phase::Prepared && plan.expectedRevision_==revision_ &&
+    plan.expectedReferenceRevision_==state_.referenceStateRevision;
+}
+bool Player::CommitReferenceEnablePlan(ReferenceEnablePlan& plan) noexcept {
+  if(!CanCommitReferenceEnablePlan(plan))return false;
+  if(plan.changed_){
+    state_.referenceEnabled.swap(plan.roots_);
+    state_.referenceStateRevision=plan.candidate_->revision;
+    ++revision_;
+  }
+  plan.expectedRevision_=revision_;plan.expectedReferenceRevision_=state_.referenceStateRevision;
+  plan.phase_=ReferenceEnablePlan::Phase::Applied;return true;
+}
+bool Player::RollbackReferenceEnablePlan(ReferenceEnablePlan& plan) noexcept {
+  if(plan.owner_!=this || plan.ownerIdentity_!=referencePlanIdentity_ ||
+     plan.phase_!=ReferenceEnablePlan::Phase::Applied || plan.expectedRevision_!=revision_ ||
+     plan.expectedReferenceRevision_!=state_.referenceStateRevision)return false;
+  if(plan.changed_){
+    state_.referenceEnabled.swap(plan.roots_);
+    state_.referenceStateRevision=plan.rollback_->revision;
+    ++revision_;
+  }
+  plan.phase_=ReferenceEnablePlan::Phase::RolledBack;return true;
 }
 bool Player::CanPickup(uint32_t id) const {
   const auto r = catalog_.references.find(id);

@@ -1,5 +1,6 @@
 #include "player/fo3-player-state.h"
 #include <cassert>
+#include <algorithm>
 #include <cstdio>
 #include <iostream>
 #include <fstream>
@@ -322,6 +323,23 @@ static void OriginalBomb(const char* path) {
     ++checked;
   }
   assert(checked==5502);
+  const auto beforePlanRevision=graph.Revision();
+  auto plan=graph.PrepareReferenceEnablePlan({{0x1e99f,true},{0x4e325,true}},error);
+  assert(plan&&plan->HasChanges()&&graph.Revision()==beforePlanRevision);
+  assert(graph.ReferenceDisabled(0x1e99f,disabled,error)&&disabled);
+  const auto candidate=plan->CandidateSnapshot();
+  assert(candidate->Enabled(0x1e99f,false)&&!candidate->Enabled(0x37ef7,true));
+  assert(std::binary_search(plan->AffectedReferences().begin(),plan->AffectedReferences().end(),0x1e99fu));
+  assert(std::binary_search(plan->AffectedReferences().begin(),plan->AffectedReferences().end(),0x37ef7u));
+  assert(graph.CommitReferenceEnablePlan(*plan));
+  for(const auto& child:c.enableParents){
+    assert(graph.ReferenceDisabled(child.first,disabled,error));
+    assert(candidate->Enabled(child.first,false)==!disabled);
+  }
+  assert(graph.RollbackReferenceEnablePlan(*plan));
+  assert(graph.ReferenceDisabled(0x1e99f,disabled,error)&&disabled);
+  std::cout<<"Original reference plan projects all 5502 XESP children without live staging; commit/rollback passed\n";
+
   assert(graph.StageReferenceEnable(0x1e99f,true,error));
   assert(graph.StageReferenceEnable(0x4e325,true,error));
   const auto snapshot=graph.CaptureReferenceState();

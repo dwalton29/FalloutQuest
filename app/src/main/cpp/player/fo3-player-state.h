@@ -7,6 +7,7 @@
 #include <array>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -242,6 +243,32 @@ struct ActorCensusReport {
   size_t unsupportedBase=0,unsupportedPlacement=0,limitReached=0;
 };
 enum class ScriptEventResult : uint8_t { NoHandler, Executed, Unsupported };
+class Player;
+struct ReferenceEnableChange { uint32_t reference=0; bool enabled=false; };
+// Owned reference-only input for the future scene coordinator. It neither runs
+// scripts nor publishes world resources. Workers capture the immutable snapshots,
+// never this render-thread-owned plan or mutable Player state.
+class ReferenceEnablePlan {
+public:
+  ReferenceEnablePlan(const ReferenceEnablePlan&)=delete;
+  ReferenceEnablePlan& operator=(const ReferenceEnablePlan&)=delete;
+  bool HasChanges() const { return changed_; }
+  const std::vector<uint32_t>& AffectedReferences() const { return affected_; }
+  std::shared_ptr<const fo3world::ReferenceStateSnapshot> CandidateSnapshot() const { return candidate_; }
+  std::shared_ptr<const fo3world::ReferenceStateSnapshot> RollbackSnapshot() const { return rollback_; }
+private:
+  friend class Player;
+  ReferenceEnablePlan()=default;
+  enum class Phase : uint8_t { Prepared, Applied, RolledBack };
+  const Player* owner_=nullptr;
+  std::shared_ptr<const uint8_t> ownerIdentity_;
+  uint64_t expectedRevision_=0,expectedReferenceRevision_=0;
+  bool changed_=false;
+  Phase phase_=Phase::Prepared;
+  std::unordered_map<uint32_t,bool> roots_;
+  std::vector<uint32_t> affected_;
+  std::shared_ptr<const fo3world::ReferenceStateSnapshot> candidate_,rollback_;
+};
 class Player {
 public:
   explicit Player(Catalog catalog);
@@ -296,6 +323,18 @@ public:
   bool ReferenceDisabled(uint32_t reference,bool& disabled,std::string& error) const;
   bool StageReferenceEnable(uint32_t reference,bool enabled,std::string& error);
   fo3world::ReferenceStateSnapshot CaptureReferenceState() const;
+  // Pure planning: validate the entire ordered batch and precompute both sparse
+  // projections without changing live state/revisions, save data or effect queues.
+  std::unique_ptr<ReferenceEnablePlan> PrepareReferenceEnablePlan(
+      const std::vector<ReferenceEnableChange>& changes,std::string& error) const;
+  bool CanCommitReferenceEnablePlan(const ReferenceEnablePlan& plan) const noexcept;
+  // Reference overlay only. The outer scene coordinator must preflight/exchange
+  // every affected resource before calling this; source handlers stay unavailable.
+  // Publication and immediate rollback allocate nothing. A newer Player mutation
+  // rejects a stale plan. Rollback restores values but advances revisions to avoid
+  // re-admitting work from an earlier publication. Destroying a plan finalizes it.
+  bool CommitReferenceEnablePlan(ReferenceEnablePlan& plan) noexcept;
+  bool RollbackReferenceEnablePlan(ReferenceEnablePlan& plan) noexcept;
   bool QueueScriptMessage(uint32_t form,float argument,bool hasArgument,uint32_t owner);
   bool QueueScriptSound(uint32_t form);
   bool PollScriptMessage(ScriptMessage& out);
@@ -393,6 +432,13 @@ public:
   bool Restore(const std::string &path, std::string &error);
 
 private:
+  bool ReferenceDisabledWith(const std::unordered_map<uint32_t,bool>& roots,
+                            uint32_t reference,bool& disabled,std::string& error) const;
+  bool StageReferenceEnableIn(std::unordered_map<uint32_t,bool>& roots,
+                             uint32_t reference,bool enabled,bool& changed,std::string& error) const;
+  fo3world::ReferenceStateSnapshot CaptureReferenceStateWith(
+      const std::unordered_map<uint32_t,bool>& roots,uint64_t revision) const;
+  std::shared_ptr<const uint8_t> referencePlanIdentity_=std::make_shared<const uint8_t>(0);
   void CommitTheft(uint32_t reference,uint32_t item,int32_t count,uint32_t container,const OwnershipResult& ownership);
   bool RunSourceEvent(uint32_t scriptId,const char* event,uint32_t owner,
                       uint32_t activator,std::string& error);
