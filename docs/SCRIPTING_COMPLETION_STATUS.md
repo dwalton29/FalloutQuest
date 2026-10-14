@@ -4,8 +4,8 @@
 
 - Starting canonical main: `2987d911f318b92d1041257868067851a09d16f0` (v208).
 - Resumed from published `6469dbb872889a79a0682501b75f6ac6577ab547`.
-- Latest published implementation: M1B3a `86ddd9c407482207aab7799760259a8f643dfcd6`.
-- M1B3a Android CI: https://github.com/dwalton29/FalloutQuest/actions/runs/38612088401 (in progress at publication).
+- Latest published implementation: M1B3b `61d1481b8a9bd75a78dc1ea37192da1fc2a6665b`.
+- M1B3b Android CI: https://github.com/dwalton29/FalloutQuest/actions/runs/38614606380 (in progress at publication).
 - M1B2 scene-load/stream-in integration is host-validated and pushed; the remote
   tree matches the tested tree `20c0e9cd4d5206190925d30a68408400c6fb1923`. Newer v209 is preserved: 209 / 0.72.0-persistent-player-stats.
 
@@ -19,6 +19,7 @@
 | v209 compatibility | `29a0c614313b948a70508aab1213204e8117d153` and `fe798c051a41648c46b9e300d6949da8da71838c` | Preserved |
 | M1B2 scene/streaming snapshots | `aa8ba6d56c4eda4e39fdb92e3c6d591a8ef63268` | Confirmed |
 | M1B3a scene publication admission | `86ddd9c407482207aab7799760259a8f643dfcd6` | Confirmed |
+| M1B3b reversible collision exchange | `61d1481b8a9bd75a78dc1ea37192da1fc2a6665b` | Confirmed |
 
 The user directly confirmed permission to push to main on 2026-10-14. The old
 approval blocker is resolved. Command-line Git cannot authenticate for writes;
@@ -288,3 +289,9 @@ still fail preflight pending query semantics; capped exterior candidates reject
 atomically. The first unfinished integration remains the resident outer-transaction
 coordinator across save/script effects, visuals, collision/navigation, actors and
 held/loose objects. This new collision primitive is not yet invoked by scripts.
+
+M1B3b published implementation 61d1481b8a9bd75a78dc1ea37192da1fc2a6665b
+was fetched and its complete tree verified against the tested local tree
+726f76760c75ea054bf3ddb689bedf0d4474de67. Android workflow 38614606380
+is in progress; native completion and headset results are not inferred. The
+original archive/ESM manifest export helper is committed under tools/physics.
