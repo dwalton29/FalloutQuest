@@ -44,6 +44,11 @@ class Expression {
       value=p.ItemCount(id);return true;
     }
     const auto dot=t.find('.');const auto query=dot==std::string::npos?t:t.substr(dot+1);
+    if(query=="getdisabled"){
+      const auto id=dot==std::string::npos?owner:form(t.substr(0,dot));bool disabled=false;
+      if(!p.ReferenceDisabled(id,disabled,error))return false;
+      value=disabled;return true;
+    }
     if(query=="getlocked"||query=="getlocklevel"||query=="getislockbroken") {
       const auto id=dot==std::string::npos?owner:form(t.substr(0,dot));auto lock=p.GetLock(id);
       if(!lock.known||lock.leveled)return Fail("unresolved lock query");

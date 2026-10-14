@@ -36,9 +36,15 @@ static bool Value(const fo3pipdata::Condition& c,const Context& ctx,float& value
   ActorContext who=ctx.speaker;
   if(c.run==1)who=ctx.target;
   else if(c.run==2){if(c.reference==0x14)who=ctx.target;else if(c.reference!=ctx.speaker.reference){
-    auto ref=d.targets.find(c.reference);
-    if(ref==d.targets.end()||(c.function!=35&&c.function!=46&&c.function!=5&&c.function!=65&&c.function!=522)){error="reference context unavailable";return false;}
-    who.reference=c.reference;who.base=ref->second.base;
+    if(c.function==35){
+      auto ref=p.Definitions().references.find(c.reference);
+      if(ref==p.Definitions().references.end()){error="GetDisabled reference unavailable";return false;}
+      who.reference=c.reference;who.base=ref->second.base;
+    }else {
+      auto ref=d.targets.find(c.reference);
+      if(ref==d.targets.end()||(c.function!=46&&c.function!=5&&c.function!=65&&c.function!=522)){error="reference context unavailable";return false;}
+      who.reference=c.reference;who.base=ref->second.base;
+    }
   }}
   else if(c.run!=0){error="unsupported run-on context";return false;}
   const bool pc=who.reference==0x14;
@@ -59,10 +65,9 @@ static bool Value(const fo3pipdata::Condition& c,const Context& ctx,float& value
     else if(c.a==12)value=p.ActionPoints();
     else if(c.a==46)value=float(p.InventoryWeight());
     else {error="actor value unsupported";return false;}return true;
-  case 35: {auto ref=d.targets.find(who.reference);
-    if(ref==d.targets.end()){error="GetDisabled reference unavailable";return false;}
-    if(ref->second.parent){error="GetDisabled enable-parent state unsupported";return false;}
-    value=bool(ref->second.flags&0x800);return true;}
+  case 35: {bool disabled=false;
+    if(!p.ReferenceDisabled(who.reference,disabled,error))return false;
+    value=disabled;return true;}
   case 84: {
     if(!d.dialogueActors.count(c.a)){error="GetDeadCount actor base unavailable";return false;}
     // Count canonical original ACHRs and persisted deaths, independently of residency.

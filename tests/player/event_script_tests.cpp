@@ -204,9 +204,61 @@ static void NoticeTransactions() {
   assert(restored.FinishQuest(20,fo3pipdata::Completion::Complete)&&!restored.PollQuestNotice(n));
   std::remove(path);
 }
+static void EnableParentQueries() {
+  auto c=Catalog();c.references[200].flags=0x800;
+  c.enableParents[100]={200,0,true};
+  c.references[201].flags=0x800;c.enableParents[201]={200,1,true};
+  c.references[202].flags=0x800;c.enableParents[202]={201,3,true};
+  c.references[203].flags=0;c.enableParents[203]={200,2,true};
+  c.references[204].flags=0x20;
+  c.references[205].flags=0;c.enableParents[205]={999,0,true};
+  c.references[206].flags=0;c.enableParents[206]={206,0,true};
+  c.references[207].flags=0;c.enableParents[207]={200,4,true};
+  c.references[208].flags=0;c.enableParents[208]={200,0,false};
+  c.references[209].flags=0;c.enableParents[209]={0,0,true};
+  c.references[210].flags=0;c.references[211].flags=0;
+  c.enableParents[210]={211,1,true};c.enableParents[211]={210,1,true};
+  for(uint32_t i=300;i<429;++i){c.references[i].flags=0;if(i<428)c.enableParents[i]={i+1,0,true};}
+  fo3player::Player p(c);std::string error;bool disabled=false;const auto revision=p.Revision();
+  for(auto id:{100u,200u,202u,203u})assert(p.ReferenceDisabled(id,disabled,error)&&disabled&&error.empty());
+  assert(p.ReferenceDisabled(201,disabled,error)&&!disabled); // Child's own disabled flag is ignored.
+  for(auto id:{0u,999u,204u,205u,206u,207u,208u,209u,210u,300u})
+    assert(!p.ReferenceDisabled(id,disabled,error)&&!error.empty());
+  assert(p.Revision()==revision&&p.Snapshot().pipboy.quests.empty());
+  // CTDA run-on-reference works even when the Pip-Boy pruned this target.
+  assert(!c.pipboy.targets.count(100));fo3dialogue::Context ctx;ctx.player=&p;
+  ctx.speaker.reference=500;ctx.target.reference=fo3player::PlayerRef;
+  fo3pipdata::Condition condition;condition.function=35;condition.run=2;condition.reference=100;condition.value=1;
+  assert(fo3dialogue::Conditions({condition},ctx,error));condition.reference=201;
+  assert(!fo3dialogue::Conditions({condition},ctx,error)&&error.empty());
+  condition.reference=206;assert(!fo3dialogue::Conditions({condition},ctx,error)&&!error.empty());
+  c.pipboy.formNames["childref"]=201;
+  c.pipboy.scripts[102].source="Begin OnActivate\nif GetDisabled == 1 && childref.GetDisabled == 0\nStartQuest ExampleQuest\nendif\nEnd";
+  c.eventPrograms[102]=fo3script::ParseEvents(c.pipboy.scripts[102]);
+  fo3player::Player source(c);
+  assert(source.DispatchReferenceEvent(100,"OnActivate",0x14,error)==fo3player::ScriptEventResult::Executed);
+  assert(source.Snapshot().pipboy.quests.count(20));
+  c.pipboy.formNames["childref"]=206;fo3player::Player bad(c);
+  const auto before=bad.Revision();
+  assert(bad.DispatchReferenceEvent(100,"OnActivate",0x14,error)==fo3player::ScriptEventResult::Unsupported);
+  assert(bad.Revision()==before&&bad.Snapshot().pipboy.quests.empty());
+}
 static void OriginalBomb(const char* path) {
   fo3player::Catalog c;std::string error;assert(fo3player::LoadCatalog(path,c,error));
   assert(c.eventBaseScripts.at(0x3bc8)==0x78cb3);
+  assert(c.enableParents.size()==5502);
+  fo3player::Player graph(c);bool disabled=false;
+  assert(graph.ReferenceDisabled(0x1e99f,disabled,error)&&disabled);
+  assert(graph.ReferenceDisabled(0x4e325,disabled,error)&&disabled);
+  assert(graph.ReferenceDisabled(0x37ef7,disabled,error)&&!disabled);
+  assert(graph.ReferenceDisabled(0x14f77,disabled,error)&&!disabled);
+  size_t checked=0;
+  for(const auto& child:c.enableParents){
+    if(!graph.ReferenceDisabled(child.first,disabled,error)){std::cerr<<error<<"\n";assert(false);}
+    ++checked;
+  }
+  assert(checked==5502);
+  std::cout<<"Original master enable graph: "<<checked<<" children resolved independently of residency\n";
   // Preserve the actual ESM source (including CRLF), message text, and scripts.
   assert(c.pipboy.scripts.at(0x78cb3).source.find("\r\n")!=std::string::npos);
   fo3player::Player low(c);fo3player::ScriptMessage message;
@@ -296,7 +348,7 @@ static void OriginalCompileInventory(const char* path,const char* report) {
            <<" command-compiled blocks; this is not execution coverage\n";
 }
 int main(int argc,char** argv){
-  Parsing();Dispatch();UnsupportedIsAtomic();Filter();NumericLocalsAndRefSafety();BombMenuAndInventory();DisarmStagePersistence();NoticeTransactions();
+  Parsing();EnableParentQueries();Dispatch();UnsupportedIsAtomic();Filter();NumericLocalsAndRefSafety();BombMenuAndInventory();DisarmStagePersistence();NoticeTransactions();
   if(argc>1)OriginalBomb(argv[1]);
   if(argc>2)OriginalCompileInventory(argv[1],argv[2]);
   std::cout<<"Original event source indexing, dispatch, scheduler and rollback passed\n";

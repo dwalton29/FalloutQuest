@@ -481,11 +481,10 @@
     "127": 1
   },
   "native_signatures": {
-    "status": "unverified",
-    "next": "M5 executable command-table decode"
+    "status": "extracted separately; see SCRIPTING_NATIVE_COMMANDS.json"
   },
   "compiled_opcodes": {
-    "status": "unverified; byte frequencies are not opcodes"
+    "status": "envelope inventory in SCRIPTING_SCDA_INVENTORY.json; payload execution not implemented"
   },
   "reference_summary": {
     "placed": 573610,

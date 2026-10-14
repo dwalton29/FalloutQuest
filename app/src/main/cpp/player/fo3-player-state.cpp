@@ -327,6 +327,16 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
         return fail("Malformed ESM subrecord");
       fo3pipdata::Decode(next.pipboy,type,form,flags,payload,groupCells.empty()?0:groupCells.back(),groupWorlds.empty()?0:groupWorlds.back(),groupTopics.empty()?0:groupTopics.back());
       fo3weapon::Decode(next.weapons,type,form,payload);
+      if(type=="REFR"||type=="ACHR"||type=="ACRE") {
+        // Keep the complete graph, including parents outside the resident cell.
+        // Do not expand each of the hundreds of thousands of Reference objects.
+        const auto* parent=Find(subs,"XESP");
+        if(parent){EnableParent link;link.valid=parent->size==8;
+          if(link.valid){link.reference=fo3esm::ReadU32(parent->data);link.flags=parent->data[4];
+            link.valid=link.reference!=0&&(link.flags&~3u)==0;}
+          next.enableParents.emplace(form,link);
+        }
+      }
       if(eventBase||type=="NPC_"||type=="WEAP"||type=="ARMO"||
          type=="BOOK"||type=="MISC"||type=="ALCH"||type=="KEYM"){
         if(const auto* script=Find(subs,"SCRI");script&&script->size==4)
@@ -829,6 +839,28 @@ bool Player::Unequip(uint64_t id) {
       return true;
     }
   return false;
+}
+bool Player::ReferenceDisabled(uint32_t reference,bool& disabled,std::string& error) const {
+  error.clear();disabled=false;
+  // Bounded stack-only traversal. No hot-frame scan, allocation or mutable ESM state.
+  std::array<uint32_t,128> visited{};size_t count=0;bool opposite=false;
+  auto fail=[&](const char* why){error=std::string("GetDisabled reference ")+std::to_string(reference)+": "+why;return false;};
+  while(reference){
+    const auto ref=catalog_.references.find(reference);
+    if(ref==catalog_.references.end()||(ref->second.flags&0x20))return fail("reference unavailable/deleted");
+    if(count==visited.size())return fail("enable-parent depth exceeded");
+    for(size_t i=0;i<count;++i)if(visited[i]==reference)return fail("enable-parent cycle");
+    visited[count++]=reference;
+    const auto parent=catalog_.enableParents.find(reference);
+    if(parent==catalog_.enableParents.end()){
+      disabled=bool(ref->second.flags&0x800)^opposite;return true;
+    }
+    const auto& link=parent->second;
+    if(!link.valid||!link.reference||(link.flags&~3u))return fail("malformed enable parent");
+    // XESP bit 0 inverts state. Bit 1 controls presentation (pop-in), not truth.
+    opposite^=bool(link.flags&1);reference=link.reference;
+  }
+  return fail("null reference");
 }
 bool Player::CanPickup(uint32_t id) const {
   const auto r = catalog_.references.find(id);

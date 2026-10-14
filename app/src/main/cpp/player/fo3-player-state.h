@@ -184,6 +184,8 @@ struct State {
   std::unordered_map<uint32_t,ActorState> actors;
 };
 struct CellOwnership {OwnershipData data;uint8_t flags=0;std::string editor;};
+// Sparse immutable XESP graph, independent of Pip-Boy target pruning.
+struct EnableParent {uint32_t reference=0;uint8_t flags=0;bool valid=true;};
 struct Catalog {
   fo3weapon::Definitions weapons;
   // Immutable original ACHR census. This is a source data catalogue, not a
@@ -192,6 +194,7 @@ struct Catalog {
   fo3pipdata::Definitions pipboy;
   std::unordered_map<uint32_t, Item> items;
   std::unordered_map<uint32_t, Reference> references;
+  std::unordered_map<uint32_t,EnableParent> enableParents;
   // Authored base SCRI associations (actor/activator/door/other object).
   std::unordered_map<uint32_t,uint32_t> eventBaseScripts;
   std::unordered_map<uint32_t,std::string> eventBaseNames;
@@ -280,6 +283,8 @@ public:
   bool SetQuestObject(uint32_t form,bool quest);
   bool RewardKarma(float amount);
   bool ReevaluatePackage(uint32_t reference);
+  // Returns false for an unknown/deleted reference or malformed/cyclic graph.
+  bool ReferenceDisabled(uint32_t reference,bool& disabled,std::string& error) const;
   bool QueueScriptMessage(uint32_t form,float argument,bool hasArgument,uint32_t owner);
   bool QueueScriptSound(uint32_t form);
   bool PollScriptMessage(ScriptMessage& out);

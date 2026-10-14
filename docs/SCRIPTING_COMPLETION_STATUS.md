@@ -3,8 +3,15 @@
 ## Recovery point
 
 - Starting canonical main: `2987d911f318b92d1041257868067851a09d16f0` (v208).
-- Latest completed checkpoint: M0 audit and baseline (version remains v208).
-- Checkpoint SHA: the commit introducing this file; recover with `git log --diff-filter=A --format=%H -- docs/SCRIPTING_COMPLETION_STATUS.md`. Its exact SHA is recorded by the next checkpoint.
+- M0 committed locally: `2310bbe9028c583053d846bf762039a8ce1d1a1a` (version remains v208).
+- M1A query checkpoint: implemented and host-validated; commit SHA is recorded after committing below.
+- Remote recovery point is still v208 `2987d911f318b92d1041257868067851a09d16f0`.
+- **Push blocked:** automatic approval review rejected both attempts, including
+  after the GitHub connector confirmed owner `dwalton29`, admin/push permission,
+  matching clone URL and main. It requires direct user confirmation to publish
+  the code and game-derived metadata reports to this public repository. Do not
+  bypass this through another API or transport. No push or new Android CI run is
+  claimed. Complete local tests and obtain that confirmation before retrying.
 - No engine completion claimed.
 - This document and `SCRIPTING_ORIGINAL_INVENTORY.json` describe actual support,
   not a promise that all listed functions execute.
@@ -62,7 +69,7 @@ OnPackageEnd and OnPackageDone both occur (20 each); do not conflate them.
 | Events | Reference OnActivate, weapon OnHit/OnDeath, quest/resident ACTI GameMode | NPC activation uses separate narrow dialogue bridge; most events indexed but undelivered |
 | Scheduling | 4 Hz bounded quest/ACTI dispatch on simulation thread | No resident NPC GameMode, trigger/package/effect lifecycle; no PC timing parity claim |
 | Actor control | EVP increments package revision; physical damage/death exist | Kill/resurrect/combat/faction/AV/equipment commands mostly missing |
-| World control | Lock/unlock through canonical persistent APIs | Enable/disable/move/spawn/delete absent; GetDisabled only initial unparented retained targets |
+| World control | Lock/unlock through canonical persistent APIs; M1A GetDisabled follows complete original enable-parent chains | Enable/disable/move/spawn/delete absent; no mutable reference overlay |
 | Scene / streaming | Async geometry/texture/collision preparation, atomic publication, NPC cell handoff | Disabled placements discarded before loading; no script mutation publication or cross-cell reference relocation |
 | Audio / UI | Transactional MESG, sounds, Karma and quest notices | Narrow formatting; no Say/SayTo or PlayGroup/IsAnimPlaying scripting interface |
 | Persistence | FQPS v14; QST1 globals/running/journal; QNF1 reveal history; locks, XP, actors, inventory, ownership | No reference mutation overlay; level allocation absent |
@@ -107,9 +114,10 @@ flowchart TD
 
 1. M0 audit checkpoint validated; commit records its recovery SHA in the next checkpoint.
    Deeper operand/control-flow semantics remain M5, not completed VM support.
-2. M1A: retain XESP independently of target pruning; bounded, fail-closed enable
-   queries shared by conditions and source. This is a query dependency,
-   **not** Enable/Disable mutation support.
+2. M1A implemented: sparse XESP catalogue and bounded fail-closed GetDisabled
+   shared by CTDA/source, independent of residency/target pruning. All 5,502
+   original children resolve. No mutable state, save version or fingerprint
+   changes. See `world-reference-m1a.md`. This is **not** Enable/Disable support.
 3. M1B: saved enable overlays, immutable scene-worker snapshots, retain disabled
    placements for materialization, atomic render/collision/interaction/physics/AI
    publication. No commands until loaded/unloaded/restart and rollback tests pass.
@@ -125,9 +133,18 @@ flowchart TD
 - Production compiler inventory: 597/2,053 event blocks command-compile (not execute).
 - SCDA envelope validation: 8,336/8,336 nonempty original fragments; four malformed/boundary Python tests pass.
 - Native table extraction: 569 contiguous validated opcode/signature entries.
-- Broader asset/world/render suites not yet run at M0; Android CI pending push.
+- Additional host suites now pass: world 5, physics 1, assets 3, NIF 12, audio 2.
+- Render C++ checks pass: GL-state cache, opaque timer, render policy, actor skinning,
+  notification rendering. Nine source checks pass (eight renderer/UI plus collision).
+- Original master XTEL graph passes: 1,118 directed links, reciprocal validation,
+  cross-cell/world identities and Megaton room/exterior/shop route.
+- M1A original bomb, 5,502 enable-parent queries and Lucas dialogue acceptance/
+  stage/save-reload pass; all 27 updated player CTest cases pass.
+- Shader compile/link tests not run: glslangValidator absent. Renderer unchanged.
+- Android CI cannot start while the push is blocked; no Android build is claimed.
 - Android toolchain absent locally. Existing push workflow provisions Java 17,
   Gradle 8.9, SDK 35, NDK 27, CMake 3.22.1. No Gradle wrapper exists.
+- Original master player catalogue/ACHR census/inventory/save-reload regression also passes.
 - No physical Quest validation. No CPU/GPU performance measurements.
 - Original dependencies supplied: Fallout3.esm, executable, INIs, shader/mesh/
   texture archives and Misc BSA. Inspect original assets as commands need them;
