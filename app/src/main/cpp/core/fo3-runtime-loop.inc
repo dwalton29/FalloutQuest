@@ -1130,6 +1130,10 @@ private:
                 if (sessionState_ == XR_SESSION_STATE_FOCUSED && changed->state != XR_SESSION_STATE_FOCUSED)
                     FlushFo3PlayerState();
                 sessionState_ = changed->state;
+                // The original GL context is current on this event thread.
+                // Request cancellation now even if STOPPING prevents another
+                // submitted frame; unfinished CPU work remains cooperatively held.
+                if(sessionState_!=XR_SESSION_STATE_FOCUSED)PumpFo3ResidentWorkflow(false);
                 SetFo3ShoulderInteractionFocused(sessionState_==XR_SESSION_STATE_FOCUSED);
                 if(sessionState_!=XR_SESSION_STATE_FOCUSED) {fo3notify::Notifications().Clear();ResetFo3Pipboy();CancelFo3Lockpick();}
                 fo3audio::Context(gCurrentCellFormId,sessionState_ == XR_SESSION_STATE_FOCUSED);
@@ -1453,6 +1457,9 @@ private:
         fqactor::lastFrame=appFrameStarted;
         XrFrameBeginInfo beginInfo{XR_TYPE_FRAME_BEGIN_INFO};
         if (!CheckXr(xrBeginFrame(session_, &beginInfo), "xrBeginFrame")) return;
+        // Advance the reserved owner once, even when gameplay and view updates
+        // are excluded. It never auto-commits merely because staging is ready.
+        PumpFo3ResidentWorkflow(sessionState_==XR_SESSION_STATE_FOCUSED);
         fo3loadingvr::PrepareCatalog();
 
         std::array<XrCompositionLayerProjectionView, 2> projectionViews{

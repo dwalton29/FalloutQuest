@@ -4,13 +4,14 @@
 
 - Starting canonical main: `2987d911f318b92d1041257868067851a09d16f0` (v208).
 - Resumed from published `6469dbb872889a79a0682501b75f6ac6577ab547`.
-- Current implementation checkpoint: M1B3p reservation frame exclusion.
+- Current implementation checkpoint: M1B3q owned asynchronous resident workflow.
   Use canonical main history for the publication SHA; the previous published
-  resource implementation is M1B3o `c7a1dce77de905f07d865d837210d2d26d37c6d1`.
+  resource implementation is M1B3p `ab592e1cb7cddcdb6e05d80abff04b753fcc1de1`.
 - M1B3l Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38635385905.
 - M1B3m Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38793178567.
 - M1B3n Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38795209693.
 - M1B3o Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38797477661.
+- M1B3p Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38799323481.
   Earlier M1B3h CI confirmed the collision-policy include-order failure from g is fixed.
 - Re-fetched and preserved newer canonical v210 barter, v211 MS11 completion and
   v212 Moira fixes. Current baseline `5a4ad709d43d36ec756aaa48bae441e45f400db7`
@@ -45,6 +46,7 @@
 | M1B3m read-only interaction preflight | `1543fa28a4bd69c5fca72e4051598d93a3b8e6c2` | Confirmed |
 | M1B3n reference/cache publication | `66ed57cf5764af7bbed863c8e28e8009f945ee10` | Confirmed |
 | M1B3o composite commit/recovery | `c7a1dce77de905f07d865d837210d2d26d37c6d1` | Confirmed |
+| M1B3p reservation frame exclusion | `ab592e1cb7cddcdb6e05d80abff04b753fcc1de1` | Confirmed |
 
 The user directly confirmed permission to push to main on 2026-10-14. The old
 approval blocker is resolved. Command-line Git cannot authenticate for writes;
@@ -190,6 +192,9 @@ flowchart TD
    M1B3p ties frame mutation/effect/save exclusion and input rearming to the
    reservation (see `world-reference-m1b3p.md`). Timer/lifecycle handling and
    script ownership in the outer workflow remain unfinished.
+   M1B3q owns the script/packet across preparation, pumps outside gameplay
+   exclusion and binds explicit execution to that owner (see
+   `world-reference-m1b3q.md`). Resource finalization/reconciliation remain open.
    Exterior lights, remaining interaction ownership, queue reconciliation and the
    outer runtime/resource/actor coordinator remain unfinished. Only then admit
    general resident Enable/Disable; no success-only handlers are allowed.
@@ -577,3 +582,19 @@ There is still no production caller for the general resident workflow. Outer
 transaction ownership, complete authored/navigation/LOD admission, finalization,
 parked-result reconciliation, timer/lifecycle handling and command dispatch
 remain unfinished. v212 and bounded nonresident actor Disable remain preserved.
+
+## M1B3q validation
+
+The owned asynchronous resident workflow passes all 48 core host cases. Real
+worker-lane tests cover preparation failures, transfer exceptions, cancellation,
+stale context, teardown and retained settled owners. Real canonical Player tests
+run commit/rollback through the workflow owner with allocations forbidden and
+reject intervening revision, message-input and location changes. Both changed
+targets pass ASan/UBSan with LeakSanitizer disabled. Native structural guards,
+original ESM regressions and relevant rendering/body/Pip-Boy source checks pass.
+See `world-reference-m1b3q.md` for validation boundaries.
+
+No gameplay command starts the general resident workflow yet. Finalization and
+parked-result reconciliation, complete authored/navigation/LOD admission, timer
+rebasing and remaining lifecycle handling must precede general Enable/Disable
+dispatch. v212 and bounded nonresident actor Disable are preserved.

@@ -1,6 +1,7 @@
 #include "player/fo3-player-state.h"
 #include "world/fo3-reference-exchange.h"
 #include "world/fo3-resident-exchange.h"
+#include "world/fo3-resident-workflow.h"
 #include <array>
 #include <cassert>
 #include <cstdlib>
@@ -70,6 +71,37 @@ struct ScriptExchangeAdapter {
     resources[static_cast<size_t>(stage)-1]=false;return true;
   }
   bool Published() noexcept {return fail!=6&&player.CanRollbackScriptTransaction(script)&&publication.Accepts(publication.Stamp(),player.Snapshot().referenceStateRevision);}
+};
+struct ScriptWorkflowPacket {};
+struct ScriptWorkflowRequest {};
+using ScriptWorkflow=fo3scene::ResidentWorkflow<fo3player::ScriptTransactionPlan,ScriptWorkflowPacket,ScriptWorkflowRequest>;
+struct ScriptWorkflowAdapter {
+  fo3player::Player& player;
+  fo3scene::ReferencePublication& publication;
+  fo3scene::ReferenceExchange::Snapshot& cache;
+  fo3scene::ReferenceExchange& references;
+  ScriptWorkflow& workflow;
+  int fail=-1;
+  std::array<bool,4> resources{};
+  bool reserved=true;
+  std::unique_ptr<ScriptWorkflowPacket> gpu;
+  bool Current(uint64_t ticket,const fo3player::ScriptTransactionPlan& script) const noexcept {
+    return reserved&&ticket==1&&script.HasReferenceChanges()&&player.CanCommitScriptTransaction(script);
+  }
+  bool Drain(uint64_t){return true;}
+  bool StartCpu(uint64_t,const ScriptWorkflowRequest&,const fo3player::ScriptTransactionPlan& script) {
+    return script.CandidateReferences()&&script.RollbackReferences()&&!script.AffectedReferences().empty();
+  }
+  fo3scene::ResidentCpuProgress CpuProgress(uint64_t){return fo3scene::ResidentCpuProgress::Ready;}
+  bool TakeCpu(uint64_t,std::unique_ptr<ScriptWorkflowPacket>& packet){packet=std::make_unique<ScriptWorkflowPacket>();return true;}
+  bool BeginGpu(std::unique_ptr<ScriptWorkflowPacket>& packet){gpu=std::move(packet);return true;}
+  fo3scene::GpuStageResult AdvanceGpu(std::unique_ptr<ScriptWorkflowPacket>& packet){packet=std::move(gpu);return fo3scene::GpuStageResult::Ready;}
+  bool Cancel(uint64_t){gpu.reset();reserved=false;return true;}
+  fo3scene::ResidentExchangeResult Execute(ScriptWorkflowPacket& packet,fo3player::ScriptTransactionPlan& script) noexcept {
+    assert(workflow.OwnsExchange(1,packet,script));
+    ScriptExchangeAdapter adapter{player,script,publication,cache,references,fail,{}};
+    const auto result=fo3scene::ExecuteResidentExchange(adapter);resources=adapter.resources;return result;
+  }
 };
 int main(){
   std::string error;fo3player::Player p(Fixture());
@@ -194,18 +226,51 @@ int main(){
     const auto stamp=publication.Stamp();
     auto references=fo3scene::ReferenceExchange::Prepare(publication,cache,before,logical->CandidateReferences(),logical->RollbackReferences());
     assert(references);
-    ScriptExchangeAdapter adapter{owner,*logical,publication,cache,*references,failure,{}};
-    forbidAllocations=true;const auto result=fo3scene::ExecuteResidentExchange(adapter);forbidAllocations=false;
+    ScriptWorkflow workflow;
+    ScriptWorkflowAdapter adapter{owner,publication,cache,*references,workflow,failure,{},true,{}};
+    const auto* owned=logical.get();const auto originalRevision=owner.Revision();
+    assert(workflow.Begin(1,logical,{},adapter)&&!logical);
+    for(int i=0;i<3;++i){
+      workflow.Pump(adapter);
+      assert(owner.Revision()==originalRevision&&owner.ItemCount(400)==0&&cache==before);
+      NoEffects(owner);
+    }
+    assert(workflow.State()==fo3scene::ResidentWorkflowPhase::Ready);
+    forbidAllocations=true;const auto result=workflow.Execute(1,adapter);forbidAllocations=false;
+    assert(adapter.reserved&&!workflow.RequestCancel(1));
     using Status=fo3scene::ResidentExchangeStatus;
-    if(failure<0){assert(result.status==Status::Committed&&owner.ItemCount(400)==1&&owner.PendingScriptMessageCount()==1&&cache==logical->CandidateReferences());}
+    if(failure<0){assert(result.status==Status::Committed&&owner.ItemCount(400)==1&&owner.PendingScriptMessageCount()==1&&cache==owned->CandidateReferences());}
     else {
       assert(result.status==(failure?Status::RolledBack:Status::Rejected));
       for(bool applied:adapter.resources)assert(!applied);
       assert(owner.ItemCount(400)==0&&owner.Snapshot().pipboy.quests.empty());NoEffects(owner);
-      assert(cache==(failure?logical->RollbackReferences():before));
+      assert(cache==(failure?owned->RollbackReferences():before));
       assert(publication.Accepts(publication.Stamp(),owner.Snapshot().referenceStateRevision));
       if(failure)assert(!publication.Accepts(stamp,0));
     }
+    workflow.ResetAfterDrain();
+  }
+  // The owner validates the actual Player plan on each pump and at execution.
+  // Canonical revision, input/effect epoch and location changes during the
+  // reserved interval cannot publish a previously prepared private candidate.
+  for(int stale=0;stale<3;++stale){
+    auto catalog=Fixture();catalog.pipboy.formNames["fixtureref"]=100;
+    catalog.pipboy.quests[10].stages[30].items.emplace_back().result=Script("FixtureRef.Disable\nplayer.AddItem TestItem 1");
+    fo3player::Player owner(std::move(catalog));
+    auto logical=owner.PrepareQuestStageTransaction(10,30,error);assert(logical);
+    auto before=std::make_shared<const fo3world::ReferenceStateSnapshot>(owner.CaptureReferenceState());
+    fo3scene::ReferencePublication publication;publication.Publish(before);auto cache=before;
+    auto references=fo3scene::ReferenceExchange::Prepare(publication,cache,before,logical->CandidateReferences(),logical->RollbackReferences());assert(references);
+    ScriptWorkflow workflow;
+    ScriptWorkflowAdapter adapter{owner,publication,cache,*references,workflow,-1,{},true,{}};
+    assert(workflow.Begin(1,logical,{},adapter));
+    for(int i=0;i<3;++i)workflow.Pump(adapter);
+    if(stale==0){const auto revision=owner.Revision();assert(owner.DamageHealth(1)&&owner.Revision()!=revision);}
+    if(stale==1)assert(owner.SubmitScriptMessageButton(100,1));
+    if(stale==2)owner.SetScriptPlayerLocation(100,200,300,400,0);
+    workflow.Pump(adapter);assert(workflow.State()==fo3scene::ResidentWorkflowPhase::Cancelling);
+    assert(workflow.Execute(1,adapter).status==fo3scene::ResidentExchangeStatus::Rejected);
+    workflow.Pump(adapter);assert(!workflow.Active()&&!adapter.reserved&&cache==before&&owner.ItemCount(400)==0);
   }
   std::cout<<"Detached whole-script state/effect transactions, previews, publication, rollback and delivery/input guards passed\n";
 }

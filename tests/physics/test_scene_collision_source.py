@@ -300,7 +300,7 @@ rollback_reference=reference_plan[reference_plan.index('bool RollbackFo3Resident
 assert 'Fo3ResidentInteractionAdmissionCurrent()' not in rollback_reference
 print('Reference publication/cache exchange owns monotonic candidate/rollback projections and follows lane lifecycle guards')
 
-executor=s[s.index('struct Fo3ResidentExchangeAdapter {'):s.index('// Dynamic NPC arrivals use')]
+executor=s[s.index('struct Fo3ResidentExchangeAdapter {'):s.index('// Reserved asynchronous owner.')]
 for proof in ('&cpu==gFo3ResidentPreparedPacket','cpu.collision.Get()==gFo3ResidentPreparedCollision',
               'script.CandidateReferences()==cpu.candidate','script.RollbackReferences()==cpu.rollback',
               'script.AffectedReferences()==cpu.affected','CanCommitScriptTransaction(script)',
@@ -331,7 +331,7 @@ assert flush.index('gFo3ResidentExchangeRecoveryFailed') < flush.index('WeaponPe
 print('Composite executor binds canonical/prepared resources, maps all exchanges/undo and blocks success/save/effects on recovery failure')
 
 frame_gate=s[s.index('bool Fo3ResidentFrameBlocked(){'):s.index('void ResetFo3ResidentPreparationLane(){')]
-assert 'gFo3ResidentLane.Blocked()||gFo3ResidentExchangeExecuting||gFo3ResidentExchangeRecoveryFailed' in frame_gate
+assert 'gFo3ResidentLane.Blocked()||gFo3ResidentWorkflow.Active()||gFo3ResidentExchangeExecuting||gFo3ResidentExchangeRecoveryFailed' in frame_gate
 acquire=s[s.index('uint64_t AcquireFo3ResidentAssetLane()'):s.index('bool PollFo3ResidentAssetLane(')]
 assert acquire.index('CaptureFo3ResidentInteractionActivity().Idle()') < acquire.index('gFo3ResidentLane.Acquire()')
 assert flush.index('Fo3ResidentFrameBlocked()') < flush.index('WeaponPersistWorld()')
@@ -367,3 +367,28 @@ assert 'residentInputBarrier_.Allow(Fo3ResidentFrameBlocked(),neutral)' in loop
 assert 'residentInputBarrier_.Allow(true,false)' in loop
 assert loop.index('previousWorldClockNs=clockNs;') > loop.index('scriptPlayer.PumpQuestGameMode(seconds)')
 print('Reservation excludes frame mutations/save/effects while retaining tracking and asset progress; held controls require release')
+
+workflow=s[s.index('// Reserved asynchronous owner.'):s.index('// Dynamic NPC arrivals use')]
+for binding in ('CanCommitScriptTransaction(script)','script.CandidateReferences()',
+                'script.RollbackReferences()','script.AffectedReferences()',
+                'PollFo3ResidentAssetLane(ticket)','StartFo3ResidentCpuPreparation(ticket,',
+                'TakeFo3ResidentCpuPreparation(ticket,packet)','BeginFo3ResidentGpuStage(packet)',
+                'AdvanceFo3ResidentGpuStage(packet)','CancelFo3ResidentPreparation(ticket)',
+                'ExecuteFo3ResidentPreparedExchange(packet,script)'):
+    assert binding in workflow,binding
+assert 'gFo3ResidentWorkflow.OwnsExchange(cpu.assetTicket,cpu,script)' in executor
+assert 'gFo3ResidentWorkflow.Active()' in release and 'gFo3ResidentWorkflowCleanup' in cancel
+assert reset.index('gFo3ResidentLane.Reset()') < reset.index('gFo3ResidentWorkflow.ResetAfterDrain()')
+pump=loop.index('PumpFo3ResidentWorkflow(sessionState_==XR_SESSION_STATE_FOCUSED)')
+assert loop.index('xrBeginFrame(session_, &beginInfo)') < pump < loop.index('if (frameState.shouldRender)')
+assert not guarded('PumpFo3ResidentWorkflow(')
+assert loop.index('if(sessionState_!=XR_SESSION_STATE_FOCUSED)PumpFo3ResidentWorkflow(false)') < loop.index('SetFo3ShoulderInteractionFocused(')
+native_pump=workflow[workflow.index('void PumpFo3ResidentWorkflow('):workflow.index('fo3scene::ResidentExchangeResult ExecuteFo3ResidentWorkflow(')]
+assert 'if(!focused)' in native_pump and 'RequestCancel' in native_pump
+assert 'ExecuteFo3' not in native_pump
+factory=workflow[workflow.index('uint64_t BeginFo3ResidentWorkflow('):workflow.index('bool CancelFo3ResidentWorkflow(')]
+assert factory.index('AcquireFo3ResidentAssetLane()') < factory.index('prepare(player)') < factory.index('gFo3ResidentWorkflow.Begin(')
+assert 'const fo3player::Player&' in factory and 'CancelFo3ResidentPreparation(ticket)' in factory
+for forbidden in ('FlushFo3','PollScript','PollQuest','DispatchReferenceEvent','glDraw','PumpFo3AndroidEvents'):
+    assert forbidden not in workflow
+print('Native workflow owns the script/packet, advances outside gameplay exclusion and retains all settled owners for finalization')
