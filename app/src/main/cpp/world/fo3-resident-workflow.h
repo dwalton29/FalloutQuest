@@ -3,6 +3,7 @@
 #include "fo3-resident-gpu-stage.h"
 #include <memory>
 #include <type_traits>
+#include <utility>
 
 namespace fo3scene {
 enum class ResidentWorkflowPhase {Idle,Draining,Cpu,Gpu,Ready,Cancelling,Executing,Settled,RecoveryFailed};
@@ -68,7 +69,7 @@ public:
     }
     template<class Adapter>
     ResidentExchangeResult Execute(uint64_t ticket,Adapter& adapter) noexcept {
-        static_assert(noexcept(adapter.Execute(*packet_,*script_)));
+        static_assert(noexcept(adapter.Execute(std::declval<Packet&>(),std::declval<Script&>())));
         if(!ticket||ticket!=ticket_||phase_!=Phase::Ready||!packet_||!script_)return {};
         phase_=Phase::Executing; // No cancellation or reentrant second commit.
         outcome_=adapter.Execute(*packet_,*script_);
