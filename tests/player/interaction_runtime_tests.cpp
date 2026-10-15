@@ -10,6 +10,7 @@
 #undef far
 #include "world/interaction/fo3-interaction.h"
 #include "world/interaction/fo3-loot-cursor.h"
+#include "world/fo3-resident-interaction.h"
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
@@ -31,6 +32,7 @@ struct Vec3 {
 };
 struct GpuObject {
   bool q220LooseObject = true;
+  bool q2400SwingDoor = false;
   std::string baseRecordType;
   uint32_t refFormId = 10, baseFormId = 100;
   float minX = -.1f, maxX = .1f, minY = -.1f, maxY = .1f, minZ = -1.1f,
@@ -100,9 +102,19 @@ std::vector<ActorTarget> gQ230NpcActors;
 bool Q230LiveBounds(const ActorTarget& actor,std::array<float,3>& lo,std::array<float,3>& hi){lo=actor.lo;hi=actor.hi;return true;}
 bool DialogueCanStart(ActorTarget& actor){return actor.eligible;}
 bool StartFo3Dialogue(uint32_t actor){talked=actor;dialogueFocus=true;return true;}
-bool Fo3LockpickFocus(){return false;}
+bool lockpickFocus=false,lockpickLatch=false;
+bool Fo3LockpickFocus(){return lockpickFocus;}
+bool Fo3LockpickInputBlocked(){return lockpickFocus||lockpickLatch;}
+bool barterFocus=false;
+bool Fo3BarterFocus(){return barterFocus;}
 bool BeginFo3Lockpick(uint32_t){return false;}
 #include "world/interaction/fo3-interaction-runtime.inc"
+struct {bool active=false;} gSceneLoad;
+uint32_t gExteriorWorldspaceQ1890=0;
+std::unordered_map<uint32_t,int> gQ2400InteriorDoors;
+fo3shoulder::Gesture gShoulderGesture;
+namespace weaponruntime {bool held=false,support=false,magazine=false,charging=false;}
+#include "world/fo3-resident-interaction-runtime.inc"
 void Check(bool ok, const char *why) {
   if (!ok)
     throw std::runtime_error(why);
@@ -394,6 +406,62 @@ int main() {
     Check(QueryFo3Interaction(0,0,0,0,0,-1,restoredTarget)&&restoredTarget.scripted&&restoredTarget.allowed,"enabled ACTI uses saved state for interaction");
     Check(gPlayerSession->player.StageReferenceEnable(10,false,worldError),"restore disabled state");
     Check(!QueryFo3Interaction(0,0,0,0,0,-1,restoredTarget),"disabled state prevents stale object targeting");
+    // Real runtime preflight reads these UI/physics registries without clearing
+    // or lazily populating them. Keep the new v210+ barter focus independent.
+    using Hazard=fo3scene::ResidentInteractionHazard;
+    fo3player::Catalog admissionCatalog;
+    for(uint32_t id=1000;id<1010;++id)admissionCatalog.references[id].base=id+1000;
+    admissionCatalog.actorPlacements[1001]={};
+    admissionCatalog.actorInventories[2002]={};
+    admissionCatalog.items[2003]={};
+    admissionCatalog.pipboy.furniture[2004]={};
+    admissionCatalog.initial.collected.insert(1005);
+    gPlayerSession=std::make_unique<fo3player::Session>(admissionCatalog);
+    gObjects.clear();gQ230NpcActors.clear();gQ223DynamicBodies.clear();
+    for(auto& hand:gQ220Grab)hand={};
+    gLootPanel.reference=0;gScriptMessagePanel.visible=false;dialogueFocus=pipFocus=false;
+    loading=false;gSceneReady=true;
+    const auto revision=gPlayerSession->player.Revision();
+    Check(CaptureFo3ResidentInteractionActivity().Idle(),"idle runtime admits preflight");
+    Check(Fo3ResidentInteractionHazard(1000)==Hazard::None,"static identity has no transient hazard");
+    ActorTarget resident;resident.source.refFormId=1000;gQ230NpcActors.push_back(resident);
+    Check(Fo3ResidentInteractionHazard(1000)==Hazard::Actor,"resident actor registry is independently guarded");gQ230NpcActors.clear();
+    Check(Fo3ResidentInteractionHazard(9999)==Hazard::UnknownReference,"unknown reference rejects");
+    Check(Fo3ResidentInteractionHazard(1001)==Hazard::Actor,"unloaded authored actor rejects");
+    Check(Fo3ResidentInteractionHazard(1002)==Hazard::Actor,"actor base rejects without resident visual");
+    Check(Fo3ResidentInteractionHazard(1003)==Hazard::LooseObject,"incoming pickup rejects before body creation");
+    Check(Fo3ResidentInteractionHazard(1004)==Hazard::Furniture,"incoming furniture rejects before residency");
+    Check(Fo3ResidentInteractionHazard(1005)==Hazard::CollectedObject,"collected resource stays excluded");
+    gQ220Grab[0].refFormId=1006;
+    Check(Fo3ResidentInteractionHazard(1006)==Hazard::HeldObject&&gQ220Grab[0].refFormId==1006,"held object rejected without releasing hand");
+    gQ223DynamicBodies[1007]=1;
+    Check(Fo3ResidentInteractionHazard(1007)==Hazard::LooseObject&&gQ223DynamicBodies.count(1007),"sleeping/moving loose-body ownership rejects");
+    gQ2400InteriorDoors[1008]=1;
+    Check(Fo3ResidentInteractionHazard(1008)==Hazard::SwingDoor&&gQ2400InteriorDoors.count(1008),"local door state remains untouched");
+    GpuObject local;local.refFormId=1009;local.q220LooseObject=false;local.q2400SwingDoor=true;gObjects.push_back(local);
+    Check(Fo3ResidentInteractionHazard(1009)==Hazard::SwingDoor,"uncached live swing door rejects");
+    gObjects.back().q2400SwingDoor=false;gObjects.back().q220LooseObject=true;
+    Check(Fo3ResidentInteractionHazard(1009)==Hazard::LooseObject,"loose visual rejects before lazy body creation");
+    gObjects.back().q220LooseObject=false;gObjects.back().baseRecordType="FURN";
+    Check(Fo3ResidentInteractionHazard(1009)==Hazard::Furniture,"live furniture visual independently rejects");
+    auto flagReject=[&](bool& flag){flag=true;Check(!CaptureFo3ResidentInteractionActivity().Idle()&&flag,"modal/physical focus rejects without mutation");flag=false;};
+    flagReject(dialogueFocus);flagReject(pipFocus);flagReject(barterFocus);
+    flagReject(lockpickFocus);flagReject(lockpickLatch);
+    flagReject(gScriptMessagePanel.visible);flagReject(gPlayerSession->saveBlocked);
+    flagReject(weaponruntime::held);flagReject(weaponruntime::support);
+    flagReject(weaponruntime::magazine);flagReject(weaponruntime::charging);
+    flagReject(gSceneLoad.active);flagReject(loading);
+    gLootPanel.reference=1000;Check(!CaptureFo3ResidentInteractionActivity().Idle()&&gLootPanel.reference==1000,"loot panel is not dismissed by preflight");gLootPanel.reference=0;
+    gShoulderGesture.reference=1006;Check(!CaptureFo3ResidentInteractionActivity().Idle()&&gShoulderGesture.reference==1006,"shoulder transfer remains armed");gShoulderGesture.Reset();
+    gExteriorWorldspaceQ1890=1;Check(!CaptureFo3ResidentInteractionActivity().Idle(),"exterior interaction admission stays unsupported");gExteriorWorldspaceQ1890=0;
+    gSceneReady=false;Check(!CaptureFo3ResidentInteractionActivity().Idle(),"unready scene rejects without starting work");gSceneReady=true;
+    auto guard=fo3scene::ResidentInteractionAdmission::Prepare(1,{1000},CaptureFo3ResidentInteractionActivity(),Fo3ResidentInteractionHazard);
+    Check(bool(guard),"unaffected transient registries do not block static scope");
+    barterFocus=true;
+    Check(guard->Current(1,CaptureFo3ResidentInteractionActivity(),Fo3ResidentInteractionHazard)==fo3scene::ResidentInteractionAdmissionResult::Busy&&barterFocus,"barter opened after preparation invalidates commit admission");barterFocus=false;
+    gQ223DynamicBodies[1000]=1;
+    Check(guard->Current(1,CaptureFo3ResidentInteractionActivity(),Fo3ResidentInteractionHazard)==fo3scene::ResidentInteractionAdmissionResult::UnsupportedReference,"late loose-body creation invalidates admission");gQ223DynamicBodies.erase(1000);
+    Check(gPlayerSession->player.Revision()==revision,"preflight does not change Player revision");
     std::cout << "Interaction runtime tests passed\n";
     return 0;
   } catch (const std::exception &e) {

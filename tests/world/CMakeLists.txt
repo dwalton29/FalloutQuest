@@ -94,3 +94,9 @@ target_compile_options(door_resource_tests PRIVATE -Wall -Wextra -Werror -UNDEBU
 target_include_directories(door_resource_tests PRIVATE ../../app/src/main/cpp)
 target_link_libraries(door_resource_tests PRIVATE ZLIB::ZLIB)
 add_test(NAME door_resource_tests COMMAND door_resource_tests)
+
+add_executable(resident_interaction_tests resident_interaction_tests.cpp)
+target_compile_features(resident_interaction_tests PRIVATE cxx_std_17)
+target_compile_options(resident_interaction_tests PRIVATE -Wall -Wextra -Werror -UNDEBUG)
+target_include_directories(resident_interaction_tests PRIVATE ../../app/src/main/cpp/world)
+add_test(NAME resident_interaction_tests COMMAND resident_interaction_tests)

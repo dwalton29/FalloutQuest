@@ -194,7 +194,7 @@ assert 'MatchesFo3PlacedInteriorLights(gFo3InteriorLighting,gFo3PlacedLights)' i
 for forbidden in ('PublishFo3InteriorLighting(','gFo3Environment=','gFo3ImageSpace=','LoadFo3CellEnvironment('):
     assert forbidden not in light_plan
 assert advance.index('PrepareFo3ResidentLightPlan(') < advance.index('PrepareFo3ResidentVisualPlan(')
-assert 'else {DiscardFo3ResidentLightPlan();DiscardFo3ResidentDoorInteractionPlan();}' in advance
+assert 'else {DiscardFo3ResidentLightPlan();DiscardFo3ResidentDoorInteractionPlan();gFo3ResidentInteractionAdmission.reset();}' in advance
 assert 'gFo3ResidentLightPlan' in release
 assert cancel.index('gFo3ResidentLightPlan->Applied()') < cancel.index('DiscardFo3ResidentLightPlan()')
 for region in (begin,teardown):
@@ -245,3 +245,37 @@ prepare=doors[doors.index('bool PrepareFo3ResidentDoorResources('):doors.index('
 for forbidden in ('Fo3LiveDoorResources','Publication()','Pending()','PlayerSession','glGen'):
     assert forbidden not in prepare
 print('Load-door resources capture privately, guard epochs and couple targeting/prompts through lifecycle checks')
+
+# Transient menus/physics are rejected, never silently closed or reset to admit
+# an exchange. Recheck before worker capture, every GPU step and final commits.
+probe=Path('app/src/main/cpp/world/fo3-resident-interaction-runtime.inc').read_text()
+for forbidden in ('Poll','Cancel','CloseFo3','EndContainer','Reset','emplace','push_back','operator[]'):
+    assert forbidden not in probe
+for focus in ('Fo3DialogueFocus()','Fo3BarterFocus()','Fo3PipboyFocus()',
+              'Fo3ScriptMessageFocus()','Fo3LockpickFocus()','Fo3LockpickInputBlocked()',
+              'GetFo3LootPanel().reference','weaponruntime::held','weaponruntime::magazine',
+              'weaponruntime::charging','gShoulderGesture.reference'):
+    assert focus in probe
+for hazard in ('catalog.actorPlacements','catalog.actorInventories','player.Snapshot().actors',
+               'gQ230NpcActors','gQ220Grab','player.IsCollected','gQ223DynamicBodies',
+               'catalog.items','gQ2400InteriorDoors','catalog.pipboy.furniture'):
+    assert hazard in probe
+assert lane_start.index('ResidentInteractionAdmission::Check(') < lane_start.index('live.reserve(gObjects.size())')
+assert 'ResidentInteractionAdmission::Check(cpu.affected' in stamp
+assert 'result.affected=affected' in immutable
+for forbidden in ('CaptureFo3ResidentInteractionActivity','Fo3ResidentInteractionHazard','gFo3ResidentInteractionAdmission'):
+    assert forbidden not in immutable
+assert advance.index('PrepareFo3ResidentInteractionAdmission(') < advance.index('PrepareFo3ResidentDoorInteractionPlan(')
+for signature,exchange in [('bool CommitFo3ResidentVisualPlan()', 'gFo3ResidentVisualPlan->Commit('),
+                           ('bool CommitFo3ResidentLightPlan()', 'gFo3ResidentLightPlan->Commit('),
+                           ('bool CommitFo3ResidentDoorInteractionPlan()', 'CommitFo3ResidentDoorPlan()')]:
+    region=s[s.index(signature):].split('\n}',1)[0]
+    assert region.index('Fo3ResidentInteractionAdmissionCurrent()') < region.index(exchange)
+for signature in ('bool RollbackFo3ResidentVisualPlan()', 'bool RollbackFo3ResidentLightPlan()', 'bool RollbackFo3ResidentDoorInteractionPlan()'):
+    assert 'Fo3ResidentInteractionAdmissionCurrent()' not in s[s.index(signature):].split('\n}',1)[0]
+assert release.index('gFo3ResidentLane.Release(ticket)') < release.index('gFo3ResidentInteractionAdmission.reset()')
+assert cancel.index('gFo3ResidentLane.Owns(ticket)') < cancel.index('gFo3ResidentInteractionAdmission.reset()')
+staged=s[s.index('bool PrepareFo3ResidentInteractionAdmission('):s.index('// Render-thread-only private GPU preparation.')]
+assert 'object.q2400SwingDoor||object.q220LooseObject' in staged
+assert 'object.baseRecordType=="FURN"' in staged
+print('Resident interaction preflight rejects live/staged hazards and guards worker/GPU/commit without restricting rollback')

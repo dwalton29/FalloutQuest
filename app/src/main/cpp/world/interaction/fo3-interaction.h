@@ -36,3 +36,4 @@ void SetFo3ShoulderInteractionFocused(bool focused);
 bool Fo3LockpickFocus();
 void CancelFo3Lockpick();
 bool Fo3LockpickInputBlocked();
+bool Fo3ScriptMessageFocus();

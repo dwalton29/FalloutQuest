@@ -4,11 +4,17 @@
 
 - Starting canonical main: `2987d911f318b92d1041257868067851a09d16f0` (v208).
 - Resumed from published `6469dbb872889a79a0682501b75f6ac6577ab547`.
-- Current implementation checkpoint: M1B3l reversible interior load-door resources.
+- Current implementation checkpoint: M1B3m read-only resident interaction preflight.
   Use canonical main history for the publication SHA; the previous published
-  implementation is M1B3k `7f97e3f062609847e972cdf34f32133896410028`.
-- Previous M1B3k Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38633472657.
+  resource implementation is M1B3l `b91803140f957935c3e1ede182f6dcddd5affb8a`.
+- M1B3l Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38635385905.
   Earlier M1B3h CI confirmed the collision-policy include-order failure from g is fixed.
+- Re-fetched and preserved newer canonical v210 barter, v211 MS11 completion and
+  v212 Moira fixes. Current baseline `5a4ad709d43d36ec756aaa48bae441e45f400db7`
+  is 212 / 0.74.1-moira-barter; its Android CI succeeded (run 38647849567).
+  v211 admits a separate bounded nonresident actor Disable path through dialogue;
+  general resident Enable/Disable remains unfinished. Older checkpoint statements
+  below describe their historical boundary, not removal of that v211 support.
 - M1B2 scene-load/stream-in integration is host-validated and pushed; the remote
   tree matches the tested tree `20c0e9cd4d5206190925d30a68408400c6fb1923`. Newer v209 is preserved: 209 / 0.72.0-persistent-player-stats.
 
@@ -32,6 +38,7 @@
 | M1B3i reserved resident asset lane | `b57842aeb7e39c34f182f6debc3e44efd6146196` | Confirmed |
 | M1B3j private collision resources | `98ad9cbd3e4c0ece6188e2108f3e76a391772f65` | Confirmed |
 | M1B3k reversible interior lights | `7f97e3f062609847e972cdf34f32133896410028` | Confirmed |
+| M1B3l reversible interior load doors | `b91803140f957935c3e1ede182f6dcddd5affb8a` | Confirmed |
 
 The user directly confirmed permission to push to main on 2026-10-14. The old
 approval blocker is resolved. Command-line Git cannot authenticate for writes;
@@ -100,7 +107,7 @@ OnPackageEnd and OnPackageDone both occur (20 each); do not conflate them.
 | Events | Reference OnActivate, weapon OnHit/OnDeath, quest/resident ACTI GameMode | NPC activation uses separate narrow dialogue bridge; most events indexed but undelivered |
 | Scheduling | 4 Hz bounded quest/ACTI dispatch on simulation thread | No resident NPC GameMode, trigger/package/effect lifecycle; no PC timing parity claim |
 | Actor control | EVP increments package revision; physical damage/death exist | Kill/resurrect/combat/faction/AV/equipment commands mostly missing |
-| World control | Lock/unlock through canonical persistent APIs; M1A GetDisabled follows complete original enable-parent chains | M1B1 persists staged enable overlays; script Enable/Disable, move/spawn/delete remain unavailable |
+| World control | Lock/unlock through canonical persistent APIs; M1A GetDisabled follows complete original enable-parent chains; v211 bounded off-scene actor Disable through dialogue transactions | M1B1 persists staged enable overlays; general resident Enable/Disable, move/spawn/delete remain unavailable |
 | Scene / streaming | Async geometry/texture/collision preparation, atomic publication, NPC cell handoff | Saved enable state now selects placements/lights/collision inputs on scene load and stream-in; live script mutation publication and cross-cell relocation remain unfinished |
 | Audio / UI | Transactional MESG, sounds, Karma and quest notices | Narrow formatting; no Say/SayTo or PlayGroup/IsAnimPlaying scripting interface |
 | Persistence | FQPS v14 for unchanged attributes, v15 with RFE1/PST1 for attribute overrides; QST1 globals/running/journal; QNF1 reveal history; locks, XP, actors, inventory, ownership | M1B1 RFE1 root-enable overlay; level allocation absent |
@@ -146,7 +153,8 @@ flowchart TD
 1. M0/M1A/M1B1/M1B2 are published; verify the current Android CI result below.
 2. M1B1 backend implemented: canonical saved root-enable overrides, graph queries,
    bounded RFE1 validation, owned immutable projections, and regression tests.
-   See `world-reference-m1b1.md`. No source Enable/Disable handler exists.
+   See `world-reference-m1b1.md`. M1B1 does not itself admit world commands;
+   v211's separate bounded nonresident actor Disable path is preserved.
 3. M1B2 implemented and validated: saved snapshots feed scene/stream-in
    placements, lights, collision inputs and canonical interaction permissions.
    See `world-reference-m1b2.md`. The **first unfinished implementation is M1B3**:
@@ -167,8 +175,11 @@ flowchart TD
    resources and cache epochs (see `world-reference-m1b3k.md`).
    M1B3l couples authored interior XTEL targeting anchors with prompt metadata/text,
    immutable worker preparation and reversible cache ownership (see `world-reference-m1b3l.md`).
-   Exterior lights, remaining interactions, queue reconciliation and the outer runtime/resource/actor coordinator remain unfinished. Only then admit source
-   Enable/Disable; no success-only handlers are allowed.
+   M1B3m adds read-only interaction/dynamic-state admission before worker/GPU work
+   and resource commits (see `world-reference-m1b3m.md`).
+   Exterior lights, remaining interaction ownership, queue reconciliation and the
+   outer runtime/resource/actor coordinator remain unfinished. Only then admit
+   general resident Enable/Disable; no success-only handlers are allowed.
 4. M1C+: cross-cell MoveTo/MoveToMarker with original placements/actor handoff,
    spawn identity/lifecycle and Delete; transaction/persistence tests.
 5. M2–M11 in task order, subdividing independently testable checkpoints.
@@ -478,3 +489,22 @@ interaction/loot/lock UI, actors, held/loose objects, navigation, exterior light
 interaction scope, baked LOD admission and final canonical/resource publication
 with queue reconciliation still need coordination. World commands remain
 rejected; v209 is unchanged. No physical Quest/performance claim is made.
+
+## M1B3m validation
+
+Continues newer v212 main, preserving original barter/Moira and MS11 reward
+changes and v211's bounded nonresident actor Disable path. Read-only resident
+interaction admission passes thirteen world, 31 player and one physics CTest
+cases (45 core host cases). The actual runtime probe covers UI focus, weapon/
+shoulder handling, original/live actors, held/loose/collected references, local
+doors and furniture without clearing their state. Pure tests cover malformed
+scopes, wrong tickets, owned affected lists, late hazards, allocation failure
+and allocation-free rechecks. Resource rollback remains available while busy.
+Pure admission/resource/lane/GPU/door tests pass ASan/UBSan with LeakSanitizer
+disabled; original Brass Lantern door regression and relevant source checks pass.
+See `world-reference-m1b3m.md`.
+
+This is conservative admission, not ownership of UI, actors, local doors, held
+objects or navigation. General resident Enable/Disable and final canonical/
+resource publication, effect/save/simulation exclusion and queue reconciliation
+remain unfinished. v212 is unchanged; no physical Quest/performance claim.
