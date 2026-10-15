@@ -194,7 +194,8 @@ assert 'MatchesFo3PlacedInteriorLights(gFo3InteriorLighting,gFo3PlacedLights)' i
 for forbidden in ('PublishFo3InteriorLighting(','gFo3Environment=','gFo3ImageSpace=','LoadFo3CellEnvironment('):
     assert forbidden not in light_plan
 assert advance.index('PrepareFo3ResidentLightPlan(') < advance.index('PrepareFo3ResidentVisualPlan(')
-assert 'else {DiscardFo3ResidentLightPlan();DiscardFo3ResidentDoorInteractionPlan();gFo3ResidentInteractionAdmission.reset();}' in advance
+assert 'DiscardFo3ResidentLightPlan();DiscardFo3ResidentDoorInteractionPlan();' in advance
+assert 'DiscardFo3ResidentReferencePublicationPlan();gFo3ResidentInteractionAdmission.reset();' in advance
 assert 'gFo3ResidentLightPlan' in release
 assert cancel.index('gFo3ResidentLightPlan->Applied()') < cancel.index('DiscardFo3ResidentLightPlan()')
 for region in (begin,teardown):
@@ -279,3 +280,22 @@ staged=s[s.index('bool PrepareFo3ResidentInteractionAdmission('):s.index('// Ren
 assert 'object.q2400SwingDoor||object.q220LooseObject' in staged
 assert 'object.baseRecordType=="FURN"' in staged
 print('Resident interaction preflight rejects live/staged hazards and guards worker/GPU/commit without restricting rollback')
+
+# The precomputed canonical rollback projection travels only as an owned,
+# immutable worker value, then couples the scene publication and fast cache.
+assert lane_start.index('ValidResidentReferenceProjections(') < lane_start.index('gFo3ResidentLane.Start(ticket,')
+assert 'rollback=std::move(rollback)' in immutable and 'result.rollback=rollback' in immutable
+assert advance.index('PrepareFo3ResidentReferencePublicationPlan(') < advance.index('PrepareFo3ResidentVisualPlan(')
+reference_plan=s[s.index('bool PrepareFo3ResidentReferencePublicationPlan('):s.index('// Render-thread-only private GPU preparation.')]
+assert 'cpu.published,cpu.candidate,cpu.rollback' in reference_plan
+assert 'ReferenceExchange::Prepare(gFo3ScenePublication,gFo3ReferenceState' in reference_plan
+for forbidden in ('CommitScriptTransaction','RollbackScriptTransaction','FlushFo3PlayerState','PublishFo3Collision'):
+    assert forbidden not in reference_plan
+assert 'Snapshot().referenceStateRevision' in reference_plan
+assert 'gFo3ResidentReferencePublicationPlan' in release
+assert cancel.index('gFo3ResidentReferencePublicationPlan->Applied()') < cancel.index('DiscardFo3ResidentReferencePublicationPlan()')
+reset=s[s.index('void ResetFo3ResidentPreparationLane(){'):s.index('bool Fo3ResidentLaneContextCurrent()')]
+assert reset.index('gFo3ResidentLane.Reset()') < reset.index('DiscardFo3ResidentReferencePublicationPlan()')
+rollback_reference=reference_plan[reference_plan.index('bool RollbackFo3ResidentReferencePublicationPlan()'):]
+assert 'Fo3ResidentInteractionAdmissionCurrent()' not in rollback_reference
+print('Reference publication/cache exchange owns monotonic candidate/rollback projections and follows lane lifecycle guards')

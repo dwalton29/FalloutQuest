@@ -1,4 +1,5 @@
 #include "player/fo3-player-state.h"
+#include "world/fo3-reference-exchange.h"
 #include <cassert>
 #include <cstdlib>
 #include <fstream>
@@ -128,5 +129,32 @@ int main(){
   assert(failing.Revision()==savedRevision&&!failing.CommitScriptTransaction(*pending));
   assert(failing.SubmitScriptMessageButton(100,1)); // failure still consumed delivered input
   std::remove(path.c_str());
+  // The canonical whole-script rollback and its renderer publication must use
+  // the same precomputed revision, rather than restoring an old worker stamp.
+  for(bool publishCandidate:{false,true}) {
+  auto worldCatalog=Fixture();worldCatalog.pipboy.formNames["fixtureref"]=100;
+  worldCatalog.pipboy.quests[10].stages[30].items.emplace_back().result=
+      Script("FixtureRef.Disable\nplayer.AddItem TestItem 1\nShowMessage TestMessage");
+  fo3player::Player world(std::move(worldCatalog));
+  auto worldPlan=world.PrepareQuestStageTransaction(10,30,error);assert(worldPlan&&worldPlan->HasReferenceChanges());
+  auto before=std::make_shared<const fo3world::ReferenceStateSnapshot>(world.CaptureReferenceState());
+  fo3scene::ReferencePublication publication;publication.Publish(before);auto cache=before;
+  const auto oldStamp=publication.Stamp();
+  auto exchange=fo3scene::ReferenceExchange::Prepare(publication,cache,before,
+      worldPlan->CandidateReferences(),worldPlan->RollbackReferences());
+  assert(exchange&&exchange->CanPublishBefore(publication,cache,world.Snapshot().referenceStateRevision));
+  assert(!exchange->Commit(publication,cache,world.Snapshot().referenceStateRevision));
+  forbidAllocations=true;
+  assert(world.CommitScriptTransaction(*worldPlan));
+  if(publishCandidate)assert(exchange->Commit(publication,cache,world.Snapshot().referenceStateRevision));
+  const auto committedStamp=publication.Stamp();
+  assert(world.CanRollbackScriptTransaction(*worldPlan)&&world.RollbackScriptTransaction(*worldPlan));
+  assert(exchange->Rollback(publication,cache,world.Snapshot().referenceStateRevision));
+  forbidAllocations=false;
+  assert(cache==worldPlan->RollbackReferences()&&cache->states==before->states);
+  assert(world.ItemCount(400)==0&&world.Snapshot().pipboy.quests.empty());NoEffects(world);
+  assert(publication.Accepts(publication.Stamp(),world.Snapshot().referenceStateRevision));
+  assert(!publication.Accepts(oldStamp,0)&&!publication.Accepts(committedStamp,1));
+  }
   std::cout<<"Detached whole-script state/effect transactions, previews, publication, rollback and delivery/input guards passed\n";
 }

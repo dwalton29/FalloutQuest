@@ -4,10 +4,11 @@
 
 - Starting canonical main: `2987d911f318b92d1041257868067851a09d16f0` (v208).
 - Resumed from published `6469dbb872889a79a0682501b75f6ac6577ab547`.
-- Current implementation checkpoint: M1B3m read-only resident interaction preflight.
+- Current implementation checkpoint: M1B3n guarded reference/cache publication.
   Use canonical main history for the publication SHA; the previous published
-  resource implementation is M1B3l `b91803140f957935c3e1ede182f6dcddd5affb8a`.
+  resource implementation is M1B3m `1543fa28a4bd69c5fca72e4051598d93a3b8e6c2`.
 - M1B3l Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38635385905.
+- M1B3m Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38793178567.
   Earlier M1B3h CI confirmed the collision-policy include-order failure from g is fixed.
 - Re-fetched and preserved newer canonical v210 barter, v211 MS11 completion and
   v212 Moira fixes. Current baseline `5a4ad709d43d36ec756aaa48bae441e45f400db7`
@@ -39,6 +40,7 @@
 | M1B3j private collision resources | `98ad9cbd3e4c0ece6188e2108f3e76a391772f65` | Confirmed |
 | M1B3k reversible interior lights | `7f97e3f062609847e972cdf34f32133896410028` | Confirmed |
 | M1B3l reversible interior load doors | `b91803140f957935c3e1ede182f6dcddd5affb8a` | Confirmed |
+| M1B3m read-only interaction preflight | `1543fa28a4bd69c5fca72e4051598d93a3b8e6c2` | Confirmed |
 
 The user directly confirmed permission to push to main on 2026-10-14. The old
 approval blocker is resolved. Command-line Git cannot authenticate for writes;
@@ -177,6 +179,8 @@ flowchart TD
    immutable worker preparation and reversible cache ownership (see `world-reference-m1b3l.md`).
    M1B3m adds read-only interaction/dynamic-state admission before worker/GPU work
    and resource commits (see `world-reference-m1b3m.md`).
+   M1B3n couples reference publication and its renderer cache with precomputed
+   monotonic rollback projections (see `world-reference-m1b3n.md`).
    Exterior lights, remaining interaction ownership, queue reconciliation and the
    outer runtime/resource/actor coordinator remain unfinished. Only then admit
    general resident Enable/Disable; no success-only handlers are allowed.
@@ -508,3 +512,21 @@ This is conservative admission, not ownership of UI, actors, local doors, held
 objects or navigation. General resident Enable/Disable and final canonical/
 resource publication, effect/save/simulation exclusion and queue reconciliation
 remain unfinished. v212 is unchanged; no physical Quest/performance claim.
+
+## M1B3n validation
+
+Guarded reference publication/cache ownership passes fourteen world, 31 player
+and one physics CTest cases (46 core host cases). Tests cover exact snapshot,
+cache-owner and publisher identity, stale same-CELL publication, monotonic
+rollback, allocation failure, allocation-free exchange and serial exhaustion.
+Canonical whole-script tests restore inventory, quest state and queued effects
+alongside the correct rollback projection, both before and after candidate
+reference publication. Old worker stamps reject after either rollback path.
+Source checks cover immutable rollback capture, final handoff and lane guards.
+Pure publication tests and canonical whole-script publication/rollback tests pass
+ASan/UBSan with LeakSanitizer disabled. The original Lucas/nonresident/barter
+production dialogue bridge regression also passes.
+See `world-reference-m1b3n.md`. No resident command caller was added; v212 and
+its bounded nonresident actor-removal path remain unchanged. The outer atomic
+canonical/resource transaction, exclusion, navigation and queue reconciliation
+are still unfinished.

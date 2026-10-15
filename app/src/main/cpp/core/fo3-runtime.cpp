@@ -39,6 +39,7 @@
 #include "world/fo3-resource-exchange.h"
 #include "world/fo3-resident-lighting.h"
 #include "world/fo3-resident-interaction.h"
+#include "world/fo3-reference-exchange.h"
 #include "world/interaction/fo3-door-resources.h"
 #include "world/fo3-world-streaming.h"
 void SetNextFo3CollisionExteriorModeQ1931(bool exterior);
@@ -3132,6 +3133,11 @@ std::shared_ptr<const fo3world::ReferenceStateSnapshot> CaptureFo3ReferenceState
 // copied. Actor/light/door/held-object/resource preflight belongs to the caller.
 using Fo3ResidentVisualPlan = fo3scene::VisualExchange<GpuObject>;
 std::unique_ptr<fo3scene::ResidentInteractionAdmission> gFo3ResidentInteractionAdmission;
+std::unique_ptr<fo3scene::ReferenceExchange> gFo3ResidentReferencePublicationPlan;
+uint64_t gFo3ResidentReferencePublicationTicket=0;
+void DiscardFo3ResidentReferencePublicationPlan() noexcept {
+    gFo3ResidentReferencePublicationPlan.reset();gFo3ResidentReferencePublicationTicket=0;
+}
 std::unique_ptr<Fo3ResidentVisualPlan> gFo3ResidentVisualPlan;
 void DisposeFo3ResidentVisuals(std::vector<GpuObject>& objects) noexcept {
     Q74DeleteGpuObjects(objects);
@@ -3168,7 +3174,7 @@ bool RollbackFo3ResidentVisualPlan() noexcept {
 struct Fo3ResidentCpuPreparation {
     Fo3CellTransitionRequestQ74 request;
     Fo3WorldspaceSelection exteriorScope;
-    std::shared_ptr<const fo3world::ReferenceStateSnapshot> published, candidate;
+    std::shared_ptr<const fo3world::ReferenceStateSnapshot> published, candidate, rollback;
     fo3scene::ResidentResourceSelection selection;
     fo3scene::PublicationStamp publication;
     uint64_t visualRevision=0;
@@ -3249,7 +3255,10 @@ Fo3CellTransitionRequestQ74 gFo3ResidentLaneContext;
 fo3scene::PublicationStamp gFo3ResidentLanePublication;
 uint64_t gFo3ResidentLaneVisualRevision=0;
 bool Fo3ResidentAssetLaneBlocked(){return gFo3ResidentLane.Blocked();}
-void ResetFo3ResidentPreparationLane(){gFo3ResidentLane.Reset();gFo3ResidentInteractionAdmission.reset();}
+void ResetFo3ResidentPreparationLane(){
+    gFo3ResidentLane.Reset();gFo3ResidentInteractionAdmission.reset();
+    DiscardFo3ResidentReferencePublicationPlan();
+}
 bool Fo3ResidentLaneContextCurrent() {
     return gSceneReady&&!gSceneLoad.active&&!IsFo3LoadingVisible()&&
         Fo3AcceptsScenePublication(gFo3ResidentLanePublication)&&
@@ -3260,7 +3269,7 @@ bool Fo3ResidentLaneContextCurrent() {
         gFo3ResidentLaneContext.z==gSceneFloorZQ1730;
 }
 uint64_t AcquireFo3ResidentAssetLane() {
-    if(!gSceneReady||gSceneLoad.active||IsFo3LoadingVisible()||gFo3ResidentVisualPlan||gFo3ResidentInteractionAdmission||
+    if(!gSceneReady||gSceneLoad.active||IsFo3LoadingVisible()||gFo3ResidentVisualPlan||gFo3ResidentInteractionAdmission||gFo3ResidentReferencePublicationPlan||
         Fo3ResidentLegacyStreamActive()||!gFo3VisualPublication.Revision()||
         !Fo3AcceptsScenePublication(gFo3ScenePublication.Stamp()))return 0;
     const auto ticket=gFo3ResidentLane.Acquire();
@@ -3281,11 +3290,13 @@ bool PollFo3ResidentAssetLane(uint64_t ticket) {
 bool StartFo3ResidentCpuPreparation(uint64_t ticket,const Fo3WorldspaceSelection& scope,
         Fo3WorldspaceSelection collisionScope,
         std::shared_ptr<const fo3world::ReferenceStateSnapshot> candidate,
+        std::shared_ptr<const fo3world::ReferenceStateSnapshot> rollback,
         std::vector<uint32_t> affected) {
     if(!gFo3ResidentLane.Exclusive(ticket)||!Fo3ResidentLaneContextCurrent()||!candidate||
         fo3scene::ResidentInteractionAdmission::Check(affected,CaptureFo3ResidentInteractionActivity(),
             Fo3ResidentInteractionHazard)!=fo3scene::ResidentInteractionAdmissionResult::Ready)return false;
     auto published=gFo3ScenePublication.Snapshot();
+    if(!published||!rollback||!fo3scene::ValidResidentReferenceProjections(*published,*candidate,*rollback))return false;
     std::vector<fo3scene::ResidentVisualRecord> live;live.reserve(gObjects.size());
     for(const auto& object:gObjects)live.push_back({object.refFormId,object.q1990NativeLod});
     const auto context=gFo3ResidentLaneContext;
@@ -3300,14 +3311,14 @@ bool StartFo3ResidentCpuPreparation(uint64_t ticket,const Fo3WorldspaceSelection
     const auto doorRevision=GetFo3DoorResourceRevision();
     auto capturedDoors=context.worldspaceFormId?Fo3DoorResources{}:CaptureFo3DoorResources();
     return gFo3ResidentLane.Start(ticket,[context,scope,publication,visualRevision,ticket,collisionScope,collisionState,lightRevision,doorRevision,
-            capturedDoors=std::move(capturedDoors),published=std::move(published),candidate=std::move(candidate),
+            capturedDoors=std::move(capturedDoors),published=std::move(published),candidate=std::move(candidate),rollback=std::move(rollback),
             live=std::move(live),affected=std::move(affected)](
             Fo3ResidentCpuPreparation& result,const std::atomic<bool>& cancelled) {
         std::string error;
         if(!PrepareFo3ResidentCpuResources(context,scope,publication,visualRevision,
                 published,candidate,live,affected,result,cancelled,error))return false;
         result.assetTicket=ticket;result.collisionScope=collisionScope;result.lightRevision=lightRevision;result.doorRevision=doorRevision;
-        result.affected=affected;
+        result.affected=affected;result.rollback=rollback;
         if(!context.worldspaceFormId) {
             if(!fo3scene::PrepareResidentInteriorLighting(fo3assets::FalloutMasterPath(),context.cellFormId,
                     {context.x,context.y,context.z},*published,*candidate,affected,result.lighting,cancelled,error))return false;
@@ -3399,6 +3410,36 @@ bool PrepareFo3ResidentInteractionAdmission(const Fo3ResidentCpuPreparation& cpu
     gFo3ResidentInteractionAdmission=std::move(admission);return true;
 }
 
+bool PrepareFo3ResidentReferencePublicationPlan(const Fo3ResidentCpuPreparation& cpu) {
+    if(gFo3ResidentReferencePublicationPlan||!gFo3ResidentLane.Exclusive(cpu.assetTicket)||
+        !(cpu.publication==gFo3ScenePublication.Stamp()))return false;
+    auto plan=fo3scene::ReferenceExchange::Prepare(gFo3ScenePublication,gFo3ReferenceState,
+        cpu.published,cpu.candidate,cpu.rollback);
+    if(!plan)return false;
+    gFo3ResidentReferencePublicationPlan=std::move(plan);
+    gFo3ResidentReferencePublicationTicket=cpu.assetTicket;return true;
+}
+// Publication only: the future outer coordinator still owns the canonical
+// ScriptTransactionPlan, complete resource exchange, exclusion and recovery.
+bool CanPublishFo3ResidentReferencesBeforeCommit() noexcept {
+    return !gSceneLoad.active&&gPlayerSession&&Fo3ResidentInteractionAdmissionCurrent()&&
+        gFo3ResidentLane.Exclusive(gFo3ResidentReferencePublicationTicket)&&gFo3ResidentReferencePublicationPlan&&
+        gFo3ResidentReferencePublicationPlan->CanPublishBefore(gFo3ScenePublication,gFo3ReferenceState,
+            gPlayerSession->player.Snapshot().referenceStateRevision);
+}
+bool CommitFo3ResidentReferencePublicationPlan() noexcept {
+    return !gSceneLoad.active&&gPlayerSession&&Fo3ResidentInteractionAdmissionCurrent()&&
+        gFo3ResidentLane.Exclusive(gFo3ResidentReferencePublicationTicket)&&gFo3ResidentReferencePublicationPlan&&
+        gFo3ResidentReferencePublicationPlan->Commit(gFo3ScenePublication,gFo3ReferenceState,
+            gPlayerSession->player.Snapshot().referenceStateRevision);
+}
+bool RollbackFo3ResidentReferencePublicationPlan() noexcept {
+    return !gSceneLoad.active&&gPlayerSession&&
+        gFo3ResidentLane.Exclusive(gFo3ResidentReferencePublicationTicket)&&gFo3ResidentReferencePublicationPlan&&
+        gFo3ResidentReferencePublicationPlan->Rollback(gFo3ScenePublication,gFo3ReferenceState,
+            gPlayerSession->player.Snapshot().referenceStateRevision);
+}
+
 // Render-thread-only private GPU preparation. The outer coordinator supplies
 // stamps captured with the input visual inventory, before worker preparation.
 struct Fo3ResidentGpuWork {
@@ -3410,13 +3451,13 @@ struct Fo3ResidentGpuWork {
 std::unique_ptr<Fo3ResidentGpuWork> gFo3ResidentGpuWork;
 void DiscardFo3ResidentGpuStage() noexcept {gFo3ResidentGpuWork.reset();}
 bool Fo3ResidentPacketCurrent(const Fo3ResidentCpuPreparation& cpu) {
-    return gFo3ResidentLane.Exclusive(cpu.assetTicket)&&Fo3ResidentLaneContextCurrent()&&
+    return cpu.rollback&&gFo3ResidentLane.Exclusive(cpu.assetTicket)&&Fo3ResidentLaneContextCurrent()&&
         fo3scene::ResidentInteractionAdmission::Check(cpu.affected,CaptureFo3ResidentInteractionActivity(),
             Fo3ResidentInteractionHazard)==fo3scene::ResidentInteractionAdmissionResult::Ready&&
         (cpu.request.worldspaceFormId||(cpu.lightRevision&&cpu.lightRevision==gFo3LightPublication.Revision()&&
             cpu.doorRevision&&cpu.doorRevision==GetFo3DoorResourceRevision()))&&
         cpu.collision.Get()&&CanExchangeFo3CollisionMutationSnapshot(cpu.collision.Get())&&
-        gSceneReady&&!gSceneLoad.active&&!gFo3ResidentVisualPlan&&!HasFo3ResidentDoorPlan()&&!gFo3ResidentInteractionAdmission&&
+        gSceneReady&&!gSceneLoad.active&&!gFo3ResidentVisualPlan&&!HasFo3ResidentDoorPlan()&&!gFo3ResidentInteractionAdmission&&!gFo3ResidentReferencePublicationPlan&&
         Fo3AcceptsScenePublication(cpu.publication)&&cpu.visualRevision!=0&&
         cpu.visualRevision==gFo3VisualPublication.Revision()&&
         cpu.request.cellFormId==gCurrentCellFormId&&
@@ -3478,26 +3519,32 @@ fo3scene::GpuStageResult AdvanceFo3ResidentGpuStage(
     bool prepared=false;
     try {
         prepared=PrepareFo3ResidentInteractionAdmission(*work.cpu,*work.stage.ReadyObjects())&&
+            PrepareFo3ResidentReferencePublicationPlan(*work.cpu)&&
             PrepareFo3ResidentDoorInteractionPlan(*work.cpu)&&
             PrepareFo3ResidentLightPlan(*work.cpu)&&
             PrepareFo3ResidentVisualPlan(work.cpu->selection.retainedSlots,*work.stage.ReadyObjects());
     }catch(...){prepared=false;}
     if(prepared)completed=std::move(work.cpu);
-    else {DiscardFo3ResidentLightPlan();DiscardFo3ResidentDoorInteractionPlan();gFo3ResidentInteractionAdmission.reset();}
+    else {
+        DiscardFo3ResidentLightPlan();DiscardFo3ResidentDoorInteractionPlan();
+        DiscardFo3ResidentReferencePublicationPlan();gFo3ResidentInteractionAdmission.reset();
+    }
     DiscardFo3ResidentGpuStage();
     return prepared?Result::Ready:Result::Failed;
 }
 
 bool ReleaseFo3ResidentAssetLane(uint64_t ticket) {
-    if(gFo3ResidentGpuWork||gFo3ResidentVisualPlan||gFo3ResidentLightPlan||HasFo3ResidentDoorPlan())return false;
+    if(gFo3ResidentGpuWork||gFo3ResidentVisualPlan||gFo3ResidentLightPlan||HasFo3ResidentDoorPlan()||gFo3ResidentReferencePublicationPlan)return false;
     if(!gFo3ResidentLane.Release(ticket))return false;
     gFo3ResidentInteractionAdmission.reset();return true;
 }
 bool CancelFo3ResidentPreparation(uint64_t ticket) {
     if(!gFo3ResidentLane.Owns(ticket)||(gFo3ResidentVisualPlan&&gFo3ResidentVisualPlan->Applied())||
-        (gFo3ResidentLightPlan&&gFo3ResidentLightPlan->Applied())||Fo3ResidentDoorPlanApplied())return false;
+        (gFo3ResidentLightPlan&&gFo3ResidentLightPlan->Applied())||Fo3ResidentDoorPlanApplied()||
+        (gFo3ResidentReferencePublicationPlan&&gFo3ResidentReferencePublicationPlan->Applied()))return false;
     DiscardFo3ResidentGpuStage();DiscardFo3ResidentVisualPlan();DiscardFo3ResidentLightPlan();
     DiscardFo3ResidentDoorInteractionPlan();
+    DiscardFo3ResidentReferencePublicationPlan();
     gFo3ResidentInteractionAdmission.reset();
     return gFo3ResidentLane.Cancel(ticket);
 }
