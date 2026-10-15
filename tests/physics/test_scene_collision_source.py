@@ -319,7 +319,7 @@ assert 'gPlayerSession->saveBlocked=true' in executor and 'gSceneReady=false' in
 assert 'gFo3ResidentExchangeRecoveryFailed' in release and 'gFo3ResidentExchangeRecoveryFailed' in cancel
 interaction=Path('app/src/main/cpp/world/interaction/fo3-interaction-runtime.inc').read_text()
 delivery=interaction[interaction.index('void DeliverFo3ScriptSounds()'):interaction.index('fo3loot::Cursor gLootCursor;')]
-assert delivery.index('Fo3ResidentExchangeRecoveryFailed()') < delivery.index('PollQuestNotice')
+assert delivery.index('Fo3ResidentFrameBlocked()') < delivery.index('PollQuestNotice')
 assert advance.index('if(prepared){') < advance.index('gFo3ResidentPreparedPacket=work.cpu.get()') < advance.index('completed=std::move(work.cpu)')
 for signature in ('void DiscardFo3ResidentReferencePublicationPlan()', 'void DiscardFo3ResidentVisualPlan()',
                   'void DiscardFo3ResidentLightPlan()', 'void DiscardFo3ResidentDoorInteractionPlan()'):
@@ -329,3 +329,41 @@ for signature in ('void DiscardFo3ResidentReferencePublicationPlan()', 'void Dis
 flush=s[s.index('void FlushFo3PlayerState()'):s.index('bool DrainFo3TransitionBackgroundWork();')]
 assert flush.index('gFo3ResidentExchangeRecoveryFailed') < flush.index('WeaponPersistWorld()') < flush.index('gPlayerSession->Flush(')
 print('Composite executor binds canonical/prepared resources, maps all exchanges/undo and blocks success/save/effects on recovery failure')
+
+frame_gate=s[s.index('bool Fo3ResidentFrameBlocked(){'):s.index('void ResetFo3ResidentPreparationLane(){')]
+assert 'gFo3ResidentLane.Blocked()||gFo3ResidentExchangeExecuting||gFo3ResidentExchangeRecoveryFailed' in frame_gate
+acquire=s[s.index('uint64_t AcquireFo3ResidentAssetLane()'):s.index('bool PollFo3ResidentAssetLane(')]
+assert acquire.index('CaptureFo3ResidentInteractionActivity().Idle()') < acquire.index('gFo3ResidentLane.Acquire()')
+assert flush.index('Fo3ResidentFrameBlocked()') < flush.index('WeaponPersistWorld()')
+assert flush.index('gPlayerSession->saveBlocked') < flush.index('WeaponPersistWorld()')
+assert 'gFo3ResidentSavePending=true;return;' in flush and 'FlushFo3DeferredPlayerState()' in flush
+actor_frame=s[s.index('void QActorPrepareStereoFrame() {'):]
+assert actor_frame.index('Fo3ResidentFrameBlocked()') < actor_frame.index('Q230SimulateActor(')
+loose=s[s.index('void Q221UpdateLooseObjectsFromSolvedPalms('):s.index('std::string Q211Lower(')]
+assert loose.index('Fo3ResidentFrameBlocked()') < loose.index('Q223AdvanceDynamicBodies()')
+loop=Path('app/src/main/cpp/core/fo3-runtime-loop.inc').read_text()
+assert 'if (!Fo3ResidentFrameBlocked() && gPlayerSession' in loop
+assert 'if (!Fo3ResidentFrameBlocked() && !IsFo3LoadingVisible())' in loop
+# Check actual block nesting so a later misplaced brace cannot silently ungate
+# a UI, physics, script or activation call. Preparation and tracking stay live.
+def guarded(call):
+    prefix=loop[:loop.index(call)]
+    stack=[]
+    for line in prefix.splitlines():
+        for ch in line:
+            if ch=='{': stack.append(line)
+            elif ch=='}' and stack: stack.pop()
+    return any('if(!Fo3ResidentFrameBlocked())' in line for line in stack)
+for call in ('UpdateFo3Pipboy(gStereoFrame,','UpdateFo3Lockpick(static_cast',
+             'UpdateFo3ScriptMessage(static_cast','UpdateFo3Dialogue(static_cast',
+             'WeaponUpdate(static_cast','DeliverFo3ScriptSounds();',
+             'UpdateFo3InteriorDoorsQ2400();','UpdateDoorAimQ1700(static_cast',
+             'ActivateFo3Interaction('):
+    assert guarded(call), call
+for call in ('UpdateFo3ExteriorStreamingQ1890(q1890VirtualHead.',
+             'SetFo3PlayerBodyTrackingQ210(','FlushFo3DeferredPlayerState();'):
+    assert not guarded(call), call
+assert 'residentInputBarrier_.Allow(Fo3ResidentFrameBlocked(),neutral)' in loop
+assert 'residentInputBarrier_.Allow(true,false)' in loop
+assert loop.index('previousWorldClockNs=clockNs;') > loop.index('scriptPlayer.PumpQuestGameMode(seconds)')
+print('Reservation excludes frame mutations/save/effects while retaining tracking and asset progress; held controls require release')

@@ -1194,7 +1194,12 @@ private:
         pipLeftGripTracked_=pipLeftAimTracked_=false;
         if (!CheckXr(xrSyncActions(session_, &sync), "xrSyncActions")) {
             for(int hand=0;hand<2;hand++)handPoseValid_[hand]=gripHandPoseValid_[hand]=false;
-            ResetFo3Pipboy();activateDownQ1700_=false;return;
+            // A failed sample cannot count as the release needed to rearm.
+            residentInputBarrier_.Allow(true,false);
+            if(!Fo3ResidentFrameBlocked())ResetFo3Pipboy();
+            moveX_=moveY_=turnX_=lootScrollY_=0;
+            fingerTriggerValue_={};fingerGripValue_={};
+            activateDownQ1700_=pipBackDown_=false;return;
         }
         const float rawMoveX = ReadFloatAction(moveXAction_, handPaths_[0]);
         const float rawMoveY = ReadFloatAction(moveYAction_, handPaths_[0]);
@@ -1224,6 +1229,14 @@ private:
                 fingerThumbContactAction_, handPaths_[1]);
         activateDownQ1700_ = ReadBoolActionQ1699(activateAction_, handPaths_[1]);
         pipBackDown_=ReadBoolActionQ1699(pipBackAction_,handPaths_[1]);
+        const bool neutral=moveX_==0&&moveY_==0&&turnX_==0&&std::fabs(lootScrollY_)<.2f&&
+            !activateDownQ1700_&&!pipBackDown_&&fingerTriggerValue_[0]<.2f&&fingerTriggerValue_[1]<.2f&&
+            fingerGripValue_[0]<.2f&&fingerGripValue_[1]<.2f;
+        if(!residentInputBarrier_.Allow(Fo3ResidentFrameBlocked(),neutral)){
+            moveX_=moveY_=turnX_=lootScrollY_=0;
+            fingerTriggerValue_={};fingerGripValue_={};
+            activateDownQ1700_=pipBackDown_=false;
+        }
 
         const XrSpaceLocationFlags required = XR_SPACE_LOCATION_POSITION_VALID_BIT |
                                               XR_SPACE_LOCATION_ORIENTATION_VALID_BIT;
@@ -1479,7 +1492,7 @@ private:
                 // across a loading screen or headset focus interruption.
                 const int64_t clockNs=static_cast<int64_t>(frameState.predictedDisplayTime);
                 static int64_t previousWorldClockNs=0;
-                if (gPlayerSession && !gPlayerSession->saveBlocked && gSceneReady &&
+                if (!Fo3ResidentFrameBlocked() && gPlayerSession && !gPlayerSession->saveBlocked && gSceneReady &&
                     !IsFo3LoadingVisible() && sessionState_==XR_SESSION_STATE_FOCUSED &&
                     previousWorldClockNs>0 && clockNs>previousWorldClockNs) {
                     const double seconds=std::clamp(double(clockNs-previousWorldClockNs)*1e-9,0.0,0.25);
@@ -1518,7 +1531,7 @@ private:
                         fo3tod::gRuntime.climate.sunsetBegin,
                         fo3tod::gRuntime.climate.sunsetEnd);
                 }
-                if (!IsFo3LoadingVisible()) {
+                if (!Fo3ResidentFrameBlocked() && !IsFo3LoadingVisible()) {
                     UpdatePlayer(views[0], frameState.predictedDisplayTime);
                 } else {
                     lastFrameTime_ = 0;
@@ -1582,71 +1595,77 @@ private:
                 gVrHeadTracking=headTracking;
                 gVrLeftGripTracking={gripHandPoseValid_[0],pipLeftGripTracked_};
                 gVrLeftAimTracking={handPoseValid_[0],pipLeftAimTracked_};
-                // Reload takes precedence over the left-wrist Pip-Boy gesture.
-                // Cancel even a primed activation so the physical magazine can
-                // pass in front of the player's face without being holstered.
-                const bool reloadingInHand=WeaponReloadActive();
-                if(reloadingInHand&&gPipActivation.phase!=fo3pip::Phase::Dormant){
-                    gPipActivation.Reset();gPipMenu.dirty=true;
-                    Q6H_LOGI("PIPBOY SUPPRESS reason=held-physical-magazine-or-slide");
+                bool dialogueControls=false;
+                if(!Fo3ResidentFrameBlocked()) {
+                    // Reload takes precedence over the left-wrist Pip-Boy gesture.
+                    // Cancel even a primed activation so the physical magazine can
+                    // pass in front of the player's face without being holstered.
+                    const bool reloadingInHand=WeaponReloadActive();
+                    if(reloadingInHand&&gPipActivation.phase!=fo3pip::Phase::Dormant){
+                        gPipActivation.Reset();gPipMenu.dirty=true;
+                        Q6H_LOGI("PIPBOY SUPPRESS reason=held-physical-magazine-or-slide");
+                    }
+                    UpdateFo3Pipboy(gStereoFrame,static_cast<double>(frameState.predictedDisplayTime)*1e-9,pipHead.m,
+                        gVrPipTracking.Step(gSceneReady&&!reloadingInHand&&!Fo3LockpickFocus(),IsFo3LoadingVisible(),sessionState_==XR_SESSION_STATE_FOCUSED,
+                            headTracking,{gripHandPoseValid_[0],pipLeftGripTracked_},{handPoseValid_[0],pipLeftAimTracked_},
+                            static_cast<double>(frameState.predictedDisplayTime)*1e-9),
+                        q210RightValid?turnX_:0,q210RightValid?lootScrollY_:0,
+                        q210RightValid&&activateDownQ1700_,q210RightValid&&pipBackDown_,fingerGripValue_[0]);
+                    const bool lockControls=Fo3LockpickFocus();
+                    UpdateFo3Lockpick(static_cast<double>(frameState.predictedDisplayTime)*1e-9,
+                        q210RightValid?turnX_:0,q210RightValid?fingerTriggerValue_[1]:0,
+                        activateDownQ1700_,pipBackDown_,sessionState_==XR_SESSION_STATE_FOCUSED&&q210RightValid,pipHead.m,fingerGripValue_[0]>.25f||fingerGripValue_[1]>.25f);
+                    const bool scriptControls=Fo3ScriptMessageFocus();
+                    UpdateFo3ScriptMessage(static_cast<double>(frameState.predictedDisplayTime)*1e-9,
+                        q210RightValid?lootScrollY_:0,q210RightValid&&activateDownQ1700_,
+                        q210RightValid&&pipBackDown_,sessionState_==XR_SESSION_STATE_FOCUSED);
+                    if(Fo3ScriptMessageFocus())ResetFo3Pipboy();
+                    dialogueControls=lockControls||Fo3LockpickFocus()||Fo3DialogueFocus()||scriptControls||Fo3ScriptMessageFocus();
+                    UpdateFo3Dialogue(static_cast<double>(frameState.predictedDisplayTime)*1e-9,
+                        !Fo3LockpickFocus()&&!Fo3ScriptMessageFocus()&&q210RightValid?lootScrollY_:0,
+                        !Fo3LockpickFocus()&&!Fo3ScriptMessageFocus()&&q210RightValid&&activateDownQ1700_,
+                        !Fo3LockpickFocus()&&!Fo3ScriptMessageFocus()&&q210RightValid&&pipBackDown_,
+                        sessionState_==XR_SESSION_STATE_FOCUSED,q210RightValid?turnX_:0,q210RightValid?fingerTriggerValue_[1]:0);
+                    if(dialogueControls&&activateDownQ1700_)activateLatched_=true;
+                    WeaponUpdate(static_cast<double>(frameState.predictedDisplayTime)*1e-9,dialogueControls?false:pipBackDown_);
+                    DeliverFo3ScriptSounds();
+                    for(int hand=0;hand<2;++hand)if(gWeaponHaptic[hand]>0){
+                        XrHapticActionInfo info{XR_TYPE_HAPTIC_ACTION_INFO};info.action=weaponHapticAction_;info.subactionPath=handPaths_[hand];
+                        XrHapticVibration pulse{XR_TYPE_HAPTIC_VIBRATION};pulse.amplitude=gWeaponHaptic[hand];pulse.duration=20000000;pulse.frequency=XR_FREQUENCY_UNSPECIFIED;
+                        xrApplyHapticFeedback(session_,&info,reinterpret_cast<XrHapticBaseHeader*>(&pulse));gWeaponHaptic[hand]=0;
+                    }
+                    if(Fo3PipboyFocus())snapTurnLatched_=std::fabs(turnX_)>=.30f;
                 }
-                UpdateFo3Pipboy(gStereoFrame,static_cast<double>(frameState.predictedDisplayTime)*1e-9,pipHead.m,
-                    gVrPipTracking.Step(gSceneReady&&!reloadingInHand&&!Fo3LockpickFocus(),IsFo3LoadingVisible(),sessionState_==XR_SESSION_STATE_FOCUSED,
-                        headTracking,{gripHandPoseValid_[0],pipLeftGripTracked_},{handPoseValid_[0],pipLeftAimTracked_},
-                        static_cast<double>(frameState.predictedDisplayTime)*1e-9),
-                    q210RightValid?turnX_:0,q210RightValid?lootScrollY_:0,
-                    q210RightValid&&activateDownQ1700_,q210RightValid&&pipBackDown_,fingerGripValue_[0]);
-                const bool lockControls=Fo3LockpickFocus();
-                UpdateFo3Lockpick(static_cast<double>(frameState.predictedDisplayTime)*1e-9,
-                    q210RightValid?turnX_:0,q210RightValid?fingerTriggerValue_[1]:0,
-                    activateDownQ1700_,pipBackDown_,sessionState_==XR_SESSION_STATE_FOCUSED&&q210RightValid,pipHead.m,fingerGripValue_[0]>.25f||fingerGripValue_[1]>.25f);
-                const bool scriptControls=Fo3ScriptMessageFocus();
-                UpdateFo3ScriptMessage(static_cast<double>(frameState.predictedDisplayTime)*1e-9,
-                    q210RightValid?lootScrollY_:0,q210RightValid&&activateDownQ1700_,
-                    q210RightValid&&pipBackDown_,sessionState_==XR_SESSION_STATE_FOCUSED);
-                if(Fo3ScriptMessageFocus())ResetFo3Pipboy();
-                const bool dialogueControls=lockControls||Fo3LockpickFocus()||Fo3DialogueFocus()||scriptControls||Fo3ScriptMessageFocus();
-                UpdateFo3Dialogue(static_cast<double>(frameState.predictedDisplayTime)*1e-9,
-                    !Fo3LockpickFocus()&&!Fo3ScriptMessageFocus()&&q210RightValid?lootScrollY_:0,
-                    !Fo3LockpickFocus()&&!Fo3ScriptMessageFocus()&&q210RightValid&&activateDownQ1700_,
-                    !Fo3LockpickFocus()&&!Fo3ScriptMessageFocus()&&q210RightValid&&pipBackDown_,
-                    sessionState_==XR_SESSION_STATE_FOCUSED,q210RightValid?turnX_:0,q210RightValid?fingerTriggerValue_[1]:0);
-                if(dialogueControls&&activateDownQ1700_)activateLatched_=true;
-                WeaponUpdate(static_cast<double>(frameState.predictedDisplayTime)*1e-9,dialogueControls?false:pipBackDown_);
-                DeliverFo3ScriptSounds();
-                for(int hand=0;hand<2;++hand)if(gWeaponHaptic[hand]>0){
-                    XrHapticActionInfo info{XR_TYPE_HAPTIC_ACTION_INFO};info.action=weaponHapticAction_;info.subactionPath=handPaths_[hand];
-                    XrHapticVibration pulse{XR_TYPE_HAPTIC_VIBRATION};pulse.amplitude=gWeaponHaptic[hand];pulse.duration=20000000;pulse.frequency=XR_FREQUENCY_UNSPECIFIED;
-                    xrApplyHapticFeedback(session_,&info,reinterpret_cast<XrHapticBaseHeader*>(&pulse));gWeaponHaptic[hand]=0;
-                }
-                if(Fo3PipboyFocus())snapTurnLatched_=std::fabs(turnX_)>=.30f;
                 // Q20.13: loading freezes player motion, not world preparation.
                 // Keep CELL/terrain/LOD streaming alive beneath the overlay.
                 const XrPosef q1890VirtualHead = q210VirtualHead;
                 UpdateFo3ExteriorStreamingQ1890(q1890VirtualHead.position.x,
                                                 q1890VirtualHead.position.z);
                 if(IsFo3LoadingVisible())ResetFo3Pipboy();
-                // Q24.0 local DOOR state advances once per gameplay frame, not per eye.
-                UpdateFo3InteriorDoorsQ2400();
-                UpdateDoorAimQ1700(static_cast<double>(frameState.predictedDisplayTime)*1e-9);
-                ApplyAuthoredDoorFacingQ1810(views[0]);
-                if (!dialogueControls && !Fo3DialogueFocus() && !Fo3ScriptMessageFocus() && gPipInput.WorldA(activateDownQ1700_) && !activateLatched_) {
-                    activateLatched_ = true;
-                    if (handPoseValid_[1]) {
-                        const XrPosef handQ1700 = ToVirtualPose(handLocalPoses_[1]);
-                        const Mat4 handMatrixQ1700 = MatrixFromPose(handQ1700);
-                        if (ActivateFo3Interaction(
-                                handQ1700.position.x, handQ1700.position.y, handQ1700.position.z,
-                                -handMatrixQ1700.m[8], -handMatrixQ1700.m[9], -handMatrixQ1700.m[10])) {
-                            playerPosition_ = {0.0f, 0.0f, 0.0f};
-                            playerYaw_ = 0.0f;
-                            lastFrameTime_ = 0;
-                            FQ_LOGI("Q16.1 player origin reset for queued authored XTEL");
+                if(!Fo3ResidentFrameBlocked()) {
+                    // Q24.0 local DOOR state advances once per gameplay frame, not per eye.
+                    UpdateFo3InteriorDoorsQ2400();
+                    UpdateDoorAimQ1700(static_cast<double>(frameState.predictedDisplayTime)*1e-9);
+                    ApplyAuthoredDoorFacingQ1810(views[0]);
+                    if (!dialogueControls && !Fo3DialogueFocus() && !Fo3ScriptMessageFocus() && gPipInput.WorldA(activateDownQ1700_) && !activateLatched_) {
+                        activateLatched_ = true;
+                        if (handPoseValid_[1]) {
+                            const XrPosef handQ1700 = ToVirtualPose(handLocalPoses_[1]);
+                            const Mat4 handMatrixQ1700 = MatrixFromPose(handQ1700);
+                            if (ActivateFo3Interaction(
+                                    handQ1700.position.x, handQ1700.position.y, handQ1700.position.z,
+                                    -handMatrixQ1700.m[8], -handMatrixQ1700.m[9], -handMatrixQ1700.m[10])) {
+                                playerPosition_ = {0.0f, 0.0f, 0.0f};
+                                playerYaw_ = 0.0f;
+                                lastFrameTime_ = 0;
+                                FQ_LOGI("Q16.1 player origin reset for queued authored XTEL");
+                            }
                         }
+                    } else if (!activateDownQ1700_) {
+                        activateLatched_ = false;
                     }
-                } else if (!activateDownQ1700_) {
-                    activateLatched_ = false;
                 }
+                FlushFo3DeferredPlayerState();
 
                 const auto lootViewer=ToVirtualPose(loadingHead);
                 const auto& lootPanel=GetFo3LootPanel();
@@ -2047,6 +2066,7 @@ private:
     std::array<bool, 2> fingerTriggerTouched_{false, false};
     std::array<bool, 2> fingerThumbTouched_{false, false};
     bool activateLatched_{false};
+    fo3scene::ResidentInputBarrier residentInputBarrier_;
 
     XrVector3f playerPosition_{0.0f, 0.0f, 0.0f};
     float playerYaw_{0.0f};

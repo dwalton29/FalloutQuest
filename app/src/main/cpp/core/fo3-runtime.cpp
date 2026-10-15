@@ -36,6 +36,7 @@
 #include "world/fo3-resident-texture-upload.h"
 #include "world/fo3-resident-gpu-stage.h"
 #include "world/fo3-resident-preparation-lane.h"
+#include "world/fo3-resident-input-barrier.h"
 #include "world/fo3-resource-exchange.h"
 #include "world/fo3-resident-lighting.h"
 #include "world/fo3-resident-interaction.h"
@@ -128,6 +129,7 @@ fo3scene::ResidentInteractionActivity CaptureFo3ResidentInteractionActivity() no
 fo3scene::ResidentInteractionHazard Fo3ResidentInteractionHazard(uint32_t reference) noexcept;
 bool Fo3ResidentInteractionAdmissionCurrent() noexcept;
 bool Fo3ResidentAssetLaneBlocked();
+bool Fo3ResidentFrameBlocked();
 bool Fo3ResidentLegacyStreamActive();
 fo3scene::ResidentAssetActivity CaptureFo3ResidentAssetActivity();
 void ResetFo3ResidentPreparationLane();
@@ -3137,7 +3139,6 @@ struct Fo3ResidentCpuPreparation;
 const Fo3ResidentCpuPreparation* gFo3ResidentPreparedPacket=nullptr;
 uint64_t gFo3ResidentPreparedCollision=0;
 bool gFo3ResidentExchangeExecuting=false,gFo3ResidentExchangeRecoveryFailed=false;
-bool Fo3ResidentExchangeRecoveryFailed(){return gFo3ResidentExchangeRecoveryFailed;}
 void InvalidateFo3ResidentPreparedBinding() noexcept {
     gFo3ResidentPreparedPacket=nullptr;gFo3ResidentPreparedCollision=0;
 }
@@ -3265,6 +3266,11 @@ Fo3CellTransitionRequestQ74 gFo3ResidentLaneContext;
 fo3scene::PublicationStamp gFo3ResidentLanePublication;
 uint64_t gFo3ResidentLaneVisualRevision=0;
 bool Fo3ResidentAssetLaneBlocked(){return gFo3ResidentLane.Blocked();}
+// Same render-thread reservation owns frame exclusion from acquisition through
+// draining, private CPU/GPU work, commit/recovery and final release/cancellation.
+bool Fo3ResidentFrameBlocked(){
+    return gFo3ResidentLane.Blocked()||gFo3ResidentExchangeExecuting||gFo3ResidentExchangeRecoveryFailed;
+}
 void ResetFo3ResidentPreparationLane(){
     gFo3ResidentLane.Reset();gFo3ResidentInteractionAdmission.reset();
     DiscardFo3ResidentReferencePublicationPlan();
@@ -3281,7 +3287,8 @@ bool Fo3ResidentLaneContextCurrent() {
         gFo3ResidentLaneContext.z==gSceneFloorZQ1730;
 }
 uint64_t AcquireFo3ResidentAssetLane() {
-    if(!gSceneReady||gSceneLoad.active||IsFo3LoadingVisible()||gFo3ResidentVisualPlan||gFo3ResidentInteractionAdmission||gFo3ResidentReferencePublicationPlan||
+    if(!CaptureFo3ResidentInteractionActivity().Idle()||Fo3ResidentFrameBlocked()||
+        !gSceneReady||gSceneLoad.active||IsFo3LoadingVisible()||gFo3ResidentVisualPlan||gFo3ResidentInteractionAdmission||gFo3ResidentReferencePublicationPlan||
         Fo3ResidentLegacyStreamActive()||!gFo3VisualPublication.Revision()||
         !Fo3AcceptsScenePublication(gFo3ScenePublication.Stamp()))return 0;
     const auto ticket=gFo3ResidentLane.Acquire();
@@ -3680,11 +3687,17 @@ float gWeaponHaptic[2]{};
 Vec3 gWeaponPalm[2]{};
 bool gWeaponPalmValid[2]{};
 
+bool gFo3ResidentSavePending=false;
 void FlushFo3PlayerState() {
-    if (!gPlayerSession || gFo3ResidentExchangeRecoveryFailed) return;
+    if (!gPlayerSession || gPlayerSession->saveBlocked || gFo3ResidentExchangeRecoveryFailed) return;
+    if(Fo3ResidentFrameBlocked()){gFo3ResidentSavePending=true;return;}
     WeaponPersistWorld();
     std::string error;
+    gFo3ResidentSavePending=false;
     if (!gPlayerSession->Flush(error)) Q6H_LOGE("PLAYER SAVE: %s", error.c_str());
+}
+void FlushFo3DeferredPlayerState() {
+    if(gFo3ResidentSavePending&&!Fo3ResidentFrameBlocked())FlushFo3PlayerState();
 }
 
 bool DrainFo3TransitionBackgroundWork();
@@ -4040,6 +4053,7 @@ bool ProcessQ74TransitionRequest() {
     const size_t oldObjects = gObjects.size();
     if (prepared.playerSession) {
         gPlayerSession = std::move(prepared.playerSession);
+        gFo3ResidentSavePending=false;
         const auto& p = gPlayerSession->player;
         Q6H_LOGI("PLAYER STATE READY: level=%u HP=%.1f/%.1f AP=%.1f/%.1f weight=%.2f/%.1f stacks=%zu items=%zu saveBlocked=%d",
             p.Snapshot().level, p.Health(), p.MaxHealth(), p.ActionPoints(), p.MaxActionPoints(),
@@ -9638,6 +9652,7 @@ void Q221UpdateLooseObjectsFromSolvedPalms(
         Vec3 leftPalmWorld,
         bool rightPalmValid,
         Vec3 rightPalmWorld) {
+    if(Fo3ResidentFrameBlocked())return;
     Q223AdvanceDynamicBodies();
     Q220UpdateLooseGrab(
         0, leftPalmValid,
@@ -11925,6 +11940,9 @@ void Q230PumpNpcArrivals(){
 }
 
 void QActorPrepareStereoFrame() {
+    // Keep the last NPC poses. No AI, package events, persistence or unloaded
+    // actor scheduling may mutate the canonical candidate's source state.
+    if(Fo3ResidentFrameBlocked()){PrepareFo3InteriorSceneLights();return;}
     const auto started=fqopaque::Clock::now();
     fqactor::npc={}; // Player pose has already been prepared before UI/world input.
     const auto setupStarted=fqopaque::Clock::now();

@@ -28,6 +28,7 @@ void NotifyFo3ItemTransfer(uint32_t base,int32_t count) {
 // Render-thread transaction shared by A-button and physical shoulder release.
 // CanPickup/Pickup remain the only inventory/ownership/count/condition policy.
 bool CollectFo3WorldReference(uint32_t reference) {
+    if(Fo3ResidentFrameBlocked())return false;
     if(!gSceneReady || IsFo3LoadingVisible() || !gPlayerSession || gPlayerSession->saveBlocked) return false;
     auto& player=gPlayerSession->player;
     if(!player.CanPickup(reference)) return false;
@@ -46,6 +47,7 @@ bool CollectFo3WorldReference(uint32_t reference) {
 bool QueryFo3Interaction(float ox, float oy, float oz, float dx, float dy,
                          float dz, Fo3InteractionTarget &target) {
     target = {};
+    if(Fo3ResidentFrameBlocked())return false;
     if (!gSceneReady || IsFo3LoadingVisible() || Fo3DialogueFocus() || Fo3PipboyFocus() || Fo3ScriptMessageFocus() || Fo3LockpickFocus() || !gPlayerSession) return false;
     const float length = std::sqrt(dx*dx+dy*dy+dz*dz);
     if (!std::isfinite(length) || length < 1e-5f ||
@@ -211,7 +213,7 @@ void UpdateFo3ScriptMessage(double now,float scroll,bool pressA,bool pressB,bool
     }
 }
 void DeliverFo3ScriptSounds(){
-    if(!gPlayerSession||Fo3ResidentExchangeRecoveryFailed())return;
+    if(!gPlayerSession||Fo3ResidentFrameBlocked())return;
     fo3player::QuestNotice notice;
     auto& player=gPlayerSession->player;
     while(player.PollQuestNotice(notice)) {

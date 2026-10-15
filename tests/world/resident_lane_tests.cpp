@@ -1,4 +1,5 @@
 #include "fo3-resident-preparation-lane.h"
+#include "fo3-resident-input-barrier.h"
 #include "fo3-visual-exchange.h"
 #include <cassert>
 #include <cstdlib>
@@ -26,6 +27,17 @@ template<class Predicate> void wait(Predicate predicate){
     while(!predicate()){assert(std::chrono::steady_clock::now()<deadline);std::this_thread::yield();}
 }
 int main(){
+    ResidentInputBarrier input;
+    rejectAllocation=true;
+    assert(input.Allow(false,false)); // Normal held controls remain unchanged.
+    assert(!input.Allow(true,false)&&!input.Allow(true,true));
+    assert(!input.Allow(false,false)&&!input.Allow(false,false));
+    assert(!input.Allow(false,true)); // Release frame never creates an action.
+    assert(input.Allow(false,false));
+    assert(!input.Allow(true,false)&&!input.Allow(false,true));
+    assert(!input.Allow(true,true)&&!input.Allow(false,false)); // New reservation rearms.
+    assert(!input.Allow(false,true)&&input.Allow(false,false));
+    rejectAllocation=false;
     ResidentPreparationLane<Result> lane;
     assert(!lane.Blocked()&&!lane.Release(0)&&!lane.Cancel(0)&&!lane.Poll(0,{}));
     const auto token=lane.Acquire();assert(token&&lane.Blocked()&&!lane.Acquire());

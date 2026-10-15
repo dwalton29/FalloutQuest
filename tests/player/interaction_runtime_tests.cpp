@@ -109,7 +109,8 @@ bool barterFocus=false;
 bool Fo3BarterFocus(){return barterFocus;}
 bool BeginFo3Lockpick(uint32_t){return false;}
 bool exchangeRecoveryFailed=false;
-bool Fo3ResidentExchangeRecoveryFailed(){return exchangeRecoveryFailed;}
+bool frameReserved=false;
+bool Fo3ResidentFrameBlocked(){return frameReserved||exchangeRecoveryFailed;}
 #include "world/interaction/fo3-interaction-runtime.inc"
 struct {bool active=false;} gSceneLoad;
 uint32_t gExteriorWorldspaceQ1890=0;
@@ -469,6 +470,18 @@ int main() {
     uint32_t preservedSound=0;
     Check(gPlayerSession->player.PollScriptSound(preservedSound)&&preservedSound==77,"failed recovery blocks queued effect delivery");
     exchangeRecoveryFailed=false;
+    Check(gPlayerSession->player.QueueScriptSound(77),"queue effect before frame reservation");
+    const auto reservedRevision=gPlayerSession->player.Revision();
+    frameReserved=true;DeliverFo3ScriptSounds();
+    Fo3InteractionTarget reservedTarget;
+    Check(!QueryFo3Interaction(0,0,0,0,0,-1,reservedTarget)&&!reservedTarget.reference,
+        "reserved frame excludes targeting and lazy interaction cache work");
+    Check(!ActivateFo3Interaction(0,0,0,0,0,-1)&&!CollectFo3WorldReference(1000),
+        "reserved frame rejects activation and physical inventory transfer");
+    Check(gPlayerSession->player.Revision()==reservedRevision,"reserved interaction leaves canonical state unchanged");
+    Check(gPlayerSession->player.PollScriptSound(preservedSound)&&preservedSound==77,
+        "reservation leaves effect queued until release");
+    frameReserved=false;
     std::cout << "Interaction runtime tests passed\n";
     return 0;
   } catch (const std::exception &e) {
