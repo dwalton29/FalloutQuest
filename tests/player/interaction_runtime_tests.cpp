@@ -108,6 +108,8 @@ bool Fo3LockpickInputBlocked(){return lockpickFocus||lockpickLatch;}
 bool barterFocus=false;
 bool Fo3BarterFocus(){return barterFocus;}
 bool BeginFo3Lockpick(uint32_t){return false;}
+bool exchangeRecoveryFailed=false;
+bool Fo3ResidentExchangeRecoveryFailed(){return exchangeRecoveryFailed;}
 #include "world/interaction/fo3-interaction-runtime.inc"
 struct {bool active=false;} gSceneLoad;
 uint32_t gExteriorWorldspaceQ1890=0;
@@ -462,6 +464,11 @@ int main() {
     gQ223DynamicBodies[1000]=1;
     Check(guard->Current(1,CaptureFo3ResidentInteractionActivity(),Fo3ResidentInteractionHazard)==fo3scene::ResidentInteractionAdmissionResult::UnsupportedReference,"late loose-body creation invalidates admission");gQ223DynamicBodies.erase(1000);
     Check(gPlayerSession->player.Revision()==revision,"preflight does not change Player revision");
+    Check(gPlayerSession->player.QueueScriptSound(77),"queue effect before recovery failure");
+    exchangeRecoveryFailed=true;DeliverFo3ScriptSounds();
+    uint32_t preservedSound=0;
+    Check(gPlayerSession->player.PollScriptSound(preservedSound)&&preservedSound==77,"failed recovery blocks queued effect delivery");
+    exchangeRecoveryFailed=false;
     std::cout << "Interaction runtime tests passed\n";
     return 0;
   } catch (const std::exception &e) {

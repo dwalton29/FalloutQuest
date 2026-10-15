@@ -211,7 +211,7 @@ void UpdateFo3ScriptMessage(double now,float scroll,bool pressA,bool pressB,bool
     }
 }
 void DeliverFo3ScriptSounds(){
-    if(!gPlayerSession)return;
+    if(!gPlayerSession||Fo3ResidentExchangeRecoveryFailed())return;
     fo3player::QuestNotice notice;
     auto& player=gPlayerSession->player;
     while(player.PollQuestNotice(notice)) {

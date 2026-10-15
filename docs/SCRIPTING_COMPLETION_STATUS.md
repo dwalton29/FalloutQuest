@@ -4,11 +4,12 @@
 
 - Starting canonical main: `2987d911f318b92d1041257868067851a09d16f0` (v208).
 - Resumed from published `6469dbb872889a79a0682501b75f6ac6577ab547`.
-- Current implementation checkpoint: M1B3n guarded reference/cache publication.
+- Current implementation checkpoint: M1B3o composite commit/recovery executor.
   Use canonical main history for the publication SHA; the previous published
-  resource implementation is M1B3m `1543fa28a4bd69c5fca72e4051598d93a3b8e6c2`.
+  resource implementation is M1B3n `66ed57cf5764af7bbed863c8e28e8009f945ee10`.
 - M1B3l Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38635385905.
 - M1B3m Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38793178567.
+- M1B3n Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38795209693.
   Earlier M1B3h CI confirmed the collision-policy include-order failure from g is fixed.
 - Re-fetched and preserved newer canonical v210 barter, v211 MS11 completion and
   v212 Moira fixes. Current baseline `5a4ad709d43d36ec756aaa48bae441e45f400db7`
@@ -41,6 +42,7 @@
 | M1B3k reversible interior lights | `7f97e3f062609847e972cdf34f32133896410028` | Confirmed |
 | M1B3l reversible interior load doors | `b91803140f957935c3e1ede182f6dcddd5affb8a` | Confirmed |
 | M1B3m read-only interaction preflight | `1543fa28a4bd69c5fca72e4051598d93a3b8e6c2` | Confirmed |
+| M1B3n reference/cache publication | `66ed57cf5764af7bbed863c8e28e8009f945ee10` | Confirmed |
 
 The user directly confirmed permission to push to main on 2026-10-14. The old
 approval blocker is resolved. Command-line Git cannot authenticate for writes;
@@ -181,6 +183,8 @@ flowchart TD
    and resource commits (see `world-reference-m1b3m.md`).
    M1B3n couples reference publication and its renderer cache with precomputed
    monotonic rollback projections (see `world-reference-m1b3n.md`).
+   M1B3o executes the bound canonical/collision/light/visual/door/reference bundle
+   in one turn and recovers failures (see `world-reference-m1b3o.md`).
    Exterior lights, remaining interaction ownership, queue reconciliation and the
    outer runtime/resource/actor coordinator remain unfinished. Only then admit
    general resident Enable/Disable; no success-only handlers are allowed.
@@ -530,3 +534,25 @@ See `world-reference-m1b3n.md`. No resident command caller was added; v212 and
 its bounded nonresident actor-removal path remain unchanged. The outer atomic
 canonical/resource transaction, exclusion, navigation and queue reconciliation
 are still unfinished.
+
+## M1B3o validation
+
+The reserved composite commit/recovery executor passes fifteen world, 31 player
+and one physics CTest cases (47 core host cases). It binds the exact ready packet,
+collision token, script snapshots and affected list, checks all component plans
+before mutation, then validates the completed publication. Tests inject failure
+at every apply/undo stage and after publication; recovery restores exact resource
+storage and the canonical rollback revision. Real Player tests restore script
+state/queues and execute successful or failed turns with allocations disabled.
+Pure executor and canonical script tests pass ASan/UBSan with LeakSanitizer
+disabled. The runtime effect bridge preserves queued effects after a recovery
+failure; source guards cover packet invalidation, concrete component mapping,
+save/effect suppression and reservation retention. Original Lucas/nonresident/
+barter dialogue bridge and relevant render/body/Pip-Boy source checks pass.
+See `world-reference-m1b3o.md`.
+
+There is still no production caller for the general resident workflow. Frame
+exclusion through asynchronous preparation, complete authored/navigation/LOD
+admission, resource finalization, parked-queue reconciliation and command
+dispatch remain unfinished. v212 and bounded nonresident actor Disable remain
+unchanged. No physical Quest/performance claim is made.

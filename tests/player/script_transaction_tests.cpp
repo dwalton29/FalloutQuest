@@ -1,5 +1,7 @@
 #include "player/fo3-player-state.h"
 #include "world/fo3-reference-exchange.h"
+#include "world/fo3-resident-exchange.h"
+#include <array>
 #include <cassert>
 #include <cstdlib>
 #include <fstream>
@@ -46,6 +48,29 @@ static void NoEffects(fo3player::Player& p){
   uint32_t sound=0;fo3player::ScriptMessage message;fo3player::QuestNotice notice;fo3player::KarmaEvent karma;
   assert(!p.PollScriptSound(sound)&&!p.PollScriptMessage(message)&&!p.PollQuestNotice(notice)&&!p.PollKarmaEvent(karma));
 }
+struct ScriptExchangeAdapter {
+  fo3player::Player& player;fo3player::ScriptTransactionPlan& script;
+  fo3scene::ReferencePublication& publication;
+  fo3scene::ReferenceExchange::Snapshot& cache;
+  fo3scene::ReferenceExchange& references;
+  int fail=-1;
+  std::array<bool,4> resources{};
+  bool Preflight() noexcept {return player.CanCommitScriptTransaction(script)&&references.CanPublishBefore(publication,cache,player.Snapshot().referenceStateRevision);}
+  bool Apply(fo3scene::ResidentExchangeStage stage) noexcept {
+    using Stage=fo3scene::ResidentExchangeStage;
+    if(int(stage)==fail)return false;
+    if(stage==Stage::Canonical)return player.CommitScriptTransaction(script);
+    if(stage==Stage::Publication)return references.Commit(publication,cache,player.Snapshot().referenceStateRevision);
+    resources[static_cast<size_t>(stage)-1]=true;return true;
+  }
+  bool Undo(fo3scene::ResidentExchangeStage stage) noexcept {
+    using Stage=fo3scene::ResidentExchangeStage;
+    if(stage==Stage::Canonical)return player.RollbackScriptTransaction(script);
+    if(stage==Stage::Publication)return references.Rollback(publication,cache,player.Snapshot().referenceStateRevision);
+    resources[static_cast<size_t>(stage)-1]=false;return true;
+  }
+  bool Published() noexcept {return fail!=6&&player.CanRollbackScriptTransaction(script)&&publication.Accepts(publication.Stamp(),player.Snapshot().referenceStateRevision);}
+};
 int main(){
   std::string error;fo3player::Player p(Fixture());
   fo3player::Player copy(p);assert(&copy.Definitions()==&p.Definitions());
@@ -155,6 +180,32 @@ int main(){
   assert(world.ItemCount(400)==0&&world.Snapshot().pipboy.quests.empty());NoEffects(world);
   assert(publication.Accepts(publication.Stamp(),world.Snapshot().referenceStateRevision));
   assert(!publication.Accepts(oldStamp,0)&&!publication.Accepts(committedStamp,1));
+  }
+  // Exercise the composite executor with a real canonical script/effect owner,
+  // including failure after publication, and no allocations during any turn.
+  for(int failure=-1;failure<=6;++failure){
+    auto catalog=Fixture();catalog.pipboy.formNames["fixtureref"]=100;
+    catalog.pipboy.quests[10].stages[30].items.emplace_back().result=
+        Script("FixtureRef.Disable\nplayer.AddItem TestItem 1\nShowMessage TestMessage");
+    fo3player::Player owner(std::move(catalog));
+    auto logical=owner.PrepareQuestStageTransaction(10,30,error);assert(logical&&logical->HasReferenceChanges());
+    auto before=std::make_shared<const fo3world::ReferenceStateSnapshot>(owner.CaptureReferenceState());
+    fo3scene::ReferencePublication publication;publication.Publish(before);auto cache=before;
+    const auto stamp=publication.Stamp();
+    auto references=fo3scene::ReferenceExchange::Prepare(publication,cache,before,logical->CandidateReferences(),logical->RollbackReferences());
+    assert(references);
+    ScriptExchangeAdapter adapter{owner,*logical,publication,cache,*references,failure,{}};
+    forbidAllocations=true;const auto result=fo3scene::ExecuteResidentExchange(adapter);forbidAllocations=false;
+    using Status=fo3scene::ResidentExchangeStatus;
+    if(failure<0){assert(result.status==Status::Committed&&owner.ItemCount(400)==1&&owner.PendingScriptMessageCount()==1&&cache==logical->CandidateReferences());}
+    else {
+      assert(result.status==(failure?Status::RolledBack:Status::Rejected));
+      for(bool applied:adapter.resources)assert(!applied);
+      assert(owner.ItemCount(400)==0&&owner.Snapshot().pipboy.quests.empty());NoEffects(owner);
+      assert(cache==(failure?logical->RollbackReferences():before));
+      assert(publication.Accepts(publication.Stamp(),owner.Snapshot().referenceStateRevision));
+      if(failure)assert(!publication.Accepts(stamp,0));
+    }
   }
   std::cout<<"Detached whole-script state/effect transactions, previews, publication, rollback and delivery/input guards passed\n";
 }

@@ -104,7 +104,7 @@ stamp=s[s.index('bool Fo3ResidentPacketCurrent('):s.index('void DeleteFo3Residen
 for guard in ('Fo3AcceptsScenePublication(cpu.publication)', 'gFo3VisualPublication.Revision()',
               'gCurrentCellFormId','gExteriorWorldspaceQ1890','gSceneCenterXQ1730','gSceneCenterYQ1730','gSceneFloorZQ1730'):
     assert guard in stamp
-advance=s[s.index('fo3scene::GpuStageResult AdvanceFo3ResidentGpuStage('):s.index('// Dynamic NPC arrivals')]
+advance=s[s.index('fo3scene::GpuStageResult AdvanceFo3ResidentGpuStage('):s.index('bool ReleaseFo3ResidentAssetLane(')]
 assert advance.index('!Fo3ResidentPacketCurrent(*work.cpu)') < advance.index('UploadCpuObject(')
 assert advance.index('UploadCpuObject(') < advance.index('PrepareFo3ResidentVisualPlan(')
 assert 'CommitFo3ResidentVisualPlan' not in advance
@@ -146,7 +146,7 @@ for forbidden in ('gObjects','gPlayerSession','gFo3ScenePublication','gFo3Visual
     assert forbidden not in immutable
 assert 'result.assetTicket=ticket' in immutable
 assert 'gFo3ResidentLane.Exclusive(cpu.assetTicket)' in stamp
-cancel=s[s.index('bool CancelFo3ResidentPreparation('):s.index('// Dynamic NPC arrivals use')]
+cancel=s[s.index('bool CancelFo3ResidentPreparation('):s.index('// Reserved one-turn commit executor.')]
 assert cancel.index('gFo3ResidentLane.Owns(ticket)') < cancel.index('DiscardFo3ResidentGpuStage()') < cancel.index('gFo3ResidentLane.Cancel(ticket)')
 assert cancel.index('gFo3ResidentVisualPlan->Applied()') < cancel.index('DiscardFo3ResidentVisualPlan()')
 release=s[s.index('bool ReleaseFo3ResidentAssetLane('):s.index('bool CancelFo3ResidentPreparation(')]
@@ -299,3 +299,33 @@ assert reset.index('gFo3ResidentLane.Reset()') < reset.index('DiscardFo3Resident
 rollback_reference=reference_plan[reference_plan.index('bool RollbackFo3ResidentReferencePublicationPlan()'):]
 assert 'Fo3ResidentInteractionAdmissionCurrent()' not in rollback_reference
 print('Reference publication/cache exchange owns monotonic candidate/rollback projections and follows lane lifecycle guards')
+
+executor=s[s.index('struct Fo3ResidentExchangeAdapter {'):s.index('// Dynamic NPC arrivals use')]
+for proof in ('&cpu==gFo3ResidentPreparedPacket','cpu.collision.Get()==gFo3ResidentPreparedCollision',
+              'script.CandidateReferences()==cpu.candidate','script.RollbackReferences()==cpu.rollback',
+              'script.AffectedReferences()==cpu.affected','CanCommitScriptTransaction(script)',
+              'CanCommitFo3ResidentDoorPlan()','CanPublishFo3ResidentReferencesBeforeCommit()'):
+    assert proof in executor
+for forbidden in ('FlushFo3','Poll','Pump','glDraw','ExecuteQuest','DispatchReferenceEvent'):
+    assert forbidden not in executor
+for forward,undo in [('CommitScriptTransaction(script)','RollbackScriptTransaction(script)'),
+                      ('CommitFo3ResidentLightPlan()','RollbackFo3ResidentLightPlan()'),
+                      ('CommitFo3ResidentVisualPlan()','RollbackFo3ResidentVisualPlan()'),
+                      ('CommitFo3ResidentDoorInteractionPlan()','RollbackFo3ResidentDoorInteractionPlan()'),
+                      ('CommitFo3ResidentReferencePublicationPlan()','RollbackFo3ResidentReferencePublicationPlan()')]:
+    assert forward in executor and undo in executor
+assert executor.count('return ExchangeFo3CollisionMutationSnapshot(cpu.collision.Get())')==2
+assert 'gPlayerSession->saveBlocked=true' in executor and 'gSceneReady=false' in executor
+assert 'gFo3ResidentExchangeRecoveryFailed' in release and 'gFo3ResidentExchangeRecoveryFailed' in cancel
+interaction=Path('app/src/main/cpp/world/interaction/fo3-interaction-runtime.inc').read_text()
+delivery=interaction[interaction.index('void DeliverFo3ScriptSounds()'):interaction.index('fo3loot::Cursor gLootCursor;')]
+assert delivery.index('Fo3ResidentExchangeRecoveryFailed()') < delivery.index('PollQuestNotice')
+assert advance.index('if(prepared){') < advance.index('gFo3ResidentPreparedPacket=work.cpu.get()') < advance.index('completed=std::move(work.cpu)')
+for signature in ('void DiscardFo3ResidentReferencePublicationPlan()', 'void DiscardFo3ResidentVisualPlan()',
+                  'void DiscardFo3ResidentLightPlan()', 'void DiscardFo3ResidentDoorInteractionPlan()'):
+    body=s[s.index(signature):].split('}',1)[0]
+    mutation='DiscardFo3ResidentDoorPlan()' if 'DoorInteraction' in signature else '.reset()'
+    assert body.index('InvalidateFo3ResidentPreparedBinding()') < body.index(mutation)
+flush=s[s.index('void FlushFo3PlayerState()'):s.index('bool DrainFo3TransitionBackgroundWork();')]
+assert flush.index('gFo3ResidentExchangeRecoveryFailed') < flush.index('WeaponPersistWorld()') < flush.index('gPlayerSession->Flush(')
+print('Composite executor binds canonical/prepared resources, maps all exchanges/undo and blocks success/save/effects on recovery failure')
