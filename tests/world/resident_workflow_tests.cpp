@@ -26,6 +26,9 @@ struct Adapter {
     std::atomic<bool> entered{false},finish{true},cancelObserved{false};
     bool current=true,workersBusy=false,holdCancellation=false,throwStart=false;
     int fail=0,started=0,parts=0,cancels=0,executions=0,packetDestroyed=0;
+    bool finalizeCurrent=true,reconcileReady=true,throwReconcile=false,releaseFails=false,fatal=false;
+    bool staleAfterReconcile=false;
+    int reconciled=0,retired=0,releases=0;
     ResidentExchangeStatus outcome=ResidentExchangeStatus::Committed;
     Workflow* workflow=nullptr;
     bool Current(uint64_t ticket,const Script& script) const noexcept {
@@ -78,6 +81,20 @@ struct Adapter {
         workflow->Pump(*this);assert(executions==1);
         return {outcome,ResidentExchangeStage::Complete,0,0};
     }
+    bool CanFinalize(uint64_t ticket,const Packet&,const Script&,const ResidentExchangeResult&) const noexcept {
+        return finalizeCurrent&&lane.CanRelease(ticket);
+    }
+    bool Reconcile(const ResidentExchangeResult&) {
+        ++reconciled;
+        assert(workflow->State()==Phase::Finalizing&&!workflow->RequestCancel(workflow->Ticket()));
+        assert(!workflow->Finalize(workflow->Ticket(),*this));
+        if(throwReconcile)throw std::bad_alloc();
+        if(staleAfterReconcile)finalizeCurrent=false;
+        return reconcileReady;
+    }
+    void Retire(Packet& packet) noexcept {++retired;packet.lease.reset();}
+    bool Release(uint64_t ticket) noexcept {++releases;return !releaseFails&&lane.Release(ticket);}
+    void FinalizationFailed() noexcept {fatal=true;}
     void Reset(Workflow& work){lane.Reset();gpu.reset();work.ResetAfterDrain();}
 };
 static void ready(Workflow& work,Adapter& adapter) {
@@ -109,7 +126,25 @@ int main() {
         assert(!work.RequestCancel(ticket));work.Pump(adapter);
         assert(work.Execute(ticket,adapter).status==ResidentExchangeStatus::Rejected);
         assert(destroyed==1&&adapter.packetDestroyed==0&&adapter.lane.Blocked());
-        adapter.Reset(work);assert(!work.Active()&&destroyed==2&&adapter.packetDestroyed==1);
+        if(outcome==ResidentExchangeStatus::RecoveryFailed){
+            assert(!work.Finalize(ticket,adapter)&&adapter.reconciled==0);
+            adapter.Reset(work);
+        }else{
+            assert(!work.Finalize(ticket+1,adapter));
+            adapter.finalizeCurrent=false;
+            assert(!work.Finalize(ticket,adapter)&&adapter.reconciled==0&&adapter.retired==0);
+            adapter.finalizeCurrent=true;adapter.reconcileReady=false;
+            assert(!work.Finalize(ticket,adapter)&&adapter.retired==0&&destroyed==1&&adapter.lane.Blocked());
+            adapter.reconcileReady=true;adapter.throwReconcile=true;
+            assert(!work.Finalize(ticket,adapter)&&work.State()==Phase::Settled&&adapter.retired==0);
+            adapter.throwReconcile=false;
+            adapter.staleAfterReconcile=true;
+            assert(!work.Finalize(ticket,adapter)&&adapter.retired==0&&adapter.lane.Blocked());
+            adapter.staleAfterReconcile=false;adapter.finalizeCurrent=true;
+            assert(work.Finalize(ticket,adapter)&&adapter.retired==1&&adapter.releases==1&&!adapter.fatal);
+            assert(!work.Finalize(ticket,adapter));
+        }
+        assert(!work.Active()&&destroyed==2&&adapter.packetDestroyed==1);
     }
     // Every private preparation failure and thrown start is cancellable with
     // no canonical execution and exactly-once reclamation.
@@ -155,6 +190,18 @@ int main() {
         const auto ticket=adapter.lane.Acquire();assert(work.Begin(ticket,script,{},adapter));
         work.Pump(adapter);wait([&]{return adapter.entered.load();});adapter.Reset(work);
         assert(adapter.cancelObserved&&destroyed==1&&!work.Active()&&!adapter.lane.Blocked());
+    }
+    // An unexpected release failure after no-throw retirement latches failure;
+    // it cannot report resumed gameplay or retry against already retired plans.
+    {
+        int destroyed=0;Workflow work;Adapter adapter;adapter.workflow=&work;
+        auto script=std::unique_ptr<Script>(new Script{destroyed});
+        const auto ticket=adapter.lane.Acquire();assert(work.Begin(ticket,script,{},adapter));
+        ready(work,adapter);work.Execute(ticket,adapter);adapter.releaseFails=true;
+        assert(!work.Finalize(ticket,adapter)&&adapter.fatal&&work.State()==Phase::RecoveryFailed);
+        assert(destroyed==0&&adapter.packetDestroyed==1&&adapter.lane.Blocked());
+        assert(!work.Finalize(ticket,adapter)&&!work.RequestCancel(ticket));
+        adapter.Reset(work);assert(destroyed==1);
     }
     std::cout<<"resident workflow retains logical/private owners through async preparation, cancellation and settled outcomes\n";
 }

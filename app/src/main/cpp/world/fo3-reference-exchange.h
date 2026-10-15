@@ -33,6 +33,12 @@ public:
         plan->candidate_=std::move(candidate);plan->rollback_=std::move(rollback);return plan;
     }
     bool Applied() const noexcept {return phase_==Phase::Applied;}
+    bool CanFinalize(const ReferencePublication& publication,const Snapshot& cache,
+            uint64_t canonicalRevision,bool committed) const noexcept {
+        if(committed)return phase_==Phase::Applied&&canonicalRevision==candidate_->revision&&Matches(publication,cache,candidate_);
+        return (phase_==Phase::Prepared&&canonicalRevision==before_->revision&&Matches(publication,cache,before_))||
+            (phase_==Phase::RolledBack&&canonicalRevision==rollback_->revision&&Matches(publication,cache,rollback_));
+    }
     // Before canonical commit: a read-only outer-transaction preflight.
     bool CanPublishBefore(const ReferencePublication& publication,const Snapshot& cache,
             uint64_t canonicalRevision) const noexcept {

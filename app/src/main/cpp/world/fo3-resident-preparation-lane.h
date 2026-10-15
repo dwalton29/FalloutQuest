@@ -47,8 +47,9 @@ public:
         catch(...){return false;}
         job_.Reset();out=std::move(next);return true;
     }
+    bool CanRelease(Ticket ticket)const noexcept {return Exclusive(ticket)&&!job_.Active();}
     bool Release(Ticket ticket)noexcept {
-        if(!Exclusive(ticket)||job_.Active())return false;
+        if(!CanRelease(ticket))return false;
         Clear();return true;
     }
     // Cooperative cancellation never joins unfinished work on an ordinary

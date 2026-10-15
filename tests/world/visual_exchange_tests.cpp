@@ -63,12 +63,14 @@ int main() {
         auto plan = Plan::Prepare(live, epoch, {0,2}, incoming, Dispose);
         assert(plan && incoming.empty() && live.data() == storage && epoch.Revision() == revision);
         assert(!plan->Applied());
+        assert(plan->CanFinalize(live,epoch,false)&&!plan->CanFinalize(live,epoch,true));
         assert(refs[1] == 2 && refs[2] == 1 && refs[3] == 1);
         auto competing = Plan::Prepare(live, epoch, {}, incoming, Dispose); assert(competing);
         allocationBudget = 0;
         const bool committed = plan->Commit(live, epoch);
         allocationBudget = SIZE_MAX;
         assert(plan->Applied());
+        assert(plan->CanFinalize(live,epoch,true)&&!plan->CanFinalize(live,epoch,false));
         assert(committed && live.size() == 3 && live[0].handle == 1 && live[1].handle == 1 && live[2].handle == 3);
         assert(!competing->Commit(live, epoch));
         // Kept slots carry their current metadata through both ownership moves.
@@ -81,6 +83,8 @@ int main() {
         assert(rolledBack && live.data() == storage && live.size() == 3 && live[0].pose == 77);
         assert(live[1].handle == 2 && live[2].handle == 1 && live[2].vertices.size() == 4);
         assert(epoch.Revision() == revision+2 && !plan->Commit(live, epoch) && !plan->Rollback(live, epoch));
+        assert(plan->CanFinalize(live,epoch,false)&&!plan->CanFinalize(live,epoch,true));
+        epoch.Changed();assert(!plan->CanFinalize(live,epoch,false));
         plan.reset(); competing.reset();
         assert(refs[3] == 0 && refs[1] == 2 && refs[2] == 1);
         Dispose(live);

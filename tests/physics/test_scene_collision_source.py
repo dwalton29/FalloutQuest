@@ -137,7 +137,7 @@ assert 'memory_order_acquire' in activity
 for forbidden in ('Consume','PublishFo3','Reset','glDelete','join('):
     assert forbidden not in activity
 terrain=Path('app/src/main/cpp/rendering/terrain/fo3-terrain-stream.inc').read_text()
-probe=terrain[terrain.index('bool IsFo3TerrainStreamingCpuQuiescentQ2000() {'):terrain.index('bool IsFo3TerrainStreamingCpuBusyQ2000() {')]
+probe=terrain[terrain.index('bool IsFo3TerrainStreamingCpuQuiescentQ2000() {'):terrain.index('#include "fo3-terrain-parked-work.inc"')]
 assert 'memory_order_acquire' in probe and 'Consume' not in probe and 'join(' not in probe
 lane_start=s[s.index('bool StartFo3ResidentCpuPreparation('):s.index('bool TakeFo3ResidentCpuPreparation(')]
 assert lane_start.index('gFo3ResidentLane.Exclusive(ticket)') < lane_start.index('live.reserve(gObjects.size())') < lane_start.index('gFo3ResidentLane.Start(ticket,')
@@ -392,3 +392,34 @@ assert 'const fo3player::Player&' in factory and 'CancelFo3ResidentPreparation(t
 for forbidden in ('FlushFo3','PollScript','PollQuest','DispatchReferenceEvent','glDraw','PumpFo3AndroidEvents'):
     assert forbidden not in workflow
 print('Native workflow owns the script/packet, advances outside gameplay exclusion and retains all settled owners for finalization')
+
+finalizer=workflow[workflow.index('bool CanFinalize('):workflow.index('uint64_t BeginFo3ResidentWorkflow(')]
+for proof in ('CanFinalizeScriptTransaction(script,committed)',
+              'gFo3ResidentVisualPlan->CanFinalize(', 'gFo3ResidentLightPlan->CanFinalize(',
+              'CanFinalizeFo3ResidentDoorPlan(committed)', 'gFo3ResidentReferencePublicationPlan->CanFinalize(',
+              'cpu.settledPublication==gFo3ScenePublication.Stamp()',
+              'cpu.settledCollision==GetFo3CollisionPublicationRevision()',
+              'gFo3ResidentLane.CanRelease(ticket)','CaptureFo3ResidentAssetActivity().Quiescent()',
+              'CanExchangeFo3CollisionMutationSnapshot(cpu.collision.Get())'):
+    assert proof in finalizer,proof
+assert 'ResidentWorkflowPhase::Finalizing' in release
+assert executor.index('ExecuteResidentExchange(adapter)') < executor.index('cpu.settledPublication=')
+owner=Path('app/src/main/cpp/world/fo3-resident-workflow.h').read_text()
+finish=owner[owner.index('bool Finalize('):owner.index('// Scene/context teardown only')]
+assert finish.index('adapter.Reconcile(outcome_)') < finish.rindex('adapter.CanFinalize(') < finish.index('adapter.Retire(*packet_);') < finish.index('if(!adapter.Release(ticket))') < finish.rindex('Clear();')
+reconcile=Path('app/src/main/cpp/world/fo3-resident-reconcile-runtime.inc').read_text()
+body=reconcile[reconcile.index('bool ReconcileFo3ResidentParkedWork('):]
+assert body.index('CaptureFo3ResidentAssetActivity().Quiescent()') < body.index('auto npcPending=') < body.index('DiscardFo3TerrainParkedWorkQ2000()') < body.index('Q230ResetNpcArrivals()')
+for queues in ('gWorldStreaming.cells.clear()', 'worker.reset()', 'gWorldStreaming.collisionTask.reset()',
+               'gQ2013LodUploadsQ19.clear()', 'gFo3LegacyMetadataWorkers.clear()',
+               'gQ230NpcArrival.pending.swap(npcPending)'):
+    assert queues in body,queues
+for forbidden in ('gObjects','gQ230NpcActors','CommitFo3','PublishFo3','gPlayerSession','FlushFo3','Pump','glDraw'):
+    assert forbidden not in reconcile,forbidden
+terrain_cleanup=Path('app/src/main/cpp/rendering/terrain/fo3-terrain-parked-work.inc').read_text()
+assert terrain_cleanup.index('IsFo3TerrainStreamingCpuQuiescentQ2000()') < terrain_cleanup.index('.join()') < terrain_cleanup.index('gQ2000Worker.reset()')
+for forbidden in ('q711TerrainBatches','gQ2000GroundCells','gQ2000ResidentValid','gQ2000WindowKeys','Publish','Consume','Launch'):
+    assert forbidden not in terrain_cleanup,forbidden
+assert '#include "world/fo3-resident-reconcile-runtime.inc"' in s
+assert '#include "fo3-terrain-parked-work.inc"' in terrain
+print('Settled finalization validates epochs/canonical owners, reconciles private queues and retires before resuming; live LAND/scene/actors stay untouched')

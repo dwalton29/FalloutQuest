@@ -134,6 +134,7 @@ bool Fo3ResidentFrameBlocked();
 bool Fo3ResidentLegacyStreamActive();
 fo3scene::ResidentAssetActivity CaptureFo3ResidentAssetActivity();
 void ResetFo3ResidentPreparationLane();
+bool ReconcileFo3ResidentParkedWork(fo3scene::ResidentExchangeStatus status);
 void ResetFo3InteriorExposureHistory();
 void PrepareFo3InteriorSceneLights();
 struct GpuObject;
@@ -3200,6 +3201,9 @@ struct Fo3ResidentCpuPreparation {
     Fo3WorldspaceSelection collisionScope;
     std::vector<Fo3WorldPlacement> collisionPlacements;
     std::vector<CpuObject> incoming;
+    fo3scene::PublicationStamp settledPublication;
+    uint64_t settledVisual=0,settledLight=0,settledDoor=0,settledCollision=0;
+    bool settled=false;
 };
 bool PrepareFo3ResidentCpuResources(const Fo3CellTransitionRequestQ74& request,
         const Fo3WorldspaceSelection& exteriorScope,
@@ -3565,7 +3569,9 @@ fo3scene::GpuStageResult AdvanceFo3ResidentGpuStage(
 }
 
 bool ReleaseFo3ResidentAssetLane(uint64_t ticket) {
-    if(gFo3ResidentWorkflow.Active()||gFo3ResidentExchangeExecuting||gFo3ResidentExchangeRecoveryFailed)return false;
+    if((gFo3ResidentWorkflow.Active()&&!(gFo3ResidentWorkflowCleanup&&
+            gFo3ResidentWorkflow.State()==fo3scene::ResidentWorkflowPhase::Finalizing))||
+        gFo3ResidentExchangeExecuting||gFo3ResidentExchangeRecoveryFailed)return false;
     if(gFo3ResidentGpuWork||gFo3ResidentVisualPlan||gFo3ResidentLightPlan||HasFo3ResidentDoorPlan()||gFo3ResidentReferencePublicationPlan)return false;
     if(!gFo3ResidentLane.Release(ticket))return false;
     gFo3ResidentPreparedPacket=nullptr;gFo3ResidentPreparedCollision=0;
@@ -3646,6 +3652,9 @@ fo3scene::ResidentExchangeResult ExecuteFo3ResidentPreparedExchange(Fo3ResidentC
     Fo3ResidentExchangeAdapter adapter{cpu,script};
     const auto result=fo3scene::ExecuteResidentExchange(adapter);
     gFo3ResidentExchangeExecuting=false;
+    cpu.settledPublication=gFo3ScenePublication.Stamp();
+    cpu.settledVisual=gFo3VisualPublication.Revision();cpu.settledLight=gFo3LightPublication.Revision();
+    cpu.settledDoor=GetFo3DoorResourceRevision();cpu.settledCollision=GetFo3CollisionPublicationRevision();cpu.settled=true;
     if(result.status==fo3scene::ResidentExchangeStatus::RecoveryFailed) {
         // Never continue gameplay or persist a mixed resource/canonical world.
         // Keep owners and reservation intact for teardown/restart.
@@ -3658,6 +3667,10 @@ fo3scene::ResidentExchangeResult ExecuteFo3ResidentPreparedExchange(Fo3ResidentC
 // Reserved asynchronous owner. Script preparation happens synchronously under
 // the reservation; it is never deferred to an asset worker or event callback.
 struct Fo3ResidentWorkflowAdapter {
+    struct Cleanup {
+        Cleanup(){gFo3ResidentWorkflowCleanup=true;}
+        ~Cleanup(){gFo3ResidentWorkflowCleanup=false;}
+    };
     bool Current(uint64_t ticket,const fo3player::ScriptTransactionPlan& script) const noexcept {
         return gFo3ResidentLane.Owns(ticket)&&!gFo3ResidentExchangeRecoveryFailed&&
             Fo3ResidentLaneContextCurrent()&&CaptureFo3ResidentInteractionActivity().Idle()&&
@@ -3679,15 +3692,53 @@ struct Fo3ResidentWorkflowAdapter {
     bool BeginGpu(std::unique_ptr<Fo3ResidentCpuPreparation>& packet){return BeginFo3ResidentGpuStage(packet);}
     fo3scene::GpuStageResult AdvanceGpu(std::unique_ptr<Fo3ResidentCpuPreparation>& packet){return AdvanceFo3ResidentGpuStage(packet);}
     bool Cancel(uint64_t ticket) {
-        struct Cleanup {
-            Cleanup(){gFo3ResidentWorkflowCleanup=true;}
-            ~Cleanup(){gFo3ResidentWorkflowCleanup=false;}
-        } cleanup;
+        Cleanup cleanup;
         return CancelFo3ResidentPreparation(ticket);
     }
     fo3scene::ResidentExchangeResult Execute(Fo3ResidentCpuPreparation& packet,
             fo3player::ScriptTransactionPlan& script) noexcept {
         return ExecuteFo3ResidentPreparedExchange(packet,script);
+    }
+    bool CanFinalize(uint64_t ticket,const Fo3ResidentCpuPreparation& cpu,
+            const fo3player::ScriptTransactionPlan& script,const fo3scene::ResidentExchangeResult& outcome) const noexcept {
+        using Status=fo3scene::ResidentExchangeStatus;using Stage=fo3scene::ResidentExchangeStage;
+        const bool committed=outcome.status==Status::Committed;
+        if(outcome.recoveryFailures||outcome.status==Status::RecoveryFailed||
+            (committed&&(outcome.applied!=fo3scene::ResidentExchangeBit(Stage::Complete)-1||outcome.failedAt!=Stage::Complete))||
+            (outcome.status==Status::Rejected&&outcome.applied)||
+            (outcome.status==Status::RolledBack&&!(outcome.applied&fo3scene::ResidentExchangeBit(Stage::Canonical))))return false;
+        const auto expected=committed?cpu.candidate:(outcome.status==Status::RolledBack?cpu.rollback:cpu.published);
+        return cpu.settled&&ticket==cpu.assetTicket&& &cpu==gFo3ResidentPreparedPacket&&
+            cpu.collision.Get()==gFo3ResidentPreparedCollision&&cpu.collision.Get()&&
+            !gFo3ResidentExchangeExecuting&&!gFo3ResidentExchangeRecoveryFailed&&!gFo3ResidentGpuWork&&
+            !gSceneLoad.active&&gSceneReady&&!IsFo3LoadingVisible()&&gPlayerSession&&!gPlayerSession->saveBlocked&&
+            CaptureFo3ResidentInteractionActivity().Idle()&&
+            !cpu.request.worldspaceFormId&&!gExteriorWorldspaceQ1890&&cpu.request.cellFormId==gCurrentCellFormId&&
+            cpu.request.x==gSceneCenterXQ1730&&cpu.request.y==gSceneCenterYQ1730&&cpu.request.z==gSceneFloorZQ1730&&
+            gFo3ResidentLane.CanRelease(ticket)&&CaptureFo3ResidentAssetActivity().Quiescent()&&
+            cpu.settledPublication==gFo3ScenePublication.Stamp()&&cpu.settledVisual==gFo3VisualPublication.Revision()&&
+            cpu.settledLight==gFo3LightPublication.Revision()&&cpu.settledDoor==GetFo3DoorResourceRevision()&&
+            cpu.settledCollision==GetFo3CollisionPublicationRevision()&&
+            gPlayerSession->player.CanFinalizeScriptTransaction(script,committed)&&
+            gFo3ReferenceState==expected&&gFo3ScenePublication.Snapshot()==expected&&Fo3AcceptsScenePublication(cpu.settledPublication)&&
+            gFo3ResidentVisualPlan&&gFo3ResidentVisualPlan->CanFinalize(gObjects,gFo3VisualPublication,committed)&&
+            gFo3ResidentLightTicket==ticket&&gFo3ResidentLightPlan&&
+            gFo3ResidentLightPlan->CanFinalize(gFo3LightPublication,std::tie(gFo3InteriorLighting,gFo3PlacedLights),committed)&&
+            gFo3ResidentDoorTicket==ticket&&CanFinalizeFo3ResidentDoorPlan(committed)&&
+            gFo3ResidentReferencePublicationTicket==ticket&&gFo3ResidentReferencePublicationPlan&&
+            gFo3ResidentReferencePublicationPlan->CanFinalize(gFo3ScenePublication,gFo3ReferenceState,
+                gPlayerSession->player.Snapshot().referenceStateRevision,committed)&&
+            CanExchangeFo3CollisionMutationSnapshot(cpu.collision.Get());
+    }
+    bool Reconcile(const fo3scene::ResidentExchangeResult& outcome){return ReconcileFo3ResidentParkedWork(outcome.status);}
+    void Retire(Fo3ResidentCpuPreparation& cpu) noexcept {
+        DiscardFo3ResidentVisualPlan();DiscardFo3ResidentLightPlan();DiscardFo3ResidentDoorInteractionPlan();
+        DiscardFo3ResidentReferencePublicationPlan();gFo3ResidentInteractionAdmission.reset();cpu.collision.Reset();
+    }
+    bool Release(uint64_t ticket) noexcept {Cleanup cleanup;return ReleaseFo3ResidentAssetLane(ticket);}
+    void FinalizationFailed() noexcept {
+        gFo3ResidentExchangeRecoveryFailed=true;gSceneReady=false;
+        if(gPlayerSession)gPlayerSession->saveBlocked=true;
     }
 };
 uint64_t BeginFo3ResidentWorkflow(Fo3ResidentWorkflowRequest request,
@@ -3714,6 +3765,10 @@ void PumpFo3ResidentWorkflow(bool focused) noexcept {
 fo3scene::ResidentExchangeResult ExecuteFo3ResidentWorkflow(uint64_t ticket) noexcept {
     Fo3ResidentWorkflowAdapter adapter;
     return gFo3ResidentWorkflow.Execute(ticket,adapter);
+}
+bool FinalizeFo3ResidentWorkflow(uint64_t ticket) noexcept {
+    Fo3ResidentWorkflowAdapter adapter;
+    return gFo3ResidentWorkflow.Finalize(ticket,adapter);
 }
 
 // Dynamic NPC arrivals use the same original ESM/NIF/KF scene-worker pipeline
@@ -12009,6 +12064,8 @@ void Q230PumpNpcArrivals(){
             cell,world,count);
     }else Q6H_LOGI("NPC LIVE ARRIVAL FAILED reason=worker-start requested=%zu",count);
 }
+
+#include "world/fo3-resident-reconcile-runtime.inc"
 
 void QActorPrepareStereoFrame() {
     // Keep the last NPC poses. No AI, package events, persistence or unloaded

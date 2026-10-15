@@ -119,3 +119,10 @@ target_compile_options(resident_workflow_tests PRIVATE -Wall -Wextra -Werror -UN
 target_include_directories(resident_workflow_tests PRIVATE ../../app/src/main/cpp/world)
 target_link_libraries(resident_workflow_tests PRIVATE Threads::Threads)
 add_test(NAME resident_workflow_tests COMMAND resident_workflow_tests)
+
+add_executable(resident_reconcile_runtime_tests resident_reconcile_runtime_tests.cpp)
+target_compile_features(resident_reconcile_runtime_tests PRIVATE cxx_std_17)
+target_compile_options(resident_reconcile_runtime_tests PRIVATE -Wall -Wextra -Werror -UNDEBUG)
+target_include_directories(resident_reconcile_runtime_tests PRIVATE ../../app/src/main/cpp ../../app/src/main/cpp/world)
+target_link_libraries(resident_reconcile_runtime_tests PRIVATE Threads::Threads)
+add_test(NAME resident_reconcile_runtime_tests COMMAND resident_reconcile_runtime_tests)

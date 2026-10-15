@@ -24,16 +24,20 @@ int main(){
     try{Plan::Prepare(publication,std::tie(lights,metadata),incoming);}catch(const std::bad_alloc&){threw=true;}
     failAllocation=false;assert(threw&&lights.data()==before&&std::get<0>(incoming).data()==staged);
     auto plan=Plan::Prepare(publication,std::tie(lights,metadata),incoming);
+    assert(plan&&plan->CanFinalize(publication,std::tie(lights,metadata),false)&&!plan->CanFinalize(publication,std::tie(lights,metadata),true));
     assert(plan&&plan->CanCommit(publication,std::tie(lights,metadata))&&!plan->Applied()&&std::get<0>(incoming).empty()&&lights.data()==before);
     std::vector<std::string> wrong;
     assert(!plan->Commit(publication,std::tie(wrong,metadata)));
     fo3scene::VisualPublication wrongPublication;
     assert(!plan->Commit(wrongPublication,std::tie(lights,metadata)));
+    assert(!plan->CanFinalize(wrongPublication,std::tie(lights,metadata),false)&&!plan->CanFinalize(publication,std::tie(wrong,metadata),false));
     failAllocation=true;const bool applied=plan->Commit(publication,std::tie(lights,metadata));failAllocation=false;
     assert(applied&&plan->CanRollback(publication,std::tie(lights,metadata))&&plan->Applied()&&lights.data()==staged&&metadata.count(2));
+    assert(plan->CanFinalize(publication,std::tie(lights,metadata),true)&&!plan->CanFinalize(publication,std::tie(lights,metadata),false));
     assert(!plan->Commit(publication,std::tie(lights,metadata)));
     failAllocation=true;const bool restored=plan->Rollback(publication,std::tie(lights,metadata));failAllocation=false;
     assert(restored&&!plan->Applied()&&lights.data()==before&&&*metadata.begin()==entry&&metadata.count(1));
+    assert(plan->CanFinalize(publication,std::tie(lights,metadata),false)&&!plan->CanFinalize(publication,std::tie(lights,metadata),true));
     assert(!plan->Rollback(publication,std::tie(lights,metadata)));
     plan.reset();
     // Dropping a prepared plan frees staged values only; finalizing an applied
@@ -44,7 +48,7 @@ int main(){
         p.reset();assert(metadata.count(apply?3:1));
     }
     Plan::Payload next{{"stale"},{}};auto stale=Plan::Prepare(publication,std::tie(lights,metadata),next);
-    publication.Changed();assert(!stale->Commit(publication,std::tie(lights,metadata)));stale.reset();
+    publication.Changed();assert(!stale->Commit(publication,std::tie(lights,metadata))&&!stale->CanFinalize(publication,std::tie(lights,metadata),false));stale.reset();
     next={{"applied stale"},{}};stale=Plan::Prepare(publication,std::tie(lights,metadata),next);
     assert(stale->Commit(publication,std::tie(lights,metadata)));publication.Changed();
     assert(!stale->Rollback(publication,std::tie(lights,metadata)));stale.reset();

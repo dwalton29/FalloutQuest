@@ -35,6 +35,7 @@ bool QueryFo3DoorAnchorResources(const std::vector<Fo3DoorAnchor>& anchors,
 bool PrepareFo3ResidentDoorPlan(uint64_t revision,Fo3DoorResources& candidate);
 bool CanCommitFo3ResidentDoorPlan();
 bool CanRollbackFo3ResidentDoorPlan();
+bool CanFinalizeFo3ResidentDoorPlan(bool committed);
 bool CommitFo3ResidentDoorPlan();
 bool RollbackFo3ResidentDoorPlan();
 void DiscardFo3ResidentDoorPlan();

@@ -220,6 +220,7 @@ bool PrepareFo3ResidentDoorPlan(uint64_t revision,Fo3DoorResources& candidate){
 }
 bool CanCommitFo3ResidentDoorPlan(){return Pending()&&Pending()->CanCommit(Publication(),std::tie(Fo3LiveDoorResources()));}
 bool CanRollbackFo3ResidentDoorPlan(){return Pending()&&Pending()->CanRollback(Publication(),std::tie(Fo3LiveDoorResources()));}
+bool CanFinalizeFo3ResidentDoorPlan(bool committed){return Pending()&&Pending()->CanFinalize(Publication(),std::tie(Fo3LiveDoorResources()),committed);}
 bool CommitFo3ResidentDoorPlan(){return Pending()&&Pending()->Commit(Publication(),std::tie(Fo3LiveDoorResources()));}
 bool RollbackFo3ResidentDoorPlan(){return Pending()&&Pending()->Rollback(Publication(),std::tie(Fo3LiveDoorResources()));}
 void DiscardFo3ResidentDoorPlan(){Pending().reset();}

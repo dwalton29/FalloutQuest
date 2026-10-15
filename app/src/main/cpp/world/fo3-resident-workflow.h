@@ -6,7 +6,7 @@
 #include <utility>
 
 namespace fo3scene {
-enum class ResidentWorkflowPhase {Idle,Draining,Cpu,Gpu,Ready,Cancelling,Executing,Settled,RecoveryFailed};
+enum class ResidentWorkflowPhase {Idle,Draining,Cpu,Gpu,Ready,Cancelling,Executing,Settled,Finalizing,RecoveryFailed};
 enum class ResidentCpuProgress {Pending,Ready,Failed};
 // One render-thread owner across asynchronous preparation. Adapters retain
 // their worker/GPU slots; only immutable projections cross into worker code.
@@ -30,13 +30,13 @@ public:
         outcome_={};phase_=Phase::Draining;return true;
     }
     bool RequestCancel(uint64_t ticket) noexcept {
-        if(!ticket||ticket!=ticket_||!Active()||phase_==Phase::Executing||
+        if(!ticket||ticket!=ticket_||!Active()||phase_==Phase::Executing||phase_==Phase::Finalizing||
             phase_==Phase::Settled||phase_==Phase::RecoveryFailed)return false;
         phase_=Phase::Cancelling;return true;
     }
     template<class Adapter>
     void Pump(Adapter& adapter) noexcept {
-        if(!Active()||phase_==Phase::Executing||phase_==Phase::Settled||phase_==Phase::RecoveryFailed)return;
+        if(!Active()||phase_==Phase::Executing||phase_==Phase::Settled||phase_==Phase::Finalizing||phase_==Phase::RecoveryFailed)return;
         try {
             if(phase_==Phase::Cancelling){
                 // Keep the script, packet and ticket until cooperative worker
@@ -80,6 +80,28 @@ public:
     }
     bool OwnsExchange(uint64_t ticket,const Packet& packet,const Script& script) const noexcept {
         return phase_==Phase::Executing&&ticket&&ticket==ticket_&&packet_.get()==&packet&&script_.get()==&script;
+    }
+    template<class Adapter>
+    bool Finalize(uint64_t ticket,Adapter& adapter) noexcept {
+        static_assert(noexcept(adapter.CanFinalize(ticket,std::declval<Packet&>(),std::declval<Script&>(),outcome_))&&
+            noexcept(adapter.Retire(std::declval<Packet&>()))&&noexcept(adapter.Release(ticket))&&noexcept(adapter.FinalizationFailed()));
+        if(!ticket||ticket!=ticket_||phase_!=Phase::Settled||!packet_||!script_)return false;
+        phase_=Phase::Finalizing;
+        // Reconciliation can allocate while only private queues change. A
+        // failure keeps all settled owners/exclusion and can be retried.
+        try {
+            if(!adapter.CanFinalize(ticket,*packet_,*script_,outcome_)||!adapter.Reconcile(outcome_)||
+                !adapter.CanFinalize(ticket,*packet_,*script_,outcome_)){
+                phase_=Phase::Settled;return false;
+            }
+        }catch(...){phase_=Phase::Settled;return false;}
+        adapter.Retire(*packet_);
+        if(!adapter.Release(ticket)){
+            phase_=Phase::RecoveryFailed;adapter.FinalizationFailed();return false;
+        }
+        // The frame gate still sees Finalizing until the canonical displaced
+        // payload and packet have been destroyed. No observer runs in this gap.
+        Clear();return true;
     }
     // Scene/context teardown only, after joining the adapter's worker and while
     // the original GL context/resource caches are still alive.

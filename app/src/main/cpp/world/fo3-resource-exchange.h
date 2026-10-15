@@ -30,6 +30,9 @@ public:
     bool CanRollback(const VisualPublication& publication,Live live)const noexcept {
         return phase_==Phase::Applied&&Matches(publication,live)&&publication.CanAdvance(1);
     }
+    bool CanFinalize(const VisualPublication& publication,Live live,bool committed)const noexcept {
+        return (committed?phase_==Phase::Applied:(phase_==Phase::Prepared||phase_==Phase::RolledBack))&&Matches(publication,live);
+    }
     bool Commit(VisualPublication& publication,Live live)noexcept {
         if(!CanCommit(publication,live))return false;
         Exchange(live,std::index_sequence_for<Values...>{});

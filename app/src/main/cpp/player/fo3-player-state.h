@@ -333,6 +333,7 @@ public:
       uint32_t reference,const char* event,uint32_t activator,std::string& error) const;
   bool CanCommitScriptTransaction(const ScriptTransactionPlan& plan) const noexcept;
   bool CanRollbackScriptTransaction(const ScriptTransactionPlan& plan) const noexcept;
+  bool CanFinalizeScriptTransaction(const ScriptTransactionPlan& plan,bool committed) const noexcept;
   bool CommitScriptTransaction(ScriptTransactionPlan& plan) noexcept;
   bool RollbackScriptTransaction(ScriptTransactionPlan& plan) noexcept;
 

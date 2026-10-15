@@ -57,6 +57,9 @@ void ResetFo3TerrainStreamingQ2000();
 bool IsFo3TerrainStreamingCpuBusyQ2000();
 // Read-only acquire probe: parks completed CPU output without consuming/publishing.
 bool IsFo3TerrainStreamingCpuQuiescentQ2000();
+// Discard only finished/private streaming work; preserve published LAND and
+// resident grounding. The resident coordinator admits this for interiors only.
+bool DiscardFo3TerrainParkedWorkQ2000();
 bool IsFo3TerrainStreamingBusyQ2000();
 bool GetFo3TerrainResidentCentreQ2000(int32_t* outGridX, int32_t* outGridY);
 const Fo3TerrainCellQ76* FindFo3TerrainGroundCellQ2000(int32_t gridX, int32_t gridY);

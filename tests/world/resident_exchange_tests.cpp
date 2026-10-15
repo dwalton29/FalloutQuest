@@ -58,6 +58,10 @@ int main(){
   Adapter a;a.failApply=failure;a.verify=failure!=6;const auto stamp=a.publication.Stamp();
   forbidAllocation=true;const auto result=fo3scene::ExecuteResidentExchange(a);forbidAllocation=false;
   assert(!result.recoveryFailures);
+  forbidAllocation=true;
+  for(size_t i=0;i<4;++i)assert(a.resources[i]->CanFinalize(a.epochs[i],std::tie(a.live[i]),result.status==Status::Committed));
+  assert(a.references->CanFinalize(a.publication,a.cache,a.revision,result.status==Status::Committed));
+  forbidAllocation=false;
   if(failure<0){assert(result.status==Status::Committed&&a.canonical==1&&a.revision==1&&a.cache==a.candidate);for(size_t i=0;i<4;++i)assert(a.live[i][0]==int(i+20));}
   else if(!failure){assert(result.status==Status::Rejected&&result.failedAt==Stage::Canonical&&a.cache==a.before&&a.publication.Stamp()==stamp);}
   else {assert(result.status==Status::RolledBack);a.Restored();assert(!a.publication.Accepts(stamp,0));}

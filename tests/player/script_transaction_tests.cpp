@@ -102,6 +102,16 @@ struct ScriptWorkflowAdapter {
     ScriptExchangeAdapter adapter{player,script,publication,cache,references,fail,{}};
     const auto result=fo3scene::ExecuteResidentExchange(adapter);resources=adapter.resources;return result;
   }
+  bool CanFinalize(uint64_t ticket,const ScriptWorkflowPacket&,const fo3player::ScriptTransactionPlan& script,
+      const fo3scene::ResidentExchangeResult& outcome) const noexcept {
+    const bool committed=outcome.status==fo3scene::ResidentExchangeStatus::Committed;
+    return reserved&&ticket==1&&player.CanFinalizeScriptTransaction(script,committed)&&
+      references.CanFinalize(publication,cache,player.Snapshot().referenceStateRevision,committed);
+  }
+  bool Reconcile(const fo3scene::ResidentExchangeResult&){return true;}
+  void Retire(ScriptWorkflowPacket&) noexcept {}
+  bool Release(uint64_t) noexcept {reserved=false;return true;}
+  void FinalizationFailed() noexcept {assert(false);}
 };
 int main(){
   std::string error;fo3player::Player p(Fixture());
@@ -141,6 +151,7 @@ int main(){
   assert(p.CommitScriptTransaction(*ready)&&p.ItemCount(400)==3&&p.Snapshot().karma==5);
   assert(p.Save(path,error));fo3player::Player restored(Fixture());assert(restored.Restore(path,error)&&restored.ItemCount(400)==3);
   uint32_t sound=0;assert(p.PollScriptSound(sound)&&sound==777);
+  assert(!p.CanFinalizeScriptTransaction(*ready,true));
   assert(!p.CanRollbackScriptTransaction(*ready)&&!p.RollbackScriptTransaction(*ready));
   assert(p.PollScriptSound(sound)&&sound==600&&!p.PollScriptSound(sound));
   fo3player::ScriptMessage message;fo3player::QuestNotice notice;fo3player::KarmaEvent karma;
@@ -175,7 +186,7 @@ int main(){
     if(channel==0)assert(delivery.PollScriptMessage(message));
     if(channel==1)assert(delivery.PollQuestNotice(notice));
     if(channel==2)assert(delivery.PollKarmaEvent(karma));
-    assert(delivery.Revision()==savedRevision&&!delivery.CommitScriptTransaction(*pending));
+    assert(delivery.Revision()==savedRevision&&!delivery.CommitScriptTransaction(*pending)&&!delivery.CanFinalizeScriptTransaction(*pending,false));
   }
   auto failedInput=Fixture();
   failedInput.pipboy.scripts[300].source="Begin GameMode\nEnable\nEnd";
@@ -206,6 +217,7 @@ int main(){
   if(publishCandidate)assert(exchange->Commit(publication,cache,world.Snapshot().referenceStateRevision));
   const auto committedStamp=publication.Stamp();
   assert(world.CanRollbackScriptTransaction(*worldPlan)&&world.RollbackScriptTransaction(*worldPlan));
+  assert(world.CanFinalizeScriptTransaction(*worldPlan,false)&&!world.CanFinalizeScriptTransaction(*worldPlan,true));
   assert(exchange->Rollback(publication,cache,world.Snapshot().referenceStateRevision));
   forbidAllocations=false;
   assert(cache==worldPlan->RollbackReferences()&&cache->states==before->states);
@@ -248,7 +260,9 @@ int main(){
       assert(publication.Accepts(publication.Stamp(),owner.Snapshot().referenceStateRevision));
       if(failure)assert(!publication.Accepts(stamp,0));
     }
-    workflow.ResetAfterDrain();
+    forbidAllocations=true;assert(workflow.Finalize(1,adapter));forbidAllocations=false;
+    assert(!workflow.Active()&&!adapter.reserved);
+    if(failure<0){fo3player::ScriptMessage delivered;assert(owner.PollScriptMessage(delivered)&&!owner.PollScriptMessage(delivered));}
   }
   // The owner validates the actual Player plan on each pump and at execution.
   // Canonical revision, input/effect epoch and location changes during the

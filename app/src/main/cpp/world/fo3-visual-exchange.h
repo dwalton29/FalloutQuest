@@ -83,6 +83,9 @@ public:
     bool CanRollback(const Objects& live, const VisualPublication& publication) const noexcept {
         return phase_ == Phase::Applied && Matches(live, publication) && publication.CanAdvance(1);
     }
+    bool CanFinalize(const Objects& live,const VisualPublication& publication,bool committed) const noexcept {
+        return (committed?phase_==Phase::Applied:(phase_==Phase::Prepared||phase_==Phase::RolledBack))&&Matches(live,publication);
+    }
     bool Commit(Objects& live, VisualPublication& publication) noexcept {
         if (!CanCommit(live, publication)) return false;
         using std::swap;
@@ -99,6 +102,7 @@ public:
         using std::swap;
         for (size_t i = 0; i < retain_.size(); ++i) swap(live[retain_[i]], payload_[i]);
         publication.Changed();
+        Capture(live, publication);
         phase_ = Phase::RolledBack;
         return true;
     }

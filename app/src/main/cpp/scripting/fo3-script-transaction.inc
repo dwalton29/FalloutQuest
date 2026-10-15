@@ -86,6 +86,12 @@ bool Player::CanRollbackScriptTransaction(const ScriptTransactionPlan& plan) con
     plan.phase_==ScriptTransactionPlan::Phase::Applied && plan.expectedRevision_==revision_ &&
     plan.expectedEffects_==scriptEffectRevision_ && ScriptPlanContextMatches(plan);
 }
+bool Player::CanFinalizeScriptTransaction(const ScriptTransactionPlan& plan,bool committed) const noexcept {
+  return plan.owner_==this&&plan.ownerIdentity_==referencePlanIdentity_&&
+    (committed?plan.phase_==ScriptTransactionPlan::Phase::Applied:
+      (plan.phase_==ScriptTransactionPlan::Phase::Prepared||plan.phase_==ScriptTransactionPlan::Phase::RolledBack))&&
+    plan.expectedRevision_==revision_&&plan.expectedEffects_==scriptEffectRevision_&&ScriptPlanContextMatches(plan);
+}
 void Player::SwapScriptPayload(Player& other) noexcept {
   static_assert(std::is_nothrow_swappable_v<State>,"script state publication must not allocate");
   using std::swap;
@@ -111,6 +117,7 @@ bool Player::RollbackScriptTransaction(ScriptTransactionPlan& plan) noexcept {
   if(!CanRollbackScriptTransaction(plan))return false;
   SwapScriptPayload(*plan.candidate_);++revision_;++scriptEffectRevision_;
   if(plan.HasReferenceChanges())state_.referenceStateRevision=plan.references_->RollbackSnapshot()->revision;
+  plan.expectedRevision_=revision_;plan.expectedEffects_=scriptEffectRevision_;
   plan.phase_=ScriptTransactionPlan::Phase::RolledBack;return true;
 }
 } // namespace fo3player

@@ -32,6 +32,7 @@ int main(){
  forbidAllocation=true;bool failed=false;try{prepare();}catch(const std::bad_alloc&){failed=true;}forbidAllocation=false;
  assert(failed&&cache==before&&publication.Stamp()==stamp&&publication.Snapshot()==before);
  auto plan=prepare();assert(plan&&plan->CanPublishBefore(publication,cache,0));
+ assert(plan->CanFinalize(publication,cache,0,false)&&!plan->CanFinalize(publication,cache,0,true));
  assert(!plan->CanCommit(publication,cache,0)&&!plan->Commit(publication,cache,0));
  assert(!plan->CanRollback(publication,cache,0));
  auto otherCache=cache;ReferencePublication other;other.Publish(before);
@@ -42,12 +43,14 @@ int main(){
  forbidAllocation=true;
  assert(plan->Commit(publication,cache,1));
  assert(cache==candidate&&publication.Snapshot()==candidate&&plan->Applied());
+ assert(plan->CanFinalize(publication,cache,1,true)&&!plan->CanFinalize(publication,cache,1,false));
  assert(!publication.Accepts(stamp,0)&&publication.Accepts(publication.Stamp(),1));
  const auto applied=publication.Stamp();
  assert(!plan->Commit(publication,cache,1)&&!plan->Rollback(publication,cache,1));
  assert(plan->CanRollback(publication,cache,2)&&plan->Rollback(publication,cache,2));
  forbidAllocation=false;
  assert(cache==rollback&&cache!=before&&cache->states==before->states);
+ assert(plan->CanFinalize(publication,cache,2,false)&&!plan->CanFinalize(publication,cache,2,true));
  assert(publication.Stamp().scene>applied.scene&&publication.Stamp().references==2);
  assert(!publication.Accepts(stamp,0)&&!publication.Accepts(applied,1));
  assert(publication.Accepts(publication.Stamp(),2)&&!plan->Commit(publication,cache,1)&&!plan->Rollback(publication,cache,2));
@@ -63,6 +66,7 @@ int main(){
   assert(!publication.Accepts(old,0)&&publication.Accepts(publication.Stamp(),2));}
  publication.Publish(before);cache=before;plan=prepare();publication.Publish(before);
  assert(!plan->CanPublishBefore(publication,cache,0)&&!plan->Commit(publication,cache,1));
+ assert(!plan->CanFinalize(publication,cache,0,false));
  plan=prepare();assert(plan->Commit(publication,cache,1));publication.Publish(candidate);
  assert(!plan->Rollback(publication,cache,2));
 
@@ -78,6 +82,7 @@ int main(){
  auto last=Exchange::Prepare(nearEnd,cache,before,candidate,rollback);assert(last);
  assert(last->Commit(nearEnd,cache,1)&&last->Rollback(nearEnd,cache,2));
  const auto finalStamp=nearEnd.Stamp();assert(finalStamp.scene==UINT64_MAX);
+ assert(last->CanFinalize(nearEnd,cache,2,false));
  nearEnd.Publish(rollback);assert(nearEnd.Stamp().scene==0&&!nearEnd.Accepts(finalStamp,2)&&!nearEnd.CanAdvance(1));
  ReferencePublication noRoom(UINT64_MAX-2);noRoom.Publish(before);cache=before;
  assert(!Exchange::Prepare(noRoom,cache,before,candidate,rollback));
