@@ -11,6 +11,7 @@ add_library(falloutquest SHARED
     world/fo3-world-streaming.cpp
     world/fo3-cell-world.cpp
     world/interaction/fo3-door-resources.cpp
+    world/fo3-resident-authored-admission.cpp
     rendering/mesh/fo3-static-nif.cpp
     physics/fo3-nif-collision-parser.cpp
     physics/fo3-collision-runtime.cpp

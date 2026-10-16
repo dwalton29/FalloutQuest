@@ -74,6 +74,9 @@ for forbidden in ('gPlayerSession','gObjects','ConfigureFo3CollisionPolicyQ710',
                   'ResetFo3CollisionSceneCache','PrimeFo3Collision','UploadCpuObject','glGen'):
     assert forbidden not in worker
 assert worker.index('SelectResidentResources(') < worker.index('PrepareResidentCpuParts(')
+assert worker.index('PrepareResidentAuthoredAdmission(') < worker.index('SelectResidentResources(')
+assert 'resident exterior authored admission unsupported' in worker
+assert s.count('cpu.authored.Matches(cpu.request.cellFormId,cpu.affected)') == 3
 assert 'BuildCpuObjects(placement,parts,true)' in worker
 assert worker.index('PrepareResidentCpuParts(') < worker.index('out=std::move(next)')
 cpu=s[s.index('bool BuildCpuObjects('):s.index('bool ResolveDoorTeleportCachedQ1698(')]

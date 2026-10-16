@@ -4,10 +4,9 @@
 
 - Starting canonical main: `2987d911f318b92d1041257868067851a09d16f0` (v208).
 - Resumed from published `6469dbb872889a79a0682501b75f6ac6577ab547`.
-- Current implementation checkpoint: M1B3r interior finalization/parked work.
+- Current implementation checkpoint: M1B3s authored-reference/dependency guard.
   Use canonical main history for the publication SHA; the previous published
-  resource implementation is M1B3q `e0819813afa2d8e35d3df48811239799b766f6a0`,
-  followed by libc++ noexcept fix `dc815bbb29d0d02b9fae9c64916ace16f23a57f5`.
+  implementation is M1B3r `d5e97daecb85eae0c9f342a4c7fec43cd1f84498`.
 - M1B3l Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38635385905.
 - M1B3m Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38793178567.
 - M1B3n Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38795209693.
@@ -15,7 +14,8 @@
 - M1B3p Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38799323481.
 - M1B3q Android CI failed a libc++ unique_ptr-dereference noexcept assertion
   (run 38801413322). The signature-only fix above is published; CI revalidation
-  runs at https://github.com/dwalton29/FalloutQuest/actions/runs/38803682541.
+  succeeded at https://github.com/dwalton29/FalloutQuest/actions/runs/38803682541.
+  M1B3r Android CI also succeeded (run 38804214979).
   Earlier M1B3h CI confirmed the collision-policy include-order failure from g is fixed.
 - Re-fetched and preserved newer canonical v210 barter, v211 MS11 completion and
   v212 Moira fixes. Current baseline `5a4ad709d43d36ec756aaa48bae441e45f400db7`
@@ -53,6 +53,7 @@
 | M1B3p reservation frame exclusion | `ab592e1cb7cddcdb6e05d80abff04b753fcc1de1` | Confirmed |
 | M1B3q owned async workflow | `e0819813afa2d8e35d3df48811239799b766f6a0` | Confirmed; libc++ fix below |
 | M1B3q Android noexcept fix | `dc815bbb29d0d02b9fae9c64916ace16f23a57f5` | Confirmed |
+| M1B3r interior finalization | `d5e97daecb85eae0c9f342a4c7fec43cd1f84498` | Confirmed; Android CI passed |
 
 The user directly confirmed permission to push to main on 2026-10-14. The old
 approval blocker is resolved. Command-line Git cannot authenticate for writes;
@@ -203,6 +204,9 @@ flowchart TD
    `world-reference-m1b3q.md`). Resource finalization/reconciliation remain open.
    M1B3r validates settled ownership, reconciles private interior queues and
    retires displaced resources before resuming (see `world-reference-m1b3r.md`).
+   M1B3s checks every affected authored reference before resource work, binds its
+   CELL/complete affected set and rejects unsupported types, attachments, VWD,
+   package targets and navmeshed geometry (see `world-reference-m1b3s.md`).
    Complete authored/navigation/LOD admission, timer rebasing and remaining
    lifecycle handling still precede command dispatch.
    Exterior lights, remaining interaction ownership, queue reconciliation and the
@@ -625,3 +629,17 @@ General resident Enable/Disable is still unadmitted. Remaining work includes
 complete authored/navigation/LOD admission, timer rebasing, remaining lifecycle
 handling and gameplay command dispatch. Exterior reconciliation and broader
 actor/held-object/local-door/UI ownership remain restricted. v212 is preserved.
+
+## M1B3s validation
+
+The necessary authored-data guard passes 50 core host cases, including its new
+synthetic suite, plus ASan/UBSan (LeakSanitizer disabled), native source guards
+and relevant renderer/body/Pip-Boy checks. The complete original ESM was recovered
+from Dropbox and verified against the recorded SHA-256 after an attachment left
+a truncated local copy. Original authored light/load-door/navigation fixtures
+and existing dialogue, barter, MS11 and door regressions pass.
+
+This is a fail-closed preparation guard, not complete dependency closure or
+navigation reconciliation. General resident Enable/Disable remains unadmitted;
+timer/lifecycle handling, bounded dispatch and device validation are still open.
+See `world-reference-m1b3s.md` for exact scope.

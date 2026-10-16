@@ -33,6 +33,7 @@
 #include "world/fo3-scene-publication.h"
 #include "world/fo3-visual-exchange.h"
 #include "world/fo3-resident-resources.h"
+#include "world/fo3-resident-authored-admission.h"
 #include "world/fo3-resident-texture-upload.h"
 #include "world/fo3-resident-gpu-stage.h"
 #include "world/fo3-resident-preparation-lane.h"
@@ -3185,6 +3186,7 @@ bool RollbackFo3ResidentVisualPlan() noexcept {
 // The coordinator must isolate/drain the asset lane before invoking it and
 // revalidate all live scene/Player/resource stamps before consuming the packet.
 struct Fo3ResidentCpuPreparation {
+    fo3scene::ResidentAuthoredAdmission authored;
     Fo3CellTransitionRequestQ74 request;
     Fo3WorldspaceSelection exteriorScope;
     std::shared_ptr<const fo3world::ReferenceStateSnapshot> published, candidate, rollback;
@@ -3224,6 +3226,11 @@ bool PrepareFo3ResidentCpuResources(const Fo3CellTransitionRequestQ74& request,
         !std::isfinite(exteriorScope.gameY))) { error="invalid resident exterior scope"; return false; }
     if (cancelled.load(std::memory_order_acquire)) { error="resident preparation cancelled"; return false; }
     Fo3ResidentCpuPreparation next;
+    // Classify every logical change, including references with no MODL/live mesh.
+    // No exterior, route-dependent geometry or unknown authored attachments yet.
+    if(request.worldspaceFormId){error="resident exterior authored admission unsupported";return false;}
+    if(!fo3scene::PrepareResidentAuthoredAdmission(fo3assets::FalloutMasterPath(),
+            request.cellFormId,affected,next.authored,cancelled,error))return false;
     next.publication=publication; next.visualRevision=visualRevision;
     next.request=request; next.published=std::move(published); next.candidate=std::move(candidate);
     next.exteriorScope=exteriorScope; next.exteriorScope.candidateSelection=true;
@@ -3483,7 +3490,8 @@ struct Fo3ResidentGpuWork {
 std::unique_ptr<Fo3ResidentGpuWork> gFo3ResidentGpuWork;
 void DiscardFo3ResidentGpuStage() noexcept {gFo3ResidentGpuWork.reset();}
 bool Fo3ResidentPacketCurrent(const Fo3ResidentCpuPreparation& cpu) {
-    return cpu.rollback&&gFo3ResidentLane.Exclusive(cpu.assetTicket)&&Fo3ResidentLaneContextCurrent()&&
+    return cpu.rollback&&cpu.authored.Matches(cpu.request.cellFormId,cpu.affected)&&
+        gFo3ResidentLane.Exclusive(cpu.assetTicket)&&Fo3ResidentLaneContextCurrent()&&
         fo3scene::ResidentInteractionAdmission::Check(cpu.affected,CaptureFo3ResidentInteractionActivity(),
             Fo3ResidentInteractionHazard)==fo3scene::ResidentInteractionAdmissionResult::Ready&&
         (cpu.request.worldspaceFormId||(cpu.lightRevision&&cpu.lightRevision==gFo3LightPublication.Revision()&&
@@ -3602,6 +3610,7 @@ struct Fo3ResidentExchangeAdapter {
             !cpu.request.worldspaceFormId&&gFo3ResidentLane.Exclusive(cpu.assetTicket)&&Fo3ResidentLaneContextCurrent()&&
             script.HasReferenceChanges()&&script.CandidateReferences()==cpu.candidate&&
             script.RollbackReferences()==cpu.rollback&&script.AffectedReferences()==cpu.affected&&
+            cpu.authored.Matches(cpu.request.cellFormId,cpu.affected)&&
             gPlayerSession->player.CanCommitScriptTransaction(script)&&
             gFo3ResidentLightTicket==cpu.assetTicket&&gFo3ResidentDoorTicket==cpu.assetTicket&&
             gFo3ResidentReferencePublicationTicket==cpu.assetTicket&&
@@ -3708,7 +3717,8 @@ struct Fo3ResidentWorkflowAdapter {
             (outcome.status==Status::Rejected&&outcome.applied)||
             (outcome.status==Status::RolledBack&&!(outcome.applied&fo3scene::ResidentExchangeBit(Stage::Canonical))))return false;
         const auto expected=committed?cpu.candidate:(outcome.status==Status::RolledBack?cpu.rollback:cpu.published);
-        return cpu.settled&&ticket==cpu.assetTicket&& &cpu==gFo3ResidentPreparedPacket&&
+        return cpu.settled&&cpu.authored.Matches(cpu.request.cellFormId,cpu.affected)&&
+            ticket==cpu.assetTicket&& &cpu==gFo3ResidentPreparedPacket&&
             cpu.collision.Get()==gFo3ResidentPreparedCollision&&cpu.collision.Get()&&
             !gFo3ResidentExchangeExecuting&&!gFo3ResidentExchangeRecoveryFailed&&!gFo3ResidentGpuWork&&
             !gSceneLoad.active&&gSceneReady&&!IsFo3LoadingVisible()&&gPlayerSession&&!gPlayerSession->saveBlocked&&

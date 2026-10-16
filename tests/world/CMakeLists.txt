@@ -6,6 +6,14 @@ find_package(Threads REQUIRED)
 # scene-transition runtime. Synthetic inputs run in CI; installed Fallout3.esm
 # additionally enables original-data Megaton and whole-master verification.
 find_package(ZLIB REQUIRED)
+add_executable(resident_authored_admission_tests resident_authored_admission_tests.cpp
+    ../../app/src/main/cpp/world/fo3-resident-authored-admission.cpp
+    ../../app/src/main/cpp/data/fo3-esm-reader.cpp)
+target_compile_features(resident_authored_admission_tests PRIVATE cxx_std_17)
+target_compile_options(resident_authored_admission_tests PRIVATE -Wall -Wextra -Werror -UNDEBUG)
+target_include_directories(resident_authored_admission_tests PRIVATE ../../app/src/main/cpp)
+target_link_libraries(resident_authored_admission_tests PRIVATE ZLIB::ZLIB)
+add_test(NAME resident_authored_admission_tests COMMAND resident_authored_admission_tests)
 add_executable(xtel_index_tests xtel_index_tests.cpp
     ../../app/src/main/cpp/data/fo3-xtel-index.cpp
     ../../app/src/main/cpp/data/fo3-esm-reader.cpp)
