@@ -4,9 +4,9 @@
 
 - Starting canonical main: `2987d911f318b92d1041257868067851a09d16f0` (v208).
 - Resumed from published `6469dbb872889a79a0682501b75f6ac6577ab547`.
-- Current implementation checkpoint: M1B3u interruption/context teardown.
+- Current implementation checkpoint: M1B3v incoming authored reference edges.
   Use canonical main history for the publication SHA; the previous published
-  implementation is M1B3t `1be0d0a64136c4e40d8242447c241755b2be2e82`.
+  implementation is M1B3u `321502777d182dfea5404ffcf89e07d363872639`.
 - M1B3l Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38635385905.
 - M1B3m Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38793178567.
 - M1B3n Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38795209693.
@@ -58,6 +58,7 @@
 | M1B3r interior finalization | `d5e97daecb85eae0c9f342a4c7fec43cd1f84498` | Confirmed; Android CI passed |
 | M1B3s authored dependency guard | `8266e32db0f8e9b504536d260e5b2aaf690310cf` | Confirmed; Android CI passed |
 | M1B3t pause-aware gameplay time | `1be0d0a64136c4e40d8242447c241755b2be2e82` | Confirmed; Android CI passed |
+| M1B3u interruption/context teardown | `321502777d182dfea5404ffcf89e07d363872639` | Confirmed; Android run 38910728273 |
 
 The user directly confirmed permission to push to main on 2026-10-14. The old
 approval blocker is resolved. Command-line Git cannot authenticate for writes;
@@ -218,6 +219,9 @@ flowchart TD
    preserves queued transitions and explicitly drains resident resources before
    UI/GL teardown without clearing fatal save exclusion (see
    `world-reference-m1b3u.md`).
+   M1B3v checks incoming XLKR/XESP/XTEL/XEMI edges across all nondeleted placed
+   references and rejects omitted enable-parent children/unowned link targets
+   (see `world-reference-m1b3v.md`).
    Complete authored/navigation/LOD admission, timer rebasing and remaining
    lifecycle handling still precede command dispatch.
    Exterior lights, remaining interaction ownership, queue reconciliation and the
@@ -682,3 +686,19 @@ original ESM regressions and relevant rendering/body/Pip-Boy checks pass.
 No general resident command dispatch is enabled. Complete dependency admission,
 remaining platform/context-loss handling, bounded dispatch and device testing
 remain open. See `world-reference-m1b3u.md` for exact scope and limits.
+
+## M1B3v validation
+
+Incoming authored-edge checks pass all 52 core host cases plus the production
+NPC runtime test, ASan/UBSan (LeakSanitizer disabled), source guards and relevant
+rendering/body/Pip-Boy checks. Synthetic tests cover same/cross-CELL/worldspace
+sources, actors/creatures, malformed/duplicate/compressed/extended link fields,
+deleted/unrelated sources and complete/incomplete XESP closure. An incoming
+XLKR target is resolved from the verified original ESM and rejected, alongside
+the existing successful light and rejected door/navigation fixtures. Original
+dialogue/barter/MS11/door regressions pass.
+
+This does not prove complete script/condition/event dependency ownership.
+General resident Enable/Disable remains unadmitted. The worker now decodes every
+nondeleted placed-reference payload; Quest preparation cost needs measurement.
+See `world-reference-m1b3v.md` for exact scope and limits.

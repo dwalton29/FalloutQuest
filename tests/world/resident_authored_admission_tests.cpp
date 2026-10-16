@@ -7,6 +7,8 @@
 #include <iostream>
 #include <limits>
 #include <unordered_map>
+#include <unordered_set>
+#include <zlib.h>
 using Bytes=std::vector<uint8_t>;
 void u32(Bytes& b,size_t p,uint32_t v){if(b.size()<p+4)b.resize(p+4);std::memcpy(b.data()+p,&v,4);}
 Bytes word(uint32_t v){Bytes b(4);u32(b,0,v);return b;}
@@ -24,6 +26,9 @@ struct Options{
     uint32_t refFlags=0,baseFlags=0,owner=10,world=0;int malformed=0;
     bool nav=false,pack=false,light=false,duplicate=false,missing=false,script=false,interior=true;
     bool baseTarget=false,lightModel=false,deletedNav=false;uint32_t targetSize=12;
+    const char* incoming=nullptr;const char* incomingType="REFR";
+    uint32_t incomingTarget=30,incomingCell=11,incomingWorld=0,incomingFlags=0;
+    int incomingSize=-1;bool duplicateLink=false,compressedIncoming=false,extendedIncoming=false;
 };
 Bytes fixture(Options o={}){
     Bytes b,cell,base,ref,children;
@@ -48,6 +53,24 @@ Bytes fixture(Options o={}){
     auto scope=group(o.owner,6,group(o.owner,9,children));
     if(o.world)scope=group(o.world,1,scope);
     append(b,scope);
+    if(o.incoming){
+        Bytes incoming;sub(incoming,"NAME",word(20));sub(incoming,"DATA",Bytes(24));
+        const size_t size=o.incomingSize>=0?size_t(o.incomingSize):
+            !std::strcmp(o.incoming,"XESP")?8:!std::strcmp(o.incoming,"XTEL")?32:4;
+        Bytes data(size);if(size>=4)u32(data,0,o.incomingTarget);
+        if(o.extendedIncoming){sub(incoming,"XXXX",word(data.size()));sub(incoming,o.incoming,{});append(incoming,data);}
+        else sub(incoming,o.incoming,data);
+        if(o.duplicateLink)sub(incoming,o.incoming,data);
+        if(o.compressedIncoming){
+            uLongf n=compressBound(incoming.size());Bytes compressed(n+4);u32(compressed,0,incoming.size());
+            assert(compress2(compressed.data()+4,&n,incoming.data(),incoming.size(),Z_BEST_SPEED)==Z_OK);
+            compressed.resize(n+4);incoming=std::move(compressed);o.incomingFlags|=0x40000u;
+        }
+        auto dependency=record(o.incomingType,60,incoming,o.incomingFlags);
+        auto foreign=group(o.incomingCell,6,dependency);
+        if(o.incomingWorld)foreign=group(o.incomingWorld,1,foreign);
+        append(b,foreign);
+    }
     if(o.nav){Bytes data(12),p;u32(data,0,10);sub(p,"DATA",data);
         // Ownership must come from DATA, not this deliberately unrelated group.
         append(b,group(999,6,record("NAVM",40,p,o.deletedNav?0x20u:0)));}
@@ -62,6 +85,7 @@ void original(const std::string& master){
     // Resolve fixtures from Bethesda's records; no invented original form IDs.
     FILE* f=std::fopen(master.c_str(),"rb");assert(f);const auto size=fo3esm::FileSize(f);
     uint32_t cell=0;std::unordered_map<uint32_t,std::string> types;
+    std::unordered_set<uint32_t> linkedTargets,interiorCells;
     while(ftello(f)<size){
         uint8_t h[24];assert(fo3esm::ReadExact(f,h,24));const auto n=fo3esm::ReadU32(h+4);
         if(!std::memcmp(h,"GRUP",4))continue;
@@ -71,12 +95,19 @@ void original(const std::string& master){
             Bytes b;assert(fo3esm::ReadPayloadCurrent(f,n,fo3esm::ReadU32(h+8),b));
             fo3esm::WalkSubrecords(b,[&](const char* t,const uint8_t* p,uint32_t count){
                 if(!std::memcmp(t,"EDID",4)&&fo3esm::ZString(p,count)=="MegatonTheBrassLantern")cell=id;
+                if(!std::memcmp(t,"DATA",4)&&count&&(p[0]&1))interiorCells.insert(id);
+            });
+        }else if((type=="REFR"||type=="ACHR"||type=="ACRE")&&!(fo3esm::ReadU32(h+8)&0x20u)){
+            Bytes b;assert(fo3esm::ReadPayloadCurrent(f,n,fo3esm::ReadU32(h+8),b));
+            fo3esm::WalkSubrecords(b,[&](const char* t,const uint8_t* p,uint32_t count){
+                if(!std::memcmp(t,"XLKR",4)&&count==4)linkedTargets.insert(fo3esm::ReadU32(p));
             });
         }else assert(!fseeko(f,n,SEEK_CUR));
     }
     assert(cell);assert(!fseeko(f,0,SEEK_SET));
     struct Frame{uint64_t end;uint32_t label,type;};std::vector<Frame> stack;
     std::unordered_map<uint32_t,uint32_t> refs;
+    std::vector<std::pair<uint32_t,uint32_t>> incomingFixtures;
     while(ftello(f)<size){
         const auto start=ftello(f);while(!stack.empty()&&uint64_t(start)>=stack.back().end)stack.pop_back();
         uint8_t h[24];assert(fo3esm::ReadExact(f,h,24));const auto n=fo3esm::ReadU32(h+4);
@@ -85,11 +116,21 @@ void original(const std::string& master){
         }
         uint32_t owner=0;for(auto g=stack.rbegin();g!=stack.rend();++g)
             if(g->type==6||g->type==8||g->type==9||g->type==10){owner=g->label;break;}
-        if(owner==cell&&!std::memcmp(h,"REFR",4)){
+        const auto id=fo3esm::ReadU32(h+12),flags=fo3esm::ReadU32(h+8);
+        if(!std::memcmp(h,"REFR",4)&&(owner==cell||linkedTargets.count(id))){
             Bytes b;assert(fo3esm::ReadPayloadCurrent(f,n,fo3esm::ReadU32(h+8),b));
+            uint32_t base=0;bool simple=true;
             fo3esm::WalkSubrecords(b,[&](const char* t,const uint8_t* p,uint32_t count){
-                if(!std::memcmp(t,"NAME",4)&&count==4)refs[fo3esm::ReadU32(h+12)]=fo3esm::ReadU32(p);
+                if(!std::memcmp(t,"NAME",4)&&count==4)base=fo3esm::ReadU32(p);
+                const std::string tag(t,4);
+                if(tag!="NAME"&&tag!="DATA"&&tag!="EDID"&&tag!="XSCL"&&tag!="XESP"&&
+                    tag!="XOWN"&&tag!="XRNK"&&tag!="XGLB")simple=false;
             });
+            if(owner==cell)refs[id]=base;
+            const auto type=types.find(base);
+            if(simple&&!(flags&(0x20u|0x8000u))&&interiorCells.count(owner)&&linkedTargets.count(id)&&
+                type!=types.end()&&(type->second=="STAT"||type->second=="LIGH"))
+                incomingFixtures.emplace_back(owner,id);
         }else assert(!fseeko(f,n,SEEK_CUR));
     }
     std::fclose(f);
@@ -109,6 +150,15 @@ void original(const std::string& master){
     }
     if(!light||!door||!nav)std::cerr<<"Original coverage light="<<light<<" door="<<door<<" nav="<<nav<<" last="<<error<<"\n";
     assert(light&&door&&nav);
+    bool incoming=false;
+    for(const auto& fixture:incomingFixtures){
+        const auto previous=out;
+        assert(!fo3scene::PrepareResidentAuthoredAdmission(master,fixture.first,{fixture.second},out,cancel,error));
+        assert(out.cell==previous.cell&&out.affected==previous.affected);
+        if(error.find("unowned incoming authored link: XLKR")!=std::string::npos){incoming=true;break;}
+    }
+    assert(incoming);
+    std::cout<<"Original incoming XLKR target resolved from authored records and rejected\n";
     std::cout<<"Original Brass Lantern: light guard admitted, load door and navmeshed geometry rejected\n";
 }
 int main(int argc,char** argv){
@@ -138,6 +188,17 @@ int main(int argc,char** argv){
     {Options o;o.pack=true;o.baseTarget=true;rejected(o);}
     {Options o;o.pack=true;o.targetSize=13;rejected(o);}
     {Options o;o.light=true;o.lightModel=true;o.nav=true;rejected(o);}
+    // Incoming dependencies anywhere in the master, not only resident meshes.
+    for(const char* kind:{"REFR","ACHR","ACRE"})for(const char* tag:{"XLKR","XTEL","XEMI","XESP"}){
+        Options o;o.incoming=tag;o.incomingType=kind;rejected(o);
+        assert(error.find(tag)!=std::string::npos&&error.find("60")!=std::string::npos);
+        o.incomingCell=10;rejected(o); // Same CELL is not sufficient ownership.
+        o.incomingCell=11;o.incomingWorld=12;rejected(o);
+        o.incomingWorld=0;o.incomingSize=1;rejected(o);
+        o.incomingSize=-1;o.duplicateLink=true;rejected(o);
+        o.duplicateLink=false;o.compressedIncoming=true;rejected(o);
+        o.compressedIncoming=false;o.extendedIncoming=true;rejected(o);
+    }
     write(fixture());cancel=true;
     assert(!fo3scene::PrepareResidentAuthoredAdmission(path,10,{30},out,cancel,error));cancel=false;
     for(const auto& ids:std::vector<std::vector<uint32_t>>{{},{0},{30,30},{31,30},{31}}){
@@ -146,6 +207,24 @@ int main(int argc,char** argv){
     }
     assert(fo3scene::PrepareResidentAuthoredAdmission(path,10,{30},out,cancel,error));
     assert(error.empty()&&out.Matches(10,{30})&&!out.Matches(11,{30})&&!out.Matches(10,{31}));
+    for(const char* tag:{"XLKR","XTEL","XEMI","XESP"}){
+        Options o;o.incoming=tag;o.incomingTarget=99;write(fixture(o));
+        assert(fo3scene::PrepareResidentAuthoredAdmission(path,10,{30},out,cancel,error));
+        o.compressedIncoming=true;write(fixture(o));
+        assert(fo3scene::PrepareResidentAuthoredAdmission(path,10,{30},out,cancel,error));
+        o.compressedIncoming=false;o.extendedIncoming=true;write(fixture(o));
+        assert(fo3scene::PrepareResidentAuthoredAdmission(path,10,{30},out,cancel,error));
+        o.incomingTarget=30;o.incomingFlags=0x20;o.incomingSize=1;write(fixture(o));
+        assert(fo3scene::PrepareResidentAuthoredAdmission(path,10,{30},out,cancel,error));
+    }
+    {Options o;o.incoming="XESP";o.incomingCell=10;write(fixture(o));
+        assert(fo3scene::PrepareResidentAuthoredAdmission(path,10,{30,60},out,cancel,error));
+        assert(out.Matches(10,{30,60}));
+        o.incomingCell=11;write(fixture(o));
+        assert(!fo3scene::PrepareResidentAuthoredAdmission(path,10,{30,60},out,cancel,error));
+        assert(out.Matches(10,{30,60}));
+        write(fixture());assert(fo3scene::PrepareResidentAuthoredAdmission(path,10,{30},out,cancel,error));
+    }
     {Options o;o.light=true;o.nav=true;write(fixture(o));
         assert(fo3scene::PrepareResidentAuthoredAdmission(path,10,{30},out,cancel,error));}
     {Options o;o.nav=true;o.deletedNav=true;write(fixture(o));

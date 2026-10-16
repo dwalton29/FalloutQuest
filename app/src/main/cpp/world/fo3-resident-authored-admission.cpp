@@ -85,8 +85,38 @@ bool PrepareResidentAuthoredAdmission(const std::string& master,uint32_t cell,
     std::vector<uint8_t> b;
     const bool first=Scan(f.get(),cancel,[&](const Record& r){
         scanning=r.location.type+" "+std::to_string(r.id);
+        bool loaded=false;
+        auto payload=[&](){
+            if(!loaded)loaded=Payload(f.get(),r,b);
+            return loaded;
+        };
+        const bool reference=r.location.type=="REFR"||r.location.type=="ACHR"||r.location.type=="ACRE";
+        if(reference&&!(r.location.flags&0x20u)){
+            // Reverse edges can originate outside the changed CELL or from an
+            // actor with no resident mesh. Never index just selected placements.
+            if(!payload())return false;
+            bool valid=true;std::unordered_set<std::string> links;
+            fo3esm::WalkSubrecords(b,[&](const char* t,const uint8_t* p,uint32_t n){
+                const bool parent=Is(t,"XESP"),linked=Is(t,"XLKR");
+                const bool teleport=Is(t,"XTEL"),emittance=Is(t,"XEMI");
+                if(!parent&&!linked&&!teleport&&!emittance)return;
+                if(!links.insert(std::string(t,4)).second||
+                    (parent?n!=8:teleport?(n!=28&&n!=32):n!=4)){valid=false;return;}
+                const auto target=fo3esm::ReadU32(p);
+                if(!wanted.count(target))return;
+                // XESP children must all be in the supplied logical change
+                // set. Conservative: independent child overrides do not relax
+                // this guard. Other incoming links remain wholly unadmitted.
+                if(parent&&wanted.count(r.id))return;
+                valid=false;
+                error=std::string(parent?"incomplete affected enable-parent closure: ":
+                    "unowned incoming authored link: ")+std::string(t,4)+" from "+scanning+
+                    " to "+std::to_string(target);
+            });
+            if(!valid)return false;
+        }
         if(r.id==cell){
-            if(seenCell||r.location.type!="CELL"||r.world||(r.location.flags&0x20)||!Payload(f.get(),r,b))return false;
+            if(seenCell||r.location.type!="CELL"||r.world||(r.location.flags&0x20)||!payload())return false;
             seenCell=true;bool data=false,valid=true;
             fo3esm::WalkSubrecords(b,[&](const char* t,const uint8_t* p,uint32_t n){
                 if(Is(t,"DATA")){if(data||n<1)valid=false;else{data=true;interior=(p[0]&1)!=0;}}
@@ -96,7 +126,7 @@ bool PrepareResidentAuthoredAdmission(const std::string& master,uint32_t cell,
         }
         if(wanted.count(r.id)){
             if(!found.insert(r.id).second||r.location.type!="REFR"||r.cell!=cell||r.world||
-                (r.location.flags&(0x20u|0x8000u))||!Payload(f.get(),r,b))return false;
+                (r.location.flags&(0x20u|0x8000u))||!payload())return false;
             bool valid=true,position=false;uint32_t base=0;std::unordered_set<std::string> tags;
             fo3esm::WalkSubrecords(b,[&](const char* t,const uint8_t* p,uint32_t n){
                 if(!tags.insert(std::string(t,4)).second){valid=false;return;}
@@ -112,7 +142,7 @@ bool PrepareResidentAuthoredAdmission(const std::string& master,uint32_t cell,
             bases.emplace(r.id,base);
         }
         if(r.location.type=="NAVM"&&!(r.location.flags&0x20u)){
-            if(!Payload(f.get(),r,b))return false;
+            if(!payload())return false;
             bool data=false,valid=true;
             fo3esm::WalkSubrecords(b,[&](const char* t,const uint8_t* p,uint32_t n){
                 if(Is(t,"DATA")){if(data||n<12)valid=false;else{data=true;if(fo3esm::ReadU32(p)==cell)navmesh=true;}}
@@ -120,7 +150,7 @@ bool PrepareResidentAuthoredAdmission(const std::string& master,uint32_t cell,
             if(!valid||!data)return false;
         }
         if(r.location.type=="PACK"&&!(r.location.flags&0x20u)){
-            if(!Payload(f.get(),r,b))return false;
+            if(!payload())return false;
             bool valid=true;
             fo3esm::WalkSubrecords(b,[&](const char* t,const uint8_t* p,uint32_t n){
                 if(Is(t,"PLDT")||Is(t,"PLD2")||Is(t,"PTDT")||Is(t,"PTD2")){
@@ -136,8 +166,11 @@ bool PrepareResidentAuthoredAdmission(const std::string& master,uint32_t cell,
         }
         return true;
     });
-    if(!first){error=cancel.load()?"authored admission cancelled":
-        "unsupported or malformed authored reference/dependency near "+scanning;return false;}
+    if(!first){
+        if(cancel.load())error="authored admission cancelled";
+        else if(error.empty())error="unsupported or malformed authored reference/dependency near "+scanning;
+        return false;
+    }
     if(!seenCell||!interior||found.size()!=wanted.size())return fail("authored reference or interior CELL missing");
     if(package)return fail("affected reference has package navigation dependency");
     std::unordered_set<uint32_t> baseIds;for(const auto& r:bases)baseIds.insert(r.second);

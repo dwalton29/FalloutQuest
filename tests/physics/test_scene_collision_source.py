@@ -77,6 +77,16 @@ assert worker.index('SelectResidentResources(') < worker.index('PrepareResidentC
 assert worker.index('PrepareResidentAuthoredAdmission(') < worker.index('SelectResidentResources(')
 assert 'resident exterior authored admission unsupported' in worker
 assert s.count('cpu.authored.Matches(cpu.request.cellFormId,cpu.affected)') == 3
+authored=Path('app/src/main/cpp/world/fo3-resident-authored-admission.cpp').read_text()
+authored_scan=authored[authored.index('const bool first=Scan('):authored.index('if(!first)')]
+assert authored_scan.index('if(reference&&!(r.location.flags&0x20u))') < authored_scan.index('if(wanted.count(r.id))')
+for kind in ('"REFR"','"ACHR"','"ACRE"'):
+    assert kind in authored_scan
+for tag in ('"XESP"','"XLKR"','"XTEL"','"XEMI"'):
+    assert tag in authored_scan
+assert 'if(parent&&wanted.count(r.id))return;' in authored_scan
+assert 'incomplete affected enable-parent closure' in authored_scan
+assert 'unowned incoming authored link' in authored_scan
 assert 'BuildCpuObjects(placement,parts,true)' in worker
 assert worker.index('PrepareResidentCpuParts(') < worker.index('out=std::move(next)')
 cpu=s[s.index('bool BuildCpuObjects('):s.index('bool ResolveDoorTeleportCachedQ1698(')]
