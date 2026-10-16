@@ -1,0 +1,141 @@
+#include "fo3-script-master-match.h"
+#include "data/fo3-esm-reader.h"
+#include <cstring>
+#include <memory>
+#include <unordered_map>
+
+namespace fo3script {
+namespace {
+using Execution=fo3player::ScriptExecution;
+using Kind=fo3player::ScriptProgramKind;
+bool Is(const uint8_t* p,const char* tag){return std::memcmp(p,tag,4)==0;}
+bool Same(const fo3pipdata::ResultScript& a,const fo3pipdata::ResultScript& b) noexcept {
+  return a.source==b.source&&a.compiled==b.compiled&&a.header==b.header&&
+    a.references==b.references&&a.records==b.records;
+}
+bool Empty(const fo3pipdata::ResultScript& s) noexcept {
+  return s.source.empty()&&s.compiled.empty()&&s.header.empty()&&s.references.empty()&&s.records.empty();
+}
+bool Same(const Execution& a,const Execution& b) noexcept {
+  const auto& x=a.origin;const auto& y=b.origin;
+  return x.kind==y.kind&&x.record==y.record&&x.item==y.item&&x.sourceLine==y.sourceLine&&
+    x.topic==y.topic&&x.stage==y.stage&&x.event==y.event&&a.owner==b.owner&&
+    a.activator==b.activator&&a.localScript==b.localScript&&Same(a.program,b.program)&&Same(a.container,b.container);
+}
+const char* Type(const Execution& e){
+  const auto& o=e.origin;
+  if(!o.record)return nullptr;
+  switch(o.kind){
+    case Kind::QuestStageItem:
+      return e.owner==o.record&&!o.topic&&!o.sourceLine&&o.event.empty()&&Empty(e.container)?"QUST":nullptr;
+    case Kind::DialogueInfo:
+      return o.topic&&o.item<2&&!o.stage&&!o.sourceLine&&o.event.empty()&&!e.localScript&&Empty(e.container)?"INFO":nullptr;
+    case Kind::ReferenceEvent:
+      return e.owner&&e.localScript==o.record&&o.sourceLine&&!o.event.empty()&&!o.item&&!o.stage&&!o.topic?"SCPT":nullptr;
+    default:return nullptr; // raw bodies can never claim an authored identity
+  }
+}
+// Validate framing before the tolerant gameplay decoder. In particular XXXX
+// cannot hide a truncated field, and duplicate script scalars are ambiguous.
+bool Complete(const std::vector<uint8_t>& b,const std::string& type){
+  size_t p=0;uint32_t extended=0;unsigned scalars=0,next=0,tpic=0;
+  while(p<b.size()){
+    if(b.size()-p<6)return false;
+    const auto* tag=b.data()+p;const auto shortSize=fo3esm::ReadU16(tag+4);p+=6;
+    if(Is(tag,"XXXX")){
+      if(extended||shortSize!=4||b.size()-p<4)return false;
+      extended=fo3esm::ReadU32(b.data()+p);p+=4;if(!extended)return false;
+      continue;
+    }
+    const uint32_t n=extended?extended:shortSize;extended=0;
+    if(n>b.size()-p)return false;
+    unsigned bit=0;
+    if(Is(tag,"SCHR")){if(n!=20)return false;bit=1;}
+    if(Is(tag,"SCDA"))bit=2;
+    if(Is(tag,"SCTX"))bit=4;
+    if(bit&&(scalars&bit))return false;
+    scalars|=bit;
+    if((Is(tag,"SCRO")||Is(tag,"SCRV"))&&n!=4)return false;
+    if(type=="INFO"&&Is(tag,"NEXT")){if(n||++next>1)return false;scalars=0;}
+    if(type=="INFO"&&Is(tag,"TPIC")){if(n!=4||++tpic>1)return false;}
+    if(type=="QUST"&&(Is(tag,"QSDT")||Is(tag,"INDX")||Is(tag,"QOBJ")))scalars=0;
+    p+=n;
+  }
+  return !extended;
+}
+bool Authored(const Execution& e,const fo3pipdata::Definitions& d){
+  const auto& o=e.origin;
+  if(o.kind==Kind::QuestStageItem){
+    const auto q=d.quests.find(o.record);
+    if(q==d.quests.end()||!q->second.diagnostics.empty()||e.localScript!=q->second.script)return false;
+    const auto stage=q->second.stages.find(o.stage);
+    return stage!=q->second.stages.end()&&o.item<stage->second.items.size()&&Same(e.program,stage->second.items[o.item].result);
+  }
+  if(o.kind==Kind::DialogueInfo){
+    const auto t=d.topics.find(o.topic);
+    return t!=d.topics.end()&&t->second.size()==1&&t->second[0].id==o.record&&
+      Same(e.program,o.item?t->second[0].end:t->second[0].begin);
+  }
+  const auto s=d.scripts.find(o.record);if(s==d.scripts.end()||!Same(e.container,s->second))return false;
+  const auto events=ParseEvents(s->second);if(!events.error.empty())return false;
+  for(const auto& block:events.blocks)if(block.sourceLine==o.sourceLine&&block.event==o.event){
+    fo3pipdata::ResultScript body;body.source=block.body;return Same(e.program,body);
+  }
+  return false;
+}
+struct Close{void operator()(FILE* f)const{std::fclose(f);}};
+}
+bool ScriptMasterMatch::Matches(const std::vector<Execution>& programs) const noexcept {
+  if(!Verified()||programs_.size()!=programs.size())return false;
+  for(size_t n=0;n<programs.size();++n)if(!Same(programs_[n],programs[n]))return false;
+  return true;
+}
+bool MatchScriptProgramsToMaster(const std::string& master,const std::vector<Execution>& programs,
+    ScriptMasterMatch& out,const std::atomic<bool>& cancel,std::string& error){
+  error.clear();auto fail=[&](const std::string& why){error=why;return false;};
+  if(programs.empty()||programs.size()>4096)return fail("invalid script master evidence count");
+  std::unordered_map<uint32_t,std::vector<size_t>> wanted;
+  for(size_t n=0;n<programs.size();++n){
+    if(!Type(programs[n]))return fail("unbound or malformed script origin");
+    wanted[programs[n].origin.record].push_back(n);
+  }
+  std::unique_ptr<FILE,Close> file(std::fopen(master.c_str(),"rb"));
+  if(!file)return fail("script master unavailable");
+  const auto size=fo3esm::FileSize(file.get());if(size<24)return fail("invalid script master size");
+  struct Group{uint64_t end;uint32_t label,type;};std::vector<Group> stack;
+  std::unordered_map<uint32_t,bool> seen;std::vector<uint8_t> bytes;
+  uint64_t p=0;
+  while(p<uint64_t(size)){
+    if(cancel.load(std::memory_order_acquire))return fail("script master match cancelled");
+    while(!stack.empty()&&p==stack.back().end)stack.pop_back();
+    const uint64_t limit=stack.empty()?uint64_t(size):stack.back().end;
+    if(p>limit||limit-p<24)return fail("invalid script master record boundary");
+    uint8_t h[24];if(!fo3esm::ReadExact(file.get(),h,24))return fail("truncated script master header");
+    const uint32_t n=fo3esm::ReadU32(h+4);
+    if(Is(h,"GRUP")){
+      if(n<24||n>limit-p||stack.size()>=128)return fail("invalid script master group");
+      stack.push_back({p+n,fo3esm::ReadU32(h+8),fo3esm::ReadU32(h+12)});p+=24;continue;
+    }
+    if(n>limit-p-24)return fail("invalid script master record size");
+    const auto id=fo3esm::ReadU32(h+12);const auto found=wanted.find(id);
+    if(found!=wanted.end()){
+      const std::string type(reinterpret_cast<const char*>(h),4);const auto flags=fo3esm::ReadU32(h+8);
+      if(!seen.emplace(id,true).second)return fail("duplicate script master identity");
+      if((flags&0x20)||type!=Type(programs[found->second[0]]))return fail("deleted or wrong-type script master identity");
+      if(!fo3esm::ReadPayload(file.get(),{p+24,n,flags,type},bytes)||!Complete(bytes,type))
+        return fail("malformed script master payload");
+      uint32_t topic=0;
+      for(auto g=stack.rbegin();g!=stack.rend();++g)if(g->type==7){topic=g->label;break;}
+      fo3pipdata::Definitions d;fo3pipdata::Decode(d,type,id,flags,bytes,0,0,topic);
+      for(const auto index:found->second)
+        if(type!=Type(programs[index])||!Authored(programs[index],d))
+          return fail("script program differs from original master "+type+" "+std::to_string(id)+" entry "+std::to_string(index));
+    }
+    p+=24+n;if(fseeko(file.get(),p,SEEK_SET))return fail("script master seek failed");
+  }
+  if(seen.size()!=wanted.size())return fail("script master identity missing");
+  if(cancel.load(std::memory_order_acquire))return fail("script master match cancelled");
+  ScriptMasterMatch next;next.programs_=programs;next.verified_=true;
+  out=std::move(next);return true;
+}
+}

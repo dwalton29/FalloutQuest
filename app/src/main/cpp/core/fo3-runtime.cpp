@@ -34,6 +34,7 @@
 #include "world/fo3-visual-exchange.h"
 #include "world/fo3-resident-resources.h"
 #include "world/fo3-resident-authored-admission.h"
+#include "scripting/fo3-script-master-match.h"
 #include "world/fo3-resident-pause-clock.h"
 #include "world/fo3-resident-texture-upload.h"
 #include "world/fo3-resident-gpu-stage.h"
@@ -3192,6 +3193,7 @@ bool RollbackFo3ResidentVisualPlan() noexcept {
 // The coordinator must isolate/drain the asset lane before invoking it and
 // revalidate all live scene/Player/resource stamps before consuming the packet.
 struct Fo3ResidentCpuPreparation {
+    fo3script::ScriptMasterMatch scriptMaster;
     fo3scene::ResidentAuthoredAdmission authored;
     Fo3CellTransitionRequestQ74 request;
     Fo3WorldspaceSelection exteriorScope;
@@ -3219,7 +3221,7 @@ bool PrepareFo3ResidentCpuResources(const Fo3CellTransitionRequestQ74& request,
         std::shared_ptr<const fo3world::ReferenceStateSnapshot> published,
         std::shared_ptr<const fo3world::ReferenceStateSnapshot> candidate,
         const std::vector<fo3scene::ResidentVisualRecord>& live,
-        const std::vector<uint32_t>& affected, Fo3ResidentCpuPreparation& out,
+        const std::vector<uint32_t>& affected,const std::vector<fo3player::ScriptExecution>& programs, Fo3ResidentCpuPreparation& out,
         const std::atomic<bool>& cancelled, std::string& error) {
     error.clear();
     if (!request.valid || !published || !candidate || !publication.scene ||
@@ -3235,6 +3237,8 @@ bool PrepareFo3ResidentCpuResources(const Fo3CellTransitionRequestQ74& request,
     // Classify every logical change, including references with no MODL/live mesh.
     // No exterior, route-dependent geometry or unknown authored attachments yet.
     if(request.worldspaceFormId){error="resident exterior authored admission unsupported";return false;}
+    if(!fo3script::MatchScriptProgramsToMaster(fo3assets::FalloutMasterPath(),
+            programs,next.scriptMaster,cancelled,error))return false;
     if(!fo3scene::PrepareResidentAuthoredAdmission(fo3assets::FalloutMasterPath(),
             request.cellFormId,affected,next.authored,cancelled,error))return false;
     next.publication=publication; next.visualRevision=visualRevision;
@@ -3334,7 +3338,7 @@ bool StartFo3ResidentCpuPreparation(uint64_t ticket,const Fo3WorldspaceSelection
         Fo3WorldspaceSelection collisionScope,
         std::shared_ptr<const fo3world::ReferenceStateSnapshot> candidate,
         std::shared_ptr<const fo3world::ReferenceStateSnapshot> rollback,
-        std::vector<uint32_t> affected) {
+        std::vector<uint32_t> affected,std::vector<fo3player::ScriptExecution> programs) {
     if(!gFo3ResidentLane.Exclusive(ticket)||!Fo3ResidentLaneContextCurrent()||!candidate||
         fo3scene::ResidentInteractionAdmission::Check(affected,CaptureFo3ResidentInteractionActivity(),
             Fo3ResidentInteractionHazard)!=fo3scene::ResidentInteractionAdmissionResult::Ready)return false;
@@ -3355,11 +3359,11 @@ bool StartFo3ResidentCpuPreparation(uint64_t ticket,const Fo3WorldspaceSelection
     auto capturedDoors=context.worldspaceFormId?Fo3DoorResources{}:CaptureFo3DoorResources();
     return gFo3ResidentLane.Start(ticket,[context,scope,publication,visualRevision,ticket,collisionScope,collisionState,lightRevision,doorRevision,
             capturedDoors=std::move(capturedDoors),published=std::move(published),candidate=std::move(candidate),rollback=std::move(rollback),
-            live=std::move(live),affected=std::move(affected)](
+            live=std::move(live),affected=std::move(affected),programs=std::move(programs)](
             Fo3ResidentCpuPreparation& result,const std::atomic<bool>& cancelled) {
         std::string error;
         if(!PrepareFo3ResidentCpuResources(context,scope,publication,visualRevision,
-                published,candidate,live,affected,result,cancelled,error))return false;
+                published,candidate,live,affected,programs,result,cancelled,error))return false;
         result.assetTicket=ticket;result.collisionScope=collisionScope;result.lightRevision=lightRevision;result.doorRevision=doorRevision;
         result.affected=affected;result.rollback=rollback;
         if(!context.worldspaceFormId) {
@@ -3495,7 +3499,7 @@ struct Fo3ResidentGpuWork {
 std::unique_ptr<Fo3ResidentGpuWork> gFo3ResidentGpuWork;
 void DiscardFo3ResidentGpuStage() noexcept {gFo3ResidentGpuWork.reset();}
 bool Fo3ResidentPacketCurrent(const Fo3ResidentCpuPreparation& cpu) {
-    return cpu.rollback&&cpu.authored.Matches(cpu.request.cellFormId,cpu.affected)&&
+    return cpu.rollback&&cpu.scriptMaster.Verified()&&cpu.authored.Matches(cpu.request.cellFormId,cpu.affected)&&
         gFo3ResidentLane.Exclusive(cpu.assetTicket)&&Fo3ResidentLaneContextCurrent()&&
         fo3scene::ResidentInteractionAdmission::Check(cpu.affected,CaptureFo3ResidentInteractionActivity(),
             Fo3ResidentInteractionHazard)==fo3scene::ResidentInteractionAdmissionResult::Ready&&
@@ -3615,6 +3619,7 @@ struct Fo3ResidentExchangeAdapter {
             !cpu.request.worldspaceFormId&&gFo3ResidentLane.Exclusive(cpu.assetTicket)&&Fo3ResidentLaneContextCurrent()&&
             script.HasProgramProvenance()&&script.HasReferenceChanges()&&script.CandidateReferences()==cpu.candidate&&
             script.RollbackReferences()==cpu.rollback&&script.AffectedReferences()==cpu.affected&&
+            cpu.scriptMaster.Matches(script.ExecutedScripts())&&
             cpu.authored.Matches(cpu.request.cellFormId,cpu.affected)&&
             gPlayerSession->player.CanCommitScriptTransaction(script)&&
             gFo3ResidentLightTicket==cpu.assetTicket&&gFo3ResidentDoorTicket==cpu.assetTicket&&
@@ -3696,7 +3701,7 @@ struct Fo3ResidentWorkflowAdapter {
     bool StartCpu(uint64_t ticket,const Fo3ResidentWorkflowRequest& request,
             const fo3player::ScriptTransactionPlan& script) {
         return StartFo3ResidentCpuPreparation(ticket,request.visuals,request.collision,
-            script.CandidateReferences(),script.RollbackReferences(),script.AffectedReferences());
+            script.CandidateReferences(),script.RollbackReferences(),script.AffectedReferences(),script.ExecutedScripts());
     }
     fo3scene::ResidentCpuProgress CpuProgress(uint64_t ticket) {
         if(!gFo3ResidentLane.Ready(ticket))return fo3scene::ResidentCpuProgress::Pending;
@@ -3722,7 +3727,7 @@ struct Fo3ResidentWorkflowAdapter {
             (outcome.status==Status::Rejected&&outcome.applied)||
             (outcome.status==Status::RolledBack&&!(outcome.applied&fo3scene::ResidentExchangeBit(Stage::Canonical))))return false;
         const auto expected=committed?cpu.candidate:(outcome.status==Status::RolledBack?cpu.rollback:cpu.published);
-        return cpu.settled&&cpu.authored.Matches(cpu.request.cellFormId,cpu.affected)&&
+        return cpu.settled&&cpu.scriptMaster.Matches(script.ExecutedScripts())&&cpu.authored.Matches(cpu.request.cellFormId,cpu.affected)&&
             ticket==cpu.assetTicket&& &cpu==gFo3ResidentPreparedPacket&&
             cpu.collision.Get()==gFo3ResidentPreparedCollision&&cpu.collision.Get()&&
             !gFo3ResidentExchangeExecuting&&!gFo3ResidentExchangeRecoveryFailed&&!gFo3ResidentGpuWork&&

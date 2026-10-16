@@ -2,6 +2,7 @@
 #include "world/fo3-reference-exchange.h"
 #include "world/fo3-resident-exchange.h"
 #include "world/fo3-resident-workflow.h"
+#include "scripting/fo3-script-master-match.h"
 #include <array>
 #include <cassert>
 #include <cstdlib>
@@ -221,8 +222,20 @@ static void OriginalProvenance(const char* path){
   assert(!endBody.source.empty()&&!endBody.compiled.empty()&&!endBody.records.empty());
   assert(end.program.source==endBody.source&&end.program.compiled==endBody.compiled);
   assert(end.program.header==endBody.header&&end.program.references==endBody.references&&end.program.records==endBody.records);
+  // Match the complete real entry sequence, not just individually decoded fields.
+  auto programs=stage->ExecutedScripts();
+  for(const auto* plan:{event.get(),dialogue.get(),ending.get()})
+    programs.insert(programs.end(),plan->ExecutedScripts().begin(),plan->ExecutedScripts().end());
+  fo3script::ScriptMasterMatch matched;std::atomic<bool> cancelled{false};
+  const bool valid=fo3script::MatchScriptProgramsToMaster(path,programs,matched,cancelled,error);
+  if(!valid)std::cerr<<"Original master match: "<<error<<'\n';
+  assert(valid&&matched.Verified());
+  forbidAllocations=true;assert(matched.Matches(programs));forbidAllocations=false;
+  programs[0].program.source+=' ';
+  assert(!matched.Matches(programs));
+  assert(!fo3script::MatchScriptProgramsToMaster(path,programs,matched,cancelled,error));
   assert(p.Revision()==revision&&p.Snapshot().pipboy.quests.empty());NoEffects(p);
-  std::cout<<"Original MS11 stage/bomb/INFO provenance matches authored program records without publication\n";
+  std::cout<<"Original MS11 stage/bomb/INFO provenance passes strict master matching without publication\n";
 }
 struct ScriptExchangeAdapter {
   fo3player::Player& player;fo3player::ScriptTransactionPlan& script;

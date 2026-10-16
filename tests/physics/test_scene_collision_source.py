@@ -537,3 +537,16 @@ assert 'begin.record=end.record=info;begin.topic=end.topic=topic;end.item=1;' in
 assert 'candidate.RunScript(authored.begin' in script_transaction
 assert 'candidate.RunScript(authored.end' in script_transaction
 print('Dialogue binds canonical INFO/phase evidence, rebuilds indexes and preserves separate begin/end publication')
+
+# Original-master matching runs on owned worker inputs before any asset decode.
+assert worker.index('MatchScriptProgramsToMaster(')<worker.index('PrepareResidentAuthoredAdmission(')<worker.index('SelectResidentResources(')
+assert 'programs=std::move(programs)' in lane_start
+assert 'published,candidate,live,affected,programs,result,cancelled,error' in lane_start
+assert 'script.AffectedReferences(),script.ExecutedScripts()' in s
+assert 'cpu.scriptMaster.Verified()&&cpu.authored.Matches' in s
+assert s.count('cpu.scriptMaster.Matches(script.ExecutedScripts())')==2
+master_match=Path('app/src/main/cpp/scripting/fo3-script-master-match.cpp').read_text()
+assert 'case Kind::ReferenceEvent:' in master_match and 'case Kind::DialogueInfo:' in master_match
+assert 'default:return nullptr;' in master_match
+assert master_match.index('if(seen.size()!=wanted.size())')<master_match.index('out=std::move(next);')
+print('Original-master program evidence precedes resident asset work and is rebound at commit/settlement without worker Player access')

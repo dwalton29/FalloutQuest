@@ -748,3 +748,28 @@ This closes canonical INFO binding, not strict original-master matching or
 complete SCRO/condition/event dependency ownership. General resident
 Enable/Disable remains unadmitted; bounded dispatch and device validation remain
 open. See `world-reference-m1b3x.md` for exact scope and limits.
+
+## M1B3y validation
+
+Captured QUST, INFO and SCPT program evidence now undergoes strict matching to
+its installed-master origin before the reserved worker selects placements or
+decodes assets. The scanner rejects missing/deleted/wrong-type/duplicate record
+identities, unbound bodies, malformed framing and mismatched program/container
+metadata. QUST numeric-local scope is checked against its authored SCRI;
+INFO phase/topic and SCPT event/Begin-line identities are resolved from originals.
+The packet owns the verified report. GPU admission requires it, and commit and
+settlement compare the exact ordered execution/context evidence without file
+access or allocation. The worker receives value copies, never the live Player.
+
+All 53 core host tests plus the production actor test pass. New matching and
+canonical transaction targets pass ASan/UBSan with LeakSanitizer disabled;
+verified-original MS11 stage/bomb/INFO evidence matches and altered source
+rejects without publication. Original dialogue/bridge/barter/MS11/door and
+relevant native/source/rendering/body/Pip-Boy regressions pass.
+
+This checks program metadata, not full condition/read-set ownership, all owner
+SCRI associations, a whole-file cryptographic identity or external file edits.
+It adds worker scans/copies and linear byte comparison at guarded settlement;
+there is no Quest performance claim. Complete SCRO/condition/event ownership,
+bounded dispatch and device validation remain open. General resident
+Enable/Disable remains unadmitted. See `world-reference-m1b3y.md` for scope.
