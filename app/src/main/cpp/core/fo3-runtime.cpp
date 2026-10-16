@@ -136,6 +136,11 @@ bool Fo3ResidentFrameBlocked();
 bool Fo3ResidentLegacyStreamActive();
 fo3scene::ResidentAssetActivity CaptureFo3ResidentAssetActivity();
 void ResetFo3ResidentPreparationLane();
+void DiscardFo3ResidentGpuStage() noexcept;
+void DiscardFo3ResidentLightPlan() noexcept;
+void DiscardFo3ResidentDoorInteractionPlan() noexcept;
+bool QuiesceFo3ResidentForSceneChange() noexcept;
+bool ShutdownFo3ResidentWorkflow() noexcept;
 bool ReconcileFo3ResidentParkedWork(fo3scene::ResidentExchangeStatus status);
 void ResetFo3InteriorExposureHistory();
 void PrepareFo3InteriorSceneLights();
@@ -3280,6 +3285,7 @@ using Fo3ResidentWorkflow=fo3scene::ResidentWorkflow<fo3player::ScriptTransactio
     Fo3ResidentCpuPreparation,Fo3ResidentWorkflowRequest>;
 Fo3ResidentWorkflow gFo3ResidentWorkflow;
 bool gFo3ResidentWorkflowCleanup=false;
+bool gFo3ResidentTeardownActive=false;
 Fo3CellTransitionRequestQ74 gFo3ResidentLaneContext;
 fo3scene::PublicationStamp gFo3ResidentLanePublication;
 uint64_t gFo3ResidentLaneVisualRevision=0;
@@ -3287,20 +3293,13 @@ bool Fo3ResidentAssetLaneBlocked(){return gFo3ResidentLane.Blocked();}
 // Same render-thread reservation owns frame exclusion from acquisition through
 // draining, private CPU/GPU work, commit/recovery and final release/cancellation.
 bool Fo3ResidentFrameBlocked(){
-    return gFo3ResidentLane.Blocked()||gFo3ResidentWorkflow.Active()||gFo3ResidentExchangeExecuting||gFo3ResidentExchangeRecoveryFailed;
+    return gFo3ResidentLane.Blocked()||gFo3ResidentWorkflow.Active()||gFo3ResidentExchangeExecuting||gFo3ResidentExchangeRecoveryFailed||gFo3ResidentTeardownActive;
 }
 std::chrono::steady_clock::time_point Fo3ResidentRawSteadyNow() noexcept {
     return std::chrono::steady_clock::now();
 }
 #include "world/fo3-resident-time-runtime.inc"
-void ResetFo3ResidentPreparationLane(){
-    gFo3ResidentLane.Reset();
-    gFo3ResidentWorkflow.ResetAfterDrain();
-    gFo3ResidentInteractionAdmission.reset();
-    DiscardFo3ResidentReferencePublicationPlan();
-    gFo3ResidentPreparedPacket=nullptr;gFo3ResidentPreparedCollision=0;
-    gFo3ResidentExchangeRecoveryFailed=false;
-}
+#include "world/fo3-resident-reset-runtime.inc"
 bool Fo3ResidentLaneContextCurrent() {
     return gSceneReady&&!gSceneLoad.active&&!IsFo3LoadingVisible()&&
         Fo3AcceptsScenePublication(gFo3ResidentLanePublication)&&
@@ -3775,8 +3774,9 @@ uint64_t BeginFo3ResidentWorkflow(Fo3ResidentWorkflowRequest request,
 }
 bool CancelFo3ResidentWorkflow(uint64_t ticket) noexcept {return gFo3ResidentWorkflow.RequestCancel(ticket);}
 void PumpFo3ResidentWorkflow(bool focused) noexcept {
-    if(!focused)gFo3ResidentWorkflow.RequestCancel(gFo3ResidentWorkflow.Ticket());
-    Fo3ResidentWorkflowAdapter adapter;gFo3ResidentWorkflow.Pump(adapter);
+    Fo3ResidentWorkflowAdapter adapter;
+    if(!focused){gFo3ResidentWorkflow.Interrupt(adapter);return;}
+    gFo3ResidentWorkflow.Pump(adapter);
 }
 fo3scene::ResidentExchangeResult ExecuteFo3ResidentWorkflow(uint64_t ticket) noexcept {
     Fo3ResidentWorkflowAdapter adapter;
@@ -3786,6 +3786,7 @@ bool FinalizeFo3ResidentWorkflow(uint64_t ticket) noexcept {
     Fo3ResidentWorkflowAdapter adapter;
     return gFo3ResidentWorkflow.Finalize(ticket,adapter);
 }
+#include "world/fo3-resident-lifecycle-runtime.inc"
 
 // Dynamic NPC arrivals use the same original ESM/NIF/KF scene-worker pipeline
 // as normal actors, but upload only missing actors and never rebuild the world.
@@ -3867,7 +3868,7 @@ void AbortFo3SceneLoad(const char* reason) {
 
 bool BeginFo3SceneLoad(const Fo3CellTransitionRequestQ74& request, bool boot) {
     if (gSceneLoad.active) return false;
-    ResetFo3ResidentPreparationLane();
+    if(!QuiesceFo3ResidentForSceneChange())return false;
     DiscardFo3ResidentGpuStage();
     DiscardFo3ResidentVisualPlan();
     DiscardFo3ResidentLightPlan();
@@ -4021,6 +4022,10 @@ bool ProcessQ74TransitionRequest() {
     if (gSceneLoad.lastFrame == gSceneLoadFrame) return false;
     gSceneLoad.lastFrame = gSceneLoadFrame;
     if (!gSceneLoad.active) {
+        if(!HasPendingFo3CellTransitionRequestQ74())return false;
+        // Keep the original queued request/generation until cooperative
+        // cancellation or settlement has released every resident owner.
+        if(!QuiesceFo3ResidentForSceneChange())return false;
         Fo3CellTransitionRequestQ74 request;
         if (!ConsumeFo3CellTransitionRequestQ74(request) || !request.valid) return false;
         BeginFo3SceneLoad(request, false);
@@ -13904,7 +13909,7 @@ void Q1280ShutdownPostQ1280() {
 void Q6HDeleteFramebuffers(GLsizei n, const GLuint* framebuffers) {
     // Release staged/displaced ownership while this GL context and its shared
     // geometry/texture caches are still alive.
-    ResetFo3ResidentPreparationLane();
+    if(!ShutdownFo3ResidentWorkflow())return;
     DiscardFo3ResidentGpuStage();
     DiscardFo3ResidentVisualPlan();
     DiscardFo3ResidentLightPlan();

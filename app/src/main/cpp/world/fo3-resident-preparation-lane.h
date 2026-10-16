@@ -24,6 +24,7 @@ public:
         ticket_=++serial_;phase_=Phase::Draining;started_=false;return ticket_;
     }
     bool Blocked()const noexcept{return phase_!=Phase::Idle;}
+    Ticket CurrentTicket()const noexcept{return ticket_;}
     bool Owns(Ticket ticket)const noexcept{return ticket&&ticket==ticket_&&Blocked();}
     bool Exclusive(Ticket ticket)const noexcept{return Owns(ticket)&&phase_==Phase::Exclusive;}
     bool Poll(Ticket ticket,ResidentAssetActivity activity)noexcept {

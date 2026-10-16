@@ -4,9 +4,9 @@
 
 - Starting canonical main: `2987d911f318b92d1041257868067851a09d16f0` (v208).
 - Resumed from published `6469dbb872889a79a0682501b75f6ac6577ab547`.
-- Current implementation checkpoint: M1B3t resident pause-aware gameplay time.
+- Current implementation checkpoint: M1B3u interruption/context teardown.
   Use canonical main history for the publication SHA; the previous published
-  implementation is M1B3s `8266e32db0f8e9b504536d260e5b2aaf690310cf`.
+  implementation is M1B3t `1be0d0a64136c4e40d8242447c241755b2be2e82`.
 - M1B3l Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38635385905.
 - M1B3m Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38793178567.
 - M1B3n Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38795209693.
@@ -17,6 +17,7 @@
   succeeded at https://github.com/dwalton29/FalloutQuest/actions/runs/38803682541.
   M1B3r Android CI also succeeded (run 38804214979).
   M1B3s Android CI succeeded (run 38906603237).
+  M1B3t Android CI succeeded (run 38908824693).
   Earlier M1B3h CI confirmed the collision-policy include-order failure from g is fixed.
 - Re-fetched and preserved newer canonical v210 barter, v211 MS11 completion and
   v212 Moira fixes. Current baseline `5a4ad709d43d36ec756aaa48bae441e45f400db7`
@@ -56,6 +57,7 @@
 | M1B3q Android noexcept fix | `dc815bbb29d0d02b9fae9c64916ace16f23a57f5` | Confirmed |
 | M1B3r interior finalization | `d5e97daecb85eae0c9f342a4c7fec43cd1f84498` | Confirmed; Android CI passed |
 | M1B3s authored dependency guard | `8266e32db0f8e9b504536d260e5b2aaf690310cf` | Confirmed; Android CI passed |
+| M1B3t pause-aware gameplay time | `1be0d0a64136c4e40d8242447c241755b2be2e82` | Confirmed; Android CI passed |
 
 The user directly confirmed permission to push to main on 2026-10-14. The old
 approval blocker is resolved. Command-line Git cannot authenticate for writes;
@@ -212,6 +214,10 @@ flowchart TD
    M1B3t freezes separate steady/XR gameplay timelines through the full barrier,
    rebases locomotion/input even across between-frame reservations and prevents
    notification advancement/sound while blocked (see `world-reference-m1b3t.md`).
+   M1B3u cooperatively interrupts preparation, finalizes settled interruption,
+   preserves queued transitions and explicitly drains resident resources before
+   UI/GL teardown without clearing fatal save exclusion (see
+   `world-reference-m1b3u.md`).
    Complete authored/navigation/LOD admission, timer rebasing and remaining
    lifecycle handling still precede command dispatch.
    Exterior lights, remaining interaction ownership, queue reconciliation and the
@@ -662,3 +668,17 @@ Gameplay time is separated from raw tracking, asset-work and performance clocks.
 General resident Enable/Disable remains unadmitted pending complete dependency
 ownership, remaining lifecycle handling, bounded dispatch and device validation.
 See `world-reference-m1b3t.md` for exact scope and limits.
+
+## M1B3u validation
+
+Interruption/context teardown passes 52 core host cases plus the production actor
+runtime test. Actual workflow tests cover every preparation phase, held-worker
+cancellation, settled outcomes, pending guards and reentry. The actual native
+lifecycle/reset includes run with tracked context/resources and verify ordering,
+idempotence, fatal/save exclusion and join-failure context retention. Both
+affected targets pass ASan/UBSan with LeakSanitizer disabled. Native structural,
+original ESM regressions and relevant rendering/body/Pip-Boy checks pass.
+
+No general resident command dispatch is enabled. Complete dependency admission,
+remaining platform/context-loss handling, bounded dispatch and device testing
+remain open. See `world-reference-m1b3u.md` for exact scope and limits.

@@ -38,6 +38,7 @@ void SetFo3TransitionContextQ74(const Fo3CellTransitionRequestQ74& request);
 // Renderer-side transition queue. The input callback only enqueues; GL/collision
 // teardown and rebuild happen later from the render thread.
 bool ConsumeFo3CellTransitionRequestQ74(Fo3CellTransitionRequestQ74& outRequest);
+bool HasPendingFo3CellTransitionRequestQ74() noexcept;
 void CompleteFo3CellTransitionQ74(uint32_t cellFormId);
 
 // Consumed by the authored collision resolver on the frame after a successful

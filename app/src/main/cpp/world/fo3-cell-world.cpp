@@ -1129,6 +1129,9 @@ bool LoadFo3ScenePlacements(const Fo3CellTransitionRequestQ74& request,
     return LoadFo3CellPlacements(request.cellFormId, outPlacements, referenceState, candidateSelection);
 }
 
+bool HasPendingFo3CellTransitionRequestQ74() noexcept {
+    return gHasPendingTransitionQ74&&gPendingTransitionQ74.valid;
+}
 bool ConsumeFo3CellTransitionRequestQ74(Fo3CellTransitionRequestQ74& outRequest) {
     if (!gHasPendingTransitionQ74 || !gPendingTransitionQ74.valid) return false;
     // Initial direct boot has no loading state and remains immediate. User door

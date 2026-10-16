@@ -362,10 +362,20 @@ public:
             ProcessXrEvents();
             fo3audio::Context(gCurrentCellFormId, sessionState_ == XR_SESSION_STATE_FOCUSED);
             if (sessionRunning_) RenderFrame();
+            else {
+                // STOPPING still drains cancellation and the deferred safe save.
+                PumpFo3ResidentWorkflow(false);FlushFo3DeferredPlayerState();
+            }
         }
     }
 
     void Shutdown() {
+        // Explicit even when initialization never created either framebuffer.
+        // UI, canonical session and GL ownership caches must still be alive.
+        if(!ShutdownFo3ResidentWorkflow()){
+            FQ_LOGE("Resident shutdown could not drain; retaining GL context and blocking save");
+            return;
+        }
         FlushFo3PlayerState();
         fo3pipui::Shutdown();ResetFo3Pipboy();fo3lockui::Shutdown();CancelFo3Lockpick();
         fo3notifyui::Shutdown();
@@ -1460,6 +1470,7 @@ private:
         // Advance the reserved owner once, even when gameplay and view updates
         // are excluded. It never auto-commits merely because staging is ready.
         PumpFo3ResidentWorkflow(sessionState_==XR_SESSION_STATE_FOCUSED);
+        FlushFo3DeferredPlayerState(); // Also after cancellation on a non-rendered frame.
         // Acquisition latches this even when the whole reservation completes
         // between frames. Rebase locomotion and require neutral raw controls.
         if(gFo3ResidentXrClock.Paused()){

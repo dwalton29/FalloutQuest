@@ -154,8 +154,8 @@ assert cancel.index('gFo3ResidentLane.Owns(ticket)') < cancel.index('DiscardFo3R
 assert cancel.index('gFo3ResidentVisualPlan->Applied()') < cancel.index('DiscardFo3ResidentVisualPlan()')
 release=s[s.index('bool ReleaseFo3ResidentAssetLane('):s.index('bool CancelFo3ResidentPreparation(')]
 assert release.index('gFo3ResidentGpuWork||gFo3ResidentVisualPlan') < release.index('gFo3ResidentLane.Release(ticket)')
-for region in (begin,teardown):
-    assert region.index('ResetFo3ResidentPreparationLane()') < region.index('DiscardFo3ResidentGpuStage()')
+assert begin.index('QuiesceFo3ResidentForSceneChange()') < begin.index('DiscardFo3ResidentGpuStage()')
+assert teardown.index('ShutdownFo3ResidentWorkflow()') < teardown.index('DiscardFo3ResidentGpuStage()')
 assert 'gFo3LegacyMetadataWorkers.push_back(task)' in s
 assert 'const auto worker=weak.lock()' in activity
 print('Resident asset reservation gates consumers/launches and acquires all six worker families before CPU/GPU use')
@@ -240,8 +240,8 @@ assert 'cpu.doorRevision==GetFo3DoorResourceRevision()' in stamp
 assert advance.index('PrepareFo3ResidentDoorInteractionPlan(') < advance.index('PrepareFo3ResidentLightPlan(')
 assert 'HasFo3ResidentDoorPlan()' in release
 assert cancel.index('Fo3ResidentDoorPlanApplied()') < cancel.index('DiscardFo3ResidentDoorInteractionPlan()')
-for region in (begin,teardown):
-    assert region.index('ResetFo3ResidentPreparationLane()') < region.index('DiscardFo3ResidentDoorInteractionPlan()')
+assert begin.index('QuiesceFo3ResidentForSceneChange()') < begin.index('DiscardFo3ResidentDoorInteractionPlan()')
+assert teardown.index('ShutdownFo3ResidentWorkflow()') < teardown.index('DiscardFo3ResidentDoorInteractionPlan()')
 for signature in ('bool CommitFo3ResidentDoorInteractionPlan()', 'bool RollbackFo3ResidentDoorInteractionPlan()'):
     region=s[s.index(signature):].split('\n}',1)[0]
     assert '!gSceneLoad.active' in region and 'gFo3ResidentLane.Exclusive(gFo3ResidentDoorTicket)' in region
@@ -297,7 +297,7 @@ for forbidden in ('CommitScriptTransaction','RollbackScriptTransaction','FlushFo
 assert 'Snapshot().referenceStateRevision' in reference_plan
 assert 'gFo3ResidentReferencePublicationPlan' in release
 assert cancel.index('gFo3ResidentReferencePublicationPlan->Applied()') < cancel.index('DiscardFo3ResidentReferencePublicationPlan()')
-reset=s[s.index('void ResetFo3ResidentPreparationLane(){'):s.index('bool Fo3ResidentLaneContextCurrent()')]
+reset=Path('app/src/main/cpp/world/fo3-resident-reset-runtime.inc').read_text()
 assert reset.index('gFo3ResidentLane.Reset()') < reset.index('DiscardFo3ResidentReferencePublicationPlan()')
 rollback_reference=reference_plan[reference_plan.index('bool RollbackFo3ResidentReferencePublicationPlan()'):]
 assert 'Fo3ResidentInteractionAdmissionCurrent()' not in rollback_reference
@@ -326,14 +326,14 @@ assert delivery.index('Fo3ResidentFrameBlocked()') < delivery.index('PollQuestNo
 assert advance.index('if(prepared){') < advance.index('gFo3ResidentPreparedPacket=work.cpu.get()') < advance.index('completed=std::move(work.cpu)')
 for signature in ('void DiscardFo3ResidentReferencePublicationPlan()', 'void DiscardFo3ResidentVisualPlan()',
                   'void DiscardFo3ResidentLightPlan()', 'void DiscardFo3ResidentDoorInteractionPlan()'):
-    body=s[s.index(signature):].split('}',1)[0]
+    body=s[s.index(signature+' noexcept {'):].split('}',1)[0]
     mutation='DiscardFo3ResidentDoorPlan()' if 'DoorInteraction' in signature else '.reset()'
     assert body.index('InvalidateFo3ResidentPreparedBinding()') < body.index(mutation)
 flush=s[s.index('void FlushFo3PlayerState()'):s.index('bool DrainFo3TransitionBackgroundWork();')]
 assert flush.index('gFo3ResidentExchangeRecoveryFailed') < flush.index('WeaponPersistWorld()') < flush.index('gPlayerSession->Flush(')
 print('Composite executor binds canonical/prepared resources, maps all exchanges/undo and blocks success/save/effects on recovery failure')
 
-frame_gate=s[s.index('bool Fo3ResidentFrameBlocked(){'):s.index('void ResetFo3ResidentPreparationLane(){')]
+frame_gate=s[s.index('bool Fo3ResidentFrameBlocked(){'):s.index('bool Fo3ResidentLaneContextCurrent()')]
 assert 'gFo3ResidentLane.Blocked()||gFo3ResidentWorkflow.Active()||gFo3ResidentExchangeExecuting||gFo3ResidentExchangeRecoveryFailed' in frame_gate
 acquire=s[s.index('uint64_t AcquireFo3ResidentAssetLane()'):s.index('bool PollFo3ResidentAssetLane(')]
 assert acquire.index('CaptureFo3ResidentInteractionActivity().Idle()') < acquire.index('gFo3ResidentLane.Acquire()')
@@ -388,7 +388,7 @@ assert loop.index('xrBeginFrame(session_, &beginInfo)') < pump < loop.index('if 
 assert not guarded('PumpFo3ResidentWorkflow(')
 assert loop.index('if(sessionState_!=XR_SESSION_STATE_FOCUSED)PumpFo3ResidentWorkflow(false)') < loop.index('SetFo3ShoulderInteractionFocused(')
 native_pump=workflow[workflow.index('void PumpFo3ResidentWorkflow('):workflow.index('fo3scene::ResidentExchangeResult ExecuteFo3ResidentWorkflow(')]
-assert 'if(!focused)' in native_pump and 'RequestCancel' in native_pump
+assert 'if(!focused)' in native_pump and 'gFo3ResidentWorkflow.Interrupt(adapter)' in native_pump
 assert 'ExecuteFo3' not in native_pump
 factory=workflow[workflow.index('uint64_t BeginFo3ResidentWorkflow('):workflow.index('bool CancelFo3ResidentWorkflow(')]
 assert factory.index('AcquireFo3ResidentAssetLane()') < factory.index('prepare(player)') < factory.index('gFo3ResidentWorkflow.Begin(')
@@ -462,3 +462,31 @@ assert 'const auto drawStarted=fqopaque::Clock::now()' in npc_time
 assert 'actor.animationStart = Fo3GameplayNow()' in s
 assert 'actor.animationStart=Fo3GameplayNow()' in s
 print('Resident timelines freeze both gameplay domains; tracking/performance clocks remain raw and notifications cannot advance/deliver sound while blocked')
+
+# Lifecycle: no ordinary transition joins or consumes its request prematurely.
+lifecycle=Path('app/src/main/cpp/world/fo3-resident-lifecycle-runtime.inc').read_text()
+quiesce=lifecycle[:lifecycle.index('bool ShutdownFo3ResidentWorkflow()')]
+assert 'gFo3ResidentWorkflow.Interrupt(adapter)' in quiesce
+assert 'ResetFo3ResidentPreparationLane' not in quiesce and '.Reset(' not in quiesce
+assert 'CancelFo3ResidentPreparation(gFo3ResidentLane.CurrentTicket())' in quiesce
+transition=s[s.index('bool ProcessQ74TransitionRequest() {'):].split('if (gSceneLoad.generation',1)[0]
+assert transition.index('HasPendingFo3CellTransitionRequestQ74()') < transition.index('QuiesceFo3ResidentForSceneChange()') < transition.index('ConsumeFo3CellTransitionRequestQ74(request)')
+assert 'ResetFo3ResidentPreparationLane()' not in begin
+assert reset.index('gFo3ResidentTeardownActive=true') < reset.index('gFo3ResidentLane.Reset()')
+assert reset.index('gFo3ResidentLane.Reset()') < reset.index('DiscardFo3ResidentGpuStage()')
+assert reset.index('DiscardFo3ResidentReferencePublicationPlan()') < reset.index('gFo3ResidentWorkflow.ResetAfterDrain()') < reset.index('gFo3ResidentTeardownActive=false')
+assert 'gFo3ResidentExchangeRecoveryFailed=false' not in reset
+shutdown=lifecycle[lifecycle.index('bool ShutdownFo3ResidentWorkflow()'):]
+assert shutdown.index('Phase::Executing') < shutdown.index('gFo3ResidentWorkflow.Interrupt(adapter)')
+assert shutdown.index('Phase::Settled') < shutdown.index('saveBlocked=true') < shutdown.index('ResetFo3ResidentPreparationLane()')
+assert 'gFo3ResidentExchangeRecoveryFailed=true' in shutdown
+shutdown_loop=loop[loop.index('void Shutdown() {'):loop.index('private:',loop.index('void Shutdown() {'))]
+assert shutdown_loop.index('ShutdownFo3ResidentWorkflow()') < shutdown_loop.index('FlushFo3PlayerState()') < shutdown_loop.index('fo3pipui::Shutdown()')
+assert shutdown_loop.index('ShutdownFo3ResidentWorkflow()') < shutdown_loop.index('if (framebuffer_)') < shutdown_loop.index('eglMakeCurrent(')
+assert 'PumpFo3ResidentWorkflow(false);FlushFo3DeferredPlayerState();' in loop
+assert frame.index('PumpFo3ResidentWorkflow(') < frame.index('FlushFo3DeferredPlayerState();') < frame.index('if (frameState.shouldRender)')
+assert teardown.index('ShutdownFo3ResidentWorkflow()') < teardown.index('FlushFo3PlayerState()')
+pending=cell_world[cell_world.index('bool HasPendingFo3CellTransitionRequestQ74()'):cell_world.index('bool ConsumeFo3CellTransitionRequestQ74(')]
+assert 'return gHasPendingTransitionQ74&&gPendingTransitionQ74.valid;' in pending
+assert '=' not in pending
+print('Resident lifecycle preserves queued transitions, cooperatively interrupts/finalizes and drains before UI/GL teardown without clearing fatal save exclusion')

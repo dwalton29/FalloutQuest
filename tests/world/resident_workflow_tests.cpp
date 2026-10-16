@@ -77,6 +77,7 @@ struct Adapter {
         ++executions;assert(workflow&&workflow->OwnsExchange(workflow->Ticket(),packet,script));
         assert(!workflow->OwnsExchange(workflow->Ticket()+1,packet,script));
         assert(!workflow->RequestCancel(workflow->Ticket()));
+        assert(!workflow->Interrupt(*this));
         assert(workflow->Execute(workflow->Ticket(),*this).status==ResidentExchangeStatus::Rejected);
         workflow->Pump(*this);assert(executions==1);
         return {outcome,ResidentExchangeStage::Complete,0,0};
@@ -87,6 +88,7 @@ struct Adapter {
     bool Reconcile(const ResidentExchangeResult&) {
         ++reconciled;
         assert(workflow->State()==Phase::Finalizing&&!workflow->RequestCancel(workflow->Ticket()));
+        assert(!workflow->Interrupt(*this));
         assert(!workflow->Finalize(workflow->Ticket(),*this));
         if(throwReconcile)throw std::bad_alloc();
         if(staleAfterReconcile)finalizeCurrent=false;
@@ -202,6 +204,46 @@ int main() {
         assert(destroyed==0&&adapter.packetDestroyed==1&&adapter.lane.Blocked());
         assert(!work.Finalize(ticket,adapter)&&!work.RequestCancel(ticket));
         adapter.Reset(work);assert(destroyed==1);
+    }
+    // External interruption cancels every preparation phase, never executing a
+    // Ready candidate; settled outcomes instead take the guarded finalizer.
+    for(auto phase:{Phase::Draining,Phase::Cpu,Phase::Gpu,Phase::Ready}){
+        int destroyed=0;Workflow work;Adapter adapter;adapter.workflow=&work;
+        auto script=std::unique_ptr<Script>(new Script{destroyed});
+        const auto ticket=adapter.lane.Acquire();assert(work.Begin(ticket,script,{},adapter));
+        wait([&]{if(work.State()!=phase)work.Pump(adapter);return work.State()==phase;});
+        wait([&]{return work.Interrupt(adapter);});
+        assert(!work.Active()&&!adapter.lane.Blocked()&&destroyed==1&&adapter.executions==0);
+        assert(work.Interrupt(adapter));
+    }
+    for(auto outcome:{ResidentExchangeStatus::Committed,ResidentExchangeStatus::RolledBack,
+                     ResidentExchangeStatus::Rejected,ResidentExchangeStatus::RecoveryFailed}){
+        int destroyed=0;Workflow work;Adapter adapter;adapter.workflow=&work;
+        auto script=std::unique_ptr<Script>(new Script{destroyed});
+        const auto ticket=adapter.lane.Acquire();assert(work.Begin(ticket,script,{},adapter));
+        ready(work,adapter);adapter.outcome=outcome;work.Execute(ticket,adapter);
+        adapter.reconcileReady=false;
+        assert(!work.Interrupt(adapter)&&destroyed==0&&work.Active());
+        adapter.reconcileReady=true;
+        if(outcome==ResidentExchangeStatus::RecoveryFailed){
+            assert(!work.Interrupt(adapter)&&destroyed==0);adapter.Reset(work);
+        }else{
+            assert(work.Interrupt(adapter)&&destroyed==1&&!adapter.lane.Blocked());
+            assert(adapter.retired==1&&adapter.releases==1&&adapter.executions==1);
+        }
+    }
+    {
+        int destroyed=0;Workflow work;Adapter adapter;adapter.workflow=&work;
+        adapter.finish=false;adapter.holdCancellation=true;
+        auto script=std::unique_ptr<Script>(new Script{destroyed});
+        const auto ticket=adapter.lane.Acquire();assert(work.Begin(ticket,script,{},adapter));
+        work.Pump(adapter);wait([&]{return adapter.entered.load();});
+        assert(!work.Interrupt(adapter));
+        wait([&]{return adapter.cancelObserved.load();});
+        for(int i=0;i<5;++i)assert(!work.Interrupt(adapter));
+        assert(destroyed==0&&work.Active()&&adapter.lane.Blocked()&&adapter.executions==0);
+        adapter.finish=true;wait([&]{return work.Interrupt(adapter);});
+        assert(destroyed==1&&!adapter.lane.Blocked());
     }
     std::cout<<"resident workflow retains logical/private owners through async preparation, cancellation and settled outcomes\n";
 }

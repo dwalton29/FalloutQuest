@@ -81,6 +81,15 @@ public:
     bool OwnsExchange(uint64_t ticket,const Packet& packet,const Script& script) const noexcept {
         return phase_==Phase::Executing&&ticket&&ticket==ticket_&&packet_.get()==&packet&&script_.get()==&script;
     }
+    // External interruption never executes a Ready candidate. Preparation is
+    // cancelled cooperatively; an already settled exchange must finalize.
+    template<class Adapter>
+    bool Interrupt(Adapter& adapter) noexcept {
+        if(!Active())return true;
+        if(phase_==Phase::Settled)return Finalize(ticket_,adapter);
+        if(!RequestCancel(ticket_))return false;
+        Pump(adapter);return !Active();
+    }
     template<class Adapter>
     bool Finalize(uint64_t ticket,Adapter& adapter) noexcept {
         static_assert(noexcept(adapter.CanFinalize(ticket,std::declval<Packet&>(),std::declval<Script&>(),outcome_))&&
