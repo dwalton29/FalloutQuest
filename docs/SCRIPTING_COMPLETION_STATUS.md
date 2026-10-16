@@ -725,3 +725,26 @@ Provenance is necessary evidence, not a completed script/condition ownership
 policy. Strict master matching, canonical INFO binding, bounded dispatch and
 device validation remain open. General resident Enable/Disable stays unadmitted.
 See `world-reference-m1b3w.md` for exact scope and limits.
+
+## M1B3x validation
+
+Dialogue transactions now resolve canonical topic/INFO identities and explicit
+begin/end phases from the immutable Player catalogue. Rebuilt value indexes
+reject duplicate IDs, zero IDs and mismatched membership; legacy raw-body
+callers remain explicitly unbound. Session previews use combined evaluation
+without capture, while actual phase publication captures its canonical program.
+INFO decoding retains fragment-local raw script subrecords across NEXT without
+changing existing execution/reference semantics.
+The Session callback regression checks exact per-phase identity and effect
+timing, side-effect-free previews and stale/repeated audio completion exclusion.
+
+All 52 core host cases and the production actor runtime test pass, along with
+canonical transaction ASan/UBSan (LeakSanitizer disabled), native source guards
+and relevant renderer/body/Pip-Boy checks. Original MS11 stage, bomb and INFO
+provenance match authored program data without live publication; original
+dialogue/production bridge/barter/MS11/door regressions pass.
+
+This closes canonical INFO binding, not strict original-master matching or
+complete SCRO/condition/event dependency ownership. General resident
+Enable/Disable remains unadmitted; bounded dispatch and device validation remain
+open. See `world-reference-m1b3x.md` for exact scope and limits.

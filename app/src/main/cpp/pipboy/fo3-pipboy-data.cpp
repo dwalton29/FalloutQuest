@@ -443,6 +443,11 @@ void Decode(Definitions &d, const std::string &t, uint32_t id, uint32_t flags,
     bool compiled = false, source = false;
     ResultScript* result=&i.begin;
     for (auto &v : s) {
+      // Preserve fragment-local script fields before decoding. NEXT switches
+      // ownership below; SCRO and SCRV must remain distinct raw evidence.
+      if(v.type=="SCHR"||v.type=="SCDA"||v.type=="SCTX"||v.type=="SCRO"||
+         v.type=="SCRV"||v.type=="SLSD"||v.type=="SCVR")
+        result->records.push_back({v.type,std::vector<uint8_t>(v.p,v.p+v.n)});
       if (v.type == "TRDT" && v.n >= 16) {
         Response r;r.sound=U(&v,16);r.number=v.p[12];r.emotion=U(&v);r.emotionValue=int32_t(U(&v,4));
         if(v.n>=21)r.flags=v.p[20];

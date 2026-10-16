@@ -60,6 +60,31 @@ std::unique_ptr<ScriptTransactionPlan> Player::PrepareDialogueTransaction(
       candidate.RunScript(end,speaker,0,budget,e,0,std::move(last));
   },error,capture==ScriptProgramCapture::EnteredPrograms);
 }
+std::unique_ptr<ScriptTransactionPlan> Player::PrepareDialogueInfoTransaction(
+    uint32_t topic,uint32_t info,DialogueScriptPhase phase,std::string& error,uint32_t speaker,ScriptProgramCapture capture) const {
+  error.clear();
+  if(phase!=DialogueScriptPhase::Begin&&phase!=DialogueScriptPhase::End&&phase!=DialogueScriptPhase::Both){
+    error="dialogue script phase unavailable";return {};
+  }
+  const auto found=catalog_->dialogueInfos.find(info);
+  if(!topic||!info||found==catalog_->dialogueInfos.end()||found->second.first!=topic){
+    error="dialogue INFO identity unavailable or ambiguous";return {};
+  }
+  const auto group=catalog_->pipboy.topics.find(topic);
+  if(group==catalog_->pipboy.topics.end()||found->second.second>=group->second.size()){
+    error="dialogue INFO index unavailable";return {};
+  }
+  const auto& authored=group->second[found->second.second];
+  if(authored.id!=info||authored.topic!=topic){error="dialogue INFO index mismatch";return {};}
+  return PrepareScriptTransaction([&](Player& candidate,std::string& e){
+    unsigned budget=4096;
+    ScriptProgramOrigin begin,end;
+    begin.kind=end.kind=ScriptProgramKind::DialogueInfo;
+    begin.record=end.record=info;begin.topic=end.topic=topic;end.item=1;
+    return (phase==DialogueScriptPhase::End||candidate.RunScript(authored.begin,speaker,0,budget,e,0,std::move(begin)))&&
+      (phase==DialogueScriptPhase::Begin||candidate.RunScript(authored.end,speaker,0,budget,e,0,std::move(end)));
+  },error,capture==ScriptProgramCapture::EnteredPrograms);
+}
 std::unique_ptr<ScriptTransactionPlan> Player::PrepareQuestStageTransaction(
     uint32_t quest,uint16_t stage,std::string& error,ScriptProgramCapture capture) const {
   return PrepareScriptTransaction([=](Player& candidate,std::string& e){

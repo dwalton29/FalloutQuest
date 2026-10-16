@@ -30,7 +30,7 @@ struct Session {
   std::string Subtitle(const fo3pipdata::Definitions&)const;
   void End(const std::string&);
 private:
-  bool Execute(const fo3pipdata::ResultScript&,fo3player::Player&,std::string&);
+  bool Execute(const fo3pipdata::Info&,fo3player::DialogueScriptPhase,fo3player::Player&,std::string&);
   bool Enter(const fo3pipdata::Info&,const Context&,fo3player::Player&);
   bool Eligible(const fo3pipdata::Info&,const Context&)const;
   void BuildChoices(const Context&);

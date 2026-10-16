@@ -148,6 +148,45 @@ static void Lifecycle() {
   assert(fo3pipdata::DecodeState(encoded,p.Definitions().pipboy,bytes.data(),bytes.size(),error));
   assert(encoded.saidInfos==p.Snapshot().pipboy.saidInfos);
 }
+static void BoundPublication() {
+  fo3player::Catalog c;c.initial.baseHealth=100;
+  c.pipboy.targets[100].base=10;c.weapons.actors[10].health=100;
+  c.pipboy.greetings={40};c.pipboy.quests[20].flags=1;
+  c.pipboy.formNames["fixturetarget"]=200;c.references[200].base=300;
+  c.pipboy.formNames["endtarget"]=201;c.references[201].base=300;
+  fo3pipdata::Info info;info.id=50;info.topic=40;info.quest=20;info.flags=1;
+  info.responses={{1,1,"Bound phase fixture"}};
+  info.begin.source="FixtureTarget.Disable\nRewardKarma 1";
+  info.end.source="EndTarget.Disable\nRewardKarma 2";
+  c.pipboy.topics[40]={info};fo3player::Player p(c);
+  Context ctx;ctx.player=&p;ctx.speaker={100,10};ctx.target={0x14,7};Session session;
+  unsigned publications=0;
+  session.diagnostic=[](const std::string& message){std::cerr<<message<<'\n';};
+  session.previewReferences=[](const fo3player::Player&,const fo3player::ScriptTransactionPlan& plan,std::string&){
+    assert(!plan.HasProgramProvenance()&&plan.HasReferenceChanges());
+    assert(!plan.CandidateReferences()->Enabled(200,true)&&!plan.CandidateReferences()->Enabled(201,true));
+    return true; // test-only coordinator; no production resident admission
+  };
+  session.publishReferences=[&](fo3player::Player& player,fo3player::ScriptTransactionPlan& plan,std::string&){
+    assert(plan.HasReferenceChanges()&&plan.HasProgramProvenance());
+    const auto& scripts=plan.ExecutedScripts();assert(scripts.size()==1);
+    const auto& script=scripts[0];
+    assert(script.origin.kind==fo3player::ScriptProgramKind::DialogueInfo);
+    assert(script.origin.record==50&&script.origin.topic==40&&script.origin.item==publications);
+    assert(script.owner==100&&script.program.source==(publications?info.end.source:info.begin.source));
+    ++publications;return player.CommitScriptTransaction(plan);
+  };
+  // The combined preview evaluates both; real phases publish independently.
+  const auto revision=p.Revision();assert(session.CanStart(ctx)&&p.Revision()==revision&&!publications);
+  assert(session.Start(ctx,p)&&publications==1&&p.Snapshot().karma==1);
+  assert(!p.CaptureReferenceState().Enabled(200,true));
+  assert(p.CaptureReferenceState().Enabled(201,true));
+  assert(!session.AudioDone(session.audioToken-1,true,ctx,p)&&publications==1);
+  session.AudioDone(session.audioToken,true,ctx,p);
+  assert(!session.Active()&&publications==2&&p.Snapshot().karma==3);
+  assert(!p.CaptureReferenceState().Enabled(200,true)&&!p.CaptureReferenceState().Enabled(201,true));
+  assert(!session.AudioDone(session.audioToken,true,ctx,p)&&publications==2);
+}
 static void ResultConsequences() {
   fo3player::Catalog catalog;catalog.initial.baseHealth=100;
   catalog.pipboy.formNames["testquest"]=20;catalog.pipboy.quests[20].stages[10]={};
@@ -205,6 +244,30 @@ static void PresentationAndOverride() {
   assert(!fo3npc::Interrupted(false,true,true,false,4));
   assert(fo3npc::Interrupted(false,true,true,false,6));assert(fo3npc::Interrupted(false,true,false,false,2));
   assert(fo3npc::Interrupted(false,false,true,false,2));assert(fo3npc::Interrupted(true,true,true,false,2));assert(fo3npc::Interrupted(false,true,true,true,2));
+}
+static void InfoParser() {
+  std::vector<uint8_t> bytes;
+  using Record=std::pair<std::string,std::vector<uint8_t>>;
+  const std::vector<Record> begin={{"SCHR",std::vector<uint8_t>(20,1)},
+    {"SCDA",{1,2}},{"SCTX",{'b',0}},{"SCRO",{100,0,0,0}},
+    {"SCRV",{2,0,0,0}},{"SLSD",{3,4}},{"SCVR",{'v',0}}};
+  const std::vector<Record> end={{"SCHR",std::vector<uint8_t>(20,2)},
+    {"SCDA",{}},{"SCTX",{'e',0}},{"SCRO",{101,0,0,0}},
+    {"SCRV",{3,0,0,0}},{"SCRO",{1,2}}}; // retain malformed evidence verbatim
+  auto sub=[&](const Record& r){bytes.insert(bytes.end(),r.first.begin(),r.first.end());
+    bytes.push_back(uint8_t(r.second.size()));bytes.push_back(uint8_t(r.second.size()>>8));
+    bytes.insert(bytes.end(),r.second.begin(),r.second.end());};
+  sub({"TPIC",{40,0,0,0}});for(const auto& r:begin)sub(r);
+  sub({"NEXT",{}});for(const auto& r:end)sub(r);
+  fo3pipdata::Definitions d;fo3pipdata::Decode(d,"INFO",50,0,bytes,0,0,0);
+  const auto& info=d.topics.at(40).front();
+  assert(info.begin.records==begin&&info.end.records==end);
+  assert(info.begin.source=="b"&&info.end.source=="e");
+  assert(info.begin.compiled==std::vector<uint8_t>({1,2})&&info.end.compiled.empty());
+  assert(info.begin.header==begin[0].second&&info.end.header==end[0].second);
+  // Existing decoded reference semantics stay unchanged; raw SCRV is separate.
+  assert(info.begin.references==std::vector<uint32_t>{100});
+  assert(info.end.references==std::vector<uint32_t>{101});
 }
 static void QuestParser() {
   std::vector<uint8_t> bytes;
@@ -294,7 +357,7 @@ static void OriginalQuest(const char* path) {
   assert(restored.Snapshot().pipboy.quests.at(0x14e9e).stage==10);
   std::cout<<"Original MS11 acceptance, nested MSObjectives, target and save/reload passed\n";
 }
-int main(int argc,char** argv){Isolated();ConsequencesAndOrder();Lifecycle();ResultConsequences();ActivationEvent();PresentationAndOverride();QuestParser();QuestFoundation();if(argc>1){Original(argv[1]);OriginalQuest(argv[1]);}
+int main(int argc,char** argv){Isolated();ConsequencesAndOrder();Lifecycle();BoundPublication();ResultConsequences();ActivationEvent();PresentationAndOverride();InfoParser();QuestParser();QuestFoundation();if(argc>1){Original(argv[1]);OriginalQuest(argv[1]);}
   if(argc>2){std::ifstream voice(std::string(argv[2])+"/ms11_greeting_0003da20_3.ogg",std::ios::binary);char header[4]{};voice.read(header,4);assert(std::string(header,4)=="OggS");
     std::ifstream lip(std::string(argv[2])+"/ms11_greeting_0003da20_3.lip",std::ios::binary);assert(lip&&lip.peek()==1);std::cout<<"Original Lucas voice and companion LIP exist\n";}
   std::cout<<"Dialogue tests passed\n";}

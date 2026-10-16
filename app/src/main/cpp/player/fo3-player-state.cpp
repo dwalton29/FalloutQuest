@@ -667,6 +667,15 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
 static std::shared_ptr<const Catalog> SharePlayerCatalog(Catalog catalog) {
   const auto perk=catalog.pipboy.formNames.find("infiltrator");
   if(perk!=catalog.pipboy.formNames.end())catalog.infiltrator=perk->second;
+  // Rebuild even for copied/user-supplied Catalogs: stale indexes are not proof
+  // of identity. Duplicate IDs anywhere in the catalogue remain ambiguous.
+  catalog.dialogueInfos.clear();
+  for(const auto& topic:catalog.pipboy.topics)for(size_t n=0;n<topic.second.size();++n){
+    const auto& info=topic.second[n];
+    auto inserted=catalog.dialogueInfos.emplace(info.id,std::make_pair(topic.first,n));
+    if(!inserted.second||!info.id||!topic.first||info.topic!=topic.first)
+      inserted.first->second={0,0};
+  }
   return std::make_shared<const Catalog>(std::move(catalog));
 }
 Player::Player(Catalog catalog)

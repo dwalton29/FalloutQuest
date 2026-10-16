@@ -108,6 +108,69 @@ static void Provenance(){
   auto unaudited=p.PrepareDialogueTransaction({}, {},error);
   assert(unaudited&&!unaudited->HasProgramProvenance()&&unaudited->ExecutedScripts().empty());
 }
+static void DialogueProvenance(){
+  using Phase=fo3player::DialogueScriptPhase;using Kind=fo3player::ScriptProgramKind;
+  constexpr auto capture=fo3player::ScriptProgramCapture::EnteredPrograms;
+  auto catalog=Fixture();fo3pipdata::Info info;info.id=801;info.topic=800;
+  info.begin=Script("RewardKarma 1\nSetStage QuestA 10");info.end=Script("RewardKarma 2");
+  info.begin.header={1,2};info.begin.compiled={3,4};info.begin.references={100,10};
+  info.begin.records={{"SCRO",{100,0,0,0}},{"SCRV",{2,0,0,0}}};
+  info.end.header={5};info.end.compiled={6};info.end.records={{"SCRO",{10,0,0,0}}};
+  catalog.pipboy.topics[800]={info};
+  catalog.dialogueInfos[801]={999,999}; // untrusted derived data must be rebuilt
+  fo3player::Player p(catalog);std::string error;const auto revision=p.Revision();
+  auto both=p.PrepareDialogueInfoTransaction(800,801,Phase::Both,error,100,capture);
+  assert(both&&both->HasProgramProvenance());const auto& scripts=both->ExecutedScripts();
+  assert(scripts.size()==4);
+  for(size_t n:{size_t(0),size_t(3)}){
+    const auto& script=scripts[n];const auto& authored=n?info.end:info.begin;
+    assert(script.origin.kind==Kind::DialogueInfo&&script.origin.record==801&&script.origin.topic==800);
+    assert(script.origin.item==(n?1u:0u)&&!script.origin.stage&&script.origin.event.empty());
+    assert(script.owner==100&&!script.localScript);
+    assert(script.program.source==authored.source&&script.program.header==authored.header);
+    assert(script.program.compiled==authored.compiled&&script.program.references==authored.references);
+    assert(script.program.records==authored.records);
+  }
+  assert(scripts[1].origin.kind==Kind::QuestStageItem&&scripts[1].origin.record==10);
+  assert(scripts[2].origin.kind==Kind::QuestStageItem&&scripts[2].origin.record==11);
+  auto begin=p.PrepareDialogueInfoTransaction(800,801,Phase::Begin,error,100,capture);
+  auto end=p.PrepareDialogueInfoTransaction(800,801,Phase::End,error,100,capture);
+  assert(begin&&begin->ExecutedScripts().size()==3);
+  assert(end&&end->ExecutedScripts().size()==1&&end->ExecutedScripts()[0].origin.item==1);
+  assert(p.Revision()==revision&&p.Snapshot().karma==0);NoEffects(p);
+  const auto* storage=scripts.data();forbidAllocations=true;
+  assert(p.CommitScriptTransaction(*both)&&p.Snapshot().karma==8);
+  assert(p.RollbackScriptTransaction(*both)&&p.Snapshot().karma==0);
+  assert(scripts.data()==storage&&scripts.size()==4);forbidAllocations=false;NoEffects(p);
+  auto plain=p.PrepareDialogueInfoTransaction(800,801,Phase::End,error);
+  assert(plain&&!plain->HasProgramProvenance()&&plain->ExecutedScripts().empty());
+  for(auto ids:{std::make_pair(0u,801u),std::make_pair(800u,0u),std::make_pair(999u,801u),std::make_pair(800u,999u)})
+    assert(!p.PrepareDialogueInfoTransaction(ids.first,ids.second,Phase::Both,error)&&!error.empty());
+  assert(!p.PrepareDialogueInfoTransaction(800,801,static_cast<Phase>(255),error));
+  // Copies can change/reorder vectors; Player reconstruction reindexes values,
+  // never pointers or caller-provided ordinal claims.
+  auto copied=p.Definitions();auto other=info;other.id=802;
+  copied.pipboy.topics[800].insert(copied.pipboy.topics[800].begin(),other);
+  copied.pipboy.topics[800][1].begin=Script("RewardKarma 9");
+  fo3player::Player reordered(copied);
+  auto fresh=reordered.PrepareDialogueInfoTransaction(800,801,Phase::Begin,error,0,capture);
+  assert(fresh&&fresh->ExecutedScripts().size()==1&&fresh->ExecutedScripts()[0].program.source=="RewardKarma 9");
+  assert(scripts[0].program.source==info.begin.source);
+  for(int malformed=0;malformed<4;++malformed){
+    auto bad=catalog;
+    if(malformed==0)bad.pipboy.topics[800].push_back(info);
+    if(malformed==1){auto duplicate=info;duplicate.topic=900;bad.pipboy.topics[900].push_back(duplicate);}
+    if(malformed==2)bad.pipboy.topics[800][0].topic=900;
+    if(malformed==3)bad.pipboy.topics[800][0].id=0;
+    fo3player::Player invalid(std::move(bad));
+    assert(!invalid.PrepareDialogueInfoTransaction(800,801,Phase::Both,error,0,capture));
+    assert(invalid.Snapshot().karma==0);NoEffects(invalid);
+  }
+  auto failure=catalog;failure.pipboy.topics[800][0].end=Script("UnsupportedDialogueCommand");
+  fo3player::Player rejected(std::move(failure));
+  assert(!rejected.PrepareDialogueInfoTransaction(800,801,Phase::Both,error,0,capture));
+  assert(rejected.Snapshot().karma==0&&rejected.Snapshot().pipboy.quests.empty());NoEffects(rejected);
+}
 static void OriginalProvenance(const char* path){
   constexpr auto capture=fo3player::ScriptProgramCapture::EnteredPrograms;
   fo3player::Catalog catalog;std::string error;assert(fo3player::LoadCatalog(path,catalog,error));
@@ -135,8 +198,31 @@ static void OriginalProvenance(const char* path){
   const auto& authored=p.Definitions().pipboy.scripts.at(execution.origin.record);
   assert(execution.container.source==authored.source&&execution.container.records==authored.records);
   assert(execution.owner==0x14bc8&&execution.activator==fo3player::PlayerRef&&execution.origin.sourceLine);
+  // Lucas Simms' original MS11 greeting is already exercised by the full
+  // dialogue regression. Bind its begin fragment by canonical identity here.
+  uint32_t topic=0;for(const auto& group:p.Definitions().pipboy.topics)
+    for(const auto& info:group.second)if(info.id==0x1501d)topic=group.first;
+  assert(topic);
+  auto dialogue=p.PrepareDialogueInfoTransaction(topic,0x1501d,fo3player::DialogueScriptPhase::Begin,error,0x3b46,capture);
+  assert(dialogue&&dialogue->ExecutedScripts().size()==1);
+  const auto& fragment=dialogue->ExecutedScripts()[0];
+  const auto& location=p.Definitions().dialogueInfos.at(0x1501d);
+  const auto& body=p.Definitions().pipboy.topics.at(topic).at(location.second).begin;
+  assert(fragment.origin.kind==fo3player::ScriptProgramKind::DialogueInfo);
+  assert(fragment.origin.record==0x1501d&&fragment.origin.topic==topic&&fragment.origin.item==0);
+  assert(fragment.program.source==body.source&&fragment.program.header==body.header);
+  assert(fragment.program.compiled==body.compiled&&fragment.program.references==body.references&&fragment.program.records==body.records);
+  const auto& greeting=p.Definitions().dialogueInfos.at(0x3da20);
+  auto ending=p.PrepareDialogueInfoTransaction(greeting.first,0x3da20,fo3player::DialogueScriptPhase::End,error,0x3b46,capture);
+  assert(ending&&ending->ExecutedScripts().size()==1);
+  const auto& end=ending->ExecutedScripts()[0];
+  const auto& endBody=p.Definitions().pipboy.topics.at(greeting.first).at(greeting.second).end;
+  assert(end.origin.kind==fo3player::ScriptProgramKind::DialogueInfo&&end.origin.record==0x3da20&&end.origin.item==1);
+  assert(!endBody.source.empty()&&!endBody.compiled.empty()&&!endBody.records.empty());
+  assert(end.program.source==endBody.source&&end.program.compiled==endBody.compiled);
+  assert(end.program.header==endBody.header&&end.program.references==endBody.references&&end.program.records==endBody.records);
   assert(p.Revision()==revision&&p.Snapshot().pipboy.quests.empty());NoEffects(p);
-  std::cout<<"Original MS11 stage/bomb provenance matches authored program records without publication\n";
+  std::cout<<"Original MS11 stage/bomb/INFO provenance matches authored program records without publication\n";
 }
 struct ScriptExchangeAdapter {
   fo3player::Player& player;fo3player::ScriptTransactionPlan& script;
@@ -204,6 +290,7 @@ struct ScriptWorkflowAdapter {
 };
 int main(int argc,char** argv){
   Provenance();
+  DialogueProvenance();
   if(argc>1)OriginalProvenance(argv[1]);
   std::string error;fo3player::Player p(Fixture());
   fo3player::Player copy(p);assert(&copy.Definitions()==&p.Definitions());

@@ -521,3 +521,19 @@ assert 'execution.container=container->second;' in script_runtime
 assert 'scriptTrace_->push_back(std::move(execution))' in script_runtime
 assert 'ScriptProgramKind::UnboundResult' in script_header
 print('Detached script provenance records exact entered bodies and typed origins without publishing its collector into canonical state')
+
+# Dialogue fragments are resolved from canonical identities, not caller bodies.
+dialogue_session=Path('app/src/main/cpp/dialogue/fo3-dialogue-session.cpp').read_text()
+player_source=Path('app/src/main/cpp/player/fo3-player-state.cpp').read_text()
+assert 'PrepareDialogueTransaction(' not in dialogue_session
+assert dialogue_session.count('PrepareDialogueInfoTransaction(')==2
+assert 'DialogueScriptPhase::Both,error,ctx.speaker.reference' in dialogue_session
+assert 'phase,error,actor,fo3player::ScriptProgramCapture::EnteredPrograms' in dialogue_session
+assert 'Execute(i,fo3player::DialogueScriptPhase::Begin' in dialogue_session
+assert 'Execute(*i,fo3player::DialogueScriptPhase::End' in dialogue_session
+assert 'catalog.dialogueInfos.clear()' in player_source
+assert 'if(!inserted.second||!info.id||!topic.first||info.topic!=topic.first)' in player_source
+assert 'begin.record=end.record=info;begin.topic=end.topic=topic;end.item=1;' in script_transaction
+assert 'candidate.RunScript(authored.begin' in script_transaction
+assert 'candidate.RunScript(authored.end' in script_transaction
+print('Dialogue binds canonical INFO/phase evidence, rebuilds indexes and preserves separate begin/end publication')

@@ -219,6 +219,9 @@ struct Catalog {
   // request to build actor visuals or simulate every world CELL.
   std::unordered_map<uint32_t,fo3pipdata::Placement> actorPlacements;
   fo3pipdata::Definitions pipboy;
+  // Derived once when the Player freezes its catalogue; never stores pointers
+  // into copyable/sortable INFO vectors. A zero topic marks an invalid identity.
+  std::unordered_map<uint32_t,std::pair<uint32_t,size_t>> dialogueInfos;
   std::unordered_map<uint32_t, Item> items;
   std::unordered_map<uint32_t, Reference> references;
   std::unordered_map<uint32_t,EnableParent> enableParents;
@@ -266,11 +269,12 @@ struct ActorCensusReport {
 enum class ScriptEventResult : uint8_t { NoHandler, Executed, Unsupported };
 class Player;
 class ScriptTransactionPlan;
-enum class ScriptProgramKind : uint8_t {UnboundResult,QuestStageItem,ReferenceEvent};
+enum class ScriptProgramKind : uint8_t {UnboundResult,QuestStageItem,ReferenceEvent,DialogueInfo};
+enum class DialogueScriptPhase : uint8_t {Begin,End,Both};
 enum class ScriptProgramCapture : uint8_t {None,EnteredPrograms};
 struct ScriptProgramOrigin {
   ScriptProgramKind kind=ScriptProgramKind::UnboundResult;
-  uint32_t record=0,item=0,sourceLine=0;
+  uint32_t record=0,item=0,sourceLine=0,topic=0;
   uint16_t stage=0;
   std::string event;
 };
@@ -342,6 +346,11 @@ public:
   // No live state/queues/callbacks change during preparation or previews.
   std::unique_ptr<ScriptTransactionPlan> PrepareDialogueTransaction(
       const fo3pipdata::ResultScript& begin,const fo3pipdata::ResultScript& end,std::string& error,uint32_t speaker=0,
+      ScriptProgramCapture capture=ScriptProgramCapture::None) const;
+  // Resolve the bodies from this Player's immutable canonical INFO catalogue.
+  // Identity evidence only: this does not evaluate dialogue eligibility.
+  std::unique_ptr<ScriptTransactionPlan> PrepareDialogueInfoTransaction(
+      uint32_t topic,uint32_t info,DialogueScriptPhase phase,std::string& error,uint32_t speaker=0,
       ScriptProgramCapture capture=ScriptProgramCapture::None) const;
   std::unique_ptr<ScriptTransactionPlan> PrepareQuestStageTransaction(
       uint32_t quest,uint16_t stage,std::string& error,ScriptProgramCapture capture=ScriptProgramCapture::None) const;
