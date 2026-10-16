@@ -134,14 +134,16 @@ bool Player::RunQuestStage(uint32_t id,uint16_t index,unsigned depth,unsigned& b
       continue;
     }
     if(item.flags&~3u)return fail("unsupported stage item flags");
-    if(!RunScript(item.result,id,depth+1,budget,error))return fail("item "+std::to_string(i)+": "+error);
+    ScriptProgramOrigin origin;origin.kind=ScriptProgramKind::QuestStageItem;
+    origin.record=id;origin.stage=index;origin.item=uint32_t(i);
+    if(!RunScript(item.result,id,depth+1,budget,error,0,std::move(origin)))return fail("item "+std::to_string(i)+": "+error);
     // Reacquire after scripts: nested stages can rehash the quest instance map.
     if(!item.log.empty())state_.pipboy.quests.at(id).journal.push_back({index,uint32_t(i)});
     if(item.flags&3)if(!FinishQuest(id,(item.flags&2)?fo3pipdata::Completion::Failed:fo3pipdata::Completion::Complete))return fail("completion rejected");
   }
   return true;
 }
-bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,unsigned depth,unsigned& budget,std::string& error,uint32_t scriptId) {
+bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,unsigned depth,unsigned& budget,std::string& error,uint32_t scriptId,ScriptProgramOrigin origin) {
   if(depth>=32){error="script nesting exceeded";return false;}
   if(!scriptId && owner){
     const auto quest=catalog_->pipboy.quests.find(owner);
@@ -159,6 +161,16 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
     if(c.type==C::If||c.type==C::ElseIf||c.type==C::Variable||c.type==C::Global||((c.type==C::ShowMessage||c.type==C::ShowBarterMenu)&&!c.expression.empty())){float v;if(!fo3script::Expression(*this,owner,c.expression,error,scriptId).Evaluate(v))return false;}
   }
   if(!gates.empty()){error="unterminated if";return false;}
+  if(scriptTrace_){
+    ScriptExecution execution;execution.origin=std::move(origin);
+    execution.owner=owner;execution.activator=scriptActivator_;execution.localScript=scriptId;
+    execution.program=script;
+    if(execution.origin.kind==ScriptProgramKind::ReferenceEvent){
+      const auto container=catalog_->pipboy.scripts.find(execution.origin.record);
+      if(container!=catalog_->pipboy.scripts.end())execution.container=container->second;
+    }
+    scriptTrace_->push_back(std::move(execution));
+  }
   for(const auto& c:commands) {
     if(!budget){error="script instruction budget exceeded";return false;}--budget;
     const bool active=gates.empty()||gates.back().active;
@@ -276,7 +288,9 @@ bool Player::RunSourceEventDirect(uint32_t scriptId,const char* event,uint32_t o
       return false;
     }
     fo3pipdata::ResultScript body;body.source=block.body;
-    if(!RunScript(body,owner,0,budget,error,scriptId)){
+    ScriptProgramOrigin origin;origin.kind=ScriptProgramKind::ReferenceEvent;
+    origin.record=scriptId;origin.event=block.event;origin.sourceLine=block.sourceLine;
+    if(!RunScript(body,owner,0,budget,error,scriptId,std::move(origin))){
       error="line "+std::to_string(block.sourceLine)+": "+error;
       return false;
     }

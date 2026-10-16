@@ -266,6 +266,21 @@ struct ActorCensusReport {
 enum class ScriptEventResult : uint8_t { NoHandler, Executed, Unsupported };
 class Player;
 class ScriptTransactionPlan;
+enum class ScriptProgramKind : uint8_t {UnboundResult,QuestStageItem,ReferenceEvent};
+enum class ScriptProgramCapture : uint8_t {None,EnteredPrograms};
+struct ScriptProgramOrigin {
+  ScriptProgramKind kind=ScriptProgramKind::UnboundResult;
+  uint32_t record=0,item=0,sourceLine=0;
+  uint16_t stage=0;
+  std::string event;
+};
+// Immutable evidence of entered programs, not authority to admit world changes.
+// Unbound dialogue bodies deliberately have no invented INFO form identity.
+struct ScriptExecution {
+  ScriptProgramOrigin origin;
+  uint32_t owner=0,activator=0,localScript=0;
+  fo3pipdata::ResultScript program,container;
+};
 struct ReferenceEnableChange { uint32_t reference=0; bool enabled=false; };
 // Owned reference-only input for the future scene coordinator. It neither runs
 // scripts nor publishes world resources. Workers capture the immutable snapshots,
@@ -326,11 +341,13 @@ public:
   // Evaluate against a private Player candidate sharing the immutable catalogue.
   // No live state/queues/callbacks change during preparation or previews.
   std::unique_ptr<ScriptTransactionPlan> PrepareDialogueTransaction(
-      const fo3pipdata::ResultScript& begin,const fo3pipdata::ResultScript& end,std::string& error,uint32_t speaker=0) const;
+      const fo3pipdata::ResultScript& begin,const fo3pipdata::ResultScript& end,std::string& error,uint32_t speaker=0,
+      ScriptProgramCapture capture=ScriptProgramCapture::None) const;
   std::unique_ptr<ScriptTransactionPlan> PrepareQuestStageTransaction(
-      uint32_t quest,uint16_t stage,std::string& error) const;
+      uint32_t quest,uint16_t stage,std::string& error,ScriptProgramCapture capture=ScriptProgramCapture::None) const;
   std::unique_ptr<ScriptTransactionPlan> PrepareReferenceEventTransaction(
-      uint32_t reference,const char* event,uint32_t activator,std::string& error) const;
+      uint32_t reference,const char* event,uint32_t activator,std::string& error,
+      ScriptProgramCapture capture=ScriptProgramCapture::None) const;
   bool CanCommitScriptTransaction(const ScriptTransactionPlan& plan) const noexcept;
   bool CanRollbackScriptTransaction(const ScriptTransactionPlan& plan) const noexcept;
   bool CanFinalizeScriptTransaction(const ScriptTransactionPlan& plan,bool committed) const noexcept;
@@ -487,7 +504,7 @@ private:
   struct ScriptCandidateTag {};
   Player(const Player& source,ScriptCandidateTag);
   std::unique_ptr<ScriptTransactionPlan> PrepareScriptTransaction(
-      const std::function<bool(Player&,std::string&)>& execute,std::string& error) const;
+      const std::function<bool(Player&,std::string&)>& execute,std::string& error,bool capturePrograms=false) const;
   void SwapScriptPayload(Player& other) noexcept;
   bool ScriptPlanContextMatches(const ScriptTransactionPlan& plan) const noexcept;
   bool RunSourceEventDirect(uint32_t scriptId,const char* event,uint32_t owner,
@@ -507,7 +524,7 @@ private:
   void TouchMerchantCells(uint32_t cell);
   bool RestockMerchant(uint32_t actor,uint32_t chest);
   bool MigrateWeaponInstances(State &state) const;
-  bool RunScript(const fo3pipdata::ResultScript&,uint32_t owner,unsigned depth,unsigned& budget,std::string&,uint32_t scriptId=0);
+  bool RunScript(const fo3pipdata::ResultScript&,uint32_t owner,unsigned depth,unsigned& budget,std::string&,uint32_t scriptId=0,ScriptProgramOrigin origin={});
   bool RunQuestStage(uint32_t,uint16_t,unsigned depth,unsigned& budget,std::string&);
   bool EnsureQuestInstance(uint32_t);
   std::shared_ptr<const Catalog> catalog_;
@@ -519,6 +536,7 @@ private:
   std::array<float,3> scriptPlayerPosition_{};
   bool scriptPlayerPositionKnown_=false;
   uint64_t scriptEffectRevision_=0;
+  std::vector<ScriptExecution>* scriptTrace_=nullptr; // Private preparation only; never published/swapped.
   std::unordered_map<uint32_t,int> scriptButtons_;
   std::vector<ScriptMessage> pendingScriptMessages_;
   std::vector<QuestNotice> pendingQuestNotices_;
@@ -552,6 +570,8 @@ public:
   const std::vector<uint32_t>& AffectedReferences() const {
     return references_?references_->AffectedReferences():emptyAffected_;
   }
+  const std::vector<ScriptExecution>& ExecutedScripts() const noexcept {return executions_;}
+  bool HasProgramProvenance() const noexcept {return programsCaptured_;}
 private:
   friend class Player;
   ScriptTransactionPlan()=default;
@@ -563,6 +583,8 @@ private:
   std::unique_ptr<Player> candidate_;
   std::unique_ptr<ReferenceEnablePlan> references_;
   std::vector<uint32_t> emptyAffected_;
+  std::vector<ScriptExecution> executions_;
+  bool programsCaptured_=false;
 };
 
 // Native integration owns one session for the application, across CELL/GL

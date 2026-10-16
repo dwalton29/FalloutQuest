@@ -49,6 +49,95 @@ static void NoEffects(fo3player::Player& p){
   uint32_t sound=0;fo3player::ScriptMessage message;fo3player::QuestNotice notice;fo3player::KarmaEvent karma;
   assert(!p.PollScriptSound(sound)&&!p.PollScriptMessage(message)&&!p.PollQuestNotice(notice)&&!p.PollKarmaEvent(karma));
 }
+static void Provenance(){
+  using Kind=fo3player::ScriptProgramKind;
+  constexpr auto capture=fo3player::ScriptProgramCapture::EnteredPrograms;
+  std::string error;auto catalog=Fixture();
+  catalog.pipboy.scripts[300].compiled={1,2,3};
+  catalog.pipboy.scripts[300].header={4,5};
+  catalog.pipboy.scripts[300].references={100,10};
+  catalog.pipboy.scripts[300].records={{"SCRO",{100,0,0,0}},{"SCRV",{7,0,0,0}}};
+  fo3player::Player p(std::move(catalog));const auto revision=p.Revision();
+  auto quest=p.PrepareQuestStageTransaction(10,10,error,capture);assert(quest&&quest->HasProgramProvenance());
+  const auto& entered=quest->ExecutedScripts();assert(entered.size()==2);
+  assert(entered[0].origin.kind==Kind::QuestStageItem&&entered[0].origin.record==10);
+  assert(entered[0].origin.stage==10&&entered[0].origin.item==0&&entered[0].owner==10);
+  assert(entered[1].origin.kind==Kind::QuestStageItem&&entered[1].origin.record==11);
+  assert(entered[1].origin.stage==20&&entered[1].origin.item==0&&entered[1].owner==11);
+  assert(entered[0].program.source==p.Definitions().pipboy.quests.at(10).stages.at(10).items[0].result.source);
+  auto event=p.PrepareReferenceEventTransaction(100,"OnActivate",fo3player::PlayerRef,error,capture);assert(event&&event->HasProgramProvenance());
+  const auto& scripts=event->ExecutedScripts();assert(scripts.size()==3);
+  const auto& first=scripts.front();
+  assert(first.origin.kind==Kind::ReferenceEvent&&first.origin.record==300);
+  assert(first.origin.event=="onactivate"&&first.origin.sourceLine==1);
+  assert(first.owner==100&&first.activator==fo3player::PlayerRef&&first.localScript==300);
+  const auto& original=p.Definitions().pipboy.scripts.at(300);
+  assert(first.container.source==original.source&&first.container.header==original.header);
+  assert(first.container.compiled==original.compiled&&first.container.references==original.references);
+  assert(first.container.records==original.records);
+  assert(first.program.source=="SetStage QuestA 10\n"&&first.program.compiled.empty());
+  assert(scripts[1].origin.record==10&&scripts[2].origin.record==11);
+  assert(scripts[1].activator==fo3player::PlayerRef&&scripts[2].activator==fo3player::PlayerRef);
+  auto begin=Script("RewardKarma 1");begin.compiled={8,9};begin.header={10};
+  begin.references={100};begin.records={{"SCRO",{100,0,0,0}}};
+  auto dialogue=p.PrepareDialogueTransaction(begin,Script("RewardKarma 2"),error,100,capture);assert(dialogue&&dialogue->HasProgramProvenance());
+  const auto& fragments=dialogue->ExecutedScripts();assert(fragments.size()==2);
+  assert(fragments[0].origin.kind==Kind::UnboundResult&&fragments[1].origin.kind==Kind::UnboundResult);
+  assert(!fragments[0].origin.record&&!fragments[1].origin.record);
+  assert(fragments[0].origin.item==0&&fragments[1].origin.item==1);
+  assert(fragments[0].owner==100&&fragments[1].owner==100);
+  assert(fragments[0].program.compiled==begin.compiled&&fragments[0].program.records==begin.records);
+  assert(fragments[0].program.header==begin.header&&fragments[0].program.references==begin.references);
+  begin.source.clear();begin.compiled.clear();begin.records.clear();
+  assert(fragments[0].program.source=="RewardKarma 1"&&fragments[0].program.compiled.size()==2);
+  assert(p.Revision()==revision&&p.Snapshot().karma==0);NoEffects(p);
+  const auto* identity=fragments.data();
+  forbidAllocations=true;
+  assert(p.CommitScriptTransaction(*dialogue)&&p.RollbackScriptTransaction(*dialogue));
+  assert(dialogue->ExecutedScripts().data()==identity&&dialogue->ExecutedScripts().size()==2);
+  forbidAllocations=false;
+  assert(p.Snapshot().karma==0);NoEffects(p);
+  auto nested=p.PrepareDialogueTransaction(Script("SetStage QuestA 10"),{},error,0,capture);assert(nested);
+  assert(nested->ExecutedScripts().size()==4);
+  assert(nested->ExecutedScripts()[0].origin.kind==Kind::UnboundResult);
+  assert(nested->ExecutedScripts()[1].origin.record==10&&nested->ExecutedScripts()[2].origin.record==11);
+  assert(nested->ExecutedScripts()[3].origin.kind==Kind::UnboundResult&&nested->ExecutedScripts()[3].origin.item==1);
+  assert(p.CommitScriptTransaction(*nested));
+  auto repeated=p.PrepareQuestStageTransaction(10,10,error,capture);
+  assert(repeated&&repeated->HasProgramProvenance()&&repeated->ExecutedScripts().empty());
+  auto unaudited=p.PrepareDialogueTransaction({}, {},error);
+  assert(unaudited&&!unaudited->HasProgramProvenance()&&unaudited->ExecutedScripts().empty());
+}
+static void OriginalProvenance(const char* path){
+  constexpr auto capture=fo3player::ScriptProgramCapture::EnteredPrograms;
+  fo3player::Catalog catalog;std::string error;assert(fo3player::LoadCatalog(path,catalog,error));
+  uint32_t quest=0;
+  for(const auto& definition:catalog.pipboy.quests)
+    if(fo3script::Lower(definition.second.editor)=="ms11")quest=definition.first;
+  assert(quest);
+  fo3player::Player p(std::move(catalog));const auto revision=p.Revision();
+  auto stage=p.PrepareQuestStageTransaction(quest,10,error,capture);
+  if(!stage)std::cerr<<error<<'\n';
+  assert(stage&&!stage->ExecutedScripts().empty());
+  for(const auto& execution:stage->ExecutedScripts()){
+    assert(execution.origin.kind==fo3player::ScriptProgramKind::QuestStageItem);
+    const auto& authored=p.Definitions().pipboy.quests.at(execution.origin.record)
+      .stages.at(execution.origin.stage).items.at(execution.origin.item).result;
+    assert(execution.program.source==authored.source&&execution.program.compiled==authored.compiled);
+    assert(execution.program.header==authored.header&&execution.program.references==authored.references);
+    assert(execution.program.records==authored.records);
+  }
+  // Original bomb activation fixture is shared with the existing MS11 regression.
+  auto event=p.PrepareReferenceEventTransaction(0x14bc8,"OnActivate",fo3player::PlayerRef,error,capture);
+  assert(event&&!event->ExecutedScripts().empty());
+  const auto& execution=event->ExecutedScripts().front();
+  assert(execution.origin.kind==fo3player::ScriptProgramKind::ReferenceEvent&&execution.origin.event=="onactivate");
+  const auto& authored=p.Definitions().pipboy.scripts.at(execution.origin.record);
+  assert(execution.container.source==authored.source&&execution.container.records==authored.records);
+  assert(execution.owner==0x14bc8&&execution.activator==fo3player::PlayerRef&&execution.origin.sourceLine);
+  assert(p.Revision()==revision&&p.Snapshot().pipboy.quests.empty());NoEffects(p);
+  std::cout<<"Original MS11 stage/bomb provenance matches authored program records without publication\n";
+}
 struct ScriptExchangeAdapter {
   fo3player::Player& player;fo3player::ScriptTransactionPlan& script;
   fo3scene::ReferencePublication& publication;
@@ -86,7 +175,7 @@ struct ScriptWorkflowAdapter {
   bool reserved=true;
   std::unique_ptr<ScriptWorkflowPacket> gpu;
   bool Current(uint64_t ticket,const fo3player::ScriptTransactionPlan& script) const noexcept {
-    return reserved&&ticket==1&&script.HasReferenceChanges()&&player.CanCommitScriptTransaction(script);
+    return reserved&&ticket==1&&script.HasProgramProvenance()&&script.HasReferenceChanges()&&player.CanCommitScriptTransaction(script);
   }
   bool Drain(uint64_t){return true;}
   bool StartCpu(uint64_t,const ScriptWorkflowRequest&,const fo3player::ScriptTransactionPlan& script) {
@@ -113,7 +202,9 @@ struct ScriptWorkflowAdapter {
   bool Release(uint64_t) noexcept {reserved=false;return true;}
   void FinalizationFailed() noexcept {assert(false);}
 };
-int main(){
+int main(int argc,char** argv){
+  Provenance();
+  if(argc>1)OriginalProvenance(argv[1]);
   std::string error;fo3player::Player p(Fixture());
   fo3player::Player copy(p);assert(&copy.Definitions()==&p.Definitions());
   const auto path="/tmp/fq-script-plan-"+std::to_string(getpid())+".fqps";
@@ -204,7 +295,7 @@ int main(){
   worldCatalog.pipboy.quests[10].stages[30].items.emplace_back().result=
       Script("FixtureRef.Disable\nplayer.AddItem TestItem 1\nShowMessage TestMessage");
   fo3player::Player world(std::move(worldCatalog));
-  auto worldPlan=world.PrepareQuestStageTransaction(10,30,error);assert(worldPlan&&worldPlan->HasReferenceChanges());
+  auto worldPlan=world.PrepareQuestStageTransaction(10,30,error,fo3player::ScriptProgramCapture::EnteredPrograms);assert(worldPlan&&worldPlan->HasReferenceChanges());
   auto before=std::make_shared<const fo3world::ReferenceStateSnapshot>(world.CaptureReferenceState());
   fo3scene::ReferencePublication publication;publication.Publish(before);auto cache=before;
   const auto oldStamp=publication.Stamp();
@@ -232,7 +323,7 @@ int main(){
     catalog.pipboy.quests[10].stages[30].items.emplace_back().result=
         Script("FixtureRef.Disable\nplayer.AddItem TestItem 1\nShowMessage TestMessage");
     fo3player::Player owner(std::move(catalog));
-    auto logical=owner.PrepareQuestStageTransaction(10,30,error);assert(logical&&logical->HasReferenceChanges());
+    auto logical=owner.PrepareQuestStageTransaction(10,30,error,fo3player::ScriptProgramCapture::EnteredPrograms);assert(logical&&logical->HasReferenceChanges());
     auto before=std::make_shared<const fo3world::ReferenceStateSnapshot>(owner.CaptureReferenceState());
     fo3scene::ReferencePublication publication;publication.Publish(before);auto cache=before;
     const auto stamp=publication.Stamp();
@@ -240,6 +331,9 @@ int main(){
     assert(references);
     ScriptWorkflow workflow;
     ScriptWorkflowAdapter adapter{owner,publication,cache,*references,workflow,failure,{},true,{}};
+    auto uncaptured=owner.PrepareQuestStageTransaction(10,30,error);
+    assert(uncaptured&&!uncaptured->HasProgramProvenance());
+    assert(!workflow.Begin(1,uncaptured,{},adapter)&&uncaptured&&!workflow.Active());
     const auto* owned=logical.get();const auto originalRevision=owner.Revision();
     assert(workflow.Begin(1,logical,{},adapter)&&!logical);
     for(int i=0;i<3;++i){
@@ -271,7 +365,7 @@ int main(){
     auto catalog=Fixture();catalog.pipboy.formNames["fixtureref"]=100;
     catalog.pipboy.quests[10].stages[30].items.emplace_back().result=Script("FixtureRef.Disable\nplayer.AddItem TestItem 1");
     fo3player::Player owner(std::move(catalog));
-    auto logical=owner.PrepareQuestStageTransaction(10,30,error);assert(logical);
+    auto logical=owner.PrepareQuestStageTransaction(10,30,error,fo3player::ScriptProgramCapture::EnteredPrograms);assert(logical);
     auto before=std::make_shared<const fo3world::ReferenceStateSnapshot>(owner.CaptureReferenceState());
     fo3scene::ReferencePublication publication;publication.Publish(before);auto cache=before;
     auto references=fo3scene::ReferenceExchange::Prepare(publication,cache,before,logical->CandidateReferences(),logical->RollbackReferences());assert(references);

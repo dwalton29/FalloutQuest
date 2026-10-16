@@ -4,9 +4,9 @@
 
 - Starting canonical main: `2987d911f318b92d1041257868067851a09d16f0` (v208).
 - Resumed from published `6469dbb872889a79a0682501b75f6ac6577ab547`.
-- Current implementation checkpoint: M1B3v incoming authored reference edges.
+- Current implementation checkpoint: M1B3w detached program provenance.
   Use canonical main history for the publication SHA; the previous published
-  implementation is M1B3u `321502777d182dfea5404ffcf89e07d363872639`.
+  implementation is M1B3v `73510a4983f0bef0872dff672db99fc831170f5a`.
 - M1B3l Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38635385905.
 - M1B3m Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38793178567.
 - M1B3n Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38795209693.
@@ -18,6 +18,8 @@
   M1B3r Android CI also succeeded (run 38804214979).
   M1B3s Android CI succeeded (run 38906603237).
   M1B3t Android CI succeeded (run 38908824693).
+  M1B3u Android CI succeeded (run 38910728273).
+  M1B3v Android CI succeeded (run 38912030225).
   Earlier M1B3h CI confirmed the collision-policy include-order failure from g is fixed.
 - Re-fetched and preserved newer canonical v210 barter, v211 MS11 completion and
   v212 Moira fixes. Current baseline `5a4ad709d43d36ec756aaa48bae441e45f400db7`
@@ -58,7 +60,8 @@
 | M1B3r interior finalization | `d5e97daecb85eae0c9f342a4c7fec43cd1f84498` | Confirmed; Android CI passed |
 | M1B3s authored dependency guard | `8266e32db0f8e9b504536d260e5b2aaf690310cf` | Confirmed; Android CI passed |
 | M1B3t pause-aware gameplay time | `1be0d0a64136c4e40d8242447c241755b2be2e82` | Confirmed; Android CI passed |
-| M1B3u interruption/context teardown | `321502777d182dfea5404ffcf89e07d363872639` | Confirmed; Android run 38910728273 |
+| M1B3u interruption/context teardown | `321502777d182dfea5404ffcf89e07d363872639` | Confirmed; Android CI passed |
+| M1B3v incoming authored edges | `73510a4983f0bef0872dff672db99fc831170f5a` | Confirmed; Android CI passed |
 
 The user directly confirmed permission to push to main on 2026-10-14. The old
 approval blocker is resolved. Command-line Git cannot authenticate for writes;
@@ -222,6 +225,10 @@ flowchart TD
    M1B3v checks incoming XLKR/XESP/XTEL/XEMI edges across all nondeleted placed
    references and rejects omitted enable-parent children/unowned link targets
    (see `world-reference-m1b3v.md`).
+   M1B3w captures optional immutable entered-program provenance, including nested
+   quest results and SCPT event context. Native resident ownership requires that
+   evidence; unbound dialogue bodies receive no invented INFO identity (see
+   `world-reference-m1b3w.md`).
    Complete authored/navigation/LOD admission, timer rebasing and remaining
    lifecycle handling still precede command dispatch.
    Exterior lights, remaining interaction ownership, queue reconciliation and the
@@ -702,3 +709,19 @@ This does not prove complete script/condition/event dependency ownership.
 General resident Enable/Disable remains unadmitted. The worker now decodes every
 nondeleted placed-reference payload; Quest preparation cost needs measurement.
 See `world-reference-m1b3v.md` for exact scope and limits.
+
+## M1B3w validation
+
+Optional plan-owned program provenance passes all 52 core host cases plus the
+production actor runtime test and the canonical transaction ASan/UBSan target
+(LeakSanitizer disabled). Tests check exact nested origins/context, raw program
+and container records, independent copies, capture-mode distinction and stable
+audit storage through allocation-free commit/rollback. The real workflow harness
+rejects uncaptured plans without taking ownership. Original MS11 stage and bomb
+event provenance match authored data without publication; existing original
+dialogue/barter/MS11/door and relevant renderer/body/Pip-Boy checks pass.
+
+Provenance is necessary evidence, not a completed script/condition ownership
+policy. Strict master matching, canonical INFO binding, bounded dispatch and
+device validation remain open. General resident Enable/Disable stays unadmitted.
+See `world-reference-m1b3w.md` for exact scope and limits.

@@ -3613,7 +3613,7 @@ struct Fo3ResidentExchangeAdapter {
             gFo3ResidentWorkflow.OwnsExchange(cpu.assetTicket,cpu,script)&&
             &cpu==gFo3ResidentPreparedPacket&&cpu.collision.Get()&&cpu.collision.Get()==gFo3ResidentPreparedCollision&&
             !cpu.request.worldspaceFormId&&gFo3ResidentLane.Exclusive(cpu.assetTicket)&&Fo3ResidentLaneContextCurrent()&&
-            script.HasReferenceChanges()&&script.CandidateReferences()==cpu.candidate&&
+            script.HasProgramProvenance()&&script.HasReferenceChanges()&&script.CandidateReferences()==cpu.candidate&&
             script.RollbackReferences()==cpu.rollback&&script.AffectedReferences()==cpu.affected&&
             cpu.authored.Matches(cpu.request.cellFormId,cpu.affected)&&
             gPlayerSession->player.CanCommitScriptTransaction(script)&&
@@ -3688,7 +3688,7 @@ struct Fo3ResidentWorkflowAdapter {
     bool Current(uint64_t ticket,const fo3player::ScriptTransactionPlan& script) const noexcept {
         return gFo3ResidentLane.Owns(ticket)&&!gFo3ResidentExchangeRecoveryFailed&&
             Fo3ResidentLaneContextCurrent()&&CaptureFo3ResidentInteractionActivity().Idle()&&
-            gPlayerSession&&!gPlayerSession->saveBlocked&&script.HasReferenceChanges()&&
+            gPlayerSession&&!gPlayerSession->saveBlocked&&script.HasProgramProvenance()&&script.HasReferenceChanges()&&
             script.CandidateReferences()&&script.RollbackReferences()&&
             gPlayerSession->player.CanCommitScriptTransaction(script);
     }

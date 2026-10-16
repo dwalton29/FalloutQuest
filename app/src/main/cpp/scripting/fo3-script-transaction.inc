@@ -13,14 +13,18 @@ Player::Player(const Player& source,ScriptCandidateTag)
       pendingTheftEvents_(source.pendingTheftEvents_),containerInteraction_(source.containerInteraction_),
       containerKarmaCommitted_(source.containerKarmaCommitted_) {}
 std::unique_ptr<ScriptTransactionPlan> Player::PrepareScriptTransaction(
-    const std::function<bool(Player&,std::string&)>& execute,std::string& error) const {
+    const std::function<bool(Player&,std::string&)>& execute,std::string& error,bool capturePrograms) const {
   error.clear();
+  if(scriptTrace_){error="nested detached script preparation unsupported";return {};}
   auto plan=std::unique_ptr<ScriptTransactionPlan>(new ScriptTransactionPlan());
   plan->owner_=this;plan->ownerIdentity_=referencePlanIdentity_;
   plan->expectedRevision_=revision_;plan->expectedEffects_=scriptEffectRevision_;
   // Player copies share a const ESM catalogue but own every mutable value/queue.
   plan->candidate_=std::unique_ptr<Player>(new Player(*this,ScriptCandidateTag{}));
   auto& candidate=*plan->candidate_;
+  plan->programsCaptured_=capturePrograms;
+  candidate.scriptTrace_=capturePrograms?&plan->executions_:nullptr;
+  struct TraceScope {Player& candidate;~TraceScope(){candidate.scriptTrace_=nullptr;}} trace{candidate};
   if(!execute(candidate,error))return {};
   if(candidate.revision_<revision_ || candidate.revision_==UINT64_MAX ||
      scriptEffectRevision_>UINT64_MAX-2){error="script transaction revision exhausted";return {};}
@@ -48,26 +52,28 @@ std::unique_ptr<ScriptTransactionPlan> Player::PrepareScriptTransaction(
   return plan;
 }
 std::unique_ptr<ScriptTransactionPlan> Player::PrepareDialogueTransaction(
-    const fo3pipdata::ResultScript& begin,const fo3pipdata::ResultScript& end,std::string& error,uint32_t speaker) const {
+    const fo3pipdata::ResultScript& begin,const fo3pipdata::ResultScript& end,std::string& error,uint32_t speaker,ScriptProgramCapture capture) const {
   return PrepareScriptTransaction([&](Player& candidate,std::string& e){
     unsigned budget=4096;
-    return candidate.RunScript(begin,speaker,0,budget,e)&&candidate.RunScript(end,speaker,0,budget,e);
-  },error);
+    ScriptProgramOrigin first,last;last.item=1;
+    return candidate.RunScript(begin,speaker,0,budget,e,0,std::move(first))&&
+      candidate.RunScript(end,speaker,0,budget,e,0,std::move(last));
+  },error,capture==ScriptProgramCapture::EnteredPrograms);
 }
 std::unique_ptr<ScriptTransactionPlan> Player::PrepareQuestStageTransaction(
-    uint32_t quest,uint16_t stage,std::string& error) const {
+    uint32_t quest,uint16_t stage,std::string& error,ScriptProgramCapture capture) const {
   return PrepareScriptTransaction([=](Player& candidate,std::string& e){
     unsigned budget=4096;return candidate.RunQuestStage(quest,stage,0,budget,e);
-  },error);
+  },error,capture==ScriptProgramCapture::EnteredPrograms);
 }
 std::unique_ptr<ScriptTransactionPlan> Player::PrepareReferenceEventTransaction(
-    uint32_t reference,const char* event,uint32_t activator,std::string& error) const {
+    uint32_t reference,const char* event,uint32_t activator,std::string& error,ScriptProgramCapture capture) const {
   error.clear();
   if(!HasReferenceEvent(reference,event)){error="reference event unavailable";return {};}
   const auto script=catalog_->eventBaseScripts.at(catalog_->references.at(reference).base);
   return PrepareScriptTransaction([=](Player& candidate,std::string& e){
     return candidate.RunSourceEventDirect(script,event,reference,activator,e);
-  },error);
+  },error,capture==ScriptProgramCapture::EnteredPrograms);
 }
 bool Player::ScriptPlanContextMatches(const ScriptTransactionPlan& plan) const noexcept {
   const auto& candidate=*plan.candidate_;

@@ -500,3 +500,24 @@ pending=cell_world[cell_world.index('bool HasPendingFo3CellTransitionRequestQ74(
 assert 'return gHasPendingTransitionQ74&&gPendingTransitionQ74.valid;' in pending
 assert '=' not in pending
 print('Resident lifecycle preserves queued transitions, cooperatively interrupts/finalizes and drains before UI/GL teardown without clearing fatal save exclusion')
+
+# Script-program evidence belongs to the detached plan, never canonical state.
+script_transaction=Path('app/src/main/cpp/scripting/fo3-script-transaction.inc').read_text()
+script_runtime=Path('app/src/main/cpp/scripting/fo3-script-runtime.inc').read_text()
+script_header=Path('app/src/main/cpp/player/fo3-player-state.h').read_text()
+assert 'const std::vector<ScriptExecution>& ExecutedScripts() const noexcept' in script_header
+assert script_transaction.index('candidate.scriptTrace_=capturePrograms?&plan->executions_:nullptr') < script_transaction.index('if(!execute(candidate,error))')
+assert 'bool HasProgramProvenance() const noexcept' in script_header
+assert 'ScriptProgramCapture capture=ScriptProgramCapture::None' in script_header
+assert s.count('script.HasProgramProvenance()&&script.HasReferenceChanges()') == 2
+assert '~TraceScope(){candidate.scriptTrace_=nullptr;}' in script_transaction
+swap_payload=script_transaction[script_transaction.index('void Player::SwapScriptPayload('):script_transaction.index('bool Player::CommitScriptTransaction(')]
+assert 'scriptTrace_' not in swap_payload and 'executions_' not in swap_payload
+assert 'ScriptProgramKind::QuestStageItem' in script_runtime
+assert 'origin.record=id;origin.stage=index;origin.item=uint32_t(i)' in script_runtime
+assert 'origin.record=scriptId;origin.event=block.event;origin.sourceLine=block.sourceLine' in script_runtime
+assert 'execution.program=script;' in script_runtime
+assert 'execution.container=container->second;' in script_runtime
+assert 'scriptTrace_->push_back(std::move(execution))' in script_runtime
+assert 'ScriptProgramKind::UnboundResult' in script_header
+print('Detached script provenance records exact entered bodies and typed origins without publishing its collector into canonical state')
