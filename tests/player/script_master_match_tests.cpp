@@ -1,4 +1,5 @@
 #include "scripting/fo3-script-master-match.h"
+#include "world/fo3-resident-authored-admission.h"
 #include <cassert>
 #include <cstdio>
 #include <cstring>
@@ -139,6 +140,18 @@ int main(){
   write(b);rejects(f.programs);
   auto owned=std::move(repeated);assert(owned.Verified()&&owned.Matches(f.programs));
   assert(!repeated.Verified()&&!repeated.Matches({}));
+  // Exact master evidence does not exempt even the same SCPT's incoming edge.
+  Bytes cell,base,ref;Sub(cell,"DATA",{1});Sub(base,"MODL",Text("fixture.nif"));
+  Sub(ref,"NAME",Word(901));Sub(ref,"DATA",Bytes(24));
+  b=Record("CELL",900,cell);Append(b,Record("STAT",901,base));
+  auto children=Record("REFR",100,ref);auto scope=Group(900,children);Put(scope,12,6);Append(b,scope);
+  Append(b,Record("SCPT",60,f.event));write(b);
+  const std::vector<Execution> eventOnly={f.programs.back()};
+  assert(fo3script::MatchScriptProgramsToMaster(path,eventOnly,owned,cancel,error)&&owned.Matches(eventOnly));
+  fo3scene::ResidentAuthoredAdmission admission;admission.cell=999;admission.affected={888};
+  assert(!fo3scene::PrepareResidentAuthoredAdmission(path,900,{100},admission,cancel,error));
+  assert(error.find("SCRO from SCPT 60 to 100")!=std::string::npos&&admission.Matches(999,{888}));
+  assert(owned.Matches(eventOnly));
   std::remove(path.c_str());rejects(f.programs);
   std::cout<<"Strict master program matching, exact report binding and fail-closed framing passed\n";
 }

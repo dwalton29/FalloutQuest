@@ -550,3 +550,16 @@ assert 'case Kind::ReferenceEvent:' in master_match and 'case Kind::DialogueInfo
 assert 'default:return nullptr;' in master_match
 assert master_match.index('if(seen.size()!=wanted.size())')<master_match.index('out=std::move(next);')
 print('Original-master program evidence precedes resident asset work and is rebound at commit/settlement without worker Player access')
+
+# Matching provenance never bypasses incoming script/condition admission.
+authored=Path('app/src/main/cpp/world/fo3-resident-authored-admission.cpp').read_text()
+second=authored[authored.index('const bool second=Scan('):authored.index('if(!second)')]
+assert second.index('if(r.location.flags&0x20u)return true;')<second.index('if(!Payload(f.get(),r,b))return false;')
+assert second.index('if(!Payload(f.get(),r,b))return false;')<second.index('if(!base)return true;')
+assert 'if(!wanted.count(id)&&!baseIds.count(id))return;' in second
+assert 'if(Is(t,"SCRO"))target(fo3esm::ReadU32(p),"SCRO");' in second
+assert 'if(n!=20&&n!=24&&n!=28)' in second
+for offset in (12,16,24):assert f'target(fo3esm::ReadU32(p+{offset}),"CTDA +{offset}")' in second
+assert 'if(p[0]&4)target(fo3esm::ReadU32(p+4),"CTDA comparison-global")' in second
+assert 'ScriptMasterMatch' not in authored and 'ExecutedScripts' not in authored
+print('Incoming SCRO/CTDA evidence scans every nondeleted record and cannot be exempted by matched program provenance')

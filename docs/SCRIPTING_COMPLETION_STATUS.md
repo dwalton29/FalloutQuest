@@ -773,3 +773,26 @@ It adds worker scans/copies and linear byte comparison at guarded settlement;
 there is no Quest performance claim. Complete SCRO/condition/event ownership,
 bounded dispatch and device validation remain open. General resident
 Enable/Disable remains unadmitted. See `world-reference-m1b3y.md` for scope.
+
+## M1B3z validation
+
+Authored admission now rejects direct incoming SCRO targets and conservative
+CTDA operand/comparison-global hits on affected references or resolved bases.
+Its second streaming pass walks every nondeleted payload, including unknown
+source classes and foreign CELL/worldspace records. SCRV indexes remain distinct
+from FormIDs. Malformed metadata/framing fails closed and prior output remains
+unchanged. Authentic master-matched program evidence grants no exception.
+
+All 53 core host tests and the production actor test pass. The affected authored
+admission and master-match targets pass ASan/UBSan (LeakSanitizer disabled).
+The original test resolves a real SCPT-to-interior-reference edge and confirms
+rejection, while retaining the admitted original light and rejected door,
+navigation and XLKR fixtures. Original dialogue bridge/barter/MS11 reward/save
+regressions and relevant native/source/renderer/body/Pip-Boy checks pass.
+
+CTDA matching can false-positive on numeric/unused operands; it is not a typed
+function/read-set analysis. Dynamic/local references, implicit contexts,
+transitive/conditional ownership, bounded dispatch and device validation remain
+open. Whole-master payload walking adds worker CPU/I/O cost with no Quest budget
+claim. General resident Enable/Disable remains unadmitted. See
+`world-reference-m1b3z.md` for exact scope and limits.

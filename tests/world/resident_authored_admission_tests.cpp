@@ -8,6 +8,7 @@
 #include <limits>
 #include <unordered_map>
 #include <unordered_set>
+#include <unistd.h>
 #include <zlib.h>
 using Bytes=std::vector<uint8_t>;
 void u32(Bytes& b,size_t p,uint32_t v){if(b.size()<p+4)b.resize(p+4);std::memcpy(b.data()+p,&v,4);}
@@ -79,13 +80,62 @@ Bytes fixture(Options o={}){
     if(o.malformed==9)u32(b,4,0xffffffffu);
     return b;
 }
-const std::string path="/tmp/falloutquest-resident-authored-admission.esm";
+const std::string path="/tmp/falloutquest-resident-authored-admission-"+std::to_string(getpid())+".esm";
 void write(const Bytes& b){std::ofstream f(path,std::ios::binary);f.write(reinterpret_cast<const char*>(b.data()),b.size());}
+void scriptDependencies(){
+    std::atomic<bool> cancel{false};std::string error;
+    fo3scene::ResidentAuthoredAdmission out;out.cell=999;out.affected={888};
+    auto master=[&](const char* type,const char* tag,const Bytes& value,int encoding=0,uint32_t flags=0){
+        Bytes p;
+        if(encoding==2){sub(p,"XXXX",word(value.size()));sub(p,tag,{});append(p,value);}
+        else sub(p,tag,value);
+        if(encoding==1){uLongf n=compressBound(p.size());Bytes compressed(n+4);u32(compressed,0,p.size());
+            assert(compress2(compressed.data()+4,&n,p.data(),p.size(),Z_BEST_SPEED)==Z_OK);
+            compressed.resize(n+4);p=std::move(compressed);flags|=0x40000u;}
+        auto b=fixture();append(b,group(12,1,group(11,6,record(type,60,p,flags))));write(b);
+    };
+    auto rejects=[&](const std::string& field){
+        assert(!fo3scene::PrepareResidentAuthoredAdmission(path,10,{30},out,cancel,error));
+        assert(error.find(field)!=std::string::npos&&error.find("60")!=std::string::npos);
+        assert(out.cell==999&&out.affected==std::vector<uint32_t>{888});
+    };
+    auto admits=[&](){fo3scene::ResidentAuthoredAdmission accepted;
+        assert(fo3scene::PrepareResidentAuthoredAdmission(path,10,{30},accepted,cancel,error));
+        assert(accepted.Matches(10,{30})&&error.empty());};
+    for(const char* type:{"SCPT","QUST","INFO","PACK","IDLE","PERK","TERM","MGEF","REFR","ACHR","ACRE","UNKN"})
+      for(uint32_t target:{20u,30u})for(int encoding:{0,1,2}){
+        master(type,"SCRO",word(target),encoding);rejects("SCRO");
+        assert(error.find(target==30?"(reference)":"(base)")!=std::string::npos);
+      }
+    for(uint32_t size:{20u,24u,28u})for(uint32_t offset:{12u,16u,24u}){
+        if(offset+4>size)continue;
+        for(uint32_t target:{20u,30u})for(int encoding:{0,1,2}){
+            Bytes c(size);u32(c,offset,target);u32(c,8,65535); // Unknown arity is not an exemption.
+            master("INFO","CTDA",c,encoding);rejects("CTDA +"+std::to_string(offset));
+        }
+    }
+    Bytes c(28);c[0]=4;u32(c,4,30);master("QUST","CTDA",c);rejects("CTDA comparison-global");
+    c[0]=0;master("QUST","CTDA",c);admits(); // A literal comparison is not a global FormID.
+    for(const char* tag:{"SCRO","SCRV","CTDA"}){
+        master("UNKN",tag,Bytes(3));rejects(tag);
+        master("UNKN",tag,Bytes(3),0,0x20);admits();
+    }
+    for(uint32_t size:{0u,19u,21u,25u,29u,32u}){master("PACK","CTDA",Bytes(size));rejects("CTDA");}
+    for(int encoding:{0,1,2}){
+        master("SCPT","SCRO",word(99),encoding);admits();
+        for(uint32_t local:{20u,30u}){master("SCPT","SCRV",word(local),encoding);admits();}
+        master("INFO","CTDA",Bytes(28),encoding);admits();
+    }
+    auto b=fixture();Bytes p;sub(p,"SCRO",word(99));sub(p,"SCRO",word(99));append(b,record("SCPT",60,p));write(b);admits();
+    b=fixture();p={1,2,3};append(b,record("UNKN",60,p));write(b);rejects("UNKN");
+    b=fixture();append(b,record("SCPT",60,{1,2,3,4},0x40000));write(b);rejects("SCPT");
+    std::cout<<"Incoming SCRO/CTDA operands cover all record classes, foreign scopes and raw encodings; SCRV stays local\n";
+}
 void original(const std::string& master){
     // Resolve fixtures from Bethesda's records; no invented original form IDs.
     FILE* f=std::fopen(master.c_str(),"rb");assert(f);const auto size=fo3esm::FileSize(f);
     uint32_t cell=0;std::unordered_map<uint32_t,std::string> types;
-    std::unordered_set<uint32_t> linkedTargets,interiorCells;
+    std::unordered_set<uint32_t> linkedTargets,interiorCells,scriptTargets;
     while(ftello(f)<size){
         uint8_t h[24];assert(fo3esm::ReadExact(f,h,24));const auto n=fo3esm::ReadU32(h+4);
         if(!std::memcmp(h,"GRUP",4))continue;
@@ -102,12 +152,18 @@ void original(const std::string& master){
             fo3esm::WalkSubrecords(b,[&](const char* t,const uint8_t* p,uint32_t count){
                 if(!std::memcmp(t,"XLKR",4)&&count==4)linkedTargets.insert(fo3esm::ReadU32(p));
             });
+        }else if(!(fo3esm::ReadU32(h+8)&0x20u)){
+            Bytes b;assert(fo3esm::ReadPayloadCurrent(f,n,fo3esm::ReadU32(h+8),b));
+            fo3esm::WalkSubrecords(b,[&](const char* t,const uint8_t* p,uint32_t count){
+                if(!std::memcmp(t,"SCRO",4)&&count==4)scriptTargets.insert(fo3esm::ReadU32(p));
+            });
         }else assert(!fseeko(f,n,SEEK_CUR));
     }
     assert(cell);assert(!fseeko(f,0,SEEK_SET));
     struct Frame{uint64_t end;uint32_t label,type;};std::vector<Frame> stack;
     std::unordered_map<uint32_t,uint32_t> refs;
     std::vector<std::pair<uint32_t,uint32_t>> incomingFixtures;
+    std::vector<std::pair<uint32_t,uint32_t>> scriptFixtures;
     while(ftello(f)<size){
         const auto start=ftello(f);while(!stack.empty()&&uint64_t(start)>=stack.back().end)stack.pop_back();
         uint8_t h[24];assert(fo3esm::ReadExact(f,h,24));const auto n=fo3esm::ReadU32(h+4);
@@ -117,7 +173,7 @@ void original(const std::string& master){
         uint32_t owner=0;for(auto g=stack.rbegin();g!=stack.rend();++g)
             if(g->type==6||g->type==8||g->type==9||g->type==10){owner=g->label;break;}
         const auto id=fo3esm::ReadU32(h+12),flags=fo3esm::ReadU32(h+8);
-        if(!std::memcmp(h,"REFR",4)&&(owner==cell||linkedTargets.count(id))){
+        if(!std::memcmp(h,"REFR",4)&&(owner==cell||linkedTargets.count(id)||interiorCells.count(owner))){
             Bytes b;assert(fo3esm::ReadPayloadCurrent(f,n,fo3esm::ReadU32(h+8),b));
             uint32_t base=0;bool simple=true;
             fo3esm::WalkSubrecords(b,[&](const char* t,const uint8_t* p,uint32_t count){
@@ -131,6 +187,9 @@ void original(const std::string& master){
             if(simple&&!(flags&(0x20u|0x8000u))&&interiorCells.count(owner)&&linkedTargets.count(id)&&
                 type!=types.end()&&(type->second=="STAT"||type->second=="LIGH"))
                 incomingFixtures.emplace_back(owner,id);
+            if(simple&&!(flags&(0x20u|0x8000u))&&interiorCells.count(owner)&&
+                (scriptTargets.count(id)||scriptTargets.count(base))&&type!=types.end()&&
+                (type->second=="STAT"||type->second=="LIGH"))scriptFixtures.emplace_back(owner,id);
         }else assert(!fseeko(f,n,SEEK_CUR));
     }
     std::fclose(f);
@@ -159,9 +218,21 @@ void original(const std::string& master){
     }
     assert(incoming);
     std::cout<<"Original incoming XLKR target resolved from authored records and rejected\n";
+    bool script=false;
+    for(const auto& fixture:scriptFixtures){
+        const auto previous=out;
+        assert(!fo3scene::PrepareResidentAuthoredAdmission(master,fixture.first,{fixture.second},out,cancel,error));
+        assert(out.cell==previous.cell&&out.affected==previous.affected);
+        if(error.find("unowned incoming script/condition dependency: SCRO")!=std::string::npos){
+            script=true;std::cout<<"Original incoming dependency: "<<error<<'\n';break;
+        }
+    }
+    if(!script)std::cerr<<"No original SCRO fixture reached its guard; candidates="<<scriptFixtures.size()<<" last="<<error<<'\n';
+    assert(script);
     std::cout<<"Original Brass Lantern: light guard admitted, load door and navmeshed geometry rejected\n";
 }
 int main(int argc,char** argv){
+    scriptDependencies();
     std::atomic<bool> cancel{false};std::string error;
     fo3scene::ResidentAuthoredAdmission out;out.cell=999;out.affected={888};
     auto rejected=[&](Options o){write(fixture(o));

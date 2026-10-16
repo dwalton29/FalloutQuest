@@ -178,9 +178,42 @@ bool PrepareResidentAuthoredAdmission(const std::string& master,uint32_t cell,
         return fail("affected base has package navigation dependency");
     std::unordered_set<uint32_t> seenBases;bool geometry=false;
     const bool second=Scan(f.get(),cancel,[&](const Record& r){
-        if(!baseIds.count(r.id))return true;
-        if(!seenBases.insert(r.id).second||(r.location.type!="STAT"&&r.location.type!="LIGH")||
-            (r.location.flags&(0x20u|0x8000u))||!Payload(f.get(),r,b))return false;
+        scanning=r.location.type+" "+std::to_string(r.id);
+        const bool base=baseIds.count(r.id)!=0;
+        if(base&&(!seenBases.insert(r.id).second||(r.location.type!="STAT"&&r.location.type!="LIGH")||
+            (r.location.flags&(0x20u|0x8000u))))return false;
+        if(r.location.flags&0x20u)return true;
+        // No record-type allowlist: dependencies also live in nonresident
+        // quests, dialogue, packages, effects and otherwise unknown records.
+        if(!Payload(f.get(),r,b))return false;
+        bool dependencies=true;
+        auto target=[&](uint32_t id,const char* field){
+            if(!wanted.count(id)&&!baseIds.count(id))return;
+            dependencies=false;
+            if(error.empty())error="unowned incoming script/condition dependency: "+std::string(field)+
+                " from "+scanning+" to "+std::to_string(id)+(wanted.count(id)?" (reference)":" (base)");
+        };
+        auto malformed=[&](const char* field){
+            dependencies=false;
+            if(error.empty())error="malformed script/condition dependency: "+std::string(field)+" in "+scanning;
+        };
+        fo3esm::WalkSubrecords(b,[&](const char* t,const uint8_t* p,uint32_t n){
+            if(Is(t,"SCRO")||Is(t,"SCRV")){
+                if(n!=4){malformed(Is(t,"SCRO")?"SCRO":"SCRV");return;}
+                // SCRV stores a local-variable index, not an authored FormID.
+                if(Is(t,"SCRO"))target(fo3esm::ReadU32(p),"SCRO");
+            }else if(Is(t,"CTDA")){
+                if(n!=20&&n!=24&&n!=28){malformed("CTDA");return;}
+                // Conservative operand matching, not a function-arity table:
+                // numeric/unconsumed operands can intentionally false-positive.
+                target(fo3esm::ReadU32(p+12),"CTDA +12");
+                target(fo3esm::ReadU32(p+16),"CTDA +16");
+                if(n==28)target(fo3esm::ReadU32(p+24),"CTDA +24");
+                if(p[0]&4)target(fo3esm::ReadU32(p+4),"CTDA comparison-global");
+            }
+        });
+        if(!dependencies)return false;
+        if(!base)return true;
         bool valid=true,model=false;std::unordered_set<std::string> tags;
         fo3esm::WalkSubrecords(b,[&](const char* t,const uint8_t* p,uint32_t n){
             if(!tags.insert(std::string(t,4)).second)valid=false;
@@ -194,7 +227,11 @@ bool PrepareResidentAuthoredAdmission(const std::string& master,uint32_t cell,
         if(r.location.type=="STAT"&&!model)valid=false;
         return valid;
     });
-    if(!second)return fail(cancel.load()?"authored admission cancelled":"unsupported or malformed authored base");
+    if(!second){
+        if(cancel.load())error="authored admission cancelled";
+        else if(error.empty())error="unsupported or malformed authored base/dependency near "+scanning;
+        return false;
+    }
     if(seenBases.size()!=baseIds.size())return fail("authored base missing");
     if(navmesh&&geometry)return fail("geometry mutation requires navigation reconciliation");
     if(cancel.load(std::memory_order_acquire))return fail("authored admission cancelled");
