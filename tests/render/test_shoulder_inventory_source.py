@@ -12,7 +12,12 @@ class ShoulderIntegration(unittest.TestCase):
             end=s.index('        } else {',start)
             return s[start:end]
         # v154 ordinary throw/drop block; hash avoids requiring git history in CI.
-        self.assertEqual(hashlib.sha256(throw(after).encode()).hexdigest(),"d801a612efb27e313c11940bbd654c898d844c4ec16b9f686159a9de147cdb11")
+        released=throw(after)
+        self.assertEqual(released.count('Fo3GameplayNow()'),1)
+        # Only the clock source changed: all original throw/drop mechanics
+        # remain byte-identical after normalizing the resident pause adapter.
+        released=released.replace('Fo3GameplayNow()','std::chrono::steady_clock::now()')
+        self.assertEqual(hashlib.sha256(released.encode()).hexdigest(),"d801a612efb27e313c11940bbd654c898d844c4ec16b9f686159a9de147cdb11")
         f=after[after.index('void Q220UpdateLooseGrab('):after.index('void Q221UpdateLooseObjectsFromSolvedPalms(')]
         self.assertLess(f.index('CollectFo3WorldReference(ref)'),f.index('const uint32_t releasedRef'))
         self.assertIn('state.previousGrip=grip;return;',f)

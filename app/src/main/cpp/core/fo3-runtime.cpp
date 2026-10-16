@@ -34,6 +34,7 @@
 #include "world/fo3-visual-exchange.h"
 #include "world/fo3-resident-resources.h"
 #include "world/fo3-resident-authored-admission.h"
+#include "world/fo3-resident-pause-clock.h"
 #include "world/fo3-resident-texture-upload.h"
 #include "world/fo3-resident-gpu-stage.h"
 #include "world/fo3-resident-preparation-lane.h"
@@ -3288,6 +3289,10 @@ bool Fo3ResidentAssetLaneBlocked(){return gFo3ResidentLane.Blocked();}
 bool Fo3ResidentFrameBlocked(){
     return gFo3ResidentLane.Blocked()||gFo3ResidentWorkflow.Active()||gFo3ResidentExchangeExecuting||gFo3ResidentExchangeRecoveryFailed;
 }
+std::chrono::steady_clock::time_point Fo3ResidentRawSteadyNow() noexcept {
+    return std::chrono::steady_clock::now();
+}
+#include "world/fo3-resident-time-runtime.inc"
 void ResetFo3ResidentPreparationLane(){
     gFo3ResidentLane.Reset();
     gFo3ResidentWorkflow.ResetAfterDrain();
@@ -3312,6 +3317,7 @@ uint64_t AcquireFo3ResidentAssetLane() {
         !Fo3AcceptsScenePublication(gFo3ScenePublication.Stamp()))return 0;
     const auto ticket=gFo3ResidentLane.Acquire();
     if(!ticket)return 0;
+    PauseFo3ResidentGameplayTime();
     gFo3ResidentLaneContext={};gFo3ResidentLaneContext.valid=true;
     gFo3ResidentLaneContext.cellFormId=gCurrentCellFormId;
     gFo3ResidentLaneContext.worldspaceFormId=gExteriorWorldspaceQ1890;
@@ -4204,7 +4210,7 @@ bool ProcessQ74TransitionRequest() {
     Q230DeleteNpcActors();
     gQ230NpcActors = std::move(prepared.actors);
     for (auto& actor : gQ230NpcActors)
-        actor.animationStart = std::chrono::steady_clock::now();
+        actor.animationStart = Fo3GameplayNow();
     gObjects = std::move(replacement);
     if(++gQ2400DoorSceneSerial==0u) gQ2400DoorSceneSerial=1u;
     gSceneReady = !gObjects.empty();
@@ -4620,7 +4626,7 @@ bool Q2400ToggleInteriorDoor(uint32_t refFormId,float activatorX,float activator
         state.targetOpen=opening;
         state.q2401NifAnimation=true;
         state.q2401Moving=true;
-        state.q2401Started=std::chrono::steady_clock::now();
+        state.q2401Started=Fo3GameplayNow();
         state.q2401Pose={};
         const auto* clip=fo3dooranim::Sequence(*first->q2401DoorAnimation,opening);
         if(clip) fo3anim::BindClip(
@@ -4644,7 +4650,7 @@ bool Q2400ToggleInteriorDoor(uint32_t refFormId,float activatorX,float activator
     if(opening&&state.progress<=0.001f)
         state.swingSign=Q2400ChooseDoorSwingSign(refFormId,activatorX,activatorZ);
     state.targetOpen=opening;
-    state.lastUpdate=std::chrono::steady_clock::now();
+    state.lastUpdate=Fo3GameplayNow();
     if(!state.collisionDisabled||state.collisionSceneSerial!=gQ2400DoorSceneSerial) {
         if(SetFo3DoorCollisionTransformQ2400(refFormId,nullptr,false)) {
             state.collisionDisabled=true;state.collisionSceneSerial=gQ2400DoorSceneSerial;
@@ -4656,7 +4662,7 @@ bool Q2400ToggleInteriorDoor(uint32_t refFormId,float activatorX,float activator
 }
 void UpdateFo3InteriorDoorsQ2400() {
     if(gExteriorWorldspaceQ1890!=0u||gQ2400InteriorDoors.empty()) return;
-    const auto now=std::chrono::steady_clock::now();
+    const auto now=Fo3GameplayNow();
     constexpr float DURATION=0.60f,EPS=0.0001f;
     for(auto& entry:gQ2400InteriorDoors) {
         const uint32_t ref=entry.first;Q2400InteriorDoorState& state=entry.second;
@@ -9230,7 +9236,7 @@ void Q223SampleHeldMotion(
         Q223DynamicBody& body,
         Vec3 palm,
         const float quat[4]) {
-    const auto now = std::chrono::steady_clock::now();
+    const auto now = Fo3GameplayNow();
     if (body.lastPalmSample.time_since_epoch().count() != 0) {
         const float dt =
             std::chrono::duration<float>(
@@ -9351,7 +9357,7 @@ void Q223BuildMotionDelta(
 void Q223AdvanceDynamicBodies() {
     if (gQ223DynamicBodies.empty()) return;
 
-    const auto now = std::chrono::steady_clock::now();
+    const auto now = Fo3GameplayNow();
     // Q22.3 standalone-VR runtime liberty: SI Earth gravity. Fallout's
     // supplied INI/ESM does not expose an unambiguous gravity acceleration.
     constexpr float GRAVITY_MPS2 = 9.80665f;
@@ -9716,7 +9722,7 @@ void Q220UpdateLooseGrab(
             const bool eligible=!Fo3LockpickFocus() && gShoulderFocused && gSceneReady && !IsFo3LoadingVisible() &&
                 gPlayerSession && !gPlayerSession->saveBlocked && gPlayerSession->player.CanPickup(ref);
             const bool wasInside=gShoulderGesture.inside,wasArmed=gShoulderGesture.armed;
-            const double now=std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+            const double now=std::chrono::duration<double>(Fo3GameplayNow().time_since_epoch()).count();
             const bool commit=gShoulderGesture.Update(handIndex,ref,handValid,eligible,grip,gShoulderZone,{hand.x,hand.y,hand.z},now);
             if(wasInside!=gShoulderGesture.inside || wasArmed!=gShoulderGesture.armed)
                 Q6H_LOGI("SHOULDER INVENTORY ZONE: rightHand=1 heldRef=%08X inside=%d armed=%d shoulder=(%.3f %.3f %.3f) hand=(%.3f %.3f %.3f) bodyYaw=%.3f",
@@ -9748,7 +9754,7 @@ void Q220UpdateLooseGrab(
                 body->sleeping = false;
                 body->sleepTimer = 0.0f;
                 body->lastPhysicsStep =
-                    std::chrono::steady_clock::now();
+                    Fo3GameplayNow();
 
                 Q6H_LOGI("Q22.5 THROW RELEASE: hand=%s ref=%08X physics=%d linear=(%.2f %.2f %.2f)mps angular=(%.2f %.2f %.2f)radps radius=%.3f",
                          handIndex == 0 ? "L" : "R",
@@ -12017,7 +12023,7 @@ void Q230PumpNpcArrivals(){
                 for(const auto& resident:gQ230NpcActors)if(resident.runtime.furniture.Pool()){
                     fo3furniture::JoinResidentActivities(actor.runtime.furniture,resident.runtime.furniture);break;
                 }
-                actor.animationStart=std::chrono::steady_clock::now();
+                actor.animationStart=Fo3GameplayNow();
                 const uint32_t id=actor.source.refFormId;
                 gQ230NpcActors.push_back(std::move(actor));
                 Q6H_LOGI("NPC LIVE ARRIVAL READY actor=%08X cell=%08X world=%08X actors=%zu",
@@ -12088,7 +12094,7 @@ void QActorPrepareStereoFrame() {
     const bool ready=Q210EnsurePlayerBody();
     const double setupUs=fqopaque::Micros(setupStarted);
     if(ready) Q211UpdatePlayerRig();
-    const double npcNow=std::chrono::duration<double>(fqopaque::Clock::now().time_since_epoch()).count();
+    const double npcNow=std::chrono::duration<double>(Fo3GameplayNow().time_since_epoch()).count();
     const uint32_t pathQueriesBefore=gQ240PathsPlanned;
     const uint32_t pathExpandedBefore=gQ240PathNodesExpanded;
     double npcAiUs=0.;
@@ -12176,7 +12182,7 @@ void QActorReportFrame(double workUs,double cadenceUs) {
 // scripted target health or persistent per-actor HUD state.
 void Q230RenderHealthHud(const float* mvp) {
     if(!mvp||!gPlayerSession||gPlayerSession->saveBlocked)return;
-    const double now=std::chrono::duration<double>(fqopaque::Clock::now().time_since_epoch()).count();
+    const double now=std::chrono::duration<double>(Fo3GameplayNow().time_since_epoch()).count();
     const std::array<float,3> eye{gQ210Head[0],gQ210Head[1],gQ210Head[2]};
     for(const auto& actor:gQ230NpcActors){
         const auto* bar=gQ230HealthBars.Actor(actor.source.refFormId);

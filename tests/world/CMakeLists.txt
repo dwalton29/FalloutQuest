@@ -2,6 +2,11 @@ cmake_minimum_required(VERSION 3.16)
 project(falloutquest_world_tests LANGUAGES CXX)
 enable_testing()
 find_package(Threads REQUIRED)
+add_executable(resident_time_tests resident_time_tests.cpp)
+target_compile_features(resident_time_tests PRIVATE cxx_std_17)
+target_compile_options(resident_time_tests PRIVATE -Wall -Wextra -Werror -UNDEBUG)
+target_include_directories(resident_time_tests PRIVATE ../../app/src/main/cpp)
+add_test(NAME resident_time_tests COMMAND resident_time_tests)
 # Immutable authored CELL / XTEL adjacency, independent of any player or NPC
 # scene-transition runtime. Synthetic inputs run in CI; installed Fallout3.esm
 # additionally enables original-data Megaton and whole-master verification.

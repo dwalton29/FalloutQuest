@@ -169,6 +169,14 @@ void QActorUploadSkin(GpuObject&,QActorSkin& skin,fqactor::Cost&,bool player) {
 bool LoadFalloutMeshFile(const std::string&,std::vector<uint8_t>&){return false;}
 namespace fo3anim {bool DecodeClip(const std::vector<uint8_t>&,Clip&){return false;}}
 #define FO3_ACTOR_RUNTIME_HOST_TEST 1
+#include "world/fo3-resident-pause-clock.h"
+bool residentBlocked=false;
+auto residentRawNow=std::chrono::steady_clock::time_point{std::chrono::seconds{10}};
+bool Fo3ResidentFrameBlocked(){return residentBlocked;}
+std::chrono::steady_clock::time_point Fo3ResidentRawSteadyNow() noexcept {
+  return residentRawNow;
+}
+#include "world/fo3-resident-time-runtime.inc"
 #include "../../app/src/main/cpp/npc/fo3-npc-runtime.inc"
 #undef FO3_ACTOR_RUNTIME_HOST_TEST
 int main() {
@@ -233,7 +241,7 @@ int main() {
   track.hasTranslation = true;
   track.base.translation = {1, 0, 5};
   actor.clip.tracks.push_back(track);
-  actor.animationStart = std::chrono::steady_clock::now();
+  actor.animationStart = Fo3GameplayNow();
   CpuObject part;
   part.placement.x = 20;
   part.placement.y = 30;
@@ -300,5 +308,24 @@ int main() {
   Q230RenderNpcActors(false);
   Q230RenderNpcActors(true);
   assert(draws == 3);
+  // Actual production pose sampler uses the same pause-aware steady epoch as AI.
+  auto& animated=gQ230NpcActors.front();
+  animated.clip.stop=10;
+  auto& channel=animated.clip.tracks.front().translation;
+  channel.dimensions=3;
+  channel.keys={{0,{1,0,5},{},{}},{10,{11,0,5},{},{}}};
+  residentRawNow+=std::chrono::seconds{1};
+  ++gStereoFrame;Q230UpdateActor(animated);
+  const auto beforePause=animated.pose.local.front().translation;
+  residentBlocked=true;PauseFo3ResidentGameplayTime();
+  residentRawNow+=std::chrono::seconds{123};
+  ++gStereoFrame;Q230UpdateActor(animated);
+  assert(animated.pose.local.front().translation==beforePause);
+  residentBlocked=false;
+  ++gStereoFrame;Q230UpdateActor(animated);
+  assert(animated.pose.local.front().translation==beforePause);
+  residentRawNow+=std::chrono::milliseconds{500};
+  ++gStereoFrame;Q230UpdateActor(animated);
+  assert(std::fabs(animated.pose.local.front().translation[0]-beforePause[0]-.5f)<1e-5f);
   std::cout << "Actor runtime bridge tests passed\n";
 }

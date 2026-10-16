@@ -1460,6 +1460,17 @@ private:
         // Advance the reserved owner once, even when gameplay and view updates
         // are excluded. It never auto-commits merely because staging is ready.
         PumpFo3ResidentWorkflow(sessionState_==XR_SESSION_STATE_FOCUSED);
+        // Acquisition latches this even when the whole reservation completes
+        // between frames. Rebase locomotion and require neutral raw controls.
+        if(gFo3ResidentXrClock.Paused()){
+            lastFrameTime_=0;residentInputBarrier_.Allow(true,false);
+        }
+        // Sample even on non-rendered/invalid-view frames. Resumption establishes
+        // a fresh baseline before any gameplay consumer; XR tracking stays raw.
+        (void)Fo3GameplayNow();
+        const int64_t gameplayFrameTime=Fo3GameplayXrTime(
+            static_cast<int64_t>(frameState.predictedDisplayTime));
+        const double gameplaySeconds=static_cast<double>(gameplayFrameTime)*1e-9;
         fo3loadingvr::PrepareCatalog();
 
         std::array<XrCompositionLayerProjectionView, 2> projectionViews{
@@ -1497,7 +1508,7 @@ private:
                 // One world clock shared by exterior lighting, resident PACK
                 // selection and unloaded XTEL scheduling. Never fast-forward
                 // across a loading screen or headset focus interruption.
-                const int64_t clockNs=static_cast<int64_t>(frameState.predictedDisplayTime);
+                const int64_t clockNs=gameplayFrameTime;
                 static int64_t previousWorldClockNs=0;
                 if (!Fo3ResidentFrameBlocked() && gPlayerSession && !gPlayerSession->saveBlocked && gSceneReady &&
                     !IsFo3LoadingVisible() && sessionState_==XR_SESSION_STATE_FOCUSED &&
@@ -1612,29 +1623,29 @@ private:
                         gPipActivation.Reset();gPipMenu.dirty=true;
                         Q6H_LOGI("PIPBOY SUPPRESS reason=held-physical-magazine-or-slide");
                     }
-                    UpdateFo3Pipboy(gStereoFrame,static_cast<double>(frameState.predictedDisplayTime)*1e-9,pipHead.m,
+                    UpdateFo3Pipboy(gStereoFrame,gameplaySeconds,pipHead.m,
                         gVrPipTracking.Step(gSceneReady&&!reloadingInHand&&!Fo3LockpickFocus(),IsFo3LoadingVisible(),sessionState_==XR_SESSION_STATE_FOCUSED,
                             headTracking,{gripHandPoseValid_[0],pipLeftGripTracked_},{handPoseValid_[0],pipLeftAimTracked_},
-                            static_cast<double>(frameState.predictedDisplayTime)*1e-9),
+                            gameplaySeconds),
                         q210RightValid?turnX_:0,q210RightValid?lootScrollY_:0,
                         q210RightValid&&activateDownQ1700_,q210RightValid&&pipBackDown_,fingerGripValue_[0]);
                     const bool lockControls=Fo3LockpickFocus();
-                    UpdateFo3Lockpick(static_cast<double>(frameState.predictedDisplayTime)*1e-9,
+                    UpdateFo3Lockpick(gameplaySeconds,
                         q210RightValid?turnX_:0,q210RightValid?fingerTriggerValue_[1]:0,
                         activateDownQ1700_,pipBackDown_,sessionState_==XR_SESSION_STATE_FOCUSED&&q210RightValid,pipHead.m,fingerGripValue_[0]>.25f||fingerGripValue_[1]>.25f);
                     const bool scriptControls=Fo3ScriptMessageFocus();
-                    UpdateFo3ScriptMessage(static_cast<double>(frameState.predictedDisplayTime)*1e-9,
+                    UpdateFo3ScriptMessage(gameplaySeconds,
                         q210RightValid?lootScrollY_:0,q210RightValid&&activateDownQ1700_,
                         q210RightValid&&pipBackDown_,sessionState_==XR_SESSION_STATE_FOCUSED);
                     if(Fo3ScriptMessageFocus())ResetFo3Pipboy();
                     dialogueControls=lockControls||Fo3LockpickFocus()||Fo3DialogueFocus()||scriptControls||Fo3ScriptMessageFocus();
-                    UpdateFo3Dialogue(static_cast<double>(frameState.predictedDisplayTime)*1e-9,
+                    UpdateFo3Dialogue(gameplaySeconds,
                         !Fo3LockpickFocus()&&!Fo3ScriptMessageFocus()&&q210RightValid?lootScrollY_:0,
                         !Fo3LockpickFocus()&&!Fo3ScriptMessageFocus()&&q210RightValid&&activateDownQ1700_,
                         !Fo3LockpickFocus()&&!Fo3ScriptMessageFocus()&&q210RightValid&&pipBackDown_,
                         sessionState_==XR_SESSION_STATE_FOCUSED,q210RightValid?turnX_:0,q210RightValid?fingerTriggerValue_[1]:0);
                     if(dialogueControls&&activateDownQ1700_)activateLatched_=true;
-                    WeaponUpdate(static_cast<double>(frameState.predictedDisplayTime)*1e-9,dialogueControls?false:pipBackDown_);
+                    WeaponUpdate(gameplaySeconds,dialogueControls?false:pipBackDown_);
                     DeliverFo3ScriptSounds();
                     for(int hand=0;hand<2;++hand)if(gWeaponHaptic[hand]>0){
                         XrHapticActionInfo info{XR_TYPE_HAPTIC_ACTION_INFO};info.action=weaponHapticAction_;info.subactionPath=handPaths_[hand];
@@ -1652,7 +1663,7 @@ private:
                 if(!Fo3ResidentFrameBlocked()) {
                     // Q24.0 local DOOR state advances once per gameplay frame, not per eye.
                     UpdateFo3InteriorDoorsQ2400();
-                    UpdateDoorAimQ1700(static_cast<double>(frameState.predictedDisplayTime)*1e-9);
+                    UpdateDoorAimQ1700(gameplaySeconds);
                     ApplyAuthoredDoorFacingQ1810(views[0]);
                     if (!dialogueControls && !Fo3DialogueFocus() && !Fo3ScriptMessageFocus() && gPipInput.WorldA(activateDownQ1700_) && !activateLatched_) {
                         activateLatched_ = true;
@@ -1712,8 +1723,8 @@ private:
                     FQ_LOGI("PIPBOY PERF: PipBoyUpdateUs=%.1f PipBoyUiRenderUs=%.1f PipBoyScreenDrawUs=%.1f glDriverQueries=%llu (guarded UI/screen paths)",gPipUpdateUs,fo3pipui::State().renderUs,gPipScreenDrawUs,(unsigned long long)(fo3pipui::State().renderQueries+gPipScreenQueries));}
                 gPipScreenDrawUs=0;gPipScreenQueries=0;
                 notificationHead_=ToVirtualPose(loadingHead);
-                const bool notificationAvailable=gSceneReady && !IsFo3LoadingVisible() && !Fo3DialogueFocus() && !Fo3ScriptMessageFocus() && !Fo3PipboyFocus() && !Fo3LockpickFocus() && sessionState_==XR_SESSION_STATE_FOCUSED;
-                fo3notifyui::Prepare(static_cast<double>(frameState.predictedDisplayTime)*1e-9,notificationAvailable,gSceneReady);
+                const bool notificationAvailable=!Fo3ResidentFrameBlocked() && gSceneReady && !IsFo3LoadingVisible() && !Fo3DialogueFocus() && !Fo3ScriptMessageFocus() && !Fo3PipboyFocus() && !Fo3LockpickFocus() && sessionState_==XR_SESSION_STATE_FOCUSED;
+                if(!Fo3ResidentFrameBlocked())fo3notifyui::Prepare(gameplaySeconds,notificationAvailable,gSceneReady);
                 if(notificationAvailable&&fo3hudrenderer::State().ready&&fo3notifyui::State().program){
                     const auto sound=fo3notify::Notifications().TakeSound();
                     if(!sound.empty())fo3audio::NamedSound(sound);

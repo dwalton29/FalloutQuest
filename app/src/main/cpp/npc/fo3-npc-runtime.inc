@@ -477,7 +477,7 @@ void Q230UpdateActor(Q230ActorVisual &actor) {
   if (actor.lastFrame == gStereoFrame || actor.rigs.empty()) return;
   actor.lastFrame=gStereoFrame;
   ++fqactor::npc.actors;
-  const double elapsed=std::chrono::duration<double>(fqopaque::Clock::now()-actor.animationStart).count();
+  const double elapsed=std::chrono::duration<double>(Fo3GameplayNow()-actor.animationStart).count();
   fo3anim::SampleTimings timings;
   int selected=int(actor.runtime.animation);
   if(selected<0||size_t(selected)>=actor.animations.size())selected=0;
@@ -508,7 +508,7 @@ void Q230UpdateActor(Q230ActorVisual &actor) {
   const bool furniturePose=slot&&(furniture.phase==fo3furniture::Phase::Enter||furniture.phase==fo3furniture::Phase::Loop||furniture.phase==fo3furniture::Phase::Exit);
   if(furniturePose){
     const auto& authored=slot->idleMarker?slot->idles[furniture.idleIndex].clip:furniture.phase==fo3furniture::Phase::Enter?slot->program->enter:furniture.phase==fo3furniture::Phase::Exit?slot->program->exit:slot->program->loop;
-    const double now=std::chrono::duration<double>(fqopaque::Clock::now().time_since_epoch()).count();
+    const double now=std::chrono::duration<double>(Fo3GameplayNow().time_since_epoch()).count();
     fo3anim::BindClip(actor.skeleton,authored,actor.pose);
     if(!fo3anim::Sample(actor.skeleton,authored,now-furniture.started,actor.pose,&timings,slot->idleMarker?fo3anim::RootPolicy::Locomotion:fo3anim::RootPolicy::Furniture,&furniture.retainedRoot))return;
   }else if(!fo3anim::Sample(actor.skeleton,clip,sampleTime,actor.pose,&timings)) return;
@@ -535,7 +535,7 @@ void Q230UpdateActor(Q230ActorVisual &actor) {
   if(locomotion&&!furniturePose&&actor.runtime.activity==fo3npc::Activity::Combat&&
      actor.runtime.action!=fo3npc::CombatAction::Flee&&actor.runtime.equippedWeapon&&
      !actor.animations[size_t(fo3npc::Animation::Aim)].tracks.empty()){
-    const double actionNow=std::chrono::duration<double>(fqopaque::Clock::now().time_since_epoch()).count();
+    const double actionNow=std::chrono::duration<double>(Fo3GameplayNow().time_since_epoch()).count();
     const bool attacking=actor.runtime.pendingAttack||actionNow<actor.runtime.actionUntil;
     const auto& aim=actor.animations[size_t(attacking?fo3npc::Animation::Attack:fo3npc::Animation::Aim)];
     fo3anim::BindClip(actor.skeleton,aim,actor.weaponAimPose);
@@ -592,7 +592,7 @@ bool Q230LiveBounds(Q230ActorVisual& actor,std::array<float,3>& lo,std::array<fl
 void Q230ActorHitReaction(uint32_t target,uint8_t region) {
   if(!gPlayerSession||gPlayerSession->player.ActorHealth(target)<=0)return;
   const double now=std::chrono::duration<double>(
-    fqopaque::Clock::now().time_since_epoch()).count();
+    Fo3GameplayNow().time_since_epoch()).count();
   for(auto& actor:gQ230NpcActors) {
     if(actor.source.refFormId!=target||actor.runtime.offScene||
        !actor.runtime.Alive()||now<actor.runtime.hitUntil)continue;

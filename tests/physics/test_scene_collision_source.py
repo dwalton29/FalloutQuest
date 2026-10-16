@@ -337,6 +337,7 @@ frame_gate=s[s.index('bool Fo3ResidentFrameBlocked(){'):s.index('void ResetFo3Re
 assert 'gFo3ResidentLane.Blocked()||gFo3ResidentWorkflow.Active()||gFo3ResidentExchangeExecuting||gFo3ResidentExchangeRecoveryFailed' in frame_gate
 acquire=s[s.index('uint64_t AcquireFo3ResidentAssetLane()'):s.index('bool PollFo3ResidentAssetLane(')]
 assert acquire.index('CaptureFo3ResidentInteractionActivity().Idle()') < acquire.index('gFo3ResidentLane.Acquire()')
+assert acquire.index('gFo3ResidentLane.Acquire()') < acquire.index('PauseFo3ResidentGameplayTime()') < acquire.index('return ticket')
 assert flush.index('Fo3ResidentFrameBlocked()') < flush.index('WeaponPersistWorld()')
 assert flush.index('gPlayerSession->saveBlocked') < flush.index('WeaponPersistWorld()')
 assert 'gFo3ResidentSavePending=true;return;' in flush and 'FlushFo3DeferredPlayerState()' in flush
@@ -357,10 +358,10 @@ def guarded(call):
             if ch=='{': stack.append(line)
             elif ch=='}' and stack: stack.pop()
     return any('if(!Fo3ResidentFrameBlocked())' in line for line in stack)
-for call in ('UpdateFo3Pipboy(gStereoFrame,','UpdateFo3Lockpick(static_cast',
-             'UpdateFo3ScriptMessage(static_cast','UpdateFo3Dialogue(static_cast',
-             'WeaponUpdate(static_cast','DeliverFo3ScriptSounds();',
-             'UpdateFo3InteriorDoorsQ2400();','UpdateDoorAimQ1700(static_cast',
+for call in ('UpdateFo3Pipboy(gStereoFrame,','UpdateFo3Lockpick(gameplaySeconds',
+             'UpdateFo3ScriptMessage(gameplaySeconds','UpdateFo3Dialogue(gameplaySeconds',
+             'WeaponUpdate(gameplaySeconds','DeliverFo3ScriptSounds();',
+             'UpdateFo3InteriorDoorsQ2400();','UpdateDoorAimQ1700(gameplaySeconds',
              'ActivateFo3Interaction('):
     assert guarded(call), call
 for call in ('UpdateFo3ExteriorStreamingQ1890(q1890VirtualHead.',
@@ -426,3 +427,38 @@ for forbidden in ('q711TerrainBatches','gQ2000GroundCells','gQ2000ResidentValid'
 assert '#include "world/fo3-resident-reconcile-runtime.inc"' in s
 assert '#include "fo3-terrain-parked-work.inc"' in terrain
 print('Settled finalization validates epochs/canonical owners, reconciles private queues and retires before resuming; live LAND/scene/actors stay untouched')
+
+# Absolute deadlines and animation sampling must share pause-aware domains.
+time_bridge=Path('app/src/main/cpp/world/fo3-resident-time-runtime.inc').read_text()
+assert 'Fo3ResidentFrameBlocked()' in time_bridge
+assert 'gFo3ResidentSteadyClock.Pause();gFo3ResidentXrClock.Pause();' in time_bridge
+frame=loop[loop.index('void RenderFrame() {'):]
+assert frame.index('PumpFo3ResidentWorkflow(') < frame.index('Fo3GameplayXrTime(') < frame.index('if (frameState.shouldRender)')
+assert frame.index('if(gFo3ResidentXrClock.Paused())') < frame.index('Fo3GameplayXrTime(') < frame.index('SyncInput(')
+assert 'lastFrameTime_=0;residentInputBarrier_.Allow(true,false);' in frame
+assert 'const int64_t clockNs=gameplayFrameTime;' in frame
+assert 'locateInfo.displayTime = frameState.predictedDisplayTime' in frame
+assert 'SyncInput(frameState.predictedDisplayTime)' in frame
+assert 'endInfo.displayTime = frameState.predictedDisplayTime' in frame
+assert 'static_cast<double>(frameState.predictedDisplayTime)*1e-9' not in frame
+assert 'if(!Fo3ResidentFrameBlocked())fo3notifyui::Prepare(gameplaySeconds' in frame
+assert 'notificationAvailable=!Fo3ResidentFrameBlocked()' in frame
+for start,end in [
+    ('void UpdateFo3InteriorDoorsQ2400()', 'bool QueryDoorInternalQ1700('),
+    ('void Q223SampleHeldMotion(', 'void Q223AdvanceDynamicBodies()'),
+    ('void Q223AdvanceDynamicBodies()', 'void Q221UpdateLooseObjectsFromSolvedPalms('),
+    ('void Q230RenderHealthHud(', 'void RenderScene('),
+]:
+    section=s[s.index(start):]
+    section=section[:section.index(end)]
+    assert 'Fo3GameplayNow()' in section
+    assert 'std::chrono::steady_clock::now()' not in section
+npc_time=Path('app/src/main/cpp/npc/fo3-npc-runtime.inc').read_text()
+assert 'Clock::now().time_since_epoch()' not in npc_time
+assert 'Clock::now()-actor.animationStart' not in npc_time
+assert 'Fo3GameplayNow()-actor.animationStart' in npc_time
+assert 'const auto started=fqopaque::Clock::now()' in npc_time
+assert 'const auto drawStarted=fqopaque::Clock::now()' in npc_time
+assert 'actor.animationStart = Fo3GameplayNow()' in s
+assert 'actor.animationStart=Fo3GameplayNow()' in s
+print('Resident timelines freeze both gameplay domains; tracking/performance clocks remain raw and notifications cannot advance/deliver sound while blocked')
