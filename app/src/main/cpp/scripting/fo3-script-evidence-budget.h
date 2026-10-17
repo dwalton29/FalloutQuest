@@ -35,4 +35,17 @@ inline bool ChargeScriptEvidence(const std::string& event,
       (questConditions&&!array(questConditions->size(),sizeof(fo3pipdata::Condition))))return false;
   used=ScriptEvidenceMaxBytes-remaining;return true;
 }
+// Accept the catalog map before capture and the canonical vector before matching.
+// Fixed vector storage is already included in sizeof(ScriptExecution) above.
+template<class Locals> inline bool ChargeScriptLocals(const Locals& locals,size_t& used) noexcept {
+  if(used>ScriptEvidenceMaxBytes)return false;
+  size_t remaining=ScriptEvidenceMaxBytes-used;
+  for(const auto& local:locals){
+    if(sizeof(std::pair<uint32_t,std::string>)>remaining)return false;
+    remaining-=sizeof(std::pair<uint32_t,std::string>);
+    if(local.second.size()>=remaining)return false; // include string terminator
+    remaining-=local.second.size()+1;
+  }
+  used=ScriptEvidenceMaxBytes-remaining;return true;
+}
 }

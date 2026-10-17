@@ -292,6 +292,8 @@ struct ScriptExecution {
   // QUST entries retain item conditions; INFOs also retain their parent gates.
   uint32_t owningQuest=0; // INFO QSTI only
   std::vector<fo3pipdata::Condition> conditions,questConditions;
+  // Canonical index order; preserves decoded names rather than map iteration.
+  std::vector<std::pair<uint32_t,std::string>> localVariables;
 };
 struct ReferenceEnableChange { uint32_t reference=0; bool enabled=false; };
 // Owned reference-only input for the future scene coordinator. It neither runs

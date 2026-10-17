@@ -34,7 +34,8 @@ bool Same(const Execution& a,const Execution& b) noexcept {
     x.topic==y.topic&&x.stage==y.stage&&x.event==y.event&&a.owner==b.owner&&
     a.activator==b.activator&&a.localScript==b.localScript&&a.parent==b.parent&&
     a.reference==b.reference&&Same(a.program,b.program)&&Same(a.container,b.container)&&
-    a.owningQuest==b.owningQuest&&Same(a.conditions,b.conditions)&&Same(a.questConditions,b.questConditions);
+    a.owningQuest==b.owningQuest&&Same(a.conditions,b.conditions)&&Same(a.questConditions,b.questConditions)&&
+    a.localVariables==b.localVariables;
 }
 bool Contexts(const std::vector<Execution>& programs){
   std::array<size_t,32> active{};size_t depth=0;
@@ -60,9 +61,12 @@ bool Contexts(const std::vector<Execution>& programs){
 const char* Type(const Execution& e){
   const auto& o=e.origin;
   if(!o.record)return nullptr;
+  if(!e.localScript&&!e.localVariables.empty())return nullptr;
+  for(size_t n=1;n<e.localVariables.size();++n)
+    if(e.localVariables[n-1].first>=e.localVariables[n].first)return nullptr;
   switch(o.kind){
     case Kind::QuestStageItem:
-      return e.owner==o.record&&!o.topic&&!o.sourceLine&&o.event.empty()&&Empty(e.container)&&
+      return e.owner==o.record&&!o.topic&&!o.sourceLine&&o.event.empty()&&(e.localScript||Empty(e.container))&&
         !e.owningQuest&&e.questConditions.empty()?"QUST":nullptr;
     case Kind::DialogueInfo:
       return e.owner&&o.topic&&o.item<2&&!o.stage&&!o.sourceLine&&o.event.empty()&&!e.localScript&&Empty(e.container)?"INFO":nullptr;
@@ -164,7 +168,8 @@ bool MatchScriptProgramsToMaster(const std::string& master,const std::vector<Exe
   std::unordered_map<uint32_t,std::vector<size_t>> wanted,owners,bases;
   for(size_t n=0;n<programs.size();++n){
     const auto& e=programs[n];
-    if(!ChargeScriptEvidence(e.origin.event,e.program,&e.container,evidenceBytes,&e.conditions,&e.questConditions))
+    if(!ChargeScriptEvidence(e.origin.event,e.program,&e.container,evidenceBytes,&e.conditions,&e.questConditions)||
+        !ChargeScriptLocals(e.localVariables,evidenceBytes))
       return fail("script master evidence byte limit exceeded");
     if(!Type(programs[n]))return fail("unbound or malformed script origin");
     wanted[programs[n].origin.record].push_back(n);
@@ -177,13 +182,17 @@ bool MatchScriptProgramsToMaster(const std::string& master,const std::vector<Exe
   struct Group{uint64_t end;uint32_t label,type;};std::vector<Group> stack;
   std::unordered_map<uint32_t,bool> seen;std::vector<uint8_t> bytes;
   std::unordered_map<uint32_t,bool> ownersSeen,basesSeen;
+  std::unordered_map<uint32_t,std::vector<size_t>> locals;
+  std::unordered_map<uint32_t,bool> localsSeen;
+  for(size_t n=0;n<programs.size();++n)if(programs[n].localScript)locals[programs[n].localScript].push_back(n);
   std::unordered_map<uint32_t,std::vector<size_t>> requiredQuests;
   std::unordered_map<uint32_t,bool> questsSeen;
   std::vector<std::string> placementTypes(programs.size());
   std::vector<uint32_t> requiredSpeakers(programs.size());
   // The first complete scan authenticates programs and resolves placed owners.
-  // A second header scan finds bases and INFO quests independently of order.
-  for(unsigned pass=0;pass<(owners.empty()?1u:2u);++pass){
+  // A second header scan finds bases, INFO quests and local SCPTs independently
+  // of order, including quest-only evidence with no placed owners.
+  for(unsigned pass=0;pass<(owners.empty()&&locals.empty()?1u:2u);++pass){
   stack.clear();
   if(fseeko(file.get(),0,SEEK_SET))return fail("script master seek failed");
   uint64_t p=0;
@@ -216,6 +225,26 @@ bool MatchScriptProgramsToMaster(const std::string& master,const std::vector<Exe
           const auto& info=d.topics.at(programs[index].origin.topic).front();
           if(!info.quest)return fail("original INFO owning quest missing");
           requiredQuests[info.quest].push_back(index);requiredSpeakers[index]=info.speaker;
+        }
+      }
+    }
+    if(pass==1&&locals.count(id)){
+      if(!localsSeen.emplace(id,true).second)return fail("duplicate local script identity");
+      const std::string type(reinterpret_cast<const char*>(h),4);const auto flags=fo3esm::ReadU32(h+8);
+      if(type!="SCPT"||(flags&0x20))return fail("deleted or wrong-type local script");
+      if(!fo3esm::ReadPayload(file.get(),{p+24,n,flags,type},bytes)||!Complete(bytes,type))
+        return fail("malformed local script payload");
+      fo3pipdata::Definitions d;fo3pipdata::Decode(d,type,id,flags,bytes,0,0,0);
+      const auto script=d.scripts.find(id);
+      if(script==d.scripts.end())return fail("local script definition missing");
+      for(const auto index:locals.at(id)){
+        if(!Same(programs[index].container,script->second))return fail("local script differs from original master");
+        const auto& variables=programs[index].localVariables;
+        if(variables.size()!=script->second.variables.size())return fail("local declarations differ from original master");
+        for(const auto& variable:variables){
+          const auto original=script->second.variables.find(variable.first);
+          if(original==script->second.variables.end()||original->second!=variable.second)
+            return fail("local declarations differ from original master");
         }
       }
     }
@@ -276,6 +305,7 @@ bool MatchScriptProgramsToMaster(const std::string& master,const std::vector<Exe
   if(seen.size()!=wanted.size())return fail("script master identity missing");
   if(ownersSeen.size()!=owners.size()||basesSeen.size()!=bases.size())return fail("script owner association identity missing");
   if(questsSeen.size()!=requiredQuests.size())return fail("INFO owning quest identity missing");
+  if(localsSeen.size()!=locals.size())return fail("local script identity missing");
   if(cancel.load(std::memory_order_acquire))return fail("script master match cancelled");
   ScriptMasterMatch next;next.programs_=programs;next.verified_=true;
   out=std::move(next);return true;

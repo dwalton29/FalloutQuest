@@ -524,6 +524,7 @@ assert 'execution.parent=scriptTraceParent_;execution.reference=scriptReference_
 assert '~RestoreTraceParent(){p.scriptTraceParent_=previous;}' in script_runtime
 assert 'scriptTrace_->size()>=fo3script::ScriptEvidenceMaxEntries' in script_runtime
 assert script_runtime.index('fo3script::ChargeScriptEvidence(')<script_runtime.index('execution.program=script;')
+assert script_runtime.index('fo3script::ChargeScriptLocals(')<script_runtime.index('execution.localVariables.reserve(')
 assert 'candidate.scriptTraceBytes_=0;' in script_transaction
 assert 'ScriptProgramKind::UnboundResult' in script_header
 print('Detached script provenance records exact entered bodies and typed origins without publishing its collector into canonical state')
@@ -574,6 +575,10 @@ assert 'association!=programs[index].origin.record' in master_match
 assert master_match.index('ownersSeen.size()!=owners.size()||basesSeen.size()!=bases.size()')<master_match.index('out=std::move(next);')
 assert master_match.index('if(!Contexts(programs))')<master_match.index('std::fopen(master.c_str(),"rb")')
 assert master_match.index('if(!ChargeScriptEvidence(')<master_match.index('std::fopen(master.c_str(),"rb")')
+assert master_match.index('!ChargeScriptLocals(')<master_match.index('std::fopen(master.c_str(),"rb")')
+assert master_match.index('localsSeen.size()!=locals.size()')<master_match.index('out=std::move(next);')
+assert 'Same(programs[index].container,script->second)' in master_match
+assert 'a.localVariables==b.localVariables' in master_match
 assert 'a.parent==b.parent' in master_match and 'a.reference==b.reference' in master_match
 assert 'EventFilterMatches(block.filter,e.activator,fo3player::PlayerRef)' in master_match
 assert 'fo3dialogue::SupportedInfoStructure(t->second[0])' in master_match

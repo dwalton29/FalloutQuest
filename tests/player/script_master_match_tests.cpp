@@ -38,6 +38,11 @@ static Bytes ConditionBytes(unsigned size,uint32_t value){
   if(size>=28)Put(b,24,0x14);
   return b;
 }
+static void Local(Bytes& b,uint32_t index,const std::string& name,bool extended=false){
+  Bytes data(24);Put(data,0,index);Sub(b,"SLSD",data);
+  if(extended){Sub(b,"XXXX",Word(name.size()+1));Sub(b,"SCVR",{});Append(b,Text(name));}
+  else Sub(b,"SCVR",Text(name));
+}
 static Bytes Owner(bool compressed=false){
   Bytes base,ref;Sub(base,"SCRI",Word(60));Sub(ref,"NAME",Word(201));
   auto b=Record("ACTI",201,compressed?Compressed(base):base,compressed?0x40000:0);
@@ -118,6 +123,14 @@ int main(){
       assert(fo3script::ChargeScriptEvidence("",empty,nullptr,used,quest?nullptr:&gates,quest?&gates:nullptr));
       assert(used==fo3script::ScriptEvidenceMaxBytes);
     }
+    std::vector<std::pair<uint32_t,std::string>> locals={{2,"Example"}};
+    const auto localCost=sizeof(locals[0])+locals[0].second.size()+1;
+    used=fo3script::ScriptEvidenceMaxBytes-localCost;
+    assert(fo3script::ChargeScriptLocals(locals,used)&&used==fo3script::ScriptEvidenceMaxBytes);
+    used=fo3script::ScriptEvidenceMaxBytes-localCost+1;
+    assert(!fo3script::ChargeScriptLocals(locals,used)&&used==fo3script::ScriptEvidenceMaxBytes-localCost+1);
+    std::unordered_map<uint32_t,std::string> map={{2,"Example"}};
+    used=0;assert(fo3script::ChargeScriptLocals(map,used)&&used==localCost);
   }
   Fixture f;const auto path="/tmp/fq-script-master-"+std::to_string(getpid());std::atomic<bool> cancel{false};std::string error;
   auto write=[&](const Bytes& b){std::ofstream out(path,std::ios::binary);out.write(reinterpret_cast<const char*>(b.data()),b.size());assert(out);};
@@ -190,7 +203,7 @@ int main(){
     if(field==4)s.records.push_back({"SCRV",Word(9)});
     assert(!report.Matches(programs));rejects(programs);
   }
-  for(int field=0;field<24;++field){
+  for(int field=0;field<26;++field){
     auto p=f.programs;
     if(field==0)p[0].origin.kind=Kind::UnboundResult;
     if(field==1)++p[0].origin.record;
@@ -216,6 +229,8 @@ int main(){
     if(field==21)p[0].owningQuest=10;
     if(field==22)p[3].owningQuest=20;
     if(field==23)p[1].owningQuest=0;
+    if(field==24)p[0].localVariables={{1,"Unexpected"}};
+    if(field==25)p[1].localVariables={{1,"Unexpected"}};
     rejects(p);
   }
   auto context=f.programs;++context[3].activator;
@@ -265,6 +280,11 @@ int main(){
     gates.resize(fo3script::ScriptEvidenceMaxBytes/sizeof(fo3pipdata::Condition));
     rejects(large);assert(error=="script master evidence byte limit exceeded");
   }
+  {
+    auto large=f.programs;large.back().localVariables={{1,std::string(fo3script::ScriptEvidenceMaxBytes,'x')}};
+    assert(!fo3script::MatchScriptProgramsToMaster(path+"-missing",large,report,cancel,error));
+    assert(error=="script master evidence byte limit exceeded"&&report.Matches(f.programs));
+  }
   // Strict scope metadata cannot inherit the tolerant decoder's first-field
   // semantics. Scalar uniqueness is record-wide, including across fragments.
   for(const char* field:{"SCRI","ANAM","QSTI"})for(unsigned n:{0u,1u,3u,5u,8u}){
@@ -297,12 +317,65 @@ int main(){
   }
   // Null and nonnull authored SCRI preserve exact quest local-scope matching.
   for(uint32_t script:{0u,60u}){
-    auto payload=f.quest;Sub(payload,"SCRI",Word(script));write(Record("QUST",10,payload));
+    auto payload=f.quest;Sub(payload,"SCRI",Word(script));auto bytes=Record("QUST",10,payload);
+    if(script)Append(bytes,Record("SCPT",60,f.event));
+    write(bytes);
     auto evidence=std::vector<Execution>{f.programs[0]};evidence[0].localScript=script;
+    if(script)evidence[0].container=f.programs.back().container;
     fo3script::ScriptMasterMatch scoped;
     assert(fo3script::MatchScriptProgramsToMaster(path,evidence,scoped,cancel,error));
     evidence[0].localScript=script?0:60;
     assert(!fo3script::MatchScriptProgramsToMaster(path,evidence,scoped,cancel,error));
+  }
+  // Quest-only evidence needs a second scan for its SCRI declarations even
+  // without any placed owner. Named locals bind by index, never map order.
+  for(bool first:{false,true})for(bool compressed:{false,true})for(bool extended:{false,true}){
+    auto quest=f.quest;Sub(quest,"SCRI",Word(61));Bytes local;
+    Script(local,"short Alpha\nfloat Zulu");
+    Local(local,9,"Alpha",extended);Local(local,2,"Zulu",extended);
+    const auto script=Record("SCPT",61,compressed?Compressed(local):local,compressed?0x40000:0);
+    const auto parent=Record("QUST",10,quest);
+    auto bytes=first?script:parent;Append(bytes,first?parent:script);write(bytes);
+    auto evidence=std::vector<Execution>{f.programs[0]};evidence[0].localScript=61;
+    fo3pipdata::Definitions d;fo3pipdata::Decode(d,"SCPT",61,0,local,0,0,0);
+    evidence[0].container=d.scripts.at(61);
+    evidence[0].localVariables={{2,"Zulu"},{9,"Alpha"}};
+    fo3script::ScriptMasterMatch locals;
+    assert(fo3script::MatchScriptProgramsToMaster(path,evidence,locals,cancel,error)&&locals.Matches(evidence));
+    for(unsigned field=0;field<9;++field){
+      auto altered=evidence;auto& variables=altered[0].localVariables;
+      if(field==0)variables[0].second+="x";
+      if(field==1)++variables[0].first;
+      if(field==2)variables.clear();
+      if(field==3)variables.push_back({10,"Extra"});
+      if(field==4)std::swap(variables[0],variables[1]);
+      if(field==5)variables[1].first=2;
+      if(field==6)altered[0].localScript=62;
+      if(field==7)altered[0].container.source+='x';
+      if(field==8)altered[0].container.records.push_back({"SCVR",Text("Extra")});
+      assert(!locals.Matches(altered)&&!fo3script::MatchScriptProgramsToMaster(path,altered,locals,cancel,error));
+      assert(locals.Matches(evidence));
+    }
+    for(unsigned malformed=0;malformed<6;++malformed){
+      auto bad=parent;
+      if(malformed!=0)Append(bad,Record(malformed==1?"STAT":"SCPT",61,malformed==4?Bytes{1,2,3}:local,
+        malformed==2?0x20:malformed==4?0x40000:0));
+      if(malformed==3)Append(bad,script);
+      if(malformed==5)Append(bad,Record("STAT",61,{}));
+      write(bad);
+      assert(!fo3script::MatchScriptProgramsToMaster(path,evidence,locals,cancel,error)&&locals.Matches(evidence));
+    }
+  }
+  {
+    auto script=f.event;Local(script,2,"Original");
+    fo3pipdata::Definitions d;fo3pipdata::Decode(d,"SCPT",60,0,script,0,0,0);
+    auto event=f.programs.back();event.container=d.scripts.at(60);event.localVariables={{2,"Original"}};
+    auto bytes=Owner();Append(bytes,Record("SCPT",60,script));write(bytes);
+    fo3script::ScriptMasterMatch locals;
+    assert(fo3script::MatchScriptProgramsToMaster(path,{event},locals,cancel,error));
+    auto altered=event;altered.localVariables[0].second="Forged";
+    assert(!locals.Matches({altered})&&!fo3script::MatchScriptProgramsToMaster(path,{altered},locals,cancel,error));
+    assert(locals.Matches({event})); // same raw container, changed decoded lookup
   }
   write(f.Master());
   for(int malformed=0;malformed<12;++malformed){

@@ -4,9 +4,9 @@
 
 - Starting canonical main: `2987d911f318b92d1041257868067851a09d16f0` (v208).
 - Resumed from published `6469dbb872889a79a0682501b75f6ac6577ab547`.
-- Current implementation checkpoint: M1B3ai decoded condition provenance.
+- Current implementation checkpoint: M1B3aj original local-script declarations.
   Use canonical main history for the publication SHA; the previous published
-  implementation is M1B3ah `8114392ccdebb991bfb303e0f4e24b1fe9845d92`.
+  implementation is M1B3ai `76cc8d85dafe1d1ade6470c2998c642a2c2d38c8`.
 - M1B3l Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38635385905.
 - M1B3m Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38793178567.
 - M1B3n Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38795209693.
@@ -1006,3 +1006,36 @@ read ownership, dispatch causality or complete call edges. It adds no dependency
 exemption or general resident Enable/Disable caller. Remaining ownership,
 bounded dispatch and device validation still gate that path; version 212 remains
 unchanged. See `world-reference-m1b3ai.md` for accounting and proof limits.
+
+## M1B3aj validation
+
+Captured entries now bind their decoded local-variable index/name table in
+canonical index order. Stage entries with nonzero SCRI also retain the full
+local SCPT: numeric local lookup depends on source declarations as well as the
+decoded variable map. The second original-master scan resolves unique nondeleted
+local SCPTs and compares both forms of evidence for every referring entry.
+Quest-only evidence now performs that scan when it has a local script; no third
+scan is added. Report comparison binds the vector without allocating.
+
+The source map and retained vector share byte accounting before copies and
+master access. Pair objects, names, terminators and full stage containers count
+toward the existing 16 MiB limit. Captured preparation fails if the local catalog
+definition is missing; capture-off behavior is unchanged. Failed capture/match
+preserves live state/effects and the prior verified report.
+
+All 53 core host tests, the actor test, source guards and matcher ASan/UBSan pass
+(LeakSanitizer disabled). Tests cover altered names/indexes, canonical ordering,
+full stage containers, changed decoded maps with unchanged raw event data,
+quest-only scans, compression/XXXX and missing/deleted/duplicate/wrong-type or
+malformed local definitions. Budget tests check exact fit, map/vector parity,
+oversized names and rejection before opening a missing master. Original MS11
+provenance, Lucas acceptance/production bridge, merchant barter and all three
+MS11 completion/reward/save-reload branches pass. Existing showmap rejections
+remain unchanged. M1B3ai Android CI passed (run 39064089108).
+
+Declaration identity is not complete lookup/read ownership. Aliases, duplicate
+name ambiguity, external variable references, runtime values and call/event
+causality remain separate requirements. No dependency exemption or general
+resident Enable/Disable caller is added. Remaining ownership, bounded dispatch
+and device validation still gate that path; version 212 remains unchanged.
+See `world-reference-m1b3aj.md` for scope and accounting limits.

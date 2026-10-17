@@ -190,13 +190,23 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
       if(quest!=catalog_->pipboy.quests.end())questConditions=&quest->second.conditions;
     }
     const fo3pipdata::ResultScript* container=nullptr;
-    if(origin.kind==ScriptProgramKind::ReferenceEvent){
-      const auto found=catalog_->pipboy.scripts.find(origin.record);
+    if(origin.kind==ScriptProgramKind::ReferenceEvent||
+        (origin.kind==ScriptProgramKind::QuestStageItem&&scriptId)){
+      const auto found=catalog_->pipboy.scripts.find(scriptId);
       if(found!=catalog_->pipboy.scripts.end())container=&found->second;
     }
     auto nextBytes=scriptTraceBytes_;
     if(!fo3script::ChargeScriptEvidence(origin.event,script,container,nextBytes,conditions,questConditions)){
       error="script provenance byte limit exceeded";return false;
+    }
+    const fo3pipdata::Script* localScript=nullptr;
+    if(scriptId){
+      const auto found=catalog_->pipboy.scripts.find(scriptId);
+      if(found==catalog_->pipboy.scripts.end()){error="script provenance local declarations unavailable";return false;}
+      localScript=&found->second;
+      if(!fo3script::ChargeScriptLocals(localScript->variables,nextBytes)){
+        error="script provenance byte limit exceeded";return false;
+      }
     }
     ScriptExecution execution;execution.origin=std::move(origin);
     execution.owner=owner;execution.activator=scriptActivator_;execution.localScript=scriptId;
@@ -206,6 +216,12 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
     if(conditions)execution.conditions=*conditions;
     if(questConditions)execution.questConditions=*questConditions;
     if(container)execution.container=*container;
+    if(localScript){
+      execution.localVariables.reserve(localScript->variables.size());
+      for(const auto& variable:localScript->variables)execution.localVariables.emplace_back(variable.first,variable.second);
+      std::sort(execution.localVariables.begin(),execution.localVariables.end(),
+        [](const auto& a,const auto& b){return a.first<b.first;});
+    }
     scriptTrace_->push_back(std::move(execution));
     scriptTraceBytes_=nextBytes;
     scriptTraceParent_=uint32_t(scriptTrace_->size()-1);

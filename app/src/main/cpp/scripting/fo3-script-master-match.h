@@ -8,6 +8,8 @@ namespace fo3script {
 // QUST SCRI) association. Activators and INFO speaker eligibility are not proven.
 // Captured item/INFO and INFO-parent condition fields are matched in order;
 // this authenticates decoded metadata, not outcomes, operand bindings or reads.
+// Nonzero local-script IDs additionally bind the original full SCPT and decoded
+// variable table. This is declaration identity, not proof of each lookup/read.
 // Output is published only after the complete master scan succeeds.
 class ScriptMasterMatch {
 public:
