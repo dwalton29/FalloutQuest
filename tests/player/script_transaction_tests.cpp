@@ -231,6 +231,10 @@ static void OriginalProvenance(const char* path){
   if(!valid)std::cerr<<"Original master match: "<<error<<'\n';
   assert(valid&&matched.Verified());
   forbidAllocations=true;assert(matched.Matches(programs));forbidAllocations=false;
+  auto forgedOwner=programs;
+  forgedOwner[stage->ExecutedScripts().size()].owner=fo3player::PlayerRef;
+  assert(!fo3script::MatchScriptProgramsToMaster(path,forgedOwner,matched,cancelled,error));
+  assert(matched.Matches(programs)); // authentic body, unauthenticated owner
   programs[0].program.source+=' ';
   assert(!matched.Matches(programs));
   assert(!fo3script::MatchScriptProgramsToMaster(path,programs,matched,cancelled,error));

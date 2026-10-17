@@ -549,6 +549,10 @@ master_match=Path('app/src/main/cpp/scripting/fo3-script-master-match.cpp').read
 assert 'case Kind::ReferenceEvent:' in master_match and 'case Kind::DialogueInfo:' in master_match
 assert 'default:return nullptr;' in master_match
 assert master_match.index('if(seen.size()!=wanted.size())')<master_match.index('out=std::move(next);')
+assert 'owners[programs[n].owner].push_back(n)' in master_match
+assert 'placed?"NAME":"SCRI"' in master_match
+assert 'association!=programs[index].origin.record' in master_match
+assert master_match.index('ownersSeen.size()!=owners.size()||basesSeen.size()!=bases.size()')<master_match.index('out=std::move(next);')
 print('Original-master program evidence precedes resident asset work and is rebound at commit/settlement without worker Player access')
 
 # Matching provenance never bypasses incoming script/condition admission.

@@ -27,6 +27,11 @@ static void Script(Bytes& b,const std::string& source){
   Sub(b,"SCHR",Bytes(20));Sub(b,"SCDA",{1,2});Sub(b,"SCTX",Text(source));
   Sub(b,"SCRO",Word(100));Sub(b,"SCRV",Word(2));
 }
+static Bytes Owner(bool compressed=false){
+  Bytes base,ref;Sub(base,"SCRI",Word(60));Sub(ref,"NAME",Word(201));
+  auto b=Record("ACTI",201,compressed?Compressed(base):base,compressed?0x40000:0);
+  Append(b,Record("REFR",101,ref));return b;
+}
 struct Fixture {
   Bytes quest,info,event;std::vector<Execution> programs;
   Fixture(){
@@ -42,13 +47,13 @@ struct Fixture {
       i.origin.record=50;i.origin.topic=40;i.origin.item=phase;i.owner=100;
       i.program=phase?d.topics.at(40)[0].end:d.topics.at(40)[0].begin;programs.push_back(i);}
     Execution e;e.origin.kind=Kind::ReferenceEvent;e.origin.record=e.localScript=60;
-    e.origin.sourceLine=1;e.origin.event="onactivate";e.owner=100;e.activator=0x14;
+    e.origin.sourceLine=1;e.origin.event="onactivate";e.owner=101;e.activator=0x14;
     e.container=d.scripts.at(60);e.program.source=fo3script::ParseEvents(d.scripts.at(60)).blocks[0].body;programs.push_back(e);
   }
   Bytes Master(bool compressed=false,bool extended=false) const {
     auto q=quest;if(extended){Bytes pref;Sub(pref,"XXXX",Word(100));Sub(pref,"EDID",{});Append(pref,Bytes(100,'x'));Append(pref,q);q=std::move(pref);}
     auto b=Record("QUST",10,compressed?Compressed(q):q,compressed?0x40000:0);
-    Append(b,Group(40,Record("INFO",50,info)));Append(b,Record("SCPT",60,event));return b;
+    Append(b,Group(40,Record("INFO",50,info)));Append(b,Record("SCPT",60,event));Append(b,Owner(compressed));return b;
   }
 };
 int main(){
@@ -126,6 +131,7 @@ int main(){
   // INFO can use its enclosing topic when TPIC is absent, but not another one.
   auto fallback=f.info;fallback.erase(fallback.begin(),fallback.begin()+10);
   auto b=Record("QUST",10,f.quest);Append(b,Group(40,Record("INFO",50,fallback)));Append(b,Record("SCPT",60,f.event));
+  Append(b,Owner());
   write(b);assert(fo3script::MatchScriptProgramsToMaster(path,f.programs,repeated,cancel,error));
   for(int malformed=0;malformed<3;++malformed){
     auto info=f.info;
@@ -140,14 +146,61 @@ int main(){
   write(b);rejects(f.programs);
   auto owned=std::move(repeated);assert(owned.Verified()&&owned.Matches(f.programs));
   assert(!repeated.Verified()&&!repeated.Matches({}));
+  // Source identity alone never authenticates an event owner. Every requested
+  // owner/base is unique, nondeleted, correctly typed and directly associated.
+  const std::vector<Execution> eventOnly={f.programs.back()};
+  for(int malformed=0;malformed<21;++malformed){
+    Bytes owner,base;Sub(owner,"NAME",Word(malformed==0?202:201));
+    Sub(base,"SCRI",Word(malformed==1?61:60));
+    if(malformed==2)Sub(owner,"NAME",Word(201));
+    if(malformed==3)Sub(base,"SCRI",Word(60));
+    if(malformed==4){owner.clear();Sub(owner,"NAME",{1,2,3});}
+    if(malformed==5){base.clear();Sub(base,"SCRI",{1,2,3});}
+    if(malformed==6){owner.clear();Sub(owner,"EDID",Text("missing"));}
+    if(malformed==7){base.clear();Sub(base,"EDID",Text("missing"));}
+    if(malformed==16){owner.clear();Sub(owner,"NAME",Word(0));}
+    if(malformed==17){base.clear();Sub(base,"SCRI",Word(0));}
+    if(malformed==18)base.push_back(0);
+    b=Record("SCPT",60,f.event);
+    Append(b,Record(malformed==8?"STAT":"REFR",101,owner,malformed==9?0x20:0));
+    if(malformed!=10)Append(b,Record(malformed==11?"QUST":"ACTI",201,base,malformed==12?0x20:0));
+    if(malformed==13)Append(b,Record("STAT",101,{}));
+    if(malformed==14)Append(b,Record("STAT",201,{}));
+    if(malformed==19)Append(b,Record("REFR",101,owner,0x20));
+    if(malformed==20)Append(b,Record("ACTI",201,base,0x20));
+    auto evidence=eventOnly;if(malformed==15)evidence[0].owner=102;
+    write(b);rejects(evidence);
+  }
+  // Quest-owned GameMode uses the quest's own SCRI, not a placed NAME.
+  auto questEvent=eventOnly;questEvent[0].owner=10;
+  Bytes questOwner;Sub(questOwner,"SCRI",Word(60));
+  b=Record("QUST",10,questOwner);Append(b,Record("SCPT",60,f.event));write(b);
+  assert(fo3script::MatchScriptProgramsToMaster(path,questEvent,owned,cancel,error));
+  Sub(questOwner,"SCRI",Word(60));b=Record("QUST",10,questOwner);Append(b,Record("SCPT",60,f.event));write(b);
+  assert(!fo3script::MatchScriptProgramsToMaster(path,questEvent,owned,cancel,error)&&owned.Matches(questEvent));
+  // Base-before-owner, owner-before-base and every supported placement kind.
+  for(const char* type:{"REFR","ACHR","ACRE"}){
+    Bytes ref,base;Sub(ref,"NAME",Word(201));Sub(base,"SCRI",Word(60));
+    const char* baseType=std::strcmp(type,"ACHR")==0?"NPC_":std::strcmp(type,"ACRE")==0?"CREA":"ACTI";
+    b=Record(type,101,ref);Append(b,Record("SCPT",60,f.event));Append(b,Record(baseType,201,base));write(b);
+    assert(fo3script::MatchScriptProgramsToMaster(path,eventOnly,owned,cancel,error));
+    b=Record(type,101,ref);Append(b,Record("SCPT",60,f.event));Append(b,Record(std::strcmp(type,"REFR")==0?"NPC_":"ACTI",201,base));write(b);
+    assert(!fo3script::MatchScriptProgramsToMaster(path,eventOnly,owned,cancel,error)&&owned.Matches(eventOnly));
+  }
+  Bytes extendedOwner,extendedBase;
+  Sub(extendedOwner,"XXXX",Word(4));Sub(extendedOwner,"NAME",{});Append(extendedOwner,Word(201));
+  Sub(extendedBase,"XXXX",Word(4));Sub(extendedBase,"SCRI",{});Append(extendedBase,Word(60));
+  b=Record("REFR",101,Compressed(extendedOwner),0x40000);
+  Append(b,Record("ACTI",201,Compressed(extendedBase),0x40000));Append(b,Record("SCPT",60,f.event));write(b);
+  assert(fo3script::MatchScriptProgramsToMaster(path,eventOnly,owned,cancel,error));
   // Exact master evidence does not exempt even the same SCPT's incoming edge.
   Bytes cell,base,ref;Sub(cell,"DATA",{1});Sub(base,"MODL",Text("fixture.nif"));
   Sub(ref,"NAME",Word(901));Sub(ref,"DATA",Bytes(24));
   b=Record("CELL",900,cell);Append(b,Record("STAT",901,base));
   auto children=Record("REFR",100,ref);auto scope=Group(900,children);Put(scope,12,6);Append(b,scope);
+  Append(b,Owner());
   const auto world=b;
   Append(b,Record("SCPT",60,f.event));write(b);
-  const std::vector<Execution> eventOnly={f.programs.back()};
   assert(fo3script::MatchScriptProgramsToMaster(path,eventOnly,owned,cancel,error)&&owned.Matches(eventOnly));
   fo3scene::ResidentAuthoredAdmission admission;admission.cell=999;admission.affected={888};
   assert(!fo3scene::PrepareResidentAuthoredAdmission(path,900,{100},admission,cancel,error));

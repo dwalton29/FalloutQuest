@@ -84,6 +84,25 @@ bool Authored(const Execution& e,const fo3pipdata::Definitions& d){
   return false;
 }
 struct Close{void operator()(FILE* f)const{std::fclose(f);}};
+// Only direct authored associations supported by the catalog are evidence.
+// This deliberately does not infer template inheritance or runtime rebinding.
+bool EventBase(const std::string& t){
+  return t=="ACTI"||t=="CREA"||t=="NPC_"||t=="FURN"||t=="MSTT"||
+    t=="CONT"||t=="LIGH"||t=="FLOR"||t=="STAT"||t=="TERM"||t=="DOOR"||
+    t=="WEAP"||t=="ARMO"||t=="BOOK"||t=="MISC"||t=="ALCH"||t=="KEYM";
+}
+bool Association(const std::vector<uint8_t>& bytes,const std::string& type,
+    const char* field,uint32_t& value){
+  if(!Complete(bytes,type))return false;
+  unsigned count=0;bool valid=true;
+  fo3esm::WalkSubrecords(bytes,[&](const char* tag,const uint8_t* p,uint32_t n){
+    if(std::memcmp(tag,field,4)==0){
+      if(++count!=1||n!=4)valid=false;
+      else value=fo3esm::ReadU32(p);
+    }
+  });
+  return valid&&count==1&&value;
+}
 }
 bool ScriptMasterMatch::Matches(const std::vector<Execution>& programs) const noexcept {
   if(!Verified()||programs_.size()!=programs.size())return false;
@@ -94,16 +113,24 @@ bool MatchScriptProgramsToMaster(const std::string& master,const std::vector<Exe
     ScriptMasterMatch& out,const std::atomic<bool>& cancel,std::string& error){
   error.clear();auto fail=[&](const std::string& why){error=why;return false;};
   if(programs.empty()||programs.size()>4096)return fail("invalid script master evidence count");
-  std::unordered_map<uint32_t,std::vector<size_t>> wanted;
+  std::unordered_map<uint32_t,std::vector<size_t>> wanted,owners,bases;
   for(size_t n=0;n<programs.size();++n){
     if(!Type(programs[n]))return fail("unbound or malformed script origin");
     wanted[programs[n].origin.record].push_back(n);
+    if(programs[n].origin.kind==Kind::ReferenceEvent)owners[programs[n].owner].push_back(n);
   }
   std::unique_ptr<FILE,Close> file(std::fopen(master.c_str(),"rb"));
   if(!file)return fail("script master unavailable");
   const auto size=fo3esm::FileSize(file.get());if(size<24)return fail("invalid script master size");
   struct Group{uint64_t end;uint32_t label,type;};std::vector<Group> stack;
   std::unordered_map<uint32_t,bool> seen;std::vector<uint8_t> bytes;
+  std::unordered_map<uint32_t,bool> ownersSeen,basesSeen;
+  std::vector<std::string> placementTypes(programs.size());
+  // The first complete scan authenticates programs and resolves placed owners.
+  // A second header scan finds bases even when they precede those owners.
+  for(unsigned pass=0;pass<(owners.empty()?1u:2u);++pass){
+  stack.clear();
+  if(fseeko(file.get(),0,SEEK_SET))return fail("script master seek failed");
   uint64_t p=0;
   while(p<uint64_t(size)){
     if(cancel.load(std::memory_order_acquire))return fail("script master match cancelled");
@@ -118,7 +145,7 @@ bool MatchScriptProgramsToMaster(const std::string& master,const std::vector<Exe
     }
     if(n>limit-p-24)return fail("invalid script master record size");
     const auto id=fo3esm::ReadU32(h+12);const auto found=wanted.find(id);
-    if(found!=wanted.end()){
+    if(pass==0&&found!=wanted.end()){
       const std::string type(reinterpret_cast<const char*>(h),4);const auto flags=fo3esm::ReadU32(h+8);
       if(!seen.emplace(id,true).second)return fail("duplicate script master identity");
       if((flags&0x20)||type!=Type(programs[found->second[0]]))return fail("deleted or wrong-type script master identity");
@@ -131,9 +158,38 @@ bool MatchScriptProgramsToMaster(const std::string& master,const std::vector<Exe
         if(type!=Type(programs[index])||!Authored(programs[index],d))
           return fail("script program differs from original master "+type+" "+std::to_string(id)+" entry "+std::to_string(index));
     }
+    const auto binding=(pass==0?owners:bases).find(id);
+    const auto& bindings=pass==0?owners:bases;
+    if(binding!=bindings.end()){
+      auto& observed=pass==0?ownersSeen:basesSeen;
+      if(!observed.emplace(id,true).second)return fail("duplicate script owner association identity");
+      const std::string type(reinterpret_cast<const char*>(h),4);const auto flags=fo3esm::ReadU32(h+8);
+      const bool placed=pass==0&&(type=="REFR"||type=="ACHR"||type=="ACRE");
+      if((flags&0x20)||(pass==0?(!placed&&type!="QUST"):!EventBase(type)))
+        return fail("deleted or wrong-type script owner association");
+      uint32_t association=0;
+      if(!fo3esm::ReadPayload(file.get(),{p+24,n,flags,type},bytes)||
+          !Association(bytes,type,placed?"NAME":"SCRI",association))
+        return fail("malformed or missing script owner association");
+      for(const auto index:binding->second){
+        if(placed){bases[association].push_back(index);placementTypes[index]=type;}
+        else {
+          if(pass==1){
+            const auto& placement=placementTypes[index];
+            if((placement=="ACHR"&&type!="NPC_")||(placement=="ACRE"&&type!="CREA")||
+                (placement=="REFR"&&(type=="NPC_"||type=="CREA")))
+              return fail("script owner placement and base types differ");
+          }
+          if(association!=programs[index].origin.record)
+            return fail("script owner SCRI differs from original master");
+        }
+      }
+    }
     p+=24+n;if(fseeko(file.get(),p,SEEK_SET))return fail("script master seek failed");
   }
+  }
   if(seen.size()!=wanted.size())return fail("script master identity missing");
+  if(ownersSeen.size()!=owners.size()||basesSeen.size()!=bases.size())return fail("script owner association identity missing");
   if(cancel.load(std::memory_order_acquire))return fail("script master match cancelled");
   ScriptMasterMatch next;next.programs_=programs;next.verified_=true;
   out=std::move(next);return true;

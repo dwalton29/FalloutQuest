@@ -4,9 +4,9 @@
 
 - Starting canonical main: `2987d911f318b92d1041257868067851a09d16f0` (v208).
 - Resumed from published `6469dbb872889a79a0682501b75f6ac6577ab547`.
-- Current implementation checkpoint: M1B3w detached program provenance.
+- Current implementation checkpoint: M1B3ab original SCPT owner associations.
   Use canonical main history for the publication SHA; the previous published
-  implementation is M1B3v `73510a4983f0bef0872dff672db99fc831170f5a`.
+  implementation is M1B3aa `1a162527632f5eb5a63f7734cc6293a0eaa7cf8e`.
 - M1B3l Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38635385905.
 - M1B3m Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38793178567.
 - M1B3n Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38795209693.
@@ -818,3 +818,21 @@ dynamic list ownership or complete conditional/implicit dependency analysis.
 General resident Enable/Disable remains unadmitted; remaining ownership,
 bounded-dispatch and Quest validation work stays open. See
 `world-reference-m1b3aa.md` for exact scope and limits.
+
+## M1B3ab validation
+
+Master-matched SCPT event evidence now requires its original direct owner/SCRI
+association, not just the original script body. Placed owners resolve through a
+strict unique NAME to a unique supported base SCRI; quest owners use QUST SCRI.
+Deleted, duplicate, missing, malformed and placement/base-type mismatches reject
+without replacing prior output. Record order, compressed/extended associations
+and separate scripted-owner/dependency-guard integration are covered.
+
+All 53 core host tests and the production actor test pass. The targeted matcher
+passes ASan/UBSan with LeakSanitizer disabled. Original MS11 stage/bomb/INFO
+evidence matches; a substituted event owner rejects without publication.
+
+Runtime eligibility, activators, INFO speakers, inherited/dynamic associations,
+complete dependency ownership, bounded dispatch and Quest validation remain
+open. No gameplay dispatch or version change is introduced. General resident
+Enable/Disable remains unadmitted. See `world-reference-m1b3ab.md` for limits.
