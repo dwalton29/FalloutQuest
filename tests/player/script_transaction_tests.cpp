@@ -65,6 +65,8 @@ static void Provenance(){
   assert(entered[0].origin.stage==10&&entered[0].origin.item==0&&entered[0].owner==10);
   assert(entered[1].origin.kind==Kind::QuestStageItem&&entered[1].origin.record==11);
   assert(entered[1].origin.stage==20&&entered[1].origin.item==0&&entered[1].owner==11);
+  assert(entered[0].parent==fo3player::ScriptExecution::NoParent&&entered[1].parent==0);
+  assert(!entered[0].reference&&!entered[1].reference);
   assert(entered[0].program.source==p.Definitions().pipboy.quests.at(10).stages.at(10).items[0].result.source);
   auto event=p.PrepareReferenceEventTransaction(100,"OnActivate",fo3player::PlayerRef,error,capture);assert(event&&event->HasProgramProvenance());
   const auto& scripts=event->ExecutedScripts();assert(scripts.size()==3);
@@ -72,6 +74,7 @@ static void Provenance(){
   assert(first.origin.kind==Kind::ReferenceEvent&&first.origin.record==300);
   assert(first.origin.event=="onactivate"&&first.origin.sourceLine==1);
   assert(first.owner==100&&first.activator==fo3player::PlayerRef&&first.localScript==300);
+  assert(first.reference==100&&first.parent==fo3player::ScriptExecution::NoParent);
   const auto& original=p.Definitions().pipboy.scripts.at(300);
   assert(first.container.source==original.source&&first.container.header==original.header);
   assert(first.container.compiled==original.compiled&&first.container.references==original.references);
@@ -79,6 +82,8 @@ static void Provenance(){
   assert(first.program.source=="SetStage QuestA 10\n"&&first.program.compiled.empty());
   assert(scripts[1].origin.record==10&&scripts[2].origin.record==11);
   assert(scripts[1].activator==fo3player::PlayerRef&&scripts[2].activator==fo3player::PlayerRef);
+  assert(scripts[1].reference==100&&scripts[2].reference==100);
+  assert(scripts[1].parent==0&&scripts[2].parent==1);
   auto begin=Script("RewardKarma 1");begin.compiled={8,9};begin.header={10};
   begin.references={100};begin.records={{"SCRO",{100,0,0,0}}};
   auto dialogue=p.PrepareDialogueTransaction(begin,Script("RewardKarma 2"),error,100,capture);assert(dialogue&&dialogue->HasProgramProvenance());
@@ -87,6 +92,8 @@ static void Provenance(){
   assert(!fragments[0].origin.record&&!fragments[1].origin.record);
   assert(fragments[0].origin.item==0&&fragments[1].origin.item==1);
   assert(fragments[0].owner==100&&fragments[1].owner==100);
+  for(const auto& fragment:fragments)
+    assert(fragment.parent==fo3player::ScriptExecution::NoParent&&!fragment.reference&&!fragment.activator);
   assert(fragments[0].program.compiled==begin.compiled&&fragments[0].program.records==begin.records);
   assert(fragments[0].program.header==begin.header&&fragments[0].program.references==begin.references);
   begin.source.clear();begin.compiled.clear();begin.records.clear();
@@ -103,11 +110,31 @@ static void Provenance(){
   assert(nested->ExecutedScripts()[0].origin.kind==Kind::UnboundResult);
   assert(nested->ExecutedScripts()[1].origin.record==10&&nested->ExecutedScripts()[2].origin.record==11);
   assert(nested->ExecutedScripts()[3].origin.kind==Kind::UnboundResult&&nested->ExecutedScripts()[3].origin.item==1);
+  assert(nested->ExecutedScripts()[1].parent==0&&nested->ExecutedScripts()[2].parent==1);
+  assert(nested->ExecutedScripts()[3].parent==fo3player::ScriptExecution::NoParent);
   assert(p.CommitScriptTransaction(*nested));
   auto repeated=p.PrepareQuestStageTransaction(10,10,error,capture);
   assert(repeated&&repeated->HasProgramProvenance()&&repeated->ExecutedScripts().empty());
   auto unaudited=p.PrepareDialogueTransaction({}, {},error);
   assert(unaudited&&!unaudited->HasProgramProvenance()&&unaudited->ExecutedScripts().empty());
+  // Empty event blocks consume no command budget, but capture must still be
+  // bounded. A failed capture leaves the original Player and later traces clean.
+  auto many=Fixture();std::string source;
+  for(unsigned n=0;n<4097;++n)source+="Begin OnActivate\nEnd\n";
+  many.pipboy.scripts[300].source=source;
+  many.eventPrograms[300]=fo3script::ParseEvents(many.pipboy.scripts[300]);
+  fo3player::Player limited(many);const auto before=limited.Revision();
+  assert(!limited.PrepareReferenceEventTransaction(100,"OnActivate",fo3player::PlayerRef,error,capture));
+  assert(error=="line 8193: script provenance entry limit exceeded"&&limited.Revision()==before);
+  auto uncaptured=limited.PrepareReferenceEventTransaction(100,"OnActivate",fo3player::PlayerRef,error);
+  assert(uncaptured&&!uncaptured->HasProgramProvenance());NoEffects(limited);
+  many.pipboy.scripts[300].source=source.substr(0,source.size()-21);
+  many.eventPrograms[300]=fo3script::ParseEvents(many.pipboy.scripts[300]);
+  fo3player::Player atLimit(many);
+  auto bounded=atLimit.PrepareReferenceEventTransaction(100,"OnActivate",fo3player::PlayerRef,error,capture);
+  assert(bounded&&bounded->ExecutedScripts().size()==4096);
+  for(const auto& entry:bounded->ExecutedScripts())
+    assert(entry.parent==fo3player::ScriptExecution::NoParent&&entry.reference==100);
 }
 static void DialogueProvenance(){
   using Phase=fo3player::DialogueScriptPhase;using Kind=fo3player::ScriptProgramKind;
@@ -128,12 +155,15 @@ static void DialogueProvenance(){
     assert(script.origin.kind==Kind::DialogueInfo&&script.origin.record==801&&script.origin.topic==800);
     assert(script.origin.item==(n?1u:0u)&&!script.origin.stage&&script.origin.event.empty());
     assert(script.owner==100&&!script.localScript);
+    assert(script.parent==fo3player::ScriptExecution::NoParent&&!script.reference&&!script.activator);
     assert(script.program.source==authored.source&&script.program.header==authored.header);
     assert(script.program.compiled==authored.compiled&&script.program.references==authored.references);
     assert(script.program.records==authored.records);
   }
   assert(scripts[1].origin.kind==Kind::QuestStageItem&&scripts[1].origin.record==10);
   assert(scripts[2].origin.kind==Kind::QuestStageItem&&scripts[2].origin.record==11);
+  assert(scripts[1].parent==0&&scripts[2].parent==1);
+  assert(!scripts[1].reference&&!scripts[2].reference);
   auto begin=p.PrepareDialogueInfoTransaction(800,801,Phase::Begin,error,100,capture);
   auto end=p.PrepareDialogueInfoTransaction(800,801,Phase::End,error,100,capture);
   assert(begin&&begin->ExecutedScripts().size()==3);
@@ -224,8 +254,13 @@ static void OriginalProvenance(const char* path){
   assert(end.program.header==endBody.header&&end.program.references==endBody.references&&end.program.records==endBody.records);
   // Match the complete real entry sequence, not just individually decoded fields.
   auto programs=stage->ExecutedScripts();
-  for(const auto* plan:{event.get(),dialogue.get(),ending.get()})
-    programs.insert(programs.end(),plan->ExecutedScripts().begin(),plan->ExecutedScripts().end());
+  for(const auto* plan:{event.get(),dialogue.get(),ending.get()}){
+    const auto offset=uint32_t(programs.size());
+    for(auto entry:plan->ExecutedScripts()){
+      if(entry.parent!=fo3player::ScriptExecution::NoParent)entry.parent+=offset;
+      programs.push_back(std::move(entry));
+    }
+  }
   fo3script::ScriptMasterMatch matched;std::atomic<bool> cancelled{false};
   const bool valid=fo3script::MatchScriptProgramsToMaster(path,programs,matched,cancelled,error);
   if(!valid)std::cerr<<"Original master match: "<<error<<'\n';
@@ -233,6 +268,7 @@ static void OriginalProvenance(const char* path){
   forbidAllocations=true;assert(matched.Matches(programs));forbidAllocations=false;
   auto forgedOwner=programs;
   forgedOwner[stage->ExecutedScripts().size()].owner=fo3player::PlayerRef;
+  forgedOwner[stage->ExecutedScripts().size()].reference=fo3player::PlayerRef;
   assert(!fo3script::MatchScriptProgramsToMaster(path,forgedOwner,matched,cancelled,error));
   assert(matched.Matches(programs)); // authentic body, unauthenticated owner
   programs[0].program.source+=' ';

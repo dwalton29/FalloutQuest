@@ -161,15 +161,20 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
     if(c.type==C::If||c.type==C::ElseIf||c.type==C::Variable||c.type==C::Global||((c.type==C::ShowMessage||c.type==C::ShowBarterMenu)&&!c.expression.empty())){float v;if(!fo3script::Expression(*this,owner,c.expression,error,scriptId).Evaluate(v))return false;}
   }
   if(!gates.empty()){error="unterminated if";return false;}
+  struct RestoreTraceParent {Player& p;uint32_t previous;
+    ~RestoreTraceParent(){p.scriptTraceParent_=previous;}} traceParent{*this,scriptTraceParent_};
   if(scriptTrace_){
+    if(scriptTrace_->size()>=4096){error="script provenance entry limit exceeded";return false;}
     ScriptExecution execution;execution.origin=std::move(origin);
     execution.owner=owner;execution.activator=scriptActivator_;execution.localScript=scriptId;
+    execution.parent=scriptTraceParent_;execution.reference=scriptReference_;
     execution.program=script;
     if(execution.origin.kind==ScriptProgramKind::ReferenceEvent){
       const auto container=catalog_->pipboy.scripts.find(execution.origin.record);
       if(container!=catalog_->pipboy.scripts.end())execution.container=container->second;
     }
     scriptTrace_->push_back(std::move(execution));
+    scriptTraceParent_=uint32_t(scriptTrace_->size()-1);
   }
   for(const auto& c:commands) {
     if(!budget){error="script instruction budget exceeded";return false;}--budget;
@@ -283,7 +288,7 @@ bool Player::RunSourceEventDirect(uint32_t scriptId,const char* event,uint32_t o
     if(block.event!=fo3script::Lower(event))continue;
     // A filtered event must not execute without a correctly resolved actor.
     // Other filter forms need their original reference/context evaluator.
-    if(!block.filter.empty() && !(block.filter=="player"&&activator==PlayerRef)){
+    if(!fo3script::EventFilterMatches(block.filter,activator,PlayerRef)){
       error="unresolved event filter '"+block.filter+"' at line "+std::to_string(block.sourceLine);
       return false;
     }

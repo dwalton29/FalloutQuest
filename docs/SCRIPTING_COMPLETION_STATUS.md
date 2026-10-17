@@ -4,9 +4,9 @@
 
 - Starting canonical main: `2987d911f318b92d1041257868067851a09d16f0` (v208).
 - Resumed from published `6469dbb872889a79a0682501b75f6ac6577ab547`.
-- Current implementation checkpoint: M1B3ab original SCPT owner associations.
+- Current implementation checkpoint: M1B3ac inherited script context evidence.
   Use canonical main history for the publication SHA; the previous published
-  implementation is M1B3aa `1a162527632f5eb5a63f7734cc6293a0eaa7cf8e`.
+  implementation is M1B3ab `c9857bc76aafda9ac6a0711ec35cc4180af71173`.
 - M1B3l Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38635385905.
 - M1B3m Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38793178567.
 - M1B3n Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38795209693.
@@ -836,3 +836,27 @@ Runtime eligibility, activators, INFO speakers, inherited/dynamic associations,
 complete dependency ownership, bounded dispatch and Quest validation remain
 open. No gameplay dispatch or version change is introduced. General resident
 Enable/Disable remains unadmitted. See `world-reference-m1b3ab.md` for limits.
+
+## M1B3ac validation
+
+Captured entries now retain the implicit reference and parent program index.
+Nested quest fragments preserve their calling event's reference even though
+their numeric-local owner is the quest. Scope restoration keeps subsequent
+siblings and roots independent. Capture is limited to the matcher's existing
+4,096-entry bound, including empty event blocks that consume no commands.
+
+Master matching validates ordered parent/context structure before file access,
+and checks the original event block's supported Begin filter using the same
+predicate as execution. Exact report comparison includes both new fields.
+No additional master pass is required.
+
+All 53 core host tests plus the production actor test pass. Targeted matcher and
+transaction tests pass ASan/UBSan with LeakSanitizer disabled. Original combined
+MS11 stage/bomb/INFO matching, bomb activation/cancel/disarm, dialogue, barter
+and MS11 completion regressions retain their expected outcomes.
+
+This checks captured structure and supported block filters; full call/condition
+reconstruction, arbitrary activator identity, INFO eligibility, dynamic binding,
+complete dependency ownership, bounded dispatch and Quest validation remain
+open. General resident Enable/Disable remains unadmitted. See
+`world-reference-m1b3ac.md` for exact scope and limits.

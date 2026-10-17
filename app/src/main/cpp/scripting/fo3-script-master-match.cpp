@@ -20,7 +20,29 @@ bool Same(const Execution& a,const Execution& b) noexcept {
   const auto& x=a.origin;const auto& y=b.origin;
   return x.kind==y.kind&&x.record==y.record&&x.item==y.item&&x.sourceLine==y.sourceLine&&
     x.topic==y.topic&&x.stage==y.stage&&x.event==y.event&&a.owner==b.owner&&
-    a.activator==b.activator&&a.localScript==b.localScript&&Same(a.program,b.program)&&Same(a.container,b.container);
+    a.activator==b.activator&&a.localScript==b.localScript&&a.parent==b.parent&&
+    a.reference==b.reference&&Same(a.program,b.program)&&Same(a.container,b.container);
+}
+bool Contexts(const std::vector<Execution>& programs){
+  std::array<size_t,32> active{};size_t depth=0;
+  for(size_t n=0;n<programs.size();++n){
+    const auto& e=programs[n];
+    if(e.parent==Execution::NoParent){
+      depth=0;
+      if(e.origin.kind==Kind::ReferenceEvent){if(e.reference!=e.owner)return false;}
+      else if(e.reference||e.activator)return false;
+    }else{
+      if(e.parent>=n||e.origin.kind!=Kind::QuestStageItem)return false;
+      // An already-returned call cannot become a parent again in this preorder.
+      while(depth&&active[depth-1]!=e.parent)--depth;
+      if(!depth)return false;
+      const auto& parent=programs[e.parent];
+      if(e.reference!=parent.reference||e.activator!=parent.activator)return false;
+    }
+    if(depth==active.size())return false;
+    active[depth++]=n;
+  }
+  return true;
 }
 const char* Type(const Execution& e){
   const auto& o=e.origin;
@@ -79,6 +101,7 @@ bool Authored(const Execution& e,const fo3pipdata::Definitions& d){
   const auto s=d.scripts.find(o.record);if(s==d.scripts.end()||!Same(e.container,s->second))return false;
   const auto events=ParseEvents(s->second);if(!events.error.empty())return false;
   for(const auto& block:events.blocks)if(block.sourceLine==o.sourceLine&&block.event==o.event){
+    if(!EventFilterMatches(block.filter,e.activator,fo3player::PlayerRef))return false;
     fo3pipdata::ResultScript body;body.source=block.body;return Same(e.program,body);
   }
   return false;
@@ -119,6 +142,7 @@ bool MatchScriptProgramsToMaster(const std::string& master,const std::vector<Exe
     wanted[programs[n].origin.record].push_back(n);
     if(programs[n].origin.kind==Kind::ReferenceEvent)owners[programs[n].owner].push_back(n);
   }
+  if(!Contexts(programs))return fail("invalid script execution context tree");
   std::unique_ptr<FILE,Close> file(std::fopen(master.c_str(),"rb"));
   if(!file)return fail("script master unavailable");
   const auto size=fo3esm::FileSize(file.get());if(size<24)return fail("invalid script master size");

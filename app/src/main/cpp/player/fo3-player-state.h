@@ -281,8 +281,12 @@ struct ScriptProgramOrigin {
 // Immutable evidence of entered programs, not authority to admit world changes.
 // Unbound dialogue bodies deliberately have no invented INFO form identity.
 struct ScriptExecution {
+  static constexpr uint32_t NoParent=UINT32_MAX;
   ScriptProgramOrigin origin;
   uint32_t owner=0,activator=0,localScript=0;
+  // Entry-order parent index and the inherited implicit reference used by
+  // distance/button/message operations. These are not the quest local owner.
+  uint32_t parent=NoParent,reference=0;
   fo3pipdata::ResultScript program,container;
 };
 struct ReferenceEnableChange { uint32_t reference=0; bool enabled=false; };
@@ -546,6 +550,7 @@ private:
   bool scriptPlayerPositionKnown_=false;
   uint64_t scriptEffectRevision_=0;
   std::vector<ScriptExecution>* scriptTrace_=nullptr; // Private preparation only; never published/swapped.
+  uint32_t scriptTraceParent_=ScriptExecution::NoParent;
   std::unordered_map<uint32_t,int> scriptButtons_;
   std::vector<ScriptMessage> pendingScriptMessages_;
   std::vector<QuestNotice> pendingQuestNotices_;

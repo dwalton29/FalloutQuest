@@ -510,7 +510,7 @@ assert script_transaction.index('candidate.scriptTrace_=capturePrograms?&plan->e
 assert 'bool HasProgramProvenance() const noexcept' in script_header
 assert 'ScriptProgramCapture capture=ScriptProgramCapture::None' in script_header
 assert s.count('script.HasProgramProvenance()&&script.HasReferenceChanges()') == 2
-assert '~TraceScope(){candidate.scriptTrace_=nullptr;}' in script_transaction
+assert 'candidate.scriptTrace_=nullptr;candidate.scriptTraceParent_=ScriptExecution::NoParent;' in script_transaction
 swap_payload=script_transaction[script_transaction.index('void Player::SwapScriptPayload('):script_transaction.index('bool Player::CommitScriptTransaction(')]
 assert 'scriptTrace_' not in swap_payload and 'executions_' not in swap_payload
 assert 'ScriptProgramKind::QuestStageItem' in script_runtime
@@ -519,6 +519,9 @@ assert 'origin.record=scriptId;origin.event=block.event;origin.sourceLine=block.
 assert 'execution.program=script;' in script_runtime
 assert 'execution.container=container->second;' in script_runtime
 assert 'scriptTrace_->push_back(std::move(execution))' in script_runtime
+assert 'execution.parent=scriptTraceParent_;execution.reference=scriptReference_;' in script_runtime
+assert '~RestoreTraceParent(){p.scriptTraceParent_=previous;}' in script_runtime
+assert 'scriptTrace_->size()>=4096' in script_runtime
 assert 'ScriptProgramKind::UnboundResult' in script_header
 print('Detached script provenance records exact entered bodies and typed origins without publishing its collector into canonical state')
 
@@ -553,6 +556,10 @@ assert 'owners[programs[n].owner].push_back(n)' in master_match
 assert 'placed?"NAME":"SCRI"' in master_match
 assert 'association!=programs[index].origin.record' in master_match
 assert master_match.index('ownersSeen.size()!=owners.size()||basesSeen.size()!=bases.size()')<master_match.index('out=std::move(next);')
+assert master_match.index('if(!Contexts(programs))')<master_match.index('std::fopen(master.c_str(),"rb")')
+assert 'a.parent==b.parent' in master_match and 'a.reference==b.reference' in master_match
+assert 'EventFilterMatches(block.filter,e.activator,fo3player::PlayerRef)' in master_match
+assert 'fo3script::EventFilterMatches(block.filter,activator,PlayerRef)' in script_runtime
 print('Original-master program evidence precedes resident asset work and is rebound at commit/settlement without worker Player access')
 
 # Matching provenance never bypasses incoming script/condition admission.

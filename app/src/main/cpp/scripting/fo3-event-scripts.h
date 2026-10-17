@@ -30,6 +30,9 @@ inline std::string Trim(const std::string& s) {
   const auto b=s.find_last_not_of(" \t\r\n");
   return s.substr(a,b-a+1);
 }
+inline bool EventFilterMatches(const std::string& filter,uint32_t activator,uint32_t playerReference){
+  return filter.empty()||(filter=="player"&&activator==playerReference);
+}
 inline EventProgram ParseEvents(const fo3pipdata::Script& script) {
   EventProgram out;
   if(script.source.empty()){

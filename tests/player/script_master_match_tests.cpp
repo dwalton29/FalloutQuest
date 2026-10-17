@@ -47,7 +47,7 @@ struct Fixture {
       i.origin.record=50;i.origin.topic=40;i.origin.item=phase;i.owner=100;
       i.program=phase?d.topics.at(40)[0].end:d.topics.at(40)[0].begin;programs.push_back(i);}
     Execution e;e.origin.kind=Kind::ReferenceEvent;e.origin.record=e.localScript=60;
-    e.origin.sourceLine=1;e.origin.event="onactivate";e.owner=101;e.activator=0x14;
+    e.origin.sourceLine=1;e.origin.event="onactivate";e.owner=e.reference=101;e.activator=0x14;
     e.container=d.scripts.at(60);e.program.source=fo3script::ParseEvents(d.scripts.at(60)).blocks[0].body;programs.push_back(e);
   }
   Bytes Master(bool compressed=false,bool extended=false) const {
@@ -80,7 +80,7 @@ int main(){
     if(field==4)s.records.push_back({"SCRV",Word(9)});
     assert(!report.Matches(programs));rejects(programs);
   }
-  for(int field=0;field<12;++field){
+  for(int field=0;field<18;++field){
     auto p=f.programs;
     if(field==0)p[0].origin.kind=Kind::UnboundResult;
     if(field==1)++p[0].origin.record;
@@ -94,6 +94,12 @@ int main(){
     if(field==9)++p[3].localScript;
     if(field==10)p[3].container.records.clear();
     if(field==11)++p[0].localScript;
+    if(field==12)++p[3].reference;
+    if(field==13)p[3].parent=0;
+    if(field==14)p[0].parent=0;
+    if(field==15)p[0].reference=101;
+    if(field==16)p[1].activator=0x14;
+    if(field==17)p[1].parent=0;
     rejects(p);
   }
   auto context=f.programs;++context[3].activator;
@@ -101,6 +107,30 @@ int main(){
   auto reversed=f.programs;std::swap(reversed[0],reversed[1]);assert(!report.Matches(reversed));
   auto repeats=f.programs;repeats.push_back(repeats[0]);fo3script::ScriptMasterMatch repeated;
   assert(fo3script::MatchScriptProgramsToMaster(path,repeats,repeated,cancel,error)&&repeated.Matches(repeats));
+  // Captured entry order is a preorder tree. Children are stage fragments and
+  // inherit the implicit reference/activator of an active parent call.
+  auto child=f.programs[0];child.parent=0;child.reference=101;child.activator=0x14;
+  auto grandchild=child;grandchild.parent=1;
+  auto sibling=child;
+  auto siblingChild=child;siblingChild.parent=3;
+  std::vector<Execution> tree={f.programs.back(),child,grandchild,sibling,siblingChild,f.programs[1]};
+  fo3script::ScriptMasterMatch treeReport;
+  assert(fo3script::MatchScriptProgramsToMaster(path,tree,treeReport,cancel,error));
+  for(int malformed=0;malformed<7;++malformed){
+    auto invalid=tree;
+    if(malformed==0)invalid[1].reference=0;
+    if(malformed==1)invalid[2].activator=0;
+    if(malformed==2)invalid[1].parent=2; // forward edge
+    if(malformed==3)invalid[1].parent=1; // self edge
+    if(malformed==4)invalid[4].parent=2; // returned subtree
+    if(malformed==5)invalid[1].parent=Execution::NoParent; // leaks inherited context into a root
+    if(malformed==6){invalid.push_back(child);invalid.back().parent=0;} // closed by INFO root
+    assert(!treeReport.Matches(invalid));rejects(invalid);
+  }
+  auto deep=std::vector<Execution>{f.programs.back()};
+  for(unsigned n=1;n<32;++n){auto entry=child;entry.parent=n-1;deep.push_back(entry);}
+  assert(fo3script::MatchScriptProgramsToMaster(path,deep,treeReport,cancel,error));
+  deep.push_back(child);deep.back().parent=31;rejects(deep);
   rejects({});cancel=true;rejects(f.programs);cancel=false;
   for(int field=0;field<5;++field){
     auto p=f.programs;auto& s=p[3].container;
@@ -172,7 +202,7 @@ int main(){
     write(b);rejects(evidence);
   }
   // Quest-owned GameMode uses the quest's own SCRI, not a placed NAME.
-  auto questEvent=eventOnly;questEvent[0].owner=10;
+  auto questEvent=eventOnly;questEvent[0].owner=questEvent[0].reference=10;
   Bytes questOwner;Sub(questOwner,"SCRI",Word(60));
   b=Record("QUST",10,questOwner);Append(b,Record("SCPT",60,f.event));write(b);
   assert(fo3script::MatchScriptProgramsToMaster(path,questEvent,owned,cancel,error));
@@ -193,6 +223,21 @@ int main(){
   b=Record("REFR",101,Compressed(extendedOwner),0x40000);
   Append(b,Record("ACTI",201,Compressed(extendedBase),0x40000));Append(b,Record("SCPT",60,f.event));write(b);
   assert(fo3script::MatchScriptProgramsToMaster(path,eventOnly,owned,cancel,error));
+  // Source equality cannot make an unsupported or unsatisfied Begin filter
+  // executable. The worker uses the same filter predicate as the interpreter.
+  for(const std::string filter:{"", " Player", " OtherRef", " player extra"}){
+    Bytes filtered;Script(filtered,"Begin OnActivate"+filter+"\nRewardKarma 4\nEnd");
+    fo3pipdata::Definitions definitions;fo3pipdata::Decode(definitions,"SCPT",60,0,filtered,0,0,0);
+    auto evidence=eventOnly;evidence[0].container=definitions.scripts.at(60);
+    for(uint32_t activator:{0u,fo3player::PlayerRef,99u}){
+      evidence[0].activator=activator;
+      b=Owner();Append(b,Record("SCPT",60,filtered));write(b);
+      const bool expected=filter.empty()||(filter==" Player"&&activator==fo3player::PlayerRef);
+      fo3script::ScriptMasterMatch filteredReport;
+      assert(fo3script::MatchScriptProgramsToMaster(path,evidence,filteredReport,cancel,error)==expected);
+      assert(filteredReport.Verified()==expected);
+    }
+  }
   // Exact master evidence does not exempt even the same SCPT's incoming edge.
   Bytes cell,base,ref;Sub(cell,"DATA",{1});Sub(base,"MODL",Text("fixture.nif"));
   Sub(ref,"NAME",Word(901));Sub(ref,"DATA",Bytes(24));

@@ -24,7 +24,9 @@ std::unique_ptr<ScriptTransactionPlan> Player::PrepareScriptTransaction(
   auto& candidate=*plan->candidate_;
   plan->programsCaptured_=capturePrograms;
   candidate.scriptTrace_=capturePrograms?&plan->executions_:nullptr;
-  struct TraceScope {Player& candidate;~TraceScope(){candidate.scriptTrace_=nullptr;}} trace{candidate};
+  struct TraceScope {Player& candidate;~TraceScope(){
+    candidate.scriptTrace_=nullptr;candidate.scriptTraceParent_=ScriptExecution::NoParent;
+  }} trace{candidate};
   if(!execute(candidate,error))return {};
   if(candidate.revision_<revision_ || candidate.revision_==UINT64_MAX ||
      scriptEffectRevision_>UINT64_MAX-2){error="script transaction revision exhausted";return {};}
