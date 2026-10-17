@@ -1,4 +1,5 @@
 #include "fo3-script-evidence-budget.h"
+#include "fo3-script-local-policy.h"
 // Shared source-script execution for dialogue results and QUST stage items.
 // Compiled-only bytecode and event blocks are retained, never guessed or skipped.
 namespace fo3script {
@@ -206,6 +207,9 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
       localScript=&found->second;
       if(!fo3script::ChargeScriptLocals(localScript->variables,nextBytes)){
         error="script provenance byte limit exceeded";return false;
+      }
+      if(!fo3script::UnambiguousScriptLocals(localScript->variables)){
+        error="script provenance local names are empty or ambiguous";return false;
       }
     }
     ScriptExecution execution;execution.origin=std::move(origin);

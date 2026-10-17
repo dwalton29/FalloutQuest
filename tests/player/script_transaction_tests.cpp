@@ -174,6 +174,21 @@ static void Provenance(){
     assert(guarded.Revision()==revision&&guarded.Snapshot().karma==0);NoEffects(guarded);
     assert(guarded.PrepareQuestStageTransaction(10,10,error));
   }
+  for(bool event:{false,true})for(unsigned kind=0;kind<4;++kind){
+    auto local=Fixture();if(!event)local.pipboy.quests[10].script=301;
+    auto& variables=local.pipboy.scripts[event?300:301].variables;
+    variables={{9,kind==0?"Count":kind==1?"COUNT":"Counter"},{2,kind==2?"":"Count"}};
+    fo3player::Player guarded(std::move(local));const auto revision=guarded.Revision();
+    auto prepare=[&](fo3player::ScriptProgramCapture mode){
+      return event?guarded.PrepareReferenceEventTransaction(100,"OnActivate",fo3player::PlayerRef,error,mode):
+        guarded.PrepareQuestStageTransaction(10,10,error,mode);
+    };
+    auto plan=prepare(capture);assert(bool(plan)==(kind==3));
+    if(kind!=3)assert(error.find("script provenance local names are empty or ambiguous")!=std::string::npos);
+    else assert(plan->ExecutedScripts()[0].localVariables[0].first==2&&plan->ExecutedScripts()[0].localVariables[1].first==9);
+    assert(guarded.Revision()==revision&&guarded.Snapshot().karma==0);NoEffects(guarded);
+    assert(prepare(fo3player::ScriptProgramCapture::None));
+  }
 }
 static void DialogueProvenance(){
   using Phase=fo3player::DialogueScriptPhase;using Kind=fo3player::ScriptProgramKind;

@@ -1,5 +1,6 @@
 #include "fo3-script-master-match.h"
 #include "fo3-script-evidence-budget.h"
+#include "fo3-script-local-policy.h"
 #include "data/fo3-esm-reader.h"
 #include "dialogue/fo3-dialogue-info-policy.h"
 #include <cstring>
@@ -172,6 +173,7 @@ bool MatchScriptProgramsToMaster(const std::string& master,const std::vector<Exe
         !ChargeScriptLocals(e.localVariables,evidenceBytes))
       return fail("script master evidence byte limit exceeded");
     if(!Type(programs[n]))return fail("unbound or malformed script origin");
+    if(!UnambiguousScriptLocals(e.localVariables))return fail("local names are empty or ambiguous");
     wanted[programs[n].origin.record].push_back(n);
     if(e.origin.kind==Kind::ReferenceEvent||e.origin.kind==Kind::DialogueInfo)owners[e.owner].push_back(n);
   }

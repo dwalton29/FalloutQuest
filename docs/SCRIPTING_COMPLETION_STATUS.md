@@ -4,9 +4,9 @@
 
 - Starting canonical main: `2987d911f318b92d1041257868067851a09d16f0` (v208).
 - Resumed from published `6469dbb872889a79a0682501b75f6ac6577ab547`.
-- Current implementation checkpoint: M1B3aj original local-script declarations.
+- Current implementation checkpoint: M1B3ak unambiguous local declaration names.
   Use canonical main history for the publication SHA; the previous published
-  implementation is M1B3ai `76cc8d85dafe1d1ade6470c2998c642a2c2d38c8`.
+  implementation is M1B3aj `7b615e10d1d51b3c2cd6a159bb256bd8ea8db416`.
 - M1B3l Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38635385905.
 - M1B3m Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38793178567.
 - M1B3n Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38795209693.
@@ -1039,3 +1039,37 @@ causality remain separate requirements. No dependency exemption or general
 resident Enable/Disable caller is added. Remaining ownership, bounded dispatch
 and device validation still gate that path; version 212 remains unchanged.
 See `world-reference-m1b3aj.md` for scope and accounting limits.
+
+## M1B3ak validation
+
+Captured preparation and master matching now share a local-name policy that
+rejects effective empty names and collisions after the runtime's existing
+case folding. Exact declaration identity cannot establish deterministic lookup
+when different indexes have equal case-insensitive names. The check runs after
+local-evidence charging and before evidence copies or master access; retained
+vectors and allocation-free frame report comparison remain unchanged.
+
+An independent ESM scan found no effective empty names or case-insensitive
+collisions across 1,257 SCPTs (867 nonempty tables). Its 4,032 SLSD fields are
+24 bytes; three repeated indexes occur across two scripts. The policy checks
+the effective decoded map, preserving existing last-assignment behavior and
+exact raw-container matching rather than rejecting those original declarations.
+
+All 53 core host tests, the actor test, source guards and matcher ASan/UBSan pass
+(LeakSanitizer disabled). Tests cover exact/case-only collisions, empty names,
+distinct prefixes, stage/event scopes, compression/XXXX, canonical capture,
+failure before a missing master and repeated raw indexes. Captured rejection
+preserves live revisions/state/effects; uncaptured behavior is unchanged.
+Original MS11 provenance, Lucas acceptance/save-reload and production bridge,
+and merchant barter pass. M1B3aj Android CI passed (run 39064993401).
+
+All three original MS11 completion/reward/save-reload branches also pass.
+Existing unsupported showmap diagnostics are unchanged.
+
+Temporary name normalization/sorting is private preparation work outside the
+retained-value budget; its input is charged first. No whole-preparation memory
+or Quest timing claim is made. Source/table consistency, aliases, external
+bindings, runtime reads/outcomes and call/event causality remain separate
+requirements. General resident Enable/Disable still awaits ownership, bounded
+dispatch and device validation; version 212 remains unchanged. See
+`world-reference-m1b3ak.md` for scope and original-data evidence.

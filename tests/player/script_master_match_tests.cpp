@@ -377,6 +377,37 @@ int main(){
     assert(!locals.Matches({altered})&&!fo3script::MatchScriptProgramsToMaster(path,{altered},locals,cancel,error));
     assert(locals.Matches({event})); // same raw container, changed decoded lookup
   }
+  // Exact raw/decoded declarations still cannot authenticate an ambiguous
+  // case-insensitive lookup. Test both local-scope entry kinds and raw layouts.
+  for(bool event:{false,true})for(bool compressed:{false,true})for(bool extended:{false,true})
+      for(unsigned kind=0;kind<4;++kind){
+    auto script=f.event;Local(script,2,kind==2?"":"Count",extended);
+    Local(script,9,kind==0?"Count":kind==1?"COUNT":"Counter",extended);
+    fo3pipdata::Definitions d;fo3pipdata::Decode(d,"SCPT",60,0,script,0,0,0);
+    auto entry=event?f.programs.back():f.programs[0];entry.localScript=60;entry.container=d.scripts.at(60);
+    entry.localVariables={{2,kind==2?"":"Count"},{9,kind==0?"Count":kind==1?"COUNT":"Counter"}};
+    auto quest=f.quest;Sub(quest,"SCRI",Word(60));
+    auto bytes=event?Owner():Record("QUST",10,quest);
+    Append(bytes,Record("SCPT",60,compressed?Compressed(script):script,compressed?0x40000:0));write(bytes);
+    fo3script::ScriptMasterMatch locals;
+    const bool valid=fo3script::MatchScriptProgramsToMaster(path,{entry},locals,cancel,error);
+    assert(valid==(kind==3));
+    if(kind!=3){
+      assert(error=="local names are empty or ambiguous");
+      assert(!fo3script::MatchScriptProgramsToMaster(path+"-missing",{entry},report,cancel,error));
+      assert(error=="local names are empty or ambiguous"&&report.Matches(f.programs));
+    }else assert(locals.Matches({entry}));
+  }
+  // Repeated SLSD indexes occur in the original master. Preserve decoder
+  // last-assignment semantics; policy applies to its effective variable table.
+  {
+    auto script=f.event;Local(script,2,"Replaced");Local(script,2,"Current");Local(script,9,"Other");
+    fo3pipdata::Definitions d;fo3pipdata::Decode(d,"SCPT",60,0,script,0,0,0);
+    auto entry=f.programs.back();entry.container=d.scripts.at(60);entry.localVariables={{2,"Current"},{9,"Other"}};
+    auto bytes=Owner();Append(bytes,Record("SCPT",60,script));write(bytes);
+    fo3script::ScriptMasterMatch locals;
+    assert(fo3script::MatchScriptProgramsToMaster(path,{entry},locals,cancel,error)&&locals.Matches({entry}));
+  }
   write(f.Master());
   for(int malformed=0;malformed<12;++malformed){
     auto b=f.Master();
