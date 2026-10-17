@@ -158,10 +158,11 @@ bool MatchScriptProgramsToMaster(const std::string& master,const std::vector<Exe
   struct Group{uint64_t end;uint32_t label,type;};std::vector<Group> stack;
   std::unordered_map<uint32_t,bool> seen;std::vector<uint8_t> bytes;
   std::unordered_map<uint32_t,bool> ownersSeen,basesSeen;
+  std::unordered_map<uint32_t,bool> requiredQuests,questsSeen;
   std::vector<std::string> placementTypes(programs.size());
   std::vector<uint32_t> requiredSpeakers(programs.size());
   // The first complete scan authenticates programs and resolves placed owners.
-  // A second header scan finds bases even when they precede those owners.
+  // A second header scan finds bases and INFO quests independently of order.
   for(unsigned pass=0;pass<(owners.empty()?1u:2u);++pass){
   stack.clear();
   if(fseeko(file.get(),0,SEEK_SET))return fail("script master seek failed");
@@ -191,8 +192,23 @@ bool MatchScriptProgramsToMaster(const std::string& master,const std::vector<Exe
       for(const auto index:found->second){
         if(type!=Type(programs[index])||!Authored(programs[index],d))
           return fail("script program differs from original master "+type+" "+std::to_string(id)+" entry "+std::to_string(index));
-        if(type=="INFO")requiredSpeakers[index]=d.topics.at(programs[index].origin.topic).front().speaker;
+        if(type=="INFO"){
+          const auto& info=d.topics.at(programs[index].origin.topic).front();
+          if(!info.quest)return fail("original INFO owning quest missing");
+          requiredQuests.emplace(info.quest,true);requiredSpeakers[index]=info.speaker;
+        }
       }
+    }
+    if(pass==1&&requiredQuests.count(id)){
+      if(!questsSeen.emplace(id,true).second)return fail("duplicate INFO owning quest identity");
+      const std::string type(reinterpret_cast<const char*>(h),4);const auto flags=fo3esm::ReadU32(h+8);
+      if(type!="QUST"||(flags&0x20))return fail("deleted or wrong-type INFO owning quest");
+      if(!fo3esm::ReadPayload(file.get(),{p+24,n,flags,type},bytes)||!Complete(bytes,type))
+        return fail("malformed INFO owning quest payload");
+      fo3pipdata::Definitions d;fo3pipdata::Decode(d,type,id,flags,bytes,0,0,0);
+      const auto quest=d.quests.find(id);
+      if(quest==d.quests.end()||!quest->second.diagnostics.empty())
+        return fail("malformed INFO owning quest definition");
     }
     const auto binding=(pass==0?owners:bases).find(id);
     const auto& bindings=pass==0?owners:bases;
@@ -236,6 +252,7 @@ bool MatchScriptProgramsToMaster(const std::string& master,const std::vector<Exe
   }
   if(seen.size()!=wanted.size())return fail("script master identity missing");
   if(ownersSeen.size()!=owners.size()||basesSeen.size()!=bases.size())return fail("script owner association identity missing");
+  if(questsSeen.size()!=requiredQuests.size())return fail("INFO owning quest identity missing");
   if(cancel.load(std::memory_order_acquire))return fail("script master match cancelled");
   ScriptMasterMatch next;next.programs_=programs;next.verified_=true;
   out=std::move(next);return true;

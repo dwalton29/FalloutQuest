@@ -559,7 +559,9 @@ assert 'e.origin.kind==Kind::ReferenceEvent||e.origin.kind==Kind::DialogueInfo' 
 assert 'owners[e.owner].push_back(n)' in master_match
 assert 'pass==0&&info&&type!="ACHR"&&type!="ACRE"' in master_match
 assert 'programs[index].origin.kind==Kind::ReferenceEvent&&association!=' in master_match
-assert 'requiredSpeakers[index]=d.topics.at(programs[index].origin.topic).front().speaker' in master_match
+assert 'requiredQuests.emplace(info.quest,true);requiredSpeakers[index]=info.speaker;' in master_match
+assert 'if(pass==1&&requiredQuests.count(id))' in master_match
+assert master_match.index('questsSeen.size()!=requiredQuests.size()')<master_match.index('out=std::move(next);')
 assert 'if(requiredSpeakers[index]&&requiredSpeakers[index]!=id)' in master_match
 assert 'placed?"NAME":"SCRI"' in master_match
 assert 'association!=programs[index].origin.record' in master_match

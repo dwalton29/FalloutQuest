@@ -4,9 +4,9 @@
 
 - Starting canonical main: `2987d911f318b92d1041257868067851a09d16f0` (v208).
 - Resumed from published `6469dbb872889a79a0682501b75f6ac6577ab547`.
-- Current implementation checkpoint: M1B3af original INFO restrictions and strict scope metadata.
+- Current implementation checkpoint: M1B3ag original INFO owning-quest identity.
   Use canonical main history for the publication SHA; the previous published
-  implementation is M1B3ae `0f9ac4fc15de7edd4674c25773d83c5ba6efbe8b`.
+  implementation is M1B3af `a6509edfed4e2c5229fe06cfa32e388cf3a989fb`.
 - M1B3l Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38635385905.
 - M1B3m Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38793178567.
 - M1B3n Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38795209693.
@@ -926,3 +926,24 @@ This adds static restriction and metadata checks, not full eligibility replay,
 owning-quest context authentication, runtime liveness or complete dependency/read
 ownership. General resident Enable/Disable remains gated by remaining ownership,
 bounded dispatch and device validation. See `world-reference-m1b3af.md` for scope.
+
+## M1B3ag validation
+
+Master-matched INFO evidence now requires its original nonzero QSTI to resolve
+to a unique nondeleted QUST with strict framing and no quest decoder diagnostics.
+The existing second pass resolves all required parents independently of record
+order; shared parents are deduplicated and distinct parents must all be found.
+Failures preserve the previous report. No third scan or dependency exemption is
+introduced, and no caller-supplied owning-quest claim is accepted.
+
+All 53 core host tests, the actor test and matcher ASan/UBSan checks pass
+(LeakSanitizer disabled). Tests cover missing/null/wrong-type links, duplicate,
+deleted and malformed quests, decoder diagnostics, compression/XXXX, record
+order and multiple parents. Original MS11 stage/bomb/INFO and the discovered
+explicit-speaker INFO retain successful admission without Player publication.
+M1B3af Android CI passed (run 39054754217).
+
+This checks original owning-quest identity and structural decoding, not current
+quest-running state, condition replay or complete execution/read ownership.
+General resident Enable/Disable remains gated by remaining ownership, bounded
+dispatch and device validation. See `world-reference-m1b3ag.md` for limits.

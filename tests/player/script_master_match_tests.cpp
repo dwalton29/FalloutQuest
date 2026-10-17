@@ -33,17 +33,23 @@ static Bytes Owner(bool compressed=false){
   auto b=Record("ACTI",201,compressed?Compressed(base):base,compressed?0x40000:0);
   Append(b,Record("REFR",101,ref));return b;
 }
-static Bytes Speakers(bool compressed=false){
+static Bytes ParentQuest(bool compressed=false,uint32_t id=20){
+  Bytes quest;Sub(quest,"DATA",{0,40});
+  return Record("QUST",id,compressed?Compressed(quest):quest,compressed?0x40000:0);
+}
+static Bytes Speakers(bool compressed=false,bool includeQuest=true){
   Bytes base,ref;Sub(base,"EDID",Text("FixtureActor"));Sub(ref,"NAME",Word(202));
   auto b=Record("NPC_",202,compressed?Compressed(base):base,compressed?0x40000:0);
-  Append(b,Record("ACHR",102,ref));return b;
+  Append(b,Record("ACHR",102,ref));
+  if(includeQuest)Append(b,ParentQuest(compressed));
+  return b;
 }
 struct Fixture {
   Bytes quest,info,event;std::vector<Execution> programs;
   Fixture(){
     Sub(quest,"DATA",{0,50});
     Sub(quest,"INDX",{10,0});Sub(quest,"QSDT",{0});Script(quest,"RewardKarma 1");
-    Sub(info,"TPIC",Word(40));Script(info,"RewardKarma 2");Sub(info,"NEXT",{});Script(info,"RewardKarma 3");
+    Sub(info,"TPIC",Word(40));Sub(info,"QSTI",Word(20));Script(info,"RewardKarma 2");Sub(info,"NEXT",{});Script(info,"RewardKarma 3");
     Sub(event,"EDID",Text("FixtureScript"));Script(event,"Begin OnActivate\nRewardKarma 4\nEnd\nBegin GameMode\nRewardKarma 5\nEnd");
     fo3pipdata::Definitions d;fo3pipdata::Decode(d,"QUST",10,0,quest,0,0,0);
     fo3pipdata::Decode(d,"INFO",50,0,info,0,0,40);fo3pipdata::Decode(d,"SCPT",60,0,event,0,0,0);
@@ -253,9 +259,55 @@ int main(){
   // INFO speaker evidence resolves independently of an actor's optional SCRI.
   // Both placement kinds, both record orders, compression and XXXX NAME work.
   const std::vector<Execution> infoOnly={f.programs[1],f.programs[2]};
+  auto noQuest=f.info;noQuest.erase(noQuest.begin()+10,noQuest.begin()+20); // fixture QSTI
+  // Parent identity is resolved on the complete second scan, independently of
+  // record order, compression or the quest's authored initial running flag.
+  for(bool before:{false,true})for(bool compressed:{false,true})for(uint8_t flags:{0,1}){
+    Bytes quest;Sub(quest,"DATA",{flags,40});
+    auto parent=Record("QUST",20,compressed?Compressed(quest):quest,compressed?0x40000:0);
+    Bytes info;Sub(info,"XXXX",Word(4));Sub(info,"QSTI",{});Append(info,Word(20));Append(info,noQuest);
+    auto record=Group(40,Record("INFO",50,info));
+    b=Speakers(false,false);Append(b,before?parent:record);Append(b,before?record:parent);write(b);
+    fo3script::ScriptMasterMatch parents;
+    assert(fo3script::MatchScriptProgramsToMaster(path,infoOnly,parents,cancel,error)&&parents.Matches(infoOnly));
+  }
+  for(int malformed=0;malformed<19;++malformed){
+    Bytes quest;Sub(quest,"DATA",{0,40});auto info=f.info;
+    if(malformed==6){quest.clear();Sub(quest,"EDID",Text("missing DATA"));}
+    if(malformed==7){quest.clear();Sub(quest,"DATA",{0});}
+    if(malformed==8)Sub(quest,"QSDT",{0}); // orphan item, decoder diagnostic
+    if(malformed==9){Sub(quest,"INDX",{1,0});Sub(quest,"INDX",{1,0});}
+    if(malformed==10)quest.push_back(0);
+    if(malformed==11)Sub(quest,"SCRI",{1,2,3});
+    if(malformed==12)Sub(quest,"CTDA",Bytes(19));
+    if(malformed==13)quest={1,2,3,4};
+    if(malformed>=15){
+      info=noQuest;
+      if(malformed!=16)Sub(info,"QSTI",Word(malformed==15?0:malformed==17?50:202));
+    }
+    b=Group(40,Record("INFO",50,info));Append(b,Speakers(false,false));
+    if(malformed!=0)Append(b,Record(malformed==1?"STAT":"QUST",malformed==14?21:20,quest,
+      malformed==2?0x20:malformed==13?0x40000:0));
+    if(malformed==3)Append(b,ParentQuest());
+    if(malformed==4)Append(b,Record("STAT",20,{}));
+    if(malformed==5)Append(b,Record("QUST",20,quest,0x20));
+    write(b);rejects(infoOnly);
+    assert(error.find("owning quest")!=std::string::npos);
+  }
+  // Sharing one quest is valid; two independent INFOs require both parents.
+  {
+    Bytes second;Sub(second,"QSTI",Word(21));Append(second,noQuest);
+    b=Group(40,Record("INFO",50,f.info));Append(b,Group(40,Record("INFO",51,second)));Append(b,Speakers());
+    const auto missingSecond=b;Append(b,ParentQuest(false,21));write(b);
+    auto evidence=infoOnly;evidence[1].origin.record=51;evidence[1].origin.item=0;evidence[1].program=evidence[0].program;
+    fo3script::ScriptMasterMatch both;
+    assert(fo3script::MatchScriptProgramsToMaster(path,evidence,both,cancel,error));
+    write(missingSecond);
+    assert(!fo3script::MatchScriptProgramsToMaster(path,evidence,both,cancel,error)&&both.Matches(evidence));
+  }
   {
     Bytes info;Sub(info,"XXXX",Word(4));Sub(info,"ANAM",{});Append(info,Word(202));
-    Sub(info,"QSTI",Word(10));Append(info,f.info);
+    Append(info,f.info);
     b=Record("QUST",10,f.quest);Append(b,Group(40,Record("INFO",50,info)));Append(b,Speakers());write(b);
     fo3script::ScriptMasterMatch extendedScope;
     assert(fo3script::MatchScriptProgramsToMaster(path,infoOnly,extendedScope,cancel,error));
@@ -278,7 +330,7 @@ int main(){
     auto baseRecord=Record(creature?"CREA":"NPC_",202,compressed?Compressed(actor):actor,compressed?0x40000:0);
     auto placedRecord=Record(creature?"ACRE":"ACHR",102,compressed?Compressed(placement):placement,compressed?0x40000:0);
     b=Group(40,Record("INFO",50,f.info));
-    Append(b,reversed?placedRecord:baseRecord);Append(b,reversed?baseRecord:placedRecord);write(b);
+    Append(b,reversed?placedRecord:baseRecord);Append(b,reversed?baseRecord:placedRecord);Append(b,ParentQuest());write(b);
     assert(fo3script::MatchScriptProgramsToMaster(path,infoOnly,owned,cancel,error)&&owned.Matches(infoOnly));
   }
   for(int malformed=0;malformed<17;++malformed){
@@ -296,6 +348,7 @@ int main(){
     auto evidence=infoOnly;
     if(malformed==15)evidence[0].owner=0;
     if(malformed==16)evidence[1].owner=999;
+    Append(b,ParentQuest());
     write(b);rejects(evidence);
     assert(owned.Matches(infoOnly));
   }
@@ -303,7 +356,7 @@ int main(){
   for(uint32_t script:{60u,999u}){
     Bytes actor,placement;Sub(actor,"SCRI",Word(script));Sub(placement,"NAME",Word(202));
     b=Group(40,Record("INFO",50,f.info));Append(b,Record("SCPT",60,f.event));
-    Append(b,Record("NPC_",202,actor));Append(b,Record("ACHR",102,placement));write(b);
+    Append(b,Record("NPC_",202,actor));Append(b,Record("ACHR",102,placement));Append(b,ParentQuest());write(b);
     auto shared=infoOnly;auto event=f.programs.back();event.owner=event.reference=102;shared.push_back(event);
     fo3script::ScriptMasterMatch sharedReport;
     assert(fo3script::MatchScriptProgramsToMaster(path,shared,sharedReport,cancel,error)==(script==60));
