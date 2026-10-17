@@ -209,6 +209,29 @@ static void Provenance(){
     assert(prepare(fo3player::ScriptProgramCapture::None));
   }
 }
+static void LocalRecordProvenance(){
+  constexpr auto capture=fo3player::ScriptProgramCapture::EnteredPrograms;
+  for(bool event:{false,true})for(unsigned kind=0;kind<9;++kind){
+    auto catalog=Fixture();if(!event)catalog.pipboy.quests[10].script=301;
+    auto& script=catalog.pipboy.scripts[event?300:301];script.variables={{2,"Count"}};
+    std::vector<uint8_t> slot(kind==3?4:24);slot[0]=2;
+    if(kind!=0)script.records.push_back({"SLSD",slot});
+    if(kind==1)script.records.push_back({"SLSD",slot});
+    if(kind!=2)script.records.push_back({"SCVR",kind==4?std::vector<uint8_t>{}:kind==5?
+      std::vector<uint8_t>{'C'}:kind==6?std::vector<uint8_t>{'C',0,'X',0}:
+      std::vector<uint8_t>{'C','o','u','n','t',0}});
+    if(kind==7)script.records.push_back({"SCVR",{'C',0}});
+    fo3player::Player player(std::move(catalog));std::string error;const auto revision=player.Revision();
+    auto prepare=[&](fo3player::ScriptProgramCapture mode){
+      return event?player.PrepareReferenceEventTransaction(100,"OnActivate",fo3player::PlayerRef,error,mode):
+        player.PrepareQuestStageTransaction(10,10,error,mode);
+    };
+    auto plan=prepare(capture);assert(bool(plan)==(kind==8));
+    if(kind!=8)assert(error.find("script provenance malformed local records")!=std::string::npos);
+    assert(player.Revision()==revision&&player.Snapshot().karma==0);NoEffects(player);
+    assert(prepare(fo3player::ScriptProgramCapture::None));
+  }
+}
 static void DialogueProvenance(){
   using Phase=fo3player::DialogueScriptPhase;using Kind=fo3player::ScriptProgramKind;
   constexpr auto capture=fo3player::ScriptProgramCapture::EnteredPrograms;
@@ -298,6 +321,7 @@ static void OriginalProvenance(const char* path){
     size_t bytes=0;
     assert(fo3script::ChargeScriptEvidence("",script.second,nullptr,bytes)&&fo3script::ChargeScriptLocals(script.second.variables,bytes));
     assert(fo3script::UnambiguousScriptLocals(script.second.variables));
+    assert(fo3script::CompleteScriptLocalRecords(script.second));
     assert(fo3script::ConsistentScriptLocalDeclarations(script.second.source,script.second.variables));
   }
   std::cout<<"Original local declaration policy accepts all "<<catalog.pipboy.scripts.size()<<" decoded SCPTs\n";
@@ -474,6 +498,7 @@ struct ScriptWorkflowAdapter {
 };
 int main(int argc,char** argv){
   Provenance();
+  LocalRecordProvenance();
   DialogueProvenance();
   if(argc>1)OriginalProvenance(argv[1]);
   std::string error;fo3player::Player p(Fixture());

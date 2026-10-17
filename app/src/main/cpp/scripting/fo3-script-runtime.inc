@@ -208,6 +208,9 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
       if(!fo3script::ChargeScriptLocals(localScript->variables,nextBytes)){
         error="script provenance byte limit exceeded";return false;
       }
+      if(container&&!fo3script::CompleteScriptLocalRecords(*container)){
+        error="script provenance malformed local records";return false;
+      }
       if(!fo3script::UnambiguousScriptLocals(localScript->variables)){
         error="script provenance local names are empty or ambiguous";return false;
       }

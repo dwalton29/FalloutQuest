@@ -4,9 +4,10 @@
 
 - Starting canonical main: `2987d911f318b92d1041257868067851a09d16f0` (v208).
 - Resumed from published `6469dbb872889a79a0682501b75f6ac6577ab547`.
-- Current implementation checkpoint: M1B3al declared local-slot consistency.
+- Current implementation checkpoint: M1B3am strict local-record framing.
   Use canonical main history for the publication SHA; the previous published
-  implementation is M1B3ak `b2b195ecc8dd91c66fcb6bd4c75fd5fffbb350ad`.
+  implementation is M1B3al `0bef93c45e4632885b0dc10f2367a40509249202`.
+  Its Android CI passed (run 39076646316).
 - M1B3l Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38635385905.
 - M1B3m Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38793178567.
 - M1B3n Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38795209693.
@@ -1108,3 +1109,27 @@ lookup/read ownership, runtime outcomes and call/event causality remain open.
 Raw unbound bodies remain unadmitted. General resident Enable/Disable still
 awaits ownership, bounded dispatch and device validation; version 212 is
 unchanged. See `world-reference-m1b3al.md` for scope and accounting limits.
+
+## M1B3am validation
+
+Strict proof now rejects orphan/repeated SCVR names, overwritten/dangling SLSD
+slots, non-24-byte slot records and names with missing/embedded terminators.
+The tolerant decoder and capture-off execution are unchanged. Complete repeated
+index pairs remain legal. Retained-container validation follows byte charging;
+both original SCPT scans independently check raw framing before decoding.
+No new retained field, master scan or frame-time report work is added.
+
+The direct original-data audit found all 4,032 SLSD/SCVR pairs in 1,257 SCPTs
+satisfy this policy. The production helper also accepts every original SCPT in
+the transaction regression. The supplied ESM SHA256 was reverified unchanged.
+All 53 core host tests, the actor test, source guards and matcher ASan/UBSan pass
+(LeakSanitizer disabled). Original MS11 provenance, Lucas acceptance/bridge,
+merchant barter and all three completion/reward/save-reload branches pass;
+existing showmap diagnostics are unchanged. M1B3al Android CI passed
+(run 39076646316).
+
+This closes a raw slot/name framing gap, not arbitrary form-name resolution or
+external variable/read ownership. Full grammar, aliases, runtime outcomes and
+call/event causality remain separate requirements. General resident Enable/Disable
+still awaits complete ownership, bounded dispatch and device validation;
+version 212 remains unchanged. See `world-reference-m1b3am.md` for scope.

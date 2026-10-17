@@ -2,6 +2,7 @@
 #include "scripting/fo3-script-evidence-budget.h"
 #include "world/fo3-resident-authored-admission.h"
 #include <cassert>
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
@@ -407,6 +408,34 @@ int main(){
     auto bytes=Owner();Append(bytes,Record("SCPT",60,script));write(bytes);
     fo3script::ScriptMasterMatch locals;
     assert(fo3script::MatchScriptProgramsToMaster(path,{entry},locals,cancel,error)&&locals.Matches({entry}));
+  }
+  // Tolerant decoding must not authenticate orphan/stale slot associations or
+  // truncated/hidden-tail names, even when raw and decoded evidence agree.
+  for(bool event:{false,true})for(bool compressed:{false,true})for(unsigned kind=0;kind<11;++kind){
+    auto script=f.event;Bytes slot(24);Put(slot,0,2);
+    if(kind==0)Sub(script,"SCVR",Text("Count")); // no preceding slot
+    else if(kind==1){Sub(script,"SLSD",slot);Sub(script,"SLSD",slot);Sub(script,"SCVR",Text("Count"));}
+    else if(kind==2)Sub(script,"SLSD",slot); // no name
+    else if(kind>=3&&kind<=6){Sub(script,"SLSD",Bytes(kind==3?0:kind==4?4:kind==5?23:25));Sub(script,"SCVR",Text("Count"));}
+    else {
+      Sub(script,"SLSD",slot);
+      Sub(script,"SCVR",kind==7?Bytes{}:kind==8?Bytes{'C','o','u','n','t'}:
+        kind==9?Bytes{'C','o','u','n','t',0,'X',0}:Text("Count"));
+      if(kind==10)Sub(script,"SCVR",Text("Again"));
+    }
+    fo3pipdata::Definitions d;fo3pipdata::Decode(d,"SCPT",60,0,script,0,0,0);
+    auto entry=event?f.programs.back():f.programs[0];entry.localScript=60;entry.container=d.scripts.at(60);
+    for(const auto& v:d.scripts.at(60).variables)entry.localVariables.push_back(v);
+    std::sort(entry.localVariables.begin(),entry.localVariables.end());
+    assert(!fo3script::MatchScriptProgramsToMaster(path+"-missing",{entry},report,cancel,error));
+    assert(error=="malformed local records"&&report.Matches(f.programs));
+    // A structurally valid retained container cannot conceal malformed disk
+    // payloads: pass one (event) and pass two (quest SCRI) both validate framing.
+    auto quest=f.quest;Sub(quest,"SCRI",Word(60));auto bytes=event?Owner():Record("QUST",10,quest);
+    Append(bytes,Record("SCPT",60,compressed?Compressed(script):script,compressed?0x40000:0));write(bytes);
+    entry.container=f.programs.back().container;entry.localVariables.clear();
+    assert(!fo3script::MatchScriptProgramsToMaster(path,{entry},report,cancel,error));
+    assert(error==(event?"malformed script master payload":"malformed local script payload")&&report.Matches(f.programs));
   }
   // Exact master identity cannot admit missing source-to-slot bindings or a
   // declaration classified as both reference and numeric before Begin.

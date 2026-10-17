@@ -528,6 +528,8 @@ assert script_runtime.index('fo3script::ChargeScriptLocals(')<script_runtime.ind
 assert script_runtime.index('fo3script::ChargeScriptLocals(')<script_runtime.index('fo3script::UnambiguousScriptLocals(')<script_runtime.index('execution.localVariables.reserve(')
 assert script_runtime.index('fo3script::UnambiguousScriptLocals(')<script_runtime.index('fo3script::ConsistentScriptLocalDeclarations(')<script_runtime.index('execution.localVariables.reserve(')
 assert 'container&&!fo3script::ConsistentScriptLocalDeclarations(container->source,localScript->variables)' in script_runtime
+assert script_runtime.index('fo3script::ChargeScriptLocals(')<script_runtime.index('fo3script::CompleteScriptLocalRecords(')<script_runtime.index('execution.localVariables.reserve(')
+assert 'container&&!fo3script::CompleteScriptLocalRecords(*container)' in script_runtime
 assert 'candidate.scriptTraceBytes_=0;' in script_transaction
 assert 'ScriptProgramKind::UnboundResult' in script_header
 print('Detached script provenance records exact entered bodies and typed origins without publishing its collector into canonical state')
@@ -583,6 +585,9 @@ assert master_match.index('!ChargeScriptLocals(')<master_match.index('!Unambiguo
 assert master_match.index('!UnambiguousScriptLocals(')<master_match.index('!ConsistentScriptLocalDeclarations(')<master_match.index('std::fopen(master.c_str(),"rb")')
 assert 'UnambiguousScriptLocals' not in master_match[master_match.index('bool ScriptMasterMatch::Matches('):master_match.index('bool MatchScriptProgramsToMaster(')]
 assert 'ConsistentScriptLocalDeclarations' not in master_match[master_match.index('bool ScriptMasterMatch::Matches('):master_match.index('bool MatchScriptProgramsToMaster(')]
+assert master_match.index('!ChargeScriptLocals(')<master_match.index('!CompleteScriptLocalRecords(')<master_match.index('std::fopen(master.c_str(),"rb")')
+assert 'CompleteScriptLocalRecords' not in master_match[master_match.index('bool ScriptMasterMatch::Matches('):master_match.index('bool MatchScriptProgramsToMaster(')]
+assert 'type=="SCPT"&&!locals.Accept(' in master_match
 assert master_match.index('localsSeen.size()!=locals.size()')<master_match.index('out=std::move(next);')
 assert 'Same(programs[index].container,script->second)' in master_match
 assert 'a.localVariables==b.localVariables' in master_match

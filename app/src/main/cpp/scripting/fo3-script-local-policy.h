@@ -1,8 +1,33 @@
 #pragma once
 #include "fo3-event-scripts.h"
 #include <algorithm>
+#include <cstring>
 
 namespace fo3script {
+// Strict ownership proof, not a replacement for the tolerant gameplay decoder.
+// Original SCPTs pair 24-byte SLSD slots with one NUL-terminated SCVR name.
+// Repeated indexes remain legal: the decoder's last assignment still wins.
+class ScriptLocalRecordFraming {
+  bool pending_=false;
+public:
+  bool Accept(const char* tag,const uint8_t* data,size_t size) noexcept {
+    if(std::memcmp(tag,"SLSD",4)==0){
+      if(pending_||size!=24)return false;
+      pending_=true;
+    }else if(std::memcmp(tag,"SCVR",4)==0){
+      if(!pending_||!size||data[size-1]!=0||std::memchr(data,0,size-1))return false;
+      pending_=false;
+    }
+    return true;
+  }
+  bool Complete() const noexcept {return !pending_;}
+};
+inline bool CompleteScriptLocalRecords(const fo3pipdata::ResultScript& script) noexcept {
+  ScriptLocalRecordFraming framing;
+  for(const auto& record:script.records)
+    if(record.first.size()==4&&!framing.Accept(record.first.data(),record.second.data(),record.second.size()))return false;
+  return framing.Complete();
+}
 // Use after retained-evidence charging. These temporary normalized names are
 // private preparation work; the frame-time report comparison never calls this.
 template<class Locals> inline bool UnambiguousScriptLocals(const Locals& locals) {

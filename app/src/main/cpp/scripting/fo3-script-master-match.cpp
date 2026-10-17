@@ -81,6 +81,7 @@ const char* Type(const Execution& e){
 // cannot hide a truncated field, and duplicate script scalars are ambiguous.
 bool Complete(const std::vector<uint8_t>& b,const std::string& type){
   size_t p=0;uint32_t extended=0;unsigned scalars=0,next=0,tpic=0,scri=0,quest=0,speaker=0,data=0;
+  ScriptLocalRecordFraming locals;
   while(p<b.size()){
     if(b.size()-p<6)return false;
     const auto* tag=b.data()+p;const auto shortSize=fo3esm::ReadU16(tag+4);p+=6;
@@ -91,6 +92,7 @@ bool Complete(const std::vector<uint8_t>& b,const std::string& type){
     }
     const uint32_t n=extended?extended:shortSize;extended=0;
     if(n>b.size()-p)return false;
+    if(type=="SCPT"&&!locals.Accept(reinterpret_cast<const char*>(tag),b.data()+p,n))return false;
     unsigned bit=0;
     if(Is(tag,"SCHR")){if(n!=20)return false;bit=1;}
     if(Is(tag,"SCDA"))bit=2;
@@ -109,7 +111,7 @@ bool Complete(const std::vector<uint8_t>& b,const std::string& type){
     if(type=="QUST"&&(Is(tag,"QSDT")||Is(tag,"INDX")||Is(tag,"QOBJ")))scalars=0;
     p+=n;
   }
-  return !extended&&(type!="INFO"||data==1);
+  return !extended&&locals.Complete()&&(type!="INFO"||data==1);
 }
 bool Authored(const Execution& e,const fo3pipdata::Definitions& d){
   const auto& o=e.origin;
@@ -173,6 +175,7 @@ bool MatchScriptProgramsToMaster(const std::string& master,const std::vector<Exe
         !ChargeScriptLocals(e.localVariables,evidenceBytes))
       return fail("script master evidence byte limit exceeded");
     if(!Type(programs[n]))return fail("unbound or malformed script origin");
+    if(!CompleteScriptLocalRecords(e.container))return fail("malformed local records");
     if(!UnambiguousScriptLocals(e.localVariables))return fail("local names are empty or ambiguous");
     if(!ConsistentScriptLocalDeclarations(e.container.source,e.localVariables))
       return fail("local declarations do not match source");
