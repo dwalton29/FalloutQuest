@@ -4,9 +4,9 @@
 
 - Starting canonical main: `2987d911f318b92d1041257868067851a09d16f0` (v208).
 - Resumed from published `6469dbb872889a79a0682501b75f6ac6577ab547`.
-- Current implementation checkpoint: M1B3ak unambiguous local declaration names.
+- Current implementation checkpoint: M1B3al declared local-slot consistency.
   Use canonical main history for the publication SHA; the previous published
-  implementation is M1B3aj `7b615e10d1d51b3c2cd6a159bb256bd8ea8db416`.
+  implementation is M1B3ak `b2b195ecc8dd91c66fcb6bd4c75fd5fffbb350ad`.
 - M1B3l Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38635385905.
 - M1B3m Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38793178567.
 - M1B3n Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38795209693.
@@ -1073,3 +1073,38 @@ bindings, runtime reads/outcomes and call/event causality remain separate
 requirements. General resident Enable/Disable still awaits ownership, bounded
 dispatch and device validation; version 212 remains unchanged. See
 `world-reference-m1b3ak.md` for scope and original-data evidence.
+
+## M1B3al validation
+
+After charging and name-uniqueness checks, typed capture and master matching
+now require each recognized source declaration before the first Begin to have
+an operand and a case-insensitive decoded slot. One name cannot be both numeric
+and reference in that scope. Case folding, comment stripping and first-operand
+parsing follow existing local lookup; numeric/ref execution behavior is unchanged.
+Repeated declarations of the same category and extra decoded slots are retained.
+No extra master scan or retained field is added. Frame report comparison stays
+allocation-free; private normalization/stream temporaries consume charged input
+but remain outside retained-value accounting and any whole-preparation bound.
+
+The original ESM has no recognized declaration missing a slot, missing operand
+or numeric/reference conflict. It has two extra effective names relative to
+recognized header declarations and repeated names in two scripts. The regression
+checks the charged local policy against all 1,257 decoded SCPTs and accepts them.
+The verified source SHA256 remains
+`d9fb0a33af495ddb43992b96ea74f2741b123fefdb1fcdcea28096f7649b0d06`.
+
+All 53 core host tests, the actor test, source guards and matcher ASan/UBSan pass
+(LeakSanitizer disabled). Tests cover missing slots/operands, both conflict
+orders, numeric/ref repetitions, extra slots, empty source, case/comments/CRLF,
+first-Begin scope, stage/event origins, compression, pre-file rejection and
+unchanged live state/effects. Original MS11 provenance, Lucas acceptance/bridge,
+merchant barter and all three completion/reward/save-reload branches pass.
+Existing showmap rejections are unchanged. M1B3ak Android CI passed
+(run 39069861040).
+
+This is consistency for recognized declarations, not a full source/type grammar
+or classification of every extra slot. Alias/external bindings, individual
+lookup/read ownership, runtime outcomes and call/event causality remain open.
+Raw unbound bodies remain unadmitted. General resident Enable/Disable still
+awaits ownership, bounded dispatch and device validation; version 212 is
+unchanged. See `world-reference-m1b3al.md` for scope and accounting limits.

@@ -3,6 +3,8 @@
 #include "world/fo3-resident-exchange.h"
 #include "world/fo3-resident-workflow.h"
 #include "scripting/fo3-script-master-match.h"
+#include "scripting/fo3-script-evidence-budget.h"
+#include "scripting/fo3-script-local-policy.h"
 #include "dialogue/fo3-dialogue-info-policy.h"
 #include <array>
 #include <cassert>
@@ -189,6 +191,23 @@ static void Provenance(){
     assert(guarded.Revision()==revision&&guarded.Snapshot().karma==0);NoEffects(guarded);
     assert(prepare(fo3player::ScriptProgramCapture::None));
   }
+  for(bool event:{false,true})for(unsigned kind=0;kind<7;++kind){
+    const std::string headers[]={"short Missing\n","ref Count\nfloat COUNT\n","float Count\nref count\n",
+      "short\n","SHORT count ; comment\r\nfloat COUNT\n","ref COUNT\nref count\n",""};
+    auto local=Fixture();if(!event)local.pipboy.quests[10].script=301;
+    auto& script=local.pipboy.scripts[event?300:301];script.variables={{2,"Count"},{9,"Extra"}};
+    script.source=headers[kind]+(event?"Begin OnActivate\nRewardKarma 4\nEnd":"");
+    if(event)local.eventPrograms[300]=fo3script::ParseEvents(script);
+    fo3player::Player guarded(std::move(local));const auto revision=guarded.Revision();
+    auto prepare=[&](fo3player::ScriptProgramCapture mode){
+      return event?guarded.PrepareReferenceEventTransaction(100,"OnActivate",fo3player::PlayerRef,error,mode):
+        guarded.PrepareQuestStageTransaction(10,10,error,mode);
+    };
+    auto plan=prepare(capture);assert(bool(plan)==(kind>=4));
+    if(kind<4)assert(error.find("script provenance local declarations do not match source")!=std::string::npos);
+    assert(guarded.Revision()==revision&&guarded.Snapshot().karma==0);NoEffects(guarded);
+    assert(prepare(fo3player::ScriptProgramCapture::None));
+  }
 }
 static void DialogueProvenance(){
   using Phase=fo3player::DialogueScriptPhase;using Kind=fo3player::ScriptProgramKind;
@@ -275,6 +294,13 @@ static void DialogueProvenance(){
 static void OriginalProvenance(const char* path){
   constexpr auto capture=fo3player::ScriptProgramCapture::EnteredPrograms;
   fo3player::Catalog catalog;std::string error;assert(fo3player::LoadCatalog(path,catalog,error));
+  for(const auto& script:catalog.pipboy.scripts){
+    size_t bytes=0;
+    assert(fo3script::ChargeScriptEvidence("",script.second,nullptr,bytes)&&fo3script::ChargeScriptLocals(script.second.variables,bytes));
+    assert(fo3script::UnambiguousScriptLocals(script.second.variables));
+    assert(fo3script::ConsistentScriptLocalDeclarations(script.second.source,script.second.variables));
+  }
+  std::cout<<"Original local declaration policy accepts all "<<catalog.pipboy.scripts.size()<<" decoded SCPTs\n";
   uint32_t quest=0;
   for(const auto& definition:catalog.pipboy.quests)
     if(fo3script::Lower(definition.second.editor)=="ms11")quest=definition.first;

@@ -174,6 +174,8 @@ bool MatchScriptProgramsToMaster(const std::string& master,const std::vector<Exe
       return fail("script master evidence byte limit exceeded");
     if(!Type(programs[n]))return fail("unbound or malformed script origin");
     if(!UnambiguousScriptLocals(e.localVariables))return fail("local names are empty or ambiguous");
+    if(!ConsistentScriptLocalDeclarations(e.container.source,e.localVariables))
+      return fail("local declarations do not match source");
     wanted[programs[n].origin.record].push_back(n);
     if(e.origin.kind==Kind::ReferenceEvent||e.origin.kind==Kind::DialogueInfo)owners[e.owner].push_back(n);
   }

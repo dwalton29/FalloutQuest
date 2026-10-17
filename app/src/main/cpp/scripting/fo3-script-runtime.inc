@@ -211,6 +211,9 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
       if(!fo3script::UnambiguousScriptLocals(localScript->variables)){
         error="script provenance local names are empty or ambiguous";return false;
       }
+      if(container&&!fo3script::ConsistentScriptLocalDeclarations(container->source,localScript->variables)){
+        error="script provenance local declarations do not match source";return false;
+      }
     }
     ScriptExecution execution;execution.origin=std::move(origin);
     execution.owner=owner;execution.activator=scriptActivator_;execution.localScript=scriptId;

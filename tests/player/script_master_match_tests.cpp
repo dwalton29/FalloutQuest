@@ -408,6 +408,34 @@ int main(){
     fo3script::ScriptMasterMatch locals;
     assert(fo3script::MatchScriptProgramsToMaster(path,{entry},locals,cancel,error)&&locals.Matches({entry}));
   }
+  // Exact master identity cannot admit missing source-to-slot bindings or a
+  // declaration classified as both reference and numeric before Begin.
+  for(bool event:{false,true})for(bool compressed:{false,true})for(unsigned kind=0;kind<8;++kind){
+    const std::string headers[]={"short Missing\n","ref Count\nfloat COUNT\n","float Count\nref count\n",
+      "short\n","SHORT count ; comment\r\nfloat COUNT\n","ref COUNT\nref count\n",
+      "scn Example\n; short Missing\nshort cOuNt\nBegin GameMode\nshort Missing\nEnd\n",""};
+    Bytes script;Script(script,headers[kind]);Local(script,2,"Count");Local(script,9,"Extra");
+    fo3pipdata::Definitions d;fo3pipdata::Decode(d,"SCPT",60,0,script,0,0,0);
+    auto entry=event?f.programs.back():f.programs[0];entry.localScript=60;entry.container=d.scripts.at(60);
+    entry.localVariables={{2,"Count"},{9,"Extra"}};
+    if(event){
+      entry.container.source=headers[kind]+"\nBegin OnActivate\nRewardKarma 4\nEnd";
+      script.clear();Script(script,entry.container.source);Local(script,2,"Count");Local(script,9,"Extra");
+      fo3pipdata::Definitions actual;fo3pipdata::Decode(actual,"SCPT",60,0,script,0,0,0);entry.container=actual.scripts.at(60);
+      const auto events=fo3script::ParseEvents(actual.scripts.at(60));
+      for(const auto& block:events.blocks)if(block.event=="onactivate")entry.origin.sourceLine=block.sourceLine;
+    }
+    auto quest=f.quest;Sub(quest,"SCRI",Word(60));auto bytes=event?Owner():Record("QUST",10,quest);
+    Append(bytes,Record("SCPT",60,compressed?Compressed(script):script,compressed?0x40000:0));write(bytes);
+    fo3script::ScriptMasterMatch declarations;
+    const bool valid=fo3script::MatchScriptProgramsToMaster(path,{entry},declarations,cancel,error);
+    assert(valid==(kind>=4));
+    if(kind<4){
+      assert(error=="local declarations do not match source");
+      assert(!fo3script::MatchScriptProgramsToMaster(path+"-missing",{entry},report,cancel,error));
+      assert(error=="local declarations do not match source"&&report.Matches(f.programs));
+    }
+  }
   write(f.Master());
   for(int malformed=0;malformed<12;++malformed){
     auto b=f.Master();
