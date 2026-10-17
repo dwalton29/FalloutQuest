@@ -323,10 +323,10 @@ int main(){
   // Supplied command bindings authenticate their target EDIDs independently of
   // program kind, file order, compression and repeated lookups. This is not an
   // independent proof that the compiler supplied every lookup.
-  for(bool first:{false,true})for(bool compressed:{false,true})for(bool extended:{false,true}){
+  for(bool expression:{false,true})for(bool first:{false,true})for(bool compressed:{false,true})for(bool extended:{false,true}){
     auto evidence=f.programs;
-    evidence[0].commandForms={{700,"namedtarget"},{701,"other"},{700,"namedtarget"}};
-    evidence.back().commandForms={{701,"other"}};
+    (expression?evidence[0].expressionForms:evidence[0].commandForms)={{700,"namedtarget"},{701,"other"},{700,"namedtarget"}};
+    (expression?evidence.back().commandForms:evidence.back().expressionForms)={{701,"other"}};
     auto named=[&](const Bytes& payload,uint32_t id=700,uint32_t flags=0){return Record("STAT",id,compressed?Compressed(payload):payload,flags|(compressed?0x40000:0));};
     Bytes target,other;Sub(other,"EDID",Text("Other"));
     if(extended){Sub(target,"XXXX",Word(12));Sub(target,"EDID",{});Append(target,Text("NamedTarget"));}
@@ -337,11 +337,12 @@ int main(){
     assert(fo3script::MatchScriptProgramsToMaster(path,evidence,bound,cancel,error)&&bound.Matches(evidence));
     for(unsigned change=0;change<5;++change){
       auto bad=evidence;
-      if(change==0)bad[0].commandForms[0].first=702;
-      if(change==1)bad[0].commandForms[0].second="other";
-      if(change==2)bad[0].commandForms.pop_back();
-      if(change==3)std::swap(bad[0].commandForms[0],bad[0].commandForms[1]);
-      if(change==4)bad.back().commandForms.clear();
+      auto& bindings=expression?bad[0].expressionForms:bad[0].commandForms;
+      if(change==0)bindings[0].first=702;
+      if(change==1)bindings[0].second="other";
+      if(change==2)bindings.pop_back();
+      if(change==3)std::swap(bindings[0],bindings[1]);
+      if(change==4)(expression?bad.back().commandForms:bad.back().expressionForms).clear();
       assert(!bound.Matches(bad));
       if(change<2)assert(!fo3script::MatchScriptProgramsToMaster(path,bad,bound,cancel,error)&&bound.Matches(evidence));
     }
@@ -363,21 +364,21 @@ int main(){
   }
   {
     auto evidence=f.programs;auto quest=f.quest;Sub(quest,"EDID",Text("QuestIdentity"));
-    evidence[0].commandForms={{10,"questidentity"},{60,"fixturescript"}};
+    evidence[0].commandForms={{10,"questidentity"}};evidence[0].expressionForms={{60,"fixturescript"}};
     auto bytes=Record("QUST",10,quest);Append(bytes,Group(40,Record("INFO",50,f.info)));
     Append(bytes,Record("SCPT",60,f.event));Append(bytes,Owner());Append(bytes,Speakers());write(bytes);
     fo3script::ScriptMasterMatch shared;
     assert(fo3script::MatchScriptProgramsToMaster(path,evidence,shared,cancel,error)&&shared.Matches(evidence));
   }
-  for(unsigned invalid=0;invalid<5;++invalid){
-    auto evidence=f.programs;evidence[0].commandForms={{700,"namedtarget"}};
-    if(invalid==0)evidence[0].commandForms[0].first=0;
-    if(invalid==1)evidence[0].commandForms[0].second.clear();
-    if(invalid==2)evidence[0].commandForms[0].second="NamedTarget";
-    if(invalid==3)evidence[0].commandForms[0].second=std::string("name\0tail",9);
-    if(invalid==4)evidence[0].commandForms[0].second.resize(fo3script::ScriptEvidenceMaxBytes,'x');
+  for(bool expression:{false,true})for(unsigned invalid=0;invalid<5;++invalid){
+    auto evidence=f.programs;auto& bindings=expression?evidence[0].expressionForms:evidence[0].commandForms;bindings={{700,"namedtarget"}};
+    if(invalid==0)bindings[0].first=0;
+    if(invalid==1)bindings[0].second.clear();
+    if(invalid==2)bindings[0].second="NamedTarget";
+    if(invalid==3)bindings[0].second=std::string("name\0tail",9);
+    if(invalid==4)bindings[0].second.resize(fo3script::ScriptEvidenceMaxBytes,'x');
     assert(!fo3script::MatchScriptProgramsToMaster(path+"-missing",evidence,report,cancel,error)&&report.Matches(f.programs));
-    assert(error==(invalid==4?"script master evidence byte limit exceeded":"malformed command form binding"));
+    assert(error==(invalid==4?"script master evidence byte limit exceeded":"malformed script form binding"));
   }
   // Null and nonnull authored SCRI preserve exact quest local-scope matching.
   for(uint32_t script:{0u,60u}){

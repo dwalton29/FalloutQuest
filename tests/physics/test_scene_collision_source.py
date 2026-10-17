@@ -532,6 +532,9 @@ assert script_runtime.index('fo3script::ChargeScriptLocals(')<script_runtime.ind
 assert 'container&&!fo3script::CompleteScriptLocalRecords(*container)' in script_runtime
 assert 'scriptTrace_?&forms:nullptr' in script_runtime
 assert script_runtime.index('fo3script::ChargeScriptForms(')<script_runtime.index('execution.commandForms=std::move(forms.bindings)')
+assert 'expressionForms.limit=forms.limit-forms.used' in script_runtime
+assert 'scriptTrace_?&expressionForms:nullptr' in script_runtime
+assert script_runtime.index('fo3script::ChargeScriptForms(expressionForms.bindings,nextBytes)')<script_runtime.index('execution.expressionForms=std::move(expressionForms.bindings)')
 assert 'candidate.scriptTraceBytes_=0;' in script_transaction
 assert 'ScriptProgramKind::UnboundResult' in script_header
 print('Detached script provenance records exact entered bodies and typed origins without publishing its collector into canonical state')
@@ -591,7 +594,8 @@ assert master_match.index('!ChargeScriptLocals(')<master_match.index('!CompleteS
 assert 'CompleteScriptLocalRecords' not in master_match[master_match.index('bool ScriptMasterMatch::Matches('):master_match.index('bool MatchScriptProgramsToMaster(')]
 assert 'type=="SCPT"&&!locals.Accept(' in master_match
 assert 'a.commandForms==b.commandForms' in master_match
-assert master_match.index('!ChargeScriptForms(')<master_match.index('for(const auto& binding:e.commandForms)')<master_match.index('std::fopen(master.c_str(),"rb")')
+assert master_match.index('!ChargeScriptForms(e.expressionForms,evidenceBytes)')<master_match.index('for(const auto* bindings:{&e.commandForms,&e.expressionForms})')<master_match.index('std::fopen(master.c_str(),"rb")')
+assert 'a.expressionForms==b.expressionForms' in master_match
 assert 'formsSeen.size()!=forms.size()' in master_match
 assert 'pass==0&&forms.count(id)' in master_match
 assert master_match.index('localsSeen.size()!=locals.size()')<master_match.index('out=std::move(next);')

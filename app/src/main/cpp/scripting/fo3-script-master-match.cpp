@@ -36,7 +36,7 @@ bool Same(const Execution& a,const Execution& b) noexcept {
     a.activator==b.activator&&a.localScript==b.localScript&&a.parent==b.parent&&
     a.reference==b.reference&&Same(a.program,b.program)&&Same(a.container,b.container)&&
     a.owningQuest==b.owningQuest&&Same(a.conditions,b.conditions)&&Same(a.questConditions,b.questConditions)&&
-    a.localVariables==b.localVariables&&a.commandForms==b.commandForms;
+    a.localVariables==b.localVariables&&a.commandForms==b.commandForms&&a.expressionForms==b.expressionForms;
 }
 bool Contexts(const std::vector<Execution>& programs){
   std::array<size_t,32> active{};size_t depth=0;
@@ -194,16 +194,17 @@ bool MatchScriptProgramsToMaster(const std::string& master,const std::vector<Exe
   for(size_t n=0;n<programs.size();++n){
     const auto& e=programs[n];
     if(!ChargeScriptEvidence(e.origin.event,e.program,&e.container,evidenceBytes,&e.conditions,&e.questConditions)||
-        !ChargeScriptLocals(e.localVariables,evidenceBytes)||!ChargeScriptForms(e.commandForms,evidenceBytes))
+        !ChargeScriptLocals(e.localVariables,evidenceBytes)||!ChargeScriptForms(e.commandForms,evidenceBytes)||
+        !ChargeScriptForms(e.expressionForms,evidenceBytes))
       return fail("script master evidence byte limit exceeded");
     if(!Type(programs[n]))return fail("unbound or malformed script origin");
     if(!CompleteScriptLocalRecords(e.container))return fail("malformed local records");
     if(!UnambiguousScriptLocals(e.localVariables))return fail("local names are empty or ambiguous");
     if(!ConsistentScriptLocalDeclarations(e.container.source,e.localVariables))
       return fail("local declarations do not match source");
-    for(const auto& binding:e.commandForms){
+    for(const auto* bindings:{&e.commandForms,&e.expressionForms})for(const auto& binding:*bindings){
       if(!binding.first||binding.second.empty()||Lower(binding.second)!=binding.second||binding.second.find('\0')!=std::string::npos)
-        return fail("malformed command form binding");
+        return fail("malformed script form binding");
       forms[binding.first].push_back(binding.second);
     }
     wanted[programs[n].origin.record].push_back(n);

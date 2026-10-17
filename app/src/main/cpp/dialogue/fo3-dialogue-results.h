@@ -3,6 +3,7 @@
 namespace fo3dialogue {
 enum class CommandType { Variable, Global, If, ElseIf, Else, EndIf, StopQuest, EnableControls, StartQuest, Stage, CompleteQuest, ObjectiveDisplay, ObjectiveComplete, AddItem, AddTopic, ShowMessage, PlaySound, RemoveItem, SetQuestObject, RewardKarma, EvaluatePackage, Lock, Unlock, ShowBarterMenu, ModDisposition, CompleteAllObjectives, RewardXP, SetCellFullName, AddAchievement, Disable };
 struct Command {CommandType type;uint32_t form=0,index=0;uint64_t variable=0;float value=0;std::string expression;};
+// Shared bounded form-name sink for command compilation and expression preflight.
 struct CommandFormCapture {
   std::vector<std::pair<uint32_t,std::string>> bindings;
   size_t limit=0,used=0;

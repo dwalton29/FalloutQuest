@@ -4,10 +4,11 @@
 
 - Starting canonical main: `2987d911f318b92d1041257868067851a09d16f0` (v208).
 - Resumed from published `6469dbb872889a79a0682501b75f6ac6577ab547`.
-- Current implementation checkpoint: M1B3an command form-name binding evidence.
+- Current implementation checkpoint: M1B3ao expression-preflight form bindings.
   Use canonical main history for the publication SHA; the previous published
-  implementation is M1B3am `3164b3386477d13d57c852f7028a89175e119015`.
-  Its Android CI was running at this checkpoint's initial recheck (run 39079219216).
+  implementation is M1B3an `844e6a2518d69d3e86e516acc4d815b4e5bee879`.
+  Its Android CI was running at this checkpoint's initial recheck (run 39079810706).
+  M1B3am Android CI passed (run 39079219216).
 - M1B3l Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38635385905.
 - M1B3m Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38793178567.
 - M1B3n Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38795209693.
@@ -1165,3 +1166,39 @@ runtime outcomes remain open. Empty supplied bindings are not a no-lookup proof.
 There is no dependency exemption or general resident caller. Full ownership,
 bounded dispatch and device validation still gate general resident Enable/Disable;
 version 212 is unchanged. See `world-reference-m1b3an.md` for exact scope.
+
+## M1B3ao validation
+
+Captured preparation now retains successful form-name lookups from the existing
+all-expression preflight in a separate ordered expressionForms vector. Quest
+queries, item counts, named receiver queries and global fallback use the shared
+resolver sink. Unreachable expressions and both logical operands retain their
+existing evaluation behavior. Runtime execution supplies no sink, so preflight
+bindings are not duplicated or misrepresented as a runtime read trace.
+
+The collector's allowance subtracts already collected command bindings from the
+remaining transaction evidence budget before retaining names. Final entry
+accounting charges both vectors with all existing evidence under 16 MiB. The
+vectors move into entries after charging. Master matching validates both phases
+before file access and authenticates their supplied targets together during the
+existing first scan. Exact allocation/file-free report comparison preserves the
+phase boundary and lookup order. No extra master pass or dependency exemption
+is added; capture-off preparation/execution is unchanged.
+
+All 53 core host tests, the actor test and source guards pass. Matcher and
+transaction fixtures pass ASan/UBSan (LeakSanitizer disabled), including the new
+collector and oversized-name rejection. Original captured MS11 evidence matches
+with both binding phases; all 1,257 SCPTs still satisfy local policy. Original
+Lucas acceptance/production bridge, merchant barter and all three completion/
+reward/save-reload branches pass. Existing showmap diagnostics and the verified
+original ESM SHA256 are unchanged. M1B3am Android CI passed (run 39079219216).
+
+Preflight binding identity is not runtime read values/outcomes or independent
+trace completeness. Qualified variables, implicit receivers, condition reads,
+same-name EDIDs on other IDs, target type suitability, aliases and call/event
+causality remain open. Empty supplied bindings are not a no-lookup proof.
+Private collector capacity/tokenization/normalization and matcher indexes stay
+outside retained-value accounting and any whole-preparation/Quest timing claim.
+General resident Enable/Disable remains gated by full ownership, bounded
+dispatch and device validation. Version 212 is unchanged; see
+`world-reference-m1b3ao.md` for scope.

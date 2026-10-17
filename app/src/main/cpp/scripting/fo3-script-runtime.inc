@@ -6,6 +6,7 @@ namespace fo3script {
 class Expression {
   const fo3player::Player& p; uint32_t owner,scriptId;
   std::vector<std::string> tokens; size_t at=0; std::string& error;
+  fo3dialogue::CommandFormCapture* forms;
   bool Fail(const std::string& text){if(error.empty())error=text;return false;}
   bool Atom(float& value) {
     if(at==tokens.size())return Fail("missing expression operand");
@@ -15,7 +16,11 @@ class Expression {
     char* end=nullptr;value=std::strtof(t.c_str(),&end);
     if(end!=t.c_str()&&!*end)return std::isfinite(value)||Fail("nonfinite literal");
     const auto& d=p.Definitions().pipboy;
-    auto form=[&](const std::string& n){auto f=d.formNames.find(n);return f==d.formNames.end()?0:f->second;};
+    auto form=[&](const std::string& n){
+      const auto f=d.formNames.find(n);if(f==d.formNames.end()||!f->second)return uint32_t(0);
+      if(forms&&!forms->Add(f->second,n))return uint32_t(0);
+      return f->second;
+    };
     if(t=="getstage"||t=="getstagedone"||t=="getquestrunning"||t=="getobjectivedisplayed"||t=="getobjectivecompleted") {
       if(at==tokens.size())return Fail("missing query quest");
       const auto id=form(tokens[at++]);auto def=d.quests.find(id);if(def==d.quests.end())return Fail("invalid query quest");
@@ -79,7 +84,7 @@ class Expression {
   bool And(float& value){if(!Compare(value))return false;while(at<tokens.size()&&tokens[at]=="&&"){++at;float b;if(!Compare(b))return false;value=value!=0&&b!=0;}return true;}
   bool Or(float& value){if(!And(value))return false;while(at<tokens.size()&&tokens[at]=="||"){++at;float b;if(!And(b))return false;value=value!=0||b!=0;}return true;}
 public:
-  Expression(const fo3player::Player& player,uint32_t o,const std::string& text,std::string& e,uint32_t sid=0):p(player),owner(o),scriptId(sid),error(e) {
+  Expression(const fo3player::Player& player,uint32_t o,const std::string& text,std::string& e,uint32_t sid=0,fo3dialogue::CommandFormCapture* capture=nullptr):p(player),owner(o),scriptId(sid),error(e),forms(capture) {
     for(size_t i=0;i<text.size();) {
       if(std::isspace((unsigned char)text[i])){++i;continue;}
       const size_t start=i;const auto c=text[i];
@@ -161,6 +166,8 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
     if(forms.exhausted)error="script provenance byte limit exceeded";
     return false;
   }
+  fo3dialogue::CommandFormCapture expressionForms;
+  if(scriptTrace_)expressionForms.limit=forms.limit-forms.used;
   using C=fo3dialogue::CommandType;
   // Validate all expressions and block structure, including unreachable branches.
   struct Gate {bool parent,taken,active,hasElse;};std::vector<Gate> gates;
@@ -168,7 +175,13 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
     if(c.type==C::If)gates.push_back({true,false,false,false});
     if(c.type==C::ElseIf||c.type==C::Else){if(gates.empty()||gates.back().hasElse){error="invalid else/elseif";return false;}if(c.type==C::Else)gates.back().hasElse=true;}
     if(c.type==C::EndIf){if(gates.empty()){error="orphan endif";return false;}gates.pop_back();}
-    if(c.type==C::If||c.type==C::ElseIf||c.type==C::Variable||c.type==C::Global||((c.type==C::ShowMessage||c.type==C::ShowBarterMenu)&&!c.expression.empty())){float v;if(!fo3script::Expression(*this,owner,c.expression,error,scriptId).Evaluate(v))return false;}
+    if(c.type==C::If||c.type==C::ElseIf||c.type==C::Variable||c.type==C::Global||((c.type==C::ShowMessage||c.type==C::ShowBarterMenu)&&!c.expression.empty())){
+      float v;const bool valid=fo3script::Expression(*this,owner,c.expression,error,scriptId,scriptTrace_?&expressionForms:nullptr).Evaluate(v);
+      if(!valid||expressionForms.exhausted){
+        if(expressionForms.exhausted)error="script provenance byte limit exceeded";
+        return false;
+      }
+    }
   }
   if(!gates.empty()){error="unterminated if";return false;}
   struct RestoreTraceParent {Player& p;uint32_t previous;
@@ -208,7 +221,8 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
     if(!fo3script::ChargeScriptEvidence(origin.event,script,container,nextBytes,conditions,questConditions)){
       error="script provenance byte limit exceeded";return false;
     }
-    if(!fo3script::ChargeScriptForms(forms.bindings,nextBytes)){
+    if(!fo3script::ChargeScriptForms(forms.bindings,nextBytes)||
+        !fo3script::ChargeScriptForms(expressionForms.bindings,nextBytes)){
       error="script provenance byte limit exceeded";return false;
     }
     const fo3pipdata::Script* localScript=nullptr;
@@ -234,6 +248,7 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
     execution.parent=scriptTraceParent_;execution.reference=scriptReference_;
     execution.program=script;
     execution.commandForms=std::move(forms.bindings);
+    execution.expressionForms=std::move(expressionForms.bindings);
     execution.owningQuest=owningQuest;
     if(conditions)execution.conditions=*conditions;
     if(questConditions)execution.questConditions=*questConditions;

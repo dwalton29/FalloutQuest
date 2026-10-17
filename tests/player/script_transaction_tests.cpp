@@ -237,6 +237,40 @@ static void CommandFormProvenance(){
   assert(player.Revision()==revision&&player.Snapshot().karma==0);NoEffects(player);
   auto plain=player.PrepareQuestStageTransaction(10,10,error);assert(plain&&plain->ExecutedScripts().empty());
 }
+static void ExpressionFormProvenance(){
+  constexpr auto capture=fo3player::ScriptProgramCapture::EnteredPrograms;
+  const std::string body="if 0 && Player.GetItemCount TeStItEm > 0\nif GetStage QuestA >= 0\nRewardKarma 1\nendif\nendif\n"
+    "if GetQuestRunning QuestB || TestRef.GetDisabled\nRewardKarma 2\nendif\n"
+    "if GetStageDone QuestA 10 && GetObjectiveDisplayed QuestA 1\nRewardKarma 3\nendif\n"
+    "set TestGlobal to TestGlobal + Player.GetItemCount TestItem";
+  const std::vector<std::pair<uint32_t,std::string>> expected={{400,"testitem"},{10,"questa"},{11,"questb"},{100,"testref"},
+    {10,"questa"},{10,"questa"},{700,"testglobal"},{400,"testitem"}};
+  for(bool event:{false,true}){
+    auto catalog=Fixture();catalog.pipboy.formNames["testref"]=100;catalog.pipboy.formNames["testglobal"]=700;catalog.globals[700]=1;
+    if(event){catalog.pipboy.scripts[300].source="Begin OnActivate\n"+body+"\nEnd";catalog.eventPrograms[300]=fo3script::ParseEvents(catalog.pipboy.scripts[300]);}
+    else catalog.pipboy.quests[10].stages[10].items[0].result=Script(body);
+    fo3player::Player player(std::move(catalog));std::string error;const auto revision=player.Revision();
+    auto prepare=[&](fo3player::ScriptProgramCapture mode){return event?
+      player.PrepareReferenceEventTransaction(100,"OnActivate",fo3player::PlayerRef,error,mode):player.PrepareQuestStageTransaction(10,10,error,mode);};
+    auto plan=prepare(capture);if(!plan)std::cerr<<error<<'\n';assert(plan&&plan->ExecutedScripts().size()==1);
+    const auto& entry=plan->ExecutedScripts()[0];assert(entry.expressionForms==expected);
+    assert((entry.commandForms==std::vector<std::pair<uint32_t,std::string>>{{700,"testglobal"}}));
+    assert(player.Revision()==revision&&player.Snapshot().karma==0);NoEffects(player);
+    auto plain=prepare(fo3player::ScriptProgramCapture::None);assert(plain&&plain->ExecutedScripts().empty());
+    forbidAllocations=true;assert(player.CommitScriptTransaction(*plan)&&player.RollbackScriptTransaction(*plan));forbidAllocations=false;
+    assert(entry.expressionForms==expected);NoEffects(player);
+  }
+  // A successful catalog lookup must not copy an unbounded name into preflight
+  // evidence. Capture-off evaluation still uses the existing global semantics.
+  auto catalog=Fixture();const std::string huge(fo3script::ScriptEvidenceMaxBytes,'r');
+  catalog.pipboy.formNames[huge]=700;catalog.globals[700]=1;
+  catalog.pipboy.quests[10].stages[10].items[0].result=Script("if "+huge+"\nendif");
+  fo3player::Player player(std::move(catalog));std::string error;const auto revision=player.Revision();
+  assert(!player.PrepareQuestStageTransaction(10,10,error,capture));
+  assert(error.find("script provenance byte limit exceeded")!=std::string::npos);
+  assert(player.Revision()==revision&&player.Snapshot().karma==0);NoEffects(player);
+  assert(player.PrepareQuestStageTransaction(10,10,error));
+}
 static void LocalRecordProvenance(){
   constexpr auto capture=fo3player::ScriptProgramCapture::EnteredPrograms;
   for(bool event:{false,true})for(unsigned kind=0;kind<9;++kind){
@@ -527,6 +561,7 @@ struct ScriptWorkflowAdapter {
 int main(int argc,char** argv){
   Provenance();
   CommandFormProvenance();
+  ExpressionFormProvenance();
   LocalRecordProvenance();
   DialogueProvenance();
   if(argc>1)OriginalProvenance(argv[1]);
