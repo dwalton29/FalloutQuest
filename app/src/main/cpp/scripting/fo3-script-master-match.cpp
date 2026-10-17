@@ -36,7 +36,7 @@ bool Same(const Execution& a,const Execution& b) noexcept {
     a.activator==b.activator&&a.localScript==b.localScript&&a.parent==b.parent&&
     a.reference==b.reference&&Same(a.program,b.program)&&Same(a.container,b.container)&&
     a.owningQuest==b.owningQuest&&Same(a.conditions,b.conditions)&&Same(a.questConditions,b.questConditions)&&
-    a.localVariables==b.localVariables;
+    a.localVariables==b.localVariables&&a.commandForms==b.commandForms;
 }
 bool Contexts(const std::vector<Execution>& programs){
   std::array<size_t,32> active{};size_t depth=0;
@@ -157,6 +157,27 @@ bool Association(const std::vector<uint8_t>& bytes,const std::string& type,
   });
   return valid&&count==1&&value;
 }
+// Strict generic framing and exactly one complete EDID; no gameplay decoding.
+bool EditorName(const std::vector<uint8_t>& bytes,std::string& name){
+  size_t at=0;uint32_t extended=0;bool found=false;
+  while(at<bytes.size()){
+    if(bytes.size()-at<6)return false;
+    const auto* tag=bytes.data()+at;const auto shortSize=fo3esm::ReadU16(tag+4);at+=6;
+    if(Is(tag,"XXXX")){
+      if(extended||shortSize!=4||bytes.size()-at<4)return false;
+      extended=fo3esm::ReadU32(bytes.data()+at);at+=4;if(!extended)return false;
+      continue;
+    }
+    const uint32_t n=extended?extended:shortSize;extended=0;
+    if(n>bytes.size()-at)return false;
+    if(Is(tag,"EDID")){
+      if(found||!n||bytes[at+n-1]!=0||std::memchr(bytes.data()+at,0,n-1))return false;
+      name=Lower(std::string(reinterpret_cast<const char*>(bytes.data()+at),n-1));found=true;
+    }
+    at+=n;
+  }
+  return !extended&&found;
+}
 }
 bool ScriptMasterMatch::Matches(const std::vector<Execution>& programs) const noexcept {
   if(!Verified()||programs_.size()!=programs.size())return false;
@@ -169,16 +190,22 @@ bool MatchScriptProgramsToMaster(const std::string& master,const std::vector<Exe
   if(programs.empty()||programs.size()>ScriptEvidenceMaxEntries)return fail("invalid script master evidence count");
   size_t evidenceBytes=0;
   std::unordered_map<uint32_t,std::vector<size_t>> wanted,owners,bases;
+  std::unordered_map<uint32_t,std::vector<std::string>> forms;
   for(size_t n=0;n<programs.size();++n){
     const auto& e=programs[n];
     if(!ChargeScriptEvidence(e.origin.event,e.program,&e.container,evidenceBytes,&e.conditions,&e.questConditions)||
-        !ChargeScriptLocals(e.localVariables,evidenceBytes))
+        !ChargeScriptLocals(e.localVariables,evidenceBytes)||!ChargeScriptForms(e.commandForms,evidenceBytes))
       return fail("script master evidence byte limit exceeded");
     if(!Type(programs[n]))return fail("unbound or malformed script origin");
     if(!CompleteScriptLocalRecords(e.container))return fail("malformed local records");
     if(!UnambiguousScriptLocals(e.localVariables))return fail("local names are empty or ambiguous");
     if(!ConsistentScriptLocalDeclarations(e.container.source,e.localVariables))
       return fail("local declarations do not match source");
+    for(const auto& binding:e.commandForms){
+      if(!binding.first||binding.second.empty()||Lower(binding.second)!=binding.second||binding.second.find('\0')!=std::string::npos)
+        return fail("malformed command form binding");
+      forms[binding.first].push_back(binding.second);
+    }
     wanted[programs[n].origin.record].push_back(n);
     if(e.origin.kind==Kind::ReferenceEvent||e.origin.kind==Kind::DialogueInfo)owners[e.owner].push_back(n);
   }
@@ -187,7 +214,7 @@ bool MatchScriptProgramsToMaster(const std::string& master,const std::vector<Exe
   if(!file)return fail("script master unavailable");
   const auto size=fo3esm::FileSize(file.get());if(size<24)return fail("invalid script master size");
   struct Group{uint64_t end;uint32_t label,type;};std::vector<Group> stack;
-  std::unordered_map<uint32_t,bool> seen;std::vector<uint8_t> bytes;
+  std::unordered_map<uint32_t,bool> seen,formsSeen;std::vector<uint8_t> bytes;
   std::unordered_map<uint32_t,bool> ownersSeen,basesSeen;
   std::unordered_map<uint32_t,std::vector<size_t>> locals;
   std::unordered_map<uint32_t,bool> localsSeen;
@@ -216,6 +243,15 @@ bool MatchScriptProgramsToMaster(const std::string& master,const std::vector<Exe
     }
     if(n>limit-p-24)return fail("invalid script master record size");
     const auto id=fo3esm::ReadU32(h+12);const auto found=wanted.find(id);
+    if(pass==0&&forms.count(id)){
+      if(!formsSeen.emplace(id,true).second)return fail("duplicate command form identity");
+      const auto flags=fo3esm::ReadU32(h+8);
+      if(flags&0x20)return fail("deleted command form identity");
+      std::string name;
+      if(!fo3esm::ReadPayload(file.get(),{p+24,n,flags,std::string(reinterpret_cast<const char*>(h),4)},bytes)||!EditorName(bytes,name))
+        return fail("malformed command form EDID");
+      for(const auto& expected:forms.at(id))if(name!=expected)return fail("command form name differs from original master");
+    }
     if(pass==0&&found!=wanted.end()){
       const std::string type(reinterpret_cast<const char*>(h),4);const auto flags=fo3esm::ReadU32(h+8);
       if(!seen.emplace(id,true).second)return fail("duplicate script master identity");
@@ -310,6 +346,7 @@ bool MatchScriptProgramsToMaster(const std::string& master,const std::vector<Exe
   }
   }
   if(seen.size()!=wanted.size())return fail("script master identity missing");
+  if(formsSeen.size()!=forms.size())return fail("command form identity missing");
   if(ownersSeen.size()!=owners.size()||basesSeen.size()!=bases.size())return fail("script owner association identity missing");
   if(questsSeen.size()!=requiredQuests.size())return fail("INFO owning quest identity missing");
   if(localsSeen.size()!=locals.size())return fail("local script identity missing");

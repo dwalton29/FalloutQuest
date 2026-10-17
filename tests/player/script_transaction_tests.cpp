@@ -6,6 +6,7 @@
 #include "scripting/fo3-script-evidence-budget.h"
 #include "scripting/fo3-script-local-policy.h"
 #include "dialogue/fo3-dialogue-info-policy.h"
+#include "dialogue/fo3-dialogue-results.h"
 #include <array>
 #include <cassert>
 #include <cstdlib>
@@ -78,6 +79,9 @@ static void Provenance(){
   assert(entered[0].localScript==301&&entered[0].localVariables.size()==1&&
     entered[0].localVariables[0].first==5&&entered[0].localVariables[0].second=="QuestLocal");
   assert(entered[1].localVariables.empty());
+  const std::vector<std::pair<uint32_t,std::string>> stageForms={{400,"testitem"},{11,"questb"},{500,"testmessage"},{600,"testsound"}};
+  assert(entered[0].commandForms==stageForms);
+  assert((entered[1].commandForms==std::vector<std::pair<uint32_t,std::string>>{{400,"testitem"},{10,"questa"}}));
   assert(entered[0].conditions.size()==1&&entered[0].conditions[0].function==72&&
     entered[0].conditions[0].run==1&&entered[0].conditions[0].a==7&&entered[0].conditions[0].value==1);
   assert(!entered[0].owningQuest&&entered[0].questConditions.empty()&&entered[1].conditions.empty());
@@ -208,6 +212,30 @@ static void Provenance(){
     assert(guarded.Revision()==revision&&guarded.Snapshot().karma==0);NoEffects(guarded);
     assert(prepare(fo3player::ScriptProgramCapture::None));
   }
+}
+static void CommandFormProvenance(){
+  auto catalog=Fixture();catalog.pipboy.formNames["testref"]=100;
+  const auto script=Script("if 0\nplayer.AddItem TestItem 1\nendif\nSetCellFullName TestItem TestMessage\nTestRef.EVP\nDisable\nTestRef.Disable");
+  const std::vector<std::pair<uint32_t,std::string>> expected={{400,"testitem"},{400,"testitem"},{500,"testmessage"},{100,"testref"},{100,"testref"}};
+  std::vector<fo3dialogue::Command> commands;std::string error;
+  size_t cost=0;assert(fo3script::ChargeScriptForms(expected,cost));
+  fo3dialogue::CommandFormCapture forms;forms.limit=cost;
+  assert(fo3dialogue::CompileResult(catalog.pipboy,script,commands,error,100,0,&forms));
+  assert(forms.bindings==expected&&forms.used==cost&&!forms.exhausted);
+  forms.limit=cost-1;
+  assert(!fo3dialogue::CompileResult(catalog.pipboy,script,commands,error,100,0,&forms));
+  assert(forms.exhausted&&forms.used<=forms.limit&&forms.bindings.size()==expected.size()-1);
+  assert(fo3dialogue::CompileResult(catalog.pipboy,script,commands,error,100));
+  forms.limit=0;
+  assert(fo3dialogue::CompileResult(catalog.pipboy,Script("RewardKarma 1"),commands,error,100,0,&forms));
+  assert(forms.bindings.empty()&&!forms.used&&!forms.exhausted);
+  constexpr auto capture=fo3player::ScriptProgramCapture::EnteredPrograms;
+  catalog.pipboy.quests[10].stages[10].items[0].result=Script("if 0\nplayer.AddItem TestItem 1\nendif\nRewardKarma 2");
+  fo3player::Player player(std::move(catalog));const auto revision=player.Revision();
+  auto plan=player.PrepareQuestStageTransaction(10,10,error,capture);assert(plan);
+  assert((plan->ExecutedScripts()[0].commandForms==std::vector<std::pair<uint32_t,std::string>>{{400,"testitem"}}));
+  assert(player.Revision()==revision&&player.Snapshot().karma==0);NoEffects(player);
+  auto plain=player.PrepareQuestStageTransaction(10,10,error);assert(plain&&plain->ExecutedScripts().empty());
 }
 static void LocalRecordProvenance(){
   constexpr auto capture=fo3player::ScriptProgramCapture::EnteredPrograms;
@@ -498,6 +526,7 @@ struct ScriptWorkflowAdapter {
 };
 int main(int argc,char** argv){
   Provenance();
+  CommandFormProvenance();
   LocalRecordProvenance();
   DialogueProvenance();
   if(argc>1)OriginalProvenance(argv[1]);

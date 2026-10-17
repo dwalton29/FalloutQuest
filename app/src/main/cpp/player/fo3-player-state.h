@@ -294,6 +294,9 @@ struct ScriptExecution {
   std::vector<fo3pipdata::Condition> conditions,questConditions;
   // Canonical index order; preserves decoded names rather than map iteration.
   std::vector<std::pair<uint32_t,std::string>> localVariables;
+  // Successful command-compiler form-name lookups, in lookup order (including
+  // unreachable commands). Not expression or qualified-variable read evidence.
+  std::vector<std::pair<uint32_t,std::string>> commandForms;
 };
 struct ReferenceEnableChange { uint32_t reference=0; bool enabled=false; };
 // Owned reference-only input for the future scene coordinator. It neither runs

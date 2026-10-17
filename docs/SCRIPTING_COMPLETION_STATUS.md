@@ -4,10 +4,10 @@
 
 - Starting canonical main: `2987d911f318b92d1041257868067851a09d16f0` (v208).
 - Resumed from published `6469dbb872889a79a0682501b75f6ac6577ab547`.
-- Current implementation checkpoint: M1B3am strict local-record framing.
+- Current implementation checkpoint: M1B3an command form-name binding evidence.
   Use canonical main history for the publication SHA; the previous published
-  implementation is M1B3al `0bef93c45e4632885b0dc10f2367a40509249202`.
-  Its Android CI passed (run 39076646316).
+  implementation is M1B3am `3164b3386477d13d57c852f7028a89175e119015`.
+  Its Android CI was running at this checkpoint's initial recheck (run 39079219216).
 - M1B3l Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38635385905.
 - M1B3m Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38793178567.
 - M1B3n Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38795209693.
@@ -1133,3 +1133,35 @@ external variable/read ownership. Full grammar, aliases, runtime outcomes and
 call/event causality remain separate requirements. General resident Enable/Disable
 still awaits complete ownership, bounded dispatch and device validation;
 version 212 remains unchanged. See `world-reference-m1b3am.md` for scope.
+
+## M1B3an validation
+
+Captured command compilation now retains successful normalized form-name/ID
+lookups in order, including repetitions, explicit receivers, multi-form commands
+and unreachable branches. Collection is opt-in and byte-bounded before copying;
+final entry accounting charges all bindings alongside existing evidence under
+the shared 16 MiB limit. Bindings move into owned entries after charging.
+Capture-off compilation/execution is unchanged.
+
+The existing first master scan authenticates every supplied target ID against
+one nondeleted record with one complete matching EDID. Strict generic subrecord
+and XXXX framing rejects malformed/duplicate/unterminated/hidden-tail EDIDs;
+missing, deleted, duplicate or misnamed target identities reject atomically.
+No new scan is added. Exact frame report comparison includes ordered bindings
+without allocations or file access. Collector capacity and matcher indexes
+remain private work outside retained-value accounting and Quest timing claims.
+
+All 53 core host tests, the actor test, source guards and matcher ASan/UBSan pass
+(LeakSanitizer disabled). Original captured MS11 stage/event/INFO evidence
+matches with the new bindings; all 1,257 original SCPTs still satisfy the local
+policy. Original Lucas acceptance/production bridge, merchant barter and all
+three MS11 completion/reward/save-reload branches pass. Existing showmap
+diagnostics and the verified original ESM SHA256 remain unchanged.
+
+Only supplied command bindings are authenticated here. Independent compiler
+trace completeness, same-name EDIDs on other IDs, target type suitability,
+expression reads, qualified variables, implicit receivers, external aliases and
+runtime outcomes remain open. Empty supplied bindings are not a no-lookup proof.
+There is no dependency exemption or general resident caller. Full ownership,
+bounded dispatch and device validation still gate general resident Enable/Disable;
+version 212 is unchanged. See `world-reference-m1b3an.md` for exact scope.

@@ -152,7 +152,15 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
     if(quest!=catalog_->pipboy.quests.end())scriptId=quest->second.script;
   }
   std::vector<fo3dialogue::Command> commands;
-  if(!fo3dialogue::CompileResult(catalog_->pipboy,script,commands,error,owner,scriptId))return false;
+  fo3dialogue::CommandFormCapture forms;
+  if(scriptTrace_){
+    if(scriptTraceBytes_>fo3script::ScriptEvidenceMaxBytes){error="script provenance byte limit exceeded";return false;}
+    forms.limit=fo3script::ScriptEvidenceMaxBytes-scriptTraceBytes_;
+  }
+  if(!fo3dialogue::CompileResult(catalog_->pipboy,script,commands,error,owner,scriptId,scriptTrace_?&forms:nullptr)){
+    if(forms.exhausted)error="script provenance byte limit exceeded";
+    return false;
+  }
   using C=fo3dialogue::CommandType;
   // Validate all expressions and block structure, including unreachable branches.
   struct Gate {bool parent,taken,active,hasElse;};std::vector<Gate> gates;
@@ -200,6 +208,9 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
     if(!fo3script::ChargeScriptEvidence(origin.event,script,container,nextBytes,conditions,questConditions)){
       error="script provenance byte limit exceeded";return false;
     }
+    if(!fo3script::ChargeScriptForms(forms.bindings,nextBytes)){
+      error="script provenance byte limit exceeded";return false;
+    }
     const fo3pipdata::Script* localScript=nullptr;
     if(scriptId){
       const auto found=catalog_->pipboy.scripts.find(scriptId);
@@ -222,6 +233,7 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
     execution.owner=owner;execution.activator=scriptActivator_;execution.localScript=scriptId;
     execution.parent=scriptTraceParent_;execution.reference=scriptReference_;
     execution.program=script;
+    execution.commandForms=std::move(forms.bindings);
     execution.owningQuest=owningQuest;
     if(conditions)execution.conditions=*conditions;
     if(questConditions)execution.questConditions=*questConditions;

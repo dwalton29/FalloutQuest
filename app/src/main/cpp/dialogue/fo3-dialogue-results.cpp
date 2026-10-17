@@ -56,11 +56,16 @@ bool Activate(const Context& ctx,fo3player::Player& player,std::string& error) {
   for(const auto& v:pending)if(!player.SetDialogueVariable(v.first,v.second))return false;
   return true;
 }
-bool CompileResult(const fo3pipdata::Definitions& d,const fo3pipdata::ResultScript& script,std::vector<Command>& out,std::string& error,uint32_t owner,uint32_t scriptId) {
+bool CompileResult(const fo3pipdata::Definitions& d,const fo3pipdata::ResultScript& script,std::vector<Command>& out,std::string& error,uint32_t owner,uint32_t scriptId,CommandFormCapture* forms) {
   out.clear();error.clear();
+  if(forms)forms->Reset();
   if(script.source.empty()&&!script.compiled.empty()){error="compiled-only result";return false;}
   auto lower=[](std::string s){for(auto& c:s)c=char(std::tolower((unsigned char)c));return s;};
-  auto form=[&](std::string n){auto f=d.formNames.find(lower(n));return f==d.formNames.end()?0:f->second;};
+  auto form=[&](std::string n){
+    n=lower(n);auto f=d.formNames.find(n);if(f==d.formNames.end()||!f->second)return uint32_t(0);
+    if(forms&&!forms->Add(f->second,n))return uint32_t(0);
+    return f->second;
+  };
   auto number=[](const std::string& s,float& n){char* end=nullptr;n=std::strtof(s.c_str(),&end);return end&&end!=s.c_str()&&!*end&&std::isfinite(n);};
   std::istringstream lines(lower(script.source));std::string line;
   while(std::getline(lines,line)) {

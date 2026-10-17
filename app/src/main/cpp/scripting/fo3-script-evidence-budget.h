@@ -48,4 +48,7 @@ template<class Locals> inline bool ChargeScriptLocals(const Locals& locals,size_
   }
   used=ScriptEvidenceMaxBytes-remaining;return true;
 }
+inline bool ChargeScriptForms(const std::vector<std::pair<uint32_t,std::string>>& forms,size_t& used) noexcept {
+  return ChargeScriptLocals(forms,used);
+}
 }
