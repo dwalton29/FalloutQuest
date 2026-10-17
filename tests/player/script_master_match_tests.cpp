@@ -33,6 +33,11 @@ static Bytes Owner(bool compressed=false){
   auto b=Record("ACTI",201,compressed?Compressed(base):base,compressed?0x40000:0);
   Append(b,Record("REFR",101,ref));return b;
 }
+static Bytes Speakers(bool compressed=false){
+  Bytes base,ref;Sub(base,"EDID",Text("FixtureActor"));Sub(ref,"NAME",Word(202));
+  auto b=Record("NPC_",202,compressed?Compressed(base):base,compressed?0x40000:0);
+  Append(b,Record("ACHR",102,ref));return b;
+}
 struct Fixture {
   Bytes quest,info,event;std::vector<Execution> programs;
   Fixture(){
@@ -45,7 +50,7 @@ struct Fixture {
     Execution q;q.origin.kind=Kind::QuestStageItem;q.origin.record=q.owner=10;q.origin.stage=10;
     q.program=d.quests.at(10).stages.at(10).items[0].result;programs.push_back(q);
     for(unsigned phase=0;phase<2;++phase){Execution i;i.origin.kind=Kind::DialogueInfo;
-      i.origin.record=50;i.origin.topic=40;i.origin.item=phase;i.owner=100;
+      i.origin.record=50;i.origin.topic=40;i.origin.item=phase;i.owner=102;
       i.program=phase?d.topics.at(40)[0].end:d.topics.at(40)[0].begin;programs.push_back(i);}
     Execution e;e.origin.kind=Kind::ReferenceEvent;e.origin.record=e.localScript=60;
     e.origin.sourceLine=1;e.origin.event="onactivate";e.owner=e.reference=101;e.activator=0x14;
@@ -54,7 +59,7 @@ struct Fixture {
   Bytes Master(bool compressed=false,bool extended=false) const {
     auto q=quest;if(extended){Bytes pref;Sub(pref,"XXXX",Word(100));Sub(pref,"EDID",{});Append(pref,Bytes(100,'x'));Append(pref,q);q=std::move(pref);}
     auto b=Record("QUST",10,compressed?Compressed(q):q,compressed?0x40000:0);
-    Append(b,Group(40,Record("INFO",50,info)));Append(b,Record("SCPT",60,event));Append(b,Owner(compressed));return b;
+    Append(b,Group(40,Record("INFO",50,info)));Append(b,Record("SCPT",60,event));Append(b,Owner(compressed));Append(b,Speakers(compressed));return b;
   }
 };
 int main(){
@@ -191,6 +196,7 @@ int main(){
   auto fallback=f.info;fallback.erase(fallback.begin(),fallback.begin()+10);
   auto b=Record("QUST",10,f.quest);Append(b,Group(40,Record("INFO",50,fallback)));Append(b,Record("SCPT",60,f.event));
   Append(b,Owner());
+  Append(b,Speakers());
   write(b);assert(fo3script::MatchScriptProgramsToMaster(path,f.programs,repeated,cancel,error));
   for(int malformed=0;malformed<3;++malformed){
     auto info=f.info;
@@ -205,6 +211,46 @@ int main(){
   write(b);rejects(f.programs);
   auto owned=std::move(repeated);assert(owned.Verified()&&owned.Matches(f.programs));
   assert(!repeated.Verified()&&!repeated.Matches({}));
+  // INFO speaker evidence resolves independently of an actor's optional SCRI.
+  // Both placement kinds, both record orders, compression and XXXX NAME work.
+  const std::vector<Execution> infoOnly={f.programs[1],f.programs[2]};
+  for(bool creature:{false,true})for(bool reversed:{false,true})for(bool compressed:{false,true}){
+    Bytes actor,placement;Sub(actor,"EDID",Text("Speaker"));Sub(actor,"SCRI",Word(999));
+    if(compressed){Sub(placement,"XXXX",Word(4));Sub(placement,"NAME",{});Append(placement,Word(202));}
+    else Sub(placement,"NAME",Word(202));
+    auto baseRecord=Record(creature?"CREA":"NPC_",202,compressed?Compressed(actor):actor,compressed?0x40000:0);
+    auto placedRecord=Record(creature?"ACRE":"ACHR",102,compressed?Compressed(placement):placement,compressed?0x40000:0);
+    b=Group(40,Record("INFO",50,f.info));
+    Append(b,reversed?placedRecord:baseRecord);Append(b,reversed?baseRecord:placedRecord);write(b);
+    assert(fo3script::MatchScriptProgramsToMaster(path,infoOnly,owned,cancel,error)&&owned.Matches(infoOnly));
+  }
+  for(int malformed=0;malformed<17;++malformed){
+    Bytes actor,placement;Sub(actor,"EDID",Text("Speaker"));Sub(placement,"NAME",Word(202));
+    if(malformed==0)placement.clear();
+    if(malformed==1){placement.clear();Sub(placement,"NAME",Word(0));}
+    if(malformed==2){placement.clear();Sub(placement,"NAME",{1,2,3});}
+    if(malformed==3)Sub(placement,"NAME",Word(202));
+    if(malformed==4)actor.push_back(0);
+    b=Group(40,Record("INFO",50,f.info));
+    if(malformed!=5)Append(b,Record(malformed==6?"REFR":malformed==7?"QUST":"ACHR",102,placement,malformed==8?0x20:0));
+    if(malformed!=9)Append(b,Record(malformed==10?"ACTI":malformed==11?"CREA":"NPC_",202,actor,malformed==12?0x20:0));
+    if(malformed==13)Append(b,Record("STAT",102,{}));
+    if(malformed==14)Append(b,Record("NPC_",202,actor,0x20));
+    auto evidence=infoOnly;
+    if(malformed==15)evidence[0].owner=0;
+    if(malformed==16)evidence[1].owner=999;
+    write(b);rejects(evidence);
+    assert(owned.Matches(infoOnly));
+  }
+  // Shared actor identity must satisfy the event SCRI as well as INFO binding.
+  for(uint32_t script:{60u,999u}){
+    Bytes actor,placement;Sub(actor,"SCRI",Word(script));Sub(placement,"NAME",Word(202));
+    b=Group(40,Record("INFO",50,f.info));Append(b,Record("SCPT",60,f.event));
+    Append(b,Record("NPC_",202,actor));Append(b,Record("ACHR",102,placement));write(b);
+    auto shared=infoOnly;auto event=f.programs.back();event.owner=event.reference=102;shared.push_back(event);
+    fo3script::ScriptMasterMatch sharedReport;
+    assert(fo3script::MatchScriptProgramsToMaster(path,shared,sharedReport,cancel,error)==(script==60));
+  }
   // Source identity alone never authenticates an event owner. Every requested
   // owner/base is unique, nondeleted, correctly typed and directly associated.
   const std::vector<Execution> eventOnly={f.programs.back()};

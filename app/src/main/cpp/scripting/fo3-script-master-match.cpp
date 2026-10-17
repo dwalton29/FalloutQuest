@@ -52,7 +52,7 @@ const char* Type(const Execution& e){
     case Kind::QuestStageItem:
       return e.owner==o.record&&!o.topic&&!o.sourceLine&&o.event.empty()&&Empty(e.container)?"QUST":nullptr;
     case Kind::DialogueInfo:
-      return o.topic&&o.item<2&&!o.stage&&!o.sourceLine&&o.event.empty()&&!e.localScript&&Empty(e.container)?"INFO":nullptr;
+      return e.owner&&o.topic&&o.item<2&&!o.stage&&!o.sourceLine&&o.event.empty()&&!e.localScript&&Empty(e.container)?"INFO":nullptr;
     case Kind::ReferenceEvent:
       return e.owner&&e.localScript==o.record&&o.sourceLine&&!o.event.empty()&&!o.item&&!o.stage&&!o.topic?"SCPT":nullptr;
     default:return nullptr; // raw bodies can never claim an authored identity
@@ -145,7 +145,7 @@ bool MatchScriptProgramsToMaster(const std::string& master,const std::vector<Exe
       return fail("script master evidence byte limit exceeded");
     if(!Type(programs[n]))return fail("unbound or malformed script origin");
     wanted[programs[n].origin.record].push_back(n);
-    if(programs[n].origin.kind==Kind::ReferenceEvent)owners[programs[n].owner].push_back(n);
+    if(e.origin.kind==Kind::ReferenceEvent||e.origin.kind==Kind::DialogueInfo)owners[e.owner].push_back(n);
   }
   if(!Contexts(programs))return fail("invalid script execution context tree");
   std::unique_ptr<FILE,Close> file(std::fopen(master.c_str(),"rb"));
@@ -196,9 +196,15 @@ bool MatchScriptProgramsToMaster(const std::string& master,const std::vector<Exe
       const bool placed=pass==0&&(type=="REFR"||type=="ACHR"||type=="ACRE");
       if((flags&0x20)||(pass==0?(!placed&&type!="QUST"):!EventBase(type)))
         return fail("deleted or wrong-type script owner association");
+      bool needsScript=false;
+      for(const auto index:binding->second){
+        const bool info=programs[index].origin.kind==Kind::DialogueInfo;
+        if(pass==0&&info&&type!="ACHR"&&type!="ACRE")return fail("dialogue speaker is not an authored actor placement");
+        needsScript=needsScript||!info;
+      }
       uint32_t association=0;
       if(!fo3esm::ReadPayload(file.get(),{p+24,n,flags,type},bytes)||
-          !Association(bytes,type,placed?"NAME":"SCRI",association))
+          ((placed||needsScript)?!Association(bytes,type,placed?"NAME":"SCRI",association):!Complete(bytes,type)))
         return fail("malformed or missing script owner association");
       for(const auto index:binding->second){
         if(placed){bases[association].push_back(index);placementTypes[index]=type;}
@@ -209,7 +215,7 @@ bool MatchScriptProgramsToMaster(const std::string& master,const std::vector<Exe
                 (placement=="REFR"&&(type=="NPC_"||type=="CREA")))
               return fail("script owner placement and base types differ");
           }
-          if(association!=programs[index].origin.record)
+          if(programs[index].origin.kind==Kind::ReferenceEvent&&association!=programs[index].origin.record)
             return fail("script owner SCRI differs from original master");
         }
       }

@@ -284,6 +284,13 @@ static void OriginalProvenance(const char* path){
   forgedOwner[stage->ExecutedScripts().size()].reference=fo3player::PlayerRef;
   assert(!fo3script::MatchScriptProgramsToMaster(path,forgedOwner,matched,cancelled,error));
   assert(matched.Matches(programs)); // authentic body, unauthenticated owner
+  auto forgedSpeaker=programs;
+  const auto infoIndex=stage->ExecutedScripts().size()+event->ExecutedScripts().size();
+  forgedSpeaker[infoIndex].owner=0x14bc8; // genuine bomb REFR, not an actor
+  assert(!fo3script::MatchScriptProgramsToMaster(path,forgedSpeaker,matched,cancelled,error));
+  assert(error=="dialogue speaker is not an authored actor placement"&&matched.Matches(programs));
+  forgedSpeaker[infoIndex].owner=0;
+  assert(!fo3script::MatchScriptProgramsToMaster(path,forgedSpeaker,matched,cancelled,error)&&matched.Matches(programs));
   programs[0].program.source+=' ';
   assert(!matched.Matches(programs));
   assert(!fo3script::MatchScriptProgramsToMaster(path,programs,matched,cancelled,error));

@@ -4,9 +4,9 @@
 
 - Starting canonical main: `2987d911f318b92d1041257868067851a09d16f0` (v208).
 - Resumed from published `6469dbb872889a79a0682501b75f6ac6577ab547`.
-- Current implementation checkpoint: M1B3ad retained script-evidence byte budget.
+- Current implementation checkpoint: M1B3ae original INFO speaker identity.
   Use canonical main history for the publication SHA; the previous published
-  implementation is M1B3ac `e97ebe7a6962d4ba19ee4d4dbcc5325cfca818cb`.
+  implementation is M1B3ad `ae28ce5d3efe411821daaa3af2fe8a707c3f6003`.
 - M1B3l Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38635385905.
 - M1B3m Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38793178567.
 - M1B3n Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38795209693.
@@ -882,3 +882,27 @@ capacity, catalogs, parsing, prepared assets and simultaneous copies remain
 separate. Complete ownership, bounded dispatch and Quest validation remain
 open, and general resident Enable/Disable remains unadmitted. See
 `world-reference-m1b3ad.md` for policy and limits.
+
+## M1B3ae validation
+
+Master-matched INFO evidence now requires its captured speaker to resolve to a
+unique original nondeleted ACHR/ACRE and a unique matching NPC_/CREA base through
+a strict NAME association. Object references, quests, zero/missing/deleted/
+duplicate speakers or bases, malformed associations and type mismatches reject.
+INFO alone does not require an actor SCRI; shared SCPT event evidence retains
+its independent original SCRI requirement. No provenance exemption is added.
+
+All 53 core host tests and the production actor test pass. The targeted matcher
+passes ASan/UBSan with LeakSanitizer disabled. Tests cover actor kinds, record
+order, compression/XXXX, failure preservation and mixed INFO/event ownership.
+Original Lucas INFO evidence matches, while substituting the bomb REFR or zero
+speaker rejects without replacing the report or publishing Player state.
+Original dialogue, production bridge, barter, MS11 and authored-guard regressions
+retain their expected outcomes. M1B3ad Android CI passed (run 39051165598).
+
+This authenticates original actor identity, not INFO condition eligibility,
+runtime liveness, voice selection, dynamic binding or complete dependency/read
+ownership. INFO-only traces now need a second header scan to resolve bases;
+traces already containing SCPT owners reuse their existing two scans. General
+resident Enable/Disable remains gated by remaining ownership, bounded dispatch
+and device validation. See `world-reference-m1b3ae.md` for exact scope and limits.
