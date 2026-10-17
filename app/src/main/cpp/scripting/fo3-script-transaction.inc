@@ -26,6 +26,7 @@ std::unique_ptr<ScriptTransactionPlan> Player::PrepareScriptTransaction(
   candidate.scriptTrace_=capturePrograms?&plan->executions_:nullptr;
   struct TraceScope {Player& candidate;~TraceScope(){
     candidate.scriptTrace_=nullptr;candidate.scriptTraceParent_=ScriptExecution::NoParent;
+    candidate.scriptTraceBytes_=0;
   }} trace{candidate};
   if(!execute(candidate,error))return {};
   if(candidate.revision_<revision_ || candidate.revision_==UINT64_MAX ||

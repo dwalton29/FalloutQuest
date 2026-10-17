@@ -1,4 +1,5 @@
 #include "scripting/fo3-script-master-match.h"
+#include "scripting/fo3-script-evidence-budget.h"
 #include "world/fo3-resident-authored-admission.h"
 #include <cassert>
 #include <cstdio>
@@ -57,6 +58,32 @@ struct Fixture {
   }
 };
 int main(){
+  // Exact-fit accounting, every retained field, and failure atomicity. These
+  // checks do not allocate a second copy of oversized evidence.
+  {
+    fo3pipdata::ResultScript empty;size_t cost=0;
+    assert(fo3script::ChargeScriptEvidence("",empty,nullptr,cost));
+    size_t explicitEmpty=0;assert(fo3script::ChargeScriptEvidence("",empty,&empty,explicitEmpty)&&explicitEmpty==cost);
+    size_t used=fo3script::ScriptEvidenceMaxBytes-cost;
+    assert(fo3script::ChargeScriptEvidence("",empty,nullptr,used)&&used==fo3script::ScriptEvidenceMaxBytes);
+    assert(!fo3script::ChargeScriptEvidence("",empty,nullptr,used)&&used==fo3script::ScriptEvidenceMaxBytes);
+    used=SIZE_MAX;assert(!fo3script::ChargeScriptEvidence("",empty,nullptr,used)&&used==SIZE_MAX);
+    for(unsigned field=0;field<7;++field){
+      fo3pipdata::ResultScript script;std::string event;
+      if(field==0)event="x";
+      if(field==1)script.source="x";
+      if(field==2)script.compiled={1};
+      if(field==3)script.header={1};
+      if(field==4)script.references={1};
+      if(field==5)script.records={{"SCRO",{}}};
+      if(field==6)script.records={{"",{1}}};
+      size_t charged=0;assert(fo3script::ChargeScriptEvidence(event,script,nullptr,charged)&&charged>cost);
+      used=fo3script::ScriptEvidenceMaxBytes-cost;
+      assert(!fo3script::ChargeScriptEvidence(event,script,nullptr,used)&&used==fo3script::ScriptEvidenceMaxBytes-cost);
+      size_t containerCost=0;assert(fo3script::ChargeScriptEvidence("",empty,&script,containerCost));
+      if(field)assert(containerCost==charged);
+    }
+  }
   Fixture f;const auto path="/tmp/fq-script-master-"+std::to_string(getpid());std::atomic<bool> cancel{false};std::string error;
   auto write=[&](const Bytes& b){std::ofstream out(path,std::ios::binary);out.write(reinterpret_cast<const char*>(b.data()),b.size());assert(out);};
   fo3script::ScriptMasterMatch report;assert(!report.Verified()&&!report.Matches(f.programs));
@@ -142,6 +169,8 @@ int main(){
     rejects(p);
   }
   auto overflow=std::vector<Execution>(4097,f.programs[0]);rejects(overflow);
+  auto tooLarge=f.programs;tooLarge.back().container.source.resize(fo3script::ScriptEvidenceMaxBytes);
+  rejects(tooLarge);assert(error=="script master evidence byte limit exceeded");
   for(int malformed=0;malformed<12;++malformed){
     auto b=f.Master();
     if(malformed==0)Append(b,Record("QUST",10,f.quest)); // scan beyond first match

@@ -4,9 +4,9 @@
 
 - Starting canonical main: `2987d911f318b92d1041257868067851a09d16f0` (v208).
 - Resumed from published `6469dbb872889a79a0682501b75f6ac6577ab547`.
-- Current implementation checkpoint: M1B3ac inherited script context evidence.
+- Current implementation checkpoint: M1B3ad retained script-evidence byte budget.
   Use canonical main history for the publication SHA; the previous published
-  implementation is M1B3ab `c9857bc76aafda9ac6a0711ec35cc4180af71173`.
+  implementation is M1B3ac `e97ebe7a6962d4ba19ee4d4dbcc5325cfca818cb`.
 - M1B3l Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38635385905.
 - M1B3m Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38793178567.
 - M1B3n Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38795209693.
@@ -860,3 +860,25 @@ reconstruction, arbitrary activator identity, INFO eligibility, dynamic binding,
 complete dependency ownership, bounded dispatch and Quest validation remain
 open. General resident Enable/Disable remains unadmitted. See
 `world-reference-m1b3ac.md` for exact scope and limits.
+
+## M1B3ad validation
+
+Captured script evidence now has a shared 16 MiB accounted-value budget as well
+as the existing 4,096-entry limit. Candidate preparation checks original values
+before retaining program/container copies, and master matching checks the same
+budget before file access or verified-report copying. Repeated SCPT containers,
+metadata, reference arrays, strings and raw-record storage all contribute.
+Failed charges preserve their running total; failed capture/matching preserves
+live state and previous reports. Uncaptured execution retains its prior policy.
+
+All 53 core host tests and the production actor test pass. Targeted matcher and
+transaction tests pass ASan/UBSan with LeakSanitizer disabled. Tests cover byte
+boundaries, each retained field, repeated containers, oversized metadata and
+independent entry-count limits. Original MS11 stage/bomb/INFO evidence fits the
+budget, with original event/dialogue/barter/completion regressions retained.
+
+This bounds accounted retained values per evidence set; allocator overhead,
+capacity, catalogs, parsing, prepared assets and simultaneous copies remain
+separate. Complete ownership, bounded dispatch and Quest validation remain
+open, and general resident Enable/Disable remains unadmitted. See
+`world-reference-m1b3ad.md` for policy and limits.

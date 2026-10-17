@@ -551,6 +551,7 @@ private:
   uint64_t scriptEffectRevision_=0;
   std::vector<ScriptExecution>* scriptTrace_=nullptr; // Private preparation only; never published/swapped.
   uint32_t scriptTraceParent_=ScriptExecution::NoParent;
+  size_t scriptTraceBytes_=0;
   std::unordered_map<uint32_t,int> scriptButtons_;
   std::vector<ScriptMessage> pendingScriptMessages_;
   std::vector<QuestNotice> pendingQuestNotices_;

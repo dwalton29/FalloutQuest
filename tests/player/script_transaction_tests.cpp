@@ -125,16 +125,29 @@ static void Provenance(){
   many.eventPrograms[300]=fo3script::ParseEvents(many.pipboy.scripts[300]);
   fo3player::Player limited(many);const auto before=limited.Revision();
   assert(!limited.PrepareReferenceEventTransaction(100,"OnActivate",fo3player::PlayerRef,error,capture));
-  assert(error=="line 8193: script provenance entry limit exceeded"&&limited.Revision()==before);
+  assert(error.find("script provenance byte limit exceeded")!=std::string::npos&&limited.Revision()==before);
   auto uncaptured=limited.PrepareReferenceEventTransaction(100,"OnActivate",fo3player::PlayerRef,error);
   assert(uncaptured&&!uncaptured->HasProgramProvenance());NoEffects(limited);
-  many.pipboy.scripts[300].source=source.substr(0,source.size()-21);
-  many.eventPrograms[300]=fo3script::ParseEvents(many.pipboy.scripts[300]);
+  // Small stage fragments reach the independent entry-count bound without
+  // repeated large SCPT containers exhausting the byte budget first.
+  many=Fixture();many.pipboy.quests[10].stages[30].items.resize(4097);
+  fo3player::Player tooMany(many);
+  assert(!tooMany.PrepareQuestStageTransaction(10,30,error,capture));
+  assert(error.find("script provenance entry limit exceeded")!=std::string::npos);
+  NoEffects(tooMany);
+  many.pipboy.quests[10].stages[30].items.resize(4096);
   fo3player::Player atLimit(many);
-  auto bounded=atLimit.PrepareReferenceEventTransaction(100,"OnActivate",fo3player::PlayerRef,error,capture);
+  auto bounded=atLimit.PrepareQuestStageTransaction(10,30,error,capture);
   assert(bounded&&bounded->ExecutedScripts().size()==4096);
   for(const auto& entry:bounded->ExecutedScripts())
-    assert(entry.parent==fo3player::ScriptExecution::NoParent&&entry.reference==100);
+    assert(entry.parent==fo3player::ScriptExecution::NoParent&&!entry.reference);
+  // The byte guard runs before deep-copying oversized retained metadata. The
+  // same scripts remain valid when evidence capture was not requested.
+  auto large=Fixture();large.pipboy.quests[10].stages[10].items[0].result.header.resize(16u*1024u*1024u);
+  fo3player::Player oversized(large);const auto initial=oversized.Revision();
+  assert(!oversized.PrepareQuestStageTransaction(10,10,error,capture));
+  assert(error.find("script provenance byte limit exceeded")!=std::string::npos&&oversized.Revision()==initial);
+  assert(oversized.PrepareQuestStageTransaction(10,10,error));NoEffects(oversized);
 }
 static void DialogueProvenance(){
   using Phase=fo3player::DialogueScriptPhase;using Kind=fo3player::ScriptProgramKind;

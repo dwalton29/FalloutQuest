@@ -1,4 +1,5 @@
 #include "fo3-script-master-match.h"
+#include "fo3-script-evidence-budget.h"
 #include "data/fo3-esm-reader.h"
 #include <cstring>
 #include <memory>
@@ -135,9 +136,13 @@ bool ScriptMasterMatch::Matches(const std::vector<Execution>& programs) const no
 bool MatchScriptProgramsToMaster(const std::string& master,const std::vector<Execution>& programs,
     ScriptMasterMatch& out,const std::atomic<bool>& cancel,std::string& error){
   error.clear();auto fail=[&](const std::string& why){error=why;return false;};
-  if(programs.empty()||programs.size()>4096)return fail("invalid script master evidence count");
+  if(programs.empty()||programs.size()>ScriptEvidenceMaxEntries)return fail("invalid script master evidence count");
+  size_t evidenceBytes=0;
   std::unordered_map<uint32_t,std::vector<size_t>> wanted,owners,bases;
   for(size_t n=0;n<programs.size();++n){
+    const auto& e=programs[n];
+    if(!ChargeScriptEvidence(e.origin.event,e.program,&e.container,evidenceBytes))
+      return fail("script master evidence byte limit exceeded");
     if(!Type(programs[n]))return fail("unbound or malformed script origin");
     wanted[programs[n].origin.record].push_back(n);
     if(programs[n].origin.kind==Kind::ReferenceEvent)owners[programs[n].owner].push_back(n);

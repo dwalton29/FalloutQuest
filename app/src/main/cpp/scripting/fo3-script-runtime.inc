@@ -1,3 +1,4 @@
+#include "fo3-script-evidence-budget.h"
 // Shared source-script execution for dialogue results and QUST stage items.
 // Compiled-only bytecode and event blocks are retained, never guessed or skipped.
 namespace fo3script {
@@ -164,16 +165,23 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
   struct RestoreTraceParent {Player& p;uint32_t previous;
     ~RestoreTraceParent(){p.scriptTraceParent_=previous;}} traceParent{*this,scriptTraceParent_};
   if(scriptTrace_){
-    if(scriptTrace_->size()>=4096){error="script provenance entry limit exceeded";return false;}
+    if(scriptTrace_->size()>=fo3script::ScriptEvidenceMaxEntries){error="script provenance entry limit exceeded";return false;}
+    const fo3pipdata::ResultScript* container=nullptr;
+    if(origin.kind==ScriptProgramKind::ReferenceEvent){
+      const auto found=catalog_->pipboy.scripts.find(origin.record);
+      if(found!=catalog_->pipboy.scripts.end())container=&found->second;
+    }
+    auto nextBytes=scriptTraceBytes_;
+    if(!fo3script::ChargeScriptEvidence(origin.event,script,container,nextBytes)){
+      error="script provenance byte limit exceeded";return false;
+    }
     ScriptExecution execution;execution.origin=std::move(origin);
     execution.owner=owner;execution.activator=scriptActivator_;execution.localScript=scriptId;
     execution.parent=scriptTraceParent_;execution.reference=scriptReference_;
     execution.program=script;
-    if(execution.origin.kind==ScriptProgramKind::ReferenceEvent){
-      const auto container=catalog_->pipboy.scripts.find(execution.origin.record);
-      if(container!=catalog_->pipboy.scripts.end())execution.container=container->second;
-    }
+    if(container)execution.container=*container;
     scriptTrace_->push_back(std::move(execution));
+    scriptTraceBytes_=nextBytes;
     scriptTraceParent_=uint32_t(scriptTrace_->size()-1);
   }
   for(const auto& c:commands) {
