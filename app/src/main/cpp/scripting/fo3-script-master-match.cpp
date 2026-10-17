@@ -61,7 +61,7 @@ const char* Type(const Execution& e){
 // Validate framing before the tolerant gameplay decoder. In particular XXXX
 // cannot hide a truncated field, and duplicate script scalars are ambiguous.
 bool Complete(const std::vector<uint8_t>& b,const std::string& type){
-  size_t p=0;uint32_t extended=0;unsigned scalars=0,next=0,tpic=0;
+  size_t p=0;uint32_t extended=0;unsigned scalars=0,next=0,tpic=0,scri=0,quest=0,speaker=0;
   while(p<b.size()){
     if(b.size()-p<6)return false;
     const auto* tag=b.data()+p;const auto shortSize=fo3esm::ReadU16(tag+4);p+=6;
@@ -81,6 +81,10 @@ bool Complete(const std::vector<uint8_t>& b,const std::string& type){
     if((Is(tag,"SCRO")||Is(tag,"SCRV"))&&n!=4)return false;
     if(type=="INFO"&&Is(tag,"NEXT")){if(n||++next>1)return false;scalars=0;}
     if(type=="INFO"&&Is(tag,"TPIC")){if(n!=4||++tpic>1)return false;}
+    if(type=="INFO"&&Is(tag,"QSTI")){if(n!=4||++quest>1)return false;}
+    if(type=="INFO"&&Is(tag,"ANAM")){if(n!=4||++speaker>1)return false;}
+    if(type=="QUST"&&Is(tag,"SCRI")){if(n!=4||++scri>1)return false;}
+    if((type=="QUST"||type=="INFO")&&Is(tag,"CTDA")&&n!=20&&n!=24&&n!=28)return false;
     if(type=="QUST"&&(Is(tag,"QSDT")||Is(tag,"INDX")||Is(tag,"QOBJ")))scalars=0;
     p+=n;
   }
@@ -155,6 +159,7 @@ bool MatchScriptProgramsToMaster(const std::string& master,const std::vector<Exe
   std::unordered_map<uint32_t,bool> seen;std::vector<uint8_t> bytes;
   std::unordered_map<uint32_t,bool> ownersSeen,basesSeen;
   std::vector<std::string> placementTypes(programs.size());
+  std::vector<uint32_t> requiredSpeakers(programs.size());
   // The first complete scan authenticates programs and resolves placed owners.
   // A second header scan finds bases even when they precede those owners.
   for(unsigned pass=0;pass<(owners.empty()?1u:2u);++pass){
@@ -183,9 +188,11 @@ bool MatchScriptProgramsToMaster(const std::string& master,const std::vector<Exe
       uint32_t topic=0;
       for(auto g=stack.rbegin();g!=stack.rend();++g)if(g->type==7){topic=g->label;break;}
       fo3pipdata::Definitions d;fo3pipdata::Decode(d,type,id,flags,bytes,0,0,topic);
-      for(const auto index:found->second)
+      for(const auto index:found->second){
         if(type!=Type(programs[index])||!Authored(programs[index],d))
           return fail("script program differs from original master "+type+" "+std::to_string(id)+" entry "+std::to_string(index));
+        if(type=="INFO")requiredSpeakers[index]=d.topics.at(programs[index].origin.topic).front().speaker;
+      }
     }
     const auto binding=(pass==0?owners:bases).find(id);
     const auto& bindings=pass==0?owners:bases;
@@ -214,6 +221,10 @@ bool MatchScriptProgramsToMaster(const std::string& master,const std::vector<Exe
             if((placement=="ACHR"&&type!="NPC_")||(placement=="ACRE"&&type!="CREA")||
                 (placement=="REFR"&&(type=="NPC_"||type=="CREA")))
               return fail("script owner placement and base types differ");
+            // ANAM constrains an INFO's actor base, not the placed reference.
+            // Check on pass two: the speaker may precede its INFO on pass one.
+            if(requiredSpeakers[index]&&requiredSpeakers[index]!=id)
+              return fail("dialogue speaker differs from original INFO ANAM");
           }
           if(programs[index].origin.kind==Kind::ReferenceEvent&&association!=programs[index].origin.record)
             return fail("script owner SCRI differs from original master");

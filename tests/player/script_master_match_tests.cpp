@@ -176,6 +176,45 @@ int main(){
   auto overflow=std::vector<Execution>(4097,f.programs[0]);rejects(overflow);
   auto tooLarge=f.programs;tooLarge.back().container.source.resize(fo3script::ScriptEvidenceMaxBytes);
   rejects(tooLarge);assert(error=="script master evidence byte limit exceeded");
+  // Strict scope metadata cannot inherit the tolerant decoder's first-field
+  // semantics. Scalar uniqueness is record-wide, including across fragments.
+  for(const char* field:{"SCRI","ANAM","QSTI"})for(unsigned n:{0u,1u,3u,5u,8u}){
+    const bool quest=std::strcmp(field,"SCRI")==0;auto payload=quest?f.quest:f.info;
+    Sub(payload,field,Bytes(n));
+    auto bytes=quest?Record("QUST",10,payload):Group(40,Record("INFO",50,payload));
+    if(!quest)Append(bytes,Speakers());
+    write(bytes);
+    rejects(quest?std::vector<Execution>{f.programs[0]}:std::vector<Execution>{f.programs[1]});
+  }
+  for(const char* field:{"SCRI","ANAM","QSTI"}){
+    const bool quest=std::strcmp(field,"SCRI")==0;Bytes payload;
+    Sub(payload,field,Word(0));Append(payload,quest?f.quest:f.info);Sub(payload,field,Word(0));
+    auto bytes=quest?Record("QUST",10,payload):Group(40,Record("INFO",50,payload));
+    if(!quest)Append(bytes,Speakers());
+    write(bytes);
+    rejects(quest?std::vector<Execution>{f.programs[0]}:std::vector<Execution>{f.programs[1]});
+  }
+  for(bool quest:{false,true})for(unsigned n:{0u,1u,19u,20u,21u,23u,24u,25u,27u,28u,29u}){
+    // Prefix the QUST condition before INDX so it is an ordinary root CTDA.
+    Bytes payload;Sub(payload,"CTDA",Bytes(n));Append(payload,quest?f.quest:f.info);
+    auto bytes=quest?Record("QUST",10,payload):Group(40,Record("INFO",50,payload));
+    if(!quest)Append(bytes,Speakers());
+    write(bytes);
+    const auto evidence=quest?std::vector<Execution>{f.programs[0]}:std::vector<Execution>{f.programs[1]};
+    fo3script::ScriptMasterMatch conditions;
+    const bool expected=n==20||n==24||n==28;
+    assert(fo3script::MatchScriptProgramsToMaster(path,evidence,conditions,cancel,error)==expected);
+  }
+  // Null and nonnull authored SCRI preserve exact quest local-scope matching.
+  for(uint32_t script:{0u,60u}){
+    auto payload=f.quest;Sub(payload,"SCRI",Word(script));write(Record("QUST",10,payload));
+    auto evidence=std::vector<Execution>{f.programs[0]};evidence[0].localScript=script;
+    fo3script::ScriptMasterMatch scoped;
+    assert(fo3script::MatchScriptProgramsToMaster(path,evidence,scoped,cancel,error));
+    evidence[0].localScript=script?0:60;
+    assert(!fo3script::MatchScriptProgramsToMaster(path,evidence,scoped,cancel,error));
+  }
+  write(f.Master());
   for(int malformed=0;malformed<12;++malformed){
     auto b=f.Master();
     if(malformed==0)Append(b,Record("QUST",10,f.quest)); // scan beyond first match
@@ -214,6 +253,24 @@ int main(){
   // INFO speaker evidence resolves independently of an actor's optional SCRI.
   // Both placement kinds, both record orders, compression and XXXX NAME work.
   const std::vector<Execution> infoOnly={f.programs[1],f.programs[2]};
+  {
+    Bytes info;Sub(info,"XXXX",Word(4));Sub(info,"ANAM",{});Append(info,Word(202));
+    Sub(info,"QSTI",Word(10));Append(info,f.info);
+    b=Record("QUST",10,f.quest);Append(b,Group(40,Record("INFO",50,info)));Append(b,Speakers());write(b);
+    fo3script::ScriptMasterMatch extendedScope;
+    assert(fo3script::MatchScriptProgramsToMaster(path,infoOnly,extendedScope,cancel,error));
+  }
+  // ANAM is the original explicit speaker base restriction. It applies to
+  // both phases and regardless of actor/INFO record order or compression.
+  for(uint32_t speaker:{0u,202u,102u,999u})for(bool actorFirst:{false,true})for(bool compressed:{false,true}){
+    auto info=f.info;Sub(info,"ANAM",Word(speaker));
+    auto infoRecord=Group(40,Record("INFO",50,compressed?Compressed(info):info,compressed?0x40000:0));
+    b=actorFirst?Speakers(compressed):infoRecord;Append(b,actorFirst?infoRecord:Speakers(compressed));write(b);
+    fo3script::ScriptMasterMatch restriction;
+    const bool accepted=fo3script::MatchScriptProgramsToMaster(path,infoOnly,restriction,cancel,error);
+    assert(accepted==(speaker==0||speaker==202));
+    if(!accepted)assert(error=="dialogue speaker differs from original INFO ANAM");
+  }
   for(bool creature:{false,true})for(bool reversed:{false,true})for(bool compressed:{false,true}){
     Bytes actor,placement;Sub(actor,"EDID",Text("Speaker"));Sub(actor,"SCRI",Word(999));
     if(compressed){Sub(placement,"XXXX",Word(4));Sub(placement,"NAME",{});Append(placement,Word(202));}

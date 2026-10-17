@@ -4,9 +4,9 @@
 
 - Starting canonical main: `2987d911f318b92d1041257868067851a09d16f0` (v208).
 - Resumed from published `6469dbb872889a79a0682501b75f6ac6577ab547`.
-- Current implementation checkpoint: M1B3ae original INFO speaker identity.
+- Current implementation checkpoint: M1B3af original INFO restrictions and strict scope metadata.
   Use canonical main history for the publication SHA; the previous published
-  implementation is M1B3ad `ae28ce5d3efe411821daaa3af2fe8a707c3f6003`.
+  implementation is M1B3ae `0f9ac4fc15de7edd4674c25773d83c5ba6efbe8b`.
 - M1B3l Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38635385905.
 - M1B3m Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38793178567.
 - M1B3n Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38795209693.
@@ -906,3 +906,23 @@ ownership. INFO-only traces now need a second header scan to resolve bases;
 traces already containing SCPT owners reuse their existing two scans. General
 resident Enable/Disable remains gated by remaining ownership, bounded dispatch
 and device validation. See `world-reference-m1b3ae.md` for exact scope and limits.
+
+## M1B3af validation
+
+Master matching now checks an original INFO's explicit ANAM restriction against
+its authenticated speaker base on the existing second pass. Null/unrestricted
+speakers retain the previous policy. QUST SCRI and INFO QSTI/ANAM fields require
+unique four-byte scalars across the entire record, and QUST/INFO CTDA fields
+require supported 20/24/28-byte framing before tolerant decoding.
+
+All 53 core host tests, the production actor test and targeted matcher
+ASan/UBSan checks pass (LeakSanitizer disabled). Tests cover scope ambiguity,
+condition widths, explicit speaker base restrictions and record order. Original
+MS11 provenance passes; an independently discovered original restricted INFO
+accepts its authored actor and rejects Lucas without report replacement or
+Player publication. M1B3ae Android CI passed (run 39053313356).
+
+This adds static restriction and metadata checks, not full eligibility replay,
+owning-quest context authentication, runtime liveness or complete dependency/read
+ownership. General resident Enable/Disable remains gated by remaining ownership,
+bounded dispatch and device validation. See `world-reference-m1b3af.md` for scope.

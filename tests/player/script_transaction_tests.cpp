@@ -291,6 +291,33 @@ static void OriginalProvenance(const char* path){
   assert(error=="dialogue speaker is not an authored actor placement"&&matched.Matches(programs));
   forgedSpeaker[infoIndex].owner=0;
   assert(!fo3script::MatchScriptProgramsToMaster(path,forgedSpeaker,matched,cancelled,error)&&matched.Matches(programs));
+  // Find an original explicit ANAM restriction and an authored matching actor.
+  // This checks metadata admission, not execution/eligibility of that fragment.
+  const auto lucasBase=p.Definitions().actorPlacements.at(0x3b46).base;
+  fo3player::ScriptExecution restricted;bool foundRestricted=false;
+  for(const auto& group:p.Definitions().pipboy.topics){
+    for(const auto& info:group.second){
+      if(!info.speaker||info.speaker==lucasBase||(info.recordFlags&0x20)||
+          !p.Definitions().dialogueInfos.count(info.id))continue;
+      for(const auto& actor:p.Definitions().actorPlacements){
+        if(actor.second.base!=info.speaker||(actor.second.flags&0x20))continue;
+        restricted.origin.kind=fo3player::ScriptProgramKind::DialogueInfo;
+        restricted.origin.topic=info.topic;restricted.origin.record=info.id;
+        restricted.owner=actor.first;restricted.program=info.begin;
+        foundRestricted=true;break;
+      }
+      if(foundRestricted)break;
+    }
+    if(foundRestricted)break;
+  }
+  assert(foundRestricted);
+  std::vector<fo3player::ScriptExecution> restrictedEvidence={restricted};
+  fo3script::ScriptMasterMatch restrictedReport;
+  assert(fo3script::MatchScriptProgramsToMaster(path,restrictedEvidence,restrictedReport,cancelled,error));
+  restrictedEvidence[0].owner=0x3b46; // real actor, different authored base
+  assert(!fo3script::MatchScriptProgramsToMaster(path,restrictedEvidence,restrictedReport,cancelled,error));
+  assert(error=="dialogue speaker differs from original INFO ANAM"&&restrictedReport.Matches({restricted}));
+  std::cout<<"Original INFO "<<restricted.origin.record<<" explicit ANAM accepts its actor and rejects Lucas\n";
   programs[0].program.source+=' ';
   assert(!matched.Matches(programs));
   assert(!fo3script::MatchScriptProgramsToMaster(path,programs,matched,cancelled,error));
