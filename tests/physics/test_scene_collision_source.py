@@ -598,6 +598,10 @@ assert master_match.index('!ChargeScriptForms(e.expressionForms,evidenceBytes)')
 assert 'a.expressionForms==b.expressionForms' in master_match
 assert 'formsSeen.size()!=forms.size()' in master_match
 assert 'pass==0&&forms.count(id)' in master_match
+assert 'pass==0&&!formNames.empty()&&!(recordFlags&0x20)' in master_match
+assert 'EditorName(bytes,name,formTarget)' in master_match
+assert 'named->second!=id' in master_match
+assert master_match.index('formNames.emplace(binding.second,binding.first)')<master_match.index('std::fopen(master.c_str(),"rb")')
 assert master_match.index('localsSeen.size()!=locals.size()')<master_match.index('out=std::move(next);')
 assert 'Same(programs[index].container,script->second)' in master_match
 assert 'a.localVariables==b.localVariables' in master_match

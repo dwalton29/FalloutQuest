@@ -380,6 +380,44 @@ int main(){
     assert(!fo3script::MatchScriptProgramsToMaster(path+"-missing",evidence,report,cancel,error)&&report.Matches(f.programs));
     assert(error==(invalid==4?"script master evidence byte limit exceeded":"malformed script form binding"));
   }
+  // Target identity alone cannot prove a name unique. A competing live EDID in
+  // any class must reject regardless of record order, compression or XXXX.
+  for(bool expression:{false,true})for(bool first:{false,true})for(bool compressed:{false,true})for(bool extended:{false,true}){
+    auto evidence=f.programs;(expression?evidence[0].expressionForms:evidence[0].commandForms)={{700,"namedtarget"}};
+    Bytes target;Sub(target,"EDID",Text("NamedTarget"));
+    auto good=f.Master();Append(good,Record("STAT",700,target));write(good);
+    fo3script::ScriptMasterMatch bound;assert(fo3script::MatchScriptProgramsToMaster(path,evidence,bound,cancel,error));
+    for(unsigned kind=0;kind<9;++kind){
+      Bytes alias;
+      const auto text=Text(kind==1?"NaMeDtArGeT":kind==2?"NamedTargetExtra":kind==3?"Unrelated":"NamedTarget");
+      if(extended){Sub(alias,"XXXX",Word(text.size()));Sub(alias,"EDID",{});Append(alias,text);}
+      else Sub(alias,"EDID",text);
+      if(kind==4)alias={1}; // unknown framing cannot exclude a hidden competitor
+      if(kind==5)Sub(alias,"EDID",Text("Unrelated")); // duplicate EDID fields
+      if(kind==6)alias.clear(); // ordinary empty record has no EDID
+      const auto other=Record("ZZZZ",702,kind==7?Bytes{1}:compressed&&kind!=6?Compressed(alias):alias,
+        kind==8?0x20:kind==7?0x40000:compressed&&kind!=6?0x40000:0);
+      auto bytes=first?other:good;Append(bytes,first?good:other);
+      if(kind==3)Append(bytes,Record("FLST",703,alias)); // unrelated name reuse is not a bound-name conflict
+      write(bytes);const bool valid=fo3script::MatchScriptProgramsToMaster(path,evidence,bound,cancel,error);
+      assert(valid==(kind==2||kind==3||kind==6||kind==8));
+      assert(bound.Matches(evidence));
+      if(kind<2)assert(error=="ambiguous script form name in master");
+    }
+  }
+  for(bool expression:{false,true}){
+    auto evidence=f.programs;evidence[0].commandForms={{700,"namedtarget"}};
+    (expression?evidence.back().expressionForms:evidence.back().commandForms)={{701,"namedtarget"}};
+    assert(!fo3script::MatchScriptProgramsToMaster(path+"-missing",evidence,report,cancel,error));
+    assert(error=="conflicting script form name bindings"&&report.Matches(f.programs));
+  }
+  {
+    // No binding claims retain the old header-only behavior for unrelated
+    // payloads. Empty claims are not a proof that the source makes no lookups.
+    auto bytes=f.Master();Append(bytes,Record("ZZZZ",702,{1}));write(bytes);
+    fo3script::ScriptMasterMatch unbound;
+    assert(fo3script::MatchScriptProgramsToMaster(path,f.programs,unbound,cancel,error));
+  }
   // Null and nonnull authored SCRI preserve exact quest local-scope matching.
   for(uint32_t script:{0u,60u}){
     auto payload=f.quest;Sub(payload,"SCRI",Word(script));auto bytes=Record("QUST",10,payload);

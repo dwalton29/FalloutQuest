@@ -157,8 +157,9 @@ bool Association(const std::vector<uint8_t>& bytes,const std::string& type,
   });
   return valid&&count==1&&value;
 }
-// Strict generic framing and exactly one complete EDID; no gameplay decoding.
-bool EditorName(const std::vector<uint8_t>& bytes,std::string& name){
+// Strict generic framing and at most one complete EDID; requested targets must
+// have one. Other live records may have none, but cannot hide a competing name.
+bool EditorName(const std::vector<uint8_t>& bytes,std::string& name,bool required){
   size_t at=0;uint32_t extended=0;bool found=false;
   while(at<bytes.size()){
     if(bytes.size()-at<6)return false;
@@ -176,7 +177,7 @@ bool EditorName(const std::vector<uint8_t>& bytes,std::string& name){
     }
     at+=n;
   }
-  return !extended&&found;
+  return !extended&&(!required||found);
 }
 }
 bool ScriptMasterMatch::Matches(const std::vector<Execution>& programs) const noexcept {
@@ -191,6 +192,7 @@ bool MatchScriptProgramsToMaster(const std::string& master,const std::vector<Exe
   size_t evidenceBytes=0;
   std::unordered_map<uint32_t,std::vector<size_t>> wanted,owners,bases;
   std::unordered_map<uint32_t,std::vector<std::string>> forms;
+  std::unordered_map<std::string,uint32_t> formNames;
   for(size_t n=0;n<programs.size();++n){
     const auto& e=programs[n];
     if(!ChargeScriptEvidence(e.origin.event,e.program,&e.container,evidenceBytes,&e.conditions,&e.questConditions)||
@@ -205,6 +207,8 @@ bool MatchScriptProgramsToMaster(const std::string& master,const std::vector<Exe
     for(const auto* bindings:{&e.commandForms,&e.expressionForms})for(const auto& binding:*bindings){
       if(!binding.first||binding.second.empty()||Lower(binding.second)!=binding.second||binding.second.find('\0')!=std::string::npos)
         return fail("malformed script form binding");
+      const auto named=formNames.emplace(binding.second,binding.first);
+      if(!named.second&&named.first->second!=binding.first)return fail("conflicting script form name bindings");
       forms[binding.first].push_back(binding.second);
     }
     wanted[programs[n].origin.record].push_back(n);
@@ -244,14 +248,29 @@ bool MatchScriptProgramsToMaster(const std::string& master,const std::vector<Exe
     }
     if(n>limit-p-24)return fail("invalid script master record size");
     const auto id=fo3esm::ReadU32(h+12);const auto found=wanted.find(id);
-    if(pass==0&&forms.count(id)){
+    const bool formTarget=pass==0&&forms.count(id);
+    const auto recordFlags=fo3esm::ReadU32(h+8);
+    if(formTarget){
       if(!formsSeen.emplace(id,true).second)return fail("duplicate command form identity");
-      const auto flags=fo3esm::ReadU32(h+8);
-      if(flags&0x20)return fail("deleted command form identity");
+      if(recordFlags&0x20)return fail("deleted command form identity");
+    }
+    // A matching EDID on the claimed ID is insufficient if another live record
+    // supplies that same normalized name. Scan every class, not just targets or
+    // catalog-selected types. No additional header pass is needed.
+    if(pass==0&&!formNames.empty()&&!(recordFlags&0x20)){
       std::string name;
-      if(!fo3esm::ReadPayload(file.get(),{p+24,n,flags,std::string(reinterpret_cast<const char*>(h),4)},bytes)||!EditorName(bytes,name))
-        return fail("malformed command form EDID");
-      for(const auto& expected:forms.at(id))if(name!=expected)return fail("command form name differs from original master");
+      if(n){
+        if(!fo3esm::ReadPayload(file.get(),{p+24,n,recordFlags,std::string(reinterpret_cast<const char*>(h),4)},bytes))
+          return fail("malformed script form namespace payload");
+      }else {
+        if(recordFlags&fo3esm::FLAG_COMPRESSED)return fail("malformed script form namespace payload");
+        bytes.clear();
+      }
+      if(!EditorName(bytes,name,formTarget))return fail("malformed script form namespace EDID");
+      const auto named=formNames.find(name);
+      if(named!=formNames.end()&&named->second!=id)return fail("ambiguous script form name in master");
+      if(formTarget)for(const auto& expected:forms.at(id))
+        if(name!=expected)return fail("command form name differs from original master");
     }
     if(pass==0&&found!=wanted.end()){
       const std::string type(reinterpret_cast<const char*>(h),4);const auto flags=fo3esm::ReadU32(h+8);

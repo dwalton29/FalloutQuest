@@ -4,11 +4,11 @@
 
 - Starting canonical main: `2987d911f318b92d1041257868067851a09d16f0` (v208).
 - Resumed from published `6469dbb872889a79a0682501b75f6ac6577ab547`.
-- Current implementation checkpoint: M1B3ao expression-preflight form bindings.
+- Current implementation checkpoint: M1B3ap bound-name namespace closure.
   Use canonical main history for the publication SHA; the previous published
-  implementation is M1B3an `844e6a2518d69d3e86e516acc4d815b4e5bee879`.
-  Its Android CI was running at this checkpoint's initial recheck (run 39079810706).
-  M1B3am Android CI passed (run 39079219216).
+  implementation is M1B3ao `c4cc1e0e2e096f7f37fbb7ba381b726e286228ae`.
+  Its Android CI was running at this checkpoint's initial recheck (run 39080442018).
+  M1B3an Android CI passed (run 39079810706).
 - M1B3l Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38635385905.
 - M1B3m Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38793178567.
 - M1B3n Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38795209693.
@@ -1202,3 +1202,38 @@ outside retained-value accounting and any whole-preparation/Quest timing claim.
 General resident Enable/Disable remains gated by full ownership, bounded
 dispatch and device validation. Version 212 is unchanged; see
 `world-reference-m1b3ao.md` for scope.
+
+## M1B3ap validation
+
+Supplied command/preflight bindings cannot claim the same normalized name on
+different IDs: conflicting claims reject before file access. When bindings are
+present, the existing first master scan now checks every nondeleted record's
+generic payload/EDID framing and rejects any requested name on another ID,
+regardless of record class or file order. Deleted aliases are ignored; deleted
+requested targets and duplicate requested IDs still reject. Unrelated name reuse
+and ordinary empty/no-EDID records are allowed. Malformed live payloads/EDIDs
+reject because they cannot exclude hidden competing names.
+
+This is conservative all-class proof, not an invented engine namespace or
+load-order policy. No-binding evidence retains its previous unrelated-payload
+behavior and remains no proof that the source performed no lookups. No extra
+master pass, retained field, frame comparison work or dependency exemption is
+added. Payload I/O/decompression now covers all live records when bindings are
+claimed, on the private worker; per-record cancellation checks and the reader's
+64 MiB per-payload cap remain. This adds preparation work, not a Quest latency
+or whole-preparation memory guarantee.
+
+The read-only audit tool reports 718,952 nondeleted records, 40,981 well-framed
+nonempty EDIDs, and zero duplicate EDID fields or case-folded name collisions
+in the supplied SHA256-verified ESM. Five synthetic audit tests pass. All 53
+core host tests, the actor test, source guards and matcher/transaction ASan/UBSan
+pass (LeakSanitizer disabled). Original captured MS11 evidence passes the broader
+scan; Lucas acceptance/production bridge, merchant barter and all three MS11
+completion/reward/save-reload branches pass. Existing showmap diagnostics remain.
+M1B3an Android CI passed (run 39079810706).
+
+Independent trace completeness, target type suitability, external variables,
+implicit receivers, condition/read ownership, outcomes and call/event causality
+remain open. General resident Enable/Disable still awaits full ownership,
+bounded dispatch and device validation; version 212 is unchanged. See
+`world-reference-m1b3ap.md` for scope and reproducible audit instructions.
