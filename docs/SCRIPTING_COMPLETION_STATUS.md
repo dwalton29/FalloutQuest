@@ -4,9 +4,9 @@
 
 - Starting canonical main: `2987d911f318b92d1041257868067851a09d16f0` (v208).
 - Resumed from published `6469dbb872889a79a0682501b75f6ac6577ab547`.
-- Current implementation checkpoint: M1B3ag original INFO owning-quest identity.
+- Current implementation checkpoint: M1B3ah shared INFO structural admission.
   Use canonical main history for the publication SHA; the previous published
-  implementation is M1B3af `a6509edfed4e2c5229fe06cfa32e388cf3a989fb`.
+  implementation is M1B3ag `b48a32e08cdd4681965b16fb321add46ed3e9ffb`.
 - M1B3l Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38635385905.
 - M1B3m Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38793178567.
 - M1B3n Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38795209693.
@@ -947,3 +947,29 @@ This checks original owning-quest identity and structural decoding, not current
 quest-running state, condition replay or complete execution/read ownership.
 General resident Enable/Disable remains gated by remaining ownership, bounded
 dispatch and device validation. See `world-reference-m1b3ag.md` for limits.
+
+## M1B3ah validation
+
+Master-matched INFOs now share Session's static supported-structure predicate:
+type 0/3, supported mode/flags and a response. Live selection behavior is
+unchanged. Strict framing requires one DATA of 3/4 bytes and rejects every
+TRDT shorter than the decoder's 16-byte minimum, even beside a valid response.
+The supplied ESM independently confirms both DATA layouts and TRDT sizes
+16/20/24. Exact script/actor/quest evidence cannot bypass these checks.
+
+All 53 core host tests, the actor test, source guards and matcher ASan/UBSan
+checks pass (LeakSanitizer disabled). Tests cover every INFO type and mode bit,
+missing/duplicate/short DATA, responses, XXXX and compression. Original MS11
+stage/bomb/INFO matching and Lucas dialogue acceptance/save-reload pass. The
+original unsupported explicit-speaker INFO 537869 is now rejected with its
+authentic body and actor; supported synthetic ANAM checks remain covered.
+M1B3ag Android CI passed (run 39057444197).
+
+Original Lucas production bridge, merchant barter and all three MS11 completion
+branches/rewards/save-reload also pass, as do original door and dependency
+checks. Existing unsupported showmap diagnostics remain unchanged.
+
+Static structure does not establish runtime eligibility, condition/read context,
+voice, ordering or dispatch authority. General resident Enable/Disable still
+awaits ownership, bounded dispatch and device validation. Version 212 remains
+unchanged. See `world-reference-m1b3ah.md` for scope and original-data counts.

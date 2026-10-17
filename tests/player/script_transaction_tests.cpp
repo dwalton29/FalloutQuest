@@ -3,6 +3,7 @@
 #include "world/fo3-resident-exchange.h"
 #include "world/fo3-resident-workflow.h"
 #include "scripting/fo3-script-master-match.h"
+#include "dialogue/fo3-dialogue-info-policy.h"
 #include <array>
 #include <cassert>
 #include <cstdlib>
@@ -291,13 +292,14 @@ static void OriginalProvenance(const char* path){
   assert(error=="dialogue speaker is not an authored actor placement"&&matched.Matches(programs));
   forgedSpeaker[infoIndex].owner=0;
   assert(!fo3script::MatchScriptProgramsToMaster(path,forgedSpeaker,matched,cancelled,error)&&matched.Matches(programs));
-  // Find an original explicit ANAM restriction and an authored matching actor.
-  // This checks metadata admission, not execution/eligibility of that fragment.
+  // An original unsupported INFO with a real ANAM actor and exact body must
+  // still be rejected. Earlier metadata-only admission accepted this fixture.
   const auto lucasBase=p.Definitions().actorPlacements.at(0x3b46).base;
   fo3player::ScriptExecution restricted;bool foundRestricted=false;
   for(const auto& group:p.Definitions().pipboy.topics){
     for(const auto& info:group.second){
       if(!info.speaker||info.speaker==lucasBase||(info.recordFlags&0x20)||
+          fo3dialogue::SupportedInfoStructure(info)||
           !p.Definitions().dialogueInfos.count(info.id))continue;
       for(const auto& actor:p.Definitions().actorPlacements){
         if(actor.second.base!=info.speaker||(actor.second.flags&0x20))continue;
@@ -312,12 +314,9 @@ static void OriginalProvenance(const char* path){
   }
   assert(foundRestricted);
   std::vector<fo3player::ScriptExecution> restrictedEvidence={restricted};
-  fo3script::ScriptMasterMatch restrictedReport;
-  assert(fo3script::MatchScriptProgramsToMaster(path,restrictedEvidence,restrictedReport,cancelled,error));
-  restrictedEvidence[0].owner=0x3b46; // real actor, different authored base
-  assert(!fo3script::MatchScriptProgramsToMaster(path,restrictedEvidence,restrictedReport,cancelled,error));
-  assert(error=="dialogue speaker differs from original INFO ANAM"&&restrictedReport.Matches({restricted}));
-  std::cout<<"Original INFO "<<restricted.origin.record<<" explicit ANAM accepts its actor and rejects Lucas\n";
+  assert(!fo3script::MatchScriptProgramsToMaster(path,restrictedEvidence,matched,cancelled,error));
+  assert(error.find("script program differs from original master INFO")!=std::string::npos&&matched.Matches(programs));
+  std::cout<<"Original INFO "<<restricted.origin.record<<" unsupported structure rejects its authored actor and exact body\n";
   programs[0].program.source+=' ';
   assert(!matched.Matches(programs));
   assert(!fo3script::MatchScriptProgramsToMaster(path,programs,matched,cancelled,error));

@@ -1,4 +1,5 @@
 #include "fo3-dialogue-session.h"
+#include "fo3-dialogue-info-policy.h"
 #include <algorithm>
 #include <cstdio>
 #include <cmath>
@@ -12,7 +13,7 @@ const fo3pipdata::Info* Session::Current(const fo3pipdata::Definitions& d)const 
 bool Session::Eligible(const fo3pipdata::Info& i,const Context& ctx)const {
   const auto& p=*ctx.player;const auto& d=p.Definitions().pipboy;
   if(!i.orderValid){if(diagnostic)diagnostic("DIALOGUE UNSUPPORTED SCRIPT info="+Id(i.id)+" cyclic Previous INFO order");return false;}
-  if((i.type!=0&&i.type!=3)||(i.recordFlags&0x20)||i.nextSpeaker||i.flags2||(i.flags&0x80)||i.responses.empty()||(i.speaker&&i.speaker!=ctx.speaker.base))return false;
+  if(!SupportedInfoStructure(i)||(i.speaker&&i.speaker!=ctx.speaker.base))return false;
   if((i.flags&4)&&p.Snapshot().pipboy.saidInfos.count((uint64_t(ctx.speaker.reference)<<32)|i.id))return false;
   std::string error;
   if(!Conditions(i.conditions,ctx,error)){if(!error.empty()&&diagnostic)diagnostic("DIALOGUE UNSUPPORTED CONDITION actor="+Id(ctx.speaker.reference)+" base="+Id(ctx.speaker.base)+" dial="+Id(i.topic)+" info="+Id(i.id)+" "+error);return false;}

@@ -28,6 +28,10 @@ static void Script(Bytes& b,const std::string& source){
   Sub(b,"SCHR",Bytes(20));Sub(b,"SCDA",{1,2});Sub(b,"SCTX",Text(source));
   Sub(b,"SCRO",Word(100));Sub(b,"SCRV",Word(2));
 }
+static Bytes InfoPayload(const Bytes& metadata){
+  Bytes b;Sub(b,"TPIC",Word(40));Sub(b,"QSTI",Word(20));Append(b,metadata);
+  Script(b,"RewardKarma 2");Sub(b,"NEXT",{});Script(b,"RewardKarma 3");return b;
+}
 static Bytes Owner(bool compressed=false){
   Bytes base,ref;Sub(base,"SCRI",Word(60));Sub(ref,"NAME",Word(201));
   auto b=Record("ACTI",201,compressed?Compressed(base):base,compressed?0x40000:0);
@@ -49,7 +53,8 @@ struct Fixture {
   Fixture(){
     Sub(quest,"DATA",{0,50});
     Sub(quest,"INDX",{10,0});Sub(quest,"QSDT",{0});Script(quest,"RewardKarma 1");
-    Sub(info,"TPIC",Word(40));Sub(info,"QSTI",Word(20));Script(info,"RewardKarma 2");Sub(info,"NEXT",{});Script(info,"RewardKarma 3");
+    Bytes metadata;Sub(metadata,"DATA",{0,0,0,0});Sub(metadata,"TRDT",Bytes(24));
+    info=InfoPayload(metadata);
     Sub(event,"EDID",Text("FixtureScript"));Script(event,"Begin OnActivate\nRewardKarma 4\nEnd\nBegin GameMode\nRewardKarma 5\nEnd");
     fo3pipdata::Definitions d;fo3pipdata::Decode(d,"QUST",10,0,quest,0,0,0);
     fo3pipdata::Decode(d,"INFO",50,0,info,0,0,40);fo3pipdata::Decode(d,"SCPT",60,0,event,0,0,0);
@@ -259,6 +264,44 @@ int main(){
   // INFO speaker evidence resolves independently of an actor's optional SCRI.
   // Both placement kinds, both record orders, compression and XXXX NAME work.
   const std::vector<Execution> infoOnly={f.programs[1],f.programs[2]};
+  // Exact bodies and actor/quest identities cannot bypass live dialogue's
+  // static supported-structure policy. Each attempt includes both phases.
+  auto checkInfo=[&](const Bytes& payload,bool expected,bool compressed=false){
+    auto bytes=Group(40,Record("INFO",50,compressed?Compressed(payload):payload,compressed?0x40000:0));
+    Append(bytes,Speakers());write(bytes);
+    fo3script::ScriptMasterMatch structure;
+    assert(fo3script::MatchScriptProgramsToMaster(path,infoOnly,structure,cancel,error)==expected);
+    if(expected)assert(structure.Matches(infoOnly));else rejects(infoOnly);
+  };
+  for(unsigned size:{0u,1u,2u,3u,4u,5u,8u})for(bool compressed:{false,true}){
+    Bytes metadata;Sub(metadata,"DATA",Bytes(size));Sub(metadata,"TRDT",Bytes(24));
+    checkInfo(InfoPayload(metadata),size==3||size==4,compressed);
+  }
+  {Bytes metadata;Sub(metadata,"TRDT",Bytes(24));checkInfo(InfoPayload(metadata),false);}
+  for(unsigned type=0;type<256;++type){
+    Bytes metadata;Sub(metadata,"DATA",{uint8_t(type),0,0,0});Sub(metadata,"TRDT",Bytes(24));
+    checkInfo(InfoPayload(metadata),type==0||type==3);
+  }
+  for(unsigned field=1;field<4;++field)for(unsigned bit=0;bit<8;++bit){
+    Bytes data(4);data[field]=uint8_t(1u<<bit);
+    Bytes metadata;Sub(metadata,"DATA",data);Sub(metadata,"TRDT",Bytes(24));
+    checkInfo(InfoPayload(metadata),field==2&&bit!=7);
+  }
+  // DATA uniqueness is record-wide, even after NEXT; XXXX has the same rules.
+  for(bool after:{false,true}){
+    Bytes extra;Sub(extra,"DATA",{0,0,0,0});
+    auto payload=after?f.info:extra;Append(payload,after?extra:f.info);checkInfo(payload,false);
+  }
+  for(unsigned size:{3u,4u,5u})for(bool compressed:{false,true}){
+    Bytes metadata;Sub(metadata,"XXXX",Word(size));Sub(metadata,"DATA",{});Append(metadata,Bytes(size));
+    Sub(metadata,"TRDT",Bytes(16));checkInfo(InfoPayload(metadata),size!=5,compressed);
+  }
+  for(unsigned size:{0u,1u,12u,15u,16u,20u,21u,24u,25u})for(bool extra:{false,true}){
+    Bytes metadata;Sub(metadata,"DATA",{0,0,0,0});Sub(metadata,"TRDT",Bytes(size));
+    if(extra)Sub(metadata,"TRDT",Bytes(24)); // a valid response cannot hide a short one
+    checkInfo(InfoPayload(metadata),size>=16);
+  }
+  {Bytes metadata;Sub(metadata,"DATA",{0,0,0,0});checkInfo(InfoPayload(metadata),false);}
   auto noQuest=f.info;noQuest.erase(noQuest.begin()+10,noQuest.begin()+20); // fixture QSTI
   // Parent identity is resolved on the complete second scan, independently of
   // record order, compression or the quest's authored initial running flag.

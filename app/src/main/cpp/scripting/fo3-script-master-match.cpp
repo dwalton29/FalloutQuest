@@ -1,6 +1,7 @@
 #include "fo3-script-master-match.h"
 #include "fo3-script-evidence-budget.h"
 #include "data/fo3-esm-reader.h"
+#include "dialogue/fo3-dialogue-info-policy.h"
 #include <cstring>
 #include <memory>
 #include <unordered_map>
@@ -61,7 +62,7 @@ const char* Type(const Execution& e){
 // Validate framing before the tolerant gameplay decoder. In particular XXXX
 // cannot hide a truncated field, and duplicate script scalars are ambiguous.
 bool Complete(const std::vector<uint8_t>& b,const std::string& type){
-  size_t p=0;uint32_t extended=0;unsigned scalars=0,next=0,tpic=0,scri=0,quest=0,speaker=0;
+  size_t p=0;uint32_t extended=0;unsigned scalars=0,next=0,tpic=0,scri=0,quest=0,speaker=0,data=0;
   while(p<b.size()){
     if(b.size()-p<6)return false;
     const auto* tag=b.data()+p;const auto shortSize=fo3esm::ReadU16(tag+4);p+=6;
@@ -83,12 +84,14 @@ bool Complete(const std::vector<uint8_t>& b,const std::string& type){
     if(type=="INFO"&&Is(tag,"TPIC")){if(n!=4||++tpic>1)return false;}
     if(type=="INFO"&&Is(tag,"QSTI")){if(n!=4||++quest>1)return false;}
     if(type=="INFO"&&Is(tag,"ANAM")){if(n!=4||++speaker>1)return false;}
+    if(type=="INFO"&&Is(tag,"DATA")){if((n!=3&&n!=4)||++data>1)return false;}
+    if(type=="INFO"&&Is(tag,"TRDT")&&n<16)return false;
     if(type=="QUST"&&Is(tag,"SCRI")){if(n!=4||++scri>1)return false;}
     if((type=="QUST"||type=="INFO")&&Is(tag,"CTDA")&&n!=20&&n!=24&&n!=28)return false;
     if(type=="QUST"&&(Is(tag,"QSDT")||Is(tag,"INDX")||Is(tag,"QOBJ")))scalars=0;
     p+=n;
   }
-  return !extended;
+  return !extended&&(type!="INFO"||data==1);
 }
 bool Authored(const Execution& e,const fo3pipdata::Definitions& d){
   const auto& o=e.origin;
@@ -101,6 +104,7 @@ bool Authored(const Execution& e,const fo3pipdata::Definitions& d){
   if(o.kind==Kind::DialogueInfo){
     const auto t=d.topics.find(o.topic);
     return t!=d.topics.end()&&t->second.size()==1&&t->second[0].id==o.record&&
+      fo3dialogue::SupportedInfoStructure(t->second[0])&&
       Same(e.program,o.item?t->second[0].end:t->second[0].begin);
   }
   const auto s=d.scripts.find(o.record);if(s==d.scripts.end()||!Same(e.container,s->second))return false;
