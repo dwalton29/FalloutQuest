@@ -796,3 +796,25 @@ transitive/conditional ownership, bounded dispatch and device validation remain
 open. Whole-master payload walking adds worker CPU/I/O cost with no Quest budget
 claim. General resident Enable/Disable remains unadmitted. See
 `world-reference-m1b3z.md` for exact scope and limits.
+
+## M1B3aa validation
+
+Original FLST leaf memberships containing an affected reference or resolved base
+now fail authored admission. This conservatively cuts potential list indirection
+at its final edge, including dormant lists and nested/cyclic metadata, without
+consumer discovery, recursive traversal or provenance exemptions. Malformed
+members reject; unrelated/null/self/cyclic/empty memberships retain the prior
+policy, and LNAM outside FLST is not reinterpreted as membership.
+
+All 53 core host tests plus the production actor test pass. The affected authored
+admission and master-match targets pass ASan/UBSan (LeakSanitizer disabled),
+including original admission regressions and a master-matched script pointing
+only to nested/cyclic lists that reach an affected reference. Relevant native,
+source, renderer/body/Pip-Boy and original dialogue/bridge/barter/MS11/door
+regressions retain their expected outcomes.
+
+This is conservative original-membership rejection, not runtime list semantics,
+dynamic list ownership or complete conditional/implicit dependency analysis.
+General resident Enable/Disable remains unadmitted; remaining ownership,
+bounded-dispatch and Quest validation work stays open. See
+`world-reference-m1b3aa.md` for exact scope and limits.

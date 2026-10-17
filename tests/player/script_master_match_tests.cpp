@@ -145,6 +145,7 @@ int main(){
   Sub(ref,"NAME",Word(901));Sub(ref,"DATA",Bytes(24));
   b=Record("CELL",900,cell);Append(b,Record("STAT",901,base));
   auto children=Record("REFR",100,ref);auto scope=Group(900,children);Put(scope,12,6);Append(b,scope);
+  const auto world=b;
   Append(b,Record("SCPT",60,f.event));write(b);
   const std::vector<Execution> eventOnly={f.programs.back()};
   assert(fo3script::MatchScriptProgramsToMaster(path,eventOnly,owned,cancel,error)&&owned.Matches(eventOnly));
@@ -152,6 +153,20 @@ int main(){
   assert(!fo3scene::PrepareResidentAuthoredAdmission(path,900,{100},admission,cancel,error));
   assert(error.find("SCRO from SCPT 60 to 100")!=std::string::npos&&admission.Matches(999,{888}));
   assert(owned.Matches(eventOnly));
+  // A matched script can reference only a list, while nested/cyclic list
+  // metadata reaches the affected reference without any direct SCRO hit.
+  Bytes indirect,outer,inner;
+  Sub(indirect,"EDID",Text("IndirectFixture"));Sub(indirect,"SCHR",Bytes(20));
+  Sub(indirect,"SCDA",{1,2});Sub(indirect,"SCTX",Text(eventOnly[0].container.source));
+  Sub(indirect,"SCRO",Word(70));Sub(indirect,"SCRV",Word(2));
+  fo3pipdata::Definitions definitions;fo3pipdata::Decode(definitions,"SCPT",60,0,indirect,0,0,0);
+  auto throughList=eventOnly;throughList[0].container=definitions.scripts.at(60);
+  Sub(outer,"LNAM",Word(71));Sub(inner,"LNAM",Word(70));Sub(inner,"LNAM",Word(100));
+  b=world;Append(b,Record("SCPT",60,indirect));Append(b,Record("FLST",70,outer));Append(b,Record("FLST",71,inner));write(b);
+  assert(fo3script::MatchScriptProgramsToMaster(path,throughList,owned,cancel,error)&&owned.Matches(throughList));
+  assert(!fo3scene::PrepareResidentAuthoredAdmission(path,900,{100},admission,cancel,error));
+  assert(error.find("FLST LNAM from FLST 71 to 100")!=std::string::npos&&admission.Matches(999,{888}));
+  assert(owned.Matches(throughList));
   std::remove(path.c_str());rejects(f.programs);
   std::cout<<"Strict master program matching, exact report binding and fail-closed framing passed\n";
 }

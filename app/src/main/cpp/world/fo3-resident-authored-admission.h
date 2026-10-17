@@ -9,6 +9,7 @@ namespace fo3scene {
 // Immutable worker output is bound to the complete logical affected set.
 // Direct SCRO and conservative raw CTDA operand hits on references/bases reject;
 // this is not complete indirect/conditional script dependency ownership.
+// Incoming original FLST membership also rejects, including dormant lists.
 struct ResidentAuthoredAdmission {
     uint32_t cell=0;
     std::vector<uint32_t> affected;

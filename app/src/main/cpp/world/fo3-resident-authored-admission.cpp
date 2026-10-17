@@ -210,6 +210,12 @@ bool PrepareResidentAuthoredAdmission(const std::string& master,uint32_t cell,
                 target(fo3esm::ReadU32(p+16),"CTDA +16");
                 if(n==28)target(fo3esm::ReadU32(p+24),"CTDA +24");
                 if(p[0]&4)target(fo3esm::ReadU32(p+4),"CTDA comparison-global");
+            }else if(r.location.type=="FLST"&&Is(t,"LNAM")){
+                if(n!=4){malformed("FLST LNAM");return;}
+                // Cut potential list indirection at its leaf membership, even
+                // for dormant lists. Nested/cyclic graphs need no traversal:
+                // every chain to an affected ID has a direct member edge.
+                target(fo3esm::ReadU32(p),"FLST LNAM");
             }
         });
         if(!dependencies)return false;

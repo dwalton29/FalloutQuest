@@ -563,3 +563,7 @@ for offset in (12,16,24):assert f'target(fo3esm::ReadU32(p+{offset}),"CTDA +{off
 assert 'if(p[0]&4)target(fo3esm::ReadU32(p+4),"CTDA comparison-global")' in second
 assert 'ScriptMasterMatch' not in authored and 'ExecutedScripts' not in authored
 print('Incoming SCRO/CTDA evidence scans every nondeleted record and cannot be exempted by matched program provenance')
+assert 'r.location.type=="FLST"&&Is(t,"LNAM")' in second
+assert 'if(n!=4){malformed("FLST LNAM");return;}' in second
+assert 'target(fo3esm::ReadU32(p),"FLST LNAM")' in second
+print('Original FLST leaf membership blocks potential list indirection without graph traversal or provenance exemptions')

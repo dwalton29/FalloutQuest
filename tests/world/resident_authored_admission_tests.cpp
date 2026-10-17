@@ -100,7 +100,9 @@ void scriptDependencies(){
         assert(out.cell==999&&out.affected==std::vector<uint32_t>{888});
     };
     auto admits=[&](){fo3scene::ResidentAuthoredAdmission accepted;
-        assert(fo3scene::PrepareResidentAuthoredAdmission(path,10,{30},accepted,cancel,error));
+        const bool valid=fo3scene::PrepareResidentAuthoredAdmission(path,10,{30},accepted,cancel,error);
+        if(!valid)std::cerr<<"Expected admission: "<<error<<'\n';
+        assert(valid);
         assert(accepted.Matches(10,{30})&&error.empty());};
     for(const char* type:{"SCPT","QUST","INFO","PACK","IDLE","PERK","TERM","MGEF","REFR","ACHR","ACRE","UNKN"})
       for(uint32_t target:{20u,30u})for(int encoding:{0,1,2}){
@@ -125,7 +127,39 @@ void scriptDependencies(){
         master("SCPT","SCRO",word(99),encoding);admits();
         for(uint32_t local:{20u,30u}){master("SCPT","SCRV",word(local),encoding);admits();}
         master("INFO","CTDA",Bytes(28),encoding);admits();
+        for(uint32_t member:{20u,30u}){
+            master("FLST","LNAM",word(member),encoding);rejects("FLST LNAM");
+            assert(error.find(member==30?"(reference)":"(base)")!=std::string::npos);
+        }
+        for(uint32_t member:{0u,60u,99u}){master("FLST","LNAM",word(member),encoding);admits();}
     }
+    for(uint32_t size:{0u,1u,3u,5u,8u}){
+        master("FLST","LNAM",Bytes(size));rejects("FLST LNAM");
+        master("FLST","LNAM",Bytes(size),0,0x20);admits();
+    }
+    // LNAM has other meanings outside FLST; it is not a global member tag.
+    for(const char* type:{"INFO","SCPT","UNKN"}){
+        master(type,"LNAM",word(30));admits();
+    }
+    for(bool cycle:{false,true})for(bool leafFirst:{false,true}){
+        auto b=fixture();Bytes outer,inner,source;
+        sub(outer,"LNAM",word(61));sub(inner,"LNAM",word(30));
+        if(cycle)sub(inner,"LNAM",word(60));
+        sub(source,"SCRO",word(60));append(b,record("SCPT",80,source));
+        append(b,record("FLST",leafFirst?61:60,leafFirst?inner:outer));
+        append(b,record("FLST",leafFirst?60:61,leafFirst?outer:inner));write(b);
+        assert(!fo3scene::PrepareResidentAuthoredAdmission(path,10,{30},out,cancel,error));
+        assert(error.find("FLST LNAM from FLST 61 to 30")!=std::string::npos);
+        assert(out.Matches(999,{888}));
+        // Remove the affected member but retain the cycle and script consumer.
+        inner.clear();sub(inner,"LNAM",word(60));b=fixture();
+        append(b,record("FLST",60,outer));append(b,record("FLST",61,inner));
+        append(b,record("SCPT",80,source));write(b);admits();
+    }
+    {auto b=fixture();Bytes p;sub(p,"LNAM",word(99));sub(p,"LNAM",word(99));
+        append(b,record("FLST",60,p));write(b);admits();}
+    {auto b=fixture();Bytes p;sub(p,"EDID",text("EmptyFixtureList"));
+        append(b,record("FLST",60,p));write(b);admits();}
     auto b=fixture();Bytes p;sub(p,"SCRO",word(99));sub(p,"SCRO",word(99));append(b,record("SCPT",60,p));write(b);admits();
     b=fixture();p={1,2,3};append(b,record("UNKN",60,p));write(b);rejects("UNKN");
     b=fixture();append(b,record("SCPT",60,{1,2,3,4},0x40000));write(b);rejects("SCPT");
