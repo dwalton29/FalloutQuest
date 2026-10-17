@@ -288,6 +288,10 @@ struct ScriptExecution {
   // distance/button/message operations. These are not the quest local owner.
   uint32_t parent=NoParent,reference=0;
   fo3pipdata::ResultScript program,container;
+  // Decoded authored gate metadata, not condition outcomes or read ownership.
+  // QUST entries retain item conditions; INFOs also retain their parent gates.
+  uint32_t owningQuest=0; // INFO QSTI only
+  std::vector<fo3pipdata::Condition> conditions,questConditions;
 };
 struct ReferenceEnableChange { uint32_t reference=0; bool enabled=false; };
 // Owned reference-only input for the future scene coordinator. It neither runs

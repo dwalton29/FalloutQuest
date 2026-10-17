@@ -559,7 +559,13 @@ assert 'e.origin.kind==Kind::ReferenceEvent||e.origin.kind==Kind::DialogueInfo' 
 assert 'owners[e.owner].push_back(n)' in master_match
 assert 'pass==0&&info&&type!="ACHR"&&type!="ACRE"' in master_match
 assert 'programs[index].origin.kind==Kind::ReferenceEvent&&association!=' in master_match
-assert 'requiredQuests.emplace(info.quest,true);requiredSpeakers[index]=info.speaker;' in master_match
+assert 'requiredQuests[info.quest].push_back(index);requiredSpeakers[index]=info.speaker;' in master_match
+assert 'Same(programs[index].questConditions,quest->second.conditions)' in master_match
+assert 'Same(e.conditions,stage->second.items[o.item].conditions)' in master_match
+assert 'Same(e.conditions,t->second[0].conditions)' in master_match
+assert 'execution.owningQuest=owningQuest;' in script_runtime
+assert 'if(conditions)execution.conditions=*conditions;' in script_runtime
+assert 'if(questConditions)execution.questConditions=*questConditions;' in script_runtime
 assert 'if(pass==1&&requiredQuests.count(id))' in master_match
 assert master_match.index('questsSeen.size()!=requiredQuests.size()')<master_match.index('out=std::move(next);')
 assert 'if(requiredSpeakers[index]&&requiredSpeakers[index]!=id)' in master_match

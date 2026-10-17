@@ -32,6 +32,12 @@ static Bytes InfoPayload(const Bytes& metadata){
   Bytes b;Sub(b,"TPIC",Word(40));Sub(b,"QSTI",Word(20));Append(b,metadata);
   Script(b,"RewardKarma 2");Sub(b,"NEXT",{});Script(b,"RewardKarma 3");return b;
 }
+static Bytes ConditionBytes(unsigned size,uint32_t value){
+  Bytes b(size);b[0]=1;b[8]=72;Put(b,4,value);Put(b,12,7);Put(b,16,8);
+  if(size>=24)Put(b,20,1);
+  if(size>=28)Put(b,24,0x14);
+  return b;
+}
 static Bytes Owner(bool compressed=false){
   Bytes base,ref;Sub(base,"SCRI",Word(60));Sub(ref,"NAME",Word(201));
   auto b=Record("ACTI",201,compressed?Compressed(base):base,compressed?0x40000:0);
@@ -62,6 +68,7 @@ struct Fixture {
     q.program=d.quests.at(10).stages.at(10).items[0].result;programs.push_back(q);
     for(unsigned phase=0;phase<2;++phase){Execution i;i.origin.kind=Kind::DialogueInfo;
       i.origin.record=50;i.origin.topic=40;i.origin.item=phase;i.owner=102;
+      i.owningQuest=20;
       i.program=phase?d.topics.at(40)[0].end:d.topics.at(40)[0].begin;programs.push_back(i);}
     Execution e;e.origin.kind=Kind::ReferenceEvent;e.origin.record=e.localScript=60;
     e.origin.sourceLine=1;e.origin.event="onactivate";e.owner=e.reference=101;e.activator=0x14;
@@ -99,6 +106,18 @@ int main(){
       size_t containerCost=0;assert(fo3script::ChargeScriptEvidence("",empty,&script,containerCost));
       if(field)assert(containerCost==charged);
     }
+    std::vector<fo3pipdata::Condition> gates(1);
+    for(bool quest:{false,true}){
+      size_t charged=0;
+      assert(fo3script::ChargeScriptEvidence("",empty,nullptr,charged,quest?nullptr:&gates,quest?&gates:nullptr));
+      assert(charged==cost+sizeof(fo3pipdata::Condition));
+      used=fo3script::ScriptEvidenceMaxBytes-cost;
+      assert(!fo3script::ChargeScriptEvidence("",empty,nullptr,used,quest?nullptr:&gates,quest?&gates:nullptr));
+      assert(used==fo3script::ScriptEvidenceMaxBytes-cost);
+      used=fo3script::ScriptEvidenceMaxBytes-charged;
+      assert(fo3script::ChargeScriptEvidence("",empty,nullptr,used,quest?nullptr:&gates,quest?&gates:nullptr));
+      assert(used==fo3script::ScriptEvidenceMaxBytes);
+    }
   }
   Fixture f;const auto path="/tmp/fq-script-master-"+std::to_string(getpid());std::atomic<bool> cancel{false};std::string error;
   auto write=[&](const Bytes& b){std::ofstream out(path,std::ios::binary);out.write(reinterpret_cast<const char*>(b.data()),b.size());assert(out);};
@@ -114,6 +133,54 @@ int main(){
     assert(!fo3script::MatchScriptProgramsToMaster(path,programs,report,cancel,error)&&!error.empty());
     assert(report.Matches(f.programs)); // failed attempts never replace valid output
   };
+  // Bind decoded conditions, including float bits and order, to each entered
+  // item/INFO and its original parent quest. This does not evaluate the gates.
+  for(unsigned width:{20u,24u,28u})for(bool compressed:{false,true})for(bool parentFirst:{false,true}){
+    auto quest=f.quest,info=f.info;Bytes parent;Sub(parent,"DATA",{0,40});
+    for(uint32_t bits:{0x80000000u,0x7fc12345u}){
+      const auto condition=ConditionBytes(width,bits);
+      Sub(quest,"CTDA",condition);Sub(info,"CTDA",condition);Sub(parent,"CTDA",condition);
+    }
+    const auto parentRecord=Record("QUST",20,compressed?Compressed(parent):parent,compressed?0x40000:0);
+    auto bytes=parentFirst?parentRecord:Bytes{};
+    Append(bytes,Record("QUST",10,compressed?Compressed(quest):quest,compressed?0x40000:0));
+    Append(bytes,Group(40,Record("INFO",50,compressed?Compressed(info):info,compressed?0x40000:0)));
+    if(!parentFirst)Append(bytes,parentRecord);
+    Append(bytes,Speakers(false,false));write(bytes);
+    auto evidence=std::vector<Execution>{f.programs[0],f.programs[1],f.programs[2]};
+    for(uint32_t bits:{0x80000000u,0x7fc12345u}){
+      fo3pipdata::Condition c;c.flags=1;c.function=72;std::memcpy(&c.value,&bits,4);
+      c.a=7;c.b=8;c.run=width>=24?1:0;c.reference=width>=28?0x14:0;
+      for(auto& entry:evidence)entry.conditions.push_back(c);
+      evidence[1].questConditions.push_back(c);evidence[2].questConditions.push_back(c);
+    }
+    fo3script::ScriptMasterMatch gates;
+    assert(fo3script::MatchScriptProgramsToMaster(path,evidence,gates,cancel,error)&&gates.Matches(evidence));
+    for(unsigned entry=0;entry<3;++entry)for(bool parentGate:{false,true})for(unsigned field=0;field<10;++field){
+      if(!entry&&parentGate)continue;
+      auto altered=evidence;auto& list=parentGate?altered[entry].questConditions:altered[entry].conditions;
+      auto& c=list[0];
+      if(field==0)c.flags^=1;
+      if(field==1)++c.function;
+      if(field==2){uint32_t bits=0;std::memcpy(&c.value,&bits,4);} // -0 differs from +0
+      if(field==3)++c.a;
+      if(field==4)++c.b;
+      if(field==5)++c.run;
+      if(field==6)++c.reference;
+      if(field==7)list.clear();
+      if(field==8)list.push_back(list[0]);
+      if(field==9)std::swap(list[0],list[1]);
+      assert(!gates.Matches(altered));
+      assert(!fo3script::MatchScriptProgramsToMaster(path,altered,gates,cancel,error)&&gates.Matches(evidence));
+    }
+    auto wrongQuest=evidence;wrongQuest[1].owningQuest=21;
+    assert(!gates.Matches(wrongQuest)&&!fo3script::MatchScriptProgramsToMaster(path,wrongQuest,gates,cancel,error));
+    assert(gates.Matches(evidence));
+    auto nan=evidence;uint32_t bits=0x7fc12346;std::memcpy(&nan[2].questConditions[1].value,&bits,4);
+    assert(!gates.Matches(nan)&&!fo3script::MatchScriptProgramsToMaster(path,nan,gates,cancel,error));
+    assert(gates.Matches(evidence));
+  }
+  write(f.Master());
   for(unsigned n=0;n<f.programs.size();++n)for(int field=0;field<5;++field){
     auto programs=f.programs;auto& s=programs[n].program;
     if(field==0)s.source+=' ';
@@ -123,7 +190,7 @@ int main(){
     if(field==4)s.records.push_back({"SCRV",Word(9)});
     assert(!report.Matches(programs));rejects(programs);
   }
-  for(int field=0;field<18;++field){
+  for(int field=0;field<24;++field){
     auto p=f.programs;
     if(field==0)p[0].origin.kind=Kind::UnboundResult;
     if(field==1)++p[0].origin.record;
@@ -143,6 +210,12 @@ int main(){
     if(field==15)p[0].reference=101;
     if(field==16)p[1].activator=0x14;
     if(field==17)p[1].parent=0;
+    if(field==18)p[3].conditions.resize(1);
+    if(field==19)p[3].questConditions.resize(1);
+    if(field==20)p[0].questConditions.resize(1);
+    if(field==21)p[0].owningQuest=10;
+    if(field==22)p[3].owningQuest=20;
+    if(field==23)p[1].owningQuest=0;
     rejects(p);
   }
   auto context=f.programs;++context[3].activator;
@@ -187,6 +260,11 @@ int main(){
   auto overflow=std::vector<Execution>(4097,f.programs[0]);rejects(overflow);
   auto tooLarge=f.programs;tooLarge.back().container.source.resize(fo3script::ScriptEvidenceMaxBytes);
   rejects(tooLarge);assert(error=="script master evidence byte limit exceeded");
+  for(bool parentGate:{false,true}){
+    auto large=f.programs;auto& gates=parentGate?large[1].questConditions:large[1].conditions;
+    gates.resize(fo3script::ScriptEvidenceMaxBytes/sizeof(fo3pipdata::Condition));
+    rejects(large);assert(error=="script master evidence byte limit exceeded");
+  }
   // Strict scope metadata cannot inherit the tolerant decoder's first-field
   // semantics. Scalar uniqueness is record-wide, including across fragments.
   for(const char* field:{"SCRI","ANAM","QSTI"})for(unsigned n:{0u,1u,3u,5u,8u}){
@@ -211,9 +289,10 @@ int main(){
     auto bytes=quest?Record("QUST",10,payload):Group(40,Record("INFO",50,payload));
     if(!quest)Append(bytes,Speakers());
     write(bytes);
-    const auto evidence=quest?std::vector<Execution>{f.programs[0]}:std::vector<Execution>{f.programs[1]};
+    auto evidence=quest?std::vector<Execution>{f.programs[0]}:std::vector<Execution>{f.programs[1]};
     fo3script::ScriptMasterMatch conditions;
     const bool expected=n==20||n==24||n==28;
+    if(expected&&!quest)evidence[0].conditions.resize(1);
     assert(fo3script::MatchScriptProgramsToMaster(path,evidence,conditions,cancel,error)==expected);
   }
   // Null and nonnull authored SCRI preserve exact quest local-scope matching.
@@ -335,7 +414,7 @@ int main(){
     if(malformed==4)Append(b,Record("STAT",20,{}));
     if(malformed==5)Append(b,Record("QUST",20,quest,0x20));
     write(b);rejects(infoOnly);
-    assert(error.find("owning quest")!=std::string::npos);
+    if(malformed<15)assert(error.find("owning quest")!=std::string::npos);
   }
   // Sharing one quest is valid; two independent INFOs require both parents.
   {
@@ -343,6 +422,7 @@ int main(){
     b=Group(40,Record("INFO",50,f.info));Append(b,Group(40,Record("INFO",51,second)));Append(b,Speakers());
     const auto missingSecond=b;Append(b,ParentQuest(false,21));write(b);
     auto evidence=infoOnly;evidence[1].origin.record=51;evidence[1].origin.item=0;evidence[1].program=evidence[0].program;
+    evidence[1].owningQuest=21;
     fo3script::ScriptMasterMatch both;
     assert(fo3script::MatchScriptProgramsToMaster(path,evidence,both,cancel,error));
     write(missingSecond);

@@ -4,9 +4,9 @@
 
 - Starting canonical main: `2987d911f318b92d1041257868067851a09d16f0` (v208).
 - Resumed from published `6469dbb872889a79a0682501b75f6ac6577ab547`.
-- Current implementation checkpoint: M1B3ah shared INFO structural admission.
+- Current implementation checkpoint: M1B3ai decoded condition provenance.
   Use canonical main history for the publication SHA; the previous published
-  implementation is M1B3ag `b48a32e08cdd4681965b16fb321add46ed3e9ffb`.
+  implementation is M1B3ah `8114392ccdebb991bfb303e0f4e24b1fe9845d92`.
 - M1B3l Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38635385905.
 - M1B3m Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38793178567.
 - M1B3n Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38795209693.
@@ -973,3 +973,36 @@ Static structure does not establish runtime eligibility, condition/read context,
 voice, ordering or dispatch authority. General resident Enable/Disable still
 awaits ownership, bounded dispatch and device validation. Version 212 remains
 unchanged. See `world-reference-m1b3ah.md` for scope and original-data counts.
+
+## M1B3ai validation
+
+Captured stage items and INFOs now retain their decoded condition lists. INFO
+evidence also records its catalog QSTI and that parent's quest-root conditions.
+The first original-master scan compares item/INFO conditions and parent identity;
+the existing second scan compares parent conditions for every captured phase.
+Report comparison binds the same fields without allocations. Order and every
+decoded field count, including exact float bits for signed zero and NaN payloads.
+Event/stage scope checks reject inappropriate INFO-parent metadata.
+
+Both vectors are charged before evidence copies and before master file access
+under the existing 16 MiB retained-value limit. No extra master scan is added.
+Capture stays opt-in and keeps only owned values. Session condition evaluation
+and separate begin/end timing are unchanged; stage capture includes item gates,
+which RunQuestStage evaluates, rather than quest-root dialogue gates.
+
+All 53 core host tests, the actor test, source guards and matcher ASan/UBSan pass
+(LeakSanitizer disabled). Mutation tests cover every condition field, list
+length/order, parent ID, all supported CTDA layouts, compression, either parent
+record order and both INFO phases. Capture checks cover nested stages,
+commit/rollback, unchanged live state and both vectors exceeding the byte limit.
+Original MS11 provenance, Lucas dialogue acceptance/save-reload and the
+production dialogue bridge pass. M1B3ah Android CI passed (run 39060759921).
+
+Original merchant barter and all three MS11 completion/reward/save-reload
+branches also pass. Existing unsupported showmap diagnostics are unchanged.
+
+This authenticates decoded metadata, not condition outcomes, operand bindings,
+read ownership, dispatch causality or complete call edges. It adds no dependency
+exemption or general resident Enable/Disable caller. Remaining ownership,
+bounded dispatch and device validation still gate that path; version 212 remains
+unchanged. See `world-reference-m1b3ai.md` for accounting and proof limits.

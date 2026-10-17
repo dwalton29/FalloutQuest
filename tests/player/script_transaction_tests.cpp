@@ -59,6 +59,8 @@ static void Provenance(){
   catalog.pipboy.scripts[300].header={4,5};
   catalog.pipboy.scripts[300].references={100,10};
   catalog.pipboy.scripts[300].records={{"SCRO",{100,0,0,0}},{"SCRV",{7,0,0,0}}};
+  fo3pipdata::Condition gate;gate.function=72;gate.run=1;gate.a=7;gate.value=1;
+  catalog.pipboy.quests[10].stages[10].items[0].conditions={gate};
   fo3player::Player p(std::move(catalog));const auto revision=p.Revision();
   auto quest=p.PrepareQuestStageTransaction(10,10,error,capture);assert(quest&&quest->HasProgramProvenance());
   const auto& entered=quest->ExecutedScripts();assert(entered.size()==2);
@@ -68,6 +70,9 @@ static void Provenance(){
   assert(entered[1].origin.stage==20&&entered[1].origin.item==0&&entered[1].owner==11);
   assert(entered[0].parent==fo3player::ScriptExecution::NoParent&&entered[1].parent==0);
   assert(!entered[0].reference&&!entered[1].reference);
+  assert(entered[0].conditions.size()==1&&entered[0].conditions[0].function==72&&
+    entered[0].conditions[0].run==1&&entered[0].conditions[0].a==7&&entered[0].conditions[0].value==1);
+  assert(!entered[0].owningQuest&&entered[0].questConditions.empty()&&entered[1].conditions.empty());
   assert(entered[0].program.source==p.Definitions().pipboy.quests.at(10).stages.at(10).items[0].result.source);
   auto event=p.PrepareReferenceEventTransaction(100,"OnActivate",fo3player::PlayerRef,error,capture);assert(event&&event->HasProgramProvenance());
   const auto& scripts=event->ExecutedScripts();assert(scripts.size()==3);
@@ -76,12 +81,14 @@ static void Provenance(){
   assert(first.origin.event=="onactivate"&&first.origin.sourceLine==1);
   assert(first.owner==100&&first.activator==fo3player::PlayerRef&&first.localScript==300);
   assert(first.reference==100&&first.parent==fo3player::ScriptExecution::NoParent);
+  assert(!first.owningQuest&&first.conditions.empty()&&first.questConditions.empty());
   const auto& original=p.Definitions().pipboy.scripts.at(300);
   assert(first.container.source==original.source&&first.container.header==original.header);
   assert(first.container.compiled==original.compiled&&first.container.references==original.references);
   assert(first.container.records==original.records);
   assert(first.program.source=="SetStage QuestA 10\n"&&first.program.compiled.empty());
   assert(scripts[1].origin.record==10&&scripts[2].origin.record==11);
+  assert(scripts[1].conditions.size()==1&&scripts[1].conditions[0].function==72);
   assert(scripts[1].activator==fo3player::PlayerRef&&scripts[2].activator==fo3player::PlayerRef);
   assert(scripts[1].reference==100&&scripts[2].reference==100);
   assert(scripts[1].parent==0&&scripts[2].parent==1);
@@ -154,6 +161,10 @@ static void DialogueProvenance(){
   using Phase=fo3player::DialogueScriptPhase;using Kind=fo3player::ScriptProgramKind;
   constexpr auto capture=fo3player::ScriptProgramCapture::EnteredPrograms;
   auto catalog=Fixture();fo3pipdata::Info info;info.id=801;info.topic=800;
+  info.quest=11;
+  fo3pipdata::Condition gate;gate.function=72;gate.a=7;gate.run=1;gate.value=1;
+  info.conditions={gate};gate.function=56;gate.a=10;gate.value=0;
+  catalog.pipboy.quests[11].conditions={gate};
   info.begin=Script("RewardKarma 1\nSetStage QuestA 10");info.end=Script("RewardKarma 2");
   info.begin.header={1,2};info.begin.compiled={3,4};info.begin.references={100,10};
   info.begin.records={{"SCRO",{100,0,0,0}},{"SCRV",{2,0,0,0}}};
@@ -173,6 +184,9 @@ static void DialogueProvenance(){
     assert(script.program.source==authored.source&&script.program.header==authored.header);
     assert(script.program.compiled==authored.compiled&&script.program.references==authored.references);
     assert(script.program.records==authored.records);
+    assert(script.owningQuest==11&&script.conditions.size()==1&&script.questConditions.size()==1);
+    assert(script.conditions[0].function==72&&script.conditions[0].a==7&&script.conditions[0].value==1);
+    assert(script.questConditions[0].function==56&&script.questConditions[0].a==10&&script.questConditions[0].value==0);
   }
   assert(scripts[1].origin.kind==Kind::QuestStageItem&&scripts[1].origin.record==10);
   assert(scripts[2].origin.kind==Kind::QuestStageItem&&scripts[2].origin.record==11);
@@ -215,6 +229,15 @@ static void DialogueProvenance(){
   fo3player::Player rejected(std::move(failure));
   assert(!rejected.PrepareDialogueInfoTransaction(800,801,Phase::Both,error,0,capture));
   assert(rejected.Snapshot().karma==0&&rejected.Snapshot().pipboy.quests.empty());NoEffects(rejected);
+  for(bool quest:{false,true}){
+    auto oversized=catalog;
+    auto& gates=quest?oversized.pipboy.quests[11].conditions:oversized.pipboy.topics[800][0].conditions;
+    gates.resize(16u*1024u*1024u/sizeof(fo3pipdata::Condition));
+    fo3player::Player large(std::move(oversized));
+    assert(!large.PrepareDialogueInfoTransaction(800,801,Phase::End,error,100,capture));
+    assert(error=="script provenance byte limit exceeded"&&large.Snapshot().karma==0);NoEffects(large);
+    assert(large.PrepareDialogueInfoTransaction(800,801,Phase::End,error));
+  }
 }
 static void OriginalProvenance(const char* path){
   constexpr auto capture=fo3player::ScriptProgramCapture::EnteredPrograms;
@@ -306,6 +329,9 @@ static void OriginalProvenance(const char* path){
         restricted.origin.kind=fo3player::ScriptProgramKind::DialogueInfo;
         restricted.origin.topic=info.topic;restricted.origin.record=info.id;
         restricted.owner=actor.first;restricted.program=info.begin;
+        restricted.owningQuest=info.quest;restricted.conditions=info.conditions;
+        const auto parent=p.Definitions().pipboy.quests.find(info.quest);
+        if(parent!=p.Definitions().pipboy.quests.end())restricted.questConditions=parent->second.conditions;
         foundRestricted=true;break;
       }
       if(foundRestricted)break;

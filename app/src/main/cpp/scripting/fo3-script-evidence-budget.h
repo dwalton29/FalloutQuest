@@ -11,7 +11,8 @@ inline constexpr size_t ScriptEvidenceMaxBytes=16u*1024u*1024u;
 // Failed charges leave the caller's running total unchanged.
 inline bool ChargeScriptEvidence(const std::string& event,
     const fo3pipdata::ResultScript& program,const fo3pipdata::ResultScript* container,
-    size_t& used) noexcept {
+    size_t& used,const std::vector<fo3pipdata::Condition>* conditions=nullptr,
+    const std::vector<fo3pipdata::Condition>* questConditions=nullptr) noexcept {
   if(used>ScriptEvidenceMaxBytes)return false;
   size_t remaining=ScriptEvidenceMaxBytes-used;
   auto bytes=[&](size_t n){if(n>remaining)return false;remaining-=n;return true;};
@@ -29,7 +30,9 @@ inline bool ChargeScriptEvidence(const std::string& event,
     return true;
   };
   if(!bytes(sizeof(fo3player::ScriptExecution))||!string(event)||!script(program)||
-      (container?!script(*container):!bytes(1)))return false;
+      (container?!script(*container):!bytes(1))||
+      (conditions&&!array(conditions->size(),sizeof(fo3pipdata::Condition)))||
+      (questConditions&&!array(questConditions->size(),sizeof(fo3pipdata::Condition))))return false;
   used=ScriptEvidenceMaxBytes-remaining;return true;
 }
 }

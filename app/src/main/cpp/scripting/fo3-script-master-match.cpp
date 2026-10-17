@@ -18,12 +18,23 @@ bool Same(const fo3pipdata::ResultScript& a,const fo3pipdata::ResultScript& b) n
 bool Empty(const fo3pipdata::ResultScript& s) noexcept {
   return s.source.empty()&&s.compiled.empty()&&s.header.empty()&&s.references.empty()&&s.records.empty();
 }
+bool Same(const std::vector<fo3pipdata::Condition>& a,const std::vector<fo3pipdata::Condition>& b) noexcept {
+  if(a.size()!=b.size())return false;
+  for(size_t n=0;n<a.size();++n){
+    const auto& x=a[n];const auto& y=b[n];
+    // Compare float bits, preserving signed zero and NaN payload identity.
+    if(x.flags!=y.flags||x.function!=y.function||std::memcmp(&x.value,&y.value,sizeof(x.value))||
+        x.a!=y.a||x.b!=y.b||x.run!=y.run||x.reference!=y.reference)return false;
+  }
+  return true;
+}
 bool Same(const Execution& a,const Execution& b) noexcept {
   const auto& x=a.origin;const auto& y=b.origin;
   return x.kind==y.kind&&x.record==y.record&&x.item==y.item&&x.sourceLine==y.sourceLine&&
     x.topic==y.topic&&x.stage==y.stage&&x.event==y.event&&a.owner==b.owner&&
     a.activator==b.activator&&a.localScript==b.localScript&&a.parent==b.parent&&
-    a.reference==b.reference&&Same(a.program,b.program)&&Same(a.container,b.container);
+    a.reference==b.reference&&Same(a.program,b.program)&&Same(a.container,b.container)&&
+    a.owningQuest==b.owningQuest&&Same(a.conditions,b.conditions)&&Same(a.questConditions,b.questConditions);
 }
 bool Contexts(const std::vector<Execution>& programs){
   std::array<size_t,32> active{};size_t depth=0;
@@ -51,11 +62,13 @@ const char* Type(const Execution& e){
   if(!o.record)return nullptr;
   switch(o.kind){
     case Kind::QuestStageItem:
-      return e.owner==o.record&&!o.topic&&!o.sourceLine&&o.event.empty()&&Empty(e.container)?"QUST":nullptr;
+      return e.owner==o.record&&!o.topic&&!o.sourceLine&&o.event.empty()&&Empty(e.container)&&
+        !e.owningQuest&&e.questConditions.empty()?"QUST":nullptr;
     case Kind::DialogueInfo:
       return e.owner&&o.topic&&o.item<2&&!o.stage&&!o.sourceLine&&o.event.empty()&&!e.localScript&&Empty(e.container)?"INFO":nullptr;
     case Kind::ReferenceEvent:
-      return e.owner&&e.localScript==o.record&&o.sourceLine&&!o.event.empty()&&!o.item&&!o.stage&&!o.topic?"SCPT":nullptr;
+      return e.owner&&e.localScript==o.record&&o.sourceLine&&!o.event.empty()&&!o.item&&!o.stage&&!o.topic&&
+        !e.owningQuest&&e.conditions.empty()&&e.questConditions.empty()?"SCPT":nullptr;
     default:return nullptr; // raw bodies can never claim an authored identity
   }
 }
@@ -99,12 +112,14 @@ bool Authored(const Execution& e,const fo3pipdata::Definitions& d){
     const auto q=d.quests.find(o.record);
     if(q==d.quests.end()||!q->second.diagnostics.empty()||e.localScript!=q->second.script)return false;
     const auto stage=q->second.stages.find(o.stage);
-    return stage!=q->second.stages.end()&&o.item<stage->second.items.size()&&Same(e.program,stage->second.items[o.item].result);
+    return stage!=q->second.stages.end()&&o.item<stage->second.items.size()&&
+      Same(e.conditions,stage->second.items[o.item].conditions)&&Same(e.program,stage->second.items[o.item].result);
   }
   if(o.kind==Kind::DialogueInfo){
     const auto t=d.topics.find(o.topic);
     return t!=d.topics.end()&&t->second.size()==1&&t->second[0].id==o.record&&
       fo3dialogue::SupportedInfoStructure(t->second[0])&&
+      e.owningQuest==t->second[0].quest&&Same(e.conditions,t->second[0].conditions)&&
       Same(e.program,o.item?t->second[0].end:t->second[0].begin);
   }
   const auto s=d.scripts.find(o.record);if(s==d.scripts.end()||!Same(e.container,s->second))return false;
@@ -149,7 +164,7 @@ bool MatchScriptProgramsToMaster(const std::string& master,const std::vector<Exe
   std::unordered_map<uint32_t,std::vector<size_t>> wanted,owners,bases;
   for(size_t n=0;n<programs.size();++n){
     const auto& e=programs[n];
-    if(!ChargeScriptEvidence(e.origin.event,e.program,&e.container,evidenceBytes))
+    if(!ChargeScriptEvidence(e.origin.event,e.program,&e.container,evidenceBytes,&e.conditions,&e.questConditions))
       return fail("script master evidence byte limit exceeded");
     if(!Type(programs[n]))return fail("unbound or malformed script origin");
     wanted[programs[n].origin.record].push_back(n);
@@ -162,7 +177,8 @@ bool MatchScriptProgramsToMaster(const std::string& master,const std::vector<Exe
   struct Group{uint64_t end;uint32_t label,type;};std::vector<Group> stack;
   std::unordered_map<uint32_t,bool> seen;std::vector<uint8_t> bytes;
   std::unordered_map<uint32_t,bool> ownersSeen,basesSeen;
-  std::unordered_map<uint32_t,bool> requiredQuests,questsSeen;
+  std::unordered_map<uint32_t,std::vector<size_t>> requiredQuests;
+  std::unordered_map<uint32_t,bool> questsSeen;
   std::vector<std::string> placementTypes(programs.size());
   std::vector<uint32_t> requiredSpeakers(programs.size());
   // The first complete scan authenticates programs and resolves placed owners.
@@ -199,7 +215,7 @@ bool MatchScriptProgramsToMaster(const std::string& master,const std::vector<Exe
         if(type=="INFO"){
           const auto& info=d.topics.at(programs[index].origin.topic).front();
           if(!info.quest)return fail("original INFO owning quest missing");
-          requiredQuests.emplace(info.quest,true);requiredSpeakers[index]=info.speaker;
+          requiredQuests[info.quest].push_back(index);requiredSpeakers[index]=info.speaker;
         }
       }
     }
@@ -213,6 +229,9 @@ bool MatchScriptProgramsToMaster(const std::string& master,const std::vector<Exe
       const auto quest=d.quests.find(id);
       if(quest==d.quests.end()||!quest->second.diagnostics.empty())
         return fail("malformed INFO owning quest definition");
+      for(const auto index:requiredQuests.at(id))
+        if(!Same(programs[index].questConditions,quest->second.conditions))
+          return fail("INFO owning quest conditions differ from original master");
     }
     const auto binding=(pass==0?owners:bases).find(id);
     const auto& bindings=pass==0?owners:bases;

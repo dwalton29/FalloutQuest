@@ -6,6 +6,8 @@ namespace fo3script {
 // Exact source evidence, not dependency/condition ownership or dispatch authority.
 // SCPT events also require the original owner's direct NAME/base SCRI (or
 // QUST SCRI) association. Activators and INFO speaker eligibility are not proven.
+// Captured item/INFO and INFO-parent condition fields are matched in order;
+// this authenticates decoded metadata, not outcomes, operand bindings or reads.
 // Output is published only after the complete master scan succeeds.
 class ScriptMasterMatch {
 public:

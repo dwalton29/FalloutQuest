@@ -166,19 +166,45 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
     ~RestoreTraceParent(){p.scriptTraceParent_=previous;}} traceParent{*this,scriptTraceParent_};
   if(scriptTrace_){
     if(scriptTrace_->size()>=fo3script::ScriptEvidenceMaxEntries){error="script provenance entry limit exceeded";return false;}
+    const std::vector<fo3pipdata::Condition>* conditions=nullptr;
+    const std::vector<fo3pipdata::Condition>* questConditions=nullptr;
+    uint32_t owningQuest=0;
+    if(origin.kind==ScriptProgramKind::QuestStageItem){
+      const auto q=catalog_->pipboy.quests.find(origin.record);
+      if(q==catalog_->pipboy.quests.end()){error="script provenance quest unavailable";return false;}
+      const auto stage=q->second.stages.find(origin.stage);
+      if(stage==q->second.stages.end()||origin.item>=stage->second.items.size()){
+        error="script provenance stage item unavailable";return false;
+      }
+      conditions=&stage->second.items[origin.item].conditions;
+    }else if(origin.kind==ScriptProgramKind::DialogueInfo){
+      const auto location=catalog_->dialogueInfos.find(origin.record);
+      const auto topic=catalog_->pipboy.topics.find(origin.topic);
+      if(location==catalog_->dialogueInfos.end()||location->second.first!=origin.topic||
+          topic==catalog_->pipboy.topics.end()||location->second.second>=topic->second.size()){
+        error="script provenance INFO unavailable";return false;
+      }
+      const auto& info=topic->second[location->second.second];
+      conditions=&info.conditions;owningQuest=info.quest;
+      const auto quest=catalog_->pipboy.quests.find(owningQuest);
+      if(quest!=catalog_->pipboy.quests.end())questConditions=&quest->second.conditions;
+    }
     const fo3pipdata::ResultScript* container=nullptr;
     if(origin.kind==ScriptProgramKind::ReferenceEvent){
       const auto found=catalog_->pipboy.scripts.find(origin.record);
       if(found!=catalog_->pipboy.scripts.end())container=&found->second;
     }
     auto nextBytes=scriptTraceBytes_;
-    if(!fo3script::ChargeScriptEvidence(origin.event,script,container,nextBytes)){
+    if(!fo3script::ChargeScriptEvidence(origin.event,script,container,nextBytes,conditions,questConditions)){
       error="script provenance byte limit exceeded";return false;
     }
     ScriptExecution execution;execution.origin=std::move(origin);
     execution.owner=owner;execution.activator=scriptActivator_;execution.localScript=scriptId;
     execution.parent=scriptTraceParent_;execution.reference=scriptReference_;
     execution.program=script;
+    execution.owningQuest=owningQuest;
+    if(conditions)execution.conditions=*conditions;
+    if(questConditions)execution.questConditions=*questConditions;
     if(container)execution.container=*container;
     scriptTrace_->push_back(std::move(execution));
     scriptTraceBytes_=nextBytes;
