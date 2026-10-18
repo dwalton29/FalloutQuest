@@ -11,6 +11,9 @@ struct Fo3LevelUpSession {
     std::vector<uint32_t> eligible;
     Page page=Page::Skills;
     fo3player::Player* owner=nullptr;
+    fo3player::Player* observedPlayer=nullptr;
+    uint32_t observedExperience=0;
+    double experienceFeedbackUntil=0;
     uint32_t selectedPerk=0;
     int points=0,remaining=0;
     bool lastA=false,lastB=false;
@@ -110,7 +113,17 @@ void UpdateFo3LevelUp(double now,float scroll,bool pressedA,bool pressedB,
         return;
     }
     auto& player=gPlayerSession->player;
+    // Let the original XP popup/audio appear before opening the allocation
+    // modal. A restored pending level has no new XP event and can open at once.
+    if(u.observedPlayer!=&player){
+        u.observedPlayer=&player;u.observedExperience=player.Snapshot().experience;
+        u.experienceFeedbackUntil=0;
+    }else if(u.observedExperience!=player.Snapshot().experience){
+        u.observedExperience=player.Snapshot().experience;
+        u.experienceFeedbackUntil=now+2.5;
+    }
     if(!u.panel.visible) {
+        if(now<u.experienceFeedbackUntil)return;
         if(!player.ExperienceProgress().ready||
            Fo3DialogueFocus()||Fo3ScriptMessageFocus()||Fo3PipboyFocus()||
            Fo3LockpickFocus()||Fo3BarterFocus()||
