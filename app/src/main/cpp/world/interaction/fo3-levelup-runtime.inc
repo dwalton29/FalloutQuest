@@ -16,7 +16,7 @@ struct Fo3LevelUpSession {
     double experienceFeedbackUntil=0;
     uint32_t selectedPerk=0;
     int points=0,remaining=0;
-    bool lastA=false,lastB=false;
+    bool lastA=false,lastB=false,preloadedSounds=false;
     uint64_t serial=20000000;
 };
 Fo3LevelUpSession gLevelUp;
@@ -40,8 +40,8 @@ void Fo3LevelUpRefresh() {
     const auto level=uint32_t(player.Snapshot().level)+1;
     panel.title="WELCOME TO LEVEL "+std::to_string(level);
     if(u.page==Fo3LevelUpSession::Page::Skills){
-        panel.subtitle="ASSIGN "+std::to_string(u.points)+
-            " SKILL POINTS    REMAINING "+std::to_string(u.remaining);
+        panel.subtitle="SKILL POINTS LEFT: "+std::to_string(u.remaining)+
+            " / "+std::to_string(u.points);
         for(size_t i=0;i<u.allocated.size();++i) {
             if(i==12)continue; // No Throwing skill in original Fallout 3.
             panel.choices.push_back(std::string(Fo3LevelUpSkillNames[i])+
@@ -84,11 +84,30 @@ void Fo3LevelUpRefresh() {
     }
     u.cursor.Target(uint32_t(u.page)+101,uint32_t(panel.choices.size()));
     panel.selected=u.cursor.selected;
+    if(u.page==Fo3LevelUpSession::Page::Skills&&
+       panel.selected<13) {
+        const size_t slot=panel.selected<12?panel.selected:panel.selected+1;
+        panel.subtitle+="\n\n"+std::string(Fo3LevelUpSkillNames[slot])+
+            " "+std::to_string(u.allocated[slot])+
+            "\nA: Increase skill    B: Undo point";
+    }
     if(u.page==Fo3LevelUpSession::Page::Perks &&
-       panel.selected<u.eligible.size())
-        panel.subtitle+="\n"+
-            player.Definitions().pipboy.perks.at(u.eligible[panel.selected]).description;
+       panel.selected<u.eligible.size()) {
+        const auto& perk=player.Definitions().pipboy.perks.at(
+            u.eligible[panel.selected]);
+        panel.subtitle+="\n\n"+perk.name+"\n"+perk.description;
+    }
     panel.revision=++u.serial;
+}
+
+std::string Fo3LevelUpSelectedIcon(){
+    const auto& u=gLevelUp;
+    if(!u.panel.visible||u.page!=Fo3LevelUpSession::Page::Perks||
+       !u.owner||u.panel.selected>=u.eligible.size())return {};
+    const auto it=u.owner->Definitions().pipboy.perks.find(
+        u.eligible[u.panel.selected]);
+    return it==u.owner->Definitions().pipboy.perks.end()?
+        std::string{}:it->second.icon;
 }
 
 bool Fo3LevelUpCombatActive() {
@@ -103,6 +122,13 @@ void UpdateFo3LevelUp(double now,float scroll,bool pressedA,bool pressedB,
                       bool focused) {
     auto& u=gLevelUp;
     gFo3LevelUpFocusFlag=&u.panel.visible;
+    if(!u.preloadedSounds&&gPlayerSession&&gSceneReady) {
+        u.preloadedSounds=true;
+        for(const char* id:{"UIPopUpExperienceUp","UILevelUp",
+                            "UILevelUpText","UIPerk","UIMenuOK",
+                            "UIMenuPrevNext","UIMenuCancel","UIMenuFocus"})
+            fo3audio::PreloadSound(id);
+    }
     const bool a=pressedA&&!u.lastA,b=pressedB&&!u.lastB;
     u.lastA=pressedA;u.lastB=pressedB;
     if(!gPlayerSession||gPlayerSession->saveBlocked||
@@ -148,7 +174,7 @@ void UpdateFo3LevelUp(double now,float scroll,bool pressedA,bool pressedB,
     u.cursor.Scroll(scroll,now,u.panel.choices.size());
     if(prev!=u.cursor.selected) {
         Fo3LevelUpRefresh();
-        fo3audio::Scroll();
+        fo3audio::NamedSound("UIMenuFocus");
     }
     const size_t selected=u.cursor.selected;
     if(u.page==Fo3LevelUpSession::Page::Skills){
@@ -173,7 +199,7 @@ void UpdateFo3LevelUp(double now,float scroll,bool pressedA,bool pressedB,
     }
     if(u.page==Fo3LevelUpSession::Page::Perks) {
         if(b) {u.page=Fo3LevelUpSession::Page::Skills;
-            Fo3LevelUpRefresh();fo3audio::NamedSound("UIMenuOK");return;}
+            Fo3LevelUpRefresh();fo3audio::NamedSound("UIMenuCancel");return;}
         if(!a||selected>=u.eligible.size())return;
         u.selectedPerk=u.eligible[selected];
         const auto special=player.Definitions().pipboy.formNames.find("intensetraining");
@@ -184,15 +210,15 @@ void UpdateFo3LevelUp(double now,float scroll,bool pressedA,bool pressedB,
         }
         if(player.CommitLevelUp(u.allocated,u.selectedPerk)){
             u.panel.visible=false;u.owner=nullptr;
-            fo3audio::NamedSound("UIMenuOK");
+            fo3audio::NamedSound("UIPerk");
         }
         return;
     }
     if(b){u.page=Fo3LevelUpSession::Page::Perks;
-        Fo3LevelUpRefresh();fo3audio::NamedSound("UIMenuOK");return;}
+        Fo3LevelUpRefresh();fo3audio::NamedSound("UIMenuCancel");return;}
     if(a&&selected<7&&player.CommitLevelUp(
            u.allocated,u.selectedPerk,int(selected))){
         u.panel.visible=false;u.owner=nullptr;
-        fo3audio::NamedSound("UIMenuOK");
+        fo3audio::NamedSound("UIPerk");
     }
 }
