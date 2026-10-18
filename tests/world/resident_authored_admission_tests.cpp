@@ -281,6 +281,20 @@ void original(const std::string& master){
     if(!script)std::cerr<<"No original SCRO fixture reached its guard; candidates="<<scriptFixtures.size()<<" last="<<error<<'\n';
     assert(script);
     std::cout<<"Original Brass Lantern: light guard admitted, load door and navmeshed geometry rejected\n";
+    // Original MQ05 FuseBoxScript enables the STAT XMarker FuseToggle in
+    // P-Purity03. Existing world input/transaction tests cover publication;
+    // this tests the real ESM reference/cell/dependency admission, including
+    // its authenticated original SCPT's own SCRO.
+    constexpr uint32_t ppurity03=0x0001DEB0,fuseToggle=0x000A6A6D,fuseScript=0x0001A02C;
+    fo3scene::ResidentAuthoredAdmission fuseAdmission;
+    const bool fuseAdmitted=fo3scene::PrepareResidentAuthoredAdmission(
+        master,ppurity03,{fuseToggle},fuseAdmission,cancel,error,{fuseScript});
+    if(!fuseAdmitted)std::cerr<<"Original MQ05 FuseToggle admission: "<<error<<'\n';
+    assert(fuseAdmitted&&fuseAdmission.Matches(ppurity03,{fuseToggle}));
+    assert(!fo3scene::PrepareResidentAuthoredAdmission(
+        master,ppurity03,{fuseToggle},fuseAdmission,cancel,error));
+    assert(error.find("SCRO")!=std::string::npos);
+    std::cout<<"Original MQ05 FuseToggle XMarker admitted with its authenticated SCPT owner only\n";
 }
 int main(int argc,char** argv){
     scriptDependencies();

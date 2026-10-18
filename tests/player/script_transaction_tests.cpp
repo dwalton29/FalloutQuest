@@ -758,6 +758,37 @@ static void OriginalProvenance(const char* path){
   assert(!fo3script::MatchScriptProgramsToMaster(path,programs,matched,cancelled,error));
   assert(p.Revision()==revision&&p.Snapshot().pipboy.quests.empty());NoEffects(p);
   std::cout<<"Original MS11 stage/bomb/INFO provenance passes strict master matching without publication\n";
+  // Real source-script gameplay preparation, using only the user's original ESM.
+  // MQ05FuseBoxRef is an authored ACTI and FuseToggle is an initially disabled
+  // XMarker in the same Project Purity interior. No synthetic source or IDs.
+  constexpr uint32_t fuseBoxRef=0x00019FF9, fuseToggleRef=0x000A6A6D;
+  uint32_t mq05=0;
+  for(const auto& definition:p.Definitions().pipboy.quests)
+    if(fo3script::Lower(definition.second.editor)=="mq05")mq05=definition.first;
+  const auto fuseItem=p.Definitions().pipboy.formNames.find("mq05fuse");
+  assert(mq05&&fuseItem!=p.Definitions().pipboy.formNames.end());
+  fo3player::Player fusePlayer(p); // Full original catalogue; isolated gameplay state.
+  assert(fusePlayer.StartQuest(mq05));
+  assert(fusePlayer.ExecuteQuestStage(mq05,50,error)&&error.empty());
+  assert(fusePlayer.Add(fuseItem->second,10));
+  bool disabled=false;
+  assert(fusePlayer.ReferenceDisabled(fuseToggleRef,disabled,error)&&disabled);
+  const uint64_t beforeFuse=fusePlayer.Revision();
+  auto fuse=fusePlayer.PrepareReferenceEventTransaction(fuseBoxRef,"OnActivate",
+      fo3player::PlayerRef,error,capture);
+  if(!fuse)std::cerr<<"Original MQ05 fuse-box preparation: "<<error<<'\n';
+  assert(fuse&&fuse->HasReferenceChanges()&&fuse->HasProgramProvenance()&&
+      fuse->AffectedReferences()==std::vector<uint32_t>{fuseToggleRef});
+  assert(fuse->CandidateState()&&
+      fuse->CandidateState()->referenceEnabled.at(fuseToggleRef));
+  assert(fusePlayer.Revision()==beforeFuse&&fusePlayer.ItemCount(fuseItem->second)==10);
+  fo3script::ScriptMasterMatch fuseAuthenticated;
+  assert(fo3script::MatchScriptProgramsToMaster(path,fuse->ExecutedScripts(),
+      fuseAuthenticated,cancelled,error)&&fuseAuthenticated.Verified());
+  assert(fusePlayer.CommitScriptTransaction(*fuse));
+  assert(fusePlayer.ItemCount(fuseItem->second)==0&&
+      fusePlayer.ReferenceDisabled(fuseToggleRef,disabled,error)&&!disabled);
+  std::cout<<"Original MQ05 fuse-box OnActivate stages enabled XMarker and removes ten authored fuses atomically on host\n";
 }
 struct ScriptExchangeAdapter {
   fo3player::Player& player;fo3player::ScriptTransactionPlan& script;
