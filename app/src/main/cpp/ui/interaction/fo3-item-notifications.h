@@ -33,6 +33,11 @@ public:
     void EnqueueQuest(const std::string& text,const std::string& sound) {
         Enqueue(text);auto& e=entries_[(head_+size_-1)%Capacity];e.quest=true;e.sound=sound;
     }
+    // XP is a short HUD event, not the quest character-stagger animation.
+    // The SOUN editor ID is resolved through the original ESM/audio catalog.
+    void EnqueueExperience(const std::string& text,const std::string& sound) {
+        Enqueue(text);auto& e=entries_[(head_+size_-1)%Capacity];e.sound=sound;
+    }
     double Age() const {return size_?now_-started_:0;}
     double Duration() const {
         if(!Quest())return Hold+Fade;
