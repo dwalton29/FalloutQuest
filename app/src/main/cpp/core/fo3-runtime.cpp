@@ -14110,7 +14110,9 @@ void SetFo3ShoulderInteractionFocused(bool focused) {
 fo3player::Session* GetFo3PlayerSession() { return gPlayerSession.get(); }
 
 #include "ui/lockpick/fo3-lockpick-runtime.inc"
+bool Fo3LevelUpFocus();
 #include "world/interaction/fo3-interaction-runtime.inc"
+#include "world/interaction/fo3-levelup-runtime.inc"
 
 void SetFo3PlayerBodyTrackingQ210(
         float headX, float headY, float headZ, float headYaw,
