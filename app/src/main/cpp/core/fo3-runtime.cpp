@@ -3123,6 +3123,7 @@ struct Fo3SceneLoadWork {
     // Original two-pass ESM door-anchor scan runs concurrently with CPU scene
     // preparation; only the ready packet mutates live resources on render thread.
     fo3scene::Preparation<Fo3AuthoredDoorCpuCache> doorPreparation;
+    bool doorWorkerAttempted=false;
     bool npcTexturesInstalled=false;
     bool collisionStarted = false;
     bool collisionComplete = false;
@@ -3967,6 +3968,26 @@ void FlushFo3DeferredPlayerState() {
 
 bool DrainFo3TransitionBackgroundWork();
 
+void StartFo3SceneDoorWorker(uint32_t cellFormId) {
+    // Boot starts with an unresolved CELL=0. Launch only after the real entry
+    // cell has been selected by the existing Fallout 3 spawn resolver.
+    if(!cellFormId || gSceneLoad.doorWorkerAttempted)return;
+    gSceneLoad.doorWorkerAttempted=true;
+    if(HasFo3AuthoredDoorAnchorsCachedQ2190(cellFormId)) {
+        fqloadprofile::Log("DOOR_CACHE_HIT generation=%llu cell=%08X",
+            (unsigned long long)gSceneLoad.generation,cellFormId);
+        return;
+    }
+    if(!gSceneLoad.doorPreparation.Start(
+        [cellFormId](Fo3AuthoredDoorCpuCache& result,
+                     const std::atomic<bool>& cancel) {
+            return PrepareFo3AuthoredDoorAnchorsQ2190(cellFormId,result,cancel);
+        })) {
+        fqloadprofile::Log("DOOR_WORKER_START_FAILED generation=%llu cell=%08X fallback=legacy",
+            (unsigned long long)gSceneLoad.generation,cellFormId);
+    }
+}
+
 uint64_t Fo3SceneElapsedUs(std::chrono::steady_clock::time_point since) {
     return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
         std::chrono::steady_clock::now() - since).count());
@@ -4022,6 +4043,7 @@ bool BeginFo3SceneLoad(const Fo3CellTransitionRequestQ74& request, bool boot) {
     gSceneLoad.aborting=false;gSceneLoad.abortReason.clear();
     gSceneLoad.boot = boot;
     gSceneLoad.contextApplied = false;
+    gSceneLoad.doorWorkerAttempted=false;
     gSceneLoad.doorPreparation.Reset();
     gSceneLoad.collisionPreparation.Reset();
     gSceneLoad.collisionStarted = gSceneLoad.collisionComplete = gSceneLoad.collisionReady = false;
@@ -4047,21 +4069,9 @@ bool BeginFo3SceneLoad(const Fo3CellTransitionRequestQ74& request, bool boot) {
     fqloadprofile::Log("BEGIN generation=%llu mode=%s cell=%08X worldspace=%08X playerCatalog=%d sceneReadyBefore=%d",
         (unsigned long long)gSceneLoad.generation,boot?"cold-boot":"transition",
         request.cellFormId,request.worldspaceFormId,loadPlayer?1:0,gSceneReady?1:0);
-    // Start the expensive authored door scan immediately, in parallel with
-    // catalogue, NIF and NPC CPU preparation. Reused cells need no new scan.
-    if (!HasFo3AuthoredDoorAnchorsCachedQ2190(request.cellFormId)) {
-        if(!gSceneLoad.doorPreparation.Start(
-            [cell=request.cellFormId](Fo3AuthoredDoorCpuCache& result,
-                                      const std::atomic<bool>& cancel) {
-                return PrepareFo3AuthoredDoorAnchorsQ2190(cell,result,cancel);
-            })) {
-            fqloadprofile::Log("DOOR_WORKER_START_FAILED generation=%llu cell=%08X fallback=legacy",
-                (unsigned long long)gSceneLoad.generation,request.cellFormId);
-        }
-    } else {
-        fqloadprofile::Log("DOOR_CACHE_HIT generation=%llu cell=%08X",
-            (unsigned long long)gSceneLoad.generation,request.cellFormId);
-    }
+    // Known transition cells can prefetch immediately. The cold-boot CELL
+    // must instead wait for ResolveFo3MegatonEntryQ1860 in the CPU worker.
+    StartFo3SceneDoorWorker(request.cellFormId);
     const auto referenceState=CaptureFo3ReferenceState();
     if (!gSceneLoad.preparation.Start(
             [request, boot, loadPlayer, referenceState](Fo3SceneCpuPreparation& result, const std::atomic<bool>& cancel) {
@@ -4267,6 +4277,9 @@ bool ProcessQ74TransitionRequest() {
         return false;
     }
     Fo3SceneCpuPreparation& prepared = gSceneLoad.preparation.Get();
+    // On boot, ResolveFo3MegatonEntryQ1860 fills in the actual CELL during
+    // CPU preparation, leaving the lengthy GPU upload phase for overlap.
+    StartFo3SceneDoorWorker(prepared.request.cellFormId);
     // Recheck every frame, including between GPU slices and the collision swap.
     // A prepared projection must never publish over a newer committed save state.
     if (gPlayerSession && (!prepared.referenceState ||
