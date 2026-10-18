@@ -410,7 +410,8 @@ workflow_core=workflow[:workflow.index('// ACTI OnActivate bridge.')]
 for forbidden in ('FlushFo3','PollScript','PollQuest','DispatchReferenceEvent','glDraw','PumpFo3AndroidEvents'):
     assert forbidden not in workflow_core
 bridge=workflow[workflow.index('// ACTI OnActivate bridge.'):]
-assert bridge.index('BeginFo3ResidentWorkflow(') < bridge.index('FlushFo3PlayerState();')
+assert bridge.index('BeginFo3ResidentPreparedWorkflow(') < bridge.index('FlushFo3PlayerState();')
+assert 'std::move(plan)' in bridge  # ACTI scripts must not be evaluated twice.
 assert 'if(!plan->HasReferenceChanges())' in bridge
 assert 'ScriptEventResult' in bridge and 'Result::Pending' in bridge
 assert 'gFo3ResidentWorkflow.Ticket()==gFo3ResidentGameplayTicket' in native_pump
