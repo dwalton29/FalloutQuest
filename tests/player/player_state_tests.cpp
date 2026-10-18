@@ -254,6 +254,24 @@ void Synthetic(const std::string &root) {
   Check(c.items.at(102).femaleModel == "female.nif" &&
             !c.items.at(107).playable && !c.items.at(105).valueKnown,
         "item flags/models/auto value");
+  // XP is earned independently of the later skill/perk selection.
+  fo3player::Player xpPlayer(c);
+  Check(xpPlayer.ExperienceProgress().nextThreshold==200 &&
+        xpPlayer.ExperienceProgress().pendingLevels==0,"initial XP threshold");
+  Check(xpPlayer.RewardExperience(200) &&
+        xpPlayer.ExperienceProgress().pendingLevels==1 &&
+        xpPlayer.Snapshot().level==1,"XP cannot skip level-up choices");
+  Check(xpPlayer.RewardExperience(350) &&
+        xpPlayer.Snapshot().experience==550 &&
+        xpPlayer.ExperienceProgress().pendingLevels==2,"multiple pending levels");
+  const auto xpPath=root+"-xp.fqps";
+  Check(xpPlayer.Save(xpPath,error),"save earned XP");
+  fo3player::Player xpReload(c);
+  Check(xpReload.Restore(xpPath,error) &&
+        xpReload.Snapshot().experience==550 &&
+        xpReload.ExperienceProgress().pendingLevels==2,
+        "pending XP reconstructed from the existing save format");
+  std::remove(xpPath.c_str());
   fo3player::Player p(c);
   Check(p.MaxHealth() == 200 && p.MaxActionPoints() == 75 &&
             p.CarryCapacity() == 200 && p.InventoryWeight() == 10,
