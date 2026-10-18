@@ -124,6 +124,49 @@ static void AidTests() {
   assert(blocked.Revision() == rev &&
          blocked.Snapshot().inventory.front().count == 2);
 }
+static void PerkRecordDecodeTests() {
+  Definitions data;
+  auto put32=[](std::vector<uint8_t>& out,uint32_t v){
+    for(int i=0;i<4;++i)out.push_back(uint8_t(v>>(8*i)));
+  };
+  auto sub=[](std::vector<uint8_t>& out,const char* type,
+              const std::vector<uint8_t>& bytes){
+    out.insert(out.end(),type,type+4);
+    out.push_back(uint8_t(bytes.size()));
+    out.push_back(uint8_t(bytes.size()>>8));
+    out.insert(out.end(),bytes.begin(),bytes.end());
+  };
+  std::vector<uint8_t> ct(28,0);
+  ct[0]=0x60; // >=
+  // required Intelligence >= 4.0; GetPermanentActorValue 495, AV 9
+  ct[6]=0x80;ct[7]=0x40;ct[8]=0xEF;ct[9]=0x01;ct[12]=9;
+  std::vector<uint8_t> perk;
+  sub(perk,"EDID",{'T','e','s','t','P','e','r','k',0});
+  sub(perk,"FULL",{'T','e','s','t',0});
+  sub(perk,"CTDA",ct); // prerequisite, outside PRKE
+  sub(perk,"DATA",{0,4,1,1,0}); // playable, not hidden
+  sub(perk,"PRKE",{2,0,0});
+  sub(perk,"DATA",{9,3,1}); // XP entry point, multiply
+  sub(perk,"PRKC",{0});
+  sub(perk,"CTDA",ct); // effect condition, not prerequisite
+  sub(perk,"EPFT",{1});
+  sub(perk,"EPFD",{0xCD,0xCC,0x8C,0x3F});
+  sub(perk,"PRKF",{});
+  Decode(data,"PERK",201,0,perk,0,0,0);
+  const auto& p=data.perks.at(201);
+  assert(p.playable&&!p.hidden&&p.minLevel==4&&p.ranks==1);
+  assert(p.prerequisites.size()==1&&p.prerequisites[0].function==495&&
+         p.prerequisites[0].a==9);
+  assert(p.effects.size()==1&&p.effects[0].entryPoint==9&&
+         p.effects[0].conditions.at(0).size()==1);
+  auto unavailable=perk;
+  // Reconstruct the same record with its authored playable flag off.
+  unavailable.clear();
+  sub(unavailable,"EDID",{'Q','u','e','s','t','P','e','r','k',0});
+  sub(unavailable,"DATA",{0,0,1,0,1});
+  Decode(data,"PERK",202,0,unavailable,0,0,0);
+  assert(!data.perks.at(202).playable&&data.perks.at(202).hidden);
+}
 static void PackageDecodeTests() {
   Definitions d;
   auto put32=[](std::vector<uint8_t>& b,uint32_t v){for(int i=0;i<4;++i)b.push_back(uint8_t(v>>(i*8)));};
@@ -337,6 +380,7 @@ int main(int argc, char **argv) {
   MapTests();
   AidTests();
   PackageDecodeTests();
+  PerkRecordDecodeTests();
   RadioTests();
   MenuDataTests();
   if (argc > 1)
