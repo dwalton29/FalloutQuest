@@ -661,12 +661,17 @@ second=authored[authored.index('const bool second=Scan('):authored.index('if(!se
 assert second.index('if(r.location.flags&0x20u)return true;')<second.index('if(!Payload(f.get(),r,b))return false;')
 assert second.index('if(!Payload(f.get(),r,b))return false;')<second.index('if(!base)return true;')
 assert 'if(!wanted.count(id)&&!baseIds.count(id))return;' in second
-assert 'if(Is(t,"SCRO"))target(fo3esm::ReadU32(p),"SCRO");' in second
+# Only the exact authenticated SCPT currently executing may own an SCRO
+# edge to its directly affected REFR; every unrelated dependency stays blocked.
+assert 'r.location.type=="SCPT"&&authenticatedOwners.count(r.id)&&wanted.count(id)' in second
+assert 'target(id,"SCRO")' in second
+assert 'executedScriptOwners.push_back(execution.origin.record);' in s
+assert s.index('MatchScriptProgramsToMaster(') < s.index('executedScriptOwners.push_back(')
 assert 'if(n!=20&&n!=24&&n!=28)' in second
 for offset in (12,16,24):assert f'target(fo3esm::ReadU32(p+{offset}),"CTDA +{offset}")' in second
 assert 'if(p[0]&4)target(fo3esm::ReadU32(p+4),"CTDA comparison-global")' in second
 assert 'ScriptMasterMatch' not in authored and 'ExecutedScripts' not in authored
-print('Incoming SCRO/CTDA evidence scans every nondeleted record and cannot be exempted by matched program provenance')
+print('Incoming SCRO/CTDA still scan every nondeleted record; only authenticated executing SCPT self-edges are admitted')
 assert 'r.location.type=="FLST"&&Is(t,"LNAM")' in second
 assert 'if(n!=4){malformed("FLST LNAM");return;}' in second
 assert 'target(fo3esm::ReadU32(p),"FLST LNAM")' in second
