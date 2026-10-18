@@ -1662,8 +1662,10 @@ private:
                         gVrPipTracking.Step(gSceneReady&&!reloadingInHand&&!Fo3LockpickFocus()&&!Fo3LevelUpFocus(),IsFo3LoadingVisible(),sessionState_==XR_SESSION_STATE_FOCUSED,
                             headTracking,{gripHandPoseValid_[0],pipLeftGripTracked_},{handPoseValid_[0],pipLeftAimTracked_},
                             gameplaySeconds),
-                        q210RightValid?turnX_:0,q210RightValid?lootScrollY_:0,
-                        q210RightValid&&activateDownQ1700_,q210RightValid&&pipBackDown_,fingerGripValue_[0]);
+                        q210RightValid&&!Fo3LevelUpFocus()?turnX_:0,
+                        q210RightValid&&!Fo3LevelUpFocus()?lootScrollY_:0,
+                        q210RightValid&&!Fo3LevelUpFocus()&&activateDownQ1700_,
+                        q210RightValid&&!Fo3LevelUpFocus()&&pipBackDown_,fingerGripValue_[0]);
                     const bool lockControls=Fo3LockpickFocus();
                     UpdateFo3Lockpick(gameplaySeconds,
                         q210RightValid?turnX_:0,q210RightValid?fingerTriggerValue_[1]:0,
