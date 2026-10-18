@@ -126,9 +126,6 @@ static void AidTests() {
 }
 static void PerkRecordDecodeTests() {
   Definitions data;
-  auto put32=[](std::vector<uint8_t>& out,uint32_t v){
-    for(int i=0;i<4;++i)out.push_back(uint8_t(v>>(8*i)));
-  };
   auto sub=[](std::vector<uint8_t>& out,const char* type,
               const std::vector<uint8_t>& bytes){
     out.insert(out.end(),type,type+4);
