@@ -1544,6 +1544,12 @@ private:
                         for(const auto& object:gObjects)
                             if(object.refFormId&&scriptPlayer.HasReferenceEvent(object.refFormId,"GameMode"))
                                 scriptedResidents.push_back(object.refFormId);
+                        // NPC and creature residents have their own skinning
+                        // registry, not the static gObjects visual list.
+                        for(const auto& actor:gQ230NpcActors)
+                            if(!actor.runtime.offScene&&actor.source.refFormId&&
+                                scriptPlayer.HasReferenceEvent(actor.source.refFormId,"GameMode"))
+                                scriptedResidents.push_back(actor.source.refFormId);
                         scriptPlayer.PumpWorldAwareGameMode(scriptResidenceElapsed,scriptedResidents,
                             [&](std::unique_ptr<fo3player::ScriptTransactionPlan> plan){
                                 const auto ticket=BeginFo3ResidentPreparedWorkflow({},std::move(plan));
