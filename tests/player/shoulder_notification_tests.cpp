@@ -44,10 +44,28 @@ int main() {
     q.Advance(151);assert(q.Size()==0); // bounded backlog expires after suspension
     q.Enqueue("clear on transition");q.Clear();assert(q.Size()==0);
     Queue xpQueue;xpQueue.Advance(198);
-    xpQueue.EnqueueExperience("+300 XP\nLEVEL UP","UILevelUp");
-    assert(std::strcmp(xpQueue.Text(),"+300 XP\nLEVEL UP")==0);
-    assert(!xpQueue.Quest()&&xpQueue.TakeSound()=="UILevelUp"&&xpQueue.TakeSound().empty());
-    xpQueue.Advance(200.5);assert(xpQueue.Size()==0);
+    const ExperienceMeter vanilla{true,199,300,1,0,200};
+    xpQueue.EnqueueExperience("+101 XP\nLEVEL UP","UILevelUp",vanilla);
+    assert(std::strcmp(xpQueue.Text(),"+101 XP\nLEVEL UP")==0);
+    assert(xpQueue.CurrentXP()&&xpQueue.CurrentXP()->total==300);
+    assert(Queue::Fraction(0,0,200)==0.f);
+    assert(Queue::Fraction(100,0,200)==.5f);
+    assert(Queue::Fraction(300,0,200)==1.f);
+    assert(Queue::Fraction(400,200,550)>0.f);
+    assert(!xpQueue.Quest()&&xpQueue.TakeSound()=="UILevelUp"&&
+           xpQueue.TakeSound().empty());
+    xpQueue.Advance(200.5);
+    assert(xpQueue.Size()==0&&!xpQueue.CurrentXP());
+    xpQueue.Enqueue("Bottle added");
+    assert(!xpQueue.CurrentXP()); // Reused slots cannot retain old meter art
+    xpQueue.Clear();
+    xpQueue.EnqueueExperience("+5 XP","UIPopUpExperienceUp",
+                              {true,10,9,1,0,200});
+    assert(!xpQueue.CurrentXP()); // Declining XP is invalid
+    xpQueue.EnqueueExperience("+5 XP","UIPopUpExperienceUp",
+                              {true,2,3,1,200,200});
+    xpQueue.Advance(205);
+    assert(!xpQueue.CurrentXP());
 
     q.Advance(200);q.EnqueueQuest("Quest added\nAuthored title","UIPopUpQuestNew");
     assert(q.Quest()&&q.Alpha()==0&&q.TakeSound()=="UIPopUpQuestNew");
