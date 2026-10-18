@@ -8,6 +8,8 @@
 #include <zlib.h>
 
 #include <algorithm>
+#include <atomic>
+#include <utility>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -1003,6 +1005,74 @@ bool EnsureRenderer() {
 }
 
 } // namespace
+
+bool HasFo3WaterCatalogCachedQ2200(uint32_t worldspaceFormId) {
+    // Render-thread-only query; the worker never reads any of these globals.
+    return worldspaceFormId != 0u && gWaterCatalogWorldspace == worldspaceFormId;
+}
+
+bool PrepareFo3WaterCatalogQ2200(uint32_t worldspaceFormId,
+                                  Fo3WaterCpuCatalogQ2200& packet,
+                                  const std::atomic<bool>& cancel) {
+    if (!worldspaceFormId || cancel.load(std::memory_order_acquire)) return false;
+    const auto started = std::chrono::steady_clock::now();
+    Fo3WaterCpuCatalogQ2200 prepared;
+    prepared.worldspace = worldspaceFormId;
+    if (!ReadWorldDefaults(worldspaceFormId, prepared.defaultWaterType,
+                           prepared.defaultWaterHeight, prepared.noiseTexture) ||
+        cancel.load(std::memory_order_acquire)) return false;
+    std::vector<RawWaterCell> raw;
+    if (!CollectWaterCells(worldspaceFormId, prepared.defaultWaterHeight, raw) ||
+        cancel.load(std::memory_order_acquire)) return false;
+    std::unordered_set<uint32_t> wanted;
+    for (const RawWaterCell& cell : raw) {
+        const uint32_t type = cell.waterType ? cell.waterType : prepared.defaultWaterType;
+        if (type != 0u) wanted.insert(type);
+    }
+    if (!ResolveWaterTypes(wanted, prepared.types) ||
+        cancel.load(std::memory_order_acquire)) return false;
+    prepared.cells.reserve(raw.size());
+    for (auto& source : raw) {
+        if (cancel.load(std::memory_order_relaxed)) return false;
+        Fo3WaterCatalogCellQ2200 cell;
+        cell.formId=source.formId;cell.gridX=source.gridX;cell.gridY=source.gridY;
+        cell.hasGrid=source.hasGrid;cell.hasWaterFlag=source.hasWaterFlag;
+        cell.hasWaterHeight=source.hasWaterHeight;
+        cell.inheritedWaterHeight=source.inheritedWaterHeight;
+        cell.waterHeight=source.waterHeight;cell.waterType=source.waterType;
+        cell.noiseTexture=std::move(source.noiseTexture);
+        prepared.cells.push_back(std::move(cell));
+    }
+    prepared.scanUs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::steady_clock::now()-started).count());
+    packet=std::move(prepared);
+    return !cancel.load(std::memory_order_acquire);
+}
+
+bool PublishFo3WaterCatalogQ2200(Fo3WaterCpuCatalogQ2200&& packet) {
+    // All live water and catalogue mutation occurs on the render thread,
+    // after the scene generation has been admitted for publication.
+    if (!packet.worldspace) return false;
+    std::vector<RawWaterCell> raw;
+    raw.reserve(packet.cells.size());
+    for (auto& source : packet.cells) {
+        RawWaterCell cell;
+        cell.formId=source.formId;cell.gridX=source.gridX;cell.gridY=source.gridY;
+        cell.hasGrid=source.hasGrid;cell.hasWaterFlag=source.hasWaterFlag;
+        cell.hasWaterHeight=source.hasWaterHeight;
+        cell.inheritedWaterHeight=source.inheritedWaterHeight;
+        cell.waterHeight=source.waterHeight;cell.waterType=source.waterType;
+        cell.noiseTexture=std::move(source.noiseTexture);
+        raw.push_back(std::move(cell));
+    }
+    gWaterCatalogDefaultType=packet.defaultWaterType;
+    gWaterCatalogDefaultHeight=packet.defaultWaterHeight;
+    gWaterCatalogNoise=std::move(packet.noiseTexture);
+    gWaterCatalogCells=std::move(raw);
+    gWaterCatalogTypes=std::move(packet.types);
+    gWaterCatalogWorldspace=packet.worldspace; // Publish validity last.
+    return true;
+}
 
 bool LoadFo3WaterSceneQ2070(uint32_t worldspaceFormId,
                             float arrivalX, float arrivalY) {

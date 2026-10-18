@@ -1144,6 +1144,16 @@ bool ConsumeFo3CellTransitionRequestQ74(Fo3CellTransitionRequestQ74& outRequest)
 }
 
 void CompleteFo3CellTransitionQ74(uint32_t cellFormId) {
+    // Q22.0: isolate terrain teardown, authored exterior environment scans,
+    // placed lights and GPU terrain build within the multi-second commit hook.
+    auto q2200Last=std::chrono::steady_clock::now();
+    const auto q2200Mark=[&](const char* stage) {
+        const auto now=std::chrono::steady_clock::now();
+        const auto micros=std::chrono::duration_cast<std::chrono::microseconds>(now-q2200Last).count();
+        q2200Last=now;
+        Q71_LOGI("Q22.0 TRANSITION_STEP cell=%08X stage=%s stepMs=%.1f",
+                 cellFormId,stage,static_cast<double>(micros)/1000.0);
+    };
     gCurrentCellQ74 = cellFormId;
     gPlayerResetPendingQ74 = true;
     const bool q2013DeferWastelandLoading =
@@ -1155,6 +1165,7 @@ void CompleteFo3CellTransitionQ74(uint32_t cellFormId) {
     } else {
         Q71_LOGI("Q20.13 LOADING HOLD: worldspace=0000003C reason=warm-7x7+Level4-ring1 notification=deferred");
     }
+    q2200Mark("notify-loading-state");
 
     if (gPendingTransitionQ74.valid &&
         gPendingTransitionQ74.cellFormId == cellFormId &&
@@ -1164,15 +1175,18 @@ void CompleteFo3CellTransitionQ74(uint32_t cellFormId) {
                                        Q71_SCENE_FORWARD, Q71_FLOOR_Y,
                                        Q71_UNITS_PER_METRE);
     }
+    q2200Mark("retire-old-terrain");
 
     bool terrainReady = false;
 
     if (gPendingTransitionQ74.valid && gPendingTransitionQ74.worldspaceFormId != 0u) {
         LoadFo3Environment(gPendingTransitionQ74.worldspaceFormId);
+        q2200Mark("load-exterior-environment");
         LoadFo3PlacedLights(gPendingTransitionQ74.worldspaceFormId,
                                  gPendingTransitionQ74.x,
                                  gPendingTransitionQ74.y,
                                  gPendingTransitionQ74.z);
+        q2200Mark("load-placed-lights");
     } // Interior state is committed with Fo3SceneCpuPreparation by the renderer.
 
     if (gPendingTransitionQ74.valid &&
@@ -1198,6 +1212,7 @@ void CompleteFo3CellTransitionQ74(uint32_t cellFormId) {
         }
     }
 
+    q2200Mark("build-and-ground-terrain");
     Q71_LOGI("Q7.7 TERRAIN POST-SWAP: persistentCell=%08X worldspace=%08X ready=%d physicalGround=%d housePathUntouched=1",
              cellFormId,
              gPendingTransitionQ74.worldspaceFormId,

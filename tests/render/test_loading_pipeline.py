@@ -120,6 +120,30 @@ class LoadingPipeline(unittest.TestCase):
         self.assertIn('FINALIZE_STEP generation=',runtime)
         self.assertIn('DOOR_WORKER_READY generation=',runtime)
 
+    def test_water_catalog_prefetch_is_cpu_only_and_generation_safe(self):
+        runtime=(ROOT/'core/fo3-runtime.cpp').read_text()
+        header=(ROOT/'rendering/water/fo3-water.h').read_text()
+        water=(ROOT/'rendering/water/fo3-water.cpp').read_text()
+        worker=water.split('bool PrepareFo3WaterCatalogQ2200(',1)[1].split('bool PublishFo3WaterCatalogQ2200(',1)[0]
+        scene=runtime.split('bool ProcessQ74TransitionRequest() {',1)[1].split('GLenum Q1150BlendFactor',1)[0]
+        self.assertIn('std::atomic<bool>& cancel',header)
+        self.assertIn('ReadWorldDefaults(',worker)
+        self.assertIn('CollectWaterCells(',worker)
+        self.assertIn('ResolveWaterTypes(',worker)
+        self.assertIn('cancel.load(',worker)
+        for forbidden in ('gWaterCatalogWorldspace', 'gWaterCatalogCells',
+                          'gWaterCells', 'glBind', 'glGen'):
+            self.assertNotIn(forbidden,worker)
+        self.assertIn('gSceneLoad.waterPreparation.RequestCancel()',runtime)
+        self.assertIn('!gSceneLoad.waterPreparation.Ready()',scene)
+        self.assertIn('StartFo3SceneWaterWorker(request.worldspaceFormId);',runtime)
+        self.assertIn('StartFo3SceneWaterWorker(prepared.request.worldspaceFormId);',scene)
+        self.assertLess(scene.index('PublishFo3WaterCatalogQ2200('),
+                        scene.index('LoadFo3WaterSceneQ2070('))
+        self.assertIn('WATER_WORKER_READY generation=',runtime)
+        self.assertIn('WATER_WORKER_FAILED generation=',runtime)
+        self.assertIn('Q22.0 TRANSITION_STEP', (ROOT/'world/fo3-cell-world.cpp').read_text())
+
     def test_gpu_backlog_never_blocks_waiting_for_completion(self):
         loop=(ROOT/'core/fo3-runtime-loop.inc').read_text()
         self.assertIn('glClientWaitSync(gLoadingUploadFence,0,0)',loop)

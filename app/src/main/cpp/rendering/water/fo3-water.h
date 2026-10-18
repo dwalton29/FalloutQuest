@@ -1,6 +1,8 @@
 #pragma once
 
+#include <atomic>
 #include <cstdint>
+#include <unordered_map>
 #include <string>
 #include <vector>
 
@@ -42,6 +44,31 @@ struct Fo3WaterCellQ2070 {
     std::string noiseTexturePath;
     Fo3WaterTypeQ2070 type;
 };
+
+// Q22.0: Plain CPU ESM water catalogue. Preparing this packet never modifies
+// render-thread water windows, GL resources or shared catalogue state.
+struct Fo3WaterCatalogCellQ2200 {
+    uint32_t formId = 0u;
+    int32_t gridX = 0, gridY = 0;
+    bool hasGrid = false, hasWaterFlag = false, hasWaterHeight = false;
+    bool inheritedWaterHeight = false;
+    float waterHeight = 0.0f;
+    uint32_t waterType = 0u;
+    std::string noiseTexture;
+};
+struct Fo3WaterCpuCatalogQ2200 {
+    uint32_t worldspace = 0u, defaultWaterType = 0u;
+    float defaultWaterHeight = 0.0f;
+    std::string noiseTexture;
+    std::vector<Fo3WaterCatalogCellQ2200> cells;
+    std::unordered_map<uint32_t, Fo3WaterTypeQ2070> types;
+    uint64_t scanUs = 0u;
+};
+bool HasFo3WaterCatalogCachedQ2200(uint32_t worldspaceFormId);
+bool PrepareFo3WaterCatalogQ2200(uint32_t worldspaceFormId,
+                                  Fo3WaterCpuCatalogQ2200& packet,
+                                  const std::atomic<bool>& cancel);
+bool PublishFo3WaterCatalogQ2200(Fo3WaterCpuCatalogQ2200&& packet);
 
 bool LoadFo3WaterSceneQ2070(uint32_t worldspaceFormId,
                             float arrivalX, float arrivalY);
