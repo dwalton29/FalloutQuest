@@ -18,7 +18,7 @@ struct Fo3LevelUpSession {
 };
 Fo3LevelUpSession gLevelUp;
 
-bool Fo3LevelUpFocus(){return gLevelUp.panel.visible;}
+// The existing interaction runtime has a safe pointer-backed focus query.
 
 static constexpr std::array<const char*,14> Fo3LevelUpSkillNames{
     "Barter","Big Guns","Energy Weapons","Explosives","Lockpick",
@@ -99,6 +99,7 @@ bool Fo3LevelUpCombatActive() {
 void UpdateFo3LevelUp(double now,float scroll,bool pressedA,bool pressedB,
                       bool focused) {
     auto& u=gLevelUp;
+    gFo3LevelUpFocusFlag=&u.panel.visible;
     const bool a=pressedA&&!u.lastA,b=pressedB&&!u.lastB;
     u.lastA=pressedA;u.lastB=pressedB;
     if(!gPlayerSession||gPlayerSession->saveBlocked||
