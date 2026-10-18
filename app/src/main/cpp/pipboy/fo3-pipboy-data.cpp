@@ -248,6 +248,7 @@ void Decode(Definitions &d, const std::string &t, uint32_t id, uint32_t flags,
     if (a && a->n >= 4) {
       p.minLevel = a->p[1];
       p.ranks = a->p[2];
+      p.playable = a->p[3] != 0; // Original level-up selection DATA flag
       p.hidden = a->n > 4 && a->p[4];
     }
     PerkEffect *e = nullptr;
@@ -261,6 +262,8 @@ void Decode(Definitions &d, const std::string &t, uint32_t id, uint32_t flags,
         e->priority = v.p[2];
       } else if (v.type == "PRKF")
         e = nullptr;
+      else if (v.type == "CTDA" && !e)
+        p.prerequisites.push_back(Cond(v));
       else if (e) {
         if (v.type == "DATA") {
           if (e->type == 0 && v.n == 8) {
