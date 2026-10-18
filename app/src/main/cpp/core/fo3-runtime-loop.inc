@@ -1909,15 +1909,29 @@ private:
             if(q1700FrameSubmitted&&layerCount) {
                 ++frames;worst=std::max(worst,previousLoadingCpu);
                 if(previousLoadingCpu>period || uint64_t(std::max(0.0,appCadenceUs))>period*3/2)++missed;
-                if(frames==1)FQ_LOGI("LOADING FIRST FRAME: generation=%llu elapsedUs=%llu",(unsigned long long)reportGeneration,(unsigned long long)GetFo3LoadingElapsedUs());
+                if(frames==1) {
+                    FQ_LOGI("LOADING FIRST FRAME: generation=%llu elapsedUs=%llu",(unsigned long long)reportGeneration,(unsigned long long)GetFo3LoadingElapsedUs());
+                    fqloadprofile::Log("UI_FIRST_FRAME generation=%llu elapsedMs=%.1f",
+                        (unsigned long long)reportGeneration,GetFo3LoadingElapsedUs()/1000.0);
+                }
                 if(!artSeen && fo3loadingvr::Ready() && fo3loadingvr::gArt) {
                     artSeen=true;FQ_LOGI("LOADING FIRST ART FRAME: generation=%llu elapsedUs=%llu",(unsigned long long)reportGeneration,(unsigned long long)GetFo3LoadingElapsedUs());
+                    fqloadprofile::Log("UI_FIRST_ART generation=%llu elapsedMs=%.1f",
+                        (unsigned long long)reportGeneration,GetFo3LoadingElapsedUs()/1000.0);
                 }
                 if(!animated && (!fo3loadingvr::gCompass.empty()||!fo3loadingvr::gModel.empty()||fo3loadingvr::gSlideshow.running)) {
                     animated=true;FQ_LOGI("LOADING FIRST ANIMATED FRAME: generation=%llu elapsedUs=%llu",(unsigned long long)reportGeneration,(unsigned long long)GetFo3LoadingElapsedUs());
+                    fqloadprofile::Log("UI_FIRST_ANIMATED generation=%llu elapsedMs=%.1f",
+                        (unsigned long long)reportGeneration,GetFo3LoadingElapsedUs()/1000.0);
                 }
-                if(frames%72==0 || gFo3LoadingPhase.load()==FO3_LOADING_POST)
+                if(frames%72==0 || gFo3LoadingPhase.load()==FO3_LOADING_POST) {
                     FQ_LOGI("LOADING FRAME STATS: generation=%llu frames=%llu missed=%llu appElapsedUs=%llu cadenceUs=%.1f worstAppElapsedUs=%llu submitUs=%llu workApiElapsedUs=%llu uploadGpuUs=%.1f gpuSupported=%d periodUs=%llu",(unsigned long long)reportGeneration,(unsigned long long)frames,(unsigned long long)missed,(unsigned long long)previousLoadingCpu,appCadenceUs,(unsigned long long)worst,(unsigned long long)(fqloading::Now()-submitStarted),(unsigned long long)fqloading::budget.spent,loadingGpu.gpu.Mean(),loadingGpu.supported,(unsigned long long)period);
+                    fqloadprofile::Log("UI_FRAMES generation=%llu frames=%llu estimatedOverBudget=%llu cpuFrameMs=%.1f worstCpuFrameMs=%.1f cadenceMs=%.1f glWorkApiMs=%.1f gpuTimerMs=%.1f gpuTimerSupported=%d frameBudgetMs=%.1f",
+                        (unsigned long long)reportGeneration,(unsigned long long)frames,(unsigned long long)missed,
+                        previousLoadingCpu/1000.0,worst/1000.0,appCadenceUs/1000.0,
+                        fqloading::budget.spent/1000.0,loadingGpu.gpu.Mean()/1000.0,
+                        loadingGpu.supported?1:0,period/1000.0);
+                }
             }
         } else previousLoadingCpu=0;
         if(!IsFo3LoadingVisible() && !gSceneReady && !gSceneLoad.active) {
