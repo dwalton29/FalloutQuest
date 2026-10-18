@@ -16,6 +16,7 @@ struct Fo3AuthoredDoorCpuCache {
     uint64_t preparationUs=0u;
 };
 
+bool HasFo3AuthoredDoorAnchorsCachedQ2190(uint32_t cellFormId);
 bool PrepareFo3AuthoredDoorAnchorsQ2190(uint32_t cellFormId,
     Fo3AuthoredDoorCpuCache& out, const std::atomic<bool>& cancel);
 void PublishFo3AuthoredDoorAnchorsQ2190(Fo3AuthoredDoorCpuCache&& prepared);
