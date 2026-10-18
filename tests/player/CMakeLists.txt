@@ -15,6 +15,13 @@ target_include_directories(npc_statistics_tests PRIVATE ../../app/src/main/cpp)
 target_link_libraries(npc_statistics_tests PRIVATE ZLIB::ZLIB)
 add_test(NAME npc_statistics_tests COMMAND npc_statistics_tests)
 # Vanilla progression maths is independently testable without OpenXR.
+# Perk level/attribute prerequisites and skill-point allocation from PERK/GMST.
+add_executable(perk_eligibility_tests perk_eligibility_tests.cpp)
+target_compile_features(perk_eligibility_tests PRIVATE cxx_std_17)
+target_compile_options(perk_eligibility_tests PRIVATE -Wall -Wextra -Werror)
+target_include_directories(perk_eligibility_tests PRIVATE ../../app/src/main/cpp)
+add_test(NAME perk_eligibility_tests COMMAND perk_eligibility_tests)
+
 add_executable(experience_progression_tests experience_progression_tests.cpp)
 target_compile_features(experience_progression_tests PRIVATE cxx_std_17)
 target_compile_options(experience_progression_tests PRIVATE -Wall -Wextra -Werror)
