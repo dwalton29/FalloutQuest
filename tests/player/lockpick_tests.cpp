@@ -28,6 +28,21 @@ void Synthetic(){auto c=Fixture();Player p(c);KarmaEvent karma;TheftEvent crime;
  Check(game.Step(.05f,0,1)==fo3lockpick::Game::Event::Unlock&&game.cylinder==90,"correct angle opens");
  Check(p.CompleteLockpick(24)&&!p.GetLock(24).locked&&p.ItemCount(10)==3&&p.Snapshot().experience==60,"one real unlock reward and pin retained");
  Check(!p.CompleteLockpick(24)&&p.Snapshot().experience==60,"no duplicate XP");
+ // Lock XP is sent through the same acquired-perk modifiers as scripted XP.
+ auto swift=c;swift.pipboy.perks[88].ranks=1;
+ fo3pipdata::PerkEffect effect;effect.type=2;effect.rank=0;
+ effect.entryPoint=9;effect.function=3;effect.parameterType=1;
+ effect.parameters={0xCD,0xCC,0x8C,0x3F}; // 1.1f multiplier
+ swift.pipboy.perks[88].effects.push_back(effect);
+ Player learner(swift);Check(learner.GrantPerk(88,1),"XP perk acquired");
+ Check(learner.CompleteLockpick(24)&&learner.Snapshot().experience==66,
+       "lock XP applies 10 percent perk modifier");
+ ExperienceNotice earned;
+ Check(learner.PollExperienceNotice(earned)&&earned.amount==66&&
+       earned.total==66&&!earned.levelUp,"modified lock XP displayed once");
+ Check(!learner.PollExperienceNotice(earned)&&
+       !learner.CompleteLockpick(24),"lock cannot award twice");
+
  Check(game.Begin(p,23,.5f),"owned lock begin");game.pin=80;Check(game.StopAngle()==0,"incorrect angle binds");
  Check(game.Step(.05f,1,1)==fo3lockpick::Game::Event::Bind&&game.pin==80,"pin immobile under torque");const auto damaged=game.durability;
  game.Step(.05f,0,0);Check(game.durability==damaged,"release does not repair pin");
