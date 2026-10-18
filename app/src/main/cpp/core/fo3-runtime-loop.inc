@@ -1510,7 +1510,12 @@ private:
         const int64_t gameplayFrameTime=Fo3GameplayXrTime(
             static_cast<int64_t>(frameState.predictedDisplayTime));
         const double gameplaySeconds=static_cast<double>(gameplayFrameTime)*1e-9;
+        const uint64_t catalogStarted=fqloadprofile::NowUs();
         fo3loadingvr::PrepareCatalog();
+        const uint64_t catalogUs=fqloadprofile::NowUs()-catalogStarted;
+        if(catalogUs>=16000u)
+            fqloadprofile::Log("LOADING_UI_CATALOG generation=%llu prepareMs=%.1f",
+                (unsigned long long)GetFo3LoadingGeneration(),catalogUs/1000.0);
         auto& loadingGpu=gLoadingGpuTimer;
         static uint64_t previousLoadingCpu=0;
         loadingGpu.Poll(gSceneLoadFrame);
@@ -1557,10 +1562,29 @@ private:
                 ++gSceneLoadFrame;
                 // All loading work advances once before stereo acquisition.
                 // No scene uploads or preparation are dispatched from an eye.
-                if(!gSceneReady)Q1030BootMegatonOnRender();
+                if(!gSceneReady) {
+                    const uint64_t bootCallStarted=fqloadprofile::NowUs();
+                    Q1030BootMegatonOnRender();
+                    const uint64_t bootCallUs=fqloadprofile::NowUs()-bootCallStarted;
+                    if(bootCallUs>=16000u)
+                        fqloadprofile::Log("BOOT_DISPATCH generation=%llu dispatchMs=%.1f",
+                            (unsigned long long)GetFo3LoadingGeneration(),bootCallUs/1000.0);
+                }
                 if(IsFo3LoadingVisible()) {
                     loadingGpu.Begin(gSceneLoadFrame);
+                    const uint64_t assetsStarted=fqloadprofile::NowUs();
                     fo3loadingvr::AdvanceAssets();
+                    const uint64_t assetsUs=fqloadprofile::NowUs()-assetsStarted;
+                    if(assetsUs>=16000u) {
+                        static uint64_t slowAssetGeneration=~uint64_t{0};
+                        static unsigned slowAssetReports=0u;
+                        if(slowAssetGeneration!=GetFo3LoadingGeneration()) {
+                            slowAssetGeneration=GetFo3LoadingGeneration();slowAssetReports=0u;
+                        }
+                        if(slowAssetReports++<12u)
+                            fqloadprofile::Log("SLOW_LOADING_UI_ASSETS generation=%llu advanceMs=%.1f",
+                                (unsigned long long)GetFo3LoadingGeneration(),assetsUs/1000.0);
+                    }
                     ProcessQ74TransitionRequest();
                 }
                 SyncInput(frameState.predictedDisplayTime);
@@ -1896,6 +1920,15 @@ private:
                     FQ_LOGI("LOADING FRAME STATS: generation=%llu frames=%llu missed=%llu appElapsedUs=%llu cadenceUs=%.1f worstAppElapsedUs=%llu submitUs=%llu workApiElapsedUs=%llu uploadGpuUs=%.1f gpuSupported=%d periodUs=%llu",(unsigned long long)reportGeneration,(unsigned long long)frames,(unsigned long long)missed,(unsigned long long)previousLoadingCpu,appCadenceUs,(unsigned long long)worst,(unsigned long long)(fqloading::Now()-submitStarted),(unsigned long long)fqloading::budget.spent,loadingGpu.gpu.Mean(),loadingGpu.supported,(unsigned long long)period);
             }
         } else previousLoadingCpu=0;
+        if(!IsFo3LoadingVisible() && !gSceneReady && !gSceneLoad.active) {
+            static uint64_t lastBlankWarningUs=0u;
+            const uint64_t now=fqloadprofile::NowUs();
+            if(now-lastBlankWarningUs>=2000000u) {
+                lastBlankWarningUs=now;
+                fqloadprofile::Log("BLANK_WORLD generation=%llu loadingVisible=0 sceneReady=0 objects=%zu lastAbort=%s",
+                    (unsigned long long)GetFo3LoadingGeneration(),gObjects.size(),gSceneLoad.abortReason.c_str());
+            }
+        }
         if(gStereoMvpReady && layerCount>0 && !IsFo3LoadingVisible())
             QActorReportFrame(fqopaque::Micros(appFrameStarted),appCadenceUs);
         static uint64_t pendingPlayableGeneration=0;
@@ -1904,6 +1937,10 @@ private:
             if(wasLoading)MarkFo3LoadingFramePresented(fo3loadingvr::FullyVisible());
             if (wasLoading && !IsFo3LoadingVisible()) {
                 pendingPlayableGeneration=GetFo3LoadingGeneration();
+                fqloadprofile::Log("PRESENTATION_COMPLETE generation=%llu elapsedMs=%.1f sceneReady=%d worldObjects=%zu collisionReady=%d sceneLoadActive=%d",
+                    (unsigned long long)pendingPlayableGeneration,GetFo3LoadingElapsedUs()/1000.0,
+                    gSceneReady?1:0,gObjects.size(),gSceneLoad.collisionReady?1:0,
+                    gSceneLoad.active?1:0);
                 FQ_LOGI("LOADING PRESENTATION COMPLETE: generation=%llu cell=%08X worldspace=%08X totalUs=%llu",
                         static_cast<unsigned long long>(GetFo3LoadingGeneration()),
                         GetFo3LoadingCell(), GetFo3LoadingWorldspace(),
@@ -1911,6 +1948,8 @@ private:
             } else if(!wasLoading && pendingPlayableGeneration==GetFo3LoadingGeneration() &&
                       pendingPlayableGeneration && gSceneReady && !Fo3GameplayBlocked()) {
                 FQ_LOGI("SCENE FIRST PLAYABLE FRAME: generation=%llu elapsedUs=%llu",(unsigned long long)pendingPlayableGeneration,(unsigned long long)GetFo3LoadingElapsedUs());
+                fqloadprofile::Log("PLAYABLE_FIRST_FRAME generation=%llu elapsedMs=%.1f worldObjects=%zu",
+                    (unsigned long long)pendingPlayableGeneration,GetFo3LoadingElapsedUs()/1000.0,gObjects.size());
                 pendingPlayableGeneration=0;
             }
         }
