@@ -317,6 +317,10 @@ struct ScriptExecution {
   // empty: these conditions use FormIDs, not editor-name resolution. These
   // describe potential gate dependencies, not evaluated reads or outcomes.
   std::vector<ScriptVariableBinding> conditionVariables,questConditionVariables;
+  // Potential CTDA 74 and flags&4 dependencies, ordered value query then
+  // comparison per condition. Each pair is (FormID, immutable catalog-default
+  // float bits), never a mutable runtime value or a condition outcome.
+  std::vector<std::pair<uint32_t,uint32_t>> conditionGlobals,questConditionGlobals;
 };
 struct ReferenceEnableChange { uint32_t reference=0; bool enabled=false; };
 // Owned reference-only input for the future scene coordinator. It neither runs

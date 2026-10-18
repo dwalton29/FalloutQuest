@@ -586,6 +586,13 @@ assert 'if(questConditions)execution.questConditions=*questConditions;' in scrip
 assert 'condition.function==53||condition.function==79' in script_runtime
 assert script_runtime.index('fo3script::ChargeScriptVariables(sink.variables,nextBytes)')<script_runtime.index('execution.conditionVariables=std::move(conditionForms.variables)')
 assert 'execution.questConditionVariables=std::move(questConditionForms.variables)' in script_runtime
+assert script_runtime.index('fo3script::ChargeScriptGlobals(1,charged)')<script_runtime.index('bindings.emplace_back(id,bits)')<script_runtime.index('execution.conditionGlobals=std::move(conditionGlobals)')
+assert 'const auto global=catalog_->globals.find(id);' in script_runtime
+assert 'execution.questConditionGlobals=std::move(questConditionGlobals)' in script_runtime
+assert 'a.conditionGlobals==b.conditionGlobals' in master_match and 'a.questConditionGlobals==b.questConditionGlobals' in master_match
+assert master_match.index('!ChargeScriptGlobals(e.questConditionGlobals.size(),evidenceBytes)')<master_match.index('condition global binding coverage or defaults differ')<master_match.index('std::fopen(master.c_str(),"rb")')
+assert 'pass==0&&globalDefaults.count(id)' in master_match
+assert master_match.index('globalsSeen.size()!=globalDefaults.size()')<master_match.index('out=std::move(next);')
 assert 'a.conditionVariables==b.conditionVariables' in master_match and 'a.questConditionVariables==b.questConditionVariables' in master_match
 assert master_match.index('!ChargeScriptVariables(e.questConditionVariables,evidenceBytes)')<master_match.index('condition variable binding coverage differs')<master_match.index('std::fopen(master.c_str(),"rb")')
 assert 'if(pass==1&&requiredQuests.count(id))' in master_match

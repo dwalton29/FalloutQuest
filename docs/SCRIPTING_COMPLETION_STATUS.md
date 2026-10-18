@@ -4,10 +4,10 @@
 
 - Starting canonical main: `2987d911f318b92d1041257868067851a09d16f0` (v208).
 - Resumed from published `6469dbb872889a79a0682501b75f6ac6577ab547`.
-- Current implementation checkpoint: M1B3as indexed condition-variable dependencies.
+- Current implementation checkpoint: M1B3at condition global identities/defaults.
   Use canonical main history for the publication SHA; the previous published
-  implementation is M1B3ar `9fefba24a82f4054c5ebda2acb3bb15556ab5740`.
-  Its Android CI passed (run 39083636186), as did M1B3aq (run 39081584682).
+  implementation is M1B3as `059dc2c78a54f5918dd4914b0efb6de0e08bd5d3`.
+  M1B3ar Android CI passed (run 39083636186), as did M1B3aq (run 39081584682).
 - M1B3l Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38635385905.
 - M1B3m Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38793178567.
 - M1B3n Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38795209693.
@@ -1363,3 +1363,48 @@ lookup completeness, integer coercion and call/event causality remain open.
 No dependency exemption or general resident caller is added; version 212 is
 unchanged. Complete ownership, bounded dispatch and device validation still
 gate general resident Enable/Disable. See `world-reference-m1b3as.md`.
+
+## M1B3at validation
+
+Retained conditionGlobals/questConditionGlobals now cover every CTDA 74 query
+and flags&4 comparison global in item/INFO and INFO-parent lists. Each pair
+owns its FormID and immutable catalog-default float bits, ordered query before
+comparison per condition. Current mutable globals and clock values are not
+captured as authored defaults. Both vectors share the existing 16 MiB evidence
+allowance; fixed-pair count arithmetic rejects overflow and charges before
+append. Capture-off evaluation is unchanged.
+
+Before file access, matching derives exact coverage/order from retained CTDA
+fields and rejects null/missing/extra/reordered/nonfinite bindings or conflicting
+defaults across entries/lists. The existing first scan authenticates unique
+nondeleted GLOB records, complete framing/XXXX, one supported one-byte numeric
+FNAM and one finite four-byte FLTV with exact default bits. Signed zero remains
+distinct. No EDID resolution or extra master pass is needed for numeric IDs.
+Report matching includes both vectors without allocation/file access; failed
+preparation/matching preserves live state/effects and the prior verified report.
+
+All six targeted host tests pass: transaction, matcher, dialogue, production
+dialogue runtime, barter and MS11 completion. Transaction/matcher fixtures pass
+ASan/UBSan with LeakSanitizer disabled; native source guards pass. Tests cover
+query/comparison and parent-list coverage, repeats/order, signed zero, mutable
+and clock values differing from defaults, s/l/f types, compression, XXXX, record
+order, absent/deleted/duplicate/wrong-type identities, malformed/duplicate scalar
+fields, nonfinite/mismatched defaults, pre-file failures, exact-fit/overflow/
+failed/shared byte charging and allocation-free commit/rollback. One misleading
+indentation warning in a new fixture was corrected before all successful runs.
+The broader player/world/physics suites were not rerun for this focused change.
+
+The supplied ESM hash is unchanged. Original MS11 provenance matches, all 1,257
+SCPTs pass local policy, and Lucas dialogue/production bridge, merchant barter
+and all three MS11 completion/reward/save-reload branches pass. Existing showmap
+diagnostics are unchanged. A read-only metadata audit found 155 live GLOBs
+(139 short, 14 float, 2 long), all with supported numeric FNAM and finite FLTV;
+all 887 CTDA global accesses found across record classes use existing GLOB IDs.
+This metadata audit does not assert runtime reads or whole-engine gate support.
+
+Only potential dependencies and authored defaults are proven. Runtime read
+values/ownership, other condition operands, activation overlays, implicit
+receivers, source lookup completeness, numeric coercion and call/event causality
+remain open. No dependency exemption or general resident caller is added.
+Version 212 is unchanged; full ownership, bounded dispatch and device validation
+still gate resident Enable/Disable. See `world-reference-m1b3at.md`.

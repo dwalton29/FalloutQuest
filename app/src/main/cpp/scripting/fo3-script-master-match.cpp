@@ -4,6 +4,7 @@
 #include "data/fo3-esm-reader.h"
 #include "dialogue/fo3-dialogue-info-policy.h"
 #include <cstring>
+#include <cmath>
 #include <memory>
 #include <unordered_map>
 
@@ -39,7 +40,8 @@ bool Same(const Execution& a,const Execution& b) noexcept {
     a.localVariables==b.localVariables&&a.commandForms==b.commandForms&&a.expressionForms==b.expressionForms&&
     a.commandVariables==b.commandVariables&&a.expressionVariables==b.expressionVariables&&
     a.commandLocals==b.commandLocals&&a.expressionLocals==b.expressionLocals&&
-    a.conditionVariables==b.conditionVariables&&a.questConditionVariables==b.questConditionVariables;
+    a.conditionVariables==b.conditionVariables&&a.questConditionVariables==b.questConditionVariables&&
+    a.conditionGlobals==b.conditionGlobals&&a.questConditionGlobals==b.questConditionGlobals;
 }
 bool Contexts(const std::vector<Execution>& programs){
   std::array<size_t,32> active{};size_t depth=0;
@@ -141,6 +143,20 @@ bool Authored(const Execution& e,const fo3pipdata::Definitions& d){
   return false;
 }
 struct Close{void operator()(FILE* f)const{std::fclose(f);}};
+bool GlobalDefault(const std::vector<uint8_t>& bytes,uint32_t& bits){
+  if(!Complete(bytes,"GLOB"))return false;
+  unsigned types=0,values=0;bool valid=true;
+  fo3esm::WalkSubrecords(bytes,[&](const char* tag,const uint8_t* p,uint32_t n){
+    if(Is(reinterpret_cast<const uint8_t*>(tag),"FNAM")){
+      if(++types!=1||n!=1||(p[0]!='s'&&p[0]!='l'&&p[0]!='f'))valid=false;
+    }
+    if(Is(reinterpret_cast<const uint8_t*>(tag),"FLTV")){
+      if(++values!=1||n!=4)valid=false;
+      else {bits=fo3esm::ReadU32(p);if(!std::isfinite(fo3esm::ReadF32(p)))valid=false;}
+    }
+  });
+  return valid&&types==1&&values==1;
+}
 // Only direct authored associations supported by the catalog are evidence.
 // This deliberately does not infer template inheritance or runtime rebinding.
 bool EventBase(const std::string& t){
@@ -196,6 +212,7 @@ bool MatchScriptProgramsToMaster(const std::string& master,const std::vector<Exe
   std::unordered_map<uint32_t,std::vector<size_t>> wanted,owners,bases;
   std::unordered_map<uint32_t,std::vector<std::string>> forms;
   std::unordered_map<std::string,uint32_t> formNames;
+  std::unordered_map<uint32_t,uint32_t> globalDefaults;
   using Variable=fo3player::ScriptVariableBinding;
   std::unordered_map<uint32_t,std::vector<const Variable*>> variableOwners,variableBases,variableScripts;
   for(size_t n=0;n<programs.size();++n){
@@ -205,9 +222,27 @@ bool MatchScriptProgramsToMaster(const std::string& master,const std::vector<Exe
         !ChargeScriptForms(e.expressionForms,evidenceBytes)||!ChargeScriptVariables(e.commandVariables,evidenceBytes)||
         !ChargeScriptVariables(e.expressionVariables,evidenceBytes)||
         !ChargeScriptLocals(e.commandLocals,evidenceBytes)||!ChargeScriptLocals(e.expressionLocals,evidenceBytes)||
-        !ChargeScriptVariables(e.conditionVariables,evidenceBytes)||!ChargeScriptVariables(e.questConditionVariables,evidenceBytes))
+        !ChargeScriptVariables(e.conditionVariables,evidenceBytes)||!ChargeScriptVariables(e.questConditionVariables,evidenceBytes)||
+        !ChargeScriptGlobals(e.conditionGlobals.size(),evidenceBytes)||!ChargeScriptGlobals(e.questConditionGlobals.size(),evidenceBytes))
       return fail("script master evidence byte limit exceeded");
     if(!Type(programs[n]))return fail("unbound or malformed script origin");
+    auto coversGlobals=[&](const auto& conditions,const auto& bindings){
+      size_t at=0;
+      auto consume=[&](uint32_t id){
+        if(!id||at==bindings.size()||bindings[at].first!=id)return false;
+        const auto& binding=bindings[at++];float value;std::memcpy(&value,&binding.second,4);
+        if(!std::isfinite(value))return false;
+        const auto added=globalDefaults.emplace(id,binding.second);
+        return added.second||added.first->second==binding.second;
+      };
+      for(const auto& condition:conditions){
+        if(condition.function==74&&!consume(condition.a))return false;
+        if(condition.flags&4){uint32_t id;std::memcpy(&id,&condition.value,4);if(!consume(id))return false;}
+      }
+      return at==bindings.size();
+    };
+    if(!coversGlobals(e.conditions,e.conditionGlobals)||!coversGlobals(e.questConditions,e.questConditionGlobals))
+      return fail("condition global binding coverage or defaults differ");
     if(!CompleteScriptLocalRecords(e.container))return fail("malformed local records");
     if(!UnambiguousScriptLocals(e.localVariables))return fail("local names are empty or ambiguous");
     std::vector<std::pair<std::string,unsigned>> declarations;
@@ -269,7 +304,7 @@ bool MatchScriptProgramsToMaster(const std::string& master,const std::vector<Exe
   if(!file)return fail("script master unavailable");
   const auto size=fo3esm::FileSize(file.get());if(size<24)return fail("invalid script master size");
   struct Group{uint64_t end;uint32_t label,type;};std::vector<Group> stack;
-  std::unordered_map<uint32_t,bool> seen,formsSeen;std::vector<uint8_t> bytes;
+  std::unordered_map<uint32_t,bool> seen,formsSeen,globalsSeen;std::vector<uint8_t> bytes;
   std::unordered_map<uint32_t,std::string> variableOwnerTypes,variableBaseTypes;
   std::unordered_map<uint32_t,bool> variableScriptsSeen;
   std::unordered_map<uint32_t,bool> ownersSeen,basesSeen;
@@ -302,6 +337,15 @@ bool MatchScriptProgramsToMaster(const std::string& master,const std::vector<Exe
     const auto id=fo3esm::ReadU32(h+12);const auto found=wanted.find(id);
     const bool formTarget=pass==0&&forms.count(id);
     const auto recordFlags=fo3esm::ReadU32(h+8);
+    if(pass==0&&globalDefaults.count(id)){
+      if(!globalsSeen.emplace(id,true).second)return fail("duplicate condition global identity");
+      const std::string type(reinterpret_cast<const char*>(h),4);
+      if((recordFlags&0x20)||type!="GLOB")return fail("deleted or wrong-type condition global");
+      uint32_t bits=0;
+      if(!fo3esm::ReadPayload(file.get(),{p+24,n,recordFlags,type},bytes)||!GlobalDefault(bytes,bits))
+        return fail("malformed condition global");
+      if(bits!=globalDefaults.at(id))return fail("condition global default differs from original master");
+    }
     if(formTarget){
       if(!formsSeen.emplace(id,true).second)return fail("duplicate command form identity");
       if(recordFlags&0x20)return fail("deleted command form identity");
@@ -463,6 +507,7 @@ bool MatchScriptProgramsToMaster(const std::string& master,const std::vector<Exe
   }
   if(seen.size()!=wanted.size())return fail("script master identity missing");
   if(formsSeen.size()!=forms.size())return fail("command form identity missing");
+  if(globalsSeen.size()!=globalDefaults.size())return fail("condition global identity missing");
   if(ownersSeen.size()!=owners.size()||basesSeen.size()!=bases.size())return fail("script owner association identity missing");
   if(questsSeen.size()!=requiredQuests.size())return fail("INFO owning quest identity missing");
   if(localsSeen.size()!=locals.size())return fail("local script identity missing");

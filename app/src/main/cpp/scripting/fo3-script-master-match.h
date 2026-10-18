@@ -9,6 +9,8 @@ namespace fo3script {
 // Captured item/INFO and INFO-parent condition fields are matched in order;
 // indexed CTDA 53/79 bindings cover each retained list and authenticate numeric
 // owner/script/slot chains. Other operands, gate outcomes and reads are unproven.
+// CTDA 74/comparison globals require complete ordered identity/default-bit
+// evidence and original live numeric GLOB records, not mutable runtime values.
 // Nonzero local-script IDs additionally bind the original full SCPT and decoded
 // variable table. Supplied successful bare bindings additionally require exact
 // numeric slots; lookup completeness and runtime read values remain unproven.

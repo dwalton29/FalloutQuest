@@ -1,5 +1,6 @@
 #include "fo3-script-evidence-budget.h"
 #include "fo3-script-local-policy.h"
+#include <cstring>
 // Shared source-script execution for dialogue results and QUST stage items.
 // Compiled-only bytecode and event blocks are retained, never guessed or skipped.
 namespace fo3script {
@@ -263,6 +264,27 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
       return true;
     };
     if(!captureConditions(conditions,conditionForms)||!captureConditions(questConditions,questConditionForms))return false;
+    std::vector<std::pair<uint32_t,uint32_t>> conditionGlobals,questConditionGlobals;
+    auto captureGlobals=[&](const std::vector<fo3pipdata::Condition>* list,auto& bindings){
+      auto add=[&](uint32_t id){
+        const auto global=catalog_->globals.find(id);
+        if(!id||global==catalog_->globals.end()||!std::isfinite(global->second)){
+          error="script provenance condition global unavailable";return false;
+        }
+        auto charged=nextBytes;
+        if(!fo3script::ChargeScriptGlobals(1,charged)){
+          error="script provenance byte limit exceeded";return false;
+        }
+        uint32_t bits;std::memcpy(&bits,&global->second,4);
+        bindings.emplace_back(id,bits);nextBytes=charged;return true;
+      };
+      if(list)for(const auto& condition:*list){
+        if(condition.function==74&&!add(condition.a))return false;
+        if(condition.flags&4){uint32_t id;std::memcpy(&id,&condition.value,4);if(!add(id))return false;}
+      }
+      return true;
+    };
+    if(!captureGlobals(conditions,conditionGlobals)||!captureGlobals(questConditions,questConditionGlobals))return false;
     ScriptExecution execution;execution.origin=std::move(origin);
     execution.owner=owner;execution.activator=scriptActivator_;execution.localScript=scriptId;
     execution.parent=scriptTraceParent_;execution.reference=scriptReference_;
@@ -275,6 +297,8 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
     execution.expressionLocals=std::move(expressionForms.locals);
     execution.conditionVariables=std::move(conditionForms.variables);
     execution.questConditionVariables=std::move(questConditionForms.variables);
+    execution.conditionGlobals=std::move(conditionGlobals);
+    execution.questConditionGlobals=std::move(questConditionGlobals);
     execution.owningQuest=owningQuest;
     if(conditions)execution.conditions=*conditions;
     if(questConditions)execution.questConditions=*questConditions;

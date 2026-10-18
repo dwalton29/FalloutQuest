@@ -14,6 +14,8 @@
 #include <iostream>
 #include <iterator>
 #include <new>
+#include <cstring>
+#include <limits>
 #include <unistd.h>
 
 static bool forbidAllocations=false;
@@ -416,6 +418,49 @@ static void IndexedConditionProvenance(){
     assert(plain&&plain->ExecutedScripts().empty());
   }
 }
+static void ConditionGlobalProvenance(){
+  constexpr auto capture=fo3player::ScriptProgramCapture::EnteredPrograms;
+  using Globals=std::vector<std::pair<uint32_t,uint32_t>>;
+  auto bits=[](float value){uint32_t raw;std::memcpy(&raw,&value,4);return raw;};
+  auto catalog=Fixture();catalog.globals={{700,0.0f},{701,-0.0f},{702,2.5f},{703,12.0f}};
+  catalog.hourGlobal=703;catalog.initial.gameHour=3;
+  fo3pipdata::Condition value;value.function=74;value.a=700;value.value=17;
+  auto comparison=value;comparison.flags=4;uint32_t id=701;std::memcpy(&comparison.value,&id,4);
+  fo3pipdata::Condition other;other.function=72;other.a=7;other.run=1;other.flags=4;
+  id=702;std::memcpy(&other.value,&id,4);
+  auto clock=value;clock.a=703;clock.value=3;
+  const std::vector<fo3pipdata::Condition> gates={value,comparison,other,clock};
+  const Globals expected={{700,bits(0.0f)},{700,bits(0.0f)},{701,bits(-0.0f)},{702,bits(2.5f)},{703,bits(12.0f)}};
+  auto& item=catalog.pipboy.quests[10].stages[10].items[0];item.conditions=gates;item.result=Script("RewardKarma 1");
+  fo3pipdata::Info info;info.id=801;info.topic=800;info.quest=11;info.conditions=gates;
+  info.begin=Script("RewardKarma 2");info.end=Script("RewardKarma 3");catalog.pipboy.topics[800]={info};
+  catalog.pipboy.quests[11].conditions={other,clock};
+  fo3player::Player player(catalog);assert(player.SetGlobalValue(700,17)&&player.SetGlobalValue(701,17)&&player.SetGlobalValue(702,1));
+  const auto revision=player.Revision();std::string error;
+  auto stage=player.PrepareQuestStageTransaction(10,10,error,capture);assert(stage&&stage->ExecutedScripts().size()==1);
+  assert(stage->ExecutedScripts()[0].conditionGlobals==expected&&stage->ExecutedScripts()[0].questConditionGlobals.empty());
+  auto both=player.PrepareDialogueInfoTransaction(800,801,fo3player::DialogueScriptPhase::Both,error,100,capture);
+  assert(both&&both->ExecutedScripts().size()==2);
+  for(const auto& entry:both->ExecutedScripts()){
+    assert(entry.conditionGlobals==expected&&(entry.questConditionGlobals==Globals{{702,bits(2.5f)},{703,bits(12.0f)}}));
+    assert(entry.conditionVariables.empty()&&entry.questConditionVariables.empty());
+  }
+  float current=0;assert(player.GlobalValue(700,current)&&current==17);
+  assert(player.GlobalValue(703,current)&&current==3&&player.Revision()==revision);NoEffects(player);
+  auto plain=player.PrepareDialogueInfoTransaction(800,801,fo3player::DialogueScriptPhase::Both,error,100);
+  assert(plain&&plain->ExecutedScripts().empty());
+  forbidAllocations=true;assert(player.CommitScriptTransaction(*both)&&player.RollbackScriptTransaction(*both));forbidAllocations=false;NoEffects(player);
+  for(unsigned bad=0;bad<3;++bad){
+    auto changed=catalog;
+    if(bad==0)changed.globals.erase(701);
+    if(bad==1)changed.globals[701]=std::numeric_limits<float>::quiet_NaN();
+    if(bad==2)changed.pipboy.topics[800][0].conditions[1].value=0; // null comparison FormID
+    fo3player::Player guarded(std::move(changed));const auto before=guarded.Revision();
+    assert(!guarded.PrepareDialogueInfoTransaction(800,801,fo3player::DialogueScriptPhase::Both,error,100,capture));
+    assert(error=="script provenance condition global unavailable"&&guarded.Revision()==before);NoEffects(guarded);
+    assert(guarded.PrepareDialogueInfoTransaction(800,801,fo3player::DialogueScriptPhase::Both,error,100));
+  }
+}
 static void LocalRecordProvenance(){
   constexpr auto capture=fo3player::ScriptProgramCapture::EnteredPrograms;
   for(bool event:{false,true})for(unsigned kind=0;kind<9;++kind){
@@ -710,6 +755,7 @@ int main(int argc,char** argv){
   QualifiedVariableProvenance();
   BareLocalProvenance();
   IndexedConditionProvenance();
+  ConditionGlobalProvenance();
   LocalRecordProvenance();
   DialogueProvenance();
   if(argc>1)OriginalProvenance(argv[1]);

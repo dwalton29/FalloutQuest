@@ -136,6 +136,15 @@ int main(){
     assert(fo3script::ChargeScriptForms(locals,used)&&used==fo3script::ScriptEvidenceMaxBytes);
     used=fo3script::ScriptEvidenceMaxBytes-localCost+1;
     assert(!fo3script::ChargeScriptForms(locals,used)&&used==fo3script::ScriptEvidenceMaxBytes-localCost+1);
+    constexpr size_t globalCost=sizeof(std::pair<uint32_t,uint32_t>);
+    used=fo3script::ScriptEvidenceMaxBytes-globalCost;
+    assert(fo3script::ChargeScriptGlobals(1,used)&&used==fo3script::ScriptEvidenceMaxBytes);
+    assert(fo3script::ChargeScriptGlobals(0,used)&&used==fo3script::ScriptEvidenceMaxBytes);
+    assert(!fo3script::ChargeScriptGlobals(1,used)&&used==fo3script::ScriptEvidenceMaxBytes);
+    used=fo3script::ScriptEvidenceMaxBytes-globalCost+1;
+    assert(!fo3script::ChargeScriptGlobals(1,used)&&used==fo3script::ScriptEvidenceMaxBytes-globalCost+1);
+    used=0;assert(!fo3script::ChargeScriptGlobals(SIZE_MAX,used)&&used==0);
+    used=SIZE_MAX;assert(!fo3script::ChargeScriptGlobals(0,used)&&used==SIZE_MAX);
   }
   Fixture f;const auto path="/tmp/fq-script-master-"+std::to_string(getpid());std::atomic<bool> cancel{false};std::string error;
   auto write=[&](const Bytes& b){std::ofstream out(path,std::ios::binary);out.write(reinterpret_cast<const char*>(b.data()),b.size());assert(out);};
@@ -558,6 +567,82 @@ int main(){
     auto missing=evidence;missing[1].questConditionVariables.clear();
     assert(!fo3script::MatchScriptProgramsToMaster(path+"-missing",missing,bound,cancel,error));
     assert(error=="condition variable binding coverage differs"&&bound.Matches(evidence));
+  }
+  // Both value-query and comparison globals require ordered complete coverage
+  // and original finite defaults. Runtime values are deliberately not claims.
+  for(char type:{'s','l','f'})for(bool compressed:{false,true})for(bool extended:{false,true})for(bool reverse:{false,true}){
+    using Globals=std::vector<std::pair<uint32_t,uint32_t>>;
+    fo3pipdata::Condition c;c.function=74;c.a=700;c.flags=4;uint32_t id=701;std::memcpy(&c.value,&id,4);
+    fo3pipdata::Condition d;d.function=72;d.flags=4;id=702;std::memcpy(&d.value,&id,4);
+    fo3pipdata::Condition e;e.function=74;e.a=701;
+    const std::vector<fo3pipdata::Condition> gates={c,d,e,c},parentGates={e,d};
+    const Globals defaults={{700,0x80000000u},{701,0x3fc00000u},{702,0x3f800000u},{701,0x3fc00000u},{700,0x80000000u},{701,0x3fc00000u}};
+    auto appendGates=[&](Bytes& bytes,const auto& list){for(const auto& gate:list){
+      Bytes raw(28);raw[0]=gate.flags;Put(raw,8,gate.function);Put(raw,12,gate.a);
+      uint32_t bits;std::memcpy(&bits,&gate.value,4);Put(raw,4,bits);Sub(bytes,"CTDA",raw);
+    }};
+    auto quest=f.quest,info=f.info;Bytes parent;Sub(parent,"DATA",{0,40});
+    appendGates(quest,gates);appendGates(info,gates);appendGates(parent,parentGates);
+    auto evidence=std::vector<Execution>{f.programs[0],f.programs[1],f.programs[2]};
+    for(auto& entry:evidence){entry.conditions=gates;entry.conditionGlobals=defaults;}
+    for(size_t n:{size_t(1),size_t(2)}){evidence[n].questConditions=parentGates; evidence[n].questConditionGlobals={{701,0x3fc00000u},{702,0x3f800000u}};}
+    auto payload=[&](uint32_t bits,unsigned bad){
+      Bytes out;auto scalar=[&](const char* tag,const Bytes& data){
+        if(extended&&!data.empty()){Sub(out,"XXXX",Word(data.size()));Sub(out,tag,{});Append(out,data);}
+        else Sub(out,tag,data);
+      };
+      if(bad!=5)scalar("FNAM",bad==6?Bytes{}:bad==16?Bytes{uint8_t(type),0}:Bytes{uint8_t(bad==7?'x':type)});
+      if(bad==8)Sub(out,"FNAM",{uint8_t(type)});
+      if(bad!=9)scalar("FLTV",bad==10?Bytes(3):Word(bad==12?0x7fc00000u:bad==13?0u:bad==17?0x7f800000u:bits));
+      if(bad==11)Sub(out,"FLTV",Word(bits));
+      if(bad==14)out.push_back(1);
+      if(bad==15)Sub(out,"XXXX",Word(4));
+      return out;
+    };
+    auto records=[&](unsigned bad){
+      std::vector<Bytes> list={Record("QUST",10,quest),Group(40,Record("INFO",50,info)),Record("QUST",20,parent),Speakers(false,false)};
+      for(uint32_t form:{700u,701u,702u}){
+        if(form==700&&bad==1)continue;
+        const auto data=payload(form==700?0x80000000u:form==701?0x3fc00000u:0x3f800000u,form==700?bad:0);
+        const auto record=Record(form==700&&bad==2?"STAT":"GLOB",form,compressed?Compressed(data):data,
+          (compressed?0x40000:0)|(form==700&&bad==3?0x20:0));
+        list.push_back(record);if(form==700&&bad==4)list.push_back(record);
+      }
+      if(reverse)std::reverse(list.begin(),list.end());
+      Bytes bytes;for(const auto& record:list)Append(bytes,record);return bytes;
+    };
+    write(records(0));fo3script::ScriptMasterMatch bound;
+    assert(fo3script::MatchScriptProgramsToMaster(path,evidence,bound,cancel,error)&&bound.Matches(evidence));
+    for(unsigned bad=1;bad<=17;++bad){
+      write(records(bad));assert(!fo3script::MatchScriptProgramsToMaster(path,evidence,bound,cancel,error)&&bound.Matches(evidence));
+    }
+    write(records(0));
+    for(bool parentGate:{false,true})for(unsigned field=0;field<11;++field){
+      auto changed=evidence;auto& bindings=parentGate?changed[1].questConditionGlobals:changed[0].conditionGlobals;
+      if(field==0)++bindings[0].first;
+      if(field==1)bindings[0].second^=1;
+      if(field==2)bindings.pop_back();
+      if(field==3)bindings.push_back(bindings[0]);
+      if(field==4)std::swap(bindings[0],bindings[1]);
+      if(field==5)std::swap(changed[1].conditionGlobals,changed[1].questConditionGlobals);
+      if(field==6)bindings[0].first=0;
+      if(field==7)bindings[0].second=0x7fc00000u;
+      if(field==8)for(auto& entry:changed)for(auto* values:{&entry.conditionGlobals,&entry.questConditionGlobals})
+        for(auto& value:*values)if(value.first==700)value.second=0; // +0 differs from original -0
+      if(field==9)bindings.clear();
+      if(field==10)(parentGate?changed[1].questConditions:changed[0].conditions)[0].function=72;
+      assert(!bound.Matches(changed));
+      assert(!fo3script::MatchScriptProgramsToMaster(path,changed,bound,cancel,error)&&bound.Matches(evidence));
+    }
+    auto missing=evidence;missing[1].questConditionGlobals.clear();
+    assert(!fo3script::MatchScriptProgramsToMaster(path+"-missing",missing,bound,cancel,error));
+    assert(error=="condition global binding coverage or defaults differ"&&bound.Matches(evidence));
+    if(type=='f'&&compressed&&extended&&reverse)for(bool parentGate:{false,true}){
+      auto huge=evidence;(parentGate?huge[1].questConditionGlobals:huge[0].conditionGlobals).resize(
+        fo3script::ScriptEvidenceMaxBytes/sizeof(std::pair<uint32_t,uint32_t>)+1);
+      assert(!fo3script::MatchScriptProgramsToMaster(path+"-missing",huge,bound,cancel,error));
+      assert(error=="script master evidence byte limit exceeded"&&bound.Matches(evidence));
+    }
   }
   // Bare names bind to this entry's authenticated owner/script and numeric
   // slot, including zero. Lookup order and phase remain exact report values.

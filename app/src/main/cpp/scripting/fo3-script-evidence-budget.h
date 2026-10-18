@@ -64,4 +64,9 @@ inline bool ChargeScriptVariables(const std::vector<fo3player::ScriptVariableBin
   }
   used=ScriptEvidenceMaxBytes-remaining;return true;
 }
+inline bool ChargeScriptGlobals(size_t count,size_t& used) noexcept {
+  constexpr size_t width=sizeof(std::pair<uint32_t,uint32_t>);
+  if(used>ScriptEvidenceMaxBytes||count>(ScriptEvidenceMaxBytes-used)/width)return false;
+  used+=count*width;return true;
+}
 }
