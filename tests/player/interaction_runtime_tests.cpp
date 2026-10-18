@@ -111,6 +111,14 @@ bool BeginFo3Lockpick(uint32_t){return false;}
 bool exchangeRecoveryFailed=false;
 bool frameReserved=false;
 bool Fo3ResidentFrameBlocked(){return frameReserved||exchangeRecoveryFailed;}
+// The interaction host harness does not instantiate Android's GL/EGL resident
+// owner. Preserve the legacy synchronous event behaviour for non-world tests;
+// native Pending/Ready/Execute is source-guarded separately.
+fo3player::ScriptEventResult DispatchFo3ScriptedActivation(
+        uint32_t ref,uint32_t activator,std::string& error) {
+    if(!gPlayerSession){error="Player unavailable";return fo3player::ScriptEventResult::Unsupported;}
+    return gPlayerSession->player.DispatchReferenceEvent(ref,"OnActivate",activator,error);
+}
 #include "world/interaction/fo3-interaction-runtime.inc"
 struct {bool active=false;} gSceneLoad;
 uint32_t gExteriorWorldspaceQ1890=0;
