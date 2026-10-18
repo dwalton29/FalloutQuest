@@ -1699,6 +1699,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
     return fail("Legacy weapon inventory exceeds instance limits");
   state_ = std::move(next);
   pendingKarmaEvents_.clear();pendingTheftEvents_.clear();pendingQuestNotices_.clear();pendingScriptItems_.clear();
+  pendingExperienceNotices_.clear();
   pendingScriptMessages_.clear();pendingScriptSounds_.clear();pendingBarters_.clear();scriptButtons_.clear();EndContainerInteraction();
   ++revision_;
   return true;
