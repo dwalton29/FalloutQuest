@@ -1,7 +1,12 @@
 #include "ui/interaction/fo3-item-notifications.h"
 
 #include "dialogue/fo3-dialogue-panel.h"
-// Shared menu focus is defined below the world interaction query functions.
+// The interaction test binary intentionally compiles without the headset
+// level-up module. Production binds this pointer to its canonical menu state.
+inline const bool* gFo3LevelUpFocusFlag=nullptr;
+inline bool Fo3LevelUpFocus() {
+    return gFo3LevelUpFocusFlag&&*gFo3LevelUpFocusFlag;
+}
 bool Fo3ScriptMessageFocus();
 bool BeginFo3Lockpick(uint32_t reference);
 
