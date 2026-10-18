@@ -1214,7 +1214,10 @@ bool Player::Save(const std::string &path, std::string &error) const {
     payload.push_back(l.forceFailures);payload.push_back(l.rewarded?1:0);}
   // Optional RFE1 after the v14 lock tail. Empty overlays keep existing v14
   // bytes unchanged; older supported saves do not require this extension.
-  const bool hasCompletionState=!state_.cellNameMessages.empty()||!state_.achievements.empty();
+  const bool hasLevelAdvancement=state_.level!=catalog_->initial.level;
+  // v18 retains all v17 tails, even empty ones, before LVP1.
+  const bool hasCompletionState=!state_.cellNameMessages.empty()||
+      !state_.achievements.empty()||hasLevelAdvancement;
   const bool hasMerchantVisits=hasCompletionState||!state_.merchantVisits.empty()||!state_.actorDispositionModifiers.empty();
   const bool hasPlayerAttributeOverrides=state_.special!=catalog_->initial.special ||
       state_.skills!=catalog_->initial.skills;
@@ -1282,7 +1285,18 @@ bool Player::Save(const std::string &path, std::string &error) const {
     std::sort(achievements.begin(),achievements.end());Put32(payload,uint32_t(achievements.size()));
     for(auto id:achievements){if(id>255){error="Invalid achievement";return false;}Put32(payload,id);}
   }
-  Put32(bytes, hasCompletionState ? 17 : hasMerchantVisits ? 16 : hasPlayerAttributeOverrides ? 15 : 14);
+  if(hasLevelAdvancement){
+    if(state_.level<catalog_->initial.level||
+       state_.level>fo3experience::BaseGameLevelCap||
+       state_.experience<fo3experience::ThresholdForLevel(
+           state_.level,catalog_->xpBumpBase)){
+      error="Invalid committed level";return false;
+    }
+    Put32(payload,0x3150564c); // LVP1: committed level, after all v17 tails.
+    Put32(payload,state_.level);
+  }
+  Put32(bytes, hasLevelAdvancement ? 18 : hasCompletionState ? 17 :
+      hasMerchantVisits ? 16 : hasPlayerAttributeOverrides ? 15 : 14);
   Put32(bytes, catalog_->fingerprint);
   Put32(bytes, static_cast<uint32_t>(payload.size()));
   Put32(bytes, Crc(payload));
@@ -1341,7 +1355,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
   const auto *h = bytes.data();
   const auto version = fo3esm::ReadU32(h + 4);
   if (std::memcmp(h, "FQPS", 4) ||
-      (version < 1 || version > 17))
+      (version < 1 || version > 18))
     return fail("Unsupported player save format");
   if (fo3esm::ReadU32(h + 8) != catalog_->fingerprint)
     return fail("Player save belongs to different game definitions");
@@ -1676,9 +1690,23 @@ bool Player::Restore(const std::string &path, std::string &error) {
           if(!catalog_->cellOwnership.count(cell)||!catalog_->pipboy.messages.count(message)||catalog_->pipboy.messages.at(message).title.empty()||!next.cellNameMessages.emplace(cell,message).second)return fail("Invalid saved cell name");
         }
         const auto achievements=fo3esm::ReadU32(p+at);at+=4;
-        if(achievements>256||payload.size()-at!=4ull*achievements)return fail("Invalid achievement count");
+        if(achievements>256||(version>=18
+            ? payload.size()-at!=4ull*achievements+8u
+            : payload.size()-at!=4ull*achievements))
+          return fail("Invalid achievement count");
         for(uint32_t i=0;i<achievements;++i,at+=4){const auto id=fo3esm::ReadU32(p+at);
           if(id>255||!next.achievements.insert(id).second)return fail("Invalid saved achievement");}
+      }
+      if(version>=18){
+        if(payload.size()-at!=8||fo3esm::ReadU32(p+at)!=0x3150564c)
+          return fail("Invalid level-up extension");
+        const auto level=fo3esm::ReadU32(p+at+4);at+=8;
+        if(level<=catalog_->initial.level||
+           level>fo3experience::BaseGameLevelCap||
+           next.experience<fo3experience::ThresholdForLevel(
+               uint16_t(level),catalog_->xpBumpBase))
+          return fail("Invalid saved player level");
+        next.level=uint16_t(level);
       }
       if(at!=payload.size())return fail("Trailing player save data");
     }
