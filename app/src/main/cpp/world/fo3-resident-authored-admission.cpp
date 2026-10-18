@@ -83,6 +83,9 @@ bool PrepareResidentAuthoredAdmission(const std::string& master,uint32_t cell,
     std::unordered_map<uint32_t,uint32_t> bases;
     std::unordered_set<uint32_t> found;
     std::unordered_set<uint32_t> packageValues;
+    // Confirm actual original XMarker base records, not just a guessed FormID.
+    // These are nonvisual in Q74ShouldSkipPlacement and do not acquire GPU parts.
+    std::unordered_set<uint32_t> nonvisualMarkerBases;
     bool interior=false,seenCell=false,navmesh=false,package=false;
     std::string scanning;
     std::vector<uint8_t> b;
@@ -94,6 +97,16 @@ bool PrepareResidentAuthoredAdmission(const std::string& master,uint32_t cell,
             return loaded;
         };
         const bool reference=r.location.type=="REFR"||r.location.type=="ACHR"||r.location.type=="ACRE";
+        if(r.location.type=="STAT"&&!(r.location.flags&(0x20u|0x8000u))){
+            if(!payload())return false;
+            std::string editor,model;
+            fo3esm::WalkSubrecords(b,[&](const char* t,const uint8_t* p,uint32_t n){
+                if(Is(t,"EDID"))editor=fo3esm::ZString(p,n);
+                if(Is(t,"MODL"))model=fo3esm::ZString(p,n);
+            });
+            if(editor=="XMarker"&&(model=="MarkerX.nif"||model=="markerx.nif"))
+                nonvisualMarkerBases.insert(r.id);
+        }
         if(reference&&!(r.location.flags&0x20u)){
             // Reverse edges can originate outside the changed CELL or from an
             // actor with no resident mesh. Never index just selected placements.
@@ -192,6 +205,11 @@ bool PrepareResidentAuthoredAdmission(const std::string& master,uint32_t cell,
         bool dependencies=true;
         auto target=[&](uint32_t id,const char* field){
             if(!wanted.count(id)&&!baseIds.count(id))return;
+            // A CTDA numeric operand equal to the shared XMarker BASE does not
+            // depend on an individual marker REFR being enabled. This BASE is
+            // immutable; all hits on the actual affected reference remain guarded.
+            if(!wanted.count(id)&&nonvisualMarkerBases.count(id)&&
+                std::strncmp(field,"CTDA",4)==0)return;
             dependencies=false;
             if(error.empty())error="unowned incoming script/condition dependency: "+std::string(field)+
                 " from "+scanning+" to "+std::to_string(id)+(wanted.count(id)?" (reference)":" (base)");
@@ -240,7 +258,7 @@ bool PrepareResidentAuthoredAdmission(const std::string& master,uint32_t cell,
                 !(r.location.type=="LIGH"&&(Is(t,"DATA")||Is(t,"FNAM")||Is(t,"FULL")||Is(t,"ICON")||Is(t,"MICO"))))valid=false;
         });
         // A model-bearing light can also change collision/grounding geometry.
-        geometry=geometry||model;
+        geometry=geometry||(model&&!nonvisualMarkerBases.count(r.id));
         if(r.location.type=="STAT"&&!model)valid=false;
         return valid;
     });

@@ -52,6 +52,22 @@ int main() {
     auto skip=[](const Fo3WorldPlacement&) { return false; };
     assert(PrepareResidentCpuParts(selected,parts,build,skip,cancelled,error));
     assert(calls==2&&parts==std::vector<uint32_t>({20,21,30,31})&&selected.collisionPlacements.size()==3);
+    // A genuine original XMarker has no renderer geometry: it remains in the
+    // logical incoming/reference/collision projections without a dummy mesh.
+    auto marker=Placement(4);marker.editorId="XMarker";marker.modelPath="MarkerX.nif";
+    assert(SelectResidentResources({a},{a,marker},{{1,false}},{4},selected,error));
+    assert(selected.incomingReferences==std::vector<uint32_t>{4}&&selected.incomingPlacements.size()==1);
+    assert(selected.collisionPlacements.size()==2);
+    parts={999};calls=0;
+    assert(PrepareResidentCpuParts(selected,parts,build,
+        [](const Fo3WorldPlacement&) {return true;},cancelled,error));
+    assert(parts.empty()&&calls==0);
+    auto unrelated=marker;unrelated.editorId="OtherStatic";
+    assert(SelectResidentResources({a},{a,unrelated},{{1,false}},{4},selected,error));
+    assert(!PrepareResidentCpuParts(selected,parts,build,
+        [](const Fo3WorldPlacement&) {return true;},cancelled,error));
+    assert(parts.empty()&&calls==0);
+    assert(SelectResidentResources({a},{a,b,c},{{1,false}},{2,3},selected,error));
     parts={999}; calls=0;
     assert(!PrepareResidentCpuParts(selected,parts,[&](const auto& p,auto& out) {
         build(p,out); return p.refFormId!=3;

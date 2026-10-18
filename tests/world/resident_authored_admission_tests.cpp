@@ -26,7 +26,7 @@ struct Options{
     const char* baseType="STAT";const char* refType="REFR";const char* extra=nullptr;
     uint32_t refFlags=0,baseFlags=0,owner=10,world=0;int malformed=0;
     bool nav=false,pack=false,light=false,duplicate=false,missing=false,script=false,interior=true;
-    bool baseTarget=false,lightModel=false,deletedNav=false;uint32_t targetSize=12;
+    bool baseTarget=false,lightModel=false,deletedNav=false,marker=false;uint32_t targetSize=12;
     const char* incoming=nullptr;const char* incomingType="REFR";
     uint32_t incomingTarget=30,incomingCell=11,incomingWorld=0,incomingFlags=0;
     int incomingSize=-1;bool duplicateLink=false,compressedIncoming=false,extendedIncoming=false;
@@ -35,8 +35,8 @@ Bytes fixture(Options o={}){
     Bytes b,cell,base,ref,children;
     sub(cell,"DATA",Bytes{uint8_t(o.interior?1:0)});
     append(b,record("CELL",10,cell));
-    sub(base,"EDID",text("Fixture"));
-    if(!o.light||o.lightModel)sub(base,"MODL",text("fixture.nif"));
+    sub(base,"EDID",text(o.marker?"XMarker":"Fixture"));
+    if(!o.light||o.lightModel)sub(base,"MODL",text(o.marker?"MarkerX.nif":"fixture.nif"));
     if(o.script)sub(base,"SCRI",word(777));
     if(!o.missing)append(b,record(o.light?"LIGH":o.baseType,20,base,o.baseFlags));
     sub(ref,"NAME",word(20));Bytes transform(24);
@@ -349,6 +349,22 @@ int main(int argc,char** argv){
     }
     {Options o;o.light=true;o.nav=true;write(fixture(o));
         assert(fo3scene::PrepareResidentAuthoredAdmission(path,10,{30},out,cancel,error));}
+    // Original XMarker is a nonvisual STAT; the navmesh is unchanged because
+    // its enable state does not add renderable geometry. Ordinary STATs reject.
+    {Options o;o.marker=true;o.nav=true;write(fixture(o));
+        assert(fo3scene::PrepareResidentAuthoredAdmission(path,10,{30},out,cancel,error));}
+    // Shared XMarker BASE appears in other conditions as a numeric argument:
+    // it is not the changed reference. A CTDA hit on REFR must still reject.
+    {Options o;o.marker=true;o.nav=true;
+        Bytes content=fixture(o),ctda(20);u32(ctda,16,20);
+        Bytes condition;sub(condition,"CTDA",ctda);
+        append(content,record("INFO",70,condition));write(content);
+        assert(fo3scene::PrepareResidentAuthoredAdmission(path,10,{30},out,cancel,error));
+        u32(ctda,16,30);condition.clear();sub(condition,"CTDA",ctda);
+        content=fixture(o);append(content,record("INFO",70,condition));write(content);
+        assert(!fo3scene::PrepareResidentAuthoredAdmission(path,10,{30},out,cancel,error));
+        assert(error.find("CTDA +16")!=std::string::npos);
+    }
     {Options o;o.nav=true;o.deletedNav=true;write(fixture(o));
         assert(fo3scene::PrepareResidentAuthoredAdmission(path,10,{30},out,cancel,error));}
     // Complete logical set: a valid visual cannot hide an unresolvable no-mesh ID.

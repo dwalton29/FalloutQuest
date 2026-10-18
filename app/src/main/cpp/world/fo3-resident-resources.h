@@ -13,6 +13,13 @@ namespace fo3scene {
 // Render-thread capture for workers: value identities only, never GPU handles,
 // pointers to live shapes, Player state, or mutable scene/collision callbacks.
 struct ResidentVisualRecord { uint32_t reference = 0; bool nativeLod = false; };
+// Original STAT XMarker (MarkerX.nif) is an editor/nonvisual marker.
+// The renderer's Q74ShouldSkipPlacement already omits its visual parts;
+// allowing its reference state to change must not invent GPU geometry.
+inline bool ResidentNonvisualXMarker(const Fo3WorldPlacement& p) {
+    return p.baseRecordType=="STAT"&&p.editorId=="XMarker"&&
+        (p.modelPath=="MarkerX.nif"||p.modelPath=="markerx.nif");
+}
 struct ResidentResourceSelection {
     std::vector<size_t> retainedSlots;
     std::vector<uint32_t> removedReferences, incomingReferences;
@@ -100,7 +107,10 @@ bool PrepareResidentCpuParts(const ResidentResourceSelection& selection,
     std::vector<Part> next;
     for (const auto& placement : selection.incomingPlacements) {
         if (cancelled.load(std::memory_order_acquire)) { error="resident preparation cancelled"; return false; }
-        if (skip(placement)) { error="incoming visual policy unsupported"; return false; }
+        if (skip(placement)) {
+            if (ResidentNonvisualXMarker(placement)) continue;
+            error="incoming visual policy unsupported"; return false;
+        }
         std::vector<Part> parts;
         if (!build(placement,parts) || parts.empty()) { error="incoming visual decode incomplete"; return false; }
         for (auto& part : parts) {
