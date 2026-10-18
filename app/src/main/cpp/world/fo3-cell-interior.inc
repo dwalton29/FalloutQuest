@@ -9,6 +9,7 @@
 #include "fo3-esm-reader.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstring>
 #include <string>
@@ -84,7 +85,8 @@ bool ParsePlacementPayload(const std::vector<uint8_t>& payload, RawPlacement& ou
     return haveBase && out.hasTransform;
 }
 
-bool CollectCellReferences(uint32_t cellFormId, std::vector<RawPlacement>& out) {
+bool CollectCellReferences(uint32_t cellFormId, std::vector<RawPlacement>& out,
+                           const std::atomic<bool>* cancelled=nullptr) {
     out.clear();
     FILE* file = std::fopen(fo3assets::FalloutMasterPath().c_str(), "rb");
     if (!file) return false;
@@ -96,7 +98,16 @@ bool CollectCellReferences(uint32_t cellFormId, std::vector<RawPlacement>& out) 
 
     std::vector<Frame> groups;
     uint32_t matchingGroups = 0u;
+    size_t scanned = 0u;
     while (true) {
+        // The authored-door scan runs in parallel with scene preparation.
+        // Cancel promptly on superseded transitions without changing legacy
+        // noncancellable callers.
+        if (cancelled && ((++scanned & 0x3ffu) == 0u) &&
+            cancelled->load(std::memory_order_acquire)) {
+            std::fclose(file);
+            return false;
+        }
         const off_t rawOffset = ftello(file);
         if (rawOffset < 0) break;
         const uint64_t offset = static_cast<uint64_t>(rawOffset);
