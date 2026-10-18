@@ -245,6 +245,7 @@ struct Catalog {
   uint32_t bobbyPin=0,infiltrator=0;
   std::unordered_map<std::string,float> lockSettings;
   uint32_t xpBumpBase = fo3experience::VanillaXPBump; // ESM iXPBumpBase GMST
+  int32_t levelSkillPointsBase=11,levelSkillPointsInterval=1; // Original GMSTs
   // FO3 executable defaults; optional GMST overrides. Not FNV reputation.
   float evilMaxKarma=-250;
   int32_t karmaMajorThreshold=250;
@@ -376,6 +377,12 @@ public:
   // SPECIAL 1..10, base skill ratings 0..100 (including unused Throwing slot).
   bool SetPlayerAttributes(const std::array<uint8_t,7>& special,
                            const std::array<uint8_t,14>& skills);
+  // Complete one pending advancement atomically. Unsupported perk effects
+  // are never silently granted as nonfunctional levels.
+  bool CommitLevelUp(const std::array<uint8_t,14>& chosenSkills,
+                     uint32_t perkForm, int intenseSpecial=-1);
+  // Only expose level-up choices whose game effects are actually implemented.
+  bool LevelUpPerkSupported(uint32_t perkForm) const;
   // Persisted motion/procedure progress still dirties saves, but is sampled
   // by AI's cadence rather than invalidating every actor's conditions per step.
   uint64_t PackageRevision() const { return revision_ - actorPoseRevisions_; }
