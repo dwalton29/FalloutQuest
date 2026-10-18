@@ -4,10 +4,10 @@
 
 - Starting canonical main: `2987d911f318b92d1041257868067851a09d16f0` (v208).
 - Resumed from published `6469dbb872889a79a0682501b75f6ac6577ab547`.
-- Current implementation checkpoint: M1B3aq qualified-variable binding chains.
+- Current implementation checkpoint: M1B3ar bare local-variable bindings.
   Use canonical main history for the publication SHA; the previous published
-  implementation is M1B3ap `43e7c537c9fde5f8886f022e13c42a4229b9427b`.
-  Its Android CI passed (run 39080827516), as did M1B3ao (run 39080442018).
+  implementation is M1B3aq `357e0b3240f62ed3e2dd9d1f8136c8c8a357444d`.
+  Its Android CI passed (run 39081584682), as did M1B3ap (run 39080827516).
 - M1B3l Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38635385905.
 - M1B3m Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38793178567.
 - M1B3n Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38795209693.
@@ -1278,3 +1278,44 @@ preparation work outside retained-value accounting and whole-preparation/Quest
 timing claims. No dependency exemption or general resident caller is added.
 Full ownership, bounded dispatch and device validation still gate resident
 Enable/Disable; version 212 remains unchanged. See `world-reference-m1b3aq.md`.
+
+## M1B3ar validation
+
+Successful bare NumericLocalKey resolutions now retain slot indexes and
+normalized names in ordered commandLocals/expressionLocals vectors. The entry's
+existing owner/localScript supplies scope; a successful synthesized quest-name
+fallback retains qualified-variable evidence as before. Capture-off resolution
+and runtime float evaluation remain unchanged. The shared collector charges
+all three binding categories before retention; final evidence charging includes
+the two new pair/name vectors under the same 16 MiB limit.
+
+Before file access, supplied bare bindings must name an exact numeric slot in
+the canonical decoded table and source declaration classification. Original
+proof then binds that table and full SCPT to the owning QUST or reference/base
+chain. No new scan or EDID name proof is required. Slot zero remains legal;
+missing/renamed/ref/unclassified/invalid names reject atomically. Report
+comparison includes both ordered vectors and phases without allocations or
+file access. It does not independently derive lookup phase or completeness.
+
+All 32 player host tests and the native provenance/source guards pass. Matcher
+and transaction fixtures pass ASan/UBSan with LeakSanitizer disabled. New cases
+cover quest/event scope, command and preflight order, unreachable/repeated
+lookups, slot zero, capture-off behavior, shared/exact-fit/failing collector
+limits, per-field corruption, pre-file budget rejection, reverse master record
+order, compression and XXXX names. Invalid bindings leave verified reports and
+live state/effects unchanged; commit/rollback remain allocation-free.
+
+The supplied ESM SHA256 still matches the M1B3aq value. Its captured MS11 stage,
+event and INFO sequence passes strict matching; all 1,257 SCPTs still pass local
+policy. Lucas dialogue acceptance and production bridge, original merchant
+barter, and all three MS11 completion/reward/save-reload branches pass. Existing
+unsupported showmap diagnostics remain unchanged. M1B3aq Android CI passed
+(run 39081584682). World/physics suites were not rerun for this binding-only
+checkpoint; their previous validation is recorded above.
+
+Only supplied successful binding identities are proven. Failed lookups, runtime
+read values/outcomes, indexed condition reads, implicit receivers, aliases,
+integer coercion and call/event causality remain open. No dependency exemption
+or general resident caller is added. Complete ownership, bounded dispatch and
+device validation still gate resident Enable/Disable; version 212 is unchanged.
+See `world-reference-m1b3ar.md`.

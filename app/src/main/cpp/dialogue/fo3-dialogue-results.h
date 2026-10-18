@@ -7,9 +7,15 @@ struct Command {CommandType type;uint32_t form=0,index=0;uint64_t variable=0;flo
 struct CommandFormCapture {
   std::vector<std::pair<uint32_t,std::string>> bindings;
   std::vector<fo3player::ScriptVariableBinding> variables;
+  std::vector<std::pair<uint32_t,std::string>> locals;
   size_t limit=0,used=0;
   bool exhausted=false;
-  void Reset(){bindings.clear();variables.clear();used=0;exhausted=false;}
+  void Reset(){bindings.clear();variables.clear();locals.clear();used=0;exhausted=false;}
+  bool AddLocal(uint32_t index,const std::string& name){
+    const auto fixed=sizeof(std::pair<uint32_t,std::string>);
+    if(used>limit||fixed>limit-used||name.size()>=limit-used-fixed){exhausted=true;return false;}
+    locals.emplace_back(index,name);used+=fixed+name.size()+1;return true;
+  }
   bool Add(uint32_t id,const std::string& name){
     const auto fixed=sizeof(std::pair<uint32_t,std::string>);
     if(used>limit||fixed>limit-used||name.size()>=limit-used-fixed){exhausted=true;return false;}
@@ -26,6 +32,14 @@ struct CommandFormCapture {
     variables.push_back(std::move(binding));used+=fixed+key.size()+1;return true;
   }
 };
+// The underlying local resolver is also used without evidence by other event
+// consumers. Keep the bounded optional sink here to avoid a player/event cycle.
+inline uint64_t CaptureNumericLocalKey(const fo3pipdata::Definitions& d,uint32_t owner,
+    uint32_t script,const std::string& token,CommandFormCapture* capture){
+  const auto key=fo3script::NumericLocalKey(d,owner,script,token);
+  if(key&&capture&&!capture->AddLocal(uint32_t(key),fo3script::Lower(token)))return 0;
+  return key;
+}
 bool ActivationVariables(const Context&,const fo3player::Player&,std::unordered_map<uint64_t,float>&,std::string&);
 bool Activate(const Context&,fo3player::Player&,std::string&);
 bool CompileResult(const fo3pipdata::Definitions&,const fo3pipdata::ResultScript&,std::vector<Command>&,std::string&,uint32_t owner=0,uint32_t scriptId=0,CommandFormCapture* forms=nullptr);

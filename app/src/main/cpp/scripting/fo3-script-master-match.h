@@ -9,7 +9,8 @@ namespace fo3script {
 // Captured item/INFO and INFO-parent condition fields are matched in order;
 // this authenticates decoded metadata, not outcomes, operand bindings or reads.
 // Nonzero local-script IDs additionally bind the original full SCPT and decoded
-// variable table. This is declaration identity, not proof of each lookup/read.
+// variable table. Supplied successful bare bindings additionally require exact
+// numeric slots; lookup completeness and runtime read values remain unproven.
 // Output is published only after the complete master scan succeeds.
 class ScriptMasterMatch {
 public:

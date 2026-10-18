@@ -319,6 +319,49 @@ static void QualifiedVariableProvenance(){
   assert(plan->ExecutedScripts()[0].commandVariables==own&&plan->ExecutedScripts()[0].expressionVariables==own);
   assert(player.Snapshot().pipboy.dialogueVariables.empty());NoEffects(player);
 }
+static void BareLocalProvenance(){
+  constexpr auto capture=fo3player::ScriptProgramCapture::EnteredPrograms;
+  using Bindings=std::vector<std::pair<uint32_t,std::string>>;
+  const Bindings targets={{0,"count"},{2,"other"}},reads={{2,"other"},{0,"count"},{2,"other"}};
+  const auto body=Script("if 0\nset CoUnT to Other\nendif\nset Other to Count + Other");
+  for(bool event:{false,true}){
+    auto catalog=Fixture();const uint32_t scriptId=event?300:301;
+    catalog.pipboy.formNames.erase("questa"); // exercise bare expression fallback in QUST too
+    if(!event)catalog.pipboy.quests[10].script=scriptId;
+    auto& script=catalog.pipboy.scripts[scriptId];
+    script.source="short Count\nfloat Other\nref Target\nBegin OnActivate\n"+body.source+"\nEnd";
+    script.variables={{0,"Count"},{2,"Other"},{3,"Target"}};
+    if(event)catalog.eventPrograms[scriptId]=fo3script::ParseEvents(script);
+    else catalog.pipboy.quests[10].stages[10].items[0].result=body;
+    std::string error;std::vector<fo3dialogue::Command> commands;
+    size_t cost=0;assert(fo3script::ChargeScriptLocals(targets,cost));
+    fo3dialogue::CommandFormCapture sink;sink.limit=cost;
+    assert(fo3dialogue::CompileResult(catalog.pipboy,body,commands,error,event?100:10,scriptId,&sink));
+    assert(sink.locals==targets&&sink.used==cost&&!sink.exhausted);
+    sink.limit=cost-1;
+    assert(!fo3dialogue::CompileResult(catalog.pipboy,body,commands,error,event?100:10,scriptId,&sink));
+    assert(sink.exhausted&&sink.used<=sink.limit&&sink.locals.size()==1);
+    sink.limit=0;
+    assert(fo3dialogue::CompileResult(catalog.pipboy,Script("RewardKarma 1"),commands,error,100,scriptId,&sink));
+    assert(sink.locals.empty()&&!sink.used&&!sink.exhausted);
+    // All successful sink categories share the same remaining allowance.
+    sink.limit=cost;assert(sink.AddLocal(0,"count"));assert(sink.Add(2,"other"));
+    assert(!sink.AddLocal(2,"other")&&sink.exhausted&&sink.used==cost);
+    sink.Reset();sink.limit=cost;assert(!fo3dialogue::CaptureNumericLocalKey(catalog.pipboy,100,scriptId,"Target",&sink));
+    assert(sink.locals.empty()&&!sink.used&&!sink.exhausted);
+    fo3player::Player player(std::move(catalog));const auto revision=player.Revision();
+    auto prepare=[&](fo3player::ScriptProgramCapture mode){return event?
+      player.PrepareReferenceEventTransaction(100,"OnActivate",fo3player::PlayerRef,error,mode):
+      player.PrepareQuestStageTransaction(10,10,error,mode);};
+    auto plan=prepare(capture);if(!plan)std::cerr<<error<<'\n';assert(plan&&plan->ExecutedScripts().size()==1);
+    const auto& entry=plan->ExecutedScripts()[0];assert(entry.commandLocals==targets&&entry.expressionLocals==reads);
+    assert(entry.commandVariables.empty()&&entry.expressionVariables.empty());
+    assert(player.Revision()==revision&&player.Snapshot().pipboy.dialogueVariables.empty());NoEffects(player);
+    auto plain=prepare(fo3player::ScriptProgramCapture::None);assert(plain&&plain->ExecutedScripts().empty());
+    forbidAllocations=true;assert(player.CommitScriptTransaction(*plan)&&player.RollbackScriptTransaction(*plan));forbidAllocations=false;
+    assert(entry.commandLocals==targets&&entry.expressionLocals==reads);NoEffects(player);
+  }
+}
 static void LocalRecordProvenance(){
   constexpr auto capture=fo3player::ScriptProgramCapture::EnteredPrograms;
   for(bool event:{false,true})for(unsigned kind=0;kind<9;++kind){
@@ -611,6 +654,7 @@ int main(int argc,char** argv){
   CommandFormProvenance();
   ExpressionFormProvenance();
   QualifiedVariableProvenance();
+  BareLocalProvenance();
   LocalRecordProvenance();
   DialogueProvenance();
   if(argc>1)OriginalProvenance(argv[1]);

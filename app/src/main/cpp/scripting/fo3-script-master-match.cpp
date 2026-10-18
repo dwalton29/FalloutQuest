@@ -37,7 +37,8 @@ bool Same(const Execution& a,const Execution& b) noexcept {
     a.reference==b.reference&&Same(a.program,b.program)&&Same(a.container,b.container)&&
     a.owningQuest==b.owningQuest&&Same(a.conditions,b.conditions)&&Same(a.questConditions,b.questConditions)&&
     a.localVariables==b.localVariables&&a.commandForms==b.commandForms&&a.expressionForms==b.expressionForms&&
-    a.commandVariables==b.commandVariables&&a.expressionVariables==b.expressionVariables;
+    a.commandVariables==b.commandVariables&&a.expressionVariables==b.expressionVariables&&
+    a.commandLocals==b.commandLocals&&a.expressionLocals==b.expressionLocals;
 }
 bool Contexts(const std::vector<Execution>& programs){
   std::array<size_t,32> active{};size_t depth=0;
@@ -201,13 +202,28 @@ bool MatchScriptProgramsToMaster(const std::string& master,const std::vector<Exe
     if(!ChargeScriptEvidence(e.origin.event,e.program,&e.container,evidenceBytes,&e.conditions,&e.questConditions)||
         !ChargeScriptLocals(e.localVariables,evidenceBytes)||!ChargeScriptForms(e.commandForms,evidenceBytes)||
         !ChargeScriptForms(e.expressionForms,evidenceBytes)||!ChargeScriptVariables(e.commandVariables,evidenceBytes)||
-        !ChargeScriptVariables(e.expressionVariables,evidenceBytes))
+        !ChargeScriptVariables(e.expressionVariables,evidenceBytes)||
+        !ChargeScriptLocals(e.commandLocals,evidenceBytes)||!ChargeScriptLocals(e.expressionLocals,evidenceBytes))
       return fail("script master evidence byte limit exceeded");
     if(!Type(programs[n]))return fail("unbound or malformed script origin");
     if(!CompleteScriptLocalRecords(e.container))return fail("malformed local records");
     if(!UnambiguousScriptLocals(e.localVariables))return fail("local names are empty or ambiguous");
-    if(!ConsistentScriptLocalDeclarations(e.container.source,e.localVariables))
+    std::vector<std::pair<std::string,unsigned>> declarations;
+    if(!ConsistentScriptLocalDeclarations(e.container.source,e.localVariables,&declarations))
       return fail("local declarations do not match source");
+    for(const auto* bindings:{&e.commandLocals,&e.expressionLocals})for(const auto& binding:*bindings){
+      if(cancel.load(std::memory_order_acquire))return fail("script master match cancelled");
+      if(!e.owner||!e.localScript||binding.second.empty()||Lower(binding.second)!=binding.second||
+          binding.second.find('.')!=std::string::npos||binding.second.find('\0')!=std::string::npos)
+        return fail("malformed bare local binding");
+      const auto slot=std::lower_bound(e.localVariables.begin(),e.localVariables.end(),binding.first,
+        [](const auto& entry,uint32_t index){return entry.first<index;});
+      const auto declared=std::lower_bound(declarations.begin(),declarations.end(),binding.second,
+        [](const auto& entry,const std::string& name){return entry.first<name;});
+      if(slot==e.localVariables.end()||slot->first!=binding.first||Lower(slot->second)!=binding.second||
+          declared==declarations.end()||declared->first!=binding.second||declared->second!=1)
+        return fail("bare local numeric slot differs");
+    }
     for(const auto* bindings:{&e.commandForms,&e.expressionForms})for(const auto& binding:*bindings){
       if(!binding.first||binding.second.empty()||Lower(binding.second)!=binding.second||binding.second.find('\0')!=std::string::npos)
         return fail("malformed script form binding");

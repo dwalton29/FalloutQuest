@@ -310,6 +310,9 @@ struct ScriptExecution {
   // order. This is binding identity, not runtime read values or branch outcomes.
   std::vector<std::pair<uint32_t,std::string>> expressionForms;
   std::vector<ScriptVariableBinding> commandVariables,expressionVariables;
+  // Successful bare NumericLocalKey lookups. Owner/script come from this entry;
+  // pairs retain the resolved slot and normalized token in lookup order.
+  std::vector<std::pair<uint32_t,std::string>> commandLocals,expressionLocals;
 };
 struct ReferenceEnableChange { uint32_t reference=0; bool enabled=false; };
 // Owned reference-only input for the future scene coordinator. It neither runs

@@ -538,6 +538,9 @@ assert script_runtime.index('fo3script::ChargeScriptForms(expressionForms.bindin
 assert script_runtime.index('fo3script::ChargeScriptVariables(forms.variables,nextBytes)')<script_runtime.index('execution.commandVariables=std::move(forms.variables)')
 assert script_runtime.index('fo3script::ChargeScriptVariables(expressionForms.variables,nextBytes)')<script_runtime.index('execution.expressionVariables=std::move(expressionForms.variables)')
 assert 'VariableKey(d,t,forms)' in script_runtime
+assert 'fo3dialogue::CaptureNumericLocalKey(d,owner,scriptId,t,forms)' in script_runtime
+assert script_runtime.index('fo3script::ChargeScriptLocals(forms.locals,nextBytes)')<script_runtime.index('execution.commandLocals=std::move(forms.locals)')
+assert script_runtime.index('fo3script::ChargeScriptLocals(expressionForms.locals,nextBytes)')<script_runtime.index('execution.expressionLocals=std::move(expressionForms.locals)')
 assert 'candidate.scriptTraceBytes_=0;' in script_transaction
 assert 'ScriptProgramKind::UnboundResult' in script_header
 print('Detached script provenance records exact entered bodies and typed origins without publishing its collector into canonical state')
@@ -600,6 +603,8 @@ assert 'a.commandForms==b.commandForms' in master_match
 assert master_match.index('!ChargeScriptForms(e.expressionForms,evidenceBytes)')<master_match.index('for(const auto* bindings:{&e.commandForms,&e.expressionForms})')<master_match.index('std::fopen(master.c_str(),"rb")')
 assert 'a.expressionForms==b.expressionForms' in master_match
 assert 'a.commandVariables==b.commandVariables' in master_match and 'a.expressionVariables==b.expressionVariables' in master_match
+assert 'a.commandLocals==b.commandLocals' in master_match and 'a.expressionLocals==b.expressionLocals' in master_match
+assert master_match.index('!ChargeScriptLocals(e.expressionLocals,evidenceBytes)')<master_match.index('malformed bare local binding')<master_match.index('std::fopen(master.c_str(),"rb")')
 assert master_match.index('!ChargeScriptVariables(e.expressionVariables,evidenceBytes)')<master_match.index('variableOwners[binding.owner].push_back(&binding)')<master_match.index('std::fopen(master.c_str(),"rb")')
 assert 'declared->second!=1' in master_match
 assert 'script->second.variables,&declarations' in master_match

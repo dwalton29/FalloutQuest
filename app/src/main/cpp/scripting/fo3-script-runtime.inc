@@ -74,7 +74,7 @@ class Expression {
     }
     uint64_t key=fo3dialogue::VariableKey(d,t,forms);
     if(!key&&owner&&t.find('.')==std::string::npos){auto q=d.quests.find(owner);if(q!=d.quests.end())key=fo3dialogue::VariableKey(d,q->second.editor+"."+t,forms);}
-    if(!key)key=fo3script::NumericLocalKey(d,owner,scriptId,t);
+    if(!key)key=fo3dialogue::CaptureNumericLocalKey(d,owner,scriptId,t,forms);
     if(key){auto v=p.Snapshot().pipboy.dialogueVariables.find(key);value=v==p.Snapshot().pipboy.dialogueVariables.end()?0:v->second;return true;}
     const auto id=form(t);if(id&&p.GlobalValue(id,value))return true;
     return Fail("unsupported expression operand: "+t);
@@ -224,7 +224,9 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
     if(!fo3script::ChargeScriptForms(forms.bindings,nextBytes)||
         !fo3script::ChargeScriptForms(expressionForms.bindings,nextBytes)||
         !fo3script::ChargeScriptVariables(forms.variables,nextBytes)||
-        !fo3script::ChargeScriptVariables(expressionForms.variables,nextBytes)){
+        !fo3script::ChargeScriptVariables(expressionForms.variables,nextBytes)||
+        !fo3script::ChargeScriptLocals(forms.locals,nextBytes)||
+        !fo3script::ChargeScriptLocals(expressionForms.locals,nextBytes)){
       error="script provenance byte limit exceeded";return false;
     }
     const fo3pipdata::Script* localScript=nullptr;
@@ -253,6 +255,8 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
     execution.expressionForms=std::move(expressionForms.bindings);
     execution.commandVariables=std::move(forms.variables);
     execution.expressionVariables=std::move(expressionForms.variables);
+    execution.commandLocals=std::move(forms.locals);
+    execution.expressionLocals=std::move(expressionForms.locals);
     execution.owningQuest=owningQuest;
     if(conditions)execution.conditions=*conditions;
     if(questConditions)execution.questConditions=*questConditions;

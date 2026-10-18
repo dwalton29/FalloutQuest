@@ -487,6 +487,51 @@ int main(){
     assert(!fo3script::MatchScriptProgramsToMaster(path+"-missing",evidence,report,cancel,error)&&report.Matches(f.programs));
     assert(error==(field==7?"script master evidence byte limit exceeded":"malformed qualified variable binding"));
   }
+  // Bare names bind to this entry's authenticated owner/script and numeric
+  // slot, including zero. Lookup order and phase remain exact report values.
+  for(bool event:{false,true})for(bool compressed:{false,true})for(bool first:{false,true}){
+    Bytes local;Script(local,"short Count\nfloat Other\nref Target\nBegin OnActivate\nRewardKarma 4\nEnd");
+    Local(local,0,"Count",compressed);Local(local,2,"Other");Local(local,3,"Target");Local(local,4,"Extra");
+    fo3pipdata::Definitions d;fo3pipdata::Decode(d,"SCPT",60,0,local,0,0,0);
+    auto entry=event?f.programs.back():f.programs[0];entry.localScript=60;entry.container=d.scripts.at(60);
+    if(event)entry.origin.sourceLine=4;
+    entry.localVariables={{0,"Count"},{2,"Other"},{3,"Target"},{4,"Extra"}};
+    entry.commandLocals={{0,"count"},{2,"other"}};entry.expressionLocals={{2,"other"},{0,"count"},{2,"other"}};
+    auto quest=f.quest;Sub(quest,"SCRI",Word(60));
+    const auto owner=event?Owner(compressed):Record("QUST",10,quest);
+    const auto script=Record("SCPT",60,compressed?Compressed(local):local,compressed?0x40000:0);
+    auto bytes=first?script:owner;Append(bytes,first?owner:script);write(bytes);
+    const std::vector<Execution> evidence={entry};fo3script::ScriptMasterMatch report;
+    assert(fo3script::MatchScriptProgramsToMaster(path,evidence,report,cancel,error)&&report.Matches(evidence));
+    for(bool expression:{false,true})for(unsigned field=0;field<12;++field){
+      auto changed=evidence;auto& bindings=expression?changed[0].expressionLocals:changed[0].commandLocals;
+      if(field==0)bindings[0].first=99;
+      if(field==1)bindings[0].second="absent";
+      if(field==2)bindings[0].second.clear();
+      if(field==3)bindings[0].second="Count";
+      if(field==4)bindings[0].second="quest.count";
+      if(field==5)bindings[0].second=std::string("count\0tail",10);
+      if(field==6)bindings[0]={3,"target"};
+      if(field==7)bindings[0]={4,"extra"};
+      if(field==8)changed[0].owner=0;
+      if(field==9)changed[0].localScript=0;
+      if(field==10)changed[0].localVariables[0].second="Forged";
+      if(field==11)changed[0].container.source="ref Count\nfloat Other\nref Target\nBegin OnActivate\nRewardKarma 4\nEnd";
+      assert(!report.Matches(changed));
+      assert(!fo3script::MatchScriptProgramsToMaster(path,changed,report,cancel,error)&&report.Matches(evidence));
+    }
+    for(unsigned field=0;field<4;++field){
+      auto changed=evidence;
+      if(field==0)std::swap(changed[0].commandLocals[0],changed[0].commandLocals[1]);
+      if(field==1)changed[0].expressionLocals.pop_back();
+      if(field==2)std::swap(changed[0].commandLocals,changed[0].expressionLocals);
+      if(field==3)changed[0].commandLocals.clear();
+      assert(!report.Matches(changed)); // supplied identity proof does not infer completeness/phase
+    }
+    auto oversized=evidence;oversized[0].expressionLocals={{0,std::string(fo3script::ScriptEvidenceMaxBytes,'x')}};
+    assert(!fo3script::MatchScriptProgramsToMaster("/no/such/master",oversized,report,cancel,error));
+    assert(error=="script master evidence byte limit exceeded"&&report.Matches(evidence));
+  }
   // Null and nonnull authored SCRI preserve exact quest local-scope matching.
   for(uint32_t script:{0u,60u}){
     auto payload=f.quest;Sub(payload,"SCRI",Word(script));auto bytes=Record("QUST",10,payload);
