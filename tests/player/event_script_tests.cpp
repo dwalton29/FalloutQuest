@@ -141,7 +141,9 @@ static void BombMenuAndInventory() {
     "scn B\nshort captureButton\nBegin GameMode\n"
     "if getButtonPressed == 1\n"
     "set captureButton to 7\nplayer.removeitem TestCharge 1\n"
-    "Enable\nendif\nEnd\n";
+    // PlaceAtMe is an original FO3 operation not yet in the supported
+    // source subset. It must reject the whole event atomically.
+    "Player.PlaceAtMe TestCharge 1\nendif\nEnd\n";
   broken.pipboy.formNames["testcharge"]=400;
   broken.items[400].formId=400;
   broken.eventPrograms[102]=fo3script::ParseEvents(broken.pipboy.scripts[102]);
