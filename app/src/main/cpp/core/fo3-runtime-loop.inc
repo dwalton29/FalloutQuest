@@ -1761,10 +1761,11 @@ private:
                 gPipScreenDrawUs=0;gPipScreenQueries=0;
                 notificationHead_=ToVirtualPose(loadingHead);
                 const bool notificationAvailable=!Fo3ResidentFrameBlocked() && gSceneReady && !IsFo3LoadingVisible() && !Fo3DialogueFocus() && !Fo3ScriptMessageFocus() && !Fo3LevelUpFocus() && !Fo3PipboyFocus() && !Fo3LockpickFocus() && sessionState_==XR_SESSION_STATE_FOCUSED;
+                // Retain the canonical once-per-logical-frame item notification
+                // preparation call; authored scene tests also enforce this boundary.
+                if(!Fo3ResidentFrameBlocked())fo3notifyui::Prepare(gameplaySeconds,notificationAvailable,gSceneReady);
                 if(!Fo3ResidentFrameBlocked()) {
-                    fo3notifyui::Prepare(gameplaySeconds,notificationAvailable,gSceneReady);
-                    // Textures, glyphs and animated pointer buffers are prepared
-                    // once per logical frame. Stereo RenderEye only draws.
+                    // Texture uploads and pointer motion happen before stereo eyes.
                     if(notificationAvailable)fo3xpui::Prepare();
                     if(Fo3LevelUpFocus())
                         fo3levelui::Prepare(gLevelUp.panel,Fo3LevelUpSelectedIcon());
