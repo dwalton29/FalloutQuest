@@ -92,6 +92,12 @@ void Fo3LevelUpRefresh() {
             " "+std::to_string(u.allocated[slot])+
             "\n"+skill.description;
     }
+    if(u.page==Fo3LevelUpSession::Page::Intense &&
+       panel.selected<7){
+        const auto& attribute=player.Definitions().pipboy.special[panel.selected];
+        panel.subtitle+="\n\n"+std::string(Fo3LevelUpSpecialNames[panel.selected])+
+            "\n"+attribute.description;
+    }
     if(u.page==Fo3LevelUpSession::Page::Perks &&
        panel.selected<u.eligible.size()) {
         const auto& perk=player.Definitions().pipboy.perks.at(
@@ -110,6 +116,9 @@ std::string Fo3LevelUpSelectedIcon(){
             u.panel.selected:u.panel.selected+1;
         return u.owner->Definitions().pipboy.skills[slot].icon;
     }
+    if(u.page==Fo3LevelUpSession::Page::Intense &&
+       u.panel.selected<7)
+        return u.owner->Definitions().pipboy.special[u.panel.selected].icon;
     if(u.page!=Fo3LevelUpSession::Page::Perks||
        u.panel.selected>=u.eligible.size())return {};
     const auto it=u.owner->Definitions().pipboy.perks.find(
