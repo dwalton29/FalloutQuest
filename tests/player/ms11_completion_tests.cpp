@@ -122,6 +122,8 @@ static void Atomic(){
   assert(fo3script::NonresidentActorRemoval(p,*plan,20,0,{},error));
   assert(p.CommitScriptTransaction(*plan));assert(p.Snapshot().experience==300&&p.CellFullName(20)=="Authored");
   assert(p.RollbackScriptTransaction(*plan));assert(p.Snapshot().experience==0&&p.CellFullName(20)=="Empty"&&p.Snapshot().achievements.empty());
+  fo3player::ExperienceNotice experienceNotice;
+  assert(!p.PollExperienceNotice(experienceNotice)); // rolled back with the script
   script.source="RewardXP 300\nSetCellFullName cell missing";
   assert(!p.PrepareDialogueTransaction(script,{},error)&&p.Snapshot().experience==0);
   const auto legacy="/tmp/fq-ms11-legacy-"+std::to_string(getpid());
@@ -129,6 +131,10 @@ static void Atomic(){
   assert(p.Save(legacy,error));
   script.source="RewardXP 300\nSetCellFullName cell name\nAddAchievement 23";
   assert(p.ExecuteDialogueResult(script,error)&&p.Save(save,error));
+  assert(p.PollExperienceNotice(experienceNotice)&&
+         experienceNotice.amount==300&&experienceNotice.total==300&&
+         experienceNotice.levelUp); // level 2 threshold has been crossed
+  assert(!p.PollExperienceNotice(experienceNotice));
   std::ifstream input(save,std::ios::binary);std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(input)),{});
   assert(bytes[4]==17);const auto before=p.Revision();
   auto put=[](std::vector<uint8_t>& data,size_t at,uint32_t value){for(unsigned i=0;i<4;++i)data[at+i]=uint8_t(value>>(8*i));};
@@ -138,6 +144,7 @@ static void Atomic(){
   bad=bytes;bad.pop_back();write(bad);assert(!p.Restore(save,error));
   assert(p.Revision()==before&&p.Snapshot().experience==300&&p.CellFullName(20)=="Authored");
   write(bytes);assert(p.Restore(save,error)&&p.CellFullName(20)=="Authored"&&p.Snapshot().achievements.count(23));
+  assert(!p.PollExperienceNotice(experienceNotice)); // restore does not replay XP
   assert(p.Restore(legacy,error)&&p.CellFullName(20)=="Empty"&&p.Snapshot().achievements.empty()&&p.Snapshot().experience==0);
   std::remove(save.c_str());std::remove(legacy.c_str());
 }
