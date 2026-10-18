@@ -106,6 +106,8 @@ inline void Prepare(){
         label(std::to_string(xp->level),-.30f,.32f);
         label(std::to_string(xp->level+1),.04f,.32f);
         label(std::to_string(xp->total)+" XP",.27f,.21f);
+        if(xp->previous<xp->thresholdEnd&&xp->total>=xp->thresholdEnd)
+            label("LEVEL UP",.08f,.145f);
         r.textCount=GLsizei(verts.size())-r.textFirst;
         glBindVertexArray(r.vao);glBindBuffer(GL_ARRAY_BUFFER,r.vbo);
         glBufferData(GL_ARRAY_BUFFER,
