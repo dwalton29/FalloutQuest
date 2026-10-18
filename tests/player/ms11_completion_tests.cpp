@@ -133,7 +133,8 @@ static void Atomic(){
   assert(p.ExecuteDialogueResult(script,error)&&p.Save(save,error));
   assert(p.PollExperienceNotice(experienceNotice)&&
          experienceNotice.amount==300&&experienceNotice.total==300&&
-         experienceNotice.levelUp); // level 2 threshold has been crossed
+         experienceNotice.levelUp&&experienceNotice.committedLevel==1&&
+         experienceNotice.thresholdStart==0&&experienceNotice.thresholdEnd==200); // level 2 threshold has been crossed
   assert(!p.PollExperienceNotice(experienceNotice));
   std::ifstream input(save,std::ios::binary);std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(input)),{});
   assert(bytes[4]==17);const auto before=p.Revision();
