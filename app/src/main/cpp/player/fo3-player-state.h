@@ -1,6 +1,7 @@
 #pragma once
 
 #include "pipboy/fo3-pipboy-session.h"
+#include "player/fo3-experience.h"
 #include "scripting/fo3-event-scripts.h"
 #include "world/fo3-reference-state.h"
 #include "weapons/fo3-weapon-data.h"
@@ -242,6 +243,7 @@ struct Catalog {
   float theftKarma=0;
   uint32_t bobbyPin=0,infiltrator=0;
   std::unordered_map<std::string,float> lockSettings;
+  uint32_t xpBumpBase = fo3experience::VanillaXPBump; // ESM iXPBumpBase GMST
   // FO3 executable defaults; optional GMST overrides. Not FNV reputation.
   float evilMaxKarma=-250;
   int32_t karmaMajorThreshold=250;
@@ -358,6 +360,9 @@ public:
   ActorCensusReport RegisterOriginalActors();
   const Catalog &Definitions() const { return *catalog_; }
   const State &Snapshot() const { return state_; }
+  fo3experience::Progress ExperienceProgress() const {
+    return fo3experience::Evaluate(state_.level,state_.experience,catalog_->xpBumpBase);
+  }
   float MaxHealth() const;
   float Health() const;
   float MaxActionPoints() const;
