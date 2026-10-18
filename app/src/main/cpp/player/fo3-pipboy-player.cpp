@@ -178,7 +178,8 @@ bool Player::RewardExperience(uint32_t amount) {
     // A transient effect, not saved. Queued only after real (or transaction
     // candidate) state mutation, and rolled back with the candidate.
     pendingExperienceNotices_.push_back({earned,state_.experience,
-        after.pendingLevels>before.pendingLevels});
+        after.pendingLevels>before.pendingLevels,after.level,
+        after.currentThreshold,after.nextThreshold});
     ++revision_;
   }
   return true;
