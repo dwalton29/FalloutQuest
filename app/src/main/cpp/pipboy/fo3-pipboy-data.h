@@ -218,6 +218,7 @@ struct Definitions {
   // Original AVIF skill descriptions and ICON paths, indexed by player
   // actor-value skill slot 32..45, including the unused slot at 44.
   std::array<SkillPresentation,14> skills{};
+  std::array<SkillPresentation,7> special{};
   std::unordered_map<uint32_t,IdleMarkerDefinition> idleMarkers;
   std::unordered_map<uint32_t,std::vector<Condition>> idleConditions;
   std::unordered_map<uint32_t,uint32_t> idleParents;
