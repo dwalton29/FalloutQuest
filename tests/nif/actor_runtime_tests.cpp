@@ -172,7 +172,7 @@ namespace fo3anim {bool DecodeClip(const std::vector<uint8_t>&,Clip&){return fal
 #include "world/fo3-resident-pause-clock.h"
 bool residentBlocked=false;
 auto residentRawNow=std::chrono::steady_clock::time_point{std::chrono::seconds{10}};
-bool Fo3ResidentFrameBlocked(){return residentBlocked;}
+bool Fo3GameplayBlocked(){return residentBlocked;}
 std::chrono::steady_clock::time_point Fo3ResidentRawSteadyNow() noexcept {
   return residentRawNow;
 }

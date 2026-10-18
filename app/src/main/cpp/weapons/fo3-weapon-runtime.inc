@@ -319,6 +319,8 @@ void WeaponRender(bool alpha){
 }
 void WeaponUpdate(double now,bool backButton){
   using namespace weaponruntime;
+  // Never turn masked held grips into a synthetic release/drop after pause.
+  if(gFo3GameplayInputSuppressed){last=now;return;}
   const float dt=std::clamp(float(now-last),0.f,.064f);last=now;
   const auto frame=fo3weapon::FrameAccessFor(gSceneReady,IsFo3LoadingVisible(),
     gPlayerSession&&gPlayerSession->saveBlocked,Fo3PipboyFocus(),gShoulderFocused);

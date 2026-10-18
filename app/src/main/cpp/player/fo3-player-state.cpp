@@ -1214,7 +1214,8 @@ bool Player::Save(const std::string &path, std::string &error) const {
     payload.push_back(l.forceFailures);payload.push_back(l.rewarded?1:0);}
   // Optional RFE1 after the v14 lock tail. Empty overlays keep existing v14
   // bytes unchanged; older supported saves do not require this extension.
-  const bool hasLevelAdvancement=state_.level!=catalog_->initial.level;
+  const bool hasDebugPoints=state_.debugPerkPoints!=0;
+  const bool hasLevelAdvancement=state_.level!=catalog_->initial.level||hasDebugPoints;
   // v18 retains all v17 tails, even empty ones, before LVP1.
   const bool hasCompletionState=!state_.cellNameMessages.empty()||
       !state_.achievements.empty()||hasLevelAdvancement;
@@ -1295,7 +1296,11 @@ bool Player::Save(const std::string &path, std::string &error) const {
     Put32(payload,0x3150564c); // LVP1: committed level, after all v17 tails.
     Put32(payload,state_.level);
   }
-  Put32(bytes, hasLevelAdvancement ? 18 : hasCompletionState ? 17 :
+  if(hasDebugPoints){
+    if(state_.debugPerkPoints>1000){error="Invalid debug perk budget";return false;}
+    Put32(payload,0x31504244);Put32(payload,state_.debugPerkPoints); // DBP1
+  }
+  Put32(bytes, hasDebugPoints ? 19 : hasLevelAdvancement ? 18 : hasCompletionState ? 17 :
       hasMerchantVisits ? 16 : hasPlayerAttributeOverrides ? 15 : 14);
   Put32(bytes, catalog_->fingerprint);
   Put32(bytes, static_cast<uint32_t>(payload.size()));
@@ -1355,7 +1360,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
   const auto *h = bytes.data();
   const auto version = fo3esm::ReadU32(h + 4);
   if (std::memcmp(h, "FQPS", 4) ||
-      (version < 1 || version > 18))
+      (version < 1 || version > 19))
     return fail("Unsupported player save format");
   if (fo3esm::ReadU32(h + 8) != catalog_->fingerprint)
     return fail("Player save belongs to different game definitions");
@@ -1691,22 +1696,27 @@ bool Player::Restore(const std::string &path, std::string &error) {
         }
         const auto achievements=fo3esm::ReadU32(p+at);at+=4;
         if(achievements>256||(version>=18
-            ? payload.size()-at!=4ull*achievements+8u
+            ? payload.size()-at!=4ull*achievements+(version>=19?16u:8u)
             : payload.size()-at!=4ull*achievements))
           return fail("Invalid achievement count");
         for(uint32_t i=0;i<achievements;++i,at+=4){const auto id=fo3esm::ReadU32(p+at);
           if(id>255||!next.achievements.insert(id).second)return fail("Invalid saved achievement");}
       }
       if(version>=18){
-        if(payload.size()-at!=8||fo3esm::ReadU32(p+at)!=0x3150564c)
+        if(payload.size()-at!=(version>=19?16u:8u)||fo3esm::ReadU32(p+at)!=0x3150564c)
           return fail("Invalid level-up extension");
         const auto level=fo3esm::ReadU32(p+at+4);at+=8;
-        if(level<=catalog_->initial.level||
+        if((version>=19?level<catalog_->initial.level:level<=catalog_->initial.level)||
            level>fo3experience::BaseGameLevelCap||
            next.experience<fo3experience::ThresholdForLevel(
                uint16_t(level),catalog_->xpBumpBase))
           return fail("Invalid saved player level");
         next.level=uint16_t(level);
+      }
+      if(version>=19){
+        if(payload.size()-at!=8||fo3esm::ReadU32(p+at)!=0x31504244||
+           fo3esm::ReadU32(p+at+4)>1000)return fail("Invalid debug perk budget");
+        next.debugPerkPoints=uint16_t(fo3esm::ReadU32(p+at+4));at+=8;
       }
       if(at!=payload.size())return fail("Trailing player save data");
     }

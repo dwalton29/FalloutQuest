@@ -5,9 +5,9 @@
 #include <iostream>
 #include <limits>
 namespace {
-bool blocked=false;
+bool blocked=false,menuPaused=false,focusPaused=false;
 int64_t rawSteady=10000000000LL;
-bool Fo3ResidentFrameBlocked(){return blocked;}
+bool Fo3GameplayBlocked(){return blocked||menuPaused||focusPaused;}
 std::chrono::steady_clock::time_point Fo3ResidentRawSteadyNow() noexcept {
     return std::chrono::steady_clock::time_point{std::chrono::nanoseconds{rawSteady}};
 }
@@ -80,5 +80,11 @@ int main(){
     assert(Fo3GameplayXrTime(5100500000000LL)==resumed);
     rawSteady+=1000000000LL;
     assert(now()==frozen+1500000000LL);
+    // Nested user pause/focus loss must not resume a resident reservation.
+    menuPaused=true;PauseFo3ResidentGameplayTime();const auto paused=now();
+    rawSteady+=1000000000LL;focusPaused=true;assert(now()==paused);
+    menuPaused=false;rawSteady+=1000000000LL;assert(now()==paused);
+    blocked=true;focusPaused=false;rawSteady+=1000000000LL;assert(now()==paused);
+    blocked=false;assert(now()==paused);rawSteady+=1000000000LL;assert(now()==paused+1000000000LL);
     std::cout<<"Resident gameplay clock bridge tests passed\n";
 }

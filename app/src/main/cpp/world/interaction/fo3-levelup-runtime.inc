@@ -239,3 +239,9 @@ void UpdateFo3LevelUp(double now,float scroll,bool pressedA,bool pressedB,
         fo3audio::NamedSound("UIPerk");
     }
 }
+
+// A developer stat/perk edit can change Educated/INT budgets or eligibility.
+// Rebuild an uncommitted allocation from authoritative state on resume.
+void ResetFo3LevelUpDraftAfterDebug() {
+    gLevelUp.panel.visible=false;gLevelUp.owner=nullptr;
+}

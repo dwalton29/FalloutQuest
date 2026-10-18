@@ -7,6 +7,7 @@
 #include "ui/interaction/fo3-dialogue-panel-renderer.h"
 #include "ui/interaction/fo3-levelup-renderer.h"
 #include "ui/interaction/fo3-xp-meter-renderer.h"
+#include "ui/pause/fo3-pause-renderer.h"
 #include <array>
 #include <string>
 #include "ui/loading/fo3-loading-vr.h"
@@ -382,7 +383,8 @@ public:
         fo3pipui::Shutdown();ResetFo3Pipboy();fo3lockui::Shutdown();CancelFo3Lockpick();
         fo3notifyui::Shutdown();
         fo3barterui::Shutdown();fo3dialogueui::Shutdown();
-         fo3levelui::Shutdown();fo3xpui::Shutdown();
+         fo3levelui::Shutdown();fo3xpui::Shutdown();fo3pauseui::Shutdown();
+        gFo3PauseMenu.Close();gFo3PauseOpen=false;
          EndFo3Dialogue("renderer shutdown");
         fo3lootui::Shutdown();
         fo3hudrenderer::Shutdown();
@@ -579,6 +581,8 @@ private:
 
         if (!CreateAction("weapon_haptic", "Weapon Haptics", XR_ACTION_TYPE_VIBRATION_OUTPUT,
                           2, handPaths_.data(), &weaponHapticAction_)) return false;
+        if (!CreateAction("pause_menu", "Pause Menu", XR_ACTION_TYPE_BOOLEAN_INPUT,
+                          1, &handPaths_[0], &pauseAction_)) return false;
         if (!CreateAction("pipboy_back", "Pip-Boy Back", XR_ACTION_TYPE_BOOLEAN_INPUT,
                           1, &handPaths_[1], &pipBackAction_)) return false;
 
@@ -612,6 +616,7 @@ private:
         XrPath rightStickY = XR_NULL_PATH;
         XrPath rightA = XR_NULL_PATH;
         XrPath rightB = XR_NULL_PATH;
+        XrPath leftMenu = XR_NULL_PATH;
         XrPath leftTriggerValue = XR_NULL_PATH;
         XrPath rightTriggerValue = XR_NULL_PATH;
         XrPath leftSqueezeValue = XR_NULL_PATH;
@@ -637,6 +642,7 @@ private:
             !Path("/user/hand/right/input/thumbstick/y", &rightStickY) ||
             !Path("/user/hand/right/input/a/click", &rightA) ||
             !Path("/user/hand/right/input/b/click", &rightB) ||
+            !Path("/user/hand/left/input/menu/click", &leftMenu) ||
             !Path("/user/hand/left/input/trigger/value", &leftTriggerValue) ||
             !Path("/user/hand/right/input/trigger/value", &rightTriggerValue) ||
             !Path("/user/hand/left/input/squeeze/value", &leftSqueezeValue) ||
@@ -654,7 +660,7 @@ private:
 
         XrPath leftHaptic=XR_NULL_PATH,rightHaptic=XR_NULL_PATH;
         if(!Path("/user/hand/left/output/haptic",&leftHaptic)||!Path("/user/hand/right/output/haptic",&rightHaptic))return false;
-        const std::array<XrActionSuggestedBinding, 26> bindings{{
+        const std::array<XrActionSuggestedBinding, 27> bindings{{
             {weaponHapticAction_,leftHaptic}, {weaponHapticAction_,rightHaptic},
             {poseAction_, leftAim},
             {poseAction_, rightAim},
@@ -666,6 +672,7 @@ private:
             {lootScrollAction_, rightStickY},
             {activateAction_, rightA},
             {pipBackAction_, rightB},
+            {pauseAction_, leftMenu},
             {fingerTriggerAction_, leftTriggerValue},
             {fingerTriggerAction_, rightTriggerValue},
             {fingerGripAction_, leftSqueezeValue},
@@ -1144,6 +1151,14 @@ private:
                 if (sessionState_ == XR_SESSION_STATE_FOCUSED && changed->state != XR_SESSION_STATE_FOCUSED)
                     FlushFo3PlayerState();
                 sessionState_ = changed->state;
+                if(sessionState_!=XR_SESSION_STATE_FOCUSED){
+                    // STOPPING may submit no more frames. Latch here, before
+                    // waiting for a later focused frame, to exclude the gap.
+                    PauseFo3ResidentGameplayTime();gFo3FocusPaused=true;
+                    gFo3PauseMenu.Close();gFo3PauseOpen=false;
+                    residentInputBarrier_.Allow(true,false);gFo3GameplayInputSuppressed=true;
+                    lastFrameTime_=0;
+                }
                 // The original GL context is current on this event thread.
                 // Request cancellation now even if STOPPING prevents another
                 // submitted frame; unfinished CPU work remains cooperatively held.
@@ -1213,8 +1228,8 @@ private:
         if (!CheckXr(xrSyncActions(session_, &sync), "xrSyncActions")) {
             for(int hand=0;hand<2;hand++)handPoseValid_[hand]=gripHandPoseValid_[hand]=false;
             // A failed sample cannot count as the release needed to rearm.
-            residentInputBarrier_.Allow(true,false);
-            if(!Fo3ResidentFrameBlocked())ResetFo3Pipboy();
+            residentInputBarrier_.Allow(true,false);gFo3GameplayInputSuppressed=true;
+            if(!Fo3GameplayBlocked())ResetFo3Pipboy();
             moveX_=moveY_=turnX_=lootScrollY_=0;
             fingerTriggerValue_={};fingerGripValue_={};
             activateDownQ1700_=pipBackDown_=false;return;
@@ -1247,10 +1262,14 @@ private:
                 fingerThumbContactAction_, handPaths_[1]);
         activateDownQ1700_ = ReadBoolActionQ1699(activateAction_, handPaths_[1]);
         pipBackDown_=ReadBoolActionQ1699(pipBackAction_,handPaths_[1]);
-        const bool neutral=moveX_==0&&moveY_==0&&turnX_==0&&std::fabs(lootScrollY_)<.2f&&
+        const bool menuDown=ReadBoolActionQ1699(pauseAction_,handPaths_[0]);
+        UpdateFo3Pause(menuDown,activateDownQ1700_,pipBackDown_,turnX_,lootScrollY_,
+            double(time)*1e-9,sessionState_==XR_SESSION_STATE_FOCUSED);
+        const bool neutral=!menuDown&&moveX_==0&&moveY_==0&&turnX_==0&&std::fabs(lootScrollY_)<.2f&&
             !activateDownQ1700_&&!pipBackDown_&&fingerTriggerValue_[0]<.2f&&fingerTriggerValue_[1]<.2f&&
             fingerGripValue_[0]<.2f&&fingerGripValue_[1]<.2f;
-        if(!residentInputBarrier_.Allow(Fo3ResidentFrameBlocked(),neutral)){
+        gFo3GameplayInputSuppressed=!residentInputBarrier_.Allow(Fo3GameplayBlocked(),neutral);
+        if(gFo3GameplayInputSuppressed){
             moveX_=moveY_=turnX_=lootScrollY_=0;
             fingerTriggerValue_={};fingerGripValue_={};
             activateDownQ1700_=pipBackDown_=false;
@@ -1480,6 +1499,10 @@ private:
         if(gFo3ResidentXrClock.Paused()){
             lastFrameTime_=0;residentInputBarrier_.Allow(true,false);
         }
+        const bool focusBlocked=sessionState_!=XR_SESSION_STATE_FOCUSED||!frameState.shouldRender;
+        if(focusBlocked&&!gFo3FocusPaused)PauseFo3ResidentGameplayTime();
+        gFo3FocusPaused=focusBlocked;
+        if(focusBlocked){gFo3PauseMenu.Close();gFo3PauseOpen=false;}
         // Sample even on non-rendered/invalid-view frames. Resumption establishes
         // a fresh baseline before any gameplay consumer; XR tracking stays raw.
         (void)Fo3GameplayNow();
@@ -1525,7 +1548,7 @@ private:
                 // across a loading screen or headset focus interruption.
                 const int64_t clockNs=gameplayFrameTime;
                 static int64_t previousWorldClockNs=0;
-                if (!Fo3ResidentFrameBlocked() && gPlayerSession && !gPlayerSession->saveBlocked && gSceneReady &&
+                if (!Fo3GameplayBlocked() && gPlayerSession && !gPlayerSession->saveBlocked && gSceneReady &&
                     !IsFo3LoadingVisible() && sessionState_==XR_SESSION_STATE_FOCUSED &&
                     previousWorldClockNs>0 && clockNs>previousWorldClockNs) {
                     const double seconds=std::clamp(double(clockNs-previousWorldClockNs)*1e-9,0.0,0.25);
@@ -1577,7 +1600,7 @@ private:
                         fo3tod::gRuntime.climate.sunsetBegin,
                         fo3tod::gRuntime.climate.sunsetEnd);
                 }
-                if (!Fo3ResidentFrameBlocked() && !IsFo3LoadingVisible()) {
+                if (!Fo3GameplayBlocked() && !IsFo3LoadingVisible()) {
                     UpdatePlayer(views[0], frameState.predictedDisplayTime);
                 } else {
                     lastFrameTime_ = 0;
@@ -1642,7 +1665,7 @@ private:
                 gVrLeftGripTracking={gripHandPoseValid_[0],pipLeftGripTracked_};
                 gVrLeftAimTracking={handPoseValid_[0],pipLeftAimTracked_};
                 bool dialogueControls=false;
-                if(!Fo3ResidentFrameBlocked()) {
+                if(!Fo3GameplayBlocked()) {
                     // Reload takes precedence over the left-wrist Pip-Boy gesture.
                     // Cancel even a primed activation so the physical magazine can
                     // pass in front of the player's face without being holstered.
@@ -1697,7 +1720,7 @@ private:
                 UpdateFo3ExteriorStreamingQ1890(q1890VirtualHead.position.x,
                                                 q1890VirtualHead.position.z);
                 if(IsFo3LoadingVisible())ResetFo3Pipboy();
-                if(!Fo3ResidentFrameBlocked()) {
+                if(!Fo3GameplayBlocked()) {
                     // Q24.0 local DOOR state advances once per gameplay frame, not per eye.
                     UpdateFo3InteriorDoorsQ2400();
                     UpdateDoorAimQ1700(gameplaySeconds);
@@ -1755,16 +1778,17 @@ private:
                 gStereoReflectionEye[2]=centrePose.position.z;
                 gStereoMvpReady = true;
                 QActorPrepareStereoFrame();
+                if(gFo3PauseOpen)fo3pauseui::Prepare(gFo3PauseMenu);
                 if(auto* player=GetFo3PlayerSession())fo3pipui::Render(gPipMenu,player->player,Fo3PipboyFocus());
                 if(gStereoFrame%180==0){FQ_LOGI("PIPBOY UI: tab=%d page=%d rows=%zu revision=%llu redraws=%u",int(gPipMenu.tab),gPipMenu.page,gPipMenu.rows.size(),(unsigned long long)gPipMenu.revision,fo3pipui::State().redraws);
                     FQ_LOGI("PIPBOY PERF: PipBoyUpdateUs=%.1f PipBoyUiRenderUs=%.1f PipBoyScreenDrawUs=%.1f glDriverQueries=%llu (guarded UI/screen paths)",gPipUpdateUs,fo3pipui::State().renderUs,gPipScreenDrawUs,(unsigned long long)(fo3pipui::State().renderQueries+gPipScreenQueries));}
                 gPipScreenDrawUs=0;gPipScreenQueries=0;
                 notificationHead_=ToVirtualPose(loadingHead);
-                const bool notificationAvailable=!Fo3ResidentFrameBlocked() && gSceneReady && !IsFo3LoadingVisible() && !Fo3DialogueFocus() && !Fo3ScriptMessageFocus() && !Fo3LevelUpFocus() && !Fo3PipboyFocus() && !Fo3LockpickFocus() && sessionState_==XR_SESSION_STATE_FOCUSED;
+                const bool notificationAvailable=!Fo3GameplayBlocked() && gSceneReady && !IsFo3LoadingVisible() && !Fo3DialogueFocus() && !Fo3ScriptMessageFocus() && !Fo3LevelUpFocus() && !Fo3PipboyFocus() && !Fo3LockpickFocus() && sessionState_==XR_SESSION_STATE_FOCUSED;
                 // Retain the canonical once-per-logical-frame item notification
                 // preparation call; authored scene tests also enforce this boundary.
-                if(!Fo3ResidentFrameBlocked())fo3notifyui::Prepare(gameplaySeconds,notificationAvailable,gSceneReady);
-                if(!Fo3ResidentFrameBlocked()) {
+                if(!Fo3GameplayBlocked())fo3notifyui::Prepare(gameplaySeconds,notificationAvailable,gSceneReady);
+                if(!Fo3GameplayBlocked()) {
                     // Texture uploads and pointer motion happen before stereo eyes.
                     if(notificationAvailable)fo3xpui::Prepare();
                     if(Fo3LevelUpFocus())
@@ -2067,6 +2091,14 @@ private:
                 glBindFramebuffer(GL_FRAMEBUFFER, framebuffer_);
             }
             rendered = true;
+            if(gFo3PauseOpen&&!IsFo3LoadingVisible()) {
+                const float yaw=gQ210Head[3];Mat4 model{};
+                model.m[0]=std::cos(yaw);model.m[2]=-std::sin(yaw);model.m[5]=1;
+                model.m[8]=std::sin(yaw);model.m[10]=std::cos(yaw);
+                model.m[12]=gQ210Head[0]-std::sin(yaw)*1.5f;
+                model.m[13]=gQ210Head[1];model.m[14]=gQ210Head[2]-std::cos(yaw)*1.5f;model.m[15]=1;
+                const auto pauseMvp=Multiply(viewProjection,model);fo3pauseui::Render(pauseMvp.m);
+            }
             if (IsFo3LoadingVisible()) {
                 const Mat4 loadingVp=Multiply(projection,ViewFromPose(view.pose));
                 RenderFo3LoadingVr(framebuffer_, eye.width, eye.height, loadingVp.m, eyeIndex == 0);
@@ -2118,6 +2150,7 @@ private:
     XrAction moveYAction_{XR_NULL_HANDLE};
     XrAction turnXAction_{XR_NULL_HANDLE};
     XrAction activateAction_{XR_NULL_HANDLE};
+    XrAction pauseAction_=XR_NULL_HANDLE;
     XrAction pipBackAction_{XR_NULL_HANDLE};
     bool pipBackDown_=false,pipLeftGripTracked_=false,pipLeftAimTracked_=false;
     XrAction lootScrollAction_{XR_NULL_HANDLE};

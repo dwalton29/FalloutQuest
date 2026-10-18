@@ -1,6 +1,7 @@
 #include "fo3-player-state.h"
 #include "player/fo3-levelup-rules.h"
 #include "data/fo3-esm-reader.h"
+#include "npc/fo3-package-schedule.h"
 #include <algorithm>
 #include <cmath>
 namespace fo3player {
@@ -149,7 +150,7 @@ bool Player::FinishQuest(uint32_t id, fo3pipdata::Completion status) {
   ++revision_;
   return true;
 }
-bool Player::RewardExperience(uint32_t amount) {
+bool Player::PreviewExperienceAward(uint32_t amount,uint32_t& earned) const {
   float reward=float(amount);
   struct Entry {uint32_t perk;size_t index;const fo3pipdata::PerkEffect* effect;};
   std::vector<Entry> effects;
@@ -170,7 +171,11 @@ bool Player::RewardExperience(uint32_t amount) {
     switch(e.function){case 1:reward=value;break;case 2:reward+=value;break;case 3:reward*=value;break;default:return false;}
   }
   if(!std::isfinite(reward)||reward<0||double(reward)>UINT32_MAX-state_.experience)return false;
-  const auto earned=uint32_t(reward);
+  earned=uint32_t(reward);return true;
+}
+bool Player::RewardExperience(uint32_t amount) {
+  uint32_t earned=0;
+  if(!PreviewExperienceAward(amount,earned))return false;
   if(earned){
     const auto before=ExperienceProgress();
     state_.experience+=earned;
@@ -333,3 +338,57 @@ bool Player::Use(uint64_t id) {
   return true;
 }
 } // namespace fo3player
+
+namespace fo3player {
+bool Player::DebugReachNextLevel() {
+  const auto p=ExperienceProgress();
+  if(p.level>=p.maxLevel||p.ready)return false;
+  const uint32_t needed=p.nextThreshold-p.earned;
+  uint32_t lo=1,hi=UINT32_MAX,earned=0;
+  // Invalid high awards overflow canonical XP. They bound the upper search
+  // just as an award larger than the deficit does; no trial mutates Player.
+  while(lo<hi){const auto mid=lo+(hi-lo)/2;
+    if(!PreviewExperienceAward(mid,earned)||earned>=needed)hi=mid;
+    else lo=mid+1;
+  }
+  return PreviewExperienceAward(lo,earned)&&earned>=needed&&RewardExperience(lo);
+}
+bool Player::DebugSetTime(int hour,int minute) {
+  if(hour<0||hour>23||minute<0||minute>59)return false;
+  const float target=float(hour)+float(minute)/60.f;
+  auto next=state_;
+  // Select the next occurrence, retaining the current date at equal time.
+  if(target<state_.gameHour){
+    if(next.gameDaysPassed==UINT32_MAX)return false;
+    ++next.gameDaysPassed;
+    if(++next.gameDay>uint32_t(fo3schedule::Days(int(next.gameYear),int(next.gameMonth)))){
+      next.gameDay=1;if(++next.gameMonth==12){next.gameMonth=0;++next.gameYear;}
+    }
+    if(next.gameYear>9999)return false;
+  }
+  next.gameHour=target;
+  state_=std::move(next);++revision_;return true;
+}
+bool Player::DebugSetPerkPoints(int points) {
+  if(points<0||points>1000)return false;
+  if(state_.debugPerkPoints!=points){state_.debugPerkPoints=uint16_t(points);++revision_;}
+  return true;
+}
+bool Player::DebugSetPerkRank(uint32_t id,int rank) {
+  const auto p=catalog_->pipboy.perks.find(id);
+  if(p==catalog_->pipboy.perks.end()||rank<0||rank>p->second.ranks)return false;
+  const auto owned=state_.pipboy.perks.find(id);
+  const int old=owned==state_.pipboy.perks.end()?0:owned->second;
+  if(old==rank)return true;
+  // Debug bypasses level/prerequisites, never invents unimplemented effects.
+  // Intense Training changes SPECIAL via its normal allocation UI. Editing
+  // that acquired rank alone cannot reconstruct which attribute it changed.
+  const auto intense=catalog_->pipboy.formNames.find("intensetraining");
+  if(rank>old&&(!p->second.playable||p->second.hidden||!LevelUpPerkSupported(id)||
+      (intense!=catalog_->pipboy.formNames.end()&&id==intense->second)))return false;
+  const int points=int(state_.debugPerkPoints)+old-rank;
+  if(points<0||points>1000)return false;
+  if(rank)state_.pipboy.perks[id]=uint8_t(rank);else state_.pipboy.perks.erase(id);
+  state_.debugPerkPoints=uint16_t(points);++revision_;return true;
+}
+}

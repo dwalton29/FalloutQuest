@@ -183,6 +183,7 @@ struct State {
   float gameHour = 12.0f;
   uint32_t gameDaysPassed = 0;
   uint32_t gameYear=2277,gameMonth=7,gameDay=17; // Original GLOB default: 17 August 2277 (GameMonth 0-based).
+  uint16_t debugPerkPoints=0; // Development selection budget; saved only when nonzero.
   uint32_t experience=0; // Canonical earned XP; level-up allocation remains a separate subsystem.
   std::unordered_map<uint32_t,LockOverride> locks;
   // Staged world state. Script Enable/Disable stays unavailable until scene
@@ -445,6 +446,11 @@ public:
   bool SetQuestObject(uint32_t form,bool quest);
   bool RewardKarma(float amount);
   bool RewardExperience(uint32_t amount);
+  bool PreviewExperienceAward(uint32_t amount,uint32_t& earned) const;
+  bool DebugReachNextLevel();
+  bool DebugSetTime(int hour,int minute);
+  bool DebugSetPerkPoints(int points);
+  bool DebugSetPerkRank(uint32_t perk,int rank);
   bool CompleteAllObjectives(uint32_t quest);
   bool SetCellFullName(uint32_t cell,uint32_t message);
   std::string CellFullName(uint32_t cell) const;

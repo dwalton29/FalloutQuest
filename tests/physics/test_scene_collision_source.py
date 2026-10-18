@@ -352,12 +352,12 @@ assert flush.index('Fo3ResidentFrameBlocked()') < flush.index('WeaponPersistWorl
 assert flush.index('gPlayerSession->saveBlocked') < flush.index('WeaponPersistWorld()')
 assert 'gFo3ResidentSavePending=true;return;' in flush and 'FlushFo3DeferredPlayerState()' in flush
 actor_frame=s[s.index('void QActorPrepareStereoFrame() {'):]
-assert actor_frame.index('Fo3ResidentFrameBlocked()') < actor_frame.index('Q230SimulateActor(')
+assert actor_frame.index('Fo3GameplayBlocked()') < actor_frame.index('Q230SimulateActor(')
 loose=s[s.index('void Q221UpdateLooseObjectsFromSolvedPalms('):s.index('std::string Q211Lower(')]
-assert loose.index('Fo3ResidentFrameBlocked()') < loose.index('Q223AdvanceDynamicBodies()')
+assert loose.index('Fo3GameplayBlocked()') < loose.index('Q223AdvanceDynamicBodies()')
 loop=Path('app/src/main/cpp/core/fo3-runtime-loop.inc').read_text()
-assert 'if (!Fo3ResidentFrameBlocked() && gPlayerSession' in loop
-assert 'if (!Fo3ResidentFrameBlocked() && !IsFo3LoadingVisible())' in loop
+assert 'if (!Fo3GameplayBlocked() && gPlayerSession' in loop
+assert 'if (!Fo3GameplayBlocked() && !IsFo3LoadingVisible())' in loop
 # Check actual block nesting so a later misplaced brace cannot silently ungate
 # a UI, physics, script or activation call. Preparation and tracking stay live.
 def guarded(call):
@@ -367,7 +367,7 @@ def guarded(call):
         for ch in line:
             if ch=='{': stack.append(line)
             elif ch=='}' and stack: stack.pop()
-    return any('if(!Fo3ResidentFrameBlocked())' in line for line in stack)
+    return any('if(!Fo3GameplayBlocked())' in line for line in stack)
 for call in ('UpdateFo3Pipboy(gStereoFrame,','UpdateFo3Lockpick(gameplaySeconds',
              'UpdateFo3ScriptMessage(gameplaySeconds','UpdateFo3Dialogue(gameplaySeconds',
              'WeaponUpdate(gameplaySeconds','DeliverFo3ScriptSounds();',
@@ -377,7 +377,8 @@ for call in ('UpdateFo3Pipboy(gStereoFrame,','UpdateFo3Lockpick(gameplaySeconds'
 for call in ('UpdateFo3ExteriorStreamingQ1890(q1890VirtualHead.',
              'SetFo3PlayerBodyTrackingQ210(','FlushFo3DeferredPlayerState();'):
     assert not guarded(call), call
-assert 'residentInputBarrier_.Allow(Fo3ResidentFrameBlocked(),neutral)' in loop
+assert 'residentInputBarrier_.Allow(Fo3GameplayBlocked(),neutral)' in loop
+assert 'return gFo3PauseOpen||gFo3FocusPaused||Fo3ResidentFrameBlocked();' in s
 assert 'residentInputBarrier_.Allow(true,false)' in loop
 assert loop.index('previousWorldClockNs=clockNs;') > loop.index('scriptPlayer.PumpWorldAwareGameMode(scriptResidenceElapsed,scriptedResidents,')
 assert 'BeginFo3ResidentPreparedWorkflow({},std::move(plan))' in loop
@@ -454,7 +455,7 @@ print('Settled finalization validates epochs/canonical owners, reconciles privat
 
 # Absolute deadlines and animation sampling must share pause-aware domains.
 time_bridge=Path('app/src/main/cpp/world/fo3-resident-time-runtime.inc').read_text()
-assert 'Fo3ResidentFrameBlocked()' in time_bridge
+assert 'Fo3GameplayBlocked()' in time_bridge
 assert 'gFo3ResidentSteadyClock.Pause();gFo3ResidentXrClock.Pause();' in time_bridge
 frame=loop[loop.index('void RenderFrame() {'):]
 assert frame.index('PumpFo3ResidentWorkflow(') < frame.index('Fo3GameplayXrTime(') < frame.index('if (frameState.shouldRender)')
@@ -465,8 +466,8 @@ assert 'locateInfo.displayTime = frameState.predictedDisplayTime' in frame
 assert 'SyncInput(frameState.predictedDisplayTime)' in frame
 assert 'endInfo.displayTime = frameState.predictedDisplayTime' in frame
 assert 'static_cast<double>(frameState.predictedDisplayTime)*1e-9' not in frame
-assert 'if(!Fo3ResidentFrameBlocked())fo3notifyui::Prepare(gameplaySeconds' in frame
-assert 'notificationAvailable=!Fo3ResidentFrameBlocked()' in frame
+assert 'if(!Fo3GameplayBlocked())fo3notifyui::Prepare(gameplaySeconds' in frame
+assert 'notificationAvailable=!Fo3GameplayBlocked()' in frame
 for start,end in [
     ('void UpdateFo3InteriorDoorsQ2400()', 'bool QueryDoorInternalQ1700('),
     ('void Q223SampleHeldMotion(', 'void Q223AdvanceDynamicBodies()'),
@@ -678,3 +679,9 @@ assert 'r.location.type=="FLST"&&Is(t,"LNAM")' in second
 assert 'if(n!=4){malformed("FLST LNAM");return;}' in second
 assert 'target(fo3esm::ReadU32(p),"FLST LNAM")' in second
 print('Original FLST leaf membership blocks potential list indirection without graph traversal or provenance exemptions')
+
+# Session STOPPING can omit all rendered frames until focus is restored.
+xr_events=loop[loop.index('    void ProcessXrEvents() {'):loop.index('    float ReadFloatAction(')]
+assert 'PauseFo3ResidentGameplayTime();gFo3FocusPaused=true;' in xr_events
+assert 'gFo3PauseMenu.Close();gFo3PauseOpen=false;' in xr_events
+assert 'residentInputBarrier_.Allow(true,false);gFo3GameplayInputSuppressed=true;' in xr_events

@@ -75,6 +75,7 @@ extern void PumpFo3AndroidEventsQ1860();
 #include "fo3-actor-animation.h"
 #include "player/fo3-player-state.h"
 #include "player/fo3-development-clock.h"
+#include "ui/pause/fo3-debug-menu.h"
 #include "audio/fo3-audio.h"
 #include "world/interaction/fo3-interaction.h"
 #include "world/interaction/fo3-interaction-ray.h"
@@ -134,6 +135,8 @@ fo3scene::ResidentInteractionHazard Fo3ResidentInteractionHazard(uint32_t refere
 bool Fo3ResidentInteractionAdmissionCurrent() noexcept;
 bool Fo3ResidentAssetLaneBlocked();
 bool Fo3ResidentFrameBlocked();
+bool gFo3PauseOpen=false,gFo3FocusPaused=false,gFo3GameplayInputSuppressed=false;
+bool Fo3GameplayBlocked(){return gFo3PauseOpen||gFo3FocusPaused||Fo3ResidentFrameBlocked();}
 bool Fo3ResidentLegacyStreamActive();
 fo3scene::ResidentAssetActivity CaptureFo3ResidentAssetActivity();
 void ResetFo3ResidentPreparationLane();
@@ -9878,7 +9881,7 @@ void Q221UpdateLooseObjectsFromSolvedPalms(
         Vec3 leftPalmWorld,
         bool rightPalmValid,
         Vec3 rightPalmWorld) {
-    if(Fo3ResidentFrameBlocked())return;
+    if(Fo3GameplayBlocked()||gFo3GameplayInputSuppressed)return;
     Q223AdvanceDynamicBodies();
     Q220UpdateLooseGrab(
         0, leftPalmValid,
@@ -12170,7 +12173,7 @@ void Q230PumpNpcArrivals(){
 void QActorPrepareStereoFrame() {
     // Keep the last NPC poses. No AI, package events, persistence or unloaded
     // actor scheduling may mutate the canonical candidate's source state.
-    if(Fo3ResidentFrameBlocked()){PrepareFo3InteriorSceneLights();return;}
+    if(Fo3GameplayBlocked()){PrepareFo3InteriorSceneLights();return;}
     const auto started=fqopaque::Clock::now();
     fqactor::npc={}; // Player pose has already been prepared before UI/world input.
     const auto setupStarted=fqopaque::Clock::now();
@@ -14112,6 +14115,7 @@ fo3player::Session* GetFo3PlayerSession() { return gPlayerSession.get(); }
 #include "ui/lockpick/fo3-lockpick-runtime.inc"
 #include "world/interaction/fo3-interaction-runtime.inc"
 #include "world/interaction/fo3-levelup-runtime.inc"
+#include "ui/pause/fo3-pause-runtime.inc"
 
 void SetFo3PlayerBodyTrackingQ210(
         float headX, float headY, float headZ, float headYaw,
