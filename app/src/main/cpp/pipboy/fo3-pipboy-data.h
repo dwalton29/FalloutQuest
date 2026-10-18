@@ -213,7 +213,11 @@ struct RadiationStage {
 };
 struct FurnitureDefinition { std::string model,editor; uint32_t markers=0; bool valid=false; };
 struct IdleMarkerDefinition { uint8_t flags=0; float timer=0; bool valid=false; std::vector<uint32_t> animations; };
+struct SkillPresentation { std::string name,description,icon; };
 struct Definitions {
+  // Original AVIF skill descriptions and ICON paths, indexed by player
+  // actor-value skill slot 32..45, including the unused slot at 44.
+  std::array<SkillPresentation,14> skills{};
   std::unordered_map<uint32_t,IdleMarkerDefinition> idleMarkers;
   std::unordered_map<uint32_t,std::vector<Condition>> idleConditions;
   std::unordered_map<uint32_t,uint32_t> idleParents;
