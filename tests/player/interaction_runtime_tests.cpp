@@ -109,7 +109,7 @@ bool barterFocus=false;
 bool Fo3BarterFocus(){return barterFocus;}
 bool BeginFo3Lockpick(uint32_t){return false;}
 bool exchangeRecoveryFailed=false;
-bool frameReserved=false;
+bool frameReserved=false,forcePendingActivation=false;
 bool Fo3ResidentFrameBlocked(){return frameReserved||exchangeRecoveryFailed;}
 // The interaction host harness does not instantiate Android's GL/EGL resident
 // owner. Preserve the legacy synchronous event behaviour for non-world tests;
@@ -117,6 +117,9 @@ bool Fo3ResidentFrameBlocked(){return frameReserved||exchangeRecoveryFailed;}
 fo3player::ScriptEventResult DispatchFo3ScriptedActivation(
         uint32_t ref,uint32_t activator,std::string& error) {
     if(!gPlayerSession){error="Player unavailable";return fo3player::ScriptEventResult::Unsupported;}
+    // The real native bridge reserves an asynchronous scene owner. The host
+    // harness can model Pending without claiming an immediate script commit.
+    if(forcePendingActivation)return fo3player::ScriptEventResult::Pending;
     return gPlayerSession->player.DispatchReferenceEvent(ref,"OnActivate",activator,error);
 }
 #include "world/interaction/fo3-interaction-runtime.inc"
@@ -399,7 +402,15 @@ int main() {
     gPlayerSession=std::make_unique<fo3player::Session>(scripted);
     gQ230NpcActors.clear();gObjects={GpuObject{}};gObjects[0].baseRecordType="ACTI";
     occluded=true;Check(!ActivateFo3Interaction(0,0,0,0,0,-1)&&gPlayerSession->player.PendingScriptMessageCount()==0,"occlusion prevents scripted activation");
-    occluded=false;Check(!ActivateFo3Interaction(0,0,0,0,0,-1)&&gPlayerSession->player.PendingScriptMessageCount()==1,"ACTI queues authored menu without door transition");
+    occluded=false;
+    forcePendingActivation=true;
+    const auto pendingFlushes=flushes;
+    Check(!ActivateFo3Interaction(0,0,0,0,0,-1)&&
+          gPlayerSession->player.PendingScriptMessageCount()==0&&
+          flushes==pendingFlushes,
+          "pending ACTI is not reported or saved as successfully executed");
+    forcePendingActivation=false;
+    Check(!ActivateFo3Interaction(0,0,0,0,0,-1)&&gPlayerSession->player.PendingScriptMessageCount()==1,"ACTI queues authored menu without door transition");
     UpdateFo3ScriptMessage(100,0,true,false,true);Check(Fo3ScriptMessageFocus(),"message acquires focus");
     UpdateFo3ScriptMessage(101,0,true,false,true);Check(Fo3ScriptMessageFocus(),"held opening A does not select");
     gPlayerSession->player.PumpReferenceGameMode(.25,{10});Check(gPlayerSession->player.Snapshot().karma==0,"opening press delivers no menu button");
