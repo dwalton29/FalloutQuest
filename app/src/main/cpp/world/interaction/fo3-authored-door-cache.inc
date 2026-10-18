@@ -209,6 +209,11 @@ const std::vector<Anchor>& AnchorsForCell(uint32_t cellFormId) {
 
 } // namespace Q1730Door
 
+bool HasFo3AuthoredDoorAnchorsCachedQ2190(uint32_t cellFormId) {
+    const auto cached=Q1730Door::gCellCaches.find(cellFormId);
+    return cached!=Q1730Door::gCellCaches.end()&&cached->second.attempted;
+}
+
 bool PrepareFo3AuthoredDoorAnchorsQ2190(uint32_t cellFormId,
     Fo3AuthoredDoorCpuCache& out, const std::atomic<bool>& cancel) {
     return Q1730Door::PrepareWorker(cellFormId,out,cancel);
