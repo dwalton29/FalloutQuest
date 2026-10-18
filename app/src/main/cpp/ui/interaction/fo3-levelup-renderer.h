@@ -11,7 +11,7 @@
 
 namespace fo3levelui {
 struct Resources {
-    GLuint vao=0,vbo=0,solid=0,illustration=0;
+    GLuint vao=0,vbo=0,solid=0,background=0,illustration=0;
     std::string loadedIcon;
     uint64_t revision=UINT64_MAX;
     GLsizei bgCount=0,linesCount=0,highlightCount=0,textCount=0,iconCount=0;
@@ -24,6 +24,7 @@ inline void Shutdown(){
     if(r.vbo)glDeleteBuffers(1,&r.vbo);
     if(r.vao)glDeleteVertexArrays(1,&r.vao);
     if(r.solid)glDeleteTextures(1,&r.solid);
+    if(r.background)glDeleteTextures(1,&r.background);
     if(r.illustration)glDeleteTextures(1,&r.illustration);
     r={};
 }
@@ -44,6 +45,11 @@ inline void Prepare(const fo3dialogue::Panel& p,const std::string& iconPath){
         glGenBuffers(1,&r.vbo);
         const uint8_t white[]{255,255,255,255};
         r.solid=fo3hudassets::UploadTexture(1,1,white);
+        Fo3RgbaTexture black;
+        if(LoadFalloutTextureRgba(
+            "Textures\\Interface\\Shared\\Background\\solid_black.dds",black))
+            r.background=fo3hudassets::UploadTexture(
+                black.width,black.height,black.rgba.data());
     }
     if(!r.vao||!r.vbo||!r.solid)return;
     if(r.loadedIcon!=iconPath){
@@ -152,9 +158,11 @@ inline void Render(const float* mvp,const fo3dialogue::Panel& panel){
     glUniformMatrix4fv(font.mvpLoc,1,GL_FALSE,mvp);
     glUniform1i(font.texLoc,0);
     glActiveTexture(GL_TEXTURE0);glBindVertexArray(r.vao);
-    glBindTexture(GL_TEXTURE_2D,r.solid);
-    glUniform4f(font.tintLoc,.008f,.017f,.011f,.94f);
+    glBindTexture(GL_TEXTURE_2D,r.background?r.background:r.solid);
+    glUniform4f(font.tintLoc,r.background?1.f:.008f,
+        r.background?1.f:.017f,r.background?1.f:.011f,.94f);
     glDrawArrays(GL_TRIANGLES,0,r.bgCount);
+    glBindTexture(GL_TEXTURE_2D,r.solid);
     glUniform4f(font.tintLoc,26.f/255,1.f,128.f/255,.8f);
     glDrawArrays(GL_TRIANGLES,r.bgCount,r.linesCount);
     if(r.highlightCount){
