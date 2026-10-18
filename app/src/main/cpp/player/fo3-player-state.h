@@ -159,7 +159,12 @@ struct ActorState {
 enum class QuestNoticeKind : uint8_t { Added, Updated, Completed };
 struct ScriptItemNotice {uint32_t form=0;int32_t count=0;};
 struct QuestNotice { uint32_t quest=0; QuestNoticeKind kind=QuestNoticeKind::Updated; };
-struct ExperienceNotice { uint32_t amount=0,total=0; bool levelUp=false; };
+struct ExperienceNotice {
+  uint32_t amount=0,total=0;
+  bool levelUp=false;
+  uint16_t committedLevel=1;
+  uint32_t thresholdStart=0,thresholdEnd=200;
+};
 struct ScriptMessage {
   uint32_t form=0, owner=0;
   std::string title,text;
