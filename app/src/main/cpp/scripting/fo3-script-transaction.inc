@@ -8,8 +8,8 @@ Player::Player(const Player& source,ScriptCandidateTag)
       scriptPlayerCell_(source.scriptPlayerCell_),scriptPlayerWorld_(source.scriptPlayerWorld_),
       scriptPlayerPosition_(source.scriptPlayerPosition_),scriptPlayerPositionKnown_(source.scriptPlayerPositionKnown_),
       scriptEffectRevision_(source.scriptEffectRevision_),scriptButtons_(source.scriptButtons_),
-      pendingScriptMessages_(source.pendingScriptMessages_),pendingQuestNotices_(source.pendingQuestNotices_),pendingScriptItems_(source.pendingScriptItems_),
-      pendingExperienceNotices_(source.pendingExperienceNotices_),
+      pendingScriptMessages_(source.pendingScriptMessages_),pendingQuestNotices_(source.pendingQuestNotices_),
+      pendingExperienceNotices_(source.pendingExperienceNotices_),pendingScriptItems_(source.pendingScriptItems_),
       pendingScriptSounds_(source.pendingScriptSounds_),pendingBarters_(source.pendingBarters_),pendingKarmaEvents_(source.pendingKarmaEvents_),
       pendingTheftEvents_(source.pendingTheftEvents_),containerInteraction_(source.containerInteraction_),
       containerKarmaCommitted_(source.containerKarmaCommitted_) {}
