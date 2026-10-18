@@ -104,6 +104,15 @@ void Decode(Definitions &d, const std::string &t, uint32_t id, uint32_t flags,
         d.skills[i]={Text(s,"FULL"),Text(s,"DESC"),Text(s,"ICON")};
         break;
       }
+    static constexpr std::array<const char*,7> specialEdids{
+      "AVStrength","AVPerception","AVEndurance","AVCharisma",
+      "AVIntelligence","AVAgility","AVLuck"
+    };
+    for(size_t i=0;i<specialEdids.size();++i)
+      if(editor==specialEdids[i]){
+        d.special[i]={Text(s,"FULL"),Text(s,"DESC"),Text(s,"ICON")};
+        break;
+      }
   }
   else if(t=="FLST") {for(auto& v:s)if(v.type=="LNAM"&&v.n==4)d.formLists[id].push_back(U(&v));}
   else if(t=="RACE"){auto voices=Find(s,"VTCK");if(voices&&voices->n>=8)d.raceVoices[id]={U(voices),U(voices,4)};auto data=Find(s,"DATA");if(data&&data->n==36&&(U(data,32)&4))d.childRaces.insert(id);}
