@@ -4109,12 +4109,18 @@ bool BeginFo3SceneLoad(const Fo3CellTransitionRequestQ74& request, bool boot) {
             if (Q74ShouldSkipPlacement(placement)) { ++result.skipped; continue; }
             std::vector<CpuObject> parts;
             const uint64_t parseStarted=fqloadprofile::NowUs();
-            const bool built=BuildCpuObjects(placement, parts);
+            if (!BuildCpuObjects(placement, parts)) {
+                const uint64_t parseUs=fqloadprofile::NowUs()-parseStarted;
+                if(parseUs>result.worstMeshParseUs) {
+                    result.worstMeshParseUs=parseUs;result.worstMeshPath=placement.modelPath;
+                }
+                ++result.unsupported;
+                continue;
+            }
             const uint64_t parseUs=fqloadprofile::NowUs()-parseStarted;
             if(parseUs>result.worstMeshParseUs) {
                 result.worstMeshParseUs=parseUs;result.worstMeshPath=placement.modelPath;
             }
-            if (!built) { ++result.unsupported; continue; }
             for (CpuObject& part : parts) {
                 if (result.request.worldspaceFormId != 0u)
                     result.collisionPlacements.push_back(part.placement);
