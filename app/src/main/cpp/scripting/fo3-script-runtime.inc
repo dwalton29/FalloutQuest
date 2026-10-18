@@ -602,6 +602,70 @@ bool Player::PollScriptSound(uint32_t& out){
   if(pendingScriptSounds_.empty())return false;
   out=pendingScriptSounds_.front();pendingScriptSounds_.erase(pendingScriptSounds_.begin());++scriptEffectRevision_;return true;
 }
+bool Player::PumpWorldAwareGameMode(double seconds,const std::vector<uint32_t>& resident,
+    const std::function<bool(std::unique_ptr<ScriptTransactionPlan>)>& reserveWorld) {
+  if(!std::isfinite(seconds)||seconds<=0||seconds>1||!reserveWorld)return false;
+  // One common cadence for source quest and placed-reference GameMode. Never
+  // tick again inside the same frame after reserving the resident world.
+  questScriptAccumulator_=std::min(.5,questScriptAccumulator_+seconds);
+  if(questScriptAccumulator_<.25)return false;
+  questScriptAccumulator_-=.25;
+  auto run=[&](uint32_t script,const char* event,uint32_t owner,bool reference)->bool {
+    std::string error;
+    // Capture the *same* original event that would be committed. An
+    // uncommitted candidate has no world, inventory or effect side effects.
+    auto plan=PrepareScriptTransaction([=](Player& candidate,std::string& e){
+      return candidate.RunSourceEventDirect(script,event,owner,0,e);
+    },error,true);
+    if(!plan){
+      // Some existing non-world scripts are source-supported but cannot
+      // capture the stricter resident provenance yet. Preserve their existing
+      // transactional gameplay path; it never publishes world changes.
+      if(RunSourceEvent(script,event,owner,0,error))return false;
+    }else if(!plan->HasReferenceChanges()){
+      if(CommitScriptTransaction(*plan))return false;
+      error="GameMode script transaction changed before publication";
+    }else {
+      if(reserveWorld(std::move(plan)))return true;
+      error="resident GameMode scene reservation unavailable";
+    }
+    if(reference&&scriptButtons_.erase(owner))++scriptEffectRevision_;
+    LogScriptEventError(script,event,error);
+    return false;
+  };
+  std::vector<uint32_t> quests;
+  for(const auto& q:catalog_->pipboy.quests) {
+    if(!q.second.script)continue;
+    const auto events=catalog_->eventPrograms.find(q.second.script);
+    if(events==catalog_->eventPrograms.end())continue;
+    bool gameMode=false;
+    for(const auto& b:events->second.blocks)if(b.event=="gamemode"){gameMode=true;break;}
+    if(!gameMode)continue;
+    const auto saved=state_.pipboy.quests.find(q.first);
+    if(saved!=state_.pipboy.quests.end()?saved->second.running:bool(q.second.flags&1))
+      quests.push_back(q.first);
+  }
+  std::sort(quests.begin(),quests.end());
+  for(const auto id:quests){
+    const auto q=catalog_->pipboy.quests.find(id);
+    if(q==catalog_->pipboy.quests.end())continue;
+    const auto saved=state_.pipboy.quests.find(id);
+    if(!(saved!=state_.pipboy.quests.end()?saved->second.running:bool(q->second.flags&1)))continue;
+    if(run(q->second.script,"GameMode",id,false))return true;
+  }
+  auto refs=resident;std::sort(refs.begin(),refs.end());
+  refs.erase(std::unique(refs.begin(),refs.end()),refs.end());
+  for(const auto id:refs){
+    if(!HasReferenceEvent(id,"GameMode"))continue;
+    const auto ref=catalog_->references.find(id);
+    if(ref==catalog_->references.end()||(ref->second.flags&0x20u))continue;
+    bool disabled=false;std::string error;
+    if(!ReferenceDisabled(id,disabled,error)||disabled)continue;
+    const auto script=catalog_->eventBaseScripts.at(ref->second.base);
+    if(run(script,"GameMode",id,true))return true;
+  }
+  return false;
+}
 void Player::PumpReferenceGameMode(double realSeconds,const std::vector<uint32_t>& resident){
   if(!std::isfinite(realSeconds)||realSeconds<=0||realSeconds>1)return;
   referenceScriptAccumulator_=std::min(.5,referenceScriptAccumulator_+realSeconds);

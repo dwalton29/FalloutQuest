@@ -155,6 +155,58 @@ static void BombMenuAndInventory() {
   assert(rejected.Snapshot().pipboy.dialogueVariables.empty()&&rejected.Revision()==previous);
 }
 
+static void WorldAwareGameMode() {
+  auto c=Catalog();
+  c.pipboy.quests[20].flags|=1u; // Start-game-enabled original quest semantics.
+  c.references[200].base=400;c.references[200].flags=0x800u;
+  c.pipboy.formNames["targetref"]=200;
+  c.pipboy.scripts[101].source="scn Q\\nBegin GameMode\\nTargetRef.Enable\\nEnd";
+  c.pipboy.scripts[102].source="scn NPC\\nBegin GameMode\\nTargetRef.Disable\\nEnd";
+  c.eventPrograms[101]=fo3script::ParseEvents(c.pipboy.scripts[101]);
+  c.eventPrograms[102]=fo3script::ParseEvents(c.pipboy.scripts[102]);
+  fo3player::Player p(std::move(c));std::string error;bool disabled=false;
+  const auto initial=p.Revision();
+  std::unique_ptr<fo3player::ScriptTransactionPlan> pending;
+  int reserved=0;
+  auto reserve=[&](std::unique_ptr<fo3player::ScriptTransactionPlan> plan){
+    ++reserved;pending=std::move(plan);return true;
+  };
+  assert(!p.PumpWorldAwareGameMode(.12,{100},reserve)&&reserved==0);
+  assert(p.Revision()==initial);
+  assert(p.PumpWorldAwareGameMode(.13,{100},reserve)&&reserved==1&&pending);
+  assert(pending->HasReferenceChanges()&&pending->HasProgramProvenance());
+  assert(pending->ExecutedScripts().size()==1);
+  assert(pending->ExecutedScripts()[0].origin.record==101);
+  assert(pending->ExecutedScripts()[0].owner==20);
+  assert(p.ReferenceDisabled(200,disabled,error)&&disabled);
+  assert(p.Revision()==initial); // Pending is not an early success.
+  assert(p.CommitScriptTransaction(*pending));
+  assert(p.ReferenceDisabled(200,disabled,error)&&!disabled);
+  pending.reset();
+  assert(p.PumpWorldAwareGameMode(.25,{100},reserve));
+  assert(reserved==2&&pending&&pending->ExecutedScripts().size()==1);
+  assert(pending->ExecutedScripts()[0].origin.record==102);
+  assert(pending->ExecutedScripts()[0].owner==100);
+  assert(p.ReferenceDisabled(200,disabled,error)&&!disabled);
+  assert(p.CommitScriptTransaction(*pending));
+  assert(p.ReferenceDisabled(200,disabled,error)&&disabled);
+  pending.reset();
+  // A refused resident reservation cannot publish any part of the script.
+  const auto revision=p.Revision();
+  auto reject=[](std::unique_ptr<fo3player::ScriptTransactionPlan>){return false;};
+  assert(!p.PumpWorldAwareGameMode(.25,{100},reject));
+  assert(p.Revision()==revision&&p.ReferenceDisabled(200,disabled,error)&&disabled);
+  // Non-world scripts commit in the same tick without a resident ticket.
+  auto normal=Catalog();normal.pipboy.quests[20].flags|=1u;
+  normal.pipboy.scripts[101].source="Begin GameMode\\nRewardKarma 4\\nEnd";
+  normal.eventPrograms[101]=fo3script::ParseEvents(normal.pipboy.scripts[101]);
+  normal.pipboy.scripts[102].source="Begin OnDeath\\nStartQuest ExampleQuest\\nEnd";
+  normal.eventPrograms[102]=fo3script::ParseEvents(normal.pipboy.scripts[102]);
+  fo3player::Player q(std::move(normal));int calls=0;
+  assert(!q.PumpWorldAwareGameMode(.25,{},[&](auto){++calls;return false;}));
+  assert(q.Snapshot().karma==4&&calls==0);
+  std::cout<<"World-aware GameMode gates original quest/reference world transactions without early publication\\n";
+}
 static void DisarmStagePersistence() {
   auto c=Catalog();
   c.pipboy.formNames["testcharge"]=400;
@@ -445,7 +497,7 @@ static void OriginalCompileInventory(const char* path,const char* report) {
            <<" command-compiled blocks; this is not execution coverage\n";
 }
 int main(int argc,char** argv){
-  Parsing();EnableParentQueries();PersistentReferenceState();Dispatch();UnsupportedIsAtomic();Filter();NumericLocalsAndRefSafety();BombMenuAndInventory();DisarmStagePersistence();NoticeTransactions();
+  Parsing();EnableParentQueries();PersistentReferenceState();Dispatch();UnsupportedIsAtomic();Filter();NumericLocalsAndRefSafety();BombMenuAndInventory();WorldAwareGameMode();DisarmStagePersistence();NoticeTransactions();
   if(argc>1)OriginalBomb(argv[1]);
   if(argc>2)OriginalCompileInventory(argv[1],argv[2]);
   std::cout<<"Original event source indexing, dispatch, scheduler and rollback passed\n";

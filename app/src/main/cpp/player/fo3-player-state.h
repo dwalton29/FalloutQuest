@@ -410,6 +410,12 @@ public:
   bool HasReferenceEvent(uint32_t reference,const char* event) const;
   void PumpQuestGameMode(double realSeconds);
   void PumpReferenceGameMode(double realSeconds,const std::vector<uint32_t>& resident);
+  // Native shared 4 Hz quest/reference scheduler. Only a reference-changing
+  // prepared plan is handed to the resident-world coordinator. The caller
+  // must own it until committed, rolled back or cancelled. Never run a second
+  // evaluation to capture provenance.
+  bool PumpWorldAwareGameMode(double realSeconds,const std::vector<uint32_t>& resident,
+      const std::function<bool(std::unique_ptr<ScriptTransactionPlan>)>& reserveWorld);
   void SetScriptPlayerLocation(float x,float y,float z,uint32_t cell,uint32_t world);
   bool ScriptDistance(float& distance) const;
   uint32_t ScriptActivator() const { return scriptActivator_; }

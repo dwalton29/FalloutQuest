@@ -1533,18 +1533,25 @@ private:
                         gSceneFloorZQ1730+(gQ210Head[1]-FLOOR_Y)*FO3_UNITS_PER_METRE_Q715,
                         gCurrentCellFormId,gExteriorWorldspaceQ1890);
                     const auto beforeScripts=scriptPlayer.Revision();
-                    scriptPlayer.PumpQuestGameMode(seconds);
-                    // Build the authored resident set only on the 4 Hz script
-                    // cadence; never scan scene meshes at the OpenXR frame rate.
+                    // Only inspect resident visual identities on the same
+                    // bounded 4 Hz cadence as the original source scheduler.
+                    // All supported base types can supply GameMode, not ACTI
+                    // alone; no quest-specific event dispatch is invented.
                     static double scriptResidenceElapsed=0;
                     scriptResidenceElapsed=std::min(.5,scriptResidenceElapsed+seconds);
                     if(scriptResidenceElapsed>=.25){
                         std::vector<uint32_t> scriptedResidents;
                         for(const auto& object:gObjects)
-                            if(object.baseRecordType=="ACTI" && object.refFormId &&
-                                scriptPlayer.HasReferenceEvent(object.refFormId,"GameMode"))
+                            if(object.refFormId&&scriptPlayer.HasReferenceEvent(object.refFormId,"GameMode"))
                                 scriptedResidents.push_back(object.refFormId);
-                        scriptPlayer.PumpReferenceGameMode(scriptResidenceElapsed,scriptedResidents);
+                        scriptPlayer.PumpWorldAwareGameMode(scriptResidenceElapsed,scriptedResidents,
+                            [&](std::unique_ptr<fo3player::ScriptTransactionPlan> plan){
+                                const auto ticket=BeginFo3ResidentPreparedWorkflow({},std::move(plan));
+                                if(!ticket)return false;
+                                gFo3ResidentGameplayTicket=ticket;
+                                FlushFo3PlayerState(); // Save is deferred under scene reservation.
+                                return true;
+                            });
                         scriptResidenceElapsed=0;
                     }
                     if(beforeScripts!=scriptPlayer.Revision())FlushFo3PlayerState();
