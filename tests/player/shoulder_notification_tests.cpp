@@ -43,6 +43,12 @@ int main() {
     assert(q.Size()==Queue::Capacity && std::strcmp(q.Text(),"24")==0);
     q.Advance(151);assert(q.Size()==0); // bounded backlog expires after suspension
     q.Enqueue("clear on transition");q.Clear();assert(q.Size()==0);
+    q.Advance(198);
+    q.EnqueueExperience("+300 XP\nLEVEL UP","UILevelUp");
+    assert(std::strcmp(q.Text(),"+300 XP\nLEVEL UP")==0);
+    assert(!q.Quest()&&q.TakeSound()=="UILevelUp"&&q.TakeSound().empty());
+    q.Advance(200.5);assert(q.Size()==0);
+
     q.Advance(200);q.EnqueueQuest("Quest added\nAuthored title","UIPopUpQuestNew");
     assert(q.Quest()&&q.Alpha()==0&&q.TakeSound()=="UIPopUpQuestNew");
     assert(q.TakeSound().empty());q.Advance(201);assert(q.Alpha()==.5f);
