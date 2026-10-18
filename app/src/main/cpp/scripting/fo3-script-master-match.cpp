@@ -36,7 +36,8 @@ bool Same(const Execution& a,const Execution& b) noexcept {
     a.activator==b.activator&&a.localScript==b.localScript&&a.parent==b.parent&&
     a.reference==b.reference&&Same(a.program,b.program)&&Same(a.container,b.container)&&
     a.owningQuest==b.owningQuest&&Same(a.conditions,b.conditions)&&Same(a.questConditions,b.questConditions)&&
-    a.localVariables==b.localVariables&&a.commandForms==b.commandForms&&a.expressionForms==b.expressionForms;
+    a.localVariables==b.localVariables&&a.commandForms==b.commandForms&&a.expressionForms==b.expressionForms&&
+    a.commandVariables==b.commandVariables&&a.expressionVariables==b.expressionVariables;
 }
 bool Contexts(const std::vector<Execution>& programs){
   std::array<size_t,32> active{};size_t depth=0;
@@ -193,11 +194,14 @@ bool MatchScriptProgramsToMaster(const std::string& master,const std::vector<Exe
   std::unordered_map<uint32_t,std::vector<size_t>> wanted,owners,bases;
   std::unordered_map<uint32_t,std::vector<std::string>> forms;
   std::unordered_map<std::string,uint32_t> formNames;
+  using Variable=fo3player::ScriptVariableBinding;
+  std::unordered_map<uint32_t,std::vector<const Variable*>> variableOwners,variableBases,variableScripts;
   for(size_t n=0;n<programs.size();++n){
     const auto& e=programs[n];
     if(!ChargeScriptEvidence(e.origin.event,e.program,&e.container,evidenceBytes,&e.conditions,&e.questConditions)||
         !ChargeScriptLocals(e.localVariables,evidenceBytes)||!ChargeScriptForms(e.commandForms,evidenceBytes)||
-        !ChargeScriptForms(e.expressionForms,evidenceBytes))
+        !ChargeScriptForms(e.expressionForms,evidenceBytes)||!ChargeScriptVariables(e.commandVariables,evidenceBytes)||
+        !ChargeScriptVariables(e.expressionVariables,evidenceBytes))
       return fail("script master evidence byte limit exceeded");
     if(!Type(programs[n]))return fail("unbound or malformed script origin");
     if(!CompleteScriptLocalRecords(e.container))return fail("malformed local records");
@@ -211,6 +215,19 @@ bool MatchScriptProgramsToMaster(const std::string& master,const std::vector<Exe
       if(!named.second&&named.first->second!=binding.first)return fail("conflicting script form name bindings");
       forms[binding.first].push_back(binding.second);
     }
+    for(const auto* bindings:{&e.commandVariables,&e.expressionVariables})for(const auto& binding:*bindings){
+      if(!binding.owner||!binding.script||(binding.quest?bool(binding.base):!binding.base)||
+          binding.ownerName.empty()||binding.variableName.empty()||Lower(binding.ownerName)!=binding.ownerName||
+          Lower(binding.variableName)!=binding.variableName||binding.ownerName.find('.')!=std::string::npos||
+          binding.ownerName.find('\0')!=std::string::npos||binding.variableName.find('\0')!=std::string::npos)
+        return fail("malformed qualified variable binding");
+      const auto named=formNames.emplace(binding.ownerName,binding.owner);
+      if(!named.second&&named.first->second!=binding.owner)return fail("conflicting script form name bindings");
+      forms[binding.owner].push_back(binding.ownerName);
+      variableOwners[binding.owner].push_back(&binding);
+      if(!binding.quest)variableBases[binding.base].push_back(&binding);
+      variableScripts[binding.script].push_back(&binding);
+    }
     wanted[programs[n].origin.record].push_back(n);
     if(e.origin.kind==Kind::ReferenceEvent||e.origin.kind==Kind::DialogueInfo)owners[e.owner].push_back(n);
   }
@@ -220,6 +237,8 @@ bool MatchScriptProgramsToMaster(const std::string& master,const std::vector<Exe
   const auto size=fo3esm::FileSize(file.get());if(size<24)return fail("invalid script master size");
   struct Group{uint64_t end;uint32_t label,type;};std::vector<Group> stack;
   std::unordered_map<uint32_t,bool> seen,formsSeen;std::vector<uint8_t> bytes;
+  std::unordered_map<uint32_t,std::string> variableOwnerTypes,variableBaseTypes;
+  std::unordered_map<uint32_t,bool> variableScriptsSeen;
   std::unordered_map<uint32_t,bool> ownersSeen,basesSeen;
   std::unordered_map<uint32_t,std::vector<size_t>> locals;
   std::unordered_map<uint32_t,bool> localsSeen;
@@ -271,6 +290,50 @@ bool MatchScriptProgramsToMaster(const std::string& master,const std::vector<Exe
       if(named!=formNames.end()&&named->second!=id)return fail("ambiguous script form name in master");
       if(formTarget)for(const auto& expected:forms.at(id))
         if(name!=expected)return fail("command form name differs from original master");
+    }
+    if(pass==0&&variableOwners.count(id)){
+      const std::string type(reinterpret_cast<const char*>(h),4);
+      if(!variableOwnerTypes.emplace(id,type).second)return fail("duplicate qualified variable owner");
+      if(recordFlags&0x20)return fail("deleted qualified variable owner");
+      for(const auto* binding:variableOwners.at(id))
+        if(binding->quest?type!="QUST":(type!="ACHR"&&type!="ACRE"))return fail("wrong-type qualified variable owner");
+      uint32_t association=0;const bool quest=variableOwners.at(id).front()->quest;
+      if(!fo3esm::ReadPayload(file.get(),{p+24,n,recordFlags,type},bytes)||
+          !Association(bytes,type,quest?"SCRI":"NAME",association))return fail("malformed qualified variable owner association");
+      for(const auto* binding:variableOwners.at(id))
+        if(association!=(binding->quest?binding->script:binding->base))return fail("qualified variable owner association differs");
+    }
+    if(pass==0&&variableBases.count(id)){
+      const std::string type(reinterpret_cast<const char*>(h),4);
+      if(!variableBaseTypes.emplace(id,type).second)return fail("duplicate qualified variable actor base");
+      if((recordFlags&0x20)||(type!="NPC_"&&type!="CREA"))return fail("deleted or wrong-type qualified variable actor base");
+      uint32_t script=0;
+      if(!fo3esm::ReadPayload(file.get(),{p+24,n,recordFlags,type},bytes)||!Association(bytes,type,"SCRI",script))
+        return fail("malformed qualified variable actor script association");
+      for(const auto* binding:variableBases.at(id))if(script!=binding->script)return fail("qualified variable actor script differs");
+    }
+    if(pass==0&&variableScripts.count(id)){
+      const std::string type(reinterpret_cast<const char*>(h),4);
+      if(!variableScriptsSeen.emplace(id,true).second)return fail("duplicate qualified variable script");
+      if((recordFlags&0x20)||type!="SCPT")return fail("deleted or wrong-type qualified variable script");
+      if(!fo3esm::ReadPayload(file.get(),{p+24,n,recordFlags,type},bytes)||!Complete(bytes,type))
+        return fail("malformed qualified variable script");
+      fo3pipdata::Definitions d;fo3pipdata::Decode(d,type,id,recordFlags,bytes,0,0,0);
+      const auto script=d.scripts.find(id);
+      std::vector<std::pair<std::string,unsigned>> declarations;
+      if(script==d.scripts.end()||!UnambiguousScriptLocals(script->second.variables)||
+          !ConsistentScriptLocalDeclarations(script->second.source,script->second.variables,&declarations))
+        return fail("ambiguous or inconsistent qualified variable declarations");
+      for(const auto* binding:variableScripts.at(id)){
+        if(cancel.load(std::memory_order_acquire))return fail("script master match cancelled");
+        const auto slot=script->second.variables.find(binding->index);
+        const auto declared=std::lower_bound(declarations.begin(),declarations.end(),binding->variableName,
+          [](const auto& entry,const std::string& name){return entry.first<name;});
+        if(slot==script->second.variables.end()||Lower(slot->second)!=binding->variableName||
+            binding->variableName.find('.')!=std::string::npos||declared==declarations.end()||
+            declared->first!=binding->variableName||declared->second!=1)
+          return fail("qualified variable numeric slot differs");
+      }
     }
     if(pass==0&&found!=wanted.end()){
       const std::string type(reinterpret_cast<const char*>(h),4);const auto flags=fo3esm::ReadU32(h+8);
@@ -370,6 +433,14 @@ bool MatchScriptProgramsToMaster(const std::string& master,const std::vector<Exe
   if(ownersSeen.size()!=owners.size()||basesSeen.size()!=bases.size())return fail("script owner association identity missing");
   if(questsSeen.size()!=requiredQuests.size())return fail("INFO owning quest identity missing");
   if(localsSeen.size()!=locals.size())return fail("local script identity missing");
+  if(variableOwnerTypes.size()!=variableOwners.size()||variableBaseTypes.size()!=variableBases.size()||
+      variableScriptsSeen.size()!=variableScripts.size())return fail("qualified variable identity missing");
+  for(const auto& entry:programs)for(const auto* bindings:{&entry.commandVariables,&entry.expressionVariables})
+    for(const auto& binding:*bindings)if(!binding.quest){
+      const auto& ownerType=variableOwnerTypes.at(binding.owner);const auto& baseType=variableBaseTypes.at(binding.base);
+      if((ownerType=="ACHR"&&baseType!="NPC_")||(ownerType=="ACRE"&&baseType!="CREA"))
+        return fail("qualified variable placement and base types differ");
+    }
   if(cancel.load(std::memory_order_acquire))return fail("script master match cancelled");
   ScriptMasterMatch next;next.programs_=programs;next.verified_=true;
   out=std::move(next);return true;

@@ -4,11 +4,10 @@
 
 - Starting canonical main: `2987d911f318b92d1041257868067851a09d16f0` (v208).
 - Resumed from published `6469dbb872889a79a0682501b75f6ac6577ab547`.
-- Current implementation checkpoint: M1B3ap bound-name namespace closure.
+- Current implementation checkpoint: M1B3aq qualified-variable binding chains.
   Use canonical main history for the publication SHA; the previous published
-  implementation is M1B3ao `c4cc1e0e2e096f7f37fbb7ba381b726e286228ae`.
-  Its Android CI was running at this checkpoint's initial recheck (run 39080442018).
-  M1B3an Android CI passed (run 39079810706).
+  implementation is M1B3ap `43e7c537c9fde5f8886f022e13c42a4229b9427b`.
+  Its Android CI passed (run 39080827516), as did M1B3ao (run 39080442018).
 - M1B3l Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38635385905.
 - M1B3m Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38793178567.
 - M1B3n Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38795209693.
@@ -1237,3 +1236,45 @@ implicit receivers, condition/read ownership, outcomes and call/event causality
 remain open. General resident Enable/Disable still awaits full ownership,
 bounded dispatch and device validation; version 212 is unchanged. See
 `world-reference-m1b3ap.md` for scope and reproducible audit instructions.
+
+## M1B3aq validation
+
+Successful named VariableKey resolutions now retain normalized owner/variable
+names, owner/script/index, quest-or-actor kind and actor base in separate ordered
+command/preflight vectors. The shared collector accounts form and variable
+values together before retaining names; final evidence charging includes all
+vectors under the same 16 MiB limit. The existing synthesized quest-qualified
+expression fallback is covered. Capture-off execution and float storage are
+unchanged, and the runtime expression pass supplies no sink.
+
+Original proof authenticates named QUST->direct SCRI->SCPT or ACHR/ACRE->NAME
+base->NPC_/CREA direct SCRI->SCPT chains, with exact numeric slot indexes/names.
+Owner prefixes join the all-class EDID collision proof. All IDs are known from
+the captured values, so no extra master pass is needed. Missing/deleted/duplicate/
+wrong-type records, associations, placement/base mismatches, malformed scripts
+and ambiguous/ref/unclassified slots reject atomically. Slot zero and complete
+repeated raw indexes remain legal. Numeric categories are classified once per
+script with the existing pre-Begin/comment policy, not reparsed per binding.
+Exact allocation/file-free report comparison includes every field and phase.
+
+All 53 core host tests, the actor test, five audit tests and source guards pass.
+Matcher/transaction fixtures pass ASan/UBSan (LeakSanitizer disabled), including
+quest/NPC/creature chains, zero slots, explicit/synthesized lookup, compression,
+XXXX, record order, shared/exact-fit/failing byte limits, pre-file failures,
+unchanged live state/effects and allocation-free commit/rollback. Original MS11
+stage/event/INFO evidence matches with the new fields; all 1,257 SCPTs still pass
+local policy. Lucas acceptance/production bridge, merchant barter and all three
+MS11 completion/reward/save-reload branches pass. Existing showmap diagnostics
+and the reverified supplied ESM SHA256 are unchanged. M1B3ap and ao Android CI
+passed (runs 39080827516 and 39080442018).
+
+Only supplied successful resolution chains are proven, not trace completeness,
+failed lookups, full catalog equivalence or runtime read values/outcomes.
+Indexed condition reads, bare NumericLocalKey, implicit receivers, template/
+alias resolution, arbitrary reference variable owners, integer coercion and
+call/event causality remain outside this addition. External decoded schemas,
+classification tables, collector capacity and worker indexes remain private
+preparation work outside retained-value accounting and whole-preparation/Quest
+timing claims. No dependency exemption or general resident caller is added.
+Full ownership, bounded dispatch and device validation still gate resident
+Enable/Disable; version 212 remains unchanged. See `world-reference-m1b3aq.md`.

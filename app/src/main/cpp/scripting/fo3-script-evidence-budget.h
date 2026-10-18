@@ -51,4 +51,17 @@ template<class Locals> inline bool ChargeScriptLocals(const Locals& locals,size_
 inline bool ChargeScriptForms(const std::vector<std::pair<uint32_t,std::string>>& forms,size_t& used) noexcept {
   return ChargeScriptLocals(forms,used);
 }
+inline bool ChargeScriptVariables(const std::vector<fo3player::ScriptVariableBinding>& variables,size_t& used) noexcept {
+  if(used>ScriptEvidenceMaxBytes)return false;
+  size_t remaining=ScriptEvidenceMaxBytes-used;
+  for(const auto& variable:variables){
+    if(sizeof(variable)>remaining)return false;
+    remaining-=sizeof(variable);
+    for(const auto* name:{&variable.ownerName,&variable.variableName}){
+      if(name->size()>=remaining)return false;
+      remaining-=name->size()+1;
+    }
+  }
+  used=ScriptEvidenceMaxBytes-remaining;return true;
+}
 }

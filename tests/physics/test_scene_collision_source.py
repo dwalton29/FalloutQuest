@@ -535,6 +535,9 @@ assert script_runtime.index('fo3script::ChargeScriptForms(')<script_runtime.inde
 assert 'expressionForms.limit=forms.limit-forms.used' in script_runtime
 assert 'scriptTrace_?&expressionForms:nullptr' in script_runtime
 assert script_runtime.index('fo3script::ChargeScriptForms(expressionForms.bindings,nextBytes)')<script_runtime.index('execution.expressionForms=std::move(expressionForms.bindings)')
+assert script_runtime.index('fo3script::ChargeScriptVariables(forms.variables,nextBytes)')<script_runtime.index('execution.commandVariables=std::move(forms.variables)')
+assert script_runtime.index('fo3script::ChargeScriptVariables(expressionForms.variables,nextBytes)')<script_runtime.index('execution.expressionVariables=std::move(expressionForms.variables)')
+assert 'VariableKey(d,t,forms)' in script_runtime
 assert 'candidate.scriptTraceBytes_=0;' in script_transaction
 assert 'ScriptProgramKind::UnboundResult' in script_header
 print('Detached script provenance records exact entered bodies and typed origins without publishing its collector into canonical state')
@@ -596,6 +599,11 @@ assert 'type=="SCPT"&&!locals.Accept(' in master_match
 assert 'a.commandForms==b.commandForms' in master_match
 assert master_match.index('!ChargeScriptForms(e.expressionForms,evidenceBytes)')<master_match.index('for(const auto* bindings:{&e.commandForms,&e.expressionForms})')<master_match.index('std::fopen(master.c_str(),"rb")')
 assert 'a.expressionForms==b.expressionForms' in master_match
+assert 'a.commandVariables==b.commandVariables' in master_match and 'a.expressionVariables==b.expressionVariables' in master_match
+assert master_match.index('!ChargeScriptVariables(e.expressionVariables,evidenceBytes)')<master_match.index('variableOwners[binding.owner].push_back(&binding)')<master_match.index('std::fopen(master.c_str(),"rb")')
+assert 'declared->second!=1' in master_match
+assert 'script->second.variables,&declarations' in master_match
+assert master_match.index('variableScriptsSeen.size()!=variableScripts.size()')<master_match.index('out=std::move(next);')
 assert 'formsSeen.size()!=forms.size()' in master_match
 assert 'pass==0&&forms.count(id)' in master_match
 assert 'pass==0&&!formNames.empty()&&!(recordFlags&0x20)' in master_match

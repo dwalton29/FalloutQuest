@@ -418,6 +418,75 @@ int main(){
     fo3script::ScriptMasterMatch unbound;
     assert(fo3script::MatchScriptProgramsToMaster(path,f.programs,unbound,cancel,error));
   }
+  // Qualified slots authenticate the complete QUST->SCPT or placed actor->base
+  // ->SCPT chain, independently of record order and binding phase.
+  for(unsigned actor=0;actor<3;++actor)for(bool expression:{false,true})for(bool reverse:{false,true})for(bool compressed:{false,true})for(bool extended:{false,true}){
+    const fo3player::ScriptVariableBinding variable{700,702,2,actor?701u:0u,!actor,"variableowner","count"};
+    auto evidence=f.programs;(expression?evidence[0].expressionVariables:evidence[0].commandVariables)={variable};
+    (expression?evidence.back().commandVariables:evidence.back().expressionVariables)={variable};
+    auto records=[&](unsigned bad){
+      Bytes owner,base,script;Sub(owner,"EDID",Text("VariableOwner"));
+      Sub(owner,actor?"NAME":"SCRI",Word(bad==1?703:actor?701:702));Sub(base,"SCRI",Word(bad==2?703:702));
+      Script(script,bad==9?"ref Count":bad==10?"short Missing":"short Count");
+      Local(script,2,"Replaced");Local(script,2,"Count",extended);
+      if(bad==11)Local(script,3,"COUNT");
+      if(bad==12){Bytes slot(4);Sub(script,"SLSD",slot);Sub(script,"SCVR",Text("Extra"));}
+      std::vector<Bytes> list;
+      auto add=[&](const char* type,uint32_t id,const Bytes& payload,uint32_t flags=0){
+        list.push_back(Record(type,id,compressed?Compressed(payload):payload,flags|(compressed?0x40000:0)));
+      };
+      if(bad!=3)add(bad==4?"STAT":actor==1?"ACHR":actor==2?"ACRE":"QUST",700,owner,bad==5?0x20:0);
+      if(actor&&bad!=6)add(bad==13?(actor==1?"CREA":"NPC_"):actor==1?"NPC_":"CREA",701,base,bad==7?0x20:0);
+      if(bad!=8)add(bad==14?"STAT":"SCPT",702,script,bad==15?0x20:0);
+      if(bad==16)add("SCPT",702,script);
+      if(bad==17&&actor)add(actor==1?"NPC_":"CREA",701,base);
+      if(reverse)std::reverse(list.begin(),list.end());
+      auto bytes=f.Master();for(const auto& record:list)Append(bytes,record);return bytes;
+    };
+    write(records(0));fo3script::ScriptMasterMatch bound;
+    assert(fo3script::MatchScriptProgramsToMaster(path,evidence,bound,cancel,error)&&bound.Matches(evidence));
+    for(unsigned bad=1;bad<18;++bad){
+      if(!actor&&(bad==2||bad==6||bad==7||bad==13||bad==17))continue;
+      write(records(bad));assert(!fo3script::MatchScriptProgramsToMaster(path,evidence,bound,cancel,error)&&bound.Matches(evidence));
+    }
+    write(records(0));
+    for(unsigned field=0;field<8;++field){
+      auto changed=evidence;auto& v=(expression?changed[0].expressionVariables:changed[0].commandVariables)[0];
+      if(field==0)++v.owner;
+      if(field==1)++v.script;
+      if(field==2)++v.index;
+      if(field==3)v.base=actor?703:701;
+      if(field==4)v.quest=!v.quest;
+      if(field==5)v.ownerName="other";
+      if(field==6)v.variableName="other";
+      if(field==7)(expression?changed[0].expressionVariables:changed[0].commandVariables).clear();
+      assert(!bound.Matches(changed));
+      if(field<7)assert(!fo3script::MatchScriptProgramsToMaster(path,changed,bound,cancel,error)&&bound.Matches(evidence));
+    }
+  }
+  {
+    auto evidence=std::vector<Execution>{f.programs[0]};
+    evidence[0].expressionVariables={{700,702,0,0,true,"variableowner","count"}};
+    Bytes owner,script;Sub(owner,"EDID",Text("VariableOwner"));Sub(owner,"SCRI",Word(702));
+    Script(script,"short Count");Local(script,0,"Count");
+    auto bytes=f.Master();Append(bytes,Record("SCPT",702,script));Append(bytes,Record("QUST",700,owner));write(bytes);
+    fo3script::ScriptMasterMatch zero;
+    assert(fo3script::MatchScriptProgramsToMaster(path,evidence,zero,cancel,error)&&zero.Matches(evidence));
+  }
+  for(unsigned field=0;field<8;++field){
+    auto evidence=f.programs;fo3player::ScriptVariableBinding variable{700,702,0,0,true,"owner","count"};
+    if(field==0)variable.owner=0;
+    if(field==1)variable.script=0;
+    if(field==2)variable.base=701;
+    if(field==3)variable.quest=false;
+    if(field==4)variable.ownerName="Owner";
+    if(field==5)variable.variableName.clear();
+    if(field==6)variable.variableName=std::string("c\0x",3);
+    if(field==7)variable.variableName.resize(fo3script::ScriptEvidenceMaxBytes,'x');
+    evidence[0].commandVariables={variable};
+    assert(!fo3script::MatchScriptProgramsToMaster(path+"-missing",evidence,report,cancel,error)&&report.Matches(f.programs));
+    assert(error==(field==7?"script master evidence byte limit exceeded":"malformed qualified variable binding"));
+  }
   // Null and nonnull authored SCRI preserve exact quest local-scope matching.
   for(uint32_t script:{0u,60u}){
     auto payload=f.quest;Sub(payload,"SCRI",Word(script));auto bytes=Record("QUST",10,payload);

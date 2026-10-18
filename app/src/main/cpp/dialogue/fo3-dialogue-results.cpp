@@ -79,7 +79,7 @@ bool CompileResult(const fo3pipdata::Definitions& d,const fo3pipdata::ResultScri
     else if(op=="enableplayercontrols")cmd.type=CommandType::EnableControls; // VR keeps controls live throughout.
     else if(op=="set") {
       if(!(in>>a>>b)||b!="to"){error="invalid assignment: "+line;return false;}
-      std::getline(in,cmd.expression);cmd.variable=VariableKey(d,a);
+      std::getline(in,cmd.expression);cmd.variable=VariableKey(d,a,forms);
       if(!cmd.variable)cmd.variable=fo3script::NumericLocalKey(d,owner,scriptId,a);
       if(!cmd.variable){cmd.form=form(a);cmd.type=CommandType::Global;if(!cmd.form){error="unresolved assignment: "+a;return false;}}
     } else if(op=="stopquest"||op=="startquest"||op=="setstage"||op=="completequest"||op=="completeallobjectives"||op=="setobjectivedisplayed"||op=="setobjectivecompleted"||op=="addtopic") {
@@ -152,6 +152,7 @@ bool CompileResult(const fo3pipdata::Definitions& d,const fo3pipdata::ResultScri
       cmd.type=CommandType::AddItem;if(!(in>>a>>b)||!(cmd.form=form(a))||!number(b,cmd.value)||cmd.value<1||cmd.value>100000||std::floor(cmd.value)!=cmd.value){error="invalid additem";return false;}
     } else {error="unsupported command: "+op;return false;}
     if(in>>extra){error="unsupported command arguments: "+line;return false;}
+    if(forms&&forms->exhausted){error="script binding byte limit exceeded";return false;}
     out.push_back(cmd);
   }
   return true;

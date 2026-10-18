@@ -1,4 +1,5 @@
 #include "fo3-dialogue-conditions.h"
+#include "fo3-dialogue-results.h"
 #include <cmath>
 #include <algorithm>
 #include <cstring>
@@ -17,17 +18,21 @@ uint64_t VariableKey(const fo3pipdata::Definitions& d,uint32_t owner,uint32_t in
   auto s=d.scripts.find(script);
   return s!=d.scripts.end()&&s->second.variables.count(index)?(uint64_t(owner)<<32)|index:0;
 }
-uint64_t VariableKey(const fo3pipdata::Definitions& d,const std::string& name) {
+uint64_t VariableKey(const fo3pipdata::Definitions& d,const std::string& name,CommandFormCapture* capture) {
   auto key=name;for(auto& c:key)c=char(std::tolower((unsigned char)c));
   auto dot=key.find('.');if(dot==std::string::npos)return 0;
   auto owner=d.formNames.find(key.substr(0,dot));if(owner==d.formNames.end())return 0;
-  uint32_t script=0;
+  uint32_t script=0,base=0;
   auto q=d.quests.find(owner->second);if(q!=d.quests.end())script=q->second.script;
   else {auto ref=d.referenceScripts.find(owner->second);if(ref!=d.referenceScripts.end()){
+    base=ref->second.second;
     auto a=d.dialogueActors.find(ref->second.second);if(a!=d.dialogueActors.end())script=a->second.script;
   }}
   auto s=d.scripts.find(script);if(s==d.scripts.end())return 0;
-  for(auto& v:s->second.variables){auto n=v.second;for(auto& c:n)c=char(std::tolower((unsigned char)c));if(n==key.substr(dot+1))return(uint64_t(owner->second)<<32)|v.first;}
+  for(auto& v:s->second.variables){auto n=v.second;for(auto& c:n)c=char(std::tolower((unsigned char)c));if(n==key.substr(dot+1)){
+    if(capture&&!capture->AddVariable(owner->second,script,v.first,base,q!=d.quests.end(),key,dot))return 0;
+    return(uint64_t(owner->second)<<32)|v.first;
+  }}
   return 0;
 }
 static bool Value(const fo3pipdata::Condition& c,const Context& ctx,float& value,std::string& error) {

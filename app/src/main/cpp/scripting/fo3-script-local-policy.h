@@ -43,8 +43,9 @@ template<class Locals> inline bool UnambiguousScriptLocals(const Locals& locals)
 // in the same pre-Begin/comment scope used by NumericLocalKey. Extra decoded
 // slots are preserved; this does not enable reference-local execution.
 template<class Locals> inline bool ConsistentScriptLocalDeclarations(
-    const std::string& source,const Locals& locals) {
-  if(source.empty())return true;
+    const std::string& source,const Locals& locals,
+    std::vector<std::pair<std::string,unsigned>>* kinds=nullptr) {
+  if(source.empty()){if(kinds)kinds->clear();return true;}
   std::vector<std::pair<std::string,unsigned>> names;names.reserve(locals.size());
   for(const auto& local:locals)names.emplace_back(Lower(local.second),0);
   std::sort(names.begin(),names.end(),[](const auto& a,const auto& b){return a.first<b.first;});
@@ -63,6 +64,7 @@ template<class Locals> inline bool ConsistentScriptLocalDeclarations(
     if(slot==names.end()||slot->first!=name||(slot->second&&slot->second!=kind))return false;
     slot->second=kind;
   }
+  if(kinds)*kinds=std::move(names);
   return true;
 }
 }

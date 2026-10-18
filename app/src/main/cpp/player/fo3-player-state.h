@@ -280,6 +280,15 @@ struct ScriptProgramOrigin {
 };
 // Immutable evidence of entered programs, not authority to admit world changes.
 // Unbound dialogue bodies deliberately have no invented INFO form identity.
+struct ScriptVariableBinding {
+  uint32_t owner=0,script=0,index=0,base=0;
+  bool quest=false;
+  std::string ownerName,variableName;
+  bool operator==(const ScriptVariableBinding& b) const noexcept {
+    return owner==b.owner&&script==b.script&&index==b.index&&base==b.base&&quest==b.quest&&
+      ownerName==b.ownerName&&variableName==b.variableName;
+  }
+};
 struct ScriptExecution {
   static constexpr uint32_t NoParent=UINT32_MAX;
   ScriptProgramOrigin origin;
@@ -300,6 +309,7 @@ struct ScriptExecution {
   // Successful form-name lookups in the all-expression preflight, in lookup
   // order. This is binding identity, not runtime read values or branch outcomes.
   std::vector<std::pair<uint32_t,std::string>> expressionForms;
+  std::vector<ScriptVariableBinding> commandVariables,expressionVariables;
 };
 struct ReferenceEnableChange { uint32_t reference=0; bool enabled=false; };
 // Owned reference-only input for the future scene coordinator. It neither runs

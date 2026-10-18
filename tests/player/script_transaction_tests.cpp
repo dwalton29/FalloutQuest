@@ -271,6 +271,54 @@ static void ExpressionFormProvenance(){
   assert(player.Revision()==revision&&player.Snapshot().karma==0);NoEffects(player);
   assert(player.PrepareQuestStageTransaction(10,10,error));
 }
+static void QualifiedVariableProvenance(){
+  constexpr auto capture=fo3player::ScriptProgramCapture::EnteredPrograms;
+  for(bool actor:{false,true})for(bool event:{false,true}){
+    auto catalog=Fixture();const uint32_t owner=actor?101:11;
+    const std::string prefix=actor?"actorref":"questb";
+    auto& script=catalog.pipboy.scripts[302];script.source="short Count\nBegin GameMode\nEnd";script.variables={{2,"Count"}};
+    if(actor){catalog.pipboy.formNames[prefix]=101;catalog.references[101].base=201;
+      catalog.pipboy.referenceScripts[101]={"ActorRef",201};catalog.pipboy.dialogueActors[201].script=302;}
+    else catalog.pipboy.quests[11].script=302;
+    const fo3player::ScriptVariableBinding binding{owner,302,2,actor?201u:0u,!actor,prefix,"count"};
+    const std::vector<fo3player::ScriptVariableBinding> expected={binding};
+    size_t cost=0;assert(fo3script::ChargeScriptVariables(expected,cost));
+    size_t used=fo3script::ScriptEvidenceMaxBytes-cost;
+    assert(fo3script::ChargeScriptVariables(expected,used)&&used==fo3script::ScriptEvidenceMaxBytes);
+    used=fo3script::ScriptEvidenceMaxBytes-cost+1;
+    assert(!fo3script::ChargeScriptVariables(expected,used)&&used==fo3script::ScriptEvidenceMaxBytes-cost+1);
+    fo3dialogue::CommandFormCapture sink;sink.limit=cost;
+    const auto key=(uint64_t(owner)<<32)|2;
+    assert(fo3dialogue::VariableKey(catalog.pipboy,prefix+".COUNT",&sink)==key&&sink.variables==expected&&sink.used==cost);
+    sink.Reset();sink.limit=cost-1;
+    assert(!fo3dialogue::VariableKey(catalog.pipboy,prefix+".Count",&sink)&&sink.exhausted&&sink.variables.empty()&&!sink.used);
+    size_t formCost=0;assert(fo3script::ChargeScriptForms({{9,"form"}},formCost));
+    sink.Reset();sink.limit=cost+formCost;
+    assert(sink.Add(9,"form")&&fo3dialogue::VariableKey(catalog.pipboy,prefix+".Count",&sink)==key&&sink.used==sink.limit);
+    const std::string body="set "+prefix+".Count to "+prefix+".COUNT + 1\nif 0 && "+prefix+".Count == 9\nRewardKarma 1\nendif";
+    if(event){catalog.pipboy.scripts[300].source="Begin OnActivate\n"+body+"\nEnd";catalog.eventPrograms[300]=fo3script::ParseEvents(catalog.pipboy.scripts[300]);}
+    else catalog.pipboy.quests[10].stages[10].items[0].result=Script(body);
+    fo3player::Player player(std::move(catalog));std::string error;const auto revision=player.Revision();
+    auto prepare=[&](fo3player::ScriptProgramCapture mode){return event?
+      player.PrepareReferenceEventTransaction(100,"OnActivate",fo3player::PlayerRef,error,mode):player.PrepareQuestStageTransaction(10,10,error,mode);};
+    auto plan=prepare(capture);if(!plan)std::cerr<<error<<'\n';assert(plan&&plan->ExecutedScripts().size()==1);
+    const auto& entry=plan->ExecutedScripts()[0];assert(entry.commandVariables==expected);
+    assert((entry.expressionVariables==std::vector<fo3player::ScriptVariableBinding>{binding,binding}));
+    assert(entry.commandForms.empty()&&entry.expressionForms.empty());
+    assert(player.Revision()==revision&&player.Snapshot().pipboy.dialogueVariables.empty());NoEffects(player);
+    auto plain=prepare(fo3player::ScriptProgramCapture::None);assert(plain&&plain->ExecutedScripts().empty());
+    forbidAllocations=true;assert(player.CommitScriptTransaction(*plan)&&player.RollbackScriptTransaction(*plan));forbidAllocations=false;
+    assert(entry.commandVariables==expected);NoEffects(player);
+  }
+  auto catalog=Fixture();catalog.pipboy.quests[10].script=302;
+  catalog.pipboy.scripts[302].source="short Count";catalog.pipboy.scripts[302].variables={{2,"Count"}};
+  catalog.pipboy.quests[10].stages[10].items[0].result=Script("set QuestA.Count to Count + 1");
+  fo3player::Player player(std::move(catalog));std::string error;
+  auto plan=player.PrepareQuestStageTransaction(10,10,error,capture);assert(plan);
+  const std::vector<fo3player::ScriptVariableBinding> own={{10,302,2,0,true,"questa","count"}};
+  assert(plan->ExecutedScripts()[0].commandVariables==own&&plan->ExecutedScripts()[0].expressionVariables==own);
+  assert(player.Snapshot().pipboy.dialogueVariables.empty());NoEffects(player);
+}
 static void LocalRecordProvenance(){
   constexpr auto capture=fo3player::ScriptProgramCapture::EnteredPrograms;
   for(bool event:{false,true})for(unsigned kind=0;kind<9;++kind){
@@ -562,6 +610,7 @@ int main(int argc,char** argv){
   Provenance();
   CommandFormProvenance();
   ExpressionFormProvenance();
+  QualifiedVariableProvenance();
   LocalRecordProvenance();
   DialogueProvenance();
   if(argc>1)OriginalProvenance(argv[1]);
