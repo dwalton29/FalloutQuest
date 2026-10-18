@@ -3113,6 +3113,9 @@ struct Fo3SceneCollisionPreparation {
 struct Fo3SceneLoadWork {
     fo3scene::Preparation<Fo3SceneCpuPreparation> preparation;
     fo3scene::Preparation<Fo3SceneCollisionPreparation> collisionPreparation;
+    // Original two-pass ESM door-anchor scan runs concurrently with CPU scene
+    // preparation; only the ready packet mutates live resources on render thread.
+    fo3scene::Preparation<Fo3AuthoredDoorCpuCache> doorPreparation;
     bool npcTexturesInstalled=false;
     bool collisionStarted = false;
     bool collisionComplete = false;
@@ -3974,16 +3977,19 @@ void AbortFo3SceneLoad(const char* reason) {
             gSceneLoad.collisionStarted?1:0, gSceneLoad.collisionReady?1:0);
     }
     gSceneLoad.preparation.RequestCancel();gSceneLoad.collisionPreparation.RequestCancel();gSceneLoad.texturePreparation.RequestCancel();
+    gSceneLoad.doorPreparation.RequestCancel();
     // A superseded scene stays private while an in-flight decoder retires.
     // Render frames keep submitting; only shutdown is allowed to join work.
     if((gSceneLoad.preparation.Active()&&!gSceneLoad.preparation.Ready()) ||
        (gSceneLoad.collisionPreparation.Active()&&!gSceneLoad.collisionPreparation.Ready()) ||
-       (gSceneLoad.texturePreparation.Active()&&!gSceneLoad.texturePreparation.Ready()))return;
+       (gSceneLoad.texturePreparation.Active()&&!gSceneLoad.texturePreparation.Ready()) ||
+       (gSceneLoad.doorPreparation.Active()&&!gSceneLoad.doorPreparation.Ready()))return;
     gSceneLoad.texturePreparation.Reset();gSceneLoad.imageTransfer.Cancel();
     gSceneLoad.texture={};gSceneLoad.textureKey.clear();gSceneLoad.missingTextures.clear();
     gSceneLoad.vertexTransfer.clear();gSceneLoad.vertexOffset=0;gSceneLoad.vertexPending=false;
     Q74DeleteGpuObjects(gSceneLoad.replacement);
     gSceneLoad.collisionPreparation.Reset();
+    gSceneLoad.doorPreparation.Reset();
     if (gSceneLoad.contextApplied)
         Fo3DynamicOnlyCollisionModelsQ710() = std::move(gSceneLoad.previousCollisionPolicy);
     if (gSceneLoad.preparation.Ready()) {
@@ -4009,6 +4015,7 @@ bool BeginFo3SceneLoad(const Fo3CellTransitionRequestQ74& request, bool boot) {
     gSceneLoad.aborting=false;gSceneLoad.abortReason.clear();
     gSceneLoad.boot = boot;
     gSceneLoad.contextApplied = false;
+    gSceneLoad.doorPreparation.Reset();
     gSceneLoad.collisionPreparation.Reset();
     gSceneLoad.collisionStarted = gSceneLoad.collisionComplete = gSceneLoad.collisionReady = false;
     gSceneLoad.collisionUs = 0u;
@@ -4033,6 +4040,21 @@ bool BeginFo3SceneLoad(const Fo3CellTransitionRequestQ74& request, bool boot) {
     fqloadprofile::Log("BEGIN generation=%llu mode=%s cell=%08X worldspace=%08X playerCatalog=%d sceneReadyBefore=%d",
         (unsigned long long)gSceneLoad.generation,boot?"cold-boot":"transition",
         request.cellFormId,request.worldspaceFormId,loadPlayer?1:0,gSceneReady?1:0);
+    // Start the expensive authored door scan immediately, in parallel with
+    // catalogue, NIF and NPC CPU preparation. Reused cells need no new scan.
+    if (!HasFo3AuthoredDoorAnchorsCachedQ2190(request.cellFormId)) {
+        if(!gSceneLoad.doorPreparation.Start(
+            [cell=request.cellFormId](Fo3AuthoredDoorCpuCache& result,
+                                      const std::atomic<bool>& cancel) {
+                return PrepareFo3AuthoredDoorAnchorsQ2190(cell,result,cancel);
+            })) {
+            fqloadprofile::Log("DOOR_WORKER_START_FAILED generation=%llu cell=%08X fallback=legacy",
+                (unsigned long long)gSceneLoad.generation,request.cellFormId);
+        }
+    } else {
+        fqloadprofile::Log("DOOR_CACHE_HIT generation=%llu cell=%08X",
+            (unsigned long long)gSceneLoad.generation,request.cellFormId);
+    }
     const auto referenceState=CaptureFo3ReferenceState();
     if (!gSceneLoad.preparation.Start(
             [request, boot, loadPlayer, referenceState](Fo3SceneCpuPreparation& result, const std::atomic<bool>& cancel) {
@@ -4434,6 +4456,10 @@ bool ProcessQ74TransitionRequest() {
         gSceneLoad.collisionComplete = true;
         return false; // Commit/environment/terrain gets a separate submitted frame.
     }
+    // Do not make the critical scene publication wait for synchronous ESM door
+    // scanning. Its independent worker normally finishes during GPU uploads.
+    // Delayed workers keep the original loading scene visible and responsive.
+    if(gSceneLoad.doorPreparation.Active()&&!gSceneLoad.doorPreparation.Ready())return false;
     // Admission precedes the atomic collision/visual commit. Never yield after
     // consuming the collision token and before completing visual publication.
     if(!fqloading::Allow())return false;
@@ -4462,6 +4488,16 @@ bool ProcessQ74TransitionRequest() {
     const uint64_t collisionUs = gSceneLoad.collisionUs;
     fqloading::WorkScope publicationOperation("scene-publication/environment/terrain");
     const auto finalizationStarted = std::chrono::steady_clock::now();
+    uint64_t lastFinalizeStamp=fqloadprofile::NowUs();
+    const auto markFinalization=[&](const char* stage) {
+        const uint64_t now=fqloadprofile::NowUs();
+        const double intervalMs=(now-lastFinalizeStamp)/1000.0;
+        const double cumulativeMs=Fo3SceneElapsedUs(finalizationStarted)/1000.0;
+        lastFinalizeStamp=now;
+        if(intervalMs>=1.0)
+            fqloadprofile::Log("FINALIZE_STEP generation=%llu stage=%s stepMs=%.1f cumulativeMs=%.1f",
+                (unsigned long long)gSceneLoad.generation,stage,intervalMs,cumulativeMs);
+    };
     const size_t oldObjects = gObjects.size();
     if (prepared.playerSession) {
         gPlayerSession = std::move(prepared.playerSession);
@@ -4476,8 +4512,11 @@ bool ProcessQ74TransitionRequest() {
     gFo3ScenePublication.Publish(prepared.referenceState);
     if (gPlayerSession) SetFo3CollectedCollisionRefs(gPlayerSession->player.Snapshot().collected);
     FlushFo3PlayerState();
+    markFinalization("flush-player-state");
     Q74DeleteGpuObjects(gObjects);
+    markFinalization("retire-previous-gpu");
     Q230DeleteNpcActors();
+    markFinalization("retire-previous-npcs");
     gQ230NpcActors = std::move(prepared.actors);
     for (auto& actor : gQ230NpcActors)
         actor.animationStart = Fo3GameplayNow();
@@ -4502,8 +4541,25 @@ bool ProcessQ74TransitionRequest() {
     }
 
     CompleteFo3CellTransitionQ74(request.cellFormId);
+    markFinalization("complete-cell-transition");
     gCurrentCellFormId = request.cellFormId;
+    if(gSceneLoad.doorPreparation.Active()) {
+        if(gSceneLoad.doorPreparation.Successful()) {
+            auto& door=gSceneLoad.doorPreparation.Get();
+            fqloadprofile::Log("DOOR_WORKER_READY generation=%llu cell=%08X queueMs=%.1f workerMs=%.1f scanMs=%.1f anchors=%zu records=%zu",
+                (unsigned long long)gSceneLoad.generation,request.cellFormId,
+                gSceneLoad.doorPreparation.QueueDelayUs()/1000.0,
+                gSceneLoad.doorPreparation.ExecutionUs()/1000.0,
+                door.preparationUs/1000.0,door.anchors.size(),door.scannedRecords);
+            PublishFo3AuthoredDoorAnchorsQ2190(std::move(door));
+        } else {
+            fqloadprofile::Log("DOOR_WORKER_FAILED generation=%llu cell=%08X fallback=legacy",
+                (unsigned long long)gSceneLoad.generation,request.cellFormId);
+        }
+        gSceneLoad.doorPreparation.Reset();
+    }
     PrimeFo3AuthoredDoorAnchorsQ1870(gCurrentCellFormId);
+    markFinalization("publish-authored-door-cache");
 
     if (request.worldspaceFormId != 0u) {
         gExteriorStreamingActiveQ1890 = true;
@@ -4535,8 +4591,10 @@ bool ProcessQ74TransitionRequest() {
     } else {
         PublishFo3InteriorLighting(std::move(prepared.interiorLighting));
     }
+    markFinalization("scene-environment");
     for(auto& object:gQ210PlayerBody) object.interiorLightFrame=UINT64_MAX;
     PrepareFo3InteriorSceneLights();
+    markFinalization("interior-scene-lights");
     if (gFo3Environment.interior) {
         int maximum=0;size_t zero=0;
         for(const auto& object:gObjects){maximum=std::max(maximum,object.interiorLights.count);if(!object.interiorLights.count)++zero;}
@@ -4544,6 +4602,7 @@ bool ProcessQ74TransitionRequest() {
             request.cellFormId,maximum,FO3_SHADER_LIGHTS,zero,gObjects.size());
     }
     ResetFo3InteriorExposureHistory();
+    markFinalization("exposure-reset");
     Q6H_LOGI("Q20.9A WATER TRANSITION DISPATCH: cell=%08X worldspace=%08X XTEL=(%.2f %.2f %.2f) exteriorStreaming=%d",
              request.cellFormId, request.worldspaceFormId,
              request.x, request.y, request.z,
@@ -4559,12 +4618,14 @@ bool ProcessQ74TransitionRequest() {
         ClearFo3WaterSceneQ2070();
         Q6H_LOGI("Q20.9A WATER TRANSITION RESULT: worldspace=00000000 loaded=0 nearbyWaterCells=0 reason=interior-or-missing-WRLD");
     }
+    markFinalization("scene-water");
     // Rebuild Q14.0 from the corrected region weather/XCIM on the first frame.
     fo3tod::gRuntime = {};
     fo3tod::gAppliedOnce = false;
     fo3tod::gLastPredictedNs = 0;
     fo3tod::gLastLoggedHour = -1;
     fo3tod::gLastLoggedPhase.clear();
+    markFinalization("time-weather-reset");
     Q6H_LOGI("Q7.4 SCENE SWAP READY: cell=%08X worldspace=%08X oldObjects=%zu newObjects=%zu triangles=%zu realDiffuse=%zu realNormal=%zu skippedMarkersEffects=%zu unsupported=%zu collisionReady=%d XTELorigin=1 orientationPreserved=1",
              request.cellFormId, request.worldspaceFormId,
              oldObjects, gObjects.size(), triangles, realDiffuse, realNormal,
