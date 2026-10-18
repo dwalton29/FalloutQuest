@@ -77,7 +77,7 @@ std::string VoicePath(const Definitions &d, const Info &i, const Response &r,
   return "@voice:" + v->second + ":" + tail;
 }
 bool Relevant(const std::string &t) {
-  return t == "MESG" || t == "ANIO" || t == "IDLM" || t == "FURN" || t == "TERM" || t == "RADS" || t == "WRLD" || t == "PERK" || t == "QUST" ||
+  return t == "AVIF" || t == "MESG" || t == "ANIO" || t == "IDLM" || t == "FURN" || t == "TERM" || t == "RADS" || t == "WRLD" || t == "PERK" || t == "QUST" ||
          t == "MGEF" || t == "TACT" || t == "INFO" || t == "DIAL" ||
          t == "RACE" || t == "FLST" || t == "IDLE" || t == "SOUN" || t == "VTYP" || t == "SCPT" || t == "NPC_" || t == "PACK";
 }
@@ -91,7 +91,21 @@ void Decode(Definitions &d, const std::string &t, uint32_t id, uint32_t flags,
                          });
   const auto editor=Text(s,"EDID");
   if(!editor.empty()) { auto key=editor; for(auto& c:key)c=char(std::tolower((unsigned char)c));d.formNames[key]=id; }
-  if(t=="FLST") {for(auto& v:s)if(v.type=="LNAM"&&v.n==4)d.formLists[id].push_back(U(&v));}
+  if(t=="AVIF"){
+    // These are the original Fallout3.esm actor-value record EDIDs;
+    // do not infer illustration filenames from English UI labels.
+    static constexpr std::array<const char*,14> skillEdids{
+      "AVBarter","AVBigGuns","AVEnergyWeapons","AVExplosives",
+      "AVLockpick","AVMedicine","AVMeleeWeapons","AVRepair",
+      "AVScience","AVSmallGuns","AVSneak","AVSpeech",nullptr,"AVUnarmed"
+    };
+    for(size_t i=0;i<skillEdids.size();++i)
+      if(skillEdids[i]&&editor==skillEdids[i]){
+        d.skills[i]={Text(s,"FULL"),Text(s,"DESC"),Text(s,"ICON")};
+        break;
+      }
+  }
+  else if(t=="FLST") {for(auto& v:s)if(v.type=="LNAM"&&v.n==4)d.formLists[id].push_back(U(&v));}
   else if(t=="RACE"){auto voices=Find(s,"VTCK");if(voices&&voices->n>=8)d.raceVoices[id]={U(voices),U(voices,4)};auto data=Find(s,"DATA");if(data&&data->n==36&&(U(data,32)&4))d.childRaces.insert(id);}
   else if(t=="FURN") {auto& f=d.furniture[id];f.model=Text(s,"MODL");f.editor=editor;auto m=Find(s,"MNAM");f.markers=U(m);f.valid=m&&m->n==4&&!f.model.empty();}
   else if(t=="IDLE") { d.idleModels[id]=Text(s,"MODL");d.idleParents[id]=U(Find(s,"ANAM")); for(const auto& v:s)if(v.type=="CTDA")d.idleConditions[id].push_back(Cond(v)); }
