@@ -48,7 +48,7 @@ bool QueryFo3Interaction(float ox, float oy, float oz, float dx, float dy,
                          float dz, Fo3InteractionTarget &target) {
     target = {};
     if(Fo3ResidentFrameBlocked())return false;
-    if (!gSceneReady || IsFo3LoadingVisible() || Fo3DialogueFocus() || Fo3PipboyFocus() || Fo3ScriptMessageFocus() || Fo3LockpickFocus() || !gPlayerSession) return false;
+    if (!gSceneReady || IsFo3LoadingVisible() || Fo3DialogueFocus() || Fo3PipboyFocus() || Fo3ScriptMessageFocus() || Fo3LevelUpFocus() || Fo3LockpickFocus() || !gPlayerSession) return false;
     const float length = std::sqrt(dx*dx+dy*dy+dz*dz);
     if (!std::isfinite(length) || length < 1e-5f ||
         !std::isfinite(ox) || !std::isfinite(oy) || !std::isfinite(oz)) return false;
@@ -172,6 +172,7 @@ void UpdateFo3ScriptMessage(double now,float scroll,bool pressA,bool pressB,bool
     }
     auto& player=gPlayerSession->player;
     if(!gScriptMessagePanel.visible){
+        if(Fo3LevelUpFocus())return; // Defer authored messages until level-up closes.
         fo3player::ScriptMessage request;
         if(!player.PollScriptMessage(request))return;
         Q6H_LOGI("SCRIPT MESSAGE PRESENT: form=%08X owner=%08X buttons=%zu remaining=%zu",request.form,request.owner,request.buttons.size(),player.PendingScriptMessageCount());
