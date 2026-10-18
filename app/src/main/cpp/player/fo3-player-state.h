@@ -159,6 +159,7 @@ struct ActorState {
 enum class QuestNoticeKind : uint8_t { Added, Updated, Completed };
 struct ScriptItemNotice {uint32_t form=0;int32_t count=0;};
 struct QuestNotice { uint32_t quest=0; QuestNoticeKind kind=QuestNoticeKind::Updated; };
+struct ExperienceNotice { uint32_t amount=0,total=0; bool levelUp=false; };
 struct ScriptMessage {
   uint32_t form=0, owner=0;
   std::string title,text;
@@ -458,6 +459,7 @@ public:
   bool QueueScriptSound(uint32_t form);
   bool PollScriptMessage(ScriptMessage& out);
   bool PollQuestNotice(QuestNotice& out);
+  bool PollExperienceNotice(ExperienceNotice& out);
   bool PollScriptItemNotice(ScriptItemNotice& out);
   size_t PendingScriptMessageCount() const {return pendingScriptMessages_.size();}
   bool SubmitScriptMessageButton(uint32_t owner,int index);
@@ -602,6 +604,7 @@ private:
   std::unordered_map<uint32_t,int> scriptButtons_;
   std::vector<ScriptMessage> pendingScriptMessages_;
   std::vector<QuestNotice> pendingQuestNotices_;
+  std::vector<ExperienceNotice> pendingExperienceNotices_;
   std::vector<ScriptItemNotice> pendingScriptItems_;
   std::vector<uint32_t> pendingScriptSounds_;
   std::vector<BarterRequest> pendingBarters_;
