@@ -38,22 +38,22 @@ struct Q1870Frame {
 
 auto& gCellCaches = Fo3LiveDoorResources().cells;
 
-const std::vector<Anchor>& AnchorsForCell(uint32_t cellFormId) {
-    const auto cached = gCellCaches.find(cellFormId);
-    if (cached != gCellCaches.end() && cached->second.attempted) return cached->second.anchors;
-    MarkFo3DoorResourcesChanged();
-    CellCache& cache = gCellCaches[cellFormId];
-    cache.attempted = true;
-
+// Pure, cancellable CPU preparation. Never touch the live door-resource store
+// and never pump Android events from a worker thread.
+bool PrepareWorker(uint32_t cellFormId, Fo3AuthoredDoorCpuCache& out,
+                   const std::atomic<bool>& cancel) {
+    out=Fo3AuthoredDoorCpuCache{};
+    out.cellFormId=cellFormId;
+    if(cancel.load(std::memory_order_acquire))return false;
     const auto started = std::chrono::steady_clock::now();
 
     // Preserve Q16.3's exact CELL-child and enable-parent semantics. This is one
     // bounded ESM pass, not one pass per reference.
     std::vector<Q1700Interior::RawPlacement> raw;
-    if (!Q1700Interior::CollectCellReferences(cellFormId, raw)) {
+    if (!Q1700Interior::CollectCellReferences(cellFormId, raw, &cancel)) {
         Q71_LOGI("Q16.15 XTEL CACHE READY: cell=%08X raw=0 active=0 xtel=0 ownerIndex=0 elapsedMs=0 source=Fallout3.esm passes=1 reason=no-cell-refs",
                  cellFormId);
-        return cache.anchors;
+        return !cancel.load(std::memory_order_acquire);
     }
 
     std::unordered_map<uint32_t, const Q1700Interior::RawPlacement*> refs;
@@ -73,13 +73,13 @@ const std::vector<Anchor>& AnchorsForCell(uint32_t cellFormId) {
     FILE* file = std::fopen(fo3assets::FalloutMasterPath().c_str(), "rb");
     if (!file) {
         Q71_LOGE("Q16.15 XTEL CACHE FAILED: cell=%08X reason=open-esm", cellFormId);
-        return cache.anchors;
+        return false;
     }
     const int64_t fileSize = fo3esm::FileSize(file);
     if (fileSize < static_cast<int64_t>(fo3esm::HEADER_SIZE)) {
         std::fclose(file);
         Q71_LOGE("Q16.15 XTEL CACHE FAILED: cell=%08X reason=bad-esm-size", cellFormId);
-        return cache.anchors;
+        return false;
     }
 
     std::vector<Q1870Frame> groups;
@@ -99,7 +99,10 @@ const std::vector<Anchor>& AnchorsForCell(uint32_t cellFormId) {
         uint8_t header[fo3esm::HEADER_SIZE]{};
         if (!fo3esm::ReadExact(file, header, sizeof(header))) break;
         ++records;
-        if ((records & 0x1fffu) == 0u) PumpFo3AndroidEventsQ1860();
+        if ((records & 0x1fffu) == 0u && cancel.load(std::memory_order_acquire)) {
+            std::fclose(file);
+            return false;
+        }
 
         const uint32_t sizeField = fo3esm::ReadU32(header + 4u);
         if (std::memcmp(header, "GRUP", 4u) == 0) {
@@ -156,7 +159,7 @@ const std::vector<Anchor>& AnchorsForCell(uint32_t cellFormId) {
         if (foundXtel) teleports.emplace(refFormId, teleport);
     }
     std::fclose(file);
-    PumpFo3AndroidEventsQ1860();
+    if (cancel.load(std::memory_order_acquire)) return false;
 
     for (const auto& entry : teleports) {
         const auto placementIt = refs.find(entry.first);
@@ -175,18 +178,55 @@ const std::vector<Anchor>& AnchorsForCell(uint32_t cellFormId) {
         anchor.sourceY = p.y;
         anchor.sourceZ = p.z;
         anchor.teleport = teleport;
-        cache.anchors.push_back(anchor);
+        out.anchors.push_back(anchor);
     }
 
     const float elapsedMs = std::chrono::duration<float, std::milli>(
         std::chrono::steady_clock::now() - started).count();
     Q71_LOGI("Q16.15 XTEL CACHE READY: cell=%08X raw=%zu active=%zu xtel=%zu ownerIndex=%zu records=%zu elapsedMs=%.1f source=Fallout3.esm passes=2 liveQuery=memory-only",
-             cellFormId, raw.size(), activeRefs.size(), cache.anchors.size(),
+             cellFormId, raw.size(), activeRefs.size(), out.anchors.size(),
              ownerCells.size(), records, elapsedMs);
+    out.rawReferences=raw.size();
+    out.activeReferences=activeRefs.size();
+    out.scannedRecords=records;
+    out.preparationUs=uint64_t(elapsedMs*1000.0f);
+    return true;
+}
+
+
+const std::vector<Anchor>& AnchorsForCell(uint32_t cellFormId) {
+    const auto cached = gCellCaches.find(cellFormId);
+    if (cached != gCellCaches.end() && cached->second.attempted) return cached->second.anchors;
+    MarkFo3DoorResourcesChanged();
+    CellCache& cache = gCellCaches[cellFormId];
+    cache.attempted = true;
+    // Retain original synchronous fallback, normally unused after scene load.
+    Fo3AuthoredDoorCpuCache built;
+    const std::atomic<bool> cancel{false};
+    if (PrepareWorker(cellFormId,built,cancel)) cache.anchors=std::move(built.anchors);
     return cache.anchors;
 }
 
 } // namespace Q1730Door
+
+bool PrepareFo3AuthoredDoorAnchorsQ2190(uint32_t cellFormId,
+    Fo3AuthoredDoorCpuCache& out, const std::atomic<bool>& cancel) {
+    return Q1730Door::PrepareWorker(cellFormId,out,cancel);
+}
+
+void PublishFo3AuthoredDoorAnchorsQ2190(Fo3AuthoredDoorCpuCache&& prepared) {
+    const uint32_t cellFormId=prepared.cellFormId;
+    const auto cached=Q1730Door::gCellCaches.find(cellFormId);
+    if(cached!=Q1730Door::gCellCaches.end()&&cached->second.attempted)return;
+    MarkFo3DoorResourcesChanged();
+    Q1730Door::CellCache& cache=Q1730Door::gCellCaches[cellFormId];
+    cache.attempted=true;
+    cache.anchors=std::move(prepared.anchors);
+    Q71_LOGI("Q21.9 XTEL WORKER CACHE PUBLISHED: cell=%08X anchors=%zu raw=%zu active=%zu scanned=%zu workerMs=%.1f",
+        cellFormId,cache.anchors.size(),prepared.rawReferences,prepared.activeReferences,
+        prepared.scannedRecords,prepared.preparationUs/1000.0);
+}
+
 
 void PrimeFo3AuthoredDoorAnchorsQ1870(uint32_t cellFormId) {
     const std::vector<Q1730Door::Anchor>& anchors = Q1730Door::AnchorsForCell(cellFormId);
