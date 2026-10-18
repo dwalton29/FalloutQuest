@@ -124,6 +124,33 @@ static void AidTests() {
   assert(blocked.Revision() == rev &&
          blocked.Snapshot().inventory.front().count == 2);
 }
+static void SkillPresentationDecodeTests() {
+  assert(Relevant("AVIF"));
+  Definitions d;
+  auto sub=[](std::vector<uint8_t>& out,const char* type,
+              const std::string& text){
+    out.insert(out.end(),type,type+4);
+    const auto n=uint16_t(text.size()+1);
+    out.push_back(uint8_t(n));out.push_back(uint8_t(n>>8));
+    out.insert(out.end(),text.begin(),text.end());out.push_back(0);
+  };
+  std::vector<uint8_t> barter;
+  sub(barter,"EDID","AVBarter");
+  sub(barter,"FULL","Barter");
+  sub(barter,"DESC","Original AVIF skill description");
+  sub(barter,"ICON","Interface\\Icons\\Stats\\Skills_Barter.dds");
+  Decode(d,"AVIF",100,0,barter,0,0,0);
+  assert(d.skills[0].name=="Barter");
+  assert(d.skills[0].description=="Original AVIF skill description");
+  assert(d.skills[0].icon=="Interface\\Icons\\Stats\\Skills_Barter.dds");
+  assert(d.skills[1].icon.empty());
+  std::vector<uint8_t> unarmed;
+  sub(unarmed,"EDID","AVUnarmed");
+  sub(unarmed,"ICON","Interface\\Icons\\Stats\\Skills_Unarmed.dds");
+  Decode(d,"AVIF",101,0,unarmed,0,0,0);
+  assert(d.skills[13].icon=="Interface\\Icons\\Stats\\Skills_Unarmed.dds");
+  assert(d.skills[12].icon.empty()); // unused Throwing actor value
+}
 static void PerkRecordDecodeTests() {
   Definitions data;
   auto sub=[](std::vector<uint8_t>& out,const char* type,
@@ -378,6 +405,7 @@ int main(int argc, char **argv) {
   AidTests();
   PackageDecodeTests();
   PerkRecordDecodeTests();
+  SkillPresentationDecodeTests();
   RadioTests();
   MenuDataTests();
   if (argc > 1)
