@@ -24,6 +24,8 @@
 #include "npc/fo3-animation-bounds.h"
 #include "rendering/actor-skinning.h"
 #include "rendering/opaque-telemetry.h"
+#include "rendering/loading-work-scope.h"
+#include "rendering/loading-transfer.h"
 #include "rendering/quest-render-policy.h"
 #include "fo3-npc-appearance.h"
 #include "fo3-install-paths.h"
@@ -3106,26 +3108,108 @@ struct Fo3SceneCollisionPreparation {
 struct Fo3SceneLoadWork {
     fo3scene::Preparation<Fo3SceneCpuPreparation> preparation;
     fo3scene::Preparation<Fo3SceneCollisionPreparation> collisionPreparation;
+    bool npcTexturesInstalled=false;
     bool collisionStarted = false;
     bool collisionComplete = false;
     bool collisionReady = false;
     uint64_t collisionUs = 0u;
     std::vector<GpuObject> replacement;
+    fo3scene::Preparation<Q1900PreparedTextureQ19> texturePreparation;
+    Q1900PreparedTextureQ19 texture;
+    std::string textureKey;
+    std::unordered_set<std::string> missingTextures;
+    fqloading::ImageTransfer imageTransfer;
+    std::vector<float> vertexTransfer;
+    size_t vertexOffset=0;
+    bool vertexPending=false;
     std::chrono::steady_clock::time_point started{};
     uint64_t generation = 0u;
     uint64_t lastFrame = UINT64_MAX;
     uint64_t uploadUs = 0u;
+    uint64_t textureDecodeUs=0,textureUploadUs=0,npcUploadUs=0;
+    size_t peakStagedImageBytes=0;
     uint64_t maxUploadSliceUs = 0u;
     size_t uploadIndex = 0u;
     size_t npcActorIndex = 0u, npcPartIndex = 0u;
     bool active = false;
+    bool aborting=false;
+    std::string abortReason;
     bool boot = false;
     bool bootAttempted = false;
     bool contextApplied = false;
     std::unordered_set<std::string> previousCollisionPolicy;
 };
 Fo3SceneLoadWork gSceneLoad;
+void AbortFo3SceneLoad(const char* reason);
+// Stage one texture at a time. Misses decode on one bounded worker, including
+// textures beyond the former 64 MiB speculative cache. No DDS decoder runs in
+// the scene upload turn. Existing fallback material semantics are retained.
+bool PrepareFo3SceneImage(const std::string& path) {
+    if(path.empty())return true;
+    const auto key=TextureCacheKey(path, "");
+    if(gTextureCache.count(key))return true;
+    if(gSceneLoad.missingTextures.count(key)) {
+        std::lock_guard<std::mutex> lock(gQ1900TextureCpuMutexQ19);
+        gQ1900PreparedTexturesQ19[key]=Q1900PreparedTextureQ19{};
+        return true;
+    }
+    if(gSceneLoad.textureKey.empty()) {
+        gSceneLoad.textureKey=key;
+        const auto generated=gQ234GeneratedTextures.find(path);
+        if(generated!=gQ234GeneratedTextures.end()) {
+            gSceneLoad.texture.texture=generated->second;
+            gSceneLoad.texture.real=true;
+        } else if(!Q1900TakePreparedTextureQ19(key,gSceneLoad.texture.texture,gSceneLoad.texture.real)) {
+            if(!gSceneLoad.texturePreparation.Start([path](Q1900PreparedTextureQ19& out,const std::atomic<bool>& cancel){
+                if(cancel.load())return false;
+                std::lock_guard<std::mutex> decodeLock(gQ2012TextureDecodeMutexQ19);
+                if(cancel.load())return false;
+                out.real=LoadFalloutTextureRgba(path,out.texture);
+                return !cancel.load();
+            })) {AbortFo3SceneLoad("texture-worker-start");return false;}
+            return false;
+        }
+    }
+    if(gSceneLoad.texturePreparation.Active()) {
+        if(!gSceneLoad.texturePreparation.Ready())return false;
+        if(!gSceneLoad.texturePreparation.Successful()){AbortFo3SceneLoad("texture-preparation");return false;}
+        Q6H_LOGI("SCENE TEXTURE CPU: key=%s queuedUs=%llu decodeUs=%llu decodedBytes=%zu",key.c_str(),
+            (unsigned long long)gSceneLoad.texturePreparation.QueueDelayUs(),(unsigned long long)gSceneLoad.texturePreparation.ExecutionUs(),
+            gSceneLoad.texturePreparation.Get().texture.rgba.size());
+        gSceneLoad.textureDecodeUs+=gSceneLoad.texturePreparation.ExecutionUs();
+        gSceneLoad.texture=std::move(gSceneLoad.texturePreparation.Get());
+        gSceneLoad.texturePreparation.Reset();
+    }
+    if(!gSceneLoad.texture.real) {
+        gSceneLoad.missingTextures.insert(key);gSceneLoad.textureKey.clear();
+        return PrepareFo3SceneImage(path);
+    }
+    if(!fqloading::Allow())return false;
+    gSceneLoad.peakStagedImageBytes=std::max(gSceneLoad.peakStagedImageBytes,gSceneLoad.texture.texture.rgba.size());
+    while(!gSceneLoad.imageTransfer.ready && fqloading::Allow()) {
+        const auto started=fqloading::Now();
+        fqloading::WorkScope operation("scene-texture-allocate/rows/mip");
+        gSceneLoad.imageTransfer.Step(gSceneLoad.texture.texture,true,true,Q1070ApplyStaticAnisotropy);
+        if(gSceneLoad.imageTransfer.failed){AbortFo3SceneLoad("staged-texture-gl");return false;}
+        const auto elapsed=fqloading::Now()-started;
+        gSceneLoad.textureUploadUs+=elapsed;gSceneLoad.uploadUs+=elapsed;
+        gSceneLoad.maxUploadSliceUs=std::max(gSceneLoad.maxUploadSliceUs,elapsed);
+    }
+    if(!gSceneLoad.imageTransfer.ready)return false;
+    const GLuint id=gSceneLoad.imageTransfer.Take();
+    gTextureCache.emplace(key,CachedGpuTexture{id,true});Q1900MarkGpuTextureKnownQ19(key);
+    gSceneLoad.texture=Q1900PreparedTextureQ19{};gSceneLoad.textureKey.clear();
+    return true;
+}
+bool PrepareFo3SceneMaterial(const CpuObject& cpu) {
+    for(const std::string* path:{&cpu.mesh.diffuseTexturePath,&cpu.mesh.normalTexturePath,
+            &cpu.mesh.glowTexturePath,&cpu.mesh.environmentMaskTexturePath})
+        if(!PrepareFo3SceneImage(*path))return false;
+    return true;
+}
 uint64_t gSceneLoadFrame = 0u;
+fqopaque::GpuTimer gLoadingGpuTimer;
+GLsync gLoadingUploadFence=nullptr;
 std::unique_ptr<fo3player::Session> gPlayerSession;
 std::shared_ptr<const fo3world::ReferenceStateSnapshot> gFo3ReferenceState;
 fo3scene::ReferencePublication gFo3ScenePublication;
@@ -3933,7 +4017,19 @@ uint64_t Fo3SceneElapsedUs(std::chrono::steady_clock::time_point since) {
 }
 
 void AbortFo3SceneLoad(const char* reason) {
-    Q6H_LOGE("SCENE LOAD FAILED: reason=%s oldSceneRetained=1", reason);
+    if(!gSceneLoad.aborting) {
+        gSceneLoad.aborting=true;gSceneLoad.abortReason=reason;
+        Q6H_LOGE("SCENE LOAD FAILED: reason=%s oldSceneRetained=1 cancellation=cooperative", reason);
+    }
+    gSceneLoad.preparation.RequestCancel();gSceneLoad.collisionPreparation.RequestCancel();gSceneLoad.texturePreparation.RequestCancel();
+    // A superseded scene stays private while an in-flight decoder retires.
+    // Render frames keep submitting; only shutdown is allowed to join work.
+    if((gSceneLoad.preparation.Active()&&!gSceneLoad.preparation.Ready()) ||
+       (gSceneLoad.collisionPreparation.Active()&&!gSceneLoad.collisionPreparation.Ready()) ||
+       (gSceneLoad.texturePreparation.Active()&&!gSceneLoad.texturePreparation.Ready()))return;
+    gSceneLoad.texturePreparation.Reset();gSceneLoad.imageTransfer.Cancel();
+    gSceneLoad.texture={};gSceneLoad.textureKey.clear();gSceneLoad.missingTextures.clear();
+    gSceneLoad.vertexTransfer.clear();gSceneLoad.vertexOffset=0;gSceneLoad.vertexPending=false;
     Q74DeleteGpuObjects(gSceneLoad.replacement);
     gSceneLoad.collisionPreparation.Reset();
     if (gSceneLoad.contextApplied)
@@ -3944,6 +4040,7 @@ void AbortFo3SceneLoad(const char* reason) {
     }
     gQ234GeneratedTextures.clear();
     gSceneLoad.preparation.Reset();
+    gSceneLoad.missingTextures.clear();
     gSceneLoad.active = false;
     if (gSceneLoad.generation == GetFo3LoadingGeneration()) CancelFo3Loading();
 }
@@ -3957,6 +4054,7 @@ bool BeginFo3SceneLoad(const Fo3CellTransitionRequestQ74& request, bool boot) {
     DiscardFo3ResidentDoorInteractionPlan();
     Q230ResetNpcArrivals();
     gSceneLoad.active = true;
+    gSceneLoad.aborting=false;gSceneLoad.abortReason.clear();
     gSceneLoad.boot = boot;
     gSceneLoad.contextApplied = false;
     gSceneLoad.collisionPreparation.Reset();
@@ -3966,7 +4064,10 @@ bool BeginFo3SceneLoad(const Fo3CellTransitionRequestQ74& request, bool boot) {
     gSceneLoad.generation = GetFo3LoadingGeneration();
     gSceneLoad.uploadIndex = 0u;
     gSceneLoad.npcActorIndex = gSceneLoad.npcPartIndex = 0u;
+    gSceneLoad.npcTexturesInstalled=false;
     gSceneLoad.uploadUs = 0u;
+    gSceneLoad.textureDecodeUs=gSceneLoad.textureUploadUs=gSceneLoad.npcUploadUs=0;
+    gSceneLoad.peakStagedImageBytes=0;
     gSceneLoad.maxUploadSliceUs = 0u;
     gSceneLoad.replacement.clear();
     MarkFo3TransitionWorkStarted();
@@ -4052,6 +4153,11 @@ bool BeginFo3SceneLoad(const Fo3CellTransitionRequestQ74& request, bool boot) {
             for (CpuObject& part : parts) {
                 if (result.request.worldspaceFormId != 0u)
                     result.collisionPlacements.push_back(part.placement);
+                // Preserve the existing unsupported-visual policy while moving
+                // expansion off-thread; authored collision inputs remain intact.
+                if(!PrepareExpandedVertexStreamQ1960(part,result.request.x,result.request.y,result.request.z)) {
+                    ++result.unsupported;continue;
+                }
                 result.selected.push_back(std::move(part));
             }
         }
@@ -4064,32 +4170,14 @@ bool BeginFo3SceneLoad(const Fo3CellTransitionRequestQ74& request, bool boot) {
         for(auto& actor:result.actors)Q230CacheDialogueAnimations(actor,actorDefinitions);
         const auto* actorCatalog=result.playerSession?&result.playerSession->player.Definitions():
             (gPlayerSession?&gPlayerSession->player.Definitions():nullptr);
-        for(auto& actor:result.actors)Q230CacheCombat(actor,actorCatalog);
+        for(auto& actor:result.actors) {
+            Q230CacheCombat(actor,actorCatalog);
+        }
         result.cpuUs = Fo3SceneElapsedUs(phase);
         if (result.selected.size() < 2u) return false;
         phase = std::chrono::steady_clock::now();
-        std::unordered_set<std::string> texturePaths;
-        for (const CpuObject& cpu : result.selected) {
-            for (const std::string* path : {&cpu.mesh.diffuseTexturePath,
-                    &cpu.mesh.normalTexturePath, &cpu.mesh.glowTexturePath,
-                    &cpu.mesh.environmentMaskTexturePath}) {
-                if (!path->empty()) texturePaths.insert(*path);
-            }
-        }
-        for (const std::string& path : texturePaths) {
-            if (cancel.load(std::memory_order_acquire)) return false;
-            // Bound speculative decoded-image retention. Remaining textures use
-            // the existing upload-time decoder; no assets are omitted.
-            size_t retainedBytes = 0u;
-            {
-                std::lock_guard<std::mutex> lock(gQ1900TextureCpuMutexQ19);
-                for (const auto& entry : gQ1900PreparedTexturesQ19)
-                    retainedBytes += entry.second.texture.rgba.size();
-            }
-            if (retainedBytes >= 64u * 1024u * 1024u) break;
-            Q1900PrepareTextureCpuQ19(path);
-            ++result.preparedTextures;
-        }
+        // Texture decoding is demand-driven by the bounded upload lane. This
+        // avoids retaining 64 MiB before the first mesh can start transferring.
         result.textureUs = Fo3SceneElapsedUs(phase);
         return !cancel.load(std::memory_order_acquire);
     })) {
@@ -4099,6 +4187,7 @@ bool BeginFo3SceneLoad(const Fo3CellTransitionRequestQ74& request, bool boot) {
     return true;
 }
 
+bool Q1030InitializeRenderProgramOnly();
 bool ProcessQ74TransitionRequest() {
     // Advance once per submitted frame, not once for each stereo eye.
     if (gSceneLoad.lastFrame == gSceneLoadFrame) return false;
@@ -4113,11 +4202,18 @@ bool ProcessQ74TransitionRequest() {
         BeginFo3SceneLoad(request, false);
         return false;
     }
+    if(gSceneLoad.aborting){AbortFo3SceneLoad(gSceneLoad.abortReason.c_str());return false;}
     if (gSceneLoad.generation != GetFo3LoadingGeneration()) {
         AbortFo3SceneLoad("superseded-generation");
         return false;
     }
-    if (!gSceneLoad.preparation.Ready() || ShouldDelayFo3TransitionConsume()) return false;
+    if(gSceneLoad.boot && !gProgram) {
+        if(GetFo3LoadingPresentedFrames()==0)return false;
+        fqloading::WorkScope operation("world-shader-compile/link");
+        if(!Q1030InitializeRenderProgramOnly())AbortFo3SceneLoad("render-program");
+        return false;
+    }
+    if (!gSceneLoad.preparation.Ready()) return false;
     MarkFo3TransitionWorkStarted();
     if (!gSceneLoad.preparation.Successful()) {
         AbortFo3SceneLoad("cpu-preparation");
@@ -4136,6 +4232,7 @@ bool ProcessQ74TransitionRequest() {
     const size_t skipped = prepared.skipped;
     const size_t unsupported = prepared.unsupported;
     if (!gSceneLoad.contextApplied) {
+        fqloading::WorkScope operation("scene-context/policy-reset");
         // Retire completed background collision tasks before changing its policy.
         if (!DrainFo3TransitionBackgroundWork()) return false;
         SetFo3TransitionContextQ74(request);
@@ -4150,6 +4247,11 @@ bool ProcessQ74TransitionRequest() {
         gFo3LoadingWarmupWarned = false;
         gSceneLoad.replacement.reserve(selected.size());
         gSceneLoad.contextApplied = true;
+        size_t expandedBytes=0;
+        for(const auto& cpu:selected)expandedBytes+=cpu.q1960ExpandedVertices.size()*sizeof(float);
+        Q6H_LOGI("SCENE WORKER TIMELINE: queuedUs=%llu executionUs=%llu cpuReadyElapsedUs=%llu expandedBytes=%zu textureDecode=demand-worker",
+            (unsigned long long)gSceneLoad.preparation.QueueDelayUs(),(unsigned long long)gSceneLoad.preparation.ExecutionUs(),
+            (unsigned long long)Fo3SceneElapsedUs(gSceneLoad.started),expandedBytes);
         Q6H_LOGI("SCENE CPU READY: boot=%d cell=%08X placements=%zu shapes=%zu resolveUs=%llu playerUs=%llu metadataUs=%llu cpuUs=%llu textureUs=%llu preparedTextures=%zu",
                  gSceneLoad.boot ? 1 : 0, request.cellFormId, prepared.placements.size(), selected.size(),
                  static_cast<unsigned long long>(prepared.resolveUs),
@@ -4158,54 +4260,7 @@ bool ProcessQ74TransitionRequest() {
                  static_cast<unsigned long long>(prepared.cpuUs),
                  static_cast<unsigned long long>(prepared.textureUs), prepared.preparedTextures);
     }
-    const auto uploadStarted = std::chrono::steady_clock::now();
-    if (gSceneLoad.uploadIndex < selected.size()) {
-        do {
-            CpuObject& cpu = selected[gSceneLoad.uploadIndex++];
-            GpuObject gpu;
-            if (UploadCpuObject(cpu, request.x, request.y, request.z, gpu)) {
-                gSceneLoad.replacement.push_back(std::move(gpu));
-            } else {
-                if (gpu.vbo) glDeleteBuffers(1, &gpu.vbo);
-                if (gpu.vao) glDeleteVertexArrays(1, &gpu.vao);
-            }
-            // Release transformed/expanded CPU buffers after their GPU upload.
-            cpu = CpuObject{};
-        } while (gSceneLoad.uploadIndex < selected.size() &&
-                 Fo3SceneElapsedUs(uploadStarted) < 6000u);
-        const uint64_t sliceUs = Fo3SceneElapsedUs(uploadStarted);
-        gSceneLoad.uploadUs += sliceUs;
-        gSceneLoad.maxUploadSliceUs = std::max(gSceneLoad.maxUploadSliceUs, sliceUs);
-        return false; // collision/finalization starts on a clean following frame
-    }
-    if (gSceneLoad.npcActorIndex < prepared.actors.size()) {
-        auto& actor = prepared.actors[gSceneLoad.npcActorIndex];
-        if (gSceneLoad.npcPartIndex == 0u) {
-            for (auto& entry : actor.generatedTextures)
-                gQ234GeneratedTextures[entry.first] = std::move(entry.second);
-        }
-        if (gSceneLoad.npcPartIndex < actor.parts.size()) {
-            auto& part = actor.parts[gSceneLoad.npcPartIndex++];
-            Q230UploadActorPart(actor, part, request.x, request.y, request.z);
-            return false;
-        }
-        for (const auto& entry : actor.generatedTextures)
-            gQ234GeneratedTextures.erase(entry.first);
-        actor.generatedTextures.clear();
-        actor.parts.clear();
-        ++gSceneLoad.npcActorIndex;
-        gSceneLoad.npcPartIndex = 0u;
-        return false;
-    }
-    auto& replacement = gSceneLoad.replacement;
-    if (replacement.size() < 2u) {
-        AbortFo3SceneLoad("gpu-upload-too-small");
-        return false;
-    }
-    if (!gSceneLoad.collisionComplete) {
-        const bool backgroundExterior = request.worldspaceFormId == 0x0000003Cu ||
-                                        request.worldspaceFormId == 0x00000A74u;
-        if (backgroundExterior || request.worldspaceFormId == 0u) {
+    if(request.worldspaceFormId==0u || request.worldspaceFormId==0x3Cu || request.worldspaceFormId==0xA74u) {
             if (!gSceneLoad.collisionStarted) {
                 // Existing CELL collision workers are drained before contextApplied.
                 // Player queries and hidden-world draws are paused under the loader;
@@ -4240,8 +4295,82 @@ bool ProcessQ74TransitionRequest() {
                 if (!gSceneLoad.collisionStarted) {
                     AbortFo3SceneLoad("collision-worker-start");
                 }
-                return false;
+                if(!gSceneLoad.collisionStarted)return false;
             }
+    }
+    while (gSceneLoad.uploadIndex < selected.size() && fqloading::Allow()) {
+        CpuObject& cpu=selected[gSceneLoad.uploadIndex];
+        if(!gSceneLoad.vertexPending && !PrepareFo3SceneMaterial(cpu))return false;
+        if(!gSceneLoad.active || !fqloading::Allow())return false;
+        const auto uploadStarted=std::chrono::steady_clock::now();
+        fqloading::WorkScope operation("scene-geometry-allocate/rows");
+        if(!gSceneLoad.vertexPending) {
+            GpuObject gpu;
+            gQ1960CaptureVboQ19=true;gQ1960CapturedVboVerticesQ19=&gSceneLoad.vertexTransfer;
+            const bool uploaded=UploadCpuObject(cpu,request.x,request.y,request.z,gpu);
+            gQ1960CaptureVboQ19=false;gQ1960CapturedVboVerticesQ19=nullptr;
+            if(!uploaded) {
+                std::vector<GpuObject> failed;failed.push_back(std::move(gpu));Q74DeleteGpuObjects(failed);
+                AbortFo3SceneLoad("geometry-upload");return false;
+            }
+            gSceneLoad.replacement.push_back(std::move(gpu));
+            gSceneLoad.vertexPending=true;gSceneLoad.vertexOffset=0;
+        } else if(gSceneLoad.vertexOffset<gSceneLoad.vertexTransfer.size()*sizeof(float)) {
+            const size_t bytes=std::min(fqloading::TransferBytes,
+                gSceneLoad.vertexTransfer.size()*sizeof(float)-gSceneLoad.vertexOffset);
+            glBindBuffer(GL_ARRAY_BUFFER,gSceneLoad.replacement.back().vbo);
+            glBufferSubData(GL_ARRAY_BUFFER,GLintptr(gSceneLoad.vertexOffset),GLsizeiptr(bytes),
+                reinterpret_cast<const uint8_t*>(gSceneLoad.vertexTransfer.data())+gSceneLoad.vertexOffset);
+            gSceneLoad.vertexOffset+=bytes;
+            if(glGetError()!=GL_NO_ERROR){AbortFo3SceneLoad("vertex-transfer");return false;}
+        }
+        if(gSceneLoad.vertexOffset==gSceneLoad.vertexTransfer.size()*sizeof(float)) {
+            Q2017PublishSharedGeometry(gSceneLoad.replacement.back());
+            gSceneLoad.vertexTransfer.clear();gSceneLoad.vertexPending=false;
+            cpu=CpuObject{};++gSceneLoad.uploadIndex;
+        }
+        const uint64_t sliceUs=Fo3SceneElapsedUs(uploadStarted);
+        gSceneLoad.uploadUs+=sliceUs;
+        gSceneLoad.maxUploadSliceUs=std::max(gSceneLoad.maxUploadSliceUs,sliceUs);
+    }
+    if(gSceneLoad.uploadIndex<selected.size())return false;
+    if (gSceneLoad.npcActorIndex < prepared.actors.size()) {
+        auto& actor = prepared.actors[gSceneLoad.npcActorIndex];
+        if (!gSceneLoad.npcTexturesInstalled) {
+            for (auto& entry : actor.generatedTextures)
+                gQ234GeneratedTextures[entry.first] = std::move(entry.second);
+            gSceneLoad.npcTexturesInstalled=true;
+        }
+        if (gSceneLoad.npcPartIndex < actor.parts.size()) {
+            auto& part = actor.parts[gSceneLoad.npcPartIndex];
+            if(!PrepareFo3SceneMaterial(part) || !gSceneLoad.active || !fqloading::Allow())return false;
+            const auto npcStarted=fqloading::Now();
+            fqloading::WorkScope operation("npc-part-upload");
+            ++gSceneLoad.npcPartIndex;
+            if(!Q230UploadActorPart(actor, part, request.x, request.y, request.z))
+                AbortFo3SceneLoad("npc-part-upload");
+            const auto elapsed=fqloading::Now()-npcStarted;
+            gSceneLoad.npcUploadUs+=elapsed;gSceneLoad.uploadUs+=elapsed;
+            gSceneLoad.maxUploadSliceUs=std::max(gSceneLoad.maxUploadSliceUs,elapsed);
+            return false;
+        }
+        for (const auto& entry : actor.generatedTextures)
+            gQ234GeneratedTextures.erase(entry.first);
+        actor.generatedTextures.clear();
+        actor.parts.clear();
+        ++gSceneLoad.npcActorIndex;
+        gSceneLoad.npcPartIndex = 0u;gSceneLoad.npcTexturesInstalled=false;
+        return false;
+    }
+    auto& replacement = gSceneLoad.replacement;
+    if (replacement.size() < 2u) {
+        AbortFo3SceneLoad("gpu-upload-too-small");
+        return false;
+    }
+    if (!gSceneLoad.collisionComplete) {
+        const bool backgroundExterior = request.worldspaceFormId == 0x0000003Cu ||
+                                        request.worldspaceFormId == 0x00000A74u;
+        if (backgroundExterior || request.worldspaceFormId == 0u) {
             if (!gSceneLoad.collisionPreparation.Ready()) return false;
             if (!gSceneLoad.collisionPreparation.Successful()) {
                 AbortFo3SceneLoad("collision-preparation");
@@ -4256,10 +4385,14 @@ bool ProcessQ74TransitionRequest() {
             gSceneLoad.collisionReady = InitializeFo3CollisionOverlay(prepared.collisionPlacements,
                 request.x, request.y, request.z, SCENE_FORWARD, FLOOR_Y, FO3_UNITS_PER_METRE);
             gSceneLoad.collisionUs = Fo3SceneElapsedUs(started);
+            if(!gSceneLoad.collisionReady){AbortFo3SceneLoad("collision-preparation");return false;}
         }
         gSceneLoad.collisionComplete = true;
         return false; // Commit/environment/terrain gets a separate submitted frame.
     }
+    // Admission precedes the atomic collision/visual commit. Never yield after
+    // consuming the collision token and before completing visual publication.
+    if(!fqloading::Allow())return false;
     if (gSceneLoad.collisionStarted) {
         auto& collision = gSceneLoad.collisionPreparation.Get();
         uint64_t swapUs = 0u;
@@ -4278,6 +4411,7 @@ bool ProcessQ74TransitionRequest() {
     }
     const bool collisionReady = gSceneLoad.collisionReady;
     const uint64_t collisionUs = gSceneLoad.collisionUs;
+    fqloading::WorkScope publicationOperation("scene-publication/environment/terrain");
     const auto finalizationStarted = std::chrono::steady_clock::now();
     const size_t oldObjects = gObjects.size();
     if (prepared.playerSession) {
@@ -4386,6 +4520,10 @@ bool ProcessQ74TransitionRequest() {
              request.cellFormId, request.worldspaceFormId,
              oldObjects, gObjects.size(), triangles, realDiffuse, realNormal,
              skipped, unsupported, collisionReady ? 1 : 0);
+    prepared.textureUs=gSceneLoad.textureDecodeUs;
+    Q6H_LOGI("SCENE UPLOAD TIMELINE: textureDecodeUs=%llu textureUploadApiUs=%llu npcUploadApiUs=%llu peakStagedImageBytes=%zu",
+        (unsigned long long)gSceneLoad.textureDecodeUs,(unsigned long long)gSceneLoad.textureUploadUs,
+        (unsigned long long)gSceneLoad.npcUploadUs,gSceneLoad.peakStagedImageBytes);
     Q6H_LOGI("SCENE LOAD READY: boot=%d cell=%08X resolveUs=%llu metadataUs=%llu cpuUs=%llu textureUs=%llu uploadUs=%llu maxUploadSliceUs=%llu collisionUs=%llu finalizationUs=%llu totalUs=%llu exteriorWarmupPending=%d",
              gSceneLoad.boot ? 1 : 0, request.cellFormId,
              static_cast<unsigned long long>(prepared.resolveUs),
@@ -4399,6 +4537,7 @@ bool ProcessQ74TransitionRequest() {
              static_cast<unsigned long long>(Fo3SceneElapsedUs(gSceneLoad.started)),
              gQ2013ExteriorWarmupPending ? 1 : 0);
     gSceneLoad.preparation.Reset();
+    gSceneLoad.missingTextures.clear();
     gSceneLoad.previousCollisionPolicy.clear();
     gSceneLoad.active = false;
     return true;
@@ -7075,15 +7214,7 @@ bool Q1030BootMegatonOnRender() {
     gSceneLoad.bootAttempted = true;
     BeginFo3Loading(0u, 0x00000A74u);
     if (!BeginFo3SceneLoad({}, true)) return false;
-    // CPU gate/scene preparation overlaps render-thread shader compilation.
-    const auto shaderStarted = std::chrono::steady_clock::now();
-    if (!Q1030InitializeRenderProgramOnly()) {
-        AbortFo3SceneLoad("render-program");
-        return false;
-    }
-    Q6H_LOGI("SCENE STARTUP SHADERS: elapsedUs=%llu cpuPreparationOverlapped=1",
-             static_cast<unsigned long long>(Fo3SceneElapsedUs(shaderStarted)));
-    return true;
+    return false; // The next frame compiles shaders after presentation starts.
 }
 
 struct Q1990NativeLodBlock {
@@ -8028,6 +8159,8 @@ void Q1970AdvanceLodGpuQ19() {
 
         Q1900CellStateQ19& state = *pending.state;
         while (state.textureCursor < state.textures.size()) {
+            if(!fqloading::Allow())return;
+            fqloading::WorkScope operation("lod-texture-step");
             Q1960AdvanceTextureQ19(state, bytesThisFrame);
             if (bytesThisFrame >= q2015LodGpuBytes ||
                 Q1960ElapsedUsQ19(frameStarted) >= q2015LodGpuBudgetUs) {
@@ -8037,6 +8170,8 @@ void Q1970AdvanceLodGpuQ19() {
             if (state.q1960TextureUpload.active) continue;
         }
         while (state.gpuCursor < state.cpu.size()) {
+            if(!fqloading::Allow())return;
+            fqloading::WorkScope operation("lod-shape-step");
             Q1960AdvanceShapeQ19(state, bytesThisFrame);
             if (bytesThisFrame >= q2015LodGpuBytes ||
                 Q1960ElapsedUsQ19(frameStarted) >= q2015LodGpuBudgetUs) {
@@ -14007,6 +14142,11 @@ void Q6HDeleteFramebuffers(GLsizei n, const GLuint* framebuffers) {
     gSceneLoad.active = false;
     gSceneLoad.bootAttempted = false;
     CancelFo3Loading();
+    gSceneLoad.texturePreparation.Reset();gSceneLoad.imageTransfer.Cancel();
+    gSceneLoad.texture={};gSceneLoad.textureKey.clear();gSceneLoad.missingTextures.clear();
+    gSceneLoad.vertexTransfer.clear();gSceneLoad.vertexPending=false;
+    if(gLoadingUploadFence){glDeleteSync(gLoadingUploadFence);gLoadingUploadFence=nullptr;}
+    gLoadingGpuTimer.Shutdown();
     fqopaque::timer.Shutdown();
     Q1280ShutdownPostQ1280();
     ShutdownFo3WaterQ2070();
@@ -14209,6 +14349,10 @@ bool ActivateFo3DoorQ1700(float originX, float originY, float originZ,
 bool GetFo3PcLightDirection(float out[3]) {
     return fo3tod::GetPcLightDirection(fo3tod::gTestHour, out);
 }
+
+// Loading owns its GL state and depth target. Compile it before legacy world
+// GL interception macros (notably forced depth-test and framebuffer teardown).
+#include "ui/loading/fo3-loading-vr.h"
 
 #define glGenFramebuffers Q6HGenFramebuffers
 #define glDeleteFramebuffers Q6HDeleteFramebuffers

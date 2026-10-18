@@ -380,6 +380,7 @@ public:
             return;
         }
         FlushFo3PlayerState();
+        ShutdownFo3LoadingVr();
         fo3pipui::Shutdown();ResetFo3Pipboy();fo3lockui::Shutdown();CancelFo3Lockpick();
         fo3notifyui::Shutdown();
         fo3barterui::Shutdown();fo3dialogueui::Shutdown();
@@ -1510,6 +1511,18 @@ private:
             static_cast<int64_t>(frameState.predictedDisplayTime));
         const double gameplaySeconds=static_cast<double>(gameplayFrameTime)*1e-9;
         fo3loadingvr::PrepareCatalog();
+        auto& loadingGpu=gLoadingGpuTimer;
+        static uint64_t previousLoadingCpu=0;
+        loadingGpu.Poll(gSceneLoadFrame);
+        fqloading::budget.Begin(fqloading::Now(),uint64_t(std::max<int64_t>(1000,frameState.predictedDisplayPeriod/1000)),
+            previousLoadingCpu,uint64_t(std::max(0.0,appCadenceUs)),uint64_t(loadingGpu.gpu.Mean()),IsFo3LoadingVisible()||!gSceneReady);
+
+        if(gLoadingUploadFence) {
+            const auto ready=glClientWaitSync(gLoadingUploadFence,0,0);
+            if(ready==GL_ALREADY_SIGNALED||ready==GL_CONDITION_SATISFIED||ready==GL_WAIT_FAILED) {
+                glDeleteSync(gLoadingUploadFence);gLoadingUploadFence=nullptr;
+            } else fqloading::budget.gpuReady=false;
+        }
 
         std::array<XrCompositionLayerProjectionView, 2> projectionViews{
             XrCompositionLayerProjectionView{XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW},
@@ -1542,12 +1555,21 @@ private:
                 fo3loadingvr::SetHead(loadingHead.position.x,loadingHead.position.y,loadingHead.position.z,
                     loadingHead.orientation.x,loadingHead.orientation.y,loadingHead.orientation.z,loadingHead.orientation.w);
                 ++gSceneLoadFrame;
+                // All loading work advances once before stereo acquisition.
+                // No scene uploads or preparation are dispatched from an eye.
+                if(!gSceneReady)Q1030BootMegatonOnRender();
+                if(IsFo3LoadingVisible()) {
+                    loadingGpu.Begin(gSceneLoadFrame);
+                    fo3loadingvr::AdvanceAssets();
+                    ProcessQ74TransitionRequest();
+                }
                 SyncInput(frameState.predictedDisplayTime);
                 // One world clock shared by exterior lighting, resident PACK
                 // selection and unloaded XTEL scheduling. Never fast-forward
                 // across a loading screen or headset focus interruption.
                 const int64_t clockNs=gameplayFrameTime;
                 static int64_t previousWorldClockNs=0;
+                if(!IsFo3LoadingVisible()) {
                 if (!Fo3GameplayBlocked() && gPlayerSession && !gPlayerSession->saveBlocked && gSceneReady &&
                     !IsFo3LoadingVisible() && sessionState_==XR_SESSION_STATE_FOCUSED &&
                     previousWorldClockNs>0 && clockNs>previousWorldClockNs) {
@@ -1589,7 +1611,6 @@ private:
                     }
                     if(beforeScripts!=scriptPlayer.Revision())FlushFo3PlayerState();
                 }
-                previousWorldClockNs=clockNs;
                 if (gPlayerSession) fo3tod::gTestHour=gPlayerSession->player.Snapshot().gameHour;
                 if (!gFo3Environment.interior) UpdateFo3TimeOfDay(0.0f,clockNs);
                 if (!gFo3Environment.interior && fo3tod::gRuntime.ready) {
@@ -1801,6 +1822,18 @@ private:
                     const auto sound=fo3notify::Notifications().TakeSound();
                     if(!sound.empty())fo3audio::NamedSound(sound);
                 }
+                } else {
+                    lastFrameTime_=0;ResetFo3Pipboy();
+                    ApplyAuthoredDoorFacingQ1810(views[0]);
+                    const auto head=ToVirtualPose(loadingHead);
+                    UpdateFo3ExteriorStreamingQ1890(head.position.x,head.position.z);
+                }
+                previousWorldClockNs=clockNs;
+                if(IsFo3LoadingVisible() && fo3loadingvr::gGeneration!=GetFo3LoadingGeneration())
+                    fo3loadingvr::AdvanceAssets();
+                loadingGpu.End();
+                if(IsFo3LoadingVisible() && !gLoadingUploadFence && fqloading::budget.operations)
+                    gLoadingUploadFence=glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE,0);
                 bool rendered = true;
                 for (uint32_t eye = 0; eye < 2; ++eye) {
                     rendered = RenderEye(eye, views[eye], projectionViews[eye]) && rendered;
@@ -1840,18 +1873,45 @@ private:
         endInfo.environmentBlendMode = blendMode_;
         endInfo.layerCount = layerCount;
         endInfo.layers = layerCount ? layers : nullptr;
+        const auto submitStarted=fqloading::Now();
         const bool q1700FrameSubmitted =
             CheckXr(xrEndFrame(session_, &endInfo), "xrEndFrame");
+        if(IsFo3LoadingVisible()) {
+            previousLoadingCpu=fqloading::Now()-uint64_t(std::chrono::duration_cast<std::chrono::microseconds>(appFrameStarted.time_since_epoch()).count());
+            static uint64_t reportGeneration=~uint64_t{0},frames=0,missed=0,worst=0;
+            static bool animated=false,artSeen=false;
+            const uint64_t period=uint64_t(std::max<int64_t>(1000,frameState.predictedDisplayPeriod/1000));
+            if(reportGeneration!=GetFo3LoadingGeneration()) {reportGeneration=GetFo3LoadingGeneration();frames=missed=worst=0;animated=artSeen=false;}
+            if(q1700FrameSubmitted&&layerCount) {
+                ++frames;worst=std::max(worst,previousLoadingCpu);
+                if(previousLoadingCpu>period || uint64_t(std::max(0.0,appCadenceUs))>period*3/2)++missed;
+                if(frames==1)FQ_LOGI("LOADING FIRST FRAME: generation=%llu elapsedUs=%llu",(unsigned long long)reportGeneration,(unsigned long long)GetFo3LoadingElapsedUs());
+                if(!artSeen && fo3loadingvr::Ready() && fo3loadingvr::gArt) {
+                    artSeen=true;FQ_LOGI("LOADING FIRST ART FRAME: generation=%llu elapsedUs=%llu",(unsigned long long)reportGeneration,(unsigned long long)GetFo3LoadingElapsedUs());
+                }
+                if(!animated && (!fo3loadingvr::gCompass.empty()||!fo3loadingvr::gModel.empty()||fo3loadingvr::gSlideshow.running)) {
+                    animated=true;FQ_LOGI("LOADING FIRST ANIMATED FRAME: generation=%llu elapsedUs=%llu",(unsigned long long)reportGeneration,(unsigned long long)GetFo3LoadingElapsedUs());
+                }
+                if(frames%72==0 || gFo3LoadingPhase.load()==FO3_LOADING_POST)
+                    FQ_LOGI("LOADING FRAME STATS: generation=%llu frames=%llu missed=%llu appElapsedUs=%llu cadenceUs=%.1f worstAppElapsedUs=%llu submitUs=%llu workApiElapsedUs=%llu uploadGpuUs=%.1f gpuSupported=%d periodUs=%llu",(unsigned long long)reportGeneration,(unsigned long long)frames,(unsigned long long)missed,(unsigned long long)previousLoadingCpu,appCadenceUs,(unsigned long long)worst,(unsigned long long)(fqloading::Now()-submitStarted),(unsigned long long)fqloading::budget.spent,loadingGpu.gpu.Mean(),loadingGpu.supported,(unsigned long long)period);
+            }
+        } else previousLoadingCpu=0;
         if(gStereoMvpReady && layerCount>0 && !IsFo3LoadingVisible())
             QActorReportFrame(fqopaque::Micros(appFrameStarted),appCadenceUs);
+        static uint64_t pendingPlayableGeneration=0;
         if (q1700FrameSubmitted && layerCount > 0) {
             const bool wasLoading = IsFo3LoadingVisible();
-            if (fo3loadingvr::Ready()) MarkFo3LoadingFramePresented(fo3loadingvr::FullyVisible());
+            if(wasLoading)MarkFo3LoadingFramePresented(fo3loadingvr::FullyVisible());
             if (wasLoading && !IsFo3LoadingVisible()) {
+                pendingPlayableGeneration=GetFo3LoadingGeneration();
                 FQ_LOGI("LOADING PRESENTATION COMPLETE: generation=%llu cell=%08X worldspace=%08X totalUs=%llu",
                         static_cast<unsigned long long>(GetFo3LoadingGeneration()),
                         GetFo3LoadingCell(), GetFo3LoadingWorldspace(),
                         static_cast<unsigned long long>(GetFo3LoadingElapsedUs()));
+            } else if(!wasLoading && pendingPlayableGeneration==GetFo3LoadingGeneration() &&
+                      pendingPlayableGeneration && gSceneReady && !Fo3GameplayBlocked()) {
+                FQ_LOGI("SCENE FIRST PLAYABLE FRAME: generation=%llu elapsedUs=%llu",(unsigned long long)pendingPlayableGeneration,(unsigned long long)GetFo3LoadingElapsedUs());
+                pendingPlayableGeneration=0;
             }
         }
     }
@@ -1878,7 +1938,7 @@ private:
         }
         uint32_t depthIndex = 0;
         bool depthReady = false;
-        if (eye.depthHandle != XR_NULL_HANDLE &&
+        if (!IsFo3LoadingVisible() && eye.depthHandle != XR_NULL_HANDLE &&
             CheckXr(xrAcquireSwapchainImage(eye.depthHandle, &acquireInfo, &depthIndex), "xrAcquireSwapchainImage(depth)")) {
             depthReady = CheckXr(xrWaitSwapchainImage(eye.depthHandle, &waitInfo), "xrWaitSwapchainImage(depth)");
             if (!depthReady) {
@@ -1892,10 +1952,19 @@ private:
         glBindFramebuffer(GL_FRAMEBUFFER, framebuffer_);
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
                                eye.images[imageIndex].image, 0);
-        Q1280BeginEyePostQ1280(framebuffer_, eye.width, eye.height);
-        glViewport(0, 0, eye.width, eye.height);
+        const bool loadingEye=IsFo3LoadingVisible();
+        if(!loadingEye) {
+            Q1280BeginEyePostQ1280(framebuffer_, eye.width, eye.height);
+            glViewport(0, 0, eye.width, eye.height);
+        }
 
         if (glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE) {
+            if(loadingEye) {
+                const Mat4 projection=ProjectionFromFov(view.fov,0.04f,125000.0f/FO3_UNITS_PER_METRE_Q715);
+                const Mat4 loadingVp=Multiply(projection,ViewFromPose(view.pose));
+                RenderFo3LoadingVr(framebuffer_,eye.width,eye.height,loadingVp.m,eyeIndex==0);
+                rendered=true;
+            } else {
             glDisable(GL_DEPTH_TEST);
             const Fo3Environment& q1000Env = GetFo3Environment();
             if (q1000Env.valid) {
@@ -2099,10 +2168,7 @@ private:
                 model.m[13]=gQ210Head[1];model.m[14]=gQ210Head[2]-std::cos(yaw)*1.5f;model.m[15]=1;
                 const auto pauseMvp=Multiply(viewProjection,model);fo3pauseui::Render(pauseMvp.m);
             }
-            if (IsFo3LoadingVisible()) {
-                const Mat4 loadingVp=Multiply(projection,ViewFromPose(view.pose));
-                RenderFo3LoadingVr(framebuffer_, eye.width, eye.height, loadingVp.m, eyeIndex == 0);
-            }
+            } // gameplay eye; loading has no world/HUD/post/depth-copy work
             glFlush();
         } else {
             FQ_LOGE("Incomplete eye framebuffer");

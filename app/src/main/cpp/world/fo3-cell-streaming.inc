@@ -207,7 +207,9 @@ void Q1910QueueGpuDeleteQ19(GpuObject& object) {
 }
 
 void Q1910DrainDeferredGpuDeletesQ19(bool flushAll = false) {
+    if(!flushAll && !fqloading::Allow())return;
     if (gWorldStreaming.deferredGpuDeletes.empty()) return;
+    fqloading::WorkScope operation("deferred-gpu-destruction");
     const size_t queuedBefore = gWorldStreaming.deferredGpuDeletes.size();
     const auto started = std::chrono::steady_clock::now();
     size_t deleted = 0u;
@@ -1209,6 +1211,8 @@ bool Q2013AdvanceCellGpuSliceQ19(
     const uint64_t sliceTimeBudgetUs = urgent ? 1400u : 950u;
 
     while (state.textureCursor < state.textures.size()) {
+        if(!fqloading::Allow())return false;
+        fqloading::WorkScope operation("cell-texture-step");
         Q1960AdvanceTextureQ19(state, globalBytes);
         didWork = true;
         if (globalBytes - sliceStartBytes >= sliceByteBudget ||
@@ -1216,6 +1220,8 @@ bool Q2013AdvanceCellGpuSliceQ19(
         if (state.q1960TextureUpload.active) continue;
     }
     while (state.gpuCursor < state.cpu.size()) {
+        if(!fqloading::Allow())return false;
+        fqloading::WorkScope operation("cell-shape-step");
         Q1960AdvanceShapeQ19(state, globalBytes);
         didWork = true;
         if (globalBytes - sliceStartBytes >= sliceByteBudget ||

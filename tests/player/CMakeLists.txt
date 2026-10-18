@@ -336,3 +336,12 @@ target_compile_features(pause_render_tests PRIVATE cxx_std_17)
 target_compile_options(pause_render_tests PRIVATE -Wall -Wextra -Werror)
 target_include_directories(pause_render_tests PRIVATE ../pipboy/mock ../render/mock ../nif ../../app/src/main/cpp ../../app/src/main/cpp/data)
 add_test(NAME pause_render_tests COMMAND pause_render_tests)
+
+# Opt-in original-data microbenchmark; excluded from routine CI builds.
+get_target_property(loading_catalogue_sources pause_debug_tests SOURCES)
+list(REMOVE_ITEM loading_catalogue_sources pause_debug_tests.cpp)
+add_executable(loading_catalog_benchmark EXCLUDE_FROM_ALL
+    ../../tools/loading/benchmark_catalogue.cpp ${loading_catalogue_sources})
+target_compile_features(loading_catalog_benchmark PRIVATE cxx_std_17)
+target_include_directories(loading_catalog_benchmark PRIVATE ../../app/src/main/cpp)
+target_link_libraries(loading_catalog_benchmark PRIVATE ZLIB::ZLIB)

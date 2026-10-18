@@ -1,6 +1,8 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
+#include <cstdint>
 #include <memory>
 #include <thread>
 #include <utility>
@@ -25,9 +27,13 @@ public:
         success_ = false;
         try {
             result_ = std::make_unique<Result>();
-            worker_ = std::thread([this, work = std::move(work)]() mutable {
+            const auto queued=std::chrono::steady_clock::now();
+            worker_ = std::thread([this, queued, work = std::move(work)]() mutable {
+                const auto started=std::chrono::steady_clock::now();
+                queueDelayUs_=uint64_t(std::chrono::duration_cast<std::chrono::microseconds>(started-queued).count());
                 try { success_ = work(*result_, cancelled_); }
                 catch (...) { success_ = false; }
+                executionUs_=uint64_t(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now()-started).count());
                 ready_.store(true, std::memory_order_release);
             });
         } catch (...) {
@@ -41,6 +47,8 @@ public:
     bool Successful() const { return Ready() && success_; }
     Result& Get() { return *result_; } // render thread only, after Ready()
 
+    uint64_t QueueDelayUs() const {return Ready()?queueDelayUs_:0;}
+    uint64_t ExecutionUs() const {return Ready()?executionUs_:0;}
     bool Active() const { return bool(result_); } // render thread only
     void RequestCancel() { cancelled_.store(true, std::memory_order_release); }
     bool TryReset() {
@@ -61,6 +69,7 @@ private:
     std::atomic<bool> cancelled_{false};
     std::atomic<bool> ready_{false};
     bool success_ = false;
+    uint64_t queueDelayUs_=0,executionUs_=0;
 };
 
 } // namespace fo3scene

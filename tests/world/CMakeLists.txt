@@ -144,3 +144,9 @@ target_compile_options(resident_reconcile_runtime_tests PRIVATE -Wall -Wextra -W
 target_include_directories(resident_reconcile_runtime_tests PRIVATE ../../app/src/main/cpp ../../app/src/main/cpp/world)
 target_link_libraries(resident_reconcile_runtime_tests PRIVATE Threads::Threads)
 add_test(NAME resident_reconcile_runtime_tests COMMAND resident_reconcile_runtime_tests)
+
+add_executable(loading_work_tests loading_work_tests.cpp)
+target_compile_features(loading_work_tests PRIVATE cxx_std_17)
+target_compile_options(loading_work_tests PRIVATE -Wall -Wextra -Werror -UNDEBUG)
+target_include_directories(loading_work_tests PRIVATE ../loading/mock ../../app/src/main/cpp)
+add_test(NAME loading_work_tests COMMAND loading_work_tests)

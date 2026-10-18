@@ -12,6 +12,8 @@
 #include <cmath>
 #include <cstddef>
 #include <limits>
+#include "rendering/loading-transfer.h"
+#include "rendering/loading-work-scope.h"
 
 // Standalone loading renderer: CPU archive/NIF/DDS work runs off-thread.
 // Draws into its own depth target, then replaces the entire eye image. No world,
@@ -21,7 +23,7 @@ using fo3loadingpose::Matrix;
 using fo3loadingpose::Multiply;
 using fo3loadingpose::Placement;
 struct Vertex { float p[3],n[3],uv[2],colour[4]; };
-struct CpuShape { Fo3StaticNifMesh mesh; Fo3RgbaTexture image; std::vector<Vertex> vertices; int bone=-1,slide=-1; };
+struct CpuShape { Fo3StaticNifMesh mesh; Fo3RgbaTexture image; std::vector<Vertex> vertices; float centre[3]{}; int bone=-1,slide=-1; };
 struct CpuDisplay {
     Fo3RgbaTexture art;
     std::vector<CpuShape> model, compass, overlay;
@@ -41,6 +43,10 @@ struct Shape { GLuint vao=0,vbo=0,ibo=0,texture=0; GLsizei count=0; bool unlit=f
 inline fo3scene::Preparation<fo3loadingmenu::Definition> gCatalog;
 inline fo3loadingmenu::Definition gMenu;
 inline fo3scene::Preparation<CpuDisplay> gPreparation;
+inline fo3scene::Preparation<CpuDisplay> gBasePreparation;
+inline bool gBaseStarted=false,gBaseReady=false;
+inline fqloading::ImageTransfer gImageTransfer;
+inline uint64_t gAssetStarted=0;
 inline bool gCatalogStarted=false,gCatalogFailed=false,gJobStarted=false,gUploaded=false;
 inline uint64_t gGeneration=~uint64_t{0};
 inline uint64_t gSeed=fo3loadingpose::Mix(Fo3LoadingClockUs());
@@ -48,6 +54,9 @@ inline Matrix gHead=fo3loadingpose::Identity(),gAnchor=fo3loadingpose::Identity(
 inline std::vector<Shape> gModel,gCompass,gOverlay,gNextModel,gNextCompass,gNextOverlay;
 inline size_t gModelUpload=0,gCompassUpload=0,gOverlayUpload=0;
 inline bool gArtUploaded=false;
+inline Shape gPendingShape;
+inline bool gShapeActive=false;
+inline size_t gVertexOffset=0,gIndexOffset=0;
 inline std::vector<GLuint> gSlides,gNextSlides;
 inline size_t gSlideUpload=0;
 inline fo3anim::Skeleton gUiHierarchy;
@@ -232,27 +241,47 @@ inline void DeleteImages(std::vector<GLuint>& images) {
     for(GLuint texture:images)if(texture)glDeleteTextures(1,&texture);
     images.clear();
 }
-inline void UploadShape(CpuShape& src,std::vector<Shape>& target,bool compass) {
+inline void CancelShapeTransfer() {
+    std::vector<Shape> pending{gPendingShape};DeleteShapes(pending);
+    gPendingShape={};gShapeActive=false;gVertexOffset=gIndexOffset=0;
+}
+inline bool UploadShape(CpuShape& src,std::vector<Shape>& target,bool compass) {
     auto& m=src.mesh;auto& v=src.vertices;
-    if(v.empty() || m.indices.empty())return;
-    Shape s;s.bone=src.bone;s.slide=src.slide;s.count=static_cast<GLsizei>(m.indices.size());s.unlit=compass||m.noLighting;s.alpha=m.alpha;s.blend=m.alphaBlend;s.sourceBlend=m.alphaSourceBlend;s.destBlend=m.alphaDestBlend;
-    for(const auto& vertex:v)for(int a=0;a<3;++a)s.centre[a]+=vertex.p[a]/v.size();
-    s.cutoff=m.alphaTest?m.alphaThreshold:0.0f;
-    s.texture=UploadImage(src.image);
-    if(!s.texture) { Fo3RgbaTexture white;white.width=white.height=1;white.rgba={255,255,255,255};s.texture=UploadImage(white); }
-    glGenVertexArrays(1,&s.vao);glBindVertexArray(s.vao);
-    glGenBuffers(1,&s.vbo);glBindBuffer(GL_ARRAY_BUFFER,s.vbo);
-    glBufferData(GL_ARRAY_BUFFER,v.size()*sizeof(Vertex),v.data(),GL_STATIC_DRAW);
-    glGenBuffers(1,&s.ibo);glBindBuffer(GL_ELEMENT_ARRAY_BUFFER,s.ibo);
-    glBufferData(GL_ELEMENT_ARRAY_BUFFER,m.indices.size()*sizeof(uint32_t),m.indices.data(),GL_STATIC_DRAW);
-    for(GLuint a=0;a<4;++a)glEnableVertexAttribArray(a);
-    glVertexAttribPointer(0,3,GL_FLOAT,GL_FALSE,sizeof(Vertex),reinterpret_cast<void*>(offsetof(Vertex,p)));
-    glVertexAttribPointer(1,3,GL_FLOAT,GL_FALSE,sizeof(Vertex),reinterpret_cast<void*>(offsetof(Vertex,n)));
-    glVertexAttribPointer(2,2,GL_FLOAT,GL_FALSE,sizeof(Vertex),reinterpret_cast<void*>(offsetof(Vertex,uv)));
-    glVertexAttribPointer(3,4,GL_FLOAT,GL_FALSE,sizeof(Vertex),reinterpret_cast<void*>(offsetof(Vertex,colour)));
-    target.push_back(s);
-
-    src=CpuShape{};
+    if(v.empty() || m.indices.empty())return true;
+    if(!gShapeActive) {
+        if(!src.image.rgba.empty() && !gImageTransfer.Step(src.image,false,false))return false;
+        auto& s=gPendingShape;
+        s.bone=src.bone;s.slide=src.slide;s.count=static_cast<GLsizei>(m.indices.size());s.unlit=compass||m.noLighting;s.alpha=m.alpha;s.blend=m.alphaBlend;s.sourceBlend=m.alphaSourceBlend;s.destBlend=m.alphaDestBlend;
+        std::copy(src.centre,src.centre+3,s.centre);
+        s.cutoff=m.alphaTest?m.alphaThreshold:0.0f;s.texture=gImageTransfer.Take();
+        if(!s.texture) {Fo3RgbaTexture white;white.width=white.height=1;white.rgba={255,255,255,255};s.texture=UploadImage(white);}
+        glGenVertexArrays(1,&s.vao);glBindVertexArray(s.vao);
+        glGenBuffers(1,&s.vbo);glBindBuffer(GL_ARRAY_BUFFER,s.vbo);
+        glBufferData(GL_ARRAY_BUFFER,v.size()*sizeof(Vertex),nullptr,GL_STATIC_DRAW);
+        glGenBuffers(1,&s.ibo);glBindBuffer(GL_ELEMENT_ARRAY_BUFFER,s.ibo);
+        glBufferData(GL_ELEMENT_ARRAY_BUFFER,m.indices.size()*sizeof(uint32_t),nullptr,GL_STATIC_DRAW);
+        for(GLuint a=0;a<4;++a)glEnableVertexAttribArray(a);
+        glVertexAttribPointer(0,3,GL_FLOAT,GL_FALSE,sizeof(Vertex),reinterpret_cast<void*>(offsetof(Vertex,p)));
+        glVertexAttribPointer(1,3,GL_FLOAT,GL_FALSE,sizeof(Vertex),reinterpret_cast<void*>(offsetof(Vertex,n)));
+        glVertexAttribPointer(2,2,GL_FLOAT,GL_FALSE,sizeof(Vertex),reinterpret_cast<void*>(offsetof(Vertex,uv)));
+        glVertexAttribPointer(3,4,GL_FLOAT,GL_FALSE,sizeof(Vertex),reinterpret_cast<void*>(offsetof(Vertex,colour)));
+        gShapeActive=true;return false;
+    }
+    glBindVertexArray(gPendingShape.vao);
+    if(gVertexOffset<v.size()*sizeof(Vertex)) {
+        const size_t bytes=std::min(fqloading::TransferBytes,v.size()*sizeof(Vertex)-gVertexOffset);
+        glBindBuffer(GL_ARRAY_BUFFER,gPendingShape.vbo);
+        glBufferSubData(GL_ARRAY_BUFFER,GLintptr(gVertexOffset),GLsizeiptr(bytes),reinterpret_cast<const uint8_t*>(v.data())+gVertexOffset);
+        gVertexOffset+=bytes;return false;
+    }
+    if(gIndexOffset<m.indices.size()*sizeof(uint32_t)) {
+        const size_t bytes=std::min(fqloading::TransferBytes,m.indices.size()*sizeof(uint32_t)-gIndexOffset);
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER,gPendingShape.ibo);
+        glBufferSubData(GL_ELEMENT_ARRAY_BUFFER,GLintptr(gIndexOffset),GLsizeiptr(bytes),reinterpret_cast<const uint8_t*>(m.indices.data())+gIndexOffset);
+        gIndexOffset+=bytes;return false;
+    }
+    target.push_back(gPendingShape);gPendingShape={};gShapeActive=false;gVertexOffset=gIndexOffset=0;
+    src=CpuShape{};return true;
 }
 
 inline bool EnsureProgram() {
@@ -298,23 +327,59 @@ inline bool EnsureProgram() {
 inline void AdvanceAssets() {
     const uint64_t generation=GetFo3LoadingGeneration();
     if(generation!=gGeneration) {
-        gPreparation.Reset();DeleteShapes(gNextModel);DeleteShapes(gNextCompass);DeleteShapes(gNextOverlay);DeleteImages(gNextSlides);
+        // Superseded presentation workers retire cooperatively; never join a
+        // decoding worker from an eye render just to switch generations.
+        if(!gBasePreparation.TryReset() || !gPreparation.TryReset())return;
+        gImageTransfer.Cancel();CancelShapeTransfer();gBaseStarted=gBaseReady=false;
+        gAssetStarted=Fo3LoadingClockUs();
+        DeleteShapes(gNextModel);DeleteShapes(gNextCompass);DeleteShapes(gNextOverlay);DeleteImages(gNextSlides);
         gModelUpload=gCompassUpload=gOverlayUpload=gSlideUpload=0;gArtUploaded=false;
         gSlideshow.running=false;
         gGeneration=generation;gAnchor=gHead;gJobStarted=gUploaded=false;gVisibleStart=Fo3LoadingClockUs();gRotationStart=gVisibleStart;
     }
+    if(gImageTransfer.failed) {
+        __android_log_print(ANDROID_LOG_WARN,"FalloutQuest","LOADING IMAGE TRANSFER FAILED: retaining valid presentation fallback");
+        gImageTransfer.Cancel();CancelShapeTransfer();
+        gPreparation.RequestCancel();gBaseReady=true;gUploaded=true;
+        DeleteShapes(gNextModel);DeleteShapes(gNextCompass);DeleteShapes(gNextOverlay);DeleteImages(gNextSlides);
+        return;
+    }
     PrepareCatalog();
-    if(!gJobStarted && (gCatalog.Ready() || gCatalogFailed)) {
+    if(!gBaseStarted && (gCatalog.Ready() || gCatalogFailed)) {
         const uint32_t cell=GetFo3LoadingCell(),world=GetFo3LoadingWorldspace();
         const uint64_t random=fo3loadingpose::Mix(gSeed^generation);
         if(gCatalog.Ready())gMenu=gCatalog.Get();
+        gBaseStarted=gBasePreparation.Start([cell,world,random](CpuDisplay& out,const std::atomic<bool>& cancelled){
+            const auto* art=fo3loading::Select(cell,world,random);
+            if(art && !cancelled.load()) {out.artPath=art->iconPath;LoadFalloutTextureRgba(art->iconPath,out.art);}
+            return !cancelled.load();
+        });
+        if(!gBaseStarted)gBaseReady=true;
+    }
+    if(gBaseStarted && !gBaseReady && gBasePreparation.Ready()) {
+        auto& base=gBasePreparation.Get();
+        if(!base.art.rgba.empty() && gBasePreparation.Successful()) {
+            if(!fqloading::Allow())return;
+            fqloading::WorkScope operation("loading-base-allocate/rows");
+            if(!gImageTransfer.Step(base.art,false,false))return;
+            if(glGetError()!=GL_NO_ERROR){gImageTransfer.Cancel();base.art={};return;}
+            if(gArt)glDeleteTextures(1,&gArt);
+            gArt=gImageTransfer.Take();gArtAspect=float(base.art.width)/base.art.height;
+        }
+        gBaseReady=true;gArtUploaded=true;gVisibleStart=Fo3LoadingClockUs();
+        __android_log_print(ANDROID_LOG_INFO,"FalloutQuest","LOADING BASE READY: generation=%llu elapsedUs=%llu",(unsigned long long)generation,(unsigned long long)(Fo3LoadingClockUs()-gAssetStarted));
+    }
+    if(!gJobStarted && gBaseReady && (gCatalog.Ready() || gCatalogFailed)) {
+        const uint32_t cell=GetFo3LoadingCell(),world=GetFo3LoadingWorldspace();
+        const uint64_t random=fo3loadingpose::Mix(gSeed^generation);
         const bool needCompass=gCompass.empty(),needOverlay=gOverlay.empty();
         const auto menu=gMenu;
-        gJobStarted=gPreparation.Start([cell,world,random,needCompass,needOverlay,menu](CpuDisplay& out,const std::atomic<bool>& cancelled){
-            const auto* art=fo3loading::Select(cell,world,random);
-            if(art) {out.artPath=art->iconPath;LoadFalloutTextureRgba(art->iconPath,out.art);}
+        CpuDisplay base;
+        if(gBasePreparation.Ready()) {base=std::move(gBasePreparation.Get());gBasePreparation.Reset();}
+        gJobStarted=gPreparation.Start([cell,world,random,needCompass,needOverlay,menu,base=std::move(base)](CpuDisplay& out,const std::atomic<bool>& cancelled) mutable {
+            out.artPath=std::move(base.artPath);out.art=std::move(base.art);
             size_t slideBytes=0;std::vector<std::string> paths;
-            if(!out.art.rgba.empty()) {paths.push_back(out.artPath);out.slides.push_back(out.art);slideBytes=out.art.rgba.size();}
+            if(!out.art.rgba.empty()) {paths.push_back(out.artPath);slideBytes=out.art.rgba.size();out.slides.push_back(std::move(out.art));}
             for(size_t i=1;i<=32 && out.slides.size()<4 && !cancelled.load();++i) {
                 const auto* choice=fo3loading::Select(cell,world,fo3loadingpose::Mix(random+i));
                 if(!choice || std::find(paths.begin(),paths.end(),choice->iconPath)!=paths.end())continue;
@@ -362,35 +427,33 @@ inline void AdvanceAssets() {
             PrepareVertices(out.model,false);
             PrepareVertices(out.compass,true,0.17f,&out.compassToPanel,haveCompassPose?&compassInitial:nullptr);
             fo3anim::Inverse(out.compassToPanel,out.panelToCompass);
+            for(auto* shapes:{&out.model,&out.compass,&out.overlay})
+                for(auto& shape:*shapes)for(const auto& vertex:shape.vertices)
+                    for(int a=0;a<3;++a)shape.centre[a]+=vertex.p[a]/shape.vertices.size();
             return !cancelled.load();
         });
         if(!gJobStarted)gUploaded=true; // Thread creation failure must not trap a transition.
     }
     if(gJobStarted && gPreparation.Ready() && !gUploaded) {
+        if(!fqloading::Allow())return;
+        fqloading::WorkScope operation("loading-enhancement-upload/publication");
+        struct GlErrorGuard {~GlErrorGuard(){if(glGetError()!=GL_NO_ERROR)gImageTransfer.failed=true;}} glErrors;
         if(gPreparation.Successful()) {
             auto& cpu=gPreparation.Get();
-            if(!gArtUploaded) {
-                if(gArt)glDeleteTextures(1,&gArt);
-                gArt=UploadImage(cpu.art);
-                if(gArt)gArtAspect=static_cast<float>(cpu.art.width)/cpu.art.height;
-                cpu.art=Fo3RgbaTexture{};gArtUploaded=true;
-                return; // Separate artwork upload from mesh uploads.
-            }
-            if(gSlideUpload<cpu.slides.size()) {
-                auto& image=cpu.slides[gSlideUpload++];GLuint texture=UploadImage(image);
-                if(texture)gNextSlides.push_back(texture);
-                image=Fo3RgbaTexture{};return;
+            if(gModelUpload==0 && gCompassUpload==0 && gOverlayUpload==0 && gSlideUpload==0) {
+                static uint64_t measuredGeneration=~uint64_t{0};
+                if(measuredGeneration!=generation) {
+                    measuredGeneration=generation;size_t decodedBytes=0;
+                    for(const auto& image:cpu.slides)decodedBytes+=image.rgba.size();
+                    for(const auto* shapes:{&cpu.model,&cpu.compass,&cpu.overlay})for(const auto& shape:*shapes)
+                        decodedBytes+=shape.image.rgba.size()+shape.vertices.size()*sizeof(Vertex)+shape.mesh.indices.size()*sizeof(uint32_t);
+                    __android_log_print(ANDROID_LOG_INFO,"FalloutQuest","LOADING ASSET CPU READY: generation=%llu queuedUs=%llu executionUs=%llu trackedDecodedBytes=%zu",(unsigned long long)generation,(unsigned long long)gPreparation.QueueDelayUs(),(unsigned long long)gPreparation.ExecutionUs(),decodedBytes);
+                }
             }
             if(gCompassUpload<cpu.compass.size()) {
-                UploadShape(cpu.compass[gCompassUpload++],gNextCompass,true);return;
+                if(UploadShape(cpu.compass[gCompassUpload],gNextCompass,true))++gCompassUpload;
+                return;
             }
-            if(gOverlayUpload<cpu.overlay.size()) {
-                UploadShape(cpu.overlay[gOverlayUpload++],gNextOverlay,true);return;
-            }
-            if(gModelUpload<cpu.model.size()) {
-                UploadShape(cpu.model[gModelUpload++],gNextModel,false);return;
-            }
-            DeleteShapes(gModel);gModel.swap(gNextModel);
             if(!gNextCompass.empty()) {
                 DeleteShapes(gCompass);gCompass.swap(gNextCompass);
                 gCompassHierarchy=std::move(cpu.compassHierarchy);gCompassClips=std::move(cpu.compassClips);
@@ -400,6 +463,22 @@ inline void AdvanceAssets() {
                 if(gCompassClip>=0)fo3anim::BindClip(gCompassHierarchy,gCompassClips[gCompassClip],gCompassPose);
                 gCompassDeltas.resize(gCompassHierarchy.bones.size());
             }
+            if(gSlideUpload<cpu.slides.size()) {
+                auto& image=cpu.slides[gSlideUpload];
+                if(!gImageTransfer.Step(image,false,false))return;
+                GLuint texture=gImageTransfer.Take();++gSlideUpload;
+                if(texture)gNextSlides.push_back(texture);
+                image=Fo3RgbaTexture{};return;
+            }
+            if(gOverlayUpload<cpu.overlay.size()) {
+                if(UploadShape(cpu.overlay[gOverlayUpload],gNextOverlay,true))++gOverlayUpload;
+                return;
+            }
+            if(gModelUpload<cpu.model.size()) {
+                if(UploadShape(cpu.model[gModelUpload],gNextModel,false))++gModelUpload;
+                return;
+            }
+            DeleteShapes(gModel);gModel.swap(gNextModel);
             if(!gNextOverlay.empty()) {
                 DeleteShapes(gOverlay);gOverlay.swap(gNextOverlay);
                 gUiHierarchy=std::move(cpu.hierarchy);gUiClips=std::move(cpu.clips);
@@ -420,11 +499,11 @@ inline void AdvanceAssets() {
             if(gOverlay.empty())__android_log_print(ANDROID_LOG_WARN,"FalloutQuest","AUTHORED LOADING OVERLAY UNAVAILABLE: %s; check original mesh/texture archives",gMenu.overlayPath.c_str());
             if(gCompass.empty())__android_log_print(ANDROID_LOG_WARN,"FalloutQuest","AUTHORED LOADING COMPASS UNAVAILABLE: Interface/Circular Loading/loading01.nif; check original mesh/texture archives");
         }
-        gPreparation.Reset();gUploaded=true;gVisibleStart=Fo3LoadingClockUs();
+        gPreparation.Reset();gUploaded=true;
     }
 }
 inline bool FullyVisible() {return gFrameSeconds>=gMenu.fadeSeconds;}
-inline bool Ready() {return gUploaded && gGeneration==GetFo3LoadingGeneration();}
+inline bool Ready() {return gBaseReady && gGeneration==GetFo3LoadingGeneration();}
 inline bool EnsureTarget(int width,int height) {
     if(!gFramebuffer)glGenFramebuffers(1,&gFramebuffer);
     if(!gColour)glGenTextures(1,&gColour);
@@ -472,7 +551,6 @@ inline void Render(GLuint framebuffer,GLsizei width,GLsizei height,const float* 
     glBlendEquationSeparate(GL_FUNC_ADD,GL_FUNC_ADD);
     glColorMask(GL_TRUE,GL_TRUE,GL_TRUE,GL_TRUE);glDepthMask(GL_TRUE);glClearColor(0,0,0,1);
     if(advance) {
-        AdvanceAssets();
         const uint64_t now=Fo3LoadingClockUs();
         gFrameSeconds=gVisibleStart?static_cast<float>(now-gVisibleStart)/1000000:0;
         gFrameRotationSeconds=gRotationStart?static_cast<float>(now-gRotationStart)/1000000:0;
@@ -555,6 +633,7 @@ inline void Render(GLuint framebuffer,GLsizei width,GLsizei height,const float* 
     glBindTexture(GL_TEXTURE_2D,texture);glActiveTexture(active);
 }
 inline void Shutdown() {
+    gBasePreparation.Reset();gImageTransfer.Cancel();CancelShapeTransfer();gBaseStarted=gBaseReady=false;
     gPreparation.Reset();gCatalog.Reset();
     fo3loading::gScreens.clear();fo3loading::gModels.clear();fo3loading::gScreensPrepared=false;
     gMenu=fo3loadingmenu::Definition{};

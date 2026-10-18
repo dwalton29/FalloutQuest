@@ -581,6 +581,8 @@ public:
   bool Restore(const std::string &path, std::string &error);
 
 private:
+  friend bool LoadCatalog(const std::string&,Catalog&,std::string&);
+  explicit Player(std::shared_ptr<const Catalog> catalog);
   struct ScriptCandidateTag {};
   Player(const Player& source,ScriptCandidateTag);
   std::unique_ptr<ScriptTransactionPlan> PrepareScriptTransaction(

@@ -31,11 +31,7 @@ int main() {
     }
 
     BeginFo3Loading(0x151e3u, 0u);
-    Require(ShouldDelayFo3TransitionConsume(), "loading presentation gate was skipped");
-    for (uint32_t frame = 0u; frame < FO3_LOADING_MIN_PRESENT_FRAMES - 1u; ++frame)
-        MarkFo3LoadingFramePresented();
-    Require(ShouldDelayFo3TransitionConsume(), "loading presentation ended early");
-    MarkFo3LoadingFramePresented();
+    Require(!ShouldDelayFo3TransitionConsume(), "presentation delayed independent scene work");
     MarkFo3TransitionWorkStarted();
     for (int frame = 0; frame < 100; ++frame) MarkFo3LoadingFramePresented();
     Require(IsFo3LoadingVisible(), "loading vanished while CPU work was pending");
@@ -105,6 +101,20 @@ int main() {
         Wait([&] { return entered.load(std::memory_order_acquire); });
     }
     Require(exited.load(std::memory_order_acquire), "destruction did not join the worker");
+    // A slow decoder may not observe cancellation until its current source
+    // operation ends. Polling cancellation must not block the XR thread.
+    entered.store(false);release.store(false);
+    Require(job.Start([&](Result&,const std::atomic<bool>& cancelled){
+        entered.store(true,std::memory_order_release);
+        while(!release.load(std::memory_order_acquire))std::this_thread::yield();
+        return !cancelled.load(std::memory_order_acquire);
+    }),"slow cancellation job did not start");
+    Wait([&]{return entered.load(std::memory_order_acquire);});
+    Require(!job.TryReset(),"in-flight decoder was synchronously joined");
+    release.store(true,std::memory_order_release);Wait([&]{return job.Ready();});
+    Require(!job.Successful(),"cancelled decoder published success");
+    Require(job.TryReset()&&!job.Active(),"retired decoder could not reset");
+
     // Publication regression: slow workers, reused metadata and staged uploads
     // all retain the scene identity which produced their placement selection.
     fo3scene::ReferencePublication publication;

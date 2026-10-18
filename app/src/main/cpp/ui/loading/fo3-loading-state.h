@@ -5,9 +5,8 @@
 #include <cstdint>
 
 // loading-screen state shared by the OpenXR host and the CELL loader.
-// extends the original one-frame gate into a real multi-frame loading
-// lifetime so the headset can continue submitting/animating frames while the
-// destination scene is prepared in slices.
+// The lifetime covers the complete destination transaction; presentation
+// readiness never delays independent CPU preparation or adds a fixed dwell.
 enum Fo3LoadingPhase : int {
     FO3_LOADING_IDLE = 0,
     FO3_LOADING_PRESENT = 1,
@@ -33,11 +32,7 @@ inline uint64_t GetFo3LoadingElapsedUs() {
     return started == 0u ? 0u : Fo3LoadingClockUs() - started;
 }
 
-// At Quest refresh rates this is roughly 0.33-0.42 seconds. The visual
-// fade is 0.35s, so the loader can no longer flash for a single submitted frame
-// and disappear into a blocking scene build before the presentation is visible.
-constexpr uint32_t FO3_LOADING_MIN_PRESENT_FRAMES = 30u;
-
+// Presentation never gates independent preparation or adds a fixed dwell.
 inline void BeginFo3Loading(uint32_t cellFormId, uint32_t worldspaceFormId) {
     gFo3LoadingStartedUs.store(Fo3LoadingClockUs(), std::memory_order_release);
     gFo3LoadingCell.store(cellFormId, std::memory_order_release);
@@ -52,7 +47,7 @@ inline bool IsFo3LoadingVisible() {
 }
 
 inline bool ShouldDelayFo3TransitionConsume() {
-    return gFo3LoadingPhase.load(std::memory_order_acquire) == FO3_LOADING_PRESENT;
+    return false; // Compatibility API: CPU work starts immediately.
 }
 
 inline uint32_t GetFo3LoadingCell() {
@@ -75,7 +70,10 @@ inline uint32_t GetFo3LoadingPresentedFrames() {
 // scene builder. WORK deliberately remains visible across any number of
 // xrEndFrame calls; only completion can advance it to POST.
 inline void MarkFo3TransitionWorkStarted() {
-    int expected = FO3_LOADING_READY;
+    int expected = FO3_LOADING_PRESENT;
+    if (gFo3LoadingPhase.compare_exchange_strong(expected, FO3_LOADING_WORK,
+            std::memory_order_acq_rel, std::memory_order_acquire)) return;
+    expected = FO3_LOADING_READY;
     (void)gFo3LoadingPhase.compare_exchange_strong(
         expected, FO3_LOADING_WORK,
         std::memory_order_acq_rel, std::memory_order_acquire);
@@ -103,25 +101,14 @@ inline void CancelFo3Loading() {
 
 // Called only after xrEndFrame succeeds.
 //
-// PRESENT stays alive for a short authored-looking dwell so the screen cannot
-// be a one-frame flash. READY remains visible until the render-thread loader
-// consumes the request. WORK remains visible for the entire phased build.
-// POST -> IDLE happens only after a submitted frame containing the finished
-// destination underneath the loading presentation.
+// Completion, rather than a presentation frame count, releases the screen.
+// Even a very short load submits one covered POST frame before gameplay.
 inline void MarkFo3LoadingFramePresented(bool fullyVisible = true) {
-    const int phase = gFo3LoadingPhase.load(std::memory_order_acquire);
-    if (phase == FO3_LOADING_PRESENT) {
-        const uint32_t presented =
-            gFo3LoadingPresentedFrames.fetch_add(1u, std::memory_order_acq_rel) + 1u;
-        if (presented >= FO3_LOADING_MIN_PRESENT_FRAMES && fullyVisible) {
-            int expected = FO3_LOADING_PRESENT;
-            (void)gFo3LoadingPhase.compare_exchange_strong(
-                expected, FO3_LOADING_READY,
-                std::memory_order_acq_rel, std::memory_order_acquire);
-        }
-    } else if (phase == FO3_LOADING_POST) {
-        gFo3LoadingPhase.store(FO3_LOADING_IDLE, std::memory_order_release);
-    }
+    (void)fullyVisible;
+    gFo3LoadingPresentedFrames.fetch_add(1u, std::memory_order_acq_rel);
+    int expected = FO3_LOADING_POST;
+    (void)gFo3LoadingPhase.compare_exchange_strong(expected, FO3_LOADING_IDLE,
+        std::memory_order_acq_rel, std::memory_order_acquire);
 }
 
 // Elapsed time diagnoses a stalled load; it must never expose incomplete cells.

@@ -20,9 +20,12 @@ int main(int argc,char**argv) {
     fo3loadingmenu::ReadXml("<menufade>nan</menufade><nif name=\"loading_nif\"><filename>bad</filename>",menu);
     assert(near(menu.fadeSeconds,0.9f) && menu.overlayPath=="Interface\\Custom.NIF");
     BeginFo3Loading(1,2);
-    for(unsigned i=0;i<FO3_LOADING_MIN_PRESENT_FRAMES+5;++i)MarkFo3LoadingFramePresented(false);
-    assert(ShouldDelayFo3TransitionConsume());
-    MarkFo3LoadingFramePresented(true);assert(!ShouldDelayFo3TransitionConsume());CancelFo3Loading();
+    assert(!ShouldDelayFo3TransitionConsume());
+    MarkFo3TransitionWorkStarted();
+    for(unsigned i=0;i<100;++i)MarkFo3LoadingFramePresented(false);
+    assert(IsFo3LoadingVisible());
+    NotifyFo3TransitionComplete();assert(IsFo3LoadingVisible());
+    MarkFo3LoadingFramePresented(false);assert(!IsFo3LoadingVisible());
     if(argc==3) {
         auto read=[](const char* path){std::ifstream f(path);assert(f.good());return std::string(std::istreambuf_iterator<char>(f),{});};
         menu=fo3loadingmenu::Definition{};fo3loadingmenu::ReadXml(read(argv[1]),menu);fo3loadingmenu::ReadIni(read(argv[2]),menu);

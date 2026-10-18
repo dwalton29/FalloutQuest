@@ -245,6 +245,20 @@ bool CanEquip(const Item &item) {
 }
 } // namespace
 
+static void FinalizePlayerCatalog(Catalog& catalog) {
+  const auto perk=catalog.pipboy.formNames.find("infiltrator");
+  if(perk!=catalog.pipboy.formNames.end())catalog.infiltrator=perk->second;
+  // Rebuild even for copied/user-supplied Catalogs: stale indexes are not proof
+  // of identity. Duplicate IDs anywhere in the catalogue remain ambiguous.
+  catalog.dialogueInfos.clear();
+  for(const auto& topic:catalog.pipboy.topics)for(size_t n=0;n<topic.second.size();++n){
+    const auto& info=topic.second[n];
+    auto inserted=catalog.dialogueInfos.emplace(info.id,std::make_pair(topic.first,n));
+    if(!inserted.second||!info.id||!topic.first||info.topic!=topic.first)
+      inserted.first->second={0,0};
+  }
+}
+
 bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
   error.clear();
   auto fail = [&](const char *why) {
@@ -279,7 +293,8 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
         groups.empty() ? static_cast<uint64_t>(fileSize) : groups.back();
     if (at > boundary || boundary - at < 24)
       return fail("Invalid ESM record boundary");
-    if (fseeko(file.get(), static_cast<off_t>(at), SEEK_SET))
+    if (ftello(file.get()) != static_cast<off_t>(at) &&
+        fseeko(file.get(), static_cast<off_t>(at), SEEK_SET))
       return fail("ESM seek failed");
     uint8_t h[24];
     if (!fo3esm::ReadExact(file.get(), h, sizeof(h)))
@@ -652,40 +667,41 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
   next.fingerprint = fingerprint;
   if(settings.count("fKarmaModStealing")&&std::isfinite(settings.at("fKarmaModStealing")))next.theftKarma=settings.at("fKarmaModStealing");
   if(settings.count("fAlignEvilMaxKarma")&&std::isfinite(settings.at("fAlignEvilMaxKarma")))next.evilMaxKarma=settings.at("fAlignEvilMaxKarma");
-  Player initial(std::move(next));
-  if (!std::isfinite(initial.MaxHealth()) || initial.MaxHealth() <= 0 ||
-      !std::isfinite(initial.MaxActionPoints()) ||
-      initial.MaxActionPoints() < 0 ||
-      !std::isfinite(initial.CarryCapacity()) || initial.CarryCapacity() < 0)
-    return fail("Invalid derived player stats");
-  for (const auto &entry : starting) {
-    if (entry.count <= 0 ||
-        !initial.Add(entry.form, entry.count, entry.condition))
-      return fail(
-          "Unresolved/unsupported player inventory (including levelled lists)");
+  // Validate the exact parsed catalogue through Player without cloning every
+  // quest, script, reference and NPC back out of Definitions afterwards.
+  // Only this builder owns the mutable alias, and it is used again strictly
+  // after the validation Player has been destroyed.
+  FinalizePlayerCatalog(next);
+  auto parsed=std::make_shared<Catalog>(std::move(next));
+  State initialState;
+  {
+    Player initial{std::shared_ptr<const Catalog>(parsed)};
+    if (!std::isfinite(initial.MaxHealth()) || initial.MaxHealth() <= 0 ||
+        !std::isfinite(initial.MaxActionPoints()) ||
+        initial.MaxActionPoints() < 0 ||
+        !std::isfinite(initial.CarryCapacity()) || initial.CarryCapacity() < 0)
+      return fail("Invalid derived player stats");
+    for (const auto &entry : starting) {
+      if (entry.count <= 0 ||
+          !initial.Add(entry.form, entry.count, entry.condition))
+        return fail(
+            "Unresolved/unsupported player inventory (including levelled lists)");
+    }
+    initialState=initial.Snapshot();
   }
-  next = initial.Definitions();
-  next.initial = initial.Snapshot();
-  out = std::move(next);
+  parsed->initial=std::move(initialState);
+  out=std::move(*parsed);
   return true;
 }
 
 static std::shared_ptr<const Catalog> SharePlayerCatalog(Catalog catalog) {
-  const auto perk=catalog.pipboy.formNames.find("infiltrator");
-  if(perk!=catalog.pipboy.formNames.end())catalog.infiltrator=perk->second;
-  // Rebuild even for copied/user-supplied Catalogs: stale indexes are not proof
-  // of identity. Duplicate IDs anywhere in the catalogue remain ambiguous.
-  catalog.dialogueInfos.clear();
-  for(const auto& topic:catalog.pipboy.topics)for(size_t n=0;n<topic.second.size();++n){
-    const auto& info=topic.second[n];
-    auto inserted=catalog.dialogueInfos.emplace(info.id,std::make_pair(topic.first,n));
-    if(!inserted.second||!info.id||!topic.first||info.topic!=topic.first)
-      inserted.first->second={0,0};
-  }
+  FinalizePlayerCatalog(catalog);
   return std::make_shared<const Catalog>(std::move(catalog));
 }
 Player::Player(Catalog catalog)
     : catalog_(SharePlayerCatalog(std::move(catalog))), state_(catalog_->initial) {}
+Player::Player(std::shared_ptr<const Catalog> catalog)
+    : catalog_(std::move(catalog)), state_(catalog_->initial) {}
 bool Player::SetPlayerAttributes(const std::array<uint8_t,7>& special,
                                  const std::array<uint8_t,14>& skills) {
   if(std::any_of(special.begin(),special.end(),[](uint8_t value){return value<1||value>10;}) ||

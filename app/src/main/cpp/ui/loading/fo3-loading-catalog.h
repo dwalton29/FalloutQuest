@@ -147,8 +147,14 @@ inline void Prepare(const char* path = fo3assets::FalloutMasterPath().c_str(), c
     while ((!cancelled || !cancelled->load()) && ReadExact(f, header, sizeof(header))) {
         const uint32_t sizeField = Read32(header + 4u);
         if (std::memcmp(header, "GRUP", 4u) == 0) {
-            // Group size includes this 24-byte header. Children immediately
-            // follow, so continue sequentially instead of skipping the group.
+            // Top-level groups are homogeneous. Never traverse CELL/WRLD,
+            // LAND, dialogue or scripts to obtain three presentation types.
+            if (Read32(header + 12u) == 0u && sizeField >= RECORD_HEADER &&
+                std::memcmp(header + 8u, "LSCR", 4u) != 0 &&
+                std::memcmp(header + 8u, "WEAP", 4u) != 0 &&
+                std::memcmp(header + 8u, "MISC", 4u) != 0) {
+                if (fseeko(f, static_cast<off_t>(sizeField - RECORD_HEADER), SEEK_CUR)) break;
+            }
             continue;
         }
         if (sizeField > 64u * 1024u * 1024u) break;

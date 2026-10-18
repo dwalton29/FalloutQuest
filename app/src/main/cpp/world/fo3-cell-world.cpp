@@ -1,3 +1,4 @@
+#include "rendering/loading-work-scope.h"
 #include "fo3-install-paths.h"
 #include <chrono>
 #include "fo3-worldspace-runtime.h"

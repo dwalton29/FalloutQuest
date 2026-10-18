@@ -71,8 +71,10 @@ jobs:
           g++ -std=c++17 -Wall -Wextra -Werror -Iapp/src/main/cpp tests/render/actor_skinning_tests.cpp app/src/main/cpp/npc/fo3-actor-animation.cpp -o /tmp/actor-skin-tests
           /tmp/actor-skin-tests
 
-      - name: Verify scene render dispatch
-        run: python3 tests/render/test_render_dispatch.py
+      - name: Verify scene render dispatch and loading isolation
+        run: |
+          python3 tests/render/test_render_dispatch.py
+          python3 tests/render/test_loading_pipeline.py
 
       - name: Verify stereo visibility and reflection reuse
         run: |

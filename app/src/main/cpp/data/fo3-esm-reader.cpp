@@ -79,7 +79,8 @@ bool ReadPayload(FILE* file,
         location.storedSize > maxBytes) {
         return false;
     }
-    if (fseeko(file, static_cast<off_t>(location.payloadOffset), SEEK_SET) != 0)
+    if (ftello(file) != static_cast<off_t>(location.payloadOffset) &&
+        fseeko(file, static_cast<off_t>(location.payloadOffset), SEEK_SET) != 0)
         return false;
 
     std::vector<uint8_t> stored(location.storedSize);

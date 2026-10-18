@@ -151,6 +151,8 @@ void Q2000QueueBatchGeometry(Q711TerrainBatch& batch) {
 }
 
 void Q2000DrainDeferredGeometry(bool all) {
+    if(gQ2000DeferredGeometry.empty() || (!all&&!fqloading::Allow()))return;
+    fqloading::WorkScope operation("terrain-deferred-destruction");
     const auto started = std::chrono::steady_clock::now();
     constexpr uint64_t budgetUs = 600u;
     size_t drained = 0u;
@@ -945,6 +947,8 @@ void Q2000AdvanceGpu() {
     size_t bytesThisUpdate = 0u;
 
     while (gQ2000TextureCursor < gQ2000PendingTextures.size()) {
+        if(!fqloading::Allow())return;
+        fqloading::WorkScope operation("terrain-texture-step");
         const bool complete = Q2000AdvanceOneTexture(bytesThisUpdate);
         if (bytesThisUpdate >= Q2000_GPU_BYTES_PER_UPDATE ||
             Q2000ElapsedUs(updateStarted) >= Q2000_GPU_BUDGET_US) {
@@ -968,6 +972,8 @@ void Q2000AdvanceGpu() {
 
         while (gQ2000BatchCursor < cell.batches.size()) {
             Q711CpuBatch& batch = cell.batches[gQ2000BatchCursor];
+            if(!fqloading::Allow())return;
+            fqloading::WorkScope operation("terrain-geometry-step");
             const bool complete =
                 Q2000AdvanceOneBatch(cell, batch, bytesThisUpdate);
             if (bytesThisUpdate >= Q2000_GPU_BYTES_PER_UPDATE ||
