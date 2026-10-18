@@ -70,8 +70,8 @@ inline void Prepare(const fo3dialogue::Panel& p,const std::string& iconPath){
     // 1024x800 authored plane mapped to 1.16x.90m, 2D pixel origin at top
     // left. The split and bracket positions follow LevelUpMenu's rectangles.
     constexpr float scale=.00112f, left=-.575f, top=.45f;
-    const auto X=[](float a){return left+a*scale;};
-    const auto Y=[](float a){return top-a*scale;};
+    const auto X=[=](float a){return left+a*scale;};
+    const auto Y=[=](float a){return top-a*scale;};
     Quad(vert,X(-32),Y(-78),X(1054),Y(875),0); // solid_black backdrop
     r.bgCount=GLsizei(vert.size());
     auto line=[&](float x,float y,float w,float h){
@@ -106,7 +106,7 @@ inline void Prepare(const fo3dialogue::Panel& p,const std::string& iconPath){
                        const fo3font::Glyph& g,const fo3font::Quad& q){
                 Quad(vert,X(x)+q.left*fontScale,Y(y)-q.top*fontScale,
                      X(x)+q.right*fontScale,Y(y)-q.bottom*fontScale,.009f,
-                     g.uv[0],g.uv[1],g.uv[4],g.uv[5]);
+                     g.uv[0],g.uv[1],g.uv[6],g.uv[7]);
             });
             ++row;y+=lineStep;
         }
