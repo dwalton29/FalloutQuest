@@ -87,9 +87,10 @@ void Fo3LevelUpRefresh() {
     if(u.page==Fo3LevelUpSession::Page::Skills&&
        panel.selected<13) {
         const size_t slot=panel.selected<12?panel.selected:panel.selected+1;
+        const auto& skill=player.Definitions().pipboy.skills[slot];
         panel.subtitle+="\n\n"+std::string(Fo3LevelUpSkillNames[slot])+
             " "+std::to_string(u.allocated[slot])+
-            "\nA: Increase skill    B: Undo point";
+            "\n"+skill.description;
     }
     if(u.page==Fo3LevelUpSession::Page::Perks &&
        panel.selected<u.eligible.size()) {
@@ -102,8 +103,15 @@ void Fo3LevelUpRefresh() {
 
 std::string Fo3LevelUpSelectedIcon(){
     const auto& u=gLevelUp;
-    if(!u.panel.visible||u.page!=Fo3LevelUpSession::Page::Perks||
-       !u.owner||u.panel.selected>=u.eligible.size())return {};
+    if(!u.panel.visible||!u.owner)return {};
+    if(u.page==Fo3LevelUpSession::Page::Skills&&
+       u.panel.selected<13) {
+        const size_t slot=u.panel.selected<12?
+            u.panel.selected:u.panel.selected+1;
+        return u.owner->Definitions().pipboy.skills[slot].icon;
+    }
+    if(u.page!=Fo3LevelUpSession::Page::Perks||
+       u.panel.selected>=u.eligible.size())return {};
     const auto it=u.owner->Definitions().pipboy.perks.find(
         u.eligible[u.panel.selected]);
     return it==u.owner->Definitions().pipboy.perks.end()?
