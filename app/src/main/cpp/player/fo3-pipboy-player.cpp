@@ -110,7 +110,16 @@ bool Player::RewardExperience(uint32_t amount) {
   }
   if(!std::isfinite(reward)||reward<0||double(reward)>UINT32_MAX-state_.experience)return false;
   const auto earned=uint32_t(reward);
-  if(earned){state_.experience+=earned;++revision_;}
+  if(earned){
+    const auto before=ExperienceProgress();
+    state_.experience+=earned;
+    const auto after=ExperienceProgress();
+    // A transient effect, not saved. Queued only after real (or transaction
+    // candidate) state mutation, and rolled back with the candidate.
+    pendingExperienceNotices_.push_back({earned,state_.experience,
+        after.pendingLevels>before.pendingLevels});
+    ++revision_;
+  }
   return true;
 }
 bool Player::CompleteAllObjectives(uint32_t id) {
@@ -150,6 +159,13 @@ bool Player::ScriptInSameCell(uint32_t reference,bool& result,std::string& error
   else {const auto ref=catalog_->references.find(reference);if(ref!=catalog_->references.end())cell=ref->second.cell;}
   if(!cell){error="GetInSameCell reference location unavailable";return false;}
   result=cell==scriptPlayerCell_;return true;
+}
+bool Player::PollExperienceNotice(ExperienceNotice& out) {
+  if(pendingExperienceNotices_.empty())return false;
+  out=pendingExperienceNotices_.front();
+  pendingExperienceNotices_.erase(pendingExperienceNotices_.begin());
+  ++scriptEffectRevision_;
+  return true;
 }
 bool Player::PollScriptItemNotice(ScriptItemNotice& out) {
   if(pendingScriptItems_.empty())return false;
