@@ -379,7 +379,9 @@ for call in ('UpdateFo3ExteriorStreamingQ1890(q1890VirtualHead.',
     assert not guarded(call), call
 assert 'residentInputBarrier_.Allow(Fo3ResidentFrameBlocked(),neutral)' in loop
 assert 'residentInputBarrier_.Allow(true,false)' in loop
-assert loop.index('previousWorldClockNs=clockNs;') > loop.index('scriptPlayer.PumpQuestGameMode(seconds)')
+assert loop.index('previousWorldClockNs=clockNs;') > loop.index('scriptPlayer.PumpWorldAwareGameMode(scriptResidenceElapsed,scriptedResidents,')
+assert 'BeginFo3ResidentPreparedWorkflow({},std::move(plan))' in loop
+assert 'gFo3ResidentGameplayTicket=ticket;' in loop
 print('Reservation excludes frame mutations/save/effects while retaining tracking and asset progress; held controls require release')
 
 workflow=s[s.index('// Reserved asynchronous owner.'):s.index('// Dynamic NPC arrivals use')]
