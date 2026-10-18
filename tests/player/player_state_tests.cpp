@@ -272,6 +272,47 @@ void Synthetic(const std::string &root) {
         xpReload.ExperienceProgress().pendingLevels==2,
         "pending XP reconstructed from the existing save format");
   std::remove(xpPath.c_str());
+  // One advancement commits skill points, perk and level together.
+  {
+    auto levelCatalog=c;
+    fo3pipdata::Perk swift;
+    swift.playable=true;swift.ranks=1;swift.minLevel=2;
+    fo3pipdata::PerkEffect effect;
+    effect.type=2;effect.rank=0;effect.entryPoint=9;effect.function=3;
+    effect.parameterType=1;effect.parameters={0xCD,0xCC,0x8C,0x3F};
+    swift.effects.push_back(effect);
+    levelCatalog.pipboy.perks[0xaaaa]=swift;
+    fo3player::Player learner(levelCatalog);
+    auto allocated=learner.Snapshot().skills;
+    allocated[0]=uint8_t(allocated[0]+15);
+    Check(!learner.CommitLevelUp(allocated,0xaaaa),"cannot level before XP");
+    Check(learner.RewardExperience(200),"earn first threshold");
+    const auto beforeLevel=learner.Revision();
+    auto overspent=allocated;overspent[1]+=1;
+    Check(!learner.CommitLevelUp(overspent,0xaaaa)&&
+          learner.Revision()==beforeLevel,"reject overspent skill budget");
+    Check(learner.CommitLevelUp(allocated,0xaaaa)&&
+          learner.Snapshot().level==2&&
+          learner.ExperienceProgress().pendingLevels==0&&
+          learner.Snapshot().pipboy.perks.at(0xaaaa)==1,
+          "atomic level 2 skill allocation and perk selection");
+    Check(learner.RewardExperience(100)&&
+          learner.Snapshot().experience==310,
+          "Swift Learner applies to next XP event");
+    Check(!learner.CommitLevelUp(allocated,0xaaaa),
+          "no repeated level without next threshold");
+    const auto lvSave=root+"-level18.fqps";
+    Check(learner.Save(lvSave,error)&&Read(lvSave)[4]==18,
+          "advanced player save emits FQPS v18");
+    fo3player::Player restoredLearner(levelCatalog);
+    Check(restoredLearner.Restore(lvSave,error)&&
+          restoredLearner.Snapshot().level==2&&
+          restoredLearner.Snapshot().skills==allocated&&
+          restoredLearner.Snapshot().pipboy.perks.at(0xaaaa)==1&&
+          restoredLearner.ExperienceProgress().nextThreshold==550,
+          "level, skills and perk persist across save");
+    std::remove(lvSave.c_str());
+  }
   fo3player::Player p(c);
   Check(p.MaxHealth() == 200 && p.MaxActionPoints() == 75 &&
             p.CarryCapacity() == 200 && p.InventoryWeight() == 10,
