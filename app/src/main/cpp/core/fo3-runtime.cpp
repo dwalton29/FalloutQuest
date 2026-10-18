@@ -3815,7 +3815,7 @@ bool FinalizeFo3ResidentWorkflow(uint64_t ticket) noexcept {
 }
 
 // ACTI OnActivate bridge. Do not report a pending mutation as Executed.
-void FlushFo3PlayerState();
+void FlushFo3PlayerState(void);
 fo3player::ScriptEventResult DispatchFo3ScriptedActivation(
         uint32_t reference,uint32_t activator,std::string& error) {
     using Result=fo3player::ScriptEventResult;
