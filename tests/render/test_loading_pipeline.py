@@ -110,8 +110,10 @@ class LoadingPipeline(unittest.TestCase):
         # with original live-door fallback only after the packet is ready.
         begin=runtime.split('bool BeginFo3SceneLoad(',1)[1].split(
             'bool ProcessQ74TransitionRequest(',1)[0]
-        self.assertLess(begin.index('gSceneLoad.doorPreparation.Start('),
+        self.assertLess(begin.index('StartFo3SceneDoorWorker(request.cellFormId);'),
                         begin.index('gSceneLoad.preparation.Start('))
+        self.assertIn('StartFo3SceneDoorWorker(prepared.request.cellFormId);',scene)
+        self.assertIn('if(!cellFormId || gSceneLoad.doorWorkerAttempted)return;',runtime)
         self.assertLess(scene.index('PublishFo3AuthoredDoorAnchorsQ2190('),
                         scene.index('PrimeFo3AuthoredDoorAnchorsQ1870('))
         self.assertIn('MarkFo3DoorResourcesChanged()',cache)
