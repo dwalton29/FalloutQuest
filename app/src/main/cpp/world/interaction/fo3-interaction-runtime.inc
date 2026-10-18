@@ -228,6 +228,23 @@ void DeliverFo3ScriptSounds(){
         fo3notify::Notifications().EnqueueQuest(text,added?"UIPopUpQuestNew":complete?"UIPopUpQuestComplete":"UIQuestUpdate");
         Q6H_LOGI("QUEST FANFARE: quest=%08X kind=%d queued=%zu",notice.quest,int(notice.kind),fo3notify::Notifications().Size());
     }
+    // Original XP and level-up SOUN editor IDs resolve through the active
+    // Fallout 3 audio catalogue, never hardcoded WAV substitutes. XP notices
+    // are emitted only for committed rewards and discarded on failed scripts.
+    fo3player::ExperienceNotice xp;
+    while(player.PollExperienceNotice(xp)) {
+        const auto& strings=player.Definitions().strings;
+        const auto label=strings.find("sStatsXP");
+        const auto level=strings.find("sLevelUp");
+        std::string text="+"+std::to_string(xp.amount)+" "+
+            (label==strings.end()?std::string("XP"):label->second);
+        if(xp.levelUp)text+="\n"+
+            (level==strings.end()?std::string("LEVEL UP"):level->second);
+        fo3notify::Notifications().EnqueueExperience(
+            text,xp.levelUp?"UILevelUp":"UIPopUpExperienceUp");
+        Q6H_LOGI("XP HUD: awarded=%u total=%u levelThreshold=%d",
+                 xp.amount,xp.total,int(xp.levelUp));
+    }
     fo3player::ScriptItemNotice item;
     while(player.PollScriptItemNotice(item))NotifyFo3ItemTransfer(item.form,item.count);
     uint32_t sound=0;
