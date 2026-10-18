@@ -3288,6 +3288,7 @@ struct Fo3ResidentWorkflowRequest {Fo3WorldspaceSelection visuals,collision;};
 using Fo3ResidentWorkflow=fo3scene::ResidentWorkflow<fo3player::ScriptTransactionPlan,
     Fo3ResidentCpuPreparation,Fo3ResidentWorkflowRequest>;
 Fo3ResidentWorkflow gFo3ResidentWorkflow;
+uint64_t gFo3ResidentGameplayTicket=0; // Explicit gameplay request; Ready is not implicit commit.
 bool gFo3ResidentWorkflowCleanup=false;
 bool gFo3ResidentTeardownActive=false;
 Fo3CellTransitionRequestQ74 gFo3ResidentLaneContext;
@@ -3780,8 +3781,29 @@ uint64_t BeginFo3ResidentWorkflow(Fo3ResidentWorkflowRequest request,
 bool CancelFo3ResidentWorkflow(uint64_t ticket) noexcept {return gFo3ResidentWorkflow.RequestCancel(ticket);}
 void PumpFo3ResidentWorkflow(bool focused) noexcept {
     Fo3ResidentWorkflowAdapter adapter;
-    if(!focused){gFo3ResidentWorkflow.Interrupt(adapter);return;}
-    gFo3ResidentWorkflow.Pump(adapter);
+    if(!focused) {
+        gFo3ResidentWorkflow.Interrupt(adapter);
+    } else {
+        gFo3ResidentWorkflow.Pump(adapter);
+        if(gFo3ResidentGameplayTicket &&
+            gFo3ResidentWorkflow.Ticket()==gFo3ResidentGameplayTicket) {
+            using Phase=fo3scene::ResidentWorkflowPhase;
+            if(gFo3ResidentWorkflow.State()==Phase::Ready) {
+                const auto outcome=gFo3ResidentWorkflow.Execute(gFo3ResidentGameplayTicket,adapter);
+                Q6H_LOGI("SCRIPT RESIDENT EXCHANGE: ticket=%llu status=%d failedStage=%d",
+                    (unsigned long long)gFo3ResidentGameplayTicket,int(outcome.status),int(outcome.failedAt));
+            }
+            if(gFo3ResidentWorkflow.State()==Phase::Settled &&
+                gFo3ResidentWorkflow.Finalize(gFo3ResidentGameplayTicket,adapter)) {
+                Q6H_LOGI("SCRIPT RESIDENT FINALIZED: ticket=%llu",
+                    (unsigned long long)gFo3ResidentGameplayTicket);
+            }
+        }
+    }
+    if(!gFo3ResidentWorkflow.Active() ||
+        (gFo3ResidentGameplayTicket &&
+         gFo3ResidentWorkflow.Ticket()!=gFo3ResidentGameplayTicket))
+        gFo3ResidentGameplayTicket=0;
 }
 fo3scene::ResidentExchangeResult ExecuteFo3ResidentWorkflow(uint64_t ticket) noexcept {
     Fo3ResidentWorkflowAdapter adapter;
@@ -3790,6 +3812,39 @@ fo3scene::ResidentExchangeResult ExecuteFo3ResidentWorkflow(uint64_t ticket) noe
 bool FinalizeFo3ResidentWorkflow(uint64_t ticket) noexcept {
     Fo3ResidentWorkflowAdapter adapter;
     return gFo3ResidentWorkflow.Finalize(ticket,adapter);
+}
+
+// ACTI OnActivate bridge. Do not report a pending mutation as Executed.
+void FlushFo3PlayerState();
+fo3player::ScriptEventResult DispatchFo3ScriptedActivation(
+        uint32_t reference,uint32_t activator,std::string& error) {
+    using Result=fo3player::ScriptEventResult;
+    error.clear();
+    if(!gPlayerSession||gPlayerSession->saveBlocked||Fo3ResidentFrameBlocked()){
+        error="script activation scene or save unavailable";return Result::Unsupported;
+    }
+    auto& player=gPlayerSession->player;
+    if(!player.HasReferenceEvent(reference,"OnActivate"))return Result::NoHandler;
+    auto plan=player.PrepareReferenceEventTransaction(reference,"OnActivate",activator,error,
+        fo3player::ScriptProgramCapture::EnteredPrograms);
+    if(!plan)return Result::Unsupported;
+    if(!plan->HasReferenceChanges()){
+        if(player.CommitScriptTransaction(*plan))return Result::Executed;
+        error="script event transaction changed before publication";return Result::Unsupported;
+    }
+    const auto ticket=BeginFo3ResidentWorkflow({},[reference,activator,&error](
+            const fo3player::Player& current) {
+        return current.PrepareReferenceEventTransaction(reference,"OnActivate",activator,error,
+            fo3player::ScriptProgramCapture::EnteredPrograms);
+    });
+    if(!ticket){
+        if(error.empty())error="resident scripted activation could not reserve a safe scene";
+        return Result::Unsupported;
+    }
+    gFo3ResidentGameplayTicket=ticket;
+    // Defer disk persistence until the owned exchange has settled and released.
+    FlushFo3PlayerState();
+    return Result::Pending;
 }
 #include "world/fo3-resident-lifecycle-runtime.inc"
 

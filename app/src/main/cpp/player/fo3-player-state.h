@@ -266,7 +266,7 @@ struct ActorCensusReport {
   size_t authored=0,registered=0,alreadyTracked=0,disabledOrConditional=0;
   size_t unsupportedBase=0,unsupportedPlacement=0,limitReached=0;
 };
-enum class ScriptEventResult : uint8_t { NoHandler, Executed, Unsupported };
+enum class ScriptEventResult : uint8_t { NoHandler, Executed, Unsupported, Pending };
 class Player;
 class ScriptTransactionPlan;
 enum class ScriptProgramKind : uint8_t {UnboundResult,QuestStageItem,ReferenceEvent,DialogueInfo};

@@ -377,6 +377,7 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
     case C::SetCellFullName:ok=SetCellFullName(c.form,c.index);break;
     case C::AddAchievement:ok=AddAchievement(uint32_t(c.value));break;
     case C::Disable:ok=StageReferenceEnable(c.form,false,error);break;
+    case C::Enable:ok=StageReferenceEnable(c.form,true,error);break;
     case C::EvaluatePackage:ok=ReevaluatePackage(c.form);break;
     case C::ShowMessage: {
       if(!c.expression.empty())ok=fo3script::Expression(*this,owner,c.expression,error,scriptId).Evaluate(value);

@@ -130,11 +130,15 @@ bool CompileResult(const fo3pipdata::Definitions& d,const fo3pipdata::ResultScri
     } else if(op=="rewardxp"||op=="addachievement") {
       cmd.type=op=="rewardxp"?CommandType::RewardXP:CommandType::AddAchievement;
       if(!(in>>a)||!number(a,cmd.value)||cmd.value<0||double(cmd.value)>2147483647.0||std::floor(cmd.value)!=cmd.value){error="invalid XP/achievement integer";return false;}
-    } else if(op=="disable"||(op.size()>8&&op.compare(op.size()-8,8,".disable")==0)) {
-      const auto dot=op.find('.');cmd.form=dot==std::string::npos?owner:form(op.substr(0,dot));
-      cmd.type=CommandType::Disable;
-      if(!cmd.form){error="missing Disable reference";return false;}
-      // Fade-out semantics require resident publication; do not silently ignore.
+    } else if(op=="disable"||op=="enable"||
+        (op.size()>8&&op.compare(op.size()-8,8,".disable")==0)||
+        (op.size()>7&&op.compare(op.size()-7,7,".enable")==0)) {
+      const auto dot=op.find('.');
+      const auto verb=dot==std::string::npos?op:op.substr(dot+1);
+      cmd.form=dot==std::string::npos?owner:form(op.substr(0,dot));
+      cmd.type=verb=="enable"?CommandType::Enable:CommandType::Disable;
+      if(!cmd.form){error="missing Enable/Disable reference";return false;}
+      // Only the resident workflow may publish world changes.
     } else if(op=="rewardkarma") {
       cmd.type=CommandType::RewardKarma;
       if(!(in>>a)||!number(a,cmd.value)){error="invalid RewardKarma";return false;}

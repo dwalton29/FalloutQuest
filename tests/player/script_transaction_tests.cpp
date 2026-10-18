@@ -56,6 +56,33 @@ static void NoEffects(fo3player::Player& p){
   uint32_t sound=0;fo3player::ScriptMessage message;fo3player::QuestNotice notice;fo3player::KarmaEvent karma;
   assert(!p.PollScriptSound(sound)&&!p.PollScriptMessage(message)&&!p.PollQuestNotice(notice)&&!p.PollKarmaEvent(karma));
 }
+static void EnableReferenceCommand(){
+  // Real source syntax and the same logical state projection used by the scene.
+  // The Player may prepare world mutations but cannot publish them uncoordinated.
+  auto catalog=Fixture();
+  catalog.references[101].base=201;
+  catalog.references[101].flags=0x800;
+  catalog.pipboy.formNames["testref"]=101;
+  fo3player::Player player(std::move(catalog));
+  std::string error;bool disabled=false;
+  assert(player.ReferenceDisabled(101,disabled,error)&&disabled);
+  const auto initial=player.Revision();
+  auto enable=player.PrepareDialogueTransaction(Script("TestRef.Enable"),{},error,0,
+      fo3player::ScriptProgramCapture::EnteredPrograms);
+  assert(enable&&enable->HasReferenceChanges()&&enable->HasProgramProvenance());
+  assert(player.Revision()==initial&&player.ReferenceDisabled(101,disabled,error)&&disabled);
+  assert(!player.ExecuteDialogueResult(Script("TestRef.Enable"),error));
+  assert(error=="world mutation requires resident coordinator");
+  assert(player.CommitScriptTransaction(*enable));
+  assert(player.ReferenceDisabled(101,disabled,error)&&!disabled);
+  auto disable=player.PrepareDialogueTransaction(Script("TestRef.Disable"),{},error);
+  assert(disable&&disable->HasReferenceChanges());
+  assert(player.CommitScriptTransaction(*disable));
+  assert(player.ReferenceDisabled(101,disabled,error)&&disabled);
+  auto unchanged=player.PrepareDialogueTransaction(Script("TestRef.Disable"),{},error);
+  assert(unchanged&&!unchanged->HasReferenceChanges());
+}
+
 static void Provenance(){
   using Kind=fo3player::ScriptProgramKind;
   constexpr auto capture=fo3player::ScriptProgramCapture::EnteredPrograms;
@@ -797,6 +824,7 @@ struct ScriptWorkflowAdapter {
   void FinalizationFailed() noexcept {assert(false);}
 };
 int main(int argc,char** argv){
+  EnableReferenceCommand();
   Provenance();
   CommandFormProvenance();
   ExpressionFormProvenance();

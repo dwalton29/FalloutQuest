@@ -321,8 +321,11 @@ bool ActivateFo3Interaction(float ox,float oy,float oz,float dx,float dy,float d
             if(ref!=refs.end() && ref->second.valid && !gPlayerSession->player.GetLock(target.reference).locked &&
                IsFo3ReferenceEnabled(gPlayerSession->player,target.reference)){
                 std::string error;
-                gPlayerSession->player.DispatchReferenceEvent(
-                    target.reference,"OnActivate",fo3player::PlayerRef,error);
+                const auto event=DispatchFo3ScriptedActivation(
+                    target.reference,fo3player::PlayerRef,error);
+                if(event==fo3player::ScriptEventResult::Unsupported)
+                    Q6H_LOGW("SCRIPT ACTIVATE REJECTED: ref=%08X reason=%s",
+                        target.reference,error.c_str());
             }
         }
         return false;
@@ -333,8 +336,12 @@ bool ActivateFo3Interaction(float ox,float oy,float oz,float dx,float dy,float d
     if(target.talk){StartFo3Dialogue(target.reference);return false;}
     if(target.scripted){
         std::string error;
-        const auto status=gPlayerSession->player.DispatchReferenceEvent(
-            target.reference,"OnActivate",fo3player::PlayerRef,error);
+        const auto status=DispatchFo3ScriptedActivation(
+            target.reference,fo3player::PlayerRef,error);
+        if(status==fo3player::ScriptEventResult::Pending){
+            Q6H_LOGI("SCRIPT ACTIVATE PENDING: reference=%08X source=ACTI",target.reference);
+            return false;
+        }
         // No synthesized follow-up, message panel, or door activation. The
         // source script must complete successfully to change gameplay state.
         if(status==fo3player::ScriptEventResult::Executed) {
