@@ -5,10 +5,8 @@
 #include "ui/interaction/fo3-interaction-hud-layout.h"
 #include "ui/interaction/fo3-loot-panel.h"
 #include "ui/interaction/fo3-dialogue-panel-renderer.h"
-// Level-up has its own geometry cache, separate from NPC dialogue.
-inline fo3dialogueui::Resources& Fo3LevelUpRendererResources(){
-    static fo3dialogueui::Resources r;return r;
-}
+#include "ui/interaction/fo3-levelup-renderer.h"
+#include "ui/interaction/fo3-xp-meter-renderer.h"
 #include <array>
 #include <string>
 #include "ui/loading/fo3-loading-vr.h"
@@ -384,7 +382,7 @@ public:
         fo3pipui::Shutdown();ResetFo3Pipboy();fo3lockui::Shutdown();CancelFo3Lockpick();
         fo3notifyui::Shutdown();
         fo3barterui::Shutdown();fo3dialogueui::Shutdown();
-         fo3dialogueui::Shutdown(&Fo3LevelUpRendererResources());
+         fo3levelui::Shutdown();fo3xpui::Shutdown();
          EndFo3Dialogue("renderer shutdown");
         fo3lootui::Shutdown();
         fo3hudrenderer::Shutdown();
@@ -1763,7 +1761,14 @@ private:
                 gPipScreenDrawUs=0;gPipScreenQueries=0;
                 notificationHead_=ToVirtualPose(loadingHead);
                 const bool notificationAvailable=!Fo3ResidentFrameBlocked() && gSceneReady && !IsFo3LoadingVisible() && !Fo3DialogueFocus() && !Fo3ScriptMessageFocus() && !Fo3LevelUpFocus() && !Fo3PipboyFocus() && !Fo3LockpickFocus() && sessionState_==XR_SESSION_STATE_FOCUSED;
-                if(!Fo3ResidentFrameBlocked())fo3notifyui::Prepare(gameplaySeconds,notificationAvailable,gSceneReady);
+                if(!Fo3ResidentFrameBlocked()) {
+                    fo3notifyui::Prepare(gameplaySeconds,notificationAvailable,gSceneReady);
+                    // Textures, glyphs and animated pointer buffers are prepared
+                    // once per logical frame. Stereo RenderEye only draws.
+                    if(notificationAvailable)fo3xpui::Prepare();
+                    if(Fo3LevelUpFocus())
+                        fo3levelui::Prepare(gLevelUp.panel,Fo3LevelUpSelectedIcon());
+                }
                 if(notificationAvailable&&fo3hudrenderer::State().ready&&fo3notifyui::State().program){
                     const auto sound=fo3notify::Notifications().TakeSound();
                     if(!sound.empty())fo3audio::NamedSound(sound);
@@ -1926,8 +1931,7 @@ private:
                 model.m[14]=gQ210Head[2]-std::cos(yaw)*1.1f;
                 model.m[15]=1;
                 const auto mvp=Multiply(viewProjection,model);
-                fo3dialogueui::Render(mvp.m,gLevelUp.panel,
-                                     &Fo3LevelUpRendererResources());
+                fo3levelui::Render(mvp.m,gLevelUp.panel);
             }
             if(gDialoguePanel.visible&&!gBarter.active&&!gScriptMessagePanel.visible&&!IsFo3LoadingVisible()) {
                 const auto& panel=gDialoguePanel;Mat4 model{};const float yaw=panel.yaw;
@@ -2033,6 +2037,7 @@ private:
             if(!IsFo3LoadingVisible()&&!Fo3DialogueFocus()&&!Fo3ScriptMessageFocus()&&!Fo3LevelUpFocus()&&!Fo3PipboyFocus()&&!Fo3LockpickFocus()) {
                 const auto notificationMvp=Multiply(viewProjection,MatrixFromPose(notificationHead_));
                 fo3notifyui::Render(notificationMvp.m);
+                fo3xpui::Render(notificationMvp.m);
             }
             if (depthReady) {
                 if (!depthFramebuffer_) glGenFramebuffers(1, &depthFramebuffer_);
