@@ -1,4 +1,5 @@
 #include "fo3-player-state.h"
+#include "player/fo3-levelup-rules.h"
 #include "data/fo3-esm-reader.h"
 #include <algorithm>
 #include <cmath>
@@ -15,6 +16,66 @@ bool Player::SetDialogueVariable(uint64_t key,float value) {
   if(!key||!std::isfinite(value))return false;
   state_.pipboy.dialogueVariables[key]=value;++revision_;return true;
 }
+bool Player::LevelUpPerkSupported(uint32_t id) const {
+  const auto it=catalog_->pipboy.perks.find(id);
+  if(it==catalog_->pipboy.perks.end())return false;
+  const auto& p=it->second;
+  // Exceptional vanilla perks with existing native outcomes.
+  const auto special=catalog_->pipboy.formNames.find("intensetraining");
+  if((special!=catalog_->pipboy.formNames.end()&&id==special->second)||
+     (catalog_->infiltrator&&id==catalog_->infiltrator))return true;
+  // Swift Learner and Educated are handled by the reward and skill budget
+  // entry-points. Other effects must not be silently accepted as functional.
+  if(p.effects.empty())return false;
+  for(const auto& e:p.effects) {
+    if(e.type!=2||(e.entryPoint!=9&&e.entryPoint!=10)||
+       e.scripted||e.parameterType!=1||e.parameters.size()!=sizeof(float)||
+       (e.function!=1&&e.function!=2&&e.function!=3))return false;
+    for(const auto& tab:e.conditions)if(!tab.second.empty())return false;
+  }
+  return true;
+}
+
+bool Player::CommitLevelUp(const std::array<uint8_t,14>& chosenSkills,
+                           uint32_t perkForm,int intenseSpecial) {
+  const auto progress=ExperienceProgress();
+  if(!progress.ready||state_.level>=fo3experience::BaseGameLevelCap)return false;
+  const int budget=fo3levelup::SkillBudget(
+      state_.special,catalog_->levelSkillPointsBase,
+      catalog_->levelSkillPointsInterval,state_.pipboy.perks,
+      catalog_->pipboy.perks);
+  if(!fo3levelup::SkillAllocationValid(state_.skills,chosenSkills,budget)||
+     !LevelUpPerkSupported(perkForm))return false;
+  const uint16_t targetLevel=uint16_t(state_.level+1);
+  const auto found=catalog_->pipboy.perks.find(perkForm);
+  if(found==catalog_->pipboy.perks.end()||
+     !fo3levelup::PerkEligible(perkForm,found->second,targetLevel,
+         state_.special,chosenSkills,catalog_->pipboy.playerFemale,
+         state_.pipboy.perks))return false;
+  const auto specialPerk=catalog_->pipboy.formNames.find("intensetraining");
+  const bool intense=specialPerk!=catalog_->pipboy.formNames.end()&&
+      perkForm==specialPerk->second;
+  if((!intense&&intenseSpecial!=-1)||
+     (intense&&(intenseSpecial<0||intenseSpecial>=7||
+                state_.special[size_t(intenseSpecial)]>=10)))return false;
+  auto next=state_;
+  next.level=targetLevel;
+  next.skills=chosenSkills;
+  if(intense)++next.special[size_t(intenseSpecial)];
+  const auto owned=next.pipboy.perks.find(perkForm);
+  next.pipboy.perks[perkForm]=owned==next.pipboy.perks.end()?1:uint8_t(owned->second+1);
+  const auto& rule=catalog_->rules;
+  const float health=next.baseHealth+
+      (next.special[2]+rule.healthEnduranceOffset)*rule.healthEnduranceMult+
+      (next.level-1)*rule.healthLevelMult;
+  const float ap=rule.apBase+next.special[5]*rule.apMult;
+  if(!std::isfinite(health)||health<=0||next.healthDamage>health||
+     !std::isfinite(ap)||ap<0||next.apSpent>ap)return false;
+  state_=std::move(next);
+  ++revision_;
+  return true;
+}
+
 bool Player::GrantPerk(uint32_t id, uint8_t rank) {
   auto p = catalog_->pipboy.perks.find(id);
   if (p == catalog_->pipboy.perks.end() || !rank || rank > p->second.ranks)
