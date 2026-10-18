@@ -160,8 +160,8 @@ static void WorldAwareGameMode() {
   c.pipboy.quests[20].flags|=1u; // Start-game-enabled original quest semantics.
   c.references[200].base=400;c.references[200].flags=0x800u;
   c.pipboy.formNames["targetref"]=200;
-  c.pipboy.scripts[101].source="scn Q\\nBegin GameMode\\nTargetRef.Enable\\nEnd";
-  c.pipboy.scripts[102].source="scn NPC\\nBegin GameMode\\nTargetRef.Disable\\nEnd";
+  c.pipboy.scripts[101].source="scn Q\nBegin GameMode\nTargetRef.Enable\nEnd";
+  c.pipboy.scripts[102].source="scn NPC\nBegin GameMode\nTargetRef.Disable\nEnd";
   c.eventPrograms[101]=fo3script::ParseEvents(c.pipboy.scripts[101]);
   c.eventPrograms[102]=fo3script::ParseEvents(c.pipboy.scripts[102]);
   fo3player::Player p(std::move(c));std::string error;bool disabled=false;
@@ -198,14 +198,14 @@ static void WorldAwareGameMode() {
   assert(p.Revision()==revision&&p.ReferenceDisabled(200,disabled,error)&&disabled);
   // Non-world scripts commit in the same tick without a resident ticket.
   auto normal=Catalog();normal.pipboy.quests[20].flags|=1u;
-  normal.pipboy.scripts[101].source="Begin GameMode\\nRewardKarma 4\\nEnd";
+  normal.pipboy.scripts[101].source="Begin GameMode\nRewardKarma 4\nEnd";
   normal.eventPrograms[101]=fo3script::ParseEvents(normal.pipboy.scripts[101]);
-  normal.pipboy.scripts[102].source="Begin OnDeath\\nStartQuest ExampleQuest\\nEnd";
+  normal.pipboy.scripts[102].source="Begin OnDeath\nStartQuest ExampleQuest\nEnd";
   normal.eventPrograms[102]=fo3script::ParseEvents(normal.pipboy.scripts[102]);
   fo3player::Player q(std::move(normal));int calls=0;
   assert(!q.PumpWorldAwareGameMode(.25,{},[&](auto){++calls;return false;}));
   assert(q.Snapshot().karma==4&&calls==0);
-  std::cout<<"World-aware GameMode gates original quest/reference world transactions without early publication\\n";
+  std::cout<<"World-aware GameMode gates original quest/reference world transactions without early publication\n";
 }
 static void DisarmStagePersistence() {
   auto c=Catalog();
