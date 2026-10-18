@@ -644,6 +644,72 @@ int main(){
       assert(error=="script master evidence byte limit exceeded"&&bound.Matches(evidence));
     }
   }
+  // Source globals share original-default proof with indexed condition globals,
+  // and each claim must also have a successful form lookup in its own phase.
+  for(bool expression:{false,true})for(bool compressed:{false,true})for(bool extended:{false,true})for(bool reverse:{false,true}){
+    using Globals=std::vector<std::pair<uint32_t,uint32_t>>;
+    auto evidence=f.programs;
+    const std::vector<std::pair<uint32_t,std::string>> names={{700,"sourceglobal"},{701,"otherglobal"},{700,"sourceglobal"}};
+    const Globals globals={{700,0x80000000u},{701,0x3fc00000u},{700,0x80000000u}};
+    (expression?evidence[0].expressionForms:evidence[0].commandForms)=names;
+    (expression?evidence[0].expressionGlobals:evidence[0].commandGlobals)=globals;
+    (expression?evidence.back().commandForms:evidence.back().expressionForms)=names;
+    (expression?evidence.back().commandGlobals:evidence.back().expressionGlobals)=globals;
+    auto records=[&](unsigned bad){
+      std::vector<Bytes> list;
+      for(uint32_t id:{700u,701u}){
+        if(id==700&&bad==1)continue;
+        Bytes data;Sub(data,"EDID",Text(id==700?"SourceGlobal":"OtherGlobal"));
+        if(id!=700||bad!=9)Sub(data,"FNAM",{uint8_t(id==700&&bad==12?'x':'f')});
+        const auto value=Word(id==700?(bad==8?0u:bad==10?0x7fc00000u:0x80000000u):0x3fc00000u);
+        if(extended){Sub(data,"XXXX",Word(4));Sub(data,"FLTV",{});Append(data,value);}
+        else Sub(data,"FLTV",value);
+        if(id==700&&bad==11)Sub(data,"FLTV",Bytes(3));
+        auto record=Record(id==700&&bad==2?"STAT":"GLOB",id,compressed?Compressed(data):data,
+          (compressed?0x40000:0)|(id==700&&bad==3?0x20:0));
+        list.push_back(record);if(id==700&&bad==4)list.push_back(record);
+      }
+      if(reverse)std::reverse(list.begin(),list.end());
+      auto bytes=f.Master();for(const auto& record:list)Append(bytes,record);return bytes;
+    };
+    write(records(0));fo3script::ScriptMasterMatch bound;
+    assert(fo3script::MatchScriptProgramsToMaster(path,evidence,bound,cancel,error)&&bound.Matches(evidence));
+    for(unsigned bad:{1u,2u,3u,4u,8u,9u,10u,11u,12u}){
+      write(records(bad));assert(!fo3script::MatchScriptProgramsToMaster(path,evidence,bound,cancel,error)&&bound.Matches(evidence));
+    }
+    write(records(0));
+    for(unsigned field=0;field<8;++field){
+      auto changed=evidence;auto& values=expression?changed[0].expressionGlobals:changed[0].commandGlobals;
+      auto& forms=expression?changed[0].expressionForms:changed[0].commandForms;
+      if(field==0)values[0].second^=1;
+      if(field==1)values[0].first=0;
+      if(field==2)values[0].first=999;
+      if(field==3)forms.clear();
+      if(field==4)std::swap(changed[0].commandGlobals,changed[0].expressionGlobals);
+      if(field==5)values[0].second=0x7fc00000u;
+      if(field==6){fo3pipdata::Condition c;c.function=74;c.a=700;changed[0].conditions={c};changed[0].conditionGlobals={{700,0}};}
+      if(field==7)for(auto& entry:changed)for(auto* bindings:{&entry.commandGlobals,&entry.expressionGlobals})
+        for(auto& value:*bindings)if(value.first==700)value.second=0;
+      assert(!bound.Matches(changed));
+      assert(!fo3script::MatchScriptProgramsToMaster(path,changed,bound,cancel,error)&&bound.Matches(evidence));
+    }
+    for(unsigned field=0;field<3;++field){
+      auto changed=evidence;auto& values=expression?changed[0].expressionGlobals:changed[0].commandGlobals;
+      if(field==0)values.clear();
+      if(field==1)values.pop_back();
+      if(field==2)std::swap(values[0],values[1]);
+      assert(!bound.Matches(changed)); // exact report values, not independent source completeness
+    }
+    auto unbound=evidence;(expression?unbound[0].expressionForms:unbound[0].commandForms).clear();
+    assert(!fo3script::MatchScriptProgramsToMaster(path+"-missing",unbound,bound,cancel,error));
+    assert(error=="malformed or unbound source global binding"&&bound.Matches(evidence));
+    if(expression&&compressed&&extended&&reverse)for(bool phase:{false,true}){
+      auto huge=evidence;(phase?huge[0].expressionGlobals:huge[0].commandGlobals).resize(
+        fo3script::ScriptEvidenceMaxBytes/sizeof(std::pair<uint32_t,uint32_t>)+1);
+      assert(!fo3script::MatchScriptProgramsToMaster(path+"-missing",huge,bound,cancel,error));
+      assert(error=="script master evidence byte limit exceeded"&&bound.Matches(evidence));
+    }
+  }
   // Bare names bind to this entry's authenticated owner/script and numeric
   // slot, including zero. Lookup order and phase remain exact report values.
   for(bool event:{false,true})for(bool compressed:{false,true})for(bool first:{false,true}){

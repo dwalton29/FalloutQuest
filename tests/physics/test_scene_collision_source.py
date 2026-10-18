@@ -589,6 +589,12 @@ assert 'execution.questConditionVariables=std::move(questConditionForms.variable
 assert script_runtime.index('fo3script::ChargeScriptGlobals(1,charged)')<script_runtime.index('bindings.emplace_back(id,bits)')<script_runtime.index('execution.conditionGlobals=std::move(conditionGlobals)')
 assert 'const auto global=catalog_->globals.find(id);' in script_runtime
 assert 'execution.questConditionGlobals=std::move(questConditionGlobals)' in script_runtime
+assert 'if(!forms->AddGlobal(id,bits))' in script_runtime and 'if(!forms.AddGlobal(command.form,bits))' in script_runtime
+assert script_runtime.index('forms.AddGlobal(command.form,bits)')<script_runtime.index('expressionForms.limit=forms.limit-forms.used')
+assert script_runtime.index('fo3script::ChargeScriptGlobals(forms.globals.size(),nextBytes)')<script_runtime.index('execution.commandGlobals=std::move(forms.globals)')
+assert script_runtime.index('fo3script::ChargeScriptGlobals(expressionForms.globals.size(),nextBytes)')<script_runtime.index('execution.expressionGlobals=std::move(expressionForms.globals)')
+assert 'a.commandGlobals==b.commandGlobals' in master_match and 'a.expressionGlobals==b.expressionGlobals' in master_match
+assert master_match.index('!ChargeScriptGlobals(e.expressionGlobals.size(),evidenceBytes)')<master_match.index('malformed or unbound source global binding')<master_match.index('std::fopen(master.c_str(),"rb")')
 assert 'a.conditionGlobals==b.conditionGlobals' in master_match and 'a.questConditionGlobals==b.questConditionGlobals' in master_match
 assert master_match.index('!ChargeScriptGlobals(e.questConditionGlobals.size(),evidenceBytes)')<master_match.index('condition global binding coverage or defaults differ')<master_match.index('std::fopen(master.c_str(),"rb")')
 assert 'pass==0&&globalDefaults.count(id)' in master_match

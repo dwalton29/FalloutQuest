@@ -461,6 +461,54 @@ static void ConditionGlobalProvenance(){
     assert(guarded.PrepareDialogueInfoTransaction(800,801,fo3player::DialogueScriptPhase::Both,error,100));
   }
 }
+static void SourceGlobalProvenance(){
+  constexpr auto capture=fo3player::ScriptProgramCapture::EnteredPrograms;
+  using Globals=std::vector<std::pair<uint32_t,uint32_t>>;
+  const auto body=Script("if 0\nset First to Second\nendif\nset Second to First + Second\nif Clock >= 0\nRewardKarma 1\nendif");
+  const Globals targets={{700,0},{701,0x80000000u}},reads={{701,0x80000000u},{700,0},{701,0x80000000u},{703,0x41400000u}};
+  constexpr size_t width=sizeof(std::pair<uint32_t,uint32_t>);
+  fo3dialogue::CommandFormCapture sink;sink.limit=2*width;
+  assert(sink.AddGlobal(700,0)&&sink.AddGlobal(701,0x80000000u)&&sink.used==2*width);
+  assert(!sink.AddGlobal(700,0)&&sink.exhausted&&sink.used==2*width&&sink.globals==targets);
+  sink.Reset();sink.limit=2*width-1;assert(sink.AddGlobal(700,0));
+  assert(!sink.AddGlobal(701,0)&&sink.exhausted&&sink.globals.size()==1);
+  sink.Reset();assert(sink.globals.empty()&&!sink.used&&!sink.exhausted);
+  size_t names=0;assert(fo3script::ChargeScriptForms({{700,"first"}},names));
+  sink.limit=names+width;assert(sink.Add(700,"first")&&sink.AddGlobal(700,0)&&sink.used==sink.limit);
+  assert(!sink.AddGlobal(700,0)&&sink.exhausted);
+  sink.Reset();sink.limit=SIZE_MAX;sink.used=SIZE_MAX-1;
+  assert(!sink.AddGlobal(700,0)&&sink.exhausted&&sink.used==SIZE_MAX-1);
+  for(bool event:{false,true}){
+    auto catalog=Fixture();catalog.pipboy.formNames["first"]=700;catalog.pipboy.formNames["second"]=701;catalog.pipboy.formNames["clock"]=703;
+    catalog.globals={{700,0.0f},{701,-0.0f},{703,12.0f}};catalog.hourGlobal=703;catalog.initial.gameHour=3;
+    if(event){catalog.pipboy.scripts[300].source="Begin OnActivate\n"+body.source+"\nEnd";catalog.eventPrograms[300]=fo3script::ParseEvents(catalog.pipboy.scripts[300]);}
+    else catalog.pipboy.quests[10].stages[10].items[0].result=body;
+    fo3player::Player player(std::move(catalog));assert(player.SetGlobalValue(700,5)&&player.SetGlobalValue(701,7));
+    std::string error;const auto revision=player.Revision();
+    auto prepare=[&](fo3player::ScriptProgramCapture mode){return event?
+      player.PrepareReferenceEventTransaction(100,"OnActivate",fo3player::PlayerRef,error,mode):player.PrepareQuestStageTransaction(10,10,error,mode);};
+    auto plan=prepare(capture);if(!plan)std::cerr<<error<<'\n';assert(plan&&plan->ExecutedScripts().size()==1);
+    const auto& entry=plan->ExecutedScripts()[0];assert(entry.commandGlobals==targets&&entry.expressionGlobals==reads);
+    assert(entry.conditionGlobals.empty()&&entry.questConditionGlobals.empty()&&player.Revision()==revision);
+    float value=0;assert(player.GlobalValue(701,value)&&value==7);NoEffects(player);
+    auto plain=prepare(fo3player::ScriptProgramCapture::None);assert(plain&&plain->ExecutedScripts().empty());
+    forbidAllocations=true;assert(player.CommitScriptTransaction(*plan));assert(player.GlobalValue(701,value)&&value==12);
+    assert(player.RollbackScriptTransaction(*plan)&&player.GlobalValue(701,value)&&value==7);forbidAllocations=false;
+    assert(entry.commandGlobals==targets&&entry.expressionGlobals==reads);NoEffects(player);
+  }
+  for(unsigned bad=0;bad<4;++bad){
+    auto catalog=Fixture();catalog.pipboy.formNames["first"]=700;catalog.pipboy.formNames["second"]=701;
+    catalog.globals={{700,0},{701,0}};
+    if(bad==0)catalog.globals.erase(700);
+    if(bad==1)catalog.globals[700]=std::numeric_limits<float>::quiet_NaN();
+    if(bad==2)catalog.globals[701]=std::numeric_limits<float>::quiet_NaN();
+    catalog.pipboy.quests[10].stages[10].items[0].result=Script(bad==2?"if Second >= 0\nendif":bad==3?"if 0\nset TestItem to 1\nendif":"if 0\nset First to 1\nendif");
+    fo3player::Player player(std::move(catalog));assert(player.SetGlobalValue(701,7));const auto revision=player.Revision();std::string error;
+    assert(!player.PrepareQuestStageTransaction(10,10,error,capture));
+    assert(error.find("script provenance global default unavailable")!=std::string::npos&&player.Revision()==revision);NoEffects(player);
+    assert(player.PrepareQuestStageTransaction(10,10,error));
+  }
+}
 static void LocalRecordProvenance(){
   constexpr auto capture=fo3player::ScriptProgramCapture::EnteredPrograms;
   for(bool event:{false,true})for(unsigned kind=0;kind<9;++kind){
@@ -756,6 +804,7 @@ int main(int argc,char** argv){
   BareLocalProvenance();
   IndexedConditionProvenance();
   ConditionGlobalProvenance();
+  SourceGlobalProvenance();
   LocalRecordProvenance();
   DialogueProvenance();
   if(argc>1)OriginalProvenance(argv[1]);

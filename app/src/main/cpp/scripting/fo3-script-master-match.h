@@ -11,6 +11,8 @@ namespace fo3script {
 // owner/script/slot chains. Other operands, gate outcomes and reads are unproven.
 // CTDA 74/comparison globals require complete ordered identity/default-bit
 // evidence and original live numeric GLOB records, not mutable runtime values.
+// Supplied command/preflight globals also bind original defaults and require a
+// form lookup in their phase; source lookup completeness remains unproven.
 // Nonzero local-script IDs additionally bind the original full SCPT and decoded
 // variable table. Supplied successful bare bindings additionally require exact
 // numeric slots; lookup completeness and runtime read values remain unproven.

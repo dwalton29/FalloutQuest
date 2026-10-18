@@ -321,6 +321,9 @@ struct ScriptExecution {
   // comparison per condition. Each pair is (FormID, immutable catalog-default
   // float bits), never a mutable runtime value or a condition outcome.
   std::vector<std::pair<uint32_t,uint32_t>> conditionGlobals,questConditionGlobals;
+  // Successful compiled global assignment targets and expression-preflight
+  // global lookups, using the same immutable default-bit representation.
+  std::vector<std::pair<uint32_t,uint32_t>> commandGlobals,expressionGlobals;
 };
 struct ReferenceEnableChange { uint32_t reference=0; bool enabled=false; };
 // Owned reference-only input for the future scene coordinator. It neither runs

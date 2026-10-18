@@ -8,9 +8,15 @@ struct CommandFormCapture {
   std::vector<std::pair<uint32_t,std::string>> bindings;
   std::vector<fo3player::ScriptVariableBinding> variables;
   std::vector<std::pair<uint32_t,std::string>> locals;
+  std::vector<std::pair<uint32_t,uint32_t>> globals;
   size_t limit=0,used=0;
   bool exhausted=false;
-  void Reset(){bindings.clear();variables.clear();locals.clear();used=0;exhausted=false;}
+  void Reset(){bindings.clear();variables.clear();locals.clear();globals.clear();used=0;exhausted=false;}
+  bool AddGlobal(uint32_t id,uint32_t bits){
+    const auto fixed=sizeof(std::pair<uint32_t,uint32_t>);
+    if(used>limit||fixed>limit-used){exhausted=true;return false;}
+    globals.emplace_back(id,bits);used+=fixed;return true;
+  }
   bool AddLocal(uint32_t index,const std::string& name){
     const auto fixed=sizeof(std::pair<uint32_t,std::string>);
     if(used>limit||fixed>limit-used||name.size()>=limit-used-fixed){exhausted=true;return false;}

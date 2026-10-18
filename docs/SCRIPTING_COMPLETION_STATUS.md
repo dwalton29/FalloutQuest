@@ -4,9 +4,9 @@
 
 - Starting canonical main: `2987d911f318b92d1041257868067851a09d16f0` (v208).
 - Resumed from published `6469dbb872889a79a0682501b75f6ac6577ab547`.
-- Current implementation checkpoint: M1B3at condition global identities/defaults.
+- Current implementation checkpoint: M1B3au source global targets/expressions.
   Use canonical main history for the publication SHA; the previous published
-  implementation is M1B3as `059dc2c78a54f5918dd4914b0efb6de0e08bd5d3`.
+  implementation is M1B3at `f8b6eaf8b3c2d14660166653fac215d9ac3f88fc`.
   M1B3ar Android CI passed (run 39083636186), as did M1B3aq (run 39081584682).
 - M1B3l Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38635385905.
 - M1B3m Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38793178567.
@@ -1408,3 +1408,48 @@ receivers, source lookup completeness, numeric coercion and call/event causality
 remain open. No dependency exemption or general resident caller is added.
 Version 212 is unchanged; full ownership, bounded dispatch and device validation
 still gate resident Enable/Disable. See `world-reference-m1b3at.md`.
+
+## M1B3au validation
+
+commandGlobals/expressionGlobals now retain original catalog-default float bits
+for compiled global assignment targets and successful expression-preflight
+global operands. Command targets include unreachable assignments; preflight
+preserves repeated/unreachable lookups. Defaults are distinct from mutable
+runtime and clock values. Normal execution still uses Player::GlobalValue and
+capture-off semantics are unchanged. Opted-in capture rejects unknown/nonfinite
+global defaults and invalid global destinations even if their branch is inactive.
+
+The bounded shared collector charges each fixed pair before append and resets
+global evidence with all other binding vectors. Command targets consume their
+allowance before expression preflight receives the remainder. Final entry and
+master accounting charge both vectors under the same 16 MiB retained-value
+limit. Matching requires finite nonnull source globals and successful form
+lookups in the same phase; all source/condition defaults for an ID must agree.
+Existing EDID namespace and numeric GLOB/default proof authenticate the supplied
+identities with no new master pass. Exact report comparison includes both
+ordered vectors without allocation/file access. Empty global vectors do not
+prove source access absence or independent lookup completeness/phase derivation.
+
+All six targeted host tests pass: transactions, master matching, dialogue,
+production dialogue runtime, barter and MS11 completion. Transaction/matcher
+fixtures pass ASan/UBSan with LeakSanitizer disabled; native source guards pass.
+New cases cover quest/event scope, signed-zero defaults, changed mutable/clock
+values, private assignments and rollback, repeated/unreachable accesses, wrong-
+phase/unbound forms, source/condition conflicts, invalid original global records,
+compression, XXXX, record order, overflow/exact/shared/failing collector limits,
+pre-file rejection and unchanged reports/state/effects. Commit/rollback remain
+allocation-free. Broader player/world/physics suites were not rerun for this
+focused binding change; previous validation remains recorded above.
+
+The supplied ESM hash is unchanged. Original MS11 stage/event/INFO provenance
+passes matching and all 1,257 SCPTs pass local policy. Lucas acceptance/production
+bridge, original merchant barter and all three MS11 completion/reward/save-reload
+branches pass. Existing unsupported showmap diagnostics remain unchanged.
+
+These are supplied identity/default proofs, not runtime read/assignment values,
+source lookup completeness, numeric coercion, all implicit receivers or event/
+call causality. Temporary phase sets and collector capacity remain private
+preparation costs outside retained accounting and device timing claims. No
+dependency exemption or general resident caller is added; version 212 remains
+unchanged. Full ownership, bounded dispatch and device validation still gate
+resident Enable/Disable. See `world-reference-m1b3au.md`.

@@ -7,6 +7,7 @@
 #include <cmath>
 #include <memory>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace fo3script {
 namespace {
@@ -41,7 +42,8 @@ bool Same(const Execution& a,const Execution& b) noexcept {
     a.commandVariables==b.commandVariables&&a.expressionVariables==b.expressionVariables&&
     a.commandLocals==b.commandLocals&&a.expressionLocals==b.expressionLocals&&
     a.conditionVariables==b.conditionVariables&&a.questConditionVariables==b.questConditionVariables&&
-    a.conditionGlobals==b.conditionGlobals&&a.questConditionGlobals==b.questConditionGlobals;
+    a.conditionGlobals==b.conditionGlobals&&a.questConditionGlobals==b.questConditionGlobals&&
+    a.commandGlobals==b.commandGlobals&&a.expressionGlobals==b.expressionGlobals;
 }
 bool Contexts(const std::vector<Execution>& programs){
   std::array<size_t,32> active{};size_t depth=0;
@@ -223,7 +225,8 @@ bool MatchScriptProgramsToMaster(const std::string& master,const std::vector<Exe
         !ChargeScriptVariables(e.expressionVariables,evidenceBytes)||
         !ChargeScriptLocals(e.commandLocals,evidenceBytes)||!ChargeScriptLocals(e.expressionLocals,evidenceBytes)||
         !ChargeScriptVariables(e.conditionVariables,evidenceBytes)||!ChargeScriptVariables(e.questConditionVariables,evidenceBytes)||
-        !ChargeScriptGlobals(e.conditionGlobals.size(),evidenceBytes)||!ChargeScriptGlobals(e.questConditionGlobals.size(),evidenceBytes))
+        !ChargeScriptGlobals(e.conditionGlobals.size(),evidenceBytes)||!ChargeScriptGlobals(e.questConditionGlobals.size(),evidenceBytes)||
+        !ChargeScriptGlobals(e.commandGlobals.size(),evidenceBytes)||!ChargeScriptGlobals(e.expressionGlobals.size(),evidenceBytes))
       return fail("script master evidence byte limit exceeded");
     if(!Type(programs[n]))return fail("unbound or malformed script origin");
     auto coversGlobals=[&](const auto& conditions,const auto& bindings){
@@ -267,6 +270,21 @@ bool MatchScriptProgramsToMaster(const std::string& master,const std::vector<Exe
       const auto named=formNames.emplace(binding.second,binding.first);
       if(!named.second&&named.first->second!=binding.first)return fail("conflicting script form name bindings");
       forms[binding.first].push_back(binding.second);
+    }
+    for(unsigned phase=0;phase<2;++phase){
+      const auto& names=phase?e.expressionForms:e.commandForms;
+      const auto& globals=phase?e.expressionGlobals:e.commandGlobals;
+      if(globals.empty())continue;
+      std::unordered_set<uint32_t> phaseForms;
+      for(const auto& name:names)phaseForms.insert(name.first);
+      for(const auto& binding:globals){
+        if(cancel.load(std::memory_order_acquire))return fail("script master match cancelled");
+        float value;std::memcpy(&value,&binding.second,4);
+        if(!binding.first||!phaseForms.count(binding.first)||!std::isfinite(value))
+          return fail("malformed or unbound source global binding");
+        const auto added=globalDefaults.emplace(binding.first,binding.second);
+        if(!added.second&&added.first->second!=binding.second)return fail("conflicting script global defaults");
+      }
     }
     auto coversConditions=[](const auto& conditions,const auto& bindings){
       size_t at=0;

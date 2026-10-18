@@ -77,7 +77,15 @@ class Expression {
     if(!key&&owner&&t.find('.')==std::string::npos){auto q=d.quests.find(owner);if(q!=d.quests.end())key=fo3dialogue::VariableKey(d,q->second.editor+"."+t,forms);}
     if(!key)key=fo3dialogue::CaptureNumericLocalKey(d,owner,scriptId,t,forms);
     if(key){auto v=p.Snapshot().pipboy.dialogueVariables.find(key);value=v==p.Snapshot().pipboy.dialogueVariables.end()?0:v->second;return true;}
-    const auto id=form(t);if(id&&p.GlobalValue(id,value))return true;
+    const auto id=form(t);if(id&&p.GlobalValue(id,value)){
+      if(forms){
+        const auto global=p.Definitions().globals.find(id);
+        if(global==p.Definitions().globals.end()||!std::isfinite(global->second))return Fail("script provenance global default unavailable");
+        uint32_t bits;std::memcpy(&bits,&global->second,4);
+        if(!forms->AddGlobal(id,bits))return Fail("script provenance byte limit exceeded");
+      }
+      return true;
+    }
     return Fail("unsupported expression operand: "+t);
   }
   bool Sum(float& value){if(!Atom(value))return false;while(at<tokens.size()&&(tokens[at]=="+"||tokens[at]=="-")){auto op=tokens[at++];float b;if(!Atom(b))return false;value=op=="+"?value+b:value-b;}return std::isfinite(value)||Fail("expression overflow");}
@@ -167,9 +175,17 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
     if(forms.exhausted)error="script provenance byte limit exceeded";
     return false;
   }
+  using C=fo3dialogue::CommandType;
+  if(scriptTrace_)for(const auto& command:commands)if(command.type==C::Global){
+    const auto global=catalog_->globals.find(command.form);
+    if(!command.form||global==catalog_->globals.end()||!std::isfinite(global->second)){
+      error="script provenance global default unavailable";return false;
+    }
+    uint32_t bits;std::memcpy(&bits,&global->second,4);
+    if(!forms.AddGlobal(command.form,bits)){error="script provenance byte limit exceeded";return false;}
+  }
   fo3dialogue::CommandFormCapture expressionForms;
   if(scriptTrace_)expressionForms.limit=forms.limit-forms.used;
-  using C=fo3dialogue::CommandType;
   // Validate all expressions and block structure, including unreachable branches.
   struct Gate {bool parent,taken,active,hasElse;};std::vector<Gate> gates;
   for(const auto& c:commands) {
@@ -227,7 +243,9 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
         !fo3script::ChargeScriptVariables(forms.variables,nextBytes)||
         !fo3script::ChargeScriptVariables(expressionForms.variables,nextBytes)||
         !fo3script::ChargeScriptLocals(forms.locals,nextBytes)||
-        !fo3script::ChargeScriptLocals(expressionForms.locals,nextBytes)){
+        !fo3script::ChargeScriptLocals(expressionForms.locals,nextBytes)||
+        !fo3script::ChargeScriptGlobals(forms.globals.size(),nextBytes)||
+        !fo3script::ChargeScriptGlobals(expressionForms.globals.size(),nextBytes)){
       error="script provenance byte limit exceeded";return false;
     }
     const fo3pipdata::Script* localScript=nullptr;
@@ -295,6 +313,8 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
     execution.expressionVariables=std::move(expressionForms.variables);
     execution.commandLocals=std::move(forms.locals);
     execution.expressionLocals=std::move(expressionForms.locals);
+    execution.commandGlobals=std::move(forms.globals);
+    execution.expressionGlobals=std::move(expressionForms.globals);
     execution.conditionVariables=std::move(conditionForms.variables);
     execution.questConditionVariables=std::move(questConditionForms.variables);
     execution.conditionGlobals=std::move(conditionGlobals);
