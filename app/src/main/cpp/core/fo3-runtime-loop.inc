@@ -1770,7 +1770,10 @@ private:
                     if(Fo3LevelUpFocus())
                         fo3levelui::Prepare(gLevelUp.panel,Fo3LevelUpSelectedIcon());
                 }
-                if(notificationAvailable&&fo3hudrenderer::State().ready&&fo3notifyui::State().program){
+                if(notificationAvailable){
+                    // Audio belongs to the committed XP/quest event, not to
+                    // successful DDS/font initialization. Missing Textures.bsa
+                    // must never suppress an available original Sound.bsa cue.
                     const auto sound=fo3notify::Notifications().TakeSound();
                     if(!sound.empty())fo3audio::NamedSound(sound);
                 }
