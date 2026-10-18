@@ -611,7 +611,14 @@ struct Q2015FrustumCullScope {
             gQ2015FrustumCullActive = false;
         }
         ++gQ2015CullScopes;
+        // Formerly emitted hundreds of FRUSTUM lines per second in outdoor
+        // scenes (4,714 in a 17s capture). Preserve counters/visibility, but
+        // sample once per second to avoid logcat and formatting overhead.
         if ((gQ2015CullScopes % 300u) == 0u) {
+            static uint64_t lastReportUs=0u;
+            const uint64_t nowUs=fqloadprofile::NowUs();
+            if(lastReportUs && nowUs-lastReportUs < 1000000u)return;
+            lastReportUs=nowUs;
             const double pct = gQ2015CullTested > 0u
                 ? 100.0 * static_cast<double>(gQ2015CullRejected) /
                   static_cast<double>(gQ2015CullTested)
