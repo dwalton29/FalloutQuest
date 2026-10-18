@@ -3144,69 +3144,6 @@ void AbortFo3SceneLoad(const char* reason);
 // Stage one texture at a time. Misses decode on one bounded worker, including
 // textures beyond the former 64 MiB speculative cache. No DDS decoder runs in
 // the scene upload turn. Existing fallback material semantics are retained.
-bool PrepareFo3SceneImage(const std::string& path) {
-    if(path.empty())return true;
-    const auto key=TextureCacheKey(path, "");
-    if(gTextureCache.count(key))return true;
-    if(gSceneLoad.missingTextures.count(key)) {
-        std::lock_guard<std::mutex> lock(gQ1900TextureCpuMutexQ19);
-        gQ1900PreparedTexturesQ19[key]=Q1900PreparedTextureQ19{};
-        return true;
-    }
-    if(gSceneLoad.textureKey.empty()) {
-        gSceneLoad.textureKey=key;
-        const auto generated=gQ234GeneratedTextures.find(path);
-        if(generated!=gQ234GeneratedTextures.end()) {
-            gSceneLoad.texture.texture=generated->second;
-            gSceneLoad.texture.real=true;
-        } else if(!Q1900TakePreparedTextureQ19(key,gSceneLoad.texture.texture,gSceneLoad.texture.real)) {
-            if(!gSceneLoad.texturePreparation.Start([path](Q1900PreparedTextureQ19& out,const std::atomic<bool>& cancel){
-                if(cancel.load())return false;
-                std::lock_guard<std::mutex> decodeLock(gQ2012TextureDecodeMutexQ19);
-                if(cancel.load())return false;
-                out.real=LoadFalloutTextureRgba(path,out.texture);
-                return !cancel.load();
-            })) {AbortFo3SceneLoad("texture-worker-start");return false;}
-            return false;
-        }
-    }
-    if(gSceneLoad.texturePreparation.Active()) {
-        if(!gSceneLoad.texturePreparation.Ready())return false;
-        if(!gSceneLoad.texturePreparation.Successful()){AbortFo3SceneLoad("texture-preparation");return false;}
-        Q6H_LOGI("SCENE TEXTURE CPU: key=%s queuedUs=%llu decodeUs=%llu decodedBytes=%zu",key.c_str(),
-            (unsigned long long)gSceneLoad.texturePreparation.QueueDelayUs(),(unsigned long long)gSceneLoad.texturePreparation.ExecutionUs(),
-            gSceneLoad.texturePreparation.Get().texture.rgba.size());
-        gSceneLoad.textureDecodeUs+=gSceneLoad.texturePreparation.ExecutionUs();
-        gSceneLoad.texture=std::move(gSceneLoad.texturePreparation.Get());
-        gSceneLoad.texturePreparation.Reset();
-    }
-    if(!gSceneLoad.texture.real) {
-        gSceneLoad.missingTextures.insert(key);gSceneLoad.textureKey.clear();
-        return PrepareFo3SceneImage(path);
-    }
-    if(!fqloading::Allow())return false;
-    gSceneLoad.peakStagedImageBytes=std::max(gSceneLoad.peakStagedImageBytes,gSceneLoad.texture.texture.rgba.size());
-    while(!gSceneLoad.imageTransfer.ready && fqloading::Allow()) {
-        const auto started=fqloading::Now();
-        fqloading::WorkScope operation("scene-texture-allocate/rows/mip");
-        gSceneLoad.imageTransfer.Step(gSceneLoad.texture.texture,true,true,Q1070ApplyStaticAnisotropy);
-        if(gSceneLoad.imageTransfer.failed){AbortFo3SceneLoad("staged-texture-gl");return false;}
-        const auto elapsed=fqloading::Now()-started;
-        gSceneLoad.textureUploadUs+=elapsed;gSceneLoad.uploadUs+=elapsed;
-        gSceneLoad.maxUploadSliceUs=std::max(gSceneLoad.maxUploadSliceUs,elapsed);
-    }
-    if(!gSceneLoad.imageTransfer.ready)return false;
-    const GLuint id=gSceneLoad.imageTransfer.Take();
-    gTextureCache.emplace(key,CachedGpuTexture{id,true});Q1900MarkGpuTextureKnownQ19(key);
-    gSceneLoad.texture=Q1900PreparedTextureQ19{};gSceneLoad.textureKey.clear();
-    return true;
-}
-bool PrepareFo3SceneMaterial(const CpuObject& cpu) {
-    for(const std::string* path:{&cpu.mesh.diffuseTexturePath,&cpu.mesh.normalTexturePath,
-            &cpu.mesh.glowTexturePath,&cpu.mesh.environmentMaskTexturePath})
-        if(!PrepareFo3SceneImage(*path))return false;
-    return true;
-}
 uint64_t gSceneLoadFrame = 0u;
 fqopaque::GpuTimer gLoadingGpuTimer;
 GLsync gLoadingUploadFence=nullptr;
@@ -4176,8 +4113,31 @@ bool BeginFo3SceneLoad(const Fo3CellTransitionRequestQ74& request, bool boot) {
         result.cpuUs = Fo3SceneElapsedUs(phase);
         if (result.selected.size() < 2u) return false;
         phase = std::chrono::steady_clock::now();
-        // Texture decoding is demand-driven by the bounded upload lane. This
-        // avoids retaining 64 MiB before the first mesh can start transferring.
+        // Restore the proven v215 bounded speculative image decode on the
+        // CPU preparation worker. Scene uploads can then reuse the immutable
+        // prepared map without decoding a unique texture on every XR frame.
+        std::unordered_set<std::string> texturePaths;
+        for (const CpuObject& cpu : result.selected) {
+            for (const std::string* path : {&cpu.mesh.diffuseTexturePath,
+                    &cpu.mesh.normalTexturePath, &cpu.mesh.glowTexturePath,
+                    &cpu.mesh.environmentMaskTexturePath}) {
+                if (!path->empty()) texturePaths.insert(*path);
+            }
+        }
+        for (const std::string& path : texturePaths) {
+            if (cancel.load(std::memory_order_acquire)) return false;
+            // Bound speculative decoded-image retention. Remaining textures use
+            // the existing upload-time decoder; no assets are omitted.
+            size_t retainedBytes = 0u;
+            {
+                std::lock_guard<std::mutex> lock(gQ1900TextureCpuMutexQ19);
+                for (const auto& entry : gQ1900PreparedTexturesQ19)
+                    retainedBytes += entry.second.texture.rgba.size();
+            }
+            if (retainedBytes >= 64u * 1024u * 1024u) break;
+            Q1900PrepareTextureCpuQ19(path);
+            ++result.preparedTextures;
+        }
         result.textureUs = Fo3SceneElapsedUs(phase);
         return !cancel.load(std::memory_order_acquire);
     })) {
@@ -4298,60 +4258,48 @@ bool ProcessQ74TransitionRequest() {
                 if(!gSceneLoad.collisionStarted)return false;
             }
     }
-    while (gSceneLoad.uploadIndex < selected.size() && fqloading::Allow()) {
-        CpuObject& cpu=selected[gSceneLoad.uploadIndex];
-        if(!gSceneLoad.vertexPending && !PrepareFo3SceneMaterial(cpu))return false;
-        if(!gSceneLoad.active || !fqloading::Allow())return false;
-        const auto uploadStarted=std::chrono::steady_clock::now();
-        fqloading::WorkScope operation("scene-geometry-allocate/rows");
-        if(!gSceneLoad.vertexPending) {
+    // v217 recovery: restore v215's proven complete GL object upload.
+    // The v216 staged pipeline made formerly optional unsupported mesh/NPC
+    // parts fatal, aborting first boot and exposing an empty tinted world.
+    // Keep the v216 isolated XR loading path and measured shared scheduler,
+    // but do not publish an unpopulated VBO or require every optional shape.
+    if (!fqloading::Allow()) return false;
+    const auto uploadStarted = std::chrono::steady_clock::now();
+    if (gSceneLoad.uploadIndex < selected.size()) {
+        do {
+            CpuObject& cpu = selected[gSceneLoad.uploadIndex++];
             GpuObject gpu;
-            gQ1960CaptureVboQ19=true;gQ1960CapturedVboVerticesQ19=&gSceneLoad.vertexTransfer;
-            const bool uploaded=UploadCpuObject(cpu,request.x,request.y,request.z,gpu);
-            gQ1960CaptureVboQ19=false;gQ1960CapturedVboVerticesQ19=nullptr;
-            if(!uploaded) {
-                std::vector<GpuObject> failed;failed.push_back(std::move(gpu));Q74DeleteGpuObjects(failed);
-                AbortFo3SceneLoad("geometry-upload");return false;
+            if (UploadCpuObject(cpu, request.x, request.y, request.z, gpu)) {
+                gSceneLoad.replacement.push_back(std::move(gpu));
+            } else {
+                Q6H_LOGW("SCENE OPTIONAL MESH SKIPPED: ref=%08X model=%s uploadFailed=1",
+                    cpu.placement.refFormId,cpu.placement.modelPath.c_str());
+                // Preserve v215's cleanup; cached material textures and
+                // shared geometry are not independently owned by this failed part.
+                if (gpu.vbo) glDeleteBuffers(1, &gpu.vbo);
+                if (gpu.vao) glDeleteVertexArrays(1, &gpu.vao);
             }
-            gSceneLoad.replacement.push_back(std::move(gpu));
-            gSceneLoad.vertexPending=true;gSceneLoad.vertexOffset=0;
-        } else if(gSceneLoad.vertexOffset<gSceneLoad.vertexTransfer.size()*sizeof(float)) {
-            const size_t bytes=std::min(fqloading::TransferBytes,
-                gSceneLoad.vertexTransfer.size()*sizeof(float)-gSceneLoad.vertexOffset);
-            glBindBuffer(GL_ARRAY_BUFFER,gSceneLoad.replacement.back().vbo);
-            glBufferSubData(GL_ARRAY_BUFFER,GLintptr(gSceneLoad.vertexOffset),GLsizeiptr(bytes),
-                reinterpret_cast<const uint8_t*>(gSceneLoad.vertexTransfer.data())+gSceneLoad.vertexOffset);
-            gSceneLoad.vertexOffset+=bytes;
-            if(glGetError()!=GL_NO_ERROR){AbortFo3SceneLoad("vertex-transfer");return false;}
-        }
-        if(gSceneLoad.vertexOffset==gSceneLoad.vertexTransfer.size()*sizeof(float)) {
-            Q2017PublishSharedGeometry(gSceneLoad.replacement.back());
-            gSceneLoad.vertexTransfer.clear();gSceneLoad.vertexPending=false;
-            cpu=CpuObject{};++gSceneLoad.uploadIndex;
-        }
-        const uint64_t sliceUs=Fo3SceneElapsedUs(uploadStarted);
-        gSceneLoad.uploadUs+=sliceUs;
-        gSceneLoad.maxUploadSliceUs=std::max(gSceneLoad.maxUploadSliceUs,sliceUs);
+            // Release transformed/expanded CPU buffers after their GPU upload.
+            cpu = CpuObject{};
+        } while (gSceneLoad.uploadIndex < selected.size() &&
+                 Fo3SceneElapsedUs(uploadStarted) < 4000u &&
+                 fqloading::Allow());
+        const uint64_t sliceUs = Fo3SceneElapsedUs(uploadStarted);
+        gSceneLoad.uploadUs += sliceUs;
+        gSceneLoad.maxUploadSliceUs = std::max(gSceneLoad.maxUploadSliceUs, sliceUs);
+        return false; // collision/finalization starts on a clean following frame
     }
-    if(gSceneLoad.uploadIndex<selected.size())return false;
     if (gSceneLoad.npcActorIndex < prepared.actors.size()) {
         auto& actor = prepared.actors[gSceneLoad.npcActorIndex];
-        if (!gSceneLoad.npcTexturesInstalled) {
+        if (gSceneLoad.npcPartIndex == 0u) {
             for (auto& entry : actor.generatedTextures)
                 gQ234GeneratedTextures[entry.first] = std::move(entry.second);
-            gSceneLoad.npcTexturesInstalled=true;
         }
         if (gSceneLoad.npcPartIndex < actor.parts.size()) {
-            auto& part = actor.parts[gSceneLoad.npcPartIndex];
-            if(!PrepareFo3SceneMaterial(part) || !gSceneLoad.active || !fqloading::Allow())return false;
-            const auto npcStarted=fqloading::Now();
-            fqloading::WorkScope operation("npc-part-upload");
-            ++gSceneLoad.npcPartIndex;
+            auto& part = actor.parts[gSceneLoad.npcPartIndex++];
             if(!Q230UploadActorPart(actor, part, request.x, request.y, request.z))
-                AbortFo3SceneLoad("npc-part-upload");
-            const auto elapsed=fqloading::Now()-npcStarted;
-            gSceneLoad.npcUploadUs+=elapsed;gSceneLoad.uploadUs+=elapsed;
-            gSceneLoad.maxUploadSliceUs=std::max(gSceneLoad.maxUploadSliceUs,elapsed);
+                Q6H_LOGW("SCENE OPTIONAL NPC PART SKIPPED: ref=%08X part=%zu",
+                    actor.source.refFormId,gSceneLoad.npcPartIndex-1u);
             return false;
         }
         for (const auto& entry : actor.generatedTextures)
@@ -4359,7 +4307,7 @@ bool ProcessQ74TransitionRequest() {
         actor.generatedTextures.clear();
         actor.parts.clear();
         ++gSceneLoad.npcActorIndex;
-        gSceneLoad.npcPartIndex = 0u;gSceneLoad.npcTexturesInstalled=false;
+        gSceneLoad.npcPartIndex = 0u;
         return false;
     }
     auto& replacement = gSceneLoad.replacement;

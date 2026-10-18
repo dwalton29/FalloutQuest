@@ -33,6 +33,24 @@ class LoadingPipeline(unittest.TestCase):
         state=(ROOT/'ui/loading/fo3-loading-state.h').read_text()
         self.assertNotIn('FO3_LOADING_MIN_PRESENT_FRAMES',state)
         self.assertIn('return detail && nearLod && horizon;',state)
+    def test_scene_optional_visuals_cannot_abort_the_world(self):
+        runtime=(ROOT/'core/fo3-runtime.cpp').read_text()
+        scene=runtime.split('bool ProcessQ74TransitionRequest() {',1)[1].split(
+            'GLenum Q1150BlendFactor',1)[0]
+        # The v216 staging lane made any unsupported optional visual fatal.
+        # A source-authored mesh/actor part is allowed to fail individually;
+        # the scene readiness and collision checks remain mandatory.
+        self.assertIn('SCENE OPTIONAL MESH SKIPPED',scene)
+        self.assertIn('SCENE OPTIONAL NPC PART SKIPPED',scene)
+        self.assertNotIn('AbortFo3SceneLoad("geometry-upload")',scene)
+        self.assertNotIn('AbortFo3SceneLoad("npc-part-upload")',scene)
+        self.assertIn('gpu-upload-too-small',scene)
+        self.assertIn('collision-publication',scene)
+        # Safe CPU source asset predecode, not a per-texture modal GL transfer.
+        self.assertNotIn('PrepareFo3SceneImage(',runtime)
+        self.assertIn('Q1900PrepareTextureCpuQ19(path);',runtime)
+        self.assertIn('gQ1900PreparedTexturesQ19',runtime)
+
     def test_gpu_backlog_never_blocks_waiting_for_completion(self):
         loop=(ROOT/'core/fo3-runtime-loop.inc').read_text()
         self.assertIn('glClientWaitSync(gLoadingUploadFence,0,0)',loop)
