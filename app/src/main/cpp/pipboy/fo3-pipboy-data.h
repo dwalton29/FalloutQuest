@@ -98,7 +98,12 @@ struct PerkEffect {
 struct Perk {
   std::string name, description, icon;
   uint8_t ranks = 0, minLevel = 0;
-  bool hidden = false;
+  // Vanilla PERK DATA flags: this is a level-up choice, not merely a
+  // hidden/quest-awarded effect. Both properties are independent.
+  bool hidden = false, playable = false;
+  // Top-level CTDAs are level-up prerequisites; PRKE-local CTDAs
+  // remain attached to their individual effects.
+  std::vector<Condition> prerequisites;
   std::vector<PerkEffect> effects;
 };
 struct Note {
