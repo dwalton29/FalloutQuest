@@ -31,6 +31,17 @@ struct CommandFormCapture {
     binding.ownerName=key.substr(0,dot);binding.variableName=key.substr(dot+1);
     variables.push_back(std::move(binding));used+=fixed+key.size()+1;return true;
   }
+  bool AddIndexedVariable(uint32_t owner,uint32_t script,uint32_t index,uint32_t base,bool quest,
+      const std::string& name){
+    const auto fixed=sizeof(fo3player::ScriptVariableBinding);
+    if(used>limit||fixed>limit-used||limit-used-fixed<2||name.size()>limit-used-fixed-2){
+      exhausted=true;return false;
+    }
+    fo3player::ScriptVariableBinding binding;
+    binding.owner=owner;binding.script=script;binding.index=index;binding.base=base;binding.quest=quest;
+    binding.variableName=fo3script::Lower(name);
+    variables.push_back(std::move(binding));used+=fixed+name.size()+2;return true;
+  }
 };
 // The underlying local resolver is also used without evidence by other event
 // consumers. Keep the bounded optional sink here to avoid a player/event cycle.

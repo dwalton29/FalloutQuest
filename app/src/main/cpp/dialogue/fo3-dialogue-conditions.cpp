@@ -9,14 +9,18 @@ bool Compare(float a,float b,uint8_t flags) {
   if(!std::isfinite(a)||!std::isfinite(b))return false;
   switch(flags>>5){case 0:return a==b;case 1:return a!=b;case 2:return a>b;case 3:return a>=b;case 4:return a<b;case 5:return a<=b;default:return false;}
 }
-uint64_t VariableKey(const fo3pipdata::Definitions& d,uint32_t owner,uint32_t index,bool quest) {
-  uint32_t script=0;
+uint64_t VariableKey(const fo3pipdata::Definitions& d,uint32_t owner,uint32_t index,bool quest,CommandFormCapture* capture) {
+  uint32_t script=0,base=0;
   if(quest){auto q=d.quests.find(owner);if(q!=d.quests.end())script=q->second.script;}
   else {auto ref=d.referenceScripts.find(owner);if(ref!=d.referenceScripts.end()){
+    base=ref->second.second;
     auto a=d.dialogueActors.find(ref->second.second);if(a!=d.dialogueActors.end())script=a->second.script;
   }}
   auto s=d.scripts.find(script);
-  return s!=d.scripts.end()&&s->second.variables.count(index)?(uint64_t(owner)<<32)|index:0;
+  if(s==d.scripts.end())return 0;
+  const auto slot=s->second.variables.find(index);if(slot==s->second.variables.end())return 0;
+  if(capture&&!capture->AddIndexedVariable(owner,script,index,base,quest,slot->second))return 0;
+  return (uint64_t(owner)<<32)|index;
 }
 uint64_t VariableKey(const fo3pipdata::Definitions& d,const std::string& name,CommandFormCapture* capture) {
   auto key=name;for(auto& c:key)c=char(std::tolower((unsigned char)c));

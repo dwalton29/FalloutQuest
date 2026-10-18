@@ -362,6 +362,60 @@ static void BareLocalProvenance(){
     assert(entry.commandLocals==targets&&entry.expressionLocals==reads);NoEffects(player);
   }
 }
+static void IndexedConditionProvenance(){
+  constexpr auto capture=fo3player::ScriptProgramCapture::EnteredPrograms;
+  using Variables=std::vector<fo3player::ScriptVariableBinding>;
+  auto catalog=Fixture();catalog.pipboy.quests[11].script=302;
+  catalog.pipboy.scripts[302].source="short Count";catalog.pipboy.scripts[302].variables={{0,"Count"}};
+  catalog.pipboy.referenceScripts[101]={"ActorRef",201};catalog.pipboy.dialogueActors[201].script=303;
+  catalog.pipboy.scripts[303].source="float Value";catalog.pipboy.scripts[303].variables={{2,"Value"}};
+  const fo3player::ScriptVariableBinding quest{11,302,0,0,true,"","count"},actor{101,303,2,201,false,"","value"};
+  fo3pipdata::Condition q;q.function=79;q.a=11;
+  fo3pipdata::Condition a;a.function=53;a.a=101;a.b=2;
+  fo3pipdata::Condition other;other.function=72;other.run=1;other.a=7;other.value=1;
+  const std::vector<fo3pipdata::Condition> gates={q,other,a,q};const Variables expected={quest,actor,quest};
+  auto& item=catalog.pipboy.quests[10].stages[10].items[0];item.conditions=gates;item.result=Script("RewardKarma 1");
+  fo3pipdata::Info info;info.id=801;info.topic=800;info.quest=11;info.conditions=gates;
+  info.begin=Script("RewardKarma 2");info.end=Script("RewardKarma 3");catalog.pipboy.topics[800]={info};
+  catalog.pipboy.quests[11].conditions={a,q};
+  size_t cost=0;assert(fo3script::ChargeScriptVariables(Variables{quest,actor},cost));
+  fo3dialogue::CommandFormCapture sink;sink.limit=cost;
+  assert(fo3dialogue::VariableKey(catalog.pipboy,11,0,true,&sink)==(uint64_t(11)<<32));
+  assert(fo3dialogue::VariableKey(catalog.pipboy,101,2,false,&sink)==((uint64_t(101)<<32)|2));
+  assert((sink.variables==Variables{quest,actor})&&sink.used==cost&&!sink.exhausted);
+  assert(!fo3dialogue::VariableKey(catalog.pipboy,11,0,true,&sink)&&sink.exhausted&&sink.used==cost);
+  sink.Reset();sink.limit=cost-1;assert(fo3dialogue::VariableKey(catalog.pipboy,11,0,true,&sink));
+  assert(!fo3dialogue::VariableKey(catalog.pipboy,101,2,false,&sink)&&sink.exhausted&&sink.variables.size()==1);
+  size_t singleCost=0;assert(fo3script::ChargeScriptVariables(Variables{actor},singleCost));
+  sink.Reset();sink.limit=singleCost;assert(sink.AddLocal(0,"local"));
+  assert(!fo3dialogue::VariableKey(catalog.pipboy,101,2,false,&sink)&&sink.exhausted);
+  fo3player::Player player(catalog);const auto revision=player.Revision();std::string error;
+  auto stage=player.PrepareQuestStageTransaction(10,10,error,capture);assert(stage&&stage->ExecutedScripts().size()==1);
+  assert(stage->ExecutedScripts()[0].conditionVariables==expected&&stage->ExecutedScripts()[0].questConditionVariables.empty());
+  auto both=player.PrepareDialogueInfoTransaction(800,801,fo3player::DialogueScriptPhase::Both,error,100,capture);
+  assert(both&&both->ExecutedScripts().size()==2);
+  for(const auto& entry:both->ExecutedScripts()){
+    assert(entry.conditionVariables==expected&&(entry.questConditionVariables==Variables{actor,quest}));
+    assert(entry.commandVariables.empty()&&entry.expressionVariables.empty());
+  }
+  assert(player.Revision()==revision&&player.Snapshot().pipboy.dialogueVariables.empty());NoEffects(player);
+  forbidAllocations=true;assert(player.CommitScriptTransaction(*both)&&player.RollbackScriptTransaction(*both));forbidAllocations=false;
+  NoEffects(player);
+  // INFO preparation captures potential gates without evaluating them. Missing
+  // or oversized binding metadata rejects only the opted-in provenance path.
+  for(unsigned bad=0;bad<3;++bad){
+    auto changed=catalog;
+    if(bad==0)changed.pipboy.scripts.erase(302);
+    if(bad==1)changed.pipboy.scripts[303].variables.clear();
+    if(bad==2)changed.pipboy.scripts[302].variables[0]=std::string(fo3script::ScriptEvidenceMaxBytes,'x');
+    fo3player::Player guarded(std::move(changed));const auto before=guarded.Revision();
+    assert(!guarded.PrepareDialogueInfoTransaction(800,801,fo3player::DialogueScriptPhase::Both,error,100,capture));
+    assert(error.find(bad==2?"script provenance byte limit exceeded":"script provenance condition variable unavailable")!=std::string::npos);
+    assert(guarded.Revision()==before&&guarded.Snapshot().karma==0);NoEffects(guarded);
+    auto plain=guarded.PrepareDialogueInfoTransaction(800,801,fo3player::DialogueScriptPhase::Both,error,100);
+    assert(plain&&plain->ExecutedScripts().empty());
+  }
+}
 static void LocalRecordProvenance(){
   constexpr auto capture=fo3player::ScriptProgramCapture::EnteredPrograms;
   for(bool event:{false,true})for(unsigned kind=0;kind<9;++kind){
@@ -655,6 +709,7 @@ int main(int argc,char** argv){
   ExpressionFormProvenance();
   QualifiedVariableProvenance();
   BareLocalProvenance();
+  IndexedConditionProvenance();
   LocalRecordProvenance();
   DialogueProvenance();
   if(argc>1)OriginalProvenance(argv[1]);

@@ -247,6 +247,22 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
         error="script provenance local declarations do not match source";return false;
       }
     }
+    fo3dialogue::CommandFormCapture conditionForms,questConditionForms;
+    auto captureConditions=[&](const std::vector<fo3pipdata::Condition>* list,
+        fo3dialogue::CommandFormCapture& sink){
+      sink.limit=fo3script::ScriptEvidenceMaxBytes-nextBytes;
+      if(list)for(const auto& condition:*list)if(condition.function==53||condition.function==79){
+        if(!fo3dialogue::VariableKey(catalog_->pipboy,condition.a,condition.b,condition.function==79,&sink)){
+          error=sink.exhausted?"script provenance byte limit exceeded":"script provenance condition variable unavailable";
+          return false;
+        }
+      }
+      if(!fo3script::ChargeScriptVariables(sink.variables,nextBytes)){
+        error="script provenance byte limit exceeded";return false;
+      }
+      return true;
+    };
+    if(!captureConditions(conditions,conditionForms)||!captureConditions(questConditions,questConditionForms))return false;
     ScriptExecution execution;execution.origin=std::move(origin);
     execution.owner=owner;execution.activator=scriptActivator_;execution.localScript=scriptId;
     execution.parent=scriptTraceParent_;execution.reference=scriptReference_;
@@ -257,6 +273,8 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
     execution.expressionVariables=std::move(expressionForms.variables);
     execution.commandLocals=std::move(forms.locals);
     execution.expressionLocals=std::move(expressionForms.locals);
+    execution.conditionVariables=std::move(conditionForms.variables);
+    execution.questConditionVariables=std::move(questConditionForms.variables);
     execution.owningQuest=owningQuest;
     if(conditions)execution.conditions=*conditions;
     if(questConditions)execution.questConditions=*questConditions;

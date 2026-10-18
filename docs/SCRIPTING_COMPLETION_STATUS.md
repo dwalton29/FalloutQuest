@@ -4,10 +4,10 @@
 
 - Starting canonical main: `2987d911f318b92d1041257868067851a09d16f0` (v208).
 - Resumed from published `6469dbb872889a79a0682501b75f6ac6577ab547`.
-- Current implementation checkpoint: M1B3ar bare local-variable bindings.
+- Current implementation checkpoint: M1B3as indexed condition-variable dependencies.
   Use canonical main history for the publication SHA; the previous published
-  implementation is M1B3aq `357e0b3240f62ed3e2dd9d1f8136c8c8a357444d`.
-  Its Android CI passed (run 39081584682), as did M1B3ap (run 39080827516).
+  implementation is M1B3ar `9fefba24a82f4054c5ebda2acb3bb15556ab5740`.
+  Its Android CI passed (run 39083636186), as did M1B3aq (run 39081584682).
 - M1B3l Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38635385905.
 - M1B3m Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38793178567.
 - M1B3n Android CI succeeded: https://github.com/dwalton29/FalloutQuest/actions/runs/38795209693.
@@ -1319,3 +1319,47 @@ integer coercion and call/event causality remain open. No dependency exemption
 or general resident caller is added. Complete ownership, bounded dispatch and
 device validation still gate resident Enable/Disable; version 212 is unchanged.
 See `world-reference-m1b3ar.md`.
+
+## M1B3as validation
+
+Indexed condition dependencies now retain one owner/script/slot binding for
+every CTDA 53/79 in entered item/INFO conditions and retained INFO-parent gates.
+Both new vectors preserve list order and repeated accesses. Their ownerName is
+empty because indexed operands use FormIDs, not editor names. Capture uses the
+existing numeric VariableKey resolver with an optional bounded sink; ordinary
+condition evaluation and capture-off result preparation retain their semantics.
+The sink charges names/objects before retention and both lists consume the
+remaining shared 16 MiB evidence allowance.
+
+Before file access, matching requires exact indexed coverage, owner, slot and
+quest/actor kind against the retained conditions. Missing, extra, reordered or
+cross-list bindings reject. Existing original chain proof authenticates QUST
+SCRI or ACHR/ACRE NAME/base SCRI, unique live SCPT, and exact numeric slot/name
+and declarations, without a new master pass. Indexed-only owner records need
+no EDID. Exact report comparison includes every new value without allocation
+or file access. Failures preserve the old verified report and canonical state.
+
+All six targeted host tests pass: script transactions, master matching, dialogue,
+production dialogue runtime, barter and MS11 completion. Transaction and matcher
+fixtures pass ASan/UBSan with LeakSanitizer disabled; native source guards pass.
+New fixtures cover quest/NPC/creature owners, both condition lists, independent
+INFO begin/end entries, slot zero, repeat/order/coverage failures, compression,
+XXXX names, record order, invalid original associations/types/declarations,
+missing metadata, oversized/pre-file failures and exact/shared/failing sink
+budgets. Private preparation rejection publishes no effects, and commit/rollback
+still pass allocation-forbidden checks. The broader player/world/physics suites
+were not rerun for this focused checkpoint; prior validation is recorded above.
+
+The supplied ESM hash is unchanged. Original captured MS11 stage/event/INFO
+provenance passes matching and all 1,257 SCPTs pass local policy. Lucas dialogue
+acceptance/production bridge, merchant barter and all three original MS11
+completion/reward/save-reload branches pass. Existing showmap diagnostics are
+unchanged. M1B3ar Android CI passed (run 39083636186).
+
+These vectors cover potential indexed dependencies in retained lists, not gate
+eligibility or runtime reads/outcomes. Activation-variable overlays, other
+condition operands/globals, implicit receivers, failed source lookups, source
+lookup completeness, integer coercion and call/event causality remain open.
+No dependency exemption or general resident caller is added; version 212 is
+unchanged. Complete ownership, bounded dispatch and device validation still
+gate general resident Enable/Disable. See `world-reference-m1b3as.md`.

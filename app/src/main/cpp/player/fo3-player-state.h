@@ -313,6 +313,10 @@ struct ScriptExecution {
   // Successful bare NumericLocalKey lookups. Owner/script come from this entry;
   // pairs retain the resolved slot and normalized token in lookup order.
   std::vector<std::pair<uint32_t,std::string>> commandLocals,expressionLocals;
+  // One indexed binding per CTDA 53/79 in authored list order. ownerName is
+  // empty: these conditions use FormIDs, not editor-name resolution. These
+  // describe potential gate dependencies, not evaluated reads or outcomes.
+  std::vector<ScriptVariableBinding> conditionVariables,questConditionVariables;
 };
 struct ReferenceEnableChange { uint32_t reference=0; bool enabled=false; };
 // Owned reference-only input for the future scene coordinator. It neither runs

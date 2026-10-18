@@ -487,6 +487,78 @@ int main(){
     assert(!fo3script::MatchScriptProgramsToMaster(path+"-missing",evidence,report,cancel,error)&&report.Matches(f.programs));
     assert(error==(field==7?"script master evidence byte limit exceeded":"malformed qualified variable binding"));
   }
+  // Indexed CTDA dependencies are complete and ordered for item/INFO gates
+  // and INFO-parent gates. Numeric IDs do not require an EDID on the owner.
+  for(unsigned actor=0;actor<3;++actor)for(bool compressed:{false,true})for(bool reverse:{false,true}){
+    const fo3player::ScriptVariableBinding count{700,702,0,actor?701u:0u,!actor,"","count"};
+    auto other=count;other.index=2;other.variableName="other";
+    fo3pipdata::Condition c;c.function=actor?53:79;c.a=700;
+    auto d=c;d.b=2;fo3pipdata::Condition spacer;spacer.function=72;
+    const std::vector<fo3pipdata::Condition> gates={c,spacer,d,c},parentGates={d,c};
+    auto appendGates=[&](Bytes& bytes,const auto& list){for(const auto& gate:list){
+      Bytes raw(28);Put(raw,8,gate.function);Put(raw,12,gate.a);Put(raw,16,gate.b);Sub(bytes,"CTDA",raw);
+    }};
+    auto quest=f.quest,info=f.info;Bytes parent;Sub(parent,"DATA",{0,40});
+    appendGates(quest,gates);appendGates(info,gates);appendGates(parent,parentGates);
+    const auto roots=[&](){
+      auto bytes=Record("QUST",10,quest);Append(bytes,Group(40,Record("INFO",50,info)));
+      Append(bytes,Record("QUST",20,parent));Append(bytes,Speakers(false,false));return bytes;
+    };
+    auto evidence=std::vector<Execution>{f.programs[0],f.programs[1],f.programs[2]};
+    for(auto& entry:evidence){entry.conditions=gates;entry.conditionVariables={count,other,count};}
+    for(size_t n:{size_t(1),size_t(2)}){evidence[n].questConditions=parentGates;evidence[n].questConditionVariables={other,count};}
+    auto records=[&](unsigned bad){
+      Bytes owner,base,script;Sub(owner,actor?"NAME":"SCRI",Word(bad==1?703:actor?701:702));
+      Sub(base,"SCRI",Word(bad==2?703:702));
+      Script(script,bad==9?"ref Count\nfloat Other":bad==10?"float Other":"short Count\nfloat Other");
+      Local(script,0,"Count",compressed);Local(script,2,"Other");
+      if(bad==11)Local(script,3,"COUNT");
+      std::vector<Bytes> list;
+      auto add=[&](const char* type,uint32_t id,const Bytes& payload,uint32_t flags=0){
+        list.push_back(Record(type,id,compressed?Compressed(payload):payload,flags|(compressed?0x40000:0)));
+      };
+      if(bad!=3)add(bad==4?"STAT":actor==1?"ACHR":actor==2?"ACRE":"QUST",700,owner,bad==5?0x20:0);
+      if(actor&&bad!=6)add(bad==12?(actor==1?"CREA":"NPC_"):actor==1?"NPC_":"CREA",701,base,bad==7?0x20:0);
+      if(bad!=8)add(bad==13?"STAT":"SCPT",702,script,bad==14?0x20:0);
+      if(bad==15)add("SCPT",702,script);
+      if(bad==16)add(actor==1?"ACHR":actor==2?"ACRE":"QUST",700,owner);
+      if(reverse)std::reverse(list.begin(),list.end());
+      auto bytes=roots();for(const auto& record:list)Append(bytes,record);return bytes;
+    };
+    write(records(0));fo3script::ScriptMasterMatch bound;
+    assert(fo3script::MatchScriptProgramsToMaster(path,evidence,bound,cancel,error)&&bound.Matches(evidence));
+    for(unsigned bad=1;bad<=16;++bad){
+      if(!actor&&(bad==2||bad==6||bad==7||bad==12))continue;
+      write(records(bad));assert(!fo3script::MatchScriptProgramsToMaster(path,evidence,bound,cancel,error)&&bound.Matches(evidence));
+    }
+    write(records(0));
+    for(bool parentGate:{false,true})for(unsigned field=0;field<14;++field){
+      auto changed=evidence;auto& bindings=parentGate?changed[1].questConditionVariables:changed[0].conditionVariables;
+      auto& value=bindings[0];
+      if(field==0)++value.owner;
+      if(field==1)++value.script;
+      if(field==2)++value.index;
+      if(field==3)value.base=actor?703:701;
+      if(field==4)value.quest=!value.quest;
+      if(field==5)value.ownerName="unexpected";
+      if(field==6)value.variableName="absent";
+      if(field==7)value.variableName.clear();
+      if(field==8)value.variableName="Count";
+      if(field==9)value.variableName=std::string("c\0x",3);
+      if(field==10)bindings.clear();
+      if(field==11)bindings.push_back(count);
+      if(field==12)std::swap(bindings[0],bindings[1]);
+      if(field==13)std::swap(changed[1].conditionVariables,changed[1].questConditionVariables);
+      assert(!bound.Matches(changed));
+      assert(!fo3script::MatchScriptProgramsToMaster(path,changed,bound,cancel,error)&&bound.Matches(evidence));
+    }
+    auto oversized=evidence;oversized[0].conditionVariables[0].variableName.resize(fo3script::ScriptEvidenceMaxBytes,'x');
+    assert(!fo3script::MatchScriptProgramsToMaster(path+"-missing",oversized,bound,cancel,error));
+    assert(error=="script master evidence byte limit exceeded"&&bound.Matches(evidence));
+    auto missing=evidence;missing[1].questConditionVariables.clear();
+    assert(!fo3script::MatchScriptProgramsToMaster(path+"-missing",missing,bound,cancel,error));
+    assert(error=="condition variable binding coverage differs"&&bound.Matches(evidence));
+  }
   // Bare names bind to this entry's authenticated owner/script and numeric
   // slot, including zero. Lookup order and phase remain exact report values.
   for(bool event:{false,true})for(bool compressed:{false,true})for(bool first:{false,true}){

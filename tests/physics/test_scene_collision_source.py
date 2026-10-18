@@ -583,6 +583,11 @@ assert 'Same(e.conditions,t->second[0].conditions)' in master_match
 assert 'execution.owningQuest=owningQuest;' in script_runtime
 assert 'if(conditions)execution.conditions=*conditions;' in script_runtime
 assert 'if(questConditions)execution.questConditions=*questConditions;' in script_runtime
+assert 'condition.function==53||condition.function==79' in script_runtime
+assert script_runtime.index('fo3script::ChargeScriptVariables(sink.variables,nextBytes)')<script_runtime.index('execution.conditionVariables=std::move(conditionForms.variables)')
+assert 'execution.questConditionVariables=std::move(questConditionForms.variables)' in script_runtime
+assert 'a.conditionVariables==b.conditionVariables' in master_match and 'a.questConditionVariables==b.questConditionVariables' in master_match
+assert master_match.index('!ChargeScriptVariables(e.questConditionVariables,evidenceBytes)')<master_match.index('condition variable binding coverage differs')<master_match.index('std::fopen(master.c_str(),"rb")')
 assert 'if(pass==1&&requiredQuests.count(id))' in master_match
 assert master_match.index('questsSeen.size()!=requiredQuests.size()')<master_match.index('out=std::move(next);')
 assert 'if(requiredSpeakers[index]&&requiredSpeakers[index]!=id)' in master_match

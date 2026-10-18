@@ -38,7 +38,8 @@ bool Same(const Execution& a,const Execution& b) noexcept {
     a.owningQuest==b.owningQuest&&Same(a.conditions,b.conditions)&&Same(a.questConditions,b.questConditions)&&
     a.localVariables==b.localVariables&&a.commandForms==b.commandForms&&a.expressionForms==b.expressionForms&&
     a.commandVariables==b.commandVariables&&a.expressionVariables==b.expressionVariables&&
-    a.commandLocals==b.commandLocals&&a.expressionLocals==b.expressionLocals;
+    a.commandLocals==b.commandLocals&&a.expressionLocals==b.expressionLocals&&
+    a.conditionVariables==b.conditionVariables&&a.questConditionVariables==b.questConditionVariables;
 }
 bool Contexts(const std::vector<Execution>& programs){
   std::array<size_t,32> active{};size_t depth=0;
@@ -203,7 +204,8 @@ bool MatchScriptProgramsToMaster(const std::string& master,const std::vector<Exe
         !ChargeScriptLocals(e.localVariables,evidenceBytes)||!ChargeScriptForms(e.commandForms,evidenceBytes)||
         !ChargeScriptForms(e.expressionForms,evidenceBytes)||!ChargeScriptVariables(e.commandVariables,evidenceBytes)||
         !ChargeScriptVariables(e.expressionVariables,evidenceBytes)||
-        !ChargeScriptLocals(e.commandLocals,evidenceBytes)||!ChargeScriptLocals(e.expressionLocals,evidenceBytes))
+        !ChargeScriptLocals(e.commandLocals,evidenceBytes)||!ChargeScriptLocals(e.expressionLocals,evidenceBytes)||
+        !ChargeScriptVariables(e.conditionVariables,evidenceBytes)||!ChargeScriptVariables(e.questConditionVariables,evidenceBytes))
       return fail("script master evidence byte limit exceeded");
     if(!Type(programs[n]))return fail("unbound or malformed script origin");
     if(!CompleteScriptLocalRecords(e.container))return fail("malformed local records");
@@ -231,15 +233,30 @@ bool MatchScriptProgramsToMaster(const std::string& master,const std::vector<Exe
       if(!named.second&&named.first->second!=binding.first)return fail("conflicting script form name bindings");
       forms[binding.first].push_back(binding.second);
     }
-    for(const auto* bindings:{&e.commandVariables,&e.expressionVariables})for(const auto& binding:*bindings){
+    auto coversConditions=[](const auto& conditions,const auto& bindings){
+      size_t at=0;
+      for(const auto& condition:conditions)if(condition.function==53||condition.function==79){
+        if(at==bindings.size())return false;
+        const auto& binding=bindings[at++];
+        if(binding.owner!=condition.a||binding.index!=condition.b||binding.quest!=(condition.function==79)||
+            !binding.ownerName.empty())return false;
+      }
+      return at==bindings.size();
+    };
+    if(!coversConditions(e.conditions,e.conditionVariables)||!coversConditions(e.questConditions,e.questConditionVariables))
+      return fail("condition variable binding coverage differs");
+    for(const auto* bindings:{&e.commandVariables,&e.expressionVariables,&e.conditionVariables,&e.questConditionVariables})for(const auto& binding:*bindings){
+      const bool indexed=bindings==&e.conditionVariables||bindings==&e.questConditionVariables;
       if(!binding.owner||!binding.script||(binding.quest?bool(binding.base):!binding.base)||
-          binding.ownerName.empty()||binding.variableName.empty()||Lower(binding.ownerName)!=binding.ownerName||
+          (!indexed&&binding.ownerName.empty())||binding.variableName.empty()||Lower(binding.ownerName)!=binding.ownerName||
           Lower(binding.variableName)!=binding.variableName||binding.ownerName.find('.')!=std::string::npos||
           binding.ownerName.find('\0')!=std::string::npos||binding.variableName.find('\0')!=std::string::npos)
         return fail("malformed qualified variable binding");
-      const auto named=formNames.emplace(binding.ownerName,binding.owner);
-      if(!named.second&&named.first->second!=binding.owner)return fail("conflicting script form name bindings");
-      forms[binding.owner].push_back(binding.ownerName);
+      if(!indexed){
+        const auto named=formNames.emplace(binding.ownerName,binding.owner);
+        if(!named.second&&named.first->second!=binding.owner)return fail("conflicting script form name bindings");
+        forms[binding.owner].push_back(binding.ownerName);
+      }
       variableOwners[binding.owner].push_back(&binding);
       if(!binding.quest)variableBases[binding.base].push_back(&binding);
       variableScripts[binding.script].push_back(&binding);
@@ -451,7 +468,7 @@ bool MatchScriptProgramsToMaster(const std::string& master,const std::vector<Exe
   if(localsSeen.size()!=locals.size())return fail("local script identity missing");
   if(variableOwnerTypes.size()!=variableOwners.size()||variableBaseTypes.size()!=variableBases.size()||
       variableScriptsSeen.size()!=variableScripts.size())return fail("qualified variable identity missing");
-  for(const auto& entry:programs)for(const auto* bindings:{&entry.commandVariables,&entry.expressionVariables})
+  for(const auto& entry:programs)for(const auto* bindings:{&entry.commandVariables,&entry.expressionVariables,&entry.conditionVariables,&entry.questConditionVariables})
     for(const auto& binding:*bindings)if(!binding.quest){
       const auto& ownerType=variableOwnerTypes.at(binding.owner);const auto& baseType=variableBaseTypes.at(binding.base);
       if((ownerType=="ACHR"&&baseType!="NPC_")||(ownerType=="ACRE"&&baseType!="CREA"))

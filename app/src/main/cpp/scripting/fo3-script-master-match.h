@@ -7,7 +7,8 @@ namespace fo3script {
 // SCPT events also require the original owner's direct NAME/base SCRI (or
 // QUST SCRI) association. Activators and INFO speaker eligibility are not proven.
 // Captured item/INFO and INFO-parent condition fields are matched in order;
-// this authenticates decoded metadata, not outcomes, operand bindings or reads.
+// indexed CTDA 53/79 bindings cover each retained list and authenticate numeric
+// owner/script/slot chains. Other operands, gate outcomes and reads are unproven.
 // Nonzero local-script IDs additionally bind the original full SCPT and decoded
 // variable table. Supplied successful bare bindings additionally require exact
 // numeric slots; lookup completeness and runtime read values remain unproven.

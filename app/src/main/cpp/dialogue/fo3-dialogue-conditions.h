@@ -18,6 +18,6 @@ struct Context {
 using Diagnostic=std::function<void(const std::string&)>;
 bool Compare(float,float,uint8_t);
 bool Conditions(const std::vector<fo3pipdata::Condition>&,const Context&,std::string&);
-uint64_t VariableKey(const fo3pipdata::Definitions&,uint32_t owner,uint32_t index,bool quest);
+uint64_t VariableKey(const fo3pipdata::Definitions&,uint32_t owner,uint32_t index,bool quest,CommandFormCapture* capture=nullptr);
 uint64_t VariableKey(const fo3pipdata::Definitions&,const std::string& name,CommandFormCapture* capture=nullptr);
 }
