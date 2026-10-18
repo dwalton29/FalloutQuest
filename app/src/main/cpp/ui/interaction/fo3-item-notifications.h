@@ -13,7 +13,17 @@ inline std::string ItemText(const std::string& name,int32_t count,
                             const std::string& added="added",const std::string& plural="(s)") {
     return count>1 ? std::to_string(count)+" "+name+plural+" "+added : name+" "+added;
 }
-struct Entry {std::array<char,512> text{};std::string icon,sound;double enqueued=0;bool quest=false,sounded=false;};
+struct ExperienceMeter {
+    bool valid=false;
+    uint32_t previous=0,total=0,level=1,thresholdStart=0,thresholdEnd=200;
+};
+struct Entry {
+    std::array<char,512> text{};
+    std::string icon,sound;
+    ExperienceMeter meter;
+    double enqueued=0;
+    bool quest=false,sounded=false;
+};
 class Queue {
 public:
     static constexpr size_t Capacity=16;
@@ -24,7 +34,8 @@ public:
     void Enqueue(const std::string& text,const std::string& icon="") {
         if(size_==Capacity) {head_=(head_+1)%Capacity;--size_;started_=now_;++revision_;}
         auto& e=entries_[(head_+size_)%Capacity];
-        std::snprintf(e.text.data(),e.text.size(),"%s",text.c_str());e.enqueued=now_;e.icon=icon;e.sound.clear();e.quest=false;e.sounded=false;
+        std::snprintf(e.text.data(),e.text.size(),"%s",text.c_str());e.enqueued=now_;e.icon=icon;e.sound.clear();e.meter={};
+        e.quest=false;e.sounded=false;
         if(!size_) {started_=now_;++revision_;}
         ++size_;
     }
@@ -35,8 +46,23 @@ public:
     }
     // XP is a short HUD event, not the quest character-stagger animation.
     // The SOUN editor ID is resolved through the original ESM/audio catalog.
-    void EnqueueExperience(const std::string& text,const std::string& sound) {
-        Enqueue(text);auto& e=entries_[(head_+size_-1)%Capacity];e.sound=sound;
+    void EnqueueExperience(const std::string& text,const std::string& sound,
+                           ExperienceMeter meter={}) {
+        Enqueue(text);
+        auto& e=entries_[(head_+size_-1)%Capacity];
+        e.sound=sound;
+        if(meter.valid&&meter.thresholdEnd>meter.thresholdStart&&
+           meter.total>=meter.previous&&meter.level>0)
+            e.meter=meter;
+    }
+    const ExperienceMeter* CurrentXP() const {
+        if(!size_||!entries_[head_].meter.valid)return nullptr;
+        return &entries_[head_].meter;
+    }
+    static float Fraction(uint32_t xp,uint32_t start,uint32_t end) {
+        if(end<=start)return 0;
+        return float(std::clamp((double(xp)-double(start))/
+                         double(end-start),0.,1.));
     }
     double Age() const {return size_?now_-started_:0;}
     double Duration() const {
