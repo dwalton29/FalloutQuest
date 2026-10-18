@@ -1924,7 +1924,13 @@ private:
                     fqloadprofile::Log("UI_FIRST_ANIMATED generation=%llu elapsedMs=%.1f",
                         (unsigned long long)reportGeneration,GetFo3LoadingElapsedUs()/1000.0);
                 }
-                if(frames%72==0 || gFo3LoadingPhase.load()==FO3_LOADING_POST) {
+                // Sample once per ~72 frames, plus the first POST frame.
+                // Never flush the profile file once per POST frame.
+                static uint64_t lastPostSampleGeneration=~uint64_t{0};
+                const bool firstPost=(gFo3LoadingPhase.load()==FO3_LOADING_POST &&
+                    lastPostSampleGeneration!=reportGeneration);
+                if(frames%72==0 || firstPost) {
+                    if(firstPost)lastPostSampleGeneration=reportGeneration;
                     FQ_LOGI("LOADING FRAME STATS: generation=%llu frames=%llu missed=%llu appElapsedUs=%llu cadenceUs=%.1f worstAppElapsedUs=%llu submitUs=%llu workApiElapsedUs=%llu uploadGpuUs=%.1f gpuSupported=%d periodUs=%llu",(unsigned long long)reportGeneration,(unsigned long long)frames,(unsigned long long)missed,(unsigned long long)previousLoadingCpu,appCadenceUs,(unsigned long long)worst,(unsigned long long)(fqloading::Now()-submitStarted),(unsigned long long)fqloading::budget.spent,loadingGpu.gpu.Mean(),loadingGpu.supported,(unsigned long long)period);
                     fqloadprofile::Log("UI_FRAMES generation=%llu frames=%llu estimatedOverBudget=%llu cpuFrameMs=%.1f worstCpuFrameMs=%.1f cadenceMs=%.1f glWorkApiMs=%.1f gpuTimerMs=%.1f gpuTimerSupported=%d frameBudgetMs=%.1f",
                         (unsigned long long)reportGeneration,(unsigned long long)frames,(unsigned long long)missed,
