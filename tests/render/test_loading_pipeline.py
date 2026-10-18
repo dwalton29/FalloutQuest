@@ -51,6 +51,38 @@ class LoadingPipeline(unittest.TestCase):
         self.assertIn('Q1900PrepareTextureCpuQ19(path);',runtime)
         self.assertIn('gQ1900PreparedTexturesQ19',runtime)
 
+    def test_loading_profiler_records_bottlenecks_and_failed_publication(self):
+        runtime=(ROOT/'core/fo3-runtime.cpp').read_text()
+        loop=(ROOT/'core/fo3-runtime-loop.inc').read_text()
+        logger=(ROOT/'rendering/loading-diagnostics.h').read_text()
+
+        # The profiler survives cooperative aborts, but does not change what
+        # is required to publish the original scene.
+        self.assertIn('fqloadprofile::Log("ABORT',runtime)
+        self.assertIn('fqloadprofile::Log("CPU_READY',runtime)
+        self.assertIn('fqloadprofile::Log("SCENE_READY',runtime)
+        self.assertIn('fqloadprofile::Log("PROGRESS',runtime)
+        self.assertIn('fqloadprofile::Log("COLLISION_READY',runtime)
+        self.assertIn('fqloadprofile::Log("SLOW_MESH',runtime)
+        self.assertIn('fqloadprofile::Log("SLOW_NPC',runtime)
+        self.assertIn('result.meshUs=Fo3SceneElapsedUs(meshStarted)',runtime)
+        self.assertIn('result.actorUs=Fo3SceneElapsedUs(actorStarted)',runtime)
+        self.assertIn('result.worstTextureDecodeUs',runtime)
+        self.assertIn('gSceneLoad.slowObjectUploads<=12u',runtime)
+
+        self.assertIn('fqloadprofile::Log("UI_FRAMES',loop)
+        self.assertIn('fqloadprofile::Log("PRESENTATION_COMPLETE',loop)
+        self.assertIn('fqloadprofile::Log("PLAYABLE_FIRST_FRAME',loop)
+        self.assertIn('fqloadprofile::Log("BLANK_WORLD',loop)
+        self.assertIn('fqloadprofile::Log("LOADING_UI_CATALOG',loop)
+        self.assertIn('fqloadprofile::Log("SLOW_LOADING_UI_ASSETS',loop)
+
+        self.assertIn('com.falloutquest.app/files/loading-profile.log',logger)
+        self.assertIn('FQLoadProfile',logger)
+        self.assertIn('std::fflush(file)',logger)
+        self.assertIn('2L*1024L*1024L',logger)
+        self.assertIn('std::mutex',logger)
+
     def test_gpu_backlog_never_blocks_waiting_for_completion(self):
         loop=(ROOT/'core/fo3-runtime-loop.inc').read_text()
         self.assertIn('glClientWaitSync(gLoadingUploadFence,0,0)',loop)
