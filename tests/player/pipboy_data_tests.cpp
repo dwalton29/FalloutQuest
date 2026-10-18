@@ -150,6 +150,21 @@ static void SkillPresentationDecodeTests() {
   Decode(d,"AVIF",101,0,unarmed,0,0,0);
   assert(d.skills[13].icon=="Interface\\Icons\\Stats\\Skills_Unarmed.dds");
   assert(d.skills[12].icon.empty()); // unused Throwing actor value
+  std::vector<uint8_t> strength;
+  sub(strength,"EDID","AVStrength");
+  sub(strength,"FULL","Strength");
+  sub(strength,"DESC","Source-defined Strength text");
+  sub(strength,"ICON","Interface\\Icons\\Stats\\Special_Strength.dds");
+  Decode(d,"AVIF",102,0,strength,0,0,0);
+  assert(d.special[0].name=="Strength"&&
+         d.special[0].description=="Source-defined Strength text"&&
+         d.special[0].icon=="Interface\\Icons\\Stats\\Special_Strength.dds");
+  std::vector<uint8_t> luck;
+  sub(luck,"EDID","AVLuck");
+  sub(luck,"ICON","Interface\\Icons\\Stats\\Special_Luck.dds");
+  Decode(d,"AVIF",103,0,luck,0,0,0);
+  assert(d.special[6].icon=="Interface\\Icons\\Stats\\Special_Luck.dds");
+  assert(d.special[5].icon.empty());
 }
 static void PerkRecordDecodeTests() {
   Definitions data;
