@@ -246,14 +246,15 @@ void DeliverFo3ScriptSounds(){
             (label==strings.end()?std::string("XP"):label->second);
         if(xp.levelUp)text+="\n"+
             (level==strings.end()?std::string("LEVEL UP"):level->second);
-        const auto progress=player.ExperienceProgress();
         fo3notify::ExperienceMeter meter;
         meter.valid=true;
         meter.previous=xp.total>=xp.amount?xp.total-xp.amount:0;
         meter.total=xp.total;
-        meter.level=progress.level;
-        meter.thresholdStart=progress.currentThreshold;
-        meter.thresholdEnd=progress.nextThreshold;
+        // Use the immutable reward-time level and threshold snapshot.
+        // Deferred HUD messages must not shift when the player levels later.
+        meter.level=xp.committedLevel;
+        meter.thresholdStart=xp.thresholdStart;
+        meter.thresholdEnd=xp.thresholdEnd;
         fo3notify::Notifications().EnqueueExperience(
             text,xp.levelUp?"UILevelUp":"UIPopUpExperienceUp",meter);
         Q6H_LOGI("XP HUD: awarded=%u total=%u levelThreshold=%d",
