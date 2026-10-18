@@ -3239,8 +3239,17 @@ bool PrepareFo3ResidentCpuResources(const Fo3CellTransitionRequestQ74& request,
     if(request.worldspaceFormId){error="resident exterior authored admission unsupported";return false;}
     if(!fo3script::MatchScriptProgramsToMaster(fo3assets::FalloutMasterPath(),
             programs,next.scriptMaster,cancelled,error))return false;
+    // Only authenticated original reference-event SCPT containers can own an
+    // incoming SCRO edge to their own changed REFR. All other SCRO, CTDA, FLST
+    // and authored incoming dependencies remain fail-closed.
+    std::vector<uint32_t> executedScriptOwners;
+    for(const auto& execution:programs)
+        if(execution.origin.kind==fo3player::ScriptProgramKind::ReferenceEvent &&
+            execution.origin.record)
+            executedScriptOwners.push_back(execution.origin.record);
     if(!fo3scene::PrepareResidentAuthoredAdmission(fo3assets::FalloutMasterPath(),
-            request.cellFormId,affected,next.authored,cancelled,error))return false;
+            request.cellFormId,affected,next.authored,cancelled,error,
+            executedScriptOwners))return false;
     next.publication=publication; next.visualRevision=visualRevision;
     next.request=request; next.published=std::move(published); next.candidate=std::move(candidate);
     next.exteriorScope=exteriorScope; next.exteriorScope.candidateSelection=true;

@@ -109,6 +109,23 @@ void scriptDependencies(){
         master(type,"SCRO",word(target),encoding);rejects("SCRO");
         assert(error.find(target==30?"(reference)":"(base)")!=std::string::npos);
       }
+    // Only the exact original SCPT executing the transaction may own its own
+    // directly affected reference's SCRO. A different script, an INFO/QUST,
+    // and a reference to an affected BASE must remain rejected.
+    for(int encoding:{0,1,2}){
+        master("SCPT","SCRO",word(30),encoding);
+        fo3scene::ResidentAuthoredAdmission admitted;
+        assert(fo3scene::PrepareResidentAuthoredAdmission(path,10,{30},admitted,cancel,error,{60}));
+        assert(admitted.Matches(10,{30}));
+        assert(!fo3scene::PrepareResidentAuthoredAdmission(path,10,{30},admitted,cancel,error,{61}));
+        assert(error.find("unowned incoming script/condition dependency: SCRO")!=std::string::npos);
+        master("SCPT","SCRO",word(20),encoding);
+        assert(!fo3scene::PrepareResidentAuthoredAdmission(path,10,{30},admitted,cancel,error,{60}));
+        assert(error.find("(base)")!=std::string::npos);
+        master("INFO","SCRO",word(30),encoding);
+        assert(!fo3scene::PrepareResidentAuthoredAdmission(path,10,{30},admitted,cancel,error,{60}));
+        assert(error.find("unowned incoming script/condition dependency: SCRO")!=std::string::npos);
+    }
     for(uint32_t size:{20u,24u,28u})for(uint32_t offset:{12u,16u,24u}){
         if(offset+4>size)continue;
         for(uint32_t target:{20u,30u})for(int encoding:{0,1,2}){

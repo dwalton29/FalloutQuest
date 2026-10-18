@@ -68,7 +68,8 @@ bool ResidentAuthoredAdmission::Matches(uint32_t expectedCell,const std::vector<
 }
 bool PrepareResidentAuthoredAdmission(const std::string& master,uint32_t cell,
     const std::vector<uint32_t>& affected,ResidentAuthoredAdmission& out,
-    const std::atomic<bool>& cancel,std::string& error){
+    const std::atomic<bool>& cancel,std::string& error,
+    const std::vector<uint32_t>& executingSourceScripts){
     error.clear();
     auto fail=[&](const char* why){error=why;return false;};
     if(!cell||affected.empty()||!affected.front()||!std::is_sorted(affected.begin(),affected.end())||
@@ -77,6 +78,8 @@ bool PrepareResidentAuthoredAdmission(const std::string& master,uint32_t cell,
     std::unique_ptr<FILE,Close> f(std::fopen(master.c_str(),"rb"));
     if(!f)return fail("authored master unavailable");
     std::unordered_set<uint32_t> wanted(affected.begin(),affected.end());
+    const std::unordered_set<uint32_t> authenticatedOwners(
+        executingSourceScripts.begin(),executingSourceScripts.end());
     std::unordered_map<uint32_t,uint32_t> bases;
     std::unordered_set<uint32_t> found;
     std::unordered_set<uint32_t> packageValues;
@@ -201,7 +204,15 @@ bool PrepareResidentAuthoredAdmission(const std::string& master,uint32_t cell,
             if(Is(t,"SCRO")||Is(t,"SCRV")){
                 if(n!=4){malformed(Is(t,"SCRO")?"SCRO":"SCRV");return;}
                 // SCRV stores a local-variable index, not an authored FormID.
-                if(Is(t,"SCRO"))target(fo3esm::ReadU32(p),"SCRO");
+                if(Is(t,"SCRO")){
+                    const uint32_t id=fo3esm::ReadU32(p);
+                    // The exact current SCPT was already authenticated against
+                    // the master before this scan. Its direct REFR operand is
+                    // the operation's intended target, not an unowned inbound
+                    // dependency. Every OTHER incoming SCRO remains rejected.
+                    if(!(r.location.type=="SCPT"&&authenticatedOwners.count(r.id)&&wanted.count(id)))
+                        target(id,"SCRO");
+                }
             }else if(Is(t,"CTDA")){
                 if(n!=20&&n!=24&&n!=28){malformed("CTDA");return;}
                 // Conservative operand matching, not a function-arity table:

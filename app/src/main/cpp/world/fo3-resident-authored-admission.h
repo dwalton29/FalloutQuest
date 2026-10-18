@@ -17,5 +17,9 @@ struct ResidentAuthoredAdmission {
 };
 bool PrepareResidentAuthoredAdmission(const std::string& master,uint32_t cell,
     const std::vector<uint32_t>& affected,ResidentAuthoredAdmission& out,
-    const std::atomic<bool>& cancelled,std::string& error);
+    const std::atomic<bool>& cancelled,std::string& error,
+    // Only original SCPT owners proven by MatchScriptProgramsToMaster during
+    // this transaction. This exception covers their SCRO reference operands,
+    // not incoming dependencies from other scripts, quests, lists or conditions.
+    const std::vector<uint32_t>& executingSourceScripts={});
 }
