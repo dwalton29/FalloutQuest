@@ -4534,13 +4534,12 @@ bool ProcessQ74TransitionRequest() {
     FlushFo3PlayerState();
     markFinalization("flush-player-state");
     Q74DeleteGpuObjects(gObjects);
-    markFinalization("retire-previous-gpu");
     Q230DeleteNpcActors();
-    markFinalization("retire-previous-npcs");
     gQ230NpcActors = std::move(prepared.actors);
     for (auto& actor : gQ230NpcActors)
         actor.animationStart = Fo3GameplayNow();
     gObjects = std::move(replacement);
+    markFinalization("retire-and-replace-world-actors");
     if(++gQ2400DoorSceneSerial==0u) gQ2400DoorSceneSerial=1u;
     gSceneReady = !gObjects.empty();
     gSceneCenterXQ1730 = request.x;
