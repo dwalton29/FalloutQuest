@@ -48,16 +48,19 @@ bool Player::UnlockByKey(uint32_t id) {
 bool Player::CompleteLockpick(uint32_t id,bool forced) {
   if(CanPickLock(id)!=PickAccess::Ready)return false;
   const auto lock=GetLock(id);const int tier=LockRequirement(id)/25;
-  auto& o=state_.locks[id];const bool reward=!o.rewarded;o.level=lock.level;o.forceFailures=lock.forceFailures;
-  o.change=forced?LockChange::Forced:LockChange::Picked;o.rewarded=true;
+  const auto previous=state_.locks.find(id);
+  const bool reward=previous==state_.locks.end()||!previous->second.rewarded;
   if(reward){
     static const char* tiers[]={"VeryEasy","Easy","Average","Hard","VeryHard"};
     const int xp=std::max(0,int(LockSetting(std::string("iXPRewardPickLock")+tiers[tier],0)));
-    state_.experience+=std::min(uint32_t(xp),UINT32_MAX-state_.experience);
-    // 0x942BDD..0x942C7C checks original ownership alignment on success.
-    // Use the shared v206 resolved owner and feedback queue; no proximity/witness guess.
-
+    // Apply the same perk-aware XP modifiers as quest rewards, once per lock.
+    // Validate the reward before committing a successful unlock.
+    if(xp>0&&!RewardExperience(uint32_t(xp)))return false;
   }
+  auto& o=state_.locks[id];o.level=lock.level;o.forceFailures=lock.forceFailures;
+  o.change=forced?LockChange::Forced:LockChange::Picked;o.rewarded=true;
+  // 0x942BDD..0x942C7C checks original ownership alignment on success.
+  // Use the shared v206 resolved owner and feedback queue; no witness guess.
   const auto owner=ResolveOwnership(id);CommitTheft(id,0,0,0,owner);
   if(owner.Theft()&&!pendingTheftEvents_.empty())pendingTheftEvents_.back().action=forced?CrimeAction::ForceLock:CrimeAction::PickLock;
   ++revision_;return true;
