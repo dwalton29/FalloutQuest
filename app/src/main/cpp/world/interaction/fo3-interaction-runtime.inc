@@ -246,8 +246,16 @@ void DeliverFo3ScriptSounds(){
             (label==strings.end()?std::string("XP"):label->second);
         if(xp.levelUp)text+="\n"+
             (level==strings.end()?std::string("LEVEL UP"):level->second);
+        const auto progress=player.ExperienceProgress();
+        fo3notify::ExperienceMeter meter;
+        meter.valid=true;
+        meter.previous=xp.total>=xp.amount?xp.total-xp.amount:0;
+        meter.total=xp.total;
+        meter.level=progress.level;
+        meter.thresholdStart=progress.currentThreshold;
+        meter.thresholdEnd=progress.nextThreshold;
         fo3notify::Notifications().EnqueueExperience(
-            text,xp.levelUp?"UILevelUp":"UIPopUpExperienceUp");
+            text,xp.levelUp?"UILevelUp":"UIPopUpExperienceUp",meter);
         Q6H_LOGI("XP HUD: awarded=%u total=%u levelThreshold=%d",
                  xp.amount,xp.total,int(xp.levelUp));
     }
