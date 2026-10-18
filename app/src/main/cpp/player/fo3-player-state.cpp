@@ -533,6 +533,8 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
           next.strings[id] = fo3esm::ZString(d->data, d->size);
         if(id=="iHoursToRespawnCell"&&d&&d->size==4&&I32(d->data)>0)next.merchantRespawnHours=uint32_t(I32(d->data));
         if(id=="iKarmaChangeThreshold"&&d&&d->size==4&&I32(d->data)>0)next.karmaMajorThreshold=I32(d->data);
+        if(id=="iXPBumpBase"&&d&&d->size==4&&I32(d->data)>0)
+          next.xpBumpBase=uint32_t(I32(d->data));
         if(!id.empty() && d && d->size==4 && (id[0]=='i'||id[0]=='f') &&
            (id.find("Lock")!=std::string::npos||id.find("SweetSpot")!=std::string::npos||id.find("Concentric")!=std::string::npos||id=="fPickBreakSecs"))
           next.lockSettings[id]=id[0]=='f'?fo3esm::ReadF32(d->data):float(I32(d->data));
