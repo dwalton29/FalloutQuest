@@ -8,11 +8,13 @@
 #include <vector>
 #include <algorithm>
 #include <cmath>
+#include <unordered_map>
 
 namespace fo3levelui {
 struct Resources {
     GLuint vao=0,vbo=0,solid=0,background=0,illustration=0;
     std::string loadedIcon;
+    std::unordered_map<std::string,GLuint> illustrationCache;
     uint64_t revision=UINT64_MAX;
     GLsizei bgCount=0,linesCount=0,highlightCount=0,textCount=0,iconCount=0;
     GLint total=0;
@@ -25,7 +27,8 @@ inline void Shutdown(){
     if(r.vao)glDeleteVertexArrays(1,&r.vao);
     if(r.solid)glDeleteTextures(1,&r.solid);
     if(r.background)glDeleteTextures(1,&r.background);
-    if(r.illustration)glDeleteTextures(1,&r.illustration);
+    for(const auto& art:r.illustrationCache)
+        if(art.second)glDeleteTextures(1,&art.second);
     r={};
 }
 inline void Quad(std::vector<fo3hudassets::Vertex>& v,float x0,float y0,
@@ -53,21 +56,28 @@ inline void Prepare(const fo3dialogue::Panel& p,const std::string& iconPath){
     }
     if(!r.vao||!r.vbo||!r.solid)return;
     if(r.loadedIcon!=iconPath){
-        if(r.illustration)glDeleteTextures(1,&r.illustration);
-        r.illustration=0;
         r.loadedIcon=iconPath;
+        r.illustration=0;
         r.iconAttempted=false;
     }
     if(!iconPath.empty()&&!r.iconAttempted){
         r.iconAttempted=true;
-        Fo3RgbaTexture art;
-        // ICON is a source-relative original DDS path, never inferred from
-        // the display name. Do not attempt to load it in the stereo renderer.
-        if(LoadFalloutTextureRgba(iconPath,art))
-            r.illustration=fo3hudassets::UploadTexture(art.width,art.height,
-                                                        art.rgba.data());
-        if(!r.illustration)__android_log_print(ANDROID_LOG_WARN,"FalloutQuest",
-            "LEVELUP original PERK ICON unavailable: %s",iconPath.c_str());
+        const auto cached=r.illustrationCache.find(iconPath);
+        if(cached!=r.illustrationCache.end()){
+            r.illustration=cached->second;
+        }else{
+            Fo3RgbaTexture art;
+            // Read original AVIF/PERK ICON only on the logical frame.
+            if(LoadFalloutTextureRgba(iconPath,art))
+                r.illustration=fo3hudassets::UploadTexture(
+                    art.width,art.height,art.rgba.data());
+            // The eligible perk/skill set is small and bounded.
+            if(r.illustrationCache.size()<32)
+                r.illustrationCache.emplace(iconPath,r.illustration);
+            if(!r.illustration)__android_log_print(ANDROID_LOG_WARN,
+                "FalloutQuest","LEVELUP original ICON unavailable: %s",
+                iconPath.c_str());
+        }
     }
     if(r.revision==p.revision)return;
     r.revision=p.revision;
