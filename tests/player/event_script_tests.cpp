@@ -54,6 +54,10 @@ static void Dispatch() {
 }
 static void UnsupportedIsAtomic() {
   auto c=Catalog();
+  // Enable is supported now, but a genuine reference change must still be
+  // rejected by Player-only event dispatch without the native scene owner.
+  // Make the original reference initially disabled so Enable is not a no-op.
+  c.references[100].flags|=0x800;
   c.pipboy.scripts[102].source="scn NPC\nBegin OnActivate Player\n"
       "StartQuest ExampleQuest\nEnable\nEnd";
   c.eventPrograms[102]=fo3script::ParseEvents(c.pipboy.scripts[102]);
