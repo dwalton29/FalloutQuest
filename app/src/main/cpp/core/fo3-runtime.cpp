@@ -3778,6 +3778,20 @@ uint64_t BeginFo3ResidentWorkflow(Fo3ResidentWorkflowRequest request,
     CancelFo3ResidentPreparation(ticket);
     return 0;
 }
+// The gameplay handler already prepared the exact original event. Reuse it:
+// preparing again would evaluate the script twice and could change its results.
+uint64_t BeginFo3ResidentPreparedWorkflow(Fo3ResidentWorkflowRequest request,
+        std::unique_ptr<fo3player::ScriptTransactionPlan> script) {
+    if(!script||!script->HasReferenceChanges()||gFo3ResidentWorkflow.Active())return 0;
+    const auto ticket=AcquireFo3ResidentAssetLane();
+    if(!ticket)return 0;
+    try {
+        Fo3ResidentWorkflowAdapter adapter;
+        if(gFo3ResidentWorkflow.Begin(ticket,script,request,adapter))return ticket;
+    }catch(...){/* A failed reservation never publishes the private candidate. */}
+    CancelFo3ResidentPreparation(ticket);
+    return 0;
+}
 bool CancelFo3ResidentWorkflow(uint64_t ticket) noexcept {return gFo3ResidentWorkflow.RequestCancel(ticket);}
 void PumpFo3ResidentWorkflow(bool focused) noexcept {
     Fo3ResidentWorkflowAdapter adapter;
@@ -3832,11 +3846,7 @@ fo3player::ScriptEventResult DispatchFo3ScriptedActivation(
         if(player.CommitScriptTransaction(*plan))return Result::Executed;
         error="script event transaction changed before publication";return Result::Unsupported;
     }
-    const auto ticket=BeginFo3ResidentWorkflow({},[reference,activator,&error](
-            const fo3player::Player& current) {
-        return current.PrepareReferenceEventTransaction(reference,"OnActivate",activator,error,
-            fo3player::ScriptProgramCapture::EnteredPrograms);
-    });
+    const auto ticket=BeginFo3ResidentPreparedWorkflow({},std::move(plan));
     if(!ticket){
         if(error.empty())error="resident scripted activation could not reserve a safe scene";
         return Result::Unsupported;
