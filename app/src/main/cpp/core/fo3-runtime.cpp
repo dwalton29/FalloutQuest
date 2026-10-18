@@ -25,6 +25,7 @@
 #include "rendering/actor-skinning.h"
 #include "rendering/opaque-telemetry.h"
 #include "rendering/loading-work-scope.h"
+#include "rendering/loading-diagnostics.h"
 #include "rendering/loading-transfer.h"
 #include "rendering/quest-render-policy.h"
 #include "fo3-npc-appearance.h"
@@ -3096,6 +3097,10 @@ struct Fo3SceneCpuPreparation {
     uint64_t metadataUs = 0u;
     uint64_t cpuUs = 0u;
     uint64_t textureUs = 0u;
+    uint64_t meshUs = 0u, actorUs = 0u;
+    uint64_t worstMeshParseUs = 0u, worstTextureDecodeUs = 0u;
+    std::string worstMeshPath, worstTexturePath;
+    size_t uniqueTextures = 0u;
 };
 
 struct Fo3SceneCollisionPreparation {
@@ -3129,6 +3134,10 @@ struct Fo3SceneLoadWork {
     uint64_t textureDecodeUs=0,textureUploadUs=0,npcUploadUs=0;
     size_t peakStagedImageBytes=0;
     uint64_t maxUploadSliceUs = 0u;
+    uint64_t worstObjectUploadUs = 0u;
+    std::string worstObjectPath;
+    size_t slowObjectUploads = 0u, skippedObjectUploads = 0u, slowNpcUploads = 0u;
+    uint64_t lastProgressUs = 0u;
     size_t uploadIndex = 0u;
     size_t npcActorIndex = 0u, npcPartIndex = 0u;
     bool active = false;
@@ -3957,6 +3966,12 @@ void AbortFo3SceneLoad(const char* reason) {
     if(!gSceneLoad.aborting) {
         gSceneLoad.aborting=true;gSceneLoad.abortReason=reason;
         Q6H_LOGE("SCENE LOAD FAILED: reason=%s oldSceneRetained=1 cancellation=cooperative", reason);
+        fqloadprofile::Log("ABORT generation=%llu boot=%d elapsedMs=%.1f reason=%s cpuReady=%d contextApplied=%d objects=%zu uploaded=%zu actors=%zu collisionStarted=%d collisionReady=%d",
+            (unsigned long long)gSceneLoad.generation, gSceneLoad.boot?1:0,
+            Fo3SceneElapsedUs(gSceneLoad.started)/1000.0, reason,
+            gSceneLoad.preparation.Ready()?1:0, gSceneLoad.contextApplied?1:0,
+            gSceneLoad.replacement.size(), gSceneLoad.uploadIndex, gSceneLoad.npcActorIndex,
+            gSceneLoad.collisionStarted?1:0, gSceneLoad.collisionReady?1:0);
     }
     gSceneLoad.preparation.RequestCancel();gSceneLoad.collisionPreparation.RequestCancel();gSceneLoad.texturePreparation.RequestCancel();
     // A superseded scene stays private while an in-flight decoder retires.
@@ -4006,12 +4021,18 @@ bool BeginFo3SceneLoad(const Fo3CellTransitionRequestQ74& request, bool boot) {
     gSceneLoad.textureDecodeUs=gSceneLoad.textureUploadUs=gSceneLoad.npcUploadUs=0;
     gSceneLoad.peakStagedImageBytes=0;
     gSceneLoad.maxUploadSliceUs = 0u;
+    gSceneLoad.worstObjectUploadUs=0u;gSceneLoad.worstObjectPath.clear();
+    gSceneLoad.slowObjectUploads=gSceneLoad.skippedObjectUploads=gSceneLoad.slowNpcUploads=0u;
+    gSceneLoad.lastProgressUs=fqloadprofile::NowUs();
     gSceneLoad.replacement.clear();
     MarkFo3TransitionWorkStarted();
     Q6H_LOGI("SCENE LOAD BEGIN: boot=%d cell=%08X worldspace=%08X generation=%llu cpuWorker=1",
              boot ? 1 : 0, request.cellFormId, request.worldspaceFormId,
              static_cast<unsigned long long>(gSceneLoad.generation));
     const bool loadPlayer = !gPlayerSession;
+    fqloadprofile::Log("BEGIN generation=%llu mode=%s cell=%08X worldspace=%08X playerCatalog=%d sceneReadyBefore=%d",
+        (unsigned long long)gSceneLoad.generation,boot?"cold-boot":"transition",
+        request.cellFormId,request.worldspaceFormId,loadPlayer?1:0,gSceneReady?1:0);
     const auto referenceState=CaptureFo3ReferenceState();
     if (!gSceneLoad.preparation.Start(
             [request, boot, loadPlayer, referenceState](Fo3SceneCpuPreparation& result, const std::atomic<bool>& cancel) {
@@ -4078,6 +4099,7 @@ bool BeginFo3SceneLoad(const Fo3CellTransitionRequestQ74& request, bool boot) {
         result.metadataUs = Fo3SceneElapsedUs(phase);
         phase = std::chrono::steady_clock::now();
         result.selected.reserve(result.placements.size() * 2u);
+        const auto meshStarted = std::chrono::steady_clock::now();
         // Interiors select authored REFRs before visual filtering or expansion.
         // Exterior selection/streaming remains unchanged.
         if (result.request.worldspaceFormId == 0u)
@@ -4086,7 +4108,13 @@ bool BeginFo3SceneLoad(const Fo3CellTransitionRequestQ74& request, bool boot) {
             if (cancel.load(std::memory_order_acquire)) return false;
             if (Q74ShouldSkipPlacement(placement)) { ++result.skipped; continue; }
             std::vector<CpuObject> parts;
-            if (!BuildCpuObjects(placement, parts)) { ++result.unsupported; continue; }
+            const uint64_t parseStarted=fqloadprofile::NowUs();
+            const bool built=BuildCpuObjects(placement, parts);
+            const uint64_t parseUs=fqloadprofile::NowUs()-parseStarted;
+            if(parseUs>result.worstMeshParseUs) {
+                result.worstMeshParseUs=parseUs;result.worstMeshPath=placement.modelPath;
+            }
+            if (!built) { ++result.unsupported; continue; }
             for (CpuObject& part : parts) {
                 if (result.request.worldspaceFormId != 0u)
                     result.collisionPlacements.push_back(part.placement);
@@ -4098,6 +4126,8 @@ bool BeginFo3SceneLoad(const Fo3CellTransitionRequestQ74& request, bool boot) {
                 result.selected.push_back(std::move(part));
             }
         }
+        result.meshUs=Fo3SceneElapsedUs(meshStarted);
+        const auto actorStarted=std::chrono::steady_clock::now();
         Q230PrepareActors(result.request.cellFormId, result.request.worldspaceFormId,
             result.actors, cancel);
         if(result.referenceState)result.actors.erase(std::remove_if(result.actors.begin(),result.actors.end(),
@@ -4110,6 +4140,7 @@ bool BeginFo3SceneLoad(const Fo3CellTransitionRequestQ74& request, bool boot) {
         for(auto& actor:result.actors) {
             Q230CacheCombat(actor,actorCatalog);
         }
+        result.actorUs=Fo3SceneElapsedUs(actorStarted);
         result.cpuUs = Fo3SceneElapsedUs(phase);
         if (result.selected.size() < 2u) return false;
         phase = std::chrono::steady_clock::now();
@@ -4124,6 +4155,7 @@ bool BeginFo3SceneLoad(const Fo3CellTransitionRequestQ74& request, bool boot) {
                 if (!path->empty()) texturePaths.insert(*path);
             }
         }
+        result.uniqueTextures=texturePaths.size();
         for (const std::string& path : texturePaths) {
             if (cancel.load(std::memory_order_acquire)) return false;
             // Bound speculative decoded-image retention. Remaining textures use
@@ -4135,7 +4167,12 @@ bool BeginFo3SceneLoad(const Fo3CellTransitionRequestQ74& request, bool boot) {
                     retainedBytes += entry.second.texture.rgba.size();
             }
             if (retainedBytes >= 64u * 1024u * 1024u) break;
+            const uint64_t decodeStarted=fqloadprofile::NowUs();
             Q1900PrepareTextureCpuQ19(path);
+            const uint64_t decodeUs=fqloadprofile::NowUs()-decodeStarted;
+            if(decodeUs>result.worstTextureDecodeUs) {
+                result.worstTextureDecodeUs=decodeUs;result.worstTexturePath=path;
+            }
             ++result.preparedTextures;
         }
         result.textureUs = Fo3SceneElapsedUs(phase);
@@ -4170,8 +4207,23 @@ bool ProcessQ74TransitionRequest() {
     if(gSceneLoad.boot && !gProgram) {
         if(GetFo3LoadingPresentedFrames()==0)return false;
         fqloading::WorkScope operation("world-shader-compile/link");
-        if(!Q1030InitializeRenderProgramOnly())AbortFo3SceneLoad("render-program");
+        const uint64_t shaderStarted=fqloadprofile::NowUs();
+        const bool shaderReady=Q1030InitializeRenderProgramOnly();
+        fqloadprofile::Log("SHADER generation=%llu elapsedMs=%.1f compileMs=%.1f success=%d",
+            (unsigned long long)gSceneLoad.generation,Fo3SceneElapsedUs(gSceneLoad.started)/1000.0,
+            (fqloadprofile::NowUs()-shaderStarted)/1000.0,shaderReady?1:0);
+        if(!shaderReady)AbortFo3SceneLoad("render-program");
         return false;
+    }
+    const uint64_t profileNow=fqloadprofile::NowUs();
+    if(profileNow-gSceneLoad.lastProgressUs>=2000000u) {
+        gSceneLoad.lastProgressUs=profileNow;
+        fqloadprofile::Log("PROGRESS generation=%llu elapsedMs=%.1f cpuReady=%d contextApplied=%d meshesUploaded=%zu liveGpuObjects=%zu actorsDone=%zu collisionStarted=%d collisionReady=%d budgetGpuReady=%d",
+            (unsigned long long)gSceneLoad.generation,Fo3SceneElapsedUs(gSceneLoad.started)/1000.0,
+            gSceneLoad.preparation.Ready()?1:0,gSceneLoad.contextApplied?1:0,
+            gSceneLoad.uploadIndex,gSceneLoad.replacement.size(),gSceneLoad.npcActorIndex,
+            gSceneLoad.collisionStarted?1:0,gSceneLoad.collisionPreparation.Ready()?1:0,
+            fqloading::budget.gpuReady?1:0);
     }
     if (!gSceneLoad.preparation.Ready()) return false;
     MarkFo3TransitionWorkStarted();
@@ -4192,6 +4244,7 @@ bool ProcessQ74TransitionRequest() {
     const size_t skipped = prepared.skipped;
     const size_t unsupported = prepared.unsupported;
     if (!gSceneLoad.contextApplied) {
+        const uint64_t contextStarted=fqloadprofile::NowUs();
         fqloading::WorkScope operation("scene-context/policy-reset");
         // Retire completed background collision tasks before changing its policy.
         if (!DrainFo3TransitionBackgroundWork()) return false;
@@ -4219,6 +4272,15 @@ bool ProcessQ74TransitionRequest() {
                  static_cast<unsigned long long>(prepared.metadataUs),
                  static_cast<unsigned long long>(prepared.cpuUs),
                  static_cast<unsigned long long>(prepared.textureUs), prepared.preparedTextures);
+        fqloadprofile::Log("CPU_READY generation=%llu elapsedMs=%.1f queueMs=%.1f workerMs=%.1f playerMs=%.1f resolveMs=%.1f placementsMs=%.1f meshesMs=%.1f actorsMs=%.1f texturePredecodeMs=%.1f contextMs=%.1f placements=%zu meshes=%zu actors=%zu texturesUnique=%zu texturesPredecoded=%zu worstMeshParseMs=%.1f worstMesh=%s worstTextureDecodeMs=%.1f worstTexture=%s",
+            (unsigned long long)gSceneLoad.generation,Fo3SceneElapsedUs(gSceneLoad.started)/1000.0,
+            gSceneLoad.preparation.QueueDelayUs()/1000.0,gSceneLoad.preparation.ExecutionUs()/1000.0,
+            prepared.playerUs/1000.0,prepared.resolveUs/1000.0,prepared.metadataUs/1000.0,
+            prepared.meshUs/1000.0,prepared.actorUs/1000.0,prepared.textureUs/1000.0,
+            (fqloadprofile::NowUs()-contextStarted)/1000.0,prepared.placements.size(),
+            selected.size(),prepared.actors.size(),prepared.uniqueTextures,prepared.preparedTextures,
+            prepared.worstMeshParseUs/1000.0,prepared.worstMeshPath.c_str(),
+            prepared.worstTextureDecodeUs/1000.0,prepared.worstTexturePath.c_str());
     }
     if(request.worldspaceFormId==0u || request.worldspaceFormId==0x3Cu || request.worldspaceFormId==0xA74u) {
             if (!gSceneLoad.collisionStarted) {
@@ -4269,9 +4331,26 @@ bool ProcessQ74TransitionRequest() {
         do {
             CpuObject& cpu = selected[gSceneLoad.uploadIndex++];
             GpuObject gpu;
-            if (UploadCpuObject(cpu, request.x, request.y, request.z, gpu)) {
+            const uint64_t modelStarted=fqloadprofile::NowUs();
+            const bool modelUploaded=UploadCpuObject(cpu, request.x, request.y, request.z, gpu);
+            const uint64_t modelUs=fqloadprofile::NowUs()-modelStarted;
+            if(modelUs>gSceneLoad.worstObjectUploadUs) {
+                gSceneLoad.worstObjectUploadUs=modelUs;gSceneLoad.worstObjectPath=cpu.placement.modelPath;
+            }
+            if(modelUs>=16000u) {
+                ++gSceneLoad.slowObjectUploads;
+                if(gSceneLoad.slowObjectUploads<=12u)
+                    fqloadprofile::Log("SLOW_MESH generation=%llu elapsedMs=%.1f modelMs=%.1f ref=%08X model=%s result=%d",
+                        (unsigned long long)gSceneLoad.generation,Fo3SceneElapsedUs(gSceneLoad.started)/1000.0,
+                        modelUs/1000.0,cpu.placement.refFormId,cpu.placement.modelPath.c_str(),modelUploaded?1:0);
+            }
+            if (modelUploaded) {
                 gSceneLoad.replacement.push_back(std::move(gpu));
             } else {
+                ++gSceneLoad.skippedObjectUploads;
+                if(gSceneLoad.skippedObjectUploads<=12u)
+                    fqloadprofile::Log("MESH_SKIPPED generation=%llu ref=%08X model=%s",
+                        (unsigned long long)gSceneLoad.generation,cpu.placement.refFormId,cpu.placement.modelPath.c_str());
                 Q6H_LOGW("SCENE OPTIONAL MESH SKIPPED: ref=%08X model=%s uploadFailed=1",
                     cpu.placement.refFormId,cpu.placement.modelPath.c_str());
                 // Preserve v215's cleanup; cached material textures and
@@ -4297,7 +4376,18 @@ bool ProcessQ74TransitionRequest() {
         }
         if (gSceneLoad.npcPartIndex < actor.parts.size()) {
             auto& part = actor.parts[gSceneLoad.npcPartIndex++];
-            if(!Q230UploadActorPart(actor, part, request.x, request.y, request.z))
+            const uint64_t npcStarted=fqloadprofile::NowUs();
+            const bool npcUploaded=Q230UploadActorPart(actor, part, request.x, request.y, request.z);
+            const uint64_t npcUs=fqloadprofile::NowUs()-npcStarted;
+            gSceneLoad.npcUploadUs+=npcUs;
+            if(npcUs>=16000u) {
+                ++gSceneLoad.slowNpcUploads;
+                if(gSceneLoad.slowNpcUploads<=12u)
+                    fqloadprofile::Log("SLOW_NPC generation=%llu partMs=%.1f ref=%08X part=%zu success=%d",
+                        (unsigned long long)gSceneLoad.generation,npcUs/1000.0,
+                        actor.source.refFormId,gSceneLoad.npcPartIndex-1u,npcUploaded?1:0);
+            }
+            if(!npcUploaded)
                 Q6H_LOGW("SCENE OPTIONAL NPC PART SKIPPED: ref=%08X part=%zu",
                     actor.source.refFormId,gSceneLoad.npcPartIndex-1u);
             return false;
@@ -4351,6 +4441,11 @@ bool ProcessQ74TransitionRequest() {
             AbortFo3SceneLoad("collision-publication");
             return false;
         }
+        fqloadprofile::Log("COLLISION_READY generation=%llu elapsedMs=%.1f queueMs=%.1f workerMs=%.1f prepareMs=%.1f swapMs=%.1f placements=%zu",
+            (unsigned long long)gSceneLoad.generation,Fo3SceneElapsedUs(gSceneLoad.started)/1000.0,
+            gSceneLoad.collisionPreparation.QueueDelayUs()/1000.0,
+            gSceneLoad.collisionPreparation.ExecutionUs()/1000.0,collision.elapsedUs/1000.0,
+            swapUs/1000.0,collision.placements.size());
         Q6H_LOGI("SCENE COLLISION READY: placements=%zu prepareUs=%llu swapUs=%llu background=1",
                  collision.placements.size(),
                  static_cast<unsigned long long>(collision.elapsedUs),
@@ -4484,6 +4579,14 @@ bool ProcessQ74TransitionRequest() {
              static_cast<unsigned long long>(Fo3SceneElapsedUs(finalizationStarted)),
              static_cast<unsigned long long>(Fo3SceneElapsedUs(gSceneLoad.started)),
              gQ2013ExteriorWarmupPending ? 1 : 0);
+    fqloadprofile::Log("SCENE_READY generation=%llu mode=%s cell=%08X elapsedMs=%.1f workerMs=%.1f meshUploadApiMs=%.1f worstMeshUploadMs=%.1f worstMeshUpload=%s slowMeshes=%zu skippedMeshes=%zu npcUploadApiMs=%.1f slowNpcParts=%zu collisionMs=%.1f finalizationMs=%.1f publishedMeshes=%zu sceneReady=%d exteriorWarmup=%d",
+        (unsigned long long)gSceneLoad.generation,gSceneLoad.boot?"boot":"transition",
+        request.cellFormId,Fo3SceneElapsedUs(gSceneLoad.started)/1000.0,
+        gSceneLoad.preparation.ExecutionUs()/1000.0,gSceneLoad.uploadUs/1000.0,
+        gSceneLoad.worstObjectUploadUs/1000.0,gSceneLoad.worstObjectPath.c_str(),
+        gSceneLoad.slowObjectUploads,gSceneLoad.skippedObjectUploads,gSceneLoad.npcUploadUs/1000.0,
+        gSceneLoad.slowNpcUploads,collisionUs/1000.0,Fo3SceneElapsedUs(finalizationStarted)/1000.0,
+        gObjects.size(),gSceneReady?1:0,gQ2013ExteriorWarmupPending?1:0);
     gSceneLoad.preparation.Reset();
     gSceneLoad.missingTextures.clear();
     gSceneLoad.previousCollisionPolicy.clear();
