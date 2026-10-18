@@ -403,9 +403,20 @@ assert 'ExecuteFo3' not in native_pump
 factory=workflow[workflow.index('uint64_t BeginFo3ResidentWorkflow('):workflow.index('bool CancelFo3ResidentWorkflow(')]
 assert factory.index('AcquireFo3ResidentAssetLane()') < factory.index('prepare(player)') < factory.index('gFo3ResidentWorkflow.Begin(')
 assert 'const fo3player::Player&' in factory and 'CancelFo3ResidentPreparation(ticket)' in factory
+# The reusable workflow adapter remains free of gameplay/UI side effects.
+# The separate ACTI gameplay bridge may request a deferred save, but only
+# after reserving the lane; the frame gate prevents early persistence.
+workflow_core=workflow[:workflow.index('// ACTI OnActivate bridge.')]
 for forbidden in ('FlushFo3','PollScript','PollQuest','DispatchReferenceEvent','glDraw','PumpFo3AndroidEvents'):
-    assert forbidden not in workflow
-print('Native workflow owns the script/packet, advances outside gameplay exclusion and retains all settled owners for finalization')
+    assert forbidden not in workflow_core
+bridge=workflow[workflow.index('// ACTI OnActivate bridge.'):]
+assert bridge.index('BeginFo3ResidentWorkflow(') < bridge.index('FlushFo3PlayerState();')
+assert 'if(!plan->HasReferenceChanges())' in bridge
+assert 'ScriptEventResult' in bridge and 'Result::Pending' in bridge
+assert 'gFo3ResidentWorkflow.Ticket()==gFo3ResidentGameplayTicket' in native_pump
+assert native_pump.index('State()==Phase::Ready') < native_pump.index('gFo3ResidentWorkflow.Execute(')
+assert native_pump.index('State()==Phase::Settled') < native_pump.index('gFo3ResidentWorkflow.Finalize(')
+print('Native workflow retains safety isolation; explicit gameplay ticket publishes only after Ready')
 
 finalizer=workflow[workflow.index('bool CanFinalize('):workflow.index('uint64_t BeginFo3ResidentWorkflow(')]
 for proof in ('CanFinalizeScriptTransaction(script,committed)',
