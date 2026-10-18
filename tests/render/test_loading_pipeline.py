@@ -83,6 +83,41 @@ class LoadingPipeline(unittest.TestCase):
         self.assertIn('2L*1024L*1024L',logger)
         self.assertIn('std::mutex',logger)
 
+    def test_authored_door_cache_is_parallel_cancellable_and_committed_once(self):
+        runtime=(ROOT/'core/fo3-runtime.cpp').read_text()
+        cache=(ROOT/'world/interaction/fo3-authored-door-cache.inc').read_text()
+        interior=(ROOT/'world/fo3-cell-interior.inc').read_text()
+        worker=cache.split('bool PrepareWorker(',1)[1].split('const std::vector<Anchor>& AnchorsForCell(',1)[0]
+        scene=runtime.split('bool ProcessQ74TransitionRequest() {',1)[1].split(
+            'GLenum Q1150BlendFactor',1)[0]
+
+        # Scan remains the original two ESM passes and XESP parent resolution.
+        self.assertIn('Q1700Interior::CollectCellReferences(cellFormId, raw, &cancel)',worker)
+        self.assertIn('Q1700Interior::ResolveEnabled(',worker)
+        self.assertIn('Fo3DoorTeleport teleport;',worker)
+        self.assertIn('ownerCells.find(teleport.destinationDoorRefFormId)',worker)
+        self.assertIn('out.anchors.push_back(anchor)',worker)
+        # No render-thread cache mutation, XR pumping or GL calls in worker.
+        for forbidden in ('gCellCaches', 'MarkFo3DoorResourcesChanged',
+                          'PumpFo3AndroidEventsQ1860(', 'glBind', 'glGen'):
+            self.assertNotIn(forbidden,worker)
+        self.assertIn('cancel.load(std::memory_order_acquire)',worker)
+        self.assertIn('cancelled->load(std::memory_order_acquire)',interior)
+        self.assertIn('gSceneLoad.doorPreparation.RequestCancel()',runtime)
+        self.assertIn('!gSceneLoad.doorPreparation.Ready()',runtime)
+
+        # Start in parallel with CPU preparation; publish on render thread
+        # with original live-door fallback only after the packet is ready.
+        begin=runtime.split('bool BeginFo3SceneLoad(',1)[1].split(
+            'bool ProcessQ74TransitionRequest(',1)[0]
+        self.assertLess(begin.index('gSceneLoad.doorPreparation.Start('),
+                        begin.index('gSceneLoad.preparation.Start('))
+        self.assertLess(scene.index('PublishFo3AuthoredDoorAnchorsQ2190('),
+                        scene.index('PrimeFo3AuthoredDoorAnchorsQ1870('))
+        self.assertIn('MarkFo3DoorResourcesChanged()',cache)
+        self.assertIn('FINALIZE_STEP generation=',runtime)
+        self.assertIn('DOOR_WORKER_READY generation=',runtime)
+
     def test_gpu_backlog_never_blocks_waiting_for_completion(self):
         loop=(ROOT/'core/fo3-runtime-loop.inc').read_text()
         self.assertIn('glClientWaitSync(gLoadingUploadFence,0,0)',loop)
