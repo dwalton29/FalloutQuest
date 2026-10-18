@@ -4262,7 +4262,7 @@ bool ProcessQ74TransitionRequest() {
         gSceneLoad.contextApplied = true;
         size_t expandedBytes=0;
         for(const auto& cpu:selected)expandedBytes+=cpu.q1960ExpandedVertices.size()*sizeof(float);
-        Q6H_LOGI("SCENE WORKER TIMELINE: queuedUs=%llu executionUs=%llu cpuReadyElapsedUs=%llu expandedBytes=%zu textureDecode=demand-worker",
+        Q6H_LOGI("SCENE WORKER TIMELINE: queuedUs=%llu executionUs=%llu cpuReadyElapsedUs=%llu expandedBytes=%zu texturePredecode=bounded-worker",
             (unsigned long long)gSceneLoad.preparation.QueueDelayUs(),(unsigned long long)gSceneLoad.preparation.ExecutionUs(),
             (unsigned long long)Fo3SceneElapsedUs(gSceneLoad.started),expandedBytes);
         Q6H_LOGI("SCENE CPU READY: boot=%d cell=%08X placements=%zu shapes=%zu resolveUs=%llu playerUs=%llu metadataUs=%llu cpuUs=%llu textureUs=%llu preparedTextures=%zu",
