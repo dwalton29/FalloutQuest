@@ -1642,16 +1642,42 @@ private:
                     static double scriptResidenceElapsed=0;
                     scriptResidenceElapsed=std::min(.5,scriptResidenceElapsed+seconds);
                     if(scriptResidenceElapsed>=.25){
-                        std::vector<uint32_t> scriptedResidents;
-                        for(const auto& object:gObjects)
-                            if(object.refFormId&&scriptPlayer.HasReferenceEvent(object.refFormId,"GameMode"))
-                                scriptedResidents.push_back(object.refFormId);
-                        // NPC and creature residents have their own skinning
-                        // registry, not the static gObjects visual list.
+                        const auto q230ScanStart=fqopaque::Clock::now();
+                        // Q230: original GameMode ownership is immutable ESM data.
+                        // Rebuild only when the static scene's publication changes.
+                        // The real enabled/running state is still evaluated at
+                        // execution time by PumpWorldAwareGameMode.
+                        struct Q230ScriptedStatics {
+                            uint64_t revision=~uint64_t{0};
+                            const GpuObject* storage=nullptr;
+                            size_t count=0;
+                            std::vector<uint32_t> ids;
+                        };
+                        static Q230ScriptedStatics q230Statics;
+                        const uint64_t revision=gFo3VisualPublication.Revision();
+                        if(!revision||q230Statics.revision!=revision||
+                           q230Statics.storage!=gObjects.data()||
+                           q230Statics.count!=gObjects.size()){
+                            q230Statics.ids.clear();
+                            for(const auto& object:gObjects)
+                                if(object.refFormId&&scriptPlayer.HasReferenceEvent(object.refFormId,"GameMode"))
+                                    q230Statics.ids.push_back(object.refFormId);
+                            q230Statics.revision=revision;
+                            q230Statics.storage=gObjects.data();
+                            q230Statics.count=gObjects.size();
+                        }
+                        static std::vector<uint32_t> scriptedResidents;
+                        scriptedResidents.clear();
+                        scriptedResidents.insert(scriptedResidents.end(),
+                            q230Statics.ids.begin(),q230Statics.ids.end());
+                        // NPC and creature residents have their own registry.
+                        // Their live presence must not be cached across ticks.
                         for(const auto& actor:gQ230NpcActors)
                             if(!actor.runtime.offScene&&actor.source.refFormId&&
                                 scriptPlayer.HasReferenceEvent(actor.source.refFormId,"GameMode"))
                                 scriptedResidents.push_back(actor.source.refFormId);
+                        const uint64_t q230ScanUs=fqopaque::Micros(q230ScanStart);
+                        const auto q230PumpStart=fqopaque::Clock::now();
                         scriptPlayer.PumpWorldAwareGameMode(scriptResidenceElapsed,scriptedResidents,
                             [&](std::unique_ptr<fo3player::ScriptTransactionPlan> plan){
                                 const auto ticket=BeginFo3ResidentPreparedWorkflow({},std::move(plan));
@@ -1660,6 +1686,21 @@ private:
                                 FlushFo3PlayerState(); // Save is deferred under scene reservation.
                                 return true;
                             });
+                        const uint64_t q230PumpUs=fqopaque::Micros(q230PumpStart);
+                        // A bounded, phase-specific diagnostic for the measured
+                        // ~14 ms 4 Hz spikes. This separates immutable lookups
+                        // from transaction cloning, execution and publication.
+                        static uint64_t q230GameModeTicks=0;
+                        static unsigned q230SlowReports=0;
+                        ++q230GameModeTicks;
+                        if((q230GameModeTicks%120u)==1u||
+                           (q230PumpUs>=8000u&&q230SlowReports++<12u)){
+                            FQ_LOGI("Q230 GAMEMODE CPU: scanUs=%llu executeUs=%llu staticRefs=%zu residentRefs=%zu indexed=1 tick=%llu",
+                                static_cast<unsigned long long>(q230ScanUs),
+                                static_cast<unsigned long long>(q230PumpUs),
+                                q230Statics.ids.size(),scriptedResidents.size(),
+                                static_cast<unsigned long long>(q230GameModeTicks));
+                        }
                         scriptResidenceElapsed=0;
                     }
                     if(beforeScripts!=scriptPlayer.Revision())FlushFo3PlayerState();

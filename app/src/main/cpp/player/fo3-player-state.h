@@ -616,6 +616,10 @@ private:
   mutable uint64_t revision_ = 0;
   uint64_t actorPoseRevisions_ = 0;
   double questScriptAccumulator_=0,referenceScriptAccumulator_=0;
+  // Q230: authored GameMode script ownership is immutable for a Player's ESM
+  // catalog. Cache IDs only; execution eligibility is still sampled live.
+  mutable bool q230GameModeQuestIndexReady_=false;
+  mutable std::vector<uint32_t> q230GameModeQuestIds_;
   uint32_t scriptActivator_=0,scriptReference_=0,scriptPlayerCell_=0,scriptPlayerWorld_=0;
   std::array<float,3> scriptPlayerPosition_{};
   bool scriptPlayerPositionKnown_=false;

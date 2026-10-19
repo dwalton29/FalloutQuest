@@ -665,19 +665,31 @@ bool Player::PumpWorldAwareGameMode(double seconds,const std::vector<uint32_t>& 
     LogScriptEventError(script,event,error);
     return false;
   };
-  std::vector<uint32_t> quests;
-  for(const auto& q:catalog_->pipboy.quests) {
-    if(!q.second.script)continue;
-    const auto events=catalog_->eventPrograms.find(q.second.script);
-    if(events==catalog_->eventPrograms.end())continue;
-    bool gameMode=false;
-    for(const auto& b:events->second.blocks)if(b.event=="gamemode"){gameMode=true;break;}
-    if(!gameMode)continue;
-    const auto saved=state_.pipboy.quests.find(q.first);
-    if(saved!=state_.pipboy.quests.end()?saved->second.running:bool(q.second.flags&1))
-      quests.push_back(q.first);
+  // Q230: immutable ESM quest/script association is indexed once per Player.
+  // Construct the live *starting* eligible set each tick: a quest started by
+  // another GameMode result must not run until the next tick (source ordering).
+  if(!q230GameModeQuestIndexReady_){
+    q230GameModeQuestIds_.clear();
+    for(const auto& q:catalog_->pipboy.quests){
+      if(!q.second.script)continue;
+      const auto events=catalog_->eventPrograms.find(q.second.script);
+      if(events==catalog_->eventPrograms.end())continue;
+      for(const auto& block:events->second.blocks)if(block.event=="gamemode"){
+        q230GameModeQuestIds_.push_back(q.first);break;
+      }
+    }
+    std::sort(q230GameModeQuestIds_.begin(),q230GameModeQuestIds_.end());
+    q230GameModeQuestIndexReady_=true;
   }
-  std::sort(quests.begin(),quests.end());
+  std::vector<uint32_t> quests;
+  quests.reserve(q230GameModeQuestIds_.size());
+  for(uint32_t id:q230GameModeQuestIds_){
+    const auto q=catalog_->pipboy.quests.find(id);
+    if(q==catalog_->pipboy.quests.end())continue;
+    const auto saved=state_.pipboy.quests.find(id);
+    if(saved!=state_.pipboy.quests.end()?saved->second.running:bool(q->second.flags&1))
+      quests.push_back(id);
+  }
   for(const auto id:quests){
     const auto q=catalog_->pipboy.quests.find(id);
     if(q==catalog_->pipboy.quests.end())continue;

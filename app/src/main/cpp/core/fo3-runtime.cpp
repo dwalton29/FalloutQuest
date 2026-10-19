@@ -6976,11 +6976,17 @@ int Q1900BuildNativeLodClipCells(float* bounds, bool objectLod) {
 }
 
 extern uint64_t gStereoFrame;
+// Q230: Q2017 classified opaque details already passed these two expensive
+// world-state checks for the published frame. This flag is scoped only to
+// detailed opaque submission, never native LOD, alpha or environment passes.
+bool gQ230DetailedObjectPrevalidated=false;
 void DrawSceneObject(const GpuObject& object, bool environmentPassQ2050 = false) {
-    if (gPlayerSession && gPlayerSession->player.IsCollected(object.refFormId)) return;
+    if (!gQ230DetailedObjectPrevalidated &&
+        gPlayerSession && gPlayerSession->player.IsCollected(object.refFormId)) return;
     if (!object.q210PlayerBody &&
         !object.q230NpcActor && !object.physicalWeapon &&
         !gInstancedDrawActiveQ2016 &&
+        !gQ230DetailedObjectPrevalidated &&
         !Q1970ShouldRenderFullDetail(object)) return;
     if (!object.q210PlayerBody &&
         !object.q230NpcActor && !object.physicalWeapon &&
@@ -7388,6 +7394,8 @@ void Q2017RenderOpaqueDetailedInstanced() {
     const auto largestBatch = cache.largestBatch;
 
     size_t fallbackDraws = 0u;
+    const bool previousPrevalidation=gQ230DetailedObjectPrevalidated;
+    gQ230DetailedObjectPrevalidated=true;
     for (const GpuObject* object : singles) {
         if (!object) continue;
         if (object->zBufferTestQ1200) glEnable(GL_DEPTH_TEST);
@@ -7447,6 +7455,7 @@ void Q2017RenderOpaqueDetailedInstanced() {
                  saved, largestBatch, rebuild ? 1 : 0, gObjects.size());
     }
 
+    gQ230DetailedObjectPrevalidated=previousPrevalidation;
     gInstancedDrawActiveQ2016 = false;
     gInstanceMatrixBaseFloatQ2017 = 0u;
     gInstanceCountQ2017 = 0;

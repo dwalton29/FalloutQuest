@@ -202,7 +202,9 @@ bool Player::ConfirmBarter(BarterSession& session,std::string& error) {
 
 namespace fo3player {
 void Player::TouchMerchantCells(uint32_t cell) {
-  if(!cell)return;
+  // Q230: no merchant has ever been visited, so there is no restock clock to
+  // update. Avoid an immutable catalog-wide scan on every tracked-head frame.
+  if(!cell||state_.merchantVisits.empty())return;
   for(const auto& merchant:catalog_->merchantContainers){auto visit=state_.merchantVisits.find(merchant.second);
     if(visit==state_.merchantVisits.end())continue;
     const auto actor=catalog_->references.find(merchant.first),chest=catalog_->references.find(merchant.second);
