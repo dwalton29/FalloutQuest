@@ -848,6 +848,7 @@ static bool Q240AlternatePortalWaypoint(Q230ActorVisual& actor) {
   return true;
 }
 static void Q240GroundPathRoot(Q230ActorVisual& actor) {
+  FQ_PERF_SCOPE(NpcGround);
   if(!actor.navigationGraph||actor.aiPathIndex>=actor.aiPathSurfaces.size())return;
   const auto surface=actor.aiPathSurfaces[actor.aiPathIndex];
   if(surface.first>=actor.navigationGraph->meshes.size()||
@@ -907,6 +908,7 @@ static void Q240GroundStandingRoot(Q230ActorVisual& actor,const char* reason){
 static bool Q240CorridorLine(const Q230ActorVisual& actor,
                             const std::array<float,3>& from,size_t goal,
                             std::vector<float>* crossings=nullptr) {
+  FQ_PERF_SCOPE(NpcPortal);
   if(crossings)crossings->clear();
   if(goal>=actor.aiPathGame.size())return false;
   if(goal==actor.aiPathIndex)return true;
@@ -1005,7 +1007,11 @@ static void Q240AdvancePath(Q230ActorVisual& actor,float dt,double now) {
     -fo3npc::MovementPolicy::Braking*dt,fo3npc::MovementPolicy::Acceleration*dt);
   const float step=std::min(distance,std::max(.02f,velocity)*dt),fraction=step/distance;
 #ifdef FO3_NPC_PATH_BLOCKED
-  if(FO3_NPC_PATH_BLOCKED(actor,dx/distance,0,dz/distance,step,distance)){waitOrRecover();return;}
+  bool q226Blocked=false;
+  { FQ_PERF_SCOPE(NpcObstruction);
+    q226Blocked=FO3_NPC_PATH_BLOCKED(actor,dx/distance,0,dz/distance,step,distance);
+  }
+  if(q226Blocked){waitOrRecover();return;}
 #else
   (void)waitOrRecover;
 #endif
@@ -1018,7 +1024,11 @@ static void Q240AdvancePath(Q230ActorVisual& actor,float dt,double now) {
   // Small forward steps between sidesteps must not hide a stalled endpoint.
   if(actor.runtime.crowdBlockedSince>=0&&(remaining+16<actor.runtime.crowdProgressDistance||
      Q240PlanarDistance(actor.runtime.crowdDestination,actor.aiPathGame.back())>1))actor.runtime.crowdBlockedSince=-1;
-  if(!FO3_NPC_CROWD_STEP(actor,nextGame)){
+  const bool q226CrowdAllowed=[&](){
+    FQ_PERF_SCOPE(NpcCrowd);
+    return FO3_NPC_CROWD_STEP(actor,nextGame);
+  }();
+  if(!q226CrowdAllowed){
     if(actor.runtime.crowdBlockedSince<0){actor.runtime.crowdBlockedSince=now;actor.runtime.crowdProgressDistance=remaining;actor.runtime.crowdDestination=actor.aiPathGame.back();}
     if(now-actor.runtime.crowdBlockedSince>=2){
       auto& state=actor.runtime;

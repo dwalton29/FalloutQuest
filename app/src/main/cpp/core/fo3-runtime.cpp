@@ -12556,8 +12556,16 @@ void Q230PumpNpcArrivals(){
                     gQ234GeneratedTextures[entry.first]=std::move(entry.second);
             if(work.partIndex<actor.parts.size()){
                 auto& part=actor.parts[work.partIndex++];
-                Q230UploadActorPart(actor,part,gSceneCenterXQ1730,
+                const auto q226UploadStart=fqopaque::Clock::now();
+                { FQ_PERF_SCOPE(NpcArrivalPart);
+                  Q230UploadActorPart(actor,part,gSceneCenterXQ1730,
                     gSceneCenterYQ1730,gSceneFloorZQ1730);
+                }
+                const double q226UploadUs=fqopaque::Micros(q226UploadStart);
+                if(q226UploadUs>16000.0)
+                    Q6H_LOGI("Q226 NPC ARRIVAL PART SLOW actor=%08X part=%zu model=%s uploadMs=%.1f",
+                        actor.source.refFormId,work.partIndex-1,
+                        part.placement.modelPath.c_str(),q226UploadUs/1000.0);
                 part=CpuObject{};
                 return; // Bound GPU work to one NPC part per frame.
             }

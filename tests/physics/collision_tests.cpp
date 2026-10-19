@@ -124,7 +124,80 @@ static void emptyQueries(bool exterior) {
 }
 #include "resident_collision_tests.inc"
 
+// Q226: the spatially indexed actor-ground resolver must return precisely the
+// same original collision surface as the old full-array walk, including ties,
+// upper Megaton platforms, oversized meshes, cell boundaries and stale epochs.
+static void IndexedActorGroundParityQ226() {
+    assert(gWorldTriangles.empty() && !gPlayerCollisionReady);
+    auto flat=[](float x,float z,float y,float radius) {
+        CollisionTriangle tri{};
+        tri.a={x-radius,y,z-radius};
+        tri.b={x+radius,y,z-radius};
+        tri.c={x,y,z+radius};
+        tri.normal={0,1,0};
+        tri.minX=x-radius;tri.maxX=x+radius;
+        tri.minY=tri.maxY=y;
+        tri.minZ=z-radius;tri.maxZ=z+radius;
+        return tri;
+    };
+    gWorldTriangles.push_back(flat(0,0,0,1.1f));
+    gWorldTriangles.push_back(flat(0,0,2,1.1f));
+    gWorldTriangles.push_back(flat(0,0,-3,1.1f));
+    gWorldTriangles.push_back(flat(0,0,-1,22.f)); // broadphase oversized
+    // Distant geometry must not force NPC grounding to scan the whole world.
+    for(int i=0;i<1700;++i)
+        gWorldTriangles.push_back(flat(12.f+float(i)*2.f,0,0,.75f));
+    Q225RebuildDynamicGrid();
+    assert(!gQ225DynamicGrid.empty()&&!gInteractionLargeTriangles.empty());
+    const auto legacy=[&](float x,float z,float reference,float& out) {
+        float best=std::numeric_limits<float>::max();
+        bool found=false;
+        for(const auto& tri:gWorldTriangles) {
+            if(std::fabs(tri.normal.y)<WalkableNormalThresholdQ714(tri))continue;
+            if(x<tri.minX-.02f||x>tri.maxX+.02f||z<tri.minZ-.02f||z>tri.maxZ+.02f)continue;
+            float u=0,v=0,w=0;
+            if(!BarycentricXZ(tri,x,z,u,v,w))continue;
+            const float y=tri.a.y*u+tri.b.y*v+tri.c.y*w;
+            const float dist=std::fabs(y-reference);
+            if(dist>SAFE_SPAWN_VERTICAL_SEARCH)continue;
+            if(!found||dist<best) {found=true;best=dist;out=y;}
+        }
+        return found;
+    };
+    const auto parity=[&]() {
+        for(float x:{-1.5f,-.75f,-.001f,0.f,.75f,1.5f,12.f,12.7f,31.5f,127.f})
+            for(float z:{-1.5f,-.1f,0.f,.1f,1.5f})
+                for(float y:{-8.f,-2.f,-1.f,0.f,1.f,2.f,6.f,64.f}) {
+                    float actual=-345.f,expected=-345.f;
+                    const bool found=FindGroundWide(x,z,y,actual);
+                    const bool before=legacy(x,z,y,expected);
+                    assert(found==before);
+                    assert(actual==expected);
+                }
+    };
+    parity();
+    float ground=0;
+    assert(FindGroundWide(0,0,1.f,ground)&&ground==0.f); // lower-index tie
+    assert(FindGroundWide(0,0,2.f,ground)&&ground==2.f);
+    // Collision publication epoch change must never consult stale buckets.
+    AdvanceFo3CollisionPublicationRevision();
+    parity();
+    Q225RebuildDynamicGrid();
+    parity();
+    // Mutated collision geometry is rebuilt on the same publication path.
+    gWorldTriangles.push_back(flat(-4.f,0,4.f,.5f));
+    AdvanceFo3CollisionPublicationRevision();
+    parity();
+    Q225RebuildDynamicGrid();
+    parity();
+    gWorldTriangles.clear();
+    Q225RebuildDynamicGrid();
+    assert(gWorldTriangles.empty());
+    std::cout<<"Q226 indexed actor ground preserves complete authored layer selection passed\n";
+}
+
 int main(int argc,char**argv) {
+    IndexedActorGroundParityQ226();
     const std::string nonMegaton="Dungeons\\Office\\Room\\Wall.NIF",megaton="Architecture\\Megaton\\interior\\Wall.NIF",item="Clutter\\Bottle.NIF",trigger="Effects\\Trigger.NIF";
     assets[nonMegaton]=packedNif();assets[megaton]=packedNif();assets[item]=packedNif();assets[trigger]=packedNif(12);
     for(auto layer:{11,12,15,16})assert(!Fo3HavokLayerBlocksPlayerQ714(layer));

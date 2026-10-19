@@ -189,6 +189,7 @@ std::vector<uint32_t> gInteractionLargeTriangles;
 std::unordered_set<uint32_t> gCollectedCollisionRefs;
 std::unordered_map<uint32_t,Fo3DoorCollisionPose> gDoorCollisionPoses;
 uint32_t gQ225DynamicSerial = 1u;
+uint64_t gQ226GroundIndexRevision = 0u;
 
 int Q225CellCoord(float value) {
     return static_cast<int>(std::floor(value / Q225_DYNAMIC_GRID_CELL));
@@ -228,6 +229,7 @@ void Q225RebuildDynamicGrid() {
     Q225BuildDynamicGrid(gWorldTriangles, gQ225DynamicGrid,
                          gInteractionLargeTriangles, gQ225DynamicStamp);
     gQ225DynamicSerial = 1u;
+    gQ226GroundIndexRevision = gCollisionPublicationRevision;
     Q6H_LOGI("Q22.5 DYNAMIC GRID: triangles=%zu cells=%zu cellSize=%.2fm",
              gWorldTriangles.size(), gQ225DynamicGrid.size(), Q225_DYNAMIC_GRID_CELL);
 }
@@ -475,30 +477,56 @@ bool FindStepGroundQ713(float x, float z, float feetY, float& groundY) {
     return found;
 }
 
+// Q22.6: Spatially index NPC standing-height queries without changing which
+// authored Havok/LAND surface wins. Neighbouring cells cover the 0.02m bound
+// tolerance and boundary points; large triangles are independently indexed.
 bool FindGroundWide(float x, float z, float referenceY, float& groundY) {
     bool found = false;
     float bestDistance = std::numeric_limits<float>::max();
     float bestY = referenceY;
-    for (const CollisionTriangle& tri : gWorldTriangles) {
-        if (std::fabs(tri.normal.y) < WalkableNormalThresholdQ714(tri)) continue;
+    size_t bestIndex = std::numeric_limits<size_t>::max();
+    auto consider = [&](size_t index) {
+        if (index >= gWorldTriangles.size()) return;
+        const CollisionTriangle& tri = gWorldTriangles[index];
+        if (std::fabs(tri.normal.y) < WalkableNormalThresholdQ714(tri)) return;
         if (x < tri.minX - 0.02f || x > tri.maxX + 0.02f ||
-            z < tri.minZ - 0.02f || z > tri.maxZ + 0.02f) continue;
-
+            z < tri.minZ - 0.02f || z > tri.maxZ + 0.02f) return;
         float u = 0.0f, v = 0.0f, w = 0.0f;
-        if (!BarycentricXZ(tri, x, z, u, v, w)) continue;
+        if (!BarycentricXZ(tri, x, z, u, v, w)) return;
         const float y = tri.a.y*u + tri.b.y*v + tri.c.y*w;
         const float distance = std::fabs(y - referenceY);
-        if (distance > SAFE_SPAWN_VERTICAL_SEARCH) continue;
-        if (!found || distance < bestDistance) {
+        if (distance > SAFE_SPAWN_VERTICAL_SEARCH) return;
+        // The former full-array scan broke ties by original triangle order.
+        if (!found || distance < bestDistance ||
+            (distance == bestDistance && index < bestIndex)) {
             bestDistance = distance;
             bestY = y;
+            bestIndex = index;
             found = true;
         }
+    };
+    const bool indexed = std::isfinite(x) && std::isfinite(z) &&
+        gQ226GroundIndexRevision == gCollisionPublicationRevision &&
+        gQ225DynamicStamp.size() == gWorldTriangles.size() &&
+        (!gQ225DynamicGrid.empty() || !gInteractionLargeTriangles.empty());
+    if (indexed) {
+        const int cx = Q225CellCoord(x), cz = Q225CellCoord(z);
+        for (int dx = -1; dx <= 1; ++dx)
+            for (int dz = -1; dz <= 1; ++dz) {
+                const auto bucket=gQ225DynamicGrid.find(Q225CellKey(cx+dx,cz+dz));
+                if (bucket == gQ225DynamicGrid.end()) continue;
+                for (uint32_t index:bucket->second) consider(index);
+            }
+        for (uint32_t index:gInteractionLargeTriangles) consider(index);
+    } else {
+        // Safe original algorithm when the spatial index is absent/stale
+        // during authored collision publication or a scene transition.
+        for (size_t index=0;index<gWorldTriangles.size();++index)
+            consider(index);
     }
     if (found) groundY = bestY;
     return found;
 }
-
 bool FindAuthoredSpawnGroundQ78B(float x, float z, float referenceY, float& groundY) {
     bool found = false;
     float highest = -1e30f;
@@ -2642,6 +2670,8 @@ void ShutdownFo3CollisionOverlay() {
     gSurfaceSourcesQ722.clear();
     gQ225DynamicGrid.clear();
     gQ225DynamicStamp.clear();
+    gInteractionLargeTriangles.clear();
+    gQ226GroundIndexRevision = 0u;
     gPlayerCollisionReady = false;
     gSafeSpawnResolved = false;
     gExteriorAllBhksQ78A = false;

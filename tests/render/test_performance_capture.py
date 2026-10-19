@@ -44,6 +44,18 @@ class CaptureTests(unittest.TestCase):
         self.assertEqual(float(rows[0]['workUs']), 1000)
         self.assertEqual(float(rows[-1]['workUs']), 5095)
 
+    def test_v226_npc_movement_and_arrival_attribution(self):
+        header=(ROOT/'app/src/main/cpp/rendering/performance-capture.h').read_text()
+        packages=(ROOT/'app/src/main/cpp/npc/fo3-npc-package-runtime.inc').read_text()
+        core=(ROOT/'app/src/main/cpp/core/fo3-runtime.cpp').read_text()
+        for field in ('npcGroundUs','npcPortalUs','npcObstructionUs',
+                      'npcCrowdUs','npcArrivalPartUs'):
+            self.assertIn('"'+field+'"',header)
+        for scope in ('NpcGround','NpcPortal','NpcObstruction','NpcCrowd'):
+            self.assertIn('FQ_PERF_SCOPE('+scope+')',packages)
+        self.assertIn('FQ_PERF_SCOPE(NpcArrivalPart)',core)
+        self.assertIn('Q226 NPC ARRIVAL PART SLOW',core)
+
     def test_world_order_and_actor_bounds_do_not_copy_or_sort_each_frame(self):
         core = (ROOT/'app/src/main/cpp/core/fo3-runtime.cpp').read_text()
         order = core.split('void Q2017PrepareOpaqueOrder()', 1)[1].split('gOpaqueOrderFrame =', 1)[0]
