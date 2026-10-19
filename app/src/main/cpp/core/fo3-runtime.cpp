@@ -7224,6 +7224,9 @@ struct Q2017FrameBatches {
 };
 Q2017FrameBatches gMainBatches, gMirrorBatches;
 std::vector<const GpuObject*> gOpaqueFrameOrder;
+// Stable publication-ordered draw lists. Built with the opaque order so the
+// stereo eyes and planar reflection do not re-scan all resident placements.
+std::vector<const GpuObject*> gAlphaFrameOrder, gEnvironmentFrameOrder;
 uint64_t gOpaqueOrderFrame = ~uint64_t{0};
 const GpuObject* gOpaqueOrderStorage = nullptr;
 size_t gOpaqueOrderCount = 0;
@@ -7238,7 +7241,16 @@ void Q2017PrepareOpaqueOrder() {
     gOpaqueOrderCount = gObjects.size();
     gOpaqueOrderVisualRevision = gFo3VisualPublication.Revision();
     gOpaqueFrameOrder.clear(); gOpaqueFrameOrder.reserve(gObjects.size());
-    for (const auto& object : gObjects) if (!object.alphaBlend) gOpaqueFrameOrder.push_back(&object);
+    gAlphaFrameOrder.clear(); gAlphaFrameOrder.reserve(gObjects.size());
+    gEnvironmentFrameOrder.clear(); gEnvironmentFrameOrder.reserve(gObjects.size());
+    for (const auto& object : gObjects) {
+        if (object.alphaBlend) gAlphaFrameOrder.push_back(&object);
+        else gOpaqueFrameOrder.push_back(&object);
+        // Retain gObjects publication order for transparency and additive
+        // passes. These authored material flags change with visual publication.
+        if (object.environmentEnabledQ2050 && object.zBufferWriteQ1200)
+            gEnvironmentFrameOrder.push_back(&object);
+    }
     std::sort(gOpaqueFrameOrder.begin(), gOpaqueFrameOrder.end(),
         [](const GpuObject* a, const GpuObject* b) { return a->q2016BatchKey < b->q2016BatchKey; });
 }
@@ -9334,8 +9346,9 @@ bool Q2090RenderWaterReflection(const float mainMvp[16],
         std::chrono::steady_clock::now();
     glEnable(GL_BLEND);
     Q1990RenderNativeLod(true);
-    for (const GpuObject& object : gObjects) {
-        if (!object.alphaBlend || !Q2017ReflectionUseful(object) || !Q2015AabbVisible(object)) continue;
+    for (const GpuObject* alpha : gAlphaFrameOrder) {
+        const GpuObject& object = *alpha;
+        if (!Q2017ReflectionUseful(object) || !Q2015AabbVisible(object)) continue;
         if (object.zBufferTestQ1200) glEnable(GL_DEPTH_TEST); else glDisable(GL_DEPTH_TEST);
         glDepthMask(object.zBufferWriteQ1200 ? GL_TRUE : GL_FALSE);
         glBlendFunc(Q1150BlendFactor(object.alphaSourceBlend, true),
@@ -13028,8 +13041,8 @@ void RenderScene(const float* mvp) {
     Q1990RenderNativeLod(true);
     Q230RenderNpcActors(true);
     Q210RenderPlayerBody(true);
-    for (const GpuObject& object : gObjects) {
-        if (!object.alphaBlend) continue;
+    for (const GpuObject* alpha : gAlphaFrameOrder) {
+        const GpuObject& object = *alpha;
         if (object.zBufferTestQ1200) glEnable(GL_DEPTH_TEST); else glDisable(GL_DEPTH_TEST);
         glDepthMask(object.zBufferWriteQ1200 ? GL_TRUE : GL_FALSE);
         glBlendFunc(Q1150BlendFactor(object.alphaSourceBlend, true),
@@ -13052,8 +13065,8 @@ void RenderScene(const float* mvp) {
     glEnable(GL_BLEND);
     glBlendFunc(GL_ONE, GL_ONE);
     if (gEnvironmentPassEnabledQ205A) {
-        for (const GpuObject& object : gObjects) {
-            if (!object.environmentEnabledQ2050 || !object.zBufferWriteQ1200) continue;
+        for (const GpuObject* reflective : gEnvironmentFrameOrder) {
+            const GpuObject& object = *reflective;
             DrawSceneObject(object, true);
             ++q2050EnvironmentDraws;
         }

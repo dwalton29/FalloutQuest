@@ -107,6 +107,15 @@ GLint q2090TerrainReflectionClipEnabledLocation = -1;
 GLint q2090TerrainReflectionPlaneYLocation = -1;
 bool q2090TerrainReflectionClipEnabled = false;
 float q2090TerrainReflectionPlaneY = 0.0f;
+// LAND's vertex shader passes aPosition directly to vPosition, and the
+// original reflection fragment clip discards positions below the plane.
+// An entire batch strictly below that plane therefore contributes no pixel.
+// This is deliberately NOT frustum culling (the Q20.18 rollback stays intact).
+bool Q228EntireTerrainBatchBelowReflectionPlane(const Q711TerrainBatch& batch) {
+    return q2090TerrainReflectionClipEnabled &&
+           std::isfinite(batch.maxY) && std::isfinite(q2090TerrainReflectionPlaneY) &&
+           batch.maxY < q2090TerrainReflectionPlaneY - 0.001f;
+}
 GLuint q1050TerrainShadowTexture = 0;
 float q1050TerrainLightMvp[16]{};
 bool q1050TerrainShadowEnabled = false;
@@ -1231,6 +1240,7 @@ void RenderFo3TerrainQ76(const float* mvp) {
         Q2018BuildTerrainFrustum(mvp);
     size_t q2018BaseTested = 0u;
     size_t q2018BaseDrawn = 0u;
+    size_t q228MirrorUnderwaterSkipped = 0u;
     size_t q2018AlphaTested = 0u;
     size_t q2018AlphaDrawn = 0u;
 
@@ -1387,6 +1397,10 @@ void RenderFo3TerrainQ76(const float* mvp) {
     for (const Q711TerrainBatch& batch : q711TerrainBatches) {
         if (batch.alphaLayer || !batch.vao || batch.vertexCount <= 0) continue;
         ++q2018BaseTested;
+        if (Q228EntireTerrainBatchBelowReflectionPlane(batch)) {
+            ++q228MirrorUnderwaterSkipped;
+            continue;
+        }
         // Q20.19 correctness rollback: Q20.18's clip-space AABB extraction
         // rejected entire authored LAND windows on valid main-eye views.
         // Preserve the telemetry but draw every authored base batch until
@@ -1414,6 +1428,10 @@ void RenderFo3TerrainQ76(const float* mvp) {
     for (const Q711TerrainBatch& batch : q711TerrainBatches) {
         if (!batch.alphaLayer || !batch.realTexture || !batch.vao || batch.vertexCount <= 0) continue;
         ++q2018AlphaTested;
+        if (Q228EntireTerrainBatchBelowReflectionPlane(batch)) {
+            ++q228MirrorUnderwaterSkipped;
+            continue;
+        }
         // Same Q20.19 correctness rollback for painted ATXT/VTXT layers.
         ++q2018AlphaDrawn;
         glUniform1i(q76bUseTextureLocation, 1);
@@ -1452,14 +1470,15 @@ void RenderFo3TerrainQ76(const float* mvp) {
     ++q2018TerrainPasses;
     if ((q2018TerrainPasses % 240u) == 1u ||
         q2018TerrainUs >= 12000u) {
-        Q76B_LOGI("Q20.19 TERRAIN SAFE: renderUs=%llu baseTested=%zu baseDrawn=%zu baseRejected=%zu alphaTested=%zu alphaDrawn=%zu alphaRejected=%zu totalBatches=%zu reflection=%d culling=OFF-q20.18-rollback",
+        Q76B_LOGI("Q20.19 TERRAIN SAFE: renderUs=%llu baseTested=%zu baseDrawn=%zu baseRejected=%zu alphaTested=%zu alphaDrawn=%zu alphaRejected=%zu totalBatches=%zu reflection=%d mirrorUnderwaterSkipped=%zu culling=OFF-q20.18-rollback",
                   static_cast<unsigned long long>(q2018TerrainUs),
                   q2018BaseTested, q2018BaseDrawn,
                   q2018BaseTested - q2018BaseDrawn,
                   q2018AlphaTested, q2018AlphaDrawn,
                   q2018AlphaTested - q2018AlphaDrawn,
                   q711TerrainBatches.size(),
-                  q2090TerrainReflectionClipEnabled ? 1 : 0);
+                  q2090TerrainReflectionClipEnabled ? 1 : 0,
+                  q228MirrorUnderwaterSkipped);
     }
 
     if (!q76bLoggedVisible) {
