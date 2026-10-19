@@ -1,4 +1,5 @@
 #include <type_traits>
+#include "fo3-script-compile-cache.h"
 
 namespace fo3player {
 Player::Player(const Player& source,ScriptCandidateTag)
@@ -7,7 +8,10 @@ Player::Player(const Player& source,ScriptCandidateTag)
       scriptActivator_(source.scriptActivator_),scriptReference_(source.scriptReference_),
       scriptPlayerCell_(source.scriptPlayerCell_),scriptPlayerWorld_(source.scriptPlayerWorld_),
       scriptPlayerPosition_(source.scriptPlayerPosition_),scriptPlayerPositionKnown_(source.scriptPlayerPositionKnown_),
-      scriptEffectRevision_(source.scriptEffectRevision_),scriptButtons_(source.scriptButtons_),
+      scriptEffectRevision_(source.scriptEffectRevision_),
+      scriptCompileCache_(source.scriptCompileCache_?source.scriptCompileCache_:
+        (source.scriptCompileCache_=std::make_shared<fo3script::CompileCache>(source.catalog_->pipboy))),
+      scriptButtons_(source.scriptButtons_),
       pendingScriptMessages_(source.pendingScriptMessages_),pendingQuestNotices_(source.pendingQuestNotices_),
       pendingExperienceNotices_(source.pendingExperienceNotices_),pendingScriptItems_(source.pendingScriptItems_),
       pendingScriptSounds_(source.pendingScriptSounds_),pendingBarters_(source.pendingBarters_),pendingKarmaEvents_(source.pendingKarmaEvents_),

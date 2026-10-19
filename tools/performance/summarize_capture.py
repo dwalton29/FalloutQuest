@@ -27,6 +27,15 @@ def stats(values):
                 over90=100 * sum(v > 1e6 / 90 for v in values) / len(values))
 
 
+def cadence_values(rows, predicate):
+    # Cadence on row N spans starts N-1 -> N. Exclude phase/focus boundaries:
+    # the first gameplay row can otherwise inherit a many-second loading gap.
+    return [float(current['cadenceUs']) for previous, current in zip(rows, rows[1:])
+            if predicate(previous) and predicate(current)
+            and int(current['serial']) == int(previous['serial']) + 1
+            and float(current['cadenceUs']) > 0]
+
+
 def report(path):
     with path.open() as f:
         rows = list(csv.DictReader(line for line in f if not line.startswith('#')))
@@ -50,12 +59,17 @@ def report(path):
             print(f'{group}: no samples')
             continue
         print(f'\n{group}: {len(selected)} frames; mean residents={statistics.mean(int(r["residents"]) for r in selected):.1f}')
+        pairs = sum(valid_gpu_us(float(r['gpuEyesUs'])) for r in selected)
+        print(f'GPU eye pairs: {pairs} valid, {len(selected)-pairs} unavailable/invalid; '
+              'cadence uses adjacent frames within this group')
         print('metric,n,mean_ms,median_ms,p95_ms,p99_ms,max_ms,over72_percent,over90_percent')
         for key in rows[0]:
             if not key.endswith('Us') or key == 'periodUs':
                 continue
             # -1 is absent/disjoint/pending. Zero cadence is the initial frame.
-            vals = [float(r[key]) for r in selected if float(r[key]) >= 0 and (not key.startswith('gpu') or valid_gpu_us(float(r[key]))) and (key != 'cadenceUs' or float(r[key]) > 0)]
+            vals = cadence_values(rows, predicate) if key == 'cadenceUs' else [
+                float(r[key]) for r in selected if float(r[key]) >= 0
+                and (not key.startswith('gpu') or valid_gpu_us(float(r[key])))]
             if vals:
                 v = stats(vals)
                 print(f'{key},{v["n"]},' + ','.join(f'{v[k]/1000:.3f}' for k in ('mean', 'median', 'p95', 'p99', 'maximum')) + f',{v["over72"]:.2f},{v["over90"]:.2f}')
@@ -63,7 +77,10 @@ def report(path):
             print(f'{key}: mean={statistics.mean(int(r[key]) for r in selected):.1f} max={max(int(r[key]) for r in selected)}')
         # This is an application cadence estimate, not a runtime/compositor counter.
         missed = sum(max(0, round(float(r['cadenceUs']) / float(r['periodUs'])) - 1)
-                     for r in selected if float(r['periodUs']) > 0 and float(r['cadenceUs']) > 0)
+                     for previous, r in zip(rows, rows[1:])
+                     if predicate(previous) and predicate(r)
+                     and int(r['serial']) == int(previous['serial']) + 1
+                     and float(r['periodUs']) > 0 and float(r['cadenceUs']) > 0)
         print(f'estimated missed display intervals={missed}; compositor/reprojection counts unavailable')
 
 

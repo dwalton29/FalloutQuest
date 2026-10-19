@@ -25,6 +25,14 @@ class CaptureTests(unittest.TestCase):
         self.assertFalse(summary.valid_gpu_us(float('nan')))
         self.assertTrue(summary.valid_gpu_us(13888.888))
 
+    def test_cadence_excludes_loading_focus_and_capture_boundaries(self):
+        rows = [dict(serial=str(i), loading=loading, cadenceUs=str(us))
+                for i, loading, us in [(1, '1', 0), (2, '1', 14000),
+                                      (3, '0', 22000000), (4, '0', 30000),
+                                      (6, '0', 900000), (7, '0', 40000)]]
+        self.assertEqual(summary.cadence_values(rows, lambda r: r['loading']=='0'),
+                         [30000, 40000])
+
     def test_csv_written_by_production_header(self):
         with open('/tmp/fq-perf-test.csv') as f:
             reader = csv.DictReader(line for line in f if not line.startswith('#'))

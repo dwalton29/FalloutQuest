@@ -777,8 +777,15 @@ static void OriginalProvenance(const char* path){
   auto fuse=fusePlayer.PrepareReferenceEventTransaction(fuseBoxRef,"OnActivate",
       fo3player::PlayerRef,error,capture);
   if(!fuse)std::cerr<<"Original MQ05 fuse-box preparation: "<<error<<'\n';
+  // FuseToggle has eight original XESP children. The complete enable graph
+  // projects their visibility as well as the root; a single-root expectation
+  // predates that integration. Recover the expected dependants from the ESM.
+  std::vector<uint32_t> fuseAffected{fuseToggleRef};
+  for(const auto& parent:fusePlayer.Definitions().enableParents)
+    if(parent.second.reference==fuseToggleRef)fuseAffected.push_back(parent.first);
+  std::sort(fuseAffected.begin(),fuseAffected.end());assert(fuseAffected.size()==9);
   assert(fuse&&fuse->HasReferenceChanges()&&fuse->HasProgramProvenance()&&
-      fuse->AffectedReferences()==std::vector<uint32_t>{fuseToggleRef});
+      fuse->AffectedReferences()==fuseAffected);
   assert(fuse->CandidateState()&&
       fuse->CandidateState()->referenceEnabled.at(fuseToggleRef));
   assert(fusePlayer.Revision()==beforeFuse&&fusePlayer.ItemCount(fuseItem->second)==10);

@@ -165,16 +165,20 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
     const auto quest=catalog_->pipboy.quests.find(owner);
     if(quest!=catalog_->pipboy.quests.end())scriptId=quest->second.script;
   }
-  std::vector<fo3dialogue::Command> commands;
   fo3dialogue::CommandFormCapture forms;
   if(scriptTrace_){
     if(scriptTraceBytes_>fo3script::ScriptEvidenceMaxBytes){error="script provenance byte limit exceeded";return false;}
     forms.limit=fo3script::ScriptEvidenceMaxBytes-scriptTraceBytes_;
   }
-  if(!fo3dialogue::CompileResult(catalog_->pipboy,script,commands,error,owner,scriptId,scriptTrace_?&forms:nullptr)){
+  if(!scriptCompileCache_)scriptCompileCache_=std::make_shared<fo3script::CompileCache>(catalog_->pipboy);
+  const auto compiled=scriptCompileCache_->Get(script,owner,scriptId,bool(scriptTrace_),forms.limit);
+  forms=compiled->forms;
+  error=compiled->error;
+  if(!compiled->valid){
     if(forms.exhausted)error="script provenance byte limit exceeded";
     return false;
   }
+  const auto& commands=compiled->commands;
   using C=fo3dialogue::CommandType;
   if(scriptTrace_)for(const auto& command:commands)if(command.type==C::Global){
     const auto global=catalog_->globals.find(command.form);
@@ -602,6 +606,27 @@ bool Player::PollScriptSound(uint32_t& out){
   if(pendingScriptSounds_.empty())return false;
   out=pendingScriptSounds_.front();pendingScriptSounds_.erase(pendingScriptSounds_.begin());++scriptEffectRevision_;return true;
 }
+bool Player::SourceEventCompileReady(uint32_t script,const char* event,uint32_t owner,
+    uint32_t activator,std::string& error) const {
+  const auto found=catalog_->eventPrograms.find(script);
+  if(found==catalog_->eventPrograms.end()){error="script definition unavailable";return false;}
+  const auto& program=found->second;
+  if(!program.error.empty()){error=program.error;return false;}
+  if(program.compiledOnly){error="compiled-only event not supported";return false;}
+  // Only the first matching block can be checked ahead of execution. A later
+  // block must retain the earlier block's dynamic errors and effect ordering.
+  for(const auto& block:program.blocks)if(block.event==fo3script::Lower(event)){
+    if(!fo3script::EventFilterMatches(block.filter,activator,PlayerRef)){
+      error="unresolved event filter '"+block.filter+"' at line "+std::to_string(block.sourceLine);return false;
+    }
+    if(!scriptCompileCache_)scriptCompileCache_=std::make_shared<fo3script::CompileCache>(catalog_->pipboy);
+    fo3pipdata::ResultScript body;body.source=block.body;
+    const auto compiled=scriptCompileCache_->Get(body,owner,script,false);
+    if(!compiled->valid){error="line "+std::to_string(block.sourceLine)+": "+compiled->error;return false;}
+    break;
+  }
+  return true;
+}
 bool Player::PumpWorldAwareGameMode(double seconds,const std::vector<uint32_t>& resident,
     const std::function<bool(std::unique_ptr<ScriptTransactionPlan>)>& reserveWorld) {
   if(!std::isfinite(seconds)||seconds<=0||seconds>1||!reserveWorld)return false;
@@ -612,6 +637,13 @@ bool Player::PumpWorldAwareGameMode(double seconds,const std::vector<uint32_t>& 
   questScriptAccumulator_-=.25;
   auto run=[&](uint32_t script,const char* event,uint32_t owner,bool reference)->bool {
     std::string error;
+    // The ordinary compiler rejects the same immutable unsupported body every
+    // tick. Do that before copying the full mutable player state. No runtime
+    // expression outcome or successful execution is cached or skipped.
+    if(!SourceEventCompileReady(script,event,owner,0,error)){
+      if(reference&&scriptButtons_.erase(owner))++scriptEffectRevision_;
+      LogScriptEventError(script,event,error);return false;
+    }
     // Capture the *same* original event that would be committed. An
     // uncommitted candidate has no world, inventory or effect side effects.
     auto plan=PrepareScriptTransaction([=](Player& candidate,std::string& e){

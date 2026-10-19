@@ -15,6 +15,7 @@
 #include <utility>
 #include <vector>
 
+namespace fo3script {class CompileCache;}
 namespace fo3player {
 constexpr uint32_t PlayerBase = 0x7u;
 constexpr uint32_t PlayerRef = 0x14u;
@@ -607,6 +608,7 @@ private:
   bool RestockMerchant(uint32_t actor,uint32_t chest);
   bool MigrateWeaponInstances(State &state) const;
   bool RunScript(const fo3pipdata::ResultScript&,uint32_t owner,unsigned depth,unsigned& budget,std::string&,uint32_t scriptId=0,ScriptProgramOrigin origin={});
+  bool SourceEventCompileReady(uint32_t,const char*,uint32_t,uint32_t,std::string&) const;
   bool RunQuestStage(uint32_t,uint16_t,unsigned depth,unsigned& budget,std::string&);
   bool EnsureQuestInstance(uint32_t);
   std::shared_ptr<const Catalog> catalog_;
@@ -621,6 +623,7 @@ private:
   std::vector<ScriptExecution>* scriptTrace_=nullptr; // Private preparation only; never published/swapped.
   uint32_t scriptTraceParent_=ScriptExecution::NoParent;
   size_t scriptTraceBytes_=0;
+  mutable std::shared_ptr<fo3script::CompileCache> scriptCompileCache_;
   std::unordered_map<uint32_t,int> scriptButtons_;
   std::vector<ScriptMessage> pendingScriptMessages_;
   std::vector<QuestNotice> pendingQuestNotices_;

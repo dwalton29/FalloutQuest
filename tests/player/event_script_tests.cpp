@@ -6,9 +6,11 @@
 #include <fstream>
 #include <map>
 #include <iterator>
+#include <chrono>
 #include <unistd.h>
 #include <zlib.h>
 #include "dialogue/fo3-dialogue-results.h"
+#include "scripting/fo3-script-compile-cache.h"
 
 static void Parsing() {
   fo3pipdata::Script source;
@@ -457,7 +459,10 @@ static void OriginalBomb(const char* path) {
   assert(rig.PollScriptMessage(message)&&message.form==0x78cb2);
   assert(rig.SubmitScriptMessageButton(0x14bc8,2));
   assert(rig.DispatchReferenceEvent(0x14bc8,"GameMode",0,error)==fo3player::ScriptEventResult::Unsupported);
-  assert(error.find(".enable")!=std::string::npos);
+  // The authored stage 40 body reaches Burke's MoveToMarker first. The v224
+  // baseline already rejects it before the later Enable command; neither
+  // failure may publish the earlier inventory/quest/effect changes.
+  assert(error.find("misterburkeref.movetomarker")!=std::string::npos);
   assert(rig.ItemCount(charge)==1&&rig.Snapshot().pipboy.quests.at(0x14e9e).stage==10);
   assert(!rig.PollScriptMessage(message)&&!rig.PollQuestNotice(notice));
   std::cout<<"Original ESM bomb activation, cancel, disarm, Karma, notices and persistence passed\n";
@@ -465,6 +470,7 @@ static void OriginalBomb(const char* path) {
 // Compile original event bodies without claiming execution compatibility.
 static void OriginalCompileInventory(const char* path,const char* report) {
   fo3player::Catalog c;std::string error;assert(fo3player::LoadCatalog(path,c,error));
+  fo3script::CompileCache cache(c.pipboy);size_t cacheChecks=0;
   size_t parsed=0,blocks=0,accepted=0;std::map<std::string,size_t> failures;
   for(const auto& entry:c.pipboy.scripts){
     auto program=fo3script::ParseEvents(entry.second);
@@ -473,6 +479,23 @@ static void OriginalCompileInventory(const char* path,const char* report) {
     for(const auto& block:program.blocks){
       ++blocks;fo3pipdata::ResultScript result;result.source=block.body;
       std::vector<fo3dialogue::Command> commands;
+      for(const bool capture:{false,true}){
+        fo3dialogue::CommandFormCapture forms;forms.limit=1024*1024;
+        std::vector<fo3dialogue::Command> baseline;std::string baselineError;
+        const bool valid=fo3dialogue::CompileResult(c.pipboy,result,baseline,baselineError,
+            entry.first,entry.first,capture?&forms:nullptr);
+        const auto cached=cache.Get(result,entry.first,entry.first,capture,capture?forms.limit:0);
+        assert(cached->valid==valid&&cached->error==baselineError&&cached->commands.size()==baseline.size());
+        for(size_t i=0;i<baseline.size();++i){const auto& a=baseline[i];const auto& b=cached->commands[i];
+          assert(a.type==b.type&&a.form==b.form&&a.index==b.index&&a.variable==b.variable&&
+              a.value==b.value&&a.expression==b.expression);
+        }
+        assert(cached->forms.bindings==forms.bindings&&cached->forms.variables==forms.variables&&
+            cached->forms.locals==forms.locals&&cached->forms.globals==forms.globals&&
+            cached->forms.used==forms.used&&cached->forms.exhausted==forms.exhausted);
+        assert(cache.Get(result,entry.first,entry.first,capture,capture?forms.limit:0)==cached);
+        ++cacheChecks;
+      }
       if(fo3dialogue::CompileResult(c.pipboy,result,commands,error,entry.first,entry.first))++accepted;
       else {
         const auto colon=error.find(":");
@@ -495,8 +518,61 @@ static void OriginalCompileInventory(const char* path,const char* report) {
   out<<"\n  }\n}\n";out.close();assert(out);
   std::cout<<"SCPT corpus: "<<parsed<<" parsed programs, "<<accepted<<"/"<<blocks
            <<" command-compiled blocks; this is not execution coverage\n";
+  std::cout<<"Original cache parity: "<<cacheChecks<<" captured/plain compiler outcomes and bindings match\n";
+  fo3player::Player player(std::move(c));player.RegisterOriginalActors();
+  player.SetScriptPlayerLocation(0,0,0,0xa96,0xa74);
+  const auto started=std::chrono::steady_clock::now();
+  for(unsigned i=0;i<32;++i)player.PumpWorldAwareGameMode(.25,{},[](auto){return false;});
+  std::cout<<"Original GameMode: 32 ticks, "<<player.Snapshot().actors.size()<<" tracked actors, "
+      <<std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-started).count()<<" host ms\n";
+}
+static void CompiledProgramsRemainLive() {
+  auto c=Catalog();fo3script::CompileCache cache(c.pipboy);
+  fo3pipdata::ResultScript body;body.source="SetStage ExampleQuest 10";
+  const auto first=cache.Get(body,20,101,true,4096);
+  assert(first->valid&&first->forms.bindings.size()==1);
+  assert(cache.Get(body,20,101,true,4096)==first&&cache.hits==1);
+  // Capture budgets, source text, implicit owner and local-script identity
+  // are inputs, not interchangeable cache entries.
+  assert(!cache.Get(body,20,101,true,0)->valid);
+  body.source="Enable";
+  assert(cache.Get(body,100,102,false)->commands[0].form==100);
+  assert(cache.Get(body,200,102,false)->commands[0].form==200);
+  const auto misses=cache.misses;cache.Get(body,200,103,false);assert(cache.misses==misses+1);
+  body.source="UnsupportedOriginalCommand";
+  const auto rejected=cache.Get(body,100,102,false);assert(!rejected->valid);
+  assert(cache.Get(body,100,102,false)==rejected);
+  body.source.clear();body.compiled={1};assert(!cache.Get(body,0,0,false)->valid);
+  body.compiled.clear();assert(cache.Get(body,0,0,false)->valid);
+  for(unsigned i=0;i<600;++i){
+    body.source="RewardKarma 1 ; "+std::to_string(i);cache.Get(body,i,0,false);
+    assert(cache.Size()<=cache.MaxEntries&&cache.retainedBytes<=cache.MaxBytes);
+  }
+  assert(first->valid&&first->forms.bindings[0].first==20); // Held across eviction.
+  auto other=c.pipboy;other.formNames["examplequest"]=21;
+  fo3script::CompileCache separate(other);body.source="SetStage ExampleQuest 10";
+  assert(separate.Get(body,20,101,true,4096)->commands[0].form==21);
+
+  c.pipboy.quests[20].flags|=1u;
+  c.items[400].formId=400;c.pipboy.formNames["existingitem"]=400;
+  c.pipboy.scripts[101].source="Begin GameMode\nif GetStage ExampleQuest == 10\nRewardKarma 4\nendif\nEnd";
+  c.eventPrograms[101]=fo3script::ParseEvents(c.pipboy.scripts[101]);
+  fo3player::Player p(std::move(c));auto rejectWorld=[](auto){return false;};
+  p.PumpWorldAwareGameMode(.25,{},rejectWorld);assert(p.Snapshot().karma==0);
+  std::string error;assert(p.ExecuteQuestStage(20,10,error));
+  p.PumpWorldAwareGameMode(.25,{},rejectWorld);assert(p.Snapshot().karma==4);
+  p.PumpWorldAwareGameMode(.25,{},rejectWorld);assert(p.Snapshot().karma==8);
+  // A later runtime failure still discards earlier commands on every attempt.
+  fo3pipdata::ResultScript fail;fail.source="RewardKarma 7\nPlayer.RemoveItem ExistingItem 1";
+  const auto revision=p.Revision();assert(!p.ExecuteDialogueResult(fail,error));
+  assert(!p.ExecuteDialogueResult(fail,error));
+  assert(p.Snapshot().karma==8&&p.Revision()==revision);
+  assert(p.Add(400,1));assert(p.ExecuteDialogueResult(fail,error));
+  assert(p.Snapshot().karma==15&&p.ItemCount(400)==0);
+  std::cout<<"Bounded compiled programs preserve live conditions, catalogue identity, evidence limits and atomic failure\n";
 }
 int main(int argc,char** argv){
+  CompiledProgramsRemainLive();
   Parsing();EnableParentQueries();PersistentReferenceState();Dispatch();UnsupportedIsAtomic();Filter();NumericLocalsAndRefSafety();BombMenuAndInventory();WorldAwareGameMode();DisarmStagePersistence();NoticeTransactions();
   if(argc>1)OriginalBomb(argv[1]);
   if(argc>2)OriginalCompileInventory(argv[1],argv[2]);

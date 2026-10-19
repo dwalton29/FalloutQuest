@@ -56,7 +56,7 @@ struct Session {
     }
     bool Write(const char* path) const {
         FILE* f=std::fopen(path,"w");if(!f)return false;
-        std::fprintf(f,"# v224 session=%llu gpuEyesUs=delayed-both-eyes-excludes-preparation missing=-1 parent-scopes-include-children compositor-drops=unavailable %s\n",(unsigned long long)id,configuration);
+        std::fprintf(f,"# v225 session=%llu gpuEyesUs=delayed-both-eyes-excludes-preparation missing=-1 parent-scopes-include-children compositor-drops=unavailable %s\n",(unsigned long long)id,configuration);
         std::fprintf(f,"serial,loading,blocked,rendered,submitted,streaming,cell,world,periodUs,residents,visible,animated,combat,parts,rigParts,paths,expanded,paletteBytes,vertices,draws,states,uniforms,textures,npcDraws,paletteSkipped,gpuEyesUs,gpuEye0Us,gpuEye1Us");
         for(auto name:names)std::fprintf(f,",%s",name);
         std::fputc('\n',f);
