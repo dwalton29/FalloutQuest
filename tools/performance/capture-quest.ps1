@@ -4,9 +4,16 @@ param(
     [switch]$AllowDebug
 )
 $ErrorActionPreference = "Stop"
+$adbCandidates = @((Join-Path $PSScriptRoot "adb.exe"), (Join-Path (Get-Location).Path "adb.exe"))
+$script:AdbPath = $adbCandidates | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
+if (!$script:AdbPath) {
+    $adbCommand = Get-Command adb -ErrorAction SilentlyContinue
+    if (!$adbCommand) { throw "Cannot find adb.exe. Put this script in your platform-tools folder or add platform-tools to PATH." }
+    $script:AdbPath = $adbCommand.Source
+}
 function Invoke-Adb {
     param([string[]]$Arguments)
-    $result = & adb @Arguments 2>&1
+    $result = & $script:AdbPath @Arguments 2>&1
     if ($LASTEXITCODE -ne 0) { throw "adb failed: $($result -join ' ')" }
     return $result
 }
@@ -14,11 +21,11 @@ function Invoke-Adb {
 $null = Invoke-Adb -Arguments @("get-state")
 $package = Invoke-Adb -Arguments @("shell", "dumpsys", "package", "com.falloutquest.app")
 $packageText = $package -join "`n"
-if ($packageText -notmatch 'versionName=0\.91\.0-gpu-timestamp-pass-capture') {
-    throw "Install v232 before capturing. The currently installed package is not v232."
+if ($packageText -notmatch 'versionName=0\.92\.0-reflection-before-hdr') {
+    throw "Install v233 before capturing. The currently installed package is not v233."
 }
-if (!$AllowDebug -and $packageText -notmatch 'versionName=0\.91\.0-gpu-timestamp-pass-capture-O2') {
-    throw "Install the v232 O2 APK, or explicitly pass -AllowDebug for an unoptimised comparison."
+if (!$AllowDebug -and $packageText -notmatch 'versionName=0\.92\.0-reflection-before-hdr-O2') {
+    throw "Install the v233 O2 APK, or explicitly pass -AllowDebug for an unoptimised comparison."
 }
 $token = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds().ToString()
 $null = Invoke-Adb -Arguments @("shell", "setprop", "debug.falloutquest.perf_capture", $token)
@@ -44,14 +51,14 @@ for ($i=0; $i -lt 10; $i++) {
 if (!$saved) { throw "No successful save for this capture. Keep the game focused; no old CSV will be downloaded." }
 $csv = (Invoke-Adb -Arguments @("exec-out", "run-as", "com.falloutquest.app", "cat", "files/performance.csv")) -join "`n"
 $header = ($csv -split "`n")[0]
-if ($header -notmatch '^# format=232\b' -or $header -notmatch "session=$token\b") {
+if ($header -notmatch '^# format=233\b' -or $header -notmatch "session=$token\b") {
     throw "Downloaded CSV is stale or from the wrong build. It has not been saved as a new capture."
 }
 if (!$AllowDebug -and $header -notmatch '\bnative=profile-O2\b') {
     throw "The native library is not the O2 profile build. Download rejected."
 }
 $null = New-Item -ItemType Directory -Force -Path $OutputDirectory
-$prefix = Join-Path $OutputDirectory "megaton-v232-$token"
+$prefix = Join-Path $OutputDirectory "megaton-v233-$token"
 $utf8 = New-Object System.Text.UTF8Encoding($false)
 [System.IO.File]::WriteAllText("$prefix.csv", $csv + "`n", $utf8)
 $log = (Invoke-Adb -Arguments @("logcat", "-d")) -join "`n"

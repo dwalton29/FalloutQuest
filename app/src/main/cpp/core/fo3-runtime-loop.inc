@@ -1506,7 +1506,7 @@ private:
 #endif
             char model[PROP_VALUE_MAX]{};__system_property_get("ro.product.model",model);
             std::snprintf(fqperf::capture.configuration,sizeof(fqperf::capture.configuration),
-                "source=%s native=%s headset=%s eye0=%dx%d eye1=%dx%d msaaAtStart=%d renderScale=%.2f cpuSkin=%d fastMaterial=%d lodRadius20=%d lodMinimal=%d lodClipBypass=%d",
+                "source=%s native=%s hdrPolicy=reflection-before-main-clear headset=%s eye0=%dx%d eye1=%dx%d msaaAtStart=%d renderScale=%.2f cpuSkin=%d fastMaterial=%d lodRadius20=%d lodMinimal=%d lodClipBypass=%d",
                 FQ_SOURCE_COMMIT,nativeVariant,model,eyes_[0].width,eyes_[0].height,eyes_[1].width,eyes_[1].height,
                 q2060MsaaActive?q2060MsaaSamples:1,fqopaque::Options().scale,fqactor::CpuReference(),
                 fqopaque::Options().fastMaterial,fqopaque::Options().lodRadius20,fqopaque::Options().lodMinimal,fqopaque::Options().lodClipBypass);
@@ -2165,7 +2165,7 @@ private:
             } else {
                 glClearColor(0.018f, 0.028f, 0.020f, 1.0f);
             }
-            glClear(GL_COLOR_BUFFER_BIT);
+            // Main colour/depth clear is deferred until after the reflection prepass.
 
             constexpr float Q1850_FO3_BLOCK_LOAD_DISTANCE_UNITS = 125000.0f;
             constexpr float Q1850_FAR_CLIP_METRES =
@@ -2190,7 +2190,6 @@ private:
             skyView.m[14] = 0.0f;
             const Mat4 skyMvp = Multiply(projection, skyView);
             SetFo3WaterSkyMvpQ2090(skyMvp.m);
-            if (!IsFo3LoadingVisible() && !gFo3Environment.interior) {fqperf::GpuScope gpuSky(fqperf::GpuSky); RenderFo3PcSky(skyMvp.m);}
             const Mat4 viewProjection = Multiply(projection, camera);
 
             glUseProgram(program_);
@@ -2379,6 +2378,7 @@ private:
         if(fqperf::capture.recording) {
             fqopaque::externalGpuScope=false;
         }
+        fqperf::EndHdrPass();
         gpuEye.Finish();
         glFlush();
 

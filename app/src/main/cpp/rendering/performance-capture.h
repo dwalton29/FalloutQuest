@@ -26,11 +26,11 @@ inline constexpr const char* names[]={"xrWaitUs","xrBeginUs","inputTrackingUs","
 static_assert(sizeof(names)/sizeof(*names)==Count);
 enum GpuPass : unsigned { GpuNative, GpuDetailed, GpuNpc, GpuPlayer,
     GpuAlpha, GpuEnvironment, GpuTerrain, GpuReflection, GpuWater,
-    GpuResolve, GpuExposure, GpuPost, GpuBloom, GpuDepthCopy, GpuSky, GpuMirrorTerrain, GpuPassCount,
+    GpuResolve, GpuExposure, GpuPost, GpuBloom, GpuDepthCopy, GpuSky, GpuMirrorTerrain, GpuHdrFirst, GpuHdrContinuation, GpuPassCount,
     GpuEyeTotal=GpuPassCount };
 inline constexpr const char* gpuPassNames[]={"native","detailed","npc","player",
     "alpha","environment","terrain","reflection","water","resolve","exposure",
-    "post","bloom","depthCopy","sky","mirrorTerrain"};
+    "post","bloom","depthCopy","sky","mirrorTerrain","hdrFirstPass","hdrContinuation"};
 static_assert(sizeof(gpuPassNames)/sizeof(*gpuPassNames)==GpuPassCount);
 struct Frame {
     uint64_t serial=0;
@@ -43,6 +43,8 @@ struct Frame {
 
     uint32_t cell=0,world=0,residents=0,visible=0,animated=0,combat=0,parts=0,rigParts=0,paths=0,expanded=0,sceneSamples=1;
     uint64_t paletteBytes=0,vertices=0,draws=0,states=0,uniforms=0,textures=0,npcDraws=0,paletteSkipped=0,submittedVertices=0;
+    uint64_t colorResolvePixels=0,depthResolvePixels=0;
+    uint32_t reflectionPasses=0,waterSnapshots=0;
     bool loading=false,blocked=false,rendered=false,submitted=false,streaming=false;
 };
 inline constexpr size_t Capacity=4096;
@@ -81,11 +83,12 @@ struct Session {
     }
     bool Write(const char* path) const {
         FILE* f=std::fopen(path,"w");if(!f)return false;
-        std::fprintf(f,"# format=232 gpuBackend=timestamp-pairs gpuSampleStride=8 gpuScopes=overlap-post-includes-bloom-reflection-includes-mirror session=%llu gpuEyesUs=delayed-both-eyes-excludes-preparation missing=-1 parent-scopes-include-children compositor-drops=unavailable %s\n",(unsigned long long)id,configuration);
+        std::fprintf(f,"# format=233 gpuBackend=timestamp-pairs gpuSampleStride=8 gpuScopes=overlap-post-includes-bloom-hdr-includes-world+water+resolves shaderAttribution=unreliable-on-tilers session=%llu gpuEyesUs=delayed-both-eyes-excludes-preparation missing=-1 parent-scopes-include-children compositor-drops=unavailable %s\n",(unsigned long long)id,configuration);
         std::fprintf(f,"serial,loading,blocked,rendered,submitted,streaming,cell,world,periodUs,residents,visible,animated,combat,parts,rigParts,paths,expanded,paletteBytes,vertices,draws,states,uniforms,textures,npcDraws,paletteSkipped,gpuEyesUs,gpuEye0Us,gpuEye1Us");
         for(auto name:names)std::fprintf(f,",%s",name);
         std::fprintf(f,",sceneSamples,submittedVertices");
         for(unsigned eye=0;eye<2;++eye)for(auto name:gpuPassNames)std::fprintf(f,",gpu%u_%sUs",eye,name);
+        std::fprintf(f,",reflectionPasses,waterSnapshots,colorResolvePixels,depthResolvePixels");
         std::fputc('\n',f);
         for(size_t i=0;i<size;++i) {
             const auto& v=frames[i];
@@ -101,6 +104,7 @@ struct Session {
                 const bool complete=v.gpuExpected[eye][pass]>0&&v.gpuExpected[eye][pass]==v.gpuReceived[eye][pass];
                 std::fprintf(f,",%.3f",complete?v.gpuPassUs[eye][pass]:-1.0);
             }
+            std::fprintf(f,",%u,%u,%llu,%llu",v.reflectionPasses,v.waterSnapshots,(unsigned long long)v.colorResolvePixels,(unsigned long long)v.depthResolvePixels);
             std::fputc('\n',f);
         }
         return std::fclose(f)==0;

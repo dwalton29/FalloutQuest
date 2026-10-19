@@ -19,7 +19,7 @@ class RenderDispatchTests(unittest.TestCase):
         self.assertNotIn("Q6HDrawArrays", runtime)
         scene = runtime[runtime.index("void RenderScene(const float* mvp)"):]
         self.assertLess(scene.index("Q1030BootMegatonOnRender();"),
-                        scene.index("if (IsFo3LoadingVisible()) return;"))
+                        scene.index("if (IsFo3LoadingVisible()) {Q233BeginMainEyeWorld();return;}"))
 
 
 if __name__ == "__main__":

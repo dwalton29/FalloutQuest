@@ -23,7 +23,8 @@ class Interior(unittest.TestCase):
         self.assertNotIn('ResetFo3Environment();',world)
         loop=(CPP/'core/fo3-runtime-loop.inc').read_text()
         self.assertIn('!gFo3Environment.interior) UpdateFo3TimeOfDay',loop)
-        self.assertRegex(loop,r'!gFo3Environment\.interior\)\s*\{[^}]*RenderFo3PcSky')
+        main=core.split('void Q233BeginMainEyeWorld()',1)[1].split('void RenderScene(',1)[0]
+        self.assertRegex(main,r'!gFo3Environment\.interior[^\{]*\{[^}]*RenderFo3PcSky')
         shader=core.split('GLuint CreateQ6HProgram()',1)[1].split('void Q1070ApplyStaticAnisotropy',1)[0]
         self.assertIn('uniform int uInteriorMode;',shader)
         self.assertIn('dot(toLight,toLight)/(radius*radius)',shader)

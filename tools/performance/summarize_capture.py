@@ -52,8 +52,8 @@ def report(path):
         ('gameplay', lambda r: r['loading'] == '0' and r['blocked'] == '0' and r['submitted'] == '1'),
         ('npc-light', lambda r: r['loading'] == '0' and r['blocked'] == '0' and r['submitted'] == '1' and int(r['residents']) == 0),
         ('npc-present', lambda r: r['loading'] == '0' and r['blocked'] == '0' and r['submitted'] == '1' and int(r['residents']) > 0),
-        ('gpu-sampled-v232', lambda r: r['loading']=='0' and r['blocked']=='0' and r['submitted']=='1' and 'gpu0_terrainUs' in r and int(r['serial'])%8==0),
-        ('gpu-unsampled-v232', lambda r: r['loading']=='0' and r['blocked']=='0' and r['submitted']=='1' and 'gpu0_terrainUs' in r and int(r['serial'])%8!=0),
+        ('gpu-sampled-v232+', lambda r: r['loading']=='0' and r['blocked']=='0' and r['submitted']=='1' and 'gpu0_terrainUs' in r and int(r['serial'])%8==0),
+        ('gpu-unsampled-v232+', lambda r: r['loading']=='0' and r['blocked']=='0' and r['submitted']=='1' and 'gpu0_terrainUs' in r and int(r['serial'])%8!=0),
         ('combat', lambda r: r['loading'] == '0' and r['submitted'] == '1' and int(r['combat']) > 0),
         ('streaming', lambda r: r['loading'] == '0' and r['streaming'] == '1'),
     ):
@@ -65,7 +65,8 @@ def report(path):
         pairs = sum(valid_gpu_us(float(r['gpuEyesUs'])) for r in selected)
         print(f'GPU eye pairs: {pairs} valid, {len(selected)-pairs} unavailable/invalid; '
               'cadence uses adjacent frames within this group; v232 GPU is sampled every 8 frames, missing=-1; '
-              'GPU scopes overlap: post includes bloom, reflection includes mirrorTerrain')
+              'GPU scopes overlap: post includes bloom, reflection includes mirrorTerrain; '
+              'v233 HDR segments include world/water/resolve work. Individual draw queries are unreliable on tilers.')
         print('metric,n,mean_ms,median_ms,p95_ms,p99_ms,max_ms,over72_percent,over90_percent')
         for key in rows[0]:
             if not key.endswith('Us') or key == 'periodUs':

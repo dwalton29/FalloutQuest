@@ -18,6 +18,19 @@ struct GpuScope {
     void Finish(){gpu.End(index);index=-1;}
     ~GpuScope(){Finish();}
 };
+// These envelopes span actual framebuffer work, including its completion at
+// the resolve boundary. They are not exclusive per-shader measurements.
+inline int hdrIndex=-1;
+inline void EndHdrPass(){gpu.End(hdrIndex);hdrIndex=-1;}
+inline void BeginHdrSegment(unsigned pass){
+    EndHdrPass();
+    if(SampleGpuFrame()){
+        ++capture.current.gpuExpected[fqopaque::eye][pass];
+        hdrIndex=gpu.Begin(capture.serial,fqopaque::eye,pass);
+    }
+}
+inline void BeginHdrPass(){BeginHdrSegment(GpuHdrFirst);}
+inline void ContinueHdrPass(){BeginHdrSegment(GpuHdrContinuation);}
 inline uint64_t lastToken=0;
 inline Clock::time_point nextControl{};
 inline void Control() {

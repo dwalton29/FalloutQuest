@@ -30,7 +30,7 @@ int main() {
     assert(s.Write("/tmp/fq-perf-test.csv"));
     std::ifstream in("/tmp/fq-perf-test.csv");std::string line;
     unsigned lines=0;while(std::getline(in,line)){
-        if(lines==0)assert(line.find("format=232")!=std::string::npos);
+        if(lines==0)assert(line.find("format=233")!=std::string::npos);
         if(lines==1)assert(line.find(",sceneSamples,submittedVertices")!=std::string::npos);
         if(lines==2)assert(line.find(",1,0,-1.000")!=std::string::npos);
         if(lines==3)assert(line.find(",2,0,-1.000")!=std::string::npos);

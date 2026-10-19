@@ -76,6 +76,8 @@ jobs:
       - name: Verify scene render dispatch and loading isolation
         run: |
           python3 tests/render/test_render_dispatch.py
+          python3 tests/render/test_hdr_pass_order.py
+          python3 tests/render/test_capture_script.py
           python3 tests/render/test_loading_pipeline.py
 
       - name: Verify stereo visibility and reflection reuse

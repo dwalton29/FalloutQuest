@@ -22,8 +22,8 @@ android {
         applicationId 'com.falloutquest.app'
         minSdk 29
         targetSdk 35
-        versionCode 232
-        versionName '0.91.0-gpu-timestamp-pass-capture'
+        versionCode 233
+        versionName '0.92.0-reflection-before-hdr'
 
         ndk {
             abiFilters 'arm64-v8a'

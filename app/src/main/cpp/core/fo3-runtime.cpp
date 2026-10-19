@@ -9236,6 +9236,7 @@ bool Q2090RenderWaterReflection(const float mainMvp[16],
     }
 
     fqperf::GpuScope gpuReflection(fqperf::GpuReflection);
+    if(fqperf::capture.recording)++fqperf::capture.current.reflectionPasses;
     float reflection[16]{};
     Q2090BuildReflectionMatrix(planeY, reflection);
     Q2090MultiplyMatrix(mainMvp, reflection, outReflectionMvp);
@@ -9300,6 +9301,7 @@ bool Q2090RenderWaterReflection(const float mainMvp[16],
     } else {
         glClearColor(0.18f, 0.18f, 0.14f, 1.0f);
     }
+    glDepthMask(GL_TRUE);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
     gWaterReflectionPassQ2090 = true;
@@ -12872,6 +12874,20 @@ void Q230RenderHealthHud(const float* mvp) {
         fo3healthui::RenderBar(mvp,anchor,eye,.18f,gQ230HealthBars.player,now,false);
     }
 }
+// The main target is allocated/bound by RenderEye, but its first draw is
+// deferred until all independent offscreen reflection work has completed.
+void Q233BeginMainEyeWorld() {
+    fqperf::BeginHdrPass();
+    GLboolean depthWrite=GL_TRUE;glGetBooleanv(GL_DEPTH_WRITEMASK,&depthWrite);
+    glDepthMask(GL_TRUE);
+    glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
+    glDepthMask(depthWrite);
+    if (!IsFo3LoadingVisible() && !gFo3Environment.interior && gWaterSkyMvpReadyQ2090) {
+        fqperf::GpuScope gpuSky(fqperf::GpuSky);
+        RenderFo3PcSky(gWaterSkyMvpQ2090);
+    }
+}
+
 void RenderScene(const float* mvp) {
     Q1970RenderStallScopeQ19 q1970RenderStallScope;
     if (!gSceneReady) Q1030BootMegatonOnRender();
@@ -12879,8 +12895,8 @@ void RenderScene(const float* mvp) {
 
     // A loading eye is replaced completely: skip invisible world draws, shadow
     // map rebuilds, reflections, terrain and actors while preparation advances.
-    if (IsFo3LoadingVisible()) return;
-    if (!gSceneReady || !gProgram || gObjects.empty()) return;
+    if (IsFo3LoadingVisible()) {Q233BeginMainEyeWorld();return;}
+    if (!gSceneReady || !gProgram || gObjects.empty()) {Q233BeginMainEyeWorld();return;}
 
     static uint64_t q209aWaterHeartbeatFrame = 0u;
     ++q209aWaterHeartbeatFrame;
@@ -12900,7 +12916,7 @@ void RenderScene(const float* mvp) {
     glGetIntegerv(GL_CURRENT_PROGRAM, &mainProgram);
     glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &mainVao);
     glGetIntegerv(GL_ACTIVE_TEXTURE, &previousActiveTexture);
-    if (mainProgram == 0) return;
+    if (mainProgram == 0) {Q233BeginMainEyeWorld();return;}
 
     Q2015FrustumCullScope q2015FrustumScope(mvp);
 
@@ -13046,6 +13062,69 @@ void RenderScene(const float* mvp) {
     glActiveTexture(GL_TEXTURE3);
     glBindTexture(GL_TEXTURE_2D,q1050ShadowActive?gShadowDepthQ1050:0u);
     glActiveTexture(GL_TEXTURE0);
+    float q2090PlaneY = 0.0f;
+    float q2090HeightGame = 0.0f;
+    uint32_t q2090PlaneCell = 0u, q2090PlaneType = 0u;
+    bool q2090HavePlane=false, q209bWaterInFrustum=false, q2090ReflectionReady=false;
+    float q2090ReflectionMvp[16]{};
+    size_t q209bExposedCells=0;
+    uint64_t q2019WaterReflectionCallUs=0;
+    if (gExteriorStreamingActiveQ1890 && gExteriorWorldspaceQ1890 != 0u) {
+        // Prepare the same WATER000 reflection before beginning the main HDR pass.
+        q2090HavePlane = GetFo3DominantWaterPlaneQ2070(
+            gFo3EyePosition[0], gFo3EyePosition[2],
+            gExteriorOriginXQ1890, gExteriorOriginYQ1890,
+            gExteriorOriginZQ1890, FLOOR_Y, SCENE_FORWARD,
+            FO3_UNITS_PER_METRE,
+            &q2090PlaneY, &q2090HeightGame,
+            &q2090PlaneCell, &q2090PlaneType);
+
+        q209bExposedCells = GetFo3ExposedWaterCellCountQ209B();
+        q209bWaterInFrustum =
+            q2090HavePlane && q209bExposedCells > 0u &&
+            IsFo3WaterPotentiallyVisibleQ209B(
+                mvp,
+                gExteriorOriginXQ1890,
+                gExteriorOriginYQ1890,
+                gExteriorOriginZQ1890,
+                FLOOR_Y,
+                SCENE_FORWARD,
+                FO3_UNITS_PER_METRE);
+        const auto q2019WaterReflectionCallStarted =
+            std::chrono::steady_clock::now();
+        q2090ReflectionReady =
+            q2090HavePlane && q209bWaterInFrustum &&
+            Q2090RenderWaterReflection(mvp, q2090PlaneY, q2090ReflectionMvp);
+        q2019WaterReflectionCallUs = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::steady_clock::now() -
+                q2019WaterReflectionCallStarted).count());
+
+        static uint32_t q2090LastPlaneCellLogged = 0u;
+        static int q209bLastExposedLogged = -1;
+        static int q209bLastFrustumLogged = -1;
+        if ((q2090HavePlane && q2090PlaneCell != q2090LastPlaneCellLogged) ||
+            static_cast<int>(q209bExposedCells) != q209bLastExposedLogged ||
+            (q209bWaterInFrustum ? 1 : 0) != q209bLastFrustumLogged) {
+            q2090LastPlaneCellLogged = q2090PlaneCell;
+            q209bLastExposedLogged = static_cast<int>(q209bExposedCells);
+            q209bLastFrustumLogged = q209bWaterInFrustum ? 1 : 0;
+            Q6H_LOGI("Q20.9B WATER VISIBILITY: worldspace=%08X loaded=%zu exposed=%zu frustumVisible=%d dominantCell=%08X WATR=%08X heightGame=%.3f planeSceneY=%.5f reflectionReady=%d policy=LAND-min<water+homogeneous-frustum",
+                     gExteriorWorldspaceQ1890,
+                     GetFo3WaterCellsQ2070().size(),
+                     q209bExposedCells,
+                     q209bWaterInFrustum ? 1 : 0,
+                     q2090PlaneCell, q2090PlaneType,
+                     q2090HeightGame, q2090PlaneY,
+                     q2090ReflectionReady ? 1 : 0);
+        }
+
+    }
+    // No main-eye colour/depth has been drawn yet: the mirror cannot interrupt
+    // an in-flight HDR scene. Restore the main camera after the mirror shader.
+    Q233BeginMainEyeWorld();
+    glUseProgram(gProgram);
+    glUniformMatrix4fv(gMvpLocation,1,GL_FALSE,mvp);
     const GLboolean q2021MainA2cWas = glIsEnabled(GL_SAMPLE_ALPHA_TO_COVERAGE);
     fqopaque::Begin(gStereoFrame);
     const auto q2017OpaqueStarted = std::chrono::steady_clock::now();
@@ -13204,62 +13283,6 @@ void RenderScene(const float* mvp) {
     {fqperf::GpuScope gpuTerrain(fqperf::GpuTerrain); RenderFo3CollisionOverlay(mvp);}
 
     if (gExteriorStreamingActiveQ1890 && gExteriorWorldspaceQ1890 != 0u) {
-        // Q20.9 WATER000: first render the current eye's mirrored world into
-        // shared 512x512 ReflectionMap, then resolve the already-drawn
-        // main scene for WATER001's RefractionMap + DepthMap inputs.
-        float q2090PlaneY = 0.0f;
-        float q2090HeightGame = 0.0f;
-        uint32_t q2090PlaneCell = 0u;
-        uint32_t q2090PlaneType = 0u;
-        const bool q2090HavePlane = GetFo3DominantWaterPlaneQ2070(
-            gFo3EyePosition[0], gFo3EyePosition[2],
-            gExteriorOriginXQ1890, gExteriorOriginYQ1890,
-            gExteriorOriginZQ1890, FLOOR_Y, SCENE_FORWARD,
-            FO3_UNITS_PER_METRE,
-            &q2090PlaneY, &q2090HeightGame,
-            &q2090PlaneCell, &q2090PlaneType);
-
-        float q2090ReflectionMvp[16]{};
-        const size_t q209bExposedCells = GetFo3ExposedWaterCellCountQ209B();
-        const bool q209bWaterInFrustum =
-            q2090HavePlane && q209bExposedCells > 0u &&
-            IsFo3WaterPotentiallyVisibleQ209B(
-                mvp,
-                gExteriorOriginXQ1890,
-                gExteriorOriginYQ1890,
-                gExteriorOriginZQ1890,
-                FLOOR_Y,
-                SCENE_FORWARD,
-                FO3_UNITS_PER_METRE);
-        const auto q2019WaterReflectionCallStarted =
-            std::chrono::steady_clock::now();
-        const bool q2090ReflectionReady =
-            q2090HavePlane && q209bWaterInFrustum &&
-            Q2090RenderWaterReflection(mvp, q2090PlaneY, q2090ReflectionMvp);
-        const uint64_t q2019WaterReflectionCallUs = static_cast<uint64_t>(
-            std::chrono::duration_cast<std::chrono::microseconds>(
-                std::chrono::steady_clock::now() -
-                q2019WaterReflectionCallStarted).count());
-
-        static uint32_t q2090LastPlaneCellLogged = 0u;
-        static int q209bLastExposedLogged = -1;
-        static int q209bLastFrustumLogged = -1;
-        if ((q2090HavePlane && q2090PlaneCell != q2090LastPlaneCellLogged) ||
-            static_cast<int>(q209bExposedCells) != q209bLastExposedLogged ||
-            (q209bWaterInFrustum ? 1 : 0) != q209bLastFrustumLogged) {
-            q2090LastPlaneCellLogged = q2090PlaneCell;
-            q209bLastExposedLogged = static_cast<int>(q209bExposedCells);
-            q209bLastFrustumLogged = q209bWaterInFrustum ? 1 : 0;
-            Q6H_LOGI("Q20.9B WATER VISIBILITY: worldspace=%08X loaded=%zu exposed=%zu frustumVisible=%d dominantCell=%08X WATR=%08X heightGame=%.3f planeSceneY=%.5f reflectionReady=%d policy=LAND-min<water+homogeneous-frustum",
-                     gExteriorWorldspaceQ1890,
-                     GetFo3WaterCellsQ2070().size(),
-                     q209bExposedCells,
-                     q209bWaterInFrustum ? 1 : 0,
-                     q2090PlaneCell, q2090PlaneType,
-                     q2090HeightGame, q2090PlaneY,
-                     q2090ReflectionReady ? 1 : 0);
-        }
-
         const auto q2019WaterPostStarted =
             std::chrono::steady_clock::now();
         const bool q2080SceneSnapshotReady =
@@ -13269,6 +13292,8 @@ void RenderScene(const float* mvp) {
             q1280PostWidth > 0 && q1280PostHeight > 0;
         if (q2080SceneSnapshotReady) {
             Q2060ResolveEyeMsaaQ2060();
+            if(fqperf::capture.recording)++fqperf::capture.current.waterSnapshots;
+            fqperf::ContinueHdrPass();
             glBindFramebuffer(GL_FRAMEBUFFER, q2060MsaaFbo);
             glViewport(0, 0, q1280PostWidth, q1280PostHeight);
         }
@@ -14281,6 +14306,11 @@ void Q2060ResolveEyeMsaaQ2060() {
     if (!q2060MsaaActive || q2060MsaaSamples <= 1 ||
         !q2060MsaaFbo || !q1280PostFbo) return;
     fqperf::GpuScope gpuResolve(fqperf::GpuResolve);
+    if(fqperf::capture.recording){
+        const uint64_t pixels=uint64_t(q1280PostWidth)*uint64_t(q1280PostHeight);
+        fqperf::capture.current.colorResolvePixels+=pixels;
+        fqperf::capture.current.depthResolvePixels+=pixels;
+    }
 
     glBindFramebuffer(GL_READ_FRAMEBUFFER, q2060MsaaFbo);
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, q1280PostFbo);
@@ -14503,6 +14533,7 @@ void Q1350CompositeEyePostQ1350(uint32_t eyeIndex, GLuint swapchainFbo,
     // Resolve the multisampled HDR scene into the existing single-sample
     // colour/depth textures before eye adaptation, bloom and final-film work.
     Q2060ResolveEyeMsaaQ2060();
+    fqperf::EndHdrPass();
     if(q2060MsaaActive && q2060MsaaFbo && q1280PostFbo) {
         // Resolve has consumed these samples. No later pass reads them before
         // the next eye clears them. Keep the resolved colour/depth textures.
