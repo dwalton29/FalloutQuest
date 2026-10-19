@@ -1,3 +1,4 @@
+#include "rendering/performance-capture.h"
 // Resident actor simulation. Immutable assets are prepared in the scene worker.
 // Nonresident actors retain canonical game-coordinate state and do not advance.
 #ifndef FO3_NPC_COMBAT_HOST_TEST
@@ -26,6 +27,7 @@ static void Q230RenderWeapon(Q230ActorVisual& actor,bool alpha) {
 }
 #endif
 static bool Q230Target(uint32_t reference,std::array<float,3>& point,uint32_t& base) {
+  FQ_PERF_SCOPE(Target);
   if(!gPlayerSession||gPlayerSession->player.ActorHealth(reference)<=0)return false;
   if(reference==0x14){base=7;
 #ifdef FO3_NPC_COMBAT_HOST_TEST
@@ -70,6 +72,7 @@ static bool Q230Target(uint32_t reference,std::array<float,3>& point,uint32_t& b
   return false;
 }
 static bool Q230Sight(Q230ActorVisual& actor,uint32_t target,const std::array<float,3>& point) {
+  FQ_PERF_SCOPE(Sight);
   Q230UpdateActor(actor);std::array<float,3> eye{};
   if(!Q230LiveBone(actor,actor.headBone,eye)){
     Q240AiLogOnce(actor.source.refFormId,actor.aiPackage,"combat perception: no skinned head bone");
@@ -79,6 +82,7 @@ static bool Q230Sight(Q230ActorVisual& actor,uint32_t target,const std::array<fl
   return length>.01f&&!HasFo3InteractionOccluder(eye[0],eye[1],eye[2],dx/length,dy/length,dz/length,length,target);
 }
 static void Q230PersistActor(Q230ActorVisual& actor) {
+  FQ_PERF_SCOPE(Persistence);
   if(!gPlayerSession||!actor.stateRestored||actor.runtime.offScene)return;
   auto& p=gPlayerSession->player;fo3player::ActorState saved;
   saved.cell=gCurrentCellFormId;saved.world=gExteriorWorldspaceQ1890;
@@ -128,6 +132,7 @@ static bool Q230DefendsLeader(const Q230ActorVisual& actor,const fo3pipdata::Pac
   return false;
 }
 static bool Q230SelectWeapon(Q230ActorVisual& actor,float targetRange=NAN) {
+  FQ_PERF_SCOPE(WeaponChoice);
   auto& p=gPlayerSession->player;const auto* contents=p.ContainerContents(actor.source.refFormId);if(!contents)return false;
   const auto* style=Q230Style(actor);const auto* package=Q230CurrentPackage(actor);
   if(package&&(!package->combatStyleValid||(package->combatStyle&&!style))){Q240AiLogOnce(actor.source.refFormId,actor.aiPackage,"unsupported package CSTY "+std::to_string(package->combatStyle));return false;}
@@ -286,6 +291,7 @@ static bool Q230TacticalRoute(Q230ActorVisual& actor,const std::array<float,3>& 
   return false;
 }
 static void Q230SimulateActor(Q230ActorVisual& actor,double now) {
+  FQ_PERF_SCOPE(Simulation);
   if(!gPlayerSession||gPlayerSession->saveBlocked||actor.runtime.offScene||actor.rigs.empty()||IsFo3LoadingVisible())return;
   auto& p=gPlayerSession->player;const auto& c=p.Definitions();auto& s=actor.runtime;
   if(!actor.stateRestored){

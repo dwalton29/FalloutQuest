@@ -4,6 +4,17 @@
 #include <iostream>
 using namespace fqskin;
 int main() {
+    // Initial publication, unchanged dead/idle pose, a single changed bone,
+    // direction-only change, resize and resource recreation all retain fidelity.
+    fqskin::PaletteUploadCache publication;
+    std::vector<fqskin::PaletteRow> sample(2);
+    for(auto& row:sample)fqskin::Pack(row,fqskin::Identity(),fqskin::Identity());
+    assert(publication.Changed(sample));assert(!publication.Changed(sample));
+    sample[1][12]=.000001f;assert(publication.Changed(sample));
+    assert(!publication.Changed(sample));
+    sample[1][20]=.125f;assert(publication.Changed(sample));
+    sample.resize(3);assert(publication.Changed(sample));
+    publication.valid=false;assert(publication.Changed(sample));
     const std::vector<uint16_t> indices={4,4,65535,0, 1,65535,0,0};
     const std::vector<float> weights={.4f,.2f,.3f,0, 1.2f,0,0,0};
     const auto player=Map(indices,weights,5,true),npc=Map(indices,weights,5,false);

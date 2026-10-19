@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 namespace fqskin {
 using Matrix=std::array<float,16>;
 using PaletteRow=std::array<float,32>;
@@ -12,6 +13,17 @@ inline void Pack(PaletteRow& row,const Matrix& position,const Matrix& direction)
     std::copy(position.begin(),position.end(),row.begin());
     std::copy(direction.begin(),direction.end(),row.begin()+16);
 }
+// Exact palette publication history. No animation quantisation or cadence
+// reduction: every changed bit is uploaded, even twice within one stereo frame.
+struct PaletteUploadCache {
+    std::vector<PaletteRow> rows;
+    bool valid=false;
+    bool Changed(const std::vector<PaletteRow>& next) {
+        if(valid && rows.size()==next.size() &&
+           (rows.empty() || std::memcmp(rows.data(),next.data(),next.size()*sizeof(PaletteRow))==0))return false;
+        rows=next;valid=true;return true;
+    }
+};
 struct Mapping {
     std::vector<int> sources; // only mesh-referenced bone ordinals; slot zero is identity
     std::vector<float> attributes; // weights[4], palette indices[4] per expanded vertex

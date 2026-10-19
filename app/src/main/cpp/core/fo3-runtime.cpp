@@ -24,6 +24,7 @@
 #include "npc/fo3-animation-bounds.h"
 #include "rendering/actor-skinning.h"
 #include "rendering/opaque-telemetry.h"
+#include "rendering/performance-capture-android.h"
 #include "rendering/loading-work-scope.h"
 #include "rendering/loading-diagnostics.h"
 #include "rendering/loading-transfer.h"
@@ -564,6 +565,7 @@ void Q2400ObjectBounds(const GpuObject& object, Vec3& minimum, Vec3& maximum) {
 float gFrustumPadding = 1.0f;
 bool gQ2015FrustumCullActive = false;
 float gQ2015FrustumMvp[16]{};
+questrender::Frustum gQ223Frustum;
 uint64_t gQ2015CullTested = 0u;
 uint64_t gQ2015CullRejected = 0u;
 uint64_t gQ2015CullPassed = 0u;
@@ -582,7 +584,7 @@ bool Q2015AabbVisible(const GpuObject& object) {
     Vec3 q2400Min{},q2400Max{};
     Q2400ObjectBounds(object,q2400Min,q2400Max);
     ++gQ2015CullTested;
-    const bool visible = questrender::Visible(gQ2015FrustumMvp,
+    const bool visible = questrender::Visible(gQ223Frustum,
         {q2400Min.x,q2400Max.x,q2400Min.y,q2400Max.y,q2400Min.z,q2400Max.z},
         gFrustumPadding);
     if (visible) ++gQ2015CullPassed; else ++gQ2015CullRejected;
@@ -593,10 +595,13 @@ struct Q2015FrustumCullScope {
     float previousPadding = 1.0f;
     bool previousActive = false;
     float previousMvp[16]{};
+    questrender::Frustum previousFrustum;
 
     explicit Q2015FrustumCullScope(const float* mvp, float padding = 1.0f) {
         previousPadding = gFrustumPadding; gFrustumPadding = padding;
         previousActive = gQ2015FrustumCullActive;
+        previousFrustum=gQ223Frustum;
+        gQ223Frustum=questrender::Frustum(mvp);
         if (previousActive)
             std::copy(gQ2015FrustumMvp, gQ2015FrustumMvp + 16, previousMvp);
         std::copy(mvp, mvp + 16, gQ2015FrustumMvp);
@@ -604,6 +609,7 @@ struct Q2015FrustumCullScope {
     }
     ~Q2015FrustumCullScope() {
         gFrustumPadding = previousPadding;
+        gQ223Frustum=previousFrustum;
         if (previousActive) {
             std::copy(previousMvp, previousMvp + 16, gQ2015FrustumMvp);
             gQ2015FrustumCullActive = true;
@@ -808,6 +814,7 @@ struct Q230ActorVisual {
     std::unordered_map<std::string,Fo3RgbaTexture> generatedTextures;
     std::chrono::steady_clock::time_point animationStart{};
     uint64_t lastFrame = UINT64_MAX;
+    uint64_t profiledAnimationFrame=UINT64_MAX;
 };
 std::vector<Q230ActorVisual> gQ230NpcActors;
 fo3health::Tracker gQ230HealthBars;
@@ -7224,7 +7231,7 @@ uint64_t gOpaqueOrderVisualRevision = 0;
 
 void Q2017PrepareOpaqueOrder() {
     if (gFo3VisualPublication.Revision() != 0 &&
-        gOpaqueOrderFrame == gStereoFrame && gOpaqueOrderStorage == gObjects.data() &&
+        gOpaqueOrderStorage == gObjects.data() &&
         gOpaqueOrderCount == gObjects.size() &&
         gOpaqueOrderVisualRevision == gFo3VisualPublication.Revision()) return;
     gOpaqueOrderFrame = gStereoFrame; gOpaqueOrderStorage = gObjects.data();
@@ -7236,13 +7243,32 @@ void Q2017PrepareOpaqueOrder() {
         [](const GpuObject* a, const GpuObject* b) { return a->q2016BatchKey < b->q2016BatchKey; });
 }
 
-bool Q2017StereoVisible(const GpuObject& object) {
-    if (!gStereoMvpReady) return Q2015AabbVisible(object);
-    for (const auto& mvp : gStereoMvp) {
-        Q2015FrustumCullScope scope(mvp);
-        if (Q2015AabbVisible(object)) return true;
+// One camera preparation per stereo frame, shared by world and actor bounds.
+// Matrix comparison also handles same-frame recentering and publication changes.
+bool Q223StereoBoundsVisible(const questrender::Bounds& bounds) {
+    if(!gStereoMvpReady)
+        return !gQ2015FrustumCullActive || questrender::Visible(gQ223Frustum,bounds,gFrustumPadding);
+    static float matrices[2][16]{};
+    static questrender::Frustum frusta[2];
+    static uint64_t frame=~uint64_t{0};
+    if(frame!=gStereoFrame || std::memcmp(matrices,gStereoMvp,sizeof(matrices))!=0) {
+        std::memcpy(matrices,gStereoMvp,sizeof(matrices));
+        for(unsigned eye=0;eye<2;++eye) frusta[eye]=questrender::Frustum(gStereoMvp[eye]);
+        frame=gStereoFrame;
+    }
+    for(const auto& frustum:frusta) {
+        ++gQ2015CullTested;
+        const bool visible=questrender::Visible(frustum,bounds,1.0f);
+        if(visible) {++gQ2015CullPassed;return true;}
+        ++gQ2015CullRejected;
     }
     return false;
+}
+bool Q2017StereoVisible(const GpuObject& object) {
+    if (!gStereoMvpReady) return Q2015AabbVisible(object);
+    if(object.minX>object.maxX || object.minY>object.maxY || object.minZ>object.maxZ)return true;
+    Vec3 lo{},hi{};Q2400ObjectBounds(object,lo,hi);
+    return Q223StereoBoundsVisible({lo.x,hi.x,lo.y,hi.y,lo.z,hi.z});
 }
 
 bool Q2017ReflectionUseful(const GpuObject& object) {
@@ -12409,6 +12435,7 @@ void PrepareFo3InteriorSceneLights() {
 // v187: Advance *tracked* nonresident actors only when the existing game
 // clock reaches a new minute. No off-scene scene graph, animation or NAVM.
 static void Q230TickUnloadedActors(float hour) {
+    FQ_PERF_SCOPE(Unloaded);
     if(!gPlayerSession||gPlayerSession->saveBlocked||IsFo3LoadingVisible())return;
     const auto index=Q230NpcXtelIndex();
     if(!index)return;
@@ -12477,6 +12504,7 @@ static void Q230TickUnloadedActors(float hour) {
 // NAVM, KF and furniture data off-thread. Do not touch OpenGL or gQ230NpcActors
 // in the worker: all GPU upload and vector publication stay on the main frame.
 void Q230PumpNpcArrivals(){
+    FQ_PERF_SCOPE(Arrivals);
     if(Fo3ResidentAssetLaneBlocked())return;
     if(!gSceneReady||gSceneLoad.active||!gPlayerSession||
        gPlayerSession->saveBlocked||IsFo3LoadingVisible())return;
@@ -12605,11 +12633,11 @@ void Q230PumpNpcArrivals(){
 #include "world/fo3-resident-reconcile-runtime.inc"
 
 void QActorPrepareStereoFrame() {
+    FQ_PERF_SCOPE(ActorPrep);
     // Keep the last NPC poses. No AI, package events, persistence or unloaded
     // actor scheduling may mutate the canonical candidate's source state.
     if(Fo3GameplayBlocked()){PrepareFo3InteriorSceneLights();return;}
     const auto started=fqopaque::Clock::now();
-    fqactor::npc={}; // Player pose has already been prepared before UI/world input.
     const auto setupStarted=fqopaque::Clock::now();
     SynchronizeFo3PipboyEquipment();
     const bool ready=Q210EnsurePlayerBody();
@@ -12619,12 +12647,17 @@ void QActorPrepareStereoFrame() {
     const uint32_t pathQueriesBefore=gQ240PathsPlanned;
     const uint32_t pathExpandedBefore=gQ240PathNodesExpanded;
     double npcAiUs=0.;
+    double npcSimulationUs=0.,npcPersistenceUs=0.;
     for(auto& actor:gQ230NpcActors) {
+        const auto simulationStarted=fqopaque::Clock::now();
         Q230SimulateActor(actor,npcNow);
+        npcSimulationUs+=fqopaque::Micros(simulationStarted);
         const auto npcAiStart=fqopaque::Clock::now();
         Q240UpdateNpcPackage(actor,npcNow);
         npcAiUs+=fqopaque::Micros(npcAiStart);
+        const auto persistenceStarted=fqopaque::Clock::now();
         Q230PersistActor(actor);
+        npcPersistenceUs+=fqopaque::Micros(persistenceStarted);
         // Sample canonical damage once per stereo frame, never during each eye.
         // For actors, previous damage plus current HP reconstructs the original
         // maximum derived by ActorHealth (NPC_ stats + level/endurance rules).
@@ -12643,7 +12676,8 @@ void QActorPrepareStereoFrame() {
                 gQ230HealthBars.ObserveActor(actor.source.refFormId,health,maxHealth,npcNow);
             }
         }
-        GpuObject bounds=actor.renderBounds;
+        const auto& b=actor.renderBounds;
+        questrender::Bounds bounds{b.minX,b.maxX,b.minY,b.maxY,b.minZ,b.maxZ};
         if(actor.renderBoundsReady&&!actor.rigs.empty()) {
             const auto& origin=actor.rigs[0].scenePlacement;
             const float dx=actor.runtime.position[0]-origin[12],
@@ -12651,21 +12685,38 @@ void QActorPrepareStereoFrame() {
                         dz=actor.runtime.position[2]-origin[14];
             bounds.minX+=dx;bounds.maxX+=dx;bounds.minY+=dy;bounds.maxY+=dy;bounds.minZ+=dz;bounds.maxZ+=dz;
         }
-        actor.renderVisible=!actor.runtime.offScene&&(!actor.renderBoundsReady || Q2017StereoVisible(bounds));
+        actor.renderVisible=!actor.runtime.offScene&&(!actor.renderBoundsReady || Q223StereoBoundsVisible(bounds));
+        if(fqperf::capture.recording) {
+            fqperf::capture.current.residents+=!actor.runtime.offScene;
+            fqperf::capture.current.rigParts+=actor.runtime.offScene?0:actor.rigs.size();
+            fqperf::capture.current.visible+=actor.renderVisible;
+            fqperf::capture.current.combat+=actor.runtime.activity==fo3npc::Activity::Combat;
+        }
         if(actor.renderVisible) Q230UpdateActor(actor);
     }
     if(gPlayerSession)
         gQ230HealthBars.player.Observe(gPlayerSession->player.Health(),
                                       gPlayerSession->player.MaxHealth(),npcNow);
+    const auto unloadedStarted=fqopaque::Clock::now();
     Q230TickUnloadedActors(GetFo3TimeOfDayHour());
+    const double unloadedUs=fqopaque::Micros(unloadedStarted);
+    const auto arrivalsStarted=fqopaque::Clock::now();
     Q230PumpNpcArrivals();
+    const double arrivalsUs=fqopaque::Micros(arrivalsStarted);
     const auto npcPaths=gQ240PathsPlanned-pathQueriesBefore;
     const auto npcExpanded=gQ240PathNodesExpanded-pathExpandedBefore;
+    if(fqperf::capture.recording) {
+        auto& f=fqperf::capture.current;
+        f.parts=fqactor::npc.parts;
+        f.us[fqperf::Clip]=fqactor::npc.clip;f.us[fqperf::Pose]=fqactor::npc.pose;
+        f.paletteBytes=fqactor::npc.paletteBytes;f.vertices=fqactor::npc.gpuVertices+fqactor::npc.vertices;
+        f.paths=npcPaths;f.expanded=npcExpanded;
+    }
     // Separates AI route spikes from actor skinning, uploads and GPU draw.
     if(gStereoFrame%60==0||(npcPaths>=4&&npcAiUs>2000.))
-        Q6H_LOGI("NPC AI PERF frame=%llu residents=%zu packageUs=%.0f paths=%u expanded=%u",
+        Q6H_LOGI("NPC AI PERF frame=%llu residents=%zu packageUs=%.0f paths=%u expanded=%u simulationUs=%.0f persistenceUs=%.0f unloadedUs=%.0f arrivalsUs=%.0f",
             (unsigned long long)gStereoFrame,gQ230NpcActors.size(),npcAiUs,
-            unsigned(npcPaths),unsigned(npcExpanded));
+            unsigned(npcPaths),unsigned(npcExpanded),npcSimulationUs,npcPersistenceUs,unloadedUs,arrivalsUs);
     PrepareFo3InteriorSceneLights();
     fqactor::framePrep.Add(fqopaque::Micros(started));
     if(gStereoFrame%60==0) Q6H_LOGI("ACTOR FRAME PREP frame=%llu playerPoseUs=%.1f fingersUs=%.1f playerBoneUs=%.1f playerSkinCpuUs=%.1f playerDirectionsUs=%.1f npcClipUs=%.1f npcPoseUs=%.1f npcBoneUs=%.1f npcSkinCpuUs=%.1f npcDirectionsUs=%.1f animatedUploadCpuUs=%.1f totalActorPrepUs=%.1f setupUs=%.1f animatedVertexUploadBytes=%llu animatedVboUploads=%llu bonePaletteUploadBytes=%llu playerParts=%llu npcParts=%llu actors=%llu cpuReference=%d",
@@ -14447,6 +14498,9 @@ void Q6HDeleteFramebuffers(GLsizei n, const GLuint* framebuffers) {
     if(gLoadingUploadFence){glDeleteSync(gLoadingUploadFence);gLoadingUploadFence=nullptr;}
     gLoadingGpuTimer.Shutdown();
     fqopaque::timer.Shutdown();
+    if(fqperf::capture.active)fqperf::capture.Write("/data/user/0/com.falloutquest.app/files/performance.csv");
+    fqperf::capture.active=fqperf::capture.recording=false;
+    fqperf::gpu.Shutdown();
     Q1280ShutdownPostQ1280();
     ShutdownFo3WaterQ2070();
     WeaponShutdown();

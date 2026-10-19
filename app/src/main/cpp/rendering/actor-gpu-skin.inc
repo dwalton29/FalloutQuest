@@ -3,13 +3,14 @@ GLint gActorSkinMode=-1, gActorPalette=-1;
 struct QActorSkin {
     fqskin::Mapping mapping;
     std::vector<fqskin::PaletteRow> palette;
+    fqskin::PaletteUploadCache published;
     std::vector<float> bind, work; // CPU reference/fallback only
     std::vector<fqskin::PaletteRow> cpuMatrices;
 };
 namespace fqactor {
 struct Cost {
     double pose=0,fingers=0,bones=0,skin=0,directions=0,upload=0,draw=0,clip=0;
-    uint64_t vertices=0,parts=0,actors=0,vertexBytes=0,vboUploads=0,paletteBytes=0,gpuVertices=0,referenceBytes=0;
+    uint64_t vertices=0,parts=0,actors=0,vertexBytes=0,vboUploads=0,paletteBytes=0,gpuVertices=0,referenceBytes=0,paletteSkipped=0;
 };
 inline Cost player,npc;
 inline fqopaque::Average framePrep,frameWork,frameCadence;
@@ -62,6 +63,7 @@ bool QActorCreateSkin(GpuObject& object,QActorSkin& skin,
     glVertexAttribPointer(10,4,GL_FLOAT,GL_FALSE,8*sizeof(float),nullptr);glEnableVertexAttribArray(10);
     glVertexAttribPointer(11,4,GL_FLOAT,GL_FALSE,8*sizeof(float),reinterpret_cast<void*>(4*sizeof(float)));glEnableVertexAttribArray(11);
     glBindVertexArray(0);glBindBuffer(GL_ARRAY_BUFFER,0);
+    skin.published.rows.resize(skin.palette.size());skin.published.valid=false;
     glGenTextures(1,&object.skinPalette);glActiveTexture(GL_TEXTURE6);
     glBindTexture(GL_TEXTURE_2D,object.skinPalette);
     glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_NEAREST);
@@ -77,10 +79,13 @@ bool QActorCreateSkin(GpuObject& object,QActorSkin& skin,
 void QActorUploadSkin(GpuObject& object,QActorSkin& skin,fqactor::Cost& cost,bool player) {
     if(object.skinMode) {
         const auto started=fqopaque::Clock::now();
-        glActiveTexture(GL_TEXTURE6);glBindTexture(GL_TEXTURE_2D,object.skinPalette);
-        glTexSubImage2D(GL_TEXTURE_2D,0,0,0,8,skin.palette.size(),GL_RGBA,GL_FLOAT,skin.palette.data());
-        glActiveTexture(GL_TEXTURE0);
-        cost.upload+=fqopaque::Micros(started);cost.paletteBytes+=skin.palette.size()*sizeof(fqskin::PaletteRow);
+        if(skin.published.Changed(skin.palette)) {
+            glActiveTexture(GL_TEXTURE6);glBindTexture(GL_TEXTURE_2D,object.skinPalette);
+            glTexSubImage2D(GL_TEXTURE_2D,0,0,0,8,skin.palette.size(),GL_RGBA,GL_FLOAT,skin.palette.data());
+            cost.paletteBytes+=skin.palette.size()*sizeof(fqskin::PaletteRow);
+        }else ++cost.paletteSkipped;
+        glActiveTexture(GL_TEXTURE0); // Preserve the upload helper's caller contract.
+        cost.upload+=fqopaque::Micros(started);
         cost.gpuVertices+=object.vertexCount;
     } else {
         // Diagnostic/unsupported-device reference, separately timed at mesh scope.

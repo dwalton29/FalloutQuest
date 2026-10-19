@@ -1,3 +1,4 @@
+#include "rendering/performance-capture.h"
 #include <limits>
 #include "fo3-package-schedule.h"
 static std::unordered_set<std::string> gQ240AiDiagnostics;
@@ -224,6 +225,7 @@ static Q240RouteCosts Q240ResidentRouteCosts(uint32_t self,const Actors& actors)
 static bool Q240Path(const Q240NavigationGraph& graph,const std::array<float,3>& from,
                      const std::array<float,3>& to,std::vector<std::array<float,3>>& path,std::string* failure=nullptr,
                      std::vector<std::pair<size_t,size_t>>* surfaces=nullptr,const Q240RouteCosts* routeCosts=nullptr) {
+  FQ_PERF_SCOPE(Path);
   ++gQ240PathsPlanned;
   path.clear();if(surfaces)surfaces->clear();if(failure)failure->clear();
   auto fail=[&](const char* why){if(failure)*failure=why;return false;};
@@ -896,6 +898,7 @@ static bool Q240CorridorLine(const Q230ActorVisual& actor,
   return true;
 }
 static void Q240AdvancePath(Q230ActorVisual& actor,float dt,double now) {
+  FQ_PERF_SCOPE(Movement);
   if(dt<=0||actor.aiPathIndex>=actor.aiPathGame.size())return;
   Q240GroundPathRoot(actor);
   // Consume reached intermediate points without selecting Idle or restarting
@@ -1522,6 +1525,7 @@ static void Q240AdvanceNpcPackage(Q230ActorVisual& actor,double now) {
   Q240AdvancePath(actor,dt,now);
 }
 void Q240UpdateNpcPackage(Q230ActorVisual& actor,double now) {
+  FQ_PERF_SCOPE(Packages);
   const auto position=actor.runtime.position;
   const auto yaw=actor.runtime.yaw;
   const auto animation=actor.runtime.animation;

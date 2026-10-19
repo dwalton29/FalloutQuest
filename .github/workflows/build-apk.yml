@@ -78,6 +78,11 @@ jobs:
 
       - name: Verify stereo visibility and reflection reuse
         run: |
+          g++ -O2 -std=c++17 -Wall -Wextra -Werror -Iapp/src/main/cpp tests/render/prepared_frustum_tests.cpp -o /tmp/prepared-frustum-tests
+          /tmp/prepared-frustum-tests
+          g++ -std=c++17 -Wall -Wextra -Werror -Iapp/src/main/cpp tests/render/performance_capture_tests.cpp -o /tmp/perf-capture-tests
+          /tmp/perf-capture-tests
+          python3 tests/render/test_performance_capture.py
           g++ -std=c++17 -Wall -Wextra -Werror tests/render/render_policy_tests.cpp -o /tmp/render-policy-tests
           /tmp/render-policy-tests
 

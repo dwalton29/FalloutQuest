@@ -176,7 +176,8 @@ class LoadingPipeline(unittest.TestCase):
     def test_v222_no_emittance_esm_scan_in_mesh_upload_path(self):
         runtime=(ROOT/'core/fo3-runtime.cpp').read_text()
         xemi=(ROOT/'rendering/environment/fo3-external-emittance.h').read_text()
-        upload=runtime.split('bool UploadCpuObject(',1)[1].split('void Q74DeleteGpuObjects(',1)[0]
+        # Stop at this function's outer closing brace, before InitializeScene.
+        upload=runtime.split('bool UploadCpuObject(',1)[1].split('\n}\n',1)[0]
         scene=runtime.split('bool ProcessQ74TransitionRequest() {',1)[1].split('GLenum Q1150BlendFactor',1)[0]
         self.assertIn('TryResolvePublishedFo3ExternalEmittanceQ2220(',upload)
         self.assertNotIn('ResolveFo3ExternalEmittance(0x00000A74u',upload)

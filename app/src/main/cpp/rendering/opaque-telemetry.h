@@ -54,6 +54,9 @@ inline bool collectingNative=false, nativeObjectMaterial=false;
 inline unsigned eye=0;
 struct DetailedWork { size_t visible=0, instanced=0, instancedDraws=0, fallbackDraws=0; };
 inline DetailedWork detailedWork;
+// GL disjoint state can be consumed by any timer owner. Share invalidation
+// across loading, opaque phases and bounded capture queries.
+inline uint64_t gpuDisjointEpoch=0;
 struct GpuTimer {
     struct Slot { GLuint id=0; bool pending=false, discard=false; uint64_t frame=0; unsigned phase=0, eye=0; };
     std::array<Slot,32> slots{};
@@ -66,7 +69,8 @@ struct GpuTimer {
     PFNGLGETQUERYIVEXTPROC bits=nullptr;
     bool initialized=false, supported=false;
     int active=-1;
-    uint64_t disjoints=0, dropped=0;
+    uint64_t disjoints=0, dropped=0, observedDisjointEpoch=0;
+    void (*sample)(uint64_t,unsigned,unsigned,double)=nullptr;
     Average gpu; // Legacy aggregate of individual query samples, not total opaque time.
     std::array<Average,PhaseCount> phaseGpu;
     std::array<std::array<Average,PhaseCount>,2> eyeGpu;
@@ -90,7 +94,9 @@ struct GpuTimer {
     void Poll(uint64_t frame) {
         Initialize(); if(!supported) return;
         GLint disjoint=0;glGetIntegerv(GL_GPU_DISJOINT_EXT,&disjoint);
-        if(disjoint) {
+        if(disjoint) ++gpuDisjointEpoch;
+        if(observedDisjointEpoch!=gpuDisjointEpoch) {
+            observedDisjointEpoch=gpuDisjointEpoch;
             ++disjoints;gpu={};phaseGpu={};eyeGpu={};
             for(auto& slot:slots) if(slot.pending) slot.discard=true;
         }
@@ -101,6 +107,7 @@ struct GpuTimer {
             if(!slot.discard) {
                 GLuint64 nanos=0;result(slot.id,GL_QUERY_RESULT_EXT,&nanos);
                 gpu.Add(double(nanos)/1000.0);
+                if(sample)sample(slot.frame,slot.eye,slot.phase,double(nanos)/1000.0);
                 phaseGpu[slot.phase].Add(double(nanos)/1000.0);
                 eyeGpu[slot.eye][slot.phase].Add(double(nanos)/1000.0);
             }
@@ -126,6 +133,7 @@ struct GpuTimer {
     }
 };
 inline GpuTimer timer;
+inline bool externalGpuScope=false;
 inline Average preparation, submission, otherCpu, drawCalls, stateChanges, uniformUploads,
     textureBinds, vaoBinds, stateQueries, vertices, visible;
 inline double preparationUs=0, submissionUs=0;
@@ -137,13 +145,15 @@ struct SubmissionScope {
 };
 struct PhaseScope {
     unsigned phase;
+    bool query=false;
     Clock::time_point started;
     fqgl::Counters before;
     PhaseScope(unsigned p, uint64_t frame):phase(p),started(Clock::now()),before(fqgl::counters) {
-        timer.Begin(frame,p);
+        query=!externalGpuScope;
+        if(query)timer.Begin(frame,p);
     }
     ~PhaseScope() {
-        timer.End();
+        if(query)timer.End();
         auto& stats=phases[eye][phase];
         stats.lastCpu=Micros(started);
         stats.lastDraws=fqgl::counters.draws-before.draws;

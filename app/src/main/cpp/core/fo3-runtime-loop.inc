@@ -1483,14 +1483,36 @@ private:
     }
 
     void RenderFrame() {
+        // Stop/write and arm outside the measured frame. Each token records
+        // at most 4096 frames, including loading and non-rendered XR frames.
+        fqperf::Control();
+        fqperf::capture.BeginFrame();
+        if(fqperf::capture.recording && !fqperf::capture.size) {
+            char model[PROP_VALUE_MAX]{};__system_property_get("ro.product.model",model);
+            std::snprintf(fqperf::capture.configuration,sizeof(fqperf::capture.configuration),
+                "headset=%s eye0=%dx%d eye1=%dx%d msaa=%d renderScale=%.2f cpuSkin=%d fastMaterial=%d lodRadius20=%d lodMinimal=%d lodClipBypass=%d",
+                model,eyes_[0].width,eyes_[0].height,eyes_[1].width,eyes_[1].height,
+                q2060MsaaActive?q2060MsaaSamples:1,fqopaque::Options().scale,fqactor::CpuReference(),
+                fqopaque::Options().fastMaterial,fqopaque::Options().lodRadius20,fqopaque::Options().lodMinimal,fqopaque::Options().lodClipBypass);
+        }
+        const auto waitStarted=fqopaque::Clock::now();
         XrFrameWaitInfo waitInfo{XR_TYPE_FRAME_WAIT_INFO};
         XrFrameState frameState{XR_TYPE_FRAME_STATE};
         if (!CheckXr(xrWaitFrame(session_, &waitInfo, &frameState), "xrWaitFrame")) return;
         const auto appFrameStarted=fqopaque::Clock::now();
+        auto& perf=fqperf::capture.current;
+        if(fqperf::capture.recording) {
+            perf.us[fqperf::Wait]=fqopaque::Micros(waitStarted);
+            perf.loading=IsFo3LoadingVisible()||!gSceneReady;
+            perf.periodUs=frameState.predictedDisplayPeriod/1000.0;
+        }
         const double appCadenceUs=fqactor::lastFrame.time_since_epoch().count() ? std::chrono::duration<double,std::micro>(appFrameStarted-fqactor::lastFrame).count() : 0.0;
         fqactor::lastFrame=appFrameStarted;
+        const auto beginStarted=fqopaque::Clock::now();
         XrFrameBeginInfo beginInfo{XR_TYPE_FRAME_BEGIN_INFO};
         if (!CheckXr(xrBeginFrame(session_, &beginInfo), "xrBeginFrame")) return;
+        if(fqperf::capture.recording)perf.us[fqperf::Begin]=fqopaque::Micros(beginStarted);
+        const auto perfGlStart=fqgl::counters;
         // Advance the reserved owner once, even when gameplay and view updates
         // are excluded. It never auto-commits merely because staging is ready.
         PumpFo3ResidentWorkflow(sessionState_==XR_SESSION_STATE_FOCUSED);
@@ -1546,6 +1568,7 @@ private:
             locateInfo.displayTime = frameState.predictedDisplayTime;
             locateInfo.space = localSpace_;
 
+            const auto locateStarted=fqopaque::Clock::now();
             uint32_t viewCount = 0;
             if (CheckXr(xrLocateViews(session_, &locateInfo, &viewState,
                                      static_cast<uint32_t>(views.size()), &viewCount, views.data()),
@@ -1553,6 +1576,7 @@ private:
                 (viewState.viewStateFlags & XR_VIEW_STATE_POSITION_VALID_BIT) &&
                 (viewState.viewStateFlags & XR_VIEW_STATE_ORIENTATION_VALID_BIT)) {
 
+                if(fqperf::capture.recording)perf.us[fqperf::Input]+=fqopaque::Micros(locateStarted);
                 XrPosef loadingHead=views[0].pose;
                 loadingHead.position.x=(views[0].pose.position.x+views[1].pose.position.x)*0.5f;
                 loadingHead.position.y=(views[0].pose.position.y+views[1].pose.position.y)*0.5f;
@@ -1587,7 +1611,8 @@ private:
                     }
                     ProcessQ74TransitionRequest();
                 }
-                SyncInput(frameState.predictedDisplayTime);
+                {FQ_PERF_SCOPE(Input);SyncInput(frameState.predictedDisplayTime);}
+                const auto gameplayStarted=fqopaque::Clock::now();
                 // One world clock shared by exterior lighting, resident PACK
                 // selection and unloaded XTEL scheduling. Never fast-forward
                 // across a loading screen or headset focus interruption.
@@ -1699,7 +1724,7 @@ private:
 
                 pipPoseUpdated=true;
                 ++gStereoFrame;
-                fqactor::player={};
+                fqactor::player={};fqactor::npc={};
                 SynchronizeFo3PipboyEquipment();
                 if(!IsFo3LoadingVisible() && Q210EnsurePlayerBody())Q211UpdatePlayerRig();
                 const auto pipHead=MatrixFromPose(q210VirtualHead);
@@ -1762,8 +1787,11 @@ private:
                 // Q20.13: loading freezes player motion, not world preparation.
                 // Keep CELL/terrain/LOD streaming alive beneath the overlay.
                 const XrPosef q1890VirtualHead = q210VirtualHead;
+                if(fqperf::capture.recording)perf.us[fqperf::Gameplay]+=fqopaque::Micros(gameplayStarted);
+                { FQ_PERF_SCOPE(Streaming);
                 UpdateFo3ExteriorStreamingQ1890(q1890VirtualHead.position.x,
-                                                q1890VirtualHead.position.z);
+                                                q1890VirtualHead.position.z); }
+                const auto interactionsStarted=fqopaque::Clock::now();
                 if(IsFo3LoadingVisible())ResetFo3Pipboy();
                 if(!Fo3GameplayBlocked()) {
                     // Q24.0 local DOOR state advances once per gameplay frame, not per eye.
@@ -1790,6 +1818,7 @@ private:
                 }
                 FlushFo3DeferredPlayerState();
 
+                if(fqperf::capture.recording)perf.us[fqperf::Gameplay]+=fqopaque::Micros(interactionsStarted);
                 const auto lootViewer=ToVirtualPose(loadingHead);
                 const auto& lootPanel=GetFo3LootPanel();
                 lootPanelYaw_=std::atan2(lootViewer.position.x-lootPanel.anchor[0],lootViewer.position.z-lootPanel.anchor[2]);
@@ -1850,7 +1879,7 @@ private:
                     lastFrameTime_=0;ResetFo3Pipboy();
                     ApplyAuthoredDoorFacingQ1810(views[0]);
                     const auto head=ToVirtualPose(loadingHead);
-                    UpdateFo3ExteriorStreamingQ1890(head.position.x,head.position.z);
+                    {FQ_PERF_SCOPE(Streaming);UpdateFo3ExteriorStreamingQ1890(head.position.x,head.position.z);}
                 }
                 previousWorldClockNs=clockNs;
                 if(IsFo3LoadingVisible() && fo3loadingvr::gGeneration!=GetFo3LoadingGeneration())
@@ -1859,8 +1888,30 @@ private:
                 if(IsFo3LoadingVisible() && !gLoadingUploadFence && fqloading::budget.operations)
                     gLoadingUploadFence=glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE,0);
                 bool rendered = true;
+                if(fqperf::capture.recording) {
+                    fqperf::gpu.Poll(fqperf::capture.serial);
+                }
                 for (uint32_t eye = 0; eye < 2; ++eye) {
+                    fqperf::Scope eyeScope(eye==0?fqperf::Eye0:fqperf::Eye1);
+                    if(fqperf::capture.recording) {
+                        fqopaque::eye=eye;fqperf::gpu.Begin(fqperf::capture.serial);
+                        fqopaque::externalGpuScope=fqperf::gpu.active>=0;
+                    }
                     rendered = RenderEye(eye, views[eye], projectionViews[eye]) && rendered;
+                    if(fqperf::capture.recording) {
+                        fqperf::gpu.End();fqopaque::externalGpuScope=false;
+                        if(!IsFo3LoadingVisible()) {
+                            const auto& phases=fqopaque::phases[eye];
+                            perf.us[eye==0?fqperf::Native0:fqperf::Native1]=phases[fqopaque::NativeLod].lastCpu;
+                            perf.us[eye==0?fqperf::Detail0:fqperf::Detail1]=phases[fqopaque::DetailedWorld].lastCpu;
+                            perf.us[eye==0?fqperf::NpcDraw0:fqperf::NpcDraw1]=phases[fqopaque::Npc].lastCpu;
+                            perf.us[eye==0?fqperf::PlayerDraw0:fqperf::PlayerDraw1]=phases[fqopaque::Player].lastCpu;
+                            perf.us[fqperf::ScenePrep]+=fqopaque::preparationUs;
+                        }
+                    }
+                }
+                if(fqperf::capture.recording) {
+                    perf.rendered=rendered;
                 }
                 if (!projectionViews[0].next || !projectionViews[1].next) {
                     projectionViews[0].next = projectionViews[1].next = nullptr;
@@ -1900,6 +1951,8 @@ private:
         const auto submitStarted=fqloading::Now();
         const bool q1700FrameSubmitted =
             CheckXr(xrEndFrame(session_, &endInfo), "xrEndFrame");
+        const double perfEndUs=double(fqloading::Now()-submitStarted);
+        const bool perfLoadingAtSubmit=IsFo3LoadingVisible();
         if(IsFo3LoadingVisible()) {
             previousLoadingCpu=fqloading::Now()-uint64_t(std::chrono::duration_cast<std::chrono::microseconds>(appFrameStarted.time_since_epoch()).count());
             static uint64_t reportGeneration=~uint64_t{0},frames=0,missed=0,worst=0;
@@ -1973,6 +2026,21 @@ private:
                 pendingPlayableGeneration=0;
             }
         }
+        if(fqperf::capture.recording) {
+            perf.us[fqperf::End]=perfEndUs;
+            perf.us[fqperf::Work]=fqopaque::Micros(appFrameStarted);
+            perf.us[fqperf::Cadence]=fqperf::capture.size?appCadenceUs:0.0;
+            perf.loading=perf.loading||perfLoadingAtSubmit;
+            perf.blocked=Fo3GameplayBlocked();perf.submitted=q1700FrameSubmitted&&layerCount>0;
+            perf.cell=gCurrentCellFormId;perf.world=gExteriorWorldspaceQ1890;
+            perf.streaming=gExteriorStreamBusyQ1890;
+            perf.paletteSkipped=perf.loading?0:fqactor::npc.paletteSkipped;
+            perf.draws=fqgl::counters.draws-perfGlStart.draws;
+            perf.states=fqgl::counters.state-perfGlStart.state;
+            perf.uniforms=fqgl::counters.uniforms-perfGlStart.uniforms;
+            perf.textures=fqgl::counters.textures-perfGlStart.textures;
+            fqperf::capture.FinishFrame();
+        }
     }
 
     void SetMvpAndColor(const Mat4& mvp, float r, float g, float b) {
@@ -1984,6 +2052,7 @@ private:
                    XrCompositionLayerProjectionView& projectionView) {
         fqopaque::eye = eyeIndex;
         EyeSwapchain& eye = eyes_[eyeIndex];
+        const auto acquireStarted=fqopaque::Clock::now();
         uint32_t imageIndex = 0;
         XrSwapchainImageAcquireInfo acquireInfo{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
         if (!CheckXr(xrAcquireSwapchainImage(eye.handle, &acquireInfo, &imageIndex),
@@ -2005,6 +2074,7 @@ private:
                 xrReleaseSwapchainImage(eye.depthHandle, &release);
             }
         }
+        if(fqperf::capture.recording)fqperf::capture.current.us[fqperf::Swapchain]+=fqopaque::Micros(acquireStarted);
         bool rendered = false;
         bool depthCopied = false;
 

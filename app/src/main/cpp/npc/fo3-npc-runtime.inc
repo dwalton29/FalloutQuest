@@ -1,3 +1,4 @@
+#include "rendering/performance-capture.h"
 void Q230CacheDialogueAnimations(Q230ActorVisual& actor,const fo3pipdata::Definitions* d) {
   actor.animations[0]=actor.clip;
   const auto root=actor.source.skeletonModel.substr(0,actor.source.skeletonModel.find_last_of("\\/")+1);
@@ -459,6 +460,7 @@ bool Q230UploadActorPart(Q230ActorVisual &actor, CpuObject &part, float centerX,
 // Only TRI-bearing head parts upload differential bind geometry. Body skinning
 // continues to update bone palettes without rebuilding its vertices.
 void Q230UpdateFacialPart(Q230ActorVisual& actor,Q230RigPart& rig) {
+  FQ_PERF_SCOPE(Facial);
     if(!rig.facialBind.empty()&&rig.facialPublished!=actor.facialWeights) {
       if(!fo3face::BlendExpanded(rig.facialBind,rig.facialDeltas,actor.facialWeights,rig.facialWork))return;
       if(!fo3face::UpdateDirections(rig.facialBind,rig.facialIndices,rig.facialWork))return;
@@ -474,8 +476,14 @@ void Q230UpdateFacialPart(Q230ActorVisual& actor,Q230RigPart& rig) {
 #endif
 
 void Q230UpdateActor(Q230ActorVisual &actor) {
+  FQ_PERF_SCOPE(Animation);
   if (actor.lastFrame == gStereoFrame || actor.rigs.empty()) return;
   actor.lastFrame=gStereoFrame;
+#ifndef FO3_ACTOR_RUNTIME_HOST_TEST
+  if(fqperf::capture.recording&&actor.profiledAnimationFrame!=gStereoFrame) {
+      actor.profiledAnimationFrame=gStereoFrame;++fqperf::capture.current.animated;
+  }
+#endif
   ++fqactor::npc.actors;
   const double elapsed=std::chrono::duration<double>(Fo3GameplayNow()-actor.animationStart).count();
   fo3anim::SampleTimings timings;
@@ -559,6 +567,7 @@ void Q230UpdateActor(Q230ActorVisual &actor) {
 #ifndef FO3_ACTOR_RUNTIME_HOST_TEST
     Q230UpdateFacialPart(actor,rig);
 #endif
+    { FQ_PERF_SCOPE(Palette);
     fqskin::Pack(rig.skin.palette[0],actor.dialogueRoot,actor.dialogueRoot);
     for(size_t slot=0;slot<rig.skin.mapping.sources.size();++slot) {
       const int index=rig.skin.mapping.sources[slot];
@@ -569,8 +578,9 @@ void Q230UpdateActor(Q230ActorVisual &actor) {
       // Uniform game->scene scale cancels in this conjugation; direction w=0.
       fqskin::Pack(rig.skin.palette[slot+1],delta,delta);
     }
+    }
     fqactor::npc.bones+=fqopaque::Micros(started);
-    QActorUploadSkin(actor.objects[rig.gpuIndex],rig.skin,fqactor::npc,false);
+    { FQ_PERF_SCOPE(Upload);QActorUploadSkin(actor.objects[rig.gpuIndex],rig.skin,fqactor::npc,false); }
   }
 }
 
@@ -628,6 +638,9 @@ void Q230ActorHitReaction(uint32_t target,uint8_t region) {
 #endif
 void Q230RenderNpcActors(bool alphaPass) {
   const auto drawStarted=fqopaque::Clock::now();
+#ifndef FO3_ACTOR_RUNTIME_HOST_TEST
+  const auto drawsBefore=fqgl::counters.draws;
+#endif
   for (auto &actor : gQ230NpcActors) {
     if(!actor.renderVisible) continue;
     for (size_t objectIndex=0;objectIndex<actor.objects.size();++objectIndex) {
@@ -656,4 +669,7 @@ void Q230RenderNpcActors(bool alphaPass) {
 #endif
   }
   fqactor::npc.draw+=fqopaque::Micros(drawStarted);
+#ifndef FO3_ACTOR_RUNTIME_HOST_TEST
+  if(fqperf::capture.recording)fqperf::capture.current.npcDraws+=fqgl::counters.draws-drawsBefore;
+#endif
 }
