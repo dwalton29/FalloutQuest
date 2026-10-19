@@ -4,6 +4,9 @@
 #include "rendering/environment/fo3-visual-depth.h"
 
 #include <array>
+#include <atomic>
+#include <chrono>
+#include <utility>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -110,17 +113,22 @@ inline void ResetFo3ExternalEmittance() {
     gFo3ExternalEmittanceLoaded = false;
 }
 
-inline bool LoadFo3ExternalEmittance(uint32_t worldspaceFormId) {
+// CPU-only original XEMI->LIGH/REGN->WTHR resolution for publication once
+// the destination scene is admitted. No worker mutates live scene globals.
+struct Fo3ExternalEmittanceCpuQ2210 {
+    uint32_t worldspace=0u;
+    std::unordered_map<uint32_t,Fo3ExternalEmittance> entries;
+    uint64_t scanUs=0u;
+};
+inline bool PrepareFo3ExternalEmittanceQ2210(
+    uint32_t worldspaceFormId,Fo3ExternalEmittanceCpuQ2210& output,
+    const std::atomic<bool>* cancel=nullptr) {
     using namespace fo3emittance;
-    if (gFo3ExternalEmittanceLoaded &&
-        gFo3ExternalEmittanceWorld == worldspaceFormId) {
-        return !gFo3ExternalEmittance.empty();
-    }
-
-    ResetFo3ExternalEmittance();
-    gFo3ExternalEmittanceWorld = worldspaceFormId;
-    gFo3ExternalEmittanceLoaded = true;
-    if (worldspaceFormId == 0u) return false;
+    if(worldspaceFormId==0u ||
+       (cancel && cancel->load(std::memory_order_acquire)))return false;
+    const auto started=std::chrono::steady_clock::now();
+    Fo3ExternalEmittanceCpuQ2210 prepared;
+    prepared.worldspace=worldspaceFormId;
 
     FILE* file = std::fopen(fo3assets::FalloutMasterPath().c_str(), "rb");
     if (!file) {
@@ -139,6 +147,9 @@ inline bool LoadFo3ExternalEmittance(uint32_t worldspaceFormId) {
     std::unordered_set<uint32_t> wantedEmittance;
     std::vector<GroupFrame> groups;
     while (true) {
+        if(cancel && cancel->load(std::memory_order_relaxed)){
+            std::fclose(file);return false;
+        }
         uint8_t header[fo3esm::HEADER_SIZE]{};
         uint64_t offset = 0u, payloadEnd = 0u;
         uint32_t sizeField = 0u, flags = 0u, formId = 0u;
@@ -174,6 +185,9 @@ inline bool LoadFo3ExternalEmittance(uint32_t worldspaceFormId) {
         return false;
     }
     while (true) {
+        if(cancel && cancel->load(std::memory_order_relaxed)){
+            std::fclose(file);return false;
+        }
         uint8_t header[fo3esm::HEADER_SIZE]{};
         uint64_t offset = 0u, payloadEnd = 0u;
         uint32_t sizeField = 0u, flags = 0u, formId = 0u;
@@ -238,6 +252,9 @@ inline bool LoadFo3ExternalEmittance(uint32_t worldspaceFormId) {
         return false;
     }
     while (true) {
+        if(cancel && cancel->load(std::memory_order_relaxed)){
+            std::fclose(file);return false;
+        }
         uint8_t header[fo3esm::HEADER_SIZE]{};
         uint64_t offset = 0u, payloadEnd = 0u;
         uint32_t sizeField = 0u, flags = 0u, formId = 0u;
@@ -295,22 +312,45 @@ inline bool LoadFo3ExternalEmittance(uint32_t worldspaceFormId) {
                 }
             }
         }
-        if (value.valid) gFo3ExternalEmittance[raw.refFormId] = value;
+        if (value.valid) prepared.entries[raw.refFormId] = value;
         else ++unresolved;
     }
 
     __android_log_print(ANDROID_LOG_INFO, TAG,
         "Q13.8 EXTERNAL EMITTANCE READY: world=%08X xemiRefs=%zu resolved=%zu fixedLIGH=%zu regionWTHR=%zu unresolved=%zu time=DAY source=Fallout3.esm shaderFlag=0x%08X",
-        worldspaceFormId, refs.size(), gFo3ExternalEmittance.size(),
+        worldspaceFormId, refs.size(), prepared.entries.size(),
         fixedCount, regionCount, unresolved, EXTERNAL_EMITTANCE_SHADER_FLAG);
 
     size_t logged = 0u;
-    for (const auto& pair : gFo3ExternalEmittance) {
+    for (const auto& pair : prepared.entries) {
         if (logged >= 6u) break;
         LogExample(pair.second);
         ++logged;
     }
-    return !gFo3ExternalEmittance.empty();
+    if(cancel && cancel->load(std::memory_order_acquire))return false;
+    prepared.scanUs=static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::steady_clock::now()-started).count());
+    output=std::move(prepared);
+    return true; // Empty XEMI maps are valid and should not be rescanned.
+}
+
+inline bool PublishFo3ExternalEmittanceQ2210(Fo3ExternalEmittanceCpuQ2210&& packet){
+    if(!packet.worldspace)return false;
+    gFo3ExternalEmittance=std::move(packet.entries);
+    gFo3ExternalEmittanceWorld=packet.worldspace;
+    gFo3ExternalEmittanceLoaded=true;
+    return true;
+}
+inline bool LoadFo3ExternalEmittance(uint32_t worldspaceFormId){
+    if(gFo3ExternalEmittanceLoaded && gFo3ExternalEmittanceWorld==worldspaceFormId)
+        return !gFo3ExternalEmittance.empty();
+    ResetFo3ExternalEmittance();
+    gFo3ExternalEmittanceWorld=worldspaceFormId;
+    gFo3ExternalEmittanceLoaded=true;
+    Fo3ExternalEmittanceCpuQ2210 packet;
+    if(!PrepareFo3ExternalEmittanceQ2210(worldspaceFormId,packet))return false;
+    return PublishFo3ExternalEmittanceQ2210(std::move(packet)) &&
+           !gFo3ExternalEmittance.empty();
 }
 
 inline bool ResolveFo3ExternalEmittance(uint32_t worldspaceFormId,

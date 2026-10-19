@@ -144,6 +144,35 @@ class LoadingPipeline(unittest.TestCase):
         self.assertIn('WATER_WORKER_FAILED generation=',runtime)
         self.assertIn('Q22.0 TRANSITION_STEP', (ROOT/'world/fo3-cell-world.cpp').read_text())
 
+    def test_v221_environment_prefetch_and_original_weather_preserved(self):
+        runtime=(ROOT/'core/fo3-runtime.cpp').read_text()
+        env=(ROOT/'rendering/environment/fo3-environment.h').read_text()
+        xemi=(ROOT/'rendering/environment/fo3-external-emittance.h').read_text()
+        weather=(ROOT/'rendering/environment/fo3-weather-imagespace.h').read_text()
+        tod=(ROOT/'rendering/environment/fo3-time-of-day.h').read_text()
+        scene=runtime.split('bool ProcessQ74TransitionRequest() {',1)[1].split('GLenum Q1150BlendFactor',1)[0]
+        idxworker=env.split('inline bool PrepareRecordIndexQ2210(',1)[1].split('inline bool PublishRecordIndexQ2210(',1)[0]
+        xworker=xemi.split('inline bool PrepareFo3ExternalEmittanceQ2210(',1)[1].split('inline bool PublishFo3ExternalEmittanceQ2210(',1)[0]
+        self.assertIn('fo3esm::ReadPayloadCurrent(cached,match->second.size',env)
+        self.assertIn('std::atomic_load_explicit(&gRecordIndexQ2210',env)
+        self.assertIn('std::atomic_store_explicit(&gRecordIndexQ2210',env)
+        self.assertIn('cancel.load(',idxworker)
+        self.assertNotIn('gRecordIndexQ2210',idxworker)
+        self.assertIn('cancel->load(',xworker)
+        self.assertIn('prepared.entries[raw.refFormId]',xworker)
+        self.assertNotIn('gFo3ExternalEmittance[raw.refFormId]',xworker)
+        self.assertIn('StartFo3SceneEnvironmentIndexWorker();',runtime)
+        self.assertIn('StartFo3SceneEmittanceWorker(prepared.request.worldspaceFormId);',scene)
+        self.assertIn('gSceneLoad.environmentIndexPreparation.RequestCancel()',runtime)
+        self.assertIn('gSceneLoad.emittancePreparation.RequestCancel()',runtime)
+        self.assertIn('!gSceneLoad.environmentIndexPreparation.Ready()',scene)
+        self.assertIn('!gSceneLoad.emittancePreparation.Ready()',scene)
+        self.assertLess(scene.index('PublishRecordIndexQ2210('),scene.index('CompleteFo3CellTransitionQ74('))
+        self.assertLess(scene.index('PublishFo3ExternalEmittanceQ2210('),scene.index('CompleteFo3CellTransitionQ74('))
+        self.assertIn('ApplyWeatherImad(runtime.endpointImage[i],modifier);',tod)
+        self.assertIn('inline bool ApplyWeatherImad(Fo3ImageSpace& image,const WeatherImad& modifier)',weather)
+        self.assertIn('TRANSITION_STEP cell=%08X',(ROOT/'world/fo3-cell-world.cpp').read_text())
+
     def test_gpu_backlog_never_blocks_waiting_for_completion(self):
         loop=(ROOT/'core/fo3-runtime-loop.inc').read_text()
         self.assertIn('glClientWaitSync(gLoadingUploadFence,0,0)',loop)

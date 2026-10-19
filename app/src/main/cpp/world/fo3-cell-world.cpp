@@ -1,4 +1,5 @@
 #include "rendering/loading-work-scope.h"
+#include "rendering/loading-diagnostics.h"
 #include "fo3-install-paths.h"
 #include <chrono>
 #include "fo3-worldspace-runtime.h"
@@ -1153,6 +1154,8 @@ void CompleteFo3CellTransitionQ74(uint32_t cellFormId) {
         q2200Last=now;
         Q71_LOGI("Q22.0 TRANSITION_STEP cell=%08X stage=%s stepMs=%.1f",
                  cellFormId,stage,static_cast<double>(micros)/1000.0);
+        fqloadprofile::Log("TRANSITION_STEP cell=%08X stage=%s stepMs=%.1f",
+            cellFormId,stage,static_cast<double>(micros)/1000.0);
     };
     gCurrentCellQ74 = cellFormId;
     gPlayerResetPendingQ74 = true;

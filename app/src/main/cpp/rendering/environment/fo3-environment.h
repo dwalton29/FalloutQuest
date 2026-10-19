@@ -7,6 +7,11 @@
 #include <android/log.h>
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <memory>
+#include <unordered_map>
+#include <utility>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -52,10 +57,106 @@ inline int32_t ReadI32(const uint8_t* p) {
     return static_cast<int32_t>(fo3esm::ReadU32(p));
 }
 
+
+struct IndexedRecordQ2210 {
+    uint64_t payloadOffset=0u;
+    uint32_t size=0u,flags=0u;
+};
+struct RecordIndexQ2210 {
+    std::string masterPath;
+    std::unordered_map<uint64_t,IndexedRecordQ2210> records;
+    uint64_t scanUs=0u;
+};
+inline std::shared_ptr<const RecordIndexQ2210> gRecordIndexQ2210;
+inline uint64_t RecordIndexKeyQ2210(const char type[4],uint32_t formId){
+    return (static_cast<uint64_t>(fo3esm::ReadU32(
+       reinterpret_cast<const uint8_t*>(type)))<<32u)|formId;
+}
+inline bool IsIndexedRecordTypeQ2210(const char type[4]){
+    return std::memcmp(type,"WRLD",4u)==0 || std::memcmp(type,"CELL",4u)==0 ||
+           std::memcmp(type,"CLMT",4u)==0 || std::memcmp(type,"WTHR",4u)==0 ||
+           std::memcmp(type,"IMAD",4u)==0 || std::memcmp(type,"IMGS",4u)==0;
+}
+inline bool HasRecordIndexQ2210(const std::string& path){
+    auto p=std::atomic_load_explicit(&gRecordIndexQ2210,std::memory_order_acquire);
+    return p && p->masterPath==path;
+}
+// CPU-only, cancellable index. First occurrence of each record retains the
+// legacy FindRecord semantics; payload decompression remains unchanged.
+inline bool PrepareRecordIndexQ2210(const std::string& path,
+             RecordIndexQ2210& out,const std::atomic<bool>& cancel){
+    if(path.empty() || cancel.load(std::memory_order_acquire))return false;
+    auto start=std::chrono::steady_clock::now();
+    FILE* file=std::fopen(path.c_str(),"rb");
+    if(!file)return false;
+    const int64_t size=fo3esm::FileSize(file);
+    if(size<static_cast<int64_t>(fo3esm::HEADER_SIZE)){
+        std::fclose(file);return false;
+    }
+    RecordIndexQ2210 next;next.masterPath=path;
+    bool valid=true;uint64_t scanned=0;
+    while(true){
+        if((++scanned&1023u)==0u && cancel.load(std::memory_order_relaxed)){
+            valid=false;break;
+        }
+        const off_t rawOffset=ftello(file);
+        if(rawOffset<0){valid=false;break;}
+        const uint64_t offset=static_cast<uint64_t>(rawOffset);
+        if(offset+fo3esm::HEADER_SIZE>static_cast<uint64_t>(size))break;
+        uint8_t header[fo3esm::HEADER_SIZE]{};
+        if(!fo3esm::ReadExact(file,header,sizeof(header))){valid=false;break;}
+        const uint32_t recordSize=fo3esm::ReadU32(header+4u);
+        if(std::memcmp(header,"GRUP",4u)==0){
+            if(recordSize<fo3esm::HEADER_SIZE ||
+               offset+recordSize>static_cast<uint64_t>(size)){valid=false;break;}
+            continue;
+        }
+        const uint64_t end=offset+fo3esm::HEADER_SIZE+recordSize;
+        if(end>static_cast<uint64_t>(size)){valid=false;break;}
+        if(IsIndexedRecordTypeQ2210(reinterpret_cast<const char*>(header))){
+            const uint32_t form=fo3esm::ReadU32(header+12u);
+            next.records.emplace(RecordIndexKeyQ2210(
+               reinterpret_cast<const char*>(header),form),
+               IndexedRecordQ2210{offset+fo3esm::HEADER_SIZE,recordSize,
+                                   fo3esm::ReadU32(header+8u)});
+        }
+        if(fseeko(file,static_cast<off_t>(end),SEEK_SET)!=0){valid=false;break;}
+    }
+    std::fclose(file);
+    if(!valid || cancel.load(std::memory_order_acquire))return false;
+    next.scanUs=static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::steady_clock::now()-start).count());
+    out=std::move(next);return true;
+}
+inline bool PublishRecordIndexQ2210(RecordIndexQ2210&& packet){
+    if(packet.masterPath.empty() || packet.records.empty())return false;
+    std::shared_ptr<const RecordIndexQ2210> ready=
+       std::make_shared<RecordIndexQ2210>(std::move(packet));
+    std::atomic_store_explicit(&gRecordIndexQ2210,std::move(ready),
+                               std::memory_order_release);
+    return true;
+}
+
 inline bool FindRecord(const char wantedType[4], uint32_t wantedFormId,
                        std::vector<uint8_t>& payload) {
     payload.clear();
-    FILE* file = std::fopen(fo3assets::FalloutMasterPath().c_str(), "rb");
+    const std::string path=fo3assets::FalloutMasterPath();
+    auto index=std::atomic_load_explicit(&gRecordIndexQ2210,std::memory_order_acquire);
+    if(index && index->masterPath==path && IsIndexedRecordTypeQ2210(wantedType)){
+        auto match=index->records.find(RecordIndexKeyQ2210(wantedType,wantedFormId));
+        if(match==index->records.end())return false;
+        FILE* cached=std::fopen(path.c_str(),"rb");
+        if(cached){
+            const bool found=fseeko(cached,static_cast<off_t>(match->second.payloadOffset),
+                                    SEEK_SET)==0 &&
+                fo3esm::ReadPayloadCurrent(cached,match->second.size,
+                                            match->second.flags,payload);
+            std::fclose(cached);
+            if(found)return true;
+            payload.clear(); // Keep the original slow-path as a safe fallback.
+        }
+    }
+    FILE* file = std::fopen(path.c_str(), "rb");
     if (!file) return false;
     const int64_t fileSize = fo3esm::FileSize(file);
     if (fileSize < static_cast<int64_t>(fo3esm::HEADER_SIZE)) {

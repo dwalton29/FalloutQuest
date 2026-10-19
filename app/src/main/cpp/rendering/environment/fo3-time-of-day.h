@@ -285,7 +285,7 @@ inline void BuildEndpointImages(TimeOfDayRuntime& runtime) {
 
         WeatherImad modifier;
         if (!LoadWeatherImad(runtime.weather.imad[i], modifier) || !modifier.valid) continue;
-        ApplyWeatherImad(runtime.endpointImage[i]);
+        ApplyWeatherImad(runtime.endpointImage[i],modifier);
 
         // Q13.2 applies these two non-post channels separately. Build their
         // per-time endpoint values here so the same clock can interpolate them.

@@ -3126,6 +3126,9 @@ struct Fo3SceneLoadWork {
     // Exterior water WRLD/CELL/WATR catalogue is prepared independently of
     // the GL scene; it is published only after the collision/visual swap.
     fo3scene::Preparation<Fo3WaterCpuCatalogQ2200> waterPreparation;
+    fo3scene::Preparation<fo3env::RecordIndexQ2210> environmentIndexPreparation;
+    fo3scene::Preparation<Fo3ExternalEmittanceCpuQ2210> emittancePreparation;
+    bool environmentIndexAttempted=false,emittanceAttempted=false;
     bool waterWorkerAttempted=false;
     bool doorWorkerAttempted=false;
     bool npcTexturesInstalled=false;
@@ -3972,6 +3975,37 @@ void FlushFo3DeferredPlayerState() {
 
 bool DrainFo3TransitionBackgroundWork();
 
+void StartFo3SceneEnvironmentIndexWorker() {
+    if(gSceneLoad.environmentIndexAttempted)return;
+    gSceneLoad.environmentIndexAttempted=true;
+    const std::string master=fo3assets::FalloutMasterPath();
+    if(fo3env::HasRecordIndexQ2210(master)){
+        fqloadprofile::Log("ENV_INDEX_CACHE_HIT generation=%llu",
+            (unsigned long long)gSceneLoad.generation);
+        return;
+    }
+    if(!gSceneLoad.environmentIndexPreparation.Start(
+        [master](fo3env::RecordIndexQ2210& result,const std::atomic<bool>& cancel){
+            return fo3env::PrepareRecordIndexQ2210(master,result,cancel);
+        }))fqloadprofile::Log("ENV_INDEX_START_FAILED generation=%llu fallback=legacy",
+            (unsigned long long)gSceneLoad.generation);
+}
+void StartFo3SceneEmittanceWorker(uint32_t worldspace){
+    if(!worldspace || gSceneLoad.emittanceAttempted)return;
+    gSceneLoad.emittanceAttempted=true;
+    if(gFo3ExternalEmittanceLoaded && gFo3ExternalEmittanceWorld==worldspace){
+        fqloadprofile::Log("XEMI_CACHE_HIT generation=%llu worldspace=%08X",
+            (unsigned long long)gSceneLoad.generation,worldspace);
+        return;
+    }
+    if(!gSceneLoad.emittancePreparation.Start(
+        [worldspace](Fo3ExternalEmittanceCpuQ2210& result,
+                     const std::atomic<bool>& cancel){
+            return PrepareFo3ExternalEmittanceQ2210(worldspace,result,&cancel);
+        }))fqloadprofile::Log("XEMI_START_FAILED generation=%llu worldspace=%08X fallback=legacy",
+            (unsigned long long)gSceneLoad.generation,worldspace);
+}
+
 void StartFo3SceneWaterWorker(uint32_t worldspaceFormId) {
     if(!worldspaceFormId || gSceneLoad.waterWorkerAttempted)return;
     gSceneLoad.waterWorkerAttempted=true;
@@ -4029,13 +4063,17 @@ void AbortFo3SceneLoad(const char* reason) {
     gSceneLoad.preparation.RequestCancel();gSceneLoad.collisionPreparation.RequestCancel();gSceneLoad.texturePreparation.RequestCancel();
     gSceneLoad.doorPreparation.RequestCancel();
     gSceneLoad.waterPreparation.RequestCancel();
+    gSceneLoad.environmentIndexPreparation.RequestCancel();
+    gSceneLoad.emittancePreparation.RequestCancel();
     // A superseded scene stays private while an in-flight decoder retires.
     // Render frames keep submitting; only shutdown is allowed to join work.
     if((gSceneLoad.preparation.Active()&&!gSceneLoad.preparation.Ready()) ||
        (gSceneLoad.collisionPreparation.Active()&&!gSceneLoad.collisionPreparation.Ready()) ||
        (gSceneLoad.texturePreparation.Active()&&!gSceneLoad.texturePreparation.Ready()) ||
        (gSceneLoad.doorPreparation.Active()&&!gSceneLoad.doorPreparation.Ready()) ||
-       (gSceneLoad.waterPreparation.Active()&&!gSceneLoad.waterPreparation.Ready()))return;
+       (gSceneLoad.waterPreparation.Active()&&!gSceneLoad.waterPreparation.Ready()) ||
+       (gSceneLoad.environmentIndexPreparation.Active()&&!gSceneLoad.environmentIndexPreparation.Ready()) ||
+       (gSceneLoad.emittancePreparation.Active()&&!gSceneLoad.emittancePreparation.Ready()))return;
     gSceneLoad.texturePreparation.Reset();gSceneLoad.imageTransfer.Cancel();
     gSceneLoad.texture={};gSceneLoad.textureKey.clear();gSceneLoad.missingTextures.clear();
     gSceneLoad.vertexTransfer.clear();gSceneLoad.vertexOffset=0;gSceneLoad.vertexPending=false;
@@ -4043,6 +4081,8 @@ void AbortFo3SceneLoad(const char* reason) {
     gSceneLoad.collisionPreparation.Reset();
     gSceneLoad.doorPreparation.Reset();
     gSceneLoad.waterPreparation.Reset();
+    gSceneLoad.environmentIndexPreparation.Reset();
+    gSceneLoad.emittancePreparation.Reset();
     if (gSceneLoad.contextApplied)
         Fo3DynamicOnlyCollisionModelsQ710() = std::move(gSceneLoad.previousCollisionPolicy);
     if (gSceneLoad.preparation.Ready()) {
@@ -4070,8 +4110,12 @@ bool BeginFo3SceneLoad(const Fo3CellTransitionRequestQ74& request, bool boot) {
     gSceneLoad.contextApplied = false;
     gSceneLoad.doorWorkerAttempted=false;
     gSceneLoad.waterWorkerAttempted=false;
+    gSceneLoad.environmentIndexAttempted=false;
+    gSceneLoad.emittanceAttempted=false;
     gSceneLoad.doorPreparation.Reset();
     gSceneLoad.waterPreparation.Reset();
+    gSceneLoad.environmentIndexPreparation.Reset();
+    gSceneLoad.emittancePreparation.Reset();
     gSceneLoad.collisionPreparation.Reset();
     gSceneLoad.collisionStarted = gSceneLoad.collisionComplete = gSceneLoad.collisionReady = false;
     gSceneLoad.collisionUs = 0u;
@@ -4098,8 +4142,10 @@ bool BeginFo3SceneLoad(const Fo3CellTransitionRequestQ74& request, bool boot) {
         request.cellFormId,request.worldspaceFormId,loadPlayer?1:0,gSceneReady?1:0);
     // Known transition cells can prefetch immediately. The cold-boot CELL
     // must instead wait for ResolveFo3MegatonEntryQ1860 in the CPU worker.
+    StartFo3SceneEnvironmentIndexWorker();
     StartFo3SceneDoorWorker(request.cellFormId);
     StartFo3SceneWaterWorker(request.worldspaceFormId);
+    StartFo3SceneEmittanceWorker(request.worldspaceFormId);
     const auto referenceState=CaptureFo3ReferenceState();
     if (!gSceneLoad.preparation.Start(
             [request, boot, loadPlayer, referenceState](Fo3SceneCpuPreparation& result, const std::atomic<bool>& cancel) {
@@ -4309,6 +4355,7 @@ bool ProcessQ74TransitionRequest() {
     // CPU preparation, leaving the lengthy GPU upload phase for overlap.
     StartFo3SceneDoorWorker(prepared.request.cellFormId);
     StartFo3SceneWaterWorker(prepared.request.worldspaceFormId);
+    StartFo3SceneEmittanceWorker(prepared.request.worldspaceFormId);
     // Recheck every frame, including between GPU slices and the collision swap.
     // A prepared projection must never publish over a newer committed save state.
     if (gPlayerSession && (!prepared.referenceState ||
@@ -4510,6 +4557,8 @@ bool ProcessQ74TransitionRequest() {
     // Delayed workers keep the original loading scene visible and responsive.
     if(gSceneLoad.doorPreparation.Active()&&!gSceneLoad.doorPreparation.Ready())return false;
     if(gSceneLoad.waterPreparation.Active()&&!gSceneLoad.waterPreparation.Ready())return false;
+    if(gSceneLoad.environmentIndexPreparation.Active()&&!gSceneLoad.environmentIndexPreparation.Ready())return false;
+    if(gSceneLoad.emittancePreparation.Active()&&!gSceneLoad.emittancePreparation.Ready())return false;
     // Admission precedes the atomic collision/visual commit. Never yield after
     // consuming the collision token and before completing visual publication.
     if(!fqloading::Allow())return false;
@@ -4548,6 +4597,34 @@ bool ProcessQ74TransitionRequest() {
             fqloadprofile::Log("FINALIZE_STEP generation=%llu stage=%s stepMs=%.1f cumulativeMs=%.1f",
                 (unsigned long long)gSceneLoad.generation,stage,intervalMs,cumulativeMs);
     };
+    if(gSceneLoad.environmentIndexPreparation.Active()){
+        if(gSceneLoad.environmentIndexPreparation.Successful()){
+            auto& packet=gSceneLoad.environmentIndexPreparation.Get();
+            fqloadprofile::Log("ENV_INDEX_READY generation=%llu queueMs=%.1f workerMs=%.1f scanMs=%.1f indexed=%zu",
+                (unsigned long long)gSceneLoad.generation,
+                gSceneLoad.environmentIndexPreparation.QueueDelayUs()/1000.0,
+                gSceneLoad.environmentIndexPreparation.ExecutionUs()/1000.0,
+                packet.scanUs/1000.0,packet.records.size());
+            (void)fo3env::PublishRecordIndexQ2210(std::move(packet));
+        }else fqloadprofile::Log("ENV_INDEX_FAILED generation=%llu fallback=legacy",
+            (unsigned long long)gSceneLoad.generation);
+        gSceneLoad.environmentIndexPreparation.Reset();
+    }
+    if(gSceneLoad.emittancePreparation.Active()){
+        if(gSceneLoad.emittancePreparation.Successful() &&
+           gSceneLoad.emittancePreparation.Get().worldspace==request.worldspaceFormId){
+            auto& packet=gSceneLoad.emittancePreparation.Get();
+            fqloadprofile::Log("XEMI_WORKER_READY generation=%llu worldspace=%08X queueMs=%.1f workerMs=%.1f scanMs=%.1f entries=%zu",
+                (unsigned long long)gSceneLoad.generation,request.worldspaceFormId,
+                gSceneLoad.emittancePreparation.QueueDelayUs()/1000.0,
+                gSceneLoad.emittancePreparation.ExecutionUs()/1000.0,
+                packet.scanUs/1000.0,packet.entries.size());
+            (void)PublishFo3ExternalEmittanceQ2210(std::move(packet));
+        }else fqloadprofile::Log("XEMI_WORKER_FAILED generation=%llu worldspace=%08X fallback=legacy",
+            (unsigned long long)gSceneLoad.generation,request.worldspaceFormId);
+        gSceneLoad.emittancePreparation.Reset();
+    }
+    markFinalization("publish-environment-prefetch");
     const size_t oldObjects = gObjects.size();
     if (prepared.playerSession) {
         gPlayerSession = std::move(prepared.playerSession);

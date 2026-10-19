@@ -184,14 +184,9 @@ inline float NormalizeCinematicTint(float authoredValue) {
     return std::clamp(authoredValue, 0.0f, 255.0f) / 255.0f;
 }
 
-inline bool ApplyWeatherImad(Fo3ImageSpace& image) {
+inline bool ApplyWeatherImad(Fo3ImageSpace& image,const WeatherImad& modifier) {
     using namespace fo3env;
-    if (!image.valid || image.weatherDayImadFormId == 0u) return false;
-
-    WeatherImad modifier;
-    if (!LoadWeatherImad(image.weatherDayImadFormId, modifier) || !modifier.valid) {
-        return false;
-    }
+    if (!image.valid || !modifier.valid) return false;
 
     const float beforeBlur = image.hdrBlurRadius;
     const float beforeThreshold = image.hdrBrightClamp;
@@ -262,6 +257,16 @@ inline bool ApplyWeatherImad(Fo3ImageSpace& image) {
         modifier.sunlightScaleMult.present ? "present" : "none",
         modifier.skyScaleMult.present ? "present" : "none");
     return true;
+}
+
+// Existing call sites retain the original IMAD lookup, whereas time-of-day
+// endpoint construction reuses its already-decoded modifier once.
+inline bool ApplyWeatherImad(Fo3ImageSpace& image) {
+    if (!image.valid || image.weatherDayImadFormId == 0u) return false;
+    WeatherImad modifier;
+    if (!LoadWeatherImad(image.weatherDayImadFormId, modifier) || !modifier.valid)
+        return false;
+    return ApplyWeatherImad(image,modifier);
 }
 
 } // namespace fo3imad
