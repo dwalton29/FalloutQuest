@@ -15,6 +15,11 @@ def percentile(values, p):
     return v[lo] + (v[hi] - v[lo]) * (pos - lo)
 
 
+def valid_gpu_us(value):
+    # v223 Quest elapsed queries sometimes returned uint64-wrapped negatives.
+    return math.isfinite(value) and 0 <= value <= ((1 << 63) - 1) / 1000
+
+
 def stats(values):
     return dict(n=len(values), mean=statistics.mean(values), median=statistics.median(values),
                 p95=percentile(values, .95), p99=percentile(values, .99), maximum=max(values),
@@ -27,7 +32,11 @@ def report(path):
         rows = list(csv.DictReader(line for line in f if not line.startswith('#')))
     if not rows:
         raise ValueError(f'{path}: no captured frames')
+    invalid_gpu = sum(not valid_gpu_us(float(r[k])) and float(r[k]) >= 0
+                      for r in rows for k in ('gpuEye0Us', 'gpuEye1Us', 'gpuEyesUs'))
     print(f'\n{path} ({len(rows)} frames; GPU excludes preparation; overlapping scopes are not additive)')
+    if invalid_gpu:
+        print(f'WARNING: excluded {invalid_gpu} invalid/wrapped GPU values; GPU bottleneck cannot be inferred from them.')
     for group, predicate in (
         ('loading', lambda r: r['loading'] == '1'),
         ('gameplay', lambda r: r['loading'] == '0' and r['blocked'] == '0' and r['submitted'] == '1'),
@@ -46,7 +55,7 @@ def report(path):
             if not key.endswith('Us') or key == 'periodUs':
                 continue
             # -1 is absent/disjoint/pending. Zero cadence is the initial frame.
-            vals = [float(r[key]) for r in selected if float(r[key]) >= 0 and (key != 'cadenceUs' or float(r[key]) > 0)]
+            vals = [float(r[key]) for r in selected if float(r[key]) >= 0 and (not key.startswith('gpu') or valid_gpu_us(float(r[key]))) and (key != 'cadenceUs' or float(r[key]) > 0)]
             if vals:
                 v = stats(vals)
                 print(f'{key},{v["n"]},' + ','.join(f'{v[k]/1000:.3f}' for k in ('mean', 'median', 'p95', 'p99', 'maximum')) + f',{v["over72"]:.2f},{v["over90"]:.2f}')

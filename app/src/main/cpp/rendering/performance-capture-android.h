@@ -18,8 +18,8 @@ inline void Control() {
     if(capture.active && (!token || token!=lastToken || capture.size==Capacity)) {
         capture.active=false;
         const bool ok=capture.Write("/data/user/0/com.falloutquest.app/files/performance.csv");
-        __android_log_print(ANDROID_LOG_INFO,"FQPerf","CAPTURE_END id=%llu frames=%zu saved=%d gpuDisjoint=%llu gpuDropped=%llu",
-            (unsigned long long)capture.id,capture.size,ok,(unsigned long long)gpu.disjoints,(unsigned long long)gpu.dropped);
+        __android_log_print(ANDROID_LOG_INFO,"FQPerf","CAPTURE_END id=%llu frames=%zu saved=%d gpuDisjoint=%llu gpuDropped=%llu gpuInvalid=%llu",
+            (unsigned long long)capture.id,capture.size,ok,(unsigned long long)gpu.disjoints,(unsigned long long)gpu.dropped,(unsigned long long)gpu.invalid);
     }
     if(token && token!=lastToken) {
         capture.Start(token);

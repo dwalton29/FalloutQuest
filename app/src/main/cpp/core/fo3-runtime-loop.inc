@@ -1320,6 +1320,7 @@ private:
     }
 
     void UpdatePlayer(const XrView& headView, XrTime frameTime) {
+        FQ_PERF_SCOPE(Motion);
         double dt = 1.0 / 72.0;
         if (lastFrameTime_ != 0 && frameTime > lastFrameTime_) {
             dt = static_cast<double>(frameTime - lastFrameTime_) / 1'000'000'000.0;
@@ -1412,6 +1413,7 @@ private:
     }
 
     void UpdateDoorAimQ1700(double lootTime) {
+        FQ_PERF_SCOPE(Interaction);
         if (IsFo3LoadingVisible() || Fo3LockpickFocus() || Fo3DialogueFocus() || Fo3ScriptMessageFocus() || Fo3PipboyFocus() || !handPoseValid_[1]) {
             if (doorAimActiveQ1700_) {
                 FQ_LOGI("Q16.13 HUD TARGET HIDE: sourceDoor=%08X reason=%s promptStorage=fixed-retained",
@@ -1619,6 +1621,7 @@ private:
                 const int64_t clockNs=gameplayFrameTime;
                 static int64_t previousWorldClockNs=0;
                 if(!IsFo3LoadingVisible()) {
+                {FQ_PERF_SCOPE(Scripts);
                 if (!Fo3GameplayBlocked() && gPlayerSession && !gPlayerSession->saveBlocked && gSceneReady &&
                     !IsFo3LoadingVisible() && sessionState_==XR_SESSION_STATE_FOCUSED &&
                     previousWorldClockNs>0 && clockNs>previousWorldClockNs) {
@@ -1659,6 +1662,7 @@ private:
                         scriptResidenceElapsed=0;
                     }
                     if(beforeScripts!=scriptPlayer.Revision())FlushFo3PlayerState();
+                }
                 }
                 if (gPlayerSession) fo3tod::gTestHour=gPlayerSession->player.Snapshot().gameHour;
                 if (!gFo3Environment.interior) UpdateFo3TimeOfDay(0.0f,clockNs);
@@ -1893,13 +1897,8 @@ private:
                 }
                 for (uint32_t eye = 0; eye < 2; ++eye) {
                     fqperf::Scope eyeScope(eye==0?fqperf::Eye0:fqperf::Eye1);
-                    if(fqperf::capture.recording) {
-                        fqopaque::eye=eye;fqperf::gpu.Begin(fqperf::capture.serial);
-                        fqopaque::externalGpuScope=fqperf::gpu.active>=0;
-                    }
                     rendered = RenderEye(eye, views[eye], projectionViews[eye]) && rendered;
                     if(fqperf::capture.recording) {
-                        fqperf::gpu.End();fqopaque::externalGpuScope=false;
                         if(!IsFo3LoadingVisible()) {
                             const auto& phases=fqopaque::phases[eye];
                             perf.us[eye==0?fqperf::Native0:fqperf::Native1]=phases[fqopaque::NativeLod].lastCpu;
@@ -2077,6 +2076,10 @@ private:
         if(fqperf::capture.recording)fqperf::capture.current.us[fqperf::Swapchain]+=fqopaque::Micros(acquireStarted);
         bool rendered = false;
         bool depthCopied = false;
+        if(fqperf::capture.recording) {
+            fqperf::gpu.Begin(fqperf::capture.serial);
+            fqopaque::externalGpuScope=fqperf::gpu.active>=0;
+        }
 
         glBindFramebuffer(GL_FRAMEBUFFER, framebuffer_);
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
@@ -2298,10 +2301,13 @@ private:
                 const auto pauseMvp=Multiply(viewProjection,model);fo3pauseui::Render(pauseMvp.m);
             }
             } // gameplay eye; loading has no world/HUD/post/depth-copy work
-            glFlush();
         } else {
             FQ_LOGE("Incomplete eye framebuffer");
         }
+        if(fqperf::capture.recording) {
+            fqperf::gpu.End();fqopaque::externalGpuScope=false;
+        }
+        glFlush();
 
         XrSwapchainImageReleaseInfo releaseInfo{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
         CheckXr(xrReleaseSwapchainImage(eye.handle, &releaseInfo), "xrReleaseSwapchainImage");

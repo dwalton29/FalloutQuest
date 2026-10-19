@@ -69,7 +69,7 @@ struct GpuTimer {
     PFNGLGETQUERYIVEXTPROC bits=nullptr;
     bool initialized=false, supported=false;
     int active=-1;
-    uint64_t disjoints=0, dropped=0, observedDisjointEpoch=0;
+    uint64_t disjoints=0, dropped=0, observedDisjointEpoch=0, invalid=0;
     void (*sample)(uint64_t,unsigned,unsigned,double)=nullptr;
     Average gpu; // Legacy aggregate of individual query samples, not total opaque time.
     std::array<Average,PhaseCount> phaseGpu;
@@ -106,10 +106,16 @@ struct GpuTimer {
             if(!ready) continue; // Never read QUERY_RESULT until available.
             if(!slot.discard) {
                 GLuint64 nanos=0;result(slot.id,GL_QUERY_RESULT_EXT,&nanos);
-                gpu.Add(double(nanos)/1000.0);
-                if(sample)sample(slot.frame,slot.eye,slot.phase,double(nanos)/1000.0);
-                phaseGpu[slot.phase].Add(double(nanos)/1000.0);
-                eyeGpu[slot.eye][slot.phase].Add(double(nanos)/1000.0);
+                // Quest drivers can return an unsigned-wrapped negative
+                // elapsed result without setting disjoint. Never publish that
+                // as GPU time (v223 capture contained values near UINT64_MAX).
+                if(nanos>(~GLuint64{0}>>1))++invalid;
+                else {
+                    gpu.Add(double(nanos)/1000.0);
+                    if(sample)sample(slot.frame,slot.eye,slot.phase,double(nanos)/1000.0);
+                    phaseGpu[slot.phase].Add(double(nanos)/1000.0);
+                    eyeGpu[slot.eye][slot.phase].Add(double(nanos)/1000.0);
+                }
             }
             slot.pending=false;slot.discard=false;
         }

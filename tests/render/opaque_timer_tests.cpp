@@ -4,11 +4,11 @@
 
 namespace {
 unsigned reads=0, begins=0, ends=0, deletes=0;
-bool ready=false;
+bool ready=false;GLuint64 measuredNanos=45000000;
 void Begin(GLenum,GLuint) {++begins;}
 void End(GLenum) {++ends;}
 void Available(GLuint,GLenum,GLuint* out) {*out=ready ? 1 : 0;}
-void Result(GLuint,GLenum,GLuint64* out) {assert(ready);++reads;*out=45000000;}
+void Result(GLuint,GLenum,GLuint64* out) {assert(ready);++reads;*out=measuredNanos;}
 void Delete(GLsizei,const GLuint*) {++deletes;}
 }
 int main() {
@@ -45,6 +45,9 @@ int main() {
     ++fqopaque::gpuDisjointEpoch;ready=true;
     const auto readsBefore=reads;other.Poll(24);
     assert(reads==readsBefore&&other.disjoints==1&&other.gpu.count==0);
+    other.Begin(25);other.End();measuredNanos=~GLuint64{0}-10000000;
+    other.Poll(29);assert(reads==readsBefore+1&&other.invalid==1&&other.gpu.count==0);
+    measuredNanos=45000000;
     other.Shutdown();
     // Full-eye captures own the GL query. Phase CPU scopes remain active,
     // but must neither nest nor end that owner's elapsed query.

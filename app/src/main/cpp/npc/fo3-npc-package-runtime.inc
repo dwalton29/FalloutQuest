@@ -1,5 +1,6 @@
 #include "rendering/performance-capture.h"
 #include <limits>
+#include "npc/fo3-npc-residency.h"
 #include "fo3-package-schedule.h"
 static std::unordered_set<std::string> gQ240AiDiagnostics;
 // Frame diagnostics only; the actual topology and algorithm remain pure.
@@ -433,9 +434,10 @@ static size_t Q240SandboxTarget(const Q230ActorVisual& actor,const fo3pipdata::P
 // Use the immutable v185 graph to find an accessible original load door
 // toward a remote PLDT reference. NPCs never call the player XTEL queue.
 static bool Q240NpcRemoteDoor(const Q230ActorVisual& actor,uint32_t targetCell,
-    uint32_t& doorRef,std::array<float,3>& doorPosition){
+    uint32_t& doorRef,std::array<float,3>& doorPosition,uint32_t* nextCell=nullptr){
+  FQ_PERF_SCOPE(Path);
 #ifndef FO3_NPC_XTEL_INDEX
-  (void)actor;(void)targetCell;(void)doorRef;(void)doorPosition;return false;
+  (void)actor;(void)targetCell;(void)doorRef;(void)doorPosition;(void)nextCell;return false;
 #else
   const auto index=FO3_NPC_XTEL_INDEX();
   if(!index||!gPlayerSession||!actor.navigationGraph||!targetCell)return false;
@@ -453,7 +455,8 @@ static bool Q240NpcRemoteDoor(const Q230ActorVisual& actor,uint32_t targetCell,
   }
   if(doors.empty())return false;
   const auto here=Q240GamePosition(actor);
-  size_t minLegs=SIZE_MAX;float minDistance=INFINITY;
+  struct Candidate {uint32_t ref;size_t legs;float distance;std::array<float,3> point;};
+  std::vector<Candidate> candidates;candidates.reserve(doors.size());
   for(uint32_t ref:doors){
     const auto* edge=index->Find(ref);
     if(!edge||edge->sourceWorld!=gExteriorWorldspaceQ1890||
@@ -466,13 +469,43 @@ static bool Q240NpcRemoteDoor(const Q230ActorVisual& actor,uint32_t targetCell,
     std::vector<uint32_t> remainder;
     if(!index->CellRoute(edge->destinationCell,targetCell,remainder))continue;
     std::array<float,3> point{placement->second.x,placement->second.y,placement->second.z};
-    std::vector<std::array<float,3>> route;
-    if(!Q240ActorPath(actor,*actor.navigationGraph,here,point,route)||route.empty()||
-       Q240PlanarDistance(route.back(),point)>96.f)continue;
-    const float distance=Q240PlanarDistance(here,point);
-    if(remainder.size()+1<minLegs||(remainder.size()+1==minLegs&&distance<minDistance)){
-      minLegs=remainder.size()+1;minDistance=distance;doorRef=ref;doorPosition=point;
-    }
+    candidates.push_back({ref,remainder.size()+1,Q240PlanarDistance(here,point),point});
+  }
+  // Rank using exactly the previous selection policy before doing NAVM work.
+  // Stable ties retain the original iteration order. An inaccessible best door
+  // still falls through to the next candidate; permission checks remain live.
+  std::stable_sort(candidates.begin(),candidates.end(),[](const Candidate& a,const Candidate& b){
+    return a.legs<b.legs||(a.legs==b.legs&&a.distance<b.distance);
+  });
+  if(candidates.empty())return false;
+  // Selection only needs existence of an approach, not a discarded shortest
+  // path. One directed traversal of the same validated NAVM portals answers
+  // reachability for every candidate. Crowd penalties affect route shape, not
+  // connectivity; actual movement still uses the unchanged crowd-aware A*.
+  const auto& graph=*actor.navigationGraph;
+  float startDistance=0;const auto start=Q240NearestNode(graph,here,&startDistance);
+  const auto startFlat=Q240Flat(graph,start);
+  if(!start.Valid()||startDistance>350.f||startFlat>=graph.triangleCount)return false;
+  std::vector<uint8_t> reachable(graph.triangleCount,0);
+  std::vector<Q240Node> frontier{start};reachable[startFlat]=1;
+  for(size_t at=0;at<frontier.size();++at) {
+    const auto current=frontier[at];
+    Q240Neighbors(graph,current,[&](const Q240Node& next){
+      const auto flat=Q240Flat(graph,next);std::array<float,3> portal{};
+      if(flat<reachable.size()&&!reachable[flat]&&Q240Portal(graph,current,next,portal)) {
+        reachable[flat]=1;frontier.push_back(next);
+      }
+    });
+  }
+  for(const auto& candidate:candidates) {
+    float distance=0;const auto goal=Q240NearestNode(graph,candidate.point,&distance);
+    const auto flat=Q240Flat(graph,goal);
+    if(!goal.Valid()||distance>500.f||flat>=reachable.size()||!reachable[flat])continue;
+    const auto endpoint=Q240GroundPoint(*graph.meshes[goal.mesh],goal.triangle,candidate.point);
+    if(Q240PlanarDistance(endpoint,candidate.point)>96.f)continue;
+    doorRef=candidate.ref;doorPosition=candidate.point;
+    if(nextCell)*nextCell=index->Find(candidate.ref)->destinationCell;
+    break;
   }
   return doorRef!=0;
 #endif
@@ -560,12 +593,14 @@ static const fo3pipdata::PackageDefinition* Q240SelectPackage(
          (remote->second.world!=0||remote->second.cell!=0)&&
          (remote->second.world!=gExteriorWorldspaceQ1890||
           (!gExteriorWorldspaceQ1890&&remote->second.cell!=gCurrentCellFormId))){
-        uint32_t door=0;std::array<float,3> approach{};
-        if(!Q240NpcRemoteDoor(actor,remote->second.cell,door,approach)){
+        uint32_t door=0,nextCell=0;std::array<float,3> approach{};
+        if(!Q240NpcRemoteDoor(actor,remote->second.cell,door,approach,&nextCell)){
           Q240AiLogOnce(actor.source.refFormId,packageId,"remote PLDT needs an accessible reachable XTEL door");
           continue;
         }
-        actor.runtime.xtelDoor=door;actor.runtime.xtelCell=remote->second.cell;
+        // The next authored hop can precede the final PACK location by more
+        // than one CELL. Traversal validates that immediate XTEL destination.
+        actor.runtime.xtelDoor=door;actor.runtime.xtelCell=nextCell;
         Q6H_LOGI("NPC XTEL INTENT actor=%08X package=%08X sourceCell=%08X targetCell=%08X door=%08X hour=%.2f",
           actor.source.refFormId,packageId,gCurrentCellFormId,remote->second.cell,door,hour);
         id=packageId;anchor=approach;radius=0;
@@ -1069,8 +1104,8 @@ static void Q240AdvanceNpcXtel(Q230ActorVisual& actor,float dt,double now){
 #else
   auto index=FO3_NPC_XTEL_INDEX();auto& state=actor.runtime;
   const auto* edge=index?index->Find(state.xtelDoor):nullptr;
-  if(!edge||edge->sourceCell!=gCurrentCellFormId||
-     edge->sourceWorld!=gExteriorWorldspaceQ1890||
+  if(!edge||!fo3npc::SceneOwnsCell(gCurrentCellFormId,gExteriorWorldspaceQ1890,
+       edge->sourceCell,edge->sourceWorld,gPlayerSession->player.Definitions().pipboy.cellWorlds)||
      edge->destinationCell!=state.xtelCell||
      (edge->sourceRecordFlags&0x820u)||(edge->destinationRecordFlags&0x820u)){
     Q240PackageRouteFailed(actor,now,"XTEL link no longer valid");return;

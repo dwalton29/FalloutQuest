@@ -20,6 +20,11 @@ class CaptureTests(unittest.TestCase):
         self.assertEqual(s['over72'], 50)
         self.assertEqual(s['over90'], 50)
 
+    def test_wrapped_gpu_results(self):
+        self.assertFalse(summary.valid_gpu_us(18446744073695728.0))
+        self.assertFalse(summary.valid_gpu_us(float('nan')))
+        self.assertTrue(summary.valid_gpu_us(13888.888))
+
     def test_csv_written_by_production_header(self):
         with open('/tmp/fq-perf-test.csv') as f:
             reader = csv.DictReader(line for line in f if not line.startswith('#'))

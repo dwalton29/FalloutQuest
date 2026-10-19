@@ -13,7 +13,7 @@ enum Metric : unsigned {
     Wait,Begin,Input,Gameplay,Streaming,ActorPrep,Simulation,Packages,Persistence,
     Unloaded,Arrivals,Animation,Facial,Palette,Upload,Target,Sight,Path,Movement,
     WeaponChoice,Eye0,Eye1,End,Work,Cadence,ScenePrep,Clip,Pose,
-    Native0,Native1,Detail0,Detail1,NpcDraw0,NpcDraw1,PlayerDraw0,PlayerDraw1,Swapchain,Count
+    Native0,Native1,Detail0,Detail1,NpcDraw0,NpcDraw1,PlayerDraw0,PlayerDraw1,Swapchain,Scripts,Motion,Interaction,Count
 };
 inline constexpr const char* names[]={"xrWaitUs","xrBeginUs","inputTrackingUs","gameplayUs",
     "streamingUs","actorPrepUs","npcSimulationUs","npcPackagesUs","npcPersistenceUs",
@@ -21,7 +21,7 @@ inline constexpr const char* names[]={"xrWaitUs","xrBeginUs","inputTrackingUs","
     "npcUploadUs","npcTargetUs","npcSightUs","npcPathUs","npcMovementUs",
     "npcWeaponChoiceUs","eye0CpuUs","eye1CpuUs","xrEndUs","workUs","cadenceUs",
     "scenePrepUs","npcClipUs","npcPoseUs","native0CpuUs","native1CpuUs",
-    "detail0CpuUs","detail1CpuUs","npcDraw0CpuUs","npcDraw1CpuUs","playerDraw0CpuUs","playerDraw1CpuUs","swapchainAcquireWaitUs"};
+    "detail0CpuUs","detail1CpuUs","npcDraw0CpuUs","npcDraw1CpuUs","playerDraw0CpuUs","playerDraw1CpuUs","swapchainAcquireWaitUs","scriptsUs","playerMotionUs","interactionUs"};
 static_assert(sizeof(names)/sizeof(*names)==Count);
 struct Frame {
     uint64_t serial=0;
@@ -56,7 +56,7 @@ struct Session {
     }
     bool Write(const char* path) const {
         FILE* f=std::fopen(path,"w");if(!f)return false;
-        std::fprintf(f,"# v223 session=%llu gpuEyesUs=delayed-both-eyes-excludes-preparation missing=-1 parent-scopes-include-children compositor-drops=unavailable %s\n",(unsigned long long)id,configuration);
+        std::fprintf(f,"# v224 session=%llu gpuEyesUs=delayed-both-eyes-excludes-preparation missing=-1 parent-scopes-include-children compositor-drops=unavailable %s\n",(unsigned long long)id,configuration);
         std::fprintf(f,"serial,loading,blocked,rendered,submitted,streaming,cell,world,periodUs,residents,visible,animated,combat,parts,rigParts,paths,expanded,paletteBytes,vertices,draws,states,uniforms,textures,npcDraws,paletteSkipped,gpuEyesUs,gpuEye0Us,gpuEye1Us");
         for(auto name:names)std::fprintf(f,",%s",name);
         std::fputc('\n',f);
