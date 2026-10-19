@@ -68,6 +68,15 @@ target_compile_options(falloutquest PRIVATE
     -include ${CMAKE_CURRENT_SOURCE_DIR}/vr/openxr-platform-prelude.h
 )
 
+# Profile uses the SAME debug-enabled source and diagnostics but emits
+# optimised native machine code. Keep this in CMake rather than Gradle
+# cppFlags so -O2 appears after CMAKE_CXX_FLAGS_DEBUG's -O0.
+option(FALLOUTQUEST_OPTIMIZED_PROFILE "Enable native -O2 without NDEBUG" OFF)
+if(FALLOUTQUEST_OPTIMIZED_PROFILE)
+    target_compile_options(falloutquest PRIVATE -O2)
+    target_compile_definitions(falloutquest PRIVATE FQ_OPTIMIZED_PROFILE=1)
+endif()
+
 find_library(android-lib android)
 find_library(log-lib log)
 find_library(egl-lib EGL)

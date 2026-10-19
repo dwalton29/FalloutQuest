@@ -40,6 +40,20 @@ android {
         debug {
             signingConfig signingConfigs.debug
         }
+        // The same source and app ID as Debug, but with native C++ -O2.
+        // Keep Android debuggability, the dev signing key, and FQPerf capture.
+        // This build type is for a controlled A/B comparison, NOT release.
+        profile {
+            initWith debug
+            matchingFallbacks = ['debug']
+            debuggable true
+            versionNameSuffix '-O2'
+            externalNativeBuild {
+                cmake {
+                    arguments '-DFALLOUTQUEST_OPTIMIZED_PROFILE=ON'
+                }
+            }
+        }
     }
 
     buildFeatures {

@@ -522,6 +522,14 @@ private:
         if (!eglMakeCurrent(eglDisplay_, eglSurface_, eglSurface_, eglContext_)) return false;
 
         fqgl::Reset();
+#ifdef FQ_OPTIMIZED_PROFILE
+#if defined(NDEBUG) || !defined(__OPTIMIZE__)
+#error "Profile requires native optimisation without disabling debug diagnostics"
+#endif
+        FQ_LOGI("FQ BUILD CONFIG: variant=profile nativeOptimisation=O2 debugDiagnostics=enabled");
+#else
+        FQ_LOGI("FQ BUILD CONFIG: variant=debug nativeOptimisation=default debugDiagnostics=enabled");
+#endif
         FQ_LOGI("Quest stereo: sequential eyes, cached batches; diagnostics fastMaterial=%d renderScale=%.2f", fqopaque::Options().fastMaterial, fqopaque::Options().scale);
         FQ_LOGI("OpenGL ES renderer: %s", reinterpret_cast<const char*>(glGetString(GL_RENDERER)));
         return true;

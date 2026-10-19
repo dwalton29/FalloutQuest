@@ -157,11 +157,14 @@ jobs:
         with:
           gradle-version: '8.9'
 
-      - name: Build debug APK
+      - name: Build matched Debug and O2 APKs
         shell: bash
         run: |
           set -o pipefail
-          gradle assembleDebug --stacktrace 2>&1 | tee build-output.log
+          gradle assembleDebug assembleProfile --stacktrace 2>&1 | tee build-output.log
+
+      - name: Verify actual ARM64 compiler optimisation and diagnostics
+        run: python3 tools/check_native_profile.py
 
       - name: Upload build diagnostics
         if: always()
@@ -176,4 +179,11 @@ jobs:
         with:
           name: FalloutQuest-debug
           path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+
+      - name: Upload FalloutQuest native O2 profile APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: FalloutQuest-O2-profile
+          path: app/build/outputs/apk/profile/app-profile.apk
           if-no-files-found: error
