@@ -48,6 +48,8 @@ class CaptureTests(unittest.TestCase):
         self.assertNotIn(None, rows[0])
         self.assertEqual(float(rows[0]['gpuEyesUs']), 250)
         self.assertEqual(float(rows[0]['gpuEye0Us']), 100)
+        self.assertEqual(float(rows[0]['gpu0_terrainUs']), 150)
+        self.assertEqual(float(rows[0]['gpu1_reflectionUs']), -1)
         self.assertEqual(float(rows[0]['workUs']), 1000)
         self.assertEqual(float(rows[-1]['workUs']), 5095)
 

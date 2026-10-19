@@ -24,11 +24,23 @@ inline constexpr const char* names[]={"xrWaitUs","xrBeginUs","inputTrackingUs","
     "detail0CpuUs","detail1CpuUs","npcDraw0CpuUs","npcDraw1CpuUs","playerDraw0CpuUs","playerDraw1CpuUs","swapchainAcquireWaitUs","scriptsUs","playerMotionUs","interactionUs",
     "npcGroundUs","npcPortalUs","npcObstructionUs","npcCrowdUs","npcArrivalPartUs"};
 static_assert(sizeof(names)/sizeof(*names)==Count);
+enum GpuPass : unsigned { GpuNative, GpuDetailed, GpuNpc, GpuPlayer,
+    GpuAlpha, GpuEnvironment, GpuTerrain, GpuReflection, GpuWater,
+    GpuResolve, GpuExposure, GpuPost, GpuBloom, GpuDepthCopy, GpuSky, GpuMirrorTerrain, GpuPassCount,
+    GpuEyeTotal=GpuPassCount };
+inline constexpr const char* gpuPassNames[]={"native","detailed","npc","player",
+    "alpha","environment","terrain","reflection","water","resolve","exposure",
+    "post","bloom","depthCopy","sky","mirrorTerrain"};
+static_assert(sizeof(gpuPassNames)/sizeof(*gpuPassNames)==GpuPassCount);
 struct Frame {
     uint64_t serial=0;
     std::array<double,Count> us{};
     double gpuEyesUs=-1,periodUs=0;
     double gpuEyeUs[2]{-1,-1};
+    std::array<std::array<double,GpuPassCount>,2> gpuPassUs{};
+    std::array<std::array<unsigned,GpuPassCount>,2> gpuExpected{},gpuReceived{};
+    Frame(){for(auto& eye:gpuPassUs)eye.fill(-1);}
+
     uint32_t cell=0,world=0,residents=0,visible=0,animated=0,combat=0,parts=0,rigParts=0,paths=0,expanded=0,sceneSamples=1;
     uint64_t paletteBytes=0,vertices=0,draws=0,states=0,uniforms=0,textures=0,npcDraws=0,paletteSkipped=0,submittedVertices=0;
     bool loading=false,blocked=false,rendered=false,submitted=false,streaming=false;
@@ -55,12 +67,25 @@ struct Session {
             if(frames[i-1].serial<frame)break;
         }
     }
+    void GpuStage(uint64_t frame,unsigned eye,unsigned pass,double us) {
+        if(pass==GpuEyeTotal){Gpu(frame,eye,us);return;}
+        if(!active||eye>1||pass>=GpuPassCount)return;
+        for(size_t i=size;i>0;--i){
+            if(frames[i-1].serial==frame){
+                ++frames[i-1].gpuReceived[eye][pass];
+                auto& value=frames[i-1].gpuPassUs[eye][pass];
+                value=value<0?us:value+us;return;
+            }
+            if(frames[i-1].serial<frame)break;
+        }
+    }
     bool Write(const char* path) const {
         FILE* f=std::fopen(path,"w");if(!f)return false;
-        std::fprintf(f,"# format=231 session=%llu gpuEyesUs=delayed-both-eyes-excludes-preparation missing=-1 parent-scopes-include-children compositor-drops=unavailable %s\n",(unsigned long long)id,configuration);
+        std::fprintf(f,"# format=232 gpuBackend=timestamp-pairs gpuSampleStride=8 gpuScopes=overlap-post-includes-bloom-reflection-includes-mirror session=%llu gpuEyesUs=delayed-both-eyes-excludes-preparation missing=-1 parent-scopes-include-children compositor-drops=unavailable %s\n",(unsigned long long)id,configuration);
         std::fprintf(f,"serial,loading,blocked,rendered,submitted,streaming,cell,world,periodUs,residents,visible,animated,combat,parts,rigParts,paths,expanded,paletteBytes,vertices,draws,states,uniforms,textures,npcDraws,paletteSkipped,gpuEyesUs,gpuEye0Us,gpuEye1Us");
         for(auto name:names)std::fprintf(f,",%s",name);
         std::fprintf(f,",sceneSamples,submittedVertices");
+        for(unsigned eye=0;eye<2;++eye)for(auto name:gpuPassNames)std::fprintf(f,",gpu%u_%sUs",eye,name);
         std::fputc('\n',f);
         for(size_t i=0;i<size;++i) {
             const auto& v=frames[i];
@@ -72,6 +97,10 @@ struct Session {
                 v.gpuEyesUs,v.gpuEyeUs[0],v.gpuEyeUs[1]);
             for(double us:v.us)std::fprintf(f,",%.3f",us);
             std::fprintf(f,",%u,%llu",v.sceneSamples,(unsigned long long)v.submittedVertices);
+            for(unsigned eye=0;eye<2;++eye)for(unsigned pass=0;pass<GpuPassCount;++pass){
+                const bool complete=v.gpuExpected[eye][pass]>0&&v.gpuExpected[eye][pass]==v.gpuReceived[eye][pass];
+                std::fprintf(f,",%.3f",complete?v.gpuPassUs[eye][pass]:-1.0);
+            }
             std::fputc('\n',f);
         }
         return std::fclose(f)==0;

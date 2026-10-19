@@ -9235,6 +9235,7 @@ bool Q2090RenderWaterReflection(const float mainMvp[16],
         return true;
     }
 
+    fqperf::GpuScope gpuReflection(fqperf::GpuReflection);
     float reflection[16]{};
     Q2090BuildReflectionMatrix(planeY, reflection);
     Q2090MultiplyMatrix(mainMvp, reflection, outReflectionMvp);
@@ -9388,7 +9389,7 @@ bool Q2090RenderWaterReflection(const float mainMvp[16],
         std::chrono::steady_clock::now();
     // LAND uses its own program, so arm the same water-plane clip there.
     SetFo3TerrainWaterReflectionClipQ2090(true, planeY);
-    RenderFo3CollisionOverlay(outReflectionMvp);
+    {fqperf::GpuScope gpuTerrain(fqperf::GpuMirrorTerrain); RenderFo3CollisionOverlay(outReflectionMvp);}
     SetFo3TerrainWaterReflectionClipQ2090(false, planeY);
     q2019LandUs = static_cast<uint64_t>(
         std::chrono::duration_cast<std::chrono::microseconds>(
@@ -13055,10 +13056,10 @@ void RenderScene(const float* mvp) {
     glDisable(GL_BLEND);
     if (q2060MsaaActive && q2060MsaaSamples > 1)
         glEnable(GL_SAMPLE_ALPHA_TO_COVERAGE);
-    { fqopaque::PhaseScope scope(fqopaque::NativeLod,gStereoFrame); Q1990RenderNativeLod(false); }
-    { fqopaque::PhaseScope scope(fqopaque::DetailedWorld,gStereoFrame); Q2017RenderOpaqueDetailedInstanced(); }
-    { fqopaque::PhaseScope scope(fqopaque::Npc,gStereoFrame); Q230RenderNpcActors(false); }
-    { fqopaque::PhaseScope scope(fqopaque::Player,gStereoFrame); Q210RenderPlayerBody(false); }
+    { fqperf::GpuScope gpuPass(fqperf::GpuNative); fqopaque::PhaseScope scope(fqopaque::NativeLod,gStereoFrame); Q1990RenderNativeLod(false); }
+    { fqperf::GpuScope gpuPass(fqperf::GpuDetailed); fqopaque::PhaseScope scope(fqopaque::DetailedWorld,gStereoFrame); Q2017RenderOpaqueDetailedInstanced(); }
+    { fqperf::GpuScope gpuPass(fqperf::GpuNpc); fqopaque::PhaseScope scope(fqopaque::Npc,gStereoFrame); Q230RenderNpcActors(false); }
+    { fqperf::GpuScope gpuPass(fqperf::GpuPlayer); fqopaque::PhaseScope scope(fqopaque::Player,gStereoFrame); Q210RenderPlayerBody(false); }
     if (!q2021MainA2cWas)
         glDisable(GL_SAMPLE_ALPHA_TO_COVERAGE);
     const uint64_t q2017OpaqueUs = static_cast<uint64_t>(
@@ -13109,6 +13110,7 @@ void RenderScene(const float* mvp) {
             (unsigned long long)p[1].lastDraws,(unsigned long long)p[1].lastVertices,(unsigned long long)(p[1].lastVertices/3));
     }
 
+    fqperf::GpuScope gpuAlpha(fqperf::GpuAlpha);
     const auto q2017AlphaStarted = std::chrono::steady_clock::now();
     glEnable(GL_BLEND);
     Q1990RenderNativeLod(true);
@@ -13127,6 +13129,8 @@ void RenderScene(const float* mvp) {
             std::chrono::steady_clock::now() -
             q2017AlphaStarted).count());
 
+    gpuAlpha.Finish();
+    fqperf::GpuScope gpuEnvironment(fqperf::GpuEnvironment);
     const auto q2017EnvStarted = std::chrono::steady_clock::now();
     // Q20.5 PC apitrace calls 14054-14061: Fallout switches to a
     // dedicated environment pass with ZWRITE=FALSE, ZFUNC=EQUAL and
@@ -13175,6 +13179,7 @@ void RenderScene(const float* mvp) {
             std::chrono::steady_clock::now() -
             q2017EnvStarted).count());
 
+    gpuEnvironment.Finish();
     static uint64_t q2017PhaseEye = 0u;
     ++q2017PhaseEye;
     if ((q2017PhaseEye % 240u) == 1u ||
@@ -13196,7 +13201,7 @@ void RenderScene(const float* mvp) {
     if(cullWasEnabled) glEnable(GL_CULL_FACE); else glDisable(GL_CULL_FACE);
     glPolygonOffset(previousOffsetFactor, previousOffsetUnits);
     if(offsetWasEnabled) glEnable(GL_POLYGON_OFFSET_FILL); else glDisable(GL_POLYGON_OFFSET_FILL);
-    RenderFo3CollisionOverlay(mvp);
+    {fqperf::GpuScope gpuTerrain(fqperf::GpuTerrain); RenderFo3CollisionOverlay(mvp);}
 
     if (gExteriorStreamingActiveQ1890 && gExteriorWorldspaceQ1890 != 0u) {
         // Q20.9 WATER000: first render the current eye's mirrored world into
@@ -13284,6 +13289,7 @@ void RenderScene(const float* mvp) {
 
         const auto q2019WaterDrawStarted =
             std::chrono::steady_clock::now();
+        fqperf::GpuScope gpuWater(fqperf::GpuWater);
         RenderFo3WaterSurfaceQ2070(
             mvp,
             gExteriorOriginXQ1890,
@@ -13309,6 +13315,7 @@ void RenderScene(const float* mvp) {
             q2090ReflectionReady ? gWaterReflectionColorQ2090 : 0u,
             q2090ReflectionReady,
             q2090ReflectionReady ? q2090ReflectionMvp : nullptr);
+        gpuWater.Finish();
         const uint64_t q2019WaterDrawUs = static_cast<uint64_t>(
             std::chrono::duration_cast<std::chrono::microseconds>(
                 std::chrono::steady_clock::now() -
@@ -13609,6 +13616,7 @@ void ResetFo3InteriorExposureHistory() { q1350AdaptFrame = 0u; }
 
 void Q1350UpdateExposureQ1350() {
     if (!q1280PostColor || !Q1350EnsureAdaptationQ1350()) return;
+    fqperf::GpuScope gpuExposure(fqperf::GpuExposure);
 
     GLint oldFramebuffer = 0, oldProgram = 0, oldVao = 0, oldActiveTexture = 0;
     GLint oldTexture0 = 0, oldTexture1 = 0;
@@ -13883,6 +13891,7 @@ bool Q1670AllocateTargetsQ1670() {
 
 bool Q1670RenderPcBloomQ1670() {
     if (!q1280PostColor) return false;
+    fqperf::GpuScope gpuBloom(fqperf::GpuBloom);
 
     GLint oldFramebuffer = 0, oldProgram = 0, oldVao = 0, oldActiveTexture = 0;
     GLint oldTexture0 = 0, oldTexture1 = 0;
@@ -14271,6 +14280,7 @@ bool Q2060AllocateMsaaTargetQ2060(GLsizei width, GLsizei height,
 void Q2060ResolveEyeMsaaQ2060() {
     if (!q2060MsaaActive || q2060MsaaSamples <= 1 ||
         !q2060MsaaFbo || !q1280PostFbo) return;
+    fqperf::GpuScope gpuResolve(fqperf::GpuResolve);
 
     glBindFramebuffer(GL_READ_FRAMEBUFFER, q2060MsaaFbo);
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, q1280PostFbo);
@@ -14372,6 +14382,7 @@ bool Q1280BeginEyePostQ1280(GLuint swapchainFbo, GLsizei width, GLsizei height) 
 
 void Q1280CompositeEyePostQ1280(GLuint swapchainFbo, GLsizei width, GLsizei height) {
     if (!q1280PostActive || !q1280PostProgram || !q1280PostColor) return;
+    fqperf::GpuScope gpuPost(fqperf::GpuPost);
 
     GLint previousProgram = 0, previousVao = 0, previousActiveTexture = 0;
     GLint previousTexture0 = 0, previousTexture1 = 0, previousTexture2 = 0, previousTexture3 = 0;

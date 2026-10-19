@@ -16,13 +16,24 @@ int main() {
     s.Gpu(serial,1,150);assert(s.frames[0].gpuEyesUs==250);
     s.Gpu(serial,9,100);assert(s.frames[0].gpuEyesUs==250);
     s.Gpu(serial-1,1,200);assert(s.size==Capacity); // stale completion ignored
+    s.frames[0].gpuExpected[0][GpuTerrain]=2;
+    s.frames[0].gpuExpected[1][GpuReflection]=2; // only one completion: export missing
+    s.GpuStage(serial,0,GpuTerrain,100);
+    s.GpuStage(serial,0,GpuTerrain,50);
+    s.GpuStage(serial,1,GpuReflection,200);
+    assert(s.frames[0].gpuPassUs[0][GpuTerrain]==150);
+    assert(s.frames[0].gpuPassUs[1][GpuReflection]==200);
+    assert(s.frames[0].gpuPassUs[1][GpuTerrain]==-1);
+    s.GpuStage(serial,2,GpuTerrain,999);
+    s.GpuStage(serial-1,0,GpuTerrain,999);
+    assert(s.frames[0].gpuPassUs[0][GpuTerrain]==150);
     assert(s.Write("/tmp/fq-perf-test.csv"));
     std::ifstream in("/tmp/fq-perf-test.csv");std::string line;
     unsigned lines=0;while(std::getline(in,line)){
-        if(lines==0)assert(line.find("format=231")!=std::string::npos);
+        if(lines==0)assert(line.find("format=232")!=std::string::npos);
         if(lines==1)assert(line.find(",sceneSamples,submittedVertices")!=std::string::npos);
-        if(lines==2)assert(line.substr(line.size()-4)==",1,0");
-        if(lines==3)assert(line.substr(line.size()-4)==",2,0");
+        if(lines==2)assert(line.find(",1,0,-1.000")!=std::string::npos);
+        if(lines==3)assert(line.find(",2,0,-1.000")!=std::string::npos);
         ++lines;
     }
     assert(lines==Capacity+2);

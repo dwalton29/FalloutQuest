@@ -12,3 +12,6 @@ using PFNGLENDQUERYEXTPROC=void(*)(GLenum);
 using PFNGLGETQUERYOBJECTUIVEXTPROC=void(*)(GLuint,GLenum,GLuint*);
 using PFNGLGETQUERYOBJECTUI64VEXTPROC=void(*)(GLuint,GLenum,GLuint64*);
 using PFNGLGETQUERYIVEXTPROC=void(*)(GLenum,GLenum,GLint*);
+
+#define GL_TIMESTAMP_EXT 0x8E28
+using PFNGLQUERYCOUNTEREXTPROC=void(*)(GLuint,GLenum);

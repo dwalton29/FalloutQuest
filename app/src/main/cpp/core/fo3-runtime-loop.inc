@@ -2138,10 +2138,9 @@ private:
         if(fqperf::capture.recording)fqperf::capture.current.us[fqperf::Swapchain]+=fqopaque::Micros(acquireStarted);
         bool rendered = false;
         bool depthCopied = false;
-        if(fqperf::capture.recording) {
-            fqperf::gpu.Begin(fqperf::capture.serial);
-            fqopaque::externalGpuScope=fqperf::gpu.active>=0;
-        }
+        fqperf::GpuScope gpuEye(fqperf::GpuEyeTotal);
+        // Suppress the known-bad elapsed-query diagnostics during captures.
+        fqopaque::externalGpuScope=fqperf::capture.recording;
 
         glBindFramebuffer(GL_FRAMEBUFFER, framebuffer_);
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
@@ -2191,7 +2190,7 @@ private:
             skyView.m[14] = 0.0f;
             const Mat4 skyMvp = Multiply(projection, skyView);
             SetFo3WaterSkyMvpQ2090(skyMvp.m);
-            if (!IsFo3LoadingVisible() && !gFo3Environment.interior) RenderFo3PcSky(skyMvp.m);
+            if (!IsFo3LoadingVisible() && !gFo3Environment.interior) {fqperf::GpuScope gpuSky(fqperf::GpuSky); RenderFo3PcSky(skyMvp.m);}
             const Mat4 viewProjection = Multiply(projection, camera);
 
             glUseProgram(program_);
@@ -2331,6 +2330,7 @@ private:
                 fo3xpui::Render(notificationMvp.m);
             }
             if (depthReady) {
+                fqperf::GpuScope gpuDepth(fqperf::GpuDepthCopy);
                 if (!depthFramebuffer_) glGenFramebuffers(1, &depthFramebuffer_);
                 glBindFramebuffer(GL_FRAMEBUFFER, depthFramebuffer_);
                 glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D,
@@ -2377,8 +2377,9 @@ private:
             FQ_LOGE("Incomplete eye framebuffer");
         }
         if(fqperf::capture.recording) {
-            fqperf::gpu.End();fqopaque::externalGpuScope=false;
+            fqopaque::externalGpuScope=false;
         }
+        gpuEye.Finish();
         glFlush();
 
         XrSwapchainImageReleaseInfo releaseInfo{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};

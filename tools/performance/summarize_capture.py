@@ -41,6 +41,7 @@ def report(path):
         rows = list(csv.DictReader(line for line in f if not line.startswith('#')))
     if not rows:
         raise ValueError(f'{path}: no captured frames')
+    print(path.read_text().splitlines()[0])
     invalid_gpu = sum(not valid_gpu_us(float(r[k])) and float(r[k]) >= 0
                       for r in rows for k in ('gpuEye0Us', 'gpuEye1Us', 'gpuEyesUs'))
     print(f'\n{path} ({len(rows)} frames; GPU excludes preparation; overlapping scopes are not additive)')
@@ -51,6 +52,8 @@ def report(path):
         ('gameplay', lambda r: r['loading'] == '0' and r['blocked'] == '0' and r['submitted'] == '1'),
         ('npc-light', lambda r: r['loading'] == '0' and r['blocked'] == '0' and r['submitted'] == '1' and int(r['residents']) == 0),
         ('npc-present', lambda r: r['loading'] == '0' and r['blocked'] == '0' and r['submitted'] == '1' and int(r['residents']) > 0),
+        ('gpu-sampled-v232', lambda r: r['loading']=='0' and r['blocked']=='0' and r['submitted']=='1' and 'gpu0_terrainUs' in r and int(r['serial'])%8==0),
+        ('gpu-unsampled-v232', lambda r: r['loading']=='0' and r['blocked']=='0' and r['submitted']=='1' and 'gpu0_terrainUs' in r and int(r['serial'])%8!=0),
         ('combat', lambda r: r['loading'] == '0' and r['submitted'] == '1' and int(r['combat']) > 0),
         ('streaming', lambda r: r['loading'] == '0' and r['streaming'] == '1'),
     ):
@@ -61,7 +64,8 @@ def report(path):
         print(f'\n{group}: {len(selected)} frames; mean residents={statistics.mean(int(r["residents"]) for r in selected):.1f}')
         pairs = sum(valid_gpu_us(float(r['gpuEyesUs'])) for r in selected)
         print(f'GPU eye pairs: {pairs} valid, {len(selected)-pairs} unavailable/invalid; '
-              'cadence uses adjacent frames within this group')
+              'cadence uses adjacent frames within this group; v232 GPU is sampled every 8 frames, missing=-1; '
+              'GPU scopes overlap: post includes bloom, reflection includes mirrorTerrain')
         print('metric,n,mean_ms,median_ms,p95_ms,p99_ms,max_ms,over72_percent,over90_percent')
         for key in rows[0]:
             if not key.endswith('Us') or key == 'periodUs':

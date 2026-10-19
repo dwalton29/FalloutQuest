@@ -17,7 +17,7 @@ class LodDiagnostics(unittest.TestCase):
     def test_queries_are_serial_and_phases_split(self):
         scene=SRC.split('void RenderScene(',1)[1]
         for phase,call in [('NativeLod','Q1990RenderNativeLod(false)'),('DetailedWorld','Q2017RenderOpaqueDetailedInstanced()'),('Npc','Q230RenderNpcActors(false)'),('Player','Q210RenderPlayerBody(false)')]:
-            self.assertIn(f'{{ fqopaque::PhaseScope scope(fqopaque::{phase},gStereoFrame); {call}; }}',scene)
+            self.assertIn(f'fqopaque::PhaseScope scope(fqopaque::{phase},gStereoFrame); {call}; }}',scene)
         begin=HEADER.split('inline void Begin(uint64_t frame)',1)[1].split('inline void End',1)[0]
         self.assertNotIn('timer.Begin(',begin) # No outer query enclosing inner queries.
     def test_material_and_clip_are_native_only(self):
