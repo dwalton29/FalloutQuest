@@ -173,6 +173,43 @@ class LoadingPipeline(unittest.TestCase):
         self.assertIn('inline bool ApplyWeatherImad(Fo3ImageSpace& image,const WeatherImad& modifier)',weather)
         self.assertIn('TRANSITION_STEP cell=%08X',(ROOT/'world/fo3-cell-world.cpp').read_text())
 
+    def test_v222_no_emittance_esm_scan_in_mesh_upload_path(self):
+        runtime=(ROOT/'core/fo3-runtime.cpp').read_text()
+        xemi=(ROOT/'rendering/environment/fo3-external-emittance.h').read_text()
+        upload=runtime.split('bool UploadCpuObject(',1)[1].split('void Q74DeleteGpuObjects(',1)[0]
+        scene=runtime.split('bool ProcessQ74TransitionRequest() {',1)[1].split('GLenum Q1150BlendFactor',1)[0]
+        self.assertIn('TryResolvePublishedFo3ExternalEmittanceQ2220(',upload)
+        self.assertNotIn('ResolveFo3ExternalEmittance(0x00000A74u',upload)
+        self.assertNotIn('LoadFo3ExternalEmittance(',upload)
+        self.assertIn('gQ2220UploadWorldspace=request.worldspaceFormId;',scene)
+        helper=xemi.split('inline bool TryResolvePublishedFo3ExternalEmittanceQ2220(',1)[1].split('inline bool ResolveFo3ExternalEmittance(',1)[0]
+        self.assertNotIn('LoadFo3ExternalEmittance(',helper)
+        self.assertIn('gFo3ExternalEmittanceWorld!=worldspaceFormId',helper)
+        self.assertIn('RebindFo3PublishedEmittanceQ2220(request.worldspaceFormId)',scene)
+        self.assertIn('XEMI_GPU_REBIND generation=',scene)
+        self.assertIn('XEMI_SCENE_FALLBACK generation=',scene)
+        self.assertLess(scene.index('PublishFo3ExternalEmittanceQ2210('),
+                        scene.index('RebindFo3PublishedEmittanceQ2220('))
+
+    def test_v222_terrain_parallel_dds_and_detailed_steps(self):
+        terrain=(ROOT/'rendering/terrain/fo3-terrain-render.inc').read_text()
+        scene=terrain.split('bool InitializeFo3TerrainRenderQ76(',1)[1].split('void RenderFo3Terrain',1)[0]
+        self.assertIn('Q2220_MAX_STAGED_BYTES=96u*1024u*1024u',scene)
+        self.assertIn('q2220Workers.emplace_back(q2220Decode)',scene)
+        self.assertIn('q2220Workers)if(worker.joinable())worker.join()',scene)
+        self.assertIn('q2220Decode();',scene)
+        self.assertIn('LoadFalloutTextureRgba(q2220Paths[i],image)',scene)
+        self.assertIn('Q711UploadTexture(cpu.texturePath,',scene)
+        self.assertIn('Q711UploadTexture(cpu.normalPath,',scene)
+        for stage in ('load-authored-land','stitch-authored-heights',
+                      'build-authored-geometry','parallel-dds-decode',
+                      'compile-terrain-shader','gpu-textures-and-geometry'):
+            self.assertIn('q2220Mark("'+stage+'"',scene)
+        self.assertIn('const GLenum error = glGetError()',scene)
+        self.assertIn('Q7.20 TERRAIN GPU READY',scene)
+        self.assertIn('TERRAIN_INIT_STEP worldspace=%08X',scene)
+        self.assertIn('InitializeFo3TerrainRenderQ76(', (ROOT/'world/fo3-cell-world.cpp').read_text())
+
     def test_gpu_backlog_never_blocks_waiting_for_completion(self):
         loop=(ROOT/'core/fo3-runtime-loop.inc').read_text()
         self.assertIn('glClientWaitSync(gLoadingUploadFence,0,0)',loop)

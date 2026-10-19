@@ -22,8 +22,8 @@ android {
         applicationId 'com.falloutquest.app'
         minSdk 29
         targetSdk 35
-        versionCode 221
-        versionName '0.80.0-loading-environment-prefetch'
+        versionCode 222
+        versionName '0.81.0-terrain-decode-and-emittance-streaming'
 
         ndk {
             abiFilters 'arm64-v8a'

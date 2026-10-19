@@ -1109,6 +1109,8 @@ size_t gQ1380ExternalFlagShapes = 0u;
 size_t gQ1380ExternalResolvedShapes = 0u;
 size_t gQ1380ExternalFixedShapes = 0u;
 size_t gQ1380ExternalRegionShapes = 0u;
+// Scene generation owns the worldspace for mesh uploads; never hardcode Megaton.
+uint32_t gQ2220UploadWorldspace = 0x00000A74u;
 
 std::string TextureCacheKey(const std::string& path, const char* label) {
     if (path.empty()) return std::string("<fallback>:") + label;
@@ -2276,8 +2278,8 @@ bool UploadCpuObject(CpuObject& cpu, float centerX, float centerY, float floorZ,
     if (gpu.externalEmittanceFlagQ1380) {
         ++gQ1380ExternalFlagShapes;
         Fo3ExternalEmittance q1380;
-        if (ResolveFo3ExternalEmittance(0x00000A74u,
-                                             cpu.placement.refFormId, q1380)) {
+        if (TryResolvePublishedFo3ExternalEmittanceQ2220(
+                gQ2220UploadWorldspace,cpu.placement.refFormId,q1380)) {
             gpu.externalEmittanceEnabledQ1380 = true;
             gpu.externalEmittanceRegionQ1380 = q1380.regionDriven;
             gpu.externalEmittanceFormIdQ1380 = q1380.emittanceFormId;
@@ -3004,7 +3006,7 @@ bool InitializeScene() {
     gLocalLightPosRadiusLocationQ1010 = glGetUniformLocation(gProgram, "uLocalLightPosRadius[0]");
     gLocalLightColorFalloffLocationQ1010 = glGetUniformLocation(gProgram, "uLocalLightColorFalloff[0]");
 
-    LoadFo3ExternalEmittance(0x00000A74u);
+    LoadFo3ExternalEmittance(gQ2220UploadWorldspace);
     gObjects.reserve(selected.size());
     size_t q1860GpuPumpCount = 0u;
     for (CpuObject& cpu : selected) {
@@ -3066,6 +3068,27 @@ bool Q74ShouldSkipPlacement(const Fo3WorldPlacement& placement) {
     if (edid.find("marker") != std::string::npos) return true;
     if (edid == "counterlean" || edid == "barkeep") return true;
     return false;
+}
+
+// After publishing the worker's XEMI map, bind any objects uploaded while
+// the map was unavailable. No ESM I/O or GL calls occur during this pass.
+size_t RebindFo3PublishedEmittanceQ2220(uint32_t worldspace) {
+    size_t rebound=0u;
+    for(GpuObject& gpu:gObjects){
+        if(!gpu.externalEmittanceFlagQ1380 || gpu.externalEmittanceEnabledQ1380)continue;
+        Fo3ExternalEmittance record;
+        if(!TryResolvePublishedFo3ExternalEmittanceQ2220(
+                 worldspace,gpu.refFormId,record))continue;
+        gpu.externalEmittanceEnabledQ1380=true;
+        gpu.externalEmittanceRegionQ1380=record.regionDriven;
+        gpu.externalEmittanceFormIdQ1380=record.emittanceFormId;
+        for(int i=0;i<3;++i)gpu.externalEmittanceColorQ1380[i]=record.color[i];
+        ++gQ1380ExternalResolvedShapes;
+        if(record.regionDriven)++gQ1380ExternalRegionShapes;
+        else ++gQ1380ExternalFixedShapes;
+        ++rebound;
+    }
+    return rebound;
 }
 
 void Q74DeleteGpuObjects(std::vector<GpuObject>& objects) {
@@ -4364,6 +4387,7 @@ bool ProcessQ74TransitionRequest() {
         return false;
     }
     const Fo3CellTransitionRequestQ74 request = prepared.request;
+    gQ2220UploadWorldspace=request.worldspaceFormId;
     auto& selected = prepared.selected;
     const size_t skipped = prepared.skipped;
     const size_t unsupported = prepared.unsupported;
@@ -4646,6 +4670,20 @@ bool ProcessQ74TransitionRequest() {
     for (auto& actor : gQ230NpcActors)
         actor.animationStart = Fo3GameplayNow();
     gObjects = std::move(replacement);
+    // Worker was published before this swap; defer missing XEMI binding until
+    // all pending meshes are owned by the new scene. One fallback scan per scene
+    // (never per object) preserves authored region/light colours on worker errors.
+    if(request.worldspaceFormId != 0u &&
+       (!gFo3ExternalEmittanceLoaded ||
+        gFo3ExternalEmittanceWorld != request.worldspaceFormId)){
+        fqloadprofile::Log("XEMI_SCENE_FALLBACK generation=%llu worldspace=%08X",
+            (unsigned long long)gSceneLoad.generation,request.worldspaceFormId);
+        LoadFo3ExternalEmittance(request.worldspaceFormId);
+    }
+    const size_t rebound=RebindFo3PublishedEmittanceQ2220(request.worldspaceFormId);
+    fqloadprofile::Log("XEMI_GPU_REBIND generation=%llu worldspace=%08X rebound=%zu objects=%zu",
+        (unsigned long long)gSceneLoad.generation,request.worldspaceFormId,
+        rebound,gObjects.size());
     markFinalization("retire-and-replace-world-actors");
     if(++gQ2400DoorSceneSerial==0u) gQ2400DoorSceneSerial=1u;
     gSceneReady = !gObjects.empty();

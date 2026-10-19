@@ -6,11 +6,15 @@ float GetFo3FogPower();
 #include "rendering/environment/fo3-weather-byte-staging.h"
 #include "rendering/environment/fo3-visual-depth.h"
 #include "fo3-texture-bsa.h"
+#include "rendering/loading-diagnostics.h"
 
 #include <GLES3/gl3.h>
 #include <android/log.h>
 
 #include <algorithm>
+#include <atomic>
+#include <thread>
+#include <unordered_set>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -462,11 +466,16 @@ void Q1070ApplyTerrainAnisotropy() {
     }
 }
 
-GLuint Q711UploadTexture(const std::string& path) {
+GLuint Q711UploadTexture(const std::string& path,
+                          const Fo3RgbaTexture* predecoded = nullptr) {
     if (path.empty()) return 0;
-    Fo3RgbaTexture image;
-    if (!LoadFalloutTextureRgba(path, image) ||
-        image.width <= 0 || image.height <= 0 || image.rgba.empty()) {
+    Fo3RgbaTexture fallback;
+    if (!predecoded && !LoadFalloutTextureRgba(path, fallback)) {
+        Q76B_LOGW("Q7.20 TERRAIN DDS MISS: path=%s", path.c_str());
+        return 0;
+    }
+    const Fo3RgbaTexture& image = predecoded ? *predecoded : fallback;
+    if (image.width <= 0 || image.height <= 0 || image.rgba.empty()) {
         Q76B_LOGW("Q7.20 TERRAIN DDS MISS: path=%s", path.c_str());
         return 0;
     }
@@ -572,7 +581,19 @@ bool InitializeFo3TerrainRenderQ76(uint32_t worldspaceFormId,
                                    float arrivalX, float arrivalY, float arrivalZ,
                                    float sceneForward, float floorY,
                                    float unitsPerMetre) {
+    // Q22.2: independent phase timing includes original LAND, CPU geometry,
+    // thread-parallel texture decode, and GL publication without hiding cells.
+    auto q2220Last=fqloadprofile::NowUs();
+    const uint64_t q2220Started=q2220Last;
+    auto q2220Mark=[&](const char* stage,size_t count=0u){
+        const uint64_t now=fqloadprofile::NowUs();
+        fqloadprofile::Log("TERRAIN_INIT_STEP worldspace=%08X stage=%s stepMs=%.1f totalMs=%.1f count=%zu",
+            worldspaceFormId,stage,(now-q2220Last)/1000.0,
+            (now-q2220Started)/1000.0,count);
+        q2220Last=now;
+    };
     ShutdownFo3TerrainRenderQ76();
+    q2220Mark("shutdown-previous-terrain");
     if (worldspaceFormId == 0u || unitsPerMetre <= 1e-4f) return false;
 
     if (!LoadFo3TerrainQ76(worldspaceFormId, arrivalX, arrivalY, arrivalZ)) {
@@ -581,6 +602,7 @@ bool InitializeFo3TerrainRenderQ76(uint32_t worldspaceFormId,
     }
     const std::vector<Fo3TerrainCellQ76>& terrain = GetFo3TerrainQ76();
     if (terrain.empty()) return false;
+    q2220Mark("load-authored-land",terrain.size());
 
     std::vector<std::vector<float>> stitchedHeights;
     stitchedHeights.reserve(terrain.size());
@@ -641,6 +663,7 @@ bool InitializeFo3TerrainRenderQ76(uint32_t worldspaceFormId,
         const auto northIt = cellByGrid.find(Q711GridKey(cell.gridX, cell.gridY + 1));
         if (northIt != cellByGrid.end()) stitchEdge(northIt->second, false);
     }
+    q2220Mark("stitch-authored-heights",sharedEdges);
     Q76B_LOGI("Q7.20 LAND SEAMS: cells=%zu sharedEdges=%zu adjustedVertices=%zu preservedLargeVertices=%zu maxHeightDelta=%.1f stitchLimit=%.1f",
               terrain.size(), sharedEdges, adjustedVertices,
               preservedLargeVertices, maxSeamDelta,
@@ -913,12 +936,66 @@ bool InitializeFo3TerrainRenderQ76(uint32_t worldspaceFormId,
 
     if (acceptedCells == 0u || cpuBatches.empty()) return false;
 
+    q2220Mark("build-authored-geometry",cpuBatches.size());
     std::stable_sort(cpuBatches.begin(), cpuBatches.end(),
                      [](const Q711CpuBatch& a, const Q711CpuBatch& b) {
         if (a.alphaLayer != b.alphaLayer) return !a.alphaLayer;
         if (a.alphaLayer && a.layerOrder != b.layerOrder) return a.layerOrder < b.layerOrder;
         return false;
     });
+
+    // Predecode immutable Fallout DDS assets on three CPU threads, not in
+    // serial between GL uploads. The bounded result cache lives only for this
+    // admission; absent/oversize images use the unchanged synchronous fallback.
+    constexpr size_t Q2220_MAX_STAGED_DDS=96u;
+    constexpr size_t Q2220_MAX_STAGED_BYTES=96u*1024u*1024u;
+    std::vector<std::string> q2220Paths;
+    std::unordered_set<std::string> q2220Seen;
+    q2220Paths.reserve(96u);
+    for(const Q711CpuBatch& batch:cpuBatches){
+        for(const std::string* path : {&batch.texturePath,&batch.normalPath}){
+            if(path->empty() || !q2220Seen.insert(*path).second)continue;
+            if(q1910TerrainTextureCache.find(*path)!=q1910TerrainTextureCache.end() ||
+               q1810TerrainNormalTextureCache.find(*path)!=q1810TerrainNormalTextureCache.end())continue;
+            if(q2220Paths.size()>=Q2220_MAX_STAGED_DDS)break;
+            q2220Paths.push_back(*path);
+        }
+    }
+    std::vector<Fo3RgbaTexture> q2220Images(q2220Paths.size());
+    std::atomic<size_t> q2220Next{0u},q2220DecodedBytes{0u};
+    auto q2220Decode=[&](){
+        while(true){
+            const size_t i=q2220Next.fetch_add(1u,std::memory_order_relaxed);
+            if(i>=q2220Paths.size())return;
+            Fo3RgbaTexture image;
+            if(!LoadFalloutTextureRgba(q2220Paths[i],image) ||
+               image.width<=0 || image.height<=0 || image.rgba.empty())continue;
+            const size_t bytes=image.rgba.size();
+            const size_t reserved=q2220DecodedBytes.fetch_add(bytes,std::memory_order_relaxed);
+            if(bytes>Q2220_MAX_STAGED_BYTES ||
+               reserved>Q2220_MAX_STAGED_BYTES-bytes){
+                q2220DecodedBytes.fetch_sub(bytes,std::memory_order_relaxed);
+                continue;
+            }
+            q2220Images[i]=std::move(image); // Per-slot writes; no shared vector mutation.
+        }
+    };
+    std::vector<std::thread> q2220Workers;
+    try {
+        for(size_t i=0u;i<2u && i<q2220Paths.size();++i)
+            q2220Workers.emplace_back(q2220Decode);
+    } catch (...) {
+        // Worker launch is opportunistic, never a reason to lose LAND.
+    }
+    q2220Decode();
+    for(auto& worker:q2220Workers)if(worker.joinable())worker.join();
+    std::unordered_map<std::string,Fo3RgbaTexture> q2220Predecoded;
+    q2220Predecoded.reserve(q2220Paths.size());
+    for(size_t i=0u;i<q2220Paths.size();++i){
+        if(q2220Images[i].rgba.empty())continue;
+        q2220Predecoded.emplace(q2220Paths[i],std::move(q2220Images[i]));
+    }
+    q2220Mark("parallel-dds-decode",q2220Predecoded.size());
 
     q76bProgram = Q76BCreateProgram();
     if (!q76bProgram) {
@@ -958,6 +1035,7 @@ bool InitializeFo3TerrainRenderQ76(uint32_t worldspaceFormId,
         return false;
     }
 
+    q2220Mark("compile-terrain-shader");
     size_t textureUploads = 0u;
     size_t baseVertices = 0u;
     size_t alphaVertices = 0u;
@@ -1000,7 +1078,9 @@ bool InitializeFo3TerrainRenderQ76(uint32_t worldspaceFormId,
                 gpu.realTexture = gpu.texture != 0u;
             } else if (textureUploads < Q713_MAX_REAL_TEXTURES &&
                        q1910TerrainTextureCache.size() < Q1910_TERRAIN_TEXTURE_CACHE_LIMIT) {
-                gpu.texture = Q711UploadTexture(cpu.texturePath);
+                auto prepared=q2220Predecoded.find(cpu.texturePath);
+                gpu.texture = Q711UploadTexture(cpu.texturePath,
+                    prepared!=q2220Predecoded.end() ? &prepared->second : nullptr);
                 gpu.realTexture = gpu.texture != 0u;
                 if (gpu.realTexture) {
                     gpu.ownsTexture = false; // Q16.19 shared process-lifetime terrain texture cache
@@ -1026,7 +1106,9 @@ bool InitializeFo3TerrainRenderQ76(uint32_t worldspaceFormId,
                 if (gpu.realNormal) ++q1810NormalCacheHits;
             } else if (q1060NormalUploads < Q713_MAX_REAL_TEXTURES &&
                        uploadedNormalsQ1060.size() < Q1810_TERRAIN_NORMAL_CACHE_LIMIT) {
-                gpu.normalTexture = Q711UploadTexture(cpu.normalPath);
+                auto prepared=q2220Predecoded.find(cpu.normalPath);
+                gpu.normalTexture = Q711UploadTexture(cpu.normalPath,
+                    prepared!=q2220Predecoded.end() ? &prepared->second : nullptr);
                 gpu.realNormal = gpu.normalTexture != 0u;
                 if (gpu.realNormal) {
                     // Q18.1: normals are immutable Fallout assets just like the
@@ -1081,6 +1163,10 @@ bool InitializeFo3TerrainRenderQ76(uint32_t worldspaceFormId,
         q711TerrainBatches.push_back(std::move(gpu));
     }
 
+    q2220Mark("gpu-textures-and-geometry",q711TerrainBatches.size());
+    // All decoded pixels are now in GL-owned resources. Drop the temporary CPU
+    // staging memory before terrain becomes playable.
+    q2220Predecoded.clear();
     const GLenum error = glGetError();
     if (error != GL_NO_ERROR || q711TerrainBatches.empty()) {
         Q76B_LOGE("Q10.7 TERRAIN FAILED: stage=gpu-upload worldspace=%08X glError=0x%X batches=%zu", worldspaceFormId, error, q711TerrainBatches.size());
@@ -1104,6 +1190,7 @@ bool InitializeFo3TerrainRenderQ76(uint32_t worldspaceFormId,
               q1810NormalCacheHits, uploadedNormalsQ1060.size(),
               q1060NormalMisses);
     Q76B_LOGI("Q7.20 LAND HIDE APPLIED: worldspace=%08X hiddenBaseQuads=%zu hiddenAlphaLayers=%zu", q76bWorldspace, q720HiddenBaseQuads, q720HiddenAlphaLayers);
+    q2220Mark("finalise-renderer",q711TerrainBatches.size());
     Q76B_LOGI("Q7.20 TERRAIN GPU READY: worldspace=%08X cells=%zu baseTriangles=%zu alphaTriangles=%zu batches=%zu alphaBatches=%zu uniqueTextureUploads=%zu realTextureBatches=%zu fallbackBatches=%zu texturedQuads=%zu fallbackQuads=%zu alphaLayersSeen=%zu alphaLayersResolved=%zu alphaLayersUnresolved=%zu alphaQuads=%zu uploadFailures=%zu limitHits=%zu alphaLayers=1 seamGuard=1",
               q76bWorldspace, q76bTerrainCells, q76bTriangles, q718AlphaTriangles,
               q711TerrainBatches.size(), q718AlphaBatches, textureUploads,

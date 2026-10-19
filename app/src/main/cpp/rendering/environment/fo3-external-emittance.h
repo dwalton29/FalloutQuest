@@ -353,6 +353,21 @@ inline bool LoadFo3ExternalEmittance(uint32_t worldspaceFormId){
            !gFo3ExternalEmittance.empty();
 }
 
+// Q22.2 GPU publication/streaming must never initiate a three-pass master
+// scan. A cache miss is deferred until the destination scene publishes its
+// independently prepared XEMI map; fallback scans happen once per scene only.
+inline bool TryResolvePublishedFo3ExternalEmittanceQ2220(
+    uint32_t worldspaceFormId,uint32_t referenceFormId,
+    Fo3ExternalEmittance& out) {
+    out={};
+    if(!worldspaceFormId || !gFo3ExternalEmittanceLoaded ||
+       gFo3ExternalEmittanceWorld!=worldspaceFormId)return false;
+    const auto entry=gFo3ExternalEmittance.find(referenceFormId);
+    if(entry==gFo3ExternalEmittance.end() || !entry->second.valid)return false;
+    out=entry->second;
+    return true;
+}
+
 inline bool ResolveFo3ExternalEmittance(uint32_t worldspaceFormId,
                                               uint32_t referenceFormId,
                                               Fo3ExternalEmittance& out) {
