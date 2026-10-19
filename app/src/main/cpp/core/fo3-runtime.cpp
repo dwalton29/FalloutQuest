@@ -3952,6 +3952,11 @@ fo3player::ScriptEventResult DispatchFo3ScriptedActivation(
 // as normal actors, but upload only missing actors and never rebuild the world.
 struct Q230NpcArrivalBatch {
     std::vector<Q230ActorVisual> actors;
+    // CPU decoded assets belong to this worker publication. A cancelled CELL
+    // discards them with the batch rather than leaving a global decode cache.
+    std::unordered_map<std::string,Q1900PreparedTextureQ19> stagedTextures;
+    size_t expandedParts=0u;
+    size_t stagedBytes=0u;
 };
 struct Q230NpcArrivalWork {
     fo3scene::PublicationStamp publication;
@@ -12569,6 +12574,24 @@ void Q230PumpNpcArrivals(){
                     gQ234GeneratedTextures[entry.first]=std::move(entry.second);
             if(work.partIndex<actor.parts.size()){
                 auto& part=actor.parts[work.partIndex++];
+                // Move only this part's decoded images into the existing upload
+                // path. GL handles are still created exclusively on this thread.
+                auto& staged=work.preparation.Get().stagedTextures;
+                for(const std::string* path:{
+                    &part.mesh.diffuseTexturePath,&part.mesh.normalTexturePath,
+                    &part.mesh.glowTexturePath,&part.mesh.environmentMaskTexturePath}) {
+                    if(path->empty())continue;
+                    const auto key=TextureCacheKey(*path,"");
+                    auto found=staged.find(key);
+                    if(found==staged.end())continue;
+                    {
+                        std::lock_guard<std::mutex> lock(gQ1900TextureCpuMutexQ19);
+                        if(!gQ1900KnownGpuTextureKeysQ19.count(key) &&
+                           !gQ1900PreparedTexturesQ19.count(key))
+                            gQ1900PreparedTexturesQ19.emplace(key,std::move(found->second));
+                    }
+                    staged.erase(found);
+                }
                 const auto q226UploadStart=fqopaque::Clock::now();
                 { FQ_PERF_SCOPE(NpcArrivalPart);
                   Q230UploadActorPart(actor,part,gSceneCenterXQ1730,
@@ -12627,9 +12650,10 @@ void Q230PumpNpcArrivals(){
     work.pending.clear();
     if(refs.empty())return;
     const uint32_t cell=gCurrentCellFormId,world=gExteriorWorldspaceQ1890;
+    const float centreX=gSceneCenterXQ1730,centreY=gSceneCenterYQ1730,floorZ=gSceneFloorZQ1730;
     const size_t count=refs.size();
     auto requested=refs;
-    if(work.preparation.Start([cell,world,saved=std::move(saved),refs=std::move(refs)](
+    if(work.preparation.Start([cell,world,centreX,centreY,floorZ,saved=std::move(saved),refs=std::move(refs)](
             Q230NpcArrivalBatch& batch,const std::atomic<bool>& cancelled){
         Q230PrepareActors(cell,world,batch.actors,cancelled,&saved,&refs);
         if(cancelled.load(std::memory_order_acquire))return false;
@@ -12641,6 +12665,43 @@ void Q230PumpNpcArrivals(){
             Q230CacheDialogueAnimations(actor,&catalog->pipboy);
             Q230CacheCombat(actor,catalog);
         }
+        // Q229: expensive expanded static vertex streams and DDS decoding run
+        // on the existing NPC worker, not on a frame that must submit both eyes.
+        // Do not retain more than 32 MiB of decoded image staging, and never
+        // stage FaceGen-generated paths: they belong to the original actor.
+        constexpr size_t maxStagedBytes=32u*1024u*1024u;
+        constexpr size_t maxStagedTextures=24u;
+        std::unordered_set<std::string> seenPaths;
+        for(auto& actor:batch.actors)for(auto& part:actor.parts) {
+            if(cancelled.load(std::memory_order_acquire))return false;
+            if(PrepareExpandedVertexStreamQ1960(part,centreX,centreY,floorZ))
+                ++batch.expandedParts;
+            for(const std::string* path:{
+                &part.mesh.diffuseTexturePath,&part.mesh.normalTexturePath,
+                &part.mesh.glowTexturePath,&part.mesh.environmentMaskTexturePath}) {
+                if(path->empty()||actor.generatedTextures.count(*path))continue;
+                const auto key=TextureCacheKey(*path,"");
+                if(!seenPaths.insert(key).second)continue;
+                if(batch.stagedTextures.size()>=maxStagedTextures||
+                   batch.stagedBytes>=maxStagedBytes||Q1900GpuTextureKnownQ19(*path))
+                    continue;
+                Q1900PreparedTextureQ19 decoded;
+                {
+                    // Same guarded DDS/BSA decoder used by CELL prefetch.
+                    std::lock_guard<std::mutex> decode(gQ2012TextureDecodeMutexQ19);
+                    decoded.real=LoadFalloutTextureRgba(*path,decoded.texture);
+                }
+                if(cancelled.load(std::memory_order_acquire))return false;
+                const size_t bytes=decoded.texture.rgba.size();
+                if(bytes<=maxStagedBytes-batch.stagedBytes) {
+                    batch.stagedBytes+=bytes;
+                    batch.stagedTextures.emplace(key,std::move(decoded));
+                }
+            }
+        }
+        Q6H_LOGI("Q229 NPC ARRIVAL CPU PREPARED expandedParts=%zu stagedTextures=%zu stagedMiB=%.2f",
+                 batch.expandedParts,batch.stagedTextures.size(),
+                 double(batch.stagedBytes)/(1024.0*1024.0));
         return true;
     })){
         work.publication=gFo3ScenePublication.Stamp();

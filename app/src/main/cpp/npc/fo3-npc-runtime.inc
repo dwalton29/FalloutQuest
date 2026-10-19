@@ -583,12 +583,16 @@ void Q230UpdateActor(Q230ActorVisual &actor) {
 #endif
     { FQ_PERF_SCOPE(Palette);
     fqskin::Pack(rig.skin.palette[0],actor.dialogueRoot,actor.dialogueRoot);
+    // Q229: the root/scene transform is invariant for all bones in this rig.
+    // Multiply it once rather than once per palette slot. The per-bone
+    // conjugation and authored KF pose are otherwise unchanged.
+    const auto rootScene=fo3anim::Multiply(actor.dialogueRoot,rig.scenePlacement);
     for(size_t slot=0;slot<rig.skin.mapping.sources.size();++slot) {
       const int index=rig.skin.mapping.sources[slot];
       const int bone=index<static_cast<int>(rig.bones.size()) ? rig.bones[index] : -1;
-      auto delta=fqskin::Identity();
-      if(bone>=0) delta=fo3anim::Multiply(rig.scenePlacement,fo3anim::Multiply(actor.pose.delta[bone],rig.inverseScenePlacement));
-      delta=fo3anim::Multiply(actor.dialogueRoot,delta);
+      auto delta=actor.dialogueRoot;
+      if(bone>=0)
+        delta=fo3anim::Multiply(rootScene,fo3anim::Multiply(actor.pose.delta[bone],rig.inverseScenePlacement));
       // Uniform game->scene scale cancels in this conjugation; direction w=0.
       fqskin::Pack(rig.skin.palette[slot+1],delta,delta);
     }

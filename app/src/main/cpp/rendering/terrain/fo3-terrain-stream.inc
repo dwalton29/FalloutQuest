@@ -868,6 +868,7 @@ bool Q2000AdvanceOneBatch(
 void Q2000PublishCurrentCell(Q2000CpuCell& cell) {
     for (Q711TerrainBatch& batch : gQ2000CurrentCellBatches)
         q711TerrainBatches.push_back(std::move(batch));
+        Q229TouchTerrainBatches();
     const size_t batches = gQ2000CurrentCellBatches.size();
     gQ2000CurrentCellBatches.clear();
 
@@ -901,6 +902,7 @@ void Q2000CommitTarget() {
         ++write;
     }
     q711TerrainBatches.resize(write);
+    Q229TouchTerrainBatches();
 
     for (auto it = gQ2000GroundCells.begin();
          it != gQ2000GroundCells.end();) {
@@ -1084,6 +1086,7 @@ void ResetFo3TerrainStreamingQ2000() {
             ++write;
         }
         q711TerrainBatches.resize(write);
+    Q229TouchTerrainBatches();
     }
 
     gQ2000Worldspace = 0u;

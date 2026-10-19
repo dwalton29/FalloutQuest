@@ -120,6 +120,25 @@ GLuint q1050TerrainShadowTexture = 0;
 float q1050TerrainLightMvp[16]{};
 bool q1050TerrainShadowEnabled = false;
 std::vector<Q711TerrainBatch> q711TerrainBatches;
+// Q229: preserve original LAND base-then-painted composition, but classify
+// published terrain batches once instead of scanning all batches for every
+// mirror/main eye. Every structural mutation below invalidates the pointers.
+uint64_t q229TerrainBatchRevision=1u,q229TerrainOrderRevision=0u;
+std::vector<const Q711TerrainBatch*> q229TerrainBaseBatches,q229TerrainPaintBatches;
+void Q229TouchTerrainBatches(){++q229TerrainBatchRevision;}
+void Q229PrepareTerrainDrawLists(){
+    if(q229TerrainBatchRevision==q229TerrainOrderRevision)return;
+    q229TerrainBaseBatches.clear();q229TerrainPaintBatches.clear();
+    q229TerrainBaseBatches.reserve(q711TerrainBatches.size());
+    q229TerrainPaintBatches.reserve(q711TerrainBatches.size());
+    for(const auto& batch:q711TerrainBatches){
+        if(!batch.vao||batch.vertexCount<=0)continue;
+        if(batch.alphaLayer){
+            if(batch.realTexture)q229TerrainPaintBatches.push_back(&batch);
+        }else q229TerrainBaseBatches.push_back(&batch);
+    }
+    q229TerrainOrderRevision=q229TerrainBatchRevision;
+}
 std::unordered_map<std::string, GLuint> q1910TerrainTextureCache;
 std::unordered_map<std::string, GLuint> q1810TerrainNormalTextureCache;
 constexpr size_t Q1910_TERRAIN_TEXTURE_CACHE_LIMIT = 256u;
@@ -539,6 +558,7 @@ void ShutdownFo3TerrainRenderQ76() {
         batch = {};
     }
     q711TerrainBatches.clear();
+    Q229TouchTerrainBatches();
     if (q76bProgram) glDeleteProgram(q76bProgram);
     q76bProgram = 0;
     q76bMvpLocation = -1;
@@ -1170,6 +1190,7 @@ bool InitializeFo3TerrainRenderQ76(uint32_t worldspaceFormId,
         if (gpu.alphaLayer) alphaVertices += static_cast<size_t>(gpu.vertexCount);
         else baseVertices += static_cast<size_t>(gpu.vertexCount);
         q711TerrainBatches.push_back(std::move(gpu));
+        Q229TouchTerrainBatches();
     }
 
     q2220Mark("gpu-textures-and-geometry",q711TerrainBatches.size());
@@ -1236,8 +1257,9 @@ void RenderFo3TerrainQ76(const float* mvp) {
     if (!q76bReady || !mvp || !q76bProgram || q711TerrainBatches.empty()) return;
 
     const auto q2018TerrainStarted = std::chrono::steady_clock::now();
-    const Q2018TerrainFrustum q2018Frustum =
-        Q2018BuildTerrainFrustum(mvp);
+    // Q20.18 frustum rejection remains disabled; do not rebuild its unused
+    // frustum on every main-eye and mirror LAND draw.
+    Q229PrepareTerrainDrawLists();
     size_t q2018BaseTested = 0u;
     size_t q2018BaseDrawn = 0u;
     size_t q228MirrorUnderwaterSkipped = 0u;
@@ -1394,8 +1416,8 @@ void RenderFo3TerrainQ76(const float* mvp) {
     glActiveTexture(GL_TEXTURE3);
     glBindTexture(GL_TEXTURE_2D, q1050TerrainShadowTexture);
     glActiveTexture(GL_TEXTURE0);
-    for (const Q711TerrainBatch& batch : q711TerrainBatches) {
-        if (batch.alphaLayer || !batch.vao || batch.vertexCount <= 0) continue;
+    for (const Q711TerrainBatch* batchPtr : q229TerrainBaseBatches) {
+        const Q711TerrainBatch& batch=*batchPtr;
         ++q2018BaseTested;
         if (Q228EntireTerrainBatchBelowReflectionPlane(batch)) {
             ++q228MirrorUnderwaterSkipped;
@@ -1425,8 +1447,8 @@ void RenderFo3TerrainQ76(const float* mvp) {
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glDepthMask(GL_FALSE);
     glDepthFunc(GL_LEQUAL);
-    for (const Q711TerrainBatch& batch : q711TerrainBatches) {
-        if (!batch.alphaLayer || !batch.realTexture || !batch.vao || batch.vertexCount <= 0) continue;
+    for (const Q711TerrainBatch* batchPtr : q229TerrainPaintBatches) {
+        const Q711TerrainBatch& batch=*batchPtr;
         ++q2018AlphaTested;
         if (Q228EntireTerrainBatchBelowReflectionPlane(batch)) {
             ++q228MirrorUnderwaterSkipped;
