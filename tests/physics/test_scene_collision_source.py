@@ -545,7 +545,11 @@ assert script_runtime.index('fo3script::UnambiguousScriptLocals(')<script_runtim
 assert 'container&&!fo3script::ConsistentScriptLocalDeclarations(container->source,localScript->variables)' in script_runtime
 assert script_runtime.index('fo3script::ChargeScriptLocals(')<script_runtime.index('fo3script::CompleteScriptLocalRecords(')<script_runtime.index('execution.localVariables.reserve(')
 assert 'container&&!fo3script::CompleteScriptLocalRecords(*container)' in script_runtime
-assert 'scriptTrace_?&forms:nullptr' in script_runtime
+compile_cache=Path('app/src/main/cpp/scripting/fo3-script-compile-cache.h').read_text()
+assert 'scriptCompileCache_->Get(script,owner,scriptId,bool(scriptTrace_),forms.limit)' in script_runtime
+assert 'forms=compiled->forms;' in script_runtime
+assert 'result->forms.limit=limit' in compile_cache
+assert 'owner,localScript,capture?&result->forms:nullptr' in compile_cache
 assert script_runtime.index('fo3script::ChargeScriptForms(')<script_runtime.index('execution.commandForms=std::move(forms.bindings)')
 assert 'expressionForms.limit=forms.limit-forms.used' in script_runtime
 assert 'scriptTrace_?&expressionForms:nullptr' in script_runtime
