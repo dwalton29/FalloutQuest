@@ -177,8 +177,19 @@ void Q230PrepareActors(uint32_t cell, uint32_t worldspace,
 #ifndef FO3_ACTOR_RUNTIME_HOST_TEST
   if(gPlayerSession)furniture=fo3furniture::BuildScene(gPlayerSession->player.Definitions().pipboy,cell,worldspace,[](const std::string& path,std::vector<uint8_t>& bytes){return LoadFalloutMeshFile(path,bytes);},true);
 #endif
+  // ACHR/ACRE FormIDs are identity keys, even when the authored CELL and
+  // relocated-XTEL admission enumerate the same reference. Duplicate rig
+  // instances would double animation/skinning and compete over one saved state.
+  std::unordered_set<uint32_t> q227PreparedRefs;
   for(auto source:actors) {
     if(cancel.load(std::memory_order_acquire))return;
+    if(!q227PreparedRefs.insert(source.refFormId).second) {
+#ifndef FO3_ACTOR_RUNTIME_HOST_TEST
+      Q6H_LOGI("Q227 NPC DUPLICATE SOURCE suppressed ref=%08X cell=%08X world=%08X",
+          source.refFormId,cell,worldspace);
+#endif
+      continue;
+    }
 #ifndef FO3_ACTOR_RUNTIME_HOST_TEST
     if(onlyRefs&&!onlyRefs->count(source.refFormId))continue;
     if(savedActors){
@@ -500,7 +511,10 @@ void Q230UpdateActor(Q230ActorVisual &actor) {
 #endif
     actor.blendFrom=actor.pose.local;actor.blendStart=elapsed;actor.activeAnimation=selected;
     fo3anim::BindClip(actor.skeleton,actor.animations[selected],actor.pose);
-    if(actor.runtime.activity!=fo3npc::Activity::Combat)Q6H_LOGI("NPC ANIM actor=%08X clip=%s",actor.source.refFormId,actor.animations[selected].name.c_str());
+    if(actor.runtime.activity!=fo3npc::Activity::Combat)
+      Q6H_LOGI("NPC ANIM actor=%08X clip=%s visual=%p frame=%llu",
+          actor.source.refFormId,actor.animations[selected].name.c_str(),
+          static_cast<const void*>(&actor),(unsigned long long)gStereoFrame);
   }
   const auto& clip=actor.animations[actor.activeAnimation].tracks.empty()?actor.clip:actor.animations[actor.activeAnimation];
   const double clipTime=actor.blendStart<0?elapsed:elapsed-actor.blendStart;
@@ -646,9 +660,10 @@ void Q230RenderNpcActors(bool alphaPass) {
     for (size_t objectIndex=0;objectIndex<actor.objects.size();++objectIndex) {
       auto& object=actor.objects[objectIndex];
 #ifndef FO3_ACTOR_RUNTIME_HOST_TEST
-      bool weaponPart=false;for(const auto& w:actor.combatWeapons)
-        if(std::find(w.second.gpu.begin(),w.second.gpu.end(),objectIndex)!=w.second.gpu.end()){weaponPart=true;break;}
-      if(weaponPart)continue;
+      // Weapon visuals are already flagged during the original WEAP upload.
+      // Avoid repeatedly traversing every weapon's GPU-index vector for every
+      // body part in both eyes; the dedicated weapon renderer handles them.
+      if(object.physicalWeapon)continue;
 #endif
       if (object.alphaBlend != alphaPass)
         continue;

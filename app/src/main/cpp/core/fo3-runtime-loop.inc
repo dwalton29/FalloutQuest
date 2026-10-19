@@ -8,6 +8,7 @@
 #include "ui/interaction/fo3-levelup-renderer.h"
 #include "ui/interaction/fo3-xp-meter-renderer.h"
 #include "ui/pause/fo3-pause-renderer.h"
+#include "ui/interaction/fo3-performance-hud.h"
 #include <array>
 #include <string>
 #include "ui/loading/fo3-loading-vr.h"
@@ -384,7 +385,7 @@ public:
         fo3pipui::Shutdown();ResetFo3Pipboy();fo3lockui::Shutdown();CancelFo3Lockpick();
         fo3notifyui::Shutdown();
         fo3barterui::Shutdown();fo3dialogueui::Shutdown();
-         fo3levelui::Shutdown();fo3xpui::Shutdown();fo3pauseui::Shutdown();
+         fo3levelui::Shutdown();fo3xpui::Shutdown();fo3pauseui::Shutdown();fo3perfui::Shutdown();
         gFo3PauseMenu.Close();gFo3PauseOpen=false;
          EndFo3Dialogue("renderer shutdown");
         fo3lootui::Shutdown();
@@ -1857,6 +1858,7 @@ private:
                 gStereoMvpReady = true;
                 QActorPrepareStereoFrame();
                 if(gFo3PauseOpen)fo3pauseui::Prepare(gFo3PauseMenu);
+                if(gFo3PauseMenu.perfHudMode&&!IsFo3LoadingVisible())fo3perfui::Prepare(gFo3PauseMenu.perfHudMode);
                 if(auto* player=GetFo3PlayerSession())fo3pipui::Render(gPipMenu,player->player,Fo3PipboyFocus());
                 if(gStereoFrame%180==0){FQ_LOGI("PIPBOY UI: tab=%d page=%d rows=%zu revision=%llu redraws=%u",int(gPipMenu.tab),gPipMenu.page,gPipMenu.rows.size(),(unsigned long long)gPipMenu.revision,fo3pipui::State().redraws);
                     FQ_LOGI("PIPBOY PERF: PipBoyUpdateUs=%.1f PipBoyUiRenderUs=%.1f PipBoyScreenDrawUs=%.1f glDriverQueries=%llu (guarded UI/screen paths)",gPipUpdateUs,fo3pipui::State().renderUs,gPipScreenDrawUs,(unsigned long long)(fo3pipui::State().renderQueries+gPipScreenQueries));}
@@ -2025,6 +2027,10 @@ private:
                 pendingPlayableGeneration=0;
             }
         }
+        fo3perfui::Tick(gFo3PauseMenu.perfHudMode,q1700FrameSubmitted&&layerCount>0,
+            gSceneReady&&!perfLoadingAtSubmit&&!Fo3GameplayBlocked(),
+            fqopaque::Micros(appFrameStarted),uint32_t(gQ230NpcActors.size()),
+            frameState.predictedDisplayPeriod/1000.0);
         if(fqperf::capture.recording) {
             perf.us[fqperf::End]=perfEndUs;
             perf.us[fqperf::Work]=fqopaque::Micros(appFrameStarted);
@@ -2292,6 +2298,16 @@ private:
                 glBindFramebuffer(GL_FRAMEBUFFER, framebuffer_);
             }
             rendered = true;
+            if(gFo3PauseMenu.perfHudMode&&!IsFo3LoadingVisible()) {
+                const float yaw=gQ210Head[3];Mat4 model{};
+                model.m[0]=std::cos(yaw);model.m[2]=-std::sin(yaw);model.m[5]=1;
+                model.m[8]=std::sin(yaw);model.m[10]=std::cos(yaw);
+                model.m[12]=gQ210Head[0]-std::sin(yaw)*1.3f;
+                model.m[13]=gQ210Head[1];model.m[14]=gQ210Head[2]-std::cos(yaw)*1.3f;
+                model.m[15]=1;
+                const auto hudMvp=Multiply(viewProjection,model);
+                fo3perfui::Render(hudMvp.m,gFo3PauseMenu.perfHudMode);
+            }
             if(gFo3PauseOpen&&!IsFo3LoadingVisible()) {
                 const float yaw=gQ210Head[3];Mat4 model{};
                 model.m[0]=std::cos(yaw);model.m[2]=-std::sin(yaw);model.m[5]=1;

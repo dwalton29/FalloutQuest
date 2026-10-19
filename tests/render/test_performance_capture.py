@@ -11,6 +11,13 @@ summary = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(summary)
 
 class CaptureTests(unittest.TestCase):
+    def test_v227_npc_duplicate_admission_and_weapon_hotpath(self):
+        source=(ROOT/'app/src/main/cpp/npc/fo3-npc-runtime.inc').read_text()
+        self.assertIn('q227PreparedRefs.insert(source.refFormId)',source)
+        self.assertIn('if(object.physicalWeapon)continue;',source)
+        self.assertNotIn('std::find(w.second.gpu.begin()',source)
+        self.assertIn('visual=%p frame=%llu',source)
+
     def test_statistics(self):
         s = summary.stats([1000, 10000, 14000, 20000])
         self.assertEqual(s['mean'], 11250)
