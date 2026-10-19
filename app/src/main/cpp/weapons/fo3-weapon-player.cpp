@@ -267,7 +267,7 @@ bool Player::ApplyAttack(uint32_t attacker,uint32_t base,uint32_t target,float d
   state_.actorDamage[target]+=applied;
   SetActorHostile(target,attacker);
   const bool died=applied>=health&&!Essential(target);
-  if(died){auto actor=state_.actors.find(target);if(actor!=state_.actors.end()){actor->second.dead=true;actor->second.packageWaitSeconds=0;}}
+  if(died){if(auto* actor=state_.actors.Edit(target)){actor->dead=true;actor->packageWaitSeconds=0;}}
   ++revision_;
   // Source scripts receive gameplay events once, after the canonical damage
   // transition. Unsupported scripts never undo physical combat damage.

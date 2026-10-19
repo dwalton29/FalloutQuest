@@ -2,6 +2,7 @@
 float GetFo3FogPower();
 
 #include "rendering/terrain/fo3-terrain.h"
+#include "rendering/terrain/fo3-terrain-bounds.h"
 #include "rendering/environment/fo3-environment.h"
 #include "rendering/environment/fo3-weather-byte-staging.h"
 #include "rendering/environment/fo3-visual-depth.h"
@@ -45,7 +46,7 @@ struct Q76BV3 {
     float z = 0.0f;
 };
 
-struct Q711TerrainBatch {
+struct Q711TerrainBatch : fo3terrain::Bounds {
     int32_t gridX = 0;
     int32_t gridY = 0;
     std::string texturePath;
@@ -62,9 +63,6 @@ struct Q711TerrainBatch {
     bool specularEnabled = false;
     bool ownsTexture = false;
     bool ownsNormal = false;
-    float minX = 0.0f, maxX = 0.0f;
-    float minY = 0.0f, maxY = 0.0f;
-    float minZ = 0.0f, maxZ = 0.0f;
 };
 
 struct Q711CpuBatch {
@@ -110,9 +108,9 @@ float q2090TerrainReflectionPlaneY = 0.0f;
 // LAND's vertex shader passes aPosition directly to vPosition, and the
 // original reflection fragment clip discards positions below the plane.
 // An entire batch strictly below that plane therefore contributes no pixel.
-// This is deliberately NOT frustum culling (the Q20.18 rollback stays intact).
+// This plane rejection is separate from the conservative homogeneous clip test.
 bool Q228EntireTerrainBatchBelowReflectionPlane(const Q711TerrainBatch& batch) {
-    return q2090TerrainReflectionClipEnabled &&
+    return batch.boundsValid && q2090TerrainReflectionClipEnabled &&
            std::isfinite(batch.maxY) && std::isfinite(q2090TerrainReflectionPlaneY) &&
            batch.maxY < q2090TerrainReflectionPlaneY - 0.001f;
 }
@@ -167,59 +165,6 @@ uint64_t Q711GridKey(int32_t x, int32_t y) {
            static_cast<uint32_t>(y);
 }
 
-struct Q2018TerrainFrustum {
-    float planes[6][4]{};
-    bool valid = false;
-};
-
-Q2018TerrainFrustum Q2018BuildTerrainFrustum(const float* m) {
-    Q2018TerrainFrustum out;
-    if (!m) return out;
-    const float raw[6][4] = {
-        {m[3] + m[0], m[7] + m[4], m[11] + m[8],  m[15] + m[12]},
-        {m[3] - m[0], m[7] - m[4], m[11] - m[8],  m[15] - m[12]},
-        {m[3] + m[1], m[7] + m[5], m[11] + m[9],  m[15] + m[13]},
-        {m[3] - m[1], m[7] - m[5], m[11] - m[9],  m[15] - m[13]},
-        {m[3] + m[2], m[7] + m[6], m[11] + m[10], m[15] + m[14]},
-        {m[3] - m[2], m[7] - m[6], m[11] - m[10], m[15] - m[14]},
-    };
-    for (int i = 0; i < 6; ++i) {
-        const float len = std::sqrt(
-            raw[i][0]*raw[i][0] +
-            raw[i][1]*raw[i][1] +
-            raw[i][2]*raw[i][2]);
-        if (len < 1.0e-6f) return out;
-        const float inv = 1.0f / len;
-        for (int j = 0; j < 4; ++j)
-            out.planes[i][j] = raw[i][j] * inv;
-    }
-    out.valid = true;
-    return out;
-}
-
-bool Q2018TerrainBatchVisible(
-        const Q2018TerrainFrustum& frustum,
-        const Q711TerrainBatch& batch) {
-    if (!frustum.valid) return true;
-    const float cx = 0.5f * (batch.minX + batch.maxX);
-    const float cy = 0.5f * (batch.minY + batch.maxY);
-    const float cz = 0.5f * (batch.minZ + batch.maxZ);
-    const float ex = 0.5f * (batch.maxX - batch.minX);
-    const float ey = 0.5f * (batch.maxY - batch.minY);
-    const float ez = 0.5f * (batch.maxZ - batch.minZ);
-    constexpr float Q2018_TERRAIN_PADDING_M = 6.0f;
-    for (const auto& p : frustum.planes) {
-        const float distance =
-            p[0]*cx + p[1]*cy + p[2]*cz + p[3];
-        const float radius =
-            std::fabs(p[0])*ex +
-            std::fabs(p[1])*ey +
-            std::fabs(p[2])*ez;
-        if (distance + radius < -Q2018_TERRAIN_PADDING_M)
-            return false;
-    }
-    return true;
-}
 
 Q76BV3 Q76BSub(const Q76BV3& a, const Q76BV3& b) {
     return {a.x - b.x, a.y - b.y, a.z - b.z};
@@ -1084,21 +1029,7 @@ bool InitializeFo3TerrainRenderQ76(uint32_t worldspaceFormId,
         gpu.alphaLayer = cpu.alphaLayer;
         gpu.layerOrder = cpu.layerOrder;
 
-        if (cpu.vertices.size() >= 12u) {
-            gpu.minX = gpu.maxX = cpu.vertices[0];
-            gpu.minY = gpu.maxY = cpu.vertices[1];
-            gpu.minZ = gpu.maxZ = cpu.vertices[2];
-            for (size_t q2018v = 12u;
-                 q2018v + 2u < cpu.vertices.size();
-                 q2018v += 12u) {
-                gpu.minX = std::min(gpu.minX, cpu.vertices[q2018v + 0u]);
-                gpu.maxX = std::max(gpu.maxX, cpu.vertices[q2018v + 0u]);
-                gpu.minY = std::min(gpu.minY, cpu.vertices[q2018v + 1u]);
-                gpu.maxY = std::max(gpu.maxY, cpu.vertices[q2018v + 1u]);
-                gpu.minZ = std::min(gpu.minZ, cpu.vertices[q2018v + 2u]);
-                gpu.maxZ = std::max(gpu.maxZ, cpu.vertices[q2018v + 2u]);
-            }
-        }
+        static_cast<fo3terrain::Bounds&>(gpu)=fo3terrain::BuildBounds(cpu.vertices.data(),cpu.vertices.size());
 
         if (!cpu.texturePath.empty()) {
             const auto cached = uploadedByPath.find(cpu.texturePath);
@@ -1257,8 +1188,8 @@ void RenderFo3TerrainQ76(const float* mvp) {
     if (!q76bReady || !mvp || !q76bProgram || q711TerrainBatches.empty()) return;
 
     const auto q2018TerrainStarted = std::chrono::steady_clock::now();
-    // Q20.18 frustum rejection remains disabled; do not rebuild its unused
-    // frustum on every main-eye and mirror LAND draw.
+    // Q231 uses actual homogeneous shader clipping and complete publication bounds.
+    // The old Q20.18 plane-extraction path remains unused.
     Q229PrepareTerrainDrawLists();
     size_t q2018BaseTested = 0u;
     size_t q2018BaseDrawn = 0u;
@@ -1423,11 +1354,7 @@ void RenderFo3TerrainQ76(const float* mvp) {
             ++q228MirrorUnderwaterSkipped;
             continue;
         }
-        // Q20.19 correctness rollback: Q20.18's clip-space AABB extraction
-        // rejected entire authored LAND windows on valid main-eye views.
-        // Preserve the telemetry but draw every authored base batch until
-        // terrain visibility can be proven against the renderer's exact
-        // projection convention.
+        if(!fo3terrain::MayIntersectClip(batch,mvp))continue;
         ++q2018BaseDrawn;
         glUniform1i(q76bUseTextureLocation, batch.realTexture ? 1 : 0);
         if (q1060TerrainUseNormalLocation >= 0) glUniform1i(q1060TerrainUseNormalLocation, batch.realNormal ? 1 : 0);
@@ -1454,7 +1381,7 @@ void RenderFo3TerrainQ76(const float* mvp) {
             ++q228MirrorUnderwaterSkipped;
             continue;
         }
-        // Same Q20.19 correctness rollback for painted ATXT/VTXT layers.
+        if(!fo3terrain::MayIntersectClip(batch,mvp))continue;
         ++q2018AlphaDrawn;
         glUniform1i(q76bUseTextureLocation, 1);
         if (q1060TerrainUseNormalLocation >= 0) glUniform1i(q1060TerrainUseNormalLocation, batch.realNormal ? 1 : 0);
@@ -1492,7 +1419,7 @@ void RenderFo3TerrainQ76(const float* mvp) {
     ++q2018TerrainPasses;
     if ((q2018TerrainPasses % 240u) == 1u ||
         q2018TerrainUs >= 12000u) {
-        Q76B_LOGI("Q20.19 TERRAIN SAFE: renderUs=%llu baseTested=%zu baseDrawn=%zu baseRejected=%zu alphaTested=%zu alphaDrawn=%zu alphaRejected=%zu totalBatches=%zu reflection=%d mirrorUnderwaterSkipped=%zu culling=OFF-q20.18-rollback",
+        Q76B_LOGI("Q231 TERRAIN CLIP: renderUs=%llu baseTested=%zu baseDrawn=%zu baseRejected=%zu alphaTested=%zu alphaDrawn=%zu alphaRejected=%zu totalBatches=%zu reflection=%d mirrorUnderwaterSkipped=%zu culling=homogeneous-padded bounds=cold+streamed unknown=draw",
                   static_cast<unsigned long long>(q2018TerrainUs),
                   q2018BaseTested, q2018BaseDrawn,
                   q2018BaseTested - q2018BaseDrawn,

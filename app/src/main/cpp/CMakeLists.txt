@@ -68,6 +68,13 @@ target_compile_options(falloutquest PRIVATE
     -include ${CMAKE_CURRENT_SOURCE_DIR}/vr/openxr-platform-prelude.h
 )
 
+execute_process(COMMAND git rev-parse HEAD WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    OUTPUT_VARIABLE FQ_SOURCE_COMMIT OUTPUT_STRIP_TRAILING_WHITESPACE)
+if(NOT FQ_SOURCE_COMMIT)
+    set(FQ_SOURCE_COMMIT "unknown")
+endif()
+target_compile_definitions(falloutquest PRIVATE FQ_SOURCE_COMMIT="${FQ_SOURCE_COMMIT}")
+
 # Profile uses the SAME debug-enabled source and diagnostics but emits
 # optimised native machine code. Keep this in CMake rather than Gradle
 # cppFlags so -O2 appears after CMAKE_CXX_FLAGS_DEBUG's -O0.

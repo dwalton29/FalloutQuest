@@ -526,9 +526,9 @@ private:
 #if defined(NDEBUG) || !defined(__OPTIMIZE__)
 #error "Profile requires native optimisation without disabling debug diagnostics"
 #endif
-        FQ_LOGI("FQ BUILD CONFIG: variant=profile nativeOptimisation=O2 debugDiagnostics=enabled");
+        FQ_LOGI("FQ BUILD CONFIG: source=%s variant=profile nativeOptimisation=O2 debugDiagnostics=enabled",FQ_SOURCE_COMMIT);
 #else
-        FQ_LOGI("FQ BUILD CONFIG: variant=debug nativeOptimisation=default debugDiagnostics=enabled");
+        FQ_LOGI("FQ BUILD CONFIG: source=%s variant=debug nativeOptimisation=default debugDiagnostics=enabled",FQ_SOURCE_COMMIT);
 #endif
         FQ_LOGI("Quest stereo: sequential eyes, cached batches; diagnostics fastMaterial=%d renderScale=%.2f", fqopaque::Options().fastMaterial, fqopaque::Options().scale);
         FQ_LOGI("OpenGL ES renderer: %s", reinterpret_cast<const char*>(glGetString(GL_RENDERER)));
@@ -1499,10 +1499,15 @@ private:
         fqperf::Control();
         fqperf::capture.BeginFrame();
         if(fqperf::capture.recording && !fqperf::capture.size) {
+#ifdef FQ_OPTIMIZED_PROFILE
+            const char* nativeVariant="profile-O2";
+#else
+            const char* nativeVariant="debug-default";
+#endif
             char model[PROP_VALUE_MAX]{};__system_property_get("ro.product.model",model);
             std::snprintf(fqperf::capture.configuration,sizeof(fqperf::capture.configuration),
-                "headset=%s eye0=%dx%d eye1=%dx%d msaa=%d renderScale=%.2f cpuSkin=%d fastMaterial=%d lodRadius20=%d lodMinimal=%d lodClipBypass=%d",
-                model,eyes_[0].width,eyes_[0].height,eyes_[1].width,eyes_[1].height,
+                "source=%s native=%s headset=%s eye0=%dx%d eye1=%dx%d msaaAtStart=%d renderScale=%.2f cpuSkin=%d fastMaterial=%d lodRadius20=%d lodMinimal=%d lodClipBypass=%d",
+                FQ_SOURCE_COMMIT,nativeVariant,model,eyes_[0].width,eyes_[0].height,eyes_[1].width,eyes_[1].height,
                 q2060MsaaActive?q2060MsaaSamples:1,fqopaque::Options().scale,fqactor::CpuReference(),
                 fqopaque::Options().fastMaterial,fqopaque::Options().lodRadius20,fqopaque::Options().lodMinimal,fqopaque::Options().lodClipBypass);
         }
@@ -2087,9 +2092,11 @@ private:
             perf.loading=perf.loading||perfLoadingAtSubmit;
             perf.blocked=Fo3GameplayBlocked();perf.submitted=q1700FrameSubmitted&&layerCount>0;
             perf.cell=gCurrentCellFormId;perf.world=gExteriorWorldspaceQ1890;
+            perf.sceneSamples=q2060MsaaActive?q2060MsaaSamples:1;
             perf.streaming=gExteriorStreamBusyQ1890;
             perf.paletteSkipped=perf.loading?0:fqactor::npc.paletteSkipped;
             perf.draws=fqgl::counters.draws-perfGlStart.draws;
+            perf.submittedVertices=fqgl::counters.vertices-perfGlStart.vertices;
             perf.states=fqgl::counters.state-perfGlStart.state;
             perf.uniforms=fqgl::counters.uniforms-perfGlStart.uniforms;
             perf.textures=fqgl::counters.textures-perfGlStart.textures;

@@ -36,7 +36,15 @@ class StereoReflectionV228(unittest.TestCase):
         self.assertEqual(draw.count("if (Q228EntireTerrainBatchBelowReflectionPlane(batch))"), 2)
         self.assertIn("vPosition = aPosition;", LAND)
         self.assertIn("vPosition.y < uWaterReflectionPlaneYQ2090", LAND)
-        self.assertIn("culling=OFF-q20.18-rollback", LAND)
+        self.assertIn("batch.boundsValid &&", helper)
+        self.assertIn("culling=homogeneous-padded", LAND)
+        self.assertNotIn("Q2018BuildTerrainFrustum", LAND)
+        # Both publication routes must derive renderer-space bounds from the
+        # very same float stream sent to GL. Streamed batches used to stay zero.
+        stream = (ROOT / "app/src/main/cpp/rendering/terrain/fo3-terrain-stream.inc").read_text()
+        for source in (LAND, stream):
+            self.assertIn("fo3terrain::BuildBounds(cpu.vertices.data(),cpu.vertices.size())", source)
+        self.assertEqual(draw.count("fo3terrain::MayIntersectClip(batch,mvp)"), 2)
 
 
 if __name__ == "__main__":

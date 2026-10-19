@@ -29,8 +29,8 @@ struct Frame {
     std::array<double,Count> us{};
     double gpuEyesUs=-1,periodUs=0;
     double gpuEyeUs[2]{-1,-1};
-    uint32_t cell=0,world=0,residents=0,visible=0,animated=0,combat=0,parts=0,rigParts=0,paths=0,expanded=0;
-    uint64_t paletteBytes=0,vertices=0,draws=0,states=0,uniforms=0,textures=0,npcDraws=0,paletteSkipped=0;
+    uint32_t cell=0,world=0,residents=0,visible=0,animated=0,combat=0,parts=0,rigParts=0,paths=0,expanded=0,sceneSamples=1;
+    uint64_t paletteBytes=0,vertices=0,draws=0,states=0,uniforms=0,textures=0,npcDraws=0,paletteSkipped=0,submittedVertices=0;
     bool loading=false,blocked=false,rendered=false,submitted=false,streaming=false;
 };
 inline constexpr size_t Capacity=4096;
@@ -57,9 +57,10 @@ struct Session {
     }
     bool Write(const char* path) const {
         FILE* f=std::fopen(path,"w");if(!f)return false;
-        std::fprintf(f,"# v226 session=%llu gpuEyesUs=delayed-both-eyes-excludes-preparation missing=-1 parent-scopes-include-children compositor-drops=unavailable %s\n",(unsigned long long)id,configuration);
+        std::fprintf(f,"# format=231 session=%llu gpuEyesUs=delayed-both-eyes-excludes-preparation missing=-1 parent-scopes-include-children compositor-drops=unavailable %s\n",(unsigned long long)id,configuration);
         std::fprintf(f,"serial,loading,blocked,rendered,submitted,streaming,cell,world,periodUs,residents,visible,animated,combat,parts,rigParts,paths,expanded,paletteBytes,vertices,draws,states,uniforms,textures,npcDraws,paletteSkipped,gpuEyesUs,gpuEye0Us,gpuEye1Us");
         for(auto name:names)std::fprintf(f,",%s",name);
+        std::fprintf(f,",sceneSamples,submittedVertices");
         std::fputc('\n',f);
         for(size_t i=0;i<size;++i) {
             const auto& v=frames[i];
@@ -70,6 +71,7 @@ struct Session {
                 (unsigned long long)v.states,(unsigned long long)v.uniforms,(unsigned long long)v.textures,(unsigned long long)v.npcDraws,(unsigned long long)v.paletteSkipped,
                 v.gpuEyesUs,v.gpuEyeUs[0],v.gpuEyeUs[1]);
             for(double us:v.us)std::fprintf(f,",%.3f",us);
+            std::fprintf(f,",%u,%llu",v.sceneSamples,(unsigned long long)v.submittedVertices);
             std::fputc('\n',f);
         }
         return std::fclose(f)==0;

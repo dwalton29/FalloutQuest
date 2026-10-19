@@ -24,7 +24,8 @@ std::unique_ptr<ScriptTransactionPlan> Player::PrepareScriptTransaction(
   auto plan=std::unique_ptr<ScriptTransactionPlan>(new ScriptTransactionPlan());
   plan->owner_=this;plan->ownerIdentity_=referencePlanIdentity_;
   plan->expectedRevision_=revision_;plan->expectedEffects_=scriptEffectRevision_;
-  // Player copies share a const ESM catalogue but own every mutable value/queue.
+  // Player copies share the const ESM catalogue and untouched actor pages.
+  // Mutable values/queues remain isolated; actor edits detach the touched page.
   plan->candidate_=std::unique_ptr<Player>(new Player(*this,ScriptCandidateTag{}));
   auto& candidate=*plan->candidate_;
   plan->programsCaptured_=capturePrograms;

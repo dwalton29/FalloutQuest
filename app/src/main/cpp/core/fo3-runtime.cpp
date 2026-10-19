@@ -9406,6 +9406,9 @@ bool Q2090RenderWaterReflection(const float mainMvp[16],
         glUniform3fv(gEyePositionLocationQ1010, 1, originalEye);
     if (gEyePositionVertexLocationQ1630 >= 0)
         glUniform3fv(gEyePositionVertexLocationQ1630, 1, originalEye);
+    // The mirror depth buffer is never sampled or submitted.
+    const GLenum transientDepth=GL_DEPTH_ATTACHMENT;
+    glInvalidateFramebuffer(GL_FRAMEBUFFER,1,&transientDepth);
     gWaterReflectionPassQ2090 = false;
 
     glBindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(previousFbo));
@@ -13255,7 +13258,7 @@ void RenderScene(const float* mvp) {
         const auto q2019WaterPostStarted =
             std::chrono::steady_clock::now();
         const bool q2080SceneSnapshotReady =
-            q2060MsaaActive && q2060MsaaSamples > 1 &&
+            q209bWaterInFrustum && q2060MsaaActive && q2060MsaaSamples > 1 &&
             q2060MsaaFbo != 0u && q1280PostFbo != 0u &&
             q1280PostColor != 0u && q1370PostDepth != 0u &&
             q1280PostWidth > 0 && q1280PostHeight > 0;
@@ -13650,7 +13653,6 @@ void Q1350UpdateExposureQ1350() {
     glUniform1i(q1350AdaptPrevLocation, 1);
 
     const Fo3ImageSpace& image = GetFo3ImageSpace();
-    const float targetLum = image.valid ? std::clamp(image.hdrTargetLum, 0.001f, 4.0f) : 1.0f;
     const float upperLum = image.valid ? std::clamp(image.hdrUpperLumClamp, 0.01f, 4.0f) : 1.0f;
     const float eyeSpeed = image.valid ? std::clamp(image.hdrEyeAdaptSpeed, 0.0f, 1.0f) : 0.5f;
     glUniform1f(q1350AdaptTargetLocation, upperLum);
@@ -13661,20 +13663,9 @@ void Q1350UpdateExposureQ1350() {
     q1350AdaptIndex = nextIndex;
     ++q1350AdaptFrame;
 
-    // Diagnostic-only 1x1 readback: first update and then roughly every two
-    // seconds at 72 Hz. Rendering itself never depends on this CPU readback.
-    if (q1350AdaptFrame == 1u || (q1350AdaptFrame % 144u) == 0u) {
-        uint8_t pixel[4]{};
-        glReadPixels(0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
-        const float packed = static_cast<float>(pixel[0]) / 255.0f +
-                             (static_cast<float>(pixel[1]) / 255.0f) / 255.0f;
-        const float exposure = packed * 4.0f;
-        const float sceneLum = (static_cast<float>(pixel[2]) / 255.0f) * 4.0f;
-        const float desiredExposure = (static_cast<float>(pixel[3]) / 255.0f) * 4.0f;
-        Q6H_LOGI("Q15.2 SP17 HDR HISTORY: sceneLum=%.4f targetLum=%.3f desiredExposure=%.4f adaptedExposure=%.4f eyeAdaptSpeed=%.3f update=%llu stereoShared=1 gpuHistory=1 mapping=sqrt(targetQuarter/logAverage) clamp=0.75..1.35",
-                 sceneLum, targetLum, desiredExposure, exposure, eyeSpeed,
-                 static_cast<unsigned long long>(q1350AdaptFrame));
-    }
+    // Adaptation stays entirely on the GPU. The former diagnostic glReadPixels
+    // drained all queued world/resolve work every 144 frames (and first use).
+    // FQPerf and runtime GPU telemetry observe performance without that stall.
 
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(oldTexture1));
@@ -14501,6 +14492,12 @@ void Q1350CompositeEyePostQ1350(uint32_t eyeIndex, GLuint swapchainFbo,
     // Resolve the multisampled HDR scene into the existing single-sample
     // colour/depth textures before eye adaptation, bloom and final-film work.
     Q2060ResolveEyeMsaaQ2060();
+    if(q2060MsaaActive && q2060MsaaFbo && q1280PostFbo) {
+        // Resolve has consumed these samples. No later pass reads them before
+        // the next eye clears them. Keep the resolved colour/depth textures.
+        const GLenum transientAttachments[]={GL_COLOR_ATTACHMENT0,GL_DEPTH_ATTACHMENT};
+        glInvalidateFramebuffer(GL_READ_FRAMEBUFFER,2,transientAttachments);
+    }
     ++q2060MsaaHeartbeatFrame;
     if ((q2060MsaaHeartbeatFrame % 300u) == 1u) {
         Q6H_LOGI("Q20.6A MSAA HEARTBEAT: attempted=%d active=%d chosen=%dx glMax=%d xrRecommended=%u xrMax=%u size=%dx%d msaaFbo=%u postFbo=%u",

@@ -2,6 +2,7 @@
 
 #include "pipboy/fo3-pipboy-session.h"
 #include "player/fo3-experience.h"
+#include "player/fo3-paged-state.h"
 #include "scripting/fo3-event-scripts.h"
 #include "world/fo3-reference-state.h"
 #include "weapons/fo3-weapon-data.h"
@@ -204,7 +205,7 @@ struct State {
   std::vector<WorldWeapon> worldWeapons;
   bool developmentWeaponGranted = false;
   std::unordered_map<uint32_t,float> actorDamage;
-  std::unordered_map<uint32_t,ActorState> actors;
+  PagedStateMap<ActorState> actors;
 };
 struct CellOwnership {OwnershipData data;uint8_t flags=0;std::string editor,name;};
 // Sparse immutable XESP graph, independent of Pip-Boy target pruning.

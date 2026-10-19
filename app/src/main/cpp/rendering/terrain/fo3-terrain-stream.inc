@@ -819,6 +819,7 @@ bool Q2000AdvanceOneBatch(
 
     const auto finalizeStarted = std::chrono::steady_clock::now();
     Q711TerrainBatch gpu;
+    static_cast<fo3terrain::Bounds&>(gpu)=fo3terrain::BuildBounds(cpu.vertices.data(),cpu.vertices.size());
     gpu.gridX = cell.gridX;
     gpu.gridY = cell.gridY;
     gpu.texturePath = cpu.texturePath;
