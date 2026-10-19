@@ -121,7 +121,7 @@ void Q230PrepareActors(uint32_t cell, uint32_t worldspace,
                        std::vector<Q230ActorVisual> &out,
                        const std::atomic<bool> &cancel
 #ifndef FO3_ACTOR_RUNTIME_HOST_TEST
-                       ,const std::unordered_map<uint32_t,fo3player::ActorState>* savedOverride,
+                       ,const fo3player::PagedStateMap<fo3player::ActorState>* savedOverride,
                        const std::unordered_set<uint32_t>* onlyRefs
 #endif
                        ) {

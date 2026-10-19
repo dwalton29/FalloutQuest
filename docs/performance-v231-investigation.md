@@ -110,7 +110,8 @@ semantics. Publishing/rolling back remains allocation-free.
 This does not change script cadence, owner order, event filters, conditions,
 world-state reservation, provenance, error handling or any AI scheduling.
 Other State containers still copy: this is not a claim to have removed every
-script cost.
+script cost. Arrival preparation snapshots and the unloaded scheduler accept
+the same paged container; no conversion back to a full census map is performed.
 
 ### 3. Avoidable GPU transfers and synchronisation
 
@@ -161,6 +162,8 @@ provenance, publication/rollback, merchant barter including Moira, theft/Karma,
 locks/XP and save/restore. The page test verifies no copies during reads,
 bounded page detachment, snapshot isolation, commit-style swap/rollback and
 move/clear/iteration. Existing allocation-forbidden transaction checks pass.
+The unloaded scheduler runs its real paged-container interface in the 130-actor
+64/64/2 budget, 37-actor day/night, resident-arrival and clock-isolation tests.
 
 The terrain test compares 20,000 triangles against an independent six-plane
 polygon-clipping oracle: no triangle capable of producing a raster contribution

@@ -42,7 +42,7 @@ public:
   // Called from one game thread. A changed in-game minute begins an actor
   // batch; at most 64 tracked actors are evaluated per frame.
   Report Tick(float hour,uint32_t residentCell,uint32_t residentWorld,
-              const std::unordered_map<uint32_t,fo3player::ActorState>& tracked,
+              const fo3player::PagedStateMap<fo3player::ActorState>& tracked,
               const fo3pipdata::Definitions& definitions,
               const fo3xtel::Index& graph,const Callbacks& callbacks,
               fo3schedule::Calendar calendar={});

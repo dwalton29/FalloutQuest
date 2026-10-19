@@ -78,7 +78,7 @@ bool SupportedLocalProcedure(const fo3pipdata::PackageDefinition& p) {
 }
 void Scheduler::Reset(){minute_=-1;previousMinute_=-1;batchHour_=0.f;batchCalendar_={};cursor_=0;pending_.clear();lastTransferredMinute_.clear();}
 Report Scheduler::Tick(float hour,uint32_t residentCell,uint32_t residentWorld,
-  const std::unordered_map<uint32_t,fo3player::ActorState>& tracked,
+  const fo3player::PagedStateMap<fo3player::ActorState>& tracked,
   const fo3pipdata::Definitions& defs,const fo3xtel::Index& graph,
   const Callbacks& cb,fo3schedule::Calendar calendar) {
   Report out;

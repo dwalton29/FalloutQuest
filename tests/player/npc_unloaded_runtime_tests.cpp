@@ -35,7 +35,7 @@ fo3xtel::Index Graph() {
 struct Fixture {
   fo3pipdata::Definitions defs;
   fo3xtel::Index graph=Graph();
-  std::unordered_map<uint32_t,fo3player::ActorState> tracked;
+  fo3player::PagedStateMap<fo3player::ActorState> tracked;
   fo3unloaded::Scheduler scheduler;
   uint32_t base=0x3000,actor=0x22;
   bool doorOpen=true,eligible=true,alive=true,megatonResident=false;
@@ -161,12 +161,12 @@ void TestGuards() {
   assert(f.writes==1);
   f.alive=false;
   f.Tick(20.01f);assert(f.writes==1);
-  f.alive=true;f.tracked.at(f.actor).hostile=0x14;
+  f.alive=true;f.tracked.Edit(f.actor)->hostile=0x14;
   f.Tick(20.02f);assert(f.writes==1);
-  f.tracked.at(f.actor).hostile=0;
+  f.tracked.Edit(f.actor)->hostile=0;
   f.eligible=false;f.Tick(20.03f);assert(f.writes==1);
   f.eligible=true;f.Tick(20.04f);assert(f.writes==2);
-  f.tracked.at(f.actor).dead=true;
+  f.tracked.Edit(f.actor)->dead=true;
   f.Tick(8.01f);assert(f.writes==2);
   std::cout<<"Disabled doors, resident exclusion, health, hostility and condition gates passed\n";
 }

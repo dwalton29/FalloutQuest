@@ -822,7 +822,7 @@ static fo3unloaded::Scheduler gQ230UnloadedScheduler;
 void Q230DeleteNpcActors();
 void Q230PrepareActors(uint32_t cell, uint32_t worldspace,
     std::vector<Q230ActorVisual>& out, const std::atomic<bool>& cancel,
-    const std::unordered_map<uint32_t,fo3player::ActorState>* savedOverride=nullptr,
+    const fo3player::PagedStateMap<fo3player::ActorState>* savedOverride=nullptr,
     const std::unordered_set<uint32_t>* onlyRefs=nullptr);
 bool Fo3DialogueFocus();
 bool Fo3BarterFocus();
@@ -12652,7 +12652,7 @@ void Q230PumpNpcArrivals(){
     // Freeze *only* requested, newly resident actor states. This snapshot
     // prevents the asset worker reading mutable player state while the game
     // clock advances on the main thread.
-    std::unordered_map<uint32_t,fo3player::ActorState> saved;
+    fo3player::PagedStateMap<fo3player::ActorState> saved;
     std::unordered_set<uint32_t> refs;
     for(uint32_t id:work.pending){
         const auto it=player.Snapshot().actors.find(id);
