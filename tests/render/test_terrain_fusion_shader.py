@@ -56,6 +56,10 @@ fused_shaders=[re.search(n+r'\s*=\s*R"\((.*?)\)";',source,re.S).group(1).lstrip(
 fused=program(fused_shaders)
 unshared=program([fused_shaders[0],fused_shaders[1].replace('#version 300 es',
     '#version 300 es\n#define FQ239_UNSHARED_LIGHTS 1',1)])
+no_zero_skip=fused_shaders[1]
+for channel in 'xyz':
+    no_zero_skip=no_zero_skip.replace(f' && vPaintAlpha.{channel} != 0.0','',1)
+no_zero_skip=program([fused_shaders[0],no_zero_skip])
 loc=gl('glGetUniformLocation',integer,uint,C.c_char_p)
 current=0
 def ui(name,value):gl('glUniform1i',None,integer,integer)(loc(current,name.encode()),value)
@@ -74,11 +78,11 @@ normals=[texture(i+4,c) for i,c in enumerate([(128,128,255,20),(144,110,250,180)
 shadow=texture(8,(255,255,255,255))
 vao=uint();gl('glGenVertexArrays',None,integer,ptr)(1,C.byref(vao));gl('glBindVertexArray',None,uint)(vao)
 vbo=uint();gl('glGenBuffers',None,integer,ptr)(1,C.byref(vbo));gl('glBindBuffer',None,uint,uint)(0x8892,vbo)
-def vertices(paint,layer):
+def vertices(paint,layer,zero=False):
     values=[]
     for c,(x,y) in enumerate([(-1,-1),(3,-1),(-1,3)]):
         alphas=[(.1+c*.2),(.7-c*.1),(.05+c*.3)]
-        if c==0: alphas[1]=0.0  # Exact zero-alpha sparse-layer case.
+        if zero: alphas[1]=0.0
         values += [x,y,0,0,1,0,x*.1,y*.1,1 if layer==0 else alphas[layer-1],.8,.9,.7]
         if paint:values+=alphas
     gl('glBufferData',None,uint,C.c_ssize_t,ptr,uint)(0x8892,len(values)*4,(C.c_float*len(values))(*values),0x88E4)
@@ -149,12 +153,17 @@ for mode,fmt in [(1,0x881A),(2,0x8058)]:
                 # Additional multi-light parity checks isolate light caching from
                 # unrelated FP16 differences between v237 multipass and v238 fusion.
                 setup(fused,mode,True,multi=True);ui('uDiffuse',0);ui('uNormalGloss',4);ui('uPaintCount',layers)
-                gl('glDisable',None,uint)(0x0BE2);vertices(True,0);gl('glDrawArrays',None,uint,integer,integer)(4,0,3)
+                gl('glDisable',None,uint)(0x0BE2);vertices(True,0,True);gl('glDrawArrays',None,uint,integer,integer)(4,0,3)
                 multi_shared=read(mode)
                 setup(unshared,mode,True,multi=True);ui('uDiffuse',0);ui('uNormalGloss',4);ui('uPaintCount',layers)
-                gl('glDisable',None,uint)(0x0BE2);vertices(True,0);gl('glDrawArrays',None,uint,integer,integer)(4,0,3)
+                gl('glDisable',None,uint)(0x0BE2);vertices(True,0,True);gl('glDrawArrays',None,uint,integer,integer)(4,0,3)
                 multi_unshared=read(mode)
                 diff=max(abs(a-b) for a,b in zip(multi_shared,multi_unshared))
                 assert diff <= (.002 if mode==1 else 2),(mode,layers,lit,'multi-light',diff)
+                setup(no_zero_skip,mode,True,multi=True);ui('uDiffuse',0);ui('uNormalGloss',4);ui('uPaintCount',layers)
+                gl('glDisable',None,uint)(0x0BE2);vertices(True,0,True);gl('glDrawArrays',None,uint,integer,integer)(4,0,3)
+                no_skip=read(mode)
+                skip_error=max(abs(a-b) for a,b in zip(no_skip,multi_shared))
+                assert skip_error <= (.002 if mode==1 else 2),(mode,layers,lit,'zero-alpha',skip_error)
             assert gl('glGetError',uint)()==0
 print('Production shared/unshared fused shaders match v237 multipass: 1–3 layers, fog, normals, specular, shadows, local lights; FP16/RGBA8. Max error:',max_error)
