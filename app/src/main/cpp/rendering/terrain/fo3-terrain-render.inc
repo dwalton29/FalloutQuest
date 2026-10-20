@@ -1467,7 +1467,7 @@ void RenderFo3TerrainQ76(const float* mvp) {
     }
     glUniform1i(q76bSamplerLocation, 0);
     if (q1060TerrainNormalSamplerLocation >= 0) glUniform1i(q1060TerrainNormalSamplerLocation, 1);
-    const Fo3Environment& q1000Env = GetFo3Environment();
+    const Fo3Environment& q1000Env = GetFo3RenderEnvironment();
     float q203dPcLightDirection[3]{0.35f, 0.85f, 0.40f};
     const bool q203dPcLightReady =
         GetFo3PcLightDirection(q203dPcLightDirection);

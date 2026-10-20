@@ -1,4 +1,5 @@
 #pragma once
+#include "../quest-quality-policy.h"
 #include "../../data/fo3-install-paths.h"
 
 #include "fo3-esm-reader.h"
@@ -434,6 +435,14 @@ inline void ResetFo3Environment() {
 
 inline const Fo3Environment& GetFo3Environment() {
     return gFo3Environment;
+}
+
+// Render-only distance cap: original WTHR/FNAM/NAM0 and time-of-day state
+// remain authoritative. Shared by objects, LAND, actors and water lighting.
+inline Fo3Environment GetFo3RenderEnvironment() {
+    Fo3Environment env = GetFo3Environment();
+    fqquality::Fog(env.worldspaceFormId, env.interior, env.valid, env.fogNear, env.fogFar);
+    return env;
 }
 
 inline bool LoadFo3Environment(uint32_t worldspaceFormId) {

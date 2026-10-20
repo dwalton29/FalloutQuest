@@ -205,10 +205,23 @@ inline void Uniform2fv(GLint l,GLsizei n,const GLfloat* v) { if(UploadArray(l,3,
 inline void Uniform3fv(GLint l,GLsizei n,const GLfloat* v) { if(UploadArray(l,4,v,n*3*sizeof(float),n)) glUniform3fv(l,n,v); }
 inline void Uniform4fv(GLint l,GLsizei n,const GLfloat* v) { if(UploadArray(l,5,v,n*4*sizeof(float),n)) glUniform4fv(l,n,v); }
 inline void UniformMatrix4fv(GLint l,GLsizei n,GLboolean t,const GLfloat* v) { if(UploadArray(l,6+t,v,n*16*sizeof(float),n)) glUniformMatrix4fv(l,n,t,v); }
-inline void DrawArrays(GLenum m,GLint first,GLsizei n) { ++counters.draws;counters.vertices+=n;glDrawArrays(m,first,n); }
-inline void DrawArraysInstanced(GLenum m,GLint first,GLsizei n,GLsizei count) { ++counters.draws;counters.vertices+=uint64_t(n)*count;glDrawArraysInstanced(m,first,n,count); }
-inline void DrawElements(GLenum m,GLsizei n,GLenum type,const void* indices) { ++counters.draws;counters.vertices+=n;glDrawElements(m,n,type,indices); }
-inline void DrawElementsInstanced(GLenum m,GLsizei n,GLenum type,const void* indices,GLsizei count) { ++counters.draws;counters.vertices+=uint64_t(n)*count;glDrawElementsInstanced(m,n,type,indices,count); }
+// Optional draw-region hook, installed only for a main-eye world pass.
+// Ordinary draws, UI, reflections and portable tests retain one submission.
+inline unsigned (*drawRegionCount)(GLsizei)=nullptr;
+inline bool (*selectDrawRegion)(unsigned)=nullptr;
+inline void (*restoreDrawRegion)()=nullptr;
+template<class Draw> inline void Submit(GLsizei n, GLsizei instances, Draw draw) {
+    const unsigned regions=drawRegionCount ? drawRegionCount(n) : 1;
+    for(unsigned i=0;i<regions;++i) {
+        if(regions>1 && !selectDrawRegion(i)) continue;
+        ++counters.draws; counters.vertices+=uint64_t(n)*instances; draw();
+    }
+    if(regions>1) restoreDrawRegion();
+}
+inline void DrawArrays(GLenum m,GLint first,GLsizei n) { Submit(n,1,[&]{glDrawArrays(m,first,n);}); }
+inline void DrawArraysInstanced(GLenum m,GLint first,GLsizei n,GLsizei count) { Submit(n,count,[&]{glDrawArraysInstanced(m,first,n,count);}); }
+inline void DrawElements(GLenum m,GLsizei n,GLenum type,const void* indices) { Submit(n,1,[&]{glDrawElements(m,n,type,indices);}); }
+inline void DrawElementsInstanced(GLenum m,GLsizei n,GLenum type,const void* indices,GLsizei count) { Submit(n,count,[&]{glDrawElementsInstanced(m,n,type,indices,count);}); }
 inline void DeleteProgram(GLuint id) {
     for(auto& p:programs) if(p.program==id) p=ProgramUniforms{};
     glDeleteProgram(id); // A current deleted program remains current until unbound.

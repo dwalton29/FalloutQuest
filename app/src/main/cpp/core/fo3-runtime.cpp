@@ -24,6 +24,7 @@
 #include "npc/fo3-animation-bounds.h"
 #include "rendering/actor-skinning.h"
 #include "rendering/opaque-telemetry.h"
+#include "rendering/fixed-foveation.h"
 #include "rendering/performance-capture-android.h"
 #include "rendering/loading-work-scope.h"
 #include "rendering/loading-diagnostics.h"
@@ -2745,7 +2746,7 @@ void Q1050Ortho(float halfSpan, float nearZ, float farZ, float out[16]) {
     out[15] = 1.0f;
 }
 void Q1050BuildLightMvp(float out[16]) {
-    const Fo3Environment& env = GetFo3Environment();
+    const Fo3Environment& env = GetFo3RenderEnvironment();
     Q1050V3 sun = Q1050Norm({env.sunDirection[0],env.sunDirection[1],env.sunDirection[2]});
     Q1050V3 center{gFo3EyePosition[0], gFo3EyePosition[1] + 4.0f, gFo3EyePosition[2]};
     Q1050V3 eye{center.x + sun.x*80.0f, center.y + sun.y*80.0f, center.z + sun.z*80.0f};
@@ -2826,7 +2827,7 @@ bool Q1050CreateShadowResources() {
 
 bool Q1050UpdateSunShadow() {
     if (!gSceneReady || gObjects.empty()) return false;
-    const Fo3Environment& env=GetFo3Environment();
+    const Fo3Environment& env=GetFo3RenderEnvironment();
     if (!env.valid || !Q1050CreateShadowResources()) return false;
     const float dx=gFo3EyePosition[0]-gShadowLastEyeQ1050[0];
     const float dy=gFo3EyePosition[1]-gShadowLastEyeQ1050[1];
@@ -6712,11 +6713,11 @@ void UpdateFo3ExteriorStreamingQ1890(float virtualHeadX, float virtualHeadZ) {
                 const bool timeout = warmupUs >= 25000000u;
                 if (timeout && !gFo3LoadingWarmupWarned) {
                     gFo3LoadingWarmupWarned = true;
-                    Q6H_LOGW("LOADING WARMUP STILL PENDING: detail=%zu/49 nearLOD=%zu/9 level32=%zu/%zu high=%zu/%zu; presentation stays covered, check original archives if progress stops",
+                    Q6H_LOGW("LOADING WARMUP STILL PENDING: detail=%zu/49 nearLOD=%zu/9 coarseLevel16=%zu/%zu high=%zu/%zu; presentation stays covered, check original archives if progress stops",
                              detailReady, lodReady, level32Ready, level32Target, highReady, highTarget);
                 }
                 if (Fo3LoadingExteriorReady(detailComplete, nearLodComplete, horizonComplete)) {
-                    Q6H_LOGI("Q20.25 EXTERIOR WARMUP COMPLETE: detailReady=%zu/49 nearLevel4=%zu/9 level32=%zu/%zu high=%zu/%zu elapsedUs=%llu timeout=%d action=release-loading-screen",
+                    Q6H_LOGI("Q20.25 EXTERIOR WARMUP COMPLETE: detailReady=%zu/49 nearLevel4=%zu/9 coarseLevel16=%zu/%zu high=%zu/%zu elapsedUs=%llu timeout=%d action=release-loading-screen",
                              detailReady, lodReady,
                              level32Ready, level32Target,
                              highReady, highTarget,
@@ -7742,14 +7743,20 @@ void Q2024GetAuthoredWarmupState(size_t& level32Ready,
     level32Target = 0u;
     highReady = gQ2023HighObjectBlocks.size();
     highTarget = 0u;
+    // Legacy output names retained for the loading gate. The required coarse
+    // fallback is now Level16, not the intentionally omitted Level32 tier.
+    const int32_t px=gQ1920LatestGridValid ? gQ1920LatestGridX : gExteriorWindowGridXQ1890;
+    const int32_t py=gQ1920LatestGridValid ? gQ1920LatestGridY : gExteriorWindowGridYQ1890;
     for (const Q2023CoarseTerrainTile& tile : gQ2023CoarseTerrainTiles) {
-        if (tile.levelCells == 32) ++level32Ready;
+        if (tile.levelCells == 16 &&
+            fqquality::CoarseDesired(16,tile.blockX,tile.blockY,px,py)) ++level32Ready;
     }
     for (const Q2023LodAsset& asset : gQ2023LodAssets) {
         if (asset.kind == Q2023LodAssetKind::HighObjects) {
             ++highTarget;
         } else if (asset.kind == Q2023LodAssetKind::CoarseTerrain &&
-                   asset.levelCells == 32) {
+                   asset.levelCells == 16 &&
+                   fqquality::CoarseDesired(16,asset.blockX,asset.blockY,px,py)) {
             ++level32Target;
         }
     }
@@ -7955,7 +7962,7 @@ bool Q2023DiscoverLodAssetsQ19() {
 
         if (inBlocks) continue;
         const int level = Q2023ParseTerrainLevel(path);
-        if (level != 8 && level != 16 && level != 32) continue;
+        if (level != 8 && level != 16) continue; // Q240: omit the outermost Level32 tier.
 
         Q2023LodAsset asset;
         asset.kind = Q2023LodAssetKind::CoarseTerrain;
@@ -7982,15 +7989,8 @@ bool Q2023DiscoverLodAssetsQ19() {
 bool Q2023TileDesiredQ19(
         int levelCells, int32_t blockX, int32_t blockY,
         int32_t playerCellX, int32_t playerCellY) {
-    if (levelCells == 32) return true;
-    const int32_t centreX = blockX + levelCells / 2;
-    const int32_t centreY = blockY + levelCells / 2;
-    const int cheb = std::max(
-        std::abs(centreX - playerCellX),
-        std::abs(centreY - playerCellY));
-    if (levelCells == 16) return cheb <= 72;
-    if (levelCells == 8) return cheb <= 44;
-    return false;
+    return fqquality::CoarseDesired(levelCells, blockX, blockY,
+                                    playerCellX, playerCellY);
 }
 
 bool Q2023AssetDesiredQ19(
@@ -9085,7 +9085,7 @@ void Q1990RenderNativeLod(bool alphaPass) {
     // visible until all four desired children are resident, so streaming never
     // punches holes into the horizon. Finer tiers use progressively smaller
     // polygon offsets and naturally win the depth test at overlap seams.
-    const int levels[] = {32, 16, 8};
+    const int levels[] = {16, 8};
     for (int level : levels) {
         if (level == 32) { gNativeLodOffsetFactor=8.0f; gNativeLodOffsetUnits=14.0f; }
         else if (level == 16) { gNativeLodOffsetFactor=6.0f; gNativeLodOffsetUnits=11.0f; }
@@ -9177,7 +9177,7 @@ void Q1990RenderNativeLod(bool alphaPass) {
     glDisable(GL_POLYGON_OFFSET_FILL);
     if (!alphaPass && !gQ1990NativeLodDrawLogged) {
         gQ1990NativeLodDrawLogged = true;
-        Q6H_LOGI("Q20.23 NATIVE LOD DRAW: shapes=%zu triangles=%zu level32Shapes=%zu level16Shapes=%zu level8Shapes=%zu highShapes=%zu level4Loaded=%zu coarseTiles=%zu highBlocks=%zu playerCell=(%d,%d) hierarchy=32>16>8>4>detail refinement=no-holes treesDTL=deferred postApocalypse=deferred",
+        Q6H_LOGI("Q20.23 NATIVE LOD DRAW: shapes=%zu triangles=%zu level32Shapes=%zu level16Shapes=%zu level8Shapes=%zu highShapes=%zu level4Loaded=%zu coarseTiles=%zu highBlocks=%zu playerCell=(%d,%d) hierarchy=16>8>4>detail refinement=no-holes treesDTL=deferred postApocalypse=deferred",
                  drawnShapes, drawnTriangles,
                  drawnLevel32, drawnLevel16, drawnLevel8, drawnHigh,
                  Q2013ProgressiveLodCountQ19(),
@@ -9425,7 +9425,7 @@ bool Q2090RenderWaterReflection(const float mainMvp[16],
     glBindFramebuffer(GL_FRAMEBUFFER, gWaterReflectionFboQ2090);
     glViewport(0, 0, Q2090_REFLECTION_SIZE, Q2090_REFLECTION_SIZE);
 
-    const Fo3Environment& env = GetFo3Environment();
+    const Fo3Environment& env = GetFo3RenderEnvironment();
     if (env.valid) {
         glClearColor(env.horizon[0], env.horizon[1], env.horizon[2], 1.0f);
     } else {
@@ -13115,7 +13115,7 @@ void RenderScene(const float* mvp) {
         glUniform1i(gEnvironmentCubeLocationQ2050, 4);
     if (gEnvironmentMaskLocationQ2050 >= 0)
         glUniform1i(gEnvironmentMaskLocationQ2050, 5);
-    const Fo3Environment& q1000Env = GetFo3Environment();
+    const Fo3Environment& q1000Env = GetFo3RenderEnvironment();
     float q203dPcLightDirection[3]{0.35f, 0.85f, 0.40f};
     const bool q203dPcLightReady =
         !q1000Env.interior && GetFo3PcLightDirection(q203dPcLightDirection);
@@ -13277,8 +13277,11 @@ void RenderScene(const float* mvp) {
     glDisable(GL_BLEND);
     if (q2060MsaaActive && q2060MsaaSamples > 1)
         glEnable(GL_SAMPLE_ALPHA_TO_COVERAGE);
+    {
+    fqfoveation::Scope foveation;
     { fqperf::GpuScope gpuPass(fqperf::GpuNative); fqopaque::PhaseScope scope(fqopaque::NativeLod,gStereoFrame); Q1990RenderNativeLod(false); }
     { fqperf::GpuScope gpuPass(fqperf::GpuDetailed); fqopaque::PhaseScope scope(fqopaque::DetailedWorld,gStereoFrame); Q2017RenderOpaqueDetailedInstanced(); }
+    } // Restore full shading before actors, hands and alpha/UI passes.
     { fqperf::GpuScope gpuPass(fqperf::GpuNpc); fqopaque::PhaseScope scope(fqopaque::Npc,gStereoFrame); Q230RenderNpcActors(false); }
     { fqperf::GpuScope gpuPass(fqperf::GpuPlayer); fqopaque::PhaseScope scope(fqopaque::Player,gStereoFrame); Q210RenderPlayerBody(false); }
     if (!q2021MainA2cWas)
@@ -13427,7 +13430,7 @@ void RenderScene(const float* mvp) {
     glPolygonOffset(previousOffsetFactor, previousOffsetUnits);
     if(offsetWasEnabled) glEnable(GL_POLYGON_OFFSET_FILL); else glDisable(GL_POLYGON_OFFSET_FILL);
     SetFo3TerrainColorFormatQ238(Q238HalfFloatTarget());
-    {fqperf::GpuScope gpuTerrain(fqperf::GpuTerrain); RenderFo3CollisionOverlay(mvp);}
+    {fqfoveation::Scope foveation; fqperf::GpuScope gpuTerrain(fqperf::GpuTerrain); RenderFo3CollisionOverlay(mvp);}
 
     if (gExteriorStreamingActiveQ1890 && gExteriorWorldspaceQ1890 != 0u) {
         const auto q2019WaterPostStarted =

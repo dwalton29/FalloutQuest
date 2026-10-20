@@ -99,6 +99,8 @@ jobs:
           python3 tests/render/test_performance_capture.py
           g++ -std=c++17 -Wall -Wextra -Werror tests/render/render_policy_tests.cpp -o /tmp/render-policy-tests
           /tmp/render-policy-tests
+          g++ -std=c++17 -Wall -Wextra -Werror -Iapp/src/main/cpp tests/render/quest_quality_tests.cpp -o /tmp/quest-quality-tests
+          /tmp/quest-quality-tests
 
       - name: Set up Java 17
         uses: actions/setup-java@v4

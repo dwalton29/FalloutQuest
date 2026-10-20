@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include "gl-state-cache.h"
+#include "quest-quality-policy.h"
 
 namespace fqopaque {
 using Clock=std::chrono::steady_clock;
@@ -15,7 +16,7 @@ inline double Micros(Clock::time_point start) {
 struct Diagnostics {
     bool fastMaterial=false, lodRadius20=false, lodMinimal=false, lodClipBypass=false;
     bool hdrRtt=false;
-    float scale=1.0f;
+    float scale=fqquality::RenderScale;
     Diagnostics() {
 #ifndef NDEBUG
         char value[PROP_VALUE_MAX]{};
@@ -30,8 +31,9 @@ struct Diagnostics {
         __system_property_get("debug.falloutquest.fast_material",value);
         fastMaterial=std::atoi(value)==1;
         __system_property_get("debug.falloutquest.render_scale",value);
-        // Explicit opt-in 0.7 diagnostic; default and production remain 1.0.
-        if(std::atof(value)>0.69 && std::atof(value)<0.71) scale=0.7f;
+        // Optional comparison override; normal Debug/Profile/production use 90%.
+        const float requested=std::atof(value);
+        if(requested>=0.7f && requested<=1.0f) scale=requested;
 #endif
     }
 };
