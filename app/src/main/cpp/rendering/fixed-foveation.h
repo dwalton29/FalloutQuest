@@ -29,7 +29,9 @@ inline void Initialize() {
     initialized=true;
     char value[PROP_VALUE_MAX]{};
     __system_property_get("debug.falloutquest.foveation",value);
-    const bool disabled=value[0] && std::atoi(value)==0;
+    // Region replay multiplies geometry submissions. Keep it opt-in while
+    // the visibility work targets the geometry-heavy wasteland workload.
+    const bool disabled=!value[0] || std::atoi(value)!=1;
     if(!disabled && HasExtension(reinterpret_cast<const char*>(glGetString(GL_EXTENSIONS)),
                                  "GL_QCOM_shading_rate"))
         rate=reinterpret_cast<RateFn>(eglGetProcAddress("glShadingRateQCOM"));

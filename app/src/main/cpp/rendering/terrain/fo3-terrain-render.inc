@@ -210,6 +210,8 @@ constexpr size_t Q1810_TERRAIN_NORMAL_CACHE_LIMIT = 256u;
 bool q76bReady = false;
 bool q76bLoggedVisible = false;
 uint32_t q76bWorldspace = 0;
+float q241TerrainOrigin[3]{};
+float q241TerrainUnits=0;
 size_t q76bTerrainCells = 0;
 size_t q76bTriangles = 0;
 size_t q718AlphaTriangles = 0;
@@ -1360,6 +1362,8 @@ bool InitializeFo3TerrainRenderQ76(uint32_t worldspaceFormId,
     q718AlphaTriangles = alphaVertices / 3u;
     q76bTerrainCells = acceptedCells;
     q76bWorldspace = worldspaceFormId;
+    q241TerrainOrigin[0]=arrivalX;q241TerrainOrigin[1]=arrivalY;q241TerrainOrigin[2]=arrivalZ;
+    q241TerrainUnits=unitsPerMetre;
     q76bReady = true;
     size_t q1070VclrCells = 0u;
     for (const Fo3TerrainCellQ76& c : terrain) {

@@ -101,6 +101,10 @@ jobs:
           /tmp/render-policy-tests
           g++ -std=c++17 -Wall -Wextra -Werror -Iapp/src/main/cpp tests/render/quest_quality_tests.cpp -o /tmp/quest-quality-tests
           /tmp/quest-quality-tests
+          g++ -O2 -std=c++17 -Wall -Wextra -Werror -Iapp/src/main/cpp tests/render/conservative_occlusion_tests.cpp -o /tmp/occlusion-tests
+          /tmp/occlusion-tests
+          g++ -O2 -std=c++17 -Wall -Wextra -Werror -Iapp/src/main/cpp tests/render/occlusion_runtime_tests.cpp -o /tmp/occlusion-runtime-tests
+          /tmp/occlusion-runtime-tests
 
       - name: Set up Java 17
         uses: actions/setup-java@v4

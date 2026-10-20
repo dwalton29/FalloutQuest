@@ -65,6 +65,10 @@ bool IsFo3TerrainStreamingBusyQ2000();
 bool GetFo3TerrainResidentCentreQ2000(int32_t* outGridX, int32_t* outGridY);
 const Fo3TerrainCellQ76* FindFo3TerrainGroundCellQ2000(int32_t gridX, int32_t gridY);
 size_t GetFo3TerrainGroundCellCountQ2000();
+// Main render thread only. Returns committed visual LAND, never worker scratch.
+// Occluders must omit border quads (seam stitching) and force-hidden quadrants.
+const Fo3TerrainCellQ76* GetFo3TerrainOcclusionCellQ241(uint32_t worldspace,
+                    int32_t x,int32_t y,float originX,float originY,float originZ);
 void UpdateFo3TerrainStreamingQ2000(
     uint32_t worldspaceFormId,
     int32_t actualGridX, int32_t actualGridY,

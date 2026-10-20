@@ -25,6 +25,7 @@
 #include "rendering/actor-skinning.h"
 #include "rendering/opaque-telemetry.h"
 #include "rendering/fixed-foveation.h"
+#include "rendering/conservative-occlusion.h"
 #include "rendering/performance-capture-android.h"
 #include "rendering/loading-work-scope.h"
 #include "rendering/loading-diagnostics.h"
@@ -399,6 +400,7 @@ struct CpuObject {
     Fo3WorldPlacement placement;
     Fo3StaticNifMesh mesh;
     std::vector<Vec3> positionsGame;
+    std::vector<fo3occ::Surface> occluders;
     std::vector<Vec3> normalsGame;
     std::vector<Vec3> tangentsGame;
     std::vector<Vec3> bitangentsGame;
@@ -420,6 +422,9 @@ struct CpuObject {
 };
 
 struct GpuObject {
+    std::shared_ptr<const std::vector<fo3occ::Surface>> occluders;
+    mutable uint64_t occlusionGeneration=0;
+    mutable bool occlusionHidden=false;
     std::shared_ptr<const fo3scene::ResidentTextureOwnership> residentTextures;
     bool pipboy=false,pipScreen=false,pipEffect=false;
     int pipButton=-1;
@@ -538,6 +543,7 @@ struct GpuObject {
 struct CachedGpuTexture {
     GLuint id = 0;
     bool real = false;
+    bool opaque = false;
 };
 
 // Q20.15: keep the 7x7 buffer resident, but reject AABBs outside the current
@@ -1768,7 +1774,16 @@ bool UploadFo3ResidentTexture(const std::string& path,const std::vector<uint8_t>
         if(!fo3scene::UploadResidentImage(*image,*work.ownership,id,Q1070ApplyStaticAnisotropy))return false;
         real=!path.empty();
     }
-    cache.emplace(key,CachedGpuTexture{id,real});
+    bool opaque=false;
+    if(!cube) {
+        if(borrowed!=global.end()&&borrowed->second.id==id)opaque=borrowed->second.opaque;
+        else if(path.empty())opaque=fo3occ::OpaquePixels(fallback.data(),fallback.size());
+        else {
+            const auto& image=work.decoded->images.at(decodedKey);
+            opaque=fo3occ::OpaquePixels(image.rgba.data(),image.rgba.size());
+        }
+    }
+    cache.emplace(key,CachedGpuTexture{id,real,opaque});
     return true;
 }
 
@@ -1882,7 +1897,8 @@ bool UploadTexture(const std::string& path,
         return false;
     }
 
-    gTextureCache.emplace(cacheKey, CachedGpuTexture{textureId, real});
+    gTextureCache.emplace(cacheKey, CachedGpuTexture{textureId, real,
+        fo3occ::OpaquePixels(texture.rgba.data(),texture.rgba.size())});
     Q1900MarkGpuTextureKnownQ19(cacheKey);
     if (!gExteriorStreamingActiveQ1890) Q6H_LOGI("Q6H GPU %s CACHE MISS: ref=%08X source=%s %dx%d format=%s uniqueTextures=%zu",
              label, refFormId, real ? texture.sourcePath.c_str() : "<fallback>",
@@ -2198,11 +2214,55 @@ void Q236PrepareIndexedStaticNif(CpuObject& cpu,float centerX,float centerY,floa
     cpu.q1960MinY=lo.y;cpu.q1960MaxY=hi.y;
     cpu.q1960MinZ=lo.z;cpu.q1960MaxZ=hi.z;
 }
+// Store only selected original triangles. Runs with normal CPU mesh preparation
+// (the scene/streaming worker), never a per-frame mesh walk.
+void Q241PrepareOccluders(CpuObject& cpu,float cx,float cy,float cz) {
+    cpu.occluders.clear();
+    const auto& type=cpu.placement.baseRecordType;
+    if((type!="STAT"&&type!="SCOL")||cpu.mesh.skinned||cpu.mesh.alphaBlend||
+       cpu.mesh.alphaTest||cpu.mesh.alpha<1.f)return;
+    struct Candidate {float size=0;fo3occ::Triangle triangle;};
+    std::array<Candidate,16> best{};
+    size_t count=0;
+    for(size_t i=0;i+2<cpu.mesh.indices.size();i+=3) {
+        fo3occ::Triangle t;
+        bool valid=true;
+        for(unsigned k=0;k<3;++k) {
+            const auto index=cpu.mesh.indices[i+k];
+            if(index>=cpu.positionsGame.size()){valid=false;break;}
+            const auto p=cpu.positionsGame[index];
+            t.p[k]={(p.x-cx)/70.f,FLOOR_Y+(p.z-cz)/70.f,SCENE_FORWARD-(p.y-cy)/70.f};
+        }
+        if(!valid)continue;
+        const auto a=t.p[0],b=t.p[1],c=t.p[2];
+        const float ux=b.x-a.x,uy=b.y-a.y,uz=b.z-a.z;
+        const float vx=c.x-a.x,vy=c.y-a.y,vz=c.z-a.z;
+        const float x=uy*vz-uz*vy,y=uz*vx-ux*vz,z=ux*vy-uy*vx;
+        const float size=x*x+y*y+z*z;
+        if(!std::isfinite(size)||size<16.f)continue;
+        if(count<best.size())best[count++]={size,t};
+        else {
+            auto it=std::min_element(best.begin(),best.end(),[](const auto& l,const auto& r){return l.size<r.size;});
+            if(size>it->size)*it={size,t};
+        }
+    }
+    cpu.occluders.reserve(count);
+    std::array<bool,16> merged{};
+    for(size_t i=0;i<count;++i) {
+        if(merged[i])continue;
+        fo3occ::Surface surface{{best[i].triangle.p[0],best[i].triangle.p[1],best[i].triangle.p[2],{}},3};
+        for(size_t j=i+1;j<count;++j)if(!merged[j]&&fo3occ::Merge(best[i].triangle,best[j].triangle,surface)) {
+            merged[j]=true;break;
+        }
+        cpu.occluders.push_back(surface);
+    }
+}
 bool PrepareExpandedVertexStreamQ1960(
         CpuObject& cpu, float centerX, float centerY, float floorZ) {
     constexpr size_t FLOATS_PER_VERTEX = 18u;
     if (cpu.q1960ExpandedReady && !cpu.q1960ExpandedVertices.empty())
         return true;
+    Q241PrepareOccluders(cpu,centerX,centerY,floorZ);
     if(Q236CanIndexStaticNif(cpu)){
         Q236PrepareIndexedStaticNif(cpu,centerX,centerY,floorZ);
         return true;
@@ -2598,6 +2658,14 @@ bool UploadCpuObject(CpuObject& cpu, float centerX, float centerY, float floorZ,
     }
 
     gpu.q236Indexed=q236Indexed;
+    const auto& imageCache=gFo3ResidentTextureUpload ? gFo3ResidentTextureUpload->images : gTextureCache;
+    const bool fullAlpha=std::any_of(imageCache.begin(),imageCache.end(),[&](const auto& entry){
+        return entry.second.id==gpu.diffuse && entry.second.opaque;
+    });
+    if(fullAlpha && !gpu.alphaBlend && !gpu.alphaTest && !gpu.useVertexAlpha &&
+       !gpu.noLightingFalloff && !gpu.decalQ1170 && gpu.zBufferWriteQ1200 &&
+       gpu.zBufferTestQ1200 && !cpu.occluders.empty())
+        gpu.occluders=std::make_shared<const std::vector<fo3occ::Surface>>(std::move(cpu.occluders));
     gpu.q236UniqueVertices=static_cast<GLsizei>(q1960ExpandedFloatCount/FLOATS_PER_VERTEX);
     // Preserve triangle-corner count semantics for all existing metrics.
     gpu.vertexCount=q236Indexed?static_cast<GLsizei>(cpu.mesh.indices.size()):gpu.q236UniqueVertices;
@@ -7098,6 +7166,7 @@ extern uint64_t gStereoFrame;
 // world-state checks for the published frame. This flag is scoped only to
 // detailed opaque submission, never native LOD, alpha or environment passes.
 bool gQ230DetailedObjectPrevalidated=false;
+bool Q241Hidden(const GpuObject& object);
 void DrawSceneObject(const GpuObject& object, bool environmentPassQ2050 = false) {
     if (!gQ230DetailedObjectPrevalidated &&
         gPlayerSession && gPlayerSession->player.IsCollected(object.refFormId)) return;
@@ -7115,6 +7184,7 @@ void DrawSceneObject(const GpuObject& object, bool environmentPassQ2050 = false)
         return;
     }
     if (environmentPassQ2050 && !object.environmentEnabledQ2050) return;
+    if(!gInstancedDrawActiveQ2016 && Q241Hidden(object))return;
     if (gFo3Environment.interior) {
         float positions[FO3_SHADER_LIGHTS*4]{}, colours[FO3_SHADER_LIGHTS*4]{};
         for (int i=0;i<object.interiorLights.count;++i) {
@@ -7358,6 +7428,7 @@ std::vector<const GpuObject*> gOpaqueFrameOrder;
 // Stable publication-ordered draw lists. Built with the opaque order so the
 // stereo eyes and planar reflection do not re-scan all resident placements.
 std::vector<const GpuObject*> gAlphaFrameOrder, gEnvironmentFrameOrder;
+std::vector<const GpuObject*> gOccluderFrameOrder;
 uint64_t gOpaqueOrderFrame = ~uint64_t{0};
 const GpuObject* gOpaqueOrderStorage = nullptr;
 size_t gOpaqueOrderCount = 0;
@@ -7374,7 +7445,9 @@ void Q2017PrepareOpaqueOrder() {
     gOpaqueFrameOrder.clear(); gOpaqueFrameOrder.reserve(gObjects.size());
     gAlphaFrameOrder.clear(); gAlphaFrameOrder.reserve(gObjects.size());
     gEnvironmentFrameOrder.clear(); gEnvironmentFrameOrder.reserve(gObjects.size());
+    gOccluderFrameOrder.clear();
     for (const auto& object : gObjects) {
+        if(object.occluders)gOccluderFrameOrder.push_back(&object);
         if (object.alphaBlend) gAlphaFrameOrder.push_back(&object);
         else gOpaqueFrameOrder.push_back(&object);
         // Retain gObjects publication order for transparency and additive
@@ -7385,6 +7458,8 @@ void Q2017PrepareOpaqueOrder() {
     std::sort(gOpaqueFrameOrder.begin(), gOpaqueFrameOrder.end(),
         [](const GpuObject* a, const GpuObject* b) { return a->q2016BatchKey < b->q2016BatchKey; });
 }
+
+#include "rendering/fo3-occlusion-runtime.inc"
 
 // One camera preparation per stereo frame, shared by world and actor bounds.
 // Matrix comparison also handles same-frame recentering and publication changes.
@@ -7411,7 +7486,7 @@ bool Q2017StereoVisible(const GpuObject& object) {
     if (!gStereoMvpReady) return Q2015AabbVisible(object);
     if(object.minX>object.maxX || object.minY>object.maxY || object.minZ>object.maxZ)return true;
     Vec3 lo{},hi{};Q2400ObjectBounds(object,lo,hi);
-    return Q223StereoBoundsVisible({lo.x,hi.x,lo.y,hi.y,lo.z,hi.z});
+    return Q223StereoBoundsVisible({lo.x,hi.x,lo.y,hi.y,lo.z,hi.z}) && !Q241Hidden(object);
 }
 
 bool Q2017ReflectionUseful(const GpuObject& object) {
@@ -13060,6 +13135,8 @@ void RenderScene(const float* mvp) {
     if (mainProgram == 0) {Q233BeginMainEyeWorld();return;}
 
     Q2015FrustumCullScope q2015FrustumScope(mvp);
+    Q2017PrepareOpaqueOrder();
+    q241::Prepare();
 
     GLint previousTexture0 = 0, previousTexture1 = 0, previousTexture2 = 0, previousTexture3 = 0;
     GLint previousTexture4CubeQ2050 = 0, previousTexture5Q2050 = 0;

@@ -1197,6 +1197,22 @@ size_t GetFo3TerrainGroundCellCountQ2000() {
         : GetFo3TerrainQ76().size();
 }
 
+const Fo3TerrainCellQ76* GetFo3TerrainOcclusionCellQ241(uint32_t worldspace,int32_t x,int32_t y,
+                                                    float originX,float originY,float originZ) {
+    if(!q76bReady || !q76bProgram || !gQ2000ResidentValid ||
+       q76bWorldspace!=worldspace || gQ2000Worldspace!=worldspace)return nullptr;
+    if(q241TerrainUnits!=70.f || q241TerrainOrigin[0]!=originX ||
+       q241TerrainOrigin[1]!=originY || q241TerrainOrigin[2]!=originZ)return nullptr;
+    const auto found=gQ2000GroundCells.find(Q711GridKey(x,y));
+    if(found==gQ2000GroundCells.end() || found->second.heights.size()!=33u*33u)return nullptr;
+    const auto& cell=found->second;
+    // The published cell carries the authored mask used by its GPU build.
+    // Never consult the legacy hide map: the decode worker can replace it.
+    for(const auto& batch:q711TerrainBatches)
+        if(batch.gridX==x&&batch.gridY==y&&!batch.alphaLayer&&batch.vao&&batch.vertexCount>0)return &cell;
+    return nullptr;
+}
+
 void UpdateFo3TerrainStreamingQ2000(
         uint32_t worldspaceFormId,
         int32_t actualGridX, int32_t actualGridY,
