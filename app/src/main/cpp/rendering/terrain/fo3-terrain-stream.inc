@@ -828,8 +828,7 @@ bool Q2000AdvanceOneBatch(
         return false;
 
     const auto finalizeStarted = std::chrono::steady_clock::now();
-    Q711TerrainBatch gpu;
-    static_cast<fo3terrain::Bounds&>(gpu)=fo3terrain::BuildBounds(cpu.vertices.data(),cpu.vertices.size());
+    Q711TerrainBatch gpu=Q238GpuMaterial(cpu);
     gpu.gridX = cell.gridX;
     gpu.gridY = cell.gridY;
     gpu.texturePath = cpu.texturePath;
@@ -851,7 +850,7 @@ bool Q2000AdvanceOneBatch(
         gpu.indexOffset = vertexBytes;
         glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, gpu.vbo);
     }
-    constexpr GLsizei stride = static_cast<GLsizei>(12 * sizeof(float));
+    const GLsizei stride = static_cast<GLsizei>(cpu.vertexFloats * sizeof(float));
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, stride, nullptr);
     glEnableVertexAttribArray(0);
     glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, stride,
@@ -866,10 +865,14 @@ bool Q2000AdvanceOneBatch(
     glVertexAttribPointer(4, 3, GL_FLOAT, GL_FALSE, stride,
                           reinterpret_cast<const void*>(9 * sizeof(float)));
     glEnableVertexAttribArray(4);
+    if(cpu.vertexFloats==15u){
+        glVertexAttribPointer(5,3,GL_FLOAT,GL_FALSE,stride,reinterpret_cast<const void*>(12u*sizeof(float)));
+        glEnableVertexAttribArray(5);
+    }
     glBindBuffer(GL_ARRAY_BUFFER, 0);
     glBindVertexArray(0);
     gpu.vertexCount =
-        static_cast<GLsizei>(cpu.indices.empty() ? cpu.vertices.size() / 12u : cpu.indices.size());
+        static_cast<GLsizei>(cpu.indices.empty() ? cpu.vertices.size() / cpu.vertexFloats : cpu.indices.size());
     gQ2000CurrentCellBatches.push_back(std::move(gpu));
     const uint64_t finalizeUs = Q2000ElapsedUs(finalizeStarted);
     gQ2000TargetMaxGpuStepUs =
@@ -996,6 +999,14 @@ void Q2000AdvanceGpu() {
                     const auto texture = q1910TerrainTextureCache.find(batch.texturePath);
                     return texture != q1910TerrainTextureCache.end() && texture->second != 0u;
                 });
+                fo3terrain::FusionStats fused;
+                if(!fo3terrain::LegacyLayers())fused=fo3terrain::FuseLayers(cell.batches,[](const Q711CpuBatch& batch){
+                    const auto texture=q1910TerrainTextureCache.find(batch.texturePath);
+                    return texture!=q1910TerrainTextureCache.end()&&texture->second!=0u;
+                });
+                for(Q711CpuBatch& batch:cell.batches)if(batch.vertexFloats==15u)Q237PrepareTerrainIndices(batch);
+                Q76B_LOGI("Q238 TERRAIN FUSION: cell=(%d,%d) baseTriangles=%zu foldedPaintTriangles=%zu groups=%zu fallbackStacks=%zu legacy=%d",
+                          cell.gridX,cell.gridY,fused.triangles,fused.paintTriangles,fused.groups,fused.fallback,fo3terrain::LegacyLayers());
                 cell.coveragePrepared = true;
                 const uint64_t elapsed = Q2000ElapsedUs(started);
                 gQ2000TargetMaxGpuStepUs = std::max(gQ2000TargetMaxGpuStepUs, elapsed);

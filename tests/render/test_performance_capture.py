@@ -51,6 +51,8 @@ class CaptureTests(unittest.TestCase):
         self.assertEqual(float(rows[0]['gpu0_terrainUs']), 150)
         self.assertEqual(float(rows[0]['gpu1_reflectionUs']), -1)
         self.assertEqual(float(rows[0]['workUs']), 1000)
+        self.assertEqual(int(rows[0]['hdrRttEyes']), 2)
+        self.assertEqual(int(rows[0]['implicitColorResolvePixels']), 123456)
         self.assertEqual(float(rows[-1]['workUs']), 5095)
 
     def test_v226_npc_movement_and_arrival_attribution(self):

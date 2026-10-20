@@ -54,6 +54,9 @@ jobs:
           g++ -O2 -std=c++17 -Wall -Wextra -Werror -Iapp/src/main/cpp tests/render/geometry_optimisation_tests.cpp -o /tmp/geometry-optimisation-tests
           /tmp/geometry-optimisation-tests
           python3 tests/render/test_terrain_upload.py
+          g++ -O2 -std=c++17 -Wall -Wextra -Werror -Iapp/src/main/cpp tests/render/terrain_layer_fusion_tests.cpp -o /tmp/terrain-fusion-tests
+          /tmp/terrain-fusion-tests
+          python3 tests/render/test_hdr_rtt_target.py
           g++ -std=c++17 -Wall -Wextra -Werror -Itests/pipboy/mock -Itests/render/mock -Itests/nif -Iapp/src/main/cpp -Iapp/src/main/cpp/data tests/render/notification_render_tests.cpp -o /tmp/notification-render-tests
           /tmp/notification-render-tests
           python3 tests/render/test_notification_layering.py
@@ -73,6 +76,7 @@ jobs:
           python3 tests/render/test_interior_lighting.py
           python3 tests/render/test_font_consumers.py
           python3 tests/render/test_gpu_skin_shader.py
+          python3 tests/render/test_terrain_fusion_shader.py
           python3 tests/render/test_actor_skin_scope.py
           g++ -std=c++17 -Wall -Wextra -Werror -Iapp/src/main/cpp tests/render/actor_skinning_tests.cpp app/src/main/cpp/npc/fo3-actor-animation.cpp -o /tmp/actor-skin-tests
           /tmp/actor-skin-tests

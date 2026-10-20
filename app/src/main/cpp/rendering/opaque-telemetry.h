@@ -14,10 +14,13 @@ inline double Micros(Clock::time_point start) {
 }
 struct Diagnostics {
     bool fastMaterial=false, lodRadius20=false, lodMinimal=false, lodClipBypass=false;
+    bool hdrRtt=false;
     float scale=1.0f;
     Diagnostics() {
 #ifndef NDEBUG
         char value[PROP_VALUE_MAX]{};
+        __system_property_get("debug.falloutquest.hdr_rtt",value);
+        hdrRtt=std::atoi(value)==1;
         __system_property_get("debug.falloutquest.lod_radius20",value);
         lodRadius20=std::atoi(value)==1;
         __system_property_get("debug.falloutquest.lod_minimal",value);

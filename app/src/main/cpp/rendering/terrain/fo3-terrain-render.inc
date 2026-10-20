@@ -5,6 +5,8 @@ float GetFo3FogPower();
 #include "rendering/terrain/fo3-terrain-bounds.h"
 #include "rendering/exact-indexed-mesh.h"
 #include "rendering/terrain/terrain-paint-coverage.h"
+#include "rendering/terrain/terrain-layer-fusion.h"
+#include "rendering/terrain/terrain-layer-options.h"
 #include "rendering/environment/fo3-environment.h"
 #include "rendering/environment/fo3-weather-byte-staging.h"
 #include "rendering/environment/fo3-visual-depth.h"
@@ -61,6 +63,10 @@ struct Q711TerrainBatch : fo3terrain::Bounds {
     // Vertices and uint32 indices share one GL buffer and one lifetime.
     // Zero means the original array path; indexed data starts after vertices.
     size_t indexOffset = 0;
+    int paintCount = 0;
+    std::array<GLuint,3> paintDiffuse = {};
+    std::array<GLuint,3> paintNormal = {};
+    std::array<bool,3> paintSpecular = {};
     int layerOrder = -1;
     bool alphaLayer = false;
     bool realTexture = false;
@@ -78,6 +84,8 @@ struct Q711CpuBatch {
     bool specularEnabled = false;
     std::vector<float> vertices;
     std::vector<uint32_t> indices;
+    size_t vertexFloats = 12u;
+    std::vector<fo3terrain::PaintMaterial> paintMaterials;
     int layerOrder = -1;
     bool alphaLayer = false;
 };
@@ -90,13 +98,18 @@ void Q237DrawTerrainBatch(const Q711TerrainBatch& batch) {
 }
 
 void Q237PrepareTerrainIndices(Q711CpuBatch& batch) {
-    fqmesh::IndexExact<12>(batch.vertices, batch.indices);
+    if(!batch.indices.empty())return;
+    if(batch.vertexFloats==15u)fqmesh::IndexExact<15>(batch.vertices,batch.indices);
+    else fqmesh::IndexExact<12>(batch.vertices, batch.indices);
 }
 
 GLuint q76bProgram = 0;
 GLint q76bMvpLocation = -1;
 GLint q76bSamplerLocation = -1;
 GLint q76bUseTextureLocation = -1;
+GLint q238PaintCountLocation = -1, q238RoundModeLocation = -1;
+std::array<GLint,3> q238PaintDiffuseLocation = {}, q238PaintNormalLocation = {}, q238PaintFlagsLocation = {};
+int q238TerrainRoundMode = 1; // 1=FP16, 2=RGBA8; supplied by the active target.
 GLint q1060TerrainNormalSamplerLocation = -1;
 GLint q1060TerrainUseNormalLocation = -1;
 GLint q1060TerrainSpecularLocation = -1;
@@ -156,6 +169,40 @@ void Q229PrepareTerrainDrawLists(){
 }
 std::unordered_map<std::string, GLuint> q1910TerrainTextureCache;
 std::unordered_map<std::string, GLuint> q1810TerrainNormalTextureCache;
+Q711TerrainBatch Q238GpuMaterial(const Q711CpuBatch& cpu) {
+    Q711TerrainBatch gpu;
+    gpu.gridX=cpu.gridX;gpu.gridY=cpu.gridY;
+    gpu.texturePath=cpu.texturePath;gpu.normalPath=cpu.normalPath;
+    gpu.alphaLayer=cpu.alphaLayer;gpu.layerOrder=cpu.layerOrder;
+    gpu.specularEnabled=cpu.specularEnabled;
+    auto lookup=[](const auto& cache,const std::string& path){
+        const auto found=cache.find(path);return found==cache.end()?0u:found->second;
+    };
+    gpu.texture=lookup(q1910TerrainTextureCache,cpu.texturePath);
+    gpu.normalTexture=lookup(q1810TerrainNormalTextureCache,cpu.normalPath);
+    gpu.realTexture=gpu.texture!=0u;gpu.realNormal=gpu.normalTexture!=0u;
+    gpu.paintCount=static_cast<int>(cpu.paintMaterials.size());
+    for(size_t i=0;i<cpu.paintMaterials.size()&&i<3u;++i){
+        gpu.paintDiffuse[i]=lookup(q1910TerrainTextureCache,cpu.paintMaterials[i].texturePath);
+        gpu.paintNormal[i]=lookup(q1810TerrainNormalTextureCache,cpu.paintMaterials[i].normalPath);
+        gpu.paintSpecular[i]=cpu.paintMaterials[i].specularEnabled;
+    }
+    static_cast<fo3terrain::Bounds&>(gpu)=fo3terrain::BuildBounds(cpu.vertices.data(),cpu.vertices.size(),cpu.vertexFloats);
+    return gpu;
+}
+void Q238BindPaint(const Q711TerrainBatch& batch) {
+    glUniform1i(q238PaintCountLocation,batch.paintCount);
+    if(!batch.paintCount)return;
+    constexpr unsigned diffuseUnits[3]={2,5,7},normalUnits[3]={4,6,8};
+    for(int i=0;i<batch.paintCount;++i){
+        glUniform1i(q238PaintDiffuseLocation[i],static_cast<GLint>(diffuseUnits[i]));
+        glUniform1i(q238PaintNormalLocation[i],static_cast<GLint>(normalUnits[i]));
+        glUniform2f(q238PaintFlagsLocation[i],batch.paintNormal[i]?1.0f:0.0f,batch.paintSpecular[i]?1.0f:0.0f);
+        glActiveTexture(GL_TEXTURE0+diffuseUnits[i]);glBindTexture(GL_TEXTURE_2D,batch.paintDiffuse[i]);
+        glActiveTexture(GL_TEXTURE0+normalUnits[i]);glBindTexture(GL_TEXTURE_2D,batch.paintNormal[i]);
+    }
+    glActiveTexture(GL_TEXTURE0);
+}
 constexpr size_t Q1910_TERRAIN_TEXTURE_CACHE_LIMIT = 256u;
 constexpr size_t Q1810_TERRAIN_NORMAL_CACHE_LIMIT = 256u;
 
@@ -265,6 +312,7 @@ GLuint Q76BCreateProgram() {
         layout(location = 2) in vec2 aTexCoord;
         layout(location = 3) in float aAlpha;
         layout(location = 4) in vec3 aVertexColor;
+        layout(location = 5) in vec3 aPaintAlpha;
         uniform mat4 uMvp;
         uniform highp float uFogNearVertexQ1532;
         uniform highp float uFogFarVertexQ1532;
@@ -273,6 +321,7 @@ GLuint Q76BCreateProgram() {
         out highp float vFogFactorQ1532;
         out vec2 vTexCoord;
         out float vAlpha;
+        out vec3 vPaintAlpha;
         out vec3 vVertexColor;
         out vec3 vPosition;
         out vec4 vShadowCoord;
@@ -281,6 +330,7 @@ GLuint Q76BCreateProgram() {
             vNormal = aNormal;
             vTexCoord = aTexCoord;
             vAlpha = aAlpha;
+            vPaintAlpha = aPaintAlpha;
             vVertexColor = aVertexColor;
             vPosition = aPosition;
             vShadowCoord = uLightMvp * vec4(aPosition, 1.0);
@@ -299,6 +349,7 @@ GLuint Q76BCreateProgram() {
         in vec3 vNormal;
         in vec2 vTexCoord;
         in float vAlpha;
+        in vec3 vPaintAlpha;
         in vec3 vVertexColor;
         in vec3 vPosition;
         in highp float vFogFactorQ1532;
@@ -324,7 +375,18 @@ GLuint Q76BCreateProgram() {
         uniform float uShadowsEnabled;
         uniform float uWaterReflectionClipEnabledQ2090;
         uniform float uWaterReflectionPlaneYQ2090;
-        out vec4 fragColor;
+        uniform int uPaintCount;
+        uniform int uRoundMode;
+        uniform sampler2D uPaintDiffuse0;
+        uniform sampler2D uPaintNormal0;
+        uniform vec2 uPaintFlags0;
+        uniform sampler2D uPaintDiffuse1;
+        uniform sampler2D uPaintNormal1;
+        uniform vec2 uPaintFlags1;
+        uniform sampler2D uPaintDiffuse2;
+        uniform sampler2D uPaintNormal2;
+        uniform vec2 uPaintFlags2;
+        out highp vec4 fragColor;
         float Q1050ShadowVisibility(vec4 shadowCoord, vec3 N, vec3 L) {
             if (uShadowsEnabled < 0.5 || shadowCoord.w <= 0.0) return 1.0;
             vec3 projected = shadowCoord.xyz / shadowCoord.w;
@@ -342,15 +404,12 @@ GLuint Q76BCreateProgram() {
             visible += projected.z - bias <= texture(uShadowMap, projected.xy + vec2( halfTexel.x,  halfTexel.y)).r ? 1.0 : 0.0;
             return visible * 0.25;
         }
-        void main() {
-            if (uWaterReflectionClipEnabledQ2090 > 0.5 &&
-                vPosition.y < uWaterReflectionPlaneYQ2090) {
-                discard;
-            }
+        vec3 Q238ShadeLayer(sampler2D diffuseMap, sampler2D normalMap,
+                             int useTexture, int useNormal, float specularEnabled) {
             vec3 N = normalize(vNormal);
             vec4 normalGloss = vec4(0.5, 0.5, 1.0, 0.0);
-            if (uUseNormal != 0) {
-                normalGloss = texture(uNormalGloss, vTexCoord);
+            if (useNormal != 0) {
+                normalGloss = texture(normalMap, vTexCoord);
                 vec3 tangentNormal = normalize(normalGloss.xyz * 2.0 - 1.0);
                 vec3 authoredU = vec3(1.0, 0.0, 0.0);
                 vec3 T = authoredU - N * dot(N, authoredU);
@@ -364,12 +423,12 @@ GLuint Q76BCreateProgram() {
             vec3 lightDirection = normalize(uSunDirection);
             float lambert = max(dot(N, lightDirection), 0.0);
             vec3 earthFallback = vec3(0.34, 0.27, 0.18);
-            vec3 albedo = (uUseTexture != 0 ? texture(uDiffuse, vTexCoord).rgb : earthFallback) * vVertexColor;
+            vec3 albedo = (useTexture != 0 ? texture(diffuseMap, vTexCoord).rgb : earthFallback) * vVertexColor;
             float q1050SunVisibility = Q1050ShadowVisibility(vShadowCoord, N, lightDirection);
             vec3 q1570LandWorldDiffuse =
                 albedo * (uAmbientColor + uSunlightColor * lambert * q1050SunVisibility);
             vec3 lit = q1570LandWorldDiffuse;
-            if (uUseNormal != 0 && uTerrainSpecularEnabled > 0.5) {
+            if (useNormal != 0 && specularEnabled > 0.5) {
                 vec3 V = normalize(uEyePosition - vPosition);
                 vec3 H = normalize(lightDirection + V);
                 float specular = pow(max(dot(N, H), 0.0), 18.0) * normalGloss.a * 0.24;
@@ -393,7 +452,41 @@ GLuint Q76BCreateProgram() {
             // vertex result instead of recomputing a different world-distance fog.
             float fogFactor = vFogFactorQ1532;
             lit = mix(lit, uFogColor, fogFactor);
-            fragColor = vec4(max(lit, vec3(0.0)), clamp(vAlpha, 0.0, 1.0));
+            return max(lit, vec3(0.0));
+        }
+        highp vec4 Q238Round(highp vec4 value) {
+            if (uRoundMode == 2) return floor(clamp(value, 0.0, 1.0) * 255.0 + 0.5) / 255.0;
+            return vec4(unpackHalf2x16(packHalf2x16(value.xy)),
+                        unpackHalf2x16(packHalf2x16(value.zw)));
+        }
+        highp vec4 Q238Over(highp vec4 previous, vec3 lit, float alpha) {
+            highp float a = clamp(alpha, 0.0, 1.0);
+            // Fixed-point targets clamp fragment source values before blend.
+            if (uRoundMode == 2) lit = clamp(lit, 0.0, 1.0);
+            // Match both RGB and the original SRC_ALPHA alpha-channel blend.
+            return Q238Round(vec4(vec3(lit) * a + previous.rgb * (1.0-a),
+                                   a*a + previous.a * (1.0-a)));
+        }
+        void main() {
+            if (uWaterReflectionClipEnabledQ2090 > 0.5 &&
+                vPosition.y < uWaterReflectionPlaneYQ2090) discard;
+            vec3 base = Q238ShadeLayer(uDiffuse, uNormalGloss, uUseTexture,
+                                      uUseNormal, uTerrainSpecularEnabled);
+            if (uPaintCount == 0) {
+                fragColor = vec4(base, clamp(vAlpha, 0.0, 1.0));
+                return;
+            }
+            highp vec4 result = Q238Round(vec4(base, 1.0));
+            if (uPaintCount > 0) result = Q238Over(result,
+                Q238ShadeLayer(uPaintDiffuse0, uPaintNormal0, 1, int(uPaintFlags0.x), uPaintFlags0.y),
+                vPaintAlpha.x);
+            if (uPaintCount > 1) result = Q238Over(result,
+                Q238ShadeLayer(uPaintDiffuse1, uPaintNormal1, 1, int(uPaintFlags1.x), uPaintFlags1.y),
+                vPaintAlpha.y);
+            if (uPaintCount > 2) result = Q238Over(result,
+                Q238ShadeLayer(uPaintDiffuse2, uPaintNormal2, 1, int(uPaintFlags2.x), uPaintFlags2.y),
+                vPaintAlpha.z);
+            fragColor = result;
         }
     )";
 
@@ -507,6 +600,7 @@ void SetFo3TerrainWaterReflectionClipQ2090(bool enabled, float planeY) {
     q2090TerrainReflectionClipEnabled = enabled;
     q2090TerrainReflectionPlaneY = planeY;
 }
+void SetFo3TerrainColorFormatQ238(bool halfFloat) { q238TerrainRoundMode=halfFloat?1:2; }
 
 void ShutdownFo3TerrainRenderQ76() {
     // Q20 may own a worker or partially staged incoming strip. Stop that work
@@ -995,6 +1089,14 @@ bool InitializeFo3TerrainRenderQ76(uint32_t worldspaceFormId,
     }
     q76bMvpLocation = glGetUniformLocation(q76bProgram, "uMvp");
     q76bSamplerLocation = glGetUniformLocation(q76bProgram, "uDiffuse");
+    q238PaintCountLocation=glGetUniformLocation(q76bProgram,"uPaintCount");
+    q238RoundModeLocation=glGetUniformLocation(q76bProgram,"uRoundMode");
+    for(int i=0;i<3;++i){
+        const std::string suffix=std::to_string(i);
+        q238PaintDiffuseLocation[i]=glGetUniformLocation(q76bProgram,("uPaintDiffuse"+suffix).c_str());
+        q238PaintNormalLocation[i]=glGetUniformLocation(q76bProgram,("uPaintNormal"+suffix).c_str());
+        q238PaintFlagsLocation[i]=glGetUniformLocation(q76bProgram,("uPaintFlags"+suffix).c_str());
+    }
     q76bUseTextureLocation = glGetUniformLocation(q76bProgram, "uUseTexture");
     q1060TerrainNormalSamplerLocation = glGetUniformLocation(q76bProgram, "uNormalGloss");
     q1060TerrainUseNormalLocation = glGetUniformLocation(q76bProgram, "uUseNormal");
@@ -1035,7 +1137,6 @@ bool InitializeFo3TerrainRenderQ76(uint32_t worldspaceFormId,
     size_t q1060NormalUploads = 0u;
     size_t q1810NormalCacheHits = 0u;
     size_t q1060NormalMisses = 0u;
-    std::vector<std::pair<size_t, Q711TerrainBatch>> q237Materials;
     for (size_t cpuIndex = 0; cpuIndex < cpuBatches.size(); ++cpuIndex) {
         Q711CpuBatch& cpu = cpuBatches[cpuIndex];
         if (cpu.vertices.empty()) continue;
@@ -1111,17 +1212,26 @@ bool InitializeFo3TerrainRenderQ76(uint32_t worldspaceFormId,
         if (gpu.realTexture) ++q711RealTextureBatches;
         if (gpu.alphaLayer) ++q718AlphaBatches;
 
-        q237Materials.emplace_back(cpuIndex, std::move(gpu));
     }
     const size_t q237Covered = fo3terrain::RemoveCoveredPaint(cpuBatches, [&](const Q711CpuBatch& batch) {
         const auto texture = uploadedByPath.find(batch.texturePath);
         return texture != uploadedByPath.end() && texture->second != 0u;
     });
+    fo3terrain::FusionStats q238Fusion;
+    if(!fo3terrain::LegacyLayers())q238Fusion=fo3terrain::FuseLayers(cpuBatches,[&](const Q711CpuBatch& batch){
+        const auto texture=uploadedByPath.find(batch.texturePath);
+        return texture!=uploadedByPath.end()&&texture->second!=0u;
+    });
+    Q76B_LOGI("Q238 TERRAIN FUSION: path=cold baseTriangles=%zu foldedPaintTriangles=%zu groups=%zu fallbackStacks=%zu legacy=%d",
+              q238Fusion.triangles,q238Fusion.paintTriangles,q238Fusion.groups,q238Fusion.fallback,fo3terrain::LegacyLayers());
     size_t q237Corners = 0u, q237Unique = 0u, q237IndexedBatches = 0u;
-    for (auto& material : q237Materials) {
-        Q711CpuBatch& cpu = cpuBatches[material.first];
+    q711RealTextureBatches=q711FallbackBatches=q718AlphaBatches=0u;
+    for (Q711CpuBatch& cpu : cpuBatches) {
         if (cpu.vertices.empty()) continue;
-        Q711TerrainBatch& gpu = material.second;
+        Q711TerrainBatch gpu=Q238GpuMaterial(cpu);
+        if(gpu.alphaLayer&&!gpu.realTexture)continue;
+        if(gpu.realTexture)++q711RealTextureBatches;else if(!gpu.alphaLayer)++q711FallbackBatches;
+        if(gpu.alphaLayer)++q718AlphaBatches;
 
         glGenVertexArrays(1, &gpu.vao);
         glBindVertexArray(gpu.vao);
@@ -1140,7 +1250,7 @@ bool InitializeFo3TerrainRenderQ76(uint32_t worldspaceFormId,
                             static_cast<GLsizeiptr>(indexBytes), cpu.indices.data());
             glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, gpu.vbo);
         }
-        constexpr GLsizei stride = static_cast<GLsizei>(12 * sizeof(float));
+        const GLsizei stride = static_cast<GLsizei>(cpu.vertexFloats * sizeof(float));
         glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, stride, nullptr);
         glEnableVertexAttribArray(0);
         glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, stride,
@@ -1155,12 +1265,16 @@ bool InitializeFo3TerrainRenderQ76(uint32_t worldspaceFormId,
         glVertexAttribPointer(4, 3, GL_FLOAT, GL_FALSE, stride,
                               reinterpret_cast<const void*>(9 * sizeof(float)));
         glEnableVertexAttribArray(4);
+        if(cpu.vertexFloats==15u){
+            glVertexAttribPointer(5,3,GL_FLOAT,GL_FALSE,stride,reinterpret_cast<const void*>(12u*sizeof(float)));
+            glEnableVertexAttribArray(5);
+        }
         glBindBuffer(GL_ARRAY_BUFFER, 0);
         glBindVertexArray(0);
 
-        gpu.vertexCount = static_cast<GLsizei>(indexBytes ? cpu.indices.size() : cpu.vertices.size() / 12u);
+        gpu.vertexCount = static_cast<GLsizei>(indexBytes ? cpu.indices.size() : cpu.vertices.size() / cpu.vertexFloats);
         q237Corners += static_cast<size_t>(gpu.vertexCount);
-        q237Unique += cpu.vertices.size() / 12u;
+        q237Unique += cpu.vertices.size() / cpu.vertexFloats;
         q237IndexedBatches += indexBytes != 0u;
         if (gpu.alphaLayer) alphaVertices += static_cast<size_t>(gpu.vertexCount);
         else baseVertices += static_cast<size_t>(gpu.vertexCount);
@@ -1271,6 +1385,10 @@ void RenderFo3TerrainQ76(const float* mvp) {
     glActiveTexture(GL_TEXTURE3);
     glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousTexture3);
     glActiveTexture(GL_TEXTURE0);
+    constexpr unsigned q238Units[6]={2,4,5,6,7,8};
+    std::array<GLint,6> q238PreviousTextures{};
+    for(size_t i=0;i<6u;++i){glActiveTexture(GL_TEXTURE0+q238Units[i]);glGetIntegerv(GL_TEXTURE_BINDING_2D,&q238PreviousTextures[i]);}
+    glActiveTexture(GL_TEXTURE0);
     const GLboolean cullWasEnabled = glIsEnabled(GL_CULL_FACE);
     const GLboolean blendWasEnabled = glIsEnabled(GL_BLEND);
 
@@ -1278,6 +1396,7 @@ void RenderFo3TerrainQ76(const float* mvp) {
     glDisable(GL_BLEND);
     glDepthMask(GL_TRUE);
     glUseProgram(q76bProgram);
+    glUniform1i(q238RoundModeLocation,q238TerrainRoundMode);
     glUniformMatrix4fv(q76bMvpLocation, 1, GL_FALSE, mvp);
     if (q2090TerrainReflectionClipEnabledLocation >= 0) {
         glUniform1f(q2090TerrainReflectionClipEnabledLocation,
@@ -1410,6 +1529,7 @@ void RenderFo3TerrainQ76(const float* mvp) {
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, batch.realTexture ? batch.texture : 0u);
         glBindVertexArray(batch.vao);
+        Q238BindPaint(batch);
         Q237DrawTerrainBatch(batch);
     }
 
@@ -1437,6 +1557,7 @@ void RenderFo3TerrainQ76(const float* mvp) {
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, batch.texture);
         glBindVertexArray(batch.vao);
+        Q238BindPaint(batch);
         Q237DrawTerrainBatch(batch);
     }
 
@@ -1452,6 +1573,8 @@ void RenderFo3TerrainQ76(const float* mvp) {
     glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture3));
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture1));
+    glUniform1i(q238PaintCountLocation,0);
+    for(size_t i=0;i<6u;++i){glActiveTexture(GL_TEXTURE0+q238Units[i]);glBindTexture(GL_TEXTURE_2D,static_cast<GLuint>(q238PreviousTextures[i]));}
     glActiveTexture(static_cast<GLenum>(previousActiveTexture));
     glUseProgram(static_cast<GLuint>(previousProgram));
     if (cullWasEnabled) glEnable(GL_CULL_FACE); else glDisable(GL_CULL_FACE);

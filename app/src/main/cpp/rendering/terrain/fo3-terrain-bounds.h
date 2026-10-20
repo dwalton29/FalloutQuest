@@ -10,10 +10,9 @@ struct Bounds {
     float minX=0,maxX=0,minY=0,maxY=0,minZ=0,maxZ=0;
     bool boundsValid=false;
 };
-inline Bounds BuildBounds(const float* vertices,size_t floats) {
+inline Bounds BuildBounds(const float* vertices,size_t floats,size_t stride=12u) {
     Bounds b;
-    constexpr size_t stride=12;
-    if(!vertices||!floats||floats%stride)return b;
+    if(!vertices||!floats||stride<3u||floats%stride)return b;
     b.minX=b.maxX=vertices[0];b.minY=b.maxY=vertices[1];b.minZ=b.maxZ=vertices[2];
     for(size_t i=0;i<floats;i+=stride){
         const float x=vertices[i],y=vertices[i+1],z=vertices[i+2];

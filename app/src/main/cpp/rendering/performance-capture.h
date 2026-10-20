@@ -45,13 +45,15 @@ struct Frame {
     uint64_t paletteBytes=0,vertices=0,draws=0,states=0,uniforms=0,textures=0,npcDraws=0,paletteSkipped=0,submittedVertices=0;
     uint64_t colorResolvePixels=0,depthResolvePixels=0;
     uint32_t reflectionPasses=0,waterSnapshots=0;
+    uint32_t hdrRttEyes=0;
+    uint64_t implicitColorResolvePixels=0;
     bool loading=false,blocked=false,rendered=false,submitted=false,streaming=false;
 };
 inline constexpr size_t Capacity=4096;
 struct Session {
     std::array<Frame,Capacity> frames{};
     Frame current;
-    char configuration[512]{};
+    char configuration[768]{};
     size_t size=0;
     uint64_t id=0,serial=0;
     bool active=false,recording=false;
@@ -88,7 +90,7 @@ struct Session {
         for(auto name:names)std::fprintf(f,",%s",name);
         std::fprintf(f,",sceneSamples,submittedVertices");
         for(unsigned eye=0;eye<2;++eye)for(auto name:gpuPassNames)std::fprintf(f,",gpu%u_%sUs",eye,name);
-        std::fprintf(f,",reflectionPasses,waterSnapshots,colorResolvePixels,depthResolvePixels");
+        std::fprintf(f,",reflectionPasses,waterSnapshots,colorResolvePixels,depthResolvePixels,hdrRttEyes,implicitColorResolvePixels");
         std::fputc('\n',f);
         for(size_t i=0;i<size;++i) {
             const auto& v=frames[i];
@@ -104,7 +106,7 @@ struct Session {
                 const bool complete=v.gpuExpected[eye][pass]>0&&v.gpuExpected[eye][pass]==v.gpuReceived[eye][pass];
                 std::fprintf(f,",%.3f",complete?v.gpuPassUs[eye][pass]:-1.0);
             }
-            std::fprintf(f,",%u,%u,%llu,%llu",v.reflectionPasses,v.waterSnapshots,(unsigned long long)v.colorResolvePixels,(unsigned long long)v.depthResolvePixels);
+            std::fprintf(f,",%u,%u,%llu,%llu,%u,%llu",v.reflectionPasses,v.waterSnapshots,(unsigned long long)v.colorResolvePixels,(unsigned long long)v.depthResolvePixels,v.hdrRttEyes,(unsigned long long)v.implicitColorResolvePixels);
             std::fputc('\n',f);
         }
         return std::fclose(f)==0;

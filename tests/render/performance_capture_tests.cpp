@@ -27,6 +27,7 @@ int main() {
     s.GpuStage(serial,2,GpuTerrain,999);
     s.GpuStage(serial-1,0,GpuTerrain,999);
     assert(s.frames[0].gpuPassUs[0][GpuTerrain]==150);
+    s.frames[0].hdrRttEyes=2;s.frames[0].implicitColorResolvePixels=123456;
     assert(s.Write("/tmp/fq-perf-test.csv"));
     std::ifstream in("/tmp/fq-perf-test.csv");std::string line;
     unsigned lines=0;while(std::getline(in,line)){

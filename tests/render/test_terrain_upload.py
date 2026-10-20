@@ -9,16 +9,23 @@ RENDER = (ROOT/'app/src/main/cpp/rendering/terrain/fo3-terrain-render.inc').read
 STREAM = (ROOT/'app/src/main/cpp/rendering/terrain/fo3-terrain-stream.inc').read_text()
 
 def declaration(source, start):
-    return start + source.split(start, 1)[1].split('};', 1)[0] + '};\n'
+    begin=source.index(start); opening=source.index('{',begin); depth=1; end=opening+1
+    while depth:
+        if source[end]=='{':depth+=1
+        elif source[end]=='}':depth-=1
+        end+=1
+    return source[begin:end]+';\n'
 
 class TerrainUpload(unittest.TestCase):
     def test_indexed_and_fallback_buffers_survive_arbitrary_chunk_boundaries(self):
         prefix = r'''
 #include "rendering/terrain/fo3-terrain-bounds.h"
+#include "rendering/terrain/terrain-layer-fusion.h"
 #include <cassert>
 #include <chrono>
 #include <cstring>
 #include <map>
+#include <tuple>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -29,6 +36,7 @@ constexpr bool GL_FALSE=false;
 GLuint arrayBuffer=0,vao=0,nextId=100;
 std::map<GLuint,std::vector<uint8_t>> bytes;
 std::map<GLuint,GLuint> elements;
+std::map<std::pair<GLuint,unsigned>,std::tuple<int,int,size_t>> attributes;
 void glGenBuffers(int,GLuint* p){*p=++nextId;}
 void glGenVertexArrays(int,GLuint* p){*p=++nextId;}
 void glBindVertexArray(GLuint v){vao=v;}
@@ -39,7 +47,7 @@ void glBufferSubData(GLenum,GLintptr offset,GLsizeiptr size,const void* data){
     assert(size_t(offset+size)<=bytes[arrayBuffer].size());
     std::memcpy(bytes[arrayBuffer].data()+offset,data,size);
 }
-void glVertexAttribPointer(unsigned,int,GLenum,bool,GLsizei,const void*){}
+void glVertexAttribPointer(unsigned index,int size,GLenum,bool,GLsizei stride,const void* offset){attributes[{vao,index}]={size,stride,reinterpret_cast<size_t>(offset)};}
 void glEnableVertexAttribArray(unsigned){}
 #define Q76B_LOGW(...) ((void)0)
 constexpr size_t Q2000_GPU_BYTES_PER_UPDATE=17;
@@ -57,17 +65,24 @@ std::unordered_map<std::string,GLuint> q1910TerrainTextureCache{{"paint",11}};
 std::unordered_map<std::string,GLuint> q1810TerrainNormalTextureCache{{"normal",12}};
 std::vector<Q711TerrainBatch> gQ2000CurrentCellBatches;
 '''
+        prefix += 'Q711TerrainBatch Q238GpuMaterial(' + RENDER.split('Q711TerrainBatch Q238GpuMaterial(',1)[1].split('void Q238BindPaint(',1)[0]
         upload = 'bool Q2000AdvanceOneBatch(' + STREAM.split('bool Q2000AdvanceOneBatch(',1)[1].split('void Q2000PublishCurrentCell(',1)[0]
         main = r'''
 int main(){
-    for(bool indexed:{false,true}){
+    for(size_t stride:{12u,15u})for(bool indexed:{false,true}){
         Q711CpuBatch cpu;cpu.texturePath="paint";cpu.normalPath="normal";
-        cpu.vertices.resize(36);for(size_t i=0;i<cpu.vertices.size();++i)cpu.vertices[i]=float(i)/10;
+        cpu.vertexFloats=stride;
+        if(stride==15u)cpu.paintMaterials.push_back({"paint","normal",true});
+        cpu.vertices.resize(stride*3);for(size_t i=0;i<cpu.vertices.size();++i)cpu.vertices[i]=float(i)/10;
         if(indexed)cpu.indices={0,1,2,0,2,1};
         Q2000CpuCell cell;bool complete=false;size_t steps=0;
         while(!complete){size_t used=0;complete=Q2000AdvanceOneBatch(cell,cpu,used);assert(used<=17);assert(++steps<100);}
         assert(!gQ2000VboUpload.active && !gQ2000VboUpload.vbo);
         const auto& gpu=gQ2000CurrentCellBatches.back();
+        assert(std::get<1>(attributes.at({gpu.vao,0}))==int(stride*4));
+        if(stride==15u)assert((attributes.at({gpu.vao,5})==std::make_tuple(3,60,size_t(48))));
+        assert(gpu.paintCount==(stride==15u?1:0));
+        if(stride==15u)assert(gpu.paintDiffuse[0]==11 && gpu.paintNormal[0]==12 && gpu.paintSpecular[0]);
         const size_t vertexBytes=cpu.vertices.size()*sizeof(float);
         assert(gpu.vertexCount==(indexed?6:3));
         assert(gpu.indexOffset==(indexed?vertexBytes:0));
@@ -83,7 +98,7 @@ int main(){
     Q711CpuBatch missing;missing.alphaLayer=true;missing.vertices.resize(36);
     size_t used=0;Q2000CpuCell cell;
     assert(Q2000AdvanceOneBatch(cell,missing,used));
-    assert(gQ2000CurrentCellBatches.size()==2 && used==0);
+    assert(gQ2000CurrentCellBatches.size()==4 && used==0);
 }
 '''
         with tempfile.TemporaryDirectory() as tmp:

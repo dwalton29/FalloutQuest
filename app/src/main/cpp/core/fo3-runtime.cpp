@@ -29,6 +29,8 @@
 #include "rendering/loading-diagnostics.h"
 #include "rendering/loading-transfer.h"
 #include "rendering/quest-render-policy.h"
+#include "rendering/hdr-rtt-target.h"
+#include "rendering/terrain/terrain-layer-options.h"
 #include "fo3-npc-appearance.h"
 #include "fo3-install-paths.h"
 #include "rendering/water/fo3-water.h"
@@ -1129,6 +1131,7 @@ GLuint gWaterReflectionFboQ2090 = 0u;
 GLuint gWaterReflectionColorQ2090 = 0u;
 GLuint gWaterReflectionDepthQ2090 = 0u;
 bool gWaterReflectionTargetReadyQ2090 = false;
+bool gWaterReflectionHalfQ238 = true;
 bool gWaterReflectionTargetLoggedQ2090 = false;
 float gWaterSkyMvpQ2090[16]{};
 bool gWaterSkyMvpReadyQ2090 = false;
@@ -9270,6 +9273,7 @@ bool Q2090EnsureReflectionTarget() {
         status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
     }
 
+    gWaterReflectionHalfQ238=chosenFormat==GL_RGBA16F;
     gWaterReflectionTargetReadyQ2090 =
         status == GL_FRAMEBUFFER_COMPLETE;
 
@@ -9517,6 +9521,7 @@ bool Q2090RenderWaterReflection(const float mainMvp[16],
         std::chrono::steady_clock::now();
     // LAND uses its own program, so arm the same water-plane clip there.
     SetFo3TerrainWaterReflectionClipQ2090(true, planeY);
+    SetFo3TerrainColorFormatQ238(gWaterReflectionHalfQ238);
     {fqperf::GpuScope gpuTerrain(fqperf::GpuMirrorTerrain); RenderFo3CollisionOverlay(outReflectionMvp);}
     SetFo3TerrainWaterReflectionClipQ2090(false, planeY);
     q2019LandUs = static_cast<uint64_t>(
@@ -13009,6 +13014,9 @@ bool q234PreWaterDepthResolved = false;
 uint64_t q234ElidedDepthResolves = 0u;
 uint64_t q234RetainedDepthResolves = 0u;
 
+void Q238SelectMainTarget(bool allowRtt);
+bool Q238HalfFloatTarget();
+
 void Q233BeginMainEyeWorld() {
     fqperf::BeginHdrPass();
     GLboolean depthWrite=GL_TRUE;glGetBooleanv(GL_DEPTH_WRITEMASK,&depthWrite);
@@ -13255,6 +13263,7 @@ void RenderScene(const float* mvp) {
     }
     // No main-eye colour/depth has been drawn yet: the mirror cannot interrupt
     // an in-flight HDR scene. Restore the main camera after the mirror shader.
+    Q238SelectMainTarget(!q209bWaterInFrustum);
     Q233BeginMainEyeWorld();
     glUseProgram(gProgram);
     glUniformMatrix4fv(gMvpLocation,1,GL_FALSE,mvp);
@@ -13417,6 +13426,7 @@ void RenderScene(const float* mvp) {
     if(cullWasEnabled) glEnable(GL_CULL_FACE); else glDisable(GL_CULL_FACE);
     glPolygonOffset(previousOffsetFactor, previousOffsetUnits);
     if(offsetWasEnabled) glEnable(GL_POLYGON_OFFSET_FILL); else glDisable(GL_POLYGON_OFFSET_FILL);
+    SetFo3TerrainColorFormatQ238(Q238HalfFloatTarget());
     {fqperf::GpuScope gpuTerrain(fqperf::GpuTerrain); RenderFo3CollisionOverlay(mvp);}
 
     if (gExteriorStreamingActiveQ1890 && gExteriorWorldspaceQ1890 != 0u) {
@@ -13585,6 +13595,17 @@ GLsizei q1280PostWidth = 0;
 GLsizei q1280PostHeight = 0;
 GLenum q1280PostInternalFormat = GL_RGBA8;
 bool q1280PostActive = false;
+fqhdr::RttTarget q238Rtt;
+bool q238RttActive=false;
+bool Q238HalfFloatTarget(){return q1280PostActive&&q1280PostInternalFormat==GL_RGBA16F;}
+void Q238SelectMainTarget(bool allowRtt){
+    if(!fqopaque::Options().hdrRtt||!allowRtt||!q1280PostActive||!q2060MsaaActive||q2060MsaaSamples!=2)return;
+    const bool first=!q238Rtt.attempted;
+    q238RttActive=q238Rtt.Ensure(q1280PostWidth,q1280PostHeight,q1280PostColor,q1280PostInternalFormat,q1280PostFbo);
+    if(first)Q6H_LOGI("Q238 HDR RTT: requested=1 ready=%d scope=no-visible-water samples=2 depth=explicit-renderbuffer-copy colour=implicit-EXT",q238RttActive);
+    glBindFramebuffer(GL_FRAMEBUFFER,q238RttActive?q238Rtt.fbo:q2060MsaaFbo);
+    if(q238RttActive&&fqperf::capture.recording)++fqperf::capture.current.hdrRttEyes;
+}
 bool q1280PostLoggedGpu = false;
 
 GLint q1280SceneLocation = -1;
@@ -14445,13 +14466,14 @@ void Q2060ResolveEyeMsaaQ2060(GLbitfield mask) {
     if (!q2060MsaaActive || q2060MsaaSamples <= 1 ||
         !q2060MsaaFbo || !q1280PostFbo) return;
     fqperf::GpuScope gpuResolve(fqperf::GpuResolve);
+    if(q238RttActive)mask&=~GL_COLOR_BUFFER_BIT;
     if(fqperf::capture.recording){
         const uint64_t pixels=uint64_t(q1280PostWidth)*uint64_t(q1280PostHeight);
         if(mask & GL_COLOR_BUFFER_BIT)fqperf::capture.current.colorResolvePixels+=pixels;
         if(mask & GL_DEPTH_BUFFER_BIT)fqperf::capture.current.depthResolvePixels+=pixels;
     }
 
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, q2060MsaaFbo);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, q238RttActive?q238Rtt.fbo:q2060MsaaFbo);
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, q1280PostFbo);
     glBlitFramebuffer(0, 0, q1280PostWidth, q1280PostHeight,
                       0, 0, q1280PostWidth, q1280PostHeight,
@@ -14539,6 +14561,7 @@ bool Q1280AllocatePostTarget(GLsizei width, GLsizei height) {
 
 bool Q1280BeginEyePostQ1280(GLuint swapchainFbo, GLsizei width, GLsizei height) {
     q1280PostActive = false;
+    q238RttActive = false;
     q234PreWaterDepthResolved = false; // Per-eye only; never reuse another eye's depth.
     if (!Q1280EnsurePostProgram() || !Q1280AllocatePostTarget(width, height)) {
         glBindFramebuffer(GL_FRAMEBUFFER, swapchainFbo);
@@ -14691,7 +14714,13 @@ void Q1350CompositeEyePostQ1350(uint32_t eyeIndex, GLuint swapchainFbo,
     }
     q234PreWaterDepthResolved=false;
     fqperf::EndHdrPass();
-    if(q2060MsaaActive && q2060MsaaFbo && q1280PostFbo) {
+    if(q238RttActive){
+        // Only depth is transient. The colour texture IS the final HDR image.
+        const GLenum depthOnly=GL_DEPTH_ATTACHMENT;
+        glInvalidateFramebuffer(GL_READ_FRAMEBUFFER,1,&depthOnly);
+        glBindFramebuffer(GL_FRAMEBUFFER,q1280PostFbo);
+        if(fqperf::capture.recording)fqperf::capture.current.implicitColorResolvePixels+=uint64_t(q1280PostWidth)*uint64_t(q1280PostHeight);
+    }else if(q2060MsaaActive && q2060MsaaFbo && q1280PostFbo) {
         // Resolve has consumed these samples. No later pass reads them before
         // the next eye clears them. Keep the resolved colour/depth textures.
         const GLenum transientAttachments[]={GL_COLOR_ATTACHMENT0,GL_DEPTH_ATTACHMENT};
@@ -14712,6 +14741,7 @@ void Q1350CompositeEyePostQ1350(uint32_t eyeIndex, GLuint swapchainFbo,
 }
 
 void Q1280ShutdownPostQ1280() {
+    q238Rtt.Reset();q238RttActive=false;
     Q1670ShutdownPcBloomQ1670();
 
     if (gWaterReflectionDepthQ2090)
@@ -14845,6 +14875,7 @@ void Q6HViewport(GLint x, GLint y, GLsizei width, GLsizei height) {
         // Q13.7 depth texture was already attached during target allocation.
         return;
     }
+    if (q238RttActive&&q1370CurrentFbo==static_cast<GLint>(q238Rtt.fbo)) return;
     if (q2060MsaaActive && q2060MsaaFbo != 0u &&
         q1370CurrentFbo == static_cast<GLint>(q2060MsaaFbo)) {
         // Q20.6 multisampled colour/depth renderbuffers are already attached.
