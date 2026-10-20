@@ -24,6 +24,7 @@
 #include "npc/fo3-animation-bounds.h"
 #include "rendering/actor-skinning.h"
 #include "rendering/opaque-telemetry.h"
+#include "rendering/opaque-front-to-back.h"
 #include "rendering/performance-capture-android.h"
 #include "rendering/loading-work-scope.h"
 #include "rendering/loading-diagnostics.h"
@@ -7213,6 +7214,15 @@ struct Q2017InstanceBatch {
     const GpuObject* representative = nullptr;
     size_t matrixBaseFloat = 0u;
     GLsizei count = 0;
+    float nearestDepthSquared = std::numeric_limits<float>::infinity();
+};
+// Q235: instanced/ordinary opaque draws share one depth-coherent schedule.
+// Unsafe authored Z states and decals are fixed barriers.
+struct Q235OpaquePacket {
+    const GpuObject* object = nullptr;
+    size_t batchIndex = 0u;
+    bool instanced = false;
+    fqopaqueorder::SortKey key{};
 };
 
 // Frame-local pointers are valid only until the next scene preparation boundary.
@@ -7229,6 +7239,7 @@ struct Q2017FrameBatches {
     size_t objectCount = 0;
     std::vector<const GpuObject*> candidates, singles, groupFallbacks;
     std::vector<Q2017InstanceBatch> batches;
+    std::vector<Q235OpaquePacket> ordered;
     std::vector<float> matrices;
     GLuint buffer = 0;
     size_t visible = 0, instancedObjects = 0, largestBatch = 0;
@@ -7294,6 +7305,24 @@ bool Q2017StereoVisible(const GpuObject& object) {
     return Q223StereoBoundsVisible({lo.x,hi.x,lo.y,hi.y,lo.z,hi.z});
 }
 
+// Closest transformed AABB depth, not center depth: large nearby occluders
+// precede props behind them. Prepared once per stereo frame and reused.
+float Q235ObjectNearDepthSquared(const GpuObject& object) {
+    if(object.minX>object.maxX||object.minY>object.maxY||
+       object.minZ>object.maxZ)return std::numeric_limits<float>::infinity();
+    Vec3 lo{},hi{};Q2400ObjectBounds(object,lo,hi);
+    return fqopaqueorder::NearestBoxDistanceSquared(
+        gFo3EyePosition[0],gFo3EyePosition[1],gFo3EyePosition[2],
+        {lo.x,hi.x,lo.y,hi.y,lo.z,hi.z});
+}
+fqopaqueorder::SortKey Q235OpaqueKey(const GpuObject& object,
+                                     float nearestDistanceSquared,
+                                     size_t ordinal) {
+    const bool safe=object.zBufferTestQ1200&&object.zBufferWriteQ1200&&
+        !object.decalQ1170&&!object.noLightingFalloff;
+    return fqopaqueorder::MakeKey(safe,nearestDistanceSquared,
+                                  object.q2016BatchKey,ordinal);
+}
 bool Q2017ReflectionUseful(const GpuObject& object) {
     if (object.minX > object.maxX || object.minY > object.maxY ||
         object.minZ > object.maxZ) return true;
@@ -7323,9 +7352,10 @@ void Q2017RenderOpaqueDetailedInstanced() {
         cache.visualRevision = gFo3VisualPublication.Revision();
         cache.storage = gObjects.data(); cache.objectCount = gObjects.size();
         cache.candidates.clear(); cache.singles.clear(); cache.groupFallbacks.clear();
-        cache.batches.clear(); cache.matrices.clear();
+        cache.batches.clear(); cache.ordered.clear(); cache.matrices.clear();
         cache.candidates.reserve(gObjects.size()); cache.singles.reserve(gObjects.size());
         cache.groupFallbacks.reserve(gObjects.size()); cache.batches.reserve(gObjects.size());
+        cache.ordered.reserve(gObjects.size());
         cache.matrices.reserve(gObjects.size()*16u);
         cache.visible = cache.instancedObjects = cache.largestBatch = 0;
         for (const auto* pointer : gOpaqueFrameOrder) {
@@ -7347,6 +7377,7 @@ void Q2017RenderOpaqueDetailedInstanced() {
                    cache.candidates[end]->q2016BatchKey == representative->q2016BatchKey) ++end;
             const size_t matrixStart = cache.matrices.size();
             size_t validCount = 0;
+            float q235BatchNearest=std::numeric_limits<float>::infinity();
             const GpuObject* onlyValid = nullptr;
             for (size_t i = first; i < end; ++i) {
                 const auto* target = cache.candidates[i];
@@ -7362,17 +7393,43 @@ void Q2017RenderOpaqueDetailedInstanced() {
                 cache.matrices.insert(cache.matrices.end(), target->q2017RelativeMatrix,
                                       target->q2017RelativeMatrix+16);
                 onlyValid = target; ++validCount;
+                if(!gWaterReflectionPassQ2090)
+                    q235BatchNearest=std::min(q235BatchNearest,Q235ObjectNearDepthSquared(*target));
             }
             if (validCount < 2) {
                 cache.matrices.resize(matrixStart);
                 if (onlyValid) cache.groupFallbacks.push_back(onlyValid);
             } else {
-                cache.batches.push_back({representative, matrixStart, static_cast<GLsizei>(validCount)});
+                cache.batches.push_back({representative,matrixStart,
+                                        static_cast<GLsizei>(validCount),q235BatchNearest});
                 cache.instancedObjects += validCount;
                 cache.largestBatch = std::max(cache.largestBatch, validCount);
             }
             first = end;
         }
+        // Build the exact v234 packet list first: singles, group fallbacks,
+        // then existing instanced batches. In the main scene, reorder only
+        // contiguous runs of eligible depth-writing opaque surfaces; authored
+        // odd-Z, falloff and decal packets remain fixed draw-order barriers.
+        size_t q235Ordinal=0u;
+        const auto addSingle=[&](const GpuObject* object) {
+            if(!object)return;
+            const float nearSq=!gWaterReflectionPassQ2090
+                ? Q235ObjectNearDepthSquared(*object)
+                : std::numeric_limits<float>::infinity();
+            cache.ordered.push_back({object,0u,false,
+                Q235OpaqueKey(*object,nearSq,q235Ordinal++)});
+        };
+        for(const GpuObject* object:cache.singles)addSingle(object);
+        for(const GpuObject* object:cache.groupFallbacks)addSingle(object);
+        for(size_t i=0;i<cache.batches.size();++i){
+            const auto& b=cache.batches[i];
+            if(!b.representative||b.count<=0)continue;
+            cache.ordered.push_back({b.representative,i,true,
+                Q235OpaqueKey(*b.representative,b.nearestDepthSquared,q235Ordinal++)});
+        }
+        if(!gWaterReflectionPassQ2090&&fqopaque::Options().frontToBack)
+            fqopaqueorder::SortSafeRuns(cache.ordered);
         if (!gWaterReflectionPassQ2090) fqopaque::preparationUs += fqopaque::Micros(prepareStarted);
         if (!cache.matrices.empty()) {
             fqopaque::SubmissionScope uploadScope;
@@ -7386,53 +7443,45 @@ void Q2017RenderOpaqueDetailedInstanced() {
     if (!rebuild && !gWaterReflectionPassQ2090) fqopaque::preparationUs += fqopaque::Micros(prepareStarted);
     // DrawSceneObject binds this buffer for matrix attributes.
     gInstanceBufferQ2016 = cache.buffer;
-    const auto& singles = cache.singles;
-    const auto& groupFallbacks = cache.groupFallbacks;
     const auto& batches = cache.batches;
     const auto visible = cache.visible;
     const auto instancedObjects = cache.instancedObjects;
     const auto largestBatch = cache.largestBatch;
 
-    size_t fallbackDraws = 0u;
+    size_t fallbackDraws=0u,actualInstancedDraws=0u;
     const bool previousPrevalidation=gQ230DetailedObjectPrevalidated;
     gQ230DetailedObjectPrevalidated=true;
-    for (const GpuObject* object : singles) {
-        if (!object) continue;
-        if (object->zBufferTestQ1200) glEnable(GL_DEPTH_TEST);
+    for(const Q235OpaquePacket& packet:cache.ordered) {
+        const GpuObject* object=packet.object;
+        if(!object)continue;
+        if(object->zBufferTestQ1200)glEnable(GL_DEPTH_TEST);
         else glDisable(GL_DEPTH_TEST);
-        glDepthMask(object->zBufferWriteQ1200 ? GL_TRUE : GL_FALSE);
+        glDepthMask(object->zBufferWriteQ1200?GL_TRUE:GL_FALSE);
         const auto before=fqgl::counters.draws;
-        DrawSceneObject(*object);
-        fallbackDraws += fqgl::counters.draws-before;
+        if(packet.instanced){
+            const Q2017InstanceBatch& batch=batches[packet.batchIndex];
+            gInstanceMatrixBaseFloatQ2017=batch.matrixBaseFloat;
+            gInstanceCountQ2017=batch.count;
+            gInstancedDrawActiveQ2016=true;
+            DrawSceneObject(*object);
+            actualInstancedDraws+=fqgl::counters.draws-before;
+            gInstancedDrawActiveQ2016=false;
+        }else{
+            DrawSceneObject(*object);
+            fallbackDraws+=fqgl::counters.draws-before;
+        }
     }
-    for (const GpuObject* object : groupFallbacks) {
-        if (!object) continue;
-        if (object->zBufferTestQ1200) glEnable(GL_DEPTH_TEST);
-        else glDisable(GL_DEPTH_TEST);
-        glDepthMask(object->zBufferWriteQ1200 ? GL_TRUE : GL_FALSE);
-        const auto before=fqgl::counters.draws;
-        DrawSceneObject(*object);
-        fallbackDraws += fqgl::counters.draws-before;
-    }
-
-    size_t actualInstancedDraws=0;
-    for (const Q2017InstanceBatch& batch : batches) {
-        if (!batch.representative || batch.count <= 0) continue;
-        if (batch.representative->zBufferTestQ1200)
-            glEnable(GL_DEPTH_TEST);
-        else
-            glDisable(GL_DEPTH_TEST);
-        glDepthMask(
-            batch.representative->zBufferWriteQ1200
-                ? GL_TRUE : GL_FALSE);
-
-        gInstanceMatrixBaseFloatQ2017 = batch.matrixBaseFloat;
-        gInstanceCountQ2017 = batch.count;
-        gInstancedDrawActiveQ2016 = true;
-        const auto before=fqgl::counters.draws;
-        DrawSceneObject(*batch.representative);
-        actualInstancedDraws += fqgl::counters.draws-before;
-        gInstancedDrawActiveQ2016 = false;
+    if(!gWaterReflectionPassQ2090&&fqopaque::eye==0&&
+       (gStereoFrame%240u)==1u){
+        size_t eligible=0u,moved=0u,barriers=0u;
+        for(size_t i=0;i<cache.ordered.size();++i){
+            const auto& key=cache.ordered[i].key;
+            if(key.safe){++eligible;if(key.ordinal!=i)++moved;}
+            else ++barriers;
+        }
+        Q6H_LOGI("Q235 OPAQUE EARLYZ: enabled=%d packets=%zu eligible=%zu moved=%zu barriers=%zu bucketMetres=4.0 instancedObjects=%zu drawCountInvariant=1 stereoShared=1",
+            fqopaque::Options().frontToBack?1:0,cache.ordered.size(),
+            eligible,moved,barriers,cache.instancedObjects);
     }
 
     if (fqopaque::measuring && !gWaterReflectionPassQ2090) {
