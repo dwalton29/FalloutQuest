@@ -180,7 +180,7 @@ extern GLsizei q1280PostHeight;
 extern GLuint q2060MsaaFbo;
 extern GLsizei q2060MsaaSamples;
 extern bool q2060MsaaActive;
-void Q2060ResolveEyeMsaaQ2060();
+void Q2060ResolveEyeMsaaQ2060(GLbitfield mask = GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
 extern bool gQ1920LatestGridValid;
 extern int32_t gQ1920LatestGridX;
@@ -14310,7 +14310,7 @@ bool Q2060AllocateMsaaTargetQ2060(GLsizei width, GLsizei height,
     return true;
 }
 
-void Q2060ResolveEyeMsaaQ2060(GLbitfield mask = GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT) {
+void Q2060ResolveEyeMsaaQ2060(GLbitfield mask) {
     if (!q2060MsaaActive || q2060MsaaSamples <= 1 ||
         !q2060MsaaFbo || !q1280PostFbo) return;
     fqperf::GpuScope gpuResolve(fqperf::GpuResolve);

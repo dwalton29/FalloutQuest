@@ -38,8 +38,8 @@ class HdrPassOrder(unittest.TestCase):
         self.assertIn('std::copy(cachedReflection, cachedReflection+16, outReflectionMvp)',mirror)
         self.assertIn('glDepthMask(previousDepthMask)',mirror)
     def test_final_depth_and_water_snapshot_still_resolve(self):
-        resolve=CORE.split('void Q2060ResolveEyeMsaaQ2060(GLbitfield mask =',1)[1].split('bool Q1280AllocatePostTarget',1)[0]
-        self.assertIn('GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT',resolve)
+        resolve=CORE.split('void Q2060ResolveEyeMsaaQ2060(GLbitfield mask) {',1)[1].split('bool Q1280AllocatePostTarget',1)[0]
+        self.assertIn('void Q2060ResolveEyeMsaaQ2060(GLbitfield mask = GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);',CORE)
         scene=CORE.split('void RenderScene(const float* mvp)',1)[1].split('void Q6HGenFramebuffers',1)[0]
         self.assertIn('q209bWaterInFrustum && q2060MsaaActive',scene)
         self.assertIn('q2080SceneSnapshotReady ? q1370PostDepth : 0u',scene)
