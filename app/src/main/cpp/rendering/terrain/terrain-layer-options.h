@@ -15,4 +15,16 @@ inline bool LegacyLayers() {
     }();
     return legacy;
 }
+inline bool UnsharedLighting() {
+    static const bool unshared=[](){
+#if defined(__ANDROID__) && !defined(NDEBUG)
+        char value[PROP_VALUE_MAX]{};
+        __system_property_get("debug.falloutquest.terrain_unshared",value);
+        return value[0]=='1'&&value[1]=='\0';
+#else
+        return false;
+#endif
+    }();
+    return unshared;
+}
 } // namespace fo3terrain

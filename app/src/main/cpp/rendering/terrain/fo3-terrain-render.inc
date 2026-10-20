@@ -7,6 +7,7 @@ float GetFo3FogPower();
 #include "rendering/terrain/terrain-paint-coverage.h"
 #include "rendering/terrain/terrain-layer-fusion.h"
 #include "rendering/terrain/terrain-layer-options.h"
+#include "rendering/terrain/fo3-terrain-v237-shaders.h"
 #include "rendering/environment/fo3-environment.h"
 #include "rendering/environment/fo3-weather-byte-staging.h"
 #include "rendering/environment/fo3-visual-depth.h"
@@ -404,8 +405,35 @@ GLuint Q76BCreateProgram() {
             visible += projected.z - bias <= texture(uShadowMap, projected.xy + vec2( halfTexel.x,  halfTexel.y)).r ? 1.0 : 0.0;
             return visible * 0.25;
         }
+// Q239: geometric lighting terms are shared by the original LAND materials;
+        // normals, shadow/specular evaluation and layer blending remain per material.
+        struct Q239SharedLighting {
+            vec3 sunDirection;
+            vec3 localDirection[8];
+            float localAttenuation[8];
+        };
+        Q239SharedLighting Q239PrepareSharedLighting() {
+            Q239SharedLighting shared;
+            shared.sunDirection = normalize(uSunDirection);
+            for (int i = 0; i < 8; ++i) {
+                if (i >= uLocalLightCount) break;
+                vec3 toLight = uLocalLightPosRadius[i].xyz - vPosition;
+                float distanceToLight = length(toLight);
+                float radius = max(uLocalLightPosRadius[i].w, 0.001);
+                if (distanceToLight >= radius) {
+                    shared.localAttenuation[i] = -1.0;
+                    continue;
+                }
+                shared.localDirection[i] = toLight / max(distanceToLight, 0.001);
+                float edge = clamp(1.0 - distanceToLight / radius, 0.0, 1.0);
+                shared.localAttenuation[i] =
+                    pow(edge, max(uLocalLightColorFalloff[i].w, 0.25));
+            }
+            return shared;
+        }
         vec3 Q238ShadeLayer(sampler2D diffuseMap, sampler2D normalMap,
-                             int useTexture, int useNormal, float specularEnabled) {
+                             int useTexture, int useNormal, float specularEnabled,
+                             Q239SharedLighting shared) {
             vec3 N = normalize(vNormal);
             vec4 normalGloss = vec4(0.5, 0.5, 1.0, 0.0);
             if (useNormal != 0) {
@@ -420,7 +448,11 @@ GLuint Q76BCreateProgram() {
                 N = normalize(mat3(T, B, N) * tangentNormal);
             }
 
+#ifdef FQ239_UNSHARED_LIGHTS
             vec3 lightDirection = normalize(uSunDirection);
+#else
+            vec3 lightDirection = shared.sunDirection;
+#endif
             float lambert = max(dot(N, lightDirection), 0.0);
             vec3 earthFallback = vec3(0.34, 0.27, 0.18);
             vec3 albedo = (useTexture != 0 ? texture(diffuseMap, vTexCoord).rgb : earthFallback) * vVertexColor;
@@ -434,6 +466,7 @@ GLuint Q76BCreateProgram() {
                 float specular = pow(max(dot(N, H), 0.0), 18.0) * normalGloss.a * 0.24;
                 lit += uSunlightColor * specular * q1050SunVisibility;
             }
+#ifdef FQ239_UNSHARED_LIGHTS
             for (int i = 0; i < 8; ++i) {
                 if (i >= uLocalLightCount) break;
                 vec3 toLight = uLocalLightPosRadius[i].xyz - vPosition;
@@ -446,6 +479,15 @@ GLuint Q76BCreateProgram() {
                 float attenuation = pow(edge, max(uLocalLightColorFalloff[i].w, 0.25));
                 lit += albedo * uLocalLightColorFalloff[i].rgb * localLambert * attenuation;
             }
+#else
+            for (int i = 0; i < 8; ++i) {
+                if (i >= uLocalLightCount) break;
+                if (shared.localAttenuation[i] < 0.0) continue;
+                float localLambert = max(dot(N, shared.localDirection[i]), 0.0);
+                lit += albedo * uLocalLightColorFalloff[i].rgb *
+                       localLambert * shared.localAttenuation[i];
+            }
+#endif
             // PC SLS2100.vso computes LAND fog per vertex from transformed
             // position, FogParam=(far, far-near, power, _), then SLS2124.pso
             // blends against the interpolated factor. Use the already matching
@@ -470,28 +512,43 @@ GLuint Q76BCreateProgram() {
         void main() {
             if (uWaterReflectionClipEnabledQ2090 > 0.5 &&
                 vPosition.y < uWaterReflectionPlaneYQ2090) discard;
+            Q239SharedLighting shared = Q239PrepareSharedLighting();
             vec3 base = Q238ShadeLayer(uDiffuse, uNormalGloss, uUseTexture,
-                                      uUseNormal, uTerrainSpecularEnabled);
+                                      uUseNormal, uTerrainSpecularEnabled, shared);
             if (uPaintCount == 0) {
                 fragColor = vec4(base, clamp(vAlpha, 0.0, 1.0));
                 return;
             }
             highp vec4 result = Q238Round(vec4(base, 1.0));
-            if (uPaintCount > 0) result = Q238Over(result,
-                Q238ShadeLayer(uPaintDiffuse0, uPaintNormal0, 1, int(uPaintFlags0.x), uPaintFlags0.y),
+            if (uPaintCount > 0 && vPaintAlpha.x != 0.0) result = Q238Over(result,
+                Q238ShadeLayer(uPaintDiffuse0, uPaintNormal0, 1, int(uPaintFlags0.x), uPaintFlags0.y, shared),
                 vPaintAlpha.x);
-            if (uPaintCount > 1) result = Q238Over(result,
-                Q238ShadeLayer(uPaintDiffuse1, uPaintNormal1, 1, int(uPaintFlags1.x), uPaintFlags1.y),
+            if (uPaintCount > 1 && vPaintAlpha.y != 0.0) result = Q238Over(result,
+                Q238ShadeLayer(uPaintDiffuse1, uPaintNormal1, 1, int(uPaintFlags1.x), uPaintFlags1.y, shared),
                 vPaintAlpha.y);
-            if (uPaintCount > 2) result = Q238Over(result,
-                Q238ShadeLayer(uPaintDiffuse2, uPaintNormal2, 1, int(uPaintFlags2.x), uPaintFlags2.y),
+            if (uPaintCount > 2 && vPaintAlpha.z != 0.0) result = Q238Over(result,
+                Q238ShadeLayer(uPaintDiffuse2, uPaintNormal2, 1, int(uPaintFlags2.x), uPaintFlags2.y, shared),
                 vPaintAlpha.z);
             fragColor = result;
         }
     )";
 
-    GLuint vs = Q76BCompile(GL_VERTEX_SHADER, vertexSource);
-    GLuint fs = Q76BCompile(GL_FRAGMENT_SHADER, fragmentSource);
+    const bool q239Legacy = fo3terrain::LegacyLayers();
+    const bool q239Unshared = !q239Legacy && fo3terrain::UnsharedLighting();
+    std::string q239FragmentWithDefine;
+    const char* q239Fragment = q239Legacy ? fo3terrain::kV237FragmentShader : fragmentSource;
+    if (q239Unshared) {
+        q239FragmentWithDefine = fragmentSource;
+        const size_t newline = q239FragmentWithDefine.find('\n');
+        if (newline != std::string::npos)
+            q239FragmentWithDefine.insert(newline + 1, "#define FQ239_UNSHARED_LIGHTS 1\n");
+        q239Fragment = q239FragmentWithDefine.c_str();
+    }
+    Q76B_LOGI("Q239 TERRAIN SHADER: legacyV237=%d unsharedLights=%d",
+              q239Legacy ? 1 : 0, q239Unshared ? 1 : 0);
+    GLuint vs = Q76BCompile(GL_VERTEX_SHADER,
+                            q239Legacy ? fo3terrain::kV237VertexShader : vertexSource);
+    GLuint fs = Q76BCompile(GL_FRAGMENT_SHADER, q239Fragment);
     if (!vs || !fs) {
         if (vs) glDeleteShader(vs);
         if (fs) glDeleteShader(fs);

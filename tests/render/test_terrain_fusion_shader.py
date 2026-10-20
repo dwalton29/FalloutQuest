@@ -28,6 +28,13 @@ def gl(name,ret,*args):
 # Compare actual production programs, rather than a second CPU implementation.
 ROOT=Path(__file__).resolve().parents[2]
 source=(ROOT/'app/src/main/cpp/rendering/terrain/fo3-terrain-render.inc').read_text()
+frozen=(ROOT/'app/src/main/cpp/rendering/terrain/fo3-terrain-v237-shaders.h').read_text()
+for key,extension in [('kV237VertexShader','vert'),('kV237FragmentShader','frag')]:
+    data=re.search(key+r'\s*=\s*R"FQ239\((.*?)\)FQ239";',frozen,re.S)
+    assert data,key
+    assert data.group(1)==(ROOT/f'tests/render/fixtures/terrain_v237.{extension}').read_text()
+assert 'q239Legacy ? fo3terrain::kV237VertexShader : vertexSource' in source
+assert 'q239Legacy ? fo3terrain::kV237FragmentShader : fragmentSource' in source
 def program(texts):
     p=gl('glCreateProgram',uint)()
     for text,kind in zip(texts,[0x8B31,0x8B30]):
@@ -45,7 +52,10 @@ def program(texts):
         raise AssertionError(log.value.decode())
     return p
 legacy=program([(ROOT/f'tests/render/fixtures/terrain_v237.{e}').read_text() for e in ['vert','frag']])
-fused=program([re.search(n+r'\s*=\s*R"\((.*?)\)";',source,re.S).group(1).lstrip() for n in ['vertexSource','fragmentSource']])
+fused_shaders=[re.search(n+r'\s*=\s*R"\((.*?)\)";',source,re.S).group(1).lstrip() for n in ['vertexSource','fragmentSource']]
+fused=program(fused_shaders)
+unshared=program([fused_shaders[0],fused_shaders[1].replace('#version 300 es',
+    '#version 300 es\n#define FQ239_UNSHARED_LIGHTS 1',1)])
 loc=gl('glGetUniformLocation',integer,uint,C.c_char_p)
 current=0
 def ui(name,value):gl('glUniform1i',None,integer,integer)(loc(current,name.encode()),value)
@@ -68,6 +78,7 @@ def vertices(paint,layer):
     values=[]
     for c,(x,y) in enumerate([(-1,-1),(3,-1),(-1,3)]):
         alphas=[(.1+c*.2),(.7-c*.1),(.05+c*.3)]
+        if c==0: alphas[1]=0.0  # Exact zero-alpha sparse-layer case.
         values += [x,y,0,0,1,0,x*.1,y*.1,1 if layer==0 else alphas[layer-1],.8,.9,.7]
         if paint:values+=alphas
     gl('glBufferData',None,uint,C.c_ssize_t,ptr,uint)(0x8892,len(values)*4,(C.c_float*len(values))(*values),0x88E4)
@@ -83,7 +94,14 @@ def setup(p,mode,lit):
     uf('uFogNearVertexQ1532',0);uf('uFogFarVertexQ1532',7);uf('uFogPowerVertexQ1532',1.4)
     uf('uAmbientColor',.4,.3,.2);uf('uSunlightColor',1.5,1.2,.9);uf('uSunDirection',.1,1,.2)
     uf('uEyePosition',0,3,0);uf('uFogColor',.3,.4,.6)
-    ui('uLocalLightCount',1 if lit else 0);uf('uLocalLightPosRadius[0]',0,3,0,20);uf('uLocalLightColorFalloff[0]',.7,.2,.4,1.1)
+    ui('uLocalLightCount',3 if lit else 0)
+    for i,(pos,col) in enumerate([
+        ((0,3,0,20),(.7,.2,.4,1.1)),
+        ((-1,1,0,8),(.4,.8,.3,1.7)),
+        ((30,0,0,2),(.1,.1,.1,1.0)), # Outside-radius light.
+    ]):
+        uf(f'uLocalLightPosRadius[{i}]',*pos)
+        uf(f'uLocalLightColorFalloff[{i}]',*col)
     ui('uShadowMap',8);uf('uShadowsEnabled',1 if lit else 0);uf('uShadowTexelSize',1,1)
     ui('uRoundMode',mode);ui('uUseTexture',1);ui('uUseNormal',1);uf('uTerrainSpecularEnabled',1)
     for i in range(4):
@@ -118,9 +136,14 @@ for mode,fmt in [(1,0x881A),(2,0x8058)]:
             setup(fused,mode,lit);ui('uDiffuse',0);ui('uNormalGloss',4);ui('uPaintCount',layers)
             gl('glDisable',None,uint)(0x0BE2);vertices(True,0);gl('glDrawArrays',None,uint,integer,integer)(4,0,3)
             new=read(mode)
+            setup(unshared,mode,lit);ui('uDiffuse',0);ui('uNormalGloss',4);ui('uPaintCount',layers)
+            gl('glDisable',None,uint)(0x0BE2);vertices(True,0);gl('glDrawArrays',None,uint,integer,integer)(4,0,3)
+            original_lighting=read(mode)
+            shared_error=max(abs(a-b) for a,b in zip(original_lighting,new))
+            assert shared_error <= (.002 if mode==1 else 2),(mode,layers,lit,'shared',shared_error)
             error=max(abs(a-b) for a,b in zip(old,new));max_error=max(max_error,error)
             # FP16 blend arithmetic and UNORM blending have implementation-specific
             # rounding. Bound differences to two representable steps near 1.
             assert error <= (.002 if mode==1 else 2),(mode,layers,lit,error)
             assert gl('glGetError',uint)()==0
-print('Production terrain fusion shader matches v237 multipass: 1–3 layers, fog, normals, specular, shadows, local lights; FP16/RGBA8. Max error:',max_error)
+print('Production shared/unshared fused shaders match v237 multipass: 1–3 layers, fog, normals, specular, shadows, local lights; FP16/RGBA8. Max error:',max_error)
