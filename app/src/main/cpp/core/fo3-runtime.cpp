@@ -13291,7 +13291,9 @@ void RenderScene(const float* mvp) {
             q1280PostColor != 0u && q1370PostDepth != 0u &&
             q1280PostWidth > 0 && q1280PostHeight > 0;
         if (q2080SceneSnapshotReady) {
+            // Refraction still receives original colour AND depth.
             Q2060ResolveEyeMsaaQ2060();
+            q234PreWaterDepthResolved = true;
             if(fqperf::capture.recording)++fqperf::capture.current.waterSnapshots;
             fqperf::ContinueHdrPass();
             glBindFramebuffer(GL_FRAMEBUFFER, q2060MsaaFbo);
@@ -13429,6 +13431,11 @@ GLint q2060GlMaxSamples = 1;
 bool q2060MsaaActive = false;
 bool q2060MsaaAttempted = false;
 uint64_t q2060MsaaHeartbeatFrame = 0u;
+// Q234: water and ordinary post-world UI do not modify depth after the
+// refraction snapshot. Retain the first resolved depth for XR composition.
+bool q234PreWaterDepthResolved = false;
+uint64_t q234ElidedDepthResolves = 0u;
+uint64_t q234RetainedDepthResolves = 0u;
 uint32_t q2060OpenXrRecommendedSamples = 0u;
 uint32_t q2060OpenXrMaxSamples = 0u;
 constexpr GLsizei Q2060_QUEST_REQUESTED_MSAA = 2;
@@ -14302,21 +14309,21 @@ bool Q2060AllocateMsaaTargetQ2060(GLsizei width, GLsizei height,
     return true;
 }
 
-void Q2060ResolveEyeMsaaQ2060() {
+void Q2060ResolveEyeMsaaQ2060(GLbitfield mask = GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT) {
     if (!q2060MsaaActive || q2060MsaaSamples <= 1 ||
         !q2060MsaaFbo || !q1280PostFbo) return;
     fqperf::GpuScope gpuResolve(fqperf::GpuResolve);
     if(fqperf::capture.recording){
         const uint64_t pixels=uint64_t(q1280PostWidth)*uint64_t(q1280PostHeight);
-        fqperf::capture.current.colorResolvePixels+=pixels;
-        fqperf::capture.current.depthResolvePixels+=pixels;
+        if(mask & GL_COLOR_BUFFER_BIT)fqperf::capture.current.colorResolvePixels+=pixels;
+        if(mask & GL_DEPTH_BUFFER_BIT)fqperf::capture.current.depthResolvePixels+=pixels;
     }
 
     glBindFramebuffer(GL_READ_FRAMEBUFFER, q2060MsaaFbo);
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, q1280PostFbo);
     glBlitFramebuffer(0, 0, q1280PostWidth, q1280PostHeight,
                       0, 0, q1280PostWidth, q1280PostHeight,
-                      GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT,
+                      mask,
                       GL_NEAREST);
 }
 
@@ -14400,6 +14407,7 @@ bool Q1280AllocatePostTarget(GLsizei width, GLsizei height) {
 
 bool Q1280BeginEyePostQ1280(GLuint swapchainFbo, GLsizei width, GLsizei height) {
     q1280PostActive = false;
+    q234PreWaterDepthResolved = false; // Per-eye only; never reuse another eye's depth.
     if (!Q1280EnsurePostProgram() || !Q1280AllocatePostTarget(width, height)) {
         glBindFramebuffer(GL_FRAMEBUFFER, swapchainFbo);
         return false;
@@ -14529,10 +14537,27 @@ void Q1280CompositeEyePostQ1280(GLuint swapchainFbo, GLsizei width, GLsizei heig
 }
 
 void Q1350CompositeEyePostQ1350(uint32_t eyeIndex, GLuint swapchainFbo,
-                                GLsizei width, GLsizei height) {
-    // Resolve the multisampled HDR scene into the existing single-sample
-    // colour/depth textures before eye adaptation, bloom and final-film work.
-    Q2060ResolveEyeMsaaQ2060();
+                                GLsizei width, GLsizei height,
+                                bool lateDepthWritesPossible) {
+    // The pre-water snapshot already contains the exact opaque-world depth.
+    // WATER001 writes only colour (depth mask FALSE), as do ordinary HUD
+    // overlays. Lockpicking may clear depth; there we still resolve both.
+    // Final colour is ALWAYS resolved after water, with 2x MSAA unchanged.
+    const bool reusePreWaterDepth=q234PreWaterDepthResolved&&!lateDepthWritesPossible;
+    const GLbitfield q234FinalResolveMask=GL_COLOR_BUFFER_BIT |
+        (reusePreWaterDepth?0u:GL_DEPTH_BUFFER_BIT);
+    Q2060ResolveEyeMsaaQ2060(q234FinalResolveMask);
+    if(q2060MsaaActive&&q2060MsaaSamples>1&&q1280PostActive){
+        if(reusePreWaterDepth)++q234ElidedDepthResolves;
+        else ++q234RetainedDepthResolves;
+        const uint64_t total=q234ElidedDepthResolves+q234RetainedDepthResolves;
+        if((total%240u)==1u)Q6H_LOGI(
+            "Q234 DEPTH REUSE: avoided=%llu full=%llu snapshot=%d lateDepthPossible=%d msaa=%dx postDepth=retained",
+            (unsigned long long)q234ElidedDepthResolves,
+            (unsigned long long)q234RetainedDepthResolves,
+            q234PreWaterDepthResolved?1:0,lateDepthWritesPossible?1:0,q2060MsaaSamples);
+    }
+    q234PreWaterDepthResolved=false;
     fqperf::EndHdrPass();
     if(q2060MsaaActive && q2060MsaaFbo && q1280PostFbo) {
         // Resolve has consumed these samples. No later pass reads them before
@@ -14579,6 +14604,8 @@ void Q1280ShutdownPostQ1280() {
     q2060MsaaActive = false;
     q2060MsaaAttempted = false;
     q2060MsaaHeartbeatFrame = 0u;
+    q234PreWaterDepthResolved = false;
+    q234ElidedDepthResolves = q234RetainedDepthResolves = 0u;
     if (q1370PostDepth) glDeleteTextures(1, &q1370PostDepth);
     q1370PostDepth = 0u;
     if (q1350AdaptTexture[0] || q1350AdaptTexture[1]) glDeleteTextures(2, q1350AdaptTexture);

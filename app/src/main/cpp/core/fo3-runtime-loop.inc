@@ -2320,7 +2320,14 @@ private:
                     }
                 }
             }
-            Q1350CompositeEyePostQ1350(eyeIndex, framebuffer_, eye.width, eye.height);
+            // All ordinary post-world UI writes colour only (health, dialogue,
+            // barter, script messages, ammo, loot and interaction prompts).
+            // Lockpicking clears its MSAA depth target, so preserve the full
+            // final depth resolve there and on loading/fallback frames.
+            const bool q234LateDepthWritesPossible =
+                IsFo3LoadingVisible() || Fo3LockpickFocus();
+            Q1350CompositeEyePostQ1350(eyeIndex, framebuffer_, eye.width, eye.height,
+                                       q234LateDepthWritesPossible);
             // Final colour HUD pass, after world, hands, prompts, loot and post.
             // One head-relative pose/queue snapshot shared by both stereo eyes.
             if(!IsFo3LoadingVisible()&&!Fo3DialogueFocus()&&!Fo3ScriptMessageFocus()&&!Fo3LevelUpFocus()&&!Fo3PipboyFocus()&&!Fo3LockpickFocus()) {
