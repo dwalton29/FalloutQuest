@@ -539,7 +539,9 @@ GLuint Q76BCreateProgram() {
     const char* q239Fragment = q239Legacy ? fo3terrain::kV237FragmentShader : fragmentSource;
     if (q239Unshared) {
         q239FragmentWithDefine = fragmentSource;
-        const size_t newline = q239FragmentWithDefine.find('\n');
+        const size_t version = q239FragmentWithDefine.find("#version");
+        const size_t newline = version == std::string::npos ? std::string::npos
+            : q239FragmentWithDefine.find('\n', version);
         if (newline != std::string::npos)
             q239FragmentWithDefine.insert(newline + 1, "#define FQ239_UNSHARED_LIGHTS 1\n");
         q239Fragment = q239FragmentWithDefine.c_str();
