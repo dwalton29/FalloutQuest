@@ -87,14 +87,14 @@ def vertices(paint,layer):
         gl('glVertexAttribPointer',None,uint,integer,uint,uint,integer,ptr)(index,size,0x1406,0,stride,ptr(offset*4))
         gl('glEnableVertexAttribArray',None,uint)(index)
     if not paint:gl('glDisableVertexAttribArray',None,uint)(5)
-def setup(p,mode,lit):
+def setup(p,mode,lit,multi=False):
     global current
     current=p;gl('glUseProgram',None,uint)(p)
     mat('uMvp');mat('uLightMvp')
     uf('uFogNearVertexQ1532',0);uf('uFogFarVertexQ1532',7);uf('uFogPowerVertexQ1532',1.4)
     uf('uAmbientColor',.4,.3,.2);uf('uSunlightColor',1.5,1.2,.9);uf('uSunDirection',.1,1,.2)
     uf('uEyePosition',0,3,0);uf('uFogColor',.3,.4,.6)
-    ui('uLocalLightCount',3 if lit else 0)
+    ui('uLocalLightCount',(3 if multi else 1) if lit else 0)
     for i,(pos,col) in enumerate([
         ((0,3,0,20),(.7,.2,.4,1.1)),
         ((-1,1,0,8),(.4,.8,.3,1.7)),
@@ -145,5 +145,16 @@ for mode,fmt in [(1,0x881A),(2,0x8058)]:
             # FP16 blend arithmetic and UNORM blending have implementation-specific
             # rounding. Bound differences to two representable steps near 1.
             assert error <= (.002 if mode==1 else 2),(mode,layers,lit,error)
+            if lit:
+                # Additional multi-light parity checks isolate light caching from
+                # unrelated FP16 differences between v237 multipass and v238 fusion.
+                setup(fused,mode,True,multi=True);ui('uDiffuse',0);ui('uNormalGloss',4);ui('uPaintCount',layers)
+                gl('glDisable',None,uint)(0x0BE2);vertices(True,0);gl('glDrawArrays',None,uint,integer,integer)(4,0,3)
+                multi_shared=read(mode)
+                setup(unshared,mode,True,multi=True);ui('uDiffuse',0);ui('uNormalGloss',4);ui('uPaintCount',layers)
+                gl('glDisable',None,uint)(0x0BE2);vertices(True,0);gl('glDrawArrays',None,uint,integer,integer)(4,0,3)
+                multi_unshared=read(mode)
+                diff=max(abs(a-b) for a,b in zip(multi_shared,multi_unshared))
+                assert diff <= (.002 if mode==1 else 2),(mode,layers,lit,'multi-light',diff)
             assert gl('glGetError',uint)()==0
 print('Production shared/unshared fused shaders match v237 multipass: 1–3 layers, fog, normals, specular, shadows, local lights; FP16/RGBA8. Max error:',max_error)
