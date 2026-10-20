@@ -404,6 +404,7 @@ struct CpuObject {
     // Non-Q19 callers lazily populate it in UploadCpuObject as before.
     std::vector<float> q1960ExpandedVertices;
     bool q1960ExpandedReady = false;
+    bool q236IndexedPrepared = false;
     float q1960MinX = 0.0f, q1960MaxX = 0.0f;
     float q1960MinY = 0.0f, q1960MaxY = 0.0f;
     float q1960MinZ = 0.0f, q1960MaxZ = 0.0f;
@@ -423,6 +424,9 @@ struct GpuObject {
     int skinMode=0;
     GLuint vao = 0;
     GLuint vbo = 0;
+    GLuint q236IndexBuffer = 0;
+    bool q236Indexed = false;
+    GLsizei q236UniqueVertices = 0;
     GLuint diffuse = 0;
     GLuint normal = 0;
     GLuint glow = 0;
@@ -916,6 +920,9 @@ std::unordered_map<std::string, Fo3RgbaTexture> gQ234GeneratedTextures;
 struct Q2017SharedGeometryEntry {
     GLuint vao = 0u;
     GLuint vbo = 0u;
+    GLuint q236IndexBuffer = 0u;
+    bool q236Indexed = false;
+    GLsizei q236UniqueVertices = 0;
     GLsizei vertexCount = 0;
     std::string modelPath;
     uint32_t shapeIndex = 0u;
@@ -941,6 +948,8 @@ uint64_t Q2017SharedMeshKey(const GpuObject& gpu) {
     };
     mix(gpu.q2016ShapeIndex);
     mix(static_cast<uint64_t>(gpu.vertexCount));
+    mix(static_cast<uint64_t>(gpu.q236Indexed));
+    mix(static_cast<uint64_t>(gpu.q236UniqueVertices));
     return hash == 0u ? 1u : hash;
 }
 
@@ -970,6 +979,9 @@ bool Q2017TryReuseSharedGeometry(GpuObject& gpu) {
     if (shared.modelPath != gpu.modelPath ||
         shared.shapeIndex != gpu.q2016ShapeIndex ||
         shared.vertexCount != gpu.vertexCount ||
+        shared.q236Indexed != gpu.q236Indexed ||
+        shared.q236UniqueVertices != gpu.q236UniqueVertices ||
+        (gpu.q236Indexed && !shared.q236IndexBuffer) ||
         shared.vao == 0u || shared.vbo == 0u) {
         return false;
     }
@@ -984,11 +996,13 @@ bool Q2017TryReuseSharedGeometry(GpuObject& gpu) {
     std::copy(relative, relative + 16, gpu.q2017RelativeMatrix);
     gpu.vao = shared.vao;
     gpu.vbo = shared.vbo;
+    gpu.q236IndexBuffer=shared.q236IndexBuffer;
     gpu.q2017SharedGeometry = true;
     ++shared.refs;
     ++gQ2017SharedHits;
     gQ2017SharedAvoidedBytes +=
-        static_cast<uint64_t>(gpu.vertexCount) * 18u * sizeof(float);
+        static_cast<uint64_t>(gpu.q236UniqueVertices)*18u*sizeof(float)+
+        (gpu.q236Indexed?static_cast<uint64_t>(gpu.vertexCount)*sizeof(uint32_t):0u);
     return true;
 }
 
@@ -1007,15 +1021,19 @@ void Q2017PublishSharedGeometry(GpuObject& gpu) {
         Q2017SharedGeometryEntry& shared = existing->second;
         if (shared.modelPath == gpu.modelPath &&
             shared.shapeIndex == gpu.q2016ShapeIndex &&
-            shared.vertexCount == gpu.vertexCount) {
+            shared.vertexCount == gpu.vertexCount &&
+            shared.q236Indexed == gpu.q236Indexed &&
+            shared.q236UniqueVertices == gpu.q236UniqueVertices) {
             float relative[16]{};
             if (Q2016RelativeMatrix(
                     shared.ownerPlacementMatrix,
                     gpu.q2016PlacementMatrix,
                     relative)) {
                 glDeleteBuffers(1, &gpu.vbo);
+                if(gpu.q236IndexBuffer)glDeleteBuffers(1,&gpu.q236IndexBuffer);
                 glDeleteVertexArrays(1, &gpu.vao);
                 gpu.vbo = shared.vbo;
+                gpu.q236IndexBuffer=shared.q236IndexBuffer;
                 gpu.vao = shared.vao;
                 std::copy(relative, relative + 16,
                           gpu.q2017RelativeMatrix);
@@ -1031,6 +1049,9 @@ void Q2017PublishSharedGeometry(GpuObject& gpu) {
     Q2017SharedGeometryEntry shared;
     shared.vao = gpu.vao;
     shared.vbo = gpu.vbo;
+    shared.q236IndexBuffer=gpu.q236IndexBuffer;
+    shared.q236Indexed=gpu.q236Indexed;
+    shared.q236UniqueVertices=gpu.q236UniqueVertices;
     shared.vertexCount = gpu.vertexCount;
     shared.modelPath = gpu.modelPath;
     shared.shapeIndex = gpu.q2016ShapeIndex;
@@ -1056,12 +1077,14 @@ bool Q2017ReleaseSharedGeometry(GpuObject& gpu) {
         if (shared.refs > 0u) --shared.refs;
         if (shared.refs == 0u) {
             if (shared.vbo) glDeleteBuffers(1, &shared.vbo);
+            if (shared.q236IndexBuffer) glDeleteBuffers(1,&shared.q236IndexBuffer);
             if (shared.vao) glDeleteVertexArrays(1, &shared.vao);
             gQ2017SharedGeometry.erase(found);
         }
     }
     gpu.vbo = 0u;
     gpu.vao = 0u;
+    gpu.q236IndexBuffer=0u;
     gpu.q2017SharedGeometry = false;
     gpu.q2017SharedCandidate = false;
     gpu.q2017SharedMeshKey = 0u;
@@ -1071,6 +1094,7 @@ bool Q2017ReleaseSharedGeometry(GpuObject& gpu) {
 void Q2017ForceClearSharedGeometry() {
     for (auto& entry : gQ2017SharedGeometry) {
         if (entry.second.vbo) glDeleteBuffers(1, &entry.second.vbo);
+        if (entry.second.q236IndexBuffer)glDeleteBuffers(1,&entry.second.q236IndexBuffer);
         if (entry.second.vao) glDeleteVertexArrays(1, &entry.second.vao);
     }
     gQ2017SharedGeometry.clear();
@@ -2108,11 +2132,74 @@ bool ResolveDoorTeleportCachedQ1698(uint32_t refFormId,
     return out.valid;
 }
 
+// Q236: only authored, immutable STAT/SCOL/TREE can use indexed vertices.
+// Preserve original alpha/material/UV seams: every original NIF vertex stays
+// distinct. Leave dynamic and skinned/animated models on the proven path.
+bool Q236CanIndexStaticNif(const CpuObject& cpu){
+    const auto& t=cpu.placement.baseRecordType;
+    const size_t unique=cpu.positionsGame.size(),corners=cpu.mesh.indices.size();
+    if(!((t=="STAT"||t=="SCOL"||t=="TREE")&&!cpu.mesh.skinned&&
+        unique>0u&&corners%3u==0u&&corners>unique&&
+        (corners-unique)*18u>corners&&
+        unique<=static_cast<size_t>(std::numeric_limits<GLsizei>::max())&&
+        corners<=static_cast<size_t>(std::numeric_limits<GLsizei>::max())))return false;
+    for(uint32_t index:cpu.mesh.indices)if(index>=unique)return false;
+    return true;
+}
+void Q236PrepareIndexedStaticNif(CpuObject& cpu,float centerX,float centerY,float floorZ){
+    const size_t n=cpu.positionsGame.size();
+    constexpr size_t stride=18u;
+    std::vector<float> interleaved;
+    interleaved.reserve(n*stride);
+    std::vector<Vec3> positions;positions.reserve(n);
+    for(size_t i=0;i<n;++i){
+        const Vec3 pg=cpu.positionsGame[i];
+        const Vec3 p{(pg.x-centerX)/FO3_UNITS_PER_METRE,
+                     FLOOR_Y+(pg.z-floorZ)/FO3_UNITS_PER_METRE,
+                     SCENE_FORWARD-(pg.y-centerY)/FO3_UNITS_PER_METRE};
+        positions.push_back(p);
+        const Vec3 normal=GameDirectionToOpenXr(cpu.normalsGame[i]);
+        const Vec3 tangent=GameDirectionToOpenXr(cpu.tangentsGame[i]);
+        const Vec3 bitangent=GameDirectionToOpenXr(cpu.bitangentsGame[i]);
+        float r=1.f,g=1.f,b=1.f,a=1.f;
+        if(cpu.mesh.vertexColors.size()==n*4u){
+            r=cpu.mesh.vertexColors[i*4u];
+            g=cpu.mesh.vertexColors[i*4u+1u];
+            b=cpu.mesh.vertexColors[i*4u+2u];
+            a=cpu.mesh.vertexColors[i*4u+3u];
+        }
+        interleaved.insert(interleaved.end(),{
+            p.x,p.y,p.z,normal.x,normal.y,normal.z,
+            tangent.x,tangent.y,tangent.z,
+            bitangent.x,bitangent.y,bitangent.z,
+            cpu.mesh.texcoords[i*2u],cpu.mesh.texcoords[i*2u+1u],
+            r,g,b,a});
+    }
+    // Do not let unreferenced NIF points expand frustum/collision bounds:
+    // this must match the previous expanded-triangle bounding box exactly.
+    Vec3 lo{1e30f,1e30f,1e30f},hi{-1e30f,-1e30f,-1e30f};
+    for(uint32_t index:cpu.mesh.indices){
+        const Vec3 p=positions[index];
+        lo.x=std::min(lo.x,p.x);lo.y=std::min(lo.y,p.y);lo.z=std::min(lo.z,p.z);
+        hi.x=std::max(hi.x,p.x);hi.y=std::max(hi.y,p.y);hi.z=std::max(hi.z,p.z);
+    }
+    cpu.q1960ExpandedVertices=std::move(interleaved);
+    cpu.q1960ExpandedReady=true;
+    cpu.q236IndexedPrepared=true;
+    cpu.q1960MinX=lo.x;cpu.q1960MaxX=hi.x;
+    cpu.q1960MinY=lo.y;cpu.q1960MaxY=hi.y;
+    cpu.q1960MinZ=lo.z;cpu.q1960MaxZ=hi.z;
+}
 bool PrepareExpandedVertexStreamQ1960(
         CpuObject& cpu, float centerX, float centerY, float floorZ) {
     constexpr size_t FLOATS_PER_VERTEX = 18u;
     if (cpu.q1960ExpandedReady && !cpu.q1960ExpandedVertices.empty())
         return true;
+    if(Q236CanIndexStaticNif(cpu)){
+        Q236PrepareIndexedStaticNif(cpu,centerX,centerY,floorZ);
+        return true;
+    }
+    cpu.q236IndexedPrepared=false;
 
     const size_t vertexCount = cpu.positionsGame.size();
     std::vector<float> expanded;
@@ -2176,6 +2263,8 @@ bool UploadCpuObject(CpuObject& cpu, float centerX, float centerY, float floorZ,
 
     std::vector<float> expanded = std::move(cpu.q1960ExpandedVertices);
     cpu.q1960ExpandedReady = false;
+    const bool q236Indexed=cpu.q236IndexedPrepared;
+    cpu.q236IndexedPrepared=false;
     const size_t q1960ExpandedFloatCount = expanded.size();
     if (q1960ExpandedFloatCount == 0u) return false;
 
@@ -2500,8 +2589,10 @@ bool UploadCpuObject(CpuObject& cpu, float centerX, float centerY, float floorZ,
                  gpu.useVertexColor ? 1 : 0);
     }
 
-    gpu.vertexCount =
-        static_cast<GLsizei>(q1960ExpandedFloatCount / FLOATS_PER_VERTEX);
+    gpu.q236Indexed=q236Indexed;
+    gpu.q236UniqueVertices=static_cast<GLsizei>(q1960ExpandedFloatCount/FLOATS_PER_VERTEX);
+    // Preserve triangle-corner count semantics for all existing metrics.
+    gpu.vertexCount=q236Indexed?static_cast<GLsizei>(cpu.mesh.indices.size()):gpu.q236UniqueVertices;
     gpu.q2017SharedCandidate = Q2017CanShareGeometry(gpu);
     gpu.q2017SharedMeshKey = gpu.q2017SharedCandidate
         ? Q2017SharedMeshKey(gpu) : 0u;
@@ -2513,6 +2604,14 @@ bool UploadCpuObject(CpuObject& cpu, float centerX, float centerY, float floorZ,
         glBindVertexArray(gpu.vao);
         glGenBuffers(1, &gpu.vbo);
         glBindBuffer(GL_ARRAY_BUFFER, gpu.vbo);
+        // VAO holds EBO binding across the Q19 sliced vertex upload.
+        if(q236Indexed){
+            glGenBuffers(1,&gpu.q236IndexBuffer);
+            glBindBuffer(GL_ELEMENT_ARRAY_BUFFER,gpu.q236IndexBuffer);
+            glBufferData(GL_ELEMENT_ARRAY_BUFFER,
+                static_cast<GLsizeiptr>(cpu.mesh.indices.size()*sizeof(uint32_t)),
+                cpu.mesh.indices.data(),GL_STATIC_DRAW);
+        }
         const GLsizeiptr q1960VboBytes =
             static_cast<GLsizeiptr>(
                 q1960ExpandedFloatCount * sizeof(float));
@@ -2572,6 +2671,8 @@ bool UploadCpuObject(CpuObject& cpu, float centerX, float centerY, float floorZ,
     };
     q2016Mix(gpu.q2016ShapeIndex);
     q2016Mix(static_cast<uint64_t>(gpu.vertexCount));
+    q2016Mix(static_cast<uint64_t>(gpu.q236Indexed));
+    q2016Mix(static_cast<uint64_t>(gpu.q236UniqueVertices));
     q2016Mix(static_cast<uint64_t>(gpu.diffuse));
     q2016Mix(static_cast<uint64_t>(gpu.normal));
     q2016Mix(static_cast<uint64_t>(gpu.glow));
@@ -2769,7 +2870,8 @@ bool Q1050UpdateSunShadow() {
         glUniform1f(gShadowAlphaThresholdLocationQ1050,object.alphaThreshold);
         glBindTexture(GL_TEXTURE_2D,object.diffuse);
         glBindVertexArray(object.vao);
-        glDrawArrays(GL_TRIANGLES,0,object.vertexCount);
+        if(object.q236Indexed)glDrawElements(GL_TRIANGLES,object.vertexCount,GL_UNSIGNED_INT,nullptr);
+        else glDrawArrays(GL_TRIANGLES,0,object.vertexCount);
         ++staticCasters;
     }
     RenderFo3TerrainShadowQ1050(gLightMvpQ1050,gShadowProgramQ1050,gShadowMvpLocationQ1050,gShadowAlphaTestLocationQ1050);
@@ -3104,6 +3206,7 @@ void Q74DeleteGpuObjects(std::vector<GpuObject>& objects) {
         QActorDeleteSkin(object);
         if (Q2017ReleaseSharedGeometry(object)) continue;
         if (object.vbo) glDeleteBuffers(1, &object.vbo);
+        if (object.q236IndexBuffer) glDeleteBuffers(1,&object.q236IndexBuffer);
         if (object.vao) glDeleteVertexArrays(1, &object.vao);
         object.vbo = 0u;
         object.vao = 0u;
@@ -4516,6 +4619,7 @@ bool ProcessQ74TransitionRequest() {
                 // Preserve v215's cleanup; cached material textures and
                 // shared geometry are not independently owned by this failed part.
                 if (gpu.vbo) glDeleteBuffers(1, &gpu.vbo);
+                if (gpu.q236IndexBuffer) glDeleteBuffers(1,&gpu.q236IndexBuffer);
                 if (gpu.vao) glDeleteVertexArrays(1, &gpu.vao);
             }
             // Release transformed/expanded CPU buffers after their GPU upload.
@@ -5483,6 +5587,7 @@ bool ProcessQ74TransitionRequestExperimentalQ1800() {
                 work.replacement.push_back(std::move(gpu));
             } else {
                 if (gpu.vbo) glDeleteBuffers(1, &gpu.vbo);
+                if (gpu.q236IndexBuffer) glDeleteBuffers(1,&gpu.q236IndexBuffer);
                 if (gpu.vao) glDeleteVertexArrays(1, &gpu.vao);
             }
             ++uploadedThisSlice;
@@ -5681,6 +5786,7 @@ bool RebuildExteriorWindowQ1890(float selectionGameX, float selectionGameY,
             replacement.push_back(std::move(gpu));
         } else {
             if (gpu.vbo) glDeleteBuffers(1, &gpu.vbo);
+            if (gpu.q236IndexBuffer) glDeleteBuffers(1,&gpu.q236IndexBuffer);
             if (gpu.vao) glDeleteVertexArrays(1, &gpu.vao);
         }
     }
@@ -5844,6 +5950,10 @@ void Q1900DeleteGpuShape(GpuObject& object) {
     if (object.vbo) {
         glDeleteBuffers(1, &object.vbo);
         object.vbo = 0u;
+    }
+    if(object.q236IndexBuffer){
+        glDeleteBuffers(1,&object.q236IndexBuffer);
+        object.q236IndexBuffer=0u;
     }
     if (object.vao) {
         glDeleteVertexArrays(1, &object.vao);
@@ -7180,7 +7290,8 @@ void DrawSceneObject(const GpuObject& object, bool environmentPassQ2050 = false)
 
     if (gInstancedDrawActiveQ2016 &&
         gInstanceCountQ2017 > 0) {
-        glDrawArraysInstanced(
+        if(object.q236Indexed)glDrawElementsInstanced(GL_TRIANGLES,object.vertexCount,GL_UNSIGNED_INT,nullptr,gInstanceCountQ2017);
+        else glDrawArraysInstanced(
             GL_TRIANGLES, 0, object.vertexCount,
             gInstanceCountQ2017);
         for (GLuint q2016Column = 0u; q2016Column < 4u; ++q2016Column) {
@@ -7189,7 +7300,8 @@ void DrawSceneObject(const GpuObject& object, bool environmentPassQ2050 = false)
             glDisableVertexAttribArray(location);
         }
     } else {
-        glDrawArrays(GL_TRIANGLES, 0, object.vertexCount);
+        if(object.q236Indexed)glDrawElements(GL_TRIANGLES,object.vertexCount,GL_UNSIGNED_INT,nullptr);
+        else glDrawArrays(GL_TRIANGLES, 0, object.vertexCount);
     }
 
 
@@ -7661,6 +7773,7 @@ int32_t Q1990FloorToLevel4Block(int32_t cell) {
 void Q1990DeleteLodGpu(GpuObject& object) {
     if (Q2017ReleaseSharedGeometry(object)) return;
     if (object.vbo) glDeleteBuffers(1, &object.vbo);
+    if (object.q236IndexBuffer) glDeleteBuffers(1,&object.q236IndexBuffer);
     if (object.vao) glDeleteVertexArrays(1, &object.vao);
     object.vbo = 0u;
     object.vao = 0u;
@@ -11551,6 +11664,7 @@ void Q210DeletePlayerBody(bool equipmentChange=false) {
         QActorDeleteSkin(object);
         if (Q2017ReleaseSharedGeometry(object)) continue;
         if (object.vbo) glDeleteBuffers(1, &object.vbo);
+        if (object.q236IndexBuffer) glDeleteBuffers(1,&object.q236IndexBuffer);
         if (object.vao) glDeleteVertexArrays(1, &object.vao);
         object.vbo = 0u;
         object.vao = 0u;

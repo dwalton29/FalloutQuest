@@ -15,7 +15,7 @@ s=json.loads(p.read_text()) if p.exists() else {}
 a=sys.argv[1:]
 if a==['get-state']:print('device')
 elif a[:3]==['shell','dumpsys','package']:
- print('versionName='+os.environ.get('FAKE_ADB_VERSION','0.93.0-reuse-water-depth-O2'))
+ print('versionName='+os.environ.get('FAKE_ADB_VERSION','0.95.0-indexed-static-nif-O2'))
 elif a[:3]==['shell','setprop','debug.falloutquest.perf_capture']:
  if a[3]!='0':s={'token':a[3]}
  else:s['stopped']=True
@@ -45,13 +45,13 @@ class CaptureScript(unittest.TestCase):
     def test_finds_adb_next_to_script_and_exports_new_matching_session(self):
         r=self.run_script();self.assertEqual(r.returncode,0,r.stdout+r.stderr)
         token=json.loads((self.directory/'state.json').read_text())['token']
-        csv=self.directory/'captures'/f'megaton-v234-{token}.csv'
-        log=self.directory/'captures'/f'megaton-v234-{token}-logcat.txt'
+        csv=self.directory/'captures'/f'megaton-v236-{token}.csv'
+        log=self.directory/'captures'/f'megaton-v236-{token}-logcat.txt'
         self.assertIn('session='+token,csv.read_text())
         self.assertIn('CAPTURE_END id='+token,log.read_text())
     def test_rejects_debug_before_starting_recording(self):
-        self.env['FAKE_ADB_VERSION']='0.93.0-reuse-water-depth'
+        self.env['FAKE_ADB_VERSION']='0.95.0-indexed-static-nif'
         r=self.run_script();self.assertNotEqual(r.returncode,0)
-        self.assertIn('Install the v234 O2 APK',r.stdout+r.stderr)
+        self.assertIn('Install the v236 O2 APK',r.stdout+r.stderr)
         self.assertFalse((self.directory/'state.json').exists())
 if __name__=='__main__':unittest.main()

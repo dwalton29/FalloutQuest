@@ -1,0 +1,14 @@
+# v236 — Original static NIF indexed geometry at full Quest quality
+
+## Starting point
+v235 front-to-back ordering was counterproductive in hardware A/B. Commit f62b4ff restores the v234 working renderer and keeps its proven depth resolve reduction. v236 builds on that rollback, with no v235 sorting code.
+
+## Renderer implementation
+The Q19 CPU mesh worker previously unpacked all NIF triangle corners into duplicated 18-float interleaved vertices. The source meshes contain original indexed positions, normals, tangents, bitangents, UVs and colour, and their original triangle indices. For authored, immutable STAT/SCOL/TREE shapes only, when indices form complete triangles, are valid uint32 offsets and indexing genuinely saves total vertex-plus-index bytes, prepare each original NIF vertex ONCE, preserving its full attribute tuple. Upload a GL_ELEMENT_ARRAY_BUFFER with the original uint32 index sequence, attached to the existing VAO. This applies in Megaton/interior boot and exterior streaming, including Q19 later vertex-buffer chunk upload.
+
+The existing GpuObject.vertexCount remains the triangle-index/draw-element count even on indexed meshes, so source triangle counts, draw visibility and frame metrics are unchanged. q236UniqueVertices stores actual compact uploaded vertex count. Primary static single draws use glDrawElements; original shared-instance batches use glDrawElementsInstanced; sun shadows also use indices. All non-indexed and skinned meshes keep the original glDrawArrays/glDrawArraysInstanced fallback. Source material flags, shaders, UV seams, original normals/tangents, world geometry, shadow casting and every triangle remain the same. Frustum bounds consider only source vertices used by indices, matching the prior expansion path.
+
+Shared STAT/SCOL/TREE VAO/VBO cache now owns/reuses/disposes its element buffers with the last reference; scene, exterior, resident, optional-failure and LOD GPU deletion paths also release owned EBOs. The existing native 2x MSAA, FP16 HDR, water/refraction, reflections and 1680x1760 per-eye pixels are not touched. This does not introduce automatic LOD or lower draw distance.
+
+## Measurement / correctness
+Download v236 O2 Profile after CI succeeds. Compare in equal Megaton and settled Wasteland scenes with v234 O2; DO NOT leave 70% render_scale or fast_material enabled. Keep draw/triangle/camera workload matched. Verify static models, normals/specular, UV seams, shadows, foliage/TREEs, streaming/unloading/residency and both eyes. Compare GPU and CPU frame time median and tails, GPU util, memory and boot/stream transition latency. Important: existing submitted-vertex counters represent triangle corners, so they do not automatically decrease when indexed processing reduces UNIQUE fetches. A GPU profiler/post-transform vertex metrics or an indexed upload counter is needed to prove vertex-cache savings. Performance gain is not yet established by headset testing.

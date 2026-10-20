@@ -21,11 +21,11 @@ function Invoke-Adb {
 $null = Invoke-Adb -Arguments @("get-state")
 $package = Invoke-Adb -Arguments @("shell", "dumpsys", "package", "com.falloutquest.app")
 $packageText = $package -join "`n"
-if ($packageText -notmatch 'versionName=0\.93\.0-reuse-water-depth') {
-    throw "Install v234 before capturing. The currently installed package is not v234."
+if ($packageText -notmatch 'versionName=0\.95\.0-indexed-static-nif') {
+    throw "Install v236 before capturing. The currently installed package is not v236."
 }
-if (!$AllowDebug -and $packageText -notmatch 'versionName=0\.93\.0-reuse-water-depth-O2') {
-    throw "Install the v234 O2 APK, or explicitly pass -AllowDebug for an unoptimised comparison."
+if (!$AllowDebug -and $packageText -notmatch 'versionName=0\.95\.0-indexed-static-nif-O2') {
+    throw "Install the v236 O2 APK, or explicitly pass -AllowDebug for an unoptimised comparison."
 }
 $token = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds().ToString()
 $null = Invoke-Adb -Arguments @("shell", "setprop", "debug.falloutquest.perf_capture", $token)
@@ -58,7 +58,7 @@ if (!$AllowDebug -and $header -notmatch '\bnative=profile-O2\b') {
     throw "The native library is not the O2 profile build. Download rejected."
 }
 $null = New-Item -ItemType Directory -Force -Path $OutputDirectory
-$prefix = Join-Path $OutputDirectory "megaton-v234-$token"
+$prefix = Join-Path $OutputDirectory "megaton-v236-$token"
 $utf8 = New-Object System.Text.UTF8Encoding($false)
 [System.IO.File]::WriteAllText("$prefix.csv", $csv + "`n", $utf8)
 $log = (Invoke-Adb -Arguments @("logcat", "-d")) -join "`n"
