@@ -51,6 +51,9 @@ jobs:
         run: |
           g++ -std=c++17 -Wall -Wextra -Werror -Itests/render/mock -Iapp/src/main/cpp tests/render/gl_state_cache_tests.cpp -o /tmp/gl-state-tests
           /tmp/gl-state-tests
+          g++ -O2 -std=c++17 -Wall -Wextra -Werror -Iapp/src/main/cpp tests/render/geometry_optimisation_tests.cpp -o /tmp/geometry-optimisation-tests
+          /tmp/geometry-optimisation-tests
+          python3 tests/render/test_terrain_upload.py
           g++ -std=c++17 -Wall -Wextra -Werror -Itests/pipboy/mock -Itests/render/mock -Itests/nif -Iapp/src/main/cpp -Iapp/src/main/cpp/data tests/render/notification_render_tests.cpp -o /tmp/notification-render-tests
           /tmp/notification-render-tests
           python3 tests/render/test_notification_layering.py

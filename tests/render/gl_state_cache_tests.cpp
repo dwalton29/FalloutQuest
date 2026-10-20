@@ -5,6 +5,12 @@
 
 int main() {
     fqgl::Reset(); driverCalls.clear();
+    // Indexed and array submissions must have identical triangle-corner
+    // telemetry, including instancing; otherwise native LOD is undercounted.
+    glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, nullptr);
+    glDrawElementsInstanced(GL_TRIANGLES, 6, GL_UNSIGNED_INT, nullptr, 4);
+    assert(fqgl::counters.draws == 2 && fqgl::counters.vertices == 30);
+    assert(driverCalls["glDrawElements"] == 1 && driverCalls["glDrawElementsInstanced"] == 1);
     for(int i=0;i<100;++i) {
         glUseProgram(7);glBindVertexArray(9);glBindBuffer(GL_ARRAY_BUFFER,11);
         fqgl::BindTextureUnit(GL_TEXTURE0,GL_TEXTURE_2D,21);

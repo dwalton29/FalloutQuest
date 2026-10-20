@@ -40,6 +40,7 @@ struct Q2000CpuCell {
     size_t baseTriangles = 0u;
     size_t alphaTriangles = 0u;
     size_t alphaLayers = 0u;
+    bool coveragePrepared = false;
 };
 
 struct Q2000WorkerTask {
@@ -453,6 +454,9 @@ bool Q2000BuildCpuCell(
             return a.layerOrder < b.layerOrder;
         return false;
     });
+    // CPU worker owns this data. Keep all 12 attributes at seams and retain
+    // draw-element counts; the GPU upload remains budgeted and cancellable.
+    for (Q711CpuBatch& batch : out.batches) Q237PrepareTerrainIndices(batch);
     return true;
 }
 
@@ -767,7 +771,7 @@ bool Q2000AdvanceOneBatch(
         GLuint vbo = 0u;
         glGenBuffers(1, &vbo);
         glBindBuffer(GL_ARRAY_BUFFER, vbo);
-        const size_t bytes = cpu.vertices.size() * sizeof(float);
+        const size_t bytes = cpu.vertices.size() * sizeof(float) + cpu.indices.size() * sizeof(uint32_t);
         glBufferData(GL_ARRAY_BUFFER,
                      static_cast<GLsizeiptr>(bytes),
                      nullptr, GL_STATIC_DRAW);
@@ -791,16 +795,22 @@ bool Q2000AdvanceOneBatch(
             ? Q2000_GPU_BYTES_PER_UPDATE - bytesThisUpdate : 0u;
     const size_t remaining =
         gQ2000VboUpload.totalBytes - gQ2000VboUpload.offsetBytes;
+    const size_t vertexBytes = cpu.vertices.size() * sizeof(float);
+    const bool uploadingIndices = gQ2000VboUpload.offsetBytes >= vertexBytes;
+    const size_t sectionRemaining = uploadingIndices ? remaining : vertexBytes - gQ2000VboUpload.offsetBytes;
     const size_t chunk =
-        std::min(remaining, std::max<size_t>(1u, available));
+        std::min(sectionRemaining, std::max<size_t>(1u, available));
+    const uint8_t* section = uploadingIndices
+        ? reinterpret_cast<const uint8_t*>(cpu.indices.data())
+        : reinterpret_cast<const uint8_t*>(cpu.vertices.data());
+    const size_t sectionOffset = gQ2000VboUpload.offsetBytes - (uploadingIndices ? vertexBytes : 0u);
     const auto stepStarted = std::chrono::steady_clock::now();
     glBindBuffer(GL_ARRAY_BUFFER, gQ2000VboUpload.vbo);
     glBufferSubData(
         GL_ARRAY_BUFFER,
         static_cast<GLintptr>(gQ2000VboUpload.offsetBytes),
         static_cast<GLsizeiptr>(chunk),
-        reinterpret_cast<const uint8_t*>(cpu.vertices.data()) +
-            gQ2000VboUpload.offsetBytes);
+        section + sectionOffset);
     const uint64_t stepUs = Q2000ElapsedUs(stepStarted);
     gQ2000VboUpload.maxStepUs =
         std::max(gQ2000VboUpload.maxStepUs, stepUs);
@@ -837,6 +847,10 @@ bool Q2000AdvanceOneBatch(
     glGenVertexArrays(1, &gpu.vao);
     glBindVertexArray(gpu.vao);
     glBindBuffer(GL_ARRAY_BUFFER, gpu.vbo);
+    if (!cpu.indices.empty()) {
+        gpu.indexOffset = vertexBytes;
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, gpu.vbo);
+    }
     constexpr GLsizei stride = static_cast<GLsizei>(12 * sizeof(float));
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, stride, nullptr);
     glEnableVertexAttribArray(0);
@@ -855,7 +869,7 @@ bool Q2000AdvanceOneBatch(
     glBindBuffer(GL_ARRAY_BUFFER, 0);
     glBindVertexArray(0);
     gpu.vertexCount =
-        static_cast<GLsizei>(cpu.vertices.size() / 12u);
+        static_cast<GLsizei>(cpu.indices.empty() ? cpu.vertices.size() / 12u : cpu.indices.size());
     gQ2000CurrentCellBatches.push_back(std::move(gpu));
     const uint64_t finalizeUs = Q2000ElapsedUs(finalizeStarted);
     gQ2000TargetMaxGpuStepUs =
@@ -974,11 +988,33 @@ void Q2000AdvanceGpu() {
         }
 
         while (gQ2000BatchCursor < cell.batches.size()) {
+            if (!cell.coveragePrepared) {
+                if (!fqloading::Allow()) return;
+                fqloading::WorkScope operation("terrain-paint-coverage");
+                const auto started = std::chrono::steady_clock::now();
+                const size_t covered = fo3terrain::RemoveCoveredPaint(cell.batches, [](const Q711CpuBatch& batch) {
+                    const auto texture = q1910TerrainTextureCache.find(batch.texturePath);
+                    return texture != q1910TerrainTextureCache.end() && texture->second != 0u;
+                });
+                cell.coveragePrepared = true;
+                const uint64_t elapsed = Q2000ElapsedUs(started);
+                gQ2000TargetMaxGpuStepUs = std::max(gQ2000TargetMaxGpuStepUs, elapsed);
+                Q76B_LOGI("Q237 TERRAIN COVERAGE: cell=(%d,%d) coveredPaintTriangles=%zu cpuUs=%llu baseDepth=retained",
+                          cell.gridX, cell.gridY, covered, static_cast<unsigned long long>(elapsed));
+                if (Q2000ElapsedUs(updateStarted) >= Q2000_GPU_BUDGET_US) {
+                    gQ2000TargetGpuUs += Q2000ElapsedUs(updateStarted);
+                    return;
+                }
+            }
             Q711CpuBatch& batch = cell.batches[gQ2000BatchCursor];
             if(!fqloading::Allow())return;
             fqloading::WorkScope operation("terrain-geometry-step");
             const bool complete =
                 Q2000AdvanceOneBatch(cell, batch, bytesThisUpdate);
+            // A completed upload already published its batch and reset the
+            // staging handle. Advance before yielding, or the next update
+            // uploads/publishes that same batch a second time.
+            if (complete) ++gQ2000BatchCursor;
             if (bytesThisUpdate >= Q2000_GPU_BYTES_PER_UPDATE ||
                 Q2000ElapsedUs(updateStarted) >= Q2000_GPU_BUDGET_US) {
                 gQ2000TargetGpuUs += Q2000ElapsedUs(updateStarted);
@@ -988,7 +1024,6 @@ void Q2000AdvanceGpu() {
                 // Continue this VBO in the same update while there is headroom.
                 continue;
             }
-            ++gQ2000BatchCursor;
         }
 
         Q2000PublishCurrentCell(cell);

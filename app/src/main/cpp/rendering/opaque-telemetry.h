@@ -48,6 +48,7 @@ struct NativeWork {
     uint64_t level32=0, level16=0, level8=0, level4Terrain=0, level4Objects=0, high=0;
     uint64_t resident=0, considered=0, windowRejected=0, refinementRejected=0,
         frustumRejectedBlocks=0, frustumRejectedShapes=0, eligibleShapes=0;
+    uint64_t indexedDraws=0, indexedCorners=0, uniqueVertices=0, legacyCorners=0;
 };
 inline NativeWork nativeWork;
 inline bool collectingNative=false, nativeObjectMaterial=false;

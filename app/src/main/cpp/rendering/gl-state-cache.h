@@ -207,6 +207,8 @@ inline void Uniform4fv(GLint l,GLsizei n,const GLfloat* v) { if(UploadArray(l,5,
 inline void UniformMatrix4fv(GLint l,GLsizei n,GLboolean t,const GLfloat* v) { if(UploadArray(l,6+t,v,n*16*sizeof(float),n)) glUniformMatrix4fv(l,n,t,v); }
 inline void DrawArrays(GLenum m,GLint first,GLsizei n) { ++counters.draws;counters.vertices+=n;glDrawArrays(m,first,n); }
 inline void DrawArraysInstanced(GLenum m,GLint first,GLsizei n,GLsizei count) { ++counters.draws;counters.vertices+=uint64_t(n)*count;glDrawArraysInstanced(m,first,n,count); }
+inline void DrawElements(GLenum m,GLsizei n,GLenum type,const void* indices) { ++counters.draws;counters.vertices+=n;glDrawElements(m,n,type,indices); }
+inline void DrawElementsInstanced(GLenum m,GLsizei n,GLenum type,const void* indices,GLsizei count) { ++counters.draws;counters.vertices+=uint64_t(n)*count;glDrawElementsInstanced(m,n,type,indices,count); }
 inline void DeleteProgram(GLuint id) {
     for(auto& p:programs) if(p.program==id) p=ProgramUniforms{};
     glDeleteProgram(id); // A current deleted program remains current until unbound.
@@ -263,6 +265,8 @@ inline void DeleteVertexArrays(GLsizei n,const GLuint* ids) {
 #define glUniformMatrix4fv fqgl::UniformMatrix4fv
 #define glDrawArrays fqgl::DrawArrays
 #define glDrawArraysInstanced fqgl::DrawArraysInstanced
+#define glDrawElements fqgl::DrawElements
+#define glDrawElementsInstanced fqgl::DrawElementsInstanced
 #define glDeleteProgram fqgl::DeleteProgram
 #define glDeleteTextures fqgl::DeleteTextures
 #define glDeleteBuffers fqgl::DeleteBuffers

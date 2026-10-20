@@ -3,6 +3,8 @@ float GetFo3FogPower();
 
 #include "rendering/terrain/fo3-terrain.h"
 #include "rendering/terrain/fo3-terrain-bounds.h"
+#include "rendering/exact-indexed-mesh.h"
+#include "rendering/terrain/terrain-paint-coverage.h"
 #include "rendering/environment/fo3-environment.h"
 #include "rendering/environment/fo3-weather-byte-staging.h"
 #include "rendering/environment/fo3-visual-depth.h"
@@ -56,6 +58,9 @@ struct Q711TerrainBatch : fo3terrain::Bounds {
     GLuint texture = 0;
     GLuint normalTexture = 0;
     GLsizei vertexCount = 0;
+    // Vertices and uint32 indices share one GL buffer and one lifetime.
+    // Zero means the original array path; indexed data starts after vertices.
+    size_t indexOffset = 0;
     int layerOrder = -1;
     bool alphaLayer = false;
     bool realTexture = false;
@@ -72,9 +77,21 @@ struct Q711CpuBatch {
     std::string normalPath;
     bool specularEnabled = false;
     std::vector<float> vertices;
+    std::vector<uint32_t> indices;
     int layerOrder = -1;
     bool alphaLayer = false;
 };
+
+void Q237DrawTerrainBatch(const Q711TerrainBatch& batch) {
+    if (batch.indexOffset)
+        glDrawElements(GL_TRIANGLES, batch.vertexCount, GL_UNSIGNED_INT,
+                       reinterpret_cast<const void*>(batch.indexOffset));
+    else glDrawArrays(GL_TRIANGLES, 0, batch.vertexCount);
+}
+
+void Q237PrepareTerrainIndices(Q711CpuBatch& batch) {
+    fqmesh::IndexExact<12>(batch.vertices, batch.indices);
+}
 
 GLuint q76bProgram = 0;
 GLint q76bMvpLocation = -1;
@@ -1018,7 +1035,9 @@ bool InitializeFo3TerrainRenderQ76(uint32_t worldspaceFormId,
     size_t q1060NormalUploads = 0u;
     size_t q1810NormalCacheHits = 0u;
     size_t q1060NormalMisses = 0u;
-    for (Q711CpuBatch& cpu : cpuBatches) {
+    std::vector<std::pair<size_t, Q711TerrainBatch>> q237Materials;
+    for (size_t cpuIndex = 0; cpuIndex < cpuBatches.size(); ++cpuIndex) {
+        Q711CpuBatch& cpu = cpuBatches[cpuIndex];
         if (cpu.vertices.empty()) continue;
         Q711TerrainBatch gpu;
         gpu.gridX = cpu.gridX;
@@ -1092,13 +1111,35 @@ bool InitializeFo3TerrainRenderQ76(uint32_t worldspaceFormId,
         if (gpu.realTexture) ++q711RealTextureBatches;
         if (gpu.alphaLayer) ++q718AlphaBatches;
 
+        q237Materials.emplace_back(cpuIndex, std::move(gpu));
+    }
+    const size_t q237Covered = fo3terrain::RemoveCoveredPaint(cpuBatches, [&](const Q711CpuBatch& batch) {
+        const auto texture = uploadedByPath.find(batch.texturePath);
+        return texture != uploadedByPath.end() && texture->second != 0u;
+    });
+    size_t q237Corners = 0u, q237Unique = 0u, q237IndexedBatches = 0u;
+    for (auto& material : q237Materials) {
+        Q711CpuBatch& cpu = cpuBatches[material.first];
+        if (cpu.vertices.empty()) continue;
+        Q711TerrainBatch& gpu = material.second;
+
         glGenVertexArrays(1, &gpu.vao);
         glBindVertexArray(gpu.vao);
         glGenBuffers(1, &gpu.vbo);
         glBindBuffer(GL_ARRAY_BUFFER, gpu.vbo);
+        Q237PrepareTerrainIndices(cpu);
+        const size_t vertexBytes = cpu.vertices.size() * sizeof(float);
+        const size_t indexBytes = cpu.indices.size() * sizeof(uint32_t);
         glBufferData(GL_ARRAY_BUFFER,
-                     static_cast<GLsizeiptr>(cpu.vertices.size() * sizeof(float)),
-                     cpu.vertices.data(), GL_STATIC_DRAW);
+                     static_cast<GLsizeiptr>(vertexBytes + indexBytes),
+                     nullptr, GL_STATIC_DRAW);
+        glBufferSubData(GL_ARRAY_BUFFER, 0, static_cast<GLsizeiptr>(vertexBytes), cpu.vertices.data());
+        if (indexBytes) {
+            gpu.indexOffset = vertexBytes;
+            glBufferSubData(GL_ARRAY_BUFFER, static_cast<GLintptr>(vertexBytes),
+                            static_cast<GLsizeiptr>(indexBytes), cpu.indices.data());
+            glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, gpu.vbo);
+        }
         constexpr GLsizei stride = static_cast<GLsizei>(12 * sizeof(float));
         glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, stride, nullptr);
         glEnableVertexAttribArray(0);
@@ -1117,12 +1158,17 @@ bool InitializeFo3TerrainRenderQ76(uint32_t worldspaceFormId,
         glBindBuffer(GL_ARRAY_BUFFER, 0);
         glBindVertexArray(0);
 
-        gpu.vertexCount = static_cast<GLsizei>(cpu.vertices.size() / 12u);
+        gpu.vertexCount = static_cast<GLsizei>(indexBytes ? cpu.indices.size() : cpu.vertices.size() / 12u);
+        q237Corners += static_cast<size_t>(gpu.vertexCount);
+        q237Unique += cpu.vertices.size() / 12u;
+        q237IndexedBatches += indexBytes != 0u;
         if (gpu.alphaLayer) alphaVertices += static_cast<size_t>(gpu.vertexCount);
         else baseVertices += static_cast<size_t>(gpu.vertexCount);
         q711TerrainBatches.push_back(std::move(gpu));
         Q229TouchTerrainBatches();
     }
+    Q76B_LOGI("Q237 TERRAIN INDEX: path=cold indexedBatches=%zu drawCorners=%zu uniqueVertices=%zu coveredPaintTriangles=%zu baseDepth=retained",
+              q237IndexedBatches, q237Corners, q237Unique, q237Covered);
 
     q2220Mark("gpu-textures-and-geometry",q711TerrainBatches.size());
     // All decoded pixels are now in GL-owned resources. Drop the temporary CPU
@@ -1180,7 +1226,7 @@ void RenderFo3TerrainShadowQ1050(const float* lightMvp,
     for (const Q711TerrainBatch& batch : q711TerrainBatches) {
         if (batch.alphaLayer || !batch.vao || batch.vertexCount <= 0) continue;
         glBindVertexArray(batch.vao);
-        glDrawArrays(GL_TRIANGLES, 0, batch.vertexCount);
+        Q237DrawTerrainBatch(batch);
     }
 }
 
@@ -1364,7 +1410,7 @@ void RenderFo3TerrainQ76(const float* mvp) {
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, batch.realTexture ? batch.texture : 0u);
         glBindVertexArray(batch.vao);
-        glDrawArrays(GL_TRIANGLES, 0, batch.vertexCount);
+        Q237DrawTerrainBatch(batch);
     }
 
     // Painted ATXT/VTXT layers lie exactly on the base LAND mesh. LEQUAL lets
@@ -1391,7 +1437,7 @@ void RenderFo3TerrainQ76(const float* mvp) {
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, batch.texture);
         glBindVertexArray(batch.vao);
-        glDrawArrays(GL_TRIANGLES, 0, batch.vertexCount);
+        Q237DrawTerrainBatch(batch);
     }
 
     glDepthMask(previousDepthMask);

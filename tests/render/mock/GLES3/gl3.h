@@ -50,6 +50,7 @@ inline constexpr GLenum GL_SRC_ALPHA=34;
 inline constexpr GLenum GL_ONE_MINUS_SRC_ALPHA=35;
 inline constexpr GLenum GL_TRIANGLES=36;
 inline constexpr GLenum GL_ELEMENT_ARRAY_BUFFER=37;
+inline constexpr GLenum GL_UNSIGNED_INT=0x1405;
 inline constexpr GLenum GL_EXTENSIONS=38;
 template<class... T> inline void glEnable(T...) { ++driverCalls["glEnable"]; }
 template<class... T> inline void glDisable(T...) { ++driverCalls["glDisable"]; }
@@ -78,6 +79,8 @@ template<class... T> inline void glUniform4fv(T...) { ++driverCalls["glUniform4f
 template<class... T> inline void glUniformMatrix4fv(T...) { ++driverCalls["glUniformMatrix4fv"]; }
 template<class... T> inline void glDrawArrays(T...) { ++driverCalls["glDrawArrays"]; }
 template<class... T> inline void glDrawArraysInstanced(T...) { ++driverCalls["glDrawArraysInstanced"]; }
+template<class... T> inline void glDrawElements(T...) { ++driverCalls["glDrawElements"]; }
+template<class... T> inline void glDrawElementsInstanced(T...) { ++driverCalls["glDrawElementsInstanced"]; }
 template<class... T> inline void glDeleteProgram(T...) { ++driverCalls["glDeleteProgram"]; }
 template<class... T> inline void glDeleteTextures(T...) { ++driverCalls["glDeleteTextures"]; }
 template<class... T> inline void glDeleteBuffers(T...) { ++driverCalls["glDeleteBuffers"]; }

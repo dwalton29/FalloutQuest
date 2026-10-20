@@ -405,6 +405,9 @@ struct CpuObject {
     std::vector<float> q1960ExpandedVertices;
     bool q1960ExpandedReady = false;
     bool q236IndexedPrepared = false;
+    // Explicit loader provenance, not a fabricated ESM record type. Native
+    // terrain/object LOD is immutable too, including Level8/16/32 and .High.
+    bool q237ImmutableNativeLod = false;
     float q1960MinX = 0.0f, q1960MaxX = 0.0f;
     float q1960MinY = 0.0f, q1960MaxY = 0.0f;
     float q1960MinZ = 0.0f, q1960MaxZ = 0.0f;
@@ -2132,13 +2135,14 @@ bool ResolveDoorTeleportCachedQ1698(uint32_t refFormId,
     return out.valid;
 }
 
-// Q236: only authored, immutable STAT/SCOL/TREE can use indexed vertices.
+// Q236/Q237: authored, immutable STAT/SCOL/TREE and explicit native LOD
+// loader output can use indexed vertices.
 // Preserve original alpha/material/UV seams: every original NIF vertex stays
 // distinct. Leave dynamic and skinned/animated models on the proven path.
 bool Q236CanIndexStaticNif(const CpuObject& cpu){
     const auto& t=cpu.placement.baseRecordType;
     const size_t unique=cpu.positionsGame.size(),corners=cpu.mesh.indices.size();
-    if(!((t=="STAT"||t=="SCOL"||t=="TREE")&&!cpu.mesh.skinned&&
+    if(!((t=="STAT"||t=="SCOL"||t=="TREE"||cpu.q237ImmutableNativeLod)&&!cpu.mesh.skinned&&
         unique>0u&&corners%3u==0u&&corners>unique&&
         (corners-unique)*18u>corners&&
         unique<=static_cast<size_t>(std::numeric_limits<GLsizei>::max())&&
@@ -7821,6 +7825,7 @@ bool Q1990UploadNativeLodNif(const std::string& path,
             continue;
         }
         CpuObject cpu;
+        cpu.q237ImmutableNativeLod = true;
         cpu.placement.refFormId = 0u;
         cpu.placement.baseFormId = 0u;
         cpu.placement.scale = 1.0f;
@@ -8363,6 +8368,7 @@ bool Q1970AppendLodNifCpuQ19(
         }
 
         CpuObject cpu;
+        cpu.q237ImmutableNativeLod = true;
         cpu.placement.refFormId = 0u;
         cpu.placement.baseFormId = 0u;
         cpu.placement.scale = 1.0f;
@@ -9048,7 +9054,14 @@ void Q1990RenderNativeLod(bool alphaPass) {
         if (profile) ++work.eligibleShapes;
         DrawSceneObject(object);
         const bool drawn = fqgl::counters.draws != before;
-        if (profile && drawn) ++tier;
+        if (profile && drawn) {
+            ++tier;
+            if (object.q236Indexed) {
+                ++work.indexedDraws;
+                work.indexedCorners += object.vertexCount;
+                work.uniqueVertices += object.q236UniqueVertices;
+            } else work.legacyCorners += object.vertexCount;
+        }
         return drawn;
     };
     auto finishBlock = [&](uint64_t eligible, uint64_t rejected) {
@@ -13286,6 +13299,10 @@ void RenderScene(const float* mvp) {
         const auto& gpu=fqopaque::timer.eyeGpu[fqopaque::eye];
         const auto& lod=fqopaque::nativeWork;
         const auto& detail=fqopaque::detailedWork;
+        Q6H_LOGI("Q237 NATIVE INDEX: eye=%u indexedDraws=%llu indexedCorners=%llu uniqueVertices=%llu legacyCorners=%llu source=original-NIF-indices",
+            fqopaque::eye, (unsigned long long)lod.indexedDraws,
+            (unsigned long long)lod.indexedCorners, (unsigned long long)lod.uniqueVertices,
+            (unsigned long long)lod.legacyCorners);
         Q6H_LOGI("OPAQUE BREAKDOWN frame=%llu eye=%u nativeLodUs=%.1f detailedWorldUs=%.1f npcUs=%.1f playerUs=%.1f totalUs=%llu nativeLodCpuUs=%.1f nativeLodGpuUs=%.1f nativeGpuSamples=%u detailedCpuUs=%.1f detailedGpuUs=%.1f detailedGpuSamples=%u gpuSupported=%d gpuDisjoint=%llu gpuDropped=%llu gpuWindow=delayed-rolling-per-eye cpuWindow=current-eye",
             (unsigned long long)gStereoFrame,fqopaque::eye,
             p[0].lastCpu,p[1].lastCpu,p[2].lastCpu,p[3].lastCpu,(unsigned long long)q2017OpaqueUs,
