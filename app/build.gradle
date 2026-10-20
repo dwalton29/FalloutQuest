@@ -22,8 +22,8 @@ android {
         applicationId 'com.falloutquest.app'
         minSdk 29
         targetSdk 35
-        versionCode 235
-        versionName '0.94.0-opaque-earlyz-order'
+        versionCode 234
+        versionName '0.93.0-reuse-water-depth'
 
         ndk {
             abiFilters 'arm64-v8a'

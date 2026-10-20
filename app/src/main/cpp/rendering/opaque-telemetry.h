@@ -14,7 +14,6 @@ inline double Micros(Clock::time_point start) {
 }
 struct Diagnostics {
     bool fastMaterial=false, lodRadius20=false, lodMinimal=false, lodClipBypass=false;
-    bool frontToBack=true;
     float scale=1.0f;
     Diagnostics() {
 #ifndef NDEBUG
@@ -27,10 +26,6 @@ struct Diagnostics {
         lodClipBypass=std::atoi(value)==1;
         __system_property_get("debug.falloutquest.fast_material",value);
         fastMaterial=std::atoi(value)==1;
-        value[0]=0;
-        __system_property_get("debug.falloutquest.opaque_front_to_back",value);
-        // v235 A/B opt out on restart only. Production defaults to enabled.
-        frontToBack=value[0]!='0';
         __system_property_get("debug.falloutquest.render_scale",value);
         // Explicit opt-in 0.7 diagnostic; default and production remain 1.0.
         if(std::atof(value)>0.69 && std::atof(value)<0.71) scale=0.7f;

@@ -56,9 +56,6 @@ jobs:
           python3 tests/render/test_notification_layering.py
           g++ -std=c++17 -Wall -Wextra -Werror -Itests/render/mock -Iapp/src/main/cpp tests/render/opaque_timer_tests.cpp -o /tmp/opaque-timer-tests
           /tmp/opaque-timer-tests
-          g++ -O2 -std=c++17 -Wall -Wextra -Werror -Iapp/src/main/cpp tests/render/opaque_front_to_back_tests.cpp -o /tmp/opaque-front-to-back-tests
-          /tmp/opaque-front-to-back-tests
-          python3 tests/render/test_opaque_order_source.py
           g++ -std=c++17 -Wall -Wextra -Werror -Itests/render/mock -Iapp/src/main/cpp tests/render/gpu_timestamp_tests.cpp -o /tmp/gpu-timestamp-tests
           /tmp/gpu-timestamp-tests
           python3 tests/render/test_shoulder_inventory_source.py
