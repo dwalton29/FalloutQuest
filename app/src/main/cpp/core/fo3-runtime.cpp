@@ -12876,6 +12876,12 @@ void Q230RenderHealthHud(const float* mvp) {
 }
 // The main target is allocated/bound by RenderEye, but its first draw is
 // deferred until all independent offscreen reflection work has completed.
+// Q234: water and ordinary post-world UI do not modify depth after the
+// refraction snapshot. Retain the first resolved depth for XR composition.
+bool q234PreWaterDepthResolved = false;
+uint64_t q234ElidedDepthResolves = 0u;
+uint64_t q234RetainedDepthResolves = 0u;
+
 void Q233BeginMainEyeWorld() {
     fqperf::BeginHdrPass();
     GLboolean depthWrite=GL_TRUE;glGetBooleanv(GL_DEPTH_WRITEMASK,&depthWrite);
@@ -13431,11 +13437,6 @@ GLint q2060GlMaxSamples = 1;
 bool q2060MsaaActive = false;
 bool q2060MsaaAttempted = false;
 uint64_t q2060MsaaHeartbeatFrame = 0u;
-// Q234: water and ordinary post-world UI do not modify depth after the
-// refraction snapshot. Retain the first resolved depth for XR composition.
-bool q234PreWaterDepthResolved = false;
-uint64_t q234ElidedDepthResolves = 0u;
-uint64_t q234RetainedDepthResolves = 0u;
 uint32_t q2060OpenXrRecommendedSamples = 0u;
 uint32_t q2060OpenXrMaxSamples = 0u;
 constexpr GLsizei Q2060_QUEST_REQUESTED_MSAA = 2;
