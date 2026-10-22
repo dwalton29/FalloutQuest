@@ -5,14 +5,18 @@
 
 namespace fqquality {
 constexpr float RenderScale = 0.90f;
-constexpr float FogFarUnits = 24.0f * 4096.0f;
-constexpr float FogNearUnits = 16.0f * 4096.0f;
+// Q244: shorter Wasteland sightline; near-field detail and other worlds keep
+// their original authored fog policy.
+constexpr float FogFarUnits = 16.0f * 4096.0f;
+constexpr float FogNearUnits = 10.0f * 4096.0f;
 // Retain the 16 > 8 > 4 > LAND hierarchy; remove only the coarsest tier.
 inline bool CoarseDesired(int level, int32_t x, int32_t y, int32_t px, int32_t py) {
     if (level == 32) return false;
     const int distance = std::max(std::abs(x + level/2 - px),
                                   std::abs(y + level/2 - py));
-    return level == 16 ? distance <= 72 : level == 8 && distance <= 44;
+    // A coarse tile is kept past the visible horizon if its footprint can
+    // still cover a nearer, incompletely refined block.
+    return level == 16 ? distance <= 24 : level == 8 && distance <= 20;
 }
 inline void Fog(uint32_t world, bool interior, bool valid, float& near, float& far) {
     if (world != 0x3Cu || interior || !valid) return;
