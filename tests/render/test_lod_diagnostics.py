@@ -10,7 +10,12 @@ class LodDiagnostics(unittest.TestCase):
         debug=HEADER.split('#ifndef NDEBUG',1)[1].split('#endif',1)[0]
         for prop in ('lod_radius20','lod_minimal','lod_clip_bypass'):
             self.assertIn('debug.falloutquest.'+prop,debug)
-        self.assertIn('fqopaque::Options().lodRadius20 ? 20 : 31',SRC)
+        # v244 pulls in the default Level4 object horizon to 16 cells;
+        # the debug flag can expand it to 20 for a controlled comparison.
+        self.assertIn('fqopaque::Options().lodRadius20 ? 20 : 16',SRC)
+        self.assertIn('Q1840_DISTANT_GRID_RADIUS_CELLS = 16',SRC)
+        self.assertIn('Q244HighObjectDesired(high.blockX, high.blockY,',SRC)
+        self.assertIn('Q244HighObjectDesired(asset.blockX, asset.blockY,',SRC)
         self.assertIn('constexpr size_t Q1840_DISTANT_CACHE_BLOCKS = 324u',SRC)
         selection=SRC.split('bool Q1970ChooseMissingLodQ19(',1)[1].split('bool Q2023ChooseMissingAuthoredLodQ19',1)[0]
         self.assertIn('Q2024ObjectBlockRadius()',selection)
