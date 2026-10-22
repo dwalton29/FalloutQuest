@@ -200,6 +200,8 @@ bool Q2013NativeLodBootstrapReadyQ19(
 bool Q2013HasNativeObjectLodForCellQ19(int32_t cellX, int32_t cellY);
 bool Q1990LodBlockDesired(int32_t blockX, int32_t blockY);
 bool Q1990TerrainLodBlockDesired(int32_t blockX, int32_t blockY);
+// Declared here because the exterior warmup check runs before LOD definitions.
+extern bool gQ2023LodAssetsDiscovered;
 void Q2024GetAuthoredWarmupState(size_t& level32Ready,
                                  size_t& level32Target,
                                  size_t& highReady,
@@ -6766,10 +6768,13 @@ void UpdateFo3ExteriorStreamingQ1890(float virtualHeadX, float virtualHeadZ) {
                     level32Ready, level32Target,
                     highReady, highTarget);
                 const bool nearLodComplete = lodReady >= 9u;
+                // Q245: empty requested LOD windows are complete. v244 omits
+                // out-of-range High VWD and coarse tiles, so the old nonzero
+                // target requirements could keep loading visible forever.
+                // Wait for archive discovery before treating zero as empty.
                 const bool horizonComplete =
-                    level32Target > 0u &&
+                    gQ2023LodAssetsDiscovered &&
                     level32Ready >= level32Target &&
-                    highTarget > 0u &&
                     highReady >= highTarget;
                 const uint64_t warmupUs =
                     gQ2013ExteriorWarmupStarted.time_since_epoch().count() == 0
@@ -6781,8 +6786,9 @@ void UpdateFo3ExteriorStreamingQ1890(float virtualHeadX, float virtualHeadZ) {
                 const bool timeout = warmupUs >= 25000000u;
                 if (timeout && !gFo3LoadingWarmupWarned) {
                     gFo3LoadingWarmupWarned = true;
-                    Q6H_LOGW("LOADING WARMUP STILL PENDING: detail=%zu/49 nearLOD=%zu/9 coarseLevel16=%zu/%zu high=%zu/%zu; presentation stays covered, check original archives if progress stops",
-                             detailReady, lodReady, level32Ready, level32Target, highReady, highTarget);
+                    Q6H_LOGW("LOADING WARMUP STILL PENDING: detail=%zu/49 nearLOD=%zu/9 coarseLevel16=%zu/%zu high=%zu/%zu assetsDiscovered=%d; presentation stays covered until requested content is ready",
+                             detailReady, lodReady, level32Ready, level32Target, highReady, highTarget,
+                             gQ2023LodAssetsDiscovered ? 1 : 0);
                 }
                 if (Fo3LoadingExteriorReady(detailComplete, nearLodComplete, horizonComplete)) {
                     Q6H_LOGI("Q20.25 EXTERIOR WARMUP COMPLETE: detailReady=%zu/49 nearLevel4=%zu/9 coarseLevel16=%zu/%zu high=%zu/%zu elapsedUs=%llu timeout=%d action=release-loading-screen",
@@ -7810,13 +7816,16 @@ std::vector<Q2023HighObjectBlock> gQ2023HighObjectBlocks;
 bool gQ2023LodAssetsDiscovered = false;
 bool gQ2023LodDiscoveryLogged = false;
 
+// Both the ready count and target must describe the same v244 window.
+bool Q244HighObjectDesired(int32_t x, int32_t y, int32_t px, int32_t py);
+
 void Q2024GetAuthoredWarmupState(size_t& level32Ready,
                                  size_t& level32Target,
                                  size_t& highReady,
                                  size_t& highTarget) {
     level32Ready = 0u;
     level32Target = 0u;
-    highReady = gQ2023HighObjectBlocks.size();
+    highReady = 0u;
     highTarget = 0u;
     // Legacy output names retained for the loading gate. The required coarse
     // fallback is now Level16, not the intentionally omitted Level32 tier.
@@ -7826,9 +7835,13 @@ void Q2024GetAuthoredWarmupState(size_t& level32Ready,
         if (tile.levelCells == 16 &&
             fqquality::CoarseDesired(16,tile.blockX,tile.blockY,px,py)) ++level32Ready;
     }
+    for (const Q2023HighObjectBlock& high : gQ2023HighObjectBlocks) {
+        if (Q244HighObjectDesired(high.blockX,high.blockY,px,py)) ++highReady;
+    }
     for (const Q2023LodAsset& asset : gQ2023LodAssets) {
         if (asset.kind == Q2023LodAssetKind::HighObjects) {
-            ++highTarget;
+            if (Q244HighObjectDesired(asset.blockX,asset.blockY,px,py))
+                ++highTarget;
         } else if (asset.kind == Q2023LodAssetKind::CoarseTerrain &&
                    asset.levelCells == 16 &&
                    fqquality::CoarseDesired(16,asset.blockX,asset.blockY,px,py)) {
