@@ -5,25 +5,29 @@ ROOT=Path(__file__).resolve().parents[2]
 CORE=(ROOT/'app/src/main/cpp/core/fo3-runtime.cpp').read_text()
 LOOP=(ROOT/'app/src/main/cpp/core/fo3-runtime-loop.inc').read_text()
 class HdrPassOrder(unittest.TestCase):
-    def test_reflection_finishes_before_main_clear_sky_and_world(self):
+    def test_water_visibility_precedes_main_clear_without_a_reflection_pass(self):
         scene=CORE.split('void RenderScene(const float* mvp)',1)[1].split('void Q6HGenFramebuffers',1)[0]
-        prepass=scene.index('Q2090RenderWaterReflection(mvp,')
-        begin=scene.index('Q233BeginMainEyeWorld();',prepass)
+        # Q244 keeps authored water/refraction but never submits a mirrored
+        # Wasteland scene or its reflection FBO before either stereo eye.
+        visibility=scene.index('IsFo3WaterPotentiallyVisibleQ209B(')
+        disabled=scene.index('q2090ReflectionReady = false;')
+        begin=scene.index('Q233BeginMainEyeWorld();',disabled)
         restore=scene.index('glUniformMatrix4fv(gMvpLocation,1,GL_FALSE,mvp);',begin)
         opaque=scene.index('Q1990RenderNativeLod(false);',restore)
         terrain=scene.index('RenderFo3CollisionOverlay(mvp);',opaque)
         snapshot=scene.index('Q2060ResolveEyeMsaaQ2060();',terrain)
         water=scene.index('RenderFo3WaterSurfaceQ2070(',snapshot)
-        self.assertLess(prepass,begin)
+        self.assertLess(visibility,disabled)
+        self.assertLess(disabled,begin)
         self.assertLess(begin,restore)
         self.assertLess(restore,opaque)
         self.assertLess(opaque,terrain)
         self.assertLess(terrain,snapshot)
         self.assertLess(snapshot,water)
-        self.assertEqual(scene.count('Q2090RenderWaterReflection(mvp,'),1)
-        before=scene[:prepass]
-        self.assertIn('IsFo3WaterPotentiallyVisibleQ209B(',before)
-        self.assertIn('q2090HavePlane && q209bWaterInFrustum &&',before)
+        self.assertNotIn('Q2090RenderWaterReflection(mvp,',scene)
+        self.assertIn('q2090HavePlane && q209bExposedCells > 0u',scene[:disabled])
+        self.assertIn('q2090ReflectionReady ? gWaterReflectionColorQ2090 : 0u',scene)
+        self.assertIn('q2090ReflectionReady ? q2090ReflectionMvp : nullptr',scene)
         eye=LOOP.split('bool RenderEye(',1)[1].split('\nprivate:',1)[0]
         self.assertNotIn('glClear(',eye)
         self.assertNotIn('RenderFo3PcSky(',eye)
