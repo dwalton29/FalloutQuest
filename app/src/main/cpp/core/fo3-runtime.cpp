@@ -1891,6 +1891,9 @@ bool UploadTexture(const std::string& path,
                  texture.width, texture.height, 0,
                  GL_RGBA, GL_UNSIGNED_BYTE, texture.rgba.data());
     glGenerateMipmap(GL_TEXTURE_2D);
+#ifdef FQ_ENABLE_VULKAN
+    fqvk::Texture(textureId,texture.width,texture.height,texture.rgba.data());
+#endif
     glBindTexture(GL_TEXTURE_2D, 0);
 
     if (glGetError() != GL_NO_ERROR) {
@@ -2693,6 +2696,11 @@ bool UploadCpuObject(CpuObject& cpu, float centerX, float centerY, float floorZ,
         const GLsizeiptr q1960VboBytes =
             static_cast<GLsizeiptr>(
                 q1960ExpandedFloatCount * sizeof(float));
+#ifdef FQ_ENABLE_VULKAN
+        fqvk::Mesh(gpu.vao,expanded.data(),q1960ExpandedFloatCount/FLOATS_PER_VERTEX,
+                   FLOATS_PER_VERTEX,q236Indexed?cpu.mesh.indices.data():nullptr,
+                   q236Indexed?cpu.mesh.indices.size():0u);
+#endif
         if (gQ1960CaptureVboQ19 && gQ1960CapturedVboVerticesQ19) {
             *gQ1960CapturedVboVerticesQ19 = std::move(expanded);
             glBufferData(GL_ARRAY_BUFFER, q1960VboBytes,
@@ -3114,6 +3122,9 @@ bool InitializeScene() {
              q6hCollisionPlacements.size(), collisionReady ? 1 : 0);
 
     gProgram = CreateQ6HProgram();
+#ifdef FQ_ENABLE_VULKAN
+    fqvk::Program(gProgram,false);
+#endif
     if (!gProgram) return false;
     gFastMaterialLocation = glGetUniformLocation(gProgram, "uFastMaterial");
     gActorSkinMode=glGetUniformLocation(gProgram,"uActorSkinMode");
@@ -7631,7 +7642,14 @@ void Q2017RenderOpaqueDetailedInstanced() {
         gInstanceCountQ2017 = batch.count;
         gInstancedDrawActiveQ2016 = true;
         const auto before=fqgl::counters.draws;
+#ifdef FQ_ENABLE_VULKAN
+        fqvk::instanceMatrices=cache.matrices.data()+batch.matrixBaseFloat;
+        fqvk::instanceMatrixCount=batch.count;
+#endif
         DrawSceneObject(*batch.representative);
+#ifdef FQ_ENABLE_VULKAN
+        fqvk::instanceMatrices=nullptr;fqvk::instanceMatrixCount=0;
+#endif
         actualInstancedDraws += fqgl::counters.draws-before;
         gInstancedDrawActiveQ2016 = false;
     }
@@ -7665,6 +7683,9 @@ void Q2017RenderOpaqueDetailedInstanced() {
 bool Q1030InitializeRenderProgramOnly() {
     if (gProgram) return true;
     gProgram = CreateQ6HProgram();
+#ifdef FQ_ENABLE_VULKAN
+    fqvk::Program(gProgram,false);
+#endif
     if (!gProgram) {
         Q6H_LOGE("Q10.3 DIRECT BOOT FAILED: stage=renderer reason=shader-program");
         return false;

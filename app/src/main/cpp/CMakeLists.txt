@@ -110,3 +110,27 @@ target_link_libraries(falloutquest
     ${gles-lib}
     ${z-lib}
 )
+
+# Native Vulkan migration stays opt-in while GLES owns gameplay presentation.
+# OFF also verifies the previous GLES-only build without Vulkan dependencies.
+option(FALLOUTQUEST_VULKAN "Build Vulkan world validation backend" ON)
+if(FALLOUTQUEST_VULKAN)
+    find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    find_program(FQ_SHADER_COMPILER NAMES glslc glslangValidator
+        HINTS "${ANDROID_NDK}/shader-tools/linux-x86_64"
+              "${ANDROID_NDK}/shader-tools/darwin-x86_64"
+              "${ANDROID_NDK}/shader-tools/windows-x86_64" REQUIRED)
+    set(FQ_VULKAN_GENERATED "${CMAKE_CURRENT_BINARY_DIR}/vulkan-shaders")
+    add_custom_command(OUTPUT "${FQ_VULKAN_GENERATED}/fo3-vulkan-shaders.h"
+        COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/../../../../tools/build_vulkan_shaders.py"
+            --compiler "${FQ_SHADER_COMPILER}" --output "${FQ_VULKAN_GENERATED}"
+        DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/../../../../tools/build_vulkan_shaders.py"
+                core/fo3-runtime.cpp rendering/terrain/fo3-terrain-v237-shaders.h
+        VERBATIM)
+    target_sources(falloutquest PRIVATE rendering/vulkan/fo3-vulkan-renderer.cpp
+        "${FQ_VULKAN_GENERATED}/fo3-vulkan-shaders.h")
+    target_include_directories(falloutquest PRIVATE "${FQ_VULKAN_GENERATED}")
+    target_compile_definitions(falloutquest PRIVATE FQ_ENABLE_VULKAN=1)
+    find_library(vulkan-lib vulkan REQUIRED)
+    target_link_libraries(falloutquest ${vulkan-lib})
+endif()

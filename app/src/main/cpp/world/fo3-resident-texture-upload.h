@@ -23,6 +23,9 @@ inline bool UploadResidentImage(const Fo3RgbaTexture& image,
     if(glGetError()!=GL_NO_ERROR||!owner.Adopt(id)) {
         glDeleteTextures(1,&id);id=0;return false;
     }
+#ifdef FQ_ENABLE_VULKAN
+    fqvk::Texture(id,image.width,image.height,image.rgba.data());
+#endif
     return true;
 }
 inline bool UploadResidentCube(const Fo3RgbaCubeTexture& cube,

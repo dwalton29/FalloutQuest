@@ -728,6 +728,9 @@ bool Q2000AdvanceOneTexture(size_t& bytesThisUpdate) {
     const GLenum error = glGetError();
     if (error == GL_NO_ERROR) {
         cache[prepared.path] = gQ2000TextureUpload.texture;
+#ifdef FQ_ENABLE_VULKAN
+        fqvk::Texture(gQ2000TextureUpload.texture,prepared.image.width,prepared.image.height,prepared.image.rgba.data());
+#endif
         Q76B_LOGI("Q20 TERRAIN TEXTURE READY: type=%s path=%s size=%dx%d maxStepUs=%llu mipUs=%llu staged=1",
                   prepared.normal ? "normal" : "diffuse",
                   prepared.path.c_str(),
@@ -844,6 +847,10 @@ bool Q2000AdvanceOneBatch(
     gpu.ownsNormal = false;
     gpu.vbo = gQ2000VboUpload.vbo;
     glGenVertexArrays(1, &gpu.vao);
+#ifdef FQ_ENABLE_VULKAN
+    fqvk::Mesh(gpu.vao,cpu.vertices.data(),cpu.vertices.size()/cpu.vertexFloats,
+               cpu.vertexFloats,cpu.indices.data(),cpu.indices.size());
+#endif
     glBindVertexArray(gpu.vao);
     glBindBuffer(GL_ARRAY_BUFFER, gpu.vbo);
     if (!cpu.indices.empty()) {

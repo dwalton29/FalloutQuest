@@ -589,6 +589,9 @@ GLuint Q76BCreateProgram() {
     Q76B_LOGI("Q242 TERRAIN PROGRAM: ready=%d fusion=%d device=%s",
               program != 0u, !fo3terrain::LegacyLayers(),
               reinterpret_cast<const char*>(glGetString(GL_RENDERER)));
+#ifdef FQ_ENABLE_VULKAN
+    fqvk::Program(program,true);
+#endif
     return program;
 }
 
@@ -652,6 +655,9 @@ GLuint Q711UploadTexture(const std::string& path,
                  image.width, image.height, 0,
                  GL_RGBA, GL_UNSIGNED_BYTE, image.rgba.data());
     glGenerateMipmap(GL_TEXTURE_2D);
+#ifdef FQ_ENABLE_VULKAN
+    fqvk::Texture(texture,image.width,image.height,image.rgba.data());
+#endif
     const GLenum error = glGetError();
     if (error != GL_NO_ERROR) {
         Q76B_LOGW("Q7.20 TERRAIN DDS GPU MISS: path=%s glError=0x%X", path.c_str(), error);
@@ -1315,6 +1321,10 @@ bool InitializeFo3TerrainRenderQ76(uint32_t worldspaceFormId,
         glGenBuffers(1, &gpu.vbo);
         glBindBuffer(GL_ARRAY_BUFFER, gpu.vbo);
         Q237PrepareTerrainIndices(cpu);
+#ifdef FQ_ENABLE_VULKAN
+        fqvk::Mesh(gpu.vao,cpu.vertices.data(),cpu.vertices.size()/cpu.vertexFloats,
+                   cpu.vertexFloats,cpu.indices.data(),cpu.indices.size());
+#endif
         const size_t vertexBytes = cpu.vertices.size() * sizeof(float);
         const size_t indexBytes = cpu.indices.size() * sizeof(uint32_t);
         glBufferData(GL_ARRAY_BUFFER,

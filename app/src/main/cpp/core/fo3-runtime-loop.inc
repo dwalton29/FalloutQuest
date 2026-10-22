@@ -16,9 +16,16 @@
 #include "ui/loading/fo3-loading-comfort.h"
 #define XR_USE_PLATFORM_ANDROID
 #define XR_USE_GRAPHICS_API_OPENGL_ES
+#ifdef FQ_ENABLE_VULKAN
+#define XR_USE_GRAPHICS_API_VULKAN
+#include <vulkan/vulkan.h>
+#endif
 
 #include <openxr/openxr.h>
 #include <openxr/openxr_platform.h>
+#ifdef FQ_ENABLE_VULKAN
+#include "rendering/vulkan/fo3-vulkan-renderer.h"
+#endif
 
 #include <android/log.h>
 #include <android_native_app_glue.h>
@@ -349,6 +356,10 @@ public:
         if (!CreateReferenceSpace()) return false;
         FQ_LOGI("Q7.1 BOOT STEP: CreateSwapchains");
         if (!CreateSwapchains()) return false;
+#ifdef FQ_ENABLE_VULKAN
+        if(vulkanProbeRequested_)
+            fqvk::InitializeWorldProbe(instance_,systemId_,eyes_[0].width,eyes_[0].height,app_->activity->internalDataPath);
+#endif
         FQ_LOGI("Q7.1 BOOT STEP: CreateSceneRenderer");
         if (!CreateSceneRenderer()) return false;
 
@@ -414,6 +425,9 @@ public:
         if (localSpace_ != XR_NULL_HANDLE) xrDestroySpace(localSpace_);
         if (session_ != XR_NULL_HANDLE) xrDestroySession(session_);
         if (actionSet_ != XR_NULL_HANDLE) xrDestroyActionSet(actionSet_);
+#ifdef FQ_ENABLE_VULKAN
+        fqvk::ShutdownWorldProbe();
+#endif
         if (instance_ != XR_NULL_HANDLE) xrDestroyInstance(instance_);
 
         if (eglDisplay_ != EGL_NO_DISPLAY) {
@@ -457,6 +471,23 @@ private:
                 extensions.push_back(XR_KHR_COMPOSITION_LAYER_DEPTH_EXTENSION_NAME);
             }
         }
+#ifdef FQ_ENABLE_VULKAN
+#ifndef NDEBUG
+        char probe[PROP_VALUE_MAX]{},selection[PROP_VALUE_MAX]{};
+        __system_property_get("debug.falloutquest.vulkan_probe",probe);
+        __system_property_get("debug.falloutquest.renderer",selection);
+        if(!std::strcmp(selection,"vulkan"))
+            FQ_LOGI("FQ RENDERER requested=vulkan selected=gles reason=Vulkan-feature-parity-incomplete use-vulkan_probe-for-world-validation");
+        if(std::atoi(probe)==1)for(const auto& extension:available)
+            if(!std::strcmp(extension.extensionName,XR_KHR_VULKAN_ENABLE2_EXTENSION_NAME)) {
+                vulkanProbeRequested_=true;
+                extensions.push_back(XR_KHR_VULKAN_ENABLE2_EXTENSION_NAME);
+                FQ_LOGI("FQVK probe requested; enabling OpenXR Vulkan enable2 alongside GLES");
+            }
+        if(std::atoi(probe)==1&&!vulkanProbeRequested_)
+            FQ_LOGI("FQVK unavailable: OpenXR Vulkan enable2 absent; keeping GLES");
+#endif
+#endif
         FQ_LOGI("XR compositor depth extension enabled=%d", depthSubmissionEnabled_);
 
         XrInstanceCreateInfoAndroidKHR androidInfo{XR_TYPE_INSTANCE_CREATE_INFO_ANDROID_KHR};
@@ -1951,9 +1982,22 @@ private:
                 if(fqperf::capture.recording) {
                     fqperf::gpu.Poll(fqperf::capture.serial);
                 }
+#ifdef FQ_ENABLE_VULKAN
+                if(fqvk::WorldProbeActive()&&!IsFo3LoadingVisible()) {
+                    Mat4 matrices[2];XrPosef poses[2];
+                    for(uint32_t i=0;i<2;++i) {
+                        poses[i]=ToVirtualPose(views[i].pose);
+                        matrices[i]=Multiply(ProjectionFromFov(views[i].fov,0.04f,125000.0f/FO3_UNITS_PER_METRE_Q715),ViewFromPose(poses[i]));
+                    }
+                    fqvk::BeginWorldProbe(matrices[0].m,matrices[1].m,&poses[0].position.x,&poses[1].position.x);
+                }
+#endif
                 for (uint32_t eye = 0; eye < 2; ++eye) {
                     fqperf::Scope eyeScope(eye==0?fqperf::Eye0:fqperf::Eye1);
                     rendered = RenderEye(eye, views[eye], projectionViews[eye]) && rendered;
+#ifdef FQ_ENABLE_VULKAN
+                    if(eye==0)fqvk::EndWorldProbe();
+#endif
                     if(fqperf::capture.recording) {
                         if(!IsFo3LoadingVisible()) {
                             const auto& phases=fqopaque::phases[eye];
@@ -2477,6 +2521,7 @@ private:
     GLuint framebuffer_{0};
     GLuint depthFramebuffer_{0};
     bool depthSubmissionEnabled_{false};
+    bool vulkanProbeRequested_{false};
     GLint mvpLocation_{-1};
     GLint colorLocation_{-1};
     GLint gridStartVertex_{0};

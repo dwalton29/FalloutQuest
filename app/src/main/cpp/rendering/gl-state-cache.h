@@ -6,6 +6,9 @@
 #include <array>
 #include <cstring>
 #include <cstdint>
+#ifdef FQ_ENABLE_VULKAN
+#include "vulkan/fo3-vulkan-bridge.h"
+#endif
 
 namespace fqgl {
 struct Counters {
@@ -172,7 +175,16 @@ inline void GetFloatv(GLenum name,GLfloat* out) {
     if(v && v->known) { *out=v->value;return; }
     ++counters.queries; glGetFloatv(name,out); if(v) v->Change(*out);
 }
+inline void MirrorUniform(GLint location,unsigned kind,const void* data,unsigned size) {
+#ifdef FQ_ENABLE_VULKAN
+    if(fqvk::hooks.uniform && location>=0 && state.program.known)
+        fqvk::hooks.uniform(state.program.value,location,kind,size,data);
+#else
+    (void)location;(void)kind;(void)data;(void)size;
+#endif
+}
 inline bool Upload(GLint location,unsigned kind,const void* data,unsigned size) {
+    MirrorUniform(location,kind,data,size);
     if(location<0) return false;
     if(state.program.known && state.program.value && location<256) {
         ProgramUniforms* bank=nullptr;
@@ -191,6 +203,7 @@ inline bool Upload(GLint location,unsigned kind,const void* data,unsigned size) 
 // arrays outside the value cache and invalidate that program's scalar history.
 inline bool UploadArray(GLint location,unsigned kind,const void* data,unsigned size,GLsizei count) {
     if(count==1) return Upload(location,kind,data,size);
+    MirrorUniform(location,kind,data,size);
     if(location<0) return false;
     for(auto& bank:programs) if(bank.program==state.program.value) bank.values={};
     ++counters.uniforms;return true;
@@ -218,15 +231,26 @@ template<class Draw> inline void Submit(GLsizei n, GLsizei instances, Draw draw)
     }
     if(regions>1) restoreDrawRegion();
 }
-inline void DrawArrays(GLenum m,GLint first,GLsizei n) { Submit(n,1,[&]{glDrawArrays(m,first,n);}); }
-inline void DrawArraysInstanced(GLenum m,GLint first,GLsizei n,GLsizei count) { Submit(n,count,[&]{glDrawArraysInstanced(m,first,n,count);}); }
-inline void DrawElements(GLenum m,GLsizei n,GLenum type,const void* indices) { Submit(n,1,[&]{glDrawElements(m,n,type,indices);}); }
-inline void DrawElementsInstanced(GLenum m,GLsizei n,GLenum type,const void* indices,GLsizei count) { Submit(n,count,[&]{glDrawElementsInstanced(m,n,type,indices,count);}); }
+inline void MirrorDraw(GLenum mode,GLenum type,size_t offset,GLint first,GLsizei count,GLsizei instances) {
+#ifdef FQ_ENABLE_VULKAN
+    if(fqvk::recording && fqvk::hooks.draw && state.program.known && state.vao.known)
+        fqvk::hooks.draw(state.program.value,state.vao.value,mode,first,count,type,offset,instances);
+#else
+    (void)mode;(void)type;(void)offset;(void)first;(void)count;(void)instances;
+#endif
+}
+inline void DrawArrays(GLenum m,GLint first,GLsizei n) { MirrorDraw(m,0,0,first,n,1); Submit(n,1,[&]{glDrawArrays(m,first,n);}); }
+inline void DrawArraysInstanced(GLenum m,GLint first,GLsizei n,GLsizei count) { MirrorDraw(m,0,0,first,n,count); Submit(n,count,[&]{glDrawArraysInstanced(m,first,n,count);}); }
+inline void DrawElements(GLenum m,GLsizei n,GLenum type,const void* indices) { MirrorDraw(m,type,reinterpret_cast<size_t>(indices),0,n,1); Submit(n,1,[&]{glDrawElements(m,n,type,indices);}); }
+inline void DrawElementsInstanced(GLenum m,GLsizei n,GLenum type,const void* indices,GLsizei count) { MirrorDraw(m,type,reinterpret_cast<size_t>(indices),0,n,count); Submit(n,count,[&]{glDrawElementsInstanced(m,n,type,indices,count);}); }
 inline void DeleteProgram(GLuint id) {
     for(auto& p:programs) if(p.program==id) p=ProgramUniforms{};
     glDeleteProgram(id); // A current deleted program remains current until unbound.
 }
 inline void DeleteTextures(GLsizei n,const GLuint* ids) {
+    #ifdef FQ_ENABLE_VULKAN
+    if(fqvk::hooks.erase)for(GLsizei i=0;i<n;++i)fqvk::hooks.erase(ids[i],true);
+#endif
     glDeleteTextures(n,ids);
     for(GLsizei i=0;i<n;++i) {
         for(auto& v:state.texture2d) if(v.known && v.value==ids[i]) v.Change(0);
@@ -238,6 +262,9 @@ inline void DeleteBuffers(GLsizei n,const GLuint* ids) {
     for(GLsizei i=0;i<n;++i) if(state.arrayBuffer.known && state.arrayBuffer.value==ids[i]) state.arrayBuffer.Change(0);
 }
 inline void DeleteVertexArrays(GLsizei n,const GLuint* ids) {
+    #ifdef FQ_ENABLE_VULKAN
+    if(fqvk::hooks.erase)for(GLsizei i=0;i<n;++i)fqvk::hooks.erase(ids[i],false);
+#endif
     glDeleteVertexArrays(n,ids);
     for(GLsizei i=0;i<n;++i) if(state.vao.known && state.vao.value==ids[i]) state.vao.Change(0);
 }
