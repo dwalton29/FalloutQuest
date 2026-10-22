@@ -320,7 +320,9 @@ public:
         arena=MakeBuffer(32u*1024u*1024u,VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT|VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,true);
         stereo=MakeBuffer(160,VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,true);
         CreatePass();CreateDescriptors();
-        if(timestampSupported){VkQueryPoolCreateInfo tci{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};tci.queryType=VK_QUERY_TYPE_TIMESTAMP;tci.queryCount=2;
+        if(timestampSupported){VkQueryPoolCreateInfo tci{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};tci.queryType=VK_QUERY_TYPE_TIMESTAMP;// Reserve a stereo-width slot for each timestamp. Some drivers
+            // retain the multiview query stride through the pass-end boundary.
+            tci.queryCount=4;
             Check(vkCreateQueryPool(device,&tci,nullptr,&timestamps),"timestamp pool");}
         uint32_t extensionCount=0;vkEnumerateDeviceExtensionProperties(physical,nullptr,&extensionCount,nullptr);
         std::vector<VkExtensionProperties> extensions(extensionCount);vkEnumerateDeviceExtensionProperties(physical,nullptr,&extensionCount,extensions.data());
@@ -490,7 +492,7 @@ public:
         cursor=0;draws=vertices=skipped=0;
         VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};bi.flags=VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
         Check(vkBeginCommandBuffer(command,&bi),"begin frame");
-        if(timestamps){vkCmdResetQueryPool(command,timestamps,0,2);vkCmdWriteTimestamp(command,VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,timestamps,0);}
+        if(timestamps){vkCmdResetQueryPool(command,timestamps,0,4);vkCmdWriteTimestamp(command,VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,timestamps,0);}
         std::array<VkClearValue,2> clears{};clears[0].color={{0,0,0,1}};clears[1].depthStencil={1,0};
         VkRenderPassBeginInfo ri{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};ri.renderPass=pass;ri.framebuffer=framebuffer;ri.renderArea={{0,0},{width,height}};ri.clearValueCount=2;ri.pClearValues=clears.data();
         vkCmdBeginRenderPass(command,&ri,VK_SUBPASS_CONTENTS_INLINE);begun=true;
@@ -498,12 +500,16 @@ public:
     void End() {
         if(!begun)return;
         begun=false;
-        vkCmdEndRenderPass(command);if(timestamps)vkCmdWriteTimestamp(command,VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,timestamps,1);
+        vkCmdEndRenderPass(command);if(timestamps)vkCmdWriteTimestamp(command,VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,timestamps,2);
         Check(vkEndCommandBuffer(command),"end frame");Check(vkResetFences(device,1,&fence),"reset frame fence");
         VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};si.commandBufferCount=1;si.pCommandBuffers=&command;
         Check(vkQueueSubmit(queue,1,&si,fence),"submit world probe");Check(vkWaitForFences(device,1,&fence,VK_TRUE,UINT64_MAX),"finish world probe");
         double gpuMs=-1;
-        if(timestamps){uint64_t t[2]{};if(vkGetQueryPoolResults(device,timestamps,0,2,sizeof(t),t,8,VK_QUERY_RESULT_64_BIT)==VK_SUCCESS)gpuMs=double(t[1]-t[0])*properties.limits.timestampPeriod/1e6;}
+        if(timestamps){uint64_t t[2]{};
+            const auto begin=vkGetQueryPoolResults(device,timestamps,0,1,8,&t[0],8,VK_QUERY_RESULT_64_BIT);
+            const auto end=vkGetQueryPoolResults(device,timestamps,2,1,8,&t[1],8,VK_QUERY_RESULT_64_BIT);
+            if(begin==VK_SUCCESS&&end==VK_SUCCESS)gpuMs=double(t[1]-t[0])*properties.limits.timestampPeriod/1e6;
+        }
         Collect();
         Dump();
         if((frames++%120)==0)VKLOG("FQVK WORLD PROBE frame=%llu partialStereoGpuMs=%.3f sharedDraws=%llu vertexCorners=%llu skippedDraws=%llu passes=world+LAND presentation=GLES concurrentApiWork=1 benchmarkValid=0",
