@@ -1,4 +1,4 @@
-"""Exercise production terrain program admission with device compiler failures."""
+"""Exercise recovery program admission, stale properties and compiler failures."""
 from pathlib import Path
 import subprocess
 import tempfile
@@ -9,11 +9,10 @@ RENDER = (ROOT / 'app/src/main/cpp/rendering/terrain/fo3-terrain-render.inc').re
 
 
 class TerrainProgramFallback(unittest.TestCase):
-    def test_device_failures_keep_original_program_and_geometry_policy(self):
+    def test_recovery_keeps_original_program_and_geometry_despite_stale_properties(self):
         # Compile the actual production factory, including its real shader texts.
         factory = 'GLuint Q76BCreateProgram() {' + RENDER.split('GLuint Q76BCreateProgram() {', 1)[1].split('Q76BV3 Q76BToVr(', 1)[0]
         prefix = r'''
-#include <cassert>
 #include <cstring>
 #include <cstdlib>
 #include <string>
@@ -28,11 +27,16 @@ constexpr int GL_FALSE=0,GL_TRUE=1;
 std::string failure;
 unsigned nextId=10, deletedShaders=0, deletedPrograms=0, originalCompiles=0, fusedCompiles=0;
 std::vector<bool> shaderFused(100),programFused(100);
+void Check(bool ok){if(!ok)std::abort();}
 GLuint Q76BCompile(GLenum kind,const char* text) {
     bool fused=std::strstr(text,"aPaintAlpha")||std::strstr(text,"uPaintCount");
     (fused?fusedCompiles:originalCompiles)++;
+    if(!fused)Check(std::strcmp(text,kind==GL_VERTEX_SHADER ?
+        fo3terrain::kV237VertexShader : fo3terrain::kV237FragmentShader)==0);
     if(failure=="both"||(fused&&((failure=="vertex"&&kind==GL_VERTEX_SHADER)||
-        (failure=="fragment"&&kind==GL_FRAGMENT_SHADER))))return 0;
+        (failure=="fragment"&&kind==GL_FRAGMENT_SHADER)))||
+        (!fused&&((failure=="original-vertex"&&kind==GL_VERTEX_SHADER)||
+        (failure=="original-fragment"&&kind==GL_FRAGMENT_SHADER))))return 0;
     auto id=nextId++;shaderFused[id]=fused;return id;
 }
 GLuint glCreateProgram(){return nextId++;}
@@ -40,22 +44,24 @@ void glAttachShader(GLuint p,GLuint s){programFused[p]=programFused[p]||shaderFu
 void glLinkProgram(GLuint){}
 void glDeleteShader(GLuint){++deletedShaders;}
 void glDeleteProgram(GLuint){++deletedPrograms;}
-void glGetProgramiv(GLuint p,GLenum,GLint* ok){*ok=!(failure=="link"&&programFused[p]);}
+void glGetProgramiv(GLuint p,GLenum,GLint* ok){*ok=!((failure=="link"&&programFused[p])||failure=="original-link");}
 void glGetProgramInfoLog(GLuint,int,void*,char*){}
 const unsigned char* glGetString(GLenum){return reinterpret_cast<const unsigned char*>("mock-device");}
 '''
         main = r'''
 int main(int argc,char** argv){
-    assert(argc==3);failure=argv[1];bool original=std::string(argv[2])=="1";
+    Check(argc==2);failure=argv[1];
+    Check(fo3terrain::LegacyLayers()); // No cold/streamed triangle removal.
     const auto p=Q76BCreateProgram();
-    if(original){assert(p&&!programFused[p]&&fusedCompiles==0);return 0;}
-    if(failure=="none"){assert(p&&programFused[p]&&!fo3terrain::LegacyLayers());return 0;}
-    assert(fo3terrain::LegacyLayers()); // Both cold and streamed fusion now bypass.
-    if(failure=="both"){assert(!p);return 0;}
-    assert(p&&!programFused[p]&&originalCompiles==2);
-    if(failure=="link")assert(deletedPrograms==1);
+    Check(fo3terrain::LegacyLayers()&&fusedCompiles==0&&originalCompiles==2);
+    if(failure=="both"||failure.find("original-")==0){
+        Check(!p);
+        if(failure=="original-link")Check(deletedPrograms==1);
+    }else Check(p&&!programFused[p]);
     failure="none";auto subsequent=Q76BCreateProgram();
-    assert(subsequent&&!programFused[subsequent]&&originalCompiles==4);
+    Check(subsequent&&!programFused[subsequent]&&originalCompiles==4&&fusedCompiles==0);
+    fo3terrain::DisableFusionAfterProgramFailure();
+    Check(fo3terrain::LegacyLayers());
 }
 '''
         with tempfile.TemporaryDirectory() as temp:
@@ -74,14 +80,14 @@ inline int __system_property_get(const char* key,char* value){
             cpp = temp/'factory.cpp'
             cpp.write_text(prefix+factory+main)
             binary = temp/'factory'
-            subprocess.run(['g++', '-std=c++17', '-Wall', '-Wextra', '-Werror', '-Wno-misleading-indentation',
-                            '-D__ANDROID__', '-I'+str(temp), '-I'+str(ROOT/'app/src/main/cpp'), str(cpp), '-o', str(binary)], check=True)
             import os
-            for setting in ['', '1', 'garbage', '0']:
-                for failure in ['none', 'vertex', 'fragment', 'link', 'both']:
-                    if setting=='1' and failure=='both':
-                        continue
-                    subprocess.run([str(binary), failure, setting], env={**os.environ, 'FQ_LEGACY':setting}, check=True)
+            for defines in [[], ['-D__ANDROID__'], ['-D__ANDROID__', '-DNDEBUG']]:
+                subprocess.run(['g++', '-std=c++17', '-Wall', '-Wextra', '-Werror', '-Wno-misleading-indentation',
+                                *defines, '-I'+str(temp), '-I'+str(ROOT/'app/src/main/cpp'), str(cpp), '-o', str(binary)], check=True)
+                for setting in ['', '1', 'garbage', '0']:
+                    for failure in ['none', 'vertex', 'fragment', 'link', 'both',
+                                    'original-vertex', 'original-fragment', 'original-link']:
+                        subprocess.run([str(binary), failure], env={**os.environ, 'FQ_LEGACY':setting}, check=True)
 
 
 if __name__ == '__main__':

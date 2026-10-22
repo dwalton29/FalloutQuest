@@ -550,6 +550,8 @@ GLuint Q76BCreateProgram() {
     }
     Q76B_LOGI("Q239 TERRAIN SHADER: legacyV237=%d unsharedLights=%d",
               q239Legacy ? 1 : 0, q239Unshared ? 1 : 0);
+    Q76B_LOGI("Q243 TERRAIN RECOVERY: originalProgram=%d fusionQuarantined=1 legacyPropertyIgnored=1",
+              q239Legacy ? 1 : 0);
     auto create = [](const char* vertex, const char* fragment) -> GLuint {
         GLuint vs = Q76BCompile(GL_VERTEX_SHADER, vertex);
         GLuint fs = Q76BCompile(GL_FRAGMENT_SHADER, fragment);
