@@ -37,7 +37,13 @@ void Program(uint32_t id,bool terrain) {
     const size_t count=terrain?std::size(fqvk::shaders::terrainFields):std::size(fqvk::shaders::worldFields);
     for(size_t i=0;i<count;++i)p.fields.push_back({int(i),fields[i]});
     const size_t samplers=terrain?std::size(fqvk::shaders::terrainSamplers):std::size(fqvk::shaders::worldSamplers);
-    p.units.resize(samplers);for(size_t i=0;i<samplers;++i)p.units[i]=i;
+    p.units.resize(samplers);
+    const auto* names=terrain?fqvk::shaders::terrainSamplers:fqvk::shaders::worldSamplers;
+    for(size_t i=0;i<samplers;++i) {
+        const std::string name=names[i].name;
+        p.units[i]=name=="uActorPalette"?6:name=="uNormalGloss"?1:name=="uGlow"?2:
+            name=="uShadowMap"?3:name=="uEnvironmentCubeQ2050"?4:name=="uEnvironmentMaskQ2050"?5:0;
+    }
     fqvk::renderer->programs.emplace(id,std::move(p));
 }
 void Set(uint32_t id,const char* name,std::initializer_list<float> values) {

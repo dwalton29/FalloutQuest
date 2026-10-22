@@ -15,7 +15,7 @@ jobs:
       - name: Install Vulkan shader, software GPU and validation tools
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y glslang-tools spirv-tools libvulkan-dev libopenxr-dev libgles-dev mesa-vulkan-drivers vulkan-validationlayers
+          sudo apt-get install -y glslang-tools spirv-tools libvulkan-dev libopenxr-dev libgles-dev mesa-vulkan-drivers vulkan-validationlayers gdb
       - name: Compile and link production world and original LAND SPIR-V
         run: |
           python3 tests/render/test_vulkan_shaders.py
@@ -33,7 +33,10 @@ jobs:
           g++ -O2 -std=c++17 -Wall -Wextra -Werror -Wno-missing-field-initializers -DFQ_ENABLE_VULKAN \
             -I/tmp/fq-vulkan-shaders -Iapp/src/main/cpp tests/render/vulkan_world_gpu_tests.cpp \
             -lvulkan -lGLESv2 -o /tmp/fq-vulkan-world
-          /tmp/fq-vulkan-world 2>&1 | tee /tmp/fq-vulkan-validation.log
+          if ! /tmp/fq-vulkan-world 2>&1 | tee /tmp/fq-vulkan-validation.log; then
+            gdb --batch -ex run -ex 'thread apply all bt 8' --args /tmp/fq-vulkan-world
+            exit 1
+          fi
           if grep -q 'Validation Error' /tmp/fq-vulkan-validation.log; then exit 1; fi
 
   build:
