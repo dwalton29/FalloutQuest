@@ -73,7 +73,19 @@ execute_process(COMMAND git rev-parse HEAD WORKING_DIRECTORY ${CMAKE_CURRENT_SOU
 if(NOT FQ_SOURCE_COMMIT)
     set(FQ_SOURCE_COMMIT "unknown")
 endif()
-target_compile_definitions(falloutquest PRIVATE FQ_SOURCE_COMMIT="${FQ_SOURCE_COMMIT}")
+# Keep the build SHA accurate in fo3-runtime-loop.inc, which is included by
+# fo3-runtime.cpp. Defining it for the whole target used to invalidate every
+# native translation unit on every GitHub push, defeating incremental builds.
+set_source_files_properties(core/fo3-runtime.cpp PROPERTIES
+    COMPILE_DEFINITIONS "FQ_SOURCE_COMMIT=\"${FQ_SOURCE_COMMIT}\"")
+
+# CI uses a persistent ccache directory between ephemeral runners. Developers
+# keep the normal compiler unless they explicitly opt in.
+if(DEFINED ENV{FALLOUTQUEST_USE_CCACHE} AND "$ENV{FALLOUTQUEST_USE_CCACHE}" STREQUAL "1")
+    find_program(FQ_CCACHE_PROGRAM ccache REQUIRED)
+    set_property(TARGET falloutquest PROPERTY C_COMPILER_LAUNCHER "${FQ_CCACHE_PROGRAM}")
+    set_property(TARGET falloutquest PROPERTY CXX_COMPILER_LAUNCHER "${FQ_CCACHE_PROGRAM}")
+endif()
 
 # Profile uses the SAME debug-enabled source and diagnostics but emits
 # optimised native machine code. Keep this in CMake rather than Gradle
