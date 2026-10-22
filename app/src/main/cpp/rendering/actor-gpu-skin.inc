@@ -71,6 +71,10 @@ bool QActorCreateSkin(GpuObject& object,QActorSkin& skin,
     glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T,GL_CLAMP_TO_EDGE);
     glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA32F,8,skin.palette.size(),0,GL_RGBA,GL_FLOAT,skin.palette.data());
+#ifdef FQ_ENABLE_VULKAN
+    fqvk::Skin(object.vao,object.skinPalette,skin.mapping.attributes.data(),skin.mapping.attributes.size(),
+               reinterpret_cast<const float*>(skin.palette.data()),skin.palette.size());
+#endif
     glActiveTexture(GL_TEXTURE0);
     Q6H_LOGI("ACTOR SKIN GPU model=%s meshBones=%zu paletteBones=%zu vertices=%d vertexUnits=%d maxTexture=%d maxAttribs=%d positionAndDirectionPalettes=1",
         object.modelPath.c_str(),bones,skin.palette.size()-1,object.vertexCount,units,size,attributes);
@@ -82,6 +86,10 @@ void QActorUploadSkin(GpuObject& object,QActorSkin& skin,fqactor::Cost& cost,boo
         if(skin.published.Changed(skin.palette)) {
             glActiveTexture(GL_TEXTURE6);glBindTexture(GL_TEXTURE_2D,object.skinPalette);
             glTexSubImage2D(GL_TEXTURE_2D,0,0,0,8,skin.palette.size(),GL_RGBA,GL_FLOAT,skin.palette.data());
+#ifdef FQ_ENABLE_VULKAN
+            fqvk::Skin(object.vao,object.skinPalette,nullptr,0,
+                       reinterpret_cast<const float*>(skin.palette.data()),skin.palette.size());
+#endif
             cost.paletteBytes+=skin.palette.size()*sizeof(fqskin::PaletteRow);
         }else ++cost.paletteSkipped;
         glActiveTexture(GL_TEXTURE0); // Preserve the upload helper's caller contract.
@@ -105,6 +113,9 @@ void QActorUploadSkin(GpuObject& object,QActorSkin& skin,fqactor::Cost& cost,boo
         cost.directions+=fqopaque::Micros(started);started=fqopaque::Clock::now();
         glBindBuffer(GL_ARRAY_BUFFER,object.vbo);
         glBufferSubData(GL_ARRAY_BUFFER,0,skin.work.size()*sizeof(float),skin.work.data());
+#ifdef FQ_ENABLE_VULKAN
+        fqvk::DynamicMesh(object.vao,skin.work.data(),skin.work.size());
+#endif
         glBindBuffer(GL_ARRAY_BUFFER,0);
         cost.upload+=fqopaque::Micros(started);cost.vertexBytes+=skin.work.size()*sizeof(float);++cost.vboUploads;
         cost.vertices+=object.vertexCount;

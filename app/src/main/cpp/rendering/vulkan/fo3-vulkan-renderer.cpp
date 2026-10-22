@@ -37,8 +37,8 @@ template<class T> T Proc(XrInstance xr,const char* name) {
     return reinterpret_cast<T>(fn);
 }
 struct Buffer {VkBuffer buffer{};VkDeviceMemory memory{};void* mapped{};VkDeviceSize size{};};
-struct Image {VkImage image{};VkImageView view{};VkDeviceMemory memory{};uint32_t levels=1;};
-struct MeshData {Buffer vertices,indices;uint32_t count=0,stride=0;};
+struct Image {VkImage image{};VkImageView view{};VkDeviceMemory memory{};uint32_t levels=1;bool palette=false;};
+struct MeshData {Buffer vertices,indices,skin;uint32_t count=0,stride=0;};
 struct ProgramData {
     bool terrain=false;
     std::vector<uint8_t> bytes;
@@ -48,16 +48,16 @@ struct ProgramData {
     std::vector<int> units;
 };
 struct PipelineKey {
-    bool instanced=false,terrain=false,depth=true,write=true,blend=false,cull=false,clockwise=false;
+    bool skinned=false,instanced=false,terrain=false,depth=true,write=true,blend=false,cull=false,clockwise=false;
     uint32_t stride=0,depthFunc=GL_LEQUAL,src=GL_ONE,dst=GL_ZERO,srcA=GL_ONE,dstA=GL_ZERO;
     bool operator==(const PipelineKey& k)const {
-        return instanced==k.instanced && terrain==k.terrain && depth==k.depth && write==k.write && blend==k.blend &&
+        return skinned==k.skinned && instanced==k.instanced && terrain==k.terrain && depth==k.depth && write==k.write && blend==k.blend &&
             cull==k.cull && clockwise==k.clockwise && stride==k.stride && depthFunc==k.depthFunc &&
             src==k.src && dst==k.dst && srcA==k.srcA && dstA==k.dstA;
     }
 };
 struct PipelineHash {size_t operator()(const PipelineKey& k)const {
-    size_t h=k.stride+uint32_t(k.instanced);for(auto v:{uint32_t(k.terrain),uint32_t(k.depth),uint32_t(k.write),uint32_t(k.blend),
+    size_t h=k.stride+uint32_t(k.instanced)*31+uint32_t(k.skinned);for(auto v:{uint32_t(k.terrain),uint32_t(k.depth),uint32_t(k.write),uint32_t(k.blend),
         uint32_t(k.cull),uint32_t(k.clockwise),k.depthFunc,k.src,k.dst,k.srcA,k.dstA}) { h=(h*16777619u)^v; }
     return h;
 }};
@@ -84,7 +84,7 @@ public:
     VkPhysicalDeviceProperties properties{};VkPhysicalDeviceMemoryProperties memory{};
     VkCommandPool pool{},uploads{};VkCommandBuffer command{};VkFence fence{};
     VkRenderPass pass{};VkFramebuffer framebuffer{};Image color,depth,white,cube;
-    VkSampler sampler{};VkDescriptorSetLayout sets[2]{};VkPipelineLayout layouts[2]{};
+    VkSampler sampler{},nearest{};VkDescriptorSetLayout sets[2]{};VkPipelineLayout layouts[2]{};
     VkShaderModule modules[2][2]{};VkDescriptorPool descriptors{};
     VkQueryPool timestamps{};bool timestampSupported=false;
     Buffer arena,stereo;VkDeviceSize cursor=0;uint32_t width=0,height=0;
@@ -92,6 +92,7 @@ public:
     std::unordered_map<uint32_t,Image> textures;
     std::unordered_map<uint32_t,ProgramData> programs;
     std::unordered_map<PipelineKey,VkPipeline,PipelineHash> pipelines;
+    std::vector<Buffer> retiredBuffers;std::vector<Image> retiredImages;
     uint64_t draws=0,vertices=0,skipped=0,frames=0;bool begun=false;
     bool failed=false;
     std::string outputDirectory;
@@ -128,6 +129,9 @@ public:
         if(i.memory)vkFreeMemory(device,i.memory,nullptr);
         i={};
     }
+    void Retire(Buffer& buffer){if(begun&&buffer.buffer){retiredBuffers.push_back(buffer);buffer={};}else Destroy(buffer);}
+    void Retire(Image& image){if(begun&&image.image){retiredImages.push_back(image);image={};}else Destroy(image);}
+    void Collect(){for(auto& b:retiredBuffers)Destroy(b);for(auto& i:retiredImages)Destroy(i);retiredBuffers.clear();retiredImages.clear();}
     Image MakeImage(uint32_t w,uint32_t h,VkFormat format,VkImageUsageFlags usage,
                     VkImageAspectFlags aspect,uint32_t layers=2,uint32_t levels=1,bool isCube=false) {
         Image image{};image.levels=levels;
@@ -218,6 +222,57 @@ public:
         }catch(...){Destroy(staging);Destroy(result);throw;}
         Destroy(staging);return result;
     }
+    Image UploadPalette(const float* data,size_t rows) {
+        const size_t bytes=rows*8*4*sizeof(float);
+        Buffer staging=MakeBuffer(bytes,VK_BUFFER_USAGE_TRANSFER_SRC_BIT,true);Image image;
+        try {
+            std::memcpy(staging.mapped,data,bytes);
+            image=MakeImage(8,uint32_t(rows),VK_FORMAT_R32G32B32A32_SFLOAT,
+                VK_IMAGE_USAGE_TRANSFER_DST_BIT|VK_IMAGE_USAGE_SAMPLED_BIT,VK_IMAGE_ASPECT_COLOR_BIT,1);
+            image.palette=true;
+            Transfer([&](VkCommandBuffer cb){
+                VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};b.image=image.image;
+                b.srcQueueFamilyIndex=b.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;
+                b.subresourceRange={VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,1};b.oldLayout=VK_IMAGE_LAYOUT_UNDEFINED;
+                b.newLayout=VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;b.dstAccessMask=VK_ACCESS_TRANSFER_WRITE_BIT;
+                vkCmdPipelineBarrier(cb,VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,0,0,nullptr,0,nullptr,1,&b);
+                VkBufferImageCopy copy{};copy.imageSubresource={VK_IMAGE_ASPECT_COLOR_BIT,0,0,1};copy.imageExtent={8,uint32_t(rows),1};
+                vkCmdCopyBufferToImage(cb,staging.buffer,image.image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,1,&copy);
+                b.oldLayout=b.newLayout;b.newLayout=VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;b.srcAccessMask=VK_ACCESS_TRANSFER_WRITE_BIT;b.dstAccessMask=VK_ACCESS_SHADER_READ_BIT;
+                vkCmdPipelineBarrier(cb,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_VERTEX_SHADER_BIT,0,0,nullptr,0,nullptr,1,&b);
+            });
+        }catch(...){Destroy(staging);Destroy(image);throw;}
+        Destroy(staging);return image;
+    }
+    Image UploadCube(const Fo3RgbaCubeTexture& source) {
+        if(source.width<=0||source.height!=source.width||source.mipLevels<=0)throw std::runtime_error("invalid cube");
+        std::vector<uint8_t> pixels;std::vector<VkBufferImageCopy> regions;
+        for(uint32_t face=0;face<6;++face) {
+            if(source.rgbaLevels[face].size()!=size_t(source.mipLevels))throw std::runtime_error("cube mip count");
+            uint32_t size=source.width;
+            for(int mip=0;mip<source.mipLevels;++mip){
+                const auto& data=source.rgbaLevels[face][mip];if(data.size()!=size_t(size)*size*4)throw std::runtime_error("cube mip size");
+                VkBufferImageCopy copy{};copy.bufferOffset=pixels.size();copy.imageSubresource={VK_IMAGE_ASPECT_COLOR_BIT,uint32_t(mip),face,1};copy.imageExtent={size,size,1};
+                regions.push_back(copy);pixels.insert(pixels.end(),data.begin(),data.end());size=std::max(1u,size/2);
+            }
+        }
+        Buffer staging=MakeBuffer(pixels.size(),VK_BUFFER_USAGE_TRANSFER_SRC_BIT,true);Image image;
+        try {
+            std::memcpy(staging.mapped,pixels.data(),pixels.size());
+            image=MakeImage(source.width,source.height,VK_FORMAT_R8G8B8A8_UNORM,VK_IMAGE_USAGE_TRANSFER_DST_BIT|VK_IMAGE_USAGE_SAMPLED_BIT,VK_IMAGE_ASPECT_COLOR_BIT,6,source.mipLevels,true);
+            Transfer([&](VkCommandBuffer cb){
+                VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};b.image=image.image;
+                b.srcQueueFamilyIndex=b.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;
+                b.subresourceRange={VK_IMAGE_ASPECT_COLOR_BIT,0,uint32_t(source.mipLevels),0,6};b.oldLayout=VK_IMAGE_LAYOUT_UNDEFINED;
+                b.newLayout=VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;b.dstAccessMask=VK_ACCESS_TRANSFER_WRITE_BIT;
+                vkCmdPipelineBarrier(cb,VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,0,0,nullptr,0,nullptr,1,&b);
+                vkCmdCopyBufferToImage(cb,staging.buffer,image.image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,uint32_t(regions.size()),regions.data());
+                b.oldLayout=b.newLayout;b.newLayout=VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;b.srcAccessMask=VK_ACCESS_TRANSFER_WRITE_BIT;b.dstAccessMask=VK_ACCESS_SHADER_READ_BIT;
+                vkCmdPipelineBarrier(cb,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,0,0,nullptr,0,nullptr,1,&b);
+            });
+        }catch(...){Destroy(staging);Destroy(image);throw;}
+        Destroy(staging);return image;
+    }
     void Initialize(XrInstance xr,XrSystemId system,uint32_t w,uint32_t h) {
         width=w;height=h;
         XrGraphicsRequirementsVulkan2KHR req{XR_TYPE_GRAPHICS_REQUIREMENTS_VULKAN2_KHR};
@@ -258,6 +313,8 @@ public:
         VkSamplerCreateInfo sci{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};sci.magFilter=sci.minFilter=VK_FILTER_LINEAR;
         sci.mipmapMode=VK_SAMPLER_MIPMAP_MODE_LINEAR;sci.maxLod=VK_LOD_CLAMP_NONE;sci.addressModeU=sci.addressModeV=sci.addressModeW=VK_SAMPLER_ADDRESS_MODE_REPEAT;
         Check(vkCreateSampler(device,&sci,nullptr,&sampler),"sampler");
+        sci.magFilter=sci.minFilter=VK_FILTER_NEAREST;sci.mipmapMode=VK_SAMPLER_MIPMAP_MODE_NEAREST;
+        Check(vkCreateSampler(device,&sci,nullptr,&nearest),"palette sampler");
         const std::array<uint8_t,24> pixels{255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255};
         white=UploadTexture(1,1,pixels.data());cube=UploadTexture(1,1,pixels.data(),true);
         arena=MakeBuffer(32u*1024u*1024u,VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT|VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,true);
@@ -322,10 +379,14 @@ public:
         else attributes={{0,0,VK_FORMAT_R32G32B32_SFLOAT,0},{1,0,VK_FORMAT_R32G32B32_SFLOAT,12},{2,0,VK_FORMAT_R32G32B32_SFLOAT,24},{3,0,VK_FORMAT_R32G32B32_SFLOAT,36},{4,0,VK_FORMAT_R32G32_SFLOAT,48},{5,0,VK_FORMAT_R32G32B32A32_SFLOAT,56}};
         // Unused skin/instance inputs must still have defined attributes. The
         // probe rejects draws needing those streams rather than render bind poses.
-        if(!key.terrain)for(uint32_t i=6;i<12;++i)attributes.push_back({i,
-            key.instanced&&i<10?1u:0u,VK_FORMAT_R32G32B32A32_SFLOAT,key.instanced&&i<10?(i-6)*16u:0u});
-        std::array<VkVertexInputBindingDescription,2> bindings{{binding,{1,64,VK_VERTEX_INPUT_RATE_INSTANCE}}};
-        VkPipelineVertexInputStateCreateInfo vi{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};vi.vertexBindingDescriptionCount=key.instanced?2:1;vi.pVertexBindingDescriptions=bindings.data();vi.vertexAttributeDescriptionCount=uint32_t(attributes.size());vi.pVertexAttributeDescriptions=attributes.data();
+        if(!key.terrain)for(uint32_t i=6;i<12;++i) {
+            const uint32_t stream=key.instanced&&i<10?1u:key.skinned&&i>=10?2u:0u;
+            attributes.push_back({i,stream,VK_FORMAT_R32G32B32A32_SFLOAT,stream==1?(i-6)*16u:stream==2?(i-10)*16u:0u});
+        }
+        std::vector<VkVertexInputBindingDescription> bindings{binding};
+        if(key.instanced)bindings.push_back({1,64,VK_VERTEX_INPUT_RATE_INSTANCE});
+        if(key.skinned)bindings.push_back({2,32,VK_VERTEX_INPUT_RATE_VERTEX});
+        VkPipelineVertexInputStateCreateInfo vi{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};vi.vertexBindingDescriptionCount=uint32_t(bindings.size());vi.pVertexBindingDescriptions=bindings.data();vi.vertexAttributeDescriptionCount=uint32_t(attributes.size());vi.pVertexAttributeDescriptions=attributes.data();
         VkPipelineInputAssemblyStateCreateInfo ia{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};ia.topology=VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
         VkViewport viewport{0,0,float(width),float(height),0,1};VkRect2D scissor{{0,0},{width,height}};
         VkPipelineViewportStateCreateInfo vp{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};vp.viewportCount=1;vp.pViewports=&viewport;vp.scissorCount=1;vp.pScissors=&scissor;
@@ -361,7 +422,7 @@ public:
             break;
         }
     }
-    bool NeedsUnsupportedStreams(const ProgramData& p) {
+    bool UsesSkin(const ProgramData& p) {
         for(const auto& e:p.fields)if(!std::strcmp(e.field.name,"uActorSkinMode")) {
             int mode=0;std::memcpy(&mode,p.bytes.data()+e.field.offset,4);if(mode)return true;
         }
@@ -370,14 +431,14 @@ public:
     void Draw(uint32_t program,uint32_t vao,uint32_t mode,int first,int count,uint32_t type,size_t offset,int instances) {
         if(!begun||failed)return;
         const auto pIt=programs.find(program);if(pIt==programs.end()){++skipped;return;}
-        const auto mIt=meshes.find(vao);if(mIt==meshes.end()||mode!=GL_TRIANGLES||count<=0||instances<=0||(instances>1&&(!instanceMatrices||instanceMatrixCount<size_t(instances)))||NeedsUnsupportedStreams(pIt->second)){++skipped;return;}
+        const auto mIt=meshes.find(vao);if(mIt==meshes.end()||mode!=GL_TRIANGLES||count<=0||instances<=0||(instances>1&&(!instanceMatrices||instanceMatrixCount<size_t(instances)))||(UsesSkin(pIt->second)&&!mIt->second.skin.buffer)){++skipped;return;}
         if(type && type!=GL_UNSIGNED_INT){++skipped;return;}
         const auto& m=mIt->second;auto& p=pIt->second;const int kind=p.terrain?1:0;
         // Mirrored terrain packs indices after vertices in GL; native buffers are separate.
         const uint32_t indexFirst=type?(p.terrain?0:uint32_t(offset/4)):uint32_t(first);
         if(indexFirst+uint32_t(count)>m.count){++skipped;return;}
         const auto& s=fqgl::state;
-        PipelineKey key;key.terrain=p.terrain;key.stride=m.stride;key.instanced=instances>1;
+        PipelineKey key;key.terrain=p.terrain;key.stride=m.stride;key.instanced=instances>1;key.skinned=UsesSkin(p);
         key.depth=s.depth.known?s.depth.value:true;key.write=s.depthWrite.known?s.depthWrite.value:true;
         key.blend=s.blend.known&&s.blend.value;key.cull=s.cull.known&&s.cull.value;
         key.clockwise=s.frontFace.known&&s.frontFace.value==GL_CW;key.depthFunc=s.depthFunc.known?s.depthFunc.value:GL_LESS;
@@ -397,10 +458,13 @@ public:
         for(size_t i=0;i<p.units.size();++i){
             VkImageView view=samplerMeta[i].cube?cube.view:white.view;
             const int unit=p.units[i];
-            if(!samplerMeta[i].cube&&unit>=0&&unit<16){
-                auto tex=textures.find(s.texture2d[unit].value);if(tex!=textures.end())view=tex->second.view;
+            VkSampler chosenSampler=sampler;
+            if(unit>=0&&unit<16){
+                const auto& binding=samplerMeta[i].cube?s.textureCube[unit]:s.texture2d[unit];
+                auto tex=textures.find(binding.value);
+                if(tex!=textures.end()){view=tex->second.view;if(tex->second.palette)chosenSampler=nearest;}
             }
-            imageInfo[i]={sampler,view,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+            imageInfo[i]={chosenSampler,view,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
         }
         std::vector<VkWriteDescriptorSet> writes(p.units.size()+2);
         for(uint32_t i=0;i<writes.size();++i){auto& w=writes[i];w.sType=VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;w.dstSet=set;w.dstBinding=i;w.descriptorCount=1;
@@ -413,6 +477,7 @@ public:
         vkCmdBindPipeline(command,VK_PIPELINE_BIND_POINT_GRAPHICS,Pipeline(key));
         vkCmdBindDescriptorSets(command,VK_PIPELINE_BIND_POINT_GRAPHICS,layouts[kind],0,1,&set,1,&dynamic);
         const VkDeviceSize zero=0;vkCmdBindVertexBuffers(command,0,1,&m.vertices.buffer,&zero);
+        if(key.skinned)vkCmdBindVertexBuffers(command,2,1,&m.skin.buffer,&zero);
         if(key.instanced)vkCmdBindVertexBuffers(command,1,1,&arena.buffer,&instanceOffset);
         if(type){vkCmdBindIndexBuffer(command,m.indices.buffer,0,VK_INDEX_TYPE_UINT32);vkCmdDrawIndexed(command,count,instances,indexFirst,0,0);}
         else vkCmdDraw(command,count,instances,first,0);
@@ -439,6 +504,7 @@ public:
         Check(vkQueueSubmit(queue,1,&si,fence),"submit world probe");Check(vkWaitForFences(device,1,&fence,VK_TRUE,UINT64_MAX),"finish world probe");
         double gpuMs=-1;
         if(timestamps){uint64_t t[2]{};if(vkGetQueryPoolResults(device,timestamps,0,2,sizeof(t),t,8,VK_QUERY_RESULT_64_BIT)==VK_SUCCESS)gpuMs=double(t[1]-t[0])*properties.limits.timestampPeriod/1e6;}
+        Collect();
         Dump();
         if((frames++%120)==0)VKLOG("FQVK WORLD PROBE frame=%llu partialStereoGpuMs=%.3f sharedDraws=%llu vertexCorners=%llu skippedDraws=%llu passes=world+LAND presentation=GLES concurrentApiWork=1 benchmarkValid=0",
             (unsigned long long)frames,gpuMs,(unsigned long long)draws,(unsigned long long)vertices,(unsigned long long)skipped);
@@ -500,8 +566,9 @@ public:
     ~Renderer() {
         if(device){vkDeviceWaitIdle(device);
             for(auto& e:pipelines)vkDestroyPipeline(device,e.second,nullptr);
-            for(auto& e:meshes){Destroy(e.second.vertices);Destroy(e.second.indices);}
+            for(auto& e:meshes){Destroy(e.second.vertices);Destroy(e.second.indices);Destroy(e.second.skin);}
             for(auto& e:textures)Destroy(e.second);
+            Collect();
             Destroy(arena);Destroy(stereo);Destroy(white);Destroy(cube);
             if(framebuffer)vkDestroyFramebuffer(device,framebuffer,nullptr);
             if(pass)vkDestroyRenderPass(device,pass,nullptr);
@@ -509,6 +576,7 @@ public:
             if(descriptors)vkDestroyDescriptorPool(device,descriptors,nullptr);
             for(int k=0;k<2;++k){if(layouts[k])vkDestroyPipelineLayout(device,layouts[k],nullptr);if(sets[k])vkDestroyDescriptorSetLayout(device,sets[k],nullptr);for(auto m:modules[k])if(m)vkDestroyShaderModule(device,m,nullptr);}
             if(timestamps)vkDestroyQueryPool(device,timestamps,nullptr);
+            if(nearest)vkDestroySampler(device,nearest,nullptr);
             if(sampler)vkDestroySampler(device,sampler,nullptr);
             if(fence)vkDestroyFence(device,fence,nullptr);
             if(uploads)vkDestroyCommandPool(device,uploads,nullptr);
@@ -530,16 +598,29 @@ bool InitializeWorldProbe(XrInstance instance,XrSystemId system,uint32_t w,uint3
         hooks.uniform=[](uint32_t id,int location,int kind,int size,const void* bytes){renderer->Uniform(id,location,kind,size,bytes);};
         hooks.mesh=[](uint32_t vao,const float* vertices,size_t n,size_t stride,const uint32_t* indices,size_t indexCount){
             try {if(!vao||!vertices||!n)return;auto& r=*renderer;
-                auto& m=r.meshes[vao];r.Destroy(m.vertices);r.Destroy(m.indices);
+                auto& m=r.meshes[vao];r.Retire(m.vertices);r.Retire(m.indices);
                 m.stride=uint32_t(stride);m.count=uint32_t(indexCount?indexCount:n);
                 m.vertices=r.UploadBuffer(vertices,n*stride*4,VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
                 if(indexCount)m.indices=r.UploadBuffer(indices,indexCount*4,VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
             }catch(const std::exception& e){Failure(e);}};
-        hooks.texture=[](uint32_t id,int w,int h,const uint8_t* rgba){try{if(w<=0||h<=0||!rgba)return;auto& r=*renderer;auto image=r.UploadTexture(w,h,rgba);r.Destroy(r.textures[id]);r.textures[id]=image;}catch(const std::exception& e){Failure(e);}};
+        hooks.texture=[](uint32_t id,int w,int h,const uint8_t* rgba){try{if(w<=0||h<=0||!rgba)return;auto& r=*renderer;auto image=r.UploadTexture(w,h,rgba);r.Retire(r.textures[id]);r.textures[id]=image;}catch(const std::exception& e){Failure(e);}};
+        hooks.dynamicMesh=[](uint32_t vao,const float* data,size_t floats){try{
+            auto& r=*renderer;auto found=r.meshes.find(vao);if(found==r.meshes.end())return;
+            auto buffer=r.UploadBuffer(data,floats*4,VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
+            r.Retire(found->second.vertices);found->second.vertices=buffer;
+        }catch(const std::exception& e){Failure(e);}};
+        hooks.skin=[](uint32_t vao,uint32_t texture,const float* attributes,size_t count,const float* palette,size_t rows){try{
+            auto& r=*renderer;auto found=r.meshes.find(vao);if(found==r.meshes.end())return;
+            if(attributes&&count){auto b=r.UploadBuffer(attributes,count*4,VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);r.Retire(found->second.skin);found->second.skin=b;}
+            auto image=r.UploadPalette(palette,rows);r.Retire(r.textures[texture]);r.textures[texture]=image;
+        }catch(const std::exception& e){Failure(e);}};
+        hooks.cube=[](uint32_t id,const Fo3RgbaCubeTexture& source){try{
+            auto& r=*renderer;auto image=r.UploadCube(source);r.Retire(r.textures[id]);r.textures[id]=image;
+        }catch(const std::exception& e){Failure(e);}};
         hooks.draw=[](uint32_t p,uint32_t v,uint32_t m,int f,int n,uint32_t t,size_t o,int i){try{renderer->Draw(p,v,m,f,n,t,o,i);}catch(const std::exception& e){Failure(e);}};
-        hooks.erase=[](uint32_t id,bool texture){auto& r=*renderer;if(r.begun)return;
-            if(texture){auto i=r.textures.find(id);if(i!=r.textures.end()){r.Destroy(i->second);r.textures.erase(i);}}
-            else{auto i=r.meshes.find(id);if(i!=r.meshes.end()){r.Destroy(i->second.vertices);r.Destroy(i->second.indices);r.meshes.erase(i);}}};
+        hooks.erase=[](uint32_t id,bool texture){auto& r=*renderer;
+            if(texture){auto i=r.textures.find(id);if(i!=r.textures.end()){r.Retire(i->second);r.textures.erase(i);}}
+            else{auto i=r.meshes.find(id);if(i!=r.meshes.end()){r.Retire(i->second.vertices);r.Retire(i->second.indices);r.Retire(i->second.skin);r.meshes.erase(i);}}};
         return true;
     }catch(const std::exception& e){Failure(e);ShutdownWorldProbe();return false;}
 }

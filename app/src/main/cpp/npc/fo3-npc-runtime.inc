@@ -479,6 +479,9 @@ void Q230UpdateFacialPart(Q230ActorVisual& actor,Q230RigPart& rig) {
       if(object.skinMode) {
         glBindBuffer(GL_ARRAY_BUFFER,object.vbo);
         glBufferSubData(GL_ARRAY_BUFFER,0,rig.facialWork.size()*sizeof(float),rig.facialWork.data());
+#ifdef FQ_ENABLE_VULKAN
+        fqvk::DynamicMesh(object.vao,rig.facialWork.data(),rig.facialWork.size());
+#endif
         glBindBuffer(GL_ARRAY_BUFFER,0);
       }else rig.skin.bind=rig.facialWork;
       rig.facialPublished=actor.facialWeights;

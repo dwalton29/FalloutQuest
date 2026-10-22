@@ -34,10 +34,22 @@ jobs:
             -I/tmp/fq-vulkan-shaders -Iapp/src/main/cpp tests/render/vulkan_world_gpu_tests.cpp \
             -lvulkan -lGLESv2 -o /tmp/fq-vulkan-world
           if ! /tmp/fq-vulkan-world 2>&1 | tee /tmp/fq-vulkan-validation.log; then
-            gdb --batch -ex run -ex 'thread apply all bt 8' --args /tmp/fq-vulkan-world
+            gdb --batch -ex run -ex 'thread apply all bt 24' --args /tmp/fq-vulkan-world
             exit 1
           fi
           if grep -q 'Validation Error' /tmp/fq-vulkan-validation.log; then exit 1; fi
+      - name: Collect software Vulkan reproduction files
+        if: always()
+        run: |
+          mkdir -p /tmp/fq-vulkan-repro
+          cp /tmp/fq-vulkan-world /tmp/fq-vulkan-repro/ || true
+          cp /lib/x86_64-linux-gnu/libvulkan_lvp.so /lib/x86_64-linux-gnu/libGLESv2.so.2 /tmp/fq-vulkan-repro/ || true
+          cp /usr/share/vulkan/icd.d/lvp*.json /tmp/fq-vulkan-repro/ || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: FalloutQuest-vulkan-host-repro
+          path: /tmp/fq-vulkan-repro
 
   build:
     runs-on: ubuntu-latest
@@ -82,6 +94,8 @@ jobs:
         run: |
           g++ -std=c++17 -Wall -Wextra -Werror -Itests/render/mock -Iapp/src/main/cpp tests/render/gl_state_cache_tests.cpp -o /tmp/gl-state-tests
           /tmp/gl-state-tests
+          g++ -std=c++17 -Wall -Wextra -Werror -Itests/render/mock -Iapp/src/main/cpp tests/render/terrain_depth_tests.cpp -o /tmp/terrain-depth-tests
+          /tmp/terrain-depth-tests
           g++ -O2 -std=c++17 -Wall -Wextra -Werror -Iapp/src/main/cpp tests/render/geometry_optimisation_tests.cpp -o /tmp/geometry-optimisation-tests
           /tmp/geometry-optimisation-tests
           python3 tests/render/test_terrain_upload.py

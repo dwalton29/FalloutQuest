@@ -54,6 +54,9 @@ inline bool UploadResidentCube(const Fo3RgbaCubeTexture& cube,
     if(glGetError()!=GL_NO_ERROR||!owner.Adopt(id)) {
         glDeleteTextures(1,&id);id=0;return false;
     }
+#ifdef FQ_ENABLE_VULKAN
+    fqvk::Cube(id,cube);
+#endif
     return true;
 }
 } // namespace fo3scene

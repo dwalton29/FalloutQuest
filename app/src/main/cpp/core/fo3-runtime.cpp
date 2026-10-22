@@ -1985,6 +1985,9 @@ bool UploadCubeTextureQ2050(const std::string& path,
         return true;
     }
 
+#ifdef FQ_ENABLE_VULKAN
+    fqvk::Cube(textureId,cube);
+#endif
     gCubeTextureCacheQ2050.emplace(cacheKey,
                                    CachedGpuTexture{textureId, true});
     Q6H_LOGI("Q20.5 CUBE GPU READY: ref=%08X path=%s size=%dx%d mips=%d format=%s cache=%zu faces=+X,-X,+Y,-Y,+Z,-Z",

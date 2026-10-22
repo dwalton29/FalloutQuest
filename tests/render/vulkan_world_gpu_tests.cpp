@@ -67,7 +67,7 @@ float Pixel(const std::vector<uint16_t>& image,int eye,int x,int y,int component
     return fqvk::Renderer::Half(image[(eye*64*64+y*64+x)*4+component]);
 }
 void Near(float value,float expected) {if(std::fabs(value-expected)>.012f)throw std::runtime_error("pixel mismatch: "+std::to_string(value)+" expected "+std::to_string(expected));}
-void Scene(bool terrain) {
+void Scene(bool terrain,bool skin=false,bool instanced=false) {
     fqgl::Reset();
     Program(1,terrain);const auto quad=Quad(terrain);const uint32_t indices[]{0,1,2,0,2,3};
     fqvk::Mesh(9,quad.data(),4,terrain?12:18,indices,6);
@@ -79,11 +79,22 @@ void Scene(bool terrain) {
     Set(1,"uFogNearVertexQ1532",{10000});Set(1,"uFogFarVertexQ1532",{10001});Set(1,"uFogPowerVertexQ1532",{1});
     if(terrain)Set(1,"uUseTexture",{1});
     else {Set(1,"uNoLighting",{1});Set(1,"uMaterialAlpha",{1});Set(1,"uPipScreenGain",{1});Set(1,"uSunDirectionVertexQ1540",{0,0,1});}
+    std::vector<float> weights(4*8);
+    float palette[32]{};palette[0]=palette[5]=palette[10]=palette[15]=1;
+    palette[16]=palette[21]=palette[26]=palette[31]=1;
+    if(skin) {
+        for(size_t i=0;i<4;++i)weights[i*8]=1;
+        fqvk::Skin(9,7,weights.data(),weights.size(),palette,1);
+        fqgl::state.texture2d[6].Change(7);Set(1,"uActorSkinMode",{1});
+    }
+    const float instances[]{1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1,
+                            1,0,0,0,0,1,0,0,0,0,1,0,1.2f,0,0,1};
+    if(instanced){Set(1,"uInstancingEnabledQ2016",{1});fqvk::instanceMatrices=instances;fqvk::instanceMatrixCount=2;}
     const float left[]{1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
     const float right[]{1,0,0,0, 0,1,0,0, 0,0,1,0, .8f,0,0,1};
     const float eye[]{0,0,2};assert(fqvk::BeginWorldProbe(left,right,eye,eye));
     // Terrain's GL EBO points past vertex bytes; native EBO has its own buffer.
-    fqvk::hooks.draw(1,9,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,terrain?quad.size()*4:0,1);
+    fqvk::hooks.draw(1,9,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,terrain?quad.size()*4:0,instanced?2:1);
     if(terrain) {
         // Authored overlay with depth equality and no depth writes. A uniform
         // update after an earlier draw must not retroactively alter that draw.
@@ -100,12 +111,23 @@ void Scene(bool terrain) {
     Near(Pixel(pixels,1,32,32,0),0); // gl_ViewIndex really selected the right camera.
     Near(Pixel(pixels,1,55,32,0),terrain?.5f:1);
     assert(fqvk::renderer->draws==uint64_t(terrain?2:1));
+    fqvk::instanceMatrices=nullptr;fqvk::instanceMatrixCount=0;
+    if(instanced)Near(Pixel(pixels,0,62,32,0),1);
+    if(skin) {
+        // Update the same live palette without rebuilding the mesh/animation.
+        palette[12]=.8f;
+        fqvk::Skin(9,7,nullptr,0,palette,1);
+        assert(fqvk::BeginWorldProbe(left,left,eye,eye));
+        fqvk::hooks.draw(1,9,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);
+        fqvk::EndWorldProbe();const auto moved=fqvk::renderer->Readback();
+        Near(Pixel(moved,0,32,32,0),0);Near(Pixel(moved,0,55,32,0),1);
+    }
 }
 }
 int main() {
-    for(bool terrain:{false,true}) {
+    for(int mode=0;mode<4;++mode) {
         assert(fqvk::InitializeWorldProbe(reinterpret_cast<XrInstance>(uintptr_t(1)),1,64,64));
-        Scene(terrain);fqvk::ShutdownWorldProbe();assert(!fqvk::WorldProbeActive());
+        Scene(mode==1,mode==2,mode==3);fqvk::ShutdownWorldProbe();assert(!fqvk::WorldProbeActive());
     }
     std::cout<<"Vulkan native multiview: original world/LAND shaders, indexed NIF layout, per-eye cameras, depth equality, ordered paint blending and recreation passed\n";
 }

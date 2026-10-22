@@ -16,6 +16,10 @@ backend. No Vulkan-default or 72 Hz claim is made.
 - Indexed and non-indexed geometry, opaque instances, normal/gloss/diffuse maps,
   vertex colors, alpha testing, ordered LAND paint blending, dynamic uniform
   snapshots, per-eye positions, and depth/cull/blend pipeline variants.
+- Native actor weight/index streams and original float bone palettes, live palette
+  updates, differential FaceGen geometry updates, CPU skin fallback uploads and
+  original six-face/mip DDS cube resources. These paths still need GPU/on-device
+  validation; source integration alone is not NPC visual parity.
 - Explicit transfers/barriers, resident buffers/images, generated DDS mip chains,
   fenced command reuse, pipeline caching, optional FP16 stereo image readback.
 - Separate partial GPU timestamps and skipped-draw diagnostics. Ordinary FQPerf
@@ -61,8 +65,8 @@ GLES selected. It must not select an incomplete game renderer.
 
 - Vulkan OpenXR graphics binding, layered swapchain presentation, acquisition /
   release and session-loss recreation; current device handshake alone is not M1.
-- GPU skin attributes/palettes, changing actor/weapon geometry, cube materials,
-  decals/reversed culling, complete UI and loading-screen native passes.
+- Complete actor/weapon visual validation, decals/reversed culling, complete UI
+  and loading-screen native passes.
 - Sky/weather, water, HDR/imagespace/bloom and native MSAA/resolve/depth submission.
 - Native draw-list generation independent of GLES commands, stereo-union culling
   for every pass and backend-owned material/resource identities.
