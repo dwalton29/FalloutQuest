@@ -3,6 +3,7 @@ float GetFo3FogPower();
 
 #include "rendering/terrain/fo3-terrain.h"
 #include "rendering/terrain/fo3-terrain-bounds.h"
+#include "rendering/terrain/terrain-depth-scope.h"
 #include "rendering/exact-indexed-mesh.h"
 #include "rendering/terrain/terrain-paint-coverage.h"
 #include "rendering/terrain/terrain-layer-fusion.h"
@@ -1483,7 +1484,7 @@ void RenderFo3TerrainQ76(const float* mvp) {
 
     glDisable(GL_CULL_FACE);
     glDisable(GL_BLEND);
-    glDepthMask(GL_TRUE);
+    fo3terrain::DepthScope terrainDepth; // Independent of restored sky/UI depth state.
     glUseProgram(q76bProgram);
     glUniform1i(q238RoundModeLocation,q238TerrainRoundMode);
     glUniformMatrix4fv(q76bMvpLocation, 1, GL_FALSE, mvp);

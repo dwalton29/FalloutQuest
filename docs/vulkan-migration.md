@@ -72,10 +72,14 @@ GLES selected. It must not select an incomplete game renderer.
   recording. The probe intentionally uses blocking transfers/fences and may
   significantly slow loading and frames. It is not the optimized architecture.
 - Full Vulkan FQPerf pass capture and matched six-environment headset benchmarks.
-- v244 terrain appearance regression: **unresolved**. Original v237 programs and
+- v244 terrain appearance: a depth-state defect is fixed in source. The eye
+  path disables depth testing; RenderScene restores it before LAND, and LAND
+  previously never enabled it. LAND now explicitly uses depth test + LEQUAL,
+  writes base depth, and restores incoming state. End-to-end visual correctness
+  still requires headset verification. Original v237 programs and
   existing LAND/LTEX/TXST/parent-worldspace resolution remain the reference;
   fusion remains quarantined. No worldspace inheritance, geometry, fog or draw
-  distance changes are included here, and no terrain repair is claimed.
+  distance changes are included here, and no complete terrain repair is claimed.
 
 ## Validation boundaries and next work
 
