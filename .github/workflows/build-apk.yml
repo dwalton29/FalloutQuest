@@ -54,6 +54,7 @@ jobs:
           g++ -O2 -std=c++17 -Wall -Wextra -Werror -Iapp/src/main/cpp tests/render/geometry_optimisation_tests.cpp -o /tmp/geometry-optimisation-tests
           /tmp/geometry-optimisation-tests
           python3 tests/render/test_terrain_upload.py
+          python3 tests/render/test_terrain_program_fallback.py
           g++ -O2 -std=c++17 -Wall -Wextra -Werror -Iapp/src/main/cpp tests/render/terrain_layer_fusion_tests.cpp -o /tmp/terrain-fusion-tests
           /tmp/terrain-fusion-tests
           python3 tests/render/test_hdr_rtt_target.py

@@ -3,6 +3,9 @@
 #include <sys/system_properties.h>
 #endif
 namespace fo3terrain {
+// A shader rejected by the device must never remove the original LAND path.
+inline bool fusionProgramFailed = false;
+inline void DisableFusionAfterProgramFailure() { fusionProgramFailed = true; }
 inline bool LegacyLayers() {
     static const bool legacy=[](){
 #if defined(__ANDROID__) && !defined(NDEBUG)
@@ -13,7 +16,7 @@ inline bool LegacyLayers() {
         return false;
 #endif
     }();
-    return legacy;
+    return legacy || fusionProgramFailed;
 }
 inline bool UnsharedLighting() {
     static const bool unshared=[](){

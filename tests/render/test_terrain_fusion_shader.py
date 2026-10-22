@@ -5,6 +5,8 @@ import ctypes as C
 import ctypes.util
 import os
 import re
+import subprocess
+import tempfile
 from pathlib import Path
 os.environ['EGL_PLATFORM']='surfaceless'
 egl=C.CDLL(ctypes.util.find_library('EGL') or 'libEGL.so.1')
@@ -53,6 +55,13 @@ def program(texts):
     return p
 legacy=program([(ROOT/f'tests/render/fixtures/terrain_v237.{e}').read_text() for e in ['vert','frag']])
 fused_shaders=[re.search(n+r'\s*=\s*R"\((.*?)\)";',source,re.S).group(1).lstrip() for n in ['vertexSource','fragmentSource']]
+# Mesa accepted a variable named `shared`, but strict ESSL compilers reject
+# that reserved word. Compile/link with glslang as well as the real GLES test.
+with tempfile.TemporaryDirectory() as directory:
+    paths=[]
+    for text,suffix in zip(fused_shaders,['vert','frag']):
+        path=Path(directory)/('terrain.'+suffix);path.write_text(text);paths.append(str(path))
+    subprocess.run(['glslangValidator','-l',*paths],check=True)
 fused=program(fused_shaders)
 unshared=program([fused_shaders[0],fused_shaders[1].replace('#version 300 es',
     '#version 300 es\n#define FQ239_UNSHARED_LIGHTS 1',1)])

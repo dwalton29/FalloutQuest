@@ -407,7 +407,7 @@ GLuint Q76BCreateProgram() {
             visible += projected.z - bias <= texture(uShadowMap, projected.xy + vec2( halfTexel.x,  halfTexel.y)).r ? 1.0 : 0.0;
             return visible * 0.25;
         }
-// Q239: geometric lighting terms are shared by the original LAND materials;
+// Q239: geometric lighting terms are lighting by the original LAND materials;
         // normals, shadow/specular evaluation and layer blending remain per material.
         struct Q239SharedLighting {
             vec3 sunDirection;
@@ -415,27 +415,27 @@ GLuint Q76BCreateProgram() {
             float localAttenuation[8];
         };
         Q239SharedLighting Q239PrepareSharedLighting() {
-            Q239SharedLighting shared;
-            shared.sunDirection = normalize(uSunDirection);
+            Q239SharedLighting lighting;
+            lighting.sunDirection = normalize(uSunDirection);
             for (int i = 0; i < 8; ++i) {
                 if (i >= uLocalLightCount) break;
                 vec3 toLight = uLocalLightPosRadius[i].xyz - vPosition;
                 float distanceToLight = length(toLight);
                 float radius = max(uLocalLightPosRadius[i].w, 0.001);
                 if (distanceToLight >= radius) {
-                    shared.localAttenuation[i] = -1.0;
+                    lighting.localAttenuation[i] = -1.0;
                     continue;
                 }
-                shared.localDirection[i] = toLight / max(distanceToLight, 0.001);
+                lighting.localDirection[i] = toLight / max(distanceToLight, 0.001);
                 float edge = clamp(1.0 - distanceToLight / radius, 0.0, 1.0);
-                shared.localAttenuation[i] =
+                lighting.localAttenuation[i] =
                     pow(edge, max(uLocalLightColorFalloff[i].w, 0.25));
             }
-            return shared;
+            return lighting;
         }
         vec3 Q238ShadeLayer(sampler2D diffuseMap, sampler2D normalMap,
                              int useTexture, int useNormal, float specularEnabled,
-                             Q239SharedLighting shared) {
+                             Q239SharedLighting lighting) {
             vec3 N = normalize(vNormal);
             vec4 normalGloss = vec4(0.5, 0.5, 1.0, 0.0);
             if (useNormal != 0) {
@@ -453,7 +453,7 @@ GLuint Q76BCreateProgram() {
 #ifdef FQ239_UNSHARED_LIGHTS
             vec3 lightDirection = normalize(uSunDirection);
 #else
-            vec3 lightDirection = shared.sunDirection;
+            vec3 lightDirection = lighting.sunDirection;
 #endif
             float lambert = max(dot(N, lightDirection), 0.0);
             vec3 earthFallback = vec3(0.34, 0.27, 0.18);
@@ -484,10 +484,10 @@ GLuint Q76BCreateProgram() {
 #else
             for (int i = 0; i < 8; ++i) {
                 if (i >= uLocalLightCount) break;
-                if (shared.localAttenuation[i] < 0.0) continue;
-                float localLambert = max(dot(N, shared.localDirection[i]), 0.0);
+                if (lighting.localAttenuation[i] < 0.0) continue;
+                float localLambert = max(dot(N, lighting.localDirection[i]), 0.0);
                 lit += albedo * uLocalLightColorFalloff[i].rgb *
-                       localLambert * shared.localAttenuation[i];
+                       localLambert * lighting.localAttenuation[i];
             }
 #endif
             // PC SLS2100.vso computes LAND fog per vertex from transformed
@@ -514,22 +514,22 @@ GLuint Q76BCreateProgram() {
         void main() {
             if (uWaterReflectionClipEnabledQ2090 > 0.5 &&
                 vPosition.y < uWaterReflectionPlaneYQ2090) discard;
-            Q239SharedLighting shared = Q239PrepareSharedLighting();
+            Q239SharedLighting lighting = Q239PrepareSharedLighting();
             vec3 base = Q238ShadeLayer(uDiffuse, uNormalGloss, uUseTexture,
-                                      uUseNormal, uTerrainSpecularEnabled, shared);
+                                      uUseNormal, uTerrainSpecularEnabled, lighting);
             if (uPaintCount == 0) {
                 fragColor = vec4(base, clamp(vAlpha, 0.0, 1.0));
                 return;
             }
             highp vec4 result = Q238Round(vec4(base, 1.0));
             if (uPaintCount > 0 && vPaintAlpha.x != 0.0) result = Q238Over(result,
-                Q238ShadeLayer(uPaintDiffuse0, uPaintNormal0, 1, int(uPaintFlags0.x), uPaintFlags0.y, shared),
+                Q238ShadeLayer(uPaintDiffuse0, uPaintNormal0, 1, int(uPaintFlags0.x), uPaintFlags0.y, lighting),
                 vPaintAlpha.x);
             if (uPaintCount > 1 && vPaintAlpha.y != 0.0) result = Q238Over(result,
-                Q238ShadeLayer(uPaintDiffuse1, uPaintNormal1, 1, int(uPaintFlags1.x), uPaintFlags1.y, shared),
+                Q238ShadeLayer(uPaintDiffuse1, uPaintNormal1, 1, int(uPaintFlags1.x), uPaintFlags1.y, lighting),
                 vPaintAlpha.y);
             if (uPaintCount > 2 && vPaintAlpha.z != 0.0) result = Q238Over(result,
-                Q238ShadeLayer(uPaintDiffuse2, uPaintNormal2, 1, int(uPaintFlags2.x), uPaintFlags2.y, shared),
+                Q238ShadeLayer(uPaintDiffuse2, uPaintNormal2, 1, int(uPaintFlags2.x), uPaintFlags2.y, lighting),
                 vPaintAlpha.z);
             fragColor = result;
         }
@@ -550,29 +550,43 @@ GLuint Q76BCreateProgram() {
     }
     Q76B_LOGI("Q239 TERRAIN SHADER: legacyV237=%d unsharedLights=%d",
               q239Legacy ? 1 : 0, q239Unshared ? 1 : 0);
-    GLuint vs = Q76BCompile(GL_VERTEX_SHADER,
-                            q239Legacy ? fo3terrain::kV237VertexShader : vertexSource);
-    GLuint fs = Q76BCompile(GL_FRAGMENT_SHADER, q239Fragment);
-    if (!vs || !fs) {
-        if (vs) glDeleteShader(vs);
-        if (fs) glDeleteShader(fs);
-        return 0;
+    auto create = [](const char* vertex, const char* fragment) -> GLuint {
+        GLuint vs = Q76BCompile(GL_VERTEX_SHADER, vertex);
+        GLuint fs = Q76BCompile(GL_FRAGMENT_SHADER, fragment);
+        if (!vs || !fs) {
+            if (vs) glDeleteShader(vs);
+            if (fs) glDeleteShader(fs);
+            return 0;
+        }
+        GLuint program = glCreateProgram();
+        glAttachShader(program, vs);
+        glAttachShader(program, fs);
+        glLinkProgram(program);
+        glDeleteShader(vs);
+        glDeleteShader(fs);
+        GLint ok = GL_FALSE;
+        glGetProgramiv(program, GL_LINK_STATUS, &ok);
+        if (ok != GL_TRUE) {
+            char log[1024]{};
+            glGetProgramInfoLog(program, sizeof(log), nullptr, log);
+            Q76B_LOGE("Q7.20 terrain shader link failed: %s", log);
+            glDeleteProgram(program);
+            return 0;
+        }
+        return program;
+    };
+    GLuint program = create(q239Legacy ? fo3terrain::kV237VertexShader : vertexSource,
+                            q239Fragment);
+    if (!program && !q239Legacy) {
+        // Runs before cold or streamed CPU layer fusion. Keep original geometry
+        // and use the matching original program for this and later admissions.
+        fo3terrain::DisableFusionAfterProgramFailure();
+        Q76B_LOGE("Q242 TERRAIN FALLBACK: fused shader rejected; retrying original LAND program before geometry preparation");
+        program = create(fo3terrain::kV237VertexShader, fo3terrain::kV237FragmentShader);
     }
-    GLuint program = glCreateProgram();
-    glAttachShader(program, vs);
-    glAttachShader(program, fs);
-    glLinkProgram(program);
-    glDeleteShader(vs);
-    glDeleteShader(fs);
-    GLint ok = GL_FALSE;
-    glGetProgramiv(program, GL_LINK_STATUS, &ok);
-    if (ok != GL_TRUE) {
-        char log[1024]{};
-        glGetProgramInfoLog(program, sizeof(log), nullptr, log);
-        Q76B_LOGE("Q7.20 terrain shader link failed: %s", log);
-        glDeleteProgram(program);
-        return 0;
-    }
+    Q76B_LOGI("Q242 TERRAIN PROGRAM: ready=%d fusion=%d device=%s",
+              program != 0u, !fo3terrain::LegacyLayers(),
+              reinterpret_cast<const char*>(glGetString(GL_RENDERER)));
     return program;
 }
 
