@@ -4,6 +4,7 @@
 Uses the CMake compile_commands.json emitted by Android Gradle Plugin rather
 than guessing defaults from the Gradle build type or Android Studio labels.
 """
+import argparse
 import json
 from pathlib import Path
 import shlex
@@ -25,14 +26,15 @@ def native_commands():
     return results
 
 
-def verify():
+def verify(require_debug=True):
     records = native_commands()
-    if set(records) != {"debug", "profile"}:
+    required = {"profile", "debug"} if require_debug else {"profile"}
+    if not required.issubset(records):
         raise RuntimeError(
-            f"Expected arm64-v8a Debug and profile compile commands: "
+            f"Expected arm64-v8a {sorted(required)} compile commands; "
             f"found {list(records)}"
         )
-    for variant in ("debug", "profile"):
+    for variant in ("debug", "profile") if require_debug else ("profile",):
         source, flags = records[variant]
         optimisations = [arg for arg in flags if arg in
                          ("-O0", "-O1", "-O2", "-O3", "-Os", "-Oz", "-Og")]
@@ -52,11 +54,15 @@ def verify():
             f"{variant}: {source}; optimisation flags={optimisations}; "
             f"effective={last}; profile_marker={has_marker}; NDEBUG={ndebug}"
         )
-    for name in ("debug", "profile"):
+    for name in ("debug", "profile") if require_debug else ("profile",):
         apk = Path(f"app/build/outputs/apk/{name}/app-{name}.apk")
         assert apk.is_file(), f"Missing {name} APK: {apk}"
         print(f"{name} apk bytes={apk.stat().st_size}")
 
 
 if __name__ == "__main__":
-    verify()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--profile-only", action="store_true",
+                        help="Fast push builds produce only the O2 APK.")
+    args = parser.parse_args()
+    verify(require_debug=not args.profile_only)
