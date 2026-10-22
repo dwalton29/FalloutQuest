@@ -8068,10 +8068,19 @@ bool Q2023TileDesiredQ19(
                                     playerCellX, playerCellY);
 }
 
+// Q244: authored High VWD landmarks are still real distant geometry; do not
+// keep every discovered block active after shortening the Wasteland horizon.
+constexpr int Q244_HIGH_OBJECT_RADIUS_CELLS = 20;
+bool Q244HighObjectDesired(int32_t x, int32_t y, int32_t px, int32_t py) {
+    return std::max(std::abs(x + 2 - px), std::abs(y + 2 - py)) <=
+           Q244_HIGH_OBJECT_RADIUS_CELLS;
+}
 bool Q2023AssetDesiredQ19(
         const Q2023LodAsset& asset,
         int32_t playerCellX, int32_t playerCellY) {
-    if (asset.kind == Q2023LodAssetKind::HighObjects) return true;
+    if (asset.kind == Q2023LodAssetKind::HighObjects)
+        return Q244HighObjectDesired(asset.blockX, asset.blockY,
+                                     playerCellX, playerCellY);
     return Q2023TileDesiredQ19(
         asset.levelCells, asset.blockX, asset.blockY,
         playerCellX, playerCellY);
@@ -8122,11 +8131,10 @@ bool Q2023TileFullyRefinedQ19(
     return true;
 }
 
-// Q20.24: separate terrain refinement from object-LOD range.
-// Terrain Level4 keeps the existing uGridDistantCount=20 window. The PC
-// profile separately requests fBlockLoadDistance=125000 (~30.5 CELLs), so
-// object blocks are searched through the next aligned four-CELL macroblock.
-constexpr int Q1840_DISTANT_GRID_RADIUS_CELLS = 20;
+// Q244 Quest 3S horizon: preserve the original 16 > 8 > 4 > LAND authored
+// refinement chain but reduce both Level4 search windows. They must agree by
+// default: the Level4 worker searches the object window and also uploads LAND.
+constexpr int Q1840_DISTANT_GRID_RADIUS_CELLS = 16;
 constexpr int Q1840_DISTANT_BLOCK_RADIUS =
     (Q1840_DISTANT_GRID_RADIUS_CELLS + Q1840_LEVEL4_BLOCK_CELLS - 1) /
     Q1840_LEVEL4_BLOCK_CELLS;
@@ -8136,7 +8144,8 @@ constexpr size_t Q1840_DISTANT_TARGET_BLOCKS =
     static_cast<size_t>((Q1840_DISTANT_BLOCK_RADIUS * 2 + 1) *
                         (Q1840_DISTANT_BLOCK_RADIUS * 2 + 1));
 
-int Q2024ObjectRadiusCells() { return fqopaque::Options().lodRadius20 ? 20 : 31; }
+// Legacy debug flag now expands the short Quest default to 20 for A/B testing.
+int Q2024ObjectRadiusCells() { return fqopaque::Options().lodRadius20 ? 20 : 16; }
 int Q2024ObjectBlockRadius() { return (Q2024ObjectRadiusCells()+3)/4; }
 int Q2024ObjectCoordRadius() { return Q2024ObjectBlockRadius()*4; }
 size_t Q2024ObjectTargetBlocks() {
@@ -9227,6 +9236,11 @@ void Q1990RenderNativeLod(bool alphaPass) {
     // normal 20-cell horizon; outside that horizon the high mesh remains.
     for (Q2023HighObjectBlock& high : gQ2023HighObjectBlocks) {
         if (profile) ++work.considered;
+        if (!Q244HighObjectDesired(high.blockX, high.blockY,
+                                   playerCellX, playerCellY)) {
+            if (profile) ++work.windowRejected;
+            continue;
+        }
         Q1990NativeLodBlock* normal =
             Q1990FindLodBlock(high.blockX, high.blockY);
         if (normal && !normal->objects.empty() &&
@@ -13288,7 +13302,8 @@ void RenderScene(const float* mvp) {
     size_t q209bExposedCells=0;
     uint64_t q2019WaterReflectionCallUs=0;
     if (gExteriorStreamingActiveQ1890 && gExteriorWorldspaceQ1890 != 0u) {
-        // Prepare the same WATER000 reflection before beginning the main HDR pass.
+        // Keep authored WATR water and its refraction, but skip the costly
+        // mirrored-world planar reflection pass on standalone Quest (Q244).
         q2090HavePlane = GetFo3DominantWaterPlaneQ2070(
             gFo3EyePosition[0], gFo3EyePosition[2],
             gExteriorOriginXQ1890, gExteriorOriginYQ1890,
@@ -13308,15 +13323,11 @@ void RenderScene(const float* mvp) {
                 FLOOR_Y,
                 SCENE_FORWARD,
                 FO3_UNITS_PER_METRE);
-        const auto q2019WaterReflectionCallStarted =
-            std::chrono::steady_clock::now();
-        q2090ReflectionReady =
-            q2090HavePlane && q209bWaterInFrustum &&
-            Q2090RenderWaterReflection(mvp, q2090PlaneY, q2090ReflectionMvp);
-        q2019WaterReflectionCallUs = static_cast<uint64_t>(
-            std::chrono::duration_cast<std::chrono::microseconds>(
-                std::chrono::steady_clock::now() -
-                q2019WaterReflectionCallStarted).count());
+        // Q244: No reflection FBO, no reflected sky or world submission.
+        // The water shader falls back to authored WATR reflection colour;
+        // underlying colour/depth refraction and gameplay water remain intact.
+        q2090ReflectionReady = false;
+        q2019WaterReflectionCallUs = 0u;
 
         static uint32_t q2090LastPlaneCellLogged = 0u;
         static int q209bLastExposedLogged = -1;
