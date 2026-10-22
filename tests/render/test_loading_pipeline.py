@@ -4,6 +4,32 @@ import unittest
 ROOT=Path(__file__).resolve().parents[2]/'app/src/main/cpp'
 
 class LoadingPipeline(unittest.TestCase):
+    def test_v245_wasteland_warmup_only_waits_for_requested_lod(self):
+        runtime=(ROOT/'core/fo3-runtime.cpp').read_text()
+        warmup=runtime.split('void Q2024GetAuthoredWarmupState(',2)[2].split(
+            'uint64_t gQ1990NativeLodSerial',1)[0]
+        # v244 made High VWD selection distance-sensitive. The loading gate
+        # must no longer count all authored High VWD in the entire archive.
+        self.assertIn('highReady = 0u;',warmup)
+        self.assertIn('highTarget = 0u;',warmup)
+        self.assertNotIn('gQ2023HighObjectBlocks.size()',warmup)
+        self.assertIn('Q244HighObjectDesired(high.blockX,high.blockY,px,py)',warmup)
+        self.assertIn('Q244HighObjectDesired(asset.blockX,asset.blockY,px,py)',warmup)
+        self.assertIn('fqquality::CoarseDesired(16,tile.blockX,tile.blockY,px,py)',warmup)
+        self.assertIn('fqquality::CoarseDesired(16,asset.blockX,asset.blockY,px,py)',warmup)
+        startup=runtime.split('const bool nearLodComplete = lodReady >= 9u;',1)[1].split(
+            'const uint64_t warmupUs =',1)[0]
+        self.assertIn('gQ2023LodAssetsDiscovered &&',startup)
+        self.assertIn('level32Ready >= level32Target &&',startup)
+        self.assertIn('highReady >= highTarget;',startup)
+        self.assertNotIn('highTarget > 0u',startup)
+        self.assertNotIn('level32Target > 0u',startup)
+        self.assertIn('Fo3LoadingExteriorReady(detailComplete, nearLodComplete, horizonComplete)',
+                      runtime)
+        # Actual admission and render checks must share the same cutoff.
+        self.assertIn('return Q244HighObjectDesired(asset.blockX, asset.blockY,',runtime)
+        self.assertIn('if (!Q244HighObjectDesired(high.blockX, high.blockY,',runtime)
+
     def test_loading_eye_has_no_world_or_post_work(self):
         loop=(ROOT/'core/fo3-runtime-loop.inc').read_text()
         eye=loop.split('    bool RenderEye(',1)[1]
