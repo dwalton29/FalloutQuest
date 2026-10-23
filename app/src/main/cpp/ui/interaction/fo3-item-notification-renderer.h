@@ -41,7 +41,11 @@ void main(){
     if(!v||!f){if(v)glDeleteShader(v);if(f)glDeleteShader(f);return 0;}
     const GLuint program=glCreateProgram();glAttachShader(program,v);glAttachShader(program,f);glLinkProgram(program);
     glDeleteShader(v);glDeleteShader(f);GLint ok=GL_FALSE;glGetProgramiv(program,GL_LINK_STATUS,&ok);
-    if(!ok){glDeleteProgram(program);return 0;}return program;
+    if(!ok){glDeleteProgram(program);return 0;}
+#ifdef FQ_ENABLE_VULKAN
+    fqvk::Program(program,10);
+#endif
+    return program;
 }
 inline void Shutdown() {
     auto& r=State();
@@ -112,6 +116,10 @@ inline void Prepare(double now,bool available,bool sceneReady) {
     for(size_t i=0;i<vertices.size();++i)animated.push_back({vertices[i],quest?float(i/6)*.1f:0.f});
     glBindVertexArray(r.vao);glBindBuffer(GL_ARRAY_BUFFER,r.vbo);
     glBufferData(GL_ARRAY_BUFFER,animated.size()*sizeof(AnimatedVertex),animated.data(),GL_DYNAMIC_DRAW);
+#ifdef FQ_ENABLE_VULKAN
+    static_assert(sizeof(AnimatedVertex)==6*sizeof(float));
+    fqvk::Mesh(r.vao,reinterpret_cast<const float*>(animated.data()),animated.size(),6,nullptr,0);
+#endif
     glEnableVertexAttribArray(0);glVertexAttribPointer(0,3,GL_FLOAT,GL_FALSE,sizeof(AnimatedVertex),nullptr);
     glEnableVertexAttribArray(1);glVertexAttribPointer(1,2,GL_FLOAT,GL_FALSE,sizeof(AnimatedVertex),reinterpret_cast<void*>(3*sizeof(float)));
     glEnableVertexAttribArray(2);glVertexAttribPointer(2,1,GL_FLOAT,GL_FALSE,sizeof(AnimatedVertex),reinterpret_cast<void*>(5*sizeof(float)));

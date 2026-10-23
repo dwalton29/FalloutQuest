@@ -99,6 +99,7 @@ inline void Render(const float *mvp, const Fo3LootPanel &panel) {
     glBufferData(GL_ARRAY_BUFFER,
                  vertices.size() * sizeof(fo3hudassets::Vertex),
                  vertices.data(), GL_DYNAMIC_DRAW);
+    fo3hudassets::UploadVertices(r.vao,vertices.data(),vertices.size());
     glEnableVertexAttribArray(0);
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE,
                           sizeof(fo3hudassets::Vertex), nullptr);

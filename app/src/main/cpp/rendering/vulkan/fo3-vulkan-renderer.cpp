@@ -41,7 +41,7 @@ struct Image {VkImage image{};VkImageView view{};VkDeviceMemory memory{};uint32_
 struct PostTarget {Image image;VkFramebuffer framebuffer{};uint32_t width=0,height=0;bool initialized=false;};
 struct MeshData {Buffer vertices,indices,skin;uint32_t count=0,stride=0;};
 struct ProgramData {
-    bool terrain=false,sky=false,water=false;
+    bool terrain=false,sky=false,water=false;int ui=0;
     std::vector<uint8_t> bytes;
     struct Location {int location;shaders::Field field;};
     std::vector<Location> fields;
@@ -49,16 +49,17 @@ struct ProgramData {
     std::vector<int> units;
 };
 struct PipelineKey {
+    uint32_t ui=0;
     bool offset=false,water=false,sky=false,skinned=false,instanced=false,terrain=false,depth=true,write=true,blend=false,cull=false,clockwise=false;
     uint32_t cullFace=GL_BACK,equation=GL_FUNC_ADD,equationA=GL_FUNC_ADD,stride=0,depthFunc=GL_LEQUAL,src=GL_ONE,dst=GL_ZERO,srcA=GL_ONE,dstA=GL_ZERO;
     bool operator==(const PipelineKey& k)const {
-        return water==k.water&&offset==k.offset&&cullFace==k.cullFace&&equation==k.equation&&equationA==k.equationA&&sky==k.sky && skinned==k.skinned && instanced==k.instanced && terrain==k.terrain && depth==k.depth && write==k.write && blend==k.blend &&
+        return ui==k.ui&&water==k.water&&offset==k.offset&&cullFace==k.cullFace&&equation==k.equation&&equationA==k.equationA&&sky==k.sky && skinned==k.skinned && instanced==k.instanced && terrain==k.terrain && depth==k.depth && write==k.write && blend==k.blend &&
             cull==k.cull && clockwise==k.clockwise && stride==k.stride && depthFunc==k.depthFunc &&
             src==k.src && dst==k.dst && srcA==k.srcA && dstA==k.dstA;
     }
 };
 struct PipelineHash {size_t operator()(const PipelineKey& k)const {
-    size_t h=uint32_t(k.water)*997+k.stride+uint32_t(k.instanced)*31+uint32_t(k.skinned)+uint32_t(k.sky)*101;for(auto v:{uint32_t(k.terrain),uint32_t(k.depth),uint32_t(k.write),uint32_t(k.blend),
+    size_t h=k.ui*1009+uint32_t(k.water)*997+k.stride+uint32_t(k.instanced)*31+uint32_t(k.skinned)+uint32_t(k.sky)*101;for(auto v:{uint32_t(k.terrain),uint32_t(k.depth),uint32_t(k.write),uint32_t(k.blend),
         uint32_t(k.cull),uint32_t(k.clockwise),uint32_t(k.offset),k.cullFace,k.equation,k.equationA,k.depthFunc,k.src,k.dst,k.srcA,k.dstA}) { h=(h*16777619u)^v; }
     return h;
 }};
@@ -96,8 +97,8 @@ public:
     VkCommandPool pool{},uploads{};VkCommandBuffer command{};VkFence fence{};
     VkRenderPass pass{},resumePass{};VkFramebuffer framebuffer{};Image color,depth,white,cube,sceneColor,sceneDepth;
     bool snapshotReady=false,snapshotInitialized=false;
-    VkSampler sampler{},nearest{},clamped{};VkDescriptorSetLayout sets[9]{};VkPipelineLayout layouts[9]{};
-    VkShaderModule modules[9][2]{};VkDescriptorPool descriptors{};
+    VkSampler sampler{},nearest{},clamped{};VkDescriptorSetLayout sets[11]{};VkPipelineLayout layouts[11]{};
+    VkShaderModule modules[11][2]{};VkDescriptorPool descriptors{};
     VkQueryPool timestamps{};bool timestampSupported=false;uint32_t timestampBits=0;
     Buffer arena,stereo;VkDeviceSize cursor=0;uint32_t width=0,height=0;
     std::unordered_map<uint32_t,MeshData> meshes;
@@ -339,7 +340,7 @@ public:
         const std::array<uint8_t,24> pixels{255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255};
         white=UploadTexture(1,1,pixels.data());cube=UploadTexture(1,1,pixels.data(),true);
         arena=MakeBuffer(32u*1024u*1024u,VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT|VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,true);
-        stereo=MakeBuffer(288,VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,true);
+        stereo=MakeBuffer(416,VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,true);
         CreatePass();CreateDescriptors();
         if(timestampSupported){VkQueryPoolCreateInfo tci{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};tci.queryType=VK_QUERY_TYPE_TIMESTAMP;// Reserve a stereo-width slot for each timestamp. Some drivers
             // retain the multiview query stride through the pass-end boundary.
@@ -381,7 +382,7 @@ public:
         Check(vkCreateFramebuffer(device,&fi,nullptr,&framebuffer),"multiview framebuffer");
     }
     void CreateDescriptors() {
-        for(int kind=0;kind<9;++kind) {
+        for(int kind=0;kind<11;++kind) {
             const size_t count=shaders::programs[kind].samplerCount;
             std::vector<VkDescriptorSetLayoutBinding> bindings(count+2);
             for(uint32_t i=0;i<bindings.size();++i){auto& b=bindings[i];b.binding=i;b.descriptorCount=1;b.stageFlags=VK_SHADER_STAGE_VERTEX_BIT|VK_SHADER_STAGE_FRAGMENT_BIT;
@@ -391,7 +392,7 @@ public:
             VkPipelineLayoutCreateInfo li{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};li.setLayoutCount=1;li.pSetLayouts=&sets[kind];
             Check(vkCreatePipelineLayout(device,&li,nullptr,&layouts[kind]),"pipeline layout");
         }
-        for(int kind=0;kind<9;++kind)for(int stage=0;stage<2;++stage) {
+        for(int kind=0;kind<11;++kind)for(int stage=0;stage<2;++stage) {
             const auto& shader=shaders::programs[kind];VkShaderModuleCreateInfo ci{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
             ci.codeSize=stage?shader.fragmentBytes:shader.vertexBytes;ci.pCode=stage?shader.fragment:shader.vertex;
             Check(vkCreateShaderModule(device,&ci,nullptr,&modules[kind][stage]),"SPIR-V module");
@@ -402,18 +403,19 @@ public:
     }
     VkPipeline Pipeline(const PipelineKey& key) {
         const auto found=pipelines.find(key);if(found!=pipelines.end())return found->second;
-        const int kind=key.water?3:key.sky?2:key.terrain?1:0;
+        const int kind=key.ui?int(key.ui):key.water?3:key.sky?2:key.terrain?1:0;
         std::array<VkPipelineShaderStageCreateInfo,2> stages{};
         for(int i=0;i<2;++i){stages[i].sType=VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;stages[i].stage=i?VK_SHADER_STAGE_FRAGMENT_BIT:VK_SHADER_STAGE_VERTEX_BIT;stages[i].module=modules[kind][i];stages[i].pName="main";}
         VkVertexInputBindingDescription binding{0,key.stride*4,VK_VERTEX_INPUT_RATE_VERTEX};
         std::vector<VkVertexInputAttributeDescription> attributes;
-        if(key.water)attributes={{0,0,VK_FORMAT_R32G32B32_SFLOAT,0},{1,0,VK_FORMAT_R32G32_SFLOAT,12}};
+        if(key.ui){attributes={{0,0,VK_FORMAT_R32G32B32_SFLOAT,0},{1,0,VK_FORMAT_R32G32_SFLOAT,12}};if(key.ui==10)attributes.push_back({2,0,VK_FORMAT_R32_SFLOAT,20});}
+        else if(key.water)attributes={{0,0,VK_FORMAT_R32G32B32_SFLOAT,0},{1,0,VK_FORMAT_R32G32_SFLOAT,12}};
         else if(key.sky)attributes={{0,0,VK_FORMAT_R32G32B32_SFLOAT,0}};
         else if(key.terrain)attributes={{0,0,VK_FORMAT_R32G32B32_SFLOAT,0},{1,0,VK_FORMAT_R32G32B32_SFLOAT,12},{2,0,VK_FORMAT_R32G32_SFLOAT,24},{3,0,VK_FORMAT_R32_SFLOAT,32},{4,0,VK_FORMAT_R32G32B32_SFLOAT,36}};
         else attributes={{0,0,VK_FORMAT_R32G32B32_SFLOAT,0},{1,0,VK_FORMAT_R32G32B32_SFLOAT,12},{2,0,VK_FORMAT_R32G32B32_SFLOAT,24},{3,0,VK_FORMAT_R32G32B32_SFLOAT,36},{4,0,VK_FORMAT_R32G32_SFLOAT,48},{5,0,VK_FORMAT_R32G32B32A32_SFLOAT,56}};
         // Unused skin/instance inputs must still have defined attributes. The
         // probe rejects draws needing those streams rather than render bind poses.
-        if(!key.terrain&&!key.sky&&!key.water)for(uint32_t i=6;i<12;++i) {
+        if(!key.terrain&&!key.sky&&!key.water&&!key.ui)for(uint32_t i=6;i<12;++i) {
             const uint32_t stream=key.instanced&&i<10?1u:key.skinned&&i>=10?2u:0u;
             attributes.push_back({i,stream,VK_FORMAT_R32G32B32A32_SFLOAT,stream==1?(i-6)*16u:stream==2?(i-10)*16u:0u});
         }
@@ -443,7 +445,7 @@ public:
     void Register(uint32_t id,int kind) {
         if(!id)return;
         const auto& shader=shaders::programs[kind];
-        ProgramData p;p.terrain=kind==1;p.sky=kind==2;p.water=kind==3;p.bytes.resize(shader.uniformSize);
+        ProgramData p;p.terrain=kind==1;p.sky=kind==2;p.water=kind==3;p.ui=kind>=9?kind:0;p.bytes.resize(shader.uniformSize);
         for(size_t i=0;i<shader.fieldCount;++i){int location=glGetUniformLocation(id,shader.fields[i].name);if(location>=0)p.fields.push_back({location,shader.fields[i]});}
         for(size_t i=0;i<shader.samplerCount;++i)p.samplers.push_back(glGetUniformLocation(id,shader.samplers[i].name));
         p.units.resize(shader.samplerCount);programs[id]=std::move(p);
@@ -469,12 +471,12 @@ public:
         const auto pIt=programs.find(program);if(pIt==programs.end()){++skipped;return;}
         const auto mIt=meshes.find(vao);if(mIt==meshes.end()||mode!=GL_TRIANGLES||count<=0||instances<=0||(instances>1&&(!instanceMatrices||instanceMatrixCount<size_t(instances)))||(UsesSkin(pIt->second)&&!mIt->second.skin.buffer)){++skipped;return;}
         if(type && type!=GL_UNSIGNED_INT){++skipped;return;}
-        const auto& m=mIt->second;auto& p=pIt->second;const int kind=p.water?3:p.sky?2:p.terrain?1:0;
+        const auto& m=mIt->second;auto& p=pIt->second;const int kind=p.ui?p.ui:p.water?3:p.sky?2:p.terrain?1:0;
         // Mirrored terrain packs indices after vertices in GL; native buffers are separate.
         const uint32_t indexFirst=type?(p.terrain?0:uint32_t(offset/4)):uint32_t(first);
         if(indexFirst+uint32_t(count)>m.count){++skipped;return;}
         const auto& s=fqgl::state;
-        PipelineKey key;key.water=p.water;key.sky=p.sky;key.terrain=p.terrain;key.stride=m.stride;key.instanced=instances>1;key.skinned=UsesSkin(p);
+        PipelineKey key;key.ui=uint32_t(p.ui);key.water=p.water;key.sky=p.sky;key.terrain=p.terrain;key.stride=m.stride;key.instanced=instances>1;key.skinned=UsesSkin(p);
         key.depth=s.depth.known?s.depth.value:true;key.write=s.depthWrite.known?s.depthWrite.value:true;
         key.blend=s.blend.known&&s.blend.value;key.cull=s.cull.known&&s.cull.value;
         key.clockwise=s.frontFace.known&&s.frontFace.value==GL_CW;key.depthFunc=s.depthFunc.known?s.depthFunc.value:GL_LESS;
@@ -497,9 +499,9 @@ public:
         }
         VkDescriptorSet set{};VkDescriptorSetAllocateInfo ai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};ai.descriptorPool=descriptors;ai.descriptorSetCount=1;ai.pSetLayouts=&sets[kind];
         Check(vkAllocateDescriptorSets(device,&ai,&set),"allocate draw descriptors");
-        std::array<VkDescriptorBufferInfo,2> bufferInfo{{{arena.buffer,0,p.bytes.size()},{stereo.buffer,0,288}}};
+        std::array<VkDescriptorBufferInfo,2> bufferInfo{{{arena.buffer,0,p.bytes.size()},{stereo.buffer,0,416}}};
         std::vector<VkDescriptorImageInfo> imageInfo(p.units.size());
-        const auto* samplerMeta=p.water?shaders::waterSamplers:p.sky?shaders::skySamplers:p.terrain?shaders::terrainSamplers:shaders::worldSamplers;
+        const auto* samplerMeta=shaders::programs[kind].samplers;
         for(size_t i=0;i<p.units.size();++i){
             VkImageView view=samplerMeta[i].cube?cube.view:white.view;
             const int unit=p.units[i];
@@ -645,7 +647,7 @@ public:
         }
         VkDescriptorSet set{};VkDescriptorSetAllocateInfo ai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};ai.descriptorPool=descriptors;ai.descriptorSetCount=1;ai.pSetLayouts=&sets[kind];
         Check(vkAllocateDescriptorSets(device,&ai,&set),"post descriptor set");
-        const std::array<VkDescriptorBufferInfo,2> buffers{{{arena.buffer,0,shader.uniformSize},{stereo.buffer,0,288}}};
+        const std::array<VkDescriptorBufferInfo,2> buffers{{{arena.buffer,0,shader.uniformSize},{stereo.buffer,0,416}}};
         std::vector<VkWriteDescriptorSet> writes(images.size()+2);
         for(size_t i=0;i<writes.size();++i){auto& w=writes[i];w.sType=VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;w.dstSet=set;w.dstBinding=uint32_t(i);w.descriptorCount=1;
             w.descriptorType=i==0?VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC:i==1?VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER:VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -699,10 +701,25 @@ public:
     void Begin(const float* left,const float* right,const float* le,const float* re) {
         Check(vkWaitForFences(device,1,&fence,VK_TRUE,UINT64_MAX),"wait frame");
         Check(vkResetCommandPool(device,pool,0),"reset commands");Check(vkResetDescriptorPool(device,descriptors,0),"reset descriptors");
-        float data[72]{};std::memcpy(data,left,64);std::memcpy(data+16,right,64);std::memcpy(data+32,le,12);std::memcpy(data+36,re,12);for(size_t eye=0;eye<2;++eye) {
+        float data[104]{};std::memcpy(data,left,64);std::memcpy(data+16,right,64);std::memcpy(data+32,le,12);std::memcpy(data+36,re,12);for(size_t eye=0;eye<2;++eye) {
             float* sky=data+40+eye*16;const float* world=data+eye*16;const float* position=data+32+eye*4;
             std::memcpy(sky,world,64);
             for(size_t row=0;row<4;++row)sky[12+row]+=world[row]*position[0]+world[4+row]*position[1]+world[8+row]*position[2];
+        }
+        // UI receives a combined object MVP from the original renderer. The
+        // clip-space delta preserves that object transform for the second eye.
+        double inverse[4][8]{};
+        for(int row=0;row<4;++row)for(int col=0;col<4;++col){inverse[row][col]=left[col*4+row];inverse[row][col+4]=row==col?1:0;}
+        for(int col=0;col<4;++col) {
+            int pivot=col;for(int row=col+1;row<4;++row)if(std::fabs(inverse[row][col])>std::fabs(inverse[pivot][col]))pivot=row;
+            if(std::fabs(inverse[pivot][col])<1e-12)throw std::runtime_error("singular left stereo camera");
+            for(int j=0;j<8;++j)std::swap(inverse[col][j],inverse[pivot][j]);
+            const double divisor=inverse[col][col];for(double& value:inverse[col])value/=divisor;
+            for(int row=0;row<4;++row)if(row!=col){const double factor=inverse[row][col];for(int j=0;j<8;++j)inverse[row][j]-=factor*inverse[col][j];}
+        }
+        for(int col=0;col<4;++col)for(int row=0;row<4;++row) {
+            data[72+col*4+row]=row==col?1.0f:0.0f;
+            for(int k=0;k<4;++k)data[88+col*4+row]+=float(right[k*4+row]*inverse[k][col+4]);
         }
         std::memcpy(stereo.mapped,data,sizeof(data));
         postDone=false;snapshotReady=false;cursor=0;draws=vertices=skipped=0;
@@ -808,7 +825,7 @@ public:
             if(pass)vkDestroyRenderPass(device,pass,nullptr);
             Destroy(color);Destroy(depth);Destroy(sceneColor);Destroy(sceneDepth);
             if(descriptors)vkDestroyDescriptorPool(device,descriptors,nullptr);
-            for(int k=0;k<9;++k){if(layouts[k])vkDestroyPipelineLayout(device,layouts[k],nullptr);if(sets[k])vkDestroyDescriptorSetLayout(device,sets[k],nullptr);for(auto m:modules[k])if(m)vkDestroyShaderModule(device,m,nullptr);}
+            for(int k=0;k<11;++k){if(layouts[k])vkDestroyPipelineLayout(device,layouts[k],nullptr);if(sets[k])vkDestroyDescriptorSetLayout(device,sets[k],nullptr);for(auto m:modules[k])if(m)vkDestroyShaderModule(device,m,nullptr);}
             if(timestamps)vkDestroyQueryPool(device,timestamps,nullptr);
             if(clamped)vkDestroySampler(device,clamped,nullptr);
             if(nearest)vkDestroySampler(device,nearest,nullptr);

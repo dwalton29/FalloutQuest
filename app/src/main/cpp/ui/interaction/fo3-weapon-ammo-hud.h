@@ -23,6 +23,7 @@ inline void Prepare(const char*text){
   if(!s.vbo)glGenBuffers(1,&s.vbo);
   glBindVertexArray(s.vao);glBindBuffer(GL_ARRAY_BUFFER,s.vbo);
   glBufferData(GL_ARRAY_BUFFER,count*sizeof(fo3hudassets::Vertex),vertices.data(),GL_DYNAMIC_DRAW);
+    fo3hudassets::UploadVertices(s.vao,vertices.data(),count);
   glEnableVertexAttribArray(0);glVertexAttribPointer(0,3,GL_FLOAT,GL_FALSE,sizeof(fo3hudassets::Vertex),nullptr);
   glEnableVertexAttribArray(1);glVertexAttribPointer(1,2,GL_FLOAT,GL_FALSE,sizeof(fo3hudassets::Vertex),reinterpret_cast<void*>(3*sizeof(float)));
   s.count=count;std::snprintf(s.text,sizeof(s.text),"%s",text);

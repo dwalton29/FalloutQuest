@@ -31,17 +31,13 @@ extern "C" XrResult XRAPI_CALL xrGetInstanceProcAddr(XrInstance,const char* name
 }
 namespace {
 void Program(uint32_t id,int kind) {
-    const bool terrain=kind==1,sky=kind==2,water=kind==3;
-    fqvk::ProgramData p;p.terrain=terrain;p.sky=sky;p.water=water;
-    p.bytes.resize(water?fqvk::shaders::waterUniformSize:sky?fqvk::shaders::skyUniformSize:terrain?fqvk::shaders::terrainUniformSize:fqvk::shaders::worldUniformSize);
-    const auto* fields=water?fqvk::shaders::waterFields:sky?fqvk::shaders::skyFields:terrain?fqvk::shaders::terrainFields:fqvk::shaders::worldFields;
-    const size_t count=water?std::size(fqvk::shaders::waterFields):sky?std::size(fqvk::shaders::skyFields):terrain?std::size(fqvk::shaders::terrainFields):std::size(fqvk::shaders::worldFields);
-    for(size_t i=0;i<count;++i)p.fields.push_back({int(i),fields[i]});
-    const size_t samplers=water?std::size(fqvk::shaders::waterSamplers):sky?std::size(fqvk::shaders::skySamplers):terrain?std::size(fqvk::shaders::terrainSamplers):std::size(fqvk::shaders::worldSamplers);
-    p.units.resize(samplers);
-    const auto* names=water?fqvk::shaders::waterSamplers:sky?fqvk::shaders::skySamplers:terrain?fqvk::shaders::terrainSamplers:fqvk::shaders::worldSamplers;
-    for(size_t i=0;i<samplers;++i) {
-        const std::string name=names[i].name;
+    const auto& shader=fqvk::shaders::programs[kind];
+    fqvk::ProgramData p;p.terrain=kind==1;p.sky=kind==2;p.water=kind==3;p.ui=kind>=9?kind:0;
+    p.bytes.resize(shader.uniformSize);
+    for(size_t i=0;i<shader.fieldCount;++i)p.fields.push_back({int(i),shader.fields[i]});
+    p.units.resize(shader.samplerCount);
+    for(size_t i=0;i<shader.samplerCount;++i) {
+        const std::string name=shader.samplers[i].name;
         p.units[i]=name=="uActorPalette"?6:name=="uNormalGloss"?1:name=="uGlow"?2:
             name=="uShadowMap"?3:name=="uEnvironmentCubeQ2050"?4:name=="uEnvironmentMaskQ2050"?5:0;
     }
@@ -217,6 +213,30 @@ void Post() {
     }
 }
 
+void Ui(bool animated) {
+    Scene(false);Program(15,animated?10:9);
+    std::vector<float> geometry;
+    for(const auto& xy:std::array<std::array<float,2>,4>{{{{-.6f,-.6f}},{{.6f,-.6f}},{{.6f,.6f}},{{-.6f,.6f}}}}) {
+        geometry.insert(geometry.end(),{xy[0],xy[1],-.2f,0,0});if(animated)geometry.push_back(0);
+    }
+    const uint32_t indices[]{0,1,2,0,2,3};fqvk::Mesh(16,geometry.data(),4,animated?6:5,indices,6);
+    uint8_t white[]{255,255,255,255};fqvk::Texture(17,1,1,white,false,false);
+    Set(15,"uMvp",{1,0,0,0,0,1,0,0,0,0,1,0,.2f,0,0,1});
+    Set(15,"uTint",{0,1,0,animated?1.0f:.5f});if(animated)Set(15,"uAge",{1});
+    const float left[]{1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1};
+    const float right[]{1,0,0,0,0,1,0,0,0,0,1,0,.8f,0,0,1};const float eye[]{0,0,2};
+    assert(fqvk::BeginWorldProbe(left,right,eye,eye));
+    fqgl::state.texture2d[0].Change(5);fqvk::hooks.draw(1,9,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);
+    fqgl::state.texture2d[0].Change(17);fqgl::state.depthWrite.Change(false);fqgl::state.blend.Change(true);
+    fqgl::state.srcRgb.Change(GL_SRC_ALPHA);fqgl::state.dstRgb.Change(GL_ONE_MINUS_SRC_ALPHA);
+    fqgl::state.srcAlpha.Change(GL_ONE);fqgl::state.dstAlpha.Change(GL_ONE_MINUS_SRC_ALPHA);
+    fqvk::hooks.draw(15,16,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);fqvk::EndWorldProbe();
+    const auto pixels=fqvk::renderer->Readback();
+    Near(Pixel(pixels,0,32,32,0),.5f);Near(Pixel(pixels,0,32,32,1),.5f);
+    Near(Pixel(pixels,0,17,32,1),0); // object translation is retained
+    Near(Pixel(pixels,1,32,32,1),0);Near(Pixel(pixels,1,55,32,1),.5f);
+}
+
 int main() {
     for(int mode=0;mode<4;++mode) {
         assert(fqvk::InitializeWorldProbe(reinterpret_cast<XrInstance>(uintptr_t(1)),1,64,64));
@@ -225,5 +245,6 @@ int main() {
     assert(fqvk::InitializeWorldProbe(reinterpret_cast<XrInstance>(uintptr_t(1)),1,64,64));Sky();fqvk::ShutdownWorldProbe();
     assert(fqvk::InitializeWorldProbe(reinterpret_cast<XrInstance>(uintptr_t(1)),1,64,64));Water();fqvk::ShutdownWorldProbe();
     assert(fqvk::InitializeWorldProbe(reinterpret_cast<XrInstance>(uintptr_t(1)),1,64,64));Post();fqvk::ShutdownWorldProbe();
-    std::cout<<"Vulkan native multiview: original world/LAND shaders, indexed NIF layout, per-eye cameras, depth equality, ordered paint blending, layered water refraction, retained opaque depth, original exposure/bloom/film/gamma and recreation passed\n";
+    for(bool animated:{false,true}){assert(fqvk::InitializeWorldProbe(reinterpret_cast<XrInstance>(uintptr_t(1)),1,64,64));Ui(animated);fqvk::ShutdownWorldProbe();}
+    std::cout<<"Vulkan native multiview: original world/LAND shaders, indexed NIF layout, per-eye cameras, depth equality, ordered paint blending, layered water refraction, retained opaque depth, original exposure/bloom/film/gamma, transformed UI/notification alpha and recreation passed\n";
 }

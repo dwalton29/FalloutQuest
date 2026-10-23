@@ -204,6 +204,7 @@ inline bool BuildPromptGeometry(const char* promptChars) {
     glBufferData(GL_ARRAY_BUFFER,
                  static_cast<GLsizeiptr>(verts.size() * sizeof(fo3hudassets::Vertex)),
                  verts.data(), GL_DYNAMIC_DRAW);
+    fo3hudassets::UploadVertices(s.vao,verts.data(),verts.size());
     glEnableVertexAttribArray(0);
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE,
                           sizeof(fo3hudassets::Vertex), reinterpret_cast<const void*>(0));

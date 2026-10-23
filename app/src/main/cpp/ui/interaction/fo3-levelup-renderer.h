@@ -146,6 +146,7 @@ inline void Prepare(const fo3dialogue::Panel& p,const std::string& iconPath){
     glBindBuffer(GL_ARRAY_BUFFER,r.vbo);
     glBufferData(GL_ARRAY_BUFFER,vert.size()*sizeof(fo3hudassets::Vertex),
                  vert.data(),GL_DYNAMIC_DRAW);
+    fo3hudassets::UploadVertices(r.vao,vert.data(),vert.size());
     glEnableVertexAttribArray(0);
     glVertexAttribPointer(0,3,GL_FLOAT,GL_FALSE,
                          sizeof(fo3hudassets::Vertex),nullptr);

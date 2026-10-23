@@ -20,6 +20,7 @@
 #include <sstream>
 #include <string>
 #include <vector>
+#include "rendering/gl-state-cache.h"
 
 namespace fo3hudassets {
 
@@ -217,6 +218,9 @@ void main() {
         glDeleteProgram(p);
         return 0;
     }
+#ifdef FQ_ENABLE_VULKAN
+    fqvk::Program(p,9);
+#endif
     return p;
 }
 
@@ -234,9 +238,20 @@ inline GLuint UploadTexture(int w, int h, const uint8_t* rgba) {
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0,
                  GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+#ifdef FQ_ENABLE_VULKAN
+    fqvk::Texture(tex,w,h,rgba,false,false);
+#endif
     glPixelStorei(GL_UNPACK_ALIGNMENT, oldUnpack);
     glBindTexture(GL_TEXTURE_2D, 0);
     return tex;
 }
 
+inline void UploadVertices(GLuint vao,const Vertex* vertices,size_t count) {
+#ifdef FQ_ENABLE_VULKAN
+    static_assert(sizeof(Vertex)==5*sizeof(float));
+    fqvk::Mesh(vao,reinterpret_cast<const float*>(vertices),count,5,nullptr,0);
+#else
+    (void)vao;(void)vertices;(void)count;
+#endif
+}
 } // namespace fo3hudassets

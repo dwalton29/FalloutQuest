@@ -19,6 +19,9 @@ class VulkanShaders(unittest.TestCase):
                 self.assertEqual(offset%16,0)
                 self.assertGreaterEqual(offset,last);last=offset+length
             self.assertEqual(max(16,last),size)
+            if name in ('ui','notification'):
+                self.assertIn('fqClipFromLeft[gl_ViewIndex]*uMvp',converted[0])
+                self.assertIn('(fqClip.z+fqClip.w)*0.5',converted[0]);continue
             if name in ('adapt','copy','bright','blur','post'):
                 self.assertIn('gl_VertexIndex',converted[0])
                 self.assertNotIn('gl_VertexID',converted[0])

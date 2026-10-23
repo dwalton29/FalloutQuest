@@ -42,6 +42,7 @@ inline void Render(const float* mvp,const fo3dialogue::Panel& panel,Resources* r
     r.textCount=GLsizei(vertices.size())-r.textStart;
     glBindVertexArray(r.vao);glBindBuffer(GL_ARRAY_BUFFER,r.vbo);
     glBufferData(GL_ARRAY_BUFFER,vertices.size()*sizeof(fo3hudassets::Vertex),vertices.data(),GL_DYNAMIC_DRAW);
+    fo3hudassets::UploadVertices(r.vao,vertices.data(),vertices.size());
     glEnableVertexAttribArray(0);glVertexAttribPointer(0,3,GL_FLOAT,GL_FALSE,sizeof(fo3hudassets::Vertex),nullptr);
     glEnableVertexAttribArray(1);glVertexAttribPointer(1,2,GL_FLOAT,GL_FALSE,sizeof(fo3hudassets::Vertex),reinterpret_cast<const void*>(3*sizeof(float)));
     r.revision=panel.revision;r.selected=panel.selected;

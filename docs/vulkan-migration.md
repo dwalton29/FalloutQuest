@@ -26,6 +26,11 @@ backend. No Vulkan-default or 72 Hz claim is made.
   horizontal Gaussian and final film SPIR-V programs. Stereo shares eye-0
   adaptation exactly as GLES does. RGBA8 history, FP16 bloom and final colour,
   authored cinematic settings, quantisation and gamma arithmetic are retained.
+- Shared original HUD/font shader and animated notification shader, original
+  decoded font/atlas textures and vertex uploads for prompts, dialogue/barter,
+  loot, level-up, pause, health, ammunition, XP, performance HUD and lockpick
+  text. Per-object combined MVPs retain their model transform in both views.
+  Pip-Boy screen RTT and loading/lockpick 3D models remain unfinished.
 - Native actor weight/index streams and original float bone palettes, live palette
   updates, differential FaceGen geometry updates, CPU skin fallback uploads and
   original six-face/mip DDS cube resources. Live palette motion has software-GPU coverage; actual NPC/FaceGen scenes still
@@ -75,8 +80,8 @@ GLES selected. It must not select an incomplete game renderer.
 
 - Vulkan OpenXR graphics binding, layered swapchain presentation, acquisition /
   release and session-loss recreation; current device handshake alone is not M1.
-- Complete actor/weapon visual validation, complete UI and loading-screen native
-  passes. Native pipeline state now handles reversed/front culling, depth bias
+- Complete actor/weapon visual validation, Pip-Boy screen RTT and loading-screen
+  native passes, including loading-model animation and lockpick 3D models. Native pipeline state now handles reversed/front culling, depth bias
   and separate color/alpha blend operations, but requires scene validation.
 - Native planar water reflections and native MSAA/resolve/depth submission.
   The HDR/imagespace/bloom chain is implemented in the probe, but still needs
@@ -109,7 +114,7 @@ water refraction, repeated snapshots, opaque depth preservation, the native
 exposure/bloom/film chain and recreation. These pixel tests passed locally on Mesa llvmpipe after correcting
 stereo timestamp query allocation. Shader compile/link checks also passed. It is not an OpenXR compositor or Quest test.
 
-Next implement native UI/loading passes, complete the optional
+Next implement Pip-Boy RTT and loading-model passes, complete the optional
 planar reflection path and validate full actor/material scenes before switching
 OpenXR presentation.
 Replace the mirror with one backend-independent stereo draw list as those passes

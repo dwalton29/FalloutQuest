@@ -38,6 +38,10 @@ def sources():
     for kind,name in [('copy','copyFragment'),('bright','brightVerticalFragment'),('blur','horizontalFragment')]:
         result[kind]=[bloom_vertex,extract(bloom,name)]
     result['post']=[extract(post,'vertexSource'),extract(post,'fragmentSource')]
+    ui=(ROOT/'app/src/main/cpp/ui/interaction/fo3-interaction-hud-assets.h').read_text()
+    result['ui']=[extract(ui,'vs'),extract(ui,'fs')]
+    notification=(ROOT/'app/src/main/cpp/ui/interaction/fo3-item-notification-renderer.h').read_text()
+    result['notification']=[re.search(r'const char\* '+name+r'\s*=\s*R"\((.*?)\)";',notification,re.S)[1] for name in ['vs','fs']]
     return result
 
 def port(pair,kind="world"):
@@ -62,7 +66,7 @@ def port(pair,kind="world"):
     # Cameras use a separate shared block, while material constants use dynamic UBOs.
     header = ('#version 450\n#extension GL_EXT_multiview : require\n'+
               ('layout(std140,set=0,binding=0) uniform Material {\n'+'\n'.join(members)+'\n};\n' if members else '')+
-              'layout(std140,set=0,binding=1) uniform Stereo { mat4 fqViewProjection[2]; vec4 fqEye[2]; mat4 fqSkyViewProjection[2]; };\n')
+              'layout(std140,set=0,binding=1) uniform Stereo { mat4 fqViewProjection[2]; vec4 fqEye[2]; mat4 fqSkyViewProjection[2]; mat4 fqClipFromLeft[2]; };\n')
     varyings = list(dict.fromkeys(m[3] for m in IO.findall(pair[0]) if m[1]=='out'))
     converted = []
     for stage,source in enumerate(pair):
@@ -77,7 +81,10 @@ def port(pair,kind="world"):
             return f'{space}layout(location={loc}) {direction} {typ} {name};'
         source = IO.sub(io,source)
         # Preserve original GL clip coordinates for FO3 fog, remap position only.
-        if stage==0:
+        if stage==0 and kind in ('ui','notification'):
+            source=re.sub(r'gl_Position\s*=\s*uMvp\s*\*\s*vec4\(aPos,\s*1.0\);',
+                'vec4 fqClip=fqClipFromLeft[gl_ViewIndex]*uMvp*vec4(aPos,1.0);gl_Position=vec4(fqClip.x,-fqClip.y,(fqClip.z+fqClip.w)*0.5,fqClip.w);',source)
+        if stage==0 and kind not in ('ui','notification'):
             source = re.sub(r'\buMvp\b','fqSkyViewProjection[gl_ViewIndex]' if kind=='sky' else 'fqViewProjection[gl_ViewIndex]',source)
             if kind in ('sky','water'):
                 source=source.replace('gl_Position = '+('fqSkyViewProjection' if kind=='sky' else 'fqViewProjection')+'[gl_ViewIndex] * vec4(aPosition, 1.0);',

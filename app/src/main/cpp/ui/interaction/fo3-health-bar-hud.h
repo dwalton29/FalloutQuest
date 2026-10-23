@@ -83,6 +83,7 @@ inline void RenderBar(const float* mvp,const std::array<float,3>& center,
   glActiveTexture(GL_TEXTURE0);glBindTexture(GL_TEXTURE_2D,s.texture);
   glBindVertexArray(s.vao);glBindBuffer(GL_ARRAY_BUFFER,s.vbo);
   glBufferSubData(GL_ARRAY_BUFFER,0,sizeof(vertices),vertices.data());
+  fo3hudassets::UploadVertices(s.vao,vertices.data(),vertices.size());
   // Both quads use original HUDMainMenu &hudmain; colour from Fallout.ini.
   glUniform4f(hud.tintLoc,26.f/255.f,1.f,128.f/255.f,alpha*.24f);
   glDrawArrays(GL_TRIANGLES,0,6);

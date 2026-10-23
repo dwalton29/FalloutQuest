@@ -111,6 +111,7 @@ inline void Render(const float* vp,const fo3lockpick::Game& game,const fo3player
   sprite(2,-.64f,-.323f,.370f,.002f);sprite(4,-.272f,-.323f,.030f,.002f);
   if(!vao){glGenVertexArrays(1,&vao);glGenBuffers(1,&vbo);}glBindVertexArray(vao);glBindBuffer(GL_ARRAY_BUFFER,vbo);
   glBufferData(GL_ARRAY_BUFFER,vertices.size()*sizeof(fo3hudassets::Vertex),vertices.data(),GL_DYNAMIC_DRAW);
+    fo3hudassets::UploadVertices(vao,vertices.data(),vertices.size());
   glEnableVertexAttribArray(0);glVertexAttribPointer(0,3,GL_FLOAT,GL_FALSE,sizeof(fo3hudassets::Vertex),nullptr);
   glEnableVertexAttribArray(1);glVertexAttribPointer(1,2,GL_FLOAT,GL_FALSE,sizeof(fo3hudassets::Vertex),reinterpret_cast<void*>(3*sizeof(float)));
   glDisable(GL_DEPTH_TEST);glDepthMask(GL_FALSE);glEnable(GL_BLEND);glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);

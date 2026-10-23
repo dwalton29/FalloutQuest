@@ -12,6 +12,9 @@
 
 namespace fo3xpui {
 struct Resources {
+#ifdef FQ_ENABLE_VULKAN
+    std::vector<fo3hudassets::Vertex> nativeVertices;
+#endif
     bool attempted=false,ready=false,visible=false;
     GLuint vao=0,vbo=0,bracket=0,pointer=0;
     fo3hudassets::TaiSprite bracketSprite{},pointerSprite{};
@@ -118,6 +121,10 @@ inline void Prepare(){
         glBindVertexArray(r.vao);glBindBuffer(GL_ARRAY_BUFFER,r.vbo);
         glBufferData(GL_ARRAY_BUFFER,
             verts.size()*sizeof(fo3hudassets::Vertex),verts.data(),GL_DYNAMIC_DRAW);
+#ifdef FQ_ENABLE_VULKAN
+        if(fqvk::hooks.mesh)r.nativeVertices=verts;
+#endif
+    fo3hudassets::UploadVertices(r.vao,verts.data(),verts.size());
         glEnableVertexAttribArray(0);
         glVertexAttribPointer(0,3,GL_FLOAT,GL_FALSE,
                              sizeof(fo3hudassets::Vertex),nullptr);
@@ -136,6 +143,12 @@ inline void Prepare(){
     glBindBuffer(GL_ARRAY_BUFFER,r.vbo);
     glBufferSubData(GL_ARRAY_BUFFER,r.pointerFirst*sizeof(fo3hudassets::Vertex),
                     sizeof(pointer),pointer.data());
+#ifdef FQ_ENABLE_VULKAN
+    if(r.nativeVertices.size()>=size_t(r.pointerFirst)+pointer.size()) {
+        std::copy(pointer.begin(),pointer.end(),r.nativeVertices.begin()+r.pointerFirst);
+        fo3hudassets::UploadVertices(r.vao,r.nativeVertices.data(),r.nativeVertices.size());
+    }
+#endif
     r.visible=true;
 }
 inline void Render(const float* mvp){

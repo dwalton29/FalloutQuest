@@ -83,6 +83,7 @@ inline void Prepare(unsigned mode) {
     glBindBuffer(GL_ARRAY_BUFFER,s.vbo);
     glBufferData(GL_ARRAY_BUFFER,verts.size()*sizeof(fo3hudassets::Vertex),
         verts.data(),GL_DYNAMIC_DRAW);
+    fo3hudassets::UploadVertices(s.vao,verts.data(),verts.size());
     glEnableVertexAttribArray(0);
     glVertexAttribPointer(0,3,GL_FLOAT,GL_FALSE,sizeof(fo3hudassets::Vertex),nullptr);
     glEnableVertexAttribArray(1);

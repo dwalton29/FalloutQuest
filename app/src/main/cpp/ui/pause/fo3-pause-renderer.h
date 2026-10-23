@@ -74,6 +74,7 @@ inline void Prepare(const fo3debug::Menu& menu){
     text(menu.panel.footer,-.69f,-.385f,1.38f,2);
     glBindVertexArray(r.vao);glBindBuffer(GL_ARRAY_BUFFER,r.vbo);
     glBufferData(GL_ARRAY_BUFFER,v.size()*sizeof(fo3hudassets::Vertex),v.data(),GL_DYNAMIC_DRAW);
+    fo3hudassets::UploadVertices(r.vao,v.data(),v.size());
     glEnableVertexAttribArray(0);glVertexAttribPointer(0,3,GL_FLOAT,GL_FALSE,sizeof(fo3hudassets::Vertex),nullptr);
     glEnableVertexAttribArray(1);glVertexAttribPointer(1,2,GL_FLOAT,GL_FALSE,sizeof(fo3hudassets::Vertex),reinterpret_cast<const void*>(3*sizeof(float)));
     r.count=GLsizei(v.size());
