@@ -19,6 +19,12 @@ class VulkanShaders(unittest.TestCase):
                 self.assertEqual(offset%16,0)
                 self.assertGreaterEqual(offset,last);last=offset+length
             self.assertEqual(last,size)
+            if name=='water':
+                self.assertIn('float(gl_ViewIndex)',converted[1])
+                self.assertIn('sampler2DArray uSceneDepth',converted[1])
+                self.assertIn('vec2(displacedNdc.x, -displacedNdc.y)',converted[1])
+                self.assertIn('fqEye[gl_ViewIndex].xyz',converted[1])
+                self.assertIn('(fqClip.z+fqClip.w)*0.5',converted[0]);continue
             if name=='sky':
                 self.assertIn('fqSkyViewProjection[gl_ViewIndex]',converted[0]);continue
             self.assertIn('fqViewProjection[gl_ViewIndex]',converted[0])

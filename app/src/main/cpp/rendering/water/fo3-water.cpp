@@ -19,6 +19,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+#include "rendering/gl-state-cache.h"
 
 namespace {
 
@@ -598,6 +599,9 @@ bool EnsureNoiseTexture(const std::string& path) {
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0,
                  GL_RGBA, GL_UNSIGNED_BYTE, pixels);
     gNoiseTextureReal = loaded;
+#ifdef FQ_ENABLE_VULKAN
+    fqvk::Texture(gNoiseTexture,width,height,pixels,true,false);
+#endif
 
     WLOGI("Q20.8A WATER NOISE: path=%s loaded=%d size=%dx%d format=%s source=%s prepass=INLINE_RECOVERED_3LAYER_SOBEL",
           path.empty() ? "<none>" : path.c_str(), loaded ? 1 : 0,
@@ -949,6 +953,9 @@ bool EnsureRenderer() {
         return false;
     }
 
+#ifdef FQ_ENABLE_VULKAN
+    fqvk::Program(gProgram,3);
+#endif
     gMvpLocation = glGetUniformLocation(gProgram, "uMvp");
     gNoiseLocation = glGetUniformLocation(gProgram, "uNoise");
     gSceneColorLocation = glGetUniformLocation(gProgram, "uSceneColor");
@@ -1368,6 +1375,9 @@ void RenderFo3WaterSurfaceQ2070(const float* mvp16,
         std::chrono::duration<double>(
             std::chrono::steady_clock::now() - gWaterTimeOrigin).count());
 
+#ifdef FQ_ENABLE_VULKAN
+    fqvk::WaterSnapshot();
+#endif
     glUseProgram(gProgram);
     glUniformMatrix4fv(gMvpLocation, 1, GL_FALSE, mvp16);
     glUniform1i(gNoiseLocation, 0);
@@ -1452,6 +1462,9 @@ void RenderFo3WaterSurfaceQ2070(const float* mvp16,
             x0,y,z1, gameMinX,gameMaxY
         };
         glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(vertices), vertices);
+#ifdef FQ_ENABLE_VULKAN
+        fqvk::Mesh(gVao,vertices,6,5,nullptr,0);
+#endif
 
         const Fo3WaterTypeQ2070& w = cell.type;
         glUniform3fv(gShallowLocation, 1, w.shallowColor);

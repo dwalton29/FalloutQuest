@@ -40,7 +40,7 @@ struct Buffer {VkBuffer buffer{};VkDeviceMemory memory{};void* mapped{};VkDevice
 struct Image {VkImage image{};VkImageView view{};VkDeviceMemory memory{};uint32_t levels=1;bool palette=false,clamp=false;};
 struct MeshData {Buffer vertices,indices,skin;uint32_t count=0,stride=0;};
 struct ProgramData {
-    bool terrain=false,sky=false;
+    bool terrain=false,sky=false,water=false;
     std::vector<uint8_t> bytes;
     struct Location {int location;shaders::Field field;};
     std::vector<Location> fields;
@@ -48,16 +48,16 @@ struct ProgramData {
     std::vector<int> units;
 };
 struct PipelineKey {
-    bool offset=false,sky=false,skinned=false,instanced=false,terrain=false,depth=true,write=true,blend=false,cull=false,clockwise=false;
+    bool offset=false,water=false,sky=false,skinned=false,instanced=false,terrain=false,depth=true,write=true,blend=false,cull=false,clockwise=false;
     uint32_t cullFace=GL_BACK,equation=GL_FUNC_ADD,equationA=GL_FUNC_ADD,stride=0,depthFunc=GL_LEQUAL,src=GL_ONE,dst=GL_ZERO,srcA=GL_ONE,dstA=GL_ZERO;
     bool operator==(const PipelineKey& k)const {
-        return offset==k.offset&&cullFace==k.cullFace&&equation==k.equation&&equationA==k.equationA&&sky==k.sky && skinned==k.skinned && instanced==k.instanced && terrain==k.terrain && depth==k.depth && write==k.write && blend==k.blend &&
+        return water==k.water&&offset==k.offset&&cullFace==k.cullFace&&equation==k.equation&&equationA==k.equationA&&sky==k.sky && skinned==k.skinned && instanced==k.instanced && terrain==k.terrain && depth==k.depth && write==k.write && blend==k.blend &&
             cull==k.cull && clockwise==k.clockwise && stride==k.stride && depthFunc==k.depthFunc &&
             src==k.src && dst==k.dst && srcA==k.srcA && dstA==k.dstA;
     }
 };
 struct PipelineHash {size_t operator()(const PipelineKey& k)const {
-    size_t h=k.stride+uint32_t(k.instanced)*31+uint32_t(k.skinned)+uint32_t(k.sky)*101;for(auto v:{uint32_t(k.terrain),uint32_t(k.depth),uint32_t(k.write),uint32_t(k.blend),
+    size_t h=uint32_t(k.water)*997+k.stride+uint32_t(k.instanced)*31+uint32_t(k.skinned)+uint32_t(k.sky)*101;for(auto v:{uint32_t(k.terrain),uint32_t(k.depth),uint32_t(k.write),uint32_t(k.blend),
         uint32_t(k.cull),uint32_t(k.clockwise),uint32_t(k.offset),k.cullFace,k.equation,k.equationA,k.depthFunc,k.src,k.dst,k.srcA,k.dstA}) { h=(h*16777619u)^v; }
     return h;
 }};
@@ -93,9 +93,10 @@ public:
     VkInstance instance{};VkPhysicalDevice physical{};VkDevice device{};VkQueue queue{};uint32_t family=0;
     VkPhysicalDeviceProperties properties{};VkPhysicalDeviceMemoryProperties memory{};
     VkCommandPool pool{},uploads{};VkCommandBuffer command{};VkFence fence{};
-    VkRenderPass pass{};VkFramebuffer framebuffer{};Image color,depth,white,cube;
-    VkSampler sampler{},nearest{},clamped{};VkDescriptorSetLayout sets[3]{};VkPipelineLayout layouts[3]{};
-    VkShaderModule modules[3][2]{};VkDescriptorPool descriptors{};
+    VkRenderPass pass{},resumePass{};VkFramebuffer framebuffer{};Image color,depth,white,cube,sceneColor,sceneDepth;
+    bool snapshotReady=false,snapshotInitialized=false;
+    VkSampler sampler{},nearest{},clamped{};VkDescriptorSetLayout sets[4]{};VkPipelineLayout layouts[4]{};
+    VkShaderModule modules[4][2]{};VkDescriptorPool descriptors{};
     VkQueryPool timestamps{};bool timestampSupported=false;uint32_t timestampBits=0;
     Buffer arena,stereo;VkDeviceSize cursor=0;uint32_t width=0,height=0;
     std::unordered_map<uint32_t,MeshData> meshes;
@@ -351,12 +352,14 @@ public:
         vkGetPhysicalDeviceFormatProperties(physical,VK_FORMAT_D32_SFLOAT,&format);
         if(!(format.optimalTilingFeatures&VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT))throw std::runtime_error("D32 depth unavailable");
         color=MakeImage(width,height,VK_FORMAT_R16G16B16A16_SFLOAT,VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT|VK_IMAGE_USAGE_TRANSFER_SRC_BIT,VK_IMAGE_ASPECT_COLOR_BIT);
-        depth=MakeImage(width,height,VK_FORMAT_D32_SFLOAT,VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,VK_IMAGE_ASPECT_DEPTH_BIT);
+        depth=MakeImage(width,height,VK_FORMAT_D32_SFLOAT,VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT|VK_IMAGE_USAGE_TRANSFER_SRC_BIT,VK_IMAGE_ASPECT_DEPTH_BIT);
+        sceneColor=MakeImage(width,height,VK_FORMAT_R16G16B16A16_SFLOAT,VK_IMAGE_USAGE_TRANSFER_DST_BIT|VK_IMAGE_USAGE_SAMPLED_BIT,VK_IMAGE_ASPECT_COLOR_BIT);
+        sceneDepth=MakeImage(width,height,VK_FORMAT_D32_SFLOAT,VK_IMAGE_USAGE_TRANSFER_DST_BIT|VK_IMAGE_USAGE_SAMPLED_BIT,VK_IMAGE_ASPECT_DEPTH_BIT);
         std::array<VkAttachmentDescription,2> attachments{};
         attachments[0].format=VK_FORMAT_R16G16B16A16_SFLOAT;attachments[1].format=VK_FORMAT_D32_SFLOAT;
         for(auto& a:attachments){a.samples=VK_SAMPLE_COUNT_1_BIT;a.loadOp=VK_ATTACHMENT_LOAD_OP_CLEAR;a.stencilLoadOp=VK_ATTACHMENT_LOAD_OP_DONT_CARE;a.stencilStoreOp=VK_ATTACHMENT_STORE_OP_DONT_CARE;a.initialLayout=VK_IMAGE_LAYOUT_UNDEFINED;}
         attachments[0].storeOp=VK_ATTACHMENT_STORE_OP_STORE;attachments[0].finalLayout=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-        attachments[1].storeOp=VK_ATTACHMENT_STORE_OP_DONT_CARE;attachments[1].finalLayout=VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+        attachments[1].storeOp=VK_ATTACHMENT_STORE_OP_STORE;attachments[1].finalLayout=VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
         VkAttachmentReference c{0,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL},d{1,VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL};
         VkSubpassDescription sub{};sub.pipelineBindPoint=VK_PIPELINE_BIND_POINT_GRAPHICS;sub.colorAttachmentCount=1;sub.pColorAttachments=&c;sub.pDepthStencilAttachment=&d;
         const uint32_t mask=3;VkRenderPassMultiviewCreateInfo mv{VK_STRUCTURE_TYPE_RENDER_PASS_MULTIVIEW_CREATE_INFO};mv.subpassCount=1;mv.pViewMasks=&mask;mv.correlationMaskCount=1;mv.pCorrelationMasks=&mask;
@@ -365,12 +368,15 @@ public:
         dependency.dstStageMask=dependency.srcStageMask;dependency.dstAccessMask=VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT|VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
         VkRenderPassCreateInfo ci{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};ci.pNext=&mv;ci.attachmentCount=2;ci.pAttachments=attachments.data();ci.subpassCount=1;ci.pSubpasses=&sub;ci.dependencyCount=1;ci.pDependencies=&dependency;
         Check(vkCreateRenderPass(device,&ci,nullptr,&pass),"multiview render pass");
+        for(auto& a:attachments){a.loadOp=VK_ATTACHMENT_LOAD_OP_LOAD;a.initialLayout=a.finalLayout;}
+        dependency.dstAccessMask|=VK_ACCESS_COLOR_ATTACHMENT_READ_BIT|VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
+        Check(vkCreateRenderPass(device,&ci,nullptr,&resumePass),"water continuation pass");
         std::array<VkImageView,2> views{color.view,depth.view};VkFramebufferCreateInfo fi{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};fi.renderPass=pass;fi.attachmentCount=2;fi.pAttachments=views.data();fi.width=width;fi.height=height;fi.layers=1;
         Check(vkCreateFramebuffer(device,&fi,nullptr,&framebuffer),"multiview framebuffer");
     }
     void CreateDescriptors() {
-        for(int kind=0;kind<3;++kind) {
-            const size_t count=kind==2?std::size(shaders::skySamplers):kind==1?std::size(shaders::terrainSamplers):std::size(shaders::worldSamplers);
+        for(int kind=0;kind<4;++kind) {
+            const size_t count=kind==3?std::size(shaders::waterSamplers):kind==2?std::size(shaders::skySamplers):kind==1?std::size(shaders::terrainSamplers):std::size(shaders::worldSamplers);
             std::vector<VkDescriptorSetLayoutBinding> bindings(count+2);
             for(uint32_t i=0;i<bindings.size();++i){auto& b=bindings[i];b.binding=i;b.descriptorCount=1;b.stageFlags=VK_SHADER_STAGE_VERTEX_BIT|VK_SHADER_STAGE_FRAGMENT_BIT;
                 b.descriptorType=i==0?VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC:i==1?VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER:VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;}
@@ -380,6 +386,7 @@ public:
             Check(vkCreatePipelineLayout(device,&li,nullptr,&layouts[kind]),"pipeline layout");
         }
         auto module=[&](auto& words,VkShaderModule& target){VkShaderModuleCreateInfo ci{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};ci.codeSize=sizeof(words);ci.pCode=words;Check(vkCreateShaderModule(device,&ci,nullptr,&target),"SPIR-V shader module");};
+        module(shaders::water_vert,modules[3][0]);module(shaders::water_frag,modules[3][1]);
         module(shaders::world_vert,modules[0][0]);module(shaders::world_frag,modules[0][1]);module(shaders::terrain_vert,modules[1][0]);module(shaders::terrain_frag,modules[1][1]);module(shaders::sky_vert,modules[2][0]);module(shaders::sky_frag,modules[2][1]);
         std::array<VkDescriptorPoolSize,3> sizes{{{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,8192},{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,8192},{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,81920}}};
         VkDescriptorPoolCreateInfo pi{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};pi.maxSets=8192;pi.poolSizeCount=uint32_t(sizes.size());pi.pPoolSizes=sizes.data();
@@ -387,17 +394,18 @@ public:
     }
     VkPipeline Pipeline(const PipelineKey& key) {
         const auto found=pipelines.find(key);if(found!=pipelines.end())return found->second;
-        const int kind=key.sky?2:key.terrain?1:0;
+        const int kind=key.water?3:key.sky?2:key.terrain?1:0;
         std::array<VkPipelineShaderStageCreateInfo,2> stages{};
         for(int i=0;i<2;++i){stages[i].sType=VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;stages[i].stage=i?VK_SHADER_STAGE_FRAGMENT_BIT:VK_SHADER_STAGE_VERTEX_BIT;stages[i].module=modules[kind][i];stages[i].pName="main";}
         VkVertexInputBindingDescription binding{0,key.stride*4,VK_VERTEX_INPUT_RATE_VERTEX};
         std::vector<VkVertexInputAttributeDescription> attributes;
-        if(key.sky)attributes={{0,0,VK_FORMAT_R32G32B32_SFLOAT,0}};
+        if(key.water)attributes={{0,0,VK_FORMAT_R32G32B32_SFLOAT,0},{1,0,VK_FORMAT_R32G32_SFLOAT,12}};
+        else if(key.sky)attributes={{0,0,VK_FORMAT_R32G32B32_SFLOAT,0}};
         else if(key.terrain)attributes={{0,0,VK_FORMAT_R32G32B32_SFLOAT,0},{1,0,VK_FORMAT_R32G32B32_SFLOAT,12},{2,0,VK_FORMAT_R32G32_SFLOAT,24},{3,0,VK_FORMAT_R32_SFLOAT,32},{4,0,VK_FORMAT_R32G32B32_SFLOAT,36}};
         else attributes={{0,0,VK_FORMAT_R32G32B32_SFLOAT,0},{1,0,VK_FORMAT_R32G32B32_SFLOAT,12},{2,0,VK_FORMAT_R32G32B32_SFLOAT,24},{3,0,VK_FORMAT_R32G32B32_SFLOAT,36},{4,0,VK_FORMAT_R32G32_SFLOAT,48},{5,0,VK_FORMAT_R32G32B32A32_SFLOAT,56}};
         // Unused skin/instance inputs must still have defined attributes. The
         // probe rejects draws needing those streams rather than render bind poses.
-        if(!key.terrain&&!key.sky)for(uint32_t i=6;i<12;++i) {
+        if(!key.terrain&&!key.sky&&!key.water)for(uint32_t i=6;i<12;++i) {
             const uint32_t stream=key.instanced&&i<10?1u:key.skinned&&i>=10?2u:0u;
             attributes.push_back({i,stream,VK_FORMAT_R32G32B32A32_SFLOAT,stream==1?(i-6)*16u:stream==2?(i-10)*16u:0u});
         }
@@ -426,12 +434,12 @@ public:
     }
     void Register(uint32_t id,int kind) {
         if(!id)return;
-        ProgramData p;p.terrain=kind==1;p.sky=kind==2;p.bytes.resize(p.sky?shaders::skyUniformSize:p.terrain?shaders::terrainUniformSize:shaders::worldUniformSize);
-        const auto* fields=p.sky?shaders::skyFields:p.terrain?shaders::terrainFields:shaders::worldFields;
-        const size_t count=p.sky?std::size(shaders::skyFields):p.terrain?std::size(shaders::terrainFields):std::size(shaders::worldFields);
+        ProgramData p;p.terrain=kind==1;p.sky=kind==2;p.water=kind==3;p.bytes.resize(p.water?shaders::waterUniformSize:p.sky?shaders::skyUniformSize:p.terrain?shaders::terrainUniformSize:shaders::worldUniformSize);
+        const auto* fields=p.water?shaders::waterFields:p.sky?shaders::skyFields:p.terrain?shaders::terrainFields:shaders::worldFields;
+        const size_t count=p.water?std::size(shaders::waterFields):p.sky?std::size(shaders::skyFields):p.terrain?std::size(shaders::terrainFields):std::size(shaders::worldFields);
         for(size_t i=0;i<count;++i){int location=glGetUniformLocation(id,fields[i].name);if(location>=0)p.fields.push_back({location,fields[i]});}
-        const auto* samplers=p.sky?shaders::skySamplers:p.terrain?shaders::terrainSamplers:shaders::worldSamplers;
-        const size_t samplerCount=p.sky?std::size(shaders::skySamplers):p.terrain?std::size(shaders::terrainSamplers):std::size(shaders::worldSamplers);
+        const auto* samplers=p.water?shaders::waterSamplers:p.sky?shaders::skySamplers:p.terrain?shaders::terrainSamplers:shaders::worldSamplers;
+        const size_t samplerCount=p.water?std::size(shaders::waterSamplers):p.sky?std::size(shaders::skySamplers):p.terrain?std::size(shaders::terrainSamplers):std::size(shaders::worldSamplers);
         for(size_t i=0;i<samplerCount;++i)p.samplers.push_back(glGetUniformLocation(id,samplers[i].name));
         p.units.resize(samplerCount);programs[id]=std::move(p);
     }
@@ -456,12 +464,12 @@ public:
         const auto pIt=programs.find(program);if(pIt==programs.end()){++skipped;return;}
         const auto mIt=meshes.find(vao);if(mIt==meshes.end()||mode!=GL_TRIANGLES||count<=0||instances<=0||(instances>1&&(!instanceMatrices||instanceMatrixCount<size_t(instances)))||(UsesSkin(pIt->second)&&!mIt->second.skin.buffer)){++skipped;return;}
         if(type && type!=GL_UNSIGNED_INT){++skipped;return;}
-        const auto& m=mIt->second;auto& p=pIt->second;const int kind=p.sky?2:p.terrain?1:0;
+        const auto& m=mIt->second;auto& p=pIt->second;const int kind=p.water?3:p.sky?2:p.terrain?1:0;
         // Mirrored terrain packs indices after vertices in GL; native buffers are separate.
         const uint32_t indexFirst=type?(p.terrain?0:uint32_t(offset/4)):uint32_t(first);
         if(indexFirst+uint32_t(count)>m.count){++skipped;return;}
         const auto& s=fqgl::state;
-        PipelineKey key;key.sky=p.sky;key.terrain=p.terrain;key.stride=m.stride;key.instanced=instances>1;key.skinned=UsesSkin(p);
+        PipelineKey key;key.water=p.water;key.sky=p.sky;key.terrain=p.terrain;key.stride=m.stride;key.instanced=instances>1;key.skinned=UsesSkin(p);
         key.depth=s.depth.known?s.depth.value:true;key.write=s.depthWrite.known?s.depthWrite.value:true;
         key.blend=s.blend.known&&s.blend.value;key.cull=s.cull.known&&s.cull.value;
         key.clockwise=s.frontFace.known&&s.frontFace.value==GL_CW;key.depthFunc=s.depthFunc.known?s.depthFunc.value:GL_LESS;
@@ -476,11 +484,17 @@ public:
         const size_t instanceBytes=key.instanced?size_t(instances)*64:0;
         if(cursor+p.bytes.size()+instanceBytes>arena.size||draws>=8192){++skipped;return;}
         std::memcpy(static_cast<uint8_t*>(arena.mapped)+cursor,p.bytes.data(),p.bytes.size());
+        if(p.water)for(const auto& e:p.fields) {
+            float* out=reinterpret_cast<float*>(static_cast<uint8_t*>(arena.mapped)+cursor+e.field.offset);
+            if(!std::strcmp(e.field.name,"uSceneSnapshotReady"))*out=snapshotReady?1.0f:0.0f;
+            if(!std::strcmp(e.field.name,"uReflectionReady"))*out=0.0f; // planar native pass pending
+            if(!std::strcmp(e.field.name,"uViewport")){out[0]=float(width);out[1]=float(height);}
+        }
         VkDescriptorSet set{};VkDescriptorSetAllocateInfo ai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};ai.descriptorPool=descriptors;ai.descriptorSetCount=1;ai.pSetLayouts=&sets[kind];
         Check(vkAllocateDescriptorSets(device,&ai,&set),"allocate draw descriptors");
         std::array<VkDescriptorBufferInfo,2> bufferInfo{{{arena.buffer,0,p.bytes.size()},{stereo.buffer,0,288}}};
         std::vector<VkDescriptorImageInfo> imageInfo(p.units.size());
-        const auto* samplerMeta=p.sky?shaders::skySamplers:p.terrain?shaders::terrainSamplers:shaders::worldSamplers;
+        const auto* samplerMeta=p.water?shaders::waterSamplers:p.sky?shaders::skySamplers:p.terrain?shaders::terrainSamplers:shaders::worldSamplers;
         for(size_t i=0;i<p.units.size();++i){
             VkImageView view=samplerMeta[i].cube?cube.view:white.view;
             const int unit=p.units[i];
@@ -489,6 +503,11 @@ public:
                 const auto& binding=samplerMeta[i].cube?s.textureCube[unit]:s.texture2d[unit];
                 auto tex=textures.find(binding.value);
                 if(tex!=textures.end()){view=tex->second.view;if(tex->second.palette)chosenSampler=nearest;else if(tex->second.clamp)chosenSampler=clamped;}
+            }
+            if(p.water) {
+                const std::string name=samplerMeta[i].name;
+                if(name=="uSceneColor"||name=="uReflectionMap"){view=sceneColor.view;chosenSampler=clamped;}
+                if(name=="uSceneDepth"){view=sceneDepth.view;chosenSampler=nearest;}
             }
             imageInfo[i]={chosenSampler,view,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
         }
@@ -510,6 +529,49 @@ public:
         else vkCmdDraw(command,count,instances,first,0);
         ++draws;vertices+=uint64_t(count)*instances;
     }
+    void WaterSnapshot() {
+        if(!begun||snapshotReady||failed)return;
+        // Refraction requires arbitrary displaced screen taps, so retain an
+        // immutable opaque image rather than sampling an active attachment.
+        // Copy both views once, before any water CELL modifies the color target.
+        vkCmdEndRenderPass(command);
+        std::array<VkImageMemoryBarrier,4> before{};
+        for(size_t i=0;i<before.size();++i) {
+            auto& b=before[i];b.sType=VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            b.srcQueueFamilyIndex=b.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;
+            const bool isDepth=i%2;
+            b.subresourceRange={isDepth?VK_IMAGE_ASPECT_DEPTH_BIT:VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,2};
+            b.image=i==0?color.image:i==1?depth.image:i==2?sceneColor.image:sceneDepth.image;
+            b.oldLayout=i<2?(isDepth?VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL:VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL):
+                snapshotInitialized?VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:VK_IMAGE_LAYOUT_UNDEFINED;
+            b.newLayout=i<2?VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL:VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            b.srcAccessMask=i<2?(isDepth?VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT:VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT):
+                snapshotInitialized?VK_ACCESS_SHADER_READ_BIT:0;
+            b.dstAccessMask=i<2?VK_ACCESS_TRANSFER_READ_BIT:VK_ACCESS_TRANSFER_WRITE_BIT;
+        }
+        vkCmdPipelineBarrier(command,VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT|VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT|
+            VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT|VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,0,0,nullptr,0,nullptr,4,before.data());
+        for(size_t i=0;i<2;++i) {
+            VkImageCopy copy{};copy.srcSubresource={i?VK_IMAGE_ASPECT_DEPTH_BIT:VK_IMAGE_ASPECT_COLOR_BIT,0,0,2};
+            copy.dstSubresource=copy.srcSubresource;copy.extent={width,height,1};
+            vkCmdCopyImage(command,i?depth.image:color.image,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                i?sceneDepth.image:sceneColor.image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,1,&copy);
+        }
+        auto after=before;
+        for(size_t i=0;i<after.size();++i) {
+            auto& b=after[i];b.oldLayout=before[i].newLayout;
+            b.newLayout=i<2?(i==1?VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL:VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL):VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            b.srcAccessMask=before[i].dstAccessMask;
+            b.dstAccessMask=i<2?(i==1?VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT|VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT:
+                VK_ACCESS_COLOR_ATTACHMENT_READ_BIT|VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT):VK_ACCESS_SHADER_READ_BIT;
+        }
+        vkCmdPipelineBarrier(command,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT|
+            VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT|VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT|VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+            0,0,nullptr,0,nullptr,4,after.data());
+        VkRenderPassBeginInfo ri{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};ri.renderPass=resumePass;ri.framebuffer=framebuffer;ri.renderArea={{0,0},{width,height}};
+        vkCmdBeginRenderPass(command,&ri,VK_SUBPASS_CONTENTS_INLINE);
+        snapshotReady=snapshotInitialized=true;
+    }
     void Begin(const float* left,const float* right,const float* le,const float* re) {
         Check(vkWaitForFences(device,1,&fence,VK_TRUE,UINT64_MAX),"wait frame");
         Check(vkResetCommandPool(device,pool,0),"reset commands");Check(vkResetDescriptorPool(device,descriptors,0),"reset descriptors");
@@ -519,7 +581,7 @@ public:
             for(size_t row=0;row<4;++row)sky[12+row]+=world[row]*position[0]+world[4+row]*position[1]+world[8+row]*position[2];
         }
         std::memcpy(stereo.mapped,data,sizeof(data));
-        cursor=0;draws=vertices=skipped=0;
+        snapshotReady=false;cursor=0;draws=vertices=skipped=0;
         VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};bi.flags=VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
         Check(vkBeginCommandBuffer(command,&bi),"begin frame");
         if(timestamps){vkCmdResetQueryPool(command,timestamps,0,4);vkCmdWriteTimestamp(command,VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,timestamps,0);}
@@ -545,7 +607,7 @@ public:
         }
         Collect();
         Dump();
-        if((frames++%120)==0)VKLOG("FQVK WORLD PROBE frame=%llu partialStereoGpuMs=%.3f sharedDraws=%llu vertexCorners=%llu skippedDraws=%llu passes=world+LAND+actors+sky presentation=GLES concurrentApiWork=1 benchmarkValid=0",
+        if((frames++%120)==0)VKLOG("FQVK WORLD PROBE frame=%llu partialStereoGpuMs=%.3f sharedDraws=%llu vertexCorners=%llu skippedDraws=%llu passes=world+LAND+actors+sky+water presentation=GLES concurrentApiWork=1 benchmarkValid=0",
             (unsigned long long)frames,gpuMs,(unsigned long long)draws,(unsigned long long)vertices,(unsigned long long)skipped);
     }
     std::vector<uint16_t> Readback() {
@@ -610,10 +672,11 @@ public:
             Collect();
             Destroy(arena);Destroy(stereo);Destroy(white);Destroy(cube);
             if(framebuffer)vkDestroyFramebuffer(device,framebuffer,nullptr);
+            if(resumePass)vkDestroyRenderPass(device,resumePass,nullptr);
             if(pass)vkDestroyRenderPass(device,pass,nullptr);
-            Destroy(color);Destroy(depth);
+            Destroy(color);Destroy(depth);Destroy(sceneColor);Destroy(sceneDepth);
             if(descriptors)vkDestroyDescriptorPool(device,descriptors,nullptr);
-            for(int k=0;k<3;++k){if(layouts[k])vkDestroyPipelineLayout(device,layouts[k],nullptr);if(sets[k])vkDestroyDescriptorSetLayout(device,sets[k],nullptr);for(auto m:modules[k])if(m)vkDestroyShaderModule(device,m,nullptr);}
+            for(int k=0;k<4;++k){if(layouts[k])vkDestroyPipelineLayout(device,layouts[k],nullptr);if(sets[k])vkDestroyDescriptorSetLayout(device,sets[k],nullptr);for(auto m:modules[k])if(m)vkDestroyShaderModule(device,m,nullptr);}
             if(timestamps)vkDestroyQueryPool(device,timestamps,nullptr);
             if(clamped)vkDestroySampler(device,clamped,nullptr);
             if(nearest)vkDestroySampler(device,nearest,nullptr);
@@ -634,6 +697,7 @@ bool InitializeWorldProbe(XrInstance instance,XrSystemId system,uint32_t w,uint3
     try {
         renderer=std::make_unique<Renderer>();renderer->Initialize(instance,system,w,h);
         if(outputDirectory)renderer->outputDirectory=outputDirectory;
+        hooks.waterSnapshot=[](){try{renderer->WaterSnapshot();}catch(const std::exception& e){Failure(e);}};
         hooks.program=[](uint32_t id,int terrain){try{renderer->Register(id,terrain);}catch(const std::exception& e){Failure(e);}};
         hooks.uniform=[](uint32_t id,int location,int kind,int size,const void* bytes){renderer->Uniform(id,location,kind,size,bytes);};
         hooks.mesh=[](uint32_t vao,const float* vertices,size_t n,size_t stride,const uint32_t* indices,size_t indexCount){

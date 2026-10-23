@@ -31,15 +31,15 @@ extern "C" XrResult XRAPI_CALL xrGetInstanceProcAddr(XrInstance,const char* name
 }
 namespace {
 void Program(uint32_t id,int kind) {
-    const bool terrain=kind==1,sky=kind==2;
-    fqvk::ProgramData p;p.terrain=terrain;p.sky=sky;
-    p.bytes.resize(sky?fqvk::shaders::skyUniformSize:terrain?fqvk::shaders::terrainUniformSize:fqvk::shaders::worldUniformSize);
-    const auto* fields=sky?fqvk::shaders::skyFields:terrain?fqvk::shaders::terrainFields:fqvk::shaders::worldFields;
-    const size_t count=sky?std::size(fqvk::shaders::skyFields):terrain?std::size(fqvk::shaders::terrainFields):std::size(fqvk::shaders::worldFields);
+    const bool terrain=kind==1,sky=kind==2,water=kind==3;
+    fqvk::ProgramData p;p.terrain=terrain;p.sky=sky;p.water=water;
+    p.bytes.resize(water?fqvk::shaders::waterUniformSize:sky?fqvk::shaders::skyUniformSize:terrain?fqvk::shaders::terrainUniformSize:fqvk::shaders::worldUniformSize);
+    const auto* fields=water?fqvk::shaders::waterFields:sky?fqvk::shaders::skyFields:terrain?fqvk::shaders::terrainFields:fqvk::shaders::worldFields;
+    const size_t count=water?std::size(fqvk::shaders::waterFields):sky?std::size(fqvk::shaders::skyFields):terrain?std::size(fqvk::shaders::terrainFields):std::size(fqvk::shaders::worldFields);
     for(size_t i=0;i<count;++i)p.fields.push_back({int(i),fields[i]});
-    const size_t samplers=sky?std::size(fqvk::shaders::skySamplers):terrain?std::size(fqvk::shaders::terrainSamplers):std::size(fqvk::shaders::worldSamplers);
+    const size_t samplers=water?std::size(fqvk::shaders::waterSamplers):sky?std::size(fqvk::shaders::skySamplers):terrain?std::size(fqvk::shaders::terrainSamplers):std::size(fqvk::shaders::worldSamplers);
     p.units.resize(samplers);
-    const auto* names=sky?fqvk::shaders::skySamplers:terrain?fqvk::shaders::terrainSamplers:fqvk::shaders::worldSamplers;
+    const auto* names=water?fqvk::shaders::waterSamplers:sky?fqvk::shaders::skySamplers:terrain?fqvk::shaders::terrainSamplers:fqvk::shaders::worldSamplers;
     for(size_t i=0;i<samplers;++i) {
         const std::string name=names[i].name;
         p.units[i]=name=="uActorPalette"?6:name=="uNormalGloss"?1:name=="uGlow"?2:
@@ -141,11 +141,61 @@ void Sky() {
     for(int eye=0;eye<2;++eye){Near(Pixel(pixels,eye,32,24,0),.31f);Near(Pixel(pixels,eye,32,24,1),.465f);Near(Pixel(pixels,eye,32,24,2),.62f);}
 }
 
+void Water() {
+    Scene(false); // establishes the original world material and resident NIF layout
+    Program(3,3);
+    std::vector<float> geometry;
+    for(const auto& xy:std::array<std::array<float,2>,4>{{{{-1,-1}},{{1,-1}},{{1,1}},{{-1,1}}}})
+        geometry.insert(geometry.end(),{xy[0],xy[1],-.2f,xy[0],xy[1]});
+    const uint32_t indices[]{0,1,2,0,2,3};fqvk::Mesh(13,geometry.data(),4,5,indices,6);
+    uint8_t flat[]{128,128,128,255};fqvk::Texture(14,1,1,flat,true,false);
+    Set(3,"uSunDirection",{0,1,0});Set(3,"uSunColor",{0,0,0});
+    Set(3,"uUnitsPerMetre",{1});Set(3,"uClipNearFar",{.1f,10});
+    Set(3,"uSceneFogNearFar",{1000,1001});Set(3,"uSceneFogPower",{1});
+    Set(3,"uNormalUvScale",{1});Set(3,"uNoiseScale",{0});
+    Set(3,"uDepthFalloff",{0,1e9f});Set(3,"uWaterFogNearFar",{0,1e9f});
+    Set(3,"uWaterFogAmount",{0});Set(3,"uShininess",{1});
+    const float left[]{1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1};
+    const float right[]{1,0,0,0,0,1,0,0,0,0,1,0,.8f,0,0,1};
+    const float eye[]{0,0,2};
+    // Repeat to exercise SHADER_READ -> TRANSFER_DST when reusing snapshots.
+    for(int frame=0;frame<2;++frame) {
+        assert(fqvk::BeginWorldProbe(left,right,eye,eye));
+        fqgl::state.depthWrite.Change(true);fqgl::state.texture2d[0].Change(5);
+        fqvk::hooks.draw(1,9,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);
+        fqvk::WaterSnapshot();assert(fqvk::renderer->snapshotReady);
+        // Snapshot must be once per frame even with multiple water cells.
+        fqvk::WaterSnapshot();
+        fqgl::state.depthWrite.Change(false);fqgl::state.texture2d[0].Change(14);
+        fqvk::hooks.draw(3,13,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);
+        fqvk::EndWorldProbe();assert(fqvk::WorldProbeActive());
+        const auto pixels=fqvk::renderer->Readback();
+        Near(Pixel(pixels,0,32,32,0),1);Near(Pixel(pixels,0,32,32,1),0);
+        Near(Pixel(pixels,1,32,32,0),0);Near(Pixel(pixels,1,55,32,0),1);
+    }
+    // A farther water plane must remain behind the stored opaque depth after
+    // leaving and resuming the render pass, while visible in uncovered pixels.
+    for(size_t i=2;i<geometry.size();i+=5)geometry[i]=.2f;
+    fqvk::Mesh(13,geometry.data(),4,5,indices,6);
+    Set(3,"uShallow",{0,1,0});Set(3,"uDeep",{0,1,0});
+    Set(3,"uDepthFalloff",{-1,0});Set(3,"uWaterFogNearFar",{0,.1f});Set(3,"uWaterFogAmount",{1});
+    const float above[]{0,2,2};
+    assert(fqvk::BeginWorldProbe(left,left,above,above));
+    fqgl::state.depthWrite.Change(true);fqgl::state.texture2d[0].Change(5);
+    fqvk::hooks.draw(1,9,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);
+    fqvk::WaterSnapshot();fqgl::state.depthWrite.Change(false);fqgl::state.texture2d[0].Change(14);
+    fqvk::hooks.draw(3,13,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);fqvk::EndWorldProbe();
+    const auto occluded=fqvk::renderer->Readback();
+    Near(Pixel(occluded,0,32,32,0),1);Near(Pixel(occluded,0,32,32,1),0);
+    assert(Pixel(occluded,0,5,32,1)>.1f);
+}
+
 int main() {
     for(int mode=0;mode<4;++mode) {
         assert(fqvk::InitializeWorldProbe(reinterpret_cast<XrInstance>(uintptr_t(1)),1,64,64));
         Scene(mode==1,mode==2,mode==3);fqvk::ShutdownWorldProbe();assert(!fqvk::WorldProbeActive());
     }
     assert(fqvk::InitializeWorldProbe(reinterpret_cast<XrInstance>(uintptr_t(1)),1,64,64));Sky();fqvk::ShutdownWorldProbe();
-    std::cout<<"Vulkan native multiview: original world/LAND shaders, indexed NIF layout, per-eye cameras, depth equality, ordered paint blending and recreation passed\n";
+    assert(fqvk::InitializeWorldProbe(reinterpret_cast<XrInstance>(uintptr_t(1)),1,64,64));Water();fqvk::ShutdownWorldProbe();
+    std::cout<<"Vulkan native multiview: original world/LAND shaders, indexed NIF layout, per-eye cameras, depth equality, ordered paint blending, layered water refraction, retained opaque depth and recreation passed\n";
 }

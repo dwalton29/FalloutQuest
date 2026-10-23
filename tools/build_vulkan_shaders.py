@@ -25,7 +25,9 @@ def sources():
     sky_text=(ROOT/'app/src/main/cpp/rendering/environment/fo3-pc-sky.h').read_text()
     sky=[re.search(r'static const char\* '+name+r' = R"\((.*?)\)";',sky_text,re.S)[1]
          for name in ['vsSource','fsSource']]
-    return {'world':world, 'terrain':terrain,'sky':sky}
+    water_text=(ROOT/'app/src/main/cpp/rendering/water/fo3-water.cpp').read_text().split('bool EnsureRenderer() {',1)[1]
+    water=[re.search(r'static const char\* '+name+r' = R"\((.*?)\)";',water_text,re.S)[1] for name in ['vs','fs']]
+    return {'world':world, 'terrain':terrain,'sky':sky,'water':water}
 
 def port(pair,kind="world"):
     uniforms = {}
@@ -65,15 +67,23 @@ def port(pair,kind="world"):
         # Preserve original GL clip coordinates for FO3 fog, remap position only.
         if stage==0:
             source = re.sub(r'\buMvp\b','fqSkyViewProjection[gl_ViewIndex]' if kind=='sky' else 'fqViewProjection[gl_ViewIndex]',source)
-            if kind=='sky':
-                source=source.replace('gl_Position = fqSkyViewProjection[gl_ViewIndex] * vec4(aPosition, 1.0);',
-                    'vec4 fqClip=fqSkyViewProjection[gl_ViewIndex]*vec4(aPosition,1.0); gl_Position=vec4(fqClip.x,-fqClip.y,(fqClip.z+fqClip.w)*0.5,fqClip.w);')
+            if kind in ('sky','water'):
+                source=source.replace('gl_Position = '+('fqSkyViewProjection' if kind=='sky' else 'fqViewProjection')+'[gl_ViewIndex] * vec4(aPosition, 1.0);',
+                    'vec4 fqClip='+('fqSkyViewProjection' if kind=='sky' else 'fqViewProjection')+'[gl_ViewIndex]*vec4(aPosition,1.0); gl_Position=vec4(fqClip.x,-fqClip.y,(fqClip.z+fqClip.w)*0.5,fqClip.w);')
             source = source.replace('gl_Position = q1532Clip;',
                 'gl_Position = vec4(q1532Clip.x, -q1532Clip.y, (q1532Clip.z+q1532Clip.w)*0.5, q1532Clip.w);')
             source = re.sub(r'\buEyePositionVertexQ1630\b','fqEye[gl_ViewIndex].xyz',source)
         else:
             source = re.sub(r'\buEyePosition\b','fqEye[gl_ViewIndex].xyz',source)
-        sampler_text = '\n'.join(f'layout(set=0,binding={i+2}) uniform {typ} {name};'
+        if kind=='water':
+            source = re.sub(r'\buMvp\b','fqViewProjection[gl_ViewIndex]',source)
+            # Sample the matching native layer; Vulkan viewport Y is inverted
+            # relative to the original projected GL coordinates. Depth stays [0,1].
+            source = source.replace('displacedNdc * 0.5 + 0.5','vec2(displacedNdc.x, -displacedNdc.y) * 0.5 + 0.5')
+            source = source.replace('reflectionClip.xy / reflectionClip.w * 0.5 + 0.5','vec2(reflectionClip.x, -reflectionClip.y) / reflectionClip.w * 0.5 + 0.5')
+            for sampler_name in ('uSceneColor','uSceneDepth','uReflectionMap'):
+                source = re.sub(r'texture\('+sampler_name+r', (\w+)\)', r'texture('+sampler_name+r', vec3(\1, float(gl_ViewIndex)))',source)
+        sampler_text = '\n'.join(f'layout(set=0,binding={i+2}) uniform {"sampler2DArray" if kind=="water" and name in ("uSceneColor","uSceneDepth","uReflectionMap") else typ} {name};'
                                  for i,(name,typ) in enumerate(samplers))
         converted.append(header+sampler_text+'\n'+source)
     return converted,metadata,samplers,offset

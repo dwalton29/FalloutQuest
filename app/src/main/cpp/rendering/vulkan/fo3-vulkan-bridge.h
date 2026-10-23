@@ -14,6 +14,7 @@ struct Hooks {
     void (*skin)(uint32_t,uint32_t,const float*,size_t,const float*,size_t)=nullptr;
     void (*dynamicMesh)(uint32_t,const float*,size_t)=nullptr;
     void (*cube)(uint32_t,const Fo3RgbaCubeTexture&)=nullptr;
+    void (*waterSnapshot)()=nullptr;
     void (*erase)(uint32_t,bool)=nullptr;
 };
 inline Hooks hooks;
@@ -36,6 +37,7 @@ inline void DynamicMesh(uint32_t vao,const float* vertices,size_t count) {
 inline void Cube(uint32_t id,const Fo3RgbaCubeTexture& image) {
     if(hooks.cube)hooks.cube(id,image);
 }
+inline void WaterSnapshot(){if(recording&&hooks.waterSnapshot)hooks.waterSnapshot();}
 inline void Program(uint32_t program,int terrain) {
     if(hooks.program)hooks.program(program,terrain);
 }

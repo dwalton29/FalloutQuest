@@ -18,10 +18,14 @@ backend. No Vulkan-default or 72 Hz claim is made.
   snapshots, per-eye positions, and depth/cull/blend pipeline variants.
 - Original PC sky gradient/cloud/sun shader and dome geometry, translation-free
   per-eye sky cameras, original weather colors and sampler/mip policies.
+- Original recovered water shader port, authored CELL/WATR parameters and noise
+  texture uploads. Refraction samples matching native stereo color/depth layers;
+  one opaque snapshot precedes water and a LOAD continuation preserves depth.
+  Native planar reflection remains unfinished (uses original no-map shader path).
 - Native actor weight/index streams and original float bone palettes, live palette
   updates, differential FaceGen geometry updates, CPU skin fallback uploads and
-  original six-face/mip DDS cube resources. These paths still need GPU/on-device
-  validation; source integration alone is not NPC visual parity.
+  original six-face/mip DDS cube resources. Live palette motion has software-GPU coverage; actual NPC/FaceGen scenes still
+  need on-device validation. Source integration alone is not NPC visual parity.
 - Explicit transfers/barriers, resident buffers/images, generated DDS mip chains,
   fenced command reuse, pipeline caching, optional FP16 stereo image readback.
 - Separate partial GPU timestamps and skipped-draw diagnostics. Ordinary FQPerf
@@ -70,7 +74,7 @@ GLES selected. It must not select an incomplete game renderer.
 - Complete actor/weapon visual validation, complete UI and loading-screen native
   passes. Native pipeline state now handles reversed/front culling, depth bias
   and separate color/alpha blend operations, but requires scene validation.
-- Water, HDR/imagespace/bloom and native MSAA/resolve/depth submission.
+- Native planar water reflections, HDR/imagespace/bloom and native MSAA/resolve/depth submission.
 - Native draw-list generation independent of GLES commands, stereo-union culling
   for every pass and backend-owned material/resource identities.
 - Hardware foveation. Fragment-density extension availability is only logged;
@@ -94,12 +98,13 @@ Shader compile/link, ABI checks, GLES bridge/fallback tests and a software-Vulka
 pixel test are in CI. The GPU test uses the actual original world/LAND port and
 production resource/command code; a fake OpenXR device handshake supplies the
 software GPU. It checks per-eye camera output, depth equality, ordered paint,
-indexed layouts, live skin palettes, instancing, sky camera translation and
-recreation. These pixel tests passed locally on Mesa llvmpipe after correcting
+indexed layouts, live skin palettes, instancing, sky camera translation, layered
+water refraction, repeated snapshots, opaque depth preservation and recreation. These pixel tests passed locally on Mesa llvmpipe after correcting
 stereo timestamp query allocation. Shader compile/link checks also passed. It is not an OpenXR compositor or Quest test.
 
-Next implement native actor/palette and remaining material streams, then sky,
-water and imagespace passes; port UI/loading before enabling Vulkan presentation.
+Next implement native imagespace and UI/loading passes, complete the optional
+planar reflection path and validate full actor/material scenes before switching
+OpenXR presentation.
 Replace the mirror with one backend-independent stereo draw list as those passes
 become native. Resolve terrain from original ESM/DDS data and captured output.
 Only enable Vulkan-default after the complete on-device flow passes and the six
