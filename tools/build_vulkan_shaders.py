@@ -68,7 +68,7 @@ def port(pair,kind="world"):
     # Cameras use a separate shared block, while material constants use dynamic UBOs.
     header = ('#version 450\n#extension GL_EXT_multiview : require\n'+
               ('layout(std140,set=0,binding=0) uniform Material {\n'+'\n'.join(members)+'\n};\n' if members else '')+
-              'layout(std140,set=0,binding=1) uniform Stereo { mat4 fqViewProjection[2]; vec4 fqEye[2]; mat4 fqSkyViewProjection[2]; mat4 fqClipFromLeft[2]; };\n')
+              'layout(std140,set=0,binding=1) uniform Stereo { mat4 fqViewProjection[2]; vec4 fqEye[2]; mat4 fqSkyViewProjection[2]; mat4 fqClipFromLeft[2]; vec4 fqTarget; };\n')
     varyings = list(dict.fromkeys(m[3] for m in IO.findall(pair[0]) if m[1]=='out'))
     converted = []
     for stage,source in enumerate(pair):
@@ -85,12 +85,12 @@ def port(pair,kind="world"):
         # Preserve original GL clip coordinates for FO3 fog, remap position only.
         if stage==0 and kind in ('ui','notification','loading'):
             source=re.sub(r'gl_Position\s*=\s*uMvp\s*\*\s*vec4\((aPos|aPosition),\s*1(?:\.0)?\);',
-                r'vec4 fqClip=fqClipFromLeft[gl_ViewIndex]*uMvp*vec4(\1,1.0);gl_Position=vec4(fqClip.x,-fqClip.y,(fqClip.z+fqClip.w)*0.5,fqClip.w);',source)
+                r'vec4 fqClip=fqClipFromLeft[gl_ViewIndex]*uMvp*vec4(\1,1.0);gl_Position=vec4(fqClip.x,(fqTarget.x>0.5?fqClip.y:-fqClip.y),(fqClip.z+fqClip.w)*0.5,fqClip.w);',source)
         if stage==0 and kind not in ('ui','notification','loading'):
             source = re.sub(r'\buMvp\b','fqSkyViewProjection[gl_ViewIndex]' if kind=='sky' else 'fqViewProjection[gl_ViewIndex]',source)
             if kind in ('sky','water'):
                 source=source.replace('gl_Position = '+('fqSkyViewProjection' if kind=='sky' else 'fqViewProjection')+'[gl_ViewIndex] * vec4(aPosition, 1.0);',
-                    'vec4 fqClip='+('fqSkyViewProjection' if kind=='sky' else 'fqViewProjection')+'[gl_ViewIndex]*vec4(aPosition,1.0); gl_Position=vec4(fqClip.x,-fqClip.y,(fqClip.z+fqClip.w)*0.5,fqClip.w);')
+                    'vec4 fqClip='+('fqSkyViewProjection' if kind=='sky' else 'fqViewProjection')+'[gl_ViewIndex]*vec4(aPosition,1.0); gl_Position=vec4(fqClip.x,(fqTarget.x>0.5?fqClip.y:-fqClip.y),(fqClip.z+fqClip.w)*0.5,fqClip.w);')
             source = source.replace('gl_Position = q1532Clip;',
                 'gl_Position = vec4(q1532Clip.x, -q1532Clip.y, (q1532Clip.z+q1532Clip.w)*0.5, q1532Clip.w);')
             source = re.sub(r'\buEyePositionVertexQ1630\b','fqEye[gl_ViewIndex].xyz',source)

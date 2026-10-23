@@ -37,8 +37,9 @@ template<class T> T Proc(XrInstance xr,const char* name) {
     return reinterpret_cast<T>(fn);
 }
 struct Buffer {VkBuffer buffer{};VkDeviceMemory memory{};void* mapped{};VkDeviceSize size{};};
-struct Image {VkImage image{};VkImageView view{};VkDeviceMemory memory{};uint32_t levels=1;bool palette=false,clamp=false;};
+struct Image {VkImage image{};VkImageView view{};VkDeviceMemory memory{};uint32_t levels=1;bool palette=false,clamp=false,repeatT=false;};
 struct PostTarget {Image image;VkFramebuffer framebuffer{};uint32_t width=0,height=0;bool initialized=false;};
+struct UiTarget {PostTarget target;VkImageView sampled{};};
 struct MeshData {Buffer vertices,indices,skin;uint32_t count=0,stride=0;};
 struct ProgramData {
     bool terrain=false,sky=false,water=false;int ui=0;
@@ -49,17 +50,17 @@ struct ProgramData {
     std::vector<int> units;
 };
 struct PipelineKey {
-    uint32_t ui=0;bool strip=false;
+    uint32_t ui=0;bool strip=false,offscreen=false;
     bool offset=false,water=false,sky=false,skinned=false,instanced=false,terrain=false,depth=true,write=true,blend=false,cull=false,clockwise=false;
     uint32_t cullFace=GL_BACK,equation=GL_FUNC_ADD,equationA=GL_FUNC_ADD,stride=0,depthFunc=GL_LEQUAL,src=GL_ONE,dst=GL_ZERO,srcA=GL_ONE,dstA=GL_ZERO;
     bool operator==(const PipelineKey& k)const {
-        return strip==k.strip&&ui==k.ui&&water==k.water&&offset==k.offset&&cullFace==k.cullFace&&equation==k.equation&&equationA==k.equationA&&sky==k.sky && skinned==k.skinned && instanced==k.instanced && terrain==k.terrain && depth==k.depth && write==k.write && blend==k.blend &&
+        return offscreen==k.offscreen&&strip==k.strip&&ui==k.ui&&water==k.water&&offset==k.offset&&cullFace==k.cullFace&&equation==k.equation&&equationA==k.equationA&&sky==k.sky && skinned==k.skinned && instanced==k.instanced && terrain==k.terrain && depth==k.depth && write==k.write && blend==k.blend &&
             cull==k.cull && clockwise==k.clockwise && stride==k.stride && depthFunc==k.depthFunc &&
             src==k.src && dst==k.dst && srcA==k.srcA && dstA==k.dstA;
     }
 };
 struct PipelineHash {size_t operator()(const PipelineKey& k)const {
-    size_t h=uint32_t(k.strip)*2017+k.ui*1009+uint32_t(k.water)*997+k.stride+uint32_t(k.instanced)*31+uint32_t(k.skinned)+uint32_t(k.sky)*101;for(auto v:{uint32_t(k.terrain),uint32_t(k.depth),uint32_t(k.write),uint32_t(k.blend),
+    size_t h=uint32_t(k.offscreen)*4093+uint32_t(k.strip)*2017+k.ui*1009+uint32_t(k.water)*997+k.stride+uint32_t(k.instanced)*31+uint32_t(k.skinned)+uint32_t(k.sky)*101;for(auto v:{uint32_t(k.terrain),uint32_t(k.depth),uint32_t(k.write),uint32_t(k.blend),
         uint32_t(k.cull),uint32_t(k.clockwise),uint32_t(k.offset),k.cullFace,k.equation,k.equationA,k.depthFunc,k.src,k.dst,k.srcA,k.dstA}) { h=(h*16777619u)^v; }
     return h;
 }};
@@ -98,7 +99,7 @@ public:
     VkCommandPool pool{},uploads{};VkCommandBuffer command{};VkFence fence{};
     VkRenderPass pass{},resumePass{};VkFramebuffer framebuffer{};Image color,depth,white,cube,sceneColor,sceneDepth;
     bool snapshotReady=false,snapshotInitialized=false;
-    VkSampler sampler{},nearest{},clamped{};VkDescriptorSetLayout sets[12]{};VkPipelineLayout layouts[12]{};
+    VkSampler sampler{},nearest{},clamped{},verticalRepeat{};VkDescriptorSetLayout sets[12]{};VkPipelineLayout layouts[12]{};
     VkShaderModule modules[12][2]{};VkDescriptorPool descriptors{};
     VkQueryPool timestamps{};bool timestampSupported=false;uint32_t timestampBits=0;
     Buffer arena,stereo;VkDeviceSize cursor=0;uint32_t width=0,height=0;
@@ -109,6 +110,8 @@ public:
     VkRenderPass postPass{},adaptPass{};
     VkPipeline postPipelines[5]{};
     PostTarget adapted[2],bloom[3],presented;
+    std::unordered_map<uint32_t,UiTarget> uiTargets;std::vector<UiTarget> retiredUi;
+    UiTarget* activeUi=nullptr;bool offscreen=false;uint32_t targetWidth=0,targetHeight=0;VkRenderPass uiPass{};
     int adaptIndex=0;bool exposureFirst=true,postDone=false,passOpen=false;
     std::vector<Buffer> retiredBuffers;std::vector<Image> retiredImages;
     uint64_t draws=0,vertices=0,skipped=0,frames=0;bool begun=false;
@@ -149,7 +152,7 @@ public:
     }
     void Retire(Buffer& buffer){if(begun&&buffer.buffer){retiredBuffers.push_back(buffer);buffer={};}else Destroy(buffer);}
     void Retire(Image& image){if(begun&&image.image){retiredImages.push_back(image);image={};}else Destroy(image);}
-    void Collect(){for(auto& b:retiredBuffers)Destroy(b);for(auto& i:retiredImages)Destroy(i);retiredBuffers.clear();retiredImages.clear();}
+    void Collect(){for(auto& ui:retiredUi)DestroyUi(ui);retiredUi.clear();for(auto& b:retiredBuffers)Destroy(b);for(auto& i:retiredImages)Destroy(i);retiredBuffers.clear();retiredImages.clear();}
     Image MakeImage(uint32_t w,uint32_t h,VkFormat format,VkImageUsageFlags usage,
                     VkImageAspectFlags aspect,uint32_t layers=2,uint32_t levels=1,bool isCube=false) {
         Image image{};image.levels=levels;
@@ -336,12 +339,15 @@ public:
         Check(vkCreateSampler(device,&sci,nullptr,&sampler),"sampler");
         sci.addressModeU=sci.addressModeV=sci.addressModeW=VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
         Check(vkCreateSampler(device,&sci,nullptr,&clamped),"clamp sampler");
+        sci.addressModeV=VK_SAMPLER_ADDRESS_MODE_REPEAT;
+        Check(vkCreateSampler(device,&sci,nullptr,&verticalRepeat),"vertical-repeat sampler");
+        sci.addressModeV=VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
         sci.magFilter=sci.minFilter=VK_FILTER_NEAREST;sci.mipmapMode=VK_SAMPLER_MIPMAP_MODE_NEAREST;
         Check(vkCreateSampler(device,&sci,nullptr,&nearest),"palette sampler");
         const std::array<uint8_t,24> pixels{255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255};
         white=UploadTexture(1,1,pixels.data());cube=UploadTexture(1,1,pixels.data(),true);
         arena=MakeBuffer(32u*1024u*1024u,VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT|VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,true);
-        stereo=MakeBuffer(416,VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,true);
+        stereo=MakeBuffer(432,VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,true);
         CreatePass();CreateDescriptors();
         if(timestampSupported){VkQueryPoolCreateInfo tci{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};tci.queryType=VK_QUERY_TYPE_TIMESTAMP;// Reserve a stereo-width slot for each timestamp. Some drivers
             // retain the multiview query stride through the pass-end boundary.
@@ -438,10 +444,10 @@ public:
         VkPipelineDepthStencilStateCreateInfo ds{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};ds.depthTestEnable=key.depth;ds.depthWriteEnable=key.write;ds.depthCompareOp=Compare(key.depthFunc);
         VkPipelineColorBlendAttachmentState ba{};ba.colorWriteMask=0xf;ba.blendEnable=key.blend;ba.srcColorBlendFactor=Blend(key.src);ba.dstColorBlendFactor=Blend(key.dst);ba.colorBlendOp=BlendOperation(key.equation);ba.srcAlphaBlendFactor=Blend(key.srcA);ba.dstAlphaBlendFactor=Blend(key.dstA);ba.alphaBlendOp=BlendOperation(key.equationA);
         VkPipelineColorBlendStateCreateInfo bs{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};bs.attachmentCount=1;bs.pAttachments=&ba;
-        const VkDynamicState dynamicState=VK_DYNAMIC_STATE_DEPTH_BIAS;
+        const VkDynamicState dynamicStates[]{VK_DYNAMIC_STATE_VIEWPORT,VK_DYNAMIC_STATE_SCISSOR,VK_DYNAMIC_STATE_DEPTH_BIAS};
         VkPipelineDynamicStateCreateInfo dynamic{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
-        dynamic.dynamicStateCount=1;dynamic.pDynamicStates=&dynamicState;
-        VkGraphicsPipelineCreateInfo ci{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};ci.stageCount=2;ci.pStages=stages.data();ci.pVertexInputState=&vi;ci.pInputAssemblyState=&ia;ci.pViewportState=&vp;ci.pRasterizationState=&rs;ci.pMultisampleState=&ms;ci.pDepthStencilState=&ds;ci.pColorBlendState=&bs;ci.layout=layouts[kind];ci.renderPass=pass;if(key.offset)ci.pDynamicState=&dynamic;
+        dynamic.dynamicStateCount=key.offset?3:2;dynamic.pDynamicStates=dynamicStates;
+        VkGraphicsPipelineCreateInfo ci{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};ci.stageCount=2;ci.pStages=stages.data();ci.pVertexInputState=&vi;ci.pInputAssemblyState=&ia;ci.pViewportState=&vp;ci.pRasterizationState=&rs;ci.pMultisampleState=&ms;ci.pDepthStencilState=&ds;ci.pColorBlendState=&bs;ci.layout=layouts[kind];ci.renderPass=key.offscreen?uiPass:pass;ci.pDynamicState=&dynamic;
         VkPipeline pipeline{};Check(vkCreateGraphicsPipelines(device,VK_NULL_HANDLE,1,&ci,nullptr,&pipeline),"world pipeline");pipelines.emplace(key,pipeline);return pipeline;
     }
     void Register(uint32_t id,int kind) {
@@ -478,7 +484,7 @@ public:
         const uint32_t indexFirst=type?(p.terrain?0:uint32_t(offset/4)):uint32_t(first);
         if(indexFirst+uint32_t(count)>m.count){++skipped;return;}
         const auto& s=fqgl::state;
-        PipelineKey key;key.strip=mode==GL_TRIANGLE_STRIP;key.ui=uint32_t(p.ui);key.water=p.water;key.sky=p.sky;key.terrain=p.terrain;key.stride=m.stride;key.instanced=instances>1;key.skinned=UsesSkin(p);
+        PipelineKey key;key.offscreen=offscreen;key.strip=mode==GL_TRIANGLE_STRIP;key.ui=uint32_t(p.ui);key.water=p.water;key.sky=p.sky;key.terrain=p.terrain;key.stride=m.stride;key.instanced=instances>1;key.skinned=UsesSkin(p);
         key.depth=s.depth.known?s.depth.value:true;key.write=s.depthWrite.known?s.depthWrite.value:true;
         key.blend=s.blend.known&&s.blend.value;key.cull=s.cull.known&&s.cull.value;
         key.clockwise=s.frontFace.known&&s.frontFace.value==GL_CW;key.depthFunc=s.depthFunc.known?s.depthFunc.value:GL_LESS;
@@ -488,6 +494,7 @@ public:
         key.equation=s.blendEquationRgb.known?s.blendEquationRgb.value:GL_FUNC_ADD;
         key.equationA=s.blendEquationAlpha.known?s.blendEquationAlpha.value:GL_FUNC_ADD;
         key.offset=s.offset.known&&s.offset.value;
+        if(offscreen){key.depth=key.write=false;}
         const VkDeviceSize alignment=std::max<VkDeviceSize>(16,properties.limits.minUniformBufferOffsetAlignment);
         cursor=(cursor+alignment-1)&~(alignment-1);
         const size_t instanceBytes=key.instanced?size_t(instances)*64:0;
@@ -501,7 +508,7 @@ public:
         }
         VkDescriptorSet set{};VkDescriptorSetAllocateInfo ai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};ai.descriptorPool=descriptors;ai.descriptorSetCount=1;ai.pSetLayouts=&sets[kind];
         Check(vkAllocateDescriptorSets(device,&ai,&set),"allocate draw descriptors");
-        std::array<VkDescriptorBufferInfo,2> bufferInfo{{{arena.buffer,0,p.bytes.size()},{stereo.buffer,0,416}}};
+        std::array<VkDescriptorBufferInfo,2> bufferInfo{{{arena.buffer,0,p.bytes.size()},{stereo.buffer,0,432}}};
         std::vector<VkDescriptorImageInfo> imageInfo(p.units.size());
         const auto* samplerMeta=shaders::programs[kind].samplers;
         for(size_t i=0;i<p.units.size();++i){
@@ -511,12 +518,16 @@ public:
             if(unit>=0&&unit<16){
                 const auto& binding=samplerMeta[i].cube?s.textureCube[unit]:s.texture2d[unit];
                 auto tex=textures.find(binding.value);
-                if(tex!=textures.end()){view=tex->second.view;if(tex->second.palette)chosenSampler=nearest;else if(tex->second.clamp)chosenSampler=clamped;}
+                if(tex!=textures.end()){view=tex->second.view;if(tex->second.palette)chosenSampler=nearest;else if(tex->second.repeatT)chosenSampler=verticalRepeat;else if(tex->second.clamp)chosenSampler=clamped;}
             }
             if(p.water) {
                 const std::string name=samplerMeta[i].name;
                 if(name=="uSceneColor"||name=="uReflectionMap"){view=sceneColor.view;chosenSampler=clamped;}
                 if(name=="uSceneDepth"){view=sceneDepth.view;chosenSampler=nearest;}
+            }
+            if(unit>=0&&unit<16&&!samplerMeta[i].cube) {
+                auto ui=uiTargets.find(s.texture2d[unit].value);
+                if(ui!=uiTargets.end()&&ui->second.target.initialized){view=ui->second.sampled;chosenSampler=clamped;}
             }
             imageInfo[i]={chosenSampler,view,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
         }
@@ -528,6 +539,8 @@ public:
         const uint32_t dynamic=uint32_t(cursor);cursor+=p.bytes.size();
         const VkDeviceSize instanceOffset=cursor;
         if(key.instanced){std::memcpy(static_cast<uint8_t*>(arena.mapped)+cursor,instanceMatrices,instanceBytes);cursor+=instanceBytes;}
+        const VkViewport viewport{0,0,float(targetWidth),float(targetHeight),0,1};const VkRect2D scissor{{0,0},{targetWidth,targetHeight}};
+        vkCmdSetViewport(command,0,1,&viewport);vkCmdSetScissor(command,0,1,&scissor);
         vkCmdBindPipeline(command,VK_PIPELINE_BIND_POINT_GRAPHICS,Pipeline(key));
         vkCmdBindDescriptorSets(command,VK_PIPELINE_BIND_POINT_GRAPHICS,layouts[kind],0,1,&set,1,&dynamic);
         if(key.offset)vkCmdSetDepthBias(command,s.offsetUnits.known?s.offsetUnits.value:0,0,s.offsetFactor.known?s.offsetFactor.value:0);
@@ -649,7 +662,7 @@ public:
         }
         VkDescriptorSet set{};VkDescriptorSetAllocateInfo ai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};ai.descriptorPool=descriptors;ai.descriptorSetCount=1;ai.pSetLayouts=&sets[kind];
         Check(vkAllocateDescriptorSets(device,&ai,&set),"post descriptor set");
-        const std::array<VkDescriptorBufferInfo,2> buffers{{{arena.buffer,0,shader.uniformSize},{stereo.buffer,0,416}}};
+        const std::array<VkDescriptorBufferInfo,2> buffers{{{arena.buffer,0,shader.uniformSize},{stereo.buffer,0,432}}};
         std::vector<VkWriteDescriptorSet> writes(images.size()+2);
         for(size_t i=0;i<writes.size();++i){auto& w=writes[i];w.sType=VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;w.dstSet=set;w.dstBinding=uint32_t(i);w.descriptorCount=1;
             w.descriptorType=i==0?VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC:i==1?VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER:VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -700,11 +713,48 @@ public:
              {"uTargetLumQ1520",{settings.targetLum}},{"uPcBloomReadyQ1670",{1}}});
         postDone=true;
     }
-    void Begin(const float* left,const float* right,const float* le,const float* re,bool loading=false) {
+    void DestroyUi(UiTarget& ui) {
+        if(ui.sampled)vkDestroyImageView(device,ui.sampled,nullptr);
+        DestroyPost(ui.target);ui={};
+    }
+    bool BeginUiTarget(uint32_t id,uint32_t w,uint32_t h) {
+        if(begun||failed||!id||!w||!h)return false;
+        Check(vkWaitForFences(device,1,&fence,VK_TRUE,UINT64_MAX),"wait UI target");
+        if(!uiPass)uiPass=MakePostPass(VK_FORMAT_R8G8B8A8_UNORM);
+        auto& ui=uiTargets[id];
+        if(ui.target.image.image&&(ui.target.width!=w||ui.target.height!=h))DestroyUi(ui);
+        if(!ui.target.image.image) {
+            ui.target.width=w;ui.target.height=h;
+            ui.target.image=MakeImage(w,h,VK_FORMAT_R8G8B8A8_UNORM,VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT|VK_IMAGE_USAGE_SAMPLED_BIT,VK_IMAGE_ASPECT_COLOR_BIT);
+            VkFramebufferCreateInfo ci{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};ci.renderPass=uiPass;ci.attachmentCount=1;ci.pAttachments=&ui.target.image.view;
+            ci.width=w;ci.height=h;ci.layers=1;Check(vkCreateFramebuffer(device,&ci,nullptr,&ui.target.framebuffer),"Pip-Boy framebuffer");
+            VkImageViewCreateInfo vi{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};vi.image=ui.target.image.image;vi.viewType=VK_IMAGE_VIEW_TYPE_2D;vi.format=VK_FORMAT_R8G8B8A8_UNORM;
+            vi.subresourceRange={VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,1};Check(vkCreateImageView(device,&vi,nullptr,&ui.sampled),"Pip-Boy sampled view");
+        }
+        offscreen=true;activeUi=&ui;targetWidth=w;targetHeight=h;
+        const float identity[]{1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1},eye[]{0,0,0};
+        StartCommands(identity,identity,eye,eye);
+        PostBarrier(ui.target.image,ui.target.initialized?VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:VK_IMAGE_LAYOUT_UNDEFINED,
+            VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,ui.target.initialized?VK_ACCESS_SHADER_READ_BIT:0,VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+            ui.target.initialized?VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT:VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+        VkRenderPassBeginInfo ri{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};ri.renderPass=uiPass;ri.framebuffer=ui.target.framebuffer;ri.renderArea={{0,0},{w,h}};
+        vkCmdBeginRenderPass(command,&ri,VK_SUBPASS_CONTENTS_INLINE);passOpen=true;
+        VkClearAttachment clear{};clear.aspectMask=VK_IMAGE_ASPECT_COLOR_BIT;clear.colorAttachment=0;clear.clearValue.color={{0,0,0,1}};
+        const VkClearRect rect{{{0,0},{w,h}},0,1};vkCmdClearAttachments(command,1,&clear,1,&rect);
+        return true;
+    }
+    void EndUiTarget() {
+        if(!begun||!offscreen||!activeUi)return;
+        vkCmdEndRenderPass(command);passOpen=false;
+        PostBarrier(activeUi->target.image,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,VK_ACCESS_SHADER_READ_BIT,VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+        activeUi->target.initialized=true;End();activeUi=nullptr;offscreen=false;
+    }
+    void StartCommands(const float* left,const float* right,const float* le,const float* re,bool loading=false) {
         loadingFrame=loading;
         Check(vkWaitForFences(device,1,&fence,VK_TRUE,UINT64_MAX),"wait frame");
         Check(vkResetCommandPool(device,pool,0),"reset commands");Check(vkResetDescriptorPool(device,descriptors,0),"reset descriptors");
-        float data[104]{};std::memcpy(data,left,64);std::memcpy(data+16,right,64);std::memcpy(data+32,le,12);std::memcpy(data+36,re,12);for(size_t eye=0;eye<2;++eye) {
+        float data[108]{};data[104]=offscreen?1.0f:0.0f;std::memcpy(data,left,64);std::memcpy(data+16,right,64);std::memcpy(data+32,le,12);std::memcpy(data+36,re,12);for(size_t eye=0;eye<2;++eye) {
             float* sky=data+40+eye*16;const float* world=data+eye*16;const float* position=data+32+eye*4;
             std::memcpy(sky,world,64);
             for(size_t row=0;row<4;++row)sky[12+row]+=world[row]*position[0]+world[4+row]*position[1]+world[8+row]*position[2];
@@ -729,6 +779,10 @@ public:
         VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};bi.flags=VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
         Check(vkBeginCommandBuffer(command,&bi),"begin frame");
         if(timestamps){vkCmdResetQueryPool(command,timestamps,0,4);vkCmdWriteTimestamp(command,VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,timestamps,0);}
+        begun=true;
+    }
+    void Begin(const float* left,const float* right,const float* le,const float* re,bool loading=false) {
+        offscreen=false;targetWidth=width;targetHeight=height;StartCommands(left,right,le,re,loading);
         std::array<VkClearValue,2> clears{};clears[0].color={{0,0,0,1}};clears[1].depthStencil={1,0};
         VkRenderPassBeginInfo ri{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};ri.renderPass=pass;ri.framebuffer=framebuffer;ri.renderArea={{0,0},{width,height}};ri.clearValueCount=2;ri.pClearValues=clears.data();
         vkCmdBeginRenderPass(command,&ri,VK_SUBPASS_CONTENTS_INLINE);begun=passOpen=true;
@@ -752,8 +806,8 @@ public:
             }
         }
         Collect();
-        Dump();
-        if((frames++%120)==0)VKLOG("FQVK WORLD PROBE frame=%llu partialStereoGpuMs=%.3f sharedDraws=%llu vertexCorners=%llu skippedDraws=%llu passes=world+LAND+actors+sky+water+post presentation=GLES concurrentApiWork=1 benchmarkValid=0",
+        if(!offscreen)Dump();
+        if(!offscreen&&(frames++%120)==0)VKLOG("FQVK WORLD PROBE frame=%llu partialStereoGpuMs=%.3f sharedDraws=%llu vertexCorners=%llu skippedDraws=%llu passes=world+LAND+actors+sky+water+post presentation=GLES concurrentApiWork=1 benchmarkValid=0",
             (unsigned long long)frames,gpuMs,(unsigned long long)draws,(unsigned long long)vertices,(unsigned long long)skipped);
     }
     std::vector<uint16_t> Readback() {
@@ -816,6 +870,8 @@ public:
             for(auto& e:meshes){Destroy(e.second.vertices);Destroy(e.second.indices);Destroy(e.second.skin);}
             for(auto& e:textures)Destroy(e.second);
             Collect();
+            for(auto& ui:uiTargets)DestroyUi(ui.second);
+            if(uiPass)vkDestroyRenderPass(device,uiPass,nullptr);
             for(auto& target:adapted)DestroyPost(target);
             for(auto& target:bloom)DestroyPost(target);
             DestroyPost(presented);
@@ -830,6 +886,7 @@ public:
             if(descriptors)vkDestroyDescriptorPool(device,descriptors,nullptr);
             for(int k=0;k<12;++k){if(layouts[k])vkDestroyPipelineLayout(device,layouts[k],nullptr);if(sets[k])vkDestroyDescriptorSetLayout(device,sets[k],nullptr);for(auto m:modules[k])if(m)vkDestroyShaderModule(device,m,nullptr);}
             if(timestamps)vkDestroyQueryPool(device,timestamps,nullptr);
+            if(verticalRepeat)vkDestroySampler(device,verticalRepeat,nullptr);
             if(clamped)vkDestroySampler(device,clamped,nullptr);
             if(nearest)vkDestroySampler(device,nearest,nullptr);
             if(sampler)vkDestroySampler(device,sampler,nullptr);
@@ -849,6 +906,9 @@ bool InitializeWorldProbe(XrInstance instance,XrSystemId system,uint32_t w,uint3
     try {
         renderer=std::make_unique<Renderer>();renderer->Initialize(instance,system,w,h);
         if(outputDirectory)renderer->outputDirectory=outputDirectory;
+        hooks.beginUiTarget=[](uint32_t id,uint32_t w,uint32_t h){try{return renderer->BeginUiTarget(id,w,h);}catch(const std::exception& e){Failure(e);return false;}};
+        hooks.endUiTarget=[](){try{renderer->EndUiTarget();}catch(const std::exception& e){Failure(e);}};
+        hooks.repeatT=[](uint32_t id){auto found=renderer->textures.find(id);if(found!=renderer->textures.end())found->second.repeatT=true;};
         hooks.clearDepth=[](){auto& r=*renderer;if(!r.begun||!r.passOpen||r.failed)return;
             VkClearAttachment attachment{};attachment.aspectMask=VK_IMAGE_ASPECT_DEPTH_BIT;attachment.clearValue.depthStencil={1,0};
             const VkClearRect rect{{{0,0},{r.width,r.height}},0,1};vkCmdClearAttachments(r.command,1,&attachment,1,&rect);};
@@ -880,7 +940,8 @@ bool InitializeWorldProbe(XrInstance instance,XrSystemId system,uint32_t w,uint3
         }catch(const std::exception& e){Failure(e);}};
         hooks.draw=[](uint32_t p,uint32_t v,uint32_t m,int f,int n,uint32_t t,size_t o,int i){try{renderer->Draw(p,v,m,f,n,t,o,i);}catch(const std::exception& e){Failure(e);}};
         hooks.erase=[](uint32_t id,bool texture){auto& r=*renderer;
-            if(texture){auto i=r.textures.find(id);if(i!=r.textures.end()){r.Retire(i->second);r.textures.erase(i);}}
+            if(texture){auto ui=r.uiTargets.find(id);if(ui!=r.uiTargets.end()){if(r.begun)r.retiredUi.push_back(ui->second);else r.DestroyUi(ui->second);r.uiTargets.erase(ui);}
+                auto i=r.textures.find(id);if(i!=r.textures.end()){r.Retire(i->second);r.textures.erase(i);}}
             else{auto i=r.meshes.find(id);if(i!=r.meshes.end()){r.Retire(i->second.vertices);r.Retire(i->second.indices);r.Retire(i->second.skin);r.meshes.erase(i);}}};
         return true;
     }catch(const std::exception& e){Failure(e);ShutdownWorldProbe();return false;}

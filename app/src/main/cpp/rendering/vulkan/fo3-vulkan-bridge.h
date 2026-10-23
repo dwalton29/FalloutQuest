@@ -19,6 +19,9 @@ struct Hooks {
     void (*skin)(uint32_t,uint32_t,const float*,size_t,const float*,size_t)=nullptr;
     void (*dynamicMesh)(uint32_t,const float*,size_t)=nullptr;
     void (*cube)(uint32_t,const Fo3RgbaCubeTexture&)=nullptr;
+    bool (*beginUiTarget)(uint32_t,uint32_t,uint32_t)=nullptr;
+    void (*endUiTarget)()=nullptr;
+    void (*repeatT)(uint32_t)=nullptr;
     void (*clearDepth)()=nullptr;
     void (*post)(const PostSettings&)=nullptr;
     void (*resetExposure)()=nullptr;
@@ -46,6 +49,17 @@ inline void Cube(uint32_t id,const Fo3RgbaCubeTexture& image) {
     if(hooks.cube)hooks.cube(id,image);
 }
 inline void PostProcess(const PostSettings& settings){if(recording&&hooks.post)hooks.post(settings);}
+struct UiTargetScope {
+    bool active=false;
+    UiTargetScope(uint32_t texture,uint32_t width,uint32_t height) {
+        active=hooks.beginUiTarget&&hooks.beginUiTarget(texture,width,height);
+        if(active)recording=true;
+    }
+    ~UiTargetScope(){if(active){recording=false;if(hooks.endUiTarget)hooks.endUiTarget();}}
+    UiTargetScope(const UiTargetScope&)=delete;
+    UiTargetScope& operator=(const UiTargetScope&)=delete;
+};
+inline void RepeatT(uint32_t texture){if(hooks.repeatT)hooks.repeatT(texture);}
 inline void ClearDepth(){if(recording&&hooks.clearDepth)hooks.clearDepth();}
 inline void ResetExposure(){if(hooks.resetExposure)hooks.resetExposure();}
 inline void WaterSnapshot(){if(recording&&hooks.waterSnapshot)hooks.waterSnapshot();}

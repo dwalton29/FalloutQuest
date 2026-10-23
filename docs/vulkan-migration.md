@@ -30,7 +30,9 @@ backend. No Vulkan-default or 72 Hz claim is made.
   decoded font/atlas textures and vertex uploads for prompts, dialogue/barter,
   loot, level-up, pause, health, ammunition, XP, performance HUD and lockpick
   text. Per-object combined MVPs retain their model transform in both views.
-  Pip-Boy screen RTT remains unfinished.
+  Native RGBA8 Pip-Boy RTT records original menu/font/art draws on demand,
+  retains the GLES texture origin and feeds the original world screen material;
+  scanlines retain their vertical-repeat sampler. No screen readback is used.
 - Original loading/lockpick model shader, indexed original NIF vertex/material
   streams, original artwork and slides, authored UI clipping/fade, compass and
   KF-derived model matrices. Loading now records into the native stereo probe
@@ -85,7 +87,7 @@ GLES selected. It must not select an incomplete game renderer.
 
 - Vulkan OpenXR graphics binding, layered swapchain presentation, acquisition /
   release and session-loss recreation; current device handshake alone is not M1.
-- Complete actor/weapon visual validation and Pip-Boy screen RTT. Loading and
+- Complete actor/weapon and Pip-Boy in-game visual validation. Loading and
   lockpick native models still require full in-game animation/alpha comparison. Native pipeline state now handles reversed/front culling, depth bias
   and separate color/alpha blend operations, but requires scene validation.
 - Native planar water reflections and native MSAA/resolve/depth submission.
@@ -119,7 +121,7 @@ water refraction, repeated snapshots, opaque depth preservation, the native
 exposure/bloom/film chain and recreation. These pixel tests passed locally on Mesa llvmpipe after correcting
 stereo timestamp query allocation. Shader compile/link checks also passed. It is not an OpenXR compositor or Quest test.
 
-Next implement Pip-Boy RTT, complete the optional
+Next implement Vulkan OpenXR presentation, complete the optional
 planar reflection path and validate full actor/material scenes before switching
 OpenXR presentation.
 Replace the mirror with one backend-independent stereo draw list as those passes

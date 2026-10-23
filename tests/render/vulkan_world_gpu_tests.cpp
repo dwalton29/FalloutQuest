@@ -260,6 +260,38 @@ void Loading() {
     Near(Pixel(pixels,1,32,32,1),0);Near(Pixel(pixels,0,50,32,1),0);
 }
 
+void PipboyTarget() {
+    Scene(false);Program(21,9);
+    std::vector<float> ui;
+    auto rect=[&](float y0,float y1){for(const auto& xy:std::array<std::array<float,2>,6>{{{{-1,y0}},{{1,y0}},{{1,y1}},{{-1,y0}},{{1,y1}},{{-1,y1}}}})ui.insert(ui.end(),{xy[0],xy[1],0,0,0});};
+    rect(-1,0);rect(0,1);fqvk::Mesh(22,ui.data(),12,5,nullptr,0);
+    const uint8_t white[]{255,255,255,255};fqvk::Texture(23,1,1,white,false,false);
+    Set(21,"uMvp",{1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1});
+    auto screen=Quad(false);for(size_t i=0;i<4;++i){screen[i*18+12]=.5f;screen[i*18+13]=(screen[i*18+1]+.6f)/1.2f;}
+    const uint32_t indices[]{0,1,2,0,2,3};fqvk::Mesh(24,screen.data(),4,18,indices,6);
+    for(int frame=0;frame<2;++frame) {
+        {
+            fqvk::UiTargetScope target(30,32,16);assert(target.active&&fqvk::recording);
+            fqgl::state.texture2d[0].Change(23);fqgl::state.blend.Change(false);
+            Set(21,"uTint",frame?std::initializer_list<float>{0,1,0,1}:std::initializer_list<float>{1,0,0,1});
+            fqvk::hooks.draw(21,22,GL_TRIANGLES,0,6,0,0,1);
+            Set(21,"uTint",frame?std::initializer_list<float>{1,0,0,1}:std::initializer_list<float>{0,1,0,1});
+            fqvk::hooks.draw(21,22,GL_TRIANGLES,6,6,0,0,1);
+        }
+        assert(!fqvk::recording&&fqvk::renderer->uiTargets.at(30).target.initialized);
+        const float left[]{1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1},eye[]{0,0,2};
+        assert(fqvk::BeginWorldProbe(left,left,eye,eye));fqgl::state.texture2d[0].Change(30);
+        fqvk::hooks.draw(1,24,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);fqvk::EndWorldProbe();
+        const auto pixels=fqvk::renderer->Readback();
+        for(int eyeIndex=0;eyeIndex<2;++eyeIndex) {
+            Near(Pixel(pixels,eyeIndex,32,20,frame?0:1),1);
+            Near(Pixel(pixels,eyeIndex,32,44,frame?1:0),1);
+            Near(Pixel(pixels,eyeIndex,32,20,frame?1:0),0);
+        }
+    }
+    fqvk::hooks.erase(30,true);assert(fqvk::renderer->uiTargets.empty());
+}
+
 int main() {
     for(int mode=0;mode<4;++mode) {
         assert(fqvk::InitializeWorldProbe(reinterpret_cast<XrInstance>(uintptr_t(1)),1,64,64));
@@ -270,5 +302,6 @@ int main() {
     assert(fqvk::InitializeWorldProbe(reinterpret_cast<XrInstance>(uintptr_t(1)),1,64,64));Post();fqvk::ShutdownWorldProbe();
     for(bool animated:{false,true}){assert(fqvk::InitializeWorldProbe(reinterpret_cast<XrInstance>(uintptr_t(1)),1,64,64));Ui(animated);fqvk::ShutdownWorldProbe();}
     assert(fqvk::InitializeWorldProbe(reinterpret_cast<XrInstance>(uintptr_t(1)),1,64,64));Loading();fqvk::ShutdownWorldProbe();
-    std::cout<<"Vulkan native multiview: original world/LAND shaders, indexed NIF layout, per-eye cameras, depth equality, ordered paint blending, layered water refraction, retained opaque depth, original exposure/bloom/film/gamma, transformed UI/notification alpha and recreation passed\n";
+    assert(fqvk::InitializeWorldProbe(reinterpret_cast<XrInstance>(uintptr_t(1)),1,64,64));PipboyTarget();fqvk::ShutdownWorldProbe();
+    std::cout<<"Vulkan native multiview: original world/LAND shaders, indexed NIF layout, per-eye cameras, depth equality, ordered paint blending, layered water refraction, retained opaque depth, original exposure/bloom/film/gamma, transformed UI/notification alpha, loading clipping/depth, Pip-Boy RTT sampling/orientation and recreation passed\n";
 }

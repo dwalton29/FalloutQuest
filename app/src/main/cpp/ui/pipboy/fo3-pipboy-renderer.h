@@ -106,6 +106,9 @@ inline bool Ensure() {
   if (r.scanlines) {
     glBindTexture(GL_TEXTURE_2D, r.scanlines);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+#ifdef FQ_ENABLE_VULKAN
+    fqvk::RepeatT(r.scanlines);
+#endif
   }
   glGenTextures(1, &r.texture);
   glBindTexture(GL_TEXTURE_2D, r.texture);
@@ -167,6 +170,7 @@ inline void Draw(GLuint texture, float alpha = 1, bool untinted = false) {
   glBufferSubData(GL_ARRAY_BUFFER, 0,
                   r.vertices.size() * sizeof(fo3hudassets::Vertex),
                   r.vertices.data());
+  fo3hudassets::UploadVertices(r.vao,r.vertices.data(),r.vertices.size());
   glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(r.vertices.size()));
   r.vertices.clear();
 }
@@ -230,6 +234,9 @@ inline void Render(fo3pip::Menu &menu, const fo3player::Player &p, bool focus) {
   const auto started = std::chrono::steady_clock::now();
   const auto queries = fqgl::counters.queries;
   fo3hudrenderer::CachedStateGuard guard;
+#ifdef FQ_ENABLE_VULKAN
+  fqvk::UiTargetScope nativeScreen(r.texture,Width,Height);
+#endif
   glBindFramebuffer(GL_FRAMEBUFFER, r.fbo);
   glViewport(0, 0, Width, Height);
   glClearColor(0, 0, 0, 1);
