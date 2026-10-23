@@ -12,13 +12,15 @@ vkbuild=importlib.util.module_from_spec(spec);spec.loader.exec_module(vkbuild)
 class VulkanShaders(unittest.TestCase):
     def test_material_abi_and_stereo(self):
         for name,pair in vkbuild.sources().items():
-            converted,fields,samplers,size=vkbuild.port(pair)
+            converted,fields,samplers,size=vkbuild.port(pair,name)
             self.assertLessEqual(size,16384)
             last=0
             for field,offset,length,typ,count in fields:
                 self.assertEqual(offset%16,0)
                 self.assertGreaterEqual(offset,last);last=offset+length
             self.assertEqual(last,size)
+            if name=='sky':
+                self.assertIn('fqSkyViewProjection[gl_ViewIndex]',converted[0]);continue
             self.assertIn('fqViewProjection[gl_ViewIndex]',converted[0])
             self.assertIn('(q1532Clip.z+q1532Clip.w)*0.5',converted[0])
             self.assertIn('-q1532Clip.y',converted[0])

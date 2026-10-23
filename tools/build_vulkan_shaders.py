@@ -22,9 +22,12 @@ def sources():
              for name in ['vertexSource','fragmentSource']]
     land = (ROOT/'app/src/main/cpp/rendering/terrain/fo3-terrain-v237-shaders.h').read_text()
     terrain = re.findall(r'R"FQ239\((.*?)\)FQ239"',land,re.S)
-    return {'world':world, 'terrain':terrain}
+    sky_text=(ROOT/'app/src/main/cpp/rendering/environment/fo3-pc-sky.h').read_text()
+    sky=[re.search(r'static const char\* '+name+r' = R"\((.*?)\)";',sky_text,re.S)[1]
+         for name in ['vsSource','fsSource']]
+    return {'world':world, 'terrain':terrain,'sky':sky}
 
-def port(pair):
+def port(pair,kind="world"):
     uniforms = {}
     for source in pair:
         for typ, name, array in UNIFORM.findall(source):
@@ -46,7 +49,7 @@ def port(pair):
     # Cameras use a separate shared block, while material constants use dynamic UBOs.
     header = ('#version 450\n#extension GL_EXT_multiview : require\n'
               'layout(std140,set=0,binding=0) uniform Material {\n'+'\n'.join(members)+'\n};\n'
-              'layout(std140,set=0,binding=1) uniform Stereo { mat4 fqViewProjection[2]; vec4 fqEye[2]; };\n')
+              'layout(std140,set=0,binding=1) uniform Stereo { mat4 fqViewProjection[2]; vec4 fqEye[2]; mat4 fqSkyViewProjection[2]; };\n')
     varyings = list(dict.fromkeys(m[3] for m in IO.findall(pair[0]) if m[1]=='out'))
     converted = []
     for stage,source in enumerate(pair):
@@ -61,7 +64,10 @@ def port(pair):
         source = IO.sub(io,source)
         # Preserve original GL clip coordinates for FO3 fog, remap position only.
         if stage==0:
-            source = re.sub(r'\buMvp\b','fqViewProjection[gl_ViewIndex]',source)
+            source = re.sub(r'\buMvp\b','fqSkyViewProjection[gl_ViewIndex]' if kind=='sky' else 'fqViewProjection[gl_ViewIndex]',source)
+            if kind=='sky':
+                source=source.replace('gl_Position = fqSkyViewProjection[gl_ViewIndex] * vec4(aPosition, 1.0);',
+                    'vec4 fqClip=fqSkyViewProjection[gl_ViewIndex]*vec4(aPosition,1.0); gl_Position=vec4(fqClip.x,-fqClip.y,(fqClip.z+fqClip.w)*0.5,fqClip.w);')
             source = source.replace('gl_Position = q1532Clip;',
                 'gl_Position = vec4(q1532Clip.x, -q1532Clip.y, (q1532Clip.z+q1532Clip.w)*0.5, q1532Clip.w);')
             source = re.sub(r'\buEyePositionVertexQ1630\b','fqEye[gl_ViewIndex].xyz',source)
@@ -78,7 +84,7 @@ def build(output,compiler):
          'struct Field { const char* name; uint32_t offset, size, components, count; bool integer; };',
          'struct Sampler { const char* name; bool cube; };']
     for name,pair in sources().items():
-        converted,meta,samplers,size = port(pair)
+        converted,meta,samplers,size = port(pair,name)
         cpp.append(f'inline constexpr uint32_t {name}UniformSize={size};')
         cpp.append(f'inline constexpr Field {name}Fields[]={{')
         for field,offset,length,typ,count in meta:

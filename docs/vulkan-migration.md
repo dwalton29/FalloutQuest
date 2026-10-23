@@ -16,6 +16,8 @@ backend. No Vulkan-default or 72 Hz claim is made.
 - Indexed and non-indexed geometry, opaque instances, normal/gloss/diffuse maps,
   vertex colors, alpha testing, ordered LAND paint blending, dynamic uniform
   snapshots, per-eye positions, and depth/cull/blend pipeline variants.
+- Original PC sky gradient/cloud/sun shader and dome geometry, translation-free
+  per-eye sky cameras, original weather colors and sampler/mip policies.
 - Native actor weight/index streams and original float bone palettes, live palette
   updates, differential FaceGen geometry updates, CPU skin fallback uploads and
   original six-face/mip DDS cube resources. These paths still need GPU/on-device
@@ -65,9 +67,10 @@ GLES selected. It must not select an incomplete game renderer.
 
 - Vulkan OpenXR graphics binding, layered swapchain presentation, acquisition /
   release and session-loss recreation; current device handshake alone is not M1.
-- Complete actor/weapon visual validation, decals/reversed culling, complete UI
-  and loading-screen native passes.
-- Sky/weather, water, HDR/imagespace/bloom and native MSAA/resolve/depth submission.
+- Complete actor/weapon visual validation, complete UI and loading-screen native
+  passes. Native pipeline state now handles reversed/front culling, depth bias
+  and separate color/alpha blend operations, but requires scene validation.
+- Water, HDR/imagespace/bloom and native MSAA/resolve/depth submission.
 - Native draw-list generation independent of GLES commands, stereo-union culling
   for every pass and backend-owned material/resource identities.
 - Hardware foveation. Fragment-density extension availability is only logged;
@@ -91,7 +94,9 @@ Shader compile/link, ABI checks, GLES bridge/fallback tests and a software-Vulka
 pixel test are in CI. The GPU test uses the actual original world/LAND port and
 production resource/command code; a fake OpenXR device handshake supplies the
 software GPU. It checks per-eye camera output, depth equality, ordered paint,
-indexed layouts and recreation. It is not an OpenXR compositor or Quest test.
+indexed layouts, live skin palettes, instancing, sky camera translation and
+recreation. These pixel tests passed locally on Mesa llvmpipe after correcting
+stereo timestamp query allocation. Shader compile/link checks also passed. It is not an OpenXR compositor or Quest test.
 
 Next implement native actor/palette and remaining material streams, then sky,
 water and imagespace passes; port UI/loading before enabling Vulkan presentation.

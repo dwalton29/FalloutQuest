@@ -418,6 +418,9 @@ inline bool EnsureSkyGpu() {
     glEnableVertexAttribArray(0);
     glBindBuffer(GL_ARRAY_BUFFER, 0);
     glBindVertexArray(0);
+#ifdef FQ_ENABLE_VULKAN
+    fqvk::Mesh(skyVao,vertices.data(),vertices.size()/3u,3,nullptr,0);
+#endif
     skyVertexCount = static_cast<GLsizei>(vertices.size() / 3u);
     skyMvpLocation = glGetUniformLocation(skyProgram, "uMvp");
     skyUpperLocation = glGetUniformLocation(skyProgram, "uSkyUpper");

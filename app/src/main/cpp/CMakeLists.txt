@@ -126,6 +126,7 @@ if(FALLOUTQUEST_VULKAN)
             --compiler "${FQ_SHADER_COMPILER}" --output "${FQ_VULKAN_GENERATED}"
         DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/../../../../tools/build_vulkan_shaders.py"
                 core/fo3-runtime.cpp rendering/terrain/fo3-terrain-v237-shaders.h
+                rendering/environment/fo3-pc-sky.h
         VERBATIM)
     target_sources(falloutquest PRIVATE rendering/vulkan/fo3-vulkan-renderer.cpp
         "${FQ_VULKAN_GENERATED}/fo3-vulkan-shaders.h")

@@ -85,6 +85,9 @@ inline GLuint UploadTexture(const std::string& path, bool repeat) {
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8,
                  decoded.width, decoded.height, 0,
                  GL_RGBA, GL_UNSIGNED_BYTE, decoded.rgba.data());
+#ifdef FQ_ENABLE_VULKAN
+    fqvk::Texture(texture,decoded.width,decoded.height,decoded.rgba.data(),repeat,false);
+#endif
     __android_log_print(ANDROID_LOG_INFO, TAG,
                         "Q15.16 SKY DDS READY: path=%s resolved=%s size=%dx%d format=%s repeat=%d",
                         path.c_str(), decoded.sourcePath.c_str(), decoded.width,
@@ -254,6 +257,9 @@ inline bool EnsureProgram() {
         return false;
     }
 
+#ifdef FQ_ENABLE_VULKAN
+    fqvk::Program(gProgram,2);
+#endif
     gMvpLoc = glGetUniformLocation(gProgram, "uMvp");
     gModeLoc = glGetUniformLocation(gProgram, "uMode");
     gTextureLoc = glGetUniformLocation(gProgram, "uTexture");
