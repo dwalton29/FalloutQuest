@@ -45,6 +45,8 @@ jobs:
           cp /tmp/fq-vulkan-world /tmp/fq-vulkan-repro/ || true
           cp /lib/x86_64-linux-gnu/libvulkan_lvp.so /lib/x86_64-linux-gnu/libGLESv2.so.2 /tmp/fq-vulkan-repro/ || true
           cp /usr/share/vulkan/icd.d/lvp*.json /tmp/fq-vulkan-repro/ || true
+          cp /usr/share/vulkan/explicit_layer.d/VkLayer_khronos_validation.json /lib/x86_64-linux-gnu/libVkLayer_khronos_validation.so /tmp/fq-vulkan-repro/ || true
+          cp /tmp/fq-vulkan-validation.log /tmp/fq-vulkan-repro/ || true
       - uses: actions/upload-artifact@v4
         if: always()
         with:

@@ -27,7 +27,18 @@ def sources():
          for name in ['vsSource','fsSource']]
     water_text=(ROOT/'app/src/main/cpp/rendering/water/fo3-water.cpp').read_text().split('bool EnsureRenderer() {',1)[1]
     water=[re.search(r'static const char\* '+name+r' = R"\((.*?)\)";',water_text,re.S)[1] for name in ['vs','fs']]
-    return {'world':world, 'terrain':terrain,'sky':sky,'water':water}
+    result={'world':world, 'terrain':terrain,'sky':sky,'water':water}
+    def extract(section,name):
+        return re.search(r'static const char\* '+name+r' = R"\((.*?)\)";',section,re.S)[1]
+    adapt=runtime.split('bool Q1350EnsureAdaptationQ1350() {',1)[1]
+    bloom_vertex=extract(runtime.split('GLuint Q1670CreateProgramQ1670(',1)[1],'vertexSource')
+    bloom=runtime.split('bool Q1670EnsureProgramsQ1670() {',1)[1]
+    post=runtime.split('bool Q1280EnsurePostProgram() {',1)[1]
+    result['adapt']=[extract(adapt,'adaptVertex'),extract(adapt,'adaptFragment')]
+    for kind,name in [('copy','copyFragment'),('bright','brightVerticalFragment'),('blur','horizontalFragment')]:
+        result[kind]=[bloom_vertex,extract(bloom,name)]
+    result['post']=[extract(post,'vertexSource'),extract(post,'fragmentSource')]
+    return result
 
 def port(pair,kind="world"):
     uniforms = {}
@@ -49,13 +60,14 @@ def port(pair,kind="world"):
         metadata.append((name,offset,size,typ,count))
         offset += size
     # Cameras use a separate shared block, while material constants use dynamic UBOs.
-    header = ('#version 450\n#extension GL_EXT_multiview : require\n'
-              'layout(std140,set=0,binding=0) uniform Material {\n'+'\n'.join(members)+'\n};\n'
+    header = ('#version 450\n#extension GL_EXT_multiview : require\n'+
+              ('layout(std140,set=0,binding=0) uniform Material {\n'+'\n'.join(members)+'\n};\n' if members else '')+
               'layout(std140,set=0,binding=1) uniform Stereo { mat4 fqViewProjection[2]; vec4 fqEye[2]; mat4 fqSkyViewProjection[2]; };\n')
     varyings = list(dict.fromkeys(m[3] for m in IO.findall(pair[0]) if m[1]=='out'))
     converted = []
     for stage,source in enumerate(pair):
         source = re.sub(r'#version[^\n]*','',source)
+        source = source.replace('gl_VertexID','gl_VertexIndex')
         source = re.sub(r'\bprecision\s+\w+\s+\w+\s*;','',source)
         source = UNIFORM.sub('',source)
         source = re.sub(r'\b(highp|mediump|lowp)\s+','',source)
@@ -83,14 +95,21 @@ def port(pair,kind="world"):
             source = source.replace('reflectionClip.xy / reflectionClip.w * 0.5 + 0.5','vec2(reflectionClip.x, -reflectionClip.y) / reflectionClip.w * 0.5 + 0.5')
             for sampler_name in ('uSceneColor','uSceneDepth','uReflectionMap'):
                 source = re.sub(r'texture\('+sampler_name+r', (\w+)\)', r'texture('+sampler_name+r', vec3(\1, float(gl_ViewIndex)))',source)
-        sampler_text = '\n'.join(f'layout(set=0,binding={i+2}) uniform {"sampler2DArray" if kind=="water" and name in ("uSceneColor","uSceneDepth","uReflectionMap") else typ} {name};'
+        fullscreen=kind in ('adapt','copy','bright','blur','post')
+        if fullscreen:
+            for sampler_name,_ in samplers:
+                source=source.replace('texture('+sampler_name+',','fqSample_'+sampler_name+'(')
+        sampler_text = '\n'.join(f'layout(set=0,binding={i+2}) uniform {"sampler2DArray" if fullscreen or (kind=="water" and name in ("uSceneColor","uSceneDepth","uReflectionMap")) else typ} {name};'
                                  for i,(name,typ) in enumerate(samplers))
+        if fullscreen:
+            sampler_text+='\n'+'\n'.join('vec4 fqSample_'+name+'(vec2 uv){return texture('+name+',vec3(uv,'+
+                ('0.0' if kind=='adapt' else 'float(gl_ViewIndex)')+'));}' for name,_ in samplers)
         converted.append(header+sampler_text+'\n'+source)
-    return converted,metadata,samplers,offset
+    return converted,metadata,samplers,max(16,offset)
 
 def build(output,compiler):
     output.mkdir(parents=True,exist_ok=True)
-    cpp=['#pragma once','#include <cstdint>','#include <cstddef>','namespace fqvk::shaders {',
+    cpp=['#pragma once','#include <cstdint>','#include <cstddef>','#include <iterator>','namespace fqvk::shaders {',
          'struct Field { const char* name; uint32_t offset, size, components, count; bool integer; };',
          'struct Sampler { const char* name; bool cube; };']
     for name,pair in sources().items():
@@ -100,6 +119,7 @@ def build(output,compiler):
         for field,offset,length,typ,count in meta:
             components={'mat4':16,'vec4':4,'vec3':3,'vec2':2,'float':1,'int':1}[typ]
             cpp.append(f'{{"{field}",{offset},{length},{components},{max(1,count)},{str(typ=="int").lower()}}},')
+        if not meta:cpp.append('{nullptr,0,0,0,0,false},')
         cpp.append('};')
         cpp.append(f'inline constexpr Sampler {name}Samplers[]={{'+','.join(
             '{"'+field+'",'+str(typ=='samplerCube').lower()+'}' for field,typ in samplers)+'};')
@@ -113,6 +133,11 @@ def build(output,compiler):
             data=spv.read_bytes()
             words=struct.unpack('<'+'I'*(len(data)//4),data)
             cpp.append(f'inline constexpr uint32_t {name}_{stage}[]={{'+','.join(hex(x) for x in words)+'};')
+    cpp.append('struct Program { const Field* fields; size_t fieldCount; const Sampler* samplers; size_t samplerCount; uint32_t uniformSize; const uint32_t* vertex; size_t vertexBytes; const uint32_t* fragment; size_t fragmentBytes; };')
+    cpp.append('inline constexpr Program programs[]={')
+    for name in sources():
+        cpp.append('{'+f'{name}Fields,{len(port(sources()[name],name)[1])},{name}Samplers,std::size({name}Samplers),{name}UniformSize,{name}_vert,sizeof({name}_vert),{name}_frag,sizeof({name}_frag)'+'},')
+    cpp.append('};')
     cpp.append('}')
     (output/'fo3-vulkan-shaders.h').write_text('\n'.join(cpp)+'\n')
 

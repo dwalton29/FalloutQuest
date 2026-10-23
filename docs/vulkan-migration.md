@@ -22,6 +22,10 @@ backend. No Vulkan-default or 72 Hz claim is made.
   texture uploads. Refraction samples matching native stereo color/depth layers;
   one opaque snapshot precedes water and a LOAD continuation preserves depth.
   Native planar reflection remains unfinished (uses original no-map shader path).
+- Native HDR post chain using the original adaptation, copy, vertical bright,
+  horizontal Gaussian and final film SPIR-V programs. Stereo shares eye-0
+  adaptation exactly as GLES does. RGBA8 history, FP16 bloom and final colour,
+  authored cinematic settings, quantisation and gamma arithmetic are retained.
 - Native actor weight/index streams and original float bone palettes, live palette
   updates, differential FaceGen geometry updates, CPU skin fallback uploads and
   original six-face/mip DDS cube resources. Live palette motion has software-GPU coverage; actual NPC/FaceGen scenes still
@@ -48,8 +52,8 @@ Leave it disabled for ordinary gameplay or performance captures. Debug/Profile:
 .\adb shell am force-stop com.falloutquest.app
 ```
 
-Launch normally. Look for `FQVK WORLD PROBE` in logcat. PFM dumps are scene HDR,
-before imagespace/bloom, and are stored in the app's internal files directory:
+Launch normally. Look for `FQVK WORLD PROBE` in logcat. PFM dumps contain the native post result in display-linear colour when the
+post hook ran (otherwise scene HDR); logcat identifies the domain. They are stored in the app's internal files directory:
 
 ```powershell
 cmd /c ".\adb exec-out run-as com.falloutquest.app cat files/vulkan-probe-left.pfm > vulkan-probe-left.pfm"
@@ -74,7 +78,9 @@ GLES selected. It must not select an incomplete game renderer.
 - Complete actor/weapon visual validation, complete UI and loading-screen native
   passes. Native pipeline state now handles reversed/front culling, depth bias
   and separate color/alpha blend operations, but requires scene validation.
-- Native planar water reflections, HDR/imagespace/bloom and native MSAA/resolve/depth submission.
+- Native planar water reflections and native MSAA/resolve/depth submission.
+  The HDR/imagespace/bloom chain is implemented in the probe, but still needs
+  complete in-game colour and temporal adaptation comparison on Quest.
 - Native draw-list generation independent of GLES commands, stereo-union culling
   for every pass and backend-owned material/resource identities.
 - Hardware foveation. Fragment-density extension availability is only logged;
@@ -99,10 +105,11 @@ pixel test are in CI. The GPU test uses the actual original world/LAND port and
 production resource/command code; a fake OpenXR device handshake supplies the
 software GPU. It checks per-eye camera output, depth equality, ordered paint,
 indexed layouts, live skin palettes, instancing, sky camera translation, layered
-water refraction, repeated snapshots, opaque depth preservation and recreation. These pixel tests passed locally on Mesa llvmpipe after correcting
+water refraction, repeated snapshots, opaque depth preservation, the native
+exposure/bloom/film chain and recreation. These pixel tests passed locally on Mesa llvmpipe after correcting
 stereo timestamp query allocation. Shader compile/link checks also passed. It is not an OpenXR compositor or Quest test.
 
-Next implement native imagespace and UI/loading passes, complete the optional
+Next implement native UI/loading passes, complete the optional
 planar reflection path and validate full actor/material scenes before switching
 OpenXR presentation.
 Replace the mirror with one backend-independent stereo draw list as those passes

@@ -13925,7 +13925,11 @@ bool Q1350EnsureAdaptationQ1350() {
     return true;
 }
 
-void ResetFo3InteriorExposureHistory() { q1350AdaptFrame = 0u; }
+void ResetFo3InteriorExposureHistory() { q1350AdaptFrame = 0u;
+#ifdef FQ_ENABLE_VULKAN
+    fqvk::ResetExposure();
+#endif
+}
 
 void Q1350UpdateExposureQ1350() {
     if (!q1280PostColor || !Q1350EnsureAdaptationQ1350()) return;
@@ -14775,6 +14779,23 @@ void Q1280CompositeEyePostQ1280(GLuint swapchainFbo, GLsizei width, GLsizei heig
     // Full Bethesda bloom is multi-pass; keep the first Quest pass conservative
     // while still scaling from the authored exterior alpha.
     glUniform1f(q1280BloomAlphaLocation, bloomAlpha * 0.35f);
+#ifdef FQ_ENABLE_VULKAN
+    fqvk::PostSettings nativePost;
+    nativePost.interior=gFo3Environment.interior?1:0;nativePost.flags=flags;
+    nativePost.saturation=image.valid?image.cinematicSaturation:1.0f;
+    nativePost.contrastAvg=image.valid?image.cinematicContrastAvgLum:.5f;
+    nativePost.contrast=image.valid?image.cinematicContrast:1.0f;
+    nativePost.brightness=image.valid?image.cinematicBrightness:1.0f;
+    const Fo3ImageSpace defaults;
+    std::copy_n(image.valid?image.cinematicTint:defaults.cinematicTint,3,nativePost.tint);
+    nativePost.tintValue=image.valid?image.cinematicTintValue:0.0f;
+    nativePost.targetLum=gFo3Environment.interior?(image.valid?image.hdrTargetLum:1.0f):1.2f;
+    nativePost.upperLum=image.valid?std::clamp(image.hdrUpperLumClamp,.01f,4.0f):1.0f;
+    nativePost.eyeSpeed=image.valid?std::clamp(image.hdrEyeAdaptSpeed,0.0f,1.0f):.5f;
+    nativePost.brightThreshold=gFo3Environment.interior?(image.valid?image.hdrBrightClamp:.225f):.55f;
+    nativePost.brightScale=gFo3Environment.interior?(image.valid?image.hdrBrightScale:0.0f):1.0f;
+    fqvk::PostProcess(nativePost);
+#endif
 
     glDrawArrays(GL_TRIANGLES, 0, 3);
 

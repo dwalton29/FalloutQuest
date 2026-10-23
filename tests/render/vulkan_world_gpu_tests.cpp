@@ -190,6 +190,33 @@ void Water() {
     assert(Pixel(occluded,0,5,32,1)>.1f);
 }
 
+float DisplayLinear(float value) {
+    const float code=std::floor(std::clamp(value,0.0f,1.0f)*255+.5f)/255;
+    const float gamma=std::pow(code,.76f);
+    return gamma<=.04045f?gamma/12.92f:std::pow((gamma+.055f)/1.055f,2.4f);
+}
+void Post() {
+    Scene(false);
+    const uint8_t red[]{102,0,0,255};fqvk::Texture(5,1,1,red);
+    const float left[]{1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1};
+    const float right[]{1,0,0,0,0,1,0,0,0,0,1,0,.8f,0,0,1};const float eye[]{0,0,2};
+    fqvk::PostSettings settings;settings.interior=1;settings.flags=4;settings.tintValue=1;
+    settings.tint[0]=settings.tint[2]=0;settings.tint[1]=1;settings.brightThreshold=.1f;
+    for(int frame=0;frame<3;++frame) {
+        assert(fqvk::BeginWorldProbe(left,right,eye,eye));
+        fqgl::state.texture2d[0].Change(5);fqvk::hooks.draw(1,9,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);
+        settings.brightScale=frame==0?0.0f:1.0f;
+        if(frame==2)fqvk::ResetExposure();
+        fqvk::PostProcess(settings);assert(fqvk::renderer->postDone);fqvk::EndWorldProbe();
+        const auto pixels=fqvk::renderer->Readback();
+        const float redCombined=.4f+(frame==0?0.0f:.3f*.5f/settings.targetLum);
+        const float expected=DisplayLinear(redCombined*.298999995f);
+        Near(Pixel(pixels,0,32,32,0),0);Near(Pixel(pixels,0,32,32,1),expected);
+        Near(Pixel(pixels,1,32,32,1),0);Near(Pixel(pixels,1,55,32,1),expected);
+        if(frame)assert(Pixel(pixels,0,32,32,1)>DisplayLinear(.4f*.298999995f)+.01f);
+    }
+}
+
 int main() {
     for(int mode=0;mode<4;++mode) {
         assert(fqvk::InitializeWorldProbe(reinterpret_cast<XrInstance>(uintptr_t(1)),1,64,64));
@@ -197,5 +224,6 @@ int main() {
     }
     assert(fqvk::InitializeWorldProbe(reinterpret_cast<XrInstance>(uintptr_t(1)),1,64,64));Sky();fqvk::ShutdownWorldProbe();
     assert(fqvk::InitializeWorldProbe(reinterpret_cast<XrInstance>(uintptr_t(1)),1,64,64));Water();fqvk::ShutdownWorldProbe();
-    std::cout<<"Vulkan native multiview: original world/LAND shaders, indexed NIF layout, per-eye cameras, depth equality, ordered paint blending, layered water refraction, retained opaque depth and recreation passed\n";
+    assert(fqvk::InitializeWorldProbe(reinterpret_cast<XrInstance>(uintptr_t(1)),1,64,64));Post();fqvk::ShutdownWorldProbe();
+    std::cout<<"Vulkan native multiview: original world/LAND shaders, indexed NIF layout, per-eye cameras, depth equality, ordered paint blending, layered water refraction, retained opaque depth, original exposure/bloom/film/gamma and recreation passed\n";
 }

@@ -38,6 +38,7 @@ template<class T> T Proc(XrInstance xr,const char* name) {
 }
 struct Buffer {VkBuffer buffer{};VkDeviceMemory memory{};void* mapped{};VkDeviceSize size{};};
 struct Image {VkImage image{};VkImageView view{};VkDeviceMemory memory{};uint32_t levels=1;bool palette=false,clamp=false;};
+struct PostTarget {Image image;VkFramebuffer framebuffer{};uint32_t width=0,height=0;bool initialized=false;};
 struct MeshData {Buffer vertices,indices,skin;uint32_t count=0,stride=0;};
 struct ProgramData {
     bool terrain=false,sky=false,water=false;
@@ -95,14 +96,18 @@ public:
     VkCommandPool pool{},uploads{};VkCommandBuffer command{};VkFence fence{};
     VkRenderPass pass{},resumePass{};VkFramebuffer framebuffer{};Image color,depth,white,cube,sceneColor,sceneDepth;
     bool snapshotReady=false,snapshotInitialized=false;
-    VkSampler sampler{},nearest{},clamped{};VkDescriptorSetLayout sets[4]{};VkPipelineLayout layouts[4]{};
-    VkShaderModule modules[4][2]{};VkDescriptorPool descriptors{};
+    VkSampler sampler{},nearest{},clamped{};VkDescriptorSetLayout sets[9]{};VkPipelineLayout layouts[9]{};
+    VkShaderModule modules[9][2]{};VkDescriptorPool descriptors{};
     VkQueryPool timestamps{};bool timestampSupported=false;uint32_t timestampBits=0;
     Buffer arena,stereo;VkDeviceSize cursor=0;uint32_t width=0,height=0;
     std::unordered_map<uint32_t,MeshData> meshes;
     std::unordered_map<uint32_t,Image> textures;
     std::unordered_map<uint32_t,ProgramData> programs;
     std::unordered_map<PipelineKey,VkPipeline,PipelineHash> pipelines;
+    VkRenderPass postPass{},adaptPass{};
+    VkPipeline postPipelines[5]{};
+    PostTarget adapted[2],bloom[3],presented;
+    int adaptIndex=0;bool exposureFirst=true,postDone=false,passOpen=false;
     std::vector<Buffer> retiredBuffers;std::vector<Image> retiredImages;
     uint64_t draws=0,vertices=0,skipped=0,frames=0;bool begun=false;
     bool failed=false;
@@ -348,10 +353,12 @@ public:
     }
     void CreatePass() {
         VkFormatProperties format{};vkGetPhysicalDeviceFormatProperties(physical,VK_FORMAT_R16G16B16A16_SFLOAT,&format);
-        if(!(format.optimalTilingFeatures&VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT))throw std::runtime_error("FP16 color unavailable");
+        const VkFormatFeatureFlags fp16Required=VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT|VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT|VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT;
+        if((format.optimalTilingFeatures&fp16Required)!=fp16Required)throw std::runtime_error("sampled FP16 color unavailable");
         vkGetPhysicalDeviceFormatProperties(physical,VK_FORMAT_D32_SFLOAT,&format);
-        if(!(format.optimalTilingFeatures&VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT))throw std::runtime_error("D32 depth unavailable");
-        color=MakeImage(width,height,VK_FORMAT_R16G16B16A16_SFLOAT,VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT|VK_IMAGE_USAGE_TRANSFER_SRC_BIT,VK_IMAGE_ASPECT_COLOR_BIT);
+        const VkFormatFeatureFlags depthRequired=VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT|VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT;
+        if((format.optimalTilingFeatures&depthRequired)!=depthRequired)throw std::runtime_error("sampled D32 depth unavailable");
+        color=MakeImage(width,height,VK_FORMAT_R16G16B16A16_SFLOAT,VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT|VK_IMAGE_USAGE_TRANSFER_SRC_BIT|VK_IMAGE_USAGE_SAMPLED_BIT,VK_IMAGE_ASPECT_COLOR_BIT);
         depth=MakeImage(width,height,VK_FORMAT_D32_SFLOAT,VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT|VK_IMAGE_USAGE_TRANSFER_SRC_BIT,VK_IMAGE_ASPECT_DEPTH_BIT);
         sceneColor=MakeImage(width,height,VK_FORMAT_R16G16B16A16_SFLOAT,VK_IMAGE_USAGE_TRANSFER_DST_BIT|VK_IMAGE_USAGE_SAMPLED_BIT,VK_IMAGE_ASPECT_COLOR_BIT);
         sceneDepth=MakeImage(width,height,VK_FORMAT_D32_SFLOAT,VK_IMAGE_USAGE_TRANSFER_DST_BIT|VK_IMAGE_USAGE_SAMPLED_BIT,VK_IMAGE_ASPECT_DEPTH_BIT);
@@ -374,8 +381,8 @@ public:
         Check(vkCreateFramebuffer(device,&fi,nullptr,&framebuffer),"multiview framebuffer");
     }
     void CreateDescriptors() {
-        for(int kind=0;kind<4;++kind) {
-            const size_t count=kind==3?std::size(shaders::waterSamplers):kind==2?std::size(shaders::skySamplers):kind==1?std::size(shaders::terrainSamplers):std::size(shaders::worldSamplers);
+        for(int kind=0;kind<9;++kind) {
+            const size_t count=shaders::programs[kind].samplerCount;
             std::vector<VkDescriptorSetLayoutBinding> bindings(count+2);
             for(uint32_t i=0;i<bindings.size();++i){auto& b=bindings[i];b.binding=i;b.descriptorCount=1;b.stageFlags=VK_SHADER_STAGE_VERTEX_BIT|VK_SHADER_STAGE_FRAGMENT_BIT;
                 b.descriptorType=i==0?VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC:i==1?VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER:VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;}
@@ -384,9 +391,11 @@ public:
             VkPipelineLayoutCreateInfo li{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};li.setLayoutCount=1;li.pSetLayouts=&sets[kind];
             Check(vkCreatePipelineLayout(device,&li,nullptr,&layouts[kind]),"pipeline layout");
         }
-        auto module=[&](auto& words,VkShaderModule& target){VkShaderModuleCreateInfo ci{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};ci.codeSize=sizeof(words);ci.pCode=words;Check(vkCreateShaderModule(device,&ci,nullptr,&target),"SPIR-V shader module");};
-        module(shaders::water_vert,modules[3][0]);module(shaders::water_frag,modules[3][1]);
-        module(shaders::world_vert,modules[0][0]);module(shaders::world_frag,modules[0][1]);module(shaders::terrain_vert,modules[1][0]);module(shaders::terrain_frag,modules[1][1]);module(shaders::sky_vert,modules[2][0]);module(shaders::sky_frag,modules[2][1]);
+        for(int kind=0;kind<9;++kind)for(int stage=0;stage<2;++stage) {
+            const auto& shader=shaders::programs[kind];VkShaderModuleCreateInfo ci{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
+            ci.codeSize=stage?shader.fragmentBytes:shader.vertexBytes;ci.pCode=stage?shader.fragment:shader.vertex;
+            Check(vkCreateShaderModule(device,&ci,nullptr,&modules[kind][stage]),"SPIR-V module");
+        }
         std::array<VkDescriptorPoolSize,3> sizes{{{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,8192},{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,8192},{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,81920}}};
         VkDescriptorPoolCreateInfo pi{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};pi.maxSets=8192;pi.poolSizeCount=uint32_t(sizes.size());pi.pPoolSizes=sizes.data();
         Check(vkCreateDescriptorPool(device,&pi,nullptr,&descriptors),"frame descriptor pool");
@@ -433,14 +442,11 @@ public:
     }
     void Register(uint32_t id,int kind) {
         if(!id)return;
-        ProgramData p;p.terrain=kind==1;p.sky=kind==2;p.water=kind==3;p.bytes.resize(p.water?shaders::waterUniformSize:p.sky?shaders::skyUniformSize:p.terrain?shaders::terrainUniformSize:shaders::worldUniformSize);
-        const auto* fields=p.water?shaders::waterFields:p.sky?shaders::skyFields:p.terrain?shaders::terrainFields:shaders::worldFields;
-        const size_t count=p.water?std::size(shaders::waterFields):p.sky?std::size(shaders::skyFields):p.terrain?std::size(shaders::terrainFields):std::size(shaders::worldFields);
-        for(size_t i=0;i<count;++i){int location=glGetUniformLocation(id,fields[i].name);if(location>=0)p.fields.push_back({location,fields[i]});}
-        const auto* samplers=p.water?shaders::waterSamplers:p.sky?shaders::skySamplers:p.terrain?shaders::terrainSamplers:shaders::worldSamplers;
-        const size_t samplerCount=p.water?std::size(shaders::waterSamplers):p.sky?std::size(shaders::skySamplers):p.terrain?std::size(shaders::terrainSamplers):std::size(shaders::worldSamplers);
-        for(size_t i=0;i<samplerCount;++i)p.samplers.push_back(glGetUniformLocation(id,samplers[i].name));
-        p.units.resize(samplerCount);programs[id]=std::move(p);
+        const auto& shader=shaders::programs[kind];
+        ProgramData p;p.terrain=kind==1;p.sky=kind==2;p.water=kind==3;p.bytes.resize(shader.uniformSize);
+        for(size_t i=0;i<shader.fieldCount;++i){int location=glGetUniformLocation(id,shader.fields[i].name);if(location>=0)p.fields.push_back({location,shader.fields[i]});}
+        for(size_t i=0;i<shader.samplerCount;++i)p.samplers.push_back(glGetUniformLocation(id,shader.samplers[i].name));
+        p.units.resize(shader.samplerCount);programs[id]=std::move(p);
     }
     void Uniform(uint32_t id,int location,int kind,int bytes,const void* data) {
         auto it=programs.find(id);if(it==programs.end())return;auto& p=it->second;
@@ -459,7 +465,7 @@ public:
         return false;
     }
     void Draw(uint32_t program,uint32_t vao,uint32_t mode,int first,int count,uint32_t type,size_t offset,int instances) {
-        if(!begun||failed)return;
+        if(!begun||!passOpen||failed)return;
         const auto pIt=programs.find(program);if(pIt==programs.end()){++skipped;return;}
         const auto mIt=meshes.find(vao);if(mIt==meshes.end()||mode!=GL_TRIANGLES||count<=0||instances<=0||(instances>1&&(!instanceMatrices||instanceMatrixCount<size_t(instances)))||(UsesSkin(pIt->second)&&!mIt->second.skin.buffer)){++skipped;return;}
         if(type && type!=GL_UNSIGNED_INT){++skipped;return;}
@@ -481,7 +487,7 @@ public:
         const VkDeviceSize alignment=std::max<VkDeviceSize>(16,properties.limits.minUniformBufferOffsetAlignment);
         cursor=(cursor+alignment-1)&~(alignment-1);
         const size_t instanceBytes=key.instanced?size_t(instances)*64:0;
-        if(cursor+p.bytes.size()+instanceBytes>arena.size||draws>=8192){++skipped;return;}
+        if(cursor+p.bytes.size()+instanceBytes>arena.size||draws>=8176){++skipped;return;}
         std::memcpy(static_cast<uint8_t*>(arena.mapped)+cursor,p.bytes.data(),p.bytes.size());
         if(p.water)for(const auto& e:p.fields) {
             float* out=reinterpret_cast<float*>(static_cast<uint8_t*>(arena.mapped)+cursor+e.field.offset);
@@ -529,7 +535,7 @@ public:
         ++draws;vertices+=uint64_t(count)*instances;
     }
     void WaterSnapshot() {
-        if(!begun||snapshotReady||failed)return;
+        if(!begun||!passOpen||snapshotReady||failed)return;
         // Refraction requires arbitrary displaced screen taps, so retain an
         // immutable opaque image rather than sampling an active attachment.
         // Copy both views once, before any water CELL modifies the color target.
@@ -571,6 +577,125 @@ public:
         vkCmdBeginRenderPass(command,&ri,VK_SUBPASS_CONTENTS_INLINE);
         snapshotReady=snapshotInitialized=true;
     }
+    void DestroyPost(PostTarget& target) {
+        if(target.framebuffer)vkDestroyFramebuffer(device,target.framebuffer,nullptr);
+        Destroy(target.image);target={};
+    }
+    VkRenderPass MakePostPass(VkFormat format) {
+        VkAttachmentDescription attachment{};attachment.format=format;attachment.samples=VK_SAMPLE_COUNT_1_BIT;
+        attachment.loadOp=VK_ATTACHMENT_LOAD_OP_DONT_CARE;attachment.storeOp=VK_ATTACHMENT_STORE_OP_STORE;
+        attachment.stencilLoadOp=VK_ATTACHMENT_LOAD_OP_DONT_CARE;attachment.stencilStoreOp=VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        attachment.initialLayout=attachment.finalLayout=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        VkAttachmentReference reference{0,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+        VkSubpassDescription sub{};sub.pipelineBindPoint=VK_PIPELINE_BIND_POINT_GRAPHICS;sub.colorAttachmentCount=1;sub.pColorAttachments=&reference;
+        const uint32_t mask=3;VkRenderPassMultiviewCreateInfo mv{VK_STRUCTURE_TYPE_RENDER_PASS_MULTIVIEW_CREATE_INFO};
+        mv.subpassCount=1;mv.pViewMasks=&mask;mv.correlationMaskCount=1;mv.pCorrelationMasks=&mask;
+        VkRenderPassCreateInfo ci{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};ci.pNext=&mv;ci.attachmentCount=1;ci.pAttachments=&attachment;ci.subpassCount=1;ci.pSubpasses=&sub;
+        VkRenderPass result{};Check(vkCreateRenderPass(device,&ci,nullptr,&result),"post render pass");return result;
+    }
+    void MakePostTarget(PostTarget& target,uint32_t w,uint32_t h,bool adaptation=false) {
+        target.width=w;target.height=h;
+        target.image=MakeImage(w,h,adaptation?VK_FORMAT_R8G8B8A8_UNORM:VK_FORMAT_R16G16B16A16_SFLOAT,
+            VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT|VK_IMAGE_USAGE_SAMPLED_BIT|VK_IMAGE_USAGE_TRANSFER_SRC_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT,VK_IMAGE_ASPECT_COLOR_BIT);
+        VkFramebufferCreateInfo ci{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};ci.renderPass=adaptation?adaptPass:postPass;
+        ci.attachmentCount=1;ci.pAttachments=&target.image.view;ci.width=w;ci.height=h;ci.layers=1;
+        Check(vkCreateFramebuffer(device,&ci,nullptr,&target.framebuffer),"post framebuffer");
+    }
+    void PostBarrier(Image& image,VkImageLayout oldLayout,VkImageLayout newLayout,VkAccessFlags src,VkAccessFlags dst,
+                     VkPipelineStageFlags srcStage,VkPipelineStageFlags dstStage) {
+        VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};b.srcQueueFamilyIndex=b.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;
+        b.image=image.image;b.subresourceRange={VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,2};b.oldLayout=oldLayout;b.newLayout=newLayout;b.srcAccessMask=src;b.dstAccessMask=dst;
+        vkCmdPipelineBarrier(command,srcStage,dstStage,0,0,nullptr,0,nullptr,1,&b);
+    }
+    void CreatePost() {
+        if(postPass)return;
+        postPass=MakePostPass(VK_FORMAT_R16G16B16A16_SFLOAT);adaptPass=MakePostPass(VK_FORMAT_R8G8B8A8_UNORM);
+        for(auto& target:adapted)MakePostTarget(target,1,1,true);
+        MakePostTarget(bloom[0],640,256);MakePostTarget(bloom[1],256,256);MakePostTarget(bloom[2],256,256);
+        MakePostTarget(presented,width,height);
+        for(int kind=4;kind<9;++kind) {
+            std::array<VkPipelineShaderStageCreateInfo,2> stages{};
+            for(int i=0;i<2;++i){stages[i].sType=VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;stages[i].stage=i?VK_SHADER_STAGE_FRAGMENT_BIT:VK_SHADER_STAGE_VERTEX_BIT;stages[i].module=modules[kind][i];stages[i].pName="main";}
+            VkPipelineVertexInputStateCreateInfo vi{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
+            VkPipelineInputAssemblyStateCreateInfo ia{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};ia.topology=VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+            VkPipelineViewportStateCreateInfo vp{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};vp.viewportCount=vp.scissorCount=1;
+            VkPipelineRasterizationStateCreateInfo rs{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};rs.polygonMode=VK_POLYGON_MODE_FILL;rs.lineWidth=1;
+            VkPipelineMultisampleStateCreateInfo ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};ms.rasterizationSamples=VK_SAMPLE_COUNT_1_BIT;
+            VkPipelineColorBlendAttachmentState colorBlend{};colorBlend.colorWriteMask=0xf;
+            VkPipelineColorBlendStateCreateInfo bs{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};bs.attachmentCount=1;bs.pAttachments=&colorBlend;
+            const VkDynamicState states[]{VK_DYNAMIC_STATE_VIEWPORT,VK_DYNAMIC_STATE_SCISSOR};
+            VkPipelineDynamicStateCreateInfo dynamic{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};dynamic.dynamicStateCount=2;dynamic.pDynamicStates=states;
+            VkGraphicsPipelineCreateInfo ci{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};ci.stageCount=2;ci.pStages=stages.data();ci.pVertexInputState=&vi;ci.pInputAssemblyState=&ia;
+            ci.pViewportState=&vp;ci.pRasterizationState=&rs;ci.pMultisampleState=&ms;ci.pColorBlendState=&bs;ci.pDynamicState=&dynamic;
+            ci.layout=layouts[kind];ci.renderPass=kind==4?adaptPass:postPass;
+            Check(vkCreateGraphicsPipelines(device,VK_NULL_HANDLE,1,&ci,nullptr,&postPipelines[kind-4]),"native post pipeline");
+        }
+    }
+    using PostValues=std::unordered_map<std::string,std::vector<float>>;
+    void PostDraw(int kind,PostTarget& target,const std::vector<VkDescriptorImageInfo>& images,const PostValues& values) {
+        const auto& shader=shaders::programs[kind];
+        const VkDeviceSize alignment=std::max<VkDeviceSize>(16,properties.limits.minUniformBufferOffsetAlignment);
+        cursor=(cursor+alignment-1)&~(alignment-1);
+        if(cursor+shader.uniformSize>arena.size)throw std::runtime_error("post uniform arena exhausted");
+        auto* bytes=static_cast<uint8_t*>(arena.mapped)+cursor;std::memset(bytes,0,shader.uniformSize);
+        for(size_t i=0;i<shader.fieldCount;++i) {
+            const auto& field=shader.fields[i];const auto value=values.find(field.name);if(value==values.end())continue;
+            if(field.integer){const int integer=int(value->second.at(0));std::memcpy(bytes+field.offset,&integer,4);}
+            else std::memcpy(bytes+field.offset,value->second.data(),std::min<size_t>(field.components,value->second.size())*4);
+        }
+        VkDescriptorSet set{};VkDescriptorSetAllocateInfo ai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};ai.descriptorPool=descriptors;ai.descriptorSetCount=1;ai.pSetLayouts=&sets[kind];
+        Check(vkAllocateDescriptorSets(device,&ai,&set),"post descriptor set");
+        const std::array<VkDescriptorBufferInfo,2> buffers{{{arena.buffer,0,shader.uniformSize},{stereo.buffer,0,288}}};
+        std::vector<VkWriteDescriptorSet> writes(images.size()+2);
+        for(size_t i=0;i<writes.size();++i){auto& w=writes[i];w.sType=VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;w.dstSet=set;w.dstBinding=uint32_t(i);w.descriptorCount=1;
+            w.descriptorType=i==0?VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC:i==1?VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER:VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            if(i<2)w.pBufferInfo=&buffers[i];else w.pImageInfo=&images[i-2];}
+        vkUpdateDescriptorSets(device,uint32_t(writes.size()),writes.data(),0,nullptr);
+        PostBarrier(target.image,target.initialized?VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:VK_IMAGE_LAYOUT_UNDEFINED,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+            target.initialized?VK_ACCESS_SHADER_READ_BIT:0,VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+            target.initialized?VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT:VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+        VkRenderPassBeginInfo ri{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};ri.renderPass=kind==4?adaptPass:postPass;ri.framebuffer=target.framebuffer;ri.renderArea={{0,0},{target.width,target.height}};
+        vkCmdBeginRenderPass(command,&ri,VK_SUBPASS_CONTENTS_INLINE);
+        const VkViewport viewport{0,0,float(target.width),float(target.height),0,1};const VkRect2D scissor{{0,0},{target.width,target.height}};
+        vkCmdSetViewport(command,0,1,&viewport);vkCmdSetScissor(command,0,1,&scissor);
+        vkCmdBindPipeline(command,VK_PIPELINE_BIND_POINT_GRAPHICS,postPipelines[kind-4]);
+        const uint32_t offset=uint32_t(cursor);cursor+=shader.uniformSize;
+        vkCmdBindDescriptorSets(command,VK_PIPELINE_BIND_POINT_GRAPHICS,layouts[kind],0,1,&set,1,&offset);
+        vkCmdDraw(command,3,1,0,0);vkCmdEndRenderPass(command);
+        PostBarrier(target.image,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,VK_ACCESS_SHADER_READ_BIT,VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+        target.initialized=true;
+    }
+    void PostProcess(const PostSettings& settings) {
+        if(!begun||!passOpen||failed||postDone)return;
+        CreatePost();vkCmdEndRenderPass(command);passOpen=false;
+        PostBarrier(color,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,VK_ACCESS_SHADER_READ_BIT,VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+        // Retail/GLES adaptation is eye 0 once per stereo frame. Both native
+        // history layers deliberately use that same source, avoiding eye rivalry.
+        auto& previous=adapted[adaptIndex];
+        if(!previous.initialized) {
+            PostBarrier(previous.image,VK_IMAGE_LAYOUT_UNDEFINED,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,0,VK_ACCESS_TRANSFER_WRITE_BIT,VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT);
+            const VkClearColorValue zero{{0,0,0,1}};const VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,2};
+            vkCmdClearColorImage(command,previous.image.image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,&zero,1,&range);
+            PostBarrier(previous.image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,VK_ACCESS_TRANSFER_WRITE_BIT,VK_ACCESS_SHADER_READ_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+            previous.initialized=true;
+        }
+        auto sample=[&](Image& image,bool point=false){return VkDescriptorImageInfo{point?nearest:clamped,image.view,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};};
+        const int next=1-adaptIndex;
+        PostDraw(4,adapted[next],{sample(color),sample(previous.image,true)},{{"uTargetLum",{settings.upperLum}},{"uEyeAdaptSpeed",{settings.eyeSpeed}},{"uFirstFrame",{exposureFirst?1.0f:0.0f}}});
+        adaptIndex=next;exposureFirst=false;
+        PostDraw(5,bloom[0],{sample(color)},{});
+        PostDraw(5,bloom[1],{sample(bloom[0].image,true)},{});
+        PostDraw(6,bloom[2],{sample(bloom[1].image,true),sample(adapted[next].image,true)},{{"uBrightThreshold",{settings.brightThreshold}},{"uBrightScale",{settings.brightScale}}});
+        PostDraw(7,bloom[1],{sample(bloom[2].image,true)},{});
+        PostDraw(8,presented,{sample(color),sample(adapted[next].image,true),sample(bloom[1].image)},
+            {{"uFlags",{float(settings.flags)}},{"uInteriorMode",{float(settings.interior)}},{"uSaturation",{settings.saturation}},
+             {"uContrastAvg",{settings.contrastAvg}},{"uContrast",{settings.contrast}},{"uBrightness",{settings.brightness}},
+             {"uTintColor",{settings.tint[0],settings.tint[1],settings.tint[2]}},{"uTintValue",{settings.tintValue}},
+             {"uTargetLumQ1520",{settings.targetLum}},{"uPcBloomReadyQ1670",{1}}});
+        postDone=true;
+    }
     void Begin(const float* left,const float* right,const float* le,const float* re) {
         Check(vkWaitForFences(device,1,&fence,VK_TRUE,UINT64_MAX),"wait frame");
         Check(vkResetCommandPool(device,pool,0),"reset commands");Check(vkResetDescriptorPool(device,descriptors,0),"reset descriptors");
@@ -580,18 +705,20 @@ public:
             for(size_t row=0;row<4;++row)sky[12+row]+=world[row]*position[0]+world[4+row]*position[1]+world[8+row]*position[2];
         }
         std::memcpy(stereo.mapped,data,sizeof(data));
-        snapshotReady=false;cursor=0;draws=vertices=skipped=0;
+        postDone=false;snapshotReady=false;cursor=0;draws=vertices=skipped=0;
         VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};bi.flags=VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
         Check(vkBeginCommandBuffer(command,&bi),"begin frame");
         if(timestamps){vkCmdResetQueryPool(command,timestamps,0,4);vkCmdWriteTimestamp(command,VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,timestamps,0);}
         std::array<VkClearValue,2> clears{};clears[0].color={{0,0,0,1}};clears[1].depthStencil={1,0};
         VkRenderPassBeginInfo ri{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};ri.renderPass=pass;ri.framebuffer=framebuffer;ri.renderArea={{0,0},{width,height}};ri.clearValueCount=2;ri.pClearValues=clears.data();
-        vkCmdBeginRenderPass(command,&ri,VK_SUBPASS_CONTENTS_INLINE);begun=true;
+        vkCmdBeginRenderPass(command,&ri,VK_SUBPASS_CONTENTS_INLINE);begun=passOpen=true;
     }
     void End() {
         if(!begun)return;
         begun=false;
-        vkCmdEndRenderPass(command);if(timestamps)vkCmdWriteTimestamp(command,VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,timestamps,2);
+        if(passOpen)vkCmdEndRenderPass(command);
+        passOpen=false;
+        if(timestamps)vkCmdWriteTimestamp(command,VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,timestamps,2);
         Check(vkEndCommandBuffer(command),"end frame");Check(vkResetFences(device,1,&fence),"reset frame fence");
         VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};si.commandBufferCount=1;si.pCommandBuffers=&command;
         Check(vkQueueSubmit(queue,1,&si,fence),"submit world probe");Check(vkWaitForFences(device,1,&fence,VK_TRUE,UINT64_MAX),"finish world probe");
@@ -606,7 +733,7 @@ public:
         }
         Collect();
         Dump();
-        if((frames++%120)==0)VKLOG("FQVK WORLD PROBE frame=%llu partialStereoGpuMs=%.3f sharedDraws=%llu vertexCorners=%llu skippedDraws=%llu passes=world+LAND+actors+sky+water presentation=GLES concurrentApiWork=1 benchmarkValid=0",
+        if((frames++%120)==0)VKLOG("FQVK WORLD PROBE frame=%llu partialStereoGpuMs=%.3f sharedDraws=%llu vertexCorners=%llu skippedDraws=%llu passes=world+LAND+actors+sky+water+post presentation=GLES concurrentApiWork=1 benchmarkValid=0",
             (unsigned long long)frames,gpuMs,(unsigned long long)draws,(unsigned long long)vertices,(unsigned long long)skipped);
     }
     std::vector<uint16_t> Readback() {
@@ -618,17 +745,17 @@ public:
             Transfer([&](VkCommandBuffer cb){
                 VkImageMemoryBarrier barrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
                 barrier.srcQueueFamilyIndex=barrier.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;
-                barrier.image=color.image;barrier.subresourceRange={VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,2};
-                barrier.oldLayout=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;barrier.newLayout=VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+                barrier.image=postDone?presented.image.image:color.image;barrier.subresourceRange={VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,2};
+                barrier.oldLayout=postDone?VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;barrier.newLayout=VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
                 barrier.srcAccessMask=VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;barrier.dstAccessMask=VK_ACCESS_TRANSFER_READ_BIT;
                 vkCmdPipelineBarrier(cb,VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,0,0,nullptr,0,nullptr,1,&barrier);
                 VkBufferImageCopy copy{};copy.imageSubresource={VK_IMAGE_ASPECT_COLOR_BIT,0,0,2};copy.imageExtent={width,height,1};
-                vkCmdCopyImageToBuffer(cb,color.image,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,readback.buffer,1,&copy);
+                vkCmdCopyImageToBuffer(cb,postDone?presented.image.image:color.image,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,readback.buffer,1,&copy);
                 VkBufferMemoryBarrier host{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};host.buffer=readback.buffer;host.size=VK_WHOLE_SIZE;
                 host.srcQueueFamilyIndex=host.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;
                 host.srcAccessMask=VK_ACCESS_TRANSFER_WRITE_BIT;host.dstAccessMask=VK_ACCESS_HOST_READ_BIT;
                 vkCmdPipelineBarrier(cb,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_HOST_BIT,0,0,nullptr,1,&host,0,nullptr);
-                barrier.oldLayout=VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;barrier.newLayout=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+                barrier.oldLayout=VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;barrier.newLayout=postDone?VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
                 barrier.srcAccessMask=VK_ACCESS_TRANSFER_READ_BIT;barrier.dstAccessMask=VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
                 vkCmdPipelineBarrier(cb,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,0,0,nullptr,0,nullptr,1,&barrier);
             });
@@ -658,7 +785,7 @@ public:
                 out.write(reinterpret_cast<const char*>(rgb),sizeof(rgb));
             }
             if(!out)throw std::runtime_error("probe image write failed");
-            VKLOG("FQVK WORLD PROBE image=%s domain=scene-HDR-no-post",file.c_str());
+            VKLOG("FQVK WORLD PROBE image=%s domain=%s",file.c_str(),postDone?"display-linear-after-imagespace":"scene-HDR-no-post");
         }
         dumped=true;
 #endif
@@ -669,13 +796,19 @@ public:
             for(auto& e:meshes){Destroy(e.second.vertices);Destroy(e.second.indices);Destroy(e.second.skin);}
             for(auto& e:textures)Destroy(e.second);
             Collect();
+            for(auto& target:adapted)DestroyPost(target);
+            for(auto& target:bloom)DestroyPost(target);
+            DestroyPost(presented);
+            for(auto pipeline:postPipelines)if(pipeline)vkDestroyPipeline(device,pipeline,nullptr);
+            if(postPass)vkDestroyRenderPass(device,postPass,nullptr);
+            if(adaptPass)vkDestroyRenderPass(device,adaptPass,nullptr);
             Destroy(arena);Destroy(stereo);Destroy(white);Destroy(cube);
             if(framebuffer)vkDestroyFramebuffer(device,framebuffer,nullptr);
             if(resumePass)vkDestroyRenderPass(device,resumePass,nullptr);
             if(pass)vkDestroyRenderPass(device,pass,nullptr);
             Destroy(color);Destroy(depth);Destroy(sceneColor);Destroy(sceneDepth);
             if(descriptors)vkDestroyDescriptorPool(device,descriptors,nullptr);
-            for(int k=0;k<4;++k){if(layouts[k])vkDestroyPipelineLayout(device,layouts[k],nullptr);if(sets[k])vkDestroyDescriptorSetLayout(device,sets[k],nullptr);for(auto m:modules[k])if(m)vkDestroyShaderModule(device,m,nullptr);}
+            for(int k=0;k<9;++k){if(layouts[k])vkDestroyPipelineLayout(device,layouts[k],nullptr);if(sets[k])vkDestroyDescriptorSetLayout(device,sets[k],nullptr);for(auto m:modules[k])if(m)vkDestroyShaderModule(device,m,nullptr);}
             if(timestamps)vkDestroyQueryPool(device,timestamps,nullptr);
             if(clamped)vkDestroySampler(device,clamped,nullptr);
             if(nearest)vkDestroySampler(device,nearest,nullptr);
@@ -696,6 +829,8 @@ bool InitializeWorldProbe(XrInstance instance,XrSystemId system,uint32_t w,uint3
     try {
         renderer=std::make_unique<Renderer>();renderer->Initialize(instance,system,w,h);
         if(outputDirectory)renderer->outputDirectory=outputDirectory;
+        hooks.resetExposure=[](){renderer->exposureFirst=true;};
+        hooks.post=[](const PostSettings& settings){try{renderer->PostProcess(settings);}catch(const std::exception& e){Failure(e);}};
         hooks.waterSnapshot=[](){try{renderer->WaterSnapshot();}catch(const std::exception& e){Failure(e);}};
         hooks.program=[](uint32_t id,int terrain){try{renderer->Register(id,terrain);}catch(const std::exception& e){Failure(e);}};
         hooks.uniform=[](uint32_t id,int location,int kind,int size,const void* bytes){renderer->Uniform(id,location,kind,size,bytes);};

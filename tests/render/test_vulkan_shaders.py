@@ -18,7 +18,14 @@ class VulkanShaders(unittest.TestCase):
             for field,offset,length,typ,count in fields:
                 self.assertEqual(offset%16,0)
                 self.assertGreaterEqual(offset,last);last=offset+length
-            self.assertEqual(last,size)
+            self.assertEqual(max(16,last),size)
+            if name in ('adapt','copy','bright','blur','post'):
+                self.assertIn('gl_VertexIndex',converted[0])
+                self.assertNotIn('gl_VertexID',converted[0])
+                self.assertIn('sampler2DArray',converted[1])
+                if name=='adapt':self.assertIn('vec3(uv,0.0)',converted[1])
+                else:self.assertIn('float(gl_ViewIndex)',converted[1])
+                continue
             if name=='water':
                 self.assertIn('float(gl_ViewIndex)',converted[1])
                 self.assertIn('sampler2DArray uSceneDepth',converted[1])
