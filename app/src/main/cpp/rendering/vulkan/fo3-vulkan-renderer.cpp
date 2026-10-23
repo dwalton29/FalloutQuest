@@ -108,7 +108,7 @@ public:
     std::unordered_map<uint32_t,ProgramData> programs;
     std::unordered_map<PipelineKey,VkPipeline,PipelineHash> pipelines;
     VkRenderPass postPass{},adaptPass{};
-    VkPipeline postPipelines[5]{};
+    VkPipeline postPipelines[5]{};VkFramebuffer postOverlayFramebuffer{};
     PostTarget adapted[2],bloom[3],presented;
     std::unordered_map<uint32_t,UiTarget> uiTargets;std::vector<UiTarget> retiredUi;
     UiTarget* activeUi=nullptr;bool offscreen=false;uint32_t targetWidth=0,targetHeight=0;VkRenderPass uiPass{};
@@ -630,6 +630,10 @@ public:
         for(auto& target:adapted)MakePostTarget(target,1,1,true);
         MakePostTarget(bloom[0],640,256);MakePostTarget(bloom[1],256,256);MakePostTarget(bloom[2],256,256);
         MakePostTarget(presented,width,height);
+        const VkImageView overlayViews[]{presented.image.view,depth.view};
+        VkFramebufferCreateInfo overlay{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};overlay.renderPass=resumePass;overlay.attachmentCount=2;overlay.pAttachments=overlayViews;
+        overlay.width=width;overlay.height=height;overlay.layers=1;
+        Check(vkCreateFramebuffer(device,&overlay,nullptr,&postOverlayFramebuffer),"post overlay framebuffer");
         for(int kind=4;kind<9;++kind) {
             std::array<VkPipelineShaderStageCreateInfo,2> stages{};
             for(int i=0;i<2;++i){stages[i].sType=VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;stages[i].stage=i?VK_SHADER_STAGE_FRAGMENT_BIT:VK_SHADER_STAGE_VERTEX_BIT;stages[i].module=modules[kind][i];stages[i].pName="main";}
@@ -712,6 +716,13 @@ public:
              {"uTintColor",{settings.tint[0],settings.tint[1],settings.tint[2]}},{"uTintValue",{settings.tintValue}},
              {"uTargetLumQ1520",{settings.targetLum}},{"uPcBloomReadyQ1670",{1}}});
         postDone=true;
+        // Notifications, XP, pause and performance HUD are deliberately drawn
+        // after the film/gamma pass in the original game path. Retain that order.
+        PostBarrier(presented.image,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+            VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,VK_ACCESS_COLOR_ATTACHMENT_READ_BIT|VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+            VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+        VkRenderPassBeginInfo overlay{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};overlay.renderPass=resumePass;overlay.framebuffer=postOverlayFramebuffer;overlay.renderArea={{0,0},{width,height}};
+        vkCmdBeginRenderPass(command,&overlay,VK_SUBPASS_CONTENTS_INLINE);passOpen=true;
     }
     void DestroyUi(UiTarget& ui) {
         if(ui.sampled)vkDestroyImageView(device,ui.sampled,nullptr);
@@ -792,6 +803,8 @@ public:
         begun=false;
         if(passOpen)vkCmdEndRenderPass(command);
         passOpen=false;
+        if(postDone)PostBarrier(presented.image,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,VK_ACCESS_SHADER_READ_BIT,VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
         if(timestamps)vkCmdWriteTimestamp(command,VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,timestamps,2);
         Check(vkEndCommandBuffer(command),"end frame");Check(vkResetFences(device,1,&fence),"reset frame fence");
         VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};si.commandBufferCount=1;si.pCommandBuffers=&command;
@@ -874,6 +887,7 @@ public:
             if(uiPass)vkDestroyRenderPass(device,uiPass,nullptr);
             for(auto& target:adapted)DestroyPost(target);
             for(auto& target:bloom)DestroyPost(target);
+            if(postOverlayFramebuffer)vkDestroyFramebuffer(device,postOverlayFramebuffer,nullptr);
             DestroyPost(presented);
             for(auto pipeline:postPipelines)if(pipeline)vkDestroyPipeline(device,pipeline,nullptr);
             if(postPass)vkDestroyRenderPass(device,postPass,nullptr);

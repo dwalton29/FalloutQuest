@@ -292,6 +292,21 @@ void PipboyTarget() {
     fqvk::hooks.erase(30,true);assert(fqvk::renderer->uiTargets.empty());
 }
 
+void PostOverlay() {
+    Scene(false);Program(31,9);
+    const float ui[]{-.1f,-.1f,0,0,0,.1f,-.1f,0,0,0,.1f,.1f,0,0,0,-.1f,-.1f,0,0,0,.1f,.1f,0,0,0,-.1f,.1f,0,0,0};
+    fqvk::Mesh(32,ui,6,5,nullptr,0);const uint8_t white[]{255,255,255,255};fqvk::Texture(33,1,1,white,false,false);
+    Set(31,"uMvp",{1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1});Set(31,"uTint",{0,0,1,1});
+    const float identity[]{1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1},eye[]{0,0,2};
+    assert(fqvk::BeginWorldProbe(identity,identity,eye,eye));fqgl::state.texture2d[0].Change(5);
+    fqvk::hooks.draw(1,9,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);
+    fqvk::PostProcess({});assert(fqvk::renderer->postDone&&fqvk::renderer->passOpen);
+    fqgl::state.texture2d[0].Change(33);fqgl::state.depth.Change(false);fqgl::state.blend.Change(false);
+    fqvk::hooks.draw(31,32,GL_TRIANGLES,0,6,0,0,1);fqvk::EndWorldProbe();
+    const auto pixels=fqvk::renderer->Readback();
+    for(int eyeIndex=0;eyeIndex<2;++eyeIndex){Near(Pixel(pixels,eyeIndex,32,32,2),1);Near(Pixel(pixels,eyeIndex,32,32,0),0);assert(Pixel(pixels,eyeIndex,48,32,2)<.1f);}
+}
+
 int main() {
     for(int mode=0;mode<4;++mode) {
         assert(fqvk::InitializeWorldProbe(reinterpret_cast<XrInstance>(uintptr_t(1)),1,64,64));
@@ -303,5 +318,6 @@ int main() {
     for(bool animated:{false,true}){assert(fqvk::InitializeWorldProbe(reinterpret_cast<XrInstance>(uintptr_t(1)),1,64,64));Ui(animated);fqvk::ShutdownWorldProbe();}
     assert(fqvk::InitializeWorldProbe(reinterpret_cast<XrInstance>(uintptr_t(1)),1,64,64));Loading();fqvk::ShutdownWorldProbe();
     assert(fqvk::InitializeWorldProbe(reinterpret_cast<XrInstance>(uintptr_t(1)),1,64,64));PipboyTarget();fqvk::ShutdownWorldProbe();
+    assert(fqvk::InitializeWorldProbe(reinterpret_cast<XrInstance>(uintptr_t(1)),1,64,64));PostOverlay();fqvk::ShutdownWorldProbe();
     std::cout<<"Vulkan native multiview: original world/LAND shaders, indexed NIF layout, per-eye cameras, depth equality, ordered paint blending, layered water refraction, retained opaque depth, original exposure/bloom/film/gamma, transformed UI/notification alpha, loading clipping/depth, Pip-Boy RTT sampling/orientation and recreation passed\n";
 }
