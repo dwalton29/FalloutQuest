@@ -42,6 +42,8 @@ def sources():
     result['ui']=[extract(ui,'vs'),extract(ui,'fs')]
     notification=(ROOT/'app/src/main/cpp/ui/interaction/fo3-item-notification-renderer.h').read_text()
     result['notification']=[re.search(r'const char\* '+name+r'\s*=\s*R"\((.*?)\)";',notification,re.S)[1] for name in ['vs','fs']]
+    loading=(ROOT/'app/src/main/cpp/ui/loading/fo3-loading-vr.h').read_text().split('inline bool EnsureProgram() {',1)[1]
+    result['loading']=[re.search(r'const char\* '+name+r'\s*=\s*R"\((.*?)\)";',loading,re.S)[1].replace(';out',';\nout').replace(';in ',';\nin ') for name in ['vs','fs']]
     return result
 
 def port(pair,kind="world"):
@@ -77,14 +79,14 @@ def port(pair,kind="world"):
         source = re.sub(r'\b(highp|mediump|lowp)\s+','',source)
         def io(match):
             space,direction,typ,name=match.groups()
-            loc = 0 if name=='fragColor' else varyings.index(name)
+            loc = 0 if stage==1 and direction=='out' else varyings.index(name)
             return f'{space}layout(location={loc}) {direction} {typ} {name};'
         source = IO.sub(io,source)
         # Preserve original GL clip coordinates for FO3 fog, remap position only.
-        if stage==0 and kind in ('ui','notification'):
-            source=re.sub(r'gl_Position\s*=\s*uMvp\s*\*\s*vec4\(aPos,\s*1.0\);',
-                'vec4 fqClip=fqClipFromLeft[gl_ViewIndex]*uMvp*vec4(aPos,1.0);gl_Position=vec4(fqClip.x,-fqClip.y,(fqClip.z+fqClip.w)*0.5,fqClip.w);',source)
-        if stage==0 and kind not in ('ui','notification'):
+        if stage==0 and kind in ('ui','notification','loading'):
+            source=re.sub(r'gl_Position\s*=\s*uMvp\s*\*\s*vec4\((aPos|aPosition),\s*1(?:\.0)?\);',
+                r'vec4 fqClip=fqClipFromLeft[gl_ViewIndex]*uMvp*vec4(\1,1.0);gl_Position=vec4(fqClip.x,-fqClip.y,(fqClip.z+fqClip.w)*0.5,fqClip.w);',source)
+        if stage==0 and kind not in ('ui','notification','loading'):
             source = re.sub(r'\buMvp\b','fqSkyViewProjection[gl_ViewIndex]' if kind=='sky' else 'fqViewProjection[gl_ViewIndex]',source)
             if kind in ('sky','water'):
                 source=source.replace('gl_Position = '+('fqSkyViewProjection' if kind=='sky' else 'fqViewProjection')+'[gl_ViewIndex] * vec4(aPosition, 1.0);',

@@ -19,7 +19,7 @@ class VulkanShaders(unittest.TestCase):
                 self.assertEqual(offset%16,0)
                 self.assertGreaterEqual(offset,last);last=offset+length
             self.assertEqual(max(16,last),size)
-            if name in ('ui','notification'):
+            if name in ('ui','notification','loading'):
                 self.assertIn('fqClipFromLeft[gl_ViewIndex]*uMvp',converted[0])
                 self.assertIn('(fqClip.z+fqClip.w)*0.5',converted[0]);continue
             if name in ('adapt','copy','bright','blur','post'):

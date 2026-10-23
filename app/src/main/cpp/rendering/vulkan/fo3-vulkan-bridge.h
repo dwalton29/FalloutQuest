@@ -19,6 +19,7 @@ struct Hooks {
     void (*skin)(uint32_t,uint32_t,const float*,size_t,const float*,size_t)=nullptr;
     void (*dynamicMesh)(uint32_t,const float*,size_t)=nullptr;
     void (*cube)(uint32_t,const Fo3RgbaCubeTexture&)=nullptr;
+    void (*clearDepth)()=nullptr;
     void (*post)(const PostSettings&)=nullptr;
     void (*resetExposure)()=nullptr;
     void (*waterSnapshot)()=nullptr;
@@ -45,6 +46,7 @@ inline void Cube(uint32_t id,const Fo3RgbaCubeTexture& image) {
     if(hooks.cube)hooks.cube(id,image);
 }
 inline void PostProcess(const PostSettings& settings){if(recording&&hooks.post)hooks.post(settings);}
+inline void ClearDepth(){if(recording&&hooks.clearDepth)hooks.clearDepth();}
 inline void ResetExposure(){if(hooks.resetExposure)hooks.resetExposure();}
 inline void WaterSnapshot(){if(recording&&hooks.waterSnapshot)hooks.waterSnapshot();}
 inline void Program(uint32_t program,int terrain) {

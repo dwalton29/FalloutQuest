@@ -1,6 +1,9 @@
 #pragma once
 #include "loading-work-budget.h"
 #include <GLES3/gl3.h>
+#ifdef FQ_ENABLE_VULKAN
+#include "vulkan/fo3-vulkan-bridge.h"
+#endif
 
 namespace fqloading {
 // Caller owns the immutable RGBA image for the transfer lifetime. Allocation
@@ -35,6 +38,9 @@ struct ImageTransfer {
             glBindTexture(GL_TEXTURE_2D,id);glGenerateMipmap(GL_TEXTURE_2D);ready=true;
         }
         if(glGetError()!=GL_NO_ERROR){failed=true;ready=false;}
+#ifdef FQ_ENABLE_VULKAN
+        if(ready)fqvk::Texture(id,image.width,image.height,image.rgba.data(),repeat,mip);
+#endif
         return ready;
     }
     GLuint Take(){GLuint result=id;id=0;row=0;rowsComplete=ready=false;return result;}

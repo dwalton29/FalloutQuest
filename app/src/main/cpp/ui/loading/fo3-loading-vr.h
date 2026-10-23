@@ -148,6 +148,9 @@ inline GLuint UploadImage(const Fo3RgbaTexture& image) {
     glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T,GL_CLAMP_TO_EDGE);
     glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA,image.width,image.height,0,GL_RGBA,GL_UNSIGNED_BYTE,image.rgba.data());
+#ifdef FQ_ENABLE_VULKAN
+    fqvk::Texture(texture,image.width,image.height,image.rgba.data(),false,false);
+#endif
     return texture;
 }
 inline void PrepareVertices(std::vector<CpuShape>& source,bool compass,float uiExtent,fo3anim::Matrix* mapping,const fo3anim::Pose* initialPose) {
@@ -280,6 +283,10 @@ inline bool UploadShape(CpuShape& src,std::vector<Shape>& target,bool compass) {
         glBufferSubData(GL_ELEMENT_ARRAY_BUFFER,GLintptr(gIndexOffset),GLsizeiptr(bytes),reinterpret_cast<const uint8_t*>(m.indices.data())+gIndexOffset);
         gIndexOffset+=bytes;return false;
     }
+#ifdef FQ_ENABLE_VULKAN
+    static_assert(sizeof(Vertex)==12*sizeof(float));
+    fqvk::Mesh(gPendingShape.vao,reinterpret_cast<const float*>(v.data()),v.size(),12,m.indices.data(),m.indices.size());
+#endif
     target.push_back(gPendingShape);gPendingShape={};gShapeActive=false;gVertexOffset=gIndexOffset=0;
     src=CpuShape{};return true;
 }
@@ -310,6 +317,9 @@ inline bool EnsureProgram() {
     gProgram=glCreateProgram();glAttachShader(gProgram,v);glAttachShader(gProgram,f);glLinkProgram(gProgram);
     glDeleteShader(v);glDeleteShader(f);GLint ok=0;glGetProgramiv(gProgram,GL_LINK_STATUS,&ok);
     if(!ok){glDeleteProgram(gProgram);gProgram=0;return false;}
+#ifdef FQ_ENABLE_VULKAN
+    fqvk::Program(gProgram,11);
+#endif
     gMvp=glGetUniformLocation(gProgram,"uMvp");gSampler=glGetUniformLocation(gProgram,"uImage");
     gUnlit=glGetUniformLocation(gProgram,"uUnlit");gTint=glGetUniformLocation(gProgram,"uTint");gFade=glGetUniformLocation(gProgram,"uFade");gCutoff=glGetUniformLocation(gProgram,"uCutoff");
     gClipUi=glGetUniformLocation(gProgram,"uClipUi");gUiTransform=glGetUniformLocation(gProgram,"uUiTransform");gClipHalf=glGetUniformLocation(gProgram,"uClipHalf");
@@ -317,6 +327,9 @@ inline bool EnsureProgram() {
         {{-1,1,0},{0,0,1},{0,0},{1,1,1,1}},{{1,1,0},{0,0,1},{1,0},{1,1,1,1}}};
     glGenVertexArrays(1,&gQuad);glBindVertexArray(gQuad);glGenBuffers(1,&gQuadBuffer);glBindBuffer(GL_ARRAY_BUFFER,gQuadBuffer);
     glBufferData(GL_ARRAY_BUFFER,sizeof(quad),quad,GL_STATIC_DRAW);
+#ifdef FQ_ENABLE_VULKAN
+    fqvk::Mesh(gQuad,reinterpret_cast<const float*>(quad),4,12,nullptr,0);
+#endif
     for(GLuint a=0;a<4;++a)glEnableVertexAttribArray(a);
     glVertexAttribPointer(0,3,GL_FLOAT,GL_FALSE,sizeof(Vertex),reinterpret_cast<void*>(offsetof(Vertex,p)));
     glVertexAttribPointer(1,3,GL_FLOAT,GL_FALSE,sizeof(Vertex),reinterpret_cast<void*>(offsetof(Vertex,n)));

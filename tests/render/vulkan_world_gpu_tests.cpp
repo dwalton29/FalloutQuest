@@ -237,6 +237,29 @@ void Ui(bool animated) {
     Near(Pixel(pixels,1,32,32,1),0);Near(Pixel(pixels,1,55,32,1),.5f);
 }
 
+void Loading() {
+    Scene(false);Program(18,11);
+    std::vector<float> geometry;
+    for(const auto& xy:std::array<std::array<float,2>,4>{{{{-.6f,-.6f}},{{.6f,-.6f}},{{-.6f,.6f}},{{.6f,.6f}}}})
+        geometry.insert(geometry.end(),{xy[0],xy[1],.2f,0,0,1,0,0,1,1,1,1});
+    fqvk::Mesh(19,geometry.data(),4,12,nullptr,0);
+    const uint8_t white[]{255,255,255,255};fqvk::Texture(20,1,1,white,false,false);
+    Set(18,"uMvp",{1,0,0,0,0,1,0,0,0,0,1,0,.2f,0,0,1});
+    Set(18,"uUiTransform",{1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1});
+    Set(18,"uTint",{0,1,0,1});Set(18,"uUnlit",{1});Set(18,"uFade",{.5f});
+    Set(18,"uCutoff",{.5f});Set(18,"uClipUi",{1});Set(18,"uClipHalf",{.3f,.6f});
+    const float left[]{1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1};
+    const float right[]{1,0,0,0,0,1,0,0,0,0,1,0,.8f,0,0,1};const float eye[]{0,0,2};
+    assert(fqvk::BeginWorldProbe(left,right,eye,eye,true));
+    fqgl::state.texture2d[0].Change(5);fqvk::hooks.draw(1,9,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);
+    fqvk::ClearDepth();
+    fqgl::state.texture2d[0].Change(20);
+    fqvk::hooks.draw(18,19,GL_TRIANGLE_STRIP,0,4,0,0,1);fqvk::EndWorldProbe();
+    const auto pixels=fqvk::renderer->Readback();
+    Near(Pixel(pixels,0,32,32,1),.5f);Near(Pixel(pixels,1,55,32,1),.5f);
+    Near(Pixel(pixels,1,32,32,1),0);Near(Pixel(pixels,0,50,32,1),0);
+}
+
 int main() {
     for(int mode=0;mode<4;++mode) {
         assert(fqvk::InitializeWorldProbe(reinterpret_cast<XrInstance>(uintptr_t(1)),1,64,64));
@@ -246,5 +269,6 @@ int main() {
     assert(fqvk::InitializeWorldProbe(reinterpret_cast<XrInstance>(uintptr_t(1)),1,64,64));Water();fqvk::ShutdownWorldProbe();
     assert(fqvk::InitializeWorldProbe(reinterpret_cast<XrInstance>(uintptr_t(1)),1,64,64));Post();fqvk::ShutdownWorldProbe();
     for(bool animated:{false,true}){assert(fqvk::InitializeWorldProbe(reinterpret_cast<XrInstance>(uintptr_t(1)),1,64,64));Ui(animated);fqvk::ShutdownWorldProbe();}
+    assert(fqvk::InitializeWorldProbe(reinterpret_cast<XrInstance>(uintptr_t(1)),1,64,64));Loading();fqvk::ShutdownWorldProbe();
     std::cout<<"Vulkan native multiview: original world/LAND shaders, indexed NIF layout, per-eye cameras, depth equality, ordered paint blending, layered water refraction, retained opaque depth, original exposure/bloom/film/gamma, transformed UI/notification alpha and recreation passed\n";
 }

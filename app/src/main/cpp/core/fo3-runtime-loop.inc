@@ -1988,13 +1988,13 @@ private:
                     fqperf::gpu.Poll(fqperf::capture.serial);
                 }
 #ifdef FQ_ENABLE_VULKAN
-                if(fqvk::WorldProbeActive()&&!IsFo3LoadingVisible()) {
+                if(fqvk::WorldProbeActive()) {
                     Mat4 matrices[2];XrPosef poses[2];
                     for(uint32_t i=0;i<2;++i) {
-                        poses[i]=ToVirtualPose(views[i].pose);
+                        poses[i]=IsFo3LoadingVisible()?views[i].pose:ToVirtualPose(views[i].pose);
                         matrices[i]=Multiply(ProjectionFromFov(views[i].fov,0.04f,125000.0f/FO3_UNITS_PER_METRE_Q715),ViewFromPose(poses[i]));
                     }
-                    fqvk::BeginWorldProbe(matrices[0].m,matrices[1].m,&poses[0].position.x,&poses[1].position.x);
+                    fqvk::BeginWorldProbe(matrices[0].m,matrices[1].m,&poses[0].position.x,&poses[1].position.x,IsFo3LoadingVisible());
                 }
 #endif
                 for (uint32_t eye = 0; eye < 2; ++eye) {

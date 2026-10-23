@@ -63,6 +63,9 @@ inline void Render(const float* vp,const fo3lockpick::Game& game,const fo3player
   if(ready&&fo3loadingvr::EnsureProgram()){
     glUseProgram(fo3loadingvr::gProgram);glUniform1i(fo3loadingvr::gSampler,0);glUniform1f(fo3loadingvr::gFade,1);glUniform1f(fo3loadingvr::gClipUi,0);
     glEnable(GL_DEPTH_TEST);glDepthFunc(GL_LEQUAL);glDepthMask(GL_TRUE);glClear(GL_DEPTH_BUFFER_BIT);
+#ifdef FQ_ENABLE_VULKAN
+    fqvk::ClearDepth();
+#endif
     for(auto* model:{&assets.lock,&assets.pin}) {
       auto pose=model->pose;
       auto enterClip=std::find_if(model->clips.begin(),model->clips.end(),[](const auto& c){return c.name=="Forward";});
