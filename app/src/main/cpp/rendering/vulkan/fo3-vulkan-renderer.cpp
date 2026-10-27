@@ -969,7 +969,11 @@ public:
         // Match the GLES clear from GetFo3Environment(), not hard-coded black.
         // The sky shader still paints the full authored sky where available.
         std::array<VkClearValue,2> clears{};
-        clears[0].color={{horizon?horizon[0]:0.018f,horizon?horizon[1]:0.028f,horizon?horizon[2]:0.020f,1.0f}};
+        // Software/probe validation uses a black offscreen reference;
+        // only the real OpenXR gameplay scene has the GLES horizon clear.
+        clears[0].color={{gameplay?(horizon?horizon[0]:0.018f):0.0f,
+                          gameplay?(horizon?horizon[1]:0.028f):0.0f,
+                          gameplay?(horizon?horizon[2]:0.020f):0.0f,1.0f}};
         clears[1].depthStencil={1,0};
         VkRenderPassBeginInfo ri{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};ri.renderPass=pass;ri.framebuffer=framebuffer;ri.renderArea={{0,0},{width,height}};ri.clearValueCount=2;ri.pClearValues=clears.data();
         vkCmdBeginRenderPass(command,&ri,VK_SUBPASS_CONTENTS_INLINE);begun=passOpen=true;
