@@ -40,7 +40,11 @@ Quest visuals, loading times, stability or a 72 Hz performance improvement.
 The renderer still uses one frame in flight and waits for the frame fence before
 OpenXR release. This change removes per-resource upload waits; it does not make
 presentation asynchronous or complete the production performance architecture.
-Debug image readback remains deliberately synchronous. The optional GLES probe
+`stereoGpuMs` brackets native frame commands; waits on asynchronous upload
+dependencies may contribute to that span. It is not an isolated transfer/pass
+measurement or application frame time. Upload work is currently counted, not
+separately GPU-timed. Debug image readback remains deliberately synchronous.
+The optional GLES probe
 keeps its previous blocking upload mode and is not a valid API benchmark.
 
 Tests now run the original material/terrain/actor/sky/water/post/UI pixel cases in
@@ -149,7 +153,9 @@ sample. Existing terrain depth-state
 fixes are retained, with fusion quarantined. Upload batching is implemented in
 v248; end-of-frame fences remain blocking. Ordinary FQPerf GPU timers still measure GLES work, so native
 captures are marked `benchmarkValid=0`; `FQVK FRAME stereoGpuMs` covers the native
-recorded passes including the final swapchain draw, excluding uploads and XR wait.
+recorded frame commands including the final swapchain draw. Asynchronous-upload
+dependencies can contribute to that span; it is not isolated render-pass timing
+or application/XR cadence.
 Neither metric proves Quest performance before hardware testing.
 
 Software Vulkan tests exercise real two-layer UNORM runtime-style images,

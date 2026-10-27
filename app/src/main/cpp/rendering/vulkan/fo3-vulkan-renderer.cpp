@@ -983,7 +983,7 @@ public:
             (unsigned long long)uploadOperations,(unsigned long long)uploadSubmissions,(unsigned long long)uploadQueueIdles,
             (unsigned long long)uploadBytes,(unsigned long long)uploadPeakBytes,(unsigned long long)uploadPressureWaits,(unsigned long long)descriptorAllocations,(unsigned long long)descriptorHits,(unsigned long long)descriptorResets,(unsigned long long)paletteAllocations,(unsigned long long)paletteUpdates);
         if(!offscreen&&!gameplay)Dump();
-        if(!offscreen&&(frames++%120)==0)VKLOG("FQVK FRAME frame=%llu stereoGpuMs=%.3f sharedDraws=%llu vertexCorners=%llu skippedDraws=%llu presentation=%s sceneSubmission=cpu-commands benchmarkValid=0",
+        if(!offscreen&&(frames++%120)==0)VKLOG("FQVK FRAME frame=%llu stereoGpuMs=%.3f gpuScope=frameSpan sharedDraws=%llu vertexCorners=%llu skippedDraws=%llu presentation=%s sceneSubmission=cpu-commands benchmarkValid=0",
             (unsigned long long)frames,gpuMs,(unsigned long long)draws,(unsigned long long)vertices,(unsigned long long)skipped,gameplay?"Vulkan":"GLES-probe");
     }
     std::vector<uint16_t> Readback() {
