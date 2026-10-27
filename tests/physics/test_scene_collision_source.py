@@ -91,7 +91,7 @@ assert 'BuildCpuObjects(placement,parts,true)' in worker
 assert worker.index('PrepareResidentCpuParts(') < worker.index('out=std::move(next)')
 cpu=s[s.index('bool BuildCpuObjects('):s.index('bool ResolveDoorTeleportCachedQ1698(')]
 assert 'requireComplete ? completeCache : ordinaryCache' in cpu
-assert 'LoadFo3StaticNifMeshes(placement.modelPath, meshes, requireComplete)' in cpu
+assert 'LoadFo3StaticNifMeshes(placement.modelPath, meshes, requireComplete, true)' in cpu
 nif=Path('app/src/main/cpp/rendering/mesh/fo3-static-nif.cpp').read_text()
 assert 'requireComplete && (!q970SelectionReady || q970Scene.fallbackAll)' in nif
 assert 'requireComplete && (q1060ShapeObjectFailures || q1060ShapeLoadFailures)' in nif

@@ -893,8 +893,6 @@ bool BuildFo3CollisionPlacementChunk(const Fo3WorldPlacement& placement,
             if (ordinal < shape.triangleWeldingInfo.size())
                 tri.weldingInfoQ801 = shape.triangleWeldingInfo[ordinal];
             tri.havokMaterialQ714=shape.havokMaterial;
-            tri.stairsQ714=(shape.havokMaterial&64u)!=0;
-            tri.platformQ714=(shape.havokMaterial&32u)!=0;
             if (meta) {
                 tri.havokLayerQ714 = meta->layer;
                 tri.havokMaterialQ714 = meta->material;
@@ -1252,8 +1250,6 @@ bool InitializeFo3CollisionOverlay(const std::vector<Fo3WorldPlacement>& placeme
                                                    placement.modelPath});
                 }
                 worldTriangle.havokMaterialQ714=shape.havokMaterial;
-                worldTriangle.stairsQ714=(shape.havokMaterial&64u)!=0;
-                worldTriangle.platformQ714=(shape.havokMaterial&32u)!=0;
                 if (metaQ714) {
                     worldTriangle.havokLayerQ714 = metaQ714->layer;
                     worldTriangle.havokMaterialQ714 = metaQ714->material;

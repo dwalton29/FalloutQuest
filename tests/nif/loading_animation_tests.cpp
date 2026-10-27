@@ -62,6 +62,17 @@ int main(int argc,char** argv) {
         assert(asset.collisionBone==1&&fo3dooranim::ShapeBone(asset,7)==2);
         Pose doorPose;assert(fo3dooranim::Sample(asset,true,1.0,doorPose));
         const auto* delta=fo3dooranim::ShapeDelta(asset,doorPose,2);assert(delta);
+        auto transformedRoot=door;
+        transformedRoot.bones[0].bind.translation={90,80,70};
+        transformedRoot.bones[0].bind.rotation={.70710678f,.70710678f,0,0};
+        transformedRoot.bones[0].bind.scale=2;
+        assert(FinalizeSkeleton(transformedRoot));
+        fo3dooranim::Asset referenceAsset;
+        assert(fo3dooranim::Configure(transformedRoot,doorMapping,{open,close},referenceAsset,true));
+        Pose referencePose;assert(fo3dooranim::Sample(referenceAsset,true,1.0,referencePose));
+        for(size_t i=0;i<16;++i)assert(std::fabs(referencePose.delta[2][i]-(*delta)[i])<1e-4f);
+        assert(referenceAsset.hierarchy.bones[1].bind.translation==door.bones[1].bind.translation);
+
         const std::array<float,3> pivot{8.00009155f,52.0f,0.07354069f};
         const auto pivotAfter=Point(*delta,pivot);
         for(int axis=0;axis<3;++axis)assert(std::fabs(pivotAfter[axis]-pivot[axis])<1e-3f);

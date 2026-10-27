@@ -5,7 +5,7 @@
 #include <algorithm>
 
 namespace fo3audio {
-// Fallout3.exe 1.7.0.3: material dispatch 0x8e945a, tables 0x1114928,
+// Fallout3.exe 1.7.0.4: material dispatch 0x8e945a, tables 0x1114928,
 // 0x11149a8, 0x11149d0, 0x11149f8; sound initialization 0x8e84f0.
 inline constexpr std::array<unsigned,32> FootstepMaterials{
     0,0,7,0,8,2,0,0,9,5,0,2,5,2,0,0,3,4,6,1,2,2,3,4,6,4,2,2,5,5,2,5};

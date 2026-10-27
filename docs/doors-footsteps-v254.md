@@ -12,7 +12,7 @@ contract. Authored collision roots and embedded door animation use the same
 reference-local frame. No UV, winding or texture modifications are involved.
 
 Footstep evidence was read from the user's original Fallout3.esm, first-person
-locomotion KF files and Fallout3.exe (1.7.0.3). No game files are bundled.
+locomotion KF files and Fallout3.exe (1.7.0.4). No game files are bundled.
 
 | Clip | Cycle | Root travel | Contact keys |
 | --- | --- | --- | --- |
