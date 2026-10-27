@@ -42,7 +42,8 @@ struct FootstepGait {
 };
 struct FootstepClock {
     float phase=0;
-    void Reset(){phase=0;}
+    bool running=false;
+    void Reset(){phase=0;running=false;}
     // Travel after capsule resolution, not stick input. Native KF root distance
     // scales the contact cadence continuously with VR locomotion speed.
     int Advance(float distance,float dt,bool enabled,const FootstepGait& walk,const FootstepGait& run) {
@@ -50,6 +51,19 @@ struct FootstepClock {
            distance<=.0001f||distance>1.f||walk.duration<=0){Reset();return -1;}
         const bool fast=run.duration>0 && distance/dt>(walk.stride/walk.duration+run.stride/run.duration)*.5f;
         const auto& gait=fast?run:walk;
+        if(fast!=running) {
+            // Preserve progress between matching contacts when speed changes;
+            // the original walk/run clips place their markers differently.
+            const auto& before=running?run:walk;
+            const int segment=phase<before.contacts[0]?0:phase<before.contacts[1]?1:2;
+            const float oldStart=segment==0?0.f:before.contacts[segment-1];
+            const float oldEnd=segment==2?1.f:before.contacts[segment];
+            const float newStart=segment==0?0.f:gait.contacts[segment-1];
+            const float newEnd=segment==2?1.f:gait.contacts[segment];
+            phase=newStart+(phase-oldStart)/(oldEnd-oldStart)*(newEnd-newStart);
+            running=fast;
+        }
+
         const float end=phase+distance/gait.stride;
         int result=-1;float earliest=end+1.f;
         for(int foot=0;foot<2;++foot) {

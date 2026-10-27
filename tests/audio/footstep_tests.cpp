@@ -26,6 +26,16 @@ int main(int argc,char** argv) {
     clock.Reset();int l=0,r=0;
     for(int i=0;i<80;++i){int step=clock.Advance(run.stride/80.f,.01f,true,walk,run);l+=step==3;r+=step==2;}
     assert(l==1&&r==1);
+    // Crossing the walk/run threshold must preserve the foot-contact interval.
+    clock.Reset();int previous=-1;
+    for(int frame=0;frame<240;++frame) {
+        const bool fast=frame>=42&&frame<140;
+        const int action=clock.Advance(fast?run.stride/80.f:walk.stride/120.f,.01f,true,walk,run);
+        if(action<0)continue;
+        const int foot=(action==0||action==3)?0:1;
+        assert(foot!=previous);previous=foot;
+    }
+
     assert(clock.Advance(0,.01f,true,walk,run)==-1&&clock.phase==0); // wall / stationary
     assert(clock.Advance(.1f,.01f,false,walk,run)==-1&&clock.phase==0); // focus/menu
     assert(clock.Advance(5,.01f,true,walk,run)==-1&&clock.phase==0); // teleport
