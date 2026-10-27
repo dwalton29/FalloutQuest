@@ -946,29 +946,39 @@ Q1960UploadStepQ19 Q1960AdvanceTextureQ19(
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER,
                     GL_LINEAR_MIPMAP_LINEAR);
     glBindTexture(GL_TEXTURE_2D, 0);
+    bool ok = glGetError() == GL_NO_ERROR;
+#ifdef FQ_ENABLE_VULKAN
+    // Native preparation intentionally skips the GLES storage/row calls.
+    // Queue the complete immutable image before publishing its CPU handle.
+    // The Vulkan upload batch and the consuming frame use the same queue;
+    // its existing fences/barriers protect staging reuse and image visibility.
+    if (ok) ok = fqvk::Texture(upload.id,
+        upload.texture.width, upload.texture.height, upload.texture.rgba.data());
+#endif
     const uint64_t stepUs = Q1960ElapsedUsQ19(started);
     Q1960RecordStepQ19(stepUs, upload.totalUs, upload.maxStepUs);
     state.gpuUs += stepUs;
     state.maxTextureGpuUs =
         std::max(state.maxTextureGpuUs, stepUs);
 
-    const bool ok = glGetError() == GL_NO_ERROR;
     if (ok) {
         gTextureCache.emplace(
             upload.cacheKey,
             CachedGpuTexture{upload.id, upload.real});
         Q1900MarkGpuTextureKnownQ19(upload.cacheKey);
-        Q6H_LOGI("Q19.6 TEXTURE READY: cell=(%d,%d) path=%s size=%dx%d chunks=%zu totalUs=%llu maxStepUs=%llu stagedRows=1 mipFinalizeUs=%llu",
+        Q6H_LOGI("Q19.6 TEXTURE READY: cell=(%d,%d) path=%s size=%dx%d chunks=%zu totalUs=%llu maxStepUs=%llu stagedRows=1 mipFinalizeUs=%llu real=%d nativeUpload=%d handle=%u",
                  state.gridX, state.gridY, upload.path.c_str(),
                  upload.texture.width, upload.texture.height,
                  upload.chunks,
                  static_cast<unsigned long long>(upload.totalUs),
                  static_cast<unsigned long long>(upload.maxStepUs),
-                 static_cast<unsigned long long>(stepUs));
+                 static_cast<unsigned long long>(stepUs),
+                 upload.real ? 1 : 0, fqrender::nativeOnly ? 1 : 0,
+                 static_cast<unsigned>(upload.id));
         upload.id = 0u; // cache now owns the GL texture.
     } else {
         if (upload.id) glDeleteTextures(1, &upload.id);
-        Q6H_LOGE("Q19.6 TEXTURE STAGE FAILED: cell=(%d,%d) phase=mipmap path=%s",
+        Q6H_LOGE("Q19.6 TEXTURE STAGE FAILED: cell=(%d,%d) phase=texture-finalize path=%s",
                  state.gridX, state.gridY, upload.path.c_str());
     }
     if (stepUs >= Q1910_GPU_ITEM_WARN_US) {

@@ -1,10 +1,69 @@
-# Vulkan migration status — v252
+# Vulkan migration status — v253
 
 The full migration is **incomplete**. Experimental Vulkan gameplay retains the
 context-free CPU frontend and native OpenXR multiview presentation. GLES remains
 the default. Native asset uploads are now batched and asynchronous; descriptors
 are reused. Software-GPU rendering and synchronization tests do not establish
 Quest visuals, loading times, stability or a 72 Hz performance improvement.
+
+## v253: publish streamed exterior textures to Vulkan
+
+The original ESM and native NIF parser identify the reported examples as:
+
+| Object | Original mesh | Representative diffuse |
+|---|---|---|
+| Ranch house | Architecture/Suburban/SuburbanRanch.NIF | textures/architecture/suburban/RanchQuad.dds |
+| Springvale school sign | Architecture/Urban/Signage/SignSpringvaleElementary.NIF | textures/architecture/urban/BricksWhiteQuad01.dds |
+| Toolbox | Clutter/Junk/Toolbox01.NIF | textures/clutter/junk/Toolbox.dds |
+| Springvale gas station/rocket stop | Architecture/Wasteland/GasStation01.NIF | textures/architecture/wasteland/GasStation01.dds and GasStation02.dds, with trim/decal materials |
+
+These meshes decode with UVs and authored texture paths. No mesh-specific shader
+or replacement texture is needed for the confirmed backend defect.
+
+`Q1960AdvanceTextureQ19` allocated and populated textures exclusively through
+sliced GLES calls, then published their handles into `gTextureCache` and marked
+them known. In native mode those driver calls intentionally do nothing. Unlike
+the other loading paths, exterior streaming omitted `fqvk::Texture`, leaving
+new streamed handles absent from the native image map. Draw submission then
+sampled its white fallback. A scratch harness of the production function
+reproduced a cache entry marked real/ready with zero native pixel uploads.
+Shared textures already uploaded by other paths can work, explaining selective
+failures rather than every Wasteland object losing its texture.
+
+Finalization now hands the full decoded immutable image to Vulkan before cache
+publication. Native upload staging, mip generation, fences, image barriers and
+same-queue ordering remain in the existing backend: accepting/queueing an image
+does not imply its GPU work has finished. The consuming frame flushes uploads
+before submission, and upload fences protect staging reuse. No queue-idle wait
+is added. The upload's CPU cost is included in finalization telemetry.
+
+The bridge reports whether the native backend accepted the texture handoff. An
+absent backend or a callback that disables itself on failure rejects the ready
+cache entry and cleans up the handle. Normal GLES preparation retains its
+sliced allocation/row/mipmap flow, and loss of its optional Vulkan probe does not
+reject a valid GLES texture. Original missing-source material fallbacks remain
+explicit `real=0` images rather than being mistaken for real DDS textures.
+
+`Q19.6 TEXTURE READY` adds `real`, `nativeUpload` and `handle`. With native Vulkan,
+`nativeUpload=1 real=1` identifies a decoded source image handed to the backend;
+`real=0` identifies an asset-resolution/decode fallback. The ranch's RanchQuad
+and normal DDS files were absent from the supplied Dropbox texture extraction;
+this is not evidence that they are absent from the headset's original archives.
+This code fix cannot recreate missing proprietary source files.
+
+Regression coverage compiles and executes the production exterior texture step,
+with native diffuse/normal/glow payload and publication-order checks, cached
+borrowing, original fallback pixels, missing/failed-backend rejection and actual
+GLES allocation/row/mipmap call recording. It also checks that optional probe
+failure leaves GLES functional. Vulkan multiview pixel, material, streaming-
+resource lifetime and synchronization-validation suites remain applicable.
+No copyrighted example assets are embedded in the tests or APK.
+
+Install v253 and force-stop/relaunch before visiting Springvale, so an older
+process cannot retain ready-cache entries created without native images. Verify
+the house, sign, toolbox and station, including travelling away and returning.
+A remaining `real=0` entry needs the actual DDS/archive lookup checked separately.
+Quest appearance still requires this hardware retest.
 
 ## v252: scene discard variants and buffered staging reuse
 

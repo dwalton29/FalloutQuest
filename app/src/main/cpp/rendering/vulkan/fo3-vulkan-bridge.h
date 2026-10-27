@@ -38,8 +38,14 @@ inline bool recording=false;
 inline bool gameplayPresentation=false;
 inline const float* instanceMatrices=nullptr;
 inline size_t instanceMatrixCount=0;
-inline void Texture(uint32_t id,int w,int h,const uint8_t* rgba,bool repeat=true,bool mips=true) {
-    if(hooks.texture)hooks.texture(id,w,h,rgba,(repeat?1u:0u)|(mips?2u:0u));
+inline bool Texture(uint32_t id,int w,int h,const uint8_t* rgba,bool repeat=true,bool mips=true) {
+    const auto upload=hooks.texture;
+    if(!upload)return !fqrender::nativeOnly;
+    upload(id,w,h,rgba,(repeat?1u:0u)|(mips?2u:0u));
+    // Native failures disable the hooks. Never publish a CPU handle as a
+    // ready texture when its backend is absent or rejected the upload.
+    // A disabled optional probe must not break normal GLES preparation.
+    return !fqrender::nativeOnly||hooks.texture==upload;
 }
 inline void Mesh(uint32_t vao,const float* vertices,size_t count,size_t stride,
                  const uint32_t* indices,size_t indexCount) {
