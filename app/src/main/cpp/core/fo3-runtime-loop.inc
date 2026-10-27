@@ -2198,6 +2198,10 @@ private:
         }
         if(gStereoMvpReady && layerCount>0 && !IsFo3LoadingVisible())
             QActorReportFrame(fqopaque::Micros(appFrameStarted),appCadenceUs);
+#ifdef FQ_ENABLE_VULKAN
+        if(vulkanGameplay_&&q1700FrameSubmitted&&layerCount)
+            fqvk::FrameTiming(appCadenceUs,double(fqopaque::Micros(appFrameStarted)),perfEndUs);
+#endif
         static uint64_t pendingPlayableGeneration=0;
         if (q1700FrameSubmitted && layerCount > 0) {
             const bool wasLoading = IsFo3LoadingVisible();

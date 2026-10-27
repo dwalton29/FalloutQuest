@@ -28,6 +28,7 @@ struct Hooks {
     void (*clearDepth)()=nullptr;
     void (*post)(const PostSettings&)=nullptr;
     void (*resetExposure)()=nullptr;
+    void (*frameTiming)(double,double,double)=nullptr;
     void (*waterSnapshot)()=nullptr;
     void (*erase)(uint32_t,bool)=nullptr;
 };
@@ -53,6 +54,7 @@ inline void DynamicMesh(uint32_t vao,const float* vertices,size_t count) {
 inline void Cube(uint32_t id,const Fo3RgbaCubeTexture& image) {
     if(hooks.cube)hooks.cube(id,image);
 }
+inline void FrameTiming(double cadenceUs,double workUs,double endFrameUs){if(hooks.frameTiming)hooks.frameTiming(cadenceUs,workUs,endFrameUs);}
 inline void PostProcess(const PostSettings& settings){if(recording&&hooks.post)hooks.post(settings);}
 struct UiTargetScope {
     bool active=false;

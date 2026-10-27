@@ -6,6 +6,10 @@
 #include <cassert>
 #include <cstdlib>
 #include <iostream>
+#include <thread>
+#include <mutex>
+#include <condition_variable>
+#include <chrono>
 
 namespace {
 XrResult XRAPI_CALL Requirements(XrInstance,XrSystemId,XrGraphicsRequirementsVulkan2KHR* out) {
@@ -40,7 +44,7 @@ bool depthAcquired=false,depthWaited=false,offerDepth=false;
 std::vector<uint8_t> submittedPixels;
 uint32_t nextImage=0,acquiredImage=0,releases=0,destroys=0;
 bool acquired=false,waited=false,timeoutWait=false,unsupportedFormat=false;
-bool offerSrgb=false;
+bool offerSrgb=false,inspectReleasedImages=true;
 VkFormat offeredColor=VK_FORMAT_R8G8B8A8_UNORM,createdColor=VK_FORMAT_UNDEFINED;
 XrResult XRAPI_CALL Formats(XrSession,uint32_t capacity,uint32_t* count,int64_t* out) {
     std::vector<int64_t> formats{unsupportedFormat?VK_FORMAT_R32G32_SFLOAT:offeredColor};
@@ -82,9 +86,39 @@ XrResult XRAPI_CALL Wait(XrSwapchain handle,const XrSwapchainImageWaitInfo*) {
     if(handle==reinterpret_cast<XrSwapchain>(uintptr_t(4))){assert(depthAcquired&&!depthWaited);depthWaited=true;return XR_SUCCESS;}
     assert(acquired&&!waited);if(timeoutWait)return XR_TIMEOUT_EXPIRED;waited=true;return XR_SUCCESS;
 }
+std::vector<uint8_t> RuntimePixels(uint32_t index) {
+    auto& r=*fqvk::renderer;std::vector<uint8_t> pixels;
+    auto readback=r.MakeBuffer(64*64*2*4,VK_BUFFER_USAGE_TRANSFER_DST_BIT,true);
+    r.Transfer([&](VkCommandBuffer cb){
+        VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};b.image=runtimeImages[index].image;
+        b.subresourceRange={VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,2};b.srcQueueFamilyIndex=b.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;
+        b.oldLayout=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;b.newLayout=VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        b.srcAccessMask=VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;b.dstAccessMask=VK_ACCESS_TRANSFER_READ_BIT;
+        vkCmdPipelineBarrier(cb,VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,0,0,nullptr,0,nullptr,1,&b);
+        VkBufferImageCopy copy{};copy.imageSubresource={VK_IMAGE_ASPECT_COLOR_BIT,0,0,2};copy.imageExtent={64,64,1};
+        vkCmdCopyImageToBuffer(cb,b.image,b.newLayout,readback.buffer,1,&copy);
+        b.oldLayout=b.newLayout;b.newLayout=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        b.srcAccessMask=VK_ACCESS_TRANSFER_READ_BIT;b.dstAccessMask=VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        vkCmdPipelineBarrier(cb,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,0,0,nullptr,0,nullptr,1,&b);
+        VkBufferMemoryBarrier host{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};host.buffer=readback.buffer;host.size=VK_WHOLE_SIZE;
+        host.srcQueueFamilyIndex=host.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;
+        host.srcAccessMask=VK_ACCESS_TRANSFER_WRITE_BIT;host.dstAccessMask=VK_ACCESS_HOST_READ_BIT;
+        vkCmdPipelineBarrier(cb,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_HOST_BIT,0,0,nullptr,1,&host,0,nullptr);
+    });
+    pixels.assign(static_cast<uint8_t*>(readback.mapped),static_cast<uint8_t*>(readback.mapped)+64*64*2*4);
+    if(createdColor==VK_FORMAT_B8G8R8A8_UNORM||createdColor==VK_FORMAT_B8G8R8A8_SRGB)
+        for(size_t i=0;i<pixels.size();i+=4)std::swap(pixels[i],pixels[i+2]);
+    r.Destroy(readback);return pixels;
+}
 XrResult XRAPI_CALL Release(XrSwapchain handle,const XrSwapchainImageReleaseInfo*) {
+    if(!inspectReleasedImages) {
+        auto& r=*fqvk::renderer;assert(r.frameSlots[r.activeSlot].serial==r.submissionSerial&&!r.begun);
+        if(handle==reinterpret_cast<XrSwapchain>(uintptr_t(4))){assert(depthAcquired&&depthWaited);depthAcquired=depthWaited=false;++depthReleases;}
+        else {assert(acquired&&waited);acquired=waited=false;++releases;}
+        return XR_SUCCESS;
+    }
     if(handle==reinterpret_cast<XrSwapchain>(uintptr_t(4))) {
-        assert(depthAcquired&&depthWaited);auto& r=*fqvk::renderer;assert(vkGetFenceStatus(r.device,r.fence)==VK_SUCCESS);
+        assert(depthAcquired&&depthWaited);auto& r=*fqvk::renderer;assert(r.frameSlots[r.activeSlot].serial==r.submissionSerial);
         auto buffer=r.MakeBuffer(64*64*2*4,VK_BUFFER_USAGE_TRANSFER_DST_BIT,true);
         r.Transfer([&](VkCommandBuffer cb){
             VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};b.image=runtimeDepth[acquiredDepth].image;
@@ -107,29 +141,11 @@ XrResult XRAPI_CALL Release(XrSwapchain handle,const XrSwapchainImageReleaseInfo
     }
     assert(acquired&&waited);
     auto& r=*fqvk::renderer;
-    // A signaled submission fence must precede release to the runtime.
-    assert(vkGetFenceStatus(r.device,r.fence)==VK_SUCCESS);
-    auto readback=r.MakeBuffer(64*64*2*4,VK_BUFFER_USAGE_TRANSFER_DST_BIT,true);
-    r.Transfer([&](VkCommandBuffer cb){
-        VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};b.image=runtimeImages[acquiredImage].image;
-        b.subresourceRange={VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,2};b.srcQueueFamilyIndex=b.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;
-        b.oldLayout=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;b.newLayout=VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-        b.srcAccessMask=VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;b.dstAccessMask=VK_ACCESS_TRANSFER_READ_BIT;
-        vkCmdPipelineBarrier(cb,VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,0,0,nullptr,0,nullptr,1,&b);
-        VkBufferImageCopy copy{};copy.imageSubresource={VK_IMAGE_ASPECT_COLOR_BIT,0,0,2};copy.imageExtent={64,64,1};
-        vkCmdCopyImageToBuffer(cb,b.image,b.newLayout,readback.buffer,1,&copy);
-        b.oldLayout=b.newLayout;b.newLayout=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-        b.srcAccessMask=VK_ACCESS_TRANSFER_READ_BIT;b.dstAccessMask=VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-        vkCmdPipelineBarrier(cb,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,0,0,nullptr,0,nullptr,1,&b);
-        VkBufferMemoryBarrier host{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};host.buffer=readback.buffer;host.size=VK_WHOLE_SIZE;
-        host.srcQueueFamilyIndex=host.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;
-        host.srcAccessMask=VK_ACCESS_TRANSFER_WRITE_BIT;host.dstAccessMask=VK_ACCESS_HOST_READ_BIT;
-        vkCmdPipelineBarrier(cb,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_HOST_BIT,0,0,nullptr,1,&host,0,nullptr);
-    });
-    submittedPixels.assign(static_cast<uint8_t*>(readback.mapped),static_cast<uint8_t*>(readback.mapped)+64*64*2*4);
-    if(createdColor==VK_FORMAT_B8G8R8A8_UNORM||createdColor==VK_FORMAT_B8G8R8A8_SRGB)
-        for(size_t i=0;i<submittedPixels.size();i+=4)std::swap(submittedPixels[i],submittedPixels[i+2]);
-    r.Destroy(readback);acquired=waited=false;++releases;return XR_SUCCESS;
+    // The app submits on the session queue before release; the fake compositor
+    // reads later on that same queue, without requiring a CPU-side frame wait.
+    assert(r.frameSlots[r.activeSlot].serial==r.submissionSerial&&!r.begun);
+    submittedPixels=RuntimePixels(acquiredImage);
+    acquired=waited=false;++releases;return XR_SUCCESS;
 }
 XrResult XRAPI_CALL DestroySwapchain(XrSwapchain handle) {
     if(handle==reinterpret_cast<XrSwapchain>(uintptr_t(4))) {
@@ -554,6 +570,7 @@ void AsyncResources() {
     }
     assert(r.descriptorAllocations==allocated&&r.descriptorHits>=hits+6);
     const uint8_t green[]{0,255,0,255},blue[]{0,0,255,255};
+    const auto resetsBeforeReplacement=r.descriptorResets;
     fqvk::Texture(5,1,1,green);fqvk::Texture(5,1,1,blue); // replace an image still referenced by a pending upload
     assert(r.uploadBatch.operations==2&&!r.retiredImages.empty());
     const auto ticket=glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE,0);assert(ticket);
@@ -565,7 +582,7 @@ void AsyncResources() {
     assert(r.uploadBytes==0&&r.uploadStagingBuffers==0&&r.retiredImages.empty());
     const auto resets=r.descriptorResets;
     assert(fqvk::BeginWorldProbe(identity,identity,eye,eye));Submit(1,9,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);fqvk::EndWorldProbe();
-    assert(r.descriptorResets==resets+1); // destroyed views invalidate cached descriptors at the next safe boundary
+    assert(r.descriptorResets>=resets&&r.descriptorResets>resetsBeforeReplacement&&r.descriptorRevision==r.viewRevision); // upload completion may allow collection before frame 5 or frame 6
     const auto pixels=r.Readback();Near(Pixel(pixels,0,32,32,2),1);Near(Pixel(pixels,1,32,32,2),1);
     // Exercise bounded staging/backpressure with rapidly replaced native images.
     r.uploadBatchLimit=1;r.uploadMemoryLimit=16;r.uploadBufferLimit=2;
@@ -623,10 +640,10 @@ void HdrPresentation(VkFormat advertised,bool alsoSrgb) {
     std::cout<<"HDR swapchain: gamma-ramp shadow gradient, exact single transfer, both eyes, loading and format="<<expected<<" passed\n";
 }
 
-std::vector<uint8_t> FilmOverlayOutput(bool legacy) {
+std::vector<uint8_t> FilmOverlayOutput(bool legacy,bool synchronous=false) {
     fqrender::nativeOnly=true;fqgl::Reset();offerSrgb=true;
     const auto xr=reinterpret_cast<XrInstance>(uintptr_t(1));const auto session=reinterpret_cast<XrSession>(uintptr_t(2));
-    assert(fqvk::InitializeWorldProbe(xr,1,64,64));auto& r=*fqvk::renderer;r.legacyPresentation=legacy;
+    assert(fqvk::InitializeWorldProbe(xr,1,64,64));auto& r=*fqvk::renderer;r.legacyPresentation=legacy;r.synchronous=synchronous;
     Scene(false);assert(fqvk::CreateGameplaySwapchain(session));Program(65,9);
     const uint8_t colour[]{25,45,75,255};fqvk::Texture(5,1,1,colour,false,false);
     auto near=Quad(false);std::vector<float> ui;
@@ -664,11 +681,84 @@ std::vector<uint8_t> FilmOverlayOutput(bool legacy) {
     return result;
 }
 void DirectPresentation() {
-    const auto legacy=FilmOverlayOutput(true),direct=FilmOverlayOutput(false);assert(legacy.size()==direct.size());
+    const auto legacy=FilmOverlayOutput(true),direct=FilmOverlayOutput(false),synchronous=FilmOverlayOutput(false,true);
+    assert(direct==synchronous);assert(legacy.size()==direct.size());
     int largest=0;for(size_t i=0;i<legacy.size();++i)largest=std::max(largest,std::abs(int(legacy[i])-int(direct[i])));
     if(largest>2)throw std::runtime_error("direct film/overlay difference exceeds two display codes: "+std::to_string(largest));
-    std::cout<<"Direct presentation: original film, two translucent overlays, opaque depth, stereo layers and recreation; max display-code difference="<<largest<<" passed\n";
+    std::cout<<"Direct presentation: original film, translucent overlays, opaque depth, stereo, recreation and synchronous/buffered equality; max display-code difference="<<largest<<" passed\n";
 }
+void BufferedOwnership() {
+    fqrender::nativeOnly=true;offerSrgb=true;inspectReleasedImages=false;
+    const auto xr=reinterpret_cast<XrInstance>(uintptr_t(1));const auto session=reinterpret_cast<XrSession>(uintptr_t(2));
+    assert(fqvk::InitializeWorldProbe(xr,1,64,64));Scene(false);auto& r=*fqvk::renderer;
+    assert(fqvk::CreateGameplaySwapchain(session));
+    // Warm pipelines, descriptor variants and resident resources before the
+    // gate. Cold driver compilation may itself block behind a GPU host event;
+    // this test isolates the engine's steady-state submission/lifetime rules.
+    Program(90,9);const float ui[]{-1,-1,0,0,0,1,-1,0,0,0,1,1,0,0,0,-1,-1,0,0,0,1,1,0,0,0,-1,1,0,0,0};
+    fqvk::Mesh(91,ui,6,5,nullptr,0);const uint8_t white[]{255,255,255,255};fqvk::Texture(92,1,1,white,false,false);
+    Set(90,"uMvp",{1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1});Set(90,"uTint",{1,0,0,1});
+    {fqvk::UiTargetScope target(99,32,16);assert(target.active);fqgl::state.texture2d[0].Change(92);Submit(90,91,GL_TRIANGLES,0,6,0,0,1);}
+    const uint8_t green[]{0,255,0,255};fqvk::Texture(6,1,1,green);
+    auto moved=Quad(false);for(size_t i=0;i<4;++i)moved[i*18+1]+=.2f;
+    const uint32_t indices[]{0,1,2,0,2,3};fqvk::Mesh(94,moved.data(),4,18,indices,6);
+    auto panel=Quad(false);for(size_t i=0;i<4;++i){panel[i*18]=panel[i*18]*.3f-.7f;panel[i*18+1]=panel[i*18+1]*.3f+.7f;}
+    fqvk::Mesh(93,panel.data(),4,18,indices,6);
+    const float identity[]{1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1},right[]{1,0,0,0,0,1,0,0,0,0,1,0,.8f,0,0,1},eye[]{0,0,2};
+    std::array<XrView,2> views{{{XR_TYPE_VIEW},{XR_TYPE_VIEW}}};for(auto& view:views){view.pose.orientation.w=1;view.fov={-.7f,.7f,.8f,-.8f};}
+    std::array<XrCompositionLayerProjectionView,2> output{};fqvk::PostSettings settings;settings.interior=1;settings.brightScale=0;
+    for(int warm=0;warm<2;++warm) {
+        assert(fqvk::BeginWorldProbe(identity,warm?right:identity,eye,eye));
+        fqgl::state.texture2d[0].Change(warm?6:5);Submit(1,9,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);
+        if(warm){fqgl::state.texture2d[0].Change(99);Submit(1,93,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);}
+        fqvk::PostProcess(settings);assert(fqvk::PresentGameplay(views.data(),output.data(),.04f,1000));
+    }
+    r.WaitFrames();
+    VkEvent gate{};VkEventCreateInfo ei{VK_STRUCTURE_TYPE_EVENT_CREATE_INFO};assert(vkCreateEvent(r.device,&ei,nullptr,&gate)==VK_SUCCESS);
+    VkCommandBuffer blocked{};VkCommandBufferAllocateInfo ai{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};ai.commandPool=r.uploads;ai.level=VK_COMMAND_BUFFER_LEVEL_PRIMARY;ai.commandBufferCount=1;
+    assert(vkAllocateCommandBuffers(r.device,&ai,&blocked)==VK_SUCCESS);
+    VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};assert(vkBeginCommandBuffer(blocked,&bi)==VK_SUCCESS);
+    vkCmdWaitEvents(blocked,1,&gate,VK_PIPELINE_STAGE_HOST_BIT,VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,0,nullptr,0,nullptr,0,nullptr);
+    assert(vkEndCommandBuffer(blocked)==VK_SUCCESS);
+    VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};submit.commandBufferCount=1;submit.pCommandBuffers=&blocked;
+    assert(vkQueueSubmit(r.queue,1,&submit,VK_NULL_HANDLE)==VK_SUCCESS);
+    std::mutex mutex;std::condition_variable ready;bool queued=false,timedOut=false;
+    std::thread watchdog([&]{std::unique_lock<std::mutex> lock(mutex);timedOut=!ready.wait_for(lock,std::chrono::seconds(10),[&]{return queued;});assert(vkSetEvent(r.device,gate)==VK_SUCCESS);});
+    std::array<uint32_t,2> images{};VkBuffer firstArena{},firstStereo{};VkDescriptorPool firstPool{};
+    for(int frame=0;frame<2;++frame) {
+        if(frame) {
+            r.Retire(r.textures.at(5));r.textures.erase(5);
+            r.Retire(r.meshes.at(9).vertices);r.meshes.at(9).vertices=r.meshes.at(94).vertices;r.meshes.at(94).vertices={};
+            assert(!r.retiredImages.empty()&&!r.retiredBuffers.empty());
+            Set(90,"uTint",{0,1,0,1});
+            {fqvk::UiTargetScope uiTarget(99,32,16);assert(uiTarget.active&&r.activeSlot==2);
+                fqgl::state.texture2d[0].Change(92);Submit(90,91,GL_TRIANGLES,0,6,0,0,1);}
+        }
+        assert(fqvk::BeginWorldProbe(identity,frame?right:identity,eye,eye));
+        if(!frame){firstArena=r.arena.buffer;firstStereo=r.stereo.buffer;firstPool=r.descriptors;}
+        else assert(firstArena!=r.arena.buffer&&firstStereo!=r.stereo.buffer&&firstPool!=r.descriptors);
+        fqgl::state.texture2d[0].Change(frame?6:5);Submit(1,9,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);
+        if(frame){fqgl::state.texture2d[0].Change(99);Submit(1,93,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);}
+        fqvk::PostProcess(settings);assert(fqvk::PresentGameplay(views.data(),output.data(),.04f,1000));images[frame]=acquiredImage;
+        assert(vkGetFenceStatus(r.device,r.fence)==VK_NOT_READY&&r.finishWaitUs==0);
+    }
+    assert(r.frameSlots[0].pending&&r.frameSlots[1].pending&&r.frameSlots[2].pending);
+    {std::lock_guard<std::mutex> lock(mutex);queued=true;}ready.notify_one();watchdog.join();assert(!timedOut);
+    r.WaitFrames();r.Collect();assert(r.retiredImages.empty()&&r.retiredBuffers.empty());
+    const auto first=RuntimePixels(images[0]),second=RuntimePixels(images[1]);
+    auto pixel=[](const auto& data,int e,int x,int y,int c){return data[(e*64*64+y*64+x)*4+c];};
+    assert(pixel(first,0,32,32,0)==255&&pixel(first,1,32,32,0)==255&&pixel(first,0,32,48,0)==255);
+    assert(pixel(second,0,32,32,1)==255&&pixel(second,1,55,32,1)==255&&pixel(second,1,32,32,1)==0);
+    assert(pixel(second,0,32,48,1)==0&&pixel(second,0,9,9,1)==255); // moved geometry and queued UI sampling
+    vkFreeCommandBuffers(r.device,r.uploads,1,&blocked);vkDestroyEvent(r.device,gate,nullptr);
+    const auto resets=r.descriptorResets;
+    assert(fqvk::BeginWorldProbe(identity,identity,eye,eye));assert(r.descriptorResets>resets);
+    fqgl::state.texture2d[0].Change(6);Submit(1,9,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);fqvk::PostProcess(settings);
+    assert(fqvk::PresentGameplay(views.data(),output.data(),.04f,1000));
+    fqvk::DestroyGameplaySwapchain();fqvk::ShutdownWorldProbe();offerSrgb=false;inspectReleasedImages=true;fqrender::nativeOnly=false;fqgl::Reset();
+    std::cout<<"Buffered ownership: GPU held pending while two world slots and UI submit/release; immutable uniforms, retirement, ordered UI sampling and delayed pixels passed\n";
+}
+
 void EarlyAcquireFailure() {
     fqrender::nativeOnly=true;offerSrgb=true;
     const auto xr=reinterpret_cast<XrInstance>(uintptr_t(1));
@@ -684,8 +774,10 @@ void TimingCapacity() {
     assert(fqvk::InitializeWorldProbe(reinterpret_cast<XrInstance>(uintptr_t(1)),1,64,64));Scene(false);
     const float identity[]{1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1},eye[]{0,0,2};
     auto& r=*fqvk::renderer;assert(fqvk::BeginWorldProbe(identity,identity,eye,eye));
-    Submit(1,9,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);r.DrainDraws();r.queryCursor=r.QueryCount;
-    r.Phase(r.Ui);fqvk::EndWorldProbe();assert(r.timingDropped>0);
+    Submit(1,9,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);r.DrainDraws();
+    bool insideRejected=false;try{r.Phase(r.Ui);}catch(const std::runtime_error&){insideRejected=true;}assert(insideRejected);
+    r.queryCursor=r.QueryCount;
+    r.EndPass();r.Phase(r.Ui);fqvk::EndWorldProbe();assert(r.timingDropped>0);
     vkDestroyQueryPool(r.device,r.timestamps,nullptr);r.timestamps={};r.timestampSupported=false;
     assert(fqvk::BeginWorldProbe(identity,identity,eye,eye));Submit(1,9,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);
     fqvk::EndWorldProbe();assert(r.gpuSpans.empty()&&r.timingDropped==0);
@@ -744,13 +836,13 @@ void GameplayPresentation(bool withDepth) {
     assert(fqvk::InitializeWorldProbe(xr,1,64,64));unsupportedFormat=true;
     assert(!fqvk::CreateGameplaySwapchain(session));assert(runtimeImages.empty());
     fqvk::ShutdownWorldProbe();unsupportedFormat=false;offerDepth=false;fqrender::nativeOnly=false;fqgl::Reset();
-    std::cout<<"Vulkan compositor software test: layered UNORM output, image rotation, upright stereo, film output, fence-before-release, independent depth indices, D32 copies/metadata, projection views, recreation, timeout and format rejection passed\n";
+    std::cout<<"Vulkan compositor software test: layered UNORM output, image rotation, upright stereo, film output, submit-before-release, independent depth indices, D32 copies/metadata, projection views, recreation, timeout and format rejection passed\n";
 }
 
 int main() {
     for(auto format:{VK_FORMAT_R8G8B8A8_UNORM,VK_FORMAT_B8G8R8A8_UNORM,VK_FORMAT_B8G8R8A8_SRGB})HdrPresentation(format,false);
     HdrPresentation(VK_FORMAT_R8G8B8A8_UNORM,true);
-    DirectPresentation();EarlyAcquireFailure();TimingCapacity();
+    BufferedOwnership();DirectPresentation();EarlyAcquireFailure();TimingCapacity();
     AsyncResources();HeadlessSceneSubmission();
     GameplayPresentation(false);GameplayPresentation(true);
     for(bool asynchronous:{false,true}) {

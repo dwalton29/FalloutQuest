@@ -1,4 +1,4 @@
-# Vulkan migration status — v250
+# Vulkan migration status — v251
 
 The full migration is **incomplete**. Experimental Vulkan gameplay retains the
 context-free CPU frontend and native OpenXR multiview presentation. GLES remains
@@ -6,7 +6,118 @@ the default. Native asset uploads are now batched and asynchronous; descriptors
 are reused. Software-GPU rendering and synchronization tests do not establish
 Quest visuals, loading times, stability or a 72 Hz performance improvement.
 
+## v251: buffered submission and tile-safe timing boundaries
+
+The v250 headset capture contained 446 profiled gameplay frames over 9.5 seconds:
+median native GPU span 15.27 ms (p95 18.65 ms), approximately 47 application FPS,
+and median immediate GPU-completion wait 15.61 ms. Direct film was active and
+staging reuse was approximately 99.8% between resource samples. Those are observed
+v250 results, not a v251 speedup or a matched before/after benchmark.
+
+**Correction to the v250 profiler:** timestamps inside a render pass do not give
+reliable per-draw-category elapsed times on a tiled GPU. Near-zero opaque/LAND/
+skinned readings on Quest were invalid for ranking their cost. Snapshot/film
+intervals also crossed invalid boundaries. v251 times only outside the existing
+whole render passes. It does not split the scene to force measurements.
+
+- **Two world contexts plus a UI context:** independent command pools/buffers,
+  fences, host-visible material/instance arenas, stereo uniforms, descriptor pools/
+  caches and query pools. Native gameplay submits and releases runtime images on
+  the session-bound queue without an immediate CPU fence wait. Host writes and
+  command/descriptor/query resets wait only when reusing that context. The UI
+  context prevents a normal offscreen update from consuming a world slot. Multiple
+  updates reusing the same UI context can still wait; UI submission batching is
+  not part of this change. There are at most two outstanding world contexts and
+  one UI context, rather than an unbounded frame queue.
+- **Shared GPU targets, ordered execution:** HDR, depth, bloom, adaptation history
+  and UI textures remain shared. A GPU memory/execution dependency orders each
+  submission against prior queue work before the frame-start timestamp. This
+  permits CPU recording while earlier GPU work runs, without duplicating large
+  render targets or concurrently overwriting them. GPU frames themselves remain
+  ordered. Staging-upload barriers and the session queue's acquire/submit/release
+  order are retained. Application command submission precedes OpenXR release;
+  completion fences protect application resource reuse, not CPU-side release.
+- **Retirement by completion epochs:** replaced geometry, textures and UI targets
+  retain both their last frame epoch and upload ticket. Resources are freed only
+  after both complete; current recording uses the next submission epoch. Destroyed
+  views increment a generation, and each context invalidates its own cached
+  descriptors only after its fence completes. Teardown drains queued work before
+  destroying runtime views or context resources; incomplete recording is discarded.
+- **Deferred query readback:** timing samples retain their submission identity and
+  CPU counters. Queries are read only after that context's fence signals, without
+  an extra GPU wait. New `FQVK GPU timingVersion=2 scope=whole-render-passes` fields:
+  `sceneMs`, `sceneResumeMs`, `offscreenUiMs`, `adaptMs`, `bloomMs`, `filmMs`,
+  `overlayMs`, `outputMs`, `snapshotCopyMs`, `depthCopyMs`. Scene includes all draws
+  before water; scene continuation includes remaining world/water/pre-film UI.
+  Opaque, LAND and actors are no longer misleadingly separated within one pass.
+  Copy spans are outside render passes as well. Query-capacity and unsupported-
+  timestamp handling remain bounded and explicit. Endpoints inside a pass are
+  rejected. Pipeline overlap means intervals still need not sum exactly to total.
+- **CPU/runtime attribution:** `FQVK TIMING` adds `buffered` and `completed=1`.
+  `finishWaitCpuMs` is normally zero in buffered mode; `reuseWaitCpuMs` exposes
+  backpressure. `FQVK CPU` reports application cadence, work wall span and
+  `xrEndFrameCpuMs`. Work includes waits and is not active CPU execution time;
+  cadence is not proof that the compositor displayed every submitted frame.
+  Join CPU and deferred GPU rows by `submission`; log order may differ.
+
+Frame arenas now total 96 MiB when buffered contexts are created (64 MiB more
+than v250). They are allocated lazily for native gameplay; the synchronous
+comparison/headless path need not allocate the additional contexts. Streaming
+retirement is bounded by the outstanding contexts and upload fences, rather than
+waiting for all future frames to become idle before reclaiming old resources.
+Original culling, sRGB film, bloom, animation, assets, depth metadata and UI order
+are retained. No resolution reduction or shader simplification is introduced.
+
+`FQVK CAP` now reports fragment-density-map, non-subsampled-image and QCOM elapsed-
+timer extension availability. Foveation stays **off**. It requires real offscreen
+scene integration, supported device features and a new visual/performance test;
+a final-swapchain-only toggle would not accelerate the expensive HDR scene.
+Correct whole-pass captures are needed before claiming which GPU work dominates.
+
+Tests hold real software-GPU execution behind a host-controlled event while both
+world contexts and the UI context submit and release. They verify distinct mapped
+buffers/pools, no immediate completion wait, old resource retention, ordered UI
+sampling, moved geometry, per-eye matrices, deferred pixel output, cache generation
+invalidation and teardown. A watchdog releases the event and fails the test if
+submission unexpectedly blocks. Pipelines/resources are warmed before the gate to
+avoid confusing cold driver compilation with an engine fence wait. Synchronous
+and buffered pixel output are equal in the original film/overlay test; direct/
+legacy comparison remains within one observed display-code step. Existing original
+shader/material/terrain/actor/water/UI, loading, timeout and recreation tests run
+with Vulkan core and synchronization validation. This is not a real compositor or
+headset performance measurement.
+
+Use the v251 O2 Profile APK with the same save, position, time of day and resolution:
+
+```powershell
+.\adb shell am force-stop com.falloutquest.app
+.\adb shell setprop debug.falloutquest.renderer vulkan
+.\adb shell setprop debug.falloutquest.vulkan_diag 0
+.\adb shell setprop debug.falloutquest.vulkan_present_copy 0
+.\adb shell setprop debug.falloutquest.vulkan_sync 0
+.\adb shell setprop debug.falloutquest.vulkan_timing 1
+.\adb logcat -c
+# Launch, settle, then stream for 30 seconds; stop with Ctrl+C:
+.\adb logcat -v time FalloutQuest:I '*:S' > vulkan-buffered.txt
+```
+
+Repeat after force-stop with `vulkan_sync 1` into `vulkan-sync.txt` to isolate
+submission scheduling using the same corrected profiler and direct presentation.
+Look for `buffered=1`, valid completed samples, scene-pass GPU cost, reuse waits,
+`xrEndFrameCpuMs`, application cadence and runtime FPS/stale frames. Also repeat
+with `vulkan_timing 0` for normal gameplay performance, since profiling has overhead.
+Restore `vulkan_sync 0` for buffered operation. Properties are startup settings.
+No v251 Quest performance gain, 72 Hz success or unchanged motion latency is claimed
+before this matched hardware test.
+
+References: [OpenXR submission/release semantics](https://github.com/KhronosGroup/OpenXR-Docs/blob/main/specification/sources/chapters/rendering.adoc),
+[OpenXR editor clarification](https://github.com/KhronosGroup/OpenXR-Docs/issues/177),
+and [tiled-GPU timestamp limitations](https://docs.vulkan.org/features/latest/features/proposals/VK_QCOM_elapsed_timer_query.html).
+
 ## v250: measured performance pass, pooled staging and direct film output
+
+Historical note: its in-render-pass category timings were invalid on Quest;
+v251 replaces them with the whole-pass measurements described above.
 
 The user reports restored visual parity on v249. This pass keeps its culling,
 original assets, scene shading, exposure/bloom/film arithmetic and sRGB output.
@@ -313,7 +424,7 @@ Compositor callbacks are mocked; this is not a real OpenXR runtime test.
 
 ### Headset validation (required before promotion)
 
-Install v250 Debug or Profile, then use PowerShell from platform-tools:
+Install v251 Debug or Profile, then use PowerShell from platform-tools:
 
 ```powershell
 .\adb shell am force-stop com.falloutquest.app
