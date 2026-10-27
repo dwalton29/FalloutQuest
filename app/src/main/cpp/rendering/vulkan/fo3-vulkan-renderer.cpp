@@ -116,7 +116,7 @@ public:
     UiTarget* activeUi=nullptr;bool offscreen=false;uint32_t targetWidth=0,targetHeight=0;VkRenderPass uiPass{};
     int adaptIndex=0;bool exposureFirst=true,postDone=false,passOpen=false;
     std::vector<Buffer> retiredBuffers;std::vector<Image> retiredImages;
-    uint64_t draws=0,vertices=0,skipped=0,frames=0;std::array<uint64_t,6> skipReasons{};uint32_t visualDiagnostics=0;bool begun=false;
+    uint64_t draws=0,vertices=0,skipped=0,frames=0;std::array<uint64_t,6> skipReasons{};uint32_t firstSkippedProgram=0,visualDiagnostics=0;bool begun=false;
     bool failed=false;
     // The OpenXR runtime owns these images. Only our views/framebuffers are destroyed.
     XrInstance xrInstance{};XrSession xrSession{};XrSwapchain xrSwapchain{};
@@ -508,9 +508,9 @@ public:
 #ifdef __ANDROID__
         char visualProp[PROP_VALUE_MAX]{};
         __system_property_get("debug.falloutquest.vulkan_diag",visualProp);
-        visualDiagnostics=uint32_t(std::strtoul(visualProp,nullptr,0))&3u;
+        visualDiagnostics=uint32_t(std::strtoul(visualProp,nullptr,0))&7u;
 #endif
-        VKLOG("FQVK VISUAL diagnosticMask=%u forceNoCull=%u rawSceneNoFilm=%u originalAssets=1",visualDiagnostics,(visualDiagnostics&1u)?1u:0u,(visualDiagnostics&2u)?1u:0u);
+        VKLOG("FQVK VISUAL diagnosticMask=%u forceNoCull=%u rawSceneNoFilm=%u reverseFrontFace=%u originalAssets=1",visualDiagnostics,(visualDiagnostics&1u)?1u:0u,(visualDiagnostics&2u)?1u:0u,(visualDiagnostics&4u)?1u:0u);
         VKLOG("FQVK WORLD PROBE device=%s api=%u.%u multiview=1 fragmentDensityExtension=%d foveationEnabled=0 size=%ux%u stereo=2 presentation=unbound parity=INCOMPLETE",
               properties.deviceName,VK_VERSION_MAJOR(properties.apiVersion),VK_VERSION_MINOR(properties.apiVersion),density,width,height);
     }
@@ -594,7 +594,11 @@ public:
             key.cullFace==GL_FRONT_AND_BACK?VK_CULL_MODE_FRONT_AND_BACK:VK_CULL_MODE_BACK_BIT;
         rs.depthBiasEnable=key.offset;
         // Vertex shader flips Y, so Vulkan front-face winding is inverted.
-        rs.frontFace=key.clockwise?VK_FRONT_FACE_COUNTER_CLOCKWISE:VK_FRONT_FACE_CLOCKWISE;
+        // Normal mode preserves the earlier GLES->Vulkan winding assumption.
+        // Diagnostic bit 4 tests the opposite interpretation *with culling on*,
+        // to distinguish wrong front-face mapping from genuinely two-sided NIFs.
+        const bool flipWindingDiagnostic=(visualDiagnostics&4u)!=0u;
+        rs.frontFace=(key.clockwise!=flipWindingDiagnostic)?VK_FRONT_FACE_COUNTER_CLOCKWISE:VK_FRONT_FACE_CLOCKWISE;
         VkPipelineMultisampleStateCreateInfo ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};ms.rasterizationSamples=VK_SAMPLE_COUNT_1_BIT;
         VkPipelineDepthStencilStateCreateInfo ds{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};ds.depthTestEnable=key.depth;ds.depthWriteEnable=key.write;ds.depthCompareOp=Compare(key.depthFunc);
         VkPipelineColorBlendAttachmentState ba{};ba.colorWriteMask=0xf;ba.blendEnable=key.blend;ba.srcColorBlendFactor=Blend(key.src);ba.dstColorBlendFactor=Blend(key.dst);ba.colorBlendOp=BlendOperation(key.equation);ba.srcAlphaBlendFactor=Blend(key.srcA);ba.dstAlphaBlendFactor=Blend(key.dstA);ba.alphaBlendOp=BlendOperation(key.equationA);
@@ -637,7 +641,7 @@ public:
     void Queue(const fqrender::DrawCommand& command) {
         if(!begun||!passOpen||failed)return;
         const auto p=programs.find(command.program);
-        if(p==programs.end()){++skipped;++skipReasons[0];return;}
+        if(p==programs.end()){++skipped;++skipReasons[0];if(!firstSkippedProgram)firstSkippedProgram=command.program;return;}
         pending.push_back({command,p->second.bytes,p->second.units});
     }
     void DrainDraws() {
@@ -651,7 +655,7 @@ public:
         if(!begun||!passOpen||failed)return;
         auto skip=[&](size_t reason){++skipped;++skipReasons[reason];};
         const auto pIt=programs.find(program);
-        if(pIt==programs.end()){skip(0);return;}
+        if(pIt==programs.end()){skip(0);if(!firstSkippedProgram)firstSkippedProgram=program;return;}
         const auto& p=pIt->second;
         const auto mIt=meshes.find(vao);
         if(mIt==meshes.end()||!mIt->second.vertices.buffer){skip(1);return;}
@@ -958,7 +962,7 @@ public:
             for(int k=0;k<4;++k)data[88+col*4+row]+=float(right[k*4+row]*inverse[k][col+4]);
         }
         std::memcpy(stereo.mapped,data,sizeof(data));
-        pending.clear();postDone=false;snapshotReady=false;cursor=0;draws=vertices=skipped=0;skipReasons.fill(0);
+        pending.clear();postDone=false;snapshotReady=false;cursor=0;draws=vertices=skipped=0;skipReasons.fill(0);firstSkippedProgram=0;
         VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};bi.flags=VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
         Check(vkBeginCommandBuffer(command,&bi),"begin frame");
         if(timestamps){vkCmdResetQueryPool(command,timestamps,0,4);vkCmdWriteTimestamp(command,VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,timestamps,0);}
@@ -1011,11 +1015,11 @@ public:
             (unsigned long long)uploadOperations,(unsigned long long)uploadSubmissions,(unsigned long long)uploadQueueIdles,
             (unsigned long long)uploadBytes,(unsigned long long)uploadPeakBytes,(unsigned long long)uploadPressureWaits,(unsigned long long)uploadStagingBuffers,(unsigned long long)uploadPeakBuffers,(unsigned long long)descriptorAllocations,(unsigned long long)descriptorHits,(unsigned long long)descriptorResets,(unsigned long long)paletteAllocations,(unsigned long long)paletteUpdates);
         if(!offscreen&&!gameplay)Dump();
-        if(!offscreen&&(frames++%120)==0)VKLOG("FQVK FRAME frame=%llu stereoGpuMs=%.3f gpuScope=frameSpan sharedDraws=%llu vertexCorners=%llu skippedDraws=%llu skipProgram=%llu skipMesh=%llu skipPrimitive=%llu skipSkin=%llu skipRange=%llu skipCapacity=%llu diagnosticMask=%u presentation=%s sceneSubmission=cpu-commands benchmarkValid=0",
+        if(!offscreen&&(frames++%120)==0)VKLOG("FQVK FRAME frame=%llu stereoGpuMs=%.3f gpuScope=frameSpan sharedDraws=%llu vertexCorners=%llu skippedDraws=%llu skipProgram=%llu skipMesh=%llu skipPrimitive=%llu skipSkin=%llu skipRange=%llu skipCapacity=%llu firstSkippedProgram=%u diagnosticMask=%u presentation=%s sceneSubmission=cpu-commands benchmarkValid=0",
             (unsigned long long)frames,gpuMs,(unsigned long long)draws,(unsigned long long)vertices,(unsigned long long)skipped,
             (unsigned long long)skipReasons[0],(unsigned long long)skipReasons[1],(unsigned long long)skipReasons[2],
             (unsigned long long)skipReasons[3],(unsigned long long)skipReasons[4],(unsigned long long)skipReasons[5],
-            visualDiagnostics,gameplay?"Vulkan":"GLES-probe");
+            firstSkippedProgram,visualDiagnostics,gameplay?"Vulkan":"GLES-probe");
     }
     std::vector<uint16_t> Readback() {
         // Debug-only, explicit readback. No readback/copy occurs on ordinary frames.

@@ -377,3 +377,26 @@ from scene lighting, film processing, or compositor colour-space assumptions,
 and whether hollow player models come from culling, skinning or missed draws.
 These flags deliberately avoid modifying original shaders/assets or the GLES
 fallback. Vulkan remains non-default.
+
+## Quest Oct 27 follow-up: winding isolation and shader-skip identifier
+
+The physical Quest 3S testing report says disabling culling with diagnostic bit 1
+restores apparently hollow player and world geometry. The captured log itself
+has `diagnosticMask=2`: it was recorded during the **raw-scene/film-bypass**
+experiment and is not a culling-off capture. It confirms Vulkan OpenXR
+multiview presentation and populated Megaton `stereoGpuMs=19.973–21.304`
+for individual sampled frames (excluding initial loading); it is **not** a
+representative or independently validated FPS benchmark. Its six native
+skipped draws are all `skipProgram`, not missing mesh/skin/capacity failures.
+
+Before disabling culling in production, test `debug.falloutquest.vulkan_diag=4`:
+this reverses the Vulkan *frontFace winding mapping* while retaining each
+NIF's authored GL_CULL_FACE/GL_FRONT_FACE state. If 4 matches the visually
+correct 1 but 0 fails, revisit the original winding conversion and add a
+headset-backed regression test. If 4 also fails, inspect actual per-mesh
+winding, shader projection sign and original NIF two-sided flags. No GLES or
+asset behaviour is changed by diagnostic 4. `5` combines winding flip and
+no-cull (usually redundant), `6` combines winding flip and raw-scene display;
+`7` enables all diagnostics. Restore `0` after testing. The `FQVK FRAME`
+heartbeat also identifies `firstSkippedProgram` to help classify the six
+unregistered-program draws observed on Quest.
