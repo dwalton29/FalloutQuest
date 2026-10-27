@@ -13,7 +13,7 @@ namespace fqvk {
 bool InitializeWorldProbe(XrInstance instance,XrSystemId system,uint32_t width,uint32_t height,const char* outputDirectory=nullptr);
 void ShutdownWorldProbe();
 bool BeginWorldProbe(const float* leftMvp,const float* rightMvp,
-                     const float* leftEye,const float* rightEye,bool loading=false);
+                     const float* leftEye,const float* rightEye,bool loading=false,const float* horizon=nullptr);
 void EndWorldProbe();
 // Experimental compositor owner; resource submission still uses the shared bridge.
 bool GameplayBinding(XrGraphicsBindingVulkan2KHR& binding);

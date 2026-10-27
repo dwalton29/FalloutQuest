@@ -2069,7 +2069,9 @@ private:
                         poses[i]=IsFo3LoadingVisible()?views[i].pose:ToVirtualPose(views[i].pose);
                         matrices[i]=Multiply(ProjectionFromFov(views[i].fov,0.04f,125000.0f/FO3_UNITS_PER_METRE_Q715),ViewFromPose(poses[i]));
                     }
-                    const bool begun=fqvk::BeginWorldProbe(matrices[0].m,matrices[1].m,&poses[0].position.x,&poses[1].position.x,IsFo3LoadingVisible());
+                    const Fo3Environment& clearEnvironment=GetFo3Environment();
+                    const float* clearHorizon=clearEnvironment.valid?clearEnvironment.horizon:nullptr;
+                    const bool begun=fqvk::BeginWorldProbe(matrices[0].m,matrices[1].m,&poses[0].position.x,&poses[1].position.x,IsFo3LoadingVisible(),clearHorizon);
                     if(vulkanGameplay_&&!begun){rendered=false;exitRequested_=true;}
                 }
 #endif

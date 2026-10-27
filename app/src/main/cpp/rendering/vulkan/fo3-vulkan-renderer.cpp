@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <cstdlib>
 #include <deque>
 #include <fstream>
 #include <cmath>
@@ -115,7 +116,7 @@ public:
     UiTarget* activeUi=nullptr;bool offscreen=false;uint32_t targetWidth=0,targetHeight=0;VkRenderPass uiPass{};
     int adaptIndex=0;bool exposureFirst=true,postDone=false,passOpen=false;
     std::vector<Buffer> retiredBuffers;std::vector<Image> retiredImages;
-    uint64_t draws=0,vertices=0,skipped=0,frames=0;bool begun=false;
+    uint64_t draws=0,vertices=0,skipped=0,frames=0;std::array<uint64_t,6> skipReasons{};uint32_t visualDiagnostics=0;bool begun=false;
     bool failed=false;
     // The OpenXR runtime owns these images. Only our views/framebuffers are destroyed.
     XrInstance xrInstance{};XrSession xrSession{};XrSwapchain xrSwapchain{};
@@ -504,6 +505,12 @@ public:
         uint32_t extensionCount=0;vkEnumerateDeviceExtensionProperties(physical,nullptr,&extensionCount,nullptr);
         std::vector<VkExtensionProperties> extensions(extensionCount);vkEnumerateDeviceExtensionProperties(physical,nullptr,&extensionCount,extensions.data());
         const bool density=std::any_of(extensions.begin(),extensions.end(),[](const auto& e){return !std::strcmp(e.extensionName,"VK_EXT_fragment_density_map");});
+#ifdef __ANDROID__
+        char visualProp[PROP_VALUE_MAX]{};
+        __system_property_get("debug.falloutquest.vulkan_diag",visualProp);
+        visualDiagnostics=uint32_t(std::strtoul(visualProp,nullptr,0))&3u;
+#endif
+        VKLOG("FQVK VISUAL diagnosticMask=%u forceNoCull=%u rawSceneNoFilm=%u originalAssets=1",visualDiagnostics,(visualDiagnostics&1u)?1u:0u,(visualDiagnostics&2u)?1u:0u);
         VKLOG("FQVK WORLD PROBE device=%s api=%u.%u multiview=1 fragmentDensityExtension=%d foveationEnabled=0 size=%ux%u stereo=2 presentation=unbound parity=INCOMPLETE",
               properties.deviceName,VK_VERSION_MAJOR(properties.apiVersion),VK_VERSION_MINOR(properties.apiVersion),density,width,height);
     }
@@ -583,7 +590,7 @@ public:
         VkViewport viewport{0,0,float(width),float(height),0,1};VkRect2D scissor{{0,0},{width,height}};
         VkPipelineViewportStateCreateInfo vp{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};vp.viewportCount=1;vp.pViewports=&viewport;vp.scissorCount=1;vp.pScissors=&scissor;
         VkPipelineRasterizationStateCreateInfo rs{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};rs.polygonMode=VK_POLYGON_MODE_FILL;rs.lineWidth=1;
-        rs.cullMode=!key.cull?VK_CULL_MODE_NONE:key.cullFace==GL_FRONT?VK_CULL_MODE_FRONT_BIT:
+        rs.cullMode=(visualDiagnostics&1u)||!key.cull?VK_CULL_MODE_NONE:key.cullFace==GL_FRONT?VK_CULL_MODE_FRONT_BIT:
             key.cullFace==GL_FRONT_AND_BACK?VK_CULL_MODE_FRONT_AND_BACK:VK_CULL_MODE_BACK_BIT;
         rs.depthBiasEnable=key.offset;
         // Vertex shader flips Y, so Vulkan front-face winding is inverted.
@@ -630,7 +637,7 @@ public:
     void Queue(const fqrender::DrawCommand& command) {
         if(!begun||!passOpen||failed)return;
         const auto p=programs.find(command.program);
-        if(p==programs.end()){++skipped;return;}
+        if(p==programs.end()){++skipped;++skipReasons[0];return;}
         pending.push_back({command,p->second.bytes,p->second.units});
     }
     void DrainDraws() {
@@ -642,13 +649,18 @@ public:
         const auto program=draw.program,vao=draw.mesh,mode=draw.topology,type=draw.indexType;
         const auto first=draw.first,count=draw.count,instances=draw.instances;const auto offset=draw.indexOffset;
         if(!begun||!passOpen||failed)return;
-        const auto pIt=programs.find(program);if(pIt==programs.end()){++skipped;return;}
+        auto skip=[&](size_t reason){++skipped;++skipReasons[reason];};
+        const auto pIt=programs.find(program);
+        if(pIt==programs.end()){skip(0);return;}
         const auto& p=pIt->second;
-        const auto mIt=meshes.find(vao);if(mIt==meshes.end()||(mode!=GL_TRIANGLES&&mode!=GL_TRIANGLE_STRIP)||count<=0||instances<=0||(instances>1&&draw.transforms.size()<size_t(instances)*16)||(UsesSkin(p,item.uniforms)&&!mIt->second.skin.buffer)){++skipped;return;}
-        if(type && type!=GL_UNSIGNED_INT){++skipped;return;}
+        const auto mIt=meshes.find(vao);
+        if(mIt==meshes.end()||!mIt->second.vertices.buffer){skip(1);return;}
+        if((mode!=GL_TRIANGLES&&mode!=GL_TRIANGLE_STRIP)||(type&&type!=GL_UNSIGNED_INT)){skip(2);return;}
+        if(count<=0||instances<=0||(instances>1&&draw.transforms.size()<size_t(instances)*16)){skip(4);return;}
+        if(UsesSkin(p,item.uniforms)&&!mIt->second.skin.buffer){skip(3);return;}
         const auto& m=mIt->second;const int kind=p.ui?p.ui:p.water?3:p.sky?2:p.terrain?1:0;
         const uint32_t indexFirst=type?(p.terrain?0:uint32_t(offset/4)):uint32_t(first);
-        if(indexFirst+uint32_t(count)>m.count){++skipped;return;}
+        if(indexFirst>m.count||uint32_t(count)>m.count-indexFirst||(type&&!m.indices.buffer)){skip(4);return;}
         const auto& s=draw.state;
         PipelineKey key;key.offscreen=offscreen;key.strip=mode==GL_TRIANGLE_STRIP;key.ui=uint32_t(p.ui);key.water=p.water;key.sky=p.sky;key.terrain=p.terrain;key.stride=m.stride;key.instanced=instances>1;key.skinned=UsesSkin(p,item.uniforms);
         key.depth=s.depth;key.write=s.write;key.blend=s.blend;key.cull=s.cull;key.clockwise=s.clockwise;
@@ -658,7 +670,7 @@ public:
         const VkDeviceSize alignment=std::max<VkDeviceSize>(16,properties.limits.minUniformBufferOffsetAlignment);
         cursor=(cursor+alignment-1)&~(alignment-1);
         const size_t instanceBytes=key.instanced?size_t(instances)*64:0;
-        if(cursor+item.uniforms.size()+instanceBytes>arena.size||draws>=8176){++skipped;return;}
+        if(cursor+item.uniforms.size()+instanceBytes>arena.size||draws>=8176){++skipped;++skipReasons[5];return;}
         std::memcpy(static_cast<uint8_t*>(arena.mapped)+cursor,item.uniforms.data(),item.uniforms.size());
         if(p.water)for(const auto& e:p.fields) {
             float* out=reinterpret_cast<float*>(static_cast<uint8_t*>(arena.mapped)+cursor+e.field.offset);
@@ -844,6 +856,12 @@ public:
         DrainDraws();CreatePost();vkCmdEndRenderPass(command);passOpen=false;
         PostBarrier(color,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
             VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,VK_ACCESS_SHADER_READ_BIT,VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+        if(visualDiagnostics&2u) {
+            // Diagnostic only: raw scene HDR sampled directly, without the
+            // original adaptation/bloom/film. Values outside SDR are clipped
+            // by the display; this is NOT an alternative production renderer.
+            PostDraw(5,presented,{{clamped,color.view,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}},{});
+        } else {
         // Retail/GLES adaptation is eye 0 once per stereo frame. Both native
         // history layers deliberately use that same source, avoiding eye rivalry.
         auto& previous=adapted[adaptIndex];
@@ -867,12 +885,13 @@ public:
              {"uContrastAvg",{settings.contrastAvg}},{"uContrast",{settings.contrast}},{"uBrightness",{settings.brightness}},
              {"uTintColor",{settings.tint[0],settings.tint[1],settings.tint[2]}},{"uTintValue",{settings.tintValue}},
              {"uTargetLumQ1520",{settings.targetLum}},{"uPcBloomReadyQ1670",{1}}});
+        }
         postDone=true;
         // Notifications, XP, pause and performance HUD are deliberately drawn
         // after the film/gamma pass in the original game path. Retain that order.
         PostBarrier(presented.image,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-            VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,VK_ACCESS_COLOR_ATTACHMENT_READ_BIT|VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
-            VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+            VK_ACCESS_SHADER_READ_BIT,VK_ACCESS_COLOR_ATTACHMENT_READ_BIT|VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
         VkRenderPassBeginInfo overlay{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};overlay.renderPass=resumePass;overlay.framebuffer=postOverlayFramebuffer;overlay.renderArea={{0,0},{width,height}};
         vkCmdBeginRenderPass(command,&overlay,VK_SUBPASS_CONTENTS_INLINE);passOpen=true;
     }
@@ -939,15 +958,19 @@ public:
             for(int k=0;k<4;++k)data[88+col*4+row]+=float(right[k*4+row]*inverse[k][col+4]);
         }
         std::memcpy(stereo.mapped,data,sizeof(data));
-        pending.clear();postDone=false;snapshotReady=false;cursor=0;draws=vertices=skipped=0;
+        pending.clear();postDone=false;snapshotReady=false;cursor=0;draws=vertices=skipped=0;skipReasons.fill(0);
         VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};bi.flags=VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
         Check(vkBeginCommandBuffer(command,&bi),"begin frame");
         if(timestamps){vkCmdResetQueryPool(command,timestamps,0,4);vkCmdWriteTimestamp(command,VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,timestamps,0);}
         begun=true;
     }
-    void Begin(const float* left,const float* right,const float* le,const float* re,bool loading=false) {
+    void Begin(const float* left,const float* right,const float* le,const float* re,bool loading=false,const float* horizon=nullptr) {
         offscreen=false;targetWidth=width;targetHeight=height;StartCommands(left,right,le,re,loading);
-        std::array<VkClearValue,2> clears{};clears[0].color={{0,0,0,1}};clears[1].depthStencil={1,0};
+        // Match the GLES clear from GetFo3Environment(), not hard-coded black.
+        // The sky shader still paints the full authored sky where available.
+        std::array<VkClearValue,2> clears{};
+        clears[0].color={{horizon?horizon[0]:0.018f,horizon?horizon[1]:0.028f,horizon?horizon[2]:0.020f,1.0f}};
+        clears[1].depthStencil={1,0};
         VkRenderPassBeginInfo ri{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};ri.renderPass=pass;ri.framebuffer=framebuffer;ri.renderArea={{0,0},{width,height}};ri.clearValueCount=2;ri.pClearValues=clears.data();
         vkCmdBeginRenderPass(command,&ri,VK_SUBPASS_CONTENTS_INLINE);begun=passOpen=true;
     }
@@ -984,8 +1007,11 @@ public:
             (unsigned long long)uploadOperations,(unsigned long long)uploadSubmissions,(unsigned long long)uploadQueueIdles,
             (unsigned long long)uploadBytes,(unsigned long long)uploadPeakBytes,(unsigned long long)uploadPressureWaits,(unsigned long long)uploadStagingBuffers,(unsigned long long)uploadPeakBuffers,(unsigned long long)descriptorAllocations,(unsigned long long)descriptorHits,(unsigned long long)descriptorResets,(unsigned long long)paletteAllocations,(unsigned long long)paletteUpdates);
         if(!offscreen&&!gameplay)Dump();
-        if(!offscreen&&(frames++%120)==0)VKLOG("FQVK FRAME frame=%llu stereoGpuMs=%.3f gpuScope=frameSpan sharedDraws=%llu vertexCorners=%llu skippedDraws=%llu presentation=%s sceneSubmission=cpu-commands benchmarkValid=0",
-            (unsigned long long)frames,gpuMs,(unsigned long long)draws,(unsigned long long)vertices,(unsigned long long)skipped,gameplay?"Vulkan":"GLES-probe");
+        if(!offscreen&&(frames++%120)==0)VKLOG("FQVK FRAME frame=%llu stereoGpuMs=%.3f gpuScope=frameSpan sharedDraws=%llu vertexCorners=%llu skippedDraws=%llu skipProgram=%llu skipMesh=%llu skipPrimitive=%llu skipSkin=%llu skipRange=%llu skipCapacity=%llu diagnosticMask=%u presentation=%s sceneSubmission=cpu-commands benchmarkValid=0",
+            (unsigned long long)frames,gpuMs,(unsigned long long)draws,(unsigned long long)vertices,(unsigned long long)skipped,
+            (unsigned long long)skipReasons[0],(unsigned long long)skipReasons[1],(unsigned long long)skipReasons[2],
+            (unsigned long long)skipReasons[3],(unsigned long long)skipReasons[4],(unsigned long long)skipReasons[5],
+            visualDiagnostics,gameplay?"Vulkan":"GLES-probe");
     }
     std::vector<uint16_t> Readback() {
         // Debug-only, explicit readback. No readback/copy occurs on ordinary frames.
@@ -1239,9 +1265,9 @@ bool InitializeWorldProbe(XrInstance instance,XrSystemId system,uint32_t w,uint3
 }
 void ShutdownWorldProbe(){hooks={};recording=false;gameplayPresentation=false;renderer.reset();}
 bool WorldProbeActive(){return renderer&&!renderer->failed;}
-bool BeginWorldProbe(const float* l,const float* r,const float* le,const float* re,bool loading){
+bool BeginWorldProbe(const float* l,const float* r,const float* le,const float* re,bool loading,const float* horizon){
     if(!WorldProbeActive())return false;
-    try{renderer->Begin(l,r,le,re,loading);recording=true;return true;}catch(const std::exception& e){Failure(e);return false;}
+    try{renderer->Begin(l,r,le,re,loading,horizon);recording=true;return true;}catch(const std::exception& e){Failure(e);return false;}
 }
 void EndWorldProbe(){recording=false;if(renderer&&renderer->failed){if(!renderer->gameplay)ShutdownWorldProbe();return;}if(!renderer||!renderer->begun)return;try{renderer->End();}catch(const std::exception& e){Failure(e);}}
 bool GameplayBinding(XrGraphicsBindingVulkan2KHR& binding) {

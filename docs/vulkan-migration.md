@@ -327,3 +327,53 @@ matched scenes have measured GPU, CPU and frame-pacing results.
 Baseline provided by the user: v244 Wasteland median stereo GPU 31.7 ms. Vulkan
 headset results: **none**. Required budget at 72 Hz: 13.89 ms. No speedup is yet
 established.
+
+## Quest v248 visual-regression diagnostics — headset follow-up
+
+The first v248 native Vulkan headset screenshots from Megaton show strongly
+crushed shadows, apparent missing/inside-out geometry and approximately
+24–29 application FPS. The in-game GPU field reports N/A on Vulkan. This is
+an actual hardware finding; no visual-fidelity or 72 Hz success is claimed.
+
+The GLES world clear uses the authored horizon colour; Vulkan's original hard-
+coded black clear has been corrected to that same per-frame horizon (or the
+existing GLES fallback colour for missing environment). A black clear alone
+cannot explain fully drawn dark surfaces. Original sky, colour grading, shader
+lighting and texture assets are unchanged.
+
+Reason-specific native draw diagnostics now report `skipProgram`, `skipMesh`,
+`skipPrimitive`, `skipSkin`, `skipRange` and `skipCapacity` alongside
+`skippedDraws` in `FQVK FRAME`. These report rejected submissions; do not
+mistake an aggregate skip count for evidence of a missing visible mesh.
+
+For a controlled *Debug/Profile* comparison, the experimental Vulkan backend
+reads `debug.falloutquest.vulkan_diag` once at renderer initialization:
+
+- `0`: unchanged normal Vulkan film and authored culling.
+- `1`: disable back-face culling in the Vulkan pipeline only; isolates
+  inside-out models, without changing GLES or mesh data.
+- `2`: show ungraded scene HDR through the original copy shader instead of
+  exposure/bloom/film. This **clips HDR to SDR**; it is only a diagnostic,
+  not a replacement renderer or correct final colour.
+- `3`: combine both diagnostics, useful only after testing each separately.
+
+For each comparison, force-stop the app, set the property and relaunch:
+
+```powershell
+.\adb shell am force-stop com.falloutquest.app
+.\adb shell setprop debug.falloutquest.renderer vulkan
+.\adb shell setprop debug.falloutquest.vulkan_diag 1
+```
+
+Repeat with `vulkan_diag 2` and then `0`, collecting the same scene and
+`adb logcat -d -v time > vulkan-visual-logcat.txt`. In the log, inspect
+`FQVK VISUAL` for the chosen flags, `FQVK FRAME` for skip reasons and
+`stereoGpuMs`, and `FQ PRESENTED api=Vulkan` to verify true Vulkan
+presentation. Do not compare brightness or frame rate across different locations
+or time-of-day. Restore `vulkan_diag 0` after each test.
+
+On-device tests are still required to identify whether the main darkness comes
+from scene lighting, film processing, or compositor colour-space assumptions,
+and whether hollow player models come from culling, skinning or missed draws.
+These flags deliberately avoid modifying original shaders/assets or the GLES
+fallback. Vulkan remains non-default.
