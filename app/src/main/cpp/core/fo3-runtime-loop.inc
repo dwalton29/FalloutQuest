@@ -2070,7 +2070,8 @@ private:
                         matrices[i]=Multiply(ProjectionFromFov(views[i].fov,0.04f,125000.0f/FO3_UNITS_PER_METRE_Q715),ViewFromPose(poses[i]));
                     }
                     const Fo3Environment& clearEnvironment=GetFo3Environment();
-                    const float* clearHorizon=clearEnvironment.valid?clearEnvironment.horizon:nullptr;
+                    static constexpr float fallbackHorizon[3]{0.018f,0.028f,0.020f};
+                    const float* clearHorizon=clearEnvironment.valid?clearEnvironment.horizon:fallbackHorizon;
                     const bool begun=fqvk::BeginWorldProbe(matrices[0].m,matrices[1].m,&poses[0].position.x,&poses[1].position.x,IsFo3LoadingVisible(),clearHorizon);
                     if(vulkanGameplay_&&!begun){rendered=false;exitRequested_=true;}
                 }
