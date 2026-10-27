@@ -30,6 +30,9 @@ struct Hooks {
 };
 inline Hooks hooks;
 inline bool recording=false;
+// Transitional scene traversal still uses GLES state/resource setup. When native
+// presentation owns output, only Vulkan executes the shared draw submissions.
+inline bool gameplayPresentation=false;
 inline const float* instanceMatrices=nullptr;
 inline size_t instanceMatrixCount=0;
 inline void Texture(uint32_t id,int w,int h,const uint8_t* rgba,bool repeat=true,bool mips=true) {

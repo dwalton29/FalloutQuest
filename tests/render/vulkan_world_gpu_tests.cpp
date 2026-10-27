@@ -20,12 +20,79 @@ XrResult XRAPI_CALL Physical(XrInstance,const XrVulkanGraphicsDeviceGetInfoKHR* 
 XrResult XRAPI_CALL Device(XrInstance,const XrVulkanDeviceCreateInfoKHR* info,VkDevice* out,VkResult* result) {
     *result=vkCreateDevice(info->vulkanPhysicalDevice,info->vulkanCreateInfo,nullptr,out);return XR_SUCCESS;
 }
+// Fake OpenXR compositor with real software-GPU images. This tests the native
+// image/view/render/release path, not a real OpenXR runtime or headset.
+std::vector<fqvk::Image> runtimeImages;
+std::vector<uint8_t> submittedPixels;
+uint32_t nextImage=0,acquiredImage=0,releases=0,destroys=0;
+bool acquired=false,waited=false,timeoutWait=false,unsupportedFormat=false;
+XrResult XRAPI_CALL Formats(XrSession,uint32_t capacity,uint32_t* count,int64_t* out) {
+    *count=1;if(capacity)*out=unsupportedFormat?VK_FORMAT_R8G8B8A8_SRGB:VK_FORMAT_R8G8B8A8_UNORM;return XR_SUCCESS;
+}
+XrResult XRAPI_CALL Swapchain(XrSession,const XrSwapchainCreateInfo* info,XrSwapchain* out) {
+    assert(info->arraySize==2&&info->sampleCount==1&&info->usageFlags==XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT);
+    assert(runtimeImages.empty());
+    for(int i=0;i<3;++i)runtimeImages.push_back(fqvk::renderer->MakeImage(info->width,info->height,VkFormat(info->format),
+        VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT|VK_IMAGE_USAGE_TRANSFER_SRC_BIT,VK_IMAGE_ASPECT_COLOR_BIT));
+    *out=reinterpret_cast<XrSwapchain>(uintptr_t(3));return XR_SUCCESS;
+}
+XrResult XRAPI_CALL Images(XrSwapchain,uint32_t capacity,uint32_t* count,XrSwapchainImageBaseHeader* out) {
+    *count=uint32_t(runtimeImages.size());
+    if(capacity)for(size_t i=0;i<runtimeImages.size();++i) {
+        auto* image=reinterpret_cast<XrSwapchainImageVulkan2KHR*>(out)+i;
+        assert(image->type==XR_TYPE_SWAPCHAIN_IMAGE_VULKAN2_KHR);image->image=runtimeImages[i].image;
+    }
+    return XR_SUCCESS;
+}
+XrResult XRAPI_CALL Acquire(XrSwapchain,const XrSwapchainImageAcquireInfo*,uint32_t* index) {
+    assert(!acquired);acquired=true;waited=false;acquiredImage=nextImage++%3;*index=acquiredImage;return XR_SUCCESS;
+}
+XrResult XRAPI_CALL Wait(XrSwapchain,const XrSwapchainImageWaitInfo*) {
+    assert(acquired&&!waited);if(timeoutWait)return XR_TIMEOUT_EXPIRED;waited=true;return XR_SUCCESS;
+}
+XrResult XRAPI_CALL Release(XrSwapchain,const XrSwapchainImageReleaseInfo*) {
+    assert(acquired&&waited);
+    auto& r=*fqvk::renderer;
+    // A signaled submission fence must precede release to the runtime.
+    assert(vkGetFenceStatus(r.device,r.fence)==VK_SUCCESS);
+    auto readback=r.MakeBuffer(64*64*2*4,VK_BUFFER_USAGE_TRANSFER_DST_BIT,true);
+    r.Transfer([&](VkCommandBuffer cb){
+        VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};b.image=runtimeImages[acquiredImage].image;
+        b.subresourceRange={VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,2};b.srcQueueFamilyIndex=b.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;
+        b.oldLayout=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;b.newLayout=VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        b.srcAccessMask=VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;b.dstAccessMask=VK_ACCESS_TRANSFER_READ_BIT;
+        vkCmdPipelineBarrier(cb,VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,0,0,nullptr,0,nullptr,1,&b);
+        VkBufferImageCopy copy{};copy.imageSubresource={VK_IMAGE_ASPECT_COLOR_BIT,0,0,2};copy.imageExtent={64,64,1};
+        vkCmdCopyImageToBuffer(cb,b.image,b.newLayout,readback.buffer,1,&copy);
+        b.oldLayout=b.newLayout;b.newLayout=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        b.srcAccessMask=VK_ACCESS_TRANSFER_READ_BIT;b.dstAccessMask=VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        vkCmdPipelineBarrier(cb,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,0,0,nullptr,0,nullptr,1,&b);
+        VkBufferMemoryBarrier host{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};host.buffer=readback.buffer;host.size=VK_WHOLE_SIZE;
+        host.srcQueueFamilyIndex=host.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;
+        host.srcAccessMask=VK_ACCESS_TRANSFER_WRITE_BIT;host.dstAccessMask=VK_ACCESS_HOST_READ_BIT;
+        vkCmdPipelineBarrier(cb,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_HOST_BIT,0,0,nullptr,1,&host,0,nullptr);
+    });
+    submittedPixels.assign(static_cast<uint8_t*>(readback.mapped),static_cast<uint8_t*>(readback.mapped)+64*64*2*4);
+    r.Destroy(readback);acquired=waited=false;++releases;return XR_SUCCESS;
+}
+XrResult XRAPI_CALL DestroySwapchain(XrSwapchain) {
+    for(auto& image:runtimeImages)fqvk::renderer->Destroy(image);
+    runtimeImages.clear();acquired=waited=false;++destroys;return XR_SUCCESS;
+}
+
 }
 extern "C" XrResult XRAPI_CALL xrGetInstanceProcAddr(XrInstance,const char* name,PFN_xrVoidFunction* out) {
     if(!std::strcmp(name,"xrGetVulkanGraphicsRequirements2KHR"))*out=reinterpret_cast<PFN_xrVoidFunction>(Requirements);
     else if(!std::strcmp(name,"xrCreateVulkanInstanceKHR"))*out=reinterpret_cast<PFN_xrVoidFunction>(Instance);
     else if(!std::strcmp(name,"xrGetVulkanGraphicsDevice2KHR"))*out=reinterpret_cast<PFN_xrVoidFunction>(Physical);
     else if(!std::strcmp(name,"xrCreateVulkanDeviceKHR"))*out=reinterpret_cast<PFN_xrVoidFunction>(Device);
+    else if(!std::strcmp(name,"xrEnumerateSwapchainFormats"))*out=reinterpret_cast<PFN_xrVoidFunction>(Formats);
+    else if(!std::strcmp(name,"xrCreateSwapchain"))*out=reinterpret_cast<PFN_xrVoidFunction>(Swapchain);
+    else if(!std::strcmp(name,"xrEnumerateSwapchainImages"))*out=reinterpret_cast<PFN_xrVoidFunction>(Images);
+    else if(!std::strcmp(name,"xrAcquireSwapchainImage"))*out=reinterpret_cast<PFN_xrVoidFunction>(Acquire);
+    else if(!std::strcmp(name,"xrWaitSwapchainImage"))*out=reinterpret_cast<PFN_xrVoidFunction>(Wait);
+    else if(!std::strcmp(name,"xrReleaseSwapchainImage"))*out=reinterpret_cast<PFN_xrVoidFunction>(Release);
+    else if(!std::strcmp(name,"xrDestroySwapchain"))*out=reinterpret_cast<PFN_xrVoidFunction>(DestroySwapchain);
     else return XR_ERROR_FUNCTION_UNSUPPORTED;
     return XR_SUCCESS;
 }
@@ -307,7 +374,55 @@ void PostOverlay() {
     for(int eyeIndex=0;eyeIndex<2;++eyeIndex){Near(Pixel(pixels,eyeIndex,32,32,2),1);Near(Pixel(pixels,eyeIndex,32,32,0),0);assert(Pixel(pixels,eyeIndex,48,32,2)<.1f);}
 }
 
+void GameplayPresentation() {
+    const auto xr=reinterpret_cast<XrInstance>(uintptr_t(1));const auto session=reinterpret_cast<XrSession>(uintptr_t(2));
+    assert(fqvk::InitializeWorldProbe(xr,1,64,64));Scene(false);
+    XrGraphicsBindingVulkan2KHR binding{};assert(fqvk::GameplayBinding(binding));
+    assert(binding.type==XR_TYPE_GRAPHICS_BINDING_VULKAN2_KHR&&binding.device==fqvk::renderer->device&&binding.queueIndex==0);
+    assert(fqvk::CreateGameplaySwapchain(session));
+    std::array<XrView,2> views{{{XR_TYPE_VIEW},{XR_TYPE_VIEW}}};views[0].pose.orientation.w=views[1].pose.orientation.w=1;
+    views[1].pose.position.x=.064f;views[0].fov={-.7f,.7f,.8f,-.8f};views[1].fov=views[0].fov;
+    std::array<XrCompositionLayerProjectionView,2> output{};
+    const float left[]{1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1};
+    const float right[]{1,0,0,0,0,1,0,0,0,0,1,0,.8f,0,0,1},eye[]{0,0,2};
+    auto upper=Quad(false);for(size_t i=0;i<4;++i)upper[i*18+1]=upper[i*18+1]*.5f+.5f;
+    const uint32_t indices[]{0,1,2,0,2,3};fqvk::Mesh(40,upper.data(),4,18,indices,6);
+    const uint32_t initialReleases=releases;
+    for(int frame=0;frame<6;++frame) {
+        const bool loading=frame<3;
+        assert(fqvk::BeginWorldProbe(left,right,eye,eye,loading));fqgl::state.texture2d[0].Change(5);
+        fqvk::hooks.draw(1,40,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);
+        if(!loading)fqvk::PostProcess({});
+        assert(fqvk::PresentGameplay(views.data(),output.data()));
+        assert(releases==initialReleases+frame+1&&!acquired&&!fqvk::recording);
+        for(uint32_t e=0;e<2;++e) {
+            assert(output[e].subImage.swapchain==fqvk::renderer->xrSwapchain&&output[e].subImage.imageArrayIndex==e);
+            assert(output[e].subImage.imageRect.extent.width==64&&!output[e].next);
+            assert(output[e].pose.position.x==views[e].pose.position.x&&output[e].fov.angleUp==views[e].fov.angleUp);
+        }
+        auto pixel=[&](int e,int x,int y){return submittedPixels[(e*64*64+y*64+x)*4];};
+        assert(pixel(0,32,16)>100&&pixel(1,55,16)>100);
+        assert(pixel(1,32,16)<5&&pixel(0,32,48)<5); // stereo separation + upright orientation
+    }
+    // Runtime suspension can retain the resources; rebuilding swapchains keeps resident NIF assets.
+    const auto mesh=fqvk::renderer->meshes.at(40).vertices.buffer;
+    fqvk::DestroyGameplaySwapchain();assert(runtimeImages.empty());
+    assert(fqvk::CreateGameplaySwapchain(session));assert(fqvk::renderer->meshes.at(40).vertices.buffer==mesh);
+    assert(fqvk::BeginWorldProbe(left,right,eye,eye,true));
+    timeoutWait=true;const auto before=releases;
+    assert(!fqvk::PresentGameplay(views.data(),output.data()));
+    assert(acquired&&!waited&&releases==before&&!fqvk::WorldProbeActive());
+    // A failed Vulkan session retains its device until session teardown. No GLES fallback.
+    assert(fqvk::renderer&&fqvk::renderer->device==binding.device);
+    fqvk::DestroyGameplaySwapchain();fqvk::ShutdownWorldProbe();timeoutWait=false;
+    assert(fqvk::InitializeWorldProbe(xr,1,64,64));unsupportedFormat=true;
+    assert(!fqvk::CreateGameplaySwapchain(session));assert(runtimeImages.empty());
+    fqvk::ShutdownWorldProbe();unsupportedFormat=false;
+    std::cout<<"Vulkan compositor software test: layered UNORM output, image rotation, upright stereo, film output, fence-before-release, projection views, recreation, timeout and format rejection passed\n";
+}
+
 int main() {
+    GameplayPresentation();
     for(int mode=0;mode<4;++mode) {
         assert(fqvk::InitializeWorldProbe(reinterpret_cast<XrInstance>(uintptr_t(1)),1,64,64));
         Scene(mode==1,mode==2,mode==3);fqvk::ShutdownWorldProbe();assert(!fqvk::WorldProbeActive());

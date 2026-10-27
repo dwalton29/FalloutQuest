@@ -1,7 +1,83 @@
-# Vulkan migration status — v245
+# Vulkan migration status — v246
 
-The full migration is **incomplete**. GLES remains the only gameplay presentation
-backend. No Vulkan-default or 72 Hz claim is made.
+The full migration is **incomplete**. Debug/Profile builds now offer experimental
+Vulkan OpenXR gameplay presentation. GLES remains the default. Native Vulkan
+session/swapchain code and software-GPU output are verified; actual headset
+operation and performance are **unverified**. No Vulkan-default or 72 Hz claim is made.
+
+## v246: experimental Vulkan presentation
+
+`debug.falloutquest.renderer=vulkan` creates an actual
+`XrGraphicsBindingVulkan2KHR` session using the runtime-selected Vulkan device
+and graphics queue. Format enumeration selects linear RGBA8/BGRA8 UNORM;
+unsupported formats or layered-swapchain creation fail explicitly. One two-layer
+swapchain uses native Vulkan image views and multiview framebuffers. The native
+world/terrain/actors/sky/water/UI/film output is sampled by a native stereo copy
+pass directly into those runtime images. No GLES texture copy or readback feeds
+headset output. Array indices 0/1 and the original located poses/FOVs are submitted
+by the existing `xrWaitFrame` / `xrBeginFrame` / `xrEndFrame` loop.
+
+One scene traversal records both cameras. GLES draw execution is suppressed in
+this mode, including Pip-Boy RTT draws; Vulkan executes supported shared
+submissions. **GLES still creates programs/resources, tracks state, and performs
+framebuffer/post setup. An active GLES context is still required.** This is the
+next architectural dependency to remove, not a completed independent renderer.
+The standalone probe keeps its previous concurrent GLES drawing behaviour.
+
+Acquisition/wait happens once per stereo frame. A timeout is not treated as
+image readiness. The GPU fence completes before release, with runtime images in
+`COLOR_ATTACHMENT_OPTIMAL`. Runtime images are borrowed; only application views
+and framebuffers are destroyed. STOPPING drains and destroys native swapchains;
+READY recreates them while retaining resident Vulkan resources and resets
+exposure. Focus/input/gameplay pause behaviour is shared with GLES. Session or
+instance loss currently exits through the existing lifecycle; relaunch is
+required. Automatic session-loss recovery is still unfinished.
+
+Failure stops native presentation and submits no projection layer; it never
+creates a GLES session while claiming Vulkan output. Logs distinguish
+`FQ RENDERER session=Vulkan presentation=Vulkan`, `FQVK FRAME`, and
+`FQ PRESENTED api=Vulkan` (the latter follows a successful `xrEndFrame`).
+
+Native MSAA, depth submission, foveation and planar reflections remain unfinished.
+Vulkan uses one sample and color-only composition. Existing terrain depth-state
+fixes are retained, with fusion quarantined. Uploads and end-of-frame fences
+remain blocking. Ordinary FQPerf GPU timers still measure GLES work, so native
+captures are marked `benchmarkValid=0`; `FQVK FRAME stereoGpuMs` covers the native
+recorded passes including the final swapchain draw, excluding uploads and XR wait.
+Neither metric proves Quest performance before hardware testing.
+
+Software Vulkan tests exercise real two-layer UNORM runtime-style images,
+multiple acquired image indices, upright asymmetric stereo geometry, loading
+and film output, projection metadata, fence-before-release, recreation with
+resident resources retained, timeout rejection and unsupported-format rejection.
+Compositor callbacks are mocked; this is not a real OpenXR runtime test.
+
+### Headset validation (required before promotion)
+
+Install v246 Debug or Profile, then use PowerShell from platform-tools:
+
+```powershell
+.\adb shell am force-stop com.falloutquest.app
+.\adb shell setprop debug.falloutquest.vulkan_probe 0
+.\adb shell setprop debug.falloutquest.renderer vulkan
+.\adb logcat -c
+```
+
+Launch from the headset. Capture `adb logcat` and verify the session/presentation
+logs above. Check loading artwork/models, Megaton, Wasteland terrain and an
+interior; verify eye separation and orientation, NPC/weapon animation, FaceGen,
+water, exposure changes, HUD/dialogue/barter/loot, Pip-Boy, lockpick and pause.
+Remove/replace the headset and suspend/resume the app; confirm swapchain
+recreation and retained scene resources. Transition exterior/interior repeatedly.
+Record visible regressions and skipped draws before comparing matched scenes.
+No Quest measurements have been collected here.
+
+Restore default GLES after testing:
+
+```powershell
+.\adb shell am force-stop com.falloutquest.app
+.\adb shell setprop debug.falloutquest.renderer gles
+```
 
 ## Implemented source
 
@@ -80,13 +156,14 @@ The dump is once per process, after a nonempty world pass. Disable and restart:
 .\adb shell am force-stop com.falloutquest.app
 ```
 
-`debug.falloutquest.renderer=vulkan` deliberately logs the parity gate and keeps
-GLES selected. It must not select an incomplete game renderer.
+Use `renderer=gles` for the probe instructions above. `renderer=vulkan` selects
+the explicitly experimental presentation path described at the top of this file.
 
 ## Unfinished implementation (not merely headset validation)
 
-- Vulkan OpenXR graphics binding, layered swapchain presentation, acquisition /
-  release and session-loss recreation; current device handshake alone is not M1.
+- Actual headset verification of the new Vulkan OpenXR binding, stereo layered
+  swapchain and compositor submission. Automatic session-loss recovery is pending;
+  STOPPING/READY swapchain recreation is implemented and software-tested.
 - Complete actor/weapon and Pip-Boy in-game visual validation. Loading and
   lockpick native models still require full in-game animation/alpha comparison. Native pipeline state now handles reversed/front culling, depth bias
   and separate color/alpha blend operations, but requires scene validation.
@@ -121,9 +198,9 @@ water refraction, repeated snapshots, opaque depth preservation, the native
 exposure/bloom/film chain and recreation. These pixel tests passed locally on Mesa llvmpipe after correcting
 stereo timestamp query allocation. Shader compile/link checks also passed. It is not an OpenXR compositor or Quest test.
 
-Next implement Vulkan OpenXR presentation, complete the optional
-planar reflection path and validate full actor/material scenes before switching
-OpenXR presentation.
+Next validate experimental Vulkan gameplay on Quest, remove GLES state/resource
+setup through backend-independent submissions, complete native depth/MSAA and
+planar reflections, and validate full actor/material scenes.
 Replace the mirror with one backend-independent stereo draw list as those passes
 become native. Resolve terrain from original ESM/DDS data and captured output.
 Only enable Vulkan-default after the complete on-device flow passes and the six

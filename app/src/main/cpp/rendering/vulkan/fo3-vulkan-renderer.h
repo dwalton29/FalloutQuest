@@ -15,5 +15,10 @@ void ShutdownWorldProbe();
 bool BeginWorldProbe(const float* leftMvp,const float* rightMvp,
                      const float* leftEye,const float* rightEye,bool loading=false);
 void EndWorldProbe();
+// Experimental compositor owner; resource submission still uses the shared bridge.
+bool GameplayBinding(XrGraphicsBindingVulkan2KHR& binding);
+bool CreateGameplaySwapchain(XrSession session);
+void DestroyGameplaySwapchain();
+bool PresentGameplay(const XrView* views,XrCompositionLayerProjectionView* output);
 bool WorldProbeActive();
 }

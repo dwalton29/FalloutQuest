@@ -14,6 +14,9 @@ int main() {
     assert(writes==2&&driverCalls["glUniform1f"]==1); // mirror sees cache hits too.
     glDrawArrays(GL_TRIANGLES,0,6);assert(draws==0);
     fqvk::recording=true;glDrawArrays(GL_TRIANGLES,0,6);assert(draws==1);
+    fqvk::gameplayPresentation=true;
+    glDrawArrays(GL_TRIANGLES,0,6);assert(draws==2&&driverCalls["glDrawArrays"]==2);
+    fqvk::gameplayPresentation=false;
     fqvk::recording=false;fqvk::hooks={};glDrawArrays(GL_TRIANGLES,0,6);
-    assert(draws==1&&driverCalls["glDrawArrays"]==3); // GLES remains usable in all modes.
+    assert(draws==2&&driverCalls["glDrawArrays"]==3); // GLES remains usable in all modes.
 }

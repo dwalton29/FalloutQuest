@@ -348,6 +348,20 @@ public:
         if (!CreateSystem()) return false;
         FQ_LOGI("Q7.1 BOOT STEP: CreateEgl");
         if (!CreateEgl()) return false;
+#ifdef FQ_ENABLE_VULKAN
+        if(vulkanGameplay_) {
+            uint32_t count=0;
+            std::array<XrViewConfigurationView,2> config{{{XR_TYPE_VIEW_CONFIGURATION_VIEW},{XR_TYPE_VIEW_CONFIGURATION_VIEW}}};
+            if(!CheckXr(xrEnumerateViewConfigurationViews(instance_,systemId_,XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO,
+                2,&count,config.data()),"Vulkan view configuration")||count!=2)return false;
+            const uint32_t width=uint32_t(std::max(config[0].recommendedImageRectWidth,config[1].recommendedImageRectWidth)*fqopaque::Options().scale);
+            const uint32_t height=uint32_t(std::max(config[0].recommendedImageRectHeight,config[1].recommendedImageRectHeight)*fqopaque::Options().scale);
+            if(!width||!height||width>std::min(config[0].maxImageRectWidth,config[1].maxImageRectWidth)||
+               height>std::min(config[0].maxImageRectHeight,config[1].maxImageRectHeight))return false;
+            for(auto& eye:eyes_){eye.width=int32_t(width);eye.height=int32_t(height);}
+            if(!fqvk::InitializeWorldProbe(instance_,systemId_,width,height,app_->activity->internalDataPath))return false;
+        }
+#endif
         FQ_LOGI("Q7.1 BOOT STEP: CreateSession");
         if (!CreateSession()) return false;
         FQ_LOGI("Q7.1 BOOT STEP: CreateInputActions");
@@ -357,7 +371,7 @@ public:
         FQ_LOGI("Q7.1 BOOT STEP: CreateSwapchains");
         if (!CreateSwapchains()) return false;
 #ifdef FQ_ENABLE_VULKAN
-        if(vulkanProbeRequested_)
+        if(vulkanProbeRequested_&&!vulkanGameplay_)
             fqvk::InitializeWorldProbe(instance_,systemId_,eyes_[0].width,eyes_[0].height,app_->activity->internalDataPath);
 #endif
         FQ_LOGI("Q7.1 BOOT STEP: CreateSceneRenderer");
@@ -422,6 +436,10 @@ public:
             if (eye.depthHandle != XR_NULL_HANDLE) xrDestroySwapchain(eye.depthHandle);
             if (eye.handle != XR_NULL_HANDLE) xrDestroySwapchain(eye.handle);
         }
+#ifdef FQ_ENABLE_VULKAN
+        fqvk::DestroyGameplaySwapchain();
+#endif
+        if (scratchColor_) glDeleteTextures(1,&scratchColor_);
         if (localSpace_ != XR_NULL_HANDLE) xrDestroySpace(localSpace_);
         if (session_ != XR_NULL_HANDLE) xrDestroySession(session_);
         if (actionSet_ != XR_NULL_HANDLE) xrDestroyActionSet(actionSet_);
@@ -476,16 +494,19 @@ private:
         char probe[PROP_VALUE_MAX]{},selection[PROP_VALUE_MAX]{};
         __system_property_get("debug.falloutquest.vulkan_probe",probe);
         __system_property_get("debug.falloutquest.renderer",selection);
-        if(!std::strcmp(selection,"vulkan"))
-            FQ_LOGI("FQ RENDERER requested=vulkan selected=gles reason=Vulkan-feature-parity-incomplete use-vulkan_probe-for-world-validation");
-        if(std::atoi(probe)==1)for(const auto& extension:available)
+        vulkanGameplay_=!std::strcmp(selection,"vulkan");
+        const bool wantVulkan=vulkanGameplay_||std::atoi(probe)==1;
+        if(wantVulkan)for(const auto& extension:available)
             if(!std::strcmp(extension.extensionName,XR_KHR_VULKAN_ENABLE2_EXTENSION_NAME)) {
                 vulkanProbeRequested_=true;
                 extensions.push_back(XR_KHR_VULKAN_ENABLE2_EXTENSION_NAME);
-                FQ_LOGI("FQVK probe requested; enabling OpenXR Vulkan enable2 alongside GLES");
             }
-        if(std::atoi(probe)==1&&!vulkanProbeRequested_)
-            FQ_LOGI("FQVK unavailable: OpenXR Vulkan enable2 absent; keeping GLES");
+        if(wantVulkan&&!vulkanProbeRequested_) {
+            FQ_LOGE("FQVK requested backend unavailable: OpenXR enable2 absent; fallback=none");
+            if(vulkanGameplay_)return false;
+        }
+        FQ_LOGI("FQ RENDERER requested=%s selected=%s experimental=%d sceneSubmission=%s",
+            selection[0]?selection:"gles",vulkanGameplay_?"vulkan":"gles",vulkanGameplay_,vulkanGameplay_?"gles-bridge":"gles");
 #endif
 #endif
         FQ_LOGI("XR compositor depth extension enabled=%d", depthSubmissionEnabled_);
@@ -567,6 +588,15 @@ private:
     }
 
     bool CreateSession() {
+#ifdef FQ_ENABLE_VULKAN
+        if(vulkanGameplay_) {
+            XrGraphicsBindingVulkan2KHR binding{XR_TYPE_GRAPHICS_BINDING_VULKAN2_KHR};
+            if(!fqvk::GameplayBinding(binding))return false;
+            XrSessionCreateInfo info{XR_TYPE_SESSION_CREATE_INFO};info.next=&binding;info.systemId=systemId_;
+            return CheckXr(xrCreateSession(instance_,&info,&session_),"xrCreateSession(Vulkan)");
+        }
+#endif
+        FQ_LOGI("FQ RENDERER session=GLES presentation=GLES");
         XrGraphicsBindingOpenGLESAndroidKHR binding{XR_TYPE_GRAPHICS_BINDING_OPENGL_ES_ANDROID_KHR};
         binding.display = eglDisplay_;
         binding.config = eglConfig_;
@@ -787,6 +817,20 @@ private:
                      configViews[1].maxSwapchainSampleCount);
         Q2060SetOpenXrSampleInfo(q2060RecommendedSamples, q2060MaxSamples);
 
+#ifdef FQ_ENABLE_VULKAN
+        if(vulkanGameplay_) {
+            depthSubmissionEnabled_=false; // Native depth submission requires a dedicated depth swapchain.
+            if(!fqvk::CreateGameplaySwapchain(session_))return false;
+            vulkanSwapchainsReady_=true;
+            // Transitional GLES submission target only. It is never submitted to OpenXR.
+            glGenTextures(1,&scratchColor_);glBindTexture(GL_TEXTURE_2D,scratchColor_);
+            glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA8,eyes_[0].width,eyes_[0].height,0,GL_RGBA,GL_UNSIGNED_BYTE,nullptr);
+            glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_LINEAR);
+            // Quest is opaque; query the common blend modes below for both backends.
+        } else
+#endif
+        {
         uint32_t formatCount = 0;
         if (!CheckXr(xrEnumerateSwapchainFormats(session_, 0, &formatCount, nullptr),
                      "xrEnumerateSwapchainFormats(count)")) return false;
@@ -873,6 +917,7 @@ private:
 
         }
 
+        } // GLES swapchains
         uint32_t blendCount = 0;
         if (CheckXr(xrEnumerateEnvironmentBlendModes(instance_, systemId_,
                         XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO, 0, &blendCount, nullptr),
@@ -1210,6 +1255,12 @@ private:
                 FQ_LOGI("OpenXR session state -> %d", static_cast<int>(sessionState_));
 
                 if (sessionState_ == XR_SESSION_STATE_READY && !sessionRunning_) {
+#ifdef FQ_ENABLE_VULKAN
+                    if(vulkanGameplay_&&!vulkanSwapchainsReady_) {
+                        if(!fqvk::CreateGameplaySwapchain(session_)){exitRequested_=true;return;}
+                        fqvk::ResetExposure();vulkanSwapchainsReady_=true;
+                    }
+#endif
                     XrSessionBeginInfo begin{XR_TYPE_SESSION_BEGIN_INFO};
                     begin.primaryViewConfigurationType = XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO;
                     if (CheckXr(xrBeginSession(session_, &begin), "xrBeginSession")) {
@@ -1220,6 +1271,9 @@ private:
                     FlushFo3PlayerState();
                     CheckXr(xrEndSession(session_), "xrEndSession");
                     sessionRunning_ = false;
+#ifdef FQ_ENABLE_VULKAN
+                    if(vulkanGameplay_) {fqvk::DestroyGameplaySwapchain();vulkanSwapchainsReady_=false;}
+#endif
                 } else if (sessionState_ == XR_SESSION_STATE_EXITING ||
                            sessionState_ == XR_SESSION_STATE_LOSS_PENDING) {
                     exitRequested_ = true;
@@ -1542,10 +1596,10 @@ private:
 #endif
             char model[PROP_VALUE_MAX]{};__system_property_get("ro.product.model",model);
             std::snprintf(fqperf::capture.configuration,sizeof(fqperf::capture.configuration),
-                "source=%s native=%s hdrPolicy=reflection-before-main-clear headset=%s eye0=%dx%d eye1=%dx%d msaaAtStart=%d renderScale=%.2f cpuSkin=%d fastMaterial=%d lodRadius20=%d lodMinimal=%d lodClipBypass=%d terrainFusion=%d hdrRttRequested=%d renderer=gles vulkanProbe=%d benchmarkValid=%d",
+                "source=%s native=%s hdrPolicy=reflection-before-main-clear headset=%s eye0=%dx%d eye1=%dx%d msaaAtStart=%d renderScale=%.2f cpuSkin=%d fastMaterial=%d lodRadius20=%d lodMinimal=%d lodClipBypass=%d terrainFusion=%d hdrRttRequested=%d renderer=%s vulkanProbe=%d benchmarkValid=%d",
                 FQ_SOURCE_COMMIT,nativeVariant,model,eyes_[0].width,eyes_[0].height,eyes_[1].width,eyes_[1].height,
-                q2060MsaaActive?q2060MsaaSamples:1,fqopaque::Options().scale,fqactor::CpuReference(),
-                fqopaque::Options().fastMaterial,fqopaque::Options().lodRadius20,fqopaque::Options().lodMinimal,fqopaque::Options().lodClipBypass,!fo3terrain::LegacyLayers(),fqopaque::Options().hdrRtt,vulkanProbe,!vulkanProbe);
+                vulkanGameplay_?1:q2060MsaaActive?q2060MsaaSamples:1,fqopaque::Options().scale,fqactor::CpuReference(),
+                fqopaque::Options().fastMaterial,fqopaque::Options().lodRadius20,fqopaque::Options().lodMinimal,fqopaque::Options().lodClipBypass,!fo3terrain::LegacyLayers(),fqopaque::Options().hdrRtt,vulkanGameplay_?"vulkan-experimental":"gles",vulkanProbe,!vulkanProbe);
         }
         const auto waitStarted=fqopaque::Clock::now();
         XrFrameWaitInfo waitInfo{XR_TYPE_FRAME_WAIT_INFO};
@@ -1994,14 +2048,15 @@ private:
                         poses[i]=IsFo3LoadingVisible()?views[i].pose:ToVirtualPose(views[i].pose);
                         matrices[i]=Multiply(ProjectionFromFov(views[i].fov,0.04f,125000.0f/FO3_UNITS_PER_METRE_Q715),ViewFromPose(poses[i]));
                     }
-                    fqvk::BeginWorldProbe(matrices[0].m,matrices[1].m,&poses[0].position.x,&poses[1].position.x,IsFo3LoadingVisible());
+                    const bool begun=fqvk::BeginWorldProbe(matrices[0].m,matrices[1].m,&poses[0].position.x,&poses[1].position.x,IsFo3LoadingVisible());
+                    if(vulkanGameplay_&&!begun){rendered=false;exitRequested_=true;}
                 }
 #endif
-                for (uint32_t eye = 0; eye < 2; ++eye) {
+                for (uint32_t eye = 0; eye < (vulkanGameplay_?1u:2u)&&rendered; ++eye) {
                     fqperf::Scope eyeScope(eye==0?fqperf::Eye0:fqperf::Eye1);
                     rendered = RenderEye(eye, views[eye], projectionViews[eye]) && rendered;
 #ifdef FQ_ENABLE_VULKAN
-                    if(eye==0)fqvk::EndWorldProbe();
+                    if(eye==0&&!vulkanGameplay_)fqvk::EndWorldProbe();
 #endif
                     if(fqperf::capture.recording) {
                         if(!IsFo3LoadingVisible()) {
@@ -2014,6 +2069,12 @@ private:
                         }
                     }
                 }
+#ifdef FQ_ENABLE_VULKAN
+                if(vulkanGameplay_) {
+                    rendered=fqvk::PresentGameplay(views.data(),projectionViews.data())&&rendered;
+                    if(!rendered){FQ_LOGE("FQVK gameplay presentation failed; exiting without GLES fallback");exitRequested_=true;}
+                }
+#endif
                 if(fqperf::capture.recording) {
                     perf.rendered=rendered;
                 }
@@ -2055,6 +2116,9 @@ private:
         const auto submitStarted=fqloading::Now();
         const bool q1700FrameSubmitted =
             CheckXr(xrEndFrame(session_, &endInfo), "xrEndFrame");
+        if(q1700FrameSubmitted&&layerCount&&(presentationFrames_++%120)==0)
+            FQ_LOGI("FQ PRESENTED api=%s stereo=%s frame=%llu",vulkanGameplay_?"Vulkan":"GLES",
+                vulkanGameplay_?"multiview-array":"sequential",(unsigned long long)presentationFrames_);
         const double perfEndUs=double(fqloading::Now()-submitStarted);
         const bool perfLoadingAtSubmit=IsFo3LoadingVisible();
         if(IsFo3LoadingVisible()) {
@@ -2141,7 +2205,7 @@ private:
             perf.loading=perf.loading||perfLoadingAtSubmit;
             perf.blocked=Fo3GameplayBlocked();perf.submitted=q1700FrameSubmitted&&layerCount>0;
             perf.cell=gCurrentCellFormId;perf.world=gExteriorWorldspaceQ1890;
-            perf.sceneSamples=q2060MsaaActive?q2060MsaaSamples:1;
+            perf.sceneSamples=vulkanGameplay_?1:q2060MsaaActive?q2060MsaaSamples:1;
             perf.streaming=gExteriorStreamBusyQ1890;
             perf.paletteSkipped=perf.loading?0:fqactor::npc.paletteSkipped;
             perf.draws=fqgl::counters.draws-perfGlStart.draws;
@@ -2165,14 +2229,16 @@ private:
         const auto acquireStarted=fqopaque::Clock::now();
         uint32_t imageIndex = 0;
         XrSwapchainImageAcquireInfo acquireInfo{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
-        if (!CheckXr(xrAcquireSwapchainImage(eye.handle, &acquireInfo, &imageIndex),
-                     "xrAcquireSwapchainImage")) return false;
         XrSwapchainImageWaitInfo waitInfo{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};
         waitInfo.timeout = XR_INFINITE_DURATION;
+        if(!vulkanGameplay_) {
+        if (!CheckXr(xrAcquireSwapchainImage(eye.handle, &acquireInfo, &imageIndex),
+                     "xrAcquireSwapchainImage")) return false;
         if (!CheckXr(xrWaitSwapchainImage(eye.handle, &waitInfo), "xrWaitSwapchainImage")) {
             XrSwapchainImageReleaseInfo release{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
             xrReleaseSwapchainImage(eye.handle, &release);
             return false;
+        }
         }
         uint32_t depthIndex = 0;
         bool depthReady = false;
@@ -2193,7 +2259,7 @@ private:
 
         glBindFramebuffer(GL_FRAMEBUFFER, framebuffer_);
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
-                               eye.images[imageIndex].image, 0);
+                               vulkanGameplay_?scratchColor_:eye.images[imageIndex].image, 0);
         const bool loadingEye=IsFo3LoadingVisible();
         if(!loadingEye) {
             Q1280BeginEyePostQ1280(framebuffer_, eye.width, eye.height);
@@ -2438,6 +2504,7 @@ private:
         gpuEye.Finish();
         glFlush();
 
+        if(vulkanGameplay_)return rendered; // Native compositor acquisition/release happens once after stereo recording.
         XrSwapchainImageReleaseInfo releaseInfo{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
         CheckXr(xrReleaseSwapchainImage(eye.handle, &releaseInfo), "xrReleaseSwapchainImage");
 
@@ -2462,6 +2529,10 @@ private:
 
 private:
     android_app* app_{};
+    bool vulkanGameplay_{false};
+    bool vulkanSwapchainsReady_{false};
+    uint64_t presentationFrames_{0};
+    GLuint scratchColor_{0};
     XrInstance instance_{XR_NULL_HANDLE};
     XrSystemId systemId_{XR_NULL_SYSTEM_ID};
     XrSession session_{XR_NULL_HANDLE};

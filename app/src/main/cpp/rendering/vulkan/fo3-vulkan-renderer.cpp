@@ -116,6 +116,11 @@ public:
     std::vector<Buffer> retiredBuffers;std::vector<Image> retiredImages;
     uint64_t draws=0,vertices=0,skipped=0,frames=0;bool begun=false;
     bool failed=false;
+    // The OpenXR runtime owns these images. Only our views/framebuffers are destroyed.
+    XrInstance xrInstance{};XrSession xrSession{};XrSwapchain xrSwapchain{};
+    std::vector<PostTarget> xrTargets;
+    VkRenderPass xrPass{};VkPipeline xrPipeline{};
+    bool gameplay=false;
     std::string outputDirectory;
     bool dumped=false,loadingFrame=false;
     uint32_t MemoryType(uint32_t bits,VkMemoryPropertyFlags flags) {
@@ -297,7 +302,7 @@ public:
         Destroy(staging);return image;
     }
     void Initialize(XrInstance xr,XrSystemId system,uint32_t w,uint32_t h) {
-        width=w;height=h;
+        width=w;height=h;xrInstance=xr;
         XrGraphicsRequirementsVulkan2KHR req{XR_TYPE_GRAPHICS_REQUIREMENTS_VULKAN2_KHR};
         CheckXr(Proc<PFN_xrGetVulkanGraphicsRequirements2KHR>(xr,"xrGetVulkanGraphicsRequirements2KHR")(xr,system,&req),"Vulkan graphics requirements");
         const XrVersion requested=std::max<XrVersion>(req.minApiVersionSupported,XR_MAKE_VERSION(1,1,0));
@@ -356,7 +361,7 @@ public:
         uint32_t extensionCount=0;vkEnumerateDeviceExtensionProperties(physical,nullptr,&extensionCount,nullptr);
         std::vector<VkExtensionProperties> extensions(extensionCount);vkEnumerateDeviceExtensionProperties(physical,nullptr,&extensionCount,extensions.data());
         const bool density=std::any_of(extensions.begin(),extensions.end(),[](const auto& e){return !std::strcmp(e.extensionName,"VK_EXT_fragment_density_map");});
-        VKLOG("FQVK WORLD PROBE device=%s api=%u.%u multiview=1 fragmentDensityExtension=%d foveationEnabled=0 size=%ux%u stereo=2 defaultRenderer=GLES parity=INCOMPLETE",
+        VKLOG("FQVK WORLD PROBE device=%s api=%u.%u multiview=1 fragmentDensityExtension=%d foveationEnabled=0 size=%ux%u stereo=2 presentation=unbound parity=INCOMPLETE",
               properties.deviceName,VK_VERSION_MAJOR(properties.apiVersion),VK_VERSION_MINOR(properties.apiVersion),density,width,height);
     }
     void CreatePass() {
@@ -634,26 +639,30 @@ public:
         VkFramebufferCreateInfo overlay{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};overlay.renderPass=resumePass;overlay.attachmentCount=2;overlay.pAttachments=overlayViews;
         overlay.width=width;overlay.height=height;overlay.layers=1;
         Check(vkCreateFramebuffer(device,&overlay,nullptr,&postOverlayFramebuffer),"post overlay framebuffer");
-        for(int kind=4;kind<9;++kind) {
-            std::array<VkPipelineShaderStageCreateInfo,2> stages{};
-            for(int i=0;i<2;++i){stages[i].sType=VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;stages[i].stage=i?VK_SHADER_STAGE_FRAGMENT_BIT:VK_SHADER_STAGE_VERTEX_BIT;stages[i].module=modules[kind][i];stages[i].pName="main";}
-            VkPipelineVertexInputStateCreateInfo vi{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
-            VkPipelineInputAssemblyStateCreateInfo ia{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};ia.topology=VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-            VkPipelineViewportStateCreateInfo vp{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};vp.viewportCount=vp.scissorCount=1;
-            VkPipelineRasterizationStateCreateInfo rs{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};rs.polygonMode=VK_POLYGON_MODE_FILL;rs.lineWidth=1;
-            VkPipelineMultisampleStateCreateInfo ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};ms.rasterizationSamples=VK_SAMPLE_COUNT_1_BIT;
-            VkPipelineColorBlendAttachmentState colorBlend{};colorBlend.colorWriteMask=0xf;
-            VkPipelineColorBlendStateCreateInfo bs{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};bs.attachmentCount=1;bs.pAttachments=&colorBlend;
-            const VkDynamicState states[]{VK_DYNAMIC_STATE_VIEWPORT,VK_DYNAMIC_STATE_SCISSOR};
-            VkPipelineDynamicStateCreateInfo dynamic{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};dynamic.dynamicStateCount=2;dynamic.pDynamicStates=states;
-            VkGraphicsPipelineCreateInfo ci{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};ci.stageCount=2;ci.pStages=stages.data();ci.pVertexInputState=&vi;ci.pInputAssemblyState=&ia;
-            ci.pViewportState=&vp;ci.pRasterizationState=&rs;ci.pMultisampleState=&ms;ci.pColorBlendState=&bs;ci.pDynamicState=&dynamic;
-            ci.layout=layouts[kind];ci.renderPass=kind==4?adaptPass:postPass;
-            Check(vkCreateGraphicsPipelines(device,VK_NULL_HANDLE,1,&ci,nullptr,&postPipelines[kind-4]),"native post pipeline");
-        }
+        for(int kind=4;kind<9;++kind)
+            postPipelines[kind-4]=MakePostPipeline(kind,kind==4?adaptPass:postPass);
+    }
+    VkPipeline MakePostPipeline(int kind,VkRenderPass targetPass) {
+        std::array<VkPipelineShaderStageCreateInfo,2> stages{};
+        for(int i=0;i<2;++i){stages[i].sType=VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;stages[i].stage=i?VK_SHADER_STAGE_FRAGMENT_BIT:VK_SHADER_STAGE_VERTEX_BIT;stages[i].module=modules[kind][i];stages[i].pName="main";}
+        VkPipelineVertexInputStateCreateInfo vi{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
+        VkPipelineInputAssemblyStateCreateInfo ia{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};ia.topology=VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+        VkPipelineViewportStateCreateInfo vp{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};vp.viewportCount=vp.scissorCount=1;
+        VkPipelineRasterizationStateCreateInfo rs{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};rs.polygonMode=VK_POLYGON_MODE_FILL;rs.lineWidth=1;
+        VkPipelineMultisampleStateCreateInfo ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};ms.rasterizationSamples=VK_SAMPLE_COUNT_1_BIT;
+        VkPipelineColorBlendAttachmentState colorBlend{};colorBlend.colorWriteMask=0xf;
+        VkPipelineColorBlendStateCreateInfo bs{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};bs.attachmentCount=1;bs.pAttachments=&colorBlend;
+        const VkDynamicState states[]{VK_DYNAMIC_STATE_VIEWPORT,VK_DYNAMIC_STATE_SCISSOR};
+        VkPipelineDynamicStateCreateInfo dynamic{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};dynamic.dynamicStateCount=2;dynamic.pDynamicStates=states;
+        VkGraphicsPipelineCreateInfo ci{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};ci.stageCount=2;ci.pStages=stages.data();ci.pVertexInputState=&vi;ci.pInputAssemblyState=&ia;
+        ci.pViewportState=&vp;ci.pRasterizationState=&rs;ci.pMultisampleState=&ms;ci.pColorBlendState=&bs;ci.pDynamicState=&dynamic;
+        ci.layout=layouts[kind];ci.renderPass=targetPass;
+        VkPipeline result{};
+        Check(vkCreateGraphicsPipelines(device,VK_NULL_HANDLE,1,&ci,nullptr,&result),"native fullscreen pipeline");
+        return result;
     }
     using PostValues=std::unordered_map<std::string,std::vector<float>>;
-    void PostDraw(int kind,PostTarget& target,const std::vector<VkDescriptorImageInfo>& images,const PostValues& values) {
+    void PostDraw(int kind,PostTarget& target,const std::vector<VkDescriptorImageInfo>& images,const PostValues& values,bool compositor=false) {
         const auto& shader=shaders::programs[kind];
         const VkDeviceSize alignment=std::max<VkDeviceSize>(16,properties.limits.minUniformBufferOffsetAlignment);
         cursor=(cursor+alignment-1)&~(alignment-1);
@@ -675,17 +684,18 @@ public:
         PostBarrier(target.image,target.initialized?VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:VK_IMAGE_LAYOUT_UNDEFINED,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
             target.initialized?VK_ACCESS_SHADER_READ_BIT:0,VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
             target.initialized?VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT:VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
-        VkRenderPassBeginInfo ri{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};ri.renderPass=kind==4?adaptPass:postPass;ri.framebuffer=target.framebuffer;ri.renderArea={{0,0},{target.width,target.height}};
+        VkRenderPassBeginInfo ri{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};ri.renderPass=compositor?xrPass:kind==4?adaptPass:postPass;ri.framebuffer=target.framebuffer;ri.renderArea={{0,0},{target.width,target.height}};
         vkCmdBeginRenderPass(command,&ri,VK_SUBPASS_CONTENTS_INLINE);
         const VkViewport viewport{0,0,float(target.width),float(target.height),0,1};const VkRect2D scissor{{0,0},{target.width,target.height}};
         vkCmdSetViewport(command,0,1,&viewport);vkCmdSetScissor(command,0,1,&scissor);
-        vkCmdBindPipeline(command,VK_PIPELINE_BIND_POINT_GRAPHICS,postPipelines[kind-4]);
+        vkCmdBindPipeline(command,VK_PIPELINE_BIND_POINT_GRAPHICS,compositor?xrPipeline:postPipelines[kind-4]);
         const uint32_t offset=uint32_t(cursor);cursor+=shader.uniformSize;
         vkCmdBindDescriptorSets(command,VK_PIPELINE_BIND_POINT_GRAPHICS,layouts[kind],0,1,&set,1,&offset);
         vkCmdDraw(command,3,1,0,0);vkCmdEndRenderPass(command);
-        PostBarrier(target.image,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+        if(!compositor)PostBarrier(target.image,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
             VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,VK_ACCESS_SHADER_READ_BIT,VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
-        target.initialized=true;
+        // OpenXR requires COLOR_ATTACHMENT_OPTIMAL on release, not PRESENT_SRC_KHR.
+        target.initialized=!compositor;
     }
     void PostProcess(const PostSettings& settings) {
         if(!begun||!passOpen||failed||postDone)return;
@@ -798,13 +808,19 @@ public:
         VkRenderPassBeginInfo ri{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};ri.renderPass=pass;ri.framebuffer=framebuffer;ri.renderArea={{0,0},{width,height}};ri.clearValueCount=2;ri.pClearValues=clears.data();
         vkCmdBeginRenderPass(command,&ri,VK_SUBPASS_CONTENTS_INLINE);begun=passOpen=true;
     }
-    void End() {
+    void End(PostTarget* output=nullptr) {
         if(!begun)return;
         begun=false;
         if(passOpen)vkCmdEndRenderPass(command);
         passOpen=false;
         if(postDone)PostBarrier(presented.image,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
             VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,VK_ACCESS_SHADER_READ_BIT,VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+        if(output) {
+            if(!loadingFrame&&!postDone)throw std::runtime_error("Vulkan gameplay missing native film pass");
+            if(!postDone)PostBarrier(color,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,VK_ACCESS_SHADER_READ_BIT,VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+            PostDraw(5,*output,{{clamped,postDone?presented.image.view:color.view,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}},{},true);
+        }
         if(timestamps)vkCmdWriteTimestamp(command,VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,timestamps,2);
         Check(vkEndCommandBuffer(command),"end frame");Check(vkResetFences(device,1,&fence),"reset frame fence");
         VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};si.commandBufferCount=1;si.pCommandBuffers=&command;
@@ -819,9 +835,9 @@ public:
             }
         }
         Collect();
-        if(!offscreen)Dump();
-        if(!offscreen&&(frames++%120)==0)VKLOG("FQVK WORLD PROBE frame=%llu partialStereoGpuMs=%.3f sharedDraws=%llu vertexCorners=%llu skippedDraws=%llu passes=world+LAND+actors+sky+water+post presentation=GLES concurrentApiWork=1 benchmarkValid=0",
-            (unsigned long long)frames,gpuMs,(unsigned long long)draws,(unsigned long long)vertices,(unsigned long long)skipped);
+        if(!offscreen&&!gameplay)Dump();
+        if(!offscreen&&(frames++%120)==0)VKLOG("FQVK FRAME frame=%llu stereoGpuMs=%.3f sharedDraws=%llu vertexCorners=%llu skippedDraws=%llu presentation=%s sceneSubmission=gles-bridge benchmarkValid=0",
+            (unsigned long long)frames,gpuMs,(unsigned long long)draws,(unsigned long long)vertices,(unsigned long long)skipped,gameplay?"Vulkan":"GLES-probe");
     }
     std::vector<uint16_t> Readback() {
         // Debug-only, explicit readback. No readback/copy occurs on ordinary frames.
@@ -877,7 +893,75 @@ public:
         dumped=true;
 #endif
     }
+    XrGraphicsBindingVulkan2KHR Binding() const {
+        XrGraphicsBindingVulkan2KHR binding{XR_TYPE_GRAPHICS_BINDING_VULKAN2_KHR};
+        binding.instance=instance;binding.physicalDevice=physical;binding.device=device;
+        binding.queueFamilyIndex=family;binding.queueIndex=0;return binding;
+    }
+    void DestroySwapchain() {
+        if(device)vkDeviceWaitIdle(device);
+        for(auto& target:xrTargets) {
+            if(target.framebuffer)vkDestroyFramebuffer(device,target.framebuffer,nullptr);
+            if(target.image.view)vkDestroyImageView(device,target.image.view,nullptr);
+        }
+        xrTargets.clear();
+        if(xrPipeline)vkDestroyPipeline(device,xrPipeline,nullptr);
+        if(xrPass)vkDestroyRenderPass(device,xrPass,nullptr);
+        xrPipeline={};xrPass={};
+        if(xrSwapchain)Proc<PFN_xrDestroySwapchain>(xrInstance,"xrDestroySwapchain")(xrSwapchain);
+        xrSwapchain={};xrSession={};
+    }
+    void CreateSwapchain(XrSession session) {
+        DestroySwapchain();gameplay=true;xrSession=session;
+        auto formatsFn=Proc<PFN_xrEnumerateSwapchainFormats>(xrInstance,"xrEnumerateSwapchainFormats");
+        uint32_t count=0;CheckXr(formatsFn(session,0,&count,nullptr),"Vulkan swapchain formats count");
+        std::vector<int64_t> formats(count);CheckXr(formatsFn(session,count,&count,formats.data()),"Vulkan swapchain formats");
+        // Match the existing final display-linear output, without an extra sRGB encode.
+        VkFormat format=VK_FORMAT_UNDEFINED;
+        for(auto preferred:{VK_FORMAT_R8G8B8A8_UNORM,VK_FORMAT_B8G8R8A8_UNORM})
+            if(std::find(formats.begin(),formats.end(),int64_t(preferred))!=formats.end()){format=preferred;break;}
+        if(format==VK_FORMAT_UNDEFINED)throw std::runtime_error("OpenXR has no supported linear UNORM Vulkan swapchain format");
+        XrSwapchainCreateInfo info{XR_TYPE_SWAPCHAIN_CREATE_INFO};info.usageFlags=XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT;
+        info.format=format;info.sampleCount=1;info.width=width;info.height=height;info.faceCount=1;info.arraySize=2;info.mipCount=1;
+        CheckXr(Proc<PFN_xrCreateSwapchain>(xrInstance,"xrCreateSwapchain")(session,&info,&xrSwapchain),"create Vulkan stereo swapchain");
+        auto imagesFn=Proc<PFN_xrEnumerateSwapchainImages>(xrInstance,"xrEnumerateSwapchainImages");
+        count=0;CheckXr(imagesFn(xrSwapchain,0,&count,nullptr),"Vulkan swapchain images count");
+        if(!count)throw std::runtime_error("OpenXR returned no Vulkan swapchain images");
+        std::vector<XrSwapchainImageVulkan2KHR> images(count,{XR_TYPE_SWAPCHAIN_IMAGE_VULKAN2_KHR});
+        CheckXr(imagesFn(xrSwapchain,count,&count,reinterpret_cast<XrSwapchainImageBaseHeader*>(images.data())),"Vulkan swapchain images");
+        xrPass=MakePostPass(format);xrPipeline=MakePostPipeline(5,xrPass);
+        xrTargets.resize(count);
+        for(uint32_t i=0;i<count;++i) {
+            auto& target=xrTargets[i];target.width=width;target.height=height;target.image.image=images[i].image;
+            VkImageViewCreateInfo vi{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};vi.image=images[i].image;
+            vi.viewType=VK_IMAGE_VIEW_TYPE_2D_ARRAY;vi.format=format;vi.subresourceRange={VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,2};
+            Check(vkCreateImageView(device,&vi,nullptr,&target.image.view),"OpenXR stereo image view");
+            VkFramebufferCreateInfo fi{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};fi.renderPass=xrPass;fi.attachmentCount=1;fi.pAttachments=&target.image.view;
+            fi.width=width;fi.height=height;fi.layers=1;
+            Check(vkCreateFramebuffer(device,&fi,nullptr,&target.framebuffer),"OpenXR multiview framebuffer");
+        }
+        VKLOG("FQ RENDERER session=Vulkan presentation=Vulkan experimental=1 arraySize=2 format=%d samples=1 depthSubmission=0 sceneSubmission=gles-bridge glesContextRequired=1",int(format));
+    }
+    bool Present(const XrView* views,XrCompositionLayerProjectionView* output) {
+        if(failed||!begun||!xrSwapchain)return false;
+        XrSwapchainImageAcquireInfo acquire{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};uint32_t index=0;
+        CheckXr(Proc<PFN_xrAcquireSwapchainImage>(xrInstance,"xrAcquireSwapchainImage")(xrSwapchain,&acquire,&index),"acquire Vulkan image");
+        XrSwapchainImageWaitInfo wait{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};wait.timeout=XR_INFINITE_DURATION;
+        const auto ready=Proc<PFN_xrWaitSwapchainImage>(xrInstance,"xrWaitSwapchainImage")(xrSwapchain,&wait);
+        // XR_TIMEOUT_EXPIRED is a positive result but does not grant image access.
+        if(ready!=XR_SUCCESS)throw std::runtime_error("wait Vulkan image: "+std::to_string(ready));
+        if(index>=xrTargets.size())throw std::runtime_error("OpenXR Vulkan image index out of range");
+        End(&xrTargets[index]); // Fence completes before release; no GLES texture/readback involved.
+        XrSwapchainImageReleaseInfo release{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
+        CheckXr(Proc<PFN_xrReleaseSwapchainImage>(xrInstance,"xrReleaseSwapchainImage")(xrSwapchain,&release),"release Vulkan image");
+        for(uint32_t eye=0;eye<2;++eye) {
+            output[eye]={XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW};output[eye].pose=views[eye].pose;output[eye].fov=views[eye].fov;
+            output[eye].subImage={xrSwapchain,{{0,0},{int32_t(width),int32_t(height)}},eye};
+        }
+        return true;
+    }
     ~Renderer() {
+        DestroySwapchain();
         if(device){vkDeviceWaitIdle(device);
             for(auto& e:pipelines)vkDestroyPipeline(device,e.second,nullptr);
             for(auto& e:meshes){Destroy(e.second.vertices);Destroy(e.second.indices);Destroy(e.second.skin);}
@@ -913,7 +997,7 @@ public:
     }
 };
 std::unique_ptr<Renderer> renderer;
-void Failure(const std::exception& e){VKLOG("FQVK WORLD PROBE disabled: %s; GLES gameplay continues",e.what());recording=false;if(renderer)renderer->failed=true;hooks={};}
+void Failure(const std::exception& e){VKLOG("FQVK FAILURE: %s; presentation=%s fallback=none",e.what(),renderer&&renderer->gameplay?"Vulkan-stopped":"GLES-probe-disabled");recording=false;if(renderer)renderer->failed=true;hooks={};}
 }
 bool InitializeWorldProbe(XrInstance instance,XrSystemId system,uint32_t w,uint32_t h,const char* outputDirectory) {
     ShutdownWorldProbe();
@@ -960,11 +1044,25 @@ bool InitializeWorldProbe(XrInstance instance,XrSystemId system,uint32_t w,uint3
         return true;
     }catch(const std::exception& e){Failure(e);ShutdownWorldProbe();return false;}
 }
-void ShutdownWorldProbe(){hooks={};recording=false;renderer.reset();}
+void ShutdownWorldProbe(){hooks={};recording=false;gameplayPresentation=false;renderer.reset();}
 bool WorldProbeActive(){return renderer&&!renderer->failed;}
 bool BeginWorldProbe(const float* l,const float* r,const float* le,const float* re,bool loading){
     if(!WorldProbeActive())return false;
     try{renderer->Begin(l,r,le,re,loading);recording=true;return true;}catch(const std::exception& e){Failure(e);return false;}
 }
-void EndWorldProbe(){recording=false;if(renderer&&renderer->failed){ShutdownWorldProbe();return;}if(!renderer||!renderer->begun)return;try{renderer->End();}catch(const std::exception& e){Failure(e);}}
+void EndWorldProbe(){recording=false;if(renderer&&renderer->failed){if(!renderer->gameplay)ShutdownWorldProbe();return;}if(!renderer||!renderer->begun)return;try{renderer->End();}catch(const std::exception& e){Failure(e);}}
+bool GameplayBinding(XrGraphicsBindingVulkan2KHR& binding) {
+    if(!WorldProbeActive())return false;
+    renderer->gameplay=gameplayPresentation=true;binding=renderer->Binding();return true;
+}
+bool CreateGameplaySwapchain(XrSession session) {
+    if(!WorldProbeActive())return false;
+    try{renderer->CreateSwapchain(session);return true;}catch(const std::exception& e){Failure(e);return false;}
+}
+void DestroyGameplaySwapchain(){if(renderer)renderer->DestroySwapchain();}
+bool PresentGameplay(const XrView* views,XrCompositionLayerProjectionView* output) {
+    recording=false;if(!WorldProbeActive())return false;
+    try{return renderer->Present(views,output);}catch(const std::exception& e){Failure(e);return false;}
+}
+
 }

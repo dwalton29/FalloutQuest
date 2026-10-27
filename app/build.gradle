@@ -22,8 +22,8 @@ android {
         applicationId 'com.falloutquest.app'
         minSdk 29
         targetSdk 35
-        versionCode 245
-        versionName '0.101.0-vulkan-world-probe'
+        versionCode 246
+        versionName '0.102.0-vulkan-xr-experimental'
 
         ndk {
             abiFilters 'arm64-v8a'

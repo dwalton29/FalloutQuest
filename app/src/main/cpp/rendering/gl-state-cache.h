@@ -224,6 +224,11 @@ inline unsigned (*drawRegionCount)(GLsizei)=nullptr;
 inline bool (*selectDrawRegion)(unsigned)=nullptr;
 inline void (*restoreDrawRegion)()=nullptr;
 template<class Draw> inline void Submit(GLsizei n, GLsizei instances, Draw draw) {
+#ifdef FQ_ENABLE_VULKAN
+    if(fqvk::gameplayPresentation) {
+        ++counters.draws;counters.vertices+=uint64_t(n)*instances;return;
+    }
+#endif
     const unsigned regions=drawRegionCount ? drawRegionCount(n) : 1;
     for(unsigned i=0;i<regions;++i) {
         if(regions>1 && !selectDrawRegion(i)) continue;
