@@ -593,12 +593,15 @@ public:
         rs.cullMode=(visualDiagnostics&1u)||!key.cull?VK_CULL_MODE_NONE:key.cullFace==GL_FRONT?VK_CULL_MODE_FRONT_BIT:
             key.cullFace==GL_FRONT_AND_BACK?VK_CULL_MODE_FRONT_AND_BACK:VK_CULL_MODE_BACK_BIT;
         rs.depthBiasEnable=key.offset;
-        // Vertex shader flips Y, so Vulkan front-face winding is inverted.
-        // Normal mode preserves the earlier GLES->Vulkan winding assumption.
-        // Diagnostic bit 4 tests the opposite interpretation *with culling on*,
-        // to distinguish wrong front-face mapping from genuinely two-sided NIFs.
+        // Vulkan's signed framebuffer area has the opposite sign to GL's.
+        // The vertex shader's Y flip already compensates for that difference:
+        // GL_CCW stays VK_COUNTER_CLOCKWISE, including authored reversed NIFs.
+        // UI RTT shaders deliberately omit that Y flip (texture orientation),
+        // so those pipelines alone need the opposite winding interpretation.
+        const bool shaderFlipsY=!(key.offscreen&&(key.ui||key.sky||key.water));
         const bool flipWindingDiagnostic=(visualDiagnostics&4u)!=0u;
-        rs.frontFace=(key.clockwise!=flipWindingDiagnostic)?VK_FRONT_FACE_COUNTER_CLOCKWISE:VK_FRONT_FACE_CLOCKWISE;
+        const bool clockwise=key.clockwise^!shaderFlipsY^flipWindingDiagnostic;
+        rs.frontFace=clockwise?VK_FRONT_FACE_CLOCKWISE:VK_FRONT_FACE_COUNTER_CLOCKWISE;
         VkPipelineMultisampleStateCreateInfo ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};ms.rasterizationSamples=VK_SAMPLE_COUNT_1_BIT;
         VkPipelineDepthStencilStateCreateInfo ds{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};ds.depthTestEnable=key.depth;ds.depthWriteEnable=key.write;ds.depthCompareOp=Compare(key.depthFunc);
         VkPipelineColorBlendAttachmentState ba{};ba.colorWriteMask=0xf;ba.blendEnable=key.blend;ba.srcColorBlendFactor=Blend(key.src);ba.dstColorBlendFactor=Blend(key.dst);ba.colorBlendOp=BlendOperation(key.equation);ba.srcAlphaBlendFactor=Blend(key.srcA);ba.dstAlphaBlendFactor=Blend(key.dstA);ba.alphaBlendOp=BlendOperation(key.equationA);
@@ -1115,11 +1118,14 @@ public:
         auto formatsFn=Proc<PFN_xrEnumerateSwapchainFormats>(xrInstance,"xrEnumerateSwapchainFormats");
         uint32_t count=0;CheckXr(formatsFn(session,0,&count,nullptr),"Vulkan swapchain formats count");
         std::vector<int64_t> formats(count);CheckXr(formatsFn(session,count,&count,formats.data()),"Vulkan swapchain formats");
-        // Match the existing final display-linear output, without an extra sRGB encode.
+        // Film already returns display-linear light. Prefer an sRGB attachment
+        // to encode that value on store, preserving the PC gamma-ramp shadows
+        // that linear UNORM8 rounded to black. OpenXR decodes sRGB on sampling;
+        // keep the shader's linear output unchanged for either attachment type.
         VkFormat format=VK_FORMAT_UNDEFINED;
-        for(auto preferred:{VK_FORMAT_R8G8B8A8_UNORM,VK_FORMAT_B8G8R8A8_UNORM})
+        for(auto preferred:{VK_FORMAT_R8G8B8A8_SRGB,VK_FORMAT_B8G8R8A8_SRGB,VK_FORMAT_R8G8B8A8_UNORM,VK_FORMAT_B8G8R8A8_UNORM})
             if(std::find(formats.begin(),formats.end(),int64_t(preferred))!=formats.end()){format=preferred;break;}
-        if(format==VK_FORMAT_UNDEFINED)throw std::runtime_error("OpenXR has no supported linear UNORM Vulkan swapchain format");
+        if(format==VK_FORMAT_UNDEFINED)throw std::runtime_error("OpenXR has no supported RGBA/BGRA Vulkan swapchain format");
         XrSwapchainCreateInfo info{XR_TYPE_SWAPCHAIN_CREATE_INFO};info.usageFlags=XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT;
         info.format=format;info.sampleCount=1;info.width=width;info.height=height;info.faceCount=1;info.arraySize=2;info.mipCount=1;
         CheckXr(Proc<PFN_xrCreateSwapchain>(xrInstance,"xrCreateSwapchain")(session,&info,&xrSwapchain),"create Vulkan stereo swapchain");
@@ -1147,7 +1153,8 @@ public:
             xrDepthImages.resize(count,{XR_TYPE_SWAPCHAIN_IMAGE_VULKAN2_KHR});
             CheckXr(imagesFn(xrDepthSwapchain,count,&count,reinterpret_cast<XrSwapchainImageBaseHeader*>(xrDepthImages.data())),"Vulkan depth images");
         }
-        VKLOG("FQ RENDERER session=Vulkan presentation=Vulkan experimental=1 arraySize=2 format=%d samples=1 depthSubmission=%d sceneSubmission=cpu-commands glesContextRequired=0",int(format),xrDepthSwapchain?1:0);
+        VKLOG("FQ RENDERER session=Vulkan presentation=Vulkan experimental=1 arraySize=2 format=%d outputTransfer=%s samples=1 depthSubmission=%d sceneSubmission=cpu-commands glesContextRequired=0",int(format),
+            (format==VK_FORMAT_R8G8B8A8_SRGB||format==VK_FORMAT_B8G8R8A8_SRGB)?"sRGB-attachment":"linear-UNORM-fallback",xrDepthSwapchain?1:0);
     }
     bool Present(const XrView* views,XrCompositionLayerProjectionView* output,float nearZ,float farZ) {
         if(failed||!begun||!xrSwapchain)return false;

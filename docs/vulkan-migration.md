@@ -1,10 +1,71 @@
-# Vulkan migration status — v248
+# Vulkan migration status — v249
 
 The full migration is **incomplete**. Experimental Vulkan gameplay retains the
 context-free CPU frontend and native OpenXR multiview presentation. GLES remains
 the default. Native asset uploads are now batched and asynchronous; descriptors
 are reused. Software-GPU rendering and synchronization tests do not establish
 Quest visuals, loading times, stability or a 72 Hz performance improvement.
+
+## v249: headset culling and shadow precision fixes
+
+The supplied `vulkan-visual-logcat(2).txt` confirms native multiview presentation
+with `glesDriverCalls=0`. Every captured frame has `diagnosticMask=2`, which
+**bypasses adaptation, bloom and film**; the shared `Q13.4 HDR POST ACTIVE` log
+only reports the shared settings and does not prove that native film ran. The six
+skipped draws are `skipProgram`; there are no captured mesh/skin/range/capacity
+rejections. The capture starts after renderer initialization and does not include
+its swapchain format enumeration, so it cannot establish device format support
+or a matched normal-HDR result.
+
+Two code defects have been isolated and corrected:
+
+- **Inside-out opaque geometry:** the native pipeline reversed authored front-face
+  state after the vertex shader had already flipped clip Y. Vulkan's framebuffer
+  signed-area convention and that shader flip compensate each other: GL_CCW maps
+  to VK_COUNTER_CLOCKWISE, and GL_CW to VK_CLOCKWISE. The previous extra reversal
+  culled the outside surface and exposed the far interior surface. Authored
+  front/back/two-sided state, depth tests and assets are retained. Pip-Boy/UI
+  texture targets deliberately omit the shader Y flip and retain their separate
+  winding mapping.
+- **Lost HDR shadow steps:** final film returns display-linear light to OpenXR.
+  Storing this in linear UNORM8 discarded near-black precision: the first nonzero
+  PC gamma-ramp code (`(1/255)^0.76 = 0.014826`) becomes linear `0.001148`, which
+  rounds to zero. Prefer runtime-advertised RGBA/BGRA sRGB attachments; hardware
+  stores that same shadow as sRGB byte 4, and OpenXR interprets the sRGB format
+  correctly. Exposure, original film/gamma arithmetic, FP16 intermediates and
+  texture decode remain unchanged. Linear UNORM stays a correctly interpreted
+  compatibility fallback when the runtime offers no supported sRGB format.
+  No guessed brightness lift, gamma replacement or asset adjustment is applied.
+
+The winding regression was reproduced before the correction with a closed opaque
+box: the expected outside face was absent. Software GPU tests now check both
+stereo layers, GL_CCW/GL_CW, front/back/both-face culling, two-sided depth,
+culled world/LAND/skinned/instanced draws, and culled Pip-Boy texture orientation.
+Real swapchain-image readback tests check a 64-step dark gradient after the
+original film/gamma, sRGB format preference, RGBA/BGRA sRGB and linear fallbacks,
+and loading output. Existing bloom/adaptation/UI/compositor tests also run with
+core and synchronization validation. These are not a substitute for headset
+visual acceptance; no new Quest performance claim is made.
+
+**Before testing v249, restore normal rendering**; Android properties survive APK
+updates. In particular, `2` still bypasses HDR and `4` now reverses the corrected
+front-face mapping for diagnostics:
+
+```powershell
+.\adb shell am force-stop com.falloutquest.app
+.\adb shell setprop debug.falloutquest.vulkan_diag 0
+.\adb shell setprop debug.falloutquest.renderer vulkan
+.\adb logcat -c
+```
+
+After launch, verify `FQVK VISUAL diagnosticMask=0` and the renderer's
+`outputTransfer=sRGB-attachment` (or explicit `linear-UNORM-fallback`). Compare
+Megaton/player geometry and the same dark surfaces at the same time of day.
+Capture initialization as well as gameplay. Earlier v248 diagnostic instructions
+below are retained as history; normal mode 0 now uses the corrected mapping.
+
+References: [Vulkan front-face framebuffer area](https://docs.vulkan.org/refpages/latest/refpages/source/VkFrontFace.html)
+and [OpenXR swapchain colour interpretation](https://registry.khronos.org/OpenXR/specs/1.1/man/html/XrSwapchain.html).
 
 ## v248: native upload batches and descriptor reuse
 
@@ -118,7 +179,7 @@ The CPU compatibility frontend retains some legacy preparation/bookkeeping work.
 
 `debug.falloutquest.renderer=vulkan` creates an actual
 `XrGraphicsBindingVulkan2KHR` session using the runtime-selected Vulkan device
-and graphics queue. Format enumeration selects linear RGBA8/BGRA8 UNORM;
+and graphics queue. Format enumeration now prefers RGBA8/BGRA8 sRGB, with linear UNORM fallback;
 unsupported formats or layered-swapchain creation fail explicitly. One two-layer
 swapchain uses native Vulkan image views and multiview framebuffers. The native
 world/terrain/actors/sky/water/UI/film output is sampled by a native stereo copy
@@ -160,7 +221,7 @@ dependencies can contribute to that span; it is not isolated render-pass timing
 or application/XR cadence.
 Neither metric proves Quest performance before hardware testing.
 
-Software Vulkan tests exercise real two-layer UNORM runtime-style images,
+Software Vulkan tests exercise real two-layer sRGB/UNORM runtime-style images,
 multiple acquired image indices, upright asymmetric stereo geometry, loading
 and film output, projection metadata, fence-before-release, independent colour/depth image rotation, D32 depth values
 and composition metadata, colour-only compatibility, recreation with resident
@@ -169,11 +230,12 @@ Compositor callbacks are mocked; this is not a real OpenXR runtime test.
 
 ### Headset validation (required before promotion)
 
-Install v248 Debug or Profile, then use PowerShell from platform-tools:
+Install v249 Debug or Profile, then use PowerShell from platform-tools:
 
 ```powershell
 .\adb shell am force-stop com.falloutquest.app
 .\adb shell setprop debug.falloutquest.vulkan_probe 0
+.\adb shell setprop debug.falloutquest.vulkan_diag 0
 .\adb shell setprop debug.falloutquest.renderer vulkan
 .\adb logcat -c
 ```

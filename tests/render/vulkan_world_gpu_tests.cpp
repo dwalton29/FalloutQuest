@@ -39,9 +39,14 @@ bool depthAcquired=false,depthWaited=false,offerDepth=false;
 std::vector<uint8_t> submittedPixels;
 uint32_t nextImage=0,acquiredImage=0,releases=0,destroys=0;
 bool acquired=false,waited=false,timeoutWait=false,unsupportedFormat=false;
+bool offerSrgb=false;
+VkFormat offeredColor=VK_FORMAT_R8G8B8A8_UNORM,createdColor=VK_FORMAT_UNDEFINED;
 XrResult XRAPI_CALL Formats(XrSession,uint32_t capacity,uint32_t* count,int64_t* out) {
-    *count=offerDepth?2:1;
-    if(capacity){out[0]=unsupportedFormat?VK_FORMAT_R8G8B8A8_SRGB:VK_FORMAT_R8G8B8A8_UNORM;if(offerDepth)out[1]=VK_FORMAT_D32_SFLOAT;}
+    std::vector<int64_t> formats{unsupportedFormat?VK_FORMAT_R32G32_SFLOAT:offeredColor};
+    if(offerSrgb)formats.push_back(VK_FORMAT_R8G8B8A8_SRGB);
+    if(offerDepth)formats.push_back(VK_FORMAT_D32_SFLOAT);
+    *count=uint32_t(formats.size());
+    if(capacity)std::copy(formats.begin(),formats.end(),out);
     return XR_SUCCESS;
 }
 XrResult XRAPI_CALL Swapchain(XrSession,const XrSwapchainCreateInfo* info,XrSwapchain* out) {
@@ -54,6 +59,7 @@ XrResult XRAPI_CALL Swapchain(XrSession,const XrSwapchainCreateInfo* info,XrSwap
         *out=reinterpret_cast<XrSwapchain>(uintptr_t(4));return XR_SUCCESS;
     }
     assert(info->usageFlags==XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT&&runtimeImages.empty());
+    createdColor=VkFormat(info->format);
     for(int i=0;i<3;++i)runtimeImages.push_back(fqvk::renderer->MakeImage(info->width,info->height,VkFormat(info->format),
         VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT|VK_IMAGE_USAGE_TRANSFER_SRC_BIT,VK_IMAGE_ASPECT_COLOR_BIT));
     *out=reinterpret_cast<XrSwapchain>(uintptr_t(3));return XR_SUCCESS;
@@ -120,6 +126,8 @@ XrResult XRAPI_CALL Release(XrSwapchain handle,const XrSwapchainImageReleaseInfo
         vkCmdPipelineBarrier(cb,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_HOST_BIT,0,0,nullptr,1,&host,0,nullptr);
     });
     submittedPixels.assign(static_cast<uint8_t*>(readback.mapped),static_cast<uint8_t*>(readback.mapped)+64*64*2*4);
+    if(createdColor==VK_FORMAT_B8G8R8A8_UNORM||createdColor==VK_FORMAT_B8G8R8A8_SRGB)
+        for(size_t i=0;i<submittedPixels.size();i+=4)std::swap(submittedPixels[i],submittedPixels[i+2]);
     r.Destroy(readback);acquired=waited=false;++releases;return XR_SUCCESS;
 }
 XrResult XRAPI_CALL DestroySwapchain(XrSwapchain handle) {
@@ -187,14 +195,15 @@ float Pixel(const std::vector<uint16_t>& image,int eye,int x,int y,int component
     return fqvk::Renderer::Half(image[(eye*64*64+y*64+x)*4+component]);
 }
 void Near(float value,float expected) {if(std::fabs(value-expected)>.012f)throw std::runtime_error("pixel mismatch: "+std::to_string(value)+" expected "+std::to_string(expected));}
-void Scene(bool terrain,bool skin=false,bool instanced=false) {
+void Scene(bool terrain,bool skin=false,bool instanced=false,bool authoredCull=false) {
     fqgl::Reset();
     Program(1,terrain);const auto quad=Quad(terrain);const uint32_t indices[]{0,1,2,0,2,3};
     fqvk::Mesh(9,quad.data(),4,terrain?12:18,indices,6);
     uint8_t red[]{255,0,0,255};fqvk::Texture(5,1,1,red);
     fqgl::state.texture2d[0].Change(5);
     fqgl::state.depth.Change(true);fqgl::state.depthWrite.Change(true);fqgl::state.depthFunc.Change(GL_LEQUAL);
-    fqgl::state.blend.Change(false);fqgl::state.cull.Change(false);
+    fqgl::state.blend.Change(false);fqgl::state.cull.Change(authoredCull);
+    fqgl::state.cullFace.Change(GL_BACK);fqgl::state.frontFace.Change(GL_CCW);
     Set(1,"uAmbientColor",{1,1,1});Set(1,"uSunlightColor",{0,0,0});Set(1,"uSunDirection",{0,0,1});
     Set(1,"uFogNearVertexQ1532",{10000});Set(1,"uFogFarVertexQ1532",{10001});Set(1,"uFogPowerVertexQ1532",{1});
     if(terrain)Set(1,"uUseTexture",{1});
@@ -315,6 +324,38 @@ void Water() {
     assert(Pixel(occluded,0,5,32,1)>.1f);
 }
 
+// Two opposing opaque faces of a closed box. Normal GL_CCW/back-cull must
+// retain the near outside face, rather than expose the farther inside texture.
+void AuthoredCulling() {
+    Scene(false);
+    auto box=Quad(false);auto back=Quad(false);
+    for(size_t i=0;i<4;++i){box[i*18+2]=-.3f;back[i*18+2]=.3f;}
+    box.insert(box.end(),back.begin(),back.end());
+    const uint32_t indices[]{0,1,2,0,2,3,4,6,5,4,7,6,
+        0,4,5,0,5,1,1,5,6,1,6,2,2,6,7,2,7,3,3,7,4,3,4,0};
+    fqvk::Mesh(50,box.data(),8,18,indices,36);
+    const uint8_t green[]{0,255,0,255};fqvk::Texture(51,1,1,green);
+    const float identity[]{1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1},eye[]{0,0,2};
+    for(unsigned cull:{GL_BACK,GL_FRONT,GL_FRONT_AND_BACK})for(bool clockwise:{false,true}) {
+        assert(fqvk::BeginWorldProbe(identity,identity,eye,eye));
+        fqgl::state.cull.Change(true);fqgl::state.cullFace.Change(cull);
+        fqgl::state.frontFace.Change(clockwise?GL_CW:GL_CCW);
+        fqgl::state.texture2d[0].Change(5);Submit(1,50,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);
+        fqgl::state.texture2d[0].Change(51);Submit(1,50,GL_TRIANGLES,0,30,GL_UNSIGNED_INT,24,1);
+        fqvk::EndWorldProbe();const auto pixels=fqvk::renderer->Readback();
+        const bool front=cull==GL_BACK?!clockwise:cull==GL_FRONT?clockwise:false;
+        const bool backVisible=cull!=GL_FRONT_AND_BACK&&!front;
+        for(int e=0;e<2;++e){Near(Pixel(pixels,e,32,32,0),front?1:0);Near(Pixel(pixels,e,32,32,1),backVisible?1:0);}
+    }
+    assert(fqvk::BeginWorldProbe(identity,identity,eye,eye));
+    fqgl::state.cull.Change(false);fqgl::state.texture2d[0].Change(5);
+    Submit(1,50,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);
+    fqgl::state.texture2d[0].Change(51);Submit(1,50,GL_TRIANGLES,0,30,GL_UNSIGNED_INT,24,1);
+    fqvk::EndWorldProbe();const auto pixels=fqvk::renderer->Readback();
+    Near(Pixel(pixels,0,32,32,0),1);Near(Pixel(pixels,0,32,32,1),0);
+    std::cout<<"Authored culling: opaque closed box, GL_CCW/GL_CW, front/back/both and two-sided depth passed\n";
+}
+
 float DisplayLinear(float value) {
     const float code=std::floor(std::clamp(value,0.0f,1.0f)*255+.5f)/255;
     const float gamma=std::pow(code,.76f);
@@ -402,6 +443,7 @@ void PipboyTarget() {
         {
             fqvk::UiTargetScope target(30,32,16);assert(target.active&&fqvk::recording);
             fqgl::state.texture2d[0].Change(23);fqgl::state.blend.Change(false);
+            fqgl::state.cull.Change(true);fqgl::state.cullFace.Change(GL_BACK);fqgl::state.frontFace.Change(GL_CCW);
             Set(21,"uTint",frame?std::initializer_list<float>{0,1,0,1}:std::initializer_list<float>{1,0,0,1});
             Submit(21,22,GL_TRIANGLES,0,6,0,0,1);
             Set(21,"uTint",frame?std::initializer_list<float>{1,0,0,1}:std::initializer_list<float>{0,1,0,1});
@@ -522,6 +564,48 @@ void AsyncResources() {
     std::cout<<"Asynchronous native resources: batched uploads, real completion tickets, bounded staging, replacement/teardown lifetime, descriptor reuse/invalidation and updated pixels passed\n";
 }
 
+// Check actual swapchain bytes, not just the intermediate FP16 image. A
+// linear 8-bit target rounded the first PC gamma-ramp shadow steps to black.
+void HdrPresentation(VkFormat advertised,bool alsoSrgb) {
+    fqrender::nativeOnly=true;fqgl::Reset();offeredColor=advertised;offerSrgb=alsoSrgb;
+    const auto xr=reinterpret_cast<XrInstance>(uintptr_t(1));
+    const auto session=reinterpret_cast<XrSession>(uintptr_t(2));
+    assert(fqvk::InitializeWorldProbe(xr,1,64,64));Scene(false);
+    assert(fqvk::CreateGameplaySwapchain(session));
+    const VkFormat expected=alsoSrgb?VK_FORMAT_R8G8B8A8_SRGB:advertised;
+    if(createdColor!=expected)throw std::runtime_error("HDR presentation did not select the advertised sRGB format");
+    const bool srgb=expected==VK_FORMAT_R8G8B8A8_SRGB||expected==VK_FORMAT_B8G8R8A8_SRGB;
+    auto quad=Quad(false);
+    for(size_t i=0;i<4;++i){quad[i*18]/=.6f;quad[i*18+1]/=.6f;quad[i*18+12]=(quad[i*18]+1)*.5f;}
+    const uint32_t indices[]{0,1,2,0,2,3};fqvk::Mesh(60,quad.data(),4,18,indices,6);
+    uint8_t gradient[64*4]{};
+    for(int i=0;i<64;++i){gradient[i*4]=gradient[i*4+1]=gradient[i*4+2]=uint8_t(i);gradient[i*4+3]=255;}
+    fqvk::Texture(61,64,1,gradient,false,false);fqgl::state.texture2d[0].Change(61);
+    const float identity[]{1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1},eye[]{0,0,2};
+    std::array<XrView,2> views{{{XR_TYPE_VIEW},{XR_TYPE_VIEW}}};
+    for(auto& view:views){view.pose.orientation.w=1;view.fov={-.7f,.7f,.8f,-.8f};}
+    std::array<XrCompositionLayerProjectionView,2> output{};
+    auto encode=[](float x){return x<=.0031308f?x*12.92f:1.055f*std::pow(x,1/2.4f)-.055f;};
+    for(bool loading:{false,true}) {
+        assert(fqvk::BeginWorldProbe(identity,identity,eye,eye,loading));
+        Submit(1,60,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);
+        if(!loading){fqvk::PostSettings settings;settings.interior=1;settings.brightScale=0;fqvk::PostProcess(settings);}
+        assert(fqvk::PresentGameplay(views.data(),output.data(),.04f,1000));
+        for(int e=0;e<2;++e)for(int x=0;x<64;++x) {
+            const float linear=loading?x/255.0f:DisplayLinear(x/255.0f);
+            const int code=int(std::lround((srgb?encode(linear):linear)*255));
+            for(int c=0;c<3;++c) {
+                const int actual=submittedPixels[(e*64*64+32*64+x)*4+c];
+                if(std::abs(actual-code)>1)throw std::runtime_error("HDR swapchain pixel="+std::to_string(actual)+" expected="+std::to_string(code));
+                if(srgb&&x>0&&x<8)assert(actual>0);
+            }
+        }
+    }
+    fqvk::DestroyGameplaySwapchain();fqvk::ShutdownWorldProbe();offerSrgb=false;offeredColor=VK_FORMAT_R8G8B8A8_UNORM;
+    fqrender::nativeOnly=false;fqgl::Reset();
+    std::cout<<"HDR swapchain: gamma-ramp shadow gradient, exact single transfer, both eyes, loading and format="<<expected<<" passed\n";
+}
+
 void GameplayPresentation(bool withDepth) {
     fqrender::nativeOnly=true;fqgl::Reset();
     const auto xr=reinterpret_cast<XrInstance>(uintptr_t(1));const auto session=reinterpret_cast<XrSession>(uintptr_t(2));
@@ -578,14 +662,17 @@ void GameplayPresentation(bool withDepth) {
 }
 
 int main() {
+    for(auto format:{VK_FORMAT_R8G8B8A8_UNORM,VK_FORMAT_B8G8R8A8_UNORM,VK_FORMAT_B8G8R8A8_SRGB})HdrPresentation(format,false);
+    HdrPresentation(VK_FORMAT_R8G8B8A8_UNORM,true);
     AsyncResources();HeadlessSceneSubmission();
     GameplayPresentation(false);GameplayPresentation(true);
     for(bool asynchronous:{false,true}) {
     fqrender::nativeOnly=asynchronous;
     for(int mode=0;mode<4;++mode) {
         assert(fqvk::InitializeWorldProbe(reinterpret_cast<XrInstance>(uintptr_t(1)),1,64,64));
-        Scene(mode==1,mode==2,mode==3);fqvk::ShutdownWorldProbe();assert(!fqvk::WorldProbeActive());
+        Scene(mode==1,mode==2,mode==3,true);fqvk::ShutdownWorldProbe();assert(!fqvk::WorldProbeActive());
     }
+    assert(fqvk::InitializeWorldProbe(reinterpret_cast<XrInstance>(uintptr_t(1)),1,64,64));AuthoredCulling();fqvk::ShutdownWorldProbe();
     assert(fqvk::InitializeWorldProbe(reinterpret_cast<XrInstance>(uintptr_t(1)),1,64,64));Sky();fqvk::ShutdownWorldProbe();
     assert(fqvk::InitializeWorldProbe(reinterpret_cast<XrInstance>(uintptr_t(1)),1,64,64));Water();fqvk::ShutdownWorldProbe();
     assert(fqvk::InitializeWorldProbe(reinterpret_cast<XrInstance>(uintptr_t(1)),1,64,64));Post();fqvk::ShutdownWorldProbe();
