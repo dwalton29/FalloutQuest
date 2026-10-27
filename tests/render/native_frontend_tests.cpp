@@ -30,6 +30,10 @@ int main() {
     glGetIntegerv(0x8869,&limit);assert(limit==32);glGetIntegerv(0x8d57,&limit);assert(limit==1);
     assert(*glGetString(0x1f03)==0); // GL timers/extensions cannot load driver entry points.
     glDeleteTextures(1,&texture);glDeleteVertexArrays(1,&mesh);glDeleteBuffers(1,&buffer);glDeleteProgram(program);
+    unsigned batch[2]{};glGenTextures(2,batch);
+    static unsigned erased=0;
+    fqvk::hooks.erase=[](uint32_t,bool){++erased;fqvk::hooks={};}; // renderer failure may disable callbacks mid-batch
+    glDeleteTextures(2,batch);assert(erased==1);
     assert(driverCalls.empty()&&fqrender::driverCalls==0);
     fqvk::hooks={};fqrender::nativeOnly=false;fqgl::Reset();glUseProgram(7);glUniform1f(1,.2f);glDrawArrays(GL_TRIANGLES,0,6);
     assert(driverCalls["glUseProgram"]==1&&driverCalls["glUniform1f"]==1&&driverCalls["glDrawArrays"]==1);

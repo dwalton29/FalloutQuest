@@ -326,7 +326,7 @@ inline void DeleteProgram(GLuint id) {
 }
 inline void DeleteTextures(GLsizei n,const GLuint* ids) {
     #ifdef FQ_ENABLE_VULKAN
-    if(fqvk::hooks.erase)for(GLsizei i=0;i<n;++i)fqvk::hooks.erase(ids[i],true);
+    for(GLsizei i=0;i<n;++i)if(fqvk::hooks.erase)fqvk::hooks.erase(ids[i],true);
 #endif
     if(UseDriver()){++fqrender::driverCalls;glDeleteTextures(n,ids);}
     for(GLsizei i=0;i<n;++i) {
@@ -340,7 +340,7 @@ inline void DeleteBuffers(GLsizei n,const GLuint* ids) {
 }
 inline void DeleteVertexArrays(GLsizei n,const GLuint* ids) {
     #ifdef FQ_ENABLE_VULKAN
-    if(fqvk::hooks.erase)for(GLsizei i=0;i<n;++i)fqvk::hooks.erase(ids[i],false);
+    for(GLsizei i=0;i<n;++i)if(fqvk::hooks.erase)fqvk::hooks.erase(ids[i],false);
 #endif
     if(UseDriver()){++fqrender::driverCalls;glDeleteVertexArrays(n,ids);}
     for(GLsizei i=0;i<n;++i) if(state.vao.known && state.vao.value==ids[i]) state.vao.Change(0);
