@@ -52,6 +52,7 @@ std::vector<fqvk::Image> runtimeImages,runtimeDepth;
 uint32_t nextDepth=1,acquiredDepth=0,depthReleases=0;
 bool depthAcquired=false,depthWaited=false,offerDepth=false;
 std::vector<uint8_t> submittedPixels;
+bool inspectModalDepth=false;std::vector<float> modalWorldDepth;
 uint32_t nextImage=0,acquiredImage=0,releases=0,destroys=0;
 bool acquired=false,waited=false,timeoutWait=false,unsupportedFormat=false;
 bool offerSrgb=false,inspectReleasedImages=true;
@@ -145,8 +146,11 @@ XrResult XRAPI_CALL Release(XrSwapchain handle,const XrSwapchainImageReleaseInfo
             vkCmdPipelineBarrier(cb,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_HOST_BIT,0,0,nullptr,1,&host,0,nullptr);
         });
         const float* depth=static_cast<const float*>(buffer.mapped);
+        if(inspectModalDepth)modalWorldDepth.assign(depth,depth+64*64*2);
+        else {
         assert(std::fabs(depth[16*64+32]-.5f)<.001f&&std::fabs(depth[64*64+16*64+55]-.5f)<.001f);
         assert(depth[64*64+16*64+32]==1&&depth[48*64+32]==1);
+        }
         r.Destroy(buffer);depthAcquired=depthWaited=false;++depthReleases;return XR_SUCCESS;
     }
     assert(acquired&&waited);
@@ -708,11 +712,22 @@ void HdrPresentation(VkFormat advertised,bool alsoSrgb) {
     std::cout<<"HDR swapchain: gamma-ramp shadow gradient, exact single transfer, both eyes, loading and format="<<expected<<" passed\n";
 }
 
-std::vector<uint8_t> FilmOverlayOutput(bool legacy,bool synchronous=false) {
+std::vector<uint8_t> FilmOverlayOutput(bool legacy,bool synchronous=false,bool modal=false) {
     fqrender::nativeOnly=true;fqgl::Reset();offerSrgb=true;
     const auto xr=reinterpret_cast<XrInstance>(uintptr_t(1));const auto session=reinterpret_cast<XrSession>(uintptr_t(2));
     assert(fqvk::InitializeWorldProbe(xr,1,64,64));auto& r=*fqvk::renderer;r.legacyPresentation=legacy;r.synchronous=synchronous;
-    Scene(false);assert(fqvk::CreateGameplaySwapchain(session));Program(65,9);
+    Scene(false);offerDepth=modal;inspectModalDepth=modal;
+    assert(fqvk::CreateGameplaySwapchain(session,modal));Program(65,9);
+    if(modal) {
+        Program(70,11);std::vector<float> geometry;
+        for(const auto& xy:std::array<std::array<float,2>,4>{{{{-.3f,-.3f}},{{.3f,-.3f}},{{-.3f,.3f}},{{.3f,.3f}}}})
+            geometry.insert(geometry.end(),{xy[0],xy[1],.2f,0,0,1,0,0,1,1,1,1});
+        fqvk::Mesh(71,geometry.data(),4,12,nullptr,0);
+        for(size_t i=0;i<4;++i)geometry[i*12+2]=.4f;
+        fqvk::Mesh(72,geometry.data(),4,12,nullptr,0);
+        Set(70,"uMvp",{1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1});
+        Set(70,"uUnlit",{1});Set(70,"uFade",{1});Set(70,"uCutoff",{0});Set(70,"uClipUi",{0});
+    }
     const uint8_t colour[]{25,45,75,255};fqvk::Texture(5,1,1,colour,false,false);
     auto near=Quad(false);std::vector<float> ui;
     for(size_t i=0;i<4;++i)ui.insert(ui.end(),{near[i*18]*.6f,near[i*18+1]*.6f,-.2f,0,0});
@@ -726,7 +741,7 @@ std::vector<uint8_t> FilmOverlayOutput(bool legacy,bool synchronous=false) {
     for(auto& view:views){view.pose.orientation.w=1;view.fov={-.7f,.7f,.8f,-.8f};}
     std::array<XrCompositionLayerProjectionView,2> output{};std::vector<uint8_t> result;
     for(int frame=0;frame<4;++frame) {
-        if(frame==2){fqvk::DestroyGameplaySwapchain();assert(fqvk::CreateGameplaySwapchain(session));}
+        if(frame==2){fqvk::DestroyGameplaySwapchain();assert(fqvk::CreateGameplaySwapchain(session,modal));}
         r.passTiming=(frame%2)==0;
         assert(fqvk::BeginWorldProbe(identity,right,eye,eye));
         fqgl::state.depth.Change(true);fqgl::state.depthWrite.Change(true);fqgl::state.blend.Change(false);
@@ -738,7 +753,23 @@ std::vector<uint8_t> FilmOverlayOutput(bool legacy,bool synchronous=false) {
         Set(65,"uTint",{.1f,.25f,.35f,.37f});Submit(65,66,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);
         Set(65,"uTint",{.23f,.08f,.31f,.41f});Submit(65,66,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);
         Set(65,"uTint",{1,0,1,1});Submit(65,67,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1); // occluded behind world depth
+        if(modal) {
+            assert(fqvk::BeginModalDepth());
+            fqgl::state.depthWrite.Change(true);fqgl::state.blend.Change(false);
+            Set(70,"uTint",{0,0,1,1});Submit(70,71,GL_TRIANGLE_STRIP,0,4,0,0,1);
+            Set(70,"uTint",{0,1,0,1});Submit(70,72,GL_TRIANGLE_STRIP,0,4,0,0,1);
+        }
         assert(fqvk::PresentGameplay(views.data(),output.data(),.04f,1000));
+        if(modal) {
+            // Both modal models sit behind the world. Blue is in front of
+            // green: fresh modal depth must show blue in BOTH eyes, while
+            // the compositor continues receiving the original world depth.
+            for(int eye=0;eye<2;++eye) {
+                const size_t at=(eye*64*64+32*64+(eye?45:32))*4;
+                assert(submittedPixels[at]<2&&submittedPixels[at+1]<2&&submittedPixels[at+2]>253);
+                assert(std::fabs(modalWorldDepth[eye*64*64+32*64+(eye?45:32)]-.5f)<.001f);
+            }
+        }
         assert(r.timingDropped==0&&r.passMs[r.Film]>=0&&r.passMs[r.Ui]>=0);
         assert(r.directOutput==!legacy&&r.colorAcquired==false);
         assert(bool(r.presented.image.image)==legacy);
@@ -746,14 +777,18 @@ std::vector<uint8_t> FilmOverlayOutput(bool legacy,bool synchronous=false) {
     }
     assert(legacy?(r.presentationCopies==4&&r.directFilmFrames==0):(r.presentationCopies==0&&r.directFilmFrames==4));
     fqvk::DestroyGameplaySwapchain();fqvk::ShutdownWorldProbe();offerSrgb=false;fqrender::nativeOnly=false;fqgl::Reset();
+    inspectModalDepth=offerDepth=false;
     return result;
 }
 void DirectPresentation() {
     const auto legacy=FilmOverlayOutput(true),direct=FilmOverlayOutput(false),synchronous=FilmOverlayOutput(false,true);
+    const auto modalLegacy=FilmOverlayOutput(true,false,true),modalDirect=FilmOverlayOutput(false,false,true);
+    assert(modalLegacy.size()==modalDirect.size());
+    for(size_t i=0;i<modalLegacy.size();++i)assert(std::abs(int(modalLegacy[i])-int(modalDirect[i]))<=2);
     assert(direct==synchronous);assert(legacy.size()==direct.size());
     int largest=0;for(size_t i=0;i<legacy.size();++i)largest=std::max(largest,std::abs(int(legacy[i])-int(direct[i])));
     if(largest>2)throw std::runtime_error("direct film/overlay difference exceeds two display codes: "+std::to_string(largest));
-    std::cout<<"Direct presentation: original film, translucent overlays, opaque depth, stereo, recreation and synchronous/buffered equality; max display-code difference="<<largest<<" passed\n";
+    std::cout<<"Direct presentation: original film, translucent overlays, private modal depth over world, retained compositor depth, stereo, recreation and synchronous/buffered equality; max display-code difference="<<largest<<" passed\n";
 }
 void BufferedOwnership() {
     enableTimelineGate=true;

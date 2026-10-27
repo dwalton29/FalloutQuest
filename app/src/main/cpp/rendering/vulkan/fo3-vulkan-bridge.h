@@ -26,6 +26,7 @@ struct Hooks {
     void (*endUiTarget)()=nullptr;
     void (*repeatT)(uint32_t)=nullptr;
     void (*clearDepth)()=nullptr;
+    bool (*beginModalDepth)()=nullptr;
     void (*post)(const PostSettings&)=nullptr;
     void (*resetExposure)()=nullptr;
     void (*frameTiming)(double,double,double)=nullptr;
@@ -73,6 +74,7 @@ struct UiTargetScope {
     UiTargetScope& operator=(const UiTargetScope&)=delete;
 };
 inline void RepeatT(uint32_t texture){if(hooks.repeatT)hooks.repeatT(texture);}
+inline bool BeginModalDepth(){return recording&&hooks.beginModalDepth?hooks.beginModalDepth():!fqrender::nativeOnly;}
 inline void ClearDepth(){if(recording&&hooks.clearDepth)hooks.clearDepth();}
 inline void ResetExposure(){if(hooks.resetExposure)hooks.resetExposure();}
 inline void WaterSnapshot(){if(recording&&hooks.waterSnapshot)hooks.waterSnapshot();}

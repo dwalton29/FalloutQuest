@@ -7,7 +7,7 @@ fo3lockpick::Game gLockpick;
 bool gLockpickInputLatch=false;
 bool Fo3LockpickInputBlocked(){return gLockpickInputLatch||Fo3LockpickFocus();}
 bool gLockpickLastA=true,gLockpickLastB=true,gLockpickReleased=false,gLockpickLoop=false;
-double gLockpickTime=0,gLockpickSoundTime=0,gLockpickBreakStarted=0,gLockpickEntered=0;
+double gLockpickTime=0,gLockpickSoundTime=0,gLockpickBreakStarted=0,gLockpickEntered=0,gLockpickPinEntered=0;
 std::mt19937 gLockpickRandom(std::random_device{}());
 bool Fo3LockpickFocus(){return gLockpick.reference!=0;}
 void CancelFo3Lockpick(){gLockpick={};fo3lockui::anchored=false;gLockpickReleased=false;fo3lockui::breakElapsed=-1;
@@ -26,7 +26,7 @@ bool BeginFo3Lockpick(uint32_t reference){
     }
     fo3lockui::Advance();if(!fo3lockui::ready)return false;
     if(!gLockpick.Begin(p,reference,std::generate_canonical<float,24>(gLockpickRandom)))return false;
-    gLockpickInputLatch=true;gLockpickLastA=gLockpickLastB=true;gLockpickReleased=false;gLockpickTime=0;fo3lockui::introElapsed=0;fo3lockui::anchored=false;
+    gLockpickInputLatch=true;gLockpickLastA=gLockpickLastB=true;gLockpickReleased=false;gLockpickTime=0;fo3lockui::introElapsed=fo3lockui::pinIntroElapsed=0;fo3lockui::anchored=false;
     p.EndContainerInteraction();fo3audio::NamedSound("UILockpickingEnter");return true;
 }
 void UpdateFo3Lockpick(double now,float motion,float torque,bool a,bool b,bool focused,const float* head,bool gripsDown){
@@ -34,18 +34,22 @@ void UpdateFo3Lockpick(double now,float motion,float torque,bool a,bool b,bool f
     if(!focused||!gPlayerSession||gPlayerSession->saveBlocked||IsFo3LoadingVisible()){CancelFo3Lockpick();return;}
     fo3lockui::SetHead(head);auto& p=gPlayerSession->player;
     const bool pressA=a&&!gLockpickLastA,pressB=b&&!gLockpickLastB;gLockpickLastA=a;gLockpickLastB=b;
-    if(gLockpickTime==0)gLockpickEntered=now;fo3lockui::introElapsed=float(now-gLockpickEntered);
+    if(gLockpickTime==0)gLockpickEntered=gLockpickPinEntered=now;
+    fo3lockui::introElapsed=float(now-gLockpickEntered);
+    fo3lockui::pinIntroElapsed=float(now-gLockpickPinEntered);
     const float dt=gLockpickTime>0?float(now-gLockpickTime):0;gLockpickTime=now;
     if(!gLockpickReleased){gLockpickReleased=!a&&!b&&torque<.1f&&std::fabs(motion)<.2f;return;}
     if(pressB){CancelFo3Lockpick();return;}
     auto intro=std::find_if(fo3lockui::assets.lock.clips.begin(),fo3lockui::assets.lock.clips.end(),[](const auto& c){return c.name=="Forward";});
-    if(intro!=fo3lockui::assets.lock.clips.end()&&fo3lockui::introElapsed<intro->stop-intro->start)return;
+    if(!fo3lockui::ready){gLockpickTime=0;return;}
+    if(intro!=fo3lockui::assets.lock.clips.end()&&fo3lockui::introElapsed<fo3lockpose::Duration(&*intro))return;
+    if(fo3lockui::pinIntroElapsed<fo3lockpose::Duration(fo3lockpose::Find(fo3lockui::assets.pin.clips,"Forward")))return;
     const auto reference=gLockpick.reference;
     if(fo3lockui::breakElapsed>=0){fo3lockui::breakElapsed=float(now-gLockpickBreakStarted);
       auto clip=std::find_if(fo3lockui::assets.pin.clips.begin(),fo3lockui::assets.pin.clips.end(),[](const auto& c){return c.name=="Left";});
-      const float duration=clip==fo3lockui::assets.pin.clips.end()?0:clip->stop-clip->start;
+      const float duration=clip==fo3lockui::assets.pin.clips.end()?0:fo3lockpose::Duration(&*clip);
       if(fo3lockui::breakElapsed>=duration){
-        if(p.ItemCount(p.Definitions().bobbyPin)>0){gLockpick.Replace();gLockpickReleased=false;fo3lockui::breakElapsed=-1;}
+        if(p.ItemCount(p.Definitions().bobbyPin)>0){gLockpick.Replace();gLockpickReleased=false;fo3lockui::breakElapsed=-1;gLockpickPinEntered=now;fo3lockui::pinIntroElapsed=0;}
         else {fo3notify::Notifications().Enqueue(LockString("sOutOfLockpicks","You are out of lockpicks."));CancelFo3Lockpick();}}
       return;
     }

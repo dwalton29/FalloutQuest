@@ -74,11 +74,12 @@ bool OverlayBranch(const Skeleton&,Pose& base,const Pose& overlay,int branch);
 int FindBone(const Skeleton &skeleton, const std::string &name);
 void BindClip(const Skeleton &skeleton, const Clip &clip, Pose &pose);
 enum class RootPolicy { Locomotion, Furniture };
+enum class Playback { Sequence, Clamp };
 // Absolute sequence sampling; actor root motion is not applied to world
 // placement.
 bool Sample(const Skeleton &skeleton, const Clip &clip, double elapsed,
             Pose &pose, SampleTimings* timings=nullptr, RootPolicy rootPolicy=RootPolicy::Locomotion,
-            const Transform* retainedRoot=nullptr);
+            const Transform* retainedRoot=nullptr, Playback playback=Playback::Sequence);
 // Rebuild after local animation blending; one canonical skeleton composition.
 bool ComposePose(const Skeleton&,Pose&);
 void LookYaw(const Skeleton&,Pose&,int bone,float radians);

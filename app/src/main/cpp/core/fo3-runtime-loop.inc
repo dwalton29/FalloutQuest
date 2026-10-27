@@ -2398,7 +2398,6 @@ private:
                     const auto mvp=Multiply(viewProjection,model);fo3dialogueui::Render(mvp.m,panel,&barterResources[side]);
                 }
             }
-            if(Fo3LockpickFocus()&&gPlayerSession)fo3lockui::Render(viewProjection.m,gLockpick,gPlayerSession->player);
             for (uint32_t hand = 0; hand < 2; ++hand) {
                 if (!handPoseValid_[hand]) continue;
                 const XrPosef virtualHandPose = ToVirtualPose(handLocalPoses_[hand]);
@@ -2479,10 +2478,10 @@ private:
             }
             // All ordinary post-world UI writes colour only (health, dialogue,
             // barter, script messages, ammo, loot and interaction prompts).
-            // Lockpicking clears its MSAA depth target, so preserve the full
-            // final depth resolve there and on loading/fallback frames.
+            // Lockpicking draws after post on a separate modal depth surface.
+            // It no longer modifies the world/MSAA depth target.
             const bool q234LateDepthWritesPossible =
-                IsFo3LoadingVisible() || Fo3LockpickFocus();
+                IsFo3LoadingVisible();
             Q1350CompositeEyePostQ1350(eyeIndex, framebuffer_, eye.width, eye.height,
                                        q234LateDepthWritesPossible);
             // Final colour HUD pass, after world, hands, prompts, loot and post.
@@ -2491,6 +2490,12 @@ private:
                 const auto notificationMvp=Multiply(viewProjection,MatrixFromPose(notificationHead_));
                 fo3notifyui::Render(notificationMvp.m);
                 fo3xpui::Render(notificationMvp.m);
+            }
+            // Modal lockpicking is last among world/hand/ordinary HUD draws.
+            // It has fresh self-occlusion depth, independent of nearby models.
+            if(Fo3LockpickFocus()&&gPlayerSession) {
+                glBindFramebuffer(GL_FRAMEBUFFER,framebuffer_);
+                fo3lockui::Render(viewProjection.m,gLockpick,gPlayerSession->player,eye.width,eye.height);
             }
             if (depthReady) {
                 fqperf::GpuScope gpuDepth(fqperf::GpuDepthCopy);

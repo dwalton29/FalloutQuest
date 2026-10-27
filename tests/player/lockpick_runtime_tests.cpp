@@ -1,5 +1,6 @@
 #include "player/fo3-lockpick.h"
 #include "npc/fo3-actor-animation.h"
+#include "ui/lockpick/fo3-lockpick-pose.h"
 #include "ui/interaction/fo3-item-notifications.h"
 #include "world/interaction/fo3-interaction.h"
 #include <memory>
@@ -17,7 +18,7 @@ void MenuLoop(const std::string& name){if(name.empty())++stops;else ++loops;}}
 // Headless presentation/audio adapters; include the actual modal runtime below.
 namespace fo3lockui {
 struct Model {std::vector<fo3anim::Clip> clips;};struct Assets {Model lock,pin;};
-Assets assets;bool ready=true,anchored=false;float breakElapsed=-1,introElapsed=0;
+Assets assets;bool ready=true,anchored=false;float breakElapsed=-1,introElapsed=0,pinIntroElapsed=0;
 void Advance(){}void SetHead(const float*){anchored=true;}
 std::string String(const fo3player::Player&,const char*,const char* fallback){return fallback;}
 }
@@ -31,7 +32,7 @@ fo3player::Catalog Fixture(){using namespace fo3player;Catalog c;c.bobbyPin=10;c
 int main(){try{
  auto c=Fixture();gPlayerSession=std::make_unique<fo3player::Session>(std::move(c));
  fo3anim::Clip intro;intro.name="Forward";intro.stop=1.333333f;fo3lockui::assets.lock.clips={intro};
- fo3anim::Clip broken;broken.name="Left";broken.stop=.466667f;fo3lockui::assets.pin.clips={broken};
+ fo3anim::Clip broken;broken.name="Left";broken.stop=.466667f;fo3anim::Clip insertion;insertion.name="Forward";insertion.stop=1;fo3lockui::assets.pin.clips={insertion,broken};
  auto& p=gPlayerSession->player;double now=10;auto update=[&](float motion,float torque,bool a,bool b,bool focus=true,bool grip=false){now+=.05;UpdateFo3Lockpick(now,motion,torque,a,b,focus,nullptr,grip);};
  Check(BeginFo3Lockpick(20)&&Fo3LockpickFocus(),"actual modal enters");
  for(int i=0;i<35;++i)update(1,1,true,false);
@@ -41,7 +42,11 @@ int main(){try{
  Check(p.ItemCount(10)==1&&fo3audio::sounds["UILockpickingPickBreak"]==1&&flushes==1,"one break consumes one pin, emits once");
  for(int i=0;i<12;++i)update(0,0,false,false);
  Check(gLockpick.durability==1&&p.GetLock(20).locked,"authored break animation finishes before replacement");
+ Check(fo3lockui::pinIntroElapsed<1,"replacement restarts original insertion");
  update(0,0,false,false);gLockpick.pin=gLockpick.sweet;
+ for(int i=0;i<10;++i)update(0,1,false,false);
+ Check(gLockpick.cylinder==0,"replacement insertion suppresses torque");
+ for(int i=0;i<12;++i)update(0,0,false,false);
  for(int i=0;i<24;++i)update(0,1,false,false);
  Check(!Fo3LockpickFocus()&&!p.GetLock(20).locked&&p.ItemCount(10)==1&&p.Snapshot().experience==60&&p.Snapshot().karma==-5,"modal success commits actual state once");
  Check(fo3audio::sounds["UILockpickingUnlock"]==1&&flushes==2,"one success audio/save across logical updates");

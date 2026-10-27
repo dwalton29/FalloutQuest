@@ -218,7 +218,7 @@ static std::array<float, 4> Evaluate(const Channel &c, float time, float start,
   }
   return v;
 }
-bool Sample(const Skeleton &s, const Clip &c, double elapsed, Pose &p, SampleTimings* timings, RootPolicy rootPolicy, const Transform* retainedRoot) {
+bool Sample(const Skeleton &s, const Clip &c, double elapsed, Pose &p, SampleTimings* timings, RootPolicy rootPolicy, const Transform* retainedRoot, Playback playback) {
   const auto started=std::chrono::steady_clock::now();
   if (p.trackBones.size() != c.tracks.size() ||
       p.local.size() != s.bones.size() ||
@@ -228,7 +228,9 @@ bool Sample(const Skeleton &s, const Clip &c, double elapsed, Pose &p, SampleTim
   if (!std::isfinite(t) || d < 0)
     return false;
   if (d > 0) {
-    if (c.cycle == 0)
+    if (playback==Playback::Clamp)
+      t = std::clamp(t,0.0,d);
+    else if (c.cycle == 0)
       t = std::fmod(std::max(0.0, t), d);
     else if (c.cycle == 1) {
       t = std::fmod(std::max(0.0, t), 2 * d);
@@ -275,9 +277,12 @@ bool Sample(const Skeleton &s, const Clip &c, double elapsed, Pose &p, SampleTim
         float cx = std::cos(angles[0] / 2), sx = std::sin(angles[0] / 2),
               cy = std::cos(angles[1] / 2), sy = std::sin(angles[1] / 2),
               cz = std::cos(angles[2] / 2), sz = std::sin(angles[2] / 2);
+        // NIF XYZ keys apply X, then Y, then Z (column-vector Rz*Ry*Rx).
+        // Reversing this order turns lock/pin rotations around their depth axis
+        // into out-of-plane tilts, especially near the authored Y=-pi/2 keys.
         local.rotation = {
-            cx * cy * cz - sx * sy * sz, sx * cy * cz + cx * sy * sz,
-            cx * sy * cz - sx * cy * sz, cx * cy * sz + sx * sy * cz};
+            cx * cy * cz + sx * sy * sz, sx * cy * cz - cx * sy * sz,
+            cx * sy * cz + sx * cy * sz, cx * cy * sz - sx * sy * cz};
       } else
         local.rotation =
             track.rotation.keys.empty() && track.rotation.controls.empty()

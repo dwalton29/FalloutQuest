@@ -60,18 +60,18 @@ void ConfigureDiscardGuards(ProgramData& p,const shaders::Program& shader) {
         if(!std::strcmp(shader.fields[i].name,guards[j]))p.discardOffsets[j]=shader.fields[i].offset;
 }
 struct PipelineKey {
-    uint32_t ui=0;bool strip=false,offscreen=false,swapchain=false,noDiscard=false;
+    uint32_t ui=0;bool strip=false,offscreen=false,swapchain=false,noDiscard=false,modal=false;
     bool offset=false,water=false,sky=false,skinned=false,instanced=false,terrain=false,depth=true,write=true,blend=false,cull=false,clockwise=false;
     uint32_t cullFace=GL_BACK,equation=GL_FUNC_ADD,equationA=GL_FUNC_ADD,stride=0,depthFunc=GL_LEQUAL,src=GL_ONE,dst=GL_ZERO,srcA=GL_ONE,dstA=GL_ZERO;
     bool operator==(const PipelineKey& k)const {
-        return noDiscard==k.noDiscard&&swapchain==k.swapchain&&offscreen==k.offscreen&&strip==k.strip&&ui==k.ui&&water==k.water&&offset==k.offset&&cullFace==k.cullFace&&equation==k.equation&&equationA==k.equationA&&sky==k.sky && skinned==k.skinned && instanced==k.instanced && terrain==k.terrain && depth==k.depth && write==k.write && blend==k.blend &&
+        return modal==k.modal&&noDiscard==k.noDiscard&&swapchain==k.swapchain&&offscreen==k.offscreen&&strip==k.strip&&ui==k.ui&&water==k.water&&offset==k.offset&&cullFace==k.cullFace&&equation==k.equation&&equationA==k.equationA&&sky==k.sky && skinned==k.skinned && instanced==k.instanced && terrain==k.terrain && depth==k.depth && write==k.write && blend==k.blend &&
             cull==k.cull && clockwise==k.clockwise && stride==k.stride && depthFunc==k.depthFunc &&
             src==k.src && dst==k.dst && srcA==k.srcA && dstA==k.dstA;
     }
 };
 struct PipelineHash {size_t operator()(const PipelineKey& k)const {
     size_t h=uint32_t(k.swapchain)*8191+uint32_t(k.offscreen)*4093+uint32_t(k.strip)*2017+k.ui*1009+uint32_t(k.water)*997+k.stride+uint32_t(k.instanced)*31+uint32_t(k.skinned)+uint32_t(k.sky)*101;for(auto v:{uint32_t(k.terrain),uint32_t(k.depth),uint32_t(k.write),uint32_t(k.blend),
-        uint32_t(k.noDiscard),uint32_t(k.cull),uint32_t(k.clockwise),uint32_t(k.offset),k.cullFace,k.equation,k.equationA,k.depthFunc,k.src,k.dst,k.srcA,k.dstA}) { h=(h*16777619u)^v; }
+        uint32_t(k.modal),uint32_t(k.noDiscard),uint32_t(k.cull),uint32_t(k.clockwise),uint32_t(k.offset),k.cullFace,k.equation,k.equationA,k.depthFunc,k.src,k.dst,k.srcA,k.dstA}) { h=(h*16777619u)^v; }
     return h;
 }};
 VkBlendFactor Blend(uint32_t x) {
@@ -107,7 +107,9 @@ public:
     VkInstance instance{};VkPhysicalDevice physical{};VkDevice device{};VkQueue queue{};uint32_t family=0;
     VkPhysicalDeviceProperties properties{};VkPhysicalDeviceMemoryProperties memory{};
     VkCommandPool pool{},uploads{};VkCommandBuffer command{};VkFence fence{};
-    VkRenderPass pass{},resumePass{};VkFramebuffer framebuffer{};Image color,depth,white,cube,sceneColor,sceneDepth;
+    VkRenderPass pass{},resumePass{};VkFramebuffer framebuffer{};Image color,depth,white,cube,sceneColor,sceneDepth,modalDepth;
+    VkRenderPass modalPass{},modalXrPass{};VkFramebuffer modalFramebuffer{};
+    std::vector<VkFramebuffer> modalXrFramebuffers;VkFormat xrColorFormat=VK_FORMAT_UNDEFINED;
     bool snapshotReady=false,snapshotInitialized=false;
     VkSampler sampler{},nearest{},clamped{},verticalRepeat{};VkDescriptorSetLayout sets[12]{};VkPipelineLayout layouts[12]{};
     VkShaderModule modules[12][2]{};VkDescriptorPool descriptors{};
@@ -171,7 +173,7 @@ public:
     PostTarget adapted[2],bloom[3],presented;
     template<class T>struct Retired {T resource;uint64_t frame,upload;};
     std::unordered_map<uint32_t,UiTarget> uiTargets;std::vector<Retired<UiTarget>> retiredUi;
-    UiTarget* activeUi=nullptr;bool offscreen=false;uint32_t targetWidth=0,targetHeight=0;VkRenderPass uiPass{};
+    UiTarget* activeUi=nullptr;bool offscreen=false,modalActive=false;uint32_t targetWidth=0,targetHeight=0;VkRenderPass uiPass{};
     int adaptIndex=0;bool exposureFirst=true,postDone=false,passOpen=false;
     std::vector<Retired<Buffer>> retiredBuffers;std::vector<Retired<Image>> retiredImages;
     uint64_t draws=0,vertices=0,skipped=0,frames=0;std::array<uint64_t,6> skipReasons{};uint32_t firstSkippedProgram=0,visualDiagnostics=0;bool begun=false;
@@ -799,7 +801,7 @@ public:
         const VkDynamicState dynamicStates[]{VK_DYNAMIC_STATE_VIEWPORT,VK_DYNAMIC_STATE_SCISSOR,VK_DYNAMIC_STATE_DEPTH_BIAS};
         VkPipelineDynamicStateCreateInfo dynamic{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
         dynamic.dynamicStateCount=key.offset?3:2;dynamic.pDynamicStates=dynamicStates;
-        VkGraphicsPipelineCreateInfo ci{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};ci.stageCount=2;ci.pStages=stages.data();ci.pVertexInputState=&vi;ci.pInputAssemblyState=&ia;ci.pViewportState=&vp;ci.pRasterizationState=&rs;ci.pMultisampleState=&ms;ci.pDepthStencilState=&ds;ci.pColorBlendState=&bs;ci.layout=layouts[kind];ci.renderPass=key.swapchain?xrOverlayPass:key.offscreen?uiPass:pass;ci.pDynamicState=&dynamic;
+        VkGraphicsPipelineCreateInfo ci{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};ci.stageCount=2;ci.pStages=stages.data();ci.pVertexInputState=&vi;ci.pInputAssemblyState=&ia;ci.pViewportState=&vp;ci.pRasterizationState=&rs;ci.pMultisampleState=&ms;ci.pDepthStencilState=&ds;ci.pColorBlendState=&bs;ci.layout=layouts[kind];ci.renderPass=key.modal?(key.swapchain?modalXrPass:modalPass):key.swapchain?xrOverlayPass:key.offscreen?uiPass:pass;ci.pDynamicState=&dynamic;
         VkPipeline pipeline{};Check(vkCreateGraphicsPipelines(device,VK_NULL_HANDLE,1,&ci,nullptr,&pipeline),"world pipeline");pipelines.emplace(key,pipeline);return pipeline;
     }
     void Register(uint32_t id,int kind) {
@@ -872,7 +874,7 @@ public:
         if(indexFirst>m.count||uint32_t(count)>m.count-indexFirst||(type&&!m.indices.buffer)){skip(4);return;}
         const auto drawStarted=passTiming?NowUs():0;
         const auto& s=draw.state;
-        PipelineKey key;key.offscreen=offscreen;key.swapchain=directOutput;key.strip=mode==GL_TRIANGLE_STRIP;key.ui=uint32_t(p.ui);key.water=p.water;key.sky=p.sky;key.terrain=p.terrain;key.stride=m.stride;key.instanced=instances>1;key.skinned=UsesSkin(p,item.uniforms);
+        PipelineKey key;key.modal=modalActive;key.offscreen=offscreen;key.swapchain=directOutput;key.strip=mode==GL_TRIANGLE_STRIP;key.ui=uint32_t(p.ui);key.water=p.water;key.sky=p.sky;key.terrain=p.terrain;key.stride=m.stride;key.instanced=instances>1;key.skinned=UsesSkin(p,item.uniforms);
         key.depth=s.depth;key.write=s.write;key.blend=s.blend;key.cull=s.cull;key.clockwise=s.clockwise;
         key.depthFunc=s.depthFunc;key.src=s.src;key.dst=s.dst;key.srcA=s.srcAlpha;key.dstA=s.dstAlpha;
         key.cullFace=s.cullFace;key.equation=s.equation;key.equationA=s.equationAlpha;key.offset=s.offset;
@@ -989,13 +991,17 @@ public:
         VkRenderPassCreateInfo ci{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};ci.pNext=&mv;ci.attachmentCount=1;ci.pAttachments=&attachment;ci.subpassCount=1;ci.pSubpasses=&sub;
         VkRenderPass result{};Check(vkCreateRenderPass(device,&ci,nullptr,&result),"post render pass");return result;
     }
-    VkRenderPass MakeOverlayPass(VkFormat format) {
+    VkRenderPass MakeOverlayPass(VkFormat format,bool freshDepth=false) {
         std::array<VkAttachmentDescription,2> attachments{};
         attachments[0].format=format;attachments[1].format=VK_FORMAT_D32_SFLOAT;
         for(auto& a:attachments){a.samples=VK_SAMPLE_COUNT_1_BIT;a.loadOp=VK_ATTACHMENT_LOAD_OP_LOAD;a.storeOp=VK_ATTACHMENT_STORE_OP_STORE;
             a.stencilLoadOp=VK_ATTACHMENT_LOAD_OP_DONT_CARE;a.stencilStoreOp=VK_ATTACHMENT_STORE_OP_DONT_CARE;}
         attachments[0].initialLayout=attachments[0].finalLayout=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
         attachments[1].initialLayout=attachments[1].finalLayout=VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+        if(freshDepth) {
+            attachments[1].loadOp=VK_ATTACHMENT_LOAD_OP_CLEAR;attachments[1].storeOp=VK_ATTACHMENT_STORE_OP_DONT_CARE;
+            attachments[1].initialLayout=VK_IMAGE_LAYOUT_UNDEFINED;
+        }
         VkAttachmentReference colorRef{0,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL},depthRef{1,VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL};
         VkSubpassDescription sub{};sub.pipelineBindPoint=VK_PIPELINE_BIND_POINT_GRAPHICS;sub.colorAttachmentCount=1;sub.pColorAttachments=&colorRef;sub.pDepthStencilAttachment=&depthRef;
         const uint32_t mask=3;VkRenderPassMultiviewCreateInfo mv{VK_STRUCTURE_TYPE_RENDER_PASS_MULTIVIEW_CREATE_INFO};mv.subpassCount=1;mv.pViewMasks=&mask;mv.correlationMaskCount=1;mv.pCorrelationMasks=&mask;
@@ -1131,6 +1137,30 @@ public:
         VkRenderPassBeginInfo overlay{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};overlay.renderPass=directOutput?xrOverlayPass:resumePass;overlay.framebuffer=directOutput?filmTarget.overlay:postOverlayFramebuffer;overlay.renderArea={{0,0},{width,height}};
         BeginPass(Overlay,overlay);
     }
+    bool BeginModalDepth() {
+        DrainDraws();
+        if(!begun||!passOpen||!postDone||offscreen||failed)return false;
+        // Lazy, retained private depth: world depth remains available to the
+        // compositor, and modal pieces still correctly occlude each other.
+        if(!modalDepth.image)modalDepth=MakeImage(width,height,VK_FORMAT_D32_SFLOAT,
+            VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,VK_IMAGE_ASPECT_DEPTH_BIT);
+        auto& renderPass=directOutput?modalXrPass:modalPass;
+        if(!renderPass)renderPass=MakeOverlayPass(directOutput?xrColorFormat:VK_FORMAT_R16G16B16A16_SFLOAT,true);
+        if(directOutput&&modalXrFramebuffers.size()!=xrTargets.size())modalXrFramebuffers.resize(xrTargets.size());
+        auto& target=directOutput?xrTargets[acquiredColor]:presented;
+        auto& fb=directOutput?modalXrFramebuffers[acquiredColor]:modalFramebuffer;
+        if(!fb) {
+            const VkImageView views[]{target.image.view,modalDepth.view};
+            VkFramebufferCreateInfo fi{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};fi.renderPass=renderPass;
+            fi.attachmentCount=2;fi.pAttachments=views;fi.width=width;fi.height=height;fi.layers=1;
+            Check(vkCreateFramebuffer(device,&fi,nullptr,&fb),"modal depth framebuffer");
+        }
+        EndPass();
+        VkClearValue clear[2]{};clear[1].depthStencil={1,0};
+        VkRenderPassBeginInfo info{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};info.renderPass=renderPass;
+        info.framebuffer=fb;info.renderArea={{0,0},{width,height}};info.clearValueCount=2;info.pClearValues=clear;
+        BeginPass(Overlay,info);modalActive=true;return true;
+    }
     void DestroyUi(UiTarget& ui) {
         if(ui.sampled){++viewRevision;vkDestroyImageView(device,ui.sampled,nullptr);}
         DestroyPost(ui.target);ui={};
@@ -1169,7 +1199,7 @@ public:
     }
     void StartCommands(const float* left,const float* right,const float* le,const float* re,bool loading=false) {
         if(begun)throw std::runtime_error("overlapping frame recording");
-        loadingFrame=loading;
+        loadingFrame=loading;modalActive=false;
         FlushUploads();
         if(Buffered()){CreateContexts();SelectSlot(offscreen?2:nextWorldSlot);if(!offscreen)nextWorldSlot=1-nextWorldSlot;}
         const auto reuseStarted=NowUs();WaitSlot(activeSlot);Collect();
@@ -1387,6 +1417,10 @@ public:
         for(auto it=pipelines.begin();it!=pipelines.end();) {
             if(it->first.swapchain){vkDestroyPipeline(device,it->second,nullptr);it=pipelines.erase(it);}else ++it;
         }
+        for(auto fb:modalXrFramebuffers)if(fb)vkDestroyFramebuffer(device,fb,nullptr);
+        modalXrFramebuffers.clear();
+        if(modalXrPass)vkDestroyRenderPass(device,modalXrPass,nullptr);
+        modalXrPass={};
         for(auto& target:xrTargets) {
             if(target.overlay)vkDestroyFramebuffer(device,target.overlay,nullptr);
             if(target.framebuffer)vkDestroyFramebuffer(device,target.framebuffer,nullptr);
@@ -1415,6 +1449,7 @@ public:
         for(auto preferred:{VK_FORMAT_R8G8B8A8_SRGB,VK_FORMAT_B8G8R8A8_SRGB,VK_FORMAT_R8G8B8A8_UNORM,VK_FORMAT_B8G8R8A8_UNORM})
             if(std::find(formats.begin(),formats.end(),int64_t(preferred))!=formats.end()){format=preferred;break;}
         if(format==VK_FORMAT_UNDEFINED)throw std::runtime_error("OpenXR has no supported RGBA/BGRA Vulkan swapchain format");
+        xrColorFormat=format;
         xrSrgb=format==VK_FORMAT_R8G8B8A8_SRGB||format==VK_FORMAT_B8G8R8A8_SRGB;
         XrSwapchainCreateInfo info{XR_TYPE_SWAPCHAIN_CREATE_INFO};info.usageFlags=XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT;
         info.format=format;info.sampleCount=1;info.width=width;info.height=height;info.faceCount=1;info.arraySize=2;info.mipCount=1;
@@ -1507,6 +1542,9 @@ public:
             if(uiPass)vkDestroyRenderPass(device,uiPass,nullptr);
             for(auto& target:adapted)DestroyPost(target);
             for(auto& target:bloom)DestroyPost(target);
+            if(modalFramebuffer)vkDestroyFramebuffer(device,modalFramebuffer,nullptr);
+            if(modalPass)vkDestroyRenderPass(device,modalPass,nullptr);
+            Destroy(modalDepth);
             if(postOverlayFramebuffer)vkDestroyFramebuffer(device,postOverlayFramebuffer,nullptr);
             DestroyPost(presented);
             for(auto pipeline:postPipelines)if(pipeline)vkDestroyPipeline(device,pipeline,nullptr);
@@ -1548,6 +1586,7 @@ bool InitializeWorldProbe(XrInstance instance,XrSystemId system,uint32_t w,uint3
         hooks.beginUiTarget=[](uint32_t id,uint32_t w,uint32_t h){try{return renderer->BeginUiTarget(id,w,h);}catch(const std::exception& e){Failure(e);return false;}};
         hooks.endUiTarget=[](){try{renderer->EndUiTarget();}catch(const std::exception& e){Failure(e);}};
         hooks.repeatT=[](uint32_t id){try{renderer->DrainDraws();auto found=renderer->textures.find(id);if(found!=renderer->textures.end())found->second.repeatT=true;}catch(const std::exception& e){Failure(e);}};
+        hooks.beginModalDepth=[](){try{return renderer->BeginModalDepth();}catch(const std::exception& e){Failure(e);return false;}};
         hooks.clearDepth=[](){try{auto& r=*renderer;r.DrainDraws();if(!r.begun||!r.passOpen||r.failed)return;
             VkClearAttachment attachment{};attachment.aspectMask=VK_IMAGE_ASPECT_DEPTH_BIT;attachment.clearValue.depthStencil={1,0};
             const VkClearRect rect{{{0,0},{r.width,r.height}},0,1};vkCmdClearAttachments(r.command,1,&attachment,1,&rect);}catch(const std::exception& e){Failure(e);}};

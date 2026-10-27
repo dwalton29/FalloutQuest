@@ -2,6 +2,8 @@
 #include "ui/loading/fo3-loading-vr.h"
 #include "ui/interaction/fo3-interaction-hud-renderer.h"
 #include "player/fo3-lockpick.h"
+#include "fo3-lockpick-pose.h"
+#include "fo3-lockpick-overlay.h"
 namespace fo3lockui {
 struct Model {
   fo3anim::Skeleton hierarchy;std::vector<fo3anim::Clip> clips;std::vector<int> blocks;
@@ -14,7 +16,7 @@ inline bool started=false,ready=false,failed=false;
 inline GLuint vao=0,vbo=0;
 inline fo3anim::Matrix anchor=fo3anim::Identity();
 inline bool anchored=false;
-inline float breakElapsed=-1,introElapsed=0;
+inline float breakElapsed=-1,introElapsed=0,pinIntroElapsed=0;
 inline bool spritesLoaded=false;
 inline std::array<fo3hudassets::TaiSprite,5> sprites;
 inline void Prepare(){
@@ -26,7 +28,7 @@ inline void Prepare(){
         !fo3loadingvr::ReadShapes(pair.second,m.cpu,cancel,true))return false;
       const auto clip=std::find_if(m.clips.begin(),m.clips.end(),[](const auto& c){return c.name=="Forward";});
       if(clip==m.clips.end())return false;
-      fo3anim::Sample(m.hierarchy,*clip,clip->stop,m.pose);
+      fo3lockpose::Seek(m.hierarchy,&*clip,fo3lockpose::Duration(&*clip),m.pose);
       for(auto& s:m.cpu){
         if(s.mesh.shapeBlock<m.blocks.size())s.bone=m.blocks[s.mesh.shapeBlock];
         const auto& mesh=s.mesh;s.vertices.resize(mesh.positions.size()/3);
@@ -51,42 +53,28 @@ inline void SetHead(const float* head){if(anchored||!head)return;std::copy_n(hea
   // Capture a stationary panel 1.4 m in front of the entry pose (VR adaptation).
   for(int k=0;k<3;++k)anchor[12+k]-=1.4f*head[8+k];anchored=true;}
 inline std::string String(const fo3player::Player& p,const char* key,const char* original){auto i=p.Definitions().strings.find(key);return i==p.Definitions().strings.end()?original:i->second;}
-inline void Render(const float* vp,const fo3lockpick::Game& game,const fo3player::Player& player){
+inline void Render(const float* vp,const fo3lockpick::Game& game,const fo3player::Player& player,GLsizei width,GLsizei height){
   if(!game.reference||!anchored||!vp)return;
   fo3hudrenderer::GlStateGuard guard;glActiveTexture(GL_TEXTURE0);glDisable(GL_CULL_FACE);
   fo3anim::Matrix view;std::copy_n(vp,16,view.begin());const auto panel=fo3anim::Multiply(view,anchor);
   // Authored NIF XZ plane, Y depth; shared mapping keeps both model proportions.
   auto map=fo3anim::Identity();map[0]=.025f;map[5]=map[10]=0;map[9]=.025f;map[6]=-.025f;
-  const auto centre=fo3anim::Point(assets.lock.pose.global.empty()?fo3anim::Identity():assets.lock.pose.global[4],{0,0,0});
+  const int lockBone=fo3anim::FindBone(assets.lock.hierarchy,"lock");
+  const auto centre=fo3anim::Point(lockBone>=0?assets.lock.pose.global[lockBone]:fo3anim::Identity(),{0,0,0});
   map[12]=-.025f*centre[0];map[13]=-.025f*centre[2];map[14]=.025f*centre[1];
   const auto base=fo3anim::Multiply(panel,map);
+  fo3lockoverlay::DepthScope modalDepth(width,height);
   if(ready&&fo3loadingvr::EnsureProgram()){
+    glBlendEquationSeparate(GL_FUNC_ADD,GL_FUNC_ADD);
     glUseProgram(fo3loadingvr::gProgram);glUniform1i(fo3loadingvr::gSampler,0);glUniform1f(fo3loadingvr::gFade,1);glUniform1f(fo3loadingvr::gClipUi,0);
-    glEnable(GL_DEPTH_TEST);glDepthFunc(GL_LEQUAL);glDepthMask(GL_TRUE);glClear(GL_DEPTH_BUFFER_BIT);
-#ifdef FQ_ENABLE_VULKAN
-    fqvk::ClearDepth();
-#endif
-    for(auto* model:{&assets.lock,&assets.pin}) {
+    if(modalDepth.valid)for(auto* model:{&assets.lock,&assets.pin}) {
       auto pose=model->pose;
-      auto enterClip=std::find_if(model->clips.begin(),model->clips.end(),[](const auto& c){return c.name=="Forward";});
-      const float enterDuration=enterClip==model->clips.end()?0:enterClip->stop-enterClip->start;
-      const char* sequence=introElapsed>=enterDuration&&(model==&assets.lock||game.durability<1)?"Backward":"Forward";
-      auto motionClip=std::find_if(model->clips.begin(),model->clips.end(),[&](const auto& c){return c.name==sequence;});
-      if(motionClip!=model->clips.end()){
-        const float elapsed=sequence==std::string("Backward")?(motionClip->stop-motionClip->start)*(model==&assets.lock?game.cylinder/90.f:1-game.durability):std::min(introElapsed,motionClip->stop);
-        fo3anim::Sample(model->hierarchy,*motionClip,elapsed,pose);
-      }
-      if(model==&assets.pin&&breakElapsed>=0){auto clip=std::find_if(model->clips.begin(),model->clips.end(),[](const auto& c){return c.name=="Left";});
-        if(clip!=model->clips.end())fo3anim::Sample(model->hierarchy,*clip,breakElapsed,pose);}
-      const char* node=model==&assets.pin?"bobbypin":"lock";
-      const int bone=fo3anim::FindBone(model->hierarchy,node);
-      if(bone>=0&&model==&assets.pin){const auto pivot=fo3anim::Point(pose.global[bone],{0,0,0});
-        fo3anim::Transform turn;turn.translation=pivot;const float rad=(model==&assets.pin?game.pin:game.cylinder)*.01745329252f;
-        turn.rotation={std::cos(rad*.5f),0,std::sin(rad*.5f),0};auto rotation=fo3anim::ToMatrix(turn);
-        auto back=fo3anim::Identity();for(int k=0;k<3;++k)back[12+k]=-pivot[k];rotation=fo3anim::Multiply(rotation,back);
-        for(size_t b=0;b<pose.delta.size();++b){bool rotate=model==&assets.pin;for(int parent=int(b);parent>=0&&!rotate;parent=model->hierarchy.bones[parent].parent)
-          rotate=parent==bone||model->hierarchy.bones[parent].name=="screwdriver";
-          if(rotate)pose.delta[b]=fo3anim::Multiply(rotation,pose.delta[b]);}
+      const bool pin=model==&assets.pin;
+      if(!fo3lockpose::Sample(model->hierarchy,model->clips,pin,pin?pinIntroElapsed:introElapsed,
+                            game.cylinder,game.durability,breakElapsed,pose))continue;
+      if(pin) {
+        const auto placement=fo3lockpose::PinPlacement(game.pin);
+        for(auto& delta:pose.delta)delta=fo3anim::Multiply(placement,delta);
       }
       for(const auto& shape:model->shapes){fo3loadingpose::Matrix mvp;auto matrix=fo3anim::Multiply(base,shape.bone>=0?pose.delta[shape.bone]:fo3anim::Identity());
         std::copy(matrix.begin(),matrix.end(),mvp.m);fo3loadingvr::Draw(shape,mvp);}
@@ -122,5 +110,5 @@ inline void Render(const float* vp,const fo3lockpick::Game& game,const fo3player
   glUniform4f(font.tintLoc,26.f/255,1,128.f/255,1);glBindTexture(GL_TEXTURE_2D,font.fontTexture);glDrawArrays(GL_TRIANGLES,0,textCount);
   glBindTexture(GL_TEXTURE_2D,font.interfaceTexture);glDrawArrays(GL_TRIANGLES,textCount,GLsizei(vertices.size())-textCount);
 }
-inline void Shutdown(){preparation.Reset();for(auto* m:{&assets.lock,&assets.pin})fo3loadingvr::DeleteShapes(m->shapes);assets={};if(vao)glDeleteVertexArrays(1,&vao);if(vbo)glDeleteBuffers(1,&vbo);vao=vbo=0;started=ready=failed=anchored=spritesLoaded=false;}
+inline void Shutdown(){fo3lockoverlay::Shutdown();preparation.Reset();for(auto* m:{&assets.lock,&assets.pin})fo3loadingvr::DeleteShapes(m->shapes);assets={};if(vao)glDeleteVertexArrays(1,&vao);if(vbo)glDeleteBuffers(1,&vbo);vao=vbo=0;started=ready=failed=anchored=spritesLoaded=false;}
 } // namespace fo3lockui
