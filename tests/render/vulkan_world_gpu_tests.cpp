@@ -4,6 +4,7 @@
 #include "rendering/gl-state-cache.h"
 #include "rendering/vulkan/fo3-vulkan-renderer.cpp"
 #include <cassert>
+#include <cstdlib>
 #include <iostream>
 
 namespace {
@@ -11,7 +12,16 @@ XrResult XRAPI_CALL Requirements(XrInstance,XrSystemId,XrGraphicsRequirementsVul
     out->minApiVersionSupported=XR_MAKE_VERSION(1,1,0);out->maxApiVersionSupported=XR_MAKE_VERSION(1,3,0);return XR_SUCCESS;
 }
 XrResult XRAPI_CALL Instance(XrInstance,const XrVulkanInstanceCreateInfoKHR* info,VkInstance* out,VkResult* result) {
-    *result=vkCreateInstance(info->vulkanCreateInfo,nullptr,out);return XR_SUCCESS;
+    auto create=*info->vulkanCreateInfo;
+    VkValidationFeatureEnableEXT synchronization=VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT;
+    VkValidationFeaturesEXT validation{VK_STRUCTURE_TYPE_VALIDATION_FEATURES_EXT};
+    std::vector<const char*> extensions;
+    if(create.enabledExtensionCount)extensions.assign(create.ppEnabledExtensionNames,create.ppEnabledExtensionNames+create.enabledExtensionCount);
+    if(const auto* layers=std::getenv("VK_INSTANCE_LAYERS");layers&&std::strstr(layers,"VK_LAYER_KHRONOS_validation")) {
+        validation.enabledValidationFeatureCount=1;validation.pEnabledValidationFeatures=&synchronization;validation.pNext=create.pNext;create.pNext=&validation;
+        extensions.push_back(VK_EXT_VALIDATION_FEATURES_EXTENSION_NAME);create.enabledExtensionCount=uint32_t(extensions.size());create.ppEnabledExtensionNames=extensions.data();
+    }
+    *result=vkCreateInstance(&create,nullptr,out);return XR_SUCCESS;
 }
 XrResult XRAPI_CALL Physical(XrInstance,const XrVulkanGraphicsDeviceGetInfoKHR* info,VkPhysicalDevice* out) {
     uint32_t count=0;vkEnumeratePhysicalDevices(info->vulkanInstance,&count,nullptr);
@@ -227,10 +237,15 @@ void Scene(bool terrain,bool skin=false,bool instanced=false) {
     if(skin) {
         // Update the same live palette without rebuilding the mesh/animation.
         palette[12]=.8f;
+        const auto view=fqvk::renderer->textures.at(7).view;
+        const auto descriptors=fqvk::renderer->descriptorAllocations;
         fqvk::Skin(9,7,nullptr,0,palette,1);
+        if(fqrender::nativeOnly)assert(fqvk::renderer->textures.at(7).view==view&&fqvk::renderer->paletteUpdates==1);
         assert(fqvk::BeginWorldProbe(left,left,eye,eye));
         Submit(1,9,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);
-        fqvk::EndWorldProbe();const auto moved=fqvk::renderer->Readback();
+        fqvk::EndWorldProbe();
+        if(fqrender::nativeOnly)assert(fqvk::renderer->descriptorAllocations==descriptors);
+        const auto moved=fqvk::renderer->Readback();
         Near(Pixel(moved,0,32,32,0),0);Near(Pixel(moved,0,55,32,0),1);
     }
 }
@@ -465,7 +480,50 @@ void HeadlessSceneSubmission() {
     std::cout<<"Context-free scene submission: CPU handles, named uniforms, queued state snapshots, native original material output and zero GLES driver calls passed\n";
 }
 
+void AsyncResources() {
+    fqrender::nativeOnly=true;fqgl::Reset();
+    const auto xr=reinterpret_cast<XrInstance>(uintptr_t(1));
+    assert(fqvk::InitializeWorldProbe(xr,1,64,64));Scene(false);
+    auto& r=*fqvk::renderer;
+    assert(r.uploadOperations>=5&&r.uploadSubmissions<r.uploadOperations&&r.uploadQueueIdles==0);
+    assert(r.uploadBytes==0&&r.uploadCompleted==r.uploadSerial);
+    const float identity[]{1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1},eye[]{0,0,2};
+    const auto allocated=r.descriptorAllocations,hits=r.descriptorHits;
+    for(int frame=0;frame<3;++frame) {
+        assert(fqvk::BeginWorldProbe(identity,identity,eye,eye));
+        Submit(1,9,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);Submit(1,9,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);
+        fqvk::EndWorldProbe();
+    }
+    assert(r.descriptorAllocations==allocated&&r.descriptorHits>=hits+6);
+    const uint8_t green[]{0,255,0,255},blue[]{0,0,255,255};
+    fqvk::Texture(5,1,1,green);fqvk::Texture(5,1,1,blue); // replace an image still referenced by a pending upload
+    assert(r.uploadBatch.operations==2&&!r.retiredImages.empty());
+    const auto ticket=glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE,0);assert(ticket);
+    const auto serial=r.uploadSerial;assert(uintptr_t(ticket)==serial+1);
+    const auto status=glClientWaitSync(ticket,0,0);assert(status==GL_ALREADY_SIGNALED||status==GL_TIMEOUT_EXPIRED);
+    assert(fqvk::BeginWorldProbe(identity,identity,eye,eye));Submit(1,9,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);fqvk::EndWorldProbe();
+    assert(glClientWaitSync(ticket,0,0)==GL_ALREADY_SIGNALED);glDeleteSync(ticket);
+    assert(r.uploadBytes==0&&r.retiredImages.empty());
+    const auto resets=r.descriptorResets;
+    assert(fqvk::BeginWorldProbe(identity,identity,eye,eye));Submit(1,9,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);fqvk::EndWorldProbe();
+    assert(r.descriptorResets==resets+1); // destroyed views invalidate cached descriptors at the next safe boundary
+    const auto pixels=r.Readback();Near(Pixel(pixels,0,32,32,2),1);Near(Pixel(pixels,1,32,32,2),1);
+    // Exercise bounded staging/backpressure with rapidly replaced native images.
+    r.uploadBatchLimit=1;r.uploadMemoryLimit=16;
+    for(int i=0;i<32;++i)fqvk::Texture(5,1,1,i%2?green:blue);
+    r.FlushUploads();assert(r.uploadBytes<=r.uploadMemoryLimit&&r.uploadQueueIdles==0);
+    assert(fqvk::BeginWorldProbe(identity,identity,eye,eye));Submit(1,9,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);fqvk::EndWorldProbe();
+    const auto changed=r.Readback();Near(Pixel(changed,0,32,32,1),1);Near(Pixel(changed,1,32,32,1),1);
+    assert(r.uploadBytes==0&&r.retiredImages.empty());
+    fqvk::ShutdownWorldProbe();
+    // Teardown before any frame must safely cancel unsubmitted uploads.
+    assert(fqvk::InitializeWorldProbe(xr,1,64,64));assert(fqvk::renderer->uploadBatch.command);
+    fqvk::ShutdownWorldProbe();fqrender::nativeOnly=false;fqgl::Reset();
+    std::cout<<"Asynchronous native resources: batched uploads, real completion tickets, bounded staging, replacement/teardown lifetime, descriptor reuse/invalidation and updated pixels passed\n";
+}
+
 void GameplayPresentation(bool withDepth) {
+    fqrender::nativeOnly=true;fqgl::Reset();
     const auto xr=reinterpret_cast<XrInstance>(uintptr_t(1));const auto session=reinterpret_cast<XrSession>(uintptr_t(2));
     assert(fqvk::InitializeWorldProbe(xr,1,64,64));Scene(false);
     XrGraphicsBindingVulkan2KHR binding{};assert(fqvk::GameplayBinding(binding));
@@ -515,13 +573,15 @@ void GameplayPresentation(bool withDepth) {
     fqvk::DestroyGameplaySwapchain();fqvk::ShutdownWorldProbe();timeoutWait=false;
     assert(fqvk::InitializeWorldProbe(xr,1,64,64));unsupportedFormat=true;
     assert(!fqvk::CreateGameplaySwapchain(session));assert(runtimeImages.empty());
-    fqvk::ShutdownWorldProbe();unsupportedFormat=false;offerDepth=false;
+    fqvk::ShutdownWorldProbe();unsupportedFormat=false;offerDepth=false;fqrender::nativeOnly=false;fqgl::Reset();
     std::cout<<"Vulkan compositor software test: layered UNORM output, image rotation, upright stereo, film output, fence-before-release, independent depth indices, D32 copies/metadata, projection views, recreation, timeout and format rejection passed\n";
 }
 
 int main() {
-    HeadlessSceneSubmission();
+    AsyncResources();HeadlessSceneSubmission();
     GameplayPresentation(false);GameplayPresentation(true);
+    for(bool asynchronous:{false,true}) {
+    fqrender::nativeOnly=asynchronous;
     for(int mode=0;mode<4;++mode) {
         assert(fqvk::InitializeWorldProbe(reinterpret_cast<XrInstance>(uintptr_t(1)),1,64,64));
         Scene(mode==1,mode==2,mode==3);fqvk::ShutdownWorldProbe();assert(!fqvk::WorldProbeActive());
@@ -533,5 +593,7 @@ int main() {
     assert(fqvk::InitializeWorldProbe(reinterpret_cast<XrInstance>(uintptr_t(1)),1,64,64));Loading();fqvk::ShutdownWorldProbe();
     assert(fqvk::InitializeWorldProbe(reinterpret_cast<XrInstance>(uintptr_t(1)),1,64,64));PipboyTarget();fqvk::ShutdownWorldProbe();
     assert(fqvk::InitializeWorldProbe(reinterpret_cast<XrInstance>(uintptr_t(1)),1,64,64));PostOverlay();fqvk::ShutdownWorldProbe();
+    }
+    fqrender::nativeOnly=false;fqgl::Reset();
     std::cout<<"Vulkan native multiview: original world/LAND shaders, indexed NIF layout, per-eye cameras, depth equality, ordered paint blending, layered water refraction, retained opaque depth, original exposure/bloom/film/gamma, transformed UI/notification alpha, loading clipping/depth, Pip-Boy RTT sampling/orientation and recreation passed\n";
 }

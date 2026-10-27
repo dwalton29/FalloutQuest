@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <deque>
 #include <fstream>
 #include <cmath>
 #ifdef __ANDROID__
@@ -37,7 +38,7 @@ template<class T> T Proc(XrInstance xr,const char* name) {
     return reinterpret_cast<T>(fn);
 }
 struct Buffer {VkBuffer buffer{};VkDeviceMemory memory{};void* mapped{};VkDeviceSize size{};};
-struct Image {VkImage image{};VkImageView view{};VkDeviceMemory memory{};uint32_t levels=1;bool palette=false,clamp=false,repeatT=false;};
+struct Image {VkImage image{};VkImageView view{};VkDeviceMemory memory{};uint32_t levels=1,width=0,height=0;bool palette=false,clamp=false,repeatT=false;};
 struct PostTarget {Image image;VkFramebuffer framebuffer{};uint32_t width=0,height=0;bool initialized=false;};
 struct UiTarget {PostTarget target;VkImageView sampled{};};
 struct MeshData {Buffer vertices,indices,skin;uint32_t count=0,stride=0;};
@@ -126,6 +127,116 @@ public:
     bool gameplay=false;
     std::string outputDirectory;
     bool dumped=false,loadingFrame=false;
+    struct DescriptorKey {
+        int kind=0;uint32_t uniformBytes=0;std::vector<VkDescriptorImageInfo> images;
+        bool operator==(const DescriptorKey& other)const {
+            if(kind!=other.kind||uniformBytes!=other.uniformBytes||images.size()!=other.images.size())return false;
+            for(size_t i=0;i<images.size();++i)if(images[i].sampler!=other.images[i].sampler||images[i].imageView!=other.images[i].imageView||images[i].imageLayout!=other.images[i].imageLayout)return false;
+            return true;
+        }
+    };
+    struct DescriptorHash {size_t operator()(const DescriptorKey& key)const {
+        size_t hash=size_t(key.kind)*16777619u+key.uniformBytes;
+        for(const auto& image:key.images){hash=(hash*16777619u)^std::hash<VkImageView>{}(image.imageView);hash=(hash*16777619u)^std::hash<VkSampler>{}(image.sampler);hash=(hash*16777619u)^size_t(image.imageLayout);}
+        return hash;
+    }};
+    std::unordered_map<DescriptorKey,VkDescriptorSet,DescriptorHash> descriptorCache;
+    static constexpr uint32_t DescriptorCapacity=16384,FrameDescriptorReserve=8192;
+    uint64_t descriptorAllocations=0,descriptorHits=0,descriptorResets=0;
+    bool descriptorsDirty=false;
+    void PrepareDescriptors() {
+        // Called after the frame fence. No cached set is reset while in flight.
+        if(descriptorsDirty||descriptorCache.size()>DescriptorCapacity-FrameDescriptorReserve) {
+            Check(vkResetDescriptorPool(device,descriptors,0),"recycle descriptors");
+            descriptorCache.clear();descriptorsDirty=false;++descriptorResets;
+        }
+    }
+    VkDescriptorSet Descriptor(int kind,uint32_t uniformBytes,const std::vector<VkDescriptorImageInfo>& images) {
+        DescriptorKey key{kind,uniformBytes,images};
+        const auto cached=descriptorCache.find(key);
+        if(cached!=descriptorCache.end()){++descriptorHits;return cached->second;}
+        VkDescriptorSet set{};VkDescriptorSetAllocateInfo ai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};ai.descriptorPool=descriptors;ai.descriptorSetCount=1;ai.pSetLayouts=&sets[kind];
+        Check(vkAllocateDescriptorSets(device,&ai,&set),"allocate cached descriptor");
+        const std::array<VkDescriptorBufferInfo,2> buffers{{{arena.buffer,0,uniformBytes},{stereo.buffer,0,432}}};
+        std::vector<VkWriteDescriptorSet> writes(images.size()+2);
+        for(size_t i=0;i<writes.size();++i){auto& w=writes[i];w.sType=VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;w.dstSet=set;w.dstBinding=uint32_t(i);w.descriptorCount=1;
+            w.descriptorType=i==0?VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC:i==1?VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER:VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            if(i<2)w.pBufferInfo=&buffers[i];else w.pImageInfo=&images[i-2];}
+        vkUpdateDescriptorSets(device,uint32_t(writes.size()),writes.data(),0,nullptr);
+        descriptorCache.emplace(std::move(key),set);++descriptorAllocations;return set;
+    }
+    struct UploadBatch {
+        VkCommandBuffer command{};VkFence fence{};uint64_t serial=0,bytes=0;uint32_t operations=0;
+        std::vector<Buffer> staging;
+    };
+    UploadBatch uploadBatch;
+    std::deque<UploadBatch> uploadFlight;
+    uint64_t uploadSerial=0,uploadCompleted=0,uploadOperations=0,uploadSubmissions=0,uploadPressureWaits=0,uploadQueueIdles=0;
+    uint64_t uploadBytes=0,uploadPeakBytes=0;
+    uint64_t uploadBatchLimit=8u*1024u*1024u,uploadMemoryLimit=64u*1024u*1024u;
+    uint32_t uploadOperationLimit=128;
+    uint64_t paletteAllocations=0,paletteUpdates=0;
+    bool AsyncUploads() const{return fqrender::nativeOnly;}
+    void ReleaseUploadBatch(UploadBatch& batch) {
+        for(auto& staging:batch.staging){uploadBytes-=staging.size;Destroy(staging);}
+        if(batch.fence)vkDestroyFence(device,batch.fence,nullptr);
+        if(batch.command)vkFreeCommandBuffers(device,uploads,1,&batch.command);
+        batch={};
+    }
+    void PollUploads() {
+        while(!uploadFlight.empty()) {
+            const auto status=vkGetFenceStatus(device,uploadFlight.front().fence);
+            if(status==VK_NOT_READY)break;
+            Check(status,"poll upload fence");uploadCompleted=uploadFlight.front().serial;
+            ReleaseUploadBatch(uploadFlight.front());uploadFlight.pop_front();
+        }
+    }
+    uint64_t FlushUploads() {
+        if(uploadBatch.command) {
+            Check(vkEndCommandBuffer(uploadBatch.command),"end batched uploads");
+            VkFenceCreateInfo fi{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};Check(vkCreateFence(device,&fi,nullptr,&uploadBatch.fence),"upload fence");
+            uploadBatch.serial=++uploadSerial;
+            uploadFlight.push_back(std::move(uploadBatch));uploadBatch={};
+            auto& submitted=uploadFlight.back();
+            VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};si.commandBufferCount=1;si.pCommandBuffers=&submitted.command;
+            Check(vkQueueSubmit(queue,1,&si,submitted.fence),"submit batched uploads");++uploadSubmissions;
+        }
+        PollUploads();
+        while(uploadBytes>uploadMemoryLimit&&!uploadFlight.empty()) {
+            ++uploadPressureWaits;
+            Check(vkWaitForFences(device,1,&uploadFlight.front().fence,VK_TRUE,UINT64_MAX),"upload staging backpressure");
+            PollUploads();
+        }
+        return uploadSerial;
+    }
+    bool UploadsComplete(uint64_t ticket) {
+        PollUploads();return ticket<=uploadCompleted;
+    }
+    void CancelUploads() {
+        // Also valid after initialization/recording failures: never submit a partially recorded batch.
+        if(device)vkDeviceWaitIdle(device);
+        ReleaseUploadBatch(uploadBatch);
+        for(auto& batch:uploadFlight)ReleaseUploadBatch(batch);
+        uploadFlight.clear();uploadCompleted=uploadSerial;
+    }
+    template<class Fn>void UploadTransfer(Fn fn) {
+        ++uploadOperations;
+        if(!AsyncUploads()){++uploadQueueIdles;Transfer(fn);return;}
+        PollUploads();
+        if(!uploadBatch.command) {
+            VkCommandBufferAllocateInfo ai{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};ai.commandPool=uploads;ai.level=VK_COMMAND_BUFFER_LEVEL_PRIMARY;ai.commandBufferCount=1;
+            Check(vkAllocateCommandBuffers(device,&ai,&uploadBatch.command),"allocate batched uploads");
+            VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};bi.flags=VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+            Check(vkBeginCommandBuffer(uploadBatch.command,&bi),"begin batched uploads");
+        }
+        fn(uploadBatch.command);++uploadBatch.operations;
+    }
+    void KeepStaging(Buffer& staging) {
+        if(!AsyncUploads()){Destroy(staging);return;}
+        uploadBatch.staging.push_back(staging);uploadBatch.bytes+=staging.size;uploadBytes+=staging.size;
+        uploadPeakBytes=std::max(uploadPeakBytes,uploadBytes);staging={};
+        if(uploadBatch.bytes>=uploadBatchLimit||uploadBatch.operations>=uploadOperationLimit)FlushUploads();
+    }
     uint32_t MemoryType(uint32_t bits,VkMemoryPropertyFlags flags) {
         for(uint32_t i=0;i<memory.memoryTypeCount;++i)
             if((bits&(1u<<i))&&(memory.memoryTypes[i].propertyFlags&flags)==flags)return i;
@@ -153,17 +264,17 @@ public:
         b={};
     }
     void Destroy(Image& i) {
-        if(i.view)vkDestroyImageView(device,i.view,nullptr);
+        if(i.view){descriptorsDirty=true;vkDestroyImageView(device,i.view,nullptr);}
         if(i.image)vkDestroyImage(device,i.image,nullptr);
         if(i.memory)vkFreeMemory(device,i.memory,nullptr);
         i={};
     }
-    void Retire(Buffer& buffer){if(begun&&buffer.buffer){retiredBuffers.push_back(buffer);buffer={};}else Destroy(buffer);}
-    void Retire(Image& image){if(begun&&image.image){retiredImages.push_back(image);image={};}else Destroy(image);}
-    void Collect(){for(auto& ui:retiredUi)DestroyUi(ui);retiredUi.clear();for(auto& b:retiredBuffers)Destroy(b);for(auto& i:retiredImages)Destroy(i);retiredBuffers.clear();retiredImages.clear();}
+    void Retire(Buffer& buffer){if((begun||AsyncUploads())&&buffer.buffer){retiredBuffers.push_back(buffer);buffer={};}else Destroy(buffer);}
+    void Retire(Image& image){if((begun||AsyncUploads())&&image.image){retiredImages.push_back(image);image={};}else Destroy(image);}
+    void Collect(){PollUploads();if(begun||uploadBatch.command||!uploadFlight.empty())return;for(auto& ui:retiredUi)DestroyUi(ui);retiredUi.clear();for(auto& b:retiredBuffers)Destroy(b);for(auto& i:retiredImages)Destroy(i);retiredBuffers.clear();retiredImages.clear();}
     Image MakeImage(uint32_t w,uint32_t h,VkFormat format,VkImageUsageFlags usage,
                     VkImageAspectFlags aspect,uint32_t layers=2,uint32_t levels=1,bool isCube=false) {
-        Image image{};image.levels=levels;
+        Image image{};image.levels=levels;image.width=w;image.height=h;
         try {
             VkImageCreateInfo ci{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};ci.imageType=VK_IMAGE_TYPE_2D;
             ci.format=format;ci.extent={w,h,1};ci.mipLevels=levels;ci.arrayLayers=layers;
@@ -183,6 +294,7 @@ public:
         return image;
     }
     template<class Fn>void Transfer(Fn fn) {
+        FlushUploads();
         VkCommandBuffer cb{};VkCommandBufferAllocateInfo ai{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
         ai.commandPool=uploads;ai.level=VK_COMMAND_BUFFER_LEVEL_PRIMARY;ai.commandBufferCount=1;
         Check(vkAllocateCommandBuffers(device,&ai,&cb),"allocate upload commands");
@@ -200,14 +312,15 @@ public:
         try {
             std::memcpy(staging.mapped,data,bytes);
             result=MakeBuffer(bytes,usage|VK_BUFFER_USAGE_TRANSFER_DST_BIT,false);
-            Transfer([&](VkCommandBuffer cb){VkBufferCopy copy{0,0,bytes};vkCmdCopyBuffer(cb,staging.buffer,result.buffer,1,&copy);
+            UploadTransfer([&](VkCommandBuffer cb){VkBufferCopy copy{0,0,bytes};vkCmdCopyBuffer(cb,staging.buffer,result.buffer,1,&copy);
                 VkBufferMemoryBarrier barrier{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};
                 barrier.srcAccessMask=VK_ACCESS_TRANSFER_WRITE_BIT;barrier.dstAccessMask=VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT|VK_ACCESS_INDEX_READ_BIT;
                 barrier.srcQueueFamilyIndex=barrier.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;
                 barrier.buffer=result.buffer;barrier.size=VK_WHOLE_SIZE;
                 vkCmdPipelineBarrier(cb,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_VERTEX_INPUT_BIT,0,0,nullptr,1,&barrier,0,nullptr);});
-        }catch(...){Destroy(staging);Destroy(result);throw;}
-        Destroy(staging);return result;
+            KeepStaging(staging);
+        }catch(...){CancelUploads();Destroy(staging);Destroy(result);throw;}
+        return result;
     }
     Image UploadTexture(uint32_t w,uint32_t h,const uint8_t* rgba,bool isCube=false,bool mips=true,bool repeat=true) {
         const uint32_t layers=isCube?6:1;const size_t bytes=size_t(w)*h*4*layers;
@@ -221,7 +334,7 @@ public:
             result=MakeImage(w,h,VK_FORMAT_R8G8B8A8_UNORM,VK_IMAGE_USAGE_TRANSFER_DST_BIT|VK_IMAGE_USAGE_TRANSFER_SRC_BIT|VK_IMAGE_USAGE_SAMPLED_BIT,
                              VK_IMAGE_ASPECT_COLOR_BIT,layers,levels,isCube);
             result.clamp=!repeat;
-            Transfer([&](VkCommandBuffer cb){
+            UploadTransfer([&](VkCommandBuffer cb){
                 VkImageMemoryBarrier barrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
                 barrier.srcQueueFamilyIndex=barrier.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;
                 barrier.image=result.image;barrier.subresourceRange={VK_IMAGE_ASPECT_COLOR_BIT,0,levels,0,layers};
@@ -249,10 +362,12 @@ public:
                 barrier.srcAccessMask=VK_ACCESS_TRANSFER_WRITE_BIT;barrier.dstAccessMask=VK_ACCESS_SHADER_READ_BIT;
                 vkCmdPipelineBarrier(cb,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_VERTEX_SHADER_BIT|VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,0,0,nullptr,0,nullptr,1,&barrier);
             });
-        }catch(...){Destroy(staging);Destroy(result);throw;}
-        Destroy(staging);return result;
+            KeepStaging(staging);
+        }catch(...){CancelUploads();Destroy(staging);Destroy(result);throw;}
+        return result;
     }
     Image UploadPalette(const float* data,size_t rows) {
+        ++paletteAllocations;
         const size_t bytes=rows*8*4*sizeof(float);
         Buffer staging=MakeBuffer(bytes,VK_BUFFER_USAGE_TRANSFER_SRC_BIT,true);Image image;
         try {
@@ -260,7 +375,7 @@ public:
             image=MakeImage(8,uint32_t(rows),VK_FORMAT_R32G32B32A32_SFLOAT,
                 VK_IMAGE_USAGE_TRANSFER_DST_BIT|VK_IMAGE_USAGE_SAMPLED_BIT,VK_IMAGE_ASPECT_COLOR_BIT,1);
             image.palette=true;
-            Transfer([&](VkCommandBuffer cb){
+            UploadTransfer([&](VkCommandBuffer cb){
                 VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};b.image=image.image;
                 b.srcQueueFamilyIndex=b.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;
                 b.subresourceRange={VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,1};b.oldLayout=VK_IMAGE_LAYOUT_UNDEFINED;
@@ -271,8 +386,30 @@ public:
                 b.oldLayout=b.newLayout;b.newLayout=VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;b.srcAccessMask=VK_ACCESS_TRANSFER_WRITE_BIT;b.dstAccessMask=VK_ACCESS_SHADER_READ_BIT;
                 vkCmdPipelineBarrier(cb,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_VERTEX_SHADER_BIT,0,0,nullptr,0,nullptr,1,&b);
             });
-        }catch(...){Destroy(staging);Destroy(image);throw;}
-        Destroy(staging);return image;
+            KeepStaging(staging);
+        }catch(...){CancelUploads();Destroy(staging);Destroy(image);throw;}
+        return image;
+    }
+    void UpdatePalette(Image& image,const float* data,size_t rows) {
+        // Only before command recording: queued draws must retain their palette contents.
+        if(begun)throw std::runtime_error("palette reuse during frame recording");
+        Buffer staging=MakeBuffer(rows*8*4*sizeof(float),VK_BUFFER_USAGE_TRANSFER_SRC_BIT,true);
+        try {
+            std::memcpy(staging.mapped,data,size_t(staging.size));
+            UploadTransfer([&](VkCommandBuffer cb){
+                VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};b.image=image.image;
+                b.srcQueueFamilyIndex=b.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;b.subresourceRange={VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,1};
+                b.oldLayout=VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;b.newLayout=VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+                b.srcAccessMask=VK_ACCESS_SHADER_READ_BIT|VK_ACCESS_TRANSFER_WRITE_BIT;b.dstAccessMask=VK_ACCESS_TRANSFER_WRITE_BIT;
+                vkCmdPipelineBarrier(cb,VK_PIPELINE_STAGE_VERTEX_SHADER_BIT|VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,0,0,nullptr,0,nullptr,1,&b);
+                VkBufferImageCopy copy{};copy.imageSubresource={VK_IMAGE_ASPECT_COLOR_BIT,0,0,1};copy.imageExtent={8,uint32_t(rows),1};
+                vkCmdCopyBufferToImage(cb,staging.buffer,image.image,b.newLayout,1,&copy);
+                b.oldLayout=b.newLayout;b.newLayout=VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                b.srcAccessMask=VK_ACCESS_TRANSFER_WRITE_BIT;b.dstAccessMask=VK_ACCESS_SHADER_READ_BIT;
+                vkCmdPipelineBarrier(cb,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_VERTEX_SHADER_BIT,0,0,nullptr,0,nullptr,1,&b);
+            });
+            KeepStaging(staging);++paletteUpdates;
+        }catch(...){CancelUploads();Destroy(staging);throw;}
     }
     Image UploadCube(const Fo3RgbaCubeTexture& source) {
         if(source.width<=0||source.height!=source.width||source.mipLevels<=0)throw std::runtime_error("invalid cube");
@@ -291,7 +428,7 @@ public:
             std::memcpy(staging.mapped,pixels.data(),pixels.size());
             image=MakeImage(source.width,source.height,VK_FORMAT_R8G8B8A8_UNORM,VK_IMAGE_USAGE_TRANSFER_DST_BIT|VK_IMAGE_USAGE_SAMPLED_BIT,VK_IMAGE_ASPECT_COLOR_BIT,6,source.mipLevels,true);
             image.clamp=true;
-            Transfer([&](VkCommandBuffer cb){
+            UploadTransfer([&](VkCommandBuffer cb){
                 VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};b.image=image.image;
                 b.srcQueueFamilyIndex=b.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;
                 b.subresourceRange={VK_IMAGE_ASPECT_COLOR_BIT,0,uint32_t(source.mipLevels),0,6};b.oldLayout=VK_IMAGE_LAYOUT_UNDEFINED;
@@ -301,8 +438,9 @@ public:
                 b.oldLayout=b.newLayout;b.newLayout=VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;b.srcAccessMask=VK_ACCESS_TRANSFER_WRITE_BIT;b.dstAccessMask=VK_ACCESS_SHADER_READ_BIT;
                 vkCmdPipelineBarrier(cb,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,0,0,nullptr,0,nullptr,1,&b);
             });
-        }catch(...){Destroy(staging);Destroy(image);throw;}
-        Destroy(staging);return image;
+            KeepStaging(staging);
+        }catch(...){CancelUploads();Destroy(staging);Destroy(image);throw;}
+        return image;
     }
     void Initialize(XrInstance xr,XrSystemId system,uint32_t w,uint32_t h) {
         width=w;height=h;xrInstance=xr;
@@ -413,8 +551,8 @@ public:
             ci.codeSize=stage?shader.fragmentBytes:shader.vertexBytes;ci.pCode=stage?shader.fragment:shader.vertex;
             Check(vkCreateShaderModule(device,&ci,nullptr,&modules[kind][stage]),"SPIR-V module");
         }
-        std::array<VkDescriptorPoolSize,3> sizes{{{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,8192},{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,8192},{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,81920}}};
-        VkDescriptorPoolCreateInfo pi{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};pi.maxSets=8192;pi.poolSizeCount=uint32_t(sizes.size());pi.pPoolSizes=sizes.data();
+        std::array<VkDescriptorPoolSize,3> sizes{{{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,DescriptorCapacity},{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,DescriptorCapacity},{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,DescriptorCapacity*10}}};
+        VkDescriptorPoolCreateInfo pi{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};pi.maxSets=DescriptorCapacity;pi.poolSizeCount=uint32_t(sizes.size());pi.pPoolSizes=sizes.data();
         Check(vkCreateDescriptorPool(device,&pi,nullptr,&descriptors),"frame descriptor pool");
     }
     VkPipeline Pipeline(const PipelineKey& key) {
@@ -527,9 +665,6 @@ public:
             if(!std::strcmp(e.field.name,"uReflectionReady"))*out=0.0f; // planar native pass pending
             if(!std::strcmp(e.field.name,"uViewport")){out[0]=float(width);out[1]=float(height);}
         }
-        VkDescriptorSet set{};VkDescriptorSetAllocateInfo ai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};ai.descriptorPool=descriptors;ai.descriptorSetCount=1;ai.pSetLayouts=&sets[kind];
-        Check(vkAllocateDescriptorSets(device,&ai,&set),"allocate draw descriptors");
-        std::array<VkDescriptorBufferInfo,2> bufferInfo{{{arena.buffer,0,item.uniforms.size()},{stereo.buffer,0,432}}};
         std::vector<VkDescriptorImageInfo> imageInfo(item.units.size());
         const auto* samplerMeta=shaders::programs[kind].samplers;
         for(size_t i=0;i<item.units.size();++i){
@@ -552,11 +687,7 @@ public:
             }
             imageInfo[i]={chosenSampler,view,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
         }
-        std::vector<VkWriteDescriptorSet> writes(item.units.size()+2);
-        for(uint32_t i=0;i<writes.size();++i){auto& w=writes[i];w.sType=VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;w.dstSet=set;w.dstBinding=i;w.descriptorCount=1;
-            w.descriptorType=i==0?VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC:i==1?VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER:VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            if(i<2)w.pBufferInfo=&bufferInfo[i];else w.pImageInfo=&imageInfo[i-2];}
-        vkUpdateDescriptorSets(device,uint32_t(writes.size()),writes.data(),0,nullptr);
+        const auto set=Descriptor(kind,uint32_t(item.uniforms.size()),imageInfo);
         const uint32_t dynamic=uint32_t(cursor);cursor+=item.uniforms.size();
         const VkDeviceSize instanceOffset=cursor;
         if(key.instanced){std::memcpy(static_cast<uint8_t*>(arena.mapped)+cursor,draw.transforms.data(),instanceBytes);cursor+=instanceBytes;}
@@ -690,14 +821,7 @@ public:
             if(field.integer){const int integer=int(value->second.at(0));std::memcpy(bytes+field.offset,&integer,4);}
             else std::memcpy(bytes+field.offset,value->second.data(),std::min<size_t>(field.components,value->second.size())*4);
         }
-        VkDescriptorSet set{};VkDescriptorSetAllocateInfo ai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};ai.descriptorPool=descriptors;ai.descriptorSetCount=1;ai.pSetLayouts=&sets[kind];
-        Check(vkAllocateDescriptorSets(device,&ai,&set),"post descriptor set");
-        const std::array<VkDescriptorBufferInfo,2> buffers{{{arena.buffer,0,shader.uniformSize},{stereo.buffer,0,432}}};
-        std::vector<VkWriteDescriptorSet> writes(images.size()+2);
-        for(size_t i=0;i<writes.size();++i){auto& w=writes[i];w.sType=VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;w.dstSet=set;w.dstBinding=uint32_t(i);w.descriptorCount=1;
-            w.descriptorType=i==0?VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC:i==1?VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER:VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            if(i<2)w.pBufferInfo=&buffers[i];else w.pImageInfo=&images[i-2];}
-        vkUpdateDescriptorSets(device,uint32_t(writes.size()),writes.data(),0,nullptr);
+        const auto set=Descriptor(kind,shader.uniformSize,images);
         PostBarrier(target.image,target.initialized?VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:VK_IMAGE_LAYOUT_UNDEFINED,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
             target.initialized?VK_ACCESS_SHADER_READ_BIT:0,VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
             target.initialized?VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT:VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
@@ -790,8 +914,9 @@ public:
     }
     void StartCommands(const float* left,const float* right,const float* le,const float* re,bool loading=false) {
         loadingFrame=loading;
+        FlushUploads();
         Check(vkWaitForFences(device,1,&fence,VK_TRUE,UINT64_MAX),"wait frame");
-        Check(vkResetCommandPool(device,pool,0),"reset commands");Check(vkResetDescriptorPool(device,descriptors,0),"reset descriptors");
+        Check(vkResetCommandPool(device,pool,0),"reset commands");PrepareDescriptors();
         float data[108]{};data[104]=offscreen?1.0f:0.0f;std::memcpy(data,left,64);std::memcpy(data+16,right,64);std::memcpy(data+32,le,12);std::memcpy(data+36,re,12);for(size_t eye=0;eye<2;++eye) {
             float* sky=data+40+eye*16;const float* world=data+eye*16;const float* position=data+32+eye*4;
             std::memcpy(sky,world,64);
@@ -841,6 +966,7 @@ public:
         if(depthOutput)CopyCompositorDepth(depthOutput);
         if(timestamps)vkCmdWriteTimestamp(command,VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,timestamps,2);
         Check(vkEndCommandBuffer(command),"end frame");Check(vkResetFences(device,1,&fence),"reset frame fence");
+        FlushUploads(); // Same graphics queue; upload barriers precede every consuming frame.
         VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};si.commandBufferCount=1;si.pCommandBuffers=&command;
         Check(vkQueueSubmit(queue,1,&si,fence),"submit world probe");Check(vkWaitForFences(device,1,&fence,VK_TRUE,UINT64_MAX),"finish world probe");
         double gpuMs=-1;
@@ -853,6 +979,9 @@ public:
             }
         }
         Collect();
+        if(!offscreen&&(frames%120)==0)VKLOG("FQVK RESOURCES uploadOperations=%llu uploadBatches=%llu uploadQueueIdles=%llu stagingBytes=%llu stagingPeakBytes=%llu stagingPressureWaits=%llu descriptorAllocations=%llu descriptorHits=%llu descriptorResets=%llu paletteAllocations=%llu paletteUpdates=%llu",
+            (unsigned long long)uploadOperations,(unsigned long long)uploadSubmissions,(unsigned long long)uploadQueueIdles,
+            (unsigned long long)uploadBytes,(unsigned long long)uploadPeakBytes,(unsigned long long)uploadPressureWaits,(unsigned long long)descriptorAllocations,(unsigned long long)descriptorHits,(unsigned long long)descriptorResets,(unsigned long long)paletteAllocations,(unsigned long long)paletteUpdates);
         if(!offscreen&&!gameplay)Dump();
         if(!offscreen&&(frames++%120)==0)VKLOG("FQVK FRAME frame=%llu stereoGpuMs=%.3f sharedDraws=%llu vertexCorners=%llu skippedDraws=%llu presentation=%s sceneSubmission=cpu-commands benchmarkValid=0",
             (unsigned long long)frames,gpuMs,(unsigned long long)draws,(unsigned long long)vertices,(unsigned long long)skipped,gameplay?"Vulkan":"GLES-probe");
@@ -1020,7 +1149,7 @@ public:
     }
     ~Renderer() {
         DestroySwapchain();
-        if(device){vkDeviceWaitIdle(device);
+        if(device){CancelUploads();begun=false;
             for(auto& e:pipelines)vkDestroyPipeline(device,e.second,nullptr);
             for(auto& e:meshes){Destroy(e.second.vertices);Destroy(e.second.indices);Destroy(e.second.skin);}
             for(auto& e:textures)Destroy(e.second);
@@ -1062,6 +1191,8 @@ bool InitializeWorldProbe(XrInstance instance,XrSystemId system,uint32_t w,uint3
     try {
         renderer=std::make_unique<Renderer>();renderer->Initialize(instance,system,w,h);
         if(outputDirectory)renderer->outputDirectory=outputDirectory;
+        hooks.flushUploads=[]()->uint64_t{try{return renderer->FlushUploads();}catch(const std::exception& e){Failure(e);return UINT64_MAX;}};
+        hooks.uploadsComplete=[](uint64_t ticket){try{return renderer->UploadsComplete(ticket);}catch(const std::exception& e){Failure(e);return false;}};
         hooks.beginUiTarget=[](uint32_t id,uint32_t w,uint32_t h){try{return renderer->BeginUiTarget(id,w,h);}catch(const std::exception& e){Failure(e);return false;}};
         hooks.endUiTarget=[](){try{renderer->EndUiTarget();}catch(const std::exception& e){Failure(e);}};
         hooks.repeatT=[](uint32_t id){try{renderer->DrainDraws();auto found=renderer->textures.find(id);if(found!=renderer->textures.end())found->second.repeatT=true;}catch(const std::exception& e){Failure(e);}};
@@ -1089,7 +1220,10 @@ bool InitializeWorldProbe(XrInstance instance,XrSystemId system,uint32_t w,uint3
         hooks.skin=[](uint32_t vao,uint32_t texture,const float* attributes,size_t count,const float* palette,size_t rows){try{
             auto& r=*renderer;r.DrainDraws();auto found=r.meshes.find(vao);if(found==r.meshes.end())return;
             if(attributes&&count){auto b=r.UploadBuffer(attributes,count*4,VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);r.Retire(found->second.skin);found->second.skin=b;}
-            auto image=r.UploadPalette(palette,rows);r.Retire(r.textures[texture]);r.textures[texture]=image;
+            auto paletteImage=r.textures.find(texture);
+            if(r.AsyncUploads()&&!r.begun&&paletteImage!=r.textures.end()&&paletteImage->second.palette&&paletteImage->second.width==8&&paletteImage->second.height==rows)
+                r.UpdatePalette(paletteImage->second,palette,rows);
+            else {auto image=r.UploadPalette(palette,rows);r.Retire(r.textures[texture]);r.textures[texture]=image;}
         }catch(const std::exception& e){Failure(e);}};
         hooks.cube=[](uint32_t id,const Fo3RgbaCubeTexture& source){try{
             auto& r=*renderer;r.DrainDraws();auto image=r.UploadCube(source);r.Retire(r.textures[id]);r.textures[id]=image;

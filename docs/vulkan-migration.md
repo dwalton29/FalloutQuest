@@ -1,10 +1,59 @@
-# Vulkan migration status — v247
+# Vulkan migration status — v248
 
-The full migration is **incomplete**. Experimental Vulkan gameplay now selects a
-CPU scene frontend and does **not create an EGL/GLES context**. GLES remains the
-default. Context-free material rendering, draw ordering and the native OpenXR
-image path have software-GPU coverage. Actual Quest operation, complete visual
-parity and performance remain **unverified**. No 72 Hz claim is made.
+The full migration is **incomplete**. Experimental Vulkan gameplay retains the
+context-free CPU frontend and native OpenXR multiview presentation. GLES remains
+the default. Native asset uploads are now batched and asynchronous; descriptors
+are reused. Software-GPU rendering and synchronization tests do not establish
+Quest visuals, loading times, stability or a 72 Hz performance improvement.
+
+## v248: native upload batches and descriptor reuse
+
+- Decoded NIF geometry, DDS textures/cubes, FaceGen updates and bone palettes
+  record transfers into shared upload command buffers. Batches flush at 8 MiB,
+  128 operations, loader fences and frame boundaries. Uploads use the same graphics
+  queue as their consuming frame, with the original explicit buffer/image barriers.
+  Native asset uploads no longer call `vkQueueWaitIdle` for each resource.
+- Staging buffers and upload command buffers/fences live until their batch fence
+  completes. Polling is nonblocking. A 64 MiB staging backpressure threshold waits
+  for the oldest batch when needed. One recording batch or a larger individual
+  asset can temporarily exceed that threshold; peak bytes and forced waits are
+  logged. Staging suballocation/pooling remains future work.
+- Loader completion tokens now refer to actual Vulkan upload serials/fences.
+  The CPU frontend no longer treats native uploads as immediately complete.
+  GPU resources replaced before their upload finishes remain alive through upload
+  and frame completion. Shutdown cancels unsubmitted batches and drains submitted
+  work before freeing staging or destination resources.
+- Descriptor sets are cached by shader layout/range and complete sampler/image
+  bindings. Per-draw uniforms still use separate dynamic offsets. Unchanged sets
+  are reused within and across frames. Destroyed image views invalidate the cache;
+  it is reset only after the previous frame fence. The bounded pool reserves room
+  for one maximum-sized frame before reuse/reset.
+- Actor palette images are updated in place during pre-frame preparation when
+  dimensions match. Their image views and descriptors remain reusable. Updates
+  during command recording retain the replacement/retirement path so earlier
+  queued draws cannot observe later palette contents. Transfer/vertex barriers
+  preserve original live skin matrices; no animation or asset substitutions.
+- `FQVK RESOURCES` logs upload operations/batches, upload queue-idle calls,
+  staging current/peak bytes, pressure waits, descriptor allocations/hits/resets
+  and palette allocations/updates. Native `uploadQueueIdles=0` is expected.
+
+The renderer still uses one frame in flight and waits for the frame fence before
+OpenXR release. This change removes per-resource upload waits; it does not make
+presentation asynchronous or complete the production performance architecture.
+Debug image readback remains deliberately synchronous. The optional GLES probe
+keeps its previous blocking upload mode and is not a valid API benchmark.
+
+Tests now run the original material/terrain/actor/sky/water/post/UI pixel cases in
+both blocking and asynchronous modes. Dedicated checks cover batch coalescing,
+completion tokens, pending-image replacement, bounded staging/backpressure,
+shutdown before the first frame, descriptor reuse/invalidation, persistent palette
+views and updated pixel output. The fake OpenXR device setup enables Vulkan
+synchronization validation alongside core validation. This is software GPU testing,
+not a real OpenXR compositor or headset result.
+
+Immediate next work: buffered frame resources/submission, staging and draw-memory
+pooling, more precise descriptor eviction during streaming, native MSAA/reflections,
+and matched Quest captures. Terrain appearance remains unverified on device.
 
 ## v247: context-free scene submission
 
@@ -54,10 +103,10 @@ material output after mutating live state/uniforms. Existing multiview, terrain,
 actors, water, film, UI, Pip-Boy and colour/depth compositor tests are retained.
 An entry-point audit rejects GL calls lacking a native dispatch boundary.
 
-Uploads and frame completion remain blocking. Native MSAA, planar reflections,
+v247 used blocking uploads and per-frame descriptors; v248 replaces these as
+specified above. Frame completion remains blocking. Native MSAA, planar reflections,
 foveation, automatic session-loss recovery and full Quest benchmarks are pending.
-The CPU compatibility frontend retains some legacy preparation/bookkeeping work;
-removing it, reusing draw/descriptor storage and batching uploads are next steps.
+The CPU compatibility frontend retains some legacy preparation/bookkeeping work.
 
 ## v246: experimental Vulkan presentation
 
@@ -97,8 +146,8 @@ array layer and the exact near/far range from the runtime camera. Loading submit
 colour only. Missing depth support retains explicit colour-only composition.
 Native MSAA, foveation and planar reflections remain unfinished; Vulkan uses one
 sample. Existing terrain depth-state
-fixes are retained, with fusion quarantined. Uploads and end-of-frame fences
-remain blocking. Ordinary FQPerf GPU timers still measure GLES work, so native
+fixes are retained, with fusion quarantined. Upload batching is implemented in
+v248; end-of-frame fences remain blocking. Ordinary FQPerf GPU timers still measure GLES work, so native
 captures are marked `benchmarkValid=0`; `FQVK FRAME stereoGpuMs` covers the native
 recorded passes including the final swapchain draw, excluding uploads and XR wait.
 Neither metric proves Quest performance before hardware testing.
@@ -112,7 +161,7 @@ Compositor callbacks are mocked; this is not a real OpenXR runtime test.
 
 ### Headset validation (required before promotion)
 
-Install v247 Debug or Profile, then use PowerShell from platform-tools:
+Install v248 Debug or Profile, then use PowerShell from platform-tools:
 
 ```powershell
 .\adb shell am force-stop com.falloutquest.app
@@ -235,9 +284,9 @@ the explicitly experimental presentation path described at the top of this file.
   Audit stereo-union culling and visual parity for every pass on Quest.
 - Hardware foveation. Fragment-density extension availability is only logged;
   extension presence alone is not feature support or validated foveation.
-- Asynchronous batched uploads, descriptor reuse across frames and buffered
-  recording. The probe intentionally uses blocking transfers/fences and may
-  significantly slow loading and frames. It is not the optimized architecture.
+- Buffered frame recording/submission, staging suballocation and draw-memory
+  reuse. Native gameplay now batches uploads asynchronously and caches descriptors;
+  the optional probe still uses blocking transfers. Frame fences remain blocking.
 - Full Vulkan FQPerf pass capture and matched six-environment headset benchmarks.
 - v244 terrain appearance: a depth-state defect is fixed in source. The eye
   path disables depth testing; RenderScene restores it before LAND, and LAND
@@ -259,8 +308,8 @@ water refraction, repeated snapshots, opaque depth preservation, the native
 exposure/bloom/film chain and recreation. These pixel tests passed locally on Mesa llvmpipe after correcting
 stereo timestamp query allocation. Shader compile/link checks also passed. It is not an OpenXR compositor or Quest test.
 
-Next validate context-free Vulkan gameplay on Quest, batch native uploads,
-reuse descriptor/draw storage, complete native MSAA and planar reflections,
+Next validate context-free Vulkan gameplay on Quest, buffer frame resources,
+pool staging/draw storage, complete native MSAA and planar reflections,
 and validate full actor/material scenes.
 Retain the shared backend-independent stereo draw list as remaining passes
 become native and their headset parity is established. Resolve terrain from original ESM/DDS data and captured output.

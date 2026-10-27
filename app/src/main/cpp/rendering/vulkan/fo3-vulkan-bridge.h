@@ -12,6 +12,8 @@ struct PostSettings {
     float targetLum=1.2f,upperLum=1,eyeSpeed=.5f,brightThreshold=.55f,brightScale=1;
 };
 struct Hooks {
+    uint64_t (*flushUploads)()=nullptr;
+    bool (*uploadsComplete)(uint64_t)=nullptr;
     void (*uniform)(uint32_t,int,int,int,const void*)=nullptr;
     void (*draw)(const fqrender::DrawCommand&)=nullptr;
     void (*texture)(uint32_t,int,int,const uint8_t*,unsigned)=nullptr;
@@ -31,8 +33,7 @@ struct Hooks {
 };
 inline Hooks hooks;
 inline bool recording=false;
-// Transitional scene traversal still uses GLES state/resource setup. When native
-// presentation owns output, only Vulkan executes the shared draw submissions.
+// The shared frontend records native commands when Vulkan owns presentation.
 inline bool gameplayPresentation=false;
 inline const float* instanceMatrices=nullptr;
 inline size_t instanceMatrixCount=0;

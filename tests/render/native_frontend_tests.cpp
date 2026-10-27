@@ -30,6 +30,12 @@ int main() {
     glGetIntegerv(0x8869,&limit);assert(limit==32);glGetIntegerv(0x8d57,&limit);assert(limit==1);
     assert(*glGetString(0x1f03)==0); // GL timers/extensions cannot load driver entry points.
     glDeleteTextures(1,&texture);glDeleteVertexArrays(1,&mesh);glDeleteBuffers(1,&buffer);glDeleteProgram(program);
+    static bool complete=false;
+    fqvk::hooks.flushUploads=[]()->uint64_t{return 7;};
+    fqvk::hooks.uploadsComplete=[](uint64_t ticket){assert(ticket==7);return complete;};
+    const auto sync=glFenceSync(0,0);assert(uintptr_t(sync)==8);
+    assert(glClientWaitSync(sync,0,0)==0x911b);complete=true;
+    assert(glClientWaitSync(sync,0,0)==0x911a);glDeleteSync(sync);
     unsigned batch[2]{};glGenTextures(2,batch);
     static unsigned erased=0;
     fqvk::hooks.erase=[](uint32_t,bool){++erased;fqvk::hooks={};}; // renderer failure may disable callbacks mid-batch

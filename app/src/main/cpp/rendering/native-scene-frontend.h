@@ -3,7 +3,9 @@
 // entry points update CPU state/handles only. No GL shader, texture, buffer or
 // framebuffer is created. Decoded assets and DrawCommand feed the native backend.
 // GLES fallback calls the real driver with unchanged arguments.
+#include <GLES3/gl3.h>
 #include "render-submission.h"
+#include "vulkan/fo3-vulkan-bridge.h"
 #include <algorithm>
 #include <cstring>
 #include <utility>
@@ -90,10 +92,9 @@ inline void ClearColor(float r,float g,float b,float a){if(Native()){state.clear
 inline void ColorMask(unsigned char r,unsigned char g,unsigned char b,unsigned char a){if(Native()){state.colourMask={r,g,b,a};return;}++fqrender::driverCalls;glColorMask(r,g,b,a);}
 inline void GetRenderbufferParameteriv(unsigned target,unsigned name,int* out){if(Native()){*out=1;return;}++fqrender::driverCalls;glGetRenderbufferParameteriv(target,name,out);}
 inline void GetFramebufferAttachmentParameteriv(unsigned target,unsigned attachment,unsigned name,int* out){if(Native()){*out=1;return;}++fqrender::driverCalls;glGetFramebufferAttachmentParameteriv(target,attachment,name,out);}
-// The current native upload path completes before returning to the shared loader.
-// Replace this completion token when uploads become asynchronous.
-inline GLsync FenceSync(unsigned condition,unsigned flags){if(Native())return reinterpret_cast<GLsync>(uintptr_t(1));++fqrender::driverCalls;return glFenceSync(condition,flags);}
-inline unsigned ClientWaitSync(GLsync sync,unsigned flags,uint64_t timeout){if(Native())return 0x911a;++fqrender::driverCalls;return glClientWaitSync(sync,flags,timeout);}
+// Non-owning CPU tickets refer to Vulkan upload fences. Polling never waits for the queue.
+inline GLsync FenceSync(unsigned condition,unsigned flags){if(Native()){if(!fqvk::hooks.flushUploads)return nullptr;const auto ticket=fqvk::hooks.flushUploads();return ticket==UINT64_MAX?nullptr:reinterpret_cast<GLsync>(uintptr_t(ticket+1));}++fqrender::driverCalls;return glFenceSync(condition,flags);}
+inline unsigned ClientWaitSync(GLsync sync,unsigned flags,uint64_t timeout){if(Native()){if(!sync||!fqvk::hooks.uploadsComplete)return 0x911d;return fqvk::hooks.uploadsComplete(uintptr_t(sync)-1)?0x911a:0x911b;}++fqrender::driverCalls;return glClientWaitSync(sync,flags,timeout);}
 }
 #define glAttachShader fqfrontend::AttachShader
 #define glBufferData fqfrontend::BufferData
