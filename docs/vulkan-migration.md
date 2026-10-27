@@ -74,11 +74,11 @@ scene integration, supported device features and a new visual/performance test;
 a final-swapchain-only toggle would not accelerate the expensive HDR scene.
 Correct whole-pass captures are needed before claiming which GPU work dominates.
 
-Tests hold real software-GPU execution behind a host-controlled event while both
+Tests hold real software-GPU execution behind a host-signalled timeline semaphore while both
 world contexts and the UI context submit and release. They verify distinct mapped
 buffers/pools, no immediate completion wait, old resource retention, ordered UI
 sampling, moved geometry, per-eye matrices, deferred pixel output, cache generation
-invalidation and teardown. A watchdog releases the event and fails the test if
+invalidation and teardown. A watchdog signals the semaphore and fails the test if
 submission unexpectedly blocks. Pipelines/resources are warmed before the gate to
 avoid confusing cold driver compilation with an engine fence wait. Synchronous
 and buffered pixel output are equal in the original film/overlay test; direct/

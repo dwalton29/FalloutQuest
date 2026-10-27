@@ -33,8 +33,18 @@ XrResult XRAPI_CALL Physical(XrInstance,const XrVulkanGraphicsDeviceGetInfoKHR* 
     if(!count)return XR_ERROR_RUNTIME_FAILURE;
     std::vector<VkPhysicalDevice> devices(count);vkEnumeratePhysicalDevices(info->vulkanInstance,&count,devices.data());*out=devices[0];return XR_SUCCESS;
 }
+bool enableTimelineGate=false;
 XrResult XRAPI_CALL Device(XrInstance,const XrVulkanDeviceCreateInfoKHR* info,VkDevice* out,VkResult* result) {
-    *result=vkCreateDevice(info->vulkanPhysicalDevice,info->vulkanCreateInfo,nullptr,out);return XR_SUCCESS;
+    auto create=*info->vulkanCreateInfo;
+    VkPhysicalDeviceTimelineSemaphoreFeatures timeline{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_FEATURES};
+    std::vector<const char*> extensions;
+    if(enableTimelineGate) {
+        if(create.enabledExtensionCount)extensions.assign(create.ppEnabledExtensionNames,create.ppEnabledExtensionNames+create.enabledExtensionCount);
+        extensions.push_back(VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME);
+        create.enabledExtensionCount=uint32_t(extensions.size());create.ppEnabledExtensionNames=extensions.data();
+        timeline.timelineSemaphore=VK_TRUE;timeline.pNext=const_cast<void*>(create.pNext);create.pNext=&timeline;
+    }
+    *result=vkCreateDevice(info->vulkanPhysicalDevice,&create,nullptr,out);return XR_SUCCESS;
 }
 // Fake OpenXR compositor with real software-GPU images. This tests the native
 // image/view/render/release path, not a real OpenXR runtime or headset.
@@ -688,12 +698,13 @@ void DirectPresentation() {
     std::cout<<"Direct presentation: original film, translucent overlays, opaque depth, stereo, recreation and synchronous/buffered equality; max display-code difference="<<largest<<" passed\n";
 }
 void BufferedOwnership() {
+    enableTimelineGate=true;
     fqrender::nativeOnly=true;offerSrgb=true;inspectReleasedImages=false;
     const auto xr=reinterpret_cast<XrInstance>(uintptr_t(1));const auto session=reinterpret_cast<XrSession>(uintptr_t(2));
     assert(fqvk::InitializeWorldProbe(xr,1,64,64));Scene(false);auto& r=*fqvk::renderer;
     assert(fqvk::CreateGameplaySwapchain(session));
     // Warm pipelines, descriptor variants and resident resources before the
-    // gate. Cold driver compilation may itself block behind a GPU host event;
+    // gate. Cold driver compilation may itself block behind the GPU gate;
     // this test isolates the engine's steady-state submission/lifetime rules.
     Program(90,9);const float ui[]{-1,-1,0,0,0,1,-1,0,0,0,1,1,0,0,0,-1,-1,0,0,0,1,1,0,0,0,-1,1,0,0,0};
     fqvk::Mesh(91,ui,6,5,nullptr,0);const uint8_t white[]{255,255,255,255};fqvk::Texture(92,1,1,white,false,false);
@@ -714,16 +725,19 @@ void BufferedOwnership() {
         fqvk::PostProcess(settings);assert(fqvk::PresentGameplay(views.data(),output.data(),.04f,1000));
     }
     r.WaitFrames();
-    VkEvent gate{};VkEventCreateInfo ei{VK_STRUCTURE_TYPE_EVENT_CREATE_INFO};assert(vkCreateEvent(r.device,&ei,nullptr,&gate)==VK_SUCCESS);
-    VkCommandBuffer blocked{};VkCommandBufferAllocateInfo ai{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};ai.commandPool=r.uploads;ai.level=VK_COMMAND_BUFFER_LEVEL_PRIMARY;ai.commandBufferCount=1;
-    assert(vkAllocateCommandBuffers(r.device,&ai,&blocked)==VK_SUCCESS);
-    VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};assert(vkBeginCommandBuffer(blocked,&bi)==VK_SUCCESS);
-    vkCmdWaitEvents(blocked,1,&gate,VK_PIPELINE_STAGE_HOST_BIT,VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,0,nullptr,0,nullptr,0,nullptr);
-    assert(vkEndCommandBuffer(blocked)==VK_SUCCESS);
-    VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};submit.commandBufferCount=1;submit.pCommandBuffers=&blocked;
+    // A timeline wait is legal before the host signals it. Unlike vkSetEvent,
+    // host signalling does not require the waiting submission to be non-pending.
+    VkSemaphore gate{};VkSemaphoreTypeCreateInfo type{VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO};type.semaphoreType=VK_SEMAPHORE_TYPE_TIMELINE;
+    VkSemaphoreCreateInfo ci{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};ci.pNext=&type;
+    assert(vkCreateSemaphore(r.device,&ci,nullptr,&gate)==VK_SUCCESS);
+    const auto signal=reinterpret_cast<PFN_vkSignalSemaphoreKHR>(vkGetDeviceProcAddr(r.device,"vkSignalSemaphoreKHR"));assert(signal);
+    const uint64_t value=1;const VkPipelineStageFlags stage=VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+    VkTimelineSemaphoreSubmitInfo timeline{VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO};timeline.waitSemaphoreValueCount=1;timeline.pWaitSemaphoreValues=&value;
+    VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};submit.pNext=&timeline;submit.waitSemaphoreCount=1;submit.pWaitSemaphores=&gate;submit.pWaitDstStageMask=&stage;
     assert(vkQueueSubmit(r.queue,1,&submit,VK_NULL_HANDLE)==VK_SUCCESS);
     std::mutex mutex;std::condition_variable ready;bool queued=false,timedOut=false;
-    std::thread watchdog([&]{std::unique_lock<std::mutex> lock(mutex);timedOut=!ready.wait_for(lock,std::chrono::seconds(10),[&]{return queued;});assert(vkSetEvent(r.device,gate)==VK_SUCCESS);});
+    std::thread watchdog([&]{std::unique_lock<std::mutex> lock(mutex);timedOut=!ready.wait_for(lock,std::chrono::seconds(10),[&]{return queued;});
+        VkSemaphoreSignalInfo info{VK_STRUCTURE_TYPE_SEMAPHORE_SIGNAL_INFO};info.semaphore=gate;info.value=value;assert(signal(r.device,&info)==VK_SUCCESS);});
     std::array<uint32_t,2> images{};VkBuffer firstArena{},firstStereo{};VkDescriptorPool firstPool{};
     for(int frame=0;frame<2;++frame) {
         if(frame) {
@@ -750,12 +764,13 @@ void BufferedOwnership() {
     assert(pixel(first,0,32,32,0)==255&&pixel(first,1,32,32,0)==255&&pixel(first,0,32,48,0)==255);
     assert(pixel(second,0,32,32,1)==255&&pixel(second,1,55,32,1)==255&&pixel(second,1,32,32,1)==0);
     assert(pixel(second,0,32,48,1)==0&&pixel(second,0,9,9,1)==255); // moved geometry and queued UI sampling
-    vkFreeCommandBuffers(r.device,r.uploads,1,&blocked);vkDestroyEvent(r.device,gate,nullptr);
+    vkDestroySemaphore(r.device,gate,nullptr);
     const auto resets=r.descriptorResets;
     assert(fqvk::BeginWorldProbe(identity,identity,eye,eye));assert(r.descriptorResets>resets);
     fqgl::state.texture2d[0].Change(6);Submit(1,9,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);fqvk::PostProcess(settings);
     assert(fqvk::PresentGameplay(views.data(),output.data(),.04f,1000));
     fqvk::DestroyGameplaySwapchain();fqvk::ShutdownWorldProbe();offerSrgb=false;inspectReleasedImages=true;fqrender::nativeOnly=false;fqgl::Reset();
+    enableTimelineGate=false;
     std::cout<<"Buffered ownership: GPU held pending while two world slots and UI submit/release; immutable uniforms, retirement, ordered UI sampling and delayed pixels passed\n";
 }
 
