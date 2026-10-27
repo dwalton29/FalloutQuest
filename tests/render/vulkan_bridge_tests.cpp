@@ -8,7 +8,7 @@ int main() {
     fqvk::hooks.uniform=[](uint32_t program,int location,int,int bytes,const void* data){
         assert(program==7&&location==3&&bytes==4);float value=0;std::memcpy(&value,data,4);assert(value==.5f);++*uniformWrites;
     };
-    fqvk::hooks.draw=[](uint32_t p,uint32_t v,uint32_t,int first,int n,uint32_t,size_t,int instances){assert(p==7&&v==9&&first==0&&n==6&&instances==1);++*drawWrites;};
+    fqvk::hooks.draw=[](const fqrender::DrawCommand& command){assert(command.program==7&&command.mesh==9&&command.first==0&&command.count==6&&command.instances==1);++*drawWrites;};
     glUseProgram(7);glBindVertexArray(9);
     glUniform1f(3,.5f);glUniform1f(3,.5f);
     assert(writes==2&&driverCalls["glUniform1f"]==1); // mirror sees cache hits too.

@@ -111,9 +111,9 @@ target_link_libraries(falloutquest
     ${z-lib}
 )
 
-# Native Vulkan migration stays opt-in while GLES owns gameplay presentation.
+# Native Vulkan gameplay stays opt-in until headset correctness is validated.
 # OFF also verifies the previous GLES-only build without Vulkan dependencies.
-option(FALLOUTQUEST_VULKAN "Build Vulkan world validation backend" ON)
+option(FALLOUTQUEST_VULKAN "Build native Vulkan gameplay and validation backend" ON)
 if(FALLOUTQUEST_VULKAN)
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
     find_program(FQ_SHADER_COMPILER NAMES glslc glslangValidator

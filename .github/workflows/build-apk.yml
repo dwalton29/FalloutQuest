@@ -24,6 +24,9 @@ jobs:
         run: |
           g++ -std=c++17 -Wall -Wextra -Werror -Itests/render/mock -Iapp/src/main/cpp tests/render/vulkan_bridge_tests.cpp -o /tmp/fq-vulkan-bridge
           /tmp/fq-vulkan-bridge
+          g++ -std=c++17 -Wall -Wextra -Werror -Itests/render/mock -Iapp/src/main/cpp tests/render/native_frontend_tests.cpp -o /tmp/fq-native-frontend
+          /tmp/fq-native-frontend
+          python3 tests/render/test_native_dispatch.py
       - name: Render original shaders through Vulkan multiview on software GPU
         env:
           VK_INSTANCE_LAYERS: VK_LAYER_KHRONOS_validation
@@ -33,6 +36,12 @@ jobs:
           g++ -O2 -std=c++17 -Wall -Wextra -Werror -Wno-missing-field-initializers -DFQ_ENABLE_VULKAN \
             -I/tmp/fq-vulkan-shaders -Iapp/src/main/cpp tests/render/vulkan_world_gpu_tests.cpp \
             -lvulkan -lGLESv2 -o /tmp/fq-vulkan-world
+          g++ -O2 -std=c++17 -Wall -Wextra -Werror -Wno-missing-field-initializers -DFQ_ENABLE_VULKAN \
+            -I/tmp/fq-vulkan-shaders -Iapp/src/main/cpp -c app/src/main/cpp/rendering/vulkan/fo3-vulkan-renderer.cpp -o /tmp/fq-native-renderer.o
+          if nm -u /tmp/fq-native-renderer.o | grep -Eq ' U (gl[A-Z]|egl[A-Z])'; then
+            echo "Native Vulkan renderer must not depend on GLES/EGL driver functions"
+            exit 1
+          fi
           if ! /tmp/fq-vulkan-world 2>&1 | tee /tmp/fq-vulkan-validation.log; then
             gdb --batch -ex run -ex 'thread apply all bt 24' --args /tmp/fq-vulkan-world
             exit 1

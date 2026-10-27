@@ -1,9 +1,63 @@
-# Vulkan migration status — v246
+# Vulkan migration status — v247
 
-The full migration is **incomplete**. Debug/Profile builds now offer experimental
-Vulkan OpenXR gameplay presentation. GLES remains the default. Native Vulkan
-session/swapchain code and software-GPU output are verified; actual headset
-operation and performance are **unverified**. No Vulkan-default or 72 Hz claim is made.
+The full migration is **incomplete**. Experimental Vulkan gameplay now selects a
+CPU scene frontend and does **not create an EGL/GLES context**. GLES remains the
+default. Context-free material rendering, draw ordering and the native OpenXR
+image path have software-GPU coverage. Actual Quest operation, complete visual
+parity and performance remain **unverified**. No 72 Hz claim is made.
+
+## v247: context-free scene submission
+
+- `rendering/render-submission.h` defines CPU resource handles, named uniform
+  bindings, material/raster state and self-contained draw commands without a
+  graphics API dependency. Native handles are generated independently of GLES.
+- The existing native engine, original asset decoders, scene traversal, animation
+  and UI preparation remain shared. A compatibility frontend accepts their
+  existing GL-shaped calls. In Vulkan mode these update CPU state and handles;
+  they never compile GLES shaders or allocate GLES textures/buffers/framebuffers.
+  Native programs use the existing original GLSL-to-SPIR-V build products.
+  Legacy shader/FBO status queries only preserve shared preparation control flow;
+  actual native shader, allocation and framebuffer failures stop Vulkan output.
+- Vulkan consumes an ordered draw list, with captured texture bindings, raster
+  state, instance matrices, uniform bytes and sampler bindings. Later state or
+  uniform edits cannot alter earlier submissions. Lists drain at water snapshots,
+  post-processing, depth clears and UI/pass boundaries, and before resource
+  replacement/deletion. Native resource retirement still waits for GPU completion.
+- The Vulkan renderer no longer includes the GLES state cache or calls GLES.
+  Program registration resolves CPU binding names; optional GLES probe mode uses
+  the fallback frontend's resolver. No native draw reads a live GLES cache.
+- Native initialization skips EGL and the OpenXR GLES requirements query, and
+  does not enable the GLES OpenXR extension. Vulkan device limits inform skinning
+  capability checks. GLES-only timer/foveation extensions are unavailable through
+  the native frontend; no GL extension function is loaded for native frames.
+- Existing loading, skin palettes, FaceGen, world/LAND, sky, water, HDR/film,
+  overlays, Pip-Boy RTT and lockpick continue through the shared decoded-data
+  uploads and original native shader ports. No replacement assets or terrain
+  fusion changes are introduced. Complete headset parity still needs verification.
+
+The CPU frontend is a migration compatibility layer, not a new engine. GL-style
+source call sites and names remain; further source/API cleanup is useful, but an
+active GLES context, GLES-generated resource identities and mirrored GLES draw
+execution are no longer required by the experimental path. GLES/EGL remain linked
+for the selectable fallback. The standalone probe still requires GLES.
+
+Native logs identify `sceneSubmission=cpu-commands`, `eglContext=none`,
+`glesResources=none`, and `FQ NATIVE FRONTEND ... glesDriverCalls=0`. Confirm the
+latter on Quest rather than inferring device execution from host tests. Existing
+`FQ PRESENTED api=Vulkan` follows a successful OpenXR frame submission.
+
+New tests exercise CPU resource allocation, named/array uniform locations,
+immutable draw snapshots, device limits, viewport/clear-state queries, zero GL
+calls and fallback restoration. The real software GPU test now uses the production
+CPU frontend and native program registration without EGL, and reads back original
+material output after mutating live state/uniforms. Existing multiview, terrain,
+actors, water, film, UI, Pip-Boy and colour/depth compositor tests are retained.
+An entry-point audit rejects GL calls lacking a native dispatch boundary.
+
+Uploads and frame completion remain blocking. Native MSAA, planar reflections,
+foveation, automatic session-loss recovery and full Quest benchmarks are pending.
+The CPU compatibility frontend retains some legacy preparation/bookkeeping work;
+removing it, reusing draw/descriptor storage and batching uploads are next steps.
 
 ## v246: experimental Vulkan presentation
 
@@ -17,12 +71,9 @@ pass directly into those runtime images. No GLES texture copy or readback feeds
 headset output. Array indices 0/1 and the original located poses/FOVs are submitted
 by the existing `xrWaitFrame` / `xrBeginFrame` / `xrEndFrame` loop.
 
-One scene traversal records both cameras. GLES draw execution is suppressed in
-this mode, including Pip-Boy RTT draws; Vulkan executes supported shared
-submissions. **GLES still creates programs/resources, tracks state, and performs
-framebuffer/post setup. An active GLES context is still required.** This is the
-next architectural dependency to remove, not a completed independent renderer.
-The standalone probe keeps its previous concurrent GLES drawing behaviour.
+One scene traversal records both cameras. In v246, GLES setup remained required;
+v247 replaces this with the CPU frontend described above. The standalone probe
+keeps its concurrent GLES drawing behaviour.
 
 Acquisition/wait happens once per stereo frame. A timeout is not treated as
 image readiness. The GPU fence completes before release, with runtime images in
@@ -61,7 +112,7 @@ Compositor callbacks are mocked; this is not a real OpenXR runtime test.
 
 ### Headset validation (required before promotion)
 
-Install v246 Debug or Profile, then use PowerShell from platform-tools:
+Install v247 Debug or Profile, then use PowerShell from platform-tools:
 
 ```powershell
 .\adb shell am force-stop com.falloutquest.app
@@ -178,8 +229,10 @@ the explicitly experimental presentation path described at the top of this file.
   D32 compositor depth now has software coverage; headset reprojection remains unverified.
   The HDR/imagespace/bloom chain is implemented in the probe, but still needs
   complete in-game colour and temporal adaptation comparison on Quest.
-- Native draw-list generation independent of GLES commands, stereo-union culling
-  for every pass and backend-owned material/resource identities.
+- Complete headset validation of context-free draw submission and CPU/native
+  resource identities. The compatibility frontend still has GL-shaped source
+  call sites; native execution is independent of an active GLES driver/context.
+  Audit stereo-union culling and visual parity for every pass on Quest.
 - Hardware foveation. Fragment-density extension availability is only logged;
   extension presence alone is not feature support or validated foveation.
 - Asynchronous batched uploads, descriptor reuse across frames and buffered
@@ -206,9 +259,9 @@ water refraction, repeated snapshots, opaque depth preservation, the native
 exposure/bloom/film chain and recreation. These pixel tests passed locally on Mesa llvmpipe after correcting
 stereo timestamp query allocation. Shader compile/link checks also passed. It is not an OpenXR compositor or Quest test.
 
-Next validate experimental Vulkan gameplay on Quest, remove GLES state/resource
-setup through backend-independent submissions, complete native depth/MSAA and
-planar reflections, and validate full actor/material scenes.
+Next validate context-free Vulkan gameplay on Quest, batch native uploads,
+reuse descriptor/draw storage, complete native MSAA and planar reflections,
+and validate full actor/material scenes.
 Replace the mirror with one backend-independent stereo draw list as those passes
 become native. Resolve terrain from original ESM/DDS data and captured output.
 Only enable Vulkan-default after the complete on-device flow passes and the six

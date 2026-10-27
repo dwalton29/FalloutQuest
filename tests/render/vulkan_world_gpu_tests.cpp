@@ -1,6 +1,7 @@
 // Runs the production backend and original ported material shaders on a real
 // Vulkan implementation (CI: Mesa lavapipe). Only the OpenXR device handshake
 // is supplied by this test; it does not claim headset/compositor validation.
+#include "rendering/gl-state-cache.h"
 #include "rendering/vulkan/fo3-vulkan-renderer.cpp"
 #include <cassert>
 #include <iostream>
@@ -137,11 +138,16 @@ extern "C" XrResult XRAPI_CALL xrGetInstanceProcAddr(XrInstance,const char* name
     return XR_SUCCESS;
 }
 namespace {
+void Submit(uint32_t p,uint32_t v,uint32_t mode,int first,int n,uint32_t type,size_t offset,int instances) {
+    fqvk::hooks.draw(fqgl::Command(p,v,mode,type,offset,first,n,instances));
+}
+}
+namespace {
 void Program(uint32_t id,int kind) {
     const auto& shader=fqvk::shaders::programs[kind];
     fqvk::ProgramData p;p.terrain=kind==1;p.sky=kind==2;p.water=kind==3;p.ui=kind>=9?kind:0;
     p.bytes.resize(shader.uniformSize);
-    for(size_t i=0;i<shader.fieldCount;++i)p.fields.push_back({int(i),shader.fields[i]});
+    for(size_t i=0;i<shader.fieldCount;++i)p.fields.push_back({int(i*64),shader.fields[i]});
     p.units.resize(shader.samplerCount);
     for(size_t i=0;i<shader.samplerCount;++i) {
         const std::string name=shader.samplers[i].name;
@@ -198,7 +204,7 @@ void Scene(bool terrain,bool skin=false,bool instanced=false) {
     const float right[]{1,0,0,0, 0,1,0,0, 0,0,1,0, .8f,0,0,1};
     const float eye[]{0,0,2};assert(fqvk::BeginWorldProbe(left,right,eye,eye));
     // Terrain's GL EBO points past vertex bytes; native EBO has its own buffer.
-    fqvk::hooks.draw(1,9,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,terrain?quad.size()*4:0,instanced?2:1);
+    Submit(1,9,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,terrain?quad.size()*4:0,instanced?2:1);
     if(terrain) {
         // Authored overlay with depth equality and no depth writes. A uniform
         // update after an earlier draw must not retroactively alter that draw.
@@ -207,7 +213,7 @@ void Scene(bool terrain,bool skin=false,bool instanced=false) {
         fqgl::state.texture2d[0].Change(6);fqgl::state.blend.Change(true);fqgl::state.depthWrite.Change(false);
         fqgl::state.srcRgb.Change(GL_SRC_ALPHA);fqgl::state.dstRgb.Change(GL_ONE_MINUS_SRC_ALPHA);
         fqgl::state.srcAlpha.Change(GL_SRC_ALPHA);fqgl::state.dstAlpha.Change(GL_ONE_MINUS_SRC_ALPHA);
-        fqvk::hooks.draw(1,10,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,paint.size()*4,1);
+        Submit(1,10,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,paint.size()*4,1);
     }
     fqvk::EndWorldProbe();assert(fqvk::WorldProbeActive());
     const auto pixels=fqvk::renderer->Readback();
@@ -222,7 +228,7 @@ void Scene(bool terrain,bool skin=false,bool instanced=false) {
         palette[12]=.8f;
         fqvk::Skin(9,7,nullptr,0,palette,1);
         assert(fqvk::BeginWorldProbe(left,left,eye,eye));
-        fqvk::hooks.draw(1,9,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);
+        Submit(1,9,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);
         fqvk::EndWorldProbe();const auto moved=fqvk::renderer->Readback();
         Near(Pixel(moved,0,32,32,0),0);Near(Pixel(moved,0,55,32,0),1);
     }
@@ -239,7 +245,7 @@ void Sky() {
     const float left[]{1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1};
     const float right[]{1,0,0,0,0,1,0,0,0,0,1,0,.8f,0,0,1};
     const float le[]{0,0,0},re[]{-.8f,0,0};
-    assert(fqvk::BeginWorldProbe(left,right,le,re));fqvk::hooks.draw(2,12,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);fqvk::EndWorldProbe();
+    assert(fqvk::BeginWorldProbe(left,right,le,re));Submit(2,12,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);fqvk::EndWorldProbe();
     const auto pixels=fqvk::renderer->Readback();
     for(int eye=0;eye<2;++eye){Near(Pixel(pixels,eye,32,24,0),.31f);Near(Pixel(pixels,eye,32,24,1),.465f);Near(Pixel(pixels,eye,32,24,2),.62f);}
 }
@@ -265,12 +271,12 @@ void Water() {
     for(int frame=0;frame<2;++frame) {
         assert(fqvk::BeginWorldProbe(left,right,eye,eye));
         fqgl::state.depthWrite.Change(true);fqgl::state.texture2d[0].Change(5);
-        fqvk::hooks.draw(1,9,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);
+        Submit(1,9,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);
         fqvk::WaterSnapshot();assert(fqvk::renderer->snapshotReady);
         // Snapshot must be once per frame even with multiple water cells.
         fqvk::WaterSnapshot();
         fqgl::state.depthWrite.Change(false);fqgl::state.texture2d[0].Change(14);
-        fqvk::hooks.draw(3,13,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);
+        Submit(3,13,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);
         fqvk::EndWorldProbe();assert(fqvk::WorldProbeActive());
         const auto pixels=fqvk::renderer->Readback();
         Near(Pixel(pixels,0,32,32,0),1);Near(Pixel(pixels,0,32,32,1),0);
@@ -285,9 +291,9 @@ void Water() {
     const float above[]{0,2,2};
     assert(fqvk::BeginWorldProbe(left,left,above,above));
     fqgl::state.depthWrite.Change(true);fqgl::state.texture2d[0].Change(5);
-    fqvk::hooks.draw(1,9,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);
+    Submit(1,9,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);
     fqvk::WaterSnapshot();fqgl::state.depthWrite.Change(false);fqgl::state.texture2d[0].Change(14);
-    fqvk::hooks.draw(3,13,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);fqvk::EndWorldProbe();
+    Submit(3,13,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);fqvk::EndWorldProbe();
     const auto occluded=fqvk::renderer->Readback();
     Near(Pixel(occluded,0,32,32,0),1);Near(Pixel(occluded,0,32,32,1),0);
     assert(Pixel(occluded,0,5,32,1)>.1f);
@@ -307,7 +313,7 @@ void Post() {
     settings.tint[0]=settings.tint[2]=0;settings.tint[1]=1;settings.brightThreshold=.1f;
     for(int frame=0;frame<3;++frame) {
         assert(fqvk::BeginWorldProbe(left,right,eye,eye));
-        fqgl::state.texture2d[0].Change(5);fqvk::hooks.draw(1,9,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);
+        fqgl::state.texture2d[0].Change(5);Submit(1,9,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);
         settings.brightScale=frame==0?0.0f:1.0f;
         if(frame==2)fqvk::ResetExposure();
         fqvk::PostProcess(settings);assert(fqvk::renderer->postDone);fqvk::EndWorldProbe();
@@ -333,11 +339,11 @@ void Ui(bool animated) {
     const float left[]{1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1};
     const float right[]{1,0,0,0,0,1,0,0,0,0,1,0,.8f,0,0,1};const float eye[]{0,0,2};
     assert(fqvk::BeginWorldProbe(left,right,eye,eye));
-    fqgl::state.texture2d[0].Change(5);fqvk::hooks.draw(1,9,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);
+    fqgl::state.texture2d[0].Change(5);Submit(1,9,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);
     fqgl::state.texture2d[0].Change(17);fqgl::state.depthWrite.Change(false);fqgl::state.blend.Change(true);
     fqgl::state.srcRgb.Change(GL_SRC_ALPHA);fqgl::state.dstRgb.Change(GL_ONE_MINUS_SRC_ALPHA);
     fqgl::state.srcAlpha.Change(GL_ONE);fqgl::state.dstAlpha.Change(GL_ONE_MINUS_SRC_ALPHA);
-    fqvk::hooks.draw(15,16,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);fqvk::EndWorldProbe();
+    Submit(15,16,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);fqvk::EndWorldProbe();
     const auto pixels=fqvk::renderer->Readback();
     Near(Pixel(pixels,0,32,32,0),.5f);Near(Pixel(pixels,0,32,32,1),.5f);
     Near(Pixel(pixels,0,17,32,1),0); // object translation is retained
@@ -358,10 +364,10 @@ void Loading() {
     const float left[]{1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1};
     const float right[]{1,0,0,0,0,1,0,0,0,0,1,0,.8f,0,0,1};const float eye[]{0,0,2};
     assert(fqvk::BeginWorldProbe(left,right,eye,eye,true));
-    fqgl::state.texture2d[0].Change(5);fqvk::hooks.draw(1,9,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);
+    fqgl::state.texture2d[0].Change(5);Submit(1,9,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);
     fqvk::ClearDepth();
     fqgl::state.texture2d[0].Change(20);
-    fqvk::hooks.draw(18,19,GL_TRIANGLE_STRIP,0,4,0,0,1);fqvk::EndWorldProbe();
+    Submit(18,19,GL_TRIANGLE_STRIP,0,4,0,0,1);fqvk::EndWorldProbe();
     const auto pixels=fqvk::renderer->Readback();
     Near(Pixel(pixels,0,32,32,1),.5f);Near(Pixel(pixels,1,55,32,1),.5f);
     Near(Pixel(pixels,1,32,32,1),0);Near(Pixel(pixels,0,50,32,1),0);
@@ -381,14 +387,14 @@ void PipboyTarget() {
             fqvk::UiTargetScope target(30,32,16);assert(target.active&&fqvk::recording);
             fqgl::state.texture2d[0].Change(23);fqgl::state.blend.Change(false);
             Set(21,"uTint",frame?std::initializer_list<float>{0,1,0,1}:std::initializer_list<float>{1,0,0,1});
-            fqvk::hooks.draw(21,22,GL_TRIANGLES,0,6,0,0,1);
+            Submit(21,22,GL_TRIANGLES,0,6,0,0,1);
             Set(21,"uTint",frame?std::initializer_list<float>{1,0,0,1}:std::initializer_list<float>{0,1,0,1});
-            fqvk::hooks.draw(21,22,GL_TRIANGLES,6,6,0,0,1);
+            Submit(21,22,GL_TRIANGLES,6,6,0,0,1);
         }
         assert(!fqvk::recording&&fqvk::renderer->uiTargets.at(30).target.initialized);
         const float left[]{1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1},eye[]{0,0,2};
         assert(fqvk::BeginWorldProbe(left,left,eye,eye));fqgl::state.texture2d[0].Change(30);
-        fqvk::hooks.draw(1,24,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);fqvk::EndWorldProbe();
+        Submit(1,24,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);fqvk::EndWorldProbe();
         const auto pixels=fqvk::renderer->Readback();
         for(int eyeIndex=0;eyeIndex<2;++eyeIndex) {
             Near(Pixel(pixels,eyeIndex,32,20,frame?0:1),1);
@@ -406,12 +412,48 @@ void PostOverlay() {
     Set(31,"uMvp",{1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1});Set(31,"uTint",{0,0,1,1});
     const float identity[]{1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1},eye[]{0,0,2};
     assert(fqvk::BeginWorldProbe(identity,identity,eye,eye));fqgl::state.texture2d[0].Change(5);
-    fqvk::hooks.draw(1,9,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);
+    Submit(1,9,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);
     fqvk::PostProcess({});assert(fqvk::renderer->postDone&&fqvk::renderer->passOpen);
     fqgl::state.texture2d[0].Change(33);fqgl::state.depth.Change(false);fqgl::state.blend.Change(false);
-    fqvk::hooks.draw(31,32,GL_TRIANGLES,0,6,0,0,1);fqvk::EndWorldProbe();
+    Submit(31,32,GL_TRIANGLES,0,6,0,0,1);fqvk::EndWorldProbe();
     const auto pixels=fqvk::renderer->Readback();
     for(int eyeIndex=0;eyeIndex<2;++eyeIndex){Near(Pixel(pixels,eyeIndex,32,32,2),1);Near(Pixel(pixels,eyeIndex,32,32,0),0);assert(Pixel(pixels,eyeIndex,48,32,2)<.1f);}
+}
+
+void HeadlessSceneSubmission() {
+    // Exercise the real shared frontend and program registration, without EGL
+    // initialization or a GLES context. Original shaders execute through Vulkan.
+    fqrender::nativeOnly=true;fqrender::driverCalls=0;fqgl::Reset();
+    assert(fqvk::InitializeWorldProbe(reinterpret_cast<XrInstance>(uintptr_t(1)),1,64,64));
+    const GLuint program=glCreateProgram();fqvk::Program(program,0);
+    glUseProgram(program);
+    auto scalar=[&](const char* name,float value){glUniform1f(glGetUniformLocation(program,name),value);};
+    auto integer=[&](const char* name,int value){glUniform1i(glGetUniformLocation(program,name),value);};
+    auto vector=[&](const char* name,float x,float y,float z){glUniform3f(glGetUniformLocation(program,name),x,y,z);};
+    vector("uAmbientColor",1,1,1);vector("uSunlightColor",0,0,0);vector("uSunDirectionVertexQ1540",0,0,1);
+    scalar("uFogNearVertexQ1532",10000);scalar("uFogFarVertexQ1532",10001);scalar("uFogPowerVertexQ1532",1);
+    scalar("uNoLighting",1);scalar("uMaterialAlpha",1);scalar("uPipScreenGain",1);integer("uDiffuse",0);
+    GLuint vao=0,texture=0;glGenVertexArrays(1,&vao);glBindVertexArray(vao);
+    auto quad=Quad(false);const uint32_t indices[]{0,1,2,0,2,3};fqvk::Mesh(vao,quad.data(),4,18,indices,6);
+    glGenTextures(1,&texture);glActiveTexture(GL_TEXTURE0);glBindTexture(GL_TEXTURE_2D,texture);
+    const uint8_t red[]{255,0,0,255};glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA8,1,1,0,GL_RGBA,GL_UNSIGNED_BYTE,red);
+    fqvk::Texture(texture,1,1,red);
+    glEnable(GL_DEPTH_TEST);glDepthFunc(GL_LEQUAL);glDepthMask(GL_TRUE);
+    const float identity[]{1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1},eye[]{0,0,2};
+    assert(fqvk::BeginWorldProbe(identity,identity,eye,eye));
+    glDrawElements(GL_TRIANGLES,6,GL_UNSIGNED_INT,nullptr);
+    assert(fqvk::renderer->pending.size()==1&&fqvk::renderer->draws==0);
+    // Mutating live uniforms and CPU state after queueing cannot alter the draw.
+    scalar("uMaterialAlpha",0);glDisable(GL_DEPTH_TEST);glBindTexture(GL_TEXTURE_2D,0);
+    fqvk::EndWorldProbe();assert(fqvk::renderer->pending.empty());
+    const auto pixels=fqvk::renderer->Readback();
+    Near(Pixel(pixels,0,32,32,0),1);Near(Pixel(pixels,1,32,32,0),1);
+    // The native renderer owns program uniforms; GLES and EGL never provided them.
+    assert(fqrender::driverCalls==0);
+    glDeleteTextures(1,&texture);glDeleteVertexArrays(1,&vao);glDeleteProgram(program);
+    fqvk::ShutdownWorldProbe();assert(fqrender::driverCalls==0);
+    fqrender::nativeOnly=false;fqgl::Reset();
+    std::cout<<"Context-free scene submission: CPU handles, named uniforms, queued state snapshots, native original material output and zero GLES driver calls passed\n";
 }
 
 void GameplayPresentation(bool withDepth) {
@@ -431,7 +473,7 @@ void GameplayPresentation(bool withDepth) {
     for(int frame=0;frame<6;++frame) {
         const bool loading=frame<3;
         assert(fqvk::BeginWorldProbe(left,right,eye,eye,loading));fqgl::state.texture2d[0].Change(5);
-        fqvk::hooks.draw(1,40,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);
+        Submit(1,40,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);
         if(!loading)fqvk::PostProcess({});
         assert(fqvk::PresentGameplay(views.data(),output.data(),.04f,125000.0f/70.0f));
         assert(releases==initialReleases+frame+1&&!acquired&&!fqvk::recording);
@@ -469,6 +511,7 @@ void GameplayPresentation(bool withDepth) {
 }
 
 int main() {
+    HeadlessSceneSubmission();
     GameplayPresentation(false);GameplayPresentation(true);
     for(int mode=0;mode<4;++mode) {
         assert(fqvk::InitializeWorldProbe(reinterpret_cast<XrInstance>(uintptr_t(1)),1,64,64));

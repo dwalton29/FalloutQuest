@@ -14518,6 +14518,9 @@ bool Q1280EnsurePostProgram() {
 }
 
 bool Q1280DriverSupportsHalfFloatTarget() {
+    // Native initialization already validates and creates the FP16 world target.
+    // Preserve terrain/material HDR semantics without querying GLES extensions.
+    if(fqrender::nativeOnly)return true;
     const char* extensions = reinterpret_cast<const char*>(glGetString(GL_EXTENSIONS));
     if (!extensions) return false;
     return std::strstr(extensions, "GL_EXT_color_buffer_half_float") != nullptr ||

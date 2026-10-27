@@ -506,7 +506,7 @@ private:
             if(vulkanGameplay_)return false;
         }
         FQ_LOGI("FQ RENDERER requested=%s selected=%s experimental=%d sceneSubmission=%s",
-            selection[0]?selection:"gles",vulkanGameplay_?"vulkan":"gles",vulkanGameplay_,vulkanGameplay_?"gles-bridge":"gles");
+            selection[0]?selection:"gles",vulkanGameplay_?"vulkan":"gles",vulkanGameplay_,vulkanGameplay_?"cpu-commands":"gles");
 #endif
 #endif
 #if !defined(FQ_ENABLE_VULKAN) && !defined(NDEBUG)
@@ -515,6 +515,9 @@ private:
             FQ_LOGE("FQ RENDERER requested=vulkan unavailable=Vulkan-not-built fallback=none");return false;
         }
 #endif
+        if(vulkanGameplay_)extensions.erase(std::remove_if(extensions.begin(),extensions.end(),[](const char* name){
+            return !std::strcmp(name,XR_KHR_OPENGL_ES_ENABLE_EXTENSION_NAME);
+        }),extensions.end());
         FQ_LOGI("XR compositor depth extension enabled=%d", depthSubmissionEnabled_);
 
         XrInstanceCreateInfoAndroidKHR androidInfo{XR_TYPE_INSTANCE_CREATE_INFO_ANDROID_KHR};
@@ -547,6 +550,19 @@ private:
     }
 
     bool CreateEgl() {
+#ifdef FQ_ENABLE_VULKAN
+        if(vulkanGameplay_) {
+            fqrender::nativeOnly=true;fqgl::Reset();
+#ifdef FQ_OPTIMIZED_PROFILE
+            FQ_LOGI("FQ BUILD CONFIG: source=%s variant=profile nativeOptimisation=O2 debugDiagnostics=enabled",FQ_SOURCE_COMMIT);
+#else
+            FQ_LOGI("FQ BUILD CONFIG: source=%s variant=debug nativeOptimisation=default debugDiagnostics=enabled",FQ_SOURCE_COMMIT);
+#endif
+            FQ_LOGI("FQ RENDERER preparation=CPU session=Vulkan eglContext=none glesResources=none");
+            return true;
+        }
+#endif
+        fqrender::nativeOnly=false;
         PFN_xrVoidFunction fn = nullptr;
         if (!CheckXr(xrGetInstanceProcAddr(instance_, "xrGetOpenGLESGraphicsRequirementsKHR", &fn),
                      "xrGetInstanceProcAddr(xrGetOpenGLESGraphicsRequirementsKHR)")) return false;
@@ -2124,6 +2140,8 @@ private:
         if(q1700FrameSubmitted&&layerCount&&(presentationFrames_++%120)==0)
             FQ_LOGI("FQ PRESENTED api=%s stereo=%s frame=%llu",vulkanGameplay_?"Vulkan":"GLES",
                 vulkanGameplay_?"multiview-array":"sequential",(unsigned long long)presentationFrames_);
+        if(vulkanGameplay_&&(presentationFrames_%120)==1)
+            FQ_LOGI("FQ NATIVE FRONTEND: eglContext=none glesDriverCalls=%llu handles=%u",(unsigned long long)fqrender::driverCalls,fqrender::nextHandle-1);
         const double perfEndUs=double(fqloading::Now()-submitStarted);
         const bool perfLoadingAtSubmit=IsFo3LoadingVisible();
         if(IsFo3LoadingVisible()) {

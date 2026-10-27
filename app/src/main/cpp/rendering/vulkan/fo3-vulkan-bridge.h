@@ -1,6 +1,7 @@
 #pragma once
 // Transitional resource/command boundary. CPU asset decoders and gameplay do
 // not depend on Vulkan headers. Disabled bridge is a no-op for normal GLES.
+#include "rendering/render-submission.h"
 #include <cstddef>
 #include <cstdint>
 #include "data/fo3-texture-bsa.h"
@@ -12,7 +13,7 @@ struct PostSettings {
 };
 struct Hooks {
     void (*uniform)(uint32_t,int,int,int,const void*)=nullptr;
-    void (*draw)(uint32_t,uint32_t,uint32_t,int,int,uint32_t,size_t,int)=nullptr;
+    void (*draw)(const fqrender::DrawCommand&)=nullptr;
     void (*texture)(uint32_t,int,int,const uint8_t*,unsigned)=nullptr;
     void (*mesh)(uint32_t,const float*,size_t,size_t,const uint32_t*,size_t)=nullptr;
     void (*program)(uint32_t,int)=nullptr;
