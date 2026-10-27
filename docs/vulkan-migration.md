@@ -14,10 +14,11 @@ Quest visuals, loading times, stability or a 72 Hz performance improvement.
   queue as their consuming frame, with the original explicit buffer/image barriers.
   Native asset uploads no longer call `vkQueueWaitIdle` for each resource.
 - Staging buffers and upload command buffers/fences live until their batch fence
-  completes. Polling is nonblocking. A 64 MiB staging backpressure threshold waits
-  for the oldest batch when needed. One recording batch or a larger individual
-  asset can temporarily exceed that threshold; peak bytes and forced waits are
-  logged. Staging suballocation/pooling remains future work.
+  completes. Polling is nonblocking. Backpressure uses actual retained Vulkan
+  allocation sizes (including buffer alignment), with thresholds of 64 MiB and
+  512 staging allocations. It waits for the oldest batch when needed. One actively
+  prepared asset can temporarily exceed a threshold; retained peak bytes/count
+  and forced waits are logged. Staging suballocation/pooling remains future work.
 - Loader completion tokens now refer to actual Vulkan upload serials/fences.
   The CPU frontend no longer treats native uploads as immediately complete.
   GPU resources replaced before their upload finishes remain alive through upload
@@ -34,7 +35,8 @@ Quest visuals, loading times, stability or a 72 Hz performance improvement.
   queued draws cannot observe later palette contents. Transfer/vertex barriers
   preserve original live skin matrices; no animation or asset substitutions.
 - `FQVK RESOURCES` logs upload operations/batches, upload queue-idle calls,
-  staging current/peak bytes, pressure waits, descriptor allocations/hits/resets
+  staging current/peak allocation bytes and counts, pressure waits, descriptor
+  allocations/hits/resets
   and palette allocations/updates. Native `uploadQueueIdles=0` is expected.
 
 The renderer still uses one frame in flight and waits for the frame fence before

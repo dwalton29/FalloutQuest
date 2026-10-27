@@ -37,7 +37,7 @@ template<class T> T Proc(XrInstance xr,const char* name) {
     if(!fn)throw std::runtime_error(name);
     return reinterpret_cast<T>(fn);
 }
-struct Buffer {VkBuffer buffer{};VkDeviceMemory memory{};void* mapped{};VkDeviceSize size{};};
+struct Buffer {VkBuffer buffer{};VkDeviceMemory memory{};void* mapped{};VkDeviceSize size{},allocationBytes{};};
 struct Image {VkImage image{};VkImageView view{};VkDeviceMemory memory{};uint32_t levels=1,width=0,height=0;bool palette=false,clamp=false,repeatT=false;};
 struct PostTarget {Image image;VkFramebuffer framebuffer{};uint32_t width=0,height=0;bool initialized=false;};
 struct UiTarget {PostTarget target;VkImageView sampled{};};
@@ -172,13 +172,14 @@ public:
     UploadBatch uploadBatch;
     std::deque<UploadBatch> uploadFlight;
     uint64_t uploadSerial=0,uploadCompleted=0,uploadOperations=0,uploadSubmissions=0,uploadPressureWaits=0,uploadQueueIdles=0;
-    uint64_t uploadBytes=0,uploadPeakBytes=0;
+    uint64_t uploadBytes=0,uploadPeakBytes=0,uploadStagingBuffers=0,uploadPeakBuffers=0;
+    uint32_t uploadBufferLimit=512;
     uint64_t uploadBatchLimit=8u*1024u*1024u,uploadMemoryLimit=64u*1024u*1024u;
     uint32_t uploadOperationLimit=128;
     uint64_t paletteAllocations=0,paletteUpdates=0;
     bool AsyncUploads() const{return fqrender::nativeOnly;}
     void ReleaseUploadBatch(UploadBatch& batch) {
-        for(auto& staging:batch.staging){uploadBytes-=staging.size;Destroy(staging);}
+        for(auto& staging:batch.staging){uploadBytes-=staging.allocationBytes;--uploadStagingBuffers;Destroy(staging);}
         if(batch.fence)vkDestroyFence(device,batch.fence,nullptr);
         if(batch.command)vkFreeCommandBuffers(device,uploads,1,&batch.command);
         batch={};
@@ -202,7 +203,7 @@ public:
             Check(vkQueueSubmit(queue,1,&si,submitted.fence),"submit batched uploads");++uploadSubmissions;
         }
         PollUploads();
-        while(uploadBytes>uploadMemoryLimit&&!uploadFlight.empty()) {
+        while((uploadBytes>uploadMemoryLimit||uploadStagingBuffers>uploadBufferLimit)&&!uploadFlight.empty()) {
             ++uploadPressureWaits;
             Check(vkWaitForFences(device,1,&uploadFlight.front().fence,VK_TRUE,UINT64_MAX),"upload staging backpressure");
             PollUploads();
@@ -233,9 +234,9 @@ public:
     }
     void KeepStaging(Buffer& staging) {
         if(!AsyncUploads()){Destroy(staging);return;}
-        uploadBatch.staging.push_back(staging);uploadBatch.bytes+=staging.size;uploadBytes+=staging.size;
-        uploadPeakBytes=std::max(uploadPeakBytes,uploadBytes);staging={};
-        if(uploadBatch.bytes>=uploadBatchLimit||uploadBatch.operations>=uploadOperationLimit)FlushUploads();
+        uploadBatch.staging.push_back(staging);uploadBatch.bytes+=staging.size;uploadBytes+=staging.allocationBytes;++uploadStagingBuffers;
+        uploadPeakBytes=std::max(uploadPeakBytes,uploadBytes);uploadPeakBuffers=std::max(uploadPeakBuffers,uploadStagingBuffers);staging={};
+        if(uploadBatch.bytes>=uploadBatchLimit||uploadBatch.operations>=uploadOperationLimit||uploadBytes>uploadMemoryLimit||uploadStagingBuffers>uploadBufferLimit)FlushUploads();
     }
     uint32_t MemoryType(uint32_t bits,VkMemoryPropertyFlags flags) {
         for(uint32_t i=0;i<memory.memoryTypeCount;++i)
@@ -247,7 +248,7 @@ public:
         try {
             VkBufferCreateInfo ci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};ci.size=size;ci.usage=usage;
             Check(vkCreateBuffer(device,&ci,nullptr,&b.buffer),"create buffer");
-            VkMemoryRequirements req{};vkGetBufferMemoryRequirements(device,b.buffer,&req);
+            VkMemoryRequirements req{};vkGetBufferMemoryRequirements(device,b.buffer,&req);b.allocationBytes=req.size;
             VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};ai.allocationSize=req.size;
             ai.memoryTypeIndex=MemoryType(req.memoryTypeBits,host?
                 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT|VK_MEMORY_PROPERTY_HOST_COHERENT_BIT:VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
@@ -979,9 +980,9 @@ public:
             }
         }
         Collect();
-        if(!offscreen&&(frames%120)==0)VKLOG("FQVK RESOURCES uploadOperations=%llu uploadBatches=%llu uploadQueueIdles=%llu stagingBytes=%llu stagingPeakBytes=%llu stagingPressureWaits=%llu descriptorAllocations=%llu descriptorHits=%llu descriptorResets=%llu paletteAllocations=%llu paletteUpdates=%llu",
+        if(!offscreen&&(frames%120)==0)VKLOG("FQVK RESOURCES uploadOperations=%llu uploadBatches=%llu uploadQueueIdles=%llu stagingBytes=%llu stagingPeakBytes=%llu stagingPressureWaits=%llu stagingBuffers=%llu stagingPeakBuffers=%llu descriptorAllocations=%llu descriptorHits=%llu descriptorResets=%llu paletteAllocations=%llu paletteUpdates=%llu",
             (unsigned long long)uploadOperations,(unsigned long long)uploadSubmissions,(unsigned long long)uploadQueueIdles,
-            (unsigned long long)uploadBytes,(unsigned long long)uploadPeakBytes,(unsigned long long)uploadPressureWaits,(unsigned long long)descriptorAllocations,(unsigned long long)descriptorHits,(unsigned long long)descriptorResets,(unsigned long long)paletteAllocations,(unsigned long long)paletteUpdates);
+            (unsigned long long)uploadBytes,(unsigned long long)uploadPeakBytes,(unsigned long long)uploadPressureWaits,(unsigned long long)uploadStagingBuffers,(unsigned long long)uploadPeakBuffers,(unsigned long long)descriptorAllocations,(unsigned long long)descriptorHits,(unsigned long long)descriptorResets,(unsigned long long)paletteAllocations,(unsigned long long)paletteUpdates);
         if(!offscreen&&!gameplay)Dump();
         if(!offscreen&&(frames++%120)==0)VKLOG("FQVK FRAME frame=%llu stereoGpuMs=%.3f gpuScope=frameSpan sharedDraws=%llu vertexCorners=%llu skippedDraws=%llu presentation=%s sceneSubmission=cpu-commands benchmarkValid=0",
             (unsigned long long)frames,gpuMs,(unsigned long long)draws,(unsigned long long)vertices,(unsigned long long)skipped,gameplay?"Vulkan":"GLES-probe");

@@ -503,18 +503,18 @@ void AsyncResources() {
     const auto status=glClientWaitSync(ticket,0,0);assert(status==GL_ALREADY_SIGNALED||status==GL_TIMEOUT_EXPIRED);
     assert(fqvk::BeginWorldProbe(identity,identity,eye,eye));Submit(1,9,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);fqvk::EndWorldProbe();
     assert(glClientWaitSync(ticket,0,0)==GL_ALREADY_SIGNALED);glDeleteSync(ticket);
-    assert(r.uploadBytes==0&&r.retiredImages.empty());
+    assert(r.uploadBytes==0&&r.uploadStagingBuffers==0&&r.retiredImages.empty());
     const auto resets=r.descriptorResets;
     assert(fqvk::BeginWorldProbe(identity,identity,eye,eye));Submit(1,9,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);fqvk::EndWorldProbe();
     assert(r.descriptorResets==resets+1); // destroyed views invalidate cached descriptors at the next safe boundary
     const auto pixels=r.Readback();Near(Pixel(pixels,0,32,32,2),1);Near(Pixel(pixels,1,32,32,2),1);
     // Exercise bounded staging/backpressure with rapidly replaced native images.
-    r.uploadBatchLimit=1;r.uploadMemoryLimit=16;
+    r.uploadBatchLimit=1;r.uploadMemoryLimit=16;r.uploadBufferLimit=2;
     for(int i=0;i<32;++i)fqvk::Texture(5,1,1,i%2?green:blue);
-    r.FlushUploads();assert(r.uploadBytes<=r.uploadMemoryLimit&&r.uploadQueueIdles==0);
+    r.FlushUploads();assert(r.uploadBytes<=r.uploadMemoryLimit&&r.uploadStagingBuffers<=r.uploadBufferLimit&&r.uploadQueueIdles==0);
     assert(fqvk::BeginWorldProbe(identity,identity,eye,eye));Submit(1,9,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);fqvk::EndWorldProbe();
     const auto changed=r.Readback();Near(Pixel(changed,0,32,32,1),1);Near(Pixel(changed,1,32,32,1),1);
-    assert(r.uploadBytes==0&&r.retiredImages.empty());
+    assert(r.uploadBytes==0&&r.uploadStagingBuffers==0&&r.retiredImages.empty());
     fqvk::ShutdownWorldProbe();
     // Teardown before any frame must safely cancel unsubmitted uploads.
     assert(fqvk::InitializeWorldProbe(xr,1,64,64));assert(fqvk::renderer->uploadBatch.command);
