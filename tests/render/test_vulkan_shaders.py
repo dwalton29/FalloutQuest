@@ -10,6 +10,17 @@ ROOT=Path(__file__).resolve().parents[2]
 spec=importlib.util.spec_from_file_location('vkbuild',ROOT/'tools/build_vulkan_shaders.py')
 vkbuild=importlib.util.module_from_spec(spec);spec.loader.exec_module(vkbuild)
 class VulkanShaders(unittest.TestCase):
+    def test_solid_variants_preserve_material_and_remove_only_inactive_guards(self):
+        for name in ('world','terrain'):
+            original=vkbuild.port(vkbuild.sources()[name],name)[0][1]
+            solid=vkbuild.no_discard_fragment(original,name)
+            self.assertNotIn('discard;',solid)
+            self.assertIn('texture(uNormalGloss',solid)
+            self.assertIn('uLocalLightPosRadius',solid)
+            self.assertIn('lit = mix(lit, uFogColor, fogFactor)',solid)
+            self.assertEqual(original.split('void main()')[0],solid.split('void main()')[0])
+            with self.assertRaises(ValueError):
+                vkbuild.no_discard_fragment(original+'\nvoid unexpected(){discard;}',name)
     def test_material_abi_and_stereo(self):
         for name,pair in vkbuild.sources().items():
             converted,fields,samplers,size=vkbuild.port(pair,name)
@@ -57,4 +68,11 @@ class VulkanShaders(unittest.TestCase):
                     if shutil.which('spirv-val'):
                         subprocess.run(['spirv-val','--target-env','vulkan1.1',str(file)],check=True)
                 subprocess.run([compiler,'-V','--target-env','vulkan1.1','-l',str(out/f'{name}.vert'),str(out/f'{name}.frag'),'-o',str(out/f'{name}-linked.spv')],check=True)
+            for name in ('world','terrain'):
+                if shutil.which('spirv-val'):
+                    subprocess.run(['spirv-val','--target-env','vulkan1.1',str(out/f'{name}_solid.frag.spv')],check=True)
+                subprocess.run([compiler,'-V','--target-env','vulkan1.1','-l',str(out/f'{name}.vert'),str(out/f'{name}_solid.frag'),'-o',str(out/f'{name}-solid-linked.spv')],check=True)
+                if shutil.which('spirv-dis'):
+                    dis=subprocess.check_output(['spirv-dis',str(out/f'{name}_solid.frag.spv')],text=True)
+                    self.assertNotIn('OpKill',dis)
 if __name__=='__main__':unittest.main()

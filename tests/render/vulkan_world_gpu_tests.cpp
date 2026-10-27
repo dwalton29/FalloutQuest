@@ -191,6 +191,7 @@ namespace {
 void Program(uint32_t id,int kind) {
     const auto& shader=fqvk::shaders::programs[kind];
     fqvk::ProgramData p;p.terrain=kind==1;p.sky=kind==2;p.water=kind==3;p.ui=kind>=9?kind:0;
+    fqvk::ConfigureDiscardGuards(p,shader);
     p.bytes.resize(shader.uniformSize);
     for(size_t i=0;i<shader.fieldCount;++i)p.fields.push_back({int(i*64),shader.fields[i]});
     p.units.resize(shader.samplerCount);
@@ -550,6 +551,50 @@ void HeadlessSceneSubmission() {
     std::cout<<"Context-free scene submission: CPU handles, named uniforms, queued state snapshots, native original material output and zero GLES driver calls passed\n";
 }
 
+void SolidMaterialParity() {
+    const auto xr=reinterpret_cast<XrInstance>(uintptr_t(1));
+    const float identity[]{1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1},eye[]{0,0,2};
+    for(bool terrain:{false,true}) {
+        assert(fqvk::InitializeWorldProbe(xr,1,64,64));Scene(terrain);
+        auto& r=*fqvk::renderer;
+        const uint8_t normal[]{128,128,255,128};fqvk::Texture(44,1,1,normal);fqgl::state.texture2d[1].Change(44);
+        Set(1,"uSunlightColor",{.5f,.4f,.3f});Set(1,"uLocalLightCount",{1});
+        Set(1,"uLocalLightPosRadius",{.2f,.1f,1,5});Set(1,"uLocalLightColorFalloff",{.1f,.2f,.3f,1});
+        if(terrain){Set(1,"uUseNormal",{1});Set(1,"uTerrainSpecularEnabled",{1});}
+        else {Set(1,"uNoLighting",{0});Set(1,"uSpecularEnabled",{1});Set(1,"uGlossiness",{16});}
+        for(int guard=0;guard<(terrain?2:4);++guard) {
+            Set(1,"uWaterReflectionClipEnabledQ2090",{guard==1?1.0f:0.0f});Set(1,"uWaterReflectionPlaneYQ2090",{.1f});
+            if(!terrain) {
+                Set(1,"uNativeLodClipEnabledQ1810",{guard==2?1.0f:0.0f});Set(1,"uNativeLodClipCellCountQ1900",{1});
+                Set(1,"uNativeLodClipCellsQ1900",{-.2f,.2f,-.2f,.2f});
+                Set(1,"uAlphaTest",{guard==3?1.0f:0.5f});Set(1,"uAlphaThreshold",{1.1f});
+            }
+            std::vector<uint16_t> reference;
+            for(bool generic:{true,false}) {
+                r.genericShaders=generic;
+                assert(fqvk::BeginWorldProbe(identity,identity,eye,eye));
+                fqgl::state.texture2d[0].Change(5);fqgl::state.depthWrite.Change(true);fqgl::state.blend.Change(false);
+                Submit(1,9,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);
+                // Selection must use the queued uniform snapshot, not live state.
+                if(guard==0)Set(1,"uWaterReflectionClipEnabledQ2090",{1});
+                fqvk::EndWorldProbe();
+                if(guard==0)Set(1,"uWaterReflectionClipEnabledQ2090",{0});
+                const auto pixels=r.Readback();
+                if(generic)reference=pixels;
+                else {
+                    assert(reference==pixels);
+                    assert(r.solidDraws==uint64_t(guard==0)&&r.guardedDraws==uint64_t(guard!=0));
+                    if(guard==1){Near(Pixel(pixels,0,32,44,0),0);assert(Pixel(pixels,0,32,20,0)>.1f);}
+                    if(guard==2){Near(Pixel(pixels,0,32,32,0),0);assert(Pixel(pixels,0,20,32,0)>.1f);}
+                    if(guard==3)Near(Pixel(pixels,0,32,32,0),0);
+                }
+            }
+        }
+        fqvk::ShutdownWorldProbe();
+    }
+    std::cout<<"Solid material variants: exact stereo pixels against generic shaders, original lighting, alpha cutouts, LOD and reflection clips passed\n";
+}
+
 void AsyncResources() {
     fqrender::nativeOnly=true;fqgl::Reset();
     const auto xr=reinterpret_cast<XrInstance>(uintptr_t(1));
@@ -571,7 +616,20 @@ void AsyncResources() {
     const auto allocations=r.stagingAllocations;
     for(int i=0;i<16;++i){auto reused=r.MakeStaging(128);assert(reused.buffer==hotHandle);r.RecycleStaging(reused);}
     assert(r.stagingAllocations==allocations);
-    r.stagingPoolLimit=16u*1024u*1024u;r.stagingPoolCountLimit=128;
+    r.stagingPoolLimit=16u*1024u*1024u;r.stagingPoolCountLimit=512;
+    // More than 128 palettes can retire together with two world frames in
+    // flight. Preserve the entire hot burst instead of evicting/reallocating it.
+    std::vector<fqvk::Buffer> burst;
+    for(int i=0;i<384;++i)burst.push_back(r.MakeStaging(128));
+    for(auto& buffer:burst)r.RecycleStaging(buffer);
+    const auto burstAllocations=r.stagingAllocations,burstEvictions=r.stagingEvictions;
+    for(int repeat=0;repeat<3;++repeat) {
+        burst.clear();
+        for(int i=0;i<384;++i){auto buffer=r.MakeStaging(128);std::memcpy(buffer.mapped,&i,sizeof(i));burst.push_back(buffer);}
+        for(int i=0;i<384;++i){int actual=-1;std::memcpy(&actual,burst[i].mapped,sizeof(actual));assert(actual==i);r.RecycleStaging(burst[i]);}
+        assert(r.stagingAllocations==burstAllocations&&r.stagingEvictions==burstEvictions);
+        assert(r.stagingPoolBytes<=r.stagingPoolLimit&&r.stagingPool.size()<=r.stagingPoolCountLimit);
+    }
     const auto allocated=r.descriptorAllocations,hits=r.descriptorHits;
     for(int frame=0;frame<3;++frame) {
         assert(fqvk::BeginWorldProbe(identity,identity,eye,eye));
@@ -858,7 +916,7 @@ int main() {
     for(auto format:{VK_FORMAT_R8G8B8A8_UNORM,VK_FORMAT_B8G8R8A8_UNORM,VK_FORMAT_B8G8R8A8_SRGB})HdrPresentation(format,false);
     HdrPresentation(VK_FORMAT_R8G8B8A8_UNORM,true);
     BufferedOwnership();DirectPresentation();EarlyAcquireFailure();TimingCapacity();
-    AsyncResources();HeadlessSceneSubmission();
+    SolidMaterialParity();AsyncResources();HeadlessSceneSubmission();
     GameplayPresentation(false);GameplayPresentation(true);
     for(bool asynchronous:{false,true}) {
     fqrender::nativeOnly=asynchronous;

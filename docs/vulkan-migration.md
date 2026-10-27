@@ -1,10 +1,101 @@
-# Vulkan migration status — v251
+# Vulkan migration status — v252
 
 The full migration is **incomplete**. Experimental Vulkan gameplay retains the
 context-free CPU frontend and native OpenXR multiview presentation. GLES remains
 the default. Native asset uploads are now batched and asynchronous; descriptors
 are reused. Software-GPU rendering and synchronization tests do not establish
 Quest visuals, loading times, stability or a 72 Hz performance improvement.
+
+## v252: scene discard variants and buffered staging reuse
+
+The v251 capture's final 30 seconds contained 1,870 completed gameplay samples,
+62.3 application frames/s, median GPU span 15.19 ms and p95 17.69 ms. Median scene
+pass cost was 10.77 ms, water colour/depth snapshot 1.80 ms, film 0.97 ms, bloom
+0.67 ms, compositor depth copy 0.42 ms. Across the longer gameplay section the
+rate was 56.8 frames/s. Views varied, so these are not matched benchmarks.
+
+### Scene shading and bandwidth investigation
+
+Both canonical world and LAND fragment shaders include fragment-discard paths.
+World can discard for alpha testing, resident-CELL LOD clipping and planar-water
+reflection clipping; LAND can discard for reflection clipping. These are dynamic
+uniform guards in the same shader used for ordinary opaque surfaces. A driver
+may have to retain coverage/depth restrictions even when a draw disables every
+such guard. Khronos' tile-rendering guidance identifies discard as an obstacle to
+early depth rejection. The capture alone does **not** identify texture bandwidth,
+fragment arithmetic or vertex processing as the dominant scene bottleneck.
+
+v252 generates a second fragment module for each of those two programs, directly
+from the existing canonical source and the same material ABI. It removes only
+the complete discard branches. All lighting, normal mapping, local lights,
+specular, environment maps, emissive, LOD fading, fog and output alpha remain.
+Each queued draw's captured uniform bytes determine eligibility: every applicable
+original discard guard must be finite and <=0.5. Alpha-tested surfaces and any
+spatial clip keep the original module. The exact >0.5 threshold is retained.
+No forced early-fragment-tests mode is applied to cutouts; no draw is reordered.
+The generator fails on any unaccounted new discard rather than silently removing
+another visibility rule. Two extra modules and a binary pipeline-key bit bound
+variant growth; this is not a combinatorial material-permutation system.
+
+The backend uploads regular sampled material textures as RGBA8 with generated
+mips; its main stereo attachments remain RGBA16F colour (8 bytes/pixel) and D32
+(4 bytes/pixel). The scene is stored/reloaded around water snapshots and film,
+and water also copies both stereo attachments. These are real sources of image
+traffic, but logical image sizes do not equal physical memory traffic on a tiled,
+compressed GPU. No hardware bandwidth counter was collected. This checkpoint
+preserves formats, resolution, HDR and refraction, and targets avoidable fragment
+execution first. Native texture compression, foveation and a water render-graph
+redesign require their own measured visual checks.
+
+New `FQVK MATERIAL` rows identify world/LAND draw counts, `noDiscardDraws`,
+`genericDraws`, `genericForced`, stereo `hdrColorSurfaceMiB`/`depthSurfaceMiB`, and
+`stagingCacheLimit`. They retain the completed submission identity like deferred
+GPU samples. Surface sizes describe storage, **not measured bandwidth**.
+
+### Staging reuse
+
+The final v251 resource window showed 9,990 staging allocations and 9,980 cache
+evictions over 26.84 seconds (approximately 372 allocations/s), despite no staging
+backpressure. The completed-buffer cache capped itself at 128 handles while the
+capture's in-flight staging peak exceeded 300. Retiring a burst could evict hot
+palette buffers that the following frames immediately needed again.
+
+The free cache now retains up to 512 buffers, matching the existing bounded
+in-flight upload-handle limit, while keeping its original 16 MiB byte limit.
+Small hot palette/geometry classes still take priority over cold large textures.
+Buffer removal uses swap/pop instead of shifting the remaining array. Exact
+size-class matching and all fence-completion/reuse rules are unchanged. This is
+a bounded working-set fix, not reuse of still-pending memory. The cache's maximum
+byte budget and the 64 MiB in-flight staging backpressure budget do not increase.
+
+### Validation and headset comparison
+
+Software-GPU tests compare exact stereo FP16 pixels between generic and selected
+modules with original normal/specular/local lighting, alpha cutouts, native LOD
+clipping, and reflection clipping. Existing skin/instance, terrain paint/depth,
+water, film, UI, swapchain and pending-GPU retirement tests remain in the suite.
+Shader checks compile/link/validate both variants and inspect SPIR-V for absence
+of `OpKill`. A 384-buffer hot-burst regression repeats three times with zero
+additional allocations or evictions after warm-up, distinct host writes and
+bounded cache memory; existing fence/backpressure/lifetime tests remain.
+These are software checks, not Quest performance or hardware visual validation.
+
+Use O2 Profile, the same save/view and the v251 capture settings, with:
+
+```powershell
+.\adb shell setprop debug.falloutquest.vulkan_generic_shaders 0
+.\adb shell setprop debug.falloutquest.vulkan_timing 1
+.\adb shell am force-stop com.falloutquest.app
+```
+
+Capture steady gameplay as `vulkan-v252.txt`. For a shader-only A/B comparison,
+repeat the same position after force-stop with `vulkan_generic_shaders 1`; that
+retains the improved staging cache but forces the old material shader modules.
+Restore `vulkan_generic_shaders 0` and `vulkan_timing 0` after testing. Compare
+scene-pass GPU span, actual cadence, variant coverage, and resource-counter deltas.
+No frame-rate or millisecond gain is claimed before a matched Quest capture.
+
+Reference: [Khronos tile-rendering depth/HSR guidance](https://github.khronos.org/Vulkan-Site/guide/latest/tile_based_rendering_best_practices.html).
 
 ## v251: buffered submission and tile-safe timing boundaries
 

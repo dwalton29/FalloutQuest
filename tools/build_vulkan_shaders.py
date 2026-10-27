@@ -116,6 +116,32 @@ def port(pair,kind="world"):
         converted.append(header+sampler_text+'\n'+source)
     return converted,metadata,samplers,max(16,offset)
 
+def no_discard_fragment(source, kind):
+    """Equivalent only when the draw's original discard guards are disabled.
+
+    Keep the canonical material and ABI; remove complete inactive branches,
+    rather than forcing early tests on alpha-tested or spatially clipped draws.
+    Fail the build if a newly added discard needs another eligibility guard.
+    """
+    guards = ['if (uWaterReflectionClipEnabledQ2090 > 0.5']
+    if kind == 'world':
+        guards.append('if (uNativeLodClipEnabledQ1810 > 0.5)')
+    for guard in guards:
+        begin = source.index(guard)
+        end = source.index('{', begin) + 1
+        depth = 1
+        while depth:
+            depth += (source[end] == '{') - (source[end] == '}')
+            end += 1
+        source = source[:begin] + source[end:]
+    if kind == 'world':
+        alpha = 'if (uAlphaTest > 0.5 && alpha < uAlphaThreshold) discard;'
+        assert source.count(alpha) == 1
+        source = source.replace(alpha, '')
+    if re.search(r'\bdiscard\s*;', source):
+        raise ValueError('Unaccounted discard in '+kind)
+    return source
+
 def build(output,compiler):
     output.mkdir(parents=True,exist_ok=True)
     cpp=['#pragma once','#include <cstdint>','#include <cstddef>','#include <iterator>','namespace fqvk::shaders {',
@@ -142,6 +168,18 @@ def build(output,compiler):
             data=spv.read_bytes()
             words=struct.unpack('<'+'I'*(len(data)//4),data)
             cpp.append(f'inline constexpr uint32_t {name}_{stage}[]={{'+','.join(hex(x) for x in words)+'};')
+    for name in ('world', 'terrain'):
+        text = no_discard_fragment(port(sources()[name], name)[0][1], name)
+        path = output/f'{name}_solid.frag';path.write_text(text)
+        spv = path.with_suffix('.frag.spv')
+        command = ([compiler,'-V','--target-env','vulkan1.1',str(path),'-o',str(spv)]
+                   if 'glslang' in Path(compiler).name else
+                   [compiler,'--target-env=vulkan1.1',str(path),'-o',str(spv)])
+        subprocess.run(command,check=True)
+        data=spv.read_bytes();words=struct.unpack('<'+'I'*(len(data)//4),data)
+        cpp.append(f'inline constexpr uint32_t {name}_solid_frag[]={{'+','.join(hex(x) for x in words)+'};')
+    cpp.append('struct SolidFragment {const uint32_t* code; size_t bytes;};')
+    cpp.append('inline constexpr SolidFragment solidFragments[]={{world_solid_frag,sizeof(world_solid_frag)},{terrain_solid_frag,sizeof(terrain_solid_frag)}};')
     cpp.append('struct Program { const Field* fields; size_t fieldCount; const Sampler* samplers; size_t samplerCount; uint32_t uniformSize; const uint32_t* vertex; size_t vertexBytes; const uint32_t* fragment; size_t fragmentBytes; };')
     cpp.append('inline constexpr Program programs[]={')
     for name in sources():
