@@ -51,6 +51,7 @@ void ActivateFo3TerrainGroundingQ77(uint32_t worldspaceFormId,
 bool SampleFo3TerrainGroundQ77(float virtualX, float virtualZ,
                                float* outPlayerYOffset);
 bool IsFo3TerrainGroundingActiveQ77();
+bool SampleFo3TerrainFootstepMaterial(float x,float z,uint32_t* material);
 
 // Q20 persistent per-CELL LAND streaming. Cold boot still uses the proven
 // Q7.20 renderer; exterior movement promotes one seven-cell strip at a time.

@@ -6,6 +6,8 @@
 // collapse to one base texture or the brown fallback.
 
 #include <array>
+#include <algorithm>
+#include <cmath>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -14,6 +16,7 @@ namespace {
 
 struct Q711LtexInfo {
     uint32_t textureSetFormId = 0u;
+    uint8_t havokMaterial = 0u;
     std::string iconPath;
 };
 
@@ -171,13 +174,13 @@ bool BuildFo3TerrainTextureIndexQ711() {
                               [&](const char* type, const uint8_t* bytes, uint32_t subSize) {
                 if (std::memcmp(type, "TNAM", 4u) == 0 && subSize >= 4u) {
                     info.textureSetFormId = ReadLe32Q75(bytes);
+                } else if (std::memcmp(type, "HNAM", 4u) == 0 && subSize >= 1u) {
+                    info.havokMaterial = bytes[0];
                 } else if (std::memcmp(type, "ICON", 4u) == 0 && subSize > 0u) {
                     info.iconPath = Q711CString(bytes, subSize);
                 }
             });
-            if (info.textureSetFormId != 0u || !info.iconPath.empty()) {
-                q711LandscapeTextures[formId] = std::move(info);
-            }
+            q711LandscapeTextures[formId] = std::move(info);
         } else if (isTxst) {
             ++txstRecords;
             std::string diffuse;
@@ -222,4 +225,31 @@ const std::vector<Q718TerrainAlphaLayer>& GetFo3TerrainAlphaLayersQ718(uint32_t 
 std::string ResolveFo3TerrainAlphaTextureQ718(const Q718TerrainAlphaLayer& layer) {
     BuildFo3TerrainTextureIndexQ711();
     return ResolveQ718LtexDiffuse(layer.ltexFormId);
+}
+
+// Render-thread read of the existing immutable LAND/LTEX index; never opens
+// the master or starts terrain preparation from the movement/audio path.
+static uint32_t Fo3TerrainContactMaterial(uint32_t land,float localX,float localY) {
+    const int q=(localX>=2048.f?1:0)+(localY>=2048.f?2:0);
+    const float gx=std::clamp((localX-(q&1?2048.f:0.f))/128.f,0.f,16.f);
+    const float gy=std::clamp((localY-(q&2?2048.f:0.f))/128.f,0.f,16.f);
+    const int x=std::min(int(gx),15),y=std::min(int(gy),15);
+    const float tx=gx-x,ty=gy-y;
+    uint32_t texture=0;float strongest=0,remaining=1;
+    const auto painted=q718LandAlphaTextures.find(land);
+    if(painted!=q718LandAlphaTextures.end()) {
+        // Painter order matches LAND rendering: later layers cover earlier ones.
+        for(int layer=7;layer>=0;--layer)for(const auto& a:painted->second) {
+            if(a.quadrant!=q||a.layer!=layer)continue;
+            auto h=[&](int u,int v){return a.opacity[v*17+u];};
+            const float alpha=std::clamp((h(x,y)*(1-tx)+h(x+1,y)*tx)*(1-ty)+
+                (h(x,y+1)*(1-tx)+h(x+1,y+1)*tx)*ty,0.f,1.f);
+            const float weight=remaining*alpha;remaining*=1-alpha;
+            if(weight>strongest){strongest=weight;texture=a.ltexFormId;}
+        }
+    }
+    const auto base=q711LandBaseTextures.find(land);
+    if(remaining>strongest && base!=q711LandBaseTextures.end())texture=base->second[q];
+    const auto info=q711LandscapeTextures.find(texture);
+    return info==q711LandscapeTextures.end()?0u:info->second.havokMaterial;
 }

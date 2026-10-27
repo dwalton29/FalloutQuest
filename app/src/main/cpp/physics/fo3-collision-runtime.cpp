@@ -480,7 +480,7 @@ bool FindStepGroundQ713(float x, float z, float feetY, float& groundY) {
 // Q22.6: Spatially index NPC standing-height queries without changing which
 // authored Havok/LAND surface wins. Neighbouring cells cover the 0.02m bound
 // tolerance and boundary points; large triangles are independently indexed.
-bool FindGroundWide(float x, float z, float referenceY, float& groundY) {
+bool FindGroundWide(float x, float z, float referenceY, float& groundY, size_t* triangleIndex=nullptr) {
     bool found = false;
     float bestDistance = std::numeric_limits<float>::max();
     float bestY = referenceY;
@@ -524,7 +524,7 @@ bool FindGroundWide(float x, float z, float referenceY, float& groundY) {
         for (size_t index=0;index<gWorldTriangles.size();++index)
             consider(index);
     }
-    if (found) groundY = bestY;
+    if (found) {groundY = bestY;if(triangleIndex)*triangleIndex=bestIndex;}
     return found;
 }
 bool FindAuthoredSpawnGroundQ78B(float x, float z, float referenceY, float& groundY) {
@@ -892,6 +892,9 @@ bool BuildFo3CollisionPlacementChunk(const Fo3WorldPlacement& placement,
             const size_t ordinal = i / 3u;
             if (ordinal < shape.triangleWeldingInfo.size())
                 tri.weldingInfoQ801 = shape.triangleWeldingInfo[ordinal];
+            tri.havokMaterialQ714=shape.havokMaterial;
+            tri.stairsQ714=(shape.havokMaterial&64u)!=0;
+            tri.platformQ714=(shape.havokMaterial&32u)!=0;
             if (meta) {
                 tri.havokLayerQ714 = meta->layer;
                 tri.havokMaterialQ714 = meta->material;
@@ -1248,6 +1251,9 @@ bool InitializeFo3CollisionOverlay(const std::vector<Fo3WorldPlacement>& placeme
                                                    placement.editorId,
                                                    placement.modelPath});
                 }
+                worldTriangle.havokMaterialQ714=shape.havokMaterial;
+                worldTriangle.stairsQ714=(shape.havokMaterial&64u)!=0;
+                worldTriangle.platformQ714=(shape.havokMaterial&32u)!=0;
                 if (metaQ714) {
                     worldTriangle.havokLayerQ714 = metaQ714->layer;
                     worldTriangle.havokMaterialQ714 = metaQ714->material;
@@ -2618,6 +2624,25 @@ bool SampleFo3ActorGroundQ240(float x, float z, float referenceY,
     if (!found) return false;
     *outGroundY = bestY;
     return true;
+}
+
+bool SampleFo3PlayerFootstepSurface(float x,float z,float playerYOffset,uint32_t* material) {
+    if(!material||!gPlayerCollisionReady||!std::isfinite(x)||!std::isfinite(z)||
+       !std::isfinite(playerYOffset))return false;
+    const float feet=gCollisionFloorY+playerYOffset;
+    float bestDistance=.08f,ground=feet;
+    bool found=false;size_t index=0;
+    if(FindGroundWide(x,z,feet,ground,&index) && std::fabs(ground-feet)<=bestDistance) {
+        bestDistance=std::fabs(ground-feet);found=true;
+        *material=gWorldTriangles[index].havokMaterialQ714;
+        if(gWorldTriangles[index].stairsQ714)*material|=64u;
+    }
+    float offset=0;
+    if(SampleFo3TerrainGroundQ77(x,z,&offset) &&
+       std::fabs(gCollisionFloorY+offset-feet)<bestDistance) {
+        found=SampleFo3TerrainFootstepMaterial(x,z,material);
+    }
+    return found;
 }
 
 void RenderFo3CollisionOverlay(const float* mvp16) {

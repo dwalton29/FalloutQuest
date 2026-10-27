@@ -20,3 +20,12 @@ target_link_libraries(audio_assets_tests PRIVATE ZLIB::ZLIB)
 add_test(NAME audio_assets_tests COMMAND audio_assets_tests)
 
 target_sources(audio_assets_tests PRIVATE ../../app/src/main/cpp/data/fo3-bsa-archive.cpp ../../app/src/main/cpp/data/fo3-asset-store.cpp)
+
+add_executable(footstep_tests footstep_tests.cpp
+ ../../app/src/main/cpp/audio/fo3-audio-catalog.cpp
+ ../../app/src/main/cpp/data/fo3-esm-reader.cpp)
+target_compile_features(footstep_tests PRIVATE cxx_std_17)
+target_compile_options(footstep_tests PRIVATE -Wall -Wextra -Werror -UNDEBUG)
+target_include_directories(footstep_tests PRIVATE ../../app/src/main/cpp)
+target_link_libraries(footstep_tests PRIVATE ZLIB::ZLIB)
+add_test(NAME footstep_tests COMMAND footstep_tests)

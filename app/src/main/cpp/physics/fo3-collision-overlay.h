@@ -108,6 +108,8 @@ bool ResolveFo3PlayerMotionQ6G(float currentX, float currentZ,
 // Ready means a world was published, including an intentionally empty world.
 // It does not imply a ground surface exists. Shutdown/uninitialized stays false.
 bool IsFo3PlayerCollisionReadyQ6G();
+// Contact at the resolved capsule feet; false for unsupported/airborne positions.
+bool SampleFo3PlayerFootstepSurface(float x,float z,float playerYOffset,uint32_t* material);
 
 // Resident actors use NAVM for route topology but the visible root height must
 // follow the same authored Havok/LAND surfaces as player locomotion.

@@ -52,6 +52,7 @@ struct Fo3NifCollisionShapeQ6F {
     uint32_t sourceShapeBlock = 0xffffffffu;
     uint32_t dataBlock = 0xffffffffu;
 
+    uint32_t havokMaterial = 0u; // non-packed leaf material
     uint8_t havokLayer = 0u; // rigid body filter, for non-packed primitives
     bool compressedVertices = false;
     bool bodyTransformApplied = false;
@@ -717,6 +718,7 @@ inline bool DecodeShape(const std::vector<uint8_t>& nif,const NifHeader& h,const
             Q6F_LOGW("Q6F COLLISION SHAPE UNSUPPORTED: model=%s co=%u body=%u shape=%u type=%s",resolved.c_str(),coBlock,bodyBlock,shapeRef,type.c_str());
         }
         if(ok){
+            if(s.kind!=Fo3CollisionShapeKindQ6F::TriangleMesh && size>=4u)s.havokMaterial=ReadLe32(data);
             ApplyMatrix(s.positions,accumulated); StoreMatrix(accumulated,s.localToModel);
             Q6F_LOGI("Q6F COLLISION LEAF: model=%s shape=%u type=%s kind=%s vertices=%zu triangles=%zu depth=%d",
                      resolved.c_str(),shapeRef,type.c_str(),Fo3CollisionShapeKindNameQ6F(s.kind),s.positions.size()/3u,s.indices.size()/3u,depth);
@@ -780,7 +782,16 @@ inline bool LoadFo3NifCollisionShapesImpl(const std::string& modelPath,
         if(target<h.numBlocks) targetApplied=ParseTargetMatrix(BlockData(nif,h,target),h.blockSizes[target],h,targetM);
         if(requireComplete&&((bodyType=="bhkRigidBodyT"&&!bodyApplied)||
                 (target!=INVALID_REF&&(target>=h.numBlocks||!targetApplied))))return false;
-        const Mat4 outer=Mul(targetApplied?targetM:Identity(),bodyApplied?bodyM:Identity());
+        // NIF footer identifies the scene roots replaced by REFR placement.
+        bool targetIsRoot = false;
+        const size_t footer=h.blockOffsets.back()+h.blockSizes.back();
+        if(footer+4u<=nif.size()) {
+            const uint32_t count=ReadLe32(nif.data()+footer);
+            if(count<=(nif.size()-footer-4u)/4u)
+                for(uint32_t i=0;i<count;++i)
+                    targetIsRoot=targetIsRoot||ReadLe32(nif.data()+footer+4u+i*4u)==target;
+        }
+        const Mat4 outer=Mul(targetApplied&&!targetIsRoot?targetM:Identity(),bodyApplied?bodyM:Identity());
 
         for(size_t i=before;i<outShapes.size();++i){
             Fo3NifCollisionShapeQ6F& s=outShapes[i];

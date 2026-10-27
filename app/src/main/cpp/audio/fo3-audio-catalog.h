@@ -25,6 +25,7 @@ struct Catalog {
   std::unordered_map<uint32_t, uint32_t> spaces;
   std::string MusicForCell(uint32_t cell) const;
   uint32_t AmbientForCell(uint32_t cell) const;
+  uint32_t Footstep(uint32_t material, unsigned action) const;
 };
 bool SafePath(const std::string &path);
 bool LoadCatalog(const std::string &esm, Catalog &out, std::string &error);

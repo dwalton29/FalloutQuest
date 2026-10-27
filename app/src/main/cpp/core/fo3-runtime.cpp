@@ -364,7 +364,7 @@ Q2401LoadDoorNifAnimation(const std::string& modelPath) {
             fo3dooranim::Asset asset;
             if(fo3dooranim::Configure(
                     std::move(hierarchy),std::move(blockBones),
-                    std::move(clips),asset)) {
+                    std::move(clips),asset,true)) {
                 decoded=std::make_shared<const fo3dooranim::Asset>(
                     std::move(asset));
             }
@@ -2033,7 +2033,7 @@ bool BuildCpuObjects(const Fo3WorldPlacement& placement, std::vector<CpuObject>&
 
     if (!cachedMeshes) {
         std::vector<Fo3StaticNifMesh> meshes;
-        if (!LoadFo3StaticNifMeshes(placement.modelPath, meshes, requireComplete)) return false;
+        if (!LoadFo3StaticNifMeshes(placement.modelPath, meshes, requireComplete, true)) return false;
         auto candidate = std::make_shared<const std::vector<Fo3StaticNifMesh>>(
             std::move(meshes));
         bool inserted = false;

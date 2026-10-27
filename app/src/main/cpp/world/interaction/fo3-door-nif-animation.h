@@ -42,7 +42,7 @@ inline bool EqualName(const std::string& value, const char* wanted) {
 inline bool Configure(fo3anim::Skeleton hierarchy,
                       std::vector<int> blockBones,
                       std::vector<fo3anim::Clip> clips,
-                      Asset& out) {
+                      Asset& out, bool referenceRoot = false) {
     out = {};
     int open = -1, close = -1;
     for (size_t i = 0u; i < clips.size(); ++i) {
@@ -54,6 +54,10 @@ inline bool Configure(fo3anim::Skeleton hierarchy,
     if (open < 0 || close < 0 || hierarchy.bones.empty() ||
         blockBones.empty()) return false;
 
+    if(referenceRoot) {
+        for(auto& bone:hierarchy.bones)if(bone.parent<0)bone.bind={};
+        if(!fo3anim::FinalizeSkeleton(hierarchy))return false;
+    }
     out.hierarchy = std::move(hierarchy);
     out.blockBones = std::move(blockBones);
     out.clips = std::move(clips);

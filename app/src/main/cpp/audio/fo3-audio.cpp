@@ -3,6 +3,8 @@
 #include "data/fo3-asset-store.h"
 #include "fo3-audio-assets.h"
 #include "fo3-audio-catalog.h"
+#include "fo3-footsteps.h"
+#include "data/fo3-bsa-reader.h"
 #include <algorithm>
 #include <android/log.h>
 #include <atomic>
@@ -39,6 +41,8 @@ struct Runtime {
   std::mutex mutex;
   std::condition_variable cv;
   std::deque<Event> events;
+  FootstepGait walk, run;
+  FootstepClock footsteps;
   bool stop = false;
   uint32_t lastCell = UINT32_MAX;
   bool lastActive = false;
@@ -101,9 +105,9 @@ bool Playable(const std::string &p) {
 void Push(Event e) {
   std::lock_guard<std::mutex> lock(runtime.mutex);
   if (!runtime.worker.joinable() || runtime.stop ||
-      (!runtime.lastActive && (e.kind < 6 || e.kind==11)))
+      (!runtime.lastActive && (e.kind < 6 || e.kind==11 || e.kind==16)))
     return;
-  if (e.kind == 6 || e.kind == 7 || e.kind == 10 || e.kind == 14)
+  if (e.kind == 6 || e.kind == 7 || e.kind == 10 || e.kind == 14 || e.kind==16)
     runtime.events.erase(
         std::remove_if(runtime.events.begin(), runtime.events.end(),
                        [&](const Event &old) { return old.kind == e.kind; }),
@@ -179,6 +183,17 @@ void Worker() {
       ready ? ANDROID_LOG_INFO : ANDROID_LOG_WARN, "FalloutQuest",
       "AUDIO: sounds=%zu music=%zu cells=%zu %s", catalog.sounds.size(),
       catalog.music.size(), catalog.cells.size(), error.c_str());
+  FootstepGait walk,run;
+  auto loadGait=[](const char* path,FootstepGait& gait) {
+    std::vector<uint8_t> bytes;fo3anim::Clip clip;
+    return LoadFalloutMeshFile(path,bytes) && fo3anim::DecodeClip(bytes,clip) && gait.Load(clip);
+  };
+  const bool walkReady=loadGait("characters/_1stperson/locomotion/mtforward.kf",walk);
+  const bool runReady=loadGait("characters/_1stperson/locomotion/mtfastforward.kf",run);
+  {std::lock_guard<std::mutex> lock(runtime.mutex);runtime.walk=walk;runtime.run=run;runtime.footsteps.Reset();}
+  __android_log_print(ANDROID_LOG_INFO,"FalloutQuest",
+      "FOOTSTEPS: originalKF walk=%d stride=%.3f duration=%.3f run=%d stride=%.3f duration=%.3f",
+      walkReady,walk.stride,walk.duration,runReady,run.stride,run.duration);
   mkdir("/data/user/0/com.falloutquest.app/cache", 0700);
   std::unordered_set<std::string> missing;
   std::unordered_map<std::string, std::string> extracted;
@@ -497,7 +512,7 @@ void Worker() {
       call(menuLoop,path,gain,true);continue;
     }
     uint32_t id = 0;
-    if(e.kind==11||(e.kind==12&&e.name.empty())){id=e.id;} else if (e.kind == 5||e.kind==12) {
+    if(e.kind==16){id=catalog.Footstep(e.id&255u,e.id>>8u);} else if(e.kind==11||(e.kind==12&&e.name.empty())){id=e.id;} else if (e.kind == 5||e.kind==12) {
       auto n = catalog.names.find(e.name);
       if (n != catalog.names.end())
         id = n->second;
@@ -580,8 +595,11 @@ void Context(uint32_t cell, bool active) {
   if (!runtime.worker.joinable() || runtime.stop ||
       (runtime.lastCell == cell && runtime.lastActive == active))
     return;
+  runtime.footsteps.Reset();
   runtime.lastCell = cell;
   runtime.lastActive = active;
+  runtime.events.erase(std::remove_if(runtime.events.begin(),runtime.events.end(),
+      [](const Event& e){return e.kind==16;}),runtime.events.end());
   if (!active)
     runtime.events.erase(
         std::remove_if(runtime.events.begin(), runtime.events.end(),
@@ -630,6 +648,14 @@ void Open(uint32_t base) { Push({2, base, true}); }
 void Close(uint32_t base) { Push({3, base, true}); }
 void Scroll() { Push({4, 0, true}); }
 void MenuLoop(const std::string& editorId){Push({15,0,false,editorId});}
+int AdvancePlayerFootsteps(float distance,float dt,bool enabled) {
+  std::lock_guard<std::mutex> lock(runtime.mutex);
+  return runtime.footsteps.Advance(distance,dt,enabled&&runtime.lastActive&&!runtime.stop,
+      runtime.walk,runtime.run);
+}
+void Footstep(uint32_t material,unsigned action) {
+  if(action<FootstepActions.size())Push({16,(material&255u)|(action<<8u),true});
+}
 void NamedSound(const std::string &editorId) {
   if (!editorId.empty() && editorId.size() <= 128)
     Push({5, 0, true, editorId});

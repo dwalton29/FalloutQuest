@@ -106,3 +106,15 @@ bool SampleFo3TerrainGroundQ77(float virtualX, float virtualZ,
 bool IsFo3TerrainGroundingActiveQ77() {
     return gGroundingActiveQ77;
 }
+
+bool SampleFo3TerrainFootstepMaterial(float virtualX,float virtualZ,uint32_t* material) {
+    if(!material||!gGroundingActiveQ77)return false;
+    const float x=gArrivalXQ77+virtualX*gUnitsPerMetreQ77;
+    const float y=gArrivalYQ77-(virtualZ-gSceneForwardQ77)*gUnitsPerMetreQ77;
+    if(!std::isfinite(x)||!std::isfinite(y))return false;
+    const int32_t cx=int32_t(std::floor(x/4096.f)),cy=int32_t(std::floor(y/4096.f));
+    const auto* cell=FindFo3TerrainGroundCellQ2000(cx,cy);
+    if(!cell)return false;
+    *material=Fo3TerrainContactMaterial(cell->landFormId,x-cx*4096.f,y-cy*4096.f);
+    return true;
+}

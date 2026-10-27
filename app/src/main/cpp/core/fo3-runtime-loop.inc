@@ -1494,6 +1494,18 @@ private:
             playerPosition_.x = desiredPlayerX;
             playerPosition_.z = desiredPlayerZ;
         }
+        const bool walkingEnabled=(std::fabs(requestedDx)+std::fabs(requestedDz)>.0001f) &&
+            !IsFo3LoadingVisible() && !Fo3BarterFocus() &&
+            !Fo3LockpickFocus() && !Fo3DialogueFocus() && !Fo3ScriptMessageFocus() &&
+            !Fo3LevelUpFocus() && !Fo3PipboyFocus() &&
+            gPipActivation.phase!=fo3pip::Phase::Candidate && !GetFo3LootPanel().reference;
+        const float actualDistance=std::hypot(playerPosition_.x+headOffset.x-currentCenterX,
+                                              playerPosition_.z+headOffset.z-currentCenterZ);
+        const int step=fo3audio::AdvancePlayerFootsteps(actualDistance,float(dt),walkingEnabled);
+        uint32_t material=0;
+        if(step>=0 && SampleFo3PlayerFootstepSurface(playerPosition_.x+headOffset.x,
+                playerPosition_.z+headOffset.z,playerPosition_.y,&material))
+            fo3audio::Footstep(material,unsigned(step));
     }
 
     XrPosef ToVirtualPose(const XrPosef& localPose) const {

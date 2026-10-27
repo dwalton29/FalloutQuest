@@ -76,3 +76,9 @@ target_compile_options(strict_original_nif_tests PRIVATE -Wall -Wextra -Werror -
 target_include_directories(strict_original_nif_tests PRIVATE . ../../app/src/main/cpp/data ../../app/src/main/cpp/npc)
 add_test(NAME strict_original_nif_tests COMMAND strict_original_nif_tests)
 set_tests_properties(strict_original_nif_tests PROPERTIES SKIP_RETURN_CODE 77)
+
+add_executable(reference_root_tests reference_root_tests.cpp reference_root_collision.cpp ../../app/src/main/cpp/npc/fo3-actor-animation.cpp)
+target_compile_features(reference_root_tests PRIVATE cxx_std_17)
+target_compile_options(reference_root_tests PRIVATE -Wall -Wextra -Werror -Wno-misleading-indentation -Wno-unused-function -UNDEBUG)
+target_include_directories(reference_root_tests PRIVATE . ../../app/src/main/cpp ../../app/src/main/cpp/data ../../app/src/main/cpp/npc)
+add_test(NAME reference_root_tests COMMAND reference_root_tests)

@@ -49,6 +49,7 @@ void PumpFo3AndroidEventsQ1860() {}
 bool ConsumeFo3PlayerResetQ74() {return false;}
 static bool terrainAvailable=false;
 static float terrainOffset=4.25f;
+bool SampleFo3TerrainFootstepMaterial(float,float,uint32_t*) {return false;}
 bool SampleFo3TerrainGroundQ77(float,float,float* out) {
     if(!terrainAvailable)return false;
     *out=terrainOffset;return true;
@@ -175,6 +176,17 @@ static void IndexedActorGroundParityQ226() {
                     assert(actual==expected);
                 }
     };
+    // Footsteps select the actual supporting layer and retain stairs metadata.
+    gPlayerCollisionReady=true;gCollisionFloorY=0;
+    gWorldTriangles[0].havokMaterialQ714=9;gWorldTriangles[0].stairsQ714=true;
+    gWorldTriangles[1].havokMaterialQ714=5;
+    uint32_t material=0;
+    assert(SampleFo3PlayerFootstepSurface(0,0,0,&material)&&material==(9u|64u));
+    assert(SampleFo3PlayerFootstepSurface(0,0,2,&material)&&material==5u);
+    assert(!SampleFo3PlayerFootstepSurface(0,0,1,&material));
+    assert(!SampleFo3PlayerFootstepSurface(0,0,.09f,&material));
+    assert(!SampleFo3PlayerFootstepSurface(0,0,0,nullptr));
+    gPlayerCollisionReady=false;
     parity();
     float ground=0;
     assert(FindGroundWide(0,0,1.f,ground)&&ground==0.f); // lower-index tie

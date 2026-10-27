@@ -793,7 +793,8 @@ bool CollectAncestorTransforms(const std::vector<uint8_t>& nif,
 void ApplyTransforms(Fo3StaticNifMesh& mesh,
                      const NifTransform& shape,
                      const std::vector<NifTransform>& ancestors,
-                     const NifTransform* rootFallback) {
+                     const NifTransform* rootFallback, bool referenceRoot = false) {
+    const size_t parentCount=ancestors.size()-(referenceRoot&&!ancestors.empty()?1u:0u);
     const bool haveFullChain = !ancestors.empty();
     // EGM deltas use raw geometry coordinates, just like the NIF vertices.
     // Preserve the full linear chain (including scale), without translation.
@@ -808,8 +809,8 @@ void ApplyTransforms(Fo3StaticNifMesh& mesh,
         };
         linear(shape);
         if (haveFullChain) {
-            for (const auto& parent : ancestors) linear(parent);
-        } else if (rootFallback) linear(*rootFallback);
+            for (size_t p=0;p<parentCount;++p) linear(ancestors[p]);
+        } else if (rootFallback && !referenceRoot) linear(*rootFallback);
         mesh.geometryDeltaToModel[column] = x;
         mesh.geometryDeltaToModel[3 + column] = y;
         mesh.geometryDeltaToModel[6 + column] = z;
@@ -821,8 +822,8 @@ void ApplyTransforms(Fo3StaticNifMesh& mesh,
         float& pz = mesh.positions[i * 3u + 2u];
         ApplyPoint(shape, px, py, pz);
         if (haveFullChain) {
-            for (const NifTransform& parent : ancestors) ApplyPoint(parent, px, py, pz);
-        } else if (rootFallback) {
+            for (size_t p=0;p<parentCount;++p) ApplyPoint(ancestors[p], px, py, pz);
+        } else if (rootFallback && !referenceRoot) {
             ApplyPoint(*rootFallback, px, py, pz);
         }
 
@@ -833,8 +834,8 @@ void ApplyTransforms(Fo3StaticNifMesh& mesh,
             float& z = (*values)[i * 3u + 2u];
             ApplyVector(shape, x, y, z);
             if (haveFullChain) {
-                for (const NifTransform& parent : ancestors) ApplyVector(parent, x, y, z);
-            } else if (rootFallback) {
+                for (size_t p=0;p<parentCount;++p) ApplyVector(ancestors[p], x, y, z);
+            } else if (rootFallback && !referenceRoot) {
                 ApplyVector(*rootFallback, x, y, z);
             }
             Normalize3(x, y, z);
@@ -1683,7 +1684,7 @@ bool Q211PopulateSkinInfo(const std::vector<uint8_t>& nif,
 bool TryLoadShape(const std::vector<uint8_t>& nif, const NifHeader& header,
                   const ShapeObject& shape,
                   const NifTransform* root,
-                  Fo3StaticNifMesh& mesh) {
+                  Fo3StaticNifMesh& mesh, bool referenceRoot = false) {
     if (shape.dataRef >= header.numBlocks) return false;
     const std::string& dataType = BlockType(header, shape.dataRef);
     const uint8_t* data = BlockData(nif, header, shape.dataRef);
@@ -1800,7 +1801,10 @@ bool TryLoadShape(const std::vector<uint8_t>& nif, const NifHeader& header,
 
     std::vector<NifTransform> ancestors;
     Q970CollectAncestorTransforms(nif, header, shape.block, ancestors);
-    ApplyTransforms(candidate, shape.transform, ancestors, root);
+    // A placed REFR replaces the scene root's local transform. Baking that
+    // transform first rotates RanchDoor's axes twice (its root is X+90deg).
+    // Preserve all child transforms and the standalone/UI loading contract.
+    ApplyTransforms(candidate, shape.transform, ancestors, root, referenceRoot);
     Q211PopulateSkinInfo(nif, header, shape, candidate);
     mesh = std::move(candidate);
     return true;
@@ -1810,7 +1814,7 @@ bool TryLoadShape(const std::vector<uint8_t>& nif, const NifHeader& header,
 
 bool LoadFo3StaticNifMeshes(const std::string& modelPath,
                             std::vector<Fo3StaticNifMesh>& outMeshes,
-                            bool requireComplete) {
+                            bool requireComplete, bool referenceRoot) {
     outMeshes.clear();
 
     std::vector<uint8_t> nif;
@@ -1879,7 +1883,7 @@ bool LoadFo3StaticNifMeshes(const std::string& modelPath,
         Fo3StaticNifMesh candidate;
         if (!TryLoadShape(nif, header, shape,
                           directRootChild ? &rootTransform : nullptr,
-                          candidate)) {
+                          candidate, referenceRoot)) {
             ++q1060ShapeLoadFailures;
             const std::string dataType = shape.dataRef < header.numBlocks
                 ? BlockType(header, shape.dataRef) : std::string("<invalid>");

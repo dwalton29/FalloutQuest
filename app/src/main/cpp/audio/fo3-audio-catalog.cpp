@@ -1,3 +1,4 @@
+#include "fo3-footsteps.h"
 #include "fo3-audio-catalog.h"
 #include "data/fo3-esm-reader.h"
 #include <algorithm>
@@ -183,5 +184,20 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
   out = std::move(catalog);
   error.clear();
   return true;
+}
+} // namespace fo3audio
+
+namespace fo3audio {
+uint32_t Catalog::Footstep(uint32_t material,unsigned action) const {
+  if(action>=FootstepActions.size())return 0;
+  if((material&64u)&&action<4)action=(action==0||action==3)?6:7;
+  unsigned surface=FootstepMaterials[material&31u];
+  for(unsigned attempt=0;attempt<3 && surface<10;++attempt) {
+    const auto named=names.find(std::string("FST")+FootstepSurfaces[surface]+FootstepActions[action]);
+    if(named!=names.end() && sounds.count(named->second))return named->second;
+    surface=FootstepFallback[surface];
+  }
+  const auto fallback=names.find("FSTConcSolidWalkR");
+  return fallback==names.end()?0:fallback->second;
 }
 } // namespace fo3audio
