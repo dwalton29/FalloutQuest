@@ -38,8 +38,14 @@ creates a GLES session while claiming Vulkan output. Logs distinguish
 `FQ RENDERER session=Vulkan presentation=Vulkan`, `FQVK FRAME`, and
 `FQ PRESENTED api=Vulkan` (the latter follows a successful `xrEndFrame`).
 
-Native MSAA, depth submission, foveation and planar reflections remain unfinished.
-Vulkan uses one sample and color-only composition. Existing terrain depth-state
+Optional compositor depth uses a separate two-layer D32 swapchain when the
+OpenXR depth extension and format are available. Colour/depth acquisition indices
+are independent. Native scene depth is copied with explicit transfer barriers and
+released in `DEPTH_STENCIL_ATTACHMENT_OPTIMAL`; each eye receives its matching
+array layer and the exact near/far range from the runtime camera. Loading submits
+colour only. Missing depth support retains explicit colour-only composition.
+Native MSAA, foveation and planar reflections remain unfinished; Vulkan uses one
+sample. Existing terrain depth-state
 fixes are retained, with fusion quarantined. Uploads and end-of-frame fences
 remain blocking. Ordinary FQPerf GPU timers still measure GLES work, so native
 captures are marked `benchmarkValid=0`; `FQVK FRAME stereoGpuMs` covers the native
@@ -48,8 +54,9 @@ Neither metric proves Quest performance before hardware testing.
 
 Software Vulkan tests exercise real two-layer UNORM runtime-style images,
 multiple acquired image indices, upright asymmetric stereo geometry, loading
-and film output, projection metadata, fence-before-release, recreation with
-resident resources retained, timeout rejection and unsupported-format rejection.
+and film output, projection metadata, fence-before-release, independent colour/depth image rotation, D32 depth values
+and composition metadata, colour-only compatibility, recreation with resident
+resources retained, timeout rejection and unsupported-format rejection.
 Compositor callbacks are mocked; this is not a real OpenXR runtime test.
 
 ### Headset validation (required before promotion)
@@ -167,7 +174,8 @@ the explicitly experimental presentation path described at the top of this file.
 - Complete actor/weapon and Pip-Boy in-game visual validation. Loading and
   lockpick native models still require full in-game animation/alpha comparison. Native pipeline state now handles reversed/front culling, depth bias
   and separate color/alpha blend operations, but requires scene validation.
-- Native planar water reflections and native MSAA/resolve/depth submission.
+- Native planar water reflections and native MSAA/resolve. Native single-sample
+  D32 compositor depth now has software coverage; headset reprojection remains unverified.
   The HDR/imagespace/bloom chain is implemented in the probe, but still needs
   complete in-game colour and temporal adaptation comparison on Quest.
 - Native draw-list generation independent of GLES commands, stereo-union culling

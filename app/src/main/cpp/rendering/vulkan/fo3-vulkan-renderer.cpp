@@ -119,6 +119,9 @@ public:
     // The OpenXR runtime owns these images. Only our views/framebuffers are destroyed.
     XrInstance xrInstance{};XrSession xrSession{};XrSwapchain xrSwapchain{};
     std::vector<PostTarget> xrTargets;
+    XrSwapchain xrDepthSwapchain{};
+    std::vector<XrSwapchainImageVulkan2KHR> xrDepthImages;
+    XrCompositionLayerDepthInfoKHR xrDepthInfo[2]{{XR_TYPE_COMPOSITION_LAYER_DEPTH_INFO_KHR},{XR_TYPE_COMPOSITION_LAYER_DEPTH_INFO_KHR}};
     VkRenderPass xrPass{};VkPipeline xrPipeline{};
     bool gameplay=false;
     std::string outputDirectory;
@@ -808,7 +811,7 @@ public:
         VkRenderPassBeginInfo ri{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};ri.renderPass=pass;ri.framebuffer=framebuffer;ri.renderArea={{0,0},{width,height}};ri.clearValueCount=2;ri.pClearValues=clears.data();
         vkCmdBeginRenderPass(command,&ri,VK_SUBPASS_CONTENTS_INLINE);begun=passOpen=true;
     }
-    void End(PostTarget* output=nullptr) {
+    void End(PostTarget* output=nullptr,VkImage depthOutput=VK_NULL_HANDLE) {
         if(!begun)return;
         begun=false;
         if(passOpen)vkCmdEndRenderPass(command);
@@ -821,6 +824,7 @@ public:
                 VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,VK_ACCESS_SHADER_READ_BIT,VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
             PostDraw(5,*output,{{clamped,postDone?presented.image.view:color.view,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}},{},true);
         }
+        if(depthOutput)CopyCompositorDepth(depthOutput);
         if(timestamps)vkCmdWriteTimestamp(command,VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,timestamps,2);
         Check(vkEndCommandBuffer(command),"end frame");Check(vkResetFences(device,1,&fence),"reset frame fence");
         VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};si.commandBufferCount=1;si.pCommandBuffers=&command;
@@ -893,6 +897,22 @@ public:
         dumped=true;
 #endif
     }
+    void CopyCompositorDepth(VkImage target) {
+        std::array<VkImageMemoryBarrier,2> barriers{};
+        for(auto& b:barriers){b.sType=VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;b.srcQueueFamilyIndex=b.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;b.subresourceRange={VK_IMAGE_ASPECT_DEPTH_BIT,0,1,0,2};}
+        auto& source=barriers[0];auto& destination=barriers[1];
+        source.image=depth.image;source.oldLayout=VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;source.newLayout=VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        source.srcAccessMask=VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT|VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;source.dstAccessMask=VK_ACCESS_TRANSFER_READ_BIT;
+        destination.image=target;destination.oldLayout=VK_IMAGE_LAYOUT_UNDEFINED;destination.newLayout=VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;destination.dstAccessMask=VK_ACCESS_TRANSFER_WRITE_BIT;
+        vkCmdPipelineBarrier(command,VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT|VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,0,0,nullptr,0,nullptr,2,barriers.data());
+        VkImageCopy copy{};copy.srcSubresource=copy.dstSubresource={VK_IMAGE_ASPECT_DEPTH_BIT,0,0,2};copy.extent={width,height,1};
+        vkCmdCopyImage(command,depth.image,source.newLayout,target,destination.newLayout,1,&copy);
+        source.oldLayout=source.newLayout;source.newLayout=VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+        source.srcAccessMask=VK_ACCESS_TRANSFER_READ_BIT;source.dstAccessMask=VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT|VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+        destination.oldLayout=destination.newLayout;destination.newLayout=VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+        destination.srcAccessMask=VK_ACCESS_TRANSFER_WRITE_BIT;destination.dstAccessMask=VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
+        vkCmdPipelineBarrier(command,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT|VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,0,0,nullptr,0,nullptr,2,barriers.data());
+    }
     XrGraphicsBindingVulkan2KHR Binding() const {
         XrGraphicsBindingVulkan2KHR binding{XR_TYPE_GRAPHICS_BINDING_VULKAN2_KHR};
         binding.instance=instance;binding.physicalDevice=physical;binding.device=device;
@@ -909,9 +929,10 @@ public:
         if(xrPass)vkDestroyRenderPass(device,xrPass,nullptr);
         xrPipeline={};xrPass={};
         if(xrSwapchain)Proc<PFN_xrDestroySwapchain>(xrInstance,"xrDestroySwapchain")(xrSwapchain);
-        xrSwapchain={};xrSession={};
+        if(xrDepthSwapchain)Proc<PFN_xrDestroySwapchain>(xrInstance,"xrDestroySwapchain")(xrDepthSwapchain);
+        xrDepthSwapchain={};xrDepthImages.clear();xrSwapchain={};xrSession={};
     }
-    void CreateSwapchain(XrSession session) {
+    void CreateSwapchain(XrSession session,bool submitDepth=false) {
         DestroySwapchain();gameplay=true;xrSession=session;
         auto formatsFn=Proc<PFN_xrEnumerateSwapchainFormats>(xrInstance,"xrEnumerateSwapchainFormats");
         uint32_t count=0;CheckXr(formatsFn(session,0,&count,nullptr),"Vulkan swapchain formats count");
@@ -940,10 +961,19 @@ public:
             fi.width=width;fi.height=height;fi.layers=1;
             Check(vkCreateFramebuffer(device,&fi,nullptr,&target.framebuffer),"OpenXR multiview framebuffer");
         }
-        VKLOG("FQ RENDERER session=Vulkan presentation=Vulkan experimental=1 arraySize=2 format=%d samples=1 depthSubmission=0 sceneSubmission=gles-bridge glesContextRequired=1",int(format));
+        if(submitDepth&&std::find(formats.begin(),formats.end(),int64_t(VK_FORMAT_D32_SFLOAT))!=formats.end()) {
+            info.format=VK_FORMAT_D32_SFLOAT;info.usageFlags=XR_SWAPCHAIN_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT|XR_SWAPCHAIN_USAGE_TRANSFER_DST_BIT;
+            CheckXr(Proc<PFN_xrCreateSwapchain>(xrInstance,"xrCreateSwapchain")(session,&info,&xrDepthSwapchain),"create Vulkan stereo depth swapchain");
+            count=0;CheckXr(imagesFn(xrDepthSwapchain,0,&count,nullptr),"Vulkan depth images count");
+            if(!count)throw std::runtime_error("OpenXR returned no Vulkan depth images");
+            xrDepthImages.resize(count,{XR_TYPE_SWAPCHAIN_IMAGE_VULKAN2_KHR});
+            CheckXr(imagesFn(xrDepthSwapchain,count,&count,reinterpret_cast<XrSwapchainImageBaseHeader*>(xrDepthImages.data())),"Vulkan depth images");
+        }
+        VKLOG("FQ RENDERER session=Vulkan presentation=Vulkan experimental=1 arraySize=2 format=%d samples=1 depthSubmission=%d sceneSubmission=gles-bridge glesContextRequired=1",int(format),xrDepthSwapchain?1:0);
     }
-    bool Present(const XrView* views,XrCompositionLayerProjectionView* output) {
+    bool Present(const XrView* views,XrCompositionLayerProjectionView* output,float nearZ,float farZ) {
         if(failed||!begun||!xrSwapchain)return false;
+        if(!(nearZ>0&&farZ>nearZ&&std::isfinite(farZ)))throw std::runtime_error("invalid compositor depth range");
         XrSwapchainImageAcquireInfo acquire{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};uint32_t index=0;
         CheckXr(Proc<PFN_xrAcquireSwapchainImage>(xrInstance,"xrAcquireSwapchainImage")(xrSwapchain,&acquire,&index),"acquire Vulkan image");
         XrSwapchainImageWaitInfo wait{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};wait.timeout=XR_INFINITE_DURATION;
@@ -951,12 +981,26 @@ public:
         // XR_TIMEOUT_EXPIRED is a positive result but does not grant image access.
         if(ready!=XR_SUCCESS)throw std::runtime_error("wait Vulkan image: "+std::to_string(ready));
         if(index>=xrTargets.size())throw std::runtime_error("OpenXR Vulkan image index out of range");
-        End(&xrTargets[index]); // Fence completes before release; no GLES texture/readback involved.
+        uint32_t depthIndex=0;const bool submitDepth=xrDepthSwapchain&&!loadingFrame;
+        if(submitDepth) {
+            CheckXr(Proc<PFN_xrAcquireSwapchainImage>(xrInstance,"xrAcquireSwapchainImage")(xrDepthSwapchain,&acquire,&depthIndex),"acquire Vulkan depth");
+            const auto depthReady=Proc<PFN_xrWaitSwapchainImage>(xrInstance,"xrWaitSwapchainImage")(xrDepthSwapchain,&wait);
+            if(depthReady!=XR_SUCCESS)throw std::runtime_error("wait Vulkan depth: "+std::to_string(depthReady));
+            if(depthIndex>=xrDepthImages.size())throw std::runtime_error("OpenXR Vulkan depth index out of range");
+        }
+        End(&xrTargets[index],submitDepth?xrDepthImages[depthIndex].image:VK_NULL_HANDLE);
+        // Fence completes before either release; no GLES texture/readback involved.
         XrSwapchainImageReleaseInfo release{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
+        if(submitDepth)CheckXr(Proc<PFN_xrReleaseSwapchainImage>(xrInstance,"xrReleaseSwapchainImage")(xrDepthSwapchain,&release),"release Vulkan depth");
         CheckXr(Proc<PFN_xrReleaseSwapchainImage>(xrInstance,"xrReleaseSwapchainImage")(xrSwapchain,&release),"release Vulkan image");
         for(uint32_t eye=0;eye<2;++eye) {
             output[eye]={XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW};output[eye].pose=views[eye].pose;output[eye].fov=views[eye].fov;
             output[eye].subImage={xrSwapchain,{{0,0},{int32_t(width),int32_t(height)}},eye};
+            if(submitDepth) {
+                auto& info=xrDepthInfo[eye];info.subImage={xrDepthSwapchain,{{0,0},{int32_t(width),int32_t(height)}},eye};
+                info.minDepth=0;info.maxDepth=1;info.nearZ=nearZ;info.farZ=farZ;
+                output[eye].next=&info;
+            }
         }
         return true;
     }
@@ -1055,14 +1099,14 @@ bool GameplayBinding(XrGraphicsBindingVulkan2KHR& binding) {
     if(!WorldProbeActive())return false;
     renderer->gameplay=gameplayPresentation=true;binding=renderer->Binding();return true;
 }
-bool CreateGameplaySwapchain(XrSession session) {
+bool CreateGameplaySwapchain(XrSession session,bool submitDepth) {
     if(!WorldProbeActive())return false;
-    try{renderer->CreateSwapchain(session);return true;}catch(const std::exception& e){Failure(e);return false;}
+    try{renderer->CreateSwapchain(session,submitDepth);return true;}catch(const std::exception& e){Failure(e);return false;}
 }
 void DestroyGameplaySwapchain(){if(renderer)renderer->DestroySwapchain();}
-bool PresentGameplay(const XrView* views,XrCompositionLayerProjectionView* output) {
+bool PresentGameplay(const XrView* views,XrCompositionLayerProjectionView* output,float nearZ,float farZ) {
     recording=false;if(!WorldProbeActive())return false;
-    try{return renderer->Present(views,output);}catch(const std::exception& e){Failure(e);return false;}
+    try{return renderer->Present(views,output,nearZ,farZ);}catch(const std::exception& e){Failure(e);return false;}
 }
 
 }

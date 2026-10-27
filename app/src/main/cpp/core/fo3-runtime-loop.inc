@@ -509,6 +509,12 @@ private:
             selection[0]?selection:"gles",vulkanGameplay_?"vulkan":"gles",vulkanGameplay_,vulkanGameplay_?"gles-bridge":"gles");
 #endif
 #endif
+#if !defined(FQ_ENABLE_VULKAN) && !defined(NDEBUG)
+        char selection[PROP_VALUE_MAX]{};__system_property_get("debug.falloutquest.renderer",selection);
+        if(!std::strcmp(selection,"vulkan")) {
+            FQ_LOGE("FQ RENDERER requested=vulkan unavailable=Vulkan-not-built fallback=none");return false;
+        }
+#endif
         FQ_LOGI("XR compositor depth extension enabled=%d", depthSubmissionEnabled_);
 
         XrInstanceCreateInfoAndroidKHR androidInfo{XR_TYPE_INSTANCE_CREATE_INFO_ANDROID_KHR};
@@ -819,8 +825,7 @@ private:
 
 #ifdef FQ_ENABLE_VULKAN
         if(vulkanGameplay_) {
-            depthSubmissionEnabled_=false; // Native depth submission requires a dedicated depth swapchain.
-            if(!fqvk::CreateGameplaySwapchain(session_))return false;
+            if(!fqvk::CreateGameplaySwapchain(session_,depthSubmissionEnabled_))return false;
             vulkanSwapchainsReady_=true;
             // Transitional GLES submission target only. It is never submitted to OpenXR.
             glGenTextures(1,&scratchColor_);glBindTexture(GL_TEXTURE_2D,scratchColor_);
@@ -1257,7 +1262,7 @@ private:
                 if (sessionState_ == XR_SESSION_STATE_READY && !sessionRunning_) {
 #ifdef FQ_ENABLE_VULKAN
                     if(vulkanGameplay_&&!vulkanSwapchainsReady_) {
-                        if(!fqvk::CreateGameplaySwapchain(session_)){exitRequested_=true;return;}
+                        if(!fqvk::CreateGameplaySwapchain(session_,depthSubmissionEnabled_)){exitRequested_=true;return;}
                         fqvk::ResetExposure();vulkanSwapchainsReady_=true;
                     }
 #endif
@@ -2071,7 +2076,7 @@ private:
                 }
 #ifdef FQ_ENABLE_VULKAN
                 if(vulkanGameplay_) {
-                    rendered=fqvk::PresentGameplay(views.data(),projectionViews.data())&&rendered;
+                    rendered=fqvk::PresentGameplay(views.data(),projectionViews.data(),.04f,125000.0f/FO3_UNITS_PER_METRE_Q715)&&rendered;
                     if(!rendered){FQ_LOGE("FQVK gameplay presentation failed; exiting without GLES fallback");exitRequested_=true;}
                 }
 #endif
