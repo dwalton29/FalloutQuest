@@ -1,10 +1,93 @@
-# Vulkan migration status — v249
+# Vulkan migration status — v250
 
 The full migration is **incomplete**. Experimental Vulkan gameplay retains the
 context-free CPU frontend and native OpenXR multiview presentation. GLES remains
 the default. Native asset uploads are now batched and asynchronous; descriptors
 are reused. Software-GPU rendering and synchronization tests do not establish
 Quest visuals, loading times, stability or a 72 Hz performance improvement.
+
+## v250: measured performance pass, pooled staging and direct film output
+
+The user reports restored visual parity on v249. This pass keeps its culling,
+original assets, scene shading, exposure/bloom/film arithmetic and sRGB output.
+It does not enable foveation or buffered frames, or claim a measured Quest gain.
+
+- **Direct film on sRGB runtime images:** acquire/wait for the colour image before
+  the final film pass, then run the original film shader directly into that image.
+  Resume overlays with the original world depth attached and linear-space sRGB
+  blending. Native gameplay avoids allocating/writing/sampling the full-resolution
+  FP16 `presented` image and avoids the final fullscreen copy. Film still follows
+  the original adaptation and multi-pass bloom; overlays still follow film.
+  Loading/raw scene presentation and linear-UNORM-only runtimes retain their copy
+  path. Colour/depth image indices remain independent and release still follows
+  the existing GPU completion fence. Image acquisition now occurs earlier for
+  direct gameplay; `xrWaitCpuMs` exposes its CPU cost.
+- **Fence-owned staging cache:** size-class host-visible/coherent buffers are
+  recycled only after the owning upload fence completes. Palette updates and
+  dynamic geometry/texture copies reuse their mapped staging. The cache is bounded
+  to 16 MiB and 128 free buffers, in addition to the existing 64 MiB/512 active
+  staging backpressure limits. Cold large buffers yield to smaller recurring
+  classes. Pooling avoids repeated allocation/mapping; it is not a suballocated
+  ring and does not remove destination-buffer allocations for dynamic meshes.
+- **Opt-in native profiling:** `debug.falloutquest.vulkan_timing=1` records
+  bounded timestamp spans for opaque materials, LAND, skinned draws, sky, water,
+  UI, adaptation, bloom, film, output copies, water snapshots and depth copies.
+  Normal rendering retains only the existing whole-frame timestamps. Extra query
+  capacity is bounded; `dropped` reports exhausted/unavailable samples rather than
+  reading unwritten queries. Every multiview timestamp reserves two query slots.
+
+`FQVK TIMING` reports `submission`, `frame`, `offscreen`, whole-submission
+`stereoGpuMs`, native upload CPU time since the previous submission, command-recording wall
+span, CPU draw-list copy/encoding time, resource-reuse/finish fence waits, XR image
+acquire/wait time, timestamp support, span count, dropped samples and direct/copy
+path. `FQVK GPU` gives the category intervals for the same submission. Offscreen
+Pip-Boy/UI submissions are included with `offscreen=1`; do not omit their cost.
+`recordSpanCpuMs` includes shared scene preparation and waits, not just active CPU
+execution; queue/draw times are subsets, upload preparation can precede recording,
+and GPU intervals can overlap due to
+pipeline execution. Do not add these fields into a purported application frame
+budget. Skinned categories classify shader draws; rigid actor attachments are
+counted with opaque materials. With `dropped=0`, zero means no recorded work in that category;
+unsupported timestamps are reported as -1. No GPU query introduces an extra wait.
+Profiling itself has overhead; use it to locate work and compare unprofiled frame
+cadence separately.
+
+`FQVK RESOURCES` adds staging allocations/reuses/evictions, cached bytes/buffer
+count, direct-film frame count and presentation-copy count. After warmup, animation
+staging reuse should grow while allocation count stabilizes. Loading copies remain
+expected; steady sRGB gameplay should grow `directFilmFrames` without growing
+`presentationCopies`.
+
+For a reproducible O2 Profile comparison, use the same save/location, time of day,
+resolution and headset settings. Start a streaming capture (Ctrl+C after the run):
+
+```powershell
+.\adb shell am force-stop com.falloutquest.app
+.\adb shell setprop debug.falloutquest.renderer vulkan
+.\adb shell setprop debug.falloutquest.vulkan_diag 0
+.\adb shell setprop debug.falloutquest.vulkan_timing 1
+.\adb shell setprop debug.falloutquest.vulkan_present_copy 0
+.\adb logcat -c
+# Launch from the headset, then capture a settled 30-second scene:
+.\adb logcat -v time FalloutQuest:I '*:S' > vulkan-perf-direct.txt
+```
+
+Repeat after force-stop with `vulkan_present_copy 1` into
+`vulkan-perf-copy.txt`. This is the v249-style FP16 film/overlay plus copy path,
+using the same upload pool and instrumentation to isolate presentation cost.
+Repeat normal timing with `vulkan_timing 0` for cadence/FPS and visual checks;
+restore `vulkan_present_copy 0` for the optimized path. Properties are read once
+at renderer initialization and survive APK upgrades.
+
+Software GPU tests compare four direct/legacy stereo frames, translucent overlays,
+opaque depth, image rotation and recreation: maximum observed difference is one
+8-bit display-code step (the FP16 intermediate and sRGB blend/store round at
+different points). Existing shadow-gradient, culling, original material, palette,
+water, HDR and UI tests remain. Tests verify stable staging allocations on reuse,
+cache eviction/bounds, query-capacity exhaustion, unsupported timestamps, early-acquisition failure and profiling on/off, with Vulkan
+core and synchronization validation. This establishes software correctness, not
+headset acceptance or performance. The end-of-frame fence and one-frame resource
+set remain; CPU/GPU overlap is the next architectural step after fresh captures.
 
 ## v249: headset culling and shadow precision fixes
 
@@ -181,9 +264,9 @@ The CPU compatibility frontend retains some legacy preparation/bookkeeping work.
 `XrGraphicsBindingVulkan2KHR` session using the runtime-selected Vulkan device
 and graphics queue. Format enumeration now prefers RGBA8/BGRA8 sRGB, with linear UNORM fallback;
 unsupported formats or layered-swapchain creation fail explicitly. One two-layer
-swapchain uses native Vulkan image views and multiview framebuffers. The native
-world/terrain/actors/sky/water/UI/film output is sampled by a native stereo copy
-pass directly into those runtime images. No GLES texture copy or readback feeds
+swapchain uses native Vulkan image views and multiview framebuffers. The native world/terrain/actors/sky/water output feeds the original film.
+On sRGB targets v250 renders film and overlays directly into the runtime image;
+loading and the compatibility/comparison path use a native stereo copy pass. No GLES texture copy or readback feeds
 headset output. Array indices 0/1 and the original located poses/FOVs are submitted
 by the existing `xrWaitFrame` / `xrBeginFrame` / `xrEndFrame` loop.
 
@@ -230,7 +313,7 @@ Compositor callbacks are mocked; this is not a real OpenXR runtime test.
 
 ### Headset validation (required before promotion)
 
-Install v249 Debug or Profile, then use PowerShell from platform-tools:
+Install v250 Debug or Profile, then use PowerShell from platform-tools:
 
 ```powershell
 .\adb shell am force-stop com.falloutquest.app

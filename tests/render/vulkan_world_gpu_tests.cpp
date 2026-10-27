@@ -12,6 +12,7 @@ XrResult XRAPI_CALL Requirements(XrInstance,XrSystemId,XrGraphicsRequirementsVul
     out->minApiVersionSupported=XR_MAKE_VERSION(1,1,0);out->maxApiVersionSupported=XR_MAKE_VERSION(1,3,0);return XR_SUCCESS;
 }
 XrResult XRAPI_CALL Instance(XrInstance,const XrVulkanInstanceCreateInfoKHR* info,VkInstance* out,VkResult* result) {
+    fqvk::renderer->passTiming=true;
     auto create=*info->vulkanCreateInfo;
     VkValidationFeatureEnableEXT synchronization=VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT;
     VkValidationFeaturesEXT validation{VK_STRUCTURE_TYPE_VALIDATION_FEATURES_EXT};
@@ -248,12 +249,13 @@ void Scene(bool terrain,bool skin=false,bool instanced=false,bool authoredCull=f
         palette[12]=.8f;
         const auto view=fqvk::renderer->textures.at(7).view;
         const auto descriptors=fqvk::renderer->descriptorAllocations;
+        const auto allocations=fqvk::renderer->stagingAllocations;
         fqvk::Skin(9,7,nullptr,0,palette,1);
         if(fqrender::nativeOnly)assert(fqvk::renderer->textures.at(7).view==view&&fqvk::renderer->paletteUpdates==1);
         assert(fqvk::BeginWorldProbe(left,left,eye,eye));
         Submit(1,9,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);
         fqvk::EndWorldProbe();
-        if(fqrender::nativeOnly)assert(fqvk::renderer->descriptorAllocations==descriptors);
+        if(fqrender::nativeOnly)assert(fqvk::renderer->descriptorAllocations==descriptors&&fqvk::renderer->stagingAllocations==allocations);
         const auto moved=fqvk::renderer->Readback();
         Near(Pixel(moved,0,32,32,0),0);Near(Pixel(moved,0,55,32,0),1);
     }
@@ -529,7 +531,21 @@ void AsyncResources() {
     auto& r=*fqvk::renderer;
     assert(r.uploadOperations>=5&&r.uploadSubmissions<r.uploadOperations&&r.uploadQueueIdles==0);
     assert(r.uploadBytes==0&&r.uploadCompleted==r.uploadSerial);
+    assert(r.stagingPoolBytes>0&&r.stagingPoolBytes<=r.stagingPoolLimit);
+    assert(r.passTiming&&!r.gpuSpans.empty()&&r.timingDropped==0);
+    for(double ms:r.passMs)assert(std::isfinite(ms)&&ms>=0);
     const float identity[]{1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1},eye[]{0,0,2};
+    // A cold large upload must not crowd out recurring small palette staging.
+    for(auto& buffer:r.stagingPool)r.Destroy(buffer);
+    r.stagingPool.clear();r.stagingPoolBytes=0;r.stagingPoolLimit=16384;r.stagingPoolCountLimit=4;
+    auto cold=r.MakeStaging(16000);r.RecycleStaging(cold);
+    const auto evictions=r.stagingEvictions;
+    auto hot=r.MakeStaging(128);const auto hotHandle=hot.buffer;r.RecycleStaging(hot);
+    assert(r.stagingEvictions==evictions+1&&r.stagingPoolBytes<=r.stagingPoolLimit);
+    const auto allocations=r.stagingAllocations;
+    for(int i=0;i<16;++i){auto reused=r.MakeStaging(128);assert(reused.buffer==hotHandle);r.RecycleStaging(reused);}
+    assert(r.stagingAllocations==allocations);
+    r.stagingPoolLimit=16u*1024u*1024u;r.stagingPoolCountLimit=128;
     const auto allocated=r.descriptorAllocations,hits=r.descriptorHits;
     for(int frame=0;frame<3;++frame) {
         assert(fqvk::BeginWorldProbe(identity,identity,eye,eye));
@@ -541,6 +557,7 @@ void AsyncResources() {
     fqvk::Texture(5,1,1,green);fqvk::Texture(5,1,1,blue); // replace an image still referenced by a pending upload
     assert(r.uploadBatch.operations==2&&!r.retiredImages.empty());
     const auto ticket=glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE,0);assert(ticket);
+    assert(r.stagingReuses>=2);
     const auto serial=r.uploadSerial;assert(uintptr_t(ticket)==serial+1);
     const auto status=glClientWaitSync(ticket,0,0);assert(status==GL_ALREADY_SIGNALED||status==GL_TIMEOUT_EXPIRED);
     assert(fqvk::BeginWorldProbe(identity,identity,eye,eye));Submit(1,9,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);fqvk::EndWorldProbe();
@@ -606,6 +623,75 @@ void HdrPresentation(VkFormat advertised,bool alsoSrgb) {
     std::cout<<"HDR swapchain: gamma-ramp shadow gradient, exact single transfer, both eyes, loading and format="<<expected<<" passed\n";
 }
 
+std::vector<uint8_t> FilmOverlayOutput(bool legacy) {
+    fqrender::nativeOnly=true;fqgl::Reset();offerSrgb=true;
+    const auto xr=reinterpret_cast<XrInstance>(uintptr_t(1));const auto session=reinterpret_cast<XrSession>(uintptr_t(2));
+    assert(fqvk::InitializeWorldProbe(xr,1,64,64));auto& r=*fqvk::renderer;r.legacyPresentation=legacy;
+    Scene(false);assert(fqvk::CreateGameplaySwapchain(session));Program(65,9);
+    const uint8_t colour[]{25,45,75,255};fqvk::Texture(5,1,1,colour,false,false);
+    auto near=Quad(false);std::vector<float> ui;
+    for(size_t i=0;i<4;++i)ui.insert(ui.end(),{near[i*18]*.6f,near[i*18+1]*.6f,-.2f,0,0});
+    const uint32_t indices[]{0,1,2,0,2,3};fqvk::Mesh(66,ui.data(),4,5,indices,6);
+    for(size_t i=0;i<4;++i)ui[i*5+2]=.2f;
+    fqvk::Mesh(67,ui.data(),4,5,indices,6);
+    const uint8_t white[]{255,255,255,255};fqvk::Texture(68,1,1,white,false,false);
+    Set(65,"uMvp",{1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1});
+    const float identity[]{1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1},right[]{1,0,0,0,0,1,0,0,0,0,1,0,.4f,0,0,1},eye[]{0,0,2};
+    std::array<XrView,2> views{{{XR_TYPE_VIEW},{XR_TYPE_VIEW}}};
+    for(auto& view:views){view.pose.orientation.w=1;view.fov={-.7f,.7f,.8f,-.8f};}
+    std::array<XrCompositionLayerProjectionView,2> output{};std::vector<uint8_t> result;
+    for(int frame=0;frame<4;++frame) {
+        if(frame==2){fqvk::DestroyGameplaySwapchain();assert(fqvk::CreateGameplaySwapchain(session));}
+        r.passTiming=(frame%2)==0;
+        assert(fqvk::BeginWorldProbe(identity,right,eye,eye));
+        fqgl::state.depth.Change(true);fqgl::state.depthWrite.Change(true);fqgl::state.blend.Change(false);
+        fqgl::state.texture2d[0].Change(5);Submit(1,9,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);
+        fqvk::PostSettings settings;settings.brightScale=0;fqvk::PostProcess(settings);
+        fqgl::state.texture2d[0].Change(68);fqgl::state.depthWrite.Change(false);fqgl::state.blend.Change(true);
+        fqgl::state.srcRgb.Change(GL_SRC_ALPHA);fqgl::state.dstRgb.Change(GL_ONE_MINUS_SRC_ALPHA);
+        fqgl::state.srcAlpha.Change(GL_ONE);fqgl::state.dstAlpha.Change(GL_ONE_MINUS_SRC_ALPHA);
+        Set(65,"uTint",{.1f,.25f,.35f,.37f});Submit(65,66,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);
+        Set(65,"uTint",{.23f,.08f,.31f,.41f});Submit(65,66,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);
+        Set(65,"uTint",{1,0,1,1});Submit(65,67,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1); // occluded behind world depth
+        assert(fqvk::PresentGameplay(views.data(),output.data(),.04f,1000));
+        assert(r.timingDropped==0&&r.passMs[r.Film]>=0&&r.passMs[r.Ui]>=0);
+        assert(r.directOutput==!legacy&&r.colorAcquired==false);
+        assert(bool(r.presented.image.image)==legacy);
+        result.insert(result.end(),submittedPixels.begin(),submittedPixels.end());
+    }
+    assert(legacy?(r.presentationCopies==4&&r.directFilmFrames==0):(r.presentationCopies==0&&r.directFilmFrames==4));
+    fqvk::DestroyGameplaySwapchain();fqvk::ShutdownWorldProbe();offerSrgb=false;fqrender::nativeOnly=false;fqgl::Reset();
+    return result;
+}
+void DirectPresentation() {
+    const auto legacy=FilmOverlayOutput(true),direct=FilmOverlayOutput(false);assert(legacy.size()==direct.size());
+    int largest=0;for(size_t i=0;i<legacy.size();++i)largest=std::max(largest,std::abs(int(legacy[i])-int(direct[i])));
+    if(largest>2)throw std::runtime_error("direct film/overlay difference exceeds two display codes: "+std::to_string(largest));
+    std::cout<<"Direct presentation: original film, two translucent overlays, opaque depth, stereo layers and recreation; max display-code difference="<<largest<<" passed\n";
+}
+void EarlyAcquireFailure() {
+    fqrender::nativeOnly=true;offerSrgb=true;
+    const auto xr=reinterpret_cast<XrInstance>(uintptr_t(1));
+    assert(fqvk::InitializeWorldProbe(xr,1,64,64));Scene(false);
+    assert(fqvk::CreateGameplaySwapchain(reinterpret_cast<XrSession>(uintptr_t(2))));
+    const float identity[]{1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1},eye[]{0,0,2};
+    assert(fqvk::BeginWorldProbe(identity,identity,eye,eye));
+    Submit(1,9,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);timeoutWait=true;fqvk::PostProcess({});
+    assert(fqvk::renderer->failed&&acquired&&!waited&&!fqvk::WorldProbeActive());
+    fqvk::DestroyGameplaySwapchain();fqvk::ShutdownWorldProbe();timeoutWait=false;offerSrgb=false;fqrender::nativeOnly=false;fqgl::Reset();
+}
+void TimingCapacity() {
+    assert(fqvk::InitializeWorldProbe(reinterpret_cast<XrInstance>(uintptr_t(1)),1,64,64));Scene(false);
+    const float identity[]{1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1},eye[]{0,0,2};
+    auto& r=*fqvk::renderer;assert(fqvk::BeginWorldProbe(identity,identity,eye,eye));
+    Submit(1,9,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);r.DrainDraws();r.queryCursor=r.QueryCount;
+    r.Phase(r.Ui);fqvk::EndWorldProbe();assert(r.timingDropped>0);
+    vkDestroyQueryPool(r.device,r.timestamps,nullptr);r.timestamps={};r.timestampSupported=false;
+    assert(fqvk::BeginWorldProbe(identity,identity,eye,eye));Submit(1,9,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);
+    fqvk::EndWorldProbe();assert(r.gpuSpans.empty()&&r.timingDropped==0);
+    fqvk::ShutdownWorldProbe();
+}
+
 void GameplayPresentation(bool withDepth) {
     fqrender::nativeOnly=true;fqgl::Reset();
     const auto xr=reinterpret_cast<XrInstance>(uintptr_t(1));const auto session=reinterpret_cast<XrSession>(uintptr_t(2));
@@ -664,6 +750,7 @@ void GameplayPresentation(bool withDepth) {
 int main() {
     for(auto format:{VK_FORMAT_R8G8B8A8_UNORM,VK_FORMAT_B8G8R8A8_UNORM,VK_FORMAT_B8G8R8A8_SRGB})HdrPresentation(format,false);
     HdrPresentation(VK_FORMAT_R8G8B8A8_UNORM,true);
+    DirectPresentation();EarlyAcquireFailure();TimingCapacity();
     AsyncResources();HeadlessSceneSubmission();
     GameplayPresentation(false);GameplayPresentation(true);
     for(bool asynchronous:{false,true}) {
