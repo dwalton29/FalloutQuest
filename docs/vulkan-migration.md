@@ -262,8 +262,8 @@ stereo timestamp query allocation. Shader compile/link checks also passed. It is
 Next validate context-free Vulkan gameplay on Quest, batch native uploads,
 reuse descriptor/draw storage, complete native MSAA and planar reflections,
 and validate full actor/material scenes.
-Replace the mirror with one backend-independent stereo draw list as those passes
-become native. Resolve terrain from original ESM/DDS data and captured output.
+Retain the shared backend-independent stereo draw list as remaining passes
+become native and their headset parity is established. Resolve terrain from original ESM/DDS data and captured output.
 Only enable Vulkan-default after the complete on-device flow passes and the six
 matched scenes have measured GPU, CPU and frame-pacing results.
 

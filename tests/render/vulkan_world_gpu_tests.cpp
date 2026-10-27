@@ -205,6 +205,7 @@ void Scene(bool terrain,bool skin=false,bool instanced=false) {
     const float eye[]{0,0,2};assert(fqvk::BeginWorldProbe(left,right,eye,eye));
     // Terrain's GL EBO points past vertex bytes; native EBO has its own buffer.
     Submit(1,9,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,terrain?quad.size()*4:0,instanced?2:1);
+    if(instanced){fqvk::instanceMatrices=nullptr;fqvk::instanceMatrixCount=0;} // queued transforms own their data
     if(terrain) {
         // Authored overlay with depth equality and no depth writes. A uniform
         // update after an earlier draw must not retroactively alter that draw.
@@ -433,6 +434,14 @@ void HeadlessSceneSubmission() {
     vector("uAmbientColor",1,1,1);vector("uSunlightColor",0,0,0);vector("uSunDirectionVertexQ1540",0,0,1);
     scalar("uFogNearVertexQ1532",10000);scalar("uFogFarVertexQ1532",10001);scalar("uFogPowerVertexQ1532",1);
     scalar("uNoLighting",1);scalar("uMaterialAlpha",1);scalar("uPipScreenGain",1);integer("uDiffuse",0);
+    const float light[]{2,3,4,5};glUniform4fv(glGetUniformLocation(program,"uLocalLightPosRadius[1]"),1,light);
+    bool checkedArray=false;
+    for(const auto& field:fqvk::renderer->programs.at(program).fields)if(!std::strcmp(field.field.name,"uLocalLightPosRadius")) {
+        const auto& bytes=fqvk::renderer->programs.at(program).bytes;float before=1,current=0,after=1;
+        std::memcpy(&before,bytes.data()+field.field.offset,4);std::memcpy(&current,bytes.data()+field.field.offset+16,4);std::memcpy(&after,bytes.data()+field.field.offset+32,4);
+        assert(before==0&&current==2&&after==0);checkedArray=true;
+    }
+    assert(checkedArray);
     GLuint vao=0,texture=0;glGenVertexArrays(1,&vao);glBindVertexArray(vao);
     auto quad=Quad(false);const uint32_t indices[]{0,1,2,0,2,3};fqvk::Mesh(vao,quad.data(),4,18,indices,6);
     glGenTextures(1,&texture);glActiveTexture(GL_TEXTURE0);glBindTexture(GL_TEXTURE_2D,texture);

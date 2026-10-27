@@ -2140,7 +2140,7 @@ private:
         if(q1700FrameSubmitted&&layerCount&&(presentationFrames_++%120)==0)
             FQ_LOGI("FQ PRESENTED api=%s stereo=%s frame=%llu",vulkanGameplay_?"Vulkan":"GLES",
                 vulkanGameplay_?"multiview-array":"sequential",(unsigned long long)presentationFrames_);
-        if(vulkanGameplay_&&(presentationFrames_%120)==1)
+        if(vulkanGameplay_&&q1700FrameSubmitted&&layerCount&&(presentationFrames_%120)==1)
             FQ_LOGI("FQ NATIVE FRONTEND: eglContext=none glesDriverCalls=%llu handles=%u",(unsigned long long)fqrender::driverCalls,fqrender::nextHandle-1);
         const double perfEndUs=double(fqloading::Now()-submitStarted);
         const bool perfLoadingAtSubmit=IsFo3LoadingVisible();
