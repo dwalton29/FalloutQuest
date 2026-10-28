@@ -33,10 +33,10 @@ void RenderFo3Terminal(const float* mvp){
   const auto& p=gPlayerSession->player;const auto t=p.Definitions().pipboy.terminals.find(gTerminal.menu);
   fo3terminalui::Render(mvp,*gTerminalScreen,gTerminal.display,t!=p.Definitions().pipboy.terminals.end()&&(t->second.flags&4),!gTerminal.image.empty());
 }
-void UpdateFo3Terminal(double now,float x,float y,bool a,bool b,bool focused){
+void UpdateFo3Terminal(double now,float x,float y,bool a,bool b,bool focused,float trigger=0,bool gripsDown=false){
   fo3terminalui::Advance();fo3terminalui::AdvanceImage(Fo3TerminalFocus()?gTerminal.image:std::string{});
   if(gPlayerSession){uint32_t back=0;while(gPlayerSession->player.PollTerminalBack(back))if(back==gTerminal.reference){gTerminal.Back(gPlayerSession->player);if(!Fo3TerminalFocus())CancelFo3Terminal();}}
-  if(!Fo3TerminalFocus()){if(!a&&!b&&std::fabs(x)<.2f&&std::fabs(y)<.2f)gTerminalInputLatch=false;return;}
+  if(!Fo3TerminalFocus()){if(focused&&!a&&!b&&std::fabs(x)<.2f&&std::fabs(y)<.2f&&trigger<.1f&&!gripsDown)gTerminalInputLatch=false;return;}
   if(fo3terminalui::failed){fo3notify::Notifications().Enqueue("Terminal assets missing: Fixedsys font or Menus/FalloutDict.txt.");CancelFo3Terminal();return;}
   if(!focused||!gPlayerSession||gPlayerSession->saveBlocked||IsFo3LoadingVisible()||gCurrentCellFormId!=gTerminalCell){CancelFo3Terminal();return;}
   auto& p=gPlayerSession->player;bool disabled=false;std::string error;

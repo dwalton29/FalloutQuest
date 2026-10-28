@@ -1941,7 +1941,8 @@ private:
                         q210RightValid&&!Fo3LevelUpFocus()&&pipBackDown_,fingerGripValue_[0]);
                     const bool terminalControls=Fo3TerminalFocus();
                     UpdateFo3Terminal(gameplaySeconds,q210RightValid?turnX_:0,q210RightValid?lootScrollY_:0,
-                        activateDownQ1700_,pipBackDown_,sessionState_==XR_SESSION_STATE_FOCUSED&&q210RightValid);
+                        activateDownQ1700_,pipBackDown_,sessionState_==XR_SESSION_STATE_FOCUSED&&q210RightValid,
+                        fingerTriggerValue_[1],fingerGripValue_[0]>.25f||fingerGripValue_[1]>.25f);
                     const bool lockControls=Fo3LockpickFocus();
                     UpdateFo3Lockpick(gameplaySeconds,
                         q210RightValid?turnX_:0,q210RightValid?fingerTriggerValue_[1]:0,

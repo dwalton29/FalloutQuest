@@ -46,7 +46,10 @@ int main(){try{
   update(false,false);update(true,false);Check(gTerminal.page==fo3terminal::Session::Page::Text&&gTerminal.result=="Original result","A selects original terminal entry");
   update(false,false);update(false,true);Check(gTerminal.page==fo3terminal::Session::Page::Menu,"B returns to menu");
   update(false,false);update(false,true);Check(!Fo3TerminalFocus()&&Fo3TerminalInputBlocked(),"B closes with release latch");
-  update(false,true);Check(Fo3TerminalInputBlocked(),"held close B cannot leak to weapon");update(false,false);Check(!Fo3TerminalInputBlocked(),"release restores gameplay");
+  update(false,true);Check(Fo3TerminalInputBlocked(),"held close B cannot leak to weapon");
+  now+=.2;UpdateFo3Terminal(now,0,0,false,false,true,1,false);Check(Fo3TerminalInputBlocked(),"held trigger remains blocked after terminal closes");
+  now+=.2;UpdateFo3Terminal(now,0,0,false,false,true,0,true);Check(Fo3TerminalInputBlocked(),"held grip remains blocked after terminal closes");
+  update(false,false);Check(!Fo3TerminalInputBlocked(),"full release restores gameplay");
   Check(BeginFo3Terminal(20),"reopen unlocked terminal");update(false,false,false);Check(!Fo3TerminalFocus()&&!p.GetLock(20).locked,"focus loss closes without relocking");
   Check(p.ScriptLock(20,0)&&BeginFo3Terminal(20),"start another hack");update(false,false);update(false,false);
   int guesses=0;for(size_t i=0;i<gTerminal.hacking.words.size()&&guesses<4;++i)if(i!=gTerminal.hacking.password){gTerminal.hacking.cursor=gTerminal.hacking.words[i].offset;update(true,false);update(false,false);++guesses;}
