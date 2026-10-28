@@ -30,6 +30,19 @@ class LoadingPipeline(unittest.TestCase):
         self.assertIn('return Q244HighObjectDesired(asset.blockX, asset.blockY,',runtime)
         self.assertIn('if (!Q244HighObjectDesired(high.blockX, high.blockY,',runtime)
 
+    def test_arrival_heading_comes_from_commit(self):
+        loop=(ROOT/'core/fo3-runtime-loop.inc').read_text()
+        facing=loop.split('    void ApplyAuthoredDoorFacingQ1810(',1)[1].split('    void RenderFrame()',1)[0]
+        self.assertIn('GetFo3ArrivalFacingQ74()',facing)
+        self.assertNotIn('doorAim',facing)
+        self.assertNotIn('IsFo3LoadingVisible()',facing)
+        world=(ROOT/'world/fo3-cell-world.cpp').read_text()
+        commit=world.split('void CompleteFo3CellTransitionQ74(',1)[1].split('bool ConsumeFo3PlayerResetQ74()',1)[0]
+        self.assertIn('gArrivalFacingQ74.Publish(gPendingTransitionQ74.destinationDoorRef, gPendingTransitionQ74.rz)',commit)
+        interaction=loop.split('if (!dialogueControls &&',1)[1].split('FlushFo3DeferredPlayerState();',1)[0]
+        self.assertNotIn('playerYaw_ = 0.0f',interaction)
+        self.assertNotIn('playerPosition_ =',interaction)
+
     def test_loading_eye_has_no_world_or_post_work(self):
         loop=(ROOT/'core/fo3-runtime-loop.inc').read_text()
         eye=loop.split('    bool RenderEye(',1)[1]

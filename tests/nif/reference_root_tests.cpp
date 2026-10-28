@@ -24,6 +24,15 @@ int main(int argc,char** argv) {
     assert(reference.normals==mesh.normals&&reference.tangents==mesh.tangents);
     assert(reference.geometryDeltaToModel[4]==1&&standalone.geometryDeltaToModel[7]==2);
     assert(reference.texcoords==mesh.texcoords);
+    // Actor attachment roots carry the authored eye/mouth orientation. A
+    // world placement of the same model must not poison the actor cache.
+    auto actor=mesh,door=mesh;
+    ApplyTransforms(actor,shape,{child,root},nullptr,Fo3UsesPlacedReferenceRoot("NPC_"));
+    ApplyTransforms(door,shape,{child,root},nullptr,Fo3UsesPlacedReferenceRoot("DOOR"));
+    assert(actor.positions==standalone.positions && actor.normals==standalone.normals);
+    assert(actor.geometryDeltaToModel[7]==standalone.geometryDeltaToModel[7]);
+    assert(door.positions==reference.positions && door.normals==reference.normals);
+
     auto fallback=mesh;ApplyTransforms(fallback,shape,{},&root,true);assert(fallback.positions==mesh.positions);
     // Optional original RanchDoor integration: its raw Y axis must become Z
     // after the Small Ranch REFR rotation, not acquire a second root X+90deg.

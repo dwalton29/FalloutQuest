@@ -1,6 +1,7 @@
 #include "../../app/src/main/cpp/ui/loading/fo3-loading-catalog.h"
 #include "../../app/src/main/cpp/ui/loading/fo3-loading-menu.h"
 #include "../../app/src/main/cpp/ui/loading/fo3-loading-state.h"
+#include "../../app/src/main/cpp/player/fo3-arrival-facing.h"
 #include <fstream>
 #include <cassert>
 #include <set>
@@ -12,6 +13,32 @@ static std::vector<uint8_t> field(const char* type,const std::string& value) {
     b.insert(b.end(),value.begin(),value.end());b.push_back(0);return b;
 }
 int main(int argc,char**argv) {
+    // A pending load/aim change has no published arrival. Only a completed
+    // transaction applies once, including startup and script-driven XTEL.
+    fo3arrival::Facing arrival;
+    uint64_t consumed=0;float yaw=0.7f;
+    assert(!arrival.Apply(consumed,0.4f,yaw) && near(yaw,0.7f));
+    const float pi=std::acos(-1.0f);
+    for(float gameYaw:{0.0f,pi/2,-pi/2,pi,-2.4f,7.0f}) {
+        for(float physical:{0.0f,0.7f,-2.0f}) {
+            arrival.Publish(0x1234,gameYaw);
+            assert(arrival.Apply(consumed,physical,yaw));
+            // XR view forward is (-sin(yaw),0,-cos(yaw)); convert the
+            // original clockwise (+sin(rz),+cos(rz),0) game direction.
+            const float heading=yaw+physical;
+            assert(near(-std::sin(heading),std::sin(gameYaw)));
+            assert(near(-std::cos(heading),-std::cos(gameYaw)));
+            const float applied=yaw;
+            assert(!arrival.Apply(consumed,physical+1,yaw) && yaw==applied);
+        }
+    }
+    const auto serial=arrival.serial;
+    arrival.Publish(0,std::nanf(""));assert(arrival.serial==serial);
+    arrival.Publish(0x24720,pi);
+    assert(!arrival.Apply(consumed,std::nanf(""),yaw));
+    assert(arrival.Apply(consumed,0,yaw));
+    assert(near(std::cos(yaw),-1)); // Original cave arrival faces game -Y.
+
     fo3loadingmenu::Definition menu;
     fo3loadingmenu::ReadIni("[Other]\niSystemColorMainMenuRed=12\n[Interface]\niSystemColorMainMenuRed=200 ; note\niSystemColorMainMenuGreen=999\niSystemColorMainMenuBlue=12junk\n",menu);
     assert(menu.red==200 && menu.green==255 && menu.blue==165);

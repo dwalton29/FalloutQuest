@@ -1249,9 +1249,10 @@ public:
         std::array<VkClearValue,2> clears{};
         // Software/probe validation uses a black offscreen reference;
         // only the real OpenXR gameplay scene has the GLES horizon clear.
-        clears[0].color={{gameplay&&horizon?horizon[0]:0.0f,
-                          gameplay&&horizon?horizon[1]:0.0f,
-                          gameplay&&horizon?horizon[2]:0.0f,1.0f}};
+        // Loading always uses the same black void as the standalone GLES UI.
+        clears[0].color={{gameplay&&!loading&&horizon?horizon[0]:0.0f,
+                          gameplay&&!loading&&horizon?horizon[1]:0.0f,
+                          gameplay&&!loading&&horizon?horizon[2]:0.0f,1.0f}};
         clears[1].depthStencil={1,0};
         VkRenderPassBeginInfo ri{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};ri.renderPass=pass;ri.framebuffer=framebuffer;ri.renderArea={{0,0},{width,height}};ri.clearValueCount=2;ri.pClearValues=clears.data();
         BeginPass(Scene,ri);begun=true;

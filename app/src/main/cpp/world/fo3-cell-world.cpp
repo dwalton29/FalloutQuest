@@ -84,6 +84,7 @@ struct Q74Owner {
 Fo3CellTransitionRequestQ74 gPendingTransitionQ74;
 bool gHasPendingTransitionQ74 = false;
 bool gPlayerResetPendingQ74 = false;
+fo3arrival::Facing gArrivalFacingQ74;
 uint32_t gCurrentCellQ74 = TARGET_CELL_FORM_ID;
 
 bool Q74ResolveOwner(uint32_t targetDoorRef, Q74Owner& out) {
@@ -1185,6 +1186,8 @@ void CompleteFo3CellTransitionQ74(uint32_t cellFormId) {
     };
     gCurrentCellQ74 = cellFormId;
     gPlayerResetPendingQ74 = true;
+    if (gPendingTransitionQ74.valid)
+        gArrivalFacingQ74.Publish(gPendingTransitionQ74.destinationDoorRef, gPendingTransitionQ74.rz);
     const bool q2013DeferWastelandLoading =
         gPendingTransitionQ74.valid &&
         gPendingTransitionQ74.worldspaceFormId == 0x0000003Cu &&
@@ -1247,9 +1250,11 @@ void CompleteFo3CellTransitionQ74(uint32_t cellFormId) {
              gPendingTransitionQ74.worldspaceFormId,
              terrainReady ? 1 : 0,
              IsFo3TerrainGroundingActiveQ77() ? 1 : 0);
-    Q71_LOGI("Q7.5 TRANSITION APPLIED: persistentCell=%08X playerReset=NEXT_PHYSICS_FRAME orientation=preserved worldspaceNeighborhood=1",
+    Q71_LOGI("Q7.5 TRANSITION APPLIED: persistentCell=%08X playerReset=NEXT_PHYSICS_FRAME orientation=authored-XTEL worldspaceNeighborhood=1",
              cellFormId);
 }
+
+const fo3arrival::Facing& GetFo3ArrivalFacingQ74() { return gArrivalFacingQ74; }
 
 bool ConsumeFo3PlayerResetQ74() {
     if (!gPlayerResetPendingQ74) return false;

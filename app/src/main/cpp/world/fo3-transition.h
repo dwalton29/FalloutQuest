@@ -1,6 +1,7 @@
 #pragma once
 
 #include "fo3-megaton-scene.h"
+#include "../player/fo3-arrival-facing.h"
 #include "fo3-collision-placements.h"
 #include "fo3-reference-state.h"
 
@@ -47,6 +48,8 @@ void CompleteFo3CellTransitionQ74(uint32_t cellFormId);
 // Consumed by the authored collision resolver on the frame after a successful
 // scene swap. Returning the body centre to VR (0,0) maps the player to XTEL.
 bool ConsumeFo3PlayerResetQ74();
+// Render-thread-only committed arrival, independent of interaction aim/loading UI.
+const fo3arrival::Facing& GetFo3ArrivalFacingQ74();
 
 // Generic ESM4 CELL loader used by Q7.4 after the door has resolved its owning
 // destination CELL. Only active, model-bearing REFRs are returned.

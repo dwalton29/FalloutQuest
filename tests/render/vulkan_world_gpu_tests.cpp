@@ -909,7 +909,9 @@ void GameplayPresentation(bool withDepth) {
     const uint32_t initialReleases=releases,initialDepthReleases=depthReleases;
     for(int frame=0;frame<6;++frame) {
         const bool loading=frame<3;
-        assert(fqvk::BeginWorldProbe(left,right,eye,eye,loading));fqgl::state.texture2d[0].Change(5);
+        // A valid exterior/interior horizon must never colour the loading void.
+        const float horizon[]{.35f,.6f,.8f};
+        assert(fqvk::BeginWorldProbe(left,right,eye,eye,loading,loading?horizon:nullptr));fqgl::state.texture2d[0].Change(5);
         Submit(1,40,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);
         if(!loading)fqvk::PostProcess({});
         assert(fqvk::PresentGameplay(views.data(),output.data(),.04f,125000.0f/70.0f));
@@ -928,6 +930,9 @@ void GameplayPresentation(bool withDepth) {
         auto pixel=[&](int e,int x,int y){return submittedPixels[(e*64*64+y*64+x)*4];};
         assert(pixel(0,32,16)>100&&pixel(1,55,16)>100);
         assert(pixel(1,32,16)<5&&pixel(0,32,48)<5); // stereo separation + upright orientation
+        if(loading)for(int e=0;e<2;++e)for(int c=0;c<3;++c)
+            assert(submittedPixels[(e*64*64+48*64+32)*4+c]==0);
+
     }
     assert(depthReleases-initialDepthReleases==(withDepth?3u:0u)); // Loading never submits world depth.
     // Runtime suspension can retain the resources; rebuilding swapchains keeps resident NIF assets.

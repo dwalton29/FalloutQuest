@@ -1561,10 +1561,6 @@ private:
             -handMatrix.m[8],-handMatrix.m[9],-handMatrix.m[10],target);
         UpdateFo3LootSelection(target,Fo3PipboyFocus()?0:lootScrollY_,lootTime);
         if (active) {
-            if (!target.pickup && !target.container && !target.talk) {
-                doorAimYawQ1800_ = target.door.rz;
-                doorAimDestinationQ1800_ = target.door.destinationDoorRef;
-            }
             if (doorAimSourceQ1840_ != target.reference ||
                 std::strcmp(doorPromptQ1850_.data(),target.prompt.data()) != 0)
             {
@@ -1584,31 +1580,14 @@ private:
     }
 
     void ApplyAuthoredDoorFacingQ1810(const XrView& view) {
-        if (!IsFo3LoadingVisible()) return;
-
-        const uint64_t generation = GetFo3LoadingGeneration();
-        if (generation == 0u || generation == doorFacingGenerationQ1810_) return;
-
-        // Consume this generation first so a malformed/missing cached target
-        // cannot repeatedly alter the player's heading every loading frame.
-        doorFacingGenerationQ1810_ = generation;
-        if (doorAimDestinationQ1800_ == 0u) {
-            FQ_LOGI("Q16.27 AUTHORED DOOR FACING SKIP: generation=%llu reason=no-cached-destination",
-                    static_cast<unsigned long long>(generation));
-            return;
-        }
-
-        playerPosition_ = {0.0f, 0.0f, 0.0f};
+        const auto& arrival = GetFo3ArrivalFacingQ74();
         const float physicalHeadYaw = YawFromQuaternion(view.pose.orientation);
-        const float rawPlayerYaw = doorAimYawQ1800_ - physicalHeadYaw;
-        playerYaw_ = std::atan2(std::sin(rawPlayerYaw), std::cos(rawPlayerYaw));
+        if (!arrival.Apply(doorFacingSerialQ1810_, physicalHeadYaw, playerYaw_)) return;
+        playerPosition_ = {0.0f, 0.0f, 0.0f};
         lastFrameTime_ = 0;
-
-        FQ_LOGI("Q16.27 AUTHORED DOOR FACING: destinationDoor=%08X XTELrz=%.4f physicalHeadYaw=%.4f playerYaw=%.4f degrees=%.1f generation=%llu",
-                doorAimDestinationQ1800_, doorAimYawQ1800_,
-                physicalHeadYaw, playerYaw_,
-                playerYaw_ * 180.0f / PI,
-                static_cast<unsigned long long>(generation));
+        FQ_LOGI("AUTHORED ARRIVAL FACING: destinationDoor=%08X XTELrz=%.4f physicalHeadYaw=%.4f playerYaw=%.4f serial=%llu",
+                arrival.destination, arrival.gameYaw, physicalHeadYaw, playerYaw_,
+                static_cast<unsigned long long>(arrival.serial));
     }
 
     void RenderFrame() {
@@ -1862,6 +1841,7 @@ private:
                         fo3tod::gRuntime.climate.sunsetBegin,
                         fo3tod::gRuntime.climate.sunsetEnd);
                 }
+                ApplyAuthoredDoorFacingQ1810(views[0]);
                 if (!Fo3GameplayBlocked() && !IsFo3LoadingVisible()) {
                     UpdatePlayer(views[0], frameState.predictedDisplayTime);
                 } else {
@@ -1993,20 +1973,14 @@ private:
                     // Q24.0 local DOOR state advances once per gameplay frame, not per eye.
                     UpdateFo3InteriorDoorsQ2400();
                     UpdateDoorAimQ1700(gameplaySeconds);
-                    ApplyAuthoredDoorFacingQ1810(views[0]);
                     if (!dialogueControls && !Fo3DialogueFocus() && !Fo3ScriptMessageFocus() && gPipInput.WorldA(activateDownQ1700_) && !activateLatched_) {
                         activateLatched_ = true;
                         if (handPoseValid_[1]) {
                             const XrPosef handQ1700 = ToVirtualPose(handLocalPoses_[1]);
                             const Mat4 handMatrixQ1700 = MatrixFromPose(handQ1700);
-                            if (ActivateFo3Interaction(
+                            (void)ActivateFo3Interaction(
                                     handQ1700.position.x, handQ1700.position.y, handQ1700.position.z,
-                                    -handMatrixQ1700.m[8], -handMatrixQ1700.m[9], -handMatrixQ1700.m[10])) {
-                                playerPosition_ = {0.0f, 0.0f, 0.0f};
-                                playerYaw_ = 0.0f;
-                                lastFrameTime_ = 0;
-                                FQ_LOGI("Q16.1 player origin reset for queued authored XTEL");
-                            }
+                                    -handMatrixQ1700.m[8], -handMatrixQ1700.m[9], -handMatrixQ1700.m[10]);
                         }
                     } else if (!activateDownQ1700_) {
                         activateLatched_ = false;
@@ -2074,7 +2048,6 @@ private:
                 }
                 } else {
                     lastFrameTime_=0;ResetFo3Pipboy();
-                    ApplyAuthoredDoorFacingQ1810(views[0]);
                     const auto head=ToVirtualPose(loadingHead);
                     {FQ_PERF_SCOPE(Streaming);UpdateFo3ExteriorStreamingQ1890(head.position.x,head.position.z);}
                 }
@@ -2671,13 +2644,11 @@ private:
     GLint interactionStartVertex_{0};
     GLsizei interactionVertexCount_{0};
     bool doorAimActiveQ1700_{false};
-    float doorAimYawQ1800_{0.0f};
-    uint32_t doorAimDestinationQ1800_{0u};
     uint32_t doorAimSourceQ1840_{0u};
     std::array<char, 512> doorPromptQ1850_{};
     bool doorPromptValidQ1850_{false};
     bool doorPromptCrime_{false};
-    uint64_t doorFacingGenerationQ1810_{0u};
+    uint64_t doorFacingSerialQ1810_{0u};
 
     uint64_t frameCounter_{0};
 };

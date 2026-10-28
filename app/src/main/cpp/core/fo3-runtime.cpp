@@ -2054,7 +2054,10 @@ bool BuildCpuObjects(const Fo3WorldPlacement& placement, std::vector<CpuObject>&
     static std::mutex modelCacheMutex;
     static std::unordered_map<std::string, Q2012CachedMeshes> ordinaryCache, completeCache;
     auto& modelCache = requireComplete ? completeCache : ordinaryCache;
-    const std::string cacheKey = placement.modelPath+(animatedVisibility?"|animated-visibility":"");
+    const bool referenceRoot = Fo3UsesPlacedReferenceRoot(placement.baseRecordType);
+    const std::string cacheKey = placement.modelPath+
+        (referenceRoot ? "|reference-root" : "|authored-root")+
+        (animatedVisibility ? "|animated-visibility" : "");
     Q2012CachedMeshes cachedMeshes;
     {
         std::lock_guard<std::mutex> lock(modelCacheMutex);
@@ -2064,7 +2067,7 @@ bool BuildCpuObjects(const Fo3WorldPlacement& placement, std::vector<CpuObject>&
 
     if (!cachedMeshes) {
         std::vector<Fo3StaticNifMesh> meshes;
-        if (!LoadFo3StaticNifMeshes(placement.modelPath, meshes, requireComplete, true, animatedVisibility)) return false;
+        if (!LoadFo3StaticNifMeshes(placement.modelPath, meshes, requireComplete, referenceRoot, animatedVisibility)) return false;
         auto candidate = std::make_shared<const std::vector<Fo3StaticNifMesh>>(
             std::move(meshes));
         bool inserted = false;
