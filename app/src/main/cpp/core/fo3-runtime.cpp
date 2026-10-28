@@ -14899,10 +14899,10 @@ void Q1280ShutdownPostQ1280() {
     q1280PostActive = false;
 }
 
-void Q6HDeleteFramebuffers(GLsizei n, const GLuint* framebuffers) {
+bool ShutdownFo3SceneGpu() {
     // Release staged/displaced ownership while this GL context and its shared
     // geometry/texture caches are still alive.
-    if(!ShutdownFo3ResidentWorkflow())return;
+    if(!ShutdownFo3ResidentWorkflow())return false;
     DiscardFo3ResidentGpuStage();
     DiscardFo3ResidentVisualPlan();
     DiscardFo3ResidentLightPlan();
@@ -14930,8 +14930,13 @@ void Q6HDeleteFramebuffers(GLsizei n, const GLuint* framebuffers) {
     Q1280ShutdownPostQ1280();
     ShutdownFo3WaterQ2070();
     WeaponShutdown();
-    glDeleteFramebuffers(n, framebuffers);
     ShutdownFo3CollisionOverlay();
+    // These owners survive cell transitions, but their names cannot survive
+    // destruction of the GLES context or native Vulkan resource registry.
+    Q210DeletePlayerBody();gQ210PlayerBodyAttempted=false;
+    Q1990ClearNativeLodGeometry();gQ1990NativeLodOriginValid=false;
+    ShutdownFo3TerrainGpuSession();
+    fo3pcsky::ShutdownGpu();ResetFo3Environment();
     gFo3VisualPublication.Changed();
     for (GpuObject& object : gObjects) {
         Q1900DeleteGpuShape(object);
@@ -14948,11 +14953,17 @@ void Q6HDeleteFramebuffers(GLsizei n, const GLuint* framebuffers) {
     gInstanceBufferQ2016 = 0u;
     gStereoMvpReady = false;
     gOpaqueFrameOrder.clear(); gOpaqueOrderFrame = ~uint64_t{0};
-    for (const auto& entry : gTextureCache) {
-        const GLuint id = entry.second.id;
-        if (id) glDeleteTextures(1, &id);
+    for (auto* cache : {&gTextureCache, &gCubeTextureCacheQ2050}) {
+        for (const auto& entry : *cache) {
+            const GLuint id = entry.second.id;
+            if (id) glDeleteTextures(1, &id);
+        }
+        cache->clear();
     }
-    gTextureCache.clear();
+    {
+        std::lock_guard<std::mutex> lock(gQ1900TextureCpuMutexQ19);
+        gQ1900KnownGpuTextureKeysQ19.clear();
+    }
     if (gShadowProgramQ1050) glDeleteProgram(gShadowProgramQ1050);
     if (gShadowDepthQ1050) glDeleteTextures(1,&gShadowDepthQ1050);
     if (gShadowFboQ1050) glDeleteFramebuffers(1,&gShadowFboQ1050);
@@ -14970,6 +14981,12 @@ void Q6HDeleteFramebuffers(GLsizei n, const GLuint* framebuffers) {
     gQ1380ExternalFixedShapes = 0u;
     gQ1380ExternalRegionShapes = 0u;
     ResetFo3ExternalEmittance();
+    Q6H_LOGI("FQ GPU SESSION scene released: player=0 lod=0 sky=0 worldTextures=0 cubeTextures=0");
+    return true;
+}
+
+void Q6HDeleteFramebuffers(GLsizei n, const GLuint* framebuffers) {
+    glDeleteFramebuffers(n, framebuffers);
 }
 
 void Q6HViewport(GLint x, GLint y, GLsizei width, GLsizei height) {

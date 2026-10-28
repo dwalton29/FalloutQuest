@@ -39,6 +39,8 @@ bool InitializeFo3TerrainRenderQ76(uint32_t worldspaceFormId,
 void RenderFo3TerrainQ76(const float* mvp);
 void SetFo3TerrainWaterReflectionClipQ2090(bool enabled, float planeY);
 void ShutdownFo3TerrainRenderQ76();
+// End of graphics session, unlike a cell/recenter: cached handles expire too.
+void ShutdownFo3TerrainGpuSession();
 void SetFo3TerrainColorFormatQ238(bool halfFloat);
 
 // Q7.7 exterior-only physical LAND grounding. Activation happens only after

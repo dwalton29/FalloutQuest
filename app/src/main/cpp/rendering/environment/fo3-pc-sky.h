@@ -62,6 +62,15 @@ inline void DeleteClouds() {
     gWeatherForm = 0u;
 }
 
+inline void ShutdownGpu() {
+    DeleteClouds();
+    if(gSunTexture)glDeleteTextures(1,&gSunTexture);
+    if(gProgram)glDeleteProgram(gProgram);
+    gSunTexture=gProgram=0;gSunTextureAttempted=false;gLogged=false;
+    gMvpLoc=gModeLoc=gTextureLoc=gUpperLoc=gLowerLoc=gHorizonLoc=gColourLoc=gOffsetLoc=gSunDirectionLoc=-1;
+    fo3env::ShutdownSkyGpu();
+}
+
 inline GLuint UploadTexture(const std::string& path, bool repeat) {
     if (path.empty()) return 0u;
     Fo3RgbaTexture decoded;

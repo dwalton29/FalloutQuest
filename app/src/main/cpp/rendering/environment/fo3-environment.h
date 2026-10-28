@@ -313,6 +313,15 @@ inline GLint skyLowerLocation = -1;
 inline GLint skyHorizonLocation = -1;
 inline bool skyLogged = false;
 
+inline void ShutdownSkyGpu() {
+    if(skyProgram)glDeleteProgram(skyProgram);
+    if(skyVao)glDeleteVertexArrays(1,&skyVao);
+    if(skyVbo)glDeleteBuffers(1,&skyVbo);
+    skyProgram=skyVao=skyVbo=0;skyVertexCount=0;
+    skyMvpLocation=skyUpperLocation=skyLowerLocation=skyHorizonLocation=-1;
+    skyLogged=false;
+}
+
 inline GLuint CompileSkyShader(GLenum type, const char* source) {
     const GLuint shader = glCreateShader(type);
     glShaderSource(shader, 1, &source, nullptr);

@@ -746,6 +746,16 @@ void ShutdownFo3TerrainRenderQ76() {
     q720HiddenAlphaLayers = 0;
 }
 
+void ShutdownFo3TerrainGpuSession() {
+    ShutdownFo3TerrainRenderQ76();
+    for (auto* cache : {&q1910TerrainTextureCache, &q1810TerrainNormalTextureCache}) {
+        for (const auto& entry : *cache) if (entry.second) glDeleteTextures(1, &entry.second);
+        cache->clear();
+    }
+    q229TerrainBaseBatches.clear();q229TerrainPaintBatches.clear();
+    Q76B_LOGI("FQ GPU SESSION terrain released: geometry=0 textureCache=0 normalCache=0");
+}
+
 bool InitializeFo3TerrainRenderQ76(uint32_t worldspaceFormId,
                                    float arrivalX, float arrivalY, float arrivalZ,
                                    float sceneForward, float floorY,

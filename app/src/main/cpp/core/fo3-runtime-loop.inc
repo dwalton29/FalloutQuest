@@ -436,6 +436,9 @@ public:
         fo3hudrenderer::Shutdown();
         fqmotion::requested=false;fqmotion::eye={};spacewarpGles_.Shutdown();
         spacewarp_.Destroy();spacewarpHistory_.Reset();
+        // Explicit session ownership: teardown must also run when initialisation
+        // failed before either wrapper framebuffer was allocated.
+        if(!ShutdownFo3SceneGpu())return;
         if (sessionRunning_) {
             xrEndSession(session_);
             sessionRunning_ = false;
@@ -538,6 +541,8 @@ private:
         }
         FQ_LOGI("FQ RENDERER requested=%s selected=%s experimental=%d sceneSubmission=%s",
             selection[0]?selection:"gles",vulkanGameplay_?"vulkan":"gles",vulkanGameplay_,vulkanGameplay_?"cpu-commands":"gles");
+        if(vulkanGameplay_&&requestSpacewarp)
+            FQ_LOGI("FQ SPACEWARP inactive backend=Vulkan reason=motion-producer-GLES-only requested=%d synthesisActive=0",spacewarpSynthesisRequested_);
 #endif
 #endif
 #if !defined(FQ_ENABLE_VULKAN) && !defined(NDEBUG)
