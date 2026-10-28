@@ -72,7 +72,7 @@ struct Game {
     const auto span=Span(cursor);if(span.second<=span.first)return Event::None;
     std::fill(dump.begin()+span.first,dump.begin()+span.second+1,'.');
     std::vector<size_t> duds;for(size_t i=0;i<words.size();++i)if(i!=password&&!words[i].removed&&!words[i].guessed)duds.push_back(i);
-    if(!replenished&&(duds.empty()||random()%2==0)){attempts=4;replenished=true;return Event::Reset;}
+    if(!duds.empty()&&!replenished&&random()%4==0){attempts=4;replenished=true;return Event::Reset;}
     if(duds.empty())return Event::None;
     auto& w=words[duds[random()%duds.size()]];w.removed=true;dump.replace(size_t(w.offset),w.text.size(),std::string(w.text.size(),'.'));return Event::Dud;
   }

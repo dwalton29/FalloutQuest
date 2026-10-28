@@ -58,6 +58,7 @@ static void PersistenceAndMenus(){
   Check(p.TerminalRequirement(22)==-1&&!p.CanHackTerminal(22)&&p.Add(10,1)&&p.TerminalPassword(22)&&p.OpenTerminalPassword(22)&&!p.GetLock(22).locked,"requires-key terminal accepts actual password note");
   Check(p.Snapshot().experience==xp,"password bypass awards no hacking XP");
   auto lev=c;lev.pipboy.terminals[100].flags=1;lev.initial.level=20;Player leveled(lev);Check(leveled.TerminalRequirement(20)==100,"original leveled difficulty cap");
+  Check(leveled.FailTerminalHack(20)&&leveled.GrantPerk(77,1)&&leveled.TerminalRequirement(20)==100&&leveled.CanHackTerminal(20),"leveled requirement retained on Computer Whiz retry");
   Check(p.ScriptDoorState(21,true),"terminal opens actual door target");
   Check(p.Save("/tmp/fq-terminal-test.fqps",error),error.c_str());Player unlocked(c);Check(unlocked.Restore("/tmp/fq-terminal-test.fqps",error)&&!unlocked.GetLock(20).locked&&!unlocked.GetLock(21).locked&&!unlocked.GetLock(22).locked,"terminal and linked-door persistence");
   Check(unlocked.Snapshot().doorStates.at(21),"door open target survives v20 save");

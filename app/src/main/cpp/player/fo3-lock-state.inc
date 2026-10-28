@@ -14,7 +14,7 @@ LockInfo Player::GetLock(uint32_t id) const {
     if(ref.locked){out.level=ref.lockLevel;out.locked=true;out.leveled=bool(ref.lockFlags&4);}
   }
   auto o=state_.locks.find(id);
-  if(o!=state_.locks.end()) {const auto& l=o->second;out.level=l.level;out.forceFailures=l.forceFailures;
+  if(o!=state_.locks.end()) {out.leveled=false;const auto& l=o->second;out.level=l.level;out.forceFailures=l.forceFailures;
     out.broken=l.change==LockChange::Broken;out.locked=l.change==LockChange::Locked||out.broken;
   } else if(terminal==catalog_->pipboy.terminals.end())out.leveled=bool(ref.lockFlags&4);
   // Leveled locks cannot be safely resolved until the original level formula is recovered.
@@ -102,7 +102,8 @@ bool Player::QueueTerminalBack(uint32_t id){
   pendingTerminalBack_.push_back(id);++scriptEffectRevision_;return true;
 }
 bool Player::PollTerminalBack(uint32_t& id){
-  if(pendingTerminalBack_.empty())return false;id=pendingTerminalBack_.front();pendingTerminalBack_.erase(pendingTerminalBack_.begin());++scriptEffectRevision_;return true;
+  if(pendingTerminalBack_.empty())return false;
+  id=pendingTerminalBack_.front();pendingTerminalBack_.erase(pendingTerminalBack_.begin());++scriptEffectRevision_;return true;
 }
 int Player::TerminalRequirement(uint32_t id) const {
   auto r=catalog_->references.find(id);if(r==catalog_->references.end())return -1;
@@ -139,14 +140,16 @@ bool Player::CompleteTerminalHack(uint32_t id){
   if(!rewarded){static const char* tiers[]={"VeryEasy","Easy","Average","Hard","VeryHard"};
     const auto xp=uint32_t(std::max(0.f,LockSetting(std::string("iXPRewardHackComputer")+tiers[TerminalRequirement(id)/25],20+10*(TerminalRequirement(id)/25))));
     if(xp&&!RewardExperience(xp))return false;}
-  auto& o=state_.locks[id];o.change=LockChange::ScriptUnlocked;o.level=l.level;o.forceFailures=l.forceFailures;o.rewarded=true;
+  const auto requirement=uint8_t(TerminalRequirement(id));
+  auto& o=state_.locks[id];o.change=LockChange::ScriptUnlocked;o.level=requirement;o.forceFailures=l.forceFailures;o.rewarded=true;
   const auto owner=ResolveOwnership(id);CommitTheft(id,0,0,0,owner);
   if(owner.Theft()&&!pendingTheftEvents_.empty())pendingTheftEvents_.back().action=CrimeAction::Hack;
   ++revision_;return true;
 }
 bool Player::FailTerminalHack(uint32_t id){
   if(!CanHackTerminal(id))return false;
-  const auto l=GetLock(id);auto& o=state_.locks[id];o.change=LockChange::Broken;o.level=l.level;
+  const auto l=GetLock(id);const auto requirement=uint8_t(TerminalRequirement(id));
+  auto& o=state_.locks[id];o.change=LockChange::Broken;o.level=requirement;
   o.forceFailures=uint8_t(std::min(2,int(l.forceFailures)+1));++revision_;return true;
 }
 } // namespace fo3player
