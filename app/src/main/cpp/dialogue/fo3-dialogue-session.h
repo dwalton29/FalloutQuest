@@ -6,6 +6,7 @@ enum class Phase { Inactive, Speaking, Choices };
 struct Choice {uint32_t topic=0,info=0;std::string text;};
 struct Session {
   Phase phase=Phase::Inactive;
+  bool scriptedTopic=false;
   uint32_t actor=0,base=0,topic=0,info=0,voice=0;
   size_t response=0,selected=0;
   uint32_t audioToken=0;

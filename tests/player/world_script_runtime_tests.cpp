@@ -1,11 +1,14 @@
 #include "player/fo3-player-state.h"
 #include "world/interaction/fo3-door-nif-animation.h"
 #include "world/fo3-cell-traversal.h"
+#include "dialogue/fo3-dialogue-session.h"
+#include "npc/fo3-npc-state.h"
 struct Fo3DoorCollisionPose {fo3anim::Matrix transform=fo3anim::Identity();bool enabled=true;std::unordered_map<uint32_t,fo3anim::Matrix> nodeTransforms;};
 #include <stdexcept>
 #include <iostream>
 static void Check(bool b,const char* message){if(!b)throw std::runtime_error(message);}
 #define Q6H_LOGW(...) ((void)0)
+#define Q6H_LOGI(...) ((void)0)
 std::unique_ptr<fo3player::Session> gPlayerSession;
 struct GpuObject {
  uint32_t refFormId=0;bool scriptAnimated=true,scriptVisible=true;
@@ -30,6 +33,28 @@ bool QueueFo3DoorTransitionQ1700(uint32_t source,uint32_t destination,float x,fl
 bool Q2400ToggleInteriorDoor(uint32_t,float,float){localOpen=!localOpen;return true;}
 bool Q2400DoorOpen(uint32_t){return localOpen;}
 #include "world/interaction/fo3-script-default-activation.inc"
+struct ActorVisual {
+  struct Source{uint32_t refFormId=0,baseFormId=0;}source;
+  fo3npc::RuntimeState runtime;uint32_t aiPackage=0;uint64_t lastFrame=0;
+};
+std::vector<ActorVisual> gQ230NpcActors;
+uint64_t gQ230NpcResidenceRevision=0;
+ActorVisual* DialogueActor(uint32_t ref){for(auto& a:gQ230NpcActors)if(a.source.refFormId==ref)return &a;return nullptr;}
+std::array<float,3> Q240GamePosition(const ActorVisual& a){return a.runtime.position;}
+fo3dialogue::Session gDialogue;
+struct Chat{bool Active()const{return false;}}gQ230NpcChat;
+uint32_t gCurrentCellFormId=1,gExteriorWorldspaceQ1890=0;
+float gSceneCenterXQ1730=0,gSceneCenterYQ1730=0,gSceneFloorZQ1730=0;
+constexpr float SCENE_FORWARD=0,FLOOR_Y=0;
+bool IsFo3LoadingVisible(){return false;}
+bool PreviewFo3DialogueReferences(const fo3player::Player&,const fo3player::ScriptTransactionPlan&,std::string&){return true;}
+namespace fo3audio {
+uint32_t token=0;uint64_t completion=0;std::string path;
+void DialogueStop(){token=0;}
+void DialogueGain(float){}
+void Dialogue(const std::string& p,uint32_t t){path=p;token=t;completion=0;}
+uint64_t DialogueCompletion(){return completion;}
+}
 #include "scripting/fo3-world-script-runtime.inc"
 int main(){try{
  fo3player::Catalog c;c.initial.baseHealth=100;c.initial.special.fill(5);
@@ -40,6 +65,17 @@ int main(){try{
  c.eventPrograms[200]=fo3script::ParseEvents(script);
  c.references[30].base=300;c.doorBases.insert(300);c.scriptedBases.insert(300);c.eventBaseScripts[300]=301;
  c.pipboy.scripts[301].source="Begin OnActivate\nActivate\nEnd";c.eventPrograms[301]=fo3script::ParseEvents(c.pipboy.scripts[301]);
+ c.references[40].base=400;c.references[40].valid=true;c.pipboy.targets[40].base=400;c.pipboy.targets[40].cell=1;
+ c.weapons.actors[400].health=20;c.pipboy.dialogueActors[400].script=401;
+ c.pipboy.referenceScripts[40]={"speaker",400};c.eventBaseScripts[400]=401;
+ c.pipboy.formNames["speaker"]=40;c.pipboy.formNames["voicetopic"]=500;
+ auto& spoken=c.pipboy.scripts[401];spoken.variables={{1,"ended"},{2,"done"}};
+ spoken.source="scn Speech\nshort ended\nshort done\nBegin SayToDone VoiceTopic\nset done to 1\nEnd";
+ c.eventPrograms[401]=fo3script::ParseEvents(spoken);
+ c.pipboy.quests[600].flags=1;c.pipboy.sounds[700]="sound/original.ogg";
+ fo3pipdata::Info line;line.id=501;line.topic=500;line.quest=600;line.type=1;
+ line.responses.push_back({700,0,"Original speech"});line.end.source="set speaker.ended to 1";
+ c.pipboy.topics[500].push_back(line);
  auto asset=std::make_shared<fo3dooranim::Asset>();fo3anim::Bone root;root.name="root";asset->hierarchy.bones.push_back(root);fo3anim::Bone leaf;leaf.name="leaf";leaf.parent=0;asset->hierarchy.bones.push_back(leaf);
  Check(fo3anim::FinalizeSkeleton(asset->hierarchy),"hierarchy");asset->blockBones={0,1};
  fo3anim::Clip clip;clip.name="Advance";clip.stop=2;clip.cycle=2;
@@ -63,5 +99,16 @@ int main(){try{
  Check(defaultTransitions==1&&defaultSource==30&&defaultDestination==31,"production adapter queues original door transition");
  Check(fo3worldscript::Event(30,"OnActivate",fo3player::PlayerRef),"queue another source activation");Check(p.ScriptLock(30,100),"lock before delivery");fo3worldscript::Actions();Check(defaultTransitions==1,"delivery rechecks changed lock");
  Check(p.ScriptUnlock(30),"unlock local door");defaultTeleport.valid=false;Check(fo3worldscript::Event(30,"OnActivate",fo3player::PlayerRef),"source delegates local door");fo3worldscript::Actions();Check(localOpen,"production local swing default");
- std::cout<<"World event/controller/presentation adapters passed\n";
+ // Exercise the production speech adapter with token-owned audio completion.
+ ActorVisual voiceActor;voiceActor.source={40,400};gQ230NpcActors.push_back(voiceActor);++gQ230NpcResidenceRevision;
+ fo3worldscript::SpeechTick(); // Initialize the independent session generation.
+ fo3script::Action say;say.kind=fo3script::ActionKind::SayTo;say.reference=40;say.form=500;say.flags=fo3player::PlayerRef;
+ Check(p.QueueScriptAction(say),"queue original SayTo");fo3worldscript::Actions();fo3worldscript::SpeechTick();
+ Check(p.ScriptActorTalking(40)&&fo3audio::path=="sound/original.ogg","authored audio owns speech");
+ const auto token=fo3audio::token;fo3audio::completion=(uint64_t(token+1)<<1)|1;fo3worldscript::SpeechTick();
+ Check(p.ScriptActorTalking(40)&&!p.Snapshot().pipboy.dialogueVariables.count((uint64_t(40)<<32)|1),"unrelated completion cannot publish INFO results");
+ fo3audio::completion=(uint64_t(token)<<1)|1;fo3worldscript::SpeechTick();
+ Check(!p.ScriptActorTalking(40),"completion releases speaking actor even after Session::End clears actor");
+ Check(p.Snapshot().pipboy.dialogueVariables.at((uint64_t(40)<<32)|1)==1&&p.Snapshot().pipboy.dialogueVariables.at((uint64_t(40)<<32)|2)==1,"INFO end precedes source filtered SayToDone");
+ std::cout<<"World event/controller/presentation and original speech adapters passed\n";
 }catch(const std::exception& e){std::cerr<<e.what()<<"\n";return 1;}}

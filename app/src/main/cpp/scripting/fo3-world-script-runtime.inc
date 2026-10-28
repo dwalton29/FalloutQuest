@@ -13,6 +13,7 @@ static fo3script::ImageModifier modifier;
 static double modifierStarted=0,seconds=0;
 static fo3dialogue::Session speech;
 static std::vector<fo3script::Action> speechPending;
+static uint32_t speechReference=0;
 static uint32_t speechTopic=0,speechTarget=0,speechToken=0,speechSerial=0;
 static double speechBegan=0;
 static uint64_t speechGeneration=~uint64_t{0};
@@ -33,10 +34,10 @@ static fo3dialogue::Context SpeechContext(uint32_t reference,uint32_t target){
     return ctx;
 }
 static void SpeechStop(){
-    if(gPlayerSession&&speech.actor)gPlayerSession->player.SetScriptActorTalking(speech.actor,false);
-    if(auto* actor=DialogueActor(speech.actor)){actor->runtime.speaking=false;actor->lastFrame=UINT64_MAX;}
+    if(gPlayerSession&&speechReference)gPlayerSession->player.SetScriptActorTalking(speechReference,false);
+    if(auto* actor=DialogueActor(speechReference)){actor->runtime.speaking=false;actor->lastFrame=UINT64_MAX;}
     if(speech.Active()&&!gDialogue.Active())fo3audio::DialogueStop();
-    speech.End("scripted speech stopped");speechToken=0;
+    speech.End("scripted speech stopped");speechToken=0;speechReference=0;
 }
 
 static uint64_t runtimeGeneration=~uint64_t{0};
@@ -98,7 +99,7 @@ void SpeechTick(){
     if(!speech.StartTopic(action.form,SpeechContext(action.reference,action.flags),player)){
         Q6H_LOGW("SCRIPT SPEECH TOPIC UNAVAILABLE ref=%08X topic=%08X",action.reference,action.form);return;
     }
-    speechTopic=action.form;speechTarget=action.flags;speechBegan=seconds;
+    speechReference=action.reference;speechTopic=action.form;speechTarget=action.flags;speechBegan=seconds;
     player.SetScriptActorTalking(action.reference,true);if(actor){actor->runtime.speaking=true;actor->lastFrame=UINT64_MAX;}
     speechToken=0x30000000u|(++speechSerial&0xffffffu);
     fo3audio::DialogueGain(.7f);fo3audio::Dialogue(speech.Audio(player.Definitions().pipboy),speechToken);

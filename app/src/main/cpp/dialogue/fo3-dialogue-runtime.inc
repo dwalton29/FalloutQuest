@@ -66,7 +66,7 @@ void ConfigureFo3Dialogue() {
   gDialogue.publishReferences=PublishFo3DialogueReferences;
 }
 bool DialogueCanStart(Q230ActorVisual& actor) {
-  if((actor.source.creature&&!(actor.source.actorBaseFlags&0x200000))||!gPlayerSession||gPlayerSession->saveBlocked||!actor.runtime.CanTalk()||gPlayerSession->player.ActorHealth(actor.source.refFormId)<=0)return false;
+  if((actor.source.creature&&!(actor.source.actorBaseFlags&0x200000))||!gPlayerSession||gPlayerSession->player.AnyScriptActorTalking()||gPlayerSession->saveBlocked||!actor.runtime.CanTalk()||gPlayerSession->player.ActorHealth(actor.source.refFormId)<=0)return false;
   auto& cached=gDialogueEligibility[actor.source.refFormId];
   const auto revision=gPlayerSession->player.Revision();
   if(cached.revision!=revision||cached.until<gDialogueTime) {
