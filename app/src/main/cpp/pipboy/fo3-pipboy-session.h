@@ -19,10 +19,17 @@ struct Waypoint {
   uint32_t world = 0;
   Point point;
 };
+struct Location {
+  uint32_t cell=0,world=0;
+  float x=0,y=0,facing=0;
+};
 struct SessionState {
   std::unordered_map<uint32_t, uint8_t> perks;
   std::unordered_map<uint32_t, QuestState> quests;
   std::unordered_set<uint32_t> discovered;
+  std::unordered_set<uint32_t> revealed,travelEnabled;
+  bool fastTravelEnabled=true;
+  Location lastExterior;
   Waypoint waypoint;
   uint32_t selectedQuest = 0, tunedRadio = 0;
   // Runtime-observed counters. Original General label comes from GMST/exe.

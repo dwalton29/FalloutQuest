@@ -1,9 +1,11 @@
 #include "player/fo3-player-state.h"
 #include "ui/pipboy/fo3-pipboy-state.h"
 #include "npc/fo3-package-schedule.h"
+#include "data/fo3-esm-reader.h"
 #include <cassert>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <iostream>
 #include <unistd.h>
 using namespace fo3pipdata;
@@ -385,6 +387,8 @@ static void Original(const char *path) {
   assert(note.type == 3 && note.npc == 0x824ab && note.topic == 0x52390);
   auto audio = NoteAudio(d, 0x52394);
   assert(!audio.empty() && audio.front().rfind("@voice:", 0) == 0);
+  assert(c.pipboy.discoveryXP==10&&c.pipboy.discoveryRadius==1000);
+  const auto caveExit=ExteriorEntrance(c.pipboy,0x24512);assert(caveExit.world==0x3c);
   fo3player::Player p(c);
   assert(p.Snapshot().pipboy.quests.empty() &&
          p.Snapshot().pipboy.perks.empty());
@@ -414,8 +418,118 @@ static void Original(const char *path) {
             << " notes=" << d.notes.size() << " stations=" << d.stations.size()
             << " broadcast segments=" << segments << " stop=" << error << '\n';
 }
+static fo3player::Catalog LocationFixture(){
+  auto c=Fixture();c.rules.carryBase=100;c.pipboy.markers.clear();
+  auto& world=c.pipboy.worlds[4];world.nwX=-10;world.nwY=10;world.seX=10;world.seY=-10;world.width=world.height=2048;
+  c.cellOwnership[99].flags=0;c.cellOwnership[98].flags=1;c.cellOwnership[97].flags=5;c.cellOwnership[96].flags=4;
+  auto marker=[&](uint32_t id,float x,uint32_t world){auto& m=c.pipboy.markers[id];m.name="Source marker "+std::to_string(id);m.world=world;m.cell=99;m.x=x;m.type=10;};
+  marker(3,0,4);marker(5,10000,4);marker(6,0,7);marker(8,15000,4);marker(9,20000,4);marker(10,25000,4);
+  c.pipboy.markers[5].radius=50;c.pipboy.markers[8].mapFlags=3;c.pipboy.markers[9].mapFlags=4;c.pipboy.markers[10].flags=0x800;
+  c.pipboy.worlds[7]=world;c.pipboy.worlds[7].parent=4;c.pipboy.worlds[7].parentFlags=4;
+  c.pipboy.formNames["marker5"]=5;return c;
+}
+static void LocationDefinitionTests(){
+  // The catalog always sends GMST to Decode, independently of Relevant().
+  // GMST must remain in its original fingerprint/stat-rule classification.
+  assert(!Relevant("GMST"));Definitions d;
+  auto setting=[&](const std::string& name,uint32_t bits){
+    std::vector<uint8_t> bytes;
+    auto sub=[&](const char* tag,const std::vector<uint8_t>& data){bytes.insert(bytes.end(),tag,tag+4);bytes.push_back(uint8_t(data.size()));bytes.push_back(uint8_t(data.size()>>8));bytes.insert(bytes.end(),data.begin(),data.end());};
+    std::vector<uint8_t> text(name.begin(),name.end());text.push_back(0);sub("EDID",text);
+    sub("DATA",{uint8_t(bits),uint8_t(bits>>8),uint8_t(bits>>16),uint8_t(bits>>24)});
+    Decode(d,"GMST",123,0,bytes,0,0,0);
+  };
+  setting("iXPRewardDiscoverMapMarker",25);assert(d.discoveryXP==25);
+  setting("iMapMarkerRevealDistance",500);assert(d.discoveryRadius==500);
+  uint32_t bits;const float zoom=3;std::memcpy(&bits,&zoom,4);setting("fWorldMapMaxZoom",bits);assert(d.worldZoomMax==3);
+}
+static void LocationTests(){
+  auto c=LocationFixture();fo3player::Player p(c);auto& d=p.Definitions().pipboy;
+  assert(!p.TrackLocations(0,0,0,0)&&!p.TrackLocations(4,NAN,0,0));
+  assert(!p.TrackLocations(4,1001,0,0)); // Not an occupied-cell rectangle.
+  assert(!p.TrackLocations(4,0,0,1001)); // Original engine uses 3D distance.
+  assert(p.RevealMapMarker(3,false)&&!MarkerKnown(d.markers.at(3),3,p.Snapshot().pipboy));
+  assert(MarkerVisible(d.markers.at(3),3,p.Snapshot().pipboy));
+  assert(p.TrackLocations(4,999,0,0)==1&&p.Snapshot().experience==10);
+  assert(!p.Snapshot().pipboy.discovered.count(6)); // Shared parent map is not the physical world.
+  assert(!p.TrackLocations(4,0,0,0)&&p.Snapshot().experience==10);
+  uint32_t notice=0;fo3player::ExperienceNotice xp;
+  assert(p.PollLocationNotice(notice)&&notice==3&&!p.PollLocationNotice(notice));
+  assert(p.PollExperienceNotice(xp)&&xp.amount==10&&!p.PollExperienceNotice(xp));
+  assert(!p.TrackLocations(4,10051,0,0)&&p.TrackLocations(4,10049,0,0)==1);
+  assert(!p.TrackLocations(4,15000,0,0)); // Authored initially-travelable marker: no free XP.
+  assert(!p.TrackLocations(4,25000,0,0)); // Initially disabled.
+  std::string reason;assert(p.CanFastTravel(3,99,4,reason));
+  assert(!p.CanFastTravel(9,99,4,reason)&&reason.find("not discovered")!=reason.npos);
+  assert(!p.CanFastTravel(3,98,0,reason)&&p.CanFastTravel(3,97,0,reason));
+  assert(!p.CanFastTravel(3,96,4,reason)); // Authored inverse exterior restriction.
+  auto blockedCatalog=c;blockedCatalog.pipboy.worlds[4].flags=2;fo3player::Player blocked(blockedCatalog);
+  assert(blocked.Discover(3)&&!blocked.CanFastTravel(3,99,4,reason));
+  p.SetFastTravelEnabled(false);assert(!p.CanFastTravel(3,99,4,reason));
+  const float xpBefore=float(p.Snapshot().experience);
+  assert(p.TrackExteriorLocation({99,4,120,240,.5f}));
+  const auto file="/tmp/fq-location-"+std::to_string(getpid());std::string error;
+  assert(p.Save(file,error));fo3player::Player restored(c);assert(restored.Restore(file,error));std::remove(file.c_str());
+  assert(!restored.Snapshot().pipboy.fastTravelEnabled&&restored.Snapshot().pipboy.lastExterior.x==120);
+  assert(restored.Snapshot().pipboy.revealed.count(3)&&restored.Snapshot().pipboy.discovered.count(3));
+  assert(!restored.TrackLocations(4,0,0,0)&&float(restored.Snapshot().experience)==xpBefore);
+  assert(!restored.PollLocationNotice(notice)&&!restored.PollExperienceNotice(xp));
+  std::vector<uint8_t> saved;EncodeState(p.Snapshot().pipboy,saved);
+  size_t extension=saved.size();for(size_t at=0;at+4<=saved.size();++at)if(fo3esm::ReadU32(saved.data()+at)==0x4d415031)extension=at;
+  assert(extension<saved.size());SessionState legacy;assert(DecodeState(legacy,c.pipboy,saved.data(),extension,error));
+  assert(legacy.discovered.count(3)&&legacy.fastTravelEnabled&&legacy.revealed.empty());
+  assert(!DecodeState(legacy,c.pipboy,saved.data(),saved.size()-1,error)&&legacy.discovered.count(3));
+  fo3player::Player dev(c);const auto count=dev.DebugUnlockLocations();
+  assert(count==3&&dev.Snapshot().experience==0&&dev.Snapshot().pipboy.discovered.empty());
+  assert(!MarkerKnown(c.pipboy.markers.at(9),9,dev.Snapshot().pipboy));
+  assert(!MarkerKnown(c.pipboy.markers.at(10),10,dev.Snapshot().pipboy));
+  assert(!dev.PollLocationNotice(notice)&&!dev.PollExperienceNotice(xp));
+  assert(!dev.TrackLocations(4,0,0,0)&&dev.DebugUnlockLocations()==0);
+  const auto devRevision=dev.Revision();assert(dev.DebugUnlockLocations()==0&&dev.Revision()==devRevision);
+  auto rewardCatalog=c;rewardCatalog.pipboy.discoveryXP=25;fo3player::Player reward(rewardCatalog);
+  assert(reward.TrackLocations(4,0,0,0)==1&&reward.Snapshot().experience==25);
+  auto disabledCatalog=c;disabledCatalog.references[3].base=0x10;disabledCatalog.references[3].cell=99;
+  disabledCatalog.initial.referenceEnabled[3]=false;fo3player::Player disabled(disabledCatalog);
+  assert(!disabled.MapMarkerEnabled(3)&&!disabled.TrackLocations(4,0,0,0));
+  fo3player::Player script(c);ResultScript body;
+  body.source="ShowMap Marker5 0\nEnableFastTravel 0";
+  assert(script.ExecuteDialogueResult(body,error));
+  assert(script.Snapshot().pipboy.revealed.count(5)&&!MarkerKnown(c.pipboy.markers.at(5),5,script.Snapshot().pipboy));
+  assert(!script.Snapshot().pipboy.fastTravelEnabled&&script.Snapshot().experience==0);
+  body.source="ShowMap Marker5 1\nEnableFastTravel 1";assert(script.ExecuteDialogueResult(body,error));
+  assert(MarkerKnown(c.pipboy.markers.at(5),5,script.Snapshot().pipboy)&&script.Snapshot().pipboy.fastTravelEnabled);
+  assert(!script.TrackLocations(4,10000,0,0)&&!script.PollLocationNotice(notice));
+  auto candidate=script.PrepareDialogueTransaction(ResultScript{},ResultScript{},error);assert(candidate);
+  assert(script.CommitScriptTransaction(*candidate)&&script.RollbackScriptTransaction(*candidate));
+  // Game time changes only through an explicit successful travel commit hook.
+  const auto days=script.Snapshot().gameDaysPassed;const float hour=script.Snapshot().gameHour;
+  assert(!script.AdvanceGameHours(NAN)&&script.Snapshot().gameHour==hour);
+  assert(script.AdvanceGameHours(25.5)&&script.Snapshot().gameDaysPassed==days+1&&std::abs(script.Snapshot().gameHour-hour-1.5f)<.001f);
+}
+static void MapControlTests(){
+  auto c=LocationFixture();fo3player::Player p(c);assert(p.ExploreLocation(3));
+  fo3pip::Menu menu;menu.tab=fo3pip::Tab::Data;menu.page=1;menu.map.mapWorld=4;menu.map.location={99,4,0,0,0};
+  menu.map.centre=MapProject(c.pipboy,4,0,0);menu.inPage=true;menu.FocusMapMarker(p);assert(menu.selectedMarker==3);
+  menu.Zoom(1,10,c.pipboy);assert(menu.map.zoom==5);menu.Zoom(-1,10,c.pipboy);assert(menu.map.zoom==.75f);
+  menu.FocusMapMarker(p);assert(menu.selectedMarker==3);
+  assert(!menu.Invoke(fo3pip::Action::Accept,p)&&menu.travelPrompt&&!menu.travelRequest);
+  menu.Invoke(fo3pip::Action::Back,p);assert(!menu.travelPrompt&&menu.inPage);
+  menu.Invoke(fo3pip::Action::Accept,p);menu.Invoke(fo3pip::Action::Accept,p);assert(menu.travelRequest==3);
+  menu.travelRequest=0;menu.travelPrompt=false;
+  menu.Invoke(fo3pip::Action::Accept,p);p.SetFastTravelEnabled(false);menu.Invoke(fo3pip::Action::Accept,p);
+  assert(!menu.travelRequest&&!menu.travelPrompt&&!menu.actionError.empty());p.SetFastTravelEnabled(true);
+  menu.map.centre={.9f,.9f};menu.FocusMapMarker(p);assert(!menu.selectedMarker);
+  assert(menu.Invoke(fo3pip::Action::Accept,p)&&p.Snapshot().pipboy.waypoint.world==4);
+  // Original XTEL graph anchors an interior on the exterior world map.
+  auto defs=c.pipboy;Placement door;door.cell=98;door.teleportRef=77;defs.doors[98].push_back(door);
+  defs.targets[77].cell=99;defs.targets[77].world=4;defs.targets[77].x=123;
+  assert(ExteriorEntrance(defs,98).x==123&&ExteriorEntrance(defs,98).world==4);
+}
 int main(int argc, char **argv) {
   StateTests();
+  LocationDefinitionTests();
+  LocationTests();
+  MapControlTests();
   MapTests();
   AidTests();
   PackageDecodeTests();

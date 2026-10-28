@@ -70,7 +70,7 @@ int main(int argc,char** argv){
   assert(p.DebugSetPerkPoints(0)&&p.Save(path,error)&&restored.Restore(path,error)&&restored.Snapshot().debugPerkPoints==0);unlink(path.c_str());
   fo3debug::Menu m;m.Open(p);const auto rev=p.Revision();
   m.Go(fo3debug::Menu::Page::Debug);m.selected=6;
-  assert(m.perfHudMode==0&&m.panel.choices.size()==7);
+  assert(m.perfHudMode==0&&m.panel.choices.size()==8);
   assert(!m.Confirm()&&m.perfHudMode==1&&p.Revision()==rev);
   assert(!m.Confirm()&&m.perfHudMode==2&&p.Revision()==rev);
   assert(!m.Confirm()&&m.perfHudMode==0&&p.Revision()==rev);

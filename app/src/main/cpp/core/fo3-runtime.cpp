@@ -4974,6 +4974,10 @@ bool ProcessQ74TransitionRequest() {
     gFo3ReferenceState=prepared.referenceState;
     gFo3ScenePublication.Publish(prepared.referenceState);
     if (gPlayerSession) SetFo3CollectedCollisionRefs(gPlayerSession->player.Snapshot().collected);
+    if(request.travelHours>0&&gPlayerSession){
+        const bool advanced=gPlayerSession->player.AdvanceGameHours(request.travelHours);
+        Q6H_LOGI("FAST TRAVEL ARRIVED marker=%08X elapsedHours=%.3f clockAdvanced=%d",request.destinationDoorRef,request.travelHours,advanced);
+    }
     FlushFo3PlayerState();
     markFinalization("flush-player-state");
     Q74DeleteGpuObjects(gObjects);

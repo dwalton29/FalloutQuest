@@ -22,8 +22,8 @@ android {
         applicationId 'com.falloutquest.app'
         minSdk 29
         targetSdk 35
-        versionCode 264
-        versionName '0.116.0-responsive-physical-grips'
+        versionCode 265
+        versionName '0.117.0-locations-map-and-fast-travel'
 
         ndk {
             abiFilters 'arm64-v8a'

@@ -3,10 +3,6 @@
 #include <random>
 #include <functional>
 namespace fo3pipdata {
-struct Location {
-  uint32_t cell = 0, world = 0;
-  float x = 0, y = 0, facing = 0;
-};
 bool Enabled(const Definitions &, const Placement &);
 using EnabledReference=std::function<bool(uint32_t)>;
 bool InRange(const Definitions &, const Transmitter &, const Location &,const EnabledReference& enabled={});

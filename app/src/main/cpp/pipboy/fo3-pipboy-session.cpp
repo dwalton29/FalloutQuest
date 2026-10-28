@@ -108,6 +108,14 @@ void EncodeState(const SessionState &s, std::vector<uint8_t> &b) {
   Put(b,0x514e4631); // QNF1: optional notice history; no queued HUD events saved.
   Put(b,s.quests.size());
   for(auto id:Keys(s.quests)){Put(b,id);Put(b,s.quests.at(id).announced);}
+  Put(b,0x4d415031); // MAP1: optional; old saves retain known locations.
+  Put(b,s.fastTravelEnabled);
+  Put(b,s.lastExterior.cell);Put(b,s.lastExterior.world);
+  Put(b,Bits(s.lastExterior.x));Put(b,Bits(s.lastExterior.y));Put(b,Bits(s.lastExterior.facing));
+  for(const auto* set:{&s.revealed,&s.travelEnabled}){
+    std::vector<uint32_t> ids(set->begin(),set->end());std::sort(ids.begin(),ids.end());
+    Put(b,ids.size());for(auto id:ids)Put(b,id);
+  }
 }
 bool DecodeState(SessionState &out, const Definitions &d, const uint8_t *p,
                  size_t n, std::string &error) {
@@ -214,6 +222,17 @@ bool DecodeState(SessionState &out, const Definitions &d, const uint8_t *p,
     for(uint32_t i=0;i<count&&r.ok;++i){auto id=r.U(),flag=r.U();
       if(!s.quests.count(id)||flag>1||!seen.insert(id).second)return fail();
       s.quests.at(id).announced=flag!=0;
+    }
+  }
+  if(r.ok&&r.at<n){
+    if(r.U()!=0x4d415031)return fail();
+    const auto enabled=r.U();if(enabled>1)return fail();s.fastTravelEnabled=enabled!=0;
+    s.lastExterior={r.U(),r.U(),r.F(),r.F(),r.F()};
+    if(!std::isfinite(s.lastExterior.x)||!std::isfinite(s.lastExterior.y)||!std::isfinite(s.lastExterior.facing)||
+       (s.lastExterior.world&&!d.worlds.count(s.lastExterior.world)))return fail();
+    for(auto* set:{&s.revealed,&s.travelEnabled}){
+      const auto count=r.Count(10000);
+      for(uint32_t i=0;i<count&&r.ok;++i){const auto id=r.U();if(!d.markers.count(id)||!set->insert(id).second)return fail();}
     }
   }
   if (!r.ok || r.at != n ||

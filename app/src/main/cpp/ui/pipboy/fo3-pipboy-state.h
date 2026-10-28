@@ -116,7 +116,9 @@ struct Menu {
   size_t selected = 0;
   bool inPage = false, dirty = true;
   size_t textScroll = 0;
-  uint32_t playingNote = 0, selectedMarker = 0;
+  uint32_t playingNote = 0, selectedMarker = 0, travelRequest=0, travelMarker=0;
+  bool travelPrompt=false;
+  float worldZoom=1,localZoom=1;
   std::vector<uint32_t> stations;
   fo3pipdata::MapContext map;
   float localX = 0, localY = 0;
@@ -198,11 +200,31 @@ struct Menu {
     return true;
   }
   bool MapInteraction() const { return tab == Tab::Data && page < 2 && inPage; }
+  void FocusMapMarker(const fo3player::Player& p){
+    selectedMarker=0;if(tab!=Tab::Data||page!=1||!map.mapWorld)return;
+    const auto& d=p.Definitions().pipboy;const auto world=d.worlds.find(map.mapWorld);if(world==d.worlds.end())return;
+    const float aspect=std::max(.01f,float(world->second.width)/std::max(1,world->second.height));
+    float closest=32*32;
+    for(const auto& entry:d.markers){const auto& m=entry.second;
+      if(fo3pipdata::MapWorld(d,m.world)!=map.mapWorld||!p.MapMarkerEnabled(entry.first)||!fo3pipdata::MarkerVisible(m,entry.first,p.Snapshot().pipboy))continue;
+      const auto point=fo3pipdata::MapProject(d,m.world,m.x,m.y);
+      const float dx=(point.x-map.centre.x)*870*map.zoom,dy=(point.y-map.centre.y)*870*map.zoom/aspect,dist=dx*dx+dy*dy;
+      if(dist<closest||(dist==closest&&entry.first<selectedMarker)){closest=dist;selectedMarker=entry.first;}
+    }
+  }
+  void Zoom(float direction,float seconds,const fo3pipdata::Definitions& d){
+    if(!MapInteraction()||travelPrompt||std::fabs(direction)<.18f||!std::isfinite(direction)||!std::isfinite(seconds)||seconds<=0)return;
+    const float lo=page==1?d.worldZoomMin:1.f,hi=page==1?d.worldZoomMax:d.localZoomMax/d.localZoomMin;
+    if(!std::isfinite(lo)||!std::isfinite(hi)||lo<=0||hi<lo)return;
+    const float next=std::clamp(map.zoom*std::exp(direction*seconds*1.5f),lo,hi);
+    if(next!=map.zoom){map.zoom=next;(page==1?worldZoom:localZoom)=next;dirty=true;}
+  }
   void Pan(float x, float y, float seconds) {
-    if (!MapInteraction())
+    if (!MapInteraction()||travelPrompt)
       return;
     if (std::max(std::fabs(x), std::fabs(y)) < .18f)
       return;
+    actionError.clear();
     float dx = x * seconds * .35f / map.zoom,
           dy = -y * seconds * .35f / map.zoom;
     map.centre.x = std::clamp(map.centre.x + dx, 0.f, 1.f);
@@ -215,9 +237,9 @@ struct Menu {
     actionError.clear();
     if (a == Action::NextTab || a == Action::PreviousTab) {
       tab = Tab((int(tab) + (a == Action::NextTab ? 1 : 2)) % 3);
-      page = 0;
+      page = 0;map.zoom=localZoom;
       selected = 0;
-      inPage = false;
+      inPage = false;travelPrompt=false;travelMarker=0;
       textScroll = 0;
       RebuildRows(p);
     } else if (a == Action::NextPage || a == Action::PreviousPage) {
@@ -227,9 +249,10 @@ struct Menu {
         textScroll = 0;
         inPage = false;
         RebuildRows(p);
-        map.centre = map.player;
+        map.centre = map.player;map.zoom=page==1?worldZoom:localZoom;
       }
     } else if (a == Action::Back) {
+      if(travelPrompt){travelPrompt=false;travelMarker=0;return false;}
       inPage = false;
       textScroll = 0;
     } else if (a == Action::Up || a == Action::Down) {
@@ -258,20 +281,17 @@ struct Menu {
         if (!inPage)
           inPage = true;
         else if (page == 1 && map.mapWorld) {
-          auto w = p.Definitions().pipboy.worlds.find(map.mapWorld);
-          if (w != p.Definitions().pipboy.worlds.end()) {
-            auto v = w->second.Unproject(map.centre);
-            if (selectedMarker &&
-                p.Definitions().pipboy.markers.count(selectedMarker)) {
-              auto &m = p.Definitions().pipboy.markers.at(selectedMarker);
-              v = fo3pipdata::WorldPoint(p.Definitions().pipboy,m.world,m.x,m.y);
+          if(travelPrompt){
+            if(p.CanFastTravel(travelMarker,map.location.cell,map.location.world,actionError))travelRequest=travelMarker;
+            travelPrompt=false;travelMarker=0;
+          }else if(selectedMarker){
+            if(p.CanFastTravel(selectedMarker,map.location.cell,map.location.world,actionError)){travelPrompt=true;travelMarker=selectedMarker;}
+          }else{
+            auto w=p.Definitions().pipboy.worlds.find(map.mapWorld);
+            if(w!=p.Definitions().pipboy.worlds.end()){
+              const auto v=w->second.Unproject(map.centre);const auto old=p.Snapshot().pipboy.waypoint;
+              mutation=old.world==map.mapWorld&&std::hypot(old.point.x-v.x,old.point.y-v.y)<1?p.SetWaypoint(0,0,0):p.SetWaypoint(map.mapWorld,v.x,v.y);
             }
-            auto old = p.Snapshot().pipboy.waypoint;
-            mutation = old.world == map.mapWorld &&
-                               std::fabs(old.point.x - v.x) < 1 &&
-                               std::fabs(old.point.y - v.y) < 1
-                           ? p.SetWaypoint(0, 0, 0)
-                           : p.SetWaypoint(map.mapWorld, v.x, v.y);
           }
         }
       } else if (tab == Tab::Items && selected < rows.size()) {

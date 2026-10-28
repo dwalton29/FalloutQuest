@@ -131,9 +131,12 @@ bool CompileResult(const fo3pipdata::Definitions& d,const fo3pipdata::ResultScri
       cmd.type=op.find("remove")!=std::string::npos?CommandType::RemoveItem:CommandType::AddItem;cmd.value=1;
     } else if(op=="showmap") {
       if(!(in>>a)||!(cmd.form=form(a))||!d.markers.count(cmd.form)){error="invalid map marker";return false;}
-      cmd.type=CommandType::ShowMap;
-      if(in>>b){float travel;if(!number(b,travel)||(travel!=0&&travel!=1)){error="invalid map marker flag";return false;}}
+      cmd.type=CommandType::ShowMap;cmd.value=0;
+      if(in>>b){float travel;if(!number(b,travel)||(travel!=0&&travel!=1)){error="invalid map marker flag";return false;}cmd.value=travel;}
       else in.clear();
+    } else if(op=="enablefasttravel") {
+      if(!(in>>a)||!number(a,cmd.value)||(cmd.value!=0&&cmd.value!=1)){error="invalid EnableFastTravel flag";return false;}
+      cmd.type=CommandType::FastTravel;
     } else if(op=="forceterminalback") {
       cmd.type=CommandType::TerminalBack;cmd.form=owner;
     } else if(op=="setopenstate"||(op.size()>13&&op.compare(op.size()-13,13,".setopenstate")==0)) {

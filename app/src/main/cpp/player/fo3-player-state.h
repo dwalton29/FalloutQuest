@@ -402,6 +402,7 @@ public:
   uint64_t PackageRevision() const { return revision_ - actorPoseRevisions_; }
   // The caller owns pause/loading policy; this mutates only canonical game time.
   bool AdvanceGameClock(double realSeconds);
+  bool AdvanceGameHours(double hours);
   // Mutable engine GLOB values must not resolve through immutable ESM defaults.
   bool GlobalValue(uint32_t form,float& value) const;
   // Invalid requests are atomic no-ops. Removal respects quest/cannot-drop
@@ -514,7 +515,16 @@ public:
   bool SetObjective(uint32_t id,uint32_t index,bool displayed,fo3pipdata::Completion status);
   bool FinishQuest(uint32_t id,fo3pipdata::Completion status);
   bool SelectQuest(uint32_t id);
-  bool Discover(uint32_t id);
+  bool Discover(uint32_t id); // Legacy programmatic knowledge, no exploration reward.
+  bool ExploreLocation(uint32_t id);
+  size_t TrackLocations(uint32_t world,float x,float y,float z);
+  bool RevealMapMarker(uint32_t id,bool travel);
+  bool MapMarkerEnabled(uint32_t id) const;
+  bool PollLocationNotice(uint32_t& id);
+  bool TrackExteriorLocation(fo3pipdata::Location location);
+  size_t DebugUnlockLocations();
+  bool SetFastTravelEnabled(bool enabled);
+  bool CanFastTravel(uint32_t marker,uint32_t cell,uint32_t world,std::string& reason) const;
   bool SetWaypoint(uint32_t world,float x,float y);
   bool TuneRadio(uint32_t reference);
   bool CanUse(uint64_t stack,std::string* reason=nullptr) const;
@@ -670,6 +680,7 @@ private:
   std::vector<ScriptMessage> pendingScriptMessages_;
   std::vector<QuestNotice> pendingQuestNotices_;
   std::vector<ExperienceNotice> pendingExperienceNotices_;
+  std::vector<uint32_t> pendingLocationNotices_;
   std::vector<ScriptItemNotice> pendingScriptItems_;
   std::vector<uint32_t> pendingScriptSounds_,pendingTerminalBack_;
   std::vector<BarterRequest> pendingBarters_;

@@ -1,4 +1,5 @@
 #include "fo3-player-state.h"
+#include "pipboy/fo3-map-runtime.h"
 #include "player/fo3-levelup-rules.h"
 #include "data/fo3-esm-reader.h"
 #include "npc/fo3-package-schedule.h"
@@ -265,6 +266,85 @@ bool Player::Discover(uint32_t id) {
     return false;
   if (state_.pipboy.discovered.insert(id).second)
     ++revision_;
+  return true;
+}
+bool Player::MapMarkerEnabled(uint32_t id) const {
+  const auto m=catalog_->pipboy.markers.find(id);if(m==catalog_->pipboy.markers.end())return false;
+  if(catalog_->references.count(id)){bool disabled=true;std::string error;return ReferenceDisabled(id,disabled,error)&&!disabled;}
+  return fo3pipdata::Enabled(catalog_->pipboy,m->second);
+}
+bool Player::RevealMapMarker(uint32_t id,bool travel){
+  if(!catalog_->pipboy.markers.count(id))return false;
+  bool changed=state_.pipboy.revealed.insert(id).second;
+  if(travel)changed=state_.pipboy.travelEnabled.insert(id).second||changed;
+  if(changed)++revision_;
+  return true;
+}
+bool Player::ExploreLocation(uint32_t id){
+  const auto m=catalog_->pipboy.markers.find(id);
+  if(m==catalog_->pipboy.markers.end()||!MapMarkerEnabled(id)||m->second.name.empty()||
+     fo3pipdata::MarkerKnown(m->second,id,state_.pipboy)||pendingLocationNotices_.size()>=128)return false;
+  uint32_t earned=0;if(!PreviewExperienceAward(catalog_->pipboy.discoveryXP,earned))return false;
+  // Reward validation precedes either mutation; no duplicate location or XP on
+  // subsequent frames, restore, script reveal, or developer unlock.
+  if(!RewardExperience(catalog_->pipboy.discoveryXP))return false;
+  state_.pipboy.discovered.insert(id);pendingLocationNotices_.push_back(id);
+  ++revision_;++scriptEffectRevision_;return true;
+}
+size_t Player::TrackLocations(uint32_t world,float x,float y,float z){
+  if(!world||!std::isfinite(x)||!std::isfinite(y)||!std::isfinite(z))return 0;
+  std::vector<std::pair<double,uint32_t>> nearby;
+  for(const auto& entry:catalog_->pipboy.markers){const auto& m=entry.second;
+    if(m.world!=world||fo3pipdata::MarkerKnown(m,entry.first,state_.pipboy))continue;
+    const double dx=double(m.x)-x,dy=double(m.y)-y,dz=double(m.z)-z;
+    const double radius=m.radius>0?m.radius:catalog_->pipboy.discoveryRadius,distance=dx*dx+dy*dy+dz*dz;
+    if(distance<radius*radius)nearby.push_back({distance,entry.first});
+  }
+  std::sort(nearby.begin(),nearby.end());size_t count=0;
+  for(const auto& marker:nearby)if(ExploreLocation(marker.second))++count;
+  return count;
+}
+bool Player::PollLocationNotice(uint32_t& id){
+  if(pendingLocationNotices_.empty())return false;
+  id=pendingLocationNotices_.front();pendingLocationNotices_.erase(pendingLocationNotices_.begin());++scriptEffectRevision_;return true;
+}
+bool Player::TrackExteriorLocation(fo3pipdata::Location location){
+  if(!location.world||!catalog_->pipboy.worlds.count(location.world)||!std::isfinite(location.x)||!std::isfinite(location.y)||!std::isfinite(location.facing))return false;
+  const auto& old=state_.pipboy.lastExterior;
+  if(old.cell!=location.cell||old.world!=location.world||std::hypot(old.x-location.x,old.y-location.y)>1){
+    state_.pipboy.lastExterior=location;++revision_;
+  }
+  return true;
+}
+size_t Player::DebugUnlockLocations(){
+  size_t count=0;
+  for(const auto& entry:catalog_->pipboy.markers){const auto& m=entry.second;
+    // Matches ShowAllMapMarkers 1,1,1: skip Show All Hidden and disabled refs.
+    if((m.mapFlags&4)||m.name.empty()||!MapMarkerEnabled(entry.first))continue;
+    if(fo3pipdata::MarkerKnown(m,entry.first,state_.pipboy))continue;
+    if(RevealMapMarker(entry.first,true))++count;
+  }
+  return count;
+}
+bool Player::SetFastTravelEnabled(bool enabled){
+  if(state_.pipboy.fastTravelEnabled!=enabled){state_.pipboy.fastTravelEnabled=enabled;++revision_;}
+  return true;
+}
+bool Player::CanFastTravel(uint32_t marker,uint32_t cell,uint32_t world,std::string& reason) const {
+  reason.clear();auto reject=[&](const char* key){const auto s=catalog_->strings.find(key);reason=s==catalog_->strings.end()?fo3pipdata::TravelDenial(key):s->second;return false;};
+  if(!state_.pipboy.fastTravelEnabled)return reject("sNoFastTravelScriptBlock");
+  const auto m=catalog_->pipboy.markers.find(marker);
+  if(m==catalog_->pipboy.markers.end()||!fo3pipdata::MarkerKnown(m->second,marker,state_.pipboy))return reject("sNoFastTravelUndiscovered");
+  if(!MapMarkerEnabled(marker)||!m->second.world||!fo3pipdata::MapWorld(catalog_->pipboy,m->second.world))return reject("sNoFastTravelCell");
+  const auto c=catalog_->cellOwnership.find(cell);
+  if(c==catalog_->cellOwnership.end())return reject("sNoFastTravelCell");
+  // CELL invert flag reverses interior/exterior travel behavior; WRLD bit 1
+  // independently prevents travel, including small child worlds.
+  const bool interior=(c->second.flags&1)!=0,invert=(c->second.flags&4)!=0;
+  if(interior!=invert)return reject("sNoFastTravelCell");
+  if(world){const auto w=catalog_->pipboy.worlds.find(world);if(w==catalog_->pipboy.worlds.end()||(w->second.flags&2))return reject("sNoFastTravelCell");}
+  if(Health()<=0)return reject("sFastTravelNoTravelHealthDamage");
+  if(Overencumbered())return reject("sNoFastTravelOverencumbered");
   return true;
 }
 bool Player::SetWaypoint(uint32_t world, float x, float y) {

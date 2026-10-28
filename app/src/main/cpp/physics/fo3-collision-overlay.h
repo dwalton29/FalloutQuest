@@ -149,3 +149,6 @@ void ShutdownFo3CollisionOverlay();
 
 // Authored controller deltas keyed by collision target AVObject block.
 bool SetFo3ScriptCollisionPose(uint32_t,const Fo3DoorCollisionPose&);
+
+// Read-only canonical support state for fast-travel admission.
+bool IsFo3PlayerGrounded();

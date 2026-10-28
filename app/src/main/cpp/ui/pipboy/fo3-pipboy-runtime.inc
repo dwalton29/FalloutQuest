@@ -1,8 +1,49 @@
 // Physical Pip-Boy activation and session integration. Included after the
 // authored body mount; never called from an eye renderer.
+bool gMapTakingDamage=false;
+float gMapPreviousDamage=-1;
+const void* gMapDamageOwner=nullptr;
+bool RequestFo3MapTravel(uint32_t marker,double now){
+  auto* session=GetFo3PlayerSession();if(!session)return false;
+  auto& player=session->player;const auto& d=player.Definitions().pipboy;
+  auto reject=[&](const char* key){const auto text=player.Definitions().strings.find(key);gPipMenu.actionError=text==player.Definitions().strings.end()?fo3pipdata::TravelDenial(key):text->second;gPipMenu.dirty=true;return false;};
+  if(session->saveBlocked||!gSceneReady||IsFo3LoadingVisible()||gSceneLoad.active||
+     HasPendingFo3CellTransitionRequestQ74()||Fo3ResidentFrameBlocked())return reject("sNoFastTravelCell");
+  if(!player.CanFastTravel(marker,gCurrentCellFormId,gExteriorWorldspaceQ1890,gPipMenu.actionError))return false;
+  if(gMapTakingDamage)return reject("sFastTravelNoTravelHealthDamage");
+  if(!IsFo3PlayerGrounded())return reject("sNoFastTravelInAir");
+  const float nearDistance=gExteriorWorldspaceQ1890?d.hostileExteriorDistance:d.hostileInteriorDistance;
+  for(const auto& actor:gQ230NpcActors){
+    if(actor.runtime.offScene||!actor.runtime.Alive()||player.ActorHealth(actor.source.refFormId)<=0)continue;
+    if(actor.runtime.activity==fo3npc::Activity::Combat&&actor.runtime.combatTarget==fo3player::PlayerRef)return reject("sNoFastTravelCombat");
+    const auto ai=fo3npc::AI(d,actor.source.baseFormId);
+    const auto saved=player.Snapshot().actors.find(actor.source.refFormId);
+    const bool hostile=(saved!=player.Snapshot().actors.end()&&saved->second.hostile==fo3player::PlayerRef)||
+      fo3npc::Acquires(ai,fo3npc::Relationship(player.Definitions(),actor.source.baseFormId,fo3player::PlayerBase));
+    const auto& pos=actor.runtime.position;
+    const float distance=Q211Length({pos[0]-gQ210Head[0],pos[1]-gQ210Head[1],pos[2]-gQ210Head[2]})*FO3_UNITS_PER_METRE;
+    if(hostile&&distance<nearDistance)return reject("sNoFastTravelHostileActorsNear");
+  }
+  (void)now;
+  const auto& destination=d.markers.at(marker);
+  const auto origin=gPipMenu.map.location.world?gPipMenu.map.location:gPipMenu.map.exterior;
+  // VR fallback for the unavailable original long-distance path-length service:
+  // authored map coordinates + walk speed/time scale, using direct distance.
+  const auto from=fo3pipdata::WorldPoint(d,origin.world,origin.x,origin.y);
+  const auto to=fo3pipdata::WorldPoint(d,destination.world,destination.x,destination.y);
+  const double hours=std::hypot(double(to.x)-from.x,double(to.y)-from.y)/d.travelWalkSpeed*player.Definitions().gameTimeScale/3600.;
+  if(!QueueFo3MapMarkerTransitionQ74(marker,destination.x,destination.y,destination.z,
+      destination.rx,destination.ry,destination.rz,hours))return reject("sNoFastTravelCell");
+  fo3audio::NamedSound("UIPipBoyAccessDown");
+  gPipActivation.Reset();gPipMenu.inPage=false;gPipMenu.dirty=true;
+  // Input keeps its A latch across loading; confirming cannot activate a world
+  // object on arrival. No clock/save mutation occurs before scene publication.
+  Q6H_LOGI("FAST TRAVEL QUEUED marker=%08X name=%s hours=%.3f",marker,destination.name.c_str(),hours);
+  return true;
+}
 void UpdateFo3Pipboy(uint64_t frame, double now, const float *headPose,
                      bool available, float x, float y, bool a, bool b,
-                     float grip) {
+                     float grip,float zoomTrigger) {
   if (!gPipMenu.BeginFrame(frame))
     return;
   const auto started = fqopaque::Clock::now();
@@ -108,6 +149,9 @@ void UpdateFo3Pipboy(uint64_t frame, double now, const float *headPose,
     }
   }
   if (session) {
+    const float damage=session->player.Snapshot().healthDamage;
+    gMapTakingDamage=gMapDamageOwner==session&&gMapPreviousDamage>=0&&damage>gMapPreviousDamage;
+    gMapDamageOwner=session;gMapPreviousDamage=damage;
     static double lastContext = 0, lastPan = 0;
     static uint32_t lastRadio = UINT32_MAX, lastNote = 0, lastMapCell = 0;
     static uint64_t lastMapGeneration = UINT64_MAX,
@@ -120,14 +164,20 @@ void UpdateFo3Pipboy(uint64_t frame, double now, const float *headPose,
                         (SCENE_FORWARD - headPose[14]) * FO3_UNITS_PER_METRE;
     auto &defs = session->player.Definitions().pipboy;
     const uint32_t world =
-        gExteriorStreamingActiveQ1890 ? gExteriorWorldspaceQ1890 : 0;
+        gExteriorWorldspaceQ1890;
     if (now - lastContext > .5) {
       lastContext = now;
       auto previous = gPipMenu.map.location;
       gPipMenu.map.location = {gCurrentCellFormId, world, gameX, gameY,
                                std::atan2(-headPose[8], headPose[10])};
-      if (world)
-        gPipMenu.map.exterior = gPipMenu.map.location;
+      if(world){
+        gPipMenu.map.exterior=gPipMenu.map.location;
+        if(gSceneReady&&!IsFo3LoadingVisible()&&!session->saveBlocked)session->player.TrackExteriorLocation(gPipMenu.map.location);
+      }else{
+        const auto entrance=fo3pipdata::ExteriorEntrance(defs,gCurrentCellFormId,gameX,gameY);
+        const auto saved=session->player.Snapshot().pipboy.lastExterior;
+        gPipMenu.map.exterior=entrance.world?entrance:saved;
+      }
       auto radioLocation = gPipMenu.map.location;
       if (!world && gPipMenu.map.exterior.world) {
         radioLocation.world = gPipMenu.map.exterior.world;
@@ -140,24 +190,10 @@ void UpdateFo3Pipboy(uint64_t frame, double now, const float *headPose,
         gPipMenu.RebuildRows(session->player);
         gPipMenu.dirty = true;
       }
-      // Exact discovery radius is not present in supplied GMSTs. VR runtime
-      // adaptation: discover enabled markers in the occupied authored 4096-unit
-      // exterior CELL; never auto-discover the entire world.
-      if (world) {
-        for (auto &m : defs.markers)
-          if (fo3pipdata::MapWorld(defs, m.second.world) ==
-                  fo3pipdata::MapWorld(defs, world) &&
-              fo3pipdata::Enabled(defs, m.second) &&
-              int(std::floor(m.second.x / 4096)) ==
-                  int(std::floor(gameX / 4096)) &&
-              int(std::floor(m.second.y / 4096)) ==
-                  int(std::floor(gameY / 4096)) &&
-              !session->player.Snapshot().pipboy.discovered.count(m.first)) {
-            session->player.Discover(m.first);
-            Q6H_LOGI("PIPBOY MAP discovered=%08X name=%s", m.first,
-                    m.second.name.c_str());
-            FlushFo3PlayerState();
-          }
+      if(world&&gSceneReady&&!IsFo3LoadingVisible()&&gVrHeadTracking.valid&&!session->saveBlocked){
+        const float gameZ=gSceneFloorZQ1730+(headPose[13]-FLOOR_Y)*FO3_UNITS_PER_METRE;
+        const auto count=session->player.TrackLocations(world,gameX,gameY,gameZ);
+        if(count){Q6H_LOGI("LOCATIONS DISCOVERED count=%zu authoredXP=%u",count,defs.discoveryXP);FlushFo3PlayerState();}
       }
       if (Fo3PipboyFocus() && gPipMenu.tab == fo3pip::Tab::Data &&
           gPipMenu.page < 2 &&
@@ -205,9 +241,14 @@ void UpdateFo3Pipboy(uint64_t frame, double now, const float *headPose,
         gPipMenu.map.player = fo3pipdata::MapProject(defs, exterior.world,
                                                      exterior.x, exterior.y);
       }
+      const bool playerKnown=gPipMenu.page==0?bool(gPipMenu.map.local):mapWorld!=0;
+      if(playerKnown!=gPipMenu.map.playerKnown){gPipMenu.map.playerKnown=playerKnown;gPipMenu.dirty=true;}
       if (!gPipMenu.MapInteraction())
         gPipMenu.map.centre = gPipMenu.map.player;
-      gPipMenu.Pan(x, y, float(std::clamp(now - lastPan, 0.0, .05)));
+      const float seconds=float(std::clamp(now-lastPan,0.0,.05));
+      if(zoomTrigger>.65f)gPipMenu.Zoom(y,seconds,defs);
+      else gPipMenu.Pan(x,y,seconds);
+      gPipMenu.FocusMapMarker(session->player);
     }
     lastPan = now;
     gPipMenu.Refresh(session->player);
@@ -233,6 +274,7 @@ void UpdateFo3Pipboy(uint64_t frame, double now, const float *headPose,
                                    ? "UIPipBoyTab"
                                    : "UIPipBoyHighlight");
         });
+    if(gPipMenu.travelRequest){const auto marker=gPipMenu.travelRequest;gPipMenu.travelRequest=0;RequestFo3MapTravel(marker,now);}
     auto tuned = session->player.Snapshot().pipboy.tunedRadio;
     if (tuned) {
       auto radioLocation = gPipMenu.map.location;

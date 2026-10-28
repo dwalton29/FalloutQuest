@@ -12,6 +12,27 @@ class Pipboy(unittest.TestCase):
         self.assertEqual(frame.count('UpdateFo3Pipboy('),1)
         self.assertIn('Fo3PipboyFocus()?0:lootScrollY_',loop)
         self.assertIn('gPipActivation.phase==fo3pip::Phase::Candidate',loop)
+    def test_location_and_travel_publication_boundaries(self):
+        runtime=(ROOT/'ui/pipboy/fo3-pipboy-runtime.inc').read_text()
+        self.assertIn('TrackLocations(world,gameX,gameY,gameZ)',runtime)
+        self.assertIn('!IsFo3LoadingVisible()&&gVrHeadTracking.valid&&!session->saveBlocked',runtime)
+        self.assertNotIn('floor(m.second.x / 4096)',runtime)
+        request=runtime.split('bool RequestFo3MapTravel(',1)[1].split('void UpdateFo3Pipboy(',1)[0]
+        self.assertIn('player.CanFastTravel(',request)
+        self.assertIn('IsFo3PlayerGrounded()',request)
+        self.assertIn('fo3npc::Activity::Combat',request)
+        self.assertIn('sNoFastTravelHostileActorsNear',request)
+        self.assertNotIn('AdvanceGameHours',request)
+        self.assertNotIn('ResetFo3Pipboy()',request) # A latch survives confirmation/loading.
+        core=(ROOT/'core/fo3-runtime.cpp').read_text()
+        commit=core.split('if (prepared.playerSession) {',1)[1].split('markFinalization("flush-player-state")',1)[0]
+        self.assertLess(commit.index('AdvanceGameHours(request.travelHours)'),commit.index('FlushFo3PlayerState()'))
+        abort=core.split('void AbortFo3SceneLoad(const char* reason) {',1)[1].split('bool BeginFo3SceneLoad(',1)[0]
+        self.assertNotIn('AdvanceGameHours',abort)
+        menu=(ROOT/'ui/pipboy/fo3-pipboy-data-pages.h').read_text()
+        self.assertNotIn('menu.selectedMarker =',menu) # Selection is gameplay input state, not rendering.
+        self.assertIn('menu.travelPrompt',menu)
+
     def test_authoritative_solved_mount(self):
         core=(ROOT/'core/fo3-runtime.cpp').read_text()
         self.assertIn('UpdateFo3PipboyMount(q213LeftPose);',core)

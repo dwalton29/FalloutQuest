@@ -50,6 +50,7 @@ public:
       case Page::Debug:
         for(const char* s:{"Set Time","Add XP / Level","Add Items","Perk Points","Chosen Perks","SPECIAL Allocations"}) {add(s);}
         add(std::string("Performance HUD: ")+(perfHudMode==0?"Off":perfHudMode==1?"FPS":"Detailed"));
+        add("Unlock all map locations");
         break;
       case Page::Time:panel.title="SET TIME";
         panel.subtitle="Current Time: "+Time(state.gameHour)+"\nSelected Time: "+Time(float(hour)+float(minute)/60)+"\n"+feedback;
@@ -122,6 +123,7 @@ public:
         else if(index==3){points=p.Snapshot().debugPerkPoints;Go(Page::Points);}
         else if(index==4){BuildPerks();Go(Page::Perks);}
         else if(index==5){special=p.Snapshot().special;Go(Page::Special);}
+        else if(index==7){const auto n=p.DebugUnlockLocations();changed=n!=0;feedback=std::to_string(n)+" locations unlocked";Refresh();}
         else if(index==6){perfHudMode=uint8_t((perfHudMode+1u)%3u);Refresh();}
         break;
       case Page::Time:if(index==2){changed=p.DebugSetTime(hour,minute);Feedback(changed,"Time applied");}else Adjust(1);break;

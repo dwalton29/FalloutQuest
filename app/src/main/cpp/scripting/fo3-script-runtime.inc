@@ -388,7 +388,8 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
     case C::RemoveItem:ok=ScriptRemoveItem(c.form,int32_t(c.value));break;
     case C::DoorState:ok=ScriptDoorState(c.form,c.value!=0);break;
     case C::TerminalBack:ok=QueueTerminalBack(c.form);break;
-    case C::ShowMap:ok=Discover(c.form);break;
+    case C::ShowMap:ok=RevealMapMarker(c.form,c.value!=0);break;
+    case C::FastTravel:ok=SetFastTravelEnabled(c.value!=0);break;
     case C::SetQuestObject:ok=SetQuestObject(c.form,c.value!=0);break;
     case C::Lock:ok=ScriptLock(c.form,int(c.value));break;
     case C::Unlock:ok=ScriptUnlock(c.form);break;

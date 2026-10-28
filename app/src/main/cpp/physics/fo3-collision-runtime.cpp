@@ -2836,6 +2836,7 @@ namespace {
 float gFallVelocity=0;
 bool gFallGrounded=true;
 }
+bool IsFo3PlayerGrounded(){return gPlayerCollisionReady&&gSafeSpawnResolved&&gFallGrounded;}
 bool ResolveFo3PlayerMotionWithGravity(float currentX,float currentZ,float desiredX,float desiredZ,
     float currentY,float seconds,float* outX,float* outZ,float* outY) {
     if(!outX||!outZ||!outY)return false;

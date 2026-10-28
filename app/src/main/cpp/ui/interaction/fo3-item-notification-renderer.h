@@ -5,10 +5,12 @@
 #include <unordered_map>
 
 namespace fo3notifyui {
+struct IconArt {GLuint texture=0;bool owned=false,atlas=false;fo3hudassets::TaiSprite sprite;};
 struct Resources {
     GLuint vao=0,vbo=0,iconTexture=0,program=0;
     GLint mvp=-1,tint=-1,tex=-1,age=-1;
-    std::unordered_map<std::string,GLuint> icons;
+    std::unordered_map<std::string,IconArt> icons;
+    fo3hudassets::TaiSprite iconSprite;bool iconAtlas=false;
     GLsizei iconFirst=0;
     GLsizei count=0;
     uint64_t revision=UINT64_MAX;
@@ -52,7 +54,7 @@ inline void Shutdown() {
     if(r.vao)glDeleteVertexArrays(1,&r.vao);
     if(r.vbo)glDeleteBuffers(1,&r.vbo);
     if(r.program)glDeleteProgram(r.program);
-    for(const auto& icon:r.icons)if(icon.second)glDeleteTextures(1,&icon.second);
+    for(const auto& icon:r.icons)if(icon.second.owned&&icon.second.texture)glDeleteTextures(1,&icon.second.texture);
     r={};fo3notify::Notifications().Clear();
 }
 // Once per logical frame, outside stereo eyes. Existing font assets are warmed
@@ -77,13 +79,22 @@ inline void Prepare(double now,bool available,bool sceneReady) {
     if(!queue.Icon().empty()){
         auto found=r.icons.find(queue.Icon());
         if(found==r.icons.end()){
-            Fo3RgbaTexture texture;GLuint handle=0;
-            if(LoadFalloutTextureRgba(queue.Icon(),texture))handle=fo3hudassets::UploadTexture(texture.width,texture.height,texture.rgba.data());
-            found=r.icons.emplace(queue.Icon(),handle).first;
-            if(!handle)__android_log_print(ANDROID_LOG_WARN,"FalloutQuest","KARMA HUD missing original icon: %s",queue.Icon().c_str());
+            Fo3RgbaTexture texture;IconArt art;
+            if(LoadFalloutTextureRgba(queue.Icon(),texture)){art.texture=fo3hudassets::UploadTexture(texture.width,texture.height,texture.rgba.data());art.owned=true;}
+            else {
+                const auto slash=queue.Icon().find_last_of("/\\");const auto alias=queue.Icon().substr(slash==std::string::npos?0:slash+1);
+                if(fo3hudassets::ParseButtonTai(art.sprite,alias.c_str())){
+                    art.atlas=true;
+                    if(art.sprite.atlasPath==font.button.atlasPath)art.texture=font.interfaceTexture;
+                    else if(LoadFalloutTextureRgba(art.sprite.atlasPath,texture)){art.texture=fo3hudassets::UploadTexture(texture.width,texture.height,texture.rgba.data());art.owned=true;}
+                }
+            }
+            found=r.icons.emplace(queue.Icon(),art).first;
+            if(!art.texture)__android_log_print(ANDROID_LOG_WARN,"FalloutQuest","HUD missing original icon: %s",queue.Icon().c_str());
         }
-        r.iconTexture=found->second;
+        r.iconTexture=found->second.texture;r.iconSprite=found->second.sprite;r.iconAtlas=found->second.atlas;
     }
+
     const std::string_view text(queue.Text());
     if(text.empty())return;
     std::vector<fo3hudassets::Vertex> vertices;vertices.reserve(text.size()*6);
@@ -111,7 +122,10 @@ inline void Prepare(double now,bool available,bool sceneReady) {
         begin+=n;while(begin<text.size() && (text[begin]==' '||text[begin]=='\n'))++begin;++line;
     }
     r.count=static_cast<GLsizei>(vertices.size());r.iconFirst=r.count;
-    if(r.iconTexture)fo3hudrenderer::AppendPromptQuad(vertices,.22f,.43f,.29f,.36f,-2.f,0,0,1,0,0,1,1,1);
+    if(r.iconTexture){const auto& sprite=r.iconSprite;
+        const float u0=r.iconAtlas?sprite.u:0,v0=r.iconAtlas?sprite.v:0,u1=r.iconAtlas?sprite.u+sprite.w:1,v1=r.iconAtlas?sprite.v+sprite.h:1;
+        fo3hudrenderer::AppendPromptQuad(vertices,.22f,.43f,.29f,.36f,-2.f,u0,v0,u1,v0,u0,v1,u1,v1);
+    }
     std::vector<AnimatedVertex> animated;animated.reserve(vertices.size());
     for(size_t i=0;i<vertices.size();++i)animated.push_back({vertices[i],quest?float(i/6)*.1f:0.f});
     glBindVertexArray(r.vao);glBindBuffer(GL_ARRAY_BUFFER,r.vbo);

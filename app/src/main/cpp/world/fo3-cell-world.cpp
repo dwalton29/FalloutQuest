@@ -690,6 +690,16 @@ bool QueueFo3DoorTransitionQ1700(uint32_t sourceDoorRef,
     return true;
 }
 
+bool QueueFo3MapMarkerTransitionQ74(uint32_t marker,float x,float y,float z,
+                                   float rx,float ry,float rz,double travelHours){
+    if(!std::isfinite(travelHours)||travelHours<0||travelHours>24*365||
+       !std::isfinite(x)||!std::isfinite(y)||!std::isfinite(z)||
+       !std::isfinite(rx)||!std::isfinite(ry)||!std::isfinite(rz))return false;
+    if(!QueueFo3DoorTransitionQ1700(0,marker,x,y,z,rx,ry,rz))return false;
+    gPendingTransitionQ74.travelHours=travelHours;
+    return true;
+}
+
 namespace Q1840Prompt {
 
 struct GroupFrame {

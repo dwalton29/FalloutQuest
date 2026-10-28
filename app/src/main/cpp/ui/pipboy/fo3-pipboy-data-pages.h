@@ -199,40 +199,33 @@ inline void MapPage(fo3pip::Menu &menu, const fo3player::Player &p) {
     Draw(texture);
   }
   auto player = screen(map.player);
-  if (inside(player))
+  if (map.playerKnown&&inside(player))
     Icon("Interface\\Icons\\Misc\\glow_cursor.dds", player.x, player.y, 28,
          map.location.facing);
-  menu.selectedMarker = 0;
+
   if (menu.page == 1 && map.mapWorld) {
     auto &world = d.worlds.at(map.mapWorld);
-    float closest = .04f;
     std::string selected;
+    if(menu.selectedMarker&&d.markers.count(menu.selectedMarker))selected=d.markers.at(menu.selectedMarker).name;
     for (auto &m : d.markers) {
       if (fo3pipdata::MapWorld(d, m.second.world) != map.mapWorld ||
-          !fo3pipdata::Enabled(d, m.second) ||
-          (!(m.second.mapFlags & 1) && !s.discovered.count(m.first)))
+          !p.MapMarkerEnabled(m.first) ||
+          !fo3pipdata::MarkerVisible(m.second,m.first,s))
         continue;
       auto point =
           fo3pipdata::MapProject(d, m.second.world, m.second.x, m.second.y);
       auto pos = screen(point);
       if (inside(pos))
         Icon(std::string("Interface\\Icons\\World Map\\") +
-                 MarkerIcon(s.discovered.count(m.first) ? m.second.type : 0),
-             pos.x, pos.y, 30);
-      float dist = std::hypot(point.x - map.centre.x, point.y - map.centre.y);
-      if (dist < closest) {
-        closest = dist;
-        selected = m.second.name;
-        menu.selectedMarker = m.first;
-      }
+                 MarkerIcon(fo3pipdata::MarkerKnown(m.second,m.first,s) ? m.second.type : 0),
+             pos.x, pos.y, menu.selectedMarker==m.first?52.5f:30.f);
     }
     if (s.waypoint.world == map.mapWorld) {
       auto pos = screen(world.Project(s.waypoint.point.x, s.waypoint.point.y));
       if (inside(pos))
         Icon("Interface\\Worldmap\\waypoint_node.dds", pos.x, pos.y, 30);
     }
-    if (!selected.empty())
-      Text(selected, 90, 590, 0, 810);
+    if (!selected.empty()&&menu.actionError.empty()){Text(selected,90,590,0,810);Draw(r.fontTexture[0]);}
     for (auto target : fo3pipdata::QuestTargets(d, s)) {
       auto &t = d.targets.at(target);
       if (fo3pipdata::MapWorld(d, t.world) != map.mapWorld)
@@ -261,6 +254,15 @@ inline void MapPage(fo3pip::Menu &menu, const fo3player::Player &p) {
   if (menu.MapInteraction())
     Icon("Interface\\Shared\\Marker\\glow_square_small.dds", left + w * .5f,
          top + h * .5f, 25);
+  if(menu.travelPrompt){
+    Draw(r.fontTexture[0]);Quad(95,235,830,245);Draw(r.white,.95f,false,true);
+    const auto question=p.Definitions().strings.find("sTravelQuestion");
+    Text(question==p.Definitions().strings.end()?"Do you want to travel to":question->second,130,270,0,760);
+    if(d.markers.count(menu.travelMarker))Text(d.markers.at(menu.travelMarker).name+"?",130,330,0,760);
+    const auto yes=p.Definitions().strings.find("sYes"),no=p.Definitions().strings.find("sNo");
+    Text("A  "+(yes==p.Definitions().strings.end()?std::string("Yes"):yes->second)+"       B  "+(no==p.Definitions().strings.end()?std::string("No"):no->second),130,405,0,760);
+  }else if(!menu.actionError.empty())Text(menu.actionError,90,590,0,830);
+  Text(menu.MapInteraction()?"Stick: Pan   Hold right trigger + stick: Zoom":"A: Map controls",90,615,0,830);
   Draw(r.fontTexture[0]);
 }
 inline void DataPage(fo3pip::Menu &menu, const fo3player::Player &p) {

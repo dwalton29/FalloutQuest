@@ -1928,7 +1928,7 @@ private:
                         q210RightValid&&!Fo3LevelUpFocus()?turnX_:0,
                         q210RightValid&&!Fo3LevelUpFocus()?lootScrollY_:0,
                         q210RightValid&&!Fo3LevelUpFocus()&&activateDownQ1700_,
-                        q210RightValid&&!Fo3LevelUpFocus()&&pipBackDown_,fingerGripValue_[0]);
+                        q210RightValid&&!Fo3LevelUpFocus()&&pipBackDown_,fingerGripValue_[0],fingerTriggerValue_[1]);
                     const bool terminalControls=Fo3TerminalFocus();
                     UpdateFo3Terminal(gameplaySeconds,q210RightValid?turnX_:0,q210RightValid?lootScrollY_:0,
                         activateDownQ1700_,pipBackDown_,sessionState_==XR_SESSION_STATE_FOCUSED&&q210RightValid,

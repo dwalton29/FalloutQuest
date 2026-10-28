@@ -158,14 +158,14 @@ inline void Quad(float x, float y, float w, float h, float u0 = 0, float v0 = 0,
                      {x + w, y, 0, u1, v0},
                      {x + w, y + h, 0, u1, v1}});
 }
-inline void Draw(GLuint texture, float alpha = 1, bool untinted = false) {
+inline void Draw(GLuint texture, float alpha = 1, bool untinted = false, bool dark = false) {
   auto &r = State();
   if (r.vertices.empty() || !texture) {
     r.vertices.clear();
     return;
   }
   glBindTexture(GL_TEXTURE_2D, texture);
-  glUniform4f(r.tint, untinted ? 1 : 26.f / 255, 1, untinted ? 1 : 128.f / 255,
+  glUniform4f(r.tint, dark?0:untinted ? 1 : 26.f / 255, dark?0:1, dark?0:untinted ? 1 : 128.f / 255,
               alpha);
   glBufferSubData(GL_ARRAY_BUFFER, 0,
                   r.vertices.size() * sizeof(fo3hudassets::Vertex),
@@ -394,7 +394,9 @@ inline void Render(fo3pip::Menu &menu, const fo3player::Player &p, bool focus) {
     }
     Draw(r.buttonAtlas);
   }
-  Text("Select", 120, 712);
+  const bool travel=menu.tab==fo3pip::Tab::Data&&menu.page==1&&menu.inPage&&menu.selectedMarker;
+  const auto label=p.Definitions().strings.find(menu.travelPrompt?"sYes":travel?"sTravel":"sSelect");
+  Text(label==p.Definitions().strings.end()?(menu.travelPrompt?"Yes":travel?"Travel":"Select"):label->second,120,712);
   Text("Back", 495, 712);
   Text("STATS   ITEMS   DATA", 615, 712, 0, 355);
   Draw(r.fontTexture[0]);

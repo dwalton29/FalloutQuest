@@ -728,8 +728,11 @@ bool Player::AdvanceGameClock(double realSeconds) {
   if (!std::isfinite(realSeconds) || realSeconds <= 0.0 || realSeconds > 1.0 ||
       !std::isfinite(catalog_->gameTimeScale) || catalog_->gameTimeScale <= 0.0f)
     return false;
-  const double total = double(state_.gameHour) +
-      realSeconds * double(catalog_->gameTimeScale) / 3600.0;
+  return AdvanceGameHours(realSeconds * double(catalog_->gameTimeScale) / 3600.0);
+}
+bool Player::AdvanceGameHours(double hours) {
+  if(!std::isfinite(hours)||hours<=0||hours>24*365||state_.gameYear>9998)return false;
+  const double total=double(state_.gameHour)+hours;
   if (!std::isfinite(total)) return false;
   const uint32_t days = static_cast<uint32_t>(std::floor(total / 24.0));
   if (days > UINT32_MAX - state_.gameDaysPassed) return false;
@@ -1784,7 +1787,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
     return fail("Legacy weapon inventory exceeds instance limits");
   state_ = std::move(next);
   pendingKarmaEvents_.clear();pendingTheftEvents_.clear();pendingQuestNotices_.clear();pendingScriptItems_.clear();
-  pendingExperienceNotices_.clear();
+  pendingExperienceNotices_.clear();pendingLocationNotices_.clear();
   pendingScriptActions_.clear();scriptAnimations_.clear();scriptInsideTriggers_.clear();++scriptRuntimeGeneration_;
   pendingScriptMessages_.clear();pendingScriptSounds_.clear();pendingBarters_.clear();scriptButtons_.clear();EndContainerInteraction();
   ++revision_;

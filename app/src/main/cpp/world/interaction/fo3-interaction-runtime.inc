@@ -224,6 +224,14 @@ void UpdateFo3ScriptMessage(double now,float scroll,bool pressA,bool pressB,bool
 }
 void DeliverFo3ScriptSounds(){
     if(!gPlayerSession||Fo3ResidentFrameBlocked())return;
+    uint32_t location=0;
+    while(gPlayerSession->player.PollLocationNotice(location)){
+      const auto& definitions=gPlayerSession->player.Definitions();const auto m=definitions.pipboy.markers.find(location);
+      if(m==definitions.pipboy.markers.end())continue;
+      const auto heading=definitions.strings.find("sDiscoveredText");
+      fo3notify::Notifications().Enqueue((heading==definitions.strings.end()?std::string("You have discovered"):heading->second)+" "+m->second.name,
+          "Interface\\Icons\\Message Icons\\glow_message_map.dds");
+    }
     fo3player::QuestNotice notice;
     auto& player=gPlayerSession->player;
     while(player.PollQuestNotice(notice)) {

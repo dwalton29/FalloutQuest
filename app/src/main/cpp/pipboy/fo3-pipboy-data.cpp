@@ -91,7 +91,22 @@ void Decode(Definitions &d, const std::string &t, uint32_t id, uint32_t flags,
                          });
   const auto editor=Text(s,"EDID");
   if(!editor.empty()) { auto key=editor; for(auto& c:key)c=char(std::tolower((unsigned char)c));d.formNames[key]=id; }
-  if(t=="AVIF"){
+  if(t=="GMST"){
+    const auto v=Find(s,"DATA");if(!v||v->n!=4)return;
+    const float value=editor.empty()?0:editor[0]=='i'?float(int32_t(U(v))):fo3esm::ReadF32(v->p);
+    if(!std::isfinite(value))return;
+    if(editor=="iXPRewardDiscoverMapMarker"&&value>=0&&value<=1000000)d.discoveryXP=uint32_t(value);
+    else if(editor=="iMapMarkerRevealDistance"&&value>0)d.discoveryRadius=value;
+    else if(editor=="iMapMarkerVisibleDistance"&&value>0)d.markerVisibleDistance=value;
+    else if(editor=="fMoveBaseSpeed"&&value>0)d.travelWalkSpeed=value;
+    else if(editor=="fHostileActorExteriorDistance"&&value>0)d.hostileExteriorDistance=value;
+    else if(editor=="fHostileActorInteriorDistance"&&value>0)d.hostileInteriorDistance=value;
+    else if(editor=="fWorldMapMinZoom"&&value>0)d.worldZoomMin=value;
+    else if(editor=="fWorldMapMaxZoom"&&value>0)d.worldZoomMax=value;
+    else if(editor=="fLocalMapMinZoom"&&value>0)d.localZoomMin=value;
+    else if(editor=="fLocalMapMaxZoom"&&value>0)d.localZoomMax=value;
+  }
+  else if(t=="AVIF"){
     // These are the original Fallout3.esm actor-value record EDIDs;
     // do not infer illustration filenames from English UI labels.
     static constexpr std::array<const char*,14> skillEdids{
@@ -192,6 +207,7 @@ void Decode(Definitions &d, const std::string &t, uint32_t id, uint32_t flags,
   else if (t == "REFR" || t == "ACHR" || t == "ACRE") {
     auto p = Place(flags, s, cell, world);
     p.linkedReference=U(Find(s,"XLKR"));
+    if(auto xtel=Find(s,"XTEL");xtel&&xtel->n>=28)p.teleportRef=U(xtel);
     if(auto primitive=Find(s,"XPRM")){
       TriggerPrimitive trigger;
       if(primitive->n==32){
@@ -210,6 +226,7 @@ void Decode(Definitions &d, const std::string &t, uint32_t id, uint32_t flags,
       Marker m;
       static_cast<Placement &>(m) = p;
       m.name = Text(s, "FULL");
+      if(auto radius=Find(s,"XRDS");radius&&radius->n==4){const float r=fo3esm::ReadF32(radius->p);if(std::isfinite(r)&&r>0)m.radius=r;}
       auto f = Find(s, "FNAM");
       if (f && f->n)
         m.mapFlags = f->p[0];

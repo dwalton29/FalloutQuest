@@ -41,7 +41,7 @@ struct Placement {
   bool patrolAction=false;
   float x = 0, y = 0, z = 0;
   float rx=0,ry=0,rz=0,scale=1;
-  uint32_t owner=0;
+  uint32_t owner=0, teleportRef=0;
 };
 struct TriggerPrimitive {
   std::array<float,3> bounds{};
@@ -51,6 +51,7 @@ struct TriggerPrimitive {
 struct Marker : Placement {
   std::string name;
   uint8_t type = 0, mapFlags = 0;
+  float radius=0; // Optional authored XRDS override.
 };
 struct ResultScript {
   std::string source;
@@ -285,7 +286,11 @@ struct Definitions {
   std::unordered_map<uint32_t,std::string> idleModels;
   std::vector<uint32_t> greetings, topLevelTopics;
   uint32_t radioHello = 0;
-  float discoveryRadius = 0;
+  // Recovered Fallout3.exe Setting defaults; ESM GMSTs override these.
+  float discoveryRadius = 1000, markerVisibleDistance=20000;
+  float travelWalkSpeed=85,hostileExteriorDistance=3000,hostileInteriorDistance=2000;
+  uint32_t discoveryXP=10;
+  float worldZoomMin=.75f,worldZoomMax=5.f,localZoomMin=.1f,localZoomMax=.9f;
 };
 bool Relevant(const std::string &type);
 void Decode(Definitions &, const std::string &, uint32_t id, uint32_t flags,

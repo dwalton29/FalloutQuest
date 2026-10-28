@@ -22,6 +22,7 @@ struct Fo3CellTransitionRequestQ74 {
     float rx = 0.0f;
     float ry = 0.0f;
     float rz = 0.0f;
+    double travelHours=0; // Applied only at successful scene publication.
     bool valid = false;
 };
 
@@ -153,3 +154,7 @@ inline bool LoadFo3NifCollisionShapesPolicyQ710(
 // the Q7.10 policy. The original Q6F implementation lives in another source
 // file and is compiled without this header, so the wrapper can safely call it.
 #define LoadFo3NifCollisionShapesQ6F LoadFo3NifCollisionShapesPolicyQ710
+
+// Validated Pip-Boy map travel shares the existing loading/arrival pipeline.
+bool QueueFo3MapMarkerTransitionQ74(uint32_t marker,float x,float y,float z,
+                                   float rx,float ry,float rz,double travelHours);
