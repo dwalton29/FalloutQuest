@@ -494,12 +494,9 @@ void WeaponUpdate(double now,bool backButton){
     const auto bodySlot=fo3weapon::BodySlot(accessPoint,hip,back,hipWeapon!=nullptr,backWeapon!=nullptr);
     const auto* slot=bodySlot==fo3weapon::HolsterSlot::Hip?hipWeapon:bodySlot==fo3weapon::HolsterSlot::Back?backWeapon:nullptr;
     if(slot)Draw(slot->id,slot->formId);
-    else{
+    else if(gWeaponPalmValid[1]){
       uint64_t best=0;float distance=.16f;
-      if(zonesReady)for(bool longGun:{false,true})if(const auto* slot=Slot(p,longGun)){
-    if(slot->id!=active){auto m=models.find(slot->formId);if(m!=models.end())DrawModel(m->second,HolsterPose(longGun),alpha,false,slot->needsAction&&slot->loadedRounds==0);}
-  }
-  for(const auto&w:p.Snapshot().worldWeapons){auto v=world.find(w.instance.id);if(v==world.end())continue;auto model=models.find(w.instance.formId);if(model==models.end())continue;float d=fo3weapon::BoxDistance(Rotation(v->second.pose),Position(v->second.pose),hand,model->second.centre,model->second.half);if(d<distance){best=w.instance.id;distance=d;}}
+      for(const auto&w:p.Snapshot().worldWeapons){auto v=world.find(w.instance.id);if(v==world.end())continue;auto model=models.find(w.instance.formId);if(model==models.end())continue;float d=fo3weapon::BoxDistance(Rotation(v->second.pose),Position(v->second.pose),hand,model->second.centre,model->second.half);if(d<distance){best=w.instance.id;distance=d;}}
       if(best&&p.PickupWorldWeapon(best)){fo3rigid::Live().Remove(fo3rigid::WeaponId(best));world.erase(best);s=p.EquippedWeapon();Draw(s->id,s->formId);Log("PICKUP",s->id,s->formId,best);}
       else {uint32_t ref=0;Vec3 centre;float surface=0;if(Q220FindNearestLooseRef(gWeaponPalm[1],ref,centre,surface)){
         const auto r=p.Definitions().references.find(ref);

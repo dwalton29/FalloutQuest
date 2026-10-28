@@ -37,6 +37,14 @@ class ShoulderIntegration(unittest.TestCase):
         self.assertIn('if(!physicsAdvanced)Q223AdvanceDynamicBodies();',weapon)
 
 
+    def test_body_holsters_do_not_draw_during_input_or_pick_up_from_stale_ik(self):
+        weapon=(ROOT/'app/src/main/cpp/weapons/fo3-weapon-runtime.inc').read_text()
+        update=weapon.split('void WeaponUpdate(double now,bool backButton){',1)[1]
+        self.assertNotIn('DrawModel(',update)
+        self.assertIn('const V accessPoint{gQ210RightHand[0]',update)
+        pickup=update.split('if(slot)Draw(slot->id,slot->formId);',1)[1]
+        self.assertIn('else if(gWeaponPalmValid[1]){',pickup)
+
     def test_prompt_renderer_has_no_driver_snapshot(self):
         prompt=(ROOT/'app/src/main/cpp/ui/interaction/fo3-interaction-hud-renderer.h').read_text()
         render=prompt[prompt.index('inline void Render('):prompt.index('inline void Shutdown()')]
