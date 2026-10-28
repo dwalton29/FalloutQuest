@@ -2,6 +2,7 @@
 // Include before the legacy GL interception macros: this isolated pass restores
 // driver state and the caller invalidates the world cache at its boundary.
 #include <GLES3/gl3.h>
+#include "rendering/render-submission.h"
 #include "fo3-motion-capture.h"
 #include "fo3-motion-vectors.h"
 #include "fo3-dynamic-motion.h"
@@ -72,6 +73,7 @@ public:
     uint64_t Allocations()const{return allocations_;}
     const std::string& Error()const{return error_;}
     bool Initialize(){
+        if(fqrender::nativeOnly)return false;
         if(staticProgram_&&dynamicProgram_&&debugProgram_)return true;
         GlState state;Shutdown();error_.clear();failed_=false;staticProgram_=Program(fqspacewarp::StaticVertex,fqspacewarp::StaticFragment);
         if(staticProgram_)dynamicProgram_=Program(fqspacewarp::DynamicVertex,fqspacewarp::DynamicFragment);
@@ -88,6 +90,7 @@ public:
         staticProgram_=dynamicProgram_=debugProgram_=debugSampler_=fbo_=vao_=0;
     }
     bool Render(const Capture& capture,unsigned eyeIndex,GLuint sourceDepth,GLuint motion,GLuint depth,int width,int height,const std::array<float,3>& scale){
+        if(fqrender::nativeOnly)return false;
         if(!staticProgram_||!dynamicProgram_||!capture.history||!capture.mainDrawn||!sourceDepth||!motion||!depth||width<=0||height<=0||eyeIndex>1)return false;
         const auto& history=*capture.history;const auto& current=history.CurrentFrame();
         const auto& prior=history.SubmittedFrames()?history.PreviousFrame():current;
@@ -168,6 +171,7 @@ public:
         return complete&&!error;
     }
     bool Visualize(GLuint target,int width,int height,GLuint motion){
+        if(fqrender::nativeOnly)return false;
         if(!debugProgram_||!motion)return false;
         GlState state;glBindFramebuffer(GL_FRAMEBUFFER,target);glViewport(0,0,width,height);
         if(glCheckFramebufferStatus(GL_FRAMEBUFFER)!=GL_FRAMEBUFFER_COMPLETE){failed_=true;error_="incomplete visualization framebuffer";return false;}

@@ -3,7 +3,15 @@
 #include <cassert>
 #include <iostream>
 #include <limits>
+#include <dlfcn.h>
 using namespace fqspacewarp;
+static unsigned driverQueries=0;
+// Observe a real driver entry point used at the beginning of every GL state
+// scope. Forward to GLVND for the pixel tests; reject any native-mode entry.
+extern "C" void GL_APIENTRY glGetIntegerv(GLenum name,GLint* value){
+ assert(!fqrender::nativeOnly);++driverQueries;
+ static auto original=reinterpret_cast<PFNGLGETINTEGERVPROC>(dlsym(RTLD_NEXT,"glGetIntegerv"));assert(original);original(name,value);
+}
 namespace {
 constexpr int Size=16;
 Frame FrameAt(int){static uint64_t serial=0;Frame f;f.serial=++serial;f.scene=1;f.world=0x3c;f.displayTime=serial*10000000;f.sceneReady=f.focused=true;return f;}
@@ -20,6 +28,8 @@ void Depth(GLuint texture,float z){
 bool Close(float x,float y){return std::abs(x-y)<.002f;}
 }
 int main(){
+ fqmotion::Gles disabled;fqrender::nativeOnly=true;
+ assert(!disabled.Initialize()&&!disabled.Visualize(1,Size,Size,1));assert(driverQueries==0);fqrender::nativeOnly=false;
  EGLDisplay display=eglGetDisplay(EGL_DEFAULT_DISPLAY);assert(eglInitialize(display,nullptr,nullptr));assert(eglBindAPI(EGL_OPENGL_ES_API));
  const EGLint configAttrs[]={EGL_SURFACE_TYPE,EGL_PBUFFER_BIT,EGL_RENDERABLE_TYPE,EGL_OPENGL_ES3_BIT,EGL_RED_SIZE,8,EGL_GREEN_SIZE,8,EGL_BLUE_SIZE,8,EGL_NONE};
  EGLConfig config;EGLint count=0;assert(eglChooseConfig(display,configAttrs,&config,1,&count)&&count);
@@ -41,6 +51,9 @@ int main(){
    fqmotion::Capture capture;capture.Begin(history);capture.Main();assert(capture.Record(draw,current));
    glBindFramebuffer(GL_FRAMEBUFFER,0);glViewport(2,3,9,10);glEnable(GL_SCISSOR_TEST);glScissor(1,2,3,4);glDepthMask(GL_FALSE);glDepthFunc(GL_GREATER);glColorMask(GL_FALSE,GL_TRUE,GL_FALSE,GL_TRUE);
    glDepthRangef(.1f,.9f);glActiveTexture(GL_TEXTURE3);
+   const auto beforeNative=driverQueries;fqrender::nativeOnly=true;
+   assert(!renderer.Initialize()&&!renderer.Render(capture,0,source,motion,depth,Size,Size,scale)&&!renderer.Visualize(0,Size,Size,motion));
+   assert(driverQueries==beforeNative);fqrender::nativeOnly=false;
    assert(renderer.Render(capture,0,source,motion,depth,Size,Size,scale));
    const auto uploaded=renderer.UploadedBytes(),allocated=renderer.Allocations();
    assert(renderer.Render(capture,1,source,motion,depth,Size,Size,scale));

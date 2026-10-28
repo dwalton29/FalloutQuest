@@ -39,7 +39,7 @@ Restart after changing modes. Eligible world views show grey for zero motion and
 
 ## Verification
 
-Production GLES pixel tests run with surfaceless EGL/Mesa. They check static camera motion, rigid transforms, EXT axis conversion, depth occlusion, alpha cutouts, facial/CPU previous positions, NPC and player skin weights, vector visualization and driver state restoration. They also assert zero additional uploads/allocations for the second eye and capacity reuse in the next frame. Pinned OpenXR tests cover image lease success/failure/timeout/destruction as well as existing capability and submission adapter tests. Host history tests exercise draw capture and coverage reasons.
+Production GLES pixel tests run with surfaceless EGL/Mesa. They check static camera motion, rigid transforms, EXT axis conversion, depth occlusion, alpha cutouts, facial/CPU previous positions, NPC and player skin weights, vector visualization and driver state restoration. They also assert zero additional uploads/allocations for the second eye and capacity reuse in the next frame. Explicit backend guards reject initialization, replay and visualization in Vulkan mode; the test interposes the real driver-query boundary to assert no entry. Pinned OpenXR tests cover image lease success/failure/timeout/destruction as well as existing capability and submission adapter tests. Host history tests exercise draw capture and coverage reasons.
 
 The prior Android workflow passed its host tests but failed before compilation while downloading the NDK (`unknown archive`). SDK installation now retries at most three times. A fresh workflow must validate the Android translation unit and APKs.
 
