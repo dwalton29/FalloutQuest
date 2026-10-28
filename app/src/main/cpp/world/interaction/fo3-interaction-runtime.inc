@@ -39,6 +39,7 @@ bool CollectFo3WorldReference(uint32_t reference) {
     if(!player.CanPickup(reference)) return false;
     const auto ref=player.Definitions().references.at(reference);
     if(!player.Pickup(reference)) return false;
+    RetireFo3LooseBody(reference);
     for(auto& hand:gQ220Grab) if(hand.refFormId==reference) hand={};
     gQ223DynamicBodies.erase(reference);
     SetFo3CollectedCollisionRefs(player.Snapshot().collected);

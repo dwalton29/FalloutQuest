@@ -55,6 +55,7 @@ bool SampleFo3TerrainGroundQ77(float,float,float* out) {
     *out=terrainOffset;return true;
 }
 bool IsFo3TerrainGroundingActiveQ77(){return false;}
+void SynchronizeFo3TerrainPhysics(float,float){}
 const std::vector<Fo3TerrainCellQ76>& GetFo3TerrainQ76(){static std::vector<Fo3TerrainCellQ76> cells;return cells;}
 static void u32(std::vector<uint8_t>& b,uint32_t v){for(int i=0;i<4;++i)b.push_back(v>>(8*i));}
 static void u16(std::vector<uint8_t>& b,uint16_t v){b.push_back(v);b.push_back(v>>8);}
@@ -206,6 +207,29 @@ static void IndexedActorGroundParityQ226() {
     Q225RebuildDynamicGrid();
     assert(gWorldTriangles.empty());
     std::cout<<"Q226 indexed actor ground preserves complete authored layer selection passed\n";
+}
+
+static void FallingAndLandingQ263(){
+    fo3rigid::Live().ClearBodies();
+    gWorldTriangles.clear();gSurfaceSourcesQ722.clear();terrainAvailable=false;
+    auto floor=[&](float xmin,float xmax,float y){
+        CollisionTriangle t;
+        assert(BuildTriangle({xmin,y,-4},{xmax,y,4},{xmax,y,-4},t));gWorldTriangles.push_back(t);
+        assert(BuildTriangle({xmin,y,-4},{xmin,y,4},{xmax,y,4},t));gWorldTriangles.push_back(t);
+    };
+    floor(-2,0,0);floor(-4,4,-3);
+    gPlayerCollisionReady=true;gSafeSpawnResolved=true;gCollisionFloorY=0;gExteriorAllBhksQ78A=false;
+    InvalidateDerivedCollisionCachesQ17();AdvanceFo3CollisionPublicationRevision();Q225RebuildDynamicGrid();
+    float x=-.5f,z=0,y=0,nx,nz,ny;
+    assert(ResolveFo3PlayerMotionWithGravity(x,z,1,0,y,1.f/72,&nx,&nz,&ny));
+    assert(ny<0&&ny>-.01f);x=nx;z=nz;y=ny;
+    for(int frame=0;frame<180;++frame){
+        assert(ResolveFo3PlayerMotionWithGravity(x,z,1,0,y,1.f/72,&nx,&nz,&ny));
+        assert(ny>=-3.01f);x=nx;z=nz;y=ny;
+        if(frame==15)assert(y<-.1f&&y>-1.f);
+    }
+    assert(y>=-3.005f&&y< -2.97f);
+    std::cout<<"Player gravity: accelerated ledge descent and continuous capsule landing passed\n";
 }
 
 int main(int argc,char**argv) {
@@ -599,4 +623,6 @@ int main(int argc,char**argv) {
     assert(nx==99&&ny==99&&nz==99&&contacts==99&&candidates==99);
     assert(gQ1930PreparedSnapshots.size()==registeredBefore);
     std::cout<<"Authored collision and empty-world publication tests passed\n";
+    FallingAndLandingQ263();
+
 }

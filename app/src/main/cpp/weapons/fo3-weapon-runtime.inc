@@ -5,6 +5,7 @@ using Matrix=fo3anim::Matrix;
 using V=fo3vr::V;
 using R=fo3vr::R;
 struct Model {
+  std::shared_ptr<const Fo3PreparedRigidBody> rigidBody;
   fo3weapon::Asset asset;
   std::vector<GpuObject> objects,flash;
   std::vector<uint8_t> magazines,slides;
@@ -12,6 +13,7 @@ struct Model {
   bool attempted=false,ready=false;
 };
 struct World {
+  uint64_t id=0;
   Matrix pose=fo3anim::Identity();
   Q223DynamicBody motion;
   uint32_t cell=0,world=0;
@@ -80,6 +82,7 @@ Model* Ensure(uint32_t form){
   if(!BuildCpuObjects(placement,parts))return nullptr;
   V lo{INFINITY,INFINITY,INFINITY},hi{-INFINITY,-INFINITY,-INFINITY};
   for(auto&part:parts){
+    if(!out.rigidBody)out.rigidBody=part.rigidBody;
     const bool mag=out.asset.Descendant(part.mesh.shapeBlock,out.asset.clipNode),slide=out.asset.Descendant(part.mesh.shapeBlock,out.asset.slideNode);
     for(size_t n=0;n<part.mesh.positions.size();n+=3){auto p=GamePoint({part.mesh.positions[n],part.mesh.positions[n+1],part.mesh.positions[n+2]});lo={std::min(lo.x,p.x),std::min(lo.y,p.y),std::min(lo.z,p.z)};hi={std::max(hi.x,p.x),std::max(hi.y,p.y),std::max(hi.z,p.z)};}
     GpuObject gpu;if(!UploadCpuObject(part,0,0,0,gpu))continue;
@@ -113,26 +116,22 @@ fo3weapon::WorldPose ToSave(const World&w){
   auto q=fo3anim::QuaternionFromMatrix(Rotation(w.pose).data());p.rotation={q[1],q[2],q[3],q[0]};
   const auto&v=w.motion.linearVelocity;const auto&a=w.motion.angularVelocity;p.velocity={v.x,v.y,v.z};p.angularVelocity={a.x,a.y,a.z};return p;
 }
-void Advance(World&w,const Model&model,float dt){
-  // Same authored collision box query and SI gravity/substep policy as loose
-  // Q223 objects; runtime ID is never passed as a fabricated Bethesda REFR.
-  auto&b=w.motion;if(b.sleeping)return;
-  while(dt>1e-5f){float step=std::min(dt,.016f);dt-=step;
-    const V centre=Point(w.pose,model.centre);b.linearVelocity.y-=9.80665f*step;
-    const V next=centre+VrPoint(b.linearVelocity)*step;
-    V resolved=next,normal{};uint32_t contacts=0,candidates=0;
-    auto r=Rotation(w.pose);auto x=fo3vr::Rotate(r,{1,0,0}),y=fo3vr::Rotate(r,{0,1,0}),z=fo3vr::Rotate(r,{0,0,1});
-    ResolveFo3DynamicBoxQ225(0,centre.x,centre.y,centre.z,next.x,next.y,next.z,
-      model.half.x,model.half.y,model.half.z,x.x,x.y,x.z,y.x,y.y,y.z,z.x,z.y,z.z,fo3vr::Length(model.half),
-      &resolved.x,&resolved.y,&resolved.z,&normal.x,&normal.y,&normal.z,&contacts,&candidates);
-    if(contacts){normal=fo3vr::Unit(normal,{0,1,0});auto velocity=VrPoint(b.linearVelocity);float inward=fo3vr::Dot(velocity,normal);if(inward<0)velocity=velocity-normal*inward;
-      b.linearVelocity=RuntimePoint(velocity*std::exp(-1.25f*step));b.angularVelocity=Q211Mul(b.angularVelocity,std::exp(-2.f*step));
-      if(normal.y>.45f&&Q211Length(b.linearVelocity)<.08f&&Q211Length(b.angularVelocity)<.22f)b.sleepTimer+=step;else b.sleepTimer=0;
-      if(b.sleepTimer>.3f){b.sleeping=true;b.linearVelocity={};b.angularVelocity={};}
-    }
-    Matrix delta;Q223BuildMotionDelta(RuntimePoint(centre),RuntimePoint(resolved),b.angularVelocity,step,delta.data());w.pose=fo3anim::Multiply(delta,w.pose);
-  }
+bool Physical(uint64_t id,const Model& model,const Matrix& modelPose,const Vec3& velocity={},const Vec3& angular={}){
+  if(!id||!model.rigidBody)return false;auto& physics=fo3rigid::Live();const auto key=fo3rigid::WeaponId(id);
+  if(physics.Has(key))return true;
+  const auto c=model.rigidBody->centerGame;const V centre=Point(modelPose,GamePoint({c.x,c.y,c.z}));
+  const auto bodyPose=Rigid(Rotation(modelPose),centre);
+  if(!physics.Add(key,model.rigidBody->asset,bodyPose))return false;
+  physics.Place(key,bodyPose,{velocity.x,velocity.y,velocity.z},{angular.x,angular.y,angular.z});return true;
 }
+void Advance(World&w,const Model& model,float){
+  if(!Physical(w.id,model,w.pose,w.motion.linearVelocity,w.motion.angularVelocity))return;
+  Matrix body;fo3rigid::V v,a;if(!fo3rigid::Live().Pose(fo3rigid::WeaponId(w.id),body,&v,&a))return;
+  const auto c=model.rigidBody->centerGame;const auto local=GamePoint({c.x,c.y,c.z});
+  w.pose=Rigid(Rotation(body),Position(body)-Direction(body,local));
+  w.motion.linearVelocity={v[0],v[1],v[2]};w.motion.angularVelocity={a[0],a[1],a[2]};
+}
+
 bool Resident(const fo3weapon::WorldPose&p){
   if(!gExteriorWorldspaceQ1890)return p.world==0&&p.cell==gCurrentCellFormId;
   if(p.world!=gExteriorWorldspaceQ1890)return false;
@@ -292,7 +291,7 @@ void WeaponPersistWorld(){
   for(const auto&e:world)gPlayerSession->player.UpdateWorldWeapon(e.first,ToSave(e.second));
 }
 void WeaponShutdown(){
-  using namespace weaponruntime;WeaponPersistWorld();for(auto&e:models){Q74DeleteGpuObjects(e.second.objects);Q74DeleteGpuObjects(e.second.flash);}models.clear();world.clear();
+  using namespace weaponruntime;WeaponPersistWorld();for(const auto&e:world)fo3rigid::Live().Remove(fo3rigid::WeaponId(e.first));if(active)fo3rigid::Live().Remove(fo3rigid::WeaponId(active));for(auto&e:models){Q74DeleteGpuObjects(e.second.objects);Q74DeleteGpuObjects(e.second.flash);}models.clear();world.clear();
   active=0;held=false;RetireReload();inputs={};flights={};last=0;ammoText[0]=0;fo3ammoui::Shutdown();
 }
 void WeaponRender(bool alpha){
@@ -331,9 +330,9 @@ void WeaponUpdate(double now,bool backButton){
   // Explicit milestone bootstrap, never part of authored starting inventory.
   if(!gPlayerSession->saveBlocked&&!p.Snapshot().developmentWeaponGranted){if(p.BootstrapDevelopmentWeapon()){auto*s=p.EquippedWeapon();if(s)Log("GRANT",s->id,s->formId);}}
   auto*s=p.EquippedWeapon();
-  if(!s||s->id!=active){active=s?s->id:0;held=false;inside=false;RetireReload();trigger={};motion={};if(s)Log("EQUIP",s->id,s->formId);}
+  if(!s||s->id!=active){if(active&&!world.count(active))fo3rigid::Live().Remove(fo3rigid::WeaponId(active));active=s?s->id:0;held=false;inside=false;RetireReload();trigger={};motion={};if(s)Log("EQUIP",s->id,s->formId);}
   if(sceneX!=gSceneCenterXQ1730||sceneY!=gSceneCenterYQ1730||sceneZ!=gSceneFloorZQ1730){
-    WeaponPersistWorld();world.clear();flights={};
+    WeaponPersistWorld();for(const auto& e:world)fo3rigid::Live().Remove(fo3rigid::WeaponId(e.first));world.clear();flights={};
     sceneX=gSceneCenterXQ1730;sceneY=gSceneCenterYQ1730;sceneZ=gSceneFloorZQ1730;
   }
   // Cache owned and saved-world resources independently of trigger events.
@@ -341,17 +340,17 @@ void WeaponUpdate(double now,bool backButton){
   for(const auto&w:p.Snapshot().worldWeapons)if(Resident(w.pose)){
     auto*m=Ensure(w.instance.formId);if(!m)continue;
     auto found=world.find(w.instance.id);if(found==world.end()){
-      World v;v.pose=ToScene(w.pose);v.cell=w.pose.cell;v.world=w.pose.world;v.motion.linearVelocity={w.pose.velocity[0],w.pose.velocity[1],w.pose.velocity[2]};v.motion.angularVelocity={w.pose.angularVelocity[0],w.pose.angularVelocity[1],w.pose.angularVelocity[2]};world.emplace(w.instance.id,v);
+      World v;v.id=w.instance.id;v.pose=ToScene(w.pose);v.cell=w.pose.cell;v.world=w.pose.world;v.motion.linearVelocity={w.pose.velocity[0],w.pose.velocity[1],w.pose.velocity[2]};v.motion.angularVelocity={w.pose.angularVelocity[0],w.pose.angularVelocity[1],w.pose.angularVelocity[2]};world.emplace(w.instance.id,v);
     }else if(!Resident(ToSave(found->second)))p.UpdateWorldWeapon(w.instance.id,ToSave(found->second));
     else if(!blocked)Advance(found->second,*m,dt);
   }
   // A CELL origin change is handled by persisted world positions at transition.
-  for(auto it=world.begin();it!=world.end();){bool keep=false;for(const auto&w:p.Snapshot().worldWeapons)if(w.instance.id==it->first&&Resident(w.pose)){keep=true;break;}if(!keep){p.UpdateWorldWeapon(it->first,ToSave(it->second));it=world.erase(it);}else ++it;}
+  for(auto it=world.begin();it!=world.end();){bool keep=false;for(const auto&w:p.Snapshot().worldWeapons)if(w.instance.id==it->first&&Resident(w.pose)){keep=true;break;}if(!keep){p.UpdateWorldWeapon(it->first,ToSave(it->second));fo3rigid::Live().Remove(fo3rigid::WeaponId(it->first));it=world.erase(it);}else ++it;}
   // Flights are owned by the world, not by whether VR hands can use a weapon.
   // Run after scene-origin retirement, including during Pip-Boy and holster focus.
   if(frame.advanceProjectiles)AdvanceFlights(dt);
   if(blocked){
-    if(held){held=false;if(s)Log("HOLSTER FOCUS",s->id,s->formId);}
+    if(held){if(active)fo3rigid::Live().Remove(fo3rigid::WeaponId(active));held=false;if(s)Log("HOLSTER FOCUS",s->id,s->formId);}
     RetireReload();inside=false;
     if(s&&gQ210PlayerBodyReady){Zones();const auto&zone=p.Definitions().items.at(s->formId).weapon.LongGun()?back:hip;const bool longGun=p.Definitions().items.at(s->formId).weapon.LongGun();const V display=longGun?zone.center:fo3weapon::HipDisplay(zone);pose=Rigid(fo3vr::Multiply(zone.body,fo3vr::Axis({0,0,1},longGun?fo3vr::Pi*.5f:-fo3vr::Pi*.5f)),display);}
     for(int hand=0;hand<2;hand++)gQ220Grab[hand].previousGrip=gQ217FingerGrip[hand];return;
@@ -381,16 +380,25 @@ void WeaponUpdate(double now,bool backButton){
         }
         (void)gripLocal;
       }
+      if(Physical(s->id,*m,pose)){
+        auto& physics=fo3rigid::Live();const auto key=fo3rigid::WeaponId(s->id);
+        const auto c=m->rigidBody->centerGame;const auto local=GamePoint({c.x,c.y,c.z});
+        const auto target=Rigid(Rotation(pose),Point(pose,local));
+        if(physics.Held(1)!=key){physics.Place(key,target);physics.Grab(key,1,Rigid(Rotation(pose),right),{right.x,right.y,right.z});}
+        physics.TargetBody(key,target);
+        Matrix actual;if(physics.Pose(key,actual))pose=Rigid(Rotation(actual),Position(actual)-Direction(actual,local));
+      }
       if(support&&gWeaponPalmValid[0])AlignSupportHand(*m);
       const auto sampledRotation=fo3anim::QuaternionFromMatrix(Rotation(pose).data());
       const float sampledQuat[4]{sampledRotation[1],sampledRotation[2],sampledRotation[3],sampledRotation[0]};
       Q223SampleHeldMotion(motion,RuntimePoint(Point(pose,m->centre)),sampledQuat);
       const bool next=zone.Contains(right,inside);if(next&&!inside)Pulse(1,.12f);inside=next;
       if(gQ217FingerGrip[1]<=.25f){
+        fo3rigid::Live().Release(1);
         if(inside){held=false;RetireReload();Pulse(1);fo3audio::SoundEvent(d.unequip);Log("HOLSTER",s->id,s->formId);}
         else{World v;v.pose=pose;v.cell=gCurrentCellFormId;v.world=gExteriorWorldspaceQ1890;v.motion.linearVelocity=motion.sampledLinearVelocity;v.motion.angularVelocity=motion.sampledAngularVelocity;
           const auto id=s->id;const auto form=s->formId;
-          if(p.DropWeapon(id,ToSave(v))){world[id]=v;held=false;RetireReload();active=0;Log("DROP",id,form,id);s=nullptr;}
+          if(p.DropWeapon(id,ToSave(v))){v.id=id;world[id]=v;held=false;RetireReload();active=0;Log("DROP",id,form,id);s=nullptr;}
           else{held=false;RetireReload();Log("HOLSTER DROP DENIED",id,form);}
         }
       }
@@ -432,6 +440,7 @@ void WeaponUpdate(double now,bool backButton){
       if(recoil>1e-4){const float weight=support?.45f:1.f;auto kick=fo3vr::Axis({0,0,1},float(recoil)*.035f*weight);pose=Rigid(fo3vr::Multiply(Rotation(pose),kick),Position(pose)+Direction(pose,{-float(recoil)*.006f*weight,0,0}));}
     }
   }
+  if(!held&&active&&!world.count(active))fo3rigid::Live().Remove(fo3rigid::WeaponId(active));
   // Right primary-grip priority: body weapon, dynamic exact instance, authored
   // weapon REFR, then existing non-weapon loose-object grabbing.
   if(inputs.r&&gWeaponPalmValid[1]&&!held&&!gQ220Grab[1].active){
@@ -440,12 +449,12 @@ void WeaponUpdate(double now,bool backButton){
     else{
       uint64_t best=0;float distance=.16f;
       for(const auto&w:p.Snapshot().worldWeapons){auto v=world.find(w.instance.id);if(v==world.end())continue;auto model=models.find(w.instance.formId);if(model==models.end())continue;float d=fo3weapon::BoxDistance(Rotation(v->second.pose),Position(v->second.pose),hand,model->second.centre,model->second.half);if(d<distance){best=w.instance.id;distance=d;}}
-      if(best&&p.PickupWorldWeapon(best)){world.erase(best);s=p.EquippedWeapon();Draw(s->id,s->formId);Log("PICKUP",s->id,s->formId,best);}
+      if(best&&p.PickupWorldWeapon(best)){fo3rigid::Live().Remove(fo3rigid::WeaponId(best));world.erase(best);s=p.EquippedWeapon();Draw(s->id,s->formId);Log("PICKUP",s->id,s->formId,best);}
       else {uint32_t ref=0;Vec3 centre;float surface=0;if(Q220FindNearestLooseRef(gWeaponPalm[1],ref,centre,surface)){
         const auto r=p.Definitions().references.find(ref);
         if(r!=p.Definitions().references.end()){auto item=p.Definitions().items.find(r->second.base);
           if(item!=p.Definitions().items.end()&&item->second.weapon.Firearm()&&Ensure(item->first)&&p.PickupWeapon(ref)){
-            gQ223DynamicBodies.erase(ref);SetFo3CollectedCollisionRefs(p.Snapshot().collected);s=p.EquippedWeapon();Draw(s->id,s->formId);Log("PICKUP",s->id,s->formId);
+            fo3rigid::Live().Remove(ref);gQ223DynamicBodies.erase(ref);SetFo3CollectedCollisionRefs(p.Snapshot().collected);s=p.EquippedWeapon();Draw(s->id,s->formId);Log("PICKUP",s->id,s->formId);
           }
         }
       }}

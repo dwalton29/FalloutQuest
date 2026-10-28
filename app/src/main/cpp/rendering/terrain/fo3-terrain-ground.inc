@@ -2,6 +2,10 @@
 
 #include <android/log.h>
 
+#include "physics/fo3-land-surface.h"
+#include "physics/fo3-rigid-world.h"
+#include <unordered_map>
+#include <unordered_set>
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -53,9 +57,7 @@ bool SampleGameHeightQ77(float gameX, float gameY, float& outGameZ) {
     auto h = [&](int x, int y) {
         return cell->heights[static_cast<size_t>(y * LAND_SIDE_Q77 + x)];
     };
-    const float h0 = h(x0, y0) * (1.0f - tx) + h(x1, y0) * tx;
-    const float h1 = h(x0, y1) * (1.0f - tx) + h(x1, y1) * tx;
-    outGameZ = h0 * (1.0f - ty) + h1 * ty;
+    outGameZ = fo3land::Height(h(x0,y0),h(x1,y0),h(x0,y1),h(x1,y1),tx,ty);
     return std::isfinite(outGameZ);
 }
 
@@ -117,4 +119,38 @@ bool SampleFo3TerrainFootstepMaterial(float virtualX,float virtualZ,uint32_t* ma
     if(!cell)return false;
     *material=Fo3TerrainContactMaterial(cell->landFormId,x-cx*4096.f,y-cy*4096.f);
     return true;
+}
+
+// Committed, stitched visual heights only. Rebuild entering/changed cells, not
+// every frame; hidden quadrants never create invisible floors.
+void SynchronizeFo3TerrainPhysics(float x,float z) {
+    struct Cached {std::vector<float> heights;uint8_t hidden=0;};
+    static std::unordered_map<uint64_t,Cached> cached;
+    static float origin[3]{INFINITY,INFINITY,INFINITY};
+    auto& world=fo3rigid::Live();
+    const bool changed=origin[0]!=gArrivalXQ77||origin[1]!=gArrivalYQ77||origin[2]!=gArrivalZQ77;
+    if(changed||!gGroundingActiveQ77){for(const auto& e:cached)world.RemoveStatic(e.first);cached.clear();}
+    origin[0]=gArrivalXQ77;origin[1]=gArrivalYQ77;origin[2]=gArrivalZQ77;
+    if(!gGroundingActiveQ77)return;
+    const int cx=int(std::floor((gArrivalXQ77+x*gUnitsPerMetreQ77)/4096.f));
+    const int cy=int(std::floor((gArrivalYQ77-(z-gSceneForwardQ77)*gUnitsPerMetreQ77)/4096.f));
+    std::unordered_set<uint64_t> live;
+    for(int gy=cy-1;gy<=cy+1;++gy)for(int gx=cx-1;gx<=cx+1;++gx){
+        const auto* cell=FindFo3TerrainGroundCellQ2000(gx,gy);if(!cell||cell->heights.size()!=1089)continue;
+        const uint64_t id=(uint64_t{1}<<62)|(uint64_t(uint32_t(gx)&0x7fffffff)<<31)|(uint32_t(gy)&0x7fffffff);
+        live.insert(id);auto& old=cached[id];
+        if(old.heights==cell->heights&&old.hidden==cell->forceHideMask)continue;
+        std::vector<fo3rigid::Triangle> triangles;triangles.reserve(2048);
+        auto point=[&](int px,int py)->fo3rigid::V{return {
+            (gx*4096.f+px*128.f-gArrivalXQ77)/gUnitsPerMetreQ77,
+            gFloorYQ77+(cell->heights[py*33+px]-gArrivalZQ77)/gUnitsPerMetreQ77,
+            gSceneForwardQ77-(gy*4096.f+py*128.f-gArrivalYQ77)/gUnitsPerMetreQ77};};
+        for(int py=0;py<32;++py)for(int px=0;px<32;++px){
+            const int q=(py>=16?2:0)+(px>=16?1:0);if(cell->forceHideMask&(1<<q))continue;
+            const auto a=point(px,py),b=point(px+1,py),c=point(px,py+1),d=point(px+1,py+1);
+            triangles.push_back({a,b,d});triangles.push_back({a,d,c});
+        }
+        world.Static(id,triangles);old.heights=cell->heights;old.hidden=cell->forceHideMask;
+    }
+    for(auto i=cached.begin();i!=cached.end();)if(!live.count(i->first)){world.RemoveStatic(i->first);i=cached.erase(i);}else ++i;
 }

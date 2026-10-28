@@ -1482,9 +1482,9 @@ private:
         float resolvedCenterX = desiredCenterX;
         float resolvedCenterZ = desiredCenterZ;
         float resolvedPlayerY = playerPosition_.y;
-        if (ResolveFo3PlayerMotionQ6G(currentCenterX, currentCenterZ,
+        if (ResolveFo3PlayerMotionWithGravity(currentCenterX, currentCenterZ,
                                      desiredCenterX, desiredCenterZ,
-                                     playerPosition_.y,
+                                     playerPosition_.y, float(dt),
                                      &resolvedCenterX, &resolvedCenterZ,
                                      &resolvedPlayerY)) {
             playerPosition_.x = resolvedCenterX - headOffset.x;

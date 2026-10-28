@@ -2,6 +2,7 @@ cmake_minimum_required(VERSION 3.22.1)
 project(falloutquest LANGUAGES C CXX)
 
 find_package(OpenXR REQUIRED CONFIG)
+include(${CMAKE_CURRENT_SOURCE_DIR}/../../../../cmake/FalloutPhysics.cmake)
 
 # Native runtime sources.
 add_library(falloutquest SHARED
@@ -103,6 +104,7 @@ find_library(gles-lib GLESv3)
 find_library(z-lib z)
 
 target_link_libraries(falloutquest
+    fq_physics
     OpenXR::openxr_loader
     ${android-lib}
     ${log-lib}

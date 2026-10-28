@@ -49,6 +49,7 @@ struct Grab {
 };
 Grab gQ220Grab[2];
 std::unordered_map<uint32_t, int> gQ223DynamicBodies;
+void RetireFo3LooseBody(uint32_t reference){gQ223DynamicBodies.erase(reference);}
 std::unordered_set<uint32_t> removedCollision;
 int flushes = 0, doorActivations = 0;
 bool IsFo3LoadingVisible() { return loading; }

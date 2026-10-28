@@ -52,6 +52,12 @@ struct Fo3NifCollisionShapeQ6F {
     uint32_t sourceShapeBlock = 0xffffffffu;
     uint32_t dataBlock = 0xffffffffu;
 
+    // FO3 bhkRigidBodyCInfo550_660, preserved independently of static filtering.
+    float massKg=0, linearDamping=.1f, angularDamping=.05f, friction=.5f, restitution=0;
+    float centerOfMass[3]{};
+    float inertiaTensor[9]{};
+    uint8_t motionSystem=0;
+    bool physicalProperties=false;
     uint32_t havokMaterial = 0u; // non-packed leaf material
     uint8_t havokLayer = 0u; // rigid body filter, for non-packed primitives
     bool compressedVertices = false;
@@ -774,6 +780,19 @@ inline bool LoadFo3NifCollisionShapesImpl(const std::string& modelPath,
         const bool decoded=DecodeShape(nif,h,resolved,rootShape,Identity(),co,target,bodyRef,0,stack,outShapes,requireComplete);
         if(requireComplete&&!decoded)return false;
         if(outShapes.size()==before) continue;
+        if(bodySize>=216u)for(size_t i=before;i<outShapes.size();++i){
+            auto& shape=outShapes[i];
+            shape.massKg=ReadLeFloat(body+180u);
+            shape.linearDamping=ReadLeFloat(body+184u);shape.angularDamping=ReadLeFloat(body+188u);
+            shape.friction=ReadLeFloat(body+192u);shape.restitution=ReadLeFloat(body+196u);
+            for(int a=0;a<3;++a)shape.centerOfMass[a]=ReadLeFloat(body+164u+a*4)*FO3_HAVOK_TO_NIF;
+            for(int r=0;r<3;++r)for(int c=0;c<3;++c)shape.inertiaTensor[r*3+c]=ReadLeFloat(body+116u+r*16+c*4);
+            shape.motionSystem=body[212u];
+            shape.physicalProperties=std::isfinite(shape.massKg)&&shape.massKg>0&&
+                std::isfinite(shape.linearDamping)&&std::isfinite(shape.angularDamping)&&
+                std::isfinite(shape.friction)&&std::isfinite(shape.restitution);
+        }
+
         ++collisionObjects;
 
         Mat4 bodyM=Identity(); bool bodyApplied=false;
@@ -796,6 +815,11 @@ inline bool LoadFo3NifCollisionShapesImpl(const std::string& modelPath,
         for(size_t i=before;i<outShapes.size();++i){
             Fo3NifCollisionShapeQ6F& s=outShapes[i];
             ApplyMatrix(s.positions,outer);
+            TransformPoint(outer,s.centerOfMass[0],s.centerOfMass[1],s.centerOfMass[2]);
+            float rotatedTensor[9]{};
+            for(int r=0;r<3;++r)for(int c=0;c<3;++c)for(int a=0;a<3;++a)for(int b=0;b<3;++b)
+                rotatedTensor[r*3+c]+=outer.m[r*4+a]*s.inertiaTensor[a*3+b]*outer.m[c*4+b];
+            std::copy(rotatedTensor,rotatedTensor+9,s.inertiaTensor);
             Mat4 local{}; std::memcpy(local.m,s.localToModel,sizeof(local.m));
             StoreMatrix(Mul(outer,local),s.localToModel);
             s.bodyTransformApplied=bodyApplied;

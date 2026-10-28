@@ -22,8 +22,8 @@ android {
         applicationId 'com.falloutquest.app'
         minSdk 29
         targetSdk 35
-        versionCode 262
-        versionName '0.114.3-arrival-and-actor-transforms'
+        versionCode 263
+        versionName '0.115.0-physical-grips-and-falling'
 
         ndk {
             abiFilters 'arm64-v8a'

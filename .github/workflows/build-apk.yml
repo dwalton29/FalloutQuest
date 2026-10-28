@@ -65,10 +65,15 @@ jobs:
 
   build:
     runs-on: ubuntu-latest
+    env:
+      FQ_BULLET_SOURCE_DIR: ${{ runner.temp }}/falloutquest-bullet
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Fetch reviewed native physics source
+        run: git clone --depth 1 --branch 3.25 https://github.com/bulletphysics/bullet3.git "$FQ_BULLET_SOURCE_DIR"
 
       - name: Verify native source layout
         shell: bash

@@ -1,5 +1,6 @@
 extern void PumpFo3AndroidEventsQ1860();
 #include "fo3-collision-overlay.h"
+#include "fo3-rigid-world.h"
 #include "fo3-nif-collision.h"
 #include "fo3-transition.h"
 #include "fo3-nif-metadata.h"
@@ -120,7 +121,10 @@ struct CollisionSurfaceSourceQ722 {
 std::vector<CollisionTriangle> gWorldTriangles;
 uint64_t gPipLocalMapRevision=0;
 uint64_t gCollisionPublicationRevision = 1u;
-void AdvanceFo3CollisionPublicationRevision() {
+bool gRigidFullDirty=true;
+std::unordered_set<uint32_t> gRigidDirtyRefs;
+void AdvanceFo3CollisionPublicationRevision(uint32_t changedRef=0) {
+    if(changedRef)gRigidDirtyRefs.insert(changedRef);else gRigidFullDirty=true;
     if (++gCollisionPublicationRevision == 0u) ++gCollisionPublicationRevision;
 }
 std::unordered_map<uint64_t, CollisionSurfaceSourceQ722> gSurfaceSourcesQ722;
@@ -2331,7 +2335,7 @@ bool SetFo3DoorCollisionTransformQ2400(uint32_t refFormId,const float transform[
     pose.enabled = enabled;
     if (transform) std::copy(transform,transform+16,pose.transform.begin());
     gDoorCollisionPoses[refFormId] = std::move(pose);
-    AdvanceFo3CollisionPublicationRevision();
+    AdvanceFo3CollisionPublicationRevision(refFormId);
     ++gPipLocalMapRevision;
     const size_t before=gWorldTriangles.size();
     gWorldTriangles.erase(std::remove_if(gWorldTriangles.begin(),gWorldTriangles.end(),
@@ -2380,7 +2384,7 @@ bool SetFo3ScriptCollisionPose(uint32_t reference,const Fo3DoorCollisionPose& re
     gDoorCollisionPoses[reference]=pose;
     gWorldTriangles.erase(std::remove_if(gWorldTriangles.begin(),gWorldTriangles.end(),[&](const CollisionTriangle& t){const auto src=gSurfaceSourcesQ722.find(t.surfaceKeyQ714);return src!=gSurfaceSourcesQ722.end()&&src->second.refFormId==reference;}),gWorldTriangles.end());
     if(pose.enabled)gWorldTriangles.insert(gWorldTriangles.end(),moved.begin(),moved.end());
-    AdvanceFo3CollisionPublicationRevision();++gPipLocalMapRevision;gTriangleCount=gWorldTriangles.size();
+    AdvanceFo3CollisionPublicationRevision(reference);++gPipLocalMapRevision;gTriangleCount=gWorldTriangles.size();
     InvalidateDerivedCollisionCachesQ17();gHkManifoldValidQ800=false;Q225RebuildDynamicGrid();return true;
 }
 
@@ -2808,3 +2812,54 @@ fo3pipdata::CaptureLocalMap(uint32_t cell, uint64_t generation, float headY) {
 }
 
 uint64_t fo3pipdata::LocalMapGeometryRevision() { return gPipLocalMapRevision; }
+
+void SynchronizeFo3RigidWorld(float x,float z) {
+    static std::unordered_set<uint32_t> published;
+    auto& world=fo3rigid::Live();
+    if(gRigidFullDirty||!gRigidDirtyRefs.empty()) {
+        std::unordered_map<uint32_t,std::vector<fo3rigid::Triangle>> chunks;
+        for(const auto& t:gWorldTriangles){
+            const auto source=gSurfaceSourcesQ722.find(t.surfaceKeyQ714);
+            const uint32_t ref=source==gSurfaceSourcesQ722.end()?0:source->second.refFormId;
+            if(world.Has(ref)||(!gRigidFullDirty&&!gRigidDirtyRefs.count(ref)))continue;
+            chunks[ref].push_back({{t.a.x,t.a.y,t.a.z},{t.b.x,t.b.y,t.b.z},{t.c.x,t.c.y,t.c.z}});
+        }
+        if(gRigidFullDirty){for(auto ref:published)world.RemoveStatic(ref);published.clear();}
+        else for(auto ref:gRigidDirtyRefs){world.RemoveStatic(ref);published.erase(ref);}
+        for(const auto& c:chunks){world.Static(c.first,c.second);published.insert(c.first);}
+        gRigidFullDirty=false;gRigidDirtyRefs.clear();
+    }
+    SynchronizeFo3TerrainPhysics(x,z);
+}
+
+namespace {
+float gFallVelocity=0;
+bool gFallGrounded=true;
+}
+bool ResolveFo3PlayerMotionWithGravity(float currentX,float currentZ,float desiredX,float desiredZ,
+    float currentY,float seconds,float* outX,float* outZ,float* outY) {
+    if(!outX||!outZ||!outY)return false;
+    if(!gPlayerCollisionReady){*outX=currentX;*outZ=currentZ;*outY=currentY;return true;}
+    const bool arrival=!gSafeSpawnResolved;
+    float planarY=currentY;
+    if(!ResolveFo3PlayerMotionQ6G(currentX,currentZ,desiredX,desiredZ,currentY,outX,outZ,&planarY))return false;
+    SynchronizeFo3RigidWorld(*outX,*outZ);
+    if(arrival||!gSafeSpawnResolved){gFallVelocity=0;gFallGrounded=true;*outY=planarY;return true;}
+    float feet=gCollisionFloorY+currentY;
+    // Only an already grounded character can step up; never snap down a ledge.
+    if(gFallGrounded&&planarY>currentY&&planarY-currentY<=StepHeightQ78B()+.01f)feet=gCollisionFloorY+planarY;
+    float remaining=std::clamp(seconds,0.f,.064f);
+    auto& world=fo3rigid::Live();
+    while(remaining>1e-6f){const float dt=std::min(remaining,1.f/120.f);remaining-=dt;
+        gFallVelocity-=9.80665f*dt;
+        fo3rigid::V resolved,normal;
+        const float target=feet+gFallVelocity*dt;
+        const bool hit=world.SweepCapsule({*outX,feet+.002f,*outZ},{*outX,target,*outZ},CollisionRadiusQ712(),PLAYER_HEIGHT,resolved,normal);
+        if(hit&&normal[1]>.45f){feet=resolved[1];gFallVelocity=0;gFallGrounded=true;}
+        else {feet=target;gFallGrounded=false;}
+        // The exact LAND surface is also a conservative recovery for an
+        // initial overlap or a cell arriving under an airborne capsule.
+        float terrain=0;if(SampleFo3TerrainGroundQ77(*outX,*outZ,&terrain)&&feet<gCollisionFloorY+terrain){feet=gCollisionFloorY+terrain;gFallVelocity=0;gFallGrounded=true;}
+    }
+    *outY=feet-gCollisionFloorY;return true;
+}

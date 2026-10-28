@@ -1,3 +1,5 @@
+#include "physics/fo3-contact-limit.h"
+#include "physics/fo3-rigid-world.h"
 #include "scripting/fo3-script-imagespace.h"
 #include "scripting/fo3-nonresident-script.h"
 namespace fo3worldscript {fo3script::ImagePresentation Presentation();}
@@ -164,6 +166,7 @@ void PrepareFo3InteriorSceneLights();
 struct GpuObject;
 bool Q1970ShouldRenderFullDetail(const GpuObject& object);
 bool Q220IsLooseRecordType(const std::string& type);
+void RetireFo3LooseBody(uint32_t reference);
 bool Q1900CellVisualReadyQ19(int32_t x, int32_t y);
 void Q1900LogLifetimeQ19(size_t added, size_t removed);
 void Q1970ProbeNativeLod(float gameX, float gameY);
@@ -418,7 +421,55 @@ Q2401LoadDoorNifAnimation(const std::string& modelPath) {
     return decoded;
 }
 
+// Geometry/properties prepared on the existing scene worker. Never decode NIFs
+// or read archives from a grab/finger/contact update.
+struct Fo3PreparedRigidBody {fo3rigid::Asset asset;Vec3 centerGame;};
+std::shared_ptr<const Fo3PreparedRigidBody> PrepareFo3RigidBody(
+    const Fo3WorldPlacement& placement,const std::vector<Fo3StaticNifMesh>& meshes) {
+    if(!Q220IsLooseRecordType(placement.baseRecordType)&&placement.baseRecordType!="WEAP")return {};
+    auto out=std::make_shared<Fo3PreparedRigidBody>();
+    using Shapes=std::shared_ptr<const std::vector<Fo3NifCollisionShapeQ6F>>;
+    static std::mutex mutex;static std::unordered_map<std::string,Shapes> cache;Shapes source;
+    {std::lock_guard<std::mutex> lock(mutex);const auto i=cache.find(placement.modelPath);if(i!=cache.end())source=i->second;}
+    if(!source){std::vector<Fo3NifCollisionShapeQ6F> decoded;LoadFo3NifCollisionShapesComplete(placement.modelPath,decoded);
+        auto next=std::make_shared<const std::vector<Fo3NifCollisionShapeQ6F>>(std::move(decoded));
+        std::lock_guard<std::mutex> lock(mutex);source=cache.emplace(placement.modelPath,next).first->second;}
+    const auto& shapes=*source;const bool authored=!shapes.empty();
+    Vec3 modelCenter{};
+    if(authored){
+        for(const auto& shape:shapes)if(shape.physicalProperties){
+            const auto& a=shape;out->asset.material={a.massKg,a.friction,a.restitution,a.linearDamping,a.angularDamping,{},true};
+            modelCenter={a.centerOfMass[0],a.centerOfMass[1],a.centerOfMass[2]};
+            const Vec3 axis[3]{ApplyEsmRotation({1,0,0},placement),ApplyEsmRotation({0,1,0},placement),ApplyEsmRotation({0,0,1},placement)};
+            const float R[9]{axis[0].x,axis[1].x,axis[2].x,axis[0].z,axis[1].z,axis[2].z,-axis[0].y,-axis[1].y,-axis[2].y};
+            for(int i=0;i<3;++i)for(int j=0;j<3;++j)for(int k=0;k<3;++k)for(int l=0;l<3;++l)
+                out->asset.material.tensor[i*3+j]+=R[i*3+k]*a.inertiaTensor[k*3+l]*R[j*3+l]*.01f*placement.scale*placement.scale;
+            break;
+        }
+    }else{
+        Vec3 lo{INFINITY,INFINITY,INFINITY},hi{-INFINITY,-INFINITY,-INFINITY};
+        for(const auto& mesh:meshes)for(size_t i=0;i+2<mesh.positions.size();i+=3){
+            lo.x=std::min(lo.x,mesh.positions[i]);lo.y=std::min(lo.y,mesh.positions[i+1]);lo.z=std::min(lo.z,mesh.positions[i+2]);
+            hi.x=std::max(hi.x,mesh.positions[i]);hi.y=std::max(hi.y,mesh.positions[i+1]);hi.z=std::max(hi.z,mesh.positions[i+2]);
+        }
+        modelCenter={(lo.x+hi.x)*.5f,(lo.y+hi.y)*.5f,(lo.z+hi.z)*.5f};
+    }
+    auto rotated=[&](Vec3 p){return ApplyEsmRotation({p.x*placement.scale,p.y*placement.scale,p.z*placement.scale},placement);};
+    const auto c=rotated(modelCenter);out->centerGame={placement.x+c.x,placement.y+c.y,placement.z+c.z};
+    auto hull=[&](const std::vector<float>& vertices){std::vector<fo3rigid::V> points;points.reserve(vertices.size()/3);
+        for(size_t i=0;i+2<vertices.size();i+=3){const auto q=rotated({vertices[i]-modelCenter.x,vertices[i+1]-modelCenter.y,vertices[i+2]-modelCenter.z});points.push_back({q.x/FO3_UNITS_PER_METRE,q.z/FO3_UNITS_PER_METRE,-q.y/FO3_UNITS_PER_METRE});}
+        if(points.size()>=4)out->asset.hulls.push_back(std::move(points));};
+    if(authored){for(const auto& shape:shapes)hull(shape.positions);}
+    else for(const auto& mesh:meshes)hull(mesh.positions);
+    auto visible=[&](const Fo3StaticNifMesh& mesh,uint32_t index)->fo3rigid::V{
+        const size_t i=size_t(index)*3;const auto q=rotated({mesh.positions[i]-modelCenter.x,mesh.positions[i+1]-modelCenter.y,mesh.positions[i+2]-modelCenter.z});return {q.x/FO3_UNITS_PER_METRE,q.z/FO3_UNITS_PER_METRE,-q.y/FO3_UNITS_PER_METRE};};
+    for(const auto& mesh:meshes)for(size_t i=0;i+2<mesh.indices.size();i+=3)
+        out->asset.surface.push_back({visible(mesh,mesh.indices[i]),visible(mesh,mesh.indices[i+1]),visible(mesh,mesh.indices[i+2])});
+    return out->asset.hulls.empty()?nullptr:out;
+}
+
 struct CpuObject {
+    std::shared_ptr<const Fo3PreparedRigidBody> rigidBody;
     Fo3WorldPlacement placement;
     Fo3StaticNifMesh mesh;
     std::vector<Vec3> positionsGame;
@@ -444,6 +495,8 @@ struct CpuObject {
 };
 
 struct GpuObject {
+    std::shared_ptr<const Fo3PreparedRigidBody> rigidBody;
+    Vec3 rigidCenter{};
     std::shared_ptr<const fo3terminal::Surface> terminalScreen;
     std::shared_ptr<const std::vector<fo3occ::Surface>> occluders;
     mutable uint64_t occlusionGeneration=0;
@@ -2088,6 +2141,7 @@ bool BuildCpuObjects(const Fo3WorldPlacement& placement, std::vector<CpuObject>&
     }
 
 
+    const auto rigidBody=PrepareFo3RigidBody(placement,*cachedMeshes);
     size_t shapeIndex = 0;
     for (const Fo3StaticNifMesh& cachedMesh : *cachedMeshes) {
         Fo3StaticNifMesh mesh = cachedMesh;
@@ -2111,6 +2165,7 @@ bool BuildCpuObjects(const Fo3WorldPlacement& placement, std::vector<CpuObject>&
 
         CpuObject out;
         out.placement = placement;
+        out.rigidBody = rigidBody;
         out.q2016ShapeIndex = static_cast<uint32_t>(shapeIndex);
         out.mesh = std::move(mesh);
         out.q2401DoorAnimation=q2401DoorAnimation;
@@ -2538,6 +2593,8 @@ bool UploadCpuObject(CpuObject& cpu, float centerX, float centerY, float floorZ,
     gpu.q1970GridY = cpu.placement.hasExteriorGrid
         ? cpu.placement.gridY
         : static_cast<int32_t>(std::floor(cpu.placement.y / Q1890_EXTERIOR_CELL_SIZE));
+    gpu.rigidBody=cpu.rigidBody;
+    if(cpu.rigidBody){const auto c=cpu.rigidBody->centerGame;gpu.rigidCenter={(c.x-centerX)/FO3_UNITS_PER_METRE,FLOOR_Y+(c.z-floorZ)/FO3_UNITS_PER_METRE,SCENE_FORWARD-(c.y-centerY)/FO3_UNITS_PER_METRE};}
     gpu.baseRecordType = cpu.placement.baseRecordType;
     gpu.q220LooseObject =
         cpu.placement.refFormId != 0u &&
@@ -9952,12 +10009,12 @@ struct Q223DynamicBody {
 };
 
 std::unordered_map<uint32_t, Q223DynamicBody> gQ223DynamicBodies;
-std::unordered_map<std::string, float> gQ223CollisionRadiusUnitsCache;
+void RetireFo3LooseBody(uint32_t reference){fo3rigid::Live().Remove(reference);gQ223DynamicBodies.erase(reference);}
 
 struct Q220GrabState {
     bool active = false;
     uint32_t refFormId = 0u;
-    Vec3 startPalm{};
+    Vec3 startPalm{},startTracked{};
     float startQuat[4]{0,0,0,1};
     float baseTransform[16]{
         1,0,0,0,
@@ -9980,6 +10037,7 @@ void Q220ResetGrabState() {
     gQ220Grab[0] = {};
     gQ220Grab[1] = {};
     gQ223DynamicBodies.clear();
+    fo3rigid::Live().ClearBodies();
 }
 
 void Q220SetRefTransform(uint32_t refFormId, const float transform[16]) {
@@ -10007,54 +10065,6 @@ bool Q223GetRefTransform(uint32_t refFormId, float out[16]) {
     return false;
 }
 
-float Q223CollisionRadiusUnits(const std::string& modelPath) {
-    const auto cached =
-        gQ223CollisionRadiusUnitsCache.find(modelPath);
-    if (cached != gQ223CollisionRadiusUnitsCache.end())
-        return cached->second;
-
-    std::vector<Fo3NifCollisionShapeQ6F> shapes;
-    if (!LoadFo3NifCollisionShapesQ6F(modelPath, shapes) ||
-        shapes.empty()) {
-        gQ223CollisionRadiusUnitsCache[modelPath] = 0.0f;
-        return 0.0f;
-    }
-
-    Vec3 minimum{1e30f,1e30f,1e30f};
-    Vec3 maximum{-1e30f,-1e30f,-1e30f};
-    size_t points = 0u;
-    for (const Fo3NifCollisionShapeQ6F& shape : shapes) {
-        for (size_t i = 0u;
-             i + 2u < shape.positions.size();
-             i += 3u) {
-            const Vec3 p{
-                shape.positions[i + 0u],
-                shape.positions[i + 1u],
-                shape.positions[i + 2u]};
-            minimum.x = std::min(minimum.x, p.x);
-            minimum.y = std::min(minimum.y, p.y);
-            minimum.z = std::min(minimum.z, p.z);
-            maximum.x = std::max(maximum.x, p.x);
-            maximum.y = std::max(maximum.y, p.y);
-            maximum.z = std::max(maximum.z, p.z);
-            ++points;
-        }
-    }
-
-    if (points == 0u) {
-        gQ223CollisionRadiusUnitsCache[modelPath] = 0.0f;
-        return 0.0f;
-    }
-
-    const Vec3 half{
-        (maximum.x - minimum.x) * 0.5f,
-        (maximum.y - minimum.y) * 0.5f,
-        (maximum.z - minimum.z) * 0.5f};
-    const float radius = Q211Length(half);
-    gQ223CollisionRadiusUnitsCache[modelPath] = radius;
-    return radius;
-}
-
 Q223DynamicBody* Q223EnsureDynamicBody(uint32_t refFormId) {
     auto existing = gQ223DynamicBodies.find(refFormId);
     if (existing != gQ223DynamicBodies.end())
@@ -10063,7 +10073,6 @@ Q223DynamicBody* Q223EnsureDynamicBody(uint32_t refFormId) {
     Vec3 minimum{1e30f,1e30f,1e30f};
     Vec3 maximum{-1e30f,-1e30f,-1e30f};
     std::string modelPath;
-    float placementScale = 1.0f;
     bool found = false;
 
     for (const GpuObject& object : gObjects) {
@@ -10079,55 +10088,24 @@ Q223DynamicBody* Q223EnsureDynamicBody(uint32_t refFormId) {
         maximum.z = std::max(maximum.z, object.maxZ);
         if (modelPath.empty()) {
             modelPath = object.modelPath;
-            placementScale = object.q223PlacementScale;
         }
         found = true;
     }
     if (!found || modelPath.empty()) return nullptr;
 
-    Q223DynamicBody body;
-    body.refFormId = refFormId;
-    body.initialized = true;
-    body.authoredCenter = {
-        (minimum.x + maximum.x) * 0.5f,
-        (minimum.y + maximum.y) * 0.5f,
-        (minimum.z + maximum.z) * 0.5f};
-    body.modelPath = modelPath;
+    const GpuObject* source=nullptr;
+    for(const auto& object:gObjects)if(object.refFormId==refFormId&&object.rigidBody){source=&object;break;}
+    if(!source)return nullptr;
+    Q223DynamicBody body;body.refFormId=refFormId;body.initialized=true;
+    body.authoredCenter=source->rigidCenter;body.modelPath=modelPath;
+    auto initial=fo3rigid::Identity();initial[12]=body.authoredCenter.x;initial[13]=body.authoredCenter.y;initial[14]=body.authoredCenter.z;
+    float transform[16];Q223GetRefTransform(refFormId,transform);
+    float current[16];Q220MulMat4(transform,initial.data(),current);
+    fo3rigid::M pose;std::copy(current,current+16,pose.begin());
+    if(!fo3rigid::Live().Add(refFormId,source->rigidBody->asset,pose))return nullptr;
 
-    const float radiusUnits =
-        Q223CollisionRadiusUnits(modelPath);
-    const Vec3 renderHalf{
-        (maximum.x - minimum.x) * 0.5f,
-        (maximum.y - minimum.y) * 0.5f,
-        (maximum.z - minimum.z) * 0.5f};
-    const float renderRadius =
-        Q211Length(renderHalf);
-
-    const bool authoredBhk =
-        radiusUnits > 0.0f &&
-        std::isfinite(radiusUnits);
-    body.collisionHalfExtents = renderHalf;
-    if (authoredBhk) {
-        body.collisionRadius =
-            (radiusUnits * placementScale) /
-            FO3_UNITS_PER_METRE;
-    } else {
-        // Q22.4 fallback for Bethesda loose clutter with no bhkRigidBody.
-        // The visible mesh is still Fallout-authored data; only the enclosing
-        // sphere representation is a standalone-VR simplification.
-        body.collisionRadius =
-            std::max(0.015f, renderRadius);
-    }
-
-    Q6H_LOGI("Q22.5 PHYSICS BODY: ref=%08X model=%s radius=%.4fm source=%s renderHalf=(%.3f %.3f %.3f) placementScale=%.3f physics=enabled",
-             refFormId, modelPath.c_str(),
-             body.collisionRadius,
-             authoredBhk
-                 ? "authored-bhk-bounds"
-                 : "authored-render-bounds-fallback",
-             renderHalf.x, renderHalf.y, renderHalf.z,
-             placementScale);
-
+    body.collisionHalfExtents={(maximum.x-minimum.x)*.5f,(maximum.y-minimum.y)*.5f,(maximum.z-minimum.z)*.5f};
+    body.collisionRadius=Q211Length(body.collisionHalfExtents);
     auto inserted =
         gQ223DynamicBodies.emplace(refFormId, std::move(body));
     return &inserted.first->second;
@@ -10256,199 +10234,21 @@ void Q223BuildMotionDelta(
 }
 
 void Q223AdvanceDynamicBodies() {
-    if (gQ223DynamicBodies.empty()) return;
-
-    const auto now = Fo3GameplayNow();
-    // Q22.3 standalone-VR runtime liberty: SI Earth gravity. Fallout's
-    // supplied INI/ESM does not expose an unambiguous gravity acceleration.
-    constexpr float GRAVITY_MPS2 = 9.80665f;
-    // Fallout.ini [HAVOK] fMaxTime=0.016.
-    constexpr float HAVOK_MAX_STEP = 0.016f;
-
-    for (auto& entry : gQ223DynamicBodies) {
-        Q223DynamicBody& body = entry.second;
-        if (!body.dynamic || body.held ||
-            body.sleeping ||
-            !(body.collisionRadius > 0.0f)) {
-            continue;
-        }
-
-        if (body.lastPhysicsStep.time_since_epoch().count() == 0) {
-            body.lastPhysicsStep = now;
-            continue;
-        }
-
-        float remaining =
-            std::chrono::duration<float>(
-                now - body.lastPhysicsStep).count();
-        body.lastPhysicsStep = now;
-        if (!(remaining > 0.0f)) continue;
-
-        // Avoid a headset pause/resume producing seconds of catch-up work.
-        remaining = std::min(remaining, 0.064f);
-
-        while (remaining > 0.00001f) {
-            const float dt =
-                std::min(remaining, HAVOK_MAX_STEP);
-            remaining -= dt;
-
-            float currentTransform[16]{};
-            if (!Q223GetRefTransform(
-                    body.refFormId,
-                    currentTransform)) {
-                body.dynamic = false;
-                break;
-            }
-
-            const Vec3 currentCenter =
-                Q220TransformPoint(
-                    currentTransform,
-                    body.authoredCenter);
-
-            body.linearVelocity.y -=
-                GRAVITY_MPS2 * dt;
-            const Vec3 desiredCenter =
-                Q211Add(
-                    currentCenter,
-                    Q211Mul(body.linearVelocity, dt));
-
-            float rx = desiredCenter.x;
-            float ry = desiredCenter.y;
-            float rz = desiredCenter.z;
-            float nx = 0.0f, ny = 0.0f, nz = 0.0f;
-            uint32_t contacts = 0u;
-
-            Vec3 axisX{
-                currentTransform[0],
-                currentTransform[1],
-                currentTransform[2]};
-            Vec3 axisY{
-                currentTransform[4],
-                currentTransform[5],
-                currentTransform[6]};
-            Vec3 axisZ{
-                currentTransform[8],
-                currentTransform[9],
-                currentTransform[10]};
-            axisX = Q211NormalizeSafe(axisX,{1.0f,0.0f,0.0f});
-            axisY = Q211NormalizeSafe(axisY,{0.0f,1.0f,0.0f});
-            axisZ = Q211NormalizeSafe(axisZ,{0.0f,0.0f,1.0f});
-
-            uint32_t candidates = 0u;
-            const bool collisionReady =
-                ResolveFo3DynamicBoxQ225(
-                    body.refFormId,
-                    currentCenter.x,
-                    currentCenter.y,
-                    currentCenter.z,
-                    desiredCenter.x,
-                    desiredCenter.y,
-                    desiredCenter.z,
-                    body.collisionHalfExtents.x,
-                    body.collisionHalfExtents.y,
-                    body.collisionHalfExtents.z,
-                    axisX.x, axisX.y, axisX.z,
-                    axisY.x, axisY.y, axisY.z,
-                    axisZ.x, axisZ.y, axisZ.z,
-                    body.collisionRadius,
-                    &rx, &ry, &rz,
-                    &nx, &ny, &nz,
-                    &contacts,
-                    &candidates);
-
-            const Vec3 resolvedCenter{rx, ry, rz};
-            if (collisionReady && contacts > 0u) {
-                const Vec3 normal =
-                    Q211NormalizeSafe(
-                        Vec3{nx, ny, nz},
-                        Vec3{0.0f, 1.0f, 0.0f});
-                const float inward =
-                    Q211Dot(
-                        body.linearVelocity,
-                        normal);
-                if (inward < 0.0f) {
-                    body.linearVelocity =
-                        Q211Sub(
-                            body.linearVelocity,
-                            Q211Mul(normal, inward));
-                }
-
-                // Q22.5 temporary VR-side settling response. Preserve
-                // tangential motion/spin instead of freezing at first touch.
-                // These damping values are solver choices until authored
-                // Havok material/inertia fields are connected.
-                const float linearRetain =
-                    std::exp(-1.25f * dt);
-                const float angularRetain =
-                    std::exp(-2.00f * dt);
-                body.linearVelocity =
-                    Q211Mul(body.linearVelocity,linearRetain);
-                body.angularVelocity =
-                    Q211Mul(body.angularVelocity,angularRetain);
-
-                const float linearSpeed =
-                    Q211Length(body.linearVelocity);
-                const float angularSpeed =
-                    Q211Length(body.angularVelocity);
-                if (normal.y > 0.45f &&
-                    linearSpeed < 0.08f &&
-                    angularSpeed < 0.22f) {
-                    body.sleepTimer += dt;
-                } else {
-                    body.sleepTimer = 0.0f;
-                }
-
-                if (body.sleepTimer >= 0.30f) {
-                    body.sleeping = true;
-                    body.dynamic = false;
-                    body.linearVelocity = {};
-                    body.angularVelocity = {};
-                    Q6H_LOGI("Q22.5 SLEEP: ref=%08X center=(%.3f %.3f %.3f) after=%.2fs",
-                             body.refFormId,
-                             resolvedCenter.x,
-                             resolvedCenter.y,
-                             resolvedCenter.z,
-                             body.sleepTimer);
-                }
-
-                static uint64_t q225ContactLog = 0u;
-                ++q225ContactLog;
-                if (q225ContactLog <= 40u ||
-                    (q225ContactLog % 180u) == 0u) {
-                    Q6H_LOGI("Q22.5 CONTACT: ref=%08X contacts=%u candidates=%u broadRadius=%.3f half=(%.3f %.3f %.3f) normal=(%.2f %.2f %.2f) velocity=(%.2f %.2f %.2f) angular=%.2f sleep=%.2f",
-                             body.refFormId,
-                             contacts,
-                             candidates,
-                             body.collisionRadius,
-                             body.collisionHalfExtents.x,
-                             body.collisionHalfExtents.y,
-                             body.collisionHalfExtents.z,
-                             normal.x, normal.y, normal.z,
-                             body.linearVelocity.x,
-                             body.linearVelocity.y,
-                             body.linearVelocity.z,
-                             angularSpeed,
-                             body.sleepTimer);
-                }
-            }
-
-            float motionDelta[16]{};
-            Q223BuildMotionDelta(
-                currentCenter,
-                resolvedCenter,
-                body.angularVelocity,
-                dt,
-                motionDelta);
-            float finalTransform[16]{};
-            Q220MulMat4(
-                motionDelta,
-                currentTransform,
-                finalTransform);
-            Q220SetRefTransform(
-                body.refFormId,
-                finalTransform);
-            if (body.sleeping) break;
-        }
+    static auto previous=Fo3GameplayNow();const auto now=Fo3GameplayNow();
+    const float seconds=std::chrono::duration<float>(now-previous).count();previous=now;
+    SynchronizeFo3RigidWorld(gQ210Head[0],gQ210Head[2]);
+    auto& world=fo3rigid::Live();
+    for(auto i=gQ223DynamicBodies.begin();i!=gQ223DynamicBodies.end();){
+        const bool resident=std::any_of(gObjects.begin(),gObjects.end(),[&](const GpuObject& o){return o.q220LooseObject&&o.refFormId==i->first;});
+        if(!resident){world.Remove(i->first);i=gQ223DynamicBodies.erase(i);}else ++i;
+    }
+    world.Step(seconds);
+    for(auto& entry:gQ223DynamicBodies){
+        auto& body=entry.second;fo3rigid::M pose;fo3rigid::V linear,angular;
+        if(!world.Pose(entry.first,pose,&linear,&angular))continue;
+        body.linearVelocity={linear[0],linear[1],linear[2]};body.angularVelocity={angular[0],angular[1],angular[2]};
+        auto inverse=fo3rigid::Identity();inverse[12]=-body.authoredCenter.x;inverse[13]=-body.authoredCenter.y;inverse[14]=-body.authoredCenter.z;
+        float transform[16];Q220MulMat4(pose.data(),inverse.data(),transform);Q220SetRefTransform(entry.first,transform);
     }
 }
 
@@ -10478,35 +10278,24 @@ bool Q220FindNearestLooseRef(
             a.transform = object.q220DynamicTransform;
     }
 
-    constexpr float Q220_GRAB_REACH = 0.16f;
-    bool found = false;
-    float best = Q220_GRAB_REACH;
-    for (const auto& entry : refs) {
-        const Aggregate& a = entry.second;
-        if (!a.transform) continue;
-        const Vec3 originalCenter{
-            (a.minimum.x + a.maximum.x) * 0.5f,
-            (a.minimum.y + a.maximum.y) * 0.5f,
-            (a.minimum.z + a.maximum.z) * 0.5f};
-        const Vec3 center =
-            Q220TransformPoint(a.transform, originalCenter);
-        const Vec3 half{
-            (a.maximum.x - a.minimum.x) * 0.5f,
-            (a.maximum.y - a.minimum.y) * 0.5f,
-            (a.maximum.z - a.minimum.z) * 0.5f};
-        const float radius =
-            std::max(0.015f, Q211Length(half));
-        const float surfaceDistance =
-            std::max(
-                0.0f,
-                Q211Length(Q211Sub(hand, center)) - radius);
-        if (surfaceDistance <= best) {
-            best = surfaceDistance;
-            outRef = entry.first;
-            outCenter = center;
-            outSurfaceDistance = surfaceDistance;
-            found = true;
+    constexpr float Q220_GRAB_REACH = 0.10f;
+    bool found=false;float best=Q220_GRAB_REACH;
+    for(const auto& entry:refs){
+        const auto& bounds=entry.second;const Vec3 original{(bounds.minimum.x+bounds.maximum.x)*.5f,(bounds.minimum.y+bounds.maximum.y)*.5f,(bounds.minimum.z+bounds.maximum.z)*.5f};
+        const auto c=Q220TransformPoint(bounds.transform,original);
+        const Vec3 half{(bounds.maximum.x-bounds.minimum.x)*.5f,(bounds.maximum.y-bounds.minimum.y)*.5f,(bounds.maximum.z-bounds.minimum.z)*.5f};
+        if(Q211Length(Q211Sub(hand,c))>Q211Length(half)+Q220_GRAB_REACH)continue;
+        fo3rigid::V point,normal;float distance;bool selected=false;
+        if(fo3rigid::Live().Has(entry.first))selected=fo3rigid::Live().Closest(entry.first,{hand.x,hand.y,hand.z},point,normal,distance);
+        else for(const auto& object:gObjects)if(object.refFormId==entry.first&&object.rigidBody){
+            auto initial=fo3rigid::Identity();initial[12]=object.rigidCenter.x;initial[13]=object.rigidCenter.y;initial[14]=object.rigidCenter.z;
+            fo3rigid::M current;Q220MulMat4(object.q220DynamicTransform,initial.data(),current.data());
+            selected=fo3rigid::Surface(object.rigidBody->asset,current,{hand.x,hand.y,hand.z},point,normal,distance);break;
         }
+        if(!selected)continue;
+        if(distance<-.02f||distance>best)continue;
+        if(HasFo3InteractionOccluder(hand.x,hand.y,hand.z,point[0]-hand.x,point[1]-hand.y,point[2]-hand.z,1,entry.first))continue;
+        best=distance;outRef=entry.first;outCenter={point[0],point[1],point[2]};outSurfaceDistance=distance;found=true;
     }
     return found;
 }
@@ -10518,6 +10307,8 @@ void Q220UpdateLooseGrab(
         const float quat[4],
         float grip) {
     Q220GrabState& state = gQ220Grab[handIndex];
+    const Vec3 tracked=handIndex==0?Vec3{gQ210LeftHand[0],gQ210LeftHand[1],gQ210LeftHand[2]}:Vec3{gQ210RightHand[0],gQ210RightHand[1],gQ210RightHand[2]};
+    if(state.active){float delta[16];Q220ControllerDeltaMatrix(state.startTracked,state.startQuat,tracked,quat,delta);hand=Q220TransformPoint(delta,state.startPalm);}
     constexpr float PRESS = 0.65f;
     constexpr float RELEASE = 0.25f;
 
@@ -10527,7 +10318,7 @@ void Q220UpdateLooseGrab(
         const auto ref=state.refFormId;
         const bool resident=std::any_of(gObjects.begin(),gObjects.end(),[&](const GpuObject& o){return o.q220LooseObject && o.refFormId==ref;});
         if(!resident || (gPlayerSession && gPlayerSession->player.IsCollected(ref))) {
-            gQ223DynamicBodies.erase(ref);state={};
+            fo3rigid::Live().Remove(ref);gQ223DynamicBodies.erase(ref);state={};
             if(handIndex==1) gShoulderGesture.Reset();
             return;
         }
@@ -10558,6 +10349,7 @@ void Q220UpdateLooseGrab(
             state.active = true;
             state.refFormId = ref;
             state.startPalm = hand;
+            state.startTracked = tracked;
             std::copy(quat, quat + 4, state.startQuat);
 
             if (Q223DynamicBody* body =
@@ -10577,42 +10369,16 @@ void Q220UpdateLooseGrab(
                     *body, hand, quat);
             }
 
-            float existingTransform[16]{};
-            bool copied = false;
-            for (const GpuObject& object : gObjects) {
-                if (object.q220LooseObject &&
-                    object.refFormId == ref) {
-                    std::copy(
-                        object.q220DynamicTransform,
-                        object.q220DynamicTransform + 16,
-                        existingTransform);
-                    copied = true;
-                    break;
-                }
+            auto palm=fo3rigid::Identity();
+            // Quaternion orientation in XR axes, with the actual solved palm.
+            const float identityQ[4]{0,0,0,1};Q220ControllerDeltaMatrix({},identityQ,hand,quat,palm.data());
+            fo3rigid::V surface,normal;float gap;
+            if(fo3rigid::Live().Closest(ref,{hand.x,hand.y,hand.z},surface,normal,gap)){
+                state.startPalm={surface[0]+normal[0]*.015f,surface[1]+normal[1]*.015f,surface[2]+normal[2]*.015f};
+                palm[12]=state.startPalm.x;palm[13]=state.startPalm.y;palm[14]=state.startPalm.z;hand=state.startPalm;
             }
-            if (!copied) Q220Identity(existingTransform);
-
-            // Q22.1 generic loose-clutter anchor:
-            // snap the authored REFR bounds-center to the weighted Fallout
-            // palm anchor produced by the same IK solve that draws the hand.
-            float snapTranslation[16]{};
-            Q220Identity(snapTranslation);
-            snapTranslation[12] = hand.x - center.x;
-            snapTranslation[13] = hand.y - center.y;
-            snapTranslation[14] = hand.z - center.z;
-            Q220MulMat4(
-                snapTranslation,
-                existingTransform,
-                state.baseTransform);
-            Q220SetRefTransform(ref, state.baseTransform);
-
-            const float snapDistance =
-                Q211Length(Q211Sub(hand, center));
-            Q6H_LOGI("Q22.5 GRAB BEGIN: hand=%s ref=%08X surfaceDistance=%.3f snapDistance=%.3f objectCenter=(%.3f %.3f %.3f) palm=(%.3f %.3f %.3f) anchor=authored-bounds-center-to-weighted-player-palm",
-                     handIndex == 0 ? "L" : "R",
-                     ref, distance, snapDistance,
-                     center.x, center.y, center.z,
-                     hand.x, hand.y, hand.z);
+            if(!fo3rigid::Live().Grab(ref,handIndex,palm,{center.x,center.y,center.z})){state.active=false;state.refFormId=0;}
+            Q6H_LOGI("SURFACE GRAB hand=%d ref=%08X distance=%.3f point=(%.3f %.3f %.3f) centreSnap=0",handIndex,ref,distance,center.x,center.y,center.z);
         }
     }
 
@@ -10640,50 +10406,16 @@ void Q220UpdateLooseGrab(
             Q223SampleHeldMotion(*body, hand, quat);
         }
 
-        if (grip <= RELEASE) {
-            const uint32_t releasedRef =
-                state.refFormId;
-            if (Q223DynamicBody* body =
-                    Q223EnsureDynamicBody(releasedRef)) {
-                body->held = false;
-                body->linearVelocity =
-                    body->sampledLinearVelocity;
-                body->angularVelocity =
-                    body->sampledAngularVelocity;
-                body->dynamic =
-                    body->collisionRadius > 0.0f;
-                body->sleeping = false;
-                body->sleepTimer = 0.0f;
-                body->lastPhysicsStep =
-                    Fo3GameplayNow();
-
-                Q6H_LOGI("Q22.5 THROW RELEASE: hand=%s ref=%08X physics=%d linear=(%.2f %.2f %.2f)mps angular=(%.2f %.2f %.2f)radps radius=%.3f",
-                         handIndex == 0 ? "L" : "R",
-                         releasedRef,
-                         body->dynamic ? 1 : 0,
-                         body->linearVelocity.x,
-                         body->linearVelocity.y,
-                         body->linearVelocity.z,
-                         body->angularVelocity.x,
-                         body->angularVelocity.y,
-                         body->angularVelocity.z,
-                         body->collisionRadius);
-            }
-            state.active = false;
-            state.refFormId = 0u;
-        } else {
-            float controllerDelta[16]{};
-            Q220ControllerDeltaMatrix(
-                state.startPalm, state.startQuat,
-                hand, quat, controllerDelta);
-            float finalTransform[16]{};
-            Q220MulMat4(
-                controllerDelta,
-                state.baseTransform,
-                finalTransform);
-            Q220SetRefTransform(
-                state.refFormId,
-                finalTransform);
+        if(grip<=RELEASE){
+            fo3rigid::Live().Release(handIndex);state.active=false;state.refFormId=0;
+        }else{
+            auto palm=fo3rigid::Identity();const float identityQ[4]{0,0,0,1};
+            Q220ControllerDeltaMatrix({},identityQ,hand,quat,palm.data());
+            fo3rigid::V anchor;
+            if(fo3rigid::Live().GripPoint(handIndex,anchor)&&
+               Q211Length(Q211Sub(hand,{anchor[0],anchor[1],anchor[2]}))>.45f){
+                fo3rigid::Live().Release(handIndex);state.active=false;state.refFormId=0;
+            }else fo3rigid::Live().Target(handIndex,palm);
         }
     }
 
@@ -11360,7 +11092,7 @@ const std::unordered_map<std::string, Q211Delta>& Q217BuildFingerPose(
         float trigger,
         bool triggerTouched,
         float grip,
-        bool thumbTouched) {
+        bool thumbTouched,const Q211Delta& handDelta) {
     static std::unordered_map<std::string,Q211Delta> poses[2];
     auto& out=poses[left?0:1];
     for(auto& entry:out) entry.second=Q211Delta{};
@@ -11438,11 +11170,19 @@ const std::unordered_map<std::string, Q211Delta>& Q217BuildFingerPose(
                 : restAxis;
             const float degrees =
                 jointDegrees[std::min<size_t>(i, 2u)];
-            const Q211Delta bend = Q218MakePivotRotation(
-                pivot,
-                axis,
-                -curl * degrees * DEG);
-            cumulative = Q218ComposeRigid(cumulative, bend);
+            auto bendAt=[&](float fraction){return Q218ComposeRigid(cumulative,Q218MakePivotRotation(pivot,axis,-curl*degrees*DEG*fraction));};
+            const auto held=fo3rigid::Live().Held(left?0:1);
+            auto penetrates=[&](const Q211Delta& candidate){
+                if(!held)return false;
+                const Vec3 end=i+1<chain.joints.size()?chain.joints[i+1].pivot:Q211Add(joint.pivot,Q211Mul(segmentDirection,.022f));
+                for(float f:{.25f,.5f,.75f,1.f}){
+                    auto rest=Q211Add(joint.pivot,Q211Mul(Q211Sub(end,joint.pivot),f));
+                    const auto p=Q211TransformPoint(gQ210PlayerRoot,Q211ApplyDelta(handDelta,Q211ApplyDelta(candidate,rest)));
+                    if(fo3rigid::Live().Intersects(held,{p.x,p.y,p.z},.004f))return true;
+                }return false;
+            };
+            const float fraction=held?fo3contact::Limit([&](float f){return penetrates(bendAt(f));}):1.f;
+            cumulative = bendAt(fraction);
             out[joint.name] = cumulative;
         }
     }
@@ -11491,10 +11231,14 @@ const std::unordered_map<std::string, Q211Delta>& Q217BuildFingerPose(
                         : thumbAxis;
                     const float weight =
                         i == 1u ? 0.70f : 0.30f;
-                    const Q211Delta bend = Q218MakePivotRotation(
-                        pivot, axis, targetAngle * weight);
-                    cumulative = Q218ComposeRigid(
-                        cumulative, bend);
+                    auto at=[&](float f){return Q218ComposeRigid(cumulative,Q218MakePivotRotation(pivot,axis,targetAngle*weight*f));};
+                    const auto held=fo3rigid::Live().Held(left?0:1);
+                    float fraction=1;
+                    if(held)fraction=fo3contact::Limit([&](float f){
+                        const auto pose=at(f);const Vec3 end=i+1<rig.thumb.size()?rig.thumb[i+1].pivot:Q211Add(joint.pivot,Q211Mul(thumbDirection,.02f));
+                        for(float t:{.25f,.5f,.75f,1.f}){const auto rest=Q211Add(joint.pivot,Q211Mul(Q211Sub(end,joint.pivot),t));const auto p=Q211TransformPoint(gQ210PlayerRoot,Q211ApplyDelta(handDelta,Q211ApplyDelta(pose,rest)));if(fo3rigid::Live().Intersects(held,{p.x,p.y,p.z},.004f))return true;}return false;
+                    });
+                    cumulative = at(fraction);
                     out[joint.name] = cumulative;
                 }
             }
@@ -11679,11 +11423,24 @@ void Q211UpdatePlayerRig() {
     float invRoot[16]{};
     if (!Q2016InvertAffine(gQ210PlayerRoot, invRoot)) return;
 
-    const Vec3 leftTargetWorld{
+    Vec3 leftTargetWorld{
         gQ210LeftHand[0], gQ210LeftHand[1], gQ210LeftHand[2]};
-    const Vec3 rightTargetWorld{
+    Vec3 rightTargetWorld{
         gQ210RightHand[0], gQ210RightHand[1], gQ210RightHand[2]};
 
+    auto contactHand=[&](int h,Vec3 target,bool valid){
+        static fo3rigid::V previous[2]{};static bool ready[2]{};
+        if(!valid){ready[h]=false;return target;}
+        fo3rigid::M palm;
+        if(fo3rigid::Live().GripPalm(h,palm)){previous[h]={palm[12],palm[13],palm[14]};ready[h]=true;return Vec3{palm[12],palm[13],palm[14]};}
+        const fo3rigid::V desired{target.x,target.y-.035f,target.z};
+        fo3rigid::V resolved=desired,normal;
+        if(ready[h]&&Q211Length(Q211Sub(target,{previous[h][0],previous[h][1]+.035f,previous[h][2]}))<.5f)
+            fo3rigid::Live().SweepCapsule(previous[h],desired,.035f,.07f,resolved,normal);
+        previous[h]=resolved;ready[h]=true;return Vec3{resolved[0],resolved[1]+.035f,resolved[2]};
+    };
+    leftTargetWorld=contactHand(0,leftTargetWorld,gQ210LeftHandValid);
+    rightTargetWorld=contactHand(1,rightTargetWorld,gQ210RightHandValid);
     const Vec3 leftTarget=Q211TransformPoint(invRoot,leftTargetWorld);
     const Vec3 rightTarget=Q211TransformPoint(invRoot,rightTargetWorld);
     // Q21.11: match the actual OpenXR grip basis exactly.
@@ -11730,14 +11487,14 @@ void Q211UpdatePlayerRig() {
             ? Q217BuildFingerPose(
                   true, q220LeftAuthoredBasis,
                   gQ217FingerTrigger[0], gQ217TriggerTouched[0],
-                  gQ217FingerGrip[0], gQ217ThumbTouched[0])
+                  gQ217FingerGrip[0], gQ217ThumbTouched[0],q213LeftPose.handDelta)
             : emptyFingerPose;
     const auto& q217RightFingerPose =
         q213RightPose.solved
             ? Q217BuildFingerPose(
                   false, q220RightAuthoredBasis,
                   gQ217FingerTrigger[1], gQ217TriggerTouched[1],
-                  gQ217FingerGrip[1], gQ217ThumbTouched[1])
+                  gQ217FingerGrip[1], gQ217ThumbTouched[1],q213RightPose.handDelta)
             : emptyFingerPose;
 
     fqactor::player.fingers+=fqopaque::Micros(fingerStarted);

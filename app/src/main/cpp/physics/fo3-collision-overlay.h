@@ -106,6 +106,10 @@ bool ResolveFo3PlayerMotionQ6G(float currentX, float currentZ,
                                float* outX, float* outZ,
                                float* outPlayerYOffset);
 
+void SynchronizeFo3RigidWorld(float x,float z);
+bool ResolveFo3PlayerMotionWithGravity(float currentX,float currentZ,float desiredX,float desiredZ,
+    float currentY,float seconds,float* outX,float* outZ,float* outY);
+
 // Ready means a world was published, including an intentionally empty world.
 // It does not imply a ground surface exists. Shutdown/uninitialized stays false.
 bool IsFo3PlayerCollisionReadyQ6G();
