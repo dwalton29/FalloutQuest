@@ -62,7 +62,8 @@ block/power attacks and existing unsupported weapons remain outside this pass.
 
 - Production actor/render-bridge tests now execute weapon compositing (the old
   host-only exclusion was removed): repeated shots preserve the gait blend and
-  evolving pelvis pose; reload uses its own clock; root stays in place; source
+  evolving pelvis pose; walk-to-stand blends retain outgoing leg priority
+  until settled, avoiding a low-priority Aim layer snapping the legs; reload uses its own clock; root stays in place; source
   pitch math and missing-variant fallback work; zero-weight layers do not win.
 - Production combat/NAVM tests cover reload plus movement, flee, loss of sight,
   out-of-range target, automatic reload initiation during pursuit/search/cover/flee,

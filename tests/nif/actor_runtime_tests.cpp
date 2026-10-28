@@ -68,6 +68,7 @@ struct Q230ActorVisual {
   std::array<fo3anim::Clip,size_t(fo3npc::Animation::Count)> animations;
   int activeAnimation=0,headBone=-1,chestBone=-1;
   std::vector<fo3anim::Transform> blendFrom;
+    std::vector<uint8_t> basePriorities,blendPrioritiesFrom;
   double blendStart=-1;
   fo3anim::Matrix dialogueRoot=fo3anim::Identity();
   fo3anim::Skeleton skeleton;
@@ -240,6 +241,14 @@ static void CombatCompositionTests(){
   // Authored zero-weight layers do not override the base, including torso.
   a.animations[size_t(Animation::Aim)].weight=0;update();
   assert(a.pose.local[2].translation[2]==0);
+  a.animations[size_t(Animation::Aim)].weight=1;a.runtime.aimPitch=0;
+  const float movingHip=a.pose.local[1].translation[0];
+  a.runtime.animation=Animation::Aim;update();
+  assert(std::abs(a.pose.local[1].translation[0]-movingHip)<1e-5f);
+  residentRawNow+=std::chrono::milliseconds{150};update();
+  assert(a.pose.local[1].translation[0]>movingHip&&a.pose.local[1].translation[0]<99);
+  residentRawNow+=std::chrono::milliseconds{200};update();
+  assert(std::abs(a.pose.local[1].translation[0]-99)<1e-5f);
   a.runtime.activity=Activity::Package;a.runtime.animation=Animation::Idle;update();
   assert(a.combatPose.instance==0&&a.combatPose.selected==Animation::Count);
   a.animations[size_t(Animation::Aim)].weight=1;

@@ -518,7 +518,7 @@ void Q230UpdateActor(Q230ActorVisual &actor) {
   const bool locomotion=fo3npc::Locomotion(fo3npc::Animation(selected));
   if(selected!=actor.activeAnimation||(!locomotion&&!combatLayer&&actor.animationSerial!=actor.runtime.actionSerial)) {
     actor.animationSerial=actor.runtime.actionSerial;
-    actor.blendFrom=actor.pose.local;actor.blendStart=elapsed;actor.activeAnimation=selected;
+    actor.blendFrom=actor.pose.local;actor.blendPrioritiesFrom=actor.basePriorities;actor.blendStart=elapsed;actor.activeAnimation=selected;
     fo3anim::BindClip(actor.skeleton,actor.animations[selected],actor.pose);
     if(actor.runtime.activity!=fo3npc::Activity::Combat)
       Q6H_LOGI("NPC ANIM actor=%08X clip=%s visual=%p frame=%llu",
@@ -538,6 +538,7 @@ void Q230UpdateActor(Q230ActorVisual &actor) {
     fo3anim::BindClip(actor.skeleton,authored,actor.pose);
     if(!fo3anim::Sample(actor.skeleton,authored,now-furniture.started,actor.pose,&timings,slot->idleMarker?fo3anim::RootPolicy::Locomotion:fo3anim::RootPolicy::Furniture,&furniture.retainedRoot))return;
   }else if(!fo3anim::Sample(actor.skeleton,clip,sampleTime,actor.pose,&timings)) return;
+  actor.basePriorities=actor.pose.priorities;
   if(!furniturePose&&actor.blendStart>=0&&elapsed-actor.blendStart<fo3npc::DialoguePolicy::BlendSeconds&&actor.blendFrom.size()==actor.pose.local.size()) {
     const float mix=float((elapsed-actor.blendStart)/fo3npc::DialoguePolicy::BlendSeconds);
     for(size_t i=0;i<actor.pose.local.size();++i) {
@@ -547,6 +548,10 @@ void Q230UpdateActor(Q230ActorVisual &actor) {
       float norm=0;for(int j=0;j<4;++j){to.rotation[j]=from.rotation[j]*(1-mix)+(dot<0?-1:1)*to.rotation[j]*mix;norm+=to.rotation[j]*to.rotation[j];}
       norm=std::sqrt(norm);if(norm>1e-6f)for(auto& v:to.rotation)v/=norm;
       to.scale=from.scale*(1-mix)+to.scale*mix;
+      // Keep an outgoing gait's leg ownership until its blend reaches the
+      // standing pose. Use base-clip priorities, never a prior weapon overlay.
+      if(i<actor.blendPrioritiesFrom.size())
+        actor.pose.priorities[i]=std::max(actor.pose.priorities[i],actor.blendPrioritiesFrom[i]);
     }
     // Blending must preserve Sample()'s in-place accumulation-root invariant.
     // Otherwise a previous clip's root motion can leak back for the blend.

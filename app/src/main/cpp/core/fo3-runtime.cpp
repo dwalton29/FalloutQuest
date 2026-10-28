@@ -810,6 +810,7 @@ struct Q230ActorVisual {
     std::array<std::array<fo3anim::Clip,3>,6> authoredHitClips; // 18 original IDLE hit variants.
     int activeAnimation=0,headBone=-1,chestBone=-1;
     std::vector<fo3anim::Transform> blendFrom;
+    std::vector<uint8_t> basePriorities,blendPrioritiesFrom;
     double blendStart=-1;
     fo3anim::Matrix dialogueRoot=fo3anim::Identity();
     fo3anim::Skeleton skeleton;
