@@ -227,6 +227,20 @@ void World::Step(float seconds){
             if(!hit.hasHit()||hit.m_closestHitFraction>=1)continue;
             const float fraction=std::max(0.f,float(hit.m_closestHitFraction)-.001f);
             btTransform safe(from.getRotation().slerp(to.getRotation(),fraction),from.getOrigin().lerp(to.getOrigin(),fraction));
+            // A blocked rotational component must not discard safe translation
+            // along the surface. Sweep that remaining slide with fixed rotation
+            // so a second wall/corner still blocks it.
+            auto slide=to.getOrigin()-safe.getOrigin();
+            slide-=hit.m_hitNormalWorld*std::min(btScalar(0),slide.dot(hit.m_hitNormalWorld));
+            for(int plane=0;plane<3&&slide.length2()>1e-10f;++plane){
+                auto end=safe;end.setOrigin(safe.getOrigin()+slide);
+                Query next(safe,end,&body);next.m_collisionFilterGroup=2;next.m_collisionFilterMask=3;
+                for(const auto& child:source->children)impl->world.convexSweepTest(static_cast<const btConvexShape*>(child.get()),safe,end,next,.001f);
+                if(!next.hasHit()){safe=end;break;}
+                safe.setOrigin(safe.getOrigin()+slide*std::max(0.f,float(next.m_closestHitFraction)-.001f));
+                slide=end.getOrigin()-safe.getOrigin();
+                slide-=next.m_hitNormalWorld*std::min(btScalar(0),slide.dot(next.m_hitNormalWorld));
+            }
             body.setWorldTransform(safe);body.setInterpolationWorldTransform(safe);
             auto velocity=body.getLinearVelocity();const float inward=velocity.dot(hit.m_hitNormalWorld);
             if(inward<0)body.setLinearVelocity(velocity-hit.m_hitNormalWorld*inward);

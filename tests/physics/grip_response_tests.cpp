@@ -67,6 +67,17 @@ int main(){
         for(int i=1;i<=120;++i){w.TargetBody(1,Pose(x+i*dt*.4f,y,i*dt*.5f));w.Step(dt);}
         w.Pose(1,p);assert(p[12]-x>.36f&&p[13]>.045f);
     }
+    // Sliding around one obstruction must still stop at a second wall.
+    {
+        World w;Floor(w);
+        w.Static(101,{{{.5f,0,-2},{.5f,3,2},{.5f,0,2}},{{.5f,0,-2},{.5f,3,-2},{.5f,3,2}}});
+        w.Static(102,{{{-2,0,.5f},{2,0,.5f},{2,3,.5f}},{{-2,0,.5f},{2,3,.5f},{-2,3,.5f}}});
+        assert(w.Add(1,Box(.1f,.05f,.1f,2),Pose(0,.06f)));
+        for(int i=0;i<240;++i)w.Step(dt);
+        M p;w.Pose(1,p);const float y=p[13];assert(w.Grab(1,0,Pose(0,y),{0,y,0}));
+        for(int i=1;i<=120;++i){auto t=Pose(i*dt*.8f,y,.15f);t[14]=i*dt*.8f;w.TargetBody(1,t);w.Step(dt);}
+        w.Pose(1,p);assert(p[12]>.25f&&p[14]>.25f&&p[12]<.43f&&p[14]<.43f&&p[13]>.045f);
+    }
     // Fast rotation still cannot sweep a thin plate through the ground.
     {
         World w;Floor(w);auto plate=Box(.3f,.01f,.3f,1);assert(w.Add(1,plate,Pose(0,.08f)));

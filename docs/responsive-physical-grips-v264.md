@@ -20,7 +20,9 @@ motion. Its callback now checks the motion at the contact point, including the
 angular component, and discards non-inward hits before choosing the first
 blocking hit. A 0.1 mm inward-motion tolerance (below the 1 mm sweep
 allowance) leaves minute resting-contact corrections to the discrete solver,
-avoiding toolchain-sensitive latching. Inward impacts and thin-body rotational collision remain guarded.
+avoiding toolchain-sensitive latching. If rotation is blocked, the remaining
+translation is projected along the contact plane and swept again (up to three
+planes for corners), rather than freezing the whole transform. Inward impacts and thin-body rotational collision remain guarded.
 
 Weapon support tracking now captures a controller-to-palm offset at acquisition,
 as primary-hand tracking already did. Both tracking targets come from raw
