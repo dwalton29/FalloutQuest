@@ -1,3 +1,4 @@
+#include <functional>
 #pragma once
 #include <array>
 #include <cstdint>
@@ -35,7 +36,7 @@ struct Projectile {
 struct Definitions {
   struct Actor {
     uint32_t flags=0,templateId=0;uint16_t templates=0,level=1,minLevel=1,maxLevel=0;
-    int32_t health=0;uint8_t endurance=0;
+    int32_t health=0;uint8_t endurance=0;bool creature=false;
     std::array<uint8_t,14> skills{};
   };
   // FO3 CSSD, not the shorter/different FNV combat-style layout.
@@ -76,6 +77,7 @@ bool Relevant(const std::string& type);
 bool DecodeWeapon(const std::vector<uint8_t>& payload,Definition& out);
 void Decode(Definitions& out,const std::string& type,uint32_t id,const std::vector<uint8_t>& payload);
 void FinalizeStatistics(Definitions& out);
-const Definitions::Actor* ActorStatistics(const Definitions&,uint32_t base);
+using ActorSelector=std::function<uint32_t(uint32_t)>;
+const Definitions::Actor* ActorStatistics(const Definitions&,uint32_t base,const ActorSelector& select={});
 bool ValidPose(const WorldPose& pose);
 }

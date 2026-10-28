@@ -1,3 +1,4 @@
+#include <functional>
 #pragma once
 #include <cstdint>
 #include <array>
@@ -269,6 +270,7 @@ struct Definitions {
   std::unordered_map<uint32_t, std::vector<Info>> topics;
   std::unordered_map<uint32_t, std::string> topicNames, voices, sounds;
   std::unordered_map<uint32_t, uint32_t> npcVoices, cellWorlds;
+  std::unordered_map<uint32_t,std::array<int32_t,2>> cellGrids;
   std::unordered_map<uint32_t, Script> scripts;
   std::unordered_map<std::string, uint32_t> questNames;
   bool playerFemale = false;
@@ -306,5 +308,5 @@ namespace fo3pipdata {void FinalizeLevelledCategories(Definitions&,const fo3weap
 namespace fo3pipdata {
 std::string VoicePath(const Definitions &, const Info &, const Response &, uint32_t voice);
 uint32_t ActorVoice(const Definitions &,uint32_t base);
-const ActorDefinition* ActorCategory(const Definitions&,uint32_t base,uint16_t category);
+const ActorDefinition* ActorCategory(const Definitions&,uint32_t base,uint16_t category,const std::function<uint32_t(uint32_t)>& select={});
 }

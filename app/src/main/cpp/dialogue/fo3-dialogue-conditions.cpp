@@ -66,7 +66,7 @@ static bool Value(const fo3pipdata::Condition& c,const Context& ctx,float& value
   }
   else if(c.run!=0){error="unsupported run-on context";return false;}
   const bool pc=who.reference==0x14;
-  const auto* def=fo3pipdata::ActorCategory(d,pc?7:who.base,(c.function==71||c.function==73)?4:1);
+  const auto* def=(pc||!d.targets.count(who.reference))?fo3pipdata::ActorCategory(d,pc?7:who.base,(c.function==71||c.function==73)?4:1):p.ActorCategory(who.reference,(c.function==71||c.function==73)?4:1);
   auto quest=state.pipboy.quests.find(c.a);
   switch(c.function) {
   case 5:case 65:case 522: {auto lock=p.GetLock(who.reference);
@@ -75,7 +75,7 @@ static bool Value(const fo3pipdata::Condition& c,const Context& ctx,float& value
   case 1: {ActorContext other;if(c.a==ctx.speaker.reference)other=ctx.speaker;else if(c.a==ctx.target.reference)other=ctx.target;else {error="distance reference unavailable";return false;}
     value=std::sqrt((who.x-other.x)*(who.x-other.x)+(who.y-other.y)*(who.y-other.y)+(who.z-other.z)*(who.z-other.z));return true;}
   case 14:
-    if(!pc){error="NPC actor value unavailable";return false;}
+    if(!pc){if(c.a>=62&&c.a<=71&&p.ActorVariable(who.reference,c.a-62,value))return true;error="NPC actor value unavailable";return false;}
     if(c.a>=5&&c.a<=11)value=state.special[c.a-5];
     else if(c.a>=32&&c.a<=45)value=state.skills[c.a-32];
     else if(c.a==23)value=state.karma;
@@ -119,6 +119,7 @@ static bool Value(const fo3pipdata::Condition& c,const Context& ctx,float& value
   case 74:if(!p.GlobalValue(c.a,value)){error="global unavailable";return false;}return true;
   case 77:if(!std::isfinite(ctx.randomPercent)||ctx.randomPercent<0||ctx.randomPercent>99){error="random percent sample unavailable";return false;}value=ctx.randomPercent;return true;
   case 80:if(!pc){error="NPC effective level unavailable";return false;}value=state.level;return true;
+  case 101:value=(pc?p.EquippedWeapon():p.ActorWeapon(who.reference))!=nullptr;return true;
   case 131:value=uint32_t(d.playerFemale)==c.a;return true;
   case 136:value=who.reference==c.a;return true;
   case 141:value=ctx.talking&&who.reference==ctx.speaker.reference;return true;
@@ -141,7 +142,7 @@ static bool Value(const fo3pipdata::Condition& c,const Context& ctx,float& value
   case 546:if(!d.quests.count(c.a)){error="quest unavailable";return false;}value=quest!=state.pipboy.quests.end()&&quest->second.status!=fo3pipdata::Completion::Active;return true;
   case 310:value=who.world==c.a;return who.world!=0;
   case 372:{auto list=d.formLists.find(c.a);if(list==d.formLists.end()){error="form list unavailable";return false;}value=std::find(list->second.begin(),list->second.end(),pc?7:who.base)!=list->second.end();return true;}
-  case 427:{auto voice=fo3pipdata::ActorVoice(d,who.base);if(!voice){error="voice type unavailable";return false;}value=voice==c.a;return true;}
+  case 427:{auto voice=p.ActorVoice(who.reference);if(!voice)voice=fo3pipdata::ActorVoice(d,who.base);if(!voice){error="voice type unavailable";return false;}value=voice==c.a;return true;}
   default:error="unsupported function "+std::to_string(c.function);return false;
   }
 }

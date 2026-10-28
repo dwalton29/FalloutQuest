@@ -210,16 +210,79 @@ float Player::WeaponDamage(uint64_t id) const {
   const float skill=d.skill>=32&&d.skill<=45?std::min<float>(100,state_.skills[d.skill-32]):0;
   return Damage(d,r,skill,s->condition);
 }
+uint32_t Player::ActorTemplate(uint32_t reference,uint32_t list)const {
+  const auto it=state_.actorTemplateChoices.find((uint64_t(reference)<<32)|list);
+  return it==state_.actorTemplateChoices.end()?0:it->second;
+}
+const fo3weapon::Definitions::Actor* Player::ActorStatistics(uint32_t reference)const {
+  const auto target=catalog_->pipboy.targets.find(reference);if(target==catalog_->pipboy.targets.end())return nullptr;
+  if(!state_.actorSpawnLevels.count(reference))return fo3weapon::ActorStatistics(catalog_->weapons,target->second.base);
+  return fo3weapon::ActorStatistics(catalog_->weapons,target->second.base,[&](uint32_t list){return ActorTemplate(reference,list);});
+}
+const fo3pipdata::ActorDefinition* Player::ActorCategory(uint32_t reference,uint16_t category)const {
+  const auto target=catalog_->pipboy.targets.find(reference);if(target==catalog_->pipboy.targets.end())return nullptr;
+  if(!state_.actorSpawnLevels.count(reference))return fo3pipdata::ActorCategory(catalog_->pipboy,target->second.base,category);
+  return fo3pipdata::ActorCategory(catalog_->pipboy,target->second.base,category,[&](uint32_t list){return ActorTemplate(reference,list);});
+}
+uint32_t Player::ActorVoice(uint32_t reference)const{
+  const auto* a=ActorCategory(reference,1);if(!a)return 0;if(a->voice)return a->voice;
+  const auto r=catalog_->pipboy.raceVoices.find(a->race);return r==catalog_->pipboy.raceVoices.end()?0:r->second[a->female?1:0];
+}
+bool Player::RealizeActor(uint32_t reference){
+  const auto placed=catalog_->actorPlacements.find(reference);if(placed==catalog_->actorPlacements.end())return false;
+  if(state_.actorSpawnLevels.count(reference))return ActorStatistics(reference)!=nullptr;
+  std::unordered_map<uint64_t,uint32_t> choices;std::unordered_set<uint32_t> visiting;
+  const uint16_t level=state_.level;
+  std::function<bool(uint32_t,unsigned)> visit=[&](uint32_t id,unsigned depth){
+    if(depth>=32||!visiting.insert(id).second)return false;
+    const auto actor=catalog_->weapons.actors.find(id);
+    bool valid=true;
+    if(actor!=catalog_->weapons.actors.end()){
+      if(actor->second.templateId&&actor->second.templates)valid=visit(actor->second.templateId,depth+1);
+    }else{
+      const auto entry=catalog_->weapons.levelledActors.find(id);
+      if(entry==catalog_->weapons.levelledActors.end()||!entry->second.valid)return false;
+      const auto& list=entry->second;if(list.flags&~3u)return false;
+      float chance=list.chanceNone;if(list.chanceGlobal&&!GlobalValue(list.chanceGlobal,chance))return false;
+      if(!std::isfinite(chance)||chance<0||chance>100)return false;
+      uint32_t hash=reference^id;hash^=hash>>16;hash*=0x7feb352d;hash^=hash>>15;hash*=0x846ca68b;hash^=hash>>16;
+      std::vector<uint32_t> eligible;uint16_t best=0;
+      for(const auto& e:list.entries)if(e.level<=level){if(e.count!=1)return false;best=std::max(best,e.level);}
+      for(const auto& e:list.entries)if(e.level<=level&&((list.flags&1)||e.level==best))eligible.push_back(e.actor);
+      const uint32_t selected=(hash%100u<uint32_t(chance)||eligible.empty())?0:eligible[(hash/100u)%eligible.size()];
+      choices[(uint64_t(reference)<<32)|id]=selected;
+      if(selected)valid=visit(selected,depth+1);
+    }
+    visiting.erase(id);return valid;
+  };
+  if(!visit(placed->second.base,0))return false;
+  state_.actorSpawnLevels[reference]=level;
+  state_.actorTemplateChoices.insert(choices.begin(),choices.end());++revision_;
+  return ActorStatistics(reference)!=nullptr;
+}
+bool Player::ActorVariable(uint32_t reference,uint32_t slot,float& value)const {
+  if(slot>=10||!catalog_->actorPlacements.count(reference))return false;
+  const auto it=state_.actorVariables.find(reference);value=it==state_.actorVariables.end()?0:it->second[slot];return true;
+}
+bool Player::SetActorVariable(uint32_t reference,uint32_t slot,float value){
+  float old=0;if(!std::isfinite(value)||!ActorVariable(reference,slot,old))return false;
+  if(old!=value){state_.actorVariables[reference][slot]=value;++revision_;}return true;
+}
+bool Player::KillActor(uint32_t reference){
+  if(Essential(reference)||ActorHealth(reference)<0)return false;
+  auto it=state_.actors.find(reference);if(it==state_.actors.end())return false;
+  auto state=it->second;state.dead=true;state.hostile=0;return UpdateActor(reference,state);
+}
 float Player::ActorHealth(uint32_t reference) const {
   if(reference==0x14)return Health();
   const auto saved=state_.actors.find(reference);
   if(saved!=state_.actors.end()&&saved->second.dead&&!Essential(reference))return 0;
   const auto target=catalog_->pipboy.targets.find(reference);
   if(target==catalog_->pipboy.targets.end())return -1;
-  const auto* actor=fo3weapon::ActorStatistics(catalog_->weapons,target->second.base);if(!actor)return -1;
+  const auto* actor=ActorStatistics(reference);if(!actor)return -1;
   const auto&a=*actor;
   float health=a.health;
-  if(a.flags&0x10){
+  if(!a.creature&&(a.flags&0x10)){
     float level=a.level;
     if(a.flags&0x80){level=state_.level*(a.level/1000.f);level=std::max<float>(a.minLevel,level);if(a.maxLevel)level=std::min<float>(a.maxLevel,level);}
     health+=a.endurance*catalog_->weapons.npcHealthEndurance+level*catalog_->weapons.npcHealthLevel;
@@ -238,10 +301,14 @@ bool Player::ApplyWeaponHit(uint32_t base,uint32_t target,float damage) {
 bool Player::Essential(uint32_t reference) const {
   const auto t=catalog_->pipboy.targets.find(reference);if(t==catalog_->pipboy.targets.end())return false;
   // Essential belongs to the actor's Traits category, not inherited Stats.
-  auto a=catalog_->weapons.actors.find(t->second.base);
-  for(int depth=0;a!=catalog_->weapons.actors.end()&&(a->second.templates&1)&&depth<16;++depth)
-    a=catalog_->weapons.actors.find(a->second.templateId);
-  return a!=catalog_->weapons.actors.end()&&!(a->second.templates&1)&&(a->second.flags&2);
+  uint32_t base=t->second.base;
+  for(unsigned depth=0;depth<32;++depth){
+    const auto a=catalog_->weapons.actors.find(base);
+    if(a==catalog_->weapons.actors.end()){base=ActorTemplate(reference,base);if(!base)return false;continue;}
+    if(a->second.templates&1){base=a->second.templateId;continue;}
+    return (a->second.flags&2)!=0;
+  }
+  return false;
 }
 float Player::DamageResistance(uint32_t target) const {
   const auto* contents=target==0x14?&state_.inventory:ContainerContents(target);
@@ -316,7 +383,7 @@ bool Player::EquipActorWeapon(uint32_t reference,uint64_t instance) {
 float Player::ActorWeaponDamage(uint32_t reference) const {
   const auto* s=ActorWeapon(reference);const auto t=catalog_->pipboy.targets.find(reference);
   if(!s||t==catalog_->pipboy.targets.end())return 0;
-  const auto* a=fo3weapon::ActorStatistics(catalog_->weapons,t->second.base);if(!a)return 0;
+  const auto* a=ActorStatistics(reference);if(!a)return 0;
   const auto& d=catalog_->items.at(s->formId).weapon;const auto& r=catalog_->weapons;
   const float skill=d.skill>=32&&d.skill<=45?std::min<float>(100,a->skills[d.skill-32]):0;
   return Damage(d,r,skill,s->condition);

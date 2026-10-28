@@ -1,7 +1,7 @@
 #pragma once
 #include "fo3-dialogue-conditions.h"
 namespace fo3dialogue {
-enum class CommandType { Variable, Global, If, ElseIf, Else, EndIf, StopQuest, EnableControls, StartQuest, Stage, CompleteQuest, ObjectiveDisplay, ObjectiveComplete, AddItem, AddTopic, ShowMessage, PlaySound, RemoveItem, SetQuestObject, RewardKarma, EvaluatePackage, Lock, Unlock, ShowBarterMenu, ModDisposition, CompleteAllObjectives, RewardXP, SetCellFullName, AddAchievement, Disable, Enable, ShowMap, DoorState, TerminalBack, PlayGroup, ImageModifier, DefaultActivate, FastTravel, Unavailable };
+enum class CommandType { Variable, Global, If, ElseIf, Else, EndIf, StopQuest, EnableControls, StartQuest, Stage, CompleteQuest, ObjectiveDisplay, ObjectiveComplete, AddItem, AddTopic, ShowMessage, PlaySound, RemoveItem, SetQuestObject, RewardKarma, EvaluatePackage, Lock, Unlock, ShowBarterMenu, ModDisposition, CompleteAllObjectives, RewardXP, SetCellFullName, AddAchievement, Disable, Enable, ShowMap, DoorState, TerminalBack, PlayGroup, ImageModifier, DefaultActivate, FastTravel, Return, SetActorValue, Kill, SayTo, Unavailable };
 struct Command {CommandType type;uint32_t form=0,index=0;uint64_t variable=0;float value=0;std::string expression;};
 // Shared bounded form-name sink for command compilation and expression preflight.
 struct CommandFormCapture {

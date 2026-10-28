@@ -31,7 +31,7 @@ void Q230CacheDialogueAnimations(Q230ActorVisual& actor,const fo3pipdata::Defini
 
 #ifndef FO3_ACTOR_RUNTIME_HOST_TEST
 void Q230CacheCombat(Q230ActorVisual& actor,const fo3player::Catalog* catalog) {
-  if(!catalog)return;
+  if(!catalog||actor.source.creature)return;
   const auto root=actor.source.skeletonModel.substr(0,actor.source.skeletonModel.find_last_of("\\/")+1);
   const auto candidates=fo3npc::CombatWeaponCandidates(actor.source,*catalog);
   Q6H_LOGI("NPC COMBAT CANDIDATES actor=%08X source=%zu weapons=%zu",
@@ -129,13 +129,10 @@ void Q230PrepareActors(uint32_t cell, uint32_t worldspace,
                        const std::atomic<bool> &cancel
 #ifndef FO3_ACTOR_RUNTIME_HOST_TEST
                        ,const fo3player::PagedStateMap<fo3player::ActorState>* savedOverride,
-                       const std::unordered_set<uint32_t>* onlyRefs
+                       const std::unordered_set<uint32_t>* onlyRefs,
+                       const fo3player::Catalog* catalogOverride,float centreX,float centreY,const std::unordered_map<uint64_t,uint32_t>* templateChoices
 #endif
                        ) {
-  // Wasteland roaming/persistent actor residency requires the AI/streaming
-  // milestone. Megaton and explicit interior CELLs can be represented now.
-  if (worldspace != 0u && worldspace != 0x00000A74u)
-    return;
 #ifndef FO3_ACTOR_RUNTIME_HOST_TEST
   if(!Q230NpcXtelIndex()){
     std::lock_guard<std::mutex> lock(gQ230NpcXtelMutex);
@@ -148,28 +145,45 @@ void Q230PrepareActors(uint32_t cell, uint32_t worldspace,
       }else Q6H_LOGI("NPC XTEL INDEX FAILED reason=%s",reason.c_str());
     }
   }
-  // Include original ACHR records moved through XTEL into any grid CELL
-  // belonging to Megaton's fully resident exterior worldspace.
+  // Include original ACHR/ACRE identities physically inside the resident
+  // window, including persistent references and canonical XTEL arrivals.
   // For background arrival preparation use an immutable actor-state snapshot,
   // rather than reading mutable Player actor states from the worker thread.
   const auto* savedActors=savedOverride?savedOverride:
       (gPlayerSession?&gPlayerSession->player.Snapshot().actors:nullptr);
-  const auto* defs=gPlayerSession?&gPlayerSession->player.Definitions().pipboy:nullptr;
+  const auto* catalog=catalogOverride?catalogOverride:(gPlayerSession?&gPlayerSession->player.Definitions():nullptr);
+  const auto* defs=catalog?&catalog->pipboy:nullptr;
+  const bool small=defs&&defs->worlds.count(worldspace)&&(defs->worlds.at(worldspace).flags&1);
+  auto resident=[&](const fo3player::ActorState& a){return fo3npc::Resident(cell,worldspace,small,centreX,centreY,a.cell,a.world,a.position);};
   std::unordered_set<uint32_t> arrivals;
   if(savedActors&&defs)for(const auto& entry:*savedActors){
     const auto& saved=entry.second;
-    if(!saved.dead&&fo3npc::SceneOwnsCell(cell,worldspace,saved.cell,saved.world,defs->cellWorlds) &&
+    if(!saved.dead&&resident(saved) &&
        (!onlyRefs||onlyRefs->count(entry.first)))
       arrivals.insert(entry.first);
   }
   std::vector<Fo3NpcActorQ230> actors;
-  if(!LoadFo3CellActors(cell,actors,{},arrivals.empty()?nullptr:&arrivals))return;
+
+  auto select=[&](uint32_t ref,uint32_t list){const auto key=(uint64_t(ref)<<32)|list;if(!templateChoices)return uint32_t(0);const auto it=templateChoices->find(key);return it==templateChoices->end()?0:it->second;};
+  if(!LoadFo3CellActors(cell,actors,{},&arrivals,select))return;
+  actors.erase(std::remove_if(actors.begin(),actors.end(),[&](const auto& a){return !arrivals.count(a.refFormId);}),actors.end());
 #else
   std::vector<Fo3NpcActorQ230> actors;
   if(!LoadFo3CellActors(cell,actors))return;
 #endif
   std::vector<Fo3NpcNavMeshQ240> rawNavigation;
+#ifndef FO3_ACTOR_RUNTIME_HOST_TEST
+  std::unordered_set<uint32_t> navCells{cell};
+  if(defs&&worldspace)for(const auto& grid:defs->cellGrids){
+    const auto world=defs->cellWorlds.find(grid.first);
+    if(world!=defs->cellWorlds.end()&&world->second==worldspace&&
+       (small||(std::abs(grid.second[0]-int(std::floor(centreX/4096.f)))<=1&&
+                 std::abs(grid.second[1]-int(std::floor(centreY/4096.f)))<=1)))navCells.insert(grid.first);
+  }
+  LoadFo3NpcNavigationQ240(cell,worldspace,rawNavigation,{},&navCells);
+#else
   LoadFo3NpcNavigationQ240(cell,worldspace,rawNavigation);
+#endif
   auto navigation=std::make_shared<Q240NavigationGraph>();
   navigation->meshes.reserve(rawNavigation.size());
   navigation->triangleOffsets.reserve(rawNavigation.size());
@@ -182,7 +196,7 @@ void Q230PrepareActors(uint32_t cell, uint32_t worldspace,
   }
   std::shared_ptr<fo3furniture::Scene> furniture;
 #ifndef FO3_ACTOR_RUNTIME_HOST_TEST
-  if(gPlayerSession)furniture=fo3furniture::BuildScene(gPlayerSession->player.Definitions().pipboy,cell,worldspace,[](const std::string& path,std::vector<uint8_t>& bytes){return LoadFalloutMeshFile(path,bytes);},true);
+  if(defs)furniture=fo3furniture::BuildScene(*defs,cell,worldspace,[](const std::string& path,std::vector<uint8_t>& bytes){return LoadFalloutMeshFile(path,bytes);},true,&navCells);
 #endif
   // ACHR/ACRE FormIDs are identity keys, even when the authored CELL and
   // relocated-XTEL admission enumerate the same reference. Duplicate rig
@@ -204,7 +218,7 @@ void Q230PrepareActors(uint32_t cell, uint32_t worldspace,
       if(it!=savedActors->end()){
         const auto& pose=it->second;
         if(pose.dead||
-           (defs&&!fo3npc::SceneOwnsCell(cell,worldspace,pose.cell,pose.world,defs->cellWorlds)))
+           (defs&&!resident(pose)))
           continue;
         // Use the canonical arrival root when constructing the new rig;
         // later Q230SimulateActor restores its package and remaining state.

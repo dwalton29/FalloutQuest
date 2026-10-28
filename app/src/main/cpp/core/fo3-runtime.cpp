@@ -912,13 +912,16 @@ struct Q230ActorVisual {
     uint64_t profiledAnimationFrame=UINT64_MAX;
 };
 std::vector<Q230ActorVisual> gQ230NpcActors;
+uint64_t gQ230NpcResidenceRevision=0;
 fo3health::Tracker gQ230HealthBars;
 static fo3unloaded::Scheduler gQ230UnloadedScheduler;
 void Q230DeleteNpcActors();
 void Q230PrepareActors(uint32_t cell, uint32_t worldspace,
     std::vector<Q230ActorVisual>& out, const std::atomic<bool>& cancel,
     const fo3player::PagedStateMap<fo3player::ActorState>* savedOverride=nullptr,
-    const std::unordered_set<uint32_t>* onlyRefs=nullptr);
+    const std::unordered_set<uint32_t>* onlyRefs=nullptr,
+    const fo3player::Catalog* catalogOverride=nullptr,float centreX=0,float centreY=0,
+    const std::unordered_map<uint64_t,uint32_t>* templateChoices=nullptr);
 bool Fo3DialogueFocus();
 bool Fo3BarterFocus();
 void EndFo3Dialogue(const char* reason);
@@ -4430,6 +4433,15 @@ void AbortFo3SceneLoad(const char* reason) {
     if (gSceneLoad.generation == GetFo3LoadingGeneration()) CancelFo3Loading();
 }
 
+static void Q230RealizeSceneActors(fo3player::Player& player,uint32_t cell,uint32_t world,float x,float y){
+    const auto& worlds=player.Definitions().pipboy.worlds;const auto w=worlds.find(world);
+    const bool small=w!=worlds.end()&&(w->second.flags&1);
+    for(const auto& entry:player.Snapshot().actors){const auto& a=entry.second;
+        if(!fo3npc::Resident(cell,world,small,x,y,a.cell,a.world,a.position))continue;
+        bool disabled=true;std::string error;
+        if(player.ReferenceDisabled(entry.first,disabled,error)&&!disabled)player.RealizeActor(entry.first);
+    }
+}
 bool BeginFo3SceneLoad(const Fo3CellTransitionRequestQ74& request, bool boot) {
     if (gSceneLoad.active) return false;
     if(!QuiesceFo3ResidentForSceneChange())return false;
@@ -4480,6 +4492,7 @@ bool BeginFo3SceneLoad(const Fo3CellTransitionRequestQ74& request, bool boot) {
     StartFo3SceneDoorWorker(request.cellFormId);
     StartFo3SceneWaterWorker(request.worldspaceFormId);
     StartFo3SceneEmittanceWorker(request.worldspaceFormId);
+    if(gPlayerSession)Q230RealizeSceneActors(gPlayerSession->player,request.cellFormId,request.worldspaceFormId,request.x,request.y);
     const auto referenceState=CaptureFo3ReferenceState();
     if (!gSceneLoad.preparation.Start(
             [request, boot, loadPlayer, referenceState](Fo3SceneCpuPreparation& result, const std::atomic<bool>& cancel) {
@@ -4581,8 +4594,17 @@ bool BeginFo3SceneLoad(const Fo3CellTransitionRequestQ74& request, bool boot) {
         }
         result.meshUs=Fo3SceneElapsedUs(meshStarted);
         const auto actorStarted=std::chrono::steady_clock::now();
+        if(result.playerSession)Q230RealizeSceneActors(result.playerSession->player,result.request.cellFormId,result.request.worldspaceFormId,result.request.x,result.request.y);
+        const auto* sourcePlayer=result.playerSession?&result.playerSession->player:
+            (gPlayerSession?&gPlayerSession->player:nullptr);
+        std::unordered_set<uint32_t> actorRefs;
+        if(sourcePlayer)for(const auto& entry:sourcePlayer->Snapshot().actors){
+            bool disabled=true;std::string error;
+            if(sourcePlayer->ReferenceDisabled(entry.first,disabled,error)&&!disabled)actorRefs.insert(entry.first);
+        }
         Q230PrepareActors(result.request.cellFormId, result.request.worldspaceFormId,
-            result.actors, cancel);
+            result.actors,cancel,sourcePlayer?&sourcePlayer->Snapshot().actors:nullptr,
+            &actorRefs,sourcePlayer?&sourcePlayer->Definitions():nullptr,result.request.x,result.request.y,sourcePlayer?&sourcePlayer->Snapshot().actorTemplateChoices:nullptr);
         if(result.referenceState)result.actors.erase(std::remove_if(result.actors.begin(),result.actors.end(),
             [&](const Q230ActorVisual& actor){return !result.referenceState->Enabled(actor.source.refFormId,true);}),result.actors.end());
         const auto* actorDefinitions=result.playerSession?&result.playerSession->player.Definitions().pipboy:
@@ -4982,7 +5004,7 @@ bool ProcessQ74TransitionRequest() {
     markFinalization("flush-player-state");
     Q74DeleteGpuObjects(gObjects);
     Q230DeleteNpcActors();
-    gQ230NpcActors = std::move(prepared.actors);
+    gQ230NpcActors = std::move(prepared.actors);++gQ230NpcResidenceRevision;
     for (auto& actor : gQ230NpcActors)
         actor.animationStart = Fo3GameplayNow();
     gObjects = std::move(replacement);
@@ -11766,6 +11788,7 @@ bool Q230BuildNpcActor(const Fo3NpcActorQ230& source, Q230ActorVisual& visual) {
         faceGenModels.push_back(path);
     };
 
+    for(const auto& path:npc->creatureModels)addModel(path);
     uint32_t q236EquippedMask=0u;
     std::unordered_set<std::string> equippedModels;
     for(const Fo3NpcVisualItemQ230& item:npc->inventory){
@@ -12063,7 +12086,7 @@ bool Q230BuildNpcActor(const Fo3NpcActorQ230& source, Q230ActorVisual& visual) {
         Fo3WorldPlacement placement;
         placement.refFormId=npc->refFormId;
         placement.baseFormId=npc->baseFormId;
-        placement.baseRecordType="NPC_";
+        placement.baseRecordType=npc->creature?"CREA":"NPC_";
         placement.editorId=npc->editorId;
         placement.modelPath=path;
         placement.x=npc->x;
@@ -12579,6 +12602,8 @@ static void Q230TickUnloadedActors(float hour) {
             player.CanActorOpenDoor(actor,door);
     };
     cb.isResidentCell=[&](uint32_t cell,uint32_t world){
+        for(const auto& actor:gQ230NpcActors){const auto s=player.Snapshot().actors.find(actor.source.refFormId);
+            if(!actor.runtime.offScene&&s!=player.Snapshot().actors.end()&&s->second.cell==cell&&s->second.world==world)return true;}
         return fo3npc::SceneOwnsCell(gCurrentCellFormId,gExteriorWorldspaceQ1890,
                                     cell,world,defs.cellWorlds);
     };
@@ -12629,6 +12654,16 @@ static void Q230TickUnloadedActors(float hour) {
 // New NPC residents are built from original ACHR, NPC_, race, outfit, NIF,
 // NAVM, KF and furniture data off-thread. Do not touch OpenGL or gQ230NpcActors
 // in the worker: all GPU upload and vector publication stay on the main frame.
+static bool Q230ActorResident(const fo3player::ActorState& s){
+    if(!gPlayerSession)return false;
+    const auto& worlds=gPlayerSession->player.Definitions().pipboy.worlds;
+    const auto world=worlds.find(gExteriorWorldspaceQ1890);
+    const bool small=world!=worlds.end()&&(world->second.flags&1);
+    return fo3npc::Resident(gCurrentCellFormId,gExteriorWorldspaceQ1890,small,
+        gSceneCenterXQ1730+gQ210Head[0]*FO3_UNITS_PER_METRE,
+        gSceneCenterYQ1730-(gQ210Head[2]-SCENE_FORWARD)*FO3_UNITS_PER_METRE,
+        s.cell,s.world,s.position);
+}
 void Q230PumpNpcArrivals(){
     FQ_PERF_SCOPE(Arrivals);
     if(Fo3ResidentAssetLaneBlocked())return;
@@ -12646,17 +12681,32 @@ void Q230PumpNpcArrivals(){
         return;
     }
     if(!Fo3AcceptsScenePublication(gFo3ScenePublication.Stamp()))return;
-    const auto& player=gPlayerSession->player;
-    const auto& definitions=player.Definitions().pipboy;
+    auto& player=gPlayerSession->player;
     const auto isResident=[&](const fo3player::ActorState& s){
-        return !s.dead&&fo3npc::SceneOwnsCell(gCurrentCellFormId,
-            gExteriorWorldspaceQ1890,s.cell,s.world,definitions.cellWorlds);
+        return !s.dead&&Q230ActorResident(s);
     };
     const auto enabled=[&](uint32_t id){bool disabled=true;std::string error;return player.ReferenceDisabled(id,disabled,error)&&!disabled;};
     const auto alreadyVisible=[&](uint32_t id){
         return std::any_of(gQ230NpcActors.begin(),gQ230NpcActors.end(),
             [id](const Q230ActorVisual& v){return v.source.refFormId==id;});
     };
+    static double reconciled=-1;
+    static std::unordered_map<uint32_t,double> retryAfter;
+    const double now=std::chrono::duration<double>(Fo3GameplayNow().time_since_epoch()).count();
+    if(now-reconciled>=.5||now<reconciled){
+        reconciled=now;
+        for(auto i=gQ230NpcActors.begin();i!=gQ230NpcActors.end();){
+            const auto saved=player.Snapshot().actors.find(i->source.refFormId);
+            // Corpses stay while in range. Disabled/off-window actors release GPU residency only.
+            const bool inRange=saved!=player.Snapshot().actors.end()&&Q230ActorResident(saved->second);
+            if(!inRange||!enabled(i->source.refFormId)){
+                i->runtime.furniture.Clear();Q74DeleteGpuObjects(i->objects);i=gQ230NpcActors.erase(i);++gQ230NpcResidenceRevision;
+            }else ++i;
+        }
+        for(const auto& entry:player.Snapshot().actors)
+            if(isResident(entry.second)&&enabled(entry.first)&&!alreadyVisible(entry.first)&&
+               !work.requested.count(entry.first)&&retryAfter[entry.first]<=now)work.pending.insert(entry.first);
+    }
     if(work.active){
         if(!work.preparation.Ready())return;
         if(!work.preparation.Successful()){
@@ -12726,7 +12776,7 @@ void Q230PumpNpcArrivals(){
                 }
                 actor.animationStart=Fo3GameplayNow();
                 const uint32_t id=actor.source.refFormId;
-                gQ230NpcActors.push_back(std::move(actor));
+                gQ230NpcActors.push_back(std::move(actor));++gQ230NpcResidenceRevision;
                 Q6H_LOGI("NPC LIVE ARRIVAL READY actor=%08X cell=%08X world=%08X actors=%zu",
                     id,saved->second.cell,saved->second.world,gQ230NpcActors.size());
             }else {
@@ -12753,17 +12803,21 @@ void Q230PumpNpcArrivals(){
     for(uint32_t id:work.pending){
         const auto it=player.Snapshot().actors.find(id);
         if(it==player.Snapshot().actors.end()||!isResident(it->second)||!enabled(id)||alreadyVisible(id))continue;
-        saved.emplace(id,it->second);refs.insert(id);
+        if(!player.RealizeActor(id)){retryAfter[id]=now+30.;continue;}
+        saved.emplace(id,it->second);refs.insert(id);retryAfter[id]=now+30.;
     }
     work.pending.clear();
     if(refs.empty())return;
     const uint32_t cell=gCurrentCellFormId,world=gExteriorWorldspaceQ1890;
     const float centreX=gSceneCenterXQ1730,centreY=gSceneCenterYQ1730,floorZ=gSceneFloorZQ1730;
+    const float residentX=centreX+gQ210Head[0]*FO3_UNITS_PER_METRE;
+    const float residentY=centreY-(gQ210Head[2]-SCENE_FORWARD)*FO3_UNITS_PER_METRE;
     const size_t count=refs.size();
     auto requested=refs;
-    if(work.preparation.Start([cell,world,centreX,centreY,floorZ,saved=std::move(saved),refs=std::move(refs)](
+    auto choices=player.Snapshot().actorTemplateChoices;
+    if(work.preparation.Start([cell,world,centreX,centreY,floorZ,residentX,residentY,choices=std::move(choices),saved=std::move(saved),refs=std::move(refs)](
             Q230NpcArrivalBatch& batch,const std::atomic<bool>& cancelled){
-        Q230PrepareActors(cell,world,batch.actors,cancelled,&saved,&refs);
+        Q230PrepareActors(cell,world,batch.actors,cancelled,&saved,&refs,nullptr,residentX,residentY,&choices);
         if(cancelled.load(std::memory_order_acquire))return false;
         // The immutable catalog remains alive until scene teardown drains us.
         const auto* catalog=gPlayerSession?&gPlayerSession->player.Definitions():nullptr;

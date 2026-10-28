@@ -13,7 +13,9 @@ inline bool NonresidentActorRemoval(const fo3player::Player& player,
   const auto& c=player.Definitions();
   for(auto id:plan.AffectedReferences()){
     const auto ref=c.references.find(id);
-    // CREA currently has no scene resource adapter. Its complete
+    if(ref!=c.references.end()&&c.actorPlacements.count(id)&&c.weapons.actors.count(ref->second.base)&&
+       player.Snapshot().actors.count(id)&&std::find(liveActors.begin(),liveActors.end(),id)==liveActors.end())continue;
+    // Unprepared creature resources remain deferred. Their complete
     // enable-parent closure may be published logically only when none of the
     // affected identities owns live resources. The canonical saved overlay is
     // still real; this does not manufacture a visible creature.

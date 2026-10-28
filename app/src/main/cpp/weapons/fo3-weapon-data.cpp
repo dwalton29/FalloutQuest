@@ -4,7 +4,7 @@
 #include <unordered_set>
 #include <functional>
 namespace fo3weapon {
-bool Relevant(const std::string&t){return t=="PROJ"||t=="STAT"||t=="NPC_"||t=="LVLN"||t=="FACT"||t=="CSTY";}
+bool Relevant(const std::string&t){return t=="PROJ"||t=="STAT"||t=="NPC_"||t=="CREA"||t=="LVLN"||t=="LVLC"||t=="FACT"||t=="CSTY";}
 bool DecodeWeapon(const std::vector<uint8_t>&p,Definition&out){
   Definition o;bool data=false,dnam=false;
   fo3esm::WalkSubrecords(p,[&](const char*tag,const uint8_t*b,uint32_t n){
@@ -26,11 +26,11 @@ bool DecodeWeapon(const std::vector<uint8_t>&p,Definition&out){
   out=std::move(o);return out.valid;
 }
 void Decode(Definitions&o,const std::string&t,uint32_t id,const std::vector<uint8_t>&p){
-  Projectile q;Definitions::Actor actor;Definitions::CombatStyle style;
+  Projectile q;Definitions::Actor actor;actor.creature=t=="CREA";Definitions::CombatStyle style;
   bool actorData=false;bool valid=false;std::string model,editor;
   Definitions::LevelledActor levelled;bool chance=false,listFlags=false,listValid=true;
   fo3esm::WalkSubrecords(p,[&](const char*tag,const uint8_t*b,uint32_t n){const std::string k(tag,4);
-    if(t=="LVLN") {
+    if((t=="LVLN"||t=="LVLC")) {
       if(k=="LVLD"){if(n!=1||chance)listValid=false;else{levelled.chanceNone=b[0];chance=true;}}
       if(k=="LVLF"){if(n!=1||listFlags)listValid=false;else{levelled.flags=b[0];listFlags=true;}}
       if(k=="LVLG"){if(n!=4)listValid=false;else levelled.chanceGlobal=fo3esm::ReadU32(b);}
@@ -40,9 +40,10 @@ void Decode(Definitions&o,const std::string&t,uint32_t id,const std::vector<uint
       }
     }
     if(k=="EDID")editor=fo3esm::ZString(b,n);
+    if(t=="CREA"&&k=="DATA"&&n==17){actor.health=int16_t(fo3esm::ReadU16(b+4));actor.endurance=b[12];actorData=true;}
     if(t=="NPC_"&&k=="DATA"&&n>=11){actor.health=static_cast<int32_t>(fo3esm::ReadU32(b));actor.endurance=b[6];actorData=true;}
-    if(t=="NPC_"&&k=="ACBS"&&n==24){actor.flags=fo3esm::ReadU32(b);actor.level=fo3esm::ReadU16(b+8);actor.minLevel=fo3esm::ReadU16(b+10);actor.maxLevel=fo3esm::ReadU16(b+12);actor.templates=fo3esm::ReadU16(b+22);}
-    if(t=="NPC_"&&k=="TPLT"&&n==4)actor.templateId=fo3esm::ReadU32(b);
+    if((t=="NPC_"||t=="CREA")&&k=="ACBS"&&n==24){actor.flags=fo3esm::ReadU32(b);actor.level=fo3esm::ReadU16(b+8);actor.minLevel=fo3esm::ReadU16(b+10);actor.maxLevel=fo3esm::ReadU16(b+12);actor.templates=fo3esm::ReadU16(b+22);}
+    if((t=="NPC_"||t=="CREA")&&k=="TPLT"&&n==4)actor.templateId=fo3esm::ReadU32(b);
     if(t=="NPC_"&&k=="DNAM"&&n==28)for(size_t i=0;i<14;++i)actor.skills[i]=b[i];
     if(t=="ARMO"&&k=="DNAM"&&n==4)o.armourDR[id]=std::max(0.f,float(int16_t(fo3esm::ReadU16(b)))/100.f);
     if(t=="FACT"&&k=="XNAM"&&n==12)o.relations[id][fo3esm::ReadU32(b)]=int32_t(fo3esm::ReadU32(b+8));
@@ -90,15 +91,15 @@ void Decode(Definitions&o,const std::string&t,uint32_t id,const std::vector<uint
   });
   if(t=="STAT")o.models[id]=model;
   if(t=="CSTY"){o.styles[id]=style;if(editor=="DefaultCombatstyle"&&style.valid)o.defaultCombatStyle=id;}
-  if(t=="NPC_"&&actorData&&actor.health>=0&&actor.endurance<=10)o.actors[id]=actor;
-  if(t=="LVLN"){levelled.valid=listValid&&chance&&listFlags&&!levelled.entries.empty();o.levelledActors[id]=std::move(levelled);}
+  if((t=="NPC_"||t=="CREA")&&actorData&&actor.health>=0&&actor.endurance<=10)o.actors[id]=actor;
+  if((t=="LVLN"||t=="LVLC")){levelled.valid=listValid&&chance&&listFlags&&!levelled.entries.empty();o.levelledActors[id]=std::move(levelled);}
   for(float v:{q.gravity,q.speed,q.range,q.flashDuration,q.impactForce})if(!std::isfinite(v)||v<0)valid=false;
   if(t=="PROJ"&&valid){q.model=model;o.projectiles[id]=std::move(q);}
 }
 static bool SameStatistics(const Definitions::Actor& a,const Definitions::Actor& b) {
   // Sex/essential/AI flags are Traits, not Statistics. Only the health/level
   // calculation flags are consumed with DATA/DNAM by the existing runtime.
-  return (a.flags&0x90)==(b.flags&0x90)&&a.level==b.level&&a.minLevel==b.minLevel&&
+  return a.creature==b.creature&&(a.flags&0x90)==(b.flags&0x90)&&a.level==b.level&&a.minLevel==b.minLevel&&
     a.maxLevel==b.maxLevel&&a.health==b.health&&a.endurance==b.endurance&&a.skills==b.skills;
 }
 void FinalizeStatistics(Definitions& d) {
@@ -130,11 +131,11 @@ void FinalizeStatistics(Definitions& d) {
   };
   for(const auto& list:d.levelledActors){budget=0;if(const auto source=resolve(list.first,0))d.invariantStatistics[list.first]=source;}
 }
-const Definitions::Actor* ActorStatistics(const Definitions& d,uint32_t id) {
+const Definitions::Actor* ActorStatistics(const Definitions& d,uint32_t id,const ActorSelector& select) {
   for(unsigned depth=0;depth<16;++depth) {
     const auto a=d.actors.find(id);
     if(a!=d.actors.end()){if(!(a->second.templates&2))return &a->second;id=a->second.templateId;}
-    else {const auto source=d.invariantStatistics.find(id);if(source==d.invariantStatistics.end())return nullptr;id=source->second;}
+    else {if(select){id=select(id);if(!id)return nullptr;continue;}const auto source=d.invariantStatistics.find(id);if(source==d.invariantStatistics.end())return nullptr;id=source->second;}
   }
   return nullptr;
 }

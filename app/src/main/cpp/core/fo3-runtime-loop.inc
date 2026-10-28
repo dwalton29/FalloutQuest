@@ -1746,6 +1746,7 @@ private:
                     auto& scriptPlayer=gPlayerSession->player;
                     fo3worldscript::Register();
                     fo3worldscript::seconds+=seconds;
+                    fo3worldscript::SpeechTick();
                     scriptPlayer.SetScriptRuntimeClock(fo3worldscript::seconds,seconds);
                     scriptPlayer.SetScriptPlayerLocation(
                         gSceneCenterXQ1730+gQ210Head[0]*FO3_UNITS_PER_METRE_Q715,

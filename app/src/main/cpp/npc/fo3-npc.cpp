@@ -59,6 +59,8 @@ struct NpcBase {
     std::vector<float> faceAsymmetric;
     std::vector<float> faceTextureSymmetric;
     uint8_t hairColor[4]{0u,0u,0u,0u};
+    bool creature = false;
+    std::vector<std::string> creatureModels;
     bool faceGen = false;
 };
 
@@ -151,12 +153,12 @@ bool ScanIndexAndActors(
 
         // Keep only actor-assembly record classes; this is tiny compared with a
         // full FormID index and lets later linked-record reads seek directly.
-        if(type=="NPC_" || type=="RACE" || type=="HAIR" ||
+        if(type=="NPC_" || type=="CREA" || type=="LVLN" || type=="LVLC" || type=="RACE" || type=="HAIR" ||
            type=="HDPT" || type=="ARMO" || type=="LVLI" || type=="EYES"){
             locators[formId]={payloadOffset,size,flags,type};
         }
 
-        if(type=="ACHR" && (InActorCell(groups,cell)||
+        if((type=="ACHR" || type=="ACRE") && (InActorCell(groups,cell)||
             (relocatedRefs&&relocatedRefs->count(formId)!=0))){
             Locator loc{payloadOffset,size,flags,type};
             std::vector<uint8_t> payload;
@@ -177,12 +179,15 @@ bool ParseNpc(FILE* f, const Locator& loc,
               uint32_t formId, NpcBase& out) {
     std::vector<uint8_t> data;
     if(!fo3esm::ReadPayload(f,loc,data)) return false;
-    out.formId=formId;
+    out.formId=formId;out.creature=loc.type=="CREA";
     fo3esm::WalkSubrecords(data,[&](const char* type,const uint8_t* p,uint32_t n){
         if(std::memcmp(type,"EDID",4u)==0 && out.editorId.empty())
             out.editorId=fo3esm::ZString(p,n);
         else if(std::memcmp(type,"FULL",4u)==0 && out.fullName.empty())
             out.fullName=fo3esm::ZString(p,n);
+        else if(std::memcmp(type,"NIFZ",4u)==0 && out.creature) {
+            for(uint32_t at=0;at<n;){auto part=fo3esm::ZString(p+at,n-at);at+=uint32_t(part.size())+1;if(!part.empty())out.creatureModels.push_back(part);}
+        }
         else if(std::memcmp(type,"MODL",4u)==0 && out.skeleton.empty())
             out.skeleton=fo3esm::ZString(p,n);
         else if(std::memcmp(type,"ACBS",4u)==0 && n>=4u) {
@@ -190,9 +195,9 @@ bool ParseNpc(FILE* f, const Locator& loc,
             if(n>=24u) out.templateFlags=fo3esm::ReadU16(p+22u);
         } else if(std::memcmp(type,"TPLT",4u)==0 && n>=4u)
             out.templateId=fo3esm::ReadU32(p);
-        else if(std::memcmp(type,"NAM6",4u)==0 && n>=4u)
+        else if((std::memcmp(type,"NAM6",4u)==0 || (out.creature&&std::memcmp(type,"BNAM",4u)==0)) && n>=4u)
             out.height=fo3esm::ReadF32(p);
-        else if(std::memcmp(type,"RNAM",4u)==0 && n>=4u)
+        else if(!out.creature && std::memcmp(type,"RNAM",4u)==0 && n>=4u)
             out.race=fo3esm::ReadU32(p);
         else if(std::memcmp(type,"HNAM",4u)==0 && n>=4u)
             out.hair=fo3esm::ReadU32(p);
@@ -224,14 +229,32 @@ bool ParseNpc(FILE* f, const Locator& loc,
 // base data=7, inventory=8. Resolve only appearance categories we consume.
 bool ResolveNpc(FILE* f, uint32_t id,
         const std::unordered_map<uint32_t,Locator>& locators,
-        std::unordered_set<uint32_t>& visiting, NpcBase& npc) {
+        std::unordered_set<uint32_t>& visiting, NpcBase& npc, uint32_t seed,const std::function<uint32_t(uint32_t,uint32_t)>& select) {
     if(!visiting.insert(id).second || visiting.size()>32u) return false;
     auto it=locators.find(id);
-    if(it==locators.end() || it->second.type!="NPC_" ||
-       !ParseNpc(f,it->second,id,npc)) return false;
+    if(it==locators.end())return false;
+    if(it->second.type=="LVLN"||it->second.type=="LVLC") {
+        if(select){const auto selected=select(seed,id);if(!selected)return false;const bool ok=ResolveNpc(f,selected,locators,visiting,npc,seed,select);visiting.erase(id);return ok;}
+        std::vector<uint8_t> data;if(!fo3esm::ReadPayload(f,it->second,data))return false;
+        std::vector<uint32_t> choices;bool valid=true;uint8_t chance=255,flags=255;
+        fo3esm::WalkSubrecords(data,[&](const char* t,const uint8_t* p,uint32_t n){
+            if(!std::memcmp(t,"LVLD",4)&&n==1)chance=p[0];
+            if(!std::memcmp(t,"LVLF",4)&&n==1)flags=p[0];
+            if(!std::memcmp(t,"LVLG",4))valid=false;
+            if(!std::memcmp(t,"LVLO",4)){
+                if(n!=12||fo3esm::ReadU16(p+8)!=1)valid=false;
+                else if(fo3esm::ReadU16(p)==1)choices.push_back(fo3esm::ReadU32(p+4));
+            }
+        });
+        if(!valid||chance||flags>3||choices.empty())return false;
+        uint32_t hash=seed^id;hash^=hash>>16;hash*=0x7feb352d;hash^=hash>>15;hash*=0x846ca68b;hash^=hash>>16;
+        const bool ok=ResolveNpc(f,choices[hash%choices.size()],locators,visiting,npc,seed,select);
+        visiting.erase(id);return ok;
+    }
+    if((it->second.type!="NPC_"&&it->second.type!="CREA")||!ParseNpc(f,it->second,id,npc))return false;
     if(npc.templateId && (npc.templateFlags & (1u|64u|128u|256u))) {
         NpcBase parent;
-        if(!ResolveNpc(f,npc.templateId,locators,visiting,parent)) {
+        if(!ResolveNpc(f,npc.templateId,locators,visiting,parent,seed,select)) {
             Q230_LOGW("ACTOR TEMPLATE UNSUPPORTED: actor=%08X template=%08X",id,npc.templateId);
             return false;
         }
@@ -241,6 +264,7 @@ bool ResolveNpc(FILE* f, uint32_t id,
             npc.baseFlags=(npc.baseFlags & ~1u)|(parent.baseFlags & 1u);
         }
         if(npc.templateFlags & 64u) {
+            npc.creatureModels=parent.creatureModels;
             npc.skeleton=parent.skeleton; npc.hair=parent.hair; npc.eyes=parent.eyes;
             npc.headParts=parent.headParts; npc.faceSymmetric=parent.faceSymmetric;
             npc.faceAsymmetric=parent.faceAsymmetric;
@@ -495,7 +519,7 @@ static bool Q230ResolveLevelledOutfit(
 bool LoadFo3CellActors(
         uint32_t cellFormId, std::vector<Fo3NpcActorQ230>& outActors,
         const std::string& esmPath,
-        const std::unordered_set<uint32_t>* relocatedRefs) {
+        const std::unordered_set<uint32_t>* relocatedRefs,const std::function<uint32_t(uint32_t,uint32_t)>& selector) {
     outActors.clear();
     FILE* f=std::fopen(esmPath.empty()?fo3assets::FalloutMasterPath().c_str():esmPath.c_str(),"rb");
     if(!f){
@@ -514,19 +538,23 @@ bool LoadFo3CellActors(
 
     for(const RawActor& placed:raw){
         // Deleted and initially disabled references need game-state evaluation.
-        if ((placed.flags & (0x20u | 0x800u)) != 0u || placed.enableParent) continue;
+        if(placed.flags&0x20u)continue;
+        const bool admitted=relocatedRefs&&relocatedRefs->count(placed.refFormId);
+        if(!admitted&&((placed.flags&0x800u)||placed.enableParent))continue;
         const auto npcLoc=locators.find(placed.baseFormId);
-        if(npcLoc==locators.end() || npcLoc->second.type!="NPC_") continue;
+        if(npcLoc==locators.end() || (npcLoc->second.type!="NPC_"&&npcLoc->second.type!="CREA")) continue;
 
         NpcBase npc;
         std::unordered_set<uint32_t> visiting;
-        if(!ResolveNpc(f,placed.baseFormId,locators,visiting,npc)) continue;
+        if(!ResolveNpc(f,placed.baseFormId,locators,visiting,npc,placed.refFormId,selector)) continue;
 
         Fo3NpcActorQ230 actor;
         actor.refFormId=placed.refFormId;
         actor.baseFormId=placed.baseFormId;
         actor.referenceFlags=placed.flags;
-        actor.actorBaseFlags=npc.baseFlags;
+        actor.actorBaseFlags=npc.baseFlags;actor.creature=npc.creature;
+        const auto folder=npc.skeleton.substr(0,npc.skeleton.find_last_of("\\/")+1);
+        for(const auto& model:npc.creatureModels)actor.creatureModels.push_back(folder+model);
         actor.female=(npc.baseFlags & 0x00000001u)!=0u;
         actor.raceFormId=npc.race;
         actor.hairFormId=npc.hair;
@@ -679,7 +707,7 @@ bool LoadFo3NpcNavigationQ240(
         uint32_t cellFormId,
         uint32_t worldspaceFormId,
         std::vector<Fo3NpcNavMeshQ240>& outNavigation,
-        const std::string& esmPath) {
+        const std::string& esmPath, const std::unordered_set<uint32_t>* cells) {
     outNavigation.clear();
     const std::string path=esmPath.empty()?fo3assets::FalloutMasterPath():esmPath;
     FILE* f=std::fopen(path.c_str(),"rb");
@@ -690,6 +718,7 @@ bool LoadFo3NpcNavigationQ240(
     }
     std::vector<GroupFrame> groups;
     auto inWorld=[&](){
+        if(cells){bool found=false;for(const auto& group:groups)if(group.type==6u&&cells->count(group.label))found=true;if(!found)return false;}
         if(!worldspaceFormId) return true;
         for(auto it=groups.rbegin();it!=groups.rend();++it)
             if(it->type==1u&&it->label==worldspaceFormId)return true;

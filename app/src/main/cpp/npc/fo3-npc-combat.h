@@ -6,8 +6,8 @@ struct AiData {
   uint8_t aggression=0,confidence=0,energy=0,responsibility=0,assistance=0;
   int32_t radius=0;bool radiusEnabled=false,valid=false;
 };
-inline AiData AI(const fo3pipdata::Definitions& d,uint32_t base){
-  AiData out;const auto* a=fo3pipdata::ActorCategory(d,base,8);
+inline AiData AI(const fo3pipdata::Definitions& d,uint32_t base,const std::function<uint32_t(uint32_t)>& select={}){
+  AiData out;const auto* a=fo3pipdata::ActorCategory(d,base,8,select);
   if(!a||a->aiData.size()!=20)return out;
   const auto& b=a->aiData;
   out.aggression=b[0];out.confidence=b[1];out.energy=b[2];out.responsibility=b[3];out.assistance=b[14];out.radiusEnabled=b[15]&1;
@@ -16,9 +16,9 @@ inline AiData AI(const fo3pipdata::Definitions& d,uint32_t base){
 }
 // Explicit FACT XNAM combat reactions; disposition alone is not hostility.
 enum class Reaction { Neutral, Enemy, Ally, Friend };
-inline Reaction Relationship(const fo3player::Catalog& c,uint32_t a,uint32_t b){
-  const auto* x=fo3pipdata::ActorCategory(c.pipboy,a,4);
-  const auto* y=fo3pipdata::ActorCategory(c.pipboy,b,4);
+inline Reaction Relationship(const fo3player::Catalog& c,uint32_t a,uint32_t b,const std::function<uint32_t(uint32_t)>& selectA={},const std::function<uint32_t(uint32_t)>& selectB={}){
+  const auto* x=fo3pipdata::ActorCategory(c.pipboy,a,4,selectA);
+  const auto* y=fo3pipdata::ActorCategory(c.pipboy,b,4,selectB);
   if(!x||!y)return Reaction::Neutral;
   Reaction result=Reaction::Neutral;
   for(const auto& from:x->factions)if(from.second>=0)for(const auto& to:y->factions)if(to.second>=0){

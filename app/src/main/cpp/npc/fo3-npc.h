@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <functional>
 #include <cstdint>
 #include <string>
 #include <unordered_set>
@@ -58,6 +59,8 @@ struct Fo3NpcActorQ230 {
     float rz = 0.0f;
     float scale = 1.0f;
 
+    bool creature = false;
+    std::vector<std::string> creatureModels;
     bool female = false;
     bool hasFaceGenGeometry = false;
 };
@@ -65,7 +68,8 @@ struct Fo3NpcActorQ230 {
 bool LoadFo3CellActors(uint32_t cellFormId,
     std::vector<Fo3NpcActorQ230>& outActors,
     const std::string& esmPath = {},
-    const std::unordered_set<uint32_t>* relocatedRefs = nullptr);
+    const std::unordered_set<uint32_t>* relocatedRefs = nullptr,
+    const std::function<uint32_t(uint32_t,uint32_t)>& selector = {});
 
 bool LoadFo3MegatonExteriorActorsQ230(
     std::vector<Fo3NpcActorQ230>& outActors);
@@ -92,7 +96,8 @@ bool LoadFo3NpcNavigationQ240(
     uint32_t cellFormId,
     uint32_t worldspaceFormId,
     std::vector<Fo3NpcNavMeshQ240>& outNavigation,
-    const std::string& esmPath = {});
+    const std::string& esmPath = {},
+    const std::unordered_set<uint32_t>* cells = nullptr);
 
 
 struct Fo3FaceGenMorphQ233 {

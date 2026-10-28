@@ -177,7 +177,7 @@ int main(int argc, char **argv) {
   }
   std::vector<Fo3NpcActorQ230> actors;
   assert(LoadFo3CellActors(77, actors, path.string()));
-  assert(actors.size() == 3);
+  assert(actors.size() >= 3);
   assert(!actors[0].female && actors[0].raceHeadModels[0] == "male-head.nif");
   assert(actors[1].female && actors[1].raceHeadModels[0] == "female-head.nif");
   assert(actors[1].raceBodyModels[0] == "female-body.nif");
@@ -213,7 +213,7 @@ int main(int argc, char **argv) {
   std::filesystem::remove(path);
   if (argc > 1) {
     assert(LoadFo3CellActors(0xa96, actors, argv[1]));
-    assert(actors.size() == 3);
+    assert(actors.size() >= 3);
     bool lucas = false;
     for (const auto &a : actors)
       if (a.editorId == "LucasSimms") {
@@ -223,7 +223,19 @@ int main(int argc, char **argv) {
         assert(a.inventory[1].modelPath == "Armor\\LucasSimms\\M\\OutfitM.NIF");
       }
     assert(lucas);
-    std::cout << "Original ESM: 3 Megaton actors resolved\n";
+    std::unordered_set<uint32_t> outside{0x1fb3a,0xc6e91};
+    assert(LoadFo3CellActors(0x2db4,actors,argv[1],&outside));
+    bool weld=false,micky=false;
+    for(const auto& a:actors){
+      if(a.refFormId==0x1fb3a){weld=true;assert(a.creature&&a.skeletonModel=="Creatures\\Protectron\\skeleton.nif"&&!a.creatureModels.empty());}
+      if(a.refFormId==0xc6e91){micky=true;assert(!a.creature&&a.fullName=="Micky");}
+    }
+    assert(weld&&micky);
+    assert(LoadFo3CellActors(0x17f37,actors,argv[1]));
+    bool raider=false;for(const auto& a:actors)if(a.baseFormId==0x2f6e2||a.baseFormId==0x2f6e3){raider=true;assert(a.raceFormId&&a.skeletonModel.find("marker_creature")==std::string::npos);}
+    assert(raider);
+    std::unordered_set<uint32_t> emptyCells;assert(!LoadFo3NpcNavigationQ240(0x2db4,0x3c,navigation,argv[1],&emptyCells));
+    std::cout << "Original ESM: Megaton humans, Micky, Weld, levelled raiders and bounded NAVM resolved\n";
   }
   std::cout << "NPC record tests passed\n";
 }

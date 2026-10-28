@@ -376,7 +376,7 @@ static const std::vector<fo3pipdata::PatrolPoint>* Q240PatrolRoute(const Q230Act
 static size_t Q240FurnitureTarget(const Q230ActorVisual& actor,const fo3pipdata::PackageDefinition& p) {
   const auto& f=actor.runtime.furniture;if(!f.scene)return SIZE_MAX;
   const auto& d=gPlayerSession->player.Definitions().pipboy;
-  const auto* def=fo3pipdata::ActorCategory(d,actor.source.baseFormId,1);
+  const auto* def=gPlayerSession->player.ActorCategory(actor.source.refFormId,1);
   if(def&&d.childRaces.count(def->race))return SIZE_MAX; // Child IDLE branch requires its own authored program.
   const auto here=Q240GamePosition(actor);std::array<float,3> anchor=here;bool exact=false;
   if(p.location.type==0){auto t=d.targets.find(p.location.value);if(t==d.targets.end())return SIZE_MAX;anchor={t->second.x,t->second.y,t->second.z};exact=d.furniture.count(t->second.base)!=0;}
@@ -408,7 +408,7 @@ static bool Q240MarkerIdleEligible(const Q230ActorVisual& actor,uint32_t idle) {
 }
 static size_t Q240SandboxTarget(const Q230ActorVisual& actor,const fo3pipdata::PackageDefinition& p,const std::array<float,3>& anchor,float radius) {
   const auto& f=actor.runtime.furniture;if(!f.scene)return SIZE_MAX;
-  const auto& d=gPlayerSession->player.Definitions().pipboy;const auto* def=fo3pipdata::ActorCategory(d,actor.source.baseFormId,1);
+  const auto& d=gPlayerSession->player.Definitions().pipboy;const auto* def=gPlayerSession->player.ActorCategory(actor.source.refFormId,1);
   std::vector<size_t> choices;
   for(size_t i=0;i<f.scene->slots.size();++i){const auto& slot=f.scene->slots[i];
     if(slot.reference==actor.runtime.sandboxBlockedTarget&&actor.aiLastUpdate<actor.runtime.sandboxBlockedUntil)continue;
@@ -515,7 +515,7 @@ static const fo3pipdata::PackageDefinition* Q240SelectPackage(
   id=0;radius=0;actor.runtime.xtelDoor=0;actor.runtime.xtelCell=0;
   if(!gPlayerSession)return nullptr;
   const auto& definitions=gPlayerSession->player.Definitions().pipboy;
-  const auto* actorDef=fo3pipdata::ActorCategory(definitions,actor.source.baseFormId,16);
+  const auto* actorDef=gPlayerSession->player.ActorCategory(actor.source.refFormId,16);
   if(!actorDef){Q240AiLogOnce(actor.source.refFormId,0,"invalid AI package template");return nullptr;}
   const float hour=GetFo3TimeOfDayHour();
   for(uint32_t packageId:actorDef->packages) {

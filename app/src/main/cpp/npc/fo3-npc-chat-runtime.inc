@@ -23,7 +23,7 @@ static fo3dialogue::Context Q230ChatContext(const Q230ActorVisual& speaker,
 }
 static bool Q230ChatEligible(const Q230ActorVisual& initiator,uint32_t reference) {
   if(!gPlayerSession||gPlayerSession->saveBlocked||gDialogue.Active()||
-     gQ230NpcChat.Active()||IsFo3LoadingVisible()||Fo3PipboyFocus())return false;
+     gQ230NpcChat.Active()||gPlayerSession->player.AnyScriptActorTalking()||IsFo3LoadingVisible()||Fo3PipboyFocus())return false;
   const auto* partner=DialogueActor(reference);
   if(!partner||partner->runtime.offScene||!partner->runtime.CanTalk()||
      partner->runtime.dialogue||partner->runtime.furniture.Active()||

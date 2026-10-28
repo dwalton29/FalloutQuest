@@ -64,7 +64,15 @@ bool CompileResult(const fo3pipdata::Definitions& d,const fo3pipdata::ResultScri
   std::unordered_map<std::string,uint32_t> referenceLocals;
   std::unordered_set<std::string> referenceDeclarations;
   bool referencePreamble=true;
+  if(scriptId){const auto sc=d.scripts.find(scriptId);if(sc!=d.scripts.end()){
+    std::istringstream source(lower(sc->second.source));std::string decl;
+    while(std::getline(source,decl)){std::istringstream row(decl);std::string op,name;row>>op>>name;
+      if(op=="ref"||op=="reference")referenceDeclarations.insert(name);
+      if(op=="begin")break;
+    }
+  }}
   auto form=[&](std::string n){
+    if(lower(n)=="player")return fo3player::PlayerRef;
     auto local=referenceLocals.find(lower(n));if(local!=referenceLocals.end())return local->second;
     n=lower(n);auto f=d.formNames.find(n);if(f==d.formNames.end()||!f->second)return uint32_t(0);
     if(forms&&!forms->Add(f->second,n))return uint32_t(0);
@@ -80,7 +88,7 @@ bool CompileResult(const fo3pipdata::Definitions& d,const fo3pipdata::ResultScri
       if(!referencePreamble||!(in>>a)||(in>>extra)||!referenceDeclarations.insert(a).second){error="invalid reference local declaration";return false;}
       continue;
     }
-    if(op=="set"&&referencePreamble){
+    if(op=="set"){
       std::istringstream assignment(line);std::string verb,target,to,value;
       assignment>>verb>>target>>to>>value;
       if(referenceDeclarations.count(target)){
@@ -100,6 +108,18 @@ bool CompileResult(const fo3pipdata::Definitions& d,const fo3pipdata::ResultScri
       std::getline(in,cmd.expression);cmd.variable=VariableKey(d,a,forms);
       if(!cmd.variable)cmd.variable=CaptureNumericLocalKey(d,owner,scriptId,a,forms);
       if(!cmd.variable){cmd.form=form(a);cmd.type=CommandType::Global;if(!cmd.form){error="unresolved assignment: "+a;return false;}}
+    } else if(op=="return")cmd.type=CommandType::Return;
+    else if(op=="sayto"||op=="say"||(op.size()>4&&op.substr(op.size()-4)==".say")){
+      cmd.type=CommandType::SayTo;cmd.form=op.find('.')==std::string::npos?owner:form(op.substr(0,op.find('.')));cmd.index=fo3player::PlayerRef;
+      if(op=="sayto"){if(!(in>>a)||!(cmd.index=form(a))){error="invalid SayTo target";return false;}}
+      if(!(in>>a)||!(cmd.variable=form(a))){error="invalid speech topic";return false;}
+    } else if(op=="kill"||(op.size()>5&&op.substr(op.size()-5)==".kill")){
+      cmd.type=CommandType::Kill;cmd.form=op=="kill"?owner:form(op.substr(0,op.size()-5));
+      if(!cmd.form){error="invalid Kill receiver";return false;}
+    } else if(op=="setav"||(op.size()>6&&op.substr(op.size()-6)==".setav")){
+      cmd.type=CommandType::SetActorValue;cmd.form=op=="setav"?owner:form(op.substr(0,op.size()-6));
+      if(!(in>>a>>b)||a.size()!=10||a.substr(0,8)!="variable"||a[8]<'0'||a[8]>'1'||a[9]<'0'||a[9]>'9'||!number(b,cmd.value)){error="unsupported actor value";return false;}
+      cmd.index=uint32_t((a[8]-'0')*10+a[9]-'0');if(cmd.index<1||cmd.index>10||!cmd.form){error="invalid variable actor value";return false;}--cmd.index;
     } else if(op=="stopquest"||op=="startquest"||op=="setstage"||op=="completequest"||op=="completeallobjectives"||op=="setobjectivedisplayed"||op=="setobjectivecompleted"||op=="addtopic") {
       if(!(in>>a)||(cmd.form=form(a))==0){error="unresolved form: "+line;return false;}
       if(op=="startquest")cmd.type=CommandType::StartQuest;

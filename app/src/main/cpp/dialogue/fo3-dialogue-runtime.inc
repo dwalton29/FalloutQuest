@@ -66,7 +66,7 @@ void ConfigureFo3Dialogue() {
   gDialogue.publishReferences=PublishFo3DialogueReferences;
 }
 bool DialogueCanStart(Q230ActorVisual& actor) {
-  if(!gPlayerSession||gPlayerSession->saveBlocked||!actor.runtime.CanTalk()||gPlayerSession->player.ActorHealth(actor.source.refFormId)<=0)return false;
+  if((actor.source.creature&&!(actor.source.actorBaseFlags&0x200000))||!gPlayerSession||gPlayerSession->saveBlocked||!actor.runtime.CanTalk()||gPlayerSession->player.ActorHealth(actor.source.refFormId)<=0)return false;
   auto& cached=gDialogueEligibility[actor.source.refFormId];
   const auto revision=gPlayerSession->player.Revision();
   if(cached.revision!=revision||cached.until<gDialogueTime) {
@@ -232,7 +232,7 @@ void UpdateFo3Dialogue(double now,float stick,bool a,bool b,bool focused,float h
 #else
     const bool npcSpeaking=false;
 #endif
-    actor.runtime.speaking=npcSpeaking||(actor.runtime.dialogue&&gDialogue.actor==actor.source.refFormId&&gDialogue.phase==fo3dialogue::Phase::Speaking);
+    actor.runtime.speaking=gPlayerSession->player.ScriptActorTalking(actor.source.refFormId)||npcSpeaking||(actor.runtime.dialogue&&gDialogue.actor==actor.source.refFormId&&gDialogue.phase==fo3dialogue::Phase::Speaking);
     fo3face::Weights weights{};
     if(actor.runtime.speaking) {
 #ifdef FO3_NPC_CHAT_RUNTIME

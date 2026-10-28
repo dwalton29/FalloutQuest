@@ -52,11 +52,11 @@ struct MarkerIdle { uint32_t form=0; fo3anim::Clip clip; };
 struct Slot { bool idleMarker=false; float idleTimer=0; std::vector<MarkerIdle> idles; uint32_t reference=0,base=0;size_t index=0;Marker marker;fo3pipdata::Placement placement;fo3anim::Matrix alignment=fo3anim::Identity();std::shared_ptr<const Program> program;bool sleep=false;};
 struct Scene {std::vector<Slot> slots;std::shared_ptr<Reservations> reservations=std::make_shared<Reservations>();};
 template<class Loader>
-inline std::shared_ptr<Scene> BuildScene(const fo3pipdata::Definitions& d,uint32_t cell,uint32_t world,Loader&& load,bool includeEat=false) {
+inline std::shared_ptr<Scene> BuildScene(const fo3pipdata::Definitions& d,uint32_t cell,uint32_t world,Loader&& load,bool includeEat=false,const std::unordered_set<uint32_t>* cells=nullptr) {
   auto scene=std::make_shared<Scene>();
   std::unordered_map<unsigned,std::shared_ptr<Program>> programs;
   auto clip=[&](const char* editor,fo3anim::Clip& out){const auto name=d.formNames.find(editor);if(name==d.formNames.end())return false;const auto model=d.idleModels.find(name->second);if(model==d.idleModels.end())return false;std::vector<uint8_t> bytes;return load(model->second,bytes)&&fo3anim::DecodeClip(bytes,out);};
-  for(const auto& r:d.targets){const auto& p=r.second;if(p.world!=world||(!world&&p.cell!=cell)||(p.flags&0x820)||p.parent||std::fabs(p.rx)>1e-5f||std::fabs(p.ry)>1e-5f||std::fabs(p.scale-1)>1e-5f)continue;
+  for(const auto& r:d.targets){const auto& p=r.second;if((cells&&!cells->count(p.cell))||p.world!=world||(!world&&p.cell!=cell)||(p.flags&0x820)||p.parent||std::fabs(p.rx)>1e-5f||std::fabs(p.ry)>1e-5f||std::fabs(p.scale-1)>1e-5f)continue;
     const auto f=d.furniture.find(p.base);if(f==d.furniture.end()||!f->second.valid||!std::isfinite(p.scale)||p.scale<=0)continue;
     std::vector<uint8_t> bytes;std::vector<Marker> markers;if(!load(f->second.model,bytes)||!DecodeMarkers(bytes,markers))continue;
     for(size_t i=0;i<markers.size();++i){const auto& m=markers[i];const bool sleep=Permitted(f->second.markers,i,true),eat=includeEat&&Permitted(f->second.markers,i,false);if(!sleep&&!eat)continue;
@@ -77,7 +77,7 @@ inline std::shared_ptr<Scene> BuildScene(const fo3pipdata::Definitions& d,uint32
   // by the canonical dialogue evaluator at selection time, never bypassed.
   std::unordered_map<uint32_t,std::vector<MarkerIdle>> markerClips;
   for(const auto& r:d.targets){const auto& p=r.second;
-    if(p.world!=world||(!world&&p.cell!=cell)||(p.flags&0x820)||p.parent||std::fabs(p.rx)>1e-5f||std::fabs(p.ry)>1e-5f||std::fabs(p.scale-1)>1e-5f)continue;
+    if((cells&&!cells->count(p.cell))||p.world!=world||(!world&&p.cell!=cell)||(p.flags&0x820)||p.parent||std::fabs(p.rx)>1e-5f||std::fabs(p.ry)>1e-5f||std::fabs(p.scale-1)>1e-5f)continue;
     const auto m=d.idleMarkers.find(p.base);if(m==d.idleMarkers.end()||!m->second.valid||m->second.flags)continue; // Sequenced/do-once markers need separate semantics.
     auto cached=markerClips.find(p.base);
     if(cached==markerClips.end()){

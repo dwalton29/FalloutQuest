@@ -85,7 +85,7 @@ struct Fo3StaticNifMesh {
 // NPC_ also identifies assembled player equipment. Its NIF root is part of
 // the authored actor/bone coordinate system, not a standalone placed REFR.
 inline bool Fo3UsesPlacedReferenceRoot(const std::string& recordType) {
-    return recordType != "NPC_";
+    return recordType != "NPC_" && recordType != "CREA";
 }
 
 // Loads every fully renderable NiTriStrips/NiTriShape geometry block in an

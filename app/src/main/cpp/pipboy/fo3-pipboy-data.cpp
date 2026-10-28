@@ -79,7 +79,7 @@ std::string VoicePath(const Definitions &d, const Info &i, const Response &r,
 bool Relevant(const std::string &t) {
   return t == "AVIF" || t == "MESG" || t == "ANIO" || t == "IDLM" || t == "FURN" || t == "TERM" || t == "RADS" || t == "WRLD" || t == "PERK" || t == "QUST" ||
          t == "MGEF" || t == "TACT" || t == "INFO" || t == "DIAL" ||
-         t == "RACE" || t == "FLST" || t == "IDLE" || t == "SOUN" || t == "VTYP" || t == "SCPT" || t == "NPC_" || t == "PACK";
+         t == "RACE" || t == "FLST" || t == "IDLE" || t == "SOUN" || t == "VTYP" || t == "SCPT" || t == "NPC_" || t == "CREA" || t == "PACK";
 }
 void Decode(Definitions &d, const std::string &t, uint32_t id, uint32_t flags,
             const std::vector<uint8_t> &bytes, uint32_t cell, uint32_t world,
@@ -202,8 +202,10 @@ void Decode(Definitions &d, const std::string &t, uint32_t id, uint32_t flags,
       w.flags = f->p[0];
     w.valid = w.valid && std::isfinite(w.scale) && w.scale > 0;
     d.worlds[id] = std::move(w);
-  } else if (t == "CELL")
+  } else if (t == "CELL") {
     d.cellWorlds[id] = world;
+    if(auto grid=Find(s,"XCLC");grid&&grid->n>=8)d.cellGrids[id]={int32_t(U(grid)),int32_t(U(grid,4))};
+  }
   else if (t == "REFR" || t == "ACHR" || t == "ACRE") {
     auto p = Place(flags, s, cell, world);
     p.linkedReference=U(Find(s,"XLKR"));
@@ -221,7 +223,7 @@ void Decode(Definitions &d, const std::string &t, uint32_t id, uint32_t flags,
     if(auto wait=Find(s,"XPRD");wait&&wait->n==4)p.patrolWait=fo3esm::ReadF32(wait->p);
     p.patrolAction=U(Find(s,"INAM"))||U(Find(s,"TNAM"));
     for(const auto& v:s)if((v.type=="SCDA"&&v.n)||(v.type=="SCTX"&&v.n>1))p.patrolAction=true;
-    if(t=="ACHR") d.referenceScripts[id]={editor,p.base};
+    if(t=="ACHR"||t=="ACRE"||(t=="REFR"&&d.dialogueActors.count(p.base))) d.referenceScripts[id]={editor,p.base};
     if (p.base == 0x10 && Find(s, "XMRK")) {
       Marker m;
       static_cast<Placement &>(m) = p;
@@ -416,7 +418,7 @@ void Decode(Definitions &d, const std::string &t, uint32_t id, uint32_t flags,
     d.sounds[id] = std::move(path);
   } else if (t == "VTYP")
     d.voices[id] = Text(s, "EDID");
-  else if (t == "NPC_") {
+  else if (t == "NPC_" || t == "CREA" || t == "TACT") {
     d.npcVoices[id] = U(Find(s, "VTCK"));
     ActorDefinition actor;actor.editor=editor;actor.name=Text(s,"FULL");
     actor.race=U(Find(s,"RNAM"));actor.actorClass=U(Find(s,"CNAM"));actor.voice=d.npcVoices[id];
@@ -658,7 +660,7 @@ void Finalize(Definitions &d) {
     if(entry.second.target2.valid&&entry.second.target2.type==0)retain.insert(entry.second.target2.value);
   }
   for (auto &p : d.targets)
-    if(d.furniture.count(p.second.base)||d.idleMarkers.count(p.second.base)||d.terminals.count(p.second.base))retain.insert(p.first);
+    if(d.dialogueActors.count(p.second.base)||d.furniture.count(p.second.base)||d.idleMarkers.count(p.second.base)||d.terminals.count(p.second.base))retain.insert(p.first);
   for (auto &p : d.targets)
     if (d.doorBases.count(p.second.base)) {
       d.doors[p.second.cell].push_back(p.second);
@@ -788,12 +790,13 @@ void FinalizeLevelledCategories(Definitions& d,const fo3weapon::Definitions& rec
     if(const auto id=source(list.first,0))d.invariantActorCategories[(uint64_t(list.first)<<16)|category]=id;
   }
 }
-const ActorDefinition* ActorCategory(const Definitions& d,uint32_t base,uint16_t category) {
+const ActorDefinition* ActorCategory(const Definitions& d,uint32_t base,uint16_t category,const std::function<uint32_t(uint32_t)>& select) {
   std::array<uint32_t,16> seen{};size_t depth=0;
   while(base&&depth<seen.size()) {
     if(std::find(seen.begin(),seen.begin()+depth,base)!=seen.begin()+depth)return nullptr;
     seen[depth++]=base;
     auto actor=d.dialogueActors.find(base);if(actor==d.dialogueActors.end()){
+      if(select){base=select(base);if(!base)return nullptr;continue;}
       const auto shared=d.invariantActorCategories.find((uint64_t(base)<<16)|category);
       if(shared==d.invariantActorCategories.end())return nullptr;
       base=shared->second;continue;

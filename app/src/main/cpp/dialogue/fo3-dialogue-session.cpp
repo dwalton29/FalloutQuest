@@ -33,7 +33,7 @@ bool Session::Eligible(const fo3pipdata::Info& i,const Context& ctx)const {
     if(diagnostic)diagnostic("DIALOGUE UNSUPPORTED SCRIPT info="+Id(i.id)+" "+error);
     return false;
   }
-  for(auto& r:i.responses)if(!r.sound&&!fo3pipdata::ActorVoice(d,ctx.speaker.base))return false;
+  for(auto& r:i.responses)if(!r.sound&&!(p.ActorVoice(ctx.speaker.reference)?p.ActorVoice(ctx.speaker.reference):fo3pipdata::ActorVoice(d,ctx.speaker.base)))return false;
   return true;
 }
 const fo3pipdata::Info* Session::Resolve(uint32_t id,const Context& ctx,bool draw)const {
@@ -64,6 +64,12 @@ bool Session::CanActivate(const Context& ctx)const {
   Context activated=ctx;activated.activationVariables=&pending;
   return CanStart(activated);
 }
+bool Session::StartTopic(uint32_t requested,const Context& ctx,fo3player::Player& p){
+  if(Active()||!ctx.player||ctx.speaker.combat||p.ActorHealth(ctx.speaker.reference)==0)return false;
+  const auto* chosen=Resolve(requested,ctx,true);if(!chosen)return false;
+  actor=ctx.speaker.reference;base=ctx.speaker.base;voice=p.ActorVoice(actor);if(!voice)voice=fo3pipdata::ActorVoice(p.Definitions().pipboy,base);
+  return Enter(*chosen,ctx,p);
+}
 bool Session::Start(const Context& ctx,fo3player::Player& p) {
   if(Active()||!ctx.player||ctx.speaker.combat||p.ActorHealth(ctx.speaker.reference)<=0)return false;
   std::string activationError;
@@ -74,7 +80,7 @@ bool Session::Start(const Context& ctx,fo3player::Player& p) {
   interruption.clear();const float dx=ctx.speaker.x-ctx.target.x,dy=ctx.speaker.y-ctx.target.y,dz=ctx.speaker.z-ctx.target.z;
   startDistanceGameUnits=std::sqrt(dx*dx+dy*dy+dz*dz);
   startDistance=std::sqrt((ctx.speaker.x-ctx.target.x)*(ctx.speaker.x-ctx.target.x)+(ctx.speaker.y-ctx.target.y)*(ctx.speaker.y-ctx.target.y)+(ctx.speaker.z-ctx.target.z)*(ctx.speaker.z-ctx.target.z))/100.f;endReason.clear();
-  actor=ctx.speaker.reference;base=ctx.speaker.base;voice=fo3pipdata::ActorVoice(p.Definitions().pipboy,base);
+  actor=ctx.speaker.reference;base=ctx.speaker.base;voice=p.ActorVoice(actor);if(!voice)voice=fo3pipdata::ActorVoice(p.Definitions().pipboy,base);
   for(auto t:p.Definitions().pipboy.greetings)if(auto i=Resolve(t,ctx,true))return Enter(*i,ctx,p);
   return false;
 }

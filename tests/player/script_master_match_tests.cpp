@@ -959,7 +959,7 @@ int main(){
   {Bytes metadata;Sub(metadata,"TRDT",Bytes(24));checkInfo(InfoPayload(metadata),false);}
   for(unsigned type=0;type<256;++type){
     Bytes metadata;Sub(metadata,"DATA",{uint8_t(type),0,0,0});Sub(metadata,"TRDT",Bytes(24));
-    checkInfo(InfoPayload(metadata),type==0||type==3);
+    checkInfo(InfoPayload(metadata),type==0||type==1||type==3);
   }
   for(unsigned field=1;field<4;++field)for(unsigned bit=0;bit<8;++bit){
     Bytes data(4);data[field]=uint8_t(1u<<bit);

@@ -23,6 +23,7 @@ struct Session {
   const fo3pipdata::Info* Resolve(uint32_t,const Context&,bool draw=false)const;
   bool CanStart(const Context&)const;
   bool CanActivate(const Context&)const;
+  bool StartTopic(uint32_t topic,const Context&,fo3player::Player&);
   bool Start(const Context&,fo3player::Player&);
   bool Choose(size_t,const Context&,fo3player::Player&);
   bool AudioDone(uint32_t,bool,const Context&,fo3player::Player&);

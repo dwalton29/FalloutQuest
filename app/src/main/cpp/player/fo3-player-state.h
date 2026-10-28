@@ -190,6 +190,9 @@ struct State {
   uint16_t debugPerkPoints=0; // Development selection budget; saved only when nonzero.
   uint32_t experience=0; // Canonical earned XP; level-up allocation remains a separate subsystem.
   std::unordered_map<uint32_t,LockOverride> locks;
+  std::unordered_map<uint32_t,std::array<float,10>> actorVariables;
+  std::unordered_map<uint32_t,uint16_t> actorSpawnLevels;
+  std::unordered_map<uint64_t,uint32_t> actorTemplateChoices;
   std::unordered_map<uint32_t,bool> doorStates; // Script/activation open targets, not animation phases.
   // Staged world state. Script Enable/Disable stays unavailable until scene
   // publication is integrated; this overlay is never a success-only command.
@@ -409,6 +412,18 @@ public:
   // flags.
   bool RecordDialogue(uint32_t actor,uint32_t info,const std::vector<uint32_t>& topics);
   bool SetDialogueVariable(uint64_t key,float value);
+  uint32_t ActorVoice(uint32_t reference)const;
+  bool RealizeActor(uint32_t reference);
+  uint32_t ActorTemplate(uint32_t reference,uint32_t list)const;
+  const fo3weapon::Definitions::Actor* ActorStatistics(uint32_t reference)const;
+  const fo3pipdata::ActorDefinition* ActorCategory(uint32_t reference,uint16_t category)const;
+  bool ActorVariable(uint32_t reference,uint32_t slot,float& value) const;
+  bool SetActorVariable(uint32_t reference,uint32_t slot,float value);
+  bool KillActor(uint32_t reference);
+  bool AnyScriptActorTalking()const{return !scriptTalking_.empty();}
+  bool ScriptActorTalking(uint32_t reference)const{return scriptTalking_.count(reference)!=0;}
+  void SetScriptActorTalking(uint32_t reference,bool talking){if(talking)scriptTalking_.insert(reference);else scriptTalking_.erase(reference);}
+
   bool ExecuteDialogueResult(const fo3pipdata::ResultScript& script,std::string& error,uint32_t speaker=0);
   // Evaluate against a private Player candidate sharing the immutable catalogue.
   // No live state/queues/callbacks change during preparation or previews.
@@ -671,6 +686,7 @@ private:
   size_t scriptTraceBytes_=0;
   mutable std::shared_ptr<fo3script::CompileCache> scriptCompileCache_;
   std::unordered_map<uint32_t,int> scriptButtons_;
+  std::unordered_set<uint32_t> scriptTalking_;
   std::vector<fo3script::Action> pendingScriptActions_;
   std::shared_ptr<const fo3script::AnimationRegistry> scriptAnimationDefinitions_;
   std::unordered_map<uint32_t,fo3script::AnimationRun> scriptAnimations_;

@@ -814,10 +814,10 @@ void OriginalActorCensus(const std::string& root){
   transferred.position={1000,2000,3000};transferred.package=0;
   Check(p.UpdateActor(0xa008,transferred),"preexisting transferred state");
   const auto first=p.RegisterOriginalActors();
-  Check(first.authored==8&&first.registered==2&&first.alreadyTracked==1&&
-      first.disabledOrConditional==2&&first.unsupportedBase==1&&
+  Check(first.authored==8&&first.registered==4&&first.alreadyTracked==1&&
+      first.disabledOrConditional==0&&first.unsupportedBase==1&&
       first.unsupportedPlacement==2,"ACHR census preserves eligibility");
-  Check(p.Snapshot().actors.size()==3&&
+  Check(p.Snapshot().actors.size()==5&&
       p.Snapshot().actors.at(0xa001).cell==0x200&&
       p.Snapshot().actors.at(0xa002).world==0xa74&&
       p.Snapshot().actors.at(0xa002).position[0]==200&&
@@ -825,12 +825,12 @@ void OriginalActorCensus(const std::string& root){
       "source poses and previously moved actor");
   const auto revision=p.Revision();
   const auto again=p.RegisterOriginalActors();
-  Check(again.registered==0&&again.alreadyTracked==3&&
+  Check(again.registered==0&&again.alreadyTracked==5&&
       p.Revision()==revision,"idempotent actor census");
   Check(p.Save(save,error),error.c_str());
   fo3player::Player restored(c);
   Check(restored.Restore(save,error),error.c_str());
-  Check(restored.Snapshot().actors.size()==3&&
+  Check(restored.Snapshot().actors.size()==5&&
         restored.Snapshot().actors.at(0xa008).cell==0x333,
         "census actor persistence");
   Check(restored.RegisterOriginalActors().registered==0,

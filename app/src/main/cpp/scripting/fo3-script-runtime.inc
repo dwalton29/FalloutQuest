@@ -58,6 +58,21 @@ class Expression {
       if(!p.ScriptInSameCell(id,same,error))return false;
       value=same;return true;
     }
+    if(query=="getdead"||query=="isincombat"||query=="istalking"){
+      const auto id=dot==std::string::npos?owner:form(t.substr(0,dot));
+      if(query=="istalking"){value=p.ScriptActorTalking(id);return true;}
+      if(query=="getdead"){const auto health=p.ActorHealth(id);if(health<0)return Fail("actor health unavailable");value=health<=0;return true;}
+      const auto actor=p.Snapshot().actors.find(id);if(actor==p.Snapshot().actors.end())return Fail("combat actor unavailable");
+      value=actor->second.hostile!=0;return true;
+    }
+    if(query=="getav"){
+      const auto id=dot==std::string::npos?owner:form(t.substr(0,dot));
+      if(at==tokens.size())return Fail("missing actor value");
+      const auto name=tokens[at++];
+      if(name.size()!=10||name.substr(0,8)!="variable"||name[8]<'0'||name[8]>'1'||name[9]<'0'||name[9]>'9')return Fail("unsupported actor value");
+      const auto slot=(name[8]-'0')*10+name[9]-'0';
+      return (slot>=1&&slot<=10&&p.ActorVariable(id,uint32_t(slot-1),value))||Fail("actor variable unavailable");
+    }
     if(query=="getdisabled"){
       const auto id=dot==std::string::npos?owner:form(t.substr(0,dot));bool disabled=false;
       if(!p.ReferenceDisabled(id,disabled,error))return false;
@@ -366,6 +381,10 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
     if(!active)continue;
     bool ok=true;
     switch(c.type) {
+    case C::Return:return true;
+    case C::Kill:ok=KillActor(c.form);break;
+    case C::SetActorValue:ok=SetActorVariable(c.form,c.index,c.value);break;
+    case C::SayTo:{fo3script::Action action;action.kind=fo3script::ActionKind::SayTo;action.reference=c.form;action.form=uint32_t(c.variable);action.flags=c.index;ok=QueueScriptAction(std::move(action));break;}
     case C::Variable:case C::Global:
       ok=fo3script::Expression(*this,owner,c.expression,error,scriptId).Evaluate(value);
       if(ok)ok=c.type==C::Variable?SetDialogueVariable(c.variable,value):SetGlobalValue(c.form,value);
@@ -472,7 +491,9 @@ bool Player::RunSourceEventDirect(uint32_t scriptId,const char* event,uint32_t o
     if(block.event!=fo3script::Lower(event))continue;
     // A filtered event must not execute without a correctly resolved actor.
     // Other filter forms need their original reference/context evaluator.
-    if(!fo3script::EventFilterMatches(block.filter,activator,PlayerRef)){
+    const auto filter=catalog_->pipboy.formNames.find(block.filter);
+    if(!block.filter.empty()&&block.filter!="player"&&filter!=catalog_->pipboy.formNames.end()&&filter->second!=activator)continue;
+    if(!fo3script::EventFilterMatches(block.filter,activator,PlayerRef) && !(filter!=catalog_->pipboy.formNames.end()&&filter->second==activator)){
       error="unresolved event filter '"+block.filter+"' at line "+std::to_string(block.sourceLine);
       return false;
     }
@@ -697,7 +718,9 @@ bool Player::SourceEventCompileReady(uint32_t script,const char* event,uint32_t 
   // Only the first matching block can be checked ahead of execution. A later
   // block must retain the earlier block's dynamic errors and effect ordering.
   for(const auto& block:program.blocks)if(block.event==fo3script::Lower(event)){
-    if(!fo3script::EventFilterMatches(block.filter,activator,PlayerRef)){
+    const auto filter=catalog_->pipboy.formNames.find(block.filter);
+    if(!block.filter.empty()&&block.filter!="player"&&filter!=catalog_->pipboy.formNames.end()&&filter->second!=activator)continue;
+    if(!fo3script::EventFilterMatches(block.filter,activator,PlayerRef) && !(filter!=catalog_->pipboy.formNames.end()&&filter->second==activator)){
       error="unresolved event filter '"+block.filter+"' at line "+std::to_string(block.sourceLine);return false;
     }
     if(!scriptCompileCache_)scriptCompileCache_=std::make_shared<fo3script::CompileCache>(catalog_->pipboy);

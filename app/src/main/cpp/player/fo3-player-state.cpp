@@ -368,7 +368,7 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
         const auto* data=Find(subs,"DATA");
         if(data&&data->size>=1&&data->size<=4){uint32_t bits=0;for(size_t i=0;i<data->size;++i)bits|=uint32_t(data->data[i])<<(8*i);next.factionFlags[form]=bits;}
       }
-      if(type=="NPC_") {
+      if(type=="NPC_"||type=="CREA") {
         if(const auto* ai=Find(subs,"AIDT");ai&&ai->size==20)next.merchantServices[form]=fo3esm::ReadU32(ai->data+8);
         Container inventory;inventory.name=Text(subs,"FULL");
         inventory.valid=DecodeLoot(subs,false,inventory.entries);
@@ -666,9 +666,7 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
   // full authored pose even if no quest, patrol or door currently points here.
   for(const auto& entry:next.actorPlacements){
     const auto& placement=entry.second;
-    if((placement.flags&0x820u)||placement.parent||
-       !next.weapons.actors.count(placement.base)||
-       !fo3weapon::ActorStatistics(next.weapons,placement.base))continue;
+    if((placement.flags&0x20u)||!next.weapons.actors.count(placement.base))continue;
     next.pipboy.targets.emplace(entry.first,placement);
   }
   next.fingerprint = fingerprint;
@@ -776,13 +774,11 @@ ActorCensusReport Player::RegisterOriginalActors() {
   for(uint32_t id:refs){
     if(state_.actors.count(id)){++report.alreadyTracked;continue;}
     const auto& p=catalog_->actorPlacements.at(id);
-    // Deleted/initially-disabled and XESP-controlled actors must not be
-    // spontaneously activated before their enabling quest/script fires.
-    if((p.flags&0x820u)||p.parent){++report.disabledOrConditional;continue;}
+    // Track conditional actors too. Canonical enable evaluation controls
+    // residency; tracking their authored state never activates them.
+    if(p.flags&0x20u){++report.disabledOrConditional;continue;}
     if(!p.base||!catalog_->weapons.actors.count(p.base)||
-       !fo3weapon::ActorStatistics(catalog_->weapons,p.base)||
-       !catalog_->pipboy.targets.count(id)||
-       ActorHealth(id)<=0){++report.unsupportedBase;continue;}
+       !catalog_->pipboy.targets.count(id)){++report.unsupportedBase;continue;}
     if((!p.cell&&!p.world)||!std::isfinite(p.x)||!std::isfinite(p.y)||
        !std::isfinite(p.z)||!std::isfinite(p.rx)||!std::isfinite(p.ry)||
        !std::isfinite(p.rz)||!std::isfinite(p.scale)||
@@ -1245,7 +1241,8 @@ bool Player::Save(const std::string &path, std::string &error) const {
     payload.push_back(l.forceFailures);payload.push_back(l.rewarded?1:0);}
   // Optional RFE1 after the v14 lock tail. Empty overlays keep existing v14
   // bytes unchanged; older supported saves do not require this extension.
-  const bool hasDoorStates=!state_.doorStates.empty();
+  const bool hasActorVariables=!state_.actorVariables.empty()||!state_.actorSpawnLevels.empty();
+  const bool hasDoorStates=!state_.doorStates.empty()||hasActorVariables;
   const bool hasDebugPoints=state_.debugPerkPoints!=0;
   const bool hasLevelAdvancement=state_.level!=catalog_->initial.level||hasDebugPoints||hasDoorStates;
   // v18 retains all v17 tails, even empty ones, before LVP1.
@@ -1339,7 +1336,19 @@ bool Player::Save(const std::string &path, std::string &error) const {
     for(auto id:ids){const auto r=catalog_->references.find(id);if(r==catalog_->references.end()||!r->second.valid||!catalog_->doorBases.count(r->second.base)){error="Invalid door state";return false;}
       Put32(payload,id);payload.push_back(state_.doorStates.at(id)?1:0);}
   }
-  Put32(bytes, hasDoorStates ? 20 : hasDebugPoints ? 19 : hasLevelAdvancement ? 18 : hasCompletionState ? 17 :
+  if(hasActorVariables){
+    Put32(payload,0x31564141);Put32(payload,uint32_t(state_.actorVariables.size())); // AAV1
+    std::vector<uint32_t> ids;for(const auto& entry:state_.actorVariables)ids.push_back(entry.first);std::sort(ids.begin(),ids.end());
+    for(auto id:ids){if(!catalog_->actorPlacements.count(id)){error="Invalid actor values reference";return false;}
+      Put32(payload,id);for(float v:state_.actorVariables.at(id)){if(!std::isfinite(v)){error="Invalid actor value";return false;}PutFloat(payload,v);}}
+  }
+  if(hasActorVariables){
+    std::vector<uint32_t> ids;for(const auto& e:state_.actorSpawnLevels)ids.push_back(e.first);std::sort(ids.begin(),ids.end());
+    Put32(payload,uint32_t(ids.size()));for(auto id:ids){Put32(payload,id);Put32(payload,state_.actorSpawnLevels.at(id));}
+    std::vector<uint64_t> keys;for(const auto& e:state_.actorTemplateChoices)keys.push_back(e.first);std::sort(keys.begin(),keys.end());
+    Put32(payload,uint32_t(keys.size()));for(auto key:keys){Put64(payload,key);Put32(payload,state_.actorTemplateChoices.at(key));}
+  }
+  Put32(bytes, hasActorVariables ? 21 : hasDoorStates ? 20 : hasDebugPoints ? 19 : hasLevelAdvancement ? 18 : hasCompletionState ? 17 :
       hasMerchantVisits ? 16 : hasPlayerAttributeOverrides ? 15 : 14);
   Put32(bytes, catalog_->fingerprint);
   Put32(bytes, static_cast<uint32_t>(payload.size()));
@@ -1399,7 +1408,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
   const auto *h = bytes.data();
   const auto version = fo3esm::ReadU32(h + 4);
   if (std::memcmp(h, "FQPS", 4) ||
-      (version < 1 || version > 20))
+      (version < 1 || version > 21))
     return fail("Unsupported player save format");
   if (fo3esm::ReadU32(h + 8) != catalog_->fingerprint)
     return fail("Player save belongs to different game definitions");
@@ -1760,9 +1769,32 @@ bool Player::Restore(const std::string &path, std::string &error) {
       if(version>=20){
         if(payload.size()-at<8||fo3esm::ReadU32(p+at)!=0x31535244)return fail("Missing door state extension");
         const auto n=fo3esm::ReadU32(p+at+4);at+=8;
-        if(n>100000||payload.size()-at!=5ull*n)return fail("Invalid door state count");
+        if(n>100000||(version>=21?payload.size()-at<5ull*n+8:payload.size()-at!=5ull*n))return fail("Invalid door state count");
         for(uint32_t i=0;i<n;++i,at+=5){const auto id=fo3esm::ReadU32(p+at);const auto r=catalog_->references.find(id);
           if(r==catalog_->references.end()||!r->second.valid||!catalog_->doorBases.count(r->second.base)||p[at+4]>1||!next.doorStates.emplace(id,p[at+4]!=0).second)return fail("Invalid saved door state");}
+      }
+      if(version>=21){
+        if(payload.size()-at<8||fo3esm::ReadU32(p+at)!=0x31564141)return fail("Missing actor values");
+        const auto n=fo3esm::ReadU32(p+at+4);at+=8;
+        if(n>10000||payload.size()-at<44ull*n+8)return fail("Invalid actor value count");
+        for(uint32_t i=0;i<n;++i){const auto id=fo3esm::ReadU32(p+at);at+=4;std::array<float,10> values{};
+          if(!catalog_->actorPlacements.count(id)||next.actorVariables.count(id))return fail("Invalid actor values reference");
+          for(float& v:values){v=fo3esm::ReadF32(p+at);at+=4;if(!std::isfinite(v))return fail("Invalid actor value");}
+          next.actorVariables.emplace(id,values);
+        }
+        if(payload.size()-at<4)return fail("Missing actor spawn levels");
+        const auto count=fo3esm::ReadU32(p+at);at+=4;
+        if(count>10000||payload.size()-at<8ull*count+4)return fail("Invalid actor spawn levels");
+        for(uint32_t i=0;i<count;++i,at+=8){const auto id=fo3esm::ReadU32(p+at),level=fo3esm::ReadU32(p+at+4);
+          if(!catalog_->actorPlacements.count(id)||!level||level>20||!next.actorSpawnLevels.emplace(id,uint16_t(level)).second)return fail("Invalid actor spawn level");}
+        const auto selections=fo3esm::ReadU32(p+at);at+=4;
+        if(selections>100000||payload.size()-at!=12ull*selections)return fail("Invalid actor template count");
+        for(uint32_t i=0;i<selections;++i,at+=12){const auto key=U64(p+at);const auto selected=fo3esm::ReadU32(p+at+8);
+          const auto list=catalog_->weapons.levelledActors.find(uint32_t(key));
+          if(!next.actorSpawnLevels.count(uint32_t(key>>32))||list==catalog_->weapons.levelledActors.end()||
+             (selected&&std::none_of(list->second.entries.begin(),list->second.entries.end(),[&](const auto& e){return e.actor==selected;}))||
+             !next.actorTemplateChoices.emplace(key,selected).second)return fail("Invalid actor template selection");}
+
       }
       if(at!=payload.size())return fail("Trailing player save data");
     }
@@ -1788,7 +1820,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
   state_ = std::move(next);
   pendingKarmaEvents_.clear();pendingTheftEvents_.clear();pendingQuestNotices_.clear();pendingScriptItems_.clear();
   pendingExperienceNotices_.clear();pendingLocationNotices_.clear();
-  pendingScriptActions_.clear();scriptAnimations_.clear();scriptInsideTriggers_.clear();++scriptRuntimeGeneration_;
+  pendingScriptActions_.clear();scriptTalking_.clear();scriptAnimations_.clear();scriptInsideTriggers_.clear();++scriptRuntimeGeneration_;
   pendingScriptMessages_.clear();pendingScriptSounds_.clear();pendingBarters_.clear();scriptButtons_.clear();EndContainerInteraction();
   ++revision_;
   return true;

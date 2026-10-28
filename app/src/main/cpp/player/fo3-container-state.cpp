@@ -42,6 +42,7 @@ bool Player::PrepareContainer(uint32_t id) {
 bool Player::PrepareActorInventory(uint32_t id) {
   const auto ref=catalog_->references.find(id);
   if(ref==catalog_->references.end()||!catalog_->actorInventories.count(ref->second.base))return false;
+  if(catalog_->actorPlacements.count(id)&&!RealizeActor(id))return false;
   return PrepareInventory(id,true);
 }
 bool Player::PrepareInventory(uint32_t id,bool actor) {
@@ -159,7 +160,7 @@ bool Player::PrepareInventory(uint32_t id,bool actor) {
   uint32_t base=catalog_->references.at(id).base;
   if(actor) {
     for(int depth=0;depth<16;++depth){const auto a=catalog_->weapons.actors.find(base);
-      if(a==catalog_->weapons.actors.end())return false;
+      if(a==catalog_->weapons.actors.end()){base=ActorTemplate(id,base);if(!base)return false;continue;}
       if(!(a->second.templates&0x100))break;
       base=a->second.templateId;if(depth==15)return false;
     }

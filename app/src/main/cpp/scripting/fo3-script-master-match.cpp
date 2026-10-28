@@ -148,7 +148,7 @@ bool Authored(const Execution& e,const fo3pipdata::Definitions& d){
   const auto s=d.scripts.find(o.record);if(s==d.scripts.end()||!Same(e.container,s->second))return false;
   const auto events=ParseEvents(s->second);if(!events.error.empty())return false;
   for(const auto& block:events.blocks)if(block.sourceLine==o.sourceLine&&block.event==o.event){
-    if(!EventFilterMatches(block.filter,e.activator,fo3player::PlayerRef))return false;
+    if(!EventFilterMatches(block.filter,e.activator,fo3player::PlayerRef) && !(d.formNames.count(block.filter)&&d.formNames.at(block.filter)==e.activator))return false;
     fo3pipdata::ResultScript body;body.source=block.body;return Same(e.program,body);
   }
   return false;

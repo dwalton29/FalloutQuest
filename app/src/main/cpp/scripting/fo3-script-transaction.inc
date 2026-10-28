@@ -12,7 +12,7 @@ Player::Player(const Player& source,ScriptCandidateTag)
       scriptCompileCache_(source.scriptCompileCache_?source.scriptCompileCache_:
         (source.scriptCompileCache_=std::make_shared<fo3script::CompileCache>(source.catalog_->pipboy))),
       scriptButtons_(source.scriptButtons_),
-      pendingScriptActions_(source.pendingScriptActions_),scriptAnimationDefinitions_(source.scriptAnimationDefinitions_),
+      scriptTalking_(source.scriptTalking_),pendingScriptActions_(source.pendingScriptActions_),scriptAnimationDefinitions_(source.scriptAnimationDefinitions_),
       scriptAnimations_(source.scriptAnimations_),scriptInsideTriggers_(source.scriptInsideTriggers_),
       scriptRuntimeSeconds_(source.scriptRuntimeSeconds_),scriptElapsedSeconds_(source.scriptElapsedSeconds_),
       scriptRuntimeGeneration_(source.scriptRuntimeGeneration_),
