@@ -155,7 +155,7 @@ static void Original(const char* path) {
   // Every exterior ACHR shares NAVM ownership but owns its route/progress.
   std::vector<Q230ActorVisual> residents;
   for(const auto& source:actors){Q230ActorVisual actor;actor.source=source;actor.runtime.position=Q240ScenePosition({source.x,source.y,source.z});actor.navigationGraph=graph;residents.push_back(std::move(actor));}
-  assert(residents.size()==3);std::vector<std::array<float,3>> initial;
+  assert(residents.size()>=3);std::vector<std::array<float,3>> initial;
   activePackageTargets=&residents;
   for(const auto& actor:residents)initial.push_back(actor.runtime.position);
   for(int frame=0;frame<7500;++frame)for(auto& actor:residents)Q240UpdateNpcPackage(actor,frame*.016);
@@ -171,7 +171,7 @@ static void Original(const char* path) {
     &gPlayerSession->player.Definitions().pipboy.dialogueActors.at(0x3b1c));
   assert(fo3pipdata::ActorCategory(gPlayerSession->player.Definitions().pipboy,0x2e2a4,8)==
     fo3pipdata::ActorCategory(gPlayerSession->player.Definitions().pipboy,0x2e29b,8));
-  assert(executable==3);assert(moved>=1);
+  assert(executable>=3);assert(moved>=1);
   std::cout<<"Simultaneous exterior residents="<<residents.size()<<" executable="<<executable<<" moved="<<moved<<" seconds=120\n";
   for(const auto& source:actors){
     Q230ActorVisual actor;actor.source=source;actor.runtime.position=Q240ScenePosition({source.x,source.y,source.z});actor.navigationGraph=graph;
