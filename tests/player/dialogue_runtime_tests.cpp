@@ -7,6 +7,8 @@
 #include "audio/fo3-dialogue-face.h"
 #include <unistd.h>
 std::vector<Q230ActorVisual> gQ230NpcActors;
+struct StaticReference {uint32_t refFormId=0;};
+std::vector<StaticReference> gObjects;
 uint64_t gStereoFrame=0;
 bool loading=false,pipboy=false;
 int stopped=0,flushes=0;
