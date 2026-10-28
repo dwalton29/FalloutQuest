@@ -169,7 +169,7 @@ void UpdateFo3LevelUp(double now,float scroll,bool pressedA,bool pressedB,
         if(now<u.experienceFeedbackUntil)return;
         if(!player.ExperienceProgress().ready||
            Fo3DialogueFocus()||Fo3ScriptMessageFocus()||Fo3PipboyFocus()||
-           Fo3LockpickFocus()||Fo3BarterFocus()||
+           Fo3LockpickFocus()||Fo3TerminalFocus()||Fo3BarterFocus()||
            GetFo3LootPanel().reference||
            fo3notify::Notifications().Size())return;
         const int budget=fo3levelup::SkillBudget(

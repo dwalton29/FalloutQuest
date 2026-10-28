@@ -22,6 +22,7 @@ Assets assets;bool ready=true,anchored=false;float breakElapsed=-1,introElapsed=
 void Advance(){}void SetHead(const float*){anchored=true;}
 std::string String(const fo3player::Player&,const char*,const char* fallback){return fallback;}
 }
+bool Fo3TerminalInputBlocked(){return false;}
 #define FO3_LOCKPICK_HEADLESS
 #include "ui/lockpick/fo3-lockpick-runtime.inc"
 void Check(bool ok,const char* why){if(!ok)throw std::runtime_error(why);}

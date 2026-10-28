@@ -22,6 +22,8 @@ bool Player::LevelUpPerkSupported(uint32_t id) const {
   if(it==catalog_->pipboy.perks.end())return false;
   const auto& p=it->second;
   // Exceptional vanilla perks with existing native outcomes.
+  const auto whiz=catalog_->pipboy.formNames.find("computerwhiz");
+  if(whiz!=catalog_->pipboy.formNames.end()&&id==whiz->second)return true;
   const auto special=catalog_->pipboy.formNames.find("intensetraining");
   if((special!=catalog_->pipboy.formNames.end()&&id==special->second)||
      (catalog_->infiltrator&&id==catalog_->infiltrator))return true;

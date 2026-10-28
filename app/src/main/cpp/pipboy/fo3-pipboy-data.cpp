@@ -114,6 +114,31 @@ void Decode(Definitions &d, const std::string &t, uint32_t id, uint32_t flags,
         break;
       }
   }
+  else if(t=="TERM") {
+    Terminal terminal;terminal.recordFlags=flags;terminal.name=Text(s,"FULL");terminal.description=Text(s,"DESC");terminal.model=Text(s,"MODL");
+    terminal.password=U(Find(s,"PNAM"));terminal.sound=U(Find(s,"SNAM"));terminal.script=U(Find(s,"SCRI"));
+    const auto data=Find(s,"DNAM");terminal.valid=data&&(data->n==3||data->n==4);
+    if(terminal.valid){terminal.difficulty=data->p[0];terminal.flags=data->p[1];terminal.server=data->p[2];
+      terminal.valid=terminal.difficulty<=5&&terminal.server<10;}
+    TerminalEntry* entry=nullptr;
+    for(const auto& v:s){
+      if(v.type=="ITXT"){terminal.entries.emplace_back();entry=&terminal.entries.back();entry->text=fo3esm::ZString(v.p,v.n);continue;}
+      if(!entry)continue;
+      if(v.type=="RNAM")entry->result=fo3esm::ZString(v.p,v.n);
+      else if(v.type=="ANAM"){if(v.n!=1)terminal.valid=false;else entry->flags=v.p[0];}
+      else if(v.type=="INAM")entry->note=U(&v);
+      else if(v.type=="TNAM")entry->submenu=U(&v);
+      else if(v.type=="CTDA"){if(v.n!=20&&v.n!=24&&v.n!=28)terminal.valid=false;else entry->conditions.push_back(Cond(v));}
+      else if(v.type=="SCHR"||v.type=="SCDA"||v.type=="SCTX"||v.type=="SCRO"||v.type=="SCRV"||v.type=="SLSD"||v.type=="SCVR"){
+        auto& r=entry->script;r.records.push_back({v.type,std::vector<uint8_t>(v.p,v.p+v.n)});
+        if(v.type=="SCHR")r.header.assign(v.p,v.p+v.n);
+        if(v.type=="SCDA")r.compiled.assign(v.p,v.p+v.n);
+        if(v.type=="SCTX")r.source=fo3esm::ZString(v.p,v.n);
+        if((v.type=="SCRO"||v.type=="SCRV")&&v.n==4)r.references.push_back(U(&v));
+      }
+    }
+    d.terminals[id]=std::move(terminal);
+  }
   else if(t=="FLST") {for(auto& v:s)if(v.type=="LNAM"&&v.n==4)d.formLists[id].push_back(U(&v));}
   else if(t=="RACE"){auto voices=Find(s,"VTCK");if(voices&&voices->n>=8)d.raceVoices[id]={U(voices),U(voices,4)};auto data=Find(s,"DATA");if(data&&data->n==36&&(U(data,32)&4))d.childRaces.insert(id);}
   else if(t=="FURN") {auto& f=d.furniture[id];f.model=Text(s,"MODL");f.editor=editor;auto m=Find(s,"MNAM");f.markers=U(m);f.valid=m&&m->n==4&&!f.model.empty();}
@@ -601,7 +626,7 @@ void Finalize(Definitions &d) {
     if(entry.second.target2.valid&&entry.second.target2.type==0)retain.insert(entry.second.target2.value);
   }
   for (auto &p : d.targets)
-    if(d.furniture.count(p.second.base)||d.idleMarkers.count(p.second.base))retain.insert(p.first);
+    if(d.furniture.count(p.second.base)||d.idleMarkers.count(p.second.base)||d.terminals.count(p.second.base))retain.insert(p.first);
   for (auto &p : d.targets)
     if (d.doorBases.count(p.second.base)) {
       d.doors[p.second.cell].push_back(p.second);

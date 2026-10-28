@@ -36,7 +36,7 @@ bool Same(const Execution& a,const Execution& b) noexcept {
   return x.kind==y.kind&&x.record==y.record&&x.item==y.item&&x.sourceLine==y.sourceLine&&
     x.topic==y.topic&&x.stage==y.stage&&x.event==y.event&&a.owner==b.owner&&
     a.activator==b.activator&&a.localScript==b.localScript&&a.parent==b.parent&&
-    a.reference==b.reference&&Same(a.program,b.program)&&Same(a.container,b.container)&&
+    a.reference==b.reference&&a.terminalLinkedReference==b.terminalLinkedReference&&Same(a.program,b.program)&&Same(a.container,b.container)&&
     a.owningQuest==b.owningQuest&&Same(a.conditions,b.conditions)&&Same(a.questConditions,b.questConditions)&&
     a.localVariables==b.localVariables&&a.commandForms==b.commandForms&&a.expressionForms==b.expressionForms&&
     a.commandVariables==b.commandVariables&&a.expressionVariables==b.expressionVariables&&
@@ -51,7 +51,7 @@ bool Contexts(const std::vector<Execution>& programs){
     const auto& e=programs[n];
     if(e.parent==Execution::NoParent){
       depth=0;
-      if(e.origin.kind==Kind::ReferenceEvent){if(e.reference!=e.owner)return false;}
+      if(e.origin.kind==Kind::ReferenceEvent||e.origin.kind==Kind::TerminalEntry){if(e.reference!=e.owner)return false;}
       else if(e.reference||e.activator)return false;
     }else{
       if(e.parent>=n||e.origin.kind!=Kind::QuestStageItem)return false;
@@ -78,6 +78,9 @@ const char* Type(const Execution& e){
         !e.owningQuest&&e.questConditions.empty()?"QUST":nullptr;
     case Kind::DialogueInfo:
       return e.owner&&o.topic&&o.item<2&&!o.stage&&!o.sourceLine&&o.event.empty()&&!e.localScript&&Empty(e.container)?"INFO":nullptr;
+    case Kind::TerminalEntry:
+      return e.owner&&o.topic&&!o.stage&&!o.sourceLine&&o.event.empty()&&!e.localScript&&Empty(e.container)&&
+        !e.owningQuest&&e.questConditions.empty()&&e.activator==fo3player::PlayerRef?"TERM":nullptr;
     case Kind::ReferenceEvent:
       return e.owner&&e.localScript==o.record&&o.sourceLine&&!o.event.empty()&&!o.item&&!o.stage&&!o.topic&&
         !e.owningQuest&&e.conditions.empty()&&e.questConditions.empty()?"SCPT":nullptr;
@@ -107,6 +110,7 @@ bool Complete(const std::vector<uint8_t>& b,const std::string& type){
     if(bit&&(scalars&bit))return false;
     scalars|=bit;
     if((Is(tag,"SCRO")||Is(tag,"SCRV"))&&n!=4)return false;
+    if(type=="TERM"&&Is(tag,"ITXT"))scalars=0;
     if(type=="INFO"&&Is(tag,"NEXT")){if(n||++next>1)return false;scalars=0;}
     if(type=="INFO"&&Is(tag,"TPIC")){if(n!=4||++tpic>1)return false;}
     if(type=="INFO"&&Is(tag,"QSTI")){if(n!=4||++quest>1)return false;}
@@ -128,6 +132,11 @@ bool Authored(const Execution& e,const fo3pipdata::Definitions& d){
     const auto stage=q->second.stages.find(o.stage);
     return stage!=q->second.stages.end()&&o.item<stage->second.items.size()&&
       Same(e.conditions,stage->second.items[o.item].conditions)&&Same(e.program,stage->second.items[o.item].result);
+  }
+  if(o.kind==Kind::TerminalEntry){
+    const auto terminal=d.terminals.find(o.record);
+    return terminal!=d.terminals.end()&&terminal->second.valid&&o.item<terminal->second.entries.size()&&
+      Same(e.conditions,terminal->second.entries[o.item].conditions)&&Same(e.program,terminal->second.entries[o.item].script);
   }
   if(o.kind==Kind::DialogueInfo){
     const auto t=d.topics.find(o.topic);
@@ -315,8 +324,10 @@ bool MatchScriptProgramsToMaster(const std::string& master,const std::vector<Exe
       variableScripts[binding.script].push_back(&binding);
     }
     wanted[programs[n].origin.record].push_back(n);
-    if(e.origin.kind==Kind::ReferenceEvent||e.origin.kind==Kind::DialogueInfo)owners[e.owner].push_back(n);
+    if(e.origin.kind==Kind::ReferenceEvent||e.origin.kind==Kind::DialogueInfo||e.origin.kind==Kind::TerminalEntry)owners[e.owner].push_back(n);
   }
+  fo3pipdata::Definitions terminalGraph;
+  const bool terminalPrograms=std::any_of(programs.begin(),programs.end(),[](const auto& e){return e.origin.kind==Kind::TerminalEntry;});
   if(!Contexts(programs))return fail("invalid script execution context tree");
   std::unique_ptr<FILE,Close> file(std::fopen(master.c_str(),"rb"));
   if(!file)return fail("script master unavailable");
@@ -386,12 +397,16 @@ bool MatchScriptProgramsToMaster(const std::string& master,const std::vector<Exe
       if(formTarget)for(const auto& expected:forms.at(id))
         if(name!=expected)return fail("command form name differs from original master");
     }
+    if(pass==0&&terminalPrograms&&std::memcmp(h,"TERM",4)==0&&!(recordFlags&0x20)){
+      if(!fo3esm::ReadPayload(file.get(),{p+24,n,recordFlags,"TERM"},bytes))return fail("terminal graph payload unavailable");
+      fo3pipdata::Decode(terminalGraph,"TERM",id,recordFlags,bytes,0,0,0);
+    }
     if(pass==0&&variableOwners.count(id)){
       const std::string type(reinterpret_cast<const char*>(h),4);
       if(!variableOwnerTypes.emplace(id,type).second)return fail("duplicate qualified variable owner");
       if(recordFlags&0x20)return fail("deleted qualified variable owner");
       for(const auto* binding:variableOwners.at(id))
-        if(binding->quest?type!="QUST":(type!="ACHR"&&type!="ACRE"))return fail("wrong-type qualified variable owner");
+        if(binding->quest?type!="QUST":(type!="ACHR"&&type!="ACRE"&&type!="REFR"))return fail("wrong-type qualified variable owner");
       uint32_t association=0;const bool quest=variableOwners.at(id).front()->quest;
       if(!fo3esm::ReadPayload(file.get(),{p+24,n,recordFlags,type},bytes)||
           !Association(bytes,type,quest?"SCRI":"NAME",association))return fail("malformed qualified variable owner association");
@@ -401,7 +416,7 @@ bool MatchScriptProgramsToMaster(const std::string& master,const std::vector<Exe
     if(pass==0&&variableBases.count(id)){
       const std::string type(reinterpret_cast<const char*>(h),4);
       if(!variableBaseTypes.emplace(id,type).second)return fail("duplicate qualified variable actor base");
-      if((recordFlags&0x20)||(type!="NPC_"&&type!="CREA"))return fail("deleted or wrong-type qualified variable actor base");
+      if((recordFlags&0x20)||!EventBase(type))return fail("deleted or wrong-type qualified variable actor base");
       uint32_t script=0;
       if(!fo3esm::ReadPayload(file.get(),{p+24,n,recordFlags,type},bytes)||!Association(bytes,type,"SCRI",script))
         return fail("malformed qualified variable actor script association");
@@ -496,16 +511,25 @@ bool MatchScriptProgramsToMaster(const std::string& master,const std::vector<Exe
       for(const auto index:binding->second){
         const bool info=programs[index].origin.kind==Kind::DialogueInfo;
         if(pass==0&&info&&type!="ACHR"&&type!="ACRE")return fail("dialogue speaker is not an authored actor placement");
-        needsScript=needsScript||!info;
+        needsScript=needsScript||(!info&&programs[index].origin.kind!=Kind::TerminalEntry);
       }
       uint32_t association=0;
       if(!fo3esm::ReadPayload(file.get(),{p+24,n,flags,type},bytes)||
           ((placed||needsScript)?!Association(bytes,type,placed?"NAME":"SCRI",association):!Complete(bytes,type)))
         return fail("malformed or missing script owner association");
       for(const auto index:binding->second){
-        if(placed){bases[association].push_back(index);placementTypes[index]=type;}
+        if(placed){
+          if(programs[index].origin.kind==Kind::TerminalEntry){
+            if(type!="REFR"||association!=programs[index].origin.topic)return fail("terminal owner base differs");
+            uint32_t linked=0;unsigned count=0;
+            fo3esm::WalkSubrecords(bytes,[&](const char* tag,const uint8_t* data,uint32_t size){if(std::memcmp(tag,"XLKR",4)==0){++count;if(size==4)linked=fo3esm::ReadU32(data);else count+=2;}});
+            if(count>1||linked!=programs[index].terminalLinkedReference)return fail("terminal linked reference differs");
+          }
+          bases[association].push_back(index);placementTypes[index]=type;
+        }
         else {
           if(pass==1){
+            if(programs[index].origin.kind==Kind::TerminalEntry&&type!="TERM")return fail("terminal owner is not TERM");
             const auto& placement=placementTypes[index];
             if((placement=="ACHR"&&type!="NPC_")||(placement=="ACRE"&&type!="CREA")||
                 (placement=="REFR"&&(type=="NPC_"||type=="CREA")))
@@ -522,6 +546,15 @@ bool MatchScriptProgramsToMaster(const std::string& master,const std::vector<Exe
     }
     p+=24+n;if(fseeko(file.get(),p,SEEK_SET))return fail("script master seek failed");
   }
+  }
+  for(const auto& e:programs)if(e.origin.kind==Kind::TerminalEntry){
+    std::vector<uint32_t> pending{e.origin.topic};std::unordered_set<uint32_t> visited;
+    while(!pending.empty()&&!visited.count(e.origin.record)){
+      auto id=pending.back();pending.pop_back();if(!visited.insert(id).second)continue;
+      auto terminal=terminalGraph.terminals.find(id);if(terminal==terminalGraph.terminals.end()||!terminal->second.valid)continue;
+      for(const auto& entry:terminal->second.entries)if(entry.submenu)pending.push_back(entry.submenu);
+    }
+    if(!visited.count(e.origin.record))return fail("terminal submenu is not reachable from owner base");
   }
   if(seen.size()!=wanted.size())return fail("script master identity missing");
   if(formsSeen.size()!=forms.size())return fail("command form identity missing");

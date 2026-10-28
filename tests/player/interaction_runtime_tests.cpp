@@ -103,6 +103,9 @@ bool Q230LiveBounds(const ActorTarget& actor,std::array<float,3>& lo,std::array<
 bool DialogueCanStart(ActorTarget& actor){return actor.eligible;}
 bool StartFo3Dialogue(uint32_t actor){talked=actor;dialogueFocus=true;return true;}
 bool lockpickFocus=false,lockpickLatch=false;
+bool Fo3TerminalFocus(){return false;}
+bool Fo3TerminalInputBlocked(){return false;}
+bool BeginFo3Terminal(uint32_t){return false;}
 bool Fo3LockpickFocus(){return lockpickFocus;}
 bool Fo3LockpickInputBlocked(){return lockpickFocus||lockpickLatch;}
 bool barterFocus=false;

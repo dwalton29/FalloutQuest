@@ -220,6 +220,10 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
         error="script provenance stage item unavailable";return false;
       }
       conditions=&stage->second.items[origin.item].conditions;
+    }else if(origin.kind==ScriptProgramKind::TerminalEntry){
+      const auto terminal=catalog_->pipboy.terminals.find(origin.record);
+      if(terminal==catalog_->pipboy.terminals.end()||origin.item>=terminal->second.entries.size()){error="terminal provenance unavailable";return false;}
+      conditions=&terminal->second.entries[origin.item].conditions;
     }else if(origin.kind==ScriptProgramKind::DialogueInfo){
       const auto location=catalog_->dialogueInfos.find(origin.record);
       const auto topic=catalog_->pipboy.topics.find(origin.topic);
@@ -310,6 +314,10 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
     ScriptExecution execution;execution.origin=std::move(origin);
     execution.owner=owner;execution.activator=scriptActivator_;execution.localScript=scriptId;
     execution.parent=scriptTraceParent_;execution.reference=scriptReference_;
+    if(execution.origin.kind==ScriptProgramKind::TerminalEntry){
+      const auto ref=catalog_->pipboy.targets.find(owner);
+      if(ref!=catalog_->pipboy.targets.end())execution.terminalLinkedReference=ref->second.linkedReference;
+    }
     execution.program=script;
     execution.commandForms=std::move(forms.bindings);
     execution.expressionForms=std::move(expressionForms.bindings);
@@ -372,6 +380,9 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
       if(ok){pendingScriptItems_.push_back({c.form,int32_t(c.value)});++scriptEffectRevision_;}
       break;
     case C::RemoveItem:ok=ScriptRemoveItem(c.form,int32_t(c.value));break;
+    case C::DoorState:ok=ScriptDoorState(c.form,c.value!=0);break;
+    case C::TerminalBack:ok=QueueTerminalBack(c.form);break;
+    case C::ShowMap:ok=Discover(c.form);break;
     case C::SetQuestObject:ok=SetQuestObject(c.form,c.value!=0);break;
     case C::Lock:ok=ScriptLock(c.form,int(c.value));break;
     case C::Unlock:ok=ScriptUnlock(c.form);break;

@@ -7,7 +7,7 @@ fo3scene::ResidentInteractionActivity CaptureFo3ResidentInteractionActivity() no
         gExteriorWorldspaceQ1890==0&&gPlayerSession&&!gPlayerSession->saveBlocked;
     activity.dialogue=Fo3DialogueFocus();activity.barter=Fo3BarterFocus();
     activity.pipboy=Fo3PipboyFocus();activity.message=Fo3ScriptMessageFocus();
-    activity.lockpick=Fo3LockpickFocus();activity.lockpickLatch=Fo3LockpickInputBlocked();
+    activity.lockpick=Fo3LockpickFocus()||Fo3TerminalFocus();activity.lockpickLatch=Fo3LockpickInputBlocked();
     activity.loot=GetFo3LootPanel().reference!=0;
     activity.weaponHandling=weaponruntime::held||weaponruntime::support||
         weaponruntime::magazine||weaponruntime::charging;

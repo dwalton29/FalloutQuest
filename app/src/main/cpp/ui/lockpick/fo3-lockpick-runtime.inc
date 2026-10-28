@@ -5,7 +5,7 @@
 #include <random>
 fo3lockpick::Game gLockpick;
 bool gLockpickInputLatch=false;
-bool Fo3LockpickInputBlocked(){return gLockpickInputLatch||Fo3LockpickFocus();}
+bool Fo3LockpickInputBlocked(){return gLockpickInputLatch||Fo3LockpickFocus()||Fo3TerminalInputBlocked();}
 bool gLockpickLastA=true,gLockpickLastB=true,gLockpickReleased=false,gLockpickLoop=false;
 double gLockpickTime=0,gLockpickSoundTime=0,gLockpickBreakStarted=0,gLockpickEntered=0,gLockpickPinEntered=0;
 std::mt19937 gLockpickRandom(std::random_device{}());

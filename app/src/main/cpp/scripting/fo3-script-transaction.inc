@@ -14,7 +14,7 @@ Player::Player(const Player& source,ScriptCandidateTag)
       scriptButtons_(source.scriptButtons_),
       pendingScriptMessages_(source.pendingScriptMessages_),pendingQuestNotices_(source.pendingQuestNotices_),
       pendingExperienceNotices_(source.pendingExperienceNotices_),pendingScriptItems_(source.pendingScriptItems_),
-      pendingScriptSounds_(source.pendingScriptSounds_),pendingBarters_(source.pendingBarters_),pendingKarmaEvents_(source.pendingKarmaEvents_),
+      pendingScriptSounds_(source.pendingScriptSounds_),pendingTerminalBack_(source.pendingTerminalBack_),pendingBarters_(source.pendingBarters_),pendingKarmaEvents_(source.pendingKarmaEvents_),
       pendingTheftEvents_(source.pendingTheftEvents_),containerInteraction_(source.containerInteraction_),
       containerKarmaCommitted_(source.containerKarmaCommitted_) {}
 std::unique_ptr<ScriptTransactionPlan> Player::PrepareScriptTransaction(
@@ -109,6 +109,33 @@ std::unique_ptr<ScriptTransactionPlan> Player::PrepareReferenceEventTransaction(
     return candidate.RunSourceEventDirect(script,event,reference,activator,e);
   },error,capture==ScriptProgramCapture::EnteredPrograms);
 }
+std::unique_ptr<ScriptTransactionPlan> Player::PrepareTerminalTransaction(
+    uint32_t reference,uint32_t menu,size_t index,std::string& error,ScriptProgramCapture capture) const {
+  const auto r=catalog_->references.find(reference);const auto t=catalog_->pipboy.terminals.find(menu);
+  if(r==catalog_->references.end()||!r->second.valid||!catalog_->pipboy.terminals.count(r->second.base)||
+     GetLock(reference).locked||t==catalog_->pipboy.terminals.end()||!t->second.valid||index>=t->second.entries.size()){
+    error="terminal action unavailable";return {};
+  }
+  std::vector<uint32_t> pending{r->second.base};std::unordered_set<uint32_t> visited;
+  while(!pending.empty()&&!visited.count(menu)){
+    auto next=pending.back();pending.pop_back();if(!visited.insert(next).second)continue;
+    const auto node=catalog_->pipboy.terminals.find(next);if(node==catalog_->pipboy.terminals.end())continue;
+    for(const auto& e:node->second.entries)if(e.submenu)pending.push_back(e.submenu);
+  }
+  if(!visited.count(menu)){error="terminal menu does not belong to this reference";return {};}
+  const auto& entry=t->second.entries[index];
+  return PrepareScriptTransaction([&](Player& candidate,std::string& e){
+    fo3dialogue::Context context;context.player=&candidate;context.speaker.reference=reference;context.speaker.base=r->second.base;
+    context.target.reference=PlayerRef;context.target.base=PlayerBase;
+    if(!fo3dialogue::Conditions(entry.conditions,context,e)){if(e.empty())e="terminal conditions changed";return false;}
+    const auto oldRef=candidate.scriptReference_,oldActivator=candidate.scriptActivator_;
+    candidate.scriptReference_=reference;candidate.scriptActivator_=PlayerRef;
+    ScriptProgramOrigin origin;origin.kind=ScriptProgramKind::TerminalEntry;origin.record=menu;origin.topic=r->second.base;origin.item=uint32_t(index);
+    unsigned budget=4096;bool result=candidate.RunScript(entry.script,reference,0,budget,e,0,std::move(origin));
+    if(result&&(entry.flags&1)&&entry.note&&candidate.ItemCount(entry.note)==0)result=candidate.Add(entry.note,1);
+    candidate.scriptReference_=oldRef;candidate.scriptActivator_=oldActivator;return result;
+  },error,capture==ScriptProgramCapture::EnteredPrograms);
+}
 bool Player::ScriptPlanContextMatches(const ScriptTransactionPlan& plan) const noexcept {
   const auto& candidate=*plan.candidate_;
   return scriptPlayerPositionKnown_==candidate.scriptPlayerPositionKnown_ &&
@@ -139,6 +166,7 @@ void Player::SwapScriptPayload(Player& other) noexcept {
   scriptButtons_.swap(other.scriptButtons_);
   pendingScriptMessages_.swap(other.pendingScriptMessages_);
   pendingScriptSounds_.swap(other.pendingScriptSounds_);
+  pendingTerminalBack_.swap(other.pendingTerminalBack_);
   pendingBarters_.swap(other.pendingBarters_);
   pendingQuestNotices_.swap(other.pendingQuestNotices_);
   pendingExperienceNotices_.swap(other.pendingExperienceNotices_);

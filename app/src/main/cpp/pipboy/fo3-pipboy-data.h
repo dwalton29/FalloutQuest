@@ -53,6 +53,20 @@ struct ResultScript {
   std::vector<uint32_t> references;
   std::vector<std::pair<std::string,std::vector<uint8_t>>> records;
 };
+struct TerminalEntry {
+  std::string text,result;
+  uint8_t flags=0;
+  uint32_t note=0,submenu=0;
+  std::vector<Condition> conditions;
+  ResultScript script;
+};
+struct Terminal {
+  std::string name,description,model;
+  uint32_t password=0,sound=0,script=0,recordFlags=0;
+  uint8_t difficulty=5,flags=0,server=0;
+  bool valid=false;
+  std::vector<TerminalEntry> entries;
+};
 struct ObjectiveTarget {
   uint32_t reference=0;
   std::vector<uint8_t> metadata;
@@ -215,6 +229,10 @@ struct FurnitureDefinition { std::string model,editor; uint32_t markers=0; bool 
 struct IdleMarkerDefinition { uint8_t flags=0; float timer=0; bool valid=false; std::vector<uint32_t> animations; };
 struct SkillPresentation { std::string name,description,icon; };
 struct Definitions {
+  std::unordered_map<uint32_t,Terminal> terminals;
+  // Scripted non-actor placements have numeric locals too. Keep them separate
+  // from referenceScripts, whose iteration is the original actor census.
+  std::unordered_map<uint32_t,std::pair<uint32_t,uint32_t>> objectReferenceScripts; // script,base
   // Original AVIF skill descriptions and ICON paths, indexed by player
   // actor-value skill slot 32..45, including the unused slot at 44.
   std::array<SkillPresentation,14> skills{};

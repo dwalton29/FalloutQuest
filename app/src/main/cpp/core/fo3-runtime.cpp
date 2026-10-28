@@ -86,6 +86,7 @@ extern void PumpFo3AndroidEventsQ1860();
 #include "ui/pause/fo3-debug-menu.h"
 #include "audio/fo3-audio.h"
 #include "world/interaction/fo3-interaction.h"
+#include "ui/terminal/fo3-terminal-surface.h"
 #include "world/interaction/fo3-interaction-ray.h"
 #include "world/interaction/fo3-loot-cursor.h"
 #include "rendering/mesh/fo3-static-nif.h"
@@ -424,6 +425,7 @@ struct CpuObject {
 };
 
 struct GpuObject {
+    std::shared_ptr<const fo3terminal::Surface> terminalScreen;
     std::shared_ptr<const std::vector<fo3occ::Surface>> occluders;
     mutable uint64_t occlusionGeneration=0;
     mutable bool occlusionHidden=false;
@@ -2462,6 +2464,18 @@ bool UploadCpuObject(CpuObject& cpu, float centerX, float centerY, float floorZ,
             if (q1380.regionDriven) ++gQ1380ExternalRegionShapes;
             else ++gQ1380ExternalFixedShapes;
         }
+    }
+    if(cpu.placement.baseRecordType=="TERM"){
+      const auto texture=TextureCacheKey(cpu.mesh.diffuseTexturePath,"");
+      if(texture.find("screen")!=std::string::npos&&texture.find("glare")==std::string::npos){
+        std::vector<fo3terminal::Point> points,normals;points.reserve(vertexCount);normals.reserve(vertexCount);
+        for(size_t i=0;i<vertexCount;++i){const auto& p=cpu.positionsGame[i];const auto n=GameDirectionToOpenXr(cpu.normalsGame[i]);
+          points.push_back({(p.x-centerX)/FO3_UNITS_PER_METRE,FLOOR_Y+(p.z-floorZ)/FO3_UNITS_PER_METRE,SCENE_FORWARD-(p.y-centerY)/FO3_UNITS_PER_METRE});
+          normals.push_back({n.x,n.y,n.z});}
+        const auto up=GameDirectionToOpenXr(ApplyEsmRotation({0,0,1},cpu.placement));
+        const auto fallback=GameDirectionToOpenXr(ApplyEsmRotation({0,1,0},cpu.placement));
+        auto screen=std::make_shared<fo3terminal::Surface>();if(screen->Build(points,cpu.mesh.indices,normals,{up.x,up.y,up.z},{fallback.x,fallback.y,fallback.z}))gpu.terminalScreen=std::move(screen);
+      }
     }
     gpu.refFormId = cpu.placement.refFormId;
     gpu.baseFormId = cpu.placement.baseFormId;
@@ -5375,6 +5389,7 @@ bool Q2400ToggleInteriorDoor(uint32_t refFormId,float activatorX,float activator
                  refFormId,opening?"open":"close",
                  clip?clip->name.c_str():"<missing>",
                  fo3dooranim::Duration(*first->q2401DoorAnimation,opening));
+        if(gPlayerSession)gPlayerSession->player.ScriptDoorState(refFormId,state.targetOpen);
         return true;
     }
 
@@ -5391,10 +5406,25 @@ bool Q2400ToggleInteriorDoor(uint32_t refFormId,float activatorX,float activator
     }
     Q6H_LOGI("Q24.0 INTERIOR DOOR ACTIVATE: ref=%08X action=%s progress=%.3f swingSign=%d input=RIGHT_A fallback=no-NIF-sequence",
              refFormId,opening?"open":"close",state.progress,state.swingSign);
+    if(gPlayerSession)gPlayerSession->player.ScriptDoorState(refFormId,state.targetOpen);
     return true;
 }
 void UpdateFo3InteriorDoorsQ2400() {
-    if(gExteriorWorldspaceQ1890!=0u||gQ2400InteriorDoors.empty()) return;
+    if(gExteriorWorldspaceQ1890!=0u) return;
+    if(gPlayerSession&&!Fo3GameplayBlocked()){
+      static uint64_t playerRevision=UINT64_MAX,sceneSerial=UINT64_MAX;
+      auto& player=gPlayerSession->player;
+      if(playerRevision!=player.Revision()||sceneSerial!=gQ2400DoorSceneSerial){
+        playerRevision=player.Revision();sceneSerial=gQ2400DoorSceneSerial;
+        for(const auto& target:player.Snapshot().doorStates){
+          const auto door=Q2400FindSwingDoorObject(target.first);if(!door)continue;
+          const auto moving=gQ2400InteriorDoors.find(target.first);
+          if(moving!=gQ2400InteriorDoors.end()&&moving->second.q2401Moving){playerRevision=UINT64_MAX;continue;}
+          if(Q2400DoorOpen(target.first)!=target.second)Q2400ToggleInteriorDoor(target.first,gQ210Head[0],gQ210Head[2]);
+        }
+      }
+    }
+    if(gQ2400InteriorDoors.empty()) return;
     const auto now=Fo3GameplayNow();
     constexpr float DURATION=0.60f,EPS=0.0001f;
     for(auto& entry:gQ2400InteriorDoors) {
@@ -5548,7 +5578,11 @@ bool ActivateDoorInternalQ1700(float ox, float oy, float oz,
         Q6H_LOGI("DOOR BLOCKED: source=%08X authored lock/ownership/script policy",aim.sourceDoorRef);
         return false;
     }
-    if(aim.localSwing) return Q2400ToggleInteriorDoor(aim.sourceDoorRef,ox,oz);
+    if(aim.localSwing){
+        if(!Q2400ToggleInteriorDoor(aim.sourceDoorRef,ox,oz))return false;
+        if(gPlayerSession->player.ScriptDoorState(aim.sourceDoorRef,Q2400DoorOpen(aim.sourceDoorRef)))FlushFo3PlayerState();
+        return true;
+    }
     if (!QueueFo3DoorTransitionQ1700(aim.sourceDoorRef,
                                      aim.destinationDoorRef,
                                      aim.x, aim.y, aim.z,
@@ -15078,6 +15112,7 @@ void SetFo3ShoulderInteractionFocused(bool focused) {
 fo3player::Session* GetFo3PlayerSession() { return gPlayerSession.get(); }
 
 #include "ui/lockpick/fo3-lockpick-runtime.inc"
+#include "ui/terminal/fo3-terminal-runtime.inc"
 #include "world/interaction/fo3-interaction-runtime.inc"
 #include "world/interaction/fo3-levelup-runtime.inc"
 #include "ui/pause/fo3-pause-runtime.inc"

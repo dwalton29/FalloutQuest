@@ -7,7 +7,7 @@
 struct Fo3InteractionTarget {
   uint32_t reference = 0;
   bool pickup = false, allowed = false;
-  bool container = false,talk=false,scripted=false,crime=false;
+  bool container = false,talk=false,scripted=false,crime=false,terminal=false;
   std::array<float,3> anchor{};
   float distance = 0;
   Fo3DoorAimQ1700 door;
@@ -33,6 +33,10 @@ void UpdateFo3LootSelection(const Fo3InteractionTarget& target,float stickY,doub
 bool CollectFo3WorldReference(uint32_t reference);
 void SetFo3ShoulderInteractionFocused(bool focused);
 
+bool Fo3TerminalFocus();
+bool Fo3TerminalInputBlocked();
+void CancelFo3Terminal();
+bool BeginFo3Terminal(uint32_t reference);
 bool Fo3LockpickFocus();
 void CancelFo3Lockpick();
 bool Fo3LockpickInputBlocked();

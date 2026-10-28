@@ -61,7 +61,11 @@ bool CompileResult(const fo3pipdata::Definitions& d,const fo3pipdata::ResultScri
   if(forms)forms->Reset();
   if(script.source.empty()&&!script.compiled.empty()){error="compiled-only result";return false;}
   auto lower=[](std::string s){for(auto& c:s)c=char(std::tolower((unsigned char)c));return s;};
+  std::unordered_map<std::string,uint32_t> referenceLocals;
+  std::unordered_set<std::string> referenceDeclarations;
+  bool referencePreamble=true;
   auto form=[&](std::string n){
+    auto local=referenceLocals.find(lower(n));if(local!=referenceLocals.end())return local->second;
     n=lower(n);auto f=d.formNames.find(n);if(f==d.formNames.end()||!f->second)return uint32_t(0);
     if(forms&&!forms->Add(f->second,n))return uint32_t(0);
     return f->second;
@@ -72,6 +76,20 @@ bool CompileResult(const fo3pipdata::Definitions& d,const fo3pipdata::ResultScri
     auto comment=line.find(';');if(comment!=std::string::npos)line.resize(comment);
     std::istringstream in(line);std::string op,a,b,c,extra;Command cmd{};cmd.type=CommandType::Variable;
     if(!(in>>op))continue;
+    if(op=="ref"||op=="reference"){
+      if(!referencePreamble||!(in>>a)||(in>>extra)||!referenceDeclarations.insert(a).second){error="invalid reference local declaration";return false;}
+      continue;
+    }
+    if(op=="set"&&referencePreamble){
+      std::istringstream assignment(line);std::string verb,target,to,value;
+      assignment>>verb>>target>>to>>value;
+      if(referenceDeclarations.count(target)){
+        if(to!="to"||value!="getlinkedref"||(assignment>>extra)){error="unsupported reference assignment";return false;}
+        auto placed=d.targets.find(owner);if(placed==d.targets.end()||!placed->second.linkedReference){error="terminal linked reference unavailable";return false;}
+        referenceLocals[target]=placed->second.linkedReference;continue;
+      }
+    }
+    referencePreamble=false;
     if(op=="if"||op=="elseif") {
       cmd.type=op=="if"?CommandType::If:CommandType::ElseIf;
       std::getline(in,cmd.expression);if(cmd.expression.empty()){error="missing conditional expression";return false;}
@@ -108,6 +126,20 @@ bool CompileResult(const fo3pipdata::Definitions& d,const fo3pipdata::ResultScri
       if(!cmd.form){error="ShowBarterMenu requires actor reference";return false;}
       cmd.type=CommandType::ShowBarterMenu;std::getline(in,cmd.expression);
       cmd.expression=fo3script::Trim(cmd.expression);
+    } else if(op=="addnote"||op=="player.addnote"||op=="removenote"||op=="player.removenote") {
+      if(!(in>>a)||!(cmd.form=form(a))||!d.notes.count(cmd.form)){error="invalid terminal note";return false;}
+      cmd.type=op.find("remove")!=std::string::npos?CommandType::RemoveItem:CommandType::AddItem;cmd.value=1;
+    } else if(op=="showmap") {
+      if(!(in>>a)||!(cmd.form=form(a))||!d.markers.count(cmd.form)){error="invalid map marker";return false;}
+      cmd.type=CommandType::ShowMap;
+      if(in>>b){float travel;if(!number(b,travel)||(travel!=0&&travel!=1)){error="invalid map marker flag";return false;}}
+      else in.clear();
+    } else if(op=="forceterminalback") {
+      cmd.type=CommandType::TerminalBack;cmd.form=owner;
+    } else if(op=="setopenstate"||(op.size()>13&&op.compare(op.size()-13,13,".setopenstate")==0)) {
+      const auto dot=op.find('.');cmd.form=dot==std::string::npos?owner:form(op.substr(0,dot));
+      if(!cmd.form||!(in>>a)||!number(a,cmd.value)||(cmd.value<0||cmd.value>255||std::floor(cmd.value)!=cmd.value)){error="invalid SetOpenState";return false;}
+      cmd.type=CommandType::DoorState;
     } else if(op=="showmessage") {
       cmd.type=CommandType::ShowMessage;
       if(!(in>>a)||(cmd.form=form(a))==0){error="invalid showmessage form";return false;}
@@ -138,6 +170,8 @@ bool CompileResult(const fo3pipdata::Definitions& d,const fo3pipdata::ResultScri
       cmd.form=dot==std::string::npos?owner:form(op.substr(0,dot));
       cmd.type=verb=="enable"?CommandType::Enable:CommandType::Disable;
       if(!cmd.form){error="missing Enable/Disable reference";return false;}
+      if(in>>a){float fade=0;if(!number(a,fade)||(fade!=0&&fade!=1)){error="invalid Enable/Disable fade flag";return false;}}
+      else in.clear();
       // Only the resident workflow may publish world changes.
     } else if(op=="rewardkarma") {
       cmd.type=CommandType::RewardKarma;

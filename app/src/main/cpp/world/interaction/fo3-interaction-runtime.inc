@@ -53,7 +53,7 @@ bool QueryFo3Interaction(float ox, float oy, float oz, float dx, float dy,
                          float dz, Fo3InteractionTarget &target) {
     target = {};
     if(Fo3ResidentFrameBlocked())return false;
-    if (!gSceneReady || IsFo3LoadingVisible() || Fo3DialogueFocus() || Fo3PipboyFocus() || Fo3ScriptMessageFocus() || Fo3LevelUpFocus() || Fo3LockpickFocus() || !gPlayerSession) return false;
+    if (!gSceneReady || IsFo3LoadingVisible() || Fo3DialogueFocus() || Fo3PipboyFocus() || Fo3ScriptMessageFocus() || Fo3LevelUpFocus() || Fo3LockpickFocus() || Fo3TerminalInputBlocked() || !gPlayerSession) return false;
     const float length = std::sqrt(dx*dx+dy*dy+dz*dz);
     if (!std::isfinite(length) || length < 1e-5f ||
         !std::isfinite(ox) || !std::isfinite(oy) || !std::isfinite(oz)) return false;
@@ -70,6 +70,7 @@ bool QueryFo3Interaction(float ox, float oy, float oz, float dx, float dy,
     }
     for (const auto& object : gObjects) {
         const bool container=catalog.containers.count(object.baseFormId)!=0;
+        const bool terminal=catalog.pipboy.terminals.count(object.baseFormId)!=0;
         // Scripted activators use their original ACTI SCRI rather than being
         // treated as pickup items or a fabricated FalloutQuest interaction.
         const bool scripted=object.baseRecordType=="ACTI" &&
@@ -77,7 +78,7 @@ bool QueryFo3Interaction(float ox, float oy, float oz, float dx, float dy,
         // Inventory eligibility comes from the item catalog, independently
         // of whether the physics runtime supports this loose-object type.
         if (player.IsCollected(object.refFormId) ||
-            (!container && !scripted && !catalog.items.count(object.baseFormId)) ||
+            (!container && !terminal && !scripted && !catalog.items.count(object.baseFormId)) ||
             !IsFo3ReferenceEnabled(player,object.refFormId)) continue;
         fo3interaction::Point lo{1e30f,1e30f,1e30f}, hi{-1e30f,-1e30f,-1e30f};
         for (int corner=0;corner<8;++corner) {
@@ -93,12 +94,12 @@ bool QueryFo3Interaction(float ox, float oy, float oz, float dx, float dy,
         for (int i=0;i<3;++i) {lo[i]-=0.015f;hi[i]+=0.015f;}
         float distance;
         if (fo3interaction::Box({ox,oy,oz},{dx,dy,dz},lo,hi,3,distance) && distance<best) {
-            best=distance; target.reference=object.refFormId; target.pickup=!container&&!scripted;
+            best=distance; target.reference=object.refFormId; target.pickup=!container&&!scripted&&!terminal;target.terminal=terminal;
             target.container=container;target.scripted=scripted;
             const float panelDistance=std::max(0.0f,distance-.15f);
             target.anchor={ox+dx*panelDistance,oy+dy*panelDistance+.22f,oz+dz*panelDistance};
             target.allowed=!gPlayerSession->saveBlocked &&
-                (scripted ? IsFo3ReferenceEnabled(player,target.reference)
+                ((scripted||terminal) ? IsFo3ReferenceEnabled(player,target.reference)
                   : (container ? player.CanLootContainer(target.reference) : player.CanPickup(target.reference)));
             target.door={};
         }
@@ -122,7 +123,9 @@ bool QueryFo3Interaction(float ox, float oy, float oz, float dx, float dy,
     const auto ownership=player.ResolveOwnership(target.reference);
     target.crime=ownership.Theft();
     if (target.container&&catalog.pipboy.targets.count(target.reference)&&catalog.actorInventories.count(catalog.pipboy.targets.at(target.reference).base))return true;
-    if (target.container) {
+    if(target.terminal){
+        std::snprintf(target.prompt.data(),target.prompt.size(),"Access %s",catalog.pipboy.terminals.at(catalog.references.at(target.reference).base).name.c_str());
+    } else if (target.container) {
         const auto& ref=catalog.references.at(target.reference);
         const auto& container=catalog.containers.at(ref.base);
         std::snprintf(target.prompt.data(),target.prompt.size(),"%s%s",
@@ -333,6 +336,7 @@ void UpdateFo3LootSelection(const Fo3InteractionTarget& target,float stickY,doub
 bool ActivateFo3Interaction(float ox,float oy,float oz,float dx,float dy,float dz) {
     Fo3InteractionTarget target;
     if (!QueryFo3Interaction(ox,oy,oz,dx,dy,dz,target)) return false;
+    if(target.terminal){BeginFo3Terminal(target.reference);return false;}
     if(target.scripted){
         const auto& catalog=gPlayerSession->player.Definitions();
         const auto ref=catalog.references.find(target.reference);

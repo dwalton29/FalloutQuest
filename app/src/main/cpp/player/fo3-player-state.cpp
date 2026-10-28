@@ -555,7 +555,7 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
         if(id=="iLevelUpSkillPointsInterval"&&d&&d->size==4&&I32(d->data)>0)
           next.levelSkillPointsInterval=I32(d->data);
         if(!id.empty() && d && d->size==4 && (id[0]=='i'||id[0]=='f') &&
-           (id.find("Lock")!=std::string::npos||id.find("SweetSpot")!=std::string::npos||id.find("Concentric")!=std::string::npos||id=="fPickBreakSecs"))
+           (id.find("Lock")!=std::string::npos||id.find("SweetSpot")!=std::string::npos||id.find("Concentric")!=std::string::npos||id=="fPickBreakSecs"||id.find("Hack")!=std::string::npos))
           next.lockSettings[id]=id[0]=='f'?fo3esm::ReadF32(d->data):float(I32(d->data));
         if (id == "iLevItemLevelDifferenceMax" && d && d->size == 4)
           next.lootLevelDifference = std::max(0, I32(d->data));
@@ -649,6 +649,11 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
   }
   fo3weapon::FinalizeStatistics(next.weapons);
   fo3pipdata::FinalizeLevelledCategories(next.pipboy,next.weapons);
+  for(const auto& reference:next.references){
+    const auto script=next.eventBaseScripts.find(reference.second.base);
+    if(script!=next.eventBaseScripts.end()&&script->second)
+      next.pipboy.objectReferenceScripts[reference.first]={script->second,reference.second.base};
+  }
   fo3pipdata::Finalize(next.pipboy);
   // Immutable event indices are generated once from source definitions.
   // The original compiled bytes remain attached and are never inferred.
@@ -1230,8 +1235,9 @@ bool Player::Save(const std::string &path, std::string &error) const {
     payload.push_back(l.forceFailures);payload.push_back(l.rewarded?1:0);}
   // Optional RFE1 after the v14 lock tail. Empty overlays keep existing v14
   // bytes unchanged; older supported saves do not require this extension.
+  const bool hasDoorStates=!state_.doorStates.empty();
   const bool hasDebugPoints=state_.debugPerkPoints!=0;
-  const bool hasLevelAdvancement=state_.level!=catalog_->initial.level||hasDebugPoints;
+  const bool hasLevelAdvancement=state_.level!=catalog_->initial.level||hasDebugPoints||hasDoorStates;
   // v18 retains all v17 tails, even empty ones, before LVP1.
   const bool hasCompletionState=!state_.cellNameMessages.empty()||
       !state_.achievements.empty()||hasLevelAdvancement;
@@ -1312,11 +1318,18 @@ bool Player::Save(const std::string &path, std::string &error) const {
     Put32(payload,0x3150564c); // LVP1: committed level, after all v17 tails.
     Put32(payload,state_.level);
   }
-  if(hasDebugPoints){
+  if(hasDebugPoints||hasDoorStates){
     if(state_.debugPerkPoints>1000){error="Invalid debug perk budget";return false;}
     Put32(payload,0x31504244);Put32(payload,state_.debugPerkPoints); // DBP1
   }
-  Put32(bytes, hasDebugPoints ? 19 : hasLevelAdvancement ? 18 : hasCompletionState ? 17 :
+  if(hasDoorStates){
+    if(state_.doorStates.size()>100000){error="Too many door states";return false;}
+    Put32(payload,0x31535244);Put32(payload,uint32_t(state_.doorStates.size())); // DRS1
+    std::vector<uint32_t> ids;for(const auto& door:state_.doorStates)ids.push_back(door.first);std::sort(ids.begin(),ids.end());
+    for(auto id:ids){const auto r=catalog_->references.find(id);if(r==catalog_->references.end()||!r->second.valid||!catalog_->doorBases.count(r->second.base)){error="Invalid door state";return false;}
+      Put32(payload,id);payload.push_back(state_.doorStates.at(id)?1:0);}
+  }
+  Put32(bytes, hasDoorStates ? 20 : hasDebugPoints ? 19 : hasLevelAdvancement ? 18 : hasCompletionState ? 17 :
       hasMerchantVisits ? 16 : hasPlayerAttributeOverrides ? 15 : 14);
   Put32(bytes, catalog_->fingerprint);
   Put32(bytes, static_cast<uint32_t>(payload.size()));
@@ -1376,7 +1389,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
   const auto *h = bytes.data();
   const auto version = fo3esm::ReadU32(h + 4);
   if (std::memcmp(h, "FQPS", 4) ||
-      (version < 1 || version > 19))
+      (version < 1 || version > 20))
     return fail("Unsupported player save format");
   if (fo3esm::ReadU32(h + 8) != catalog_->fingerprint)
     return fail("Player save belongs to different game definitions");
@@ -1711,7 +1724,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
           if(!catalog_->cellOwnership.count(cell)||!catalog_->pipboy.messages.count(message)||catalog_->pipboy.messages.at(message).title.empty()||!next.cellNameMessages.emplace(cell,message).second)return fail("Invalid saved cell name");
         }
         const auto achievements=fo3esm::ReadU32(p+at);at+=4;
-        if(achievements>256||(version>=18
+        if(achievements>256||(version>=20 ? payload.size()-at<4ull*achievements+24u : version>=18
             ? payload.size()-at!=4ull*achievements+(version>=19?16u:8u)
             : payload.size()-at!=4ull*achievements))
           return fail("Invalid achievement count");
@@ -1719,7 +1732,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
           if(id>255||!next.achievements.insert(id).second)return fail("Invalid saved achievement");}
       }
       if(version>=18){
-        if(payload.size()-at!=(version>=19?16u:8u)||fo3esm::ReadU32(p+at)!=0x3150564c)
+        if((version>=20?payload.size()-at<24u:payload.size()-at!=(version>=19?16u:8u))||fo3esm::ReadU32(p+at)!=0x3150564c)
           return fail("Invalid level-up extension");
         const auto level=fo3esm::ReadU32(p+at+4);at+=8;
         if((version>=19?level<catalog_->initial.level:level<=catalog_->initial.level)||
@@ -1730,9 +1743,16 @@ bool Player::Restore(const std::string &path, std::string &error) {
         next.level=uint16_t(level);
       }
       if(version>=19){
-        if(payload.size()-at!=8||fo3esm::ReadU32(p+at)!=0x31504244||
+        if((version>=20?payload.size()-at<16u:payload.size()-at!=8)||fo3esm::ReadU32(p+at)!=0x31504244||
            fo3esm::ReadU32(p+at+4)>1000)return fail("Invalid debug perk budget");
         next.debugPerkPoints=uint16_t(fo3esm::ReadU32(p+at+4));at+=8;
+      }
+      if(version>=20){
+        if(payload.size()-at<8||fo3esm::ReadU32(p+at)!=0x31535244)return fail("Missing door state extension");
+        const auto n=fo3esm::ReadU32(p+at+4);at+=8;
+        if(n>100000||payload.size()-at!=5ull*n)return fail("Invalid door state count");
+        for(uint32_t i=0;i<n;++i,at+=5){const auto id=fo3esm::ReadU32(p+at);const auto r=catalog_->references.find(id);
+          if(r==catalog_->references.end()||!r->second.valid||!catalog_->doorBases.count(r->second.base)||p[at+4]>1||!next.doorStates.emplace(id,p[at+4]!=0).second)return fail("Invalid saved door state");}
       }
       if(at!=payload.size())return fail("Trailing player save data");
     }

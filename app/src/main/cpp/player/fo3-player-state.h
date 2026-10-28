@@ -86,7 +86,7 @@ struct OwnershipResult {
   bool inherited=false, permitted=true, known=true, karmaEligible=false;
   bool Theft() const {return known && !permitted;}
 };
-enum class CrimeAction : uint8_t { Take, PickLock, ForceLock };
+enum class CrimeAction : uint8_t { Take, PickLock, ForceLock, Hack };
 struct TheftEvent {
   CrimeAction action=CrimeAction::Take;
   uint32_t reference=0,item=0,container=0,owner=0,player=PlayerRef,cell=0,world=0;
@@ -188,6 +188,7 @@ struct State {
   uint16_t debugPerkPoints=0; // Development selection budget; saved only when nonzero.
   uint32_t experience=0; // Canonical earned XP; level-up allocation remains a separate subsystem.
   std::unordered_map<uint32_t,LockOverride> locks;
+  std::unordered_map<uint32_t,bool> doorStates; // Script/activation open targets, not animation phases.
   // Staged world state. Script Enable/Disable stays unavailable until scene
   // publication is integrated; this overlay is never a success-only command.
   std::unordered_map<uint32_t,bool> referenceEnabled;
@@ -281,7 +282,7 @@ struct ActorCensusReport {
 enum class ScriptEventResult : uint8_t { NoHandler, Executed, Unsupported, Pending };
 class Player;
 class ScriptTransactionPlan;
-enum class ScriptProgramKind : uint8_t {UnboundResult,QuestStageItem,ReferenceEvent,DialogueInfo};
+enum class ScriptProgramKind : uint8_t {UnboundResult,QuestStageItem,ReferenceEvent,DialogueInfo,TerminalEntry};
 enum class DialogueScriptPhase : uint8_t {Begin,End,Both};
 enum class ScriptProgramCapture : uint8_t {None,EnteredPrograms};
 struct ScriptProgramOrigin {
@@ -305,6 +306,7 @@ struct ScriptExecution {
   static constexpr uint32_t NoParent=UINT32_MAX;
   ScriptProgramOrigin origin;
   uint32_t owner=0,activator=0,localScript=0;
+  uint32_t terminalLinkedReference=0;
   // Entry-order parent index and the inherited implicit reference used by
   // distance/button/message operations. These are not the quest local owner.
   uint32_t parent=NoParent,reference=0;
@@ -549,10 +551,22 @@ public:
   int ForceLockChance(uint32_t reference) const;
   bool UnlockByKey(uint32_t reference);
   bool CompleteLockpick(uint32_t reference,bool forced=false);
+  int TerminalRequirement(uint32_t reference) const;
+  bool CanHackTerminal(uint32_t reference) const;
+  bool TerminalPassword(uint32_t reference) const;
+  bool CompleteTerminalHack(uint32_t reference);
+  bool FailTerminalHack(uint32_t reference);
+  bool OpenTerminalPassword(uint32_t reference);
+  std::unique_ptr<ScriptTransactionPlan> PrepareTerminalTransaction(
+      uint32_t reference,uint32_t menu,size_t entry,std::string& error,
+      ScriptProgramCapture capture=ScriptProgramCapture::None) const;
   bool ForceLock(uint32_t reference,uint32_t roll);
   bool BreakBobbyPin(uint32_t reference);
   bool ScriptLock(uint32_t reference,int level);
   bool ScriptUnlock(uint32_t reference);
+  bool ScriptDoorState(uint32_t reference,bool open);
+  bool QueueTerminalBack(uint32_t reference);
+  bool PollTerminalBack(uint32_t& reference);
   float LockSetting(const std::string& key,float fallback) const;
   bool CanOpenDoor(uint32_t reference) const;
   bool CanActorOpenDoor(uint32_t actor,uint32_t reference) const;
@@ -634,7 +648,7 @@ private:
   std::vector<QuestNotice> pendingQuestNotices_;
   std::vector<ExperienceNotice> pendingExperienceNotices_;
   std::vector<ScriptItemNotice> pendingScriptItems_;
-  std::vector<uint32_t> pendingScriptSounds_;
+  std::vector<uint32_t> pendingScriptSounds_,pendingTerminalBack_;
   std::vector<BarterRequest> pendingBarters_;
   std::vector<KarmaEvent> pendingKarmaEvents_;
   std::vector<TheftEvent> pendingTheftEvents_;

@@ -16,6 +16,7 @@ uint64_t VariableKey(const fo3pipdata::Definitions& d,uint32_t owner,uint32_t in
     base=ref->second.second;
     auto a=d.dialogueActors.find(ref->second.second);if(a!=d.dialogueActors.end())script=a->second.script;
   }}
+  if(!script){const auto object=d.objectReferenceScripts.find(owner);if(object!=d.objectReferenceScripts.end()){script=object->second.first;base=object->second.second;}}
   auto s=d.scripts.find(script);
   if(s==d.scripts.end())return 0;
   const auto slot=s->second.variables.find(index);if(slot==s->second.variables.end())return 0;
@@ -32,6 +33,7 @@ uint64_t VariableKey(const fo3pipdata::Definitions& d,const std::string& name,Co
     base=ref->second.second;
     auto a=d.dialogueActors.find(ref->second.second);if(a!=d.dialogueActors.end())script=a->second.script;
   }}
+  if(!script){const auto object=d.objectReferenceScripts.find(owner->second);if(object!=d.objectReferenceScripts.end()){script=object->second.first;base=object->second.second;}}
   auto s=d.scripts.find(script);if(s==d.scripts.end())return 0;
   for(auto& v:s->second.variables){auto n=v.second;for(auto& c:n)c=char(std::tolower((unsigned char)c));if(n==key.substr(dot+1)){
     if(capture&&!capture->AddVariable(owner->second,script,v.first,base,q!=d.quests.end(),key,dot))return 0;
@@ -55,6 +57,13 @@ static bool Value(const fo3pipdata::Condition& c,const Context& ctx,float& value
       who.reference=c.reference;who.base=ref->second.base;
     }
   }}
+  else if(c.run==4){
+    const auto source=d.targets.find(ctx.speaker.reference);
+    if(source==d.targets.end()||!source->second.linkedReference){error="linked reference context unavailable";return false;}
+    const auto linked=p.Definitions().references.find(source->second.linkedReference);
+    if(linked==p.Definitions().references.end()||!linked->second.valid){error="linked reference unavailable";return false;}
+    who.reference=linked->first;who.base=linked->second.base;
+  }
   else if(c.run!=0){error="unsupported run-on context";return false;}
   const bool pc=who.reference==0x14;
   const auto* def=fo3pipdata::ActorCategory(d,pc?7:who.base,(c.function==71||c.function==73)?4:1);
