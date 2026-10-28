@@ -20,22 +20,24 @@ static Catalog Fixture(){
   return c;
 }
 static void HackingRules(){
-  for(int t=0;t<5;++t){Check(fo3hacking::WordLength(t,false)==4+2*t,"original even word lengths");Check(fo3hacking::WordLength(t,true)==std::min(12,5+2*t),"original base flag odd word lengths");}
+  for(int t=0;t<5;++t){Check(fo3hacking::WordLength(t,false)==4+2*t,"original even word lengths");Check(fo3hacking::WordLength(t,true)==std::min(12,5+2*t),"original base FormID parity gives odd word lengths");}
   Check(fo3hacking::WordCount(50,50)==20&&fo3hacking::WordCount(100,50)==5&&fo3hacking::WordCount(100,100)==13,"original Science candidate formula and very hard half case");
   auto dict=fo3hacking::Dictionary("TEST REST BEST WEST TEST BAD bad LONGER FOO 1234");Check(dict[4].size()==4,"dictionary filters duplicates and non-original glyph tokens");
   fo3hacking::Game g;Check(!g.Begin({},20,1),"missing dictionary fails explicitly");
   Check(g.Begin(dict[4],20,1234)&&g.words.size()==4&&g.attempts==4,"real dictionary initialization");
   auto repeat=g;Check(repeat.dump==g.dump,"copy stable");
   Check(fo3hacking::Game::Likeness("FALL","FILL")==3,"likeness is exact position matches");
-  for(size_t i=0;i<g.words.size();++i)if(i!=g.password){g.cursor=g.words[i].offset;auto result=g.Select();Check(result==fo3hacking::Game::Event::Denied,"wrong candidates consume attempts");int remaining=g.attempts;Check(g.Select()==fo3hacking::Game::Event::None&&g.attempts==remaining,"repeat guess cannot consume attempts");}
+  for(size_t i=0;i<g.words.size();++i)if(i!=g.password){g.cursor=g.words[i].offset;auto result=g.Select();Check(result==fo3hacking::Game::Event::Denied,"wrong candidates consume attempts");}
   g.cursor=g.words[g.password].offset;Check(g.Select()==fo3hacking::Game::Event::Granted,"correct candidate succeeds");
+  Check(g.Begin(dict[4],4,10),"repeat guess fixture");for(size_t i=0;i<g.words.size();++i)if(i!=g.password){g.cursor=g.words[i].offset;break;}
+  Check(g.Select()==fo3hacking::Game::Event::Denied&&g.Select()==fo3hacking::Game::Event::Denied&&g.attempts==2,"original repeated guesses each consume an attempt");
   auto d=fo3hacking::Dictionary("TEST REST BEST WEST NEST PEST ZEST");Check(g.Begin(d[4],7,9),"lockout fixture");int denied=0;
   for(size_t i=0;i<g.words.size()&&g.attempts;++i)if(i!=g.password){g.cursor=g.words[i].offset;auto result=g.Select();++denied;if(denied==4)Check(result==fo3hacking::Game::Event::Lockout,"fourth wrong guess locks out");}
   Check(g.attempts==0&&g.Select()==fo3hacking::Game::Event::None,"locked game cannot select");
   Check(g.Begin(d[4],7,12),"bracket fixture");g.dump.replace(0,12,"(!!)...[!!!]");
   for(auto& w:g.words)if(w.offset<12)w.offset+=24;
   g.cursor=0;auto bonus=g.Select();Check(bonus==fo3hacking::Game::Event::Dud||bonus==fo3hacking::Game::Event::Reset,"matched bracket bonus");
-  Check(g.dump[0]=='.'&&g.Select()==fo3hacking::Game::Event::None,"bonus cannot be reused");
+  Check(g.dump[0]=='.'&&g.Select()==fo3hacking::Game::Event::Denied,"used bracket becomes ordinary junk, not another bonus");
   Check(!g.words[g.password].removed,"bracket never removes password");
   g.cursor=11;g.Move(1,0);Check(g.cursor==fo3hacking::Game::Half,"right crosses to next dump column");g.Move(-1,0);Check(g.cursor==11,"left crosses back");
 }
@@ -55,6 +57,10 @@ static void PersistenceAndMenus(){
   Check(plan->ExecutedScripts().size()==1&&plan->ExecutedScripts()[0].origin.kind==ScriptProgramKind::TerminalEntry&&plan->ExecutedScripts()[0].terminalLinkedReference==21,"terminal source identity captured");
   fo3terminal::Session session;session.Open(p,20,1);Check(session.page==fo3terminal::Session::Page::Menu&&session.entries.size()==1,"unlocked root menu is displayed");
   const auto xp=p.Snapshot().experience;session.reference=0;Check(p.Snapshot().experience==xp,"closing does not change gameplay");
+  auto oddCatalog=c;oddCatalog.pipboy.terminals[101].difficulty=0;oddCatalog.pipboy.terminals[101].password=0;
+  Player odd(oddCatalog);fo3terminal::Session oddSession;oddSession.Open(odd,22,1);
+  auto oddWords=fo3hacking::Dictionary("APPLE ANGLE APPLY AMPLE");
+  Check(oddSession.BeginHack(odd,oddWords,1)&&oddSession.hacking.words[0].text.size()==5,"odd terminal base FormID selects original five-letter passwords");
   Check(p.TerminalRequirement(22)==-1&&!p.CanHackTerminal(22)&&p.Add(10,1)&&p.TerminalPassword(22)&&p.OpenTerminalPassword(22)&&!p.GetLock(22).locked,"requires-key terminal accepts actual password note");
   Check(p.Snapshot().experience==xp,"password bypass awards no hacking XP");
   auto lev=c;lev.pipboy.terminals[100].flags=1;lev.initial.level=20;Player leveled(lev);Check(leveled.TerminalRequirement(20)==100,"original leveled difficulty cap");

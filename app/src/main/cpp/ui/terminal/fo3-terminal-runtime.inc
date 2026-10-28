@@ -76,7 +76,7 @@ void UpdateFo3Terminal(double now,float x,float y,bool a,bool b,bool focused){
       fo3audio::NamedSound("UIHackingPassGood");FlushFo3PlayerState();gTerminal.page=Page::Menu;gTerminal.selected=0;}
       else {gTerminal.page=Page::Locked;gTerminal.result="Terminal access changed.";}}
     if(event==E::Denied||event==E::Lockout){fo3audio::NamedSound("UIHackingPassBad");gTerminal.log.push_back(gTerminal.String(p,"sHackingDenied","Entry denied"));
-      gTerminal.log.push_back(std::to_string(game.likeness)+"/"+std::to_string(chosen.size())+" "+gTerminal.String(p,"sHackingCorrect","correct"));}
+      gTerminal.log.push_back(std::to_string(game.likeness)+"/"+std::to_string(game.words[game.password].text.size())+" "+gTerminal.String(p,"sHackingCorrect","correct"));}
     if(event==E::Lockout){p.FailTerminalHack(gTerminal.reference);FlushFo3PlayerState();gTerminal.page=Page::Locked;
       gTerminal.result=gTerminal.String(p,"sHackingLockout3","TERMINAL LOCKED")+"\n"+gTerminal.String(p,"sHackingLockout4","PLEASE CONTACT AN ADMINISTRATOR");}
     if(event==E::Dud)gTerminal.log.push_back(gTerminal.String(p,"sHackingDudRemoved","Dud removed."));

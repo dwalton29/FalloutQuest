@@ -95,7 +95,7 @@ struct Session {
   }
   bool BeginHack(fo3player::Player& p,const std::array<std::vector<std::string>,13>& dict,uint32_t seed){
     const int requirement=p.TerminalRequirement(reference);if(!p.CanHackTerminal(reference)||requirement<0)return false;
-    const auto ref=p.Definitions().references.at(reference);const auto length=fo3hacking::WordLength(requirement/25,(p.Definitions().pipboy.terminals.at(ref.base).recordFlags&1)!=0);
+    const auto ref=p.Definitions().references.at(reference);const auto length=fo3hacking::WordLength(requirement/25,(ref.base&1)!=0);
     if(!hacking.Begin(dict[size_t(length)],fo3hacking::WordCount(float(p.Snapshot().skills[8]),requirement,
        int(p.LockSetting("iHackingMinWords",5)),int(p.LockSetting("iHackingMaxWords",20))),seed))return false;
     page=Page::Hacking;Refresh(p);return true;

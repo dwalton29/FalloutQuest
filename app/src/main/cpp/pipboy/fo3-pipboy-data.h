@@ -62,7 +62,7 @@ struct TerminalEntry {
 };
 struct Terminal {
   std::string name,description,model;
-  uint32_t password=0,sound=0,script=0,recordFlags=0;
+  uint32_t password=0,sound=0,script=0;
   uint8_t difficulty=5,flags=0,server=0;
   bool valid=false;
   std::vector<TerminalEntry> entries;

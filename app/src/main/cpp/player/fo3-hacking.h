@@ -9,7 +9,7 @@
 #include <unordered_set>
 #include <vector>
 namespace fo3hacking {
-// Original word lengths: 005B3E50: 4 + tier*2 + (base record flags & 1), capped 12.
+// Original word lengths: 005B3E50: 4 + tier*2 + (base FormID & 1), capped 12.
 inline int WordLength(int tier,bool odd){return std::clamp(4+2*tier+int(odd),4,12);}
 // 00925781..0092586A. Science bonus entry point 30 modifies the input skill.
 inline int WordCount(float science,int requirement,int minimum=5,int maximum=20){
@@ -65,13 +65,13 @@ struct Game {
   Event Select(){
     if(attempts<=0)return Event::None;
     const int index=WordAt(cursor);
-    if(index>=0){auto& w=words[size_t(index)];if(w.guessed)return Event::None;
+    if(index>=0){auto& w=words[size_t(index)];
       w.guessed=true;likeness=Likeness(w.text,words[password].text);
       if(size_t(index)==password)return Event::Granted;
       return --attempts?Event::Denied:Event::Lockout;}
-    const auto span=Span(cursor);if(span.second<=span.first)return Event::None;
+    const auto span=Span(cursor);if(span.second<=span.first){likeness=0;return --attempts?Event::Denied:Event::Lockout;}
     std::fill(dump.begin()+span.first,dump.begin()+span.second+1,'.');
-    std::vector<size_t> duds;for(size_t i=0;i<words.size();++i)if(i!=password&&!words[i].removed&&!words[i].guessed)duds.push_back(i);
+    std::vector<size_t> duds;for(size_t i=0;i<words.size();++i)if(i!=password&&!words[i].removed)duds.push_back(i);
     if(!duds.empty()&&!replenished&&random()%4==0){attempts=4;replenished=true;return Event::Reset;}
     if(duds.empty())return Event::None;
     auto& w=words[duds[random()%duds.size()]];w.removed=true;dump.replace(size_t(w.offset),w.text.size(),std::string(w.text.size(),'.'));return Event::Dud;

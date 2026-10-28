@@ -20,7 +20,7 @@ is suppressed while that stick controls the terminal.
   ruined, wall, mainframe, Vault control, Overseer and Planetarium consoles.
   Largest connected screen-material surfaces exclude keyboard lamps/labels;
   glyph corners are mapped barycentrically onto the original curved geometry.
-- Fallout3.exe 1.7.0.4: 005B3E50 word length, 005B3EF0 difficulty thresholds
+- Fallout3.exe 1.7.0.4: 005B3E50 word length (4 + 2*tier + base FormID parity), 005B3EF0 difficulty thresholds
   and leveled adjustment; 00925781..0092586A Science-based word count;
   00928A50 dictionary loading. Defaults iHackingMinWords=5,
   iHackingMaxWords=20, fHackLevelMult=.25 and original hacking strings.
@@ -38,7 +38,7 @@ are 0/25/50/75/100. Real password notes bypass hacking, including Requires Key
 terminals. Difficulty and candidate counts use original data/defaults.
 
 The minigame supports four guesses, positional likeness, selectable whole words,
-matched punctuation bonuses, dud removal that preserves the password, one
+repeated guesses costing another attempt, matched punctuation bonuses, dud removal that preserves the password, one
 allowance reset, warning on the final attempt, cancellation and persistent
 lockout. Computer Whiz is selectable and permits one additional failed hack.
 Success unlocks the real reference and awards the original tier's perk-modified

@@ -115,7 +115,7 @@ void Decode(Definitions &d, const std::string &t, uint32_t id, uint32_t flags,
       }
   }
   else if(t=="TERM") {
-    Terminal terminal;terminal.recordFlags=flags;terminal.name=Text(s,"FULL");terminal.description=Text(s,"DESC");terminal.model=Text(s,"MODL");
+    Terminal terminal;terminal.name=Text(s,"FULL");terminal.description=Text(s,"DESC");terminal.model=Text(s,"MODL");
     terminal.password=U(Find(s,"PNAM"));terminal.sound=U(Find(s,"SNAM"));terminal.script=U(Find(s,"SCRI"));
     const auto data=Find(s,"DNAM");terminal.valid=data&&(data->n==3||data->n==4);
     if(terminal.valid){terminal.difficulty=data->p[0];terminal.flags=data->p[1];terminal.server=data->p[2];
