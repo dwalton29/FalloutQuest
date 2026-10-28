@@ -6,6 +6,7 @@
 #define XR_USE_GRAPHICS_API_VULKAN
 #endif
 #include <openxr/openxr_platform.h>
+#include "rendering/spacewarp/fo3-motion-capture.h"
 
 namespace fqvk {
 // World validation runs alongside the usable GLES renderer until all passes
@@ -21,4 +22,8 @@ bool CreateGameplaySwapchain(XrSession session,bool submitDepth=false);
 void DestroyGameplaySwapchain();
 bool PresentGameplay(const XrView* views,XrCompositionLayerProjectionView* output,float nearZ,float farZ);
 bool WorldProbeActive();
+struct MotionSwapchainTarget {XrSwapchain motion,depth;uint32_t width,height;};
+bool InitializeSpacewarp(const std::array<MotionSwapchainTarget,2>& targets);
+void ShutdownSpacewarp();
+void QueueSpacewarp(const fqmotion::Capture& capture,std::array<fqspacewarp::Coverage,2>& coverage);
 }

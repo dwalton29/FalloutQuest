@@ -26,6 +26,7 @@
 #include "rendering/spacewarp/fo3-openxr-spacewarp.h"
 #include "rendering/spacewarp/fo3-image-lease.h"
 #include "rendering/spacewarp/fo3-mode.h"
+#include "rendering/renderer-selection.h"
 #ifdef FQ_ENABLE_VULKAN
 #include "rendering/vulkan/fo3-vulkan-renderer.h"
 #endif
@@ -373,21 +374,34 @@ public:
         if (!CreateReferenceSpace()) return false;
         FQ_LOGI("Q7.1 BOOT STEP: CreateSwapchains");
         if (!CreateSwapchains()) return false;
-        if(spacewarp_.Requested()&&spacewarp_.Backend()!=fqspacewarp::Api::None&&!vulkanGameplay_){
-            fqmotion::DriverBoundary runtimeBoundary("resource-create",true);
+        if(spacewarp_.Requested()&&spacewarp_.Backend()!=fqspacewarp::Api::None){
+            std::optional<fqmotion::DriverBoundary> runtimeBoundary;
+            if(!vulkanGameplay_)runtimeBoundary.emplace("resource-create",true);
+            int64_t motionFormat=GL_RGBA16F,depthFormat=GL_DEPTH_COMPONENT24;
+#ifdef FQ_ENABLE_VULKAN
+            if(vulkanGameplay_){motionFormat=VK_FORMAT_R16G16B16A16_SFLOAT;depthFormat=VK_FORMAT_D32_SFLOAT;}
+#endif
             uint32_t count=0;bool ready=false;
             if(XR_SUCCEEDED(xrEnumerateSwapchainFormats(session_,0,&count,nullptr))){
                 std::vector<int64_t> formats(count);
                 if(XR_SUCCEEDED(xrEnumerateSwapchainFormats(session_,count,&count,formats.data()))&&
-                   std::find(formats.begin(),formats.end(),int64_t(GL_RGBA16F))!=formats.end()&&
-                   std::find(formats.begin(),formats.end(),int64_t(GL_DEPTH_COMPONENT24))!=formats.end())
-                    ready=spacewarp_.Create(instance_,systemId_,session_,GL_RGBA16F,GL_DEPTH_COMPONENT24);
+                   std::find(formats.begin(),formats.end(),motionFormat)!=formats.end()&&
+                   std::find(formats.begin(),formats.end(),depthFormat)!=formats.end())
+                    ready=spacewarp_.Create(instance_,systemId_,session_,motionFormat,depthFormat);
             }
-            FQ_LOGI("FQ SPACEWARP resources ready=%d size0=%ux%u size1=%ux%u motion=RGBA16F depth=DEPTH24 samples=1 synthesis=0",ready,
-                spacewarp_.Eye(0).width,spacewarp_.Eye(0).height,spacewarp_.Eye(1).width,spacewarp_.Eye(1).height);
+            FQ_LOGI("FQ SPACEWARP resources backend=%s ready=%d size0=%ux%u size1=%ux%u motionFormat=%lld depthFormat=%lld samples=1",vulkanGameplay_?"Vulkan":"GLES",ready,
+                spacewarp_.Eye(0).width,spacewarp_.Eye(0).height,spacewarp_.Eye(1).width,spacewarp_.Eye(1).height,(long long)motionFormat,(long long)depthFormat);
+#ifdef FQ_ENABLE_VULKAN
+            if(vulkanGameplay_){
+                std::array<fqvk::MotionSwapchainTarget,2> targets{};
+                for(unsigned i=0;i<2;++i){const auto& t=spacewarp_.Eye(i);targets[i]={t.motion,t.depth,t.width,t.height};}
+                spacewarpProducerReady_=ready&&fqvk::InitializeSpacewarp(targets);
+            }
+            else
+#endif
             spacewarpProducerReady_=ready&&InitializeSpacewarpProducer();
             fqmotion::requested=false; // Deformation snapshots begin only in an eligible world frame.
-            FQ_LOGI("FQ SPACEWARP producer ready=%d mode=%s error=%s",spacewarpProducerReady_,spacewarpSynthesisRequested_?"on":spacewarpVisualize_?"visualize":"validate",spacewarpGles_.Error().c_str());
+            FQ_LOGI("FQ SPACEWARP producer backend=%s ready=%d mode=%s error=%s",vulkanGameplay_?"Vulkan":"GLES",spacewarpProducerReady_,spacewarpSynthesisRequested_?"on":spacewarpVisualize_?"visualize":"validate",spacewarpGles_.Error().c_str());
         }
 #ifdef FQ_ENABLE_VULKAN
         if(vulkanProbeRequested_&&!vulkanGameplay_)
@@ -435,6 +449,9 @@ public:
         fo3lootui::Shutdown();
         fo3hudrenderer::Shutdown();
         fqmotion::requested=false;fqmotion::eye={};spacewarpGles_.Shutdown();
+#ifdef FQ_ENABLE_VULKAN
+        if(vulkanGameplay_)fqvk::ShutdownSpacewarp();
+#endif
         spacewarp_.Destroy();spacewarpHistory_.Reset();
         // Explicit session ownership: teardown must also run when initialisation
         // failed before either wrapper framebuffer was allocated.
@@ -524,11 +541,12 @@ private:
             }
         }
 #ifdef FQ_ENABLE_VULKAN
-#ifndef NDEBUG
         char probe[PROP_VALUE_MAX]{},selection[PROP_VALUE_MAX]{};
+#ifndef NDEBUG
         __system_property_get("debug.falloutquest.vulkan_probe",probe);
+#endif
         __system_property_get("debug.falloutquest.renderer",selection);
-        vulkanGameplay_=!std::strcmp(selection,"vulkan");
+        vulkanGameplay_=fqrender::SelectVulkan(selection);
         const bool wantVulkan=vulkanGameplay_||std::atoi(probe)==1;
         if(wantVulkan)for(const auto& extension:available)
             if(!std::strcmp(extension.extensionName,XR_KHR_VULKAN_ENABLE2_EXTENSION_NAME)) {
@@ -540,10 +558,7 @@ private:
             if(vulkanGameplay_)return false;
         }
         FQ_LOGI("FQ RENDERER requested=%s selected=%s experimental=%d sceneSubmission=%s",
-            selection[0]?selection:"gles",vulkanGameplay_?"vulkan":"gles",vulkanGameplay_,vulkanGameplay_?"cpu-commands":"gles");
-        if(vulkanGameplay_&&requestSpacewarp)
-            FQ_LOGI("FQ SPACEWARP inactive backend=Vulkan reason=motion-producer-GLES-only requested=%d synthesisActive=0",spacewarpSynthesisRequested_);
-#endif
+            selection[0]?selection:"vulkan",vulkanGameplay_?"vulkan":"gles",vulkanGameplay_,vulkanGameplay_?"cpu-commands":"gles");
 #endif
 #if !defined(FQ_ENABLE_VULKAN) && !defined(NDEBUG)
         char selection[PROP_VALUE_MAX]{};__system_property_get("debug.falloutquest.renderer",selection);
@@ -554,6 +569,10 @@ private:
         if(vulkanGameplay_)extensions.erase(std::remove_if(extensions.begin(),extensions.end(),[](const char* name){
             return !std::strcmp(name,XR_KHR_OPENGL_ES_ENABLE_EXTENSION_NAME);
         }),extensions.end());
+        if(vulkanGameplay_&&spacewarpVisualize_){
+            spacewarpVisualize_=false;
+            FQ_LOGI("FQ SPACEWARP Vulkan visualize uses validation/logs; colour overlay is GLES-only");
+        }
         FQ_LOGI("XR compositor depth extension enabled=%d", depthSubmissionEnabled_);
 
         XrInstanceCreateInfoAndroidKHR androidInfo{XR_TYPE_INSTANCE_CREATE_INFO_ANDROID_KHR};
@@ -2154,6 +2173,7 @@ private:
 #ifdef FQ_ENABLE_VULKAN
                 if(vulkanGameplay_) {
                     rendered=fqvk::PresentGameplay(views.data(),projectionViews.data(),.04f,125000.0f/FO3_UNITS_PER_METRE_Q715)&&rendered;
+                    if(rendered&&spacewarp_.Requested())spacewarpHistory_.EyeRendered(1); // One native multiview submission covers both eyes.
                     if(!rendered){FQ_LOGE("FQVK gameplay presentation failed; exiting without GLES fallback");exitRequested_=true;}
                 }
 #endif
@@ -2672,13 +2692,18 @@ private:
             }
             if(fqgl::counters.draws!=motionLateUiBefore)fqmotion::eye.Block(fqmotion::Ui);
             if(spacewarpProducerReady_&&fqmotion::eye.history){
-                runtimeBoundary.emplace("motion+image-release",(spacewarpSerial_%180)==1);
+                if(!vulkanGameplay_)runtimeBoundary.emplace("motion+image-release",(spacewarpSerial_%180)==1);
                 const uint32_t unsupported=fqmotion::eye.reasons&~uint32_t(fqmotion::MissingHistory);
                 if(spacewarpSynthesisRequested_&&unsupported){
-                    spacewarpGles_.Retain(fqmotion::eye);spacewarpCoverage_[eyeIndex]=fqmotion::eye.Coverage(false);
+                    if(!vulkanGameplay_)spacewarpGles_.Retain(fqmotion::eye);spacewarpCoverage_[eyeIndex]=fqmotion::eye.Coverage(false);
                     if((spacewarpSerial_%180)==1)FQ_LOGI("FQ SPACEWARP native fallback eye=%u reasons=0x%X motionPassSkipped=1",eyeIndex,fqmotion::eye.reasons);
                 }
-                else if(motionDepthReady)spacewarpCoverage_[eyeIndex]=RenderSpacewarpEye(eyeIndex);
+                else
+#ifdef FQ_ENABLE_VULKAN
+                if(vulkanGameplay_)fqvk::QueueSpacewarp(fqmotion::eye,spacewarpCoverage_);
+                else
+#endif
+                if(motionDepthReady)spacewarpCoverage_[eyeIndex]=RenderSpacewarpEye(eyeIndex);
                 else{fqmotion::eye.Block(fqmotion::Resources);spacewarpCoverage_[eyeIndex]=fqmotion::eye.Coverage(false);}
             }
             } // gameplay eye; loading has no world/HUD/post/depth-copy work

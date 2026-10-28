@@ -6,7 +6,7 @@ namespace fqmotion {
 // The scene cannot publish/delete resources between an eye draw and its replay.
 struct Draw {
     uint64_t identity=0;
-    uint32_t vbo=0,indexBuffer=0,skinAttributes=0,paletteTexture=0,diffuse=0;
+    uint32_t mesh=0,vbo=0,indexBuffer=0,skinAttributes=0,paletteTexture=0,diffuse=0;
     int count=0,vertices=0,skinMode=0;
     bool indexed=false,cull=true,clockwise=false,decal=false,alphaTest=false,vertexAlpha=false;
     float alpha=1,threshold=.5f;

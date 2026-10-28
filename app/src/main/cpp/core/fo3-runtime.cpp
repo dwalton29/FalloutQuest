@@ -7570,6 +7570,7 @@ void DrawSceneObject(const GpuObject& object, bool environmentPassQ2050 = false)
                     std::copy_n(transform,16,shape.model.begin());
                 }
                 fqmotion::Draw draw;draw.identity=object.motionIdentity;draw.vbo=object.vbo;draw.indexBuffer=object.q236IndexBuffer;
+                draw.mesh=object.vao;
                 draw.skinAttributes=object.skinAttributes;draw.paletteTexture=object.skinPalette;draw.diffuse=object.diffuse;
                 draw.count=object.vertexCount;draw.vertices=object.q236Indexed?object.q236UniqueVertices:object.vertexCount;draw.skinMode=object.skinMode;draw.indexed=object.q236Indexed;
                 draw.cull=cull;draw.clockwise=front==GL_CW;draw.decal=object.decalQ1170;draw.alphaTest=object.alphaTest;

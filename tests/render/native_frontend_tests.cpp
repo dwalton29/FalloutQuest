@@ -1,7 +1,9 @@
 #define FQ_ENABLE_VULKAN 1
 #include "rendering/gl-state-cache.h"
+#include "rendering/renderer-selection.h"
 #include <cassert>
 int main() {
+    assert(fqrender::SelectVulkan(nullptr)&&fqrender::SelectVulkan("")&&fqrender::SelectVulkan("vulkan")&&!fqrender::SelectVulkan("gles"));
     fqrender::nativeOnly=true;fqrender::driverCalls=0;fqgl::Reset();driverCalls.clear();
     fqrender::capabilities={8192,32,16};
     unsigned shader=glCreateShader(0x8b31);glShaderSource(shader,0,nullptr,nullptr);glCompileShader(shader);

@@ -1,0 +1,21 @@
+# Native Vulkan SpaceWarp — v273
+
+Vulkan is the default gameplay renderer, including production configurations. An explicit `debug.falloutquest.renderer=gles` still permits GLES comparison. SpaceWarp defaults to synthesis on either backend; `debug.falloutquest.spacewarp=0` disables it and `validate` runs its producer without attaching synthesis metadata. Vulkan's `visualize` request currently selects validation/logs; the colour-vector overlay remains GLES-only.
+
+The existing OpenXR adapter negotiates EXT first, FB second, queries recommended per-eye dimensions, and creates independent sampled motion/depth swapchains. Vulkan uses `VK_FORMAT_R16G16B16A16_SFLOAT` and `VK_FORMAT_D32_SFLOAT`. The backend imports borrowed Vulkan images, owns their views/framebuffers, and supports independent image indices and image counts. Unsupported formats or creation failures retain native Vulkan rendering.
+
+After the original multiview world, actors, film and compositor-depth copy, a low-resolution native pass samples the retained full-resolution stereo depth. A fullscreen reprojection produces static-world motion and sampled depth. Dynamic draws overwrite motion with current/previous world transforms, bone palettes and CPU/facial position streams. They retain the original player/NPC weight policies, authored culling, cutout threshold/material alpha/vertex alpha, diffuse addressing and decal depth bias. Source-depth occlusion is evaluated at the full-resolution sample location with derivative correction. Dynamic draws preserve the resampled source depth.
+
+History matrices remain the canonical engine GL camera matrices. Source UVs reconstruct GL clip Y/Z, while final raster positions and vectors explicitly remap into native Vulkan NDC: X unchanged, Y negated, Z scaled by one half. Motion is current minus previous NDC. This implements EXT's Vulkan NDC contract and the native FB motion convention without changing world coordinates or game artwork.
+
+Commands use the existing frame command buffer, session graphics queue, descriptor cache and fenced per-frame arena. Previous-pose image capacity persists across frames, including visible actors returning after native fallback. Palette transfers and previous-position copies happen once per logical frame and serve both eyes. Departed poses retire through the normal fence/upload lifetime system; palette payload capacity is bounded by the shared history budget. There are no motion readbacks, GLES calls, second lighting pass, full-resolution depth copy for motion, per-frame device-idle waits or manual frame skipping. Timing logs include `motionMs`, producer coverage and upload bytes.
+
+The queue receives colour/depth/motion commands before any motion image is released. Both eyes become rendered only after successful multiview presentation. The common adapter then attaches EXT/FB metadata, preserves compositor depth, and commits history only after successful `xrEndFrame`. Warm-up, scene/world changes, origin rebasing, large camera cuts, loading, focus loss, modals, incomplete deformation and unsupported UI/water/transparency retain the existing native fallback. No scene or world ID filter disables interiors. This does not claim synthesis on every gameplay frame or guarantee a headset performance gain.
+
+Checks include SPIR-V compilation/link/validation; a real software-Vulkan test with synchronization validation, borrowed runtime-image setup, independent motion/depth indices, normal film/compositor-depth/presentation, stereo vector pixels, rigid transforms, player/NPC skinning, facial positions, cutouts, occlusion, exact source depth, pose-image reuse and once-per-frame uploads. Release callbacks require submission first and the test verifies no synchronous frame wait. Source integration checks guard native setup, both-eye history and release/teardown ordering. The existing native world/LAND/sky/water/UI and GLES fallback suites remain in CI. Actual Quest compositor cadence, visual quality and performance still require a headset run.
+
+References:
+
+- https://registry.khronos.org/OpenXR/specs/1.1/man/html/XrFrameSynthesisInfoEXT.html
+- https://registry.khronos.org/OpenXR/specs/1.1/man/html/XrCompositionLayerSpaceWarpInfoFB.html
+- https://developers.meta.com/vr/documentation/native/android/mobile-asw/

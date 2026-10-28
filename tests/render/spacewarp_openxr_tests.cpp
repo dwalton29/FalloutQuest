@@ -17,7 +17,7 @@ XRAPI_ATTR XrResult XRAPI_CALL xrDestroySwapchain(XrSwapchain handle){assert(liv
 XRAPI_ATTR XrResult XRAPI_CALL xrCreateSwapchain(XrSession,const XrSwapchainCreateInfo* info,XrSwapchain* handle){
  assert(info->sampleCount==1&&info->arraySize==1&&info->mipCount==1);
  assert(info->usageFlags&XR_SWAPCHAIN_USAGE_SAMPLED_BIT);
- assert(info->usageFlags&(info->format==1?XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT:XR_SWAPCHAIN_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT));
+ assert(info->usageFlags&((info->format==1||info->format==97)?XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT:XR_SWAPCHAIN_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT));
  ++creates;if(creates==failAt)return XR_ERROR_RUNTIME_FAILURE;
  *handle=reinterpret_cast<XrSwapchain>(uintptr_t(creates));live.insert(*handle);return XR_SUCCESS;
 }
@@ -76,6 +76,9 @@ int main(){
  assert(ArtificialYawDelta(Yaw(0),Yaw(.1f,.2f,0,-.1f),Api::EXT,delta));
  assert(session.Attach(views,history,coverage,delta,.04f,1000));
  info=static_cast<const XrFrameSynthesisInfoEXT*>(views[0].next);assert(info->appSpaceDeltaPose.position.z==delta.position.z&&info->appSpaceDeltaPose.orientation.y==delta.orientation.y);
+ session.Destroy();assert(live.empty());
+ // Actual Vulkan enum values: RGBA16F motion and D32 depth, independent per eye.
+ assert(session.Create(XR_NULL_HANDLE,1,XR_NULL_HANDLE,97,126));
  session.Destroy();assert(live.empty());
  extensions.resize(1);assert(session.Negotiate(true,extensions)==std::string(XR_FB_SPACE_WARP_EXTENSION_NAME));assert(session.Create(XR_NULL_HANDLE,1,XR_NULL_HANDLE,1,2));
  for(auto& v:views)v.next=nullptr;

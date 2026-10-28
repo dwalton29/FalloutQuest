@@ -185,6 +185,15 @@ def build(output,compiler):
     for name in sources():
         cpp.append('{'+f'{name}Fields,{len(port(sources()[name],name)[1])},{name}Samplers,std::size({name}Samplers),{name}UniformSize,{name}_vert,sizeof({name}_vert),{name}_frag,sizeof({name}_frag)'+'},')
     cpp.append('};')
+    motion=(ROOT/'app/src/main/cpp/rendering/vulkan/fo3-vulkan-motion-shaders.h').read_text()
+    for name,text in re.findall(r'const char\* (\w+)=R"FQMV\((.*?)\)FQMV"',motion,re.S):
+        stage=name.rsplit('_',1)[1]
+        path=output/f'motion_{name}.{stage}';path.write_text(text)
+        spv=path.with_suffix(path.suffix+'.spv')
+        command=([compiler,'-V','--target-env','vulkan1.1',str(path),'-o',str(spv)] if 'glslang' in Path(compiler).name else [compiler,'--target-env=vulkan1.1',str(path),'-o',str(spv)])
+        subprocess.run(command,check=True)
+        data=spv.read_bytes();words=struct.unpack('<'+'I'*(len(data)//4),data)
+        cpp.append(f'inline constexpr uint32_t motion_{name}[]={{'+','.join(hex(x) for x in words)+'};')
     cpp.append('}')
     (output/'fo3-vulkan-shaders.h').write_text('\n'.join(cpp)+'\n')
 

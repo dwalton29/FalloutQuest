@@ -1,6 +1,7 @@
 #include "fo3-vulkan-renderer.h"
 #include "fo3-vulkan-bridge.h"
 #include "fo3-vulkan-shaders.h"
+#include "rendering/spacewarp/fo3-motion-vectors.h"
 #include <GLES3/gl3.h> // Legacy numeric material enums only; no GLES calls.
 #include <algorithm>
 #include <array>
@@ -111,12 +112,12 @@ public:
     VkRenderPass modalPass{},modalXrPass{};VkFramebuffer modalFramebuffer{};
     std::vector<VkFramebuffer> modalXrFramebuffers;VkFormat xrColorFormat=VK_FORMAT_UNDEFINED;
     bool snapshotReady=false,snapshotInitialized=false;
-    VkSampler sampler{},nearest{},clamped{},verticalRepeat{};VkDescriptorSetLayout sets[12]{};VkPipelineLayout layouts[12]{};
+    VkSampler sampler{},nearest{},clamped{},verticalRepeat{};VkDescriptorSetLayout sets[13]{};VkPipelineLayout layouts[13]{};
     VkShaderModule modules[12][2]{};VkDescriptorPool descriptors{};
     VkShaderModule solidModules[2]{};bool genericShaders=false;
     uint64_t solidDraws=0,guardedDraws=0,worldDraws=0,landDraws=0;
     VkQueryPool timestamps{};bool timestampSupported=false;uint32_t timestampBits=0;
-    enum GpuPass {Scene,SceneResume,Ui,Adapt,Bloom,Film,Output,Snapshot,DepthCopy,Overlay,PassCount};
+    enum GpuPass {Scene,SceneResume,Ui,Adapt,Bloom,Film,Output,Snapshot,DepthCopy,Overlay,Motion,PassCount};
     static constexpr uint32_t QueryCount=4096;
     struct GpuSpan {GpuPass kind;uint32_t begin,end;};
     bool passTiming=false;uint32_t queryCursor=4,timingDropped=0;int activeSpan=-1;
@@ -712,7 +713,7 @@ public:
         const VkFormatFeatureFlags depthRequired=VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT|VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT;
         if((format.optimalTilingFeatures&depthRequired)!=depthRequired)throw std::runtime_error("sampled D32 depth unavailable");
         color=MakeImage(width,height,VK_FORMAT_R16G16B16A16_SFLOAT,VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT|VK_IMAGE_USAGE_TRANSFER_SRC_BIT|VK_IMAGE_USAGE_SAMPLED_BIT,VK_IMAGE_ASPECT_COLOR_BIT);
-        depth=MakeImage(width,height,VK_FORMAT_D32_SFLOAT,VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT|VK_IMAGE_USAGE_TRANSFER_SRC_BIT,VK_IMAGE_ASPECT_DEPTH_BIT);
+        depth=MakeImage(width,height,VK_FORMAT_D32_SFLOAT,VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT|VK_IMAGE_USAGE_TRANSFER_SRC_BIT|VK_IMAGE_USAGE_SAMPLED_BIT,VK_IMAGE_ASPECT_DEPTH_BIT);
         sceneColor=MakeImage(width,height,VK_FORMAT_R16G16B16A16_SFLOAT,VK_IMAGE_USAGE_TRANSFER_DST_BIT|VK_IMAGE_USAGE_SAMPLED_BIT,VK_IMAGE_ASPECT_COLOR_BIT);
         sceneDepth=MakeImage(width,height,VK_FORMAT_D32_SFLOAT,VK_IMAGE_USAGE_TRANSFER_DST_BIT|VK_IMAGE_USAGE_SAMPLED_BIT,VK_IMAGE_ASPECT_DEPTH_BIT);
         std::array<VkAttachmentDescription,2> attachments{};
@@ -1257,6 +1258,7 @@ public:
         VkRenderPassBeginInfo ri{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};ri.renderPass=pass;ri.framebuffer=framebuffer;ri.renderArea={{0,0},{width,height}};ri.clearValueCount=2;ri.pClearValues=clears.data();
         BeginPass(Scene,ri);begun=true;
     }
+    #include "fo3-vulkan-spacewarp.inc"
     void End(PostTarget* output=nullptr,VkImage depthOutput=VK_NULL_HANDLE) {
         if(!begun)return;
         DrainDraws();begun=false;
@@ -1272,6 +1274,7 @@ public:
         }
         if(directOutput&&!(visualDiagnostics&2u))++directFilmFrames;
         if(depthOutput)CopyCompositorDepth(depthOutput);
+        RenderMotion();
         EndTiming();
         if(timestamps)vkCmdWriteTimestamp(command,VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,timestamps,2);
         Check(vkEndCommandBuffer(command),"end frame");Check(vkResetFences(device,1,&fence),"reset frame fence");
@@ -1320,12 +1323,12 @@ public:
         if(passTiming) {
             VKLOG("FQVK TIMING submission=%llu frame=%llu offscreen=%d diagnosticMask=%u timestampSupported=%d stereoGpuMs=%.4f uploadCpuMs=%.3f recordSpanCpuMs=%.3f queueCpuMs=%.3f drawCpuMs=%.3f reuseWaitCpuMs=%.3f finishWaitCpuMs=%.3f xrWaitCpuMs=%.3f spans=%zu dropped=%u directFilm=%d buffered=%d completed=1 copies=%llu",
                 (unsigned long long)sample.serial,(unsigned long long)sample.frame,offscreen,visualDiagnostics,timestampSupported,gpuMs,sample.uploadCpu/1000.0,recordSpanUs/1000.0,queueCpuUs/1000.0,drawCpuUs/1000.0,reuseWaitUs/1000.0,finishWaitUs/1000.0,xrWaitUs/1000.0,gpuSpans.size(),timingDropped,sample.direct,sample.buffered,(unsigned long long)sample.copies);
-            VKLOG("FQVK GPU submission=%llu frame=%llu offscreen=%d timingVersion=2 scope=whole-render-passes sceneMs=%.4f sceneResumeMs=%.4f offscreenUiMs=%.4f adaptMs=%.4f bloomMs=%.4f filmMs=%.4f overlayMs=%.4f outputMs=%.4f snapshotCopyMs=%.4f depthCopyMs=%.4f",
+            VKLOG("FQVK GPU submission=%llu frame=%llu offscreen=%d timingVersion=2 scope=whole-render-passes sceneMs=%.4f sceneResumeMs=%.4f offscreenUiMs=%.4f adaptMs=%.4f bloomMs=%.4f filmMs=%.4f overlayMs=%.4f outputMs=%.4f snapshotCopyMs=%.4f depthCopyMs=%.4f motionMs=%.4f",
                 (unsigned long long)sample.serial,(unsigned long long)sample.frame,offscreen,
                 timestampSupported?passMs[Scene]:-1.0,timestampSupported?passMs[SceneResume]:-1.0,
                 timestampSupported?passMs[Ui]:-1.0,timestampSupported?passMs[Adapt]:-1.0,timestampSupported?passMs[Bloom]:-1.0,
                 timestampSupported?passMs[Film]:-1.0,timestampSupported?passMs[Overlay]:-1.0,timestampSupported?passMs[Output]:-1.0,
-                timestampSupported?passMs[Snapshot]:-1.0,timestampSupported?passMs[DepthCopy]:-1.0);
+                timestampSupported?passMs[Snapshot]:-1.0,timestampSupported?passMs[DepthCopy]:-1.0,timestampSupported?passMs[Motion]:-1.0);
         }
         if(sample.logFrame)VKLOG("FQVK RESOURCES uploadOperations=%llu uploadBatches=%llu uploadQueueIdles=%llu stagingBytes=%llu stagingPeakBytes=%llu stagingPressureWaits=%llu stagingBuffers=%llu stagingPeakBuffers=%llu descriptorAllocations=%llu descriptorHits=%llu descriptorResets=%llu paletteAllocations=%llu paletteUpdates=%llu stagingAllocations=%llu stagingReuses=%llu stagingEvictions=%llu stagingPoolBytes=%llu stagingPoolBuffers=%zu directFilmFrames=%llu presentationCopies=%llu",
             (unsigned long long)uploadOperations,(unsigned long long)uploadSubmissions,(unsigned long long)uploadQueueIdles,
@@ -1516,6 +1519,7 @@ public:
             xrWaitUs+=NowUs()-depthStarted;
         }
         End(&xrTargets[index],submitDepth?xrDepthImages[depthIndex].image:VK_NULL_HANDLE);
+        ReleaseMotion(); // Same session queue has received the motion commands.
         // Commands are submitted on the session-bound queue before release.
         // OpenXR orders composition on that queue; CPU waits occur only at reuse.
         XrSwapchainImageReleaseInfo release{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
@@ -1534,6 +1538,7 @@ public:
         return true;
     }
     ~Renderer() {
+        DestroyMotion();
         DestroySwapchain();
         if(device){CancelUploads();begun=false;
             SwapSlot(frameSlots[activeSlot]);
@@ -1653,6 +1658,16 @@ void DestroyGameplaySwapchain(){if(renderer)renderer->DestroySwapchain();}
 bool PresentGameplay(const XrView* views,XrCompositionLayerProjectionView* output,float nearZ,float farZ) {
     recording=false;if(!WorldProbeActive())return false;
     try{return renderer->Present(views,output,nearZ,farZ);}catch(const std::exception& e){Failure(e);return false;}
+}
+bool InitializeSpacewarp(const std::array<MotionSwapchainTarget,2>& targets) {
+    if(!WorldProbeActive())return false;
+    try{renderer->InitializeMotion(targets,VK_FORMAT_D32_SFLOAT);return true;}
+    catch(const std::exception& e){VKLOG("FQ SPACEWARP Vulkan initialization failed: %s; native rendering retained",e.what());renderer->DestroyMotion();return false;}
+}
+void ShutdownSpacewarp(){if(renderer)renderer->DestroyMotion();}
+void QueueSpacewarp(const fqmotion::Capture& capture,std::array<fqspacewarp::Coverage,2>& coverage){
+    if(!WorldProbeActive()||!renderer->motionPass)return;
+    renderer->motionCapture=&capture;renderer->motionCoverage=&coverage;
 }
 
 }

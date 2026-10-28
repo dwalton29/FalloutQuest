@@ -49,6 +49,8 @@ XrResult XRAPI_CALL Device(XrInstance,const XrVulkanDeviceCreateInfoKHR* info,Vk
 // Fake OpenXR compositor with real software-GPU images. This tests the native
 // image/view/render/release path, not a real OpenXR runtime or headset.
 std::vector<fqvk::Image> runtimeImages,runtimeDepth;
+std::array<std::vector<VkImage>,4> runtimeMotion;
+int MotionHandle(XrSwapchain handle){auto n=uintptr_t(handle);return n>=100&&n<104?int(n-100):-1;}
 uint32_t nextDepth=1,acquiredDepth=0,depthReleases=0;
 bool depthAcquired=false,depthWaited=false,offerDepth=false;
 std::vector<uint8_t> submittedPixels;
@@ -81,6 +83,7 @@ XrResult XRAPI_CALL Swapchain(XrSession,const XrSwapchainCreateInfo* info,XrSwap
     *out=reinterpret_cast<XrSwapchain>(uintptr_t(3));return XR_SUCCESS;
 }
 XrResult XRAPI_CALL Images(XrSwapchain handle,uint32_t capacity,uint32_t* count,XrSwapchainImageBaseHeader* out) {
+    if(const int h=MotionHandle(handle);h>=0){*count=uint32_t(runtimeMotion[h].size());if(capacity)for(size_t i=0;i<runtimeMotion[h].size();++i){auto* image=reinterpret_cast<XrSwapchainImageVulkan2KHR*>(out)+i;assert(image->type==XR_TYPE_SWAPCHAIN_IMAGE_VULKAN2_KHR);image->image=runtimeMotion[h][i];}return XR_SUCCESS;}
     const auto& images=handle==reinterpret_cast<XrSwapchain>(uintptr_t(4))?runtimeDepth:runtimeImages;
     *count=uint32_t(images.size());
     if(capacity)for(size_t i=0;i<images.size();++i) {
@@ -89,11 +92,15 @@ XrResult XRAPI_CALL Images(XrSwapchain handle,uint32_t capacity,uint32_t* count,
     }
     return XR_SUCCESS;
 }
+std::array<bool,4> motionAcquired{},motionWaited{};
+unsigned motionCycles=0,motionReleases=0;
 XrResult XRAPI_CALL Acquire(XrSwapchain handle,const XrSwapchainImageAcquireInfo*,uint32_t* index) {
+    if(const int h=MotionHandle(handle);h>=0){assert(!motionAcquired[h]);motionAcquired[h]=true;motionWaited[h]=false;*index=(h%2)?(motionCycles+1)%3:motionCycles%2;return XR_SUCCESS;}
     if(handle==reinterpret_cast<XrSwapchain>(uintptr_t(4))){assert(!depthAcquired);depthAcquired=true;depthWaited=false;acquiredDepth=nextDepth++%2;*index=acquiredDepth;return XR_SUCCESS;}
     assert(!acquired);acquired=true;waited=false;acquiredImage=nextImage++%3;*index=acquiredImage;return XR_SUCCESS;
 }
 XrResult XRAPI_CALL Wait(XrSwapchain handle,const XrSwapchainImageWaitInfo*) {
+    if(const int h=MotionHandle(handle);h>=0){assert(motionAcquired[h]&&!motionWaited[h]);motionWaited[h]=true;return XR_SUCCESS;}
     if(handle==reinterpret_cast<XrSwapchain>(uintptr_t(4))){assert(depthAcquired&&!depthWaited);depthWaited=true;return XR_SUCCESS;}
     assert(acquired&&!waited);if(timeoutWait)return XR_TIMEOUT_EXPIRED;waited=true;return XR_SUCCESS;
 }
@@ -122,6 +129,7 @@ std::vector<uint8_t> RuntimePixels(uint32_t index) {
     r.Destroy(readback);return pixels;
 }
 XrResult XRAPI_CALL Release(XrSwapchain handle,const XrSwapchainImageReleaseInfo*) {
+    if(const int h=MotionHandle(handle);h>=0){auto& r=*fqvk::renderer;assert(!r.begun&&r.submissionSerial&&r.frameSlots[r.activeSlot].serial==r.submissionSerial);assert(motionAcquired[h]&&motionWaited[h]);motionAcquired[h]=motionWaited[h]=false;++motionReleases;return XR_SUCCESS;}
     if(!inspectReleasedImages) {
         auto& r=*fqvk::renderer;assert(r.frameSlots[r.activeSlot].serial==r.submissionSerial&&!r.begun);
         if(handle==reinterpret_cast<XrSwapchain>(uintptr_t(4))){assert(depthAcquired&&depthWaited);depthAcquired=depthWaited=false;++depthReleases;}
@@ -952,7 +960,9 @@ void GameplayPresentation(bool withDepth) {
     std::cout<<"Vulkan compositor software test: layered UNORM output, image rotation, upright stereo, film output, submit-before-release, independent depth indices, D32 copies/metadata, projection views, recreation, timeout and format rejection passed\n";
 }
 
+#include "vulkan_motion_gpu_tests.inc"
 int main() {
+    NativeMotion();
     for(auto format:{VK_FORMAT_R8G8B8A8_UNORM,VK_FORMAT_B8G8R8A8_UNORM,VK_FORMAT_B8G8R8A8_SRGB})HdrPresentation(format,false);
     HdrPresentation(VK_FORMAT_R8G8B8A8_UNORM,true);
     BufferedOwnership();DirectPresentation();EarlyAcquireFailure();TimingCapacity();

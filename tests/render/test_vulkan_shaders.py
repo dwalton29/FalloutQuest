@@ -75,4 +75,10 @@ class VulkanShaders(unittest.TestCase):
                 if shutil.which('spirv-dis'):
                     dis=subprocess.check_output(['spirv-dis',str(out/f'{name}_solid.frag.spv')],text=True)
                     self.assertNotIn('OpKill',dis)
+            for name in ('static','dynamic'):
+                paths=[out/f'motion_{name}_{stage}.{stage}' for stage in ('vert','frag')]
+                for path in paths:
+                    if shutil.which('spirv-val'):
+                        subprocess.run(['spirv-val','--target-env','vulkan1.1',str(path)+'.spv'],check=True)
+                subprocess.run([compiler,'-V','--target-env','vulkan1.1','-l',*map(str,paths),'-o',str(out/f'motion-{name}-linked.spv')],check=True)
 if __name__=='__main__':unittest.main()
