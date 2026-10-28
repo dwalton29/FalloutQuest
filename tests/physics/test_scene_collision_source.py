@@ -91,7 +91,9 @@ assert 'BuildCpuObjects(placement,parts,true)' in worker
 assert worker.index('PrepareResidentCpuParts(') < worker.index('out=std::move(next)')
 cpu=s[s.index('bool BuildCpuObjects('):s.index('bool ResolveDoorTeleportCachedQ1698(')]
 assert 'requireComplete ? completeCache : ordinaryCache' in cpu
-assert 'LoadFo3StaticNifMeshes(placement.modelPath, meshes, requireComplete, true, animatedVisibility)' in cpu
+assert 'LoadFo3StaticNifMeshes(placement.modelPath, meshes, requireComplete, referenceRoot, animatedVisibility)' in cpu
+assert 'referenceRoot = Fo3UsesPlacedReferenceRoot(placement.baseRecordType)' in cpu
+assert '"|reference-root" : "|authored-root"' in cpu
 assert 'animatedVisibility=bool(q2401DoorAnimation)&&placement.baseRecordType!="DOOR"' in cpu
 nif=Path('app/src/main/cpp/rendering/mesh/fo3-static-nif.cpp').read_text()
 assert 'requireComplete && (!q970SelectionReady || q970Scene.fallbackAll)' in nif
