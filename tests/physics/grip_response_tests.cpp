@@ -33,6 +33,13 @@ int main(){
         M p;for(int frame=1;frame<=hz;++frame){w.Target(0,Pose(float(frame)/hz,1));w.Step(1.f/hz);}
         w.Pose(1,p);assert(std::abs(p[12]-1)<.03f);
     }
+    // A discontinuous tracking target has finite correction speed/effort.
+    {
+        World w;assert(w.Add(1,Box(.1f,.1f,.1f,10),Pose(0,1)));assert(w.Grab(1,0,Pose(0,1),{0,1,0}));
+        M p;V velocity;
+        for(int i=0;i<180;++i){w.Target(0,Pose(5,1));w.Step(dt);w.Pose(1,p,&velocity);assert(std::abs(velocity[0])<4.1f&&p[12]<5.01f);}
+        assert(p[12]>4.9f);
+    }
     // Long gun with an off-centre grip: rapid angular changes must settle without
     // a pendulum swing or rotating the muzzle wildly through the requested aim.
     {
@@ -65,7 +72,7 @@ int main(){
         for(int i=0;i<240;++i)w.Step(dt);
         M p;w.Pose(1,p);const float x=p[12],y=p[13];assert(w.Grab(1,0,Pose(x,y),{x,y,0}));
         for(int i=1;i<=120;++i){w.TargetBody(1,Pose(x+i*dt*.4f,y,i*dt*.5f));w.Step(dt);}
-        w.Pose(1,p);assert(p[12]-x>.36f&&p[13]>.045f);
+        w.Pose(1,p);std::cout<<"seed="<<seed<<" x="<<p[12]-x<<" y="<<p[13]<<std::endl;assert(p[12]-x>.36f&&p[13]>.045f);
     }
     // Sliding around one obstruction must still stop at a second wall.
     {
@@ -76,7 +83,7 @@ int main(){
         for(int i=0;i<240;++i)w.Step(dt);
         M p;w.Pose(1,p);const float y=p[13];assert(w.Grab(1,0,Pose(0,y),{0,y,0}));
         for(int i=1;i<=120;++i){auto t=Pose(i*dt*.8f,y,.15f);t[14]=i*dt*.8f;w.TargetBody(1,t);w.Step(dt);}
-        w.Pose(1,p);assert(p[12]>.25f&&p[14]>.25f&&p[12]<.43f&&p[14]<.43f&&p[13]>.045f);
+        w.Pose(1,p);std::cout<<"corner="<<p[12]<<","<<p[13]<<","<<p[14]<<std::endl;assert(p[12]>.25f&&p[14]>.25f&&p[12]<.43f&&p[14]<.43f&&p[13]>.045f);
     }
     // Fast rotation still cannot sweep a thin plate through the ground.
     {

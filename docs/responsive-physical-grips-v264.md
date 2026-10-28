@@ -6,10 +6,14 @@ were independent of authored mass/inertia. This created considerable lag for
 heavy props and sustained oscillation for weapons. Bullet's spring stiffness
 limiter also reduced rotational stiffness for small inertias.
 
-Grips now use six compliant locked constraint axes in the same contact solver.
+Grips now use six damped velocity servos in the same contact solver.
 Per-tick position correction is 0.55, with small inverse-mass/inertia-scaled
-constraint softness. This gives a damped attachment response without overriding
-body transforms or replacing authored mass, friction, restitution or inertia.
+constraint softness. Linear motor speed is bounded to 4 m/s per axis, angular
+motor speed to 20 rad/s per axis. Effort is capped using authored mass/inertia
+and the grip lever arm (linear acceleration budget 120 m/s²; angular budget
+400 rad/s²). This gives a consistent tracking response while allowing contacts
+to resist a hand target beyond a wall. It does not override body transforms or
+replace authored mass, friction, restitution or inertia.
 The original surface anchor, physical contacts and solver release momentum stay
 in use. This is a VR interaction policy, not a claim about Fallout 3's Havok
 solver settings.

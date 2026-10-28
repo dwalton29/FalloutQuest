@@ -49,7 +49,7 @@ struct World::Impl {
     btSequentialImpulseConstraintSolver solver;
     btDiscreteDynamicsWorld world{&dispatcher,&broad,&solver,&config};
     std::unordered_map<uint64_t,Entry> statics,bodies;
-    struct Grip {uint64_t id=0;btTransform anchor,offset;std::unique_ptr<btGeneric6DofSpring2Constraint> constraint;};
+    struct Grip {uint64_t id=0;btTransform anchor,offset,target;std::unique_ptr<btGeneric6DofSpring2Constraint> constraint;};
     Grip grips[2];
     float accumulated=0;
     std::vector<std::pair<Entry*,btTransform>> previous;
@@ -163,27 +163,31 @@ bool World::Grab(uint64_t id,int hand,const M& palm,const V& surface){
     impl->Drop(hand);auto& b=*impl->bodies.at(id).body;auto& g=impl->grips[hand];g.id=id;
     btTransform frame=B(palm);frame.setOrigin(B(surface));g.anchor=b.getWorldTransform().inverse()*frame;g.offset=B(palm).inverse()*frame;
     g.constraint.reset(new btGeneric6DofSpring2Constraint(b,g.anchor));
-    g.constraint->setFrames(frame,g.anchor);
-    // Solve the grip as a compliant attachment in the contact solver. The old
-    // explicit force spring used dimensional damping=1 for every mass/inertia:
-    // heavy props lagged, while small angular inertias rang like a pendulum.
-    // Velocity-level correction removes residual velocity every tick and keeps
-    // collision contacts authoritative. No kinematic teleport or centre snap.
-    g.constraint->setLinearLowerLimit({0,0,0});g.constraint->setLinearUpperLimit({0,0,0});
-    g.constraint->setAngularLowerLimit({0,0,0});g.constraint->setAngularUpperLimit({0,0,0});
+    g.target=frame;g.constraint->setFrames(frame,g.anchor);
+    // Velocity servos damp the grab without a mass-dependent explicit spring.
+    // Finite mass/inertia-scaled effort lets collision contacts win when the
+    // tracked hand is beyond a wall, instead of an unlimited locked attachment
+    // fighting the contact solver and eventually punching through a corner.
+    g.constraint->setLinearLowerLimit({1,1,1});g.constraint->setLinearUpperLimit({-1,-1,-1});
+    g.constraint->setAngularLowerLimit({1,1,1});g.constraint->setAngularUpperLimit({-1,-1,-1});
+    const float mass=1.f/b.getInvMass();
     for(int axis=0;axis<6;++axis){
-        g.constraint->setParam(BT_CONSTRAINT_STOP_ERP,.55f,axis);
+        g.constraint->enableMotor(axis,true);g.constraint->setServo(axis,true);g.constraint->setServoTarget(axis,0);
+        g.constraint->setTargetVelocity(axis,axis<3?4.f:20.f);
+        g.constraint->setParam(BT_CONSTRAINT_ERP,.55f,axis);
         const float inverseEffectiveMass=axis<3?b.getInvMass():b.getInvInertiaDiagLocal()[axis-3];
-        g.constraint->setParam(BT_CONSTRAINT_STOP_CFM,.0001f*inverseEffectiveMass,axis);
+        g.constraint->setParam(BT_CONSTRAINT_CFM,.0001f*inverseEffectiveMass,axis);
+        const float effortMass=axis<3?mass:(inverseEffectiveMass>0?1.f/inverseEffectiveMass:0.f)+mass*g.anchor.getOrigin().length2();
+        g.constraint->setMaxMotorForce(axis,effortMass*(axis<3?120.f:400.f));
     }
     impl->world.addConstraint(g.constraint.get(),true);b.setActivationState(DISABLE_DEACTIVATION);return true;
 }
-void World::Target(int hand,const M& palm){if(hand<0||hand>1||!Finite(palm))return;auto& g=impl->grips[hand];if(!g.constraint)return;g.constraint->setFrames(B(palm)*g.offset,g.anchor);}
+void World::Target(int hand,const M& palm){if(hand<0||hand>1||!Finite(palm))return;auto& g=impl->grips[hand];if(!g.constraint)return;g.target=B(palm)*g.offset;}
 void World::Release(int hand,const V* velocity,const V* angular){if(hand<0||hand>1)return;auto id=Held(hand);impl->Drop(hand);auto i=impl->bodies.find(id);if(i==impl->bodies.end())return;auto& b=*i->second.body;b.forceActivationState(ACTIVE_TAG);b.activate(true);if(velocity)b.setLinearVelocity(B(*velocity));if(angular)b.setAngularVelocity(B(*angular));}
 uint64_t World::Held(int hand)const{return hand>=0&&hand<2?impl->grips[hand].id:0;}
 bool World::GripPoint(int hand,V& point)const{auto id=Held(hand);auto i=impl->bodies.find(id);if(i==impl->bodies.end())return false;point=A((i->second.body->getWorldTransform()*impl->grips[hand].anchor).getOrigin());return true;}
 bool World::GripPalm(int hand,M& palm)const{auto id=Held(hand);auto i=impl->bodies.find(id);if(i==impl->bodies.end())return false;const auto& g=impl->grips[hand];palm=A(i->second.body->getWorldTransform()*g.anchor*g.offset.inverse());return true;}
-void World::TargetBody(uint64_t id,const M& pose){for(auto& g:impl->grips)if(g.id==id&&g.constraint)g.constraint->setFrames(B(pose)*impl->bodies.at(id).principal*g.anchor,g.anchor);}
+void World::TargetBody(uint64_t id,const M& pose){if(!Finite(pose))return;for(auto& g:impl->grips)if(g.id==id&&g.constraint)g.target=B(pose)*impl->bodies.at(id).principal*g.anchor;}
 void World::Step(float seconds){
     if(!(seconds>0)||!std::isfinite(seconds))return;
     impl->accumulated+=std::min(seconds,.064f);constexpr float dt=1.f/120.f;
@@ -191,6 +195,7 @@ void World::Step(float seconds){
         impl->accumulated-=dt;
         auto& previous=impl->previous;previous.clear();
         for(auto& entry:impl->bodies)if(entry.second.body->isActive())previous.push_back({&entry.second,entry.second.body->getWorldTransform()});
+        for(auto& grip:impl->grips)if(grip.constraint)grip.constraint->setFrames(grip.target,grip.anchor);
         impl->world.stepSimulation(dt,0);
         // Bullet's swept sphere protects linear COM motion. Sweep each authored
         // convex child as well so a fast-spinning thin plate/weapon cannot rotate
