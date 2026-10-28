@@ -74,6 +74,12 @@ memory placement, screen insets and 1-2.5 mm surface offsets are implementation
 choices for Quest. This is a native reconstruction of the original menus, not
 execution of Bethesda's XML renderer or bit-identical random puzzle generation.
 
+Leveled terminals currently use the player level as the effective-zone-level
+fallback. Encounter-zone minimums, first-visit locked levels and reset history
+are not yet connected to terminal difficulty; ordinary fixed difficulty tiers
+are decoded directly. This is an explicit engine limitation, not a claim of
+complete original encounter-zone parity.
+
 Specialized menu scripts still depend on engine systems outside this terminal
 implementation. Examples include creature/turret DamageAV/SetUnconscious,
 SetFaction/SetEnemy, Activate chains, PlaceAtMe and special scripted activator
