@@ -239,6 +239,10 @@ inline void MirrorUniform(GLint location,unsigned kind,const void* data,unsigned
 inline bool Upload(GLint location,unsigned kind,const void* data,unsigned size) {
     MirrorUniform(location,kind,data,size);
     if(location<0) return false;
+    // An invalidated binding cache does not unbind the real driver program.
+    // This write can therefore change any bank's matching location. Do not
+    // leave an old value cached and later skip the upload that restores it.
+    if(!state.program.known&&location<256)for(auto& bank:programs)bank.values[location].size=0;
     if(state.program.known && state.program.value && location<256) {
         ProgramUniforms* bank=nullptr;
         for(auto& p:programs) if(p.program==state.program.value) { bank=&p;break; }
@@ -258,7 +262,8 @@ inline bool UploadArray(GLint location,unsigned kind,const void* data,unsigned s
     if(count==1) return Upload(location,kind,data,size);
     MirrorUniform(location,kind,data,size);
     if(location<0) return false;
-    for(auto& bank:programs) if(bank.program==state.program.value) bank.values={};
+    for(auto& bank:programs) if(!state.program.known||bank.program==state.program.value)
+        for(auto& value:bank.values)value.size=0;
     ++counters.uniforms;return true;
 }
 inline void Uniform1f(GLint l,GLfloat a) { if(Upload(l,1,&a,sizeof(a))) if(UseDriver()){++fqrender::driverCalls;glUniform1f(l,a);} }

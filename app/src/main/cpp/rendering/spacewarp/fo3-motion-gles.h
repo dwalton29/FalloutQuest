@@ -7,36 +7,51 @@
 #include "fo3-motion-vectors.h"
 #include "fo3-dynamic-motion.h"
 #include <string>
+#include <optional>
 namespace fqmotion {
 struct GlState {
-    GLint draw=0,read=0,viewport[4]{},program=0,vao=0,array=0,active=0,depthFunc=0,front=0,cull=0;
+    GLint draw=0,read=0,viewport[4]{},program=0,vao=0,array=0,element=0,renderbuffer=0,active=0,depthFunc=0,front=0,cull=0;
+    GLint scissor[4]{},blendSrc=0,blendDst=0,blendSrcAlpha=0,blendDstAlpha=0,blendEquation=0,blendEquationAlpha=0;
     GLint unpack=0,alignment=0,rowLength=0,skipRows=0,skipPixels=0;
-    static constexpr unsigned units[]={0,1,6,7};
-    GLint textures[4]{},samplers[4]{};
+    static constexpr unsigned units[]={0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15};
+    GLint textures[16]{},cubes[16]{},samplers[16]{};
     GLboolean depthMask=0,colour[4]{};
-    GLfloat range[2]{},offsetFactor=0,offsetUnits=0;
+    GLfloat range[2]{},offsetFactor=0,offsetUnits=0,clearColour[4]{},clearDepth=1,blendColour[4]{};
     static constexpr GLenum caps[]={GL_DEPTH_TEST,GL_BLEND,GL_CULL_FACE,GL_POLYGON_OFFSET_FILL,GL_SCISSOR_TEST,GL_STENCIL_TEST,GL_SAMPLE_ALPHA_TO_COVERAGE,GL_SAMPLE_COVERAGE,GL_RASTERIZER_DISCARD};
     GLboolean enabled[9]{};
     GlState(){
         glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING,&draw);glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING,&read);
         glGetIntegerv(GL_VIEWPORT,viewport);glGetIntegerv(GL_CURRENT_PROGRAM,&program);glGetIntegerv(GL_VERTEX_ARRAY_BINDING,&vao);
         glGetIntegerv(GL_ARRAY_BUFFER_BINDING,&array);glGetIntegerv(GL_ACTIVE_TEXTURE,&active);
+        glGetIntegerv(GL_ELEMENT_ARRAY_BUFFER_BINDING,&element);glGetIntegerv(GL_RENDERBUFFER_BINDING,&renderbuffer);glGetIntegerv(GL_SCISSOR_BOX,scissor);
+        glGetIntegerv(GL_BLEND_SRC_RGB,&blendSrc);glGetIntegerv(GL_BLEND_DST_RGB,&blendDst);glGetIntegerv(GL_BLEND_SRC_ALPHA,&blendSrcAlpha);glGetIntegerv(GL_BLEND_DST_ALPHA,&blendDstAlpha);
+        glGetIntegerv(GL_BLEND_EQUATION_RGB,&blendEquation);glGetIntegerv(GL_BLEND_EQUATION_ALPHA,&blendEquationAlpha);
+        glGetFloatv(GL_COLOR_CLEAR_VALUE,clearColour);glGetFloatv(GL_DEPTH_CLEAR_VALUE,&clearDepth);glGetFloatv(GL_BLEND_COLOR,blendColour);
         glGetIntegerv(GL_DEPTH_FUNC,&depthFunc);glGetBooleanv(GL_DEPTH_WRITEMASK,&depthMask);glGetBooleanv(GL_COLOR_WRITEMASK,colour);
         glGetFloatv(GL_DEPTH_RANGE,range);glGetIntegerv(GL_FRONT_FACE,&front);glGetIntegerv(GL_CULL_FACE_MODE,&cull);
         glGetFloatv(GL_POLYGON_OFFSET_FACTOR,&offsetFactor);glGetFloatv(GL_POLYGON_OFFSET_UNITS,&offsetUnits);
         glGetIntegerv(GL_PIXEL_UNPACK_BUFFER_BINDING,&unpack);glGetIntegerv(GL_UNPACK_ALIGNMENT,&alignment);
         glGetIntegerv(GL_UNPACK_ROW_LENGTH,&rowLength);glGetIntegerv(GL_UNPACK_SKIP_ROWS,&skipRows);glGetIntegerv(GL_UNPACK_SKIP_PIXELS,&skipPixels);
         for(unsigned i=0;i<9;++i)enabled[i]=glIsEnabled(caps[i]);
-        for(unsigned i=0;i<4;++i){glActiveTexture(GL_TEXTURE0+units[i]);glGetIntegerv(GL_TEXTURE_BINDING_2D,&textures[i]);glGetIntegerv(GL_SAMPLER_BINDING,&samplers[i]);}
+        for(unsigned i=0;i<16;++i){glActiveTexture(GL_TEXTURE0+units[i]);glGetIntegerv(GL_TEXTURE_BINDING_2D,&textures[i]);glGetIntegerv(GL_TEXTURE_BINDING_CUBE_MAP,&cubes[i]);glGetIntegerv(GL_SAMPLER_BINDING,&samplers[i]);}
+        glActiveTexture(active);
     }
     ~GlState(){
-        for(unsigned i=0;i<4;++i){glActiveTexture(GL_TEXTURE0+units[i]);glBindTexture(GL_TEXTURE_2D,textures[i]);glBindSampler(units[i],samplers[i]);}
+        for(unsigned i=0;i<16;++i){glActiveTexture(GL_TEXTURE0+units[i]);glBindTexture(GL_TEXTURE_2D,textures[i]);glBindTexture(GL_TEXTURE_CUBE_MAP,cubes[i]);glBindSampler(units[i],samplers[i]);}
         glActiveTexture(active);glUseProgram(program);glBindVertexArray(vao);glBindBuffer(GL_ARRAY_BUFFER,array);
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER,element);glBindRenderbuffer(GL_RENDERBUFFER,renderbuffer);
         glBindBuffer(GL_PIXEL_UNPACK_BUFFER,unpack);glPixelStorei(GL_UNPACK_ALIGNMENT,alignment);glPixelStorei(GL_UNPACK_ROW_LENGTH,rowLength);glPixelStorei(GL_UNPACK_SKIP_ROWS,skipRows);glPixelStorei(GL_UNPACK_SKIP_PIXELS,skipPixels);
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER,draw);glBindFramebuffer(GL_READ_FRAMEBUFFER,read);glViewport(viewport[0],viewport[1],viewport[2],viewport[3]);
         glDepthFunc(depthFunc);glDepthMask(depthMask);glColorMask(colour[0],colour[1],colour[2],colour[3]);glDepthRangef(range[0],range[1]);
         glFrontFace(front);glCullFace(cull);glPolygonOffset(offsetFactor,offsetUnits);
+        glScissor(scissor[0],scissor[1],scissor[2],scissor[3]);glBlendFuncSeparate(blendSrc,blendDst,blendSrcAlpha,blendDstAlpha);glBlendEquationSeparate(blendEquation,blendEquationAlpha);
+        glClearColor(clearColour[0],clearColour[1],clearColour[2],clearColour[3]);glClearDepthf(clearDepth);glBlendColor(blendColour[0],blendColour[1],blendColour[2],blendColour[3]);
         for(unsigned i=0;i<9;++i){if(enabled[i])glEnable(caps[i]);else glDisable(caps[i]);}
+    }
+    uint32_t SamplerChanges()const{
+        GLint before=0;glGetIntegerv(GL_ACTIVE_TEXTURE,&before);uint32_t mask=0;
+        for(unsigned i=0;i<16;++i){GLint sampler=0;glActiveTexture(GL_TEXTURE0+units[i]);glGetIntegerv(GL_SAMPLER_BINDING,&sampler);if(sampler!=samplers[i])mask|=uint32_t(1)<<i;}
+        glActiveTexture(before);return mask;
     }
 };
 class Gles {
@@ -68,6 +83,7 @@ class Gles {
     static void Float(GLuint p,const char* name,float value){glUniform1f(glGetUniformLocation(p,name),value);}
     static void Attribute(GLuint index,GLint count,GLsizei stride,size_t offset){glEnableVertexAttribArray(index);glVertexAttribPointer(index,count,GL_FLOAT,GL_FALSE,stride,reinterpret_cast<void*>(offset));}
 public:
+    static void PrepareSceneSampling(){if(!fqrender::nativeOnly)for(unsigned unit:GlState::units)glBindSampler(unit,0);}
     Gles()=default;Gles(const Gles&)=delete;Gles& operator=(const Gles&)=delete;
     bool Failed()const{return failed_;}
     uint64_t UploadedBytes()const{return uploadedBytes_;}
@@ -79,10 +95,10 @@ public:
         for(const auto& draw:capture.draws){auto it=previousGpu_.find(draw.identity);if(it!=previousGpu_.end())it->second.used=capture.history->CurrentFrame().serial;}
     }
     const std::string& Error()const{return error_;}
-    bool Initialize(){
+    bool Initialize(bool preserveState=true){
         if(fqrender::nativeOnly)return false;
         if(staticProgram_&&dynamicProgram_&&debugProgram_)return true;
-        GlState state;Shutdown();error_.clear();failed_=false;staticProgram_=Program(fqspacewarp::StaticVertex,fqspacewarp::StaticFragment);
+        std::optional<GlState> state;if(preserveState)state.emplace();Shutdown();error_.clear();failed_=false;staticProgram_=Program(fqspacewarp::StaticVertex,fqspacewarp::StaticFragment);
         if(staticProgram_)dynamicProgram_=Program(fqspacewarp::DynamicVertex,fqspacewarp::DynamicFragment);
         if(dynamicProgram_)debugProgram_=Program(fqspacewarp::StaticVertex,fqspacewarp::DebugFragment);
         if(!staticProgram_||!dynamicProgram_||!debugProgram_){Shutdown();return false;}
@@ -96,13 +112,13 @@ public:
         for(auto& entry:previousGpu_)Delete(entry.second);previousGpu_.clear();previousBytes_=0;
         staticProgram_=dynamicProgram_=debugProgram_=debugSampler_=fbo_=vao_=0;
     }
-    bool Render(const Capture& capture,unsigned eyeIndex,GLuint sourceDepth,GLuint motion,GLuint depth,int width,int height,const std::array<float,3>& scale){
+    bool Render(const Capture& capture,unsigned eyeIndex,GLuint sourceDepth,GLuint motion,GLuint depth,int width,int height,const std::array<float,3>& scale,bool preserveState=true){
         if(fqrender::nativeOnly)return false;
         if(!staticProgram_||!dynamicProgram_||!capture.history||!capture.mainDrawn||!sourceDepth||!motion||!depth||width<=0||height<=0||eyeIndex>1)return false;
         const auto& history=*capture.history;const auto& current=history.CurrentFrame();
         const auto& prior=history.SubmittedFrames()?history.PreviousFrame():current;
         fqspacewarp::Matrix inverse{};if(!fqspacewarp::Inverse(current.viewProjection[eyeIndex],inverse))return false;
-        GlState state;
+        std::optional<GlState> state;if(preserveState)state.emplace();
         // Previous-pose buffers survive both stereo eyes and subsequent frames.
         // Upload each identity once per logical frame; retire departed geometry.
         for(auto it=previousGpu_.begin();it!=previousGpu_.end();){
@@ -120,7 +136,7 @@ public:
         glViewport(0,0,width,height);for(GLenum cap:GlState::caps)glDisable(cap);
         glEnable(GL_DEPTH_TEST);glDepthFunc(GL_ALWAYS);glDepthMask(GL_TRUE);glColorMask(GL_TRUE,GL_TRUE,GL_TRUE,GL_TRUE);glDepthRangef(0,1);
         glBindBuffer(GL_PIXEL_UNPACK_BUFFER,0);glPixelStorei(GL_UNPACK_ALIGNMENT,1);glPixelStorei(GL_UNPACK_ROW_LENGTH,0);glPixelStorei(GL_UNPACK_SKIP_ROWS,0);glPixelStorei(GL_UNPACK_SKIP_PIXELS,0);
-        for(unsigned unit:GlState::units)glBindSampler(unit,0);
+        for(unsigned unit:{0u,1u,6u,7u})glBindSampler(unit,0);
         glBindVertexArray(vao_);glUseProgram(staticProgram_);glActiveTexture(GL_TEXTURE0);glBindTexture(GL_TEXTURE_2D,sourceDepth);
         Int(staticProgram_,"uDepth",0);Matrix(staticProgram_,"uInverseCurrentViewProjection",inverse);Matrix(staticProgram_,"uPreviousViewProjection",prior.viewProjection[eyeIndex]);
         glUniform3fv(glGetUniformLocation(staticProgram_,"uMotionScale"),1,scale.data());glDrawArrays(GL_TRIANGLES,0,3);
@@ -179,10 +195,10 @@ public:
         if(error){failed_=true;error_="GLES motion pass error";}
         return complete&&!error;
     }
-    bool Visualize(GLuint target,int width,int height,GLuint motion){
+    bool Visualize(GLuint target,int width,int height,GLuint motion,bool preserveState=true){
         if(fqrender::nativeOnly)return false;
         if(!debugProgram_||!motion)return false;
-        GlState state;glBindFramebuffer(GL_FRAMEBUFFER,target);glViewport(0,0,width,height);
+        std::optional<GlState> state;if(preserveState)state.emplace();glBindFramebuffer(GL_FRAMEBUFFER,target);glViewport(0,0,width,height);
         if(glCheckFramebufferStatus(GL_FRAMEBUFFER)!=GL_FRAMEBUFFER_COMPLETE){failed_=true;error_="incomplete visualization framebuffer";return false;}
         for(GLenum cap:GlState::caps)glDisable(cap);
         glDepthMask(GL_FALSE);glColorMask(GL_TRUE,GL_TRUE,GL_TRUE,GL_TRUE);glBindVertexArray(vao_);glUseProgram(debugProgram_);

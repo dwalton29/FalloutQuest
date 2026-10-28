@@ -30,6 +30,7 @@ namespace fo3worldscript {fo3script::ImagePresentation Presentation();}
 #include "npc/fo3-animation-bounds.h"
 #include "rendering/actor-skinning.h"
 #include "rendering/opaque-telemetry.h"
+#include "rendering/spacewarp/fo3-driver-boundary.h"
 #include "rendering/fixed-foveation.h"
 #include "rendering/conservative-occlusion.h"
 #include "rendering/performance-capture-android.h"

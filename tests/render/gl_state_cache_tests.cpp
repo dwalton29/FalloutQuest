@@ -85,5 +85,11 @@ int main() {
     }
     const auto priorProgramCalls=driverCalls["glUseProgram"];
     fqgl::Invalidate();glUseProgram(8);assert(driverCalls["glUseProgram"]==priorProgramCalls+1);
+    glUniform1f(17,.1f);fqgl::Invalidate();glUniform1f(17,.9f);glUseProgram(8);
+    auto beforeRestore=driverCalls["glUniform1f"];glUniform1f(17,.1f);
+    assert(driverCalls["glUniform1f"]==beforeRestore+1);
+    glUniform1f(3,.25f);fqgl::Invalidate();glUniform4fv(2,2,values);glUseProgram(8);
+    beforeRestore=driverCalls["glUniform1f"];glUniform1f(3,.25f);
+    assert(driverCalls["glUniform1f"]==beforeRestore+1);
     std::cout << "GL state/uniform cache regressions passed\n";
 }

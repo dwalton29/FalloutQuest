@@ -23,6 +23,8 @@ jobs:
           python3 tests/render/test_spacewarp_openxr.py
           g++ -std=c++17 -Wall -Wextra -Werror -Wno-misleading-indentation -Iapp/src/main/cpp tests/render/spacewarp_gles_tests.cpp -lEGL -lGLESv2 -ldl -o /tmp/spacewarp-gles
           EGL_PLATFORM=surfaceless /tmp/spacewarp-gles
+          g++ -std=c++17 -Wall -Wextra -Werror -Wno-misleading-indentation -Iapp/src/main/cpp tests/render/spacewarp_colour_tests.cpp -lEGL -lGLESv2 -ldl -o /tmp/spacewarp-colour
+          EGL_PLATFORM=surfaceless /tmp/spacewarp-colour
           python3 tools/build_vulkan_shaders.py --compiler glslangValidator --output /tmp/fq-vulkan-shaders
       - name: Verify Vulkan bridge preserves GLES fallback
         run: |

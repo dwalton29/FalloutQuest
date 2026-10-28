@@ -25,6 +25,7 @@
 #include <openxr/openxr_platform.h>
 #include "rendering/spacewarp/fo3-openxr-spacewarp.h"
 #include "rendering/spacewarp/fo3-image-lease.h"
+#include "rendering/spacewarp/fo3-mode.h"
 #ifdef FQ_ENABLE_VULKAN
 #include "rendering/vulkan/fo3-vulkan-renderer.h"
 #endif
@@ -373,6 +374,7 @@ public:
         FQ_LOGI("Q7.1 BOOT STEP: CreateSwapchains");
         if (!CreateSwapchains()) return false;
         if(spacewarp_.Requested()&&spacewarp_.Backend()!=fqspacewarp::Api::None&&!vulkanGameplay_){
+            fqmotion::DriverBoundary runtimeBoundary("resource-create",true);
             uint32_t count=0;bool ready=false;
             if(XR_SUCCEEDED(xrEnumerateSwapchainFormats(session_,0,&count,nullptr))){
                 std::vector<int64_t> formats(count);
@@ -504,11 +506,13 @@ private:
                      "xrEnumerateInstanceExtensionProperties")) return false;
         char spacewarpRequest[PROP_VALUE_MAX]{};
         __system_property_get("debug.falloutquest.spacewarp",spacewarpRequest);
-        spacewarpVisualize_=!std::strcmp(spacewarpRequest,"visualize");
-        spacewarpSynthesisRequested_=!std::strcmp(spacewarpRequest,"on");
-        const bool requestSpacewarp=!std::strcmp(spacewarpRequest,"1")||!std::strcmp(spacewarpRequest,"validate")||spacewarpVisualize_||spacewarpSynthesisRequested_;
+        const auto spacewarpMode=fqspacewarp::SelectMode(spacewarpRequest);
+        fqmotion::reportBoundary=[](const char* label,uint32_t mask){FQ_LOGI("FQ SPACEWARP boundary=%s samplerChanges=0x%X",label?label:"unknown",mask);};
+        spacewarpVisualize_=spacewarpMode==fqspacewarp::Mode::Visualize;
+        spacewarpSynthesisRequested_=spacewarpMode==fqspacewarp::Mode::Synthesis;
+        const bool requestSpacewarp=spacewarpMode!=fqspacewarp::Mode::Off;
         if(const char* extension=spacewarp_.Negotiate(requestSpacewarp,available))extensions.push_back(extension);
-        FQ_LOGI("FQ SPACEWARP capability requested=%d api=%s synthesisRequested=%d default=off",
+        FQ_LOGI("FQ SPACEWARP capability requested=%d api=%s synthesisRequested=%d default=on scope=all-scenes",
             requestSpacewarp,spacewarp_.Backend()==fqspacewarp::Api::EXT?"EXT":spacewarp_.Backend()==fqspacewarp::Api::FB?"FB":"unavailable",spacewarpSynthesisRequested_);
         for (const auto& extension : available) {
             if (std::strcmp(extension.extensionName, XR_KHR_COMPOSITION_LAYER_DEPTH_EXTENSION_NAME) == 0) {
@@ -1655,7 +1659,13 @@ private:
         fqactor::lastFrame=appFrameStarted;
         const auto beginStarted=fqopaque::Clock::now();
         XrFrameBeginInfo beginInfo{XR_TYPE_FRAME_BEGIN_INFO};
-        if (!CheckXr(xrBeginFrame(session_, &beginInfo), "xrBeginFrame")) return;
+        bool frameBegun=false;
+        {
+            std::optional<fqmotion::DriverBoundary> runtimeBoundary;
+            if(spacewarp_.Requested()&&!vulkanGameplay_)runtimeBoundary.emplace("frame-begin",spacewarpProducerReady_&&(spacewarpSerial_%180)==1);
+            frameBegun=CheckXr(xrBeginFrame(session_, &beginInfo), "xrBeginFrame");
+        }
+        if(!frameBegun)return;
         if(fqperf::capture.recording)perf.us[fqperf::Begin]=fqopaque::Micros(beginStarted);
         const auto perfGlStart=fqgl::counters;
         // Advance the reserved owner once, even when gameplay and view updates
@@ -2050,7 +2060,7 @@ private:
                 gStereoReflectionEye[1]=centrePose.position.y;
                 gStereoReflectionEye[2]=centrePose.position.z;
                 gStereoMvpReady = true;
-                fqmotion::requested=spacewarpProducerReady_&&gExteriorWorldspaceQ1890==0x3cu&&gSceneReady&&
+                fqmotion::requested=spacewarpProducerReady_&&gSceneReady&&
                     !IsFo3LoadingVisible()&&sessionState_==XR_SESSION_STATE_FOCUSED&&!Fo3GameplayBlocked();
                 QActorPrepareStereoFrame();
                 if(gFo3PauseOpen)fo3pauseui::Prepare(gFo3PauseMenu);
@@ -2149,7 +2159,7 @@ private:
                     projectionViews[0].next = projectionViews[1].next = nullptr;
                 }
                 if(spacewarpSynthesisRequested_&&spacewarpProducerReady_&&rendered&&gSceneReady&&!IsFo3LoadingVisible()&&
-                   gExteriorWorldspaceQ1890==0x3cu&&spacewarpHistory_.CanSynthesize(spacewarpCoverage_)&&
+                   spacewarpHistory_.CanSynthesize(spacewarpCoverage_)&&
                    spacewarpHistory_.CurrentFrame().scene==gSceneLoad.generation){
                     XrPosef delta{};
                     if(fqspacewarp::ArtificialYawDelta(spacewarpHistory_.PreviousFrame().appToWorld,
@@ -2189,8 +2199,12 @@ private:
         endInfo.layerCount = layerCount;
         endInfo.layers = layerCount ? layers : nullptr;
         const auto submitStarted=fqloading::Now();
-        const bool q1700FrameSubmitted =
-            CheckXr(xrEndFrame(session_, &endInfo), "xrEndFrame");
+        bool q1700FrameSubmitted=false;
+        {
+            std::optional<fqmotion::DriverBoundary> runtimeBoundary;
+            if(spacewarp_.Requested()&&!vulkanGameplay_)runtimeBoundary.emplace("frame-submit",spacewarpProducerReady_&&(spacewarpSerial_%180)==1);
+            q1700FrameSubmitted=CheckXr(xrEndFrame(session_, &endInfo), "xrEndFrame");
+        }
         if(spacewarpAttached&&!q1700FrameSubmitted){
             spacewarpSynthesisRequested_=spacewarpProducerReady_=fqmotion::requested=false;
             FQ_LOGE("FQ SPACEWARP synthesis disabled after failed submission; restart required to retry");
@@ -2326,9 +2340,10 @@ private:
             };
             if(!enumerate(target.motion,spacewarpMotionImages_[eye])||!enumerate(target.depth,spacewarpDepthImages_[eye]))return false;
         }
-        const bool ready=spacewarpGles_.Initialize();fqgl::Invalidate();return ready;
+        return spacewarpGles_.Initialize(false); // Caller encloses XR creation and GL setup.
     }
     fqspacewarp::Coverage RenderSpacewarpEye(unsigned eye){
+        // RenderEye owns the boundary through the primary image releases too.
         const auto started=fqopaque::Clock::now();
         const auto uploadBefore=spacewarpGles_.UploadedBytes(),allocationBefore=spacewarpGles_.Allocations();
         const auto& target=spacewarp_.Eye(eye);
@@ -2345,9 +2360,8 @@ private:
                 std::array<float,3>{1,-1,.5f}:std::array<float,3>{1,1,1};
             rendered=spacewarpGles_.Render(fqmotion::eye,eye,q1370PostDepth,
                 spacewarpMotionImages_[eye][motion.index].image,spacewarpDepthImages_[eye][depth.index].image,
-                target.width,target.height,scale);
-            if(rendered&&spacewarpVisualize_)rendered=spacewarpGles_.Visualize(framebuffer_,eyes_[eye].width,eyes_[eye].height,spacewarpMotionImages_[eye][motion.index].image);
-            fqgl::Invalidate();
+                target.width,target.height,scale,false);
+            if(rendered&&spacewarpVisualize_)rendered=spacewarpGles_.Visualize(framebuffer_,eyes_[eye].width,eyes_[eye].height,spacewarpMotionImages_[eye][motion.index].image,false);
             if(spacewarpGles_.Failed()){
                 spacewarpProducerReady_=fqmotion::requested=false;fqmotion::eye.Block(fqmotion::Resources);
                 FQ_LOGE("FQ SPACEWARP producer stopped: %s",spacewarpGles_.Error().c_str());
@@ -2370,6 +2384,7 @@ private:
                    XrCompositionLayerProjectionView& projectionView) {
         fqopaque::eye = eyeIndex;
         EyeSwapchain& eye = eyes_[eyeIndex];
+        std::optional<fqmotion::DriverBoundary> runtimeBoundary;
         fqmotion::eye.Begin(spacewarpHistory_);
         const auto acquireStarted=fqopaque::Clock::now();
         uint32_t imageIndex = 0;
@@ -2396,6 +2411,7 @@ private:
             }
         }
         if(fqperf::capture.recording)fqperf::capture.current.us[fqperf::Swapchain]+=fqopaque::Micros(acquireStarted);
+        if(spacewarp_.Requested()&&!vulkanGameplay_){fqmotion::Gles::PrepareSceneSampling();fqgl::Invalidate();}
         bool rendered = false;
         bool depthCopied = false;
         fqperf::GpuScope gpuEye(fqperf::GpuEyeTotal);
@@ -2651,6 +2667,7 @@ private:
             }
             if(fqgl::counters.draws!=motionLateUiBefore)fqmotion::eye.Block(fqmotion::Ui);
             if(spacewarpProducerReady_&&fqmotion::eye.history){
+                runtimeBoundary.emplace("motion+image-release",(spacewarpSerial_%180)==1);
                 const uint32_t unsupported=fqmotion::eye.reasons&~uint32_t(fqmotion::MissingHistory);
                 if(spacewarpSynthesisRequested_&&unsupported){
                     spacewarpGles_.Retain(fqmotion::eye);spacewarpCoverage_[eyeIndex]=fqmotion::eye.Coverage(false);
@@ -2668,6 +2685,7 @@ private:
         }
         fqperf::EndHdrPass();
         gpuEye.Finish();
+        if(spacewarp_.Requested()&&!vulkanGameplay_&&!runtimeBoundary)runtimeBoundary.emplace("image-release",false);
         glFlush();
 
         if(vulkanGameplay_)return rendered; // Native compositor acquisition/release happens once after stereo recording.

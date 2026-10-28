@@ -65,7 +65,12 @@ int main(){
  assert(!session.Attach(views,history,coverage,delta,.04f,1000));
  for(auto& v:views)v.next=&depth;
  coverage[1].weapons=false;assert(!session.Attach(views,history,coverage,delta,.04f,1000)&&views[0].next==&depth);coverage[1].weapons=true;
- auto interior=Input(4);interior.world=0;assert(!history.Begin(interior));assert(!session.Attach(views,history,coverage,delta,.04f,1000));
+ auto interior=Input(4);interior.world=0;assert(history.Begin(interior)&&!history.Ready());assert(!session.Attach(views,history,coverage,delta,.04f,1000));
+ history.Finish(false);
+ History interiorHistory;
+ for(unsigned i=1;i<=2;++i){auto f=Input(i);f.world=0;assert(interiorHistory.Begin(f));interiorHistory.EyeRendered(0);interiorHistory.EyeRendered(1);assert(interiorHistory.Finish(true));}
+ auto f=Input(3);f.world=0;assert(interiorHistory.Begin(f));interiorHistory.EyeRendered(0);interiorHistory.EyeRendered(1);
+ assert(session.Attach(views,interiorHistory,coverage,delta,.04f,1000));for(auto& v:views)v.next=&depth;
  for(unsigned i=5;i<=6;++i){assert(history.Begin(Input(i)));history.EyeRendered(0);history.EyeRendered(1);assert(history.Finish(true));}
  assert(history.Begin(Input(7)));history.EyeRendered(0);history.EyeRendered(1);for(auto& c:coverage)c.serial=7;
  assert(ArtificialYawDelta(Yaw(0),Yaw(.1f,.2f,0,-.1f),Api::EXT,delta));

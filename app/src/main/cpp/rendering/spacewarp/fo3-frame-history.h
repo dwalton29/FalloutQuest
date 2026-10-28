@@ -20,7 +20,7 @@ struct Frame {
 };
 inline bool Finite(const Matrix& m){for(float f:m)if(!std::isfinite(f))return false;return true;}
 inline bool Eligible(const Frame& f){
-  if(f.world!=0x3cu||!f.sceneReady||f.loading||!f.focused||f.modal||f.displayTime<=0||!Finite(f.appToWorld))return false;
+  if(!f.sceneReady||f.loading||!f.focused||f.modal||f.displayTime<=0||!Finite(f.appToWorld))return false;
   for(float v:f.origin)if(!std::isfinite(v))return false;
   return Finite(f.viewProjection[0])&&Finite(f.viewProjection[1]);
 }
@@ -57,7 +57,7 @@ public:
   void Reset(){committed_.clear();pending_.clear();submitted_=0;candidate_=false;eyes_={};pendingBytes_=0;consistent_=true;}
   bool Begin(const Frame& f){
     if(!Eligible(f)){Reset();return false;}
-    if(submitted_&&(f.scene!=previous_.scene||f.origin!=previous_.origin||f.displayTime<=previous_.displayTime||CameraCut(previous_.appToWorld,f.appToWorld)))Reset();
+    if(submitted_&&(f.world!=previous_.world||f.scene!=previous_.scene||f.origin!=previous_.origin||f.displayTime<=previous_.displayTime||CameraCut(previous_.appToWorld,f.appToWorld)))Reset();
     current_=f;pending_.clear();pendingBytes_=0;eyes_={};consistent_=true;candidate_=true;return true;
   }
   bool Record(uint64_t identity,const Drawable& d){

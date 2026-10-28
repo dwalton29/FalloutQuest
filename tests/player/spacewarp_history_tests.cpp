@@ -2,6 +2,7 @@
 #include <cassert>
 #include "rendering/spacewarp/fo3-motion-vectors.h"
 #include "rendering/spacewarp/fo3-motion-capture.h"
+#include "rendering/spacewarp/fo3-mode.h"
 #include <iostream>
 using namespace fqspacewarp;
 Frame Input(uint64_t serial){Frame f;f.serial=serial;f.displayTime=int64_t(serial)*13888889;f.scene=10;f.world=0x3c;f.sceneReady=f.focused=true;return f;}
@@ -13,7 +14,9 @@ int main(){
  assert(StaticMotion(inverse,fqskin::Identity(),.5f,.5f,.5f,{1,1,1},velocity));assert(std::abs(velocity[0]-.2f)<1e-6f);
  assert(!StaticMotion(inverse,fqskin::Identity(),.5f,.5f,1,{1,1,1},velocity));Matrix singular{};assert(!Inverse(singular,inverse));
  History h;auto frame=Input(1);assert(Eligible(frame));
- for(uint32_t world:{0u,0xa74u}){auto other=frame;other.world=world;assert(!Eligible(other));}
+ for(uint32_t world:{0u,0xa74u,0x3cu}){auto other=frame;other.world=world;assert(Eligible(other));}
+ assert(SelectMode("")==Mode::Synthesis&&SelectMode(nullptr)==Mode::Synthesis&&SelectMode("on")==Mode::Synthesis);
+ assert(SelectMode("0")==Mode::Off&&SelectMode("validate")==Mode::Validate&&SelectMode("1")==Mode::Validate&&SelectMode("visualize")==Mode::Visualize);
  for(int block=0;block<4;++block){auto f=frame;if(block==0)f.loading=true;if(block==1)f.focused=false;if(block==2)f.modal=true;if(block==3)f.sceneReady=false;assert(!h.Begin(f));}
  Drawable d;d.geometry=99;d.palette.resize(2);d.deformedPositions={1,2,3};
  assert(h.Begin(frame)&&h.Record(1,d)&&h.Record(1,d));h.EyeRendered(0);assert(!h.Finish(true)&&!h.Previous(1,99));
@@ -39,5 +42,10 @@ int main(){
  assert(captured.Begin(Input(3)));capture.Begin(captured);capture.Main();d.deformedPositions={1,2,3};assert(capture.Record(draw,d));assert(capture.reasons&fqmotion::Deformation);assert(!capture.Coverage(true).Complete(3));
  capture.Block(fqmotion::Ui|fqmotion::Water);assert((capture.reasons&fqmotion::Ui)&&(capture.reasons&fqmotion::Water));
  captured.Finish(false);capture.Begin(captured);capture.Main();assert(!capture.history&&!capture.collecting&&!capture.Record(draw,d));
- std::cout<<"SpaceWarp Wasteland policy, stereo submission, deformation history, coverage and bounded storage passed\n";
+ History transitions;Submit(transitions,Input(1));Submit(transitions,Input(2));auto inside=Input(3);inside.world=0;
+ assert(transitions.Begin(inside)&&transitions.Active()&&!transitions.Ready()&&transitions.SubmittedFrames()==0);
+ transitions.EyeRendered(0);transitions.EyeRendered(1);assert(transitions.Finish(true));inside.serial=4;inside.displayTime+=10000000;
+ assert(transitions.Begin(inside));transitions.EyeRendered(0);transitions.EyeRendered(1);assert(transitions.Finish(true));
+ inside.serial=5;inside.displayTime+=10000000;assert(transitions.Begin(inside)&&transitions.Ready());
+ std::cout<<"SpaceWarp all-scene defaults, transitions, stereo submission, deformation history, coverage and bounded storage passed\n";
 }
