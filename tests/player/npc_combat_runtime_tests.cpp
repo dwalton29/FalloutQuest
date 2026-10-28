@@ -14,7 +14,8 @@ void Q230UpdateActor(Q230ActorVisual&){}
 bool Q230LiveBone(const Q230ActorVisual& actor,int bone,std::array<float,3>& p){p=actor.runtime.position;p[1]+=bone==actor.headBone?1.7f:1.f;return true;}
 bool HasFo3InteractionOccluder(float,float y,float,float,float dy,float,float length,uint32_t){if(captureCoverRays)coverRayOrigins.push_back(y);if(partialCover)return y+dy*length<.3f;return blocked||(blockSecondSightRay&&++sightRayCount==2);}
 void EndFo3Dialogue(const char*){++dialogueEnds;}
-namespace fo3audio {void SoundEvent(uint32_t){}void NamedSound(const std::string&) {}}
+std::vector<std::string> actionSounds;
+namespace fo3audio {void SoundEvent(uint32_t){}void NamedSound(const std::string& name) {actionSounds.push_back(name);}}
 static fo3anim::Matrix Q230WeaponMatrix(Q230ActorVisual& actor){auto m=fo3anim::Identity();m[12]=actor.runtime.position[0];m[13]=actor.runtime.position[1]+1;m[14]=actor.runtime.position[2];return m;}
 namespace weaponruntime {
 void EmitShot(uint64_t,uint32_t attacker,uint32_t base,const fo3weapon::Definition&,fo3vr::V,fo3vr::V,fo3vr::V,fo3vr::V,float damage){++shots;emittedDamage=damage;gPlayerSession->player.ApplyAttack(attacker,base,0x14,damage);}
@@ -34,7 +35,7 @@ static void Prepare() {
   actor.combatWeapons[10]=weapon;actor.runtime.yaw=0;actor.runtime.activity=fo3npc::Activity::Package;actor.runtime.package=50;
   actor.runtime.BeginDialogue();gQ230NpcActors={actor};
   gQ210Head=actor.runtime.position;gQ210Head[1]+=1;gQ210Head[2]-=1;
-  shots=0;blocked=false;partialCover=captureCoverRays=false;coverRayOrigins.clear();loading=false;dialogueEnds=0;
+  actionSounds.clear();shots=0;blocked=false;partialCover=captureCoverRays=false;coverRayOrigins.clear();loading=false;dialogueEnds=0;
 }
 static void AddNpc(fo3player::Catalog& c,uint32_t ref,uint32_t base,uint32_t target=0) {
   auto actor=gQ230NpcActors.front();actor.source.refFormId=ref;actor.source.baseFormId=base;actor.runtime={};actor.runtime.position=gQ230NpcActors.front().runtime.position;actor.runtime.position[2]-=.5f;
@@ -128,8 +129,66 @@ static void CoverGeometryTests(){
   assert(Q230TacticalRoute(actor,threat,0,INFINITY,false,true,2));
   assert(!coverRayOrigins.empty());for(float y:coverRayOrigins)assert(y==Q240ScenePosition(threat)[1]);
 }
+static void ConcurrentWeaponTests(){
+  for(int scenario=0;scenario<4;++scenario){
+    Prepare();auto& a=gQ230NpcActors[0];auto& player=gPlayerSession->player;
+    assert(player.PrepareActorInventory(42)&&Q230SelectWeapon(a));
+    a.stateRestored=true;a.runtime.EndDialogue();a.runtime.BeginCombat(0x14);
+    a.runtime.lastSeen=1;a.runtime.lastThreat=gQ210Head;a.aiLastUpdate=1;
+    a.runtime.combatMovement=fo3npc::CombatAction::Reposition;a.runtime.action=fo3npc::CombatAction::Reload;
+    a.aiPathGame={{1140,2040,20}};a.aiPathSurfaces={{0,0}};
+    a.runtime.reloadUntil=2;a.runtime.actionStart=1;a.runtime.lastActionTime=1;
+    a.animations[size_t(fo3npc::Animation::Reload)].textKeys={{.1f,"Sound: ReloadOut"},{.4f,"Sound: ReloadIn"}};
+    if(scenario==3){a.runtime.moraleFlee=true;a.runtime.nextTactic=100;a.runtime.fleeUntil=100;a.runtime.nextPath=100;}
+    const auto before=a.runtime.position;Q230SimulateActor(a,1.1);
+    assert(a.runtime.position!=before&&a.runtime.reloadUntil==2&&!a.runtime.pendingAttack&&shots==0);
+    if(scenario==3)assert(a.runtime.action==fo3npc::CombatAction::Flee);
+    assert(actionSounds.empty());
+    Q230SimulateActor(a,1.3);Q230SimulateActor(a,1.3);
+    assert(actionSounds==std::vector<std::string>{"ReloadOut"});
+    if(scenario==1)blocked=true;
+    if(scenario==2)gQ210Head[2]-=20;
+    Q230SimulateActor(a,2.1);
+    assert(a.runtime.reloadUntil==0&&player.ActorWeapon(42)->loadedRounds==3&&shots==0);
+    assert((actionSounds==std::vector<std::string>{"ReloadOut","ReloadIn"}));
+    const auto contents=*player.ContainerContents(42);
+    Q230SimulateActor(a,2.11);
+    // No second magazine transaction on the following combat tick.
+    const auto* after=player.ContainerContents(42);
+    assert(after&&after->size()==contents.size());
+    for(size_t j=0;j<after->size();++j)if((*after)[j].formId==11)
+      assert((*after)[j].count==contents[j].count);
+  }
+  // Starting the reload must also precede pursuit/search/cover early returns.
+  for(int scenario=0;scenario<4;++scenario){
+    Prepare();auto& a=gQ230NpcActors[0];
+    assert(gPlayerSession->player.PrepareActorInventory(42)&&Q230SelectWeapon(a));
+    a.stateRestored=true;a.runtime.EndDialogue();a.runtime.BeginCombat(0x14);a.aiLastUpdate=1;
+    a.runtime.lastSeen=1;a.runtime.lastThreat=gQ210Head;
+    a.aiPathGame={{1140,2040,20}};a.aiPathSurfaces={{0,0}};
+    if(scenario==0)gQ210Head[2]-=20;
+    if(scenario==1)blocked=true;
+    if(scenario==2)a.runtime.combatMovement=fo3npc::CombatAction::Cover;
+    if(scenario==3){a.runtime.moraleFlee=true;a.runtime.nextTactic=100;a.runtime.fleeUntil=100;a.runtime.nextPath=100;}
+    Q230SimulateActor(a,1.1);
+    assert(a.runtime.reloadUntil>1.1&&!a.runtime.pendingAttack&&shots==0);
+    const double end=a.runtime.reloadUntil;Q230SimulateActor(a,end+.1);
+    assert(a.runtime.reloadUntil==0&&gPlayerSession->player.ActorWeapon(42)->loadedRounds==3);
+  }
+  Prepare();auto c=gPlayerSession->player.Definitions();
+  auto& style=c.weapons.styles[200];style.valid=style.manoeuvresValid=true;
+  style.dodgeChance=100;style.leftRightChance=100;style.rangeMax=1;
+  style.manoeuvreTimers.fill(1);c.weapons.defaultCombatStyle=200;
+  gPlayerSession=std::make_unique<Session>(c);auto& a=gQ230NpcActors[0];
+  assert(gPlayerSession->player.PrepareActorInventory(42)&&Q230SelectWeapon(a));
+  assert(gPlayerSession->player.ReloadActorWeapon(42,a.runtime.equippedWeapon));
+  a.stateRestored=true;a.runtime.EndDialogue();a.runtime.BeginCombat(0x14);a.aiLastUpdate=1;
+  a.runtime.pendingAttack=true;a.runtime.pendingHit=1.5;a.runtime.actionStart=1;a.runtime.actionUntil=1.6;
+  Q230SimulateActor(a,1.1);
+  assert(a.runtime.nextManoeuvre>1.1&&a.runtime.pendingAttack&&a.runtime.pendingHit==1.5&&shots==0);
+}
 int main(int argc,char** argv){
-  WeaponCommitAndMeleeTests();CoverGeometryTests();
+  WeaponCommitAndMeleeTests();CoverGeometryTests();ConcurrentWeaponTests();
   {
     Prepare();auto& actor=gQ230NpcActors[0];assert(gPlayerSession->player.PrepareActorInventory(42));
     assert(Q230SelectWeapon(actor));assert(gPlayerSession->player.ReloadActorWeapon(42,actor.runtime.equippedWeapon));

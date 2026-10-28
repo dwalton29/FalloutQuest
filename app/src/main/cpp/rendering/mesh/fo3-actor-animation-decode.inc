@@ -316,6 +316,7 @@ static bool DecodeClips(const std::vector<uint8_t> &bytes, std::vector<fo3anim::
         continue;
       }
       Track track;
+      track.priority = priority;
       track.bone = h.strings[strings[0]];
       if (!ActorTrack(bytes, h, interp, track)) {
         Q6H_LOGW("ACTOR CLIP UNSUPPORTED: block=%u bone=%s type=%s", interp,
@@ -326,10 +327,10 @@ static bool DecodeClips(const std::vector<uint8_t> &bytes, std::vector<fo3anim::
         ++clip.compressedTracks;
       clip.tracks.push_back(std::move(track));
     }
-    float weight = 0;
     uint32_t text = 0, manager = 0, root = 0;
     uint16_t notes = 0;
-    if (!c.F32(weight) || !c.U32(text) || !c.U32(clip.cycle) ||
+    if (!c.F32(clip.weight) || !ActorValid(clip.weight) || clip.weight < 0 ||
+        !c.U32(text) || !c.U32(clip.cycle) ||
         clip.cycle > 2 || !c.F32(clip.frequency) || !c.F32(clip.start) ||
         !c.F32(clip.stop) || !c.U32(manager) || !c.U32(root) ||
         !ActorValid(clip.start) || !ActorValid(clip.stop) ||

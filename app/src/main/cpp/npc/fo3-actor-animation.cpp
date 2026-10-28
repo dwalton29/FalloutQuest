@@ -136,6 +136,8 @@ void BindClip(const Skeleton &s, const Clip &c, Pose &p) {
   p.global.resize(s.bones.size());
   p.delta.resize(s.bones.size());
   p.evaluated.resize(s.bones.size());
+  p.priorities.resize(s.bones.size());
+  p.channels.resize(s.bones.size());
   p.trackBones.clear();
   for (const Track &t : c.tracks)
     p.trackBones.push_back(FindBone(s, t.bone));
@@ -222,6 +224,7 @@ bool Sample(const Skeleton &s, const Clip &c, double elapsed, Pose &p, SampleTim
   const auto started=std::chrono::steady_clock::now();
   if (p.trackBones.size() != c.tracks.size() ||
       p.local.size() != s.bones.size() ||
+      p.priorities.size() != s.bones.size() || p.channels.size() != s.bones.size() ||
       p.accumulationRoot != c.accumulationRoot)
     BindClip(s, c, p);
   double d = c.stop - c.start, t = elapsed * c.frequency;
@@ -241,6 +244,8 @@ bool Sample(const Skeleton &s, const Clip &c, double elapsed, Pose &p, SampleTim
   } else
     t = 0;
   float time = c.start + static_cast<float>(t);
+  std::fill(p.priorities.begin(),p.priorities.end(),0);
+  std::fill(p.channels.begin(),p.channels.end(),0);
   for (size_t i = 0; i < s.bones.size(); ++i)
     p.local[i] = s.bones[i].bind;
   const int accumulation=p.accumulation;
@@ -256,6 +261,8 @@ bool Sample(const Skeleton &s, const Clip &c, double elapsed, Pose &p, SampleTim
     if (bone == accumulation && rootPolicy==RootPolicy::Locomotion)
       continue;
     const Track &track = c.tracks[i];
+    p.priorities[bone]=track.priority;
+    p.channels[bone]=(track.hasTranslation?1:0)|(track.hasRotation?2:0)|(track.hasScale?4:0);
     Transform &local = p.local[bone];
     if (track.hasTranslation) {
       auto v =
@@ -324,6 +331,58 @@ bool ComposePose(const Skeleton& s,Pose& p) {
     for (float v : m)
       if (!std::isfinite(v))
         return false;
+  return true;
+}
+Transform MixTransform(const Transform& from,const Transform& to,float weight){
+  const float w=std::clamp(weight,0.f,1.f);
+  if(w>=1)return to;
+  if(w<=0)return from;
+  Transform result;
+  for(int i=0;i<3;++i)result.translation[i]=from.translation[i]+(to.translation[i]-from.translation[i])*w;
+  result.rotation=Slerp(from.rotation,to.rotation,w);
+  result.scale=from.scale+(to.scale-from.scale)*w;return result;
+}
+bool OverlayPriority(const Skeleton& s,Pose& base,const Clip& clip,const Pose& overlay,float weight){
+  const size_t size=s.bones.size();
+  if(base.local.size()!=size||overlay.local.size()!=size||base.priorities.size()!=size||
+     base.channels.size()!=size||overlay.trackBones.size()!=clip.tracks.size()||!std::isfinite(weight)||!std::isfinite(clip.weight))return false;
+  const float mix=std::clamp(weight*clip.weight,0.f,1.f);
+  if(mix<=0)return true;
+  for(size_t i=0;i<clip.tracks.size();++i){
+    const int bone=overlay.trackBones[i];const auto& t=clip.tracks[i];
+    if(bone<0||size_t(bone)>=size||bone==base.accumulation||t.priority<base.priorities[bone]||
+       !(t.hasTranslation||t.hasRotation||t.hasScale))continue;
+    const auto target=MixTransform(base.local[bone],overlay.local[bone],mix);
+    if(t.hasTranslation)base.local[bone].translation=target.translation;
+    if(t.hasRotation)base.local[bone].rotation=target.rotation;
+    if(t.hasScale)base.local[bone].scale=target.scale;
+    base.priorities[bone]=t.priority;
+    base.channels[bone]|=(t.hasTranslation?1:0)|(t.hasRotation?2:0)|(t.hasScale?4:0);
+  }
+  return ComposePose(s,base);
+}
+bool ApplyAimDelta(Pose& weapon,const Pose& neutral,const Pose& direction,float weight){
+  const size_t size=weapon.local.size();
+  if(neutral.local.size()!=size||direction.local.size()!=size||neutral.channels.size()!=size||
+     direction.channels.size()!=size||!std::isfinite(weight))return false;
+  for(size_t i=0;i<size;++i){
+    if(int(i)==weapon.accumulation)continue;
+    const auto channels=neutral.channels[i]&direction.channels[i];
+    if(channels&1)for(int j=0;j<3;++j)
+      weapon.local[i].translation[j]+=(direction.local[i].translation[j]-neutral.local[i].translation[j])*std::clamp(weight,0.f,1.f);
+    if(channels&2){
+      auto inverse=Normalize(neutral.local[i].rotation);
+      for(int j=1;j<4;++j)inverse[j]=-inverse[j];
+      const auto product=[](const std::array<float,4>& a,const std::array<float,4>& b){
+        return std::array<float,4>{a[0]*b[0]-a[1]*b[1]-a[2]*b[2]-a[3]*b[3],
+          a[0]*b[1]+a[1]*b[0]+a[2]*b[3]-a[3]*b[2],
+          a[0]*b[2]-a[1]*b[3]+a[2]*b[0]+a[3]*b[1],
+          a[0]*b[3]+a[1]*b[2]-a[2]*b[1]+a[3]*b[0]};
+      };
+      const auto delta=Slerp({1,0,0,0},product(direction.local[i].rotation,inverse),std::clamp(weight,0.f,1.f));
+      weapon.local[i].rotation=Normalize(product(delta,weapon.local[i].rotation));
+    }
+  }
   return true;
 }
 bool OverlayBranch(const Skeleton& s,Pose& base,const Pose& overlay,int branch){

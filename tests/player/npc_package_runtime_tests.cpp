@@ -38,7 +38,7 @@ struct Q240NavigationGraph {
   std::vector<size_t> triangleOffsets;
   size_t triangleCount=0;
 };
-struct Q230CombatWeapon {fo3weapon::Definition definition;std::array<fo3anim::Clip,4> clips;std::vector<size_t> gpu;std::array<float,3> muzzle{};bool ready=false;};
+struct Q230CombatWeapon {fo3weapon::Definition definition;std::array<fo3anim::Clip,4> clips;std::array<fo3anim::Clip,2> aimVariants;std::vector<size_t> gpu;std::array<float,3> muzzle{};bool ready=false;};
 struct Q230ActorVisual {
   fo3face::Weights facialWeights{};
   std::unordered_map<uint32_t,Q230CombatWeapon> combatWeapons;

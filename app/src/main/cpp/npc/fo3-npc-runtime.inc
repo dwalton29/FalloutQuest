@@ -1,3 +1,4 @@
+#include "fo3-combat-animation.h"
 #include "rendering/performance-capture.h"
 void Q230CacheDialogueAnimations(Q230ActorVisual& actor,const fo3pipdata::Definitions* d) {
   actor.animations[0]=actor.clip;
@@ -71,6 +72,12 @@ void Q230CacheCombat(Q230ActorVisual& actor,const fo3player::Catalog* catalog) {
     placement.baseRecordType="WEAP";placement.scale=1;
     std::vector<CpuObject> parts;if(!BuildCpuObjects(placement,parts))continue;
     for(auto& part:parts)actor.parts.push_back(std::move(part));
+    for(size_t i=0;i<2;++i){
+      const auto path=root+group+(i==0?"aimup.kf":"aimdown.kf");
+      auto& aim=ready.aimVariants[i];
+      if(!LoadFalloutMeshFile(path,bytes)||!fo3anim::DecodeClip(bytes,aim)||
+         aim.name!=(i==0?"AimUp":"AimDown"))aim={};
+    }
     ready.ready=true;actor.combatWeapons.emplace(form,std::move(ready));
     fo3audio::PreloadSound(d.fire3D);fo3audio::PreloadSound(d.equip);
   }
@@ -504,14 +511,13 @@ void Q230UpdateActor(Q230ActorVisual &actor) {
   int selected=int(actor.runtime.animation);
   if(selected<0||size_t(selected)>=actor.animations.size())selected=0;
   if(actor.animations[selected].tracks.empty())selected=0;
-  if(selected!=actor.activeAnimation
-#ifndef FO3_ACTOR_RUNTIME_HOST_TEST
-     ||actor.animationSerial!=actor.runtime.actionSerial
-#endif
-     ) {
-#ifndef FO3_ACTOR_RUNTIME_HOST_TEST
+  const bool combatLayer=actor.runtime.activity==fo3npc::Activity::Combat&&
+      actor.runtime.equippedWeapon&&actor.runtime.animation!=fo3npc::Animation::Hit;
+  if(combatLayer&&(selected==int(fo3npc::Animation::Attack)||selected==int(fo3npc::Animation::Reload)))
+    selected=int(fo3npc::Animation::Aim);
+  const bool locomotion=fo3npc::Locomotion(fo3npc::Animation(selected));
+  if(selected!=actor.activeAnimation||(!locomotion&&!combatLayer&&actor.animationSerial!=actor.runtime.actionSerial)) {
     actor.animationSerial=actor.runtime.actionSerial;
-#endif
     actor.blendFrom=actor.pose.local;actor.blendStart=elapsed;actor.activeAnimation=selected;
     fo3anim::BindClip(actor.skeleton,actor.animations[selected],actor.pose);
     if(actor.runtime.activity!=fo3npc::Activity::Combat)
@@ -521,11 +527,6 @@ void Q230UpdateActor(Q230ActorVisual &actor) {
   }
   const auto& clip=actor.animations[actor.activeAnimation].tracks.empty()?actor.clip:actor.animations[actor.activeAnimation];
   const double clipTime=actor.blendStart<0?elapsed:elapsed-actor.blendStart;
-  const bool locomotion=actor.runtime.animation==fo3npc::Animation::Walk||
-      actor.runtime.animation==fo3npc::Animation::Run||
-      actor.runtime.animation==fo3npc::Animation::StepLeft||
-      actor.runtime.animation==fo3npc::Animation::StepRight||
-      actor.runtime.animation==fo3npc::Animation::StepBack;
   const double sampleTime=actor.runtime.activity==fo3npc::Activity::Dead?
       std::max(0.f,clip.stop-clip.start):locomotion?actor.runtime.locomotionTime:clipTime;
   const auto& furniture=actor.runtime.furniture;
@@ -553,21 +554,13 @@ void Q230UpdateActor(Q230ActorVisual &actor) {
       actor.pose.local[size_t(actor.pose.accumulation)]=fo3anim::Transform{};
     fo3anim::ComposePose(actor.skeleton,actor.pose);
   }
-#ifndef FO3_ACTOR_RUNTIME_HOST_TEST
-  // Use the equipped weapon's original Aim pose above the source Spine2,
-  // leaving the original movement clip's hips/legs and in-place root intact.
-  // This branch-composition rule is a Quest bridge, not Bethesda's full graph.
-  if(locomotion&&!furniturePose&&actor.runtime.activity==fo3npc::Activity::Combat&&
-     actor.runtime.action!=fo3npc::CombatAction::Flee&&actor.runtime.equippedWeapon&&
-     !actor.animations[size_t(fo3npc::Animation::Aim)].tracks.empty()){
-    const double actionNow=std::chrono::duration<double>(Fo3GameplayNow().time_since_epoch()).count();
-    const bool attacking=actor.runtime.pendingAttack||actionNow<actor.runtime.actionUntil;
-    const auto& aim=actor.animations[size_t(attacking?fo3npc::Animation::Attack:fo3npc::Animation::Aim)];
-    fo3anim::BindClip(actor.skeleton,aim,actor.weaponAimPose);
-    if(fo3anim::Sample(actor.skeleton,aim,attacking?std::max(0.,actionNow-actor.runtime.actionStart):0,actor.weaponAimPose))
-      fo3anim::OverlayBranch(actor.skeleton,actor.pose,actor.weaponAimPose,actor.chestBone);
+  if(combatLayer&&!furniturePose&&
+     (actor.runtime.action!=fo3npc::CombatAction::Flee||actor.runtime.reloadUntil>0)){
+    const double now=std::chrono::duration<double>(Fo3GameplayNow().time_since_epoch()).count();
+    fo3npc::LayerWeapon(actor.skeleton,actor.pose,actor.animations,actor.runtime,now,elapsed,actor.combatPose);
+  }else{
+    actor.combatPose.instance=0;actor.combatPose.selected=fo3npc::Animation::Count;
   }
-#endif
   if(!furniturePose)fo3anim::LookYaw(actor.skeleton,actor.pose,actor.headBone,actor.runtime.headYaw);
   auto root=fo3anim::Identity();const float yaw=actor.runtime.yaw-actor.runtime.authoredYaw;
   root[0]=root[10]=std::cos(yaw);root[2]=-std::sin(yaw);root[8]=-root[2];

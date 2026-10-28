@@ -4,6 +4,7 @@
 // Execute the production actor/render bridge with a recording GL adapter.
 #include "../../app/src/main/cpp/rendering/mesh/fo3-static-nif.h"
 #include "fo3-actor-animation.h"
+#include "npc/fo3-combat-animation.h"
 #include "fo3-npc.h"
 #include "../..//app/src/main/cpp/npc/fo3-npc-state.h"
 #include "../..//app/src/main/cpp/pipboy/fo3-pipboy-data.h"
@@ -72,6 +73,8 @@ struct Q230ActorVisual {
   fo3anim::Skeleton skeleton;
   fo3anim::Clip clip;
   fo3anim::Pose pose;
+  fo3npc::CombatPose combatPose;
+  uint64_t animationSerial=0;
   std::vector<CpuObject> parts;
   std::vector<GpuObject> objects;
   std::vector<Q230RigPart> rigs;
@@ -179,6 +182,70 @@ std::chrono::steady_clock::time_point Fo3ResidentRawSteadyNow() noexcept {
 #include "world/fo3-resident-time-runtime.inc"
 #include "../../app/src/main/cpp/npc/fo3-npc-runtime.inc"
 #undef FO3_ACTOR_RUNTIME_HOST_TEST
+static void CombatCompositionTests(){
+  using namespace fo3anim;using namespace fo3npc;
+  Q230ActorVisual a;
+  for(const auto& name:{"Bip01","Bip01 Pelvis","Bip01 Spine2","Weapon"}){
+    Bone bone;bone.name=name;bone.parent=a.skeleton.bones.empty()?-1:int(a.skeleton.bones.size()-1);
+    a.skeleton.bones.push_back(bone);
+  }
+  assert(FinalizeSkeleton(a.skeleton));
+  a.objects.resize(1);a.rigs.resize(1);a.rigs[0].skin.palette.resize(1);
+  a.rigs[0].scenePlacement=a.rigs[0].inverseScenePlacement=Identity();
+  const auto make=[](int lower,int upper,float hips,float spine){
+    Clip c;c.stop=10;c.cycle=2;c.accumulationRoot="Bip01";
+    Track leg;leg.bone="Bip01 Pelvis";leg.priority=uint8_t(lower);leg.hasTranslation=true;leg.base.translation={hips,0,0};
+    Track torso;torso.bone="Bip01 Spine2";torso.priority=uint8_t(upper);torso.hasTranslation=torso.hasRotation=true;
+    torso.base.translation={0,0,spine};c.tracks={leg,torso};return c;
+  };
+  auto walk=make(30,30,0,0);walk.tracks[0].translation.dimensions=3;
+  walk.tracks[0].translation.keys={{0,{0,0,0},{},{}},{10,{10,0,0},{},{}}};
+  a.animations[size_t(Animation::Walk)]=walk;
+  a.animations[size_t(Animation::Aim)]=make(25,35,99,1);
+  a.animations[size_t(Animation::Attack)]=make(26,55,99,5);
+  a.animations[size_t(Animation::Attack)].textKeys={{0,"Hit"}};
+  a.animations[size_t(Animation::Reload)]=make(27,65,99,1);
+  a.animations[size_t(Animation::Reload)].stop=2;
+  auto& reload=a.animations[size_t(Animation::Reload)].tracks[1];reload.translation.dimensions=3;
+  reload.translation.keys={{0,{0,0,1},{},{}},{2,{0,0,3},{},{}}};
+  a.animations[size_t(Animation::AimUp)]=a.animations[size_t(Animation::Aim)];
+  a.animations[size_t(Animation::AimUp)].tracks[1].base.rotation={std::sqrt(.5f),std::sqrt(.5f),0,0};
+  a.runtime.activity=Activity::Combat;a.runtime.equippedWeapon=1;
+  a.runtime.animation=Animation::Walk;a.runtime.locomotionTime=1;
+  a.animationStart=Fo3GameplayNow();
+  const auto now=[](){return std::chrono::duration<double>(Fo3GameplayNow().time_since_epoch()).count();};
+  const auto update=[&](){++gStereoFrame;Q230UpdateActor(a);};
+  update();const auto gaitBlend=a.blendStart;
+  assert(std::abs(a.pose.local[1].translation[0]-1)<1e-5f);
+  for(int i=0;i<6;++i){
+    residentRawNow+=std::chrono::milliseconds{100};a.runtime.locomotionTime+=.1;
+    a.runtime.pendingAttack=true;a.runtime.actionStart=now();++a.runtime.actionSerial;
+    update();
+    assert(a.blendStart==gaitBlend); // Every shot must leave the gait blend alone.
+    assert(std::abs(a.pose.local[1].translation[0]-a.runtime.locomotionTime)<1e-5f);
+    assert(std::abs(a.pose.local[2].translation[2]-5)<1e-5f);
+    assert(a.pose.local[0].translation==Transform{}.translation);
+  }
+  a.runtime.pendingAttack=false;a.runtime.reloadUntil=now()+3;a.runtime.actionStart=now();++a.runtime.actionSerial;
+  update();residentRawNow+=std::chrono::milliseconds{500};a.runtime.locomotionTime+=.5;update();
+  assert(a.blendStart==gaitBlend&&std::abs(a.pose.local[1].translation[0]-a.runtime.locomotionTime)<1e-5f);
+  assert(std::abs(a.pose.local[2].translation[2]-(1.f+1.f/3.f))<1e-5f); // Source reload spans the committed 3-second duration.
+  a.runtime.reloadUntil=0;a.runtime.aimPitch=.7853981634f;update();
+  residentRawNow+=std::chrono::milliseconds{400};a.runtime.locomotionTime+=.4;update();
+  auto aimed=Point(a.pose.global[2],{0,1,0},true);
+  assert(std::abs(aimed[1]-std::sqrt(.5f))<1e-5f&&std::abs(aimed[2]-std::sqrt(.5f))<1e-5f);
+  // Missing optional downward pose cannot reuse the cached upward pose.
+  a.runtime.aimPitch=-.7853981634f;update();
+  aimed=Point(a.pose.global[2],{0,1,0},true);assert(std::abs(aimed[1]-1)<1e-5f&&std::abs(aimed[2])<1e-5f);
+  // Authored zero-weight layers do not override the base, including torso.
+  a.animations[size_t(Animation::Aim)].weight=0;update();
+  assert(a.pose.local[2].translation[2]==0);
+  a.runtime.activity=Activity::Package;a.runtime.animation=Animation::Idle;update();
+  assert(a.combatPose.instance==0&&a.combatPose.selected==Animation::Count);
+  a.animations[size_t(Animation::Aim)].weight=1;
+  a.runtime.activity=Activity::Combat;a.runtime.animation=Animation::Walk;update();
+  assert(a.combatPose.instance==1&&a.combatPose.from.empty());
+}
 int main() {
   // FO3 rigid parts keep actor axes despite a rotated head bone.
   {
@@ -327,5 +394,6 @@ int main() {
   residentRawNow+=std::chrono::milliseconds{500};
   ++gStereoFrame;Q230UpdateActor(animated);
   assert(std::fabs(animated.pose.local.front().translation[0]-beforePause[0]-.5f)<1e-5f);
-  std::cout << "Actor runtime bridge tests passed\n";
+  CombatCompositionTests();
+  std::cout << "Actor runtime bridge and concurrent combat composition tests passed\n";
 }

@@ -81,6 +81,7 @@ extern void PumpFo3AndroidEventsQ1860();
 #include "fo3-megaton-scene.h"
 #include "fo3-npc.h"
 #include "fo3-actor-animation.h"
+#include "npc/fo3-combat-animation.h"
 #include "player/fo3-player-state.h"
 #include "player/fo3-development-clock.h"
 #include "ui/pause/fo3-debug-menu.h"
@@ -795,6 +796,7 @@ struct Q230CombatWeapon {
     fo3anim::Skeleton model;
     std::vector<int> modelBlocks;
     std::array<fo3anim::Clip,4> clips; // aim, attack, reload, recoil
+    std::array<fo3anim::Clip,2> aimVariants;
     std::vector<size_t> gpu;
     std::array<float,3> muzzle{};
     bool ready=false;
@@ -813,7 +815,7 @@ struct Q230ActorVisual {
     fo3anim::Skeleton skeleton;
     fo3anim::Clip clip;
     fo3anim::Pose pose;
-    fo3anim::Pose weaponAimPose;
+    fo3npc::CombatPose combatPose;
     std::vector<CpuObject> parts;
     std::vector<GpuObject> objects;
     std::vector<Q230RigPart> rigs;

@@ -33,6 +33,7 @@ struct Channel {
 };
 struct Track {
   std::string bone;
+  uint8_t priority = 0; // NiControllerSequence controlled-block priority.
   Transform base;
   bool hasTranslation = false, hasRotation = false, hasScale = false;
   float start = 0, stop = 0;
@@ -46,6 +47,7 @@ struct TextKey {
 struct Clip {
   std::string name, accumulationRoot;
   float start = 0, stop = 0, frequency = 1;
+  float weight = 1; // Authored NiControllerSequence weight.
   uint32_t cycle = 0;
   std::vector<Track> tracks;
   std::vector<TextKey> textKeys;
@@ -59,6 +61,7 @@ struct Pose {
   std::vector<Matrix> global, delta;
   std::vector<int> trackBones;
   std::vector<uint8_t> evaluated;
+  std::vector<uint8_t> priorities, channels;
 };
 Matrix Identity();
 Matrix Multiply(const Matrix &a, const Matrix &b);
@@ -71,6 +74,11 @@ bool FinalizeSkeleton(Skeleton &skeleton);
 // Compose independently authored upper/lower pose branches. Root/world motion
 // stays with navigation; the source skeleton supplies the branch topology.
 bool OverlayBranch(const Skeleton&,Pose& base,const Pose& overlay,int branch);
+Transform MixTransform(const Transform&,const Transform&,float weight);
+// Only authored channels participate; lower-priority weapon leg tracks cannot
+// replace locomotion. Equal-priority tie order is an explicit Quest policy.
+bool OverlayPriority(const Skeleton&,Pose& base,const Clip&,const Pose& overlay,float weight=1);
+bool ApplyAimDelta(Pose& weapon,const Pose& neutral,const Pose& direction,float weight);
 int FindBone(const Skeleton &skeleton, const std::string &name);
 void BindClip(const Skeleton &skeleton, const Clip &clip, Pose &pose);
 enum class RootPolicy { Locomotion, Furniture };
