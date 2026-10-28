@@ -1,27 +1,20 @@
 """Integration guards for the actual render-thread release and stereo paths."""
 import pathlib
-import hashlib
 import unittest
 ROOT=pathlib.Path(__file__).resolve().parents[2]
 class ShoulderIntegration(unittest.TestCase):
-    def test_normal_throw_preserved(self):
-        path='app/src/main/cpp/core/fo3-runtime.cpp'
-        after=(ROOT/path).read_text()
-        def throw(s):
-            start=s.index('            const uint32_t releasedRef =',s.index('void Q220UpdateLooseGrab('))
-            end=s.index('        } else {',start)
-            return s[start:end]
-        # v154 ordinary throw/drop block; hash avoids requiring git history in CI.
-        released=throw(after)
-        self.assertEqual(released.count('Fo3GameplayNow()'),1)
-        # Only the clock source changed: all original throw/drop mechanics
-        # remain byte-identical after normalizing the resident pause adapter.
-        released=released.replace('Fo3GameplayNow()','std::chrono::steady_clock::now()')
-        self.assertEqual(hashlib.sha256(released.encode()).hexdigest(),"d801a612efb27e313c11940bbd654c898d844c4ec16b9f686159a9de147cdb11")
-        f=after[after.index('void Q220UpdateLooseGrab('):after.index('void Q221UpdateLooseObjectsFromSolvedPalms(')]
-        self.assertLess(f.index('CollectFo3WorldReference(ref)'),f.index('const uint32_t releasedRef'))
-        self.assertIn('state.previousGrip=grip;return;',f)
-        self.assertLess(f.index('const bool resident='),f.index('if (!handValid)'))
+    def test_physical_release_preserves_shoulder_priority(self):
+        runtime=(ROOT/'app/src/main/cpp/core/fo3-runtime.cpp').read_text()
+        grab=runtime.split('void Q220UpdateLooseGrab(',1)[1].split('void Q221UpdateLooseObjectsFromSolvedPalms(',1)[0]
+        self.assertLess(grab.index('CollectFo3WorldReference(ref)'),grab.index('if(grip<=RELEASE)'))
+        released=grab.split('if(grip<=RELEASE){',1)[1].split('}else{',1)[0]
+        self.assertIn('fo3rigid::Live().Release(handIndex)',released)
+        self.assertNotIn('sampledLinearVelocity',released)
+        self.assertNotIn('sampledAngularVelocity',released)
+        self.assertIn('state.previousGrip=grip;return;',grab)
+        self.assertLess(grab.index('const bool resident='),grab.index('if (!handValid)'))
+        self.assertIn('Fo3GameplayNow()',runtime.split('void Q223AdvanceDynamicBodies()',1)[1].split('bool Q220FindNearestLooseRef(',1)[0])
+
     def test_prompt_renderer_has_no_driver_snapshot(self):
         prompt=(ROOT/'app/src/main/cpp/ui/interaction/fo3-interaction-hud-renderer.h').read_text()
         render=prompt[prompt.index('inline void Render('):prompt.index('inline void Shutdown()')]

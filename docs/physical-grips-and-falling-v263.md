@@ -25,6 +25,7 @@ worker, not on grab/finger updates. FO3 bhkRigidBodyCInfo550_660 mass, centre of
 mass, friction, restitution, damping and inertia are decoded. Original inertia
 is transformed into render coordinates with Havok-to-metre squared scale and
 converted to principal axes internally without changing model-space poses.
+Authored zero mass remains immovable; it is not replaced by the VR fallback.
 Each authored collision leaf supplies a convex hull; concave movable leaves
 therefore use their convex envelope. NIFs without BHK use a hull of authored
 visible geometry and a disclosed 1 kg/default-material VR fallback. Compound

@@ -788,7 +788,7 @@ inline bool LoadFo3NifCollisionShapesImpl(const std::string& modelPath,
             for(int a=0;a<3;++a)shape.centerOfMass[a]=ReadLeFloat(body+164u+a*4)*FO3_HAVOK_TO_NIF;
             for(int r=0;r<3;++r)for(int c=0;c<3;++c)shape.inertiaTensor[r*3+c]=ReadLeFloat(body+116u+r*16+c*4);
             shape.motionSystem=body[212u];
-            shape.physicalProperties=std::isfinite(shape.massKg)&&shape.massKg>0&&
+            shape.physicalProperties=std::isfinite(shape.massKg)&&shape.massKg>=0&&
                 std::isfinite(shape.linearDamping)&&std::isfinite(shape.angularDamping)&&
                 std::isfinite(shape.friction)&&std::isfinite(shape.restitution);
         }

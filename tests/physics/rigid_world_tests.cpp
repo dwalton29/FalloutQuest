@@ -38,7 +38,8 @@ int main(){
     assert(!w.Grab(3,1,At(1.21f,1,0),surface)); // One body cannot have two primary owners.
     assert(w.Intersects(3,{p[12],p[13],p[14]},.005f));
     assert(!w.Intersects(3,{p[12],p[13]+.2f,p[14]},.005f));
-    w.Release(0);assert(!w.Held(0));
+    V beforeRelease,afterRelease;w.Pose(3,p,&beforeRelease);
+    w.Release(0);w.Pose(3,p,&afterRelease);assert(beforeRelease==afterRelease&&!w.Held(0));
     for(int i=0;i<240;++i)w.Step(1.f/120);
     w.Pose(3,p);assert(p[13]>.005f&&p[13]<.04f);
     // Continuous capsule landing: a large downward motion cannot skip a floor.
