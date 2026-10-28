@@ -25,7 +25,7 @@ fo3weapon::Inputs inputs;
 fo3weapon::Trigger trigger;
 uint64_t active=0;
 bool held=false,support=false,inside=false,magazine=false,charging=false,pouchNearby=false;
-bool rawHeldReady=false;Matrix rawToWeapon=fo3anim::Identity();V rawPalmLocal{};
+bool rawHeldReady=false;Matrix rawToWeapon=fo3anim::Identity();V rawPalmLocal{},rawSupportPalmLocal{};
 Matrix pose=fo3anim::Identity(),magPose=fo3anim::Identity(),magStart=fo3anim::Identity();
 V supportLocal{},chargeStart{},magPalm{};
 float magQuat[4]{0,0,0,1};
@@ -139,6 +139,7 @@ bool Resident(const fo3weapon::WorldPose&p){
   return p.world!=0x3c||fo3weapon::CollisionResident(p,gExteriorWindowGridXQ1890,gExteriorWindowGridYQ1890);
 }
 Matrix RawPrimaryHand(){Matrix raw;const float identity[4]{0,0,0,1};Q220ControllerDeltaMatrix({},identity,{gQ210RightHand[0],gQ210RightHand[1],gQ210RightHand[2]},gQ218RightHandQuat,raw.data());return raw;}
+Matrix RawSupportHand(){Matrix raw;const float identity[4]{0,0,0,1};Q220ControllerDeltaMatrix({},identity,{gQ210LeftHand[0],gQ210LeftHand[1],gQ210LeftHand[2]},gQ218LeftHandQuat,raw.data());return raw;}
 Matrix HandPose(const Model&m){
   const int hand=fo3anim::FindBone(gVrSkeleton,"Bip01 R Hand");
   if(hand<0)return pose;
@@ -358,6 +359,7 @@ void WeaponUpdate(double now,bool backButton){
     for(int hand=0;hand<2;hand++)gQ220Grab[hand].previousGrip=gQ217FingerGrip[hand];return;
   }
   Zones();
+  bool physicsAdvanced=false;
   Model*m=s?Ensure(s->formId):nullptr;
   if(s&&m){const auto&d=p.Definitions().items.at(s->formId).weapon;auto&zone=d.LongGun()?back:hip;
     if(!held){const V display=d.LongGun()?zone.center:fo3weapon::HipDisplay(zone);pose=Rigid(fo3vr::Multiply(zone.body,fo3vr::Axis({0,0,1},d.LongGun()?fo3vr::Pi*.5f:-fo3vr::Pi*.5f)),display);}
@@ -368,14 +370,17 @@ void WeaponUpdate(double now,bool backButton){
         if(fo3anim::Inverse(raw,inverse)){rawToWeapon=fo3anim::Multiply(inverse,pose);rawPalmLocal=Point(inverse,VrPoint(gWeaponPalm[1]));rawHeldReady=true;}
       }
       pose=fo3anim::Multiply(raw,rawToWeapon);
-      const V right=Point(raw,rawPalmLocal),left=VrPoint(gWeaponPalm[0]);
+      const auto rawSupport=RawSupportHand();
+      const V right=Point(raw,rawPalmLocal),left=support?Point(rawSupport,rawSupportPalmLocal):VrPoint(gWeaponPalm[0]);
       const V supportAnchor=GamePoint(m->asset.support);
       // Authored support palm with a 20cm sliding fore-end access segment.
       const V begin=Point(pose,supportAnchor+V{-.10f,0,0}),end=Point(pose,supportAnchor+V{.10f,0,0});
       if(support&&(!gWeaponPalmValid[0]||gQ217FingerGrip[0]<=.25f)){support=false;supportWeight=0;Log("SUPPORT RELEASE",s->id,s->formId);}
       if(inputs.l&&!gQ220Grab[0].active&&gWeaponPalmValid[0]&&d.LongGun()&&m->asset.hasSupport&&!magazine&&!charging){
         const auto point=fo3weapon::ClosestSupport(left,begin,end);
-        if(fo3vr::Length(left-point)<.12f){Matrix inverse;if(fo3anim::Inverse(pose,inverse)){supportLocal=Point(inverse,point);support=true;Pulse(0);Log("SUPPORT",s->id,s->formId);}}
+        if(fo3vr::Length(left-point)<.12f){Matrix inverse;if(fo3anim::Inverse(pose,inverse)){supportLocal=Point(inverse,point);Matrix inverseSupport;
+          if(fo3anim::Inverse(rawSupport,inverseSupport))rawSupportPalmLocal=Point(inverseSupport,left);
+          support=true;Pulse(0);Log("SUPPORT",s->id,s->formId);}}
       }
       if(support&&gWeaponPalmValid[0]){
         const auto gripLocal=Point(GameRigid(m->asset.handToWeapon),{});
@@ -393,6 +398,9 @@ void WeaponUpdate(double now,bool backButton){
         const auto target=Rigid(Rotation(pose),Point(pose,local));
         if(physics.Held(1)!=key){physics.Place(key,target);physics.Grab(key,1,Rigid(Rotation(raw),right),{right.x,right.y,right.z});}
         physics.TargetBody(key,target);
+        // Solve the current tracking target before sampling aim, throw velocity,
+        // reload geometry and the displayed gun. Advance the shared world once.
+        Q223AdvanceDynamicBodies();physicsAdvanced=true;
         Matrix actual;if(physics.Pose(key,actual))pose=Rigid(Rotation(actual),Position(actual)-Direction(actual,local));
       }
       if(support&&gWeaponPalmValid[0])AlignSupportHand(*m);
@@ -468,7 +476,7 @@ void WeaponUpdate(double now,bool backButton){
     }
   }
   if(ejectUntil>now){ejectVelocity.y-=9.80665f*dt;ejectPose[12]+=ejectVelocity.x*dt;ejectPose[13]+=ejectVelocity.y*dt;ejectPose[14]+=ejectVelocity.z*dt;}
-  Q223AdvanceDynamicBodies();
+  if(!physicsAdvanced)Q223AdvanceDynamicBodies();
   if(!support&&!magazine&&!charging)Q220UpdateLooseGrab(0,gWeaponPalmValid[0],gWeaponPalm[0],gQ218LeftHandQuat,gQ217FingerGrip[0]);
   if(!held)Q220UpdateLooseGrab(1,gWeaponPalmValid[1],gWeaponPalm[1],gQ218RightHandQuat,gQ217FingerGrip[1]);
   else gQ220Grab[1].previousGrip=gQ217FingerGrip[1];

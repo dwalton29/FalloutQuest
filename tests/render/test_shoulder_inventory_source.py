@@ -27,6 +27,15 @@ class ShoulderIntegration(unittest.TestCase):
         self.assertIn('gQ218RightHandQuat',raw)
         self.assertNotIn('gVrSolved',raw)
         self.assertIn('pose=fo3anim::Multiply(raw,rawToWeapon)',weapon)
+        support=weapon.split('Matrix RawSupportHand()',1)[1].split('Matrix HandPose(',1)[0]
+        self.assertIn('gQ210LeftHand[0]',support)
+        self.assertIn('gQ218LeftHandQuat',support)
+        self.assertNotIn('gVrSolved',support)
+        self.assertIn('left=support?Point(rawSupport,rawSupportPalmLocal)',weapon)
+        after_step=weapon.split('Q223AdvanceDynamicBodies();',1)[1]
+        self.assertIn('physics.Pose(key,actual)',after_step)
+        self.assertIn('if(!physicsAdvanced)Q223AdvanceDynamicBodies();',weapon)
+
 
     def test_prompt_renderer_has_no_driver_snapshot(self):
         prompt=(ROOT/'app/src/main/cpp/ui/interaction/fo3-interaction-hud-renderer.h').read_text()

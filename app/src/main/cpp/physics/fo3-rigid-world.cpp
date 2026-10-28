@@ -164,9 +164,18 @@ bool World::Grab(uint64_t id,int hand,const M& palm,const V& surface){
     btTransform frame=B(palm);frame.setOrigin(B(surface));g.anchor=b.getWorldTransform().inverse()*frame;g.offset=B(palm).inverse()*frame;
     g.constraint.reset(new btGeneric6DofSpring2Constraint(b,g.anchor));
     g.constraint->setFrames(frame,g.anchor);
-    g.constraint->setLinearLowerLimit({1,1,1});g.constraint->setLinearUpperLimit({-1,-1,-1});
-    g.constraint->setAngularLowerLimit({1,1,1});g.constraint->setAngularUpperLimit({-1,-1,-1});
-    for(int axis=0;axis<6;++axis){g.constraint->enableSpring(axis,true);g.constraint->setStiffness(axis,axis<3?900.f:35.f,true);g.constraint->setDamping(axis,1,true);g.constraint->setEquilibriumPoint(axis,0);}
+    // Solve the grip as a compliant attachment in the contact solver. The old
+    // explicit force spring used dimensional damping=1 for every mass/inertia:
+    // heavy props lagged, while small angular inertias rang like a pendulum.
+    // Velocity-level correction removes residual velocity every tick and keeps
+    // collision contacts authoritative. No kinematic teleport or centre snap.
+    g.constraint->setLinearLowerLimit({0,0,0});g.constraint->setLinearUpperLimit({0,0,0});
+    g.constraint->setAngularLowerLimit({0,0,0});g.constraint->setAngularUpperLimit({0,0,0});
+    for(int axis=0;axis<6;++axis){
+        g.constraint->setParam(BT_CONSTRAINT_STOP_ERP,.55f,axis);
+        const float inverseEffectiveMass=axis<3?b.getInvMass():b.getInvInertiaDiagLocal()[axis-3];
+        g.constraint->setParam(BT_CONSTRAINT_STOP_CFM,.0001f*inverseEffectiveMass,axis);
+    }
     impl->world.addConstraint(g.constraint.get(),true);b.setActivationState(DISABLE_DEACTIVATION);return true;
 }
 void World::Target(int hand,const M& palm){if(hand<0||hand>1||!Finite(palm))return;auto& g=impl->grips[hand];if(!g.constraint)return;g.constraint->setFrames(B(palm)*g.offset,g.anchor);}
@@ -192,15 +201,26 @@ void World::Step(float seconds){
             if((to.getOrigin()-from.getOrigin()).length2()<1e-8f&&rotation<.001f)continue;
             struct Query:btCollisionWorld::ClosestConvexResultCallback{
                 const btCollisionObject* self;
-                Query(const btVector3& a,const btVector3& b,const btCollisionObject* object):ClosestConvexResultCallback(a,b),self(object){}
+                btTransform from,to;
+                Query(const btTransform& a,const btTransform& b,const btCollisionObject* object):ClosestConvexResultCallback(a.getOrigin(),b.getOrigin()),self(object),from(a),to(b){}
+                btScalar addSingleResult(btCollisionWorld::LocalConvexResult& result,bool normalWorld)override{
+                    const auto normal=normalWorld?result.m_hitNormalLocal:result.m_hitCollisionObject->getWorldTransform().getBasis()*result.m_hitNormalLocal;
+                    auto delta=to.getRotation()*from.getRotation().inverse();if(delta.w()<0)delta=-delta;
+                    const auto turn=delta.getAxis()*delta.getAngle();
+                    const auto centre=from.getOrigin().lerp(to.getOrigin(),result.m_hitFraction);
+                    // A resting/tangential or separating contact is not a new
+                    // obstruction. Test the contact point's rotational motion,
+                    // not just COM motion, so gentle lift/slide is never latched.
+                    const auto motion=to.getOrigin()-from.getOrigin()+turn.cross(result.m_hitPointLocal-centre);
+                    if(motion.dot(normal)>=-1e-6f)return 1;
+                    return ClosestConvexResultCallback::addSingleResult(result,normalWorld);
+                }
                 bool needsCollision(btBroadphaseProxy* proxy)const override{return proxy->m_clientObject!=self&&ClosestConvexResultCallback::needsCollision(proxy);}
-            } hit(from.getOrigin(),to.getOrigin(),&body);
+            } hit(from,to,&body);
             hit.m_collisionFilterGroup=2;hit.m_collisionFilterMask=3;
             const Entry* source=state.first;
             for(const auto& child:source->children)impl->world.convexSweepTest(static_cast<const btConvexShape*>(child.get()),from,to,hit,.001f);
             if(!hit.hasHit()||hit.m_closestHitFraction>=1)continue;
-            const auto movement=to.getOrigin()-from.getOrigin();
-            if(movement.dot(hit.m_hitNormalWorld)>=-1e-6f&&rotation<.001f)continue;
             const float fraction=std::max(0.f,float(hit.m_closestHitFraction)-.001f);
             btTransform safe(from.getRotation().slerp(to.getRotation(),fraction),from.getOrigin().lerp(to.getOrigin(),fraction));
             body.setWorldTransform(safe);body.setInterpolationWorldTransform(safe);
