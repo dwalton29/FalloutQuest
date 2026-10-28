@@ -23,6 +23,7 @@ bool BeginFo3Terminal(uint32_t reference){
     std::string error;auto event=DispatchFo3ScriptedActivation(reference,fo3player::PlayerRef,error);
     if(event!=fo3player::ScriptEventResult::Executed){if(!error.empty())fo3notify::Notifications().Enqueue(error);return false;}
   }
+  fo3terminalui::Invalidate();
   gTerminalScreen=std::move(screen);gTerminalCell=gCurrentCellFormId;gTerminalInputLatch=true;
   p.EndContainerInteraction();ResetFo3Pipboy();gTerminal.Open(p,reference,0);
   fo3audio::MenuLoop("UIHackingFanHumLP");fo3audio::NamedSound("UIHackingCharEnter");FlushFo3PlayerState();return true;
@@ -36,6 +37,7 @@ void UpdateFo3Terminal(double now,float x,float y,bool a,bool b,bool focused){
   fo3terminalui::Advance();fo3terminalui::AdvanceImage(Fo3TerminalFocus()?gTerminal.image:std::string{});
   if(gPlayerSession){uint32_t back=0;while(gPlayerSession->player.PollTerminalBack(back))if(back==gTerminal.reference){gTerminal.Back(gPlayerSession->player);if(!Fo3TerminalFocus())CancelFo3Terminal();}}
   if(!Fo3TerminalFocus()){if(!a&&!b&&std::fabs(x)<.2f&&std::fabs(y)<.2f)gTerminalInputLatch=false;return;}
+  if(fo3terminalui::failed){fo3notify::Notifications().Enqueue("Terminal assets missing: Fixedsys font or Menus/FalloutDict.txt.");CancelFo3Terminal();return;}
   if(!focused||!gPlayerSession||gPlayerSession->saveBlocked||IsFo3LoadingVisible()||gCurrentCellFormId!=gTerminalCell){CancelFo3Terminal();return;}
   auto& p=gPlayerSession->player;bool disabled=false;std::string error;
   if(!p.ReferenceDisabled(gTerminal.reference,disabled,error)||disabled){CancelFo3Terminal();return;}
@@ -88,11 +90,12 @@ void UpdateFo3Terminal(double now,float x,float y,bool a,bool b,bool focused){
   if(!plan){gTerminal.result=error;gTerminal.page=Page::Text;gTerminal.scroll=0;gTerminal.Refresh(p);return;}
   if(plan->HasReferenceChanges()){
     // The resident world exchange owns focus while publishing. Close first so
-    // its admission checks see an idle interaction, retaining the input latch.
-    CancelFo3Terminal();gTerminalInputLatch=true;
+    // its admission checks see an idle interaction. Its own release barrier
+    // owns held controls while active; the terminal latch must not deadlock it.
+    CancelFo3Terminal();gTerminalInputLatch=false;
     const auto ticket=BeginFo3ResidentPreparedWorkflow({},std::move(plan));
     if(ticket){gFo3ResidentGameplayTicket=ticket;FlushFo3PlayerState();}
-    else fo3notify::Notifications().Enqueue("Terminal action could not reserve the resident scene.");return;
+    else {gTerminalInputLatch=true;fo3notify::Notifications().Enqueue("Terminal action could not reserve the resident scene.");}return;
   }
   if(!p.CommitScriptTransaction(*plan)){gTerminal.result="Terminal state changed; select the entry again.";gTerminal.page=Page::Text;gTerminal.Refresh(p);return;}
   FlushFo3PlayerState();

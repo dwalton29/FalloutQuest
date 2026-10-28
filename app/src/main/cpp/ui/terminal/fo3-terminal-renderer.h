@@ -50,6 +50,7 @@ inline void AdvanceImage(const std::string& request){
 inline void Shutdown(){preparation.Reset();imagePreparation.Reset();if(imageTexture)glDeleteTextures(1,&imageTexture);imageTexture=0;imageRequest.clear();if(vbo)glDeleteBuffers(1,&vbo);if(vao)glDeleteVertexArrays(1,&vao);
   if(solid)glDeleteTextures(1,&solid);if(fontTexture)glDeleteTextures(1,&fontTexture);
   vao=vbo=solid=fontTexture=0;assets={};started=ready=failed=false;revision=UINT64_MAX;surface=nullptr;}
+inline void Invalidate(){revision=UINT64_MAX;surface=nullptr;}
 inline void Render(const float* mvp,const fo3terminal::Surface& screen,const fo3terminal::Display& display,bool amber=false,bool imageVisible=false){
   if(!ready||!screen.Ready()||!fo3hudrenderer::EnsureResources())return;
   fo3hudrenderer::GlStateGuard guard;

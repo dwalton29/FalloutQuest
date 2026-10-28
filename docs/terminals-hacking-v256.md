@@ -4,7 +4,9 @@ Terminals are activated with right A. Right stick moves the hacking cursor or
 menu selection; A selects and B backs out. Horizontal stick scrolls long menu
 pages; vertical stick scrolls result text. The interface is rendered on the
 actual CRT mesh, depth-tested in the world, without relocating the player or
-spawning a floating screen. Physical head movement remains available.
+spawning a floating screen. Left-stick walking and physical head movement remain available, so the player
+can approach the CRT without resetting the puzzle. Right-stick snap turning
+is suppressed while that stick controls the terminal.
 
 ## Original sources inspected
 

@@ -15,11 +15,12 @@ namespace fo3audio {int good=0,bad=0;uint32_t PlayingNote(){return 0;}
 void Note(uint32_t,const std::vector<std::string>&){}void MenuLoop(const std::string&){}
 void NamedSound(const std::string& s){good+=s=="UIHackingPassGood";bad+=s=="UIHackingPassBad";}}
 fo3player::ScriptEventResult DispatchFo3ScriptedActivation(uint32_t,uint32_t,std::string&){return fo3player::ScriptEventResult::Executed;}
-uint64_t BeginFo3ResidentPreparedWorkflow(int,std::unique_ptr<fo3player::ScriptTransactionPlan>){return 0;}
+bool Fo3TerminalInputBlocked();int residentAttempts=0;
+uint64_t BeginFo3ResidentPreparedWorkflow(int,std::unique_ptr<fo3player::ScriptTransactionPlan>){Check(!Fo3TerminalInputBlocked(),"terminal latch must not deadlock resident reservation");++residentAttempts;return 0;}
 namespace fo3terminalui {
 bool failed=false,ready=true;
 struct {std::array<std::vector<std::string>,13> dictionary;} assets;
-void Advance(){}void AdvanceImage(const std::string&){}
+void Invalidate(){}void Advance(){}void AdvanceImage(const std::string&){}
 void Render(const float*,const fo3terminal::Surface&,const fo3terminal::Display&,bool,bool){}
 }
 namespace fo3notify {struct Queue {void Enqueue(const std::string&) {}};Queue queue;Queue& Notifications(){return queue;}}
@@ -29,6 +30,8 @@ bool Fo3TerminalFocus();
 int main(){try{
   using namespace fo3player;Catalog c;c.initial.baseHealth=100;c.initial.special.fill(5);c.initial.skills[8]=100;
   fo3pipdata::Terminal t;t.valid=true;t.name="Desk Terminal";t.difficulty=0;fo3pipdata::TerminalEntry e;e.text="Original entry";e.result="Original result";t.entries.push_back(e);
+  fo3pipdata::TerminalEntry world;world.text="Disable sign";world.script.source="testsign.Disable";t.entries.push_back(world);
+  c.references[30].base=300;c.pipboy.formNames["testsign"]=30;
   c.pipboy.terminals[100]=t;c.references[20].base=100;c.pipboy.targets[20].base=100;
   gPlayerSession=std::make_unique<Session>(c);auto& p=gPlayerSession->player;
   auto surface=std::make_shared<fo3terminal::Surface>();surface->width=surface->height=.3f;surface->triangles={0,1,2};gObjects.push_back({20,surface});
@@ -48,5 +51,8 @@ int main(){try{
   Check(p.ScriptLock(20,0)&&BeginFo3Terminal(20),"start another hack");update(false,false);update(false,false);
   int guesses=0;for(size_t i=0;i<gTerminal.hacking.words.size()&&guesses<4;++i)if(i!=gTerminal.hacking.password){gTerminal.hacking.cursor=gTerminal.hacking.words[i].offset;update(true,false);update(false,false);++guesses;}
   Check(gTerminal.page==fo3terminal::Session::Page::Locked&&p.GetLock(20).broken&&fo3audio::bad==4,"four misses persist lockout and lock screen");
+  CancelFo3Terminal();Check(p.ScriptUnlock(20)&&BeginFo3Terminal(20),"world action test opens terminal");
+  update(false,false);gTerminal.selected=1;gTerminal.Refresh(p);update(true,false);
+  Check(residentAttempts==1&&!Fo3TerminalFocus()&&Fo3TerminalInputBlocked(),"failed reservation closes safely and retains release latch");
   std::cout<<"Terminal runtime controls passed\n";
 }catch(const std::exception& e){std::cerr<<e.what()<<"\n";return 1;}}
