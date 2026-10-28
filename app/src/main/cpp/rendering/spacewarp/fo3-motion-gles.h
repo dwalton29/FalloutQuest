@@ -11,7 +11,8 @@ namespace fqmotion {
 struct GlState {
     GLint draw=0,read=0,viewport[4]{},program=0,vao=0,array=0,active=0,depthFunc=0,front=0,cull=0;
     GLint unpack=0,alignment=0,rowLength=0,skipRows=0,skipPixels=0;
-    GLint textures[3]{},samplers[3]{};
+    static constexpr unsigned units[]={0,1,6,7};
+    GLint textures[4]{},samplers[4]{};
     GLboolean depthMask=0,colour[4]{};
     GLfloat range[2]{},offsetFactor=0,offsetUnits=0;
     static constexpr GLenum caps[]={GL_DEPTH_TEST,GL_BLEND,GL_CULL_FACE,GL_POLYGON_OFFSET_FILL,GL_SCISSOR_TEST,GL_STENCIL_TEST,GL_SAMPLE_ALPHA_TO_COVERAGE,GL_SAMPLE_COVERAGE,GL_RASTERIZER_DISCARD};
@@ -26,10 +27,10 @@ struct GlState {
         glGetIntegerv(GL_PIXEL_UNPACK_BUFFER_BINDING,&unpack);glGetIntegerv(GL_UNPACK_ALIGNMENT,&alignment);
         glGetIntegerv(GL_UNPACK_ROW_LENGTH,&rowLength);glGetIntegerv(GL_UNPACK_SKIP_ROWS,&skipRows);glGetIntegerv(GL_UNPACK_SKIP_PIXELS,&skipPixels);
         for(unsigned i=0;i<9;++i)enabled[i]=glIsEnabled(caps[i]);
-        for(unsigned i=0;i<3;++i){glActiveTexture(GL_TEXTURE0+(i?i+5:0));glGetIntegerv(GL_TEXTURE_BINDING_2D,&textures[i]);glGetIntegerv(GL_SAMPLER_BINDING,&samplers[i]);}
+        for(unsigned i=0;i<4;++i){glActiveTexture(GL_TEXTURE0+units[i]);glGetIntegerv(GL_TEXTURE_BINDING_2D,&textures[i]);glGetIntegerv(GL_SAMPLER_BINDING,&samplers[i]);}
     }
     ~GlState(){
-        for(unsigned i=0;i<3;++i){const unsigned unit=i?i+5:0;glActiveTexture(GL_TEXTURE0+unit);glBindTexture(GL_TEXTURE_2D,textures[i]);glBindSampler(unit,samplers[i]);}
+        for(unsigned i=0;i<4;++i){glActiveTexture(GL_TEXTURE0+units[i]);glBindTexture(GL_TEXTURE_2D,textures[i]);glBindSampler(units[i],samplers[i]);}
         glActiveTexture(active);glUseProgram(program);glBindVertexArray(vao);glBindBuffer(GL_ARRAY_BUFFER,array);
         glBindBuffer(GL_PIXEL_UNPACK_BUFFER,unpack);glPixelStorei(GL_UNPACK_ALIGNMENT,alignment);glPixelStorei(GL_UNPACK_ROW_LENGTH,rowLength);glPixelStorei(GL_UNPACK_SKIP_ROWS,skipRows);glPixelStorei(GL_UNPACK_SKIP_PIXELS,skipPixels);
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER,draw);glBindFramebuffer(GL_READ_FRAMEBUFFER,read);glViewport(viewport[0],viewport[1],viewport[2],viewport[3]);
@@ -113,14 +114,16 @@ public:
         glViewport(0,0,width,height);for(GLenum cap:GlState::caps)glDisable(cap);
         glEnable(GL_DEPTH_TEST);glDepthFunc(GL_ALWAYS);glDepthMask(GL_TRUE);glColorMask(GL_TRUE,GL_TRUE,GL_TRUE,GL_TRUE);glDepthRangef(0,1);
         glBindBuffer(GL_PIXEL_UNPACK_BUFFER,0);glPixelStorei(GL_UNPACK_ALIGNMENT,1);glPixelStorei(GL_UNPACK_ROW_LENGTH,0);glPixelStorei(GL_UNPACK_SKIP_ROWS,0);glPixelStorei(GL_UNPACK_SKIP_PIXELS,0);
-        for(unsigned unit:{0u,6u,7u})glBindSampler(unit,0);
+        for(unsigned unit:GlState::units)glBindSampler(unit,0);
         glBindVertexArray(vao_);glUseProgram(staticProgram_);glActiveTexture(GL_TEXTURE0);glBindTexture(GL_TEXTURE_2D,sourceDepth);
         Int(staticProgram_,"uDepth",0);Matrix(staticProgram_,"uInverseCurrentViewProjection",inverse);Matrix(staticProgram_,"uPreviousViewProjection",prior.viewProjection[eyeIndex]);
         glUniform3fv(glGetUniformLocation(staticProgram_,"uMotionScale"),1,scale.data());glDrawArrays(GL_TRIANGLES,0,3);
-        glUseProgram(dynamicProgram_);glDepthFunc(GL_LEQUAL);glCullFace(GL_BACK);
+        glUseProgram(dynamicProgram_);glCullFace(GL_BACK);
         Matrix(dynamicProgram_,"uCurrentVP",current.viewProjection[eyeIndex]);Matrix(dynamicProgram_,"uPreviousVP",prior.viewProjection[eyeIndex]);
         glUniform3fv(glGetUniformLocation(dynamicProgram_,"uMotionScale"),1,scale.data());
         Int(dynamicProgram_,"uDiffuse",0);Int(dynamicProgram_,"uPalette",6);Int(dynamicProgram_,"uPreviousPalette",7);
+        Int(dynamicProgram_,"uSceneDepth",1);glUniform2f(glGetUniformLocation(dynamicProgram_,"uTargetSize"),float(width),float(height));
+        glActiveTexture(GL_TEXTURE1);glBindTexture(GL_TEXTURE_2D,sourceDepth);
         bool complete=true;
         for(const auto& draw:capture.draws){
             const auto* shape=history.Current(draw.identity);if(!shape){complete=false;continue;}

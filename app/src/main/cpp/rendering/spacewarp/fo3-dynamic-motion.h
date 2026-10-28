@@ -38,12 +38,22 @@ precision highp float;
 in vec4 currentClip,previousClip;
 in vec2 uv;
 in float vertexAlpha;
-uniform sampler2D uDiffuse;
+uniform sampler2D uDiffuse,uSceneDepth;
+uniform vec2 uTargetSize;
 uniform vec3 uMotionScale;
 uniform bool uAlphaTest,uVertexAlpha;
 uniform float uAlpha,uThreshold;
 layout(location=0) out vec4 velocity;
 void main(){
+ // Compare at the source depth texel's actual sample location. A direct
+ // low-resolution depth test rejects visible slopes when resolutions differ.
+ vec2 screenUv=gl_FragCoord.xy/uTargetSize;
+ vec2 sourceSize=vec2(textureSize(uSceneDepth,0));
+ vec2 sampleUv=(floor(screenUv*sourceSize)+.5)/sourceSize;
+ vec2 offset=(sampleUv-screenUv)*uTargetSize;
+ float depth=gl_FragCoord.z;
+ float sampleDepth=depth+dFdx(depth)*offset.x+dFdy(depth)*offset.y;
+ if(sampleDepth>texture(uSceneDepth,screenUv).r+2.0/16777215.0)discard;
  if(uAlphaTest&&texture(uDiffuse,uv).a*uAlpha*(uVertexAlpha?vertexAlpha:1.0)<uThreshold)discard;
  velocity=vec4(0.0);
  if(previousClip.w>0.000001&&currentClip.w>0.000001)

@@ -87,6 +87,17 @@ int main(){
  draw.count=3;
  // Foreground depth blocks a moving object hidden behind it.
  Depth(source,.25f);auto hidden=render(previous,current);assert(Close(hidden[0],0));Depth(source,.5f);
+ // A sloped surface sampled from a 4x larger depth image must still receive
+ // its dynamic vectors. Naive LEQUAL against the nearest sample rejects it.
+ const GLuint originalSource=source;constexpr int Large=64;
+ std::vector<uint32_t> slope(Large*Large);
+ for(int y=0;y<Large;++y)for(int x=0;x<Large;++x)slope[y*Large+x]=uint32_t((.5-.1*(2.0*(x+.5)/Large-1))*std::numeric_limits<uint32_t>::max());
+ source=Texture(GL_DEPTH_COMPONENT24,GL_DEPTH_COMPONENT,GL_UNSIGNED_INT,slope.data(),Large,Large);
+ for(int v=0;v<3;++v)vertices[v*18+2]=-.2f*vertices[v*18];
+ glBindBuffer(GL_ARRAY_BUFFER,vbo);glBufferSubData(GL_ARRAY_BUFFER,0,vertices.size()*sizeof(float),vertices.data());
+ auto sloped=render(previous,current);assert(Close(sloped[0],.2f));
+ source=originalSource;for(int v=0;v<3;++v)vertices[v*18+2]=0;
+ glBindBuffer(GL_ARRAY_BUFFER,vbo);glBufferSubData(GL_ARRAY_BUFFER,0,vertices.size()*sizeof(float),vertices.data());
  // Actual authored alpha-test silhouettes, with optional vertex/material alpha.
  const unsigned char transparent[]={255,255,255,0};glBindTexture(GL_TEXTURE_2D,diffuse);glTexSubImage2D(GL_TEXTURE_2D,0,0,0,1,1,GL_RGBA,GL_UNSIGNED_BYTE,transparent);
  draw.alphaTest=true;auto cutout=render(previous,current);assert(Close(cutout[0],0));
