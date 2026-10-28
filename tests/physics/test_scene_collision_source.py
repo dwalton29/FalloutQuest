@@ -91,7 +91,8 @@ assert 'BuildCpuObjects(placement,parts,true)' in worker
 assert worker.index('PrepareResidentCpuParts(') < worker.index('out=std::move(next)')
 cpu=s[s.index('bool BuildCpuObjects('):s.index('bool ResolveDoorTeleportCachedQ1698(')]
 assert 'requireComplete ? completeCache : ordinaryCache' in cpu
-assert 'LoadFo3StaticNifMeshes(placement.modelPath, meshes, requireComplete, true)' in cpu
+assert 'LoadFo3StaticNifMeshes(placement.modelPath, meshes, requireComplete, true, animatedVisibility)' in cpu
+assert 'animatedVisibility=bool(q2401DoorAnimation)&&placement.baseRecordType!="DOOR"' in cpu
 nif=Path('app/src/main/cpp/rendering/mesh/fo3-static-nif.cpp').read_text()
 assert 'requireComplete && (!q970SelectionReady || q970Scene.fallbackAll)' in nif
 assert 'requireComplete && (q1060ShapeObjectFailures || q1060ShapeLoadFailures)' in nif
@@ -290,7 +291,7 @@ for signature in ('bool RollbackFo3ResidentVisualPlan()', 'bool RollbackFo3Resid
 assert release.index('gFo3ResidentLane.Release(ticket)') < release.index('gFo3ResidentInteractionAdmission.reset()')
 assert cancel.index('gFo3ResidentLane.Owns(ticket)') < cancel.index('gFo3ResidentInteractionAdmission.reset()')
 staged=s[s.index('bool PrepareFo3ResidentInteractionAdmission('):s.index('// Render-thread-only private GPU preparation.')]
-assert 'object.q2400SwingDoor||object.q220LooseObject' in staged
+assert 'object.q2400SwingDoor||object.scriptAnimated||object.q220LooseObject' in staged
 assert 'object.baseRecordType=="FURN"' in staged
 print('Resident interaction preflight rejects live/staged hazards and guards worker/GPU/commit without restricting rollback')
 
