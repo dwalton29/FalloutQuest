@@ -4415,7 +4415,7 @@ bool BeginFo3SceneLoad(const Fo3CellTransitionRequestQ74& request, bool boot) {
         (unsigned long long)gSceneLoad.generation,boot?"cold-boot":"transition",
         request.cellFormId,request.worldspaceFormId,loadPlayer?1:0,gSceneReady?1:0);
     // Known transition cells can prefetch immediately. The cold-boot CELL
-    // must instead wait for ResolveFo3MegatonEntryQ1860 in the CPU worker.
+    // must instead wait for ResolveFo3StartupEntryQ1860 in the CPU worker.
     StartFo3SceneEnvironmentIndexWorker();
     StartFo3SceneDoorWorker(request.cellFormId);
     StartFo3SceneWaterWorker(request.worldspaceFormId);
@@ -4475,7 +4475,7 @@ bool BeginFo3SceneLoad(const Fo3CellTransitionRequestQ74& request, bool boot) {
             result.referenceState=std::make_shared<const fo3world::ReferenceStateSnapshot>(result.playerSession->player.CaptureReferenceState());
         result.playerUs = Fo3SceneElapsedUs(phase);
         phase = std::chrono::steady_clock::now();
-        if (boot && !ResolveFo3MegatonEntryQ1860(result.request, &cancel)) return false;
+        if (boot && !ResolveFo3StartupEntryQ1860(result.request, &cancel)) return false;
         result.resolveUs = Fo3SceneElapsedUs(phase);
         if (cancel.load(std::memory_order_acquire)) return false;
         phase = std::chrono::steady_clock::now();
@@ -4625,7 +4625,7 @@ bool ProcessQ74TransitionRequest() {
         return false;
     }
     Fo3SceneCpuPreparation& prepared = gSceneLoad.preparation.Get();
-    // On boot, ResolveFo3MegatonEntryQ1860 fills in the actual CELL during
+    // On boot, ResolveFo3StartupEntryQ1860 fills in the actual CELL during
     // CPU preparation, leaving the lengthy GPU upload phase for overlap.
     StartFo3SceneDoorWorker(prepared.request.cellFormId);
     StartFo3SceneWaterWorker(prepared.request.worldspaceFormId);
@@ -7853,7 +7853,7 @@ bool Q1030BootMegatonOnRender() {
     if (gSceneReady) return true;
     if (gSceneLoad.bootAttempted) return false;
     gSceneLoad.bootAttempted = true;
-    BeginFo3Loading(0u, 0x00000A74u);
+    BeginFo3Loading(0u, 0x0000003Cu);
     if (!BeginFo3SceneLoad({}, true)) return false;
     return false; // The next frame compiles shaders after presentation starts.
 }

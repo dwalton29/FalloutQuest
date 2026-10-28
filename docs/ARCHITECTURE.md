@@ -83,7 +83,12 @@ indexed door teleports. No game data is committed.
 
 ## Background scene preparation: 0.24.11
 
-Direct Megaton startup and authored door transitions share one preparation job.
+Development startup and authored door transitions share one preparation job.
+v260 starts at the original Vault 101 exterior cave-door XTEL arrival, selected
+by the interior exit REFR `00024720`. Coordinates and facing are read from the
+installed ESM, not copied into the runtime. The original Megaton entry resolver
+remains available for its existing transition path. The Vault reveal's one-shot
+local is preserved; changing startup does not reset or force any script.
 The worker resolves the startup XTEL (when needed), loads request-local placement
 metadata and builds CPU mesh objects. It uses the existing thread-safe model
 and texture caches. Texture predecoding stops once the shared prepared-image

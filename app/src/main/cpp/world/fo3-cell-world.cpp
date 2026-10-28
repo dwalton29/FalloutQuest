@@ -934,6 +934,32 @@ bool GetFo3NamedDoorPromptQ1840(uint32_t sourceDoorRef,const std::string& destin
     return count>0;
 }
 
+// Development startup selection only: use the actual Vault 101 exit XTEL.
+// Script state and trigger behavior are unchanged; no cinematic is forced.
+bool ResolveFo3StartupEntryQ1860(Fo3CellTransitionRequestQ74& outRequest,
+                                const std::atomic<bool>* cancelled) {
+    outRequest = {};
+    constexpr uint32_t VAULT101_CAVE_DOOR_INTERIOR = 0x00024720u;
+    if (cancelled && cancelled->load(std::memory_order_acquire)) return false;
+    Fo3DoorTeleport arrival;
+    if (!ResolveFo3DoorTeleportQ1700(VAULT101_CAVE_DOOR_INTERIOR, &arrival) ||
+        !arrival.valid) return false;
+    Q74Owner owner;
+    if (!Q74ResolveOwner(arrival.destinationDoorRefFormId, owner) || !owner.valid)
+        return false;
+    if (cancelled && cancelled->load(std::memory_order_acquire)) return false;
+    outRequest.destinationDoorRef = arrival.destinationDoorRefFormId;
+    outRequest.cellFormId = owner.cellFormId;
+    outRequest.worldspaceFormId = owner.worldspaceFormId;
+    outRequest.x = arrival.x; outRequest.y = arrival.y; outRequest.z = arrival.z;
+    outRequest.rx = arrival.rx; outRequest.ry = arrival.ry; outRequest.rz = arrival.rz;
+    outRequest.valid = true;
+    Q71_LOGI("STARTUP VAULT EXIT: sourceDoor=%08X destinationDoor=%08X cell=%08X world=%08X source=Fallout3.esm/XTEL",
+             VAULT101_CAVE_DOOR_INTERIOR, outRequest.destinationDoorRef,
+             outRequest.cellFormId, outRequest.worldspaceFormId);
+    return true;
+}
+
 bool ResolveFo3MegatonEntryQ1860(Fo3CellTransitionRequestQ74& outRequest,
                                const std::atomic<bool>* cancelled) {
     outRequest = {};
