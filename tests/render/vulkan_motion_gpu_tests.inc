@@ -28,9 +28,9 @@ void NativeMotion() {
         });std::vector<float> pixels(32*32*(depth?1:4));if(depth)std::memcpy(pixels.data(),buffer.mapped,pixels.size()*4);else for(size_t i=0;i<pixels.size();++i)pixels[i]=fqvk::Renderer::Half(static_cast<uint16_t*>(buffer.mapped)[i]);r.Destroy(buffer);return pixels;};
     auto matrix=fqskin::Identity();float eye[3]{};
     const unsigned initialReleases=motionReleases;
-    for(int mode=0;mode<7;++mode){
+    for(int mode=0;mode<8;++mode){
         // Rigid, weighted palette, facial/CPU deformation, cutout, occluded.
-        const bool skinned=mode==1||mode>=5,deformed=mode==2,cutout=mode==3,occluded=mode==4;
+        const bool skinned=mode==1||mode==5||mode==6,deformed=mode==2,cutout=mode==3,occluded=mode==4;
         fqspacewarp::History history;fqspacewarp::Drawable prior;prior.geometry=1;
         if(skinned){auto bone=fqskin::Identity();bone[12]=-.1f;fqskin::PaletteRow row;fqskin::Pack(row,bone,fqskin::Identity());prior.palette={row};}
         if(deformed)for(unsigned i=0;i<4;++i){prior.deformedPositions.push_back(quad[i*18]-.2f);prior.deformedPositions.push_back(quad[i*18+1]);prior.deformedPositions.push_back(0);}
@@ -38,7 +38,7 @@ void NativeMotion() {
         for(unsigned s=1;s<=2;++s){f.serial=s;f.displayTime=s*10000000;assert(history.Begin(f));assert(history.Record(1,prior));history.EyeRendered(0);history.EyeRendered(1);assert(history.Finish(true));}
         auto current=prior;current.model[12]=.1f;current.model[13]=.2f;if(skinned)current.palette={identity};if(deformed)for(unsigned i=0;i<4;++i)current.deformedPositions[i*3]+=.2f;
         f.serial=3;f.displayTime=30000000;f.viewProjection={matrix,matrix};assert(history.Begin(f));
-        fqmotion::Capture capture;capture.Begin(history);capture.Main();fqmotion::Draw d;d.identity=1;d.mesh=20;d.vbo=1;d.vertices=4;d.count=6;d.indexed=true;d.cull=false;d.skinMode=skinned?(mode==6?2:1):0;d.paletteTexture=21;d.alphaTest=cutout;d.diffuse=22;assert(capture.Record(d,current));
+        fqmotion::Capture capture;capture.Begin(history);capture.Main();fqmotion::Draw d;d.identity=1;d.mesh=mode==7?999:20;d.vbo=1;d.vertices=4;d.count=6;d.indexed=true;d.cull=false;d.skinMode=skinned?(mode==6?2:1):0;d.paletteTexture=21;d.alphaTest=cutout;d.diffuse=22;assert(capture.Record(d,current));
         uint8_t white[4]{255,255,255,uint8_t(cutout?0:255)};assert(fqvk::Texture(22,1,1,white));
         assert(fqvk::BeginWorldProbe(matrix.data(),matrix.data(),eye,eye));
         VkClearAttachment clear{};clear.aspectMask=VK_IMAGE_ASPECT_DEPTH_BIT;clear.clearValue.depthStencil={occluded?.2f:.5f,0};VkClearRect rect{{{0,0},{64,64}},0,1};vkCmdClearAttachments(r.command,1,&clear,1,&rect);
@@ -48,19 +48,29 @@ void NativeMotion() {
         std::array<XrView,2> views{};std::array<XrCompositionLayerProjectionView,2> output{};
         assert(fqvk::PresentGameplay(views.data(),output.data(),.04f,1000));
         assert(output[0].next&&output[1].next&&r.finishWaitUs==0);
-        assert(coverage[0].Complete(3)&&coverage[1].Complete(3));
+        assert(coverage[0].Complete(3)==(mode!=7)&&coverage[1].Complete(3)==(mode!=7));
         if(skinned)assert(r.motionUploads-uploads==sizeof(fqskin::PaletteRow));
-        if(mode>=5)assert(r.paletteAllocations==allocations); // Reuse the previous-pose image across frames.
+        if(mode==5||mode==6)assert(r.paletteAllocations==allocations); // Reuse the previous-pose image across frames.
         if(deformed)assert(r.motionUploads-uploads==4*3*sizeof(float));
-        history.EyeRendered(0);history.EyeRendered(1);assert(history.CanSynthesize(coverage));
+        history.EyeRendered(0);history.EyeRendered(1);assert(history.CanSynthesize(coverage)==(mode!=7));
         for(unsigned e=0;e<2;++e){auto& t=r.motionTargets[e];assert(t.motionIndex==motionCycles%2&&t.depthIndex==(motionCycles+1)%3);
             auto pixels=read(motionImages[e][t.motionIndex],false);auto depths=read(depthImages[e][t.depthIndex],true);
             const float camera=e?.4f:-.25f;Near(pixels[0],camera);Near(pixels[1],0);
-            const size_t centre=(16*32+16)*4;Near(pixels[centre],camera+((cutout||occluded)?0:.1f+(skinned?.1f:deformed?.2f:0)));Near(pixels[centre+1],cutout||occluded?0:-.2f);Near(pixels[centre+2],0);Near(depths[16*32+16],occluded?.2f:.5f);
+            const size_t centre=(16*32+16)*4;Near(pixels[centre],camera+((cutout||occluded||mode==7)?0:.1f+(skinned?.1f:deformed?.2f:0)));Near(pixels[centre+1],cutout||occluded||mode==7?0:-.2f);Near(pixels[centre+2],0);Near(depths[16*32+16],occluded?.2f:.5f);
         }
         ++motionCycles;
     }
-    assert(motionReleases-initialReleases==28);fqvk::ShutdownSpacewarp();
+    assert(motionReleases-initialReleases==32);
+    r.WaitFrames();
+    // The old colour-only reserve did not leave space for motion descriptors.
+    for(unsigned i=0;r.descriptorCache.size()<fqvk::Renderer::DescriptorCapacity-fqvk::Renderer::FrameDescriptorReserve;++i)
+        r.descriptorCache.emplace(fqvk::Renderer::DescriptorKey{-1,i,{}},VK_NULL_HANDLE);
+    r.PrepareDescriptors();assert(r.descriptorCache.empty());
+    for(unsigned i=0;i<fqvk::Renderer::DescriptorCapacity;++i)
+        r.descriptorCache.emplace(fqvk::Renderer::DescriptorKey{-1,i,{}},VK_NULL_HANDLE);
+    fqvk::Renderer::MotionConstants constants{};const auto cursor=r.cursor;
+    assert(!r.MotionBind(constants,{},32)&&r.cursor==cursor);
+    r.PrepareDescriptors();fqvk::ShutdownSpacewarp();
     for(auto& images:motionImages)for(auto& image:images)r.Destroy(image);
     for(auto& images:depthImages)for(auto& image:images)r.Destroy(image);
     for(auto& images:runtimeMotion)images.clear();

@@ -105,6 +105,7 @@ VkPipeline MotionPipeline(unsigned key) {
     VkPipeline pipeline{};Check(vkCreateGraphicsPipelines(device,VK_NULL_HANDLE,1,&ci,nullptr,&pipeline),"motion pipeline");motionPipelines[key]=pipeline;return pipeline;
 }
 bool MotionBind(const MotionConstants& constants,const std::vector<VkDescriptorImageInfo>& images,unsigned pipeline) {
+    if(descriptorCache.size()>=DescriptorCapacity)return false;
     const auto alignment=std::max<VkDeviceSize>(16,properties.limits.minUniformBufferOffsetAlignment);cursor=(cursor+alignment-1)&~(alignment-1);
     if(cursor+sizeof(constants)>arena.size)return false;
     std::memcpy(static_cast<uint8_t*>(arena.mapped)+cursor,&constants,sizeof(constants));const uint32_t offset=uint32_t(cursor);cursor+=sizeof(constants);

@@ -211,7 +211,8 @@ public:
     uint64_t viewRevision=0,descriptorRevision=0;
     void PrepareDescriptors() {
         // Called after the frame fence. No cached set is reset while in flight.
-        if(descriptorRevision!=viewRevision||descriptorCache.size()>DescriptorCapacity-FrameDescriptorReserve) {
+        const size_t reserve=FrameDescriptorReserve+(motionPass?fqspacewarp::History::MaxDrawables+128:0);
+        if(descriptorRevision!=viewRevision||descriptorCache.size()>DescriptorCapacity-reserve) {
             Check(vkResetDescriptorPool(device,descriptors,0),"recycle descriptors");
             descriptorCache.clear();descriptorRevision=viewRevision;++descriptorResets;
         }
