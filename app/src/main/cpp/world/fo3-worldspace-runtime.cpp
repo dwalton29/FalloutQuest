@@ -889,25 +889,10 @@ bool LoadFo3WorldspacePlacements(const Fo3WorldspaceSelection& selection,
 
     std::unordered_map<std::string, size_t> baseTypes;
     std::unordered_set<std::string> uniqueModels;
-    size_t q1770MegatonEntranceSkipped = 0u;
     for (const RawPlacementQ75* p : active) {
         const auto it = bases.find(p->baseFormId);
         if (it == bases.end()) continue;
         const BaseRecordQ75& base = it->second;
-
-        const bool q1770SuppressMegatonEntrance =
-            worldspaceFormId == 0x0000003Cu &&
-            (p->refFormId == 0x00003B24u ||
-             p->refFormId == 0x0001D55Au ||
-             p->refFormId == 0x0006D4ADu);
-        if (q1770SuppressMegatonEntrance) {
-            ++q1770MegatonEntranceSkipped;
-            Q75_LOGI("Q16.7 MEGATON ENTRANCE SUPPRESSED: ref=%08X base=%08X EDID=%s model=%s",
-                     p->refFormId, p->baseFormId,
-                     base.editorId.empty() ? "<none>" : base.editorId.c_str(),
-                     base.modelPath.empty() ? "<none>" : base.modelPath.c_str());
-            continue;
-        }
 
         ++baseTypes[base.recordType.empty() ? "<none>" : base.recordType];
         if (base.modelPath.empty() || !EndsInNifQ75(base.modelPath)) continue;
@@ -944,8 +929,8 @@ bool LoadFo3WorldspacePlacements(const Fo3WorldspaceSelection& selection,
         outPlacements.push_back(std::move(world));
     }
 
-    Q75_LOGI("Q18 EXTERIOR RESIDENCY READY: entranceSkipped=%zu persistentKept=%zu residentRadius=%d",
-             q1770MegatonEntranceSkipped, q1770PersistentAfter, q1800PersistentResidentRadius);
+    Q75_LOGI("Q18 EXTERIOR RESIDENCY READY: persistentKept=%zu residentRadius=%d",
+             q1770PersistentAfter, q1800PersistentResidentRadius);
     const auto lookupElapsedQ1800 = std::chrono::duration_cast<std::chrono::microseconds>(
         std::chrono::steady_clock::now() - lookupStartedQ1800).count();
     Q75_LOGI("Q7.5 WORLDSPACE READY: worldspace=%08X persistent=%08X selectedCells=%zu LAND=%zu rawRefs=%zu activeRefs=%zu disabledInitial=%zu bases=%zu modelPlacements=%zu uniqueModels=%zu XTEL=(%.2f %.2f) source=%s lookupUs=%lld",

@@ -584,6 +584,8 @@ public:
   float LockSetting(const std::string& key,float fallback) const;
   bool CanOpenDoor(uint32_t reference) const;
   bool CanActorOpenDoor(uint32_t actor,uint32_t reference) const;
+  bool CanScriptActivateDoor(uint32_t reference) const;
+  bool QueueScriptDefaultActivate(uint32_t reference,uint32_t activator);
   bool CanLootContainer(uint32_t reference) const;
   bool PrepareContainer(uint32_t reference);
   bool MerchantAvailable(uint32_t actor) const;
@@ -621,6 +623,7 @@ private:
   bool ScriptPlanContextMatches(const ScriptTransactionPlan& plan) const noexcept;
   bool RunSourceEventDirect(uint32_t scriptId,const char* event,uint32_t owner,
                             uint32_t activator,std::string& error);
+  bool CanOpenDoorImpl(uint32_t actor,uint32_t reference,bool sourceDelegated) const;
   bool ReferenceDisabledWith(const std::unordered_map<uint32_t,bool>& roots,
                             uint32_t reference,bool& disabled,std::string& error) const;
   bool StageReferenceEnableIn(std::unordered_map<uint32_t,bool>& roots,

@@ -81,7 +81,10 @@ void Events(){
 void Actions(){
     auto& player=gPlayerSession->player;fo3script::Action action;
     while(player.PollScriptAction(action)){
-        if(action.kind==fo3script::ActionKind::ImageModifier){
+        if(action.kind==fo3script::ActionKind::DefaultActivate){
+            if(!DeliverFo3ScriptDefaultActivation(action.reference))
+                Q6H_LOGW("SCRIPT DEFAULT ACTIVATE REJECTED: ref=%08X",action.reference);
+        }else if(action.kind==fo3script::ActionKind::ImageModifier){
             const auto i=player.Definitions().imageModifiers.find(action.form);
             if(i!=player.Definitions().imageModifiers.end()){modifier=i->second;modifierStarted=seconds;}
         }else if(action.kind==fo3script::ActionKind::PlayGroup){

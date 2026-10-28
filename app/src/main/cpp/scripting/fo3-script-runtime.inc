@@ -410,6 +410,8 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
       if(!c.expression.empty())ok=fo3script::Expression(*this,owner,c.expression,error,scriptId).Evaluate(value);
       if(ok)ok=std::isfinite(value)&&value>=-100&&value<=100&&std::floor(value)==value&&QueueBarter(c.form,int(value));
       break;
+    case C::Unavailable:error="unsupported executed command: "+c.expression;return false;
+    case C::DefaultActivate:ok=QueueScriptDefaultActivate(c.form,c.index?c.index:scriptActivator_);break;
     case C::PlayGroup:ok=QueueScriptPlayGroup(c.form,c.expression,c.index);break;
     case C::ImageModifier:{fo3script::Action action;action.kind=fo3script::ActionKind::ImageModifier;action.reference=owner;action.form=c.form;ok=QueueScriptAction(std::move(action));break;}
     case C::PlaySound:ok=QueueScriptSound(c.form);break;
@@ -637,6 +639,11 @@ bool Player::QueueScriptPlayGroup(uint32_t reference,const std::string& group,ui
     scriptAnimations_[reference]={name,scriptRuntimeSeconds_,clip.duration,clip.loop};return true;
   }
   return false;
+}
+bool Player::QueueScriptDefaultActivate(uint32_t reference,uint32_t activator){
+  if(reference!=scriptReference_||activator!=PlayerRef||!CanScriptActivateDoor(reference))return false;
+  fo3script::Action action;action.kind=fo3script::ActionKind::DefaultActivate;action.reference=reference;
+  return QueueScriptAction(std::move(action));
 }
 bool Player::QueueScriptAction(fo3script::Action action){
   if(pendingScriptActions_.size()>=64)return false;

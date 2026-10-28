@@ -5272,11 +5272,7 @@ void Q1590UploadPcSp17LightConstants() {
 bool RayAabbQ7(float ox, float oy, float oz,
                float dx, float dy, float dz,
                const GpuObject& object, float& outT) {
-    const bool q1740MegatonMainGate =
-        object.editorId == "MegatonMainGate01" ||
-        object.modelPath.find("MegatonMainGate01") != std::string::npos ||
-        object.modelPath.find("megatonmaingate01") != std::string::npos;
-    const float PAD = q1740MegatonMainGate ? 6.50f : 0.08f;
+    constexpr float PAD = 0.08f;
     Vec3 q2400Min{},q2400Max{};
     Q2400ObjectBounds(object,q2400Min,q2400Max);
     const float mins[3]{q2400Min.x-PAD,q2400Min.y-PAD,q2400Min.z-PAD};
@@ -7853,7 +7849,7 @@ bool Q1030BootMegatonOnRender() {
     if (gSceneReady) return true;
     if (gSceneLoad.bootAttempted) return false;
     gSceneLoad.bootAttempted = true;
-    BeginFo3Loading(0u, 0x0000003Cu);
+    BeginFo3Loading(0u, 0u);
     if (!BeginFo3SceneLoad({}, true)) return false;
     return false; // The next frame compiles shaders after presentation starts.
 }
@@ -15176,6 +15172,7 @@ fo3player::Session* GetFo3PlayerSession() { return gPlayerSession.get(); }
 #include "ui/lockpick/fo3-lockpick-runtime.inc"
 #include "ui/terminal/fo3-terminal-runtime.inc"
 #include "world/interaction/fo3-interaction-runtime.inc"
+#include "world/interaction/fo3-script-default-activation.inc"
 #include "scripting/fo3-world-script-runtime.inc"
 #include "world/interaction/fo3-levelup-runtime.inc"
 #include "ui/pause/fo3-pause-runtime.inc"

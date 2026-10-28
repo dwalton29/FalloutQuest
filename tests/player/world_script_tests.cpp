@@ -5,6 +5,8 @@
 #include <stdexcept>
 #include <unistd.h>
 #include <cstdio>
+#include <filesystem>
+#include "world/fo3-worldspace-runtime.h"
 using namespace fo3player;
 static void Check(bool b,const std::string& s){if(!b)throw std::runtime_error(s);}
 static float Local(const Player& p,const std::string& name){
@@ -44,12 +46,28 @@ static void Synthetic(){
   Check(p.ScriptRuntimeGeneration()!=generation&&!p.PollScriptAction(action),"restore invalidates transient presentation");
   Check(p.ScriptAnimationPlaying(10,playing)&&!playing,"restore clears animation clock");
   p.SetScriptPlayerLocation(0,0,0,1,0);Check(p.ScriptTriggerChanges().size()==1,"restore starts fresh spatial lifecycle");
+  // A source command delegates the default action; the normal A policy still
+  // blocks scripted doors until their event explicitly authorizes the command.
+  Catalog doors;doors.initial.baseHealth=100;doors.initial.special.fill(5);
+  doors.references[30].base=300;doors.doorBases.insert(300);doors.scriptedBases.insert(300);doors.eventBaseScripts[300]=301;
+  auto& ds=doors.pipboy.scripts[301];ds.source="Begin OnActivate\nif 0\nplayer.scaonactor\nforceSave\nendif\nActivate\nEnd";
+  doors.eventPrograms[301]=fo3script::ParseEvents(ds);
+  Player doorPlayer(doors);Check(!doorPlayer.CanOpenDoor(30)&&doorPlayer.CanScriptActivateDoor(30),"explicit source delegation preserves ordinary script gate");
+  auto delegated=doorPlayer.PrepareReferenceEventTransaction(30,"OnActivate",PlayerRef,error);Check(bool(delegated),error);
+  Check(!doorPlayer.PollScriptAction(action)&&doorPlayer.CommitScriptTransaction(*delegated),"default action is transactional");
+  Check(doorPlayer.PollScriptAction(action)&&action.kind==fo3script::ActionKind::DefaultActivate&&action.reference==30,"source default action queued");
+  Check(doorPlayer.ScriptLock(30,100)&&!doorPlayer.CanScriptActivateDoor(30),"source delegation respects locks");
+  doors.pipboy.scripts[301].source="Begin OnActivate\nif 1\nforceSave\nendif\nActivate\nEnd";doors.eventPrograms[301]=fo3script::ParseEvents(doors.pipboy.scripts[301]);
+  Player unsupported(doors);Check(!unsupported.PrepareReferenceEventTransaction(30,"OnActivate",PlayerRef,error)&&!unsupported.PollScriptAction(action),"executed unsupported operation rejects entire event");
   // Image curves are sampled over the authored duration, not reduced to last keys.
   fo3script::ImageModifier m;m.valid=true;m.duration=10;m.fade.keys={{0,{1,1,1,.8f}},{1,{1,1,1,0}}};m.blur.keys={{0,{2,0,0,0}},{1,{0,0,0,0}}};
   auto image=fo3script::SampleImageModifier(m,5);Check(std::abs(image.fade[3]-.4f)<.001&&image.blur==1,"temporal modifier midpoint");
   Check(fo3script::SampleImageModifier(m,10).fade[3]==0,"modifier expires");
 }
 static void Original(const char* path){
+  const auto root="/tmp/fq-world-original-"+std::to_string(getpid());std::filesystem::create_directory(root);
+  std::filesystem::create_symlink(std::filesystem::absolute(path),root+"/Fallout3.esm");Check(setenv("FALLOUTQUEST_DATA_ROOT",root.c_str(),1)==0,"original data root");
+  struct Cleanup {std::string root;~Cleanup(){std::filesystem::remove(root+"/Fallout3.esm");std::filesystem::remove(root);}} cleanup{root};
   Catalog c;std::string error;Check(LoadCatalog(path,c,error),error);c.initial.gameHour=12;Player p(std::move(c));
   const auto& d=p.Definitions().pipboy;auto id=[&](const char* name){auto f=d.formNames.find(name);Check(f!=d.formNames.end(),std::string("missing ")+name);return f->second;};
   const uint32_t house=id("megatongatehouseref"),weld=id("megatongateprotectronref");
@@ -61,14 +79,26 @@ static void Original(const char* path){
   }}Check(trigger!=0,"source gate trigger");
   const auto& gateVolume=d.targets.at(trigger);p.SetScriptPlayerLocation(gateVolume.x,gateVolume.y,gateVolume.z,gateVolume.cell,gateVolume.world);
   auto changes=p.ScriptTriggerChanges();Check(std::find(changes.begin(),changes.end(),std::make_pair(trigger,true))!=changes.end(),"original gate volume retained and entered");
+  std::vector<Fo3WorldPlacement> placements;
+  Check(LoadFo3WorldspacePlacements({gateVolume.world,0x2db4,gateVolume.x,gateVolume.y,1},placements),"original gate neighborhood");
+  std::vector<uint32_t> resident;bool entrance=false;
+  for(const auto& placement:placements){resident.push_back(placement.refFormId);entrance|=placement.refFormId==0x3b24;}
+  Check(entrance&&std::find(resident.begin(),resident.end(),house)!=resident.end(),"authored entrance and scripted gatehouse survive real scene selection");
   auto enter=p.PrepareReferenceEventTransaction(trigger,"OnTriggerEnter",PlayerRef,error);Check(bool(enter),"gate enter: "+error);Check(p.CommitScriptTransaction(*enter),"gate trigger commit");
   Check(Local(p,"megatongatehouseref.opennow")==1&&Local(p,"megatongateprotectronref.playernear")==1,"original cross-reference locals");
-  auto run=[&](const char* event){auto plan=p.PrepareReferenceEventTransaction(house,event,0,error);Check(bool(plan),std::string(event)+": "+error);Check(p.CommitScriptTransaction(*plan),"gate commit");};
+  auto run=[&](const char* event){if(std::string(event)=="GameMode"){
+    p.PumpWorldAwareGameMode(.25,resident,[](auto){return false;});return;
+  }auto plan=p.PrepareReferenceEventTransaction(house,event,0,error);Check(bool(plan),std::string(event)+": "+error);Check(p.CommitScriptTransaction(*plan),"gate commit");};
   run("OnLoad");run("GameMode");fo3script::Action action;Check(p.PollScriptAction(action)&&action.group=="forward","original Forward");Check(!p.PollScriptAction(action),"idle cannot interrupt opening");
   p.SetScriptRuntimeClock(114.99,.25);run("GameMode");Check(!p.PollScriptAction(action),"source waits for duration");
   p.SetScriptRuntimeClock(115,.25);run("GameMode");Check(p.PollScriptAction(action)&&action.group=="left"&&Local(p,"megatongatehouseref.opened")==2,"source Left at completion");
   run("OnLoad");run("GameMode");Check(p.PollScriptAction(action)&&action.group=="left","source reload idle");
   (void)weld;
+  // Actual cave exit OnActivate must reach its authored fallback when CG04
+  // is not running. No forced quest stage or source replacement is involved.
+  auto cave=p.PrepareReferenceEventTransaction(id("vault101cavedoorinterior"),"OnActivate",PlayerRef,error);
+  Check(bool(cave),"original cave exit: "+error);Check(p.CommitScriptTransaction(*cave),"cave default delegation commit");
+  Check(p.PollScriptAction(action)&&action.kind==fo3script::ActionKind::DefaultActivate,"original cave exit default action");
   // Sun-blind trigger is located by its base SCRI, not by a runtime hardcode.
   trigger=0;for(const auto& t:d.triggerPrimitives){const auto ref=p.Definitions().references.find(t.first);if(ref==p.Definitions().references.end())continue;const auto script=p.Definitions().eventBaseScripts.find(ref->second.base);if(script!=p.Definitions().eventBaseScripts.end()&&script->second==id("cg04sunblindscript"))trigger=t.first;}
   Check(trigger!=0,"source exit trigger");

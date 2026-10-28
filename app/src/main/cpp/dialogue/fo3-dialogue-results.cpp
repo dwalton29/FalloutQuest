@@ -190,6 +190,18 @@ bool CompileResult(const fo3pipdata::Definitions& d,const fo3pipdata::ResultScri
     } else if(op=="imod"||op=="applyimagespacemodifier"){
       cmd.type=CommandType::ImageModifier;
       if(!(in>>a)||!(cmd.form=form(a))){error="invalid image modifier";return false;}
+    } else if(op=="activate") {
+      cmd.type=CommandType::DefaultActivate;cmd.form=owner;
+      if(!owner){error="Activate requires a reference owner";return false;}
+      if(in>>a){if(a!="player"){error="unsupported Activate actor";return false;}cmd.index=fo3player::PlayerRef;
+        if(in>>b){if(b!="0"){error="Activate event re-entry unsupported";return false;}}
+      }
+      in.clear();
+    } else if(op=="player.scaonactor"||op=="forcesave") {
+      // Recognize these commands without pretending their effects exist.
+      // Unentered character-generation branches do not execute them; entered
+      // branches still reject the entire transaction explicitly.
+      cmd.type=CommandType::Unavailable;cmd.expression=op;
     } else if(op=="playsound") {
       cmd.type=CommandType::PlaySound;
       if(!(in>>a)||(cmd.form=form(a))==0){error="invalid playsound form";return false;}

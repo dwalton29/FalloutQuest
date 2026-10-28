@@ -369,10 +369,10 @@ target_include_directories(terminal_runtime_tests PRIVATE ../../app/src/main/cpp
 target_link_libraries(terminal_runtime_tests PRIVATE ZLIB::ZLIB)
 add_test(NAME terminal_runtime_tests COMMAND terminal_runtime_tests)
 
-add_executable(world_script_tests world_script_tests.cpp ${dialogue_shared})
+add_executable(world_script_tests world_script_tests.cpp ${dialogue_shared} ../../app/src/main/cpp/world/fo3-worldspace-runtime.cpp)
 target_compile_features(world_script_tests PRIVATE cxx_std_17)
 target_compile_options(world_script_tests PRIVATE -Wall -Wextra -Werror)
-target_include_directories(world_script_tests PRIVATE ../../app/src/main/cpp)
+target_include_directories(world_script_tests PRIVATE ../../app/src/main/cpp ../../app/src/main/cpp/data)
 target_link_libraries(world_script_tests PRIVATE ZLIB::ZLIB)
 add_test(NAME world_script_tests COMMAND world_script_tests)
 add_executable(world_script_runtime_tests world_script_runtime_tests.cpp ${dialogue_shared} ../../app/src/main/cpp/npc/fo3-actor-animation.cpp)

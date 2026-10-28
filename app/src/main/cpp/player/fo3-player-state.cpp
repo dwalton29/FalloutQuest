@@ -1061,14 +1061,19 @@ bool Player::Pickup(uint32_t id) {
   return true;
 }
 bool Player::CanOpenDoor(uint32_t id) const {return CanActorOpenDoor(PlayerRef,id);}
-bool Player::CanActorOpenDoor(uint32_t actor,uint32_t id) const {
+bool Player::CanActorOpenDoor(uint32_t actor,uint32_t id) const {return CanOpenDoorImpl(actor,id,false);}
+bool Player::CanScriptActivateDoor(uint32_t id) const {
+  const auto r=catalog_->references.find(id);
+  return r!=catalog_->references.end()&&catalog_->doorBases.count(r->second.base)&&CanOpenDoorImpl(PlayerRef,id,true);
+}
+bool Player::CanOpenDoorImpl(uint32_t actor,uint32_t id,bool sourceDelegated) const {
   const auto r = catalog_->references.find(id);
   if (r == catalog_->references.end())
     return false;
   const auto &ref = r->second;
   // Ownership controls trespass/crime, not whether an unlocked door opens.
   if (!ref.valid || (ref.flags & 0x20u) ||
-      (catalog_->scriptedBases.count(ref.base) &&
+      (!sourceDelegated && catalog_->scriptedBases.count(ref.base) &&
        (actor!=PlayerRef||!catalog_->defaultActivationDoors.count(ref.base))))
     return false;
   bool disabled=false;std::string error;

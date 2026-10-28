@@ -70,6 +70,14 @@ void synthetic(const std::string& path){
  assert(!LoadFo3InteriorCellPlacementsQ1700(200,after,&state,true));
  assert(LoadFo3WorldspacePlacements({100,200,100,100,1},after,&state)&&find(after,400));
  assert(!LoadFo3WorldspacePlacements({100,200,100,100,1,true},after,&state));
+ // Source-authored entrance references must not be filtered by their FormIDs.
+ Bytes gateRefs;for(uint32_t id:{0x3b24u,0x1d55au,0x6d4adu})add(gateRefs,rec("REFR",id,ref()));
+ Bytes gateChildren;add(gateChildren,rec("CELL",200,cell));add(gateChildren,group(200,6,group(200,8,gateRefs)));add(gateChildren,rec("CELL",201,grid));
+ Bytes gateEsm=rec("TES4",0,{});add(gateEsm,rec("ACTI",300,base));add(gateEsm,rec("WRLD",0x3c,world));add(gateEsm,group(0x3c,1,gateChildren));
+ {std::ofstream f(path,std::ios::binary|std::ios::trunc);f.write(reinterpret_cast<const char*>(gateEsm.data()),gateEsm.size());assert(f);}
+ assert(LoadFo3WorldspacePlacements({0x3c,200,100,100,1},after));
+ assert(find(after,0x3b24)&&find(after,0x1d55a)&&find(after,0x6d4ad));
+
 }
 void original(){
  constexpr uint32_t refId=0x1e99f;std::vector<Fo3WorldPlacement> before,after;

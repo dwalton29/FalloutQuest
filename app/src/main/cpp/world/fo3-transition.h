@@ -26,7 +26,7 @@ struct Fo3CellTransitionRequestQ74 {
 
 // CPU-only entry points: no terrain teardown or collision-policy mutation.
 // Candidate selection permits empty results and rejects unresolved active bases.
-// Current development spawn: original exterior Vault 101 cave-door arrival.
+// Current development spawn: original interior Vault 101 cave-door arrival.
 bool ResolveFo3StartupEntryQ1860(Fo3CellTransitionRequestQ74& outRequest,
                                const std::atomic<bool>* cancelled = nullptr);
 bool ResolveFo3MegatonEntryQ1860(Fo3CellTransitionRequestQ74& outRequest,

@@ -84,8 +84,8 @@ indexed door teleports. No game data is committed.
 ## Background scene preparation: 0.24.11
 
 Development startup and authored door transitions share one preparation job.
-v260 starts at the original Vault 101 exterior cave-door XTEL arrival, selected
-by the interior exit REFR `00024720`. Coordinates and facing are read from the
+v261 starts inside the Vault 101 cave tunnel using the original incoming XTEL
+on exterior door REFR `00018612`, arriving at interior door `00024720`. Coordinates and facing are read from the
 installed ESM, not copied into the runtime. The original Megaton entry resolver
 remains available for its existing transition path. The Vault reveal's one-shot
 local is preserved; changing startup does not reset or force any script.
