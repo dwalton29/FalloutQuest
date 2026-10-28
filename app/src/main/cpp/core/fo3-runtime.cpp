@@ -13157,13 +13157,13 @@ void Q230RenderHealthHud(const float* mvp) {
                 actor.runtime.position[1]+std::max(0.f,actor.renderBounds.maxY-oldY)+.12f,
                 actor.runtime.position[2]};
         }else continue;
-        fo3healthui::RenderBar(mvp,anchor,eye,.28f,*bar,now,true);
+        fo3healthui::RenderBar(mvp,anchor,eye,.28f,*bar,now,true,fo3healthui::Style::Enemy);
     }
     // The left hand is tracked in world metres; hide when tracking drops or
     // when the physical Pip-Boy is in focus to avoid covering its controls.
     if(gQ210LeftHandValid&&!Fo3PipboyFocus()){
         const auto anchor=std::array<float,3>{gQ210LeftHand[0],gQ210LeftHand[1]+.16f,gQ210LeftHand[2]};
-        fo3healthui::RenderBar(mvp,anchor,eye,.18f,gQ230HealthBars.player,now,false);
+        fo3healthui::RenderBar(mvp,anchor,eye,.18f,gQ230HealthBars.player,now,false,fo3healthui::Style::Player);
     }
 }
 // The main target is allocated/bound by RenderEye, but its first draw is
