@@ -15,6 +15,19 @@ class ShoulderIntegration(unittest.TestCase):
         self.assertLess(grab.index('const bool resident='),grab.index('if (!handValid)'))
         self.assertIn('Fo3GameplayNow()',runtime.split('void Q223AdvanceDynamicBodies()',1)[1].split('bool Q220FindNearestLooseRef(',1)[0])
 
+    def test_physical_hand_is_not_its_own_tracking_target(self):
+        runtime=(ROOT/'app/src/main/cpp/core/fo3-runtime.cpp').read_text()
+        hand=runtime.split('void Q211UpdatePlayerRig()',1)[1].split('#include "weapons/fo3-weapon-runtime.inc"',1)[0]
+        self.assertIn('fo3rigid::Live().GripPalm(h,palm)',hand)
+        self.assertIn('Q218RotateQuaternion(renderQuat[0]',hand)
+        self.assertIn('Q218RotateQuaternion(renderQuat[1]',hand)
+        weapon=(ROOT/'app/src/main/cpp/weapons/fo3-weapon-runtime.inc').read_text()
+        raw=weapon.split('Matrix RawPrimaryHand()',1)[1].split('Matrix HandPose(',1)[0]
+        self.assertIn('gQ210RightHand[0]',raw)
+        self.assertIn('gQ218RightHandQuat',raw)
+        self.assertNotIn('gVrSolved',raw)
+        self.assertIn('pose=fo3anim::Multiply(raw,rawToWeapon)',weapon)
+
     def test_prompt_renderer_has_no_driver_snapshot(self):
         prompt=(ROOT/'app/src/main/cpp/ui/interaction/fo3-interaction-hud-renderer.h').read_text()
         render=prompt[prompt.index('inline void Render('):prompt.index('inline void Shutdown()')]

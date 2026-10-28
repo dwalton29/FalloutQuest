@@ -11432,7 +11432,7 @@ void Q211UpdatePlayerRig() {
         static fo3rigid::V previous[2]{};static bool ready[2]{};
         if(!valid){ready[h]=false;return target;}
         fo3rigid::M palm;
-        if(fo3rigid::Live().GripPalm(h,palm)){previous[h]={palm[12],palm[13],palm[14]};ready[h]=true;return Vec3{palm[12],palm[13],palm[14]};}
+        if(fo3rigid::Live().GripPalm(h,palm)){previous[h]={palm[12],palm[13]-.035f,palm[14]};ready[h]=true;return Vec3{palm[12],palm[13],palm[14]};}
         const fo3rigid::V desired{target.x,target.y-.035f,target.z};
         fo3rigid::V resolved=desired,normal;
         if(ready[h]&&Q211Length(Q211Sub(target,{previous[h][0],previous[h][1]+.035f,previous[h][2]}))<.5f)
@@ -11443,17 +11443,27 @@ void Q211UpdatePlayerRig() {
     rightTargetWorld=contactHand(1,rightTargetWorld,gQ210RightHandValid);
     const Vec3 leftTarget=Q211TransformPoint(invRoot,leftTargetWorld);
     const Vec3 rightTarget=Q211TransformPoint(invRoot,rightTargetWorld);
+    // The rendered hand follows the physical grip orientation; controller
+    // targets remain raw and independent in both clutter and weapon drivers.
+    float renderQuat[2][4];
+    std::copy(gQ218LeftHandQuat,gQ218LeftHandQuat+4,renderQuat[0]);
+    std::copy(gQ218RightHandQuat,gQ218RightHandQuat+4,renderQuat[1]);
+    for(int h=0;h<2;++h){fo3rigid::M physical;
+        if(!fo3rigid::Live().GripPalm(h,physical))continue;
+        const float rotation[9]{physical[0],physical[4],physical[8],physical[1],physical[5],physical[9],physical[2],physical[6],physical[10]};
+        const auto q=fo3anim::QuaternionFromMatrix(rotation);renderQuat[h][0]=q[1];renderQuat[h][1]=q[2];renderQuat[h][2]=q[3];renderQuat[h][3]=q[0];
+    }
     // Q21.11: match the actual OpenXR grip basis exactly.
     // +X is away from the left palm / into the right palm.
     // -Z is the across-hand direction from little finger to thumb.
     const Vec3 leftIntoPalmWorld =
-        Q218RotateQuaternion(gQ218LeftHandQuat, Vec3{-1.0f, 0.0f, 0.0f});
+        Q218RotateQuaternion(renderQuat[0], Vec3{-1.0f, 0.0f, 0.0f});
     const Vec3 rightIntoPalmWorld =
-        Q218RotateQuaternion(gQ218RightHandQuat, Vec3{1.0f, 0.0f, 0.0f});
+        Q218RotateQuaternion(renderQuat[1], Vec3{1.0f, 0.0f, 0.0f});
     const Vec3 leftAcrossWorld =
-        Q218RotateQuaternion(gQ218LeftHandQuat, Vec3{0.0f, 0.0f, -1.0f});
+        Q218RotateQuaternion(renderQuat[0], Vec3{0.0f, 0.0f, -1.0f});
     const Vec3 rightAcrossWorld =
-        Q218RotateQuaternion(gQ218RightHandQuat, Vec3{0.0f, 0.0f, -1.0f});
+        Q218RotateQuaternion(renderQuat[1], Vec3{0.0f, 0.0f, -1.0f});
 
     const Vec3 leftPalmRoot =
         Q211NormalizeSafe(Q218TransformVector(invRoot, leftIntoPalmWorld));

@@ -25,6 +25,7 @@ fo3weapon::Inputs inputs;
 fo3weapon::Trigger trigger;
 uint64_t active=0;
 bool held=false,support=false,inside=false,magazine=false,charging=false,pouchNearby=false;
+bool rawHeldReady=false;Matrix rawToWeapon=fo3anim::Identity();V rawPalmLocal{};
 Matrix pose=fo3anim::Identity(),magPose=fo3anim::Identity(),magStart=fo3anim::Identity();
 V supportLocal{},chargeStart{},magPalm{};
 float magQuat[4]{0,0,0,1};
@@ -137,6 +138,7 @@ bool Resident(const fo3weapon::WorldPose&p){
   if(p.world!=gExteriorWorldspaceQ1890)return false;
   return p.world!=0x3c||fo3weapon::CollisionResident(p,gExteriorWindowGridXQ1890,gExteriorWindowGridYQ1890);
 }
+Matrix RawPrimaryHand(){Matrix raw;const float identity[4]{0,0,0,1};Q220ControllerDeltaMatrix({},identity,{gQ210RightHand[0],gQ210RightHand[1],gQ210RightHand[2]},gQ218RightHandQuat,raw.data());return raw;}
 Matrix HandPose(const Model&m){
   const int hand=fo3anim::FindBone(gVrSkeleton,"Bip01 R Hand");
   if(hand<0)return pose;
@@ -237,7 +239,7 @@ void AdvanceFlights(float dt){
   }
 }
 void RetireReload(){magazine=charging=support=pouchNearby=false;supportWeight=chargeTravel=0;}
-void Draw(uint64_t id,uint32_t form){active=id;held=true;inside=false;RetireReload();motion={};Pulse(1);fo3audio::SoundEvent(gPlayerSession->player.Definitions().items.at(form).weapon.equip);Log("DRAW",id,form);}
+void Draw(uint64_t id,uint32_t form){active=id;held=true;rawHeldReady=false;inside=false;RetireReload();motion={};Pulse(1);fo3audio::SoundEvent(gPlayerSession->player.Definitions().items.at(form).weapon.equip);Log("DRAW",id,form);}
 void DrawModel(Model&m,const Matrix&root,bool alpha,bool onlyMag=false,bool removeMag=false,float action=0){
   auto transform=root;
   // Uploaded vertices include the runtime's fixed model-space origin.
@@ -360,8 +362,13 @@ void WeaponUpdate(double now,bool backButton){
   if(s&&m){const auto&d=p.Definitions().items.at(s->formId).weapon;auto&zone=d.LongGun()?back:hip;
     if(!held){const V display=d.LongGun()?zone.center:fo3weapon::HipDisplay(zone);pose=Rigid(fo3vr::Multiply(zone.body,fo3vr::Axis({0,0,1},d.LongGun()?fo3vr::Pi*.5f:-fo3vr::Pi*.5f)),display);}
     else if(gWeaponPalmValid[1]){
-      pose=HandPose(*m);
-      const V right=VrPoint(gWeaponPalm[1]),left=VrPoint(gWeaponPalm[0]);
+      const auto raw=RawPrimaryHand();
+      if(!rawHeldReady){
+        pose=HandPose(*m);Matrix inverse;
+        if(fo3anim::Inverse(raw,inverse)){rawToWeapon=fo3anim::Multiply(inverse,pose);rawPalmLocal=Point(inverse,VrPoint(gWeaponPalm[1]));rawHeldReady=true;}
+      }
+      pose=fo3anim::Multiply(raw,rawToWeapon);
+      const V right=Point(raw,rawPalmLocal),left=VrPoint(gWeaponPalm[0]);
       const V supportAnchor=GamePoint(m->asset.support);
       // Authored support palm with a 20cm sliding fore-end access segment.
       const V begin=Point(pose,supportAnchor+V{-.10f,0,0}),end=Point(pose,supportAnchor+V{.10f,0,0});
@@ -384,7 +391,7 @@ void WeaponUpdate(double now,bool backButton){
         auto& physics=fo3rigid::Live();const auto key=fo3rigid::WeaponId(s->id);
         const auto c=m->rigidBody->centerGame;const auto local=GamePoint({c.x,c.y,c.z});
         const auto target=Rigid(Rotation(pose),Point(pose,local));
-        if(physics.Held(1)!=key){physics.Place(key,target);physics.Grab(key,1,Rigid(Rotation(pose),right),{right.x,right.y,right.z});}
+        if(physics.Held(1)!=key){physics.Place(key,target);physics.Grab(key,1,Rigid(Rotation(raw),right),{right.x,right.y,right.z});}
         physics.TargetBody(key,target);
         Matrix actual;if(physics.Pose(key,actual))pose=Rigid(Rotation(actual),Position(actual)-Direction(actual,local));
       }
