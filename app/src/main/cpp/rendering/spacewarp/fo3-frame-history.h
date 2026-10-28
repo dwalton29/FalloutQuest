@@ -76,6 +76,9 @@ public:
   }
   void EyeRendered(unsigned eye){if(candidate_&&eye<2)eyes_[eye]=true;}
   bool Ready()const{return candidate_&&consistent_&&submitted_>=2;}
+  bool Active()const{return candidate_;}
+  const Frame& CurrentFrame()const{return current_;}
+  const Drawable* Current(uint64_t identity)const{const auto it=pending_.find(identity);return it==pending_.end()?nullptr:&it->second;}
   bool CanSynthesize(const std::array<Coverage,2>& coverage)const{return Ready()&&eyes_[0]&&eyes_[1]&&coverage[0].Complete(current_.serial)&&coverage[1].Complete(current_.serial)&&pending_.size()>=std::max(coverage[0].dynamicExpected,coverage[1].dynamicExpected);}
   bool Finish(bool submitted){
     if(!submitted){Reset();return false;}

@@ -493,7 +493,8 @@ bool Q230UploadActorPart(Q230ActorVisual &actor, CpuObject &part, float centerX,
 // continues to update bone palettes without rebuilding its vertices.
 void Q230UpdateFacialPart(Q230ActorVisual& actor,Q230RigPart& rig) {
   FQ_PERF_SCOPE(Facial);
-    if(!rig.facialBind.empty()&&rig.facialPublished!=actor.facialWeights) {
+    const bool facialChanged=!rig.facialBind.empty()&&rig.facialPublished!=actor.facialWeights;
+    if(facialChanged) {
       if(!fo3face::BlendExpanded(rig.facialBind,rig.facialDeltas,actor.facialWeights,rig.facialWork))return;
       if(!fo3face::UpdateDirections(rig.facialBind,rig.facialIndices,rig.facialWork))return;
       auto& object=actor.objects[rig.gpuIndex];
@@ -506,6 +507,12 @@ void Q230UpdateFacialPart(Q230ActorVisual& actor,Q230RigPart& rig) {
         glBindBuffer(GL_ARRAY_BUFFER,0);
       }else rig.skin.bind=rig.facialWork;
       rig.facialPublished=actor.facialWeights;
+    }
+    if(fqmotion::requested&&!rig.facialBind.empty()&&actor.objects[rig.gpuIndex].skinMode&&
+       (facialChanged||!actor.objects[rig.gpuIndex].motionShape||actor.objects[rig.gpuIndex].motionShape->deformedPositions.empty())){
+      auto& object=actor.objects[rig.gpuIndex];
+      if(!object.motionShape)object.motionShape=std::make_shared<fqspacewarp::Drawable>();
+      fqmotion::Positions(*object.motionShape,rig.facialWork.empty()?rig.facialBind:rig.facialWork);
     }
 }
 #endif

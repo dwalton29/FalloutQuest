@@ -81,9 +81,11 @@ bool QActorCreateSkin(GpuObject& object,QActorSkin& skin,
     return true;
 }
 void QActorUploadSkin(GpuObject& object,QActorSkin& skin,fqactor::Cost& cost,bool player) {
+    bool paletteChanged=false;
     if(object.skinMode) {
         const auto started=fqopaque::Clock::now();
-        if(skin.published.Changed(skin.palette)) {
+        paletteChanged=skin.published.Changed(skin.palette);
+        if(paletteChanged) {
             glActiveTexture(GL_TEXTURE6);glBindTexture(GL_TEXTURE_2D,object.skinPalette);
             glTexSubImage2D(GL_TEXTURE_2D,0,0,0,8,skin.palette.size(),GL_RGBA,GL_FLOAT,skin.palette.data());
 #ifdef FQ_ENABLE_VULKAN
@@ -120,6 +122,11 @@ void QActorUploadSkin(GpuObject& object,QActorSkin& skin,fqactor::Cost& cost,boo
         cost.upload+=fqopaque::Micros(started);cost.vertexBytes+=skin.work.size()*sizeof(float);++cost.vboUploads;
         cost.vertices+=object.vertexCount;
     }
+    if(fqmotion::requested){
+        if(!object.motionShape)object.motionShape=std::make_shared<fqspacewarp::Drawable>();
+        if(object.skinMode&&(paletteChanged||object.motionShape->palette.empty()))object.motionShape->palette=skin.palette;
+        if(!object.skinMode)fqmotion::Positions(*object.motionShape,skin.work);
+    }else object.motionShape.reset();
     cost.referenceBytes+=static_cast<uint64_t>(object.vertexCount)*18*sizeof(float);
     ++cost.parts;
 }

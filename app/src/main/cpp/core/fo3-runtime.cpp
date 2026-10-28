@@ -1,3 +1,4 @@
+#include "rendering/spacewarp/fo3-motion-gles.h"
 #include "physics/fo3-contact-limit.h"
 #include "physics/fo3-rigid-world.h"
 #include "scripting/fo3-script-imagespace.h"
@@ -495,6 +496,8 @@ struct CpuObject {
 };
 
 struct GpuObject {
+    mutable uint64_t motionIdentity=0;
+    std::shared_ptr<fqspacewarp::Drawable> motionShape;
     std::shared_ptr<const Fo3PreparedRigidBody> rigidBody;
     Vec3 rigidCenter{};
     std::shared_ptr<const fo3terminal::Surface> terminalScreen;
@@ -7548,12 +7551,38 @@ void DrawSceneObject(const GpuObject& object, bool environmentPassQ2050 = false)
         if(object.q236Indexed)glDrawElements(GL_TRIANGLES,object.vertexCount,GL_UNSIGNED_INT,nullptr);
         else glDrawArrays(GL_TRIANGLES, 0, object.vertexCount);
     }
-
-
+    if(fqmotion::eye.collecting&&!environmentPassQ2050&&!gWaterReflectionPassQ2090){
+        if(object.alphaBlend||!object.zBufferTestQ1200||!object.zBufferWriteQ1200)fqmotion::eye.Block(fqmotion::Transparency);
+        const bool moving=object.q210PlayerBody||object.q230NpcActor||object.physicalWeapon||object.q220LooseObject||object.q2400SwingDoor||object.scriptAnimated;
+        if(moving){
+            if(gInstancedDrawActiveQ2016)fqmotion::eye.Block(fqmotion::Instancing);
+            else{
+                if(!object.motionIdentity)object.motionIdentity=++fqmotion::nextIdentity;
+                fqspacewarp::Drawable shape;
+                if(object.motionShape)shape=*object.motionShape;
+                if(object.skinMode&&shape.palette.empty())fqmotion::eye.Block(fqmotion::Deformation);
+                shape.geometry=object.motionIdentity;
+                if(q2017UseObjectTransform){
+                    const float* transform=object.q210PlayerBody?(object.pipboy?gPipWorld.data():gQ210PlayerRoot):
+                        (object.q220LooseObject||object.physicalWeapon)?object.q220DynamicTransform:
+                        (object.q2400SwingDoor||object.scriptAnimated)?object.q2400DoorTransform:object.q2017RelativeMatrix;
+                    std::copy_n(transform,16,shape.model.begin());
+                }
+                fqmotion::Draw draw;draw.identity=object.motionIdentity;draw.vbo=object.vbo;draw.indexBuffer=object.q236IndexBuffer;
+                draw.skinAttributes=object.skinAttributes;draw.paletteTexture=object.skinPalette;draw.diffuse=object.diffuse;
+                draw.count=object.vertexCount;draw.vertices=object.q236Indexed?object.q236UniqueVertices:object.vertexCount;draw.skinMode=object.skinMode;draw.indexed=object.q236Indexed;
+                draw.cull=cull;draw.clockwise=front==GL_CW;draw.decal=object.decalQ1170;draw.alphaTest=object.alphaTest;
+                draw.vertexAlpha=q2025ApplyVertexAlpha;draw.alpha=object.materialAlpha;draw.threshold=object.alphaThreshold;
+                fqmotion::eye.Record(draw,shape);
+            }
+        }
+    }
 }
 
 bool Q2017EligibleForInstancing(const GpuObject& object) {
     return object.q2017SharedGeometry &&
+           !object.scriptAnimated && !object.q2400SwingDoor &&
+           !object.q210PlayerBody && !object.q230NpcActor && !object.physicalWeapon &&
            !object.q220LooseObject &&
            gExteriorStreamingActiveQ1890 &&
            !object.q1990NativeLod &&
@@ -13279,6 +13308,7 @@ void RenderScene(const float* mvp) {
     // an in-flight HDR scene. Restore the main camera after the mirror shader.
     Q238SelectMainTarget(!q209bWaterInFrustum);
     Q233BeginMainEyeWorld();
+    fqmotion::eye.Main();
     glUseProgram(gProgram);
     glUniformMatrix4fv(gMvpLocation,1,GL_FALSE,mvp);
     const GLboolean q2021MainA2cWas = glIsEnabled(GL_SAMPLE_ALPHA_TO_COVERAGE);
@@ -13481,6 +13511,7 @@ void RenderScene(const float* mvp) {
         const auto q2019WaterDrawStarted =
             std::chrono::steady_clock::now();
         fqperf::GpuScope gpuWater(fqperf::GpuWater);
+        if(q209bWaterInFrustum)fqmotion::eye.Block(fqmotion::Water);
         RenderFo3WaterSurfaceQ2070(
             mvp,
             gExteriorOriginXQ1890,
@@ -13533,7 +13564,10 @@ void RenderScene(const float* mvp) {
 
     // Draw per-eye after world/water depth has been populated; meters have
     // depth writes disabled and use the original Fallout HUD solid sprite.
+    const auto motionHealthBefore=fqgl::counters.draws;
     Q230RenderHealthHud(mvp);
+    if(fqgl::counters.draws!=motionHealthBefore)fqmotion::eye.Block(fqmotion::Ui);
+    fqmotion::eye.collecting=false;
     glActiveTexture(GL_TEXTURE5);
     glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture5Q2050));
     glActiveTexture(GL_TEXTURE4);

@@ -15,12 +15,14 @@ jobs:
       - name: Install Vulkan shader, software GPU and validation tools
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y glslang-tools spirv-tools libvulkan-dev libopenxr-dev libgles-dev mesa-vulkan-drivers vulkan-validationlayers gdb
+          sudo apt-get install -y glslang-tools spirv-tools libvulkan-dev libopenxr-dev libgles-dev libegl-dev libegl-mesa0 libgl1-mesa-dri mesa-vulkan-drivers vulkan-validationlayers gdb
       - name: Compile and link production world and original LAND SPIR-V
         run: |
           python3 tests/render/test_vulkan_shaders.py
           python3 tests/render/test_spacewarp_shaders.py
           python3 tests/render/test_spacewarp_openxr.py
+          g++ -std=c++17 -Wall -Wextra -Werror -Wno-misleading-indentation -Iapp/src/main/cpp tests/render/spacewarp_gles_tests.cpp -lEGL -lGLESv2 -o /tmp/spacewarp-gles
+          EGL_PLATFORM=surfaceless /tmp/spacewarp-gles
           python3 tools/build_vulkan_shaders.py --compiler glslangValidator --output /tmp/fq-vulkan-shaders
       - name: Verify Vulkan bridge preserves GLES fallback
         run: |
@@ -238,7 +240,11 @@ jobs:
 
       - name: Install Android build components
         run: |
-          sdkmanager "platforms;android-35" "build-tools;35.0.0" "ndk;27.0.12077973" "cmake;3.22.1"
+          for attempt in 1 2 3; do
+            if sdkmanager "platforms;android-35" "build-tools;35.0.0" "ndk;27.0.12077973" "cmake;3.22.1"; then exit 0; fi
+            if [ "$attempt" = 3 ]; then exit 1; fi
+            sleep 5
+          done
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4

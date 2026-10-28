@@ -1,6 +1,7 @@
 #include "rendering/spacewarp/fo3-frame-history.h"
 #include <cassert>
 #include "rendering/spacewarp/fo3-motion-vectors.h"
+#include "rendering/spacewarp/fo3-motion-capture.h"
 #include <iostream>
 using namespace fqspacewarp;
 Frame Input(uint64_t serial){Frame f;f.serial=serial;f.displayTime=int64_t(serial)*13888889;f.scene=10;f.world=0x3c;f.sceneReady=f.focused=true;return f;}
@@ -30,5 +31,13 @@ int main(){
  Submit(h,Input(10));Submit(h,Input(11));auto rebase=Input(12);rebase.origin[0]=4096;assert(h.Begin(rebase)&&!h.Ready());
  History lost;Submit(lost,Input(1));Submit(lost,Input(2));assert(!lost.Finish(false)&&lost.SubmittedFrames()==0);
  History bounded;assert(bounded.Begin(Input(1)));Drawable large;large.geometry=99;large.deformedPositions.resize(History::MaxHistoryBytes/sizeof(float));assert(!bounded.Record(1,large));
+ History captured;fqmotion::Capture capture;fqmotion::Draw draw;draw.identity=5;d={};d.geometry=9;
+ for(unsigned serial=1;serial<=2;++serial){assert(captured.Begin(Input(serial)));capture.Begin(captured);assert(!capture.Record(draw,d));capture.Main();assert(capture.Record(draw,d));assert(capture.Record(draw,d)&&capture.draws.size()==1);
+   if(serial==1)assert(capture.reasons&fqmotion::MissingHistory);
+   else assert(capture.Coverage(true).Complete(serial));
+   captured.EyeRendered(0);captured.EyeRendered(1);assert(captured.Finish(true));}
+ assert(captured.Begin(Input(3)));capture.Begin(captured);capture.Main();d.deformedPositions={1,2,3};assert(capture.Record(draw,d));assert(capture.reasons&fqmotion::Deformation);assert(!capture.Coverage(true).Complete(3));
+ capture.Block(fqmotion::Ui|fqmotion::Water);assert((capture.reasons&fqmotion::Ui)&&(capture.reasons&fqmotion::Water));
+ captured.Finish(false);capture.Begin(captured);capture.Main();assert(!capture.history&&!capture.collecting&&!capture.Record(draw,d));
  std::cout<<"SpaceWarp Wasteland policy, stereo submission, deformation history, coverage and bounded storage passed\n";
 }

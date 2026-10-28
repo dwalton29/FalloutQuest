@@ -50,4 +50,11 @@ void main(){
  if(depth<1.0&&previous.w>0.000001)velocity.xyz=(current.xyz-previous.xyz/previous.w)*uMotionScale;
 }
 )GLSL";
+inline constexpr const char* DebugFragment=R"GLSL(#version 300 es
+precision highp float;
+in vec2 uv;
+uniform sampler2D uMotion;
+layout(location=0) out vec4 colour;
+void main(){colour=vec4(vec3(.5)+texture(uMotion,uv).xyz*4.0,1.0);}
+)GLSL";
 } // namespace fqspacewarp

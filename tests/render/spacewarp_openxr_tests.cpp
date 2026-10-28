@@ -1,4 +1,5 @@
 #include "rendering/spacewarp/fo3-openxr-spacewarp.h"
+#include "rendering/spacewarp/fo3-image-lease.h"
 #include <cassert>
 #include <set>
 #include <string>
@@ -6,7 +7,12 @@
 using namespace fqspacewarp;
 static unsigned creates=0,failAt=0;static uint32_t viewsCount=2,width=368;
 static std::set<XrSwapchain> live;
+static XrResult acquireResult=XR_SUCCESS,waitResult=XR_SUCCESS,releaseResult=XR_SUCCESS;
+static unsigned acquisitions=0,waits=0,releases=0;
 extern "C" {
+XRAPI_ATTR XrResult XRAPI_CALL xrAcquireSwapchainImage(XrSwapchain,const XrSwapchainImageAcquireInfo*,uint32_t* index){++acquisitions;*index=2;return acquireResult;}
+XRAPI_ATTR XrResult XRAPI_CALL xrWaitSwapchainImage(XrSwapchain,const XrSwapchainImageWaitInfo* info){++waits;assert(info->timeout==XR_INFINITE_DURATION);return waitResult;}
+XRAPI_ATTR XrResult XRAPI_CALL xrReleaseSwapchainImage(XrSwapchain,const XrSwapchainImageReleaseInfo*){++releases;return releaseResult;}
 XRAPI_ATTR XrResult XRAPI_CALL xrDestroySwapchain(XrSwapchain handle){assert(live.erase(handle)==1);return XR_SUCCESS;}
 XRAPI_ATTR XrResult XRAPI_CALL xrCreateSwapchain(XrSession,const XrSwapchainCreateInfo* info,XrSwapchain* handle){
  assert(info->sampleCount==1&&info->arraySize==1&&info->mipCount==1);
@@ -50,4 +56,12 @@ int main(){
  extensions.resize(2);std::strcpy(extensions[1].extensionName,XR_EXT_FRAME_SYNTHESIS_EXTENSION_NAME);session.Negotiate(true,extensions);width=0;
  assert(!session.Create(XR_NULL_HANDLE,1,XR_NULL_HANDLE,1,2)&&live.empty());
  session.Destroy();
+ const auto handle=reinterpret_cast<XrSwapchain>(uintptr_t(1000));
+ {ImageLease lease;assert(lease.Acquire(handle)&&lease.index==2);assert(!lease.Acquire(handle));assert(lease.Release());assert(!lease.Release());}
+ assert(acquisitions==1&&waits==1&&releases==1);
+ acquireResult=XR_ERROR_RUNTIME_FAILURE;{ImageLease lease;assert(!lease.Acquire(handle));}assert(waits==1&&releases==1);acquireResult=XR_SUCCESS;
+ waitResult=XR_ERROR_RUNTIME_FAILURE;{ImageLease lease;assert(!lease.Acquire(handle));assert(!lease.Acquire(handle));}assert(waits==2&&releases==1);
+ waitResult=XR_TIMEOUT_EXPIRED;{ImageLease lease;assert(!lease.Acquire(handle));}assert(releases==1);
+ waitResult=XR_SUCCESS;{ImageLease lease;assert(lease.Acquire(handle));}assert(releases==2);
+ releaseResult=XR_ERROR_RUNTIME_FAILURE;{ImageLease lease;assert(lease.Acquire(handle));assert(!lease.Release());}assert(releases==3);
 }
