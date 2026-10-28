@@ -14931,13 +14931,13 @@ bool ShutdownFo3SceneGpu() {
     ShutdownFo3WaterQ2070();
     WeaponShutdown();
     ShutdownFo3CollisionOverlay();
+    gFo3VisualPublication.Changed();
     // These owners survive cell transitions, but their names cannot survive
     // destruction of the GLES context or native Vulkan resource registry.
     Q210DeletePlayerBody();gQ210PlayerBodyAttempted=false;
     Q1990ClearNativeLodGeometry();gQ1990NativeLodOriginValid=false;
     ShutdownFo3TerrainGpuSession();
     fo3pcsky::ShutdownGpu();ResetFo3Environment();
-    gFo3VisualPublication.Changed();
     for (GpuObject& object : gObjects) {
         Q1900DeleteGpuShape(object);
     }

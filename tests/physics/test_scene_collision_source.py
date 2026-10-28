@@ -46,7 +46,7 @@ assert deletion.index('QActorDeleteSkin(object)') < deletion.index('Q2017Release
 for source,start,end,mutation in [
     (s,'bool InitializeScene()','bool Q74ShouldSkipPlacement(', 'gObjects.push_back('),
     (s,'void Q1900CommitWindow()','struct Q1970', 'replacement.push_back(std::move(object))'),
-    (s,'void Q6HDeleteFramebuffers(',None, 'Q1900DeleteGpuShape(object)'),
+    (s,'bool ShutdownFo3SceneGpu(',None, 'Q1900DeleteGpuShape(object)'),
     (c,'void Q1900CommitCellVisualsQ19(','bool Q2013AdvanceCellGpuSliceQ19(', 'Q1910QueueGpuDeleteQ19(object)'),
     (c,'void Q1900RetireFarCellsQ19(',None, 'Q1910QueueGpuDeleteQ19(object)'),
 ]:
@@ -60,9 +60,9 @@ for assignment in ('gObjects = std::move(replacement)', 'gObjects = std::move(wo
         assert ('Q74DeleteGpuObjects(gObjects)' in part[-250:] or
                 'void Q1900CommitWindow()' in part and
                 'gFo3VisualPublication.Changed()' in part[part.rindex('void Q1900CommitWindow()'):])
-teardown=s[s.index('void Q6HDeleteFramebuffers('):]
+teardown=s[s.index('bool ShutdownFo3SceneGpu('):]
 assert teardown.index('DiscardFo3ResidentVisualPlan()') < teardown.index('Q2017ForceClearSharedGeometry()')
-assert teardown.index('DiscardFo3ResidentVisualPlan()') < teardown.index('gTextureCache.clear()')
+assert teardown.index('DiscardFo3ResidentVisualPlan()') < teardown.index('for (auto* cache : {&gTextureCache, &gCubeTextureCacheQ2050})') < teardown.index('cache->clear()')
 assert begin.index('DiscardFo3ResidentVisualPlan()') < begin.index('gSceneLoad.preparation.Start(')
 assert 'gOpaqueOrderVisualRevision == gFo3VisualPublication.Revision()' in s
 assert 'cache.visualRevision != gFo3VisualPublication.Revision()' in s
