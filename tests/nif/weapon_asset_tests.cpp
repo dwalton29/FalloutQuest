@@ -57,6 +57,10 @@ int main(int argc, char **argv) {
       if(assault){assert(runtime.Reload(Read(reload)));fo3weapon::Definition definition;definition.animation=6;definition.reload=0;assert(runtime.ReloadInteraction(definition)==fo3weapon::ReloadFamily::DetachableRifle);}
       if(!rifle){assert(runtime.Reload(Read(reload)));assert(runtime.reloadSounds[0]=="WPNPistol10mmReloadOut");assert(runtime.reloadSounds[1]=="WPNPistol10mmReloadIn");assert(runtime.reloadSounds[2]=="WPNPistol10mmReloadChamber");}
       const auto hip=fo3weapon::Hip({1,2,3},fo3vr::Identity());assert(hip.Contains(hip.center));
+      assert(hip.radius.x==.28f&&hip.radius.y==.28f&&hip.radius.z==.28f);
+      const auto back=fo3weapon::Back({1,2,3},fo3vr::Identity());
+      const auto display=fo3weapon::BackDisplay(back);
+      assert(std::abs(display.y-1.96f)<1e-5f&&std::abs(display.z-3.15f)<1e-5f);
       fo3weapon::Attachment attachment;
       assert(fo3weapon::BuildAttachment(skeleton,aimClip,rifle,attachment));
       assert(attachment.support==rifle);

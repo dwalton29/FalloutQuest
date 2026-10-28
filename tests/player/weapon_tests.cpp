@@ -1,6 +1,7 @@
 #include "player/fo3-player-state.h"
 #include "weapons/fo3-weapon-interaction.h"
 #include "weapons/fo3-weapon-hit.h"
+#include "weapons/fo3-weapon-holsters.h"
 #include <cassert>
 #include <cmath>
 #include <iostream>
@@ -177,7 +178,43 @@ void Combat() {
   assert(!fo3weapon::Surface({2,0,0},{0,0,1},{-1,-1,2},{1,-1,2},{0,1,2},distance));
   assert(!fo3weapon::Surface({0,0,0},{0,0,1},{0,0,2},{0,0,2},{0,0,2},distance));
 }
+void BodyAccess(){
+  const auto body=fo3vr::Axis({0,1,0},1.2f);
+  const auto hip=fo3weapon::Hip({2,1,3},body);
+  for(const auto local:{fo3vr::V{.27f,0,0},fo3vr::V{0,.27f,0},fo3vr::V{0,-.27f,0},fo3vr::V{0,0,.27f}})
+    assert(hip.Contains(hip.center+fo3vr::Rotate(body,local)));
+  assert(!hip.Contains(hip.center+fo3vr::Rotate(body,{.29f,0,0})));
+  assert(hip.Contains(hip.center+fo3vr::Rotate(body,{.29f,0,0}),true));
+  const auto back=fo3weapon::Back({2,1.4f,3},body);
+  assert(back.Contains(back.center+fo3vr::Rotate(body,{0,.36f,0})));
+  assert(back.Contains(back.center+fo3vr::Rotate(body,{.31f,.10f,0})));
+  assert(!back.Contains(back.center+fo3vr::Rotate(body,{0,0,-.26f}))); // In front of the shoulder.
+  auto overlapHip=fo3weapon::Hip({0,1,0},fo3vr::Identity());
+  auto overlapBack=fo3weapon::Back({0,1.4f,0},fo3vr::Identity());
+  const fo3vr::V overlapping{.10f,1.24f,.08f};
+  assert(overlapHip.Contains(overlapping)&&overlapBack.Contains(overlapping));
+  assert(fo3weapon::BodySlot(overlapping,overlapHip,overlapBack,true,true)==fo3weapon::HolsterSlot::Back);
+  assert(fo3weapon::BodySlot(overlapping,overlapHip,overlapBack,true,false)==fo3weapon::HolsterSlot::Hip);
+  fo3weapon::StowAccess access;
+  assert(access.Update(back,true,back.center,1));
+  assert(access.Update(back,false,{},1.15)); // Brief occlusion can finish an already-entered stow.
+  assert(!access.Update(back,false,{},1.21));
+  assert(!access.Update(back,false,back.center,2)); // Untracked coordinates cannot enter a holster.
+  assert(access.Update(back,true,back.center,3));
+  assert(!access.Update(back,true,back.center+fo3vr::Rotate(body,{0,0,-1}),3.01));
+  Catalog c=Fixture();auto rifle=c.items.at(0x434f);rifle.formId=99;rifle.weapon.animation=6;c.items[99]=rifle;
+  Player player(c);assert(player.Add(0x434f,1,.7f)&&player.Add(99,1,.4f));
+  const auto pistol=player.Snapshot().inventory[0].id,gun=player.Snapshot().inventory[1].id;
+  auto ready=[](uint32_t){return true;};
+  assert(player.Equip(pistol));
+  assert(fo3weapon::Holstered(player,true,pistol,0,ready)->id==gun); // Rifle accessible with pistol active.
+  assert(player.Equip(gun));
+  assert(fo3weapon::Holstered(player,false,gun,pistol,ready)->id==pistol);
+  assert(player.Weapon(pistol)->condition==.7f&&player.Weapon(gun)->condition==.4f);
+  assert(!fo3weapon::Holstered(player,true,pistol,0,[](uint32_t){return false;}));
+}
 int main(int argc,char**argv) {
+  BodyAccess();
   // Gameplay bullets do not pause merely because VR weapon input is blocked.
   const auto normal=fo3weapon::FrameAccessFor(true,false,false,false,true);
   assert(normal.advanceProjectiles&&normal.weaponControls);

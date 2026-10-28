@@ -1,5 +1,6 @@
 #pragma once
 #include <array>
+#include "weapons/fo3-weapon-interaction.h"
 #include <cmath>
 #include <cstdint>
 
@@ -21,16 +22,8 @@ struct Zone {
     bool Contains(Point hand,bool entered) const {
         if (!ready) return false;
         for(float v:hand) if(!std::isfinite(v)) return false;
-        const auto p=Coordinates(hand);
-        const float shell=entered ? .05f : 0.0f;
-        // Broad rounded volume centred behind/slightly above the authored
-        // shoulder. The rear plane is the important false-positive guard:
-        // ordinary chest/face movement can never inventory an item.
-        const float x=(p[0]-.04f)/(.27f+shell);
-        const float y=(p[1]-.03f)/(.30f+shell);
-        const float z=(p[2]-.17f)/(.28f+shell);
-        return p[2]>=0.015f-shell*0.35f &&
-               x*x+y*y+z*z<=1.0f;
+        const fo3vr::R body{right[0],0,rear[0],0,1,0,right[2],0,rear[2]};
+        return fo3weapon::Back({shoulder[0],shoulder[1],shoulder[2]},body).Contains({hand[0],hand[1],hand[2]},entered);
     }
 };
 struct Gesture {

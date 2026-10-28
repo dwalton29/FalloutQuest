@@ -39,12 +39,33 @@ struct Inputs {
   }
 };
 struct Zone {
-  V center{};R body=fo3vr::Identity();V radius{.16f,.20f,.16f};
+  V center{};R body=fo3vr::Identity();V radius{.16f,.20f,.16f};float frontLimit=-INFINITY;
   bool Contains(V p,bool inside=false)const {
     if(!fo3vr::Finite(p))return false;
     auto q=fo3vr::Rotate(fo3vr::Transpose(body),p-center);
     float h=inside?.04f:0.f;
-    return q.x*q.x/((radius.x+h)*(radius.x+h))+q.y*q.y/((radius.y+h)*(radius.y+h))+q.z*q.z/((radius.z+h)*(radius.z+h))<=1;
+    return q.z>=frontLimit-h*.35f&&q.x*q.x/((radius.x+h)*(radius.x+h))+q.y*q.y/((radius.y+h)*(radius.y+h))+q.z*q.z/((radius.z+h)*(radius.z+h))<=1;
+  }
+};
+// Body access is a standalone VR policy in metres, not a Bethesda asset.
+inline Zone Hip(V thigh,const R&body){return {thigh+fo3vr::Rotate(body,{.10f,0,.035f}),body,{.28f,.28f,.28f}};}
+inline Zone Back(V shoulder,const R&body){return {shoulder+fo3vr::Rotate(body,{.04f,.06f,.12f}),body,{.38f,.38f,.38f},-.22f};}
+// A brief loss of positional tracking behind the HMD may finish a stow only
+// after a recent valid sample inside the zone. Never extrapolate a new entry.
+enum class HolsterSlot { None,Hip,Back };
+inline HolsterSlot BodySlot(V hand,const Zone& hip,const Zone& back,bool hasHip,bool hasBack){
+  hasHip=hasHip&&hip.Contains(hand);hasBack=hasBack&&back.Contains(hand);
+  if(hasHip&&hasBack)return fo3vr::Length(hand-hip.center)<=fo3vr::Length(hand-back.center)?HolsterSlot::Hip:HolsterSlot::Back;
+  return hasHip?HolsterSlot::Hip:hasBack?HolsterSlot::Back:HolsterSlot::None;
+}
+struct StowAccess {
+  bool inside=false;double seen=-INFINITY;
+  void Reset(){inside=false;seen=-INFINITY;}
+  bool Update(const Zone& zone,bool tracked,V point,double now){
+    if(!std::isfinite(now)){Reset();return false;}
+    if(tracked&&fo3vr::Finite(point)){inside=zone.Contains(point,inside);seen=now;}
+    else if(now<seen||now-seen>.20)Reset();
+    return inside;
   }
 };
 inline V ClosestSupport(V palm,V begin,V end) {

@@ -30,6 +30,9 @@ Matrix pose=fo3anim::Identity(),magPose=fo3anim::Identity(),magStart=fo3anim::Id
 V supportLocal{},chargeStart{},magPalm{};
 float magQuat[4]{0,0,0,1};
 fo3weapon::Zone hip,back,pouch;
+fo3weapon::StowAccess stowAccess;
+bool zonesReady=false;
+uint64_t holsterSlots[2]{};
 Q223DynamicBody motion;
 double last=0,recoil=0,ejectUntil=0,flashUntil=0;
 float supportWeight=0,chargeTravel=0;
@@ -151,12 +154,15 @@ Matrix HandPose(const Model&m){
   return fo3anim::Multiply(fo3anim::Multiply(root,local),GameRigid(m.asset.handToWeapon));
 }
 void Zones(){
+  zonesReady=false;if(!gQ210PlayerBodyReady)return;
   Matrix root;std::copy(gQ210PlayerRoot,gQ210PlayerRoot+16,root.begin());auto body=Rotation(root);
   const int thigh=fo3anim::FindBone(gVrSkeleton,"Bip01 R Thigh"),pelvis=fo3anim::FindBone(gVrSkeleton,"Bip01 Pelvis");
   if(thigh<0||pelvis<0)return;
   hip=fo3weapon::Hip(VrPoint(Q211TransformPoint(gQ210PlayerRoot,VrSkeletonPoint(thigh))),body);
-  back=fo3weapon::Back(VrPoint(Q211TransformPoint(gQ210PlayerRoot,RuntimePoint(gVrSolvedArms[1].shoulder))),body);
-  pouch=fo3weapon::Pouch(VrPoint(Q211TransformPoint(gQ210PlayerRoot,VrSkeletonPoint(pelvis))),body);
+  const auto shoulder=gShoulderZone.ready?V{gShoulderZone.shoulder[0],gShoulderZone.shoulder[1],gShoulderZone.shoulder[2]}:
+    VrPoint(Q211TransformPoint(gQ210PlayerRoot,RuntimePoint(gVrArms[1].shoulder)));
+  back=fo3weapon::Back(shoulder,body);
+  pouch=fo3weapon::Pouch(VrPoint(Q211TransformPoint(gQ210PlayerRoot,VrSkeletonPoint(pelvis))),body);zonesReady=true;
 }
 struct Flight {bool active=false;uint64_t instance=0;uint32_t projectile=0,base=0,attacker=0x14;V position{},velocity{};float distance=0,limit=0,damage=0;};
 std::array<Flight,64> flights{};
@@ -240,7 +246,15 @@ void AdvanceFlights(float dt){
   }
 }
 void RetireReload(){magazine=charging=support=pouchNearby=false;supportWeight=chargeTravel=0;}
-void Draw(uint64_t id,uint32_t form){active=id;held=true;rawHeldReady=false;inside=false;RetireReload();motion={};Pulse(1);fo3audio::SoundEvent(gPlayerSession->player.Definitions().items.at(form).weapon.equip);Log("DRAW",id,form);}
+void Draw(uint64_t id,uint32_t form){if(!gPlayerSession->player.Equip(id))return;holsterSlots[gPlayerSession->player.Definitions().items.at(form).weapon.LongGun()?1:0]=id;stowAccess.Reset();active=id;held=true;rawHeldReady=false;inside=false;RetireReload();motion={};Pulse(1);fo3audio::SoundEvent(gPlayerSession->player.Definitions().items.at(form).weapon.equip);Log("DRAW",id,form);}
+Matrix HolsterPose(bool longGun){
+  const auto& zone=longGun?back:hip;
+  const auto display=longGun?fo3weapon::BackDisplay(zone):fo3weapon::HipDisplay(zone);
+  return Rigid(fo3vr::Multiply(zone.body,fo3vr::Axis({0,0,1},longGun?fo3vr::Pi*.5f:-fo3vr::Pi*.5f)),display);
+}
+const fo3player::Stack* Slot(const fo3player::Player& player,bool longGun){
+  return fo3weapon::Holstered(player,longGun,active,holsterSlots[longGun?1:0],[](uint32_t form){auto i=models.find(form);return i!=models.end()&&i->second.ready;});
+}
 void DrawModel(Model&m,const Matrix&root,bool alpha,bool onlyMag=false,bool removeMag=false,float action=0){
   auto transform=root;
   // Uploaded vertices include the runtime's fixed model-space origin.
@@ -295,7 +309,7 @@ void WeaponPersistWorld(){
 }
 void WeaponShutdown(){
   using namespace weaponruntime;WeaponPersistWorld();for(const auto&e:world)fo3rigid::Live().Remove(fo3rigid::WeaponId(e.first));if(active)fo3rigid::Live().Remove(fo3rigid::WeaponId(active));for(auto&e:models){Q74DeleteGpuObjects(e.second.objects);Q74DeleteGpuObjects(e.second.flash);}models.clear();world.clear();
-  active=0;held=false;RetireReload();inputs={};flights={};last=0;ammoText[0]=0;fo3ammoui::Shutdown();
+  active=0;held=false;stowAccess.Reset();zonesReady=false;holsterSlots[0]=holsterSlots[1]=0;RetireReload();inputs={};flights={};last=0;ammoText[0]=0;fo3ammoui::Shutdown();
 }
 void WeaponRender(bool alpha){
   using namespace weaponruntime;if(!gPlayerSession||IsFo3LoadingVisible())return;
@@ -316,6 +330,9 @@ void WeaponRender(bool alpha){
     }
     if(held&&flashUntil>last)DrawFlash(m->second,alpha);
   }}
+  if(zonesReady)for(bool longGun:{false,true})if(const auto* slot=Slot(p,longGun)){
+    if(slot->id!=active){auto m=models.find(slot->formId);if(m!=models.end())DrawModel(m->second,HolsterPose(longGun),alpha,false,slot->needsAction&&slot->loadedRounds==0);}
+  }
   for(const auto&w:p.Snapshot().worldWeapons){auto v=world.find(w.instance.id);auto m=models.find(w.instance.formId);if(v!=world.end()&&m!=models.end()&&m->second.ready)DrawModel(m->second,v->second.pose,alpha,false,w.instance.needsAction&&w.instance.loadedRounds==0);}
   if(ejectUntil>last){auto m=models.find(ejectForm);if(m!=models.end()&&m->second.ready)DrawModel(m->second,ejectPose,alpha,true);}
 }
@@ -333,7 +350,7 @@ void WeaponUpdate(double now,bool backButton){
   // Explicit milestone bootstrap, never part of authored starting inventory.
   if(!gPlayerSession->saveBlocked&&!p.Snapshot().developmentWeaponGranted){if(p.BootstrapDevelopmentWeapon()){auto*s=p.EquippedWeapon();if(s)Log("GRANT",s->id,s->formId);}}
   auto*s=p.EquippedWeapon();
-  if(!s||s->id!=active){if(active&&!world.count(active))fo3rigid::Live().Remove(fo3rigid::WeaponId(active));active=s?s->id:0;held=false;inside=false;RetireReload();trigger={};motion={};if(s)Log("EQUIP",s->id,s->formId);}
+  if(!s||s->id!=active){if(active&&!world.count(active))fo3rigid::Live().Remove(fo3rigid::WeaponId(active));active=s?s->id:0;held=false;inside=false;stowAccess.Reset();RetireReload();trigger={};motion={};if(s)Log("EQUIP",s->id,s->formId);}
   if(sceneX!=gSceneCenterXQ1730||sceneY!=gSceneCenterYQ1730||sceneZ!=gSceneFloorZQ1730){
     WeaponPersistWorld();for(const auto& e:world)fo3rigid::Live().Remove(fo3rigid::WeaponId(e.first));world.clear();flights={};
     sceneX=gSceneCenterXQ1730;sceneY=gSceneCenterYQ1730;sceneZ=gSceneFloorZQ1730;
@@ -354,15 +371,28 @@ void WeaponUpdate(double now,bool backButton){
   if(frame.advanceProjectiles)AdvanceFlights(dt);
   if(blocked){
     if(held){if(active)fo3rigid::Live().Remove(fo3rigid::WeaponId(active));held=false;if(s)Log("HOLSTER FOCUS",s->id,s->formId);}
-    RetireReload();inside=false;
-    if(s&&gQ210PlayerBodyReady){Zones();const auto&zone=p.Definitions().items.at(s->formId).weapon.LongGun()?back:hip;const bool longGun=p.Definitions().items.at(s->formId).weapon.LongGun();const V display=longGun?zone.center:fo3weapon::HipDisplay(zone);pose=Rigid(fo3vr::Multiply(zone.body,fo3vr::Axis({0,0,1},longGun?fo3vr::Pi*.5f:-fo3vr::Pi*.5f)),display);}
+    RetireReload();inside=false;stowAccess.Reset();
+    if(s&&gQ210PlayerBodyReady){Zones();const auto&zone=p.Definitions().items.at(s->formId).weapon.LongGun()?back:hip;const bool longGun=p.Definitions().items.at(s->formId).weapon.LongGun();const V display=longGun?fo3weapon::BackDisplay(zone):fo3weapon::HipDisplay(zone);pose=Rigid(fo3vr::Multiply(zone.body,fo3vr::Axis({0,0,1},longGun?fo3vr::Pi*.5f:-fo3vr::Pi*.5f)),display);}
     for(int hand=0;hand<2;hand++)gQ220Grab[hand].previousGrip=gQ217FingerGrip[hand];return;
   }
   Zones();
   bool physicsAdvanced=false;
   Model*m=s?Ensure(s->formId):nullptr;
+  const V accessPoint{gQ210RightHand[0],gQ210RightHand[1],gQ210RightHand[2]};
+  const bool accessTracked=zonesReady&&gQ210RightHandValid&&fo3vr::Finite(accessPoint);
+  if(s&&m&&held){
+    const auto& d=p.Definitions().items.at(s->formId).weapon;
+    const bool wasInside=inside;
+    inside=stowAccess.Update(d.LongGun()?back:hip,accessTracked,accessPoint,now);
+    if(inside&&!wasInside)Pulse(1,.12f);
+    if(inside&&gQ217FingerGrip[1]<=.25f){
+      fo3rigid::Live().Release(1);fo3rigid::Live().Remove(fo3rigid::WeaponId(s->id));
+      holsterSlots[d.LongGun()?1:0]=s->id;held=false;RetireReload();stowAccess.Reset();inside=false;
+      Pulse(1);fo3audio::SoundEvent(d.unequip);Log("HOLSTER",s->id,s->formId);
+    }
+  }else {stowAccess.Reset();inside=false;}
   if(s&&m){const auto&d=p.Definitions().items.at(s->formId).weapon;auto&zone=d.LongGun()?back:hip;
-    if(!held){const V display=d.LongGun()?zone.center:fo3weapon::HipDisplay(zone);pose=Rigid(fo3vr::Multiply(zone.body,fo3vr::Axis({0,0,1},d.LongGun()?fo3vr::Pi*.5f:-fo3vr::Pi*.5f)),display);}
+    if(!held){const V display=d.LongGun()?fo3weapon::BackDisplay(zone):fo3weapon::HipDisplay(zone);pose=Rigid(fo3vr::Multiply(zone.body,fo3vr::Axis({0,0,1},d.LongGun()?fo3vr::Pi*.5f:-fo3vr::Pi*.5f)),display);}
     else if(gWeaponPalmValid[1]){
       const auto raw=RawPrimaryHand();
       if(!rawHeldReady){
@@ -407,7 +437,7 @@ void WeaponUpdate(double now,bool backButton){
       const auto sampledRotation=fo3anim::QuaternionFromMatrix(Rotation(pose).data());
       const float sampledQuat[4]{sampledRotation[1],sampledRotation[2],sampledRotation[3],sampledRotation[0]};
       Q223SampleHeldMotion(motion,RuntimePoint(Point(pose,m->centre)),sampledQuat);
-      const bool next=zone.Contains(right,inside);if(next&&!inside)Pulse(1,.12f);inside=next;
+      // Body access uses the raw controller, independently of IK/physics constraints.
       if(gQ217FingerGrip[1]<=.25f){
         fo3rigid::Live().Release(1);
         if(inside){held=false;RetireReload();Pulse(1);fo3audio::SoundEvent(d.unequip);Log("HOLSTER",s->id,s->formId);}
@@ -458,12 +488,18 @@ void WeaponUpdate(double now,bool backButton){
   if(!held&&active&&!world.count(active))fo3rigid::Live().Remove(fo3rigid::WeaponId(active));
   // Right primary-grip priority: body weapon, dynamic exact instance, authored
   // weapon REFR, then existing non-weapon loose-object grabbing.
-  if(inputs.r&&gWeaponPalmValid[1]&&!held&&!gQ220Grab[1].active){
-    const auto hand=VrPoint(gWeaponPalm[1]);
-    if(s&&m&&(p.Definitions().items.at(s->formId).weapon.LongGun()?back:hip).Contains(hand))Draw(s->id,s->formId);
+  if(inputs.r&&accessTracked&&!held&&!gQ220Grab[1].active){
+    const auto hand=gWeaponPalmValid[1]?VrPoint(gWeaponPalm[1]):accessPoint;
+    const auto* hipWeapon=Slot(p,false);const auto* backWeapon=Slot(p,true);
+    const auto bodySlot=fo3weapon::BodySlot(accessPoint,hip,back,hipWeapon!=nullptr,backWeapon!=nullptr);
+    const auto* slot=bodySlot==fo3weapon::HolsterSlot::Hip?hipWeapon:bodySlot==fo3weapon::HolsterSlot::Back?backWeapon:nullptr;
+    if(slot)Draw(slot->id,slot->formId);
     else{
       uint64_t best=0;float distance=.16f;
-      for(const auto&w:p.Snapshot().worldWeapons){auto v=world.find(w.instance.id);if(v==world.end())continue;auto model=models.find(w.instance.formId);if(model==models.end())continue;float d=fo3weapon::BoxDistance(Rotation(v->second.pose),Position(v->second.pose),hand,model->second.centre,model->second.half);if(d<distance){best=w.instance.id;distance=d;}}
+      if(zonesReady)for(bool longGun:{false,true})if(const auto* slot=Slot(p,longGun)){
+    if(slot->id!=active){auto m=models.find(slot->formId);if(m!=models.end())DrawModel(m->second,HolsterPose(longGun),alpha,false,slot->needsAction&&slot->loadedRounds==0);}
+  }
+  for(const auto&w:p.Snapshot().worldWeapons){auto v=world.find(w.instance.id);if(v==world.end())continue;auto model=models.find(w.instance.formId);if(model==models.end())continue;float d=fo3weapon::BoxDistance(Rotation(v->second.pose),Position(v->second.pose),hand,model->second.centre,model->second.half);if(d<distance){best=w.instance.id;distance=d;}}
       if(best&&p.PickupWorldWeapon(best)){fo3rigid::Live().Remove(fo3rigid::WeaponId(best));world.erase(best);s=p.EquippedWeapon();Draw(s->id,s->formId);Log("PICKUP",s->id,s->formId,best);}
       else {uint32_t ref=0;Vec3 centre;float surface=0;if(Q220FindNearestLooseRef(gWeaponPalm[1],ref,centre,surface)){
         const auto r=p.Definitions().references.find(ref);
