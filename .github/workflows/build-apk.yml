@@ -19,6 +19,8 @@ jobs:
       - name: Compile and link production world and original LAND SPIR-V
         run: |
           python3 tests/render/test_vulkan_shaders.py
+          python3 tests/render/test_spacewarp_shaders.py
+          python3 tests/render/test_spacewarp_openxr.py
           python3 tools/build_vulkan_shaders.py --compiler glslangValidator --output /tmp/fq-vulkan-shaders
       - name: Verify Vulkan bridge preserves GLES fallback
         run: |

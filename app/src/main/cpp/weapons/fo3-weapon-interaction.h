@@ -49,7 +49,7 @@ struct Zone {
 };
 // Body access is a standalone VR policy in metres, not a Bethesda asset.
 inline Zone Hip(V thigh,const R&body){return {thigh+fo3vr::Rotate(body,{.10f,0,.035f}),body,{.28f,.28f,.28f}};}
-inline Zone Back(V shoulder,const R&body){return {shoulder+fo3vr::Rotate(body,{.04f,.06f,.12f}),body,{.38f,.38f,.38f},-.22f};}
+inline Zone Back(V shoulder,const R&body){return {shoulder+fo3vr::Rotate(body,{.04f,.06f,.12f}),body,{.38f,.38f,.38f},-.105f};}
 // A brief loss of positional tracking behind the HMD may finish a stow only
 // after a recent valid sample inside the zone. Never extrapolate a new entry.
 enum class HolsterSlot { None,Hip,Back };

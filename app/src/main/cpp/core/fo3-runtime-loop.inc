@@ -23,6 +23,7 @@
 
 #include <openxr/openxr.h>
 #include <openxr/openxr_platform.h>
+#include "rendering/spacewarp/fo3-openxr-spacewarp.h"
 #ifdef FQ_ENABLE_VULKAN
 #include "rendering/vulkan/fo3-vulkan-renderer.h"
 #endif
@@ -370,6 +371,18 @@ public:
         if (!CreateReferenceSpace()) return false;
         FQ_LOGI("Q7.1 BOOT STEP: CreateSwapchains");
         if (!CreateSwapchains()) return false;
+        if(spacewarp_.Requested()&&spacewarp_.Backend()!=fqspacewarp::Api::None&&!vulkanGameplay_){
+            uint32_t count=0;bool ready=false;
+            if(XR_SUCCEEDED(xrEnumerateSwapchainFormats(session_,0,&count,nullptr))){
+                std::vector<int64_t> formats(count);
+                if(XR_SUCCEEDED(xrEnumerateSwapchainFormats(session_,count,&count,formats.data()))&&
+                   std::find(formats.begin(),formats.end(),int64_t(GL_RGBA16F))!=formats.end()&&
+                   std::find(formats.begin(),formats.end(),int64_t(GL_DEPTH_COMPONENT24))!=formats.end())
+                    ready=spacewarp_.Create(instance_,systemId_,session_,GL_RGBA16F,GL_DEPTH_COMPONENT24);
+            }
+            FQ_LOGI("FQ SPACEWARP resources ready=%d size0=%ux%u size1=%ux%u motion=RGBA16F depth=DEPTH24 samples=1 submitted=0 reason=motion-pass-pending",ready,
+                spacewarp_.Eye(0).width,spacewarp_.Eye(0).height,spacewarp_.Eye(1).width,spacewarp_.Eye(1).height);
+        }
 #ifdef FQ_ENABLE_VULKAN
         if(vulkanProbeRequested_&&!vulkanGameplay_)
             fqvk::InitializeWorldProbe(instance_,systemId_,eyes_[0].width,eyes_[0].height,app_->activity->internalDataPath);
@@ -415,6 +428,7 @@ public:
          EndFo3Dialogue("renderer shutdown");
         fo3lootui::Shutdown();
         fo3hudrenderer::Shutdown();
+        spacewarp_.Destroy();spacewarpHistory_.Reset();
         if (sessionRunning_) {
             xrEndSession(session_);
             sessionRunning_ = false;
@@ -483,6 +497,12 @@ private:
         std::vector<XrExtensionProperties> available(extensionCount, {XR_TYPE_EXTENSION_PROPERTIES});
         if (!CheckXr(xrEnumerateInstanceExtensionProperties(nullptr, extensionCount, &extensionCount, available.data()),
                      "xrEnumerateInstanceExtensionProperties")) return false;
+        char spacewarpRequest[PROP_VALUE_MAX]{};
+        __system_property_get("debug.falloutquest.spacewarp",spacewarpRequest);
+        const bool requestSpacewarp=!std::strcmp(spacewarpRequest,"1")||!std::strcmp(spacewarpRequest,"validate");
+        if(const char* extension=spacewarp_.Negotiate(requestSpacewarp,available))extensions.push_back(extension);
+        FQ_LOGI("FQ SPACEWARP capability requested=%d api=%s gameplay=native reason=motion-pass-pending",
+            requestSpacewarp,spacewarp_.Backend()==fqspacewarp::Api::EXT?"EXT":spacewarp_.Backend()==fqspacewarp::Api::FB?"FB":"unavailable");
         for (const auto& extension : available) {
             if (std::strcmp(extension.extensionName, XR_KHR_COMPOSITION_LAYER_DEPTH_EXTENSION_NAME) == 0) {
                 depthSubmissionEnabled_ = true;
@@ -2076,9 +2096,22 @@ private:
                     if(vulkanGameplay_&&!begun){rendered=false;exitRequested_=true;}
                 }
 #endif
+                if(spacewarp_.Requested()){
+                    fqspacewarp::Frame frame;frame.serial=++spacewarpSerial_;
+                    frame.scene=gSceneLoad.generation;frame.displayTime=frameState.predictedDisplayTime;
+                    frame.world=gExteriorWorldspaceQ1890;frame.origin={gSceneCenterXQ1730,gSceneCenterYQ1730,gSceneFloorZQ1730};
+                    frame.sceneReady=gSceneReady;frame.loading=IsFo3LoadingVisible();frame.focused=sessionState_==XR_SESSION_STATE_FOCUSED;
+                    frame.modal=Fo3PipboyFocus()||Fo3DialogueFocus()||Fo3TerminalFocus()||Fo3LockpickFocus()||gFo3PauseOpen||Fo3ScriptMessageFocus()||Fo3LevelUpFocus();
+                    XrPosef appPose{};appPose.orientation=YawQuaternion(playerYaw_);appPose.position=playerPosition_;
+                    const auto appMatrix=MatrixFromPose(appPose);std::copy(appMatrix.m,appMatrix.m+16,frame.appToWorld.begin());
+                    for(unsigned eye=0;eye<2;++eye){const auto vp=Multiply(ProjectionFromFov(views[eye].fov,.04f,125000.f/FO3_UNITS_PER_METRE_Q715),ViewFromPose(ToVirtualPose(views[eye].pose)));
+                        std::copy(vp.m,vp.m+16,frame.viewProjection[eye].begin());}
+                    spacewarpHistory_.Begin(frame);
+                }
                 for (uint32_t eye = 0; eye < (vulkanGameplay_?1u:2u)&&rendered; ++eye) {
                     fqperf::Scope eyeScope(eye==0?fqperf::Eye0:fqperf::Eye1);
                     rendered = RenderEye(eye, views[eye], projectionViews[eye]) && rendered;
+                    if(spacewarp_.Requested()&&rendered)spacewarpHistory_.EyeRendered(eye);
 #ifdef FQ_ENABLE_VULKAN
                     if(eye==0&&!vulkanGameplay_)fqvk::EndWorldProbe();
 #endif
@@ -2140,6 +2173,11 @@ private:
         const auto submitStarted=fqloading::Now();
         const bool q1700FrameSubmitted =
             CheckXr(xrEndFrame(session_, &endInfo), "xrEndFrame");
+        if(spacewarp_.Requested()){
+            spacewarpHistory_.Finish(q1700FrameSubmitted&&layerCount==1);
+            if((spacewarpSerial_%180)==1)FQ_LOGI("FQ SPACEWARP frame world=%08X history=%u native=1 motionCoverage=0",
+                gExteriorWorldspaceQ1890,spacewarpHistory_.SubmittedFrames());
+        }
         if(q1700FrameSubmitted&&layerCount&&(presentationFrames_++%120)==0)
             FQ_LOGI("FQ PRESENTED api=%s stereo=%s frame=%llu",vulkanGameplay_?"Vulkan":"GLES",
                 vulkanGameplay_?"multiview-array":"sequential",(unsigned long long)presentationFrames_);
@@ -2565,6 +2603,9 @@ private:
 
 private:
     android_app* app_{};
+    fqspacewarp::Session spacewarp_;
+    fqspacewarp::History spacewarpHistory_;
+    uint64_t spacewarpSerial_=0;
     bool vulkanGameplay_{false};
     bool vulkanSwapchainsReady_{false};
     uint64_t presentationFrames_{0};

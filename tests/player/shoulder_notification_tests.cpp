@@ -11,8 +11,10 @@ int main() {
     assert(z.Contains({.39f,1.58f,.28f},false)); // high/outward/rear remains forgiving
     assert(!z.Contains({.2f,1.4f,-.1f},true)); // face/chest side is rejected
     assert(!z.Contains({NAN,1.4f,.09f},false));
-    assert(!z.Contains({.54f,1.4f,.17f},false));
-    assert(z.Contains({.50f,1.4f,.17f},true)); // exit hysteresis shell
+    assert(z.Contains({.54f,1.4f,.17f},false)); // enlarged horizontal access
+    assert(z.Contains({.2f,1.8f,.17f},false)); // enlarged vertical access
+    assert(!z.Contains({.64f,1.4f,.17f},false));
+    assert(z.Contains({.64f,1.4f,.17f},true)); // exit hysteresis shell
     z.right={0,0,-1};z.rear={1,0,0};z.shoulder={1,1.4f,2};
     assert(z.Contains({1.24f,1.48f,1.86f},false)); // translated, 90-degree torso
     assert(!z.Contains({.95f,1.4f,2},true));
