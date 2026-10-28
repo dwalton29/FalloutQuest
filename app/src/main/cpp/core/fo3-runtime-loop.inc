@@ -1765,6 +1765,9 @@ private:
                     const double seconds=std::clamp(double(clockNs-previousWorldClockNs)*1e-9,0.0,0.25);
                     gPlayerSession->player.AdvanceGameClock(seconds);
                     auto& scriptPlayer=gPlayerSession->player;
+                    fo3worldscript::Register();
+                    fo3worldscript::seconds+=seconds;
+                    scriptPlayer.SetScriptRuntimeClock(fo3worldscript::seconds,seconds);
                     scriptPlayer.SetScriptPlayerLocation(
                         gSceneCenterXQ1730+gQ210Head[0]*FO3_UNITS_PER_METRE_Q715,
                         gSceneCenterYQ1730-(gQ210Head[2]-SCENE_FORWARD)*FO3_UNITS_PER_METRE_Q715,
@@ -1778,6 +1781,7 @@ private:
                     static double scriptResidenceElapsed=0;
                     scriptResidenceElapsed=std::min(.5,scriptResidenceElapsed+seconds);
                     if(scriptResidenceElapsed>=.25){
+                        fo3worldscript::Events();
                         const auto q230ScanStart=fqopaque::Clock::now();
                         // Q230: original GameMode ownership is immutable ESM data.
                         // Rebuild only when the static scene's publication changes.
@@ -1814,8 +1818,10 @@ private:
                                 scriptedResidents.push_back(actor.source.refFormId);
                         const uint64_t q230ScanUs=fqopaque::Micros(q230ScanStart);
                         const auto q230PumpStart=fqopaque::Clock::now();
-                        scriptPlayer.PumpWorldAwareGameMode(scriptResidenceElapsed,scriptedResidents,
+                        if(!Fo3ResidentFrameBlocked())scriptPlayer.PumpWorldAwareGameMode(scriptResidenceElapsed,scriptedResidents,
                             [&](std::unique_ptr<fo3player::ScriptTransactionPlan> plan){
+                                std::string error;
+                                if(PublishFo3DialogueReferences(scriptPlayer,*plan,error))return true;
                                 const auto ticket=BeginFo3ResidentPreparedWorkflow({},std::move(plan));
                                 if(!ticket)return false;
                                 gFo3ResidentGameplayTicket=ticket;
@@ -1838,6 +1844,10 @@ private:
                                 static_cast<unsigned long long>(q230GameModeTicks));
                         }
                         scriptResidenceElapsed=0;
+                    }
+                    if(!Fo3ResidentFrameBlocked()){
+                        fo3worldscript::Actions();
+                        fo3worldscript::Animate();
                     }
                     if(beforeScripts!=scriptPlayer.Revision())FlushFo3PlayerState();
                 }

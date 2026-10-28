@@ -1,14 +1,16 @@
 #pragma once
 #include "fo3-pipboy-session.h"
 #include <random>
+#include <functional>
 namespace fo3pipdata {
 struct Location {
   uint32_t cell = 0, world = 0;
   float x = 0, y = 0, facing = 0;
 };
 bool Enabled(const Definitions &, const Placement &);
-bool InRange(const Definitions &, const Transmitter &, const Location &);
-std::vector<uint32_t> AvailableStations(const Definitions &, const Location &);
+using EnabledReference=std::function<bool(uint32_t)>;
+bool InRange(const Definitions &, const Transmitter &, const Location &,const EnabledReference& enabled={});
+std::vector<uint32_t> AvailableStations(const Definitions &, const Location &,const EnabledReference& enabled={});
 struct Broadcast {
   uint32_t station = 0, quest = 0, topic = 0;
   std::vector<uint32_t> next;

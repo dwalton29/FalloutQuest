@@ -571,6 +571,24 @@ int main(int argc,char**argv) {
                  <<" removed/restored triangles="<<targetTriangles<<" without allocation\n";
     }
     privateCollisionTests(a,b,d,door);
+    // Independent authored collision targets: opening one leaf must preserve
+    // the gatehouse walls, unrelated references and original metadata.
+    gPlayerCollisionReady=true;gWorldTriangles.clear();gSurfaceSourcesQ722.clear();gQ1990CollisionPlacementCache.clear();gDoorCollisionPoses.clear();
+    CollisionTriangle leaf,wall;
+    assert(BuildTriangle({0,0,0},{0,1,0},{0,0,1},leaf));
+    assert(BuildTriangle({5,0,0},{5,1,0},{5,0,1},wall));
+    leaf.animationTargetBlock=11;wall.animationTargetBlock=22;leaf.surfaceKeyQ714=111;wall.surfaceKeyQ714=222;
+    gSurfaceSourcesQ722.emplace(111,CollisionSurfaceSourceQ722{900,"test","test"});
+    gSurfaceSourcesQ722.emplace(222,CollisionSurfaceSourceQ722{900,"test","test"});
+    gQ1990CollisionPlacementCache[900].triangles={leaf,wall};gWorldTriangles={leaf,wall};
+    Fo3DoorCollisionPose animated;auto delta=animated.transform;delta[12]=3;animated.nodeTransforms.emplace(11,delta);
+    assert(SetFo3ScriptCollisionPose(900,animated));assert(gWorldTriangles.size()==2);
+    assert(gWorldTriangles[0].a.x==3&&gWorldTriangles[1].a.x==5&&gWorldTriangles[0].animationTargetBlock==11);
+    const auto animatedRevision=GetFo3CollisionPublicationRevision();
+    animated.nodeTransforms.emplace(99,delta); // No collider owns this animated node.
+    assert(SetFo3ScriptCollisionPose(900,animated)&&GetFo3CollisionPublicationRevision()==animatedRevision);
+    assert(gQ1990CollisionPlacementCache[900].triangles[0].a.x==0); // Bind cache stays immutable.
+    std::cout<<"Per-node scripted collision preserves static structure passed\n";
     ShutdownFo3CollisionOverlay();
     assert(!IsFo3PlayerCollisionReadyQ6G());
     assert(!ResolveFo3PlayerMotionQ6G(0,0,1,2,3,&x,&z,&y));

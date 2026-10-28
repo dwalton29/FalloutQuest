@@ -192,6 +192,16 @@ void Decode(Definitions &d, const std::string &t, uint32_t id, uint32_t flags,
   else if (t == "REFR" || t == "ACHR" || t == "ACRE") {
     auto p = Place(flags, s, cell, world);
     p.linkedReference=U(Find(s,"XLKR"));
+    if(auto primitive=Find(s,"XPRM")){
+      TriggerPrimitive trigger;
+      if(primitive->n==32){
+        trigger.kind=fo3esm::ReadU32(primitive->p+28);
+        trigger.valid=trigger.kind==1||trigger.kind==2;
+        for(size_t i=0;i<3;++i){trigger.bounds[i]=fo3esm::ReadF32(primitive->p+4*i);
+          trigger.valid=trigger.valid&&std::isfinite(trigger.bounds[i])&&trigger.bounds[i]>0;}
+      }
+      d.triggerPrimitives.emplace(id,trigger);
+    }
     if(auto wait=Find(s,"XPRD");wait&&wait->n==4)p.patrolWait=fo3esm::ReadF32(wait->p);
     p.patrolAction=U(Find(s,"INAM"))||U(Find(s,"TNAM"));
     for(const auto& v:s)if((v.type=="SCDA"&&v.n)||(v.type=="SCTX"&&v.n>1))p.patrolAction=true;
@@ -216,6 +226,7 @@ void Decode(Definitions &d, const std::string &t, uint32_t id, uint32_t flags,
       x.range = U(r, 4);
       x.staticPercent = fo3esm::ReadF32(r->p + 8);
       x.position = U(r, 12);
+      x.reference=id;
       d.transmitters[id] = x;
     } // Retain only quest targets after finalization.
     d.targets[id] = p;
@@ -613,6 +624,10 @@ void Finalize(Definitions &d) {
     } else p.patrolUnsupported="Patrol starting location resolver unsupported";
   }
   std::unordered_set<uint32_t> retain;
+  // Trigger dispatch and radio state require placements independently of
+  // quest navigation. Their invisible volumes/transmitters are real residents.
+  for(const auto& trigger:d.triggerPrimitives)retain.insert(trigger.first);
+  for(const auto& transmitter:d.transmitters)retain.insert(transmitter.first);
   for(auto& actor:d.referenceScripts)retain.insert(actor.first);
   for(const auto& route:d.actorPatrols)for(const auto& point:route.second)retain.insert(point.reference);
   for(const auto& entry:d.packages) {

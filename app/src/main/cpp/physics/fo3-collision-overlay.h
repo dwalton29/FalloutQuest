@@ -53,9 +53,10 @@ void DiscardFo3CollisionSnapshotQ1930(uint64_t token);
 uint64_t GetFo3CollisionPublicationRevision();
 struct Fo3DoorCollisionPose {
     std::array<float,16> transform{{1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1}};
+    std::unordered_map<uint32_t,std::array<float,16>> nodeTransforms;
     bool enabled = true;
     bool operator==(const Fo3DoorCollisionPose& other) const {
-        return enabled == other.enabled && transform == other.transform;
+        return enabled == other.enabled && transform == other.transform && nodeTransforms == other.nodeTransforms;
     }
 };
 struct Fo3CollisionMutationState {
@@ -141,3 +142,6 @@ bool ResolveFo3DynamicBoxQ225(
 void RenderFo3CollisionOverlay(const float* mvp16) __attribute__((weak));
 
 void ShutdownFo3CollisionOverlay();
+
+// Authored controller deltas keyed by collision target AVObject block.
+bool SetFo3ScriptCollisionPose(uint32_t,const Fo3DoorCollisionPose&);

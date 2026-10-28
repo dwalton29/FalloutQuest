@@ -2,6 +2,7 @@
 // Layouts: niftools/nifxml nif.xml (20.2.0.7, user 11, Bethesda 34).
 #include "fo3-actor-animation.h"
 #include <functional>
+#include <limits>
 namespace {
 bool ActorHeader(const std::vector<uint8_t> &bytes, NifHeader &h) {
   if (bytes.size() > MAX_NIF_BYTES || !ParseHeader(bytes, h))
@@ -195,7 +196,7 @@ static bool DecodeHierarchy(const std::vector<uint8_t> &bytes, fo3anim::Skeleton
   for (uint32_t block = 0; block < h.numBlocks; ++block) {
     const auto &type = BlockType(h, block);
     if (type != "NiNode" && type != "BSFadeNode" &&
-        !(blockBones && Q970IsShapeType(type)))
+        !(blockBones && (Q970IsShapeType(type)||type=="NiParticleSystem")))
       continue;
     Cursor name(BlockData(bytes, h, block), h.blockSizes[block]);
     uint32_t ni = 0;
@@ -208,6 +209,7 @@ static bool DecodeHierarchy(const std::vector<uint8_t> &bytes, fo3anim::Skeleton
     Node node;
     node.block = block;
     node.bone.name = h.strings[ni];
+    node.bone.visible=(transform.flags&1u)==0;
     for (int i = 0; i < 3; ++i)
       node.bone.bind.translation[i] = transform.translation[i];
     node.bone.bind.rotation = QuaternionFromMatrix(transform.rotation);
@@ -221,7 +223,7 @@ static bool DecodeHierarchy(const std::vector<uint8_t> &bytes, fo3anim::Skeleton
     if (!ActorValid(transform.scale) || transform.scale <= 0)
       return false;
     uint32_t children = 0;
-    if (!Q970IsShapeType(type) && (!c.U32(children) || children > h.numBlocks))
+    if ((type=="NiNode"||type=="BSFadeNode") && (!c.U32(children) || children > h.numBlocks))
       return false;
     node.children.resize(children);
     for (auto &ref : node.children)
@@ -283,6 +285,40 @@ bool fo3anim::DecodeModelHierarchy(const std::vector<uint8_t> &bytes, Skeleton &
   return ok;
 }
 
+static bool DecodeProperty(const std::vector<uint8_t>& bytes,const NifHeader& h,
+    uint32_t interpolator,uint32_t controller,const std::string& type,fo3anim::PropertyTrack& out){
+  using namespace fo3anim;
+  if(interpolator>=h.numBlocks||controller>=h.numBlocks||BlockType(h,controller)!=type)return false;
+  const bool emitter=type=="NiPSysEmitterCtlr";
+  const bool boolean=type=="NiVisController"||(emitter&&BlockType(h,interpolator)=="NiBoolInterpolator"),color=type=="NiMaterialColorController";
+  if(!boolean&&!color&&!emitter&&type!="NiAlphaController")return false;
+  if(BlockType(h,interpolator)!=(boolean?"NiBoolInterpolator":color?"NiPoint3Interpolator":"NiFloatInterpolator"))return false;
+  out.kind=emitter?(boolean?PropertyKind::EmitterActive:PropertyKind::EmitterRate):(boolean?PropertyKind::Visibility:PropertyKind::Alpha);
+  if(color){
+    if(h.blockSizes[controller]!=32)return false;
+    Cursor control(BlockData(bytes,h,controller),h.blockSizes[controller]);uint16_t role=0;
+    if(!control.Skip(30)||!control.U16(role))return false;
+    if(role!=2&&role!=3)return false;
+    out.kind=role==3?PropertyKind::Emissive:PropertyKind::Specular;
+  }
+  Cursor c(BlockData(bytes,h,interpolator),h.blockSizes[interpolator]);uint32_t data=INVALID_REF;
+  if(boolean){uint8_t value=0;if(!c.U8(value)||value>2)return false;out.base[0]=value==2?std::numeric_limits<float>::quiet_NaN():float(value);}
+  else for(int i=0;i<(color?3:1);++i)if(!c.F32(out.base[i]))return false;
+  if(!c.U32(data)||c.remaining())return false;
+  if(data==INVALID_REF)return true; // INVALID_FLOAT means this interpolator supplies no value.
+  if(data>=h.numBlocks||BlockType(h,data)!=(boolean?"NiBoolData":color?"NiPosData":"NiFloatData"))return false;
+  Cursor keys(BlockData(bytes,h,data),h.blockSizes[data]);
+  if(!boolean)return ActorKeys(keys,out.values,color?3:1)&&!keys.remaining();
+  out.values.dimensions=1;uint32_t count=0;
+  if(!keys.U32(count)||count>100000)return false;
+  if(count&&(!keys.U32(out.values.interpolation)||(out.values.interpolation!=1&&out.values.interpolation!=5)))return false;
+  float previous=-1e30f;
+  for(uint32_t i=0;i<count;++i){Key key;uint8_t value=0;
+    if(!keys.F32(key.time)||!ActorValid(key.time)||key.time<previous||!keys.U8(value)||value>1)return false;
+    previous=key.time;key.value[0]=float(value);out.values.keys.push_back(key);
+  }
+  return !keys.remaining();
+}
 static bool DecodeClips(const std::vector<uint8_t> &bytes, std::vector<fo3anim::Clip> &out) {
   using namespace fo3anim;
   out.clear();
@@ -310,9 +346,12 @@ static bool DecodeClips(const std::vector<uint8_t> &bytes, std::vector<fo3anim::
           return false;
       if (strings[0] >= h.strings.size())
         return false;
-      if (strings[2] >= h.strings.size() ||
-          h.strings[strings[2]] != "NiTransformController") {
-        ++clip.ignoredControllers;
+      if(strings[2]>=h.strings.size())return false;
+      if(h.strings[strings[2]]!="NiTransformController"){
+        PropertyTrack property;property.bone=h.strings[strings[0]];
+        if(DecodeProperty(bytes,h,interp,controller,h.strings[strings[2]],property))
+          clip.properties.push_back(std::move(property));
+        else ++clip.ignoredControllers;
         continue;
       }
       Track track;
@@ -376,7 +415,7 @@ bool fo3anim::DecodeClip(const std::vector<uint8_t> &bytes, Clip &out) {
   return true;
 }
 
-bool fo3anim::DecodeUiAnimation(const std::vector<uint8_t> &bytes, Skeleton &out,
+bool fo3anim::DecodeObjectAnimation(const std::vector<uint8_t> &bytes, Skeleton &out,
                                std::vector<int> &blockBones, std::vector<Clip> &clips) {
   out = {}; blockBones.clear(); clips.clear();
   Skeleton hierarchy; std::vector<int> mapping; std::vector<Clip> sequences;
@@ -388,8 +427,16 @@ bool fo3anim::DecodeUiAnimation(const std::vector<uint8_t> &bytes, Skeleton &out
     if (clip.ignoredControllers) return false;
     for (const auto &track : clip.tracks)
       if (FindBone(hierarchy, track.bone) < 0) return false;
+    for(const auto& property:clip.properties)if(FindBone(hierarchy,property.bone)<0)return false;
   }
   out = std::move(hierarchy); blockBones = std::move(mapping); clips = std::move(sequences);
+  return true;
+}
+
+bool fo3anim::DecodeUiAnimation(const std::vector<uint8_t>& bytes,Skeleton& out,
+    std::vector<int>& mapping,std::vector<Clip>& clips){
+  if(!DecodeObjectAnimation(bytes,out,mapping,clips))return false;
+  for(const auto& clip:clips)if(!clip.properties.empty()){out={};mapping.clear();clips.clear();return false;}
   return true;
 }
 

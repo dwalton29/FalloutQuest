@@ -1,3 +1,6 @@
+#include "scripting/fo3-script-imagespace.h"
+#include "scripting/fo3-nonresident-script.h"
+namespace fo3worldscript {fo3script::ImagePresentation Presentation();}
 #include "dialogue/fo3-dialogue-session.h"
 #include "dialogue/fo3-dialogue-panel.h"
 #include "npc/fo3-npc-state.h"
@@ -341,6 +344,21 @@ bool Q2016RelativeMatrix(
     return true;
 }
 
+std::shared_ptr<const fo3dooranim::Asset> LoadFo3ObjectAnimation(const std::string& model){
+    using Ptr=std::shared_ptr<const fo3dooranim::Asset>;
+    static std::mutex mutex;static std::unordered_map<std::string,Ptr> cache;
+    {std::lock_guard<std::mutex> lock(mutex);const auto i=cache.find(model);if(i!=cache.end())return i->second;}
+    Ptr result;std::vector<uint8_t> bytes;
+    if(LoadFalloutMeshFile(model,bytes,nullptr)){
+        fo3dooranim::Asset asset;
+        if(fo3anim::DecodeObjectAnimation(bytes,asset.hierarchy,asset.blockBones,asset.clips)){
+            for(auto& bone:asset.hierarchy.bones)if(bone.parent<0)bone.bind={};
+            if(fo3anim::FinalizeSkeleton(asset.hierarchy))result=std::make_shared<const fo3dooranim::Asset>(std::move(asset));
+        }
+    }
+    std::lock_guard<std::mutex> lock(mutex);return cache.emplace(model,result).first->second;
+}
+
 // Q24.1: decode embedded Open/Close controller sequences once per unique DOOR
 // model. The existing Gamebryo UI-animation decoder already understands FO3's
 // NiControllerSequence / NiTransformInterpolator / NiTransformData hierarchy.
@@ -498,6 +516,7 @@ struct GpuObject {
     bool physicalWeapon = false;
     bool q230NpcActor = false;
     bool q2400SwingDoor = false;
+    bool scriptAnimated=false,scriptVisible=true;
     std::shared_ptr<const fo3dooranim::Asset> q2401DoorAnimation;
     int q2401AnimationBone = -1;
     float q223PlacementScale = 1.0f;
@@ -565,7 +584,7 @@ Vec3 Q2400TransformPoint(const float m[16], Vec3 p) {
     };
 }
 void Q2400ObjectBounds(const GpuObject& object, Vec3& minimum, Vec3& maximum) {
-    if (!object.q2400SwingDoor) {
+    if (!object.q2400SwingDoor&&!object.scriptAnimated) {
         minimum={object.minX,object.minY,object.minZ};
         maximum={object.maxX,object.maxY,object.maxZ};
         return;
@@ -2020,6 +2039,13 @@ bool BuildCpuObjects(const Fo3WorldPlacement& placement, std::vector<CpuObject>&
                      bool requireComplete = false) {
     outs.clear();
 
+    const auto q2401DoorAnimation =
+        placement.baseRecordType=="DOOR"
+            ? Q2401LoadDoorNifAnimation(placement.modelPath)
+            : (placement.baseRecordType=="ACTI"||placement.baseRecordType=="MSTT"||placement.baseRecordType=="FURN"?LoadFo3ObjectAnimation(placement.modelPath):std::shared_ptr<const fo3dooranim::Asset>{});
+
+    const bool animatedVisibility=bool(q2401DoorAnimation)&&placement.baseRecordType!="DOOR";
+
     // Q20.12: detailed CELLs can build in parallel. Keep parsed NIFs immutable
     // behind shared_ptrs so cache lookup/insertion is thread-safe without
     // serializing each placement's transform/expanded-vertex work.
@@ -2028,7 +2054,7 @@ bool BuildCpuObjects(const Fo3WorldPlacement& placement, std::vector<CpuObject>&
     static std::mutex modelCacheMutex;
     static std::unordered_map<std::string, Q2012CachedMeshes> ordinaryCache, completeCache;
     auto& modelCache = requireComplete ? completeCache : ordinaryCache;
-    const std::string& cacheKey = placement.modelPath;
+    const std::string cacheKey = placement.modelPath+(animatedVisibility?"|animated-visibility":"");
     Q2012CachedMeshes cachedMeshes;
     {
         std::lock_guard<std::mutex> lock(modelCacheMutex);
@@ -2038,7 +2064,7 @@ bool BuildCpuObjects(const Fo3WorldPlacement& placement, std::vector<CpuObject>&
 
     if (!cachedMeshes) {
         std::vector<Fo3StaticNifMesh> meshes;
-        if (!LoadFo3StaticNifMeshes(placement.modelPath, meshes, requireComplete, true)) return false;
+        if (!LoadFo3StaticNifMeshes(placement.modelPath, meshes, requireComplete, true, animatedVisibility)) return false;
         auto candidate = std::make_shared<const std::vector<Fo3StaticNifMesh>>(
             std::move(meshes));
         bool inserted = false;
@@ -2058,10 +2084,6 @@ bool BuildCpuObjects(const Fo3WorldPlacement& placement, std::vector<CpuObject>&
         }
     }
 
-    const auto q2401DoorAnimation =
-        placement.baseRecordType=="DOOR"
-            ? Q2401LoadDoorNifAnimation(placement.modelPath)
-            : std::shared_ptr<const fo3dooranim::Asset>{};
 
     size_t shapeIndex = 0;
     for (const Fo3StaticNifMesh& cachedMesh : *cachedMeshes) {
@@ -2498,7 +2520,12 @@ bool UploadCpuObject(CpuObject& cpu, float centerX, float centerY, float floorZ,
          Q2025_FLAG_HIGH_PRIORITY_LOD) != 0u;
     gpu.q2016ShapeIndex = cpu.q2016ShapeIndex;
     gpu.q2401DoorAnimation=cpu.q2401DoorAnimation;
+    gpu.scriptAnimated=bool(cpu.q2401DoorAnimation)&&cpu.placement.baseRecordType!="DOOR";
     gpu.q2401AnimationBone=cpu.q2401AnimationBone;
+    if(gpu.scriptAnimated){
+        for(int bone=gpu.q2401AnimationBone;bone>=0;bone=gpu.q2401DoorAnimation->hierarchy.bones[size_t(bone)].parent)
+            gpu.scriptVisible=gpu.scriptVisible&&gpu.q2401DoorAnimation->hierarchy.bones[size_t(bone)].visible;
+    }
     Q2016BuildPlacementMatrix(
         cpu.placement, centerX, centerY, floorZ,
         gpu.q2016PlacementMatrix);
@@ -3753,7 +3780,7 @@ bool PrepareFo3ResidentInteractionAdmission(const Fo3ResidentCpuPreparation& cpu
     // Newly enabled local doors/loose objects have no live registry entry yet.
     // Their transient ownership must not slip past the live-reference preflight.
     for(const auto& object:staged)
-        if(object.q2400SwingDoor||object.q220LooseObject||object.baseRecordType=="FURN"||
+        if(object.q2400SwingDoor||object.scriptAnimated||object.q220LooseObject||object.baseRecordType=="FURN"||
             object.baseRecordType=="NPC_"||object.baseRecordType=="CREA")return false;
     auto admission=fo3scene::ResidentInteractionAdmission::Prepare(cpu.assetTicket,cpu.affected,
         CaptureFo3ResidentInteractionActivity(),Fo3ResidentInteractionHazard);
@@ -7225,6 +7252,7 @@ extern uint64_t gStereoFrame;
 bool gQ230DetailedObjectPrevalidated=false;
 bool Q241Hidden(const GpuObject& object);
 void DrawSceneObject(const GpuObject& object, bool environmentPassQ2050 = false) {
+    if(!object.scriptVisible)return;
     if (!gQ230DetailedObjectPrevalidated &&
         gPlayerSession && gPlayerSession->player.IsCollected(object.refFormId)) return;
     if (!object.q210PlayerBody &&
@@ -7272,7 +7300,7 @@ void DrawSceneObject(const GpuObject& object, bool environmentPassQ2050 = false)
         (object.q2017SharedGeometry ||
          object.q210PlayerBody ||
          object.q220LooseObject || object.physicalWeapon ||
-         object.q2400SwingDoor) &&
+         (object.q2400SwingDoor||object.scriptAnimated)) &&
         !gInstancedDrawActiveQ2016;
     if (gObjectTransformEnabledLocationQ2017 >= 0) {
         glUniform1f(gObjectTransformEnabledLocationQ2017,
@@ -7285,7 +7313,7 @@ void DrawSceneObject(const GpuObject& object, bool environmentPassQ2050 = false)
                 ? (object.pipboy ? gPipWorld.data() : gQ210PlayerRoot)
                 : (object.q220LooseObject || object.physicalWeapon)
                     ? object.q220DynamicTransform
-                    : object.q2400SwingDoor
+                    : (object.q2400SwingDoor||object.scriptAnimated)
                         ? object.q2400DoorTransform
                         : object.q2017RelativeMatrix;
         glUniformMatrix4fv(
@@ -13781,6 +13809,7 @@ GLint q1280ContrastLocation = -1;
 GLint q1280BrightnessLocation = -1;
 GLint q1280TintColorLocation = -1;
 GLint q1280TintValueLocation = -1;
+GLint scriptFadeLocation=-1,scriptTintLocation=-1,scriptGradeLocation=-1,scriptBlurLocation=-1;
 GLint q1280InteriorModeLocation = -1;
 GLint q1280BloomRadiusLocation = -1;
 GLint q1280BloomScaleLocation = -1;
@@ -14395,6 +14424,10 @@ bool Q1280EnsurePostProgram() {
         uniform float uBrightness;
         uniform vec3 uTintColor;
         uniform float uTintValue;
+        uniform vec4 uScriptFade;
+        uniform vec4 uScriptTint;
+        uniform vec3 uScriptGrade;
+        uniform float uScriptBlur;
         uniform int uInteriorMode;
         uniform float uBloomRadius;
         uniform float uBloomScale;
@@ -14425,6 +14458,14 @@ bool Q1280EnsurePostProgram() {
 
         void main() {
             vec3 colour = texture(uScene, vUv).rgb;
+            if(uScriptBlur>0.001){
+                vec2 pixel=vec2(uScriptBlur)/vec2(textureSize(uScene,0));
+                colour*=0.2;
+                colour+=0.2*texture(uScene,vUv+vec2(pixel.x,0.0)).rgb;
+                colour+=0.2*texture(uScene,vUv-vec2(pixel.x,0.0)).rgb;
+                colour+=0.2*texture(uScene,vUv+vec2(0.0,pixel.y)).rgb;
+                colour+=0.2*texture(uScene,vUv-vec2(0.0,pixel.y)).rgb;
+            }
 
 
             // Q15.17 / PC calls 4618165 + 4618189: Src0 is already the
@@ -14479,6 +14520,11 @@ bool Q1280EnsurePostProgram() {
 
             // X8R8G8B8 clamps AND quantises the final shader result to an
             // 8-bit display code before the D3D9 gamma ramp is applied.
+            float scriptLum=dot(q1640PcOutput,vec3(0.299,0.587,0.114));
+            q1640PcOutput=mix(vec3(scriptLum),q1640PcOutput,uScriptGrade.x);
+            q1640PcOutput=(q1640PcOutput*uScriptGrade.y-vec3(0.5))*uScriptGrade.z+vec3(0.5);
+            q1640PcOutput=mix(q1640PcOutput,q1640PcOutput*uScriptTint.rgb,clamp(uScriptTint.a,0.0,1.0));
+            q1640PcOutput=mix(q1640PcOutput,uScriptFade.rgb,clamp(uScriptFade.a,0.0,1.0));
             q1640PcOutput = clamp(q1640PcOutput, vec3(0.0), vec3(1.0));
             vec3 q204fPcBackbufferCode =
                 floor(q1640PcOutput * 255.0 + 0.5) / 255.0;
@@ -14539,6 +14585,10 @@ bool Q1280EnsurePostProgram() {
     q1280BrightnessLocation = glGetUniformLocation(q1280PostProgram, "uBrightness");
     q1280TintColorLocation = glGetUniformLocation(q1280PostProgram, "uTintColor");
     q1280TintValueLocation = glGetUniformLocation(q1280PostProgram, "uTintValue");
+    scriptFadeLocation=glGetUniformLocation(q1280PostProgram,"uScriptFade");
+    scriptTintLocation=glGetUniformLocation(q1280PostProgram,"uScriptTint");
+    scriptGradeLocation=glGetUniformLocation(q1280PostProgram,"uScriptGrade");
+    scriptBlurLocation=glGetUniformLocation(q1280PostProgram,"uScriptBlur");
     q1280InteriorModeLocation = glGetUniformLocation(q1280PostProgram, "uInteriorMode");
     q1280BloomRadiusLocation = glGetUniformLocation(q1280PostProgram, "uBloomRadius");
     q1280BloomScaleLocation = glGetUniformLocation(q1280PostProgram, "uBloomScale");
@@ -14792,6 +14842,11 @@ void Q1280CompositeEyePostQ1280(GLuint swapchainFbo, GLsizei width, GLsizei heig
     glUniform1f(q1670PcBloomReadyLocation, q1670BloomReadyQ1670 ? 1.0f : 0.0f);
     glActiveTexture(GL_TEXTURE0);
     const Fo3ImageSpace& image = GetFo3ImageSpace();
+    const auto scriptImage=fo3worldscript::Presentation();
+    glUniform4fv(scriptFadeLocation,1,scriptImage.fade.data());
+    glUniform4fv(scriptTintLocation,1,scriptImage.tint.data());
+    glUniform3f(scriptGradeLocation,scriptImage.saturation,scriptImage.brightness,scriptImage.contrast);
+    glUniform1f(scriptBlurLocation,scriptImage.blur);
     glUniform1i(q1280InteriorModeLocation, gFo3Environment.interior ? 1 : 0);
     glUniform1f(q1520TargetLumLocation, gFo3Environment.interior
         ? (image.valid ? image.hdrTargetLum : 1.0f) : 1.2f);
@@ -14821,6 +14876,10 @@ void Q1280CompositeEyePostQ1280(GLuint swapchainFbo, GLsizei width, GLsizei heig
     glUniform1f(q1280BloomAlphaLocation, bloomAlpha * 0.35f);
 #ifdef FQ_ENABLE_VULKAN
     fqvk::PostSettings nativePost;
+    std::copy(scriptImage.fade.begin(),scriptImage.fade.end(),nativePost.scriptFade);
+    std::copy(scriptImage.tint.begin(),scriptImage.tint.end(),nativePost.scriptTint);
+    nativePost.scriptGrade[0]=scriptImage.saturation;nativePost.scriptGrade[1]=scriptImage.brightness;nativePost.scriptGrade[2]=scriptImage.contrast;
+    nativePost.scriptBlur=scriptImage.blur;
     nativePost.interior=gFo3Environment.interior?1:0;nativePost.flags=flags;
     nativePost.saturation=image.valid?image.cinematicSaturation:1.0f;
     nativePost.contrastAvg=image.valid?image.cinematicContrastAvgLum:.5f;
@@ -15117,6 +15176,7 @@ fo3player::Session* GetFo3PlayerSession() { return gPlayerSession.get(); }
 #include "ui/lockpick/fo3-lockpick-runtime.inc"
 #include "ui/terminal/fo3-terminal-runtime.inc"
 #include "world/interaction/fo3-interaction-runtime.inc"
+#include "scripting/fo3-world-script-runtime.inc"
 #include "world/interaction/fo3-levelup-runtime.inc"
 #include "ui/pause/fo3-pause-runtime.inc"
 

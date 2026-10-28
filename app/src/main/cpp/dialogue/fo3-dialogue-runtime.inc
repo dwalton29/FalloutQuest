@@ -48,6 +48,7 @@ bool PreviewFo3DialogueReferences(const fo3player::Player& player,
   }
   std::vector<uint32_t> live;
   for(const auto& a:gQ230NpcActors)live.push_back(a.source.refFormId);
+  for(const auto& object:gObjects)live.push_back(object.refFormId);
   return fo3script::NonresidentActorRemoval(player,plan,gCurrentCellFormId,gExteriorWorldspaceQ1890,live,error);
 }
 bool PublishFo3DialogueReferences(fo3player::Player& player,

@@ -12,6 +12,10 @@ Player::Player(const Player& source,ScriptCandidateTag)
       scriptCompileCache_(source.scriptCompileCache_?source.scriptCompileCache_:
         (source.scriptCompileCache_=std::make_shared<fo3script::CompileCache>(source.catalog_->pipboy))),
       scriptButtons_(source.scriptButtons_),
+      pendingScriptActions_(source.pendingScriptActions_),scriptAnimationDefinitions_(source.scriptAnimationDefinitions_),
+      scriptAnimations_(source.scriptAnimations_),scriptInsideTriggers_(source.scriptInsideTriggers_),
+      scriptRuntimeSeconds_(source.scriptRuntimeSeconds_),scriptElapsedSeconds_(source.scriptElapsedSeconds_),
+      scriptRuntimeGeneration_(source.scriptRuntimeGeneration_),
       pendingScriptMessages_(source.pendingScriptMessages_),pendingQuestNotices_(source.pendingQuestNotices_),
       pendingExperienceNotices_(source.pendingExperienceNotices_),pendingScriptItems_(source.pendingScriptItems_),
       pendingScriptSounds_(source.pendingScriptSounds_),pendingTerminalBack_(source.pendingTerminalBack_),pendingBarters_(source.pendingBarters_),pendingKarmaEvents_(source.pendingKarmaEvents_),
@@ -164,6 +168,7 @@ void Player::SwapScriptPayload(Player& other) noexcept {
   using std::swap;
   swap(state_,other.state_);swap(actorPoseRevisions_,other.actorPoseRevisions_);
   scriptButtons_.swap(other.scriptButtons_);
+  pendingScriptActions_.swap(other.pendingScriptActions_);scriptAnimations_.swap(other.scriptAnimations_);
   pendingScriptMessages_.swap(other.pendingScriptMessages_);
   pendingScriptSounds_.swap(other.pendingScriptSounds_);
   pendingTerminalBack_.swap(other.pendingTerminalBack_);

@@ -328,7 +328,7 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
     // SCRI is on the base definition; the placed REFR/ACHR/ACRE supplies identity.
     const bool eventBase = type=="ACTI"||type=="CREA"||type=="FURN"||
         type=="MSTT"||type=="CONT"||type=="LIGH"||type=="FLOR"||
-        type=="STAT"||type=="TERM"||type=="DOOR";
+        type=="STAT"||type=="TERM"||type=="DOOR"||type=="IMAD"||type=="TACT";
     const bool selected = extra || eventBase || lootRecord || worldRecord || type == "TES4" ||
                           type == "GMST" || item ||
                           (type == "NPC_" && form == PlayerBase);
@@ -344,6 +344,8 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
         return fail("Malformed ESM subrecord");
       fo3pipdata::Decode(next.pipboy,type,form,flags,payload,groupCells.empty()?0:groupCells.back(),groupWorlds.empty()?0:groupWorlds.back(),groupTopics.empty()?0:groupTopics.back());
       fo3weapon::Decode(next.weapons,type,form,payload);
+      if(type=="CREA")next.deferredBases.insert(form);
+      if(type=="IMAD")next.imageModifiers.emplace(form,fo3script::DecodeImageModifier(payload));
       if(type=="REFR"||type=="ACHR"||type=="ACRE") {
         if(Find(subs,"XEZN"))next.encounterZoneReferences.insert(form);
         // Keep the complete graph, including parents outside the resident cell.
@@ -1778,6 +1780,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
   state_ = std::move(next);
   pendingKarmaEvents_.clear();pendingTheftEvents_.clear();pendingQuestNotices_.clear();pendingScriptItems_.clear();
   pendingExperienceNotices_.clear();
+  pendingScriptActions_.clear();scriptAnimations_.clear();scriptInsideTriggers_.clear();++scriptRuntimeGeneration_;
   pendingScriptMessages_.clear();pendingScriptSounds_.clear();pendingBarters_.clear();scriptButtons_.clear();EndContainerInteraction();
   ++revision_;
   return true;

@@ -124,6 +124,7 @@ struct NifHeader {
 };
 
 struct NifTransform {
+    uint16_t flags=0;
     float translation[3]{0.0f, 0.0f, 0.0f};
     float rotation[9]{
         1.0f, 0.0f, 0.0f,
@@ -242,6 +243,7 @@ bool ParseAvObjectPrefix(Cursor& c, const NifHeader& header,
 
     uint16_t flags = 0;
     if (!c.U16(flags)) return false;
+    transform.flags=flags;
     if (header.userVersion >= 11u && header.bsVersion > 26u) {
         uint16_t unknown = 0;
         if (!c.U16(unknown)) return false;
@@ -989,7 +991,7 @@ bool Q970CollectAncestorTransforms(const std::vector<uint8_t>& nif,
 bool Q970BuildRenderableSet(const std::vector<uint8_t>& nif,
                             const NifHeader& header,
                             std::vector<uint8_t>& renderable,
-                            Q970SceneStats& stats) {
+                            Q970SceneStats& stats, bool includeHidden=false) {
     renderable.assign(header.numBlocks, 0u);
     stats = {};
 
@@ -1033,7 +1035,7 @@ bool Q970BuildRenderableSet(const std::vector<uint8_t>& nif,
 
         const std::string& type = BlockType(header, block);
         if (nodes[block].parsed) {
-            if ((nodes[block].flagsLow & 0x0001u) != 0u) {
+            if (!includeHidden && (nodes[block].flagsLow & 0x0001u) != 0u) {
                 ++stats.hiddenNodes;
                 continue;
             }
@@ -1074,7 +1076,7 @@ bool Q970BuildRenderableSet(const std::vector<uint8_t>& nif,
 
         if (Q970IsShapeType(type)) {
             uint16_t flagsLow = 0u;
-            if (Q970ReadAvFlags(nif, header, block, flagsLow) &&
+            if (!includeHidden && Q970ReadAvFlags(nif, header, block, flagsLow) &&
                 (flagsLow & 0x0001u) != 0u) {
                 ++stats.hiddenShapes;
                 continue;
@@ -1089,7 +1091,7 @@ bool Q970BuildRenderableSet(const std::vector<uint8_t>& nif,
         if (!Q970IsShapeType(BlockType(header, block)) ||
             parent[block] != INVALID_REF || renderable[block] != 0u) continue;
         uint16_t flagsLow = 0u;
-        if (Q970ReadAvFlags(nif, header, block, flagsLow) &&
+        if (!includeHidden && Q970ReadAvFlags(nif, header, block, flagsLow) &&
             (flagsLow & 0x0001u) != 0u) {
             ++stats.hiddenShapes;
             continue;
@@ -1106,7 +1108,7 @@ bool Q970BuildRenderableSet(const std::vector<uint8_t>& nif,
         for (uint32_t block = 0u; block < header.numBlocks; ++block) {
             if (!Q970IsShapeType(BlockType(header, block))) continue;
             uint16_t flagsLow = 0u;
-            if (Q970ReadAvFlags(nif, header, block, flagsLow) &&
+            if (!includeHidden && Q970ReadAvFlags(nif, header, block, flagsLow) &&
                 (flagsLow & 0x0001u) != 0u) continue;
             renderable[block] = 1u;
             ++stats.selectedShapes;
@@ -1814,7 +1816,7 @@ bool TryLoadShape(const std::vector<uint8_t>& nif, const NifHeader& header,
 
 bool LoadFo3StaticNifMeshes(const std::string& modelPath,
                             std::vector<Fo3StaticNifMesh>& outMeshes,
-                            bool requireComplete, bool referenceRoot) {
+                            bool requireComplete, bool referenceRoot, bool includeHidden) {
     outMeshes.clear();
 
     std::vector<uint8_t> nif;
@@ -1831,7 +1833,7 @@ bool LoadFo3StaticNifMeshes(const std::string& modelPath,
     Q970SceneStats q970Scene;
     std::vector<uint8_t> q970Renderable;
     const bool q970SelectionReady =
-        Q970BuildRenderableSet(nif, header, q970Renderable, q970Scene);
+        Q970BuildRenderableSet(nif, header, q970Renderable, q970Scene, includeHidden);
     Q6H_LOGI("Q9.70 NIF SCENEGRAPH: model=%s nodes=%zu lodNodes=%zu switchNodes=%zu selectedShapes=%zu suppressedLodChildren=%zu hiddenNodes=%zu hiddenShapes=%zu unparentedShapes=%zu fallbackAll=%d forceLOD0=1",
              resolved.c_str(), q970Scene.parsedNodes, q970Scene.lodNodes,
              q970Scene.switchNodes, q970Scene.selectedShapes,

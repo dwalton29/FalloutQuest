@@ -68,6 +68,12 @@ class Expression {
       if(!lock.known||lock.leveled)return Fail("unresolved lock query");
       value=query=="getlocked"?float(lock.locked):query=="getlocklevel"?float(lock.level):float(lock.broken);return true;
     }
+    if(t=="getsecondspassed"){value=float(p.ScriptSecondsPassed());return true;}
+    if(query=="isanimplaying"){
+      const auto id=dot==std::string::npos?owner:form(t.substr(0,dot));bool playing=false;
+      if(!p.ScriptAnimationPlaying(id,playing))return Fail("animation reference unavailable");
+      value=playing;return true;
+    }
     if(t=="getbuttonpressed"){value=p.ScriptButton();return true;}
     if(t=="getdistance"){
       if(at==tokens.size()||tokens[at++]!="player")return Fail("unsupported distance target");
@@ -404,6 +410,8 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
       if(!c.expression.empty())ok=fo3script::Expression(*this,owner,c.expression,error,scriptId).Evaluate(value);
       if(ok)ok=std::isfinite(value)&&value>=-100&&value<=100&&std::floor(value)==value&&QueueBarter(c.form,int(value));
       break;
+    case C::PlayGroup:ok=QueueScriptPlayGroup(c.form,c.expression,c.index);break;
+    case C::ImageModifier:{fo3script::Action action;action.kind=fo3script::ActionKind::ImageModifier;action.reference=owner;action.form=c.form;ok=QueueScriptAction(std::move(action));break;}
     case C::PlaySound:ok=QueueScriptSound(c.form);break;
     case C::AddTopic:if(!catalog_->pipboy.dialogueTopics.count(c.form))ok=false;else if(state_.pipboy.knownTopics.insert(c.form).second)++revision_;break;
     default:ok=false;break;
@@ -494,7 +502,8 @@ void Player::PumpQuestGameMode(double realSeconds) {
   // 4 Hz is a bounded Quest adaptation, not a claim of PC GameMode parity.
   questScriptAccumulator_=std::min(0.5,questScriptAccumulator_+realSeconds);
   if(questScriptAccumulator_<0.25)return;
-  questScriptAccumulator_-=0.25;
+  scriptElapsedSeconds_=questScriptAccumulator_;
+  questScriptAccumulator_=0;
   std::vector<uint32_t> ids;
   for(const auto& q:catalog_->pipboy.quests){
     if(!q.second.script)continue;
@@ -601,6 +610,59 @@ bool Player::QueueScriptMessage(uint32_t form,float argument,bool hasArgument,ui
   if(request.text.find('%')!=std::string::npos)return false; // unknown formatting cannot be guessed
   pendingScriptMessages_.push_back(std::move(request));++scriptEffectRevision_;return true;
 }
+void Player::SetScriptRuntimeClock(double now,double elapsed){
+  if(std::isfinite(now)&&std::isfinite(elapsed)&&elapsed>=0){scriptRuntimeSeconds_=now;scriptElapsedSeconds_=elapsed;}
+}
+void Player::SetScriptAnimationRegistry(std::shared_ptr<const fo3script::AnimationRegistry> registry){
+  scriptAnimationDefinitions_=std::move(registry);++scriptEffectRevision_;
+}
+bool Player::ScriptAnimationPlaying(uint32_t reference,bool& playing) const {
+  if(!scriptAnimationDefinitions_||!scriptAnimationDefinitions_->count(reference))return false;
+  const auto i=scriptAnimations_.find(reference);
+  playing=i!=scriptAnimations_.end()&&fo3script::Playing(i->second,scriptRuntimeSeconds_);return true;
+}
+bool Player::QueueScriptPlayGroup(uint32_t reference,const std::string& group,uint32_t flags){
+  // The object bridge supports immediate start (1) and the authored object
+  // restart mode (5). Normal (0) is admitted only when no sequence is active;
+  // queued/loop-entry initialization needs a separate animation queue.
+  if(!scriptAnimationDefinitions_||(flags!=0&&flags!=1&&flags!=5))return false;
+  if(flags==0){bool playing=false;if(ScriptAnimationPlaying(reference,playing)&&playing)return false;}
+  const auto found=scriptAnimationDefinitions_->find(reference);if(found==scriptAnimationDefinitions_->end())return false;
+  const auto name=fo3script::Lower(group);
+  for(const auto& clip:found->second)if(fo3script::Lower(clip.name)==name){
+    if(!std::isfinite(clip.duration)||clip.duration<0)return false;
+    fo3script::Action action;action.kind=fo3script::ActionKind::PlayGroup;action.reference=reference;
+    action.group=name;action.flags=flags;action.started=scriptRuntimeSeconds_;
+    if(!QueueScriptAction(std::move(action)))return false;
+    scriptAnimations_[reference]={name,scriptRuntimeSeconds_,clip.duration,clip.loop};return true;
+  }
+  return false;
+}
+bool Player::QueueScriptAction(fo3script::Action action){
+  if(pendingScriptActions_.size()>=64)return false;
+  if(action.kind==fo3script::ActionKind::ImageModifier&&(!catalog_->imageModifiers.count(action.form)||!catalog_->imageModifiers.at(action.form).valid))return false;
+  pendingScriptActions_.push_back(std::move(action));++scriptEffectRevision_;return true;
+}
+bool Player::PollScriptAction(fo3script::Action& out){
+  if(pendingScriptActions_.empty())return false;
+  out=std::move(pendingScriptActions_.front());pendingScriptActions_.erase(pendingScriptActions_.begin());++scriptEffectRevision_;return true;
+}
+std::vector<std::pair<uint32_t,bool>> Player::ScriptTriggerChanges() const {
+  std::vector<std::pair<uint32_t,bool>> changes;
+  if(!scriptPlayerPositionKnown_)return changes;
+  for(const auto& entry:catalog_->pipboy.triggerPrimitives){
+    const auto target=catalog_->pipboy.targets.find(entry.first);if(target==catalog_->pipboy.targets.end())continue;
+    const auto& p=target->second;
+    const bool resident=scriptPlayerWorld_?p.world==scriptPlayerWorld_:p.cell==scriptPlayerCell_;
+    bool disabled=true;std::string error;
+    const bool inside=resident&&ReferenceDisabled(entry.first,disabled,error)&&!disabled&&fo3script::Contains(p,entry.second,scriptPlayerPosition_);
+    if(inside!=bool(scriptInsideTriggers_.count(entry.first)))changes.push_back({entry.first,inside});
+  }
+  std::sort(changes.begin(),changes.end(),[](const auto& a,const auto& b){return a.first<b.first;});return changes;
+}
+void Player::AcknowledgeScriptTrigger(uint32_t reference,bool inside){
+  if(inside)scriptInsideTriggers_.insert(reference);else scriptInsideTriggers_.erase(reference);
+}
 bool Player::QueueScriptSound(uint32_t form){
   if(!form||pendingScriptSounds_.size()>=16)return false;
   pendingScriptSounds_.push_back(form);++scriptEffectRevision_;return true;
@@ -645,7 +707,8 @@ bool Player::PumpWorldAwareGameMode(double seconds,const std::vector<uint32_t>& 
   // tick again inside the same frame after reserving the resident world.
   questScriptAccumulator_=std::min(.5,questScriptAccumulator_+seconds);
   if(questScriptAccumulator_<.25)return false;
-  questScriptAccumulator_-=.25;
+  scriptElapsedSeconds_=questScriptAccumulator_;
+  questScriptAccumulator_=0;
   auto run=[&](uint32_t script,const char* event,uint32_t owner,bool reference)->bool {
     std::string error;
     // The ordinary compiler rejects the same immutable unsupported body every
@@ -725,7 +788,8 @@ void Player::PumpReferenceGameMode(double realSeconds,const std::vector<uint32_t
   if(!std::isfinite(realSeconds)||realSeconds<=0||realSeconds>1)return;
   referenceScriptAccumulator_=std::min(.5,referenceScriptAccumulator_+realSeconds);
   if(referenceScriptAccumulator_<.25)return;
-  referenceScriptAccumulator_-=.25;
+  scriptElapsedSeconds_=referenceScriptAccumulator_;
+  referenceScriptAccumulator_=0;
   auto ids=resident;std::sort(ids.begin(),ids.end());ids.erase(std::unique(ids.begin(),ids.end()),ids.end());
   for(uint32_t id:ids){
     if(!HasReferenceEvent(id,"GameMode"))continue;

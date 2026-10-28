@@ -4,6 +4,8 @@
 #include "player/fo3-experience.h"
 #include "player/fo3-paged-state.h"
 #include "scripting/fo3-event-scripts.h"
+#include "scripting/fo3-script-actions.h"
+#include "scripting/fo3-script-imagespace.h"
 #include "world/fo3-reference-state.h"
 #include "weapons/fo3-weapon-data.h"
 #include <array>
@@ -238,6 +240,8 @@ struct Catalog {
   std::unordered_map<uint32_t,EnableParent> enableParents;
   // Authored base SCRI associations (actor/activator/door/other object).
   std::unordered_map<uint32_t,uint32_t> eventBaseScripts;
+  std::unordered_set<uint32_t> deferredBases; // CREA has no resident visual/physics adapter yet.
+  std::unordered_map<uint32_t,fo3script::ImageModifier> imageModifiers;
   std::unordered_map<uint32_t,std::string> eventBaseNames;
   std::unordered_map<uint32_t,fo3script::EventProgram> eventPrograms;
   std::unordered_set<uint32_t> doorBases;
@@ -478,6 +482,16 @@ public:
   bool CommitReferenceEnablePlan(ReferenceEnablePlan& plan) noexcept;
   bool RollbackReferenceEnablePlan(ReferenceEnablePlan& plan) noexcept;
   bool QueueScriptMessage(uint32_t form,float argument,bool hasArgument,uint32_t owner);
+  uint64_t ScriptRuntimeGeneration() const {return scriptRuntimeGeneration_;}
+  void SetScriptRuntimeClock(double now,double elapsed);
+  void SetScriptAnimationRegistry(std::shared_ptr<const fo3script::AnimationRegistry> registry);
+  bool ScriptAnimationPlaying(uint32_t reference,bool& playing) const;
+  bool QueueScriptPlayGroup(uint32_t reference,const std::string& group,uint32_t flags);
+  bool QueueScriptAction(fo3script::Action action);
+  bool PollScriptAction(fo3script::Action& action);
+  double ScriptSecondsPassed() const {return scriptElapsedSeconds_;}
+  std::vector<std::pair<uint32_t,bool>> ScriptTriggerChanges() const;
+  void AcknowledgeScriptTrigger(uint32_t reference,bool inside);
   bool QueueScriptSound(uint32_t form);
   bool PollScriptMessage(ScriptMessage& out);
   bool PollQuestNotice(QuestNotice& out);
@@ -644,6 +658,12 @@ private:
   size_t scriptTraceBytes_=0;
   mutable std::shared_ptr<fo3script::CompileCache> scriptCompileCache_;
   std::unordered_map<uint32_t,int> scriptButtons_;
+  std::vector<fo3script::Action> pendingScriptActions_;
+  std::shared_ptr<const fo3script::AnimationRegistry> scriptAnimationDefinitions_;
+  std::unordered_map<uint32_t,fo3script::AnimationRun> scriptAnimations_;
+  std::unordered_set<uint32_t> scriptInsideTriggers_;
+  double scriptRuntimeSeconds_=0,scriptElapsedSeconds_=0;
+  uint64_t scriptRuntimeGeneration_=0;
   std::vector<ScriptMessage> pendingScriptMessages_;
   std::vector<QuestNotice> pendingQuestNotices_;
   std::vector<ExperienceNotice> pendingExperienceNotices_;

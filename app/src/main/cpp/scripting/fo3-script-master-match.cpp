@@ -172,7 +172,7 @@ bool GlobalDefault(const std::vector<uint8_t>& bytes,uint32_t& bits){
 // This deliberately does not infer template inheritance or runtime rebinding.
 bool EventBase(const std::string& t){
   return t=="ACTI"||t=="CREA"||t=="NPC_"||t=="FURN"||t=="MSTT"||
-    t=="CONT"||t=="LIGH"||t=="FLOR"||t=="STAT"||t=="TERM"||t=="DOOR"||
+    t=="CONT"||t=="LIGH"||t=="FLOR"||t=="STAT"||t=="TERM"||t=="DOOR"||t=="TACT"||
     t=="WEAP"||t=="ARMO"||t=="BOOK"||t=="MISC"||t=="ALCH"||t=="KEYM";
 }
 bool Association(const std::vector<uint8_t>& bytes,const std::string& type,

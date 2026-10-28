@@ -138,6 +138,8 @@ void BindClip(const Skeleton &s, const Clip &c, Pose &p) {
   p.evaluated.resize(s.bones.size());
   p.priorities.resize(s.bones.size());
   p.channels.resize(s.bones.size());
+  p.propertyBones.clear();
+  for(const auto& property:c.properties)p.propertyBones.push_back(FindBone(s,property.bone));
   p.trackBones.clear();
   for (const Track &t : c.tracks)
     p.trackBones.push_back(FindBone(s, t.bone));
@@ -222,7 +224,7 @@ static std::array<float, 4> Evaluate(const Channel &c, float time, float start,
 }
 bool Sample(const Skeleton &s, const Clip &c, double elapsed, Pose &p, SampleTimings* timings, RootPolicy rootPolicy, const Transform* retainedRoot, Playback playback) {
   const auto started=std::chrono::steady_clock::now();
-  if (p.trackBones.size() != c.tracks.size() ||
+  if (p.trackBones.size() != c.tracks.size() || p.propertyBones.size()!=c.properties.size() ||
       p.local.size() != s.bones.size() ||
       p.priorities.size() != s.bones.size() || p.channels.size() != s.bones.size() ||
       p.accumulationRoot != c.accumulationRoot)
@@ -301,6 +303,16 @@ bool Sample(const Skeleton &s, const Clip &c, double elapsed, Pose &p, SampleTim
           track.scale.keys.empty() && track.scale.controls.empty()
               ? track.base.scale
               : Evaluate(track.scale, time, track.start, track.stop, false)[0];
+  }
+  p.properties.clear();
+  for(size_t i=0;i<c.properties.size();++i){
+    const auto& property=c.properties[i];auto value=property.base;
+    if(property.values.keys.empty()&&(!std::isfinite(value[0])||std::abs(value[0])>=1e30f))continue;
+    if(property.kind==PropertyKind::Visibility||property.kind==PropertyKind::EmitterActive){
+      if(!property.values.keys.empty())value=property.values.keys.front().value;
+      for(const auto& key:property.values.keys){if(key.time>time)break;value=key.value;}
+    }else if(!property.values.keys.empty())value=Evaluate(property.values,time,c.start,c.stop,false);
+    if(p.propertyBones[i]>=0)p.properties.push_back({p.propertyBones[i],property.kind,value});
   }
   const auto skeletonStarted=std::chrono::steady_clock::now();
   if(timings) timings->clipUs=std::chrono::duration<double,std::micro>(skeletonStarted-started).count();

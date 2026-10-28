@@ -79,6 +79,7 @@ struct CollisionTriangle {
     // every triangle into one anonymous soup. Triangles from the same packed
     // subshape share a surface key and therefore contribute one manifold contact.
     uint64_t surfaceKeyQ714 = 0u;
+    uint32_t animationTargetBlock = 0xffffffffu;
     uint8_t havokLayerQ714 = 0u;
     uint32_t havokMaterialQ714 = 0u;
     bool stairsQ714 = false;
@@ -881,6 +882,7 @@ bool BuildFo3CollisionPlacementChunk(const Fo3WorldPlacement& placement,
 
             CollisionTriangle tri;
             if (!BuildTriangle(point(ia), point(ib), point(ic), tri)) {if(requireComplete)return false;continue;}
+            tri.animationTargetBlock=shape.targetBlock;
             tri.walkableModuleQ723 = IsWalkableModuleQ723(placement);
             tri.surfaceKeyQ714 = MakeSurfaceKeyQ714(
                 placement.refFormId, shape.sourceShapeBlock, subShapeIndex);
@@ -1229,6 +1231,7 @@ bool InitializeFo3CollisionOverlay(const std::vector<Fo3WorldPlacement>& placeme
 
                 CollisionTriangle worldTriangle;
                 if (!BuildTriangle(a, b, c, worldTriangle)) continue;
+                worldTriangle.animationTargetBlock=shape.targetBlock;
                 worldTriangle.walkableModuleQ723 = IsWalkableModuleQ723(placement);
                 worldTriangle.surfaceKeyQ714 = MakeSurfaceKeyQ714(
                     placement.refFormId, shape.sourceShapeBlock, subShapeIndexQ714);
@@ -1714,14 +1717,12 @@ bool Q1930AssembleCachedAuthored(
                                       entry.triangles.begin(), entry.triangles.end());
         } else {
             if (!pose->second.enabled) continue;
-            const auto& m = pose->second.transform;
-            auto apply = [&](Vec3 p) { return Vec3{
-                m[0]*p.x+m[4]*p.y+m[8]*p.z+m[12],
-                m[1]*p.x+m[5]*p.y+m[9]*p.z+m[13],
-                m[2]*p.x+m[6]*p.y+m[10]*p.z+m[14]}; };
             for (const auto& original : entry.triangles) {
-                CollisionTriangle moved = original;
-                if (!BuildTriangle(apply(original.a),apply(original.b),apply(original.c),moved)) return false;
+                const auto node=pose->second.nodeTransforms.find(original.animationTargetBlock);
+                const auto& m=node==pose->second.nodeTransforms.end()?pose->second.transform:node->second;
+                auto apply=[&](Vec3 p){return Vec3{m[0]*p.x+m[4]*p.y+m[8]*p.z+m[12],m[1]*p.x+m[5]*p.y+m[9]*p.z+m[13],m[2]*p.x+m[6]*p.y+m[10]*p.z+m[14]};};
+                CollisionTriangle moved=original;
+                if(!BuildTriangle(apply(original.a),apply(original.b),apply(original.c),moved))return false;
                 snapshot.triangles.push_back(std::move(moved));
             }
         }
@@ -2356,6 +2357,31 @@ bool SetFo3DoorCollisionTransformQ2400(uint32_t refFormId,const float transform[
     Q6G_LOGI("Q24.0 DOOR COLLISION: ref=%08X enabled=%d removed=%zu restored=%zu triangles=%zu source=authored-bhk endpointOnly=1",
              refFormId,enabled?1:0,removed,restored,gWorldTriangles.size());
     return true;
+}
+
+bool SetFo3ScriptCollisionPose(uint32_t reference,const Fo3DoorCollisionPose& requested){
+    if(!reference||!gPlayerCollisionReady)return false;
+    const auto cached=gQ1990CollisionPlacementCache.find(reference);
+    if(cached==gQ1990CollisionPlacementCache.end())return false;
+    Fo3DoorCollisionPose pose;pose.enabled=requested.enabled;pose.transform=requested.transform;
+    for(const auto& triangle:cached->second.triangles){
+        const auto target=requested.nodeTransforms.find(triangle.animationTargetBlock);
+        if(target!=requested.nodeTransforms.end())pose.nodeTransforms.emplace(*target);
+    }
+    const auto previous=gDoorCollisionPoses.find(reference);
+    if(previous!=gDoorCollisionPoses.end()&&previous->second==pose)return true;
+    std::vector<CollisionTriangle> moved;moved.reserve(cached->second.triangles.size());
+    for(const auto& original:cached->second.triangles){
+        const auto node=pose.nodeTransforms.find(original.animationTargetBlock);
+        const auto& m=node==pose.nodeTransforms.end()?pose.transform:node->second;
+        auto apply=[&](Vec3 p){return Vec3{m[0]*p.x+m[4]*p.y+m[8]*p.z+m[12],m[1]*p.x+m[5]*p.y+m[9]*p.z+m[13],m[2]*p.x+m[6]*p.y+m[10]*p.z+m[14]};};
+        CollisionTriangle tri=original;if(!BuildTriangle(apply(original.a),apply(original.b),apply(original.c),tri))return false;moved.push_back(std::move(tri));
+    }
+    gDoorCollisionPoses[reference]=pose;
+    gWorldTriangles.erase(std::remove_if(gWorldTriangles.begin(),gWorldTriangles.end(),[&](const CollisionTriangle& t){const auto src=gSurfaceSourcesQ722.find(t.surfaceKeyQ714);return src!=gSurfaceSourcesQ722.end()&&src->second.refFormId==reference;}),gWorldTriangles.end());
+    if(pose.enabled)gWorldTriangles.insert(gWorldTriangles.end(),moved.begin(),moved.end());
+    AdvanceFo3CollisionPublicationRevision();++gPipLocalMapRevision;gTriangleCount=gWorldTriangles.size();
+    InvalidateDerivedCollisionCachesQ17();gHkManifoldValidQ800=false;Q225RebuildDynamicGrid();return true;
 }
 
 bool HasFo3InteractionOccluder(float ox,float oy,float oz,float dx,float dy,float dz,

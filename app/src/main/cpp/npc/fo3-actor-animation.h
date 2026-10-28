@@ -16,6 +16,7 @@ struct Bone {
   std::string name;
   int parent = -1;
   Transform bind;
+  bool visible=true;
 };
 struct Skeleton {
   std::vector<Bone> bones;
@@ -40,6 +41,14 @@ struct Track {
   Channel translation, rotation, scale;
   std::array<Channel, 3> xyzRotation;
 };
+enum class PropertyKind { Visibility, Alpha, Emissive, Specular,EmitterRate,EmitterActive };
+struct PropertyTrack {
+  std::string bone;
+  PropertyKind kind=PropertyKind::Visibility;
+  std::array<float,4> base{};
+  Channel values;
+};
+struct PropertyValue {int bone=-1;PropertyKind kind=PropertyKind::Visibility;std::array<float,4> value{};};
 struct TextKey {
   float time = 0;
   std::string text;
@@ -50,6 +59,7 @@ struct Clip {
   float weight = 1; // Authored NiControllerSequence weight.
   uint32_t cycle = 0;
   std::vector<Track> tracks;
+  std::vector<PropertyTrack> properties;
   std::vector<TextKey> textKeys;
   size_t compressedTracks = 0, ignoredControllers = 0;
 };
@@ -59,7 +69,8 @@ struct Pose {
   std::string accumulationRoot;
   std::vector<Transform> local;
   std::vector<Matrix> global, delta;
-  std::vector<int> trackBones;
+  std::vector<int> trackBones,propertyBones;
+  std::vector<PropertyValue> properties;
   std::vector<uint8_t> evaluated;
   std::vector<uint8_t> priorities, channels;
 };
@@ -99,6 +110,8 @@ bool DecodeModelHierarchy(const std::vector<uint8_t> &bytes, Skeleton &out,
 bool DecodeClip(const std::vector<uint8_t> &bytes, Clip &out);
 // UI NIFs embed multiple sequences and animate an AVObject hierarchy, including
 // geometry. blockBones maps original NIF block IDs to that hierarchy.
+// World objects also retain visibility, material and emitter controller channels.
+bool DecodeObjectAnimation(const std::vector<uint8_t>&, Skeleton&,std::vector<int>&,std::vector<Clip>&);
 bool DecodeUiAnimation(const std::vector<uint8_t> &bytes, Skeleton &hierarchy,
                        std::vector<int> &blockBones, std::vector<Clip> &clips);
 } // namespace fo3anim

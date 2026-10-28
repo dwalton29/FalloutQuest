@@ -60,8 +60,8 @@ bool Enabled(const Definitions &d, const Placement &p) {
   }
   return true;
 }
-bool InRange(const Definitions &d, const Transmitter &t, const Location &l) {
-  if (!Enabled(d, t))
+bool InRange(const Definitions &d, const Transmitter &t, const Location &l,const EnabledReference& enabled) {
+  if (!(enabled?enabled(t.reference):Enabled(d, t)))
     return false;
   if (t.range == 1)
     return true;
@@ -94,13 +94,13 @@ bool InRange(const Definitions &d, const Transmitter &t, const Location &l) {
   return t.radius > 0 && dx * dx + dy * dy <= t.radius * t.radius;
 }
 std::vector<uint32_t> AvailableStations(const Definitions &d,
-                                        const Location &l) {
+                                        const Location &l,const EnabledReference& enabled) {
   std::vector<uint32_t> out;
   std::unordered_set<uint32_t> bases;
   for (auto &t : d.transmitters) {
     auto s = d.stations.find(t.second.base);
     if (s != d.stations.end() && !s->second.name.empty() &&
-        InRange(d, t.second, l) && bases.insert(t.second.base).second)
+        InRange(d, t.second, l,enabled) && bases.insert(t.second.base).second)
       out.push_back(t.first);
   }
   std::sort(out.begin(), out.end(), [&](auto a, auto b) {

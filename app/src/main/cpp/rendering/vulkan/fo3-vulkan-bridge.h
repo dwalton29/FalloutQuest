@@ -7,6 +7,7 @@
 #include "data/fo3-texture-bsa.h"
 namespace fqvk {
 struct PostSettings {
+    float scriptFade[4]{},scriptTint[4]{},scriptGrade[3]{1,1,1},scriptBlur=0;
     int flags=0,interior=0;
     float saturation=1,contrastAvg=.5f,contrast=1,brightness=1,tint[3]{1,1,1},tintValue=0;
     float targetLum=1.2f,upperLum=1,eyeSpeed=.5f,brightThreshold=.55f,brightScale=1;

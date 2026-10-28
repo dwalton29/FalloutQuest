@@ -180,9 +180,21 @@ bool CompileResult(const fo3pipdata::Definitions& d,const fo3pipdata::ResultScri
       cmd.type=CommandType::EvaluatePackage;
       cmd.form=form(op.substr(0,op.size()-4));
       if(!cmd.form){error="unresolved EVP reference";return false;}
+    } else if(op=="playgroup"||(op.size()>10&&op.substr(op.size()-10)==".playgroup")){
+      cmd.type=CommandType::PlayGroup;
+      cmd.form=op=="playgroup"?owner:form(op.substr(0,op.size()-10));
+      if(!cmd.form||!(in>>a)){error="invalid PlayGroup receiver/group";return false;}
+      cmd.expression=a;cmd.index=0;
+      if(in>>b){float flags=0;if(!number(b,flags)||flags<0||flags>5||std::floor(flags)!=flags){error="invalid PlayGroup flags";return false;}cmd.index=uint32_t(flags);}
+      in.clear();
+    } else if(op=="imod"||op=="applyimagespacemodifier"){
+      cmd.type=CommandType::ImageModifier;
+      if(!(in>>a)||!(cmd.form=form(a))){error="invalid image modifier";return false;}
     } else if(op=="playsound") {
       cmd.type=CommandType::PlaySound;
       if(!(in>>a)||(cmd.form=form(a))==0){error="invalid playsound form";return false;}
+      if(in>>b){if(b!="0"&&b!="1"){error="invalid PlaySound wait flag";return false;}cmd.index=uint32_t(b=="1");}
+      in.clear();
     } else if(op=="player.removeitem") {
       cmd.type=CommandType::RemoveItem;
       if(!(in>>a>>b)||(cmd.form=form(a))==0||!number(b,cmd.value)||cmd.value<1||cmd.value>100000||std::floor(cmd.value)!=cmd.value){error="invalid removeitem";return false;}

@@ -101,3 +101,9 @@ target_compile_options(combat_pose_asset_tests PRIVATE -Wall -Wextra -Werror -Wn
 target_include_directories(combat_pose_asset_tests PRIVATE . ../../app/src/main/cpp ../../app/src/main/cpp/data ../../app/src/main/cpp/npc)
 add_test(NAME combat_pose_asset_tests COMMAND combat_pose_asset_tests)
 set_tests_properties(combat_pose_asset_tests PROPERTIES SKIP_RETURN_CODE 77)
+
+add_executable(world_animation_tests world_animation_tests.cpp ../../app/src/main/cpp/npc/fo3-actor-animation.cpp)
+target_compile_features(world_animation_tests PRIVATE cxx_std_17)
+target_compile_options(world_animation_tests PRIVATE -Wall -Wextra -Werror -Wno-unused-function -UNDEBUG)
+target_include_directories(world_animation_tests PRIVATE . ../../app/src/main/cpp ../../app/src/main/cpp/data ../../app/src/main/cpp/npc)
+add_test(NAME world_animation_tests COMMAND world_animation_tests)

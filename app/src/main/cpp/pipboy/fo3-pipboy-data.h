@@ -43,6 +43,11 @@ struct Placement {
   float rx=0,ry=0,rz=0,scale=1;
   uint32_t owner=0;
 };
+struct TriggerPrimitive {
+  std::array<float,3> bounds{};
+  uint32_t kind=0; // original XPRM: 1 box, 2 sphere
+  bool valid=false;
+};
 struct Marker : Placement {
   std::string name;
   uint8_t type = 0, mapFlags = 0;
@@ -216,6 +221,7 @@ struct Station {
   uint32_t voice = 0, sound = 0;
 };
 struct Transmitter : Placement {
+  uint32_t reference=0;
   float radius = 0, staticPercent = 0;
   uint32_t range = 0, position = 0;
 };
@@ -232,6 +238,7 @@ struct Definitions {
   std::unordered_map<uint32_t,Terminal> terminals;
   // Scripted non-actor placements have numeric locals too. Keep them separate
   // from referenceScripts, whose iteration is the original actor census.
+  std::unordered_map<uint32_t,TriggerPrimitive> triggerPrimitives;
   std::unordered_map<uint32_t,std::pair<uint32_t,uint32_t>> objectReferenceScripts; // script,base
   // Original AVIF skill descriptions and ICON paths, indexed by player
   // actor-value skill slot 32..45, including the unused slot at 44.

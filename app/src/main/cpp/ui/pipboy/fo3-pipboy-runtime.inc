@@ -134,7 +134,7 @@ void UpdateFo3Pipboy(uint64_t frame, double now, const float *headPose,
         radioLocation.x = gPipMenu.map.exterior.x;
         radioLocation.y = gPipMenu.map.exterior.y;
       }
-      auto stations = fo3pipdata::AvailableStations(defs, radioLocation);
+      auto stations = fo3pipdata::AvailableStations(defs, radioLocation,[&](uint32_t id){bool disabled=true;std::string error;return session->player.ReferenceDisabled(id,disabled,error)&&!disabled;});
       if (stations != gPipMenu.stations) {
         gPipMenu.stations = std::move(stations);
         gPipMenu.RebuildRows(session->player);
@@ -243,7 +243,7 @@ void UpdateFo3Pipboy(uint64_t frame, double now, const float *headPose,
       }
       auto tx = defs.transmitters.find(tuned);
       if (tx == defs.transmitters.end() ||
-          !fo3pipdata::InRange(defs, tx->second, radioLocation))
+          !fo3pipdata::InRange(defs, tx->second, radioLocation,[&](uint32_t id){bool disabled=true;std::string error;return session->player.ReferenceDisabled(id,disabled,error)&&!disabled;}))
         tuned = 0;
     }
     if (lastRadio != tuned) {

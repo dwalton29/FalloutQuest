@@ -1125,6 +1125,9 @@ public:
         PostDraw(8,filmTarget,{sample(color),sample(adapted[next].image,true),sample(bloom[1].image)},
             {{"uFlags",{float(settings.flags)}},{"uInteriorMode",{float(settings.interior)}},{"uSaturation",{settings.saturation}},
              {"uContrastAvg",{settings.contrastAvg}},{"uContrast",{settings.contrast}},{"uBrightness",{settings.brightness}},
+             {"uScriptFade",{settings.scriptFade[0],settings.scriptFade[1],settings.scriptFade[2],settings.scriptFade[3]}},
+             {"uScriptTint",{settings.scriptTint[0],settings.scriptTint[1],settings.scriptTint[2],settings.scriptTint[3]}},
+             {"uScriptGrade",{settings.scriptGrade[0],settings.scriptGrade[1],settings.scriptGrade[2]}},{"uScriptBlur",{settings.scriptBlur}},
              {"uTintColor",{settings.tint[0],settings.tint[1],settings.tint[2]}},{"uTintValue",{settings.tintValue}},
              {"uTargetLumQ1520",{settings.targetLum}},{"uPcBloomReadyQ1670",{1}}},directOutput);
         }

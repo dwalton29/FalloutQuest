@@ -1,5 +1,14 @@
 # FalloutQuest scripting completion — recovery status
 
+## Current source-sequence pass (v259)
+
+See [world-source-sequences-v259.md](world-source-sequences-v259.md). Original
+XPRM player entry/leave, resident OnLoad, world-NIF PlayGroup/IsAnimPlaying and
+animated IMAD presentation now drive the exterior Vault reveal and Megaton gate
+mechanism through their actual source scripts. Full CG04 character creation,
+Weld speech/creature rendering and particle presentation remain unfinished.
+Older audit tables below describe historical checkpoints.
+
 ## Recovery point
 
 - Starting canonical main: `2987d911f318b92d1041257868067851a09d16f0` (v208).
