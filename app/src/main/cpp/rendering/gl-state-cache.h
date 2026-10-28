@@ -298,6 +298,7 @@ inline fqrender::DrawCommand Command(GLuint program,GLuint mesh,GLenum mode,GLen
     fqrender::DrawCommand command;command.program=program;command.mesh=mesh;command.topology=mode;
     command.indexType=type;command.indexOffset=offset;command.first=first;command.count=count;command.instances=instances;
     const auto& s=state;auto& d=command.state;
+    d.synthesisOverlay=fqrender::synthesisOverlayDraw;
     d.depth=s.depth.known?s.depth.value:true;d.write=s.depthWrite.known?s.depthWrite.value:true;
     d.blend=s.blend.known&&s.blend.value;d.cull=s.cull.known&&s.cull.value;
     d.clockwise=s.frontFace.known&&s.frontFace.value==GL_CW;d.depthFunc=s.depthFunc.known?s.depthFunc.value:GL_LESS;

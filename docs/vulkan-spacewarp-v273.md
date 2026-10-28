@@ -1,5 +1,7 @@
 # Native Vulkan SpaceWarp — v273
 
+Normal-scene transparency/water/UI integration is superseded by [v274](vulkan-spacewarp-v274.md).
+
 Vulkan is the default gameplay renderer, including production configurations. An explicit `debug.falloutquest.renderer=gles` still permits GLES comparison. SpaceWarp defaults to synthesis on either backend; `debug.falloutquest.spacewarp=0` disables it and `validate` runs its producer without attaching synthesis metadata. Vulkan's `visualize` request currently selects validation/logs; the colour-vector overlay remains GLES-only.
 
 The existing OpenXR adapter negotiates EXT first, FB second, queries recommended per-eye dimensions, and creates independent sampled motion/depth swapchains. Vulkan uses `VK_FORMAT_R16G16B16A16_SFLOAT` and `VK_FORMAT_D32_SFLOAT`. The backend imports borrowed Vulkan images, owns their views/framebuffers, and supports independent image indices and image counts. Unsupported formats or creation failures retain native Vulkan rendering.

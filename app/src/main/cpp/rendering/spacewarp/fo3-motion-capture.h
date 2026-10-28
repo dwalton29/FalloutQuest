@@ -12,6 +12,8 @@ struct Draw {
     float alpha=1,threshold=.5f;
 };
 enum Reason : uint32_t { MissingHistory=1,Deformation=2,Transparency=4,Water=8,Ui=16,Resources=32,Capacity=64,Instancing=128 };
+// Set only while a live native opaque/effects composition frame is recording.
+inline bool separatedComposition=false;
 struct Capture {
     fqspacewarp::History* history=nullptr;
     std::vector<Draw> draws;
@@ -20,7 +22,10 @@ struct Capture {
     bool collecting=false,mainDrawn=false;
     void Begin(fqspacewarp::History& h){history=h.Active()?&h:nullptr;draws.clear();identities.clear();reasons=0;collecting=false;mainDrawn=false;}
     void Main(){collecting=history!=nullptr;mainDrawn=collecting;}
-    void Block(uint32_t reason){if(history)reasons|=reason;}
+    void Block(uint32_t reason){
+        if(separatedComposition)reason&=~uint32_t(Transparency|Water|Ui);
+        if(history)reasons|=reason;
+    }
     bool Record(const Draw& draw,const fqspacewarp::Drawable& shape){
         if(!collecting||!history)return false;
         if(!history->Record(draw.identity,shape)){Block(Capacity);return false;}

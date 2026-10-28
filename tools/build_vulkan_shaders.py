@@ -194,6 +194,32 @@ def build(output,compiler):
         subprocess.run(command,check=True)
         data=spv.read_bytes();words=struct.unpack('<'+'I'*(len(data)//4),data)
         cpp.append(f'inline constexpr uint32_t motion_{name}[]={{'+','.join(hex(x) for x in words)+'};')
+    # Additional outputs reuse the original material/film math verbatim.
+    variants={}
+    for name in ('world','terrain','sky'):
+        original=port(sources()[name],name)[0][1]
+        for solid in ((False,True) if name!='sky' else (False,)):
+            text=no_discard_fragment(original,name) if solid else original
+            colour=re.search(r'layout\(location=0\) out vec4 (\w+)',text)[1]
+            text=text.replace('void main()', 'void fqOriginalMain()',1)
+            variants[name+('_solid' if solid else '')+'_split']=text+f'\nlayout(location=1) out vec4 fqOpaque;layout(location=2) out float fqOpaqueDepth;void main(){{fqOriginalMain();fqOpaque={colour};fqOpaqueDepth=gl_FragCoord.z;}}'
+    text=port(sources()['post'],'post')[0][1]
+    colour=re.search(r'layout\(location=0\) out vec4 (\w+)',text)[1]
+    uv=re.search(r'layout\(location=0\) in vec2 (\w+)',text)[1]
+    text=text.replace('void main()', 'void fqOriginalMain()',1)
+    variants['composition_split']=text+f'''\nlayout(set=0,binding=5) uniform sampler2DArray fqFullFinal;
+layout(location=1) out vec4 fqNativeOverlay;
+void main(){{fqOriginalMain();
+ vec3 base=vec3(unpackHalf2x16(packHalf2x16({colour}.rg)),unpackHalf2x16(packHalf2x16({colour}.bb)).x);
+ vec3 full=texture(fqFullFinal,vec3({uv},float(gl_ViewIndex))).rgb;
+ {colour}=vec4(base,1);fqNativeOverlay=any(notEqual(full,base))?vec4(full,1):vec4(0);
+}}'''
+    for name,text in variants.items():
+        path=output/f'{name}.frag';path.write_text(text);spv=path.with_suffix('.frag.spv')
+        command=([compiler,'-V','--target-env','vulkan1.1',str(path),'-o',str(spv)] if 'glslang' in Path(compiler).name else [compiler,'--target-env=vulkan1.1',str(path),'-o',str(spv)])
+        subprocess.run(command,check=True)
+        data=spv.read_bytes();words=struct.unpack('<'+'I'*(len(data)//4),data)
+        cpp.append(f'inline constexpr uint32_t {name}_frag[]={{'+','.join(hex(x) for x in words)+'};')
     cpp.append('}')
     (output/'fo3-vulkan-shaders.h').write_text('\n'.join(cpp)+'\n')
 

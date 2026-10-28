@@ -16,6 +16,7 @@ class NativeDispatch(unittest.TestCase):
     def test_native_gpu_backend_has_no_gles_driver_calls_or_state_cache(self):
         source=(ROOT/'rendering/vulkan/fo3-vulkan-renderer.cpp').read_text()
         source+=(ROOT/'rendering/vulkan/fo3-vulkan-spacewarp.inc').read_text()
+        source+=(ROOT/'rendering/vulkan/fo3-vulkan-composition.inc').read_text()
         self.assertNotIn('gl-state-cache.h',source)
         self.assertEqual(re.findall(r'\bgl[A-Z]\w*\s*\(',source),[])
         self.assertNotIn('fqgl::state',source)

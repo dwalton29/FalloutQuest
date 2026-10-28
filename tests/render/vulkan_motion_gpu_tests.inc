@@ -1,6 +1,7 @@
 // Exercises the actual native producer, shader modules, resource staging and
 // borrowed runtime targets. Only OpenXR image acquisition/release is simulated.
-void NativeMotion() {
+void NativeMotion(bool srgb=false) {
+    offerSrgb=srgb;
     fqrender::nativeOnly=true;fqgl::Reset();
     assert(fqvk::InitializeWorldProbe(reinterpret_cast<XrInstance>(uintptr_t(1)),1,64,64));
     auto& r=*fqvk::renderer;
@@ -61,6 +62,60 @@ void NativeMotion() {
         ++motionCycles;
     }
     assert(motionReleases-initialReleases==32);
+    // Reproduce all three blockers from the headset log in ONE real GPU frame.
+    // Original water/refraction, blended world material and post-film HUD must
+    // remain pixel-equivalent while the opaque motion/depth coverage succeeds.
+    Water();Program(65,9);
+    const uint8_t white[]{255,255,255,255};fqvk::Texture(68,1,1,white,false,false);
+    const float ui[]{-.25f,-.85f,-.2f,0,0,.25f,-.85f,-.2f,0,0,.25f,-.55f,-.2f,0,0,-.25f,-.55f,-.2f,0,0};
+    fqvk::Mesh(66,ui,4,5,indices,6);Set(65,"uMvp",{1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1});Set(65,"uTint",{.1f,.8f,.2f,.65f});
+    auto glass=Quad(false);for(unsigned i=0;i<4;++i){glass[i*18]=glass[i*18]*.5f-.55f;glass[i*18+2]=-.1f;}
+    fqvk::Mesh(69,glass.data(),4,18,indices,6);
+    fqspacewarp::History combinedHistory;fqspacewarp::Frame combinedFrame;combinedFrame.scene=1;combinedFrame.world=0x3c;combinedFrame.sceneReady=combinedFrame.focused=true;
+    for(unsigned i=1;i<=2;++i){combinedFrame.serial=i;combinedFrame.displayTime=i*10000000;assert(combinedHistory.Begin(combinedFrame));combinedHistory.EyeRendered(0);combinedHistory.EyeRendered(1);assert(combinedHistory.Finish(true));}
+    std::vector<uint8_t> reference;unsigned effectsPixels=0,opaquePixels=0;
+    for(unsigned frame=0;frame<6;++frame){
+        if(frame==4){fqvk::DestroyGameplaySwapchain();assert(fqvk::CreateGameplaySwapchain(reinterpret_cast<XrSession>(uintptr_t(2)),true));}
+        if(frame==4){combinedFrame.world=0;for(unsigned warm=0;warm<2;++warm){combinedFrame.serial=frame+3+warm;combinedFrame.displayTime=combinedFrame.serial*10000000;assert(combinedHistory.Begin(combinedFrame));combinedHistory.EyeRendered(0);combinedHistory.EyeRendered(1);assert(combinedHistory.Finish(true));}}
+        const bool split=frame%2;combinedFrame.serial=frame+3+(frame>=4?2:0);combinedFrame.displayTime=combinedFrame.serial*10000000;
+        assert(combinedHistory.Begin(combinedFrame));fqmotion::Capture capture;capture.Begin(combinedHistory);capture.Main();
+        assert(fqvk::BeginWorldProbe(matrix.data(),matrix.data(),eye,eye,false,nullptr,split));
+        assert(fqmotion::separatedComposition==split);
+        capture.Block(fqmotion::Transparency|fqmotion::Water|fqmotion::Ui);
+        assert(capture.reasons==(split?0u:28u));
+        fqgl::state.depth.Change(true);fqgl::state.depthWrite.Change(true);fqgl::state.blend.Change(false);fqgl::state.texture2d[0].Change(5);
+        Submit(1,9,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);
+        fqvk::WaterSnapshot();fqgl::state.depthWrite.Change(false);fqgl::state.texture2d[0].Change(14);
+        Submit(3,13,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);
+        fqgl::state.blend.Change(true);fqgl::state.srcRgb.Change(GL_SRC_ALPHA);fqgl::state.dstRgb.Change(GL_ONE_MINUS_SRC_ALPHA);fqgl::state.srcAlpha.Change(GL_ONE);fqgl::state.dstAlpha.Change(GL_ONE_MINUS_SRC_ALPHA);
+        Set(1,"uMaterialAlpha",{.4f});fqgl::state.texture2d[0].Change(68);
+        {fqrender::SynthesisOverlayScope authoredTransparency(true);Submit(1,69,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);}
+        Set(1,"uMaterialAlpha",{1});
+        fqvk::PostSettings settings;settings.interior=1;settings.brightScale=0;fqvk::PostProcess(settings);
+        fqgl::state.depth.Change(false);fqgl::state.texture2d[0].Change(68);Submit(65,66,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);
+        std::array<fqspacewarp::Coverage,2> coverage{};if(split)fqvk::QueueSpacewarp(capture,coverage);
+        std::array<XrView,2> views{};std::array<XrCompositionLayerProjectionView,2> output{},overlay{};
+        assert(fqvk::PresentGameplay(views.data(),output.data(),.04f,1000));
+        assert(!fqmotion::separatedComposition&&fqvk::SpacewarpOverlay(views.data(),overlay.data())==split);
+        combinedHistory.EyeRendered(0);combinedHistory.EyeRendered(1);
+        if(!split){reference=RuntimePixels(acquiredImage);assert(output[0].next&&output[1].next);}
+        else {
+            assert(coverage[0].Complete(combinedFrame.serial)&&coverage[1].Complete(combinedFrame.serial));
+            assert(combinedHistory.CanSynthesize(coverage));assert(!output[0].next&&!output[1].next);
+            const auto base=RuntimePixels(acquiredImage),effects=RuntimePixels(effectsIndex,true);
+            for(unsigned e=0;e<2;++e){assert(overlay[e].next==&r.xrDepthInfo[e]);assert(overlay[e].subImage.imageArrayIndex==e);assert(overlay[e].subImage.swapchain==r.compositionChain);
+                const auto depths=read(depthImages[e][r.motionTargets[e].depthIndex],true);Near(depths[16*32+16],.5f);Near(depths[0],1.f);}
+            int largest=0;for(size_t at=0;at<base.size();at+=4){assert(effects[at+3]==0||effects[at+3]==255);const bool effect=effects[at+3]!=0;effect?++effectsPixels:++opaquePixels;
+                for(unsigned c=0;c<3;++c){if(!effect)assert(effects[at+c]==0);largest=std::max(largest,std::abs(int((effect?effects:base)[at+c])-int(reference[at+c])));}}
+            if(largest>2)throw std::runtime_error("opaque/effects composition changed original colour by "+std::to_string(largest)+" display codes");
+            ++motionCycles;
+        }
+        assert(combinedHistory.Finish(true));
+    }
+    assert(effectsPixels>0&&opaquePixels>0);
+    // Separating effects never conceals a real opaque geometry/resource failure.
+    ++combinedFrame.serial;combinedFrame.displayTime+=10000000;assert(combinedHistory.Begin(combinedFrame));fqmotion::separatedComposition=true;fqmotion::Capture unsupported;unsupported.Begin(combinedHistory);unsupported.Block(fqmotion::Resources|fqmotion::Transparency);assert(unsupported.reasons==fqmotion::Resources);fqmotion::separatedComposition=false;
+    std::cout<<"Vulkan combined SpaceWarp: original water + transparency + HUD, opaque depth, complete coverage, stereo colour parity, native depth routing, exterior/interior and swapchain recreation passed\n";
     r.WaitFrames();
     // The old colour-only reserve did not leave space for motion descriptors.
     for(unsigned i=0;r.descriptorCache.size()<fqvk::Renderer::DescriptorCapacity-fqvk::Renderer::FrameDescriptorReserve;++i)
@@ -75,6 +130,6 @@ void NativeMotion() {
     for(auto& images:depthImages)for(auto& image:images)r.Destroy(image);
     for(auto& images:runtimeMotion)images.clear();
     fqvk::DestroyGameplaySwapchain();offerDepth=false;inspectReleasedImages=true;
-    fqvk::ShutdownWorldProbe();fqrender::nativeOnly=false;fqgl::Reset();
+    fqvk::ShutdownWorldProbe();offerSrgb=false;fqrender::nativeOnly=false;fqgl::Reset();
     std::cout<<"Vulkan SpaceWarp pixels: stereo native axes, rigid motion, skin palettes, facial positions, cutouts, occlusion, source depth, independent runtime indices and once-per-frame pose uploads passed\n";
 }

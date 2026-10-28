@@ -14,7 +14,7 @@ namespace fqvk {
 bool InitializeWorldProbe(XrInstance instance,XrSystemId system,uint32_t width,uint32_t height,const char* outputDirectory=nullptr);
 void ShutdownWorldProbe();
 bool BeginWorldProbe(const float* leftMvp,const float* rightMvp,
-                     const float* leftEye,const float* rightEye,bool loading=false,const float* horizon=nullptr);
+                     const float* leftEye,const float* rightEye,bool loading=false,const float* horizon=nullptr,bool splitComposition=false);
 void EndWorldProbe();
 // Experimental compositor owner; resource submission still uses the shared bridge.
 bool GameplayBinding(XrGraphicsBindingVulkan2KHR& binding);
@@ -26,4 +26,5 @@ struct MotionSwapchainTarget {XrSwapchain motion,depth;uint32_t width,height;};
 bool InitializeSpacewarp(const std::array<MotionSwapchainTarget,2>& targets);
 void ShutdownSpacewarp();
 void QueueSpacewarp(const fqmotion::Capture& capture,std::array<fqspacewarp::Coverage,2>& coverage);
+bool SpacewarpOverlay(const XrView* views,XrCompositionLayerProjectionView* output);
 }

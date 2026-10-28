@@ -7368,6 +7368,7 @@ void DrawSceneObject(const GpuObject& object, bool environmentPassQ2050 = false)
         glUniform4fv(gLocalLightColorFalloffLocationQ1010,FO3_SHADER_LIGHTS,colours);
     }
     fqopaque::SubmissionScope submissionScope;
+    fqrender::SynthesisOverlayScope synthesisLayer(object.alphaBlend||!object.zBufferTestQ1200||!object.zBufferWriteQ1200);
     glUniform1i(gActorSkinMode,object.skinMode);
     if(object.skinMode) {
         glUniform1i(gActorPalette,6);glActiveTexture(GL_TEXTURE6);
@@ -7553,9 +7554,10 @@ void DrawSceneObject(const GpuObject& object, bool environmentPassQ2050 = false)
         else glDrawArrays(GL_TRIANGLES, 0, object.vertexCount);
     }
     if(fqmotion::eye.collecting&&!environmentPassQ2050&&!gWaterReflectionPassQ2090){
-        if(object.alphaBlend||!object.zBufferTestQ1200||!object.zBufferWriteQ1200)fqmotion::eye.Block(fqmotion::Transparency);
+        const bool colourOnly=object.alphaBlend||!object.zBufferTestQ1200||!object.zBufferWriteQ1200;
+        if(colourOnly)fqmotion::eye.Block(fqmotion::Transparency);
         const bool moving=object.q210PlayerBody||object.q230NpcActor||object.physicalWeapon||object.q220LooseObject||object.q2400SwingDoor||object.scriptAnimated;
-        if(moving){
+        if(moving&&!(colourOnly&&fqmotion::separatedComposition)){
             if(gInstancedDrawActiveQ2016)fqmotion::eye.Block(fqmotion::Instancing);
             else{
                 if(!object.motionIdentity)object.motionIdentity=++fqmotion::nextIdentity;

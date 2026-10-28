@@ -1735,7 +1735,9 @@ private:
             XrCompositionLayerProjectionView{XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW}
         };
         XrCompositionLayerProjection projectionLayer{XR_TYPE_COMPOSITION_LAYER_PROJECTION};
-        const XrCompositionLayerBaseHeader* layers[1]{};
+        std::array<XrCompositionLayerProjectionView,2> effectViews{};
+        XrCompositionLayerProjection effectLayer{XR_TYPE_COMPOSITION_LAYER_PROJECTION};
+        const XrCompositionLayerBaseHeader* layers[2]{};
         uint32_t layerCount = 0;
         bool spacewarpAttached=false;
 
@@ -2126,20 +2128,6 @@ private:
                 if(fqperf::capture.recording) {
                     fqperf::gpu.Poll(fqperf::capture.serial);
                 }
-#ifdef FQ_ENABLE_VULKAN
-                if(fqvk::WorldProbeActive()) {
-                    Mat4 matrices[2];XrPosef poses[2];
-                    for(uint32_t i=0;i<2;++i) {
-                        poses[i]=IsFo3LoadingVisible()?views[i].pose:ToVirtualPose(views[i].pose);
-                        matrices[i]=Multiply(ProjectionFromFov(views[i].fov,0.04f,125000.0f/FO3_UNITS_PER_METRE_Q715),ViewFromPose(poses[i]));
-                    }
-                    const Fo3Environment& clearEnvironment=GetFo3Environment();
-                    static constexpr float fallbackHorizon[3]{0.018f,0.028f,0.020f};
-                    const float* clearHorizon=clearEnvironment.valid?clearEnvironment.horizon:fallbackHorizon;
-                    const bool begun=fqvk::BeginWorldProbe(matrices[0].m,matrices[1].m,&poses[0].position.x,&poses[1].position.x,IsFo3LoadingVisible(),clearHorizon);
-                    if(vulkanGameplay_&&!begun){rendered=false;exitRequested_=true;}
-                }
-#endif
                 if(spacewarpProducerReady_){
                     fqspacewarp::Frame frame;frame.serial=++spacewarpSerial_;
                     frame.scene=gSceneLoad.generation;frame.displayTime=frameState.predictedDisplayTime;
@@ -2152,6 +2140,20 @@ private:
                         std::copy(vp.m,vp.m+16,frame.viewProjection[eye].begin());}
                     spacewarpHistory_.Begin(frame);spacewarpCoverage_={};
                 }
+#ifdef FQ_ENABLE_VULKAN
+                if(fqvk::WorldProbeActive()) {
+                    Mat4 matrices[2];XrPosef poses[2];
+                    for(uint32_t i=0;i<2;++i) {
+                        poses[i]=IsFo3LoadingVisible()?views[i].pose:ToVirtualPose(views[i].pose);
+                        matrices[i]=Multiply(ProjectionFromFov(views[i].fov,0.04f,125000.0f/FO3_UNITS_PER_METRE_Q715),ViewFromPose(poses[i]));
+                    }
+                    const Fo3Environment& clearEnvironment=GetFo3Environment();
+                    static constexpr float fallbackHorizon[3]{0.018f,0.028f,0.020f};
+                    const float* clearHorizon=clearEnvironment.valid?clearEnvironment.horizon:fallbackHorizon;
+                    const bool begun=fqvk::BeginWorldProbe(matrices[0].m,matrices[1].m,&poses[0].position.x,&poses[1].position.x,IsFo3LoadingVisible(),clearHorizon,spacewarpProducerReady_&&spacewarpSynthesisRequested_&&spacewarpHistory_.Ready());
+                    if(vulkanGameplay_&&!begun){rendered=false;exitRequested_=true;}
+                }
+#endif
                 for (uint32_t eye = 0; eye < (vulkanGameplay_?1u:2u)&&rendered; ++eye) {
                     fqperf::Scope eyeScope(eye==0?fqperf::Eye0:fqperf::Eye1);
                     rendered = RenderEye(eye, views[eye], projectionViews[eye]) && rendered;
@@ -2197,6 +2199,12 @@ private:
                 projectionLayer.views = projectionViews.data();
                 layers[0] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&projectionLayer);
                 layerCount = rendered ? 1 : 0;
+#ifdef FQ_ENABLE_VULKAN
+                if(rendered&&vulkanGameplay_&&fqvk::SpacewarpOverlay(views.data(),effectViews.data())){
+                    effectLayer.space=localSpace_;effectLayer.layerFlags=XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
+                    effectLayer.viewCount=2;effectLayer.views=effectViews.data();layers[layerCount++]=reinterpret_cast<const XrCompositionLayerBaseHeader*>(&effectLayer);
+                }
+#endif
 
                 if ((frameCounter_++ % 180) == 0) {
                     FQ_LOGI("Q21.17 live: player %.2f %.2f %.2f collision=%d aim=(L%d,R%d) gripPose=(L%d,R%d) bodyHandSource=(L%s,R%s) move %.2f %.2f fingers=L[t%.2f g%.2f tt%d th%d] R[t%.2f g%.2f tt%d th%d]",
@@ -2235,11 +2243,11 @@ private:
             FQ_LOGE("FQ SPACEWARP synthesis disabled after failed submission; restart required to retry");
         }
         if(spacewarp_.Requested()){
-            if(spacewarpProducerReady_)spacewarpHistory_.Finish(q1700FrameSubmitted&&layerCount==1);
+            if(spacewarpProducerReady_)spacewarpHistory_.Finish(q1700FrameSubmitted&&layerCount>=1);
             else spacewarpHistory_.Reset();
-            if(spacewarpProducerReady_&&(spacewarpSerial_%180)==1)FQ_LOGI("FQ SPACEWARP frame world=%08X history=%u native=%d synthesisAttached=%d submitted=%d motionCoverage=%d/%d periodUs=%lld",
+            if(spacewarpProducerReady_&&(spacewarpSerial_%180)==1)FQ_LOGI("FQ SPACEWARP frame world=%08X history=%u native=%d synthesisAttached=%d submitted=%d motionCoverage=%d/%d nativeEffectsLayer=%d layers=%u periodUs=%lld",
                 gExteriorWorldspaceQ1890,spacewarpHistory_.SubmittedFrames(),!spacewarpAttached,spacewarpAttached,q1700FrameSubmitted,
-                spacewarpCoverage_[0].Complete(spacewarpSerial_),spacewarpCoverage_[1].Complete(spacewarpSerial_),
+                spacewarpCoverage_[0].Complete(spacewarpSerial_),spacewarpCoverage_[1].Complete(spacewarpSerial_),layerCount==2,layerCount,
                 (long long)(frameState.predictedDisplayPeriod/1000));
         }
         if(q1700FrameSubmitted&&layerCount&&(presentationFrames_++%120)==0)

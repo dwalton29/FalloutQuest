@@ -9,6 +9,12 @@
 namespace fqrender {
 using Handle=uint32_t;
 inline bool nativeOnly=false;
+inline bool synthesisOverlayDraw=false;
+struct SynthesisOverlayScope {
+    bool previous;
+    explicit SynthesisOverlayScope(bool overlay):previous(synthesisOverlayDraw){synthesisOverlayDraw=overlay;}
+    ~SynthesisOverlayScope(){synthesisOverlayDraw=previous;}
+};
 struct Capabilities {int textureSize=0,vertexAttributes=0,vertexTextures=0;};
 inline Capabilities capabilities;
 inline Handle nextHandle=1;
@@ -25,6 +31,7 @@ inline int UniformLocation(Handle program,const char* name) {
     return found->second+element;
 }
 struct DrawState {
+    bool synthesisOverlay=false;
     bool depth=true,write=true,blend=false,cull=false,clockwise=false,offset=false;
     uint32_t depthFunc=0x0201,cullFace=0x0405,src=1,dst=0,srcAlpha=1,dstAlpha=0,equation=0x8006,equationAlpha=0x8006;
     float offsetUnits=0,offsetFactor=0;

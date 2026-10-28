@@ -48,7 +48,8 @@ XrResult XRAPI_CALL Device(XrInstance,const XrVulkanDeviceCreateInfoKHR* info,Vk
 }
 // Fake OpenXR compositor with real software-GPU images. This tests the native
 // image/view/render/release path, not a real OpenXR runtime or headset.
-std::vector<fqvk::Image> runtimeImages,runtimeDepth;
+std::vector<fqvk::Image> runtimeImages,runtimeDepth,runtimeEffects;
+bool effectsAcquired=false,effectsWaited=false;uint32_t effectsIndex=0,nextEffects=0;
 std::array<std::vector<VkImage>,4> runtimeMotion;
 int MotionHandle(XrSwapchain handle){auto n=uintptr_t(handle);return n>=100&&n<104?int(n-100):-1;}
 uint32_t nextDepth=1,acquiredDepth=0,depthReleases=0;
@@ -76,7 +77,11 @@ XrResult XRAPI_CALL Swapchain(XrSession,const XrSwapchainCreateInfo* info,XrSwap
             VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT|VK_IMAGE_USAGE_TRANSFER_SRC_BIT,VK_IMAGE_ASPECT_DEPTH_BIT));
         *out=reinterpret_cast<XrSwapchain>(uintptr_t(4));return XR_SUCCESS;
     }
-    assert(info->usageFlags==XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT&&runtimeImages.empty());
+    assert(info->usageFlags==XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT);
+    if(!runtimeImages.empty()){
+        assert(runtimeEffects.empty());for(int i=0;i<2;++i)runtimeEffects.push_back(fqvk::renderer->MakeImage(info->width,info->height,VkFormat(info->format),VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT|VK_IMAGE_USAGE_TRANSFER_SRC_BIT,VK_IMAGE_ASPECT_COLOR_BIT));
+        *out=reinterpret_cast<XrSwapchain>(uintptr_t(5));return XR_SUCCESS;
+    }
     createdColor=VkFormat(info->format);
     for(int i=0;i<3;++i)runtimeImages.push_back(fqvk::renderer->MakeImage(info->width,info->height,VkFormat(info->format),
         VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT|VK_IMAGE_USAGE_TRANSFER_SRC_BIT,VK_IMAGE_ASPECT_COLOR_BIT));
@@ -84,7 +89,7 @@ XrResult XRAPI_CALL Swapchain(XrSession,const XrSwapchainCreateInfo* info,XrSwap
 }
 XrResult XRAPI_CALL Images(XrSwapchain handle,uint32_t capacity,uint32_t* count,XrSwapchainImageBaseHeader* out) {
     if(const int h=MotionHandle(handle);h>=0){*count=uint32_t(runtimeMotion[h].size());if(capacity)for(size_t i=0;i<runtimeMotion[h].size();++i){auto* image=reinterpret_cast<XrSwapchainImageVulkan2KHR*>(out)+i;assert(image->type==XR_TYPE_SWAPCHAIN_IMAGE_VULKAN2_KHR);image->image=runtimeMotion[h][i];}return XR_SUCCESS;}
-    const auto& images=handle==reinterpret_cast<XrSwapchain>(uintptr_t(4))?runtimeDepth:runtimeImages;
+    const auto& images=handle==reinterpret_cast<XrSwapchain>(uintptr_t(5))?runtimeEffects:handle==reinterpret_cast<XrSwapchain>(uintptr_t(4))?runtimeDepth:runtimeImages;
     *count=uint32_t(images.size());
     if(capacity)for(size_t i=0;i<images.size();++i) {
         auto* image=reinterpret_cast<XrSwapchainImageVulkan2KHR*>(out)+i;
@@ -95,20 +100,22 @@ XrResult XRAPI_CALL Images(XrSwapchain handle,uint32_t capacity,uint32_t* count,
 std::array<bool,4> motionAcquired{},motionWaited{};
 unsigned motionCycles=0,motionReleases=0;
 XrResult XRAPI_CALL Acquire(XrSwapchain handle,const XrSwapchainImageAcquireInfo*,uint32_t* index) {
+    if(uintptr_t(handle)==5){assert(!effectsAcquired);effectsAcquired=true;effectsWaited=false;effectsIndex=nextEffects++%2;*index=effectsIndex;return XR_SUCCESS;}
     if(const int h=MotionHandle(handle);h>=0){assert(!motionAcquired[h]);motionAcquired[h]=true;motionWaited[h]=false;*index=(h%2)?(motionCycles+1)%3:motionCycles%2;return XR_SUCCESS;}
     if(handle==reinterpret_cast<XrSwapchain>(uintptr_t(4))){assert(!depthAcquired);depthAcquired=true;depthWaited=false;acquiredDepth=nextDepth++%2;*index=acquiredDepth;return XR_SUCCESS;}
     assert(!acquired);acquired=true;waited=false;acquiredImage=nextImage++%3;*index=acquiredImage;return XR_SUCCESS;
 }
 XrResult XRAPI_CALL Wait(XrSwapchain handle,const XrSwapchainImageWaitInfo*) {
+    if(uintptr_t(handle)==5){assert(effectsAcquired&&!effectsWaited);effectsWaited=true;return XR_SUCCESS;}
     if(const int h=MotionHandle(handle);h>=0){assert(motionAcquired[h]&&!motionWaited[h]);motionWaited[h]=true;return XR_SUCCESS;}
     if(handle==reinterpret_cast<XrSwapchain>(uintptr_t(4))){assert(depthAcquired&&!depthWaited);depthWaited=true;return XR_SUCCESS;}
     assert(acquired&&!waited);if(timeoutWait)return XR_TIMEOUT_EXPIRED;waited=true;return XR_SUCCESS;
 }
-std::vector<uint8_t> RuntimePixels(uint32_t index) {
+std::vector<uint8_t> RuntimePixels(uint32_t index,bool effects=false) {
     auto& r=*fqvk::renderer;std::vector<uint8_t> pixels;
     auto readback=r.MakeBuffer(64*64*2*4,VK_BUFFER_USAGE_TRANSFER_DST_BIT,true);
     r.Transfer([&](VkCommandBuffer cb){
-        VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};b.image=runtimeImages[index].image;
+        VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};b.image=(effects?runtimeEffects:runtimeImages)[index].image;
         b.subresourceRange={VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,2};b.srcQueueFamilyIndex=b.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;
         b.oldLayout=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;b.newLayout=VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
         b.srcAccessMask=VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;b.dstAccessMask=VK_ACCESS_TRANSFER_READ_BIT;
@@ -129,6 +136,7 @@ std::vector<uint8_t> RuntimePixels(uint32_t index) {
     r.Destroy(readback);return pixels;
 }
 XrResult XRAPI_CALL Release(XrSwapchain handle,const XrSwapchainImageReleaseInfo*) {
+    if(uintptr_t(handle)==5){auto& r=*fqvk::renderer;assert(effectsAcquired&&effectsWaited&&!r.begun&&r.frameSlots[r.activeSlot].serial==r.submissionSerial);effectsAcquired=effectsWaited=false;return XR_SUCCESS;}
     if(const int h=MotionHandle(handle);h>=0){auto& r=*fqvk::renderer;assert(!r.begun&&r.submissionSerial&&r.frameSlots[r.activeSlot].serial==r.submissionSerial);assert(motionAcquired[h]&&motionWaited[h]);motionAcquired[h]=motionWaited[h]=false;++motionReleases;return XR_SUCCESS;}
     if(!inspectReleasedImages) {
         auto& r=*fqvk::renderer;assert(r.frameSlots[r.activeSlot].serial==r.submissionSerial&&!r.begun);
@@ -170,6 +178,7 @@ XrResult XRAPI_CALL Release(XrSwapchain handle,const XrSwapchainImageReleaseInfo
     acquired=waited=false;++releases;return XR_SUCCESS;
 }
 XrResult XRAPI_CALL DestroySwapchain(XrSwapchain handle) {
+    if(uintptr_t(handle)==5){for(auto& image:runtimeEffects)fqvk::renderer->Destroy(image);runtimeEffects.clear();effectsAcquired=effectsWaited=false;return XR_SUCCESS;}
     if(handle==reinterpret_cast<XrSwapchain>(uintptr_t(4))) {
         for(auto& image:runtimeDepth)fqvk::renderer->Destroy(image);
         runtimeDepth.clear();depthAcquired=depthWaited=false;++destroys;return XR_SUCCESS;
@@ -962,7 +971,7 @@ void GameplayPresentation(bool withDepth) {
 
 #include "vulkan_motion_gpu_tests.inc"
 int main() {
-    NativeMotion();
+    NativeMotion();NativeMotion(true);
     for(auto format:{VK_FORMAT_R8G8B8A8_UNORM,VK_FORMAT_B8G8R8A8_UNORM,VK_FORMAT_B8G8R8A8_SRGB})HdrPresentation(format,false);
     HdrPresentation(VK_FORMAT_R8G8B8A8_UNORM,true);
     BufferedOwnership();DirectPresentation();EarlyAcquireFailure();TimingCapacity();

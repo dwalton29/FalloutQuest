@@ -26,6 +26,7 @@ uint64_t motionUploads=0,motionDraws=0;
 void DestroyMotion() {
     if(!device)return;
     if(motionPass)vkDeviceWaitIdle(device); // Teardown must also tolerate device loss.
+    DestroyComposition();
     motionCapture=nullptr;motionCoverage=nullptr;
     for(auto& target:motionTargets){
         for(auto f:target.framebuffers)if(f)vkDestroyFramebuffer(device,f,nullptr);
@@ -157,7 +158,7 @@ bool MotionEye(unsigned eye,VkFramebuffer framebuffer,const fqmotion::Capture& c
     BeginPass(Motion,bi);
     const VkViewport viewport{0,0,float(t.width),float(t.height),0,1};const VkRect2D scissor{{0,0},{t.width,t.height}};
     vkCmdSetViewport(command,0,1,&viewport);vkCmdSetScissor(command,0,1,&scissor);
-    std::vector<VkDescriptorImageInfo> images{{nearest,depth.view,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},{sampler,white.view,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},{nearest,white.view,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},{nearest,white.view,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}};
+    std::vector<VkDescriptorImageInfo> images{{nearest,splitFrame?splitDepth.view:depth.view,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},{sampler,white.view,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},{nearest,white.view,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},{nearest,white.view,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}};
     bool complete=MotionBind(c,images,32);if(complete)vkCmdDraw(command,3,1,0,0);
     for(const auto& item:prepared){
         const auto& d=*item.draw;const auto& m=meshes.at(d.mesh);
@@ -185,9 +186,9 @@ void RenderMotion() {
     // End() has drained colour draws and closed their pass. Pose transfers are
     // queued before this command buffer, once for both eyes.
     const auto prepared=PrepareMotion(capture);
-    VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};b.image=depth.image;b.srcQueueFamilyIndex=b.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;b.subresourceRange={VK_IMAGE_ASPECT_DEPTH_BIT,0,1,0,2};
-    b.oldLayout=VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;b.newLayout=VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;b.srcAccessMask=VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;b.dstAccessMask=VK_ACCESS_SHADER_READ_BIT;
-    vkCmdPipelineBarrier(command,VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT|VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,0,0,nullptr,0,nullptr,1,&b);
+    VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};b.image=splitFrame?splitDepth.image:depth.image;b.srcQueueFamilyIndex=b.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;b.subresourceRange={splitFrame?VK_IMAGE_ASPECT_COLOR_BIT:VK_IMAGE_ASPECT_DEPTH_BIT,0,1,0,2};
+    b.oldLayout=splitFrame?VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL:VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;b.newLayout=VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;b.srcAccessMask=splitFrame?VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT:VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;b.dstAccessMask=VK_ACCESS_SHADER_READ_BIT;
+    vkCmdPipelineBarrier(command,(splitFrame?VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT:VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT|VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT),VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,0,0,nullptr,0,nullptr,1,&b);
     for(unsigned eye=0;eye<2;++eye){auto& t=motionTargets[eye];
         auto acquire=[&](XrSwapchain chain,uint32_t& index,bool& ready){XrSwapchainImageAcquireInfo ai{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};CheckXr(Proc<PFN_xrAcquireSwapchainImage>(xrInstance,"xrAcquireSwapchainImage")(chain,&ai,&index),"acquire motion");XrSwapchainImageWaitInfo wi{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};wi.timeout=XR_INFINITE_DURATION;const auto status=Proc<PFN_xrWaitSwapchainImage>(xrInstance,"xrWaitSwapchainImage")(chain,&wi);if(status!=XR_SUCCESS)throw std::runtime_error("motion wait failed");ready=true;};
         acquire(t.motion,t.motionIndex,t.motionReady);acquire(t.depth,t.depthIndex,t.depthReady);
@@ -195,8 +196,8 @@ void RenderMotion() {
         const bool rendered=MotionEye(eye,t.framebuffers[t.motionIndex*t.depthViews.size()+t.depthIndex],capture,prepared);
         (*result)[eye]=capture.Coverage(rendered);
     }
-    b.oldLayout=VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;b.newLayout=VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;b.srcAccessMask=VK_ACCESS_SHADER_READ_BIT;b.dstAccessMask=VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT|VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-    vkCmdPipelineBarrier(command,VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT|VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,0,0,nullptr,0,nullptr,1,&b);
+    b.oldLayout=VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;b.newLayout=splitFrame?VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL:VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;b.srcAccessMask=VK_ACCESS_SHADER_READ_BIT;b.dstAccessMask=splitFrame?VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT:VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT|VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    vkCmdPipelineBarrier(command,VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,(splitFrame?VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT:VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT|VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT),0,0,nullptr,0,nullptr,1,&b);
     if((capture.history->CurrentFrame().serial%180)==1)VKLOG("FQ SPACEWARP motion backend=Vulkan serial=%llu coverage=%d/%d draws=%llu uploadBytes=%llu previousPaletteBytes=%zu queue=shared cpuWait=0",
         (unsigned long long)capture.history->CurrentFrame().serial,(*result)[0].Complete(capture.history->CurrentFrame().serial),(*result)[1].Complete(capture.history->CurrentFrame().serial),(unsigned long long)(motionDraws-drawBefore),(unsigned long long)(motionUploads-uploadBefore),motionPoseBytes);
 }

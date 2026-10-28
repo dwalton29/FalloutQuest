@@ -75,6 +75,11 @@ class VulkanShaders(unittest.TestCase):
                 if shutil.which('spirv-dis'):
                     dis=subprocess.check_output(['spirv-dis',str(out/f'{name}_solid.frag.spv')],text=True)
                     self.assertNotIn('OpKill',dis)
+            for name,vertex in [('world_split','world'),('world_solid_split','world'),('terrain_split','terrain'),('terrain_solid_split','terrain'),('sky_split','sky'),('composition_split','post')]:
+                file=out/f'{name}.frag.spv'
+                if shutil.which('spirv-val'):
+                    subprocess.run(['spirv-val','--target-env','vulkan1.1',str(file)],check=True)
+                subprocess.run([compiler,'-V','--target-env','vulkan1.1','-l',str(out/f'{vertex}.vert'),str(out/f'{name}.frag'),'-o',str(out/f'{name}-linked.spv')],check=True)
             for name in ('static','dynamic'):
                 paths=[out/f'motion_{name}_{stage}.{stage}' for stage in ('vert','frag')]
                 for path in paths:
