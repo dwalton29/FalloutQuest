@@ -31,7 +31,22 @@ XRAPI_ATTR XrResult XRAPI_CALL xrGetSystemProperties(XrInstance,XrSystemId,XrSys
 }
 }
 Frame Input(uint64_t serial){Frame f;f.serial=serial;f.displayTime=int64_t(serial)*1000;f.world=0x3c;f.sceneReady=f.focused=true;return f;}
+Matrix Yaw(float yaw,float x=0,float y=0,float z=0){auto m=fqskin::Identity();m[0]=m[10]=std::cos(yaw);m[2]=-std::sin(yaw);m[8]=std::sin(yaw);m[12]=x;m[13]=y;m[14]=z;return m;}
 int main(){
+ XrPosef motionDelta{};
+ for(auto api:{Api::EXT,Api::FB}){
+   assert(ArtificialYawDelta(Yaw(.4f,1,2,3),Yaw(.4f,1,2,3),api,motionDelta));
+   assert(std::abs(motionDelta.orientation.y)<1e-6f&&std::abs(motionDelta.orientation.w-1)<1e-6f&&motionDelta.position.x==0&&motionDelta.position.y==0&&motionDelta.position.z==0);
+   assert(ArtificialYawDelta(Yaw(1.5707963268f),Yaw(1.5707963268f,1,2,0),api,motionDelta));
+   assert(std::abs(motionDelta.position.x)<1e-6f&&motionDelta.position.y==2&&std::abs(motionDelta.position.z-1)<1e-6f);
+   assert(ArtificialYawDelta(Yaw(0),Yaw(1.5707963268f,1,0,0),api,motionDelta));
+   assert(std::abs(motionDelta.orientation.y-.70710678f)<1e-6f&&std::abs(motionDelta.orientation.w-.70710678f)<1e-6f);
+   if(api==Api::EXT)assert(std::abs(motionDelta.position.x)<1e-6f&&std::abs(motionDelta.position.z-1)<1e-6f);
+   else assert(std::abs(motionDelta.position.x-1)<1e-6f&&std::abs(motionDelta.position.z)<1e-6f);
+   assert(ArtificialYawDelta(Yaw(3.13f),Yaw(-3.13f),api,motionDelta));assert(motionDelta.orientation.w>.999f&&motionDelta.orientation.y>0);
+ }
+ auto invalidYaw=Yaw(0);invalidYaw[4]=.1f;assert(!ArtificialYawDelta(Yaw(0),invalidYaw,Api::EXT,motionDelta));
+ assert(!ArtificialYawDelta(Yaw(0),Yaw(0),Api::None,motionDelta));
  static_assert(!std::is_copy_constructible_v<Session>);
  std::vector<XrExtensionProperties> extensions(2);std::strcpy(extensions[0].extensionName,XR_FB_SPACE_WARP_EXTENSION_NAME);std::strcpy(extensions[1].extensionName,XR_EXT_FRAME_SYNTHESIS_EXTENSION_NAME);
  Session session;assert(!session.Negotiate(false,extensions));assert(session.Negotiate(true,extensions)==std::string(XR_EXT_FRAME_SYNTHESIS_EXTENSION_NAME));
@@ -47,7 +62,16 @@ int main(){
  assert(session.Attach(views,history,coverage,delta,.04f,1000));
  const auto* info=static_cast<const XrFrameSynthesisInfoEXT*>(views[0].next);assert(info->next==&depth&&info->motionVectorSubImage.swapchain==session.Eye(0).motion);
  assert(info->layerFlags==XR_FRAME_SYNTHESIS_INFO_REQUEST_RELAXED_FRAME_INTERVAL_BIT_EXT&&info->nearZ==.04f&&info->farZ==1000);
- assert(!session.Attach(views,history,coverage,delta,.04f,1000));session.Destroy();assert(live.empty());
+ assert(!session.Attach(views,history,coverage,delta,.04f,1000));
+ for(auto& v:views)v.next=&depth;
+ coverage[1].weapons=false;assert(!session.Attach(views,history,coverage,delta,.04f,1000)&&views[0].next==&depth);coverage[1].weapons=true;
+ auto interior=Input(4);interior.world=0;assert(!history.Begin(interior));assert(!session.Attach(views,history,coverage,delta,.04f,1000));
+ for(unsigned i=5;i<=6;++i){assert(history.Begin(Input(i)));history.EyeRendered(0);history.EyeRendered(1);assert(history.Finish(true));}
+ assert(history.Begin(Input(7)));history.EyeRendered(0);history.EyeRendered(1);for(auto& c:coverage)c.serial=7;
+ assert(ArtificialYawDelta(Yaw(0),Yaw(.1f,.2f,0,-.1f),Api::EXT,delta));
+ assert(session.Attach(views,history,coverage,delta,.04f,1000));
+ info=static_cast<const XrFrameSynthesisInfoEXT*>(views[0].next);assert(info->appSpaceDeltaPose.position.z==delta.position.z&&info->appSpaceDeltaPose.orientation.y==delta.orientation.y);
+ session.Destroy();assert(live.empty());
  extensions.resize(1);assert(session.Negotiate(true,extensions)==std::string(XR_FB_SPACE_WARP_EXTENSION_NAME));assert(session.Create(XR_NULL_HANDLE,1,XR_NULL_HANDLE,1,2));
  for(auto& v:views)v.next=nullptr;
  assert(session.Attach(views,history,coverage,delta,.04f,1000));assert(static_cast<const XrCompositionLayerSpaceWarpInfoFB*>(views[0].next)->type==XR_TYPE_COMPOSITION_LAYER_SPACE_WARP_INFO_FB);

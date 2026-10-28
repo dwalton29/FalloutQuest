@@ -72,6 +72,12 @@ public:
     bool Failed()const{return failed_;}
     uint64_t UploadedBytes()const{return uploadedBytes_;}
     uint64_t Allocations()const{return allocations_;}
+    // Native fallback frames still carry CPU pose history. Keep visible GPU
+    // capacity warm without uploading or issuing any driver calls.
+    void Retain(const Capture& capture){
+        if(!capture.history)return;
+        for(const auto& draw:capture.draws){auto it=previousGpu_.find(draw.identity);if(it!=previousGpu_.end())it->second.used=capture.history->CurrentFrame().serial;}
+    }
     const std::string& Error()const{return error_;}
     bool Initialize(){
         if(fqrender::nativeOnly)return false;

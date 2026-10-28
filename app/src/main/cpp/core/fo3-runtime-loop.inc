@@ -385,7 +385,7 @@ public:
                 spacewarp_.Eye(0).width,spacewarp_.Eye(0).height,spacewarp_.Eye(1).width,spacewarp_.Eye(1).height);
             spacewarpProducerReady_=ready&&InitializeSpacewarpProducer();
             fqmotion::requested=false; // Deformation snapshots begin only in an eligible world frame.
-            FQ_LOGI("FQ SPACEWARP producer ready=%d mode=%s error=%s",spacewarpProducerReady_,spacewarpVisualize_?"visualize":"validate",spacewarpGles_.Error().c_str());
+            FQ_LOGI("FQ SPACEWARP producer ready=%d mode=%s error=%s",spacewarpProducerReady_,spacewarpSynthesisRequested_?"on":spacewarpVisualize_?"visualize":"validate",spacewarpGles_.Error().c_str());
         }
 #ifdef FQ_ENABLE_VULKAN
         if(vulkanProbeRequested_&&!vulkanGameplay_)
@@ -505,10 +505,11 @@ private:
         char spacewarpRequest[PROP_VALUE_MAX]{};
         __system_property_get("debug.falloutquest.spacewarp",spacewarpRequest);
         spacewarpVisualize_=!std::strcmp(spacewarpRequest,"visualize");
-        const bool requestSpacewarp=!std::strcmp(spacewarpRequest,"1")||!std::strcmp(spacewarpRequest,"validate")||spacewarpVisualize_;
+        spacewarpSynthesisRequested_=!std::strcmp(spacewarpRequest,"on");
+        const bool requestSpacewarp=!std::strcmp(spacewarpRequest,"1")||!std::strcmp(spacewarpRequest,"validate")||spacewarpVisualize_||spacewarpSynthesisRequested_;
         if(const char* extension=spacewarp_.Negotiate(requestSpacewarp,available))extensions.push_back(extension);
-        FQ_LOGI("FQ SPACEWARP capability requested=%d api=%s gameplay=native reason=producer-validation",
-            requestSpacewarp,spacewarp_.Backend()==fqspacewarp::Api::EXT?"EXT":spacewarp_.Backend()==fqspacewarp::Api::FB?"FB":"unavailable");
+        FQ_LOGI("FQ SPACEWARP capability requested=%d api=%s synthesisRequested=%d default=off",
+            requestSpacewarp,spacewarp_.Backend()==fqspacewarp::Api::EXT?"EXT":spacewarp_.Backend()==fqspacewarp::Api::FB?"FB":"unavailable",spacewarpSynthesisRequested_);
         for (const auto& extension : available) {
             if (std::strcmp(extension.extensionName, XR_KHR_COMPOSITION_LAYER_DEPTH_EXTENSION_NAME) == 0) {
                 depthSubmissionEnabled_ = true;
@@ -1702,6 +1703,7 @@ private:
         XrCompositionLayerProjection projectionLayer{XR_TYPE_COMPOSITION_LAYER_PROJECTION};
         const XrCompositionLayerBaseHeader* layers[1]{};
         uint32_t layerCount = 0;
+        bool spacewarpAttached=false;
 
         bool pipPoseUpdated=false;
         if (frameState.shouldRender) {
@@ -2146,6 +2148,14 @@ private:
                 if (!projectionViews[0].next || !projectionViews[1].next) {
                     projectionViews[0].next = projectionViews[1].next = nullptr;
                 }
+                if(spacewarpSynthesisRequested_&&spacewarpProducerReady_&&rendered&&gSceneReady&&!IsFo3LoadingVisible()&&
+                   gExteriorWorldspaceQ1890==0x3cu&&spacewarpHistory_.CanSynthesize(spacewarpCoverage_)&&
+                   spacewarpHistory_.CurrentFrame().scene==gSceneLoad.generation){
+                    XrPosef delta{};
+                    if(fqspacewarp::ArtificialYawDelta(spacewarpHistory_.PreviousFrame().appToWorld,
+                       spacewarpHistory_.CurrentFrame().appToWorld,spacewarp_.Backend(),delta))
+                        spacewarpAttached=spacewarp_.Attach(projectionViews,spacewarpHistory_,spacewarpCoverage_,delta,.04f,125000.f/FO3_UNITS_PER_METRE_Q715);
+                }
 
                 projectionLayer.space = localSpace_;
                 projectionLayer.viewCount = 2;
@@ -2181,10 +2191,16 @@ private:
         const auto submitStarted=fqloading::Now();
         const bool q1700FrameSubmitted =
             CheckXr(xrEndFrame(session_, &endInfo), "xrEndFrame");
+        if(spacewarpAttached&&!q1700FrameSubmitted){
+            spacewarpSynthesisRequested_=spacewarpProducerReady_=fqmotion::requested=false;
+            FQ_LOGE("FQ SPACEWARP synthesis disabled after failed submission; restart required to retry");
+        }
         if(spacewarp_.Requested()){
             spacewarpHistory_.Finish(q1700FrameSubmitted&&layerCount==1);
-            if((spacewarpSerial_%180)==1)FQ_LOGI("FQ SPACEWARP frame world=%08X history=%u native=1 motionCoverage=%d/%d",
-                gExteriorWorldspaceQ1890,spacewarpHistory_.SubmittedFrames(),spacewarpCoverage_[0].Complete(spacewarpSerial_),spacewarpCoverage_[1].Complete(spacewarpSerial_));
+            if((spacewarpSerial_%180)==1)FQ_LOGI("FQ SPACEWARP frame world=%08X history=%u native=%d synthesisAttached=%d submitted=%d motionCoverage=%d/%d periodUs=%lld",
+                gExteriorWorldspaceQ1890,spacewarpHistory_.SubmittedFrames(),!spacewarpAttached,spacewarpAttached,q1700FrameSubmitted,
+                spacewarpCoverage_[0].Complete(spacewarpSerial_),spacewarpCoverage_[1].Complete(spacewarpSerial_),
+                (long long)(frameState.predictedDisplayPeriod/1000));
         }
         if(q1700FrameSubmitted&&layerCount&&(presentationFrames_++%120)==0)
             FQ_LOGI("FQ PRESENTED api=%s stereo=%s frame=%llu",vulkanGameplay_?"Vulkan":"GLES",
@@ -2634,7 +2650,12 @@ private:
             }
             if(fqgl::counters.draws!=motionLateUiBefore)fqmotion::eye.Block(fqmotion::Ui);
             if(spacewarpProducerReady_&&fqmotion::eye.history){
-                if(motionDepthReady)spacewarpCoverage_[eyeIndex]=RenderSpacewarpEye(eyeIndex);
+                const uint32_t unsupported=fqmotion::eye.reasons&~uint32_t(fqmotion::MissingHistory);
+                if(spacewarpSynthesisRequested_&&unsupported){
+                    spacewarpGles_.Retain(fqmotion::eye);spacewarpCoverage_[eyeIndex]=fqmotion::eye.Coverage(false);
+                    if((spacewarpSerial_%180)==1)FQ_LOGI("FQ SPACEWARP native fallback eye=%u reasons=0x%X motionPassSkipped=1",eyeIndex,fqmotion::eye.reasons);
+                }
+                else if(motionDepthReady)spacewarpCoverage_[eyeIndex]=RenderSpacewarpEye(eyeIndex);
                 else{fqmotion::eye.Block(fqmotion::Resources);spacewarpCoverage_[eyeIndex]=fqmotion::eye.Coverage(false);}
             }
             } // gameplay eye; loading has no world/HUD/post/depth-copy work
@@ -2679,6 +2700,7 @@ private:
     fqmotion::Gles spacewarpGles_;
     bool spacewarpProducerReady_=false;
     bool spacewarpVisualize_=false;
+    bool spacewarpSynthesisRequested_=false;
     std::array<fqspacewarp::Coverage,2> spacewarpCoverage_{};
     std::array<std::vector<XrSwapchainImageOpenGLESKHR>,2> spacewarpMotionImages_,spacewarpDepthImages_;
     bool vulkanGameplay_{false};

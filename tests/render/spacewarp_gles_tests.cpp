@@ -68,6 +68,15 @@ int main(){
    history.EyeRendered(0);history.EyeRendered(1);assert(history.Finish(true));
    auto next=FrameAt(4);next.viewProjection={currentVP,currentVP};assert(history.Begin(next));capture.Begin(history);capture.Main();assert(capture.Record(draw,current));
    assert(renderer.Render(capture,0,source,motion,depth,Size,Size,scale));assert(renderer.Allocations()==allocated);
+   history.EyeRendered(0);history.EyeRendered(1);assert(history.Finish(true));
+   const auto beforeRetain=driverQueries;const auto beforeUploads=renderer.UploadedBytes();
+   for(int skip=0;skip<2;++skip){
+     auto native=FrameAt(5+skip);native.viewProjection={currentVP,currentVP};assert(history.Begin(native));capture.Begin(history);capture.Main();assert(capture.Record(draw,current));
+     capture.Block(fqmotion::Ui);renderer.Retain(capture);history.EyeRendered(0);history.EyeRendered(1);assert(history.Finish(true));
+   }
+   assert(driverQueries==beforeRetain&&renderer.UploadedBytes()==beforeUploads);
+   auto resumed=FrameAt(7);resumed.viewProjection={currentVP,currentVP};assert(history.Begin(resumed));capture.Begin(history);capture.Main();assert(capture.Record(draw,current));
+   assert(renderer.Render(capture,0,source,motion,depth,Size,Size,scale)&&renderer.Allocations()==allocated);
    glBindFramebuffer(GL_FRAMEBUFFER,0);glDisable(GL_SCISSOR_TEST);glColorMask(GL_TRUE,GL_TRUE,GL_TRUE,GL_TRUE);glDepthMask(GL_TRUE);glDepthRangef(0,1);glActiveTexture(GL_TEXTURE0);
    return result;
  };

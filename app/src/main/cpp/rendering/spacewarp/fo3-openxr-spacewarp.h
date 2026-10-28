@@ -5,6 +5,26 @@
 #include <vector>
 namespace fqspacewarp {
 enum class Api { None,EXT,FB };
+// ToVirtualPose uses only a rigid yaw + translation for artificial locomotion.
+// Head/controller tracking belongs in VP matrices, never in this delta.
+inline bool ArtificialYawDelta(const Matrix& previous,const Matrix& current,Api api,XrPosef& delta){
+    delta={};delta.orientation.w=1;
+    if(api==Api::None)return false;
+    for(const auto* m:{&previous,&current}){
+        if(!Finite(*m))return false;
+        for(unsigned i:{1u,3u,4u,6u,7u,9u,11u})if(std::abs((*m)[i])>1e-4f)return false;
+        if(std::abs((*m)[5]-1)>1e-4f||std::abs((*m)[15]-1)>1e-4f||std::abs((*m)[0]-(*m)[10])>1e-4f||
+           std::abs((*m)[2]+(*m)[8])>1e-4f||std::abs((*m)[0]*(*m)[0]+(*m)[8]*(*m)[8]-1)>1e-4f)return false;
+    }
+    const float yaw=std::remainder(std::atan2(current[8],current[0])-std::atan2(previous[8],previous[0]),6.28318530718f);
+    delta.orientation.y=std::sin(yaw*.5f);delta.orientation.w=std::cos(yaw*.5f);
+    // EXT explicitly requires translation in current application coordinates.
+    // Meta's FB guide specifies inverse(previousAppPose) * currentAppPose.
+    const auto& basis=api==Api::EXT?current:previous;
+    const float x=current[12]-previous[12],y=current[13]-previous[13],z=current[14]-previous[14];
+    delta.position={basis[0]*x+basis[1]*y+basis[2]*z,basis[4]*x+basis[5]*y+basis[6]*z,basis[8]*x+basis[9]*y+basis[10]*z};
+    return std::isfinite(delta.position.x)&&std::isfinite(delta.position.y)&&std::isfinite(delta.position.z);
+}
 struct Target {XrSwapchain motion=XR_NULL_HANDLE,depth=XR_NULL_HANDLE;uint32_t width=0,height=0;};
 // Owns only runtime swapchains. Graphics backends must acquire/render/release
 // these before supplying matching Coverage; allocation alone never enables ASW.
