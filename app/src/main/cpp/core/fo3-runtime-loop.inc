@@ -2196,8 +2196,9 @@ private:
             FQ_LOGE("FQ SPACEWARP synthesis disabled after failed submission; restart required to retry");
         }
         if(spacewarp_.Requested()){
-            spacewarpHistory_.Finish(q1700FrameSubmitted&&layerCount==1);
-            if((spacewarpSerial_%180)==1)FQ_LOGI("FQ SPACEWARP frame world=%08X history=%u native=%d synthesisAttached=%d submitted=%d motionCoverage=%d/%d periodUs=%lld",
+            if(spacewarpProducerReady_)spacewarpHistory_.Finish(q1700FrameSubmitted&&layerCount==1);
+            else spacewarpHistory_.Reset();
+            if(spacewarpProducerReady_&&(spacewarpSerial_%180)==1)FQ_LOGI("FQ SPACEWARP frame world=%08X history=%u native=%d synthesisAttached=%d submitted=%d motionCoverage=%d/%d periodUs=%lld",
                 gExteriorWorldspaceQ1890,spacewarpHistory_.SubmittedFrames(),!spacewarpAttached,spacewarpAttached,q1700FrameSubmitted,
                 spacewarpCoverage_[0].Complete(spacewarpSerial_),spacewarpCoverage_[1].Complete(spacewarpSerial_),
                 (long long)(frameState.predictedDisplayPeriod/1000));
