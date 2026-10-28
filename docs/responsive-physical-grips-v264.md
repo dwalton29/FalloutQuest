@@ -18,7 +18,9 @@ The extra convex sweep previously treated a rotation starting against a surface
 as a reason to clamp the entire transform, even during tangential/separating
 motion. Its callback now checks the motion at the contact point, including the
 angular component, and discards non-inward hits before choosing the first
-blocking hit. Inward impacts and thin-body rotational collision remain guarded.
+blocking hit. A 0.1 mm inward-motion tolerance (below the 1 mm sweep
+allowance) leaves minute resting-contact corrections to the discrete solver,
+avoiding toolchain-sensitive latching. Inward impacts and thin-body rotational collision remain guarded.
 
 Weapon support tracking now captures a controller-to-palm offset at acquisition,
 as primary-hand tracking already did. Both tracking targets come from raw

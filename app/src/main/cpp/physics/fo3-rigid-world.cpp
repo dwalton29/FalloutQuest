@@ -212,7 +212,11 @@ void World::Step(float seconds){
                     // obstruction. Test the contact point's rotational motion,
                     // not just COM motion, so gentle lift/slide is never latched.
                     const auto motion=to.getOrigin()-from.getOrigin()+turn.cross(result.m_hitPointLocal-centre);
-                    if(motion.dot(normal)>=-1e-6f)return 1;
+                    // Sub-contact-slop normal motion belongs to the discrete
+                    // contact solver; using an epsilon near float noise here
+                    // re-latches resting bodies on different CPUs/toolchains.
+                    constexpr float inwardSlop=.0001f; // 0.1 mm, sweep allowance is 1 mm
+                    if(motion.dot(normal)>=-inwardSlop)return 1;
                     return ClosestConvexResultCallback::addSingleResult(result,normalWorld);
                 }
                 bool needsCollision(btBroadphaseProxy* proxy)const override{return proxy->m_clientObject!=self&&ClosestConvexResultCallback::needsCollision(proxy);}

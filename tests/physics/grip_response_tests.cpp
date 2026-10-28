@@ -56,6 +56,17 @@ int main(){
         for(int i=1;i<=60;++i){auto t=Pose(0,y+i*dt*.2f);const float a=i*dt*.2f;t[0]=t[5]=std::cos(a);t[1]=std::sin(a);t[4]=-t[1];w.TargetBody(2,t);w.Step(dt);}
         w.Pose(2,p);std::cout<<"gentleLift="<<p[13]-y<<std::endl;assert(p[13]-y>.075f);
     }
+    // Tiny resting tilt/position differences must not change tangential motion
+    // into a latch. The discrete solver resolves sub-contact-slop corrections.
+    for(int seed=0;seed<12;++seed){
+        World w;Floor(w);auto start=Pose(.02f*seed,.06f);
+        const float a=(seed-6)*.0002f;start[5]=start[10]=std::cos(a);start[6]=std::sin(a);start[9]=-start[6];
+        assert(w.Add(1,Box(.15f,.05f,.15f,2),start));
+        for(int i=0;i<240;++i)w.Step(dt);
+        M p;w.Pose(1,p);const float x=p[12],y=p[13];assert(w.Grab(1,0,Pose(x,y),{x,y,0}));
+        for(int i=1;i<=120;++i){w.TargetBody(1,Pose(x+i*dt*.4f,y,i*dt*.5f));w.Step(dt);}
+        w.Pose(1,p);assert(p[12]-x>.36f&&p[13]>.045f);
+    }
     // Fast rotation still cannot sweep a thin plate through the ground.
     {
         World w;Floor(w);auto plate=Box(.3f,.01f,.3f,1);assert(w.Add(1,plate,Pose(0,.08f)));
