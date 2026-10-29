@@ -22,8 +22,8 @@ android {
         applicationId 'com.falloutquest.app'
         minSdk 29
         targetSdk 35
-        versionCode 286
-        versionName '0.138.0-streamed-gate-collision'
+        versionCode 287
+        versionName '0.139.0-authored-door-activation'
 
         ndk {
             abiFilters 'arm64-v8a'

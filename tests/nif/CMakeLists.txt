@@ -117,3 +117,11 @@ target_compile_options(creature_actor_asset_tests PRIVATE -UNDEBUG -Wall -Wextra
 target_include_directories(creature_actor_asset_tests PRIVATE . ../../app/src/main/cpp ../../app/src/main/cpp/data ../../app/src/main/cpp/npc)
 add_test(NAME creature_actor_asset_tests COMMAND creature_actor_asset_tests)
 set_tests_properties(creature_actor_asset_tests PROPERTIES SKIP_RETURN_CODE 77)
+
+add_executable(door_activation_tests door_activation_tests.cpp
+  ../../app/src/main/cpp/rendering/mesh/fo3-static-nif.cpp
+  ../../app/src/main/cpp/npc/fo3-actor-animation.cpp)
+target_compile_features(door_activation_tests PRIVATE cxx_std_17)
+target_compile_options(door_activation_tests PRIVATE -UNDEBUG -Wall -Wextra -Werror -Wno-unused-function -Wno-misleading-indentation)
+target_include_directories(door_activation_tests PRIVATE . ../../app/src/main/cpp ../../app/src/main/cpp/data ../../app/src/main/cpp/npc)
+add_test(NAME door_activation_tests COMMAND door_activation_tests)

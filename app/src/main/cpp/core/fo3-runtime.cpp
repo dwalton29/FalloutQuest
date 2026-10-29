@@ -1,3 +1,4 @@
+#include "world/interaction/fo3-door-activation.h"
 #include "world/interaction/fo3-world-door-anchors.h"
 #include "npc/fo3-actor-clip-path.h"
 #include "rendering/fo3-visual-admission.h"
@@ -476,6 +477,7 @@ std::shared_ptr<const Fo3PreparedRigidBody> PrepareFo3RigidBody(
 }
 
 struct CpuObject {
+    std::shared_ptr<const fo3doorpick::Bounds> doorActivation;
     bool nonvisualResident=false;
     std::shared_ptr<const Fo3PreparedRigidBody> rigidBody;
     Fo3WorldPlacement placement;
@@ -503,6 +505,7 @@ struct CpuObject {
 };
 
 struct GpuObject {
+    std::shared_ptr<const fo3doorpick::Bounds> doorActivation;
     mutable uint64_t motionIdentity=0;
     std::shared_ptr<fqspacewarp::Drawable> motionShape;
     std::shared_ptr<const Fo3PreparedRigidBody> rigidBody;
@@ -2102,6 +2105,20 @@ float MaxModelExtent(const Fo3StaticNifMesh& mesh) {
     return std::max({maximum.x - minimum.x, maximum.y - minimum.y, maximum.z - minimum.z});
 }
 
+std::shared_ptr<const fo3doorpick::Bounds> LoadFo3DoorActivation(const std::string& model){
+    static std::mutex mutex;
+    static std::unordered_map<std::string,std::shared_ptr<const fo3doorpick::Bounds>> cache;
+    auto key=model;for(char& c:key){if(c=='/')c='\\';c=static_cast<char>(std::tolower(static_cast<unsigned char>(c)));}
+    {std::lock_guard<std::mutex> lock(mutex);const auto found=cache.find(key);if(found!=cache.end())return found->second;}
+    std::vector<Fo3NifCollisionShapeQ6F> shapes;
+    std::shared_ptr<const fo3doorpick::Bounds> result;
+    if(LoadFo3NifCollisionShapesQ6F(model,shapes)){
+        auto bounds=fo3doorpick::FromShapes(shapes);
+        if(bounds.valid)result=std::make_shared<const fo3doorpick::Bounds>(bounds);
+    }
+    std::lock_guard<std::mutex> lock(mutex);return cache.emplace(key,std::move(result)).first->second;
+}
+
 bool Q74ShouldSkipPlacement(const Fo3WorldPlacement& placement);
 
 bool BuildCpuObjects(const Fo3WorldPlacement& placement, std::vector<CpuObject>& outs,
@@ -2112,6 +2129,7 @@ bool BuildCpuObjects(const Fo3WorldPlacement& placement, std::vector<CpuObject>&
         outs.push_back(std::move(part));return true;
     }
 
+    const auto doorActivation=placement.baseRecordType=="DOOR"?LoadFo3DoorActivation(placement.modelPath):nullptr;
     const auto q2401DoorAnimation =
         placement.baseRecordType=="DOOR"
             ? Q2401LoadDoorNifAnimation(placement.modelPath)
@@ -2162,15 +2180,7 @@ bool BuildCpuObjects(const Fo3WorldPlacement& placement, std::vector<CpuObject>&
 
 
     if(cachedMeshes->empty()) {
-        CpuObject part;part.placement=placement;part.nonvisualResident=true;
-        if(placement.baseRecordType=="DOOR"){
-            std::vector<Fo3NifCollisionShapeQ6F> shapes;
-            if(LoadFo3NifCollisionShapesQ6F(placement.modelPath,shapes))for(const auto& shape:shapes)
-                for(size_t i=0;i+2<shape.positions.size();i+=3){
-                    auto point=ApplyEsmRotation({shape.positions[i],shape.positions[i+1],shape.positions[i+2]},placement);
-                    part.positionsGame.push_back({placement.x+point.x*placement.scale,placement.y+point.y*placement.scale,placement.z+point.z*placement.scale});
-                }
-        }
+        CpuObject part;part.placement=placement;part.nonvisualResident=true;part.doorActivation=doorActivation;
         outs.push_back(std::move(part));return true;
     }
     const auto rigidBody=PrepareFo3RigidBody(placement,*cachedMeshes);
@@ -2205,6 +2215,7 @@ bool BuildCpuObjects(const Fo3WorldPlacement& placement, std::vector<CpuObject>&
             ? fo3dooranim::ShapeBone(
                 *q2401DoorAnimation,out.mesh.shapeBlock)
             : -1;
+        out.doorActivation=doorActivation;
         out.positionsGame.resize(vertexCount);
         out.normalsGame.resize(vertexCount);
         out.tangentsGame.resize(vertexCount);
@@ -2458,13 +2469,8 @@ bool UploadCpuObject(CpuObject& cpu, float centerX, float centerY, float floorZ,
         gpu.q1970GridX=cpu.placement.hasExteriorGrid?cpu.placement.gridX:static_cast<int32_t>(std::floor(cpu.placement.x/Q1890_EXTERIOR_CELL_SIZE));
         gpu.q1970GridY=cpu.placement.hasExteriorGrid?cpu.placement.gridY:static_cast<int32_t>(std::floor(cpu.placement.y/Q1890_EXTERIOR_CELL_SIZE));
         Q2016BuildPlacementMatrix(cpu.placement,centerX,centerY,floorZ,gpu.q2016PlacementMatrix);
-        if(gpu.baseRecordType=="DOOR"&&!cpu.positionsGame.empty()){
-            gpu.minX=gpu.minY=gpu.minZ=INFINITY;gpu.maxX=gpu.maxY=gpu.maxZ=-INFINITY;
-            for(const auto& p:cpu.positionsGame){const Vec3 v{(p.x-centerX)/FO3_UNITS_PER_METRE,FLOOR_Y+(p.z-floorZ)/FO3_UNITS_PER_METRE,SCENE_FORWARD-(p.y-centerY)/FO3_UNITS_PER_METRE};
-                gpu.minX=std::min(gpu.minX,v.x);gpu.maxX=std::max(gpu.maxX,v.x);
-                gpu.minY=std::min(gpu.minY,v.y);gpu.maxY=std::max(gpu.maxY,v.y);
-                gpu.minZ=std::min(gpu.minZ,v.z);gpu.maxZ=std::max(gpu.maxZ,v.z);
-            }
+        gpu.doorActivation=cpu.doorActivation;
+        if(gpu.baseRecordType=="DOOR"){
             ResolveDoorTeleportCachedQ1698(gpu.refFormId,gExteriorWorldspaceQ1890==0x3cu,gpu.teleport);
             if(gpu.teleport.valid&&!gFo3ResidentTextureUpload)CacheFo3DoorPromptQ1840(gpu.refFormId,gpu.baseFormId,gpu.teleport);
         }
@@ -2613,6 +2619,7 @@ bool UploadCpuObject(CpuObject& cpu, float centerX, float centerY, float floorZ,
         auto screen=std::make_shared<fo3terminal::Surface>();if(screen->Build(points,cpu.mesh.indices,normals,{up.x,up.y,up.z},{fallback.x,fallback.y,fallback.z}))gpu.terminalScreen=std::move(screen);
       }
     }
+    gpu.doorActivation=cpu.doorActivation;
     gpu.refFormId = cpu.placement.refFormId;
     gpu.baseFormId = cpu.placement.baseFormId;
     gpu.editorId = cpu.placement.editorId;
@@ -5708,10 +5715,17 @@ bool QueryDoorInternalQ1700(float ox, float oy, float oz,
     float bestT = 3.0f;
     for (const GpuObject& object : gObjects) {
         if (object.baseRecordType != "DOOR") continue;
+        if(object.nonvisualResident&&!object.doorActivation)continue;
         const bool localSwing=object.q2400SwingDoor&&gExteriorWorldspaceQ1890==0u;
         if(!object.teleport.valid&&!localSwing) continue;
         float t = 0.0f;
-        if (RayAabbQ7(ox, oy, oz, dx, dy, dz, object, t) && t < bestT) {
+        bool intersects=false;
+        if(object.teleport.valid&&object.doorActivation){
+            float inverse[16]{};
+            if(Q2016InvertAffine(object.q2016PlacementMatrix,inverse))
+                intersects=fo3doorpick::Ray(*object.doorActivation,inverse,FO3_UNITS_PER_METRE,{ox,oy,oz},{dx,dy,dz},bestT,t);
+        }else intersects=RayAabbQ7(ox,oy,oz,dx,dy,dz,object,t);
+        if (intersects && t < bestT) {
             if(gPlayerSession){bool disabled=true;std::string error;
                 if(!gPlayerSession->player.ReferenceDisabled(object.refFormId,disabled,error)||disabled)continue;
             }
@@ -5729,6 +5743,9 @@ bool QueryDoorInternalQ1700(float ox, float oy, float oz,
             for(const auto& door:gObjects){
                 if(door.baseRecordType!="DOOR")continue;
                 Vec3 lo{},hi{};Q2400ObjectBounds(door,lo,hi);
+                if(door.teleport.valid&&door.doorActivation){const auto bounds=fo3doorpick::SceneBounds(*door.doorActivation,door.q2016PlacementMatrix,FO3_UNITS_PER_METRE);
+                    lo={bounds.lo[0],bounds.lo[1],bounds.lo[2]};hi={bounds.hi[0],bounds.hi[1],bounds.hi[2]};}
+
                 const float x=std::clamp(ox,lo.x,hi.x)-ox,y=std::clamp(oy,lo.y,hi.y)-oy,z=std::clamp(oz,lo.z,hi.z)-oz;
                 if(x*x+y*y+z*z>100)continue;
                 bool disabled=false;std::string error;
