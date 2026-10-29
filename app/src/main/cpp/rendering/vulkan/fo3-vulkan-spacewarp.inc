@@ -13,7 +13,10 @@ struct MotionTarget {
     std::vector<VkFramebuffer> framebuffers;
 };
 std::array<MotionTarget,2> motionTargets;
-VkRenderPass motionPass{};
+VkRenderPass motionPass{},dynamicMotionPass{};
+Image dynamicMotionImage;
+std::array<VkImageView,2> dynamicMotionViews{};
+std::array<VkFramebuffer,2> dynamicMotionFrames{};
 VkShaderModule motionModules[2][2]{};
 std::unordered_map<unsigned,VkPipeline> motionPipelines;
 struct MotionPose {Image palette;uint64_t used=0;};
@@ -43,6 +46,11 @@ void DestroyMotion() {
     layouts[12]={};
     if(sets[12])vkDestroyDescriptorSetLayout(device,sets[12],nullptr);
     sets[12]={};
+    for(auto& fb:dynamicMotionFrames){if(fb)vkDestroyFramebuffer(device,fb,nullptr);fb={};}
+    for(auto& view:dynamicMotionViews){if(view)vkDestroyImageView(device,view,nullptr);view={};}
+    Destroy(dynamicMotionImage);
+    if(dynamicMotionPass)vkDestroyRenderPass(device,dynamicMotionPass,nullptr);
+    dynamicMotionPass={};
     if(motionPass)vkDestroyRenderPass(device,motionPass,nullptr);
     motionPass={};
 }
@@ -69,8 +77,32 @@ void CreateMotionPass(VkFormat depthFormat) {
     const size_t bytes[2][2]{{sizeof(shaders::motion_static_vert),sizeof(shaders::motion_static_frag)},{sizeof(shaders::motion_dynamic_vert),sizeof(shaders::motion_dynamic_frag)}};
     for(unsigned p=0;p<2;++p)for(unsigned s=0;s<2;++s){VkShaderModuleCreateInfo mi{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};mi.pCode=code[p][s];mi.codeSize=bytes[p][s];Check(vkCreateShaderModule(device,&mi,nullptr,&motionModules[p][s]),"motion shader module");}
 }
+void CreateDynamicMotion(){
+    // Replay visible moving geometry at the same sample positions as colour
+    // and retained depth. Only the final runtime images use the lower size.
+    dynamicMotionImage=MakeImage(width,height,VK_FORMAT_R16G16B16A16_SFLOAT,VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT|VK_IMAGE_USAGE_SAMPLED_BIT,VK_IMAGE_ASPECT_COLOR_BIT);
+    VkAttachmentDescription attachment{};attachment.format=VK_FORMAT_R16G16B16A16_SFLOAT;attachment.samples=VK_SAMPLE_COUNT_1_BIT;
+    attachment.loadOp=VK_ATTACHMENT_LOAD_OP_CLEAR;attachment.storeOp=VK_ATTACHMENT_STORE_OP_STORE;
+    attachment.stencilLoadOp=VK_ATTACHMENT_LOAD_OP_DONT_CARE;attachment.stencilStoreOp=VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    attachment.initialLayout=VK_IMAGE_LAYOUT_UNDEFINED;attachment.finalLayout=VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    const VkAttachmentReference colorRef{0,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+    VkSubpassDescription sub{};sub.pipelineBindPoint=VK_PIPELINE_BIND_POINT_GRAPHICS;sub.colorAttachmentCount=1;sub.pColorAttachments=&colorRef;
+    std::array<VkSubpassDependency,2> deps{};
+    deps[0].srcSubpass=VK_SUBPASS_EXTERNAL;deps[0].dstSubpass=0;deps[0].srcStageMask=VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;deps[0].srcAccessMask=VK_ACCESS_SHADER_READ_BIT;
+    deps[0].dstStageMask=VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;deps[0].dstAccessMask=VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    deps[1].srcSubpass=0;deps[1].dstSubpass=VK_SUBPASS_EXTERNAL;deps[1].srcStageMask=VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;deps[1].srcAccessMask=VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    deps[1].dstStageMask=VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;deps[1].dstAccessMask=VK_ACCESS_SHADER_READ_BIT;
+    VkRenderPassCreateInfo pi{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};pi.attachmentCount=1;pi.pAttachments=&attachment;pi.subpassCount=1;pi.pSubpasses=&sub;pi.dependencyCount=2;pi.pDependencies=deps.data();
+    Check(vkCreateRenderPass(device,&pi,nullptr,&dynamicMotionPass),"full-resolution dynamic motion pass");
+    for(unsigned eye=0;eye<2;++eye){
+        VkImageViewCreateInfo vi{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};vi.image=dynamicMotionImage.image;vi.viewType=VK_IMAGE_VIEW_TYPE_2D;vi.format=VK_FORMAT_R16G16B16A16_SFLOAT;vi.subresourceRange={VK_IMAGE_ASPECT_COLOR_BIT,0,1,eye,1};
+        Check(vkCreateImageView(device,&vi,nullptr,&dynamicMotionViews[eye]),"dynamic motion eye view");
+        VkFramebufferCreateInfo fi{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};fi.renderPass=dynamicMotionPass;fi.attachmentCount=1;fi.pAttachments=&dynamicMotionViews[eye];fi.width=width;fi.height=height;fi.layers=1;
+        Check(vkCreateFramebuffer(device,&fi,nullptr,&dynamicMotionFrames[eye]),"dynamic motion eye framebuffer");
+    }
+}
 void InitializeMotion(const std::array<MotionSwapchainTarget,2>& targets,VkFormat depthFormat) {
-    DestroyMotion();CreateMotionPass(depthFormat);
+    DestroyMotion();CreateMotionPass(depthFormat);CreateDynamicMotion();
     for(unsigned eye=0;eye<2;++eye){
         const auto& source=targets[eye];auto& t=motionTargets[eye];t.motion=source.motion;t.depth=source.depth;t.width=source.width;t.height=source.height;
         auto views=[&](XrSwapchain chain,VkFormat format,VkImageAspectFlags aspect,std::vector<VkImageView>& out){
@@ -98,11 +130,11 @@ VkPipeline MotionPipeline(unsigned key) {
     VkPipelineViewportStateCreateInfo viewport{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};viewport.viewportCount=viewport.scissorCount=1;
     VkPipelineRasterizationStateCreateInfo rs{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};rs.polygonMode=VK_POLYGON_MODE_FILL;rs.lineWidth=1;rs.cullMode=(key&1)?VK_CULL_MODE_BACK_BIT:VK_CULL_MODE_NONE;rs.frontFace=(key&2)?VK_FRONT_FACE_CLOCKWISE:VK_FRONT_FACE_COUNTER_CLOCKWISE;rs.depthBiasEnable=(key&4)!=0;
     VkPipelineMultisampleStateCreateInfo ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};ms.rasterizationSamples=VK_SAMPLE_COUNT_1_BIT;
-    VkPipelineDepthStencilStateCreateInfo ds{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};ds.depthTestEnable=VK_TRUE;ds.depthWriteEnable=full;ds.depthCompareOp=VK_COMPARE_OP_ALWAYS;
+    VkPipelineDepthStencilStateCreateInfo ds{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};ds.depthTestEnable=full;ds.depthWriteEnable=full;ds.depthCompareOp=VK_COMPARE_OP_ALWAYS;
     VkPipelineColorBlendAttachmentState ba{};ba.colorWriteMask=0xf;
     VkPipelineColorBlendStateCreateInfo blend{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};blend.attachmentCount=1;blend.pAttachments=&ba;
     const VkDynamicState dynamicStates[]{VK_DYNAMIC_STATE_VIEWPORT,VK_DYNAMIC_STATE_SCISSOR,VK_DYNAMIC_STATE_DEPTH_BIAS};VkPipelineDynamicStateCreateInfo dynamic{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};dynamic.dynamicStateCount=3;dynamic.pDynamicStates=dynamicStates;
-    VkGraphicsPipelineCreateInfo ci{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};ci.stageCount=2;ci.pStages=stages;ci.pVertexInputState=&vertex;ci.pInputAssemblyState=&ia;ci.pViewportState=&viewport;ci.pRasterizationState=&rs;ci.pMultisampleState=&ms;ci.pDepthStencilState=&ds;ci.pColorBlendState=&blend;ci.pDynamicState=&dynamic;ci.layout=layouts[12];ci.renderPass=motionPass;
+    VkGraphicsPipelineCreateInfo ci{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};ci.stageCount=2;ci.pStages=stages;ci.pVertexInputState=&vertex;ci.pInputAssemblyState=&ia;ci.pViewportState=&viewport;ci.pRasterizationState=&rs;ci.pMultisampleState=&ms;ci.pDepthStencilState=&ds;ci.pColorBlendState=&blend;ci.pDynamicState=&dynamic;ci.layout=layouts[12];ci.renderPass=full?motionPass:dynamicMotionPass;
     VkPipeline pipeline{};Check(vkCreateGraphicsPipelines(device,VK_NULL_HANDLE,1,&ci,nullptr,&pipeline),"motion pipeline");motionPipelines[key]=pipeline;return pipeline;
 }
 bool MotionBind(const MotionConstants& constants,const std::vector<VkDescriptorImageInfo>& images,unsigned pipeline) {
@@ -148,18 +180,18 @@ std::vector<PreparedMotion> PrepareMotion(const fqmotion::Capture& capture) {
     }
     return prepared;
 }
-bool MotionEye(unsigned eye,VkFramebuffer framebuffer,const fqmotion::Capture& capture,const std::vector<PreparedMotion>& prepared) {
+bool DynamicMotionEye(unsigned eye,const fqmotion::Capture& capture,const std::vector<PreparedMotion>& prepared){
     const auto& frame=capture.history->CurrentFrame();const auto& prior=capture.history->SubmittedFrames()?capture.history->PreviousFrame():frame;
     MotionConstants c{};c.currentVP=frame.viewProjection[eye];c.previousVP=prior.viewProjection[eye];
-    if(!fqspacewarp::ClipReprojection(c.currentVP,c.previousVP,c.clipReprojection))return false;
-    // Both Vulkan extensions consume native NDC: [-1,1] XY, [0,1] Z.
-    c.scaleEye={1,-1,.5f,float(eye)};auto& t=motionTargets[eye];c.target={float(t.width),float(t.height),0,0};
-    VkRenderPassBeginInfo bi{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};bi.renderPass=motionPass;bi.framebuffer=framebuffer;bi.renderArea.extent={t.width,t.height};
+    c.scaleEye={1,-1,.5f,float(eye)};
+    c.target={float(width),float(height),0,0};
+    VkClearValue clear{};
+    VkRenderPassBeginInfo bi{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};bi.renderPass=dynamicMotionPass;bi.framebuffer=dynamicMotionFrames[eye];bi.renderArea.extent={width,height};bi.clearValueCount=1;bi.pClearValues=&clear;
     BeginPass(Motion,bi);
-    const VkViewport viewport{0,0,float(t.width),float(t.height),0,1};const VkRect2D scissor{{0,0},{t.width,t.height}};
+    const VkViewport viewport{0,0,float(width),float(height),0,1};const VkRect2D scissor{{0,0},{width,height}};
     vkCmdSetViewport(command,0,1,&viewport);vkCmdSetScissor(command,0,1,&scissor);
     std::vector<VkDescriptorImageInfo> images{{nearest,worldDepthReady?worldDepthSnapshot.view:depth.view,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},{sampler,white.view,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},{nearest,white.view,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},{nearest,white.view,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}};
-    bool complete=MotionBind(c,images,32);if(complete)vkCmdDraw(command,3,1,0,0);
+    bool complete=true;
     for(const auto& item:prepared){
         const auto& d=*item.draw;const auto& m=meshes.at(d.mesh);
         c.model=item.shape->model;c.previousModel=item.previous->model;c.flags={float(d.skinMode),float(d.alphaTest),float(d.vertexAlpha),d.alpha};c.target[2]=d.threshold;
@@ -178,6 +210,20 @@ bool MotionEye(unsigned eye,VkFramebuffer framebuffer,const fqmotion::Capture& c
     }
     EndPass();return complete&&prepared.size()==capture.draws.size();
 }
+bool MotionEye(unsigned eye,VkFramebuffer framebuffer,const fqmotion::Capture& capture){
+    const auto& frame=capture.history->CurrentFrame();const auto& prior=capture.history->SubmittedFrames()?capture.history->PreviousFrame():frame;
+    MotionConstants c{};c.currentVP=frame.viewProjection[eye];c.previousVP=prior.viewProjection[eye];
+    c.scaleEye={1,-1,.5f,float(eye)};
+    if(!fqspacewarp::ClipReprojection(c.currentVP,c.previousVP,c.clipReprojection))return false;
+    auto& t=motionTargets[eye];c.target={float(t.width),float(t.height),0,0};
+    VkRenderPassBeginInfo bi{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};bi.renderPass=motionPass;bi.framebuffer=framebuffer;bi.renderArea.extent={t.width,t.height};
+    BeginPass(Motion,bi);
+    const VkViewport viewport{0,0,float(t.width),float(t.height),0,1};const VkRect2D scissor{{0,0},{t.width,t.height}};
+    vkCmdSetViewport(command,0,1,&viewport);vkCmdSetScissor(command,0,1,&scissor);
+    const std::vector<VkDescriptorImageInfo> images{{nearest,worldDepthReady?worldDepthSnapshot.view:depth.view,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},{nearest,dynamicMotionImage.view,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},{nearest,white.view,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},{nearest,white.view,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}};
+    const bool complete=MotionBind(c,images,32);if(complete)vkCmdDraw(command,3,1,0,0);
+    EndPass();return complete;
+}
 void RenderMotion() {
     if(!motionCapture||!motionCoverage)return;
     const auto& capture=*motionCapture;auto* result=motionCoverage;motionCapture=nullptr;motionCoverage=nullptr;
@@ -189,16 +235,17 @@ void RenderMotion() {
     VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};b.image=depth.image;b.srcQueueFamilyIndex=b.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;b.subresourceRange={VK_IMAGE_ASPECT_DEPTH_BIT,0,1,0,2};
     b.oldLayout=VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;b.newLayout=VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;b.srcAccessMask=VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;b.dstAccessMask=VK_ACCESS_SHADER_READ_BIT;
     if(!worldDepthReady)vkCmdPipelineBarrier(command,VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT|VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,0,0,nullptr,0,nullptr,1,&b);
+    const std::array<bool,2> dynamicComplete{DynamicMotionEye(0,capture,prepared),DynamicMotionEye(1,capture,prepared)};
     for(unsigned eye=0;eye<2;++eye){auto& t=motionTargets[eye];
         auto acquire=[&](XrSwapchain chain,uint32_t& index,bool& ready){XrSwapchainImageAcquireInfo ai{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};CheckXr(Proc<PFN_xrAcquireSwapchainImage>(xrInstance,"xrAcquireSwapchainImage")(chain,&ai,&index),"acquire motion");XrSwapchainImageWaitInfo wi{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};wi.timeout=XR_INFINITE_DURATION;const auto status=Proc<PFN_xrWaitSwapchainImage>(xrInstance,"xrWaitSwapchainImage")(chain,&wi);if(status!=XR_SUCCESS)throw std::runtime_error("motion wait failed");ready=true;};
         acquire(t.motion,t.motionIndex,t.motionReady);acquire(t.depth,t.depthIndex,t.depthReady);
         if(t.motionIndex>=t.motionViews.size()||t.depthIndex>=t.depthViews.size())throw std::runtime_error("motion index out of range");
-        const bool rendered=MotionEye(eye,t.framebuffers[t.motionIndex*t.depthViews.size()+t.depthIndex],capture,prepared);
+        const bool rendered=MotionEye(eye,t.framebuffers[t.motionIndex*t.depthViews.size()+t.depthIndex],capture)&&dynamicComplete[eye];
         (*result)[eye]=capture.Coverage(rendered&&!lateWorldDepthWrite);
     }
     b.oldLayout=VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;b.newLayout=VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;b.srcAccessMask=VK_ACCESS_SHADER_READ_BIT;b.dstAccessMask=VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT|VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
     if(!worldDepthReady)vkCmdPipelineBarrier(command,VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT|VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,0,0,nullptr,0,nullptr,1,&b);
-    if((capture.history->CurrentFrame().serial%180)==1)VKLOG("FQ SPACEWARP motion backend=Vulkan serial=%llu coverage=%d/%d draws=%llu uploadBytes=%llu previousPaletteBytes=%zu queue=shared cpuWait=0 worldColour=shared uiOnlyLayer=1 reprojection=precomposed worldDepthRetained=%d lateDepthWrite=%d",
+    if((capture.history->CurrentFrame().serial%180)==1)VKLOG("FQ SPACEWARP motion backend=Vulkan serial=%llu coverage=%d/%d draws=%llu uploadBytes=%llu previousPaletteBytes=%zu queue=shared cpuWait=0 worldColour=shared uiOnlyLayer=1 reprojection=precomposed dynamicCoverage=scene-resolution worldDepthRetained=%d lateDepthWrite=%d",
         (unsigned long long)capture.history->CurrentFrame().serial,(*result)[0].Complete(capture.history->CurrentFrame().serial),(*result)[1].Complete(capture.history->CurrentFrame().serial),(unsigned long long)(motionDraws-drawBefore),(unsigned long long)(motionUploads-uploadBefore),motionPoseBytes,worldDepthReady,lateWorldDepthWrite);
 }
 void ReleaseMotion() {

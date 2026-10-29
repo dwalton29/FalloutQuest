@@ -1,5 +1,7 @@
 # Held movement, final body pose and SpaceWarp HUD — v278
 
+Follow-up: the headset confirmed the body distortion persisted with v278 and stopped with SpaceWarp disabled. [v279](spacewarp-skin-coverage-v279.md) corrects a reproduced fine-triangle motion-coverage defect.
+
 The headset confirmed v277 resolves the whole-image pitch judder. The remaining report describes a jiggly player model while walking and a held weapon staying behind, pulling the arm backward until it catches up.
 
 ## Concrete causes and changes

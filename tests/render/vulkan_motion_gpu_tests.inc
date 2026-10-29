@@ -107,6 +107,52 @@ void NativeMotion(bool srgb=false,bool densityEmulation=false) {
         ++motionCycles;
     }
     std::cout<<"Vulkan tracked-head stability: exact zero motion for stationary perspective cameras at wasteland/distant origins, pitched stationary poses, correct vertical translation and changing positive/negative pitch across the image in both eyes passed\n";
+    // A near-body surface travelling with its camera must not inherit static
+    // scenery motion. Use actual main-pass depth, perspective and a sloped skin,
+    // rather than clearing a flat synthetic depth plane for the motion replay.
+    // Adjacent small triangles have different slopes, like a skinned NIF surface.
+    Program(70,0);Set(70,"uNoLighting",{1});Set(70,"uMaterialAlpha",{1});Set(70,"uPipScreenGain",{1});
+    Set(70,"uActorSkinMode",{1});Set(70,"uObjectTransformEnabledQ2017",{1});
+    std::vector<float> bodyQuad,bodySkin;std::vector<uint32_t> bodyIndices;
+    for(unsigned y=0;y<=12;++y)for(unsigned x=0;x<=12;++x){
+        const float px=-.4f+float(x)/12*.8f,py=-.4f+float(y)/12*.8f;
+        const float z=-.7f+(((x+y)%2)? .025f:-.025f);
+        bodyQuad.insert(bodyQuad.end(),{px,py,z,0,0,1,1,0,0,0,1,0,float(x)/12,float(y)/12,1,1,1,1});
+        bodySkin.insert(bodySkin.end(),{1,0,0,0,0,0,0,0});
+        if(x<12&&y<12){const uint32_t i=y*13+x;bodyIndices.insert(bodyIndices.end(),{i,i+1,i+14,i,i+14,i+13});}
+    }
+    fqvk::Mesh(71,bodyQuad.data(),bodyQuad.size()/18,18,bodyIndices.data(),bodyIndices.size());fqvk::Skin(71,72,bodySkin.data(),bodySkin.size(),identity.data(),1);
+    fqgl::state.texture2d[6].Change(72);fqgl::state.texture2d[0].Change(22);
+    fqgl::state.depth.Change(true);fqgl::state.depthWrite.Change(true);fqgl::state.depthFunc.Change(GL_LEQUAL);fqgl::state.cull.Change(false);fqgl::state.blend.Change(false);
+    auto projection=fqskin::Identity();const float near=.04f,far=125000.f/70;
+    projection[0]=1.13f;projection[5]=1.07f;projection[10]=-(far+near)/(far-near);projection[11]=-1;projection[14]=-2*far*near/(far-near);projection[15]=0;
+    auto vp=[&](float x){auto m=projection;m[12]=-projection[0]*x;return m;};
+    fqspacewarp::History bodyHistory;fqspacewarp::Frame bodyFrame;bodyFrame.scene=1;bodyFrame.world=0x3c;bodyFrame.sceneReady=bodyFrame.focused=true;
+    fqspacewarp::Drawable oldBody;oldBody.geometry=71;oldBody.model[12]=157;oldBody.palette={identity};
+    bodyFrame.viewProjection={vp(157),vp(157)};
+    for(unsigned i=1;i<=2;++i){bodyFrame.serial=i;bodyFrame.displayTime=i*27777778;assert(bodyHistory.Begin(bodyFrame));assert(bodyHistory.Record(71,oldBody));bodyHistory.EyeRendered(0);bodyHistory.EyeRendered(1);assert(bodyHistory.Finish(true));}
+    auto currentBody=oldBody;currentBody.model[12]+=4.84f/36;
+    bodyFrame.serial=3;bodyFrame.displayTime=3*27777778;bodyFrame.viewProjection={vp(currentBody.model[12]),vp(currentBody.model[12])};
+    assert(bodyHistory.Begin(bodyFrame));fqmotion::Capture bodyCapture;bodyCapture.Begin(bodyHistory);bodyCapture.Main();
+    fqmotion::Draw bodyDraw;bodyDraw.identity=71;bodyDraw.mesh=71;bodyDraw.vbo=71;bodyDraw.vertices=int(bodyQuad.size()/18);bodyDraw.count=int(bodyIndices.size());bodyDraw.indexed=true;bodyDraw.cull=false;bodyDraw.skinMode=1;bodyDraw.paletteTexture=72;assert(bodyCapture.Record(bodyDraw,currentBody));
+    Set(70,"uObjectTransformQ2017",{1,0,0,0,0,1,0,0,0,0,1,0,currentBody.model[12],0,0,1});
+    assert(fqvk::BeginWorldProbe(bodyFrame.viewProjection[0].data(),bodyFrame.viewProjection[1].data(),eye,eye,false,nullptr,true));
+    Submit(70,71,GL_TRIANGLES,0,int(bodyIndices.size()),GL_UNSIGNED_INT,0,1);
+    std::array<fqspacewarp::Coverage,2> bodyCoverage{};fqvk::PostProcess({});fqvk::QueueSpacewarp(bodyCapture,bodyCoverage);
+    std::array<XrView,2> bodyViews{};std::array<XrCompositionLayerProjectionView,2> bodyOutput{};
+    assert(fqvk::PresentGameplay(bodyViews.data(),bodyOutput.data(),near,far));
+    for(unsigned e=0;e<2;++e){assert(bodyCoverage[e].Complete(3));
+        const auto pixels=read(motionImages[e][r.motionTargets[e].motionIndex],false),depths=read(depthImages[e][r.motionTargets[e].depthIndex],true);
+        unsigned interior=0,bad=0;float maximum=0;
+        for(unsigned y=1;y<31;++y)for(unsigned x=1;x<31;++x){const unsigned at=y*32+x;
+            if(depths[at]>=1||depths[at-1]>=1||depths[at+1]>=1||depths[at-32]>=1||depths[at+32]>=1)continue;
+            ++interior;assert(std::isfinite(pixels[at*4])&&std::isfinite(pixels[at*4+1])&&std::isfinite(pixels[at*4+2]));const float error=std::max({std::abs(pixels[at*4]),std::abs(pixels[at*4+1]),std::abs(pixels[at*4+2])});
+            maximum=std::max(maximum,error);bad+=error>.001f;
+        }
+        std::cout<<"Walking body cancellation eye="<<e<<" interior="<<interior<<" bad="<<bad<<" max="<<maximum<<std::endl;
+        assert(interior>200&&bad==0);
+    }
+    ++motionCycles;
     // Reproduce all three blockers from the headset log in ONE real GPU frame.
     // Original water/refraction, blended world material and post-film HUD must
     // remain pixel-equivalent while the opaque motion/depth coverage succeeds.
