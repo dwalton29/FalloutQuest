@@ -57,11 +57,16 @@ class VulkanShaders(unittest.TestCase):
             self.assertIn('length(q1532Clip.xyz)',converted[0])
             if name=='terrain':self.assertNotIn('uPaintCount',converted[1])
             if name=='terrain_fused':
+                legacy=vkbuild.port(vkbuild.sources()['terrain'],'terrain')
+                self.assertEqual(fields[:len(legacy[1])],legacy[1])
+                self.assertEqual(samplers[:len(legacy[2])],legacy[2])
+                self.assertIn('layout(constant_id=3) const int fqPaintCount',converted[1])
+                self.assertNotIn('Q239SharedLighting',converted[1])
                 self.assertIn('uPaintCount',converted[1])
                 self.assertIn('layout(location = 5) in vec3 aPaintAlpha',converted[0])
                 self.assertEqual(len(samplers),9)
                 self.assertIn('textureGrad(diffuseMap',converted[1])
-                self.assertLess(converted[1].index('uvDx = dFdx'),converted[1].index('if (uPaintCount == 0)'))
+                self.assertLess(converted[1].index('uvDx = dFdx'),converted[1].index('if (fqPaintCount == 0)'))
     def test_compile_link_validate(self):
         compiler=os.environ.get('FQ_SHADER_COMPILER') or shutil.which('glslangValidator')
         self.assertIsNotNone(compiler,'Set FQ_SHADER_COMPILER or install glslang-tools')

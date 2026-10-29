@@ -54,29 +54,29 @@ struct ProgramData {
     std::vector<Location> fields;
     std::vector<int> samplers;
     std::vector<int> units;
-    uint32_t lightingOffset=UINT32_MAX,localOffset=UINT32_MAX,environmentOffset=UINT32_MAX;
+    uint32_t lightingOffset=UINT32_MAX,localOffset=UINT32_MAX,environmentOffset=UINT32_MAX,paintOffset=UINT32_MAX;
     std::array<uint32_t,3> discardOffsets{{UINT32_MAX,UINT32_MAX,UINT32_MAX}};
 };
 void ConfigureDiscardGuards(ProgramData& p,const shaders::Program& shader) {
-    for(size_t i=0;i<shader.fieldCount;++i){const auto& f=shader.fields[i];if(!std::strcmp(f.name,"uNoLighting"))p.lightingOffset=f.offset;if(!std::strcmp(f.name,"uLocalLightCount"))p.localOffset=f.offset;if(!std::strcmp(f.name,"uEnvironmentPassQ2050"))p.environmentOffset=f.offset;}
+    for(size_t i=0;i<shader.fieldCount;++i){const auto& f=shader.fields[i];if(!std::strcmp(f.name,"uNoLighting"))p.lightingOffset=f.offset;if(!std::strcmp(f.name,"uLocalLightCount"))p.localOffset=f.offset;if(!std::strcmp(f.name,"uEnvironmentPassQ2050"))p.environmentOffset=f.offset;if(!std::strcmp(f.name,"uPaintCount"))p.paintOffset=f.offset;}
     const char* guards[]{"uWaterReflectionClipEnabledQ2090","uNativeLodClipEnabledQ1810","uAlphaTest"};
     for(size_t i=0;i<shader.fieldCount;++i)for(size_t j=0;j<3;++j)
         if(!std::strcmp(shader.fields[i].name,guards[j]))p.discardOffsets[j]=shader.fields[i].offset;
 }
 struct PipelineKey {
     uint32_t ui=0;bool strip=false,offscreen=false,swapchain=false,noDiscard=false,modal=false;
-    uint32_t lighting=0;bool noLocal=false,noEnvironment=false,foveated=false;
+    uint32_t paintCount=0,lighting=0;bool noLocal=false,noEnvironment=false,foveated=false;
     bool split=false,offset=false,water=false,sky=false,skinned=false,instanced=false,terrain=false,fused=false,depth=true,write=true,blend=false,cull=false,clockwise=false;
     uint32_t cullFace=GL_BACK,equation=GL_FUNC_ADD,equationA=GL_FUNC_ADD,stride=0,depthFunc=GL_LEQUAL,src=GL_ONE,dst=GL_ZERO,srcA=GL_ONE,dstA=GL_ZERO;
     bool operator==(const PipelineKey& k)const {
-        return lighting==k.lighting&&noLocal==k.noLocal&&noEnvironment==k.noEnvironment&&foveated==k.foveated&&split==k.split&&modal==k.modal&&noDiscard==k.noDiscard&&swapchain==k.swapchain&&offscreen==k.offscreen&&strip==k.strip&&ui==k.ui&&water==k.water&&offset==k.offset&&cullFace==k.cullFace&&equation==k.equation&&equationA==k.equationA&&sky==k.sky && skinned==k.skinned && instanced==k.instanced && terrain==k.terrain && fused==k.fused && depth==k.depth && write==k.write && blend==k.blend &&
+        return paintCount==k.paintCount&&lighting==k.lighting&&noLocal==k.noLocal&&noEnvironment==k.noEnvironment&&foveated==k.foveated&&split==k.split&&modal==k.modal&&noDiscard==k.noDiscard&&swapchain==k.swapchain&&offscreen==k.offscreen&&strip==k.strip&&ui==k.ui&&water==k.water&&offset==k.offset&&cullFace==k.cullFace&&equation==k.equation&&equationA==k.equationA&&sky==k.sky && skinned==k.skinned && instanced==k.instanced && terrain==k.terrain && fused==k.fused && depth==k.depth && write==k.write && blend==k.blend &&
             cull==k.cull && clockwise==k.clockwise && stride==k.stride && depthFunc==k.depthFunc &&
             src==k.src && dst==k.dst && srcA==k.srcA && dstA==k.dstA;
     }
 };
 struct PipelineHash {size_t operator()(const PipelineKey& k)const {
     size_t h=uint32_t(k.swapchain)*8191+uint32_t(k.offscreen)*4093+uint32_t(k.strip)*2017+k.ui*1009+uint32_t(k.water)*997+k.stride+uint32_t(k.instanced)*31+uint32_t(k.skinned)+uint32_t(k.sky)*101;for(auto v:{uint32_t(k.terrain),uint32_t(k.fused),uint32_t(k.depth),uint32_t(k.write),uint32_t(k.blend),
-        k.lighting,uint32_t(k.noLocal),uint32_t(k.noEnvironment),uint32_t(k.foveated),uint32_t(k.split),uint32_t(k.modal),uint32_t(k.noDiscard),uint32_t(k.cull),uint32_t(k.clockwise),uint32_t(k.offset),k.cullFace,k.equation,k.equationA,k.depthFunc,k.src,k.dst,k.srcA,k.dstA}) { h=(h*16777619u)^v; }
+        k.paintCount,k.lighting,uint32_t(k.noLocal),uint32_t(k.noEnvironment),uint32_t(k.foveated),uint32_t(k.split),uint32_t(k.modal),uint32_t(k.noDiscard),uint32_t(k.cull),uint32_t(k.clockwise),uint32_t(k.offset),k.cullFace,k.equation,k.equationA,k.depthFunc,k.src,k.dst,k.srcA,k.dstA}) { h=(h*16777619u)^v; }
     return h;
 }};
 VkBlendFactor Blend(uint32_t x) {
@@ -780,9 +780,9 @@ public:
         std::array<VkPipelineShaderStageCreateInfo,2> stages{};
         for(int i=0;i<2;++i){stages[i].sType=VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;stages[i].stage=i?VK_SHADER_STAGE_FRAGMENT_BIT:VK_SHADER_STAGE_VERTEX_BIT;stages[i].module=modules[kind][i];stages[i].pName="main";}
         if(key.noDiscard)stages[1].module=solidModules[key.fused?2:kind];
-        const uint32_t materialConstants[]{key.lighting,uint32_t(key.noLocal),uint32_t(key.noEnvironment)};
-        const VkSpecializationMapEntry materialEntries[]{{0,0,4},{1,4,4},{2,8,4}};
-        const VkSpecializationInfo materialSpecialization{3,materialEntries,sizeof(materialConstants),materialConstants};
+        const uint32_t materialConstants[]{key.lighting,uint32_t(key.noLocal),uint32_t(key.noEnvironment),key.paintCount};
+        const VkSpecializationMapEntry materialEntries[]{{0,0,4},{1,4,4},{2,8,4},{3,12,4}};
+        const VkSpecializationInfo materialSpecialization{4,materialEntries,sizeof(materialConstants),materialConstants};
         if(kind<2||kind==TerrainFusionKind)stages[1].pSpecializationInfo=&materialSpecialization;
         if(key.split&&(kind<4||key.fused))stages[1].module=splitModules[key.fused?(key.noDiscard?7:6):kind==3?5:key.noDiscard?kind+3:kind];
         VkVertexInputBindingDescription binding{0,key.stride*4,VK_VERTEX_INPUT_RATE_VERTEX};
@@ -901,7 +901,11 @@ public:
         if((mode!=GL_TRIANGLES&&mode!=GL_TRIANGLE_STRIP)||(type&&type!=GL_UNSIGNED_INT)){skip(2);return;}
         if(count<=0||instances<=0||(instances>1&&draw.transforms.size()<size_t(instances)*16)){skip(4);return;}
         if(UsesSkin(p,item.uniforms)&&!mIt->second.skin.buffer){skip(3);return;}
-        const auto& m=mIt->second;const int kind=p.ui?p.ui:p.water?3:p.sky?2:p.terrain?(p.fused?TerrainFusionKind:1):0;
+        const auto& m=mIt->second;
+        // Only 15-float meshes carry fused paint attributes. Ordinary retained
+        // batches use the original 3-sampler material and its common UBO prefix.
+        const bool fused=p.fused&&m.stride==15;
+        const int kind=p.ui?p.ui:p.water?3:p.sky?2:p.terrain?(fused?TerrainFusionKind:1):0;
         const uint32_t indexFirst=type?(p.terrain?0:uint32_t(offset/4)):uint32_t(first);
         if(indexFirst>m.count||uint32_t(count)>m.count-indexFirst||(type&&!m.indices.buffer)){skip(4);return;}
         const auto drawStarted=passTiming?NowUs():0;
@@ -909,13 +913,14 @@ public:
         if(splitFrame&&worldDepthReady&&!p.ui&&!postDone&&s.depth&&s.write)lateWorldDepthWrite=true;
         if(p.ui&&(densityActive||(splitFrame&&!worldDepthReady)))FullRateScene();
         else if(!p.ui&&splitFrame&&!sidecarPass&&!offscreen&&!postDone)ResumeSidecar();
-        PipelineKey key;key.modal=modalActive;key.offscreen=offscreen;key.swapchain=directOutput||(compactFrame&&postDone);key.strip=mode==GL_TRIANGLE_STRIP;key.ui=uint32_t(p.ui);key.water=p.water;key.sky=p.sky;key.terrain=p.terrain;key.fused=p.fused;key.stride=m.stride;key.instanced=instances>1;key.skinned=UsesSkin(p,item.uniforms);
+        PipelineKey key;key.modal=modalActive;key.offscreen=offscreen;key.swapchain=directOutput||(compactFrame&&postDone);key.strip=mode==GL_TRIANGLE_STRIP;key.ui=uint32_t(p.ui);key.water=p.water;key.sky=p.sky;key.terrain=p.terrain;key.fused=fused;key.stride=m.stride;key.instanced=instances>1;key.skinned=UsesSkin(p,item.uniforms);
         key.split=sidecarPass&&!offscreen&&!postDone;key.foveated=densityActive&&!offscreen&&!postDone;
         if(!genericShaders&&(kind<2||p.fused)){
             if(p.lightingOffset!=UINT32_MAX){float value;std::memcpy(&value,item.uniforms.data()+p.lightingOffset,4);key.lighting=value>.5f?1:value<.5f?2:0;}
             if(p.environmentOffset!=UINT32_MAX){float value;std::memcpy(&value,item.uniforms.data()+p.environmentOffset,4);key.noEnvironment=value<=.5f;}
             if(p.localOffset!=UINT32_MAX){int count;std::memcpy(&count,item.uniforms.data()+p.localOffset,4);key.noLocal=count<=0;}
         }
+        if(fused&&p.paintOffset!=UINT32_MAX){int count;std::memcpy(&count,item.uniforms.data()+p.paintOffset,4);key.paintCount=uint32_t(std::clamp(count,0,3));}
         key.depth=s.depth;key.write=s.write;key.blend=s.blend;key.cull=s.cull;key.clockwise=s.clockwise;
         key.depthFunc=s.depthFunc;key.src=s.src;key.dst=s.dst;key.srcA=s.srcAlpha;key.dstA=s.dstAlpha;
         key.cullFace=s.cullFace;key.equation=s.equation;key.equationA=s.equationAlpha;key.offset=s.offset;
@@ -924,8 +929,9 @@ public:
         const VkDeviceSize alignment=std::max<VkDeviceSize>(16,properties.limits.minUniformBufferOffsetAlignment);
         cursor=(cursor+alignment-1)&~(alignment-1);
         const size_t instanceBytes=key.instanced?size_t(instances)*64:0;
-        if(cursor+item.uniforms.size()+instanceBytes>arena.size||draws>=8176){++skipped;++skipReasons[5];return;}
-        std::memcpy(static_cast<uint8_t*>(arena.mapped)+cursor,item.uniforms.data(),item.uniforms.size());
+        const size_t uniformBytes=shaders::programs[kind].uniformSize;
+        if(cursor+uniformBytes+instanceBytes>arena.size||draws>=8176){++skipped;++skipReasons[5];return;}
+        std::memcpy(static_cast<uint8_t*>(arena.mapped)+cursor,item.uniforms.data(),uniformBytes);
         if(p.water)for(const auto& e:p.fields) {
             float* out=reinterpret_cast<float*>(static_cast<uint8_t*>(arena.mapped)+cursor+e.field.offset);
             if(!std::strcmp(e.field.name,"uSceneSnapshotReady"))*out=snapshotReady?1.0f:0.0f;
@@ -934,13 +940,13 @@ public:
         }
         // Native scene attachments are FP16 even when the compatibility
         // frontend's legacy RTT state is inactive. Match the actual blend target.
-        if(p.fused&&!offscreen&&!postDone)for(const auto& e:p.fields)
+        if(fused&&!offscreen&&!postDone)for(const auto& e:p.fields)
             if(!std::strcmp(e.field.name,"uRoundMode")) {
                 const int mode=1;std::memcpy(static_cast<uint8_t*>(arena.mapped)+cursor+e.field.offset,&mode,4);
             }
-        std::vector<VkDescriptorImageInfo> imageInfo(item.units.size());
+        std::vector<VkDescriptorImageInfo> imageInfo(shaders::programs[kind].samplerCount);
         const auto* samplerMeta=shaders::programs[kind].samplers;
-        for(size_t i=0;i<item.units.size();++i){
+        for(size_t i=0;i<imageInfo.size();++i){
             VkImageView view=samplerMeta[i].cube?cube.view:white.view;
             const int unit=item.units[i];
             VkSampler chosenSampler=samplerMeta[i].cube?clamped:sampler;
@@ -960,8 +966,8 @@ public:
             }
             imageInfo[i]={chosenSampler,view,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
         }
-        const auto set=Descriptor(kind,uint32_t(item.uniforms.size()),imageInfo);
-        const uint32_t dynamic=uint32_t(cursor);cursor+=item.uniforms.size();
+        const auto set=Descriptor(kind,uint32_t(uniformBytes),imageInfo);
+        const uint32_t dynamic=uint32_t(cursor);cursor+=uniformBytes;
         const VkDeviceSize instanceOffset=cursor;
         if(key.instanced){std::memcpy(static_cast<uint8_t*>(arena.mapped)+cursor,draw.transforms.data(),instanceBytes);cursor+=instanceBytes;}
         const VkViewport viewport{0,0,float(targetWidth),float(targetHeight),0,1};const VkRect2D scissor{{0,0},{targetWidth,targetHeight}};

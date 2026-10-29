@@ -409,35 +409,11 @@ GLuint Q76BCreateProgram() {
             visible += projected.z - bias <= texture(uShadowMap, projected.xy + vec2( halfTexel.x,  halfTexel.y)).r ? 1.0 : 0.0;
             return visible * 0.25;
         }
-// Q239: geometric lighting terms are lighting by the original LAND materials;
-        // normals, shadow/specular evaluation and layer blending remain per material.
-        struct Q239SharedLighting {
-            vec3 sunDirection;
-            vec3 localDirection[8];
-            float localAttenuation[8];
-        };
-        Q239SharedLighting Q239PrepareSharedLighting() {
-            Q239SharedLighting lighting;
-            lighting.sunDirection = normalize(uSunDirection);
-            for (int i = 0; i < 8; ++i) {
-                if (i >= uLocalLightCount) break;
-                vec3 toLight = uLocalLightPosRadius[i].xyz - vPosition;
-                float distanceToLight = length(toLight);
-                float radius = max(uLocalLightPosRadius[i].w, 0.001);
-                if (distanceToLight >= radius) {
-                    lighting.localAttenuation[i] = -1.0;
-                    continue;
-                }
-                lighting.localDirection[i] = toLight / max(distanceToLight, 0.001);
-                float edge = clamp(1.0 - distanceToLight / radius, 0.0, 1.0);
-                lighting.localAttenuation[i] =
-                    pow(edge, max(uLocalLightColorFalloff[i].w, 0.25));
-            }
-            return lighting;
-        }
+        // Keep light intermediates local to each material. The old shared
+        // eight-light arrays increased live fragment state across paint layers.
         vec3 Q238ShadeLayer(sampler2D diffuseMap, sampler2D normalMap,
                              int useTexture, int useNormal, float specularEnabled,
-                             Q239SharedLighting lighting, vec2 uvDx, vec2 uvDy) {
+                             vec2 uvDx, vec2 uvDy) {
             vec3 N = normalize(vNormal);
             vec4 normalGloss = vec4(0.5, 0.5, 1.0, 0.0);
             if (useNormal != 0) {
@@ -452,11 +428,7 @@ GLuint Q76BCreateProgram() {
                 N = normalize(mat3(T, B, N) * tangentNormal);
             }
 
-#ifdef FQ239_UNSHARED_LIGHTS
             vec3 lightDirection = normalize(uSunDirection);
-#else
-            vec3 lightDirection = lighting.sunDirection;
-#endif
             float lambert = max(dot(N, lightDirection), 0.0);
             vec3 earthFallback = vec3(0.34, 0.27, 0.18);
             vec3 albedo = (useTexture != 0 ? textureGrad(diffuseMap, vTexCoord, uvDx, uvDy).rgb : earthFallback) * vVertexColor;
@@ -470,7 +442,6 @@ GLuint Q76BCreateProgram() {
                 float specular = pow(max(dot(N, H), 0.0), 18.0) * normalGloss.a * 0.24;
                 lit += uSunlightColor * specular * q1050SunVisibility;
             }
-#ifdef FQ239_UNSHARED_LIGHTS
             for (int i = 0; i < 8; ++i) {
                 if (i >= uLocalLightCount) break;
                 vec3 toLight = uLocalLightPosRadius[i].xyz - vPosition;
@@ -483,15 +454,7 @@ GLuint Q76BCreateProgram() {
                 float attenuation = pow(edge, max(uLocalLightColorFalloff[i].w, 0.25));
                 lit += albedo * uLocalLightColorFalloff[i].rgb * localLambert * attenuation;
             }
-#else
-            for (int i = 0; i < 8; ++i) {
-                if (i >= uLocalLightCount) break;
-                if (lighting.localAttenuation[i] < 0.0) continue;
-                float localLambert = max(dot(N, lighting.localDirection[i]), 0.0);
-                lit += albedo * uLocalLightColorFalloff[i].rgb *
-                       localLambert * lighting.localAttenuation[i];
-            }
-#endif
+
             // PC SLS2100.vso computes LAND fog per vertex from transformed
             // position, FogParam=(far, far-near, power, _), then SLS2124.pso
             // blends against the interpolated factor. Use the already matching
@@ -519,22 +482,21 @@ GLuint Q76BCreateProgram() {
             vec2 uvDx = dFdx(vTexCoord), uvDy = dFdy(vTexCoord);
             if (uWaterReflectionClipEnabledQ2090 > 0.5 &&
                 vPosition.y < uWaterReflectionPlaneYQ2090) { discard; }
-            Q239SharedLighting lighting = Q239PrepareSharedLighting();
             vec3 base = Q238ShadeLayer(uDiffuse, uNormalGloss, uUseTexture,
-                                      uUseNormal, uTerrainSpecularEnabled, lighting, uvDx, uvDy);
+                                      uUseNormal, uTerrainSpecularEnabled, uvDx, uvDy);
             if (uPaintCount == 0) {
                 fragColor = vec4(base, clamp(vAlpha, 0.0, 1.0));
                 return;
             }
             highp vec4 result = Q238Round(vec4(base, 1.0));
             if (uPaintCount > 0 && vPaintAlpha.x != 0.0) result = Q238Over(result,
-                Q238ShadeLayer(uPaintDiffuse0, uPaintNormal0, 1, int(uPaintFlags0.x), uPaintFlags0.y, lighting, uvDx, uvDy),
+                Q238ShadeLayer(uPaintDiffuse0, uPaintNormal0, 1, int(uPaintFlags0.x), uPaintFlags0.y, uvDx, uvDy),
                 vPaintAlpha.x);
             if (uPaintCount > 1 && vPaintAlpha.y != 0.0) result = Q238Over(result,
-                Q238ShadeLayer(uPaintDiffuse1, uPaintNormal1, 1, int(uPaintFlags1.x), uPaintFlags1.y, lighting, uvDx, uvDy),
+                Q238ShadeLayer(uPaintDiffuse1, uPaintNormal1, 1, int(uPaintFlags1.x), uPaintFlags1.y, uvDx, uvDy),
                 vPaintAlpha.y);
             if (uPaintCount > 2 && vPaintAlpha.z != 0.0) result = Q238Over(result,
-                Q238ShadeLayer(uPaintDiffuse2, uPaintNormal2, 1, int(uPaintFlags2.x), uPaintFlags2.y, lighting, uvDx, uvDy),
+                Q238ShadeLayer(uPaintDiffuse2, uPaintNormal2, 1, int(uPaintFlags2.x), uPaintFlags2.y, uvDx, uvDy),
                 vPaintAlpha.z);
             fragColor = result;
         }

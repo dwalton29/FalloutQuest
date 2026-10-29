@@ -46,7 +46,7 @@ void TerrainFusionGpu(bool split,bool density=false) {
     const uint8_t shadow[]{255,255,255,255};fqvk::Texture(940,1,1,shadow);
     auto sampler=[&](uint32_t program,const char* name,int unit){const int location=fqrender::UniformLocation(program,name);fqvk::hooks.uniform(program,location,2,4,&unit);};
     const float left[]{1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1},right[]{1,0,0,0,0,1,0,0,0,0,1,0,.17f,.08f,0,1},eye[]{0,0,2};
-    for(int scenario=0;scenario<=5;++scenario)for(bool indexed:{false,true})for(bool lit:{false,true})for(bool clipped:{false,true}) {
+    for(int scenario=0;scenario<=5;++scenario)for(bool indexed:{false,true})for(int lights:{0,1,8})for(bool clipped:{false,true}) {
         const int layers=std::min(scenario,4);const bool mixed=scenario==4;
         std::vector<FusionGpuBatch> original;
         FusionGpuBatch base;base.texturePath="d0";base.normalPath="n0";base.specularEnabled=true;
@@ -77,7 +77,9 @@ void TerrainFusionGpu(bool split,bool density=false) {
             for(const auto id:{900u,901u}) {
                 Set(id,"uAmbientColor",{.4f,.3f,.2f});Set(id,"uSunlightColor",{4.f,3.f,2.f});Set(id,"uSunDirection",{.1f,.2f,1});
                 Set(id,"uFogNearVertexQ1532",{0});Set(id,"uFogFarVertexQ1532",{2});Set(id,"uFogPowerVertexQ1532",{1.4f});Set(id,"uFogColor",{.3f,.4f,.6f});
-                Set(id,"uLocalLightCount",{lit?1.f:0.f});Set(id,"uLocalLightPosRadius",{.2f,.1f,1,5});Set(id,"uLocalLightColorFalloff",{.7f,.2f,.4f,1.1f});
+                Set(id,"uLocalLightCount",{float(lights)});
+                Set(id,"uLocalLightPosRadius",{.2f,.1f,1,5, -.4f,.2f,1,3, .8f,.1f,2,5, 20,20,20,1, .3f,.8f,1,4, -.5f,-.4f,2,6, .2f,-.6f,1,5, -.9f,.9f,2,5});
+                Set(id,"uLocalLightColorFalloff",{.7f,.2f,.4f,1.1f, .1f,.2f,.1f,2, .2f,.1f,.1f,1, 1,1,1,1, .1f,.1f,.2f,3, .1f,.2f,.1f,1, .2f,.1f,.1f,2, .1f,.1f,.1f,1});
                 Set(id,"uShadowsEnabled",{1});Set(id,"uShadowTexelSize",{1,1});Set(id,"uLightMvp",{1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1});
                 Set(id,"uWaterReflectionClipEnabledQ2090",{clipped?1.f:0.f});Set(id,"uWaterReflectionPlaneYQ2090",{0});
                 sampler(id,"uDiffuse",0);sampler(id,"uNormalGloss",1);sampler(id,"uShadowMap",3);
@@ -99,7 +101,17 @@ void TerrainFusionGpu(bool split,bool density=false) {
                 fqgl::state.srcRgb.Change(GL_SRC_ALPHA);fqgl::state.dstRgb.Change(GL_ONE_MINUS_SRC_ALPHA);fqgl::state.srcAlpha.Change(GL_SRC_ALPHA);fqgl::state.dstAlpha.Change(GL_ONE_MINUS_SRC_ALPHA);
                 Submit(program,mesh,GL_TRIANGLES,0,int(b.indices.empty()?b.vertices.size()/b.vertexFloats:b.indices.size()),b.indices.empty()?0:GL_UNSIGNED_INT,b.vertices.size()*4,1);
             }
-            r.DrainDraws();if(split)r.FullRateScene();
+            r.DrainDraws();
+            for(const auto& entry:r.pipelines)if(entry.first.terrain){
+                const auto& key=entry.first;
+                assert(key.fused==(key.stride==15));
+                if(key.fused)assert(key.paintCount>=1&&key.paintCount<=3);
+            }
+            for(const auto& entry:r.descriptorCache)if(entry.first.kind==1){
+                assert(entry.first.images.size()==3);
+                assert(entry.first.uniformBytes==fqvk::shaders::terrainUniformSize);
+            }
+            if(split)r.FullRateScene();
             fqvk::EndWorldProbe();assert(fqvk::WorldProbeActive()&&r.skipped==0);
             const auto pixels=r.Readback();const auto depths=FusionDepth(r.depth,VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
             if(!combined){reference=pixels;referenceDepth=depths;legacyDraws=r.draws;}

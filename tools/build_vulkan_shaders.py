@@ -125,9 +125,10 @@ def port(pair,kind="world"):
                 main=re.sub(r'\buEnvironmentPassQ2050\b','(fqNoEnvironmentPass?0.0:uEnvironmentPassQ2050)',main)
                 main=re.sub(r'\buNoLighting\b','(fqLightingMode==1?1.0:(fqLightingMode==2?0.0:uNoLighting))',main)
             if kind=='terrain_fused':
-                # Shared-light helpers precede main; specialise their loop too.
+                # Layer helpers precede main; declare constants before them.
                 prefix=prefix.replace('i >= uLocalLightCount','i >= (fqNoLocalLights?0:uLocalLightCount)')
-                prefix=prefix.replace('struct Q239SharedLighting',constants+'struct Q239SharedLighting',1)
+                prefix=prefix.replace('vec3 Q238ShadeLayer',constants+'layout(constant_id=3) const int fqPaintCount=3;\nvec3 Q238ShadeLayer',1)
+                main=re.sub(r'\buPaintCount\b','fqPaintCount',main)
                 constants=''
             text=prefix+constants+'void main()'+main
         converted.append(text)
@@ -160,6 +161,13 @@ def no_discard_fragment(source, kind):
     return source
 
 def build(output,compiler):
+    # Retained batches select the legacy pipeline from a fused registration.
+    # Reject ABI drift before emitting binaries: no host remapping is needed.
+    pairs=sources()
+    legacy=port(pairs['terrain'],'terrain')
+    fused=port(pairs['terrain_fused'],'terrain_fused')
+    if legacy[1]!=fused[1][:len(legacy[1])] or legacy[2]!=fused[2][:len(legacy[2])]:
+        raise ValueError('Terrain fallback material prefix changed')
     output.mkdir(parents=True,exist_ok=True)
     cpp=['#pragma once','#include <cstdint>','#include <cstddef>','#include <iterator>','namespace fqvk::shaders {',
          'struct Field { const char* name; uint32_t offset, size, components, count; bool integer; };',
