@@ -10,7 +10,7 @@ Before the fix, 52 of 328 interior body pixels in the first eye retained static-
 
 ## Correction
 
-Moving geometry now replays into an owned two-eye RGBA16F motion image at scene resolution. It uses the original current and previous roots, palettes/deformation, material cutout and depth occlusion rules. Each covered fragment writes a validity marker alongside its vector. Static reconstruction then selects the exact same scene texel for motion and retained depth, replacing the scenery proxy where a visible dynamic fragment exists. The runtime swapchains retain their queried recommended dimensions.
+Moving geometry now replays into an owned two-eye RGBA16F motion image at scene resolution. It uses the original current and previous roots, palettes/deformation, material cutout and depth occlusion rules. Each covered fragment writes a validity marker alongside its vector. Static reconstruction then selects the exact same scene texel for motion and retained depth, replacing the scenery proxy where a visible dynamic fragment exists. Both inputs use explicit integer texel fetches, including the full-resolution depth test, so GPU-specific nearest-filter tie-breaking cannot select different pixels at sample boundaries. The runtime swapchains retain their queried recommended dimensions.
 
 Both full-resolution eye passes finish before the array image is sampled. Render-pass dependencies order previous reads, colour writes and subsequent sampling on the existing shared session queue. No per-frame CPU waits/readbacks are added. The dynamic image and its eye views/framebuffers are owned by the motion producer and destroyed after GPU idle, including partial initialization failure. Renderer initialization failure continues to retain native presentation.
 

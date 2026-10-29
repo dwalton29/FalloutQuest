@@ -13,12 +13,13 @@ layout(set=0,binding=3) uniform sampler2DArray dynamicMotion;
 layout(location=0) in vec2 uv;
 layout(location=0) out vec4 velocity;
 void main(){
- float d=texture(sceneDepth,vec3(uv,scaleEye.w)).r;gl_FragDepth=d;
+ ivec2 size=textureSize(sceneDepth,0).xy;
+ ivec2 pixel=clamp(ivec2(uv*vec2(size)),ivec2(0),size-1);
+ float d=texelFetch(sceneDepth,ivec3(pixel,int(scaleEye.w)),0).r;gl_FragDepth=d;
  vec4 current=vec4(uv.x*2-1,1-uv.y*2,d*2-1,1);
  vec4 previous=clipReprojection*current;velocity=vec4(0);
  if(d<1&&previous.w>0.000001)velocity.xyz=(current.xyz-previous.xyz/previous.w)*scaleEye.xyz;
  // Match the exact full-resolution texel selected for retained scene depth.
- ivec2 pixel=clamp(ivec2(uv*vec2(textureSize(dynamicMotion,0).xy)),ivec2(0),textureSize(dynamicMotion,0).xy-1);
  vec4 objectMotion=texelFetch(dynamicMotion,ivec3(pixel,int(scaleEye.w)),0);
  if(objectMotion.w>.5)velocity.xyz=objectMotion.xyz;
 }
@@ -63,13 +64,8 @@ layout(location=2) in vec2 uv;
 layout(location=3) in float vertexAlpha;
 layout(location=0) out vec4 velocity;
 void main(){
- vec2 screen=gl_FragCoord.xy/target.xy;
- vec2 sourceSize=vec2(textureSize(sceneDepth,0).xy);
- vec2 sampleUv=(floor(screen*sourceSize)+.5)/sourceSize;
- vec2 offset=(sampleUv-screen)*target.xy;
- float d=gl_FragCoord.z;
- float sampleDepth=d+dFdx(d)*offset.x+dFdy(d)*offset.y;
- if(sampleDepth>texture(sceneDepth,vec3(screen,scaleEye.w)).r+2.0/16777215.0)discard;
+ // This pass has the retained scene depth's exact resolution and samples.
+ if(gl_FragCoord.z>texelFetch(sceneDepth,ivec3(ivec2(gl_FragCoord.xy),int(scaleEye.w)),0).r+2.0/16777215.0)discard;
  if(flags.y>0&&texture(diffuse,uv).a*flags.w*(flags.z>0?vertexAlpha:1)<target.z)discard;
  velocity=vec4(0,0,0,1);
  if(previousClip.w>0.000001&&currentClip.w>0.000001)velocity.xyz=(currentClip.xyz/currentClip.w-previousClip.xyz/previousClip.w)*scaleEye.xyz;
