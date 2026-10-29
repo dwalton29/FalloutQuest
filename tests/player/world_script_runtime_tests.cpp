@@ -24,6 +24,7 @@ bool Fo3ResidentFrameBlocked(){return false;}
 void FlushFo3PlayerState(){++saves;}
 bool PublishFo3DialogueReferences(fo3player::Player& p,fo3player::ScriptTransactionPlan& plan,std::string&){return p.CommitScriptTransaction(plan);}
 uint64_t BeginFo3ResidentPreparedWorkflow(int,std::unique_ptr<fo3player::ScriptTransactionPlan>){return 0;}
+std::vector<uint32_t> GetFo3ScriptCollisionTargets(uint32_t){return {0,1};}
 Fo3DoorCollisionPose collision;int collisionUpdates=0;
 bool SetFo3ScriptCollisionPose(uint32_t,const Fo3DoorCollisionPose& pose){collision=pose;++collisionUpdates;return true;}
 float gQ210Head[4]{};

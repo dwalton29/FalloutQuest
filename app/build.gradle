@@ -22,8 +22,8 @@ android {
         applicationId 'com.falloutquest.app'
         minSdk 29
         targetSdk 35
-        versionCode 284
-        versionName '0.136.0-tiled-occlusion'
+        versionCode 285
+        versionName '0.137.0-door-gate-visibility'
 
         ndk {
             abiFilters 'arm64-v8a'

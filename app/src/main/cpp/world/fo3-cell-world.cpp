@@ -841,34 +841,15 @@ std::string DestinationName(const Fo3DoorTeleport& teleport) {
     return FullName(worldIt->second);
 }
 
+// HUD queries consume scene-prepared metadata only. Missing XTEL is a normal
+// local-door result, never a reason to synchronously scan the ESM while aiming.
 bool EnsureDoorMetadata(uint32_t sourceDoorRef) {
-    if (gDoorMetadata.find(sourceDoorRef) != gDoorMetadata.end()) return true;
-    if (!EnsureIndex()) return false;
-
-    const auto baseIt = gRefBases.find(sourceDoorRef);
-    if (baseIt == gRefBases.end() || baseIt->second == 0u) return false;
-
-    Fo3DoorTeleport teleport;
-    if (!ResolveFo3DoorTeleportQ1700(sourceDoorRef, &teleport) || !teleport.valid) {
-        return false;
-    }
-
-    Metadata meta;
-    meta.sourceBase = baseIt->second;
-    meta.teleport = teleport;
-    MarkFo3DoorResourcesChanged();
-    gDoorMetadata[sourceDoorRef] = meta;
-    Q71_LOGI("Q16.12 PROMPT METADATA LAZY: sourceDoor=%08X sourceBase=%08X destinationDoor=%08X destinationCell=%08X source=Fallout3.esm",
-             sourceDoorRef, meta.sourceBase,
-             teleport.destinationDoorRefFormId,
-             teleport.destinationCellFormId);
-    return true;
+    return gDoorMetadata.find(sourceDoorRef) != gDoorMetadata.end();
 }
 
 bool BuildPrompt(uint32_t sourceDoorRef, std::string& out) {
     out.clear();
-    if (!EnsureDoorMetadata(sourceDoorRef)) return false;
-    if (!EnsureIndex()) return false;
+    if (!EnsureDoorMetadata(sourceDoorRef) || !gIndexReady) return false;
 
     const Metadata& meta = gDoorMetadata[sourceDoorRef];
     const std::string doorName = FullName(meta.sourceBase);

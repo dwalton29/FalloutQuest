@@ -13,6 +13,7 @@ extern void PumpFo3AndroidEventsQ1860();
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <chrono>
 #include <cstdint>
 #include <limits>
 #include <memory>
@@ -123,7 +124,9 @@ uint64_t gPipLocalMapRevision=0;
 uint64_t gCollisionPublicationRevision = 1u;
 bool gRigidFullDirty=true;
 std::unordered_set<uint32_t> gRigidDirtyRefs;
+void InvalidateAnimatedReferenceIndex();
 void AdvanceFo3CollisionPublicationRevision(uint32_t changedRef=0) {
+    if(!changedRef)InvalidateAnimatedReferenceIndex();
     if(changedRef)gRigidDirtyRefs.insert(changedRef);else gRigidFullDirty=true;
     if (++gCollisionPublicationRevision == 0u) ++gCollisionPublicationRevision;
 }
@@ -2304,6 +2307,7 @@ void DiscardFo3CollisionSnapshotQ1930(uint64_t token) {
 }
 
 void InvalidateDerivedCollisionCachesQ17() {
+    InvalidateAnimatedReferenceIndex();
     gHkWeldAdjacencyReadyQ801 = false;
     gHkShapesReadyQ900 = false;
     gQ950Ready = false;
@@ -2363,6 +2367,16 @@ bool SetFo3DoorCollisionTransformQ2400(uint32_t refFormId,const float transform[
     return true;
 }
 
+#include "fo3-animated-collision.inc"
+
+std::vector<uint32_t> GetFo3ScriptCollisionTargets(uint32_t reference) {
+    std::vector<uint32_t> targets;
+    const auto cached=gQ1990CollisionPlacementCache.find(reference);
+    if(cached!=gQ1990CollisionPlacementCache.end())for(const auto& t:cached->second.triangles)
+        if(t.animationTargetBlock!=0xffffffffu&&std::find(targets.begin(),targets.end(),t.animationTargetBlock)==targets.end())targets.push_back(t.animationTargetBlock);
+    return targets;
+}
+
 bool SetFo3ScriptCollisionPose(uint32_t reference,const Fo3DoorCollisionPose& requested){
     if(!reference||!gPlayerCollisionReady)return false;
     const auto cached=gQ1990CollisionPlacementCache.find(reference);
@@ -2374,6 +2388,7 @@ bool SetFo3ScriptCollisionPose(uint32_t reference,const Fo3DoorCollisionPose& re
     }
     const auto previous=gDoorCollisionPoses.find(reference);
     if(previous!=gDoorCollisionPoses.end()&&previous->second==pose)return true;
+    const auto poseStarted=std::chrono::steady_clock::now();
     std::vector<CollisionTriangle> moved;moved.reserve(cached->second.triangles.size());
     for(const auto& original:cached->second.triangles){
         const auto node=pose.nodeTransforms.find(original.animationTargetBlock);
@@ -2381,7 +2396,16 @@ bool SetFo3ScriptCollisionPose(uint32_t reference,const Fo3DoorCollisionPose& re
         auto apply=[&](Vec3 p){return Vec3{m[0]*p.x+m[4]*p.y+m[8]*p.z+m[12],m[1]*p.x+m[5]*p.y+m[9]*p.z+m[13],m[2]*p.x+m[6]*p.y+m[10]*p.z+m[14]};};
         CollisionTriangle tri=original;if(!BuildTriangle(apply(original.a),apply(original.b),apply(original.c),tri))return false;moved.push_back(std::move(tri));
     }
+    const bool incremental=pose.enabled&&UpdateAnimatedCollisionInPlace(reference,moved);
     gDoorCollisionPoses[reference]=pose;
+    if(incremental){
+        AdvanceFo3CollisionPublicationRevision(reference);++gPipLocalMapRevision;
+        gQ226GroundIndexRevision=gCollisionPublicationRevision;
+        static uint64_t refits=0;++refits;
+        if(refits<=8||(refits%120)==0)Q6G_LOGI("Q285 ANIMATED COLLISION: ref=%08X referenceTriangles=%zu worldTriangles=%zu incremental=1 poseUs=%lld",
+            reference,moved.size(),gWorldTriangles.size(),static_cast<long long>(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now()-poseStarted).count()));
+        return true;
+    }
     gWorldTriangles.erase(std::remove_if(gWorldTriangles.begin(),gWorldTriangles.end(),[&](const CollisionTriangle& t){const auto src=gSurfaceSourcesQ722.find(t.surfaceKeyQ714);return src!=gSurfaceSourcesQ722.end()&&src->second.refFormId==reference;}),gWorldTriangles.end());
     if(pose.enabled)gWorldTriangles.insert(gWorldTriangles.end(),moved.begin(),moved.end());
     AdvanceFo3CollisionPublicationRevision(reference);++gPipLocalMapRevision;gTriangleCount=gWorldTriangles.size();
@@ -2818,11 +2842,20 @@ void SynchronizeFo3RigidWorld(float x,float z) {
     auto& world=fo3rigid::Live();
     if(gRigidFullDirty||!gRigidDirtyRefs.empty()) {
         std::unordered_map<uint32_t,std::vector<fo3rigid::Triangle>> chunks;
-        for(const auto& t:gWorldTriangles){
-            const auto source=gSurfaceSourcesQ722.find(t.surfaceKeyQ714);
-            const uint32_t ref=source==gSurfaceSourcesQ722.end()?0:source->second.refFormId;
-            if(world.Has(ref)||(!gRigidFullDirty&&!gRigidDirtyRefs.count(ref)))continue;
-            chunks[ref].push_back({{t.a.x,t.a.y,t.a.z},{t.b.x,t.b.y,t.b.z},{t.c.x,t.c.y,t.c.z}});
+        auto append=[&](uint32_t ref,const CollisionTriangle& t){
+            if(!world.Has(ref))chunks[ref].push_back({{t.a.x,t.a.y,t.a.z},{t.b.x,t.b.y,t.b.z},{t.c.x,t.c.y,t.c.z}});
+        };
+        if(gRigidFullDirty){
+            for(const auto& t:gWorldTriangles){
+                const auto source=gSurfaceSourcesQ722.find(t.surfaceKeyQ714);
+                append(source==gSurfaceSourcesQ722.end()?0:source->second.refFormId,t);
+            }
+        }else{
+            EnsureAnimatedReferenceIndex();
+            for(uint32_t ref:gRigidDirtyRefs){
+                const auto entry=gAnimatedReferenceTriangles.find(ref);
+                if(entry!=gAnimatedReferenceTriangles.end())for(uint32_t index:entry->second)append(ref,gWorldTriangles[index]);
+            }
         }
         if(gRigidFullDirty){for(auto ref:published)world.RemoveStatic(ref);published.clear();}
         else for(auto ref:gRigidDirtyRefs){world.RemoveStatic(ref);published.erase(ref);}

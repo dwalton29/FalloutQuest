@@ -6,6 +6,7 @@ struct Animation {
     int clip=-1;double started=0,lastCollision=-1;bool settled=false;
     fo3anim::Pose pose;
     std::vector<bool> visible;
+    std::vector<size_t> shapes;
 };
 static std::unordered_map<uint32_t,Animation> animations;
 static std::unordered_set<uint32_t> loaded;
@@ -124,6 +125,11 @@ void Register(){
             for(size_t i=0;i<state.visible.size();++i)state.visible[i]=asset->hierarchy.bones[i].visible;}
         state.settled=false; // Reapply retained pose to newly published shapes.
     }
+    for(auto& entry:animations)entry.second.shapes.clear();
+    for(size_t i=0;i<gObjects.size();++i)if(gObjects[i].scriptAnimated){
+        const auto state=animations.find(gObjects[i].refFormId);
+        if(state!=animations.end())state->second.shapes.push_back(i);
+    }
     for(const auto& actor:gQ230NpcActors)if(!actor.runtime.offScene)present.insert(actor.source.refFormId);
     for(auto i=animations.begin();i!=animations.end();)if(!present.count(i->first))i=animations.erase(i);else ++i;
     for(auto i=loaded.begin();i!=loaded.end();)if(!present.count(*i))i=loaded.erase(i);else ++i;
@@ -171,7 +177,7 @@ void Animate(){
         if(!fo3anim::Sample(asset.hierarchy,clip,elapsed,state.pose))continue;
         for(const auto& value:state.pose.properties)if(value.kind==fo3anim::PropertyKind::Visibility)state.visible[size_t(value.bone)]=value.value[0]!=0;
         const GpuObject* first=nullptr;
-        for(auto& object:gObjects){if(!object.scriptAnimated||object.refFormId!=entry.first)continue;if(!first)first=&object;
+        for(size_t shape:state.shapes){auto& object=gObjects[shape];if(!first)first=&object;
             const int bone=object.q2401AnimationBone;
             const auto* delta=fo3dooranim::ShapeDelta(asset,state.pose,bone);
             fo3anim::Matrix scene{};
@@ -190,7 +196,9 @@ void Animate(){
         // Publish at 10 Hz and once at the precise settled endpoint.
         if(first&&(state.lastCollision<0||elapsed-state.lastCollision>=.1||ended)){
             Fo3DoorCollisionPose collision;
-            for(size_t block=0;block<asset.blockBones.size();++block){const int bone=asset.blockBones[block];
+            for(uint32_t block:GetFo3ScriptCollisionTargets(entry.first)){
+                if(block>=asset.blockBones.size())continue;
+                const int bone=asset.blockBones[block];
                 if(bone<0||size_t(bone)>=state.pose.delta.size())continue;
                 fo3anim::Matrix scene{};if(fo3dooranim::ModelDeltaToScene(first->q2016PlacementMatrix,FO3_UNITS_PER_METRE,state.pose.delta[size_t(bone)],scene))collision.nodeTransforms.emplace(uint32_t(block),scene);
             }

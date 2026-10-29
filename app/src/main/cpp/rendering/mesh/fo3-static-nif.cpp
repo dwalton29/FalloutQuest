@@ -1057,13 +1057,6 @@ bool Q970BuildRenderableSet(const std::vector<uint8_t>& nif,
                 uint32_t chosen = INVALID_REF;
                 if (nodes[block].switchIndex < children.size()) {
                     chosen = children[nodes[block].switchIndex];
-                } else {
-                    for (uint32_t child : children) {
-                        if (child < header.numBlocks) {
-                            chosen = child;
-                            break;
-                        }
-                    }
                 }
                 if (chosen < header.numBlocks) stack.push_back(chosen);
             } else {
@@ -1101,19 +1094,8 @@ bool Q970BuildRenderableSet(const std::vector<uint8_t>& nif,
         ++stats.unparentedShapes;
     }
 
-    // If an unfamiliar node subclass prevented traversal, fail open rather
-    // than making the entire model disappear. Hidden shapes remain excluded.
-    if (shapeCount > 0u && stats.selectedShapes == 0u) {
-        stats.fallbackAll = true;
-        for (uint32_t block = 0u; block < header.numBlocks; ++block) {
-            if (!Q970IsShapeType(BlockType(header, block))) continue;
-            uint16_t flagsLow = 0u;
-            if (!includeHidden && Q970ReadAvFlags(nif, header, block, flagsLow) &&
-                (flagsLow & 0x0001u) != 0u) continue;
-            renderable[block] = 1u;
-            ++stats.selectedShapes;
-        }
-    }
+    // Zero selected shapes is valid: hidden roots and inactive switches are
+    // authored states. Never resurrect their descendants as a fallback.
 
     return shapeCount > 0u;
 }
@@ -1942,6 +1924,11 @@ bool LoadFo3StaticNifMeshes(const std::string& modelPath,
     if (requireComplete && (q1060ShapeObjectFailures || q1060ShapeLoadFailures)) {
         outMeshes.clear();
         return false;
+    }
+    if (outMeshes.empty() && q970SelectionReady && q970Scene.selectedShapes==0u) {
+        // Successfully parsed intentional invisibility, distinct from a decode
+        // failure. The caller retains a nonvisual reference for script events.
+        return true;
     }
     if (outMeshes.empty()) {
         Q6H_LOGW("Q6H NIF NO SUPPORTED STATIC SHAPE: %s blocks=%u", resolved.c_str(), header.numBlocks);

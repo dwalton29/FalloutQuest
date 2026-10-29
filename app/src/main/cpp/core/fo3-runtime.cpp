@@ -1,3 +1,4 @@
+#include "rendering/fo3-visual-admission.h"
 #include "rendering/spacewarp/fo3-motion-gles.h"
 #include "physics/fo3-contact-limit.h"
 #include "physics/fo3-rigid-world.h"
@@ -473,6 +474,7 @@ std::shared_ptr<const Fo3PreparedRigidBody> PrepareFo3RigidBody(
 }
 
 struct CpuObject {
+    bool nonvisualResident=false;
     std::shared_ptr<const Fo3PreparedRigidBody> rigidBody;
     Fo3WorldPlacement placement;
     Fo3StaticNifMesh mesh;
@@ -576,6 +578,7 @@ struct GpuObject {
     bool q230NpcActor = false;
     bool q2400SwingDoor = false;
     bool scriptAnimated=false,scriptVisible=true;
+    bool nonvisualResident=false;
     std::shared_ptr<const fo3dooranim::Asset> q2401DoorAnimation;
     int q2401AnimationBone = -1;
     float q223PlacementScale = 1.0f;
@@ -2097,9 +2100,15 @@ float MaxModelExtent(const Fo3StaticNifMesh& mesh) {
     return std::max({maximum.x - minimum.x, maximum.y - minimum.y, maximum.z - minimum.z});
 }
 
+bool Q74ShouldSkipPlacement(const Fo3WorldPlacement& placement);
+
 bool BuildCpuObjects(const Fo3WorldPlacement& placement, std::vector<CpuObject>& outs,
                      bool requireComplete = false) {
     outs.clear();
+    if(Fo3IsTriggerHelperModel(placement.modelPath)) {
+        CpuObject part;part.placement=placement;part.nonvisualResident=true;
+        outs.push_back(std::move(part));return true;
+    }
 
     const auto q2401DoorAnimation =
         placement.baseRecordType=="DOOR"
@@ -2150,6 +2159,10 @@ bool BuildCpuObjects(const Fo3WorldPlacement& placement, std::vector<CpuObject>&
     }
 
 
+    if(cachedMeshes->empty()) {
+        CpuObject part;part.placement=placement;part.nonvisualResident=true;
+        outs.push_back(std::move(part));return true;
+    }
     const auto rigidBody=PrepareFo3RigidBody(placement,*cachedMeshes);
     size_t shapeIndex = 0;
     for (const Fo3StaticNifMesh& cachedMesh : *cachedMeshes) {
@@ -2361,6 +2374,7 @@ void Q241PrepareOccluders(CpuObject& cpu,float cx,float cy,float cz) {
 }
 bool PrepareExpandedVertexStreamQ1960(
         CpuObject& cpu, float centerX, float centerY, float floorZ) {
+    if(cpu.nonvisualResident)return true;
     constexpr size_t FLOATS_PER_VERTEX = 18u;
     if (cpu.q1960ExpandedReady && !cpu.q1960ExpandedVertices.empty())
         return true;
@@ -2426,6 +2440,16 @@ bool PrepareExpandedVertexStreamQ1960(
 
 bool UploadCpuObject(CpuObject& cpu, float centerX, float centerY, float floorZ,
                      GpuObject& gpu) {
+    if(cpu.nonvisualResident){
+        gpu={};gpu.refFormId=cpu.placement.refFormId;gpu.baseFormId=cpu.placement.baseFormId;
+        gpu.editorId=cpu.placement.editorId;gpu.modelPath=cpu.placement.modelPath;
+        gpu.baseRecordType=cpu.placement.baseRecordType;gpu.nonvisualResident=true;
+        gpu.scriptVisible=false;
+        gpu.q1970GridX=cpu.placement.hasExteriorGrid?cpu.placement.gridX:static_cast<int32_t>(std::floor(cpu.placement.x/Q1890_EXTERIOR_CELL_SIZE));
+        gpu.q1970GridY=cpu.placement.hasExteriorGrid?cpu.placement.gridY:static_cast<int32_t>(std::floor(cpu.placement.y/Q1890_EXTERIOR_CELL_SIZE));
+        Q2016BuildPlacementMatrix(cpu.placement,centerX,centerY,floorZ,gpu.q2016PlacementMatrix);
+        return true;
+    }
     constexpr size_t FLOATS_PER_VERTEX = 18u;
     const size_t vertexCount = cpu.positionsGame.size();
     if (!PrepareExpandedVertexStreamQ1960(cpu, centerX, centerY, floorZ))
@@ -2783,7 +2807,7 @@ bool UploadCpuObject(CpuObject& cpu, float centerX, float centerY, float floorZ,
     const bool fullAlpha=std::any_of(imageCache.begin(),imageCache.end(),[&](const auto& entry){
         return entry.second.id==gpu.diffuse && entry.second.opaque;
     });
-    if(fullAlpha && !gpu.alphaBlend && !gpu.alphaTest && !gpu.useVertexAlpha &&
+    if(!gpu.nonvisualResident && fullAlpha && !gpu.alphaBlend && !gpu.alphaTest && !gpu.useVertexAlpha &&
        !gpu.noLightingFalloff && !gpu.decalQ1170 && gpu.zBufferWriteQ1200 &&
        gpu.zBufferTestQ1200 && !cpu.occluders.empty())
         gpu.occluders=std::make_shared<const std::vector<fo3occ::Surface>>(std::move(cpu.occluders));
@@ -3137,9 +3161,7 @@ bool InitializeScene() {
         const std::string type = placement.baseRecordType.empty() ? "<none>" : placement.baseRecordType;
         ++attemptedTypes[type];
 
-        if (placement.editorId == "XMarker" ||
-            placement.modelPath.rfind("Effects\\", 0) == 0 ||
-            placement.modelPath.rfind("effects\\", 0) == 0) {
+        if (Q74ShouldSkipPlacement(placement)) {
             ++filteredMarkersEffects;
             continue;
         }
@@ -3960,7 +3982,8 @@ fo3scene::GpuStageResult AdvanceFo3ResidentGpuStage(
     const auto result=work.stage.Advance([&](size_t i,GpuObject& gpu) {
         Fo3ResidentUploadScope scope(work.textures);
         return UploadCpuObject(work.cpu->incoming[i],work.cpu->request.x,
-            work.cpu->request.y,work.cpu->request.z,gpu)&&gpu.vao&&gpu.vbo&&gpu.vertexCount>0;
+            work.cpu->request.y,work.cpu->request.z,gpu)&&
+            (gpu.nonvisualResident||(gpu.vao&&gpu.vbo&&gpu.vertexCount>0));
     });
     if(result==Result::Pending)return result;
     if(result==Result::Failed){DiscardFo3ResidentGpuStage();return result;}
@@ -7341,7 +7364,7 @@ extern uint64_t gStereoFrame;
 bool gQ230DetailedObjectPrevalidated=false;
 bool Q241Hidden(const GpuObject& object);
 void DrawSceneObject(const GpuObject& object, bool environmentPassQ2050 = false) {
-    if(!object.scriptVisible)return;
+    if(object.nonvisualResident||!object.scriptVisible)return;
     if (!gQ230DetailedObjectPrevalidated &&
         gPlayerSession && gPlayerSession->player.IsCollected(object.refFormId)) return;
     if (!object.q210PlayerBody &&
@@ -7587,7 +7610,7 @@ void DrawSceneObject(const GpuObject& object, bool environmentPassQ2050 = false)
 }
 
 bool Q2017EligibleForInstancing(const GpuObject& object) {
-    return object.q2017SharedGeometry &&
+    return !object.nonvisualResident && object.q2017SharedGeometry &&
            !object.scriptAnimated && !object.q2400SwingDoor &&
            !object.q210PlayerBody && !object.q230NpcActor && !object.physicalWeapon &&
            !object.q220LooseObject &&

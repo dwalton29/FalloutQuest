@@ -604,14 +604,45 @@ int main(int argc,char**argv) {
     leaf.animationTargetBlock=11;wall.animationTargetBlock=22;leaf.surfaceKeyQ714=111;wall.surfaceKeyQ714=222;
     gSurfaceSourcesQ722.emplace(111,CollisionSurfaceSourceQ722{900,"test","test"});
     gSurfaceSourcesQ722.emplace(222,CollisionSurfaceSourceQ722{900,"test","test"});
+    leaf.meshKeyQ801=11;wall.meshKeyQ801=22;
     gQ1990CollisionPlacementCache[900].triangles={leaf,wall};gWorldTriangles={leaf,wall};
+    // A large unrelated resident world must retain storage, weld links, shape
+    // indices and static broadphase cells during recurring gate poses.
+    for(uint32_t i=0;i<4000;++i){CollisionTriangle t;
+        assert(BuildTriangle({float(i)+100,0,0},{float(i)+100,1,0},{float(i)+100,0,1},t));
+        t.surfaceKeyQ714=1000+i;t.meshKeyQ801=1000+i;
+        gSurfaceSourcesQ722[t.surfaceKeyQ714]={1000+i,"static","static"};gWorldTriangles.push_back(t);
+    }
+    InvalidateDerivedCollisionCachesQ17();Q225RebuildDynamicGrid();EnsureQ950SpatialIndex();
+    const auto* worldStorage=gWorldTriangles.data();const auto* shapeStorage=gHkShapesQ900.data();
+    const auto* weldStorage=gHkWeldNeighboursQ801.data();
     Fo3DoorCollisionPose animated;auto delta=animated.transform;delta[12]=3;animated.nodeTransforms.emplace(11,delta);
-    assert(SetFo3ScriptCollisionPose(900,animated));assert(gWorldTriangles.size()==2);
+    assert(SetFo3ScriptCollisionPose(900,animated));assert(gWorldTriangles.size()==4002);
     assert(gWorldTriangles[0].a.x==3&&gWorldTriangles[1].a.x==5&&gWorldTriangles[0].animationTargetBlock==11);
     const auto animatedRevision=GetFo3CollisionPublicationRevision();
     animated.nodeTransforms.emplace(99,delta); // No collider owns this animated node.
     assert(SetFo3ScriptCollisionPose(900,animated)&&GetFo3CollisionPublicationRevision()==animatedRevision);
     assert(gQ1990CollisionPlacementCache[900].triangles[0].a.x==0); // Bind cache stays immutable.
+    for(int step=0;step<40;++step){animated.nodeTransforms[11][12]=float(step)-20;
+        assert(SetFo3ScriptCollisionPose(900,animated));
+        assert(gWorldTriangles.data()==worldStorage&&gHkShapesQ900.data()==shapeStorage&&gHkWeldNeighboursQ801.data()==weldStorage);
+        assert(gQ950Ready&&gHkShapesReadyQ900&&gHkWeldAdjacencyReadyQ801);
+        assert(gWorldTriangles[2].a.x==100&&gWorldTriangles.back().a.x==4099);
+    }
+    auto grid=gQ225DynamicGrid;auto movingLarge=gInteractionLargeTriangles;
+    auto objects=gQ950Objects;auto shapeBounds=gHkShapesQ900;
+    auto spatial=gQ950Grid;auto largeObjects=gQ950LargeObjects;
+    InvalidateDerivedCollisionCachesQ17();Q225RebuildDynamicGrid();EnsureQ950SpatialIndex();
+    auto sameValues=[](auto a,auto b){std::sort(a.begin(),a.end());std::sort(b.begin(),b.end());return a==b;};
+    assert(grid.size()==gQ225DynamicGrid.size()&&sameValues(movingLarge,gInteractionLargeTriangles));
+    for(const auto& c:grid)assert(sameValues(c.second,gQ225DynamicGrid.at(c.first)));
+    assert(objects.size()==gQ950Objects.size()&&spatial.size()==gQ950Grid.size()&&sameValues(largeObjects,gQ950LargeObjects));
+    for(const auto& c:spatial){const auto& actual=gQ950Grid.at(c.first);assert(sameValues(c.second.objects,actual.objects)&&sameValues(c.second.legacyTriangles,actual.legacyTriangles));}
+    for(size_t i=0;i<objects.size();++i){const auto& a=objects[i];const auto& b=gQ950Objects[i];
+        assert(a.minX==b.minX&&a.maxX==b.maxX&&a.minY==b.minY&&a.maxY==b.maxY&&a.minZ==b.minZ&&a.maxZ==b.maxZ&&a.walkableTriangles==b.walkableTriangles);}
+    for(size_t i=0;i<shapeBounds.size();++i){const auto& a=shapeBounds[i];const auto& b=gHkShapesQ900[i];
+        assert(a.minX==b.minX&&a.maxX==b.maxX&&a.walkableTriangles==b.walkableTriangles);}
+    std::cout<<"40 moving BHK poses preserve 4000 static meshes; incremental player/prop grids match a full rebuild\n";
     std::cout<<"Per-node scripted collision preserves static structure passed\n";
     ShutdownFo3CollisionOverlay();
     assert(!IsFo3PlayerCollisionReadyQ6G());

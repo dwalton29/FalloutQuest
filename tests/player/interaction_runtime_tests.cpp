@@ -31,6 +31,7 @@ struct Vec3 {
   float x, y, z;
 };
 struct GpuObject {
+  bool nonvisualResident=false;
   bool q220LooseObject = true;
   bool q2400SwingDoor = false;
   std::string baseRecordType;
@@ -42,6 +43,7 @@ struct GpuObject {
 };
 bool gSceneReady = true, loading = false, occluded = false, doorPresent = false;
 bool doorLocalSwing = false, doorOpen = false, doorPromptAvailable = true;
+int promptQueries=0;
 std::unique_ptr<fo3player::Session> gPlayerSession;
 std::vector<GpuObject> gObjects;
 struct Grab {
@@ -81,6 +83,7 @@ bool HasFo3InteractionOccluder(float, float, float, float, float, float, float,
 uint32_t GetFo3DoorDestinationCellQ1840(uint32_t){return 0;}
 bool GetFo3NamedDoorPromptQ1840(uint32_t,const std::string&,char*,size_t){return false;}
 bool GetFo3DoorPromptQ1840(uint32_t, char *p, size_t n) {
+  ++promptQueries;
   if (!doorPromptAvailable) return false;
   std::snprintf(p, n, "Open Door");
   return true;
@@ -226,6 +229,7 @@ int main() {
           "collected item no longer targets; XTEL door queues");
     const int doorOpenAudio = fo3audio::opens;
     const int doorCloseAudio = fo3audio::closes;
+    const int queriesBeforeSwing=promptQueries;
     doorLocalSwing = true;
     doorPromptAvailable = false;
     doorOpen = false;
@@ -242,6 +246,7 @@ int main() {
     Check(!activate() && doorActivations == 3 &&
               fo3audio::closes == doorCloseAudio + 1,
           "local closing uses authored close effect");
+    Check(promptQueries==queriesBeforeSwing,"swing aiming never asks for teleport metadata");
     doorLocalSwing = false;
     doorOpen = false;
     doorPromptAvailable = true;

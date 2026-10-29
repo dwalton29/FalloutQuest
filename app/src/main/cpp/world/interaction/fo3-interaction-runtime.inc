@@ -78,7 +78,7 @@ bool QueryFo3Interaction(float ox, float oy, float oz, float dx, float dy,
             player.HasReferenceEvent(object.refFormId,"OnActivate");
         // Inventory eligibility comes from the item catalog, independently
         // of whether the physics runtime supports this loose-object type.
-        if (player.IsCollected(object.refFormId) ||
+        if (object.nonvisualResident || player.IsCollected(object.refFormId) ||
             (!container && !terminal && !scripted && !catalog.items.count(object.baseFormId)) ||
             !IsFo3ReferenceEnabled(player,object.refFormId)) continue;
         fo3interaction::Point lo{1e30f,1e30f,1e30f}, hi{-1e30f,-1e30f,-1e30f};
@@ -148,7 +148,12 @@ bool QueryFo3Interaction(float ox, float oy, float oz, float dx, float dy,
         else if (!target.allowed && item.script) action = "Scripted ";
         std::snprintf(target.prompt.data(),target.prompt.size(),"%s%s",action,item.name.c_str());
     } else {
-        if (!GetFo3DoorPromptQ1840(target.reference,target.prompt.data(),target.prompt.size())) {
+        if (target.door.localSwing) {
+            const auto ref=catalog.references.find(target.reference);
+            const auto name=ref==catalog.references.end()?catalog.eventBaseNames.end():catalog.eventBaseNames.find(ref->second.base);
+            const char* label=name==catalog.eventBaseNames.end()||name->second.empty()?"Door":name->second.c_str();
+            std::snprintf(target.prompt.data(),target.prompt.size(),"%s %s",target.door.open?"Close":"Open",label);
+        } else if (!GetFo3DoorPromptQ1840(target.reference,target.prompt.data(),target.prompt.size())) {
             std::snprintf(target.prompt.data(),target.prompt.size(),"%s Door",
                 target.door.localSwing && target.door.open ? "Close" : "Open");
         }
