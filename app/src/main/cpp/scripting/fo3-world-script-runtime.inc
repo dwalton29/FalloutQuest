@@ -171,6 +171,9 @@ void Actions(){
     }
 }
 void Animate(){
+    // OnLoad/GameMode actions can publish a new visual inventory after the
+    // frame's initial Register. Revalidate cached shape slots before use.
+    Register();
     for(auto& entry:animations){auto& state=entry.second;const auto& asset=*state.asset;
         if(state.clip<0||state.settled)continue;
         const auto& clip=asset.clips[size_t(state.clip)];const double elapsed=std::max(0.,seconds-state.started);

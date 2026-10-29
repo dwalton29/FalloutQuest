@@ -95,6 +95,12 @@ int main(){try{
  Check(fo3worldscript::animations.at(10).clip==1&&gObjects[0].q2400DoorTransform[12]==4,"source waits and selects idle");
  // Re-publication reapplies the retained pose and does not invent another OnLoad.
  ++gFo3VisualPublication.revision;gObjects[0].q2400DoorTransform[12]=0;fo3worldscript::Register();fo3worldscript::Animate();Check(gObjects[0].q2400DoorTransform[12]==4,"stream publication retains pose");
+ // Events can republish/reorder meshes after Register and before Animate.
+ GpuObject unrelated;unrelated.refFormId=55;unrelated.scriptAnimated=false;
+ gObjects.insert(gObjects.begin(),unrelated);++gFo3VisualPublication.revision;
+ fo3worldscript::Animate();
+ Check(gObjects[0].q2400DoorTransform[12]==0&&gObjects[1].q2400DoorTransform[12]==4,"animation refreshes shape slots after mid-frame publication");
+ gObjects.erase(gObjects.begin());++gFo3VisualPublication.revision;fo3worldscript::Animate();
  defaultTeleport.valid=true;defaultTeleport.destinationDoorRefFormId=31;defaultTeleport.x=100;defaultTeleport.y=200;defaultTeleport.z=300;
  Check(fo3worldscript::Event(30,"OnActivate",fo3player::PlayerRef),"source delegates default activation");fo3worldscript::Actions();
  Check(defaultTransitions==1&&defaultSource==30&&defaultDestination==31,"production adapter queues original door transition");
