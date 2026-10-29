@@ -13082,7 +13082,8 @@ void QActorPrepareStereoFrame() {
                     actor.aiPackage=actor.runtime.package=saved.package;actor.aiSequence=saved.sequence;
                     actor.aiPathGame.clear();actor.aiPathSurfaces.clear();actor.aiPathIndex=0;
                     actor.aiLastUpdate=npcNow;actor.aiRepathAt=npcNow;
-                    actor.stateRestored=true;actor.scriptMoveEpoch=epoch;actor.lastFrame=UINT64_MAX;
+                    // Keep first-resident restoration pending: it also prepares inventory.
+                    actor.scriptMoveEpoch=epoch;actor.lastFrame=UINT64_MAX;
                     // A teleport has no preceding motion sample, for either renderer.
                     for(auto& object:actor.objects)object.motionIdentity=0;
                     ++gQ230NpcResidenceRevision;

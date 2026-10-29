@@ -503,11 +503,14 @@ static void OriginalBomb(const char* path) {
   assert(rig.DispatchReferenceEvent(0x14bc8,"OnActivate",0x14,error)==fo3player::ScriptEventResult::Executed);
   assert(rig.PollScriptMessage(message)&&message.form==0x78cb2);
   assert(rig.SubmitScriptMessageButton(0x14bc8,2));
+  const auto burke=c.pipboy.formNames.at("misterburkeref");
+  const auto beforeMove=rig.Snapshot().actors.at(burke);
   assert(rig.DispatchReferenceEvent(0x14bc8,"GameMode",0,error)==fo3player::ScriptEventResult::Unsupported);
-  // The authored stage 40 body reaches Burke's MoveToMarker first. The v224
-  // baseline already rejects it before the later Enable command; neither
-  // failure may publish the earlier inventory/quest/effect changes.
-  assert(error.find("misterburkeref.movetomarker")!=std::string::npos);
+  // MoveToMarker is supported now. The later Enable still requires the native
+  // resident coordinator, so Player-only dispatch must roll back both the move
+  // and the preceding inventory/quest/effect changes.
+  assert(error.find("resident coordinator")!=std::string::npos);
+  assert(rig.Snapshot().actors.at(burke).position==beforeMove.position&&!rig.ScriptActorMoveEpoch(burke));
   assert(rig.ItemCount(charge)==1&&rig.Snapshot().pipboy.quests.at(0x14e9e).stage==10);
   assert(!rig.PollScriptMessage(message)&&!rig.PollQuestNotice(notice));
   std::cout<<"Original ESM bomb activation, cancel, disarm, Karma, notices and persistence passed\n";

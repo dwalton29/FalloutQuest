@@ -92,5 +92,30 @@ static void Original(const char* path){
   {Conversation liAgain(restored,catalog.pipboy.formNames.at("doctorliref"));liAgain.Start();}
   assert(restored.Snapshot().experience==xp&&restored.ItemCount(0xf)==0);
   std::cout<<"Original MQ01 Moriarty payment -> early Rivet City dialogue -> authored stage 210; world state, return/reload and one-time effects passed\n";
+  // Isolate the original ending conversation using the same stage-40 save.
+  // Actor placement is a dialogue fixture: this does not bypass or certify
+  // the physical GNR approach, locked entrance or Behemoth battle.
+  assert(first.Save(save,error));fo3player::Player normal(catalog);assert(normal.Restore(save,error));unlink(save.c_str());
+  const auto dog=catalog.pipboy.formNames.at("threedogref");
+  {
+    Conversation gnr(normal,dog);gnr.Start();
+    for(auto topic:{0x24170u,0x3e5a0u,0x2416cu,0x24164u,0x24162u,0x2415fu,0x26184u,0x3e57fu})gnr.Choose(topic);
+  }
+  const auto& ending=normal.Snapshot().pipboy.quests.at(0x14e87);
+  assert(ending.stage==200&&ending.status==fo3pipdata::Completion::Complete&&!ending.running);
+  assert(normal.Snapshot().pipboy.quests.at(0x14e88).stage==10);
+  const auto note=catalog.pipboy.formNames.at("mq02virgonote");
+  assert(normal.Snapshot().experience==xp+300&&normal.Snapshot().achievements.count(4)&&normal.ItemCount(note)==1);
+  assert(normal.Snapshot().pipboy.dialogueVariables.at(fo3dialogue::VariableKey(catalog.pipboy,"RadioGalaxyNewsQuest.ExploitReady"))==1);
+  assert(normal.Snapshot().actors.at(sarah).position==relocated.position);
+  assert(normal.Save(save,error));fo3player::Player rewarded(catalog);assert(rewarded.Restore(save,error));unlink(save.c_str());
+  assert(rewarded.Snapshot().experience==xp+300&&rewarded.ItemCount(note)==1&&rewarded.Snapshot().achievements.count(4));
+  const auto completedRevision=rewarded.Revision();assert(rewarded.ExecuteQuestStage(0x14e87,200,error));
+  assert(rewarded.Revision()==completedRevision&&!rewarded.ScriptActorMoveEpoch(sarah));
+  fo3player::ExperienceNotice notice;assert(!rewarded.PollExperienceNotice(notice));
+  {Conversation gnrAgain(rewarded,dog);gnrAgain.Start();}
+  assert(rewarded.Snapshot().experience==xp+300&&rewarded.ItemCount(note)==1);
+  std::cout<<"Original Three Dog ending conversation: stage 200, MQ02, 300 XP, NOTE/radio/achievement, relocation and duplicate-reward protection passed; GNR world approach not simulated\n";
+
 }
 int main(int argc,char** argv){if(argc>1)Original(argv[1]);else {std::cout<<"Original MQ01 checkpoint requires Fallout3.esm; no original-data verification performed\n";return 77;}}

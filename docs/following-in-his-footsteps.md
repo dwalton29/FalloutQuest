@@ -1,7 +1,7 @@
 # Following in His Footsteps: implementation checkpoint
 
 Baseline: main 09d5a3c (v288). Foundation: 853deb8 (v289).
-Original quest MQ01 / 00014E87; movement checkpoint v290.
+Original quest MQ01 / 00014E87; movement checkpoint v290; native arrival follow-up v291.
 This is an incomplete quest implementation, not an end-to-end certification.
 
 ## Original progression and alternatives
@@ -137,7 +137,7 @@ movement, combat or scene rendering.
 | Moriarty 300-cap demand | Insufficient-funds result rejection checked; full conversation route remains unverified. |
 | Silver / Gob / Nova / terminal | Original links identified; complete conversation/access/terminal routes remain unverified. |
 | Early Rivet City / MQ03 skip | Original dialogue/script progression to stage 210, canonical world changes and persistence tested on host; traversal/residency rendering still needs headset verification. |
-| Normal Three Dog / stage 200 | Complete result preflight passes, including Sarah's movement; full world approach, battle and final conversation/rewards remain unverified. |
+| Normal Three Dog / stage 200 | Original ending conversation verified in an isolated actor-location fixture: 300 XP, NOTE, radio variables, achievement, Sarah movement, reload and duplicate-reward protection. Physical GNR approach/door/battle remain unverified and need the missing scene support. |
 | Three Dog speech shortcut / 175 | Nested MQ03 movement no longer blocks the result preflight; skill-success conversation and repeat-reward checks remain. |
 | Dish already held | Separate DialogueGNR INFO/NOTE/MQ02 continuation identified; complete alternate path remains unverified. |
 | Three Dog killed / 250 | Complete result preflight passes; real death-event delivery and consequences remain to be verified. |
@@ -166,3 +166,13 @@ commands, not skipped successful effects.
 No physical Quest/ADB session is connected here. The available local asset subset
 also does not provide a complete rendered/audio D.C. traversal. Host script tests
 cannot certify those observations.
+
+The isolated Three Dog ending fixture follows his original greeting and acceptance
+choices from the stage-40 state, without a stage-advance command. It verifies
+stage 200, MQ02 stage 10, 300 XP, MQ02VirgoNote, radio ExploitReady, achievement 4,
+Sarah's relocation and reload/replay protection. Positioning the actor context in
+GNR is not evidence that the preceding battle/door route works.
+
+Native review retained first-resident restoration after MoveTo: that path also
+initialises actor inventory. Applying a teleport must not mark a newly loaded
+NPC as already restored and accidentally skip its equipment preparation.

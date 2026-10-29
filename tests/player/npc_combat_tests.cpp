@@ -269,7 +269,7 @@ static void Original(const char* path) {
     if(!id||!p.EquipActorWeapon(r.first,id)||!p.ReloadActorWeapon(r.first,id))continue;
     assert(p.ActorWeapon(r.first)->loadedRounds<=c.items.at(form).weapon.clip&&p.FireActorWeapon(r.first,id));
     std::cout<<"Original NPC "<<std::hex<<r.first<<" base="<<r.second.base<<" weapon="<<form<<std::dec<<std::endl;
-    assert(fo3npc::AI(c.pipboy,r.second.base).valid);++count;
+    assert(fo3npc::AI(c.pipboy,r.second.base,[&](uint32_t list){return p.ActorTemplate(r.first,list);}).valid);++count;
   }assert(count==5);
 }
 int main(int argc,char** argv){ScriptedRelationsAndEssential();ScriptedNotes();ScriptPlacementsSurviveFinalization();ScriptedActorMovement();StyleDecodeValidation();SourceContext();StateAndPerception();CombatAssetCandidates();InventoryDamagePersistence(true);InventoryDamagePersistence(false);if(argc>1)Original(argv[1]);std::cout<<"NPC combat state tests passed\n";}
