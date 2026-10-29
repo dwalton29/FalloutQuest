@@ -419,6 +419,9 @@ public:
                 FO3_MOVE_BASE_SPEED_Q715, FO3_MOVE_RUN_MULT_Q715,
                 FO3_MOVE_NO_WEAPON_MULT_Q715, FO3_UNITS_PER_METRE_Q715,
                 MOVE_SPEED_METRES_PER_SECOND);
+#ifdef FQ_ENABLE_VULKAN
+        if(vulkanGameplay_)fqvk::PrewarmPipelines();
+#endif
         FQ_LOGI("Q7.1 READY: Q6K runtime + isolated right-trigger door probe");
         return true;
     }

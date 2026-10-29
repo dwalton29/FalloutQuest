@@ -23,6 +23,29 @@ inline Bounds BuildBounds(const float* vertices,size_t floats,size_t stride=12u)
     }
     b.boundsValid=true;return b;
 }
+inline bool MayIntersectLight(const Bounds& b,const float* light) {
+    if(!b.boundsValid||!light)return true;
+    for(size_t i=0;i<4;++i)if(!std::isfinite(light[i]))return true;
+    const double radius=std::max(double(light[3]),0.001);
+    double distance2=0;
+    const float low[]{b.minX,b.minY,b.minZ},high[]{b.maxX,b.maxY,b.maxZ};
+    for(size_t i=0;i<3;++i){
+        if(!std::isfinite(low[i])||!std::isfinite(high[i])||low[i]>high[i])return true;
+        const double delta=std::max({double(low[i])-light[i],0.0,double(light[i])-high[i]});
+        distance2+=delta*delta;
+    }
+    // Expand rather than reject near a float roundoff boundary.
+    return distance2<=radius*radius+1e-5*std::max(1.0,radius*radius);
+}
+inline int CullLights(const Bounds& bounds,int count,const float* positions,const float* colours,
+                      float* outPositions,float* outColours){
+    int kept=0;
+    for(int i=0;i<count;++i)if(MayIntersectLight(bounds,positions+i*4)){
+        std::copy_n(positions+i*4,4,outPositions+kept*4);
+        std::copy_n(colours+i*4,4,outColours+kept*4);++kept;
+    }
+    return kept;
+}
 inline bool MayIntersectClip(const Bounds& b,const float* m) {
     if(!m||!b.boundsValid)return true;
     for(size_t i=0;i<16;++i)if(!std::isfinite(m[i]))return true;

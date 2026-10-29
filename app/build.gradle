@@ -22,8 +22,8 @@ android {
         applicationId 'com.falloutquest.app'
         minSdk 29
         targetSdk 35
-        versionCode 282
-        versionName '0.134.0-terrain-fusion-cost'
+        versionCode 283
+        versionName '0.135.0-scene-cost-reuse'
 
         ndk {
             abiFilters 'arm64-v8a'

@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdint>
+#include <cstddef>
 #include <vulkan/vulkan.h>
 #include <openxr/openxr.h>
 #ifndef XR_USE_GRAPHICS_API_VULKAN
@@ -15,6 +16,8 @@ bool InitializeWorldProbe(XrInstance instance,XrSystemId system,uint32_t width,u
 void ShutdownWorldProbe();
 bool BeginWorldProbe(const float* leftMvp,const float* rightMvp,
                      const float* leftEye,const float* rightEye,bool loading=false,const float* horizon=nullptr,bool splitComposition=false);
+bool StereoBoundsVisible(const float* vertices,size_t count,size_t stride);
+void PrewarmPipelines();
 void EndWorldProbe();
 // Experimental compositor owner; resource submission still uses the shared bridge.
 bool GameplayBinding(XrGraphicsBindingVulkan2KHR& binding);

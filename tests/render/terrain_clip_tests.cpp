@@ -44,6 +44,20 @@ int main(){
     assert(fo3terrain::MayIntersectClip(b,translated));
     stream[12]=std::numeric_limits<float>::quiet_NaN();
     assert(!fo3terrain::BuildBounds(stream.data(),stream.size()).boundsValid);
+    const fo3terrain::Bounds lightBounds{0,1,0,1,0,1,true};
+    const float outside[]{3,0,0,1},touching[]{2,0,0,1},inside[]{.5f,.5f,.5f,.1f};
+    assert(!fo3terrain::MayIntersectLight(lightBounds,outside));
+    assert(fo3terrain::MayIntersectLight(lightBounds,touching));
+    assert(fo3terrain::MayIntersectLight(lightBounds,inside));
+    assert(fo3terrain::MayIntersectLight({},outside));
+    const float invalid[]{std::numeric_limits<float>::quiet_NaN(),0,0,1};
+    assert(fo3terrain::MayIntersectLight(lightBounds,invalid));
+    const float lights[]{3,0,0,1, .5f,.5f,.5f,.1f, 2,0,0,1};
+    const float colours[]{1,2,3,4, 5,6,7,8, -1,-2,-3,-4};
+    float keptPositions[12]{},keptColours[12]{};
+    assert(fo3terrain::CullLights(lightBounds,3,lights,colours,keptPositions,keptColours)==2);
+    assert(std::equal(lights+4,lights+12,keptPositions));
+    assert(std::equal(colours+4,colours+12,keptColours)); // preserve order and negative light colour
     // Actual OpenXR GLES projection convention: asymmetric FOV, near .04m,
     // far 125000/70m. Translate/rotate and mirror the view across a water plane.
     std::mt19937 random(231);std::uniform_real_distribution<float> d(-1000,1000),u(-1,1);

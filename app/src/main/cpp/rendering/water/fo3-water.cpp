@@ -20,6 +20,9 @@
 #include <unordered_set>
 #include <vector>
 #include "rendering/gl-state-cache.h"
+#ifdef FQ_ENABLE_VULKAN
+#include "rendering/vulkan/fo3-vulkan-renderer.h"
+#endif
 
 namespace {
 
@@ -1375,9 +1378,6 @@ void RenderFo3WaterSurfaceQ2070(const float* mvp16,
         std::chrono::duration<double>(
             std::chrono::steady_clock::now() - gWaterTimeOrigin).count());
 
-#ifdef FQ_ENABLE_VULKAN
-    fqvk::WaterSnapshot();
-#endif
     glUseProgram(gProgram);
     glUniformMatrix4fv(gMvpLocation, 1, GL_FALSE, mvp16);
     glUniform1i(gNoiseLocation, 0);
@@ -1461,6 +1461,10 @@ void RenderFo3WaterSurfaceQ2070(const float* mvp16,
             x1,y,z1, gameMaxX,gameMaxY,
             x0,y,z1, gameMinX,gameMaxY
         };
+#ifdef FQ_ENABLE_VULKAN
+        if(!fqvk::StereoBoundsVisible(vertices,6,5))continue;
+        if(!draws)fqvk::WaterSnapshot();
+#endif
         glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(vertices), vertices);
 #ifdef FQ_ENABLE_VULKAN
         fqvk::Mesh(gVao,vertices,6,5,nullptr,0);

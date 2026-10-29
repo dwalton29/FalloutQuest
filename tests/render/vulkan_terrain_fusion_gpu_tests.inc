@@ -1,6 +1,7 @@
 // Actual native material registration, descriptor snapshots, CPU fusion and
 // indexed geometry. The retained v237 Vulkan material is the pixel oracle.
 #include "rendering/terrain/terrain-layer-fusion.h"
+#include "rendering/terrain/fo3-terrain-bounds.h"
 struct FusionGpuBatch {
     int gridX=0,gridY=0,layerOrder=-1;bool alphaLayer=false,specularEnabled=false;
     size_t vertexFloats=12;std::string texturePath,normalPath;
@@ -95,6 +96,21 @@ void TerrainFusionGpu(bool split,bool density=false) {
                     for(size_t p=0;p<b.paintMaterials.size();++p){const auto suffix=std::to_string(p);sampler(program,("uPaintDiffuse"+suffix).c_str(),diffuseUnits[p]);sampler(program,("uPaintNormal"+suffix).c_str(),normalUnits[p]);
                         Set(program,("uPaintFlags"+suffix).c_str(),{1,b.paintMaterials[p].specularEnabled?1.f:0.f});
                         fqgl::state.texture2d[diffuseUnits[p]].Change(textures.at(b.paintMaterials[p].texturePath));fqgl::state.texture2d[normalUnits[p]].Change(textures.at(b.paintMaterials[p].normalPath));
+                    }
+                }
+                if(combined){
+                    float selectedPositions[32]{},selectedColours[32]{},positions[32]{},colours[32]{};
+                    const auto& referenceProgram=r.programs.at(900);
+                    for(const auto& field:referenceProgram.fields){
+                        if(!std::strcmp(field.field.name,"uLocalLightPosRadius"))std::memcpy(selectedPositions,referenceProgram.bytes.data()+field.field.offset,sizeof(selectedPositions));
+                        if(!std::strcmp(field.field.name,"uLocalLightColorFalloff"))std::memcpy(selectedColours,referenceProgram.bytes.data()+field.field.offset,sizeof(selectedColours));
+                    }
+                    const auto bounds=fo3terrain::BuildBounds(b.vertices.data(),b.vertices.size(),b.vertexFloats);
+                    const int count=fo3terrain::CullLights(bounds,lights,selectedPositions,selectedColours,positions,colours);
+                    assert(count<=lights);Set(program,"uLocalLightCount",{float(count)});
+                    for(const auto& field:r.programs.at(program).fields){
+                        if(!std::strcmp(field.field.name,"uLocalLightPosRadius"))fqvk::hooks.uniform(program,field.location,1,count*16,positions);
+                        if(!std::strcmp(field.field.name,"uLocalLightColorFalloff"))fqvk::hooks.uniform(program,field.location,1,count*16,colours);
                     }
                 }
                 fqgl::state.depth.Change(true);fqgl::state.depthWrite.Change(!b.alphaLayer);fqgl::state.depthFunc.Change(GL_LEQUAL);fqgl::state.cull.Change(false);fqgl::state.blend.Change(b.alphaLayer);

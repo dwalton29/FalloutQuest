@@ -1544,11 +1544,17 @@ void RenderFo3TerrainQ76(const float* mvp) {
     }
 
     glUniform3fv(q1010TerrainEyeLocation, 1, gFo3EyePosition);
-    glUniform1i(q1010TerrainLightCountLocation, gFo3SelectedLightCount);
-    glUniform4fv(q1010TerrainLightPosRadiusLocation, FO3_SHADER_LIGHTS,
-                 gFo3SelectedLightPosRadius);
-    glUniform4fv(q1010TerrainLightColorFalloffLocation, FO3_SHADER_LIGHTS,
-                 gFo3SelectedLightColorFalloff);
+    size_t q283LightCandidates=0,q283LightKept=0;
+    auto bindBatchLights=[&](const Q711TerrainBatch& batch){
+        float positions[FO3_SHADER_LIGHTS*4]{},colours[FO3_SHADER_LIGHTS*4]{};
+        const int count=fo3terrain::CullLights(batch,gFo3SelectedLightCount,
+            gFo3SelectedLightPosRadius,gFo3SelectedLightColorFalloff,positions,colours);
+        q283LightCandidates+=size_t(gFo3SelectedLightCount);q283LightKept+=size_t(count);
+        glUniform1i(q1010TerrainLightCountLocation,count);
+        // Do not clear unused slots: count bounds all reads in both materials.
+        if(count){glUniform4fv(q1010TerrainLightPosRadiusLocation,count,positions);
+                  glUniform4fv(q1010TerrainLightColorFalloffLocation,count,colours);}
+    };
     if (q1410TerrainFogPowerLocation >= 0) glUniform1f(q1410TerrainFogPowerLocation, GetFo3FogPower());
     const float q1532TerrainFogNear =
         (q1000Env.valid && q1000Env.fogFar > q1000Env.fogNear + 1.0f)
@@ -1594,6 +1600,7 @@ void RenderFo3TerrainQ76(const float* mvp) {
         }
         if(!fo3terrain::MayIntersectClip(batch,mvp))continue;
         ++q2018BaseDrawn;
+        bindBatchLights(batch);
         glUniform1i(q76bUseTextureLocation, batch.realTexture ? 1 : 0);
         if (q1060TerrainUseNormalLocation >= 0) glUniform1i(q1060TerrainUseNormalLocation, batch.realNormal ? 1 : 0);
         if (q1060TerrainSpecularLocation >= 0) glUniform1f(q1060TerrainSpecularLocation, batch.specularEnabled ? 1.0f : 0.0f);
@@ -1622,6 +1629,7 @@ void RenderFo3TerrainQ76(const float* mvp) {
         }
         if(!fo3terrain::MayIntersectClip(batch,mvp))continue;
         ++q2018AlphaDrawn;
+        bindBatchLights(batch);
         glUniform1i(q76bUseTextureLocation, 1);
         if (q1060TerrainUseNormalLocation >= 0) glUniform1i(q1060TerrainUseNormalLocation, batch.realNormal ? 1 : 0);
         if (q1060TerrainSpecularLocation >= 0) glUniform1f(q1060TerrainSpecularLocation, batch.specularEnabled ? 1.0f : 0.0f);
@@ -1661,6 +1669,7 @@ void RenderFo3TerrainQ76(const float* mvp) {
     ++q2018TerrainPasses;
     if ((q2018TerrainPasses % 240u) == 1u ||
         q2018TerrainUs >= 12000u) {
+        Q76B_LOGI("Q283 TERRAIN LIGHTS candidates=%zu kept=%zu rejected=%zu",q283LightCandidates,q283LightKept,q283LightCandidates-q283LightKept);
         Q76B_LOGI("Q231 TERRAIN CLIP: renderUs=%llu baseTested=%zu baseDrawn=%zu baseRejected=%zu alphaTested=%zu alphaDrawn=%zu alphaRejected=%zu totalBatches=%zu reflection=%d mirrorUnderwaterSkipped=%zu culling=homogeneous-padded bounds=cold+streamed unknown=draw",
                   static_cast<unsigned long long>(q2018TerrainUs),
                   q2018BaseTested, q2018BaseDrawn,
