@@ -17,6 +17,19 @@ LockInfo Player::GetLock(uint32_t id) const {
   if(o!=state_.locks.end()) {out.leveled=false;const auto& l=o->second;out.level=l.level;out.forceFailures=l.forceFailures;
     out.broken=l.change==LockChange::Broken;out.locked=l.change==LockChange::Locked||out.broken;
   } else if(terminal==catalog_->pipboy.terminals.end())out.leveled=bool(ref.lockFlags&4);
+  // Interior exit records can retain entry-side lock metadata while the
+  // paired exterior reference is unlocked. Explicit runtime locks win.
+  if(o==state_.locks.end()&&terminal==catalog_->pipboy.terminals.end()&&catalog_->doorBases.count(ref.base)){
+    const auto placement=catalog_->pipboy.targets.find(id);
+    const auto cell=catalog_->cellOwnership.find(ref.cell);
+    if(placement!=catalog_->pipboy.targets.end()&&cell!=catalog_->cellOwnership.end()&&(cell->second.flags&1)){
+      const auto partner=catalog_->pipboy.targets.find(placement->second.teleportRef);
+      if(partner!=catalog_->pipboy.targets.end()&&partner->second.world&&partner->first!=id){
+        const auto paired=GetLock(partner->first);
+        if(paired.known&&!paired.locked){out.locked=false;out.leveled=false;}
+      }
+    }
+  }
   // Leveled locks cannot be safely resolved until the original level formula is recovered.
   return out;
 }

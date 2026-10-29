@@ -24,7 +24,8 @@ bool BeginFo3Lockpick(uint32_t reference){
       case fo3player::PickAccess::Ready:break;
       default:return false;
     }
-    fo3lockui::Advance();if(!fo3lockui::ready)return false;
+    // Enter immediately; the modal owns input while original assets prepare.
+    fo3lockui::Advance();
     if(!gLockpick.Begin(p,reference,std::generate_canonical<float,24>(gLockpickRandom)))return false;
     gLockpickInputLatch=true;gLockpickLastA=gLockpickLastB=true;gLockpickReleased=false;gLockpickTime=0;fo3lockui::introElapsed=fo3lockui::pinIntroElapsed=0;fo3lockui::anchored=false;
     p.EndContainerInteraction();fo3audio::NamedSound("UILockpickingEnter");return true;

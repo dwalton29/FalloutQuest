@@ -74,7 +74,40 @@ static bool Q230ChatBegin(uint32_t speaker,uint32_t listener,double now) {
   return true;
 }
 static void Q230ChatTick(double now) {
-  if(!gQ230NpcChat.Active())return;
+  static double nextScan=0,nextRemark=0;
+  static std::unordered_map<uint32_t,double> greeted;
+  if(!gQ230NpcChat.Active()){
+    if(now<nextScan)return;nextScan=now+.5;
+    if(now<nextRemark||!gPlayerSession||gPlayerSession->saveBlocked||gDialogue.Active()||
+       gPlayerSession->player.AnyScriptActorTalking()||IsFo3LoadingVisible()||Fo3PipboyFocus())return;
+    for(auto& actor:gQ230NpcActors){
+      const auto ref=actor.source.refFormId;
+      if(actor.runtime.offScene||!actor.runtime.CanTalk()||actor.runtime.dialogue||actor.rigs.empty()||
+         actor.runtime.activity==fo3npc::Activity::Combat)continue;
+      const float distance=std::hypot(actor.runtime.position[0]-gQ210Head[0],actor.runtime.position[2]-gQ210Head[2]);
+      if(distance>2.5f||now<greeted[ref])continue;
+      if(HasFo3InteractionOccluder(gQ210Head[0],gQ210Head[1],gQ210Head[2],
+          actor.runtime.position[0]-gQ210Head[0],actor.runtime.position[1]+1-gQ210Head[1],
+          actor.runtime.position[2]-gQ210Head[2],1,ref))continue;
+      auto line=fo3npcchat::SelectHello(gPlayerSession->player.Definitions().pipboy,
+        gPlayerSession->player,DialogueContext(actor));
+      greeted[ref]=now+30;
+      if(!line.Valid())continue;
+      const uint32_t serial=(gQ230NpcChat.serial+1u)&0xffffu;
+      gQ230NpcChat={ref,0x14,line.info,actor.aiPackage,0x20000000u|serial,serial,now};
+      nextRemark=now+8;fo3audio::DialogueGain(1.f/std::max(1.f,distance*.5f));
+      fo3audio::Dialogue(line.audio,gQ230NpcChat.token);return;
+    }
+    return;
+  }
+  if(gQ230NpcChat.listener==0x14){
+    const auto* speaker=DialogueActor(gQ230NpcChat.speaker);
+    const auto done=fo3audio::DialogueCompletion();
+    if(!speaker||!gPlayerSession||gDialogue.Active()||IsFo3LoadingVisible()||Fo3PipboyFocus()||
+       speaker->runtime.activity==fo3npc::Activity::Combat||!speaker->runtime.Alive()||
+       now-gQ230NpcChat.began>30||(done&&uint32_t(done>>1)==gQ230NpcChat.token))Q230ChatStop("ambient completion/interruption");
+    return;
+  }
   const auto* a=DialogueActor(gQ230NpcChat.speaker);
   const auto* b=DialogueActor(gQ230NpcChat.listener);
   if(!gPlayerSession||gPlayerSession->saveBlocked||IsFo3LoadingVisible()||

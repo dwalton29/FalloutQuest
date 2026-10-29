@@ -346,6 +346,20 @@ fo3anim::Matrix Q230PlacementMatrix(const Fo3WorldPlacement &placement) {
 
 bool Q230UploadActorPart(Q230ActorVisual &actor, CpuObject &part, float centerX,
                          float centerY, float floorZ) {
+  // BSDismember partitions 101..113 / 201..213 are wound caps,
+  // not geometry on the intact actor. Keep the original body partitions.
+  if(part.mesh.dismemberSkin && part.mesh.skinTriangleBodyParts.size()==part.mesh.indices.size()/3){
+    std::vector<uint32_t> intact;
+    for(size_t t=0;t<part.mesh.skinTriangleBodyParts.size();++t){
+      const auto region=part.mesh.skinTriangleBodyParts[t];
+      if((region>=101&&region<=113)||(region>=201&&region<=213))continue;
+      intact.insert(intact.end(),part.mesh.indices.begin()+t*3,part.mesh.indices.begin()+t*3+3);
+    }
+    if(intact.size()!=part.mesh.indices.size()){
+      part.mesh.indices=std::move(intact);part.q1960ExpandedReady=false;
+      if(part.mesh.indices.empty())return true;
+    }
+  }
 #ifndef FO3_ACTOR_RUNTIME_HOST_TEST
   if(part.placement.baseRecordType=="WEAP") {
     GpuObject gpu;if(!UploadCpuObject(part,0,0,0,gpu))return false;

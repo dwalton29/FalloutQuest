@@ -5,8 +5,8 @@ namespace fo3npcchat {
 Line SelectHello(const fo3pipdata::Definitions& d,const fo3player::Player& player,
                  const fo3dialogue::Context& context) {
   if(!context.speaker.reference||!context.target.reference||
-     context.target.reference==0x14||context.speaker.reference==context.target.reference||
-     player.ActorHealth(context.speaker.reference)<=0||player.ActorHealth(context.target.reference)<=0||
+     context.speaker.reference==context.target.reference||
+     player.ActorHealth(context.speaker.reference)<=0||(context.target.reference!=0x14&&player.ActorHealth(context.target.reference)<=0)||
      context.speaker.combat||context.target.combat)return {};
   uint32_t hello=0;
   for(const auto& topic:d.dialogueTopics)
@@ -25,6 +25,7 @@ Line SelectHello(const fo3pipdata::Definitions& d,const fo3player::Player& playe
        !info.end.source.empty()||!info.end.compiled.empty())continue;
     const auto& r=info.responses.front();
     if(r.text.empty()&&!r.sound)continue;
+    if(context.target.reference==0x14&&(info.flags&4u))continue; // Ambient playback does not commit Say Once results.
     if((info.flags&4u)&&player.Snapshot().pipboy.saidInfos.count(
        (uint64_t(context.speaker.reference)<<32)|info.id))continue;
     const auto quest=d.quests.find(info.quest);

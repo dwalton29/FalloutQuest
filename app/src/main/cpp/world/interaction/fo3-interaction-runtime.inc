@@ -123,6 +123,11 @@ bool QueryFo3Interaction(float ox, float oy, float oz, float dx, float dy,
     if(target.talk)return true;
     const auto ownership=player.ResolveOwnership(target.reference);
     target.crime=ownership.Theft();
+    // An unlocked load door enters the destination property. Ownership of
+    // the room being left must never mark an exit as theft. Picking still
+    // uses the source lock ownership and its canonical crime policy.
+    if(target.door.valid&&!target.door.localSwing&&!player.GetLock(target.reference).locked)
+        target.crime=player.ResolveOwnership(target.door.destinationDoorRef).Theft();
     if (target.container&&catalog.pipboy.targets.count(target.reference)&&catalog.actorInventories.count(catalog.pipboy.targets.at(target.reference).base))return true;
     if(target.terminal){
         std::snprintf(target.prompt.data(),target.prompt.size(),"Access %s",catalog.pipboy.terminals.at(catalog.references.at(target.reference).base).name.c_str());

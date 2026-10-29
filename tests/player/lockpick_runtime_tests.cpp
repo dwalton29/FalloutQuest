@@ -31,11 +31,20 @@ fo3player::Catalog Fixture(){using namespace fo3player;Catalog c;c.bobbyPin=10;c
  c.doorBases.insert(100);c.references[20].base=100;c.references[20].locked=true;c.references[20].lockLevel=100;
  c.references[20].owner=90;c.pipboy.dialogueActors[90].karma=0;c.lockSettings["iXPRewardPickLockVeryHard"]=60;return c;}
 int main(){try{
- auto c=Fixture();gPlayerSession=std::make_unique<fo3player::Session>(std::move(c));
+ auto c=Fixture();
+ {auto exits=Fixture();exits.references[20].cell=40;exits.cellOwnership[40].flags=1;
+  exits.pipboy.targets[20].teleportRef=21;exits.pipboy.targets[21].world=1;
+  exits.references[21].base=100;
+  fo3player::Player check(exits);
+  Check(!check.GetLock(20).locked&&check.CanOpenDoor(20),"unlocked exterior partner permits leaving interior");
+  Check(check.ScriptLock(20,100)&&check.GetLock(20).locked&&!check.CanOpenDoor(20),"explicit script lock still blocks exit");}
+ gPlayerSession=std::make_unique<fo3player::Session>(std::move(c));
  fo3anim::Clip intro;intro.name="Forward";intro.stop=1.333333f;fo3lockui::assets.lock.clips={intro};
  fo3anim::Clip broken;broken.name="Left";broken.stop=.466667f;fo3anim::Clip insertion;insertion.name="Forward";insertion.stop=1;fo3lockui::assets.pin.clips={insertion,broken};
  auto& p=gPlayerSession->player;double now=10;auto update=[&](float motion,float torque,bool a,bool b,bool focus=true,bool grip=false){now+=.05;UpdateFo3Lockpick(now,motion,torque,a,b,focus,nullptr,grip);};
- Check(BeginFo3Lockpick(20)&&Fo3LockpickFocus(),"actual modal enters");
+ fo3lockui::ready=false;
+ Check(BeginFo3Lockpick(20)&&Fo3LockpickFocus(),"cold asset preparation retains activation and modal focus");
+ fo3lockui::ready=true;
  for(int i=0;i<35;++i)update(1,1,true,false);
  Check(gLockpick.cylinder==0&&p.ItemCount(10)==2&&p.GetLock(20).locked&&flushes==0,"held entry A/trigger cannot force/break/rotate");
  update(0,0,false,false);gLockpick.pin=gLockpick.sweet>0?-90.f:90.f;

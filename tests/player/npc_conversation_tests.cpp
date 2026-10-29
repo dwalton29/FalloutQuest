@@ -33,7 +33,7 @@ int main(){
     assert(line.Valid()&&line.info==0xD3&&line.speaker==0xA1&&line.listener==0xB1);
     assert(line.subtitle=="Good afternoon."&&line.audio=="@sound:authored-npc-hello");
     auto other=ctx;other.target.reference=0x14;
-    assert(!fo3npcchat::SelectHello(d,player,other).Valid());
+    assert(fo3npcchat::SelectHello(d,player,other).Valid());
     other=ctx;other.target.reference=0xA1;
     assert(!fo3npcchat::SelectHello(d,player,other).Valid());
     other=ctx;other.target.combat=true;
