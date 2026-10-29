@@ -7,9 +7,9 @@ void NativeMotion(bool srgb=false,bool densityEmulation=false) {
     assert(fqvk::InitializeWorldProbe(reinterpret_cast<XrInstance>(uintptr_t(1)),1,64,64));
     auto& r=*fqvk::renderer;
     if(densityEmulation){
-        const auto pixels=fqvk::DensityPixels(64,64);assert(pixels.size()==64*64*4&&pixels[0]==64&&pixels[(32*64+32)*2]==255);
+        const auto pixels=fqvk::DensityPixels(64,64);assert(pixels.size()==64*64*4&&pixels[0]==63&&pixels[(32*64+32)*2]==255);
         assert(std::equal(pixels.begin(),pixels.begin()+64*64*2,pixels.begin()+64*64*2));
-        for(unsigned y=0;y<64;++y)for(unsigned x=0;x<64;++x){const auto v=pixels[(y*64+x)*2];assert(v==255||v==128||v==64);assert(v==pixels[((63-y)*64+(63-x))*2]);}
+        for(unsigned y=0;y<64;++y)for(unsigned x=0;x<64;++x){const auto v=pixels[(y*64+x)*2];assert(v==255||v==127||v==63);assert(v==pixels[((63-y)*64+(63-x))*2]);if(v!=255)assert(v*(v==127?2:4)<=255);}
         r.densityMap=r.MakeImage(4,4,VK_FORMAT_R8G8_UNORM,VK_IMAGE_USAGE_SAMPLED_BIT,VK_IMAGE_ASPECT_COLOR_BIT);r.CreateDensityPasses(false);r.foveationRequested=true;
     }
     XrGraphicsBindingVulkan2KHR binding{};assert(fqvk::GameplayBinding(binding));

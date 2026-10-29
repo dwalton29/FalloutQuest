@@ -10,7 +10,8 @@ inline std::vector<uint8_t> DensityPixels(uint32_t w,uint32_t h) {
     for(unsigned e=0;e<2;++e)for(uint32_t y=0;y<h;++y)for(uint32_t x=0;x<w;++x){
         const float nx=2.f*(x+.5f)/w-1,ny=2.f*(y+.5f)/h-1;
         const float radius=std::sqrt(nx*nx+ny*ny);
-        const uint8_t density=radius<=.75f?255:radius<=1.2f?128:64;
+        // Round density DOWN: 128/255 exceeds 1/2 and may forbid 2x2 fragments.
+        const uint8_t density=radius<=.75f?255:radius<=1.2f?127:63;
         const size_t at=(size_t(e)*w*h+y*w+x)*2;pixels[at]=pixels[at+1]=density;
     }
     return pixels;
