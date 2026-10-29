@@ -48,7 +48,7 @@ struct PostTarget {Image image;VkFramebuffer framebuffer{},overlay{};uint32_t wi
 struct UiTarget {PostTarget target;VkImageView sampled{};};
 struct MeshData {Buffer vertices,indices,skin;uint32_t count=0,stride=0;};
 struct ProgramData {
-    bool terrain=false,sky=false,water=false;int ui=0;
+    bool terrain=false,fused=false,sky=false,water=false;int ui=0;
     std::vector<uint8_t> bytes;
     struct Location {int location;shaders::Field field;};
     std::vector<Location> fields;
@@ -66,16 +66,16 @@ void ConfigureDiscardGuards(ProgramData& p,const shaders::Program& shader) {
 struct PipelineKey {
     uint32_t ui=0;bool strip=false,offscreen=false,swapchain=false,noDiscard=false,modal=false;
     uint32_t lighting=0;bool noLocal=false,noEnvironment=false,foveated=false;
-    bool split=false,offset=false,water=false,sky=false,skinned=false,instanced=false,terrain=false,depth=true,write=true,blend=false,cull=false,clockwise=false;
+    bool split=false,offset=false,water=false,sky=false,skinned=false,instanced=false,terrain=false,fused=false,depth=true,write=true,blend=false,cull=false,clockwise=false;
     uint32_t cullFace=GL_BACK,equation=GL_FUNC_ADD,equationA=GL_FUNC_ADD,stride=0,depthFunc=GL_LEQUAL,src=GL_ONE,dst=GL_ZERO,srcA=GL_ONE,dstA=GL_ZERO;
     bool operator==(const PipelineKey& k)const {
-        return lighting==k.lighting&&noLocal==k.noLocal&&noEnvironment==k.noEnvironment&&foveated==k.foveated&&split==k.split&&modal==k.modal&&noDiscard==k.noDiscard&&swapchain==k.swapchain&&offscreen==k.offscreen&&strip==k.strip&&ui==k.ui&&water==k.water&&offset==k.offset&&cullFace==k.cullFace&&equation==k.equation&&equationA==k.equationA&&sky==k.sky && skinned==k.skinned && instanced==k.instanced && terrain==k.terrain && depth==k.depth && write==k.write && blend==k.blend &&
+        return lighting==k.lighting&&noLocal==k.noLocal&&noEnvironment==k.noEnvironment&&foveated==k.foveated&&split==k.split&&modal==k.modal&&noDiscard==k.noDiscard&&swapchain==k.swapchain&&offscreen==k.offscreen&&strip==k.strip&&ui==k.ui&&water==k.water&&offset==k.offset&&cullFace==k.cullFace&&equation==k.equation&&equationA==k.equationA&&sky==k.sky && skinned==k.skinned && instanced==k.instanced && terrain==k.terrain && fused==k.fused && depth==k.depth && write==k.write && blend==k.blend &&
             cull==k.cull && clockwise==k.clockwise && stride==k.stride && depthFunc==k.depthFunc &&
             src==k.src && dst==k.dst && srcA==k.srcA && dstA==k.dstA;
     }
 };
 struct PipelineHash {size_t operator()(const PipelineKey& k)const {
-    size_t h=uint32_t(k.swapchain)*8191+uint32_t(k.offscreen)*4093+uint32_t(k.strip)*2017+k.ui*1009+uint32_t(k.water)*997+k.stride+uint32_t(k.instanced)*31+uint32_t(k.skinned)+uint32_t(k.sky)*101;for(auto v:{uint32_t(k.terrain),uint32_t(k.depth),uint32_t(k.write),uint32_t(k.blend),
+    size_t h=uint32_t(k.swapchain)*8191+uint32_t(k.offscreen)*4093+uint32_t(k.strip)*2017+k.ui*1009+uint32_t(k.water)*997+k.stride+uint32_t(k.instanced)*31+uint32_t(k.skinned)+uint32_t(k.sky)*101;for(auto v:{uint32_t(k.terrain),uint32_t(k.fused),uint32_t(k.depth),uint32_t(k.write),uint32_t(k.blend),
         k.lighting,uint32_t(k.noLocal),uint32_t(k.noEnvironment),uint32_t(k.foveated),uint32_t(k.split),uint32_t(k.modal),uint32_t(k.noDiscard),uint32_t(k.cull),uint32_t(k.clockwise),uint32_t(k.offset),k.cullFace,k.equation,k.equationA,k.depthFunc,k.src,k.dst,k.srcA,k.dstA}) { h=(h*16777619u)^v; }
     return h;
 }};
@@ -116,11 +116,11 @@ public:
     VkRenderPass modalPass{},modalXrPass{};VkFramebuffer modalFramebuffer{};
     std::vector<VkFramebuffer> modalXrFramebuffers;VkFormat xrColorFormat=VK_FORMAT_UNDEFINED;
     bool snapshotReady=false,snapshotInitialized=false;
-    VkSampler sampler{},nearest{},clamped{},verticalRepeat{};VkDescriptorSetLayout sets[13]{};VkPipelineLayout layouts[13]{};
-    VkShaderModule modules[12][2]{};VkDescriptorPool descriptors{};
-    VkShaderModule solidModules[2]{};bool genericShaders=false;
+    VkSampler sampler{},nearest{},clamped{},verticalRepeat{};VkDescriptorSetLayout sets[14]{};VkPipelineLayout layouts[14]{};
+    VkShaderModule modules[13][2]{};VkDescriptorPool descriptors{};
+    VkShaderModule solidModules[3]{};bool genericShaders=false;
     uint64_t foveatedDraws=0,specializedDraws=0;
-    uint64_t solidDraws=0,guardedDraws=0,worldDraws=0,landDraws=0;
+    uint64_t solidDraws=0,guardedDraws=0,worldDraws=0,landDraws=0,fusedLandDraws=0;
     VkQueryPool timestamps{};bool timestampSupported=false;uint32_t timestampBits=0;
     enum GpuPass {Scene,SceneResume,Ui,Adapt,Bloom,Film,Output,Snapshot,DepthCopy,Overlay,Motion,Composition,PassCount};
     static constexpr uint32_t QueryCount=4096;
@@ -237,7 +237,7 @@ public:
         descriptorCache.emplace(std::move(key),set);++descriptorAllocations;return set;
     }
     struct FrameSample {
-        uint64_t solid=0,guarded=0,world=0,land=0,foveated=0,specialized=0;bool compact=false;
+        uint64_t solid=0,guarded=0,world=0,land=0,fusedLand=0,foveated=0,specialized=0;bool compact=false;
         uint64_t serial=0,frame=0,copies=0,record=0,queueCpu=0,drawCpu=0,reuse=0,finish=0,xrWait=0,uploadCpu=0;
         uint64_t drawCount=0,vertexCount=0,skipCount=0;std::array<uint64_t,6> reasons{};uint32_t firstSkip=0,diagnostic=0,dropped=0;
         bool offscreen=false,profile=false,supported=false,direct=false,logFrame=false,buffered=false;
@@ -754,7 +754,7 @@ public:
         Check(vkCreateFramebuffer(device,&fi,nullptr,&framebuffer),"multiview framebuffer");
     }
     void CreateDescriptors() {
-        for(int kind=0;kind<12;++kind) {
+        for(int kind=0;kind<13;++kind) {
             const size_t count=shaders::programs[kind].samplerCount;
             std::vector<VkDescriptorSetLayoutBinding> bindings(count+2);
             for(uint32_t i=0;i<bindings.size();++i){auto& b=bindings[i];b.binding=i;b.descriptorCount=1;b.stageFlags=VK_SHADER_STAGE_VERTEX_BIT|VK_SHADER_STAGE_FRAGMENT_BIT;
@@ -764,34 +764,37 @@ public:
             VkPipelineLayoutCreateInfo li{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};li.setLayoutCount=1;li.pSetLayouts=&sets[kind];
             Check(vkCreatePipelineLayout(device,&li,nullptr,&layouts[kind]),"pipeline layout");
         }
-        for(int kind=0;kind<12;++kind)for(int stage=0;stage<2;++stage) {
+        for(int kind=0;kind<13;++kind)for(int stage=0;stage<2;++stage) {
             const auto& shader=shaders::programs[kind];VkShaderModuleCreateInfo ci{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
             ci.codeSize=stage?shader.fragmentBytes:shader.vertexBytes;ci.pCode=stage?shader.fragment:shader.vertex;
             Check(vkCreateShaderModule(device,&ci,nullptr,&modules[kind][stage]),"SPIR-V module");
         }
-        for(size_t i=0;i<2;++i){const auto& shader=shaders::solidFragments[i];
+        for(size_t i=0;i<3;++i){const auto& shader=shaders::solidFragments[i];
             VkShaderModuleCreateInfo ci{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};ci.codeSize=shader.bytes;ci.pCode=shader.code;
             Check(vkCreateShaderModule(device,&ci,nullptr,&solidModules[i]),"solid fragment SPIR-V");}
         descriptors=MakeDescriptorPool();
     }
     VkPipeline Pipeline(const PipelineKey& key) {
         const auto found=pipelines.find(key);if(found!=pipelines.end())return found->second;
-        const int kind=key.ui?int(key.ui):key.water?3:key.sky?2:key.terrain?1:0;
+        const int kind=key.ui?int(key.ui):key.water?3:key.sky?2:key.terrain?(key.fused?TerrainFusionKind:1):0;
         std::array<VkPipelineShaderStageCreateInfo,2> stages{};
         for(int i=0;i<2;++i){stages[i].sType=VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;stages[i].stage=i?VK_SHADER_STAGE_FRAGMENT_BIT:VK_SHADER_STAGE_VERTEX_BIT;stages[i].module=modules[kind][i];stages[i].pName="main";}
-        if(key.noDiscard)stages[1].module=solidModules[kind];
+        if(key.noDiscard)stages[1].module=solidModules[key.fused?2:kind];
         const uint32_t materialConstants[]{key.lighting,uint32_t(key.noLocal),uint32_t(key.noEnvironment)};
         const VkSpecializationMapEntry materialEntries[]{{0,0,4},{1,4,4},{2,8,4}};
         const VkSpecializationInfo materialSpecialization{3,materialEntries,sizeof(materialConstants),materialConstants};
-        if(kind<2)stages[1].pSpecializationInfo=&materialSpecialization;
-        if(key.split&&kind<4)stages[1].module=splitModules[kind==3?5:key.noDiscard?kind+3:kind];
+        if(kind<2||kind==TerrainFusionKind)stages[1].pSpecializationInfo=&materialSpecialization;
+        if(key.split&&(kind<4||key.fused))stages[1].module=splitModules[key.fused?(key.noDiscard?7:6):kind==3?5:key.noDiscard?kind+3:kind];
         VkVertexInputBindingDescription binding{0,key.stride*4,VK_VERTEX_INPUT_RATE_VERTEX};
         std::vector<VkVertexInputAttributeDescription> attributes;
         if(key.ui==11)attributes={{0,0,VK_FORMAT_R32G32B32_SFLOAT,0},{1,0,VK_FORMAT_R32G32B32_SFLOAT,12},{2,0,VK_FORMAT_R32G32_SFLOAT,24},{3,0,VK_FORMAT_R32G32B32A32_SFLOAT,32}};
         else if(key.ui){attributes={{0,0,VK_FORMAT_R32G32B32_SFLOAT,0},{1,0,VK_FORMAT_R32G32_SFLOAT,12}};if(key.ui==10)attributes.push_back({2,0,VK_FORMAT_R32_SFLOAT,20});}
         else if(key.water)attributes={{0,0,VK_FORMAT_R32G32B32_SFLOAT,0},{1,0,VK_FORMAT_R32G32_SFLOAT,12}};
         else if(key.sky)attributes={{0,0,VK_FORMAT_R32G32B32_SFLOAT,0}};
-        else if(key.terrain)attributes={{0,0,VK_FORMAT_R32G32B32_SFLOAT,0},{1,0,VK_FORMAT_R32G32B32_SFLOAT,12},{2,0,VK_FORMAT_R32G32_SFLOAT,24},{3,0,VK_FORMAT_R32_SFLOAT,32},{4,0,VK_FORMAT_R32G32B32_SFLOAT,36}};
+        else if(key.terrain){
+            attributes={{0,0,VK_FORMAT_R32G32B32_SFLOAT,0},{1,0,VK_FORMAT_R32G32B32_SFLOAT,12},{2,0,VK_FORMAT_R32G32_SFLOAT,24},{3,0,VK_FORMAT_R32_SFLOAT,32},{4,0,VK_FORMAT_R32G32B32_SFLOAT,36}};
+            if(key.fused)attributes.push_back({5,0,VK_FORMAT_R32G32B32_SFLOAT,key.stride==15?48u:0u});
+        }
         else attributes={{0,0,VK_FORMAT_R32G32B32_SFLOAT,0},{1,0,VK_FORMAT_R32G32B32_SFLOAT,12},{2,0,VK_FORMAT_R32G32B32_SFLOAT,24},{3,0,VK_FORMAT_R32G32B32_SFLOAT,36},{4,0,VK_FORMAT_R32G32_SFLOAT,48},{5,0,VK_FORMAT_R32G32B32A32_SFLOAT,56}};
         // Unused skin/instance inputs must still have defined attributes. The
         // probe rejects draws needing those streams rather than render bind poses.
@@ -838,7 +841,7 @@ public:
         DrainDraws();
         if(!fqrender::locationLookup)throw std::runtime_error("missing CPU program binding resolver");
         const auto& shader=shaders::programs[kind];
-        ProgramData p;p.terrain=kind==1;p.sky=kind==2;p.water=kind==3;p.ui=kind>=9?kind:0;p.bytes.resize(shader.uniformSize);
+        ProgramData p;p.terrain=kind==1||kind==TerrainFusionKind;p.fused=kind==TerrainFusionKind;p.sky=kind==2;p.water=kind==3;p.ui=kind>=9&&kind<=11?kind:0;p.bytes.resize(shader.uniformSize);
         for(size_t i=0;i<shader.fieldCount;++i){int location=fqrender::locationLookup(id,shader.fields[i].name);if(location>=0)p.fields.push_back({location,shader.fields[i]});}
         for(size_t i=0;i<shader.samplerCount;++i)p.samplers.push_back(fqrender::locationLookup(id,shader.samplers[i].name));
         ConfigureDiscardGuards(p,shader);
@@ -898,7 +901,7 @@ public:
         if((mode!=GL_TRIANGLES&&mode!=GL_TRIANGLE_STRIP)||(type&&type!=GL_UNSIGNED_INT)){skip(2);return;}
         if(count<=0||instances<=0||(instances>1&&draw.transforms.size()<size_t(instances)*16)){skip(4);return;}
         if(UsesSkin(p,item.uniforms)&&!mIt->second.skin.buffer){skip(3);return;}
-        const auto& m=mIt->second;const int kind=p.ui?p.ui:p.water?3:p.sky?2:p.terrain?1:0;
+        const auto& m=mIt->second;const int kind=p.ui?p.ui:p.water?3:p.sky?2:p.terrain?(p.fused?TerrainFusionKind:1):0;
         const uint32_t indexFirst=type?(p.terrain?0:uint32_t(offset/4)):uint32_t(first);
         if(indexFirst>m.count||uint32_t(count)>m.count-indexFirst||(type&&!m.indices.buffer)){skip(4);return;}
         const auto drawStarted=passTiming?NowUs():0;
@@ -906,9 +909,9 @@ public:
         if(splitFrame&&worldDepthReady&&!p.ui&&!postDone&&s.depth&&s.write)lateWorldDepthWrite=true;
         if(p.ui&&(densityActive||(splitFrame&&!worldDepthReady)))FullRateScene();
         else if(!p.ui&&splitFrame&&!sidecarPass&&!offscreen&&!postDone)ResumeSidecar();
-        PipelineKey key;key.modal=modalActive;key.offscreen=offscreen;key.swapchain=directOutput||(compactFrame&&postDone);key.strip=mode==GL_TRIANGLE_STRIP;key.ui=uint32_t(p.ui);key.water=p.water;key.sky=p.sky;key.terrain=p.terrain;key.stride=m.stride;key.instanced=instances>1;key.skinned=UsesSkin(p,item.uniforms);
+        PipelineKey key;key.modal=modalActive;key.offscreen=offscreen;key.swapchain=directOutput||(compactFrame&&postDone);key.strip=mode==GL_TRIANGLE_STRIP;key.ui=uint32_t(p.ui);key.water=p.water;key.sky=p.sky;key.terrain=p.terrain;key.fused=p.fused;key.stride=m.stride;key.instanced=instances>1;key.skinned=UsesSkin(p,item.uniforms);
         key.split=sidecarPass&&!offscreen&&!postDone;key.foveated=densityActive&&!offscreen&&!postDone;
-        if(!genericShaders&&kind<2){
+        if(!genericShaders&&(kind<2||p.fused)){
             if(p.lightingOffset!=UINT32_MAX){float value;std::memcpy(&value,item.uniforms.data()+p.lightingOffset,4);key.lighting=value>.5f?1:value<.5f?2:0;}
             if(p.environmentOffset!=UINT32_MAX){float value;std::memcpy(&value,item.uniforms.data()+p.environmentOffset,4);key.noEnvironment=value<=.5f;}
             if(p.localOffset!=UINT32_MAX){int count;std::memcpy(&count,item.uniforms.data()+p.localOffset,4);key.noLocal=count<=0;}
@@ -929,6 +932,12 @@ public:
             if(!std::strcmp(e.field.name,"uReflectionReady"))*out=0.0f; // planar native pass pending
             if(!std::strcmp(e.field.name,"uViewport")){out[0]=float(width);out[1]=float(height);}
         }
+        // Native scene attachments are FP16 even when the compatibility
+        // frontend's legacy RTT state is inactive. Match the actual blend target.
+        if(p.fused&&!offscreen&&!postDone)for(const auto& e:p.fields)
+            if(!std::strcmp(e.field.name,"uRoundMode")) {
+                const int mode=1;std::memcpy(static_cast<uint8_t*>(arena.mapped)+cursor+e.field.offset,&mode,4);
+            }
         std::vector<VkDescriptorImageInfo> imageInfo(item.units.size());
         const auto* samplerMeta=shaders::programs[kind].samplers;
         for(size_t i=0;i<item.units.size();++i){
@@ -967,8 +976,8 @@ public:
         else vkCmdDraw(command,count,instances,first,0);
         ++draws;vertices+=uint64_t(count)*instances;
         if(key.foveated)++foveatedDraws;
-        if(kind<2&&(key.lighting||key.noLocal))++specializedDraws;
-        if(kind<2){if(key.noDiscard)++solidDraws;else ++guardedDraws;if(kind)++landDraws;else ++worldDraws;}
+        if((kind<2||p.fused)&&(key.lighting||key.noLocal))++specializedDraws;
+        if(kind<2||kind==TerrainFusionKind){if(key.noDiscard)++solidDraws;else ++guardedDraws;if(p.terrain){++landDraws;if(key.fused&&key.stride==15)++fusedLandDraws;}else ++worldDraws;}
         if(passTiming)drawCpuUs+=NowUs()-drawStarted;
     }
     void WaterSnapshot() {
@@ -1271,7 +1280,7 @@ public:
             for(int k=0;k<4;++k)data[88+col*4+row]+=float(right[k*4+row]*inverse[k][col+4]);
         }
         std::memcpy(stereo.mapped,data,sizeof(data));
-        pending.clear();postDone=false;directOutput=false;snapshotReady=false;cursor=0;foveatedDraws=specializedDraws=0;solidDraws=guardedDraws=worldDraws=landDraws=0;draws=vertices=skipped=0;skipReasons.fill(0);firstSkippedProgram=0;
+        pending.clear();postDone=false;directOutput=false;snapshotReady=false;cursor=0;foveatedDraws=specializedDraws=0;solidDraws=guardedDraws=worldDraws=landDraws=fusedLandDraws=0;draws=vertices=skipped=0;skipReasons.fill(0);firstSkippedProgram=0;
         VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};bi.flags=VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
         Check(vkBeginCommandBuffer(command,&bi),"begin frame");
         // Shared HDR/depth/history/UI targets are queue-ordered. Only CPU-written
@@ -1332,7 +1341,7 @@ public:
         auto& slot=frameSlots[activeSlot];slot.pending=true;slot.serial=++submissionSerial;
         if(!offscreen)++frames;
         FrameSample sample;sample.copies=presentationCopies;sample.serial=submissionSerial;sample.frame=offscreen?frames+1:frames;
-        sample.foveated=foveatedDraws;sample.specialized=specializedDraws;sample.compact=compactFrame&&!offscreen;sample.solid=solidDraws;sample.guarded=guardedDraws;sample.world=worldDraws;sample.land=landDraws;
+        sample.foveated=foveatedDraws;sample.specialized=specializedDraws;sample.compact=compactFrame&&!offscreen;sample.solid=solidDraws;sample.guarded=guardedDraws;sample.world=worldDraws;sample.land=landDraws;sample.fusedLand=fusedLandDraws;
         sample.record=recordSpanUs;sample.queueCpu=queueCpuUs;sample.drawCpu=drawCpuUs;sample.reuse=reuseWaitUs;sample.xrWait=xrWaitUs;
         sample.uploadCpu=uploadPrepareUs-lastUploadPrepareUs;lastUploadPrepareUs=uploadPrepareUs;
         sample.drawCount=draws;sample.vertexCount=vertices;sample.skipCount=skipped;sample.reasons=skipReasons;sample.firstSkip=firstSkippedProgram;
@@ -1347,8 +1356,8 @@ public:
         PollFrames();Collect();if(!offscreen&&!gameplay)Dump();
     }
     void ReportFrame(const FrameSample& sample,VkQueryPool queryPool) {
-        if(sample.profile||sample.logFrame)VKLOG("FQVK MATERIAL submission=%llu worldDraws=%llu landDraws=%llu noDiscardDraws=%llu genericDraws=%llu genericForced=%d hdrColorSurfaceMiB=%.2f depthSurfaceMiB=%.2f stagingCacheLimit=%zu foveatedDraws=%llu lightingSpecializedDraws=%llu compactFilm=%d",
-            (unsigned long long)sample.serial,(unsigned long long)sample.world,(unsigned long long)sample.land,
+        if(sample.profile||sample.logFrame)VKLOG("FQVK MATERIAL submission=%llu worldDraws=%llu landDraws=%llu fusedLandDraws=%llu noDiscardDraws=%llu genericDraws=%llu genericForced=%d hdrColorSurfaceMiB=%.2f depthSurfaceMiB=%.2f stagingCacheLimit=%zu foveatedDraws=%llu lightingSpecializedDraws=%llu compactFilm=%d",
+            (unsigned long long)sample.serial,(unsigned long long)sample.world,(unsigned long long)sample.land,(unsigned long long)sample.fusedLand,
             (unsigned long long)sample.solid,(unsigned long long)sample.guarded,genericShaders,
             double(width)*height*2*8/(1024*1024),double(width)*height*2*4/(1024*1024),stagingPoolCountLimit,(unsigned long long)sample.foveated,(unsigned long long)sample.specialized,sample.compact);
         const auto offscreen=sample.offscreen;const auto passTiming=sample.profile;
@@ -1619,7 +1628,7 @@ public:
             Destroy(color);Destroy(depth);Destroy(sceneColor);Destroy(sceneDepth);
             if(descriptors)vkDestroyDescriptorPool(device,descriptors,nullptr);
             for(auto module:solidModules)if(module)vkDestroyShaderModule(device,module,nullptr);
-            for(int k=0;k<12;++k){if(layouts[k])vkDestroyPipelineLayout(device,layouts[k],nullptr);if(sets[k])vkDestroyDescriptorSetLayout(device,sets[k],nullptr);for(auto m:modules[k])if(m)vkDestroyShaderModule(device,m,nullptr);}
+            for(int k=0;k<13;++k){if(layouts[k])vkDestroyPipelineLayout(device,layouts[k],nullptr);if(sets[k])vkDestroyDescriptorSetLayout(device,sets[k],nullptr);for(auto m:modules[k])if(m)vkDestroyShaderModule(device,m,nullptr);}
             if(timestamps)vkDestroyQueryPool(device,timestamps,nullptr);
             if(verticalRepeat)vkDestroySampler(device,verticalRepeat,nullptr);
             if(clamped)vkDestroySampler(device,clamped,nullptr);

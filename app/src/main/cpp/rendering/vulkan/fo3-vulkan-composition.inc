@@ -6,7 +6,7 @@ VkRenderPass splitPass{},splitResumePass{},compositionPass{};
 VkFramebuffer splitFramebuffer{};
 Image splitColour,worldDepthSnapshot;
 bool worldDepthReady=false,worldDepthInitialized=false,lateWorldDepthWrite=false;
-VkShaderModule splitModules[6]{},compositionModule{};
+VkShaderModule splitModules[8]{},compositionModule{};
 VkPipeline compositionPipeline{};
 XrSwapchain compositionChain=XR_NULL_HANDLE;
 std::vector<VkImageView> compositionViews;
@@ -86,7 +86,7 @@ void CreateCompositionSwapchain() {
     VkPipelineColorBlendStateCreateInfo blend{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};blend.attachmentCount=2;blend.pAttachments=blendAttachments.data();
     const VkDynamicState states[]{VK_DYNAMIC_STATE_VIEWPORT,VK_DYNAMIC_STATE_SCISSOR};VkPipelineDynamicStateCreateInfo ds{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};ds.dynamicStateCount=2;ds.pDynamicStates=states;
     const uint32_t compact=xrSrgb?1:0;const VkSpecializationMapEntry entry{0,0,4};const VkSpecializationInfo specialization{1,&entry,4,&compact};stages[1].pSpecializationInfo=&specialization;
-    VkGraphicsPipelineCreateInfo ci{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};ci.stageCount=2;ci.pStages=stages.data();ci.pVertexInputState=&vertex;ci.pInputAssemblyState=&ia;ci.pViewportState=&vp;ci.pRasterizationState=&rs;ci.pMultisampleState=&ms;ci.pColorBlendState=&blend;ci.pDynamicState=&ds;ci.layout=layouts[12];ci.renderPass=compositionPass;
+    VkGraphicsPipelineCreateInfo ci{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};ci.stageCount=2;ci.pStages=stages.data();ci.pVertexInputState=&vertex;ci.pInputAssemblyState=&ia;ci.pViewportState=&vp;ci.pRasterizationState=&rs;ci.pMultisampleState=&ms;ci.pColorBlendState=&blend;ci.pDynamicState=&ds;ci.layout=layouts[MotionKind];ci.renderPass=compositionPass;
     Check(vkCreateGraphicsPipelines(device,VK_NULL_HANDLE,1,&ci,nullptr,&compositionPipeline),"native effects composition pipeline");
 }
 void CreateComposition() {
@@ -105,9 +105,9 @@ void CreateComposition() {
     Check(vkCreateRenderPass(device,&pi,nullptr,&splitResumePass),"world colour sidecar continuation");
     const VkImageView views[]{color.view,depth.view,splitColour.view};VkFramebufferCreateInfo fi{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};fi.renderPass=splitPass;fi.attachmentCount=3;fi.pAttachments=views;fi.width=width;fi.height=height;fi.layers=1;
     Check(vkCreateFramebuffer(device,&fi,nullptr,&splitFramebuffer),"world colour sidecar framebuffer");
-    const uint32_t* code[]{shaders::world_split_frag,shaders::terrain_split_frag,shaders::sky_split_frag,shaders::world_solid_split_frag,shaders::terrain_solid_split_frag,shaders::water_split_frag,shaders::composition_split_frag};
-    const size_t bytes[]{sizeof(shaders::world_split_frag),sizeof(shaders::terrain_split_frag),sizeof(shaders::sky_split_frag),sizeof(shaders::world_solid_split_frag),sizeof(shaders::terrain_solid_split_frag),sizeof(shaders::water_split_frag),sizeof(shaders::composition_split_frag)};
-    for(unsigned i=0;i<7;++i){VkShaderModuleCreateInfo mi{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};mi.pCode=code[i];mi.codeSize=bytes[i];Check(vkCreateShaderModule(device,&mi,nullptr,i<6?&splitModules[i]:&compositionModule),"sidecar shader");}
+    const uint32_t* code[]{shaders::world_split_frag,shaders::terrain_split_frag,shaders::sky_split_frag,shaders::world_solid_split_frag,shaders::terrain_solid_split_frag,shaders::water_split_frag,shaders::terrain_fused_split_frag,shaders::terrain_fused_solid_split_frag,shaders::composition_split_frag};
+    const size_t bytes[]{sizeof(shaders::world_split_frag),sizeof(shaders::terrain_split_frag),sizeof(shaders::sky_split_frag),sizeof(shaders::world_solid_split_frag),sizeof(shaders::terrain_solid_split_frag),sizeof(shaders::water_split_frag),sizeof(shaders::terrain_fused_split_frag),sizeof(shaders::terrain_fused_solid_split_frag),sizeof(shaders::composition_split_frag)};
+    for(unsigned i=0;i<9;++i){VkShaderModuleCreateInfo mi{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};mi.pCode=code[i];mi.codeSize=bytes[i];Check(vkCreateShaderModule(device,&mi,nullptr,i<8?&splitModules[i]:&compositionModule),"sidecar shader");}
     CreateDensityPasses(true);
     CreateCompositionSwapchain();
 }
@@ -144,10 +144,10 @@ void ComposeSplit() {
     auto* bytes=static_cast<uint8_t*>(arena.mapped)+cursor;std::memset(bytes,0,shader.uniformSize);
     for(size_t i=0;i<shader.fieldCount;++i){const auto& f=shader.fields[i];const auto v=splitPostValues.find(f.name);if(v==splitPostValues.end())continue;if(f.integer){const int n=int(v->second[0]);std::memcpy(bytes+f.offset,&n,4);}else std::memcpy(bytes+f.offset,v->second.data(),std::min<size_t>(f.components,v->second.size())*4);}
     const std::vector<VkDescriptorImageInfo> images{{clamped,splitColour.view,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},{nearest,adapted[adaptIndex].image.view,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},{clamped,bloom[1].image.view,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},{nearest,Finished().image.view,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}};
-    const auto set=Descriptor(12,shader.uniformSize,images);const uint32_t offset=uint32_t(cursor);cursor+=shader.uniformSize;
+    const auto set=Descriptor(MotionKind,shader.uniformSize,images);const uint32_t offset=uint32_t(cursor);cursor+=shader.uniformSize;
     VkRenderPassBeginInfo bi{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};bi.renderPass=compositionPass;bi.framebuffer=compositionFrames[acquiredColor*compositionViews.size()+compositionIndex];bi.renderArea.extent={width,height};BeginPass(Composition,bi);
     const VkViewport viewport{0,0,float(width),float(height),0,1};const VkRect2D scissor{{0,0},{width,height}};vkCmdSetViewport(command,0,1,&viewport);vkCmdSetScissor(command,0,1,&scissor);
-    vkCmdBindPipeline(command,VK_PIPELINE_BIND_POINT_GRAPHICS,compositionPipeline);vkCmdBindDescriptorSets(command,VK_PIPELINE_BIND_POINT_GRAPHICS,layouts[12],0,1,&set,1,&offset);vkCmdDraw(command,3,1,0,0);EndPass();
+    vkCmdBindPipeline(command,VK_PIPELINE_BIND_POINT_GRAPHICS,compositionPipeline);vkCmdBindDescriptorSets(command,VK_PIPELINE_BIND_POINT_GRAPHICS,layouts[MotionKind],0,1,&set,1,&offset);vkCmdDraw(command,3,1,0,0);EndPass();
 }
 void ReleaseComposition() {
     if(!compositionAcquired)return;

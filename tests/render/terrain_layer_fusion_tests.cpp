@@ -75,5 +75,32 @@ int main(){
     const auto original=b;stats=fo3terrain::FuseLayers(b,ready);
     assert(!stats.triangles && b.size()==7);
     for(size_t i=0;i<7;++i)assert(b[i].vertices==original[i].vertices);
+    // Retained complex geometry must not veto useful large groups elsewhere.
+    b=std::vector<Batch>(7);for(size_t i=1;i<7;++i){b[i].alphaLayer=true;b[i].texturePath=std::to_string(i);}
+    for(int mask=1;mask<=32;++mask){
+        if(__builtin_popcount(unsigned(mask))!=3&&mask!=15&&mask!=32)continue;
+        for(int repeat=0;repeat<(mask==32?20:1);++repeat)for(int layer=0;layer<7;++layer){
+            if(layer&&!(mask&(1<<(layer-1))))continue;
+            auto t=Triangle(layer!=0,layer?.4f:1,float(mask+repeat*64)*2);
+            b[layer].vertices.insert(b[layer].vertices.end(),t.vertices.begin(),t.vertices.end());
+        }
+    }
+    stats=fo3terrain::FuseLayers(b,ready);
+    size_t draws=0;for(const auto& batch:b)draws+=!batch.vertices.empty();
+    assert(stats.triangles>0&&stats.groups>0&&stats.fallback>0&&draws<=7);
+    std::map<int,std::pair<int,unsigned>> contributions;
+    auto paint=[&](int mask,unsigned layer){auto& value=contributions[mask];assert(!(value.second&(1u<<layer)));value.second|=1u<<layer;};
+    for(size_t batch=0;batch<b.size();++batch){const auto& value=b[batch];
+        for(size_t at=0;at<value.vertices.size();at+=value.vertexFloats*3){
+            const int mask=int(value.vertices[at]/2);auto& contribution=contributions[mask];
+            if(value.alphaLayer)paint(mask,unsigned(batch-1));
+            else {++contribution.first;
+                for(size_t layer=0;layer<value.paintMaterials.size();++layer)
+                    if(value.vertices[at+12+layer]>0)paint(mask,unsigned(std::stoi(value.paintMaterials[layer].texturePath)-1));
+            }
+        }
+    }
+    assert(contributions.size()==31);
+    for(const auto& value:contributions)assert(value.second.first==1&&value.second.second==unsigned(value.first%64));
     std::cout<<"Terrain fusion: exact stacks, ordered alpha, fallback and draw guard passed\n";
 }

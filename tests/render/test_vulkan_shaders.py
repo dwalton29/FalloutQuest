@@ -11,11 +11,11 @@ spec=importlib.util.spec_from_file_location('vkbuild',ROOT/'tools/build_vulkan_s
 vkbuild=importlib.util.module_from_spec(spec);spec.loader.exec_module(vkbuild)
 class VulkanShaders(unittest.TestCase):
     def test_solid_variants_preserve_material_and_remove_only_inactive_guards(self):
-        for name in ('world','terrain'):
+        for name in ('world','terrain','terrain_fused'):
             original=vkbuild.port(vkbuild.sources()[name],name)[0][1]
             solid=vkbuild.no_discard_fragment(original,name)
             self.assertNotIn('discard;',solid)
-            self.assertIn('texture(uNormalGloss',solid)
+            self.assertIn('textureGrad(normalMap' if name=='terrain_fused' else 'texture(uNormalGloss',solid)
             self.assertIn('uLocalLightPosRadius',solid)
             self.assertIn('lit = mix(lit, uFogColor, fogFactor)',solid)
             self.assertEqual(original.split('void main()')[0],solid.split('void main()')[0])
@@ -56,6 +56,12 @@ class VulkanShaders(unittest.TestCase):
             # Original per-vertex FO3 fog stays in GL clip space, before remapping.
             self.assertIn('length(q1532Clip.xyz)',converted[0])
             if name=='terrain':self.assertNotIn('uPaintCount',converted[1])
+            if name=='terrain_fused':
+                self.assertIn('uPaintCount',converted[1])
+                self.assertIn('layout(location = 5) in vec3 aPaintAlpha',converted[0])
+                self.assertEqual(len(samplers),9)
+                self.assertIn('textureGrad(diffuseMap',converted[1])
+                self.assertLess(converted[1].index('uvDx = dFdx'),converted[1].index('if (uPaintCount == 0)'))
     def test_compile_link_validate(self):
         compiler=os.environ.get('FQ_SHADER_COMPILER') or shutil.which('glslangValidator')
         self.assertIsNotNone(compiler,'Set FQ_SHADER_COMPILER or install glslang-tools')
@@ -77,14 +83,14 @@ class VulkanShaders(unittest.TestCase):
                     counts[name]=(dis.count('OpImageSample'),dis.count('OpExtInst '))
                 self.assertLess(counts['unlit'][0],counts['dynamic'][0])
                 self.assertLess(counts['unlit'][1],counts['dynamic'][1])
-            for name in ('world','terrain'):
+            for name in ('world','terrain','terrain_fused'):
                 if shutil.which('spirv-val'):
                     subprocess.run(['spirv-val','--target-env','vulkan1.1',str(out/f'{name}_solid.frag.spv')],check=True)
                 subprocess.run([compiler,'-V','--target-env','vulkan1.1','-l',str(out/f'{name}.vert'),str(out/f'{name}_solid.frag'),'-o',str(out/f'{name}-solid-linked.spv')],check=True)
                 if shutil.which('spirv-dis'):
                     dis=subprocess.check_output(['spirv-dis',str(out/f'{name}_solid.frag.spv')],text=True)
                     self.assertNotIn('OpKill',dis)
-            for name,vertex in [('world_split','world'),('world_solid_split','world'),('terrain_split','terrain'),('terrain_solid_split','terrain'),('sky_split','sky'),('water_split','water'),('composition_split','post')]:
+            for name,vertex in [('world_split','world'),('world_solid_split','world'),('terrain_split','terrain'),('terrain_solid_split','terrain'),('sky_split','sky'),('water_split','water'),('terrain_fused_split','terrain_fused'),('terrain_fused_solid_split','terrain_fused'),('composition_split','post')]:
                 file=out/f'{name}.frag.spv'
                 if shutil.which('spirv-val'):
                     subprocess.run(['spirv-val','--target-env','vulkan1.1',str(file)],check=True)

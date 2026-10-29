@@ -309,6 +309,7 @@ GLuint Q76BCompile(GLenum type, const char* source) {
 }
 
 GLuint Q76BCreateProgram() {
+    fo3terrain::nativeFusionReady=false;
     static const char* vertexSource = R"(
         #version 300 es
         layout(location = 0) in vec3 aPosition;
@@ -436,11 +437,11 @@ GLuint Q76BCreateProgram() {
         }
         vec3 Q238ShadeLayer(sampler2D diffuseMap, sampler2D normalMap,
                              int useTexture, int useNormal, float specularEnabled,
-                             Q239SharedLighting lighting) {
+                             Q239SharedLighting lighting, vec2 uvDx, vec2 uvDy) {
             vec3 N = normalize(vNormal);
             vec4 normalGloss = vec4(0.5, 0.5, 1.0, 0.0);
             if (useNormal != 0) {
-                normalGloss = texture(normalMap, vTexCoord);
+                normalGloss = textureGrad(normalMap, vTexCoord, uvDx, uvDy);
                 vec3 tangentNormal = normalize(normalGloss.xyz * 2.0 - 1.0);
                 vec3 authoredU = vec3(1.0, 0.0, 0.0);
                 vec3 T = authoredU - N * dot(N, authoredU);
@@ -458,7 +459,7 @@ GLuint Q76BCreateProgram() {
 #endif
             float lambert = max(dot(N, lightDirection), 0.0);
             vec3 earthFallback = vec3(0.34, 0.27, 0.18);
-            vec3 albedo = (useTexture != 0 ? texture(diffuseMap, vTexCoord).rgb : earthFallback) * vVertexColor;
+            vec3 albedo = (useTexture != 0 ? textureGrad(diffuseMap, vTexCoord, uvDx, uvDy).rgb : earthFallback) * vVertexColor;
             float q1050SunVisibility = Q1050ShadowVisibility(vShadowCoord, N, lightDirection);
             vec3 q1570LandWorldDiffuse =
                 albedo * (uAmbientColor + uSunlightColor * lambert * q1050SunVisibility);
@@ -513,30 +514,35 @@ GLuint Q76BCreateProgram() {
                                    a*a + previous.a * (1.0-a)));
         }
         void main() {
+            // Paint alpha varies across fragments. Compute derivatives before
+            // discard/paint branches; implicit texture LOD there is undefined.
+            vec2 uvDx = dFdx(vTexCoord), uvDy = dFdy(vTexCoord);
             if (uWaterReflectionClipEnabledQ2090 > 0.5 &&
-                vPosition.y < uWaterReflectionPlaneYQ2090) discard;
+                vPosition.y < uWaterReflectionPlaneYQ2090) { discard; }
             Q239SharedLighting lighting = Q239PrepareSharedLighting();
             vec3 base = Q238ShadeLayer(uDiffuse, uNormalGloss, uUseTexture,
-                                      uUseNormal, uTerrainSpecularEnabled, lighting);
+                                      uUseNormal, uTerrainSpecularEnabled, lighting, uvDx, uvDy);
             if (uPaintCount == 0) {
                 fragColor = vec4(base, clamp(vAlpha, 0.0, 1.0));
                 return;
             }
             highp vec4 result = Q238Round(vec4(base, 1.0));
             if (uPaintCount > 0 && vPaintAlpha.x != 0.0) result = Q238Over(result,
-                Q238ShadeLayer(uPaintDiffuse0, uPaintNormal0, 1, int(uPaintFlags0.x), uPaintFlags0.y, lighting),
+                Q238ShadeLayer(uPaintDiffuse0, uPaintNormal0, 1, int(uPaintFlags0.x), uPaintFlags0.y, lighting, uvDx, uvDy),
                 vPaintAlpha.x);
             if (uPaintCount > 1 && vPaintAlpha.y != 0.0) result = Q238Over(result,
-                Q238ShadeLayer(uPaintDiffuse1, uPaintNormal1, 1, int(uPaintFlags1.x), uPaintFlags1.y, lighting),
+                Q238ShadeLayer(uPaintDiffuse1, uPaintNormal1, 1, int(uPaintFlags1.x), uPaintFlags1.y, lighting, uvDx, uvDy),
                 vPaintAlpha.y);
             if (uPaintCount > 2 && vPaintAlpha.z != 0.0) result = Q238Over(result,
-                Q238ShadeLayer(uPaintDiffuse2, uPaintNormal2, 1, int(uPaintFlags2.x), uPaintFlags2.y, lighting),
+                Q238ShadeLayer(uPaintDiffuse2, uPaintNormal2, 1, int(uPaintFlags2.x), uPaintFlags2.y, lighting, uvDx, uvDy),
                 vPaintAlpha.z);
             fragColor = result;
         }
     )";
 
-    const bool q239Legacy = fo3terrain::LegacyLayers();
+    // Retain the recovered GLES program; native SPIR-V is registered below.
+    // Its CPU uniform locations are supplied by the native frontend.
+    const bool q239Legacy = true;
     const bool q239Unshared = !q239Legacy && fo3terrain::UnsharedLighting();
     std::string q239FragmentWithDefine;
     const char* q239Fragment = q239Legacy ? fo3terrain::kV237FragmentShader : fragmentSource;
@@ -551,7 +557,7 @@ GLuint Q76BCreateProgram() {
     }
     Q76B_LOGI("Q239 TERRAIN SHADER: legacyV237=%d unsharedLights=%d",
               q239Legacy ? 1 : 0, q239Unshared ? 1 : 0);
-    Q76B_LOGI("Q243 TERRAIN RECOVERY: originalProgram=%d fusionQuarantined=1 legacyPropertyIgnored=1",
+    Q76B_LOGI("Q281 TERRAIN GLES RECOVERY: originalProgram=%d fusionGlesQuarantined=1 legacyPropertyIgnored=1",
               q239Legacy ? 1 : 0);
     auto create = [](const char* vertex, const char* fragment) -> GLuint {
         GLuint vs = Q76BCompile(GL_VERTEX_SHADER, vertex);
@@ -591,7 +597,12 @@ GLuint Q76BCreateProgram() {
               program != 0u, !fo3terrain::LegacyLayers(),
               reinterpret_cast<const char*>(glGetString(GL_RENDERER)));
 #ifdef FQ_ENABLE_VULKAN
-    fqvk::Program(program,true);
+    const bool fused=fqrender::nativeOnly&&fo3terrain::NativeFusionRequested();
+    const auto registration=fqvk::hooks.program;
+    fqvk::Program(program,fused?fqvk::TerrainFusionKind:1);
+    fo3terrain::nativeFusionReady=program&&fused&&registration&&fqvk::hooks.program==registration;
+    Q76B_LOGI("Q281 TERRAIN NATIVE: fusedMaterial=%d geometryFusion=%d legacyGles=1",
+              fo3terrain::nativeFusionReady,!fo3terrain::LegacyLayers());
 #endif
     return program;
 }

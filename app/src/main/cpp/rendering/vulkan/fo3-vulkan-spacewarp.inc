@@ -42,10 +42,10 @@ void DestroyMotion() {
     for(auto& p:motionPipelines)vkDestroyPipeline(device,p.second,nullptr);
     motionPipelines.clear();
     for(auto& program:motionModules)for(auto& m:program){if(m)vkDestroyShaderModule(device,m,nullptr);m={};}
-    if(layouts[12])vkDestroyPipelineLayout(device,layouts[12],nullptr);
-    layouts[12]={};
-    if(sets[12])vkDestroyDescriptorSetLayout(device,sets[12],nullptr);
-    sets[12]={};
+    if(layouts[MotionKind])vkDestroyPipelineLayout(device,layouts[MotionKind],nullptr);
+    layouts[MotionKind]={};
+    if(sets[MotionKind])vkDestroyDescriptorSetLayout(device,sets[MotionKind],nullptr);
+    sets[MotionKind]={};
     for(auto& fb:dynamicMotionFrames){if(fb)vkDestroyFramebuffer(device,fb,nullptr);fb={};}
     for(auto& view:dynamicMotionViews){if(view)vkDestroyImageView(device,view,nullptr);view={};}
     Destroy(dynamicMotionImage);
@@ -70,9 +70,9 @@ void CreateMotionPass(VkFormat depthFormat) {
     std::array<VkDescriptorSetLayoutBinding,6> bindings{};
     for(uint32_t i=0;i<bindings.size();++i){bindings[i].binding=i;bindings[i].descriptorCount=1;bindings[i].stageFlags=VK_SHADER_STAGE_VERTEX_BIT|VK_SHADER_STAGE_FRAGMENT_BIT;bindings[i].descriptorType=i==0?VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC:i==1?VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER:VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;}
     VkDescriptorSetLayoutCreateInfo ci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};ci.bindingCount=uint32_t(bindings.size());ci.pBindings=bindings.data();
-    Check(vkCreateDescriptorSetLayout(device,&ci,nullptr,&sets[12]),"motion descriptor layout");
-    VkPipelineLayoutCreateInfo li{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};li.setLayoutCount=1;li.pSetLayouts=&sets[12];
-    Check(vkCreatePipelineLayout(device,&li,nullptr,&layouts[12]),"motion pipeline layout");
+    Check(vkCreateDescriptorSetLayout(device,&ci,nullptr,&sets[MotionKind]),"motion descriptor layout");
+    VkPipelineLayoutCreateInfo li{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};li.setLayoutCount=1;li.pSetLayouts=&sets[MotionKind];
+    Check(vkCreatePipelineLayout(device,&li,nullptr,&layouts[MotionKind]),"motion pipeline layout");
     const uint32_t* code[2][2]{{shaders::motion_static_vert,shaders::motion_static_frag},{shaders::motion_dynamic_vert,shaders::motion_dynamic_frag}};
     const size_t bytes[2][2]{{sizeof(shaders::motion_static_vert),sizeof(shaders::motion_static_frag)},{sizeof(shaders::motion_dynamic_vert),sizeof(shaders::motion_dynamic_frag)}};
     for(unsigned p=0;p<2;++p)for(unsigned s=0;s<2;++s){VkShaderModuleCreateInfo mi{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};mi.pCode=code[p][s];mi.codeSize=bytes[p][s];Check(vkCreateShaderModule(device,&mi,nullptr,&motionModules[p][s]),"motion shader module");}
@@ -134,7 +134,7 @@ VkPipeline MotionPipeline(unsigned key) {
     VkPipelineColorBlendAttachmentState ba{};ba.colorWriteMask=0xf;
     VkPipelineColorBlendStateCreateInfo blend{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};blend.attachmentCount=1;blend.pAttachments=&ba;
     const VkDynamicState dynamicStates[]{VK_DYNAMIC_STATE_VIEWPORT,VK_DYNAMIC_STATE_SCISSOR,VK_DYNAMIC_STATE_DEPTH_BIAS};VkPipelineDynamicStateCreateInfo dynamic{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};dynamic.dynamicStateCount=3;dynamic.pDynamicStates=dynamicStates;
-    VkGraphicsPipelineCreateInfo ci{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};ci.stageCount=2;ci.pStages=stages;ci.pVertexInputState=&vertex;ci.pInputAssemblyState=&ia;ci.pViewportState=&viewport;ci.pRasterizationState=&rs;ci.pMultisampleState=&ms;ci.pDepthStencilState=&ds;ci.pColorBlendState=&blend;ci.pDynamicState=&dynamic;ci.layout=layouts[12];ci.renderPass=full?motionPass:dynamicMotionPass;
+    VkGraphicsPipelineCreateInfo ci{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};ci.stageCount=2;ci.pStages=stages;ci.pVertexInputState=&vertex;ci.pInputAssemblyState=&ia;ci.pViewportState=&viewport;ci.pRasterizationState=&rs;ci.pMultisampleState=&ms;ci.pDepthStencilState=&ds;ci.pColorBlendState=&blend;ci.pDynamicState=&dynamic;ci.layout=layouts[MotionKind];ci.renderPass=full?motionPass:dynamicMotionPass;
     VkPipeline pipeline{};Check(vkCreateGraphicsPipelines(device,VK_NULL_HANDLE,1,&ci,nullptr,&pipeline),"motion pipeline");motionPipelines[key]=pipeline;return pipeline;
 }
 bool MotionBind(const MotionConstants& constants,const std::vector<VkDescriptorImageInfo>& images,unsigned pipeline) {
@@ -142,9 +142,9 @@ bool MotionBind(const MotionConstants& constants,const std::vector<VkDescriptorI
     const auto alignment=std::max<VkDeviceSize>(16,properties.limits.minUniformBufferOffsetAlignment);cursor=(cursor+alignment-1)&~(alignment-1);
     if(cursor+sizeof(constants)>arena.size)return false;
     std::memcpy(static_cast<uint8_t*>(arena.mapped)+cursor,&constants,sizeof(constants));const uint32_t offset=uint32_t(cursor);cursor+=sizeof(constants);
-    const auto set=Descriptor(12,sizeof(constants),images);
+    const auto set=Descriptor(MotionKind,sizeof(constants),images);
     vkCmdBindPipeline(command,VK_PIPELINE_BIND_POINT_GRAPHICS,MotionPipeline(pipeline));
-    vkCmdBindDescriptorSets(command,VK_PIPELINE_BIND_POINT_GRAPHICS,layouts[12],0,1,&set,1,&offset);return true;
+    vkCmdBindDescriptorSets(command,VK_PIPELINE_BIND_POINT_GRAPHICS,layouts[MotionKind],0,1,&set,1,&offset);return true;
 }
 struct PreparedMotion {const fqmotion::Draw* draw;const fqspacewarp::Drawable* shape;const fqspacewarp::Drawable* previous;VkImageView previousPalette;VkDeviceSize previousOffset;};
 std::vector<PreparedMotion> PrepareMotion(const fqmotion::Capture& capture) {

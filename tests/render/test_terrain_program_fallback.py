@@ -48,6 +48,16 @@ void glGetProgramiv(GLuint p,GLenum,GLint* ok){*ok=!((failure=="link"&&programFu
 void glGetProgramInfoLog(GLuint,int,void*,char*){}
 const unsigned char* glGetString(GLenum){return reinterpret_cast<const unsigned char*>("mock-device");}
 '''
+        prefix += r'''
+namespace fqrender {bool nativeOnly=false;}
+namespace fqvk {
+constexpr int TerrainFusionKind=12;
+struct Hooks {void (*program)(unsigned,int)=nullptr;} hooks;
+int registered=-1;bool reject=false;
+void Register(unsigned,int kind){registered=kind;if(reject)hooks.program=nullptr;}
+void Program(unsigned p,int kind){if(hooks.program)hooks.program(p,kind);}
+}
+'''
         main = r'''
 int main(int argc,char** argv){
     Check(argc==2);failure=argv[1];
@@ -73,7 +83,7 @@ int main(int argc,char** argv){
 #include <cstring>
 #define PROP_VALUE_MAX 92
 inline int __system_property_get(const char* key,char* value){
-    const char* text=std::strstr(key,"terrain_legacy")?std::getenv("FQ_LEGACY"):"";
+    const char* text=std::strstr(key,"terrain_fusion")?std::getenv("FQ_FUSION"):std::strstr(key,"terrain_legacy")?std::getenv("FQ_LEGACY"):"";
     if(!text)text="";std::strcpy(value,text);return std::strlen(text);
 }
 ''')
@@ -88,6 +98,27 @@ inline int __system_property_get(const char* key,char* value){
                     for failure in ['none', 'vertex', 'fragment', 'link', 'both',
                                     'original-vertex', 'original-fragment', 'original-link']:
                         subprocess.run([str(binary), failure], env={**os.environ, 'FQ_LEGACY':setting}, check=True)
+            native_main=r'''
+int main(int argc,char** argv){
+    Check(argc==2);std::string mode=argv[1];
+    fqrender::nativeOnly=mode!="gles";fqvk::hooks.program=mode=="missing"?nullptr:fqvk::Register;fqvk::reject=mode=="reject";
+    fo3terrain::nativeFusionReady=true; // A previous factory call must not leak readiness.
+    const auto p=Q76BCreateProgram();Check(p&&originalCompiles==2&&fusedCompiles==0);
+    const char* setting=std::getenv("FQ_FUSION");
+    const bool expected=mode=="on"&&(!setting||std::strcmp(setting,"0")!=0);
+    Check(fo3terrain::nativeFusionReady==expected);
+    Check(fo3terrain::LegacyLayers()!=expected);
+    if(expected)Check(fqvk::registered==fqvk::TerrainFusionKind);
+    fo3terrain::DisableFusionAfterProgramFailure();Check(fo3terrain::LegacyLayers());
+}
+'''
+            cpp.write_text(prefix+factory+native_main)
+            for defines in [['-DFQ_ENABLE_VULKAN','-D__ANDROID__'],['-DFQ_ENABLE_VULKAN','-D__ANDROID__','-DNDEBUG']]:
+                subprocess.run(['g++','-std=c++17','-Wall','-Wextra','-Werror','-Wno-misleading-indentation',*defines,
+                                '-I'+str(temp),'-I'+str(ROOT/'app/src/main/cpp'),str(cpp),'-o',str(binary)],check=True)
+                for setting in ['', '0', '1']:
+                    for mode in ['on','gles','missing','reject']:
+                        subprocess.run([str(binary),mode],env={**os.environ,'FQ_FUSION':setting},check=True)
 
 
 if __name__ == '__main__':

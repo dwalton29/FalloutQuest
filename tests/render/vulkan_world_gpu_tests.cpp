@@ -215,7 +215,7 @@ void Submit(uint32_t p,uint32_t v,uint32_t mode,int first,int n,uint32_t type,si
 namespace {
 void Program(uint32_t id,int kind) {
     const auto& shader=fqvk::shaders::programs[kind];
-    fqvk::ProgramData p;p.terrain=kind==1;p.sky=kind==2;p.water=kind==3;p.ui=kind>=9?kind:0;
+    fqvk::ProgramData p;p.terrain=kind==1||kind==fqvk::TerrainFusionKind;p.fused=kind==fqvk::TerrainFusionKind;p.sky=kind==2;p.water=kind==3;p.ui=kind>=9&&kind<=11?kind:0;
     fqvk::ConfigureDiscardGuards(p,shader);
     p.bytes.resize(shader.uniformSize);
     for(size_t i=0;i<shader.fieldCount;++i)p.fields.push_back({int(i*64),shader.fields[i]});
@@ -975,7 +975,9 @@ void GameplayPresentation(bool withDepth) {
 }
 
 #include "vulkan_motion_gpu_tests.inc"
+#include "vulkan_terrain_fusion_gpu_tests.inc"
 int main() {
+    TerrainFusionGpu(false);TerrainFusionGpu(true);TerrainFusionGpu(true,true);
     NativeMotion();NativeMotion(true);NativeMotion(true,true);
     for(auto format:{VK_FORMAT_R8G8B8A8_UNORM,VK_FORMAT_B8G8R8A8_UNORM,VK_FORMAT_B8G8R8A8_SRGB})HdrPresentation(format,false);
     HdrPresentation(VK_FORMAT_R8G8B8A8_UNORM,true);

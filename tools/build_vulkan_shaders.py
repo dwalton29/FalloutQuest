@@ -44,6 +44,8 @@ def sources():
     result['notification']=[re.search(r'const char\* '+name+r'\s*=\s*R"\((.*?)\)";',notification,re.S)[1] for name in ['vs','fs']]
     loading=(ROOT/'app/src/main/cpp/ui/loading/fo3-loading-vr.h').read_text().split('inline bool EnsureProgram() {',1)[1]
     result['loading']=[re.search(r'const char\* '+name+r'\s*=\s*R"\((.*?)\)";',loading,re.S)[1].replace(';out',';\nout').replace(';in ',';\nin ') for name in ['vs','fs']]
+    fused=(ROOT/'app/src/main/cpp/rendering/terrain/fo3-terrain-render.inc').read_text().split('GLuint Q76BCreateProgram() {',1)[1]
+    result['terrain_fused']=[re.search(r'static const char\* '+name+r' = R"\((.*?)\)";',fused,re.S)[1] for name in ['vertexSource','fragmentSource']]
     return result
 
 def port(pair,kind="world"):
@@ -114,7 +116,7 @@ def port(pair,kind="world"):
             sampler_text+='\n'+'\n'.join('vec4 fqSample_'+name+'(vec2 uv){return texture('+name+',vec3(uv,'+
                 ('0.0' if kind=='adapt' else 'float(gl_ViewIndex)')+'));}' for name,_ in samplers)
         text=header+sampler_text+'\n'+source
-        if stage==1 and kind in ('world','terrain'):
+        if stage==1 and kind in ('world','terrain','terrain_fused'):
             prefix,main=text.split('void main()',1)
             constants='layout(constant_id=1) const bool fqNoLocalLights=false;\n'
             main=re.sub(r'\buLocalLightCount\b','(fqNoLocalLights?0:uLocalLightCount)',main)
@@ -122,6 +124,11 @@ def port(pair,kind="world"):
                 constants+='layout(constant_id=0) const int fqLightingMode=0;\nlayout(constant_id=2) const bool fqNoEnvironmentPass=false;\n'
                 main=re.sub(r'\buEnvironmentPassQ2050\b','(fqNoEnvironmentPass?0.0:uEnvironmentPassQ2050)',main)
                 main=re.sub(r'\buNoLighting\b','(fqLightingMode==1?1.0:(fqLightingMode==2?0.0:uNoLighting))',main)
+            if kind=='terrain_fused':
+                # Shared-light helpers precede main; specialise their loop too.
+                prefix=prefix.replace('i >= uLocalLightCount','i >= (fqNoLocalLights?0:uLocalLightCount)')
+                prefix=prefix.replace('struct Q239SharedLighting',constants+'struct Q239SharedLighting',1)
+                constants=''
             text=prefix+constants+'void main()'+main
         converted.append(text)
     return converted,metadata,samplers,max(16,offset)
@@ -178,7 +185,7 @@ def build(output,compiler):
             data=spv.read_bytes()
             words=struct.unpack('<'+'I'*(len(data)//4),data)
             cpp.append(f'inline constexpr uint32_t {name}_{stage}[]={{'+','.join(hex(x) for x in words)+'};')
-    for name in ('world', 'terrain'):
+    for name in ('world', 'terrain', 'terrain_fused'):
         text = no_discard_fragment(port(sources()[name], name)[0][1], name)
         path = output/f'{name}_solid.frag';path.write_text(text)
         spv = path.with_suffix('.frag.spv')
@@ -189,7 +196,7 @@ def build(output,compiler):
         data=spv.read_bytes();words=struct.unpack('<'+'I'*(len(data)//4),data)
         cpp.append(f'inline constexpr uint32_t {name}_solid_frag[]={{'+','.join(hex(x) for x in words)+'};')
     cpp.append('struct SolidFragment {const uint32_t* code; size_t bytes;};')
-    cpp.append('inline constexpr SolidFragment solidFragments[]={{world_solid_frag,sizeof(world_solid_frag)},{terrain_solid_frag,sizeof(terrain_solid_frag)}};')
+    cpp.append('inline constexpr SolidFragment solidFragments[]={{world_solid_frag,sizeof(world_solid_frag)},{terrain_solid_frag,sizeof(terrain_solid_frag)},{terrain_fused_solid_frag,sizeof(terrain_fused_solid_frag)}};')
     cpp.append('struct Program { const Field* fields; size_t fieldCount; const Sampler* samplers; size_t samplerCount; uint32_t uniformSize; const uint32_t* vertex; size_t vertexBytes; const uint32_t* fragment; size_t fragmentBytes; };')
     cpp.append('inline constexpr Program programs[]={')
     for name in sources():
@@ -206,9 +213,9 @@ def build(output,compiler):
         cpp.append(f'inline constexpr uint32_t motion_{name}[]={{'+','.join(hex(x) for x in words)+'};')
     # Additional outputs reuse the original material/film math verbatim.
     variants={}
-    for name in ('world','terrain','sky','water'):
+    for name in ('world','terrain','sky','water','terrain_fused'):
         original=port(sources()[name],name)[0][1]
-        for solid in ((False,True) if name in ('world','terrain') else (False,)):
+        for solid in ((False,True) if name in ('world','terrain','terrain_fused') else (False,)):
             text=no_discard_fragment(original,name) if solid else original
             colour=re.search(r'layout\(location=0\) out vec4 (\w+)',text)[1]
             text=text.replace('void main()', 'void fqOriginalMain()',1)

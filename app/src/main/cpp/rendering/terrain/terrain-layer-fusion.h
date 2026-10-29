@@ -64,6 +64,10 @@ FusionStats FuseLayers(Batches& batches, TextureReady ready) {
     std::map<std::vector<size_t>,size_t> groups;
     std::vector<std::vector<size_t>> groupLayers;
     Batches fused;
+    // Keep provenance until draw admission. A fragmented material region must
+    // not veto every other useful stack in the same authored CELL.
+    std::vector<std::vector<Ref>> originals;
+    std::vector<size_t> groupTriangles,groupPaintTriangles;
     for(size_t i=0;i<original;++i){
         const auto& base=batches[i];
         if(base.alphaLayer||base.vertexFloats!=12u)continue;
@@ -128,7 +132,8 @@ FusionStats FuseLayers(Batches& batches, TextureReady ready) {
                         const auto& p=batches[ref.batch];
                         batch.paintMaterials.push_back({p.texturePath,p.normalPath,p.specularEnabled});
                     }
-                    fused.push_back(std::move(batch));group=groups.find(tuple);
+                    fused.push_back(std::move(batch));originals.emplace_back();
+                    groupTriangles.push_back(0);groupPaintTriangles.push_back(0);group=groups.find(tuple);
                 }
             }
             auto& output=fused[group->second];
@@ -145,6 +150,10 @@ FusionStats FuseLayers(Batches& batches, TextureReady ready) {
                     output.vertices.push_back(alpha);
                 }
             }
+            const size_t g=group->second;
+            originals[g].push_back({i,t});
+            originals[g].insert(originals[g].end(),stack.paint.begin(),stack.paint.end());
+            ++groupTriangles[g];groupPaintTriangles[g]+=stack.paint.size();
             keep[i][t]=0u;
             for(const Ref& ref:stack.paint)keep[ref.batch][ref.triangle]=0u;
             ++stats.triangles;stats.paintTriangles+=stack.paint.size();
@@ -158,7 +167,26 @@ FusionStats FuseLayers(Batches& batches, TextureReady ready) {
         if(keep[i].empty())after+=!batches[i].vertices.empty();
         else after+=std::find(keep[i].begin(),keep[i].end(),uint8_t(1))!=keep[i].end();
     }
-    if(after>before){stats.fallback+=stats.triangles;stats.triangles=stats.paintTriangles=0;return stats;}
+    std::vector<size_t> kept(original,0);
+    for(size_t i=0;i<original;++i)kept[i]=size_t(std::count(keep[i].begin(),keep[i].end(),uint8_t(1)));
+    std::vector<uint8_t> active(fused.size(),1);
+    while(after>before) {
+        size_t selected=fused.size(),revivals=SIZE_MAX;
+        for(size_t g=0;g<fused.size();++g)if(active[g]) {
+            size_t count=0;for(size_t b:groupLayers[g])count+=kept[b]==0;
+            // Prefer groups whose original draws already survive. Among equal
+            // costs restore the least paint replay, preserving larger savings.
+            if(selected==fused.size()||count<revivals||
+               (count==revivals&&groupPaintTriangles[g]<groupPaintTriangles[selected])) {
+                selected=g;revivals=count;
+            }
+        }
+        if(selected==fused.size())break;
+        active[selected]=0;after=after-1+revivals;
+        for(const auto& ref:originals[selected]){keep[ref.batch][ref.triangle]=1;++kept[ref.batch];}
+        stats.fallback+=groupTriangles[selected];stats.triangles-=groupTriangles[selected];
+        stats.paintTriangles-=groupPaintTriangles[selected];
+    }
     for(size_t i=0;i<original;++i){
         auto& b=batches[i];if(keep[i].empty())continue;
         const bool indexed=!b.indices.empty();size_t write=0;
@@ -172,8 +200,7 @@ FusionStats FuseLayers(Batches& batches, TextureReady ready) {
         if(indexed)b.indices.resize(write);else b.vertices.resize(write*12u);
         if(!write){b.vertices.clear();b.indices.clear();}
     }
-    stats.groups=fused.size();
-    for(auto& b:fused)batches.push_back(std::move(b));
+    for(size_t g=0;g<fused.size();++g)if(active[g]){batches.push_back(std::move(fused[g]));++stats.groups;}
     return stats;
 }
 } // namespace fo3terrain

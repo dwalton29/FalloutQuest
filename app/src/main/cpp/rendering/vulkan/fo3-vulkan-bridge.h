@@ -6,6 +6,7 @@
 #include <cstdint>
 #include "data/fo3-texture-bsa.h"
 namespace fqvk {
+inline constexpr int TerrainFusionKind=12,MotionKind=13;
 struct PostSettings {
     float scriptFade[4]{},scriptTint[4]{},scriptGrade[3]{1,1,1},scriptBlur=0;
     int flags=0,interior=0;
