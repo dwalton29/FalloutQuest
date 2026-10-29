@@ -68,6 +68,15 @@ class VulkanShaders(unittest.TestCase):
                     if shutil.which('spirv-val'):
                         subprocess.run(['spirv-val','--target-env','vulkan1.1',str(file)],check=True)
                 subprocess.run([compiler,'-V','--target-env','vulkan1.1','-l',str(out/f'{name}.vert'),str(out/f'{name}.frag'),'-o',str(out/f'{name}-linked.spv')],check=True)
+            if shutil.which('spirv-opt') and shutil.which('spirv-dis'):
+                counts={}
+                for name,defaults in [('dynamic',[]),('unlit',['--set-spec-const-default-value','0:1 1:true 2:true'])]:
+                    file=out/f'{name}-specialized.spv'
+                    subprocess.run(['spirv-opt',*defaults,'--freeze-spec-const','--fold-spec-const-op-composite','-O',str(out/'world.frag.spv'),'-o',str(file)],check=True)
+                    dis=subprocess.check_output(['spirv-dis',str(file)],text=True)
+                    counts[name]=(dis.count('OpImageSample'),dis.count('OpExtInst '))
+                self.assertLess(counts['unlit'][0],counts['dynamic'][0])
+                self.assertLess(counts['unlit'][1],counts['dynamic'][1])
             for name in ('world','terrain'):
                 if shutil.which('spirv-val'):
                     subprocess.run(['spirv-val','--target-env','vulkan1.1',str(out/f'{name}_solid.frag.spv')],check=True)

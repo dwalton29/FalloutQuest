@@ -113,7 +113,17 @@ def port(pair,kind="world"):
         if fullscreen:
             sampler_text+='\n'+'\n'.join('vec4 fqSample_'+name+'(vec2 uv){return texture('+name+',vec3(uv,'+
                 ('0.0' if kind=='adapt' else 'float(gl_ViewIndex)')+'));}' for name,_ in samplers)
-        converted.append(header+sampler_text+'\n'+source)
+        text=header+sampler_text+'\n'+source
+        if stage==1 and kind in ('world','terrain'):
+            prefix,main=text.split('void main()',1)
+            constants='layout(constant_id=1) const bool fqNoLocalLights=false;\n'
+            main=re.sub(r'\buLocalLightCount\b','(fqNoLocalLights?0:uLocalLightCount)',main)
+            if kind=='world':
+                constants+='layout(constant_id=0) const int fqLightingMode=0;\nlayout(constant_id=2) const bool fqNoEnvironmentPass=false;\n'
+                main=re.sub(r'\buEnvironmentPassQ2050\b','(fqNoEnvironmentPass?0.0:uEnvironmentPassQ2050)',main)
+                main=re.sub(r'\buNoLighting\b','(fqLightingMode==1?1.0:(fqLightingMode==2?0.0:uNoLighting))',main)
+            text=prefix+constants+'void main()'+main
+        converted.append(text)
     return converted,metadata,samplers,max(16,offset)
 
 def no_discard_fragment(source, kind):
@@ -209,10 +219,13 @@ def build(output,compiler):
     text=text.replace('void main()', 'void fqOriginalMain()',1)
     variants['composition_split']=text+f'''\nlayout(set=0,binding=5) uniform sampler2DArray fqFullFinal;
 layout(location=1) out vec4 fqNativeOverlay;
+layout(constant_id=0) const bool fqCompactFilm=false;
+vec3 fqSrgb(vec3 c){{c=clamp(c,0.0,1.0);return mix(12.92*c,1.055*pow(c,vec3(1.0/2.4))-0.055,greaterThan(c,vec3(0.0031308)));}}
 void main(){{fqOriginalMain();
  vec3 base=vec3(unpackHalf2x16(packHalf2x16({colour}.rg)),unpackHalf2x16(packHalf2x16({colour}.bb)).x);
  vec3 full=texture(fqFullFinal,vec3({uv},float(gl_ViewIndex))).rgb;
- {colour}=vec4(base,1);fqNativeOverlay=any(notEqual(full,base))?vec4(full,1):vec4(0);
+ bool changed=fqCompactFilm?any(greaterThan(abs(floor(fqSrgb(full)*255.0+0.5)-floor(fqSrgb(base)*255.0+0.5)),vec3(1))):any(notEqual(full,base));
+ {colour}=vec4(base,1);fqNativeOverlay=changed?vec4(full,1):vec4(0);
 }}'''
     for name,text in variants.items():
         path=output/f'{name}.frag';path.write_text(text);spv=path.with_suffix('.frag.spv')

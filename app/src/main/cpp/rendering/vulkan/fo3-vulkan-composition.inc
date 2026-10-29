@@ -13,9 +13,23 @@ std::vector<VkFramebuffer> compositionFrames;
 uint32_t compositionIndex=0;
 bool compositionAcquired=false,compositionHasDepth=false;
 PostValues splitPostValues;
+PostTarget compactFinal;
+bool compactFrame=false;
+PostTarget& Finished(){return compactFrame?compactFinal:presented;}
+void CreateCompactFinal(){
+    if(compactFinal.image.image)return;
+    compactFinal.width=width;compactFinal.height=height;
+    compactFinal.image=MakeImage(width,height,xrColorFormat,VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT|VK_IMAGE_USAGE_SAMPLED_BIT,VK_IMAGE_ASPECT_COLOR_BIT);
+    VkFramebufferCreateInfo fi{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};fi.renderPass=xrPass;fi.attachmentCount=1;fi.pAttachments=&compactFinal.image.view;fi.width=width;fi.height=height;fi.layers=1;
+    Check(vkCreateFramebuffer(device,&fi,nullptr,&compactFinal.framebuffer),"compact film framebuffer");
+    const VkImageView views[]{compactFinal.image.view,depth.view};fi.renderPass=xrOverlayPass;fi.attachmentCount=2;fi.pAttachments=views;
+    Check(vkCreateFramebuffer(device,&fi,nullptr,&compactFinal.overlay),"compact HUD framebuffer");
+}
 
 void DestroyCompositionSwapchain() {
     if(!device)return;
+    if(compactFinal.overlay)vkDestroyFramebuffer(device,compactFinal.overlay,nullptr);
+    compactFinal.overlay={};DestroyPost(compactFinal);
     for(auto fb:compositionFrames)if(fb)vkDestroyFramebuffer(device,fb,nullptr);
     compositionFrames.clear();
     for(auto view:compositionViews)if(view)vkDestroyImageView(device,view,nullptr);
@@ -30,6 +44,7 @@ void DestroyCompositionSwapchain() {
 }
 void DestroyComposition() {
     DestroyCompositionSwapchain();
+    DestroyDensityPasses(densitySplit);
     if(splitFramebuffer)vkDestroyFramebuffer(device,splitFramebuffer,nullptr);
     splitFramebuffer={};
     if(splitPass)vkDestroyRenderPass(device,splitPass,nullptr);
@@ -69,6 +84,7 @@ void CreateCompositionSwapchain() {
     std::array<VkPipelineColorBlendAttachmentState,2> blendAttachments{};for(auto& a:blendAttachments)a.colorWriteMask=0xf;
     VkPipelineColorBlendStateCreateInfo blend{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};blend.attachmentCount=2;blend.pAttachments=blendAttachments.data();
     const VkDynamicState states[]{VK_DYNAMIC_STATE_VIEWPORT,VK_DYNAMIC_STATE_SCISSOR};VkPipelineDynamicStateCreateInfo ds{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};ds.dynamicStateCount=2;ds.pDynamicStates=states;
+    const uint32_t compact=xrSrgb?1:0;const VkSpecializationMapEntry entry{0,0,4};const VkSpecializationInfo specialization{1,&entry,4,&compact};stages[1].pSpecializationInfo=&specialization;
     VkGraphicsPipelineCreateInfo ci{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};ci.stageCount=2;ci.pStages=stages.data();ci.pVertexInputState=&vertex;ci.pInputAssemblyState=&ia;ci.pViewportState=&vp;ci.pRasterizationState=&rs;ci.pMultisampleState=&ms;ci.pColorBlendState=&blend;ci.pDynamicState=&ds;ci.layout=layouts[12];ci.renderPass=compositionPass;
     Check(vkCreateGraphicsPipelines(device,VK_NULL_HANDLE,1,&ci,nullptr,&compositionPipeline),"native effects composition pipeline");
 }
@@ -94,6 +110,7 @@ void CreateComposition() {
     const uint32_t* code[]{shaders::world_split_frag,shaders::terrain_split_frag,shaders::sky_split_frag,shaders::world_solid_split_frag,shaders::terrain_solid_split_frag,shaders::composition_split_frag};
     const size_t bytes[]{sizeof(shaders::world_split_frag),sizeof(shaders::terrain_split_frag),sizeof(shaders::sky_split_frag),sizeof(shaders::world_solid_split_frag),sizeof(shaders::terrain_solid_split_frag),sizeof(shaders::composition_split_frag)};
     for(unsigned i=0;i<6;++i){VkShaderModuleCreateInfo mi{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};mi.pCode=code[i];mi.codeSize=bytes[i];Check(vkCreateShaderModule(device,&mi,nullptr,i<5?&splitModules[i]:&compositionModule),"sidecar shader");}
+    CreateDensityPasses(true);
     CreateCompositionSwapchain();
 }
 void AcquireComposition() {
@@ -110,7 +127,7 @@ void ComposeSplit() {
     if(cursor+shader.uniformSize>arena.size)throw std::runtime_error("composition uniform capacity exhausted");
     auto* bytes=static_cast<uint8_t*>(arena.mapped)+cursor;std::memset(bytes,0,shader.uniformSize);
     for(size_t i=0;i<shader.fieldCount;++i){const auto& f=shader.fields[i];const auto v=splitPostValues.find(f.name);if(v==splitPostValues.end())continue;if(f.integer){const int n=int(v->second[0]);std::memcpy(bytes+f.offset,&n,4);}else std::memcpy(bytes+f.offset,v->second.data(),std::min<size_t>(f.components,v->second.size())*4);}
-    const std::vector<VkDescriptorImageInfo> images{{clamped,splitColour.view,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},{nearest,adapted[adaptIndex].image.view,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},{clamped,bloom[1].image.view,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},{nearest,presented.image.view,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}};
+    const std::vector<VkDescriptorImageInfo> images{{clamped,splitColour.view,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},{nearest,adapted[adaptIndex].image.view,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},{clamped,bloom[1].image.view,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},{nearest,Finished().image.view,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}};
     const auto set=Descriptor(12,shader.uniformSize,images);const uint32_t offset=uint32_t(cursor);cursor+=shader.uniformSize;
     VkRenderPassBeginInfo bi{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};bi.renderPass=compositionPass;bi.framebuffer=compositionFrames[acquiredColor*compositionViews.size()+compositionIndex];bi.renderArea.extent={width,height};BeginPass(Composition,bi);
     const VkViewport viewport{0,0,float(width),float(height),0,1};const VkRect2D scissor{{0,0},{width,height}};vkCmdSetViewport(command,0,1,&viewport);vkCmdSetScissor(command,0,1,&scissor);

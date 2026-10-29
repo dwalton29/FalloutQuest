@@ -1,10 +1,17 @@
 // Exercises the actual native producer, shader modules, resource staging and
 // borrowed runtime targets. Only OpenXR image acquisition/release is simulated.
-void NativeMotion(bool srgb=false) {
+void NativeMotion(bool srgb=false,bool densityEmulation=false) {
+    emulateDensity=densityEmulation;const auto descriptions=densityDescriptions;
     offerSrgb=srgb;
     fqrender::nativeOnly=true;fqgl::Reset();
     assert(fqvk::InitializeWorldProbe(reinterpret_cast<XrInstance>(uintptr_t(1)),1,64,64));
     auto& r=*fqvk::renderer;
+    if(densityEmulation){
+        const auto pixels=fqvk::DensityPixels(64,64);assert(pixels.size()==64*64*4&&pixels[0]==64&&pixels[(32*64+32)*2]==255);
+        assert(std::equal(pixels.begin(),pixels.begin()+64*64*2,pixels.begin()+64*64*2));
+        for(unsigned y=0;y<64;++y)for(unsigned x=0;x<64;++x){const auto v=pixels[(y*64+x)*2];assert(v==255||v==128||v==64);assert(v==pixels[((63-y)*64+(63-x))*2]);}
+        r.densityMap=r.MakeImage(4,4,VK_FORMAT_R8G8_UNORM,VK_IMAGE_USAGE_SAMPLED_BIT,VK_IMAGE_ASPECT_COLOR_BIT);r.CreateDensityPasses(false);r.foveationRequested=true;
+    }
     XrGraphicsBindingVulkan2KHR binding{};assert(fqvk::GameplayBinding(binding));
     offerDepth=true;inspectReleasedImages=false;
     assert(fqvk::CreateGameplaySwapchain(reinterpret_cast<XrSession>(uintptr_t(2)),true));
@@ -91,7 +98,11 @@ void NativeMotion(bool srgb=false) {
         Set(1,"uMaterialAlpha",{.4f});fqgl::state.texture2d[0].Change(68);
         {fqrender::SynthesisOverlayScope authoredTransparency(true);Submit(1,69,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);}
         Set(1,"uMaterialAlpha",{1});
+        // Pre-film health/UI must switch off scene foveation without losing depth.
+        fqgl::state.texture2d[0].Change(68);Submit(65,66,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);r.DrainDraws();assert(!r.densityActive);assert(r.sidecarPass==(split&&!densityEmulation));
+        {Submit(1,69,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);r.DrainDraws();assert(r.sidecarPass==split);Submit(65,66,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);r.DrainDraws();assert(r.sidecarPass==split);}
         fqvk::PostSettings settings;settings.interior=1;settings.brightScale=0;fqvk::PostProcess(settings);
+        assert(r.compactFrame==(split&&srgb));if(r.compactFrame)assert(r.compactFinal.image.image);
         fqgl::state.depth.Change(false);fqgl::state.texture2d[0].Change(68);Submit(65,66,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);
         std::array<fqspacewarp::Coverage,2> coverage{};if(split)fqvk::QueueSpacewarp(capture,coverage);
         std::array<XrView,2> views{};std::array<XrCompositionLayerProjectionView,2> output{},overlay{};
@@ -116,6 +127,14 @@ void NativeMotion(bool srgb=false) {
     // Separating effects never conceals a real opaque geometry/resource failure.
     ++combinedFrame.serial;combinedFrame.displayTime+=10000000;assert(combinedHistory.Begin(combinedFrame));fqmotion::separatedComposition=true;fqmotion::Capture unsupported;unsupported.Begin(combinedHistory);unsupported.Block(fqmotion::Resources|fqmotion::Transparency);assert(unsupported.reasons==fqmotion::Resources);fqmotion::separatedComposition=false;
     std::cout<<"Vulkan combined SpaceWarp: original water + transparency + HUD, opaque depth, complete coverage, stereo colour parity, native depth routing, exterior/interior and swapchain recreation passed\n";
+    if(densityEmulation){
+        std::array<XrView,2> views{};std::array<XrCompositionLayerProjectionView,2> output{};
+        assert(fqvk::BeginWorldProbe(matrix.data(),matrix.data(),eye,eye,true));assert(!r.densityActive&&!r.compactFrame);
+        assert(fqvk::PresentGameplay(views.data(),output.data(),.04f,1000));
+        r.foveationRequested=false;
+        assert(fqvk::BeginWorldProbe(matrix.data(),matrix.data(),eye,eye));assert(!r.densityActive);fqvk::PostProcess({});
+        assert(fqvk::PresentGameplay(views.data(),output.data(),.04f,1000));assert(r.foveatedDraws==0);
+    }
     r.WaitFrames();
     // The old colour-only reserve did not leave space for motion descriptors.
     for(unsigned i=0;r.descriptorCache.size()<fqvk::Renderer::DescriptorCapacity-fqvk::Renderer::FrameDescriptorReserve;++i)
@@ -130,6 +149,6 @@ void NativeMotion(bool srgb=false) {
     for(auto& images:depthImages)for(auto& image:images)r.Destroy(image);
     for(auto& images:runtimeMotion)images.clear();
     fqvk::DestroyGameplaySwapchain();offerDepth=false;inspectReleasedImages=true;
-    fqvk::ShutdownWorldProbe();offerSrgb=false;fqrender::nativeOnly=false;fqgl::Reset();
+    fqvk::ShutdownWorldProbe();if(densityEmulation){assert(densityDescriptions-descriptions==4&&densityPassHandles.empty());std::cout<<"Vulkan FDM attachment emulation: stereo density policy, native/split water continuation, full-rate pre/post-film HUD, compact sRGB colour parity and teardown passed\n";}emulateDensity=false;offerSrgb=false;fqrender::nativeOnly=false;fqgl::Reset();
     std::cout<<"Vulkan SpaceWarp pixels: stereo native axes, rigid motion, skin palettes, facial positions, cutouts, occlusion, source depth, independent runtime indices and once-per-frame pose uploads passed\n";
 }

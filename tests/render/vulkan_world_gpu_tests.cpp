@@ -2,7 +2,11 @@
 // Vulkan implementation (CI: Mesa lavapipe). Only the OpenXR device handshake
 // is supplied by this test; it does not claim headset/compositor validation.
 #include "rendering/gl-state-cache.h"
+#include "vulkan_density_driver.h"
 #include "rendering/vulkan/fo3-vulkan-renderer.cpp"
+#undef vkCreateRenderPass
+#undef vkCreateFramebuffer
+#undef vkDestroyRenderPass
 #include <cassert>
 #include <cstdlib>
 #include <iostream>
@@ -583,7 +587,8 @@ void SolidMaterialParity() {
         Set(1,"uLocalLightPosRadius",{.2f,.1f,1,5});Set(1,"uLocalLightColorFalloff",{.1f,.2f,.3f,1});
         if(terrain){Set(1,"uUseNormal",{1});Set(1,"uTerrainSpecularEnabled",{1});}
         else {Set(1,"uNoLighting",{0});Set(1,"uSpecularEnabled",{1});Set(1,"uGlossiness",{16});}
-        for(int guard=0;guard<(terrain?2:4);++guard) {
+        for(int feature=0;feature<3;++feature)for(int guard=0;guard<(terrain?2:4);++guard) {
+            Set(1,"uLocalLightCount",{feature==2?0.f:1.f});if(!terrain)Set(1,"uNoLighting",{feature==1?1.f:0.f});
             Set(1,"uWaterReflectionClipEnabledQ2090",{guard==1?1.0f:0.0f});Set(1,"uWaterReflectionPlaneYQ2090",{.1f});
             if(!terrain) {
                 Set(1,"uNativeLodClipEnabledQ1810",{guard==2?1.0f:0.0f});Set(1,"uNativeLodClipCellCountQ1900",{1});
@@ -971,7 +976,7 @@ void GameplayPresentation(bool withDepth) {
 
 #include "vulkan_motion_gpu_tests.inc"
 int main() {
-    NativeMotion();NativeMotion(true);
+    NativeMotion();NativeMotion(true);NativeMotion(true,true);
     for(auto format:{VK_FORMAT_R8G8B8A8_UNORM,VK_FORMAT_B8G8R8A8_UNORM,VK_FORMAT_B8G8R8A8_SRGB})HdrPresentation(format,false);
     HdrPresentation(VK_FORMAT_R8G8B8A8_UNORM,true);
     BufferedOwnership();DirectPresentation();EarlyAcquireFailure();TimingCapacity();

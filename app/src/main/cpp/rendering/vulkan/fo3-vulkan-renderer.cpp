@@ -2,6 +2,7 @@
 #include "fo3-vulkan-bridge.h"
 #include "fo3-vulkan-shaders.h"
 #include "rendering/spacewarp/fo3-motion-vectors.h"
+#include "fo3-vulkan-foveation.h"
 #include <GLES3/gl3.h> // Legacy numeric material enums only; no GLES calls.
 #include <algorithm>
 #include <array>
@@ -53,26 +54,29 @@ struct ProgramData {
     std::vector<Location> fields;
     std::vector<int> samplers;
     std::vector<int> units;
+    uint32_t lightingOffset=UINT32_MAX,localOffset=UINT32_MAX,environmentOffset=UINT32_MAX;
     std::array<uint32_t,3> discardOffsets{{UINT32_MAX,UINT32_MAX,UINT32_MAX}};
 };
 void ConfigureDiscardGuards(ProgramData& p,const shaders::Program& shader) {
+    for(size_t i=0;i<shader.fieldCount;++i){const auto& f=shader.fields[i];if(!std::strcmp(f.name,"uNoLighting"))p.lightingOffset=f.offset;if(!std::strcmp(f.name,"uLocalLightCount"))p.localOffset=f.offset;if(!std::strcmp(f.name,"uEnvironmentPassQ2050"))p.environmentOffset=f.offset;}
     const char* guards[]{"uWaterReflectionClipEnabledQ2090","uNativeLodClipEnabledQ1810","uAlphaTest"};
     for(size_t i=0;i<shader.fieldCount;++i)for(size_t j=0;j<3;++j)
         if(!std::strcmp(shader.fields[i].name,guards[j]))p.discardOffsets[j]=shader.fields[i].offset;
 }
 struct PipelineKey {
     uint32_t ui=0;bool strip=false,offscreen=false,swapchain=false,noDiscard=false,modal=false;
+    uint32_t lighting=0;bool noLocal=false,noEnvironment=false,foveated=false;
     bool split=false,baseOpaque=false,offset=false,water=false,sky=false,skinned=false,instanced=false,terrain=false,depth=true,write=true,blend=false,cull=false,clockwise=false;
     uint32_t cullFace=GL_BACK,equation=GL_FUNC_ADD,equationA=GL_FUNC_ADD,stride=0,depthFunc=GL_LEQUAL,src=GL_ONE,dst=GL_ZERO,srcA=GL_ONE,dstA=GL_ZERO;
     bool operator==(const PipelineKey& k)const {
-        return baseOpaque==k.baseOpaque&&split==k.split&&modal==k.modal&&noDiscard==k.noDiscard&&swapchain==k.swapchain&&offscreen==k.offscreen&&strip==k.strip&&ui==k.ui&&water==k.water&&offset==k.offset&&cullFace==k.cullFace&&equation==k.equation&&equationA==k.equationA&&sky==k.sky && skinned==k.skinned && instanced==k.instanced && terrain==k.terrain && depth==k.depth && write==k.write && blend==k.blend &&
+        return lighting==k.lighting&&noLocal==k.noLocal&&noEnvironment==k.noEnvironment&&foveated==k.foveated&&baseOpaque==k.baseOpaque&&split==k.split&&modal==k.modal&&noDiscard==k.noDiscard&&swapchain==k.swapchain&&offscreen==k.offscreen&&strip==k.strip&&ui==k.ui&&water==k.water&&offset==k.offset&&cullFace==k.cullFace&&equation==k.equation&&equationA==k.equationA&&sky==k.sky && skinned==k.skinned && instanced==k.instanced && terrain==k.terrain && depth==k.depth && write==k.write && blend==k.blend &&
             cull==k.cull && clockwise==k.clockwise && stride==k.stride && depthFunc==k.depthFunc &&
             src==k.src && dst==k.dst && srcA==k.srcA && dstA==k.dstA;
     }
 };
 struct PipelineHash {size_t operator()(const PipelineKey& k)const {
     size_t h=uint32_t(k.swapchain)*8191+uint32_t(k.offscreen)*4093+uint32_t(k.strip)*2017+k.ui*1009+uint32_t(k.water)*997+k.stride+uint32_t(k.instanced)*31+uint32_t(k.skinned)+uint32_t(k.sky)*101;for(auto v:{uint32_t(k.terrain),uint32_t(k.depth),uint32_t(k.write),uint32_t(k.blend),
-        uint32_t(k.baseOpaque),uint32_t(k.split),uint32_t(k.modal),uint32_t(k.noDiscard),uint32_t(k.cull),uint32_t(k.clockwise),uint32_t(k.offset),k.cullFace,k.equation,k.equationA,k.depthFunc,k.src,k.dst,k.srcA,k.dstA}) { h=(h*16777619u)^v; }
+        k.lighting,uint32_t(k.noLocal),uint32_t(k.noEnvironment),uint32_t(k.foveated),uint32_t(k.baseOpaque),uint32_t(k.split),uint32_t(k.modal),uint32_t(k.noDiscard),uint32_t(k.cull),uint32_t(k.clockwise),uint32_t(k.offset),k.cullFace,k.equation,k.equationA,k.depthFunc,k.src,k.dst,k.srcA,k.dstA}) { h=(h*16777619u)^v; }
     return h;
 }};
 VkBlendFactor Blend(uint32_t x) {
@@ -115,6 +119,7 @@ public:
     VkSampler sampler{},nearest{},clamped{},verticalRepeat{};VkDescriptorSetLayout sets[13]{};VkPipelineLayout layouts[13]{};
     VkShaderModule modules[12][2]{};VkDescriptorPool descriptors{};
     VkShaderModule solidModules[2]{};bool genericShaders=false;
+    uint64_t foveatedDraws=0,specializedDraws=0;
     uint64_t solidDraws=0,guardedDraws=0,worldDraws=0,landDraws=0;
     VkQueryPool timestamps{};bool timestampSupported=false;uint32_t timestampBits=0;
     enum GpuPass {Scene,SceneResume,Ui,Adapt,Bloom,Film,Output,Snapshot,DepthCopy,Overlay,Motion,Composition,PassCount};
@@ -232,7 +237,7 @@ public:
         descriptorCache.emplace(std::move(key),set);++descriptorAllocations;return set;
     }
     struct FrameSample {
-        uint64_t solid=0,guarded=0,world=0,land=0;
+        uint64_t solid=0,guarded=0,world=0,land=0,foveated=0,specialized=0;bool compact=false;
         uint64_t serial=0,frame=0,copies=0,record=0,queueCpu=0,drawCpu=0,reuse=0,finish=0,xrWait=0,uploadCpu=0;
         uint64_t drawCount=0,vertexCount=0,skipCount=0;std::array<uint64_t,6> reasons{};uint32_t firstSkip=0,diagnostic=0,dropped=0;
         bool offscreen=false,profile=false,supported=false,direct=false,logFrame=false,buffered=false;
@@ -650,15 +655,30 @@ public:
         auto it=std::find_if(queues.begin(),queues.end(),[](const auto& q){return q.queueCount&&(q.queueFlags&VK_QUEUE_GRAPHICS_BIT);});
         if(it==queues.end())throw std::runtime_error("Vulkan graphics queue unavailable");
         family=uint32_t(it-queues.begin());timestampBits=it->timestampValidBits;timestampSupported=timestampBits>0&&properties.limits.timestampComputeAndGraphics;
+        uint32_t extensionCount=0;vkEnumerateDeviceExtensionProperties(physical,nullptr,&extensionCount,nullptr);
+        std::vector<VkExtensionProperties> extensions(extensionCount);vkEnumerateDeviceExtensionProperties(physical,nullptr,&extensionCount,extensions.data());
+        const bool density=std::any_of(extensions.begin(),extensions.end(),[](const auto& e){return !std::strcmp(e.extensionName,VK_EXT_FRAGMENT_DENSITY_MAP_EXTENSION_NAME);});
+        VkPhysicalDeviceFragmentDensityMapFeaturesEXT densityFeatures{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_DENSITY_MAP_FEATURES_EXT};
+        if(density){VkPhysicalDeviceFeatures2 f{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};f.pNext=&densityFeatures;vkGetPhysicalDeviceFeatures2(physical,&f);}
+        foveationSupported=densityFeatures.fragmentDensityMap&&densityFeatures.fragmentDensityMapNonSubsampledImages;
+#ifdef __ANDROID__
+        char densityProp[PROP_VALUE_MAX]{};__system_property_get("debug.falloutquest.vulkan_foveation",densityProp);
+        foveationRequested=std::strcmp(densityProp,"0")!=0;
+#endif
+        const bool enableDensity=foveationSupported&&foveationRequested;
         VkPhysicalDeviceMultiviewFeatures multiview{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MULTIVIEW_FEATURES};
         VkPhysicalDeviceFeatures2 features{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};features.pNext=&multiview;
         vkGetPhysicalDeviceFeatures2(physical,&features);
         independentBlendAvailable=features.features.independentBlend;
         if(!multiview.multiview)throw std::runtime_error("Vulkan native multiview unavailable");
         multiview.multiviewGeometryShader=multiview.multiviewTessellationShader=VK_FALSE;
+        densityFeatures.fragmentDensityMapDynamic=VK_FALSE;
+        if(enableDensity)multiview.pNext=&densityFeatures;
         const float priority=1;VkDeviceQueueCreateInfo qci{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};qci.queueFamilyIndex=family;qci.queueCount=1;qci.pQueuePriorities=&priority;
         VkPhysicalDeviceFeatures enabled{};enabled.independentBlend=independentBlendAvailable;
-        VkDeviceCreateInfo dci{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};dci.pEnabledFeatures=&enabled;dci.pNext=&multiview;dci.queueCreateInfoCount=1;dci.pQueueCreateInfos=&qci;
+        VkDeviceCreateInfo dci{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};const char* densityExtension=VK_EXT_FRAGMENT_DENSITY_MAP_EXTENSION_NAME;
+        if(enableDensity){dci.enabledExtensionCount=1;dci.ppEnabledExtensionNames=&densityExtension;}
+        dci.pEnabledFeatures=&enabled;dci.pNext=&multiview;dci.queueCreateInfoCount=1;dci.pQueueCreateInfos=&qci;
         XrVulkanDeviceCreateInfoKHR xdci{XR_TYPE_VULKAN_DEVICE_CREATE_INFO_KHR};xdci.systemId=system;xdci.pfnGetInstanceProcAddr=vkGetInstanceProcAddr;
         xdci.vulkanPhysicalDevice=physical;xdci.vulkanCreateInfo=&dci;
         CheckXr(Proc<PFN_xrCreateVulkanDeviceKHR>(xr,"xrCreateVulkanDeviceKHR")(xr,&xdci,&device,&result),"xrCreateVulkanDeviceKHR");Check(result,"Vulkan device");
@@ -687,13 +707,9 @@ public:
             // retain the multiview query stride through the pass-end boundary.
             tci.queryCount=QueryCount;
             Check(vkCreateQueryPool(device,&tci,nullptr,&timestamps),"timestamp pool");}
-        uint32_t extensionCount=0;vkEnumerateDeviceExtensionProperties(physical,nullptr,&extensionCount,nullptr);
-        std::vector<VkExtensionProperties> extensions(extensionCount);vkEnumerateDeviceExtensionProperties(physical,nullptr,&extensionCount,extensions.data());
-        const bool density=std::any_of(extensions.begin(),extensions.end(),[](const auto& e){return !std::strcmp(e.extensionName,"VK_EXT_fragment_density_map");});
-        VkPhysicalDeviceFragmentDensityMapFeaturesEXT densityFeatures{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_DENSITY_MAP_FEATURES_EXT};
-        if(density){VkPhysicalDeviceFeatures2 features{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};features.pNext=&densityFeatures;vkGetPhysicalDeviceFeatures2(physical,&features);}
+        if(enableDensity){try{CreateDensityMap();CreateDensityPasses(false);}catch(const std::exception& e){VKLOG("FQVK FOVEATION unavailable=%s native full resolution retained",e.what());DestroyDensityPasses(densityMain);Destroy(densityMap);}}
         const bool elapsed=std::any_of(extensions.begin(),extensions.end(),[](const auto& e){return !std::strcmp(e.extensionName,"VK_QCOM_elapsed_timer_query");});
-        VKLOG("FQVK CAP fragmentDensityMap=%d nonSubsampledImages=%d elapsedTimerExtension=%d foveationEnabled=0",densityFeatures.fragmentDensityMap,densityFeatures.fragmentDensityMapNonSubsampledImages,elapsed);
+        VKLOG("FQVK CAP fragmentDensityMap=%d nonSubsampledImages=%d elapsedTimerExtension=%d foveationEnabled=%d",densityFeatures.fragmentDensityMap,densityFeatures.fragmentDensityMapNonSubsampledImages,elapsed,bool(densityMain.clear));
 #ifdef __ANDROID__
         char visualProp[PROP_VALUE_MAX]{};
         __system_property_get("debug.falloutquest.vulkan_diag",visualProp);
@@ -705,8 +721,8 @@ public:
         __system_property_get("debug.falloutquest.vulkan_generic_shaders",visualProp);genericShaders=std::atoi(visualProp)==1;
 #endif
         VKLOG("FQVK VISUAL diagnosticMask=%u forceNoCull=%u rawSceneNoFilm=%u reverseFrontFace=%u originalAssets=1",visualDiagnostics,(visualDiagnostics&1u)?1u:0u,(visualDiagnostics&2u)?1u:0u,(visualDiagnostics&4u)?1u:0u);
-        VKLOG("FQVK WORLD PROBE device=%s api=%u.%u multiview=1 fragmentDensityExtension=%d foveationEnabled=0 size=%ux%u stereo=2 presentation=unbound parity=INCOMPLETE",
-              properties.deviceName,VK_VERSION_MAJOR(properties.apiVersion),VK_VERSION_MINOR(properties.apiVersion),density,width,height);
+        VKLOG("FQVK WORLD PROBE device=%s api=%u.%u multiview=1 fragmentDensityExtension=%d foveationEnabled=%d size=%ux%u stereo=2 presentation=unbound parity=INCOMPLETE",
+              properties.deviceName,VK_VERSION_MAJOR(properties.apiVersion),VK_VERSION_MINOR(properties.apiVersion),density,bool(densityMain.clear),width,height);
     }
     void CreatePass() {
         VkFormatProperties format{};vkGetPhysicalDeviceFormatProperties(physical,VK_FORMAT_R16G16B16A16_SFLOAT,&format);
@@ -764,6 +780,10 @@ public:
         std::array<VkPipelineShaderStageCreateInfo,2> stages{};
         for(int i=0;i<2;++i){stages[i].sType=VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;stages[i].stage=i?VK_SHADER_STAGE_FRAGMENT_BIT:VK_SHADER_STAGE_VERTEX_BIT;stages[i].module=modules[kind][i];stages[i].pName="main";}
         if(key.noDiscard)stages[1].module=solidModules[kind];
+        const uint32_t materialConstants[]{key.lighting,uint32_t(key.noLocal),uint32_t(key.noEnvironment)};
+        const VkSpecializationMapEntry materialEntries[]{{0,0,4},{1,4,4},{2,8,4}};
+        const VkSpecializationInfo materialSpecialization{3,materialEntries,sizeof(materialConstants),materialConstants};
+        if(kind<2)stages[1].pSpecializationInfo=&materialSpecialization;
         if(key.split&&kind<3)stages[1].module=splitModules[key.noDiscard?kind+3:kind];
         VkVertexInputBindingDescription binding{0,key.stride*4,VK_VERTEX_INPUT_RATE_VERTEX};
         std::vector<VkVertexInputAttributeDescription> attributes;
@@ -810,7 +830,7 @@ public:
         const VkDynamicState dynamicStates[]{VK_DYNAMIC_STATE_VIEWPORT,VK_DYNAMIC_STATE_SCISSOR,VK_DYNAMIC_STATE_DEPTH_BIAS};
         VkPipelineDynamicStateCreateInfo dynamic{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
         dynamic.dynamicStateCount=key.offset?3:2;dynamic.pDynamicStates=dynamicStates;
-        VkGraphicsPipelineCreateInfo ci{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};ci.stageCount=2;ci.pStages=stages.data();ci.pVertexInputState=&vi;ci.pInputAssemblyState=&ia;ci.pViewportState=&vp;ci.pRasterizationState=&rs;ci.pMultisampleState=&ms;ci.pDepthStencilState=&ds;ci.pColorBlendState=&bs;ci.layout=layouts[kind];ci.renderPass=key.split?splitPass:key.modal?(key.swapchain?modalXrPass:modalPass):key.swapchain?xrOverlayPass:key.offscreen?uiPass:pass;ci.pDynamicState=&dynamic;
+        VkGraphicsPipelineCreateInfo ci{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};ci.stageCount=2;ci.pStages=stages.data();ci.pVertexInputState=&vi;ci.pInputAssemblyState=&ia;ci.pViewportState=&vp;ci.pRasterizationState=&rs;ci.pMultisampleState=&ms;ci.pDepthStencilState=&ds;ci.pColorBlendState=&bs;ci.layout=layouts[kind];ci.renderPass=key.foveated?(key.split?densitySplit.clear:densityMain.clear):key.split?splitPass:key.modal?(key.swapchain?modalXrPass:modalPass):key.swapchain?xrOverlayPass:key.offscreen?uiPass:pass;ci.pDynamicState=&dynamic;
         VkPipeline pipeline{};Check(vkCreateGraphicsPipelines(device,VK_NULL_HANDLE,1,&ci,nullptr,&pipeline),"world pipeline");pipelines.emplace(key,pipeline);return pipeline;
     }
     void Register(uint32_t id,int kind) {
@@ -883,8 +903,15 @@ public:
         if(indexFirst>m.count||uint32_t(count)>m.count-indexFirst||(type&&!m.indices.buffer)){skip(4);return;}
         const auto drawStarted=passTiming?NowUs():0;
         const auto& s=draw.state;
-        PipelineKey key;key.modal=modalActive;key.offscreen=offscreen;key.swapchain=directOutput;key.strip=mode==GL_TRIANGLE_STRIP;key.ui=uint32_t(p.ui);key.water=p.water;key.sky=p.sky;key.terrain=p.terrain;key.stride=m.stride;key.instanced=instances>1;key.skinned=UsesSkin(p,item.uniforms);
-        key.split=splitFrame&&!offscreen&&!postDone;
+        if(p.ui&&densityActive)FullRateScene();
+        else if(!p.ui&&splitFrame&&!sidecarPass&&!offscreen&&!postDone)ResumeSidecar();
+        PipelineKey key;key.modal=modalActive;key.offscreen=offscreen;key.swapchain=directOutput||(compactFrame&&postDone);key.strip=mode==GL_TRIANGLE_STRIP;key.ui=uint32_t(p.ui);key.water=p.water;key.sky=p.sky;key.terrain=p.terrain;key.stride=m.stride;key.instanced=instances>1;key.skinned=UsesSkin(p,item.uniforms);
+        key.split=sidecarPass&&!offscreen&&!postDone;key.foveated=densityActive&&!offscreen&&!postDone;
+        if(!genericShaders&&kind<2){
+            if(p.lightingOffset!=UINT32_MAX){float value;std::memcpy(&value,item.uniforms.data()+p.lightingOffset,4);key.lighting=value>.5f?1:value<.5f?2:0;}
+            if(p.environmentOffset!=UINT32_MAX){float value;std::memcpy(&value,item.uniforms.data()+p.environmentOffset,4);key.noEnvironment=value<=.5f;}
+            if(p.localOffset!=UINT32_MAX){int count;std::memcpy(&count,item.uniforms.data()+p.localOffset,4);key.noLocal=count<=0;}
+        }
         key.depth=s.depth;key.write=s.write;key.baseOpaque=!s.synthesisOverlay&&!s.blend&&!key.water&&!key.ui&&s.depth&&s.write;key.blend=s.blend;key.cull=s.cull;key.clockwise=s.clockwise;
         key.depthFunc=s.depthFunc;key.src=s.src;key.dst=s.dst;key.srcA=s.srcAlpha;key.dstA=s.dstAlpha;
         key.cullFace=s.cullFace;key.equation=s.equation;key.equationA=s.equationAlpha;key.offset=s.offset;
@@ -938,6 +965,8 @@ public:
         if(type){vkCmdBindIndexBuffer(command,m.indices.buffer,0,VK_INDEX_TYPE_UINT32);vkCmdDrawIndexed(command,count,instances,indexFirst,0,0);}
         else vkCmdDraw(command,count,instances,first,0);
         ++draws;vertices+=uint64_t(count)*instances;
+        if(key.foveated)++foveatedDraws;
+        if(kind<2&&(key.lighting||key.noLocal))++specializedDraws;
         if(kind<2){if(key.noDiscard)++solidDraws;else ++guardedDraws;if(kind)++landDraws;else ++worldDraws;}
         if(passTiming)drawCpuUs+=NowUs()-drawStarted;
     }
@@ -981,7 +1010,7 @@ public:
         vkCmdPipelineBarrier(command,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT|
             VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT|VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT|VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
             0,0,nullptr,0,nullptr,4,after.data());
-        VkRenderPassBeginInfo ri{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};ri.renderPass=splitFrame?splitResumePass:resumePass;ri.framebuffer=splitFrame?splitFramebuffer:framebuffer;ri.renderArea={{0,0},{width,height}};
+        VkRenderPassBeginInfo ri{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};ri.renderPass=densityActive?(sidecarPass?densitySplit.load:densityMain.load):sidecarPass?splitResumePass:resumePass;ri.framebuffer=densityActive?(sidecarPass?densitySplit.framebuffer:densityMain.framebuffer):sidecarPass?splitFramebuffer:framebuffer;ri.renderArea={{0,0},{width,height}};
         BeginPass(SceneResume,ri);
         snapshotReady=snapshotInitialized=true;
     }
@@ -1106,8 +1135,8 @@ public:
         PostBarrier(color,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
             VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,VK_ACCESS_SHADER_READ_BIT,VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
         directOutput=gameplay&&xrSwapchain&&xrSrgb&&!legacyPresentation&&!splitFrame;
-        if(directOutput)AcquireColor();else CreatePresented();
-        auto& filmTarget=directOutput?xrTargets[acquiredColor]:presented;
+        if(directOutput)AcquireColor();else if(compactFrame)CreateCompactFinal();else CreatePresented();
+        auto& filmTarget=directOutput?xrTargets[acquiredColor]:Finished();
         if(visualDiagnostics&2u) {
             // Diagnostic only: raw scene HDR sampled directly, without the
             // original adaptation/bloom/film. Values outside SDR are clipped
@@ -1139,15 +1168,16 @@ public:
              {"uScriptTint",{settings.scriptTint[0],settings.scriptTint[1],settings.scriptTint[2],settings.scriptTint[3]}},
              {"uScriptGrade",{settings.scriptGrade[0],settings.scriptGrade[1],settings.scriptGrade[2]}},{"uScriptBlur",{settings.scriptBlur}},
              {"uTintColor",{settings.tint[0],settings.tint[1],settings.tint[2]}},{"uTintValue",{settings.tintValue}},
-             {"uTargetLumQ1520",{settings.targetLum}},{"uPcBloomReadyQ1670",{1}}},directOutput);
+             {"uTargetLumQ1520",{settings.targetLum}},{"uPcBloomReadyQ1670",{1}}},directOutput||compactFrame);
+        if(compactFrame)compactFinal.initialized=true;
         }
         postDone=true;
         // Notifications, XP, pause and performance HUD are deliberately drawn
         // after the film/gamma pass in the original game path. Retain that order.
-        PostBarrier(filmTarget.image,directOutput?VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL:VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-            directOutput?VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT:VK_ACCESS_SHADER_READ_BIT,VK_ACCESS_COLOR_ATTACHMENT_READ_BIT|VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
-            directOutput?VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT:VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
-        VkRenderPassBeginInfo overlay{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};overlay.renderPass=directOutput?xrOverlayPass:resumePass;overlay.framebuffer=directOutput?filmTarget.overlay:postOverlayFramebuffer;overlay.renderArea={{0,0},{width,height}};
+        PostBarrier(filmTarget.image,(directOutput||compactFrame)?VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL:VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+            (directOutput||compactFrame)?VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT:VK_ACCESS_SHADER_READ_BIT,VK_ACCESS_COLOR_ATTACHMENT_READ_BIT|VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+            (directOutput||compactFrame)?VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT:VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+        VkRenderPassBeginInfo overlay{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};overlay.renderPass=(directOutput||compactFrame)?xrOverlayPass:resumePass;overlay.framebuffer=(directOutput||compactFrame)?filmTarget.overlay:postOverlayFramebuffer;overlay.renderArea={{0,0},{width,height}};
         BeginPass(Overlay,overlay);
     }
     bool BeginModalDepth() {
@@ -1160,7 +1190,7 @@ public:
         auto& renderPass=directOutput?modalXrPass:modalPass;
         if(!renderPass)renderPass=MakeOverlayPass(directOutput?xrColorFormat:VK_FORMAT_R16G16B16A16_SFLOAT,true);
         if(directOutput&&modalXrFramebuffers.size()!=xrTargets.size())modalXrFramebuffers.resize(xrTargets.size());
-        auto& target=directOutput?xrTargets[acquiredColor]:presented;
+        auto& target=directOutput?xrTargets[acquiredColor]:Finished();
         auto& fb=directOutput?modalXrFramebuffers[acquiredColor]:modalFramebuffer;
         if(!fb) {
             const VkImageView views[]{target.image.view,modalDepth.view};
@@ -1240,7 +1270,7 @@ public:
             for(int k=0;k<4;++k)data[88+col*4+row]+=float(right[k*4+row]*inverse[k][col+4]);
         }
         std::memcpy(stereo.mapped,data,sizeof(data));
-        pending.clear();postDone=false;directOutput=false;snapshotReady=false;cursor=0;solidDraws=guardedDraws=worldDraws=landDraws=0;draws=vertices=skipped=0;skipReasons.fill(0);firstSkippedProgram=0;
+        pending.clear();postDone=false;directOutput=false;snapshotReady=false;cursor=0;foveatedDraws=specializedDraws=0;solidDraws=guardedDraws=worldDraws=landDraws=0;draws=vertices=skipped=0;skipReasons.fill(0);firstSkippedProgram=0;
         VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};bi.flags=VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
         Check(vkBeginCommandBuffer(command,&bi),"begin frame");
         // Shared HDR/depth/history/UI targets are queue-ordered. Only CPU-written
@@ -1255,6 +1285,8 @@ public:
     void Begin(const float* left,const float* right,const float* le,const float* re,bool loading=false,const float* horizon=nullptr,bool split=false) {
         splitFrame=split&&splitPass&&compositionChain&&!loading&&!(visualDiagnostics&2u);
         fqmotion::separatedComposition=splitFrame;compositionPresented=false;
+        sidecarPass=splitFrame;compactFrame=splitFrame&&xrSrgb;
+        densityActive=foveationRequested&&densityMain.clear&&(!splitFrame||densitySplit.clear)&&!loading;
         offscreen=false;targetWidth=width;targetHeight=height;StartCommands(left,right,le,re,loading);
         // Match the GLES clear from GetFo3Environment(), not hard-coded black.
         // The sky shader still paints the full authored sky where available.
@@ -1266,16 +1298,17 @@ public:
                           gameplay&&!loading&&horizon?horizon[1]:0.0f,
                           gameplay&&!loading&&horizon?horizon[2]:0.0f,1.0f}};
         clears[1].depthStencil={1,0};clears[2].color=clears[0].color;clears[3].color={{1,0,0,0}};
-        VkRenderPassBeginInfo ri{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};ri.renderPass=splitFrame?splitPass:pass;ri.framebuffer=splitFrame?splitFramebuffer:framebuffer;ri.renderArea={{0,0},{width,height}};ri.clearValueCount=splitFrame?4:2;ri.pClearValues=clears.data();
+        VkRenderPassBeginInfo ri{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};ri.renderPass=densityActive?(splitFrame?densitySplit.clear:densityMain.clear):splitFrame?splitPass:pass;ri.framebuffer=densityActive?(splitFrame?densitySplit.framebuffer:densityMain.framebuffer):splitFrame?splitFramebuffer:framebuffer;ri.renderArea={{0,0},{width,height}};ri.clearValueCount=splitFrame?4:2;ri.pClearValues=clears.data();
         BeginPass(Scene,ri);begun=true;
     }
+    #include "fo3-vulkan-foveation.inc"
     #include "fo3-vulkan-composition.inc"
     #include "fo3-vulkan-spacewarp.inc"
     void End(PostTarget* output=nullptr,VkImage depthOutput=VK_NULL_HANDLE) {
         if(!begun)return;
         DrainDraws();begun=false;
         if(passOpen)EndPass();
-        if(postDone&&!directOutput)PostBarrier(presented.image,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+        if(postDone&&!directOutput)PostBarrier(Finished().image,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
             VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,VK_ACCESS_SHADER_READ_BIT,VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
         if(output&&splitFrame){ComposeSplit();}
         else if(output&&!directOutput) {
@@ -1298,7 +1331,7 @@ public:
         auto& slot=frameSlots[activeSlot];slot.pending=true;slot.serial=++submissionSerial;
         if(!offscreen)++frames;
         FrameSample sample;sample.copies=presentationCopies;sample.serial=submissionSerial;sample.frame=offscreen?frames+1:frames;
-        sample.solid=solidDraws;sample.guarded=guardedDraws;sample.world=worldDraws;sample.land=landDraws;
+        sample.foveated=foveatedDraws;sample.specialized=specializedDraws;sample.compact=compactFrame&&!offscreen;sample.solid=solidDraws;sample.guarded=guardedDraws;sample.world=worldDraws;sample.land=landDraws;
         sample.record=recordSpanUs;sample.queueCpu=queueCpuUs;sample.drawCpu=drawCpuUs;sample.reuse=reuseWaitUs;sample.xrWait=xrWaitUs;
         sample.uploadCpu=uploadPrepareUs-lastUploadPrepareUs;lastUploadPrepareUs=uploadPrepareUs;
         sample.drawCount=draws;sample.vertexCount=vertices;sample.skipCount=skipped;sample.reasons=skipReasons;sample.firstSkip=firstSkippedProgram;
@@ -1313,10 +1346,10 @@ public:
         PollFrames();Collect();if(!offscreen&&!gameplay)Dump();
     }
     void ReportFrame(const FrameSample& sample,VkQueryPool queryPool) {
-        if(sample.profile||sample.logFrame)VKLOG("FQVK MATERIAL submission=%llu worldDraws=%llu landDraws=%llu noDiscardDraws=%llu genericDraws=%llu genericForced=%d hdrColorSurfaceMiB=%.2f depthSurfaceMiB=%.2f stagingCacheLimit=%zu",
+        if(sample.profile||sample.logFrame)VKLOG("FQVK MATERIAL submission=%llu worldDraws=%llu landDraws=%llu noDiscardDraws=%llu genericDraws=%llu genericForced=%d hdrColorSurfaceMiB=%.2f depthSurfaceMiB=%.2f stagingCacheLimit=%zu foveatedDraws=%llu lightingSpecializedDraws=%llu compactFilm=%d",
             (unsigned long long)sample.serial,(unsigned long long)sample.world,(unsigned long long)sample.land,
             (unsigned long long)sample.solid,(unsigned long long)sample.guarded,genericShaders,
-            double(width)*height*2*8/(1024*1024),double(width)*height*2*4/(1024*1024),stagingPoolCountLimit);
+            double(width)*height*2*8/(1024*1024),double(width)*height*2*4/(1024*1024),stagingPoolCountLimit,(unsigned long long)sample.foveated,(unsigned long long)sample.specialized,sample.compact);
         const auto offscreen=sample.offscreen;const auto passTiming=sample.profile;
         const auto timestampSupported=sample.supported&&queryPool;
         const auto recordSpanUs=sample.record,queueCpuUs=sample.queueCpu,drawCpuUs=sample.drawCpu,reuseWaitUs=sample.reuse,finishWaitUs=sample.finish,xrWaitUs=sample.xrWait;
@@ -1356,7 +1389,7 @@ public:
     std::vector<uint16_t> Readback() {
         // Debug-only, explicit readback. No readback/copy occurs on ordinary frames.
         WaitFrames();
-        if(directOutput)throw std::runtime_error("direct output requires runtime image capture or legacy presentation comparison");
+        if(directOutput||compactFrame)throw std::runtime_error("direct/compact output requires runtime image capture or legacy presentation comparison");
         const size_t bytes=size_t(width)*height*2*8;
         Buffer readback=MakeBuffer(bytes,VK_BUFFER_USAGE_TRANSFER_DST_BIT,true);
         std::vector<uint16_t> data(bytes/2);
@@ -1557,7 +1590,7 @@ public:
     ~Renderer() {
         DestroyMotion();
         DestroySwapchain();
-        if(device){CancelUploads();begun=false;
+        if(device){CancelUploads();begun=false;DestroyDensityPasses(densityMain);Destroy(densityMap);
             SwapSlot(frameSlots[activeSlot]);
             for(auto& e:pipelines)vkDestroyPipeline(device,e.second,nullptr);
             for(auto& e:meshes){Destroy(e.second.vertices);Destroy(e.second.indices);Destroy(e.second.skin);}
