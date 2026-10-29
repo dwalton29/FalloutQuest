@@ -42,7 +42,9 @@ The optional original-data weapon test starts the normal Moriarty greeting,
 selects the original father/location/payment choices through the shared dialogue
 session, advances original responses by completion tokens,
 checks caps/objective/stage effects and saves/restores state. Its starting
-snapshot is explicitly MQ01 stage 10; it does not demonstrate the Escape quest.
+snapshot test does not demonstrate the Escape quest. The v292 progression test
+now uses the actual generic Quest Starts menu to execute the original entry
+instead of pre-seeding MQ01 stage 10.
 
 The supplied executable's SetQuestDelay command entry (opcode 11DC,
 handler 007A6510) writes the float quest override at quest +40h and marks change
@@ -115,7 +117,8 @@ Moriarty greeting/choices/payment, saves at stage 40, returns to Moriarty,
 then follows Doctor Li's original greeting and father/location choices. Original
 INFO results advance MQ03 to 30, MQ01 to 210 and MQ01LD to 150. No stage is
 advanced by the test during this progression. The valid starting-state fixture
-has MQ01 stage 10 and 100 caps. Audio completion tokens stand in for actual voice
+now uses the developer entry action to execute original stage 10 and supplies
+100 caps. Audio completion tokens stand in for actual voice
 playback; actor locations stand in for world traversal.
 
 The checks cover objective completion, the authored early-skip outcome (no 300 XP
@@ -176,3 +179,35 @@ GNR is not evidence that the preceding battle/door route works.
 Native review retained first-resident restoration after MoveTo: that path also
 initialises actor inventory. Applying a teleport must not mark a newly loaded
 NPC as already restored and accidentally skip its equipment preparation.
+
+## Direct-spawn entry and saloon access (v292)
+
+The original Escape quest is CG04 (00014E86), not MQ00. Its ending result starts
+MQ01 with SetStage MQ01 10. A direct-world-spawn save can lack that handoff.
+The existing cave-exit fallback permits travel when CG04 is not running; it
+does not imply that Escape was completed.
+
+Pause > Debug > Quest Starts browses original named quests and runs their first
+stage containing an authored stage item. Empty placeholders are skipped: MQ01
+has an empty stage 0, while its entry effects are at stage 10. This is an explicit
+developer action, not an automatic quest repair. Existing stage, objective,
+completion or visited-stage progress prevents replay. The menu shows the saved
+stage/running state; unsupported entry effects reject the normal transaction.
+Reference changes use the existing native publication coordinator. There is no
+MQ01-specific start rule in production code.
+
+Moriarty's main entrance (00003A23) uses MegatonMoriartysFrontDoorSCRIPT
+(0006C565). It checks GetCurrentTime, changes three customers in the saloon
+interior, then delegates Activate. It has no MQ01 requirement and is originally
+unlocked. GetCurrentTime now reads the canonical game hour. Reference activation
+shares the logical publication path already used by dialogue, avoiding resident
+mesh preparation for changes wholly outside the current scene. Actual resident
+changes still use the full coordinator; the source Activate remains mandatory.
+
+The original-data world-script test compiles the actual native activation
+adapter and exercises the saloon at 00:00, 03:00, 03:01, noon, 18:00, 23:00 and
+23:01. It checks customer enable states, preview isolation, exactly one original
+default activation per press, and no unnecessary resident reservations.
+The progression test starts MQ01 through the menu model, checks its original
+objective, rejects replay, then follows both tested dialogue outcomes.
+Physical headset transition and access verification remains separate.

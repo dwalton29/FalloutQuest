@@ -22,6 +22,9 @@ void PauseFo3ResidentGameplayTime(){++pauses;}
 void FlushFo3PlayerState(){++flushes;}
 void ResetFo3LevelUpDraftAfterDebug(){}
 namespace fo3audio {void NamedSound(const std::string&){}void PreloadSound(const std::string&) {}}
+bool StartFo3DebugQuestEntry(fo3player::Player& player,uint32_t quest,std::string& error){
+  auto plan=fo3script::PrepareQuestEntry(player,quest,error);return plan&&!plan->HasReferenceChanges()&&player.CommitScriptTransaction(*plan);
+}
 #include "ui/pause/fo3-pause-runtime.inc"
 fo3player::Catalog Fixture(){
   fo3player::Catalog c;c.fingerprint=101;c.initial.special.fill(5);c.initial.skills.fill(20);c.initial.level=1;
@@ -31,6 +34,12 @@ fo3player::Catalog Fixture(){
   fo3pipdata::PerkEffect e;e.type=2;e.entryPoint=9;e.parameterType=1;e.function=3;
   float multiplier=1.1f;e.parameters.resize(4);std::memcpy(e.parameters.data(),&multiplier,4);perk.effects.push_back(e);
   auto& unsupported=c.pipboy.perks[101];unsupported.name="Unsupported";unsupported.ranks=1;unsupported.playable=true;
+  for(uint32_t id:{900u,901u}){auto& quest=c.pipboy.quests[id];quest.name="Quest "+std::to_string(id);quest.editor="Entry"+std::to_string(id);
+    c.pipboy.formNames["entry"+std::to_string(id)]=id;quest.objectives[1].text="Authored entry";
+    quest.stages[10].items.push_back({});quest.stages[10].items.back().result.source="SetObjectiveDisplayed Entry"+std::to_string(id)+" 1 1\nRewardKarma 2";
+    quest.stages[0]={}; // Empty placeholder is not an entry with original effects.
+    quest.stages[20].items.push_back({});
+  }
   return c;
 }
 int main(int argc,char** argv){
@@ -70,7 +79,7 @@ int main(int argc,char** argv){
   assert(p.DebugSetPerkPoints(0)&&p.Save(path,error)&&restored.Restore(path,error)&&restored.Snapshot().debugPerkPoints==0);unlink(path.c_str());
   fo3debug::Menu m;m.Open(p);const auto rev=p.Revision();
   m.Go(fo3debug::Menu::Page::Debug);m.selected=6;
-  assert(m.perfHudMode==0&&m.panel.choices.size()==8);
+  assert(m.perfHudMode==0&&m.panel.choices.size()==9);
   assert(!m.Confirm()&&m.perfHudMode==1&&p.Revision()==rev);
   assert(!m.Confirm()&&m.perfHudMode==2&&p.Revision()==rev);
   assert(!m.Confirm()&&m.perfHudMode==0&&p.Revision()==rev);
@@ -82,7 +91,12 @@ int main(int argc,char** argv){
   m.selected=1;assert(m.Confirm()&&p.ItemCount(id)==10);assert(p.Snapshot().karma==0);
   m.Go(fo3debug::Menu::Page::Hex);m.hex=0xdeadbeef;m.selected=8;const auto before=p.Revision();assert(!m.Confirm()&&p.Revision()==before);
   m.hex=1;m.selected=8;m.Confirm();assert(m.page==fo3debug::Menu::Page::Item);m.selected=3;m.Adjust(-1);m.selected=0;assert(m.Confirm());
-  const auto& weapon=p.Snapshot().inventory.back();assert(weapon.formId==1&&std::fabs(weapon.condition-.9f)<.001f);
+  const auto weapon=p.Snapshot().inventory.back();assert(weapon.formId==1&&std::fabs(weapon.condition-.9f)<.001f);
+  m.BuildQuests();assert(m.quests.size()==2);m.form=900;m.Go(fo3debug::Menu::Page::Quest);
+  const auto entryRevision=p.Revision();m.Refresh();assert(p.Revision()==entryRevision);
+  assert(m.Confirm()&&p.Snapshot().pipboy.quests.at(900).stage==10&&p.Snapshot().karma==2);
+  assert(p.Snapshot().pipboy.quests.at(900).objectives.at(1).displayed&&!p.Snapshot().pipboy.quests.at(900).stages.count(20));
+  const auto entered=p.Revision();assert(!m.Confirm()&&p.Revision()==entered&&p.Snapshot().karma==2);
   // Actual production input/admission bridge: held A never grants; explicit
   // confirms flush once. Focus/loading/publication cannot perform mutations.
   double t=10;auto input=[&](bool menu,bool a,bool b=false,float x=0,float y=0,bool focus=true){t+=.05;UpdateFo3Pause(menu,a,b,x,y,t,focus);};
@@ -96,6 +110,10 @@ int main(int argc,char** argv){
   input(false,false);input(true,false);assert(gFo3PauseOpen);input(false,false,false,0,0,false);assert(!gFo3PauseOpen);
   fo3scene::ResidentInputBarrier barrier;assert(!barrier.Allow(true,false));assert(!barrier.Allow(false,false));assert(!barrier.Allow(false,true));assert(barrier.Allow(false,true));
   fo3scene::ResidentPauseClock clock;assert(clock.Sample(100,false)==100);clock.Pause();assert(clock.Sample(10000,true)==100);assert(clock.Sample(20000,false)==100);assert(clock.Sample(20010,false)==110);
+  input(false,false);input(true,false);input(false,false);
+  gFo3PauseMenu.form=901;gFo3PauseMenu.Go(fo3debug::Menu::Page::Quest);
+  const auto beforeEntryFlush=flushes;input(false,true);assert(flushes==beforeEntryFlush+1&&p.Snapshot().pipboy.quests.at(901).stage==10);
+  input(false,true);assert(flushes==beforeEntryFlush+1);input(false,false);input(false,true);assert(flushes==beforeEntryFlush+1);
   assert(p.Save(path,error)&&restored.Restore(path,error));
   assert(restored.Snapshot().special[0]==6&&restored.ItemCount(id)==10);
   assert(restored.Snapshot().inventory.back().condition==weapon.condition);unlink(path.c_str());

@@ -25,7 +25,7 @@ void UpdateFo3Pause(bool menu,bool a,bool b,float x,float y,double now,bool focu
     if(menuEdge){
         if(gFo3PauseOpen){gFo3PauseMenu.Close();gFo3PauseOpen=false;fo3audio::NamedSound("UIMenuCancel");}
         else {
-            PauseFo3ResidentGameplayTime();gFo3PauseMenu.Open(gPlayerSession->player);gFo3PauseOpen=true;
+            PauseFo3ResidentGameplayTime();gFo3PauseMenu.startQuest=StartFo3DebugQuestEntry;gFo3PauseMenu.Open(gPlayerSession->player);gFo3PauseOpen=true;
             gFo3PauseNeutral=false;gFo3PauseVertical=gFo3PauseHorizontal=0;
             fo3audio::NamedSound("UIMenuOK");
         }

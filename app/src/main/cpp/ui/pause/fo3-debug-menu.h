@@ -1,5 +1,6 @@
 #pragma once
 #include "player/fo3-player-state.h"
+#include "scripting/fo3-script-quest-entry.h"
 #include "dialogue/fo3-dialogue-panel.h"
 #include <algorithm>
 #include <cstdio>
@@ -11,13 +12,14 @@ inline std::string Time(float hour){char b[16];const int m=int(hour*60+.001f)%14
 // persistence; no highlighted row ever changes canonical player state.
 class Menu {
 public:
-  enum class Page { Root,Debug,Time,XP,Categories,Items,Hex,Item,Points,Perks,Perk,Special };
+  enum class Page { Root,Debug,Time,XP,Categories,Items,Hex,Item,Points,Perks,Perk,Special,Quests,Quest };
   fo3dialogue::Panel panel;
   Page page=Page::Root;
-  size_t selected=0,itemPage=0,perkPage=0;
+  size_t selected=0,itemPage=0,perkPage=0,questPage=0;
   static constexpr size_t PageSize=10;
   fo3player::Player* owner=nullptr;
-  std::vector<uint32_t> items,perks;
+  std::vector<uint32_t> items,perks,quests;
+  std::function<bool(fo3player::Player&,uint32_t,std::string&)> startQuest;
   std::array<uint8_t,7> special{};
   int hour=0,minute=0,points=0,category=0;
   uint32_t form=0,hex=0;
@@ -51,7 +53,20 @@ public:
         for(const char* s:{"Set Time","Add XP / Level","Add Items","Perk Points","Chosen Perks","SPECIAL Allocations"}) {add(s);}
         add(std::string("Performance HUD: ")+(perfHudMode==0?"Off":perfHudMode==1?"FPS":"Detailed"));
         add("Unlock all map locations");
+        add("Quest Starts");
         break;
+      case Page::Quests:panel.title="QUEST STARTS - PAGE "+std::to_string(questPage+1);
+        for(size_t i=questPage*PageSize;i<quests.size()&&i<(questPage+1)*PageSize;++i){const auto id=quests[i];const auto& q=player.Definitions().pipboy.quests.at(id);add(q.name+" ["+Hex(id)+"]");}
+        add("Previous Page");add("Next Page");break;
+      case Page::Quest:{
+        panel.title="START QUEST";const auto& q=player.Definitions().pipboy.quests.at(form);
+        uint16_t stage=0;std::string error;const bool available=fo3script::QuestEntryStage(player,form,stage,error);
+        const auto current=state.pipboy.quests.find(form);
+        const std::string status=current==state.pipboy.quests.end()?"No saved quest progress":"Current stage: "+std::to_string(current->second.stage)+(current->second.running?" (running)":" (stopped)");
+        panel.subtitle=q.name+" ["+Hex(form)+"]\n"+q.editor+"\n"+status+"\n"+(!feedback.empty()?feedback:available?"":error);
+        panel.footer="A Start original entry    B Back";
+        add(available?"Start original entry (stage "+std::to_string(stage)+")":"Entry unavailable");break;
+      }
       case Page::Time:panel.title="SET TIME";
         panel.subtitle="Current Time: "+Time(state.gameHour)+"\nSelected Time: "+Time(float(hour)+float(minute)/60)+"\n"+feedback;
         add("Hour: "+std::to_string(hour));add("Minute: "+std::to_string(minute));add("Apply Time");break;
@@ -111,6 +126,10 @@ public:
     std::sort(items.begin(),items.end(),[&](uint32_t a,uint32_t b){const auto& x=owner->Definitions().items.at(a).name;const auto& y=owner->Definitions().items.at(b).name;return x==y?a<b:x<y;});itemPage=0;}
   void BuildPerks(){perks.clear();for(const auto& kv:owner->Definitions().pipboy.perks)if((kv.second.playable&&!kv.second.hidden)||owner->Snapshot().pipboy.perks.count(kv.first))if(!ownedOnly||owner->Snapshot().pipboy.perks.count(kv.first))perks.push_back(kv.first);
     std::sort(perks.begin(),perks.end(),[&](uint32_t a,uint32_t b){const auto& x=owner->Definitions().pipboy.perks.at(a).name;const auto& y=owner->Definitions().pipboy.perks.at(b).name;return x==y?a<b:x<y;});perkPage=0;}
+  void BuildQuests(){quests.clear();questPage=0;
+    for(const auto& entry:owner->Definitions().pipboy.quests)if(!entry.second.name.empty()&&!entry.second.stages.empty())quests.push_back(entry.first);
+    std::sort(quests.begin(),quests.end(),[&](uint32_t a,uint32_t b){const auto& x=owner->Definitions().pipboy.quests.at(a).name;const auto& y=owner->Definitions().pipboy.quests.at(b).name;return x==y?a<b:x<y;});
+  }
   // Caller checks safe mutation admission on EVERY confirm, including resume.
   bool Confirm(){
     if(!owner)return false;
@@ -124,8 +143,15 @@ public:
         else if(index==4){BuildPerks();Go(Page::Perks);}
         else if(index==5){special=p.Snapshot().special;Go(Page::Special);}
         else if(index==7){const auto n=p.DebugUnlockLocations();changed=n!=0;feedback=std::to_string(n)+" locations unlocked";Refresh();}
+        else if(index==8){BuildQuests();Go(Page::Quests);}
         else if(index==6){perfHudMode=uint8_t((perfHudMode+1u)%3u);Refresh();}
         break;
+      case Page::Quests:{const auto begin=questPage*PageSize;const auto count=std::min(PageSize,quests.size()-std::min(begin,quests.size()));
+        if(index<count){form=quests[begin+index];Go(Page::Quest);}else{if(index==count&&questPage)--questPage;else if(index==count+1&&(questPage+1)*PageSize<quests.size())++questPage;selected=0;Refresh();}break;}
+      case Page::Quest:{std::string error;
+        if(startQuest)changed=startQuest(p,form,error);
+        else {auto plan=fo3script::PrepareQuestEntry(p,form,error);if(plan){if(plan->HasReferenceChanges())error="Quest entry requires resident world publication";else changed=p.CommitScriptTransaction(*plan);}}
+        feedback=changed?"Original quest entry requested":error.empty()?"Quest entry rejected":error;Refresh();break;}
       case Page::Time:if(index==2){changed=p.DebugSetTime(hour,minute);Feedback(changed,"Time applied");}else Adjust(1);break;
       case Page::XP:{
         if(index==3&&p.ExperienceProgress().ready){Reject("Level-up already pending. Close pause to allocate it.");break;}
@@ -151,6 +177,6 @@ public:
       case Page::Special:if(index==7){changed=p.SetPlayerAttributes(special,p.Snapshot().skills);Feedback(changed,"SPECIAL applied");}else Adjust(1);break;
     }return changed;
   }
-  void Back(){switch(page){case Page::Root:Close();break;case Page::Debug:Go(Page::Root);break;case Page::Items:case Page::Hex:Go(Page::Categories);break;case Page::Item:Go(Page::Categories);break;case Page::Perk:Go(Page::Perks);break;default:Go(Page::Debug);break;}}
+  void Back(){switch(page){case Page::Root:Close();break;case Page::Debug:Go(Page::Root);break;case Page::Items:case Page::Hex:Go(Page::Categories);break;case Page::Quest:Go(Page::Quests);break;case Page::Quests:Go(Page::Debug);break;case Page::Item:Go(Page::Categories);break;case Page::Perk:Go(Page::Perks);break;default:Go(Page::Debug);break;}}
 };
 }

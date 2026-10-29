@@ -1,12 +1,13 @@
 #include "dialogue/fo3-dialogue-session.h"
 #include "scripting/fo3-nonresident-script.h"
+#include "ui/pause/fo3-debug-menu.h"
 #include <cassert>
 #include <iostream>
 #include <unistd.h>
 
-// Original-data gameplay checkpoint. The only quest-state fixture is valid
-// post-Escape entry. Locations substitute for world traversal, not quest gates.
-// No stage is advanced by the harness; original INFO results own progression.
+// Original-data checkpoint. The explicit developer entry action executes the
+// original first stage. Locations substitute for world traversal, not quest
+// gates; subsequent progression is owned by original INFO results.
 struct Conversation {
   fo3player::Player& player;
   fo3dialogue::Session session;
@@ -41,10 +42,17 @@ struct Conversation {
 };
 static void Original(const char* path){
   fo3player::Catalog catalog;std::string error;assert(fo3player::LoadCatalog(path,catalog,error));
-  auto& initial=catalog.initial.pipboy.quests[0x14e87];
-  initial.stage=10;initial.running=true;initial.stages.insert(10);initial.objectives[10].displayed=true;
   const auto save="/tmp/fq-mq01-progression-"+std::to_string(getpid());
   fo3player::Player first(catalog);first.RegisterOriginalActors();assert(first.Add(0xf,100));
+  // A direct-world-spawn save has no Escape handoff. Exercise the actual
+  // generic debug menu rather than synthesising a post-Escape quest snapshot.
+  fo3debug::Menu entry;entry.Open(first);entry.BuildQuests();
+  const auto mq=std::find(entry.quests.begin(),entry.quests.end(),0x14e87u);assert(mq!=entry.quests.end());
+  entry.form=*mq;entry.Go(fo3debug::Menu::Page::Quest);const auto entryRevision=first.Revision();
+  assert(first.Snapshot().pipboy.quests.count(*mq)==0&&first.Revision()==entryRevision);
+  assert(entry.Confirm());const auto& started=first.Snapshot().pipboy.quests.at(*mq);
+  assert(started.stage==10&&started.running&&started.stages.count(10)&&started.objectives.at(10).displayed);
+  const auto startedRevision=first.Revision();assert(!entry.Confirm()&&first.Revision()==startedRevision);entry.Close();
   const auto xp=first.Snapshot().experience;
   {
     Conversation moriarty(first,catalog.pipboy.formNames.at("colinmoriartyref"));moriarty.Start();

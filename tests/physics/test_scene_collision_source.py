@@ -412,13 +412,14 @@ assert 'const fo3player::Player&' in factory and 'CancelFo3ResidentPreparation(t
 # The reusable workflow adapter remains free of gameplay/UI side effects.
 # The separate ACTI gameplay bridge may request a deferred save, but only
 # after reserving the lane; the frame gate prevents early persistence.
-workflow_core=workflow[:workflow.index('// ACTI OnActivate bridge.')]
+workflow_core=workflow[:workflow.index('#include \"world/interaction/fo3-script-activation-runtime.inc\"')]
 for forbidden in ('FlushFo3','PollScript','PollQuest','DispatchReferenceEvent','glDraw','PumpFo3AndroidEvents'):
     assert forbidden not in workflow_core
-bridge=workflow[workflow.index('// ACTI OnActivate bridge.'):]
+bridge=Path('app/src/main/cpp/world/interaction/fo3-script-activation-runtime.inc').read_text()
 assert bridge.index('BeginFo3ResidentPreparedWorkflow(') < bridge.index('FlushFo3PlayerState();')
 assert 'std::move(plan)' in bridge  # ACTI scripts must not be evaluated twice.
 assert 'if(!plan->HasReferenceChanges())' in bridge
+assert bridge.index('PublishFo3DialogueReferences(player,*plan,error)') < bridge.index('BeginFo3ResidentPreparedWorkflow(')
 assert 'ScriptEventResult' in bridge and 'Result::Pending' in bridge
 assert 'gFo3ResidentWorkflow.Ticket()==gFo3ResidentGameplayTicket' in native_pump
 assert native_pump.index('State()==Phase::Ready') < native_pump.index('gFo3ResidentWorkflow.Execute(')

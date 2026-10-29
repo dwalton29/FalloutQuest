@@ -4277,34 +4277,7 @@ bool FinalizeFo3ResidentWorkflow(uint64_t ticket) noexcept {
     return gFo3ResidentWorkflow.Finalize(ticket,adapter);
 }
 
-// ACTI OnActivate bridge. Do not report a pending mutation as Executed.
-void FlushFo3PlayerState(void);
-fo3player::ScriptEventResult DispatchFo3ScriptedActivation(
-        uint32_t reference,uint32_t activator,std::string& error) {
-    using Result=fo3player::ScriptEventResult;
-    error.clear();
-    if(!gPlayerSession||gPlayerSession->saveBlocked||Fo3ResidentFrameBlocked()){
-        error="script activation scene or save unavailable";return Result::Unsupported;
-    }
-    auto& player=gPlayerSession->player;
-    if(!player.HasReferenceEvent(reference,"OnActivate"))return Result::NoHandler;
-    auto plan=player.PrepareReferenceEventTransaction(reference,"OnActivate",activator,error,
-        fo3player::ScriptProgramCapture::EnteredPrograms);
-    if(!plan)return Result::Unsupported;
-    if(!plan->HasReferenceChanges()){
-        if(player.CommitScriptTransaction(*plan))return Result::Executed;
-        error="script event transaction changed before publication";return Result::Unsupported;
-    }
-    const auto ticket=BeginFo3ResidentPreparedWorkflow({},std::move(plan));
-    if(!ticket){
-        if(error.empty())error="resident scripted activation could not reserve a safe scene";
-        return Result::Unsupported;
-    }
-    gFo3ResidentGameplayTicket=ticket;
-    // Defer disk persistence until the owned exchange has settled and released.
-    FlushFo3PlayerState();
-    return Result::Pending;
-}
+#include "world/interaction/fo3-script-activation-runtime.inc"
 #include "world/fo3-resident-lifecycle-runtime.inc"
 
 // Dynamic NPC arrivals use the same original ESM/NIF/KF scene-worker pipeline
@@ -15230,6 +15203,15 @@ fo3player::Session* GetFo3PlayerSession() { return gPlayerSession.get(); }
 #include "world/interaction/fo3-script-default-activation.inc"
 #include "scripting/fo3-world-script-runtime.inc"
 #include "world/interaction/fo3-levelup-runtime.inc"
+bool StartFo3DebugQuestEntry(fo3player::Player& player,uint32_t quest,std::string& error){
+    auto plan=fo3script::PrepareQuestEntry(player,quest,error,fo3player::ScriptProgramCapture::EnteredPrograms);
+    if(!plan)return false;
+    if(!plan->HasReferenceChanges())return player.CommitScriptTransaction(*plan);
+    if(PublishFo3DialogueReferences(player,*plan,error))return true;
+    const auto ticket=BeginFo3ResidentPreparedWorkflow({},std::move(plan));
+    if(!ticket){if(error.empty())error="Quest entry could not reserve world publication";return false;}
+    gFo3ResidentGameplayTicket=ticket;return true;
+}
 #include "ui/pause/fo3-pause-runtime.inc"
 
 void SetFo3PlayerBodyTrackingQ210(

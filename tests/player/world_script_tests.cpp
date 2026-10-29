@@ -8,6 +8,21 @@
 #include <filesystem>
 #include "world/fo3-worldspace-runtime.h"
 using namespace fo3player;
+// Compile the actual native activation adapter, with resource publication
+// supplied by this host scene. Original door events use the same route as A.
+std::unique_ptr<fo3player::Session> gPlayerSession;
+uint64_t gFo3ResidentGameplayTicket=0;
+uint32_t activationCell=0,activationWorld=0;
+unsigned activationReservations=0;
+std::vector<uint32_t> activationLive;
+bool Fo3ResidentFrameBlocked(){return false;}
+void FlushFo3PlayerState(){}
+bool PublishFo3DialogueReferences(Player& player,ScriptTransactionPlan& plan,std::string& error){
+  return fo3script::NonresidentActorRemoval(player,plan,activationCell,activationWorld,activationLive,error)&&player.CommitScriptTransaction(plan);
+}
+struct ActivationRequest {};
+uint64_t BeginFo3ResidentPreparedWorkflow(ActivationRequest,std::unique_ptr<ScriptTransactionPlan>){++activationReservations;return 0;}
+#include "world/interaction/fo3-script-activation-runtime.inc"
 static void Check(bool b,const std::string& s){if(!b)throw std::runtime_error(s);}
 static float Local(const Player& p,const std::string& name){
   const auto key=fo3dialogue::VariableKey(p.Definitions().pipboy,name);
@@ -68,7 +83,7 @@ static void Original(const char* path){
   const auto root="/tmp/fq-world-original-"+std::to_string(getpid());std::filesystem::create_directory(root);
   std::filesystem::create_symlink(std::filesystem::absolute(path),root+"/Fallout3.esm");Check(setenv("FALLOUTQUEST_DATA_ROOT",root.c_str(),1)==0,"original data root");
   struct Cleanup {std::string root;~Cleanup(){std::filesystem::remove(root+"/Fallout3.esm");std::filesystem::remove(root);}} cleanup{root};
-  Catalog c;std::string error;Check(LoadCatalog(path,c,error),error);c.initial.gameHour=12;Player p(std::move(c));
+  Catalog c;std::string error;Check(LoadCatalog(path,c,error),error);c.initial.gameHour=12;gPlayerSession=std::make_unique<Session>(std::move(c));auto& p=gPlayerSession->player;
   const auto& d=p.Definitions().pipboy;auto id=[&](const char* name){auto f=d.formNames.find(name);Check(f!=d.formNames.end(),std::string("missing ")+name);return f->second;};
   const uint32_t house=id("megatongatehouseref"),weld=id("megatongateprotectronref");
   auto registry=std::make_shared<fo3script::AnimationRegistry>();(*registry)[house]={{"Forward",15,false},{"Backward",15,false},{"Left",3,true},{"SpecialIdle",3,true}};
@@ -94,6 +109,31 @@ static void Original(const char* path){
   p.SetScriptRuntimeClock(115,.25);run("GameMode");Check(p.PollScriptAction(action)&&action.group=="left"&&Local(p,"megatongatehouseref.opened")==2,"source Left at completion");
   run("OnLoad");run("GameMode");Check(p.PollScriptAction(action)&&action.group=="left","source reload idle");
   (void)weld;
+  // The saloon door's original script is independent of MQ01. Its time
+  // branches change customers in the destination CELL and then delegate the
+  // ordinary door action. Repeated presses/time changes must not drop it.
+  const auto saloon=id("megmoriartysmaindoorexref");const auto& front=d.targets.at(saloon);
+  p.SetScriptPlayerLocation(front.x,front.y,front.z,front.cell,front.world);
+  Check(!p.GetLock(saloon).locked&&p.CanScriptActivateDoor(saloon),"original saloon entrance is unlocked");
+  activationCell=front.cell;activationWorld=front.world;activationLive={saloon};
+  const auto customer1=id("megatonmoriartyscustomer01ref"),customer2=id("megatonmoriartyscustomer02ref"),customer3=id("megatonmoriartyscustomer03ref");
+  for(const auto& time:std::vector<std::pair<int,int>>{{0,0},{3,0},{3,1},{12,0},{18,0},{23,0},{23,1}}){
+    Check(p.DebugSetTime(time.first,time.second),"set saloon clock");const auto before=p.Revision();
+    auto door=p.PrepareReferenceEventTransaction(saloon,"OnActivate",PlayerRef,error,ScriptProgramCapture::EnteredPrograms);
+    Check(bool(door),"original saloon script: "+error);Check(p.Revision()==before&&!p.PollScriptAction(action),"saloon preview has no effects");
+    if(door->HasReferenceChanges())Check(fo3script::NonresidentActorRemoval(p,*door,front.cell,front.world,{saloon},error),"saloon customer publication: "+error);
+    Check(DispatchFo3ScriptedActivation(saloon,PlayerRef,error)==ScriptEventResult::Executed,"native saloon activation adapter: "+error);
+    Check(activationReservations==0,"off-scene customers do not request resident mesh publication");bool disabled=false;
+    const float hour=p.Snapshot().gameHour;const bool evening=hour>=18&&hour<=23,late=hour<=3;
+    Check(p.ReferenceDisabled(customer1,disabled,error)&&!disabled,"first original saloon customer enabled");
+    Check(p.ReferenceDisabled(customer2,disabled,error)&&disabled==!(evening||late),"second saloon customer schedule");
+    Check(p.ReferenceDisabled(customer3,disabled,error)&&disabled==!evening,"third saloon customer schedule");
+    Check(p.PollScriptAction(action)&&action.kind==fo3script::ActionKind::DefaultActivate&&action.reference==saloon,"original saloon default activation delivered");
+    Check(!p.PollScriptAction(action),"one saloon activation per press");
+  }
+  Check(p.DebugSetTime(12,0),"restore daylight for cave presentation check");
+  std::cout<<"Original saloon time branches and native activation adapter passed\n";
+  p.SetScriptPlayerLocation(gateVolume.x,gateVolume.y,gateVolume.z,gateVolume.cell,gateVolume.world);
   // Actual cave exit OnActivate must reach its authored fallback when CG04
   // is not running. No forced quest stage or source replacement is involved.
   auto cave=p.PrepareReferenceEventTransaction(id("vault101cavedoorinterior"),"OnActivate",PlayerRef,error);

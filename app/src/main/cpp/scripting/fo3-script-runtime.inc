@@ -84,6 +84,7 @@ class Expression {
       if(!lock.known||lock.leveled)return Fail("unresolved lock query");
       value=query=="getlocked"?float(lock.locked):query=="getlocklevel"?float(lock.level):float(lock.broken);return true;
     }
+    if(t=="getcurrenttime"){value=p.Snapshot().gameHour;return true;}
     if(t=="getsecondspassed"){value=float(p.ScriptSecondsPassed());return true;}
     if(query=="isanimplaying"){
       const auto id=dot==std::string::npos?owner:form(t.substr(0,dot));bool playing=false;
