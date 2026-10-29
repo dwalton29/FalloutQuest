@@ -33,6 +33,8 @@ namespace fo3worldscript {fo3script::ImagePresentation Presentation();}
 #include "rendering/spacewarp/fo3-driver-boundary.h"
 #include "rendering/fixed-foveation.h"
 #include "rendering/conservative-occlusion.h"
+#include "rendering/tiled-occlusion.h"
+#include "rendering/frame-hitch-timing.h"
 #include "rendering/performance-capture-android.h"
 #include "rendering/loading-work-scope.h"
 #include "rendering/loading-diagnostics.h"
@@ -4305,6 +4307,7 @@ bool gFo3ResidentSavePending=false;
 void FlushFo3PlayerState() {
     if (!gPlayerSession || gPlayerSession->saveBlocked || gFo3ResidentExchangeRecoveryFailed) return;
     if(Fo3ResidentFrameBlocked()){gFo3ResidentSavePending=true;return;}
+    fqframehitch::Operation saveTiming("player-save",[](const char* name,uint64_t us){Q6H_LOGI("Q284 SLOW OP name=%s us=%llu",name,(unsigned long long)us);});
     WeaponPersistWorld();
     std::string error;
     gFo3ResidentSavePending=false;

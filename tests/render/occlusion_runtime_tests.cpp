@@ -1,4 +1,5 @@
 #include "rendering/conservative-occlusion.h"
+#include "rendering/tiled-occlusion.h"
 #include <vector>
 #include <memory>
 #include <string>

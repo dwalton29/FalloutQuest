@@ -578,7 +578,10 @@ void Q2000RunWorker(const std::shared_ptr<Q2000WorkerTask>& task) {
 }
 
 void Q2000JoinFinishedWorker() {
+    const auto started=std::chrono::steady_clock::now();
     if (gQ2000WorkerThread.joinable()) gQ2000WorkerThread.join();
+    const auto us=Q2000ElapsedUs(started);
+    if(us>=2000)Q76B_LOGI("Q284 ASSET WAIT name=terrain-completed-worker-join us=%llu",(unsigned long long)us);
 }
 
 void Q2000ConsumeWorker() {

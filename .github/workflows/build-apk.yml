@@ -176,6 +176,8 @@ jobs:
           /tmp/quest-quality-tests
           g++ -O2 -std=c++17 -Wall -Wextra -Werror -Iapp/src/main/cpp tests/render/conservative_occlusion_tests.cpp -o /tmp/occlusion-tests
           /tmp/occlusion-tests
+          g++ -O2 -std=c++17 -Wall -Wextra -Werror -Iapp/src/main/cpp tests/render/tiled_occlusion_tests.cpp -o /tmp/tiled-occlusion-tests
+          /tmp/tiled-occlusion-tests
           g++ -O2 -std=c++17 -Wall -Wextra -Werror -Iapp/src/main/cpp tests/render/occlusion_runtime_tests.cpp -o /tmp/occlusion-runtime-tests
           /tmp/occlusion-runtime-tests
 

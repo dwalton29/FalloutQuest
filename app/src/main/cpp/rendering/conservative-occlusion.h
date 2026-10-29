@@ -27,6 +27,7 @@ struct Rect { float left=0,right=0,bottom=0,top=0,nearZ=0; };
 struct Polygon {
     float nx[4]{},ny[4]{},c[4]{},farZ=1,area=0;
     unsigned count=0;
+    Point projected[4]{};float winding=1;
     bool Covers(const Rect& r) const {
         // Two NDC margins: shrink real occluders by >2 pixels at the normal
         // eye resolution; require a strictly separated depth interval.
@@ -57,7 +58,8 @@ inline bool ProjectPolygon(const float* m,const Point* points,unsigned n,
     if(!std::isfinite(cross)||std::fabs(cross)<1e-10)return false;
     if(!twoSided && ((cross<0)!=clockwise))return false;
     const float sign=cross>0?1.f:-1.f;
-    Polygon result;result.count=n;result.farZ=-1;
+    Polygon result;result.count=n;result.farZ=-1;result.winding=sign;
+    std::copy_n(p,n,result.projected);
     float left=1,right=-1,bottom=1,top=-1;
     for(unsigned i=0;i<n;++i) {
         const auto a=p[i],b=p[(i+1)%n];
@@ -75,7 +77,7 @@ inline bool ProjectPolygon(const float* m,const Point* points,unsigned n,
     }
     result.area=std::max(0.f,std::min(1.f,right)-std::max(-1.f,left))*
                 std::max(0.f,std::min(1.f,top)-std::max(-1.f,bottom));
-    if(result.area<0.0004f)return false;
+    if(result.area<1e-10f)return false;
     out=result;return true;
 }
 inline bool ProjectBounds(const float* m,const questrender::Bounds& b,Rect& out) {

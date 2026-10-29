@@ -621,7 +621,10 @@ bool BuildWorldspaceIndexQ1800(uint32_t worldspaceFormId,
 
 const Q1800WorldspaceIndex* GetWorldspaceIndexQ1800(uint32_t worldspaceFormId) {
     if (worldspaceFormId == 0u) return nullptr;
+    const auto lockStarted=std::chrono::steady_clock::now();
     std::lock_guard<std::mutex> lock(gQ1800WorldspaceIndexesMutex);
+    const auto waitUs=std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now()-lockStarted).count();
+    if(waitUs>=2000)Q75_LOGI("Q284 ASSET WAIT name=worldspace-index-lock us=%llu world=%08X",(unsigned long long)waitUs,worldspaceFormId);
     const auto cached = gQ1800WorldspaceIndexes.find(worldspaceFormId);
     if (cached != gQ1800WorldspaceIndexes.end()) return cached->second.get();
 

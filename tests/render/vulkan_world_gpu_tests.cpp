@@ -977,8 +977,9 @@ void GameplayPresentation(bool withDepth) {
 #include "vulkan_motion_gpu_tests.inc"
 #include "vulkan_terrain_fusion_gpu_tests.inc"
 #include "vulkan_pipeline_cache_tests.inc"
+#include "vulkan_tiled_occlusion_tests.inc"
 int main() {
-    PipelineCacheReuse();StereoWaterVisibility();
+    TiledOcclusionGpu();PipelineCacheReuse();StereoWaterVisibility();
     TerrainFusionGpu(false);TerrainFusionGpu(true);TerrainFusionGpu(true,true);
     NativeMotion();NativeMotion(true);NativeMotion(true,true);
     for(auto format:{VK_FORMAT_R8G8B8A8_UNORM,VK_FORMAT_B8G8R8A8_UNORM,VK_FORMAT_B8G8R8A8_SRGB})HdrPresentation(format,false);

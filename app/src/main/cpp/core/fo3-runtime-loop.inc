@@ -1693,6 +1693,11 @@ private:
         XrFrameState frameState{XR_TYPE_FRAME_STATE};
         if (!CheckXr(xrWaitFrame(session_, &waitInfo, &frameState), "xrWaitFrame")) return;
         const auto appFrameStarted=fqopaque::Clock::now();
+        static uint64_t hitchSerial=0;
+        fqframehitch::Trace hitch(++hitchSerial,[](uint64_t serial,uint64_t total,const fqframehitch::Span* spans,size_t count){
+            FQ_LOGI("Q284 FRAME HITCH serial=%llu totalUs=%llu loading=%d",(unsigned long long)serial,(unsigned long long)total,IsFo3LoadingVisible());
+            for(size_t i=0;i<count;++i)if(spans[i].us>=1000)FQ_LOGI("Q284 HITCH STAGE serial=%llu stage=%s us=%llu",(unsigned long long)serial,spans[i].name,(unsigned long long)spans[i].us);
+        });
         auto& perf=fqperf::capture.current;
         if(fqperf::capture.recording) {
             perf.us[fqperf::Wait]=fqopaque::Micros(waitStarted);
@@ -1709,6 +1714,7 @@ private:
             if(spacewarp_.Requested()&&!vulkanGameplay_)runtimeBoundary.emplace("frame-begin",spacewarpProducerReady_&&(spacewarpSerial_%180)==1);
             frameBegun=CheckXr(xrBeginFrame(session_, &beginInfo), "xrBeginFrame");
         }
+        hitch.Mark("xrBegin");
         if(!frameBegun)return;
         if(fqperf::capture.recording)perf.us[fqperf::Begin]=fqopaque::Micros(beginStarted);
         const auto perfGlStart=fqgl::counters;
@@ -1716,6 +1722,7 @@ private:
         // are excluded. It never auto-commits merely because staging is ready.
         PumpFo3ResidentWorkflow(sessionState_==XR_SESSION_STATE_FOCUSED);
         FlushFo3DeferredPlayerState(); // Also after cancellation on a non-rendered frame.
+        hitch.Mark("resident+save");
         // Acquisition latches this even when the whole reservation completes
         // between frames. Rebase locomotion and require neutral raw controls.
         if(gFo3ResidentXrClock.Paused()){
@@ -1814,6 +1821,7 @@ private:
                     ProcessQ74TransitionRequest();
                 }
                 {FQ_PERF_SCOPE(Input);SyncInput(frameState.predictedDisplayTime);}
+                hitch.Mark("locate+loading+input");
                 const auto gameplayStarted=fqopaque::Clock::now();
                 // One world clock shared by exterior lighting, resident PACK
                 // selection and unloaded XTEL scheduling. Never fast-forward
@@ -1932,6 +1940,7 @@ private:
                 } else {
                     lastFrameTime_ = 0;
                 }
+                hitch.Mark("scripts+player");
                 // Q21.0: drive the Fallout body root from the exact virtual
                 // HMD/controller poses used by locomotion and interaction.
                 XrPosef q210HeadLocal=views[0].pose;
@@ -2050,6 +2059,7 @@ private:
                 const XrPosef q1890VirtualHead = q210VirtualHead;
                 if(fqperf::capture.recording)perf.us[fqperf::Gameplay]+=fqopaque::Micros(gameplayStarted);
                 { FQ_PERF_SCOPE(Streaming);
+                hitch.Mark("interactions");
                 UpdateFo3ExteriorStreamingQ1890(q1890VirtualHead.position.x,
                                                 q1890VirtualHead.position.z); }
                 const auto interactionsStarted=fqopaque::Clock::now();
@@ -2072,6 +2082,7 @@ private:
                     }
                 }
                 FlushFo3DeferredPlayerState();
+                hitch.Mark("streaming+doors+save");
 
                 if(fqperf::capture.recording)perf.us[fqperf::Gameplay]+=fqopaque::Micros(interactionsStarted);
                 const auto lootViewer=ToVirtualPose(loadingHead);
@@ -2109,6 +2120,7 @@ private:
                 fqmotion::requested=spacewarpProducerReady_&&gSceneReady&&
                     !IsFo3LoadingVisible()&&sessionState_==XR_SESSION_STATE_FOCUSED&&!Fo3GameplayBlocked();
                 QActorPrepareStereoFrame();
+                hitch.Mark("actorPrep");
                 if(gFo3PauseOpen)fo3pauseui::Prepare(gFo3PauseMenu);
                 if(gFo3PauseMenu.perfHudMode&&!IsFo3LoadingVisible())fo3perfui::Prepare(gFo3PauseMenu.perfHudMode);
                 if(auto* player=GetFo3PlayerSession())fo3pipui::Render(gPipMenu,player->player,Fo3PipboyFocus());
@@ -2148,6 +2160,7 @@ private:
                 if(fqperf::capture.recording) {
                     fqperf::gpu.Poll(fqperf::capture.serial);
                 }
+                hitch.Mark("uiPrep");
                 if(spacewarpProducerReady_){
                     fqspacewarp::Frame frame;frame.serial=++spacewarpSerial_;
                     frame.scene=gSceneLoad.generation;frame.displayTime=frameState.predictedDisplayTime;
@@ -2245,6 +2258,7 @@ private:
             }
         }
 
+        hitch.Mark("render+present");
         if(!pipPoseUpdated){ResetFo3Pipboy();}
         XrFrameEndInfo endInfo{XR_TYPE_FRAME_END_INFO};
         endInfo.displayTime = frameState.predictedDisplayTime;
@@ -2276,6 +2290,7 @@ private:
         if(vulkanGameplay_&&q1700FrameSubmitted&&layerCount&&(presentationFrames_%120)==1)
             FQ_LOGI("FQ NATIVE FRONTEND: eglContext=none glesDriverCalls=%llu handles=%u",(unsigned long long)fqrender::driverCalls,fqrender::nextHandle-1);
         const double perfEndUs=double(fqloading::Now()-submitStarted);
+        hitch.Mark("xrEnd");
         const bool perfLoadingAtSubmit=IsFo3LoadingVisible();
         if(IsFo3LoadingVisible()) {
             previousLoadingCpu=fqloading::Now()-uint64_t(std::chrono::duration_cast<std::chrono::microseconds>(appFrameStarted.time_since_epoch()).count());

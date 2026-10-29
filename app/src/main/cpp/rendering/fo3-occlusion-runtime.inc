@@ -3,7 +3,9 @@ namespace q241 {
 using Clock=std::chrono::steady_clock;
 constexpr uint32_t MaxTests=40000;
 constexpr double BuildBudgetUs=900,TotalBudgetUs=1500;
-fo3occ::Buffer eyes[2];
+fo3occ::TiledBuffer eyes[2];
+Clock::time_point buildStarted;
+double phaseBudgetUs=BuildBudgetUs;
 uint64_t generation=0,frame=~uint64_t{0},revision=0;
 const GpuObject* storage=nullptr;
 size_t objectCount=0;
@@ -32,7 +34,7 @@ void Add(const fo3occ::Point* points,unsigned n,bool twoSided=false,bool clockwi
     ++candidates;
     for(unsigned eye=0;eye<2;++eye) {
         fo3occ::Polygon p;
-        if(fo3occ::ProjectPolygon(gStereoMvp[eye],points,n,twoSided,clockwise,p))eyes[eye].Add(p);
+        if(fo3occ::ProjectPolygon(gStereoMvp[eye],points,n,twoSided,clockwise,p))eyes[eye].Add(p,[]{return Us(buildStarted)<phaseBudgetUs;});
     }
 }
 void Prepare() {
@@ -48,19 +50,60 @@ void Prepare() {
             static uint64_t lastReport=0;
             if(gStereoFrame-lastReport>=60) {
                 lastReport=gStereoFrame;
+                Q6H_LOGI("Q284 TILED OCCLUSION: covered=%zu/%zu overflow=%zu/%zu rasterCells=%zu/%zu currentCamera=1",eyes[0].coveredCells,eyes[1].coveredCells,eyes[0].overflowCells,eyes[1].overflowCells,eyes[0].rasterCells,eyes[1].rasterCells);
                 Q6H_LOGI("Q241 OCCLUSION: frame=%llu candidates=%u polygons=%zu/%zu testedShapes=%u hiddenShapes=%u hiddenCorners=%llu polygonTests=%u buildUs=%.1f testUs=%.1f stopped=%d cooldown=%u scope=main-stereo-static mirrors=independent distanceCut=0 gpuReadbacks=0",
                     (unsigned long long)frame,candidates,eyes[0].count,eyes[1].count,tested,hidden,
                     (unsigned long long)hiddenCorners,tests,buildUs,testUs,stopped,cooldown);
             }
         }
     }
+    const auto prepareStarted=Clock::now();
     frame=gStereoFrame;revision=rev;storage=gObjects.data();objectCount=gObjects.size();world=gExteriorWorldspaceQ1890;
     std::memcpy(matrices,gStereoMvp,sizeof(matrices));
     ++generation;active=false;stopped=false;eyes[0].Clear();eyes[1].Clear();
     tests=tested=hidden=candidates=0;hiddenCorners=0;buildUs=testUs=0;
     if(!Enabled()||!rev||!gStereoMvpReady||gFo3Environment.interior||!gExteriorStreamingActiveQ1890)return;
     if(newFrame&&cooldown){--cooldown;return;}
-    const auto start=Clock::now();
+    const auto start=prepareStarted;buildStarted=start;
+    // Published LAND only. Two closest resident CELLs, interior quads only:
+    // border heights can be stitched differently from grounding heights.
+    struct Cell {const Fo3TerrainCellQ76* land=nullptr;float distance=1e30f;};
+    std::array<Cell,2> nearest{};
+    const float gx=gExteriorOriginXQ1890+gFo3EyePosition[0]*70.f;
+    const float gy=gExteriorOriginYQ1890-gFo3EyePosition[2]*70.f;
+    const int cx=int(std::floor(gx/4096.f)),cy=int(std::floor(gy/4096.f));
+    for(int y=cy-1;y<=cy+1&&Us(start)<=BuildBudgetUs;++y)for(int x=cx-1;x<=cx+1;++x) {
+        const auto* cell=GetFo3TerrainOcclusionCellQ241(world,x,y,
+            gExteriorOriginXQ1890,gExteriorOriginYQ1890,gExteriorOriginZQ1890);
+        if(!cell)continue;
+        const float dx=(x+.5f)*4096.f-gx,dy=(y+.5f)*4096.f-gy,d=dx*dx+dy*dy;
+        if(d<nearest[0].distance){nearest[1]=nearest[0];nearest[0]={cell,d};}
+        else if(d<nearest[1].distance)nearest[1]={cell,d};
+    }
+    // Visit near quads first, interleaving both CELLs. Reserve the remainder
+    // for authored building occluders; no previous-camera result is reused.
+    phaseBudgetUs=BuildBudgetUs*.45;
+    for(int radius=0;radius<31&&Us(start)<phaseBudgetUs;++radius)for(const auto& entry:nearest){
+        if(!entry.land)continue;
+        const auto& cell=*entry.land;
+        const int centreX=std::clamp(int(std::floor((gx-cell.gridX*4096.f)/128.f)),1,30);
+        const int centreY=std::clamp(int(std::floor((gy-cell.gridY*4096.f)/128.f)),1,30);
+        auto visit=[&](int x,int y){
+            if(x<1||x>30||y<1||y>30||Us(start)>=phaseBudgetUs)return;
+            const unsigned quadrant=(y>=16?2:0)+(x>=16?1:0);
+            if(cell.forceHideMask&(1u<<quadrant))return;
+            auto point=[&](int px,int py)->fo3occ::Point{
+                return {(cell.gridX*4096.f+px*128.f-gExteriorOriginXQ1890)/70.f,
+                    FLOOR_Y+(cell.heights[py*33+px]-gExteriorOriginZQ1890)/70.f,
+                    SCENE_FORWARD-(cell.gridY*4096.f+py*128.f-gExteriorOriginYQ1890)/70.f};
+            };
+            const fo3occ::Point points[]{point(x,y),point(x+1,y),point(x+1,y+1),point(x,y+1)};Add(points,4);
+        };
+        if(!radius){visit(centreX,centreY);continue;}
+        for(int x=-radius;x<=radius;++x){visit(centreX+x,centreY-radius);visit(centreX+x,centreY+radius);}
+        for(int y=-radius+1;y<radius;++y){visit(centreX-radius,centreY+y);visit(centreX+radius,centreY+y);}
+    }
+    phaseBudgetUs=BuildBudgetUs;
     // At most 64 static source shapes, each with <=16 original triangles.
     // The pointer list is rebuilt only with normal visual publication.
     size_t selected=0,visited=0;
@@ -81,39 +124,7 @@ void Prepare() {
         for(const auto& t:*o.occluders)Add(t.p,t.count,two,clockwise);
         if(++selected>=64||Us(start)>BuildBudgetUs)break;
     }
-    // Published LAND only. Two closest resident CELLs, interior quads only:
-    // border heights can be stitched differently from grounding heights.
-    struct Cell {const Fo3TerrainCellQ76* land=nullptr;float distance=1e30f;};
-    std::array<Cell,2> nearest{};
-    const float gx=gExteriorOriginXQ1890+gFo3EyePosition[0]*70.f;
-    const float gy=gExteriorOriginYQ1890-gFo3EyePosition[2]*70.f;
-    const int cx=int(std::floor(gx/4096.f)),cy=int(std::floor(gy/4096.f));
-    for(int y=cy-1;y<=cy+1&&Us(start)<=BuildBudgetUs;++y)for(int x=cx-1;x<=cx+1;++x) {
-        const auto* cell=GetFo3TerrainOcclusionCellQ241(world,x,y,
-            gExteriorOriginXQ1890,gExteriorOriginYQ1890,gExteriorOriginZQ1890);
-        if(!cell)continue;
-        const float dx=(x+.5f)*4096.f-gx,dy=(y+.5f)*4096.f-gy,d=dx*dx+dy*dy;
-        if(d<nearest[0].distance){nearest[1]=nearest[0];nearest[0]={cell,d};}
-        else if(d<nearest[1].distance)nearest[1]={cell,d};
-    }
-    for(const auto& entry:nearest) {
-        if(!entry.land||Us(start)>BuildBudgetUs)break;
-        const auto& cell=*entry.land;
-        auto point=[&](int x,int y) -> fo3occ::Point {
-            return {(cell.gridX*4096.f+x*128.f-gExteriorOriginXQ1890)/70.f,
-                    FLOOR_Y+(cell.heights[y*33+x]-gExteriorOriginZQ1890)/70.f,
-                    SCENE_FORWARD-(cell.gridY*4096.f+y*128.f-gExteriorOriginYQ1890)/70.f};
-        };
-        bool finished=false;
-        for(int y=1;y<31&&!finished;++y)for(int x=1;x<31;++x) {
-            if((candidates%32)==0&&Us(start)>BuildBudgetUs){finished=true;break;}
-            const unsigned q=(y>=16?2:0)+(x>=16?1:0);
-            if(cell.forceHideMask&(1u<<q))continue;
-            const fo3occ::Point p[]{point(x,y),point(x+1,y),point(x+1,y+1),point(x,y+1)};
-            Add(p,4);
-        }
-    }
-    buildUs=Us(start);active=eyes[0].count&&eyes[1].count;
+    buildUs=Us(start);active=eyes[0].coveredCells&&eyes[1].coveredCells;
 }
 }
 
