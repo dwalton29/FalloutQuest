@@ -1,4 +1,5 @@
 #include "player/fo3-player-state.h"
+#include "dialogue/fo3-dialogue-session.h"
 #include "weapons/fo3-weapon-interaction.h"
 #include "weapons/fo3-weapon-hit.h"
 #include "weapons/fo3-weapon-holsters.h"
@@ -155,18 +156,26 @@ void Combat() {
   c.weapons.conditionBase=.66f;c.weapons.conditionMult=.34f;
   c.weapons.actors[100].health=100;c.pipboy.targets[200].base=100;
   c.weapons.actors[101].health=100;c.weapons.actors[101].flags=2;c.pipboy.targets[201].base=101;
+  c.pipboy.formNames["testactor"]=200;
   Player p(c);assert(p.BootstrapDevelopmentWeapon());const auto id=p.EquippedWeapon()->id;
   assert(p.ActorHealth(200)==100&&p.ActorHealth(201)==100);
   const float amount=p.WeaponDamage(id);assert(amount>=4.5f&&amount<=9);
   assert(!p.ApplyWeaponHit(0,200,amount)&&!p.ApplyWeaponHit(0x434f,0,amount));
   assert(!p.ApplyWeaponHit(0x434f,200,NAN)&&!p.ApplyWeaponHit(0x434f,200,-1));
   assert(p.WeaponHit(id,200));assert(std::fabs(p.ActorHealth(200)-(100-amount))<1e-5f);
+  fo3pipdata::ResultScript heal;heal.source="testactor.ResetHealth";std::string healError;
+  const auto hurt=p.ActorHealth(200);
+  assert(p.PreviewDialogueResult(heal,healError)&&p.ActorHealth(200)==hurt);
+  assert(p.ExecuteDialogueResult(heal,healError)&&p.ActorHealth(200)==100);
+  assert(!p.ResetActorHealth(0xffffffff));
+  assert(p.WeaponHit(id,200));
   fo3weapon::WorldPose pose;pose.cell=123;assert(p.DropWeapon(id,pose));
   // A travelling shot retains the damage captured when fired after ownership changes.
   assert(p.ApplyWeaponHit(0x434f,200,amount));assert(!p.WeaponHit(id,200));
   assert(p.ApplyWeaponHit(0x434f,201,1000)&&p.ActorHealth(201)==1);
   assert(p.ApplyWeaponHit(0x434f,200,1000)&&p.ActorHealth(200)==0);
   assert(!p.ApplyWeaponHit(0x434f,200,1));
+  assert(p.ExecuteDialogueResult(heal,healError)&&p.ActorHealth(200)==0);
   std::string error;const auto path="/tmp/fq-weapon-combat-"+std::to_string(getpid())+".fqps";
   assert(p.Save(path,error));Player restored(c);assert(restored.Restore(path,error));
   assert(restored.ActorHealth(200)==0&&restored.ActorHealth(201)==1);
@@ -317,6 +326,53 @@ int main(int argc,char**argv) {
     Catalog c;std::string error;
     assert(LoadCatalog(argv[1],c,error));
     Ownership(c);
+    // Original-data checkpoint: valid MQ01 entry snapshot, original paid topic.
+    {auto start=c;auto& q=start.initial.pipboy.quests[0x14e87];q.stage=10;q.running=true;q.stages.insert(10);
+     Player mq(start);mq.RegisterOriginalActors();assert(mq.Add(0xf,100));
+     const auto placed=c.pipboy.targets.at(0x3b3c);
+     mq.SetScriptPlayerLocation(placed.x,placed.y,placed.z,placed.cell,placed.world);
+     fo3dialogue::Context ctx;ctx.player=&mq;
+     ctx.speaker={0x3b3c,0xa61,placed.cell,placed.world,0,placed.x,placed.y,placed.z,false,false};
+     ctx.target={PlayerRef,7,placed.cell,placed.world,0,placed.x,placed.y+40,placed.z,false,false};
+     fo3dialogue::Session conversation;
+     auto finish=[&](){while(conversation.phase==fo3dialogue::Phase::Speaking)
+       (void)conversation.AudioDone(conversation.audioToken,true,ctx,mq);};
+     assert(conversation.Start(ctx,mq));finish();
+     for(uint32_t topic:{0x3b7cu,0x14f3eu,0x151b6u}){
+       const auto choice=std::find_if(conversation.choices.begin(),conversation.choices.end(),[&](const auto& row){return row.topic==topic;});
+       assert(choice!=conversation.choices.end());
+       assert(conversation.Choose(size_t(choice-conversation.choices.begin()),ctx,mq));
+       if(topic==0x151b6)assert(conversation.info==0x151bc);
+       finish();
+     }
+     assert(mq.ItemCount(0xf)==0&&mq.Snapshot().pipboy.quests.at(0x14e87).stage==40);
+     assert(mq.Snapshot().pipboy.quests.at(0x14e87).objectives.at(40).displayed);
+     mq.RegisterOriginalActors();
+     // Execute the complete original pre-ambush result, without advancing a stage.
+     for(const auto& item:c.pipboy.quests.at(0x14e87).stages.at(80).items)
+       assert(mq.ExecuteDialogueResult(item.result,error));
+     for(uint16_t stage:{55,142,150})for(const auto& item:c.pipboy.quests.at(0x14e87).stages.at(stage).items)
+       assert(mq.ExecuteDialogueResult(item.result,error));
+     const auto vargas=c.pipboy.formNames.at("mq01vargasref");
+     assert(!mq.Essential(vargas)&&mq.QuestScriptDelay(0x14e87)==5);
+     const auto sarah=c.pipboy.formNames.at("mq01sarahref");float ai=-1;
+     assert(mq.ActorAIValue(sarah,0,ai)&&ai==0);
+     assert(mq.ActorAIValue(sarah,57,ai)&&ai==0);
+     assert(!mq.SetActorAIValue(sarah,57,3)&&!mq.SetActorAIValue(sarah,0,NAN));
+     auto save="/tmp/fq-mq01-paid-"+std::to_string(getpid());assert(mq.Save(save,error));
+     Player returned(start);assert(returned.Restore(save,error));
+     assert(returned.ItemCount(0xf)==0&&returned.Snapshot().pipboy.quests.at(0x14e87).stage==40);
+     assert(returned.Snapshot().pipboy.dialogueVariables==mq.Snapshot().pipboy.dialogueVariables);
+     assert(returned.ActorAIValue(sarah,0,ai)&&ai==0&&returned.ActorAIValue(sarah,57,ai)&&ai==0);
+     assert(!returned.Essential(vargas)&&returned.QuestScriptDelay(0x14e87)==5);
+     assert(returned.Snapshot().factionRelations==mq.Snapshot().factionRelations);
+     auto corrupt=Read(save);size_t aiTag=0;
+     for(size_t i=20;i+20<corrupt.size();++i)if(corrupt[i]=='N'&&corrupt[i+1]=='A'&&corrupt[i+2]=='I'&&corrupt[i+3]=='1'){aiTag=i;break;}
+     assert(aiTag);Put(corrupt,aiTag+16,0x7fc00000);Seal(corrupt);Write(save,corrupt);
+     const auto beforeBadAI=returned.Revision();assert(!returned.Restore(save,error)&&returned.Revision()==beforeBadAI);
+     unlink(save.c_str());
+     std::cout<<"Original MQ01 paid Moriarty response, completion token, caps, GNR objective and reload passed\n";
+    }
     struct Expected {uint32_t id,ammo,projectile;const char*edid;uint8_t clip,animation;uint16_t damage;int health;};
     const Expected expected[]={
       {0x434f,0x4241,0x2cd5f,"Weap10mmPistol",12,3,9,150},

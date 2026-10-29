@@ -383,7 +383,7 @@ for call in ('UpdateFo3ExteriorStreamingQ1890(q1890VirtualHead.',
 assert 'residentInputBarrier_.Allow(Fo3GameplayBlocked(),neutral)' in loop
 assert 'return gFo3PauseOpen||gFo3FocusPaused||Fo3ResidentFrameBlocked();' in s
 assert 'residentInputBarrier_.Allow(true,false)' in loop
-assert loop.index('previousWorldClockNs=clockNs;') > loop.index('scriptPlayer.PumpWorldAwareGameMode(scriptResidenceElapsed,scriptedResidents,')
+assert loop.index('previousWorldClockNs=clockNs;') > loop.index('scriptPlayer.PumpWorldAwareGameMode(seconds,scriptedResidents,')
 assert 'BeginFo3ResidentPreparedWorkflow({},std::move(plan))' in loop
 assert 'gFo3ResidentGameplayTicket=ticket;' in loop
 print('Reservation excludes frame mutations/save/effects while retaining tracking and asset progress; held controls require release')

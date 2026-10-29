@@ -259,6 +259,9 @@ void Decode(Definitions &d, const std::string &t, uint32_t id, uint32_t flags,
     if (v && v->n >= 2) {
       q.flags = v->p[0];
       q.priority = v->p[1];
+      q.scriptDelay=(v->n>=8&&!(q.flags&16))?fo3esm::ReadF32(v->p+4):5.f;
+      if(q.scriptDelay==0)q.scriptDelay=5.f; // supplied FALLOUT.INI default
+      if(!std::isfinite(q.scriptDelay)||q.scriptDelay<0)q.diagnostics.push_back("Invalid quest script delay");
     }
     if(!v||v->n<2)q.diagnostics.push_back("QUST "+std::to_string(id)+" malformed DATA");
     Stage *stage = nullptr;

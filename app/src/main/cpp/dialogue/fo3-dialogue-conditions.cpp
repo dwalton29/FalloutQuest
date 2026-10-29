@@ -75,7 +75,7 @@ static bool Value(const fo3pipdata::Condition& c,const Context& ctx,float& value
   case 1: {ActorContext other;if(c.a==ctx.speaker.reference)other=ctx.speaker;else if(c.a==ctx.target.reference)other=ctx.target;else {error="distance reference unavailable";return false;}
     value=std::sqrt((who.x-other.x)*(who.x-other.x)+(who.y-other.y)*(who.y-other.y)+(who.z-other.z)*(who.z-other.z));return true;}
   case 14:
-    if(!pc){if(c.a>=62&&c.a<=71&&p.ActorVariable(who.reference,c.a-62,value))return true;error="NPC actor value unavailable";return false;}
+    if(!pc){if((c.a==0||c.a==57)&&p.ActorAIValue(who.reference,c.a,value))return true;if(c.a>=62&&c.a<=71&&p.ActorVariable(who.reference,c.a-62,value))return true;error="NPC actor value unavailable";return false;}
     if(c.a>=5&&c.a<=11)value=state.special[c.a-5];
     else if(c.a>=32&&c.a<=45)value=state.skills[c.a-32];
     else if(c.a==23)value=state.karma;

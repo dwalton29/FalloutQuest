@@ -16,10 +16,12 @@ bool RequestFo3MapTravel(uint32_t marker,double now){
   for(const auto& actor:gQ230NpcActors){
     if(actor.runtime.offScene||!actor.runtime.Alive()||player.ActorHealth(actor.source.refFormId)<=0)continue;
     if(actor.runtime.activity==fo3npc::Activity::Combat&&actor.runtime.combatTarget==fo3player::PlayerRef)return reject("sNoFastTravelCombat");
-    const auto ai=fo3npc::AI(d,actor.source.baseFormId);
+    auto ai=fo3npc::AI(d,actor.source.baseFormId);float scriptedAI=0;
+    if(player.Snapshot().actorAIValues.count((uint64_t(actor.source.refFormId)<<32)|0u)&&player.ActorAIValue(actor.source.refFormId,0,scriptedAI))ai.aggression=uint8_t(scriptedAI);
+    if(player.Snapshot().actorAIValues.count((uint64_t(actor.source.refFormId)<<32)|57u)&&player.ActorAIValue(actor.source.refFormId,57,scriptedAI))ai.assistance=uint8_t(scriptedAI);
     const auto saved=player.Snapshot().actors.find(actor.source.refFormId);
     const bool hostile=(saved!=player.Snapshot().actors.end()&&saved->second.hostile==fo3player::PlayerRef)||
-      fo3npc::Acquires(ai,fo3npc::Relationship(player.Definitions(),actor.source.baseFormId,fo3player::PlayerBase));
+      fo3npc::Acquires(ai,fo3npc::Relationship(player.Definitions(),actor.source.baseFormId,fo3player::PlayerBase,{},{},&player.Snapshot().factionRelations));
     const auto& pos=actor.runtime.position;
     const float distance=Q211Length({pos[0]-gQ210Head[0],pos[1]-gQ210Head[1],pos[2]-gQ210Head[2]})*FO3_UNITS_PER_METRE;
     if(hostile&&distance<nearDistance)return reject("sNoFastTravelHostileActorsNear");

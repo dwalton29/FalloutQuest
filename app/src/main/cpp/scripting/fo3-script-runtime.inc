@@ -69,6 +69,7 @@ class Expression {
       const auto id=dot==std::string::npos?owner:form(t.substr(0,dot));
       if(at==tokens.size())return Fail("missing actor value");
       const auto name=tokens[at++];
+      if(name=="aggression"||name=="assistance")return p.ActorAIValue(id,name=="aggression"?0:57,value)||Fail("AI actor value unavailable");
       if(name.size()!=10||name.substr(0,8)!="variable"||name[8]<'0'||name[8]>'1'||name[9]<'0'||name[9]>'9')return Fail("unsupported actor value");
       const auto slot=(name[8]-'0')*10+name[9]-'0';
       return (slot>=1&&slot<=10&&p.ActorVariable(id,uint32_t(slot-1),value))||Fail("actor variable unavailable");
@@ -383,6 +384,11 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
     switch(c.type) {
     case C::Return:return true;
     case C::Kill:ok=KillActor(c.form);break;
+    case C::ResetHealth:ok=ResetActorHealth(c.form);break;
+    case C::SetActorAIValue:ok=SetActorAIValue(c.form,c.index,c.value);break;
+    case C::SetQuestDelay:ok=SetQuestScriptDelay(c.form,c.value);break;
+    case C::FactionRelation:ok=SetFactionRelation(c.form,c.index,c.value!=0,(c.variable&1)!=0,(c.variable&2)!=0);break;
+    case C::SetEssential:ok=SetEssential(c.form,c.value!=0);break;
     case C::SetActorValue:ok=SetActorVariable(c.form,c.index,c.value);break;
     case C::SayTo:{fo3script::Action action;action.kind=fo3script::ActionKind::SayTo;action.reference=c.form;action.form=uint32_t(c.variable);action.flags=c.index;ok=QueueScriptAction(std::move(action));break;}
     case C::Variable:case C::Global:
@@ -521,37 +527,21 @@ ScriptEventResult Player::DispatchReferenceEvent(uint32_t reference,const char* 
   return ScriptEventResult::Executed;
 }
 void Player::PumpQuestGameMode(double realSeconds) {
-  if(!std::isfinite(realSeconds)||realSeconds<=0||realSeconds>1)return;
-  // Script cadence belongs to the simulation, never each stereo eye.
-  // 4 Hz is a bounded Quest adaptation, not a claim of PC GameMode parity.
-  questScriptAccumulator_=std::min(0.5,questScriptAccumulator_+realSeconds);
-  if(questScriptAccumulator_<0.25)return;
-  scriptElapsedSeconds_=questScriptAccumulator_;
-  questScriptAccumulator_=0;
-  std::vector<uint32_t> ids;
-  for(const auto& q:catalog_->pipboy.quests){
-    if(!q.second.script)continue;
-    const auto script=catalog_->eventPrograms.find(q.second.script);
-    if(script==catalog_->eventPrograms.end())continue;
-    bool hasGameMode=false;
-    for(const auto& b:script->second.blocks)if(b.event=="gamemode"){hasGameMode=true;break;}
-    if(!hasGameMode)continue;
-    const auto saved=state_.pipboy.quests.find(q.first);
-    if(saved!=state_.pipboy.quests.end()?saved->second.running:bool(q.second.flags&1))
-      ids.push_back(q.first);
-  }
-  std::sort(ids.begin(),ids.end());
-  for(const auto id:ids){
-    const auto q=catalog_->pipboy.quests.find(id);
-    if(q==catalog_->pipboy.quests.end())continue;
-    // Nested result scripts can stop another quest in the selected set.
-    const auto saved=state_.pipboy.quests.find(id);
-    if(!(saved!=state_.pipboy.quests.end()?saved->second.running:bool(q->second.flags&1)))continue;
-    std::string error;
-    if(!RunSourceEvent(q->second.script,"GameMode",id,0,error))
-      LogScriptEventError(q->second.script,"GameMode",error);
-  }
+  (void)PumpWorldAwareGameMode(realSeconds,{},[](auto){return false;});
 }
+bool Player::SetQuestScriptDelay(uint32_t quest,float delay){
+  if(!catalog_->pipboy.quests.count(quest)||!std::isfinite(delay)||delay<0)return false;
+  const auto found=state_.questScriptDelays.find(quest);
+  if(found==state_.questScriptDelays.end()||found->second!=delay){state_.questScriptDelays[quest]=delay;++revision_;}
+  return true;
+}
+float Player::QuestScriptDelay(uint32_t quest)const{
+  const auto q=catalog_->pipboy.quests.find(quest);if(q==catalog_->pipboy.quests.end())return -1;
+  const auto found=state_.questScriptDelays.find(quest);
+  const float delay=found==state_.questScriptDelays.end()?q->second.scriptDelay:found->second;
+  return delay==0?5.f:delay;
+}
+
 } // namespace fo3player
 
 namespace fo3player {
@@ -734,12 +724,13 @@ bool Player::SourceEventCompileReady(uint32_t script,const char* event,uint32_t 
 bool Player::PumpWorldAwareGameMode(double seconds,const std::vector<uint32_t>& resident,
     const std::function<bool(std::unique_ptr<ScriptTransactionPlan>)>& reserveWorld) {
   if(!std::isfinite(seconds)||seconds<=0||seconds>1||!reserveWorld)return false;
-  // One common cadence for source quest and placed-reference GameMode. Never
-  // tick again inside the same frame after reserving the resident world.
+  // Reference scripts retain their bounded cadence. Quest scripts use their
+  // original DATA/SetQuestDelay interval, with at most one run per frame.
   questScriptAccumulator_=std::min(.5,questScriptAccumulator_+seconds);
-  if(questScriptAccumulator_<.25)return false;
-  scriptElapsedSeconds_=questScriptAccumulator_;
-  questScriptAccumulator_=0;
+  const bool referencesDue=questScriptAccumulator_>=.25;
+  const double referenceElapsed=questScriptAccumulator_;
+  if(referencesDue)questScriptAccumulator_=0;
+  questScriptClock_+=seconds;
   auto run=[&](uint32_t script,const char* event,uint32_t owner,bool reference)->bool {
     std::string error;
     // The ordinary compiler rejects the same immutable unsupported body every
@@ -794,14 +785,23 @@ bool Player::PumpWorldAwareGameMode(double seconds,const std::vector<uint32_t>& 
     const auto saved=state_.pipboy.quests.find(id);
     if(saved!=state_.pipboy.quests.end()?saved->second.running:bool(q->second.flags&1))
       quests.push_back(id);
+    else questScriptLastTicks_.erase(id);
   }
   for(const auto id:quests){
     const auto q=catalog_->pipboy.quests.find(id);
     if(q==catalog_->pipboy.quests.end())continue;
     const auto saved=state_.pipboy.quests.find(id);
-    if(!(saved!=state_.pipboy.quests.end()?saved->second.running:bool(q->second.flags&1)))continue;
+    if(!(saved!=state_.pipboy.quests.end()?saved->second.running:bool(q->second.flags&1))){questScriptLastTicks_.erase(id);continue;}
+    auto tick=questScriptLastTicks_.emplace(id,questScriptClock_-seconds).first;
+    const double elapsed=questScriptClock_-tick->second;
+    const float interval=QuestScriptDelay(id);
+    if(!std::isfinite(interval)||interval<0){LogScriptEventError(q->second.script,"GameMode","invalid quest processing interval");continue;}
+    if(elapsed+1e-7<interval)continue;
+    tick->second=questScriptClock_;scriptElapsedSeconds_=elapsed;
     if(run(q->second.script,"GameMode",id,false))return true;
   }
+  if(!referencesDue)return false;
+  scriptElapsedSeconds_=referenceElapsed;
   auto refs=resident;std::sort(refs.begin(),refs.end());
   refs.erase(std::unique(refs.begin(),refs.end()),refs.end());
   for(const auto id:refs){

@@ -1241,7 +1241,8 @@ bool Player::Save(const std::string &path, std::string &error) const {
     payload.push_back(l.forceFailures);payload.push_back(l.rewarded?1:0);}
   // Optional RFE1 after the v14 lock tail. Empty overlays keep existing v14
   // bytes unchanged; older supported saves do not require this extension.
-  const bool hasActorVariables=!state_.actorVariables.empty()||!state_.actorSpawnLevels.empty();
+  const bool hasScriptOverrides=!state_.actorAIValues.empty()||!state_.questScriptDelays.empty()||!state_.factionRelations.empty()||!state_.essentialFlags.empty();
+  const bool hasActorVariables=!state_.actorVariables.empty()||!state_.actorSpawnLevels.empty()||hasScriptOverrides;
   const bool hasDoorStates=!state_.doorStates.empty()||hasActorVariables;
   const bool hasDebugPoints=state_.debugPerkPoints!=0;
   const bool hasLevelAdvancement=state_.level!=catalog_->initial.level||hasDebugPoints||hasDoorStates;
@@ -1348,7 +1349,31 @@ bool Player::Save(const std::string &path, std::string &error) const {
     std::vector<uint64_t> keys;for(const auto& e:state_.actorTemplateChoices)keys.push_back(e.first);std::sort(keys.begin(),keys.end());
     Put32(payload,uint32_t(keys.size()));for(auto key:keys){Put64(payload,key);Put32(payload,state_.actorTemplateChoices.at(key));}
   }
-  Put32(bytes, hasActorVariables ? 21 : hasDoorStates ? 20 : hasDebugPoints ? 19 : hasLevelAdvancement ? 18 : hasCompletionState ? 17 :
+  if(hasScriptOverrides){
+    Put32(payload,0x3149414E);Put32(payload,uint32_t(state_.actorAIValues.size())); // NAI1
+    std::vector<uint64_t> keys;for(const auto& entry:state_.actorAIValues)keys.push_back(entry.first);std::sort(keys.begin(),keys.end());
+    for(auto key:keys){const auto av=uint32_t(key);const float value=state_.actorAIValues.at(key);
+      if(!catalog_->actorPlacements.count(uint32_t(key>>32))||(av!=0&&av!=57)||!std::isfinite(value)||std::floor(value)!=value||value<0||value>(av==0?3:2)){error="Invalid AI actor value";return false;}
+      Put64(payload,key);PutFloat(payload,value);}
+  }
+  if(hasScriptOverrides){
+    Put32(payload,0x314C4451);Put32(payload,uint32_t(state_.questScriptDelays.size())); // QDL1
+    std::vector<uint32_t> ids;for(const auto& entry:state_.questScriptDelays)ids.push_back(entry.first);std::sort(ids.begin(),ids.end());
+    for(auto id:ids){const float value=state_.questScriptDelays.at(id);
+      if(!catalog_->pipboy.quests.count(id)||!std::isfinite(value)||value<0){error="Invalid quest delay";return false;}
+      Put32(payload,id);PutFloat(payload,value);}
+  }
+  if(hasScriptOverrides){
+    Put32(payload,0x31434146);Put32(payload,uint32_t(state_.factionRelations.size())); // FAC1
+    std::vector<uint64_t> keys;for(const auto& entry:state_.factionRelations)keys.push_back(entry.first);std::sort(keys.begin(),keys.end());
+    for(auto key:keys){const auto value=state_.factionRelations.at(key);
+      if(!catalog_->factionFlags.count(uint32_t(key>>32))||!catalog_->factionFlags.count(uint32_t(key))||value>3){error="Invalid faction relation";return false;}
+      Put64(payload,key);payload.push_back(value);}
+    Put32(payload,0x31535345);Put32(payload,uint32_t(state_.essentialFlags.size())); // ESS1
+    std::vector<uint32_t> ids;for(const auto& entry:state_.essentialFlags)ids.push_back(entry.first);std::sort(ids.begin(),ids.end());
+    for(auto id:ids){if(!catalog_->weapons.actors.count(id)){error="Invalid essential actor base";return false;}Put32(payload,id);payload.push_back(state_.essentialFlags.at(id)?1:0);}
+  }
+  Put32(bytes, hasScriptOverrides ? 22 : hasActorVariables ? 21 : hasDoorStates ? 20 : hasDebugPoints ? 19 : hasLevelAdvancement ? 18 : hasCompletionState ? 17 :
       hasMerchantVisits ? 16 : hasPlayerAttributeOverrides ? 15 : 14);
   Put32(bytes, catalog_->fingerprint);
   Put32(bytes, static_cast<uint32_t>(payload.size()));
@@ -1408,7 +1433,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
   const auto *h = bytes.data();
   const auto version = fo3esm::ReadU32(h + 4);
   if (std::memcmp(h, "FQPS", 4) ||
-      (version < 1 || version > 21))
+      (version < 1 || version > 22))
     return fail("Unsupported player save format");
   if (fo3esm::ReadU32(h + 8) != catalog_->fingerprint)
     return fail("Player save belongs to different game definitions");
@@ -1788,13 +1813,39 @@ bool Player::Restore(const std::string &path, std::string &error) {
         for(uint32_t i=0;i<count;++i,at+=8){const auto id=fo3esm::ReadU32(p+at),level=fo3esm::ReadU32(p+at+4);
           if(!catalog_->actorPlacements.count(id)||!level||level>20||!next.actorSpawnLevels.emplace(id,uint16_t(level)).second)return fail("Invalid actor spawn level");}
         const auto selections=fo3esm::ReadU32(p+at);at+=4;
-        if(selections>100000||payload.size()-at!=12ull*selections)return fail("Invalid actor template count");
+        if(selections>100000||(version>=22?payload.size()-at<12ull*selections+8:payload.size()-at!=12ull*selections))return fail("Invalid actor template count");
         for(uint32_t i=0;i<selections;++i,at+=12){const auto key=U64(p+at);const auto selected=fo3esm::ReadU32(p+at+8);
           const auto list=catalog_->weapons.levelledActors.find(uint32_t(key));
           if(!next.actorSpawnLevels.count(uint32_t(key>>32))||list==catalog_->weapons.levelledActors.end()||
              (selected&&std::none_of(list->second.entries.begin(),list->second.entries.end(),[&](const auto& e){return e.actor==selected;}))||
              !next.actorTemplateChoices.emplace(key,selected).second)return fail("Invalid actor template selection");}
 
+      }
+      if(version>=22){
+        if(payload.size()-at<8||fo3esm::ReadU32(p+at)!=0x3149414E)return fail("Missing AI actor values");
+        const auto count=fo3esm::ReadU32(p+at+4);at+=8;
+        if(count>10000||payload.size()-at<12ull*count+8)return fail("Invalid AI actor value count");
+        for(uint32_t i=0;i<count;++i,at+=12){const auto key=U64(p+at);const auto av=uint32_t(key);const float value=fo3esm::ReadF32(p+at+8);
+          if(!catalog_->actorPlacements.count(uint32_t(key>>32))||(av!=0&&av!=57)||!std::isfinite(value)||std::floor(value)!=value||value<0||value>(av==0?3:2)||!next.actorAIValues.emplace(key,value).second)return fail("Invalid AI actor value");}
+      }
+      if(version>=22){
+        if(payload.size()-at<8||fo3esm::ReadU32(p+at)!=0x314C4451)return fail("Missing quest delays");
+        const auto count=fo3esm::ReadU32(p+at+4);at+=8;
+        if(count>10000||payload.size()-at<8ull*count+8)return fail("Invalid quest delay count");
+        for(uint32_t i=0;i<count;++i,at+=8){const auto id=fo3esm::ReadU32(p+at);const float value=fo3esm::ReadF32(p+at+4);
+          if(!catalog_->pipboy.quests.count(id)||!std::isfinite(value)||value<0||!next.questScriptDelays.emplace(id,value).second)return fail("Invalid quest delay");}
+      }
+      if(version>=22){
+        if(payload.size()-at<8||fo3esm::ReadU32(p+at)!=0x31434146)return fail("Missing faction relations");
+        const auto count=fo3esm::ReadU32(p+at+4);at+=8;
+        if(count>10000||payload.size()-at<9ull*count+8)return fail("Invalid faction relation count");
+        for(uint32_t i=0;i<count;++i,at+=9){const auto key=U64(p+at);const auto value=p[at+8];
+          if(!catalog_->factionFlags.count(uint32_t(key>>32))||!catalog_->factionFlags.count(uint32_t(key))||value>3||!next.factionRelations.emplace(key,value).second)return fail("Invalid faction relation");}
+        if(payload.size()-at<8||fo3esm::ReadU32(p+at)!=0x31535345)return fail("Missing essential actors");
+        const auto bases=fo3esm::ReadU32(p+at+4);at+=8;
+        if(bases>10000||payload.size()-at!=5ull*bases)return fail("Invalid essential actor count");
+        for(uint32_t i=0;i<bases;++i,at+=5){const auto id=fo3esm::ReadU32(p+at);const auto value=p[at+4];
+          if(!catalog_->weapons.actors.count(id)||value>1||!next.essentialFlags.emplace(id,value!=0).second)return fail("Invalid essential actor base");}
       }
       if(at!=payload.size())return fail("Trailing player save data");
     }
@@ -1818,6 +1869,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
   if (version < 5 && !MigrateWeaponInstances(next))
     return fail("Legacy weapon inventory exceeds instance limits");
   state_ = std::move(next);
+  questScriptClock_=questScriptAccumulator_=referenceScriptAccumulator_=0;questScriptLastTicks_.clear();
   pendingKarmaEvents_.clear();pendingTheftEvents_.clear();pendingQuestNotices_.clear();pendingScriptItems_.clear();
   pendingExperienceNotices_.clear();pendingLocationNotices_.clear();
   pendingScriptActions_.clear();scriptTalking_.clear();scriptAnimations_.clear();scriptInsideTriggers_.clear();++scriptRuntimeGeneration_;

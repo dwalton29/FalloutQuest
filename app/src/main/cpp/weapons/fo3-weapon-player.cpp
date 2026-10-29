@@ -273,10 +273,52 @@ bool Player::KillActor(uint32_t reference){
   auto it=state_.actors.find(reference);if(it==state_.actors.end())return false;
   auto state=it->second;state.dead=true;state.hostile=0;return UpdateActor(reference,state);
 }
+bool Player::SetFactionRelation(uint32_t from,uint32_t to,bool ally,bool firstFlag,bool secondFlag){
+  if(!catalog_->factionFlags.count(from)||!catalog_->factionFlags.count(to))return false;
+  bool changed=false;
+  auto set=[&](uint32_t a,uint32_t b,bool flag){const uint64_t key=(uint64_t(a)<<32)|b;
+    const uint8_t reaction=ally?(flag?3:2):(flag?0:1);
+    const auto old=state_.factionRelations.find(key);
+    if(old==state_.factionRelations.end()||old->second!=reaction){state_.factionRelations[key]=reaction;changed=true;}};
+  set(from,to,firstFlag);set(to,from,secondFlag);if(changed)++revision_;return true;
+}
+bool Player::SetEssential(uint32_t base,bool essential){
+  if(!catalog_->weapons.actors.count(base))return false;
+  const auto old=state_.essentialFlags.find(base);
+  if(old==state_.essentialFlags.end()||old->second!=essential){state_.essentialFlags[base]=essential;++revision_;}
+  return true;
+}
+bool Player::ActorAIValue(uint32_t reference,uint32_t valueId,float& value) const {
+  if(valueId!=0&&valueId!=57)return false;
+  const auto found=state_.actorAIValues.find((uint64_t(reference)<<32)|valueId);
+  if(found!=state_.actorAIValues.end())value=found->second;
+  else{
+    const auto* actor=ActorCategory(reference,8);
+    if(!actor||actor->aiData.size()!=20)return false;
+    value=actor->aiData[valueId==0?0:14];
+  }
+  return std::isfinite(value)&&value>=0&&value<=(valueId==0?3:2);
+}
+bool Player::SetActorAIValue(uint32_t reference,uint32_t valueId,float value){
+  float old=0;if(!catalog_->actorPlacements.count(reference)||!std::isfinite(value)||std::floor(value)!=value||value<0||value>(valueId==0?3:2)||
+      !ActorAIValue(reference,valueId,old))return false;
+  if(old!=value){state_.actorAIValues[(uint64_t(reference)<<32)|valueId]=value;++revision_;}
+  return true;
+}
+bool Player::ResetActorHealth(uint32_t reference) {
+  if(reference==PlayerRef)return Health()<=0||RestoreHealth(MaxHealth());
+  const float health=ActorHealth(reference);
+  if(health<0)return false;
+  if(health==0)return true;
+  // Preserve death, combat and package state. ResetHealth is not Resurrect.
+  // The original also restores condition AVs; no limb damage state exists yet.
+  if(state_.actorDamage.erase(reference))++revision_;
+  return true;
+}
 float Player::ActorHealth(uint32_t reference) const {
   if(reference==0x14)return Health();
   const auto saved=state_.actors.find(reference);
-  if(saved!=state_.actors.end()&&saved->second.dead&&!Essential(reference))return 0;
+  if(saved!=state_.actors.end()&&saved->second.dead)return 0;
   const auto target=catalog_->pipboy.targets.find(reference);
   if(target==catalog_->pipboy.targets.end())return -1;
   const auto* actor=ActorStatistics(reference);if(!actor)return -1;
@@ -306,7 +348,8 @@ bool Player::Essential(uint32_t reference) const {
     const auto a=catalog_->weapons.actors.find(base);
     if(a==catalog_->weapons.actors.end()){base=ActorTemplate(reference,base);if(!base)return false;continue;}
     if(a->second.templates&1){base=a->second.templateId;continue;}
-    return (a->second.flags&2)!=0;
+    const auto scripted=state_.essentialFlags.find(base);
+    return scripted==state_.essentialFlags.end()?(a->second.flags&2)!=0:scripted->second;
   }
   return false;
 }

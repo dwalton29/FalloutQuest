@@ -1,5 +1,6 @@
 #include "player/fo3-player-state.h"
 #include <cassert>
+#include <cmath>
 #include <algorithm>
 #include <cstdio>
 #include <iostream>
@@ -36,6 +37,7 @@ static fo3player::Catalog Catalog() {
   c.pipboy.quests[20].stages[10]={};
   c.pipboy.formNames["examplequest"]=20;
   c.pipboy.quests[20].script=101;
+  c.pipboy.quests[20].scriptDelay=.25f; // Explicit cadence for this synthetic fixture.
   c.pipboy.scripts[101].source="scn Q\nBegin GameMode\nSetStage ExampleQuest 10\nEnd";
   c.eventPrograms[101]=fo3script::ParseEvents(c.pipboy.scripts[101]);
   c.references[100].base=30;
@@ -53,6 +55,49 @@ static void Dispatch() {
   assert(p.Snapshot().pipboy.quests.count(20));
   p.PumpQuestGameMode(0.10);p.PumpQuestGameMode(0.16);
   assert(p.Snapshot().pipboy.quests.at(20).stage==10);
+}
+static void QuestCadence(){
+  auto c=Catalog();c.pipboy.quests[20].scriptDelay=5;
+  auto& script=c.pipboy.scripts[101];script.variables[1]="ticks";script.variables[2]="elapsed";
+  script.source="scn Q\nshort ticks\nfloat elapsed\nBegin GameMode\nset ticks to ticks + 1\nset elapsed to GetSecondsPassed\nEnd";
+  c.eventPrograms[101]=fo3script::ParseEvents(script);
+  fo3player::Player p(c);std::string error;assert(p.StartQuest(20));
+  const uint64_t ticks=(uint64_t(20)<<32)|1,elapsed=(uint64_t(20)<<32)|2;
+  auto value=[&](uint64_t key){const auto& vars=p.Snapshot().pipboy.dialogueVariables;auto i=vars.find(key);return i==vars.end()?0:i->second;};
+  p.PumpQuestGameMode(.1);assert(value(ticks)==0);
+  fo3pipdata::ResultScript fast;fast.source="SetQuestDelay ExampleQuest .01";
+  assert(p.PreviewDialogueResult(fast,error)&&p.QuestScriptDelay(20)==5);
+  assert(p.ExecuteDialogueResult(fast,error));p.PumpQuestGameMode(.01);assert(value(ticks)==1);
+  p.PumpQuestGameMode(.01);assert(value(ticks)==2&&std::fabs(value(elapsed)-.01f)<1e-6f);
+  fo3pipdata::ResultScript reset;reset.source="SetQuestDelay ExampleQuest 0";
+  assert(p.ExecuteDialogueResult(reset,error)&&p.QuestScriptDelay(20)==5);
+  for(int i=0;i<4;++i){p.PumpQuestGameMode(1);}
+  assert(value(ticks)==2);
+  p.PumpQuestGameMode(1);assert(value(ticks)==3&&value(elapsed)==5);
+  assert(p.ExecuteDialogueResult(fast,error));
+  auto save="/tmp/fq-quest-delay-"+std::to_string(getpid());assert(p.Save(save,error));
+  fo3player::Player restored(c);assert(restored.Restore(save,error));unlink(save.c_str());
+  assert(std::fabs(restored.QuestScriptDelay(20)-.01f)<1e-6f);
+  restored.PumpQuestGameMode(.009);assert(restored.Snapshot().pipboy.dialogueVariables.at(ticks)==3);
+  restored.PumpQuestGameMode(.002);assert(restored.Snapshot().pipboy.dialogueVariables.at(ticks)==4);
+}
+static void UnenteredCommands() {
+  fo3player::Player p(Catalog());std::string error;
+  fo3pipdata::ResultScript body;
+  body.source="if 0\nUnsupportedFutureEffect argument\nendif\nRewardKarma 3";
+  assert(p.ExecuteDialogueResult(body,error)&&p.Snapshot().karma==3);
+  const auto revision=p.Revision();
+  body.source="RewardKarma 7\nif 1\nUnsupportedFutureEffect argument\nendif";
+  assert(!p.ExecuteDialogueResult(body,error));
+  assert(error.find("UnsupportedFutureEffect")==std::string::npos); // Compiler normalises source.
+  assert(error.find("unsupportedfutureeffect")!=std::string::npos);
+  assert(p.Revision()==revision&&p.Snapshot().karma==3);
+  body.source="if 0\nUnsupportedFutureEffect\nelse\nelse\nendif";
+  assert(!p.ExecuteDialogueResult(body,error)&&p.Revision()==revision);
+  body.source="if 0\nUnsupportedFutureEffect";
+  assert(!p.ExecuteDialogueResult(body,error)&&p.Revision()==revision);
+  body.source="UnsupportedFutureEffect";
+  assert(!p.ExecuteDialogueResult(body,error)&&p.Revision()==revision);
 }
 static void UnsupportedIsAtomic() {
   auto c=Catalog();
@@ -573,7 +618,7 @@ static void CompiledProgramsRemainLive() {
 }
 int main(int argc,char** argv){
   CompiledProgramsRemainLive();
-  Parsing();EnableParentQueries();PersistentReferenceState();Dispatch();UnsupportedIsAtomic();Filter();NumericLocalsAndRefSafety();BombMenuAndInventory();WorldAwareGameMode();DisarmStagePersistence();NoticeTransactions();
+  Parsing();QuestCadence();UnenteredCommands();EnableParentQueries();PersistentReferenceState();Dispatch();UnsupportedIsAtomic();Filter();NumericLocalsAndRefSafety();BombMenuAndInventory();WorldAwareGameMode();DisarmStagePersistence();NoticeTransactions();
   if(argc>1)OriginalBomb(argv[1]);
   if(argc>2)OriginalCompileInventory(argv[1],argv[2]);
   std::cout<<"Original event source indexing, dispatch, scheduler and rollback passed\n";

@@ -64,6 +64,7 @@ bool CompileResult(const fo3pipdata::Definitions& d,const fo3pipdata::ResultScri
   std::unordered_map<std::string,uint32_t> referenceLocals;
   std::unordered_set<std::string> referenceDeclarations;
   bool referencePreamble=true;
+  unsigned conditionalDepth=0;
   if(scriptId){const auto sc=d.scripts.find(scriptId);if(sc!=d.scripts.end()){
     std::istringstream source(lower(sc->second.source));std::string decl;
     while(std::getline(source,decl)){std::istringstream row(decl);std::string op,name;row>>op>>name;
@@ -98,6 +99,8 @@ bool CompileResult(const fo3pipdata::Definitions& d,const fo3pipdata::ResultScri
       }
     }
     referencePreamble=false;
+    const bool control=op=="if"||op=="elseif"||op=="else"||op=="endif";
+    auto compileCommand=[&]()->bool {
     if(op=="if"||op=="elseif") {
       cmd.type=op=="if"?CommandType::If:CommandType::ElseIf;
       std::getline(in,cmd.expression);if(cmd.expression.empty()){error="missing conditional expression";return false;}
@@ -116,10 +119,20 @@ bool CompileResult(const fo3pipdata::Definitions& d,const fo3pipdata::ResultScri
     } else if(op=="kill"||(op.size()>5&&op.substr(op.size()-5)==".kill")){
       cmd.type=CommandType::Kill;cmd.form=op=="kill"?owner:form(op.substr(0,op.size()-5));
       if(!cmd.form){error="invalid Kill receiver";return false;}
+    } else if(op=="resethealth"||(op.size()>12&&op.substr(op.size()-12)==".resethealth")){
+      cmd.type=CommandType::ResetHealth;cmd.form=op=="resethealth"?owner:form(op.substr(0,op.size()-12));
+      if(!cmd.form){error="invalid ResetHealth receiver";return false;}
     } else if(op=="setav"||(op.size()>6&&op.substr(op.size()-6)==".setav")){
       cmd.type=CommandType::SetActorValue;cmd.form=op=="setav"?owner:form(op.substr(0,op.size()-6));
-      if(!(in>>a>>b)||a.size()!=10||a.substr(0,8)!="variable"||a[8]<'0'||a[8]>'1'||a[9]<'0'||a[9]>'9'||!number(b,cmd.value)){error="unsupported actor value";return false;}
+      if(!(in>>a>>b)){error="missing actor value";return false;}
+      if(a=="aggression"||a=="assistance"){
+        cmd.type=CommandType::SetActorAIValue;cmd.index=a=="aggression"?0:57;
+        if(!cmd.form||!number(b,cmd.value)||std::floor(cmd.value)!=cmd.value||cmd.value<0||cmd.value>(cmd.index==0?3:2)){
+          error="invalid AI actor value";return false;}
+      }else{
+      if(a.size()!=10||a.substr(0,8)!="variable"||a[8]<'0'||a[8]>'1'||a[9]<'0'||a[9]>'9'||!number(b,cmd.value)){error="unsupported actor value";return false;}
       cmd.index=uint32_t((a[8]-'0')*10+a[9]-'0');if(cmd.index<1||cmd.index>10||!cmd.form){error="invalid variable actor value";return false;}--cmd.index;
+      }
     } else if(op=="stopquest"||op=="startquest"||op=="setstage"||op=="completequest"||op=="completeallobjectives"||op=="setobjectivedisplayed"||op=="setobjectivecompleted"||op=="addtopic") {
       if(!(in>>a)||(cmd.form=form(a))==0){error="unresolved form: "+line;return false;}
       if(op=="startquest")cmd.type=CommandType::StartQuest;
@@ -170,6 +183,21 @@ bool CompileResult(const fo3pipdata::Definitions& d,const fo3pipdata::ResultScri
       // ESM SCTX uses CRLF: a bare ShowMessage leaves a trailing CR.
       // It is whitespace, not a formatting argument/expression.
       cmd.expression=fo3script::Trim(cmd.expression);
+    } else if(op=="setenemy"||op=="setally") {
+      cmd.type=CommandType::FactionRelation;cmd.value=op=="setally"?1:0;
+      if(!(in>>a>>b)||!(cmd.form=form(a))||!(cmd.index=form(b))){error="invalid faction relation";return false;}
+      for(unsigned bit=0;bit<2;++bit){
+        if(in>>a){float flag;if(!number(a,flag)||std::floor(flag)!=flag||flag<-2147483648.f||double(flag)>2147483647.0){error="invalid faction relation flag";return false;}
+          if(flag!=0)cmd.variable|=uint64_t(1)<<bit;
+        }else{in.clear();break;}
+      }
+    } else if(op=="setessential"){
+      cmd.type=CommandType::SetEssential;
+      if(!(in>>a>>b)||!(cmd.form=form(a))||!number(b,cmd.value)||std::floor(cmd.value)!=cmd.value||cmd.value<-2147483648.f||double(cmd.value)>2147483647.0){error="invalid SetEssential";return false;}
+      cmd.value=cmd.value>0?1:0;
+    } else if(op=="setquestdelay") {
+      cmd.type=CommandType::SetQuestDelay;
+      if(!(in>>a>>b)||!(cmd.form=form(a))||!d.quests.count(cmd.form)||!number(b,cmd.value)||cmd.value<0){error="invalid SetQuestDelay";return false;}
     } else if(op=="setquestobject") {
       cmd.type=CommandType::SetQuestObject;
       if(!(in>>a>>b)||(cmd.form=form(a))==0||!number(b,cmd.value)||(cmd.value!=0&&cmd.value!=1)){error="invalid SetQuestObject";return false;}
@@ -237,7 +265,20 @@ bool CompileResult(const fo3pipdata::Definitions& d,const fo3pipdata::ResultScri
       cmd.type=CommandType::AddItem;if(!(in>>a>>b)||!(cmd.form=form(a))||!number(b,cmd.value)||cmd.value<1||cmd.value>100000||std::floor(cmd.value)!=cmd.value){error="invalid additem";return false;}
     } else {error="unsupported command: "+op;return false;}
     if(in>>extra){error="unsupported command arguments: "+line;return false;}
+    return true;
+    };
+    if(!compileCommand()){
+      // A future, unentered branch must not require the engine to implement
+      // its effects. Retain an explicit failing command: entering that branch
+      // still rejects the complete transaction, including preceding effects.
+      // Binding/evidence limits and malformed control flow are never deferred.
+      if(!conditionalDepth||control||(forms&&forms->exhausted)||
+         error.compare(0,12,"unsupported ")!=0)return false;
+      cmd={};cmd.type=CommandType::Unavailable;cmd.expression=error;error.clear();
+    }
     if(forms&&forms->exhausted){error="script binding byte limit exceeded";return false;}
+    if(op=="if")++conditionalDepth;
+    else if(op=="endif"&&conditionalDepth)--conditionalDepth;
     out.push_back(cmd);
   }
   return true;

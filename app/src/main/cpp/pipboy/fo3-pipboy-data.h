@@ -107,6 +107,7 @@ struct Quest {
   std::unordered_map<uint16_t, Stage> stages;
   std::unordered_map<uint32_t, Objective> objectives;
   std::vector<Condition> conditions;
+  float scriptDelay=5.f; // Supplied FALLOUT.INI default; ESM DATA can override.
 };
 struct PerkEffect {
   uint8_t type = 0, rank = 0, priority = 0, stage = 0, entryPoint = 0,

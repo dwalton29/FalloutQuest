@@ -16,18 +16,19 @@ inline AiData AI(const fo3pipdata::Definitions& d,uint32_t base,const std::funct
 }
 // Explicit FACT XNAM combat reactions; disposition alone is not hostility.
 enum class Reaction { Neutral, Enemy, Ally, Friend };
-inline Reaction Relationship(const fo3player::Catalog& c,uint32_t a,uint32_t b,const std::function<uint32_t(uint32_t)>& selectA={},const std::function<uint32_t(uint32_t)>& selectB={}){
+inline Reaction Relationship(const fo3player::Catalog& c,uint32_t a,uint32_t b,const std::function<uint32_t(uint32_t)>& selectA={},const std::function<uint32_t(uint32_t)>& selectB={},const std::unordered_map<uint64_t,uint8_t>* overrides=nullptr){
   const auto* x=fo3pipdata::ActorCategory(c.pipboy,a,4,selectA);
   const auto* y=fo3pipdata::ActorCategory(c.pipboy,b,4,selectB);
   if(!x||!y)return Reaction::Neutral;
   Reaction result=Reaction::Neutral;
   for(const auto& from:x->factions)if(from.second>=0)for(const auto& to:y->factions)if(to.second>=0){
-    if(from.first==to.first)result=Reaction::Ally;
-    const auto f=c.weapons.relations.find(from.first);if(f==c.weapons.relations.end())continue;
-    const auto r=f->second.find(to.first);if(r==f->second.end())continue;
-    if(r->second==1)return Reaction::Enemy;
-    if(r->second==2)result=Reaction::Ally;
-    if(r->second==3&&result==Reaction::Neutral)result=Reaction::Friend;
+    uint8_t relation=from.first==to.first?2:0;
+    const auto f=c.weapons.relations.find(from.first);
+    if(f!=c.weapons.relations.end()){const auto r=f->second.find(to.first);if(r!=f->second.end())relation=r->second;}
+    if(overrides&&!overrides->empty()){const auto r=overrides->find((uint64_t(from.first)<<32)|to.first);if(r!=overrides->end())relation=r->second;}
+    if(relation==1)return Reaction::Enemy;
+    if(relation==2)result=Reaction::Ally;
+    if(relation==3&&result==Reaction::Neutral)result=Reaction::Friend;
   }
   return result;
 }

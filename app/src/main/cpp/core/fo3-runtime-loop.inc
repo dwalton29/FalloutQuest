@@ -1846,82 +1846,66 @@ private:
                         gSceneFloorZQ1730+(gQ210Head[1]-FLOOR_Y)*FO3_UNITS_PER_METRE_Q715,
                         gCurrentCellFormId,gExteriorWorldspaceQ1890);
                     const auto beforeScripts=scriptPlayer.Revision();
-                    // Only inspect resident visual identities on the same
-                    // bounded 4 Hz cadence as the original source scheduler.
-                    // All supported base types can supply GameMode, not ACTI
-                    // alone; no quest-specific event dispatch is invented.
+                    // Discover resident identities at 4 Hz or a publication change;
+                    // drive quest cadence every application frame, not per eye.
+                    struct Q230ScriptedStatics {
+                        uint64_t revision=~uint64_t{0};
+                        const GpuObject* storage=nullptr;
+                        size_t count=0;
+                        std::vector<uint32_t> ids;
+                    };
+                    static Q230ScriptedStatics q230Statics;
+                    static std::vector<uint32_t> scriptedResidents;
+                    static uint64_t scriptActorResidence=~uint64_t{0};
                     static double scriptResidenceElapsed=0;
                     scriptResidenceElapsed=std::min(.5,scriptResidenceElapsed+seconds);
-                    if(scriptResidenceElapsed>=.25){
+                    const uint64_t revision=gFo3VisualPublication.Revision();
+                    const bool staticChanged=!revision||q230Statics.revision!=revision||q230Statics.storage!=gObjects.data()||q230Statics.count!=gObjects.size();
+                    uint64_t q230ScanUs=0;
+                    if(scriptResidenceElapsed>=.25||staticChanged||scriptActorResidence!=gQ230NpcResidenceRevision){
                         fo3worldscript::Events();
                         const auto q230ScanStart=fqopaque::Clock::now();
-                        // Q230: original GameMode ownership is immutable ESM data.
-                        // Rebuild only when the static scene's publication changes.
-                        // The real enabled/running state is still evaluated at
-                        // execution time by PumpWorldAwareGameMode.
-                        struct Q230ScriptedStatics {
-                            uint64_t revision=~uint64_t{0};
-                            const GpuObject* storage=nullptr;
-                            size_t count=0;
-                            std::vector<uint32_t> ids;
-                        };
-                        static Q230ScriptedStatics q230Statics;
-                        const uint64_t revision=gFo3VisualPublication.Revision();
-                        if(!revision||q230Statics.revision!=revision||
-                           q230Statics.storage!=gObjects.data()||
-                           q230Statics.count!=gObjects.size()){
+                        if(staticChanged){
                             q230Statics.ids.clear();
                             for(const auto& object:gObjects)
-                                if(object.refFormId&&scriptPlayer.HasReferenceEvent(object.refFormId,"GameMode"))
-                                    q230Statics.ids.push_back(object.refFormId);
-                            q230Statics.revision=revision;
-                            q230Statics.storage=gObjects.data();
-                            q230Statics.count=gObjects.size();
+                                if(object.refFormId&&scriptPlayer.HasReferenceEvent(object.refFormId,"GameMode"))q230Statics.ids.push_back(object.refFormId);
+                            q230Statics.revision=revision;q230Statics.storage=gObjects.data();q230Statics.count=gObjects.size();
                         }
-                        static std::vector<uint32_t> scriptedResidents;
-                        scriptedResidents.clear();
-                        scriptedResidents.insert(scriptedResidents.end(),
-                            q230Statics.ids.begin(),q230Statics.ids.end());
-                        // NPC and creature residents have their own registry.
-                        // Their live presence must not be cached across ticks.
+                        scriptedResidents=q230Statics.ids;
                         for(const auto& actor:gQ230NpcActors)
-                            if(!actor.runtime.offScene&&actor.source.refFormId&&
-                                scriptPlayer.HasReferenceEvent(actor.source.refFormId,"GameMode"))
-                                scriptedResidents.push_back(actor.source.refFormId);
-                        const uint64_t q230ScanUs=fqopaque::Micros(q230ScanStart);
-                        const auto q230PumpStart=fqopaque::Clock::now();
-                        if(!Fo3ResidentFrameBlocked())scriptPlayer.PumpWorldAwareGameMode(scriptResidenceElapsed,scriptedResidents,
-                            [&](std::unique_ptr<fo3player::ScriptTransactionPlan> plan){
-                                std::string error;
-                                if(PublishFo3DialogueReferences(scriptPlayer,*plan,error))return true;
-                                const auto ticket=BeginFo3ResidentPreparedWorkflow({},std::move(plan));
-                                if(!ticket)return false;
-                                gFo3ResidentGameplayTicket=ticket;
-                                FlushFo3PlayerState(); // Save is deferred under scene reservation.
-                                return true;
-                            });
-                        const uint64_t q230PumpUs=fqopaque::Micros(q230PumpStart);
-                        // A bounded, phase-specific diagnostic for the measured
-                        // ~14 ms 4 Hz spikes. This separates immutable lookups
-                        // from transaction cloning, execution and publication.
-                        static uint64_t q230GameModeTicks=0;
-                        static unsigned q230SlowReports=0;
-                        ++q230GameModeTicks;
-                        if((q230GameModeTicks%120u)==1u||
-                           (q230PumpUs>=8000u&&q230SlowReports++<12u)){
-                            FQ_LOGI("Q230 GAMEMODE CPU: scanUs=%llu executeUs=%llu staticRefs=%zu residentRefs=%zu indexed=1 tick=%llu",
-                                static_cast<unsigned long long>(q230ScanUs),
-                                static_cast<unsigned long long>(q230PumpUs),
-                                q230Statics.ids.size(),scriptedResidents.size(),
-                                static_cast<unsigned long long>(q230GameModeTicks));
-                        }
-                        scriptResidenceElapsed=0;
+                            if(!actor.runtime.offScene&&actor.source.refFormId&&scriptPlayer.HasReferenceEvent(actor.source.refFormId,"GameMode"))scriptedResidents.push_back(actor.source.refFormId);
+                        scriptActorResidence=gQ230NpcResidenceRevision;
+                        scriptResidenceElapsed=0;q230ScanUs=fqopaque::Micros(q230ScanStart);
+                    }
+                    const auto q230PumpStart=fqopaque::Clock::now();
+                    if(!Fo3ResidentFrameBlocked())scriptPlayer.PumpWorldAwareGameMode(seconds,scriptedResidents,
+                        [&](std::unique_ptr<fo3player::ScriptTransactionPlan> plan){
+                            std::string error;
+                            if(PublishFo3DialogueReferences(scriptPlayer,*plan,error))return true;
+                            const auto ticket=BeginFo3ResidentPreparedWorkflow({},std::move(plan));
+                            if(!ticket)return false;
+                            gFo3ResidentGameplayTicket=ticket;
+                            FlushFo3PlayerState();return true;
+                        });
+                    const uint64_t q230PumpUs=fqopaque::Micros(q230PumpStart);
+                    static double nextScriptReport=0;static unsigned q230SlowReports=0;
+                    if(fo3worldscript::seconds>=nextScriptReport||(q230PumpUs>=8000u&&q230SlowReports++<12u)){
+                        nextScriptReport=fo3worldscript::seconds+30;
+                        FQ_LOGI("Q289 GAMEMODE CPU: scanUs=%llu executeUs=%llu staticRefs=%zu residentRefs=%zu indexed=1",
+                            (unsigned long long)q230ScanUs,(unsigned long long)q230PumpUs,q230Statics.ids.size(),scriptedResidents.size());
                     }
                     if(!Fo3ResidentFrameBlocked()){
                         fo3worldscript::Actions();
                         fo3worldscript::Animate();
                     }
-                    if(beforeScripts!=scriptPlayer.Revision())FlushFo3PlayerState();
+                    // Fast scene timers must not write the entire save every frame.
+                    // Explicit interaction/manual saves still flush immediately.
+                    static bool scriptSaveDirty=false;static double nextScriptSave=0;
+                    if(nextScriptSave>fo3worldscript::seconds+.5)nextScriptSave=fo3worldscript::seconds;
+                    scriptSaveDirty=scriptSaveDirty||beforeScripts!=scriptPlayer.Revision();
+                    if(scriptSaveDirty&&fo3worldscript::seconds>=nextScriptSave){
+                        FlushFo3PlayerState();scriptSaveDirty=false;nextScriptSave=fo3worldscript::seconds+.5;
+                    }
                 }
                 }
                 if (gPlayerSession) fo3tod::gTestHour=gPlayerSession->player.Snapshot().gameHour;

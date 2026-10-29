@@ -191,6 +191,10 @@ struct State {
   uint32_t experience=0; // Canonical earned XP; level-up allocation remains a separate subsystem.
   std::unordered_map<uint32_t,LockOverride> locks;
   std::unordered_map<uint32_t,std::array<float,10>> actorVariables;
+  std::unordered_map<uint64_t,uint8_t> factionRelations;
+  std::unordered_map<uint32_t,bool> essentialFlags;
+  std::unordered_map<uint32_t,float> questScriptDelays;
+  std::unordered_map<uint64_t,float> actorAIValues; // reference + original actor-value ID
   std::unordered_map<uint32_t,uint16_t> actorSpawnLevels;
   std::unordered_map<uint64_t,uint32_t> actorTemplateChoices;
   std::unordered_map<uint32_t,bool> doorStates; // Script/activation open targets, not animation phases.
@@ -563,6 +567,13 @@ public:
   bool BootstrapDevelopmentWeapon();
   float WeaponDamage(uint64_t instance) const;
   float ActorHealth(uint32_t reference) const;
+  bool ResetActorHealth(uint32_t reference);
+  bool SetFactionRelation(uint32_t from,uint32_t to,bool ally,bool firstFlag=false,bool secondFlag=false);
+  bool SetEssential(uint32_t actorBase,bool essential);
+  bool SetQuestScriptDelay(uint32_t quest,float delay);
+  float QuestScriptDelay(uint32_t quest) const;
+  bool ActorAIValue(uint32_t reference,uint32_t valueId,float& value) const;
+  bool SetActorAIValue(uint32_t reference,uint32_t valueId,float value);
   bool WeaponHit(uint64_t instance,uint32_t target,float fraction=1);
   bool ApplyWeaponHit(uint32_t base,uint32_t target,float damage);
   bool ApplyAttack(uint32_t attacker,uint32_t weapon,uint32_t target,float damage);
@@ -673,6 +684,8 @@ private:
   mutable uint64_t revision_ = 0;
   uint64_t actorPoseRevisions_ = 0;
   double questScriptAccumulator_=0,referenceScriptAccumulator_=0;
+  double questScriptClock_=0;
+  std::unordered_map<uint32_t,double> questScriptLastTicks_;
   // Q230: authored GameMode script ownership is immutable for a Player's ESM
   // catalog. Cache IDs only; execution eligibility is still sampled live.
   mutable bool q230GameModeQuestIndexReady_=false;

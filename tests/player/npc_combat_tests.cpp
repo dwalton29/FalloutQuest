@@ -21,6 +21,28 @@ static Catalog Fixture(bool finite=true) {
   }
   c.pipboy.packages[77].type=6;c.weapons.relations[600][601]=1;return c;
 }
+static void ScriptedRelationsAndEssential(){
+  using namespace fo3npc;auto c=Fixture();c.factionFlags[600]=0;c.factionFlags[601]=0;
+  c.pipboy.formNames["fa"]=600;c.pipboy.formNames["fb"]=601;c.pipboy.formNames["baseactor"]=200;
+  c.pipboy.targets[102].base=200;c.pipboy.targets[102].cell=1;c.references[102].base=200;
+  Player p(c);std::string error;
+  auto run=[&](const char* source){fo3pipdata::ResultScript script;script.source=source;return p.ExecuteDialogueResult(script,error);};
+  auto relation=[&](uint32_t a,uint32_t b){return Relationship(p.Definitions(),a,b,{},{},&p.Snapshot().factionRelations);};
+  assert(relation(200,201)==Reaction::Enemy);
+  assert(run("SetEnemy fa fb 1 0")&&relation(200,201)==Reaction::Neutral&&relation(201,200)==Reaction::Enemy);
+  assert(run("SetAlly fa fb 0 1")&&relation(200,201)==Reaction::Ally&&relation(201,200)==Reaction::Friend);
+  assert(run("SetEnemy fa fa 1 1")&&relation(200,200)==Reaction::Neutral);
+  assert(c.weapons.relations.at(600).at(601)==1);
+  assert(run("SetEssential baseactor 2")&&p.Essential(100)&&p.Essential(102));
+  assert(p.ApplyWeaponHit(10,100,1000)&&p.ActorHealth(100)==1);
+  assert(run("SetEssential baseactor -1")&&!p.Essential(100)&&!p.Essential(102));
+  assert(p.ApplyWeaponHit(10,102,1000)&&p.ActorHealth(102)==0);
+  assert(run("SetEssential baseactor 1")&&p.ActorHealth(102)==0);
+  const auto revision=p.Revision();assert(!run("SetEssential baseactor 0\nSetEnemy fa baseactor")&&p.Revision()==revision&&p.Essential(100));
+  auto file="/tmp/fq-scripted-ai-"+std::to_string(getpid());assert(p.Save(file,error));Player restored(c);assert(restored.Restore(file,error));unlink(file.c_str());
+  assert(restored.Essential(100)&&restored.ActorHealth(100)==1&&restored.ActorHealth(102)==0);
+  assert(restored.Snapshot().factionRelations==p.Snapshot().factionRelations);
+}
 static void StateAndPerception() {
   using namespace fo3npc;RuntimeState s;s.activity=Activity::Package;s.package=77;s.position={1,2,3};s.speed=2;
   s.BeginDialogue();assert(s.activity==Activity::Dialogue&&s.speed==0);s.BeginCombat(101);
@@ -204,4 +226,4 @@ static void Original(const char* path) {
     assert(fo3npc::AI(c.pipboy,r.second.base).valid);++count;
   }assert(count==5);
 }
-int main(int argc,char** argv){StyleDecodeValidation();SourceContext();StateAndPerception();CombatAssetCandidates();InventoryDamagePersistence(true);InventoryDamagePersistence(false);if(argc>1)Original(argv[1]);std::cout<<"NPC combat state tests passed\n";}
+int main(int argc,char** argv){ScriptedRelationsAndEssential();StyleDecodeValidation();SourceContext();StateAndPerception();CombatAssetCandidates();InventoryDamagePersistence(true);InventoryDamagePersistence(false);if(argc>1)Original(argv[1]);std::cout<<"NPC combat state tests passed\n";}

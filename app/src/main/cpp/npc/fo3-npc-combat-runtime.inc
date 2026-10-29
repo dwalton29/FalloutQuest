@@ -284,7 +284,7 @@ static bool Q230TacticalRoute(Q230ActorVisual& actor,const std::array<float,3>& 
     // Source assistance/relations permit retreat towards real living allies.
     if(escape)for(const auto& ally:gQ230NpcActors){
       if(ally.source.refFormId==actor.source.refFormId||ally.runtime.offScene||!ally.runtime.Alive())continue;
-      if(fo3npc::Relationship(catalog,actor.source.baseFormId,ally.source.baseFormId,[&](uint32_t l){return gPlayerSession->player.ActorTemplate(actor.source.refFormId,l);},[&](uint32_t l){return gPlayerSession->player.ActorTemplate(ally.source.refFormId,l);})!=fo3npc::Reaction::Ally)continue;
+      if(fo3npc::Relationship(catalog,actor.source.baseFormId,ally.source.baseFormId,[&](uint32_t l){return gPlayerSession->player.ActorTemplate(actor.source.refFormId,l);},[&](uint32_t l){return gPlayerSession->player.ActorTemplate(ally.source.refFormId,l);},&gPlayerSession->player.Snapshot().factionRelations)!=fo3npc::Reaction::Ally)continue;
       const float d=Q240PlanarDistance(point,Q240GamePosition(ally));
       const float maximumAlly=fo3npc::CombatSetting(catalog,"fCombatFleeMaxAllyDistance");
       const float minimumAlly=fo3npc::CombatSetting(catalog,"fCombatFleeMinAllyDistance");
@@ -370,7 +370,10 @@ static void Q230SimulateActor(Q230ActorVisual& actor,double now) {
   const bool reloadAdvanced=Q230AdvanceReload(actor,now);
   // Preserve an authored short hit response before selecting the next combat action.
   if(now<s.hitUntil){s.speed=0;s.animation=fo3npc::Animation::Hit;return;}
-  const auto ai=fo3npc::AI(c.pipboy,actor.source.baseFormId,[&](uint32_t list){return p.ActorTemplate(actor.source.refFormId,list);});
+  auto ai=fo3npc::AI(c.pipboy,actor.source.baseFormId,[&](uint32_t list){return p.ActorTemplate(actor.source.refFormId,list);});
+  float scriptedAI=0;
+  if(p.Snapshot().actorAIValues.count((uint64_t(actor.source.refFormId)<<32)|0u)&&p.ActorAIValue(actor.source.refFormId,0,scriptedAI))ai.aggression=uint8_t(scriptedAI);
+  if(p.Snapshot().actorAIValues.count((uint64_t(actor.source.refFormId)<<32)|57u)&&p.ActorAIValue(actor.source.refFormId,57,scriptedAI))ai.assistance=uint8_t(scriptedAI);
   if(!ai.valid){Q240AiLogOnce(actor.source.refFormId,actor.aiPackage,"unsupported AIDT");return;}
   if(now>=s.nextThink){
     s.nextThink=now+.25;
@@ -384,8 +387,8 @@ static void Q230SimulateActor(Q230ActorVisual& actor,double now) {
       float nearest=ai.radiusEnabled?float(ai.radius):c.weapons.detectionDistance;
       auto candidate=[&](uint32_t ref){
         if(ref==actor.source.refFormId||!Q230Target(ref,point,base))return;
-        bool hostile=defensive?Q230DefendsLeader(actor,policy,ref):fo3npc::Acquires(ai,fo3npc::Relationship(c,actor.source.baseFormId,base,[&](uint32_t l){return p.ActorTemplate(actor.source.refFormId,l);},[&](uint32_t l){return p.ActorTemplate(ref,l);}));
-        if(!defensive&&!hostile&&ref!=0x14){for(const auto& ally:gQ230NpcActors)if(ally.runtime.combatTarget==ref&&fo3npc::Assists(ai,fo3npc::Relationship(c,actor.source.baseFormId,ally.source.baseFormId,[&](uint32_t l){return p.ActorTemplate(actor.source.refFormId,l);},[&](uint32_t l){return p.ActorTemplate(ally.source.refFormId,l);})))hostile=true;}
+        bool hostile=defensive?Q230DefendsLeader(actor,policy,ref):fo3npc::Acquires(ai,fo3npc::Relationship(c,actor.source.baseFormId,base,[&](uint32_t l){return p.ActorTemplate(actor.source.refFormId,l);},[&](uint32_t l){return p.ActorTemplate(ref,l);},&p.Snapshot().factionRelations));
+        if(!defensive&&!hostile&&ref!=0x14){for(const auto& ally:gQ230NpcActors)if(ally.runtime.combatTarget==ref&&fo3npc::Assists(ai,fo3npc::Relationship(c,actor.source.baseFormId,ally.source.baseFormId,[&](uint32_t l){return p.ActorTemplate(actor.source.refFormId,l);},[&](uint32_t l){return p.ActorTemplate(ally.source.refFormId,l);},&p.Snapshot().factionRelations)))hostile=true;}
         const float dx=point[0]-s.position[0],dy=point[1]-s.position[1],dz=point[2]-s.position[2];
         const float range=std::sqrt(dx*dx+dy*dy+dz*dz)*FO3_UNITS_PER_METRE;
         if(hostile&&range<nearest&&Q230Sight(actor,ref,point)){nearest=range;acquire=ref;}
