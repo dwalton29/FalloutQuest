@@ -120,6 +120,7 @@ struct CollisionSurfaceSourceQ722 {
     std::string modelPath;
 };
 std::vector<CollisionTriangle> gWorldTriangles;
+std::unordered_set<uint32_t> gCollisionScopeRefs;
 uint64_t gPipLocalMapRevision=0;
 uint64_t gCollisionPublicationRevision = 1u;
 bool gRigidFullDirty=true;
@@ -1057,6 +1058,7 @@ bool InitializeFo3CollisionOverlay(const std::vector<Fo3WorldPlacement>& placeme
     }
     gNextCollisionExteriorOverrideQ1931 = -1;
     gExteriorAllBhksQ78A = exteriorAllBhksQ78A;
+    gCollisionScopeRefs.clear();
     const size_t placementLimitQ78A = exteriorAllBhksQ78A
         ? MAX_EXTERIOR_COLLISION_PLACEMENTS_Q78A
         : placements.size();
@@ -1115,6 +1117,7 @@ bool InitializeFo3CollisionOverlay(const std::vector<Fo3WorldPlacement>& placeme
                     capped = true;
                     break;
                 }
+                if(!q1990Entry.triangles.empty())gCollisionScopeRefs.insert(placement.refFormId);
                 gWorldTriangles.insert(gWorldTriangles.end(),
                                        q1990Entry.triangles.begin(), q1990Entry.triangles.end());
                 for (uint64_t q1990SurfaceKey : q1990Entry.surfaceKeys) {
@@ -1290,6 +1293,7 @@ bool InitializeFo3CollisionOverlay(const std::vector<Fo3WorldPlacement>& placeme
         }
 
         if (placementTriangles > 0u) {
+            gCollisionScopeRefs.insert(placement.refFormId);
             ++gPlacementCount;
             gCollisionShapeCount += placementShapes;
             gTriangleCount += placementTriangles;
@@ -1620,6 +1624,7 @@ struct Q1930PreparedCollisionSnapshot {
     size_t bhkMissing = 0u, decodedPlacements = 0u, nonSolidFiltered = 0u;
     bool capped = false;
     std::vector<CollisionTriangle> triangles;
+    std::unordered_set<uint32_t> scopeRefs;
     std::unordered_map<uint64_t, CollisionSurfaceSourceQ722> surfaceSources;
     size_t placementCount = 0u;
     size_t collisionShapeCount = 0u;
@@ -1718,6 +1723,7 @@ bool Q1930AssembleCachedAuthored(
                 entry.kindCounts[0], entry.kindCounts[1], entry.kindCounts[2], entry.kindCounts[3], entry.kindCounts[4]);
         }
 
+        snapshot.scopeRefs.insert(placement.refFormId);
         const auto pose = snapshot.doorPoses.find(placement.refFormId);
         if (pose == snapshot.doorPoses.end()) {
             snapshot.triangles.insert(snapshot.triangles.end(),
@@ -2173,6 +2179,7 @@ bool ExchangeFo3CollisionMutationSnapshot(uint64_t token) {
         snapshot.policyApplied=!snapshot.policyApplied;
     }
     gWorldTriangles.swap(snapshot.triangles);
+    gCollisionScopeRefs.swap(snapshot.scopeRefs);
     gSurfaceSourcesQ722.swap(snapshot.surfaceSources);
     swap(gPlacementCount, snapshot.placementCount);
     swap(gCollisionShapeCount, snapshot.collisionShapeCount);
@@ -2229,9 +2236,15 @@ bool PublishFo3CollisionSnapshotQ1930(uint64_t token, uint64_t* outSwapUs) {
 
     const auto started = std::chrono::steady_clock::now();
 
+    // Rolling windows retain the live authored pose, including an endpoint
+    // whose visual animation has already settled and will not sample again.
+    const bool retainPoses=snapshot->cellFormId==0u&&gLiveCollisionContext.Matches(snapshot->context);
+    auto livePoses=retainPoses?std::move(gDoorCollisionPoses):std::unordered_map<uint32_t,Fo3DoorCollisionPose>{};
+
     // Debug collision GL is disabled in normal Quest builds. If enabled later,
     // rebuild its visual overlay separately; locomotion data below is complete.
     gWorldTriangles = std::move(snapshot->triangles);
+    gCollisionScopeRefs=std::move(snapshot->scopeRefs);
     gLiveCollisionContext = snapshot->context;
     gDoorCollisionPoses.clear();
     AdvanceFo3CollisionPublicationRevision();
@@ -2271,6 +2284,10 @@ bool PublishFo3CollisionSnapshotQ1930(uint64_t token, uint64_t* outSwapUs) {
     gQ950Ready = snapshot->exterior;
     Q225RebuildDynamicGrid();
     SetFo3CollectedCollisionRefs(gCollectedCollisionRefs);
+    for(const auto& entry:livePoses)
+        if(!SetFo3ScriptCollisionPose(entry.first,entry.second))
+            gDoorCollisionPoses[entry.first]=entry.second; // Retain settled poses even after far-cache eviction.
+
 
     if (snapshot->cellFormId != 0u) {
         gSafeSpawnResolved = false;
@@ -2388,6 +2405,13 @@ bool SetFo3ScriptCollisionPose(uint32_t reference,const Fo3DoorCollisionPose& re
     }
     const auto previous=gDoorCollisionPoses.find(reference);
     if(previous!=gDoorCollisionPoses.end()&&previous->second==pose)return true;
+    EnsureAnimatedReferenceIndex();
+    if(!gCollisionScopeRefs.count(reference)&&!gAnimatedReferenceTriangles.count(reference)){
+        // A visual/NIF can outlive its 3x3 physical window. Keep its pose for
+        // re-entry, without appending distant BHKs or invalidating world caches.
+        gDoorCollisionPoses[reference]=std::move(pose);
+        return true;
+    }
     const auto poseStarted=std::chrono::steady_clock::now();
     std::vector<CollisionTriangle> moved;moved.reserve(cached->second.triangles.size());
     for(const auto& original:cached->second.triangles){
@@ -2422,8 +2446,19 @@ bool HasFo3InteractionOccluder(float ox,float oy,float oz,float dx,float dy,floa
         const auto& tri=gWorldTriangles[index];
         const auto source=gSurfaceSourcesQ722.find(tri.surfaceKeyQ714);
         if (source!=gSurfaceSourcesQ722.end() && source->second.refFormId==targetRef) return false;
-        return fo3interaction::Triangle(origin,direction,{tri.a.x,tri.a.y,tri.a.z},
+        const bool hit=fo3interaction::Triangle(origin,direction,{tri.a.x,tri.a.y,tri.a.z},
             {tri.b.x,tri.b.y,tri.b.z},{tri.c.x,tri.c.y,tri.c.z},distance);
+        if(hit){
+            static auto nextReport=std::chrono::steady_clock::time_point{};
+            const auto now=std::chrono::steady_clock::now();
+            if(now>=nextReport){nextReport=now+std::chrono::seconds(2);
+                Q6G_LOGI("Q286 INTERACTION OCCLUDED target=%08X blocker=%08X node=%u posed=%d model=%s distance=%.3f",
+                    targetRef,source==gSurfaceSourcesQ722.end()?0:source->second.refFormId,
+                    tri.animationTargetBlock,source!=gSurfaceSourcesQ722.end()&&gDoorCollisionPoses.count(source->second.refFormId)?1:0,
+                    source==gSurfaceSourcesQ722.end()?"<terrain>":source->second.modelPath.c_str(),distance);
+            }
+        }
+        return hit;
     };
     for (int x=Q225CellCoord(std::min(ox,endX));x<=Q225CellCoord(std::max(ox,endX));++x)
         for (int z=Q225CellCoord(std::min(oz,endZ));z<=Q225CellCoord(std::max(oz,endZ));++z) {
@@ -2726,6 +2761,7 @@ void RenderFo3CollisionOverlay(const float* mvp16) {
 void ShutdownFo3CollisionOverlay() {
     AdvanceFo3CollisionPublicationRevision();
     gLiveCollisionContext.valid = false;
+    gCollisionScopeRefs.clear();
     gDoorCollisionPoses.clear();
     if (gVbo) glDeleteBuffers(1, &gVbo);
     if (gVao) glDeleteVertexArrays(1, &gVao);

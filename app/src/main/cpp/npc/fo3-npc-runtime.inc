@@ -1,3 +1,4 @@
+#include "fo3-actor-clip-path.h"
 #include "fo3-combat-animation.h"
 #include "rendering/performance-capture.h"
 void Q230CacheDialogueAnimations(Q230ActorVisual& actor,const fo3pipdata::Definitions* d) {
@@ -20,6 +21,17 @@ void Q230CacheDialogueAnimations(Q230ActorVisual& actor,const fo3pipdata::Defini
       (actor.source.female?std::string("female\\"):std::string("male\\"))+"mtright.kf";
   paths[size_t(fo3npc::Animation::StepBack)]=root+"locomotion\\"+
       (actor.source.female?std::string("female\\"):std::string("male\\"))+"mtbackward.kf";
+  if(actor.source.creature){
+    paths[3].clear(); // Do not bind humanoid conversation IDLEs to a creature.
+    paths[1]=Fo3ActorClipPath(actor.source.skeletonModel,"mtturnleft",true);
+    paths[2]=Fo3ActorClipPath(actor.source.skeletonModel,"mtturnright",true);
+    paths[4]=Fo3ActorClipPath(actor.source.skeletonModel,"mtforward",true,false,true);
+    paths[5]=Fo3ActorClipPath(actor.source.skeletonModel,"talking",true);
+    paths[size_t(fo3npc::Animation::Run)]=Fo3ActorClipPath(actor.source.skeletonModel,"mtfastforward",true);
+    paths[size_t(fo3npc::Animation::StepLeft)]=Fo3ActorClipPath(actor.source.skeletonModel,"mtleft",true);
+    paths[size_t(fo3npc::Animation::StepRight)]=Fo3ActorClipPath(actor.source.skeletonModel,"mtright",true);
+    paths[size_t(fo3npc::Animation::StepBack)]=Fo3ActorClipPath(actor.source.skeletonModel,"mtbackward",true);
+  }
   for(size_t i=1;i<paths.size();++i){std::vector<uint8_t> bytes;
     const bool ready=!paths[i].empty()&&LoadFalloutMeshFile(paths[i],bytes)&&fo3anim::DecodeClip(bytes,actor.animations[i]);
     (void)ready;Q6H_LOGI("NPC CLIP actor=%08X slot=%zu ready=%d path=%s",actor.source.refFormId,i,ready,paths[i].c_str());

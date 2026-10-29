@@ -34,6 +34,7 @@ public:
     bool Build(const std::string& esmPath,std::string& error);
     const DoorLink* Find(uint32_t sourceDoorRef) const;
     const std::vector<uint32_t>* Outgoing(uint32_t sourceCell) const;
+    const std::vector<uint32_t>* WorldDoors(uint32_t sourceWorld) const;
 
     // Returns authored source-door FormIDs on a directed CELL route. This
     // proves graph connectivity only, not that the NPC can use those doors.
@@ -47,6 +48,7 @@ public:
 private:
     std::unordered_map<uint32_t,DoorLink> links_;
     std::unordered_map<uint32_t,std::vector<uint32_t>> byCell_;
+    std::unordered_map<uint32_t,std::vector<uint32_t>> byWorld_;
     Statistics stats_;
 };
 

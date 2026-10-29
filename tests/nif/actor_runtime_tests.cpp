@@ -1,5 +1,7 @@
 #include "../../app/src/main/cpp/rendering/actor-skinning.h"
 #include <memory>
+#include <fstream>
+#include "npc/fo3-actor-clip-path.h"
 #include "../../app/src/main/cpp/npc/fo3-animation-bounds.h"
 // Execute the production actor/render bridge with a recording GL adapter.
 #include "../../app/src/main/cpp/rendering/mesh/fo3-static-nif.h"
@@ -170,8 +172,16 @@ void QActorUploadSkin(GpuObject&,QActorSkin& skin,fqactor::Cost&,bool player) {
     std::copy(p.begin(),p.end(),recorded.begin()+v*18);
   }
 }
+#ifdef FQ_REAL_CREATURE_ASSETS
+bool LoadFalloutMeshFile(const std::string& path,std::vector<uint8_t>& bytes,std::string* resolved=nullptr){
+  std::string file=path;for(char& c:file)if(c=='\\')c='/';
+  std::ifstream stream(file,std::ios::binary);bytes.assign(std::istreambuf_iterator<char>(stream),{});
+  if(resolved)*resolved=path;return !bytes.empty();
+}
+#else
 bool LoadFalloutMeshFile(const std::string&,std::vector<uint8_t>&){return false;}
 namespace fo3anim {bool DecodeClip(const std::vector<uint8_t>&,Clip&){return false;}}
+#endif
 #define FO3_ACTOR_RUNTIME_HOST_TEST 1
 #include "world/fo3-resident-pause-clock.h"
 bool residentBlocked=false;
@@ -255,7 +265,11 @@ static void CombatCompositionTests(){
   a.runtime.activity=Activity::Combat;a.runtime.animation=Animation::Walk;update();
   assert(a.combatPose.instance==1&&a.combatPose.from.empty());
 }
-int main() {
+int main(int argc,char** argv) {
+  (void)argc;(void)argv;
+#ifdef FQ_REAL_CREATURE_ASSETS
+  if(argc!=3)return 77;
+#endif
   // FO3 rigid parts keep actor axes despite a rotated head bone.
   {
     fo3anim::Skeleton skeleton;
@@ -404,5 +418,36 @@ int main() {
   ++gStereoFrame;Q230UpdateActor(animated);
   assert(std::fabs(animated.pose.local.front().translation[0]-beforePause[0]-.5f)<1e-5f);
   CombatCompositionTests();
+#ifdef FQ_REAL_CREATURE_ASSETS
+  Q230ActorVisual creature;creature.source.creature=true;creature.source.skeletonModel=argv[1];
+  std::vector<uint8_t> bytes;
+  assert(LoadFalloutMeshFile(argv[1],bytes,nullptr)&&fo3anim::DecodeSkeleton(bytes,creature.skeleton));
+  const auto idle=Fo3ActorClipPath(creature.source.skeletonModel,"mtidle",true);
+  assert(LoadFalloutMeshFile(idle,bytes,nullptr)&&fo3anim::DecodeClip(bytes,creature.clip)&&!creature.clip.tracks.empty());
+  fo3anim::BindClip(creature.skeleton,creature.clip,creature.pose);
+  assert(!creature.pose.delta.empty());
+  Q230CacheDialogueAnimations(creature,nullptr);
+  std::vector<Fo3StaticNifMesh> meshes;assert(LoadFo3StaticNifMeshes(argv[2],meshes));
+  size_t originalTriangles=0;
+  for(auto& mesh:meshes){CpuObject part;part.mesh=std::move(mesh);part.placement.modelPath=argv[2];
+    originalTriangles+=part.mesh.indices.size()/3;
+    for(size_t i=0;i<part.mesh.positions.size();i+=3){
+      part.positionsGame.push_back({part.mesh.positions[i],part.mesh.positions[i+1],part.mesh.positions[i+2]});
+      part.normalsGame.push_back({part.mesh.normals[i],part.mesh.normals[i+1],part.mesh.normals[i+2]});
+      part.tangentsGame.push_back({part.mesh.tangents[i],part.mesh.tangents[i+1],part.mesh.tangents[i+2]});
+      part.bitangentsGame.push_back({part.mesh.bitangents[i],part.mesh.bitangents[i+1],part.mesh.bitangents[i+2]});
+    }
+    assert(Q230UploadActorPart(creature,part,0,0,0));
+  }
+  assert(originalTriangles>0&&!creature.rigs.empty()&&!creature.objects.empty());
+  ++gStereoFrame;Q230UpdateActor(creature);
+  assert(!recorded.empty());for(float value:recorded)assert(std::isfinite(value));
+  std::array<float,3> clo{},chi{};assert(Q230LiveBounds(creature,clo,chi));
+  for(size_t i=0;i<3;++i)assert(chi[i]>=clo[i]&&chi[i]-clo[i]<10);
+  gQ230NpcActors.clear();gQ230NpcActors.push_back(std::move(creature));draws=0;
+  Q230RenderNpcActors(false);Q230RenderNpcActors(true);
+  assert(size_t(draws)==gQ230NpcActors.front().objects.size());
+  std::cout<<"Original creature idle, skinning rig, finite bounds and render submission passed: triangles="<<originalTriangles<<"\n";
+#endif
   std::cout << "Actor runtime bridge and concurrent combat composition tests passed\n";
 }

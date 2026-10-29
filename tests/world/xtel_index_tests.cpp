@@ -1,3 +1,4 @@
+#include "world/interaction/fo3-world-door-anchors.h"
 #include "data/fo3-xtel-index.h"
 #include <algorithm>
 #include <array>
@@ -99,6 +100,13 @@ void Synthetic() {
     assert(reverse->teleportFlags==0xA0000001u&&reverse->sourceRecordFlags==0x800u);
     assert(!index.Find(0x103)&&!index.Find(0x104));
     assert(index.Outgoing(0x200)&&index.Outgoing(0x200)->size()==1);
+    assert(index.WorldDoors(0x700)&&*index.WorldDoors(0x700)==std::vector<uint32_t>{0x102});
+    fo3pipdata::Definitions data;data.targets[0x102].x=42;data.targets[0x102].cell=0x300;data.targets[0x102].world=0x700;
+    const auto anchors=Fo3WorldDoorAnchors(index,data,0x700,[](uint32_t){return true;});
+    assert(anchors.size()==1&&anchors[0].sourceDoorRef==0x102&&anchors[0].sourceX==42);
+    assert(anchors[0].teleport.destinationDoorRefFormId==0x101&&anchors[0].teleport.valid);
+    assert(Fo3WorldDoorAnchors(index,data,0x700,[](uint32_t){return false;}).empty());
+    assert(Fo3WorldDoorAnchors(index,data,0x701,[](uint32_t){return true;}).empty());
     std::vector<uint32_t> pathRefs;
     assert(index.CellRoute(0x200,0x300,pathRefs)&&pathRefs==std::vector<uint32_t>{0x101});
     assert(index.CellRoute(0x300,0x200,pathRefs)&&pathRefs==std::vector<uint32_t>{0x102});
@@ -154,6 +162,11 @@ void Original(const std::string& esm) {
 }
 int main(int argc,char** argv) {
     Synthetic();ReverseCellDistances();
-    if(argc>1)Original(argv[1]);
+    if(argc>1){Original(argv[1]);fo3xtel::Index original;std::string error;assert(original.Build(argv[1],error));
+        const auto* wasteland=original.WorldDoors(0x3c);
+        assert(wasteland&&std::binary_search(wasteland->begin(),wasteland->end(),0x3b24u));
+        assert(original.Find(0x3b24)->sourceCell==0x2db4);
+        std::cout<<"Original persistent Megaton entrance is in the Wasteland door index\n";
+    }
     return 0;
 }

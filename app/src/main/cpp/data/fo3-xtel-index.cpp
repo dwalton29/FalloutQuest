@@ -174,6 +174,7 @@ bool Index::Build(const std::string& esmPath,std::string& error) {
         link.teleportFlags=entry.second.flags;
         built.links_.emplace(link.sourceRef,link);
         built.byCell_[link.sourceCell].push_back(link.sourceRef);
+        built.byWorld_[link.sourceWorld].push_back(link.sourceRef);
         ++built.stats_.resolved;
         if(link.sourceCell!=link.destinationCell)++built.stats_.crossCell;
         if(link.sourceWorld!=link.destinationWorld)++built.stats_.crossWorld;
@@ -186,12 +187,16 @@ bool Index::Build(const std::string& esmPath,std::string& error) {
         if(link.reciprocal)++built.stats_.reciprocal;
     }
     for(auto& entry:built.byCell_)std::sort(entry.second.begin(),entry.second.end());
+    for(auto& entry:built.byWorld_)std::sort(entry.second.begin(),entry.second.end());
     *this=std::move(built);
     return true;
 }
 const DoorLink* Index::Find(uint32_t id) const {
     const auto it=links_.find(id);
     return it==links_.end()?nullptr:&it->second;
+}
+const std::vector<uint32_t>* Index::WorldDoors(uint32_t world) const {
+    const auto it=byWorld_.find(world);return it==byWorld_.end()?nullptr:&it->second;
 }
 const std::vector<uint32_t>* Index::Outgoing(uint32_t cell) const {
     const auto it=byCell_.find(cell);

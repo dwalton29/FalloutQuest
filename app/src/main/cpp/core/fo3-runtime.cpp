@@ -1,3 +1,5 @@
+#include "world/interaction/fo3-world-door-anchors.h"
+#include "npc/fo3-actor-clip-path.h"
 #include "rendering/fo3-visual-admission.h"
 #include "rendering/spacewarp/fo3-motion-gles.h"
 #include "physics/fo3-contact-limit.h"
@@ -2161,6 +2163,14 @@ bool BuildCpuObjects(const Fo3WorldPlacement& placement, std::vector<CpuObject>&
 
     if(cachedMeshes->empty()) {
         CpuObject part;part.placement=placement;part.nonvisualResident=true;
+        if(placement.baseRecordType=="DOOR"){
+            std::vector<Fo3NifCollisionShapeQ6F> shapes;
+            if(LoadFo3NifCollisionShapesQ6F(placement.modelPath,shapes))for(const auto& shape:shapes)
+                for(size_t i=0;i+2<shape.positions.size();i+=3){
+                    auto point=ApplyEsmRotation({shape.positions[i],shape.positions[i+1],shape.positions[i+2]},placement);
+                    part.positionsGame.push_back({placement.x+point.x*placement.scale,placement.y+point.y*placement.scale,placement.z+point.z*placement.scale});
+                }
+        }
         outs.push_back(std::move(part));return true;
     }
     const auto rigidBody=PrepareFo3RigidBody(placement,*cachedMeshes);
@@ -2448,6 +2458,16 @@ bool UploadCpuObject(CpuObject& cpu, float centerX, float centerY, float floorZ,
         gpu.q1970GridX=cpu.placement.hasExteriorGrid?cpu.placement.gridX:static_cast<int32_t>(std::floor(cpu.placement.x/Q1890_EXTERIOR_CELL_SIZE));
         gpu.q1970GridY=cpu.placement.hasExteriorGrid?cpu.placement.gridY:static_cast<int32_t>(std::floor(cpu.placement.y/Q1890_EXTERIOR_CELL_SIZE));
         Q2016BuildPlacementMatrix(cpu.placement,centerX,centerY,floorZ,gpu.q2016PlacementMatrix);
+        if(gpu.baseRecordType=="DOOR"&&!cpu.positionsGame.empty()){
+            gpu.minX=gpu.minY=gpu.minZ=INFINITY;gpu.maxX=gpu.maxY=gpu.maxZ=-INFINITY;
+            for(const auto& p:cpu.positionsGame){const Vec3 v{(p.x-centerX)/FO3_UNITS_PER_METRE,FLOOR_Y+(p.z-floorZ)/FO3_UNITS_PER_METRE,SCENE_FORWARD-(p.y-centerY)/FO3_UNITS_PER_METRE};
+                gpu.minX=std::min(gpu.minX,v.x);gpu.maxX=std::max(gpu.maxX,v.x);
+                gpu.minY=std::min(gpu.minY,v.y);gpu.maxY=std::max(gpu.maxY,v.y);
+                gpu.minZ=std::min(gpu.minZ,v.z);gpu.maxZ=std::max(gpu.maxZ,v.z);
+            }
+            ResolveDoorTeleportCachedQ1698(gpu.refFormId,gExteriorWorldspaceQ1890==0x3cu,gpu.teleport);
+            if(gpu.teleport.valid&&!gFo3ResidentTextureUpload)CacheFo3DoorPromptQ1840(gpu.refFormId,gpu.baseFormId,gpu.teleport);
+        }
         return true;
     }
     constexpr size_t FLOATS_PER_VERTEX = 18u;
@@ -5655,6 +5675,26 @@ void UpdateFo3InteriorDoorsQ2400() {
     }
 }
 
+static std::shared_ptr<const fo3xtel::Index> Q230NpcXtelIndex();
+bool QueryFo3WorldDoorAnchor(float ox,float oy,float oz,float dx,float dy,float dz,Fo3DoorAimQ1700* out){
+    if(!gPlayerSession||!gExteriorWorldspaceQ1890)return false;
+    const auto index=Q230NpcXtelIndex();if(!index)return false;
+    auto& player=gPlayerSession->player;
+    static std::shared_ptr<const fo3xtel::Index> cachedIndex;
+    static fo3scene::PublicationStamp scene{};
+    static uint32_t world=0;static uint64_t revision=~uint64_t{0};
+    static std::vector<Fo3DoorAnchor> anchors;
+    const auto stamp=gFo3ScenePublication.Stamp();
+    if(cachedIndex!=index||!(scene==stamp)||world!=gExteriorWorldspaceQ1890||revision!=player.Snapshot().referenceStateRevision){
+        anchors=Fo3WorldDoorAnchors(*index,player.Definitions().pipboy,gExteriorWorldspaceQ1890,[&](uint32_t ref){
+            bool disabled=true;std::string error;return player.ReferenceDisabled(ref,disabled,error)&&!disabled;
+        });
+        cachedIndex=index;scene=stamp;world=gExteriorWorldspaceQ1890;revision=player.Snapshot().referenceStateRevision;
+    }
+    return QueryFo3DoorAnchorResources(anchors,gSceneCenterXQ1730,gSceneCenterYQ1730,gSceneFloorZQ1730,
+        FO3_UNITS_PER_METRE,FLOOR_Y,SCENE_FORWARD,ox,oy,oz,dx,dy,dz,out);
+}
+
 bool QueryDoorInternalQ1700(float ox, float oy, float oz,
                             float dx, float dy, float dz,
                             Fo3DoorAimQ1700* outAim) {
@@ -5672,11 +5712,39 @@ bool QueryDoorInternalQ1700(float ox, float oy, float oz,
         if(!object.teleport.valid&&!localSwing) continue;
         float t = 0.0f;
         if (RayAabbQ7(ox, oy, oz, dx, dy, dz, object, t) && t < bestT) {
+            if(gPlayerSession){bool disabled=true;std::string error;
+                if(!gPlayerSession->player.ReferenceDisabled(object.refFormId,disabled,error)||disabled)continue;
+            }
             bestT = t;
             hit = &object;
         }
     }
     if (!hit) {
+        if(QueryFo3WorldDoorAnchor(ox,oy,oz,dx,dy,dz,outAim))return true;
+        static auto nextDoorReport=std::chrono::steady_clock::time_point{};
+        const auto reportTime=std::chrono::steady_clock::now();
+        if(reportTime>=nextDoorReport){
+            nextDoorReport=reportTime+std::chrono::seconds(2);
+            unsigned nearby=0;
+            for(const auto& door:gObjects){
+                if(door.baseRecordType!="DOOR")continue;
+                Vec3 lo{},hi{};Q2400ObjectBounds(door,lo,hi);
+                const float x=std::clamp(ox,lo.x,hi.x)-ox,y=std::clamp(oy,lo.y,hi.y)-oy,z=std::clamp(oz,lo.z,hi.z)-oz;
+                if(x*x+y*y+z*z>100)continue;
+                bool disabled=false;std::string error;
+                const bool known=gPlayerSession&&gPlayerSession->player.ReferenceDisabled(door.refFormId,disabled,error);
+                Q6H_LOGI("Q286 DOOR NEAR ref=%08X xtel=%d nonvisual=%d enabled=%d bounds=(%.2f,%.2f,%.2f)-(%.2f,%.2f,%.2f) model=%s",
+                    door.refFormId,door.teleport.valid?1:0,door.nonvisualResident?1:0,known&&!disabled?1:0,
+                    lo.x,lo.y,lo.z,hi.x,hi.y,hi.z,door.modelPath.c_str());
+                if(++nearby>=8)break;
+            }
+            if(nearby)Q6H_LOGI("Q286 DOOR AIM MISS cell=%08X world=%08X nearby=%u origin=(%.2f,%.2f,%.2f) dir=(%.3f,%.3f,%.3f)",
+                gCurrentCellFormId,gExteriorWorldspaceQ1890,nearby,ox,oy,oz,dx,dy,dz);
+        }
+        // Exterior anchors were already queried from the immutable WRLD
+        // index. A CELL fallback adds no links and could synchronously scan
+        // the master when the controller first misses after crossing a grid.
+        if(gExteriorWorldspaceQ1890)return false;
         Fo3DoorAimQ1700 authoredAim;
         if (QueryFo3AuthoredDoorAnchorQ1730(
                 gCurrentCellFormId,
@@ -11847,11 +11915,13 @@ bool Q230BuildNpcActor(const Fo3NpcActorQ230& source, Q230ActorVisual& visual) {
     std::vector<uint8_t> bytes;
     if (LoadFalloutMeshFile(source.skeletonModel, bytes) &&
         !fo3anim::DecodeSkeleton(bytes, visual.skeleton)) visual.skeleton = {};
-    std::string idle = source.skeletonModel;
-    const size_t slash = idle.find_last_of("\\/");
-    idle = slash == std::string::npos ? std::string{} : idle.substr(0, slash + 1u) + "locomotion\\mtidle.kf";
+    const std::string idle=Fo3ActorClipPath(source.skeletonModel,"mtidle",source.creature);
     if (!idle.empty() && LoadFalloutMeshFile(idle, bytes))
         fo3anim::DecodeClip(bytes, visual.clip);
+    if(source.creature&&visual.clip.tracks.empty()){
+        const auto nested=Fo3ActorClipPath(source.skeletonModel,"mtidle",false);
+        if(LoadFalloutMeshFile(nested,bytes))fo3anim::DecodeClip(bytes,visual.clip);
+    }
     if (!visual.skeleton.bones.empty() && !visual.clip.tracks.empty())
         fo3anim::BindClip(visual.skeleton, visual.clip, visual.pose);
     std::vector<std::string> models;
@@ -12330,7 +12400,8 @@ bool Q230BuildNpcActor(const Fo3NpcActorQ230& source, Q230ActorVisual& visual) {
         }
     }
 
-    const bool ready=!visual.parts.empty();
+    const bool ready=triangles>0;
+    if(!ready)Q6H_LOGW("NPC VISUAL EMPTY ref=%08X base=%08X skeleton=%s modelParts=%zu reason=no-visible-authored-triangles",source.refFormId,source.baseFormId,source.skeletonModel.c_str(),models.size());
     Q6H_LOGI("Q23.7 NPC ASSEMBLY READY: ready=%d actor=%s ref=%08X base=%08X assets=%zu cpuShapes=%zu gpuShapes=%zu triangles=%zu raceHeadParts=%zu egmAssets=%zu morphedShapes=%zu morphedVertices=%zu faceTextureShapes=%zu faceTexturePixels=%zu eyeTextureOverrides=%zu hairTextureOverrides=%zu hairTintShapes=%zu raceBodyTextureOverrides=%zu armorSkinFallbackOverrides=%zu bodyEgtTextures=%zu bodyEgtPixels=%zu rigidHeadAttachedShapes=%zu headAnchorReady=%d equippedMask=%08X faceGenGeometryApplied=%d faceGenTextureApplied=%d combinedCoeffs=(%zu,%zu,%zu) npcCoeffs=(%zu,%zu,%zu) raceCoeffs=(%zu,%zu,%zu) hairRGB=(%u,%u,%u) pose=cpu-prepared source=RACE-head/body-slots+BMDT+BodyEGT+HeadBindAttach+RACE-baseline+NPC-FaceGen+EGM/EGT+HCLR",
              ready?1:0,
              npc->fullName.empty()?npc->editorId.c_str():npc->fullName.c_str(),

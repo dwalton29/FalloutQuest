@@ -107,3 +107,13 @@ target_compile_features(world_animation_tests PRIVATE cxx_std_17)
 target_compile_options(world_animation_tests PRIVATE -Wall -Wextra -Werror -Wno-unused-function -UNDEBUG)
 target_include_directories(world_animation_tests PRIVATE . ../../app/src/main/cpp ../../app/src/main/cpp/data ../../app/src/main/cpp/npc)
 add_test(NAME world_animation_tests COMMAND world_animation_tests)
+
+add_executable(creature_actor_asset_tests actor_runtime_tests.cpp
+  ../../app/src/main/cpp/rendering/mesh/fo3-static-nif.cpp
+  ../../app/src/main/cpp/npc/fo3-actor-animation.cpp)
+target_compile_definitions(creature_actor_asset_tests PRIVATE FQ_REAL_CREATURE_ASSETS=1)
+target_compile_features(creature_actor_asset_tests PRIVATE cxx_std_17)
+target_compile_options(creature_actor_asset_tests PRIVATE -UNDEBUG -Wall -Wextra -Werror -Wno-unused-function -Wno-misleading-indentation)
+target_include_directories(creature_actor_asset_tests PRIVATE . ../../app/src/main/cpp ../../app/src/main/cpp/data ../../app/src/main/cpp/npc)
+add_test(NAME creature_actor_asset_tests COMMAND creature_actor_asset_tests)
+set_tests_properties(creature_actor_asset_tests PROPERTIES SKIP_RETURN_CODE 77)

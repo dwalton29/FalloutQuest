@@ -644,6 +644,35 @@ int main(int argc,char**argv) {
         assert(a.minX==b.minX&&a.maxX==b.maxX&&a.walkableTriangles==b.walkableTriangles);}
     std::cout<<"40 moving BHK poses preserve 4000 static meshes; incremental player/prop grids match a full rebuild\n";
     std::cout<<"Per-node scripted collision preserves static structure passed\n";
+    // A settled animated gate survives rolling snapshot publication. Once its
+    // reference leaves the physical window, further visual animation must not
+    // append distant triangles or invalidate the static world every 100 ms.
+    publish(prepare({b,door},true,0));
+    Fo3DoorCollisionPose openGate;openGate.transform[12]=4;
+    assert(SetFo3ScriptCollisionPose(10,openGate));
+    auto checkGatePose=[&](float translation){
+        const auto index=gAnimatedReferenceTriangles.find(10);assert(index!=gAnimatedReferenceTriangles.end());
+        const auto& original=gQ1990CollisionPlacementCache.at(10).triangles.front();
+        assert(gWorldTriangles[index->second.front()].a.x==original.a.x+translation);
+    };
+    publish(prepare({b,door},true,0));EnsureAnimatedReferenceIndex();checkGatePose(4);
+    uint64_t departingWindow=0;
+    assert(PrepareFo3CollisionSnapshotQ1930({b},0,0,0,0,0,70,&departingWindow,true,0));
+    publish(departingWindow);EnsureQ950SpatialIndex();
+    assert(countRef(10)==0&&!gCollisionScopeRefs.count(10));
+    const auto outsideRevision=GetFo3CollisionPublicationRevision();
+    const auto* outsideStorage=gWorldTriangles.data();
+    for(int step=0;step<100;++step){openGate.transform[12]=float(step);
+        assert(SetFo3ScriptCollisionPose(10,openGate));
+        assert(countRef(10)==0&&gWorldTriangles.data()==outsideStorage&&gQ950Ready&&gHkShapesReadyQ900);
+    }
+    assert(GetFo3CollisionPublicationRevision()==outsideRevision);
+    gQ1990CollisionPlacementCache.erase(10); // The far BHK cache may be evicted before re-entry.
+    assert(PrepareFo3CollisionSnapshotQ1930({b},0,0,0,0,0,70,&departingWindow,true,0));
+    publish(departingWindow);assert(gDoorCollisionPoses.at(10).transform[12]==99);
+    publish(prepare({b,door},true,0));EnsureAnimatedReferenceIndex();checkGatePose(99);
+    publish(prepare({b,door},false,111));assert(gDoorCollisionPoses.empty());
+    std::cout<<"Rolling gate pose retention, distant animation isolation and re-entry passed\n";
     ShutdownFo3CollisionOverlay();
     assert(!IsFo3PlayerCollisionReadyQ6G());
     assert(!ResolveFo3PlayerMotionQ6G(0,0,1,2,3,&x,&z,&y));
