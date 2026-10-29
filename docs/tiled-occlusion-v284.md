@@ -22,7 +22,10 @@ polygon covering the entire tile can improve that depth. Partial near coverage
 cannot reduce the depth of a later full farther surface. Clipping uses double
 precision and a bounded current-frame registry of exact shared edges. Clipped
 vertices retain edge identities, so roundoff does not leave artificial seams
-when the camera rotates. Registry exhaustion skips additional source polygons. Bounded piece/vertex overflow
+when the camera rotates. Boundary endpoints are copied directly instead of
+recomputing intersections at t=0 or t=1. This repairs a compiler-sensitive
+under-culling case exposed by hosted validation. Registry exhaustion skips
+additional source polygons. Bounded piece/vertex overflow
 fails open, retaining visible geometry rather than approximating a filled tile.
 
 Query bounds keep the existing world-space expansion and receive an additional
@@ -63,6 +66,8 @@ and raster work beside the existing hidden-shape/corner and CPU-cost counters.
 
 ## Validation
 
+- 543 camera-angle/adjacent-float matrix cases exercise the shared-edge and exact
+  endpoint regression.
 - Adjacent polygons/triangles, diagonal seams, real cracks, differing depths,
   partial-near/full-far regression and deadline/query-budget fail-open.
 - Random rotated opaque polygons and query rectangles checked against independent

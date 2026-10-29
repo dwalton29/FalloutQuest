@@ -25,6 +25,19 @@ int main(){
     // Two authored triangles share a diagonal; their union covers the tile seam.
     buffer.Clear();Point a[]{{-.9f,-.9f,-.5f},{.9f,-.9f,-.5f},{.9f,.9f,-.5f}},b[]{{-.9f,-.9f,-.5f},{.9f,.9f,-.5f},{-.9f,.9f,-.5f}};
     Polygon pa,pb;assert(ProjectPolygon(camera,a,3,false,false,pa));assert(ProjectPolygon(camera,b,3,false,false,pb));buffer.Add(pa);buffer.Add(pb);assert(Hidden(buffer,target));
+    // Endpoint/canonical-edge regression across camera angles and neighbouring
+    // representable matrix values, independent of compiler constant folding.
+    for(int angle=0;angle<181;++angle)for(int ulp=-1;ulp<=1;++ulp){
+        float rotated[16];std::copy_n(camera,16,rotated);const float radians=angle*.03491f;
+        float c=std::cos(radians),s=std::sin(radians);
+        if(ulp)c=std::nextafter(c,ulp>0?1.f:-1.f);
+        rotated[0]=rotated[5]=c;rotated[1]=s;rotated[4]=-s;rotated[12]=.08f;
+        buffer.Clear();
+        const Point panels[2][4]{{{-.9f,-.9f,-.5f},{.013f,-.9f,-.5f},{.013f,.9f,-.5f},{-.9f,.9f,-.5f}},
+            {{.013f,-.9f,-.4f},{.9f,-.9f,-.4f},{.9f,.9f,-.4f},{.013f,.9f,-.4f}}};
+        for(const auto& panel:panels){Polygon p;assert(ProjectPolygon(rotated,panel,4,false,false,p));buffer.Add(p);}
+        Rect bounds;assert(ProjectBounds(rotated,{-.22f,.22f,-.15f,.15f,.5f,.5f},bounds));assert(Hidden(buffer,bounds));
+    }
     std::mt19937 random(284);std::uniform_real_distribution<float> coordinate(-.95f,.95f),size(.04f,.6f);
     size_t hidden=0;
     for(int scene=0;scene<80;++scene){

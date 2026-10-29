@@ -53,8 +53,14 @@ class TiledBuffer {
         V a=in.p[in.n-1];double da=plane.At(a);bool keepA=inside?da>=0:da<=0;
         for(size_t i=0;i<in.n;++i){
             const V b=in.p[i];const double db=plane.At(b);const bool keepB=inside?db>=0:db<=0;
-            if(keepA!=keepB){const double denominator=da-db;if(denominator==0){overflow=true;return {};}
-                const double t=da/denominator;append({a.x+t*(b.x-a.x),a.y+t*(b.y-a.y),plane.identity,SharedBoundary(a,b)});}
+            if(keepA!=keepB){
+                // A boundary endpoint is already the exact intersection. In
+                // particular a+(b-a) can round differently from b at t==1.
+                if(da==0)append(OnBoundary(a,plane.identity));
+                else if(db==0)append(OnBoundary(b,plane.identity));
+                else{const double denominator=da-db;if(denominator==0){overflow=true;return {};}
+                    const double t=da/denominator;append({a.x+t*(b.x-a.x),a.y+t*(b.y-a.y),plane.identity,SharedBoundary(a,b)});}
+            }
             if(keepB)append(db==0?OnBoundary(b,plane.identity):b);
             a=b;da=db;keepA=keepB;
         }
