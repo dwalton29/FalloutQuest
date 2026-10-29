@@ -110,6 +110,24 @@ void Synthetic() {
     std::remove(bad.c_str());
     std::cout<<"Synthetic directed XTEL links, owner cells/worlds, flags, unresolved and transactional failure passed\n";
 }
+void ReverseCellDistances() {
+    auto master=Master();Append(master,Record("CELL",0x400));
+    Append(master,Group(0x400,6,Record("REFR",0x105,DoorRef(0x1000,0x102,false))));
+    const auto path=Write(master);fo3xtel::Index index;std::string error;
+    assert(index.Build(path,error));std::remove(path.c_str());
+    for(uint32_t to:{0u,0x200u,0x300u,0x400u,0x999u}) {
+        const auto distances=index.CellDistancesTo(to);
+        for(uint32_t from:{0u,0x200u,0x300u,0x400u,0x999u}) {
+            std::vector<uint32_t> route;const bool reachable=index.CellRoute(from,to,route);
+            const auto found=distances.find(from);
+            assert(reachable==(found!=distances.end()));
+            if(reachable)assert(found->second==route.size());
+        }
+    }
+    assert(index.CellDistancesTo(0x200).at(0x400)==2);
+    assert(!index.CellDistancesTo(0x400).count(0x200));
+    std::cout<<"Reverse CELL distances match forward routes: directed, same-cell, unreachable and zero IDs passed\n";
+}
 void Original(const std::string& esm) {
     fo3xtel::Index index;std::string error;
     assert(index.Build(esm,error)&&error.empty());
@@ -135,7 +153,7 @@ void Original(const std::string& esm) {
 }
 }
 int main(int argc,char** argv) {
-    Synthetic();
+    Synthetic();ReverseCellDistances();
     if(argc>1)Original(argv[1]);
     return 0;
 }

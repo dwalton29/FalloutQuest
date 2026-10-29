@@ -68,7 +68,11 @@ struct RuntimeState {
   double blockedSince=-1,nextPackageEvaluation=0;
   uint64_t packageRevision=UINT64_MAX;
   int packageMinute=-1;
-  uint32_t evaluatedPackage=0;
+  uint32_t evaluatedPackage=0,evaluationOwnerPackage=0;
+  uint32_t evaluatedXtelDoor=0,evaluatedXtelCell=0;
+  uint32_t evaluatedCell=0,evaluatedWorld=0;
+  const void* evaluatedGraph=nullptr;
+  const void* evaluatedPlayer=nullptr;
   std::array<float,3> evaluatedAnchor{};
   float evaluatedRadius=0;
   // Ephemeral route backoff, owned per actor and per package. A failed

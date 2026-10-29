@@ -5,6 +5,7 @@
 static std::unordered_set<std::string> gQ240AiDiagnostics;
 // Frame diagnostics only; the actual topology and algorithm remain pure.
 static uint32_t gQ240PathsPlanned=0,gQ240PathNodesExpanded=0;
+[[maybe_unused]] static uint64_t gQ280PackageEvaluations=0,gQ280DoorGraphBuilds=0,gQ280DoorGoalScans=0,gQ280DoorFloods=0,gQ280DoorCacheHits=0,gQ280CellRouteBuilds=0;
 static void Q240AiLogOnce(uint32_t actor,uint32_t package,const std::string& why) {
   char prefix[40];std::snprintf(prefix,sizeof(prefix),"%08X:%08X:",actor,package);
   const std::string key=std::string(prefix)+why;
@@ -187,6 +188,9 @@ static bool Q240Portal(const Q240NavigationGraph& graph,const Q240Node& from,con
   }
   return false;
 }
+#ifdef FO3_NPC_XTEL_INDEX
+#include "fo3-npc-door-cache.inc"
+#endif
 // Soft local congestion costs. Original topology and fixed destinations remain
 // authoritative; an occupied sole passage still has a route and can yield.
 struct Q240RouteCosts {
@@ -457,6 +461,7 @@ static bool Q240NpcRemoteDoor(const Q230ActorVisual& actor,uint32_t targetCell,
   const auto here=Q240GamePosition(actor);
   struct Candidate {uint32_t ref;size_t legs;float distance;std::array<float,3> point;};
   std::vector<Candidate> candidates;candidates.reserve(doors.size());
+  const auto& distances=Q280CellDistances(index,targetCell);
   for(uint32_t ref:doors){
     const auto* edge=index->Find(ref);
     if(!edge||edge->sourceWorld!=gExteriorWorldspaceQ1890||
@@ -466,10 +471,10 @@ static bool Q240NpcRemoteDoor(const Q230ActorVisual& actor,uint32_t targetCell,
     if(placement==d.targets.end()||(placement->second.flags&0x820u)||
        placement->second.parent||!gPlayerSession->player.CanActorOpenDoor(actor.source.refFormId,ref))
       continue;
-    std::vector<uint32_t> remainder;
-    if(!index->CellRoute(edge->destinationCell,targetCell,remainder))continue;
+    const auto remainder=distances.find(edge->destinationCell);
+    if(remainder==distances.end())continue;
     std::array<float,3> point{placement->second.x,placement->second.y,placement->second.z};
-    candidates.push_back({ref,remainder.size()+1,Q240PlanarDistance(here,point),point});
+    candidates.push_back({ref,remainder->second+1,Q240PlanarDistance(here,point),point});
   }
   // Rank using exactly the previous selection policy before doing NAVM work.
   // Stable ties retain the original iteration order. An inaccessible best door
@@ -486,23 +491,10 @@ static bool Q240NpcRemoteDoor(const Q230ActorVisual& actor,uint32_t targetCell,
   float startDistance=0;const auto start=Q240NearestNode(graph,here,&startDistance);
   const auto startFlat=Q240Flat(graph,start);
   if(!start.Valid()||startDistance>350.f||startFlat>=graph.triangleCount)return false;
-  std::vector<uint8_t> reachable(graph.triangleCount,0);
-  std::vector<Q240Node> frontier{start};reachable[startFlat]=1;
-  for(size_t at=0;at<frontier.size();++at) {
-    const auto current=frontier[at];
-    Q240Neighbors(graph,current,[&](const Q240Node& next){
-      const auto flat=Q240Flat(graph,next);std::array<float,3> portal{};
-      if(flat<reachable.size()&&!reachable[flat]&&Q240Portal(graph,current,next,portal)) {
-        reachable[flat]=1;frontier.push_back(next);
-      }
-    });
-  }
+  auto& topology=Q280DoorGraph(actor.navigationGraph);
   for(const auto& candidate:candidates) {
-    float distance=0;const auto goal=Q240NearestNode(graph,candidate.point,&distance);
-    const auto flat=Q240Flat(graph,goal);
-    if(!goal.Valid()||distance>500.f||flat>=reachable.size()||!reachable[flat])continue;
-    const auto endpoint=Q240GroundPoint(*graph.meshes[goal.mesh],goal.triangle,candidate.point);
-    if(Q240PlanarDistance(endpoint,candidate.point)>96.f)continue;
+    const auto& goal=topology.Goal(graph,candidate.ref,candidate.point);
+    if(!goal.valid||!topology.Reaches(graph,startFlat,goal.flat))continue;
     doorRef=candidate.ref;doorPosition=candidate.point;
     if(nextCell)*nextCell=index->Find(candidate.ref)->destinationCell;
     break;
@@ -601,8 +593,6 @@ static const fo3pipdata::PackageDefinition* Q240SelectPackage(
         // The next authored hop can precede the final PACK location by more
         // than one CELL. Traversal validates that immediate XTEL destination.
         actor.runtime.xtelDoor=door;actor.runtime.xtelCell=nextCell;
-        Q6H_LOGI("NPC XTEL INTENT actor=%08X package=%08X sourceCell=%08X targetCell=%08X door=%08X hour=%.2f",
-          actor.source.refFormId,packageId,gCurrentCellFormId,remote->second.cell,door,hour);
         id=packageId;anchor=approach;radius=0;
         return &package;
       }
@@ -653,6 +643,38 @@ static const fo3pipdata::PackageDefinition* Q240SelectPackage(
     radius=package.type==12&&package.location.type==1?std::numeric_limits<float>::max():float(std::max(0,package.location.radius));id=packageId;return &package;
   }
   return nullptr;
+}
+// One condition/intent evaluation shared by perception and movement. Reading
+// policy must not adopt a package or replace an in-progress door approach.
+static const fo3pipdata::PackageDefinition* Q280EvaluatePackage(Q230ActorVisual& actor,
+    double now,uint32_t& id,std::array<float,3>& anchor,float& radius) {
+  id=0;radius=0;if(!gPlayerSession)return nullptr;
+  auto& state=actor.runtime;
+  const auto revision=gPlayerSession->player.PackageRevision();
+  const int minute=int(fo3tod::WrapHour(GetFo3TimeOfDayHour())*60);
+  if(now>=state.nextPackageEvaluation||state.packageRevision!=revision||state.packageMinute!=minute||
+     state.evaluatedCell!=gCurrentCellFormId||state.evaluatedWorld!=gExteriorWorldspaceQ1890||
+     state.evaluatedGraph!=actor.navigationGraph.get()||state.evaluatedPlayer!=&gPlayerSession->player||
+     (state.evaluationOwnerPackage!=actor.aiPackage&&state.evaluatedPackage!=actor.aiPackage)) {
+    const auto door=state.xtelDoor,cell=state.xtelCell;
+    // The selector's retry checks need current time, but reading policy must
+    // not consume the movement executor's previous-tick timestamp.
+    const double last=actor.aiLastUpdate;actor.aiLastUpdate=now;
+    const auto* package=Q240SelectPackage(actor,id,anchor,radius);actor.aiLastUpdate=last;
+    state.evaluatedXtelDoor=state.xtelDoor;state.evaluatedXtelCell=state.xtelCell;
+    state.xtelDoor=door;state.xtelCell=cell;
+    state.evaluatedPackage=id;state.evaluationOwnerPackage=actor.aiPackage;
+    state.evaluatedAnchor=anchor;state.evaluatedRadius=radius;
+    state.packageRevision=revision;state.packageMinute=minute;
+    state.evaluatedCell=gCurrentCellFormId;state.evaluatedWorld=gExteriorWorldspaceQ1890;
+    state.evaluatedGraph=actor.navigationGraph.get();state.evaluatedPlayer=&gPlayerSession->player;
+    state.nextPackageEvaluation=now+.25;++gQ280PackageEvaluations;
+    return package;
+  }
+  id=state.evaluatedPackage;anchor=state.evaluatedAnchor;radius=state.evaluatedRadius;
+  const auto& definitions=gPlayerSession->player.Definitions().pipboy;
+  const auto found=definitions.packages.find(id);
+  return found==definitions.packages.end()?nullptr:&found->second;
 }
 static void Q240PackageRouteFailed(Q230ActorVisual& actor,double now,const char* reason,double delay=2) {
   actor.runtime.furniture.Clear();
@@ -1419,18 +1441,12 @@ static void Q240AdvanceNpcPackage(Q230ActorVisual& actor,double now) {
   actor.aiLastUpdate=now;
   uint32_t packageId=0;std::array<float,3> anchor{};float radius=0;
   auto& state=actor.runtime;
-  const auto revision=gPlayerSession->player.PackageRevision();
-  const int minute=int(fo3tod::WrapHour(GetFo3TimeOfDayHour())*60);
-  const fo3pipdata::PackageDefinition* package=nullptr;
-  if(now>=state.nextPackageEvaluation||state.packageRevision!=revision||state.packageMinute!=minute||state.evaluatedPackage!=actor.aiPackage) {
-    package=Q240SelectPackage(actor,packageId,anchor,radius);
-    state.evaluatedPackage=packageId;state.evaluatedAnchor=anchor;state.evaluatedRadius=radius;
-    state.packageRevision=revision;state.packageMinute=minute;state.nextPackageEvaluation=now+.25;
-  } else if(state.evaluatedPackage) {
-    const auto& definitions=gPlayerSession->player.Definitions().pipboy;
-    const auto found=definitions.packages.find(state.evaluatedPackage);
-    if(found!=definitions.packages.end()){package=&found->second;packageId=found->first;anchor=state.evaluatedAnchor;radius=state.evaluatedRadius;}
-  }
+  const auto* package=Q280EvaluatePackage(actor,now,packageId,anchor,radius);
+  const auto previousDoor=state.xtelDoor;
+  state.xtelDoor=state.evaluatedXtelDoor;state.xtelCell=state.evaluatedXtelCell;
+  if(state.xtelDoor&&(previousDoor!=state.xtelDoor||actor.aiPackage!=packageId))
+    Q6H_LOGI("NPC XTEL INTENT actor=%08X package=%08X sourceCell=%08X nextCell=%08X door=%08X",
+      actor.source.refFormId,packageId,gCurrentCellFormId,state.xtelCell,state.xtelDoor);
   // Actor targets remain live between condition scans, including death/unload.
   if(package&&(package->type==1||package->type==7||package->type==10)&&!Q240PackageActorTarget(actor,package->target.value,anchor)) {
     state.nextPackageEvaluation=0;state.procedure=fo3npc::Procedure::InvalidTarget;package=nullptr;

@@ -321,7 +321,7 @@ int main(int argc,char** argv){
   Prepare();auto& policyActor=gQ230NpcActors.front();policyActor.runtime.EndDialogue();
   policyActor.runtime.xtelDoor=0xabc;policyActor.runtime.xtelCell=0xdef;
   uint32_t policyId=0;std::array<float,3> policyAnchor{};
-  (void)Q230PerceptionPackage(policyActor,policyId,policyAnchor);
+  (void)Q230PerceptionPackage(policyActor,policyId,policyAnchor,1);
   assert(policyActor.runtime.xtelDoor==0xabc&&policyActor.runtime.xtelCell==0xdef);
   PackageCombatPolicyTests();if(argc>1)OriginalCombatPolicies(argv[1]);
   std::cout<<"Production NPC combat pursuit/flee, LOS, reload, firing, death and restore passed\n";

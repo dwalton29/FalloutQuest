@@ -197,6 +197,25 @@ const std::vector<uint32_t>* Index::Outgoing(uint32_t cell) const {
     const auto it=byCell_.find(cell);
     return it==byCell_.end()?nullptr:&it->second;
 }
+std::unordered_map<uint32_t,size_t> Index::CellDistancesTo(uint32_t to) const {
+    std::unordered_map<uint32_t,size_t> distances;
+    if(!to)return distances;
+    std::unordered_map<uint32_t,std::vector<uint32_t>> incoming;
+    for(const auto& entry:links_) {
+        const auto& edge=entry.second;
+        if(edge.sourceCell&&edge.destinationCell)
+            incoming[edge.destinationCell].push_back(edge.sourceCell);
+    }
+    std::queue<uint32_t> open;open.push(to);distances.emplace(to,0);
+    while(!open.empty()) {
+        const auto cell=open.front();open.pop();
+        const auto found=incoming.find(cell);if(found==incoming.end())continue;
+        const auto next=distances.at(cell)+1;
+        for(uint32_t source:found->second)
+            if(distances.emplace(source,next).second)open.push(source);
+    }
+    return distances;
+}
 bool Index::CellRoute(uint32_t from,uint32_t to,std::vector<uint32_t>& doors) const {
     doors.clear();
     if(!from||!to)return false;

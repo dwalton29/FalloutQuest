@@ -12949,6 +12949,8 @@ void QActorPrepareStereoFrame() {
     const double npcNow=std::chrono::duration<double>(Fo3GameplayNow().time_since_epoch()).count();
     const uint32_t pathQueriesBefore=gQ240PathsPlanned;
     const uint32_t pathExpandedBefore=gQ240PathNodesExpanded;
+    const auto evaluationsBefore=gQ280PackageEvaluations,doorBuildsBefore=gQ280DoorGraphBuilds,
+      doorScansBefore=gQ280DoorGoalScans,doorFloodsBefore=gQ280DoorFloods,doorHitsBefore=gQ280DoorCacheHits,cellRoutesBefore=gQ280CellRouteBuilds;
     double npcAiUs=0.;
     double npcSimulationUs=0.,npcPersistenceUs=0.;
     for(auto& actor:gQ230NpcActors) {
@@ -13017,9 +13019,15 @@ void QActorPrepareStereoFrame() {
     }
     // Separates AI route spikes from actor skinning, uploads and GPU draw.
     if(gStereoFrame%60==0||(npcPaths>=4&&npcAiUs>2000.))
-        Q6H_LOGI("NPC AI PERF frame=%llu residents=%zu packageUs=%.0f paths=%u expanded=%u simulationUs=%.0f persistenceUs=%.0f unloadedUs=%.0f arrivalsUs=%.0f",
+        Q6H_LOGI("NPC AI PERF frame=%llu residents=%zu packageUs=%.0f paths=%u expanded=%u simulationUs=%.0f persistenceUs=%.0f unloadedUs=%.0f arrivalsUs=%.0f packageEvaluations=%llu doorGraphBuilds=%llu doorGoalScans=%llu doorFloods=%llu doorCacheHits=%llu cellRouteBuilds=%llu",
             (unsigned long long)gStereoFrame,gQ230NpcActors.size(),npcAiUs,
-            unsigned(npcPaths),unsigned(npcExpanded),npcSimulationUs,npcPersistenceUs,unloadedUs,arrivalsUs);
+            unsigned(npcPaths),unsigned(npcExpanded),npcSimulationUs,npcPersistenceUs,unloadedUs,arrivalsUs,
+            (unsigned long long)(gQ280PackageEvaluations-evaluationsBefore),
+            (unsigned long long)(gQ280DoorGraphBuilds-doorBuildsBefore),
+            (unsigned long long)(gQ280DoorGoalScans-doorScansBefore),
+            (unsigned long long)(gQ280DoorFloods-doorFloodsBefore),
+            (unsigned long long)(gQ280DoorCacheHits-doorHitsBefore),
+            (unsigned long long)(gQ280CellRouteBuilds-cellRoutesBefore));
     PrepareFo3InteriorSceneLights();
     fqactor::framePrep.Add(fqopaque::Micros(started));
     if(gStereoFrame%60==0) Q6H_LOGI("ACTOR FRAME PREP frame=%llu playerPoseUs=%.1f fingersUs=%.1f playerBoneUs=%.1f playerSkinCpuUs=%.1f playerDirectionsUs=%.1f npcClipUs=%.1f npcPoseUs=%.1f npcBoneUs=%.1f npcSkinCpuUs=%.1f npcDirectionsUs=%.1f animatedUploadCpuUs=%.1f totalActorPrepUs=%.1f setupUs=%.1f animatedVertexUploadBytes=%llu animatedVboUploads=%llu bonePaletteUploadBytes=%llu playerParts=%llu npcParts=%llu actors=%llu cpuReference=%d",

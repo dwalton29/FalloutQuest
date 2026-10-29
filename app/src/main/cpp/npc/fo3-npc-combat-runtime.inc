@@ -108,15 +108,10 @@ static const fo3pipdata::PackageDefinition* Q230CurrentPackage(const Q230ActorVi
   const uint32_t id=actor.aiPackage?actor.aiPackage:actor.runtime.package;
   const auto found=packages.find(id);return found==packages.end()?nullptr:&found->second;
 }
-static const fo3pipdata::PackageDefinition* Q230PerceptionPackage(Q230ActorVisual& actor,uint32_t& id,std::array<float,3>& anchor) {
+static const fo3pipdata::PackageDefinition* Q230PerceptionPackage(Q230ActorVisual& actor,uint32_t& id,std::array<float,3>& anchor,double now) {
   if(actor.runtime.dialogue||actor.runtime.activity==fo3npc::Activity::Combat){id=actor.aiPackage?actor.aiPackage:actor.runtime.package;return Q230CurrentPackage(actor);}
-  // Perception is a read of policy, not adoption of another movement intent.
-  // Package selection also resolves XTEL; retain the active movement intent
-  // until the package executor evaluates/adopts its own selected package.
-  const auto door=actor.runtime.xtelDoor,cell=actor.runtime.xtelCell;
-  float radius=0;const auto* policy=Q240SelectPackage(actor,id,anchor,radius);
-  actor.runtime.xtelDoor=door;actor.runtime.xtelCell=cell;
-  return policy;
+  float radius=0;
+  return Q280EvaluatePackage(actor,now,id,anchor,radius);
 }
 static const fo3weapon::Definitions::CombatStyle* Q230Style(const Q230ActorVisual& actor) {
   const auto& c=gPlayerSession->player.Definitions();const auto* package=Q230CurrentPackage(actor);
@@ -380,7 +375,7 @@ static void Q230SimulateActor(Q230ActorVisual& actor,double now) {
   if(now>=s.nextThink){
     s.nextThink=now+.25;
     uint32_t policyId=0;std::array<float,3> policyAnchor{};
-    const auto* policy=Q230PerceptionPackage(actor,policyId,policyAnchor);
+    const auto* policy=Q230PerceptionPackage(actor,policyId,policyAnchor,now);
     const bool defensive=fo3npc::Defensive(policy);
     uint32_t acquire=0;std::array<float,3> point{};uint32_t base=0;
     const auto saved=p.Snapshot().actors.find(actor.source.refFormId);

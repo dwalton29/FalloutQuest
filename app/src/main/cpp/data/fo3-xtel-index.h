@@ -39,6 +39,9 @@ public:
     // proves graph connectivity only, not that the NPC can use those doors.
     bool CellRoute(uint32_t fromCell,uint32_t toCell,
                    std::vector<uint32_t>& sourceDoorRefs) const;
+    // Same directed, unweighted connectivity as CellRoute. One reverse BFS
+    // answers shortest leg counts for every possible start CELL.
+    std::unordered_map<uint32_t,size_t> CellDistancesTo(uint32_t toCell) const;
     const Statistics& Stats() const {return stats_;}
     size_t Size() const {return links_.size();}
 private:
