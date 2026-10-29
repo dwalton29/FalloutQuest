@@ -1,11 +1,12 @@
-// The original complete image is preserved. A second projection layer carries
-// pixels changed by transparent world materials/water/UI; only the opaque
-// projection receives frame-synthesis metadata. Both use the original film.
+// Every world material shares the primary projection and synthesis metadata.
+// A second native projection carries only the original UI colour difference.
+// Both use the original film and preserve the completed frame's appearance.
 bool independentBlendAvailable=false,splitFrame=false,compositionPresented=false;
 VkRenderPass splitPass{},splitResumePass{},compositionPass{};
 VkFramebuffer splitFramebuffer{};
-Image splitColour,splitDepth;
-VkShaderModule splitModules[5]{},compositionModule{};
+Image splitColour,worldDepthSnapshot;
+bool worldDepthReady=false,worldDepthInitialized=false,lateWorldDepthWrite=false;
+VkShaderModule splitModules[6]{},compositionModule{};
 VkPipeline compositionPipeline{};
 XrSwapchain compositionChain=XR_NULL_HANDLE;
 std::vector<VkImageView> compositionViews;
@@ -51,7 +52,7 @@ void DestroyComposition() {
     splitPass={};
     if(splitResumePass)vkDestroyRenderPass(device,splitResumePass,nullptr);
     splitResumePass={};
-    Destroy(splitColour);Destroy(splitDepth);
+    Destroy(splitColour);Destroy(worldDepthSnapshot);worldDepthReady=worldDepthInitialized=false;
     for(auto& module:splitModules){if(module)vkDestroyShaderModule(device,module,nullptr);module={};}
     if(compositionModule)vkDestroyShaderModule(device,compositionModule,nullptr);
     compositionModule={};
@@ -90,28 +91,43 @@ void CreateCompositionSwapchain() {
 }
 void CreateComposition() {
     if(!independentBlendAvailable)throw std::runtime_error("independent attachment writes unavailable");
-    VkFormatProperties format{};vkGetPhysicalDeviceFormatProperties(physical,VK_FORMAT_R32_SFLOAT,&format);
-    if((format.optimalTilingFeatures&(VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT|VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT))!=(VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT|VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT))throw std::runtime_error("opaque depth colour target unavailable");
     splitColour=MakeImage(width,height,VK_FORMAT_R16G16B16A16_SFLOAT,VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT|VK_IMAGE_USAGE_SAMPLED_BIT,VK_IMAGE_ASPECT_COLOR_BIT);
-    splitDepth=MakeImage(width,height,VK_FORMAT_R32_SFLOAT,VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT|VK_IMAGE_USAGE_SAMPLED_BIT,VK_IMAGE_ASPECT_COLOR_BIT);
-    std::array<VkAttachmentDescription,4> a{};
-    a[0].format=a[2].format=VK_FORMAT_R16G16B16A16_SFLOAT;a[1].format=VK_FORMAT_D32_SFLOAT;a[3].format=VK_FORMAT_R32_SFLOAT;
-    for(unsigned i=0;i<4;++i){a[i].samples=VK_SAMPLE_COUNT_1_BIT;a[i].loadOp=VK_ATTACHMENT_LOAD_OP_CLEAR;a[i].storeOp=VK_ATTACHMENT_STORE_OP_STORE;a[i].stencilLoadOp=VK_ATTACHMENT_LOAD_OP_DONT_CARE;a[i].stencilStoreOp=VK_ATTACHMENT_STORE_OP_DONT_CARE;a[i].initialLayout=VK_IMAGE_LAYOUT_UNDEFINED;a[i].finalLayout=i==1?VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL:VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;}
-    const VkAttachmentReference refs[]{{0,a[0].finalLayout},{2,a[2].finalLayout},{3,a[3].finalLayout}},d{1,a[1].finalLayout};
-    VkSubpassDescription sub{};sub.pipelineBindPoint=VK_PIPELINE_BIND_POINT_GRAPHICS;sub.colorAttachmentCount=3;sub.pColorAttachments=refs;sub.pDepthStencilAttachment=&d;
+    std::array<VkAttachmentDescription,3> a{};
+    a[0].format=a[2].format=VK_FORMAT_R16G16B16A16_SFLOAT;a[1].format=VK_FORMAT_D32_SFLOAT;
+    for(unsigned i=0;i<3;++i){a[i].samples=VK_SAMPLE_COUNT_1_BIT;a[i].loadOp=VK_ATTACHMENT_LOAD_OP_CLEAR;a[i].storeOp=VK_ATTACHMENT_STORE_OP_STORE;a[i].stencilLoadOp=VK_ATTACHMENT_LOAD_OP_DONT_CARE;a[i].stencilStoreOp=VK_ATTACHMENT_STORE_OP_DONT_CARE;a[i].initialLayout=VK_IMAGE_LAYOUT_UNDEFINED;a[i].finalLayout=i==1?VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL:VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;}
+    const VkAttachmentReference refs[]{{0,a[0].finalLayout},{2,a[2].finalLayout}},d{1,a[1].finalLayout};
+    VkSubpassDescription sub{};sub.pipelineBindPoint=VK_PIPELINE_BIND_POINT_GRAPHICS;sub.colorAttachmentCount=2;sub.pColorAttachments=refs;sub.pDepthStencilAttachment=&d;
     const uint32_t mask=3;VkRenderPassMultiviewCreateInfo mv{VK_STRUCTURE_TYPE_RENDER_PASS_MULTIVIEW_CREATE_INFO};mv.subpassCount=1;mv.pViewMasks=&mask;mv.correlationMaskCount=1;mv.pCorrelationMasks=&mask;
     VkSubpassDependency dep{};dep.srcSubpass=VK_SUBPASS_EXTERNAL;dep.dstSubpass=0;dep.srcStageMask=dep.dstStageMask=VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT|VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT|VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;dep.srcAccessMask=VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT|VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;dep.dstAccessMask=VK_ACCESS_COLOR_ATTACHMENT_READ_BIT|VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT|VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT|VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-    VkRenderPassCreateInfo pi{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};pi.pNext=&mv;pi.attachmentCount=4;pi.pAttachments=a.data();pi.subpassCount=1;pi.pSubpasses=&sub;pi.dependencyCount=1;pi.pDependencies=&dep;
-    Check(vkCreateRenderPass(device,&pi,nullptr,&splitPass),"opaque sidecar render pass");
+    VkRenderPassCreateInfo pi{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};pi.pNext=&mv;pi.attachmentCount=3;pi.pAttachments=a.data();pi.subpassCount=1;pi.pSubpasses=&sub;pi.dependencyCount=1;pi.pDependencies=&dep;
+    Check(vkCreateRenderPass(device,&pi,nullptr,&splitPass),"world colour sidecar render pass");
     for(auto& attachment:a){attachment.loadOp=VK_ATTACHMENT_LOAD_OP_LOAD;attachment.initialLayout=attachment.finalLayout;}
-    Check(vkCreateRenderPass(device,&pi,nullptr,&splitResumePass),"opaque sidecar continuation");
-    const VkImageView views[]{color.view,depth.view,splitColour.view,splitDepth.view};VkFramebufferCreateInfo fi{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};fi.renderPass=splitPass;fi.attachmentCount=4;fi.pAttachments=views;fi.width=width;fi.height=height;fi.layers=1;
-    Check(vkCreateFramebuffer(device,&fi,nullptr,&splitFramebuffer),"opaque sidecar framebuffer");
-    const uint32_t* code[]{shaders::world_split_frag,shaders::terrain_split_frag,shaders::sky_split_frag,shaders::world_solid_split_frag,shaders::terrain_solid_split_frag,shaders::composition_split_frag};
-    const size_t bytes[]{sizeof(shaders::world_split_frag),sizeof(shaders::terrain_split_frag),sizeof(shaders::sky_split_frag),sizeof(shaders::world_solid_split_frag),sizeof(shaders::terrain_solid_split_frag),sizeof(shaders::composition_split_frag)};
-    for(unsigned i=0;i<6;++i){VkShaderModuleCreateInfo mi{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};mi.pCode=code[i];mi.codeSize=bytes[i];Check(vkCreateShaderModule(device,&mi,nullptr,i<5?&splitModules[i]:&compositionModule),"sidecar shader");}
+    Check(vkCreateRenderPass(device,&pi,nullptr,&splitResumePass),"world colour sidecar continuation");
+    const VkImageView views[]{color.view,depth.view,splitColour.view};VkFramebufferCreateInfo fi{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};fi.renderPass=splitPass;fi.attachmentCount=3;fi.pAttachments=views;fi.width=width;fi.height=height;fi.layers=1;
+    Check(vkCreateFramebuffer(device,&fi,nullptr,&splitFramebuffer),"world colour sidecar framebuffer");
+    const uint32_t* code[]{shaders::world_split_frag,shaders::terrain_split_frag,shaders::sky_split_frag,shaders::world_solid_split_frag,shaders::terrain_solid_split_frag,shaders::water_split_frag,shaders::composition_split_frag};
+    const size_t bytes[]{sizeof(shaders::world_split_frag),sizeof(shaders::terrain_split_frag),sizeof(shaders::sky_split_frag),sizeof(shaders::world_solid_split_frag),sizeof(shaders::terrain_solid_split_frag),sizeof(shaders::water_split_frag),sizeof(shaders::composition_split_frag)};
+    for(unsigned i=0;i<7;++i){VkShaderModuleCreateInfo mi{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};mi.pCode=code[i];mi.codeSize=bytes[i];Check(vkCreateShaderModule(device,&mi,nullptr,i<6?&splitModules[i]:&compositionModule),"sidecar shader");}
     CreateDensityPasses(true);
     CreateCompositionSwapchain();
+}
+// Snapshot fixed-function world depth before UI can modify the main target.
+// Depth is independent of coarse colour fragment invocation locations.
+void RetainWorldDepth(){
+    if(!splitFrame||worldDepthReady)return;
+    if(passOpen)EndPass();
+    if(!worldDepthSnapshot.image)worldDepthSnapshot=MakeImage(width,height,VK_FORMAT_D32_SFLOAT,VK_IMAGE_USAGE_TRANSFER_DST_BIT|VK_IMAGE_USAGE_SAMPLED_BIT,VK_IMAGE_ASPECT_DEPTH_BIT);
+    Phase(DepthCopy);
+    std::array<VkImageMemoryBarrier,2> barriers{};
+    for(auto& b:barriers){b.sType=VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;b.srcQueueFamilyIndex=b.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;b.subresourceRange={VK_IMAGE_ASPECT_DEPTH_BIT,0,1,0,2};}
+    auto& src=barriers[0];src.image=depth.image;src.oldLayout=VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;src.newLayout=VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;src.srcAccessMask=VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;src.dstAccessMask=VK_ACCESS_TRANSFER_READ_BIT;
+    auto& dst=barriers[1];dst.image=worldDepthSnapshot.image;dst.oldLayout=worldDepthInitialized?VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:VK_IMAGE_LAYOUT_UNDEFINED;dst.newLayout=VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;dst.srcAccessMask=worldDepthInitialized?VK_ACCESS_SHADER_READ_BIT:0;dst.dstAccessMask=VK_ACCESS_TRANSFER_WRITE_BIT;
+    vkCmdPipelineBarrier(command,VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT|VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT|VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,0,0,nullptr,0,nullptr,2,barriers.data());
+    VkImageCopy copy{};copy.srcSubresource=copy.dstSubresource={VK_IMAGE_ASPECT_DEPTH_BIT,0,0,2};copy.extent={width,height,1};vkCmdCopyImage(command,src.image,src.newLayout,dst.image,dst.newLayout,1,&copy);
+    src.oldLayout=src.newLayout;src.newLayout=VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;src.srcAccessMask=VK_ACCESS_TRANSFER_READ_BIT;src.dstAccessMask=VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT|VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    dst.oldLayout=dst.newLayout;dst.newLayout=VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;dst.srcAccessMask=VK_ACCESS_TRANSFER_WRITE_BIT;dst.dstAccessMask=VK_ACCESS_SHADER_READ_BIT;
+    vkCmdPipelineBarrier(command,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT|VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT|VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,0,0,nullptr,0,nullptr,2,barriers.data());
+    worldDepthReady=worldDepthInitialized=true;
 }
 void AcquireComposition() {
     XrSwapchainImageAcquireInfo ai{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};CheckXr(Proc<PFN_xrAcquireSwapchainImage>(xrInstance,"xrAcquireSwapchainImage")(compositionChain,&ai,&compositionIndex),"acquire effects layer");

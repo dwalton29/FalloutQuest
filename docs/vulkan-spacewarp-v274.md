@@ -1,5 +1,7 @@
 # Vulkan SpaceWarp composition — v274
 
+The world-layer/depth/reprojection path is superseded by [the v276 stability repair](spacewarp-stability-v276.md).
+
 ## Fault reproduced from v273
 
 The supplied headset log had native producer/resources ready but synthesisAttached=0 at every status sample and motionMs=0 throughout. Normal gameplay reported coverage reasons 0x14 (transparency/UI) and 0x1c (transparency/water/UI), even after history reached two frames. Those guards stopped the entire producer. Automatic PTWFromStereo was not evidence of application SpaceWarp.

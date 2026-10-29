@@ -7,19 +7,19 @@ layout(location=0) out vec2 uv;
 void main(){vec2 p=vec2(float((gl_VertexIndex<<1)&2),float(gl_VertexIndex&2));uv=p;gl_Position=vec4(p*2-1,0,1);}
 )FQMV";
 inline constexpr const char* static_frag=R"FQMV(#version 450
-layout(std140,set=0,binding=0) uniform Motion {mat4 currentVP;mat4 previousVP;mat4 inverseCurrent;mat4 model;mat4 previousModel;vec4 scaleEye;vec4 flags;vec4 target;};
+layout(std140,set=0,binding=0) uniform Motion {mat4 currentVP;mat4 previousVP;mat4 clipReprojection;mat4 model;mat4 previousModel;vec4 scaleEye;vec4 flags;vec4 target;};
 layout(set=0,binding=2) uniform sampler2DArray sceneDepth;
 layout(location=0) in vec2 uv;
 layout(location=0) out vec4 velocity;
 void main(){
  float d=texture(sceneDepth,vec3(uv,scaleEye.w)).r;gl_FragDepth=d;
  vec4 current=vec4(uv.x*2-1,1-uv.y*2,d*2-1,1);
- vec4 previous=previousVP*(inverseCurrent*current);velocity=vec4(0);
+ vec4 previous=clipReprojection*current;velocity=vec4(0);
  if(d<1&&previous.w>0.000001)velocity.xyz=(current.xyz-previous.xyz/previous.w)*scaleEye.xyz;
 }
 )FQMV";
 inline constexpr const char* dynamic_vert=R"FQMV(#version 450
-layout(std140,set=0,binding=0) uniform Motion {mat4 currentVP;mat4 previousVP;mat4 inverseCurrent;mat4 model;mat4 previousModel;vec4 scaleEye;vec4 flags;vec4 target;};
+layout(std140,set=0,binding=0) uniform Motion {mat4 currentVP;mat4 previousVP;mat4 clipReprojection;mat4 model;mat4 previousModel;vec4 scaleEye;vec4 flags;vec4 target;};
 layout(set=0,binding=4) uniform sampler2D palette;
 layout(set=0,binding=5) uniform sampler2D previousPalette;
 layout(location=0) in vec3 position;
@@ -42,14 +42,14 @@ vec3 skin(sampler2D p,vec3 v){
  return (m*vec4(v,1)).xyz;
 }
 void main(){
- currentClip=currentVP*model*vec4(skin(palette,position),1);
- previousClip=previousVP*previousModel*vec4(skin(previousPalette,previousPosition),1);
+ currentClip=currentVP*(model*vec4(skin(palette,position),1));
+ previousClip=previousVP*(previousModel*vec4(skin(previousPalette,previousPosition),1));
  gl_Position=vec4(currentClip.x,-currentClip.y,(currentClip.z+currentClip.w)*.5,currentClip.w);
  uv=texcoord;vertexAlpha=colour.a;
 }
 )FQMV";
 inline constexpr const char* dynamic_frag=R"FQMV(#version 450
-layout(std140,set=0,binding=0) uniform Motion {mat4 currentVP;mat4 previousVP;mat4 inverseCurrent;mat4 model;mat4 previousModel;vec4 scaleEye;vec4 flags;vec4 target;};
+layout(std140,set=0,binding=0) uniform Motion {mat4 currentVP;mat4 previousVP;mat4 clipReprojection;mat4 model;mat4 previousModel;vec4 scaleEye;vec4 flags;vec4 target;};
 layout(set=0,binding=2) uniform sampler2DArray sceneDepth;
 layout(set=0,binding=3) uniform sampler2D diffuse;
 layout(location=0) in vec4 currentClip;

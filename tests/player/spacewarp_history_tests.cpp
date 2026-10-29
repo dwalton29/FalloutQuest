@@ -8,11 +8,12 @@ using namespace fqspacewarp;
 Frame Input(uint64_t serial){Frame f;f.serial=serial;f.displayTime=int64_t(serial)*13888889;f.scene=10;f.world=0x3c;f.sceneReady=f.focused=true;return f;}
 void Submit(History& h,const Frame& f){assert(h.Begin(f));h.EyeRendered(0);h.EyeRendered(1);assert(h.Finish(true));}
 int main(){
+ Matrix reproject;auto unchanged=fqskin::Identity();unchanged[12]=157.12f;unchanged[13]=-31.88f;assert(ClipReprojection(unchanged,unchanged,reproject)&&reproject==fqskin::Identity());
  Matrix inverse;auto translated=fqskin::Identity();translated[12]=.2f;
  assert(Inverse(translated,inverse));auto world=Transform(inverse,{.2f,0,0,1});assert(std::abs(world[0])<1e-6f);
  std::array<float,3> velocity{};assert(StaticMotion(fqskin::Identity(),fqskin::Identity(),.3f,.4f,.5f,{1,1,1},velocity));assert((velocity==std::array<float,3>{}));
  assert(StaticMotion(inverse,fqskin::Identity(),.5f,.5f,.5f,{1,1,1},velocity));assert(std::abs(velocity[0]-.2f)<1e-6f);
- assert(!StaticMotion(inverse,fqskin::Identity(),.5f,.5f,1,{1,1,1},velocity));Matrix singular{};assert(!Inverse(singular,inverse));
+ assert(!StaticMotion(inverse,fqskin::Identity(),.5f,.5f,1,{1,1,1},velocity));Matrix singular{};assert(!Inverse(singular,inverse));assert(!ClipReprojection(singular,fqskin::Identity(),reproject));assert(!ClipReprojection(singular,singular,reproject));assert(ClipReprojection(translated,fqskin::Identity(),reproject)&&std::abs(reproject[12]+.2f)<1e-6f);
  History h;auto frame=Input(1);assert(Eligible(frame));
  for(uint32_t world:{0u,0xa74u,0x3cu}){auto other=frame;other.world=world;assert(Eligible(other));}
  assert(SelectMode("")==Mode::Synthesis&&SelectMode(nullptr)==Mode::Synthesis&&SelectMode("on")==Mode::Synthesis);

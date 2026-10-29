@@ -16,6 +16,22 @@ inline bool Inverse(const Matrix& m,Matrix& out){
   if(!Finite(candidate))return false;
   out=candidate;return true;
 }
+// Compose previousVP * inverse(currentVP) before uploading to the GPU.
+// Keep inversion/product in double: reconstructing a large float world position
+// and projecting it again introduces camera-dependent cancellation jitter.
+inline bool ClipReprojection(const Matrix& current,const Matrix& previous,Matrix& out){
+  if(!Finite(current)||!Finite(previous))return false;
+  double a[4][8]{};for(unsigned r=0;r<4;++r){for(unsigned c=0;c<4;++c)a[r][c]=current[c*4+r];a[r][r+4]=1;}
+  for(unsigned c=0;c<4;++c){unsigned pivot=c;for(unsigned r=c+1;r<4;++r)if(std::abs(a[r][c])>std::abs(a[pivot][c]))pivot=r;
+    if(std::abs(a[pivot][c])<1e-12)return false;
+    for(unsigned j=0;j<8;++j)std::swap(a[c][j],a[pivot][j]);
+    const double scale=a[c][c];for(double& v:a[c])v/=scale;
+    for(unsigned r=0;r<4;++r)if(r!=c){const double factor=a[r][c];for(unsigned j=0;j<8;++j)a[r][j]-=factor*a[c][j];}}
+  if(current==previous){out=fqskin::Identity();return true;}
+  Matrix candidate{};for(unsigned c=0;c<4;++c)for(unsigned r=0;r<4;++r){double value=0;for(unsigned k=0;k<4;++k)value+=double(previous[k*4+r])*a[k][c+4];candidate[c*4+r]=float(value);}
+  if(!Finite(candidate))return false;
+  out=candidate;return true;
+}
 // GL depth is [0,1]; its source clip coordinates are [-1,1]. Scale is an
 // explicit backend/API contract (including EXT's depth-range/Y convention).
 inline bool StaticMotion(const Matrix& inverseCurrent,const Matrix& previous,

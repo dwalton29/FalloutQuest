@@ -84,7 +84,7 @@ class VulkanShaders(unittest.TestCase):
                 if shutil.which('spirv-dis'):
                     dis=subprocess.check_output(['spirv-dis',str(out/f'{name}_solid.frag.spv')],text=True)
                     self.assertNotIn('OpKill',dis)
-            for name,vertex in [('world_split','world'),('world_solid_split','world'),('terrain_split','terrain'),('terrain_solid_split','terrain'),('sky_split','sky'),('composition_split','post')]:
+            for name,vertex in [('world_split','world'),('world_solid_split','world'),('terrain_split','terrain'),('terrain_solid_split','terrain'),('sky_split','sky'),('water_split','water'),('composition_split','post')]:
                 file=out/f'{name}.frag.spv'
                 if shutil.which('spirv-val'):
                     subprocess.run(['spirv-val','--target-env','vulkan1.1',str(file)],check=True)

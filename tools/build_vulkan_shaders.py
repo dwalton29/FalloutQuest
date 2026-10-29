@@ -206,13 +206,13 @@ def build(output,compiler):
         cpp.append(f'inline constexpr uint32_t motion_{name}[]={{'+','.join(hex(x) for x in words)+'};')
     # Additional outputs reuse the original material/film math verbatim.
     variants={}
-    for name in ('world','terrain','sky'):
+    for name in ('world','terrain','sky','water'):
         original=port(sources()[name],name)[0][1]
-        for solid in ((False,True) if name!='sky' else (False,)):
+        for solid in ((False,True) if name in ('world','terrain') else (False,)):
             text=no_discard_fragment(original,name) if solid else original
             colour=re.search(r'layout\(location=0\) out vec4 (\w+)',text)[1]
             text=text.replace('void main()', 'void fqOriginalMain()',1)
-            variants[name+('_solid' if solid else '')+'_split']=text+f'\nlayout(location=1) out vec4 fqOpaque;layout(location=2) out float fqOpaqueDepth;void main(){{fqOriginalMain();fqOpaque={colour};fqOpaqueDepth=gl_FragCoord.z;}}'
+            variants[name+('_solid' if solid else '')+'_split']=text+f'\nlayout(location=1) out vec4 fqOpaque;void main(){{fqOriginalMain();fqOpaque={colour};}}'
     text=port(sources()['post'],'post')[0][1]
     colour=re.search(r'layout\(location=0\) out vec4 (\w+)',text)[1]
     uv=re.search(r'layout\(location=0\) in vec2 (\w+)',text)[1]
@@ -224,7 +224,9 @@ vec3 fqSrgb(vec3 c){{c=clamp(c,0.0,1.0);return mix(12.92*c,1.055*pow(c,vec3(1.0/
 void main(){{fqOriginalMain();
  vec3 base=vec3(unpackHalf2x16(packHalf2x16({colour}.rg)),unpackHalf2x16(packHalf2x16({colour}.bb)).x);
  vec3 full=texture(fqFullFinal,vec3({uv},float(gl_ViewIndex))).rgb;
- bool changed=fqCompactFilm?any(greaterThan(abs(floor(fqSrgb(full)*255.0+0.5)-floor(fqSrgb(base)*255.0+0.5)),vec3(1))):any(notEqual(full,base));
+ vec3 fullCode=floor((fqCompactFilm?fqSrgb(full):clamp(full,0.0,1.0))*255.0+0.5);
+ vec3 baseCode=floor((fqCompactFilm?fqSrgb(base):clamp(base,0.0,1.0))*255.0+0.5);
+ bool changed=any(greaterThan(abs(fullCode-baseCode),vec3(1)));
  {colour}=vec4(base,1);fqNativeOverlay=changed?vec4(full,1):vec4(0);
 }}'''
     for name,text in variants.items():

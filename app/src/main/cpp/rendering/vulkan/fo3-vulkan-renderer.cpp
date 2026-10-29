@@ -66,17 +66,17 @@ void ConfigureDiscardGuards(ProgramData& p,const shaders::Program& shader) {
 struct PipelineKey {
     uint32_t ui=0;bool strip=false,offscreen=false,swapchain=false,noDiscard=false,modal=false;
     uint32_t lighting=0;bool noLocal=false,noEnvironment=false,foveated=false;
-    bool split=false,baseOpaque=false,offset=false,water=false,sky=false,skinned=false,instanced=false,terrain=false,depth=true,write=true,blend=false,cull=false,clockwise=false;
+    bool split=false,offset=false,water=false,sky=false,skinned=false,instanced=false,terrain=false,depth=true,write=true,blend=false,cull=false,clockwise=false;
     uint32_t cullFace=GL_BACK,equation=GL_FUNC_ADD,equationA=GL_FUNC_ADD,stride=0,depthFunc=GL_LEQUAL,src=GL_ONE,dst=GL_ZERO,srcA=GL_ONE,dstA=GL_ZERO;
     bool operator==(const PipelineKey& k)const {
-        return lighting==k.lighting&&noLocal==k.noLocal&&noEnvironment==k.noEnvironment&&foveated==k.foveated&&baseOpaque==k.baseOpaque&&split==k.split&&modal==k.modal&&noDiscard==k.noDiscard&&swapchain==k.swapchain&&offscreen==k.offscreen&&strip==k.strip&&ui==k.ui&&water==k.water&&offset==k.offset&&cullFace==k.cullFace&&equation==k.equation&&equationA==k.equationA&&sky==k.sky && skinned==k.skinned && instanced==k.instanced && terrain==k.terrain && depth==k.depth && write==k.write && blend==k.blend &&
+        return lighting==k.lighting&&noLocal==k.noLocal&&noEnvironment==k.noEnvironment&&foveated==k.foveated&&split==k.split&&modal==k.modal&&noDiscard==k.noDiscard&&swapchain==k.swapchain&&offscreen==k.offscreen&&strip==k.strip&&ui==k.ui&&water==k.water&&offset==k.offset&&cullFace==k.cullFace&&equation==k.equation&&equationA==k.equationA&&sky==k.sky && skinned==k.skinned && instanced==k.instanced && terrain==k.terrain && depth==k.depth && write==k.write && blend==k.blend &&
             cull==k.cull && clockwise==k.clockwise && stride==k.stride && depthFunc==k.depthFunc &&
             src==k.src && dst==k.dst && srcA==k.srcA && dstA==k.dstA;
     }
 };
 struct PipelineHash {size_t operator()(const PipelineKey& k)const {
     size_t h=uint32_t(k.swapchain)*8191+uint32_t(k.offscreen)*4093+uint32_t(k.strip)*2017+k.ui*1009+uint32_t(k.water)*997+k.stride+uint32_t(k.instanced)*31+uint32_t(k.skinned)+uint32_t(k.sky)*101;for(auto v:{uint32_t(k.terrain),uint32_t(k.depth),uint32_t(k.write),uint32_t(k.blend),
-        k.lighting,uint32_t(k.noLocal),uint32_t(k.noEnvironment),uint32_t(k.foveated),uint32_t(k.baseOpaque),uint32_t(k.split),uint32_t(k.modal),uint32_t(k.noDiscard),uint32_t(k.cull),uint32_t(k.clockwise),uint32_t(k.offset),k.cullFace,k.equation,k.equationA,k.depthFunc,k.src,k.dst,k.srcA,k.dstA}) { h=(h*16777619u)^v; }
+        k.lighting,uint32_t(k.noLocal),uint32_t(k.noEnvironment),uint32_t(k.foveated),uint32_t(k.split),uint32_t(k.modal),uint32_t(k.noDiscard),uint32_t(k.cull),uint32_t(k.clockwise),uint32_t(k.offset),k.cullFace,k.equation,k.equationA,k.depthFunc,k.src,k.dst,k.srcA,k.dstA}) { h=(h*16777619u)^v; }
     return h;
 }};
 VkBlendFactor Blend(uint32_t x) {
@@ -784,7 +784,7 @@ public:
         const VkSpecializationMapEntry materialEntries[]{{0,0,4},{1,4,4},{2,8,4}};
         const VkSpecializationInfo materialSpecialization{3,materialEntries,sizeof(materialConstants),materialConstants};
         if(kind<2)stages[1].pSpecializationInfo=&materialSpecialization;
-        if(key.split&&kind<3)stages[1].module=splitModules[key.noDiscard?kind+3:kind];
+        if(key.split&&kind<4)stages[1].module=splitModules[kind==3?5:key.noDiscard?kind+3:kind];
         VkVertexInputBindingDescription binding{0,key.stride*4,VK_VERTEX_INPUT_RATE_VERTEX};
         std::vector<VkVertexInputAttributeDescription> attributes;
         if(key.ui==11)attributes={{0,0,VK_FORMAT_R32G32B32_SFLOAT,0},{1,0,VK_FORMAT_R32G32B32_SFLOAT,12},{2,0,VK_FORMAT_R32G32_SFLOAT,24},{3,0,VK_FORMAT_R32G32B32A32_SFLOAT,32}};
@@ -822,11 +822,11 @@ public:
         VkPipelineMultisampleStateCreateInfo ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};ms.rasterizationSamples=VK_SAMPLE_COUNT_1_BIT;
         VkPipelineDepthStencilStateCreateInfo ds{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};ds.depthTestEnable=key.depth;ds.depthWriteEnable=key.write;ds.depthCompareOp=Compare(key.depthFunc);
         VkPipelineColorBlendAttachmentState ba{};ba.colorWriteMask=0xf;ba.blendEnable=key.blend;ba.srcColorBlendFactor=Blend(key.src);ba.dstColorBlendFactor=Blend(key.dst);ba.colorBlendOp=BlendOperation(key.equation);ba.srcAlphaBlendFactor=Blend(key.srcA);ba.dstAlphaBlendFactor=Blend(key.dstA);ba.alphaBlendOp=BlendOperation(key.equationA);
-        std::array<VkPipelineColorBlendAttachmentState,3> blendAttachments{};blendAttachments[0]=ba;
-        const bool opaque=key.baseOpaque;
-        blendAttachments[1].colorWriteMask=opaque||key.sky?0xf:0;
-        blendAttachments[2].colorWriteMask=opaque?VK_COLOR_COMPONENT_R_BIT:0;
-        VkPipelineColorBlendStateCreateInfo bs{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};bs.attachmentCount=key.split?3:1;bs.pAttachments=blendAttachments.data();
+        std::array<VkPipelineColorBlendAttachmentState,2> blendAttachments{};blendAttachments[0]=ba;
+        // Every world pass uses identical blending in both HDR targets. Only UI
+        // is separated: model pixels must never swap native/synthesised layers.
+        blendAttachments[1]=ba;blendAttachments[1].colorWriteMask=key.ui?0:0xf;
+        VkPipelineColorBlendStateCreateInfo bs{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};bs.attachmentCount=key.split?2:1;bs.pAttachments=blendAttachments.data();
         const VkDynamicState dynamicStates[]{VK_DYNAMIC_STATE_VIEWPORT,VK_DYNAMIC_STATE_SCISSOR,VK_DYNAMIC_STATE_DEPTH_BIAS};
         VkPipelineDynamicStateCreateInfo dynamic{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
         dynamic.dynamicStateCount=key.offset?3:2;dynamic.pDynamicStates=dynamicStates;
@@ -903,7 +903,8 @@ public:
         if(indexFirst>m.count||uint32_t(count)>m.count-indexFirst||(type&&!m.indices.buffer)){skip(4);return;}
         const auto drawStarted=passTiming?NowUs():0;
         const auto& s=draw.state;
-        if(p.ui&&densityActive)FullRateScene();
+        if(splitFrame&&worldDepthReady&&!p.ui&&!postDone&&s.depth&&s.write)lateWorldDepthWrite=true;
+        if(p.ui&&(densityActive||(splitFrame&&!worldDepthReady)))FullRateScene();
         else if(!p.ui&&splitFrame&&!sidecarPass&&!offscreen&&!postDone)ResumeSidecar();
         PipelineKey key;key.modal=modalActive;key.offscreen=offscreen;key.swapchain=directOutput||(compactFrame&&postDone);key.strip=mode==GL_TRIANGLE_STRIP;key.ui=uint32_t(p.ui);key.water=p.water;key.sky=p.sky;key.terrain=p.terrain;key.stride=m.stride;key.instanced=instances>1;key.skinned=UsesSkin(p,item.uniforms);
         key.split=sidecarPass&&!offscreen&&!postDone;key.foveated=densityActive&&!offscreen&&!postDone;
@@ -912,7 +913,7 @@ public:
             if(p.environmentOffset!=UINT32_MAX){float value;std::memcpy(&value,item.uniforms.data()+p.environmentOffset,4);key.noEnvironment=value<=.5f;}
             if(p.localOffset!=UINT32_MAX){int count;std::memcpy(&count,item.uniforms.data()+p.localOffset,4);key.noLocal=count<=0;}
         }
-        key.depth=s.depth;key.write=s.write;key.baseOpaque=!s.synthesisOverlay&&!s.blend&&!key.water&&!key.ui&&s.depth&&s.write;key.blend=s.blend;key.cull=s.cull;key.clockwise=s.clockwise;
+        key.depth=s.depth;key.write=s.write;key.blend=s.blend;key.cull=s.cull;key.clockwise=s.clockwise;
         key.depthFunc=s.depthFunc;key.src=s.src;key.dst=s.dst;key.srcA=s.srcAlpha;key.dstA=s.dstAlpha;
         key.cullFace=s.cullFace;key.equation=s.equation;key.equationA=s.equationAlpha;key.offset=s.offset;
         if(offscreen){key.depth=key.write=false;}
@@ -1131,7 +1132,7 @@ public:
     }
     void PostProcess(const PostSettings& settings) {
         if(!begun||!passOpen||failed||postDone)return;
-        DrainDraws();CreatePost();EndPass();
+        DrainDraws();CreatePost();EndPass();RetainWorldDepth();
         PostBarrier(color,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
             VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,VK_ACCESS_SHADER_READ_BIT,VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
         directOutput=gameplay&&xrSwapchain&&xrSrgb&&!legacyPresentation&&!splitFrame;
@@ -1285,7 +1286,7 @@ public:
     void Begin(const float* left,const float* right,const float* le,const float* re,bool loading=false,const float* horizon=nullptr,bool split=false) {
         splitFrame=split&&splitPass&&compositionChain&&!loading&&!(visualDiagnostics&2u);
         fqmotion::separatedComposition=splitFrame;compositionPresented=false;
-        sidecarPass=splitFrame;compactFrame=splitFrame&&xrSrgb;
+        worldDepthReady=lateWorldDepthWrite=false;sidecarPass=splitFrame;compactFrame=splitFrame&&xrSrgb;
         densityActive=foveationRequested&&densityMain.clear&&(!splitFrame||densitySplit.clear)&&!loading;
         offscreen=false;targetWidth=width;targetHeight=height;StartCommands(left,right,le,re,loading);
         // Match the GLES clear from GetFo3Environment(), not hard-coded black.
@@ -1297,8 +1298,8 @@ public:
         clears[0].color={{gameplay&&!loading&&horizon?horizon[0]:0.0f,
                           gameplay&&!loading&&horizon?horizon[1]:0.0f,
                           gameplay&&!loading&&horizon?horizon[2]:0.0f,1.0f}};
-        clears[1].depthStencil={1,0};clears[2].color=clears[0].color;clears[3].color={{1,0,0,0}};
-        VkRenderPassBeginInfo ri{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};ri.renderPass=densityActive?(splitFrame?densitySplit.clear:densityMain.clear):splitFrame?splitPass:pass;ri.framebuffer=densityActive?(splitFrame?densitySplit.framebuffer:densityMain.framebuffer):splitFrame?splitFramebuffer:framebuffer;ri.renderArea={{0,0},{width,height}};ri.clearValueCount=splitFrame?4:2;ri.pClearValues=clears.data();
+        clears[1].depthStencil={1,0};clears[2].color=clears[0].color;
+        VkRenderPassBeginInfo ri{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};ri.renderPass=densityActive?(splitFrame?densitySplit.clear:densityMain.clear):splitFrame?splitPass:pass;ri.framebuffer=densityActive?(splitFrame?densitySplit.framebuffer:densityMain.framebuffer):splitFrame?splitFramebuffer:framebuffer;ri.renderArea={{0,0},{width,height}};ri.clearValueCount=splitFrame?3:2;ri.pClearValues=clears.data();
         BeginPass(Scene,ri);begun=true;
     }
     #include "fo3-vulkan-foveation.inc"

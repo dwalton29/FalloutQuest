@@ -69,6 +69,29 @@ void NativeMotion(bool srgb=false,bool densityEmulation=false) {
         ++motionCycles;
     }
     assert(motionReleases-initialReleases==32);
+    // A stationary camera at real wasteland coordinates must generate exactly
+    // zero static motion. The old inverse -> float world -> previous VP path
+    // loses precision here even when current and previous matrices are equal.
+    for(unsigned mode=0;mode<4;++mode){
+        auto projection=fqskin::Identity();const float n=.04f,far=125000.f/70;
+        projection[0]=1.13f;projection[5]=1.07f;projection[10]=-(far+n)/(far-n);projection[11]=-1;projection[14]=-2*far*n/(far-n);projection[15]=0;
+        auto multiply=[](const auto& a,const auto& b){fqspacewarp::Matrix m{};for(unsigned c=0;c<4;++c)for(unsigned r=0;r<4;++r)for(unsigned k=0;k<4;++k)m[c*4+r]+=a[k*4+r]*b[c*4+k];return m;};
+        auto view=fqskin::Identity();view[12]=mode==2?-1200.f:-157.12f;view[13]=mode==2?400.f:31.88f;view[14]=mode==2?-890.f:8.79f;
+        if(mode==1){const float angle=.13f;view[5]=view[10]=std::cos(angle);view[6]=std::sin(angle);view[9]=-std::sin(angle);}
+        const auto prior=multiply(projection,view);auto current=prior;
+        if(mode==3)current[13]-=projection[5]*.01f; // Upward tracked head translation, with no artificial app motion.
+        fqspacewarp::History h;fqspacewarp::Frame f;f.scene=1;f.world=0x3c;f.sceneReady=f.focused=true;f.viewProjection={prior,prior};
+        for(unsigned i=1;i<=2;++i){f.serial=i;f.displayTime=i*10000000;assert(h.Begin(f));h.EyeRendered(0);h.EyeRendered(1);assert(h.Finish(true));}
+        f.serial=3;f.displayTime=30000000;f.viewProjection={current,current};assert(h.Begin(f));fqmotion::Capture capture;capture.Begin(h);capture.Main();
+        assert(fqvk::BeginWorldProbe(current.data(),current.data(),eye,eye));
+        VkClearAttachment clear{};clear.aspectMask=VK_IMAGE_ASPECT_DEPTH_BIT;clear.clearValue.depthStencil={.99f,0};VkClearRect rect{{{0,0},{64,64}},0,1};vkCmdClearAttachments(r.command,1,&clear,1,&rect);
+        std::array<fqspacewarp::Coverage,2> coverage{};fqvk::PostProcess({});fqvk::QueueSpacewarp(capture,coverage);
+        std::array<XrView,2> views{};std::array<XrCompositionLayerProjectionView,2> output{};assert(fqvk::PresentGameplay(views.data(),output.data(),.04f,1000));
+        for(unsigned e=0;e<2;++e){assert(coverage[e].Complete(3));const auto pixels=read(motionImages[e][r.motionTargets[e].motionIndex],false);
+            for(size_t at=0;at<pixels.size();at+=4){if(mode<3){assert(pixels[at]==0&&pixels[at+1]==0&&pixels[at+2]==0);}else{const float z=-projection[14]/(2*.99f-1+projection[10]);const float headY=-((current[13]-prior[13])/projection[5]);Near(pixels[at+1],projection[5]*headY/(-z));assert(pixels[at+1]>0);}}}
+        ++motionCycles;
+    }
+    std::cout<<"Vulkan tracked-head stability: exact zero motion for stationary perspective cameras at wasteland/distant origins, pitched stationary poses and correct vertical translation in both eyes passed\n";
     // Reproduce all three blockers from the headset log in ONE real GPU frame.
     // Original water/refraction, blended world material and post-film HUD must
     // remain pixel-equivalent while the opaque motion/depth coverage succeeds.
@@ -84,7 +107,7 @@ void NativeMotion(bool srgb=false,bool densityEmulation=false) {
     for(unsigned frame=0;frame<6;++frame){
         if(frame==4){fqvk::DestroyGameplaySwapchain();assert(fqvk::CreateGameplaySwapchain(reinterpret_cast<XrSession>(uintptr_t(2)),true));}
         if(frame==4){combinedFrame.world=0;for(unsigned warm=0;warm<2;++warm){combinedFrame.serial=frame+3+warm;combinedFrame.displayTime=combinedFrame.serial*10000000;assert(combinedHistory.Begin(combinedFrame));combinedHistory.EyeRendered(0);combinedHistory.EyeRendered(1);assert(combinedHistory.Finish(true));}}
-        const bool split=frame%2;combinedFrame.serial=frame+3+(frame>=4?2:0);combinedFrame.displayTime=combinedFrame.serial*10000000;
+        const bool split=frame%2,showUi=frame>=2;combinedFrame.serial=frame+3+(frame>=4?2:0);combinedFrame.displayTime=combinedFrame.serial*10000000;
         assert(combinedHistory.Begin(combinedFrame));fqmotion::Capture capture;capture.Begin(combinedHistory);capture.Main();
         assert(fqvk::BeginWorldProbe(matrix.data(),matrix.data(),eye,eye,false,nullptr,split));
         assert(fqmotion::separatedComposition==split);
@@ -98,12 +121,18 @@ void NativeMotion(bool srgb=false,bool densityEmulation=false) {
         Set(1,"uMaterialAlpha",{.4f});fqgl::state.texture2d[0].Change(68);
         {fqrender::SynthesisOverlayScope authoredTransparency(true);Submit(1,69,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);}
         Set(1,"uMaterialAlpha",{1});
+        // A reflected NIF surface must remain in the same world layer as its
+        // diffuse pass; otherwise head reprojection separates the two images.
+        fqgl::state.srcRgb.Change(GL_ONE);fqgl::state.dstRgb.Change(GL_ONE);
+        Set(1,"uEnvironmentPassQ2050",{1});Set(1,"uEnvironmentScaleQ2050",{.2f});
+        Submit(1,9,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);Set(1,"uEnvironmentPassQ2050",{0});
+        fqgl::state.srcRgb.Change(GL_SRC_ALPHA);fqgl::state.dstRgb.Change(GL_ONE_MINUS_SRC_ALPHA);
         // Pre-film health/UI must switch off scene foveation without losing depth.
-        fqgl::state.texture2d[0].Change(68);Submit(65,66,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);r.DrainDraws();assert(!r.densityActive);assert(r.sidecarPass==(split&&!densityEmulation));
-        {Submit(1,69,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);r.DrainDraws();assert(r.sidecarPass==split);Submit(65,66,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);r.DrainDraws();assert(r.sidecarPass==split);}
+        if(showUi){fqgl::state.texture2d[0].Change(68);fqgl::state.depthWrite.Change(true);Submit(65,66,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);r.DrainDraws();assert(!r.densityActive);assert(!r.sidecarPass);if(split)assert(r.worldDepthReady);
+        {fqgl::state.depthWrite.Change(frame>=4);Submit(1,69,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);r.DrainDraws();assert(r.sidecarPass==split);Submit(65,66,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);r.DrainDraws();assert(r.sidecarPass==split);}}
         fqvk::PostSettings settings;settings.interior=1;settings.brightScale=0;fqvk::PostProcess(settings);
         assert(r.compactFrame==(split&&srgb));if(r.compactFrame)assert(r.compactFinal.image.image);
-        fqgl::state.depth.Change(false);fqgl::state.texture2d[0].Change(68);Submit(65,66,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);
+        if(showUi){fqgl::state.depth.Change(false);fqgl::state.texture2d[0].Change(68);Submit(65,66,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);}
         std::array<fqspacewarp::Coverage,2> coverage{};if(split)fqvk::QueueSpacewarp(capture,coverage);
         std::array<XrView,2> views{};std::array<XrCompositionLayerProjectionView,2> output{},overlay{};
         assert(fqvk::PresentGameplay(views.data(),output.data(),.04f,1000));
@@ -111,12 +140,12 @@ void NativeMotion(bool srgb=false,bool densityEmulation=false) {
         combinedHistory.EyeRendered(0);combinedHistory.EyeRendered(1);
         if(!split){reference=RuntimePixels(acquiredImage);assert(output[0].next&&output[1].next);}
         else {
-            assert(coverage[0].Complete(combinedFrame.serial)&&coverage[1].Complete(combinedFrame.serial));
-            assert(combinedHistory.CanSynthesize(coverage));assert(!output[0].next&&!output[1].next);
+            assert(coverage[0].Complete(combinedFrame.serial)==(frame<4)&&coverage[1].Complete(combinedFrame.serial)==(frame<4));
+            assert(combinedHistory.CanSynthesize(coverage)==(frame<4));assert(r.lateWorldDepthWrite==(frame>=4));assert(!output[0].next&&!output[1].next);
             const auto base=RuntimePixels(acquiredImage),effects=RuntimePixels(effectsIndex,true);
             for(unsigned e=0;e<2;++e){assert(overlay[e].next==&r.xrDepthInfo[e]);assert(overlay[e].subImage.imageArrayIndex==e);assert(overlay[e].subImage.swapchain==r.compositionChain);
-                const auto depths=read(depthImages[e][r.motionTargets[e].depthIndex],true);Near(depths[16*32+16],.5f);Near(depths[0],1.f);}
-            int largest=0;for(size_t at=0;at<base.size();at+=4){assert(effects[at+3]==0||effects[at+3]==255);const bool effect=effects[at+3]!=0;effect?++effectsPixels:++opaquePixels;
+                const auto depths=read(depthImages[e][r.motionTargets[e].depthIndex],true);Near(depths[16*32+16],.5f);Near(depths[0],1.f);Near(depths[27*32+16],1.f);}
+            int largest=0;for(size_t at=0;at<base.size();at+=4){assert(effects[at+3]==0||effects[at+3]==255);const bool effect=effects[at+3]!=0;if(!showUi)assert(!effect);effect?++effectsPixels:++opaquePixels;
                 for(unsigned c=0;c<3;++c){if(!effect)assert(effects[at+c]==0);largest=std::max(largest,std::abs(int((effect?effects:base)[at+c])-int(reference[at+c])));}}
             if(largest>2)throw std::runtime_error("opaque/effects composition changed original colour by "+std::to_string(largest)+" display codes");
             ++motionCycles;
@@ -126,7 +155,7 @@ void NativeMotion(bool srgb=false,bool densityEmulation=false) {
     assert(effectsPixels>0&&opaquePixels>0);
     // Separating effects never conceals a real opaque geometry/resource failure.
     ++combinedFrame.serial;combinedFrame.displayTime+=10000000;assert(combinedHistory.Begin(combinedFrame));fqmotion::separatedComposition=true;fqmotion::Capture unsupported;unsupported.Begin(combinedHistory);unsupported.Block(fqmotion::Resources|fqmotion::Transparency);assert(unsupported.reasons==fqmotion::Resources);fqmotion::separatedComposition=false;
-    std::cout<<"Vulkan combined SpaceWarp: original water + transparency + HUD, opaque depth, complete coverage, stereo colour parity, native depth routing, exterior/interior and swapchain recreation passed\n";
+    std::cout<<"Vulkan combined SpaceWarp: world-only reflected NIF/water/transparency never leak into native layer; original HUD, opaque depth, complete coverage, stereo colour parity, native depth routing, exterior/interior and swapchain recreation passed\n";
     if(densityEmulation){
         std::array<XrView,2> views{};std::array<XrCompositionLayerProjectionView,2> output{};
         assert(fqvk::BeginWorldProbe(matrix.data(),matrix.data(),eye,eye,true));assert(!r.densityActive&&!r.compactFrame);

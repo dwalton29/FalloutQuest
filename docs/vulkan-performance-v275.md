@@ -1,5 +1,7 @@
 # Vulkan performance pass — v275
 
+The world-layer/depth/reprojection path is superseded by [the v276 stability repair](spacewarp-stability-v276.md).
+
 The v274 headset capture measured median stereo GPU time 29.56 ms (p95 34.23 ms), with 78% of frames exceeding the 27.78 ms half-rate 72 Hz budget. The main scene cost 22.61 ms median. The goal of this pass is to reduce pixel work and external-memory traffic while retaining authored scene content, draw distance, material effects and 90% render scale.
 
 ## Native fixed foveation

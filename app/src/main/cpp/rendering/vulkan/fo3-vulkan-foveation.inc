@@ -41,14 +41,14 @@ void CreateDensityMap() {
 void CreateDensityPasses(bool split) {
     if(!densityMap.image)return;
     auto& target=split?densitySplit:densityMain;
-    const unsigned n=split?4:2;
+    const unsigned n=split?3:2;
     std::vector<VkAttachmentDescription> a(n+1);
     a[0].format=VK_FORMAT_R16G16B16A16_SFLOAT;a[1].format=VK_FORMAT_D32_SFLOAT;
-    if(split){a[2].format=a[0].format;a[3].format=VK_FORMAT_R32_SFLOAT;}
+    if(split)a[2].format=a[0].format;
     for(unsigned i=0;i<n;++i){a[i].samples=VK_SAMPLE_COUNT_1_BIT;a[i].loadOp=VK_ATTACHMENT_LOAD_OP_CLEAR;a[i].storeOp=VK_ATTACHMENT_STORE_OP_STORE;a[i].stencilLoadOp=VK_ATTACHMENT_LOAD_OP_DONT_CARE;a[i].stencilStoreOp=VK_ATTACHMENT_STORE_OP_DONT_CARE;a[i].initialLayout=VK_IMAGE_LAYOUT_UNDEFINED;a[i].finalLayout=i==1?VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL:VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;}
     auto& map=a[n];map.format=VK_FORMAT_R8G8_UNORM;map.samples=VK_SAMPLE_COUNT_1_BIT;map.loadOp=VK_ATTACHMENT_LOAD_OP_LOAD;map.storeOp=VK_ATTACHMENT_STORE_OP_DONT_CARE;map.stencilLoadOp=VK_ATTACHMENT_LOAD_OP_DONT_CARE;map.stencilStoreOp=VK_ATTACHMENT_STORE_OP_DONT_CARE;map.initialLayout=map.finalLayout=VK_IMAGE_LAYOUT_FRAGMENT_DENSITY_MAP_OPTIMAL_EXT;
-    const VkAttachmentReference refs[]{{0,a[0].finalLayout},{2,a[0].finalLayout},{3,a[0].finalLayout}},d{1,a[1].finalLayout};
-    VkSubpassDescription sub{};sub.pipelineBindPoint=VK_PIPELINE_BIND_POINT_GRAPHICS;sub.colorAttachmentCount=split?3:1;sub.pColorAttachments=refs;sub.pDepthStencilAttachment=&d;
+    const VkAttachmentReference refs[]{{0,a[0].finalLayout},{2,a[0].finalLayout}},d{1,a[1].finalLayout};
+    VkSubpassDescription sub{};sub.pipelineBindPoint=VK_PIPELINE_BIND_POINT_GRAPHICS;sub.colorAttachmentCount=split?2:1;sub.pColorAttachments=refs;sub.pDepthStencilAttachment=&d;
     VkRenderPassFragmentDensityMapCreateInfoEXT density{VK_STRUCTURE_TYPE_RENDER_PASS_FRAGMENT_DENSITY_MAP_CREATE_INFO_EXT};density.fragmentDensityMapAttachment={n,map.finalLayout};
     const uint32_t mask=3;VkRenderPassMultiviewCreateInfo mv{VK_STRUCTURE_TYPE_RENDER_PASS_MULTIVIEW_CREATE_INFO};mv.pNext=&density;mv.subpassCount=1;mv.pViewMasks=&mask;mv.correlationMaskCount=1;mv.pCorrelationMasks=&mask;
     VkSubpassDependency dep{};dep.srcSubpass=VK_SUBPASS_EXTERNAL;dep.dstSubpass=0;dep.srcStageMask=VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT|VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT|VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;dep.dstStageMask=dep.srcStageMask|VK_PIPELINE_STAGE_FRAGMENT_DENSITY_PROCESS_BIT_EXT;dep.srcAccessMask=VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT|VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;dep.dstAccessMask=VK_ACCESS_COLOR_ATTACHMENT_READ_BIT|VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT|VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT|VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT|VK_ACCESS_FRAGMENT_DENSITY_MAP_READ_BIT_EXT;
@@ -56,13 +56,13 @@ void CreateDensityPasses(bool split) {
     Check(vkCreateRenderPass(device,&ci,nullptr,&target.clear),"foveated scene pass");
     for(unsigned i=0;i<n;++i){a[i].loadOp=VK_ATTACHMENT_LOAD_OP_LOAD;a[i].initialLayout=a[i].finalLayout;}
     Check(vkCreateRenderPass(device,&ci,nullptr,&target.load),"foveated scene continuation");
-    std::vector<VkImageView> views{color.view,depth.view};if(split){views.push_back(splitColour.view);views.push_back(splitDepth.view);}views.push_back(densityMap.view);
+    std::vector<VkImageView> views{color.view,depth.view};if(split){views.push_back(splitColour.view);}views.push_back(densityMap.view);
     VkFramebufferCreateInfo fi{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};fi.renderPass=target.clear;fi.attachmentCount=uint32_t(views.size());fi.pAttachments=views.data();fi.width=width;fi.height=height;fi.layers=1;
     Check(vkCreateFramebuffer(device,&fi,nullptr,&target.framebuffer),"foveated scene framebuffer");
 }
 void FullRateScene() {
-    if((!densityActive&&!sidecarPass)||offscreen||postDone)return;
-    EndPass();densityActive=sidecarPass=false;
+    if(offscreen||postDone||(!densityActive&&!(splitFrame&&!worldDepthReady)))return;
+    EndPass();RetainWorldDepth();densityActive=sidecarPass=false;
     VkRenderPassBeginInfo bi{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};bi.renderPass=resumePass;bi.framebuffer=framebuffer;bi.renderArea.extent={width,height};BeginPass(SceneResume,bi);
 }
 // An uncommon world draw after UI still gets correct opaque sidecar coverage.
