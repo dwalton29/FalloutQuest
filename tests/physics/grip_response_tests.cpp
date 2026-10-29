@@ -33,6 +33,51 @@ int main(){
         M p;for(int frame=1;frame<=hz;++frame){w.Target(0,Pose(float(frame)/hz,1));w.Step(1.f/hz);}
         w.Pose(1,p);assert(std::abs(p[12]-1)<.03f);
     }
+    // Actual player run speed is 4.84 m/s, above the 4 m/s hand correction
+    // cap. The locomotion frame carries a held object; it must not chase the
+    // moving player, nor transport unrelated world props.
+    for(int hz:{30,36,72,90}){
+        World w;auto gun=Box(.35f,.05f,.04f,6);
+        assert(w.Add(1,gun,Pose(0,1))&&w.Add(2,gun,Pose(0,3)));
+        assert(w.Grab(1,1,Pose(-.2f,1),{-.2f,1,0}));M p,previousApp=Identity();
+        const float frameDt=1.f/hz;float worst=0;
+        for(int frame=1;frame<=hz*2;++frame){const float x=4.84f*frame*frameDt;auto app=Pose(x,0);
+            w.MoveHeld(previousApp,app,frameDt);previousApp=app;
+            w.TargetBody(1,Pose(x,1));w.Step(frameDt);assert(w.Pose(1,p));
+            worst=std::max(worst,std::abs(p[12]-x));
+        }
+        std::cout<<"run hz="<<hz<<" carriedLag="<<worst<<std::endl;assert(worst<.025f);
+        assert(w.Pose(2,p)&&std::abs(p[12])<.001f);
+        w.Release(1);V velocity;assert(w.Pose(1,p,&velocity));assert(std::abs(velocity[0]-4.84f)<.05f);
+        const float released=p[12];w.MoveHeld(previousApp,Pose(20,0),frameDt);w.Pose(1,p);assert(p[12]==released);
+    }
+    // Both held bodies share the locomotion frame, so neither should collide
+    // with the other's old position while their common transform is applied.
+    {
+        World w;auto box=Box(.1f,.1f,.1f,1);
+        assert(w.Add(1,box,Pose(0,1))&&w.Add(2,box,Pose(.5f,1)));
+        assert(w.Grab(1,0,Pose(0,1),{0,1,0})&&w.Grab(2,1,Pose(.5f,1),{.5f,1,0}));
+        w.MoveHeld(Identity(),Pose(1,0),1.f/36);M p;
+        assert(w.Pose(1,p)&&std::abs(p[12]-1)<.001f);
+        assert(w.Pose(2,p)&&std::abs(p[12]-1.5f)<.001f);
+    }
+    // Snap-turn around the player transports the grip and orientation once.
+    {
+        World w;assert(w.Add(1,Box(.1f,.1f,.1f,2),Pose(1,1)));
+        assert(w.Grab(1,0,Pose(1,1),{1,1,0}));
+        w.MoveHeld(Identity(),Pose(0,0,.5235987756f),1.f/36);M p;
+        assert(w.Pose(1,p)&&std::abs(p[12]-.8660254f)<.001f&&std::abs(p[14]+.5f)<.001f);
+        M palm;assert(w.GripPalm(0,palm)&&std::abs(palm[12]-p[12])<.001f);
+    }
+    // Carry still respects a wall. A high-speed locomotion step cannot move a
+    // held body through it, while unobstructed tangential travel can continue.
+    {
+        World w;w.Static(100,{{{.5f,0,-10},{.5f,3,10},{.5f,0,10}},{{.5f,0,-10},{.5f,3,-10},{.5f,3,10}}});
+        assert(w.Add(1,Box(.1f,.1f,.1f,2),Pose(0,1)));assert(w.Grab(1,0,Pose(0,1),{0,1,0}));
+        auto end=Pose(1,0);end[14]=.5f;w.MoveHeld(Identity(),end,1.f/36);M p;
+        assert(w.Pose(1,p));std::cout<<"carry wall="<<p[12]<<","<<p[14]<<std::endl;
+        assert(p[12]<.41f&&p[12]>.35f&&p[14]>.45f);
+    }
     // A discontinuous tracking target has finite correction speed/effort.
     {
         World w;assert(w.Add(1,Box(.1f,.1f,.1f,10),Pose(0,1)));assert(w.Grab(1,0,Pose(0,1),{0,1,0}));

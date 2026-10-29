@@ -17,7 +17,7 @@ class ShoulderIntegration(unittest.TestCase):
 
     def test_physical_hand_is_not_its_own_tracking_target(self):
         runtime=(ROOT/'app/src/main/cpp/core/fo3-runtime.cpp').read_text()
-        hand=runtime.split('void Q211UpdatePlayerRig()',1)[1].split('#include "weapons/fo3-weapon-runtime.inc"',1)[0]
+        hand=runtime.split('void Q211UpdatePlayerRig(',1)[1].split('#include "weapons/fo3-weapon-runtime.inc"',1)[0]
         self.assertIn('fo3rigid::Live().GripPalm(h,palm)',hand)
         self.assertIn('Q218RotateQuaternion(renderQuat[0]',hand)
         self.assertIn('Q218RotateQuaternion(renderQuat[1]',hand)

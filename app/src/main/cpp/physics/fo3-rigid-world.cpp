@@ -49,12 +49,64 @@ struct World::Impl {
     btSequentialImpulseConstraintSolver solver;
     btDiscreteDynamicsWorld world{&dispatcher,&broad,&solver,&config};
     std::unordered_map<uint64_t,Entry> statics,bodies;
-    struct Grip {uint64_t id=0;btTransform anchor,offset,target;std::unique_ptr<btGeneric6DofSpring2Constraint> constraint;};
+    struct Grip {uint64_t id=0;btTransform anchor,offset,target;btVector3 carryVelocity{0,0,0};std::unique_ptr<btGeneric6DofSpring2Constraint> constraint;};
     Grip grips[2];
     float accumulated=0;
     std::vector<std::pair<Entry*,btTransform>> previous;
     Impl(){world.setGravity({0,-9.80665f,0});world.getSolverInfo().m_numIterations=20;world.getSolverInfo().m_splitImpulse=true;}
-    void Drop(int hand){auto& g=grips[hand];if(g.constraint)world.removeConstraint(g.constraint.get());g.constraint.reset();g.id=0;}
+    void ClipMotion(Entry& entry,const btTransform& from,const btTransform& to,const btCollisionObject* carriedCompanion=nullptr){
+        auto& body=*entry.body;
+        const float rotation=from.getRotation().angleShortestPath(to.getRotation());
+        if((to.getOrigin()-from.getOrigin()).length2()<1e-8f&&rotation<.001f)return;
+        struct Query:btCollisionWorld::ClosestConvexResultCallback{
+            const btCollisionObject* self;const btCollisionObject* companion;
+            btTransform from,to;
+            Query(const btTransform& a,const btTransform& b,const btCollisionObject* object,const btCollisionObject* other):ClosestConvexResultCallback(a.getOrigin(),b.getOrigin()),self(object),companion(other),from(a),to(b){}
+            btScalar addSingleResult(btCollisionWorld::LocalConvexResult& result,bool normalWorld)override{
+                const auto normal=normalWorld?result.m_hitNormalLocal:result.m_hitCollisionObject->getWorldTransform().getBasis()*result.m_hitNormalLocal;
+                auto delta=to.getRotation()*from.getRotation().inverse();if(delta.w()<0)delta=-delta;
+                const auto turn=delta.getAxis()*delta.getAngle();
+                const auto centre=from.getOrigin().lerp(to.getOrigin(),result.m_hitFraction);
+                // A resting/tangential or separating contact is not a new
+                // obstruction. Test the contact point's rotational motion,
+                // not just COM motion, so gentle lift/slide is never latched.
+                const auto motion=to.getOrigin()-from.getOrigin()+turn.cross(result.m_hitPointLocal-centre);
+                // Sub-contact-slop normal motion belongs to the discrete
+                // contact solver; using an epsilon near float noise here
+                // re-latches resting bodies on different CPUs/toolchains.
+                constexpr float inwardSlop=.0001f; // 0.1 mm, sweep allowance is 1 mm
+                if(motion.dot(normal)>=-inwardSlop)return 1;
+                return ClosestConvexResultCallback::addSingleResult(result,normalWorld);
+            }
+            bool needsCollision(btBroadphaseProxy* proxy)const override{return proxy->m_clientObject!=self&&proxy->m_clientObject!=companion&&ClosestConvexResultCallback::needsCollision(proxy);}
+        } hit(from,to,&body,carriedCompanion);
+        hit.m_collisionFilterGroup=2;hit.m_collisionFilterMask=3;
+        const Entry* source=&entry;
+        for(const auto& child:source->children)world.convexSweepTest(static_cast<const btConvexShape*>(child.get()),from,to,hit,.001f);
+        if(!hit.hasHit()||hit.m_closestHitFraction>=1)return;
+        const float fraction=std::max(0.f,float(hit.m_closestHitFraction)-.001f);
+        btTransform safe(from.getRotation().slerp(to.getRotation(),fraction),from.getOrigin().lerp(to.getOrigin(),fraction));
+        // A blocked rotational component must not discard safe translation
+        // along the surface. Sweep that remaining slide with fixed rotation
+        // so a second wall/corner still blocks it.
+        auto slide=to.getOrigin()-safe.getOrigin();
+        slide-=hit.m_hitNormalWorld*std::min(btScalar(0),slide.dot(hit.m_hitNormalWorld));
+        for(int plane=0;plane<3&&slide.length2()>1e-10f;++plane){
+            auto end=safe;end.setOrigin(safe.getOrigin()+slide);
+            Query next(safe,end,&body,carriedCompanion);next.m_collisionFilterGroup=2;next.m_collisionFilterMask=3;
+            for(const auto& child:source->children)world.convexSweepTest(static_cast<const btConvexShape*>(child.get()),safe,end,next,.001f);
+            if(!next.hasHit()){safe=end;break;}
+            safe.setOrigin(safe.getOrigin()+slide*std::max(0.f,float(next.m_closestHitFraction)-.001f));
+            slide=end.getOrigin()-safe.getOrigin();
+            slide-=next.m_hitNormalWorld*std::min(btScalar(0),slide.dot(next.m_hitNormalWorld));
+        }
+        body.setWorldTransform(safe);body.setInterpolationWorldTransform(safe);
+        auto velocity=body.getLinearVelocity();const float inward=velocity.dot(hit.m_hitNormalWorld);
+        if(inward<0)body.setLinearVelocity(velocity-hit.m_hitNormalWorld*inward);
+        if(rotation>.001f)body.setAngularVelocity(body.getAngularVelocity()*fraction);
+        world.updateSingleAabb(&body);
+    }
+    void Drop(int hand){auto& g=grips[hand];if(g.constraint)world.removeConstraint(g.constraint.get());g.constraint.reset();g.id=0;g.carryVelocity={0,0,0};}
     ~Impl(){for(int h=0;h<2;++h)Drop(h);for(auto* map:{&bodies,&statics})for(auto& e:*map)world.removeRigidBody(e.second.body.get());}
 };
 World::World():impl(new Impl){}World::~World()=default;
@@ -183,11 +235,34 @@ bool World::Grab(uint64_t id,int hand,const M& palm,const V& surface){
     impl->world.addConstraint(g.constraint.get(),true);b.setActivationState(DISABLE_DEACTIVATION);return true;
 }
 void World::Target(int hand,const M& palm){if(hand<0||hand>1||!Finite(palm))return;auto& g=impl->grips[hand];if(!g.constraint)return;g.target=B(palm)*g.offset;}
-void World::Release(int hand,const V* velocity,const V* angular){if(hand<0||hand>1)return;auto id=Held(hand);impl->Drop(hand);auto i=impl->bodies.find(id);if(i==impl->bodies.end())return;auto& b=*i->second.body;b.forceActivationState(ACTIVE_TAG);b.activate(true);if(velocity)b.setLinearVelocity(B(*velocity));if(angular)b.setAngularVelocity(B(*angular));}
+void World::Release(int hand,const V* velocity,const V* angular){if(hand<0||hand>1)return;auto id=Held(hand);const auto carry=impl->grips[hand].carryVelocity;impl->Drop(hand);auto i=impl->bodies.find(id);if(i==impl->bodies.end())return;auto& b=*i->second.body;b.forceActivationState(ACTIVE_TAG);b.activate(true);if(velocity)b.setLinearVelocity(B(*velocity));else b.setLinearVelocity(b.getLinearVelocity()+carry);if(angular)b.setAngularVelocity(B(*angular));}
 uint64_t World::Held(int hand)const{return hand>=0&&hand<2?impl->grips[hand].id:0;}
 bool World::GripPoint(int hand,V& point)const{auto id=Held(hand);auto i=impl->bodies.find(id);if(i==impl->bodies.end())return false;point=A((i->second.body->getWorldTransform()*impl->grips[hand].anchor).getOrigin());return true;}
 bool World::GripPalm(int hand,M& palm)const{auto id=Held(hand);auto i=impl->bodies.find(id);if(i==impl->bodies.end())return false;const auto& g=impl->grips[hand];palm=A(i->second.body->getWorldTransform()*g.anchor*g.offset.inverse());return true;}
 void World::TargetBody(uint64_t id,const M& pose){if(!Finite(pose))return;for(auto& g:impl->grips)if(g.id==id&&g.constraint)g.target=B(pose)*impl->bodies.at(id).principal*g.anchor;}
+// Artificial locomotion carries attached objects; controller-relative motion
+// still goes through the finite-effort grip solver. Sweep the same convex hulls
+// as normal integration, so transport cannot pull a held gun through a wall.
+void World::MoveHeld(const M& previousApp,const M& currentApp,float seconds){
+    if(!Finite(previousApp)||!Finite(currentApp)||!std::isfinite(seconds)||seconds<=0)return;
+    if(previousApp==currentApp){for(auto& grip:impl->grips)grip.carryVelocity={0,0,0};return;}
+    const auto delta=B(currentApp)*B(previousApp).inverse();
+    for(int hand=0;hand<2;++hand){
+        auto& grip=impl->grips[hand];
+        auto found=impl->bodies.find(grip.id);if(!grip.constraint||found==impl->bodies.end())continue;
+        auto& entry=found->second;auto& body=*entry.body;
+        const auto from=body.getWorldTransform(),to=delta*from;
+        body.setWorldTransform(to);body.setInterpolationWorldTransform(to);
+        body.setLinearVelocity(delta.getBasis()*body.getLinearVelocity());
+        body.setAngularVelocity(delta.getBasis()*body.getAngularVelocity());
+        const auto other=impl->bodies.find(impl->grips[1-hand].id);
+        impl->ClipMotion(entry,from,to,other==impl->bodies.end()?nullptr:other->second.body.get());
+        const auto actual=body.getWorldTransform();
+        grip.carryVelocity=(actual.getOrigin()-from.getOrigin())/seconds;
+        grip.target=delta*grip.target;grip.constraint->setFrames(grip.target,grip.anchor);
+        impl->world.updateSingleAabb(&body);body.activate(true);
+    }
+}
 void World::Step(float seconds){
     if(!(seconds>0)||!std::isfinite(seconds))return;
     impl->accumulated+=std::min(seconds,.064f);constexpr float dt=1.f/120.f;
@@ -202,55 +277,7 @@ void World::Step(float seconds){
         // through a floor between ticks, including compound bodies.
         for(const auto& state:previous){
             auto& body=*state.first->body;const auto from=state.second,to=body.getWorldTransform();
-            const float rotation=from.getRotation().angleShortestPath(to.getRotation());
-            if((to.getOrigin()-from.getOrigin()).length2()<1e-8f&&rotation<.001f)continue;
-            struct Query:btCollisionWorld::ClosestConvexResultCallback{
-                const btCollisionObject* self;
-                btTransform from,to;
-                Query(const btTransform& a,const btTransform& b,const btCollisionObject* object):ClosestConvexResultCallback(a.getOrigin(),b.getOrigin()),self(object),from(a),to(b){}
-                btScalar addSingleResult(btCollisionWorld::LocalConvexResult& result,bool normalWorld)override{
-                    const auto normal=normalWorld?result.m_hitNormalLocal:result.m_hitCollisionObject->getWorldTransform().getBasis()*result.m_hitNormalLocal;
-                    auto delta=to.getRotation()*from.getRotation().inverse();if(delta.w()<0)delta=-delta;
-                    const auto turn=delta.getAxis()*delta.getAngle();
-                    const auto centre=from.getOrigin().lerp(to.getOrigin(),result.m_hitFraction);
-                    // A resting/tangential or separating contact is not a new
-                    // obstruction. Test the contact point's rotational motion,
-                    // not just COM motion, so gentle lift/slide is never latched.
-                    const auto motion=to.getOrigin()-from.getOrigin()+turn.cross(result.m_hitPointLocal-centre);
-                    // Sub-contact-slop normal motion belongs to the discrete
-                    // contact solver; using an epsilon near float noise here
-                    // re-latches resting bodies on different CPUs/toolchains.
-                    constexpr float inwardSlop=.0001f; // 0.1 mm, sweep allowance is 1 mm
-                    if(motion.dot(normal)>=-inwardSlop)return 1;
-                    return ClosestConvexResultCallback::addSingleResult(result,normalWorld);
-                }
-                bool needsCollision(btBroadphaseProxy* proxy)const override{return proxy->m_clientObject!=self&&ClosestConvexResultCallback::needsCollision(proxy);}
-            } hit(from,to,&body);
-            hit.m_collisionFilterGroup=2;hit.m_collisionFilterMask=3;
-            const Entry* source=state.first;
-            for(const auto& child:source->children)impl->world.convexSweepTest(static_cast<const btConvexShape*>(child.get()),from,to,hit,.001f);
-            if(!hit.hasHit()||hit.m_closestHitFraction>=1)continue;
-            const float fraction=std::max(0.f,float(hit.m_closestHitFraction)-.001f);
-            btTransform safe(from.getRotation().slerp(to.getRotation(),fraction),from.getOrigin().lerp(to.getOrigin(),fraction));
-            // A blocked rotational component must not discard safe translation
-            // along the surface. Sweep that remaining slide with fixed rotation
-            // so a second wall/corner still blocks it.
-            auto slide=to.getOrigin()-safe.getOrigin();
-            slide-=hit.m_hitNormalWorld*std::min(btScalar(0),slide.dot(hit.m_hitNormalWorld));
-            for(int plane=0;plane<3&&slide.length2()>1e-10f;++plane){
-                auto end=safe;end.setOrigin(safe.getOrigin()+slide);
-                Query next(safe,end,&body);next.m_collisionFilterGroup=2;next.m_collisionFilterMask=3;
-                for(const auto& child:source->children)impl->world.convexSweepTest(static_cast<const btConvexShape*>(child.get()),safe,end,next,.001f);
-                if(!next.hasHit()){safe=end;break;}
-                safe.setOrigin(safe.getOrigin()+slide*std::max(0.f,float(next.m_closestHitFraction)-.001f));
-                slide=end.getOrigin()-safe.getOrigin();
-                slide-=next.m_hitNormalWorld*std::min(btScalar(0),slide.dot(next.m_hitNormalWorld));
-            }
-            body.setWorldTransform(safe);body.setInterpolationWorldTransform(safe);
-            auto velocity=body.getLinearVelocity();const float inward=velocity.dot(hit.m_hitNormalWorld);
-            if(inward<0)body.setLinearVelocity(velocity-hit.m_hitNormalWorld*inward);
-            if(rotation>.001f)body.setAngularVelocity(body.getAngularVelocity()*fraction);
-            impl->world.updateSingleAabb(&body);
+            impl->ClipMotion(*state.first,from,to);
         }
     }
 }

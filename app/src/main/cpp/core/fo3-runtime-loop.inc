@@ -368,6 +368,11 @@ public:
 #endif
         FQ_LOGI("Q7.1 BOOT STEP: CreateSession");
         if (!CreateSession()) return false;
+        if(displayRefreshSupported_){
+            PFN_xrVoidFunction fn=nullptr;
+            if(XR_SUCCEEDED(xrGetInstanceProcAddr(instance_,"xrGetDisplayRefreshRateFB",&fn))&&fn)
+                reinterpret_cast<PFN_xrGetDisplayRefreshRateFB>(fn)(session_,&displayRefreshRate_);
+        }
         FQ_LOGI("Q7.1 BOOT STEP: CreateInputActions");
         if (!CreateInputActions()) return false;
         FQ_LOGI("Q7.1 BOOT STEP: CreateReferenceSpace");
@@ -535,6 +540,9 @@ private:
         FQ_LOGI("FQ SPACEWARP capability requested=%d api=%s synthesisRequested=%d default=on scope=all-scenes",
             requestSpacewarp,spacewarp_.Backend()==fqspacewarp::Api::EXT?"EXT":spacewarp_.Backend()==fqspacewarp::Api::FB?"FB":"unavailable",spacewarpSynthesisRequested_);
         for (const auto& extension : available) {
+            if(std::strcmp(extension.extensionName,XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME)==0){
+                displayRefreshSupported_=true;extensions.push_back(XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME);
+            }
             if (std::strcmp(extension.extensionName, XR_KHR_COMPOSITION_LAYER_DEPTH_EXTENSION_NAME) == 0) {
                 depthSubmissionEnabled_ = true;
                 extensions.push_back(XR_KHR_COMPOSITION_LAYER_DEPTH_EXTENSION_NAME);
@@ -1354,6 +1362,8 @@ private:
                            sessionState_ == XR_SESSION_STATE_LOSS_PENDING) {
                     exitRequested_ = true;
                 }
+            } else if(event.type==XR_TYPE_EVENT_DATA_DISPLAY_REFRESH_RATE_CHANGED_FB){
+                displayRefreshRate_=reinterpret_cast<const XrEventDataDisplayRefreshRateChangedFB*>(&event)->toDisplayRefreshRate;
             } else if (event.type == XR_TYPE_EVENT_DATA_INSTANCE_LOSS_PENDING) {
                 exitRequested_ = true;
             }
@@ -1491,6 +1501,8 @@ private:
 
     void UpdatePlayer(const XrView& headView, XrTime frameTime) {
         FQ_PERF_SCOPE(Motion);
+        XrPosef beforeApp{};beforeApp.orientation=YawQuaternion(playerYaw_);beforeApp.position=playerPosition_;
+        const auto beforeMatrix=MatrixFromPose(beforeApp);
         double dt = 1.0 / 72.0;
         if (lastFrameTime_ != 0 && frameTime > lastFrameTime_) {
             dt = static_cast<double>(frameTime - lastFrameTime_) / 1'000'000'000.0;
@@ -1549,6 +1561,11 @@ private:
             playerPosition_.x = desiredPlayerX;
             playerPosition_.z = desiredPlayerZ;
         }
+        XrPosef afterApp{};afterApp.orientation=YawQuaternion(playerYaw_);afterApp.position=playerPosition_;
+        const auto afterMatrix=MatrixFromPose(afterApp);
+        fo3rigid::M previousApp,currentApp;
+        std::copy_n(beforeMatrix.m,16,previousApp.begin());std::copy_n(afterMatrix.m,16,currentApp.begin());
+        fo3rigid::Live().MoveHeld(previousApp,currentApp,float(dt));
         const bool walkingEnabled=(std::fabs(requestedDx)+std::fabs(requestedDz)>.0001f) &&
             !IsFo3LoadingVisible() && !Fo3BarterFocus() &&
             !Fo3LockpickFocus() && !Fo3DialogueFocus() && !Fo3ScriptMessageFocus() &&
@@ -2337,7 +2354,7 @@ private:
         fo3perfui::Tick(gFo3PauseMenu.perfHudMode,q1700FrameSubmitted&&layerCount>0,
             gSceneReady&&!perfLoadingAtSubmit&&!Fo3GameplayBlocked(),
             fqopaque::Micros(appFrameStarted),uint32_t(gQ230NpcActors.size()),
-            frameState.predictedDisplayPeriod/1000.0);
+            displayRefreshRate_,spacewarpAttached);
         if(fqperf::capture.recording) {
             perf.us[fqperf::End]=perfEndUs;
             perf.us[fqperf::Work]=fqopaque::Micros(appFrameStarted);
@@ -2751,6 +2768,8 @@ private:
 
 private:
     android_app* app_{};
+    bool displayRefreshSupported_=false;
+    float displayRefreshRate_=0;
     fqspacewarp::Session spacewarp_;
     fqspacewarp::History spacewarpHistory_;
     uint64_t spacewarpSerial_=0;

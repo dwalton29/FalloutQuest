@@ -39,6 +39,7 @@ public:
     bool GripPalm(int hand,M& palm)const;
     void TargetBody(uint64_t id,const M& pose);
     uint64_t Held(int hand)const;
+    void MoveHeld(const M& previousApp,const M& currentApp,float seconds);
     void Step(float seconds);
     bool SweepCapsule(const V& fromFeet,const V& toFeet,float radius,float height,V& resolved,V& normal)const;
 };

@@ -17,7 +17,9 @@ struct State {
     GLsizei count=0;
     char text[144]{};
     unsigned mode=0;
-    unsigned frames=0;
+    unsigned frames=0,synthesisFrames=0;
+    bool spacewarp=false;
+    double synthesisFps=0;
     double cpuUs=0;
     uint32_t residents=0;
     int hz=72;
@@ -32,23 +34,26 @@ inline void Shutdown() {
     s={};
 }
 inline void Tick(unsigned mode,bool submitted,bool playable,double workUs,
-                 uint32_t residents,double periodUs) {
+                 uint32_t residents,double displayHz,bool synthesisSubmitted) {
     auto& s=Get();
-    if(mode==0) {s.frames=0;s.cpuUs=0;s.started={};s.mode=0;return;}
-    s.mode=mode;
+    if(mode==0) {s.frames=s.synthesisFrames=0;s.spacewarp=false;s.synthesisFps=0;s.cpuUs=0;s.started={};s.mode=0;return;}
+    s.mode=mode;s.spacewarp=playable&&submitted&&synthesisSubmitted;
     const auto now=Clock::now();
     if(s.started.time_since_epoch().count()==0) s.started=now;
     if(playable&&submitted) {
-        ++s.frames;
+        ++s.frames;if(synthesisSubmitted)++s.synthesisFrames;
         s.cpuUs+=std::max(0.0,workUs);
         s.residents=residents;
-        if(periodUs>1000) s.hz=int(std::lround(1000000.0/periodUs));
+        s.hz=displayHz>0?int(std::lround(displayHz)):0;
     }
     const double elapsed=std::chrono::duration<double>(now-s.started).count();
     if(elapsed>=.5) {
         s.fps=elapsed>0 ? double(s.frames)/elapsed : 0;
+        // Submission-based estimate, not a count of compositor-generated frames.
+        s.synthesisFps=s.fps+double(s.synthesisFrames)/elapsed;
+        if(s.hz>0)s.synthesisFps=std::min(s.synthesisFps,double(s.hz));
         s.cpuMs=s.frames ? s.cpuUs/(1000.0*s.frames) : 0;
-        s.frames=0;s.cpuUs=0;s.started=now;
+        s.frames=s.synthesisFrames=0;s.cpuUs=0;s.started=now;
     }
 }
 inline void Prepare(unsigned mode) {
@@ -58,10 +63,15 @@ inline void Prepare(unsigned mode) {
     if(!fo3hudrenderer::EnsureResources())return;
     const auto& font=fo3hudrenderer::State();
     char text[144]{};
-    if(mode==1) std::snprintf(text,sizeof text,"APP %.1f FPS / %d Hz",s.fps,s.hz);
+    char warp[48]{},refresh[24]{};
+    if(s.spacewarp)std::snprintf(warp,sizeof warp,"SW ~%.1f FPS",s.synthesisFps);
+    else std::snprintf(warp,sizeof warp,"SW OFF");
+    if(s.hz>0)std::snprintf(refresh,sizeof refresh,"%d Hz",s.hz);
+    else std::snprintf(refresh,sizeof refresh,"Hz N/A");
+    if(mode==1)std::snprintf(text,sizeof text,"APP %.1f FPS | %s | %s",s.fps,warp,refresh);
     else std::snprintf(text,sizeof text,
-          "APP %.1f FPS / %d Hz   CPU %.1fms   NPC %u   GPU N/A",
-          s.fps,s.hz,s.cpuMs,s.residents);
+          "APP %.1f FPS | %s | %s\nCPU %.1fms   NPC %u   GPU N/A",
+          s.fps,warp,refresh,s.cpuMs,s.residents);
     if(s.vao&&s.vbo&&mode==s.mode&&std::strcmp(s.text,text)==0)return;
     if(!s.vao) glGenVertexArrays(1,&s.vao);
     if(!s.vbo) glGenBuffers(1,&s.vbo);
@@ -71,7 +81,10 @@ inline void Prepare(unsigned mode) {
     std::vector<fo3hudassets::Vertex> verts;
     verts.reserve(std::strlen(text)*6u);
     const float scale=.030f/std::max(1.f,font.baseLine);
-    fo3font::AppendText(font,std::string_view(text),0,0,
+    std::string_view remaining(text);float lineTop=0;
+    while(!remaining.empty()){
+    const auto newline=remaining.find('\n');
+    fo3font::AppendText(font,remaining.substr(0,newline),0,lineTop,
         [&](uint8_t,const fo3font::Glyph& glyph,const fo3font::Quad& q) {
             fo3hudrenderer::AppendPromptQuad(verts,
                 -.52f+q.left*scale,.28f-q.top*scale,
@@ -79,6 +92,9 @@ inline void Prepare(unsigned mode) {
                 glyph.uv[0],glyph.uv[1],glyph.uv[2],glyph.uv[3],
                 glyph.uv[4],glyph.uv[5],glyph.uv[6],glyph.uv[7]);
         });
+    if(newline==std::string_view::npos)break;
+    remaining.remove_prefix(newline+1);lineTop+=std::max(1.f,font.baseLine)*1.4f;
+    }
     glBindVertexArray(s.vao);
     glBindBuffer(GL_ARRAY_BUFFER,s.vbo);
     glBufferData(GL_ARRAY_BUFFER,verts.size()*sizeof(fo3hudassets::Vertex),

@@ -10301,6 +10301,18 @@ void Q223AdvanceDynamicBodies() {
         const bool resident=std::any_of(gObjects.begin(),gObjects.end(),[&](const GpuObject& o){return o.q220LooseObject&&o.refFormId==i->first;});
         if(!resident){world.Remove(i->first);i=gQ223DynamicBodies.erase(i);}else ++i;
     }
+    // Existing loose grips receive this frame's raw tracking target before
+    // the shared step; late grab/release processing must not add a frame of lag.
+    for(int hand=0;hand<2;++hand){
+        const auto& grab=gQ220Grab[hand];
+        if(!grab.active||!gWeaponPalmValid[hand]||world.Held(hand)!=grab.refFormId)continue;
+        const float* tracked=hand==0?gQ210LeftHand:gQ210RightHand;
+        const float* quat=hand==0?gQ218LeftHandQuat:gQ218RightHandQuat;
+        float delta[16];Q220ControllerDeltaMatrix(grab.startTracked,grab.startQuat,{tracked[0],tracked[1],tracked[2]},quat,delta);
+        const auto point=Q220TransformPoint(delta,grab.startPalm);
+        auto palm=fo3rigid::Identity();const float identityQ[4]{0,0,0,1};
+        Q220ControllerDeltaMatrix({},identityQ,point,quat,palm.data());world.Target(hand,palm);
+    }
     world.Step(seconds);
     for(auto& entry:gQ223DynamicBodies){
         auto& body=entry.second;fo3rigid::M pose;fo3rigid::V linear,angular;
@@ -11473,9 +11485,19 @@ void UpdateFo3PipboyMount(const Q213ArmPose &pose) {
   gPipSolved = true;
 }
 #include "ui/pipboy/fo3-pipboy-runtime.inc"
-void Q211UpdatePlayerRig() {
-    if (gQ211LastSkinnedSerial == gQ211TrackingSerial) return;
-    gQ211LastSkinnedSerial = gQ211TrackingSerial;
+void Q211UpdatePlayerRig(bool finalPose=false) {
+    // Interaction first uses current tracking. Rendering is solved after the
+    // weapon/loose-body step, and is the only owner that publishes skin poses.
+    static uint64_t preparedSerial=UINT64_MAX,preparedRevision=UINT64_MAX;
+    static std::array<fo3vr::ArmState,2> beforeSolve;
+    if(finalPose){
+        if(gQ211LastSkinnedSerial==gQ211TrackingSerial)return;
+        gQ211LastSkinnedSerial=gQ211TrackingSerial;
+        if(preparedSerial==gQ211TrackingSerial&&preparedRevision==gQ211RigRevision){gVrArmState[0]=beforeSolve[0];gVrArmState[1]=beforeSolve[1];}
+    }else{
+        if(preparedSerial==gQ211TrackingSerial&&preparedRevision==gQ211RigRevision)return;
+        preparedSerial=gQ211TrackingSerial;preparedRevision=gQ211RigRevision;beforeSolve={gVrArmState[0],gVrArmState[1]};
+    }
     if (gQ211PlayerRigParts.empty()) return;
 
     const auto poseStarted=fqopaque::Clock::now();
@@ -11488,6 +11510,7 @@ void Q211UpdatePlayerRig() {
         gQ210RightHand[0], gQ210RightHand[1], gQ210RightHand[2]};
 
     auto contactHand=[&](int h,Vec3 target,bool valid){
+        if(!finalPose)return target; // Never feed last frame's physical palm back into tracking targets.
         static fo3rigid::V previous[2]{};static bool ready[2]{};
         if(!valid){ready[h]=false;return target;}
         fo3rigid::M palm;
@@ -11508,7 +11531,7 @@ void Q211UpdatePlayerRig() {
     std::copy(gQ218LeftHandQuat,gQ218LeftHandQuat+4,renderQuat[0]);
     std::copy(gQ218RightHandQuat,gQ218RightHandQuat+4,renderQuat[1]);
     for(int h=0;h<2;++h){fo3rigid::M physical;
-        if(!fo3rigid::Live().GripPalm(h,physical))continue;
+        if(!finalPose||!fo3rigid::Live().GripPalm(h,physical))continue;
         const float rotation[9]{physical[0],physical[4],physical[8],physical[1],physical[5],physical[9],physical[2],physical[6],physical[10]};
         const auto q=fo3anim::QuaternionFromMatrix(rotation);renderQuat[h][0]=q[1];renderQuat[h][1]=q[2];renderQuat[h][2]=q[3];renderQuat[h][3]=q[0];
     }
@@ -11549,6 +11572,7 @@ void Q211UpdatePlayerRig() {
 
     UpdateFo3PipboyMount(q213LeftPose);
     fqactor::player.pose+=fqopaque::Micros(poseStarted);
+    if(finalPose){
     const auto fingerStarted=fqopaque::Clock::now();
     static const std::unordered_map<std::string,Q211Delta> emptyFingerPose;
     const auto& q217LeftFingerPose =
@@ -11621,6 +11645,8 @@ void Q211UpdatePlayerRig() {
         fqactor::player.bones+=fqopaque::Micros(bonesStarted);
         QActorUploadSkin(gQ210PlayerBody[part.gpuIndex],part.skin,fqactor::player,true);
     }
+
+    } // Publish fingers/palettes only for the final post-physics render pose.
 
     // Interaction uses the same exact Hand-weighted palm as the wrist solver,
     // transformed by the canonical hand delta. There is no second hand solve.
@@ -12919,7 +12945,7 @@ void QActorPrepareStereoFrame() {
     SynchronizeFo3PipboyEquipment();
     const bool ready=Q210EnsurePlayerBody();
     const double setupUs=fqopaque::Micros(setupStarted);
-    if(ready) Q211UpdatePlayerRig();
+    if(ready){Q211UpdatePlayerRig(true);WeaponFinalizePlayerPose();}
     const double npcNow=std::chrono::duration<double>(Fo3GameplayNow().time_since_epoch()).count();
     const uint32_t pathQueriesBefore=gQ240PathsPlanned;
     const uint32_t pathExpandedBefore=gQ240PathNodesExpanded;

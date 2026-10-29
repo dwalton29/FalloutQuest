@@ -12,19 +12,31 @@ class Scope(unittest.TestCase):
     def test_draws_do_not_prepare_poses(self):
         core=(ROOT/'core/fo3-runtime.cpp').read_text()
         player=core.split('void Q210RenderPlayerBody(',1)[1].split('void QActorPrepareStereoFrame()',1)[0]
-        self.assertNotIn('Q211UpdatePlayerRig()',player)
+        self.assertNotIn('Q211UpdatePlayerRig(',player)
         self.assertNotIn('Q210EnsurePlayerBody()',player)
         npc=(ROOT/'npc/fo3-npc-runtime.inc').read_text().split('void Q230RenderNpcActors(',1)[1]
         self.assertNotIn('Q230UpdateActor(',npc)
         loop=(ROOT/'core/fo3-runtime-loop.inc').read_text()
         self.assertLess(loop.index('QActorPrepareStereoFrame();'),loop.index('rendered = RenderEye(eye'))
+    def test_player_final_pose_follows_physics(self):
+        core=(ROOT/'core/fo3-runtime.cpp').read_text()
+        prepare=core.split('void QActorPrepareStereoFrame()',1)[1]
+        self.assertIn('Q211UpdatePlayerRig(true);WeaponFinalizePlayerPose();',prepare)
+        rig=core.split('void Q211UpdatePlayerRig(',1)[1].split('void Q210DeletePlayerBody',1)[0]
+        self.assertIn('if(!finalPose)return target;',rig)
+        self.assertIn('beforeSolve={gVrArmState[0],gVrArmState[1]}',rig)
+        self.assertIn('if(finalPose){\n    const auto fingerStarted',rig)
+        step=core.split('void Q223AdvanceDynamicBodies()',1)[1].split('bool Q220FindNearestLooseRef',1)[0]
+        self.assertLess(step.index('world.Target(hand,palm)'),step.index('world.Step(seconds)'))
+        loop=(ROOT/'core/fo3-runtime-loop.inc').read_text()
+        self.assertLess(loop.index('WeaponUpdate(gameplaySeconds'),loop.index('QActorPrepareStereoFrame();'))
     def test_gpu_updates_only_palettes(self):
         helper=(ROOT/'rendering/actor-gpu-skin.inc').read_text()
         branch=helper.split('void QActorUploadSkin(',1)[1].split('} else {',1)[0]
         self.assertIn('glTexSubImage2D(',branch)
         self.assertNotIn('glBufferSubData',branch)
         self.assertNotIn('skin.bind',branch)
-        player=(ROOT/'core/fo3-runtime.cpp').read_text().split('void Q211UpdatePlayerRig()',1)[1].split('void Q210DeletePlayerBody',1)[0]
+        player=(ROOT/'core/fo3-runtime.cpp').read_text().split('void Q211UpdatePlayerRig(',1)[1].split('void Q210DeletePlayerBody',1)[0]
         self.assertNotIn('for (size_t v',player)
         self.assertNotIn('glBufferSubData',player)
         npc=(ROOT/'npc/fo3-npc-runtime.inc').read_text().split('void Q230UpdateActor(',1)[1].split('void Q230RenderNpcActors',1)[0]

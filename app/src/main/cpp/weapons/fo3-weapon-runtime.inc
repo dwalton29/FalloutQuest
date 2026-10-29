@@ -295,6 +295,12 @@ void AlignSupportHand(const Model&m){
 }
 }
 
+void WeaponFinalizePlayerPose(){
+  using namespace weaponruntime;
+  if(!held||!support||!gWeaponPalmValid[0]||!gPlayerSession)return;
+  const auto* gun=gPlayerSession->player.EquippedWeapon();if(!gun)return;
+  const auto model=models.find(gun->formId);if(model!=models.end())AlignSupportHand(model->second);
+}
 bool WeaponHeld(){return weaponruntime::held;}
 // The left hand owns the spare magazine/charging gesture; arm raise must not
 // switch to Pip-Boy focus and retire its reload state.
@@ -433,7 +439,7 @@ void WeaponUpdate(double now,bool backButton){
         Q223AdvanceDynamicBodies();physicsAdvanced=true;
         Matrix actual;if(physics.Pose(key,actual))pose=Rigid(Rotation(actual),Position(actual)-Direction(actual,local));
       }
-      if(support&&gWeaponPalmValid[0])AlignSupportHand(*m);
+      // Support-hand skin alignment is published with the final render pose.
       const auto sampledRotation=fo3anim::QuaternionFromMatrix(Rotation(pose).data());
       const float sampledQuat[4]{sampledRotation[1],sampledRotation[2],sampledRotation[3],sampledRotation[0]};
       Q223SampleHeldMotion(motion,RuntimePoint(Point(pose,m->centre)),sampledQuat);
