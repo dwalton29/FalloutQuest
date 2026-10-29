@@ -273,6 +273,7 @@ struct Definitions {
   std::unordered_map<uint32_t, uint32_t> npcVoices, cellWorlds;
   std::unordered_map<uint32_t,std::array<int32_t,2>> cellGrids;
   std::unordered_map<uint32_t, Script> scripts;
+  std::unordered_set<uint32_t> scriptReferencedForms; // Original SCRO dependencies survive placement pruning.
   std::unordered_map<std::string, uint32_t> questNames;
   bool playerFemale = false;
   std::unordered_map<uint32_t,std::vector<uint32_t>> formLists;

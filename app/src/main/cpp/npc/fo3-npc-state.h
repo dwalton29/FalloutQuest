@@ -78,6 +78,13 @@ struct RuntimeState {
   // Ephemeral route backoff, owned per actor and per package. A failed
   // priority entry must let other authored entries run until its next retry.
   std::unordered_map<uint32_t,double> packageRetryAfter;
+  void Relocate(const std::array<float,3>& point,float facing,bool resident){
+    furniture.Clear();position=destination=point;yaw=returnYaw=facing;speed=0;offScene=!resident;
+    navigationDoor=xtelDoor=xtelCell=0;blockedSince=crowdBlockedSince=-1;
+    hasLastRoamDestination=false;packageRetryAfter.clear();
+    nextPath=nextDoorQuery=nextPackageEvaluation=0;packageRevision=UINT64_MAX;
+    procedure=Procedure::Interrupted;tacticalRouteKind=0;coverUntil=-1;
+  }
   bool Alive() const {return activity!=Activity::Dying&&activity!=Activity::Dead&&activity!=Activity::Unconscious;}
   bool CanTalk() const {return Alive()&&activity!=Activity::Combat;}
   void BeginCombat(uint32_t target){

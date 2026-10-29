@@ -586,6 +586,8 @@ public:
   float ActorWeaponDamage(uint32_t reference) const;
   float DamageResistance(uint32_t reference) const;
   bool UpdateActor(uint32_t reference,const ActorState& state);
+  bool MoveActorTo(uint32_t reference,uint32_t destination,const std::array<float,3>& offset);
+  uint64_t ScriptActorMoveEpoch(uint32_t reference) const {const auto i=scriptActorMoves_.find(reference);return i==scriptActorMoves_.end()?0:i->second;}
   bool SetActorHostile(uint32_t reference,uint32_t target);
   OwnershipResult ResolveOwnership(uint32_t reference, const OwnershipData* item=nullptr) const;
   OwnershipResult ContainerStackOwnership(uint32_t reference,uint64_t stack) const;
@@ -683,6 +685,7 @@ private:
   mutable State state_;
   mutable uint64_t revision_ = 0;
   uint64_t actorPoseRevisions_ = 0;
+  std::unordered_map<uint32_t,uint64_t> scriptActorMoves_; // Native pose invalidation, not save authority.
   double questScriptAccumulator_=0,referenceScriptAccumulator_=0;
   double questScriptClock_=0;
   std::unordered_map<uint32_t,double> questScriptLastTicks_;

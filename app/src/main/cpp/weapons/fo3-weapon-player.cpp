@@ -401,6 +401,29 @@ bool Player::UpdateActor(uint32_t reference,const ActorState& a) {
   }else if(state_.actors.size()>=10000)return false;
   state_.actors[reference]=a;++revision_;if(poseOnly)++actorPoseRevisions_;return true;
 }
+bool Player::MoveActorTo(uint32_t reference,uint32_t destination,const std::array<float,3>& offset) {
+  // Original MoveToMarker/MoveTo (109E) copies the destination CELL, position
+  // and rotation, then adds world-axis offsets. Canonical actor state already
+  // persists across residency; it must change before any native pose is touched.
+  const auto source=catalog_->pipboy.targets.find(reference),target=catalog_->pipboy.targets.find(destination);
+  if(reference==PlayerRef||destination==PlayerRef||source==catalog_->pipboy.targets.end()||
+     target==catalog_->pipboy.targets.end()||!catalog_->actorPlacements.count(reference)||
+     (source->second.flags&0x20u)||(target->second.flags&0x20u)||
+     !std::all_of(offset.begin(),offset.end(),[](float x){return std::isfinite(x);}))return false;
+  ActorState moved;const auto old=state_.actors.find(reference);
+  if(old!=state_.actors.end())moved=old->second;
+  moved.cell=target->second.cell;moved.world=target->second.world;
+  moved.position={target->second.x,target->second.y,target->second.z};moved.yaw=target->second.rz;
+  const auto live=state_.actors.find(destination);
+  if(live!=state_.actors.end()){moved.cell=live->second.cell;moved.world=live->second.world;moved.position=live->second.position;moved.yaw=live->second.yaw;}
+  for(size_t i=0;i<3;++i)moved.position[i]+=offset[i];
+  moved.sequence=0;moved.packageWaitSeconds=0;
+  if(!UpdateActor(reference,moved))return false;
+  // Repeated MoveTo to the same coordinates still invalidates an old route.
+  // This signal is copied/swapped with script transactions. Saved ActorState
+  // supplies the destination after reload; transient epochs are cleared there.
+  scriptActorMoves_[reference]=++revision_;return true;
+}
 bool Player::SetActorHostile(uint32_t reference,uint32_t target) {
   const auto t=catalog_->pipboy.targets.find(reference);if(t==catalog_->pipboy.targets.end())return false;
   ActorState a;const auto old=state_.actors.find(reference);

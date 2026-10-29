@@ -1,6 +1,7 @@
 # Following in His Footsteps: implementation checkpoint
 
-Baseline: main 09d5a3c (v288). Original quest MQ01 / 00014E87.
+Baseline: main 09d5a3c (v288). Foundation: 853deb8 (v289).
+Original quest MQ01 / 00014E87; movement checkpoint v290.
 This is an incomplete quest implementation, not an end-to-end certification.
 
 ## Original progression and alternatives
@@ -66,12 +67,12 @@ explicitly listed whole result bodies below have been tested.
 | Quest cadence | Added original QUST DATA cadence and saved SetQuestDelay overrides. Zero uses the supplied INI default of 5 seconds. Fast quests run at most once per frame; reference scripts retain their bounded cadence. Timing, reset-to-default and reload tests pass. |
 | Factions | Added saved SetEnemy/SetAlly directional relations and live combat/fast-travel consumers. Original executable handlers 007A3FF0 and 007A2AF0 confirm neutral/enemy and ally/friend flag semantics. |
 | Essential actors | Added saved base-actor SetEssential overrides used by canonical hit/kill policy, retaining Traits inheritance and death state. Handler 007A40A0 sets base flag 2 for a positive integer argument. |
-| Reference movement | MoveTo using original destination reference, rotation/cell/world ownership, resident/unloaded actor migration and scene publication. MQ03's nested Dr Li movement blocks the stage-175 shortcut. |
+| Reference movement | Added actor MoveTo/MoveToMarker with authored destination, rotation and world-axis offsets, transactional canonical state, resident pose invalidation before simulation/persistence, navigation reset and fresh motion identity. Existing arrivals/retirement handles changes in residency. Player/non-actor moves and reference-variable destinations remain unsupported. |
 | Positional effects | PlaySound3D and original explosion/weapon effects, using authored locations and ownership. Stage 104 currently rejects marker.PlaySound3D. |
 | Events | OnHitWith must carry the weapon filter separately from the attacker; preserve IsActionRef/OnHit/OnDeath identity. Do not substitute the weapon as activator. Verify OnPackageStart/Done and speech-completion filters. |
 | Typed references | Durable reference locals and reference-valued expressions for MQ01's speaker/target scene logic. Numeric locals must not stand in for FormIDs. |
 | Dialogue | Normal GREETING/choices, speech outcomes, Silver, Gob/Nova, Three Dog's alternatives and unavailable-condition diagnostics. A result-script preview alone does not establish access to a choice. |
-| World route | Original encounters, triggers, doors, combat and navigation across the D.C. approach and GNR; unloading/return must not duplicate encounters or discard timers. |
+| World route | Original encounters, triggers, doors, combat and navigation across the D.C. approach and GNR still need demonstration. Off-scene reference changes now publish logically when every enable-parent descendant is outside the current CELL/world and live resource inventory; resident changes still use the resource coordinator. |
 | Completion | Original stage flags/results, nested MQ02/MQ03 execution, actual perk/item/XP/radio consequences and no duplicate rewards after reload. |
 
 ## Verification boundary and next checkpoints
@@ -88,13 +89,80 @@ The original result bodies for stages 55, 80, 142 and 150 execute in the host
 fixture, with their timing/AI/faction/essential overrides retained across reload.
 This does not demonstrate the actual approach, battle or world scene.
 
-No complete quest route has been demonstrated. Android compilation and physical
-headset testing are separate evidence requirements. In particular, headset
-verification needs a post-Escape save, sufficient caps for Moriarty, the GNR
-approach/battle, and saves before and after each transition/completion branch.
-The original MS11 disarm/reward regression remains required.
+No complete world traversal or headset quest route has been demonstrated.
+Android compilation and physical headset testing are separate evidence requirements.
 
 Host verification: event_script_tests, weapon_tests with Fallout3.esm,
 npc_combat_tests, original MS11 completion tests (all three branches plus
 Swift Learner), and scene-collision/indexed-NIF source contracts pass. These do
 not establish headset playback, navigation or frame time.
+
+## Movement and early Rivet City checkpoint
+
+Pip-Boy target pruning discarded the Citadel destination marker used by MQ01's
+endings. The shared decoder now retains original SCRO dependencies from SCPT,
+QUST, INFO, terminal and patrol records before pruning placements. This is not
+an editor-name allowlist. It does not add marker meshes to rendering.
+
+The shared AddNote path previously treated notes as stackable AddItem grants.
+The original executable's AddNote entry (117C / 0078E480) delegates to the unique
+player note list (008AF220). Repeated AddNote now retains one owned note and does
+not replay its added notification. Existing DATA/Notes content/audio paths consume
+that inventory; it persists through the existing item save format.
+
+The original-data test `mq01_progression_tests Fallout3.esm` follows normal
+Moriarty greeting/choices/payment, saves at stage 40, returns to Moriarty,
+then follows Doctor Li's original greeting and father/location choices. Original
+INFO results advance MQ03 to 30, MQ01 to 210 and MQ01LD to 150. No stage is
+advanced by the test during this progression. The valid starting-state fixture
+has MQ01 stage 10 and 100 caps. Audio completion tokens stand in for actual voice
+playback; actor locations stand in for world traversal.
+
+The checks cover objective completion, the authored early-skip outcome (no 300 XP
+or achievement-4 grant), Sarah's Citadel placement, disabled encounter references,
+post-quest enablers/collision, mid-quest and completed saves, return conversations
+and replay protection for already visited stages. The test is explicitly skipped
+by CTest without the original master; CI without game assets is not original-data
+verification.
+
+The complete original stage-result bodies 175, 200, 210 and 250 now pass host
+preflight. That does not prove access to every ending, voice playback, physical
+movement, combat or scene rendering.
+
+## Alternative-route status
+
+| Route/outcome | Evidence / remaining work |
+|---|---|
+| Moriarty 100-cap route | Normal greeting, original choices and completion-token result execution; stage 40, caps and save/return checks. |
+| Moriarty 300-cap demand | Insufficient-funds result rejection checked; full conversation route remains unverified. |
+| Silver / Gob / Nova / terminal | Original links identified; complete conversation/access/terminal routes remain unverified. |
+| Early Rivet City / MQ03 skip | Original dialogue/script progression to stage 210, canonical world changes and persistence tested on host; traversal/residency rendering still needs headset verification. |
+| Normal Three Dog / stage 200 | Complete result preflight passes, including Sarah's movement; full world approach, battle and final conversation/rewards remain unverified. |
+| Three Dog speech shortcut / 175 | Nested MQ03 movement no longer blocks the result preflight; skill-success conversation and repeat-reward checks remain. |
+| Dish already held | Separate DialogueGNR INFO/NOTE/MQ02 continuation identified; complete alternate path remains unverified. |
+| Three Dog killed / 250 | Complete result preflight passes; real death-event delivery and consequences remain to be verified. |
+
+DialogueGNR (00025960) owns Three Dog's relevant INFOs, independently of their
+MQ01 stage effects. An audit restricted to INFOs whose QSTI is MQ01 misses these.
+MQ01LD stage 50 also needs AddToFaction membership overlays and all their live
+condition/combat consumers. The Behemoth entrance needs original PlaceAtMe
+explosion effects as well as PlaySound3D. These remain explicit unsupported
+commands, not skipped successful effects.
+
+## Focused headset verification
+
+1. Use a valid post-Escape save with MQ01 active and 100 caps. Talk to Moriarty
+   through the original father/payment choices. Check the GNR objective/map marker
+   and the 100-cap deduction. Save, leave, return and reload.
+2. Travel to Rivet City and talk to Doctor Li. Follow the father/location choices
+   through asking where the old lab is. Check MQ01 completion and the Project
+   Purity objective. The early-skip outcome must not invent a 300 XP reward.
+3. Save/reload and revisit Li/Moriarty; verify no duplicate charge, reward or
+   encounter reset. Revisit affected GNR/Citadel areas to verify original NPC
+   residency, relocated facing, enabled collision and absence of teleport streaks.
+4. Recheck the existing Megaton bomb disarm/reward path. Host tests retain all
+   three original reward branches and Swift Learner checks.
+
+No physical Quest/ADB session is connected here. The available local asset subset
+also does not provide a complete rendered/audio D.C. traversal. Host script tests
+cannot certify those observations.

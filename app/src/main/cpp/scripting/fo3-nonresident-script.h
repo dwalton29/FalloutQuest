@@ -2,9 +2,9 @@
 #include "player/fo3-player-state.h"
 #include <algorithm>
 namespace fo3script {
-// Bounded logical publication: off-scene actor removal, resource-free CREA
-// changes, and off-scene radio state. Every affected enable-parent descendant
-// must pass independently. Resident resources need the full scene coordinator.
+// Logical publication for references outside the current CELL/world and live
+// resource inventory, plus existing resource-free actor/CREA changes. Every
+// enable-parent descendant is checked. Resident resources use the coordinator.
 inline bool NonresidentActorRemoval(const fo3player::Player& player,
     const fo3player::ScriptTransactionPlan& plan,uint32_t cell,uint32_t world,
     const std::vector<uint32_t>& liveActors,std::string& error) {
@@ -13,6 +13,17 @@ inline bool NonresidentActorRemoval(const fo3player::Player& player,
   const auto& c=player.Definitions();
   for(auto id:plan.AffectedReferences()){
     const auto ref=c.references.find(id);
+    if(ref!=c.references.end()&&ref->second.valid&&ref->second.base&&!(ref->second.flags&0x20u)&&
+       std::find(liveActors.begin(),liveActors.end(),id)==liveActors.end()){
+      uint32_t location=ref->second.cell,space=0;
+      const auto originalWorld=c.pipboy.cellWorlds.find(location);
+      bool located=originalWorld!=c.pipboy.cellWorlds.end();
+      if(located)space=originalWorld->second;
+      const auto actor=player.Snapshot().actors.find(id);
+      if(actor!=player.Snapshot().actors.end()){location=actor->second.cell;space=actor->second.world;located=true;}
+      if(located&&location&&location!=cell&&(!world||space!=world))continue;
+    }
+
     if(ref!=c.references.end()&&c.actorPlacements.count(id)&&c.weapons.actors.count(ref->second.base)&&
        player.Snapshot().actors.count(id)&&std::find(liveActors.begin(),liveActors.end(),id)==liveActors.end())continue;
     // Unprepared creature resources remain deferred. Their complete

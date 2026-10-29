@@ -43,6 +43,52 @@ static void ScriptedRelationsAndEssential(){
   assert(restored.Essential(100)&&restored.ActorHealth(100)==1&&restored.ActorHealth(102)==0);
   assert(restored.Snapshot().factionRelations==p.Snapshot().factionRelations);
 }
+static void ScriptedNotes(){
+  auto c=Fixture();c.items[400].formId=400;c.items[400].kind=ItemKind::Note;c.items[400].name="Authored note";
+  c.pipboy.notes[400].type=1;c.pipboy.notes[400].text="Original fixture text";c.pipboy.formNames["authorednote"]=400;
+  Player p(c);std::string error;fo3pipdata::ResultScript body;body.source="Player.AddNote AuthoredNote";
+  assert(p.PreviewDialogueResult(body,error)&&p.ItemCount(400)==0);
+  assert(p.ExecuteDialogueResult(body,error)&&p.ItemCount(400)==1);
+  ScriptItemNotice notice;assert(p.PollScriptItemNotice(notice)&&notice.form==400&&notice.count==1);
+  const bool repeat=p.ExecuteDialogueResult(body,error);const auto count=p.ItemCount(400);const bool notified=p.PollScriptItemNotice(notice);
+  if(!repeat||count!=1||notified)std::cerr<<"AddNote repeat="<<repeat<<" count="<<count<<" notified="<<notified<<" error="<<error<<std::endl;
+  assert(repeat&&count==1&&!notified);
+  auto file="/tmp/fq-addnote-"+std::to_string(getpid());assert(p.Save(file,error));Player restored(c);assert(restored.Restore(file,error));unlink(file.c_str());
+  assert(restored.ItemCount(400)==1&&restored.Definitions().pipboy.notes.at(400).text=="Original fixture text");
+  assert(restored.ExecuteDialogueResult(body,error)&&restored.ItemCount(400)==1&&!restored.PollScriptItemNotice(notice));
+  body.source="Player.AddNote AuthoredNote\nPlayer.RemoveItem UnknownItem 1";const auto revision=p.Revision();
+  assert(!p.ExecuteDialogueResult(body,error)&&p.Revision()==revision&&p.ItemCount(400)==1);
+}
+static void ScriptPlacementsSurviveFinalization(){
+  fo3pipdata::Definitions d;d.targets[300].cell=2;d.targets[301].cell=2;
+  std::vector<uint8_t> script={'S','C','R','O',4,0,44,1,0,0};
+  fo3pipdata::Decode(d,"SCPT",500,0,script,0,0,0);fo3pipdata::Finalize(d);
+  assert(d.targets.count(300)&&!d.targets.count(301));
+}
+static void ScriptedActorMovement(){
+  auto c=Fixture();c.actorPlacements[100].base=200;
+  auto& marker=c.pipboy.targets[300];marker.cell=2;marker.x=100;marker.y=200;marker.z=300;marker.rz=1.25f;
+  c.pipboy.formNames["actorref"]=100;c.pipboy.formNames["destmarker"]=300;
+  Player p(c);std::string error;ActorState initial;initial.cell=1;initial.position={1,2,3};initial.package=77;
+  assert(p.UpdateActor(100,initial));
+  fo3pipdata::ResultScript body;body.source="ActorRef.MoveTo DestMarker 10 -20 30";
+  assert(p.PreviewDialogueResult(body,error));assert(p.Snapshot().actors.at(100).cell==1&&!p.ScriptActorMoveEpoch(100));
+  auto plan=p.PrepareDialogueTransaction(body,{},error);assert(plan&&p.CommitScriptTransaction(*plan));
+  auto moved=p.Snapshot().actors.at(100);assert(moved.cell==2&&moved.world==0&&moved.yaw==1.25f&&moved.package==77);
+  assert((moved.position==std::array<float,3>{110,180,330})&&p.ScriptActorMoveEpoch(100));
+  assert(p.RollbackScriptTransaction(*plan));assert(p.Snapshot().actors.at(100).cell==1&&!p.ScriptActorMoveEpoch(100));
+  assert(p.ExecuteDialogueResult(body,error));const auto epoch=p.ScriptActorMoveEpoch(100);
+  auto file="/tmp/fq-moveto-"+std::to_string(getpid());assert(p.Save(file,error));Player restored(c);assert(restored.Restore(file,error));unlink(file.c_str());
+  assert(restored.Snapshot().actors.at(100).position==moved.position&&!restored.ScriptActorMoveEpoch(100));
+  body.source="ActorRef.MoveToMarker DestMarker";assert(p.ExecuteDialogueResult(body,error)&&p.ScriptActorMoveEpoch(100)>epoch);
+  body.source="ActorRef.MoveTo DestMarker\nPlayer.RemoveItem UnknownItem 1";
+  const auto revision=p.Revision();assert(!p.ExecuteDialogueResult(body,error)&&p.Revision()==revision);
+  assert(!p.MoveActorTo(100,0x14,{})&&!p.MoveActorTo(0x14,300,{}));
+  fo3npc::RuntimeState runtime;runtime.position={1,2,3};runtime.navigationDoor=1;runtime.xtelDoor=2;runtime.nextPath=20;
+  runtime.Relocate({4,5,6},1.25f,false);assert(runtime.offScene&&runtime.xtelDoor==0&&runtime.navigationDoor==0&&runtime.nextPath==0);
+  assert((runtime.position==std::array<float,3>{4,5,6})&&runtime.returnYaw==1.25f);
+  runtime.Relocate({1,2,3},0,true);assert(!runtime.offScene);
+}
 static void StateAndPerception() {
   using namespace fo3npc;RuntimeState s;s.activity=Activity::Package;s.package=77;s.position={1,2,3};s.speed=2;
   s.BeginDialogue();assert(s.activity==Activity::Dialogue&&s.speed==0);s.BeginCombat(101);
@@ -226,4 +272,4 @@ static void Original(const char* path) {
     assert(fo3npc::AI(c.pipboy,r.second.base).valid);++count;
   }assert(count==5);
 }
-int main(int argc,char** argv){ScriptedRelationsAndEssential();StyleDecodeValidation();SourceContext();StateAndPerception();CombatAssetCandidates();InventoryDamagePersistence(true);InventoryDamagePersistence(false);if(argc>1)Original(argv[1]);std::cout<<"NPC combat state tests passed\n";}
+int main(int argc,char** argv){ScriptedRelationsAndEssential();ScriptedNotes();ScriptPlacementsSurviveFinalization();ScriptedActorMovement();StyleDecodeValidation();SourceContext();StateAndPerception();CombatAssetCandidates();InventoryDamagePersistence(true);InventoryDamagePersistence(false);if(argc>1)Original(argv[1]);std::cout<<"NPC combat state tests passed\n";}

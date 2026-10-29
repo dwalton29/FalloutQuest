@@ -89,6 +89,9 @@ void Decode(Definitions &d, const std::string &t, uint32_t id, uint32_t flags,
                          [&](const char *tag, const uint8_t *p, uint32_t n) {
                            s.push_back({std::string(tag, 4), p, n});
                          });
+  // Result scripts occur in SCPT, QUST, INFO, terminal entries and patrol
+  // records. Keep their authored SCRO dependencies independently of map targets.
+  for(const auto& v:s)if(v.type=="SCRO"&&v.n==4)d.scriptReferencedForms.insert(U(&v));
   const auto editor=Text(s,"EDID");
   if(!editor.empty()) { auto key=editor; for(auto& c:key)c=char(std::tolower((unsigned char)c));d.formNames[key]=id; }
   if(t=="GMST"){
@@ -645,7 +648,7 @@ void Finalize(Definitions &d) {
       }
     } else p.patrolUnsupported="Patrol starting location resolver unsupported";
   }
-  std::unordered_set<uint32_t> retain;
+  std::unordered_set<uint32_t> retain=d.scriptReferencedForms;
   // Trigger dispatch and radio state require placements independently of
   // quest navigation. Their invisible volumes/transmitters are real residents.
   for(const auto& trigger:d.triggerPrimitives)retain.insert(trigger.first);

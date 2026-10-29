@@ -384,6 +384,7 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
     switch(c.type) {
     case C::Return:return true;
     case C::Kill:ok=KillActor(c.form);break;
+    case C::MoveTo:ok=MoveActorTo(c.form,c.index,c.offset);break;
     case C::ResetHealth:ok=ResetActorHealth(c.form);break;
     case C::SetActorAIValue:ok=SetActorAIValue(c.form,c.index,c.value);break;
     case C::SetQuestDelay:ok=SetQuestScriptDelay(c.form,c.value);break;
@@ -409,6 +410,15 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
     case C::AddItem:
       ok=pendingScriptItems_.size()<128&&Add(c.form,int32_t(c.value));
       if(ok){pendingScriptItems_.push_back({c.form,int32_t(c.value)});++scriptEffectRevision_;}
+      break;
+    case C::AddNote:
+      if(!catalog_->pipboy.notes.count(c.form)){ok=false;break;}
+      // The original maintains a unique player note list, independent of a
+      // script's receiver. Existing Pip-Boy DATA/Notes consumes NOTE inventory.
+      if(!ItemCount(c.form)){
+        ok=pendingScriptItems_.size()<128&&Add(c.form,1);
+        if(ok){pendingScriptItems_.push_back({c.form,1});++scriptEffectRevision_;}
+      }
       break;
     case C::RemoveItem:ok=ScriptRemoveItem(c.form,int32_t(c.value));break;
     case C::DoorState:ok=ScriptDoorState(c.form,c.value!=0);break;

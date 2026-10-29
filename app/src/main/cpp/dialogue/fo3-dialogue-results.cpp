@@ -116,6 +116,11 @@ bool CompileResult(const fo3pipdata::Definitions& d,const fo3pipdata::ResultScri
       cmd.type=CommandType::SayTo;cmd.form=op.find('.')==std::string::npos?owner:form(op.substr(0,op.find('.')));cmd.index=fo3player::PlayerRef;
       if(op=="sayto"){if(!(in>>a)||!(cmd.index=form(a))){error="invalid SayTo target";return false;}}
       if(!(in>>a)||!(cmd.variable=form(a))){error="invalid speech topic";return false;}
+    } else if(op=="moveto"||op=="movetomarker"||
+              (op.find('.')!=std::string::npos&&(op.substr(op.find('.')+1)=="moveto"||op.substr(op.find('.')+1)=="movetomarker"))){
+      cmd.type=CommandType::MoveTo;cmd.form=op.find('.')==std::string::npos?owner:form(op.substr(0,op.find('.')));
+      if(!cmd.form||!(in>>a)||!(cmd.index=form(a))){error="invalid MoveTo references";return false;}
+      for(auto& offset:cmd.offset){if(!(in>>a)){in.clear();break;}if(!number(a,offset)){error="unsupported MoveTo offset expression";return false;}}
     } else if(op=="kill"||(op.size()>5&&op.substr(op.size()-5)==".kill")){
       cmd.type=CommandType::Kill;cmd.form=op=="kill"?owner:form(op.substr(0,op.size()-5));
       if(!cmd.form){error="invalid Kill receiver";return false;}
@@ -160,8 +165,8 @@ bool CompileResult(const fo3pipdata::Definitions& d,const fo3pipdata::ResultScri
       cmd.type=CommandType::ShowBarterMenu;std::getline(in,cmd.expression);
       cmd.expression=fo3script::Trim(cmd.expression);
     } else if(op=="addnote"||op=="player.addnote"||op=="removenote"||op=="player.removenote") {
-      if(!(in>>a)||!(cmd.form=form(a))||!d.notes.count(cmd.form)){error="invalid terminal note";return false;}
-      cmd.type=op.find("remove")!=std::string::npos?CommandType::RemoveItem:CommandType::AddItem;cmd.value=1;
+      if(!(in>>a)||!(cmd.form=form(a))||!d.notes.count(cmd.form)){error="invalid note";return false;}
+      cmd.type=op.find("remove")!=std::string::npos?CommandType::RemoveItem:CommandType::AddNote;cmd.value=1;
     } else if(op=="showmap") {
       if(!(in>>a)||!(cmd.form=form(a))||!d.markers.count(cmd.form)){error="invalid map marker";return false;}
       cmd.type=CommandType::ShowMap;cmd.value=0;

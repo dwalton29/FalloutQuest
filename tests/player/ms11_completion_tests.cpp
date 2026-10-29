@@ -149,4 +149,20 @@ static void Atomic(){
   assert(p.Restore(legacy,error)&&p.CellFullName(20)=="Empty"&&p.Snapshot().achievements.empty()&&p.Snapshot().experience==0);
   std::remove(save.c_str());std::remove(legacy.c_str());
 }
-int main(int argc,char** argv){Atomic();if(argc>1)Original(argv[1]);std::cout<<"MS11 completion transactions passed\n";}
+static void OffsceneReferenceClosure(){
+  fo3player::Catalog c;c.initial.baseHealth=100;c.initial.special.fill(1);
+  c.pipboy.formNames["enabler"]=100;
+  for(auto id:{100u,101u}){c.references[id].base=200+id;c.references[id].cell=21;c.references[id].flags=0x800;}
+  c.enableParents[101]={100,0,true};c.pipboy.cellWorlds[21]=5;
+  fo3player::Player p(c);std::string error;fo3pipdata::ResultScript body;body.source="Enabler.Enable";
+  auto plan=p.PrepareDialogueTransaction(body,{},error);assert(plan&&plan->HasReferenceChanges());
+  assert(fo3script::NonresidentActorRemoval(p,*plan,20,0,{},error));
+  assert(!fo3script::NonresidentActorRemoval(p,*plan,21,0,{},error));
+  assert(!fo3script::NonresidentActorRemoval(p,*plan,22,5,{},error));
+  assert(!fo3script::NonresidentActorRemoval(p,*plan,20,0,{101},error));
+  assert(p.CommitScriptTransaction(*plan));bool disabled=true;assert(p.ReferenceDisabled(101,disabled,error)&&!disabled);
+  c.references[101].cell=20;c.pipboy.cellWorlds[20]=0;fo3player::Player mixed(c);
+  plan=mixed.PrepareDialogueTransaction(body,{},error);assert(plan);
+  assert(!fo3script::NonresidentActorRemoval(mixed,*plan,20,0,{},error));
+}
+int main(int argc,char** argv){OffsceneReferenceClosure();Atomic();if(argc>1)Original(argv[1]);std::cout<<"MS11 completion transactions passed\n";}

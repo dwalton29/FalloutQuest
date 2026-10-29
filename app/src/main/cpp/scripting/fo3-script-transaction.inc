@@ -4,7 +4,7 @@
 namespace fo3player {
 Player::Player(const Player& source,ScriptCandidateTag)
     : referencePlanIdentity_(source.referencePlanIdentity_),catalog_(source.catalog_),
-      state_(source.state_),revision_(source.revision_),actorPoseRevisions_(source.actorPoseRevisions_),
+      state_(source.state_),revision_(source.revision_),actorPoseRevisions_(source.actorPoseRevisions_),scriptActorMoves_(source.scriptActorMoves_),
       scriptActivator_(source.scriptActivator_),scriptReference_(source.scriptReference_),
       scriptPlayerCell_(source.scriptPlayerCell_),scriptPlayerWorld_(source.scriptPlayerWorld_),
       scriptPlayerPosition_(source.scriptPlayerPosition_),scriptPlayerPositionKnown_(source.scriptPlayerPositionKnown_),
@@ -167,6 +167,7 @@ void Player::SwapScriptPayload(Player& other) noexcept {
   static_assert(std::is_nothrow_swappable_v<State>,"script state publication must not allocate");
   using std::swap;
   swap(state_,other.state_);swap(actorPoseRevisions_,other.actorPoseRevisions_);
+  scriptActorMoves_.swap(other.scriptActorMoves_);
   scriptButtons_.swap(other.scriptButtons_);
   pendingScriptActions_.swap(other.pendingScriptActions_);scriptAnimations_.swap(other.scriptAnimations_);
   pendingScriptMessages_.swap(other.pendingScriptMessages_);

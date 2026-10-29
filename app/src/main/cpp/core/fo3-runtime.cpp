@@ -917,6 +917,7 @@ struct Q230ActorVisual {
     double aiLastUpdate=-1.0,aiRepathAt=0.0;
     std::unordered_map<uint32_t,Q230CombatWeapon> combatWeapons;
     bool stateRestored=false;
+    uint64_t scriptMoveEpoch=0;
     uint64_t animationSerial=0;
     GpuObject renderBounds;
     bool renderBoundsReady=false, renderVisible=true;
@@ -13068,6 +13069,28 @@ void QActorPrepareStereoFrame() {
     double npcAiUs=0.;
     double npcSimulationUs=0.,npcPersistenceUs=0.;
     for(auto& actor:gQ230NpcActors) {
+        // Script MoveTo publishes canonical actor state transactionally. Apply
+        // its discontinuity before simulation, package routing or persistence
+        // can overwrite it with the previous frame's resident pose.
+        if(gPlayerSession){
+            const auto epoch=gPlayerSession->player.ScriptActorMoveEpoch(actor.source.refFormId);
+            if(epoch&&epoch!=actor.scriptMoveEpoch){
+                const auto moved=gPlayerSession->player.Snapshot().actors.find(actor.source.refFormId);
+                if(moved!=gPlayerSession->player.Snapshot().actors.end()){
+                    const auto& saved=moved->second;
+                    actor.runtime.Relocate(Q240ScenePosition(saved.position),saved.yaw,Q230ActorResident(saved));
+                    actor.aiPackage=actor.runtime.package=saved.package;actor.aiSequence=saved.sequence;
+                    actor.aiPathGame.clear();actor.aiPathSurfaces.clear();actor.aiPathIndex=0;
+                    actor.aiLastUpdate=npcNow;actor.aiRepathAt=npcNow;
+                    actor.stateRestored=true;actor.scriptMoveEpoch=epoch;actor.lastFrame=UINT64_MAX;
+                    // A teleport has no preceding motion sample, for either renderer.
+                    for(auto& object:actor.objects)object.motionIdentity=0;
+                    ++gQ230NpcResidenceRevision;
+                    Q6H_LOGI("SCRIPT ACTOR MOVETO actor=%08X cell=%08X world=%08X resident=%d",
+                        actor.source.refFormId,saved.cell,saved.world,!actor.runtime.offScene);
+                }
+            }
+        }
         const auto simulationStarted=fqopaque::Clock::now();
         Q230SimulateActor(actor,npcNow);
         npcSimulationUs+=fqopaque::Micros(simulationStarted);
