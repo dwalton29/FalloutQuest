@@ -9,7 +9,10 @@ static unsigned creates=0,failAt=0;static uint32_t viewsCount=2,width=368;
 static std::set<XrSwapchain> live;
 static XrResult acquireResult=XR_SUCCESS,waitResult=XR_SUCCESS,releaseResult=XR_SUCCESS;
 static unsigned acquisitions=0,waits=0,releases=0;
+static const char* runtimeName="Reference runtime";
+static XrResult instanceResult=XR_SUCCESS;
 extern "C" {
+XRAPI_ATTR XrResult XRAPI_CALL xrGetInstanceProperties(XrInstance,XrInstanceProperties* info){std::strcpy(info->runtimeName,runtimeName);return instanceResult;}
 XRAPI_ATTR XrResult XRAPI_CALL xrAcquireSwapchainImage(XrSwapchain,const XrSwapchainImageAcquireInfo*,uint32_t* index){++acquisitions;*index=2;return acquireResult;}
 XRAPI_ATTR XrResult XRAPI_CALL xrWaitSwapchainImage(XrSwapchain,const XrSwapchainImageWaitInfo* info){++waits;assert(info->timeout==XR_INFINITE_DURATION);return waitResult;}
 XRAPI_ATTR XrResult XRAPI_CALL xrReleaseSwapchainImage(XrSwapchain,const XrSwapchainImageReleaseInfo*){++releases;return releaseResult;}
@@ -62,6 +65,7 @@ int main(){
  assert(session.Attach(views,history,coverage,delta,.04f,1000));
  const auto* info=static_cast<const XrFrameSynthesisInfoEXT*>(views[0].next);assert(info->next==&depth&&info->motionVectorSubImage.swapchain==session.Eye(0).motion);
  assert(info->layerFlags==XR_FRAME_SYNTHESIS_INFO_REQUEST_RELAXED_FRAME_INTERVAL_BIT_EXT&&info->nearZ==.04f&&info->farZ==1000);
+ assert(info->motionVectorScale.y==1);
  assert(!session.Attach(views,history,coverage,delta,.04f,1000));
  for(auto& v:views)v.next=&depth;
  coverage[1].weapons=false;assert(!session.Attach(views,history,coverage,delta,.04f,1000)&&views[0].next==&depth);coverage[1].weapons=true;
@@ -80,6 +84,31 @@ int main(){
  // Actual Vulkan enum values: RGBA16F motion and D32 depth, independent per eye.
  assert(session.Create(XR_NULL_HANDLE,1,XR_NULL_HANDLE,97,126));
  session.Destroy();assert(live.empty());
+ // The Quest log identifies runtime=Oculus, api=EXT. Preserve native Vulkan
+ // buffers but interpret vertical displacement as Y-up on this compositor.
+ for(const char* name:{"Oculus","Meta OpenXR","Reference runtime"}){
+   runtimeName=name;assert(session.Create(XR_NULL_HANDLE,1,XR_NULL_HANDLE,97,126));
+   for(auto& v:views)v.next=&depth;
+   assert(session.Attach(views,history,coverage,delta,.04f,1000));
+   for(unsigned eye=0;eye<2;++eye){const auto* ext=static_cast<const XrFrameSynthesisInfoEXT*>(views[eye].next);
+     const float sign=std::string(name)=="Reference runtime"?1.f:-1.f;
+     assert(ext->motionVectorScale.x==1&&ext->motionVectorScale.y==sign&&ext->motionVectorScale.z==1);
+     assert(ext->next==&depth&&ext->minDepth==0&&ext->maxDepth==1);
+     // Both pitch directions: native Y-down -> Meta Y-up, exactly once.
+     for(float pitch:{-.04f,.04f}){
+       // A stationary point straight ahead projects down when looking up.
+       const float currentGlY=-std::tan(pitch),previousGlY=0;
+       const float nativeY=-(currentGlY-previousGlY);
+       const float consumedY=ext->motionVectorScale.y*nativeY;
+       if(sign<0)assert(std::abs(consumedY-(currentGlY-previousGlY))<1e-6f&&consumedY*pitch<0);
+       else assert(consumedY*pitch>0);
+     }
+   }
+   session.Destroy();assert(live.empty());
+ }
+ instanceResult=XR_ERROR_RUNTIME_FAILURE;runtimeName="Oculus";
+ assert(session.Create(XR_NULL_HANDLE,1,XR_NULL_HANDLE,97,126)&&session.SubmissionMotionYScale()==1);
+ session.Destroy();instanceResult=XR_SUCCESS;
  extensions.resize(1);assert(session.Negotiate(true,extensions)==std::string(XR_FB_SPACE_WARP_EXTENSION_NAME));assert(session.Create(XR_NULL_HANDLE,1,XR_NULL_HANDLE,1,2));
  for(auto& v:views)v.next=nullptr;
  assert(session.Attach(views,history,coverage,delta,.04f,1000));assert(static_cast<const XrCompositionLayerSpaceWarpInfoFB*>(views[0].next)->type==XR_TYPE_COMPOSITION_LAYER_SPACE_WARP_INFO_FB);

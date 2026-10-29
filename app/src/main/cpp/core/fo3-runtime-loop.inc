@@ -389,8 +389,8 @@ public:
                    std::find(formats.begin(),formats.end(),depthFormat)!=formats.end())
                     ready=spacewarp_.Create(instance_,systemId_,session_,motionFormat,depthFormat);
             }
-            FQ_LOGI("FQ SPACEWARP resources backend=%s ready=%d size0=%ux%u size1=%ux%u motionFormat=%lld depthFormat=%lld samples=1",vulkanGameplay_?"Vulkan":"GLES",ready,
-                spacewarp_.Eye(0).width,spacewarp_.Eye(0).height,spacewarp_.Eye(1).width,spacewarp_.Eye(1).height,(long long)motionFormat,(long long)depthFormat);
+            FQ_LOGI("FQ SPACEWARP resources backend=%s ready=%d size0=%ux%u size1=%ux%u motionFormat=%lld depthFormat=%lld samples=1 submissionMotionYScale=%.0f",vulkanGameplay_?"Vulkan":"GLES",ready,
+                spacewarp_.Eye(0).width,spacewarp_.Eye(0).height,spacewarp_.Eye(1).width,spacewarp_.Eye(1).height,(long long)motionFormat,(long long)depthFormat,spacewarp_.SubmissionMotionYScale());
 #ifdef FQ_ENABLE_VULKAN
             if(vulkanGameplay_){
                 std::array<fqvk::MotionSwapchainTarget,2> targets{};

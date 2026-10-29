@@ -72,7 +72,7 @@ void NativeMotion(bool srgb=false,bool densityEmulation=false) {
     // A stationary camera at real wasteland coordinates must generate exactly
     // zero static motion. The old inverse -> float world -> previous VP path
     // loses precision here even when current and previous matrices are equal.
-    for(unsigned mode=0;mode<4;++mode){
+    for(unsigned mode=0;mode<6;++mode){
         auto projection=fqskin::Identity();const float n=.04f,far=125000.f/70;
         projection[0]=1.13f;projection[5]=1.07f;projection[10]=-(far+n)/(far-n);projection[11]=-1;projection[14]=-2*far*n/(far-n);projection[15]=0;
         auto multiply=[](const auto& a,const auto& b){fqspacewarp::Matrix m{};for(unsigned c=0;c<4;++c)for(unsigned r=0;r<4;++r)for(unsigned k=0;k<4;++k)m[c*4+r]+=a[k*4+r]*b[c*4+k];return m;};
@@ -80,6 +80,8 @@ void NativeMotion(bool srgb=false,bool densityEmulation=false) {
         if(mode==1){const float angle=.13f;view[5]=view[10]=std::cos(angle);view[6]=std::sin(angle);view[9]=-std::sin(angle);}
         const auto prior=multiply(projection,view);auto current=prior;
         if(mode==3)current[13]-=projection[5]*.01f; // Upward tracked head translation, with no artificial app motion.
+        const float pitch=mode==4?.04f:mode==5?-.04f:0;
+        if(mode>=4){auto rotation=fqskin::Identity();rotation[5]=rotation[10]=std::cos(pitch);rotation[6]=-std::sin(pitch);rotation[9]=std::sin(pitch);current=multiply(projection,multiply(rotation,view));}
         fqspacewarp::History h;fqspacewarp::Frame f;f.scene=1;f.world=0x3c;f.sceneReady=f.focused=true;f.viewProjection={prior,prior};
         for(unsigned i=1;i<=2;++i){f.serial=i;f.displayTime=i*10000000;assert(h.Begin(f));h.EyeRendered(0);h.EyeRendered(1);assert(h.Finish(true));}
         f.serial=3;f.displayTime=30000000;f.viewProjection={current,current};assert(h.Begin(f));fqmotion::Capture capture;capture.Begin(h);capture.Main();
@@ -88,10 +90,23 @@ void NativeMotion(bool srgb=false,bool densityEmulation=false) {
         std::array<fqspacewarp::Coverage,2> coverage{};fqvk::PostProcess({});fqvk::QueueSpacewarp(capture,coverage);
         std::array<XrView,2> views{};std::array<XrCompositionLayerProjectionView,2> output{};assert(fqvk::PresentGameplay(views.data(),output.data(),.04f,1000));
         for(unsigned e=0;e<2;++e){assert(coverage[e].Complete(3));const auto pixels=read(motionImages[e][r.motionTargets[e].motionIndex],false);
-            for(size_t at=0;at<pixels.size();at+=4){if(mode<3){assert(pixels[at]==0&&pixels[at+1]==0&&pixels[at+2]==0);}else{const float z=-projection[14]/(2*.99f-1+projection[10]);const float headY=-((current[13]-prior[13])/projection[5]);Near(pixels[at+1],projection[5]*headY/(-z));assert(pixels[at+1]>0);}}}
+            for(size_t at=0;at<pixels.size();at+=4){if(mode<3){assert(pixels[at]==0&&pixels[at+1]==0&&pixels[at+2]==0);}else if(mode==3){const float z=-projection[14]/(2*.99f-1+projection[10]);const float headY=-((current[13]-prior[13])/projection[5]);Near(pixels[at+1],projection[5]*headY/(-z));assert(pixels[at+1]>0);}else{
+                // Independent ray/rotation oracle, rather than the producer's
+                // inverse matrices. Validate changing pitch, including edges.
+                const double cy=1-2*(double((at/4)/32)+.5)/32;
+                const double cx=2*(double((at/4)%32)+.5)/32-1;
+                const double rayY=cy/projection[5];
+                const double previousZ=std::sin(pitch)*rayY-std::cos(pitch);
+                const double previousY=projection[5]*(std::cos(pitch)*rayY+std::sin(pitch))/(-previousZ);
+                const double previousX=cx/(-previousZ);
+                assert(std::abs(pixels[at]-(cx-previousX))<.001);
+                assert(std::abs(pixels[at+1]-(previousY-cy))<.001);
+                // Meta submission must reverse native raster Y exactly once.
+                assert(pixels[at+1]*pitch>0);
+            }}}
         ++motionCycles;
     }
-    std::cout<<"Vulkan tracked-head stability: exact zero motion for stationary perspective cameras at wasteland/distant origins, pitched stationary poses and correct vertical translation in both eyes passed\n";
+    std::cout<<"Vulkan tracked-head stability: exact zero motion for stationary perspective cameras at wasteland/distant origins, pitched stationary poses, correct vertical translation and changing positive/negative pitch across the image in both eyes passed\n";
     // Reproduce all three blockers from the headset log in ONE real GPU frame.
     // Original water/refraction, blended world material and post-film HUD must
     // remain pixel-equivalent while the opaque motion/depth coverage succeeds.

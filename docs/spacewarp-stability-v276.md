@@ -1,5 +1,7 @@
 # SpaceWarp head-motion stability — v276
 
+Follow-up: the headset still reported full-image pitch judder. [v277](spacewarp-pitch-v277.md) adds a Meta EXT submission Y-convention correction; the held-pitch tests below did not exercise changing pitch.
+
 The headset A/B isolated the reported model jiggle to the SpaceWarp path: disabling Vulkan foveation did not remove it; disabling SpaceWarp did. That identifies the subsystem, not a proven individual cause. This change fixes concrete layer/depth/reprojection weaknesses found in that path. Actual headset confirmation is still required.
 
 ## Consistent world colour

@@ -34,11 +34,13 @@ class Session {
   std::array<XrFrameSynthesisInfoEXT,2> ext_{};
   std::array<XrCompositionLayerSpaceWarpInfoFB,2> fb_{};
   bool requested_=false,allocated_=false;
+  float submissionMotionYScale_=1;
 public:
   Session()=default;Session(const Session&)=delete;Session& operator=(const Session&)=delete;
   Api Backend()const{return api_;}
   bool Requested()const{return requested_;}
   bool Allocated()const{return allocated_;}
+  float SubmissionMotionYScale()const{return submissionMotionYScale_;}
   const Target& Eye(unsigned eye)const{return targets_.at(eye);}
   const char* Negotiate(bool requested,const std::vector<XrExtensionProperties>& available){
     requested_=requested;api_=Api::None;if(!requested)return nullptr;
@@ -50,6 +52,14 @@ public:
   void Destroy(){for(auto& t:targets_){if(t.motion!=XR_NULL_HANDLE)xrDestroySwapchain(t.motion);if(t.depth!=XR_NULL_HANDLE)xrDestroySwapchain(t.depth);t={};}allocated_=false;}
   bool Create(XrInstance instance,XrSystemId system,XrSession session,int64_t motionFormat,int64_t depthFormat){
     Destroy();if(api_==Api::None)return false;
+    // Raster/storage coordinates remain native Vulkan. Meta's compositor
+    // consumes Y-up displacement, including through its EXT entry point.
+    // Convert only the vector interpretation, never flip the depth image.
+    submissionMotionYScale_=1;
+    XrInstanceProperties runtime{XR_TYPE_INSTANCE_PROPERTIES};
+    if(api_==Api::EXT&&XR_SUCCEEDED(xrGetInstanceProperties(instance,&runtime))&&
+       (!std::strcmp(runtime.runtimeName,"Oculus")||!std::strncmp(runtime.runtimeName,"Meta",4)))
+      submissionMotionYScale_=-1;
     std::array<uint32_t,2> width{},height{};
     if(api_==Api::EXT){
       std::array<XrFrameSynthesisConfigViewEXT,2> config{{{XR_TYPE_FRAME_SYNTHESIS_CONFIG_VIEW_EXT},{XR_TYPE_FRAME_SYNTHESIS_CONFIG_VIEW_EXT}}};
@@ -84,7 +94,7 @@ public:
       const auto& t=targets_[eye];XrSwapchainSubImage motion{t.motion,{{0,0},{int32_t(t.width),int32_t(t.height)}},0};auto depth=motion;depth.swapchain=t.depth;
       if(api_==Api::EXT){auto& info=ext_[eye];info={XR_TYPE_FRAME_SYNTHESIS_INFO_EXT};info.next=views[eye].next;
         info.layerFlags=XR_FRAME_SYNTHESIS_INFO_REQUEST_RELAXED_FRAME_INTERVAL_BIT_EXT;info.motionVectorSubImage=motion;info.depthSubImage=depth;info.appSpaceDeltaPose=appDelta;
-        info.motionVectorScale={1,1,1,1};info.motionVectorOffset={0,0,0,0};info.minDepth=0;info.maxDepth=1;info.nearZ=nearZ;info.farZ=farZ;views[eye].next=&info;
+        info.motionVectorScale={1,submissionMotionYScale_,1,1};info.motionVectorOffset={0,0,0,0};info.minDepth=0;info.maxDepth=1;info.nearZ=nearZ;info.farZ=farZ;views[eye].next=&info;
       }else{auto& info=fb_[eye];info={XR_TYPE_COMPOSITION_LAYER_SPACE_WARP_INFO_FB};info.next=views[eye].next;info.motionVectorSubImage=motion;info.depthSubImage=depth;info.appSpaceDeltaPose=appDelta;
         info.minDepth=0;info.maxDepth=1;info.nearZ=nearZ;info.farZ=farZ;views[eye].next=&info;}
     }
