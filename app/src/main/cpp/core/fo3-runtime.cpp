@@ -977,7 +977,6 @@ uint64_t gPipScreenQueries=0;
 GLint gPipGain=-1;
 fo3vr::PipboyTracking gVrPipTracking;
 void ResetFo3Pipboy(){gVrPipTracking.Reset();gPipActivation.Reset();gPipSolved=false;gPipMenu.dirty=true;}
-bool gPipOverlayRendering=false;
 bool Fo3PipboyFocus(){return gPipActivation.Focus();}
 float gQ210Head[4]{0.0f, 0.0f, 0.0f, 0.0f};
 float gQ210LeftHand[3]{0.0f, 0.0f, 0.0f};
@@ -7558,7 +7557,7 @@ void DrawSceneObject(const GpuObject& object, bool environmentPassQ2050 = false)
     }
     glUniform1f(gGlossinessLocation, object.glossiness);
     glUniform1f(gNoLightingLocationQ1020, object.noLighting ? 1.0f : 0.0f);
-    glUniform1f(gPipGain,object.pipScreen ? (gPipOverlayRendering? -1.f : Fo3PipboyFocus()? .85f : .012f) : 1.f);
+    glUniform1f(gPipGain,object.pipScreen ? (Fo3PipboyFocus()? .85f : .012f) : 1.f);
     glUniform1f(gNoLightingFalloffLocationQ1160, object.noLightingFalloff ? 1.0f : 0.0f);
     glUniform4fv(gNoLightingFalloffParamsLocationQ1160, 1, object.noLightingFalloffParams);
     // Q20.25: landscape-LOD NIF vertex colours are not the detailed LAND
@@ -12674,24 +12673,13 @@ bool Q210EnsurePlayerBody() {
 }
 
 
-void Q210RenderPipboyOverlay(const float* mvp){
-    if(!gQ210PlayerBodyReady||!gPipAnchorReady||!gPipSurface.valid)return;
-    glUseProgram(gProgram);glUniformMatrix4fv(gMvpLocation,1,GL_FALSE,mvp);gPipOverlayRendering=true;
-    for(bool alpha:{false,true})for(const auto& object:gQ210PlayerBody){
-        if(!object.pipboy||object.pipEffect||object.alphaBlend!=alpha)continue;
-        if(object.pipButton>=0&&object.pipButton!=int(gPipMenu.tab))continue;
-        glEnable(GL_DEPTH_TEST);glDepthMask(object.zBufferWriteQ1200?GL_TRUE:GL_FALSE);
-        if(alpha){glEnable(GL_BLEND);glBlendFunc(Q1150BlendFactor(object.alphaSourceBlend,true),Q1150BlendFactor(object.alphaDestBlend,false));}else glDisable(GL_BLEND);
-        DrawSceneObject(object);
-    }gPipOverlayRendering=false;
-}
 void Q210RenderPlayerBody(bool alphaPass) {
     WeaponRender(alphaPass);
     if (!gQ210PlayerBodyReady) return;
     const auto drawStarted=fqopaque::Clock::now();
     for (const GpuObject& object : gQ210PlayerBody) {
         if (object.q215IkReferenceOnly) continue;
-        if(object.pipboy && (Fo3PipboyFocus()||!gPipAnchorReady||!gPipSurface.valid))continue;
+        if(object.pipboy && (!gPipAnchorReady||!gPipSurface.valid))continue;
         if(object.pipEffect)continue; // authored light cone requires engine animation; no fake world light
         if(object.pipButton>=0&&(!Fo3PipboyFocus()||object.pipButton!=int(gPipMenu.tab)))continue;
         if (object.alphaBlend != alphaPass) continue;

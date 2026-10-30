@@ -48,7 +48,7 @@ template<class T> T Proc(XrInstance xr,const char* name) {
     return reinterpret_cast<T>(fn);
 }
 struct Buffer {VkBuffer buffer{};VkDeviceMemory memory{};void* mapped{};VkDeviceSize size{},allocationBytes{},capacity{};};
-struct Image {VkImage image{};VkImageView view{};VkDeviceMemory memory{};uint32_t levels=1,width=0,height=0;bool palette=false,clamp=false,repeatT=false;};
+struct Image {VkImage image{};VkImageView view{};VkDeviceMemory memory{};uint32_t levels=1,width=0,height=0;bool palette=false,clamp=false,repeatT=false,repeatS=false;};
 struct PostTarget {Image image;VkFramebuffer framebuffer{},overlay{};uint32_t width=0,height=0;bool initialized=false;};
 struct UiTarget {PostTarget target;VkImageView sampled{};};
 struct MeshData {Buffer vertices,indices,skin;uint32_t count=0,stride=0;};
@@ -130,7 +130,7 @@ public:
     VkRenderPass modalPass{},modalXrPass{};VkFramebuffer modalFramebuffer{};
     std::vector<VkFramebuffer> modalXrFramebuffers;VkFormat xrColorFormat=VK_FORMAT_UNDEFINED;
     bool snapshotReady=false,snapshotInitialized=false;
-    VkSampler sampler{},nearest{},clamped{},verticalRepeat{};VkDescriptorSetLayout sets[14]{};VkPipelineLayout layouts[14]{};
+    VkSampler sampler{},nearest{},clamped{},verticalRepeat{},horizontalRepeat{};VkDescriptorSetLayout sets[14]{};VkPipelineLayout layouts[14]{};
     VkPipelineCache pipelineCache{};
     VkShaderModule modules[13][2]{};VkDescriptorPool descriptors{};
     VkShaderModule solidModules[3]{};bool genericShaders=false;
@@ -712,7 +712,9 @@ public:
         Check(vkCreateSampler(device,&sci,nullptr,&clamped),"clamp sampler");
         sci.addressModeV=VK_SAMPLER_ADDRESS_MODE_REPEAT;
         Check(vkCreateSampler(device,&sci,nullptr,&verticalRepeat),"vertical-repeat sampler");
-        sci.addressModeV=VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        sci.addressModeV=VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;sci.addressModeU=VK_SAMPLER_ADDRESS_MODE_REPEAT;
+        Check(vkCreateSampler(device,&sci,nullptr,&horizontalRepeat),"horizontal-repeat sampler");
+        sci.addressModeU=VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
         sci.magFilter=sci.minFilter=VK_FILTER_NEAREST;sci.mipmapMode=VK_SAMPLER_MIPMAP_MODE_NEAREST;
         Check(vkCreateSampler(device,&sci,nullptr,&nearest),"palette sampler");
         const std::array<uint8_t,24> pixels{255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255};
@@ -987,7 +989,7 @@ public:
             if(unit>=0&&unit<16){
                 const auto& binding=samplerMeta[i].cube?s.cubes[unit]:s.textures[unit];
                 auto tex=textures.find(binding);
-                if(tex!=textures.end()){view=tex->second.view;if(tex->second.palette)chosenSampler=nearest;else if(tex->second.repeatT)chosenSampler=verticalRepeat;else if(tex->second.clamp)chosenSampler=clamped;}
+                if(tex!=textures.end()){view=tex->second.view;if(tex->second.palette)chosenSampler=nearest;else if(tex->second.repeatT&&tex->second.repeatS)chosenSampler=sampler;else if(tex->second.repeatS)chosenSampler=horizontalRepeat;else if(tex->second.repeatT)chosenSampler=verticalRepeat;else if(tex->second.clamp)chosenSampler=clamped;}
             }
             if(p.water) {
                 const std::string name=samplerMeta[i].name;
@@ -1681,6 +1683,7 @@ public:
             for(auto module:solidModules)if(module)vkDestroyShaderModule(device,module,nullptr);
             for(int k=0;k<13;++k){if(layouts[k])vkDestroyPipelineLayout(device,layouts[k],nullptr);if(sets[k])vkDestroyDescriptorSetLayout(device,sets[k],nullptr);for(auto m:modules[k])if(m)vkDestroyShaderModule(device,m,nullptr);}
             if(timestamps)vkDestroyQueryPool(device,timestamps,nullptr);
+            if(horizontalRepeat)vkDestroySampler(device,horizontalRepeat,nullptr);
             if(verticalRepeat)vkDestroySampler(device,verticalRepeat,nullptr);
             if(clamped)vkDestroySampler(device,clamped,nullptr);
             if(nearest)vkDestroySampler(device,nearest,nullptr);
@@ -1707,6 +1710,7 @@ bool InitializeWorldProbe(XrInstance instance,XrSystemId system,uint32_t w,uint3
         hooks.uploadsComplete=[](uint64_t ticket){try{return renderer->UploadsComplete(ticket);}catch(const std::exception& e){Failure(e);return false;}};
         hooks.beginUiTarget=[](uint32_t id,uint32_t w,uint32_t h){try{return renderer->BeginUiTarget(id,w,h);}catch(const std::exception& e){Failure(e);return false;}};
         hooks.endUiTarget=[](){try{renderer->EndUiTarget();}catch(const std::exception& e){Failure(e);}};
+        hooks.repeatS=[](uint32_t id){try{renderer->DrainDraws();auto found=renderer->textures.find(id);if(found!=renderer->textures.end())found->second.repeatS=true;}catch(const std::exception& e){Failure(e);}};
         hooks.repeatT=[](uint32_t id){try{renderer->DrainDraws();auto found=renderer->textures.find(id);if(found!=renderer->textures.end())found->second.repeatT=true;}catch(const std::exception& e){Failure(e);}};
         hooks.beginModalDepth=[](){try{return renderer->BeginModalDepth();}catch(const std::exception& e){Failure(e);return false;}};
         hooks.clearDepth=[](){try{auto& r=*renderer;r.DrainDraws();if(!r.begun||!r.passOpen||r.failed)return;

@@ -294,6 +294,12 @@ void UpdateFo3Pipboy(uint64_t frame, double now, const float *headPose,
           !fo3pipdata::InRange(defs, tx->second, radioLocation,[&](uint32_t id){bool disabled=true;std::string error;return session->player.ReferenceDisabled(id,disabled,error)&&!disabled;}))
         tuned = 0;
     }
+    if(gPipMenu.radioSignal!=(tuned!=0)){gPipMenu.radioSignal=tuned!=0;gPipMenu.dirty=true;}
+    // Original MapMenu 009502B7..00950306: +0.1 UV every >=10 ms, wrap at 1.
+    if(tuned&&now-gPipMenu.radioUpdated>=.01){
+      gPipMenu.radioUpdated=now;gPipMenu.radioPhase=std::fmod(gPipMenu.radioPhase+.1f,1.f);
+      if(Fo3PipboyFocus()&&gPipMenu.tab==fo3pip::Tab::Data&&gPipMenu.page==4)gPipMenu.dirty=true;
+    }
     if (lastRadio != tuned) {
       lastRadio = tuned;
       fo3audio::Radio(tuned, defs, session->player.Snapshot().pipboy);

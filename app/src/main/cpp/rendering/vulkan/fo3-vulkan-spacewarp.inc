@@ -197,7 +197,7 @@ bool DynamicMotionEye(unsigned eye,const fqmotion::Capture& capture,const std::v
         c.model=item.shape->model;c.previousModel=item.previous->model;c.flags={float(d.skinMode),float(d.alphaTest),float(d.vertexAlpha),d.alpha};c.target[2]=d.threshold;
         const auto diffuse=textures.find(d.diffuse);if(d.alphaTest&&diffuse==textures.end()){complete=false;continue;}
         images[1].imageView=diffuse==textures.end()?white.view:diffuse->second.view;
-        images[1].sampler=diffuse==textures.end()?sampler:diffuse->second.repeatT?verticalRepeat:diffuse->second.clamp?clamped:sampler;
+        images[1].sampler=diffuse==textures.end()?sampler:diffuse->second.repeatS?(diffuse->second.repeatT?sampler:horizontalRepeat):diffuse->second.repeatT?verticalRepeat:diffuse->second.clamp?clamped:sampler;
         images[2].imageView=d.skinMode?textures.at(d.paletteTexture).view:white.view;images[3].imageView=item.previousPalette;
         const bool positions=!item.previous->deformedPositions.empty();const unsigned key=unsigned(d.cull)|(unsigned(d.clockwise)<<1)|(unsigned(d.decal)<<2)|(unsigned(d.skinMode!=0)<<3)|(unsigned(positions)<<4);
         if(!MotionBind(c,images,key)){complete=false;continue;}

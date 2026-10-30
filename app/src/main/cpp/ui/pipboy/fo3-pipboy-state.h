@@ -173,6 +173,9 @@ inline uint64_t PresentationRevision(const fo3player::Player &p) {
   return h;
 }
 struct Menu {
+  bool radioSignal=false;
+  float radioPhase=0;
+  double radioUpdated=0;
   Tab tab = Tab::Stats;
   int page = 0,statusMode=0;
   size_t selected = 0;
@@ -214,8 +217,12 @@ struct Menu {
         if (!p.Definitions().pipboy.perks.at(i.first).hidden)
           rows.push_back(i.first);
     if (tab == Tab::Data && page == 2)
-      for (auto &i : p.Snapshot().pipboy.quests)
-        rows.push_back(i.first);
+      for (auto &i : p.Snapshot().pipboy.quests) {
+        auto def=p.Definitions().pipboy.quests.find(i.first);
+        if(def==p.Definitions().pipboy.quests.end()||def->second.name.find_first_not_of(" \r\n\t")==std::string::npos)continue;
+        bool journal=i.second.announced;for(const auto &objective:i.second.objectives)journal|=objective.second.displayed;
+        if(journal)rows.push_back(i.first);
+      }
     if (tab == Tab::Data && page == 3)
       for (auto &i : p.Snapshot().inventory)
         if (p.Definitions().pipboy.notes.count(i.formId) &&

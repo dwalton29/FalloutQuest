@@ -89,7 +89,7 @@ def main():
             parser.error('--output requires --menus')
         keys = set(NATIVE_KEYS)
         for path in args.menus.rglob('*.xml'):
-            keys.update(re.findall(r'&-([^;]+);', path.read_text(encoding='cp1252')))
+            keys.update(re.findall(r'&-([A-Za-z0-9_]+);?', path.read_text(encoding='cp1252')))
         selected = {key: values[key] for key in sorted(keys) if key in values}
         header = '''#pragma once
 #include <string>

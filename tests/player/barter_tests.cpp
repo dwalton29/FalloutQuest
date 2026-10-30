@@ -22,6 +22,40 @@ Catalog Fixture(){
  c.pipboy.formNames["merchant"]=1;
  return c;
 }
+#include "dialogue/fo3-dialogue-panel.h"
+#include "world/interaction/fo3-loot-cursor.h"
+struct UiSession {fo3player::Player player;};
+UiSession *gPlayerSession=nullptr;
+fo3dialogue::Panel gDialoguePanel;
+uint32_t gDialoguePanelInfo=0;
+fo3dialogue::Phase gDialoguePanelPhase=fo3dialogue::Phase::Inactive;
+int uiFlushes=0;
+void FlushFo3PlayerState(){++uiFlushes;}
+namespace fo3audio {void NamedSound(const std::string&){} void Scroll(){}}
+#include "../../app/src/main/cpp/dialogue/fo3-barter-runtime.inc"
+void UiAdapter(){
+ UiSession live{Player(Fixture())};gPlayerSession=&live;auto &p=live.player;
+ Check(p.Add(0xf,1500)&&p.Add(100,5),"UI seed");gBarter={};
+ Check(p.OpenBarter(1,0,gBarter.session),"UI merchant opens");gBarter.active=true;BarterBuildPanels();
+ double now=1;
+ auto input=[&](float horizontal,float left,float right,bool x,bool a,bool b){now+=.25;UpdateFo3Barter(now,0,horizontal,left,right,x,a,b,true);};
+ input(0,1,0,false,false,false);Check(!gBarter.buying,"LT selects player");
+ input(0,0,1,false,false,false);Check(gBarter.buying,"RT selects merchant");
+ input(1,0,0,false,false,false);Check(gBarter.controls.filters[1]==0&&gBarter.rows.size()==1,"weapon category filters real rows");
+ input(-1,0,0,false,false,false);Check(gBarter.controls.filters[1]==-1,"return to all");
+ size_t cup=0;for(size_t i=0;i<gBarter.rows.size();++i)for(const auto &s:gBarter.session.merchant)if(s.id==gBarter.rows[i]&&s.formId==100)cup=i;
+ gBarter.cursor.selected=cup;input(0,0,0,false,true,false);
+ Check(gBarter.controls.Editing()&&gBarter.controls.quantity==10,"stack opens original quantity control with max");
+ input(-1,0,0,false,false,false);Check(gBarter.controls.quantity==9,"stick moves amount slider");
+ input(0,0,0,true,false,false);Check(gBarter.controls.Editing()&&p.ItemCount(100)==5,"X cannot bypass amount confirmation");
+ input(0,0,0,false,false,true);Check(!gBarter.controls.Editing()&&gBarter.session.selections.empty(),"B cancels quantity without staging");
+ input(0,0,0,false,true,false);for(int i=0;i<8;++i)input(-1,0,0,false,false,false);
+ Check(gBarter.controls.quantity==2,"slider reaches desired count");input(0,0,0,false,true,false);
+ Check(gBarter.session.selections.size()==1&&gBarter.session.selections[0].count==2,"A stages exact amount");
+ input(0,0,0,true,false,false);Check(p.ItemCount(100)==7&&p.ItemCount(0xf)==1190&&uiFlushes==1,"X commits canonical trade once");
+ input(0,0,0,true,false,false);Check(uiFlushes==1&&gBarter.status.empty(),"held X has no duplicate trade or success popup");
+ input(0,0,0,false,false,true);Check(!gBarter.active,"B returns from barter");gPlayerSession=nullptr;
+}
 void Synthetic(){
  Player p(Fixture());Check(p.Add(0xf,1000)&&p.Add(100,5),"seed");
  BarterSession s;Check(p.OpenBarter(1,0,s),"open");
@@ -187,4 +221,4 @@ void Original(const char* path){
   BarterSession persisted;Check(restored.OpenBarter(actor,s.discount,persisted)&&persisted.merchant.size()==s.merchant.size(),"original merchant restore");
  }
 }
-int main(int argc,char** argv){try{Synthetic();Safety();RestockAndModifiers();AuthoredServices();if(argc>1)Original(argv[1]);std::cout<<"barter tests passed\n";}catch(const std::exception& e){std::cerr<<e.what()<<"\n";return 1;}}
+int main(int argc,char** argv){try{UiAdapter();Synthetic();Safety();RestockAndModifiers();AuthoredServices();if(argc>1)Original(argv[1]);std::cout<<"barter tests passed\n";}catch(const std::exception& e){std::cerr<<e.what()<<"\n";return 1;}}

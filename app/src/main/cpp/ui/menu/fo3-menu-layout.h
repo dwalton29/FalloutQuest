@@ -283,10 +283,14 @@ class Layout {
   }
   Value Literal(std::string text) {
     text = Trim(text);
+    if (text.rfind("&-", 0) == 0) {
+      auto key = Trim(text.substr(2));
+      if (!key.empty() && key.back() == ';')
+        key.pop_back();
+      return strings ? strings(key) : Value{};
+    }
     if (text.size() > 2 && text.front() == '&' && text.back() == ';') {
       auto key = text.substr(1, text.size() - 2);
-      if (!key.empty() && key[0] == '-')
-        return strings ? strings(key.substr(1)) : Value{};
       if (key == "xbox")
         return 1.;
       if (key == "console")
@@ -387,6 +391,8 @@ class Layout {
         value = std::floor(op.text.empty() && op.children.empty() ? a : b);
       else if (kind == "abs")
         value = std::abs(op.text.empty() && op.children.empty() ? a : b);
+      else if (kind == "round")
+        value = b ? std::round(a / b) * b : std::round(a);
       else if (kind == "mod")
         value = b ? std::fmod(a, b) : 0.;
       else
@@ -475,6 +481,8 @@ public:
     const auto source = node.traits.find(trait);
     if (source != node.traits.end())
       result = Expression(id, source->second);
+    else if (trait == "childcount")
+      result = double(node.children.size());
     else if (trait == "visible")
       result = 1.;
     else if (trait == "alpha" || trait == "brightness")
@@ -482,7 +490,7 @@ public:
     else if (trait == "zoom")
       result = 100.;
     else if (trait == "font")
-      result = 2.;
+      result = node.tag == "text" ? 2. : 0.;
     else if ((trait == "filewidth" || trait == "fileheight") && imageSize) {
       const auto size = imageSize(S(id, "filename"), S(id, "texatlas"));
       result = (trait == "filewidth" ? size.w : size.h) * N(id, "zoom") / 100.f;

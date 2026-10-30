@@ -461,6 +461,22 @@ void Ui(bool animated) {
     Near(Pixel(pixels,1,32,32,1),0);Near(Pixel(pixels,1,55,32,1),.5f);
 }
 
+void HorizontalUiRepeat() {
+    Scene(false);Program(15,9);
+    const float geometry[]{-1,-1,0,1.125f,.5f,1,-1,0,1.125f,.5f,1,1,0,1.125f,.5f,-1,1,0,1.125f,.5f};
+    const uint32_t indices[]{0,1,2,0,2,3};fqvk::Mesh(16,geometry,4,5,indices,6);
+    const uint8_t pixels[]{255,0,0,255,0,255,0,255,0,0,255,255,255,255,255,255};
+    fqvk::Texture(17,4,1,pixels,false,false);fqvk::RepeatS(17);
+    Set(15,"uMvp",{1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1});Set(15,"uTint",{1,1,1,1});
+    const float identity[]{1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1},eye[]{0,0,2};
+    assert(fqvk::BeginWorldProbe(identity,identity,eye,eye));
+    fqgl::state.texture2d[0].Change(17);fqgl::state.depth.Change(false);fqgl::state.depthWrite.Change(false);
+    Submit(15,16,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);fqvk::EndWorldProbe();
+    auto image=fqvk::renderer->Readback();
+    for(int view=0;view<2;++view){Near(Pixel(image,view,32,32,0),1);Near(Pixel(image,view,32,32,1),0);Near(Pixel(image,view,32,32,2),0);}
+    std::cout<<"Native animated UI: horizontal repeat samples source artwork across its UV boundary in both eyes passed\n";
+}
+
 void Loading() {
     Scene(false);Program(18,11);
     std::vector<float> geometry;
@@ -1019,6 +1035,7 @@ int main() {
     assert(fqvk::InitializeWorldProbe(reinterpret_cast<XrInstance>(uintptr_t(1)),1,64,64));Water();fqvk::ShutdownWorldProbe();
     assert(fqvk::InitializeWorldProbe(reinterpret_cast<XrInstance>(uintptr_t(1)),1,64,64));Post();fqvk::ShutdownWorldProbe();
     for(bool animated:{false,true}){assert(fqvk::InitializeWorldProbe(reinterpret_cast<XrInstance>(uintptr_t(1)),1,64,64));Ui(animated);fqvk::ShutdownWorldProbe();}
+    assert(fqvk::InitializeWorldProbe(reinterpret_cast<XrInstance>(uintptr_t(1)),1,64,64));HorizontalUiRepeat();fqvk::ShutdownWorldProbe();
     assert(fqvk::InitializeWorldProbe(reinterpret_cast<XrInstance>(uintptr_t(1)),1,64,64));Loading();fqvk::ShutdownWorldProbe();
     assert(fqvk::InitializeWorldProbe(reinterpret_cast<XrInstance>(uintptr_t(1)),1,64,64));PipboyTarget();fqvk::ShutdownWorldProbe();
     assert(fqvk::InitializeWorldProbe(reinterpret_cast<XrInstance>(uintptr_t(1)),1,64,64));PostOverlay();fqvk::ShutdownWorldProbe();

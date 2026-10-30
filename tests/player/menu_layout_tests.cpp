@@ -76,7 +76,8 @@ int main(int argc, char **argv) {
     for (const auto *path :
          {"menus\\main\\stats_menu.xml", "menus\\main\\inventory_menu.xml",
           "menus\\main\\map_menu.xml", "menus\\barter_menu.xml",
-          "menus\\dialog\\dialog_menu.xml", "menus\\message_menu.xml"}) {
+          "menus\\dialog\\dialog_menu.xml", "menus\\message_menu.xml",
+          "menus\\quantity_menu.xml"}) {
       Layout l;
       assert(l.Load(path, read));
       l.strings = [](const std::string &key) -> Value {
@@ -131,6 +132,14 @@ int main(int argc, char **argv) {
                !l.N(l.Find("stats_special_container"), "visible"));
         assert(l.Instantiate("stats_list_template",
                              l.Find("stats_skills_container")) >= 0);
+      }
+      if (name == "StatsMenu")
+        assert(l.S("stats_title", "string") == "STATS");
+      if (name == "QuantityMenu") {
+        l.Set("QM_AmountMeter", "user0", 10.);
+        l.Set("QM_AmountMeter", "user2", 4.);
+        assert(Near(l.N("QM_AmountMeter", "_Value"), .4f));
+        assert(l.S("QM_AmountChosen", "string") == "4");
       }
       if (name == "MapMenu") {
         assert(l.N("GLOW_BRANCH", "systemcolor") == 1);

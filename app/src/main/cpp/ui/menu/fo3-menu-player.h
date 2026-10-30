@@ -1,4 +1,5 @@
 #pragma once
+#include "fo3-barter-controls.h"
 #include "fo3-menu-renderer.h"
 #include "pipboy/fo3-quest-route.h"
 #include "ui/pipboy/fo3-pipboy-state.h"
@@ -37,6 +38,10 @@ struct Document {
     layout.Reset();
     Strings(layout, p);
     layout.Set(layout.Globals(), "_Has360Controller", 1.);
+    // VR readability: retain the authored backdrop geometry and black art,
+    // increasing its opacity for a world-space panel over bright terrain.
+    if (layout.width > 1024)
+      layout.Set(layout.Globals(), "_background_fill_alpha", 160.);
   }
 };
 inline Document &PipDocument(int tab) {
@@ -65,11 +70,11 @@ inline std::string Decimal(double n) {
   return value;
 }
 inline std::string Label(const fo3player::Player &p, const std::string &key) {
-  auto i = p.Definitions().strings.find(key);
-  if (i != p.Definitions().strings.end())
-    return i->second;
-  auto original = fo3menu::StringDefaults().find(key);
-  return original == fo3menu::StringDefaults().end() ? "" : original->second;
+  return Setting(p, key);
+}
+inline Document &QuantityDocument() {
+  static Document d;
+  return d;
 }
 inline Document &MessageDocument() {
   static Document d;
@@ -364,6 +369,18 @@ inline bool Pipboy(fo3pip::Menu &menu, const fo3player::Player &p,
   auto &doc = PipDocument(int(menu.tab));
   if (!doc.Ensure(paths[int(menu.tab)]))
     return false;
+  const bool animatedRadio = menu.tab == fo3pip::Tab::Data && menu.page == 4;
+  uint64_t radioKey = fo3pip::PresentationRevision(p) ^
+                      uint64_t(menu.selected << 8) ^
+                      uint64_t(menu.radioSignal) ^ 0x524144494full;
+  for (auto id : menu.rows)
+    radioKey = (radioKey ^ id) * 1099511628211ull;
+  if (animatedRadio && doc.revision == radioKey) {
+    doc.surface.Animate(menu.radioPhase);
+    doc.surface.Render(mvp);
+    Notice(mvp, menu.actionError, p, false);
+    return true;
+  }
   doc.Begin(p);
   auto &l = doc.layout;
   const auto &state = p.Snapshot();
@@ -528,6 +545,10 @@ inline bool Pipboy(fo3pip::Menu &menu, const fo3player::Player &p,
     if (menu.page >= 2) {
       auto ids = List(l, list, "MM_ListMarkerTemplate", rows, menu.selected);
       for (size_t i = 0; i < ids.size(); ++i) {
+        if (menu.page == 2 &&
+            state.pipboy.quests.at(uint32_t(menu.rows[i])).status !=
+                fo3pipdata::Completion::Active)
+          l.Set(ids[i], "_TextAlpha", 128.);
         l.Set(ids[i], "_selected", double(rows[i].marked));
         l.Set(ids[i], "_ShowEmptyMarker", 1.);
       }
@@ -538,10 +559,26 @@ inline bool Pipboy(fo3pip::Menu &menu, const fo3player::Player &p,
       auto id = uint32_t(menu.rows[menu.selected]);
       if (menu.page == 2 && d.quests.count(id) &&
           state.pipboy.quests.count(id)) {
-        for (const auto &o : state.pipboy.quests.at(id).objectives)
-          if (o.second.displayed && d.quests.at(id).objectives.count(o.first))
-            text += d.quests.at(id).objectives.at(o.first).text + "\n\n";
-        type = 1;
+        std::vector<Row> objectives;
+        std::vector<bool> finished;
+        for (auto index : d.quests.at(id).objectiveOrder) {
+          auto o = state.pipboy.quests.at(id).objectives.find(index);
+          if (o == state.pipboy.quests.at(id).objectives.end() ||
+              !o->second.displayed)
+            continue;
+          const bool done = o->second.status != fo3pipdata::Completion::Active;
+          objectives.push_back(
+              {d.quests.at(id).objectives.at(index).text, "", false, done});
+          finished.push_back(done);
+        }
+        auto ids = List(l, "MM_QuestObjectivesList", "MM_ListMarkerTemplate",
+                        objectives, SIZE_MAX);
+        for (size_t i = 0; i < ids.size(); ++i) {
+          l.Set(ids[i], "_TextAlpha", finished[i] ? 128. : 255.);
+          l.Set(ids[i], "_ShowEmptyMarker", 1.);
+          l.Set(ids[i], "_selected", double(finished[i]));
+        }
+        type = 4;
       } else if (menu.page == 3 && d.notes.count(id)) {
         const auto &note = d.notes.at(id);
         if (note.type == 1) {
@@ -559,14 +596,15 @@ inline bool Pipboy(fo3pip::Menu &menu, const fo3player::Player &p,
     l.Set("MM_TextScrollbar", "_current_value", double(menu.textScroll));
     l.Set("MM_DataRect", "visible", double(type != 0));
     l.Set("MM_DataRect", "_ItemType", double(type));
-    // Set by name in the original XML, rather than by assumptions about its ID.
-    for (size_t i = 0; i < l.Nodes().size(); ++i)
-      if (l.Nodes()[i].traits.count("_ItemType")) {
-        l.Set(int(i), "_ItemType", double(type));
-        l.Set(int(i), "visible", double(type != 0));
-      }
+    if (menu.page == 4) {
+      l.Set("MM_Waveform", "filename", "Interface\\Radio Wave\\wave.dds");
+      l.Set("MM_Waveform", "visible", double(menu.radioSignal));
+    }
   }
   doc.Build();
+  doc.revision = animatedRadio ? radioKey : UINT64_MAX;
+  if (animatedRadio)
+    doc.surface.Animate(menu.radioPhase);
   doc.surface.Render(mvp);
   if (menu.travelPrompt && d.markers.count(menu.travelMarker))
     Notice(mvp,
@@ -612,7 +650,8 @@ inline void Conversation(const float *mvp, const fo3dialogue::Panel &panel,
 inline void Barter(const float *mvp, const fo3player::Player &p,
                    const fo3player::BarterSession &session, bool buying,
                    size_t selected, uint64_t revision,
-                   const std::string &status) {
+                   const std::string &status,
+                   const fo3barter::Controls &controls = {}) {
   auto &doc = BarterDocument();
   if (!doc.Ensure("menus\\barter_menu.xml", 1280, 1024))
     return;
@@ -621,6 +660,8 @@ inline void Barter(const float *mvp, const fo3player::Player &p,
   // list.
   uint64_t key = TextKey(status) ^ revision ^ session.actor ^ uint64_t(buying) ^
                  uint64_t(selected << 1);
+  key ^= uint64_t(controls.filters[0] + 1) << 40;
+  key ^= uint64_t(controls.filters[1] + 1) << 44;
   key = TextKey(Number(session.skill) + ":" + Number(session.discount), key);
   for (const auto *inventory : {&session.player, &session.merchant})
     for (const auto &stack : *inventory)
@@ -646,12 +687,17 @@ inline void Barter(const float *mvp, const fo3player::Player &p,
         merchant = npc->second.name;
     }
     l.Set("BM_ContainerTitle", "string", merchant);
-    // Category switching has no VR binding yet. Do not advertise dead controls.
-    for (const char *name :
-         {"BM_Items_LeftFilterArrow", "BM_Items_RightFilterArrow",
-          "BM_Container_LeftFilterArrow", "BM_Container_RightFilterArrow",
-          "BM_Items_TitleButton", "BM_Container_TitleButton"})
-      l.Set(name, "visible", 0.);
+    const char *categories[]{"sInventoryItems",   "sInventoryWeapons",
+                             "sInventoryApparel", "sInventoryAid",
+                             "sInventoryMisc",    "sInventoryAmmoTab"};
+    l.Set("BM_ItemsTitle", "string",
+          Label(p, categories[controls.filters[0] + 1]));
+    l.Set("BM_ContainerTitle", "string",
+          controls.filters[1] < 0
+              ? merchant
+              : Label(p, categories[controls.filters[1] + 1]));
+    l.Set("BM_Items_TitleButton", "filename", "general_button_lt.dds");
+    l.Set("BM_Container_TitleButton", "filename", "general_button_rt.dds");
     const fo3player::Stack *focused = nullptr;
     for (bool side : {false, true}) {
       const auto &inventory = side ? session.merchant : session.player;
@@ -662,7 +708,9 @@ inline void Barter(const float *mvp, const fo3player::Player &p,
         if (stack.formId == 0xf)
           caps += stack.count;
         float price = 0;
-        if (!p.BarterItemAllowed(session.actor, stack) ||
+        if (!fo3barter::InCategory(p.Definitions().items.at(stack.formId),
+                                   controls.filters[side]) ||
+            !p.BarterItemAllowed(session.actor, stack) ||
             !p.BarterPrice(stack, side, session.discount, price))
           continue;
         int32_t pending = 0;
@@ -689,8 +737,7 @@ inline void Barter(const float *mvp, const fo3player::Player &p,
     l.Set("BM_CapsFlow", "_Value", Number(std::abs(net)));
     l.Set(l.Root(), "_ArrowDirection", net < 0 ? 2. : 1.);
     l.Set("BM_CapsFlow", "visible", double(net != 0));
-    l.Set("BM_ButtonX", "_box_visible", double(!focused));
-    l.Set("BM_ButtonX", "_xbox_button", "glow_general_button_a.dds");
+    l.Set("BM_ButtonX", "_box_visible", double(!session.selections.empty()));
     ItemCards(l, l.Find("BM_ItemData"), p, focused);
     if (focused) {
       float price = 0;
@@ -712,7 +759,22 @@ inline void Barter(const float *mvp, const fo3player::Player &p,
     doc.revision = key;
   }
   World(doc.surface, doc.layout, mvp);
-  Notice(mvp, status, p, true);
+  if (controls.Editing()) {
+    auto &q = QuantityDocument();
+    if (q.Ensure("menus\\quantity_menu.xml", 1280, 1024)) {
+      const auto key = uint64_t(controls.quantityStack) ^
+                       (uint64_t(controls.quantity) << 32);
+      if (q.revision != key) {
+        q.Begin(p);
+        q.layout.Set("QM_AmountMeter", "user0", double(controls.maximum));
+        q.layout.Set("QM_AmountMeter", "user2", double(controls.quantity));
+        q.Build();
+        q.revision = key;
+      }
+      World(q.surface, q.layout, mvp);
+    }
+  } else
+    Notice(mvp, status, p, true);
 }
 inline void Shutdown() {
   for (int i = 0; i < 3; ++i) {
@@ -720,7 +782,8 @@ inline void Shutdown() {
     d.surface.Shutdown();
     d = {};
   }
-  for (auto *d : {&DialogueDocument(), &BarterDocument(), &MessageDocument()}) {
+  for (auto *d : {&DialogueDocument(), &BarterDocument(), &MessageDocument(),
+                  &QuantityDocument()}) {
     d->surface.Shutdown();
     *d = {};
   }

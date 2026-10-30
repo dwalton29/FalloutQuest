@@ -6,6 +6,7 @@
 #include "player/fo3-player-state.h"
 #include "ui/fo3-system-colour.h"
 #include "ui/interaction/fo3-interaction-hud-renderer.h"
+#include <cctype>
 #include <memory>
 namespace fo3menuui {
 struct Font {
@@ -191,8 +192,10 @@ inline void Measure(fo3menu::Layout &layout) {
       float length = fo3font::MeasureText(f->metrics, line);
       maximum = std::max(maximum, length);
     }
+    // B564AF loads post-load space.height for line measurement. XML padding
+    // already positions the font cell; its Y anchor is centred on that cell.
     return fo3menu::Box{0, 0, maximum,
-                        float(lines.size()) * f->metrics.baseLine};
+                        float(lines.size()) * f->metrics.glyphs[32].height};
   };
 }
 struct Batch {
@@ -204,6 +207,25 @@ struct Surface {
   GLuint vao = 0, vbo = 0;
   std::vector<Batch> batches;
   std::vector<fo3hudassets::Vertex> vertices;
+  struct AnimatedUv {
+    size_t vertex;
+    float u;
+  };
+  std::vector<AnimatedUv> animated;
+  float animationPhase = -1;
+  void Animate(float phase) {
+    if (animated.empty() || phase == animationPhase)
+      return;
+    fo3hudrenderer::CachedStateGuard guard;
+    animationPhase = phase;
+    for (const auto &point : animated)
+      vertices[point.vertex].u = point.u + phase;
+    glBindVertexArray(vao);
+    glBindBuffer(GL_ARRAY_BUFFER, vbo);
+    glBufferSubData(GL_ARRAY_BUFFER, 0, vertices.size() * sizeof(vertices[0]),
+                    vertices.data());
+    fo3hudassets::UploadVertices(vao, vertices.data(), vertices.size());
+  }
   void Shutdown() {
     if (vao)
       glDeleteVertexArrays(1, &vao);
@@ -284,6 +306,8 @@ struct Surface {
       return false;
     batches.clear();
     vertices.clear();
+    animated.clear();
+    animationPhase = -1;
     auto draw = layout.Paint();
     bool complete = true;
     for (auto &d : draw) {
@@ -302,13 +326,14 @@ struct Surface {
         auto lines = fo3dialogue::Wrap(font->metrics, d.text,
                                        width > 0 ? width : 100000.f);
         float y = d.box.y;
+        const float glyphOrigin = font->metrics.glyphs[32].height * .5f;
         for (const auto &line : lines) {
           auto extent = layout.measure(d.font, line, 0);
           float x = d.box.x - (d.justify == 2   ? extent.w
                                : d.justify == 1 ? extent.w * .5f
                                                 : 0);
           fo3font::AppendText(
-              font->metrics, line, 0, 0,
+              font->metrics, line, 0, glyphOrigin - font->metrics.baseLine,
               [&](uint8_t, const fo3font::Glyph &g, const fo3font::Quad &q) {
                 Quad(
                     {x + q.left, y + q.top, q.right - q.left, q.bottom - q.top},
@@ -317,7 +342,7 @@ struct Surface {
                      g.uv[5] - g.uv[1]},
                     0);
               });
-          y += font->metrics.baseLine;
+          y += font->metrics.glyphs[32].height;
         }
       } else if (d.type == "image" && !d.file.empty()) {
         texture = Shared().Image(d.file, d.atlas);
@@ -334,7 +359,20 @@ struct Surface {
             texture.v += texture.h * layout.N(d.node, "cropy") / height;
             texture.h *= d.box.h / height;
           }
+          const bool scroll = layout.S(d.node, "animation") == "Forward";
+          if (scroll && width > 0 && height > 0) {
+            texture.w *= d.box.w / width;
+            texture.h *= d.box.h / height;
+            glBindTexture(GL_TEXTURE_2D, texture.id);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+#ifdef FQ_ENABLE_VULKAN
+            fqvk::RepeatS(texture.id);
+#endif
+          }
           Quad(d.box, d.clip, texture, 0, d.rotation);
+          if (scroll)
+            for (size_t i = first; i < vertices.size(); ++i)
+              animated.push_back({i, vertices[i].u});
         } else
           complete = false;
       }
@@ -403,17 +441,36 @@ struct Surface {
     }
   }
 };
+inline bool SameSetting(const std::string &a, const std::string &b) {
+  return a.size() == b.size() &&
+         std::equal(a.begin(), a.end(), b.begin(),
+                    [](unsigned char x, unsigned char y) {
+                      return std::tolower(x) == std::tolower(y);
+                    });
+}
+inline std::string Setting(const fo3player::Player &p, const std::string &key) {
+  const auto &overrides = p.Definitions().strings;
+  auto found = overrides.find(key);
+  if (found != overrides.end())
+    return found->second;
+  for (const auto &entry : overrides)
+    if (SameSetting(entry.first, key))
+      return entry.second;
+  const auto &defaults = fo3menu::StringDefaults();
+  auto original = defaults.find(key);
+  if (original != defaults.end())
+    return original->second;
+  for (const auto &entry : defaults)
+    if (SameSetting(entry.first, key))
+      return entry.second;
+  return {};
+}
 inline void Strings(fo3menu::Layout &l, const fo3player::Player &p) {
   l.strings = [&p](const std::string &key) -> fo3menu::Value {
-    auto i = p.Definitions().strings.find(key);
-    if (i != p.Definitions().strings.end())
-      return i->second;
-    auto fallback = fo3menu::StringDefaults().find(key);
-    return fallback == fo3menu::StringDefaults().end()
-               ? fo3menu::Value{}
-               : fo3menu::Value(fallback->second);
+    return Setting(p, key);
   };
 }
+
 struct Row {
   std::string text, value;
   bool equipped = false, marked = false;

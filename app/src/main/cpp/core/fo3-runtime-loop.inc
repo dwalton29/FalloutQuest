@@ -745,6 +745,8 @@ private:
         if (!CreateAction("pipboy_back", "Pip-Boy Back", XR_ACTION_TYPE_BOOLEAN_INPUT,
                           1, &handPaths_[1], &pipBackAction_)) return false;
 
+        if(!CreateAction("barter_confirm", "Accept Trade", XR_ACTION_TYPE_BOOLEAN_INPUT,1,&handPaths_[0],&barterConfirmAction_))return false;
+
         // Q24.0 cleanup: controller triggers are gameplay input, not renderer
         // test controls. Keep one two-hand action for authored finger pose.
         if (!CreateAction("finger_trigger", "Finger Trigger",
@@ -774,6 +776,7 @@ private:
         XrPath rightStickX = XR_NULL_PATH;
         XrPath rightStickY = XR_NULL_PATH;
         XrPath rightA = XR_NULL_PATH;
+        XrPath leftX = XR_NULL_PATH;
         XrPath rightB = XR_NULL_PATH;
         XrPath leftMenu = XR_NULL_PATH;
         XrPath leftTriggerValue = XR_NULL_PATH;
@@ -799,6 +802,7 @@ private:
             !Path("/user/hand/left/input/thumbstick/y", &leftStickY) ||
             !Path("/user/hand/right/input/thumbstick/x", &rightStickX) ||
             !Path("/user/hand/right/input/thumbstick/y", &rightStickY) ||
+            !Path("/user/hand/left/input/x/click", &leftX) ||
             !Path("/user/hand/right/input/a/click", &rightA) ||
             !Path("/user/hand/right/input/b/click", &rightB) ||
             !Path("/user/hand/left/input/menu/click", &leftMenu) ||
@@ -819,7 +823,7 @@ private:
 
         XrPath leftHaptic=XR_NULL_PATH,rightHaptic=XR_NULL_PATH;
         if(!Path("/user/hand/left/output/haptic",&leftHaptic)||!Path("/user/hand/right/output/haptic",&rightHaptic))return false;
-        const std::array<XrActionSuggestedBinding, 27> bindings{{
+        const std::array<XrActionSuggestedBinding, 28> bindings{{
             {weaponHapticAction_,leftHaptic}, {weaponHapticAction_,rightHaptic},
             {poseAction_, leftAim},
             {poseAction_, rightAim},
@@ -830,6 +834,7 @@ private:
             {turnXAction_, rightStickX},
             {lootScrollAction_, rightStickY},
             {activateAction_, rightA},
+            {barterConfirmAction_,leftX},
             {pipBackAction_, rightB},
             {pauseAction_, leftMenu},
             {fingerTriggerAction_, leftTriggerValue},
@@ -1416,7 +1421,7 @@ private:
             if(!Fo3GameplayBlocked())ResetFo3Pipboy();
             moveX_=moveY_=turnX_=lootScrollY_=0;
             fingerTriggerValue_={};fingerGripValue_={};
-            activateDownQ1700_=pipBackDown_=false;return;
+            activateDownQ1700_=pipBackDown_=barterConfirmDown_=false;return;
         }
         const float rawMoveX = ReadFloatAction(moveXAction_, handPaths_[0]);
         const float rawMoveY = ReadFloatAction(moveYAction_, handPaths_[0]);
@@ -1445,18 +1450,19 @@ private:
             ReadBooleanActionQ1450(
                 fingerThumbContactAction_, handPaths_[1]);
         activateDownQ1700_ = ReadBoolActionQ1699(activateAction_, handPaths_[1]);
+        barterConfirmDown_=ReadBoolActionQ1699(barterConfirmAction_,handPaths_[0]);
         pipBackDown_=ReadBoolActionQ1699(pipBackAction_,handPaths_[1]);
         const bool menuDown=ReadBoolActionQ1699(pauseAction_,handPaths_[0]);
         UpdateFo3Pause(menuDown,activateDownQ1700_,pipBackDown_,turnX_,lootScrollY_,
             double(time)*1e-9,sessionState_==XR_SESSION_STATE_FOCUSED);
         const bool neutral=!menuDown&&moveX_==0&&moveY_==0&&turnX_==0&&std::fabs(lootScrollY_)<.2f&&
-            !activateDownQ1700_&&!pipBackDown_&&fingerTriggerValue_[0]<.2f&&fingerTriggerValue_[1]<.2f&&
+            !activateDownQ1700_&&!pipBackDown_&&!barterConfirmDown_&&fingerTriggerValue_[0]<.2f&&fingerTriggerValue_[1]<.2f&&
             fingerGripValue_[0]<.2f&&fingerGripValue_[1]<.2f;
         gFo3GameplayInputSuppressed=!residentInputBarrier_.Allow(Fo3GameplayBlocked(),neutral);
         if(gFo3GameplayInputSuppressed){
             moveX_=moveY_=turnX_=lootScrollY_=0;
             fingerTriggerValue_={};fingerGripValue_={};
-            activateDownQ1700_=pipBackDown_=false;
+            activateDownQ1700_=pipBackDown_=barterConfirmDown_=false;
         }
 
         const XrSpaceLocationFlags required = XR_SPACE_LOCATION_POSITION_VALID_BIT |
@@ -2027,7 +2033,8 @@ private:
                         !(Fo3LockpickFocus()||Fo3TerminalFocus())&&!Fo3ScriptMessageFocus()&&!Fo3LevelUpFocus()&&q210RightValid?lootScrollY_:0,
                         !(Fo3LockpickFocus()||Fo3TerminalFocus())&&!Fo3ScriptMessageFocus()&&!Fo3LevelUpFocus()&&q210RightValid&&activateDownQ1700_,
                         !(Fo3LockpickFocus()||Fo3TerminalFocus())&&!Fo3ScriptMessageFocus()&&!Fo3LevelUpFocus()&&q210RightValid&&pipBackDown_,
-                        sessionState_==XR_SESSION_STATE_FOCUSED,q210RightValid?turnX_:0,q210RightValid?fingerTriggerValue_[1]:0);
+                        sessionState_==XR_SESSION_STATE_FOCUSED,q210RightValid?turnX_:0,q210RightValid?fingerTriggerValue_[1]:0,
+                        q210LeftValid?fingerTriggerValue_[0]:0,q210LeftValid&&barterConfirmDown_);
                     if(dialogueControls&&activateDownQ1700_)activateLatched_=true;
                     WeaponUpdate(gameplaySeconds,dialogueControls?false:pipBackDown_);
                     DeliverFo3ScriptSounds();
@@ -2550,7 +2557,6 @@ private:
             if(spacewarpProducerReady_&&glGetError()!=GL_NO_ERROR)motionDepthReady=false;
             const auto motionLateUiBefore=fqgl::counters.draws;
             if(!IsFo3LoadingVisible()) {
-                if(Fo3PipboyFocus()){fo3hudrenderer::CachedStateGuard guard;fo3lockoverlay::DepthScope depth(eye.width,eye.height);if(depth.valid)Q210RenderPipboyOverlay(viewProjection.m);}
                 Q230RenderHealthHud(viewProjection.m);
                 if(Fo3TerminalFocus())RenderFo3Terminal(viewProjection.m);
             }
@@ -2595,7 +2601,7 @@ private:
                 model.m[12]=panel.anchor[0];model.m[13]=panel.anchor[1];model.m[14]=panel.anchor[2];model.m[15]=1;
                 const auto mvp=Multiply(viewProjection,model);
                 if(gPlayerSession)fo3menuui::Barter(mvp.m,gPlayerSession->player,gBarter.session,gBarter.buying,gBarter.cursor.selected,
-                    gBarter.playerPanel.revision+gBarter.merchantPanel.revision,gBarter.status);
+                    gBarter.playerPanel.revision+gBarter.merchantPanel.revision,gBarter.status,gBarter.controls);
 
             }
             for (uint32_t hand = 0; hand < 2; ++hand) {
@@ -2821,6 +2827,8 @@ private:
     XrAction activateAction_{XR_NULL_HANDLE};
     XrAction pauseAction_=XR_NULL_HANDLE;
     XrAction pipBackAction_{XR_NULL_HANDLE};
+    XrAction barterConfirmAction_{XR_NULL_HANDLE};
+    bool barterConfirmDown_=false;
     bool pipBackDown_=false,pipLeftGripTracked_=false,pipLeftAimTracked_=false;
     XrAction lootScrollAction_{XR_NULL_HANDLE};
     float lootScrollY_=0;

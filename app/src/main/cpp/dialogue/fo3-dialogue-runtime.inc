@@ -117,7 +117,7 @@ bool StartFo3Dialogue(uint32_t reference) {
   Q6H_LOGI("NPC DIALOGUE OVERRIDE actor=%08X begin=1 package=%08X",reference,actor->runtime.package);
   fo3audio::NamedSound("UIMenuOK");DialoguePublishAudio();FlushFo3PlayerState();return true;
 }
-void UpdateFo3Dialogue(double now,float stick,bool a,bool b,bool focused,float horizontal=0,float trigger=0) {
+void UpdateFo3Dialogue(double now,float stick,bool a,bool b,bool focused,float horizontal=0,float trigger=0,float leftTrigger=0,bool x=false) {
   const float dt=std::clamp(float(now-gDialogueTime),0.f,.1f);gDialogueTime=now;
   const bool pressA=a&&!gDialoguePreviousA,pressB=b&&!gDialoguePreviousB;
   gDialoguePreviousA=a;gDialoguePreviousB=b;
@@ -153,7 +153,7 @@ void UpdateFo3Dialogue(double now,float stick,bool a,bool b,bool focused,float h
     // OpenXR focus can transiently leave FOCUSED while the application remains
     // visible (system UI/headset state). Do not destroy an authored conversation
     // for that presentation-level event; input is already gated by focused below.
-    else if(gBarter.active)UpdateFo3Barter(now,stick,horizontal,trigger,pressA,pressB,focused);
+    else if(gBarter.active)UpdateFo3Barter(now,stick,horizontal,leftTrigger,trigger,x,pressA,pressB,focused);
     else if(focused&&pressB)EndFo3Dialogue("B exit");
     else {
       auto ctx=DialogueContext(*actor);
@@ -218,7 +218,7 @@ void UpdateFo3Dialogue(double now,float stick,bool a,bool b,bool focused,float h
     fo3player::BarterRequest request;
     if(gPlayerSession->player.PollBarter(request)&&request.actor==gDialogue.actor&&
        gPlayerSession->player.OpenBarter(request.actor,request.discount,gBarter.session)){
-      gBarter.active=true;gBarter.buying=true;gBarter.status.clear();gBarter.cursor.Target(0,0);
+      gBarter.controls={};gBarter.controls.leftDown=leftTrigger>.65f;gBarter.controls.rightDown=trigger>.65f;gBarter.controls.xDown=x;gBarter.active=true;gBarter.buying=true;gBarter.status.clear();gBarter.cursor.Target(0,0);
       fo3audio::DialogueStop();BarterBuildPanels();
     }
   }

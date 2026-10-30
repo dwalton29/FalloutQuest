@@ -117,6 +117,35 @@ int main(int argc, char **argv) {
         fo3menuui::Shared().textures[command.atlas + "|" + command.file] = {
             200};
   }
+  // Original text_box padding assumes the font cell's central Y anchor.
+  // A full line-height baseline would push every label below its border.
+  {
+    fo3menu::Layout l;
+    assert(l.Load("menus\\center.xml",
+                  [](const std::string &path, std::string &out) {
+                    out = path == "menus\\globals.xml"
+                              ? "<rect name='Strings'/>"
+                              : "<menu name='Test'><text "
+                                "name='Label'><x>0</x><y>20</y><font>2</"
+                                "font><string>A</string></text></menu>";
+                    return true;
+                  }));
+    fo3menuui::Measure(l);
+    fo3menuui::Surface s;
+    assert(s.Build(l));
+    const auto &font = fo3menuui::Shared().fonts[2].metrics;
+    assert(std::abs(l.N("Label", "height") - font.glyphs[32].height) < .001f);
+    float top = 1000, bottom = -1000;
+    for (const auto &v : s.vertices) {
+      top = std::min(top, v.y);
+      bottom = std::max(bottom, v.y);
+    }
+    assert(std::abs(top - (20 + font.glyphs[32].height * .5f -
+                           font.glyphs['A'].topEdge)) < .001f);
+    if (argc > 2)
+      assert(std::abs((top + bottom) * .5f - 26) < 2.f);
+    s.Shutdown();
+  }
   // Prime exactly the renderer-owned state and verify it survives UI work.
   fqgl::Invalidate();
   glUseProgram(91);
@@ -216,6 +245,8 @@ int main(int argc, char **argv) {
     prime(fo3menuui::PipDocument(0), "menus\\main\\stats_menu.xml");
     prime(fo3menuui::PipDocument(1), "menus\\main\\inventory_menu.xml");
     prime(fo3menuui::MessageDocument(), "menus\\message_menu.xml");
+    prime(fo3menuui::QuantityDocument(), "menus\\quantity_menu.xml", 1280,
+          1024);
     prime(fo3menuui::BarterDocument(), "menus\\barter_menu.xml", 1280, 1024);
     assert(p.Add(0xf, 1000) && p.Add(0x434f, 1) && p.Add(0x4241, 37));
     assert(p.Definitions().items.at(0x4241).shortName == "10mm");
@@ -296,6 +327,77 @@ int main(int argc, char **argv) {
     }
     assert(count == eligible && count > 0 &&
            barter.layout.Unsupported().empty());
+    fo3barter::Controls controls;
+    controls.filters[1] = 0;
+    fo3menuui::Barter(identity, p, session, true, 0, 20, "", controls);
+    assert(barter.layout.S("BM_ContainerTitle", "string") ==
+           fo3menuui::Label(p, "sInventoryWeapons"));
+    assert(barter.layout.N(barter.layout.Globals(), "_background_fill_alpha") >=
+           128);
+    assert(barter.layout.S("BM_ButtonX", "_xbox_button") ==
+           "glow_general_button_x.dds");
+    for (const auto &stack : session.merchant)
+      if (stack.count > 1 && p.BarterItemAllowed(session.actor, stack)) {
+        controls.Begin(session, stack.id, true);
+        if (!controls.Editing())
+          continue;
+        controls.Adjust(-1);
+        fo3menuui::Barter(identity, p, session, true, 0, 21, "", controls);
+        auto &quantity = fo3menuui::QuantityDocument();
+        assert(quantity.layout.S("QM_AmountChosen", "string") ==
+               std::to_string(controls.quantity));
+        assert(quantity.layout.Unsupported().empty());
+        break;
+      }
+    // Display original objectives in authored order, with completed rows
+    // dimmed.
+    for (const auto &entry : p.Definitions().pipboy.quests) {
+      const auto &quest = entry.second;
+      if (quest.name.empty() || quest.objectiveOrder.size() < 2)
+        continue;
+      assert(p.StartQuest(entry.first));
+      assert(p.SetObjective(entry.first, quest.objectiveOrder[0], true,
+                            fo3pipdata::Completion::Complete));
+      assert(p.SetObjective(entry.first, quest.objectiveOrder[1], true,
+                            fo3pipdata::Completion::Active));
+      menu.tab = fo3pip::Tab::Data;
+      menu.page = 2;
+      menu.revision = UINT64_MAX;
+      menu.Refresh(p);
+      auto found = std::find(menu.rows.begin(), menu.rows.end(), entry.first);
+      assert(found != menu.rows.end());
+      menu.selected = found - menu.rows.begin();
+      fo3menuui::Pipboy(menu, p, identity);
+      auto &map = fo3menuui::PipDocument(2).layout;
+      assert(map.N("MM_DataRect", "_ItemType") == 4);
+      auto objectives = map.Find("MM_QuestObjectivesList");
+      std::vector<int> ids;
+      for (auto child : map.Nodes()[objectives].children)
+        if (map.Nodes()[child].dynamic)
+          ids.push_back(child);
+      assert(ids.size() >= 2 && map.N(ids[0], "_TextAlpha") == 128 &&
+             map.N(ids[1], "_TextAlpha") == 255);
+      for (auto id : menu.rows)
+        assert(!p.Definitions().pipboy.quests.at(uint32_t(id)).name.empty());
+      break;
+    }
+    // Source waveform UVs move without reparsing or rebuilding static text.
+    menu.tab = fo3pip::Tab::Data;
+    menu.page = 4;
+    menu.radioSignal = true;
+    menu.radioPhase = 0;
+    fo3menuui::Shared().textures["|Interface\\Radio Wave\\wave.dds"] = {
+        250, 0, 0, 1, 1, 1024, 256};
+    fo3menuui::Pipboy(menu, p, identity);
+    auto &radio = fo3menuui::PipDocument(2);
+    assert(!radio.surface.animated.empty());
+    auto vertex = radio.surface.animated[0].vertex;
+    const auto u = radio.surface.vertices[vertex].u;
+    const auto builds = driverCalls["glBufferData"];
+    menu.radioPhase = .1f;
+    fo3menuui::Pipboy(menu, p, identity);
+    assert(driverCalls["glBufferData"] == builds &&
+           std::abs(radio.surface.vertices[vertex].u - u - .1f) < .0001f);
     fo3dialogue::Panel message;
     message.visible = true;
     message.title = "Fixture";

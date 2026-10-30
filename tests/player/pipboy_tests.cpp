@@ -55,6 +55,20 @@ int main() {
   a.Step(good, 6.2);
   a.Step({}, 7);
   assert(!a.Focus()); // 8
+  {
+    fo3player::Catalog catalog;
+    auto &visible=catalog.pipboy.quests[10];visible.name="Visible quest";visible.objectiveOrder={1};visible.objectives[1].text="Objective";
+    auto &internal=catalog.pipboy.quests[11];internal.objectiveOrder={1};internal.objectives[1].text="Internal objective";
+    catalog.pipboy.quests[12].name="Not in journal yet";
+    fo3player::Player quests(std::move(catalog));
+    assert(quests.StartQuest(10)&&quests.StartQuest(11)&&quests.StartQuest(12));
+    assert(quests.SetObjective(10,1,true,fo3pipdata::Completion::Active));
+    assert(quests.SetObjective(11,1,true,fo3pipdata::Completion::Active));
+    Menu journal;journal.tab=Tab::Data;journal.page=2;journal.Refresh(quests);
+    assert(journal.rows.size()==1&&journal.rows[0]==10);
+    assert(quests.SetObjective(10,1,false,fo3pipdata::Completion::Complete));
+    journal.Refresh(quests);assert(journal.rows.size()==1&&journal.rows[0]==10);
+  }
   auto p = Player();
   Menu m;
   assert(m.BeginFrame(1));
