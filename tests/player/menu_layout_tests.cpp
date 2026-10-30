@@ -122,6 +122,7 @@ int main(int argc, char **argv) {
                              l.Find("stats_skills_container")) >= 0);
       }
       if (name == "MapMenu") {
+        assert(l.N("GLOW_BRANCH", "systemcolor") == 1);
         auto b = l.Bounds(l.Find("MM_LocalMap_ClipWindow"));
         assert(Near(b.w, 855) && Near(b.h, 500));
         assert(l.Instantiate("TabButtonTemplate", l.Find("MM_Tabline")) >= 0);
