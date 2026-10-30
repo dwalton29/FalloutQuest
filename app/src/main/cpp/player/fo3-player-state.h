@@ -399,6 +399,10 @@ public:
   float CarryCapacity() const;
   double InventoryWeight() const;
   bool Overencumbered() const { return InventoryWeight() > CarryCapacity(); }
+  uint32_t CurrentFurniture()const{return furnitureRef_;}
+  uint8_t SittingState()const{return sittingState_;}
+  uint8_t FurnitureMarker()const{return furnitureMarker_;}
+  void SetFurnitureUse(uint32_t ref,uint8_t marker,uint8_t state){if(!state){ref=0;marker=0;}if(ref!=furnitureRef_||marker!=furnitureMarker_||state!=sittingState_){furnitureRef_=ref;furnitureMarker_=marker;sittingState_=state;++revision_;}}
   bool IsSneaking()const{return sneaking_;}
   void SetSneaking(bool value){if(value!=sneaking_){sneaking_=value;++revision_;}}
   uint64_t Revision() const { return revision_; }
@@ -707,6 +711,7 @@ private:
   std::shared_ptr<const Catalog> catalog_;
   mutable State state_;
   mutable uint64_t revision_ = 0;
+  uint32_t furnitureRef_=0;uint8_t furnitureMarker_=0,sittingState_=0; // Transient physical furniture use.
   bool sneaking_=false; // Tracking/input state; recomputed rather than serialized.
   uint64_t actorPoseRevisions_ = 0;
   std::unordered_map<uint32_t,uint64_t> scriptActorMoves_; // Native pose invalidation, not save authority.

@@ -138,3 +138,9 @@ target_compile_options(sneak_gait_asset_tests PRIVATE -UNDEBUG -Wall -Wextra -We
 target_include_directories(sneak_gait_asset_tests PRIVATE . ../../app/src/main/cpp ../../app/src/main/cpp/data ../../app/src/main/cpp/npc)
 add_test(NAME sneak_gait_asset_tests COMMAND sneak_gait_asset_tests)
 set_tests_properties(sneak_gait_asset_tests PROPERTIES SKIP_RETURN_CODE 77)
+
+add_executable(player_seat_tests player_seat_tests.cpp ../../app/src/main/cpp/npc/fo3-actor-animation.cpp)
+target_compile_features(player_seat_tests PRIVATE cxx_std_17)
+target_compile_options(player_seat_tests PRIVATE -UNDEBUG -Wall -Wextra -Werror -Wno-unused-function -Wno-misleading-indentation)
+target_include_directories(player_seat_tests PRIVATE . ../../app/src/main/cpp ../../app/src/main/cpp/data ../../app/src/main/cpp/npc)
+add_test(NAME player_seat_tests COMMAND player_seat_tests)

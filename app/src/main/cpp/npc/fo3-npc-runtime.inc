@@ -567,6 +567,11 @@ void Q230UpdateFacialPart(Q230ActorVisual& actor,Q230RigPart& rig) {
 void Q230UpdateActor(Q230ActorVisual &actor) {
   FQ_PERF_SCOPE(Animation);
   if (actor.lastFrame == gStereoFrame || actor.rigs.empty()) return;
+#if !defined(FO3_ACTOR_RUNTIME_HOST_TEST) || defined(FO3_NPC_SLEEP_HOST_TEST)
+  // Keep the settled palette resident. Wake/corpse/appearance/MoveTo changes
+  // invalidate lastFrame, so the first changed pose is still uploaded.
+  if(actor.ragdollStarted&&actor.corpsePose&&actor.corpsePose->sleeping&&actor.lastFrame!=UINT64_MAX){actor.lastFrame=gStereoFrame;return;}
+#endif
   actor.lastFrame=gStereoFrame;
 #ifndef FO3_ACTOR_RUNTIME_HOST_TEST
   if(fqperf::capture.recording&&actor.profiledAnimationFrame!=gStereoFrame) {

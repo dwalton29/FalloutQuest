@@ -129,6 +129,12 @@ fo3player::ScriptEventResult DispatchFo3ScriptedActivation(
     if(forcePendingActivation)return fo3player::ScriptEventResult::Pending;
     return gPlayerSession->player.DispatchReferenceEvent(ref,"OnActivate",activator,error);
 }
+static uint32_t testSeat=0,testSeated=0;static bool seatAllowed=true,seatBlocked=false;static int seatRequests=0;
+bool Fo3PlayerSeatBlocked(){return seatBlocked;}
+uint32_t Fo3PlayerSeatReference(){return testSeated;}
+bool HasFo3PlayerSeat(uint32_t ref){return ref&&ref==testSeat;}
+bool CanFo3PlayerSit(uint32_t ref){return HasFo3PlayerSeat(ref)&&seatAllowed;}
+bool BeginFo3PlayerSit(uint32_t ref){if(!CanFo3PlayerSit(ref))return false;++seatRequests;return true;}
 #include "world/interaction/fo3-interaction-runtime.inc"
 struct {bool active=false;} gSceneLoad;
 uint32_t gExteriorWorldspaceQ1890=0;
@@ -537,6 +543,12 @@ int main() {
     Check(gPlayerSession->player.PollScriptSound(preservedSound)&&preservedSound==77,
         "reservation leaves effect queued until release");
     frameReserved=false;
+    gObjects.clear();gQ230NpcActors.clear();doorPresent=false;testSeat=700;seatRequests=0;seatAllowed=true;testSeated=0;
+    fo3player::Catalog seats;Reference chair;chair.base=701;seats.references[700]=chair;seats.pipboy.targets[700].base=701;seats.pipboy.targets[700].cell=1;seats.pipboy.furniture[701]={};seats.eventBaseNames[701]="Office Chair";
+    gPlayerSession=std::make_unique<fo3player::Session>(seats);gObjects.push_back({});auto& seatObject=gObjects.back();seatObject.baseRecordType="FURN";seatObject.baseFormId=701;seatObject.refFormId=700;seatObject.minX=seatObject.minY=-.5f;seatObject.maxX=seatObject.maxY=.5f;seatObject.minZ=-2;seatObject.maxZ=-1;
+    Check(query()&&t.furniture&&!t.pickup&&t.allowed&&std::string(t.prompt.data())=="Sit Office Chair","original FURN is a Sit target rather than an inventory item");
+    activate();Check(seatRequests==1,"A dispatches seating through the actual interaction path");seatAllowed=false;Check(query()&&!t.allowed,"occupied furniture cannot sit");activate();Check(seatRequests==1,"blocked seat cannot activate");
+    seatAllowed=true;testSeated=700;gObjects.clear();Check(query()&&t.furniture&&std::string(t.prompt.data())=="Stand Office Chair","seated empty ray exposes stand action");seatBlocked=true;Check(!query(),"blink transition blocks double activation");seatBlocked=false;testSeat=testSeated=0;
     std::cout << "Interaction runtime tests passed\n";
     return 0;
   } catch (const std::exception &e) {

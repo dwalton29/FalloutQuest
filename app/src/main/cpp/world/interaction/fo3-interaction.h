@@ -7,7 +7,7 @@
 struct Fo3InteractionTarget {
   uint32_t reference = 0;
   bool pickup = false, allowed = false;
-  bool container = false,talk=false,scripted=false,crime=false,terminal=false;
+  bool container = false,talk=false,scripted=false,crime=false,terminal=false,furniture=false;
   std::array<float,3> anchor{};
   float distance = 0;
   Fo3DoorAimQ1700 door;
@@ -41,3 +41,9 @@ bool Fo3LockpickFocus();
 void CancelFo3Lockpick();
 bool Fo3LockpickInputBlocked();
 bool Fo3ScriptMessageFocus();
+
+bool Fo3PlayerSeatBlocked();
+uint32_t Fo3PlayerSeatReference();
+bool HasFo3PlayerSeat(uint32_t reference);
+bool CanFo3PlayerSit(uint32_t reference);
+bool BeginFo3PlayerSit(uint32_t reference);

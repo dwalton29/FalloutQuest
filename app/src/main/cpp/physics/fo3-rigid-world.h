@@ -45,6 +45,7 @@ public:
     void RemoveRagdoll(uint32_t actor);
     bool HasRagdoll(uint32_t actor)const;
     void SleepRagdoll(uint32_t actor);
+    bool RagdollSleeping(uint32_t actor)const;
     bool RagdollPose(uint32_t actor,std::vector<M>& bones,bool* sleeping=nullptr,std::vector<V>* linear=nullptr,std::vector<V>* angular=nullptr)const;
     bool SetRagdollMotion(uint32_t actor,const std::vector<V>& linear,const std::vector<V>& angular);
     std::vector<uint32_t> RagdollActors()const;

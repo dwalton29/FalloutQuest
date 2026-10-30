@@ -7,6 +7,7 @@ inline void glGenVertexArrays(GLsizei n,GLuint* ids){++driverCalls["glGenVertexA
 #include "ui/interaction/fo3-health-bar-hud.h"
 #include "ui/interaction/fo3-compass-hud.h"
 #include "ui/interaction/fo3-sneak-hud.h"
+#include "ui/interaction/fo3-blink-hud.h"
 #include <cassert>
 #include <iostream>
 #include <limits>
@@ -102,5 +103,6 @@ int main(){
   const auto sneakDraws=driverCalls["glDrawArrays"];fo3sneakui::PrepareLabel(false,"");fo3sneakui::Render(mvp);assert(driverCalls["glDrawArrays"]==sneakDraws);
   for(unsigned label=1;label<4;++label){fo3sneakui::PrepareLabel(true,fo3sneak::Label(label));assert(fo3sneakui::Get().count>6);}
   fo3sneakui::Shutdown();
+  const auto beforeBlink=fqgl::state.program.value;fo3blinkui::Render(1);const auto blinkQueries=fqgl::counters.queries;const auto blinkUploads=driverCalls["glBufferData"];fo3blinkui::Render(.5f);assert(fqgl::counters.queries==blinkQueries&&driverCalls["glBufferData"]==blinkUploads&&fqgl::state.program.value==beforeBlink);fo3blinkui::Shutdown();
   std::cout<<"Authored HP: tick quantization, centered enemy drain, atlas UVs/sharing, empty HP, stereo state restoration and warm reuse passed\n";
 }

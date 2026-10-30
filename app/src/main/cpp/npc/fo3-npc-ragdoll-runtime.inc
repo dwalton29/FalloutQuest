@@ -43,6 +43,8 @@ void Q230CaptureRagdolls(){
  if(!gPlayerSession)return;
  for(auto& actor:gQ230NpcActors){
   if(!actor.ragdollStarted||actor.rigs.empty())continue;
+  // Check activation before allocating/copying 18 body transforms and velocities.
+  if(actor.corpsePose&&actor.corpsePose->sleeping&&fo3rigid::Live().RagdollSleeping(actor.source.refFormId))continue;
   std::vector<fo3rigid::M> bones;std::vector<fo3rigid::V> linear,angular;bool sleeping=false;
   if(!fo3rigid::Live().RagdollPose(actor.source.refFormId,bones,&sleeping,&linear,&angular))continue;
   if(sleeping&&actor.corpsePose&&actor.corpsePose->sleeping)continue;
@@ -61,8 +63,9 @@ void Q230CaptureRagdolls(){
 static bool Q230RagdollBounds(const Q230ActorVisual& actor,questrender::Bounds& out){
  if(!actor.corpsePose||!actor.ragdollDefinition||actor.rigs.empty())return false;
  const auto scene=fo3anim::Multiply(actor.dialogueRoot,actor.rigs[0].scenePlacement);
+ if(actor.boundsCorpse==actor.corpsePose&&actor.corpseBoundsScene==scene){out=actor.cachedCorpseBounds;return true;}
  out={INFINITY,-INFINITY,INFINITY,-INFINITY,INFINITY,-INFINITY};
  for(size_t i=0;i<actor.corpsePose->bones.size();++i){const auto transform=fo3anim::Multiply(scene,actor.corpsePose->bones[i].global);const auto& body=actor.ragdollDefinition->bodies[i];float scale=0;for(int r=0;r<3;++r)scale+=transform[r]*transform[r];const float margin=body.radius*std::sqrt(scale)+.2f;
   for(const auto& end:{body.a,body.b}){const auto p=fo3anim::Point(transform,end);out.minX=std::min(out.minX,p[0]-margin);out.maxX=std::max(out.maxX,p[0]+margin);out.minY=std::min(out.minY,p[1]-margin);out.maxY=std::max(out.maxY,p[1]+margin);out.minZ=std::min(out.minZ,p[2]-margin);out.maxZ=std::max(out.maxZ,p[2]+margin);}
- }return true;
+ }actor.boundsCorpse=actor.corpsePose;actor.corpseBoundsScene=scene;actor.cachedCorpseBounds=out;return true;
 }

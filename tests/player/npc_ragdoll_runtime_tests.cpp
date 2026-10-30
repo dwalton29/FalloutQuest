@@ -16,6 +16,7 @@ struct Q230ActorVisual {
  Fo3NpcActorQ230 source;fo3npc::RuntimeState runtime;fo3anim::Skeleton skeleton;fo3anim::Pose pose;
  std::vector<Rig> rigs;fo3anim::Matrix dialogueRoot=fo3anim::Identity();
  std::shared_ptr<const fo3rag::Definition> ragdollDefinition;std::shared_ptr<const fo3player::CorpsePose> corpsePose;
+ mutable std::shared_ptr<const fo3player::CorpsePose> boundsCorpse;mutable fo3anim::Matrix corpseBoundsScene{};mutable questrender::Bounds cachedCorpseBounds{};
  std::vector<int> ragdollBones;std::vector<float> ragdollScales;bool ragdollStarted=false,stateRestored=true;
  std::array<float,3> ragdollPreviousPosition{},ragdollVelocity{};double ragdollMotionAt=-1;uint64_t lastFrame=0;
 };
@@ -44,8 +45,8 @@ int main(){
  assert(p.CanLootContainer(100)&&p.PrepareContainer(100));const auto* loot=p.ContainerContents(100);assert(loot&&!loot->empty());assert(p.TakeContainerStack(100,loot->front().id));assert(p.ItemCount(10)==1);
  const auto path="/tmp/fq-corpse-runtime-"+std::to_string(getpid());std::string error;assert(p.Save(path,error));const auto saved=*actor.corpsePose;
  world.ClearBodies();gQ230NpcActors.clear();assert(p.Restore(path,error));gQ230NpcActors.push_back(Actor());auto& returned=gQ230NpcActors[0];returned.corpsePose=p.Snapshot().actors.at(100).corpse;returned.ragdollStarted=true;Q230PrepareRagdolls();Q230CaptureRagdolls();assert(*returned.corpsePose==saved);assert(fo3rag::ApplyPose(returned.skeleton,returned.pose,*returned.corpsePose));assert(p.ItemCount(10)==1&&p.ContainerContents(100)->empty());
- const auto revision=p.Revision();world.Step(1.f/60);Q230CaptureRagdolls();assert(p.Revision()==revision); // Sleeping pose does not dirty saves/packages every frame.
+ const auto revision=p.Revision();const auto frozenPose=returned.corpsePose;for(int frame=0;frame<180;++frame){world.Step(1.f/60);Q230CaptureRagdolls();assert(world.RagdollSleeping(100)&&returned.corpsePose==frozenPose&&p.Revision()==revision);} // Sleeping pose does not dirty saves/packages every frame.
  // Resuming an airborne save preserves actual body velocity, not just pose.
- world.RemoveRagdoll(100);auto moving=saved;moving.sleeping=false;for(auto& b:moving.bones){b.global[13]+=4;b.linear={2,0,0};b.angular={0,.3f,0};}returned.corpsePose=std::make_shared<const CorpsePose>(moving);Q230PrepareRagdolls();Q230CaptureRagdolls();assert(std::abs(returned.corpsePose->bones[0].linear[0]-2)<1e-5f);world.Step(1.f/120);Q230CaptureRagdolls();assert(returned.corpsePose->bones[0].global[12]>moving.bones[0].global[12]);
+ world.RemoveRagdoll(100);auto moving=saved;moving.sleeping=false;for(auto& b:moving.bones){b.global[13]+=4;b.linear={2,0,0};b.angular={0,.3f,0};}returned.corpsePose=std::make_shared<const CorpsePose>(moving);Q230PrepareRagdolls();Q230CaptureRagdolls();assert(std::abs(returned.corpsePose->bones[0].linear[0]-2)<1e-5f);world.Step(1.f/120);Q230CaptureRagdolls();assert(!world.RagdollSleeping(100)&&returned.corpsePose->bones[0].global[12]>moving.bones[0].global[12]);
  gQ230NpcActors.clear();Q230PrepareRagdolls();assert(world.RagdollActors().empty());unlink(path.c_str());std::cout<<"production NPC ragdoll handoff, loot, return/save and motion tests passed\n";
 }

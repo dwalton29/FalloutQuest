@@ -1,3 +1,5 @@
+#define FO3_NPC_SLEEP_HOST_TEST 1
+#include "npc/fo3-ragdoll-pose.h"
 #include "../../app/src/main/cpp/rendering/actor-skinning.h"
 #include <memory>
 #include <fstream>
@@ -65,6 +67,7 @@ struct Q240NavigationGraph {
   size_t triangleCount=0u;
 };
 struct Q230ActorVisual {
+  bool ragdollStarted=false;std::shared_ptr<const fo3player::CorpsePose> corpsePose;
   Fo3NpcActorQ230 source;
   fo3npc::RuntimeState runtime;
   std::array<fo3anim::Clip,size_t(fo3npc::Animation::Count)> animations;
@@ -371,6 +374,14 @@ int main(int argc,char** argv) {
   ++gStereoFrame;
   Q230UpdateActor(actor);
   assert(uploads == 2);
+  auto sleeping=std::make_shared<fo3player::CorpsePose>();sleeping->sleeping=true;actor.ragdollStarted=true;actor.corpsePose=sleeping;
+  for(int frame=0;frame<180;++frame){++gStereoFrame;Q230UpdateActor(actor);assert(uploads==2);}
+  // A dirty appearance/transform still gets one palette publication.
+  actor.lastFrame=UINT64_MAX;++gStereoFrame;Q230UpdateActor(actor);assert(uploads==3);
+  for(int frame=0;frame<30;++frame){++gStereoFrame;Q230UpdateActor(actor);assert(uploads==3);}
+  sleeping=std::make_shared<fo3player::CorpsePose>();actor.corpsePose=sleeping;actor.lastFrame=UINT64_MAX;++gStereoFrame;Q230UpdateActor(actor);assert(uploads==4);
+  actor.ragdollStarted=false;actor.corpsePose.reset();
+
   // A rigid mouth/eye follows the same head deformation and captured origin.
   part.mesh.skinned = false;
   part.placement.modelPath = "mouth.nif";

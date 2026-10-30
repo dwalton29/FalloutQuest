@@ -157,3 +157,5 @@ bool IsFo3PlayerGrounded();
 std::vector<uint32_t> GetFo3ScriptCollisionTargets(uint32_t reference);
 
 float SetFo3PlayerStanceHeight(float x,float z,float feetOffset,float height);
+
+void ResetFo3PlayerGravity();

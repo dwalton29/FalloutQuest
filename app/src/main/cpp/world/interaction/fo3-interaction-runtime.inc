@@ -54,7 +54,7 @@ bool QueryFo3Interaction(float ox, float oy, float oz, float dx, float dy,
                          float dz, Fo3InteractionTarget &target) {
     target = {};
     if(Fo3ResidentFrameBlocked())return false;
-    if (!gSceneReady || IsFo3LoadingVisible() || Fo3DialogueFocus() || Fo3PipboyFocus() || Fo3ScriptMessageFocus() || Fo3LevelUpFocus() || Fo3LockpickFocus() || Fo3TerminalInputBlocked() || !gPlayerSession) return false;
+    if (Fo3PlayerSeatBlocked() || !gSceneReady || IsFo3LoadingVisible() || Fo3DialogueFocus() || Fo3PipboyFocus() || Fo3ScriptMessageFocus() || Fo3LevelUpFocus() || Fo3LockpickFocus() || Fo3TerminalInputBlocked() || !gPlayerSession) return false;
     const float length = std::sqrt(dx*dx+dy*dy+dz*dz);
     if (!std::isfinite(length) || length < 1e-5f ||
         !std::isfinite(ox) || !std::isfinite(oy) || !std::isfinite(oz)) return false;
@@ -73,14 +73,15 @@ bool QueryFo3Interaction(float ox, float oy, float oz, float dx, float dy,
     for (const auto& object : gObjects) {
         const bool container=catalog.containers.count(object.baseFormId)!=0;
         const bool terminal=catalog.pipboy.terminals.count(object.baseFormId)!=0;
+        const bool furniture=catalog.pipboy.furniture.count(object.baseFormId)!=0&&HasFo3PlayerSeat(object.refFormId);
         // Scripted activators use their original ACTI SCRI rather than being
         // treated as pickup items or a fabricated FalloutQuest interaction.
-        const bool scripted=(object.baseRecordType=="ACTI" || container) &&
+        const bool scripted=(object.baseRecordType=="ACTI" || container || furniture) &&
             player.HasReferenceEvent(object.refFormId,"OnActivate");
         // Inventory eligibility comes from the item catalog, independently
         // of whether the physics runtime supports this loose-object type.
         if (object.nonvisualResident || player.IsCollected(object.refFormId) ||
-            (!container && !terminal && !scripted && !catalog.items.count(object.baseFormId)) ||
+            (!container && !terminal && !furniture && !scripted && !catalog.items.count(object.baseFormId)) ||
             !IsFo3ReferenceEnabled(player,object.refFormId)) continue;
         fo3interaction::Point lo{1e30f,1e30f,1e30f}, hi{-1e30f,-1e30f,-1e30f};
         for (int corner=0;corner<8;++corner) {
@@ -97,12 +98,12 @@ bool QueryFo3Interaction(float ox, float oy, float oz, float dx, float dy,
         float distance;
         if (fo3interaction::Box({ox,oy,oz},{dx,dy,dz},lo,hi,3,distance) && distance<best) {
             const bool dispatchScript=scripted&&(!container||!player.CanLootContainer(object.refFormId));
-            best=distance; target.reference=object.refFormId; target.pickup=!container&&!scripted&&!terminal;target.terminal=terminal;
+            best=distance; target.reference=object.refFormId; target.pickup=!container&&!scripted&&!terminal&&!furniture;target.terminal=terminal;target.furniture=furniture;
             target.container=container;target.scripted=dispatchScript;
             const float panelDistance=std::max(0.0f,distance-.15f);
             target.anchor={ox+dx*panelDistance,oy+dy*panelDistance+.22f,oz+dz*panelDistance};
             target.allowed=!gPlayerSession->saveBlocked &&
-                ((dispatchScript||terminal) ? (IsFo3ReferenceEnabled(player,target.reference)&&
+                (furniture&&!dispatchScript?CanFo3PlayerSit(target.reference):(dispatchScript||terminal) ? (IsFo3ReferenceEnabled(player,target.reference)&&
                     (!container||player.CanScriptActivateContainer(target.reference)))
                   : (container ? player.CanLootContainer(target.reference) : player.CanPickup(target.reference)));
             target.door={};
@@ -119,6 +120,10 @@ bool QueryFo3Interaction(float ox, float oy, float oz, float dx, float dy,
             std::snprintf(target.prompt.data(),target.prompt.size(),corpse?"%s":"Talk %s",actor.source.fullName.c_str());
         }
     }
+    if(!target.reference&&Fo3PlayerSeatReference()){
+        target.reference=Fo3PlayerSeatReference();target.furniture=true;target.allowed=CanFo3PlayerSit(target.reference);best=.4f;
+        target.anchor={ox+dx*.4f,oy+dy*.4f+.15f,oz+dz*.4f};
+    }
     if (!target.reference || HasFo3InteractionOccluder(ox,oy,oz,dx,dy,dz,best,target.reference)) {
         target={}; return false;
     }
@@ -128,7 +133,12 @@ bool QueryFo3Interaction(float ox, float oy, float oz, float dx, float dy,
     target.crime=ownership.Theft();
     if(target.door.valid)target.crime=player.DoorInteractionCrime(target.reference);
     if (target.container&&catalog.pipboy.targets.count(target.reference)&&catalog.actorInventories.count(catalog.pipboy.targets.at(target.reference).base))return true;
-    if(target.terminal){
+    if(target.furniture&&!target.scripted){
+        target.crime=false;
+        const auto& names=catalog.eventBaseNames;const auto ref=catalog.references.find(target.reference);
+        const auto name=ref==catalog.references.end()?names.end():names.find(ref->second.base);
+        std::snprintf(target.prompt.data(),target.prompt.size(),"%s%s%s",Fo3PlayerSeatReference()==target.reference?"Stand":"Sit",name==names.end()?"":" ",name==names.end()?"":name->second.c_str());
+    } else if(target.terminal){
         std::snprintf(target.prompt.data(),target.prompt.size(),"Access %s",catalog.pipboy.terminals.at(catalog.references.at(target.reference).base).name.c_str());
     } else if (target.container) {
         const auto& ref=catalog.references.at(target.reference);
@@ -406,6 +416,7 @@ bool ActivateFo3Interaction(float ox,float oy,float oz,float dx,float dy,float d
             Q6H_LOGW("SCRIPT ACTIVATE FAILED: reference=%08X status=%d queued=%zu reason=%s",target.reference,int(status),gPlayerSession->player.PendingScriptMessageCount(),error.c_str());
         return false;
     }
+    if(target.furniture){BeginFo3PlayerSit(target.reference);return false;}
     if (target.container) {
         // Selection comes from this frame's target; never use a previous container.
         if (gLootPanel.reference!=target.reference || gLootPanel.rows.empty()) return false;

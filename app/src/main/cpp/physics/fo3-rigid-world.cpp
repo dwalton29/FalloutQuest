@@ -53,6 +53,7 @@ struct World::Impl {
     struct Grip {uint64_t id=0;btTransform anchor,offset,target;btVector3 carryVelocity{0,0,0};std::unique_ptr<btGeneric6DofSpring2Constraint> constraint;};
     struct Ragdoll {float quietSeconds=0;std::vector<uint64_t> bodies;std::vector<std::unique_ptr<btTypedConstraint>> joints;};
     std::unordered_map<uint32_t,Ragdoll> ragdolls;
+    std::vector<uint32_t> activeRagdolls;
     std::vector<const btCollisionObject*> restingContacts;
     Grip grips[2];
     float accumulated=0;
@@ -269,6 +270,11 @@ void World::MoveHeld(const M& previousApp,const M& currentApp,float seconds){
     }
 }
 void World::SleepRagdoll(uint32_t actor){auto i=impl->ragdolls.find(actor);if(i==impl->ragdolls.end())return;for(auto id:i->second.bodies){auto& b=*impl->bodies.at(id).body;b.setLinearVelocity({0,0,0});b.setAngularVelocity({0,0,0});b.forceActivationState(ISLAND_SLEEPING);}}
+bool World::RagdollSleeping(uint32_t actor)const{
+ const auto i=impl->ragdolls.find(actor);if(i==impl->ragdolls.end())return false;
+ for(auto id:i->second.bodies)if(impl->bodies.at(id).body->isActive())return false;
+ return true;
+}
 bool World::HasRagdoll(uint32_t actor)const{return impl->ragdolls.count(actor)!=0;}
 std::vector<uint32_t> World::RagdollActors()const{std::vector<uint32_t> ids;for(const auto& e:impl->ragdolls)ids.push_back(e.first);return ids;}
 void World::RemoveRagdoll(uint32_t actor){
@@ -347,8 +353,10 @@ void World::Step(float seconds){
         // Keep linked capsules in one constraint solve. Independent per-bone
         // post-step casts can tear joints on stair edges. Bound active ragdoll
         // surface displacement with up to eight smaller shared solver steps.
+        auto& active=impl->activeRagdolls;active.clear();
+        for(const auto& row:impl->ragdolls)if(!RagdollSleeping(row.first))active.push_back(row.first);
         int substeps=1;
-        for(const auto& row:impl->ragdolls)for(auto id:row.second.bodies){const auto& e=impl->bodies.at(id);const auto& b=*e.body;if(!b.isActive())continue;const float speed=b.getLinearVelocity().length()+b.getAngularVelocity().length()*e.ragdollRadius;substeps=std::max(substeps,std::min(8,int(std::ceil(speed*dt/std::max(.002f,e.ragdollThinRadius*.5f)))));}
+        for(auto actor:active)for(auto id:impl->ragdolls.at(actor).bodies){const auto& e=impl->bodies.at(id);const auto& b=*e.body;if(!b.isActive())continue;const float speed=b.getLinearVelocity().length()+b.getAngularVelocity().length()*e.ragdollRadius;substeps=std::max(substeps,std::min(8,int(std::ceil(speed*dt/std::max(.002f,e.ragdollThinRadius*.5f)))));}
         for(int i=0;i<substeps;++i)impl->world.stepSimulation(dt/substeps,0);
         // Bullet's swept sphere protects linear COM motion. Sweep each authored
         // convex child as well so a fast-spinning thin plate/weapon cannot rotate
@@ -361,13 +369,13 @@ void World::Step(float seconds){
         // indefinitely at sub-centimetre contact jitter. Sleep the whole island
         // after two supported, quiet seconds, using speed at the capsule surface.
         // Gravity prevents an unsupported falling island satisfying this window.
-        if(!impl->ragdolls.empty()){
+        if(!active.empty()){
             auto& contacts=impl->restingContacts;contacts.clear();
             for(int i=0;i<impl->dispatcher.getNumManifolds();++i){auto* m=impl->dispatcher.getManifoldByIndexInternal(i);for(int k=0;k<m->getNumContacts();++k)if(m->getContactPoint(k).getDistance()<.005f){contacts.push_back(m->getBody0());contacts.push_back(m->getBody1());break;}}
-            for(auto& row:impl->ragdolls){auto& rag=row.second;bool quiet=true,supported=false,active=false;
-                for(auto id:rag.bodies){const auto& e=impl->bodies.at(id);const auto& body=*e.body;active|=body.isActive();supported|=std::find(contacts.begin(),contacts.end(),&body)!=contacts.end();quiet&=body.getLinearVelocity().length()+body.getAngularVelocity().length()*e.ragdollRadius<.1f;}
-                if(!active){rag.quietSeconds=0;continue;}rag.quietSeconds=quiet&&supported?rag.quietSeconds+dt:0;
-                if(rag.quietSeconds>=2){SleepRagdoll(row.first);rag.quietSeconds=0;}
+            for(auto actor:active){auto& rag=impl->ragdolls.at(actor);bool quiet=true,supported=false,awake=false;
+                for(auto id:rag.bodies){const auto& e=impl->bodies.at(id);const auto& body=*e.body;awake|=body.isActive();supported|=std::find(contacts.begin(),contacts.end(),&body)!=contacts.end();quiet&=body.getLinearVelocity().length()+body.getAngularVelocity().length()*e.ragdollRadius<.1f;}
+                if(!awake){rag.quietSeconds=0;continue;}rag.quietSeconds=quiet&&supported?rag.quietSeconds+dt:0;
+                if(rag.quietSeconds>=2){SleepRagdoll(actor);rag.quietSeconds=0;}
             }
         }
 

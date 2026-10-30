@@ -7,6 +7,7 @@
 #include "physics/fo3-rigid-world.h"
 #include "npc/fo3-ragdoll-pose.h"
 #include "player/fo3-sneak.h"
+#include "player/fo3-player-seat.h"
 #include "npc/fo3-detection.h"
 #include "scripting/fo3-script-imagespace.h"
 #include "scripting/fo3-nonresident-script.h"
@@ -37,6 +38,7 @@ namespace fo3worldscript {fo3script::ImagePresentation Presentation();}
 #include "ui/interaction/fo3-health-bar-hud.h"
 #include "ui/interaction/fo3-compass-hud.h"
 #include "ui/interaction/fo3-sneak-hud.h"
+#include "ui/interaction/fo3-blink-hud.h"
 #include "npc/fo3-animation-bounds.h"
 #include "rendering/actor-skinning.h"
 #include "rendering/opaque-telemetry.h"
@@ -914,6 +916,9 @@ struct Q230ActorVisual {
     fo3anim::Pose pose;
     std::shared_ptr<const fo3rag::Definition> ragdollDefinition;
     std::shared_ptr<const fo3player::CorpsePose> corpsePose;
+    mutable std::shared_ptr<const fo3player::CorpsePose> boundsCorpse;
+    mutable fo3anim::Matrix corpseBoundsScene{};
+    mutable questrender::Bounds cachedCorpseBounds{};
     std::vector<int> ragdollBones;
     std::vector<float> ragdollScales;
     bool ragdollStarted=false;
@@ -947,6 +952,8 @@ float gPlayerSneakDrop=0,gPlayerDetectionSpeed=0;
 double gPlayerDetectionActionUntil=0;
 float gPlayerDetectionAction=0;
 fo3sneak::Indicator gPlayerSneakIndicator=fo3sneak::Indicator::Hidden;
+fo3seat::State gPlayerSeat;
+float gPlayerSeatFade=0;
 std::vector<Q230ActorVisual> gQ230NpcActors;
 uint64_t gQ230NpcResidenceRevision=0;
 fo3health::Tracker gQ230HealthBars;
@@ -3520,6 +3527,7 @@ struct Fo3SceneCpuPreparation {
     std::vector<Fo3WorldPlacement> collisionPlacements;
     std::vector<CpuObject> selected;
     std::vector<Q230ActorVisual> actors;
+    std::shared_ptr<fo3furniture::Scene> playerFurniture;
     std::unique_ptr<fo3player::Session> playerSession;
     size_t skipped = 0u;
     size_t unsupported = 0u;
@@ -4674,6 +4682,15 @@ bool BeginFo3SceneLoad(const Fo3CellTransitionRequestQ74& request, bool boot) {
         Q230PrepareActors(result.request.cellFormId, result.request.worldspaceFormId,
             result.actors,cancel,sourcePlayer?&sourcePlayer->Snapshot().actors:nullptr,
             &actorRefs,sourcePlayer?&sourcePlayer->Definitions():nullptr,result.request.x,result.request.y,sourcePlayer?&sourcePlayer->Snapshot().actorTemplateChoices:nullptr);
+        if(!result.actors.empty())result.playerFurniture=result.actors.front().runtime.furniture.scene;
+        if(!result.playerFurniture&&sourcePlayer){
+            const auto& defs=sourcePlayer->Definitions().pipboy;std::unordered_set<uint32_t> cells{result.request.cellFormId};
+            const auto world=defs.worlds.find(result.request.worldspaceFormId);const bool small=world!=defs.worlds.end()&&(world->second.flags&1);
+            if(result.request.worldspaceFormId)for(const auto& cell:defs.cellGrids){const auto owner=defs.cellWorlds.find(cell.first);
+                if(owner!=defs.cellWorlds.end()&&owner->second==result.request.worldspaceFormId&&(small||(std::abs(cell.second[0]-int(std::floor(result.request.x/4096.f)))<=1&&std::abs(cell.second[1]-int(std::floor(result.request.y/4096.f)))<=1)))cells.insert(cell.first);
+            }
+            result.playerFurniture=fo3furniture::BuildScene(defs,result.request.cellFormId,result.request.worldspaceFormId,[](const std::string& path,std::vector<uint8_t>& bytes){return LoadFalloutMeshFile(path,bytes);},true,&cells);
+        }
         if(result.referenceState)result.actors.erase(std::remove_if(result.actors.begin(),result.actors.end(),
             [&](const Q230ActorVisual& actor){return !result.referenceState->Enabled(actor.source.refFormId,true);}),result.actors.end());
         const auto* actorDefinitions=result.playerSession?&result.playerSession->player.Definitions().pipboy:
@@ -5073,6 +5090,7 @@ bool ProcessQ74TransitionRequest() {
     markFinalization("flush-player-state");
     Q74DeleteGpuObjects(gObjects);
     Q230DeleteNpcActors();
+    gPlayerSeat.Reset();gPlayerSeat.scene=std::move(prepared.playerFurniture);gPlayerSeatFade=0;
     gQ230NpcActors = std::move(prepared.actors);++gQ230NpcResidenceRevision;
     for (auto& actor : gQ230NpcActors)
         actor.animationStart = Fo3GameplayNow();
@@ -12476,6 +12494,7 @@ static float Q230PlayerLightLevel(const std::array<float,3>& point,double now){
 #include "npc/fo3-npc-ragdoll-cache.inc"
 #include "fo3-npc-runtime.inc"
 #include "npc/fo3-npc-ragdoll-runtime.inc"
+#include "player/fo3-player-seat-runtime.inc"
 
 bool Q210EnsurePlayerBody() {
     if (gQ210PlayerBodyReady) return true;
@@ -12965,6 +12984,7 @@ void Q230PumpNpcArrivals(){
                 }
                 actor.animationStart=Fo3GameplayNow();
                 const uint32_t id=actor.source.refFormId;
+                if(gPlayerSeat.scene&&actor.runtime.furniture.scene)actor.runtime.furniture.scene->reservations=gPlayerSeat.scene->reservations;
                 gQ230NpcActors.push_back(std::move(actor));++gQ230NpcResidenceRevision;
                 Q6H_LOGI("NPC LIVE ARRIVAL READY actor=%08X cell=%08X world=%08X actors=%zu",
                     id,saved->second.cell,saved->second.world,gQ230NpcActors.size());

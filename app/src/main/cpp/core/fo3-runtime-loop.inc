@@ -451,7 +451,7 @@ public:
         fo3pipui::Shutdown();ResetFo3Pipboy();fo3lockui::Shutdown();fo3terminalui::Shutdown();CancelFo3Lockpick();CancelFo3Terminal();
         fo3notifyui::Shutdown();
         fo3barterui::Shutdown();fo3dialogueui::Shutdown();fo3menuui::Shutdown();
-         fo3levelui::Shutdown();fo3xpui::Shutdown();fo3pauseui::Shutdown();fo3perfui::Shutdown();fo3compassui::Shutdown();fo3sneakui::Shutdown();
+         fo3levelui::Shutdown();fo3xpui::Shutdown();fo3pauseui::Shutdown();fo3perfui::Shutdown();fo3compassui::Shutdown();fo3sneakui::Shutdown();fo3blinkui::Shutdown();gPlayerSeat.Reset();
         gFo3PauseMenu.Close();gFo3PauseOpen=false;
          EndFo3Dialogue("renderer shutdown");
         fo3lootui::Shutdown();
@@ -1523,8 +1523,33 @@ private:
             dt = std::clamp(dt, 0.0, 0.05);
         }
         lastFrameTime_ = frameTime;
+        const double seatNow=std::chrono::duration<double>(Fo3GameplayNow().time_since_epoch()).count();
+        const bool seatInput=headTracked&&sessionState_==XR_SESSION_STATE_FOCUSED&&!gFo3GameplayInputSuppressed&&!IsFo3LoadingVisible()&&!Fo3GameplayBlocked()&&!Fo3TerminalFocus()&&!Fo3PipboyFocus()&&!Fo3DialogueFocus()&&!Fo3LockpickFocus()&&!Fo3ScriptMessageFocus()&&!Fo3LevelUpFocus()&&!Fo3BarterFocus()&&!gFo3PauseOpen;
+        const bool seatBack=pipBackDown_&&!seatBackDown_;seatBackDown_=pipBackDown_;
+        if(!pipBackDown_)seatConsumeB_=false;
+        if(gPlayerSeat.seated&&seatInput&&seatBack)seatConsumeB_=true;
+        if(gPlayerSeat.seated&&seatInput&&(seatBack||std::hypot(moveX_,moveY_)>.3f))gPlayerSeat.Leave(seatNow);
+        const auto seatCommit=headTracked?gPlayerSeat.Step(seatNow):fo3seat::State::Commit::None;
+        if(seatCommit!=fo3seat::State::Commit::None){
+            const auto& pose=seatCommit==fo3seat::State::Commit::Sit?gPlayerSeat.sitting:gPlayerSeat.standing;
+            playerYaw_=pose.yaw-YawFromQuaternion(headView.pose.orientation);
+            const auto local=RotateYaw(headView.pose.position,playerYaw_);
+            const bool sitting=seatCommit==fo3seat::State::Commit::Sit;
+            const float physicalDrop=sitting?0:std::max(0.f,sneak_.standing-(headView.pose.position.y-FLOOR_Y));
+            playerPosition_={pose.eye[0]-local.x,pose.eye[1]-physicalDrop-local.y,pose.eye[2]-local.z};
+            if(sitting)seatTrackedY_=headView.pose.position.y;
+            ResetFo3PlayerGravity();
+            sneak_.manual=false;sneak_.physical=sneak_.sneaking=physicalDrop>.22f;sneak_.offset=0;sneak_.drop=physicalDrop;
+            if(gPlayerSession)gPlayerSession->player.SetSneaking(sneak_.sneaking);
+        }
+        gPlayerSeatFade=gPlayerSeat.Alpha(seatNow);
+        if(gPlayerSession){const auto* slot=gPlayerSeat.scene&&gPlayerSeat.marker<gPlayerSeat.scene->slots.size()?&gPlayerSeat.scene->slots[gPlayerSeat.marker]:nullptr;
+            const uint8_t state=gPlayerSeat.Busy()?(gPlayerSeat.entering?(gPlayerSeat.seated?3:2):4):(gPlayerSeat.seated?3:0);
+            gPlayerSession->player.SetFurnitureUse(gPlayerSeat.reference,slot?slot->marker.reference:0,state);
+        }
 
-        if (Fo3LockpickFocus() || Fo3TerminalFocus() || Fo3DialogueFocus() || Fo3ScriptMessageFocus() || Fo3LevelUpFocus() || Fo3PipboyFocus() || gPipActivation.phase==fo3pip::Phase::Candidate || GetFo3LootPanel().reference) {
+
+        if (gPlayerSeat.Active() || Fo3LockpickFocus() || Fo3TerminalFocus() || Fo3DialogueFocus() || Fo3ScriptMessageFocus() || Fo3LevelUpFocus() || Fo3PipboyFocus() || gPipActivation.phase==fo3pip::Phase::Candidate || GetFo3LootPanel().reference) {
             // Releasing the list while the stick is held cannot cause an accidental turn.
             snapTurnLatched_ = std::fabs(turnX_) >= .30f;
         } else if (!snapTurnLatched_ && std::fabs(turnX_) > 0.65f) {
@@ -1542,7 +1567,7 @@ private:
             snapTurnLatched_ = false;
         }
 
-        const bool sneakInput= !gFo3GameplayInputSuppressed&&!IsFo3LoadingVisible()&&sessionState_==XR_SESSION_STATE_FOCUSED&&!Fo3DialogueFocus()&&!Fo3BarterFocus()&&!Fo3PipboyFocus()&&!Fo3TerminalFocus()&&!Fo3LockpickFocus()&&!Fo3ScriptMessageFocus()&&!Fo3LevelUpFocus()&&!gFo3PauseOpen;
+        const bool sneakInput= !gPlayerSeat.Active()&&!gFo3GameplayInputSuppressed&&!IsFo3LoadingVisible()&&sessionState_==XR_SESSION_STATE_FOCUSED&&!Fo3DialogueFocus()&&!Fo3BarterFocus()&&!Fo3PipboyFocus()&&!Fo3TerminalFocus()&&!Fo3LockpickFocus()&&!Fo3ScriptMessageFocus()&&!Fo3LevelUpFocus()&&!gFo3PauseOpen;
         sneak_.Step(headView.pose.position.y-FLOOR_Y,headTracked,sneakInput,sneakDown_,float(dt));
         const auto stanceHead=RotateYaw(headView.pose.position,playerYaw_);
         const float desiredHeight=std::clamp(headView.pose.position.y-FLOOR_Y+sneak_.offset+.10f,.7f,1.7f);
@@ -1551,10 +1576,10 @@ private:
             sneak_.drop=std::max(0.f,sneak_.standing-headView.pose.position.y+FLOOR_Y-sneak_.offset);
             if(gPlayerSession)gPlayerSession->player.SetSneaking(sneak_.sneaking);
         }
-        gPlayerSneakDrop=sneak_.drop;
+        gPlayerSneakDrop=gPlayerSeat.seated?std::max(0.f,gPlayerSeat.sitting.bodyDrop+seatTrackedY_-headView.pose.position.y):sneak_.drop;
         const float headYaw = YawFromQuaternion(headView.pose.orientation) + playerYaw_;
-        const float forward = (Fo3BarterFocus()||Fo3ScriptMessageFocus()||Fo3LockpickFocus()||Fo3LevelUpFocus())?0.f:moveY_;
-        const float strafe = (Fo3BarterFocus()||Fo3ScriptMessageFocus()||Fo3LockpickFocus()||Fo3LevelUpFocus())?0.f:moveX_;
+        const float forward = (gPlayerSeat.Active()||Fo3BarterFocus()||Fo3ScriptMessageFocus()||Fo3LockpickFocus()||Fo3LevelUpFocus())?0.f:moveY_;
+        const float strafe = (gPlayerSeat.Active()||Fo3BarterFocus()||Fo3ScriptMessageFocus()||Fo3LockpickFocus()||Fo3LevelUpFocus())?0.f:moveX_;
         const float c = std::cos(headYaw);
         const float s = std::sin(headYaw);
         const float sneakSpeed=gPlayerSession&&gPlayerSession->player.IsSneaking()?fo3sneak::Setting(gPlayerSession->player.Definitions().sneakSettings,"fMoveSneakMult"):1.f;
@@ -1574,7 +1599,7 @@ private:
         float resolvedCenterX = desiredCenterX;
         float resolvedCenterZ = desiredCenterZ;
         float resolvedPlayerY = playerPosition_.y;
-        if (ResolveFo3PlayerMotionWithGravity(currentCenterX, currentCenterZ,
+        if (!gPlayerSeat.Active() && ResolveFo3PlayerMotionWithGravity(currentCenterX, currentCenterZ,
                                      desiredCenterX, desiredCenterZ,
                                      playerPosition_.y, float(dt),
                                      &resolvedCenterX, &resolvedCenterZ,
@@ -1591,7 +1616,7 @@ private:
         fo3rigid::M previousApp,currentApp;
         std::copy_n(beforeMatrix.m,16,previousApp.begin());std::copy_n(afterMatrix.m,16,currentApp.begin());
         fo3rigid::Live().MoveHeld(previousApp,currentApp,float(dt));
-        const bool walkingEnabled=(std::fabs(requestedDx)+std::fabs(requestedDz)>.0001f) &&
+        const bool walkingEnabled=!gPlayerSeat.Active()&&(std::fabs(requestedDx)+std::fabs(requestedDz)>.0001f) &&
             !IsFo3LoadingVisible() && !Fo3BarterFocus() &&
             !Fo3LockpickFocus() && !Fo3DialogueFocus() && !Fo3ScriptMessageFocus() &&
             !Fo3LevelUpFocus() && !Fo3PipboyFocus() &&
@@ -2054,7 +2079,7 @@ private:
                         sessionState_==XR_SESSION_STATE_FOCUSED,q210RightValid?turnX_:0,q210RightValid?fingerTriggerValue_[1]:0,
                         q210LeftValid?fingerTriggerValue_[0]:0,q210LeftValid&&barterConfirmDown_);
                     if(dialogueControls&&activateDownQ1700_)activateLatched_=true;
-                    WeaponUpdate(gameplaySeconds,dialogueControls?false:pipBackDown_);
+                    WeaponUpdate(gameplaySeconds,(dialogueControls||gPlayerSeat.Active()||seatConsumeB_)?false:pipBackDown_);
                     DeliverFo3ScriptSounds();
                     for(int hand=0;hand<2;++hand)if(gWeaponHaptic[hand]>0){
                         XrHapticActionInfo info{XR_TYPE_HAPTIC_ACTION_INFO};info.action=weaponHapticAction_;info.subactionPath=handPaths_[hand];
@@ -2127,7 +2152,7 @@ private:
                 gStereoReflectionEye[2]=centrePose.position.z;
                 gStereoMvpReady = true;
                 fqmotion::requested=spacewarpProducerReady_&&gSceneReady&&
-                    !IsFo3LoadingVisible()&&sessionState_==XR_SESSION_STATE_FOCUSED&&!Fo3GameplayBlocked();
+                    !IsFo3LoadingVisible()&&sessionState_==XR_SESSION_STATE_FOCUSED&&!Fo3GameplayBlocked()&&!gPlayerSeat.Busy();
                 QActorPrepareStereoFrame();
                 if(gPlayerSession&&!Fo3GameplayBlocked()&&!IsFo3LoadingVisible())fo3sneakui::Prepare(gPlayerSession->player,gPlayerSneakIndicator);
                 hitch.Mark("actorPrep");
@@ -2187,7 +2212,7 @@ private:
                     frame.scene=gSceneLoad.generation;frame.displayTime=frameState.predictedDisplayTime;
                     frame.world=gExteriorWorldspaceQ1890;frame.origin={gSceneCenterXQ1730,gSceneCenterYQ1730,gSceneFloorZQ1730};
                     frame.sceneReady=gSceneReady;frame.loading=IsFo3LoadingVisible();frame.focused=sessionState_==XR_SESSION_STATE_FOCUSED;
-                    frame.modal=Fo3PipboyFocus()||Fo3DialogueFocus()||Fo3TerminalFocus()||Fo3LockpickFocus()||gFo3PauseOpen||Fo3ScriptMessageFocus()||Fo3LevelUpFocus();
+                    frame.modal=gPlayerSeat.Busy()||Fo3PipboyFocus()||Fo3DialogueFocus()||Fo3TerminalFocus()||Fo3LockpickFocus()||gFo3PauseOpen||Fo3ScriptMessageFocus()||Fo3LevelUpFocus();
                     XrPosef appPose{};appPose.orientation=YawQuaternion(playerYaw_);appPose.position=playerPosition_;appPose.position.y+=sneak_.offset;
                     const auto appMatrix=MatrixFromPose(appPose);std::copy(appMatrix.m,appMatrix.m+16,frame.appToWorld.begin());
                     for(unsigned eye=0;eye<2;++eye){const auto vp=Multiply(ProjectionFromFov(views[eye].fov,.04f,125000.f/FO3_UNITS_PER_METRE_Q715),ViewFromPose(ToVirtualPose(views[eye].pose)));
@@ -2715,6 +2740,7 @@ private:
                 glBindFramebuffer(GL_FRAMEBUFFER,framebuffer_);
                 fo3lockui::Render(viewProjection.m,gLockpick,gPlayerSession->player,eye.width,eye.height);
             }
+            fo3blinkui::Render(gPlayerSeatFade);
             if (depthReady) {
                 fqperf::GpuScope gpuDepth(fqperf::GpuDepthCopy);
                 if (!depthFramebuffer_) glGenFramebuffers(1, &depthFramebuffer_);
@@ -2845,7 +2871,8 @@ private:
     XrAction turnXAction_{XR_NULL_HANDLE};
     XrAction sneakAction_{XR_NULL_HANDLE};
     fo3sneak::Stance sneak_;
-    bool sneakDown_=false;
+    bool sneakDown_=false,seatBackDown_=false,seatConsumeB_=false;
+    float seatTrackedY_=0;
     XrAction activateAction_{XR_NULL_HANDLE};
     XrAction pauseAction_=XR_NULL_HANDLE;
     XrAction pipBackAction_{XR_NULL_HANDLE};

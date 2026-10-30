@@ -123,6 +123,7 @@ static bool Value(const fo3pipdata::Condition& c,const Context& ctx,float& value
   case 131:value=uint32_t(d.playerFemale)==c.a;return true;
   case 136:value=who.reference==c.a;return true;
   case 141:value=ctx.talking&&who.reference==ctx.speaker.reference;return true;
+  case 159:case 160:if(!pc){error="NPC furniture query unavailable";return false;}value=c.function==159?p.SittingState():p.FurnitureMarker();return true;
   case 161:if(!who.packageKnown){error="package not executing";return false;}value=who.package==c.a;return true;
   case 182:{
     if(!d.formNames.empty()&&!p.Definitions().items.count(c.a)){error="equipped item unavailable";return false;}

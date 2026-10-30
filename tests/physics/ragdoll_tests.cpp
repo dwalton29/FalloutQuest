@@ -23,6 +23,12 @@ int main(int argc,char** argv){
  for(int i=0;i<1800;++i){w.Step(1.f/120);Verify(w,50,d,1);}
  std::vector<M> settled;bool sleeping=false;assert(w.RagdollPose(50,settled,&sleeping)&&sleeping);
  w.Static(2,{{{100,0,100},{101,0,101},{101,0,100}}});assert(w.RagdollPose(50,settled,&sleeping)&&sleeping);
+ // A sleeping corpse remains a physical collider and wakes under an impact.
+ assert(w.RagdollSleeping(50));Asset box;box.hulls.resize(1);for(float x:{-.08f,.08f})for(float y:{-.08f,.08f})for(float z:{-.08f,.08f})box.hulls[0].push_back({x,y,z});
+ assert(w.Add(900,box,At(settled[0][12],settled[0][13]+.8f,settled[0][14])));bool woke=false;
+ for(int tick=0;tick<240;++tick){w.Step(1.f/120);woke|=!w.RagdollSleeping(50);}assert(woke);w.Remove(900);
+ for(int tick=0;tick<1200;++tick)w.Step(1.f/120);
+ assert(w.RagdollPose(50,settled,&sleeping)&&sleeping);
  w.RemoveRagdoll(50);assert(!w.HasRagdoll(50));assert(w.AddRagdoll(50,d,settled,1));w.SleepRagdoll(50);assert(w.RagdollPose(50,settled,&sleeping)&&sleeping);w.ClearBodies();assert(w.RagdollActors().empty());
  // Fast falling capsules must not tunnel through a one-sided terrain mesh.
  assert(w.AddRagdoll(52,d,{At(2,2,0),At(2,2.4f,0)},1,{0,-20,0}));
@@ -45,6 +51,11 @@ int main(int argc,char** argv){
   for(int i=0;i<3600;++i){w.Step(1.f/120);Verify(w,51,d,1.f/70,i<30,scales);}
   assert(w.RagdollPose(51,settled,&sleeping)&&sleeping&&settled[0][13]<1);
   std::cout<<"original rig stair/riser fall settled\n";
+  w.ClearBodies();w.ClearStatics();w.Static(1,Floor());
+  for(uint32_t actor=60;actor<63;++actor){auto group=original;for(auto& m:group)m[12]+=float(int(actor)-61)*2.f;assert(w.AddRagdoll(actor,d,group,1.f/70,{},scales));}
+  for(int tick=0;tick<2400;++tick)w.Step(1.f/120);
+  for(uint32_t actor=60;actor<63;++actor)assert(w.RagdollSleeping(actor));
+  std::cout<<"Three original human ragdolls settle concurrently and retain sleeping collision islands\n";
   for(size_t size:{size_t(0),size_t(30),bytes.size()/2,bytes.size()-1}){auto cut=bytes;cut.resize(size);fo3rag::Definition invalid;assert(!fo3rag::Read(cut,invalid,error));}
  }
  std::cout<<"ragdoll tests passed\n";
