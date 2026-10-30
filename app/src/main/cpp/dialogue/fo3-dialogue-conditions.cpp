@@ -138,6 +138,7 @@ static bool Value(const fo3pipdata::Condition& c,const Context& ctx,float& value
     if(package==d.packages.end()){error="service package missing";return false;}
     value=(package->second.flags&1)!=0&&!who.combat;return true;
   }
+  case 286:if(!pc){error="NPC sneak posture unavailable";return false;}value=p.IsSneaking();return true;
   case 289:value=who.combat;return true;
   case 546:if(!d.quests.count(c.a)){error="quest unavailable";return false;}value=quest!=state.pipboy.quests.end()&&quest->second.status!=fo3pipdata::Completion::Active;return true;
   case 310:value=who.world==c.a;return who.world!=0;

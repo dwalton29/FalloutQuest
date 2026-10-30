@@ -98,8 +98,9 @@ class Expression {
       const auto height=[&](uint32_t ref){if(ref==fo3player::PlayerRef)return p.ScriptPlayerHeight();const auto actor=p.Snapshot().actors.find(ref);if(actor!=p.Snapshot().actors.end())return actor->second.position[2];const auto placed=d.targets.find(ref);return placed==d.targets.end()?0.f:placed->second.z;};
       const float dz=height(id)-height(target);value=std::sqrt(dx*dx+dy*dy+dz*dz);return true;
     }
-    if(query=="getdead"||query=="isincombat"||query=="istalking"){
+    if(query=="getdead"||query=="isincombat"||query=="istalking"||query=="issneaking"){
       const auto id=dot==std::string::npos?owner:form(t.substr(0,dot));
+      if(query=="issneaking"){if(id!=fo3player::PlayerRef)return Fail("NPC sneak posture unavailable");value=p.IsSneaking();return true;}
       if(query=="istalking"){value=p.ScriptActorTalking(id);return true;}
       if(query=="getdead"){const auto health=p.ActorHealth(id);if(health<0)return Fail("actor health unavailable");value=health<=0;return true;}
       const auto actor=p.Snapshot().actors.find(id);if(actor==p.Snapshot().actors.end())return Fail("combat actor unavailable");

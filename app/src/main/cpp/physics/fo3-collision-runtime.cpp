@@ -34,7 +34,7 @@ constexpr size_t MAX_LINE_VERTICES = 800000u;
 constexpr bool SHOW_COLLISION_DEBUG_Q6G = false;
 
 constexpr float PLAYER_RADIUS = 0.26f;
-constexpr float PLAYER_HEIGHT = 1.70f;
+float PLAYER_HEIGHT = 1.70f; // Current calibrated standing/crouched capsule.
 constexpr float PLAYER_SKIN = 0.003f;
 constexpr float MAX_STEP_UP = 0.32f;
 constexpr float EXTERIOR_MAX_STEP_UP_Q78B = 0.30f;
@@ -2899,6 +2899,12 @@ void SynchronizeFo3RigidWorld(float x,float z) {
         gRigidFullDirty=false;gRigidDirtyRefs.clear();
     }
     SynchronizeFo3TerrainPhysics(x,z);
+}
+
+float SetFo3PlayerStanceHeight(float x,float z,float feetOffset,float height){
+ height=std::clamp(height,.7f,1.7f);
+ if(height>PLAYER_HEIGHT+.001f){SynchronizeFo3RigidWorld(x,z);if(!fo3rigid::Live().CanExpandCapsule({x,gCollisionFloorY+feetOffset,z},CollisionRadiusQ712(),PLAYER_HEIGHT,height))return PLAYER_HEIGHT;}
+ PLAYER_HEIGHT=height;return PLAYER_HEIGHT;
 }
 
 namespace {

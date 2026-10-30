@@ -8,6 +8,7 @@
 namespace fo3weapon {
 enum class Family { Unarmed, Melee, Pistol, EnergyPistol, Rifle, EnergyRifle, Heavy, Thrown };
 struct Definition {
+  uint32_t soundLevel=UINT32_MAX;
   uint32_t animation=0,ammo=0,projectile=0,firstPerson=0,flags2=0,skill=0;
   uint32_t fire3D=0,fire2D=0,dry=0,equip=0,unequip=0,criticalEffect=0;
   uint8_t flags=0,grip=255,reload=255,attackAnimation=255,ammoUse=0,pellets=0,clip=0;
@@ -36,7 +37,7 @@ struct Projectile {
 struct Definitions {
   struct Actor {
     uint32_t flags=0,templateId=0;uint16_t templates=0,level=1,minLevel=1,maxLevel=0;
-    int32_t health=0;uint8_t endurance=0;bool creature=false;
+    int32_t health=0;uint8_t endurance=0,perception=0;bool creature=false;
     std::array<uint8_t,14> skills{};
   };
   // FO3 CSSD, not the shorter/different FNV combat-style layout.

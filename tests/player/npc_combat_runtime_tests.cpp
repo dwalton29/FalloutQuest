@@ -20,6 +20,10 @@ static fo3anim::Matrix Q230WeaponMatrix(Q230ActorVisual& actor){auto m=fo3anim::
 namespace weaponruntime {
 void EmitShot(uint64_t,uint32_t attacker,uint32_t base,const fo3weapon::Definition&,fo3vr::V,fo3vr::V,fo3vr::V,fo3vr::V,float damage){++shots;emittedDamage=damage;gPlayerSession->player.ApplyAttack(attacker,base,0x14,damage);}
 }
+#ifdef FO3_NPC_DETECTION_HOST_TEST
+float gPlayerDetectionSpeed=0,gPlayerDetectionAction=0,detectionLight=0;double gPlayerDetectionActionUntil=-1;
+float Q230PlayerLightLevel(const std::array<float,3>&){return detectionLight;}
+#endif
 #define FO3_NPC_COMBAT_HOST_TEST
 #include "npc/fo3-npc-combat-runtime.inc"
 static void Prepare() {
@@ -187,7 +191,25 @@ static void ConcurrentWeaponTests(){
   Q230SimulateActor(a,1.1);
   assert(a.runtime.nextManoeuvre>1.1&&a.runtime.pendingAttack&&a.runtime.pendingHit==1.5&&shots==0);
 }
+#ifdef FO3_NPC_DETECTION_HOST_TEST
+static void DetectionIntegration(){
+ Prepare();auto& p=gPlayerSession->player;auto& a=gQ230NpcActors[0];a.runtime.EndDialogue();a.stateRestored=true;
+ auto special=p.Snapshot().special;auto skills=p.Snapshot().skills;skills[size_t(fo3player::Skill::Sneak)]=100;assert(p.SetPlayerAttributes(special,skills));p.SetSneaking(true);detectionLight=0;
+ Q230SimulateActor(a,1);assert(!a.runtime.combatTarget&&a.playerDetection.Hud()==fo3sneak::Indicator::Hidden);
+ detectionLight=100;Q230SimulateActor(a,2);assert(a.runtime.combatTarget==0x14&&a.playerDetection.detected&&a.playerDetection.Hud()==fo3sneak::Indicator::Danger);
+ const auto known=a.runtime.lastThreat;const auto before=shots;blocked=true;gQ210Head[0]+=10;
+ Q230SimulateActor(a,3);assert(!a.playerDetection.detected&&a.playerDetection.Hud()==fo3sneak::Indicator::Caution&&a.runtime.lastThreat==known&&!a.runtime.pendingAttack&&shots==before);
+ Q230SimulateActor(a,14);assert(!a.runtime.combatTarget&&a.playerDetection.Hud()==fo3sneak::Indicator::Hidden);
+ blocked=false;gQ210Head=a.runtime.position;gQ210Head[1]+=1;gQ210Head[2]-=1;a.playerDetection={};detectionLight=100;
+ Q230ObservePlayer(a,false,15);assert(a.playerDetection.Hud()==fo3sneak::Indicator::Detected);
+ gQ210Head[2]+=2;a.playerDetection={};Q230ObservePlayer(a,true,16);assert(!a.playerDetection.detected); // Behind the authored 190-degree cone.
+ std::cout<<"Production player detection: hide, acquire, lose, last-known search, forget and friendly detection passed\n";
+}
+#endif
 int main(int argc,char** argv){
+#ifdef FO3_NPC_DETECTION_HOST_TEST
+ DetectionIntegration();return 0;
+#endif
   WeaponCommitAndMeleeTests();CoverGeometryTests();ConcurrentWeaponTests();
   {
     Prepare();auto& actor=gQ230NpcActors[0];assert(gPlayerSession->player.PrepareActorInventory(42));

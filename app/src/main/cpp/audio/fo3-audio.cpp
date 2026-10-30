@@ -41,7 +41,8 @@ struct Runtime {
   std::mutex mutex;
   std::condition_variable cv;
   std::deque<Event> events;
-  FootstepGait walk, run;
+  FootstepGait walk, run, sneak;
+  bool wasSneaking=false;
   FootstepClock footsteps;
   bool stop = false;
   uint32_t lastCell = UINT32_MAX;
@@ -183,14 +184,15 @@ void Worker() {
       ready ? ANDROID_LOG_INFO : ANDROID_LOG_WARN, "FalloutQuest",
       "AUDIO: sounds=%zu music=%zu cells=%zu %s", catalog.sounds.size(),
       catalog.music.size(), catalog.cells.size(), error.c_str());
-  FootstepGait walk,run;
+  FootstepGait walk,run,sneak;
   auto loadGait=[](const char* path,FootstepGait& gait) {
     std::vector<uint8_t> bytes;fo3anim::Clip clip;
     return LoadFalloutMeshFile(path,bytes) && fo3anim::DecodeClip(bytes,clip) && gait.Load(clip);
   };
   const bool walkReady=loadGait("characters/_1stperson/locomotion/mtforward.kf",walk);
   const bool runReady=loadGait("characters/_1stperson/locomotion/mtfastforward.kf",run);
-  {std::lock_guard<std::mutex> lock(runtime.mutex);runtime.walk=walk;runtime.run=run;runtime.footsteps.Reset();}
+  loadGait("characters/_1stperson/sneakmtforward.kf",sneak);
+  {std::lock_guard<std::mutex> lock(runtime.mutex);runtime.sneak=sneak;runtime.walk=walk;runtime.run=run;runtime.footsteps.Reset();}
   __android_log_print(ANDROID_LOG_INFO,"FalloutQuest",
       "FOOTSTEPS: originalKF walk=%d stride=%.3f duration=%.3f run=%d stride=%.3f duration=%.3f",
       walkReady,walk.stride,walk.duration,runReady,run.stride,run.duration);
@@ -648,10 +650,12 @@ void Open(uint32_t base) { Push({2, base, true}); }
 void Close(uint32_t base) { Push({3, base, true}); }
 void Scroll() { Push({4, 0, true}); }
 void MenuLoop(const std::string& editorId){Push({15,0,false,editorId});}
-int AdvancePlayerFootsteps(float distance,float dt,bool enabled) {
+int AdvancePlayerFootsteps(float distance,float dt,bool enabled,bool sneaking) {
   std::lock_guard<std::mutex> lock(runtime.mutex);
-  return runtime.footsteps.Advance(distance,dt,enabled&&runtime.lastActive&&!runtime.stop,
-      runtime.walk,runtime.run);
+  if(sneaking!=runtime.wasSneaking){runtime.footsteps.Reset();runtime.wasSneaking=sneaking;}
+  const int step=runtime.footsteps.Advance(distance,dt,enabled&&runtime.lastActive&&!runtime.stop,
+      sneaking?runtime.sneak:runtime.walk,sneaking?FootstepGait{}:runtime.run);
+  return step<0?-1:sneaking?step+4:step;
 }
 void Footstep(uint32_t material,unsigned action) {
   if(action<FootstepActions.size())Push({16,(material&255u)|(action<<8u),true});

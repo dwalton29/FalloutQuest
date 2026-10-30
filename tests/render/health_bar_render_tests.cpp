@@ -6,6 +6,7 @@ inline void glGenBuffers(GLsizei n,GLuint* ids){++driverCalls["glGenBuffers"];wh
 inline void glGenVertexArrays(GLsizei n,GLuint* ids){++driverCalls["glGenVertexArrays"];while(n--)*ids++=nextHealthObject++;}
 #include "ui/interaction/fo3-health-bar-hud.h"
 #include "ui/interaction/fo3-compass-hud.h"
+#include "ui/interaction/fo3-sneak-hud.h"
 #include <cassert>
 #include <iostream>
 #include <limits>
@@ -93,5 +94,13 @@ int main(){
   assert(driverCalls["glDrawArrays"]==compassDraws+2*count&&assetReads==compassReads);
   assert(fqgl::counters.queries==compassQueries);fo3compassui::Shutdown();
 
+  hud.textureCount=1;for(auto& g:hud.glyphs){g.width=10;g.height=20;g.spacing=10;g.uv={0,0,1,0,0,1,1,1};}
+  fo3sneakui::PrepareLabel(true,fo3sneak::Label(0));assert(fo3sneakui::Get().count>6);
+  const auto sneakQueries=fqgl::counters.queries; const auto sneakReads=assetReads; const auto sneakUploads=driverCalls["glBufferData"];
+  for(int eye=0;eye<2;++eye){fo3sneakui::PrepareLabel(true,fo3sneak::Label(0));fo3sneakui::Render(mvp);}
+  assert(fqgl::counters.queries==sneakQueries&&assetReads==sneakReads&&driverCalls["glBufferData"]==sneakUploads);
+  const auto sneakDraws=driverCalls["glDrawArrays"];fo3sneakui::PrepareLabel(false,"");fo3sneakui::Render(mvp);assert(driverCalls["glDrawArrays"]==sneakDraws);
+  for(unsigned label=1;label<4;++label){fo3sneakui::PrepareLabel(true,fo3sneak::Label(label));assert(fo3sneakui::Get().count>6);}
+  fo3sneakui::Shutdown();
   std::cout<<"Authored HP: tick quantization, centered enemy drain, atlas UVs/sharing, empty HP, stereo state restoration and warm reuse passed\n";
 }

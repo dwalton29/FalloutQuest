@@ -209,7 +209,9 @@ bool Hit(uint64_t instance,V origin,V direction,float limit,uint32_t base,float 
     }
   }
   if(target&&!HasFo3InteractionOccluder(origin.x,origin.y,origin.z,direction.x,direction.y,direction.z,nearest,target)){
-    if(p.ApplyAttack(attacker,base,target,damage)){if(Fo3DialogueFocus())EndFo3Dialogue("weapon damage");if(target!=0x14)Q230ActorHitReaction(target,region);Q6H_LOGI("NPC DAMAGE attacker=%08X weapon=%08X target=%08X region=%u damage=%.3f health=%.3f",attacker,base,target,unsigned(region),damage,p.ActorHealth(target));}
+    if(p.ApplyAttack(attacker,base,target,damage)){
+      if(attacker==0x14&&target!=0x14){const double eventTime=std::chrono::duration<double>(Fo3GameplayNow().time_since_epoch()).count();for(auto& actor:gQ230NpcActors)if(actor.source.refFormId==target){actor.playerDetection.Hit(p.Definitions().sneakSettings,eventTime,{origin.x,origin.y,origin.z});actor.runtime.lastThreat=actor.playerDetection.lastKnown;actor.runtime.nextThink=0;break;}}
+      if(Fo3DialogueFocus())EndFo3Dialogue("weapon damage");if(target!=0x14)Q230ActorHitReaction(target,region);Q6H_LOGI("NPC DAMAGE attacker=%08X weapon=%08X target=%08X region=%u damage=%.3f health=%.3f",attacker,base,target,unsigned(region),damage,p.ActorHealth(target));}
     return true;
   }
   return HasFo3InteractionOccluder(origin.x,origin.y,origin.z,direction.x,direction.y,direction.z,limit,0);
@@ -512,7 +514,7 @@ void WeaponUpdate(double now,bool backButton){
         if(Fo3DialogueFocus())EndFo3Dialogue("player weapon fire");
         const auto id=s->id;const auto form=s->formId;
         const float shotDamage=p.WeaponDamage(id);
-        if(p.FireWeapon(id)){const auto projectile=p.Definitions().weapons.projectiles.find(d.projectile);if(projectile!=p.Definitions().weapons.projectiles.end())flashUntil=now+projectile->second.flashDuration;Shoot(id,d,*m,shotDamage);fo3audio::SoundEvent(d.fire3D?d.fire3D:d.fire2D);Pulse(1,std::clamp(d.rumbleRight,.15f,.65f));recoil=1;Log("FIRE",id,form);}
+        if(p.FireWeapon(id)){if(d.soundLevel<=2){const auto& settings=p.Definitions().sneakSettings;gPlayerDetectionAction=fo3sneak::Setting(settings,d.soundLevel==0?"iSoundLevelLoud":d.soundLevel==1?"iSoundLevelNormal":"iSoundLevelSilent");gPlayerDetectionActionUntil=now+fo3sneak::Setting(settings,"fDetectionActionTimer");}const auto projectile=p.Definitions().weapons.projectiles.find(d.projectile);if(projectile!=p.Definitions().weapons.projectiles.end())flashUntil=now+projectile->second.flashDuration;Shoot(id,d,*m,shotDamage);fo3audio::SoundEvent(d.fire3D?d.fire3D:d.fire2D);Pulse(1,std::clamp(d.rumbleRight,.15f,.65f));recoil=1;Log("FIRE",id,form);}
         else{fo3audio::SoundEvent(d.dry);Pulse(1,.06f);Log("EMPTY",id,form);}
         s=p.Weapon(id);
       }

@@ -451,7 +451,7 @@ public:
         fo3pipui::Shutdown();ResetFo3Pipboy();fo3lockui::Shutdown();fo3terminalui::Shutdown();CancelFo3Lockpick();CancelFo3Terminal();
         fo3notifyui::Shutdown();
         fo3barterui::Shutdown();fo3dialogueui::Shutdown();fo3menuui::Shutdown();
-         fo3levelui::Shutdown();fo3xpui::Shutdown();fo3pauseui::Shutdown();fo3perfui::Shutdown();fo3compassui::Shutdown();
+         fo3levelui::Shutdown();fo3xpui::Shutdown();fo3pauseui::Shutdown();fo3perfui::Shutdown();fo3compassui::Shutdown();fo3sneakui::Shutdown();
         gFo3PauseMenu.Close();gFo3PauseOpen=false;
          EndFo3Dialogue("renderer shutdown");
         fo3lootui::Shutdown();
@@ -735,6 +735,7 @@ private:
                           1, &handPaths_[1], &turnXAction_)) return false;
         if (!CreateAction("loot_scroll_y", "Loot Scroll", XR_ACTION_TYPE_FLOAT_INPUT,
                           1, &handPaths_[1], &lootScrollAction_)) return false;
+        if(!CreateAction("sneak_toggle","Sneak",XR_ACTION_TYPE_BOOLEAN_INPUT,1,&handPaths_[1],&sneakAction_))return false;
         if (!CreateAction("activate_q160", "Activate", XR_ACTION_TYPE_BOOLEAN_INPUT,
                           1, &handPaths_[1], &activateAction_)) return false;
 
@@ -775,6 +776,7 @@ private:
         XrPath leftStickY = XR_NULL_PATH;
         XrPath rightStickX = XR_NULL_PATH;
         XrPath rightStickY = XR_NULL_PATH;
+        XrPath rightStickClick = XR_NULL_PATH;
         XrPath rightA = XR_NULL_PATH;
         XrPath leftX = XR_NULL_PATH;
         XrPath rightB = XR_NULL_PATH;
@@ -802,6 +804,7 @@ private:
             !Path("/user/hand/left/input/thumbstick/y", &leftStickY) ||
             !Path("/user/hand/right/input/thumbstick/x", &rightStickX) ||
             !Path("/user/hand/right/input/thumbstick/y", &rightStickY) ||
+            !Path("/user/hand/right/input/thumbstick/click", &rightStickClick) ||
             !Path("/user/hand/left/input/x/click", &leftX) ||
             !Path("/user/hand/right/input/a/click", &rightA) ||
             !Path("/user/hand/right/input/b/click", &rightB) ||
@@ -823,7 +826,7 @@ private:
 
         XrPath leftHaptic=XR_NULL_PATH,rightHaptic=XR_NULL_PATH;
         if(!Path("/user/hand/left/output/haptic",&leftHaptic)||!Path("/user/hand/right/output/haptic",&rightHaptic))return false;
-        const std::array<XrActionSuggestedBinding, 28> bindings{{
+        const std::array<XrActionSuggestedBinding, 29> bindings{{
             {weaponHapticAction_,leftHaptic}, {weaponHapticAction_,rightHaptic},
             {poseAction_, leftAim},
             {poseAction_, rightAim},
@@ -832,6 +835,7 @@ private:
             {moveXAction_, leftStickX},
             {moveYAction_, leftStickY},
             {turnXAction_, rightStickX},
+            {sneakAction_, rightStickClick},
             {lootScrollAction_, rightStickY},
             {activateAction_, rightA},
             {barterConfirmAction_,leftX},
@@ -1421,7 +1425,7 @@ private:
             if(!Fo3GameplayBlocked())ResetFo3Pipboy();
             moveX_=moveY_=turnX_=lootScrollY_=0;
             fingerTriggerValue_={};fingerGripValue_={};
-            activateDownQ1700_=pipBackDown_=barterConfirmDown_=false;return;
+            sneakDown_=false;activateDownQ1700_=pipBackDown_=barterConfirmDown_=false;return;
         }
         const float rawMoveX = ReadFloatAction(moveXAction_, handPaths_[0]);
         const float rawMoveY = ReadFloatAction(moveYAction_, handPaths_[0]);
@@ -1449,6 +1453,7 @@ private:
         fingerThumbTouched_[1] =
             ReadBooleanActionQ1450(
                 fingerThumbContactAction_, handPaths_[1]);
+        sneakDown_=ReadBoolActionQ1699(sneakAction_,handPaths_[1]);
         activateDownQ1700_ = ReadBoolActionQ1699(activateAction_, handPaths_[1]);
         barterConfirmDown_=ReadBoolActionQ1699(barterConfirmAction_,handPaths_[0]);
         pipBackDown_=ReadBoolActionQ1699(pipBackAction_,handPaths_[1]);
@@ -1456,13 +1461,13 @@ private:
         UpdateFo3Pause(menuDown,activateDownQ1700_,pipBackDown_,turnX_,lootScrollY_,
             double(time)*1e-9,sessionState_==XR_SESSION_STATE_FOCUSED);
         const bool neutral=!menuDown&&moveX_==0&&moveY_==0&&turnX_==0&&std::fabs(lootScrollY_)<.2f&&
-            !activateDownQ1700_&&!pipBackDown_&&!barterConfirmDown_&&fingerTriggerValue_[0]<.2f&&fingerTriggerValue_[1]<.2f&&
+            !sneakDown_&&!activateDownQ1700_&&!pipBackDown_&&!barterConfirmDown_&&fingerTriggerValue_[0]<.2f&&fingerTriggerValue_[1]<.2f&&
             fingerGripValue_[0]<.2f&&fingerGripValue_[1]<.2f;
         gFo3GameplayInputSuppressed=!residentInputBarrier_.Allow(Fo3GameplayBlocked(),neutral);
         if(gFo3GameplayInputSuppressed){
             moveX_=moveY_=turnX_=lootScrollY_=0;
             fingerTriggerValue_={};fingerGripValue_={};
-            activateDownQ1700_=pipBackDown_=barterConfirmDown_=false;
+            sneakDown_=false;activateDownQ1700_=pipBackDown_=barterConfirmDown_=false;
         }
 
         const XrSpaceLocationFlags required = XR_SPACE_LOCATION_POSITION_VALID_BIT |
@@ -1508,9 +1513,9 @@ private:
         }
     }
 
-    void UpdatePlayer(const XrView& headView, XrTime frameTime) {
+    void UpdatePlayer(const XrView& headView, XrTime frameTime,bool headTracked) {
         FQ_PERF_SCOPE(Motion);
-        XrPosef beforeApp{};beforeApp.orientation=YawQuaternion(playerYaw_);beforeApp.position=playerPosition_;
+        XrPosef beforeApp{};beforeApp.orientation=YawQuaternion(playerYaw_);beforeApp.position=playerPosition_;beforeApp.position.y+=sneak_.offset;
         const auto beforeMatrix=MatrixFromPose(beforeApp);
         double dt = 1.0 / 72.0;
         if (lastFrameTime_ != 0 && frameTime > lastFrameTime_) {
@@ -1537,12 +1542,23 @@ private:
             snapTurnLatched_ = false;
         }
 
+        const bool sneakInput= !gFo3GameplayInputSuppressed&&!IsFo3LoadingVisible()&&sessionState_==XR_SESSION_STATE_FOCUSED&&!Fo3DialogueFocus()&&!Fo3BarterFocus()&&!Fo3PipboyFocus()&&!Fo3TerminalFocus()&&!Fo3LockpickFocus()&&!Fo3ScriptMessageFocus()&&!Fo3LevelUpFocus()&&!gFo3PauseOpen;
+        sneak_.Step(headView.pose.position.y-FLOOR_Y,headTracked,sneakInput,sneakDown_,float(dt));
+        const auto stanceHead=RotateYaw(headView.pose.position,playerYaw_);
+        const float desiredHeight=std::clamp(headView.pose.position.y-FLOOR_Y+sneak_.offset+.10f,.7f,1.7f);
+        if(headTracked&&sneakInput){const float actualHeight=SetFo3PlayerStanceHeight(stanceHead.x+playerPosition_.x,stanceHead.z+playerPosition_.z,playerPosition_.y,desiredHeight);
+            if(actualHeight+.001f<desiredHeight){sneak_.offset=std::min(sneak_.offset,actualHeight-.10f-headView.pose.position.y+FLOOR_Y);sneak_.sneaking=true;}
+            sneak_.drop=std::max(0.f,sneak_.standing-headView.pose.position.y+FLOOR_Y-sneak_.offset);
+            if(gPlayerSession)gPlayerSession->player.SetSneaking(sneak_.sneaking);
+        }
+        gPlayerSneakDrop=sneak_.drop;
         const float headYaw = YawFromQuaternion(headView.pose.orientation) + playerYaw_;
         const float forward = (Fo3BarterFocus()||Fo3ScriptMessageFocus()||Fo3LockpickFocus()||Fo3LevelUpFocus())?0.f:moveY_;
         const float strafe = (Fo3BarterFocus()||Fo3ScriptMessageFocus()||Fo3LockpickFocus()||Fo3LevelUpFocus())?0.f:moveX_;
         const float c = std::cos(headYaw);
         const float s = std::sin(headYaw);
-        const float velocity = MOVE_SPEED_METRES_PER_SECOND * static_cast<float>(dt);
+        const float sneakSpeed=gPlayerSession&&gPlayerSession->player.IsSneaking()?fo3sneak::Setting(gPlayerSession->player.Definitions().sneakSettings,"fMoveSneakMult"):1.f;
+        const float velocity = MOVE_SPEED_METRES_PER_SECOND * sneakSpeed * static_cast<float>(dt);
 
         const float requestedDx = (strafe * c - forward * s) * velocity;
         const float requestedDz = (-strafe * s - forward * c) * velocity;
@@ -1570,7 +1586,7 @@ private:
             playerPosition_.x = desiredPlayerX;
             playerPosition_.z = desiredPlayerZ;
         }
-        XrPosef afterApp{};afterApp.orientation=YawQuaternion(playerYaw_);afterApp.position=playerPosition_;
+        XrPosef afterApp{};afterApp.orientation=YawQuaternion(playerYaw_);afterApp.position=playerPosition_;afterApp.position.y+=sneak_.offset;
         const auto afterMatrix=MatrixFromPose(afterApp);
         fo3rigid::M previousApp,currentApp;
         std::copy_n(beforeMatrix.m,16,previousApp.begin());std::copy_n(afterMatrix.m,16,currentApp.begin());
@@ -1582,8 +1598,9 @@ private:
             gPipActivation.phase!=fo3pip::Phase::Candidate && !GetFo3LootPanel().reference;
         const float actualDistance=std::hypot(playerPosition_.x+headOffset.x-currentCenterX,
                                               playerPosition_.z+headOffset.z-currentCenterZ);
-        const int step=fo3audio::AdvancePlayerFootsteps(actualDistance,float(dt),walkingEnabled);
+        const int step=fo3audio::AdvancePlayerFootsteps(actualDistance,float(dt),walkingEnabled,gPlayerSession&&gPlayerSession->player.IsSneaking());
         uint32_t material=0;
+        gPlayerDetectionSpeed=dt>0?actualDistance/float(dt):0;
         if(step>=0 && SampleFo3PlayerFootstepSurface(playerPosition_.x+headOffset.x,
                 playerPosition_.z+headOffset.z,playerPosition_.y,&material))
             fo3audio::Footstep(material,unsigned(step));
@@ -1595,7 +1612,7 @@ private:
         result.orientation = QuaternionMultiply(YawQuaternion(playerYaw_), localPose.orientation);
         result.position = {
             rotated.x + playerPosition_.x,
-            rotated.y + playerPosition_.y,
+            rotated.y + playerPosition_.y + sneak_.offset,
             rotated.z + playerPosition_.z,
         };
         return result;
@@ -1926,7 +1943,8 @@ private:
                 }
                 ApplyAuthoredDoorFacingQ1810(views[0]);
                 if (!Fo3GameplayBlocked() && !IsFo3LoadingVisible()) {
-                    UpdatePlayer(views[0], frameState.predictedDisplayTime);
+                    UpdatePlayer(views[0], frameState.predictedDisplayTime,
+                        (viewState.viewStateFlags&(XR_VIEW_STATE_POSITION_TRACKED_BIT|XR_VIEW_STATE_ORIENTATION_TRACKED_BIT))==(XR_VIEW_STATE_POSITION_TRACKED_BIT|XR_VIEW_STATE_ORIENTATION_TRACKED_BIT));
                 } else {
                     lastFrameTime_ = 0;
                 }
@@ -1964,7 +1982,7 @@ private:
                     q210VirtualHead.position.z,
                     YawFromQuaternion(q210VirtualHead.orientation),
                     playerYaw_,
-                    views[0].pose.position.y,
+                    views[0].pose.position.y+sneak_.offset,
                     q210LeftValid,
                     q210Left.position.x, q210Left.position.y, q210Left.position.z,
                     q210Left.orientation.x, q210Left.orientation.y,
@@ -2111,6 +2129,7 @@ private:
                 fqmotion::requested=spacewarpProducerReady_&&gSceneReady&&
                     !IsFo3LoadingVisible()&&sessionState_==XR_SESSION_STATE_FOCUSED&&!Fo3GameplayBlocked();
                 QActorPrepareStereoFrame();
+                if(gPlayerSession&&!Fo3GameplayBlocked()&&!IsFo3LoadingVisible())fo3sneakui::Prepare(gPlayerSession->player,gPlayerSneakIndicator);
                 hitch.Mark("actorPrep");
                 if(gPlayerSession&&gSceneReady&&!IsFo3LoadingVisible()&&!Fo3GameplayBlocked()&&!Fo3DialogueFocus()&&!Fo3PipboyFocus()&&!gFo3PauseOpen){
                     fo3pipdata::Location location;
@@ -2169,7 +2188,7 @@ private:
                     frame.world=gExteriorWorldspaceQ1890;frame.origin={gSceneCenterXQ1730,gSceneCenterYQ1730,gSceneFloorZQ1730};
                     frame.sceneReady=gSceneReady;frame.loading=IsFo3LoadingVisible();frame.focused=sessionState_==XR_SESSION_STATE_FOCUSED;
                     frame.modal=Fo3PipboyFocus()||Fo3DialogueFocus()||Fo3TerminalFocus()||Fo3LockpickFocus()||gFo3PauseOpen||Fo3ScriptMessageFocus()||Fo3LevelUpFocus();
-                    XrPosef appPose{};appPose.orientation=YawQuaternion(playerYaw_);appPose.position=playerPosition_;
+                    XrPosef appPose{};appPose.orientation=YawQuaternion(playerYaw_);appPose.position=playerPosition_;appPose.position.y+=sneak_.offset;
                     const auto appMatrix=MatrixFromPose(appPose);std::copy(appMatrix.m,appMatrix.m+16,frame.appToWorld.begin());
                     for(unsigned eye=0;eye<2;++eye){const auto vp=Multiply(ProjectionFromFov(views[eye].fov,.04f,125000.f/FO3_UNITS_PER_METRE_Q715),ViewFromPose(ToVirtualPose(views[eye].pose)));
                         std::copy(vp.m,vp.m+16,frame.viewProjection[eye].begin());}
@@ -2688,7 +2707,7 @@ private:
                 const auto notificationMvp=Multiply(viewProjection,MatrixFromPose(notificationHead_));
                 fo3notifyui::Render(notificationMvp.m);
                 fo3xpui::Render(notificationMvp.m);
-                if(!gFo3PauseOpen)fo3compassui::Render(notificationMvp.m);
+                if(!gFo3PauseOpen){fo3compassui::Render(notificationMvp.m);fo3sneakui::Render(notificationMvp.m);}
             }
             // Modal lockpicking is last among world/hand/ordinary HUD draws.
             // It has fresh self-occlusion depth, independent of nearby models.
@@ -2824,6 +2843,9 @@ private:
     XrAction moveXAction_{XR_NULL_HANDLE};
     XrAction moveYAction_{XR_NULL_HANDLE};
     XrAction turnXAction_{XR_NULL_HANDLE};
+    XrAction sneakAction_{XR_NULL_HANDLE};
+    fo3sneak::Stance sneak_;
+    bool sneakDown_=false;
     XrAction activateAction_{XR_NULL_HANDLE};
     XrAction pauseAction_=XR_NULL_HANDLE;
     XrAction pipBackAction_{XR_NULL_HANDLE};

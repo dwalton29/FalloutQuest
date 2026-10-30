@@ -6,6 +6,8 @@
 #include "physics/fo3-contact-limit.h"
 #include "physics/fo3-rigid-world.h"
 #include "npc/fo3-ragdoll-pose.h"
+#include "player/fo3-sneak.h"
+#include "npc/fo3-detection.h"
 #include "scripting/fo3-script-imagespace.h"
 #include "scripting/fo3-nonresident-script.h"
 namespace fo3worldscript {fo3script::ImagePresentation Presentation();}
@@ -34,6 +36,7 @@ namespace fo3worldscript {fo3script::ImagePresentation Presentation();}
 #include "ui/interaction/fo3-weapon-ammo-hud.h"
 #include "ui/interaction/fo3-health-bar-hud.h"
 #include "ui/interaction/fo3-compass-hud.h"
+#include "ui/interaction/fo3-sneak-hud.h"
 #include "npc/fo3-animation-bounds.h"
 #include "rendering/actor-skinning.h"
 #include "rendering/opaque-telemetry.h"
@@ -898,6 +901,7 @@ struct Q230ActorVisual {
     fo3face::Weights facialWeights{};
     Fo3NpcActorQ230 source;
     fo3npc::RuntimeState runtime;
+    fo3sneak::Observer playerDetection;
     std::array<fo3anim::Clip,size_t(fo3npc::Animation::Count)> animations;
     std::array<std::array<fo3anim::Clip,3>,6> authoredHitClips; // 18 original IDLE hit variants.
     int activeAnimation=0,headBone=-1,chestBone=-1;
@@ -939,6 +943,10 @@ struct Q230ActorVisual {
     uint64_t lastFrame = UINT64_MAX;
     uint64_t profiledAnimationFrame=UINT64_MAX;
 };
+float gPlayerSneakDrop=0,gPlayerDetectionSpeed=0;
+double gPlayerDetectionActionUntil=0;
+float gPlayerDetectionAction=0;
+fo3sneak::Indicator gPlayerSneakIndicator=fo3sneak::Indicator::Hidden;
 std::vector<Q230ActorVisual> gQ230NpcActors;
 uint64_t gQ230NpcResidenceRevision=0;
 fo3health::Tracker gQ230HealthBars;
@@ -11724,6 +11732,19 @@ void Q211UpdatePlayerRig(bool finalPose=false) {
         Q213AssignArmPoseToPart(
             part, q213LeftPose, q213RightPose, deltas);
 
+        // Keep feet at their standing floor anchors while the HMD lowers the torso.
+        if(gPlayerSneakDrop>.001f)for(const char* side:{"L","R"}){
+            const std::string prefix=std::string("Bip01 ")+side+" ";
+            const int hip=fo3anim::FindBone(gVrSkeleton,prefix+"Thigh"),knee=fo3anim::FindBone(gVrSkeleton,prefix+"Calf"),ankle=fo3anim::FindBone(gVrSkeleton,prefix+"Foot");
+            if(hip<0||knee<0||ankle<0)continue;
+            const auto pose=fo3vr::SolveCrouchLeg(VrPoint(VrSkeletonPoint(hip)),VrPoint(VrSkeletonPoint(knee)),VrPoint(VrSkeletonPoint(ankle)),gPlayerSneakDrop);
+            if(!pose.valid)continue;const auto lower=Q211Lower(prefix);
+            for(size_t b=0;b<part.boneNames.size();++b){const auto& name=part.boneNames[b];
+                if(name==lower+"thigh")deltas[b]=RuntimeDelta(pose.thigh);
+                else if(name==lower+"calf")deltas[b]=RuntimeDelta(pose.calf);
+                else if(name==lower+"foot"||name.rfind(lower+"toe",0)==0)deltas[b]=RuntimeDelta(pose.foot);
+            }
+        }
         // Layer authored-finger-space curls before the already-solved hand
         // transform. Finger articulation cannot alter the canonical arm solve.
         for (size_t boneIndex = 0u;
@@ -12441,6 +12462,14 @@ static void Q230ChatTick(double);
 static bool Q230ChatSpeaking(uint32_t);
 static fo3face::Weights Q230ChatWeights(uint32_t);
 static bool Q230ChatLook(uint32_t,std::array<float,3>&);
+// CPU light proxy from the same authored ambient/directional/placed lights.
+// Native screen-space light detection is unavailable; this Quest sampling policy
+// excludes tone mapping/bloom and bounds local-light work with the renderer budget.
+static float Q230PlayerLightLevel(const std::array<float,3>& point){
+ float light=0;for(int c=0;c<3;++c)light=std::max(light,gFo3Environment.ambient[c]+gFo3Environment.sunlight[c]);
+ if(gFo3Environment.interior){const auto selected=fo3interior::Select(gFo3InteriorLighting.lights,point,point);for(int n=0;n<selected.count;++n){const auto& l=gFo3InteriorLighting.lights[selected.indices[n]];float distance=0;for(int c=0;c<3;++c)distance+=(l.position[c]-point[c])*(l.position[c]-point[c]);const float attenuation=fo3interior::Attenuation(std::sqrt(distance),l.radius);light+=std::max({l.colour[0],l.colour[1],l.colour[2]})*attenuation*l.fade;}}
+ return std::clamp(light*100,0.f,100.f);
+}
 #include "npc/fo3-npc-ragdoll-cache.inc"
 #include "fo3-npc-runtime.inc"
 #include "npc/fo3-npc-ragdoll-runtime.inc"
@@ -13045,6 +13074,11 @@ void QActorPrepareStereoFrame() {
     const double setupUs=fqopaque::Micros(setupStarted);
     if(ready){Q211UpdatePlayerRig(true);WeaponFinalizePlayerPose();}
     const double npcNow=std::chrono::duration<double>(Fo3GameplayNow().time_since_epoch()).count();
+    static double motionAt=-1;static std::array<float,3> oldHead{};static uint32_t motionCell=0;
+    const float motionDt=float(npcNow-motionAt),travel=std::hypot(gQ210Head[0]-oldHead[0],gQ210Head[2]-oldHead[2]);
+    gPlayerDetectionSpeed=motionAt>=0&&motionCell==gCurrentCellFormId&&motionDt>.001f&&motionDt<.1f&&travel<1?travel/motionDt:0;
+    oldHead={gQ210Head[0],gQ210Head[1],gQ210Head[2]};motionAt=npcNow;motionCell=gCurrentCellFormId;
+
     const uint32_t pathQueriesBefore=gQ240PathsPlanned;
     const uint32_t pathExpandedBefore=gQ240PathNodesExpanded;
     const auto evaluationsBefore=gQ280PackageEvaluations,doorBuildsBefore=gQ280DoorGraphBuilds,
@@ -13123,6 +13157,8 @@ void QActorPrepareStereoFrame() {
         }
         if(actor.renderVisible) Q230UpdateActor(actor);
     }
+    gPlayerSneakIndicator=fo3sneak::Indicator::Hidden;
+    for(const auto& actor:gQ230NpcActors)if(!actor.runtime.offScene&&actor.runtime.Alive())gPlayerSneakIndicator=fo3sneak::Strongest(gPlayerSneakIndicator,actor.playerDetection.Hud());
     if(gPlayerSession)
         gQ230HealthBars.player.Observe(gPlayerSession->player.Health(),
                                       gPlayerSession->player.MaxHealth(),npcNow);

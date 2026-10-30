@@ -169,3 +169,24 @@ inline float SolveTorso(TorsoState&s,V /*head*/,float headYaw,float locomotion,
  return s.yaw;
 }
 } // namespace fo3vr
+
+namespace fo3vr {
+struct CrouchLeg {Delta thigh,calf,foot;V knee{},ankle{};bool valid=false;};
+// VR retarget policy: retain authored segment lengths and the floor-relative
+// feet while lowering the torso with the physical/virtual head. No replacement
+// animation or fabricated skeleton coordinates.
+inline CrouchLeg SolveCrouchLeg(V hip,V knee,V ankle,float drop){
+ CrouchLeg out;const float a=Length(knee-hip),b=Length(ankle-knee);
+ if(a<.05f||b<.05f||!std::isfinite(drop)||drop<=0)return out;
+ const V target=ankle+V{0,drop,0};const V delta=target-hip;const float d=std::clamp(Length(delta),std::abs(a-b)+.001f,a+b-.001f);
+ const V dir=Unit(delta,{0,-1,0});V pole=Project(knee-hip,dir);
+ if(Length(pole)<.02f)pole=Project({0,0,-1},dir);
+ pole=Unit(pole,{0,0,-1});
+ const float along=(a*a+d*d-b*b)/(2*d),height=std::sqrt(std::max(0.f,a*a-along*along));
+ out.knee=hip+dir*along+pole*height;out.ankle=hip+dir*d;
+ const V normal=Unit(Cross(dir,pole),{1,0,0});const V oldNormal=Unit(Cross(knee-hip,ankle-knee),normal);
+ out.thigh=Segment(hip,knee-hip,hip,FrameRotation(knee-hip,oldNormal,out.knee-hip,normal));
+ out.calf=Segment(knee,ankle-knee,out.knee,FrameRotation(ankle-knee,oldNormal,out.ankle-out.knee,normal));
+ out.foot=Segment(ankle,{0,1,0},out.ankle,Identity());out.valid=true;return out;
+}
+}

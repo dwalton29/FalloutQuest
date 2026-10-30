@@ -49,6 +49,7 @@ public:
     bool SetRagdollMotion(uint32_t actor,const std::vector<V>& linear,const std::vector<V>& angular);
     std::vector<uint32_t> RagdollActors()const;
     void Step(float seconds);
+    bool CanExpandCapsule(const V& feet,float radius,float oldHeight,float newHeight)const;
     bool SweepCapsule(const V& fromFeet,const V& toFeet,float radius,float height,V& resolved,V& normal)const;
 };
 World& Live();

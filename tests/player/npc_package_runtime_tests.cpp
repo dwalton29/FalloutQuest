@@ -2,6 +2,7 @@
 #include "npc/fo3-actor-animation.h"
 #include "data/fo3-texture-bsa.h"
 #include "npc/fo3-npc-state.h"
+#include "npc/fo3-detection.h"
 #include "player/fo3-player-state.h"
 #include "dialogue/fo3-dialogue-conditions.h"
 #include "dialogue/fo3-dialogue-session.h"
@@ -41,6 +42,7 @@ struct Q240NavigationGraph {
 };
 struct Q230CombatWeapon {fo3weapon::Definition definition;std::array<fo3anim::Clip,4> clips;std::array<fo3anim::Clip,2> aimVariants;std::vector<size_t> gpu;std::array<float,3> muzzle{};bool ready=false;};
 struct Q230ActorVisual {
+  fo3sneak::Observer playerDetection;
   fo3face::Weights facialWeights{};
   std::unordered_map<uint32_t,Q230CombatWeapon> combatWeapons;
   std::array<fo3anim::Clip,size_t(fo3npc::Animation::Count)> animations;

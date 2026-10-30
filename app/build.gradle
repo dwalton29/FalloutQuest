@@ -22,8 +22,8 @@ android {
         applicationId 'com.falloutquest.app'
         minSdk 29
         targetSdk 35
-        versionCode 299
-        versionName '0.150.0-human-ragdolls'
+        versionCode 300
+        versionName '0.151.0-vr-sneaking'
 
         ndk {
             abiFilters 'arm64-v8a'

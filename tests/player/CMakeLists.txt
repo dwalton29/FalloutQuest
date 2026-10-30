@@ -423,3 +423,19 @@ target_compile_options(npc_ragdoll_runtime_tests PRIVATE -UNDEBUG -Wall -Wextra 
 target_include_directories(npc_ragdoll_runtime_tests PRIVATE ../../app/src/main/cpp)
 target_link_libraries(npc_ragdoll_runtime_tests PRIVATE ZLIB::ZLIB fq_physics)
 add_test(NAME npc_ragdoll_runtime_tests COMMAND npc_ragdoll_runtime_tests)
+
+add_executable(sneak_tests sneak_tests.cpp ${dialogue_shared})
+target_compile_features(sneak_tests PRIVATE cxx_std_17)
+target_compile_options(sneak_tests PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+target_include_directories(sneak_tests PRIVATE ../../app/src/main/cpp)
+target_link_libraries(sneak_tests PRIVATE ZLIB::ZLIB)
+add_test(NAME sneak_tests COMMAND sneak_tests)
+
+add_executable(npc_detection_runtime_tests npc_combat_runtime_tests.cpp ${dialogue_shared}
+    ../../app/src/main/cpp/npc/fo3-npc.cpp ../../app/src/main/cpp/npc/fo3-actor-animation.cpp)
+target_compile_definitions(npc_detection_runtime_tests PRIVATE FO3_NPC_DETECTION_HOST_TEST=1)
+target_compile_features(npc_detection_runtime_tests PRIVATE cxx_std_17)
+target_compile_options(npc_detection_runtime_tests PRIVATE -UNDEBUG -Wall -Wextra -Werror -Wno-misleading-indentation)
+target_include_directories(npc_detection_runtime_tests PRIVATE ../nif ../../app/src/main/cpp ../../app/src/main/cpp/data)
+target_link_libraries(npc_detection_runtime_tests PRIVATE ZLIB::ZLIB)
+add_test(NAME npc_detection_runtime_tests COMMAND npc_detection_runtime_tests)

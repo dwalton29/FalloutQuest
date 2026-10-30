@@ -1,5 +1,6 @@
 #pragma once
 #include "fo3-corpse-pose.h"
+#include "fo3-sneak-defaults.h"
 
 #include "pipboy/fo3-pipboy-session.h"
 #include "player/fo3-experience.h"
@@ -274,6 +275,7 @@ struct Catalog {
   float evilMaxKarma=-250;
   int32_t karmaMajorThreshold=250;
   float gameTimeScale = 30.0f; // Fallout 3 TimeScale GLOB, default 30 game min / real min.
+  std::unordered_map<std::string,float> sneakSettings=fo3sneak::NativeSettings();
   float npcRunMultiplier = 1.0f; // Optional original fMoveRunMult GMST; do not invent.
   float npcBaseSpeed = 0.f; // Original fMoveBaseSpeed, in game units/second.
   // Optional original GMSTs. Missing data disables the added morale/range policy.
@@ -397,6 +399,8 @@ public:
   float CarryCapacity() const;
   double InventoryWeight() const;
   bool Overencumbered() const { return InventoryWeight() > CarryCapacity(); }
+  bool IsSneaking()const{return sneaking_;}
+  void SetSneaking(bool value){if(value!=sneaking_){sneaking_=value;++revision_;}}
   uint64_t Revision() const { return revision_; }
   // Mutable player attributes are authoritative save state, not ESM edits.
   // SPECIAL 1..10, base skill ratings 0..100 (including unused Throwing slot).
@@ -703,6 +707,7 @@ private:
   std::shared_ptr<const Catalog> catalog_;
   mutable State state_;
   mutable uint64_t revision_ = 0;
+  bool sneaking_=false; // Tracking/input state; recomputed rather than serialized.
   uint64_t actorPoseRevisions_ = 0;
   std::unordered_map<uint32_t,uint64_t> scriptActorMoves_; // Native pose invalidation, not save authority.
   double questScriptAccumulator_=0,referenceScriptAccumulator_=0;

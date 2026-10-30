@@ -17,6 +17,10 @@ int main(){
     assert(fo3contact::Limit([](float){return false;})==1);
     assert(fo3contact::Limit([](float){return true;})==0);
     World w;w.Static(100,{{{-10,0,-10},{10,0,10},{10,0,-10}},{{-10,0,-10},{-10,0,10},{10,0,10}}});
+    w.Static(101,{{{-6,1.15f,-1},{-4,1.15f,1},{-4,1.15f,-1}},{{-6,1.15f,-1},{-6,1.15f,1},{-4,1.15f,1}}});
+    assert(!w.CanExpandCapsule({-5,0,0},.2f,.9f,1.7f));assert(w.CanExpandCapsule({-5,0,0},.2f,1.7f,.9f));
+    assert(w.CanExpandCapsule({-7,0,0},.2f,.9f,1.7f));w.RemoveStatic(101);
+    w.Static(102,{{{-4.8f,0,-1},{-4.8f,2,1},{-4.8f,2,-1}},{{-4.8f,0,-1},{-4.8f,0,1},{-4.8f,2,1}}});assert(w.CanExpandCapsule({-5,0,0},.2f,.9f,1.7f));w.RemoveStatic(102);
     auto box=Box(.1f,.1f,.1f);box.material.restitution=0;
     assert(w.Add(1,box,At(0,2,0)));M p;V v;
     w.Step(1.f/60);assert(w.Pose(1,p,&v)&&v[1]<0&&p[13]<2);

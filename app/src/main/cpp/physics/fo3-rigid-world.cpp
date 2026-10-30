@@ -374,6 +374,14 @@ void World::Step(float seconds){
     }
 }
 
+bool World::CanExpandCapsule(const V& feet,float radius,float oldHeight,float newHeight)const{
+ if(newHeight<=oldHeight)return true;
+ // Inset the head sweep slightly so a tangent wall contact cannot block standing.
+ btSphereShape shape(std::max(.01f,radius-.005f));auto from=btTransform::getIdentity(),to=from;
+ from.setOrigin(B(feet)+btVector3(0,std::max(radius,oldHeight-radius),0));to.setOrigin(B(feet)+btVector3(0,newHeight-radius,0));
+ struct Upward:btCollisionWorld::ClosestConvexResultCallback{using ClosestConvexResultCallback::ClosestConvexResultCallback;btScalar addSingleResult(btCollisionWorld::LocalConvexResult& r,bool world)override{const auto normal=world?r.m_hitNormalLocal:r.m_hitCollisionObject->getWorldTransform().getBasis()*r.m_hitNormalLocal;if(normal.y()>=-.01f)return 1;return ClosestConvexResultCallback::addSingleResult(r,world);}}hit(from.getOrigin(),to.getOrigin());hit.m_collisionFilterGroup=4;hit.m_collisionFilterMask=3;
+ impl->world.convexSweepTest(&shape,from,to,hit,.001f);return !hit.hasHit();
+}
 bool World::SweepCapsule(const V& from,const V& to,float radius,float height,V& resolved,V& normal)const{
     btCapsuleShape capsule(radius,std::max(0.f,height-2*radius));capsule.setMargin(.001f);
     btTransform a=btTransform::getIdentity(),b=a;a.setOrigin(B(from)+btVector3(0,height*.5f,0));b.setOrigin(B(to)+btVector3(0,height*.5f,0));

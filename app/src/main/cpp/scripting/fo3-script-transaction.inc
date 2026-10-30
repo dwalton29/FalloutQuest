@@ -4,7 +4,7 @@
 namespace fo3player {
 Player::Player(const Player& source,ScriptCandidateTag)
     : referencePlanIdentity_(source.referencePlanIdentity_),catalog_(source.catalog_),
-      state_(source.state_),revision_(source.revision_),actorPoseRevisions_(source.actorPoseRevisions_),scriptActorMoves_(source.scriptActorMoves_),
+      state_(source.state_),revision_(source.revision_),sneaking_(source.sneaking_),actorPoseRevisions_(source.actorPoseRevisions_),scriptActorMoves_(source.scriptActorMoves_),
       scriptActivator_(source.scriptActivator_),scriptReference_(source.scriptReference_),
       scriptPlayerCell_(source.scriptPlayerCell_),scriptPlayerWorld_(source.scriptPlayerWorld_),
       scriptPlayerPosition_(source.scriptPlayerPosition_),scriptPlayerPositionKnown_(source.scriptPlayerPositionKnown_),
