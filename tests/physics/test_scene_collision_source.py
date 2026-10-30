@@ -556,7 +556,13 @@ assert 'result->forms.limit=limit' in compile_cache
 assert 'owner,localScript,capture?&result->forms:nullptr' in compile_cache
 assert script_runtime.index('fo3script::ChargeScriptForms(')<script_runtime.index('execution.commandForms=std::move(forms.bindings)')
 assert 'expressionForms.limit=forms.limit-forms.used' in script_runtime
-assert 'scriptTrace_?&expressionForms:nullptr' in script_runtime
+# Expression bindings are collected only inside the explicit capture branch;
+# runtime capabilities of skipped expressions are validated on entry instead.
+expression_capture=script_runtime.index('scriptId,&expressionForms).Evaluate(v)')
+expression_guard=script_runtime.rfind('if(scriptTrace_){',0,expression_capture)
+assert expression_guard>=0
+assert expression_capture<script_runtime.index('\n      }',expression_guard)
+assert 'scriptId,nullptr,true).Evaluate(v)' in script_runtime
 assert script_runtime.index('fo3script::ChargeScriptForms(expressionForms.bindings,nextBytes)')<script_runtime.index('execution.expressionForms=std::move(expressionForms.bindings)')
 assert script_runtime.index('fo3script::ChargeScriptVariables(forms.variables,nextBytes)')<script_runtime.index('execution.commandVariables=std::move(forms.variables)')
 assert script_runtime.index('fo3script::ChargeScriptVariables(expressionForms.variables,nextBytes)')<script_runtime.index('execution.expressionVariables=std::move(expressionForms.variables)')
