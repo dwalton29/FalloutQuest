@@ -964,7 +964,9 @@ int main(){
   for(unsigned field=1;field<4;++field)for(unsigned bit=0;bit<8;++bit){
     Bytes data(4);data[field]=uint8_t(1u<<bit);
     Bytes metadata;Sub(metadata,"DATA",data);Sub(metadata,"TRDT",Bytes(24));
-    checkInfo(InfoPayload(metadata),field==2&&bit!=7);
+    // Say Once a Day is now supported by live dialogue and its persistent timer;
+    // Always Darken and other flags2 bits remain rejected.
+    checkInfo(InfoPayload(metadata),(field==2&&bit!=7)||(field==3&&bit==0));
   }
   // DATA uniqueness is record-wide, even after NEXT; XXXX has the same rules.
   for(bool after:{false,true}){
