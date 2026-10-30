@@ -2,6 +2,7 @@
 #include "dialogue/fo3-dialogue-panel.h"
 #include "fo3-menu-layout.h"
 #include "fo3-menu-strings.h"
+#include "fo3-menu-texture-paths.h"
 #include "player/fo3-player-state.h"
 #include "ui/fo3-system-colour.h"
 #include "ui/interaction/fo3-interaction-hud-renderer.h"
@@ -24,6 +25,24 @@ struct Assets {
   std::map<std::string, Texture> textures;
   std::map<std::string, Texture> images;
   std::map<std::string, GLuint> dynamicImages;
+  fo3menu::TexturePaths aliases;
+  bool aliasesReady = false;
+  std::string AliasPath(const std::string &file) {
+    if (file.find_first_of("/\\") != file.npos)
+      return {};
+    if (!aliasesReady) {
+      aliasesReady = true;
+      for (const auto &path : fo3assets::TextureArchivePaths()) {
+        auto archive = fo3assets::GetBsaArchive(path);
+        std::vector<fo3assets::BsaFileInfo> entries;
+        if (archive && archive->List("interface\\", entries,
+                                     fo3assets::BsaPathKind::Texture))
+          for (const auto &entry : entries)
+            aliases.Add(entry.path);
+      }
+    }
+    return aliases.Resolve(file);
+  }
   bool Ensure() {
     if (program)
       return true;
@@ -91,13 +110,20 @@ struct Assets {
     std::string path = file;
     if (!atlas.empty()) {
       fo3hudassets::TaiSprite sprite;
-      if (fo3hudassets::ParseButtonTai(sprite, file.c_str())) {
+      const auto slash = file.find_last_of("/\\");
+      const auto alias = file.substr(slash == file.npos ? 0 : slash + 1);
+      if (fo3hudassets::ParseButtonTai(sprite, alias.c_str())) {
         path = sprite.atlasPath;
         t.u = sprite.u;
         t.v = sprite.v;
         t.w = sprite.w;
         t.h = sprite.h;
       }
+    }
+    if (path == file) {
+      const auto resolved = AliasPath(file);
+      if (!resolved.empty())
+        path = resolved;
     }
     if (path.rfind("Textures", 0) != 0 && path.rfind("textures", 0) != 0)
       path = "Textures\\" + path;

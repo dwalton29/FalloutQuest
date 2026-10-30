@@ -26,6 +26,11 @@ bool LoadTextureFile(const std::string &, std::vector<uint8_t> &, BsaFileInfo *,
 namespace fo3assets {
 std::shared_ptr<BsaArchive> GetBsaArchive(const std::string &) { return {}; }
 std::string FalloutDataPath(const std::string &filename) { return filename; }
+const std::array<std::string, 2> &TextureArchivePaths() {
+  static const std::array<std::string, 2> paths{"mock-textures",
+                                                "mock-fallback"};
+  return paths;
+}
 } // namespace fo3assets
 int main(int argc, char **argv) {
   fo3player::Catalog catalog;

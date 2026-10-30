@@ -14,7 +14,10 @@ conditional expressions, native overrides and instantiated templates.
 `fo3-menu-renderer.h` resolves original font metrics and image dimensions,
 clips glyph/image geometry, applies crop offsets, preserves layer order and
 batches adjacent compatible sprites. Original font and atlas textures share
-GPU ownership across these menus. Source layout and vertex buffers are cached;
+GPU ownership across these menus. The supplied loose InterfaceShared.tai is empty;
+when an index is unavailable, bare source aliases resolve only to unique DDS
+basenames in the original Interface archive index. Ambiguous names are rejected
+rather than selecting an arbitrary file. Full source paths retain exact lookup. Source layout and vertex buffers are cached;
 static stereo eyes do not rebuild them. Pip-Boy redraw invalidation follows
 presented player data rather than every NPC pose/script timer revision.
 

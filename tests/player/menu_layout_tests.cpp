@@ -1,6 +1,7 @@
 #include "data/fo3-bsa-archive.h"
 #include "ui/menu/fo3-menu-layout.h"
 #include "ui/menu/fo3-menu-strings.h"
+#include "ui/menu/fo3-menu-texture-paths.h"
 #include <cassert>
 #include <iostream>
 using namespace fo3menu;
@@ -50,6 +51,16 @@ static void Synthetic() {
   std::string error;
   assert(!Parse("<menu><text></menu>", malformed, error));
   assert(StringDefaults().at("sInventoryItems") == "ITEMS");
+  TexturePaths paths;
+  paths.Add("textures/interface/shared/solid.dds");
+  paths.Add("textures/interface/shared/solid.dds");
+  assert(paths.Resolve("SOLID.DDS") ==
+         "textures\\interface\\shared\\solid.dds");
+  paths.Add("textures/interface/another/solid.dds");
+  assert(paths.Resolve("solid.dds").empty());
+  paths.Add("textures/clutter/only.dds");
+  assert(paths.Resolve("only.dds").empty());
+  assert(paths.Resolve("../solid.dds").empty());
 }
 int main(int argc, char **argv) {
   Synthetic();
