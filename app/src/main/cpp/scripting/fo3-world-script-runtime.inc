@@ -1,10 +1,11 @@
 #include "dialogue/fo3-dialogue-selection.h"
+#include "audio/fo3-animation-sounds.h"
 // Render-thread adapters for original reference events and controller actions.
 // No location, quest, reference, sound or animation-group IDs are embedded here.
 namespace fo3worldscript {
 struct Animation {
     std::shared_ptr<const fo3dooranim::Asset> asset;
-    int clip=-1;double started=0,lastCollision=-1;bool settled=false;
+    int clip=-1;double started=0,lastCollision=-1,lastSound=-1;bool settled=false;
     fo3anim::Pose pose;
     std::vector<bool> visible;
     std::vector<size_t> shapes;
@@ -172,7 +173,7 @@ void Actions(){
             const auto i=animations.find(action.reference);if(i==animations.end())continue;
             auto& state=i->second;
             for(size_t c=0;c<state.asset->clips.size();++c)if(fo3dooranim::EqualName(state.asset->clips[c].name,action.group.c_str())){
-                state.clip=int(c);state.started=action.started;state.lastCollision=-1;state.settled=false;
+                state.clip=int(c);state.started=action.started;state.lastCollision=-1;state.lastSound=-1;state.settled=false;
                 fo3anim::BindClip(state.asset->hierarchy,state.asset->clips[c],state.pose);break;
             }
         }
@@ -186,6 +187,7 @@ void Animate(){
         if(state.clip<0||state.settled)continue;
         const auto& clip=asset.clips[size_t(state.clip)];const double elapsed=std::max(0.,seconds-state.started);
         if(!fo3anim::Sample(asset.hierarchy,clip,elapsed,state.pose))continue;
+        fo3animsound::Advance(gPlayerSession->player.Definitions().pipboy,clip,state.lastSound,elapsed,[](uint32_t id){fo3audio::SoundEvent(id);});state.lastSound=elapsed;
         for(const auto& value:state.pose.properties)if(value.kind==fo3anim::PropertyKind::Visibility)state.visible[size_t(value.bone)]=value.value[0]!=0;
         const GpuObject* first=nullptr;
         for(size_t shape:state.shapes){auto& object=gObjects[shape];if(!first)first=&object;

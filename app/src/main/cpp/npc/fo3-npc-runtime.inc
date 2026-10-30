@@ -193,6 +193,9 @@ void Q230PrepareActors(uint32_t cell, uint32_t worldspace,
   auto select=[&](uint32_t ref,uint32_t list){const auto key=(uint64_t(ref)<<32)|list;if(!templateChoices)return uint32_t(0);const auto it=templateChoices->find(key);return it==templateChoices->end()?0:it->second;};
   if(!LoadFo3CellActors(cell,actors,{},&arrivals,select))return;
   actors.erase(std::remove_if(actors.begin(),actors.end(),[&](const auto& a){return !arrivals.count(a.refFormId);}),actors.end());
+  for(uint32_t ref:arrivals)if(std::none_of(actors.begin(),actors.end(),[&](const auto& actor){return actor.refFormId==ref;}))
+    Q6H_LOGI("NPC RESIDENT SOURCE UNAVAILABLE ref=%08X cell=%08X world=%08X templateChoices=%zu",ref,cell,worldspace,templateChoices?templateChoices->size():0);
+  Q6H_LOGI("NPC RESIDENT SOURCE CENSUS cell=%08X world=%08X canonical=%zu resolved=%zu",cell,worldspace,arrivals.size(),actors.size());
 #else
   std::vector<Fo3NpcActorQ230> actors;
   if(!LoadFo3CellActors(cell,actors))return;

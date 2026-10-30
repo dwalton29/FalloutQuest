@@ -273,4 +273,20 @@ static void OriginalUseItemAt(const char* esm){
   std::cout<<"Original MS03 seated target, condition, and POBA result passed\\n";
 }
 
-int main(int argc,char** argv){AccompanyTests();SyntheticUseItemAt();AccompanyRecoveryTests();SandboxActivities();SyntheticFurniture();if(argc>2){meshRoot=argv[2];OriginalUseItemAt(argv[1]);OriginalFurniture(argv[1]);OriginalFurniture(argv[1],true);Coverage(argv[1]);SandboxCoverage(argv[1]);OriginalAccompany(argv[1]);}std::cout<<"Furniture package runtime tests passed\n";}
+static void OriginalFloorSit(const char* path,const char* root){
+  fo3player::Catalog catalog;std::string error;assert(fo3player::LoadCatalog(path,catalog,error));gPlayerSession=std::make_unique<Session>(std::move(catalog));gPlayerSession->player.RegisterOriginalActors();
+  const auto& d=gPlayerSession->player.Definitions().pipboy;const auto& placed=d.targets.at(0xc6e91);
+  gCurrentCellFormId=placed.cell;gExteriorWorldspaceQ1890=placed.world;packageHour=12;q240GroundProbe=false;
+  std::unordered_set<uint32_t> refs{0xc6e91},cells{placed.cell};
+  for(const auto& grid:d.cellGrids){const auto world=d.cellWorlds.find(grid.first);if(world!=d.cellWorlds.end()&&world->second==placed.world&&std::abs(grid.second[0]-int(std::floor(placed.x/4096.f)))<=1&&std::abs(grid.second[1]-int(std::floor(placed.y/4096.f)))<=1)cells.insert(grid.first);}std::vector<Fo3NpcActorQ230> actors;
+  assert(LoadFo3CellActors(placed.cell,actors,path,&refs));auto found=std::find_if(actors.begin(),actors.end(),[](const auto& a){return a.refFormId==0xc6e91;});assert(found!=actors.end());
+  std::vector<Fo3NpcNavMeshQ240> meshes;assert(LoadFo3NpcNavigationQ240(placed.cell,placed.world,meshes,path,&cells));auto graph=std::make_shared<Q240NavigationGraph>();
+  for(auto& mesh:meshes){graph->triangleOffsets.push_back(graph->triangleCount);graph->triangleCount+=mesh.triangles.size();graph->byForm[mesh.formId]=graph->meshes.size();graph->meshes.push_back(std::make_shared<Fo3NpcNavMeshQ240>(std::move(mesh)));}
+  auto scene=fo3furniture::BuildScene(d,placed.cell,placed.world,[&](std::string name,auto& bytes){for(auto& c:name){if(c=='\\')c='/';else c=char(std::tolower(static_cast<unsigned char>(c)));}std::ifstream file(std::string(root)+"/"+name,std::ios::binary);bytes.assign(std::istreambuf_iterator<char>(file),{});return !bytes.empty();},true,&cells);
+  Q230ActorVisual actor;actor.source=*found;actor.runtime.reference=found->refFormId;actor.runtime.position=Q240ScenePosition({found->x,found->y,found->z});actor.navigationGraph=graph;actor.runtime.furniture.scene=scene;
+  for(int i=0;i<1000&&actor.runtime.furniture.phase!=fo3furniture::Phase::Loop;++i)Q240UpdateNpcPackage(actor,i*.1);
+  assert(actor.aiPackage==0xc6e8e&&actor.runtime.furniture.phase==fo3furniture::Phase::Loop);
+  assert(actor.runtime.furniture.Selected()->reference==0xc6e92&&actor.runtime.furniture.Selected()->marker.reference==17);
+  std::cout<<"Original Micky PACK, linked floor furniture, original NAVM and original entry/loop clips reach seated state\n";
+}
+int main(int argc,char** argv){if(argc>3&&std::string(argv[3])=="--floor"){meshRoot=argv[2];OriginalFloorSit(argv[1],argv[2]);return 0;}AccompanyTests();SyntheticUseItemAt();AccompanyRecoveryTests();SandboxActivities();SyntheticFurniture();if(argc>2){meshRoot=argv[2];OriginalUseItemAt(argv[1]);OriginalFurniture(argv[1]);OriginalFurniture(argv[1],true);Coverage(argv[1]);SandboxCoverage(argv[1]);OriginalAccompany(argv[1]);}std::cout<<"Furniture package runtime tests passed\n";}

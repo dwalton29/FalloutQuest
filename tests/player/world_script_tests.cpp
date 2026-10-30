@@ -1,6 +1,7 @@
 #include "player/fo3-player-state.h"
 #include "dialogue/fo3-dialogue-results.h"
 #include "dialogue/fo3-dialogue-session.h"
+#include "dialogue/fo3-dialogue-selection.h"
 #include "scripting/fo3-nonresident-script.h"
 #include <iostream>
 #include <stdexcept>
@@ -54,6 +55,20 @@ static void Synthetic(){
     const auto path="/tmp/fq-daily-"+std::to_string(getpid());std::string error;Check(p.Save(path,error),error);Player restored(c);Check(restored.Restore(path,error),error);std::remove(path.c_str());
     Check(!restored.CanSayDailyInfo(10,40)&&restored.AdvanceGameHours(11)&&!restored.CanSayDailyInfo(10,40),"daily INFO history persists before original 12-hour timer");
     Check(restored.AdvanceGameHours(1)&&restored.CanSayDailyInfo(10,40),"original timer expiry permits another line");
+  }
+  {Catalog speech;speech.initial.baseHealth=100;speech.initial.special.fill(5);
+    speech.references[10].base=20;speech.references[10].cell=1;speech.pipboy.targets[10].base=20;speech.pipboy.targets[10].cell=1;
+    speech.eventBaseScripts[20]=30;speech.pipboy.referenceScripts[10]={"Speaker",20};speech.pipboy.dialogueActors[20].script=30;
+    speech.pipboy.formNames["speaker"]=10;speech.pipboy.formNames["voicetopic"]=40;
+    auto& source=speech.pipboy.scripts[30];source.variables[1]="waiting";source.source="scn voice\nshort waiting\nBegin GameMode\nset waiting to 1\nSay VoiceTopic\nEnd";speech.eventPrograms[30]=fo3script::ParseEvents(source);
+    speech.pipboy.quests[60].flags=1;speech.pipboy.sounds[70]="sound/original.wav";
+    fo3pipdata::Info line;line.id=50;line.topic=40;line.quest=60;line.type=1;line.responses.push_back({70,0,"Original line"});speech.pipboy.topics[40].push_back(line);
+    Player valid(speech);valid.SetScriptPlayerLocation(0,0,0,1,0);std::string error;auto plan=valid.PrepareReferenceEventTransaction(10,"GameMode",PlayerRef,error,ScriptProgramCapture::EnteredPrograms);
+    Check(bool(plan)&&valid.CommitScriptTransaction(*plan),"captured Say selects without nested detached publication: "+error);
+    fo3script::Action queued;Check(valid.PollScriptAction(queued)&&queued.info==50,"captured Say pins original INFO");
+    speech.pipboy.topics[40][0].end.source="UnsupportedCommand 1";Player invalid(speech);invalid.SetScriptPlayerLocation(0,0,0,1,0);
+    auto rejected=invalid.PrepareReferenceEventTransaction(10,"GameMode",PlayerRef,error,ScriptProgramCapture::EnteredPrograms);
+    Check(!rejected&&Local(invalid,"speaker.waiting")==0&&!invalid.PollScriptAction(queued),"unsupported speech preflight cannot commit waiting flags without a line");
   }
   Catalog c;c.initial.baseHealth=100;c.initial.special.fill(5);
   c.references[10].base=100;c.references[10].cell=1;
@@ -188,7 +203,25 @@ static void Original(const char* path){
   const auto& modifier=p.Definitions().imageModifiers.at(action.form);Check(modifier.valid&&modifier.duration==10,"original modifier duration");
   Check(fo3script::SampleImageModifier(modifier,0).fade[3]>.8f&&fo3script::SampleImageModifier(modifier,0).blur==2.5f,"original fade and blur");
   exit=p.PrepareReferenceEventTransaction(trigger,"OnTriggerEnter",PlayerRef,error);Check(bool(exit)&&p.CommitScriptTransaction(*exit),"second exit");Check(!p.PollScriptSound(sound)&&!p.PollScriptAction(action),"source doOnce");
-  p.RegisterOriginalActors();const auto gob=id("gobref"),nova=id("novaref"),radio=id("moriartysradioref");
+  {Player live(p.Definitions());live.RegisterOriginalActors();const auto& position=d.targets.at(id("gobref"));
+    live.SetScriptPlayerLocation(position.x,position.y+40,position.z,position.cell,position.world);
+    live.SetScriptEventDiagnostic([](const std::string& message){std::cerr<<message<<"\n";});
+    for(int frame=0;frame<30;++frame){live.SetScriptRuntimeClock(frame*.05,.05);live.PumpWorldAwareGameMode(.05,{id("gobref"),id("novaref")},[&](auto plan){return live.CommitScriptTransaction(*plan);});}
+    Check(Local(live,"gobref.tick")==2,"normal frame pump starts original Gob speech");
+    bool queued=false;fo3script::Action request;while(live.PollScriptAction(request))queued|=request.kind==fo3script::ActionKind::SayTo&&request.reference==id("gobref")&&request.info!=0;
+    Check(queued,"normal captured frame pump queues Gob's original INFO");
+  }
+  {Player live(p.Definitions());live.RegisterOriginalActors();live.SetScriptPlayerLocation(gateVolume.x,gateVolume.y,gateVolume.z,gateVolume.cell,gateVolume.world);
+    std::unique_ptr<ScriptTransactionPlan> entered;
+    // Deliver the original gate volume rather than manufacturing its script variable.
+    for(const auto& volume:d.triggerPrimitives){const auto placed=p.Definitions().references.find(volume.first);if(placed==p.Definitions().references.end())continue;const auto script=p.Definitions().eventBaseScripts.find(placed->second.base);if(script!=p.Definitions().eventBaseScripts.end()&&script->second==id("megatongatetriggerscript")){entered=live.PrepareReferenceEventTransaction(volume.first,"OnTriggerEnter",PlayerRef,error,ScriptProgramCapture::EnteredPrograms);break;}}
+    Check(bool(entered)&&live.CommitScriptTransaction(*entered),"original gate proximity event captured");
+    for(int frame=0;frame<10;++frame){live.SetScriptRuntimeClock(frame*.05,.05);live.PumpWorldAwareGameMode(.05,{weld},[&](auto plan){return live.CommitScriptTransaction(*plan);});}
+    bool queued=false;fo3script::Action request;while(live.PollScriptAction(request))queued|=request.kind==fo3script::ActionKind::SayTo&&request.reference==weld&&request.info!=0;
+    Check(queued,"normal captured frame pump queues Weld's original greeting");
+  }
+  p.RegisterOriginalActors();
+  const auto gob=id("gobref"),nova=id("novaref"),radio=id("moriartysradioref");
   const auto& gobPlaced=d.targets.at(gob);p.SetScriptPlayerLocation(gobPlaced.x,gobPlaced.y+40,gobPlaced.z,gobPlaced.cell,gobPlaced.world);
   Check(!p.DoorInteractionCrime(saloon),"original unlocked saloon entrance is not theft");
   Check(d.targets.at(radio).openByDefault,"original radio is on/open by default");

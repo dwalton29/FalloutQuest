@@ -51,7 +51,8 @@ constexpr float SCENE_FORWARD=0,FLOOR_Y=0;
 bool IsFo3LoadingVisible(){return false;}
 bool PreviewFo3DialogueReferences(const fo3player::Player&,const fo3player::ScriptTransactionPlan&,std::string&){return true;}
 namespace fo3audio {
-uint32_t token=0;uint64_t completion=0;std::string path;
+uint32_t token=0;uint64_t completion=0;std::string path;std::vector<uint32_t> sounds;
+void SoundEvent(uint32_t id){sounds.push_back(id);}
 void DialogueStop(){token=0;}
 void DialogueGain(float){}
 void Dialogue(const std::string& p,uint32_t t){path=p;token=t;completion=0;}
@@ -74,28 +75,30 @@ int main(){try{
  auto& spoken=c.pipboy.scripts[401];spoken.variables={{1,"ended"},{2,"done"}};
  spoken.source="scn Speech\nshort ended\nshort done\nBegin SayToDone VoiceTopic\nset done to 1\nEnd";
  c.eventPrograms[401]=fo3script::ParseEvents(spoken);
- c.pipboy.quests[600].flags=1;c.pipboy.sounds[700]="sound/original.ogg";
+ c.pipboy.quests[600].flags=1;c.pipboy.sounds[700]="sound/original.ogg";c.pipboy.formNames["originalsound"]=700;
  fo3pipdata::Info line;line.id=501;line.topic=500;line.quest=600;line.type=1;
  line.responses.push_back({700,0,"Original speech"});line.end.source="set speaker.ended to 1";
  c.pipboy.topics[500].push_back(line);
  auto asset=std::make_shared<fo3dooranim::Asset>();fo3anim::Bone root;root.name="root";asset->hierarchy.bones.push_back(root);fo3anim::Bone leaf;leaf.name="leaf";leaf.parent=0;asset->hierarchy.bones.push_back(leaf);
  Check(fo3anim::FinalizeSkeleton(asset->hierarchy),"hierarchy");asset->blockBones={0,1};
- fo3anim::Clip clip;clip.name="Advance";clip.stop=2;clip.cycle=2;
+ fo3anim::Clip clip;clip.name="Advance";clip.stop=2;clip.cycle=2;clip.textKeys={{.1f,"sound: OriginalSound"},{1.5f,"OriginalSound"}};
  fo3anim::Track track;track.bone="leaf";track.hasTranslation=true;track.translation.dimensions=3;track.translation.interpolation=1;track.translation.keys={{0,{0,0,0,0},{},{}},{2,{4,0,0,0},{},{}}};clip.tracks.push_back(track);
  fo3anim::PropertyTrack alpha;alpha.bone="leaf";alpha.kind=fo3anim::PropertyKind::Alpha;alpha.values.dimensions=1;alpha.values.interpolation=1;alpha.values.keys={{0,{0,0,0,0},{},{}},{2,{1,0,0,0},{},{}}};clip.properties.push_back(alpha);asset->clips.push_back(clip);
- clip.name="Idle";clip.cycle=0;clip.stop=1;clip.tracks[0].translation.keys={{0,{4,0,0,0},{},{}}};asset->clips.push_back(clip);
+ clip.textKeys.clear();clip.name="Idle";clip.cycle=0;clip.stop=1;clip.tracks[0].translation.keys={{0,{4,0,0,0},{},{}}};asset->clips.push_back(clip);
  gPlayerSession=std::make_unique<fo3player::Session>(std::move(c));auto& p=gPlayerSession->player;
  GpuObject object;object.refFormId=10;object.q2401DoorAnimation=asset;gObjects.push_back(object);
  p.SetScriptPlayerLocation(0,0,0,1,0);fo3worldscript::Register();p.SetScriptRuntimeClock(0,.25);fo3worldscript::Events();fo3worldscript::Actions();fo3worldscript::Animate();
  Check(fo3worldscript::animations.at(10).clip==0,"trigger plays authored group");Check(p.ScriptTriggerChanges().empty(),"committed trigger acknowledged");
  fo3worldscript::seconds=1;p.SetScriptRuntimeClock(1,.25);fo3worldscript::Events();fo3worldscript::Animate();
  Check(std::abs(gObjects[0].q2400DoorTransform[12]-2)<1e-5&&gObjects[0].materialAlpha==.5f,"live node transform and alpha");
+ Check(fo3audio::sounds==std::vector<uint32_t>{700},"authored lowercase sound key emitted once");
  Check(collision.nodeTransforms.at(1)[12]==2&&collision.nodeTransforms.at(0)[12]==0,"independent collision node transforms");
  fo3worldscript::seconds=2;p.SetScriptRuntimeClock(2,.25);fo3worldscript::Animate();
  bool reserved=p.PumpWorldAwareGameMode(.25,{10},[](auto){return false;});Check(!reserved,"non-world animation transaction");fo3worldscript::Actions();fo3worldscript::Animate();
  Check(fo3worldscript::animations.at(10).clip==1&&gObjects[0].q2400DoorTransform[12]==4,"source waits and selects idle");
  // Re-publication reapplies the retained pose and does not invent another OnLoad.
  ++gFo3VisualPublication.revision;gObjects[0].q2400DoorTransform[12]=0;fo3worldscript::Register();fo3worldscript::Animate();Check(gObjects[0].q2400DoorTransform[12]==4,"stream publication retains pose");
+ Check(fo3audio::sounds==std::vector<uint32_t>({700,700}),"bare authored SOUN key emitted, publication does not replay");
  // Events can republish/reorder meshes after Register and before Animate.
  GpuObject unrelated;unrelated.refFormId=55;unrelated.scriptAnimated=false;
  gObjects.insert(gObjects.begin(),unrelated);++gFo3VisualPublication.revision;

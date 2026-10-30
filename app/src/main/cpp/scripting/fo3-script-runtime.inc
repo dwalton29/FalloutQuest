@@ -906,14 +906,22 @@ bool Player::QueueScriptSpeech(uint32_t reference,uint32_t topic,uint32_t target
   static thread_local unsigned selecting=0;
   if(selecting>=8)return false;
   struct Guard{unsigned& depth;Guard(unsigned& d):depth(d){++depth;}~Guard(){--depth;}} guard(selecting);
-  fo3dialogue::Context context;context.player=this;context.talking=true;
+  // Say selects an INFO; its results execute later in the voice adapter.
+  // The enclosing captured SCPT must not attempt a nested detached publication.
+  // Preflight against an isolated, read-only snapshot of this exact command state.
+  Player selection(*this,ScriptCandidateTag{});
+  fo3dialogue::Context context;context.player=&selection;context.talking=true;
   if(!fo3dialogue::ReferenceContext(*this,reference,context.speaker)||!fo3dialogue::ReferenceContext(*this,target,context.target))return false;
   static thread_local std::mt19937 random{std::random_device{}()};
   // This only binds the authored INFO identity in the script transaction.
   // Scene mutation capability is admitted again by the actual voice adapter.
   const auto preview=[](const auto&,const auto&,std::string&){return true;};
-  const auto selected=fo3dialogue::ResolveTopicInfo(topic,context,[&](const auto& info){return fo3dialogue::EligibleInfo(info,context,{},preview);},&random);
-  if(!selected)return true; // Original Say with no eligible INFO is a no-op.
+  bool unsupported=false;
+  const auto diagnostic=[&](const std::string& message){unsupported=true;if(eventDiagnostic_)eventDiagnostic_(message);};
+  const auto selected=fo3dialogue::ResolveTopicInfo(topic,context,[&](const auto& info){return fo3dialogue::EligibleInfo(info,context,diagnostic,preview);},&random);
+  // A legitimate empty selection is a no-op. An unsupported preflight must
+  // roll back the caller too, rather than saving its waiting flags without speech.
+  if(!selected)return !unsupported;
   fo3script::Action action;action.kind=fo3script::ActionKind::SayTo;action.reference=reference;action.form=topic;action.flags=target;action.info=selected->id;
   return QueueScriptAction(std::move(action));
 }

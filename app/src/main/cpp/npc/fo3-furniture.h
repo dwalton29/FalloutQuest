@@ -68,6 +68,7 @@ inline std::shared_ptr<Scene> BuildScene(const fo3pipdata::Definitions& d,uint32
       if(eat&&m.reference==11){enter="chairleftsit";loop="chairdynamicidle";exit="chairleftstand";}
       if(eat&&m.reference==12){enter="chairrightsit";loop="chairdynamicidle";exit="chairrightstand";}
       if(eat&&m.reference==14){enter="chairfrontsit";loop="chairdynamicidle";exit="chairfrontstand";}
+      if(eat&&m.reference==17){enter="floorsitenter";loop="floorsitdynamicidle";exit="floorexit";}
       if(!enter)continue;
       auto& program=programs[m.reference];if(!program){auto ready=std::make_shared<Program>();if(!clip(enter,ready->enter)||!clip(loop,ready->loop)||!clip(exit,ready->exit)||!ready->Valid())continue;program=std::move(ready);}
       Slot slot;slot.reference=r.first;slot.base=p.base;slot.index=i;slot.marker=m;slot.placement=p;slot.alignment=Alignment(p,m);slot.program=program;slot.sleep=sleep;scene->slots.push_back(std::move(slot));

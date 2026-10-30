@@ -15,6 +15,20 @@ int main(int argc,char** argv){
  assert(std::fabs(world[12]-100)<.001f&&std::fabs(world[13]-180)<.001f&&std::fabs(world[14]-40)<.001f);
  assert(Permitted(0x80000002,1,true)&&!Permitted(0x80000002,0,true)&&!Permitted(0x40000002,1,true));
  std::vector<Marker> markers;assert(!DecodeMarkers({},markers));
+ if(argc==3&&std::string(argv[1])=="--floor"){
+   const std::string root=argv[2];assert(DecodeMarkers(Read(root+"/furniture/floorsitmarker.nif"),markers)&&markers.size()==1&&markers[0].reference==17&&markers[0].orientation==3141);
+   Program program;const auto folder=root+"/characters/_male/idleanims/";
+   assert(fo3anim::DecodeClip(Read(folder+"sitfloorenter.kf"),program.enter));
+   assert(fo3anim::DecodeClip(Read(folder+"sitfloordynamicidle.kf"),program.loop));
+   assert(fo3anim::DecodeClip(Read(folder+"sitfloorexit.kf"),program.exit));assert(program.Valid()&&program.loop.cycle==0);
+   fo3pipdata::Definitions d;d.furniture[1]={};d.furniture[1].valid=true;d.furniture[1].markers=0x40000001;d.furniture[1].model="furniture/floorsitmarker.nif";
+   d.targets[2].base=1;d.targets[2].cell=3;
+   d.formNames["floorsitenter"]=4;d.formNames["floorsitdynamicidle"]=5;d.formNames["floorexit"]=6;
+   d.idleModels[4]="characters/_male/idleanims/sitfloorenter.kf";d.idleModels[5]="characters/_male/idleanims/sitfloordynamicidle.kf";d.idleModels[6]="characters/_male/idleanims/sitfloorexit.kf";
+   const auto scene=BuildScene(d,3,0,[&](const auto& path,auto& bytes){bytes=Read(root+"/"+path);return !bytes.empty();},true);
+   assert(scene->slots.size()==1&&scene->slots[0].marker.reference==17&&scene->slots[0].program->Valid());
+   std::cout<<"Original floor-sit FRN 17, entry/loop/exit and resident activity preparation passed\n";return 0;
+ }
  if(argc<2){std::cout<<"furniture core tests passed; original assets not supplied\n";return 0;}
  const std::string root=argv[1];
  assert(DecodeMarkers(Read(root+"/furniture/bedtwin01.nif"),markers)&&markers.size()==2);

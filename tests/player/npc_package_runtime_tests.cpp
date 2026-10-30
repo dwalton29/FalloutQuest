@@ -15,6 +15,7 @@
 #include <vector>
 #include <iostream>
 #include <queue>
+#include <fstream>
 #include <functional>
 #ifndef FO3_NPC_FURNITURE_HOST_TEST
 bool LoadFalloutMeshFile(const std::string&,std::vector<uint8_t>&,std::string*) {return false;}
@@ -100,7 +101,7 @@ static std::shared_ptr<Q240NavigationGraph> Graph(bool invalid=false) {
   }
   return graph;
 }
-static Q230ActorVisual Actor(uint8_t type) {
+static Q230ActorVisual Actor(uint8_t type,bool linkedFurniture=false) {
   activePackageTargets=&packageTargets;
   packageTargets.clear();
   fo3player::Catalog c;c.initial.baseHealth=100;c.initial.special.fill(1);
@@ -110,6 +111,7 @@ static Q230ActorVisual Actor(uint8_t type) {
   auto& p=d.packages[50];p.type=type;p.location={};p.location.valid=true;
   p.location.type=0;p.location.value=60;p.location.radius=2000;
   d.targets[60].x=1900;d.targets[60].y=2900;d.targets[60].z=20;d.targets[60].world=2;
+  if(linkedFurniture){d.targets[42].linkedReference=60;d.targets[60].base=61;d.furniture[61].valid=true;p.location.type=6;p.location.value=0;}
   gPlayerSession=std::make_unique<Session>(std::move(c));
   Q230ActorVisual actor;actor.source.refFormId=42;actor.source.baseFormId=43;
   actor.runtime.position=Q240ScenePosition({1010,2010,20});actor.navigationGraph=Graph();return actor;
@@ -125,6 +127,17 @@ static void Original(const char* path) {
   assert(!catalog.pipboy.packages.at(0x7e6dd).patrolRepeat);
   assert(catalog.pipboy.packages.at(0x7e6dd).patrol.back().placement.patrolWait==20);
   gPlayerSession=std::make_unique<Session>(std::move(catalog));
+  {auto& player=gPlayerSession->player;player.RegisterOriginalActors();assert(player.DebugSetTime(18,0));
+    const auto& d=player.Definitions().pipboy;
+    auto activation=player.PrepareReferenceEventTransaction(d.formNames.at("megmoriartysmaindoorexref"),"OnActivate",fo3player::PlayerRef,error,fo3player::ScriptProgramCapture::EnteredPrograms);
+    assert(activation&&player.CommitScriptTransaction(*activation));
+    std::unordered_set<uint32_t> refs;
+    for(const auto& row:player.Snapshot().actors){bool disabled=true;if(row.second.cell==0x3a35&&player.ReferenceDisabled(row.first,disabled,error)&&!disabled){assert(player.RealizeActor(row.first));refs.insert(row.first);}}
+    auto choose=[&](uint32_t ref,uint32_t list){const auto& choices=player.Snapshot().actorTemplateChoices;const auto it=choices.find((uint64_t(ref)<<32)|list);return it==choices.end()?0:it->second;};
+    std::vector<Fo3NpcActorQ230> saloon;assert(LoadFo3CellActors(0x3a35,saloon,path,&refs,choose));
+    for(uint32_t ref:{0x3b3cu,0x3b3du,0x3b3fu,0x41709u,0x4170au,0x4170bu})assert(std::any_of(saloon.begin(),saloon.end(),[&](const auto& a){return a.refFormId==ref;}));
+    std::cout<<"Original evening saloon ingress realizes Moriarty, Gob, Nova and all three authored customers\n";
+  }
   std::vector<Fo3NpcActorQ230> actors;assert(LoadFo3CellActors(0xa96,actors,path));
   for(const auto& source:actors){Q230ActorVisual target;target.source=source;target.runtime.position=Q240ScenePosition({source.x,source.y,source.z});packageTargets.push_back(target);}
   size_t fleeFrom=0;for(const auto& entry:gPlayerSession->player.Definitions().pipboy.packages){const auto& p=entry.second;
@@ -276,6 +289,20 @@ static void AccompanyRecoveryTests(){
  std::cout<<"Accompany stop/reverse, two actors, exhausted routes, retry, cross-cell fallback, save/load and condition invalidation passed\n";
 }
 int main(int argc,char** argv) {
+  {auto actor=Actor(6,true);auto scene=std::make_shared<fo3furniture::Scene>();fo3furniture::Slot slot;
+    slot.reference=60;slot.base=61;slot.marker.reference=slot.marker.reference2=17;
+    slot.placement=gPlayerSession->player.Definitions().pipboy.targets.at(60);slot.alignment=fo3furniture::Placement(slot.placement);
+    auto program=std::make_shared<fo3furniture::Program>();
+    for(auto* clip:{&program->enter,&program->loop,&program->exit}){clip->stop=.2f;fo3anim::Track track;track.bone="root";clip->tracks.push_back(track);}
+    program->enter.cycle=program->exit.cycle=2;program->loop.cycle=0;slot.program=program;scene->slots.push_back(slot);actor.runtime.furniture.scene=scene;
+    for(int i=0;i<1000&&actor.runtime.furniture.phase!=fo3furniture::Phase::Loop;++i)Q240UpdateNpcPackage(actor,i*.1);
+    assert(actor.runtime.furniture.phase==fo3furniture::Phase::Loop&&actor.aiPackage==50);
+    assert(actor.runtime.furniture.Selected()->marker.reference==17);
+    actor.runtime.furniture.RequestExit();for(int i=1000;i<1010&&actor.runtime.furniture.Active();++i)Q240AdvanceFurniture(actor,nullptr,0,.1f,i*.1);
+    assert(!actor.runtime.furniture.Active()&&scene->reservations->owners.empty());
+    std::cout<<"Linked Travel furniture: authored floor-sit entry/loop/exit and lease release passed\n";
+  }
+
   AccompanyTests();AccompanyRecoveryTests();
   fo3pipdata::PackageSchedule schedule;schedule.valid=true;schedule.hour=22;schedule.duration=4;
   assert(Q240ScheduleActive(schedule,23)&&Q240ScheduleActive(schedule,1)&&!Q240ScheduleActive(schedule,12));

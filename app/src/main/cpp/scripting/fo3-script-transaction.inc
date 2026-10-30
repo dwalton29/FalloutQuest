@@ -20,7 +20,7 @@ Player::Player(const Player& source,ScriptCandidateTag)
       pendingExperienceNotices_(source.pendingExperienceNotices_),pendingLocationNotices_(source.pendingLocationNotices_),pendingScriptItems_(source.pendingScriptItems_),
       pendingScriptSounds_(source.pendingScriptSounds_),pendingTerminalBack_(source.pendingTerminalBack_),pendingBarters_(source.pendingBarters_),pendingKarmaEvents_(source.pendingKarmaEvents_),
       pendingTheftEvents_(source.pendingTheftEvents_),containerInteraction_(source.containerInteraction_),
-      containerKarmaCommitted_(source.containerKarmaCommitted_) {}
+      containerKarmaCommitted_(source.containerKarmaCommitted_),eventDiagnostic_(source.eventDiagnostic_) {}
 std::unique_ptr<ScriptTransactionPlan> Player::PrepareScriptTransaction(
     const std::function<bool(Player&,std::string&)>& execute,std::string& error,bool capturePrograms) const {
   error.clear();
