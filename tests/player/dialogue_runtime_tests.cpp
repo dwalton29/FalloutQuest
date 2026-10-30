@@ -8,7 +8,14 @@
 #include "dialogue/fo3-dialogue-session.h"
 #include <unistd.h>
 std::vector<Q230ActorVisual> gQ230NpcActors;
-struct StaticReference {uint32_t refFormId=0;};
+struct StaticReference {uint32_t refFormId=0;bool q230NpcActor=false,physicalWeapon=false,q2400SwingDoor=false;std::string baseRecordType;};
+std::array<StaticReference,2> gQ220Grab{};
+std::unordered_set<uint32_t> gFo3ScriptRemovedItems;
+std::unordered_map<uint32_t,int> gQ223DynamicBodies;
+int retiredDisplays=0,collisionRefreshes=0;
+void RetireFo3LooseBody(uint32_t){++retiredDisplays;}
+void RefreshFo3RemovedCollisionRefs(){++collisionRefreshes;}
+
 std::vector<StaticReference> gObjects;
 uint64_t gStereoFrame=0;
 bool loading=false,pipboy=false;
@@ -245,4 +252,31 @@ static void NonresidentPublication(){
   assert(Fo3AcceptsScenePublication(gFo3ScenePublication.Stamp()));
   std::cout<<"Production nonresident dialogue publication and busy-scene rejection passed\n";
 }
-int main(int argc,char** argv){Synthetic();SkipWithA();BarterBridge();NonresidentPublication();if(argc>1)OriginalBridge(argv[1]);std::cout<<"Dialogue bridge lifecycle tests passed\n";}
+static void OriginalMoiraInterview(const char* path){
+  fo3player::Catalog catalog;std::string error;assert(fo3player::LoadCatalog(path,catalog,error));
+  const auto ref=catalog.pipboy.formNames.at("moirabrownref"),display=catalog.pipboy.formNames.at("ms03armoredvaultsuitref"),gift=catalog.pipboy.formNames.at("ms03vaultsuit101armored");
+  for(uint32_t answer:{0x5ecc5u,0x5ecc4u,0x5ecc3u,0x5ecc2u,0x5ecc1u}){
+    gPlayerSession=std::make_unique<Session>(catalog);auto& p=gPlayerSession->player;p.RegisterOriginalActors();gFo3ScriptRemovedItems.clear();
+    const auto& placed=catalog.pipboy.targets.at(ref);gCurrentCellFormId=placed.cell;gExteriorWorldspaceQ1890=placed.world;
+    p.SetScriptPlayerLocation(placed.x,placed.y+40,placed.z,placed.cell,placed.world);
+    gQ230NpcActors.clear();gObjects={{display,false,false,false,"ARMO"}};
+    gFo3ReferenceState=std::make_shared<const fo3world::ReferenceStateSnapshot>(p.CaptureReferenceState());gFo3ScenePublication.Publish(gFo3ReferenceState);
+    fo3dialogue::Context ctx;ctx.player=&p;ctx.speaker={ref,placed.base,placed.cell,placed.world,0,placed.x,placed.y,placed.z,false,false};ctx.target={fo3player::PlayerRef,7,placed.cell,placed.world,0,placed.x,placed.y+40,placed.z,false,false};
+    fo3dialogue::Session talk;talk.previewReferences=PreviewFo3DialogueReferences;talk.publishReferences=PublishFo3DialogueReferences;
+    const auto finish=[&](){unsigned count=0;while(talk.phase==fo3dialogue::Phase::Speaking){assert(++count<100);talk.AudioDone(talk.audioToken,true,ctx,p);}};
+    const auto choose=[&](uint32_t topic){const auto i=std::find_if(talk.choices.begin(),talk.choices.end(),[&](const auto& c){return c.topic==topic;});assert(i!=talk.choices.end());assert(talk.Choose(size_t(i-talk.choices.begin()),ctx,p));finish();};
+    assert(talk.Start(ctx,p));finish();choose(0x5ecc0);
+    // The displayed ARMO is resident here, unlike the old data-only fixture.
+    for(uint32_t option:{0x5ecc5u,0x5ecc4u,0x5ecc3u,0x5ecc2u,0x5ecc1u})assert(std::any_of(talk.choices.begin(),talk.choices.end(),[&](const auto& c){return c.topic==option;}));
+    if(answer==0x5ecc5){
+      const auto* info=talk.Resolve(answer,ctx);assert(info);auto plan=p.PrepareDialogueInfoTransaction(info->topic,info->id,fo3player::DialogueScriptPhase::Both,error,ref);assert(plan);
+      gQ220Grab[0].refFormId=display;assert(!PreviewFo3DialogueReferences(p,*plan,error)&&!PublishFo3DialogueReferences(p,*plan,error)&&p.ItemCount(gift)==0);gQ220Grab[0].refFormId=0;
+    }
+    const int retired=retiredDisplays,collisions=collisionRefreshes;choose(answer);
+    assert(p.ItemCount(gift)==1&&gFo3ScriptRemovedItems.count(display)&&!p.IsCollected(display));
+    assert(retiredDisplays==retired+1&&collisionRefreshes==collisions+1&&!gFo3ReferenceState->Enabled(display,true));
+    talk.End("leave shop");
+  }
+  std::cout<<"Original Moira five vault answers with resident display removal and real publication bridge passed\n";
+}
+int main(int argc,char** argv){Synthetic();SkipWithA();BarterBridge();NonresidentPublication();if(argc>1){OriginalBridge(argv[1]);OriginalMoiraInterview(argv[1]);}std::cout<<"Dialogue bridge lifecycle tests passed\n";}

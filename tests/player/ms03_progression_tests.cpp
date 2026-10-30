@@ -126,6 +126,25 @@ static void Synthetic(){
  body.source="RewardKarma 99\nif player.GetAV FutureUnsupportedAV == 0\nendif";Check(!p.ExecuteDialogueResult(body,e)&&p.Snapshot().karma==karma,"entered unsupported query rolls back earlier effects");
  c.lootLists[2].entries={{2,0,1,1}};Player cycle(c);Check(!cycle.ExecuteDialogueResult(body,e)&&cycle.ItemCount(1)==0,"cyclic reward list rejected atomically");
 }
+static void ActorValueAndControlState(){
+ Catalog c;c.initial.baseHealth=100;c.initial.special.fill(5);c.rules.apBase=100;
+ Player p(c);float value=-1;std::string error;
+ Check(p.ActorValue(PlayerRef,25,value)&&value==100&&p.ActorValue(PlayerRef,54,value)&&value==0,"original condition/radiation defaults");
+ Check(p.ChangeActorValueDamage(PlayerRef,54,600,false)&&p.ChangeActorValueDamage(PlayerRef,25,100,false)&&p.DamageHealth(60),"shared damage modifiers");
+ Check(p.HealthPercentage(PlayerRef)==.4f&&p.ActorValue(PlayerRef,25,value)&&value==0,"health percentage and crippled condition");
+ fo3pipdata::ResultScript script;script.source="if player.getav radiationrads >= 600 && player.gethealthpercentage <= 0.5\nRewardKarma 1\nendif";
+ Check(p.ExecuteDialogueResult(script,error)&&p.Snapshot().karma==1,"source reads canonical radiation and injury");
+ script.source="player.RestoreAV RadiationRads 1000\nUnavailableEffect";Check(!p.ExecuteDialogueResult(script,error)&&p.Snapshot().pipboy.radiation==600,"unsupported healing result rolls back");
+ script.source="DisablePlayerControls 1 0 1 0 0 0 0\nplayer.SetRestrained 1";Check(p.ExecuteDialogueResult(script,error),error);
+ Check(p.PlayerControlDisabled(0)&&!p.PlayerControlDisabled(1)&&p.PlayerControlDisabled(2)&&!p.PlayerControlDisabled(6)&&p.Restrained(PlayerRef),"original seven control argument positions");
+ Roundtrip(p,c,[&](Player& loaded){
+  Check(loaded.Snapshot().pipboy.radiation==600&&loaded.ActorValue(PlayerRef,25,value)&&value==0&&loaded.PlayerControlDisabled(0)&&loaded.Restrained(PlayerRef),"mid-treatment modifiers/control/restraint persistence");
+  fo3pipdata::ResultScript heal;heal.source="player.RestoreAV RadiationRads 1000\nplayer.ResetHealth\nEnablePlayerControls\nplayer.SetRestrained 0";Check(loaded.ExecuteDialogueResult(heal,error),error);
+  Check(loaded.Health()==100&&loaded.ActorValue(PlayerRef,25,value)&&value==100&&loaded.Snapshot().pipboy.radiation==0&&!loaded.PlayerControlDisabled(0)&&!loaded.Restrained(PlayerRef),"shared treatment clears damage and restrictions");
+ });
+ Player lethal(c);Check(lethal.ChangeActorValueDamage(PlayerRef,54,1000,false)&&lethal.Health()==0,"lethal accumulated radiation");
+ std::cout<<"Canonical actor values, source healing/control flags, rollback and mid-treatment save/reload passed\n";
+}
 static void OriginalKeys(const Catalog& c){
  Player p(c);const auto key=Form(p,"pharmacykey");const auto box=ContainerRef(p,"sdmmetalbox01commercial");
  const uint32_t door=0x4135b;Check(p.GetLock(door).locked&&!p.CanOpenDoor(door),"pharmacy door initially locked");
@@ -157,4 +176,4 @@ static void Original(const char* path){
  Completion(reverse,c,true,0x2d287);
  std::cout<<"Original MS03 foreword, assignment, pharmacy key, intercom/reinforcements, food-only and both collection orders, bonus, rewards, return and reload passed; physical traversal not simulated\n";
 }
-int main(int argc,char** argv){try{Synthetic();if(argc<2){std::cout<<"Shared reward/control-flow tests passed; original MS03 requires Fallout3.esm\n";return 0;}Original(argv[1]);}catch(const std::exception& e){std::cerr<<e.what()<<"\n";return 1;}}
+int main(int argc,char** argv){try{Synthetic();ActorValueAndControlState();if(argc<2){std::cout<<"Shared reward/control-flow tests passed; original MS03 requires Fallout3.esm\n";return 0;}Original(argv[1]);}catch(const std::exception& e){std::cerr<<e.what()<<"\n";return 1;}}

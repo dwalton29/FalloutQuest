@@ -551,7 +551,7 @@ static const fo3pipdata::PackageDefinition* Q240SelectPackage(
     if(package.type==10&&(package.location.valid||!package.target.valid||package.target.type!=0||package.target.radius<=0||package.procedureActions)){
       Q240AiLogOnce(actor.source.refFormId,packageId,"Flee requires an actor reference, positive minimum distance, no start location or procedure action");continue;
     }
-    if(package.type==15&&(!package.target.valid||package.target.type!=0||package.target.value==0x14||!package.target.value||package.target2.valid||package.location2.valid||package.procedureActions||package.otherProcedureScript)){
+    if(package.type==15&&(!package.target.valid||package.target.type!=0||!package.target.value||package.target2.valid||package.location2.valid||package.procedureActions||package.otherProcedureScript)){
       Q240AiLogOnce(actor.source.refFormId,packageId,"Dialogue AI requires one real actor target and no unsupported procedure actions");continue;
     }
     if(!package.combatStyleValid){Q240AiLogOnce(actor.source.refFormId,packageId,"malformed package combat style");continue;}
@@ -569,7 +569,7 @@ static const fo3pipdata::PackageDefinition* Q240SelectPackage(
     // For actor-to-actor packages the actual interlocutor, NOT the player,
     // is the CTDA target. Never accidentally satisfy run-on-target quests
     // using the player as a substitute.
-    if(package.type==15){
+    if(package.type==15&&package.target.value!=0x14){
       const auto placement=definitions.targets.find(package.target.value);
       std::array<float,3> listener{};
       if(placement==definitions.targets.end()||
@@ -1608,7 +1608,8 @@ void Q240UpdateNpcPackage(Q230ActorVisual& actor,double now) {
   const auto position=actor.runtime.position;
   const auto yaw=actor.runtime.yaw;
   const auto animation=actor.runtime.animation;
-  Q240AdvanceNpcPackage(actor,now);
+  if(actor.runtime.OwnsAuthoredMotion(now)||(gPlayerSession&&gPlayerSession->player.Restrained(actor.source.refFormId))){actor.runtime.speed=0;actor.runtime.animation=fo3npc::Animation::Idle;}
+  else Q240AdvanceNpcPackage(actor,now);
   // Interaction bounds can sample the skin earlier in this stereo frame.
   // A changed package root/clip must still be submitted before world drawing.
   if(position!=actor.runtime.position||yaw!=actor.runtime.yaw||animation!=actor.runtime.animation)

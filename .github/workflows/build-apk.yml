@@ -33,6 +33,7 @@ jobs:
           g++ -std=c++17 -Wall -Wextra -Werror -Itests/render/mock -Iapp/src/main/cpp tests/render/native_frontend_tests.cpp -o /tmp/fq-native-frontend
           /tmp/fq-native-frontend
           python3 tests/render/test_native_dispatch.py
+          python3 tests/render/test_door_lookup.py
           python3 tests/render/test_gpu_session_lifetime.py
           python3 tests/render/test_exterior_texture_upload.py
       - name: Render original shaders through Vulkan multiview on software GPU

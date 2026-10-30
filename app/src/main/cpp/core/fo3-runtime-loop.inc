@@ -1470,6 +1470,14 @@ private:
             sneakDown_=false;activateDownQ1700_=pipBackDown_=barterConfirmDown_=false;
         }
 
+        if(gPlayerSession){const auto& p=gPlayerSession->player;
+            // Scripted restrictions affect game controls; tracked head/hands and
+            // the system pause control always remain live for VR comfort.
+            if(p.PlayerControlDisabled(0)||p.Restrained(fo3player::PlayerRef))moveX_=moveY_=0;
+            if(p.PlayerControlDisabled(4))turnX_=0;
+            if(p.PlayerControlDisabled(6))sneakDown_=false;
+            if(p.PlayerControlDisabled(5))activateDownQ1700_=false;
+        }
         const XrSpaceLocationFlags required = XR_SPACE_LOCATION_POSITION_VALID_BIT |
                                               XR_SPACE_LOCATION_ORIENTATION_VALID_BIT;
         for (uint32_t hand = 0; hand < 2; ++hand) {

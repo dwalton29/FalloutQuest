@@ -59,7 +59,32 @@ void Dialogue(const std::string& p,uint32_t t){path=p;token=t;completion=0;}
 uint64_t DialogueCompletion(){return completion;}
 }
 #include "scripting/fo3-world-script-runtime.inc"
-int main(){try{
+static void OriginalPrayer(const char* path){
+ fo3player::Catalog catalog;std::string error;Check(fo3player::LoadCatalog(path,catalog,error),"original prayer catalogue");
+ gPlayerSession=std::make_unique<fo3player::Session>(catalog);auto& p=gPlayerSession->player;p.RegisterOriginalActors();
+ const auto ref=catalog.pipboy.formNames.at("confessorcromwellref"),marker=catalog.pipboy.formNames.at("megcromwellpraybombmarkerref");
+ const auto& at=catalog.pipboy.targets.at(marker);gCurrentCellFormId=at.cell;gExteriorWorldspaceQ1890=at.world;
+ p.SetScriptPlayerLocation(at.x+100,at.y,at.z,at.cell,at.world);gQ210Head[0]=at.x+100;gQ210Head[1]=at.z;gQ210Head[2]=-at.y;
+ auto state=p.Snapshot().actors.at(ref);state.position={at.x,at.y,at.z};state.cell=at.cell;state.world=at.world;Check(p.UpdateActor(ref,state),"resident at original prayer marker");
+ gQ230NpcActors.clear();ActorVisual actor;actor.source={ref,catalog.pipboy.targets.at(ref).base};actor.runtime.position={at.x,at.y,at.z};gQ230NpcActors.push_back(actor);++gQ230NpcResidenceRevision;
+ fo3worldscript::SpeechTick();
+ Check(fo3worldscript::Event(ref,"OnLoad",0),"original Cromwell OnLoad");
+ const auto errors=[&](const std::string& text){std::cerr<<text<<"\n";};p.SetScriptEventDiagnostic(errors);
+ p.PumpReferenceGameMode(.3,{ref});fo3worldscript::Actions();fo3worldscript::SpeechTick();
+ Check(p.ScriptActorTalking(ref),"original StartConversation begins prayer");
+ std::unordered_set<uint32_t> spoken;unsigned gestures=0;
+ while(p.ScriptActorTalking(ref)){
+  const auto* info=fo3worldscript::speech.Current(catalog.pipboy);Check(info&&spoken.insert(info->id).second,"authored prayer line does not repeat");
+  for(const auto& r:info->responses)if(r.speakerAnimation){Check(catalog.pipboy.idleModels.count(r.speakerAnimation),"original preaching IDLE bound");++gestures;}
+  Check(spoken.size()<=32,"bounded original prayer chain");
+  fo3audio::completion=(uint64_t(fo3audio::token)<<1)|1;fo3worldscript::SpeechTick();
+ }
+ Check(spoken.size()==17&&gestures==15,"all original prayer lines and authored gestures");
+ const auto key=fo3dialogue::VariableKey(catalog.pipboy,"ConfessorCromwellREF.Tick");Check(p.Snapshot().pipboy.dialogueVariables.at(key)==0,"authored final Amen resets prayer tick");
+ const auto before=fo3audio::token;p.PumpReferenceGameMode(.3,{ref});fo3worldscript::Actions();fo3worldscript::SpeechTick();Check(!p.ScriptActorTalking(ref)&&fo3audio::token==before,"source timer prevents immediate repeat");
+ std::cout<<"Original Cromwell OnLoad/GameMode, self conversation, 17 linked lines, 15 gestures and final reset passed\n";
+}
+int main(int argc,char** argv){try{
  fo3player::Catalog c;c.initial.baseHealth=100;c.initial.special.fill(5);
  c.references[10].base=100;c.references[10].cell=1;c.pipboy.targets[10].cell=1;
  c.pipboy.triggerPrimitives[10]={{2,2,2},1,true};c.eventBaseScripts[100]=200;c.pipboy.objectReferenceScripts[10]={200,100};
@@ -137,5 +162,6 @@ int main(){try{
  Check(p.ScriptActorTalking(81)&&fo3audio::path=="sound/original.ogg","production TACT adapter delivers original speech without NPC mesh");
  fo3audio::completion=(uint64_t(fo3audio::token)<<1)|1;fo3worldscript::SpeechTick();
  Check(!p.ScriptActorTalking(81),"TACT speech releases on actual voice completion");
+ if(argc>1)OriginalPrayer(argv[1]);
  std::cout<<"World event/controller/presentation and original speech adapters passed\n";
 }catch(const std::exception& e){std::cerr<<e.what()<<"\n";return 1;}}

@@ -1,5 +1,6 @@
 #include "fo3-script-evidence-budget.h"
 #include "fo3-script-local-policy.h"
+#include "player/fo3-actor-values.h"
 #include <cstring>
 // Shared source-script execution for dialogue results and QUST stage items.
 // Compiled-only bytecode and event blocks are retained, never guessed or skipped.
@@ -53,13 +54,6 @@ class Expression {
       if(at==tokens.size()||tokens[at++]!="player")return Fail("unsupported action reference");
       value=p.ScriptActivator()==fo3player::PlayerRef;return true;
     }
-    if(t=="player.getav"){
-      if(at==tokens.size())return Fail("missing actor value");
-      const auto name=tokens[at++];
-      static const char* skills[]={"barter","bigguns","energyweapons","explosives","lockpick","medicine","meleeweapons","repair","science","smallguns","sneak","speech","throwing","unarmed"};
-      for(size_t i=0;i<14;++i)if(name==skills[i]){value=p.Snapshot().skills[i];return true;}
-      return Fail("unsupported player actor value "+name);
-    }
     if(t=="player.getitemcount"){
       if(at==tokens.size())return Fail("missing item form");
       const auto id=form(tokens[at++]);if(!id)return Fail("unresolved item form");
@@ -111,10 +105,16 @@ class Expression {
       const auto id=dot==std::string::npos?owner:form(t.substr(0,dot));
       if(at==tokens.size())return Fail("missing actor value");
       const auto name=tokens[at++];
-      if(name=="aggression"||name=="assistance")return p.ActorAIValue(id,name=="aggression"?0:57,value)||Fail("AI actor value unavailable");
-      if(name.size()!=10||name.substr(0,8)!="variable"||name[8]<'0'||name[8]>'1'||name[9]<'0'||name[9]>'9')return Fail("unsupported actor value");
-      const auto slot=(name[8]-'0')*10+name[9]-'0';
-      return (slot>=1&&slot<=10&&p.ActorVariable(id,uint32_t(slot-1),value))||Fail("actor variable unavailable");
+      uint32_t valueId=fo3av::ID(name);
+      if(name=="aggression")valueId=0;
+      if(name=="assistance")valueId=57;
+      if(name.size()==10&&name.substr(0,8)=="variable"&&name[8]>='0'&&name[8]<='1'&&name[9]>='0'&&name[9]<='9'){
+        const unsigned slot=(name[8]-'0')*10+name[9]-'0';if(slot>=1&&slot<=10)valueId=61+slot;
+      }
+      return p.ActorValue(id,valueId,value)||Fail("actor value unavailable "+name);
+    }
+    if(query=="gethealthpercentage"){
+      const auto id=dot==std::string::npos?owner:form(t.substr(0,dot));value=p.HealthPercentage(id);return value>=0||Fail("actor health unavailable");
     }
     if(query=="getdisabled"){
       const auto id=dot==std::string::npos?owner:form(t.substr(0,dot));bool disabled=false;
@@ -438,6 +438,7 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
     case C::Kill:ok=KillActor(c.form);break;
     case C::MoveTo:ok=MoveActorTo(c.form,c.index,c.offset);break;
     case C::ResetHealth:ok=ResetActorHealth(c.form);break;
+    case C::ActorValueDamage:ok=ChangeActorValueDamage(c.form,c.index,c.value,c.variable!=0);break;
     case C::SetActorAIValue:ok=SetActorAIValue(c.form,c.index,c.value);break;
     case C::SetQuestDelay:ok=SetQuestScriptDelay(c.form,c.value);break;
     case C::FactionRelation:ok=SetFactionRelation(c.form,c.index,c.value!=0,(c.variable&1)!=0,(c.variable&2)!=0);break;
@@ -445,12 +446,15 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
     case C::SetActorValue:ok=SetActorVariable(c.form,c.index,c.value);break;
     case C::Look:{fo3pipdata::Location location;ok=ScriptReferenceLocation(c.form,location)&&(!c.index||ScriptReferenceLocation(c.index,location));if(ok){fo3script::Action action;action.kind=fo3script::ActionKind::Look;action.reference=c.form;action.form=c.index;ok=QueueScriptAction(std::move(action));}break;}
     case C::ScriptPackage:ok=ScriptPackage(c.form,c.index,c.value!=0);break;
+    case C::StartConversation:ok=QueueScriptSpeech(c.form,uint32_t(c.variable),c.index,true);break;
     case C::SayTo:ok=QueueScriptSpeech(c.form,uint32_t(c.variable),c.index);break;
     case C::Variable:case C::Global:
       ok=fo3script::Expression(*this,owner,c.expression,error,scriptId).Evaluate(value);
       if(ok)ok=c.type==C::Variable?SetDialogueVariable(c.variable,value):SetGlobalValue(c.form,value);
       break;
-    case C::EnableControls:break; // Existing VR interaction keeps controls enabled.
+    case C::EnableControls:ok=SetPlayerControls(127,true);break;
+    case C::PlayerControls:ok=SetPlayerControls(c.index,c.value!=0);break;
+    case C::Restrain:ok=SetRestrained(c.form,c.value!=0);break;
     case C::StartQuest:ok=StartQuest(c.form);break;
     case C::StopQuest:ok=StopQuest(c.form);break;
     case C::Stage:ok=RunQuestStage(c.form,uint16_t(c.index),depth+1,budget,error);break;
@@ -928,7 +932,7 @@ bool Player::ScriptPackage(uint32_t reference,uint32_t package,bool add){
 }
 
 namespace fo3player {
-bool Player::QueueScriptSpeech(uint32_t reference,uint32_t topic,uint32_t target){
+bool Player::QueueScriptSpeech(uint32_t reference,uint32_t topic,uint32_t target,bool conversation){
   static thread_local unsigned selecting=0;
   if(selecting>=8)return false;
   struct Guard{unsigned& depth;Guard(unsigned& d):depth(d){++depth;}~Guard(){--depth;}} guard(selecting);
@@ -948,7 +952,7 @@ bool Player::QueueScriptSpeech(uint32_t reference,uint32_t topic,uint32_t target
   // A legitimate empty selection is a no-op. An unsupported preflight must
   // roll back the caller too, rather than saving its waiting flags without speech.
   if(!selected)return !unsupported;
-  fo3script::Action action;action.kind=fo3script::ActionKind::SayTo;action.reference=reference;action.form=topic;action.flags=target;action.info=selected->id;
+  fo3script::Action action;action.kind=conversation?fo3script::ActionKind::Conversation:fo3script::ActionKind::SayTo;action.reference=reference;action.form=topic;action.flags=target;action.info=selected->id;
   return QueueScriptAction(std::move(action));
 }
 }

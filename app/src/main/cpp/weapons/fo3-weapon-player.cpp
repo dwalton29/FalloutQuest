@@ -322,7 +322,10 @@ bool Player::SetActorAIValue(uint32_t reference,uint32_t valueId,float value){
   return true;
 }
 bool Player::ResetActorHealth(uint32_t reference) {
-  if(reference==PlayerRef)return Health()<=0||RestoreHealth(MaxHealth());
+  if(reference==PlayerRef){
+    if(Health()<=0)return true;
+    RestoreHealth(MaxHealth());for(uint32_t id=25;id<=30;++id)ChangeActorValueDamage(reference,id,100,true);return true;
+  }
   const float health=ActorHealth(reference);
   if(health<0)return false;
   if(health==0)return true;

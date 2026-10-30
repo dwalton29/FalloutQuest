@@ -6,7 +6,7 @@ enum class Phase { Inactive, Speaking, Choices };
 struct Choice {uint32_t topic=0,info=0;std::string text;};
 struct Session {
   Phase phase=Phase::Inactive;
-  bool scriptedTopic=false;
+  bool scriptedTopic=false,linkedConversation=false;
   uint32_t actor=0,base=0,topic=0,info=0,voice=0;
   size_t response=0,selected=0;
   uint32_t audioToken=0;
@@ -25,7 +25,7 @@ struct Session {
   bool CanStart(const Context&)const;
   bool CanActivate(const Context&)const;
   bool StartTopic(uint32_t topic,const Context&,fo3player::Player&);
-  bool StartSelectedTopic(uint32_t topic,uint32_t info,const Context&,fo3player::Player&);
+  bool StartSelectedTopic(uint32_t topic,uint32_t info,const Context&,fo3player::Player&,bool conversation=false);
   bool Start(const Context&,fo3player::Player&);
   bool Choose(size_t,const Context&,fo3player::Player&);
   bool AudioDone(uint32_t,bool,const Context&,fo3player::Player&);

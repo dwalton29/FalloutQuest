@@ -45,7 +45,7 @@ bool Session::StartTopic(uint32_t requested,const Context& ctx,fo3player::Player
   actor=ctx.speaker.reference;base=ctx.speaker.base;voice=p.ActorVoice(actor);if(!voice)voice=fo3pipdata::ActorVoice(p.Definitions().pipboy,base);
   return Enter(*chosen,ctx,p);
 }
-bool Session::StartSelectedTopic(uint32_t requested,uint32_t selected,const Context& ctx,fo3player::Player& p){
+bool Session::StartSelectedTopic(uint32_t requested,uint32_t selected,const Context& ctx,fo3player::Player& p,bool conversation){
   if(Active()||!ctx.player||ctx.speaker.combat||!ScriptSpeakerAlive(ctx,p))return false;
   const auto topic=p.Definitions().pipboy.topics.find(requested);if(topic==p.Definitions().pipboy.topics.end())return false;
   const auto chosen=std::find_if(topic->second.begin(),topic->second.end(),[&](const auto& i){return i.id==selected;});
@@ -54,7 +54,7 @@ bool Session::StartSelectedTopic(uint32_t requested,uint32_t selected,const Cont
   // later script assignments. Revalidate result capability at audio admission.
   std::string error;auto plan=p.PrepareDialogueInfoTransaction(requested,selected,fo3player::DialogueScriptPhase::Both,error,ctx.speaker.reference);
   if(!plan||(plan->HasReferenceChanges()&&(!previewReferences||!previewReferences(p,*plan,error))))return false;
-  scriptedTopic=true;actor=ctx.speaker.reference;base=ctx.speaker.base;voice=p.ActorVoice(actor);if(!voice)voice=fo3pipdata::ActorVoice(p.Definitions().pipboy,base);
+  scriptedTopic=true;linkedConversation=conversation;actor=ctx.speaker.reference;base=ctx.speaker.base;voice=p.ActorVoice(actor);if(!voice)voice=fo3pipdata::ActorVoice(p.Definitions().pipboy,base);
   return Enter(*chosen,ctx,p);
 }
 bool Session::Start(const Context& ctx,fo3player::Player& p) {
@@ -117,7 +117,18 @@ bool Session::AudioDone(uint32_t token,bool success,const Context& ctx,fo3player
   std::string error;if(!Execute(*i,fo3player::DialogueScriptPhase::End,p,error)){if(diagnostic)diagnostic("DIALOGUE UNSUPPORTED SCRIPT info="+Id(i->id)+" "+error);End("end result rejected");return false;}
   if(diagnostic&&!i->end.source.empty())diagnostic("DIALOGUE RESULT info="+Id(i->id)+" phase=end");
   p.RecordDialogue(actor,(i->flags&4)?i->id:0,i->addedTopics,!scriptedTopic&&ctx.target.reference==fo3player::PlayerRef,(i->flags2&1u)?i->id:0);
-  if(scriptedTopic){End("scripted INFO completed");return false;}
+  if(scriptedTopic){
+    if(linkedConversation&&!(i->flags&1)&&!i->links.empty()){
+      auto next=ctx;if(i->nextSpeaker==0)std::swap(next.speaker,next.target);
+      if(next.speaker.reference!=fo3player::PlayerRef&&ScriptSpeakerAlive(next,p)){
+        for(auto link:i->links)if(const auto* line=Resolve(link,next,true)){
+          actor=next.speaker.reference;base=next.speaker.base;voice=p.ActorVoice(actor);if(!voice)voice=fo3pipdata::ActorVoice(p.Definitions().pipboy,base);
+          return Enter(*line,next,p);
+        }
+      }
+    }
+    End("scripted INFO completed");return false;
+  }
   if(i->flags&1){End("authored goodbye");return false;}
   phase=Phase::Choices;BuildChoices(ctx);return false;
 }
@@ -131,6 +142,6 @@ std::string Session::Subtitle(const fo3pipdata::Definitions& d)const {
 }
 void Session::End(const std::string& reason) {
   if(Active()&&diagnostic)diagnostic("DIALOGUE END actor="+Id(actor)+" info="+Id(info)+" reason="+reason);
-  interruption=reason;phase=Phase::Inactive;actor=base=topic=info=voice=0;response=selected=0;choices.clear();++audioToken;
+  linkedConversation=false;interruption=reason;phase=Phase::Inactive;actor=base=topic=info=voice=0;response=selected=0;choices.clear();++audioToken;
 }
 }

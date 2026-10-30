@@ -55,4 +55,20 @@ inline bool NonresidentActorRemoval(const fo3player::Player& player,
   }
   return true;
 }
+// Existing inventory displays can be hidden without rebuilding GPU resources.
+// Every affected reference must be an actual item and become disabled; a held
+// item, actor, furniture, load door or enabling change still needs its owner.
+template<class Available>
+inline bool InventoryReferenceRemoval(const fo3player::Player& player,
+    const fo3player::ScriptTransactionPlan& plan,Available available,std::string& error){
+  const auto after=plan.CandidateReferences();const auto& catalog=player.Definitions();
+  if(!after||plan.AffectedReferences().empty())return false;
+  for(auto ref:plan.AffectedReferences()){
+    const auto item=catalog.references.find(ref);
+    if(item==catalog.references.end()||!item->second.valid||!catalog.items.count(item->second.base)||
+       after->Enabled(ref,true)||!available(ref)){error="inventory removal requires an unheld disabled item";return false;}
+  }
+  error.clear();return true;
+}
+
 }

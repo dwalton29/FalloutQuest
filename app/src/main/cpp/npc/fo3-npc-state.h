@@ -48,6 +48,8 @@ struct RuntimeState {
   std::array<float,3> position{},destination{};
   float aimPitch=0;
   float yaw=0,authoredYaw=0,returnYaw=0,speed=0,headYaw=0,suspendedSpeed=0;
+  double authoredMotionUntil=0;
+  bool OwnsAuthoredMotion(double now)const{return Alive()&&activity!=Activity::Combat&&now<authoredMotionUntil;}
   bool dialogue=false,speaking=false,packageKnown=false;
   uint32_t suspendedPackage=0;
   float suspendedPackageWait=0;

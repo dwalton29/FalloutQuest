@@ -390,7 +390,7 @@ bool Player::CanUse(uint64_t id, std::string *why) const {
     if (m == catalog_->pipboy.magic.end() || e.conditional || e.area ||
         e.duration || e.range || m->second.archetype != 0 ||
         (m->second.flags & 0x100000) ||
-        ((m->second.av != 16) && (m->second.av != 12)))
+        ((m->second.av != 16) && (m->second.av != 12) && (m->second.av != 54) && (m->second.av < 25 || m->second.av > 30)))
       return reject("Requires timed, conditional or unsupported actor effect");
   }
   return true;
@@ -405,17 +405,7 @@ bool Player::Use(uint64_t id) {
   for (auto &e : effects) {
     auto &m = catalog_->pipboy.magic.at(e.id);
     float amount = float(e.magnitude);
-    if (m.av == 16) {
-      if (m.flags & 4)
-        DamageHealth(amount);
-      else
-        RestoreHealth(amount);
-    } else if (m.av == 12) {
-      if (m.flags & 4) {
-        state_.apSpent = std::min(MaxActionPoints(), state_.apSpent + amount);
-      } else
-        RestoreActionPoints(amount);
-    }
+    ChangeActorValueDamage(PlayerRef,m.av,amount,(m.flags&4)==0);
   }
   --s->count;
   if (!s->count)

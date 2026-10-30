@@ -53,6 +53,7 @@ void UpdateFo3Pipboy(uint64_t frame, double now, const float *headPose,
   if (gSceneReady && !fo3pipui::State().attempted)
     fo3pipui::Ensure();
   auto *session = GetFo3PlayerSession();
+  if(session&&session->player.PlayerControlDisabled(1))available=false;
   fo3pip::View view;
   if (gPipSolved) {
     Vec3 c{gPipSurface.center.x / FO3_UNITS_PER_METRE,

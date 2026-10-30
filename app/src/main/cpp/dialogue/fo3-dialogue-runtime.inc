@@ -40,24 +40,39 @@ void DialogueDiagnostic(const std::string& message) {
   if(message.find("UNSUPPORTED")!=std::string::npos&&!gDialogueDiagnostics.insert(message).second)return;
   Q6H_LOGI("%s",message.c_str());
 }
+static bool CanRemoveFo3DialogueInventory(uint32_t reference){
+  for(const auto& hand:gQ220Grab)if(hand.refFormId==reference)return false;
+  for(const auto& object:gObjects)if(object.refFormId==reference&&(object.q230NpcActor||object.physicalWeapon||object.q2400SwingDoor||object.baseRecordType=="FURN"))return false;
+  return true;
+}
 bool PreviewFo3DialogueReferences(const fo3player::Player& player,
     const fo3player::ScriptTransactionPlan& plan,std::string& error) {
-  if(!gSceneReady||gSceneLoad.active||IsFo3LoadingVisible()||Fo3ResidentAssetLaneBlocked()||
-     gQ230NpcArrival.active||!Fo3AcceptsScenePublication(gFo3ScenePublication.Stamp())){
+  if(!gSceneReady||gSceneLoad.active||IsFo3LoadingVisible()||!Fo3AcceptsScenePublication(gFo3ScenePublication.Stamp())){
     error="reference publication scene/background work busy";return false;
   }
   std::vector<uint32_t> live;
   for(const auto& a:gQ230NpcActors)live.push_back(a.source.refFormId);
   for(const auto& object:gObjects)live.push_back(object.refFormId);
-  return fo3script::NonresidentActorRemoval(player,plan,gCurrentCellFormId,gExteriorWorldspaceQ1890,live,error);
+  return fo3script::NonresidentActorRemoval(player,plan,gCurrentCellFormId,gExteriorWorldspaceQ1890,live,error)||
+    fo3script::InventoryReferenceRemoval(player,plan,CanRemoveFo3DialogueInventory,error);
 }
 bool PublishFo3DialogueReferences(fo3player::Player& player,
     fo3player::ScriptTransactionPlan& plan,std::string& error) {
   // Single render-thread turn; validate and allocate before logical publication.
   if(!PreviewFo3DialogueReferences(player,plan,error)||!player.CanCommitScriptTransaction(plan))return false;
+  auto removed=gFo3ScriptRemovedItems;
+  std::string removalError;
+  const bool inventory=fo3script::InventoryReferenceRemoval(player,plan,CanRemoveFo3DialogueInventory,removalError);
+  if(!inventory&&(Fo3ResidentAssetLaneBlocked()||gQ230NpcArrival.active)){error="reference publication background work busy";return false;}
+  if(inventory)for(auto ref:plan.AffectedReferences())removed.insert(ref);
   auto snapshot=plan.CandidateReferences();
   if(!player.CommitScriptTransaction(plan)){error="reference transaction changed";return false;}
   gFo3ReferenceState=snapshot;gFo3ScenePublication.Publish(std::move(snapshot));
+  if(inventory){
+    gFo3ScriptRemovedItems.swap(removed);
+    for(auto ref:plan.AffectedReferences()){RetireFo3LooseBody(ref);gQ223DynamicBodies.erase(ref);}
+    RefreshFo3RemovedCollisionRefs();
+  }
   return true;
 }
 void ConfigureFo3Dialogue() {
@@ -250,7 +265,7 @@ void UpdateFo3Dialogue(double now,float stick,bool a,bool b,bool focused,float h
       if(std::fabs(weights[c])<.001f)weights[c]=0;
     }
     if(actor.facialWeights!=weights){actor.facialWeights=weights;actor.lastFrame=UINT64_MAX;}
-    if(actor.runtime.activity!=fo3npc::Activity::Combat&&(actor.runtime.scriptLookTarget||actor.runtime.dialogue||std::fabs(actor.runtime.headYaw)>.01f||std::fabs(fo3npc::Angle(actor.runtime.yaw-actor.runtime.returnYaw))>.01f)) {
+    if(!actor.runtime.OwnsAuthoredMotion(gDialogueTime)&&actor.runtime.activity!=fo3npc::Activity::Combat&&(actor.runtime.scriptLookTarget||actor.runtime.dialogue||std::fabs(actor.runtime.headYaw)>.01f||std::fabs(fo3npc::Angle(actor.runtime.yaw-actor.runtime.returnYaw))>.01f)) {
       // Humanoid authored forward is +Y game space; scene Z is -game Y.
       const float x=actor.runtime.position[0],z=actor.runtime.position[2];
       std::array<float,3> chatPartner{};

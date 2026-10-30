@@ -24,7 +24,7 @@ bool BeginFo3PlayerSit(uint32_t reference){
  if(gPlayerSeat.seated){gPlayerSeat.Leave(now);return true;}
  const auto index=Fo3PlayerSeatSlot(reference);Vec3 eye;if(!Q211FindAvatarHeadAnchor(eye))return false;
  fo3seat::Pose sit,stand;
- if(!fo3seat::Targets(gPlayerSeat.scene->slots[index],gVrSkeleton,{eye.x*FO3_UNITS_PER_METRE,-eye.z*FO3_UNITS_PER_METRE,eye.y*FO3_UNITS_PER_METRE},sit,stand))return false;
+ if(!fo3seat::TargetsFromSceneEye(gPlayerSeat.scene->slots[index],gVrSkeleton,{eye.x,eye.y,eye.z},SCENE_FORWARD,FLOOR_Y,FO3_UNITS_PER_METRE,sit,stand))return false;
  sit.eye=Q240ScenePosition(sit.eye);stand.eye=Q240ScenePosition(stand.eye);sit.bodyDrop/=FO3_UNITS_PER_METRE;
  return gPlayerSeat.Begin(reference,index,sit,stand,now);
 }

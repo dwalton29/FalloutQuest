@@ -373,6 +373,7 @@ static void Q230SimulateActor(Q230ActorVisual& actor,double now) {
     }
     return;
   }
+  if(p.Restrained(actor.source.refFormId)){s.speed=0;s.animation=fo3npc::Animation::Idle;return;}
   const bool reloadAdvanced=Q230AdvanceReload(actor,now);
   // Preserve an authored short hit response before selecting the next combat action.
   if(now<s.hitUntil){s.speed=0;s.animation=fo3npc::Animation::Hit;return;}

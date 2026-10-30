@@ -63,6 +63,13 @@ struct Clip {
   std::vector<TextKey> textKeys;
   size_t compressedTracks = 0, ignoredControllers = 0;
 };
+// A response sequence that authors the accumulation root owns actor motion
+// until that sequence finishes. Gesture-only responses do not block locomotion.
+inline bool ControlsAccumulationRoot(const Clip& clip){
+  if(clip.accumulationRoot.empty())return false;
+  for(const auto& track:clip.tracks)if(track.bone==clip.accumulationRoot&&(track.hasTranslation||track.hasRotation))return true;
+  return false;
+}
 struct SampleTimings { double clipUs=0,skeletonUs=0; };
 struct Pose {
   int accumulation=-1;

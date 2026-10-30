@@ -620,7 +620,8 @@ void Q230UpdateActor(Q230ActorVisual &actor) {
     actor.responseLastTime=keyTime;
 #endif
     fo3anim::BindClip(actor.skeleton,responseClip->second,actor.pose);
-    if(!fo3anim::Sample(actor.skeleton,responseClip->second,responseNow-actor.responseStarted,actor.pose,&timings))return;
+    if(!fo3anim::Sample(actor.skeleton,responseClip->second,responseNow-actor.responseStarted,actor.pose,&timings,
+      fo3anim::ControlsAccumulationRoot(responseClip->second)?fo3anim::RootPolicy::Furniture:fo3anim::RootPolicy::Locomotion))return;
   }else if(furniturePose){
     const auto& authored=slot->idleMarker?slot->idles[furniture.idleIndex].clip:furniture.phase==fo3furniture::Phase::Enter?slot->program->enter:furniture.phase==fo3furniture::Phase::Exit?slot->program->exit:slot->program->loop;
     const double now=std::chrono::duration<double>(Fo3GameplayNow().time_since_epoch()).count();
@@ -656,7 +657,7 @@ void Q230UpdateActor(Q230ActorVisual &actor) {
   }else{
     actor.combatPose.instance=0;actor.combatPose.selected=fo3npc::Animation::Count;
   }
-  if(!furniturePose)fo3anim::LookYaw(actor.skeleton,actor.pose,actor.headBone,actor.runtime.headYaw);
+  if(!furniturePose&&!actor.runtime.OwnsAuthoredMotion(responseNow))fo3anim::LookYaw(actor.skeleton,actor.pose,actor.headBone,actor.runtime.headYaw);
   }} // A corpse is driven by physics, never a resampled death animation.
   auto root=fo3anim::Identity();const float yaw=actor.runtime.yaw-actor.runtime.authoredYaw;
   root[0]=root[10]=std::cos(yaw);root[2]=-std::sin(yaw);root[8]=-root[2];
@@ -794,6 +795,9 @@ void Q230DialogueResponseAnimation(Q230ActorVisual& actor,const fo3dialogue::Ses
   actor.responseToken=session.audioToken;actor.responseInfo=session.info;const auto* info=session.Current(gPlayerSession->player.Definitions().pipboy);
   const auto idle=info&&session.response<info->responses.size()?info->responses[session.response].speakerAnimation:0;
   actor.responseIdle=idle;actor.responseLastTime=-1;actor.responseStarted=std::chrono::duration<double>(Fo3GameplayNow().time_since_epoch()).count();actor.lastFrame=UINT64_MAX;
+  const auto authored=actor.responseClips.find(idle);
+  actor.runtime.authoredMotionUntil=authored!=actor.responseClips.end()&&fo3anim::ControlsAccumulationRoot(authored->second)&&authored->second.frequency>0?
+    actor.responseStarted+(authored->second.stop-authored->second.start)/authored->second.frequency:0;
   if(idle&&!actor.responseClips.count(idle))Q6H_LOGI("DIALOGUE IDLE UNAVAILABLE actor=%08X idle=%08X",actor.source.refFormId,idle);
 }
 #endif

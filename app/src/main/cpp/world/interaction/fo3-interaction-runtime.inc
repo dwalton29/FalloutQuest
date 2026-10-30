@@ -42,7 +42,7 @@ bool CollectFo3WorldReference(uint32_t reference) {
     RetireFo3LooseBody(reference);
     for(auto& hand:gQ220Grab) if(hand.refFormId==reference) hand={};
     gQ223DynamicBodies.erase(reference);
-    SetFo3CollectedCollisionRefs(player.Snapshot().collected);
+    RefreshFo3RemovedCollisionRefs();
     NotifyFo3ItemTransfer(ref.base,ref.count);
     Q6H_LOGI("ITEM PICKUP: reference=%08X base=%08X count=%d condition=%.3f weight=%.2f stacks=%zu",reference,ref.base,ref.count,ref.condition,
         player.InventoryWeight(),player.Snapshot().inventory.size());
@@ -60,6 +60,7 @@ bool QueryFo3Interaction(float ox, float oy, float oz, float dx, float dy,
         !std::isfinite(ox) || !std::isfinite(oy) || !std::isfinite(oz)) return false;
     dx /= length; dy /= length; dz /= length;
     auto& player = gPlayerSession->player;
+    if(player.PlayerControlDisabled(5))return false;
     const auto& catalog = player.Definitions();
     float best = 3.001f;
     Fo3DoorAimQ1700 door;

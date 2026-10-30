@@ -23,6 +23,12 @@ int main(int argc,char** argv){
   const int head=fo3anim::FindBone(skeleton,"Bip01 Head");assert(head>=0);const auto eye=fo3anim::Point(skeleton.bindGlobal[head],{});
   fo3furniture::Slot slot;slot.reference=100;slot.marker=*marker;slot.program=program;slot.alignment=fo3furniture::Alignment(slot.placement,*marker);
   assert(fo3seat::Targets(slot,skeleton,eye,sit,stand));
+  // Production eye anchors include non-zero SceneForward/FloorY offsets.
+  // Convert those before deforming through a game-space skeleton.
+  fo3seat::Pose actualSit,actualStand;
+  assert(fo3seat::TargetsFromSceneEye(slot,skeleton,{eye[0]/100,-1+eye[2]/100,-3-eye[1]/100},-3,-1,100,actualSit,actualStand));
+  for(int k=0;k<3;++k){assert(std::abs(actualSit.eye[k]-sit.eye[k])<.001f);assert(std::abs(actualStand.eye[k]-stand.eye[k])<.001f);}
+
   std::cout<<"Original chair marker="<<unsigned(marker->reference)<<" sitZ="<<sit.eye[2]<<" standZ="<<stand.eye[2]<<" drop="<<sit.bodyDrop<<"\n";
   assert(sit.eye[2]<stand.eye[2]-10&&sit.bodyDrop>10&&sit.bodyDrop<100);
   auto moved=slot;moved.placement.x=100;moved.placement.y=200;moved.placement.rz=1.57079633f;moved.alignment=fo3furniture::Alignment(moved.placement,moved.marker);

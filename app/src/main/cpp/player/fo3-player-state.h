@@ -185,6 +185,10 @@ struct State {
   uint16_t level = 1;
   int32_t baseHealth = 0;
   float karma = 0, healthDamage = 0, apSpent = 0;
+  // Damage modifiers: head, torso, left/right arm, left/right leg.
+  std::array<float,6> bodyDamage{};
+  uint8_t disabledControls=0;
+  std::unordered_set<uint32_t> restrainedActors;
   // One authoritative 24-hour clock shared by lighting and authored AI PACKs.
   // GameDaysPassed tracks midnight boundaries; dated calendar gates remain unsupported.
   float gameHour = 12.0f;
@@ -394,6 +398,13 @@ public:
   }
   float MaxHealth() const;
   float Health() const;
+  bool ActorValue(uint32_t reference,uint32_t value,float& result) const;
+  bool ChangeActorValueDamage(uint32_t reference,uint32_t value,float amount,bool restore);
+  float HealthPercentage(uint32_t reference) const;
+  bool SetPlayerControls(uint32_t mask,bool enable);
+  bool PlayerControlDisabled(unsigned bit)const{return bit<7&&(state_.disabledControls&(1u<<bit));}
+  bool SetRestrained(uint32_t reference,bool restrained);
+  bool Restrained(uint32_t reference)const{return state_.restrainedActors.count(reference)!=0;}
   float MaxActionPoints() const;
   float ActionPoints() const;
   float CarryCapacity() const;
@@ -522,7 +533,7 @@ public:
   bool ScriptAnimationPlaying(uint32_t reference,bool& playing) const;
   bool QueueScriptPlayGroup(uint32_t reference,const std::string& group,uint32_t flags);
   bool QueueScriptAction(fo3script::Action action);
-  bool QueueScriptSpeech(uint32_t reference,uint32_t topic,uint32_t target);
+  bool QueueScriptSpeech(uint32_t reference,uint32_t topic,uint32_t target,bool conversation=false);
   bool PollScriptAction(fo3script::Action& action);
   double ScriptSecondsPassed() const {return scriptElapsedSeconds_;}
   std::vector<std::pair<uint32_t,bool>> ScriptTriggerChanges() const;

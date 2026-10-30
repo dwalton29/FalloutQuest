@@ -47,4 +47,11 @@ inline bool Targets(const fo3furniture::Slot& slot,const fo3anim::Skeleton& skel
  fo3anim::Pose pose;fo3anim::BindClip(skeleton,program.loop,pose);if(!fo3anim::Sample(skeleton,program.loop,0,pose,nullptr,fo3anim::RootPolicy::Furniture,&loopRoot))return false;
  sit.bodyDrop=std::max(0.f,bindEye[2]-fo3anim::Point(pose.delta[size_t(head)],bindEye)[2]);return true;
 }
+inline bool TargetsFromSceneEye(const fo3furniture::Slot& slot,const fo3anim::Skeleton& skeleton,
+    const std::array<float,3>& sceneEye,float sceneForward,float floorY,float units,Pose& sit,Pose& stand){
+ if(!std::isfinite(units)||units<=0)return false;
+ const std::array<float,3> eye{sceneEye[0]*units,(sceneForward-sceneEye[2])*units,(sceneEye[1]-floorY)*units};
+ return Targets(slot,skeleton,eye,sit,stand);
+}
+
 }

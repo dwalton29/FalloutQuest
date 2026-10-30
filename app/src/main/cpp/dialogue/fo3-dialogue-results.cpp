@@ -1,4 +1,5 @@
 #include "fo3-dialogue-results.h"
+#include "player/fo3-actor-values.h"
 #include "fo3-dialogue-selection.h"
 #include <sstream>
 #include <cctype>
@@ -115,7 +116,13 @@ bool CompileResult(const fo3pipdata::Definitions& d,const fo3pipdata::ResultScri
       cmd.type=op=="if"?CommandType::If:CommandType::ElseIf;
       std::getline(in,cmd.expression);if(cmd.expression.empty()){error="missing conditional expression";return false;}
     } else if(op=="else"||op=="endif")cmd.type=op=="else"?CommandType::Else:CommandType::EndIf;
-    else if(op=="enableplayercontrols")cmd.type=CommandType::EnableControls; // VR keeps controls live throughout.
+    else if(op=="enableplayercontrols"||op=="disableplayercontrols"){
+      cmd.type=CommandType::PlayerControls;cmd.value=op=="enableplayercontrols";cmd.index=127;
+      for(unsigned n=0;n<7;++n){if(!(in>>a)){in.clear();break;}float flag;if(!number(a,flag)||(flag!=0&&flag!=1)){error="invalid player controls flag";return false;}if(flag==0)cmd.index&=~(1u<<n);}
+    }else if(op=="setrestrained"||(op.size()>14&&op.substr(op.size()-14)==".setrestrained")){
+      const auto dot=op.find('.');cmd.type=CommandType::Restrain;cmd.form=dot==std::string::npos?owner:form(op.substr(0,dot));
+      if(!cmd.form||!(in>>a)||!number(a,cmd.value)||(cmd.value!=0&&cmd.value!=1)){error="invalid SetRestrained";return false;}
+    }
     else if(op=="set") {
       if(!(in>>a>>b)||b!="to"){error="invalid assignment: "+line;return false;}
       std::getline(in,cmd.expression);cmd.variable=VariableKey(d,a,forms);
@@ -130,6 +137,10 @@ bool CompileResult(const fo3pipdata::Definitions& d,const fo3pipdata::ResultScri
       cmd.value=verb=="addscriptpackage"?1:0;
       if(verb!="stoplook"&&(!(in>>a)||!(cmd.index=form(a)))){error="invalid reference action argument";return false;}
       if(!cmd.form){error="invalid reference action receiver";return false;}
+    }
+    else if(op=="startconversation"||(op.find('.')!=std::string::npos&&op.substr(op.find('.')+1)=="startconversation")){
+      const auto dot=op.find('.');cmd.type=CommandType::StartConversation;cmd.form=dot==std::string::npos?owner:form(op.substr(0,dot));
+      if(!cmd.form||!(in>>a>>b)||!(cmd.index=form(a))||!(cmd.variable=form(b))){error="invalid StartConversation references/topic";return false;}
     }
     else if(op=="sayto"||op=="say"||(op.find('.')!=std::string::npos&&(op.substr(op.find('.')+1)=="say"||op.substr(op.find('.')+1)=="sayto"))){
       cmd.type=CommandType::SayTo;cmd.form=op.find('.')==std::string::npos?owner:form(op.substr(0,op.find('.')));cmd.index=fo3player::PlayerRef;
@@ -146,6 +157,11 @@ bool CompileResult(const fo3pipdata::Definitions& d,const fo3pipdata::ResultScri
     } else if(op=="resethealth"||(op.size()>12&&op.substr(op.size()-12)==".resethealth")){
       cmd.type=CommandType::ResetHealth;cmd.form=op=="resethealth"?owner:form(op.substr(0,op.size()-12));
       if(!cmd.form){error="invalid ResetHealth receiver";return false;}
+    } else if(op=="restoreav"||op=="restoreactorvalue"||op=="damageav"||op=="damageactorvalue"||
+              (op.find('.')!=std::string::npos&&(op.substr(op.find('.')+1)=="restoreav"||op.substr(op.find('.')+1)=="restoreactorvalue"||op.substr(op.find('.')+1)=="damageav"||op.substr(op.find('.')+1)=="damageactorvalue"))){
+      const auto dot=op.find('.');const auto verb=dot==std::string::npos?op:op.substr(dot+1);
+      cmd.type=CommandType::ActorValueDamage;cmd.form=dot==std::string::npos?owner:form(op.substr(0,dot));cmd.variable=verb.substr(0,7)=="restore";
+      if(!(in>>a>>b)||!cmd.form||(cmd.index=fo3av::ID(a))==UINT32_MAX||!number(b,cmd.value)||cmd.value<0){error="invalid actor value damage/restore";return false;}
     } else if(op=="setav"||(op.size()>6&&op.substr(op.size()-6)==".setav")){
       cmd.type=CommandType::SetActorValue;cmd.form=op=="setav"?owner:form(op.substr(0,op.size()-6));
       if(!(in>>a>>b)){error="missing actor value";return false;}
@@ -186,7 +202,7 @@ bool CompileResult(const fo3pipdata::Definitions& d,const fo3pipdata::ResultScri
     } else if(op=="addnote"||op=="player.addnote"||op=="removenote"||op=="player.removenote") {
       if(!(in>>a)||!(cmd.form=form(a))||!d.notes.count(cmd.form)){error="invalid note";return false;}
       cmd.type=op.find("remove")!=std::string::npos?CommandType::RemoveItem:CommandType::AddNote;cmd.value=1;
-    } else if(op=="showmap") {
+    } else if(op=="showmap"||op=="player.showmap") {
       if(!(in>>a)||!(cmd.form=form(a))||!d.markers.count(cmd.form)){error="invalid map marker";return false;}
       cmd.type=CommandType::ShowMap;cmd.value=0;
       if(in>>b){float travel;if(!number(b,travel)||(travel!=0&&travel!=1)){error="invalid map marker flag";return false;}cmd.value=travel;}
@@ -234,8 +250,8 @@ bool CompileResult(const fo3pipdata::Definitions& d,const fo3pipdata::ResultScri
     } else if(op=="setcellfullname") {
       cmd.type=CommandType::SetCellFullName;
       if(!(in>>a>>b)||!(cmd.form=form(a))||!(cmd.index=form(b))){error="invalid SetCellFullName";return false;}
-    } else if(op=="rewardxp"||op=="addachievement") {
-      cmd.type=op=="rewardxp"?CommandType::RewardXP:CommandType::AddAchievement;
+    } else if(op=="rewardxp"||op=="player.rewardxp"||op=="addachievement") {
+      cmd.type=op!="addachievement"?CommandType::RewardXP:CommandType::AddAchievement;
       if(!(in>>a)||!number(a,cmd.value)||cmd.value<0||double(cmd.value)>2147483647.0||std::floor(cmd.value)!=cmd.value){error="invalid XP/achievement integer";return false;}
     } else if(op=="disable"||op=="enable"||
         (op.size()>8&&op.compare(op.size()-8,8,".disable")==0)||

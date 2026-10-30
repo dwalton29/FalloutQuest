@@ -91,6 +91,7 @@ bool GetFo3DoorPromptQ1840(uint32_t, char *p, size_t n) {
 void SetFo3CollectedCollisionRefs(const std::unordered_set<uint32_t> &r) {
   removedCollision = r;
 }
+void RefreshFo3RemovedCollisionRefs(){SetFo3CollectedCollisionRefs(gPlayerSession->player.Snapshot().collected);}
 void FlushFo3PlayerState() { ++flushes; }
 #define Q6H_LOGI(...) ((void)0)
 #define Q6H_LOGW(...) ((void)0)

@@ -2295,6 +2295,8 @@ bool BuildCpuObjects(const Fo3WorldPlacement& placement, std::vector<CpuObject>&
 bool ResolveDoorTeleportCachedQ1698(uint32_t refFormId,
                                       bool wastelandExterior,
                                       Fo3DoorTeleport& out) {
+    static std::mutex cacheMutex;
+    std::lock_guard<std::mutex> cacheLock(cacheMutex);
     static std::unordered_map<uint32_t, Fo3DoorTeleport> cache;
     const auto cached = cache.find(refFormId);
     if (cached != cache.end()) {
@@ -2317,8 +2319,12 @@ bool ResolveDoorTeleportCachedQ1698(uint32_t refFormId,
                      refFormId, resolved.destinationDoorRefFormId,
                      resolved.destinationCellFormId);
         } else {
-            Q6H_LOGI("Q19.2 DOOR XTEL INDEX ABSENT: sourceDoor=%08X renderThreadEsmScan=0",
-                     refFormId);
+            // Preparation may still carry the previous live world's identity.
+            // Absence from the Wasteland index cannot classify another world's
+            // load door as a swing door. Resolve its original XTEL before caching.
+            ResolveFo3DoorTeleportQ1700(refFormId, &resolved);
+            Q6H_LOGI("Q19.2 DOOR XTEL INDEX MISS: sourceDoor=%08X genericResolved=%d",
+                     refFormId,resolved.valid?1:0);
         }
     } else {
         // Interior and non-Wasteland worlds retain the proven generic resolver.
@@ -3609,6 +3615,21 @@ fqopaque::GpuTimer gLoadingGpuTimer;
 GLsync gLoadingUploadFence=nullptr;
 std::unique_ptr<fo3player::Session> gPlayerSession;
 std::shared_ptr<const fo3world::ReferenceStateSnapshot> gFo3ReferenceState;
+// Disabled inventory displays keep their immutable GPU resources until normal
+// scene retirement, while render, targeting and collision share the removal.
+std::unordered_set<uint32_t> gFo3ScriptRemovedItems;
+bool Fo3WorldReferenceHidden(uint32_t reference){
+    return gFo3ScriptRemovedItems.count(reference)||(gPlayerSession&&gPlayerSession->player.IsCollected(reference));
+}
+void RefreshFo3RemovedCollisionRefs(){
+    if(!gPlayerSession)return;
+    const auto& player=gPlayerSession->player;
+    for(auto i=gFo3ScriptRemovedItems.begin();i!=gFo3ScriptRemovedItems.end();){bool disabled=false;std::string error;
+        if(!player.ReferenceDisabled(*i,disabled,error)||!disabled)i=gFo3ScriptRemovedItems.erase(i);else ++i;
+    }
+    auto refs=player.Snapshot().collected;refs.insert(gFo3ScriptRemovedItems.begin(),gFo3ScriptRemovedItems.end());SetFo3CollectedCollisionRefs(refs);
+}
+
 fo3scene::ReferencePublication gFo3ScenePublication;
 bool Fo3AcceptsScenePublication(fo3scene::PublicationStamp stamp) {
     const uint64_t revision = gPlayerSession
@@ -5081,7 +5102,7 @@ bool ProcessQ74TransitionRequest() {
     }
     gFo3ReferenceState=prepared.referenceState;
     gFo3ScenePublication.Publish(prepared.referenceState);
-    if (gPlayerSession) SetFo3CollectedCollisionRefs(gPlayerSession->player.Snapshot().collected);
+    if (gPlayerSession) RefreshFo3RemovedCollisionRefs();
     if(request.travelHours>0&&gPlayerSession){
         const bool advanced=gPlayerSession->player.AdvanceGameHours(request.travelHours);
         Q6H_LOGI("FAST TRAVEL ARRIVED marker=%08X elapsedHours=%.3f clockAdvanced=%d",request.destinationDoorRef,request.travelHours,advanced);
@@ -7481,7 +7502,7 @@ bool Q241Hidden(const GpuObject& object);
 void DrawSceneObject(const GpuObject& object, bool environmentPassQ2050 = false) {
     if(object.nonvisualResident||!object.scriptVisible)return;
     if (!gQ230DetailedObjectPrevalidated &&
-        gPlayerSession && gPlayerSession->player.IsCollected(object.refFormId)) return;
+        Fo3WorldReferenceHidden(object.refFormId)) return;
     if (!object.q210PlayerBody &&
         !object.q230NpcActor && !object.physicalWeapon &&
         !gInstancedDrawActiveQ2016 &&
@@ -7867,7 +7888,7 @@ void Q2017RenderOpaqueDetailedInstanced() {
         for (const auto* pointer : gOpaqueFrameOrder) {
             const auto& object = *pointer;
             if (object.alphaBlend ||
-                (gPlayerSession && gPlayerSession->player.IsCollected(object.refFormId)) ||
+                (Fo3WorldReferenceHidden(object.refFormId)) ||
                 !Q1970ShouldRenderFullDetail(object)) continue;
             if (gWaterReflectionPassQ2090) {
                 if (!Q2017ReflectionUseful(object) || !Q2015AabbVisible(object)) continue;
@@ -10479,7 +10500,7 @@ bool Q220FindNearestLooseRef(
     std::unordered_map<uint32_t, Aggregate> refs;
     for (const GpuObject& object : gObjects) {
         if (!object.q220LooseObject ||
-            (gPlayerSession && gPlayerSession->player.IsCollected(object.refFormId)) ||
+            (Fo3WorldReferenceHidden(object.refFormId)) ||
             object.refFormId == 0u) continue;
         Aggregate& a = refs[object.refFormId];
         a.minimum.x = std::min(a.minimum.x, object.minX);
@@ -10531,7 +10552,7 @@ void Q220UpdateLooseGrab(
     if(state.active) {
         const auto ref=state.refFormId;
         const bool resident=std::any_of(gObjects.begin(),gObjects.end(),[&](const GpuObject& o){return o.q220LooseObject && o.refFormId==ref;});
-        if(!resident || (gPlayerSession && gPlayerSession->player.IsCollected(ref))) {
+        if(!resident || (Fo3WorldReferenceHidden(ref))) {
             fo3rigid::Live().Remove(ref);gQ223DynamicBodies.erase(ref);state={};
             if(handIndex==1) gShoulderGesture.Reset();
             return;

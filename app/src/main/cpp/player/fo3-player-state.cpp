@@ -1091,6 +1091,47 @@ bool Player::CanOpenDoorImpl(uint32_t actor,uint32_t id,bool sourceDelegated) co
       return true;
   return false;
 }
+bool Player::SetPlayerControls(uint32_t mask,bool enable){
+  if(mask>127)return false;
+  const uint8_t next=enable?(state_.disabledControls&~mask):(state_.disabledControls|mask);
+  if(next!=state_.disabledControls){state_.disabledControls=next;++revision_;}return true;
+}
+bool Player::SetRestrained(uint32_t reference,bool restrained){
+  if(reference!=PlayerRef&&!catalog_->actorPlacements.count(reference))return false;
+  const bool changed=restrained?state_.restrainedActors.insert(reference).second:state_.restrainedActors.erase(reference)!=0;
+  if(changed){++revision_;if(reference!=PlayerRef)ReevaluatePackage(reference);}return true;
+}
+bool Player::ActorValue(uint32_t reference,uint32_t id,float& value) const {
+  if(reference!=PlayerRef){
+    if(id==16){value=ActorHealth(reference);return value>=0;}
+    if(id==0||id==57)return ActorAIValue(reference,id,value);
+    if(id>=62&&id<=71)return ActorVariable(reference,id-62,value);
+    return false;
+  }
+  if(id>=5&&id<=11)value=state_.special[id-5];
+  else if(id>=32&&id<=45)value=state_.skills[id-32];
+  else if(id>=25&&id<=30)value=100-state_.bodyDamage[id-25];
+  else if(id==54)value=state_.pipboy.radiation;
+  else if(id==16)value=Health();else if(id==12)value=ActionPoints();
+  else if(id==23)value=state_.karma;else if(id==46)value=float(InventoryWeight());else return false;
+  return true;
+}
+float Player::HealthPercentage(uint32_t reference) const {
+  const float health=ActorHealth(reference);if(health<0)return -1;
+  if(reference==PlayerRef)return MaxHealth()>0?health/MaxHealth():0;
+  const auto damage=state_.actorDamage.find(reference);const float maximum=health+(damage==state_.actorDamage.end()?0:damage->second);
+  return maximum>0?health/maximum:0;
+}
+bool Player::ChangeActorValueDamage(uint32_t reference,uint32_t id,float amount,bool restore){
+  if(reference!=PlayerRef||!std::isfinite(amount)||amount<0)return false;
+  if(id==16)return restore?RestoreHealth(amount):DamageHealth(amount);
+  if(id==12){if(restore)return RestoreActionPoints(amount);const float next=std::min(MaxActionPoints(),state_.apSpent+amount);if(next!=state_.apSpent){state_.apSpent=next;++revision_;}return true;}
+  if(id!=54&&(id<25||id>30))return false;
+  auto& damage=id==54?state_.pipboy.radiation:state_.bodyDamage[id-25];const float next=std::clamp(damage+(restore?-amount:amount),0.f,id==54?1000.f:100.f);
+  if(next!=damage){damage=next;++revision_;}
+  if(id==54&&damage>=1000)DamageHealth(MaxHealth());
+  return true;
+}
 bool Player::DamageHealth(float amount) {
   if (!Amount(amount))
     return false;
@@ -1243,7 +1284,8 @@ bool Player::Save(const std::string &path, std::string &error) const {
     payload.push_back(l.forceFailures);payload.push_back(l.rewarded?1:0);}
   // Optional RFE1 after the v14 lock tail. Empty overlays keep existing v14
   // bytes unchanged; older supported saves do not require this extension.
-  const bool hasCorpsePoses=std::any_of(state_.actors.begin(),state_.actors.end(),[](const auto& a){return bool(a.second.corpse);});
+  const bool hasBodyDamage=state_.disabledControls||!state_.restrainedActors.empty()||std::any_of(state_.bodyDamage.begin(),state_.bodyDamage.end(),[](float v){return v!=0;});
+  const bool hasCorpsePoses=hasBodyDamage||std::any_of(state_.actors.begin(),state_.actors.end(),[](const auto& a){return bool(a.second.corpse);});
   const bool hasDailyInfos=hasCorpsePoses||!state_.dailySaidInfos.empty();
   const bool hasScriptPackages=hasDailyInfos||!state_.scriptPackages.empty();
   const bool hasScriptOverrides=hasScriptPackages||!state_.actorAIValues.empty()||!state_.questScriptDelays.empty()||!state_.factionRelations.empty()||!state_.essentialFlags.empty();
@@ -1406,7 +1448,10 @@ bool Player::Save(const std::string &path, std::string &error) const {
       for(const auto& bone:corpse.bones){string(bone.name);for(float v:bone.global)PutFloat(payload,v);for(float v:bone.linear)PutFloat(payload,v);for(float v:bone.angular)PutFloat(payload,v);}
     }
   }
-  Put32(bytes, hasCorpsePoses ? 25 : hasDailyInfos ? 24 : hasScriptPackages ? 23 : hasScriptOverrides ? 22 : hasActorVariables ? 21 : hasDoorStates ? 20 : hasDebugPoints ? 19 : hasLevelAdvancement ? 18 : hasCompletionState ? 17 :
+  if(hasBodyDamage){Put32(payload,0x31564442);for(float v:state_.bodyDamage)PutFloat(payload,v);Put32(payload,state_.disabledControls);
+    std::vector<uint32_t> refs(state_.restrainedActors.begin(),state_.restrainedActors.end());std::sort(refs.begin(),refs.end());Put32(payload,uint32_t(refs.size()));for(auto id:refs)Put32(payload,id);
+  }
+  Put32(bytes, hasBodyDamage ? 26 : hasCorpsePoses ? 25 : hasDailyInfos ? 24 : hasScriptPackages ? 23 : hasScriptOverrides ? 22 : hasActorVariables ? 21 : hasDoorStates ? 20 : hasDebugPoints ? 19 : hasLevelAdvancement ? 18 : hasCompletionState ? 17 :
       hasMerchantVisits ? 16 : hasPlayerAttributeOverrides ? 15 : 14);
   Put32(bytes, catalog_->fingerprint);
   Put32(bytes, static_cast<uint32_t>(payload.size()));
@@ -1466,7 +1511,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
   const auto *h = bytes.data();
   const auto version = fo3esm::ReadU32(h + 4);
   if (std::memcmp(h, "FQPS", 4) ||
-      (version < 1 || version > 25))
+      (version < 1 || version > 26))
     return fail("Unsupported player save format");
   if (fo3esm::ReadU32(h + 8) != catalog_->fingerprint)
     return fail("Player save belongs to different game definitions");
@@ -1913,6 +1958,16 @@ bool Player::Restore(const std::string &path, std::string &error) {
           if(!ValidCorpsePose(corpse))return fail("Invalid corpse transform");
           next.actors.Edit(ref)->corpse=std::make_shared<const CorpsePose>(std::move(corpse));
         }
+      }
+      if(version>=26){
+        if(payload.size()-at<36||fo3esm::ReadU32(p+at)!=0x31564442)return fail("Invalid body damage extension");
+        at+=4;
+        for(size_t n=0;n<next.bodyDamage.size();++n){float v=fo3esm::ReadF32(p+at);at+=4;if(!std::isfinite(v)||v<0||v>100)return fail("Invalid body damage");next.bodyDamage[n]=v;}
+        const auto controls=fo3esm::ReadU32(p+at),count=fo3esm::ReadU32(p+at+4);at+=8;
+        if(controls>127||count>10000||payload.size()-at!=4ull*count)return fail("Invalid script controls/restraint state");
+        next.disabledControls=uint8_t(controls);
+        for(uint32_t n=0;n<count;++n){const auto ref=fo3esm::ReadU32(p+at);at+=4;if((ref!=PlayerRef&&!catalog_->actorPlacements.count(ref))||!next.restrainedActors.insert(ref).second)return fail("Invalid restrained actor");}
+
       }
       if(at!=payload.size())return fail("Trailing player save data");
     }

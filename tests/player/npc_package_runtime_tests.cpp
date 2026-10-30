@@ -291,6 +291,17 @@ static void AccompanyRecoveryTests(){
  std::cout<<"Accompany stop/reverse, two actors, exhausted routes, retry, cross-cell fallback, save/load and condition invalidation passed\n";
 }
 int main(int argc,char** argv) {
+  {
+    auto actor=Actor(6);actor.runtime.authoredMotionUntil=4;
+    const auto position=actor.runtime.position;const float yaw=actor.runtime.yaw;
+    for(int frame=0;frame<39;++frame){Q240UpdateNpcPackage(actor,frame*.1);assert(actor.runtime.position==position&&actor.runtime.yaw==yaw&&actor.runtime.speed==0);}
+    assert(actor.runtime.OwnsAuthoredMotion(3.99)&&!actor.runtime.OwnsAuthoredMotion(4));
+    for(int frame=40;frame<60;++frame)Q240UpdateNpcPackage(actor,frame*.1);
+    assert(actor.runtime.position!=position);
+    actor.runtime.authoredMotionUntil=100;actor.runtime.BeginCombat(0x14);assert(!actor.runtime.OwnsAuthoredMotion(5));
+    std::cout<<"Production package movement waits for authored full-body response, resumes at completion and yields to combat\n";
+  }
+
   {auto actor=Actor(6,true);auto scene=std::make_shared<fo3furniture::Scene>();fo3furniture::Slot slot;
     slot.reference=60;slot.base=61;slot.marker.reference=slot.marker.reference2=17;
     slot.placement=gPlayerSession->player.Definitions().pipboy.targets.at(60);slot.alignment=fo3furniture::Placement(slot.placement);

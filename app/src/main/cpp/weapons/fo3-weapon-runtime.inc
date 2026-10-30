@@ -367,7 +367,7 @@ void WeaponUpdate(double now,bool backButton){
   const float dt=std::clamp(float(now-last),0.f,.064f);last=now;
   const auto frame=fo3weapon::FrameAccessFor(gSceneReady,IsFo3LoadingVisible(),
     gPlayerSession&&gPlayerSession->saveBlocked,Fo3PipboyFocus(),gShoulderFocused);
-  const bool blocked=Fo3BarterFocus()||Fo3LockpickInputBlocked()||!gPlayerSession||!frame.weaponControls;
+  const bool blocked=(gPlayerSession&&gPlayerSession->player.PlayerControlDisabled(2))||Fo3BarterFocus()||Fo3LockpickInputBlocked()||!gPlayerSession||!frame.weaponControls;
   inputs.Update(blocked,gQ217FingerGrip[1],gQ217FingerGrip[0],gQ217FingerTrigger[1],backButton);
   if(Fo3DialogueFocus()){inputs.r=false;inputs.l=false;} // Dialogue suppresses new grabs; held trigger can interrupt.
   if(!gPlayerSession)return;auto&p=gPlayerSession->player;
@@ -540,7 +540,7 @@ void WeaponUpdate(double now,bool backButton){
         const auto r=p.Definitions().references.find(ref);
         if(r!=p.Definitions().references.end()){auto item=p.Definitions().items.find(r->second.base);
           if(item!=p.Definitions().items.end()&&item->second.weapon.Firearm()&&Ensure(item->first)&&p.PickupWeapon(ref)){
-            fo3rigid::Live().Remove(ref);gQ223DynamicBodies.erase(ref);SetFo3CollectedCollisionRefs(p.Snapshot().collected);s=p.EquippedWeapon();Draw(s->id,s->formId);Log("PICKUP",s->id,s->formId);
+            fo3rigid::Live().Remove(ref);gQ223DynamicBodies.erase(ref);RefreshFo3RemovedCollisionRefs();s=p.EquippedWeapon();Draw(s->id,s->formId);Log("PICKUP",s->id,s->formId);
           }
         }
       }}

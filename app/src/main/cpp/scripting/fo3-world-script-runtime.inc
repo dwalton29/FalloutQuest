@@ -93,8 +93,15 @@ void SpeechTick(){
         // results. Missing audio must never pretend Weld finished his greeting.
         if(!(done&1u)){Q6H_LOGW("SCRIPT SPEECH VOICE UNAVAILABLE ref=%08X topic=%08X",actor,topic);SpeechStop();return;}
         if(speech.AudioDone(speech.audioToken,true,SpeechContext(actor,speechTarget),player)){
+            if(speech.actor!=speechReference){
+                player.SetScriptActorTalking(speechReference,false);
+                if(auto* previous=DialogueActor(speechReference)){previous->runtime.speaking=false;previous->runtime.scriptSpeechToken=0;}
+                speechTarget=speechReference;speechReference=speech.actor;player.SetScriptActorTalking(speechReference,true);
+                if(auto* next=DialogueActor(speechReference))next->runtime.speaking=true;
+            }
+            speechBegan=seconds;
             speechToken=0x30000000u|(++speechSerial&0xffffffu);
-            if(auto* live=DialogueActor(actor))live->runtime.scriptSpeechToken=speechToken;
+            if(auto* live=DialogueActor(speechReference))live->runtime.scriptSpeechToken=speechToken;
             fo3audio::Dialogue(speech.Audio(player.Definitions().pipboy),speechToken);return;
         }
         SpeechStop();Event(actor,"SayToDone",topic);FlushFo3PlayerState();
@@ -105,7 +112,7 @@ void SpeechTick(){
     if(actor&&(actor->runtime.offScene||!actor->runtime.CanTalk()))return;
     speech.publishReferences=[](fo3player::Player& p,fo3player::ScriptTransactionPlan& plan,std::string& e){return PublishFo3DialogueReferences(p,plan,e);};
     speech.previewReferences=[](const fo3player::Player& p,const fo3player::ScriptTransactionPlan& plan,std::string& e){return PreviewFo3DialogueReferences(p,plan,e);};
-    if(!(action.info?speech.StartSelectedTopic(action.form,action.info,SpeechContext(action.reference,action.flags),player):speech.StartTopic(action.form,SpeechContext(action.reference,action.flags),player))){
+    if(!(action.info?speech.StartSelectedTopic(action.form,action.info,SpeechContext(action.reference,action.flags),player,action.kind==fo3script::ActionKind::Conversation):speech.StartTopic(action.form,SpeechContext(action.reference,action.flags),player))){
         Q6H_LOGW("SCRIPT SPEECH TOPIC UNAVAILABLE ref=%08X topic=%08X",action.reference,action.form);return;
     }
     speechReference=action.reference;speechTopic=action.form;speechTarget=action.flags;speechBegan=seconds;
@@ -164,7 +171,7 @@ void Actions(){
     while(player.PollScriptAction(action)){
         if(action.kind==fo3script::ActionKind::Look){
             if(auto* actor=DialogueActor(action.reference))actor->runtime.scriptLookTarget=action.form;
-        }else if(action.kind==fo3script::ActionKind::SayTo){if(speechPending.size()<128)speechPending.push_back(action);
+        }else if((action.kind==fo3script::ActionKind::SayTo||action.kind==fo3script::ActionKind::Conversation)){if(speechPending.size()<128)speechPending.push_back(action);
         }else if(action.kind==fo3script::ActionKind::DefaultActivate){
             if(!DeliverFo3ScriptDefaultActivation(action.reference))
                 Q6H_LOGW("SCRIPT DEFAULT ACTIVATE REJECTED: ref=%08X",action.reference);
