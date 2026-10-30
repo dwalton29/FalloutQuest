@@ -12494,7 +12494,6 @@ static float Q230PlayerLightLevel(const std::array<float,3>& point,double now){
 #include "npc/fo3-npc-ragdoll-cache.inc"
 #include "fo3-npc-runtime.inc"
 #include "npc/fo3-npc-ragdoll-runtime.inc"
-#include "player/fo3-player-seat-runtime.inc"
 
 bool Q210EnsurePlayerBody() {
     if (gQ210PlayerBodyReady) return true;
@@ -15267,6 +15266,7 @@ fo3player::Session* GetFo3PlayerSession() { return gPlayerSession.get(); }
 #include "ui/lockpick/fo3-lockpick-runtime.inc"
 #include "ui/terminal/fo3-terminal-runtime.inc"
 #include "world/interaction/fo3-interaction-runtime.inc"
+#include "player/fo3-player-seat-runtime.inc"
 #include "world/interaction/fo3-script-default-activation.inc"
 #include "scripting/fo3-world-script-runtime.inc"
 #include "world/interaction/fo3-levelup-runtime.inc"
