@@ -7,6 +7,7 @@
 // model-path/spawn hacks.
 
 #include "fo3-esm-reader.h"
+#include "world/fo3-reference-model.h"
 
 #include <algorithm>
 #include <atomic>
@@ -163,7 +164,7 @@ BaseRecord ParseBase(uint32_t formId, const char* recordType,
             size_t n = 0u;
             while (n < size && bytes[n] != 0u) ++n;
             out.editorId.assign(reinterpret_cast<const char*>(bytes), n);
-        } else if (std::memcmp(type, "MODL", 4u) == 0 && out.modelPath.empty()) {
+        } else if (fo3world::PlacedModelField(recordType,type) && out.modelPath.empty()) {
             size_t n = 0u;
             while (n < size && bytes[n] != 0u) ++n;
             out.modelPath.assign(reinterpret_cast<const char*>(bytes), n);

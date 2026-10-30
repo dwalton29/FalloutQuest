@@ -1,4 +1,5 @@
 #include "fo3-install-paths.h"
+#include "world/fo3-reference-model.h"
 #include "fo3-transition.h"
 
 #include "fo3-worldspace-runtime.h"
@@ -388,7 +389,7 @@ bool ResolveBasesQ75(const std::unordered_set<uint32_t>& wanted,
                 size_t len = 0u;
                 while (len < size && bytes[len] != 0u) ++len;
                 base.editorId.assign(reinterpret_cast<const char*>(bytes), len);
-            } else if (std::memcmp(type, "MODL", 4u) == 0 && base.modelPath.empty()) {
+            } else if (fo3world::PlacedModelField(base.recordType.c_str(),type) && base.modelPath.empty()) {
                 size_t len = 0u;
                 while (len < size && bytes[len] != 0u) ++len;
                 base.modelPath.assign(reinterpret_cast<const char*>(bytes), len);

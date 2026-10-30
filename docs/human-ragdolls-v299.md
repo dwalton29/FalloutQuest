@@ -8,7 +8,7 @@ The render bridge applies one physical pose to skinning and attached bones for b
 
 Save version 25 adds validated, immutable per-body model-space transforms, linear/angular velocities and sleeping state. Root/scene conversion supports cell-origin changes and authored bone scale. Moving saves resume motion; sleeping restores stay asleep. Body-pose revisions do not invalidate NPC package evaluation. Existing saves retain their prior format until a corpse pose is present, and versions 1–24 remain readable. Death events and depleted loot are not replayed on restoration. Older corpses without stored physical poses are not retroactively reconstructed.
 
-The intact-mesh staging path hides BSDismemberSkinInstance wound-cap partitions (101–113 and 201–213). Source/cached geometry remains available for future severing. The original armored Vault 101 outfit loses 2,161 cap triangles and retains 5,502 intact triangles. Its separately authored mounted display mesh has no caps and retains all 4,872 triangles. This applies to the actual outfit model used by placed/worn apparel, including Moira's suit.
+Placed armor now selects its authored MOD2 world/display model in both interior and exterior loaders, while character equipment retains the MODL/MOD3 biped model. The original Moira display reference resolves to ArmorMounted.NIF instead of the worn outfit: this was the source of the exposed gore on the display. The intact-mesh staging path also hides BSDismemberSkinInstance wound-cap partitions (101–113 and 201–213). Source/cached geometry remains available for future severing. The original armored Vault 101 outfit loses 2,161 cap triangles and retains 5,502 intact triangles. Its separately authored mounted display mesh has no caps and retains all 4,872 triangles. This also protects intact worn apparel and previews, including the rewarded suit.
 
 ## Solver policy and remaining differences
 
@@ -22,6 +22,7 @@ Fast capsules request up to eight smaller shared solver steps within the existin
 - Supplied original human skeleton: import all 18 bodies/17 joints; validate frames and reject truncated data; collapse onto a floor and a triangle stair/riser, retain joint connectivity, and settle/sleep. Original bind-space pivots already differ by up to about 3.2 cm in the arms; tests distinguish the initial settling window from subsequent constrained motion.
 - Production NPC ragdoll bridge: pose handoff without a visible transform jump, attachment propagation, actual gravity/ground contact, canonical loot transfer, save/reload and resident reconstruction, retained depleted loot, restored airborne velocity, no repeated sleeping save/package mutations, and retirement.
 - Player save tests: immutable snapshots, actor updates retaining corpse state, invalid-transform rejection, atomic corrupt-save rejection and backward-format regressions.
+- Production interior/exterior placement loaders: ARMO world-model selection; original Moira display reference selects its mounted NIF, and the existing original MS11 detonator placement/collision assertions remain valid.
 - Original outfit and mounted-display NIFs: triangle counts and intact-cap filtering verified directly. No original assets are committed.
 - Original-data MS03, MS11, MQ01 and barter regressions are run separately from physical headset verification.
 

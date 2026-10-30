@@ -29,9 +29,10 @@ const Fo3WorldPlacement* find(const std::vector<Fo3WorldPlacement>& p,uint32_t i
 void synthetic(const std::string& path){
  Bytes base;sub(base,"EDID",str("OriginalFormatFixture"));sub(base,"MODL",str("architecture\\fixture.nif"));
  Bytes refs;add(refs,rec("REFR",400,ref()));add(refs,rec("REFR",401,ref(),0x800));add(refs,rec("REFR",402,ref(999)));add(refs,rec("REFR",403,ref(),0x20));add(refs,rec("REFR",404,ref(0,999),0x800));
+ add(refs,rec("REFR",405,ref(0,301),0x800));
  Bytes cell;sub(cell,"EDID",str("FixturePersistent"));Bytes children;add(children,rec("CELL",200,cell));add(children,group(200,6,group(200,8,refs)));
  Bytes grid;sub(grid,"EDID",str("FixtureGrid"));sub(grid,"XCLC",Bytes(8));add(children,rec("CELL",201,grid));
- Bytes world;sub(world,"EDID",str("FixtureWorld"));Bytes esm=rec("TES4",0,{});add(esm,rec("STAT",300,base));add(esm,rec("WRLD",100,world));add(esm,group(100,1,children));
+ Bytes world;sub(world,"EDID",str("FixtureWorld"));Bytes esm=rec("TES4",0,{});add(esm,rec("STAT",300,base));Bytes armour;sub(armour,"MODL",str("armor/worn.nif"));sub(armour,"MOD2",str("armor/world.nif"));add(esm,rec("ARMO",301,armour));add(esm,rec("WRLD",100,world));add(esm,group(100,1,children));
  {std::ofstream f(path,std::ios::binary);f.write(reinterpret_cast<const char*>(esm.data()),esm.size());assert(f);}
  std::vector<Fo3WorldPlacement> before,after;
  assert(LoadFo3WorldspacePlacements({100,200,100,100,0},before));
@@ -70,6 +71,9 @@ void synthetic(const std::string& path){
  assert(!LoadFo3InteriorCellPlacementsQ1700(200,after,&state,true));
  assert(LoadFo3WorldspacePlacements({100,200,100,100,1},after,&state)&&find(after,400));
  assert(!LoadFo3WorldspacePlacements({100,200,100,100,1,true},after,&state));
+ state.states[404]=fo3world::ReferenceEnableState::Disabled;state.states[405]=fo3world::ReferenceEnableState::Enabled;
+ assert(LoadFo3InteriorCellPlacementsQ1700(200,after,&state)&&find(after,405)&&find(after,405)->modelPath=="armor/world.nif");
+ assert(LoadFo3WorldspacePlacements({100,200,100,100,1},after,&state)&&find(after,405)&&find(after,405)->modelPath=="armor/world.nif");
  // Source-authored entrance references must not be filtered by their FormIDs.
  Bytes gateRefs;for(uint32_t id:{0x3b24u,0x1d55au,0x6d4adu})add(gateRefs,rec("REFR",id,ref()));
  Bytes gateChildren;add(gateChildren,rec("CELL",200,cell));add(gateChildren,group(200,6,group(200,8,gateRefs)));add(gateChildren,rec("CELL",201,grid));
@@ -97,6 +101,8 @@ void original(){
  assert(find(plan.collisionPlacements,refId));
  state.states[refId]=fo3world::ReferenceEnableState::Disabled;
  assert(LoadFo3WorldspacePlacements(selection,after,&state)&&!find(after,refId));
+ assert(LoadFo3InteriorCellPlacementsQ1700(0x3a2a,after,nullptr));const auto* suit=find(after,0x6c588);assert(suit&&suit->baseFormId==0x6c587&&suit->modelPath=="Armor\\VaultSuitArmor\\M\\ArmorMounted.NIF");
+ std::cout<<"Original Moira display selects the authored mounted world model\n";
  std::cout<<"Original MS11 detonator model/pose selection and collision input honor saved snapshots\n";
 }
 }
