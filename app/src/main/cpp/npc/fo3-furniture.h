@@ -42,12 +42,38 @@ public:
 };
 // Ephemeral leases are intentionally not persisted. Cell destruction releases
 // them even when interrupted between entry and the first authored event.
-struct Program { fo3anim::Clip enter,loop,exit; bool Valid()const{return !enter.tracks.empty()&&!loop.tracks.empty()&&!exit.tracks.empty()&&enter.cycle==2&&exit.cycle==2;} };
+
 inline fo3anim::Transform Root(const fo3anim::Clip& clip,double time,const fo3anim::Transform* retained=nullptr) {
   fo3anim::Skeleton s;fo3anim::Bone b;b.name=clip.accumulationRoot;s.bones.push_back(b);fo3anim::FinalizeSkeleton(s);fo3anim::Pose p;fo3anim::BindClip(s,clip,p);
   if(!fo3anim::Sample(s,clip,time,p,nullptr,fo3anim::RootPolicy::Furniture,retained)||p.local.empty())return {};
   return p.local[0];
 }
+// Entry/exit KFs retain their approach frame. Shared dynamic idle KFs do
+// not: their NonAccum orientation must inherit the entry endpoint heading.
+// Derive the planar change once per decoded program; never rotate the FRN
+// marker or its accumulated translation (that would move bodies off the seat).
+struct Program {
+  fo3anim::Clip enter,loop,exit;
+  float loopHeading=0;
+  bool Valid()const{return !enter.tracks.empty()&&!loop.tracks.empty()&&!exit.tracks.empty()&&enter.cycle==2&&exit.cycle==2;}
+  void Prepare(){
+    loopHeading=0;
+    if(enter.accumulationRoot.empty()||enter.accumulationRoot!=loop.accumulationRoot||enter.frequency<=0)return;
+    fo3anim::Skeleton skeleton;fo3anim::Bone bone;bone.name=enter.accumulationRoot+" NonAccum";skeleton.bones.push_back(bone);
+    if(!fo3anim::FinalizeSkeleton(skeleton))return;
+    fo3anim::Pose a,b;fo3anim::BindClip(skeleton,enter,a);fo3anim::BindClip(skeleton,loop,b);
+    if(!fo3anim::Sample(skeleton,enter,(enter.stop-enter.start)/enter.frequency,a,nullptr,fo3anim::RootPolicy::Furniture,nullptr,fo3anim::Playback::Clamp)||
+       !fo3anim::Sample(skeleton,loop,0,b,nullptr,fo3anim::RootPolicy::Furniture)||!(a.channels[0]&2)||!(b.channels[0]&2))return;
+    fo3anim::Transform from,to;from.rotation=a.local[0].rotation;to.rotation=b.local[0].rotation;
+    fo3anim::Matrix inverse;if(!fo3anim::Inverse(fo3anim::ToMatrix(to),inverse))return;
+    const auto change=fo3anim::Multiply(fo3anim::ToMatrix(from),inverse);
+    loopHeading=std::atan2(change[1],change[0]);
+  }
+  fo3anim::Transform LoopRoot(const fo3anim::Transform& retained)const{
+    auto root=retained;const auto q=retained.rotation;const float c=std::cos(loopHeading/2),s=std::sin(loopHeading/2);
+    root.rotation={q[0]*c-q[3]*s,q[1]*c+q[2]*s,q[2]*c-q[1]*s,q[3]*c+q[0]*s};return root;
+  }
+};
 struct MarkerIdle { uint32_t form=0; fo3anim::Clip clip; };
 struct Slot { bool idleMarker=false; float idleTimer=0; std::vector<MarkerIdle> idles; uint32_t reference=0,base=0;size_t index=0;Marker marker;fo3pipdata::Placement placement;fo3anim::Matrix alignment=fo3anim::Identity();std::shared_ptr<const Program> program;bool sleep=false;};
 struct Scene {std::vector<Slot> slots;std::shared_ptr<Reservations> reservations=std::make_shared<Reservations>();};
@@ -70,7 +96,7 @@ inline std::shared_ptr<Scene> BuildScene(const fo3pipdata::Definitions& d,uint32
       if(eat&&m.reference==14){enter="chairfrontsit";loop="chairdynamicidle";exit="chairfrontstand";}
       if(eat&&m.reference==17){enter="floorsitenter";loop="floorsitdynamicidle";exit="floorexit";}
       if(!enter)continue;
-      auto& program=programs[m.reference];if(!program){auto ready=std::make_shared<Program>();if(!clip(enter,ready->enter)||!clip(loop,ready->loop)||!clip(exit,ready->exit)||!ready->Valid())continue;program=std::move(ready);}
+      auto& program=programs[m.reference];if(!program){auto ready=std::make_shared<Program>();if(!clip(enter,ready->enter)||!clip(loop,ready->loop)||!clip(exit,ready->exit)||!ready->Valid())continue;ready->Prepare();program=std::move(ready);}
       Slot slot;slot.reference=r.first;slot.base=p.base;slot.index=i;slot.marker=m;slot.placement=p;slot.alignment=Alignment(p,m);slot.program=program;slot.sleep=sleep;scene->slots.push_back(std::move(slot));
     }
   }

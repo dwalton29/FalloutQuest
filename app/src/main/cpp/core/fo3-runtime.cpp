@@ -3527,7 +3527,7 @@ struct Fo3SceneCpuPreparation {
     std::vector<Fo3WorldPlacement> collisionPlacements;
     std::vector<CpuObject> selected;
     std::vector<Q230ActorVisual> actors;
-    std::shared_ptr<fo3furniture::Scene> playerFurniture;
+    std::shared_ptr<const fo3furniture::Scene> playerFurniture;
     std::unique_ptr<fo3player::Session> playerSession;
     size_t skipped = 0u;
     size_t unsupported = 0u;
@@ -12983,7 +12983,7 @@ void Q230PumpNpcArrivals(){
                 }
                 actor.animationStart=Fo3GameplayNow();
                 const uint32_t id=actor.source.refFormId;
-                if(gPlayerSeat.scene&&actor.runtime.furniture.scene)actor.runtime.furniture.scene->reservations=gPlayerSeat.scene->reservations;
+                if(gPlayerSeat.scene&&actor.runtime.furniture.scene)actor.runtime.furniture.residentReservations=gPlayerSeat.scene->reservations;
                 gQ230NpcActors.push_back(std::move(actor));++gQ230NpcResidenceRevision;
                 Q6H_LOGI("NPC LIVE ARRIVAL READY actor=%08X cell=%08X world=%08X actors=%zu",
                     id,saved->second.cell,saved->second.world,gQ230NpcActors.size());

@@ -625,7 +625,8 @@ void Q230UpdateActor(Q230ActorVisual &actor) {
     const auto& authored=slot->idleMarker?slot->idles[furniture.idleIndex].clip:furniture.phase==fo3furniture::Phase::Enter?slot->program->enter:furniture.phase==fo3furniture::Phase::Exit?slot->program->exit:slot->program->loop;
     const double now=std::chrono::duration<double>(Fo3GameplayNow().time_since_epoch()).count();
     fo3anim::BindClip(actor.skeleton,authored,actor.pose);
-    if(!fo3anim::Sample(actor.skeleton,authored,now-furniture.started,actor.pose,&timings,slot->idleMarker?fo3anim::RootPolicy::Locomotion:fo3anim::RootPolicy::Furniture,&furniture.retainedRoot))return;
+    const auto root=!slot->idleMarker&&furniture.phase==fo3furniture::Phase::Loop?slot->program->LoopRoot(furniture.retainedRoot):furniture.retainedRoot;
+    if(!fo3anim::Sample(actor.skeleton,authored,now-furniture.started,actor.pose,&timings,slot->idleMarker?fo3anim::RootPolicy::Locomotion:fo3anim::RootPolicy::Furniture,&root))return;
   }else if(!fo3anim::Sample(actor.skeleton,clip,sampleTime,actor.pose,&timings)) return;
   actor.basePriorities=actor.pose.priorities;
   if(!responsePose&&!furniturePose&&actor.blendStart>=0&&elapsed-actor.blendStart<fo3npc::DialoguePolicy::BlendSeconds&&actor.blendFrom.size()==actor.pose.local.size()) {

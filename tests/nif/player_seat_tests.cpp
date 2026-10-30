@@ -18,7 +18,7 @@ int main(int argc,char** argv){
  if(argc>5){
   std::vector<fo3furniture::Marker> markers;assert(fo3furniture::DecodeMarkers(Read(argv[1]),markers));
   fo3anim::Skeleton skeleton;assert(fo3anim::DecodeSkeleton(Read(argv[2]),skeleton));
-  auto program=std::make_shared<fo3furniture::Program>();assert(fo3anim::DecodeClip(Read(argv[3]),program->enter));assert(fo3anim::DecodeClip(Read(argv[4]),program->loop));assert(fo3anim::DecodeClip(Read(argv[5]),program->exit));assert(program->Valid());
+  auto program=std::make_shared<fo3furniture::Program>();assert(fo3anim::DecodeClip(Read(argv[3]),program->enter));assert(fo3anim::DecodeClip(Read(argv[4]),program->loop));assert(fo3anim::DecodeClip(Read(argv[5]),program->exit));assert(program->Valid());program->Prepare();
   auto marker=std::find_if(markers.begin(),markers.end(),[](const auto& m){return m.reference==11;});assert(marker!=markers.end());
   const int head=fo3anim::FindBone(skeleton,"Bip01 Head");assert(head>=0);const auto eye=fo3anim::Point(skeleton.bindGlobal[head],{});
   fo3furniture::Slot slot;slot.reference=100;slot.marker=*marker;slot.program=program;slot.alignment=fo3furniture::Alignment(slot.placement,*marker);

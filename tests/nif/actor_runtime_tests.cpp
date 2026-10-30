@@ -439,6 +439,33 @@ int main(int argc,char** argv) {
   ++gStereoFrame;Q230UpdateActor(animated);
   assert(std::fabs(animated.pose.local.front().translation[0]-beforePause[0]-.5f)<1e-5f);
   CombatCompositionTests();
+  // Production furniture branch must feed the continuation root to the skin
+  // palette, without moving the accumulated pivot or reapplying it to exit.
+  {
+    Q230ActorVisual seated;fo3anim::Bone root,nonAccum,head;
+    root.name="Bip01";nonAccum.name="Bip01 NonAccum";nonAccum.parent=0;
+    head.name="Bip01 Head";head.parent=1;head.bind.translation={2,0,5};
+    seated.skeleton.bones={root,nonAccum,head};assert(fo3anim::FinalizeSkeleton(seated.skeleton));
+    auto program=std::make_shared<fo3furniture::Program>();
+    program->enter.accumulationRoot=program->loop.accumulationRoot=program->exit.accumulationRoot="Bip01";
+    program->enter.stop=program->loop.stop=program->exit.stop=1;program->enter.cycle=program->exit.cycle=2;
+    fo3anim::Track turn;turn.bone=nonAccum.name;turn.hasRotation=true;turn.base.rotation={.70710678f,0,0,.70710678f};
+    program->enter.tracks={turn};program->exit.tracks={turn};turn.base.rotation={1,0,0,0};program->loop.tracks={turn};program->Prepare();
+    seated.clip=program->enter;seated.animationStart=Fo3GameplayNow();
+    CpuObject body;body.placement.x=20;body.placement.y=30;body.placement.z=40;body.mesh.skinned=true;
+    Fo3NifSkinBone bone;bone.name=head.name;body.mesh.skinBones={bone};body.mesh.skinBoneIndices={0,0xffff,0xffff,0xffff};body.mesh.skinBoneWeights={1,0,0,0};body.mesh.indices={0,0,0};
+    body.positionsGame={{22,30,45}};body.normalsGame={{0,0,1}};body.tangentsGame={{1,0,0}};body.bitangentsGame={{0,1,0}};
+    assert(Q230UploadActorPart(seated,body,20,30,40));
+    auto scene=std::make_shared<fo3furniture::Scene>();scene->slots.resize(1);scene->slots[0].program=program;
+    auto& furniture=seated.runtime.furniture;furniture.scene=scene;furniture.slot=0;furniture.retainedRoot.translation={10,20,0};
+    furniture.started=std::chrono::duration<double>(Fo3GameplayNow().time_since_epoch()).count();
+    std::vector<float> entry;
+    for(auto phase:{fo3furniture::Phase::Enter,fo3furniture::Phase::Loop,fo3furniture::Phase::Exit}){
+      furniture.phase=phase;++gStereoFrame;Q230UpdateActor(seated);
+      if(entry.empty())entry=recorded;else{assert(entry.size()==recorded.size());for(size_t i=0;i<entry.size();++i)assert(std::abs(entry[i]-recorded[i])<.0001f);}
+      assert(furniture.retainedRoot.rotation==fo3anim::Transform{}.rotation);
+    }
+  }
 #ifdef FQ_REAL_CREATURE_ASSETS
   Q230ActorVisual creature;creature.source.creature=true;creature.source.skeletonModel=argv[1];
   std::vector<uint8_t> bytes;
