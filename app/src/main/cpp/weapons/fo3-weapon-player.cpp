@@ -101,9 +101,21 @@ bool Player::FireWeapon(uint64_t id) {
   ++revision_;
   return true;
 }
+bool Player::CanReloadWeapon(uint64_t id)const{
+  const auto* s=Weapon(id);if(!s||!s->equipped||s->condition<=0)return false;
+  const auto& d=catalog_->items.at(s->formId).weapon;
+  return d.Firearm()&&(s->needsAction||s->loadedRounds<d.clip)&&(AmmoReserve(d.ammo)>0||(s->needsAction&&s->loadedRounds));
+}
+bool Player::ReloadWeapon(uint64_t id){
+  if(!CanReloadWeapon(id))return false;
+  Player candidate=*this;const auto* current=candidate.Weapon(id);
+  if((!current->needsAction||current->loadedRounds)&&!candidate.EjectMagazine(id))return false;
+  if(!candidate.LoadMagazine(id)||!candidate.ChamberWeapon(id))return false;
+  state_=std::move(candidate.state_);++revision_;return true;
+}
 bool Player::EjectMagazine(uint64_t id) {
   const auto *s = Weapon(id);
-  if (!s || !s->equipped) return false;
+  if (!s || !s->equipped || (s->needsAction && !s->loadedRounds)) return false;
   const auto &def = catalog_->items.at(s->formId).weapon;
   const auto ammo = catalog_->items.find(def.ammo);
   if (!def.Firearm() || ammo == catalog_->items.end() || ammo->second.kind != ItemKind::Ammo)

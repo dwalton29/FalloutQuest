@@ -3,13 +3,17 @@
 #include "fo3-weapon-assets.h"
 #include "rendering/mesh/fo3-static-nif.h"
 #include "fo3-weapon-interaction.h"
+#include "fo3-reload-policy.h"
 
 namespace fo3weapon {
 // Authored anchors in NIF coordinates. Conversion to metres belongs to the
 // runtime boundary; neither model origin nor controller origin is a grip.
 enum class ReloadFamily { DetachablePistol, DetachableRifle, Cylinder, Tube, InternalMagazine, EnergyCell, Heavy, RequiresAudit };
 struct Asset {
-  fo3anim::Skeleton nodes;
+  fo3anim::Skeleton nodes,firstPerson;
+  fo3anim::Clip reloadAnimation;
+  fo3anim::Matrix magazineInLeft=fo3anim::Identity();
+  bool hasMagazineGrip=false;
   std::vector<int> blocks;
   fo3anim::Matrix handToWeapon=fo3anim::Identity();
   std::array<float,3> muzzle{},muzzleForward{},clip{},slide{},support{};
@@ -51,12 +55,24 @@ struct Asset {
       }
       if(count){for(float&v:palm)v/=count;support=fo3anim::Point(inverse,palm);hasSupport=true;}
     }
-    valid=true;return true;
+    firstPerson=std::move(fp);valid=true;return true;
   }
   bool Reload(const std::vector<uint8_t>& bytes) {
     fo3anim::Clip animation;if(!fo3anim::DecodeClip(bytes,animation))return false;
-    size_t i=0;for(const auto&key:animation.textKeys) {
-      if(key.text.compare(0,7,"Sound: ")==0&&i<reloadSounds.size())reloadSounds[i++]=key.text.substr(7);
+    reloadAnimation=animation;hasMagazineGrip=false;
+    size_t i=0;float contact=-1;
+    for(const auto&key:animation.textKeys)if(key.text.compare(0,7,"Sound: ")==0&&i<reloadSounds.size()){
+      if(i==1)contact=key.time;
+      reloadSounds[i++]=key.text.substr(7);
+    }
+    const int left=fo3anim::FindBone(firstPerson,"Bip01 L Hand"),weapon=fo3anim::FindBone(firstPerson,"Weapon");
+    fo3anim::Pose hands,model;fo3anim::Matrix inverse;
+    if(std::isfinite(animation.frequency)&&animation.frequency>0&&contact>=animation.start&&left>=0&&weapon>=0&&clipNode>=0&&
+       fo3anim::Sample(firstPerson,animation,(contact-animation.start)/animation.frequency,hands)&&
+       fo3anim::Sample(nodes,animation,(contact-animation.start)/animation.frequency,model)&&
+       fo3anim::Inverse(hands.global[left],inverse)){
+      magazineInLeft=fo3anim::Multiply(fo3anim::Multiply(inverse,hands.global[weapon]),model.delta[size_t(clipNode)]);
+      hasMagazineGrip=true;
     }
     return i==3;
   }

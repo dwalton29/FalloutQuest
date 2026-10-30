@@ -1,4 +1,5 @@
 #pragma once
+#include "ui/fo3-system-colour.h"
 #include "ui/pipboy/fo3-pipboy-assets.h"
 #include "fo3-pipboy-state.h"
 #include "ui/interaction/fo3-hud-cached-state.h"
@@ -165,7 +166,7 @@ inline void Draw(GLuint texture, float alpha = 1, bool untinted = false, bool da
     return;
   }
   glBindTexture(GL_TEXTURE_2D, texture);
-  glUniform4f(r.tint, dark?0:untinted ? 1 : 26.f / 255, dark?0:1, dark?0:untinted ? 1 : 128.f / 255,
+  glUniform4f(r.tint, dark?0:untinted ? 1 : fo3uicolor::Main[0], dark?0:1, dark?0:untinted ? 1 : fo3uicolor::Main[2],
               alpha);
   glBufferSubData(GL_ARRAY_BUFFER, 0,
                   r.vertices.size() * sizeof(fo3hudassets::Vertex),

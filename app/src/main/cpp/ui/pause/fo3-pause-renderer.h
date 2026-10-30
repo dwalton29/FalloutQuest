@@ -1,4 +1,5 @@
 #pragma once
+#include "ui/fo3-system-colour.h"
 #include "ui/pause/fo3-debug-menu.h"
 #include "ui/interaction/fo3-interaction-hud-renderer.h"
 
@@ -85,7 +86,7 @@ inline void Render(const float* mvp){
     glEnable(GL_BLEND);glBlendEquationSeparate(GL_FUNC_ADD,GL_FUNC_ADD);glBlendFuncSeparate(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA,GL_ONE,GL_ONE_MINUS_SRC_ALPHA);
     glUseProgram(font.program);glUniformMatrix4fv(font.mvpLoc,1,GL_FALSE,mvp);glUniform1i(font.texLoc,0);glActiveTexture(GL_TEXTURE0);glBindVertexArray(r.vao);
     for(const auto& draw:r.draws){glBindTexture(GL_TEXTURE_2D,draw.texture);
-        if(draw.green)glUniform4f(font.tintLoc,26.f/255*draw.brightness,draw.brightness,128.f/255*draw.brightness,draw.alpha);
+        if(draw.green)glUniform4f(font.tintLoc,fo3uicolor::Main[0]*draw.brightness,fo3uicolor::Main[1]*draw.brightness,fo3uicolor::Main[2]*draw.brightness,draw.alpha);
         else if(draw.texture==r.solid)glUniform4f(font.tintLoc,0,0,0,draw.alpha);
         else glUniform4f(font.tintLoc,1,1,1,draw.alpha);
         glDrawArrays(GL_TRIANGLES,draw.first,draw.count);

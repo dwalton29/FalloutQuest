@@ -1,4 +1,5 @@
 #pragma once
+#include "ui/fo3-system-colour.h"
 #include "fo3-interaction-hud-renderer.h"
 #include "fo3-item-notifications.h"
 #include "fo3-hud-cached-state.h"
@@ -149,7 +150,7 @@ inline void Render(const float* mvp) {
         glEnable(GL_BLEND);glBlendEquationSeparate(GL_FUNC_ADD,GL_FUNC_ADD);
         glBlendFuncSeparate(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA,GL_ONE,GL_ONE_MINUS_SRC_ALPHA);
         glUseProgram(r.program);glUniformMatrix4fv(r.mvp,1,GL_FALSE,mvp);
-        glUniform4f(r.tint,26.0f/255,1,128.0f/255,fo3notify::Notifications().Quest()?1.f:alpha);glUniform1i(r.tex,0);
+        glUniform4f(r.tint,fo3uicolor::Main[0],fo3uicolor::Main[1],fo3uicolor::Main[2],fo3notify::Notifications().Quest()?1.f:alpha);glUniform1i(r.tex,0);
         glUniform1f(r.age,fo3notify::Notifications().Quest()?float(fo3notify::Notifications().Age()):-1.f);
         glActiveTexture(GL_TEXTURE0);glBindTexture(GL_TEXTURE_2D,font.fontTexture);
         glBindVertexArray(r.vao);glDrawArrays(GL_TRIANGLES,0,r.count);

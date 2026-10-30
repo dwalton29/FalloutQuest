@@ -1,4 +1,5 @@
 #pragma once
+#include "ui/fo3-system-colour.h"
 // Q22.7: independent, optional diagnostic HUD. One mono font geometry build
 // per half-second, then a single small stereo draw per eye. Rendering text is
 // kept outside the world/Pip-Boy texture and all Fallout save authority.
@@ -120,7 +121,7 @@ inline void Render(const float* mvp,unsigned mode){
     glUseProgram(font.program);
     glUniformMatrix4fv(font.mvpLoc,1,GL_FALSE,mvp);
     glUniform1i(font.texLoc,0);
-    glUniform4f(font.tintLoc,26.f/255.f,1.f,128.f/255.f,1.f);
+    glUniform4f(font.tintLoc,fo3uicolor::Main[0],fo3uicolor::Main[1],fo3uicolor::Main[2],1.f);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D,font.fontTexture);
     glBindVertexArray(s.vao);

@@ -565,6 +565,8 @@ public:
   bool PickupWorldWeapon(uint64_t id);
   bool UpdateWorldWeapon(uint64_t id, const fo3weapon::WorldPose &pose);
   bool FireWeapon(uint64_t id);
+  bool CanReloadWeapon(uint64_t id) const;
+  bool ReloadWeapon(uint64_t id);
   bool EjectMagazine(uint64_t id);
   bool LoadMagazine(uint64_t id);
   bool ChamberWeapon(uint64_t id);

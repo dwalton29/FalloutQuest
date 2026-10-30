@@ -1,4 +1,5 @@
 #pragma once
+#include "ui/fo3-system-colour.h"
 #include "fo3-interaction-hud-renderer.h"
 #include "world/interaction/fo3-interaction.h"
 
@@ -123,7 +124,7 @@ inline void Render(const float *mvp, const Fo3LootPanel &panel) {
   glUniform4f(font.tintLoc, .015f, .035f, .025f, .87f);
   glDrawArrays(GL_TRIANGLES, 0, 6);
   const bool selectedCrime=!panel.rows.empty()&&panel.rows[panel.selected].crime;
-  auto tint=[&](bool crime,float alpha){glUniform4f(font.tintLoc,crime?1.f:26.f/255,crime?67.f/255:1.f,crime?42.f/255:128.f/255,alpha);};
+  auto tint=[&](bool crime,float alpha){glUniform4f(font.tintLoc,crime?fo3uicolor::Crime[0]:fo3uicolor::Main[0],crime?fo3uicolor::Crime[1]:fo3uicolor::Main[1],crime?fo3uicolor::Crime[2]:fo3uicolor::Main[2],alpha);};
   if (r.highlight) {
     tint(selectedCrime,.22f);
     glDrawArrays(GL_TRIANGLES, 6, 6);

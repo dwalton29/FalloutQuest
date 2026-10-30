@@ -42,11 +42,29 @@ static void Synthetic(){
     auto& objective=d.quests[900].objectives[10];objective.conditionalTargets=true;fo3pipdata::ObjectiveTarget target;target.reference=800;
     fo3pipdata::Condition condition;condition.function=72;condition.a=PlayerBase;condition.value=1;target.conditions.push_back(condition);objective.targetItems.push_back(target);
     auto& progress=navigation.initial.pipboy.quests[900];progress.objectives[10].displayed=true;navigation.initial.pipboy.selectedQuest=900;
-    fo3pipdata::Placement door;door.cell=10;door.x=20;door.y=40;door.teleportRef=802;d.doors[10].push_back(door);d.targets[802].cell=30;d.targets[802].world=1;
+    fo3pipdata::Placement door;door.cell=10;door.x=20;door.y=40;door.teleportRef=802;d.doors[10].push_back(door);d.targets[801]=door;navigation.references[801].base=1;navigation.references[802].base=1;d.targets[802].cell=30;d.targets[802].world=1;
     Player player(navigation);player.SetScriptPlayerLocation(0,0,0,10,0);
     const auto targets=fo3pipdata::NavigationTargets(player);Check(targets.size()==1&&targets.front()==800,"conditional objective uses original player context");
     fo3pipdata::Point point;Check(fo3compass::TargetPoint(player,{10,0,0,0,0},800,point)&&point.x==20&&point.y==40,"interior quest compass points to exit door");
     const auto compass=fo3compass::Build(player,{10,0,0,0,0},0);Check(compass.icons.size()==1&&compass.icons[0].kind==fo3compass::Kind::Quest,"quest icon reaches compass frame");
+  }
+  {Catalog route;route.initial.baseHealth=100;route.initial.special.fill(5);auto& d=route.pipboy;route.doorBases.insert(300);
+    auto portal=[&](uint32_t a,uint32_t b,uint32_t cell,uint32_t world,float x,uint32_t nextCell,uint32_t nextWorld,float nextX){
+      auto& p=d.targets[a];p.base=300;p.cell=cell;p.world=world;p.x=x;p.teleportRef=b;auto& q=d.targets[b];q.base=300;q.cell=nextCell;q.world=nextWorld;q.x=nextX;q.teleportRef=a;
+      route.references[a].base=route.references[b].base=300;
+    };
+    portal(10,11,1,1,100,1000,0,0);portal(12,13,1000,0,100,1001,0,0);portal(14,15,1001,0,100,2,2,10);portal(16,17,2,2,20,1002,0,0);
+    d.targets[200].cell=1002;d.targets[200].x=70;d.targets[201].cell=1;d.targets[201].world=1;
+    Player p(route);fo3questroute::Navigator navigator;
+    Check(navigator.Toward(p,{1,1,0,0,0},200).door==10,"exterior quest enters its original metro link");
+    Check(navigator.Toward(p,{1000,0,0,0,0},200).door==12,"first metro CELL points to next tunnel door");
+    Check(navigator.Toward(p,{1001,0,0,0,0},200).door==14,"second metro CELL points to exterior exit");
+    Check(navigator.Toward(p,{2,2,10,0,0},200).door==16,"child exterior points at the building entrance");
+    const auto final=navigator.Toward(p,{1002,0,0,0,0},200);Check(final.valid&&final.door==0&&final.point.x==70,"arrival switches to the actual objective");
+    Check(navigator.Toward(p,{1002,0,0,0,0},201).door==17,"reverse quest traversal begins at interior exit");
+    Check(p.ScriptLock(14,255),"lock tunnel portal");Check(!navigator.Toward(p,{1,1,0,0,0},200).valid,"unusable lock invalidates cached quest route");
+    Check(navigator.Toward(p,{1,1,0,0,0},200,true).door==10,"authored ignore-lock policy can retain a route");
+    Check(p.ScriptUnlock(14)&&navigator.Toward(p,{1,1,0,0,0},200).valid,"unlock restores route without scene reload");
   }
   {
     Catalog c;c.initial.baseHealth=100;c.initial.special.fill(5);c.pipboy.referenceScripts[10]={"Speaker",20};
@@ -126,6 +144,22 @@ static void Original(const char* path){
   struct Cleanup {std::string root;~Cleanup(){std::filesystem::remove(root+"/Fallout3.esm");std::filesystem::remove(root);}} cleanup{root};
   Catalog c;std::string error;Check(LoadCatalog(path,c,error),error);c.initial.gameHour=12;gPlayerSession=std::make_unique<Session>(std::move(c));auto& p=gPlayerSession->player;
   const auto& d=p.Definitions().pipboy;auto id=[&](const char* name){auto f=d.formNames.find(name);Check(f!=d.formNames.end(),std::string("missing ")+name);return f->second;};
+  {fo3questroute::Navigator route;const auto& authored=d.quests.at(id("mq01")).objectives.at(40).targetItems.front();const auto goal=authored.reference;
+    const bool ignoresLocks=!authored.metadata.empty()&&(authored.metadata[0]&1u);
+    const auto& start=d.targets.at(id("megatongateprotectronref"));fo3pipdata::Location here{start.cell,start.world,start.x,start.y,0},target;
+    Check(p.ScriptReferenceLocation(goal,target),"original MQ01 GNR entrance objective location");
+    std::unordered_set<uint32_t> visited;unsigned interiorSteps=0,exteriorSteps=0;
+    for(unsigned hop=0;fo3questroute::Area(here)!=fo3questroute::Area(target);++hop){
+      Check(hop<20,"bounded original GNR portal route");const auto next=route.Toward(p,here,goal,ignoresLocks);
+      Check(next.valid&&next.door&&visited.insert(next.door).second,"original GNR route has a new reachable authored XTEL hop");
+      const auto& door=d.targets.at(next.door);const auto& destination=d.targets.at(door.teleportRef);
+      interiorSteps+=!destination.world;exteriorSteps+=destination.world!=0;
+      std::cout<<"GNR ROUTE source="<<std::hex<<next.door<<" cell="<<door.cell<<" destination="<<door.teleportRef<<" cell="<<destination.cell<<" world="<<destination.world<<std::dec<<"\n";
+      here={destination.cell,destination.world,destination.x,destination.y,0};
+    }
+    Check(interiorSteps>=2&&exteriorSteps>=1,"GNR objective traverses original metro interiors and exterior rather than pointing through worldspaces");
+    Check(route.Toward(p,here,goal,ignoresLocks).door==0&&goal==id("chevychasetognr01ref"),"GNR approach finishes at the authored front door, not a locked balcony");
+  }
   const auto& dc=d.worlds.at(0x18de6);Check(dc.centreX==55296&&dc.centreY==-20480&&dc.scale==.5f&&dc.offsetX==2048&&dc.offsetY==6076,"original Chevy Chase map metadata");
   const auto transformed=fo3pipdata::WorldPoint(d,0x18de6,32768,-45056);
   Check(transformed.x==46080&&transformed.y==-26692,"original child-world scale pivot and game-unit offset");

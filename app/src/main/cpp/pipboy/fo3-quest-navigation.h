@@ -4,7 +4,7 @@
 #include "dialogue/fo3-dialogue-conditions.h"
 #include "fo3-map-runtime.h"
 namespace fo3pipdata {
-inline std::vector<uint32_t> NavigationTargets(const fo3player::Player& player){
+inline std::vector<uint32_t> NavigationTargets(const fo3player::Player& player,std::unordered_map<uint32_t,bool>* ignoresLocks=nullptr){
   std::vector<uint32_t> out;const auto& d=player.Definitions().pipboy;const auto& state=player.Snapshot().pipboy;
   const auto saved=state.quests.find(state.selectedQuest);if(saved==state.quests.end()||saved->second.status!=Completion::Active)return out;
   const auto quest=d.quests.find(saved->first);if(quest==d.quests.end())return out;
@@ -15,7 +15,7 @@ inline std::vector<uint32_t> NavigationTargets(const fo3player::Player& player){
     if(def.targetItems.empty()){if(!def.conditionalTargets)for(auto id:def.targets)if(d.targets.count(id))out.push_back(id);continue;}
     for(const auto& target:def.targetItems){const auto placed=d.targets.find(target.reference);if(placed==d.targets.end())continue;
       const auto& p=placed->second;ctx.target={target.reference,p.base,p.cell,p.world,0,p.x,p.y,p.z,false,false};std::string error;
-      if(fo3dialogue::Conditions(target.conditions,ctx,error)&&error.empty())out.push_back(target.reference);
+      if(fo3dialogue::Conditions(target.conditions,ctx,error)&&error.empty()){out.push_back(target.reference);if(ignoresLocks)(*ignoresLocks)[target.reference]|=!target.metadata.empty()&&(target.metadata[0]&1u);}
     }
   }
   std::sort(out.begin(),out.end());out.erase(std::unique(out.begin(),out.end()),out.end());return out;

@@ -521,7 +521,7 @@ void PostOverlay() {
     Scene(false);Program(31,9);
     const float ui[]{-.1f,-.1f,0,0,0,.1f,-.1f,0,0,0,.1f,.1f,0,0,0,-.1f,-.1f,0,0,0,.1f,.1f,0,0,0,-.1f,.1f,0,0,0};
     fqvk::Mesh(32,ui,6,5,nullptr,0);const uint8_t white[]{255,255,255,255};fqvk::Texture(33,1,1,white,false,false);
-    Set(31,"uMvp",{1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1});Set(31,"uTint",{0,0,1,1});
+    Set(31,"uMvp",{1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1});Set(31,"uTint",{fo3uicolor::Main[0],fo3uicolor::Main[1],fo3uicolor::Main[2],1});
     const float identity[]{1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1},eye[]{0,0,2};
     assert(fqvk::BeginWorldProbe(identity,identity,eye,eye));fqgl::state.texture2d[0].Change(5);
     Submit(1,9,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);
@@ -529,7 +529,7 @@ void PostOverlay() {
     fqgl::state.texture2d[0].Change(33);fqgl::state.depth.Change(false);fqgl::state.blend.Change(false);
     Submit(31,32,GL_TRIANGLES,0,6,0,0,1);fqvk::EndWorldProbe();
     const auto pixels=fqvk::renderer->Readback();
-    for(int eyeIndex=0;eyeIndex<2;++eyeIndex){Near(Pixel(pixels,eyeIndex,32,32,2),1);Near(Pixel(pixels,eyeIndex,32,32,0),0);assert(Pixel(pixels,eyeIndex,48,32,2)<.1f);}
+    for(int eyeIndex=0;eyeIndex<2;++eyeIndex){for(int channel=0;channel<3;++channel)Near(Pixel(pixels,eyeIndex,32,32,channel),fo3uicolor::Linear(fo3uicolor::Main[channel]));assert(Pixel(pixels,eyeIndex,48,32,2)<.1f);}
 }
 
 void HeadlessSceneSubmission() {
@@ -727,6 +727,21 @@ void HdrPresentation(VkFormat advertised,bool alsoSrgb) {
                 if(std::abs(actual-code)>1)throw std::runtime_error("HDR swapchain pixel="+std::to_string(actual)+" expected="+std::to_string(code));
                 if(srgb&&x>0&&x<8)assert(actual>0);
             }
+        }
+    }
+    // Final UI authored bytes must survive exactly one display transfer.
+    Program(62,9);const float overlay[]{-.5f,-.5f,0,0,0,.5f,-.5f,0,0,0,.5f,.5f,0,0,0,-.5f,.5f,0,0,0};
+    fqvk::Mesh(63,overlay,4,5,indices,6);const uint8_t white[]{255,255,255,255};fqvk::Texture(64,1,1,white,false,false);
+    Set(62,"uMvp",{1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1});
+    for(const auto* colour:{fo3uicolor::Main,fo3uicolor::Crime}){
+        assert(fqvk::BeginWorldProbe(identity,identity,eye,eye));fqvk::PostProcess({});
+        Set(62,"uTint",{colour[0],colour[1],colour[2],1});fqgl::state.texture2d[0].Change(64);
+        fqgl::state.depth.Change(false);fqgl::state.blend.Change(false);Submit(62,63,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);
+        assert(fqvk::PresentGameplay(views.data(),output.data(),.04f,1000));
+        for(int e=0;e<2;++e)for(int c=0;c<3;++c){
+            const auto expectedCode=int(std::lround((srgb?colour[c]:fo3uicolor::Linear(colour[c]))*255));
+            const auto actual=submittedPixels[(e*64*64+32*64+32)*4+c];
+            assert(std::abs(int(actual)-expectedCode)<=1);
         }
     }
     fqvk::DestroyGameplaySwapchain();fqvk::ShutdownWorldProbe();offerSrgb=false;offeredColor=VK_FORMAT_R8G8B8A8_UNORM;

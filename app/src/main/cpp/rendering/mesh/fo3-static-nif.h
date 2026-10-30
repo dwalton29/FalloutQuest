@@ -99,7 +99,8 @@ bool LoadFo3StaticNifMeshes(const std::string& modelPath,
                             std::vector<Fo3StaticNifMesh>& outMeshes,
                             bool requireComplete = false,
                             bool referenceRoot = false,
-                            bool includeHidden = false);
+                            bool includeHidden = false,
+                            bool includeEditor = false);
 
 // Compatibility helper used by earlier milestones: returns the first supported
 // renderable shape from the same generalized loader.

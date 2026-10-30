@@ -1,4 +1,5 @@
 #pragma once
+#include "ui/fo3-system-colour.h"
 #include "fo3-compass-state.h"
 #include "fo3-health-bar-hud.h"
 namespace fo3compassui {
@@ -38,7 +39,7 @@ inline void Prepare(const fo3compass::Frame& frame){
 inline void Render(const float* mvp){auto& s=Get();if(!s.ready||!mvp)return;auto& hud=fo3hudrenderer::State();fo3hudrenderer::CachedStateGuard guard;
   glDisable(GL_DEPTH_TEST);glDepthMask(GL_FALSE);glDisable(GL_CULL_FACE);glEnable(GL_BLEND);glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);
   glUseProgram(hud.program);glUniformMatrix4fv(hud.mvpLoc,1,GL_FALSE,mvp);glUniform1i(hud.texLoc,0);glActiveTexture(GL_TEXTURE0);glBindVertexArray(s.vao);
-  glUniform4f(hud.tintLoc,26.f/255,1,128.f/255,1);
+  glUniform4f(hud.tintLoc,fo3uicolor::Main[0],fo3uicolor::Main[1],fo3uicolor::Main[2],1);
   for(const auto& d:s.draws){glBindTexture(GL_TEXTURE_2D,s.sprites[d.sprite].texture);glDrawArrays(GL_TRIANGLES,GLint(d.first),GLsizei(d.count));}
 }
 inline void Shutdown(){auto& s=Get();if(s.vao)glDeleteVertexArrays(1,&s.vao);if(s.vbo)glDeleteBuffers(1,&s.vbo);for(auto& sprite:s.sprites)if(sprite.ownsTexture&&sprite.texture)glDeleteTextures(1,&sprite.texture);s={};}

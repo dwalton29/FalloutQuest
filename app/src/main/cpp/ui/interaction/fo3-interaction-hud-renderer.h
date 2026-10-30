@@ -1,4 +1,5 @@
 #pragma once
+#include "ui/fo3-system-colour.h"
 
 // Single live prompt renderer and shared loot font resources. Metrics and
 // geometry are owned by fo3font; presentation remains HUDMainMenu/text_box.xml.
@@ -46,7 +47,7 @@ inline HudState& State() {
     return state;
 }
 
-// The prompt is drawn after the world and before the post/composite path.
+// The prompt is drawn after world image-space processing in display colour.
 // Restore only renderer-owned cached state; never synchronously query Adreno
 // merely because an Open/Close/Take prompt became visible.
 using GlStateGuard = CachedStateGuard;
@@ -241,7 +242,7 @@ inline void Render(const float* mvp, const char* promptChars,bool crime=false) {
     glUseProgram(s.program);
     glUniformMatrix4fv(s.mvpLoc, 1, GL_FALSE, mvp);
     // FALLOUT.INI Interface HUDMain/HUDAlt; engine selects HUDAlt for crime.
-    glUniform4f(s.tintLoc, crime?1.0f:26.0f/255, crime?67.0f/255:1.0f, crime?42.0f/255:128.0f/255, 1.0f);
+    glUniform4f(s.tintLoc, crime?fo3uicolor::Crime[0]:fo3uicolor::Main[0], crime?fo3uicolor::Crime[1]:fo3uicolor::Main[1], crime?fo3uicolor::Crime[2]:fo3uicolor::Main[2], 1.0f);
     glUniform1i(s.texLoc, 0);
     glBindVertexArray(s.vao);
     glActiveTexture(GL_TEXTURE0);

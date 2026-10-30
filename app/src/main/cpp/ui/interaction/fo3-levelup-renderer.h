@@ -1,4 +1,5 @@
 #pragma once
+#include "ui/fo3-system-colour.h"
 // LevelUpMenu from the user's Fallout - Misc.bsa: two-page 1024x800
 // bracket title, 470px left list, right illustration and selection info.
 // VR changes only scale/position and input; font/perk ICON come from installed
@@ -174,19 +175,19 @@ inline void Render(const float* mvp,const fo3dialogue::Panel& panel){
         r.background?1.f:.017f,r.background?1.f:.011f,.94f);
     glDrawArrays(GL_TRIANGLES,0,r.bgCount);
     glBindTexture(GL_TEXTURE_2D,r.solid);
-    glUniform4f(font.tintLoc,26.f/255,1.f,128.f/255,.8f);
+    glUniform4f(font.tintLoc,fo3uicolor::Main[0],fo3uicolor::Main[1],fo3uicolor::Main[2],.8f);
     glDrawArrays(GL_TRIANGLES,r.bgCount,r.linesCount);
     if(r.highlightCount){
-        glUniform4f(font.tintLoc,26.f/255,1.f,128.f/255,.20f);
+        glUniform4f(font.tintLoc,fo3uicolor::Main[0],fo3uicolor::Main[1],fo3uicolor::Main[2],.20f);
         glDrawArrays(GL_TRIANGLES,r.bgCount+r.linesCount,r.highlightCount);
     }
     glBindTexture(GL_TEXTURE_2D,font.fontTexture);
-    glUniform4f(font.tintLoc,26.f/255,1.f,128.f/255,1);
+    glUniform4f(font.tintLoc,fo3uicolor::Main[0],fo3uicolor::Main[1],fo3uicolor::Main[2],1);
     const GLsizei textStart=r.bgCount+r.linesCount+r.highlightCount;
     glDrawArrays(GL_TRIANGLES,textStart,r.textCount);
     if(r.illustration&&r.iconCount){
         glBindTexture(GL_TEXTURE_2D,r.illustration);
-        glUniform4f(font.tintLoc,26.f/255,1.f,128.f/255,1);
+        glUniform4f(font.tintLoc,fo3uicolor::Main[0],fo3uicolor::Main[1],fo3uicolor::Main[2],1);
         glDrawArrays(GL_TRIANGLES,textStart+r.textCount,r.iconCount);
     }
 }

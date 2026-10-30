@@ -2,6 +2,7 @@
 #include "player/fo3-player-state.h"
 #include "pipboy/fo3-map-runtime.h"
 #include "pipboy/fo3-quest-navigation.h"
+#include "pipboy/fo3-quest-route.h"
 #include <cmath>
 namespace fo3compass {
 constexpr float Pi=3.14159265358979323846f,Window=345.f/1024.f*2*Pi;
@@ -11,18 +12,11 @@ struct Frame {float bearing=0;std::vector<Icon> icons;};
 inline float Relative(float x,float y,float bearing){return std::atan2(std::sin(std::atan2(x,y)-bearing),std::cos(std::atan2(x,y)-bearing));}
 // One gate per original XTEL hop; interior objectives point at the door leading
 // toward their target, not at unrelated coordinates in the other CELL.
-inline bool TargetPoint(const fo3player::Player& player,const fo3pipdata::Location& from,uint32_t reference,fo3pipdata::Point& point){
-  const auto& d=player.Definitions().pipboy;fo3pipdata::Location target;if(!player.ScriptReferenceLocation(reference,target))return false;
-  if((from.world&&from.world==target.world)||(!from.world&&from.cell==target.cell)){point={target.x,target.y};return true;}
-  if(from.world){const auto exit=fo3pipdata::ExteriorEntrance(d,target.cell,target.x,target.y);if(exit.world==from.world){point={exit.x,exit.y};return true;}return false;}
-  struct Hop{uint32_t cell;bool hasFirst;fo3pipdata::Point first;};std::vector<Hop> pending{{from.cell,false,{}}};std::unordered_set<uint32_t> seen;
-  for(size_t i=0;i<pending.size()&&i<128;++i){const auto hop=pending[i];if(!seen.insert(hop.cell).second)continue;const auto doors=d.doors.find(hop.cell);if(doors==d.doors.end())continue;
-    for(const auto& door:doors->second){const auto dest=d.targets.find(door.teleportRef);if(dest==d.targets.end())continue;const auto& t=dest->second;
-      const auto first=hop.hasFirst?hop.first:fo3pipdata::Point{door.x,door.y};
-      if((target.world&&t.world==target.world)||(!target.world&&t.cell==target.cell)){point=first;return true;}
-      if(!t.world)pending.push_back({t.cell,true,first});
-    }
-  }return false;
+inline bool TargetPoint(const fo3player::Player& player,const fo3pipdata::Location& from,uint32_t reference,fo3pipdata::Point& point,bool ignoreLocks=false){
+  static thread_local fo3questroute::Navigator navigation;
+  const auto route=navigation.Toward(player,from,reference,ignoreLocks);
+  if(route.valid)point=route.point;
+  return route.valid;
 }
 inline Frame Build(const fo3player::Player& player,const fo3pipdata::Location& location,float bearing){
   Frame out;out.bearing=bearing;const auto& d=player.Definitions().pipboy;const auto& state=player.Snapshot().pipboy;
@@ -33,7 +27,8 @@ inline Frame Build(const fo3player::Player& player,const fo3pipdata::Location& l
     if(dx*dx+dy*dy>d.markerVisibleDistance*d.markerVisibleDistance)continue;
     add(fo3pipdata::MarkerKnown(m,entry.first,state)?Kind::Discovered:Kind::Landmark,{m.x,m.y});
   }
-  for(auto id:fo3pipdata::NavigationTargets(player)){fo3pipdata::Point point;if(TargetPoint(player,location,id,point))add(Kind::Quest,point);}
+  std::unordered_map<uint32_t,bool> ignoresLocks;
+  for(auto id:fo3pipdata::NavigationTargets(player,&ignoresLocks)){fo3pipdata::Point point;if(TargetPoint(player,location,id,point,ignoresLocks[id]))add(Kind::Quest,point);}
   if(location.world&&state.waypoint.world==fo3pipdata::MapWorld(d,location.world)){
     // Waypoints are stored in the root map's game coordinates.
     const auto here=fo3pipdata::WorldPoint(d,location.world,location.x,location.y);

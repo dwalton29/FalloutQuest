@@ -3,6 +3,7 @@
 #include "weapons/fo3-weapon-interaction.h"
 #include "weapons/fo3-weapon-hit.h"
 #include "weapons/fo3-weapon-holsters.h"
+#include "weapons/fo3-reload-policy.h"
 #include <cassert>
 #include <cmath>
 #include <iostream>
@@ -45,6 +46,27 @@ Catalog Fixture() {
   c.references[20].base=30;
   c.containers[30].entries.push_back({0x434f,0,2,1,.5f,false});
   return c;
+}
+void ReloadTests() {
+  Player p(Fixture());assert(p.Add(0x434f,1));const auto id=p.Snapshot().inventory.front().id;
+  assert(p.Equip(id)&&p.Add(0x4241,18));
+  assert(p.EjectMagazine(id));const auto ejected=p.Revision();
+  assert(!p.EjectMagazine(id)&&p.Revision()==ejected&&p.AmmoReserve(0x4241)==18);
+  std::string error;const auto path="/tmp/fq-reload-"+std::to_string(getpid());
+  assert(p.Save(path,error));Player restored(Fixture());assert(restored.Restore(path,error));unlink(path.c_str());
+  assert(!restored.EjectMagazine(id)&&restored.CanReloadWeapon(id)&&restored.ReloadWeapon(id));
+  assert(restored.Weapon(id)->loadedRounds==12&&!restored.Weapon(id)->needsAction&&restored.AmmoReserve(0x4241)==6);
+  const auto full=restored.Revision();assert(!restored.ReloadWeapon(id)&&restored.Revision()==full);
+  for(int i=0;i<12;++i)assert(restored.FireWeapon(id));
+  assert(!restored.Weapon(id)->needsAction&&restored.EjectMagazine(id));const auto empty=restored.Revision();
+  assert(!restored.EjectMagazine(id)&&restored.Revision()==empty);
+  assert(restored.ReloadWeapon(id)&&restored.Weapon(id)->loadedRounds==6&&restored.AmmoReserve(0x4241)==0);
+  for(int i=0;i<6;++i)assert(restored.FireWeapon(id));
+  const auto dry=restored.Revision();assert(!restored.ReloadWeapon(id)&&restored.Revision()==dry);
+  assert(fo3weapon::InsertionZone({.4f,0,0},{0,0,0},{.2f,.1f,.1f}));
+  assert(fo3weapon::InsertionZone({0,.4f,0},{0,0,0},{.2f,.1f,.1f}));
+  assert(!fo3weapon::InsertionZone({0,.8f,0},{0,0,0},{.2f,.1f,.1f}));
+  assert(!fo3weapon::InsertionZone({NAN,0,0},{0,0,0},{.2f,.1f,.1f}));
 }
 void Ownership(Catalog c) {
   // Isolate the test inventory, preserving original item/projectile/rule definitions.
@@ -223,6 +245,7 @@ void BodyAccess(){
   assert(!fo3weapon::Holstered(player,true,pistol,0,[](uint32_t){return false;}));
 }
 int main(int argc,char**argv) {
+  ReloadTests();
   BodyAccess();
   // Gameplay bullets do not pause merely because VR weapon input is blocked.
   const auto normal=fo3weapon::FrameAccessFor(true,false,false,false,true);

@@ -56,6 +56,16 @@ int main(int argc, char **argv) {
       fo3weapon::Asset runtime;assert(runtime.Decode(Read(model),Read(root+"/skeleton.nif"),Read(aim)));
       if(assault){assert(runtime.Reload(Read(reload)));fo3weapon::Definition definition;definition.animation=6;definition.reload=0;assert(runtime.ReloadInteraction(definition)==fo3weapon::ReloadFamily::DetachableRifle);}
       if(!rifle){assert(runtime.Reload(Read(reload)));assert(runtime.reloadSounds[0]=="WPNPistol10mmReloadOut");assert(runtime.reloadSounds[1]=="WPNPistol10mmReloadIn");assert(runtime.reloadSounds[2]=="WPNPistol10mmReloadChamber");}
+      if(!rifle||assault){
+        assert(runtime.hasMagazineGrip&&runtime.reloadAnimation.stop>runtime.reloadAnimation.start);
+        const float contact=assault?runtime.reloadAnimation.textKeys.front().time:13.f/30;
+        float insert=contact;for(const auto& key:reloadClip.textKeys)if(key.text.find(runtime.reloadSounds[1])!=std::string::npos)insert=key.time;
+        fo3anim::Pose hands,parts;const auto time=(insert-reloadClip.start)/reloadClip.frequency;
+        assert(fo3anim::Sample(runtime.firstPerson,reloadClip,time,hands)&&fo3anim::Sample(runtime.nodes,reloadClip,time,parts));
+        const auto actual=fo3anim::Multiply(hands.global[fo3anim::FindBone(runtime.firstPerson,"Bip01 L Hand")],runtime.magazineInLeft);
+        const auto expected=fo3anim::Multiply(hands.global[fo3anim::FindBone(runtime.firstPerson,"Weapon")],parts.delta[runtime.clipNode]);
+        for(size_t i=0;i<16;++i)assert(std::abs(actual[i]-expected[i])<.001f);
+      }
       const auto hip=fo3weapon::Hip({1,2,3},fo3vr::Identity());assert(hip.Contains(hip.center));
       assert(hip.radius.x==.28f&&hip.radius.y==.28f&&hip.radius.z==.28f);
       const auto back=fo3weapon::Back({1,2,3},fo3vr::Identity());

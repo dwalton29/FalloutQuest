@@ -1,4 +1,5 @@
 #pragma once
+#include "ui/fo3-system-colour.h"
 // Vanilla HUDMainMenu/XPMeter. Source nodes: XPBracket, XPPointer,
 // XPAmount, XPLabel, XPLastLevel, XPNextLevel and XPLevelUp.
 // Original TAI sprite coordinates and original Fallout font are loaded from
@@ -164,7 +165,7 @@ inline void Render(const float* mvp){
     glUniform1i(hud.texLoc,0);glBindVertexArray(s.vao);
     glActiveTexture(GL_TEXTURE0);
     const float alpha=fo3notify::Notifications().Alpha();
-    glUniform4f(hud.tintLoc,26.f/255,1.f,128.f/255,alpha);
+    glUniform4f(hud.tintLoc,fo3uicolor::Main[0],fo3uicolor::Main[1],fo3uicolor::Main[2],alpha);
     glBindTexture(GL_TEXTURE_2D,s.bracket);
     glDrawArrays(GL_TRIANGLES,s.bracketFirst,s.bracketCount);
     glBindTexture(GL_TEXTURE_2D,s.pointer);

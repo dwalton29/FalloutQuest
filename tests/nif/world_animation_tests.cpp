@@ -1,6 +1,7 @@
 #include "rendering/fo3-visual-admission.h"
 #include "../../app/src/main/cpp/rendering/mesh/fo3-static-nif.cpp"
 #include "world/interaction/fo3-door-nif-animation.h"
+#include "world/interaction/fo3-door-activation.h"
 #include <cassert>
 #include <fstream>
 #include <iostream>
@@ -22,12 +23,35 @@ static void VisibilityAdmissionTests(){
  check(true,false,0,false,0);check(false,true,INVALID_REF,false,0);
  check(false,true,0,false,1);check(false,true,1,false,1);
  check(true,false,0,true,2);check(false,true,0,true,1);check(false,true,INVALID_REF,true,0);
+ // BSX editor markers must stay hidden even when animated visibility opts
+ // into hidden geometry. Activation can explicitly request the authored proxy.
+ for(bool flagged:{false,true})for(bool includeHidden:{false,true})for(bool includeEditor:{false,true}){
+   NifHeader h;h.userVersion=11;h.bsVersion=34;h.numBlocks=5;h.strings={"Scene Root","EditorMarker","BSX"};h.blockTypes={"NiNode","NiTriShape","BSXFlags"};h.blockTypeIndices={0,0,1,1,2};
+   auto root=node(false,false,0);root[4]=1;root.insert(root.begin()+8,{4,0,0,0});
+   auto editor=base(false);editor[0]=1;editor[1]=editor[2]=editor[3]=0;u32(editor,1);u32(editor,3);u32(editor,0);
+   auto flags=std::vector<uint8_t>{};u32(flags,2);u32(flags,flagged?32:0);
+   std::vector<uint8_t> bytes;for(const auto& b:{root,editor,base(false),base(false),flags}){h.blockOffsets.push_back(bytes.size());h.blockSizes.push_back(b.size());bytes.insert(bytes.end(),b.begin(),b.end());}
+   std::vector<uint8_t> selected;Q970SceneStats stats;assert(Q970BuildRenderableSet(bytes,h,selected,stats,includeHidden,includeEditor));
+   assert(stats.selectedShapes==((flagged&&!includeEditor)?1u:2u)&&!stats.fallbackAll);
+ }
  assert(Fo3IsTriggerHelperModel("Triggers\\TrigActorBox03.NIF"));
  assert(Fo3IsTriggerHelperModel("TRIGGERS/TrigActorBox03.nif"));
  assert(!Fo3IsTriggerHelperModel("Architecture\\Wasteland\\SuperDuperMart01.NIF"));
 }
 int main(int argc,char** argv){
   VisibilityAdmissionTests();
+  if(argc==3&&std::string(argv[1])=="--doors"){
+    const std::string root=argv[2];std::vector<Fo3StaticNifMesh> visible,proxy;
+    const auto generic=root+"/gendoor01.nif";
+    assert(LoadFo3StaticNifMeshes(generic,visible,false,true,true));
+    assert(LoadFo3StaticNifMeshes(generic,proxy,false,true,true,true));
+    assert(visible.size()==1&&proxy.size()==2);
+    for(const auto& name:{"gendoor01.nif","bld12door01.nif","metroentrancedoor01.nif","metrotunneltransdoorload01.nif","gnrbuildingdoor01.nif"}){
+      assert(LoadFo3StaticNifMeshes(root+"/"+name,proxy,false,true,true,true));
+      assert(fo3doorpick::FromShapes(proxy).valid);
+    }
+    std::cout<<"Original generic door editor branch hidden; ruined/metro/GNR activation geometry retained\n";return 0;
+  }
   using namespace fo3anim;
   Skeleton s;Bone root;root.name="root";s.bones.push_back(root);assert(FinalizeSkeleton(s));
   Clip c;c.stop=2;c.cycle=2;PropertyTrack property;property.bone="root";property.kind=PropertyKind::Visibility;

@@ -2539,6 +2539,18 @@ private:
             RenderScene(viewProjection.m);
             const auto motionUiBefore=fqgl::counters.draws;
             if(Fo3TerminalFocus()&&!IsFo3LoadingVisible())RenderFo3Terminal(viewProjection.m);
+            // Ordinary overlays draw after the image-space composite below.
+            // Lockpicking draws after post on a separate modal depth surface.
+            // It no longer modifies the world/MSAA depth target.
+            const bool q234LateDepthWritesPossible =
+                IsFo3LoadingVisible();
+            if(fqgl::counters.draws!=motionUiBefore)fqmotion::eye.Block(fqmotion::Ui);
+            bool motionDepthReady=q1280PostActive&&q1280PostFbo&&q1370PostDepth;
+            Q1350CompositeEyePostQ1350(eyeIndex, framebuffer_, eye.width, eye.height,
+                                       q234LateDepthWritesPossible);
+            if(spacewarpProducerReady_&&glGetError()!=GL_NO_ERROR)motionDepthReady=false;
+            const auto motionLateUiBefore=fqgl::counters.draws;
+            // UI system colours are display colours, never world image-space inputs.
             if(gScriptMessagePanel.visible&&!IsFo3LoadingVisible()) {
                 const float yaw=gQ210Head[3];
                 Mat4 model{};
@@ -2660,18 +2672,6 @@ private:
                     }
                 }
             }
-            // All ordinary post-world UI writes colour only (health, dialogue,
-            // barter, script messages, ammo, loot and interaction prompts).
-            // Lockpicking draws after post on a separate modal depth surface.
-            // It no longer modifies the world/MSAA depth target.
-            const bool q234LateDepthWritesPossible =
-                IsFo3LoadingVisible();
-            if(fqgl::counters.draws!=motionUiBefore)fqmotion::eye.Block(fqmotion::Ui);
-            bool motionDepthReady=q1280PostActive&&q1280PostFbo&&q1370PostDepth;
-            Q1350CompositeEyePostQ1350(eyeIndex, framebuffer_, eye.width, eye.height,
-                                       q234LateDepthWritesPossible);
-            if(spacewarpProducerReady_&&glGetError()!=GL_NO_ERROR)motionDepthReady=false;
-            const auto motionLateUiBefore=fqgl::counters.draws;
             // Final colour HUD pass, after world, hands, prompts, loot and post.
             // One head-relative pose/queue snapshot shared by both stereo eyes.
             if(!IsFo3LoadingVisible()&&!Fo3DialogueFocus()&&!Fo3ScriptMessageFocus()&&!Fo3LevelUpFocus()&&!Fo3PipboyFocus()&&!(Fo3LockpickFocus()||Fo3TerminalFocus())) {

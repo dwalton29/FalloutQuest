@@ -1,4 +1,5 @@
 #pragma once
+#include "ui/fo3-system-colour.h"
 #include "ui/loading/fo3-loading-vr.h"
 #include "ui/interaction/fo3-interaction-hud-renderer.h"
 #include "player/fo3-lockpick.h"
@@ -107,7 +108,7 @@ inline void Render(const float* vp,const fo3lockpick::Game& game,const fo3player
   glEnableVertexAttribArray(1);glVertexAttribPointer(1,2,GL_FLOAT,GL_FALSE,sizeof(fo3hudassets::Vertex),reinterpret_cast<void*>(3*sizeof(float)));
   glDisable(GL_DEPTH_TEST);glDepthMask(GL_FALSE);glEnable(GL_BLEND);glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);
   glUseProgram(font.program);glUniformMatrix4fv(font.mvpLoc,1,GL_FALSE,panel.data());glUniform1i(font.texLoc,0);
-  glUniform4f(font.tintLoc,26.f/255,1,128.f/255,1);glBindTexture(GL_TEXTURE_2D,font.fontTexture);glDrawArrays(GL_TRIANGLES,0,textCount);
+  glUniform4f(font.tintLoc,fo3uicolor::Main[0],fo3uicolor::Main[1],fo3uicolor::Main[2],1);glBindTexture(GL_TEXTURE_2D,font.fontTexture);glDrawArrays(GL_TRIANGLES,0,textCount);
   glBindTexture(GL_TEXTURE_2D,font.interfaceTexture);glDrawArrays(GL_TRIANGLES,textCount,GLsizei(vertices.size())-textCount);
 }
 inline void Shutdown(){fo3lockoverlay::Shutdown();preparation.Reset();for(auto* m:{&assets.lock,&assets.pin})fo3loadingvr::DeleteShapes(m->shapes);assets={};if(vao)glDeleteVertexArrays(1,&vao);if(vbo)glDeleteBuffers(1,&vbo);vao=vbo=0;started=ready=failed=anchored=spritesLoaded=false;}

@@ -1,3 +1,4 @@
+#include "ui/fo3-system-colour.h"
 #include "fo3-vulkan-renderer.h"
 #include "fo3-vulkan-bridge.h"
 #include "fo3-vulkan-shaders.h"
@@ -962,6 +963,10 @@ public:
         const size_t uniformBytes=shaders::programs[kind].uniformSize;
         if(cursor+uniformBytes+instanceBytes>arena.size||draws>=8176){++skipped;++skipReasons[5];return;}
         std::memcpy(static_cast<uint8_t*>(arena.mapped)+cursor,item.uniforms.data(),uniformBytes);
+        if(p.ui&&postDone&&!offscreen)for(const auto& field:p.fields)if(!std::strcmp(field.field.name,"uTint")){
+            auto* tint=reinterpret_cast<float*>(static_cast<uint8_t*>(arena.mapped)+cursor+field.field.offset);
+            for(int channel=0;channel<3;++channel)tint[channel]=fo3uicolor::Linear(tint[channel]);
+        }
         if(p.water)for(const auto& e:p.fields) {
             float* out=reinterpret_cast<float*>(static_cast<uint8_t*>(arena.mapped)+cursor+e.field.offset);
             if(!std::strcmp(e.field.name,"uSceneSnapshotReady"))*out=snapshotReady?1.0f:0.0f;

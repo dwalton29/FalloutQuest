@@ -2122,6 +2122,15 @@ std::shared_ptr<const fo3doorpick::Bounds> LoadFo3DoorActivation(const std::stri
         auto bounds=fo3doorpick::FromShapes(shapes);
         if(bounds.valid)result=std::make_shared<const fo3doorpick::Bounds>(bounds);
     }
+    if(!result){
+        // Some original load doors are editor-only proxies with no BHK. Their
+        // geometry provides activation bounds without entering the render list.
+        std::vector<Fo3StaticNifMesh> proxy;
+        if(LoadFo3StaticNifMeshes(model,proxy,false,true,true,true)){
+            const auto bounds=fo3doorpick::FromShapes(proxy);
+            if(bounds.valid)result=std::make_shared<const fo3doorpick::Bounds>(bounds);
+        }
+    }
     std::lock_guard<std::mutex> lock(mutex);return cache.emplace(key,std::move(result)).first->second;
 }
 
@@ -4328,6 +4337,7 @@ void WeaponShutdown();
 void WeaponPersistWorld();
 bool WeaponHeld();
 bool WeaponReloadActive();
+bool WeaponAnimatedReloadHand(fo3vr::V&,fo3vr::R&);
 float gWeaponHaptic[2]{};
 Vec3 gWeaponPalm[2]{};
 bool gWeaponPalmValid[2]{};
@@ -5506,7 +5516,6 @@ int Q2400ChooseDoorSwingSign(uint32_t refFormId,float activatorX,float activator
     return pdx*pdx+pdz*pdz>=mdx*mdx+mdz*mdz?1:-1;
 }
 bool Q2400ToggleInteriorDoor(uint32_t refFormId,float activatorX,float activatorZ) {
-    if(gExteriorWorldspaceQ1890!=0u) return false;
     const GpuObject* first=Q2400FindSwingDoorObject(refFormId);
     if(!first) return false;
     Q2400InteriorDoorState& state=gQ2400InteriorDoors[refFormId];
@@ -5558,16 +5567,17 @@ bool Q2400ToggleInteriorDoor(uint32_t refFormId,float activatorX,float activator
     return true;
 }
 void UpdateFo3InteriorDoorsQ2400() {
-    if(gExteriorWorldspaceQ1890!=0u) return;
     if(gPlayerSession&&!Fo3GameplayBlocked()){
-      static uint64_t playerRevision=UINT64_MAX,sceneSerial=UINT64_MAX;
+      static uint64_t sceneSerial=UINT64_MAX;
+      static std::unordered_map<uint32_t,bool> appliedTargets;
+      static bool retry=false;
       auto& player=gPlayerSession->player;
-      if(playerRevision!=player.Revision()||sceneSerial!=gQ2400DoorSceneSerial){
-        playerRevision=player.Revision();sceneSerial=gQ2400DoorSceneSerial;
+      if(retry||appliedTargets!=player.Snapshot().doorStates||sceneSerial!=gQ2400DoorSceneSerial){
+        appliedTargets=player.Snapshot().doorStates;sceneSerial=gQ2400DoorSceneSerial;retry=false;
         for(const auto& target:player.Snapshot().doorStates){
           const auto door=Q2400FindSwingDoorObject(target.first);if(!door)continue;
           const auto moving=gQ2400InteriorDoors.find(target.first);
-          if(moving!=gQ2400InteriorDoors.end()&&moving->second.q2401Moving){playerRevision=UINT64_MAX;continue;}
+          if(moving!=gQ2400InteriorDoors.end()&&moving->second.q2401Moving){retry=true;continue;}
           if(Q2400DoorOpen(target.first)!=target.second)Q2400ToggleInteriorDoor(target.first,gQ210Head[0],gQ210Head[2]);
         }
       }
@@ -5695,11 +5705,11 @@ bool QueryDoorInternalQ1700(float ox, float oy, float oz,
     for (const GpuObject& object : gObjects) {
         if (object.baseRecordType != "DOOR") continue;
         if(object.nonvisualResident&&!object.doorActivation)continue;
-        const bool localSwing=object.q2400SwingDoor&&gExteriorWorldspaceQ1890==0u;
+        const bool localSwing=object.q2400SwingDoor;
         if(!object.teleport.valid&&!localSwing) continue;
         float t = 0.0f;
         bool intersects=false;
-        if(object.teleport.valid&&object.doorActivation){
+        if((object.teleport.valid||object.nonvisualResident)&&object.doorActivation){
             float inverse[16]{};
             if(Q2016InvertAffine(object.q2016PlacementMatrix,inverse))
                 intersects=fo3doorpick::Ray(*object.doorActivation,inverse,FO3_UNITS_PER_METRE,{ox,oy,oz},{dx,dy,dz},bestT,t);
@@ -11479,10 +11489,13 @@ void BuildVrAuthoredArms(){
 Q213ArmPose Q213SolveMasterArm(bool left,Vec3 target,const Q220HandBasis& basis,
                               Vec3 across,Vec3 inward,bool orientationValid){
     Q213ArmPose pose;const int side=left?0:1;
-    if(!orientationValid||!basis.ready){gVrArmState[side]={};return pose;}
-    fo3vr::R hand=fo3vr::Identity();
-    if(!Q220BasisRotation(basis.littleToThumb,basis.intoPalm,across,inward,hand.data()))return pose;
-    const auto solved=fo3vr::SolveArm(gVrArms[side],VrPoint(target),hand,gVrArmState[side],gVrPoseDt);
+    fo3vr::R hand=fo3vr::Identity();fo3vr::V authoredTarget;
+    const bool authored=left&&WeaponAnimatedReloadHand(authoredTarget,hand);
+    if(!authored){
+        if(!orientationValid||!basis.ready){gVrArmState[side]={};return pose;}
+        if(!Q220BasisRotation(basis.littleToThumb,basis.intoPalm,across,inward,hand.data()))return pose;
+    }
+    const auto solved=fo3vr::SolveArm(gVrArms[side],authored?authoredTarget:VrPoint(target),hand,gVrArmState[side],gVrPoseDt);
     gVrSolvedArms[side]=solved;
     if(!solved.valid)return pose;
     pose.clavicle=RuntimeDelta(solved.clavicle);pose.upper=RuntimeDelta(solved.upper);

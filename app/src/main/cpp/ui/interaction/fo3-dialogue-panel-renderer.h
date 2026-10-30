@@ -1,4 +1,5 @@
 #pragma once
+#include "ui/fo3-system-colour.h"
 #include "dialogue/fo3-dialogue-panel.h"
 #include "fo3-interaction-hud-renderer.h"
 namespace fo3dialogueui {
@@ -52,8 +53,8 @@ inline void Render(const float* mvp,const fo3dialogue::Panel& panel,Resources* r
   glBlendEquationSeparate(GL_FUNC_ADD,GL_FUNC_ADD);glBlendFuncSeparate(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA,GL_ONE,GL_ONE_MINUS_SRC_ALPHA);
   glUseProgram(font.program);glUniformMatrix4fv(font.mvpLoc,1,GL_FALSE,mvp);glUniform1i(font.texLoc,0);glBindVertexArray(r.vao);
   glBindTexture(GL_TEXTURE_2D,r.solid);glUniform4f(font.tintLoc,.015f,.035f,.025f,.87f);glDrawArrays(GL_TRIANGLES,0,6);
-  if(r.highlight){glUniform4f(font.tintLoc,26.f/255,1,128.f/255,.22f);glDrawArrays(GL_TRIANGLES,6,6);}
-  glBindTexture(GL_TEXTURE_2D,font.fontTexture);glUniform4f(font.tintLoc,26.f/255,1,128.f/255,1);glDrawArrays(GL_TRIANGLES,r.textStart,r.textCount);
+  if(r.highlight){glUniform4f(font.tintLoc,fo3uicolor::Main[0],fo3uicolor::Main[1],fo3uicolor::Main[2],.22f);glDrawArrays(GL_TRIANGLES,6,6);}
+  glBindTexture(GL_TEXTURE_2D,font.fontTexture);glUniform4f(font.tintLoc,fo3uicolor::Main[0],fo3uicolor::Main[1],fo3uicolor::Main[2],1);glDrawArrays(GL_TRIANGLES,r.textStart,r.textCount);
 }
 }
 

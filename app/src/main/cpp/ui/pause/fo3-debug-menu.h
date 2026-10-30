@@ -1,4 +1,5 @@
 #pragma once
+#include "weapons/fo3-reload-policy.h"
 #include "player/fo3-player-state.h"
 #include "scripting/fo3-script-quest-entry.h"
 #include "dialogue/fo3-dialogue-panel.h"
@@ -54,6 +55,7 @@ public:
         add(std::string("Performance HUD: ")+(perfHudMode==0?"Off":perfHudMode==1?"FPS":"Detailed"));
         add("Unlock all map locations");
         add("Quest Starts");
+        add(std::string("Manual reloading: ")+(fo3weapon::ManualReloadEnabled()?"On":"Off (B reloads)"));
         break;
       case Page::Quests:panel.title="QUEST STARTS - PAGE "+std::to_string(questPage+1);
         for(size_t i=questPage*PageSize;i<quests.size()&&i<(questPage+1)*PageSize;++i){const auto id=quests[i];const auto& q=player.Definitions().pipboy.quests.at(id);add(q.name+" ["+Hex(id)+"]");}
@@ -144,6 +146,7 @@ public:
         else if(index==5){special=p.Snapshot().special;Go(Page::Special);}
         else if(index==7){const auto n=p.DebugUnlockLocations();changed=n!=0;feedback=std::to_string(n)+" locations unlocked";Refresh();}
         else if(index==8){BuildQuests();Go(Page::Quests);}
+        else if(index==9){fo3weapon::ManualReloadEnabled()=!fo3weapon::ManualReloadEnabled();Refresh();}
         else if(index==6){perfHudMode=uint8_t((perfHudMode+1u)%3u);Refresh();}
         break;
       case Page::Quests:{const auto begin=questPage*PageSize;const auto count=std::min(PageSize,quests.size()-std::min(begin,quests.size()));

@@ -1,4 +1,5 @@
 #pragma once
+#include "ui/fo3-system-colour.h"
 #include "fo3-interaction-hud-renderer.h"
 namespace fo3ammoui {
 struct State{GLuint vao=0,vbo=0;GLsizei count=0;char text[48]{};};
@@ -31,9 +32,9 @@ inline void Prepare(const char*text){
 inline void Render(const float*mvp){
   auto&s=Get();auto&font=fo3hudrenderer::State();if(!mvp||!s.count||!font.ready)return;
   fo3hudrenderer::CachedStateGuard guard;
-  glEnable(GL_DEPTH_TEST);glDepthMask(GL_FALSE);glDisable(GL_CULL_FACE);glEnable(GL_BLEND);
+  glDisable(GL_DEPTH_TEST);glDepthMask(GL_FALSE);glDisable(GL_CULL_FACE);glEnable(GL_BLEND);
   glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);glUseProgram(font.program);
-  glUniformMatrix4fv(font.mvpLoc,1,GL_FALSE,mvp);glUniform4f(font.tintLoc,26.f/255,1,128.f/255,1);glUniform1i(font.texLoc,0);
+  glUniformMatrix4fv(font.mvpLoc,1,GL_FALSE,mvp);glUniform4f(font.tintLoc,fo3uicolor::Main[0],fo3uicolor::Main[1],fo3uicolor::Main[2],1);glUniform1i(font.texLoc,0);
   glActiveTexture(GL_TEXTURE0);glBindTexture(GL_TEXTURE_2D,font.fontTexture);glBindVertexArray(s.vao);glDrawArrays(GL_TRIANGLES,0,s.count);
 }
 inline void Shutdown(){auto&s=Get();if(s.vbo)glDeleteBuffers(1,&s.vbo);if(s.vao)glDeleteVertexArrays(1,&s.vao);s={};}

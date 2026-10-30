@@ -79,10 +79,11 @@ int main(int argc,char** argv){
   assert(p.DebugSetPerkPoints(0)&&p.Save(path,error)&&restored.Restore(path,error)&&restored.Snapshot().debugPerkPoints==0);unlink(path.c_str());
   fo3debug::Menu m;m.Open(p);const auto rev=p.Revision();
   m.Go(fo3debug::Menu::Page::Debug);m.selected=6;
-  assert(m.perfHudMode==0&&m.panel.choices.size()==9);
+  assert(m.perfHudMode==0&&m.panel.choices.size()==10);
   assert(!m.Confirm()&&m.perfHudMode==1&&p.Revision()==rev);
   assert(!m.Confirm()&&m.perfHudMode==2&&p.Revision()==rev);
   assert(!m.Confirm()&&m.perfHudMode==0&&p.Revision()==rev);
+  m.selected=9;assert(fo3weapon::ManualReloadEnabled());assert(!m.Confirm()&&!fo3weapon::ManualReloadEnabled()&&p.Revision()==rev);assert(!m.Confirm()&&fo3weapon::ManualReloadEnabled());
   m.Go(fo3debug::Menu::Page::Root);m.selected=1;m.Confirm();assert(m.page==fo3debug::Menu::Page::Root&&p.Revision()==rev);
   m.Go(fo3debug::Menu::Page::Special);m.special=p.Snapshot().special;m.selected=0;m.Adjust(1);assert(p.Snapshot().special[0]==5);
   m.selected=7;assert(m.Confirm()&&p.Snapshot().special[0]==6);

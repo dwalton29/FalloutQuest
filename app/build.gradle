@@ -22,8 +22,8 @@ android {
         applicationId 'com.falloutquest.app'
         minSdk 29
         targetSdk 35
-        versionCode 294
-        versionName '0.145.0-script-speech-floor'
+        versionCode 295
+        versionName '0.146.0-hud-routes-reload'
 
         ndk {
             abiFilters 'arm64-v8a'

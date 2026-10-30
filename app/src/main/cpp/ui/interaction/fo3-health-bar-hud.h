@@ -1,4 +1,5 @@
 #pragma once
+#include "ui/fo3-system-colour.h"
 // Original HUDMainMenu HitPoints / EnemyHealth: tiled hud_tick_mark and
 // their distinct authored brackets. No solid replacement artwork is embedded.
 #include "fo3-interaction-hud-renderer.h"
@@ -122,12 +123,12 @@ inline void RenderBar(const float* mvp,const std::array<float,3>& center,
   glBufferSubData(GL_ARRAY_BUFFER,0,count*sizeof(vertices[0]),vertices.data());
   fo3hudassets::UploadVertices(s.vao,vertices.data(),count);
   glBindTexture(GL_TEXTURE_2D,bracket.texture);
-  glUniform4f(hud.tintLoc,26.f/255.f,1.f,128.f/255.f,
+  glUniform4f(hud.tintLoc,fo3uicolor::Main[0],fo3uicolor::Main[1],fo3uicolor::Main[2],
               alpha*(style==Style::Player ? 1.f : kMeterAlpha));
   glDrawArrays(GL_TRIANGLES,0,6);
   if(count>6){
     glBindTexture(GL_TEXTURE_2D,s.tick.texture);
-    glUniform4f(hud.tintLoc,26.f/255.f,1.f,128.f/255.f,alpha*kMeterAlpha);
+    glUniform4f(hud.tintLoc,fo3uicolor::Main[0],fo3uicolor::Main[1],fo3uicolor::Main[2],alpha*kMeterAlpha);
     glDrawArrays(GL_TRIANGLES,6,static_cast<GLsizei>(count-6));
   }
 }
