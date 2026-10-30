@@ -5088,9 +5088,9 @@ bool ProcessQ74TransitionRequest() {
     }
     FlushFo3PlayerState();
     markFinalization("flush-player-state");
+    gPlayerSeat.Reset();gPlayerSeat.scene=std::move(prepared.playerFurniture);gPlayerSeatFade=0;
     Q74DeleteGpuObjects(gObjects);
     Q230DeleteNpcActors();
-    gPlayerSeat.Reset();gPlayerSeat.scene=std::move(prepared.playerFurniture);gPlayerSeatFade=0;
     gQ230NpcActors = std::move(prepared.actors);++gQ230NpcResidenceRevision;
     for (auto& actor : gQ230NpcActors)
         actor.animationStart = Fo3GameplayNow();
