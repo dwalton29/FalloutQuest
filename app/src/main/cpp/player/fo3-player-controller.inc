@@ -2940,9 +2940,10 @@ bool UpperBodyTriangleContactQ930(float x, float z, float feetY,
     const float radius = CollisionRadiusQ712();
     const float queryRadius = radius + Q910_SWEEP_SKIN;
     const float envelopeTop = feetY + StepHeightQ78B() + PLAYER_SKIN + 0.025f;
-    const float lowerCenterY = envelopeTop + radius;
     const float upperCenterY = feetY + PLAYER_HEIGHT - radius;
-    if (lowerCenterY > upperCenterY) return false;
+    // A deep crouch can leave only the head sphere above the step envelope.
+    // Keep that sphere rather than dropping the entire clearance test.
+    const float lowerCenterY = std::min(envelopeTop + radius, upperCenterY);
 
     if (tri.maxY < envelopeTop - Q910_SWEEP_SKIN ||
         tri.minY > feetY + PLAYER_HEIGHT + queryRadius) return false;

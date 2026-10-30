@@ -17,7 +17,7 @@ static void WalkStair(float& x,float& z,float& y,float dz,int frames){
     }
 }
 static void InteriorStepRegression(){
-    for(int variant=0;variant<3;++variant){
+    for(int variant=0;variant<4;++variant){
         ResetFo3CollisionSceneCache();gWorldTriangles.clear();gSurfaceSourcesQ722.clear();
         StairQuad({-1,0,1},{1,0,1},{1,0,-4},{-1,0,-4});
         const float rise=variant==1?.65f:.4f;
@@ -25,14 +25,15 @@ static void InteriorStepRegression(){
             StairQuad({-1,top,front},{1,top,front},{1,top,back},{-1,top,back});
             StairQuad({-1,top-rise,front},{1,top-rise,front},{1,top,front},{-1,top,front});
         }
-        if(variant==2)StairQuad({-1,1.9f,1},{1,1.9f,1},{1,1.9f,-4},{-1,1.9f,-4});
-        StairStart();float x=0,z=.3f,y=0;
+        if(variant>=2){const float ceiling=variant==3?1.f:1.9f;StairQuad({-1,ceiling,1},{1,ceiling,1},{1,ceiling,-4},{-1,ceiling,-4});}
+        StairStart();if(variant==3)PLAYER_HEIGHT=.7f;float x=0,z=.3f,y=0;
         // Ground contact stays stable under submillimetre gravity integration.
         for(int n=0;n<120;++n){WalkStair(x,z,y,0,1);assert(gFallGrounded&&std::abs(y)<.005f);}
         WalkStair(x,z,y,-.025f,135);
         if(variant==0){assert(z< -2.9f&&y>2.7f);WalkStair(x,z,y,.025f,135);WalkStair(x,z,y,0,90);assert(z>.2f&&std::abs(y)<.04f);}
         else assert(z>.15f&&y<.05f); // Tall risers and ceiling still block.
     }
+    PLAYER_HEIGHT=1.7f;
     std::cout<<"Interior stairs: ascent/descent, stable support, tall risers and ceiling clearance passed\n";
 }
 static void OriginalInteriorStairs(const char* left,const char* right){
