@@ -38,7 +38,7 @@ struct RuntimeState {
   // Local-only roaming memory: original PACK schedules and saved progress are untouched.
   std::array<float,3> lastRoamDestination{};
   bool hasLastRoamDestination=false;
-  uint32_t scriptLookTarget=0;
+  uint32_t scriptLookTarget=0,scriptSpeechToken=0;
   uint32_t reference=0,package=0,combatTarget=0,navigationDoor=0;
   // One active XTEL approach. No player scene transition is ever queued.
   uint32_t xtelDoor=0,xtelCell=0;

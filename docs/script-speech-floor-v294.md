@@ -15,7 +15,9 @@ selection preflight aborts the calling transaction; a legitimate empty selection
 remains an original Say no-op. Candidate diagnostics are retained. Regression
 coverage includes the normal captured frame pump, original gate proximity and
 Weld speech, Gob speech and the complete Gob/Nova exchange, and rollback of a
-synthetic unsupported INFO without committing waiting flags.
+synthetic unsupported INFO without committing waiting flags. Scripted actors also
+carry the actual voice token into facial sampling, instead of reading the inactive
+interactive-dialogue token; it advances between responses and clears on stop.
 
 The original water beggar travels to his linked reference. It is a FURN using
 FloorSitMarker.NIF, FRN entry 17, orientation 3141, with original FloorSitEnter,

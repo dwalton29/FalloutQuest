@@ -116,10 +116,10 @@ int main(){try{
  fo3script::Action say;say.kind=fo3script::ActionKind::SayTo;say.reference=40;say.form=500;say.flags=fo3player::PlayerRef;
  Check(p.QueueScriptAction(say),"queue original SayTo");fo3worldscript::Actions();fo3worldscript::SpeechTick();
  Check(p.ScriptActorTalking(40)&&fo3audio::path=="sound/original.ogg","authored audio owns speech");
- const auto token=fo3audio::token;fo3audio::completion=(uint64_t(token+1)<<1)|1;fo3worldscript::SpeechTick();
+ const auto token=fo3audio::token;Check(gQ230NpcActors.back().runtime.scriptSpeechToken==token,"script lip owner follows the actual voice token");fo3audio::completion=(uint64_t(token+1)<<1)|1;fo3worldscript::SpeechTick();
  Check(p.ScriptActorTalking(40)&&!p.Snapshot().pipboy.dialogueVariables.count((uint64_t(40)<<32)|1),"unrelated completion cannot publish INFO results");
  fo3audio::completion=(uint64_t(token)<<1)|1;fo3worldscript::SpeechTick();
- Check(!p.ScriptActorTalking(40),"completion releases speaking actor even after Session::End clears actor");
+ Check(!p.ScriptActorTalking(40)&&gQ230NpcActors.back().runtime.scriptSpeechToken==0,"completion releases speaking actor and lip token even after Session::End clears actor");
  Check(p.Snapshot().pipboy.dialogueVariables.at((uint64_t(40)<<32)|1)==1&&p.Snapshot().pipboy.dialogueVariables.at((uint64_t(40)<<32)|2)==1,"INFO end precedes source filtered SayToDone");
  std::cout<<"World event/controller/presentation and original speech adapters passed\n";
 }catch(const std::exception& e){std::cerr<<e.what()<<"\n";return 1;}}

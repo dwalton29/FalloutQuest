@@ -126,6 +126,14 @@ static void SkipWithA(){
 }
 static void Synthetic(){
   PrepareSynthetic();auto& actor=gQ230NpcActors[0];
+  {const uint32_t token=0x30000001u;assert(!gDialogue.Active());
+    actor.runtime.scriptSpeechToken=token;gPlayerSession->player.SetScriptActorTalking(actor.source.refFormId,true);
+    auto lip=std::make_shared<fo3face::Lip>();lip->frames.resize(30);lip->frames[0].speech[0]=.75f;
+    fo3audio::face.Start(token);fo3audio::face.Asset(token,lip);fo3audio::face.Position(token,0);Tick();
+    assert(actor.facialWeights[0]==.75f);
+    actor.runtime.scriptSpeechToken=0;gPlayerSession->player.SetScriptActorTalking(actor.source.refFormId,false);fo3audio::face.Start(0);
+    for(int i=0;i<20;++i)Tick();for(float weight:actor.facialWeights)assert(weight==0);
+  }
   uint32_t old=0;
   for(int repeat=0;repeat<4;++repeat){
     assert(DialogueCanStart(actor)&&StartFo3Dialogue(42));assert(actor.runtime.dialogue);

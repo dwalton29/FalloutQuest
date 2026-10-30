@@ -241,7 +241,7 @@ void UpdateFo3Dialogue(double now,float stick,bool a,bool b,bool focused,float h
       else
 #endif
       {
-        const auto facial=fo3audio::DialogueFace(gDialogue.audioToken);
+        const auto facial=fo3audio::DialogueFace(actor.runtime.scriptSpeechToken?actor.runtime.scriptSpeechToken:gDialogue.audioToken);
         if(facial.lip)weights=fo3face::Sample(*facial.lip,facial.seconds);
       }
     }else for(size_t c=0;c<weights.size();++c) {

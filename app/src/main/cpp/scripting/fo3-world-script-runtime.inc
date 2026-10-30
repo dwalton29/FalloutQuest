@@ -42,7 +42,7 @@ static fo3dialogue::Context SpeechContext(uint32_t reference,uint32_t target){
 }
 static void SpeechStop(){
     if(gPlayerSession&&speechReference)gPlayerSession->player.SetScriptActorTalking(speechReference,false);
-    if(auto* actor=DialogueActor(speechReference)){actor->runtime.speaking=false;actor->lastFrame=UINT64_MAX;}
+    if(auto* actor=DialogueActor(speechReference)){actor->runtime.speaking=false;actor->runtime.scriptSpeechToken=0;actor->lastFrame=UINT64_MAX;}
     if(speech.Active()&&!gDialogue.Active())fo3audio::DialogueStop();
     speech.End("scripted speech stopped");speechToken=0;speechReference=0;
 }
@@ -94,6 +94,7 @@ void SpeechTick(){
         if(!(done&1u)){Q6H_LOGW("SCRIPT SPEECH VOICE UNAVAILABLE ref=%08X topic=%08X",actor,topic);SpeechStop();return;}
         if(speech.AudioDone(speech.audioToken,true,SpeechContext(actor,speechTarget),player)){
             speechToken=0x30000000u|(++speechSerial&0xffffffu);
+            if(auto* live=DialogueActor(actor))live->runtime.scriptSpeechToken=speechToken;
             fo3audio::Dialogue(speech.Audio(player.Definitions().pipboy),speechToken);return;
         }
         SpeechStop();Event(actor,"SayToDone",topic);FlushFo3PlayerState();
@@ -110,13 +111,14 @@ void SpeechTick(){
     speechReference=action.reference;speechTopic=action.form;speechTarget=action.flags;speechBegan=seconds;
     player.SetScriptActorTalking(action.reference,true);if(actor){actor->runtime.speaking=true;actor->lastFrame=UINT64_MAX;}
     speechToken=0x30000000u|(++speechSerial&0xffffffu);
+    if(actor)actor->runtime.scriptSpeechToken=speechToken;
     fo3audio::DialogueGain(.7f);fo3audio::Dialogue(speech.Audio(player.Definitions().pipboy),speechToken);
 }
 void Register(){
     auto& player=gPlayerSession->player;
     const uint64_t revision=gFo3VisualPublication.Revision();
     if(actorRegistryRevision==gQ230NpcResidenceRevision&&registryPlayer==&player&&runtimeGeneration==player.ScriptRuntimeGeneration()&&registryRevision==revision&&registryStorage==gObjects.data()&&registryCount==gObjects.size())return;
-    if(registryPlayer!=&player||runtimeGeneration!=player.ScriptRuntimeGeneration()){animations.clear();loaded.clear();modifier={};seconds=0;for(auto& actor:gQ230NpcActors){actor.runtime.scriptLookTarget=0;actor.responseIdle=actor.responseToken=actor.responseInfo=0;}}
+    if(registryPlayer!=&player||runtimeGeneration!=player.ScriptRuntimeGeneration()){animations.clear();loaded.clear();modifier={};seconds=0;for(auto& actor:gQ230NpcActors){actor.runtime.scriptLookTarget=actor.runtime.scriptSpeechToken=0;actor.responseIdle=actor.responseToken=actor.responseInfo=0;}}
     actorRegistryRevision=gQ230NpcResidenceRevision;runtimeGeneration=player.ScriptRuntimeGeneration();registryPlayer=&player;registryRevision=revision;registryStorage=gObjects.data();registryCount=gObjects.size();
     auto registry=std::make_shared<fo3script::AnimationRegistry>();
     std::unordered_set<uint32_t> present;
