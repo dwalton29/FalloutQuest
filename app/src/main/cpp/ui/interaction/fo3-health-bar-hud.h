@@ -112,8 +112,7 @@ inline void RenderBar(const float* mvp,const std::array<float,3>& center,
   const std::array<float,3> right{dz/distance,0,-dx/distance};
   Vertices vertices{};
   const size_t count=BuildVertices(vertices,style,bar.Fraction(),width,center,right,bracket.uv,s.tick.uv);
-  if(depthTest)glEnable(GL_DEPTH_TEST);
-  else glDisable(GL_DEPTH_TEST);
+  (void)depthTest;glDisable(GL_DEPTH_TEST);
   glDepthMask(GL_FALSE);glDisable(GL_CULL_FACE);glEnable(GL_BLEND);
   glBlendEquationSeparate(GL_FUNC_ADD,GL_FUNC_ADD);
   glBlendFuncSeparate(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA,GL_ONE,GL_ONE_MINUS_SRC_ALPHA);

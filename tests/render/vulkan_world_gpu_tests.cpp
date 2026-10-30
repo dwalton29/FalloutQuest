@@ -519,7 +519,7 @@ void PipboyTarget() {
 
 void PostOverlay() {
     Scene(false);Program(31,9);
-    const float ui[]{-.1f,-.1f,0,0,0,.1f,-.1f,0,0,0,.1f,.1f,0,0,0,-.1f,-.1f,0,0,0,.1f,.1f,0,0,0,-.1f,.1f,0,0,0};
+    const float ui[]{-.1f,-.1f,.8f,0,0,.1f,-.1f,.8f,0,0,.1f,.1f,.8f,0,0,-.1f,-.1f,.8f,0,0,.1f,.1f,.8f,0,0,-.1f,.1f,.8f,0,0};
     fqvk::Mesh(32,ui,6,5,nullptr,0);const uint8_t white[]{255,255,255,255};fqvk::Texture(33,1,1,white,false,false);
     Set(31,"uMvp",{1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1});Set(31,"uTint",{fo3uicolor::Main[0],fo3uicolor::Main[1],fo3uicolor::Main[2],1});
     const float identity[]{1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1},eye[]{0,0,2};
@@ -530,6 +530,12 @@ void PostOverlay() {
     Submit(31,32,GL_TRIANGLES,0,6,0,0,1);fqvk::EndWorldProbe();
     const auto pixels=fqvk::renderer->Readback();
     for(int eyeIndex=0;eyeIndex<2;++eyeIndex){for(int channel=0;channel<3;++channel)Near(Pixel(pixels,eyeIndex,32,32,channel),fo3uicolor::Linear(fo3uicolor::Main[channel]));assert(Pixel(pixels,eyeIndex,48,32,2)<.1f);}
+    const uint8_t authored[]{26,255,128,255};fqvk::Texture(34,1,1,authored,false,false);
+    assert(fqvk::BeginWorldProbe(identity,identity,eye,eye));fqvk::PostProcess({});
+    fqgl::state.texture2d[0].Change(34);fqgl::state.depth.Change(false);fqgl::state.blend.Change(false);
+    Set(1,"uNoLighting",{1});Set(1,"uPipScreenGain",{-1});Submit(1,9,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);fqvk::EndWorldProbe();
+    const auto wrist=fqvk::renderer->Readback();for(int e=0;e<2;++e)for(int c=0;c<3;++c)Near(Pixel(wrist,e,32,32,c),fo3uicolor::Linear(fo3uicolor::Main[c]));
+
 }
 
 void HeadlessSceneSubmission() {

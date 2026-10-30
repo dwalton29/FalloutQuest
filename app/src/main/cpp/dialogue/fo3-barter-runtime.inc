@@ -18,7 +18,7 @@ void BarterBuildPanels() {
   auto& p=gPlayerSession->player;auto& ui=gBarter;
   auto build=[&](bool buying,fo3dialogue::Panel& panel){
     const auto& inventory=buying?ui.session.merchant:ui.session.player;
-    const auto revision=panel.revision;panel=gDialoguePanel;panel.revision=revision;panel.visible=true;panel.subtitle.clear();panel.choices.clear();
+    const auto previous=panel;const auto revision=panel.revision;panel=gDialoguePanel;panel.revision=revision;panel.visible=true;panel.subtitle.clear();panel.choices.clear();
     const auto ref=p.Definitions().references.find(ui.session.actor);
     const auto npc=ref==p.Definitions().references.end()?p.Definitions().pipboy.dialogueActors.end():p.Definitions().pipboy.dialogueActors.find(ref->second.base);
     const std::string name=npc==p.Definitions().pipboy.dialogueActors.end()?"Merchant":npc->second.name;
@@ -39,7 +39,7 @@ void BarterBuildPanels() {
     panel.subtitle=(net>=0?"Pay ":"Receive ")+std::to_string(std::abs(net))+" caps | Weight "+std::to_string(int(p.InventoryWeight()))+"/"+std::to_string(int(p.CarryCapacity()))+
       (ui.status.empty()?(reason.empty()?"":"\n"+reason):"\n"+ui.status);
     panel.footer="Stick: scroll / switch side\nA Select   Trigger + stick: quantity\nB Return to dialogue";
-    ++panel.revision;
+    panel.revision=revision+(previous.title!=panel.title||previous.subtitle!=panel.subtitle||previous.choices!=panel.choices||previous.selected!=panel.selected);
   };
   build(false,ui.playerPanel);build(true,ui.merchantPanel);
 }

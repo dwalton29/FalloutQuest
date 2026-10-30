@@ -2,14 +2,15 @@
 #include "ui/fo3-system-colour.h"
 #include "ui/pipboy/fo3-pipboy-assets.h"
 #include "fo3-pipboy-state.h"
+#include "ui/menu/fo3-menu-renderer.h"
 #include "ui/interaction/fo3-hud-cached-state.h"
 #include "ui/interaction/fo3-interaction-hud-renderer.h"
 #include <chrono>
 #include <unordered_map>
 #include <unordered_set>
 namespace fo3pipui {
-constexpr int Width = 512,
-              Height = 384; // original globals.xml 1024x768, half-resolution
+constexpr int Width = 1024,
+              Height = 768; // original globals.xml render surface
 struct Resources {
   bool attempted = false, ready = false;
   GLuint fbo = 0, texture = 0, program = 0, vao = 0, vbo = 0, white = 0,
@@ -92,17 +93,19 @@ inline bool Ensure() {
   r.tex = glGetUniformLocation(r.program, "uTex");
   for (int i = 0; i < 2; ++i) {
     auto &f = r.fonts[i];
-    r.fontTexture[i] = fo3hudassets::UploadTexture(
-        f.textureWidth, f.textureHeight, f.rgba.data());
+    auto &shared = fo3menuui::Shared().fonts[i == 0 ? 2 : 4];
+    if (!shared.texture) {
+      shared.texture = fo3hudassets::UploadTexture(
+          f.textureWidth, f.textureHeight, f.rgba.data());
+      shared.metrics = f;
+      shared.metrics.rgba.clear();
+      shared.owned = true;
+    }
+    r.fontTexture[i] = shared.texture;
     f.rgba.clear();
   }
   uint8_t white[4] = {255, 255, 255, 255};
   r.white = fo3hudassets::UploadTexture(1, 1, white);
-  r.background =
-      Art("Textures\\Interface\\Shared\\Background\\pipboy.dds", true);
-  if (fo3hudassets::ParseButtonTai(r.buttons[0]) &&
-      fo3hudassets::ParseButtonTai(r.buttons[1], "glow_general_button_b.dds"))
-    r.buttonAtlas = Art(r.buttons[0].atlasPath, true);
   r.scanlines = Art("Textures\\Pipboy3000\\pipboyscanlines.dds", true);
   if (r.scanlines) {
     glBindTexture(GL_TEXTURE_2D, r.scanlines);
@@ -143,9 +146,9 @@ inline bool Ensure() {
   r.vertices.reserve(12000);
   __android_log_print(
       ANDROID_LOG_INFO, "FalloutQuest",
-      "PIPBOY UI ASSETS: ready=%d target=512x384 original=1024x768 font2=%.1f "
-      "font4=%.1f background=%d scanlines=%d",
-      r.ready, r.fonts[0].baseLine, r.fonts[1].baseLine, r.background != 0,
+      "PIPBOY UI ASSETS: ready=%d target=1024x768 original=1024x768 font2=%.1f "
+      "font4=%.1f authored-menu-assets=lazy scanlines=%d",
+      r.ready, r.fonts[0].baseLine, r.fonts[1].baseLine,
       r.scanlines != 0);
   return r.ready;
 }
@@ -225,6 +228,7 @@ inline const char *Page(fo3pip::Tab tab, int page) {
 }
 } // namespace fo3pipui
 #include "fo3-pipboy-data-pages.h"
+#include "ui/menu/fo3-menu-player.h"
 namespace fo3pipui {
 // Only called before the eye renderers, which explicitly bind their framebuffer
 // and viewport. The FBO/viewport are owned here until this function returns.
@@ -257,150 +261,17 @@ inline void Render(fo3pip::Menu &menu, const fo3player::Player &p, bool focus) {
   glActiveTexture(GL_TEXTURE0);
   glBindVertexArray(r.vao);
   glBindBuffer(GL_ARRAY_BUFFER, r.vbo);
-  if (r.background) {
-    Quad(0, 0, 1024, 768);
-    Draw(r.background, .9f);
+  if (menu.tab == fo3pip::Tab::Data && menu.page == 0 && menu.map.local &&
+      !menu.map.local->rgba.empty() && r.localMap != menu.map.local) {
+    if (r.localTexture)
+      glDeleteTextures(1, &r.localTexture);
+    r.localTexture =
+        fo3hudassets::UploadTexture(256, 256, menu.map.local->rgba.data());
+    r.localMap = menu.map.local;
   }
-  const char *titles[] = {"STATS", "ITEMS", "DATA"};
-  const char *titleKeys[] = {"sStats", "sInventoryItems", "sData"};
-  Text(Label(p, titleKeys[int(menu.tab)], titles[int(menu.tab)]), 120, 50, 1);
-  Draw(r.fontTexture[1]);
-  const auto &s = p.Snapshot();
-  if (menu.tab == fo3pip::Tab::Stats) {
-    Text("LVL " + Number(s.level), 270, 50);
-    Text("HP " + Pair(p.Health(), p.MaxHealth()), 380, 50, 0, 155);
-    Text("AP " + Pair(p.ActionPoints(), p.MaxActionPoints()), 545, 50, 0, 155);
-    Text("XP " + std::to_string(s.experience) + "/" +
-             std::to_string(p.ExperienceProgress().nextThreshold), 730, 50, 0, 190);
-  }
-  if (menu.tab == fo3pip::Tab::Items) {
-    Text("Wg " + WeightPair(p), 265, 50, 0, 155);
-    Text("HP " + Pair(p.Health(), p.MaxHealth()), 430, 50, 0, 155);
-    int caps = 0;
-    for (const auto &stack : s.inventory) {
-      auto i = p.Definitions().items.find(stack.formId);
-      if (i != p.Definitions().items.end() && i->second.editorId == "Caps001")
-        caps += stack.count;
-    }
-    Text("Caps " + std::to_string(caps), 715, 50, 0, 190);
-  }
-  Draw(r.fontTexture[0]);
-  Quad(50, 98, 905, 2);
-  Quad(50, 642, 905, 2);
-  Draw(r.white, .85f);
-  // The original tabline at the bottom, preserving the original five pages.
-  for (int i = 0; i < 5; ++i) {
-    float x = 55.f + i * 184;
-    Text(Page(menu.tab, i), x, 657, 0, 178);
-    if (i == menu.page) {
-      Draw(r.fontTexture[0]);
-      Quad(x - 5, 650, 178, 2);
-      Quad(x - 5, 695, 178, 2);
-      Draw(r.white);
-    }
-  }
-  Draw(r.fontTexture[0]);
-  if (menu.tab == fo3pip::Tab::Items) {
-    size_t first = menu.selected >= 8 ? menu.selected - 7 : 0;
-    size_t end = std::min(menu.rows.size(), first + 8);
-    if (menu.rows.empty())
-      Text("No items", 90, 190);
-    for (size_t row = first; row < end; ++row) {
-      const auto *stack = fo3pip::Menu::Stack(p, menu.rows[row]);
-      if (!stack)
-        continue;
-      const auto &item = p.Definitions().items.at(stack->formId);
-      float y = 145.f + (row - first) * 51;
-      if (row == menu.selected) {
-        Draw(r.fontTexture[0]);
-        Quad(75, y - 4, 425, 2);
-        Quad(75, y + 41, 425, 2);
-        Draw(r.white, menu.inPage ? 1.f : .45f);
-      }
-      Text((stack->equipped ? "[+] " : "") + item.name +
-               (stack->count > 1 ? " (" + std::to_string(stack->count) + ")"
-                                 : ""),
-           90, y, 0, 395);
-    }
-    Draw(r.fontTexture[0]);
-    if (menu.selected < menu.rows.size()) {
-      const auto *stack = fo3pip::Menu::Stack(p, menu.rows[menu.selected]);
-      if (stack) {
-        const auto &item = p.Definitions().items.at(stack->formId);
-        if (!item.icon.empty()) {
-          auto art = Art(item.icon);
-          if (art) {
-            Quad(565, 145, 230, 230);
-            Draw(art);
-          }
-        }
-        Text(item.name, 540, 400, 0, 360);
-        Text("WG " + Decimal(item.weight), 540, 451);
-        if (item.valueKnown)
-          Text("VAL " + std::to_string(item.value), 700, 451);
-        if (item.maxCondition > 0)
-          Text("CND " + Number(stack->condition * 100) + "%", 540, 500);
-        Text(fo3pip::Equippable(item)
-                 ? (stack->equipped ? "A  Unequip" : "A  Equip")
-                 : "",
-             540, 555);
-        if(item.kind==fo3player::ItemKind::Aid||item.kind==fo3player::ItemKind::Ingredient){std::string reason;Text(p.CanUse(stack->id,&reason)?"A  Use":reason,540,555,0,365);}
-        Draw(r.fontTexture[0]);
-      }
-    }
-    if(!menu.actionError.empty()){Text(menu.actionError,80,605,0,840);Draw(r.fontTexture[0]);}
-  } else if (menu.tab == fo3pip::Tab::Stats) {
-    if (menu.page == 0) {
-      GLuint art = Art("Textures\\Interface\\Icons\\PipboyImages\\Derived "
-                       "Statistics\\hit_points.dds");
-      if (art) {
-        Quad(600, 175, 235, 235);
-        Draw(art);
-      }
-      Text("HP " + Pair(p.Health(), p.MaxHealth()), 120, 175);
-      Text("AP " + Pair(p.ActionPoints(), p.MaxActionPoints()), 120, 235);
-      Text("Wg " + WeightPair(p), 120, 295);
-      Text("Karma " + Number(s.karma), 120, 355);
-    } else if (menu.page == 1) {
-      const char *names[] = {"Strength", "Perception",   "Endurance",
-                             "Charisma", "Intelligence", "Agility",
-                             "Luck"};
-      for (int i = 0; i < 7; ++i) {
-        Text(names[i], 120, 145 + i * 58);
-        Text(Number(s.special[i]), 450, 145 + i * 58);
-      }
-    } else if (menu.page == 2) {
-      const char *names[] = {"Barter",        "Big Guns", "Energy Weapons",
-                             "Explosives",    "Lockpick", "Medicine",
-                             "Melee Weapons", "Repair",   "Science",
-                             "Small Guns",    "Sneak",    "Speech",
-                             "Unarmed"};
-      size_t first = menu.selected >= 8 ? menu.selected - 7 : 0;
-      for (size_t i = first; i < std::min(size_t(13), first + 8); ++i) {
-        Text(names[i], 120, 145 + (i - first) * 51);
-        Text(Number(s.skills[i == 12 ? 13 : i]), 470, 145 + (i - first) * 51);
-      }
-    } else
-      ExtendedStats(menu,p);
-    Draw(r.fontTexture[0]);
-  } else {
-    DataPage(menu,p);
-    Draw(r.fontTexture[0]);
-  }
-  if (r.buttonAtlas) {
-    for (int i = 0; i < 2; ++i) {
-      const auto &button = r.buttons[i];
-      Quad(i == 0 ? 65 : 445, 706, 45, 45, button.u, button.v,
-           button.u + button.w, button.v + button.h);
-    }
-    Draw(r.buttonAtlas);
-  }
-  const bool travel=menu.tab==fo3pip::Tab::Data&&menu.page==1&&menu.inPage&&menu.selectedMarker;
-  const auto label=p.Definitions().strings.find(menu.travelPrompt?"sYes":travel?"sTravel":"sSelect");
-  Text(label==p.Definitions().strings.end()?(menu.travelPrompt?"Yes":travel?"Travel":"Select"):label->second,120,712);
-  Text("Back", 495, 712);
-  Text("STATS   ITEMS   DATA", 615, 712, 0, 355);
-  Draw(r.fontTexture[0]);
+  if (!fo3menuui::Pipboy(menu, p, mvp, r.localTexture))
+    __android_log_print(ANDROID_LOG_ERROR, "FalloutQuest",
+                        "PIPBOY authored menu unavailable");
   // Original recovered static CRT overlay. No invented animated noise or
   // steady redraw timer; authored glass is a separate world NIF shape.
   if (r.scanlines) {
@@ -424,9 +295,7 @@ inline void Shutdown() {
   for (auto &art : r.art)
     if (art.second)
       glDeleteTextures(1, &art.second);
-  for (auto &texture : r.fontTexture)
-    if (texture)
-      glDeleteTextures(1, &texture);
+  // Font GPU ownership is shared with dialogue/barter; menu shutdown releases it.
   for (auto texture : {r.texture, r.white, r.localTexture})
     if (texture)
       glDeleteTextures(1, &texture);

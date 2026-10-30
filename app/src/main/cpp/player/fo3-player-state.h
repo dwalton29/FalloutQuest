@@ -65,7 +65,7 @@ struct Item {
   uint32_t formId = 0, recordFlags = 0, bipedMask = 0, script = 0,
            enchantment = 0;
   ItemKind kind = ItemKind::Misc;
-  std::string editorId, name, model, femaleModel, icon, femaleIcon;
+  std::string editorId, name, model, femaleModel, icon, femaleIcon,shortName;
   int32_t value = 0, maxCondition = 0;
   float weight = 0;
   uint8_t ingestibleFlags=0;
@@ -573,6 +573,7 @@ public:
   // Explicit development bootstrap; runtime enables only when presentation is ready.
   bool BootstrapDevelopmentWeapon();
   float WeaponDamage(uint64_t instance) const;
+  float WeaponDamage(const Stack& instance) const;
   float ActorHealth(uint32_t reference) const;
   bool ResetActorHealth(uint32_t reference);
   bool SetFactionRelation(uint32_t from,uint32_t to,bool ally,bool firstFlag=false,bool secondFlag=false);

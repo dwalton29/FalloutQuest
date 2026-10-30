@@ -4,6 +4,7 @@
 #include "player/fo3-player-state.h"
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <vector>
 namespace fo3pip {
 struct V {
@@ -110,9 +111,70 @@ inline bool Equippable(const fo3player::Item &i) {
   return i.playable && (i.kind == fo3player::ItemKind::Weapon ||
                         (i.kind == fo3player::ItemKind::Armour && i.bipedMask));
 }
+// Menu content must not rebuild for every actor pose or sub-second clock
+// update. Hash only values presented by these pages; map context dirties itself.
+inline uint64_t PresentationRevision(const fo3player::Player &p) {
+  const auto &s = p.Snapshot();
+  const auto &b = s.pipboy;
+  uint64_t h = 1469598103934665603ull;
+  auto add = [&](uint64_t value) { h = (h ^ value) * 1099511628211ull; };
+  auto real = [&](float value) {
+    uint32_t bits = 0;
+    std::memcpy(&bits, &value, 4);
+    add(bits);
+  };
+  add(s.level);
+  add(s.gameYear);add(s.gameMonth);add(s.gameDay);add(uint32_t(s.gameHour*60));
+  add(s.experience);
+  add(s.baseHealth);
+  real(s.healthDamage);
+  real(s.apSpent);
+  real(s.karma);
+  real(b.radiation);
+  for (auto value : s.special)
+    add(value);
+  for (auto value : s.skills)
+    add(value);
+  for (auto value : s.skillOffsets)
+    add(value);
+  for (const auto &item : s.inventory) {
+    add(item.id);
+    add(item.formId);
+    add(item.count);
+    add(item.equipped);
+    add(item.loadedRounds);
+    real(item.condition);
+  }
+  for (const auto &perk : b.perks) {
+    add(perk.first);
+    add(perk.second);
+  }
+  for (const auto &q : b.quests) {
+    add(q.first);
+    add(q.second.stage);
+    add(uint8_t(q.second.status));
+    add(q.second.announced);
+    for (const auto &objective : q.second.objectives) {
+      add(objective.first);
+      add(objective.second.displayed);
+      add(uint8_t(objective.second.status));
+    }
+  }
+  for (auto marker : b.discovered)
+    add(marker);
+  for (auto marker : b.revealed)
+    add(marker);
+  add(b.selectedQuest);
+  add(b.tunedRadio);
+  add(b.aidUsed);
+  add(b.waypoint.world);
+  real(b.waypoint.point.x);
+  real(b.waypoint.point.y);
+  return h;
+}
 struct Menu {
   Tab tab = Tab::Stats;
-  int page = 0;
+  int page = 0,statusMode=0;
   size_t selected = 0;
   bool inPage = false, dirty = true;
   size_t textScroll = 0;
@@ -128,9 +190,10 @@ struct Menu {
   // IDs only: stacks, quantities, equipment and conditions remain in Player.
   std::vector<uint64_t> rows;
   void Refresh(const fo3player::Player &player) {
-    if (revision == player.Revision())
+    const auto contentRevision=PresentationRevision(player);
+    if (revision == contentRevision)
       return;
-    revision = player.Revision();
+    revision = contentRevision;
     dirty = true;
     ++rebuilds;
     RebuildRows(player);
@@ -257,7 +320,8 @@ struct Menu {
       textScroll = 0;
     } else if (a == Action::Up || a == Action::Down) {
       int delta = a == Action::Up ? -1 : 1;
-      if (page == 3 && inPage && (tab == Tab::Data || tab == Tab::Stats)) {
+      if(tab==Tab::Stats&&page==0&&inPage){statusMode=(statusMode+delta+3)%3;}
+      else if (page == 3 && inPage && (tab == Tab::Data || tab == Tab::Stats)) {
         if (delta < 0 && textScroll)
           --textScroll;
         if (delta > 0)

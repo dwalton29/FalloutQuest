@@ -133,6 +133,7 @@ jobs:
           g++ -std=c++17 -Wall -Wextra -Werror -Itests/pipboy/mock -Itests/render/mock -Itests/nif -Iapp/src/main/cpp -Iapp/src/main/cpp/data tests/render/health_bar_render_tests.cpp -o /tmp/health-bar-render-tests
           /tmp/health-bar-render-tests
           python3 tests/render/test_notification_layering.py
+          python3 tests/render/test_ui_world_layering.py
           g++ -std=c++17 -Wall -Wextra -Werror -Itests/render/mock -Iapp/src/main/cpp tests/render/opaque_timer_tests.cpp -o /tmp/opaque-timer-tests
           /tmp/opaque-timer-tests
           g++ -std=c++17 -Wall -Wextra -Werror -Itests/render/mock -Iapp/src/main/cpp tests/render/gpu_timestamp_tests.cpp -o /tmp/gpu-timestamp-tests

@@ -94,6 +94,7 @@ bool DecodeItem(uint32_t form, uint32_t flags, ItemKind kind,
   item.editorId = Text(subs, "EDID");
   if(const auto* et=Find(subs,"ETYP");et&&et->size==4)item.equipType=I32(et->data);
   item.name = Text(subs, "FULL");
+  if(kind==ItemKind::Ammo)item.shortName=Text(subs,"ONAM");
   item.model = Text(subs, "MODL");
   item.femaleModel = Text(subs, "MOD3");
   item.icon = Text(subs, "ICON");

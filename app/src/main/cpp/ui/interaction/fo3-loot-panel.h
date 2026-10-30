@@ -110,7 +110,7 @@ inline void Render(const float *mvp, const Fo3LootPanel &panel) {
                           reinterpret_cast<const void *>(3 * sizeof(float)));
     r.key = std::move(key);
   }
-  glEnable(GL_DEPTH_TEST);
+  glDisable(GL_DEPTH_TEST);
   glDepthMask(GL_FALSE);
   glEnable(GL_BLEND);
   glBlendEquationSeparate(GL_FUNC_ADD, GL_FUNC_ADD);

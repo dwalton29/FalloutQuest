@@ -217,11 +217,15 @@ bool Player::MigrateWeaponInstances(State &state) const {
 
 namespace fo3player {
 float Player::WeaponDamage(uint64_t id) const {
-  const auto*s=Weapon(id);if(!s)return 0;
-  const auto&d=catalog_->items.at(s->formId).weapon;const auto&r=catalog_->weapons;
-  const float skill=d.skill>=32&&d.skill<=45?std::min<float>(100,state_.skills[d.skill-32]):0;
-  return Damage(d,r,skill,s->condition);
+  const auto* stack=Weapon(id);return stack?WeaponDamage(*stack):0;
 }
+float Player::WeaponDamage(const Stack& stack) const {
+  const auto item=catalog_->items.find(stack.formId);if(item==catalog_->items.end()||item->second.kind!=ItemKind::Weapon)return 0;
+  const auto& d=item->second.weapon;const auto& r=catalog_->weapons;
+  const float skill=d.skill>=32&&d.skill<=45?std::min<float>(100,state_.skills[d.skill-32]):0;
+  return Damage(d,r,skill,stack.condition);
+}
+
 uint32_t Player::ActorTemplate(uint32_t reference,uint32_t list)const {
   const auto it=state_.actorTemplateChoices.find((uint64_t(reference)<<32)|list);
   return it==state_.actorTemplateChoices.end()?0:it->second;

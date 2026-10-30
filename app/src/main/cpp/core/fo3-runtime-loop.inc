@@ -450,7 +450,7 @@ public:
         ShutdownFo3LoadingVr();
         fo3pipui::Shutdown();ResetFo3Pipboy();fo3lockui::Shutdown();fo3terminalui::Shutdown();CancelFo3Lockpick();CancelFo3Terminal();
         fo3notifyui::Shutdown();
-        fo3barterui::Shutdown();fo3dialogueui::Shutdown();
+        fo3barterui::Shutdown();fo3dialogueui::Shutdown();fo3menuui::Shutdown();
          fo3levelui::Shutdown();fo3xpui::Shutdown();fo3pauseui::Shutdown();fo3perfui::Shutdown();fo3compassui::Shutdown();
         gFo3PauseMenu.Close();gFo3PauseOpen=false;
          EndFo3Dialogue("renderer shutdown");
@@ -2538,7 +2538,6 @@ private:
             // prototype geometry hidden and no tracked controllers.
             RenderScene(viewProjection.m);
             const auto motionUiBefore=fqgl::counters.draws;
-            if(Fo3TerminalFocus()&&!IsFo3LoadingVisible())RenderFo3Terminal(viewProjection.m);
             // Ordinary overlays draw after the image-space composite below.
             // Lockpicking draws after post on a separate modal depth surface.
             // It no longer modifies the world/MSAA depth target.
@@ -2550,6 +2549,12 @@ private:
                                        q234LateDepthWritesPossible);
             if(spacewarpProducerReady_&&glGetError()!=GL_NO_ERROR)motionDepthReady=false;
             const auto motionLateUiBefore=fqgl::counters.draws;
+            if(!IsFo3LoadingVisible()) {
+                if(Fo3PipboyFocus()){fo3hudrenderer::CachedStateGuard guard;fo3lockoverlay::DepthScope depth(eye.width,eye.height);if(depth.valid)Q210RenderPipboyOverlay(viewProjection.m);}
+                Q230RenderHealthHud(viewProjection.m);
+                if(Fo3TerminalFocus())RenderFo3Terminal(viewProjection.m);
+            }
+
             // UI system colours are display colours, never world image-space inputs.
             if(gScriptMessagePanel.visible&&!IsFo3LoadingVisible()) {
                 const float yaw=gQ210Head[3];
@@ -2561,7 +2566,7 @@ private:
                 model.m[14]=gQ210Head[2]-std::cos(yaw)*1.1f;
                 model.m[15]=1;
                 const auto mvp=Multiply(viewProjection,model);
-                fo3dialogueui::Render(mvp.m,gScriptMessagePanel);
+                if(gPlayerSession)fo3menuui::Message(mvp.m,gScriptMessagePanel,gPlayerSession->player);
             }
             if(Fo3LevelUpFocus()&&!IsFo3LoadingVisible()) {
                 const float yaw=gQ210Head[3];
@@ -2580,19 +2585,18 @@ private:
                 model.m[0]=std::cos(yaw);model.m[2]=-std::sin(yaw);model.m[5]=1;
                 model.m[8]=std::sin(yaw);model.m[10]=std::cos(yaw);
                 model.m[12]=panel.anchor[0];model.m[13]=panel.anchor[1];model.m[14]=panel.anchor[2];model.m[15]=1;
-                const auto dialogueMvp=Multiply(viewProjection,model);fo3dialogueui::Render(dialogueMvp.m,panel);
+                const auto dialogueMvp=Multiply(viewProjection,model);if(gPlayerSession)fo3menuui::Conversation(dialogueMvp.m,panel,gPlayerSession->player);
             }
 
             if(gBarter.active&&!gScriptMessagePanel.visible&&!IsFo3LoadingVisible()) {
-                auto* barterResources=fo3barterui::State();
-                for(int side=0;side<2;++side){const auto& panel=side?gBarter.merchantPanel:gBarter.playerPanel;
-                    Mat4 model{};const float yaw=panel.yaw,offset=side?.37f:-.37f;
-                    model.m[0]=std::cos(yaw);model.m[2]=-std::sin(yaw);model.m[5]=1;
-                    model.m[8]=std::sin(yaw);model.m[10]=std::cos(yaw);
-                    model.m[12]=panel.anchor[0]+std::cos(yaw)*offset;model.m[13]=panel.anchor[1];
-                    model.m[14]=panel.anchor[2]-std::sin(yaw)*offset;model.m[15]=1;
-                    const auto mvp=Multiply(viewProjection,model);fo3dialogueui::Render(mvp.m,panel,&barterResources[side]);
-                }
+                const auto& panel=gBarter.merchantPanel;Mat4 model{};const float yaw=panel.yaw;
+                model.m[0]=std::cos(yaw);model.m[2]=-std::sin(yaw);model.m[5]=1;
+                model.m[8]=std::sin(yaw);model.m[10]=std::cos(yaw);
+                model.m[12]=panel.anchor[0];model.m[13]=panel.anchor[1];model.m[14]=panel.anchor[2];model.m[15]=1;
+                const auto mvp=Multiply(viewProjection,model);
+                if(gPlayerSession)fo3menuui::Barter(mvp.m,gPlayerSession->player,gBarter.session,gBarter.buying,gBarter.cursor.selected,
+                    gBarter.playerPanel.revision+gBarter.merchantPanel.revision,gBarter.status);
+
             }
             for (uint32_t hand = 0; hand < 2; ++hand) {
                 if (!handPoseValid_[hand]) continue;

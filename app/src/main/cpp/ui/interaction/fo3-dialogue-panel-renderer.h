@@ -49,7 +49,7 @@ inline void Render(const float* mvp,const fo3dialogue::Panel& panel,Resources* r
     r.revision=panel.revision;r.selected=panel.selected;
     __android_log_print(ANDROID_LOG_INFO,"FalloutQuest","DIALOGUE PANEL uploaded choices=%zu vertices=%zu textCount=%d",panel.choices.size(),vertices.size(),int(r.textCount));
   }
-  glEnable(GL_DEPTH_TEST);glDepthMask(GL_FALSE);glEnable(GL_BLEND);
+  glDisable(GL_DEPTH_TEST);glDepthMask(GL_FALSE);glEnable(GL_BLEND);
   glBlendEquationSeparate(GL_FUNC_ADD,GL_FUNC_ADD);glBlendFuncSeparate(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA,GL_ONE,GL_ONE_MINUS_SRC_ALPHA);
   glUseProgram(font.program);glUniformMatrix4fv(font.mvpLoc,1,GL_FALSE,mvp);glUniform1i(font.texLoc,0);glBindVertexArray(r.vao);
   glBindTexture(GL_TEXTURE_2D,r.solid);glUniform4f(font.tintLoc,.015f,.035f,.025f,.87f);glDrawArrays(GL_TRIANGLES,0,6);

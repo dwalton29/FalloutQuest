@@ -88,7 +88,7 @@ inline void Render(const float* mvp,const fo3terminal::Surface& screen,const fo3
     glEnableVertexAttribArray(1);glVertexAttribPointer(1,2,GL_FLOAT,GL_FALSE,sizeof(vertices[0]),reinterpret_cast<const void*>(3*sizeof(float)));
   }
   auto& program=fo3hudrenderer::State();
-  glEnable(GL_DEPTH_TEST);glDepthMask(GL_FALSE);glDisable(GL_CULL_FACE);glEnable(GL_BLEND);
+  glDisable(GL_DEPTH_TEST);glDepthMask(GL_FALSE);glDisable(GL_CULL_FACE);glEnable(GL_BLEND);
   glBlendEquationSeparate(GL_FUNC_ADD,GL_FUNC_ADD);glBlendFuncSeparate(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA,GL_ONE,GL_ONE_MINUS_SRC_ALPHA);
   glUseProgram(program.program);glUniformMatrix4fv(program.mvpLoc,1,GL_FALSE,mvp);glUniform1i(program.texLoc,0);glActiveTexture(GL_TEXTURE0);glBindVertexArray(vao);
   glBindTexture(GL_TEXTURE_2D,solid);glUniform4f(program.tintLoc,.005f,.009f,.006f,1);glDrawArrays(GL_TRIANGLES,0,background);

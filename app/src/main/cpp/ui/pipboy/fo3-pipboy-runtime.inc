@@ -197,6 +197,7 @@ void UpdateFo3Pipboy(uint64_t frame, double now, const float *headPose,
         const auto count=session->player.TrackLocations(world,gameX,gameY,gameZ);
         if(count){Q6H_LOGI("LOCATIONS DISCOVERED count=%zu authoredXP=%u",count,defs.discoveryXP);FlushFo3PlayerState();}
       }
+      if(Fo3PipboyFocus()&&gPipMenu.tab==fo3pip::Tab::Data&&gPipMenu.page<2)gPipMenu.dirty=true;
       if (Fo3PipboyFocus() && gPipMenu.tab == fo3pip::Tab::Data &&
           gPipMenu.page < 2 &&
           (previous.cell != gCurrentCellFormId ||
