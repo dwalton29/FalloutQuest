@@ -67,8 +67,12 @@ files include empty entries, as recorded in v296; missing art is still diagnosed
 
 The production barter adapter is included in the host integration test. It drives
 LT/RT, category changes, quantity adjustment/cancellation/acceptance, X commit,
-caps/items, one-time save flushing, no success popup and B exit. Existing original
-merchant transaction/persistence regressions are retained.
+caps/items, one-time save flushing, no success popup and B exit. The dialogue
+bridge fixture also enters barter through ShowBarterMenu after authored speech,
+accepts the stack amount before X commits, verifies held-X save deduplication,
+cancels quantity without closing barter, returns to dialogue and discards pending
+selections on walk-away. Existing original merchant transaction/persistence
+regressions are retained.
 
 Production software Vulkan verifies horizontal wrapping through real descriptor
 and sampler selection in both eyes, alongside the existing UI/depth/colour suites.

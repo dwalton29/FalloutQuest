@@ -44,7 +44,7 @@ bool Fo3AcceptsScenePublication(fo3scene::PublicationStamp stamp){
 }
 #include "dialogue/fo3-dialogue-runtime.inc"
 static double clockTime=0;
-static void Tick(bool a=false,bool b=false){++gStereoFrame;clockTime+=.05;UpdateFo3Dialogue(clockTime,0,a,b,true);}
+static void Tick(bool a=false,bool b=false,bool x=false,float horizontal=0){++gStereoFrame;clockTime+=.05;UpdateFo3Dialogue(clockTime,0,a,b,true,horizontal,0,0,x);}
 static void Speak(){
   for(int budget=0;gDialogue.phase==fo3dialogue::Phase::Speaking;++budget){
     assert(budget<32&&fo3audio::published==gDialogue.audioToken);
@@ -204,12 +204,24 @@ static void BarterBridge(){
   Tick(true);assert(gDialogue.phase==fo3dialogue::Phase::Speaking&&!gBarter.active);Tick(false);
   Speak();assert(gBarter.active&&gBarter.session.actor==42&&Fo3DialogueFocus());
   assert(gBarter.playerPanel.visible&&gBarter.merchantPanel.visible&&gBarter.rows.size()==1);
-  Tick(true);Tick(false);assert(gBarter.session.selections.size()==1&&gPlayerSession->player.ItemCount(100)==0);
-  gBarter.cursor.selected=gBarter.rows.size();Tick(true);Tick(false);
+  Tick(true);Tick(false);
+  assert(gBarter.controls.Editing()&&gBarter.controls.quantity==10&&gBarter.session.selections.empty());
+  // X cannot skip quantity acceptance or commit a pending amount.
+  Tick(false,false,true);Tick();assert(gPlayerSession->player.ItemCount(100)==0&&gBarter.controls.Editing());
+  for(int i=0;i<9;++i){Tick(false,false,false,-1);Tick();}
+  assert(gBarter.controls.quantity==1);
+  Tick(true);Tick(false);assert(gBarter.session.selections.size()==1&&gBarter.session.selections[0].count==1);
+  assert(gPlayerSession->player.ItemCount(100)==0);
+  const auto flushesBefore=flushes;
+  Tick(false,false,true);Tick(false,false,true);
+  assert(flushes==flushesBefore+1&&gBarter.status.empty());Tick();
   assert(gPlayerSession->player.ItemCount(100)==1&&gPlayerSession->player.ItemCount(0xf)==900);
   assert(gBarter.session.selections.empty());
   Tick(false,true);Tick();assert(!gBarter.active&&gDialogue.Active());
-  Choose(0);assert(gBarter.active);Tick(true);Tick(false);assert(gBarter.session.selections.size()==1);
+  Choose(0);assert(gBarter.active);Tick(true);Tick(false);
+  assert(gBarter.controls.Editing()&&gBarter.controls.maximum==9);
+  Tick(false,true);Tick();assert(!gBarter.controls.Editing()&&gBarter.session.selections.empty()&&gBarter.active);
+  Tick(true);Tick(false);Tick(true);Tick(false);assert(gBarter.session.selections.size()==1);
   const auto capsBefore=gPlayerSession->player.ItemCount(0xf);
   gQ230NpcActors[0].runtime.position[0]+=fo3npc::DialoguePolicy::LeaveRange+1;Tick();Clean();
   assert(!gBarter.active&&gPlayerSession->player.ItemCount(0xf)==capsBefore);
