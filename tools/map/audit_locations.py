@@ -10,7 +10,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'dialogue'))
 from audit_esm import records, first, text
 
-SETTINGS = ('iMapMarkerRevealDistance', 'iMapMarkerVisibleDistance',
+SETTINGS = ('fSayOncePerDayInfoTimer', 'iMapMarkerRevealDistance', 'iMapMarkerVisibleDistance',
             'iXPRewardDiscoverMapMarker', 'fWorldMapMinZoom', 'fWorldMapMaxZoom',
             'fLocalMapMinZoom', 'fLocalMapMaxZoom', 'fMoveBaseSpeed',
             'fHostileActorExteriorDistance', 'fHostileActorInteriorDistance',

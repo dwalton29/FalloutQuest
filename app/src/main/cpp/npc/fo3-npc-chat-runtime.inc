@@ -1,4 +1,5 @@
-// A single resident NPC-to-NPC HELLO line at a time. Uses the existing
+// One resident NPC-to-NPC HELLO response sequence, with original INFO results.
+// Uses the existing
 // dialogue voice channel only when the player dialogue owns nothing.
 // No inferred quest results, generated words or synthetic animation assets.
 namespace {
@@ -8,6 +9,7 @@ struct Q230NpcChatSession {
   bool Active()const{return speaker&&listener&&token;}
 };
 Q230NpcChatSession gQ230NpcChat;
+fo3dialogue::Session gQ230AuthoredNpcChat;
 }
 static fo3dialogue::Context Q230ChatContext(const Q230ActorVisual& speaker,
                                            const Q230ActorVisual& listener){
@@ -21,7 +23,14 @@ static fo3dialogue::Context Q230ChatContext(const Q230ActorVisual& speaker,
     b[0],b[1],b[2],false,listener.runtime.packageKnown};
   return ctx;
 }
-static bool Q230ChatEligible(const Q230ActorVisual& initiator,uint32_t reference) {
+static uint32_t Q230HelloTopic(){
+  for(const auto& topic:gPlayerSession->player.Definitions().pipboy.dialogueTopics)if(topic.second.editor=="HELLO"&&topic.second.type==1)return topic.first;
+  return 0;
+}
+static void Q230PrepareNpcChat(fo3dialogue::Session& session){
+  session.previewReferences=PreviewFo3DialogueReferences;session.publishReferences=PublishFo3DialogueReferences;
+}
+static bool Q230ChatEligible(const Q230ActorVisual& initiator,uint32_t reference,uint32_t package) {
   if(!gPlayerSession||gPlayerSession->saveBlocked||gDialogue.Active()||
      gQ230NpcChat.Active()||gPlayerSession->player.AnyScriptActorTalking()||IsFo3LoadingVisible()||Fo3PipboyFocus())return false;
   const auto* partner=DialogueActor(reference);
@@ -30,11 +39,14 @@ static bool Q230ChatEligible(const Q230ActorVisual& initiator,uint32_t reference
      partner->runtime.activity==fo3npc::Activity::Combat||
      !initiator.runtime.CanTalk()||initiator.runtime.furniture.Active()||
      partner->rigs.empty()||initiator.rigs.empty())return false;
-  return fo3npcchat::SelectHello(gPlayerSession->player.Definitions().pipboy,
-    gPlayerSession->player,Q230ChatContext(initiator,*partner)).Valid();
+  auto context=Q230ChatContext(initiator,*partner);context.talking=true;
+  if(package){context.speaker.package=package;context.speaker.packageKnown=true;}
+  fo3dialogue::Session candidate;Q230PrepareNpcChat(candidate);
+  return candidate.Resolve(Q230HelloTopic(),context)!=nullptr;
 }
 static void Q230ChatStop(const char* reason) {
   if(!gQ230NpcChat.Active())return;
+  gQ230AuthoredNpcChat.End(reason);
   const auto speaker=gQ230NpcChat.speaker,listener=gQ230NpcChat.listener;
   if(auto* actor=DialogueActor(speaker)){
     actor->runtime.EndDialogue();
@@ -54,9 +66,9 @@ static bool Q230ChatBegin(uint32_t speaker,uint32_t listener,double now) {
   if(gQ230NpcChat.Active()||!gPlayerSession||gDialogue.Active())return false;
   auto* a=DialogueActor(speaker);auto* b=DialogueActor(listener);
   if(!a||!b||!Q230ChatEligible(*a,listener))return false;
-  auto chosen=fo3npcchat::SelectHello(gPlayerSession->player.Definitions().pipboy,
-    gPlayerSession->player,Q230ChatContext(*a,*b));
-  if(!chosen.Valid())return false;
+  auto context=Q230ChatContext(*a,*b);context.talking=true;
+  Q230PrepareNpcChat(gQ230AuthoredNpcChat);
+  if(!gQ230AuthoredNpcChat.StartTopic(Q230HelloTopic(),context,gPlayerSession->player))return false;
   const uint32_t serial=(gQ230NpcChat.serial+1u)&0xffffu;
   const uint32_t token=0x20000000u|serial;
   if(!a->runtime.CanTalk()||!b->runtime.CanTalk())return false;
@@ -66,11 +78,11 @@ static bool Q230ChatBegin(uint32_t speaker,uint32_t listener,double now) {
   }
   a->runtime.speaking=true;b->runtime.speaking=false;
   a->lastFrame=b->lastFrame=UINT64_MAX;
-  gQ230NpcChat={speaker,listener,chosen.info,a->aiPackage,token,serial,now};
+  gQ230NpcChat={speaker,listener,gQ230AuthoredNpcChat.info,a->aiPackage,token,serial,now};
   Q6H_LOGI("NPC CHAT BEGIN speaker=%08X listener=%08X package=%08X info=%08X token=%u text=%s",
-    speaker,listener,a->aiPackage,chosen.info,token,chosen.subtitle.c_str());
+    speaker,listener,a->aiPackage,gQ230AuthoredNpcChat.info,token,gQ230AuthoredNpcChat.Subtitle(gPlayerSession->player.Definitions().pipboy).c_str());
   fo3audio::DialogueGain(.7f);
-  fo3audio::Dialogue(chosen.audio,token);
+  fo3audio::Dialogue(gQ230AuthoredNpcChat.Audio(gPlayerSession->player.Definitions().pipboy),token);
   return true;
 }
 static void Q230ChatTick(double now) {
@@ -108,8 +120,8 @@ static void Q230ChatTick(double now) {
        now-gQ230NpcChat.began>30||(done&&uint32_t(done>>1)==gQ230NpcChat.token))Q230ChatStop("ambient completion/interruption");
     return;
   }
-  const auto* a=DialogueActor(gQ230NpcChat.speaker);
-  const auto* b=DialogueActor(gQ230NpcChat.listener);
+  auto* a=DialogueActor(gQ230NpcChat.speaker);
+  auto* b=DialogueActor(gQ230NpcChat.listener);
   if(!gPlayerSession||gPlayerSession->saveBlocked||IsFo3LoadingVisible()||
      Fo3PipboyFocus()||gDialogue.Active()||!a||!b||!a->runtime.dialogue||
      !b->runtime.dialogue||!a->runtime.Alive()||!b->runtime.Alive()||
@@ -125,9 +137,16 @@ static void Q230ChatTick(double now) {
      now-gQ230NpcChat.began>30.){
     Q230ChatStop("separation/audio timeout");return;
   }
+  Q230DialogueResponseAnimation(*a,gQ230AuthoredNpcChat);
   const uint64_t done=fo3audio::DialogueCompletion();
   if(done&&uint32_t(done>>1)==gQ230NpcChat.token){
-    Q230ChatStop((done&1u)?"authored audio completed":"voice unavailable");
+    if(!(done&1u)){Q230ChatStop("voice unavailable");return;}
+    auto context=Q230ChatContext(*a,*b);context.talking=true;
+    if(gQ230AuthoredNpcChat.AudioDone(gQ230AuthoredNpcChat.audioToken,true,context,gPlayerSession->player)){
+      gQ230NpcChat.token=0x20000000u|((++gQ230NpcChat.serial)&0xffffu);
+      fo3audio::Dialogue(gQ230AuthoredNpcChat.Audio(gPlayerSession->player.Definitions().pipboy),gQ230NpcChat.token);return;
+    }
+    FlushFo3PlayerState();Q230ChatStop("authored audio and INFO results completed");
   }
 }
 static bool Q230ChatSpeaking(uint32_t reference) {

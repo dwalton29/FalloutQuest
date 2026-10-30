@@ -1,7 +1,7 @@
 // Same production package executor as regular NPC tests, with the new
 // resident dialogue director's start/eligibility seams explicitly injected.
 static int chatRequests=0;
-#define FO3_NPC_CHAT_AVAILABLE(actor,reference) (reference==60u)
+#define FO3_NPC_CHAT_AVAILABLE(actor,reference,package) (reference==60u)
 #define FO3_NPC_CHAT_REQUEST(speaker,listener,now) (++chatRequests,true)
 #define main ExistingPackageTestMain
 #include "npc_package_runtime_tests.cpp"

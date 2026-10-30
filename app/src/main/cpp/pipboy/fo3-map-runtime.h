@@ -33,7 +33,7 @@ inline uint32_t MapWorld(const Definitions &d, uint32_t world) {
   }
   return 0;
 }
-// Convert child-world coordinates through authored ONAM cell-unit transforms.
+// ONAM offsets are game units. Scale about NAM0/NAM9 centre (EXE 007C8D00).
 inline Point WorldPoint(const Definitions &d, uint32_t world, float x,
                         float y) {
   for (int depth = 0; depth < 8; ++depth) {
@@ -41,8 +41,7 @@ inline Point WorldPoint(const Definitions &d, uint32_t world, float x,
     if (w == d.worlds.end() || !w->second.parent ||
         !(w->second.parentFlags & 4))
       break;
-    x = (x / 4096.f * w->second.scale + w->second.offsetX) * 4096.f;
-    y = (y / 4096.f * w->second.scale + w->second.offsetY) * 4096.f;
+    const auto point=w->second.ToMapPoint(x,y);x=point.x;y=point.y;
     world = w->second.parent;
   }
   return {x, y};

@@ -36,12 +36,13 @@ bool Q2400DoorOpen(uint32_t){return localOpen;}
 #include "world/interaction/fo3-script-default-activation.inc"
 struct ActorVisual {
   struct Source{uint32_t refFormId=0,baseFormId=0;}source;
-  fo3npc::RuntimeState runtime;uint32_t aiPackage=0;uint64_t lastFrame=0;
+  fo3npc::RuntimeState runtime;uint32_t aiPackage=0,responseIdle=0,responseToken=0,responseInfo=0;uint64_t lastFrame=0;
 };
 std::vector<ActorVisual> gQ230NpcActors;
 uint64_t gQ230NpcResidenceRevision=0;
 ActorVisual* DialogueActor(uint32_t ref){for(auto& a:gQ230NpcActors)if(a.source.refFormId==ref)return &a;return nullptr;}
 std::array<float,3> Q240GamePosition(const ActorVisual& a){return a.runtime.position;}
+void Q230DialogueResponseAnimation(ActorVisual&,const fo3dialogue::Session&){}
 fo3dialogue::Session gDialogue;
 struct Chat{bool Active()const{return false;}}gQ230NpcChat;
 uint32_t gCurrentCellFormId=1,gExteriorWorldspaceQ1890=0;

@@ -662,7 +662,8 @@ assert 'a.localVariables==b.localVariables' in master_match
 assert 'a.parent==b.parent' in master_match and 'a.reference==b.reference' in master_match
 assert 'EventFilterMatches(block.filter,e.activator,fo3player::PlayerRef)' in master_match
 assert 'fo3dialogue::SupportedInfoStructure(t->second[0])' in master_match
-assert 'SupportedInfoStructure(i)' in Path('app/src/main/cpp/dialogue/fo3-dialogue-session.cpp').read_text()
+assert 'EligibleInfo(i,ctx,diagnostic,previewReferences)' in Path('app/src/main/cpp/dialogue/fo3-dialogue-session.cpp').read_text()
+assert 'SupportedInfoStructure(i)' in Path('app/src/main/cpp/dialogue/fo3-dialogue-selection.h').read_text()
 assert 'fo3script::EventFilterMatches(block.filter,activator,PlayerRef)' in script_runtime
 print('Original-master program evidence precedes resident asset work and is rebound at commit/settlement without worker Player access')
 

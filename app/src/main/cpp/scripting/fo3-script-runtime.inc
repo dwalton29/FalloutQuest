@@ -18,6 +18,7 @@ class Expression {
     if(end!=t.c_str()&&!*end)return std::isfinite(value)||Fail("nonfinite literal");
     const auto& d=p.Definitions().pipboy;
     auto form=[&](const std::string& n){
+      if(n=="player")return fo3player::PlayerRef;
       const auto f=d.formNames.find(n);if(f==d.formNames.end()||!f->second)return uint32_t(0);
       if(forms&&!forms->Add(f->second,n))return uint32_t(0);
       return f->second;
@@ -57,6 +58,32 @@ class Expression {
       const auto id=dot==std::string::npos?owner:form(t.substr(0,dot));bool same=false;
       if(!p.ScriptInSameCell(id,same,error))return false;
       value=same;return true;
+    }
+    if(query=="gettalkedtopc"){
+      const auto id=dot==std::string::npos?owner:form(t.substr(0,dot));value=p.Snapshot().pipboy.talkedActors.count(id);return true;
+    }
+    if(query=="getincell"){
+      const auto id=dot==std::string::npos?owner:form(t.substr(0,dot));
+      if(at==tokens.size())return Fail("missing cell query");
+      const auto cell=form(tokens[at++]);fo3pipdata::Location location;
+      if(!d.cellWorlds.count(cell)||!p.ScriptReferenceLocation(id,location))return Fail("cell query location unavailable");
+      value=location.cell==cell;return true;
+    }
+    if(query=="getopenstate"){
+      const auto id=dot==std::string::npos?owner:form(t.substr(0,dot));
+      const auto placed=d.targets.find(id);if(placed==d.targets.end())return Fail("open-state reference unavailable");
+      const auto saved=p.Snapshot().doorStates.find(id);value=saved==p.Snapshot().doorStates.end()?placed->second.openByDefault:saved->second;return true;
+    }
+    if(query=="getdistance"){
+      const auto id=dot==std::string::npos?owner:form(t.substr(0,dot));
+      if(at==tokens.size())return Fail("missing distance target");
+      const auto target=form(tokens[at++]);
+      fo3pipdata::Location a,b;if(!p.ScriptReferenceLocation(id,a)||!p.ScriptReferenceLocation(target,b))return Fail("distance location unavailable");
+      if(a.cell!=b.cell&&(!a.world||a.world!=b.world)){value=1e9f;return true;}
+      const float dx=a.x-b.x,dy=a.y-b.y;
+      // Location carries planar map coordinates; fetch canonical actor height too.
+      const auto height=[&](uint32_t ref){if(ref==fo3player::PlayerRef)return p.ScriptPlayerHeight();const auto actor=p.Snapshot().actors.find(ref);if(actor!=p.Snapshot().actors.end())return actor->second.position[2];const auto placed=d.targets.find(ref);return placed==d.targets.end()?0.f:placed->second.z;};
+      const float dz=height(id)-height(target);value=std::sqrt(dx*dx+dy*dy+dz*dz);return true;
     }
     if(query=="getdead"||query=="isincombat"||query=="istalking"){
       const auto id=dot==std::string::npos?owner:form(t.substr(0,dot));
@@ -392,7 +419,9 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
     case C::FactionRelation:ok=SetFactionRelation(c.form,c.index,c.value!=0,(c.variable&1)!=0,(c.variable&2)!=0);break;
     case C::SetEssential:ok=SetEssential(c.form,c.value!=0);break;
     case C::SetActorValue:ok=SetActorVariable(c.form,c.index,c.value);break;
-    case C::SayTo:{fo3script::Action action;action.kind=fo3script::ActionKind::SayTo;action.reference=c.form;action.form=uint32_t(c.variable);action.flags=c.index;ok=QueueScriptAction(std::move(action));break;}
+    case C::Look:{fo3pipdata::Location location;ok=ScriptReferenceLocation(c.form,location)&&(!c.index||ScriptReferenceLocation(c.index,location));if(ok){fo3script::Action action;action.kind=fo3script::ActionKind::Look;action.reference=c.form;action.form=c.index;ok=QueueScriptAction(std::move(action));}break;}
+    case C::ScriptPackage:ok=ScriptPackage(c.form,c.index,c.value!=0);break;
+    case C::SayTo:ok=QueueScriptSpeech(c.form,uint32_t(c.variable),c.index);break;
     case C::Variable:case C::Global:
       ok=fo3script::Expression(*this,owner,c.expression,error,scriptId).Evaluate(value);
       if(ok)ok=c.type==C::Variable?SetDialogueVariable(c.variable,value):SetGlobalValue(c.form,value);
@@ -848,3 +877,44 @@ void Player::PumpReferenceGameMode(double realSeconds,const std::vector<uint32_t
   }
 }
 } // namespace fo3player
+
+namespace fo3player {
+bool Player::ScriptReferenceLocation(uint32_t id,fo3pipdata::Location& out)const{
+  if(id==PlayerRef){if(!scriptPlayerPositionKnown_)return false;out={scriptPlayerCell_,scriptPlayerWorld_,scriptPlayerPosition_[0],scriptPlayerPosition_[1],0};return true;}
+  const auto actor=state_.actors.find(id);
+  if(actor!=state_.actors.end()){const auto& a=actor->second;out={a.cell,a.world,a.position[0],a.position[1],a.yaw};return true;}
+  const auto placed=catalog_->pipboy.targets.find(id);if(placed==catalog_->pipboy.targets.end())return false;
+  const auto& p=placed->second;out={p.cell,p.world,p.x,p.y,p.rz};return true;
+}
+bool Player::ScriptPackage(uint32_t reference,uint32_t package,bool add){
+  const auto placed=catalog_->actorPlacements.find(reference);
+  if(placed==catalog_->actorPlacements.end()||!catalog_->weapons.actors.count(placed->second.base)||!catalog_->pipboy.packages.count(package))return false;
+  if(!add&&!state_.scriptPackages.count(reference))return true;
+  if(add&&!state_.scriptPackages.count(reference)&&state_.scriptPackages.size()>=10000)return false;
+  if(add&&state_.scriptPackages.count(reference)){const auto& list=state_.scriptPackages.at(reference);if(list.size()>=128&&std::find(list.begin(),list.end(),package)==list.end())return false;}
+  auto& packages=state_.scriptPackages[reference];
+  const auto old=packages;packages.erase(std::remove(packages.begin(),packages.end(),package),packages.end());
+  if(add)packages.insert(packages.begin(),package);
+  if(packages==old)return true;
+  if(packages.empty())state_.scriptPackages.erase(reference);
+  ++revision_;++scriptEffectRevision_;return ReevaluatePackage(reference);
+}
+}
+
+namespace fo3player {
+bool Player::QueueScriptSpeech(uint32_t reference,uint32_t topic,uint32_t target){
+  static thread_local unsigned selecting=0;
+  if(selecting>=8)return false;
+  struct Guard{unsigned& depth;Guard(unsigned& d):depth(d){++depth;}~Guard(){--depth;}} guard(selecting);
+  fo3dialogue::Context context;context.player=this;context.talking=true;
+  if(!fo3dialogue::ReferenceContext(*this,reference,context.speaker)||!fo3dialogue::ReferenceContext(*this,target,context.target))return false;
+  static thread_local std::mt19937 random{std::random_device{}()};
+  // This only binds the authored INFO identity in the script transaction.
+  // Scene mutation capability is admitted again by the actual voice adapter.
+  const auto preview=[](const auto&,const auto&,std::string&){return true;};
+  const auto selected=fo3dialogue::ResolveTopicInfo(topic,context,[&](const auto& info){return fo3dialogue::EligibleInfo(info,context,{},preview);},&random);
+  if(!selected)return true; // Original Say with no eligible INFO is a no-op.
+  fo3script::Action action;action.kind=fo3script::ActionKind::SayTo;action.reference=reference;action.form=topic;action.flags=target;action.info=selected->id;
+  return QueueScriptAction(std::move(action));
+}
+}

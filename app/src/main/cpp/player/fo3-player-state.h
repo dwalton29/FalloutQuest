@@ -193,6 +193,8 @@ struct State {
   std::unordered_map<uint32_t,std::array<float,10>> actorVariables;
   std::unordered_map<uint64_t,uint8_t> factionRelations;
   std::unordered_map<uint32_t,bool> essentialFlags;
+  std::unordered_map<uint64_t,float> dailySaidInfos;
+  std::unordered_map<uint32_t,std::vector<uint32_t>> scriptPackages;
   std::unordered_map<uint32_t,float> questScriptDelays;
   std::unordered_map<uint64_t,float> actorAIValues; // reference + original actor-value ID
   std::unordered_map<uint32_t,uint16_t> actorSpawnLevels;
@@ -414,7 +416,8 @@ public:
   bool GlobalValue(uint32_t form,float& value) const;
   // Invalid requests are atomic no-ops. Removal respects quest/cannot-drop
   // flags.
-  bool RecordDialogue(uint32_t actor,uint32_t info,const std::vector<uint32_t>& topics);
+  bool RecordDialogue(uint32_t actor,uint32_t info,const std::vector<uint32_t>& topics,bool playerConversation=true,uint32_t dailyInfo=0);
+  bool CanSayDailyInfo(uint32_t actor,uint32_t info)const;
   bool SetDialogueVariable(uint64_t key,float value);
   uint32_t ActorVoice(uint32_t reference)const;
   bool RealizeActor(uint32_t reference);
@@ -465,6 +468,7 @@ public:
       const std::function<bool(std::unique_ptr<ScriptTransactionPlan>)>& reserveWorld);
   void SetScriptPlayerLocation(float x,float y,float z,uint32_t cell,uint32_t world);
   bool ScriptDistance(float& distance) const;
+  float ScriptPlayerHeight()const{return scriptPlayerPosition_[2];}
   uint32_t ScriptActivator() const { return scriptActivator_; }
   uint32_t ScriptReference() const { return scriptReference_; }
   int ScriptButton() const;
@@ -508,6 +512,7 @@ public:
   bool ScriptAnimationPlaying(uint32_t reference,bool& playing) const;
   bool QueueScriptPlayGroup(uint32_t reference,const std::string& group,uint32_t flags);
   bool QueueScriptAction(fo3script::Action action);
+  bool QueueScriptSpeech(uint32_t reference,uint32_t topic,uint32_t target);
   bool PollScriptAction(fo3script::Action& action);
   double ScriptSecondsPassed() const {return scriptElapsedSeconds_;}
   std::vector<std::pair<uint32_t,bool>> ScriptTriggerChanges() const;
@@ -589,6 +594,9 @@ public:
   bool MoveActorTo(uint32_t reference,uint32_t destination,const std::array<float,3>& offset);
   uint64_t ScriptActorMoveEpoch(uint32_t reference) const {const auto i=scriptActorMoves_.find(reference);return i==scriptActorMoves_.end()?0:i->second;}
   bool SetActorHostile(uint32_t reference,uint32_t target);
+  bool DoorInteractionCrime(uint32_t reference) const;
+  bool ScriptReferenceLocation(uint32_t reference,fo3pipdata::Location& location) const;
+  bool ScriptPackage(uint32_t reference,uint32_t package,bool add);
   OwnershipResult ResolveOwnership(uint32_t reference, const OwnershipData* item=nullptr) const;
   OwnershipResult ContainerStackOwnership(uint32_t reference,uint64_t stack) const;
   void BeginContainerInteraction(uint32_t reference);

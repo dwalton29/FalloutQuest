@@ -212,6 +212,9 @@ void UpdateFo3Pipboy(uint64_t frame, double now, const float *headPose,
       uint32_t mapWorld = fo3pipdata::MapWorld(defs, exterior.world);
       if (mapWorld != gPipMenu.map.mapWorld) {
         gPipMenu.map.mapWorld = mapWorld;
+        if(mapWorld){const auto& w=defs.worlds.at(mapWorld);
+          Q6H_LOGI("WORLD MAP PROJECTION world=%08X image=%s usable=%dx%d NW=(%d,%d) SE=(%d,%d) playerGame=(%.2f,%.2f)",mapWorld,w.image.c_str(),w.width,w.height,int(w.nwX),int(w.nwY),int(w.seX),int(w.seY),exterior.x,exterior.y);
+        }
         gPipMenu.dirty = true;
       }
       if (gPipMenu.page == 0) {

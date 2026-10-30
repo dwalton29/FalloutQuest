@@ -1,4 +1,5 @@
 #include "fo3-dialogue-session.h"
+#include "fo3-dialogue-selection.h"
 #include "fo3-dialogue-info-policy.h"
 #include <algorithm>
 #include <cstdio>
@@ -11,46 +12,10 @@ const fo3pipdata::Info* Session::Current(const fo3pipdata::Definitions& d)const 
   return nullptr;
 }
 bool Session::Eligible(const fo3pipdata::Info& i,const Context& ctx)const {
-  const auto& p=*ctx.player;const auto& d=p.Definitions().pipboy;
-  if(!i.orderValid){if(diagnostic)diagnostic("DIALOGUE UNSUPPORTED SCRIPT info="+Id(i.id)+" cyclic Previous INFO order");return false;}
-  if(!SupportedInfoStructure(i)||(i.speaker&&i.speaker!=ctx.speaker.base))return false;
-  if((i.flags&4)&&p.Snapshot().pipboy.saidInfos.count((uint64_t(ctx.speaker.reference)<<32)|i.id))return false;
-  std::string error;
-  if(!Conditions(i.conditions,ctx,error)){if(!error.empty()&&diagnostic)diagnostic("DIALOGUE UNSUPPORTED CONDITION actor="+Id(ctx.speaker.reference)+" base="+Id(ctx.speaker.base)+" dial="+Id(i.topic)+" info="+Id(i.id)+" "+error);return false;}
-  auto quest=d.quests.find(i.quest);
-  if(quest==d.quests.end())return false;
-  if(!Conditions(quest->second.conditions,ctx,error)){if(!error.empty()&&diagnostic)diagnostic("DIALOGUE UNSUPPORTED CONDITION info="+Id(i.id)+" quest="+Id(i.quest)+" "+error);return false;}
-  auto qs=p.Snapshot().pipboy.quests.find(i.quest);
-  if(qs==p.Snapshot().pipboy.quests.end()&&!(quest->second.flags&1))return false;
-  if(qs!=p.Snapshot().pipboy.quests.end()&&!qs->second.running)return false;
-  // Transactional preflight includes nested QUST dependencies and both phases.
-  auto plan=p.PrepareDialogueInfoTransaction(i.topic,i.id,fo3player::DialogueScriptPhase::Both,error,ctx.speaker.reference);
-  if(plan&&plan->HasReferenceChanges()&&(!previewReferences||!previewReferences(p,*plan,error))){
-    if(error.empty())error="world mutation requires resident coordinator";
-    plan.reset();
-  }
-  if(!plan) {
-    if(diagnostic)diagnostic("DIALOGUE UNSUPPORTED SCRIPT info="+Id(i.id)+" "+error);
-    return false;
-  }
-  for(auto& r:i.responses)if(!r.sound&&!(p.ActorVoice(ctx.speaker.reference)?p.ActorVoice(ctx.speaker.reference):fo3pipdata::ActorVoice(d,ctx.speaker.base)))return false;
-  return true;
+  return EligibleInfo(i,ctx,diagnostic,previewReferences);
 }
 const fo3pipdata::Info* Session::Resolve(uint32_t id,const Context& ctx,bool draw)const {
-  const auto& d=ctx.player->Definitions().pipboy;auto t=d.topics.find(id);if(t==d.topics.end())return nullptr;
-  // Quest priority precedes authored INFO order. Random stacks include only
-  // eligible INFOs and stop at the next eligible non-random / Random End.
-  int priority=-1;
-  for(auto& i:t->second)if(Eligible(i,ctx)){auto q=d.quests.find(i.quest);priority=std::max(priority,int(q->second.priority));}
-  std::vector<const fo3pipdata::Info*> pool;
-  for(auto& i:t->second) {
-    auto q=d.quests.find(i.quest);
-    if(q==d.quests.end()||q->second.priority!=priority||!Eligible(i,ctx))continue;
-    if(!(i.flags&2)){if(pool.empty())return &i;break;}
-    pool.push_back(&i);if(i.flags&32)break;
-  }
-  if(pool.empty())return nullptr;
-  return pool[draw?std::uniform_int_distribution<size_t>(0,pool.size()-1)(random):0];
+  return ResolveTopicInfo(id,ctx,[&](const auto& info){return Eligible(info,ctx);},draw?&random:nullptr);
 }
 bool Session::CanStart(const Context& ctx)const {
   if(!ctx.player||ctx.player->ActorHealth(ctx.speaker.reference)<=0||ctx.speaker.combat)return false;
@@ -69,6 +34,18 @@ bool Session::StartTopic(uint32_t requested,const Context& ctx,fo3player::Player
   scriptedTopic=true;
   const auto* chosen=Resolve(requested,ctx,true);if(!chosen)return false;
   actor=ctx.speaker.reference;base=ctx.speaker.base;voice=p.ActorVoice(actor);if(!voice)voice=fo3pipdata::ActorVoice(p.Definitions().pipboy,base);
+  return Enter(*chosen,ctx,p);
+}
+bool Session::StartSelectedTopic(uint32_t requested,uint32_t selected,const Context& ctx,fo3player::Player& p){
+  if(Active()||!ctx.player||ctx.speaker.combat||p.ActorHealth(ctx.speaker.reference)<=0)return false;
+  const auto topic=p.Definitions().pipboy.topics.find(requested);if(topic==p.Definitions().pipboy.topics.end())return false;
+  const auto chosen=std::find_if(topic->second.begin(),topic->second.end(),[&](const auto& i){return i.id==selected;});
+  if(chosen==topic->second.end()||!SupportedInfoStructure(*chosen)||(chosen->speaker&&chosen->speaker!=ctx.speaker.base))return false;
+  // Conditions were bound transactionally at the original Say command, before
+  // later script assignments. Revalidate result capability at audio admission.
+  std::string error;auto plan=p.PrepareDialogueInfoTransaction(requested,selected,fo3player::DialogueScriptPhase::Both,error,ctx.speaker.reference);
+  if(!plan||(plan->HasReferenceChanges()&&(!previewReferences||!previewReferences(p,*plan,error))))return false;
+  scriptedTopic=true;actor=ctx.speaker.reference;base=ctx.speaker.base;voice=p.ActorVoice(actor);if(!voice)voice=fo3pipdata::ActorVoice(p.Definitions().pipboy,base);
   return Enter(*chosen,ctx,p);
 }
 bool Session::Start(const Context& ctx,fo3player::Player& p) {
@@ -130,7 +107,7 @@ bool Session::AudioDone(uint32_t token,bool success,const Context& ctx,fo3player
   if(diagnostic)diagnostic("DIALOGUE TRANSITION info="+Id(i->id)+" stage=end-result");
   std::string error;if(!Execute(*i,fo3player::DialogueScriptPhase::End,p,error)){if(diagnostic)diagnostic("DIALOGUE UNSUPPORTED SCRIPT info="+Id(i->id)+" "+error);End("end result rejected");return false;}
   if(diagnostic&&!i->end.source.empty())diagnostic("DIALOGUE RESULT info="+Id(i->id)+" phase=end");
-  p.RecordDialogue(actor,(i->flags&4)?i->id:0,i->addedTopics);
+  p.RecordDialogue(actor,(i->flags&4)?i->id:0,i->addedTopics,!scriptedTopic&&ctx.target.reference==fo3player::PlayerRef,(i->flags2&1u)?i->id:0);
   if(scriptedTopic){End("scripted INFO completed");return false;}
   if(i->flags&1){End("authored goodbye");return false;}
   phase=Phase::Choices;BuildChoices(ctx);return false;

@@ -1,4 +1,5 @@
 #pragma once
+#include "pipboy/fo3-quest-navigation.h"
 // Included after canonical Text/Quad/Draw primitives. Authored definitions and
 // mutable state live in their own modules; this file only presents them.
 namespace fo3pipui {
@@ -226,10 +227,11 @@ inline void MapPage(fo3pip::Menu &menu, const fo3player::Player &p) {
         Icon("Interface\\Worldmap\\waypoint_node.dds", pos.x, pos.y, 30);
     }
     if (!selected.empty()&&menu.actionError.empty()){Text(selected,90,590,0,810);Draw(r.fontTexture[0]);}
-    for (auto target : fo3pipdata::QuestTargets(d, s)) {
-      auto &t = d.targets.at(target);
-      if (fo3pipdata::MapWorld(d, t.world) != map.mapWorld)
-        continue;
+    for (auto target : fo3pipdata::NavigationTargets(p)) {
+      fo3pipdata::Location t;
+      if(!p.ScriptReferenceLocation(target,t))continue;
+      if(!t.world)t=fo3pipdata::ExteriorEntrance(d,t.cell,t.x,t.y);
+      if (fo3pipdata::MapWorld(d, t.world) != map.mapWorld)continue;
       auto pos = screen(fo3pipdata::MapProject(d, t.world, t.x, t.y));
       if (inside(pos))
         Icon("Interface\\HUD\\glow_hud_compass_objective_marker.dds", pos.x,

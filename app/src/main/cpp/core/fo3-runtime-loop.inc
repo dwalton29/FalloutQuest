@@ -451,7 +451,7 @@ public:
         fo3pipui::Shutdown();ResetFo3Pipboy();fo3lockui::Shutdown();fo3terminalui::Shutdown();CancelFo3Lockpick();CancelFo3Terminal();
         fo3notifyui::Shutdown();
         fo3barterui::Shutdown();fo3dialogueui::Shutdown();
-         fo3levelui::Shutdown();fo3xpui::Shutdown();fo3pauseui::Shutdown();fo3perfui::Shutdown();
+         fo3levelui::Shutdown();fo3xpui::Shutdown();fo3pauseui::Shutdown();fo3perfui::Shutdown();fo3compassui::Shutdown();
         gFo3PauseMenu.Close();gFo3PauseOpen=false;
          EndFo3Dialogue("renderer shutdown");
         fo3lootui::Shutdown();
@@ -2105,6 +2105,17 @@ private:
                     !IsFo3LoadingVisible()&&sessionState_==XR_SESSION_STATE_FOCUSED&&!Fo3GameplayBlocked();
                 QActorPrepareStereoFrame();
                 hitch.Mark("actorPrep");
+                if(gPlayerSession&&gSceneReady&&!IsFo3LoadingVisible()&&!Fo3GameplayBlocked()&&!Fo3DialogueFocus()&&!Fo3PipboyFocus()&&!gFo3PauseOpen){
+                    fo3pipdata::Location location;
+                    if(gPlayerSession->player.ScriptReferenceLocation(fo3player::PlayerRef,location)){
+                        static fo3compass::Frame targets;static double refresh=0;static uint32_t cell=0,world=0;
+                        const double now=std::chrono::duration<double>(Fo3GameplayNow().time_since_epoch()).count();
+                        if(now>=refresh||cell!=location.cell||world!=location.world){targets=fo3compass::Build(gPlayerSession->player,location,0);refresh=now+.2;cell=location.cell;world=location.world;}
+                        auto compass=targets;compass.bearing=-gQ210Head[3];
+                        for(auto& icon:compass.icons){const float angle=icon.x*fo3compass::Window-compass.bearing;icon.x=std::atan2(std::sin(angle),std::cos(angle))/fo3compass::Window;}
+                        fo3compassui::Prepare(compass);
+                    }
+                }
                 if(gFo3PauseOpen)fo3pauseui::Prepare(gFo3PauseMenu);
                 if(gFo3PauseMenu.perfHudMode&&!IsFo3LoadingVisible())fo3perfui::Prepare(gFo3PauseMenu.perfHudMode);
                 if(auto* player=GetFo3PlayerSession())fo3pipui::Render(gPipMenu,player->player,Fo3PipboyFocus());
@@ -2667,6 +2678,7 @@ private:
                 const auto notificationMvp=Multiply(viewProjection,MatrixFromPose(notificationHead_));
                 fo3notifyui::Render(notificationMvp.m);
                 fo3xpui::Render(notificationMvp.m);
+                if(!gFo3PauseOpen)fo3compassui::Render(notificationMvp.m);
             }
             // Modal lockpicking is last among world/hand/ordinary HUD draws.
             // It has fresh self-occlusion depth, independent of nearby models.

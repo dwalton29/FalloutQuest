@@ -64,10 +64,10 @@ static void MapTests() {
   w.seY = -20;
   w.width = w.height = 2048;
   w.valid = true;
-  auto p = w.Project(-30 * 4096, 30 * 4096);
-  assert(p.x == 0 && p.y == 0);
-  p = w.Project(20 * 4096, -20 * 4096);
-  assert(p.x == 1 && p.y == 1);
+  auto p = w.Project(-30 * 4096, 31 * 4096);
+  assert(p.x == World::Border && p.y == World::Border);
+  p = w.Project(21 * 4096, -20 * 4096);
+  assert(p.x == World::Border+World::Content && p.y == World::Border+World::Content);
   for (auto v : {Point{0, 0}, Point{.5f, .5f}, Point{.2f, .9f}}) {
     auto game = w.Unproject(v);
     auto back = w.Project(game.x, game.y);
@@ -79,8 +79,8 @@ static void MapTests() {
   d.worlds[2].parentFlags = 4;
   assert(MapWorld(d, 2) == 1);
   d.worlds[2].scale = 2;
-  d.worlds[2].offsetX = 3;
-  d.worlds[2].offsetY = -4;
+  d.worlds[2].offsetX = 3*4096;
+  d.worlds[2].offsetY = -4*4096;
   auto child = MapProject(d, 2, 4096, 8192), expected = w.Project(5 * 4096, 0);
   assert(std::fabs(child.x - expected.x) < 1e-5 &&
          std::fabs(child.y - expected.y) < 1e-5);

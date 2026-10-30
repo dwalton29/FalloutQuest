@@ -1,3 +1,4 @@
+#include "dialogue/fo3-dialogue-selection.h"
 // Render-thread adapters for original reference events and controller actions.
 // No location, quest, reference, sound or animation-group IDs are embedded here.
 namespace fo3worldscript {
@@ -28,10 +29,14 @@ static fo3dialogue::Context SpeechContext(uint32_t reference,uint32_t target){
         const auto pos=Q240GamePosition(*actor);
         ctx.speaker={reference,actor->source.baseFormId,gCurrentCellFormId,gExteriorWorldspaceQ1890,actor->aiPackage,pos[0],pos[1],pos[2],actor->runtime.activity==fo3npc::Activity::Combat,actor->runtime.packageKnown};
     }
-    ctx.target={target,7,gCurrentCellFormId,gExteriorWorldspaceQ1890,0,
+    fo3dialogue::ReferenceContext(gPlayerSession->player,target,ctx.target);
+    if(target==fo3player::PlayerRef){ctx.target={target,7,gCurrentCellFormId,gExteriorWorldspaceQ1890,0,
         gSceneCenterXQ1730+gQ210Head[0]*FO3_UNITS_PER_METRE,
         gSceneCenterYQ1730-(gQ210Head[2]-SCENE_FORWARD)*FO3_UNITS_PER_METRE,
         gSceneFloorZQ1730+(gQ210Head[1]-FLOOR_Y)*FO3_UNITS_PER_METRE,false,false};
+    }else if(const auto* actor=DialogueActor(target)){const auto pos=Q240GamePosition(*actor);
+      ctx.target={target,actor->source.baseFormId,gCurrentCellFormId,gExteriorWorldspaceQ1890,actor->aiPackage,pos[0],pos[1],pos[2],actor->runtime.activity==fo3npc::Activity::Combat,actor->runtime.packageKnown};
+    }
     return ctx;
 }
 static void SpeechStop(){
@@ -77,6 +82,7 @@ void SpeechTick(){
         SpeechStop();speechPending.clear();speechGeneration=player.ScriptRuntimeGeneration();
     }
     if(speech.Active()){
+        if(auto* actor=DialogueActor(speech.actor))Q230DialogueResponseAnimation(*actor,speech);
         bool disabled=true;std::string error;
         if(gDialogue.Active()||IsFo3LoadingVisible()||!player.ReferenceDisabled(speech.actor,disabled,error)||disabled||seconds-speechBegan>60){SpeechStop();return;}
         const auto done=fo3audio::DialogueCompletion();
@@ -97,7 +103,7 @@ void SpeechTick(){
     if(actor&&(actor->runtime.offScene||!actor->runtime.CanTalk()))return;
     speech.publishReferences=[](fo3player::Player& p,fo3player::ScriptTransactionPlan& plan,std::string& e){return PublishFo3DialogueReferences(p,plan,e);};
     speech.previewReferences=[](const fo3player::Player& p,const fo3player::ScriptTransactionPlan& plan,std::string& e){return PreviewFo3DialogueReferences(p,plan,e);};
-    if(!speech.StartTopic(action.form,SpeechContext(action.reference,action.flags),player)){
+    if(!(action.info?speech.StartSelectedTopic(action.form,action.info,SpeechContext(action.reference,action.flags),player):speech.StartTopic(action.form,SpeechContext(action.reference,action.flags),player))){
         Q6H_LOGW("SCRIPT SPEECH TOPIC UNAVAILABLE ref=%08X topic=%08X",action.reference,action.form);return;
     }
     speechReference=action.reference;speechTopic=action.form;speechTarget=action.flags;speechBegan=seconds;
@@ -109,7 +115,7 @@ void Register(){
     auto& player=gPlayerSession->player;
     const uint64_t revision=gFo3VisualPublication.Revision();
     if(actorRegistryRevision==gQ230NpcResidenceRevision&&registryPlayer==&player&&runtimeGeneration==player.ScriptRuntimeGeneration()&&registryRevision==revision&&registryStorage==gObjects.data()&&registryCount==gObjects.size())return;
-    if(registryPlayer!=&player||runtimeGeneration!=player.ScriptRuntimeGeneration()){animations.clear();loaded.clear();modifier={};seconds=0;}
+    if(registryPlayer!=&player||runtimeGeneration!=player.ScriptRuntimeGeneration()){animations.clear();loaded.clear();modifier={};seconds=0;for(auto& actor:gQ230NpcActors){actor.runtime.scriptLookTarget=0;actor.responseIdle=actor.responseToken=actor.responseInfo=0;}}
     actorRegistryRevision=gQ230NpcResidenceRevision;runtimeGeneration=player.ScriptRuntimeGeneration();registryPlayer=&player;registryRevision=revision;registryStorage=gObjects.data();registryCount=gObjects.size();
     auto registry=std::make_shared<fo3script::AnimationRegistry>();
     std::unordered_set<uint32_t> present;
@@ -153,7 +159,9 @@ void Events(){
 void Actions(){
     auto& player=gPlayerSession->player;fo3script::Action action;
     while(player.PollScriptAction(action)){
-        if(action.kind==fo3script::ActionKind::SayTo){if(speechPending.size()<128)speechPending.push_back(action);
+        if(action.kind==fo3script::ActionKind::Look){
+            if(auto* actor=DialogueActor(action.reference))actor->runtime.scriptLookTarget=action.form;
+        }else if(action.kind==fo3script::ActionKind::SayTo){if(speechPending.size()<128)speechPending.push_back(action);
         }else if(action.kind==fo3script::ActionKind::DefaultActivate){
             if(!DeliverFo3ScriptDefaultActivation(action.reference))
                 Q6H_LOGW("SCRIPT DEFAULT ACTIVATE REJECTED: ref=%08X",action.reference);

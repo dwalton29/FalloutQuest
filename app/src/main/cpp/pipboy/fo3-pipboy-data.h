@@ -23,20 +23,33 @@ struct World {
   int32_t width = 0, height = 0;
   int16_t nwX = 0, nwY = 0, seX = 0, seY = 0;
   float scale = 1, offsetX = 0, offsetY = 0;
+  float centreX=0,centreY=0; // NAM0/NAM9 midpoint, in game units.
   uint8_t flags = 0;
   bool valid = false;
+  // Fallout3.exe 00946172..00946197 maps the playable rectangle into
+  // the authored image: 104/1024 border, 816/1024 content extent.
+  static constexpr float Border=104.f/1024.f,Content=816.f/1024.f;
+  Point ToMapPoint(float x,float y)const{
+    const float factor=scale==0?1:scale;
+    return {(x-centreX)*factor+centreX+offsetX,(y-centreY)*factor+centreY+offsetY};
+  }
   Point Project(float x, float y) const {
-    return {(x / 4096.f * scale + offsetX - nwX) / (seX - nwX),
-            (nwY - y / 4096.f * scale - offsetY) / (nwY - seY)};
+    const auto p=ToMapPoint(x,y);
+    // MNAM identifies whole corner cells, not their two lower-left vertices.
+    return {Border+Content*(p.x/4096.f-nwX)/float(seX-nwX+1),
+            Border+Content*(float(nwY+1)-p.y/4096.f)/float(nwY-seY+1)};
   }
   Point Unproject(Point p) const {
-    return {((nwX + p.x * (seX - nwX)) - offsetX) / scale * 4096,
-            ((nwY - p.y * (nwY - seY)) - offsetY) / scale * 4096};
+    const float x=(nwX+(p.x-Border)/Content*(seX-nwX+1))*4096.f;
+    const float y=(nwY+1-(p.y-Border)/Content*(nwY-seY+1))*4096.f;
+    const float factor=scale==0?1:scale;
+    return {(x-centreX-offsetX)/factor+centreX,(y-centreY-offsetY)/factor+centreY};
   }
 };
 struct Placement {
   uint32_t base = 0, cell = 0, world = 0, flags = 0, parent = 0;
   bool opposite = false;
+  bool openByDefault=false;
   uint32_t linkedReference=0;
   float patrolWait=0;
   bool patrolAction=false;
@@ -291,6 +304,7 @@ struct Definitions {
   std::vector<uint32_t> greetings, topLevelTopics;
   uint32_t radioHello = 0;
   // Recovered Fallout3.exe Setting defaults; ESM GMSTs override these.
+  float sayOncePerDayHours=12; // Fallout3.exe fSayOncePerDayInfoTimer default.
   float discoveryRadius = 1000, markerVisibleDistance=20000;
   float travelWalkSpeed=85,hostileExteriorDistance=3000,hostileInteriorDistance=2000;
   uint32_t discoveryXP=10;

@@ -56,6 +56,7 @@ Placement Place(uint32_t flags, const Subs &s, uint32_t cell, uint32_t world) {
     p.rx=fo3esm::ReadF32(d->p+12);p.ry=fo3esm::ReadF32(d->p+16);p.rz=fo3esm::ReadF32(d->p+20);
   }
   if(auto scale=Find(s,"XSCL");scale&&scale->n==4)p.scale=fo3esm::ReadF32(scale->p);
+  p.openByDefault=Find(s,"ONAM")!=nullptr;
   p.owner=U(Find(s,"XOWN"));
   auto e = Find(s, "XESP");
   if (e && e->n >= 5) {
@@ -98,7 +99,8 @@ void Decode(Definitions &d, const std::string &t, uint32_t id, uint32_t flags,
     const auto v=Find(s,"DATA");if(!v||v->n!=4)return;
     const float value=editor.empty()?0:editor[0]=='i'?float(int32_t(U(v))):fo3esm::ReadF32(v->p);
     if(!std::isfinite(value))return;
-    if(editor=="iXPRewardDiscoverMapMarker"&&value>=0&&value<=1000000)d.discoveryXP=uint32_t(value);
+    if(editor=="fSayOncePerDayInfoTimer"&&value>=0)d.sayOncePerDayHours=value;
+    else if(editor=="iXPRewardDiscoverMapMarker"&&value>=0&&value<=1000000)d.discoveryXP=uint32_t(value);
     else if(editor=="iMapMarkerRevealDistance"&&value>0)d.discoveryRadius=value;
     else if(editor=="iMapMarkerVisibleDistance"&&value>0)d.markerVisibleDistance=value;
     else if(editor=="fMoveBaseSpeed"&&value>0)d.travelWalkSpeed=value;
@@ -192,7 +194,7 @@ void Decode(Definitions &d, const std::string &t, uint32_t id, uint32_t flags,
       w.nwY = int16_t(fo3esm::ReadU16(m->p + 10));
       w.seX = int16_t(fo3esm::ReadU16(m->p + 12));
       w.seY = int16_t(fo3esm::ReadU16(m->p + 14));
-      w.valid = w.seX > w.nwX && w.nwY > w.seY && w.width > 0 && w.height > 0;
+      w.valid = w.seX >= w.nwX && w.nwY >= w.seY && w.width > 0 && w.height > 0;
     }
     auto o = Find(s, "ONAM");
     if (o && o->n == 12) {
@@ -200,10 +202,15 @@ void Decode(Definitions &d, const std::string &t, uint32_t id, uint32_t flags,
       w.offsetX = fo3esm::ReadF32(o->p + 4);
       w.offsetY = fo3esm::ReadF32(o->p + 8);
     }
+    const auto lo=Find(s,"NAM0"),hi=Find(s,"NAM9");
+    if(lo&&hi&&lo->n==8&&hi->n==8){
+      w.centreX=(fo3esm::ReadF32(lo->p)+fo3esm::ReadF32(hi->p))*.5f;
+      w.centreY=(fo3esm::ReadF32(lo->p+4)+fo3esm::ReadF32(hi->p+4))*.5f;
+    }
     f = Find(s, "DATA");
     if (f && f->n)
       w.flags = f->p[0];
-    w.valid = w.valid && std::isfinite(w.scale) && w.scale > 0;
+    w.valid = w.valid && std::isfinite(w.scale) && w.scale >= 0 && std::isfinite(w.centreX) && std::isfinite(w.centreY) && std::isfinite(w.offsetX) && std::isfinite(w.offsetY);
     d.worlds[id] = std::move(w);
   } else if (t == "CELL") {
     d.cellWorlds[id] = world;

@@ -1,5 +1,6 @@
 #include "player/fo3-player-state.h"
 #include "dialogue/fo3-dialogue-results.h"
+#include "dialogue/fo3-dialogue-session.h"
 #include "scripting/fo3-nonresident-script.h"
 #include <iostream>
 #include <stdexcept>
@@ -7,6 +8,7 @@
 #include <cstdio>
 #include <filesystem>
 #include "world/fo3-worldspace-runtime.h"
+#include "ui/interaction/fo3-compass-state.h"
 using namespace fo3player;
 // Compile the actual native activation adapter, with resource publication
 // supplied by this host scene. Original door events use the same route as A.
@@ -29,6 +31,30 @@ static float Local(const Player& p,const std::string& name){
   const auto i=p.Snapshot().pipboy.dialogueVariables.find(key);return i==p.Snapshot().pipboy.dialogueVariables.end()?0:i->second;
 }
 static void Synthetic(){
+  Check(std::abs(fo3compass::Relative(0,100,0))<1e-6f,"north centered");
+  Check(fo3compass::Relative(100,0,0)>0,"east moves right");
+  Check(std::abs(fo3compass::Relative(-.001f,100,2*fo3compass::Pi))<.001f,"north seam wraps");
+
+  {
+    Catalog navigation;navigation.initial.baseHealth=100;navigation.initial.special.fill(5);
+    auto& d=navigation.pipboy;d.targets[800].cell=30;d.targets[800].world=1;d.targets[800].x=100;d.targets[800].y=100;
+    auto& objective=d.quests[900].objectives[10];objective.conditionalTargets=true;fo3pipdata::ObjectiveTarget target;target.reference=800;
+    fo3pipdata::Condition condition;condition.function=72;condition.a=PlayerBase;condition.value=1;target.conditions.push_back(condition);objective.targetItems.push_back(target);
+    auto& progress=navigation.initial.pipboy.quests[900];progress.objectives[10].displayed=true;navigation.initial.pipboy.selectedQuest=900;
+    fo3pipdata::Placement door;door.cell=10;door.x=20;door.y=40;door.teleportRef=802;d.doors[10].push_back(door);d.targets[802].cell=30;d.targets[802].world=1;
+    Player player(navigation);player.SetScriptPlayerLocation(0,0,0,10,0);
+    const auto targets=fo3pipdata::NavigationTargets(player);Check(targets.size()==1&&targets.front()==800,"conditional objective uses original player context");
+    fo3pipdata::Point point;Check(fo3compass::TargetPoint(player,{10,0,0,0,0},800,point)&&point.x==20&&point.y==40,"interior quest compass points to exit door");
+    const auto compass=fo3compass::Build(player,{10,0,0,0,0},0);Check(compass.icons.size()==1&&compass.icons[0].kind==fo3compass::Kind::Quest,"quest icon reaches compass frame");
+  }
+  {
+    Catalog c;c.initial.baseHealth=100;c.initial.special.fill(5);c.pipboy.referenceScripts[10]={"Speaker",20};
+    fo3pipdata::Info daily;daily.id=40;daily.topic=30;daily.flags2=1;c.pipboy.topics[30].push_back(daily);
+    Player p(c);Check(p.CanSayDailyInfo(10,40)&&p.RecordDialogue(10,0,{},false,40)&&!p.CanSayDailyInfo(10,40),"authored daily INFO cooldown");
+    const auto path="/tmp/fq-daily-"+std::to_string(getpid());std::string error;Check(p.Save(path,error),error);Player restored(c);Check(restored.Restore(path,error),error);std::remove(path.c_str());
+    Check(!restored.CanSayDailyInfo(10,40)&&restored.AdvanceGameHours(11)&&!restored.CanSayDailyInfo(10,40),"daily INFO history persists before original 12-hour timer");
+    Check(restored.AdvanceGameHours(1)&&restored.CanSayDailyInfo(10,40),"original timer expiry permits another line");
+  }
   Catalog c;c.initial.baseHealth=100;c.initial.special.fill(5);
   c.references[10].base=100;c.references[10].cell=1;
   c.pipboy.targets[10].cell=1;c.pipboy.targets[10].scale=2;c.pipboy.targets[10].rz=1.57079632679f;
@@ -85,6 +111,13 @@ static void Original(const char* path){
   struct Cleanup {std::string root;~Cleanup(){std::filesystem::remove(root+"/Fallout3.esm");std::filesystem::remove(root);}} cleanup{root};
   Catalog c;std::string error;Check(LoadCatalog(path,c,error),error);c.initial.gameHour=12;gPlayerSession=std::make_unique<Session>(std::move(c));auto& p=gPlayerSession->player;
   const auto& d=p.Definitions().pipboy;auto id=[&](const char* name){auto f=d.formNames.find(name);Check(f!=d.formNames.end(),std::string("missing ")+name);return f->second;};
+  const auto& dc=d.worlds.at(0x18de6);Check(dc.centreX==55296&&dc.centreY==-20480&&dc.scale==.5f&&dc.offsetX==2048&&dc.offsetY==6076,"original Chevy Chase map metadata");
+  const auto transformed=fo3pipdata::WorldPoint(d,0x18de6,32768,-45056);
+  Check(transformed.x==46080&&transformed.y==-26692,"original child-world scale pivot and game-unit offset");
+  const auto projected=fo3pipdata::MapProject(d,0x18de6,32768,-45056);
+  Check(std::abs(projected.x-(.1015625f+.796875f*(41.25f/51)))<1e-6f,"original map-art border and whole-cell extent");
+  const auto inverse=d.worlds.at(0x3c).Unproject(projected);Check(std::abs(inverse.x-transformed.x)<.05f&&std::abs(inverse.y-transformed.y)<.05f,"world-map waypoint inversion");
+  std::cout<<"Original executable map border, whole cells and ESM child-world scale/offset verified\n";
   const uint32_t house=id("megatongatehouseref"),weld=id("megatongateprotectronref");
   auto registry=std::make_shared<fo3script::AnimationRegistry>();(*registry)[house]={{"Forward",15,false},{"Backward",15,false},{"Left",3,true},{"SpecialIdle",3,true}};
   p.SetScriptAnimationRegistry(registry);p.SetScriptRuntimeClock(100,.25);
@@ -155,5 +188,58 @@ static void Original(const char* path){
   const auto& modifier=p.Definitions().imageModifiers.at(action.form);Check(modifier.valid&&modifier.duration==10,"original modifier duration");
   Check(fo3script::SampleImageModifier(modifier,0).fade[3]>.8f&&fo3script::SampleImageModifier(modifier,0).blur==2.5f,"original fade and blur");
   exit=p.PrepareReferenceEventTransaction(trigger,"OnTriggerEnter",PlayerRef,error);Check(bool(exit)&&p.CommitScriptTransaction(*exit),"second exit");Check(!p.PollScriptSound(sound)&&!p.PollScriptAction(action),"source doOnce");
+  p.RegisterOriginalActors();const auto gob=id("gobref"),nova=id("novaref"),radio=id("moriartysradioref");
+  const auto& gobPlaced=d.targets.at(gob);p.SetScriptPlayerLocation(gobPlaced.x,gobPlaced.y+40,gobPlaced.z,gobPlaced.cell,gobPlaced.world);
+  Check(!p.DoorInteractionCrime(saloon),"original unlocked saloon entrance is not theft");
+  Check(d.targets.at(radio).openByDefault,"original radio is on/open by default");
+  for(auto ref:{gob,nova}){auto event=p.PrepareReferenceEventTransaction(ref,"GameMode",PlayerRef,error);Check(bool(event),"saloon original GameMode: "+error);Check(p.CommitScriptTransaction(*event),"saloon source commit");}
+  Check(Local(p,"gobref.radioconversation")==1&&Local(p,"gobref.tick")==1,"Gob's original proximity trigger and first radio phase");
+  Check(p.PollScriptAction(action)&&action.kind==fo3script::ActionKind::Look&&action.reference==gob&&action.form==radio,"Gob looks at original radio");
+  Check(p.PollScriptAction(action)&&action.kind==fo3script::ActionKind::Look&&action.reference==nova&&action.form==gob,"Nova looks at Gob");
+  unsigned radioGestures=0;
+  auto finishSpeech=[&](const fo3script::Action& request){
+    const auto& speaker=d.targets.at(request.reference);fo3dialogue::Context context;context.player=&p;context.talking=true;
+    const auto sourcePackage=request.reference==gob?id("meggobradiocomplain"):id("megnovaradiostand");
+    context.speaker={request.reference,speaker.base,speaker.cell,speaker.world,sourcePackage,speaker.x,speaker.y,speaker.z,false,true};
+    if(request.flags==PlayerRef)context.target={PlayerRef,PlayerBase,speaker.cell,speaker.world,0,speaker.x,speaker.y+40,speaker.z,false,false};
+    else {const auto& target=d.targets.at(request.flags);context.target={request.flags,target.base,target.cell,target.world,0,target.x,target.y,target.z,false,false};}
+    fo3dialogue::Session speech;Check(speech.StartSelectedTopic(request.form,request.info,context,p),"original scripted speech INFO resolves");
+    unsigned count=0;while(speech.phase==fo3dialogue::Phase::Speaking){Check(++count<20,"bounded source response sequence");const auto* info=speech.Current(d);if(info&&speech.response<info->responses.size()&&info->responses[speech.response].speakerAnimation==id("looseradiobangon"))++radioGestures;speech.AudioDone(speech.audioToken,true,context,p);}
+    Check(!p.Snapshot().pipboy.talkedActors.count(request.reference),"scripted speech is not a player conversation");
+  };
+  auto gobTick=[&](){auto event=p.PrepareReferenceEventTransaction(gob,"GameMode",PlayerRef,error);Check(bool(event),"Gob original phase: "+error);Check(p.CommitScriptTransaction(*event),"Gob phase commit");};
+  gobTick();Check(Local(p,"gobref.tick")==2,"Gob advances to authored speech");
+  Check(p.PollScriptAction(action)&&action.kind==fo3script::ActionKind::SayTo&&action.reference==gob&&action.form==id("meggobradiotalk"),"Gob original topic queued");finishSpeech(action);
+  auto done=p.PrepareReferenceEventTransaction(gob,"SayToDone",id("meggobradiotalk"),error);Check(bool(done)&&p.CommitScriptTransaction(*done),"source Gob SayToDone");
+  gobTick();Check(p.PollScriptAction(action)&&action.kind==fo3script::ActionKind::SayTo&&action.reference==nova&&action.flags==gob,"Nova's authored SayTo targets Gob");finishSpeech(action);
+  done=p.PrepareReferenceEventTransaction(nova,"SayToDone",id("megnovaradiotalk"),error);Check(bool(done)&&p.CommitScriptTransaction(*done),"source Nova SayToDone");
+  auto finishGobReply=[&](){
+    bool voiced=false;
+    while(p.PollScriptAction(action)){if(action.kind==fo3script::ActionKind::SayTo&&action.reference==gob){finishSpeech(action);voiced=true;
+      auto complete=p.PrepareReferenceEventTransaction(gob,"SayToDone",action.form,error);Check(bool(complete)&&p.CommitScriptTransaction(*complete),"actual Gob reply completion");}}
+    Check(voiced,"original radio phase produced a real queued Gob INFO");
+  };
+  gobTick();gobTick();Check(Local(p,"gobref.tick")==5,"radio exchange resumes after actual completion event");finishGobReply();
+  for(int phase=5;phase<=8;++phase){gobTick();finishGobReply();}
+  gobTick();while(p.PollScriptAction(action)){}
+  const auto moriarty=id("colinmoriartyref"),package=id("megmoriartyfindgob");
+  Check(Local(p,"gobref.tick")==10&&Local(p,"gobref.radioconversation")==-1,"original radio exchange reaches its final phase");
+  Check(p.Snapshot().scriptPackages.at(moriarty).front()==package,"original Gob script installs Moriarty dialogue package");
+  const auto save="/tmp/fq293-saloon-"+std::to_string(getpid());Check(p.Save(save,error),error);Player reloaded(p.Definitions());Check(reloaded.Restore(save,error),error);std::remove(save.c_str());
+  Check(reloaded.Snapshot().scriptPackages.at(moriarty).front()==package&&Local(reloaded,"gobref.tick")==10,"saloon script progress and package persist");
+  const auto& colin=d.targets.at(moriarty);fo3dialogue::Context conversation;conversation.player=&reloaded;conversation.talking=true;
+  conversation.speaker={moriarty,colin.base,gobPlaced.cell,gobPlaced.world,package,colin.x,colin.y,colin.z,false,true};
+  conversation.target={gob,gobPlaced.base,gobPlaced.cell,gobPlaced.world,0,gobPlaced.x,gobPlaced.y,gobPlaced.z,false,true};
+  fo3dialogue::Session hello;Check(hello.StartTopic(id("hello"),conversation,reloaded),"Moriarty's original NPC HELLO resolves");
+  unsigned replies=0;while(hello.phase==fo3dialogue::Phase::Speaking){Check(++replies<20,"bounded original NPC responses");hello.AudioDone(hello.audioToken,true,conversation,reloaded);}
+  Check(!reloaded.Snapshot().scriptPackages.count(moriarty),"original HELLO result removes the temporary Moriarty package");
+  Check(!reloaded.Snapshot().pipboy.talkedActors.count(moriarty),"NPC conversation does not count as speaking to the player");
+  Check(!reloaded.Snapshot().dailySaidInfos.empty(),"daily radio INFO history survives reload");
+  Check(radioGestures>0,"original radio response supplies the bang-on IDLE");
+  reloaded.SetScriptPlayerLocation(gobPlaced.x,gobPlaced.y+40,gobPlaced.z,gobPlaced.cell,gobPlaced.world);
+  const auto repeat=reloaded.PrepareReferenceEventTransaction(gob,"GameMode",PlayerRef,error);Check(bool(repeat)&&reloaded.CommitScriptTransaction(*repeat),"return to saloon after completed radio scene");
+  Check(!reloaded.PollScriptAction(action)&&!reloaded.Snapshot().scriptPackages.count(moriarty),"one-time scene does not replay after return/reload");
+  std::cout<<"Original Gob/Nova radio scene, authored response IDLEs, Moriarty HELLO/results, return/reload and package persistence passed\n";
+
 }
 int main(int argc,char** argv){try{Synthetic();if(argc>1)Original(argv[1]);std::cout<<"World source scripts passed\n";}catch(const std::exception& e){std::cerr<<e.what()<<"\n";return 1;}}

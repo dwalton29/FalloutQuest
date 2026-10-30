@@ -1,4 +1,5 @@
 #include "fo3-dialogue-results.h"
+#include "fo3-dialogue-selection.h"
 #include <sstream>
 #include <cctype>
 #include <cstdlib>
@@ -85,6 +86,7 @@ bool CompileResult(const fo3pipdata::Definitions& d,const fo3pipdata::ResultScri
     auto comment=line.find(';');if(comment!=std::string::npos)line.resize(comment);
     std::istringstream in(line);std::string op,a,b,c,extra;Command cmd{};cmd.type=CommandType::Variable;
     if(!(in>>op))continue;
+    if(!op.empty()&&op.back()=='.'){std::string verb;if(!(in>>verb)){error="missing reference command";return false;}op+=verb;}
     if(op=="ref"||op=="reference"){
       if(!referencePreamble||!(in>>a)||(in>>extra)||!referenceDeclarations.insert(a).second){error="invalid reference local declaration";return false;}
       continue;
@@ -112,9 +114,18 @@ bool CompileResult(const fo3pipdata::Definitions& d,const fo3pipdata::ResultScri
       if(!cmd.variable)cmd.variable=CaptureNumericLocalKey(d,owner,scriptId,a,forms);
       if(!cmd.variable){cmd.form=form(a);cmd.type=CommandType::Global;if(!cmd.form){error="unresolved assignment: "+a;return false;}}
     } else if(op=="return")cmd.type=CommandType::Return;
-    else if(op=="sayto"||op=="say"||(op.size()>4&&op.substr(op.size()-4)==".say")){
+    else if(op=="look"||op=="stoplook"||op=="addscriptpackage"||op=="removescriptpackage"||
+        (op.find('.')!=std::string::npos&&(op.substr(op.find('.')+1)=="look"||op.substr(op.find('.')+1)=="stoplook"||op.substr(op.find('.')+1)=="addscriptpackage"||op.substr(op.find('.')+1)=="removescriptpackage"))){
+      const auto dot=op.find('.');const auto verb=dot==std::string::npos?op:op.substr(dot+1);
+      cmd.form=dot==std::string::npos?owner:form(op.substr(0,dot));
+      cmd.type=(verb=="look"||verb=="stoplook")?CommandType::Look:CommandType::ScriptPackage;
+      cmd.value=verb=="addscriptpackage"?1:0;
+      if(verb!="stoplook"&&(!(in>>a)||!(cmd.index=form(a)))){error="invalid reference action argument";return false;}
+      if(!cmd.form){error="invalid reference action receiver";return false;}
+    }
+    else if(op=="sayto"||op=="say"||(op.find('.')!=std::string::npos&&(op.substr(op.find('.')+1)=="say"||op.substr(op.find('.')+1)=="sayto"))){
       cmd.type=CommandType::SayTo;cmd.form=op.find('.')==std::string::npos?owner:form(op.substr(0,op.find('.')));cmd.index=fo3player::PlayerRef;
-      if(op=="sayto"){if(!(in>>a)||!(cmd.index=form(a))){error="invalid SayTo target";return false;}}
+      if(op=="sayto"||(op.size()>6&&op.substr(op.size()-6)==".sayto")){if(!(in>>a)||!(cmd.index=form(a))){error="invalid SayTo target";return false;}}
       if(!(in>>a)||!(cmd.variable=form(a))){error="invalid speech topic";return false;}
     } else if(op=="moveto"||op=="movetomarker"||
               (op.find('.')!=std::string::npos&&(op.substr(op.find('.')+1)=="moveto"||op.substr(op.find('.')+1)=="movetomarker"))){

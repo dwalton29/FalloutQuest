@@ -510,7 +510,10 @@ static const fo3pipdata::PackageDefinition* Q240SelectPackage(
   const auto* actorDef=gPlayerSession->player.ActorCategory(actor.source.refFormId,16);
   if(!actorDef){Q240AiLogOnce(actor.source.refFormId,0,"invalid AI package template");return nullptr;}
   const float hour=GetFo3TimeOfDayHour();
-  for(uint32_t packageId:actorDef->packages) {
+  auto packages=actorDef->packages;
+  const auto scripted=gPlayerSession->player.Snapshot().scriptPackages.find(actor.source.refFormId);
+  if(scripted!=gPlayerSession->player.Snapshot().scriptPackages.end())packages.insert(packages.begin(),scripted->second.begin(),scripted->second.end());
+  for(uint32_t packageId:packages) {
     const auto retry=actor.runtime.packageRetryAfter.find(packageId);
     if(retry!=actor.runtime.packageRetryAfter.end()&&actor.aiLastUpdate<retry->second)continue;
     const auto found=definitions.packages.find(packageId);if(found==definitions.packages.end())continue;
@@ -598,13 +601,14 @@ static const fo3pipdata::PackageDefinition* Q240SelectPackage(
       }
     }
     if(package.type==15){
-      if(package.location.valid&&package.location.type!=2u&&package.location.type!=3u){
+      if(package.location.valid&&package.location.type!=2u&&package.location.type!=3u&&
+          !(package.location.type==0u&&package.location.value==package.target.value)){
         Q240AiLogOnce(actor.source.refFormId,packageId,"Dialogue start-location mode unsupported");continue;
       }
 #ifndef FO3_NPC_CHAT_AVAILABLE
       Q240AiLogOnce(actor.source.refFormId,packageId,"NPC conversation director unavailable");continue;
 #else
-      if(!FO3_NPC_CHAT_AVAILABLE(actor,package.target.value)){continue;}
+      if(!FO3_NPC_CHAT_AVAILABLE(actor,package.target.value,packageId)){continue;}
       if(!Q240PackageActorTarget(actor,package.target.value,anchor))continue;
 #endif
     }
@@ -1283,7 +1287,7 @@ static void Q240AdvanceNpcTalk(Q230ActorVisual& actor,const fo3pipdata::PackageD
   if(!Q240PackageActorTarget(actor,p.target.value,listener)){
     Q240PackageRouteFailed(actor,now,"Dialogue partner no longer resident");return;
   }
-  constexpr float talkingDistance=128.f; // proximity policy in FO3 game units
+  const float talkingDistance=p.target.radius>0?float(p.target.radius):128.f; // authored PTDT distance, then VR fallback
   const auto here=Q240GamePosition(actor);
   if(Q240PlanarDistance(here,listener)<=talkingDistance){
     actor.aiPathGame.clear();actor.aiPathSurfaces.clear();actor.aiPathIndex=0;

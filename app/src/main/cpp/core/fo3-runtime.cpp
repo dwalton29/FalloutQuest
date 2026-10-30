@@ -13,6 +13,7 @@ namespace fo3worldscript {fo3script::ImagePresentation Presentation();}
 #include "npc/fo3-npc-state.h"
 #include "npc/fo3-npc-residency.h"
 #include "npc/fo3-npc-conversation.h"
+#include "dialogue/fo3-dialogue-selection.h"
 #include "npc/fo3-unloaded-ai.h"
 #include "data/fo3-xtel-index.h"
 #include "npc/fo3-facial-data.h"
@@ -31,6 +32,7 @@ namespace fo3worldscript {fo3script::ImagePresentation Presentation();}
 #include "weapons/fo3-weapon-hit.h"
 #include "ui/interaction/fo3-weapon-ammo-hud.h"
 #include "ui/interaction/fo3-health-bar-hud.h"
+#include "ui/interaction/fo3-compass-hud.h"
 #include "npc/fo3-animation-bounds.h"
 #include "rendering/actor-skinning.h"
 #include "rendering/opaque-telemetry.h"
@@ -888,6 +890,9 @@ struct Q230CombatWeapon {
     bool ready=false;
 };
 struct Q230ActorVisual {
+  std::unordered_map<uint32_t,fo3anim::Clip> responseClips;
+  uint32_t responseIdle=0,responseToken=0,responseInfo=0;
+  double responseStarted=0,responseLastTime=-1;
     std::unordered_map<std::string,std::shared_ptr<const fo3face::Tri>> facialAssets;
     fo3face::Weights facialWeights{};
     Fo3NpcActorQ230 source;
@@ -12427,7 +12432,7 @@ bool Q230BuildNpcActor(const Fo3NpcActorQ230& source, Q230ActorVisual& visual) {
 
 // Forward declarations: resident package execution precedes player-dialogue
 // runtime inclusion, but its conversation owner is resolved later in this TU.
-static bool Q230ChatEligible(const Q230ActorVisual&,uint32_t);
+static bool Q230ChatEligible(const Q230ActorVisual&,uint32_t,uint32_t=0);
 static bool Q230ChatBegin(uint32_t,uint32_t,double);
 static void Q230ChatStop(const char*);
 static void Q230ChatTick(double);

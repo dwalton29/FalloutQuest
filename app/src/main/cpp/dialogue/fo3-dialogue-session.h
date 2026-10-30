@@ -25,6 +25,7 @@ struct Session {
   bool CanStart(const Context&)const;
   bool CanActivate(const Context&)const;
   bool StartTopic(uint32_t topic,const Context&,fo3player::Player&);
+  bool StartSelectedTopic(uint32_t topic,uint32_t info,const Context&,fo3player::Player&);
   bool Start(const Context&,fo3player::Player&);
   bool Choose(size_t,const Context&,fo3player::Player&);
   bool AudioDone(uint32_t,bool,const Context&,fo3player::Player&);

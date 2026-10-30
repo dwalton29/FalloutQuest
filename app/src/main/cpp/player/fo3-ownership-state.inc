@@ -53,6 +53,11 @@ OwnershipResult Player::ResolveOwnership(uint32_t id,const OwnershipData* item) 
   if(out.data.global){out.known=false;out.permitted=false;out.karmaEligible=false;}
   return out;
 }
+bool Player::DoorInteractionCrime(uint32_t reference) const {
+  // Activating an unlocked door is not taking CELL-owned property. The red
+  // crime indication belongs to picking/forcing an owned lock.
+  return GetLock(reference).locked&&ResolveOwnership(reference).Theft();
+}
 OwnershipResult Player::ContainerStackOwnership(uint32_t id,uint64_t stack) const {
   const auto* contents=ContainerContents(id);
   if(contents)for(const auto& s:*contents)if(s.id==stack){

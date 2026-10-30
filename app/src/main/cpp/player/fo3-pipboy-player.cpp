@@ -6,13 +6,18 @@
 #include <algorithm>
 #include <cmath>
 namespace fo3player {
-bool Player::RecordDialogue(uint32_t actor,uint32_t info,const std::vector<uint32_t>& topics) {
+bool Player::RecordDialogue(uint32_t actor,uint32_t info,const std::vector<uint32_t>& topics,bool playerConversation,uint32_t dailyInfo) {
   if(!catalog_->pipboy.referenceScripts.count(actor))return false;
-  bool changed=state_.pipboy.talkedActors.insert(actor).second;
+  bool changed=playerConversation&&state_.pipboy.talkedActors.insert(actor).second;
   if(info)changed=state_.pipboy.saidInfos.insert((uint64_t(actor)<<32)|info).second||changed;
   for(auto topic:topics)if(catalog_->pipboy.dialogueTopics.count(topic))changed=state_.pipboy.knownTopics.insert(topic).second||changed;
+  if(dailyInfo){state_.dailySaidInfos[(uint64_t(actor)<<32)|dailyInfo]=float(double(state_.gameDaysPassed)+state_.gameHour/24.);changed=true;}
   if(changed)++revision_;
   return true;
+}
+bool Player::CanSayDailyInfo(uint32_t actor,uint32_t info)const{
+  const auto said=state_.dailySaidInfos.find((uint64_t(actor)<<32)|info);
+  return said==state_.dailySaidInfos.end()||(double(state_.gameDaysPassed)+state_.gameHour/24.-said->second)*24.+1e-6>=catalog_->pipboy.sayOncePerDayHours;
 }
 bool Player::SetDialogueVariable(uint64_t key,float value) {
   if(!key||!std::isfinite(value))return false;

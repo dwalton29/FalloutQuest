@@ -1241,7 +1241,9 @@ bool Player::Save(const std::string &path, std::string &error) const {
     payload.push_back(l.forceFailures);payload.push_back(l.rewarded?1:0);}
   // Optional RFE1 after the v14 lock tail. Empty overlays keep existing v14
   // bytes unchanged; older supported saves do not require this extension.
-  const bool hasScriptOverrides=!state_.actorAIValues.empty()||!state_.questScriptDelays.empty()||!state_.factionRelations.empty()||!state_.essentialFlags.empty();
+  const bool hasDailyInfos=!state_.dailySaidInfos.empty();
+  const bool hasScriptPackages=hasDailyInfos||!state_.scriptPackages.empty();
+  const bool hasScriptOverrides=hasScriptPackages||!state_.actorAIValues.empty()||!state_.questScriptDelays.empty()||!state_.factionRelations.empty()||!state_.essentialFlags.empty();
   const bool hasActorVariables=!state_.actorVariables.empty()||!state_.actorSpawnLevels.empty()||hasScriptOverrides;
   const bool hasDoorStates=!state_.doorStates.empty()||hasActorVariables;
   const bool hasDebugPoints=state_.debugPerkPoints!=0;
@@ -1373,7 +1375,25 @@ bool Player::Save(const std::string &path, std::string &error) const {
     std::vector<uint32_t> ids;for(const auto& entry:state_.essentialFlags)ids.push_back(entry.first);std::sort(ids.begin(),ids.end());
     for(auto id:ids){if(!catalog_->weapons.actors.count(id)){error="Invalid essential actor base";return false;}Put32(payload,id);payload.push_back(state_.essentialFlags.at(id)?1:0);}
   }
-  Put32(bytes, hasScriptOverrides ? 22 : hasActorVariables ? 21 : hasDoorStates ? 20 : hasDebugPoints ? 19 : hasLevelAdvancement ? 18 : hasCompletionState ? 17 :
+  if(hasScriptPackages){
+    Put32(payload,0x314B5053);Put32(payload,uint32_t(state_.scriptPackages.size())); // SPK1
+    std::vector<uint32_t> refs;for(const auto& row:state_.scriptPackages)refs.push_back(row.first);std::sort(refs.begin(),refs.end());
+    for(auto ref:refs){const auto& packages=state_.scriptPackages.at(ref);
+      if(!catalog_->actorPlacements.count(ref)||packages.size()>128){error="Invalid script package owner/count";return false;}
+      Put32(payload,ref);Put32(payload,uint32_t(packages.size()));std::unordered_set<uint32_t> seen;
+      for(auto id:packages){if(!catalog_->pipboy.packages.count(id)||!seen.insert(id).second){error="Invalid script package";return false;}Put32(payload,id);}
+    }
+  }
+  if(hasDailyInfos){
+    std::unordered_set<uint32_t> valid;for(const auto& topic:catalog_->pipboy.topics)for(const auto& info:topic.second)if(info.flags2&1u)valid.insert(info.id);
+    Put32(payload,0x31494144);Put32(payload,uint32_t(state_.dailySaidInfos.size())); // DAI1
+    std::vector<uint64_t> keys;for(const auto& row:state_.dailySaidInfos)keys.push_back(row.first);std::sort(keys.begin(),keys.end());
+    const double now=double(state_.gameDaysPassed)+state_.gameHour/24.;
+    for(auto key:keys){const float time=state_.dailySaidInfos.at(key);
+      if(!catalog_->pipboy.referenceScripts.count(uint32_t(key>>32))||!valid.count(uint32_t(key))||!std::isfinite(time)||time<0||time>now+1e-5){error="Invalid daily INFO history";return false;}
+      Put64(payload,key);PutFloat(payload,time);}
+  }
+  Put32(bytes, hasDailyInfos ? 24 : hasScriptPackages ? 23 : hasScriptOverrides ? 22 : hasActorVariables ? 21 : hasDoorStates ? 20 : hasDebugPoints ? 19 : hasLevelAdvancement ? 18 : hasCompletionState ? 17 :
       hasMerchantVisits ? 16 : hasPlayerAttributeOverrides ? 15 : 14);
   Put32(bytes, catalog_->fingerprint);
   Put32(bytes, static_cast<uint32_t>(payload.size()));
@@ -1433,7 +1453,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
   const auto *h = bytes.data();
   const auto version = fo3esm::ReadU32(h + 4);
   if (std::memcmp(h, "FQPS", 4) ||
-      (version < 1 || version > 22))
+      (version < 1 || version > 24))
     return fail("Unsupported player save format");
   if (fo3esm::ReadU32(h + 8) != catalog_->fingerprint)
     return fail("Player save belongs to different game definitions");
@@ -1843,9 +1863,30 @@ bool Player::Restore(const std::string &path, std::string &error) {
           if(!catalog_->factionFlags.count(uint32_t(key>>32))||!catalog_->factionFlags.count(uint32_t(key))||value>3||!next.factionRelations.emplace(key,value).second)return fail("Invalid faction relation");}
         if(payload.size()-at<8||fo3esm::ReadU32(p+at)!=0x31535345)return fail("Missing essential actors");
         const auto bases=fo3esm::ReadU32(p+at+4);at+=8;
-        if(bases>10000||payload.size()-at!=5ull*bases)return fail("Invalid essential actor count");
+        if(bases>10000||(version>=23?payload.size()-at<5ull*bases+8:payload.size()-at!=5ull*bases))return fail("Invalid essential actor count");
         for(uint32_t i=0;i<bases;++i,at+=5){const auto id=fo3esm::ReadU32(p+at);const auto value=p[at+4];
           if(!catalog_->weapons.actors.count(id)||value>1||!next.essentialFlags.emplace(id,value!=0).second)return fail("Invalid essential actor base");}
+      }
+      if(version>=23){
+        if(payload.size()-at<8||fo3esm::ReadU32(p+at)!=0x314B5053)return fail("Missing script packages");
+        const auto count=fo3esm::ReadU32(p+at+4);at+=8;
+        if(count>10000)return fail("Invalid script package actor count");
+        for(uint32_t i=0;i<count;++i){
+          if(payload.size()-at<8)return fail("Truncated script packages");
+          const auto ref=fo3esm::ReadU32(p+at),n=fo3esm::ReadU32(p+at+4);at+=8;
+          if(!catalog_->actorPlacements.count(ref)||!n||n>128||payload.size()-at<4ull*n||next.scriptPackages.count(ref))return fail("Invalid script package owner/count");
+          auto& packages=next.scriptPackages[ref];std::unordered_set<uint32_t> seen;
+          for(uint32_t j=0;j<n;++j,at+=4){const auto id=fo3esm::ReadU32(p+at);if(!catalog_->pipboy.packages.count(id)||!seen.insert(id).second)return fail("Invalid script package");packages.push_back(id);}
+        }
+      }
+      if(version>=24){
+        if(payload.size()-at<8||fo3esm::ReadU32(p+at)!=0x31494144)return fail("Missing daily INFO history");
+        const auto count=fo3esm::ReadU32(p+at+4);at+=8;
+        if(count>100000||payload.size()-at!=12ull*count)return fail("Invalid daily INFO count");
+        std::unordered_set<uint32_t> valid;for(const auto& topic:catalog_->pipboy.topics)for(const auto& info:topic.second)if(info.flags2&1u)valid.insert(info.id);
+        const double now=double(next.gameDaysPassed)+next.gameHour/24.;
+        for(uint32_t i=0;i<count;++i,at+=12){const auto key=U64(p+at);const auto time=fo3esm::ReadF32(p+at+8);
+          if(!catalog_->pipboy.referenceScripts.count(uint32_t(key>>32))||!valid.count(uint32_t(key))||!std::isfinite(time)||time<0||time>now+1e-5||!next.dailySaidInfos.emplace(key,time).second)return fail("Invalid daily INFO history");}
       }
       if(at!=payload.size())return fail("Trailing player save data");
     }

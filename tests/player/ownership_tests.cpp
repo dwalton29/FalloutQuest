@@ -20,6 +20,7 @@ Catalog Fixture(){
  c.references[5].owner=80;c.references[5].ownership.rank=2;
  c.references[6].cell=60;c.cellOwnership[60].data={90,0,0,true,true};c.cellOwnership[60].flags=0x21;
  c.references[7].cell=60;c.references[7].ownership.explicitOwner=true;
+ c.references[8].base=300;c.references[8].owner=90;c.references[8].locked=true;c.references[8].lockLevel=30;c.doorBases.insert(300);
  c.references[20].base=200;c.references[20].owner=90;
  c.containers[200].entries={{100,0,3,1,1,false},{101,0,2,1,1,false}};
  c.references[21].base=201;
@@ -44,6 +45,8 @@ void Synthetic(){
  c.pipboy.dialogueActors[PlayerBase].factions[80]=2;Player member(c);Check(member.ResolveOwnership(5).permitted,"sufficient original rank");
  c.pipboy.dialogueActors[PlayerBase].factions[80]=-1;Player removed(c);Check(removed.ResolveOwnership(5).Theft(),"negative rank is not membership");
  Check(p.ResolveOwnership(6).Theft()&&p.ResolveOwnership(6).inherited,"public CELL retains item ownership");
+ Check(!p.DoorInteractionCrime(6)&&!p.DoorInteractionCrime(5),"unlocked doors do not steal CELL-owned property");
+ {Player door(c);Check(door.DoorInteractionCrime(8)&&door.ScriptUnlock(8)&&!door.DoorInteractionCrime(8),"owned lock is red only until unlocked");}
  Check(p.ResolveOwnership(7).Theft()&&p.ResolveOwnership(7).inherited,"null owner retains CELL inheritance");
  Check(p.Pickup(6)&&p.Snapshot().karma==0,"CELL theft");
  while(p.PollKarmaEvent(k)){}

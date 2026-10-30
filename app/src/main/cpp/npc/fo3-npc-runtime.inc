@@ -36,6 +36,20 @@ void Q230CacheDialogueAnimations(Q230ActorVisual& actor,const fo3pipdata::Defini
     const bool ready=!paths[i].empty()&&LoadFalloutMeshFile(paths[i],bytes)&&fo3anim::DecodeClip(bytes,actor.animations[i]);
     (void)ready;Q6H_LOGI("NPC CLIP actor=%08X slot=%zu ready=%d path=%s",actor.source.refFormId,i,ready,paths[i].c_str());
   }
+  if(d&&!actor.source.creature)for(const auto& topic:d->topics)for(const auto& info:topic.second){
+    const bool speaker=info.speaker==actor.source.baseFormId||std::any_of(info.conditions.begin(),info.conditions.end(),[&](const auto& c){return c.function==72&&c.a==actor.source.baseFormId&&c.run==0;});
+    if(!speaker)continue;
+    for(const auto& response:info.responses){const auto id=response.speakerAnimation;if(!id||actor.responseClips.count(id)||d->idleAnimationObjects.count(id))continue;
+      const auto model=d->idleModels.find(id);if(model==d->idleModels.end())continue;
+      std::vector<uint8_t> bytes;fo3anim::Clip clip;
+      if(LoadFalloutMeshFile(model->second,bytes)&&fo3anim::DecodeClip(bytes,clip)&&!clip.tracks.empty()&&clip.frequency>0&&clip.stop>clip.start){
+#ifndef FO3_ACTOR_RUNTIME_HOST_TEST
+        for(const auto& key:clip.textKeys)if(key.text.rfind("Sound: ",0)==0)fo3audio::PreloadSound(key.text.substr(7));
+#endif
+        actor.responseClips.emplace(id,std::move(clip));
+      }
+    }
+  }
   actor.headBone=fo3anim::FindBone(actor.skeleton,"Bip01 Head");
   actor.chestBone=fo3anim::FindBone(actor.skeleton,"Bip01 Spine2");
   actor.blendFrom.resize(actor.skeleton.bones.size());
@@ -292,7 +306,7 @@ static bool Q230CrowdStep(const Q230ActorVisual&,const std::array<float,3>&);
 #define FO3_NPC_WORLD_GROUND(x,z,referenceY,outY) SampleFo3ActorGroundQ240(x,z,referenceY,outY)
 #define FO3_NPC_FURNITURE_LOADING IsFo3LoadingVisible()
 #define FO3_NPC_XTEL_INDEX() Q230NpcXtelIndex()
-#define FO3_NPC_CHAT_AVAILABLE(actor,reference) Q230ChatEligible(actor,reference)
+#define FO3_NPC_CHAT_AVAILABLE(actor,reference,package) Q230ChatEligible(actor,reference,package)
 #define FO3_NPC_CHAT_REQUEST(speaker,listener,now) Q230ChatBegin(speaker,listener,now)
 #include "fo3-npc-package-runtime.inc"
 #undef FO3_NPC_CHAT_REQUEST
@@ -578,15 +592,26 @@ void Q230UpdateActor(Q230ActorVisual &actor) {
       std::max(0.f,clip.stop-clip.start):locomotion?actor.runtime.locomotionTime:clipTime;
   const auto& furniture=actor.runtime.furniture;
   const auto* slot=furniture.Selected();
-  const bool furniturePose=slot&&(furniture.phase==fo3furniture::Phase::Enter||furniture.phase==fo3furniture::Phase::Loop||furniture.phase==fo3furniture::Phase::Exit);
-  if(furniturePose){
+  const auto responseClip=actor.responseClips.find(actor.responseIdle);
+  const double responseNow=std::chrono::duration<double>(Fo3GameplayNow().time_since_epoch()).count();
+  const bool responsePose=actor.runtime.Alive()&&actor.runtime.activity!=fo3npc::Activity::Combat&&!actor.runtime.furniture.Active()&&actor.runtime.speed<.01f&&responseClip!=actor.responseClips.end()&&responseNow-actor.responseStarted<(responseClip->second.stop-responseClip->second.start)/responseClip->second.frequency;
+  const bool furniturePose=!responsePose&&slot&&(furniture.phase==fo3furniture::Phase::Enter||furniture.phase==fo3furniture::Phase::Loop||furniture.phase==fo3furniture::Phase::Exit);
+  if(responsePose){
+#ifndef FO3_ACTOR_RUNTIME_HOST_TEST
+    const double keyTime=(responseNow-actor.responseStarted)*responseClip->second.frequency+responseClip->second.start;
+    for(const auto& key:responseClip->second.textKeys)if(key.time>actor.responseLastTime&&key.time<=keyTime&&key.text.rfind("Sound: ",0)==0)fo3audio::NamedSound(key.text.substr(7));
+    actor.responseLastTime=keyTime;
+#endif
+    fo3anim::BindClip(actor.skeleton,responseClip->second,actor.pose);
+    if(!fo3anim::Sample(actor.skeleton,responseClip->second,responseNow-actor.responseStarted,actor.pose,&timings))return;
+  }else if(furniturePose){
     const auto& authored=slot->idleMarker?slot->idles[furniture.idleIndex].clip:furniture.phase==fo3furniture::Phase::Enter?slot->program->enter:furniture.phase==fo3furniture::Phase::Exit?slot->program->exit:slot->program->loop;
     const double now=std::chrono::duration<double>(Fo3GameplayNow().time_since_epoch()).count();
     fo3anim::BindClip(actor.skeleton,authored,actor.pose);
     if(!fo3anim::Sample(actor.skeleton,authored,now-furniture.started,actor.pose,&timings,slot->idleMarker?fo3anim::RootPolicy::Locomotion:fo3anim::RootPolicy::Furniture,&furniture.retainedRoot))return;
   }else if(!fo3anim::Sample(actor.skeleton,clip,sampleTime,actor.pose,&timings)) return;
   actor.basePriorities=actor.pose.priorities;
-  if(!furniturePose&&actor.blendStart>=0&&elapsed-actor.blendStart<fo3npc::DialoguePolicy::BlendSeconds&&actor.blendFrom.size()==actor.pose.local.size()) {
+  if(!responsePose&&!furniturePose&&actor.blendStart>=0&&elapsed-actor.blendStart<fo3npc::DialoguePolicy::BlendSeconds&&actor.blendFrom.size()==actor.pose.local.size()) {
     const float mix=float((elapsed-actor.blendStart)/fo3npc::DialoguePolicy::BlendSeconds);
     for(size_t i=0;i<actor.pose.local.size();++i) {
       auto& to=actor.pose.local[i];const auto& from=actor.blendFrom[i];
@@ -740,3 +765,13 @@ void Q230RenderNpcActors(bool alphaPass) {
   if(fqperf::capture.recording)fqperf::capture.current.npcDraws+=fqgl::counters.draws-drawsBefore;
 #endif
 }
+
+#ifndef FO3_ACTOR_RUNTIME_HOST_TEST
+void Q230DialogueResponseAnimation(Q230ActorVisual& actor,const fo3dialogue::Session& session){
+  if(session.phase!=fo3dialogue::Phase::Speaking||(actor.responseToken==session.audioToken&&actor.responseInfo==session.info))return;
+  actor.responseToken=session.audioToken;actor.responseInfo=session.info;const auto* info=session.Current(gPlayerSession->player.Definitions().pipboy);
+  const auto idle=info&&session.response<info->responses.size()?info->responses[session.response].speakerAnimation:0;
+  actor.responseIdle=idle;actor.responseLastTime=-1;actor.responseStarted=std::chrono::duration<double>(Fo3GameplayNow().time_since_epoch()).count();actor.lastFrame=UINT64_MAX;
+  if(idle&&!actor.responseClips.count(idle))Q6H_LOGI("DIALOGUE IDLE UNAVAILABLE actor=%08X idle=%08X",actor.source.refFormId,idle);
+}
+#endif

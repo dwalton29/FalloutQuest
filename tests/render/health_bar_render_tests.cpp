@@ -5,6 +5,7 @@ inline void glGenTextures(GLsizei n,GLuint* ids){++driverCalls["glGenTextures"];
 inline void glGenBuffers(GLsizei n,GLuint* ids){++driverCalls["glGenBuffers"];while(n--)*ids++=nextHealthObject++;}
 inline void glGenVertexArrays(GLsizei n,GLuint* ids){++driverCalls["glGenVertexArrays"];while(n--)*ids++=nextHealthObject++;}
 #include "ui/interaction/fo3-health-bar-hud.h"
+#include "ui/interaction/fo3-compass-hud.h"
 #include <cassert>
 #include <iostream>
 #include <limits>
@@ -84,5 +85,13 @@ int main(){
   assert(driverCalls["glDrawArrays"]==draws+1); // empty bracket only
   assert(assetReads==reads&&fqgl::counters.queries==queries&&driverCalls["glBufferData"]==allocations);
   Shutdown();assert(!Get().ready);
+  fo3compass::Frame compass;compass.bearing=0;compass.icons={{fo3compass::Kind::Quest,0},{fo3compass::Kind::Waypoint,.49f}};
+  fo3compassui::Prepare(compass);const auto count=fo3compassui::Get().draws.size();assert(count==4); // two strip segments at North
+  const auto compassReads=assetReads,compassDraws=driverCalls["glDrawArrays"];
+  const auto compassQueries=fqgl::counters.queries;
+  fo3compassui::Render(mvp);fo3compassui::Render(mvp);
+  assert(driverCalls["glDrawArrays"]==compassDraws+2*count&&assetReads==compassReads);
+  assert(fqgl::counters.queries==compassQueries);fo3compassui::Shutdown();
+
   std::cout<<"Authored HP: tick quantization, centered enemy drain, atlas UVs/sharing, empty HP, stereo state restoration and warm reuse passed\n";
 }

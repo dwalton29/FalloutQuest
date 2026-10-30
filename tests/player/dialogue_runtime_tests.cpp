@@ -5,6 +5,7 @@
 #undef main
 #include "audio/fo3-dialogue-completion.h"
 #include "audio/fo3-dialogue-face.h"
+#include "dialogue/fo3-dialogue-session.h"
 #include <unistd.h>
 std::vector<Q230ActorVisual> gQ230NpcActors;
 struct StaticReference {uint32_t refFormId=0;};
@@ -16,6 +17,7 @@ bool IsFo3LoadingVisible(){return loading;}
 bool Fo3PipboyFocus(){return pipboy;}
 void FlushFo3PlayerState(){++flushes;}
 void Q230UpdateActor(Q230ActorVisual&){}
+void Q230DialogueResponseAnimation(Q230ActorVisual&,const fo3dialogue::Session&){}
 bool Q230LiveBone(const Q230ActorVisual& actor,int,std::array<float,3>& p){p=actor.runtime.position;p[1]+=1.5f;return true;}
 bool Q230LiveBounds(Q230ActorVisual&,std::array<float,3>&,std::array<float,3>&){return false;}
 namespace fo3audio {

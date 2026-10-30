@@ -232,6 +232,7 @@ void UpdateFo3Dialogue(double now,float stick,bool a,bool b,bool focused,float h
 #else
     const bool npcSpeaking=false;
 #endif
+    if(gDialogue.Active()&&gDialogue.actor==actor.source.refFormId)Q230DialogueResponseAnimation(actor,gDialogue);
     actor.runtime.speaking=gPlayerSession->player.ScriptActorTalking(actor.source.refFormId)||npcSpeaking||(actor.runtime.dialogue&&gDialogue.actor==actor.source.refFormId&&gDialogue.phase==fo3dialogue::Phase::Speaking);
     fo3face::Weights weights{};
     if(actor.runtime.speaking) {
@@ -249,7 +250,7 @@ void UpdateFo3Dialogue(double now,float stick,bool a,bool b,bool focused,float h
       if(std::fabs(weights[c])<.001f)weights[c]=0;
     }
     if(actor.facialWeights!=weights){actor.facialWeights=weights;actor.lastFrame=UINT64_MAX;}
-    if(actor.runtime.activity!=fo3npc::Activity::Combat&&(actor.runtime.dialogue||std::fabs(actor.runtime.headYaw)>.01f||std::fabs(fo3npc::Angle(actor.runtime.yaw-actor.runtime.returnYaw))>.01f)) {
+    if(actor.runtime.activity!=fo3npc::Activity::Combat&&(actor.runtime.scriptLookTarget||actor.runtime.dialogue||std::fabs(actor.runtime.headYaw)>.01f||std::fabs(fo3npc::Angle(actor.runtime.yaw-actor.runtime.returnYaw))>.01f)) {
       // Humanoid authored forward is +Y game space; scene Z is -game Y.
       const float x=actor.runtime.position[0],z=actor.runtime.position[2];
       std::array<float,3> chatPartner{};
@@ -257,6 +258,12 @@ void UpdateFo3Dialogue(double now,float stick,bool a,bool b,bool focused,float h
 #ifdef FO3_NPC_CHAT_RUNTIME
       chat=Q230ChatLook(actor.source.refFormId,chatPartner);
 #endif
+      if(actor.runtime.scriptLookTarget&&!actor.runtime.dialogue){
+        fo3pipdata::Location target;
+        if(gPlayerSession->player.ScriptReferenceLocation(actor.runtime.scriptLookTarget,target)){
+          chatPartner=Q240ScenePosition({target.x,target.y,0});chat=true;
+        }
+      }
       const float targetX=chat?chatPartner[0]:gQ210Head[0];
       const float targetZ=chat?chatPartner[2]:gQ210Head[2];
       const float desired=std::atan2(-(targetX-x),-(targetZ-z));

@@ -68,6 +68,9 @@ struct Q230ActorVisual {
   Fo3NpcActorQ230 source;
   fo3npc::RuntimeState runtime;
   std::array<fo3anim::Clip,size_t(fo3npc::Animation::Count)> animations;
+  std::unordered_map<uint32_t,fo3anim::Clip> responseClips;
+  uint32_t responseIdle=0,responseToken=0,responseInfo=0;
+  double responseStarted=0,responseLastTime=-1;
   int activeAnimation=0,headBone=-1,chestBone=-1;
   std::vector<fo3anim::Transform> blendFrom;
     std::vector<uint8_t> basePriorities,blendPrioritiesFrom;
@@ -179,7 +182,8 @@ bool LoadFalloutMeshFile(const std::string& path,std::vector<uint8_t>& bytes,std
   if(resolved)*resolved=path;return !bytes.empty();
 }
 #else
-bool LoadFalloutMeshFile(const std::string&,std::vector<uint8_t>&){return false;}
+std::vector<std::string> requestedActorClips;
+bool LoadFalloutMeshFile(const std::string& path,std::vector<uint8_t>&){requestedActorClips.push_back(path);return false;}
 namespace fo3anim {bool DecodeClip(const std::vector<uint8_t>&,Clip&){return false;}}
 #endif
 #define FO3_ACTOR_RUNTIME_HOST_TEST 1
@@ -269,6 +273,12 @@ int main(int argc,char** argv) {
   (void)argc;(void)argv;
 #ifdef FQ_REAL_CREATURE_ASSETS
   if(argc!=3)return 77;
+#endif
+#ifndef FQ_REAL_CREATURE_ASSETS
+  {Q230ActorVisual actor;actor.source.baseFormId=43;actor.source.skeletonModel="Characters\\_Male\\skeleton.nif";
+   fo3pipdata::Definitions d;fo3pipdata::Info info;fo3pipdata::Condition isActor;isActor.function=72;isActor.a=43;info.conditions.push_back(isActor);
+   fo3pipdata::Response response;response.speakerAnimation=19;info.responses.push_back(response);d.topics[1].push_back(info);d.idleModels[19]="OriginalResponse.kf";
+   Q230CacheDialogueAnimations(actor,&d);assert(std::find(requestedActorClips.begin(),requestedActorClips.end(),"OriginalResponse.kf")!=requestedActorClips.end());}
 #endif
   // FO3 rigid parts keep actor axes despite a rotated head bone.
   {
