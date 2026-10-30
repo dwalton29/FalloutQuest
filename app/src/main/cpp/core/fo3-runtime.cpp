@@ -5,6 +5,7 @@
 #include "rendering/spacewarp/fo3-motion-gles.h"
 #include "physics/fo3-contact-limit.h"
 #include "physics/fo3-rigid-world.h"
+#include "npc/fo3-ragdoll-pose.h"
 #include "scripting/fo3-script-imagespace.h"
 #include "scripting/fo3-nonresident-script.h"
 namespace fo3worldscript {fo3script::ImagePresentation Presentation();}
@@ -907,6 +908,13 @@ struct Q230ActorVisual {
     fo3anim::Skeleton skeleton;
     fo3anim::Clip clip;
     fo3anim::Pose pose;
+    std::shared_ptr<const fo3rag::Definition> ragdollDefinition;
+    std::shared_ptr<const fo3player::CorpsePose> corpsePose;
+    std::vector<int> ragdollBones;
+    std::vector<float> ragdollScales;
+    bool ragdollStarted=false;
+    std::array<float,3> ragdollPreviousPosition{},ragdollVelocity{};
+    double ragdollMotionAt=-1;
     fo3npc::CombatPose combatPose;
     std::vector<CpuObject> parts;
     std::vector<GpuObject> objects;
@@ -946,6 +954,8 @@ bool Fo3DialogueFocus();
 bool Fo3BarterFocus();
 void EndFo3Dialogue(const char* reason);
 void Q230UpdateActor(Q230ActorVisual&);
+void Q230PrepareRagdolls();
+void Q230CaptureRagdolls();
 void Q230ActorHitReaction(uint32_t target,uint8_t region);
 void Q230CacheDialogueAnimations(Q230ActorVisual&,const fo3pipdata::Definitions*);
 void Q230CacheCombat(Q230ActorVisual&,const fo3player::Catalog*);
@@ -2205,6 +2215,8 @@ bool BuildCpuObjects(const Fo3WorldPlacement& placement, std::vector<CpuObject>&
     size_t shapeIndex = 0;
     for (const Fo3StaticNifMesh& cachedMesh : *cachedMeshes) {
         Fo3StaticNifMesh mesh = cachedMesh;
+        Fo3SuppressIntactGoreCaps(mesh);
+        if(mesh.indices.empty()){++shapeIndex;continue;}
         const float extent = MaxModelExtent(mesh) * placement.scale;
         if (!(extent >= 1.0f && extent <= MAX_MODEL_EXTENT_UNITS)) {
             Q6H_LOGW("Q7.16 STATIC SKIP SIZE: ref=%08X model=%s shape=%zu extent=%.1f",
@@ -10416,7 +10428,9 @@ void Q223AdvanceDynamicBodies() {
         auto palm=fo3rigid::Identity();const float identityQ[4]{0,0,0,1};
         Q220ControllerDeltaMatrix({},identityQ,point,quat,palm.data());world.Target(hand,palm);
     }
+    Q230PrepareRagdolls();
     world.Step(seconds);
+    Q230CaptureRagdolls();
     for(auto& entry:gQ223DynamicBodies){
         auto& body=entry.second;fo3rigid::M pose;fo3rigid::V linear,angular;
         if(!world.Pose(entry.first,pose,&linear,&angular))continue;
@@ -11853,40 +11867,12 @@ bool Q215IsDismemberCap(uint16_t bodyPart) {
 }
 
 size_t Q215SuppressPlayerGoreCaps(Fo3StaticNifMesh& mesh) {
-    const size_t triangleCount = mesh.indices.size() / 3u;
-    if (!mesh.dismemberSkin ||
-        mesh.skinTriangleBodyParts.size() != triangleCount) {
-        return 0u;
-    }
-
-    std::vector<uint32_t> keptIndices;
-    std::vector<uint16_t> keptBodyParts;
-    keptIndices.reserve(mesh.indices.size());
-    keptBodyParts.reserve(triangleCount);
-
-    size_t removed = 0u;
-    for (size_t tri = 0u; tri < triangleCount; ++tri) {
-        const uint16_t bodyPart = mesh.skinTriangleBodyParts[tri];
-        if (Q215IsDismemberCap(bodyPart)) {
-            ++removed;
-            continue;
-        }
-        keptIndices.push_back(mesh.indices[tri * 3u + 0u]);
-        keptIndices.push_back(mesh.indices[tri * 3u + 1u]);
-        keptIndices.push_back(mesh.indices[tri * 3u + 2u]);
-        keptBodyParts.push_back(bodyPart);
-    }
-
-    if (removed > 0u) {
-        mesh.indices.swap(keptIndices);
-        mesh.skinTriangleBodyParts.swap(keptBodyParts);
-    }
-    return removed;
+    return Fo3SuppressIntactGoreCaps(mesh);
 }
 
 void Q230DeleteNpcActors() {
     EndFo3Dialogue("actor unload");
-    for (auto& actor : gQ230NpcActors) Q74DeleteGpuObjects(actor.objects);
+    for (auto& actor : gQ230NpcActors) {fo3rigid::Live().RemoveRagdoll(actor.source.refFormId);Q74DeleteGpuObjects(actor.objects);}
     gQ230NpcActors.clear();
     gQ230HealthBars.Clear();
     fo3healthui::Shutdown();
@@ -12455,7 +12441,9 @@ static void Q230ChatTick(double);
 static bool Q230ChatSpeaking(uint32_t);
 static fo3face::Weights Q230ChatWeights(uint32_t);
 static bool Q230ChatLook(uint32_t,std::array<float,3>&);
+#include "npc/fo3-npc-ragdoll-cache.inc"
 #include "fo3-npc-runtime.inc"
+#include "npc/fo3-npc-ragdoll-runtime.inc"
 
 bool Q210EnsurePlayerBody() {
     if (gQ210PlayerBodyReady) return true;
@@ -12852,7 +12840,7 @@ void Q230PumpNpcArrivals(){
     if(!Fo3AcceptsScenePublication(gFo3ScenePublication.Stamp()))return;
     auto& player=gPlayerSession->player;
     const auto isResident=[&](const fo3player::ActorState& s){
-        return !s.dead&&Q230ActorResident(s);
+        return (!s.dead||s.corpse)&&Q230ActorResident(s);
     };
     const auto enabled=[&](uint32_t id){bool disabled=true;std::string error;return player.ReferenceDisabled(id,disabled,error)&&!disabled;};
     const auto alreadyVisible=[&](uint32_t id){
@@ -12869,7 +12857,7 @@ void Q230PumpNpcArrivals(){
             // Corpses stay while in range. Disabled/off-window actors release GPU residency only.
             const bool inRange=saved!=player.Snapshot().actors.end()&&Q230ActorResident(saved->second);
             if(!inRange||!enabled(i->source.refFormId)){
-                i->runtime.furniture.Clear();Q74DeleteGpuObjects(i->objects);i=gQ230NpcActors.erase(i);++gQ230NpcResidenceRevision;
+                fo3rigid::Live().RemoveRagdoll(i->source.refFormId);i->runtime.furniture.Clear();Q74DeleteGpuObjects(i->objects);i=gQ230NpcActors.erase(i);++gQ230NpcResidenceRevision;
             }else ++i;
         }
         for(const auto& entry:player.Snapshot().actors)
@@ -12939,7 +12927,7 @@ void Q230PumpNpcArrivals(){
                 // Publish at the original XTEL arrival only after the previous
                 // resident has cleared it. No invented spawn offsets and no
                 // simultaneous actors on the exact same door root.
-                if(Q230RoamEndpointOccupied(actor.source.refFormId,saved->second.position))return;
+                if(!saved->second.dead&&Q230RoamEndpointOccupied(actor.source.refFormId,saved->second.position))return;
                 for(const auto& resident:gQ230NpcActors)if(resident.runtime.furniture.Pool()){
                     fo3furniture::JoinResidentActivities(actor.runtime.furniture,resident.runtime.furniture);break;
                 }
@@ -13078,7 +13066,7 @@ void QActorPrepareStereoFrame() {
                     actor.aiPathGame.clear();actor.aiPathSurfaces.clear();actor.aiPathIndex=0;
                     actor.aiLastUpdate=npcNow;actor.aiRepathAt=npcNow;
                     // Keep first-resident restoration pending: it also prepares inventory.
-                    actor.scriptMoveEpoch=epoch;actor.lastFrame=UINT64_MAX;
+                    actor.scriptMoveEpoch=epoch;actor.lastFrame=UINT64_MAX;actor.ragdollMotionAt=-1;
                     // A teleport has no preceding motion sample, for either renderer.
                     for(auto& object:actor.objects)object.motionIdentity=0;
                     ++gQ230NpcResidenceRevision;
@@ -13087,6 +13075,8 @@ void QActorPrepareStereoFrame() {
                 }
             }
         }
+        Q230TrackRagdollMotion(actor,npcNow);
+        Q230StartRagdoll(actor);
         const auto simulationStarted=fqopaque::Clock::now();
         Q230SimulateActor(actor,npcNow);
         npcSimulationUs+=fqopaque::Micros(simulationStarted);
@@ -13123,6 +13113,7 @@ void QActorPrepareStereoFrame() {
                         dz=actor.runtime.position[2]-origin[14];
             bounds.minX+=dx;bounds.maxX+=dx;bounds.minY+=dy;bounds.maxY+=dy;bounds.minZ+=dz;bounds.maxZ+=dz;
         }
+        if(actor.ragdollStarted)Q230RagdollBounds(actor,bounds);
         actor.renderVisible=!actor.runtime.offScene&&(!actor.renderBoundsReady || Q223StereoBoundsVisible(bounds));
         if(fqperf::capture.recording) {
             fqperf::capture.current.residents+=!actor.runtime.offScene;

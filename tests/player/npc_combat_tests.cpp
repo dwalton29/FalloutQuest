@@ -21,6 +21,22 @@ static Catalog Fixture(bool finite=true) {
   }
   c.pipboy.packages[77].type=6;c.weapons.relations[600][601]=1;return c;
 }
+static void CorpsePersistence(){
+ auto c=Fixture();Player player(c);ActorState state;state.cell=1;state.position={100,200,300};assert(player.UpdateActor(100,state));
+ CorpsePose pose;pose.model="Characters/OriginalSkeleton.nif";pose.sleeping=true;
+ std::array<float,16> identity{1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1};pose.bones={{"Pelvis",identity},{"Spine",identity}};pose.bones[1].global[14]=20;
+ assert(!player.SetCorpsePose(100,pose));assert(player.ApplyWeaponHit(10,100,1000));assert(player.ActorHealth(100)==0);
+ auto before=player.Snapshot();const auto packageRevision=player.PackageRevision();assert(player.SetCorpsePose(100,pose)&&player.PackageRevision()==packageRevision);assert(!before.actors.at(100).corpse);
+ const auto revision=player.Revision();assert(player.SetCorpsePose(100,pose)&&player.Revision()==revision);
+ const auto savedPose=player.Snapshot().actors.at(100).corpse;state.dead=true;state.position[0]+=10;assert(player.UpdateActor(100,state));assert(player.Snapshot().actors.at(100).corpse==savedPose);
+ auto invalid=pose;invalid.bones[0].global[0]=NAN;assert(!player.SetCorpsePose(100,invalid));invalid=pose;invalid.bones[0].global[4]=.5f;assert(!player.SetCorpsePose(100,invalid));invalid=pose;invalid.bones[1].name=invalid.bones[0].name;assert(!player.SetCorpsePose(100,invalid));
+ const auto path="/tmp/fq-ragdoll-save-"+std::to_string(getpid());std::string error;assert(player.Save(path,error));Player restored(c);if(!restored.Restore(path,error))std::cerr<<error<<std::endl;assert(restored.Restore(path,error));assert(*restored.Snapshot().actors.at(100).corpse==pose&&restored.ActorHealth(100)==0);
+ auto immutable=restored.Snapshot();pose.sleeping=false;pose.bones[1].global[12]=10;assert(restored.SetCorpsePose(100,pose));assert(immutable.actors.at(100).corpse->sleeping&&immutable.actors.at(100).corpse->bones[1].global[12]==0);
+ assert(restored.Save(path,error));Player returned(c);assert(returned.Restore(path,error)&&*returned.Snapshot().actors.at(100).corpse==pose);
+ // Corrupt a persisted transform with a correct CRC: reject atomically.
+ std::ifstream f(path,std::ios::binary);std::vector<uint8_t> bytes(std::istreambuf_iterator<char>(f),{});f.close();
+ auto put=[&](size_t at,uint32_t n){for(int k=0;k<4;++k)bytes[at+k]=uint8_t(n>>(8*k));};put(bytes.size()-4,0x7fc00000);put(16,crc32(0,bytes.data()+20,bytes.size()-20));std::ofstream out(path,std::ios::binary);out.write(reinterpret_cast<const char*>(bytes.data()),bytes.size());out.close();const auto unchanged=returned.Revision();assert(!returned.Restore(path,error)&&returned.Revision()==unchanged&&*returned.Snapshot().actors.at(100).corpse==pose);unlink(path.c_str());
+}
 static void ScriptedRelationsAndEssential(){
   using namespace fo3npc;auto c=Fixture();c.factionFlags[600]=0;c.factionFlags[601]=0;
   c.pipboy.formNames["fa"]=600;c.pipboy.formNames["fb"]=601;c.pipboy.formNames["baseactor"]=200;
@@ -272,4 +288,4 @@ static void Original(const char* path) {
     assert(fo3npc::AI(c.pipboy,r.second.base,[&](uint32_t list){return p.ActorTemplate(r.first,list);}).valid);++count;
   }assert(count==5);
 }
-int main(int argc,char** argv){ScriptedRelationsAndEssential();ScriptedNotes();ScriptPlacementsSurviveFinalization();ScriptedActorMovement();StyleDecodeValidation();SourceContext();StateAndPerception();CombatAssetCandidates();InventoryDamagePersistence(true);InventoryDamagePersistence(false);if(argc>1)Original(argv[1]);std::cout<<"NPC combat state tests passed\n";}
+int main(int argc,char** argv){CorpsePersistence();ScriptedRelationsAndEssential();ScriptedNotes();ScriptPlacementsSurviveFinalization();ScriptedActorMovement();StyleDecodeValidation();SourceContext();StateAndPerception();CombatAssetCandidates();InventoryDamagePersistence(true);InventoryDamagePersistence(false);if(argc>1)Original(argv[1]);std::cout<<"NPC combat state tests passed\n";}

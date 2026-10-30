@@ -402,7 +402,17 @@ bool Player::ApplyAttack(uint32_t attacker,uint32_t base,uint32_t target,float d
   if(died)DispatchReferenceEvent(target,"OnDeath",attacker,scriptError);
   return true;
 }
-bool Player::UpdateActor(uint32_t reference,const ActorState& a) {
+bool Player::SetCorpsePose(uint32_t reference,const CorpsePose& pose){
+ const auto actor=state_.actors.find(reference);
+ if(actor==state_.actors.end()||!actor->second.dead||ActorHealth(reference)!=0)return false;
+ if(actor->second.corpse&&*actor->second.corpse==pose)return true;
+ if(!ValidCorpsePose(pose))return false;
+ state_.actors.Edit(reference)->corpse=std::make_shared<const CorpsePose>(pose);++revision_;++actorPoseRevisions_;return true;
+}
+bool Player::UpdateActor(uint32_t reference,const ActorState& incoming) {
+  ActorState a=incoming;
+  const auto prior=state_.actors.find(reference);
+  if(a.dead&&!a.corpse&&prior!=state_.actors.end())a.corpse=prior->second.corpse;
   const auto t=catalog_->pipboy.targets.find(reference);
   if(t==catalog_->pipboy.targets.end()||!catalog_->weapons.actors.count(t->second.base)||
      (!a.cell&&!a.world)||!std::isfinite(a.yaw)||!std::isfinite(a.packageWaitSeconds)||a.packageWaitSeconds<0||
@@ -412,7 +422,7 @@ bool Player::UpdateActor(uint32_t reference,const ActorState& a) {
   const auto old=state_.actors.find(reference);
   bool poseOnly=false;
   if(old!=state_.actors.end()){const auto& o=old->second;
-    if(o.cell==a.cell&&o.world==a.world&&o.position==a.position&&o.yaw==a.yaw&&o.package==a.package&&o.sequence==a.sequence&&o.hostile==a.hostile&&o.equippedWeapon==a.equippedWeapon&&o.dead==a.dead&&o.packageWaitSeconds==a.packageWaitSeconds)return true;
+    if(o.cell==a.cell&&o.world==a.world&&o.position==a.position&&o.yaw==a.yaw&&o.package==a.package&&o.sequence==a.sequence&&o.hostile==a.hostile&&o.equippedWeapon==a.equippedWeapon&&o.dead==a.dead&&o.packageWaitSeconds==a.packageWaitSeconds&&o.corpse==a.corpse)return true;
     poseOnly=o.cell==a.cell&&o.world==a.world&&o.package==a.package&&o.hostile==a.hostile&&o.equippedWeapon==a.equippedWeapon&&o.dead==a.dead;
   }else if(state_.actors.size()>=10000)return false;
   state_.actors[reference]=a;++revision_;if(poseOnly)++actorPoseRevisions_;return true;

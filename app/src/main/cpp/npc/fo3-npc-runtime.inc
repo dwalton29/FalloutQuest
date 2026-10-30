@@ -184,7 +184,7 @@ void Q230PrepareActors(uint32_t cell, uint32_t worldspace,
   std::unordered_set<uint32_t> arrivals;
   if(savedActors&&defs)for(const auto& entry:*savedActors){
     const auto& saved=entry.second;
-    if(!saved.dead&&resident(saved) &&
+    if((!saved.dead||saved.corpse)&&resident(saved) &&
        (!onlyRefs||onlyRefs->count(entry.first)))
       arrivals.insert(entry.first);
   }
@@ -231,6 +231,9 @@ void Q230PrepareActors(uint32_t cell, uint32_t worldspace,
   // relocated-XTEL admission enumerate the same reference. Duplicate rig
   // instances would double animation/skinning and compete over one saved state.
   std::unordered_set<uint32_t> q227PreparedRefs;
+#ifndef FO3_ACTOR_RUNTIME_HOST_TEST
+  std::unordered_map<std::string,std::shared_ptr<const fo3rag::Definition>> ragdollAssets;
+#endif
   for(auto source:actors) {
     if(cancel.load(std::memory_order_acquire))return;
     if(!q227PreparedRefs.insert(source.refFormId).second) {
@@ -246,7 +249,7 @@ void Q230PrepareActors(uint32_t cell, uint32_t worldspace,
       const auto it=savedActors->find(source.refFormId);
       if(it!=savedActors->end()){
         const auto& pose=it->second;
-        if(pose.dead||
+        if((pose.dead&&!pose.corpse)||
            (defs&&!resident(pose)))
           continue;
         // Use the canonical arrival root when constructing the new rig;
@@ -259,6 +262,7 @@ void Q230PrepareActors(uint32_t cell, uint32_t worldspace,
     Q230ActorVisual visual;
     if (Q230BuildNpcActor(source, visual)) {
 #ifndef FO3_ACTOR_RUNTIME_HOST_TEST
+      Q230CacheRagdoll(visual,ragdollAssets,savedActors);
       // Original differential targets are decoded on the scene worker, like
       // the existing FaceGen/animation preparation, never during a draw.
       for(const auto& part:visual.parts) {
@@ -572,6 +576,11 @@ void Q230UpdateActor(Q230ActorVisual &actor) {
   ++fqactor::npc.actors;
   const double elapsed=std::chrono::duration<double>(Fo3GameplayNow()-actor.animationStart).count();
   fo3anim::SampleTimings timings;
+  {
+#ifndef FO3_ACTOR_RUNTIME_HOST_TEST
+  if(!actor.ragdollStarted)
+#endif
+  {
   int selected=int(actor.runtime.animation);
   if(selected<0||size_t(selected)>=actor.animations.size())selected=0;
   if(actor.animations[selected].tracks.empty())selected=0;
@@ -642,6 +651,7 @@ void Q230UpdateActor(Q230ActorVisual &actor) {
     actor.combatPose.instance=0;actor.combatPose.selected=fo3npc::Animation::Count;
   }
   if(!furniturePose)fo3anim::LookYaw(actor.skeleton,actor.pose,actor.headBone,actor.runtime.headYaw);
+  }} // A corpse is driven by physics, never a resampled death animation.
   auto root=fo3anim::Identity();const float yaw=actor.runtime.yaw-actor.runtime.authoredYaw;
   root[0]=root[10]=std::cos(yaw);root[2]=-std::sin(yaw);root[8]=-root[2];
   if(!actor.rigs.empty()) {
@@ -651,6 +661,9 @@ void Q230UpdateActor(Q230ActorVisual &actor) {
     root[14]=actor.runtime.position[2]-root[2]*x-root[10]*z;
   }
   actor.dialogueRoot=root;
+#ifndef FO3_ACTOR_RUNTIME_HOST_TEST
+  if(actor.ragdollStarted&&actor.corpsePose)fo3rag::ApplyPose(actor.skeleton,actor.pose,*actor.corpsePose);
+#endif
   fqactor::npc.clip+=timings.clipUs;fqactor::npc.pose+=timings.skeletonUs;
   for(auto& rig:actor.rigs) {
     const auto started=fqopaque::Clock::now();

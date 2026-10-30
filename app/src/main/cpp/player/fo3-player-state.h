@@ -1,4 +1,5 @@
 #pragma once
+#include "fo3-corpse-pose.h"
 
 #include "pipboy/fo3-pipboy-session.h"
 #include "player/fo3-experience.h"
@@ -159,6 +160,7 @@ struct ActorState {
   float yaw=0,packageWaitSeconds=0;
   uint64_t equippedWeapon=0;
   bool dead=false;
+  std::shared_ptr<const CorpsePose> corpse;
 };
 enum class QuestNoticeKind : uint8_t { Added, Updated, Completed };
 struct ScriptItemNotice {uint32_t form=0;int32_t count=0;};
@@ -594,6 +596,7 @@ public:
   float ActorWeaponDamage(uint32_t reference) const;
   float DamageResistance(uint32_t reference) const;
   bool UpdateActor(uint32_t reference,const ActorState& state);
+  bool SetCorpsePose(uint32_t reference,const CorpsePose& pose);
   bool MoveActorTo(uint32_t reference,uint32_t destination,const std::array<float,3>& offset);
   uint64_t ScriptActorMoveEpoch(uint32_t reference) const {const auto i=scriptActorMoves_.find(reference);return i==scriptActorMoves_.end()?0:i->second;}
   bool SetActorHostile(uint32_t reference,uint32_t target);

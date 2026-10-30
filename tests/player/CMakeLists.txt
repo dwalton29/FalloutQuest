@@ -415,3 +415,11 @@ target_compile_options(ms03_progression_tests PRIVATE -UNDEBUG -Wall -Wextra -We
 target_include_directories(ms03_progression_tests PRIVATE ../../app/src/main/cpp)
 target_link_libraries(ms03_progression_tests PRIVATE ZLIB::ZLIB)
 add_test(NAME ms03_progression_tests COMMAND ms03_progression_tests)
+
+include(${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/FalloutPhysics.cmake)
+add_executable(npc_ragdoll_runtime_tests npc_ragdoll_runtime_tests.cpp ${dialogue_shared} ../../app/src/main/cpp/npc/fo3-actor-animation.cpp)
+target_compile_features(npc_ragdoll_runtime_tests PRIVATE cxx_std_17)
+target_compile_options(npc_ragdoll_runtime_tests PRIVATE -UNDEBUG -Wall -Wextra -Werror -Wno-misleading-indentation)
+target_include_directories(npc_ragdoll_runtime_tests PRIVATE ../../app/src/main/cpp)
+target_link_libraries(npc_ragdoll_runtime_tests PRIVATE ZLIB::ZLIB fq_physics)
+add_test(NAME npc_ragdoll_runtime_tests COMMAND npc_ragdoll_runtime_tests)

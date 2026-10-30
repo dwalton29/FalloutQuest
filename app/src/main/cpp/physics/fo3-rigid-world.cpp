@@ -34,6 +34,7 @@ struct SurfaceQuery:btTriangleCallback {
     }
 };
 struct Entry {
+    bool ragdoll=false;float ragdollScale=1,ragdollRadius=0,ragdollThinRadius=0;
     btTransform principal=btTransform::getIdentity();
     std::unique_ptr<btTriangleMesh> mesh,visualMesh;
     std::unique_ptr<btBvhTriangleMeshShape> visualShape;
@@ -50,6 +51,9 @@ struct World::Impl {
     btDiscreteDynamicsWorld world{&dispatcher,&broad,&solver,&config};
     std::unordered_map<uint64_t,Entry> statics,bodies;
     struct Grip {uint64_t id=0;btTransform anchor,offset,target;btVector3 carryVelocity{0,0,0};std::unique_ptr<btGeneric6DofSpring2Constraint> constraint;};
+    struct Ragdoll {float quietSeconds=0;std::vector<uint64_t> bodies;std::vector<std::unique_ptr<btTypedConstraint>> joints;};
+    std::unordered_map<uint32_t,Ragdoll> ragdolls;
+    std::vector<const btCollisionObject*> restingContacts;
     Grip grips[2];
     float accumulated=0;
     std::vector<std::pair<Entry*,btTransform>> previous;
@@ -106,12 +110,13 @@ struct World::Impl {
         if(rotation>.001f)body.setAngularVelocity(body.getAngularVelocity()*fraction);
         world.updateSingleAabb(&body);
     }
+    void WakeBounds(btVector3 lo,btVector3 hi){lo-=btVector3(.1f,.1f,.1f);hi+=btVector3(.1f,.1f,.1f);for(auto& b:bodies){btVector3 a,z;b.second.body->getAabb(a,z);if(TestAabbAgainstAabb2(lo,hi,a,z))b.second.body->activate(true);}}
     void Drop(int hand){auto& g=grips[hand];if(g.constraint)world.removeConstraint(g.constraint.get());g.constraint.reset();g.id=0;g.carryVelocity={0,0,0};}
-    ~Impl(){for(int h=0;h<2;++h)Drop(h);for(auto* map:{&bodies,&statics})for(auto& e:*map)world.removeRigidBody(e.second.body.get());}
+    ~Impl(){for(auto& r:ragdolls)for(auto& j:r.second.joints)world.removeConstraint(j.get());ragdolls.clear();for(int h=0;h<2;++h)Drop(h);for(auto* map:{&bodies,&statics})for(auto& e:*map)world.removeRigidBody(e.second.body.get());}
 };
 World::World():impl(new Impl){}World::~World()=default;
 World& Live(){static World instance;return instance;}
-void World::RemoveStatic(uint64_t id){auto i=impl->statics.find(id);if(i==impl->statics.end())return;impl->world.removeRigidBody(i->second.body.get());impl->statics.erase(i);}
+void World::RemoveStatic(uint64_t id){auto i=impl->statics.find(id);if(i==impl->statics.end())return;btVector3 lo,hi;i->second.body->getAabb(lo,hi);impl->WakeBounds(lo,hi);impl->world.removeRigidBody(i->second.body.get());impl->statics.erase(i);}
 void World::ClearStatics(){for(auto& e:impl->statics)impl->world.removeRigidBody(e.second.body.get());impl->statics.clear();}
 void World::Static(uint64_t id,const std::vector<Triangle>& triangles){
     RemoveStatic(id);if(triangles.empty())return;
@@ -121,7 +126,7 @@ void World::Static(uint64_t id,const std::vector<Triangle>& triangles){
     btRigidBody::btRigidBodyConstructionInfo info(0,nullptr,e.shape.get());e.body.reset(new btRigidBody(info));
     e.body->setFriction(.5f);impl->world.addRigidBody(e.body.get(),1,short(-1));impl->statics.emplace(id,std::move(e));
     // Newly published/moving support must wake resting nearby bodies.
-    for(auto& b:impl->bodies)b.second.body->activate(true);
+    btVector3 lo,hi;impl->statics.at(id).body->getAabb(lo,hi);impl->WakeBounds(lo,hi);
 }
 bool World::Has(uint64_t id)const{return impl->bodies.count(id)!=0;}
 bool World::Add(uint64_t id,const Asset& asset,const M& pose){
@@ -163,7 +168,7 @@ bool World::Add(uint64_t id,const Asset& asset,const M& pose){
     impl->world.addRigidBody(e.body.get(),2,short(-1));impl->bodies.emplace(id,std::move(e));return true;
 }
 void World::Remove(uint64_t id){auto i=impl->bodies.find(id);if(i==impl->bodies.end())return;for(int h=0;h<2;++h)if(impl->grips[h].id==id)impl->Drop(h);impl->world.removeRigidBody(i->second.body.get());impl->bodies.erase(i);}
-void World::ClearBodies(){for(int h=0;h<2;++h)impl->Drop(h);for(auto& b:impl->bodies)impl->world.removeRigidBody(b.second.body.get());impl->bodies.clear();}
+void World::ClearBodies(){for(auto& rag:impl->ragdolls)for(auto& j:rag.second.joints)impl->world.removeConstraint(j.get());impl->ragdolls.clear();for(int h=0;h<2;++h)impl->Drop(h);for(auto& b:impl->bodies)impl->world.removeRigidBody(b.second.body.get());impl->bodies.clear();}
 bool World::Pose(uint64_t id,M& pose,V* velocity,V* angular)const{auto i=impl->bodies.find(id);if(i==impl->bodies.end())return false;const auto& b=*i->second.body;pose=A(b.getWorldTransform()*i->second.principal.inverse());if(velocity)*velocity=A(b.getLinearVelocity());if(angular)*angular=A(b.getAngularVelocity());return true;}
 void World::Place(uint64_t id,const M& pose,const V& velocity,const V& angular){auto i=impl->bodies.find(id);if(i==impl->bodies.end()||!Finite(pose))return;auto& b=*i->second.body;b.setWorldTransform(B(pose)*i->second.principal);b.setInterpolationWorldTransform(B(pose)*i->second.principal);b.setLinearVelocity(B(velocity));b.setAngularVelocity(B(angular));b.activate(true);impl->world.updateSingleAabb(&b);}
 bool World::Closest(uint64_t id,const V& point,V& surface,V& normal,float& distance)const{
@@ -263,15 +268,88 @@ void World::MoveHeld(const M& previousApp,const M& currentApp,float seconds){
         impl->world.updateSingleAabb(&body);body.activate(true);
     }
 }
+void World::SleepRagdoll(uint32_t actor){auto i=impl->ragdolls.find(actor);if(i==impl->ragdolls.end())return;for(auto id:i->second.bodies){auto& b=*impl->bodies.at(id).body;b.setLinearVelocity({0,0,0});b.setAngularVelocity({0,0,0});b.forceActivationState(ISLAND_SLEEPING);}}
+bool World::HasRagdoll(uint32_t actor)const{return impl->ragdolls.count(actor)!=0;}
+std::vector<uint32_t> World::RagdollActors()const{std::vector<uint32_t> ids;for(const auto& e:impl->ragdolls)ids.push_back(e.first);return ids;}
+void World::RemoveRagdoll(uint32_t actor){
+ auto i=impl->ragdolls.find(actor);if(i==impl->ragdolls.end())return;
+ for(auto& j:i->second.joints)impl->world.removeConstraint(j.get());
+ i->second.joints.clear();
+ for(auto id:i->second.bodies)Remove(id);
+ impl->ragdolls.erase(i);
+}
+bool World::RagdollPose(uint32_t actor,std::vector<M>& bones,bool* sleeping,std::vector<V>* linear,std::vector<V>* angular)const{
+ const auto i=impl->ragdolls.find(actor);if(i==impl->ragdolls.end())return false;
+ bones.resize(i->second.bodies.size());if(linear)linear->resize(bones.size());if(angular)angular->resize(bones.size());bool asleep=true;
+ for(size_t k=0;k<bones.size();++k){const auto id=i->second.bodies[k];if(!Pose(id,bones[k],linear?&(*linear)[k]:nullptr,angular?&(*angular)[k]:nullptr))return false;asleep&=!impl->bodies.at(id).body->isActive();}
+ if(sleeping)*sleeping=asleep;return true;
+}
+bool World::SetRagdollMotion(uint32_t actor,const std::vector<V>& linear,const std::vector<V>& angular){
+ const auto i=impl->ragdolls.find(actor);if(i==impl->ragdolls.end()||linear.size()!=i->second.bodies.size()||angular.size()!=linear.size())return false;
+ for(size_t n=0;n<linear.size();++n)if(!Finite(linear[n])||!Finite(angular[n]))return false;
+ for(size_t n=0;n<linear.size();++n){auto& body=*impl->bodies.at(i->second.bodies[n]).body;body.setLinearVelocity(B(linear[n]));body.setAngularVelocity(B(angular[n]));body.activate(true);}return true;
+}
+bool World::AddRagdoll(uint32_t actor,const fo3rag::Definition& asset,const std::vector<M>& poses,float scale,const V& velocity,const std::vector<float>& bodyScales){
+ if(HasRagdoll(actor))return true;
+ if(!actor||asset.bodies.size()<2||asset.bodies.size()>64||asset.joints.size()+1!=asset.bodies.size()||poses.size()!=asset.bodies.size()||!std::isfinite(scale)||scale<=0||scale>1||!Finite(velocity))return false;
+ if(!bodyScales.empty()&&bodyScales.size()!=poses.size())return false;
+ for(float s:bodyScales)if(!std::isfinite(s)||s<=0||s>1)return false;
+ for(const auto& p:poses)if(!Finite(p))return false;
+ for(const auto& j:asset.joints)if(j.a>=poses.size()||j.b>=poses.size()||j.a==j.b||!Finite(j.frameA)||!Finite(j.frameB)||!Finite(j.minimum)||!Finite(j.maximum))return false;
+ impl->ragdolls.emplace(actor,Impl::Ragdoll{});auto& rag=impl->ragdolls.at(actor);
+ for(size_t n=0;n<asset.bodies.size();++n){
+  const auto& d=asset.bodies[n];const uint64_t id=(uint64_t{1}<<62)|(uint64_t(actor)<<8)|n;
+  if(Has(id)||d.mass<=0||!std::isfinite(d.mass)||!Finite(d.a)||!Finite(d.b)||!Finite(d.center)||!std::isfinite(d.radius)||d.radius<=0){RemoveRagdoll(actor);return false;}
+  const float bodyScale=bodyScales.empty()?scale:bodyScales[n];
+  Entry e;e.ragdoll=true;e.ragdollScale=bodyScale;e.ragdollRadius=(B(d.b)-B(d.a)).length()*.5f*bodyScale+d.radius*bodyScale;e.principal.setOrigin(B(d.center)*bodyScale);
+  btVector3 inertia(d.inertia[0]*bodyScale*bodyScale,d.inertia[4]*bodyScale*bodyScale,d.inertia[8]*bodyScale*bodyScale);
+  if(inertia.x()>0&&inertia.y()>0&&inertia.z()>0){btMatrix3x3 tensor(d.inertia[0],d.inertia[1],d.inertia[2],d.inertia[3],d.inertia[4],d.inertia[5],d.inertia[6],d.inertia[7],d.inertia[8]),axes;for(int r=0;r<3;++r)tensor[r]*=bodyScale*bodyScale;tensor.diagonalize(axes,1e-6f,32);if(tensor[0][0]>0&&tensor[1][1]>0&&tensor[2][2]>0){e.principal.setBasis(axes);inertia={tensor[0][0],tensor[1][1],tensor[2][2]};}}
+  const auto a=B(d.a)*bodyScale,b=B(d.b)*bodyScale,axis=b-a;
+  auto capsule=std::make_unique<btCapsuleShape>(d.radius*bodyScale,axis.length());capsule->setMargin(.001f);
+  auto local=btTransform::getIdentity();local.setOrigin((a+b)*.5f);
+  if(axis.length2()>1e-10f)local.setRotation(shortestArcQuat(btVector3(0,1,0),axis.normalized()));
+  local=e.principal.inverse()*local;
+  auto compound=std::make_unique<btCompoundShape>();compound->addChildShape(local,capsule.get());e.children.push_back(std::move(capsule));e.shape=std::move(compound);e.ragdollThinRadius=d.radius*bodyScale;
+  // Authored full inertia is rotated into its principal frame above.
+  if(inertia.x()<=0||inertia.y()<=0||inertia.z()<=0)e.shape->calculateLocalInertia(d.mass,inertia);
+  btRigidBody::btRigidBodyConstructionInfo info(d.mass,nullptr,e.shape.get(),inertia);
+  info.m_friction=std::clamp(d.friction,0.f,2.f);info.m_restitution=std::clamp(d.restitution,0.f,1.f);
+  info.m_linearDamping=std::clamp(d.linearDamping,0.f,1.f);info.m_angularDamping=std::clamp(d.angularDamping,0.f,1.f);
+  e.body=std::make_unique<btRigidBody>(info);const auto pose=B(poses[n])*e.principal;e.body->setWorldTransform(pose);e.body->setInterpolationWorldTransform(pose);e.body->setLinearVelocity(B(velocity));
+  e.body->setSleepingThresholds(.06f,.25f);e.body->setCcdMotionThreshold(d.radius*bodyScale*.5f);e.body->setCcdSweptSphereRadius(d.radius*bodyScale*.8f);
+  impl->world.addRigidBody(e.body.get(),4,7);impl->bodies.emplace(id,std::move(e));rag.bodies.push_back(id);
+ }
+ for(const auto& d:asset.joints){
+  auto& a=impl->bodies.at(rag.bodies[d.a]);auto& b=impl->bodies.at(rag.bodies[d.b]);
+  auto frame=[&](const M& source,const Entry& e){auto m=source;for(int k=0;k<3;++k)m[12+k]*=e.ragdollScale;return e.principal.inverse()*B(m);};
+  const auto fa=frame(d.frameA,a),fb=frame(d.frameB,b);std::unique_ptr<btTypedConstraint> joint;
+  const float torque=std::max(0.f,d.friction)*49*scale*scale;
+  if(d.hinge){auto h=std::make_unique<btHingeConstraint>(*a.body,*b.body,fa,fb,true);h->setLimit(d.minimum[2],d.maximum[2]);if(torque>0)h->enableAngularMotor(true,0,torque/120.f);joint=std::move(h);}
+  else{
+   // Bullet angular box uses the authored twist/plane/cone extrema. Havok's
+   // coupled cone surface and feedback motors are not claimed numerically equal.
+   auto h=std::make_unique<btGeneric6DofSpring2Constraint>(*a.body,*b.body,fa,fb,RO_XYZ);
+   h->setLinearLowerLimit({0,0,0});h->setLinearUpperLimit({0,0,0});h->setAngularLowerLimit(B(d.minimum));h->setAngularUpperLimit(B(d.maximum));
+   for(int k=0;k<3;++k){h->enableMotor(3+k,torque>0);h->setTargetVelocity(3+k,0);h->setMaxMotorForce(3+k,torque);}joint=std::move(h);
+  }
+  impl->world.addConstraint(joint.get(),true);rag.joints.push_back(std::move(joint));
+ }
+ return true;
+}
 void World::Step(float seconds){
     if(!(seconds>0)||!std::isfinite(seconds))return;
     impl->accumulated+=std::min(seconds,.064f);constexpr float dt=1.f/120.f;
     while(impl->accumulated+1e-7f>=dt){
         impl->accumulated-=dt;
         auto& previous=impl->previous;previous.clear();
-        for(auto& entry:impl->bodies)if(entry.second.body->isActive())previous.push_back({&entry.second,entry.second.body->getWorldTransform()});
+        for(auto& entry:impl->bodies)if(!entry.second.ragdoll&&entry.second.body->isActive())previous.push_back({&entry.second,entry.second.body->getWorldTransform()});
         for(auto& grip:impl->grips)if(grip.constraint)grip.constraint->setFrames(grip.target,grip.anchor);
-        impl->world.stepSimulation(dt,0);
+        // Keep linked capsules in one constraint solve. Independent per-bone
+        // post-step casts can tear joints on stair edges. Bound active ragdoll
+        // surface displacement with up to eight smaller shared solver steps.
+        int substeps=1;
+        for(const auto& row:impl->ragdolls)for(auto id:row.second.bodies){const auto& e=impl->bodies.at(id);const auto& b=*e.body;if(!b.isActive())continue;const float speed=b.getLinearVelocity().length()+b.getAngularVelocity().length()*e.ragdollRadius;substeps=std::max(substeps,std::min(8,int(std::ceil(speed*dt/std::max(.002f,e.ragdollThinRadius*.5f)))));}
+        for(int i=0;i<substeps;++i)impl->world.stepSimulation(dt/substeps,0);
         // Bullet's swept sphere protects linear COM motion. Sweep each authored
         // convex child as well so a fast-spinning thin plate/weapon cannot rotate
         // through a floor between ticks, including compound bodies.
@@ -279,6 +357,20 @@ void World::Step(float seconds){
             auto& body=*state.first->body;const auto from=state.second,to=body.getWorldTransform();
             impl->ClipMotion(*state.first,from,to);
         }
+        // Malleable/motor constraints can keep individual Bullet bodies awake
+        // indefinitely at sub-centimetre contact jitter. Sleep the whole island
+        // after two supported, quiet seconds, using speed at the capsule surface.
+        // Gravity prevents an unsupported falling island satisfying this window.
+        if(!impl->ragdolls.empty()){
+            auto& contacts=impl->restingContacts;contacts.clear();
+            for(int i=0;i<impl->dispatcher.getNumManifolds();++i){auto* m=impl->dispatcher.getManifoldByIndexInternal(i);for(int k=0;k<m->getNumContacts();++k)if(m->getContactPoint(k).getDistance()<.005f){contacts.push_back(m->getBody0());contacts.push_back(m->getBody1());break;}}
+            for(auto& row:impl->ragdolls){auto& rag=row.second;bool quiet=true,supported=false,active=false;
+                for(auto id:rag.bodies){const auto& e=impl->bodies.at(id);const auto& body=*e.body;active|=body.isActive();supported|=std::find(contacts.begin(),contacts.end(),&body)!=contacts.end();quiet&=body.getLinearVelocity().length()+body.getAngularVelocity().length()*e.ragdollRadius<.1f;}
+                if(!active){rag.quietSeconds=0;continue;}rag.quietSeconds=quiet&&supported?rag.quietSeconds+dt:0;
+                if(rag.quietSeconds>=2){SleepRagdoll(row.first);rag.quietSeconds=0;}
+            }
+        }
+
     }
 }
 

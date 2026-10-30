@@ -1242,7 +1242,8 @@ bool Player::Save(const std::string &path, std::string &error) const {
     payload.push_back(l.forceFailures);payload.push_back(l.rewarded?1:0);}
   // Optional RFE1 after the v14 lock tail. Empty overlays keep existing v14
   // bytes unchanged; older supported saves do not require this extension.
-  const bool hasDailyInfos=!state_.dailySaidInfos.empty();
+  const bool hasCorpsePoses=std::any_of(state_.actors.begin(),state_.actors.end(),[](const auto& a){return bool(a.second.corpse);});
+  const bool hasDailyInfos=hasCorpsePoses||!state_.dailySaidInfos.empty();
   const bool hasScriptPackages=hasDailyInfos||!state_.scriptPackages.empty();
   const bool hasScriptOverrides=hasScriptPackages||!state_.actorAIValues.empty()||!state_.questScriptDelays.empty()||!state_.factionRelations.empty()||!state_.essentialFlags.empty();
   const bool hasActorVariables=!state_.actorVariables.empty()||!state_.actorSpawnLevels.empty()||hasScriptOverrides;
@@ -1394,7 +1395,17 @@ bool Player::Save(const std::string &path, std::string &error) const {
       if(!catalog_->pipboy.referenceScripts.count(uint32_t(key>>32))||!valid.count(uint32_t(key))||!std::isfinite(time)||time<0||time>now+1e-5){error="Invalid daily INFO history";return false;}
       Put64(payload,key);PutFloat(payload,time);}
   }
-  Put32(bytes, hasDailyInfos ? 24 : hasScriptPackages ? 23 : hasScriptOverrides ? 22 : hasActorVariables ? 21 : hasDoorStates ? 20 : hasDebugPoints ? 19 : hasLevelAdvancement ? 18 : hasCompletionState ? 17 :
+  if(hasCorpsePoses){
+    Put32(payload,0x31504752);uint32_t count=0;for(const auto& a:state_.actors)if(a.second.corpse)++count;Put32(payload,count);
+    std::vector<uint32_t> refs;for(const auto& a:state_.actors)if(a.second.corpse)refs.push_back(a.first);std::sort(refs.begin(),refs.end());
+    auto string=[&](const std::string& v){Put32(payload,uint32_t(v.size()));payload.insert(payload.end(),v.begin(),v.end());};
+    for(auto ref:refs){const auto& a=state_.actors.at(ref);const auto& corpse=*a.corpse;
+      if(!a.dead||!ValidCorpsePose(corpse)){error="Invalid corpse pose";return false;}
+      Put32(payload,ref);string(corpse.model);Put32(payload,corpse.sleeping);Put32(payload,uint32_t(corpse.bones.size()));
+      for(const auto& bone:corpse.bones){string(bone.name);for(float v:bone.global)PutFloat(payload,v);for(float v:bone.linear)PutFloat(payload,v);for(float v:bone.angular)PutFloat(payload,v);}
+    }
+  }
+  Put32(bytes, hasCorpsePoses ? 25 : hasDailyInfos ? 24 : hasScriptPackages ? 23 : hasScriptOverrides ? 22 : hasActorVariables ? 21 : hasDoorStates ? 20 : hasDebugPoints ? 19 : hasLevelAdvancement ? 18 : hasCompletionState ? 17 :
       hasMerchantVisits ? 16 : hasPlayerAttributeOverrides ? 15 : 14);
   Put32(bytes, catalog_->fingerprint);
   Put32(bytes, static_cast<uint32_t>(payload.size()));
@@ -1454,7 +1465,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
   const auto *h = bytes.data();
   const auto version = fo3esm::ReadU32(h + 4);
   if (std::memcmp(h, "FQPS", 4) ||
-      (version < 1 || version > 24))
+      (version < 1 || version > 25))
     return fail("Unsupported player save format");
   if (fo3esm::ReadU32(h + 8) != catalog_->fingerprint)
     return fail("Player save belongs to different game definitions");
@@ -1883,11 +1894,24 @@ bool Player::Restore(const std::string &path, std::string &error) {
       if(version>=24){
         if(payload.size()-at<8||fo3esm::ReadU32(p+at)!=0x31494144)return fail("Missing daily INFO history");
         const auto count=fo3esm::ReadU32(p+at+4);at+=8;
-        if(count>100000||payload.size()-at!=12ull*count)return fail("Invalid daily INFO count");
+        if(count>100000||(version>=25?payload.size()-at<12ull*count+8u:payload.size()-at!=12ull*count))return fail("Invalid daily INFO count");
         std::unordered_set<uint32_t> valid;for(const auto& topic:catalog_->pipboy.topics)for(const auto& info:topic.second)if(info.flags2&1u)valid.insert(info.id);
         const double now=double(next.gameDaysPassed)+next.gameHour/24.;
         for(uint32_t i=0;i<count;++i,at+=12){const auto key=U64(p+at);const auto time=fo3esm::ReadF32(p+at+8);
           if(!catalog_->pipboy.referenceScripts.count(uint32_t(key>>32))||!valid.count(uint32_t(key))||!std::isfinite(time)||time<0||time>now+1e-5||!next.dailySaidInfos.emplace(key,time).second)return fail("Invalid daily INFO history");}
+      }
+      if(version>=25){
+        auto u32=[&](uint32_t& v){if(payload.size()-at<4)return false;v=fo3esm::ReadU32(p+at);at+=4;return true;};
+        auto string=[&](std::string& v,size_t max){uint32_t n;if(!u32(n)||!n||n>max||payload.size()-at<n)return false;v.assign(reinterpret_cast<const char*>(p+at),n);at+=n;return true;};
+        uint32_t magic,count;if(!u32(magic)||magic!=0x31504752||!u32(count)||count>10000)return fail("Missing corpse pose extension");
+        for(uint32_t n=0;n<count;++n){uint32_t ref,sleeping,bones;CorpsePose corpse;
+          if(!u32(ref)||!string(corpse.model,512)||!u32(sleeping)||sleeping>1||!u32(bones)||bones<2||bones>64)return fail("Invalid corpse pose header");
+          auto actor=next.actors.find(ref);if(actor==next.actors.end()||!actor->second.dead||actor->second.corpse)return fail("Invalid corpse pose actor");
+          corpse.sleeping=sleeping;corpse.bones.resize(bones);
+          for(auto& bone:corpse.bones){if(!string(bone.name,128)||payload.size()-at<88)return fail("Invalid corpse bone");for(float& v:bone.global){v=fo3esm::ReadF32(p+at);at+=4;}for(auto* velocity:{&bone.linear,&bone.angular})for(float& v:*velocity){v=fo3esm::ReadF32(p+at);at+=4;}}
+          if(!ValidCorpsePose(corpse))return fail("Invalid corpse transform");
+          next.actors.Edit(ref)->corpse=std::make_shared<const CorpsePose>(std::move(corpse));
+        }
       }
       if(at!=payload.size())return fail("Trailing player save data");
     }

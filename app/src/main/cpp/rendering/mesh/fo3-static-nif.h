@@ -82,6 +82,19 @@ struct Fo3StaticNifMesh {
     std::vector<uint16_t> skinTriangleBodyParts;
 };
 
+// Keep cached/source geometry intact for future severing. Staging each intact
+// body, worn outfit or placed apparel hides only authored wound-cap regions.
+inline size_t Fo3SuppressIntactGoreCaps(Fo3StaticNifMesh& mesh){
+ const auto count=mesh.indices.size()/3;if(!mesh.dismemberSkin||mesh.skinTriangleBodyParts.size()!=count)return 0;
+ size_t kept=0;
+ for(size_t t=0;t<count;++t){const auto part=mesh.skinTriangleBodyParts[t];
+  if((part>=101&&part<=113)||(part>=201&&part<=213))continue;
+  for(size_t k=0;k<3;++k)mesh.indices[kept*3+k]=mesh.indices[t*3+k];
+  mesh.skinTriangleBodyParts[kept++]=part;
+ }
+ mesh.indices.resize(kept*3);mesh.skinTriangleBodyParts.resize(kept);return count-kept;
+}
+
 // NPC_ also identifies assembled player equipment. Its NIF root is part of
 // the authored actor/bone coordinate system, not a standalone placed REFR.
 inline bool Fo3UsesPlacedReferenceRoot(const std::string& recordType) {

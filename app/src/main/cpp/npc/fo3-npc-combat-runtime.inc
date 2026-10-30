@@ -102,6 +102,9 @@ static void Q230PersistActor(Q230ActorVisual& actor) {
   saved.dead=(old!=p.Snapshot().actors.end()&&old->second.dead)||(p.ActorHealth(actor.source.refFormId)==0&&!p.Essential(actor.source.refFormId));
   const auto* weapon=p.ActorWeapon(actor.source.refFormId);saved.equippedWeapon=weapon?weapon->id:0;
   p.UpdateActor(actor.source.refFormId,saved);
+#ifndef FO3_NPC_COMBAT_HOST_TEST
+  if(actor.ragdollStarted&&actor.corpsePose)p.SetCorpsePose(actor.source.refFormId,*actor.corpsePose);
+#endif
 }
 static const fo3pipdata::PackageDefinition* Q230CurrentPackage(const Q230ActorVisual& actor) {
   const auto& packages=gPlayerSession->player.Definitions().pipboy.packages;

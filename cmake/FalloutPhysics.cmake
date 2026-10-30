@@ -23,7 +23,7 @@ add_subdirectory(${fq_bullet_SOURCE_DIR}/src/BulletDynamics ${CMAKE_CURRENT_BINA
 foreach(lib LinearMath BulletCollision BulletDynamics)
     target_include_directories(${lib} PUBLIC ${fq_bullet_SOURCE_DIR}/src)
 endforeach()
-add_library(fq_physics STATIC ${CMAKE_CURRENT_LIST_DIR}/../app/src/main/cpp/physics/fo3-rigid-world.cpp)
+add_library(fq_physics STATIC ${CMAKE_CURRENT_LIST_DIR}/../app/src/main/cpp/physics/fo3-rigid-world.cpp ${CMAKE_CURRENT_LIST_DIR}/../app/src/main/cpp/physics/fo3-ragdoll-nif.cpp)
 target_compile_features(fq_physics PUBLIC cxx_std_17)
 target_include_directories(fq_physics PUBLIC ${CMAKE_CURRENT_LIST_DIR}/../app/src/main/cpp)
 target_link_libraries(fq_physics PUBLIC BulletDynamics BulletCollision LinearMath)

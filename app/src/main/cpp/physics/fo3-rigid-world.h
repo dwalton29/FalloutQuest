@@ -1,4 +1,5 @@
 #pragma once
+#include "fo3-ragdoll-data.h"
 #include <array>
 #include <cstdint>
 #include <memory>
@@ -40,6 +41,13 @@ public:
     void TargetBody(uint64_t id,const M& pose);
     uint64_t Held(int hand)const;
     void MoveHeld(const M& previousApp,const M& currentApp,float seconds);
+    bool AddRagdoll(uint32_t actor,const fo3rag::Definition&,const std::vector<M>& boneWorld,float unitsToMetres,const V& velocity={},const std::vector<float>& bodyScales={});
+    void RemoveRagdoll(uint32_t actor);
+    bool HasRagdoll(uint32_t actor)const;
+    void SleepRagdoll(uint32_t actor);
+    bool RagdollPose(uint32_t actor,std::vector<M>& bones,bool* sleeping=nullptr,std::vector<V>* linear=nullptr,std::vector<V>* angular=nullptr)const;
+    bool SetRagdollMotion(uint32_t actor,const std::vector<V>& linear,const std::vector<V>& angular);
+    std::vector<uint32_t> RagdollActors()const;
     void Step(float seconds);
     bool SweepCapsule(const V& fromFeet,const V& toFeet,float radius,float height,V& resolved,V& normal)const;
 };
