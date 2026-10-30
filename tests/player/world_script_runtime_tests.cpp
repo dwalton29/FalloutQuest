@@ -66,6 +66,11 @@ int main(){try{
  auto& script=c.pipboy.scripts[200];script.variables={{1,"opened"},{2,"loaded"}};
  script.source="scn C\nshort opened\nshort loaded\nBegin OnTriggerEnter player\nPlayGroup Advance 5\nEnd\nBegin OnLoad\nset loaded to loaded + 1\nEnd\nBegin GameMode\nif IsAnimPlaying == 0\nPlayGroup Idle 5\nendif\nEnd";
  c.eventPrograms[200]=fo3script::ParseEvents(script);
+ c.references[81].base=810;c.pipboy.targets[81].base=810;c.pipboy.targets[81].cell=1;
+ c.pipboy.dialogueActors[810].talkingActivator=true;
+ c.references[80].base=800;c.containers[800].script=801;c.containers[800].entries={{900,0,2}};
+ c.items[900].formId=900;c.items[900].name="Original goods";c.eventBaseScripts[800]=801;
+ c.pipboy.scripts[801].source="Begin OnActivate\nActivate player\nEnd";c.eventPrograms[801]=fo3script::ParseEvents(c.pipboy.scripts[801]);
  c.references[30].base=300;c.doorBases.insert(300);c.scriptedBases.insert(300);c.eventBaseScripts[300]=301;
  c.pipboy.scripts[301].source="Begin OnActivate\nActivate\nEnd";c.eventPrograms[301]=fo3script::ParseEvents(c.pipboy.scripts[301]);
  c.references[40].base=400;c.references[40].valid=true;c.pipboy.targets[40].base=400;c.pipboy.targets[40].cell=1;
@@ -79,6 +84,7 @@ int main(){try{
  fo3pipdata::Info line;line.id=501;line.topic=500;line.quest=600;line.type=1;
  line.responses.push_back({700,0,"Original speech"});line.end.source="set speaker.ended to 1";
  c.pipboy.topics[500].push_back(line);
+ auto broadcast=line;broadcast.id=821;broadcast.topic=820;broadcast.flags=1;broadcast.end={};c.pipboy.topics[820].push_back(broadcast);
  auto asset=std::make_shared<fo3dooranim::Asset>();fo3anim::Bone root;root.name="root";asset->hierarchy.bones.push_back(root);fo3anim::Bone leaf;leaf.name="leaf";leaf.parent=0;asset->hierarchy.bones.push_back(leaf);
  Check(fo3anim::FinalizeSkeleton(asset->hierarchy),"hierarchy");asset->blockBones={0,1};
  fo3anim::Clip clip;clip.name="Advance";clip.stop=2;clip.cycle=2;clip.textKeys={{.1f,"sound: OriginalSound"},{1.5f,"OriginalSound"}};
@@ -110,6 +116,11 @@ int main(){try{
  Check(defaultTransitions==1&&defaultSource==30&&defaultDestination==31,"production adapter queues original door transition");
  Check(fo3worldscript::Event(30,"OnActivate",fo3player::PlayerRef),"queue another source activation");Check(p.ScriptLock(30,100),"lock before delivery");fo3worldscript::Actions();Check(defaultTransitions==1,"delivery rechecks changed lock");
  Check(p.ScriptUnlock(30),"unlock local door");defaultTeleport.valid=false;Check(fo3worldscript::Event(30,"OnActivate",fo3player::PlayerRef),"source delegates local door");fo3worldscript::Actions();Check(localOpen,"production local swing default");
+ Check(fo3worldscript::Event(80,"OnActivate",fo3player::PlayerRef)&&!p.CanLootContainer(80),"container event waits for normal action delivery");
+ fo3worldscript::Actions();Check(p.CanLootContainer(80)&&p.ContainerContents(80)->front().count==2,"production default adapter opens real container inventory");
+ p.EndContainerInteraction();Check(!p.CanLootContainer(80),"production loot delegation is transient");
+ Check(fo3worldscript::Event(80,"OnActivate",fo3player::PlayerRef),"queue container default action");Check(p.ScriptLock(80,100),"lock container before delivery");
+ fo3worldscript::Actions();Check(!p.CanLootContainer(80),"default container delivery rechecks lock");
  // Exercise the production speech adapter with token-owned audio completion.
  ActorVisual voiceActor;voiceActor.source={40,400};gQ230NpcActors.push_back(voiceActor);++gQ230NpcResidenceRevision;
  fo3worldscript::SpeechTick(); // Initialize the independent session generation.
@@ -121,5 +132,10 @@ int main(){try{
  fo3audio::completion=(uint64_t(token)<<1)|1;fo3worldscript::SpeechTick();
  Check(!p.ScriptActorTalking(40)&&gQ230NpcActors.back().runtime.scriptSpeechToken==0,"completion releases speaking actor and lip token even after Session::End clears actor");
  Check(p.Snapshot().pipboy.dialogueVariables.at((uint64_t(40)<<32)|1)==1&&p.Snapshot().pipboy.dialogueVariables.at((uint64_t(40)<<32)|2)==1,"INFO end precedes source filtered SayToDone");
+ Check(p.QueueScriptSpeech(81,820,fo3player::PlayerRef),"source Say selects non-actor TACT INFO");
+ fo3worldscript::Actions();fo3worldscript::SpeechTick();
+ Check(p.ScriptActorTalking(81)&&fo3audio::path=="sound/original.ogg","production TACT adapter delivers original speech without NPC mesh");
+ fo3audio::completion=(uint64_t(fo3audio::token)<<1)|1;fo3worldscript::SpeechTick();
+ Check(!p.ScriptActorTalking(81),"TACT speech releases on actual voice completion");
  std::cout<<"World event/controller/presentation and original speech adapters passed\n";
 }catch(const std::exception& e){std::cerr<<e.what()<<"\n";return 1;}}

@@ -40,8 +40,8 @@ int Player::LockRequirement(uint32_t id) const {
 }
 PickAccess Player::CanPickLock(uint32_t id) const {
   auto r=catalog_->references.find(id);if(r==catalog_->references.end()||!r->second.valid||(r->second.flags&0x20u)||
-    catalog_->scriptedBases.count(r->second.base)||
-    (catalog_->containers.count(r->second.base)&&(!catalog_->containers.at(r->second.base).valid||catalog_->containers.at(r->second.base).script))||
+    (!catalog_->containers.count(r->second.base)&&catalog_->scriptedBases.count(r->second.base))||
+    (catalog_->containers.count(r->second.base)&&!catalog_->containers.at(r->second.base).valid)||
     (!catalog_->containers.count(r->second.base)&&!catalog_->doorBases.count(r->second.base)))return PickAccess::Unsupported;
   bool disabled=false;std::string error;
   if(!ReferenceDisabled(id,disabled,error)||disabled)return PickAccess::Unsupported;
@@ -61,7 +61,7 @@ int Player::ForceLockChance(uint32_t id) const {
   return std::clamp(int(state_.skills[4])+int(LockSetting("fLockSkillBase",10))-requirement,0,100);
 }
 bool Player::UnlockByKey(uint32_t id) {
-  auto l=GetLock(id);if(!l.known||!l.locked||!l.key||ItemCount(l.key)<=0||!CanOpenDoor(id))return false;
+  auto l=GetLock(id);if(!l.known||!l.locked||!l.key||ItemCount(l.key)<=0||!CanOpenDoorImpl(PlayerRef,id,true))return false;
   auto& o=state_.locks[id];o.level=l.level;o.change=LockChange::Key;o.forceFailures=l.forceFailures;++revision_;return true;
 }
 bool Player::CompleteLockpick(uint32_t id,bool forced) {

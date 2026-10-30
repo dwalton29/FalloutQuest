@@ -298,6 +298,15 @@ int main() {
     c.defaultActivationDoors.insert(200);
     gPlayerSession = std::make_unique<fo3player::Session>(c);
     Check(gPlayerSession->player.Add(300,1) && gPlayerSession->player.CanOpenDoor(20), "verified activation script accepts authored key");
+    auto scriptedDoor=c;scriptedDoor.doorBases.insert(200);scriptedDoor.defaultActivationDoors.clear();scriptedDoor.eventBaseScripts[200]=201;
+    scriptedDoor.pipboy.scripts[201].source="Begin OnActivate\nActivate player\nEnd";
+    scriptedDoor.eventPrograms[201]=fo3script::ParseEvents(scriptedDoor.pipboy.scripts[201]);
+    gPlayerSession=std::make_unique<fo3player::Session>(scriptedDoor);
+    Check(gPlayerSession->player.Add(300,1)&&!gPlayerSession->player.CanOpenDoor(20),"key does not bypass script gate");
+    Check(query()&&t.scripted&&t.allowed&&t.door.valid,"key admits original scripted-door OnActivate");
+    const auto beforeScriptDoor=doorActivations;
+    Check(!activate()&&doorActivations==beforeScriptDoor&&!gPlayerSession->player.GetLock(20).locked,"A unlocks and dispatches source before default door action");
+    fo3script::Action doorAction;Check(gPlayerSession->player.PollScriptAction(doorAction)&&doorAction.kind==fo3script::ActionKind::DefaultActivate&&doorAction.reference==20,"scripted keyed door delegates its real default action");
     c.references[20].locked=false;
     gPlayerSession = std::make_unique<fo3player::Session>(c);
     Check(gPlayerSession->player.CanOpenDoor(20), "Brass Lantern passthrough permits unlocked entry");
@@ -382,6 +391,24 @@ int main() {
                     {0, 1, -1}, .5f),
           "wall behind target does not occlude");
     Check(fo3notify::Notifications().Size()==2,"A pickup and container transfer share item-added notifications");
+    // Native container SCRI runs on A, then its Activate delegates to loot.
+    // Holding the ray on it must never run the script or expose rows early.
+    auto scriptedBox=c;scriptedBox.containers[400].script=401;
+    scriptedBox.eventBaseScripts[400]=401;scriptedBox.references[40].locked=true;
+    scriptedBox.references[40].key=300;scriptedBox.references[40].lockFlags=4;
+    scriptedBox.pipboy.scripts[401].source="Begin OnActivate\nif IsActionRef player == 1\nActivate player\nRewardKarma 3\nendif\nEnd";
+    scriptedBox.eventPrograms[401]=fo3script::ParseEvents(scriptedBox.pipboy.scripts[401]);
+    gPlayerSession=std::make_unique<fo3player::Session>(scriptedBox);auto& boxed=gPlayerSession->player;
+    Check(boxed.Add(300,1),"real key acquired");
+    Check(query()&&t.container&&t.scripted&&t.allowed,"key permits scripted-container activation target");
+    UpdateFo3LootSelection(t,0,3);Check(!GetFo3LootPanel().reference&&!boxed.CanLootContainer(40)&&boxed.Snapshot().karma==0,"aim cannot bypass source activation");
+    Check(!activate()&&!boxed.GetLock(40).locked&&boxed.ItemCount(300)==1&&boxed.Snapshot().karma==3,"A unlocks with reusable key and executes script");
+    fo3script::Action defaultAction;Check(boxed.PollScriptAction(defaultAction)&&defaultAction.kind==fo3script::ActionKind::DefaultActivate&&defaultAction.reference==40,"source default action delivered");
+    Check(boxed.OpenScriptContainer(defaultAction.reference),"normal action opens container");
+    Check(query()&&t.container&&!t.scripted&&t.allowed,"delegated loot uses same interaction path");
+    UpdateFo3LootSelection(t,0,4);Check(GetFo3LootPanel().rows.size()==2,"authored loot rows after activation");
+    Check(!activate()&&boxed.Snapshot().karma==3,"loot A does not reexecute OnActivate");
+    UpdateFo3LootSelection({},0,5);Check(!boxed.CanLootContainer(40),"aim loss closes script-authorized loot");
     auto npcCatalog=c;
     npcCatalog.pipboy.targets[80].base=800;npcCatalog.pipboy.targets[81].base=800;
     npcCatalog.weapons.actors[800].health=100;

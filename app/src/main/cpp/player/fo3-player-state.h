@@ -634,6 +634,8 @@ public:
   bool CanOpenDoor(uint32_t reference) const;
   bool CanActorOpenDoor(uint32_t actor,uint32_t reference) const;
   bool CanScriptActivateDoor(uint32_t reference) const;
+  bool CanScriptActivateContainer(uint32_t reference) const;
+  bool OpenScriptContainer(uint32_t reference);
   bool QueueScriptDefaultActivate(uint32_t reference,uint32_t activator);
   bool CanLootContainer(uint32_t reference) const;
   bool PrepareContainer(uint32_t reference);
@@ -685,6 +687,9 @@ private:
                       uint32_t activator,std::string& error);
   void LogScriptEventError(uint32_t scriptId,const char* event,const std::string& error);
   bool PrepareInventory(uint32_t reference,bool actor);
+  bool ExpandLoot(const std::vector<LootEntry>& entries,uint32_t seed,
+                  std::vector<Stack>& contents,uint64_t& nextId) const;
+  bool AddScriptItem(uint32_t form,int32_t count);
   void TouchMerchantCells(uint32_t cell);
   bool RestockMerchant(uint32_t actor,uint32_t chest);
   bool MigrateWeaponInstances(State &state) const;
@@ -729,6 +734,7 @@ private:
   std::vector<BarterRequest> pendingBarters_;
   std::vector<KarmaEvent> pendingKarmaEvents_;
   std::vector<TheftEvent> pendingTheftEvents_;
+  uint32_t scriptOpenedContainer_=0; // transient delegation, cleared on leave/load
   uint32_t containerInteraction_=0;
   bool containerKarmaCommitted_=false;
   std::function<void(const std::string&)> eventDiagnostic_;

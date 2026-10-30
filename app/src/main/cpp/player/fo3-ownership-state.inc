@@ -73,7 +73,7 @@ OwnershipResult Player::ContainerStackOwnership(uint32_t id,uint64_t stack) cons
 void Player::BeginContainerInteraction(uint32_t id) {
   if(containerInteraction_!=id){containerInteraction_=id;containerKarmaCommitted_=false;}
 }
-void Player::EndContainerInteraction(){containerInteraction_=0;containerKarmaCommitted_=false;}
+void Player::EndContainerInteraction(){if(scriptOpenedContainer_){scriptOpenedContainer_=0;++scriptEffectRevision_;}containerInteraction_=0;containerKarmaCommitted_=false;}
 void Player::CommitTheft(uint32_t ref,uint32_t item,int32_t count,uint32_t container,const OwnershipResult& o) {
   if(!o.Theft())return;
   float delta=0;

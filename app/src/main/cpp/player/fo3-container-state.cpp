@@ -17,8 +17,8 @@ bool Player::CanLootContainer(uint32_t id) const {
     return false;
   const auto c = catalog_->containers.find(r->second.base);
   return c != catalog_->containers.end() && c->second.valid &&
-         !c->second.script &&
-         CanOpenDoor(id); // Share lock/key access; container ownership is separate.
+         (!c->second.script || scriptOpenedContainer_==id) &&
+         CanOpenDoorImpl(PlayerRef,id,true); // Share lock/key access; container ownership is separate.
 }
 const std::vector<Stack> *Player::ContainerContents(uint32_t id) const {
   const auto c = state_.containers.find(id);
@@ -50,15 +50,32 @@ bool Player::PrepareInventory(uint32_t id,bool actor) {
     return true;
   if (state_.containers.size() >= 10000)
     return false;
-  size_t total = 0;
-  for (const auto &c : state_.containers)
-    total += c.second.size();
-  std::vector<Stack> contents;
-  uint64_t nextId = state_.nextStackId;
+  uint32_t base=catalog_->references.at(id).base;
+  if(actor) {
+    for(int depth=0;depth<16;++depth){const auto a=catalog_->weapons.actors.find(base);
+      if(a==catalog_->weapons.actors.end()){base=ActorTemplate(id,base);if(!base)return false;continue;}
+      if(!(a->second.templates&0x100))break;
+      base=a->second.templateId;if(depth==15)return false;
+    }
+  }
+  const auto found=(actor?catalog_->actorInventories:catalog_->containers).find(base);
+  if(found==(actor?catalog_->actorInventories:catalog_->containers).end()||!found->second.valid)return false;
+  const auto &c=found->second;
+  std::vector<Stack> contents;uint64_t nextId=state_.nextStackId;
+  const uint32_t seed=id ^ catalog_->lootFingerprint ^ catalog_->worldFingerprint ^ state_.level ^
+      (state_.merchantVisits.count(id)?state_.merchantVisits.at(id).day:0);
+  if(!ExpandLoot(c.entries,seed,contents,nextId))return false;
+  size_t total=contents.size();for(const auto& existing:state_.containers)total+=existing.second.size();
+  if(total>30000)return false;
+  state_.containers.emplace(id, std::move(contents));
+  state_.nextStackId = nextId;
+  ++revision_;
+  return true;
+}
+bool Player::ExpandLoot(const std::vector<LootEntry>& entries,uint32_t seed,
+                        std::vector<Stack>& contents,uint64_t& nextId) const {
   // Runtime-owned RNG; outcomes persist once. Not Bethesda save/RNG parity.
-  std::mt19937 random(id ^ catalog_->lootFingerprint ^
-                      catalog_->worldFingerprint ^ state_.level ^
-                      (state_.merchantVisits.count(id)?state_.merchantVisits.at(id).day:0));
+  std::mt19937 random(seed);
   std::unordered_set<uint32_t> path;
   size_t work = 0;
   std::function<bool(uint32_t, int32_t, float, uint32_t, uint32_t, unsigned)> expand;
@@ -76,7 +93,6 @@ bool Player::PrepareInventory(uint32_t id,bool actor) {
         return false;
       if (item->second.kind == ItemKind::Weapon) {
         if (static_cast<size_t>(count) > 10000 - contents.size() ||
-            total + contents.size() + count > 30000 ||
             static_cast<uint64_t>(count) > UINT64_MAX - nextId)
           return false;
         for (int32_t i = 0; i < count; ++i)
@@ -91,7 +107,7 @@ bool Player::PrepareInventory(uint32_t id,bool actor) {
           s.count += count;
           return true;
         }
-      if (total + contents.size() >= 30000 || contents.size() >= 10000 ||
+      if (contents.size() >= 10000 ||
           nextId == UINT64_MAX)
         return false;
       contents.push_back({nextId++, form, count, condition, false});
@@ -157,23 +173,36 @@ bool Player::PrepareInventory(uint32_t id,bool actor) {
     path.erase(form);
     return ok;
   };
-  uint32_t base=catalog_->references.at(id).base;
-  if(actor) {
-    for(int depth=0;depth<16;++depth){const auto a=catalog_->weapons.actors.find(base);
-      if(a==catalog_->weapons.actors.end()){base=ActorTemplate(id,base);if(!base)return false;continue;}
-      if(!(a->second.templates&0x100))break;
-      base=a->second.templateId;if(depth==15)return false;
-    }
+  for(const auto& e:entries)
+    if(!expand(e.form,e.count,e.condition,e.owner,e.ownerParameter,0))return false;
+  return true;
+}
+bool Player::CanScriptActivateContainer(uint32_t id) const {
+  const auto r=catalog_->references.find(id);if(r==catalog_->references.end())return false;
+  const auto c=catalog_->containers.find(r->second.base);
+  return c!=catalog_->containers.end()&&c->second.valid&&CanOpenDoorImpl(PlayerRef,id,true);
+}
+bool Player::OpenScriptContainer(uint32_t id) {
+  if(!CanScriptActivateContainer(id)||!PrepareInventory(id,false))return false;
+  if(GetLock(id).locked&&!UnlockByKey(id))return false;
+  scriptOpenedContainer_=id;++scriptEffectRevision_;return true;
+}
+bool Player::AddScriptItem(uint32_t form,int32_t count) {
+  if(catalog_->items.count(form)){
+    if(pendingScriptItems_.size()>=128||!Add(form,count))return false;
+    pendingScriptItems_.push_back({form,count});++scriptEffectRevision_;return true;
   }
-  const auto found=(actor?catalog_->actorInventories:catalog_->containers).find(base);
-  if(found==(actor?catalog_->actorInventories:catalog_->containers).end()||!found->second.valid)return false;
-  const auto &c=found->second;
-  for (const auto &e : c.entries)
-    if (!expand(e.form, e.count, e.condition, e.owner, e.ownerParameter, 0))
-      return false;
-  state_.containers.emplace(id, std::move(contents));
-  state_.nextStackId = nextId;
-  ++revision_;
+  std::vector<Stack> items;uint64_t nextId=state_.nextStackId;
+  // Same original LVLI selection rules as containers. The committed outcome
+  // persists; preview never consumes live RNG state (not Bethesda RNG parity).
+  const uint32_t seed=form ^ catalog_->lootFingerprint ^ catalog_->worldFingerprint ^
+      state_.level ^ uint32_t(state_.nextStackId);
+  LootEntry entry;entry.form=form;entry.count=count;
+  if(!ExpandLoot({entry},seed,items,nextId)||pendingScriptItems_.size()>128||items.size()>128-pendingScriptItems_.size())return false;
+  for(const auto& item:items){
+    if(!Add(item.formId,item.count,item.condition))return false;
+    pendingScriptItems_.push_back({item.formId,item.count});++scriptEffectRevision_;
+  }
   return true;
 }
 bool Player::CanTakeContainerStack(uint32_t id, uint64_t stack) const {

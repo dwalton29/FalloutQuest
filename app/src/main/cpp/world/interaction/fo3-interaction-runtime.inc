@@ -67,14 +67,15 @@ bool QueryFo3Interaction(float ox, float oy, float oz, float dx, float dy,
         best = door.distance;
         target.reference = door.sourceDoorRef;
         target.door = door;
-        target.allowed = player.CanOpenDoor(target.reference);
+        target.scripted=player.HasReferenceEvent(target.reference,"OnActivate");
+        target.allowed = target.scripted?player.CanScriptActivateDoor(target.reference):player.CanOpenDoor(target.reference);
     }
     for (const auto& object : gObjects) {
         const bool container=catalog.containers.count(object.baseFormId)!=0;
         const bool terminal=catalog.pipboy.terminals.count(object.baseFormId)!=0;
         // Scripted activators use their original ACTI SCRI rather than being
         // treated as pickup items or a fabricated FalloutQuest interaction.
-        const bool scripted=object.baseRecordType=="ACTI" &&
+        const bool scripted=(object.baseRecordType=="ACTI" || container) &&
             player.HasReferenceEvent(object.refFormId,"OnActivate");
         // Inventory eligibility comes from the item catalog, independently
         // of whether the physics runtime supports this loose-object type.
@@ -95,12 +96,14 @@ bool QueryFo3Interaction(float ox, float oy, float oz, float dx, float dy,
         for (int i=0;i<3;++i) {lo[i]-=0.015f;hi[i]+=0.015f;}
         float distance;
         if (fo3interaction::Box({ox,oy,oz},{dx,dy,dz},lo,hi,3,distance) && distance<best) {
+            const bool dispatchScript=scripted&&(!container||!player.CanLootContainer(object.refFormId));
             best=distance; target.reference=object.refFormId; target.pickup=!container&&!scripted&&!terminal;target.terminal=terminal;
-            target.container=container;target.scripted=scripted;
+            target.container=container;target.scripted=dispatchScript;
             const float panelDistance=std::max(0.0f,distance-.15f);
             target.anchor={ox+dx*panelDistance,oy+dy*panelDistance+.22f,oz+dz*panelDistance};
             target.allowed=!gPlayerSession->saveBlocked &&
-                ((scripted||terminal) ? IsFo3ReferenceEnabled(player,target.reference)
+                ((dispatchScript||terminal) ? (IsFo3ReferenceEnabled(player,target.reference)&&
+                    (!container||player.CanScriptActivateContainer(target.reference)))
                   : (container ? player.CanLootContainer(target.reference) : player.CanPickup(target.reference)));
             target.door={};
         }
@@ -132,7 +135,7 @@ bool QueryFo3Interaction(float ox, float oy, float oz, float dx, float dy,
         const auto& container=catalog.containers.at(ref.base);
         std::snprintf(target.prompt.data(),target.prompt.size(),"%s%s",
             player.GetLock(target.reference).locked&&!target.allowed ? "Locked " : "Open ",container.name.c_str());
-    } else if(target.scripted) {
+    } else if(target.scripted&&!target.door.valid) {
         const auto ref=catalog.references.find(target.reference);
         if(ref==catalog.references.end()){target={};return false;}
         const auto name=catalog.eventBaseNames.find(ref->second.base);
@@ -308,7 +311,7 @@ Fo3LootPanel gLootPanel;
 uint64_t gLootPanelRevision=UINT64_MAX;
 const Fo3LootPanel& GetFo3LootPanel() {return gLootPanel;}
 void UpdateFo3LootSelection(const Fo3InteractionTarget& target,float stickY,double time) {
-    const bool valid=target.container && target.allowed && gPlayerSession && !IsFo3LoadingVisible();
+    const bool valid=target.container && !target.scripted && target.allowed && gPlayerSession && !IsFo3LoadingVisible();
     const auto previousReference=gLootPanel.reference;
     if (previousReference && (!valid || previousReference!=target.reference) && gPlayerSession) {
         const auto ref=gPlayerSession->player.Definitions().references.find(previousReference);
@@ -325,7 +328,7 @@ void UpdateFo3LootSelection(const Fo3InteractionTarget& target,float stickY,doub
         if (previousReference==target.reference) fo3audio::Close(player.Definitions().references.at(target.reference).base);
         gLootPanel.reference=0;gLootPanel.rows.clear();gLootCursor.Target(0,0);return;
     }
-    if(previousReference!=target.reference){player.EndContainerInteraction();player.BeginContainerInteraction(target.reference);}
+    if(previousReference!=target.reference){if(previousReference)player.EndContainerInteraction();player.BeginContainerInteraction(target.reference);}
     if (revision!=player.Revision()) FlushFo3PlayerState();
     const auto& catalog=player.Definitions();
     if (gLootPanel.reference!=target.reference || gLootPanelRevision!=player.Revision()) {
@@ -381,8 +384,8 @@ bool ActivateFo3Interaction(float ox,float oy,float oz,float dx,float dy,float d
         }
         return false;
     }
-    if(!target.talk&&!target.pickup&&!target.scripted&&gPlayerSession->player.GetLock(target.reference).locked){
-        if(gPlayerSession->player.UnlockByKey(target.reference)){FlushFo3PlayerState();if(target.container)return false;}
+    if(!target.talk&&!target.pickup&&gPlayerSession->player.GetLock(target.reference).locked){
+        if(gPlayerSession->player.UnlockByKey(target.reference)){FlushFo3PlayerState();if(target.container&&!target.scripted)return false;}
     }
     if(target.talk){StartFo3Dialogue(target.reference);return false;}
     if(target.scripted){
@@ -390,13 +393,13 @@ bool ActivateFo3Interaction(float ox,float oy,float oz,float dx,float dy,float d
         const auto status=DispatchFo3ScriptedActivation(
             target.reference,fo3player::PlayerRef,error);
         if(status==fo3player::ScriptEventResult::Pending){
-            Q6H_LOGI("SCRIPT ACTIVATE PENDING: reference=%08X source=ACTI",target.reference);
+            Q6H_LOGI("SCRIPT ACTIVATE PENDING: reference=%08X source=OnActivate",target.reference);
             return false;
         }
         // No synthesized follow-up, message panel, or door activation. The
         // source script must complete successfully to change gameplay state.
         if(status==fo3player::ScriptEventResult::Executed) {
-            Q6H_LOGI("SCRIPT ACTIVATE: reference=%08X status=%d queued=%zu source=ACTI",target.reference,int(status),gPlayerSession->player.PendingScriptMessageCount());
+            Q6H_LOGI("SCRIPT ACTIVATE: reference=%08X status=%d queued=%zu source=OnActivate",target.reference,int(status),gPlayerSession->player.PendingScriptMessageCount());
             FlushFo3PlayerState();
         }
         if(status!=fo3player::ScriptEventResult::Executed)

@@ -432,8 +432,8 @@ void Decode(Definitions &d, const std::string &t, uint32_t id, uint32_t flags,
   } else if (t == "VTYP")
     d.voices[id] = Text(s, "EDID");
   else if (t == "NPC_" || t == "CREA" || t == "TACT") {
-    d.npcVoices[id] = U(Find(s, "VTCK"));
-    ActorDefinition actor;actor.editor=editor;actor.name=Text(s,"FULL");
+    d.npcVoices[id] = U(Find(s, t=="TACT"?"VNAM":"VTCK"));
+    ActorDefinition actor;actor.editor=editor;actor.name=Text(s,"FULL");actor.talkingActivator=t=="TACT";
     actor.race=U(Find(s,"RNAM"));actor.actorClass=U(Find(s,"CNAM"));actor.voice=d.npcVoices[id];
     actor.script=U(Find(s,"SCRI"));actor.templateActor=U(Find(s,"TPLT"));
     actor.female=(U(Find(s,"ACBS"))&1)!=0;

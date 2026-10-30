@@ -22,7 +22,7 @@ void Synthetic(){auto c=Fixture();Player p(c);KarmaEvent karma;TheftEvent crime;
  Check(p.CanPickLock(25)==PickAccess::RequiresKey,"impossible");c.references[26].lockFlags=4;Player leveled(c);Check(leveled.GetLock(26).leveled&&leveled.CanPickLock(26)==PickAccess::Unsupported,"leveled explicitly unresolved");
  Check(p.CanPickLock(30)==PickAccess::Ready&&!p.CanLootContainer(30),"actual locked container");
  auto no=c;no.initial.inventory.clear();Player empty(no);Check(empty.CanPickLock(20)==PickAccess::NoPins,"no fabricated pins");
- auto script=c;script.containers[200].script=99;Player blocked(script);Check(blocked.CanPickLock(30)==PickAccess::Unsupported,"scripted container protection");
+ auto script=c;script.containers[200].script=99;Player blocked(script);Check(blocked.CanPickLock(30)==PickAccess::Ready&&!blocked.CanLootContainer(30),"scripted container lock can be picked without bypassing OnActivate");
  fo3lockpick::Game game;Check(game.Begin(p,24,.5f),"begin actual reference");Check(p.Snapshot().karma==0&&!p.PollKarmaEvent(karma),"looking/entry no penalty");
  game.pin=game.sweet;for(int i=0;i<19;++i)Check(game.Step(.05f,0,1)==fo3lockpick::Game::Event::None,"proper cylinder travel");
  Check(game.Step(.05f,0,1)==fo3lockpick::Game::Event::Unlock&&game.cylinder==90,"correct angle opens");

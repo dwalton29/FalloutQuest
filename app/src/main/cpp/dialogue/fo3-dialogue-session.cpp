@@ -29,15 +29,24 @@ bool Session::CanActivate(const Context& ctx)const {
   Context activated=ctx;activated.activationVariables=&pending;
   return CanStart(activated);
 }
+static bool ScriptSpeakerAlive(const Context& ctx,const fo3player::Player& p){
+  const auto health=p.ActorHealth(ctx.speaker.reference);if(health>=0)return health>0;
+  const auto& d=p.Definitions();const auto r=d.references.find(ctx.speaker.reference);
+  const auto speaker=d.pipboy.dialogueActors.find(ctx.speaker.base);
+  bool disabled=true;std::string error;
+  return r!=d.references.end()&&r->second.valid&&r->second.base==ctx.speaker.base&&
+      speaker!=d.pipboy.dialogueActors.end()&&speaker->second.talkingActivator&&
+      p.ReferenceDisabled(ctx.speaker.reference,disabled,error)&&!disabled;
+}
 bool Session::StartTopic(uint32_t requested,const Context& ctx,fo3player::Player& p){
-  if(Active()||!ctx.player||ctx.speaker.combat||p.ActorHealth(ctx.speaker.reference)==0)return false;
+  if(Active()||!ctx.player||ctx.speaker.combat||!ScriptSpeakerAlive(ctx,p))return false;
   scriptedTopic=true;
   const auto* chosen=Resolve(requested,ctx,true);if(!chosen)return false;
   actor=ctx.speaker.reference;base=ctx.speaker.base;voice=p.ActorVoice(actor);if(!voice)voice=fo3pipdata::ActorVoice(p.Definitions().pipboy,base);
   return Enter(*chosen,ctx,p);
 }
 bool Session::StartSelectedTopic(uint32_t requested,uint32_t selected,const Context& ctx,fo3player::Player& p){
-  if(Active()||!ctx.player||ctx.speaker.combat||p.ActorHealth(ctx.speaker.reference)<=0)return false;
+  if(Active()||!ctx.player||ctx.speaker.combat||!ScriptSpeakerAlive(ctx,p))return false;
   const auto topic=p.Definitions().pipboy.topics.find(requested);if(topic==p.Definitions().pipboy.topics.end())return false;
   const auto chosen=std::find_if(topic->second.begin(),topic->second.end(),[&](const auto& i){return i.id==selected;});
   if(chosen==topic->second.end()||!SupportedInfoStructure(*chosen)||(chosen->speaker&&chosen->speaker!=ctx.speaker.base))return false;

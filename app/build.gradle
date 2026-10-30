@@ -22,8 +22,8 @@ android {
         applicationId 'com.falloutquest.app'
         minSdk 29
         targetSdk 35
-        versionCode 297
-        versionName '0.148.0-menu-controls-and-wrist-depth'
+        versionCode 298
+        versionName '0.149.0-survival-guide-scavenging'
 
         ndk {
             abiFilters 'arm64-v8a'

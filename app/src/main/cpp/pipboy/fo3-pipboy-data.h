@@ -168,7 +168,7 @@ struct ActorDefinition {
   uint32_t race=0, actorClass=0, voice=0, script=0, templateActor=0,combatStyle=0;
   float karma=0;int16_t disposition=0;
   uint16_t templateFlags=0;
-  bool female=false;
+  bool female=false,talkingActivator=false;
   std::unordered_map<uint32_t,int8_t> factions;
   std::vector<uint32_t> packages;
   std::vector<uint8_t> aiData;

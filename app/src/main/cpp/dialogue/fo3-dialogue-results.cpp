@@ -7,6 +7,7 @@
 #include <functional>
 #include <algorithm>
 #include <cstdio>
+#include <cstring>
 #include <limits>
 namespace fo3dialogue {
 // The player's explicit Talk action dispatches the NPC's OnActivate event.
@@ -84,6 +85,13 @@ bool CompileResult(const fo3pipdata::Definitions& d,const fo3pipdata::ResultScri
   std::istringstream lines(lower(script.source));std::string line;
   while(std::getline(lines,line)) {
     auto comment=line.find(';');if(comment!=std::string::npos)line.resize(comment);
+    // Bethesda source permits a condition parenthesis directly after its
+    // keyword (e.g. if(...)); it is a token boundary, not part of the opcode.
+    const auto head=line.find_first_not_of(" \t\r");
+    if(head!=std::string::npos)for(const char* keyword:{"if","elseif"}){
+      const auto n=std::strlen(keyword);
+      if(line.compare(head,n,keyword)==0&&head+n<line.size()&&line[head+n]=='('){line.insert(head+n,1,' ');break;}
+    }
     std::istringstream in(line);std::string op,a,b,c,extra;Command cmd{};cmd.type=CommandType::Variable;
     if(!(in>>op))continue;
     if(!op.empty()&&op.back()=='.'){std::string verb;if(!(in>>verb)){error="missing reference command";return false;}op+=verb;}
