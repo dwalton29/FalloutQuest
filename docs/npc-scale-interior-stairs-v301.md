@@ -1,0 +1,11 @@
+# NPC race height and interior stairs — v301
+
+NPC assembly now composes the original RACE DATA male/female height with NPC NAM6 height and placed-reference XSCL. RACE DATA places the heights at offsets 16 and 20, after seven skill/boost pairs and two unused bytes (xEdit FO3 definition: https://tes5edit.github.io/fopdoc/Fallout3/Records/RACE.html). The supplied ESM gives all four child races 0.8; ordinary adult races use 1.0. The shared actor transform scales body, clothes, face parts, bone positions and authored ragdoll placement together. No child names or race IDs control the implementation. Missing/invalid height retains identity scaling.
+
+Interior movement previously bypassed the coherent capsule sweep/footprint step controller and used the legacy wall depenetration path. Interiors now use the same indexed controller after safe-spawn resolution. The existing interior slope threshold and exterior step allowance remain. Interior step allowance is tuned to 0.42 m, with the existing 0.02 m tolerance, because the original shack meshes contain risers up to about 0.40 m; this is a Quest controller policy, not a recovered original-game setting. The landing must be real authored support, the upper capsule must fit, and larger obstacles still block.
+
+Grounded vertical integration also probes 12 mm below the feet before declaring support lost. This prevents submillimetre gravity integration from repeatedly toggling a stationary player airborne, which could discard a legitimate step-up. With no support, the player retains accelerated gravity rather than snapping down a ledge.
+
+Tests cover sex-specific race height composed with NPC/reference/template scales, original Maggie/Harden Simms scale and Lucas Simms adult scale, stable flat-ground contact, complete stair ascent/descent, oversized risers and low-ceiling rejection. Optional original-mesh checks run the production controller and gravity on both original `shackstairsregleft01.nif` and `shackstairsregright01.nif`. Original assets are read externally and are not committed.
+
+Physical headset verification is still required: revisit Megaton children and both stair orientations inside houses, walk up/down and stop on treads, check head clearance while standing/crouched, then verify exterior movement and ledge falls. v300 crouch/stealth changes are retained.

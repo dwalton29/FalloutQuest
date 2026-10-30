@@ -76,6 +76,7 @@ struct Linked {
     std::vector<std::string> bodyModels;
     std::vector<std::string> bodyTextures;
     uint32_t bipedMask = 0u;
+    float height = 1.0f;
     std::vector<float> faceSymmetric;
     std::vector<float> faceAsymmetric;
     std::vector<float> faceTextureSymmetric;
@@ -304,6 +305,12 @@ bool ParseLinked(FILE* f, const Locator& loc, Linked& out, bool female) {
         }
 
         if(loc.type=="RACE"){
+            // FO3 RACE DATA: seven skill/boost pairs, two padding bytes,
+            // then male/female height. Compose with NPC NAM6 and REFR XSCL.
+            if(std::memcmp(type,"DATA",4u)==0 && n>=24u){
+                const float height=fo3esm::ReadF32(p+(female?20u:16u));
+                if(std::isfinite(height)&&height>0)out.height=height;
+            }
             if(std::memcmp(type,"NAM0",4u)==0){
                 raceHeadData=true;
                 raceBodyData=false;
@@ -579,6 +586,7 @@ bool LoadFo3CellActors(
 
         Linked race;
         if(npc.race!=0u && resolve(npc.race,race)){
+            actor.scale*=race.height;
             actor.raceEditorId=race.editorId;
             actor.raceHeadModel=race.headModels.empty()?std::string{}:race.headModels[0];
             actor.raceHeadModels=race.headModels;

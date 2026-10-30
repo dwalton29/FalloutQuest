@@ -4400,7 +4400,7 @@ bool ResolveFo3PlayerMotionQ6G(float currentX, float currentZ,
         return true;
     }
     if (!gPlayerCollisionReady) return false;
-    if (gWorldTriangles.empty() || !gExteriorAllBhksQ78A || !gSafeSpawnResolved) {
+    if (gWorldTriangles.empty() || !gSafeSpawnResolved) {
         return ResolveFo3PlayerMotionLegacyQ716(currentX, currentZ, desiredX, desiredZ,
                                                 currentPlayerYOffset, outX, outZ, outPlayerYOffset);
     }

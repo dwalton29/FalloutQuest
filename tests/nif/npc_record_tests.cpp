@@ -1,6 +1,7 @@
 #include "fo3-npc.h"
 #include "fo3-texture-bsa.h"
 #include <cassert>
+#include <cmath>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -73,6 +74,7 @@ int main(int argc, char **argv) {
   testMesh.clear(); testTexture = {};
   Bytes esm, race;
   Sub(race, "EDID", Text("TestRace"));
+  Bytes raceData(16);F32(raceData,.8f);F32(raceData,.7f);F32(raceData,1);F32(raceData,1);U32(raceData,4);Sub(race,"DATA",raceData);
   Sub(race, "NAM0", {});
   Sub(race, "MNAM", {});
   Sub(race, "INDX", Word(0));
@@ -125,6 +127,7 @@ int main(int argc, char **argv) {
     Sub(b, "EDID", Text(female ? "Female" : "Male"));
     Sub(b, "ACBS", acbs);
     Sub(b, "RNAM", Word(10));
+    Bytes height;F32(height,female?1.f:1.1f);Sub(b,"NAM6",height);
     Sub(b, "MODL", Text("skeleton.nif"));
     Bytes inv = Word(20);
     U32(inv, 1);
@@ -146,6 +149,7 @@ int main(int argc, char **argv) {
     Bytes r;
     Sub(r, "NAME", Word(30 + (i < 3 ? i : 0)));
     Sub(r, "DATA", Bytes(24));
+    if(i==0){Bytes scale;F32(scale,1.2f);Sub(r,"XSCL",scale);}
     Add(refs, Record("ACHR", 100 + i, r, i == 3 ? 0x800 : i == 4 ? 0x20 : 0));
   }
   Bytes group;
@@ -178,6 +182,7 @@ int main(int argc, char **argv) {
   std::vector<Fo3NpcActorQ230> actors;
   assert(LoadFo3CellActors(77, actors, path.string()));
   assert(actors.size() >= 3);
+  assert(std::abs(actors[0].scale-.8f*1.1f*1.2f)<.0001f&&std::abs(actors[1].scale-.7f)<.0001f&&std::abs(actors[2].scale-.8f*1.1f)<.0001f);
   assert(!actors[0].female && actors[0].raceHeadModels[0] == "male-head.nif");
   assert(actors[1].female && actors[1].raceHeadModels[0] == "female-head.nif");
   assert(actors[1].raceBodyModels[0] == "female-body.nif");
@@ -217,12 +222,14 @@ int main(int argc, char **argv) {
     bool lucas = false;
     for (const auto &a : actors)
       if (a.editorId == "LucasSimms") {
-        lucas = true;
+        lucas = true;assert(std::abs(a.scale-1.f)<.0001f);
         assert(a.raceEditorId == "AfricanAmerican" &&
                a.raceHeadModels.size() == 8);
         assert(a.inventory[1].modelPath == "Armor\\LucasSimms\\M\\OutfitM.NIF");
       }
     assert(lucas);
+    std::unordered_set<uint32_t> childRefs{0x3b45,0x3b5c};assert(LoadFo3CellActors(0xa96,actors,argv[1],&childRefs));
+    unsigned children=0;for(const auto& a:actors)if(a.editorId=="Maggie"||a.editorId=="HardenSimms"){assert(std::abs(a.scale-.8f)<.0001f);++children;}assert(children==2);
     std::unordered_set<uint32_t> outside{0x1fb3a,0xc6e91};
     assert(LoadFo3CellActors(0x2db4,actors,argv[1],&outside));
     bool weld=false,micky=false;

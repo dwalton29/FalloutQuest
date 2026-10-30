@@ -232,7 +232,10 @@ static void FallingAndLandingQ263(){
     std::cout<<"Player gravity: accelerated ledge descent and continuous capsule landing passed\n";
 }
 
+#include "interior_stair_tests.inc"
+
 int main(int argc,char**argv) {
+    if(argc==4&&std::string(argv[1])=="--stairs"){OriginalInteriorStairs(argv[2],argv[3]);return 0;}
     IndexedActorGroundParityQ226();
     const std::string nonMegaton="Dungeons\\Office\\Room\\Wall.NIF",megaton="Architecture\\Megaton\\interior\\Wall.NIF",item="Clutter\\Bottle.NIF",trigger="Effects\\Trigger.NIF";
     assets[nonMegaton]=packedNif();assets[megaton]=packedNif();assets[item]=packedNif();assets[trigger]=packedNif(12);
@@ -684,5 +687,6 @@ int main(int argc,char**argv) {
     assert(gQ1930PreparedSnapshots.size()==registeredBefore);
     std::cout<<"Authored collision and empty-world publication tests passed\n";
     FallingAndLandingQ263();
+    InteriorStepRegression();
 
 }

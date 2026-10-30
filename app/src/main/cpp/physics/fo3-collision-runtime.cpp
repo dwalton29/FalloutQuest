@@ -36,7 +36,7 @@ constexpr bool SHOW_COLLISION_DEBUG_Q6G = false;
 constexpr float PLAYER_RADIUS = 0.26f;
 float PLAYER_HEIGHT = 1.70f; // Current calibrated standing/crouched capsule.
 constexpr float PLAYER_SKIN = 0.003f;
-constexpr float MAX_STEP_UP = 0.32f;
+constexpr float MAX_STEP_UP = 0.42f; // Quest interior policy; original shack risers reach 0.40 m.
 constexpr float EXTERIOR_MAX_STEP_UP_Q78B = 0.30f;
 constexpr float STEP_MIN_RISE_Q78B = 0.015f;
 constexpr float EXTERIOR_CONTACT_SLOP_Q712 = 0.015f;
@@ -2930,7 +2930,10 @@ bool ResolveFo3PlayerMotionWithGravity(float currentX,float currentZ,float desir
         gFallVelocity-=9.80665f*dt;
         fo3rigid::V resolved,normal;
         const float target=feet+gFallVelocity*dt;
-        const bool hit=world.SweepCapsule({*outX,feet+.002f,*outZ},{*outX,target,*outZ},CollisionRadiusQ712(),PLAYER_HEIGHT,resolved,normal);
+        // Retain support across submillimetre gravity steps; a short contact
+        // probe must not turn a grounded character airborne every other frame.
+        const float probeTarget=gFallGrounded?std::min(target,feet-.012f):target;
+        const bool hit=world.SweepCapsule({*outX,feet+.002f,*outZ},{*outX,probeTarget,*outZ},CollisionRadiusQ712(),PLAYER_HEIGHT,resolved,normal);
         if(hit&&normal[1]>.45f){feet=resolved[1];gFallVelocity=0;gFallGrounded=true;}
         else {feet=target;gFallGrounded=false;}
         // The exact LAND surface is also a conservative recovery for an
