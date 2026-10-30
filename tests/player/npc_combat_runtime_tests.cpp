@@ -22,7 +22,7 @@ void EmitShot(uint64_t,uint32_t attacker,uint32_t base,const fo3weapon::Definiti
 }
 #ifdef FO3_NPC_DETECTION_HOST_TEST
 float gPlayerDetectionSpeed=0,gPlayerDetectionAction=0,detectionLight=0;double gPlayerDetectionActionUntil=-1;
-float Q230PlayerLightLevel(const std::array<float,3>&){return detectionLight;}
+float Q230PlayerLightLevel(const std::array<float,3>&,double){return detectionLight;}
 #endif
 #define FO3_NPC_COMBAT_HOST_TEST
 #include "npc/fo3-npc-combat-runtime.inc"

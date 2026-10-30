@@ -5,12 +5,16 @@ static void Q230ObservePlayer(Q230ActorVisual& actor,bool hostile,double now){
  const auto* stats=player.ActorStatistics(actor.source.refFormId);if(!stats)return;
  const std::array<float,3> point{gQ210Head[0],gQ210Head[1],gQ210Head[2]};
  const auto& pos=actor.runtime.position;const float dx=point[0]-pos[0],dy=point[1]-pos[1],dz=point[2]-pos[2];
+ const float distance=std::sqrt(dx*dx+dy*dy+dz*dz)*FO3_UNITS_PER_METRE;
+ const bool exterior=gExteriorWorldspaceQ1890!=0;
+ const float limit=fo3sneak::Setting(settings,"fSneakMaxDistance")*(exterior?fo3sneak::Setting(settings,"fSneakExteriorDistanceMult"):1);
+ if(distance>=limit){observer.Step(settings,-INFINITY,hostile,now,point);return;}
  const float planar=std::hypot(dx,dz),bearing=std::atan2(-dx,-dz);
  const float cone=fo3sneak::Setting(settings,"fDetectionViewCone")*.5f*3.14159265359f/180;
  const bool front=planar<.01f||std::abs(fo3npc::Angle(bearing-actor.runtime.yaw-actor.runtime.headYaw))<=cone;
  const bool los=front&&Q230Sight(actor,0x14,point);
- fo3sneak::Evidence e;e.distance=std::sqrt(dx*dx+dy*dy+dz*dz)*FO3_UNITS_PER_METRE;
- e.exterior=gExteriorWorldspaceQ1890!=0;e.los=los;e.light=Q230PlayerLightLevel(point);e.perception=stats->perception;
+ fo3sneak::Evidence e;e.distance=distance;
+ e.exterior=exterior;e.los=los;e.light=Q230PlayerLightLevel(point,now);e.perception=stats->perception;
  e.skill=player.Snapshot().skills[size_t(fo3player::Skill::Sneak)];e.sneaking=player.IsSneaking();e.moving=gPlayerDetectionSpeed>.05f;
  const float walking=player.Definitions().npcBaseSpeed/FO3_UNITS_PER_METRE*(e.sneaking?fo3sneak::Setting(settings,"fMoveSneakMult"):1);
  e.running=e.moving&&walking>0&&gPlayerDetectionSpeed>walking;e.alert=observer.phase!=fo3sneak::Phase::Normal;

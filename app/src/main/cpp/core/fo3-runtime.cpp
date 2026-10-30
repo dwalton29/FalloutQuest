@@ -12465,10 +12465,13 @@ static bool Q230ChatLook(uint32_t,std::array<float,3>&);
 // CPU light proxy from the same authored ambient/directional/placed lights.
 // Native screen-space light detection is unavailable; this Quest sampling policy
 // excludes tone mapping/bloom and bounds local-light work with the renderer budget.
-static float Q230PlayerLightLevel(const std::array<float,3>& point){
+static float Q230PlayerLightLevel(const std::array<float,3>& point,double now){
+ // All observers share one player/light sample per simulation frame.
+ static double sampled=-1;static uint32_t cell=0;static float cached=0;
+ if(sampled==now&&cell==gCurrentCellFormId)return cached;sampled=now;cell=gCurrentCellFormId;
  float light=0;for(int c=0;c<3;++c)light=std::max(light,gFo3Environment.ambient[c]+gFo3Environment.sunlight[c]);
  if(gFo3Environment.interior){const auto selected=fo3interior::Select(gFo3InteriorLighting.lights,point,point);for(int n=0;n<selected.count;++n){const auto& l=gFo3InteriorLighting.lights[selected.indices[n]];float distance=0;for(int c=0;c<3;++c)distance+=(l.position[c]-point[c])*(l.position[c]-point[c]);const float attenuation=fo3interior::Attenuation(std::sqrt(distance),l.radius);light+=std::max({l.colour[0],l.colour[1],l.colour[2]})*attenuation*l.fade;}}
- return std::clamp(light*100,0.f,100.f);
+ return cached=std::clamp(light*100,0.f,100.f);
 }
 #include "npc/fo3-npc-ragdoll-cache.inc"
 #include "fo3-npc-runtime.inc"

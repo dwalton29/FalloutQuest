@@ -562,7 +562,7 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
           next.lockSettings[id]=id[0]=='f'?fo3esm::ReadF32(d->data):float(I32(d->data));
         if (id == "iLevItemLevelDifferenceMax" && d && d->size == 4)
           next.lootLevelDifference = std::max(0, I32(d->data));
-        if(!id.empty()&&d&&d->size==4&&(id.rfind("fSneak",0)==0||id.rfind("fDetection",0)==0||id=="fMoveSneakMult"||id.rfind("iSoundLevel",0)==0))next.sneakSettings[id]=id[0]=='f'?fo3esm::ReadF32(d->data):float(I32(d->data));
+        if(!id.empty()&&d&&d->size==4&&(id.rfind("fSneak",0)==0||id.rfind("fDetection",0)==0||id=="fMoveSneakMult"||id.rfind("iSoundLevel",0)==0||id.rfind("fCombatSearch",0)==0))next.sneakSettings[id]=id[0]=='f'?fo3esm::ReadF32(d->data):float(I32(d->data));
       } else if (item) {
         Item definition;
         if (!form || !DecodeItem(form, flags, kind, subs, definition))
