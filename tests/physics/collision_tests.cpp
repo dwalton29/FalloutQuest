@@ -233,8 +233,10 @@ static void FallingAndLandingQ263(){
 }
 
 #include "interior_stair_tests.inc"
+#include "walkway_tests.inc"
 
 int main(int argc,char**argv) {
+    if(argc==3&&std::string(argv[1])=="--walkways"){OriginalMegatonWalkways(argv[2]);return 0;}
     if(argc==4&&std::string(argv[1])=="--stairs"){OriginalInteriorStairs(argv[2],argv[3]);return 0;}
     IndexedActorGroundParityQ226();
     const std::string nonMegaton="Dungeons\\Office\\Room\\Wall.NIF",megaton="Architecture\\Megaton\\interior\\Wall.NIF",item="Clutter\\Bottle.NIF",trigger="Effects\\Trigger.NIF";

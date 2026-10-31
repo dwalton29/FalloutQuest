@@ -390,10 +390,21 @@ bool World::CanExpandCapsule(const V& feet,float radius,float oldHeight,float ne
  struct Upward:btCollisionWorld::ClosestConvexResultCallback{using ClosestConvexResultCallback::ClosestConvexResultCallback;btScalar addSingleResult(btCollisionWorld::LocalConvexResult& r,bool world)override{const auto normal=world?r.m_hitNormalLocal:r.m_hitCollisionObject->getWorldTransform().getBasis()*r.m_hitNormalLocal;if(normal.y()>=-.01f)return 1;return ClosestConvexResultCallback::addSingleResult(r,world);}}hit(from.getOrigin(),to.getOrigin());hit.m_collisionFilterGroup=4;hit.m_collisionFilterMask=3;
  impl->world.convexSweepTest(&shape,from,to,hit,.001f);return !hit.hasHit();
 }
-bool World::SweepCapsule(const V& from,const V& to,float radius,float height,V& resolved,V& normal)const{
+bool World::SweepCapsule(const V& from,const V& to,float radius,float height,V& resolved,V& normal,float minimumUpNormal)const{
     btCapsuleShape capsule(radius,std::max(0.f,height-2*radius));capsule.setMargin(.001f);
     btTransform a=btTransform::getIdentity(),b=a;a.setOrigin(B(from)+btVector3(0,height*.5f,0));b.setOrigin(B(to)+btVector3(0,height*.5f,0));
-    btCollisionWorld::ClosestConvexResultCallback hit(a.getOrigin(),b.getOrigin());hit.m_collisionFilterGroup=4;hit.m_collisionFilterMask=3;
+    struct SupportHit:btCollisionWorld::ClosestConvexResultCallback{
+        float minimum;
+        SupportHit(const btVector3& from,const btVector3& to,float threshold):ClosestConvexResultCallback(from,to),minimum(threshold){}
+        btScalar addSingleResult(btCollisionWorld::LocalConvexResult& result,bool world)override{
+            const auto n=world?result.m_hitNormalLocal:result.m_hitCollisionObject->getWorldTransform().getBasis()*result.m_hitNormalLocal;
+            // A nearer rail/vertical edge must not hide the floor from a
+            // support query. Other sweep callers retain the unfiltered path.
+            if(n.y()<minimum)return 1;
+            return ClosestConvexResultCallback::addSingleResult(result,world);
+        }
+    }hit(a.getOrigin(),b.getOrigin(),minimumUpNormal);
+    hit.m_collisionFilterGroup=4;hit.m_collisionFilterMask=3;
     impl->world.convexSweepTest(&capsule,a,b,hit,.001f);
     if(!hit.hasHit()){resolved=to;normal={};return false;}
     normal=A(hit.m_hitNormalWorld);resolved=A(B(from).lerp(B(to),std::max(0.f,float(hit.m_closestHitFraction)-.001f)));return true;

@@ -305,6 +305,45 @@ bool ParseShapeObject(const uint8_t* data, size_t size, const NifHeader& header,
     return true;
 }
 
+// Resolve inherited surface properties before classifying placed geometry.
+// Local properties win over the nearest ancestor of the same material class.
+void InheritShapeProperties(const std::vector<uint8_t>& nif,const NifHeader& header,
+                            const std::vector<uint32_t>& parents,uint32_t block,ShapeObject& shape){
+    for(uint32_t ancestor=block<parents.size()?parents[block]:INVALID_REF,guard=0;
+        ancestor<header.numBlocks&&guard<header.numBlocks;++guard){
+        Cursor c(BlockData(nif,header,ancestor),header.blockSizes[ancestor]);
+        NifTransform transform;std::vector<uint32_t> properties;
+        if(!ParseAvObjectPrefix(c,header,transform,&properties))break;
+        for(uint32_t ref:properties){
+            if(ref>=header.numBlocks)continue;
+            const auto& type=BlockType(header,ref);
+            const bool shader=type.find("Shader")!=std::string::npos;
+            const bool overridden=std::any_of(shape.properties.begin(),shape.properties.end(),[&](uint32_t local){
+                if(local>=header.numBlocks)return false;
+                const auto& existing=BlockType(header,local);
+                return existing==type||(shader&&existing.find("Shader")!=std::string::npos);
+            });
+            if(!overridden)shape.properties.push_back(ref);
+        }
+        ancestor=ancestor<parents.size()?parents[ancestor]:INVALID_REF;
+    }
+}
+
+// A material colour alone is not a Fallout 3 world surface shader. Some
+// authored architecture contains such geometry alongside its real surfaces.
+// Keep standalone/legacy UI decoding, and never confuse a missing DDS on a
+// real shader with this absence of a surface property.
+bool MaterialOnlyWorldShape(const ShapeObject& shape,const NifHeader& header) {
+    bool material=false;
+    for(uint32_t ref:shape.properties){
+        if(ref>=header.numBlocks)continue;
+        const auto& type=BlockType(header,ref);
+        if(type=="NiMaterialProperty")material=true;
+        if(type.find("Shader")!=std::string::npos||type=="NiTexturingProperty"||type=="NiVertexColorProperty")return false;
+    }
+    return header.userVersion==11u&&header.bsVersion==34u&&material;
+}
+
 bool ParseTextureSet(const uint8_t* data, size_t size,
                      std::string& diffuse, std::string& normal,
                      std::string& glow,
@@ -1005,7 +1044,8 @@ bool Q970HasEditorMarkers(const std::vector<uint8_t>& nif,const NifHeader& h){
 bool Q970BuildRenderableSet(const std::vector<uint8_t>& nif,
                             const NifHeader& header,
                             std::vector<uint8_t>& renderable,
-                            Q970SceneStats& stats, bool includeHidden=false,bool includeEditor=false) {
+                            Q970SceneStats& stats, bool includeHidden=false,bool includeEditor=false,
+                            std::vector<uint32_t>* parentBlocks=nullptr) {
     renderable.assign(header.numBlocks, 0u);
     stats = {};
 
@@ -1035,6 +1075,7 @@ bool Q970BuildRenderableSet(const std::vector<uint8_t>& nif,
         }
     }
 
+    if(parentBlocks)*parentBlocks=parent;
     std::vector<uint32_t> stack;
     stack.reserve(header.numBlocks);
     for (uint32_t block = 0u; block < header.numBlocks; ++block) {
@@ -1767,6 +1808,7 @@ bool TryLoadShape(const std::vector<uint8_t>& nif, const NifHeader& header,
                                   candidate.glossiness, candidate.alpha,
                                   candidate.emissiveMult);
         } else if (type == "NiAlphaProperty") {
+            candidate.alphaPropertyPresent = true;
             ParseAlphaProperty(prop, header.blockSizes[ref],
                                candidate.alphaBlend, candidate.alphaTest,
                                candidate.alphaThreshold,
@@ -1831,8 +1873,9 @@ bool LoadFo3StaticNifMeshes(const std::string& modelPath,
 
     Q970SceneStats q970Scene;
     std::vector<uint8_t> q970Renderable;
+    std::vector<uint32_t> q970Parents;
     const bool q970SelectionReady =
-        Q970BuildRenderableSet(nif, header, q970Renderable, q970Scene, includeHidden,includeEditor);
+        Q970BuildRenderableSet(nif, header, q970Renderable, q970Scene, includeHidden,includeEditor,&q970Parents);
     Q6H_LOGI("Q9.70 NIF SCENEGRAPH: model=%s nodes=%zu lodNodes=%zu switchNodes=%zu selectedShapes=%zu suppressedLodChildren=%zu hiddenNodes=%zu hiddenShapes=%zu unparentedShapes=%zu fallbackAll=%d forceLOD0=1",
              resolved.c_str(), q970Scene.parsedNodes, q970Scene.lodNodes,
              q970Scene.switchNodes, q970Scene.selectedShapes,
@@ -1879,6 +1922,11 @@ bool LoadFo3StaticNifMeshes(const std::string& modelPath,
             continue;
         }
 
+        InheritShapeProperties(nif,header,q970Parents,block,shape);
+        if(referenceRoot&&MaterialOnlyWorldShape(shape,header)){
+            Q6H_LOGI("WORLD NONSURFACE: model=%s block=%u materialOnly=1 geometryRetainedForCollision=1",resolved.c_str(),block);
+            continue;
+        }
         const bool directRootChild = haveRoot &&
             std::find(rootChildren.begin(), rootChildren.end(), block) != rootChildren.end();
         Fo3StaticNifMesh candidate;

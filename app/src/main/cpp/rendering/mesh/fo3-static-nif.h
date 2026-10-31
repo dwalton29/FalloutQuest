@@ -12,6 +12,7 @@ struct Fo3NifSkinBone {
 };
 
 struct Fo3StaticNifMesh {
+    bool alphaPropertyPresent = false;
     std::vector<float> positions;    // xyz in NIF model space after NIF transforms
     std::vector<float> normals;      // xyz
     std::vector<float> tangents;     // xyz

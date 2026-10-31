@@ -51,7 +51,7 @@ public:
     std::vector<uint32_t> RagdollActors()const;
     void Step(float seconds);
     bool CanExpandCapsule(const V& feet,float radius,float oldHeight,float newHeight)const;
-    bool SweepCapsule(const V& fromFeet,const V& toFeet,float radius,float height,V& resolved,V& normal)const;
+    bool SweepCapsule(const V& fromFeet,const V& toFeet,float radius,float height,V& resolved,V& normal,float minimumUpNormal=-1.f)const;
 };
 World& Live();
 bool Surface(const Asset& asset,const M& pose,const V& point,V& surface,V& normal,float& distance);

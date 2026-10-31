@@ -48,6 +48,11 @@ int main(){
     w.Pose(3,p);assert(p[13]>.005f&&p[13]<.04f);
     // Continuous capsule landing: a large downward motion cannot skip a floor.
     V resolved,n;assert(w.SweepCapsule({3,4,0},{3,-4,0},.25f,1.7f,resolved,n));
+    w.Static(103,{{{4,0,-2},{4,6,2},{4,6,-2}},{{4,0,-2},{4,0,2},{4,6,2}}});
+    V support,supportNormal;
+    assert(w.SweepCapsule({3,4,0},{5,-4,0},.25f,1.7f,support,supportNormal)&&supportNormal[1]<.1f);
+    assert(w.SweepCapsule({3,4,0},{5,-4,0},.25f,1.7f,support,supportNormal,.45f)&&supportNormal[1]>.99f&&support[1]<.02f);
+    w.RemoveStatic(103);
     assert(resolved[1]>=-.003f&&resolved[1]<.03f&&n[1]>.9f);
     // A held object remains blocked by the same world as a dropped one.
     w.Static(101,{{{.5f,0,-2},{.5f,3,2},{.5f,0,2}},{{.5f,0,-2},{.5f,3,-2},{.5f,3,2}}});

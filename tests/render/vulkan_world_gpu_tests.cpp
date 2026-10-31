@@ -598,6 +598,38 @@ void HeadlessSceneSubmission() {
     std::cout<<"Context-free scene submission: CPU handles, named uniforms, queued state snapshots, native original material output and zero GLES driver calls passed\n";
 }
 
+void NativeLodMaterials() {
+    const auto xr=reinterpret_cast<XrInstance>(uintptr_t(1));
+    const float identity[]{1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1},eye[]{0,0,2};
+    assert(fqvk::InitializeWorldProbe(xr,1,64,64));Scene(false);
+    auto& r=*fqvk::renderer;
+    const uint8_t base[]{128,192,255,255},normal[]{128,128,191,0};
+    fqvk::Texture(44,1,1,normal);fqvk::Texture(45,1,1,base);
+    Set(1,"uNoLighting",{0});Set(1,"uSpecularEnabled",{0});Set(1,"uTerrainLodModeQ2024",{1});
+    Set(1,"uSunDirection",{0,1,0});
+    for(bool generic:{false,true})for(bool night:{false,true}){
+        r.genericShaders=generic;
+        Set(1,"uAmbientColor",{.2f,.3f,.4f});Set(1,"uSunlightColor",{night?0.f:.5f,night?0.f:.4f,night?0.f:.3f});
+        assert(fqvk::BeginWorldProbe(identity,identity,eye,eye));
+        fqgl::state.texture2d[0].Change(45);fqgl::state.texture2d[1].Change(44);
+        Submit(1,9,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);fqvk::EndWorldProbe();
+        const auto pixels=r.Readback();const float ambient[]{.2f,.3f,.4f},sun[]{.5f,.4f,.3f};
+        // Original SLS2003: signed world-space normal, no normalization,
+        // live ambient/sun colour and one common vertex fog blend.
+        for(int e=0;e<2;++e)for(int c=0;c<3;++c)Near(Pixel(pixels,e,32,32,c),base[c]/255.f*(ambient[c]+(night?0.f:sun[c])*(2*191/255.f-1)));
+    }
+    // Native LOD cutouts must enter the guarded shader even with blending off.
+    const uint8_t hole[]{0,0,0,0};fqvk::Texture(46,1,1,hole);Set(1,"uAlphaTest",{1});Set(1,"uAlphaThreshold",{.5f});
+    for(bool generic:{false,true}){
+        r.genericShaders=generic;assert(fqvk::BeginWorldProbe(identity,identity,eye,eye));fqgl::state.texture2d[0].Change(46);
+        Submit(1,9,GL_TRIANGLES,0,6,GL_UNSIGNED_INT,0,1);fqvk::EndWorldProbe();const auto pixels=r.Readback();
+        for(int e=0;e<2;++e)for(int c=0;c<3;++c)Near(Pixel(pixels,e,32,32,c),0);
+        assert(r.guardedDraws==1&&r.solidDraws==0);
+    }
+    fqvk::ShutdownWorldProbe();
+    std::cout<<"Native LOD: live day/night lighting, original world-normal decode, stereo cutout coverage and generic/specialized parity passed\n";
+}
+
 void SolidMaterialParity() {
     const auto xr=reinterpret_cast<XrInstance>(uintptr_t(1));
     const float identity[]{1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1},eye[]{0,0,2};
@@ -1022,7 +1054,7 @@ int main() {
     for(auto format:{VK_FORMAT_R8G8B8A8_UNORM,VK_FORMAT_B8G8R8A8_UNORM,VK_FORMAT_B8G8R8A8_SRGB})HdrPresentation(format,false);
     HdrPresentation(VK_FORMAT_R8G8B8A8_UNORM,true);
     BufferedOwnership();DirectPresentation();EarlyAcquireFailure();TimingCapacity();
-    SolidMaterialParity();AsyncResources();HeadlessSceneSubmission();
+    NativeLodMaterials();SolidMaterialParity();AsyncResources();HeadlessSceneSubmission();
     GameplayPresentation(false);GameplayPresentation(true);
     for(bool asynchronous:{false,true}) {
     fqrender::nativeOnly=asynchronous;

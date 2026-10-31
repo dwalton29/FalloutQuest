@@ -2934,7 +2934,23 @@ bool ResolveFo3PlayerMotionWithGravity(float currentX,float currentZ,float desir
         // Retain support across submillimetre gravity steps; a short contact
         // probe must not turn a grounded character airborne every other frame.
         const float probeTarget=gFallGrounded?std::min(target,feet-.012f):target;
-        const bool hit=world.SweepCapsule({*outX,feet+.002f,*outZ},{*outX,probeTarget,*outZ},CollisionRadiusQ712(),PLAYER_HEIGHT,resolved,normal);
+        bool hit=world.SweepCapsule({*outX,feet+.002f,*outZ},{*outX,probeTarget,*outZ},CollisionRadiusQ712(),PLAYER_HEIGHT,resolved,normal,.45f);
+        // Horizontal stepping and gravity share the same authored geometry,
+        // but a thin/uneven facet can leave the next cast initially touching or
+        // overlapping it. Bullet does not guarantee a sweep hit from overlap.
+        // Search downward from above the step envelope only while supported;
+        // this is a probe, not a raised player pose or a ledge-height snap.
+        if(gFallGrounded&&(!hit||normal[1]<=.45f)){
+            fo3rigid::V support,supportNormal;
+            const float lift=StepHeightQ78B()+PLAYER_SKIN;
+            const bool supported=world.SweepCapsule({*outX,feet+lift,*outZ},{*outX,probeTarget,*outZ},CollisionRadiusQ712(),PLAYER_HEIGHT,support,supportNormal,.45f);
+            CapsuleHitQ910 ceiling;
+            if(supported&&supportNormal[1]>.45f&&support[1]>=probeTarget&&support[1]<=feet+lift&&
+               world.CanExpandCapsule({*outX,feet,*outZ},CollisionRadiusQ712(),PLAYER_HEIGHT,PLAYER_HEIGHT+std::max(0.f,support[1]-feet))&&
+               !UpperBlockedQ950(*outX,*outZ,support[1],0,0,ceiling)){
+                resolved=support;normal=supportNormal;hit=true;
+            }
+        }
         if(hit&&normal[1]>.45f){feet=resolved[1];gFallVelocity=0;gFallGrounded=true;}
         else {feet=target;gFallGrounded=false;}
         // The exact LAND surface is also a conservative recovery for an

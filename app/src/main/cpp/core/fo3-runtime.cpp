@@ -1,3 +1,4 @@
+#include "rendering/mesh/fo3-lod-material.h"
 #include "world/interaction/fo3-door-activation.h"
 #include "world/interaction/fo3-world-door-anchors.h"
 #include "npc/fo3-actor-clip-path.h"
@@ -1736,16 +1737,14 @@ GLuint CreateQ6HProgram() {
             vec3 q1630Sp17Lighting = max(
                 uAmbientColor + uSunlightColor * lambert, vec3(0.0));
 
-            // Q20.24: landscape LOD is not a static-object PPLighting material.
-            // Match the existing detailed LAND lighting until Fallout3.exe's
-            // dedicated landscape-LOD shader is recovered.
+            // Original SLS2003/2006: landscape-LOD normals are in game
+            // world axes, not this mesh's tangent frame. Decode without a
+            // second normalization; clamp the combined ambient + signed sun
+            // contribution, rather than clamping Lambert before ambient.
             if (uTerrainLodModeQ2024 > 0.5) {
-                vec3 q2024LandLight =
-                    normalize(vec3(0.35, 0.85, 0.40));
-                float q2024LandLambert =
-                    max(dot(N, q2024LandLight), 0.0);
-                q1630Sp17Lighting =
-                    vec3(0.48 + 0.52 * q2024LandLambert);
+                vec3 lodNormal = normalGloss.rgb * 2.0 - 1.0;
+                vec3 lodLight = vec3(lightDirection.x, -lightDirection.z, lightDirection.y);
+                q1630Sp17Lighting = max(uAmbientColor + uSunlightColor * dot(lodNormal,lodLight), vec3(0.0));
             }
 
             if (uInteriorMode != 0) {
@@ -2553,6 +2552,9 @@ bool UploadCpuObject(CpuObject& cpu, float centerX, float centerY, float floorZ,
     gpu.alphaDestBlend = cpu.mesh.alphaDestBlend;
     gpu.zBufferTestQ1200 = (cpu.mesh.shaderFlags1 & 0x80000000u) != 0u;
     gpu.zBufferWriteQ1200 = (cpu.mesh.shaderFlags2 & 0x00000001u) != 0u;
+    if(fo3lod::Surface(cpu.q237ImmutableNativeLod,cpu.mesh.shaderFlags2)){
+        gpu.zBufferTestQ1200=true;gpu.zBufferWriteQ1200=true;
+    }
     if (!gExteriorStreamingActiveQ1890) Q6H_LOGI("Q12.0 Z STATE: ref=%08X model=%s test=%d write=%d alphaBlend=%d flags1=%08X flags2=%08X",
              gpu.refFormId, cpu.placement.modelPath.c_str(),
              gpu.zBufferTestQ1200 ? 1 : 0, gpu.zBufferWriteQ1200 ? 1 : 0,
@@ -2885,6 +2887,13 @@ bool UploadCpuObject(CpuObject& cpu, float centerX, float centerY, float floorZ,
     const bool fullAlpha=std::any_of(imageCache.begin(),imageCache.end(),[&](const auto& entry){
         return entry.second.id==gpu.diffuse && entry.second.opaque;
     });
+    // Native object LOD carries its cutout atlas without NiAlphaProperty.
+    // Keep explicit authored alpha states; otherwise use the existing material
+    // cutoff (0.5 default) for the standalone cutout pass, not alpha blending.
+    if(fo3lod::Cutout(cpu.q237ImmutableNativeLod,cpu.mesh.shaderFlags2,
+                     cpu.mesh.alphaPropertyPresent,gpu.realDiffuse,fullAlpha)){
+        gpu.alphaTest=true;
+    }
     if(!gpu.nonvisualResident && fullAlpha && !gpu.alphaBlend && !gpu.alphaTest && !gpu.useVertexAlpha &&
        !gpu.noLightingFalloff && !gpu.decalQ1170 && gpu.zBufferWriteQ1200 &&
        gpu.zBufferTestQ1200 && !cpu.occluders.empty())
