@@ -2922,37 +2922,45 @@ bool ResolveFo3PlayerMotionWithGravity(float currentX,float currentZ,float desir
     if(!ResolveFo3PlayerMotionQ6G(currentX,currentZ,desiredX,desiredZ,currentY,outX,outZ,&planarY))return false;
     SynchronizeFo3RigidWorld(*outX,*outZ);
     if(arrival||!gSafeSpawnResolved){gFallVelocity=0;gFallGrounded=true;*outY=planarY;return true;}
-    float feet=gCollisionFloorY+currentY;
+    const float initialFeet=gCollisionFloorY+currentY;
+    float feet=initialFeet;
     // Only an already grounded character can step up; never snap down a ledge.
     if(gFallGrounded&&planarY>currentY&&planarY-currentY<=StepHeightQ78B()+.01f)feet=gCollisionFloorY+planarY;
     float remaining=std::clamp(seconds,0.f,.064f);
     auto& world=fo3rigid::Live();
+    const float radius=CollisionRadiusQ712(),minimumNormal=.45f;
+    const float moved=std::hypot(*outX-currentX,*outZ-currentZ);
+    // A supported capsule follows a walkable downhill slope rather than
+    // becoming airborne whenever descent exceeds the numerical contact skin.
+    const float slope=std::sqrt(1-minimumNormal*minimumNormal)/minimumNormal;
+    const float adhesion=std::min(StepHeightQ78B(),.012f+moved*slope);
+    const float stepCeiling=initialFeet+StepHeightQ78B()+PLAYER_SKIN;
+    float clearanceFeet=initialFeet;
     while(remaining>1e-6f){const float dt=std::min(remaining,1.f/120.f);remaining-=dt;
         gFallVelocity-=9.80665f*dt;
         fo3rigid::V resolved,normal;
         const float target=feet+gFallVelocity*dt;
-        // Retain support across submillimetre gravity steps; a short contact
-        // probe must not turn a grounded character airborne every other frame.
-        const float probeTarget=gFallGrounded?std::min(target,feet-.012f):target;
-        bool hit=world.SweepCapsule({*outX,feet+.002f,*outZ},{*outX,probeTarget,*outZ},CollisionRadiusQ712(),PLAYER_HEIGHT,resolved,normal,.45f);
-        // Horizontal stepping and gravity share the same authored geometry,
-        // but a thin/uneven facet can leave the next cast initially touching or
-        // overlapping it. Bullet does not guarantee a sweep hit from overlap.
-        // Search downward from above the step envelope only while supported;
-        // this is a probe, not a raised player pose or a ledge-height snap.
-        if(gFallGrounded&&(!hit||normal[1]<=.45f)){
-            fo3rigid::V support,supportNormal;
-            const float lift=StepHeightQ78B()+PLAYER_SKIN;
-            const bool supported=world.SweepCapsule({*outX,feet+lift,*outZ},{*outX,probeTarget,*outZ},CollisionRadiusQ712(),PLAYER_HEIGHT,support,supportNormal,.45f);
+        const bool supported=gFallGrounded;
+        const float probeTarget=supported?std::min(target,feet-adhesion):target;
+        // Search with the capsule's bottom sphere from above the step envelope.
+        // A full-height raised cast overlaps low ceilings; a cast starting at
+        // the feet can start inside the next sloped facet and select its bottom
+        // or an adjacent edge instead. Upper-body clearance is checked below.
+        const float from=supported?stepCeiling:feet+.002f;
+        const bool hit=world.SweepCapsule({*outX,from,*outZ},{*outX,probeTarget,*outZ},radius,
+            supported?2*radius:PLAYER_HEIGHT,resolved,normal,minimumNormal);
+        if(hit&&normal[1]>minimumNormal&&(!supported||resolved[1]<=stepCeiling)){
             CapsuleHitQ910 ceiling;
-            if(supported&&supportNormal[1]>.45f&&support[1]>=probeTarget&&support[1]<=feet+lift&&
-               world.CanExpandCapsule({*outX,feet,*outZ},CollisionRadiusQ712(),PLAYER_HEIGHT,PLAYER_HEIGHT+std::max(0.f,support[1]-feet))&&
-               !UpperBlockedQ950(*outX,*outZ,support[1],0,0,ceiling)){
-                resolved=support;normal=supportNormal;hit=true;
+            if(supported&&resolved[1]>clearanceFeet+PLAYER_SKIN&&(!world.CanExpandCapsule({*outX,clearanceFeet,*outZ},radius,PLAYER_HEIGHT,
+                    PLAYER_HEIGHT+std::max(0.f,resolved[1]-clearanceFeet))||
+                    UpperBlockedQ950(*outX,*outZ,resolved[1],0,0,ceiling))){
+                // The new support is real but cannot accommodate the body.
+                // Stop the horizontal move instead of proceeding underneath it.
+                *outX=currentX;*outZ=currentZ;feet=initialFeet;gFallVelocity=0;gFallGrounded=true;break;
             }
-        }
-        if(hit&&normal[1]>.45f){feet=resolved[1];gFallVelocity=0;gFallGrounded=true;}
-        else {feet=target;gFallGrounded=false;}
+            clearanceFeet=std::max(clearanceFeet,resolved[1]);
+            feet=resolved[1];gFallVelocity=0;gFallGrounded=true;
+        }else {feet=target;gFallGrounded=false;}
         // The exact LAND surface is also a conservative recovery for an
         // initial overlap or a cell arriving under an airborne capsule.
         float terrain=0;if(SampleFo3TerrainGroundQ77(*outX,*outZ,&terrain)&&feet<gCollisionFloorY+terrain){feet=gCollisionFloorY+terrain;gFallVelocity=0;gFallGrounded=true;}

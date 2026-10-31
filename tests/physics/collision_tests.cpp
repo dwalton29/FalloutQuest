@@ -236,6 +236,7 @@ static void FallingAndLandingQ263(){
 #include "walkway_tests.inc"
 
 int main(int argc,char**argv) {
+    if(argc==4&&std::string(argv[1])=="--walkway-scene"){OriginalPlacedWalkways(argv[2],argv[3]);return 0;}
     if(argc==3&&std::string(argv[1])=="--walkways"){OriginalMegatonWalkways(argv[2]);return 0;}
     if(argc==4&&std::string(argv[1])=="--stairs"){OriginalInteriorStairs(argv[2],argv[3]);return 0;}
     IndexedActorGroundParityQ226();

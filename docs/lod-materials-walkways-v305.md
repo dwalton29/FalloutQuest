@@ -36,3 +36,5 @@ Optional local originals:
 - `collision_tests --walkways <extracted architecture/megaton directory>`
 
 Headset: compare near/far hills in one stationary view and again at a different time of day; inspect mast openings against the sky; walk around the Mart and view it through surrounding objects; traverse the Megaton scrap plates/ramp joins in both directions, stop on joins, crouch, leave/re-enter and check a real ledge still falls. The exact reported Mart draw and all live walkway placements still require this physical check.
+
+The broader placed-scene fixture subsequently exposed remaining walkway cases; v306 refines the support query. See placed-walkway-support-v306.md for the final solver and expanded verification.
