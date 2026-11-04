@@ -21,7 +21,7 @@ bool RequestFo3MapTravel(uint32_t marker,double now){
     if(player.Snapshot().actorAIValues.count((uint64_t(actor.source.refFormId)<<32)|57u)&&player.ActorAIValue(actor.source.refFormId,57,scriptedAI))ai.assistance=uint8_t(scriptedAI);
     const auto saved=player.Snapshot().actors.find(actor.source.refFormId);
     const bool hostile=(saved!=player.Snapshot().actors.end()&&saved->second.hostile==fo3player::PlayerRef)||
-      fo3npc::Acquires(ai,fo3npc::Relationship(player.Definitions(),actor.source.baseFormId,fo3player::PlayerBase,{},{},&player.Snapshot().factionRelations));
+      fo3npc::Acquires(ai,fo3npc::Relationship(player,actor.source.refFormId,fo3player::PlayerRef));
     const auto& pos=actor.runtime.position;
     const float distance=Q211Length({pos[0]-gQ210Head[0],pos[1]-gQ210Head[1],pos[2]-gQ210Head[2]})*FO3_UNITS_PER_METRE;
     if(hostile&&distance<nearDistance)return reject("sNoFastTravelHostileActorsNear");

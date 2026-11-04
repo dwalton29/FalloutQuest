@@ -97,6 +97,23 @@ static void OriginalCombatPolicies(const char* path) {
     assert(asset!=catalog.pipboy.idleModels.end()&&!asset->second.empty());
   }
   assert(defensive==161&&overrides==17);std::cout<<"Original Defensive packages="<<defensive<<" CNAM combat styles="<<overrides<<'\n';
+  // Drive the original ambush trigger/timer, then exercise production enemy
+  // acquisition with its resulting memberships. Positions/eyes are the same
+  // explicit recording fixtures used by the other combat-runtime tests.
+  auto& player=gPlayerSession->player;player.RegisterOriginalActors();
+  uint32_t trigger=0;const auto script=catalog.pipboy.formNames.at("mq01cityambushscript");
+  for(const auto& ref:catalog.references){const auto owner=catalog.eventBaseScripts.find(ref.second.base);if(owner!=catalog.eventBaseScripts.end()&&owner->second==script)trigger=ref.first;}
+  assert(trigger);assert(player.DispatchReferenceEvent(trigger,"OnTriggerEnter",fo3player::PlayerRef,error)==fo3player::ScriptEventResult::Executed);
+  for(int i=0;i<24;++i)player.PumpReferenceGameMode(.25,{trigger});
+  const auto sarah=catalog.pipboy.formNames.at("mq01sarahref"),mutant=catalog.pipboy.formNames.at("mq01citysupermutant01ref");
+  gQ230NpcActors.clear();
+  for(uint32_t ref:{sarah,mutant}){Q230ActorVisual live;live.source.refFormId=ref;live.source.baseFormId=catalog.pipboy.targets.at(ref).base;live.stateRestored=true;live.runtime.position={ref==sarah?0.f:1.f,0,0};gQ230NpcActors.push_back(std::move(live));}
+  const auto savedHead=gQ210Head;gQ210Head={100,0,100};blocked=false;blockSecondSightRay=false;partialCover=false;
+  Q230SimulateActor(gQ230NpcActors[0],10);
+  assert(gQ230NpcActors[0].runtime.combatTarget==mutant);
+  gQ210Head=savedHead;gQ230NpcActors.clear();
+  std::cout<<"Original ambush script faction changes feed production NPC combat target acquisition\n";
+
 }
 static void WeaponCommitAndMeleeTests(){
   Prepare();auto& actor=gQ230NpcActors[0];auto c=gPlayerSession->player.Definitions();

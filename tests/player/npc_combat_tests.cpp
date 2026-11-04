@@ -1,6 +1,7 @@
 #include "npc/fo3-npc-combat.h"
 #include "npc/fo3-npc-combat-assets.h"
 #include "weapons/fo3-weapon-hit.h"
+#include "dialogue/fo3-dialogue-conditions.h"
 #include <cassert>
 #include <cstring>
 #include <iostream>
@@ -20,6 +21,36 @@ static Catalog Fixture(bool finite=true) {
     auto& actor=c.pipboy.dialogueActors[ref+100];actor.aiData.resize(20);actor.aiData[0]=1;actor.aiData[1]=3;actor.aiData[14]=1;actor.factions[500+ref]=0;
   }
   c.pipboy.packages[77].type=6;c.weapons.relations[600][601]=1;return c;
+}
+static void ScriptedMemberships(){
+  using namespace fo3npc;auto c=Fixture();
+  for(uint32_t ref:{100,101}){c.actorPlacements[ref].base=ref+100;c.actorPlacements[ref].cell=1;}
+  c.pipboy.dialogueActors[PlayerBase].factions[600]=0;
+  for(uint32_t faction:{600,601,602})c.factionFlags[faction]=0;
+  c.weapons.relations[602][601]=1;c.pipboy.dialogueActors[200].factions.clear();
+  c.pipboy.formNames["soldier"]=100;c.pipboy.formNames["battlefaction"]=602;
+  c.references[90].valid=true;c.references[90].ownership={602,0,0,true,true};
+  Player p(c);std::string error;fo3pipdata::ResultScript script;
+  script.source="soldier.AddToFaction BattleFaction 0";
+  assert(Relationship(p,100,101)==Reaction::Neutral);
+  assert(p.PreviewDialogueResult(script,error)&&p.ActorFactionRank(100,602)==-1);
+  assert(p.ExecuteDialogueResult(script,error)&&p.ActorFactionRank(100,602)==0);
+  assert(Relationship(p,100,101)==Reaction::Enemy&&Acquires(AI(c.pipboy,200),Relationship(p,100,101)));
+  assert(p.ActorFactionRank(101,602)==-1&&c.pipboy.dialogueActors.at(200).factions.empty());
+  script.source="if soldier.GetInFaction BattleFaction && soldier.GetFactionRank BattleFaction == 0\nRewardKarma 1\nendif";
+  assert(p.ExecuteDialogueResult(script,error)&&p.Snapshot().karma==1);
+  fo3dialogue::Context context;context.player=&p;context.speaker.reference=100;context.speaker.base=200;
+  fo3pipdata::Condition condition;condition.function=71;condition.a=602;condition.value=1;
+  assert(fo3dialogue::Conditions({condition},context,error));
+  assert(!p.ResolveOwnership(90).permitted);
+  script.source="player.addfac BattleFaction 1";assert(p.ExecuteDialogueResult(script,error)&&p.ResolveOwnership(90).permitted);
+  auto file="/tmp/fq-memberships-"+std::to_string(getpid());assert(p.Save(file,error));Player restored(c);assert(restored.Restore(file,error));
+  assert(restored.ActorFactionRank(100,602)==0&&restored.ResolveOwnership(90).permitted&&Relationship(restored,100,101)==Reaction::Enemy);
+  script.source="soldier.RemoveFromFaction BattleFaction";assert(restored.ExecuteDialogueResult(script,error));
+  assert(Relationship(restored,100,101)==Reaction::Neutral&&restored.ActorFactions(100)->empty());
+  assert(restored.Save(file,error));Player empty(c);assert(empty.Restore(file,error)&&empty.ActorFactions(100)->empty());unlink(file.c_str());
+  const auto revision=empty.Revision();script.source="soldier.addfac BattleFaction 0\nUnsupportedEffect";
+  assert(!empty.ExecuteDialogueResult(script,error)&&empty.Revision()==revision&&empty.ActorFactionRank(100,602)==-1);
 }
 static void CorpsePersistence(){
  auto c=Fixture();Player player(c);ActorState state;state.cell=1;state.position={100,200,300};assert(player.UpdateActor(100,state));
@@ -288,4 +319,4 @@ static void Original(const char* path) {
     assert(fo3npc::AI(c.pipboy,r.second.base,[&](uint32_t list){return p.ActorTemplate(r.first,list);}).valid);++count;
   }assert(count==5);
 }
-int main(int argc,char** argv){CorpsePersistence();ScriptedRelationsAndEssential();ScriptedNotes();ScriptPlacementsSurviveFinalization();ScriptedActorMovement();StyleDecodeValidation();SourceContext();StateAndPerception();CombatAssetCandidates();InventoryDamagePersistence(true);InventoryDamagePersistence(false);if(argc>1)Original(argv[1]);std::cout<<"NPC combat state tests passed\n";}
+int main(int argc,char** argv){ScriptedMemberships();CorpsePersistence();ScriptedRelationsAndEssential();ScriptedNotes();ScriptPlacementsSurviveFinalization();ScriptedActorMovement();StyleDecodeValidation();SourceContext();StateAndPerception();CombatAssetCandidates();InventoryDamagePersistence(true);InventoryDamagePersistence(false);if(argc>1)Original(argv[1]);std::cout<<"NPC combat state tests passed\n";}

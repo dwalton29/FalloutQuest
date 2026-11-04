@@ -34,8 +34,8 @@ OwnershipResult Player::ResolveOwnership(uint32_t id,const OwnershipData* item) 
   const auto faction=catalog_->factionFlags.find(owner);
   if(faction!=catalog_->factionFlags.end()) {
     out.kind=OwnershipKind::Faction;
-    const auto* pc=OwnershipActor(*catalog_,PlayerBase,2);
-    if(pc){const auto rank=pc->factions.find(owner);out.permitted=rank!=pc->factions.end()&&rank->second>=0&&rank->second>=out.data.rank;}
+    const int rank=ActorFactionRank(PlayerRef,owner);
+    out.permitted=rank>=0&&rank>=out.data.rank;
     // Fallout3.exe 0x7F6707..0x7F678F tests Evil independently of
     // witness lookup/Track Crime; moral consequences do not need a witness.
     out.karmaEligible=!out.permitted&&!(faction->second&2);

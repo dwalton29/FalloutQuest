@@ -290,7 +290,7 @@ static bool Q230TacticalRoute(Q230ActorVisual& actor,const std::array<float,3>& 
     // Source assistance/relations permit retreat towards real living allies.
     if(escape)for(const auto& ally:gQ230NpcActors){
       if(ally.source.refFormId==actor.source.refFormId||ally.runtime.offScene||!ally.runtime.Alive())continue;
-      if(fo3npc::Relationship(catalog,actor.source.baseFormId,ally.source.baseFormId,[&](uint32_t l){return gPlayerSession->player.ActorTemplate(actor.source.refFormId,l);},[&](uint32_t l){return gPlayerSession->player.ActorTemplate(ally.source.refFormId,l);},&gPlayerSession->player.Snapshot().factionRelations)!=fo3npc::Reaction::Ally)continue;
+      if(fo3npc::Relationship(gPlayerSession->player,actor.source.refFormId,ally.source.refFormId)!=fo3npc::Reaction::Ally)continue;
       const float d=Q240PlanarDistance(point,Q240GamePosition(ally));
       const float maximumAlly=fo3npc::CombatSetting(catalog,"fCombatFleeMaxAllyDistance");
       const float minimumAlly=fo3npc::CombatSetting(catalog,"fCombatFleeMinAllyDistance");
@@ -391,7 +391,7 @@ static void Q230SimulateActor(Q230ActorVisual& actor,double now) {
     const auto saved=p.Snapshot().actors.find(actor.source.refFormId);
 #if !defined(FO3_NPC_COMBAT_HOST_TEST) || defined(FO3_NPC_DETECTION_HOST_TEST)
     const bool enemyPlayer=(saved!=p.Snapshot().actors.end()&&saved->second.hostile==0x14)||
-        (defensive?Q230DefendsLeader(actor,policy,0x14):fo3npc::Acquires(ai,fo3npc::Relationship(c,actor.source.baseFormId,7,[&](uint32_t l){return p.ActorTemplate(actor.source.refFormId,l);},{},&p.Snapshot().factionRelations)));
+        (defensive?Q230DefendsLeader(actor,policy,0x14):fo3npc::Acquires(ai,fo3npc::Relationship(p,actor.source.refFormId,0x14)));
     Q230ObservePlayer(actor,enemyPlayer,now);
 #endif
     if(saved!=p.Snapshot().actors.end()&&saved->second.hostile&&Q230Target(saved->second.hostile,point,base))acquire=saved->second.hostile;
@@ -405,8 +405,8 @@ static void Q230SimulateActor(Q230ActorVisual& actor,double now) {
 #endif
       auto candidate=[&](uint32_t ref){
         if(ref==actor.source.refFormId||!Q230Target(ref,point,base))return;
-        bool hostile=defensive?Q230DefendsLeader(actor,policy,ref):fo3npc::Acquires(ai,fo3npc::Relationship(c,actor.source.baseFormId,base,[&](uint32_t l){return p.ActorTemplate(actor.source.refFormId,l);},[&](uint32_t l){return p.ActorTemplate(ref,l);},&p.Snapshot().factionRelations));
-        if(!defensive&&!hostile&&ref!=0x14){for(const auto& ally:gQ230NpcActors)if(ally.runtime.combatTarget==ref&&fo3npc::Assists(ai,fo3npc::Relationship(c,actor.source.baseFormId,ally.source.baseFormId,[&](uint32_t l){return p.ActorTemplate(actor.source.refFormId,l);},[&](uint32_t l){return p.ActorTemplate(ally.source.refFormId,l);},&p.Snapshot().factionRelations)))hostile=true;}
+        bool hostile=defensive?Q230DefendsLeader(actor,policy,ref):fo3npc::Acquires(ai,fo3npc::Relationship(p,actor.source.refFormId,ref));
+        if(!defensive&&!hostile&&ref!=0x14){for(const auto& ally:gQ230NpcActors)if(ally.runtime.combatTarget==ref&&fo3npc::Assists(ai,fo3npc::Relationship(p,actor.source.refFormId,ally.source.refFormId)))hostile=true;}
         const float dx=point[0]-s.position[0],dy=point[1]-s.position[1],dz=point[2]-s.position[2];
         const float range=std::sqrt(dx*dx+dy*dy+dz*dz)*FO3_UNITS_PER_METRE;
         bool perceived;
@@ -421,7 +421,7 @@ static void Q230SimulateActor(Q230ActorVisual& actor,double now) {
       candidate(0x14);for(const auto& other:gQ230NpcActors)candidate(other.source.refFormId);
     }
     if(acquire&&acquire!=s.combatTarget){
-      if(policy&&s.activity!=fo3npc::Activity::Combat&&!s.dialogue)Q240AdoptPackage(actor,policyId,*policy,policyAnchor);
+      if(policy&&s.activity!=fo3npc::Activity::Combat&&!s.dialogue&&!Q240AdoptPackage(actor,policyId,*policy,policyAnchor))return;
       if(s.dialogue)EndFo3Dialogue("combat threat");
       if(s.activity!=fo3npc::Activity::Combat)Q240SuspendPackageWait(actor,now);
       s.BeginCombat(acquire);s.lastSeen=now;s.nextPath=0;actor.aiPathGame.clear();actor.aiPathSurfaces.clear();actor.aiPathIndex=0;s.navigationDoor=0;

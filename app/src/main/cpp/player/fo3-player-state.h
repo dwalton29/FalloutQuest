@@ -199,6 +199,12 @@ struct State {
   std::unordered_map<uint32_t,LockOverride> locks;
   std::unordered_map<uint32_t,std::array<float,10>> actorVariables;
   std::unordered_map<uint64_t,uint8_t> factionRelations;
+  // Effective reference memberships, copied from the resolved Factions template
+  // on first edit. An empty map records removal of every original membership.
+  std::unordered_map<uint32_t,std::unordered_map<uint32_t,int8_t>> actorFactions;
+  // Last adopted package and whether its real procedure completed. Keeps actor
+  // OnPackage callbacks one-shot across scene retirement and save/reload.
+  std::unordered_map<uint32_t,std::pair<uint32_t,bool>> actorPackageEvents;
   std::unordered_map<uint32_t,bool> essentialFlags;
   std::unordered_map<uint64_t,float> dailySaidInfos;
   std::unordered_map<uint32_t,std::vector<uint32_t>> scriptPackages;
@@ -308,7 +314,7 @@ enum class DialogueScriptPhase : uint8_t {Begin,End,Both};
 enum class ScriptProgramCapture : uint8_t {None,EnteredPrograms};
 struct ScriptProgramOrigin {
   ScriptProgramKind kind=ScriptProgramKind::UnboundResult;
-  uint32_t record=0,item=0,sourceLine=0,topic=0;
+  uint32_t record=0,item=0,sourceLine=0,topic=0,filterForm=0;
   uint16_t stage=0;
   std::string event;
 };
@@ -467,6 +473,10 @@ public:
       uint32_t quest,uint16_t stage,std::string& error,ScriptProgramCapture capture=ScriptProgramCapture::None) const;
   std::unique_ptr<ScriptTransactionPlan> PrepareReferenceEventTransaction(
       uint32_t reference,const char* event,uint32_t activator,std::string& error,
+      ScriptProgramCapture capture=ScriptProgramCapture::None,uint32_t filterForm=0) const;
+  bool PackageEventNeeded(uint32_t reference,uint32_t package,bool completed) const;
+  std::unique_ptr<ScriptTransactionPlan> PreparePackageEventTransaction(
+      uint32_t reference,uint32_t package,bool completed,std::string& error,
       ScriptProgramCapture capture=ScriptProgramCapture::None) const;
   bool CanCommitScriptTransaction(const ScriptTransactionPlan& plan) const noexcept;
   bool CanRollbackScriptTransaction(const ScriptTransactionPlan& plan) const noexcept;
@@ -477,7 +487,7 @@ public:
   // Event scripts dispatch through the same bounded transactional interpreter.
   // A rejected event does not roll back the preceding physical hit/activation.
   ScriptEventResult DispatchReferenceEvent(uint32_t reference,const char* event,
-                                            uint32_t activator,std::string& error);
+                                            uint32_t activator,std::string& error,uint32_t filterForm=0);
   bool HasReferenceEvent(uint32_t reference,const char* event) const;
   void PumpQuestGameMode(double realSeconds);
   void PumpReferenceGameMode(double realSeconds,const std::vector<uint32_t>& resident);
@@ -598,6 +608,9 @@ public:
   float ActorHealth(uint32_t reference) const;
   bool ResetActorHealth(uint32_t reference);
   bool SetFactionRelation(uint32_t from,uint32_t to,bool ally,bool firstFlag=false,bool secondFlag=false);
+  const std::unordered_map<uint32_t,int8_t>* ActorFactions(uint32_t reference) const;
+  int ActorFactionRank(uint32_t reference,uint32_t faction) const;
+  bool SetActorFactionRank(uint32_t reference,uint32_t faction,int rank,bool remove=false);
   bool SetEssential(uint32_t actorBase,bool essential);
   bool SetQuestScriptDelay(uint32_t quest,float delay);
   float QuestScriptDelay(uint32_t quest) const;
@@ -695,7 +708,7 @@ private:
   void SwapScriptPayload(Player& other) noexcept;
   bool ScriptPlanContextMatches(const ScriptTransactionPlan& plan) const noexcept;
   bool RunSourceEventDirect(uint32_t scriptId,const char* event,uint32_t owner,
-                            uint32_t activator,std::string& error);
+                            uint32_t activator,std::string& error,uint32_t filterForm=0);
   bool CanOpenDoorImpl(uint32_t actor,uint32_t reference,bool sourceDelegated) const;
   bool ReferenceDisabledWith(const std::unordered_map<uint32_t,bool>& roots,
                             uint32_t reference,bool& disabled,std::string& error) const;
@@ -706,7 +719,7 @@ private:
   std::shared_ptr<const uint8_t> referencePlanIdentity_=std::make_shared<const uint8_t>(0);
   void CommitTheft(uint32_t reference,uint32_t item,int32_t count,uint32_t container,const OwnershipResult& ownership);
   bool RunSourceEvent(uint32_t scriptId,const char* event,uint32_t owner,
-                      uint32_t activator,std::string& error);
+                      uint32_t activator,std::string& error,uint32_t filterForm=0);
   void LogScriptEventError(uint32_t scriptId,const char* event,const std::string& error);
   bool PrepareInventory(uint32_t reference,bool actor);
   bool ExpandLoot(const std::vector<LootEntry>& entries,uint32_t seed,

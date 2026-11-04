@@ -56,6 +56,15 @@ static void Dispatch() {
   p.PumpQuestGameMode(0.10);p.PumpQuestGameMode(0.16);
   assert(p.Snapshot().pipboy.quests.at(20).stage==10);
 }
+static void WeaponFilteredHit(){
+  auto c=Catalog();c.items[40].formId=40;c.items[40].kind=fo3player::ItemKind::Weapon;c.items[40].weapon.valid=true;
+  c.items[41]=c.items[40];c.items[41].formId=41;c.pipboy.formNames["specialweapon"]=40;
+  c.pipboy.targets[100].base=30;c.weapons.actors[30].health=100;
+  c.pipboy.scripts[102].source="scn NPC\nBegin OnHit Player\nRewardKarma 1\nEnd\nBegin OnHitWith SpecialWeapon\nif IsActionRef Player\nRewardKarma 10\nendif\nEnd";
+  c.eventPrograms[102]=fo3script::ParseEvents(c.pipboy.scripts[102]);fo3player::Player p(c);
+  assert(p.ApplyAttack(fo3player::PlayerRef,41,100,1)&&p.Snapshot().karma==1);
+  assert(p.ApplyAttack(fo3player::PlayerRef,40,100,1)&&p.Snapshot().karma==12&&p.ActorHealth(100)==98);
+}
 static void QuestCadence(){
   auto c=Catalog();c.pipboy.quests[20].scriptDelay=5;
   auto& script=c.pipboy.scripts[101];script.variables[1]="ticks";script.variables[2]="elapsed";
@@ -621,7 +630,7 @@ static void CompiledProgramsRemainLive() {
 }
 int main(int argc,char** argv){
   CompiledProgramsRemainLive();
-  Parsing();QuestCadence();UnenteredCommands();EnableParentQueries();PersistentReferenceState();Dispatch();UnsupportedIsAtomic();Filter();NumericLocalsAndRefSafety();BombMenuAndInventory();WorldAwareGameMode();DisarmStagePersistence();NoticeTransactions();
+  Parsing();WeaponFilteredHit();QuestCadence();UnenteredCommands();EnableParentQueries();PersistentReferenceState();Dispatch();UnsupportedIsAtomic();Filter();NumericLocalsAndRefSafety();BombMenuAndInventory();WorldAwareGameMode();DisarmStagePersistence();NoticeTransactions();
   if(argc>1)OriginalBomb(argv[1]);
   if(argc>2)OriginalCompileInventory(argv[1],argv[2]);
   std::cout<<"Original event source indexing, dispatch, scheduler and rollback passed\n";

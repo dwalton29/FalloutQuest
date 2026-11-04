@@ -223,6 +223,15 @@ bool CompileResult(const fo3pipdata::Definitions& d,const fo3pipdata::ResultScri
       // ESM SCTX uses CRLF: a bare ShowMessage leaves a trailing CR.
       // It is whitespace, not a formatting argument/expression.
       cmd.expression=fo3script::Trim(cmd.expression);
+    } else if([&]{const auto dot=op.find('.');const auto name=op.substr(dot==std::string::npos?0:dot+1);
+        return name=="addtofaction"||name=="addfac"||name=="setfactionrank"||name=="removefromfaction"||name=="removefac";}()) {
+      const auto dot=op.find('.');const auto name=op.substr(dot==std::string::npos?0:dot+1);
+      cmd.type=CommandType::FactionMembership;cmd.form=dot==std::string::npos?owner:form(op.substr(0,dot));
+      cmd.variable=(name=="removefromfaction"||name=="removefac")?1:0;
+      if(!cmd.form||!(in>>a)||!(cmd.index=form(a))){error="invalid faction membership";return false;}
+      if(!cmd.variable&&(!(in>>b)||!number(b,cmd.value)||std::floor(cmd.value)!=cmd.value||cmd.value<-1||cmd.value>127)){
+        error="invalid faction rank";return false;
+      }
     } else if(op=="setenemy"||op=="setally") {
       cmd.type=CommandType::FactionRelation;cmd.value=op=="setally"?1:0;
       if(!(in>>a>>b)||!(cmd.form=form(a))||!(cmd.index=form(b))){error="invalid faction relation";return false;}

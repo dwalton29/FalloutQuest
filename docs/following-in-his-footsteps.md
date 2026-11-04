@@ -211,3 +211,14 @@ default activation per press, and no unnecessary resident reservations.
 The progression test starts MQ01 through the menu model, checks its original
 objective, rejects replay, then follows both tested dialogue outcomes.
 Physical headset transition and access verification remains separate.
+
+## Main-quest event checkpoint (v307)
+
+See [main-quest-events-v307.md](main-quest-events-v307.md). Original ambush trigger,
+local timer and MQ01LD stage-50 faction changes now execute, including a mid-timer
+save/reload. Actor SCPT package callbacks are connected to supported procedures,
+with persistent delivery guards. An isolated original Colvin NAVM arrival advances
+MQ01 75 / MQ01LD 70. Weapon-filtered OnHitWith receives the weapon independently
+of the attacker. These address the faction/event dependencies above; typed scene
+references, scripted weapon use, positional/explosion/destruction effects and
+complete world traversal remain outstanding.

@@ -16,12 +16,10 @@ inline AiData AI(const fo3pipdata::Definitions& d,uint32_t base,const std::funct
 }
 // Explicit FACT XNAM combat reactions; disposition alone is not hostility.
 enum class Reaction { Neutral, Enemy, Ally, Friend };
-inline Reaction Relationship(const fo3player::Catalog& c,uint32_t a,uint32_t b,const std::function<uint32_t(uint32_t)>& selectA={},const std::function<uint32_t(uint32_t)>& selectB={},const std::unordered_map<uint64_t,uint8_t>* overrides=nullptr){
-  const auto* x=fo3pipdata::ActorCategory(c.pipboy,a,4,selectA);
-  const auto* y=fo3pipdata::ActorCategory(c.pipboy,b,4,selectB);
+inline Reaction FactionRelationship(const fo3player::Catalog& c,const std::unordered_map<uint32_t,int8_t>* x,const std::unordered_map<uint32_t,int8_t>* y,const std::unordered_map<uint64_t,uint8_t>* overrides){
   if(!x||!y)return Reaction::Neutral;
   Reaction result=Reaction::Neutral;
-  for(const auto& from:x->factions)if(from.second>=0)for(const auto& to:y->factions)if(to.second>=0){
+  for(const auto& from:*x)if(from.second>=0)for(const auto& to:*y)if(to.second>=0){
     uint8_t relation=from.first==to.first?2:0;
     const auto f=c.weapons.relations.find(from.first);
     if(f!=c.weapons.relations.end()){const auto r=f->second.find(to.first);if(r!=f->second.end())relation=r->second;}
@@ -31,6 +29,16 @@ inline Reaction Relationship(const fo3player::Catalog& c,uint32_t a,uint32_t b,c
     if(relation==3&&result==Reaction::Neutral)result=Reaction::Friend;
   }
   return result;
+}
+inline Reaction Relationship(const fo3player::Catalog& c,uint32_t a,uint32_t b,const std::function<uint32_t(uint32_t)>& selectA={},const std::function<uint32_t(uint32_t)>& selectB={},const std::unordered_map<uint64_t,uint8_t>* overrides=nullptr){
+  const auto* x=fo3pipdata::ActorCategory(c.pipboy,a,4,selectA);
+  const auto* y=fo3pipdata::ActorCategory(c.pipboy,b,4,selectB);
+  return FactionRelationship(c,x?&x->factions:nullptr,y?&y->factions:nullptr,overrides);
+}
+// Live references consume the same saved memberships as conditions and ownership.
+// No per-pair map copy or base-record mutation on the combat thread.
+inline Reaction Relationship(const fo3player::Player& player,uint32_t a,uint32_t b){
+  return FactionRelationship(player.Definitions(),player.ActorFactions(a),player.ActorFactions(b),&player.Snapshot().factionRelations);
 }
 inline bool Acquires(const AiData& a,Reaction reaction){
   return a.valid&&(a.aggression==3||(a.aggression>=1&&reaction==Reaction::Enemy)||

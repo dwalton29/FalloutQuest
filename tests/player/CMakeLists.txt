@@ -439,3 +439,12 @@ target_compile_options(npc_detection_runtime_tests PRIVATE -UNDEBUG -Wall -Wextr
 target_include_directories(npc_detection_runtime_tests PRIVATE ../nif ../../app/src/main/cpp ../../app/src/main/cpp/data)
 target_link_libraries(npc_detection_runtime_tests PRIVATE ZLIB::ZLIB)
 add_test(NAME npc_detection_runtime_tests COMMAND npc_detection_runtime_tests)
+
+add_executable(mq01_scene_tests mq01_scene_tests.cpp ${dialogue_shared}
+    ../../app/src/main/cpp/scripting/fo3-script-master-match.cpp)
+target_compile_features(mq01_scene_tests PRIVATE cxx_std_17)
+target_compile_options(mq01_scene_tests PRIVATE -UNDEBUG -Wall -Wextra -Werror -Wno-misleading-indentation)
+target_include_directories(mq01_scene_tests PRIVATE ../../app/src/main/cpp)
+target_link_libraries(mq01_scene_tests PRIVATE ZLIB::ZLIB)
+add_test(NAME mq01_scene_tests COMMAND mq01_scene_tests)
+set_tests_properties(mq01_scene_tests PROPERTIES SKIP_RETURN_CODE 77)

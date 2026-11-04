@@ -22,7 +22,7 @@ class Expression {
       const auto dot=t.find('.');const auto query=dot==std::string::npos?t:t.substr(dot+1);
       size_t arguments=0;
       if(query=="getstage"||query=="getquestrunning"||query=="isactionref"||query=="getav"||
-         query=="getitemcount"||query=="getinsamecell"||query=="getincell"||query=="getdistance")arguments=1;
+         query=="getitemcount"||query=="getinsamecell"||query=="getincell"||query=="getdistance"||query=="getinfaction"||query=="getfactionrank")arguments=1;
       if(query=="getstagedone"||query=="getobjectivedisplayed"||query=="getobjectivecompleted")arguments=2;
       for(size_t n=0;n<arguments;++n){
         if(at==tokens.size()||tokens[at]=="("||tokens[at]==")"||tokens[at]=="&&"||tokens[at]=="||"||tokens[at]=="==")return Fail("missing expression query argument");
@@ -60,6 +60,13 @@ class Expression {
       value=p.ItemCount(id);return true;
     }
     const auto dot=t.find('.');const auto query=dot==std::string::npos?t:t.substr(dot+1);
+    if(query=="getinfaction"||query=="getfactionrank"){
+      const auto id=dot==std::string::npos?owner:form(t.substr(0,dot));
+      if(at==tokens.size())return Fail("missing faction query");
+      const auto faction=form(tokens[at++]);
+      if(!p.ActorFactions(id)||!p.Definitions().factionFlags.count(faction))return Fail("invalid faction query");
+      const int rank=p.ActorFactionRank(id,faction);value=query=="getinfaction"?float(rank>=0):float(rank);return true;
+    }
     if(query=="getinsamecell") {
       if(at==tokens.size()||tokens[at++]!="player")return Fail("unsupported GetInSameCell target");
       const auto id=dot==std::string::npos?owner:form(t.substr(0,dot));bool same=false;
@@ -442,6 +449,7 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
     case C::SetActorAIValue:ok=SetActorAIValue(c.form,c.index,c.value);break;
     case C::SetQuestDelay:ok=SetQuestScriptDelay(c.form,c.value);break;
     case C::FactionRelation:ok=SetFactionRelation(c.form,c.index,c.value!=0,(c.variable&1)!=0,(c.variable&2)!=0);break;
+    case C::FactionMembership:ok=SetActorFactionRank(c.form,c.index,int(c.value),c.variable!=0);break;
     case C::SetEssential:ok=SetEssential(c.form,c.value!=0);break;
     case C::SetActorValue:ok=SetActorVariable(c.form,c.index,c.value);break;
     case C::Look:{fo3pipdata::Location location;ok=ScriptReferenceLocation(c.form,location)&&(!c.index||ScriptReferenceLocation(c.index,location));if(ok){fo3script::Action action;action.kind=fo3script::ActionKind::Look;action.reference=c.form;action.form=c.index;ok=QueueScriptAction(std::move(action));}break;}
@@ -538,9 +546,9 @@ void Player::LogScriptEventError(uint32_t scriptId,const char* event,const std::
     eventDiagnostic_("SCPT "+std::to_string(scriptId)+" event="+(event?event:"")+" rejected: "+error);
 }
 bool Player::RunSourceEvent(uint32_t scriptId,const char* event,uint32_t owner,
-                            uint32_t activator,std::string& error) {
+                            uint32_t activator,std::string& error,uint32_t filterForm) {
   auto plan=PrepareScriptTransaction([=](Player& candidate,std::string& e){
-    return candidate.RunSourceEventDirect(scriptId,event,owner,activator,e);
+    return candidate.RunSourceEventDirect(scriptId,event,owner,activator,e,filterForm);
   },error);
   if(!plan)return false;
   if(plan->HasReferenceChanges()){error="world mutation requires resident coordinator";return false;}
@@ -548,7 +556,7 @@ bool Player::RunSourceEvent(uint32_t scriptId,const char* event,uint32_t owner,
   error="event transaction changed before publication";return false;
 }
 bool Player::RunSourceEventDirect(uint32_t scriptId,const char* event,uint32_t owner,
-                            uint32_t activator,std::string& error) {
+                            uint32_t activator,std::string& error,uint32_t filterForm) {
   error.clear();
   const auto def=catalog_->eventPrograms.find(scriptId);
   if(def==catalog_->eventPrograms.end()) {error="script definition unavailable";return false;}
@@ -562,17 +570,18 @@ bool Player::RunSourceEventDirect(uint32_t scriptId,const char* event,uint32_t o
   unsigned budget=4096;
   for(const auto& block:program.blocks){
     if(block.event!=fo3script::Lower(event))continue;
-    // A filtered event must not execute without a correctly resolved actor.
-    // Other filter forms need their original reference/context evaluator.
+    // Event matching identity can be a weapon/package/topic, independently
+    // of GetActionRef (the actor responsible for the event).
+    const uint32_t match=filterForm?filterForm:activator;
     const auto filter=catalog_->pipboy.formNames.find(block.filter);
-    if(!block.filter.empty()&&block.filter!="player"&&filter!=catalog_->pipboy.formNames.end()&&filter->second!=activator)continue;
-    if(!fo3script::EventFilterMatches(block.filter,activator,PlayerRef) && !(filter!=catalog_->pipboy.formNames.end()&&filter->second==activator)){
+    if(!block.filter.empty()&&block.filter!="player"&&filter!=catalog_->pipboy.formNames.end()&&filter->second!=match)continue;
+    if(!fo3script::EventFilterMatches(block.filter,match,PlayerRef) && !(filter!=catalog_->pipboy.formNames.end()&&filter->second==match)){
       error="unresolved event filter '"+block.filter+"' at line "+std::to_string(block.sourceLine);
       return false;
     }
     fo3pipdata::ResultScript body;body.source=block.body;
     ScriptProgramOrigin origin;origin.kind=ScriptProgramKind::ReferenceEvent;
-    origin.record=scriptId;origin.event=block.event;origin.sourceLine=block.sourceLine;
+    origin.record=scriptId;origin.event=block.event;origin.sourceLine=block.sourceLine;origin.filterForm=filterForm;
     if(!RunScript(body,owner,0,budget,error,scriptId,std::move(origin))){
       error="line "+std::to_string(block.sourceLine)+": "+error;
       return false;
@@ -582,12 +591,12 @@ bool Player::RunSourceEventDirect(uint32_t scriptId,const char* event,uint32_t o
   return true;
 }
 ScriptEventResult Player::DispatchReferenceEvent(uint32_t reference,const char* event,
-                                                  uint32_t activator,std::string& error) {
+                                                  uint32_t activator,std::string& error,uint32_t filterForm) {
   error.clear();
   if(!HasReferenceEvent(reference,event))return ScriptEventResult::NoHandler;
   const auto& ref=catalog_->references.at(reference);
   const auto scriptId=catalog_->eventBaseScripts.at(ref.base);
-  if(!RunSourceEvent(scriptId,event,reference,activator,error)){
+  if(!RunSourceEvent(scriptId,event,reference,activator,error,filterForm)){
     LogScriptEventError(scriptId,event,error);
     return ScriptEventResult::Unsupported;
   }

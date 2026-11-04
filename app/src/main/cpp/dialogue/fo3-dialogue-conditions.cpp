@@ -53,7 +53,7 @@ static bool Value(const fo3pipdata::Condition& c,const Context& ctx,float& value
       who.reference=c.reference;who.base=ref->second.base;
     }else {
       auto ref=d.targets.find(c.reference);
-      if(ref==d.targets.end()||(c.function!=46&&c.function!=5&&c.function!=65&&c.function!=522)){error="reference context unavailable";return false;}
+      if(ref==d.targets.end()||(c.function!=46&&c.function!=5&&c.function!=65&&c.function!=522&&c.function!=71&&c.function!=73)){error="reference context unavailable";return false;}
       who.reference=c.reference;who.base=ref->second.base;
     }
   }}
@@ -107,8 +107,9 @@ static bool Value(const fo3pipdata::Condition& c,const Context& ctx,float& value
     if(c.function==68)value=def->actorClass==c.a;
     if(c.function==69)value=def->race==c.a;
     if(c.function==70)value=uint32_t(def->female)==c.a;
-    if(c.function==71)value=def->factions.count(c.a);
-    if(c.function==73){auto rank=def->factions.find(c.a);value=rank==def->factions.end()?-1:rank->second;}return true;
+    if(c.function==71)value=p.ActorFactionRank(who.reference,c.a)>=0;
+    if(c.function==73)value=p.ActorFactionRank(who.reference,c.a);
+    return true;
   case 72:value=(pc?7:who.base)==c.a;return true;
   case 74:if(!p.GlobalValue(c.a,value)){error="global unavailable";return false;}return true;
   case 77:if(!std::isfinite(ctx.randomPercent)||ctx.randomPercent<0||ctx.randomPercent>99){error="random percent sample unavailable";return false;}value=ctx.randomPercent;return true;

@@ -18,6 +18,7 @@
 #include <queue>
 #include <fstream>
 #include <functional>
+#include <unistd.h>
 #ifndef FO3_NPC_FURNITURE_HOST_TEST
 bool LoadFalloutMeshFile(const std::string&,std::vector<uint8_t>&,std::string*) {return false;}
 #endif
@@ -118,9 +119,30 @@ static Q230ActorVisual Actor(uint8_t type,bool linkedFurniture=false) {
   Q230ActorVisual actor;actor.source.refFormId=42;actor.source.baseFormId=43;
   actor.runtime.position=Q240ScenePosition({1010,2010,20});actor.navigationGraph=Graph();return actor;
 }
+static void OriginalColvinArrival(const fo3player::Catalog& original,const char* path){
+  // Isolate the authored arrival checkpoint. The valid stage-74 snapshot is
+  // a test precondition, not a stage command or a claim of full D.C. traversal.
+  auto c=original;const auto mq=c.pipboy.formNames.at("mq01"),ld=c.pipboy.formNames.at("mq01ld");
+  auto& quest=c.initial.pipboy.quests[mq];quest.stage=74;quest.running=true;quest.stages.insert(74);
+  const auto ref=c.pipboy.formNames.at("mq01colvinref"),package=c.pipboy.formNames.at("mq01colvinadvancefromcheckpoint");
+  const auto& p=c.pipboy.packages.at(package);const auto marker=c.pipboy.targets.at(p.location.value);
+  gCurrentCellFormId=marker.cell;gExteriorWorldspaceQ1890=marker.world;
+  std::vector<Fo3NpcNavMeshQ240> meshes;assert(LoadFo3NpcNavigationQ240(marker.cell,marker.world,meshes,path));
+  auto graph=std::make_shared<Q240NavigationGraph>();
+  for(auto& mesh:meshes){graph->triangleOffsets.push_back(graph->triangleCount);graph->triangleCount+=mesh.triangles.size();graph->byForm[mesh.formId]=graph->meshes.size();graph->meshes.push_back(std::make_shared<Fo3NpcNavMeshQ240>(std::move(mesh)));}
+  assert(graph->triangleCount);gPlayerSession=std::make_unique<Session>(c);gPlayerSession->player.RegisterOriginalActors();
+  Q230ActorVisual actor;actor.source.refFormId=ref;actor.source.baseFormId=c.pipboy.targets.at(ref).base;
+  actor.navigationGraph=graph;actor.runtime.position=Q240ScenePosition({marker.x,marker.y,marker.z});
+  for(int i=0;i<100&&gPlayerSession->player.Snapshot().pipboy.quests.at(mq).stage==74;++i)Q240UpdateNpcPackage(actor,i*.05);
+  assert(gPlayerSession->player.Snapshot().pipboy.quests.at(mq).stage==75);
+  assert(gPlayerSession->player.Snapshot().pipboy.quests.at(ld).stage==70);
+  assert(gPlayerSession->player.Snapshot().actorPackageEvents.at(ref)==std::make_pair(package,true));
+  std::cout<<"Original Colvin stage-74 arrival fixture: production NAVM Travel completion executes actor OnPackageDone -> MQ01 75 -> MQ01LD 70\n";
+}
 static void Original(const char* path) {
   originalLogs=true;
   fo3player::Catalog catalog;std::string error;assert(fo3player::LoadCatalog(path,catalog,error));
+  OriginalColvinArrival(catalog,path);
   size_t linkedRoutes=0;for(const auto& r:catalog.pipboy.actorPatrols)if(!r.second.empty())++linkedRoutes;
   std::cout<<"Original valid actor-linked Patrol routes="<<linkedRoutes<<'\n';assert(linkedRoutes>10);
   assert(catalog.pipboy.packages.at(0xc2f11).escortDistance==300&&catalog.pipboy.packages.at(0xc2f11).escortDistanceValid);
@@ -290,7 +312,34 @@ static void AccompanyRecoveryTests(){
  fo3pipdata::Condition gate;gate.function=72;gate.a=99;gate.value=1;c.pipboy.packages[50].conditions={gate};gPlayerSession=std::make_unique<Session>(c);Q240UpdateNpcPackage(fresh,15);assert(fresh.aiPackage==52);
  std::cout<<"Accompany stop/reverse, two actors, exhausted routes, retry, cross-cell fallback, save/load and condition invalidation passed\n";
 }
+static void PackageCallbacks(){
+  auto actor=Actor(6);auto c=gPlayerSession->player.Definitions();
+  c.references[42].base=43;c.actorPlacements[42].base=43;c.actorPlacements[42].cell=1;
+  c.eventBaseScripts[43]=90;c.pipboy.formNames["trip"]=50;
+  auto& script=c.pipboy.scripts[90];script.source="scn Actor\nBegin OnPackageStart Trip\nRewardKarma 1\nEnd\nBegin OnPackageDone Trip\nRewardKarma 10\nEnd\nBegin OnPackageChange Trip\nRewardKarma 100\nEnd";
+  c.eventPrograms[90]=fo3script::ParseEvents(script);
+  c.pipboy.packages[50].schedule.valid=true;c.pipboy.packages[50].schedule.hour=12;c.pipboy.packages[50].schedule.duration=1;
+  c.pipboy.packages[52]=c.pipboy.packages[50];c.pipboy.packages[52].schedule.valid=false;
+  c.pipboy.dialogueActors[43].packages.push_back(52);
+  gPlayerSession=std::make_unique<Session>(c);packageHour=12;
+  for(int i=0;i<2000;++i)Q240UpdateNpcPackage(actor,i*.05);
+  assert(gPlayerSession->player.Snapshot().karma==11&&actor.runtime.procedure==fo3npc::Procedure::Completed);
+  assert(!gPlayerSession->player.PackageEventNeeded(42,50,true));
+  auto path="/tmp/fq-package-events-"+std::to_string(getpid());std::string error;
+  assert(gPlayerSession->player.Save(path,error));gPlayerSession=std::make_unique<Session>(c);assert(gPlayerSession->player.Restore(path,error));unlink(path.c_str());
+  // Displace/reload a visual and let the production route reach its endpoint
+  // again. Neither OnStart nor OnDone may replay for this same adoption.
+  actor.aiPackage=0;actor.aiSequence=0;actor.aiPathGame.clear();actor.aiPathIndex=0;actor.aiLastUpdate=-1;
+  actor.runtime.position=Q240ScenePosition({1010,2010,20});actor.runtime.nextPackageEvaluation=0;
+  for(int i=0;i<2000;++i)Q240UpdateNpcPackage(actor,100+i*.05);
+  assert(gPlayerSession->player.Snapshot().karma==11);
+  packageHour=14;actor.runtime.nextPackageEvaluation=0;
+  for(int i=0;i<20;++i)Q240UpdateNpcPackage(actor,201+i*.05);
+  assert(actor.aiPackage==52&&gPlayerSession->player.Snapshot().karma==111);packageHour=12;
+  std::cout<<"Production NAVM package start/arrival/change callbacks and reload replay protection passed\n";
+}
 int main(int argc,char** argv) {
+  PackageCallbacks();
   {
     auto actor=Actor(6);actor.runtime.authoredMotionUntil=4;
     const auto position=actor.runtime.position;const float yaw=actor.runtime.yaw;
@@ -302,7 +351,11 @@ int main(int argc,char** argv) {
     std::cout<<"Production package movement waits for authored full-body response, resumes at completion and yields to combat\n";
   }
 
-  {auto actor=Actor(6,true);auto scene=std::make_shared<fo3furniture::Scene>();fo3furniture::Slot slot;
+  {auto actor=Actor(6,true);
+    auto c=gPlayerSession->player.Definitions();c.references[42].base=43;c.actorPlacements[42].base=43;c.actorPlacements[42].cell=1;
+    c.eventBaseScripts[43]=90;c.pipboy.formNames["trip"]=50;
+    c.pipboy.scripts[90].source="Begin OnPackageDone Trip\nRewardKarma 2\nEnd";c.eventPrograms[90]=fo3script::ParseEvents(c.pipboy.scripts[90]);
+    gPlayerSession=std::make_unique<Session>(c);auto scene=std::make_shared<fo3furniture::Scene>();fo3furniture::Slot slot;
     slot.reference=60;slot.base=61;slot.marker.reference=slot.marker.reference2=17;
     slot.placement=gPlayerSession->player.Definitions().pipboy.targets.at(60);slot.alignment=fo3furniture::Placement(slot.placement);
     auto program=std::make_shared<fo3furniture::Program>();
@@ -310,6 +363,7 @@ int main(int argc,char** argv) {
     program->enter.cycle=program->exit.cycle=2;program->loop.cycle=0;slot.program=program;scene->slots.push_back(slot);actor.runtime.furniture.scene=scene;
     for(int i=0;i<1000&&actor.runtime.furniture.phase!=fo3furniture::Phase::Loop;++i)Q240UpdateNpcPackage(actor,i*.1);
     assert(actor.runtime.furniture.phase==fo3furniture::Phase::Loop&&actor.aiPackage==50);
+    assert(gPlayerSession->player.Snapshot().karma==2);
     assert(actor.runtime.furniture.Selected()->marker.reference==17);
     actor.runtime.furniture.RequestExit();for(int i=1000;i<1010&&actor.runtime.furniture.Active();++i)Q240AdvanceFurniture(actor,nullptr,0,.1f,i*.1);
     assert(!actor.runtime.furniture.Active()&&scene->reservations->owners.empty());

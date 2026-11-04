@@ -12,6 +12,21 @@ static void Q240AiLogOnce(uint32_t actor,uint32_t package,const std::string& why
   if(gQ240AiDiagnostics.insert(key).second)
     Q6H_LOGI("NPC PACKAGE UNSUPPORTED actor=%08X package=%08X reason=%s",actor,package,why.c_str());
 }
+static bool Q240PackageEvent(Q230ActorVisual& actor,uint32_t package,bool completed){
+  auto& player=gPlayerSession->player;
+  if(!player.PackageEventNeeded(actor.source.refFormId,package,completed))return true;
+  const auto retry=actor.runtime.packageRetryAfter.find(package);
+  if(retry!=actor.runtime.packageRetryAfter.end()&&actor.aiLastUpdate<retry->second)return false;
+#ifdef FO3_NPC_PACKAGE_EVENT
+  const bool delivered=FO3_NPC_PACKAGE_EVENT(actor.source.refFormId,package,completed);
+#else
+  std::string error;auto plan=player.PreparePackageEventTransaction(actor.source.refFormId,package,completed,error);
+  const bool delivered=plan&&!plan->HasReferenceChanges()&&player.CommitScriptTransaction(*plan);
+  if(!delivered)Q240AiLogOnce(actor.source.refFormId,package,"package callback: "+error);
+#endif
+  if(!delivered){actor.runtime.packageRetryAfter[package]=actor.aiLastUpdate+2.;actor.runtime.nextPackageEvaluation=0;}
+  return delivered;
+}
 static void Q240AccompanyOnce(uint32_t actor,uint32_t package,uint32_t target,const char* event,const std::string& reason) {
   const std::string key="Accompany:"+std::to_string(actor)+":"+std::to_string(package)+":"+event+":"+reason;
   if(gQ240AiDiagnostics.insert(key).second)
@@ -719,9 +734,10 @@ static void Q240ResumePackageWait(Q230ActorVisual& actor,double now) {
 }
 // One package owner for ordinary updates and a pre-movement combat override.
 // Adopting a newly selected package changes its intent/progress, never its root.
-static void Q240AdoptPackage(Q230ActorVisual& actor,uint32_t packageId,const fo3pipdata::PackageDefinition& package,
+static bool Q240AdoptPackage(Q230ActorVisual& actor,uint32_t packageId,const fo3pipdata::PackageDefinition& package,
                              const std::array<float,3>& anchor) {
   if(packageId!=actor.aiPackage) {
+    if(!Q240PackageEvent(actor,packageId,false))return false;
     const auto previous=gPlayerSession->player.Definitions().pipboy.packages.find(actor.aiPackage);
     if(previous!=gPlayerSession->player.Definitions().pipboy.packages.end()&&previous->second.type==7)
       Q6H_LOGI("NPC ACCOMPANY COMPLETE actor=%08X package=%08X target=%08X reason=reselection",actor.source.refFormId,actor.aiPackage,previous->second.target.value);
@@ -746,6 +762,7 @@ static void Q240AdoptPackage(Q230ActorVisual& actor,uint32_t packageId,const fo3
       package.location.type,package.location.radius,package.flags,package.combatStyle,GetFo3TimeOfDayHour());
   }
   actor.runtime.package=packageId;actor.runtime.packageKnown=true;
+  return true;
 }
 static bool Q240BuildPackagePath(Q230ActorVisual& actor,const fo3pipdata::PackageDefinition& package,
                                  const std::array<float,3>& anchor,float radius) {
@@ -1233,7 +1250,7 @@ static void Q240AdvancePlayerEscort(Q230ActorVisual& actor,const fo3pipdata::Pac
   const auto target=actor.aiSequence==0?player:destination;
   if(actor.aiSequence==0&&Q240PlanarDistance(actor.runtime.pathDestinationGame,target)>16.f&&now>=actor.aiRepathAt){actor.aiPathGame.clear();actor.aiPathSurfaces.clear();actor.aiPathIndex=0;actor.runtime.navigationDoor=0;}
   if(actor.aiPathIndex>=actor.aiPathGame.size()) {
-    if(actor.aiSequence==1&&!actor.aiPathGame.empty()&&Q240PlanarDistance(current,actor.aiPathGame.back())<=8.f){actor.aiSequence=2;actor.runtime.procedure=fo3npc::Procedure::Completed;actor.runtime.nextPackageEvaluation=0;actor.runtime.speed=0;actor.runtime.animation=fo3npc::Animation::Idle;return;}
+    if(actor.aiSequence==1&&!actor.aiPathGame.empty()&&Q240PlanarDistance(current,actor.aiPathGame.back())<=8.f){if(!Q240PackageEvent(actor,actor.aiPackage,true))return;actor.aiSequence=2;actor.runtime.procedure=fo3npc::Procedure::Completed;actor.runtime.nextPackageEvaluation=0;actor.runtime.speed=0;actor.runtime.animation=fo3npc::Animation::Idle;return;}
     if(now<actor.aiRepathAt)return;
     if(!Q240BuildPackagePath(actor,package,target,0)){Q240PackageRouteFailed(actor,now,"Escort route unavailable");return;}
     actor.runtime.pathDestinationGame=target;actor.aiRepathAt=now+.75;
@@ -1414,10 +1431,14 @@ static bool Q240AdvanceFurniture(Q230ActorVisual& actor,const fo3pipdata::Packag
     actor.runtime.sandboxNext=now+1.;Q6H_LOGI("NPC ACTIVITY END actor=%08X package=%08X target=%08X",actor.source.refFormId,id,slot->reference);
     Q240FurnitureExit(actor,now);return true;
   }
-  if(slot->idleMarker){actor.runtime.procedure=fo3npc::Procedure::Waiting;return true;}
+  if(slot->idleMarker){
+    if(actor.runtime.procedure!=fo3npc::Procedure::Waiting&&(p->type==6||p->type==14)&&!Q240PackageEvent(actor,id,true))return true;
+    actor.runtime.procedure=fo3npc::Procedure::Waiting;return true;
+  }
   if(f.phase==fo3furniture::Phase::Enter){const double duration=(slot->program->enter.stop-slot->program->enter.start)/slot->program->enter.frequency;
     if(now-f.started>=duration){f.retainedRoot=fo3furniture::Root(slot->program->enter,duration);f.phase=fo3furniture::Phase::Loop;f.started=now;}
   }
+  if(f.phase==fo3furniture::Phase::Loop&&actor.runtime.procedure!=fo3npc::Procedure::Waiting&&(p->type==6||p->type==14)&&!Q240PackageEvent(actor,id,true))return true;
   actor.runtime.procedure=f.phase==fo3furniture::Phase::Loop?fo3npc::Procedure::Waiting:fo3npc::Procedure::Executing;return true;
 }
 static void Q240AdvanceNpcPackage(Q230ActorVisual& actor,double now) {
@@ -1473,6 +1494,7 @@ static void Q240AdvanceNpcPackage(Q230ActorVisual& actor,double now) {
     if(Q240AdvanceFurniture(actor,package,packageId,dt,now))return;
   }
   if(!package) {
+    if(!Q240PackageEvent(actor,0,false))return;
     const auto previous=gPlayerSession->player.Definitions().pipboy.packages.find(actor.aiPackage);
     if(previous!=gPlayerSession->player.Definitions().pipboy.packages.end()&&previous->second.type==7)
       Q6H_LOGI("NPC ACCOMPANY COMPLETE actor=%08X package=%08X target=%08X reason=ineligible-or-unavailable",actor.source.refFormId,actor.aiPackage,previous->second.target.value);
@@ -1484,7 +1506,7 @@ static void Q240AdvanceNpcPackage(Q230ActorVisual& actor,double now) {
     actor.runtime.animation=fo3npc::Animation::Idle;actor.aiPathGame.clear();actor.aiPathSurfaces.clear();actor.aiPathIndex=0;actor.runtime.navigationDoor=0;return;
   }
   const bool newlySelected=actor.aiPackage!=packageId;
-  Q240AdoptPackage(actor,packageId,*package,anchor);
+  if(!Q240AdoptPackage(actor,packageId,*package,anchor))return;
   if(state.xtelDoor){
     state.activity=fo3npc::Activity::Package;state.package=packageId;
     state.packageKnown=true;
@@ -1538,7 +1560,11 @@ static void Q240AdvanceNpcPackage(Q230ActorVisual& actor,double now) {
     actor.runtime.speed=0;actor.runtime.animation=fo3npc::Animation::Idle;
     if(now<actor.aiRepathAt)return;
     const size_t legs=n+(circular?1:0);
-    if(!package->patrolRepeat&&actor.aiSequence>legs){if(package->schedule.duration>0)return;actor.aiSequence=1;}
+    if(!package->patrolRepeat&&actor.aiSequence>legs){
+      if(!Q240PackageEvent(actor,packageId,true))return;
+      state.nextPackageEvaluation=0;
+      if(package->schedule.duration>0)return;actor.aiSequence=1;
+    }
     size_t next=index(actor.aiSequence);
     if(!package->patrolRepeat&&circular&&actor.aiSequence==n+1)next=0;
     const auto& point=points[next].placement;anchor={point.x,point.y,point.z};
@@ -1578,8 +1604,10 @@ static void Q240AdvanceNpcPackage(Q230ActorVisual& actor,double now) {
       // Sequence alone is not proof of arrival after save restore, combat or
       // relocation. Only a reached route endpoint can keep this actor waiting.
       if(!actor.aiPathGame.empty()&&Q240PlanarDistance(Q240GamePosition(actor),actor.aiPathGame.back())<=8.f) {
-        if(actor.runtime.procedure!=fo3npc::Procedure::Completed)
+        if(actor.runtime.procedure!=fo3npc::Procedure::Completed){
           Q6H_LOGI("NPC PACKAGE COMPLETE actor=%08X package=%08X type=%u scheduleReevaluated=1",actor.source.refFormId,packageId,unsigned(package->type));
+          if(!Q240PackageEvent(actor,packageId,true))return;
+        }
         actor.runtime.procedure=fo3npc::Procedure::Completed;return;
       }
       actor.aiSequence=0;actor.aiRepathAt=0;actor.runtime.procedure=fo3npc::Procedure::Executing;

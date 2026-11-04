@@ -34,7 +34,7 @@ bool Same(const std::vector<fo3pipdata::Condition>& a,const std::vector<fo3pipda
 bool Same(const Execution& a,const Execution& b) noexcept {
   const auto& x=a.origin;const auto& y=b.origin;
   return x.kind==y.kind&&x.record==y.record&&x.item==y.item&&x.sourceLine==y.sourceLine&&
-    x.topic==y.topic&&x.stage==y.stage&&x.event==y.event&&a.owner==b.owner&&
+    x.topic==y.topic&&x.stage==y.stage&&x.event==y.event&&x.filterForm==y.filterForm&&a.owner==b.owner&&
     a.activator==b.activator&&a.localScript==b.localScript&&a.parent==b.parent&&
     a.reference==b.reference&&a.terminalLinkedReference==b.terminalLinkedReference&&Same(a.program,b.program)&&Same(a.container,b.container)&&
     a.owningQuest==b.owningQuest&&Same(a.conditions,b.conditions)&&Same(a.questConditions,b.questConditions)&&
@@ -69,6 +69,7 @@ bool Contexts(const std::vector<Execution>& programs){
 const char* Type(const Execution& e){
   const auto& o=e.origin;
   if(!o.record)return nullptr;
+  if(o.filterForm&&(o.kind!=Kind::ReferenceEvent||(o.event!="onhitwith"&&o.event!="onpackagestart"&&o.event!="onpackagedone"&&o.event!="onpackagechange")))return nullptr;
   if(!e.localScript&&!e.localVariables.empty())return nullptr;
   for(size_t n=1;n<e.localVariables.size();++n)
     if(e.localVariables[n-1].first>=e.localVariables[n].first)return nullptr;
@@ -148,7 +149,8 @@ bool Authored(const Execution& e,const fo3pipdata::Definitions& d){
   const auto s=d.scripts.find(o.record);if(s==d.scripts.end()||!Same(e.container,s->second))return false;
   const auto events=ParseEvents(s->second);if(!events.error.empty())return false;
   for(const auto& block:events.blocks)if(block.sourceLine==o.sourceLine&&block.event==o.event){
-    if(!EventFilterMatches(block.filter,e.activator,fo3player::PlayerRef) && !(d.formNames.count(block.filter)&&d.formNames.at(block.filter)==e.activator))return false;
+    const uint32_t match=o.filterForm?o.filterForm:e.activator;
+    if(!EventFilterMatches(block.filter,match,fo3player::PlayerRef) && !(d.formNames.count(block.filter)&&d.formNames.at(block.filter)==match))return false;
     fo3pipdata::ResultScript body;body.source=block.body;return Same(e.program,body);
   }
   return false;
@@ -238,6 +240,18 @@ bool MatchScriptProgramsToMaster(const std::string& master,const std::vector<Exe
         !ChargeScriptGlobals(e.commandGlobals.size(),evidenceBytes)||!ChargeScriptGlobals(e.expressionGlobals.size(),evidenceBytes))
       return fail("script master evidence byte limit exceeded");
     if(!Type(programs[n]))return fail("unbound or malformed script origin");
+    if(e.origin.kind==Kind::ReferenceEvent){
+      fo3pipdata::Script source;source.source=e.container.source;source.compiled=e.container.compiled;
+      const auto events=ParseEvents(source);
+      if(!events.error.empty())return fail("malformed event source");
+      for(const auto& block:events.blocks)if(block.event==e.origin.event&&block.sourceLine==e.origin.sourceLine&&!block.filter.empty()&&block.filter!="player"){
+        const uint32_t match=e.origin.filterForm?e.origin.filterForm:e.activator;
+        if(!match)return fail("missing event filter identity");
+        const auto named=formNames.emplace(block.filter,match);
+        if(!named.second&&named.first->second!=match)return fail("conflicting event filter identity");
+        forms[match].push_back(block.filter);
+      }
+    }
     auto coversGlobals=[&](const auto& conditions,const auto& bindings){
       size_t at=0;
       auto consume=[&](uint32_t id){
@@ -454,6 +468,9 @@ bool MatchScriptProgramsToMaster(const std::string& master,const std::vector<Exe
       uint32_t topic=0;
       for(auto g=stack.rbegin();g!=stack.rend();++g)if(g->type==7){topic=g->label;break;}
       fo3pipdata::Definitions d;fo3pipdata::Decode(d,type,id,flags,bytes,0,0,topic);
+      // These names are checked against live original EDIDs by this complete
+      // master scan, including filters whose target appears after the SCPT.
+      d.formNames.insert(formNames.begin(),formNames.end());
       for(const auto index:found->second){
         if(type!=Type(programs[index])||!Authored(programs[index],d))
           return fail("script program differs from original master "+type+" "+std::to_string(id)+" entry "+std::to_string(index));

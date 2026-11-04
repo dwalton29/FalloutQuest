@@ -1284,7 +1284,8 @@ bool Player::Save(const std::string &path, std::string &error) const {
     payload.push_back(l.forceFailures);payload.push_back(l.rewarded?1:0);}
   // Optional RFE1 after the v14 lock tail. Empty overlays keep existing v14
   // bytes unchanged; older supported saves do not require this extension.
-  const bool hasBodyDamage=state_.disabledControls||!state_.restrainedActors.empty()||std::any_of(state_.bodyDamage.begin(),state_.bodyDamage.end(),[](float v){return v!=0;});
+  const bool hasFactionRanks=!state_.actorFactions.empty()||!state_.actorPackageEvents.empty();
+  const bool hasBodyDamage=hasFactionRanks||state_.disabledControls||!state_.restrainedActors.empty()||std::any_of(state_.bodyDamage.begin(),state_.bodyDamage.end(),[](float v){return v!=0;});
   const bool hasCorpsePoses=hasBodyDamage||std::any_of(state_.actors.begin(),state_.actors.end(),[](const auto& a){return bool(a.second.corpse);});
   const bool hasDailyInfos=hasCorpsePoses||!state_.dailySaidInfos.empty();
   const bool hasScriptPackages=hasDailyInfos||!state_.scriptPackages.empty();
@@ -1451,7 +1452,27 @@ bool Player::Save(const std::string &path, std::string &error) const {
   if(hasBodyDamage){Put32(payload,0x31564442);for(float v:state_.bodyDamage)PutFloat(payload,v);Put32(payload,state_.disabledControls);
     std::vector<uint32_t> refs(state_.restrainedActors.begin(),state_.restrainedActors.end());std::sort(refs.begin(),refs.end());Put32(payload,uint32_t(refs.size()));for(auto id:refs)Put32(payload,id);
   }
-  Put32(bytes, hasBodyDamage ? 26 : hasCorpsePoses ? 25 : hasDailyInfos ? 24 : hasScriptPackages ? 23 : hasScriptOverrides ? 22 : hasActorVariables ? 21 : hasDoorStates ? 20 : hasDebugPoints ? 19 : hasLevelAdvancement ? 18 : hasCompletionState ? 17 :
+  if(hasFactionRanks){
+    if(state_.actorFactions.size()>10000){error="Too many faction membership owners";return false;}
+    Put32(payload,0x314B5246);Put32(payload,uint32_t(state_.actorFactions.size())); // FRK1
+    std::vector<uint32_t> refs;for(const auto& row:state_.actorFactions)refs.push_back(row.first);std::sort(refs.begin(),refs.end());
+    for(auto ref:refs){const auto& ranks=state_.actorFactions.at(ref);
+      if((ref!=PlayerRef&&!catalog_->actorPlacements.count(ref))||ranks.size()>1000){error="Invalid faction membership owner/count";return false;}
+      Put32(payload,ref);Put32(payload,uint32_t(ranks.size()));
+      std::vector<uint32_t> factions;for(const auto& row:ranks)factions.push_back(row.first);std::sort(factions.begin(),factions.end());
+      for(auto faction:factions){const auto rank=ranks.at(faction);if(!catalog_->factionFlags.count(faction)||rank<-1){error="Invalid faction membership";return false;}Put32(payload,faction);payload.push_back(uint8_t(rank));}
+    }
+  }
+  if(hasFactionRanks){
+    if(state_.actorPackageEvents.size()>10000){error="Too many package event owners";return false;}
+    Put32(payload,0x31564550);Put32(payload,uint32_t(state_.actorPackageEvents.size())); // PEV1
+    std::vector<uint32_t> refs;for(const auto& row:state_.actorPackageEvents)refs.push_back(row.first);std::sort(refs.begin(),refs.end());
+    for(auto ref:refs){const auto& event=state_.actorPackageEvents.at(ref);
+      if(!catalog_->actorPlacements.count(ref)||(event.first&&!catalog_->pipboy.packages.count(event.first))){error="Invalid package event owner/package";return false;}
+      Put32(payload,ref);Put32(payload,event.first);payload.push_back(event.second?1:0);
+    }
+  }
+  Put32(bytes, hasFactionRanks ? 27 : hasBodyDamage ? 26 : hasCorpsePoses ? 25 : hasDailyInfos ? 24 : hasScriptPackages ? 23 : hasScriptOverrides ? 22 : hasActorVariables ? 21 : hasDoorStates ? 20 : hasDebugPoints ? 19 : hasLevelAdvancement ? 18 : hasCompletionState ? 17 :
       hasMerchantVisits ? 16 : hasPlayerAttributeOverrides ? 15 : 14);
   Put32(bytes, catalog_->fingerprint);
   Put32(bytes, static_cast<uint32_t>(payload.size()));
@@ -1511,7 +1532,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
   const auto *h = bytes.data();
   const auto version = fo3esm::ReadU32(h + 4);
   if (std::memcmp(h, "FQPS", 4) ||
-      (version < 1 || version > 26))
+      (version < 1 || version > 27))
     return fail("Unsupported player save format");
   if (fo3esm::ReadU32(h + 8) != catalog_->fingerprint)
     return fail("Player save belongs to different game definitions");
@@ -1964,10 +1985,29 @@ bool Player::Restore(const std::string &path, std::string &error) {
         at+=4;
         for(size_t n=0;n<next.bodyDamage.size();++n){float v=fo3esm::ReadF32(p+at);at+=4;if(!std::isfinite(v)||v<0||v>100)return fail("Invalid body damage");next.bodyDamage[n]=v;}
         const auto controls=fo3esm::ReadU32(p+at),count=fo3esm::ReadU32(p+at+4);at+=8;
-        if(controls>127||count>10000||payload.size()-at!=4ull*count)return fail("Invalid script controls/restraint state");
+        if(controls>127||count>10000||payload.size()-at<4ull*count)return fail("Invalid script controls/restraint state");
         next.disabledControls=uint8_t(controls);
         for(uint32_t n=0;n<count;++n){const auto ref=fo3esm::ReadU32(p+at);at+=4;if((ref!=PlayerRef&&!catalog_->actorPlacements.count(ref))||!next.restrainedActors.insert(ref).second)return fail("Invalid restrained actor");}
 
+      }
+      if(version>=27){
+        if(payload.size()-at<8||fo3esm::ReadU32(p+at)!=0x314B5246)return fail("Missing faction memberships");
+        const auto count=fo3esm::ReadU32(p+at+4);at+=8;if(count>10000)return fail("Too many faction membership owners");
+        for(uint32_t n=0;n<count;++n){
+          if(payload.size()-at<8)return fail("Truncated faction memberships");
+          const auto ref=fo3esm::ReadU32(p+at),size=fo3esm::ReadU32(p+at+4);at+=8;
+          if((ref!=PlayerRef&&!catalog_->actorPlacements.count(ref))||size>1000||payload.size()-at<5ull*size)return fail("Invalid faction membership owner/count");
+          auto [entry,inserted]=next.actorFactions.emplace(ref,std::unordered_map<uint32_t,int8_t>{});if(!inserted)return fail("Duplicate faction membership owner");
+          for(uint32_t j=0;j<size;++j){const auto faction=fo3esm::ReadU32(p+at);const auto rank=int8_t(p[at+4]);at+=5;
+            if(!catalog_->factionFlags.count(faction)||rank<-1||!entry->second.emplace(faction,rank).second)return fail("Invalid faction membership");}
+        }
+      }
+      if(version>=27){
+        if(payload.size()-at<8||fo3esm::ReadU32(p+at)!=0x31564550)return fail("Missing package event state");
+        const auto count=fo3esm::ReadU32(p+at+4);at+=8;
+        if(count>10000||payload.size()-at!=9ull*count)return fail("Invalid package event count");
+        for(uint32_t n=0;n<count;++n){const auto ref=fo3esm::ReadU32(p+at),package=fo3esm::ReadU32(p+at+4);const auto done=p[at+8];at+=9;
+          if(!catalog_->actorPlacements.count(ref)||(package&&!catalog_->pipboy.packages.count(package))||done>1||(!package&&done)||!next.actorPackageEvents.emplace(ref,std::make_pair(package,done!=0)).second)return fail("Invalid package event state");}
       }
       if(at!=payload.size())return fail("Trailing player save data");
     }

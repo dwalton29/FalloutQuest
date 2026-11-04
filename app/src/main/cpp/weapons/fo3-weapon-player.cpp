@@ -289,6 +289,28 @@ bool Player::KillActor(uint32_t reference){
   auto it=state_.actors.find(reference);if(it==state_.actors.end())return false;
   auto state=it->second;state.dead=true;state.hostile=0;return UpdateActor(reference,state);
 }
+const std::unordered_map<uint32_t,int8_t>* Player::ActorFactions(uint32_t reference) const {
+  const auto edited=state_.actorFactions.find(reference);
+  if(edited!=state_.actorFactions.end())return &edited->second;
+  const auto* actor=reference==PlayerRef?fo3pipdata::ActorCategory(catalog_->pipboy,PlayerBase,4):ActorCategory(reference,4);
+  return actor?&actor->factions:nullptr;
+}
+int Player::ActorFactionRank(uint32_t reference,uint32_t faction) const {
+  const auto* ranks=ActorFactions(reference);if(!ranks)return -1;
+  const auto rank=ranks->find(faction);return rank==ranks->end()?-1:rank->second;
+}
+bool Player::SetActorFactionRank(uint32_t reference,uint32_t faction,int rank,bool remove){
+  if(!catalog_->factionFlags.count(faction)||rank<-1||rank>127)return false;
+  if(reference!=PlayerRef&&!catalog_->actorPlacements.count(reference))return false;
+  // Resolve levelled templates before capturing their original memberships.
+  if(reference!=PlayerRef&&!RealizeActor(reference))return false;
+  const auto* current=ActorFactions(reference);if(!current)return false;
+  const auto old=current->find(faction);
+  if(remove?old==current->end():(old!=current->end()&&old->second==rank))return true;
+  auto [entry,inserted]=state_.actorFactions.try_emplace(reference,*current);(void)inserted;
+  if(remove)entry->second.erase(faction);else entry->second[faction]=int8_t(rank);
+  ++revision_;return true;
+}
 bool Player::SetFactionRelation(uint32_t from,uint32_t to,bool ally,bool firstFlag,bool secondFlag){
   if(!catalog_->factionFlags.count(from)||!catalog_->factionFlags.count(to))return false;
   bool changed=false;
@@ -316,7 +338,7 @@ bool Player::ActorAIValue(uint32_t reference,uint32_t valueId,float& value) cons
   return std::isfinite(value)&&value>=0&&value<=(valueId==0?3:2);
 }
 bool Player::SetActorAIValue(uint32_t reference,uint32_t valueId,float value){
-  float old=0;if(!catalog_->actorPlacements.count(reference)||!std::isfinite(value)||std::floor(value)!=value||value<0||value>(valueId==0?3:2)||
+  float old=0;if(!catalog_->actorPlacements.count(reference)||(valueId!=0&&valueId!=57)||!std::isfinite(value)||std::floor(value)!=value||value<0||value>(valueId==0?3:2)||!RealizeActor(reference)||
       !ActorAIValue(reference,valueId,old))return false;
   if(old!=value){state_.actorAIValues[(uint64_t(reference)<<32)|valueId]=value;++revision_;}
   return true;
@@ -402,6 +424,7 @@ bool Player::ApplyAttack(uint32_t attacker,uint32_t base,uint32_t target,float d
   // transition. Unsupported scripts never undo physical combat damage.
   std::string scriptError;
   DispatchReferenceEvent(target,"OnHit",attacker,scriptError);
+  DispatchReferenceEvent(target,"OnHitWith",attacker,scriptError,base);
   if(died)DispatchReferenceEvent(target,"OnDeath",attacker,scriptError);
   return true;
 }
