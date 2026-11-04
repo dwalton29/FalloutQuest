@@ -12,7 +12,10 @@
 #include "npc/fo3-detection.h"
 #include "scripting/fo3-script-imagespace.h"
 #include "scripting/fo3-nonresident-script.h"
-namespace fo3worldscript {fo3script::ImagePresentation Presentation();}
+namespace fo3worldscript {
+fo3script::ImagePresentation Presentation();
+bool PackageEvent(uint32_t reference,uint32_t package,bool completed);
+}
 #include "dialogue/fo3-dialogue-session.h"
 #include "dialogue/fo3-dialogue-panel.h"
 #include "npc/fo3-npc-state.h"

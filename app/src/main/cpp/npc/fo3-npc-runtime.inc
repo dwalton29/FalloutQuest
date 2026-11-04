@@ -315,8 +315,7 @@ static bool Q230CrowdStep(const Q230ActorVisual&,const std::array<float,3>&);
 #define FO3_NPC_XTEL_INDEX() Q230NpcXtelIndex()
 #define FO3_NPC_CHAT_AVAILABLE(actor,reference,package) Q230ChatEligible(actor,reference,package)
 #define FO3_NPC_CHAT_REQUEST(speaker,listener,now) Q230ChatBegin(speaker,listener,now)
-bool PublishFo3PackageEvent(uint32_t,uint32_t,bool);
-#define FO3_NPC_PACKAGE_EVENT(reference,package,completed) PublishFo3PackageEvent(reference,package,completed)
+#define FO3_NPC_PACKAGE_EVENT(reference,package,completed) ::fo3worldscript::PackageEvent(reference,package,completed)
 #include "fo3-npc-package-runtime.inc"
 #undef FO3_NPC_PACKAGE_EVENT
 #undef FO3_NPC_CHAT_REQUEST

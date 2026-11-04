@@ -230,8 +230,7 @@ void Animate(){
     }
 }
 fo3script::ImagePresentation Presentation(){return fo3script::SampleImageModifier(modifier,seconds-modifierStarted);}
-}
-bool PublishFo3PackageEvent(uint32_t reference,uint32_t package,bool completed){
+bool PackageEvent(uint32_t reference,uint32_t package,bool completed){
     if(!gPlayerSession||gPlayerSession->saveBlocked||Fo3ResidentFrameBlocked())return false;
     auto& player=gPlayerSession->player;std::string error;
     auto plan=player.PreparePackageEventTransaction(reference,package,completed,error,fo3player::ScriptProgramCapture::EnteredPrograms);
@@ -248,4 +247,5 @@ bool PublishFo3PackageEvent(uint32_t reference,uint32_t package,bool completed){
     const auto key=std::to_string(reference)+":"+std::to_string(package)+":"+error;
     if(reported.size()<256&&reported.insert(key).second)Q6H_LOGW("SCRIPT PACKAGE EVENT REJECTED ref=%08X package=%08X completed=%d reason=%s",reference,package,completed,error.c_str());
     return false;
+}
 }
