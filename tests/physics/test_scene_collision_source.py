@@ -666,7 +666,9 @@ assert master_match.index('localsSeen.size()!=locals.size()')<master_match.index
 assert 'Same(programs[index].container,script->second)' in master_match
 assert 'a.localVariables==b.localVariables' in master_match
 assert 'a.parent==b.parent' in master_match and 'a.reference==b.reference' in master_match
-assert 'EventFilterMatches(block.filter,e.activator,fo3player::PlayerRef)' in master_match
+assert 'const uint32_t match=o.filterForm?o.filterForm:e.activator;' in master_match
+assert 'EventFilterMatches(block.filter,match,fo3player::PlayerRef)' in master_match
+assert 'x.filterForm==y.filterForm' in master_match
 assert 'fo3dialogue::SupportedInfoStructure(t->second[0])' in master_match
 assert 'EligibleInfo(i,ctx,diagnostic,previewReferences)' in Path('app/src/main/cpp/dialogue/fo3-dialogue-session.cpp').read_text()
 assert 'SupportedInfoStructure(i)' in Path('app/src/main/cpp/dialogue/fo3-dialogue-selection.h').read_text()
