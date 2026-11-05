@@ -1,5 +1,6 @@
 #include "ui/interaction/fo3-item-notifications.h"
 #include "ui/chargen/fo3-name-entry.h"
+#include "ui/chargen/fo3-special-book.h"
 
 #include "dialogue/fo3-dialogue-panel.h"
 // The interaction test binary intentionally compiles without the headset
@@ -196,7 +197,28 @@ bool gScriptMessageLastA=false,gScriptMessageLastB=false;
 fo3name::Model gPlayerNameEntry;
 fo3dialogue::Panel gPlayerNameKeyboard;
 bool Fo3PlayerNameFocus(){return gPlayerSession&&gPlayerSession->player.Snapshot().nameMenuOwner!=0;}
-bool Fo3ScriptMessageFocus(){return gScriptMessagePanel.visible||Fo3PlayerNameFocus();}
+fo3special::Model gSpecialBookEntry;
+fo3dialogue::Panel gSpecialBookPanel;
+bool Fo3SpecialBookFocus(){return gPlayerSession&&gPlayerSession->player.Snapshot().specialMenuOwner!=0;}
+bool Fo3ScriptMessageFocus(){return gScriptMessagePanel.visible||Fo3PlayerNameFocus()||Fo3SpecialBookFocus()||(gPlayerSession&&gPlayerSession->player.Snapshot().deferredAppearanceOwner);}
+void UpdateFo3SpecialBook(double now,float x,float y,bool a,bool b,bool focused,const float* head){
+    if(!gPlayerSession||gPlayerSession->saveBlocked||IsFo3LoadingVisible())return;
+    auto& player=gPlayerSession->player;const auto owner=player.Snapshot().specialMenuOwner;
+    if(!owner&&!gSpecialBookEntry.owner)return;
+    if(owner&&owner!=gSpecialBookEntry.owner){
+        gSpecialBookPanel={};const float yaw=head[3];gSpecialBookPanel.yaw=yaw;
+        gSpecialBookPanel.anchor={head[0]-std::sin(yaw)*1.5f,head[1]+.12f,head[2]-std::cos(yaw)*1.5f};
+    }
+    const auto before=gSpecialBookEntry.revision;
+    const auto result=gSpecialBookEntry.Step(player,now,x,y,a,b,focused);
+    gSpecialBookPanel.visible=player.Snapshot().specialMenuOwner!=0;
+    gSpecialBookPanel.title="You're S.P.E.C.I.A.L.!";
+    gSpecialBookPanel.subtitle="Points remaining: "+std::to_string(player.SpecialBookRemaining())+". Left/right or A/B: adjust.";
+    gSpecialBookPanel.choices=gSpecialBookEntry.Choices(player);gSpecialBookPanel.selected=gSpecialBookEntry.cursor.selected;
+    gSpecialBookPanel.revision=player.Revision()+gSpecialBookEntry.revision;
+    if(result!=fo3special::Model::Result::None){fo3audio::NamedSound("UIMenuOK");FlushFo3PlayerState();}
+    else if(gSpecialBookEntry.revision!=before)fo3audio::Scroll();
+}
 void UpdateFo3PlayerName(double now,float x,float y,bool a,bool b,bool focused,const float* head){
     if(!gPlayerSession||gPlayerSession->saveBlocked||IsFo3LoadingVisible())return;
     auto& player=gPlayerSession->player;const auto owner=player.Snapshot().nameMenuOwner;
@@ -222,7 +244,7 @@ void UpdateFo3ScriptMessage(double now,float scroll,bool pressA,bool pressB,bool
         gScriptMessagePanel.visible=false;gScriptMessageOwner=0;return;
     }
     auto& player=gPlayerSession->player;
-    if(Fo3PlayerNameFocus())return;
+    if(Fo3PlayerNameFocus()||Fo3SpecialBookFocus()||player.Snapshot().deferredAppearanceOwner)return;
     if(!gScriptMessagePanel.visible){
         if(Fo3LevelUpFocus())return; // Defer authored messages until level-up closes.
         fo3player::ScriptMessage request;

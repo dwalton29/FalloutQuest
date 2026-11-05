@@ -2059,7 +2059,9 @@ private:
                         gPipActivation.Reset();gPipMenu.dirty=true;
                         Q6H_LOGI("PIPBOY SUPPRESS reason=held-physical-magazine-or-slide");
                     }
-                    const bool nameControls=Fo3PlayerNameFocus();
+                    const bool nameControls=Fo3PlayerNameFocus()||Fo3SpecialBookFocus();
+                    UpdateFo3SpecialBook(gameplaySeconds,q210RightValid?turnX_:0,q210RightValid?lootScrollY_:0,
+                        q210RightValid&&activateDownQ1700_,q210RightValid&&pipBackDown_,sessionState_==XR_SESSION_STATE_FOCUSED&&q210RightValid,gQ210Head);
                     UpdateFo3PlayerName(gameplaySeconds,q210RightValid?turnX_:0,q210RightValid?lootScrollY_:0,
                         q210RightValid&&activateDownQ1700_,q210RightValid&&pipBackDown_,sessionState_==XR_SESSION_STATE_FOCUSED&&q210RightValid,gQ210Head);
                     UpdateFo3LevelUp(gameplaySeconds,
@@ -2642,14 +2644,16 @@ private:
             }
 
             // UI system colours are display colours, never world image-space inputs.
-            if(Fo3PlayerNameFocus()&&!IsFo3LoadingVisible()&&gPlayerSession){
-                const auto& panel=gPlayerNameKeyboard;Mat4 model{};const float yaw=panel.yaw;
+            if((Fo3PlayerNameFocus()||Fo3SpecialBookFocus())&&!IsFo3LoadingVisible()&&gPlayerSession){
+                const auto& panel=Fo3SpecialBookFocus()?gSpecialBookPanel:gPlayerNameKeyboard;Mat4 model{};const float yaw=panel.yaw;
                 model.m[0]=std::cos(yaw);model.m[2]=-std::sin(yaw);model.m[5]=1;
                 model.m[8]=std::sin(yaw);model.m[10]=std::cos(yaw);
                 model.m[12]=panel.anchor[0];model.m[13]=panel.anchor[1];model.m[14]=panel.anchor[2];model.m[15]=1;
                 const auto keyboard=Multiply(viewProjection,model);fo3menuui::Message(keyboard.m,panel,gPlayerSession->player);
-                model.m[13]+=.65f;
-                const auto field=Multiply(viewProjection,model);fo3menuui::PlayerName(field.m,gPlayerSession->player,gPlayerNameEntry.cursor.selected==2);
+                if(Fo3PlayerNameFocus()){
+                    model.m[13]+=.65f;
+                    const auto field=Multiply(viewProjection,model);fo3menuui::PlayerName(field.m,gPlayerSession->player,gPlayerNameEntry.cursor.selected==2);
+                }
             }
             if(gScriptMessagePanel.visible&&!IsFo3LoadingVisible()) {
                 const float yaw=gQ210Head[3];

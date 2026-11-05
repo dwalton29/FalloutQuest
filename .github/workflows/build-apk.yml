@@ -265,7 +265,9 @@ jobs:
           gradle assembleDebug assembleProfile --stacktrace 2>&1 | tee build-output.log
 
       - name: Verify actual ARM64 compiler optimisation and diagnostics
-        run: python3 tools/check_native_profile.py
+        run: |
+          python3 tests/build/test_native_profile.py
+          python3 tools/check_native_profile.py
 
       - name: Upload build diagnostics
         if: always()

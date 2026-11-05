@@ -636,6 +636,11 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
       return fail("Missing/nonfinite player game setting");
     *entry.second = it->second;
   }
+  for(const auto& entry:std::array<std::pair<const char*,float*>,2>{{
+      {"fAVDSkillPrimaryBonusMult",&next.rules.skillPrimaryMult},{"fAVDSkillLuckBonusMult",&next.rules.skillLuckMult}}}){
+    const auto setting=settings.find(entry.first);
+    if(setting!=settings.end()&&std::isfinite(setting->second)&&setting->second>=0&&setting->second<=10)*entry.second=setting->second;
+  }
   // Fast NPC flee locomotion uses the actual Fallout3.esm run multiplier;
   // absent/invalid source fails closed to current walk speed.
   const auto runSetting=settings.find("fMoveRunMult");
@@ -1110,7 +1115,7 @@ static bool ValidNameDraft(const std::string& name){
   return name.size()<=32&&std::all_of(name.begin(),name.end(),[](unsigned char c){return c>=32&&c<=126;});
 }
 bool Player::OpenPlayerNameMenu(uint32_t owner){
-  if(!owner||(!catalog_->pipboy.quests.count(owner)&&!catalog_->references.count(owner)))return false;
+  if(!owner||state_.specialMenuOwner||state_.deferredAppearanceOwner||(!catalog_->pipboy.quests.count(owner)&&!catalog_->references.count(owner)))return false;
   if(state_.nameMenuOwner)return state_.nameMenuOwner==owner;
   state_.nameMenuOwner=owner;state_.nameDraft=state_.playerName;++revision_;return true;
 }
@@ -1123,6 +1128,44 @@ bool Player::ConfirmPlayerName(){
   const auto first=state_.nameDraft.find_first_not_of(' ');if(first==std::string::npos)return false;
   state_.playerName=state_.nameDraft.substr(first,state_.nameDraft.find_last_not_of(' ')-first+1);
   state_.nameMenuOwner=0;state_.nameDraft.clear();++revision_;return true;
+}
+bool Player::DeferAppearanceMenu(uint32_t owner){
+  if(!owner||state_.nameMenuOwner||state_.specialMenuOwner||(!catalog_->pipboy.quests.count(owner)&&!catalog_->references.count(owner)))return false;
+  if(state_.deferredAppearanceOwner)return state_.deferredAppearanceOwner==owner;
+  state_.deferredAppearanceOwner=owner;++revision_;return true;
+}
+int Player::SpecialBookRemaining()const{
+  int remaining=int(state_.specialMenuTotal);for(auto value:state_.specialDraft)remaining-=value;return remaining;
+}
+bool Player::OpenSpecialBook(uint32_t owner,uint32_t total){
+  if(!owner||total<7||total>70||state_.nameMenuOwner||state_.deferredAppearanceOwner||(!catalog_->pipboy.quests.count(owner)&&!catalog_->references.count(owner)))return false;
+  if(state_.specialMenuOwner)return state_.specialMenuOwner==owner&&state_.specialMenuTotal==total;
+  auto draft=state_.special;unsigned used=0;for(auto value:draft){if(value<1||value>10)return false;used+=value;}
+  if(used>total)draft.fill(1);
+  state_.specialDraft=draft;state_.specialMenuOwner=owner;state_.specialMenuTotal=total;++revision_;return true;
+}
+bool Player::AdjustSpecialBook(unsigned attribute,int delta){
+  if(!state_.specialMenuOwner||attribute>=7||(delta!=1&&delta!=-1))return false;
+  const int value=state_.specialDraft[attribute]+delta;
+  if(value<1||value>10||(delta>0&&SpecialBookRemaining()<=0))return false;
+  state_.specialDraft[attribute]=uint8_t(value);++revision_;return true;
+}
+bool Player::ConfirmSpecialBook(){
+  if(!state_.specialMenuOwner||SpecialBookRemaining()!=0)return false;
+  // Native actor-value governing attributes, in the canonical skill order.
+  // Preserve authored skill offsets and earned/tag bonuses; change only the
+  // contribution of the edited SPECIAL attributes.
+  static constexpr unsigned governing[14]={3,2,1,1,1,4,0,4,4,5,5,3,5,2};
+  auto skills=state_.skills;const auto& rules=catalog_->rules;
+  const int luck=int(std::ceil(state_.specialDraft[6]*rules.skillLuckMult))-int(std::ceil(state_.special[6]*rules.skillLuckMult));
+  for(unsigned i=0;i<14;++i){
+    if(i==12)continue; // Throwing is unused in Fallout 3.
+    const auto attribute=governing[i];
+    const int delta=int(std::lround((int(state_.specialDraft[attribute])-int(state_.special[attribute]))*rules.skillPrimaryMult))+luck;
+    skills[i]=uint8_t(std::clamp(int(skills[i])+delta,0,100));
+  }
+  if(!SetPlayerAttributes(state_.specialDraft,skills))return false;
+  state_.specialMenuOwner=state_.specialMenuTotal=0;state_.specialDraft={};++revision_;return true;
 }
 bool Player::SetNoActivationSound(uint32_t sound){
   if(sound&&!catalog_->pipboy.sounds.count(sound))return false;
@@ -1328,7 +1371,8 @@ bool Player::Save(const std::string &path, std::string &error) const {
     payload.push_back(l.forceFailures);payload.push_back(l.rewarded?1:0);}
   // Optional RFE1 after the v14 lock tail. Empty overlays keep existing v14
   // bytes unchanged; older supported saves do not require this extension.
-  const bool hasIdentity=state_.playerSex!=2||!state_.playerName.empty()||state_.nameMenuOwner||!state_.nameDraft.empty();
+  const bool hasMenus=state_.deferredAppearanceOwner||state_.specialMenuOwner;
+  const bool hasIdentity=hasMenus||state_.playerSex!=2||!state_.playerName.empty()||state_.nameMenuOwner||!state_.nameDraft.empty();
   const bool hasNewGame=hasIdentity||state_.noActivationSound||state_.inCharGen||state_.locationSpecificLoadScreens||state_.playerMove.marker;
   const bool hasFactionRanks=hasNewGame||!state_.actorFactions.empty()||!state_.actorPackageEvents.empty();
   const bool hasBodyDamage=hasFactionRanks||state_.disabledControls||!state_.restrainedActors.empty()||std::any_of(state_.bodyDamage.begin(),state_.bodyDamage.end(),[](float v){return v!=0;});
@@ -1538,7 +1582,17 @@ bool Player::Save(const std::string &path, std::string &error) const {
     Put32(payload,uint32_t(state_.playerName.size()));payload.insert(payload.end(),state_.playerName.begin(),state_.playerName.end());
     Put32(payload,uint32_t(state_.nameDraft.size()));payload.insert(payload.end(),state_.nameDraft.begin(),state_.nameDraft.end());
   }
-  Put32(bytes, hasIdentity ? 29 : hasNewGame ? 28 : hasFactionRanks ? 27 : hasBodyDamage ? 26 : hasCorpsePoses ? 25 : hasDailyInfos ? 24 : hasScriptPackages ? 23 : hasScriptOverrides ? 22 : hasActorVariables ? 21 : hasDoorStates ? 20 : hasDebugPoints ? 19 : hasLevelAdvancement ? 18 : hasCompletionState ? 17 :
+  if(hasMenus){
+    auto validOwner=[&](uint32_t owner){return !owner||catalog_->pipboy.quests.count(owner)||catalog_->references.count(owner);};
+    unsigned used=0;for(auto value:state_.specialDraft)used+=value;
+    if(!validOwner(state_.deferredAppearanceOwner)||!validOwner(state_.specialMenuOwner)||state_.nameMenuOwner||
+       (state_.specialMenuOwner&&(state_.deferredAppearanceOwner||state_.specialMenuTotal<7||state_.specialMenuTotal>70||used>state_.specialMenuTotal||std::any_of(state_.specialDraft.begin(),state_.specialDraft.end(),[](auto v){return v<1||v>10;})))||
+       (!state_.specialMenuOwner&&(used||state_.specialMenuTotal))){error="Invalid character menu state";return false;}
+    Put32(payload,0x31495543); // CUI1
+    Put32(payload,state_.deferredAppearanceOwner);Put32(payload,state_.specialMenuOwner);Put32(payload,state_.specialMenuTotal);
+    for(auto value:state_.specialDraft)Put32(payload,value);
+  }
+  Put32(bytes, hasMenus ? 30 : hasIdentity ? 29 : hasNewGame ? 28 : hasFactionRanks ? 27 : hasBodyDamage ? 26 : hasCorpsePoses ? 25 : hasDailyInfos ? 24 : hasScriptPackages ? 23 : hasScriptOverrides ? 22 : hasActorVariables ? 21 : hasDoorStates ? 20 : hasDebugPoints ? 19 : hasLevelAdvancement ? 18 : hasCompletionState ? 17 :
       hasMerchantVisits ? 16 : hasPlayerAttributeOverrides ? 15 : 14);
   Put32(bytes, catalog_->fingerprint);
   Put32(bytes, static_cast<uint32_t>(payload.size()));
@@ -1598,7 +1652,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
   const auto *h = bytes.data();
   const auto version = fo3esm::ReadU32(h + 4);
   if (std::memcmp(h, "FQPS", 4) ||
-      (version < 1 || version > 29))
+      (version < 1 || version > 30))
     return fail("Unsupported player save format");
   if (fo3esm::ReadU32(h + 8) != catalog_->fingerprint)
     return fail("Player save belongs to different game definitions");
@@ -2099,6 +2153,15 @@ bool Player::Restore(const std::string &path, std::string &error) {
           if(!ValidNameDraft(*value))return fail("Invalid player name characters");
         }
         if(!next.nameMenuOwner&&!next.nameDraft.empty())return fail("Orphan player name draft");
+      }
+      if(version>=30){
+        if(payload.size()-at!=44||fo3esm::ReadU32(p+at)!=0x31495543)return fail("Missing character menu state");
+        next.deferredAppearanceOwner=fo3esm::ReadU32(p+at+4);next.specialMenuOwner=fo3esm::ReadU32(p+at+8);next.specialMenuTotal=fo3esm::ReadU32(p+at+12);at+=16;
+        unsigned used=0;for(auto& value:next.specialDraft){const auto raw=fo3esm::ReadU32(p+at);at+=4;if(raw>10)return fail("Invalid SPECIAL draft value");value=uint8_t(raw);used+=value;}
+        auto validOwner=[&](uint32_t owner){return !owner||catalog_->pipboy.quests.count(owner)||catalog_->references.count(owner);};
+        if(!validOwner(next.deferredAppearanceOwner)||!validOwner(next.specialMenuOwner)||next.nameMenuOwner||
+           (next.specialMenuOwner&&(next.deferredAppearanceOwner||next.specialMenuTotal<7||next.specialMenuTotal>70||used>next.specialMenuTotal||std::any_of(next.specialDraft.begin(),next.specialDraft.end(),[](auto v){return v<1;})))||
+           (!next.specialMenuOwner&&(used||next.specialMenuTotal)))return fail("Invalid character menu state");
       }
       if(at!=payload.size())return fail("Trailing player save data");
     }

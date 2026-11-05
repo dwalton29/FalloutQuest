@@ -121,6 +121,17 @@ bool CompileResult(const fo3pipdata::Definitions& d,const fo3pipdata::ResultScri
       if(in>>a){if(a=="male")cmd.index=0;else if(a=="female")cmd.index=1;else {error="invalid SexChange sex";return false;}
         if(in>>b){if(b!="0"&&b!="1"){error="invalid SexChange refresh flag";return false;}}else in.clear();
       }else in.clear();
+    }else if(op=="showracemenu")cmd.type=CommandType::DeferredAppearanceMenu;
+    else if(op=="showspecialbookmenu"||op=="ssbmp"){
+      cmd.type=CommandType::SpecialBook;
+      if(!(in>>a)||!number(a,cmd.value)||cmd.value<7||cmd.value>70||std::floor(cmd.value)!=cmd.value){error="invalid SPECIAL point total";return false;}
+    }else if(op=="setpcyoung"){
+      cmd.type=CommandType::DeferredAppearance;
+      if(!(in>>a)||(a!="0"&&a!="1")){error="invalid default-hair flag";return false;}
+    }else if(op.find('.')!=std::string::npos&&(op.substr(op.find('.')+1)=="matchrace"||op.substr(op.find('.')+1)=="matchfacegeometry")){
+      const auto dot=op.find('.');cmd.type=CommandType::DeferredAppearance;cmd.form=form(op.substr(0,dot));
+      if(!cmd.form||!(in>>a)||(cmd.index=form(a))!=fo3player::PlayerRef){error="unsupported appearance match target";return false;}
+      if(op.substr(dot+1)=="matchfacegeometry"&&(!(in>>b)||!(cmd.variable=form(b)))){error="invalid face-match template";return false;}
     }else if(op=="getplayername")cmd.type=CommandType::PlayerNameMenu;
     else if(op=="setinchargen"||op=="setlocationspecificloadscreensonly"){
       cmd.type=op=="setinchargen"?CommandType::CharacterGeneration:CommandType::LocationLoadScreens;

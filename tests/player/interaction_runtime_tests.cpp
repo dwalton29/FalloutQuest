@@ -545,7 +545,7 @@ int main() {
         "reservation leaves effect queued until release");
     frameReserved=false;
     gObjects.clear();gQ230NpcActors.clear();doorPresent=false;testSeat=700;seatRequests=0;seatAllowed=true;testSeated=0;
-    fo3player::Catalog seats;Reference chair;chair.base=701;seats.references[700]=chair;seats.pipboy.targets[700].base=701;seats.pipboy.targets[700].cell=1;seats.pipboy.furniture[701]={};seats.eventBaseNames[701]="Office Chair";
+    fo3player::Catalog seats;seats.initial.baseHealth=100;seats.initial.special.fill(5);Reference chair;chair.base=701;seats.references[700]=chair;seats.pipboy.targets[700].base=701;seats.pipboy.targets[700].cell=1;seats.pipboy.furniture[701]={};seats.eventBaseNames[701]="Office Chair";
     gPlayerSession=std::make_unique<fo3player::Session>(seats);gObjects.push_back({});auto& seatObject=gObjects.back();seatObject.baseRecordType="FURN";seatObject.baseFormId=701;seatObject.refFormId=700;seatObject.minX=seatObject.minY=-.5f;seatObject.maxX=seatObject.maxY=.5f;seatObject.minZ=-2;seatObject.maxZ=-1;
     Check(query()&&t.furniture&&!t.pickup&&t.allowed&&std::string(t.prompt.data())=="Sit Office Chair","original FURN is a Sit target rather than an inventory item");
     activate();Check(seatRequests==1,"A dispatches seating through the actual interaction path");seatAllowed=false;Check(query()&&!t.allowed,"occupied furniture cannot sit");activate();Check(seatRequests==1,"blocked seat cannot activate");
@@ -565,6 +565,16 @@ int main() {
     UpdateFo3PlayerName(.6,0,0,false,false,true,trackedHead);UpdateFo3PlayerName(.7,0,0,false,false,true,trackedHead);
     gPlayerNameEntry.cursor.selected=2;UpdateFo3PlayerName(.8,0,0,true,false,true,trackedHead);
     Check(named.PlayerName()=="A"&&!Fo3PlayerNameFocus()&&!gPlayerNameKeyboard.visible,"Done confirms and releases modal state");
+    Check(named.OpenSpecialBook(700,40)&&Fo3SpecialBookFocus()&&Fo3ScriptMessageFocus(),"SPECIAL book owns modal gameplay input");
+    Check(!query()&&!CaptureFo3ResidentInteractionActivity().Idle(),"SPECIAL book blocks world/resident interactions");
+    UpdateFo3SpecialBook(1,0,0,true,false,true,trackedHead);Check(named.SpecialBookRemaining()==5,"book opening press ignored");
+    UpdateFo3SpecialBook(1.1,0,0,false,false,true,trackedHead);UpdateFo3SpecialBook(1.2,0,0,false,false,true,trackedHead);
+    const int savedBeforeBook=flushes;UpdateFo3SpecialBook(1.3,0,0,true,false,true,trackedHead);
+    Check(named.Snapshot().specialDraft[0]==6&&named.Snapshot().special[0]==5&&flushes>savedBeforeBook,"book controller edits and saves draft without spending canonical stats");
+    for(unsigned i=0;i<4;++i)Check(named.AdjustSpecialBook(i+1,1),"spend remaining points");
+    UpdateFo3SpecialBook(1.4,0,0,false,false,true,trackedHead);gSpecialBookEntry.cursor.selected=7;
+    UpdateFo3SpecialBook(1.5,0,0,true,false,true,trackedHead);
+    Check(!Fo3SpecialBookFocus()&&!gSpecialBookPanel.visible&&named.Snapshot().special[0]==6,"book Done commits and releases focus");
     std::cout << "Interaction runtime tests passed\n";
     return 0;
   } catch (const std::exception &e) {

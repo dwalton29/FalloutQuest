@@ -16,6 +16,7 @@
 #include "scripting/fo3-nonresident-script.h"
 bool Fo3ScriptMessageFocus();
 bool Fo3PlayerNameFocus();
+bool Fo3SpecialBookFocus();
 namespace fo3worldscript {
 fo3script::ImagePresentation Presentation();
 bool PackageEvent(uint32_t reference,uint32_t package,bool completed);

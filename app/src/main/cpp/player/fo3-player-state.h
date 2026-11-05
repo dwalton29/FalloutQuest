@@ -119,6 +119,7 @@ struct WorldWeapon {
 struct Rules {
   float healthEnduranceMult = 0, healthEnduranceOffset = 0, healthLevelMult = 0;
   float apBase = 0, apMult = 0, carryBase = 0, carryMult = 0;
+  float skillPrimaryMult=2,skillLuckMult=.5f; // Verified native fAVDSkill defaults.
 };
 enum class LockChange : uint8_t { Locked, Key, Picked, Forced, Broken, ScriptUnlocked };
 struct LockOverride { LockChange change=LockChange::Locked; uint8_t level=0,forceFailures=0; bool rewarded=false; };
@@ -188,6 +189,8 @@ struct State {
   uint8_t playerSex=2; // 2 inherits the original NPC_ player record.
   std::string playerName,nameDraft;
   uint32_t nameMenuOwner=0;
+  uint32_t deferredAppearanceOwner=0,specialMenuOwner=0,specialMenuTotal=0;
+  std::array<uint8_t,7> specialDraft{};
   uint32_t noActivationSound=0;
   PlayerMove playerMove;
   fo3pipdata::SessionState pipboy;
@@ -429,6 +432,11 @@ public:
   bool OpenPlayerNameMenu(uint32_t owner);
   bool EditPlayerName(const std::string& draft);
   bool ConfirmPlayerName();
+  bool DeferAppearanceMenu(uint32_t owner);
+  bool OpenSpecialBook(uint32_t owner,uint32_t total);
+  bool AdjustSpecialBook(unsigned attribute,int delta);
+  bool ConfirmSpecialBook();
+  int SpecialBookRemaining()const;
   bool SetCharacterGeneration(bool enabled);
   bool SetNoActivationSound(uint32_t sound);
   bool SetLocationSpecificLoadScreens(bool enabled);

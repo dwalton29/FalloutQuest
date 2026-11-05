@@ -443,6 +443,10 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
     switch(c.type) {
     case C::Return:return true;
     case C::PlayerSex:ok=SetPlayerSex(c.index==2?!PlayerFemale():c.index==1);break;
+    case C::DeferredAppearanceMenu:ok=DeferAppearanceMenu(owner);break;
+    case C::SpecialBook:ok=OpenSpecialBook(owner,uint32_t(c.value));break;
+    // Explicit temporary policy: retain existing race/face/default-hair assets.
+    case C::DeferredAppearance:{fo3pipdata::Location location;ok=!c.form||ScriptReferenceLocation(c.form,location);break;}
     case C::PlayerNameMenu:ok=OpenPlayerNameMenu(owner);break;
     case C::CharacterGeneration:ok=SetCharacterGeneration(c.value!=0);break;
     case C::LocationLoadScreens:ok=SetLocationSpecificLoadScreens(c.value!=0);break;
@@ -847,6 +851,8 @@ bool Player::SourceEventCompileReady(uint32_t script,const char* event,uint32_t 
 bool Player::PumpWorldAwareGameMode(double seconds,const std::vector<uint32_t>& resident,
     const std::function<bool(std::unique_ptr<ScriptTransactionPlan>)>& reserveWorld,bool menuMode) {
   if(!std::isfinite(seconds)||seconds<=0||seconds>1||!reserveWorld)return false;
+  const auto deferredOwner=state_.deferredAppearanceOwner;
+  if(deferredOwner||state_.specialMenuOwner||state_.nameMenuOwner)menuMode=true;
   // Reference scripts retain their bounded cadence. Quest scripts use their
   // original DATA/SetQuestDelay interval, with at most one run per frame.
   if(!menuMode)questScriptAccumulator_=std::min(.5,questScriptAccumulator_+seconds);
@@ -866,13 +872,20 @@ bool Player::PumpWorldAwareGameMode(double seconds,const std::vector<uint32_t>& 
     // Capture the *same* original event that would be committed. An
     // uncommitted candidate has no world, inventory or effect side effects.
     auto plan=PrepareScriptTransaction([=](Player& candidate,std::string& e){
-      return candidate.RunSourceEventDirect(script,event,owner,0,e);
+      if(!candidate.RunSourceEventDirect(script,event,owner,0,e))return false;
+      if(candidate.state_.deferredAppearanceOwner==owner&&std::string(event)=="MenuMode"){
+        candidate.state_.deferredAppearanceOwner=0;++candidate.revision_;
+      }
+      return true;
     },error,true);
     if(!plan){
       // Some existing non-world scripts are source-supported but cannot
       // capture the stricter resident provenance yet. Preserve their existing
       // transactional gameplay path; it never publishes world changes.
-      if(RunSourceEvent(script,event,owner,0,error))return false;
+      if(RunSourceEvent(script,event,owner,0,error)){
+        if(state_.deferredAppearanceOwner==owner&&std::string(event)=="MenuMode"){state_.deferredAppearanceOwner=0;++revision_;}
+        return false;
+      }
     }else if(!plan->HasReferenceChanges()){
       if(CommitScriptTransaction(*plan))return false;
       error="GameMode script transaction changed before publication";
@@ -926,6 +939,16 @@ bool Player::PumpWorldAwareGameMode(double seconds,const std::vector<uint32_t>& 
     if(elapsed+1e-7<interval)continue;
     tick->second=questScriptClock_;scriptElapsedSeconds_=elapsed;
     if(run(q->second.script,"GameMode",id,false))return true;
+    if(state_.deferredAppearanceOwner||state_.specialMenuOwner||state_.nameMenuOwner)return false;
+  }
+  if(menuMode&&deferredOwner&&state_.deferredAppearanceOwner==deferredOwner){
+    const auto quest=catalog_->pipboy.quests.find(deferredOwner);
+    bool handler=false;
+    if(quest!=catalog_->pipboy.quests.end()&&std::find(quests.begin(),quests.end(),deferredOwner)!=quests.end()){
+      const auto program=catalog_->eventPrograms.find(quest->second.script);
+      if(program!=catalog_->eventPrograms.end())for(const auto& block:program->second.blocks)handler|=block.event=="menumode";
+    }
+    if(!handler){state_.deferredAppearanceOwner=0;++revision_;}
   }
   if(menuMode||!referencesDue)return false;
   scriptElapsedSeconds_=referenceElapsed;
@@ -939,6 +962,7 @@ bool Player::PumpWorldAwareGameMode(double seconds,const std::vector<uint32_t>& 
     if(!ReferenceDisabled(id,disabled,error)||disabled)continue;
     const auto script=catalog_->eventBaseScripts.at(ref->second.base);
     if(run(script,"GameMode",id,true))return true;
+    if(state_.deferredAppearanceOwner||state_.specialMenuOwner||state_.nameMenuOwner)return false;
   }
   return false;
 }

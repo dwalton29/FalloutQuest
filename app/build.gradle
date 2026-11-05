@@ -22,8 +22,8 @@ android {
         applicationId 'com.falloutquest.app'
         minSdk 29
         targetSdk 35
-        versionCode 311
-        versionName '0.161.0-vault-inventory-scripts'
+        versionCode 312
+        versionName '0.162.0-deferred-appearance-special-book'
 
         ndk {
             abiFilters 'arm64-v8a'
@@ -39,6 +39,11 @@ android {
     buildTypes {
         debug {
             signingConfig signingConfigs.debug
+            externalNativeBuild {
+                cmake {
+                    arguments '-DFALLOUTQUEST_OPTIMIZED_PROFILE=OFF'
+                }
+            }
         }
         // The same source and app ID as Debug, but with native C++ -O2.
         // Keep Android debuggability, the dev signing key, and FQPerf capture.
