@@ -29,7 +29,16 @@ class HdrPassOrder(unittest.TestCase):
         self.assertIn('q2090ReflectionReady ? gWaterReflectionColorQ2090 : 0u',scene)
         self.assertIn('q2090ReflectionReady ? q2090ReflectionMvp : nullptr',scene)
         eye=LOOP.split('bool RenderEye(',1)[1].split('\nprivate:',1)[0]
-        self.assertNotIn('glClear(',eye)
+        # The title owns an isolated colour/depth surface. Gameplay still
+        # defers its clear to Q233BeginMainEyeWorld after water visibility.
+        self.assertIn('const bool loadingEye=IsFo3LoadingVisible()||titleEye;',eye)
+        before_title,title_and_after=eye.split('if(titleEye){',1)
+        title,after_title=title_and_after.split('}else RenderFo3LoadingVr(',1)
+        self.assertIn('if(loadingEye) {',before_title)
+        self.assertIn('glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT)',title)
+        self.assertLess(title.index('glDepthMask(GL_TRUE)'),title.index('glClear('))
+        self.assertLess(title.index('glClear('),title.index('fo3titleui::Render('))
+        self.assertNotIn('glClear(',before_title+after_title)
         self.assertNotIn('RenderFo3PcSky(',eye)
     def test_clear_honours_depth_mask_and_interior_loading_guards(self):
         begin=CORE.split('void Q233BeginMainEyeWorld()',1)[1].split('void RenderScene(',1)[0]
