@@ -127,7 +127,12 @@ std::unique_ptr<ScriptTransactionPlan> Player::PrepareReferenceEventTransaction(
 bool Player::PackageEventNeeded(uint32_t reference,uint32_t package,bool completed) const {
   const auto old=state_.actorPackageEvents.find(reference);
   if(old!=state_.actorPackageEvents.end()&&old->second.first==package&&(!completed||old->second.second))return false;
-  if(!HasReferenceEvent(reference,"OnPackageStart")&&!HasReferenceEvent(reference,"OnPackageDone")&&!HasReferenceEvent(reference,"OnPackageChange"))return false;
+  auto actions=[&](uint32_t id){const auto p=catalog_->pipboy.packages.find(id);if(p==catalog_->pipboy.packages.end())return false;
+    if(p->second.procedureActions||p->second.otherProcedureScript)return true;
+    for(size_t n=0;n<3;++n)if(p->second.procedureIdles[n]||!p->second.procedureScripts[n].source.empty()||!p->second.procedureScripts[n].compiled.empty())return true;
+    return false;};
+  if(!actions(package)&&!(old!=state_.actorPackageEvents.end()&&actions(old->second.first))&&
+     !HasReferenceEvent(reference,"OnPackageStart")&&!HasReferenceEvent(reference,"OnPackageDone")&&!HasReferenceEvent(reference,"OnPackageChange"))return false;
   if(completed)return package&&(old==state_.actorPackageEvents.end()||old->second.first!=package||!old->second.second);
   return old==state_.actorPackageEvents.end()?package!=0:old->second.first!=package;
 }
@@ -136,15 +141,29 @@ std::unique_ptr<ScriptTransactionPlan> Player::PreparePackageEventTransaction(
   if(!catalog_->actorPlacements.count(reference)||(package&&!catalog_->pipboy.packages.count(package))){error="invalid package event actor/package";return {};}
   return PrepareScriptTransaction([=](Player& candidate,std::string& e){
     if(!candidate.PackageEventNeeded(reference,package,completed))return true;
-    const auto script=catalog_->eventBaseScripts.at(catalog_->references.at(reference).base);
+    const auto association=catalog_->eventBaseScripts.find(catalog_->references.at(reference).base);
+    const auto script=association==catalog_->eventBaseScripts.end()?0:association->second;
     const auto old=candidate.state_.actorPackageEvents.find(reference);
     const uint32_t previous=old==candidate.state_.actorPackageEvents.end()?0:old->second.first;
     candidate.state_.actorPackageEvents[reference]={package,completed};++candidate.revision_;
-    auto run=[&](const char* event,uint32_t filter){return !candidate.HasReferenceEvent(reference,event)||candidate.RunSourceEventDirect(script,event,reference,0,e,filter);};
-    if(completed)return run("OnPackageDone",package);
-    // Completion and interruption are distinct. Combat/dialogue temporarily
-    // suspend a package; only adoption of a different one sends OnPackageChange.
-    return (!previous||run("OnPackageChange",previous))&&(!package||run("OnPackageStart",package));
+    const auto previousReference=candidate.scriptReference_;candidate.scriptReference_=reference;
+    struct Restore {Player& p;uint32_t reference;~Restore(){p.scriptReference_=reference;}} restore{candidate,previousReference};
+    auto run=[&](const char* event,uint32_t filter,unsigned phase){
+      const auto& definition=catalog_->pipboy.packages.at(filter);
+      if(definition.procedureActions||definition.otherProcedureScript){e="unsupported package topic/action framing";return false;}
+      const auto& result=definition.procedureScripts[phase];
+      if(!result.source.empty()||!result.compiled.empty()){
+        ScriptProgramOrigin origin;origin.kind=ScriptProgramKind::PackageResult;origin.record=filter;origin.item=phase;
+        unsigned budget=4096;if(!candidate.RunScript(result,reference,0,budget,e,0,std::move(origin)))return false;
+      }
+      if(definition.procedureIdles[phase]){
+        fo3script::Action idle;idle.kind=fo3script::ActionKind::PackageIdle;idle.reference=reference;idle.form=definition.procedureIdles[phase];idle.flags=definition.flags;
+        if(!candidate.QueueScriptAction(std::move(idle))){e="package idle action queue full";return false;}
+      }
+      return !candidate.HasReferenceEvent(reference,event)||candidate.RunSourceEventDirect(script,event,reference,0,e,filter);
+    };
+    if(completed)return run("OnPackageDone",package,1);
+    return (!previous||run("OnPackageChange",previous,2))&&(!package||run("OnPackageStart",package,0));
   },error,capture==ScriptProgramCapture::EnteredPrograms);
 }
 std::unique_ptr<ScriptTransactionPlan> Player::PrepareTerminalTransaction(

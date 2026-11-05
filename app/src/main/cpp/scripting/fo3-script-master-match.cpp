@@ -51,7 +51,7 @@ bool Contexts(const std::vector<Execution>& programs){
     const auto& e=programs[n];
     if(e.parent==Execution::NoParent){
       depth=0;
-      if(e.origin.kind==Kind::ReferenceEvent||e.origin.kind==Kind::TerminalEntry){if(e.reference!=e.owner)return false;}
+      if(e.origin.kind==Kind::ReferenceEvent||e.origin.kind==Kind::TerminalEntry||e.origin.kind==Kind::PackageResult){if(e.reference!=e.owner)return false;}
       else if(e.reference||e.activator)return false;
     }else{
       if(e.parent>=n||e.origin.kind!=Kind::QuestStageItem)return false;
@@ -79,6 +79,9 @@ const char* Type(const Execution& e){
         !e.owningQuest&&e.questConditions.empty()?"QUST":nullptr;
     case Kind::DialogueInfo:
       return e.owner&&o.topic&&o.item<2&&!o.stage&&!o.sourceLine&&o.event.empty()&&!e.localScript&&Empty(e.container)?"INFO":nullptr;
+    case Kind::PackageResult:
+      return e.owner&&o.item<3&&!o.topic&&!o.stage&&!o.sourceLine&&o.event.empty()&&!e.localScript&&Empty(e.container)&&
+        !e.owningQuest&&e.conditions.empty()&&e.questConditions.empty()&&!e.activator?"PACK":nullptr;
     case Kind::TerminalEntry:
       return e.owner&&o.topic&&!o.stage&&!o.sourceLine&&o.event.empty()&&!e.localScript&&Empty(e.container)&&
         !e.owningQuest&&e.questConditions.empty()&&e.activator==fo3player::PlayerRef?"TERM":nullptr;
@@ -112,6 +115,7 @@ bool Complete(const std::vector<uint8_t>& b,const std::string& type){
     scalars|=bit;
     if((Is(tag,"SCRO")||Is(tag,"SCRV"))&&n!=4)return false;
     if(type=="TERM"&&Is(tag,"ITXT"))scalars=0;
+    if(type=="PACK"&&(Is(tag,"POBA")||Is(tag,"POEA")||Is(tag,"POCA")))scalars=0;
     if(type=="INFO"&&Is(tag,"NEXT")){if(n||++next>1)return false;scalars=0;}
     if(type=="INFO"&&Is(tag,"TPIC")){if(n!=4||++tpic>1)return false;}
     if(type=="INFO"&&Is(tag,"QSTI")){if(n!=4||++quest>1)return false;}
@@ -133,6 +137,10 @@ bool Authored(const Execution& e,const fo3pipdata::Definitions& d){
     const auto stage=q->second.stages.find(o.stage);
     return stage!=q->second.stages.end()&&o.item<stage->second.items.size()&&
       Same(e.conditions,stage->second.items[o.item].conditions)&&Same(e.program,stage->second.items[o.item].result);
+  }
+  if(o.kind==Kind::PackageResult){
+    const auto package=d.packages.find(o.record);
+    return package!=d.packages.end()&&o.item<3&&Same(e.program,package->second.procedureScripts[o.item]);
   }
   if(o.kind==Kind::TerminalEntry){
     const auto terminal=d.terminals.find(o.record);
@@ -338,7 +346,7 @@ bool MatchScriptProgramsToMaster(const std::string& master,const std::vector<Exe
       variableScripts[binding.script].push_back(&binding);
     }
     wanted[programs[n].origin.record].push_back(n);
-    if(e.origin.kind==Kind::ReferenceEvent||e.origin.kind==Kind::DialogueInfo||e.origin.kind==Kind::TerminalEntry)owners[e.owner].push_back(n);
+    if(e.origin.kind==Kind::ReferenceEvent||e.origin.kind==Kind::DialogueInfo||e.origin.kind==Kind::TerminalEntry||e.origin.kind==Kind::PackageResult)owners[e.owner].push_back(n);
   }
   fo3pipdata::Definitions terminalGraph;
   const bool terminalPrograms=std::any_of(programs.begin(),programs.end(),[](const auto& e){return e.origin.kind==Kind::TerminalEntry;});
@@ -527,8 +535,8 @@ bool MatchScriptProgramsToMaster(const std::string& master,const std::vector<Exe
       bool needsScript=false;
       for(const auto index:binding->second){
         const bool info=programs[index].origin.kind==Kind::DialogueInfo;
-        if(pass==0&&info&&type!="ACHR"&&type!="ACRE")return fail("dialogue speaker is not an authored actor placement");
-        needsScript=needsScript||(!info&&programs[index].origin.kind!=Kind::TerminalEntry);
+        if(pass==0&&(info||programs[index].origin.kind==Kind::PackageResult)&&type!="ACHR"&&type!="ACRE")return fail("dialogue speaker is not an authored actor placement");
+        needsScript=needsScript||(!info&&programs[index].origin.kind!=Kind::TerminalEntry&&programs[index].origin.kind!=Kind::PackageResult);
       }
       uint32_t association=0;
       if(!fo3esm::ReadPayload(file.get(),{p+24,n,flags,type},bytes)||

@@ -559,9 +559,8 @@ static const fo3pipdata::PackageDefinition* Q240SelectPackage(
     // resident authored chair. Other item/activator semantics remain unsupported.
     if(package.type==8&&(!package.location.valid||package.location.type!=0||package.location2.valid||
        !package.target.valid||package.target.type!=0||package.target2.valid||
-       package.typeFlags!=2||package.procedureActions||package.otherProcedureScript||
-       (package.scripted&&package.onBeginScript.empty()))){
-      Q240AiLogOnce(actor.source.refFormId,packageId,"Use Item At requires original seated reference target with supported OnBegin only");continue;
+       package.typeFlags!=2||package.procedureActions||package.otherProcedureScript)){
+      Q240AiLogOnce(actor.source.refFormId,packageId,"Use Item At requires original seated reference target and supported procedure actions");continue;
     }
     if(package.type==10&&(package.location.valid||!package.target.valid||package.target.type!=0||package.target.radius<=0||package.procedureActions)){
       Q240AiLogOnce(actor.source.refFormId,packageId,"Flee requires an actor reference, positive minimum distance, no start location or procedure action");continue;
@@ -570,7 +569,7 @@ static const fo3pipdata::PackageDefinition* Q240SelectPackage(
       Q240AiLogOnce(actor.source.refFormId,packageId,"Dialogue AI requires one real actor target and no unsupported procedure actions");continue;
     }
     if(!package.combatStyleValid){Q240AiLogOnce(actor.source.refFormId,packageId,"malformed package combat style");continue;}
-    if(package.scripted&&package.type!=8){Q240AiLogOnce(actor.source.refFormId,packageId,"package script");continue;}
+    if(package.otherProcedureScript){Q240AiLogOnce(actor.source.refFormId,packageId,"package script");continue;}
     if(!Q240ScheduleActive(package.schedule,hour))continue;
     if(!package.location.valid&&package.type!=1&&package.type!=7&&package.type!=10&&package.type!=15){Q240AiLogOnce(actor.source.refFormId,packageId,"missing PLDT");continue;}
     fo3dialogue::Context ctx;ctx.player=&gPlayerSession->player;
@@ -1505,29 +1504,12 @@ static void Q240AdvanceNpcPackage(Q230ActorVisual& actor,double now) {
     actor.runtime.activity=fo3npc::Activity::Idle;actor.runtime.speed=0;
     actor.runtime.animation=fo3npc::Animation::Idle;actor.aiPathGame.clear();actor.aiPathSurfaces.clear();actor.aiPathIndex=0;actor.runtime.navigationDoor=0;return;
   }
-  const bool newlySelected=actor.aiPackage!=packageId;
   if(!Q240AdoptPackage(actor,packageId,*package,anchor))return;
   if(state.xtelDoor){
     state.activity=fo3npc::Activity::Package;state.package=packageId;
     state.packageKnown=true;
     Q240AdvanceNpcXtel(actor,dt,now);
     return;
-  }
-  if(newlySelected&&package->type==8){
-    // The original POBA script is executed exactly once per adoption through
-    // the canonical, atomic dialogue-result interpreter. Failed scripts do not
-    // simulate an item-use success or apply guessed quest effects.
-    if(!package->onBeginScript.empty()){
-      fo3pipdata::ResultScript begin;begin.source=package->onBeginScript;
-      std::string error;
-      if(!gPlayerSession->player.ExecuteDialogueResult(begin,error)){
-        Q240AiLogOnce(actor.source.refFormId,packageId,"Use Item At OnBegin: "+error);
-        Q240PackageRouteFailed(actor,now,"unsupported Use Item At OnBegin");return;
-      }
-    }
-    Q6H_LOGI("NPC USEITEM BEGIN actor=%08X package=%08X item=%08X location=%08X",
-      actor.source.refFormId,packageId,package->target.value,package->location.value);
-    state.nextPackageEvaluation=0; // OnBegin may change its own CTDA gates.
   }
   if(package->type==13) {
     bool circular=false;const auto& points=*Q240PatrolRoute(actor,packageId,*package,&circular);const size_t n=points.size();

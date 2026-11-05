@@ -36,10 +36,17 @@ void Q230CacheDialogueAnimations(Q230ActorVisual& actor,const fo3pipdata::Defini
     const bool ready=!paths[i].empty()&&LoadFalloutMeshFile(paths[i],bytes)&&fo3anim::DecodeClip(bytes,actor.animations[i]);
     (void)ready;Q6H_LOGI("NPC CLIP actor=%08X slot=%zu ready=%d path=%s",actor.source.refFormId,i,ready,paths[i].c_str());
   }
-  if(d&&!actor.source.creature)for(const auto& topic:d->topics)for(const auto& info:topic.second){
-    const bool speaker=info.speaker==actor.source.baseFormId||std::any_of(info.conditions.begin(),info.conditions.end(),[&](const auto& c){return c.function==72&&c.a==actor.source.baseFormId&&c.run==0;});
-    if(!speaker)continue;
-    for(const auto& response:info.responses){const auto id=response.speakerAnimation;if(!id||actor.responseClips.count(id)||d->idleAnimationObjects.count(id))continue;
+  if(d&&!actor.source.creature){
+    std::unordered_set<uint32_t> idles;
+    for(const auto& topic:d->topics)for(const auto& info:topic.second){
+      const bool speaker=info.speaker==actor.source.baseFormId||std::any_of(info.conditions.begin(),info.conditions.end(),[&](const auto& c){return c.function==72&&c.a==actor.source.baseFormId&&c.run==0;});
+      if(speaker)for(const auto& response:info.responses)if(response.speakerAnimation)idles.insert(response.speakerAnimation);
+    }
+    if(const auto* definition=fo3pipdata::ActorCategory(*d,actor.source.baseFormId,16))for(uint32_t package:definition->packages){
+      const auto found=d->packages.find(package);if(found!=d->packages.end())for(uint32_t idle:found->second.procedureIdles)if(idle)idles.insert(idle);
+    }
+    for(uint32_t id:idles){
+      if(actor.responseClips.count(id)||d->idleAnimationObjects.count(id))continue;
       const auto model=d->idleModels.find(id);if(model==d->idleModels.end())continue;
       std::vector<uint8_t> bytes;fo3anim::Clip clip;
       if(LoadFalloutMeshFile(model->second,bytes)&&fo3anim::DecodeClip(bytes,clip)&&!clip.tracks.empty()&&clip.frequency>0&&clip.stop>clip.start){
@@ -792,6 +799,16 @@ void Q230RenderNpcActors(bool alphaPass) {
 }
 
 #ifndef FO3_ACTOR_RUNTIME_HOST_TEST
+void Q230PlayPackageIdle(Q230ActorVisual& actor,uint32_t idle,uint32_t packageFlags){
+  // Preserve the active voice token so its next update does not immediately
+  // replace this package action. A genuinely new response still takes over.
+  actor.responseIdle=idle;actor.responseLastTime=-1;
+  actor.responseStarted=std::chrono::duration<double>(Fo3GameplayNow().time_since_epoch()).count();actor.lastFrame=UINT64_MAX;
+  const auto clip=actor.responseClips.find(idle);
+  if(clip==actor.responseClips.end()){Q6H_LOGW("PACKAGE IDLE UNAVAILABLE actor=%08X idle=%08X",actor.source.refFormId,idle);return;}
+  actor.runtime.authoredMotionUntil=((packageFlags&4)||fo3anim::ControlsAccumulationRoot(clip->second))?
+    actor.responseStarted+(clip->second.stop-clip->second.start)/clip->second.frequency:0;
+}
 void Q230DialogueResponseAnimation(Q230ActorVisual& actor,const fo3dialogue::Session& session){
   if(session.phase!=fo3dialogue::Phase::Speaking||(actor.responseToken==session.audioToken&&actor.responseInfo==session.info))return;
   actor.responseToken=session.audioToken;actor.responseInfo=session.info;const auto* info=session.Current(gPlayerSession->player.Definitions().pipboy);

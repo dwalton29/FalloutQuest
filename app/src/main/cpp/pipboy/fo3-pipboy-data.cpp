@@ -491,25 +491,36 @@ void Decode(Definitions &d, const std::string &t, uint32_t id, uint32_t flags,
       package.schedule.duration=static_cast<int32_t>(U(schedule,4));
       package.schedule.valid=true;
     }
-    // PACK POBA/POEA/POCA delimit OnBegin/OnEnd/OnChange. Never treat a
-    // script in one event as permission to silently skip the others.
-    int event=0;
+    // Keep each procedure fragment separate, including its compiled/source
+    // evidence. INAM is an idle action; TNAM topic actions remain unsupported.
+    int event=-1;
     for(auto& v:s) {
-      if(v.type=="POBA"){event=1;continue;}
-      if(v.type=="POEA"){event=2;continue;}
-      if(v.type=="POCA"){event=3;continue;}
+      if(v.type=="POBA"){event=0;continue;}
+      if(v.type=="POEA"){event=1;continue;}
+      if(v.type=="POCA"){event=2;continue;}
       if(v.type=="CTDA")package.conditions.push_back(Cond(v));
-      else if((v.type=="INAM"||v.type=="TNAM")&&v.n==4&&U(&v))package.procedureActions=true;
-      else if(v.type=="SCDA"&&v.n){package.scripted=true;if(event!=1)package.otherProcedureScript=true;}
-      else if(v.type=="SCTX"&&v.n>1) {
-        package.scripted=true;
-        if(event==1) {
-          if(!package.onBeginScript.empty())package.onBeginScript+="\n";
-          package.onBeginScript+=fo3esm::ZString(v.p,v.n);
-        }else package.otherProcedureScript=true;
+      else if(v.type=="TNAM"&&v.n==4&&U(&v))package.procedureActions=true;
+      else if(v.type=="INAM"&&v.n==4){
+        if(event>=0)package.procedureIdles[event]=U(&v);
+        else if(U(&v))package.procedureActions=true;
       }
-      // Empty SCHR script headers are not executable actions.
+      else if(v.type=="SCHR"||v.type=="SCDA"||v.type=="SCTX"||v.type=="SCRO"||v.type=="SCRV"||v.type=="SLSD"||v.type=="SCVR"){
+        if(event<0){
+          const bool executable=(v.type=="SCDA"&&v.n)||(v.type=="SCTX"&&v.n>1);
+          package.scripted|=executable;
+          package.otherProcedureScript|=executable||v.type=="SCRO"||v.type=="SCRV"||v.type=="SLSD"||v.type=="SCVR";
+          // Legacy empty SCHR headers alone are not executable actions.
+          continue;
+        }
+        auto& result=package.procedureScripts[event];
+        result.records.push_back({v.type,std::vector<uint8_t>(v.p,v.p+v.n)});
+        if(v.type=="SCHR")result.header.assign(v.p,v.p+v.n);
+        if(v.type=="SCDA"){result.compiled.assign(v.p,v.p+v.n);package.scripted|=v.n!=0;}
+        if(v.type=="SCTX"){result.source+=fo3esm::ZString(v.p,v.n);package.scripted|=v.n>1;}
+        if(v.type=="SCRO"&&v.n==4)result.references.push_back(U(&v));
+      }
     }
+    package.onBeginScript=package.procedureScripts[0].source;
     d.packages[id]=std::move(package);
   } else if (t == "DIAL") {
     auto name = Text(s, "EDID");

@@ -139,9 +139,29 @@ static void OriginalColvinArrival(const fo3player::Catalog& original,const char*
   assert(gPlayerSession->player.Snapshot().actorPackageEvents.at(ref)==std::make_pair(package,true));
   std::cout<<"Original Colvin stage-74 arrival fixture: production NAVM Travel completion executes actor OnPackageDone -> MQ01 75 -> MQ01LD 70\n";
 }
+static void OriginalToddlerArrivals(const fo3player::Catalog& original,const char* path){
+  for(const auto& checkpoint:std::array<std::pair<const char*,uint16_t>,2>{{{"cg01dadclosegate",14},{"cg01dadshowbibleverse",73}}}){
+    auto c=original;const auto quest=c.pipboy.formNames.at("cg01"),ref=c.pipboy.formNames.at("cg01dadref"),package=c.pipboy.formNames.at(checkpoint.first);
+    auto& initial=c.initial.pipboy.quests[quest];initial.stage=checkpoint.second;initial.running=true;
+    const auto& definition=c.pipboy.packages.at(package);const auto marker=c.pipboy.targets.at(definition.location.value);
+    gCurrentCellFormId=marker.cell;gExteriorWorldspaceQ1890=marker.world;
+    std::vector<Fo3NpcNavMeshQ240> meshes;assert(LoadFo3NpcNavigationQ240(marker.cell,marker.world,meshes,path));
+    auto graph=std::make_shared<Q240NavigationGraph>();
+    for(auto& mesh:meshes){graph->triangleOffsets.push_back(graph->triangleCount);graph->triangleCount+=mesh.triangles.size();graph->byForm[mesh.formId]=graph->meshes.size();graph->meshes.push_back(std::make_shared<Fo3NpcNavMeshQ240>(std::move(mesh)));}
+    assert(graph->triangleCount);gPlayerSession=std::make_unique<Session>(c);gPlayerSession->player.RegisterOriginalActors();
+    Q230ActorVisual actor;actor.source.refFormId=ref;actor.source.baseFormId=c.pipboy.targets.at(ref).base;actor.navigationGraph=graph;
+    const auto from=c.pipboy.targets.at(c.pipboy.formNames.at("cg01dadstartmarker"));actor.runtime.position=Q240ScenePosition({from.x,from.y,from.z});
+    for(unsigned i=0;i<5000&&gPlayerSession->player.Snapshot().pipboy.quests.at(quest).stage==checkpoint.second;++i)Q240UpdateNpcPackage(actor,i*.05);
+    if(gPlayerSession->player.Snapshot().pipboy.quests.at(quest).stage==checkpoint.second)std::cerr<<"Toddler package stalled "<<checkpoint.first<<" package="<<actor.aiPackage<<" procedure="<<unsigned(actor.runtime.procedure)<<"\n";
+    assert(gPlayerSession->player.Snapshot().pipboy.quests.at(quest).stage==(checkpoint.second==14?16:74));
+    assert(gPlayerSession->player.Snapshot().actorPackageEvents.at(ref)==std::make_pair(package,true));
+  }
+  std::cout<<"Original toddler NAVM Travel executes gate and Bible package OnEnd stages, without reference-only callbacks\n";
+}
 static void Original(const char* path) {
   originalLogs=true;
   fo3player::Catalog catalog;std::string error;assert(fo3player::LoadCatalog(path,catalog,error));
+  OriginalToddlerArrivals(catalog,path);
   OriginalColvinArrival(catalog,path);
   size_t linkedRoutes=0;for(const auto& r:catalog.pipboy.actorPatrols)if(!r.second.empty())++linkedRoutes;
   std::cout<<"Original valid actor-linked Patrol routes="<<linkedRoutes<<'\n';assert(linkedRoutes>10);
@@ -319,12 +339,18 @@ static void PackageCallbacks(){
   auto& script=c.pipboy.scripts[90];script.source="scn Actor\nBegin OnPackageStart Trip\nRewardKarma 1\nEnd\nBegin OnPackageDone Trip\nRewardKarma 10\nEnd\nBegin OnPackageChange Trip\nRewardKarma 100\nEnd";
   c.eventPrograms[90]=fo3script::ParseEvents(script);
   c.pipboy.packages[50].schedule.valid=true;c.pipboy.packages[50].schedule.hour=12;c.pipboy.packages[50].schedule.duration=1;
+  auto& actions=c.pipboy.packages[50];actions.scripted=true;
+  actions.procedureScripts[0].source="RewardKarma 2";actions.procedureScripts[1].source="RewardKarma 20";actions.procedureScripts[2].source="RewardKarma 200";
+  actions.procedureIdles={701,702,0};
   c.pipboy.packages[52]=c.pipboy.packages[50];c.pipboy.packages[52].schedule.valid=false;
+  c.pipboy.packages[52].procedureScripts={};c.pipboy.packages[52].procedureIdles={};c.pipboy.packages[52].scripted=false;
   c.pipboy.dialogueActors[43].packages.push_back(52);
   gPlayerSession=std::make_unique<Session>(c);packageHour=12;
   for(int i=0;i<2000;++i)Q240UpdateNpcPackage(actor,i*.05);
-  assert(gPlayerSession->player.Snapshot().karma==11&&actor.runtime.procedure==fo3npc::Procedure::Completed);
+  assert(gPlayerSession->player.Snapshot().karma==33&&actor.runtime.procedure==fo3npc::Procedure::Completed);
   assert(!gPlayerSession->player.PackageEventNeeded(42,50,true));
+  fo3script::Action action;std::vector<uint32_t> idles;while(gPlayerSession->player.PollScriptAction(action))if(action.kind==fo3script::ActionKind::PackageIdle)idles.push_back(action.form);
+  assert(idles==std::vector<uint32_t>({701,702}));
   auto path="/tmp/fq-package-events-"+std::to_string(getpid());std::string error;
   assert(gPlayerSession->player.Save(path,error));gPlayerSession=std::make_unique<Session>(c);assert(gPlayerSession->player.Restore(path,error));unlink(path.c_str());
   // Displace/reload a visual and let the production route reach its endpoint
@@ -332,10 +358,17 @@ static void PackageCallbacks(){
   actor.aiPackage=0;actor.aiSequence=0;actor.aiPathGame.clear();actor.aiPathIndex=0;actor.aiLastUpdate=-1;
   actor.runtime.position=Q240ScenePosition({1010,2010,20});actor.runtime.nextPackageEvaluation=0;
   for(int i=0;i<2000;++i)Q240UpdateNpcPackage(actor,100+i*.05);
-  assert(gPlayerSession->player.Snapshot().karma==11);
+  assert(gPlayerSession->player.Snapshot().karma==33);
   packageHour=14;actor.runtime.nextPackageEvaluation=0;
   for(int i=0;i<20;++i)Q240UpdateNpcPackage(actor,201+i*.05);
-  assert(actor.aiPackage==52&&gPlayerSession->player.Snapshot().karma==111);packageHour=12;
+  assert(actor.aiPackage==52&&gPlayerSession->player.Snapshot().karma==333);packageHour=12;
+  // PACK-only actors need no SCRI to execute their own fragments. Rejecting a
+  // later boundary keeps the completion record and its effects unpublished.
+  c.eventBaseScripts.clear();fo3player::Player only(c);std::string failure;
+  auto begin=only.PreparePackageEventTransaction(42,50,false,failure);assert(begin&&only.CommitScriptTransaction(*begin)&&only.Snapshot().karma==2);
+  c.pipboy.packages[50].procedureScripts[1].source="RewardKarma 20\nUnsupportedBoundary";
+  fo3player::Player rejected(c);begin=rejected.PreparePackageEventTransaction(42,50,false,failure);assert(begin&&rejected.CommitScriptTransaction(*begin));
+  assert(!rejected.PreparePackageEventTransaction(42,50,true,failure)&&rejected.Snapshot().karma==2&&!rejected.Snapshot().actorPackageEvents.at(42).second);
   std::cout<<"Production NAVM package start/arrival/change callbacks and reload replay protection passed\n";
 }
 int main(int argc,char** argv) {

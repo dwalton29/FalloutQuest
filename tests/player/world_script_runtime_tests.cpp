@@ -44,6 +44,7 @@ uint64_t gQ230NpcResidenceRevision=0;
 ActorVisual* DialogueActor(uint32_t ref){for(auto& a:gQ230NpcActors)if(a.source.refFormId==ref)return &a;return nullptr;}
 std::array<float,3> Q240GamePosition(const ActorVisual& a){return a.runtime.position;}
 void Q230DialogueResponseAnimation(ActorVisual&,const fo3dialogue::Session&){}
+void Q230PlayPackageIdle(ActorVisual& a,uint32_t idle,uint32_t){a.responseIdle=idle;}
 fo3dialogue::Session gDialogue;
 struct Chat{bool Active()const{return false;}}gQ230NpcChat;
 uint32_t gCurrentCellFormId=1,gExteriorWorldspaceQ1890=0;
@@ -95,7 +96,7 @@ int main(int argc,char** argv){try{
  c.references[10].base=100;c.references[10].cell=1;c.pipboy.targets[10].cell=1;
  c.pipboy.triggerPrimitives[10]={{2,2,2},1,true};c.eventBaseScripts[100]=200;c.pipboy.objectReferenceScripts[10]={200,100};
  auto& script=c.pipboy.scripts[200];script.variables={{1,"opened"},{2,"loaded"}};
- script.source="scn C\nshort opened\nshort loaded\nBegin OnTriggerEnter player\nPlayGroup Advance 5\nEnd\nBegin OnLoad\nset loaded to loaded + 1\nEnd\nBegin GameMode\nif IsAnimPlaying == 0\nPlayGroup Idle 5\nendif\nEnd";
+ script.source="scn C\nshort opened\nshort loaded\nBegin OnTrigger\nRewardKarma 1\nEnd\nBegin OnTriggerEnter player\nPlayGroup Advance 5\nEnd\nBegin OnLoad\nset loaded to loaded + 1\nEnd\nBegin GameMode\nif IsAnimPlaying == 0\nPlayGroup Idle 5\nendif\nEnd";
  c.eventPrograms[200]=fo3script::ParseEvents(script);
  c.references[81].base=810;c.pipboy.targets[81].base=810;c.pipboy.targets[81].cell=1;
  c.pipboy.dialogueActors[810].talkingActivator=true;
@@ -124,9 +125,9 @@ int main(int argc,char** argv){try{
  clip.textKeys.clear();clip.name="Idle";clip.cycle=0;clip.stop=1;clip.tracks[0].translation.keys={{0,{4,0,0,0},{},{}}};asset->clips.push_back(clip);
  gPlayerSession=std::make_unique<fo3player::Session>(std::move(c));auto& p=gPlayerSession->player;
  GpuObject object;object.refFormId=10;object.q2401DoorAnimation=asset;gObjects.push_back(object);
- p.SetScriptPlayerLocation(0,0,0,1,0);fo3worldscript::Register();p.SetScriptRuntimeClock(0,.25);fo3worldscript::Events();fo3worldscript::Actions();fo3worldscript::Animate();
+ p.SetScriptPlayerLocation(0,0,0,1,0);fo3worldscript::Register();p.SetScriptRuntimeClock(0,.25);fo3worldscript::Events();fo3worldscript::TriggerTick();fo3worldscript::Actions();fo3worldscript::Animate();
  Check(fo3worldscript::animations.at(10).clip==0,"trigger plays authored group");Check(p.ScriptTriggerChanges().empty(),"committed trigger acknowledged");
- fo3worldscript::seconds=1;p.SetScriptRuntimeClock(1,.25);fo3worldscript::Events();fo3worldscript::Animate();
+ fo3worldscript::seconds=1;p.SetScriptRuntimeClock(1,.25);fo3worldscript::Events();fo3worldscript::TriggerTick();fo3worldscript::Animate();
  Check(std::abs(gObjects[0].q2400DoorTransform[12]-2)<1e-5&&gObjects[0].materialAlpha==.5f,"live node transform and alpha");
  Check(fo3audio::sounds==std::vector<uint32_t>{700},"authored lowercase sound key emitted once");
  Check(collision.nodeTransforms.at(1)[12]==2&&collision.nodeTransforms.at(0)[12]==0,"independent collision node transforms");
@@ -142,6 +143,12 @@ int main(int argc,char** argv){try{
  fo3worldscript::Animate();
  Check(gObjects[0].q2400DoorTransform[12]==0&&gObjects[1].q2400DoorTransform[12]==4,"animation refreshes shape slots after mid-frame publication");
  gObjects.erase(gObjects.begin());++gFo3VisualPublication.revision;fo3worldscript::Animate();
+ Check(p.Snapshot().karma==2,"OnTrigger follows enter and runs while occupied");
+ const int beforeContinuousSave=saves;fo3worldscript::TriggerTick();Check(p.Snapshot().karma==3,"continuous trigger repeats without another enter");
+ Check(saves==beforeContinuousSave,"continuous callback leaves persistence to throttled script saves");
+ p.SetScriptPlayerLocation(10,0,0,1,0);fo3worldscript::Events();fo3worldscript::TriggerTick();Check(p.Snapshot().karma==3&&p.ScriptOccupiedTriggers().empty(),"leave ends continuous events");
+ p.SetScriptPlayerLocation(0,0,0,999,0);fo3worldscript::Events();fo3worldscript::TriggerTick();Check(p.Snapshot().karma==3,"another cell cannot trigger");
+ p.SetScriptPlayerLocation(0,0,0,1,0);
  defaultTeleport.valid=true;defaultTeleport.destinationDoorRefFormId=31;defaultTeleport.x=100;defaultTeleport.y=200;defaultTeleport.z=300;
  Check(fo3worldscript::Event(30,"OnActivate",fo3player::PlayerRef),"source delegates default activation");fo3worldscript::Actions();
  Check(defaultTransitions==1&&defaultSource==30&&defaultDestination==31,"production adapter queues original door transition");
@@ -154,6 +161,8 @@ int main(int argc,char** argv){try{
  fo3worldscript::Actions();Check(!p.CanLootContainer(80),"default container delivery rechecks lock");
  // Exercise the production speech adapter with token-owned audio completion.
  ActorVisual voiceActor;voiceActor.source={40,400};gQ230NpcActors.push_back(voiceActor);++gQ230NpcResidenceRevision;
+ fo3script::Action idle;idle.kind=fo3script::ActionKind::PackageIdle;idle.reference=40;idle.form=701;idle.flags=4;
+ Check(p.QueueScriptAction(idle),"queue authored package idle");fo3worldscript::Actions();Check(gQ230NpcActors.back().responseIdle==701,"package idle reaches resident animation adapter");
  fo3worldscript::SpeechTick(); // Initialize the independent session generation.
  fo3script::Action say;say.kind=fo3script::ActionKind::SayTo;say.reference=40;say.form=500;say.flags=fo3player::PlayerRef;
  Check(p.QueueScriptAction(say),"queue original SayTo");fo3worldscript::Actions();fo3worldscript::SpeechTick();

@@ -330,7 +330,7 @@ struct ActorCensusReport {
 enum class ScriptEventResult : uint8_t { NoHandler, Executed, Unsupported, Pending };
 class Player;
 class ScriptTransactionPlan;
-enum class ScriptProgramKind : uint8_t {UnboundResult,QuestStageItem,ReferenceEvent,DialogueInfo,TerminalEntry};
+enum class ScriptProgramKind : uint8_t {UnboundResult,QuestStageItem,ReferenceEvent,DialogueInfo,TerminalEntry,PackageResult};
 enum class DialogueScriptPhase : uint8_t {Begin,End,Both};
 enum class ScriptProgramCapture : uint8_t {None,EnteredPrograms};
 struct ScriptProgramOrigin {
@@ -600,6 +600,7 @@ public:
   bool PollScriptAction(fo3script::Action& action);
   double ScriptSecondsPassed() const {return scriptElapsedSeconds_;}
   std::vector<std::pair<uint32_t,bool>> ScriptTriggerChanges() const;
+  std::vector<uint32_t> ScriptOccupiedTriggers() const;
   void AcknowledgeScriptTrigger(uint32_t reference,bool inside);
   bool QueueScriptSound(uint32_t form);
   bool PollScriptMessage(ScriptMessage& out);

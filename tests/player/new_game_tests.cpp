@@ -250,7 +250,7 @@ static void OriginalInventory(const fo3player::Catalog& catalog){
   Player restored(catalog);Check(restored.Restore(save,error),error);unlink(save.c_str());
   assert(restored.ItemCount(id("vaultsuit101"))==1&&restored.ItemCount(pipboy)>=1&&restored.ItemCount(id("ammo10mm"))==66);
 }
-static void OriginalIdentity(const fo3player::Catalog& catalog,bool female){
+static void OriginalIdentity(const fo3player::Catalog& catalog,bool female,const char* master){
   fo3player::Player p(catalog);p.RegisterOriginalActors();std::string error;
   const auto& d=catalog.pipboy;const auto quest=d.formNames.at("cg00");
   auto boot=p.PrepareNewGameTransaction(quest,error);Check(bool(boot)&&p.CommitScriptTransaction(*boot),error);
@@ -261,10 +261,49 @@ static void OriginalIdentity(const fo3player::Catalog& catalog,bool female){
   // Renderer-capability fixture, not a claim that the original NIF was loaded.
   (*registry)[d.formNames.at("cg00geneprojectorref")]={{"forward",1,false},{"backward",1,false}};p.SetScriptAnimationRegistry(registry);
   bool chose=false,genderLine=false,enteredName=false,sawMovie=false;const auto baby=d.formNames.at("cg01");
-  unsigned modalTicks=0;
-  for(unsigned frame=0;frame<1600;++frame){
+  const auto scriptedReference=[&](const char* name){
+    const auto script=d.formNames.at(name);
+    for(const auto& ref:catalog.references){const auto found=catalog.eventBaseScripts.find(ref.second.base);if(found!=catalog.eventBaseScripts.end()&&found->second==script)return ref.first;}
+    assert(false&&"original scripted reference missing");return uint32_t(0);
+  };
+  auto event=[&](uint32_t ref,const char* name){if(!p.HasReferenceEvent(ref,name))return;auto plan=p.PrepareReferenceEventTransaction(ref,name,fo3player::PlayerRef,error);Check(bool(plan)&&p.CommitScriptTransaction(*plan),error);};
+  auto enter=[&](const char* script){const auto ref=scriptedReference(script);const auto& at=d.targets.at(ref);p.SetScriptPlayerLocation(at.x,at.y,at.z,at.cell,at.world);};
+  auto arrival=[&](const char* package){
+    const auto ref=d.formNames.at("cg01dadref"),id=d.formNames.at(package);
+    // Presentation fixture signals an actual package start/arrival boundary;
+    // package and actor scripts perform all quest progression themselves.
+    for(bool completed:{false,true}){
+      auto actor=p.Snapshot().actors.at(ref);actor.package=id;
+      if(completed){const auto& at=d.targets.at(d.packages.at(id).location.value);actor.position={at.x,at.y,at.z};actor.cell=at.cell;actor.world=at.world;}
+      Check(p.UpdateActor(ref,actor),"original package arrival pose fixture");
+      auto plan=p.PreparePackageEventTransaction(ref,id,completed,error,fo3player::ScriptProgramCapture::EnteredPrograms);Check(bool(plan),error);
+      if(!plan->ExecutedScripts().empty()){std::atomic<bool> cancel{false};fo3script::ScriptMasterMatch report;Check(fo3script::MatchScriptProgramsToMaster(master,plan->ExecutedScripts(),report,cancel,error),error);}
+      Check(p.CommitScriptTransaction(*plan),error);
+    }
+  };
+  unsigned modalTicks=0;bool allocated=false,followed=false;
+  for(unsigned frame=0;frame<2400;++frame){
     const auto child=p.Snapshot().pipboy.quests.find(baby);
-    if(child!=p.Snapshot().pipboy.quests.end()&&child->second.stage==10)break;
+    if(child!=p.Snapshot().pipboy.quests.end()){
+      const auto stage=child->second.stage;
+      if(stage==90)break;
+      if(stage==10)enter("cg01dadtriggerscript");
+      if(stage==14&&p.Snapshot().pipboy.dialogueVariables.at(fo3dialogue::VariableKey(d,"CG01DadREF.doTalk"))==0)arrival("cg01dadclosegate");
+      if(stage==16&&p.Snapshot().pipboy.dialogueVariables.at(fo3dialogue::VariableKey(d,"CG01DadREF.doTalk"))==0)arrival("cg01dadclosedoor");
+      if(stage==20)event(d.formNames.at("cg01playpengateref"),"OnActivate");
+      if(stage==30)enter("cg01exitcribtriggerscript");
+      if(stage==40){event(scriptedReference("cg01specialbookscript"),"OnActivate");
+        assert(p.Snapshot().specialMenuTotal==40);
+        while(p.SpecialBookRemaining()>0)for(unsigned n=0;n<7&&p.SpecialBookRemaining()>0;++n)if(p.Snapshot().specialDraft[n]<10)assert(p.AdjustSpecialBook(n,1));
+        assert(p.ConfirmSpecialBook());allocated=true;
+      }
+      if(stage==70)arrival("cg01dadreturn");
+      if(stage==73&&p.Snapshot().pipboy.dialogueVariables.at(fo3dialogue::VariableKey(d,"CG01DadREF.doTalk"))==0)arrival("cg01dadshowbibleverse");
+      if(stage==80){enter("cg01endquesttriggerscript");followed=true;}
+      for(const auto& change:p.ScriptTriggerChanges()){event(change.first,change.second?"OnTriggerEnter":"OnTriggerLeave");p.AcknowledgeScriptTrigger(change.first,change.second);}
+      for(uint32_t ref:p.ScriptOccupiedTriggers())event(ref,"OnTrigger");
+      if(p.Snapshot().pipboy.quests.at(baby).stage==90)break;
+    }
     if(p.Snapshot().movie.owner){
       const auto request=p.Snapshot().movie;assert(!sawMovie&&request.path=="1 year later.bik"&&request.flags==4&&request.owner==baby);
       assert(p.Snapshot().playerToddler&&p.Snapshot().playerScale==.4f&&p.Snapshot().pipboy.quests.at(baby).stage==5);sawMovie=true;
@@ -321,7 +360,9 @@ static void OriginalIdentity(const fo3player::Catalog& catalog,bool female){
   const auto& birth=p.Snapshot().pipboy.quests.at(quest);
   if(birth.stage!=100)std::cerr<<"Birth stopped at "<<birth.stage<<'\n';
   assert(birth.stage==100&&!birth.running&&birth.stages.count(61)&&birth.stages.count(62)&&birth.stages.count(65)&&birth.stages.count(80));
-  assert(sawMovie&&p.Snapshot().pipboy.quests.at(baby).stage==10&&p.Snapshot().playerToddler&&p.Snapshot().playerScale==.4f);
+  if(p.Snapshot().pipboy.quests.at(baby).stage!=90)std::cerr<<"Toddler stopped at "<<p.Snapshot().pipboy.quests.at(baby).stage<<"\n";
+  assert(sawMovie&&allocated&&followed&&p.Snapshot().pipboy.quests.at(baby).stage==90&&p.Snapshot().playerToddler&&p.Snapshot().playerScale==.4f);
+  assert(!p.Snapshot().autoDisplayObjectives&&p.Snapshot().pipboy.quests.at(baby).stages.count(50));
   const auto save="/tmp/fq-original-identity-"+std::to_string(getpid());Check(p.Save(save,error),error);
   fo3player::Player restored(catalog);Check(restored.Restore(save,error),error);unlink(save.c_str());
   assert(restored.PlayerFemale()==female&&restored.PlayerName()==(female?"Catherine":"James"));
@@ -365,6 +406,6 @@ int main(int argc,char** argv){
   const auto& base=catalog.imageModifiers.at(catalog.pipboy.formNames.at("cg00birthbaseisfx"));assert(base.valid&&!(base.flags&1));
   fo3script::ImageStack images;images.Apply(1,base,0);images.Apply(2,catalog.imageModifiers.at(catalog.pipboy.formNames.at("cg00blackscreenisfx")),0);
   assert(images.Sample(0).fade[3]>.9f);images.Sample(20);assert(images.entries.size()==1);images.Remove(1);assert(images.entries.empty());
-  OriginalIdentity(catalog,false);OriginalIdentity(catalog,true);OriginalInventory(catalog);OriginalSpecialBook(catalog);
-  std::cout<<"Original birth through toddler arrival and first objective, both dialogue branches, movie pause, SPECIAL, inventory and saves passed\n";
+  OriginalIdentity(catalog,false,argv[1]);OriginalIdentity(catalog,true,argv[1]);OriginalInventory(catalog);OriginalSpecialBook(catalog);
+  std::cout<<"Original birth through playpen, SPECIAL and apartment exit fade, both dialogue branches, package scripts, movie pause, inventory and saves passed\n";
 }

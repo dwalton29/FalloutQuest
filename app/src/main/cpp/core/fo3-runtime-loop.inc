@@ -1946,6 +1946,7 @@ private:
                         scriptActorResidence=gQ230NpcResidenceRevision;
                         scriptResidenceElapsed=0;q230ScanUs=fqopaque::Micros(q230ScanStart);
                     }
+                    if(!scriptMenu)fo3worldscript::TriggerTick();
                     const auto q230PumpStart=fqopaque::Clock::now();
                     if(!Fo3ResidentFrameBlocked())scriptPlayer.PumpWorldAwareGameMode(seconds,scriptedResidents,
                         [&](std::unique_ptr<fo3player::ScriptTransactionPlan> plan){

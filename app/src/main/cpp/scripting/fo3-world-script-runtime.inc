@@ -57,7 +57,7 @@ static const GpuObject* registryStorage=nullptr;
 static size_t registryCount=0;
 static const fo3player::Player* registryPlayer=nullptr;
 
-bool Event(uint32_t reference,const char* event,uint32_t activator){
+bool Event(uint32_t reference,const char* event,uint32_t activator,bool persist=true){
     auto& player=gPlayerSession->player;
     if(!player.HasReferenceEvent(reference,event))return true;
     std::string error;
@@ -77,7 +77,7 @@ bool Event(uint32_t reference,const char* event,uint32_t activator){
         const auto key=std::to_string(reference)+event+error;
         if(reported.size()<256&&reported.insert(key).second)
             Q6H_LOGW("SCRIPT WORLD EVENT REJECTED: ref=%08X event=%s reason=%s",reference,event,error.c_str());
-    }else FlushFo3PlayerState();
+    }else if(persist)FlushFo3PlayerState();
     return committed||invalidProgram;
 }
 void SpeechTick(){
@@ -176,6 +176,15 @@ void Events(){
     std::sort(refs.begin(),refs.end());refs.erase(std::unique(refs.begin(),refs.end()),refs.end());
     for(uint32_t id:refs){if(Event(id,"OnLoad",0))loaded.insert(id);if(Fo3ResidentFrameBlocked())return;}
 }
+void TriggerTick(){
+    if(!gPlayerSession||Fo3ResidentFrameBlocked())return;
+    // Only acknowledged, still-overlapping volumes run continuously. Source
+    // changes use the normal throttled script-save path, not a save per frame.
+    for(uint32_t reference:gPlayerSession->player.ScriptOccupiedTriggers()){
+        Event(reference,"OnTrigger",fo3player::PlayerRef,false);
+        if(Fo3ResidentFrameBlocked())return;
+    }
+}
 void Actions(){
     auto& player=gPlayerSession->player;fo3script::Action action;
     SetFo3PlayerScale(std::clamp(player.PlayerTrackingScale(),.1f,10.f));
@@ -184,7 +193,9 @@ void Actions(){
         QueueFo3MapMarkerTransitionQ74(move.marker,move.position[0],move.position[1],move.position[2],move.rotation[0],move.rotation[1],move.rotation[2],0);
     fo3loading::gLocationSpecificOnly.store(player.Snapshot().locationSpecificLoadScreens);
     while(player.PollScriptAction(action)){
-        if(action.kind==fo3script::ActionKind::KillQuestUpdates){
+        if(action.kind==fo3script::ActionKind::PackageIdle){
+            if(auto* actor=DialogueActor(action.reference))Q230PlayPackageIdle(*actor,action.form,action.flags);
+        }else if(action.kind==fo3script::ActionKind::KillQuestUpdates){
             fo3notify::Notifications().ClearQuests();
         }else if(action.kind==fo3script::ActionKind::AutoSave){
             FlushFo3PlayerState();

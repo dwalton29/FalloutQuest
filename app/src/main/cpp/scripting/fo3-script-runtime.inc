@@ -812,6 +812,17 @@ std::vector<std::pair<uint32_t,bool>> Player::ScriptTriggerChanges() const {
   }
   std::sort(changes.begin(),changes.end(),[](const auto& a,const auto& b){return a.first<b.first;});return changes;
 }
+std::vector<uint32_t> Player::ScriptOccupiedTriggers() const {
+  std::vector<uint32_t> active;
+  if(!scriptPlayerPositionKnown_)return active;
+  for(uint32_t reference:scriptInsideTriggers_){
+    const auto target=catalog_->pipboy.targets.find(reference);const auto shape=catalog_->pipboy.triggerPrimitives.find(reference);
+    if(target==catalog_->pipboy.targets.end()||shape==catalog_->pipboy.triggerPrimitives.end())continue;
+    const auto& p=target->second;bool disabled=true;std::string error;
+    if((scriptPlayerWorld_?p.world==scriptPlayerWorld_:p.cell==scriptPlayerCell_)&&ReferenceDisabled(reference,disabled,error)&&!disabled&&fo3script::Contains(p,shape->second,scriptPlayerPosition_))active.push_back(reference);
+  }
+  std::sort(active.begin(),active.end());return active;
+}
 void Player::AcknowledgeScriptTrigger(uint32_t reference,bool inside){
   if(inside)scriptInsideTriggers_.insert(reference);else scriptInsideTriggers_.erase(reference);
 }

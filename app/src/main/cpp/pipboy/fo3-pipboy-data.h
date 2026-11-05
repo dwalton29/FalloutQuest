@@ -200,8 +200,10 @@ struct PackageDefinition {
   std::string patrolUnsupported;
   std::vector<Condition> conditions;
   bool scripted=false,procedureActions=false,otherProcedureScript=false;
-  // Source of authored PACK OnBegin block; only whitelisted script subsets execute.
+  // Legacy source view; execution uses the complete procedure fragments below.
   std::string onBeginScript;
+  std::array<ResultScript,3> procedureScripts; // POBA, POEA, POCA
+  std::array<uint32_t,3> procedureIdles{};
 };
 struct Response {
   Response()=default;
