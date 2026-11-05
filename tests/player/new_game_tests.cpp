@@ -72,6 +72,96 @@ static void Identity(){
   keyboard.cursor.selected=2;assert(keyboard.Step(restored,.8,0,0,true,false,true)==fo3name::Model::Result::Confirmed);
   assert(restored.PlayerName()=="A");
 }
+static void ScriptInventory(){
+  using namespace fo3player;
+  Catalog c;c.initial.baseHealth=100;c.initial.special.fill(5);
+  for(uint32_t id:{11,12,13,14,15}){auto& item=c.items[id];item.formId=id;item.name="Item";item.kind=ItemKind::Armour;item.bipedMask=4;}
+  c.items[11].playable=false;c.items[11].bipedMask=64; // unplayable Pip-Boy equivalent
+  c.items[12].questItem=true;c.items[14].kind=ItemKind::Misc;
+  c.items[15].kind=ItemKind::Weapon;c.items[15].maxCondition=100;
+  c.pipboy.formNames={{"wrist",11},{"questitem",12},{"suit",13},{"gift",14},{"gun",15},{"dresser",101},{"dad",102}};
+  c.references[101].base=201;c.containers[201].valid=true;
+  c.references[102].base=202;c.actorInventories[202].valid=true;c.weapons.actors[202]={};
+  c.pipboy.transmitters[300]={};c.globals[401]=2;c.pipboy.formNames["amount"]=401;
+  Player p(c);std::string error;
+  const auto run=[&](const std::string& source){fo3pipdata::ResultScript result;result.source=source;const bool ok=p.ExecuteDialogueResult(result,error);Check(ok,source+"\n"+error);};
+  run("player.AddItem Wrist 1 1\nplayer.EquipItem Wrist 0 1\nplayer.AddItem QuestItem 1 1\nplayer.AddItem Suit 2 1\nplayer.EquipItem Suit 0 1\nplayer.AddItem Gift 3 1\nplayer.AddItem Gun 1 1\nplayer.EquipItem Gun");
+  assert(p.ItemCount(11)==1&&p.ItemCount(13)==2&&p.EquippedWeapon());
+  ScriptItemNotice notice;assert(!p.PollScriptItemNotice(notice));
+  assert(!p.Equip(p.Snapshot().inventory.front().id)); // UI still rejects unplayable equipment.
+  assert(p.TuneRadio(300));run("PipBoyRadioOff");assert(!p.Snapshot().pipboy.tunedRadio);
+  // Equipped quest/unplayable equipment must survive a regular save and restore.
+  const auto save="/tmp/fq-script-inventory-"+std::to_string(getpid());Check(p.Save(save,error),error);
+  Player restored(c);Check(restored.Restore(save,error),error);unlink(save.c_str());
+  assert(restored.ItemCount(11)==1&&restored.EquippedWeapon());
+  run("player.RemoveItem Suit 1");assert(p.ItemCount(13)==1);
+  for(const auto& stack:p.Snapshot().inventory)if(stack.formId==13)assert(stack.equipped);
+  run("player.RemoveItem Suit 1");assert(!p.ItemCount(13));
+  run("player.RemoveAllItems");assert(p.ItemCount(11)==1&&p.ItemCount(12)==1&&!p.ItemCount(14)&&!p.EquippedWeapon());
+  run("Dresser.AddItem Gift 1 1\nDad.AddItem Gift 2\nDad.RemoveItem Gift 1");
+  assert(p.ContainerContents(101)->size()==1&&p.ContainerContents(101)->front().count==1);
+  assert(p.ContainerContents(102)->size()==1&&p.ContainerContents(102)->front().count==1);
+  assert(!p.PollScriptItemNotice(notice));
+  run("Dad.AddItemHealthPercent Gun Amount .25\nplayer.AddItemHealthPercent Gun 1 .9 1");
+  bool quarter=false;for(const auto& stack:*p.ContainerContents(102))if(stack.formId==15){assert(stack.condition==.25f);quarter=true;}assert(quarter);
+  for(const auto& stack:p.Snapshot().inventory)if(stack.formId==15)assert(std::abs(stack.condition-.9f)<.001f);
+  run("player.UnequipItem Gun 0 1\nplayer.RemoveItem Gun 100\nDad.RemoveItem Gift 100\nplayer.AddItem Gift 0");
+  assert(!p.ItemCount(15));
+  run("player.AddItem Gift 1");assert(p.PollScriptItemNotice(notice)&&notice.form==14&&notice.count==1);
+  // Destructive operations, equipment and save requests remain private until commit.
+  fo3pipdata::ResultScript begin,end;begin.source="player.RemoveAllItems\nplayer.AddItem Suit 1 1\nplayer.EquipItem Suit 0 1\nautosave";
+  const auto before=p.Revision();auto plan=p.PrepareDialogueTransaction(begin,end,error);Check(bool(plan),error);
+  assert(p.Revision()==before&&p.ItemCount(14)==1&&!p.ItemCount(13));
+  fo3script::Action action;assert(!p.PollScriptAction(action));
+  assert(p.CommitScriptTransaction(*plan)&&p.ItemCount(13)==1&&!p.ItemCount(14));
+  assert(p.RollbackScriptTransaction(*plan)&&p.ItemCount(14)==1&&!p.ItemCount(13)&&!p.PollScriptAction(action));
+  end.source="UnknownOperation";assert(!p.PrepareDialogueTransaction(begin,end,error));assert(p.ItemCount(14)==1&&!p.ItemCount(13));
+  for(const char* source:{"player.EquipItem Suit 1", "player.UnequipItem Suit 1", "player.RemoveAllItems Dresser", "player.AddItem Gift 1 2"}){
+    fo3pipdata::ResultScript invalid;invalid.source=source;assert(!p.ExecuteDialogueResult(invalid,error));
+  }
+}
+static void OriginalInventory(const fo3player::Catalog& catalog){
+  using namespace fo3player;
+  Player p(catalog);p.RegisterOriginalActors();std::string error;
+  const auto& d=catalog.pipboy;const auto id=[&](const char* name){return d.formNames.at(name);};
+  // Execute unchanged, contiguous inventory sections from the original stage
+  // results. These are subsystem tests; they do not claim to play the stages.
+  const auto section=[&](const char* quest,uint16_t stage,const char* first,const char* last){
+    for(const auto& item:d.quests.at(id(quest)).stages.at(stage).items){
+      auto source=fo3script::Lower(item.result.source);const auto begin=source.find(first);
+      if(begin==std::string::npos)continue;
+      const auto end=source.find(last,begin);assert(end!=std::string::npos);
+      const auto newline=source.find('\n',end);fo3pipdata::ResultScript original;
+      original.source=item.result.source.substr(begin,(newline==std::string::npos?source.size():newline)-begin);
+      const bool ok=p.ExecuteDialogueResult(original,error,id(quest));Check(ok,original.source+"\n"+error);return;
+    }assert(false&&"original inventory section unavailable");
+  };
+  const auto pipboy=id("pipboy");
+  Player intro(catalog);const auto arrival=intro.PrepareNewGameTransaction(id("cg00"),error);Check(bool(arrival)&&intro.CommitScriptTransaction(*arrival),error);
+  assert(!intro.BootstrapDevelopmentWeapon()&&!intro.Snapshot().developmentWeaponGranted);
+  assert(intro.SetCharacterGeneration(false)); // Still protected after leaving chargen.
+  assert(!intro.BootstrapDevelopmentWeapon());
+  if(!p.ItemCount(pipboy))assert(p.Add(pipboy,1));
+  section("cg02",5,"player.removeallitems","player.equipitem pipboy");
+  assert(p.ItemCount(id("kidvaultsuitchild101"))==1&&p.ItemCount(pipboy)>=1);
+  section("cg02",44,"player.additem cg02weapbbgun","player.equipitem cg02weapbbgun");
+  assert(p.EquippedWeapon()&&p.EquippedWeapon()->formId==id("cg02weapbbgun"));
+  section("cg02",95,"player.unequipitem cg02weapbbgun","player.unequipitem cg02weapbbgun");
+  assert(!p.EquippedWeapon());
+  section("cg02",70,"setquestobject cg02weapbbgun","setquestobject cg02weapbbgun");
+  section("cg02",100,"player.removeallitems","player.equipitem vaultsuit101");
+  assert(!p.ItemCount(id("cg02weapbbgun"))&&!p.ItemCount(id("kidvaultsuitchild101"))&&p.ItemCount(id("vaultsuit101"))==1&&p.ItemCount(pipboy)>=1);
+  section("cg03",5,"player.removeallitems","player.equipitem pipboy");
+  assert(p.ItemCount(id("vaultsuit101"))==1);
+  section("cg04",8,"cg04amataref.removeitem","player.additem ammo10mm");
+  assert(p.ItemCount(id("weap10mmpistol"))==1&&p.ItemCount(id("ammo10mm"))==36);
+  section("cg04",50,"cg04amataref.removeitem","player.additem ammo10mm");
+  bool damaged=false;for(const auto& stack:p.Snapshot().inventory)if(stack.formId==id("weap10mmpistol")&&std::abs(stack.condition-.9f)<.001f)damaged=true;
+  assert(damaged);
+  const auto save="/tmp/fq-vault-handoffs-"+std::to_string(getpid());Check(p.Save(save,error),error);
+  Player restored(catalog);Check(restored.Restore(save,error),error);unlink(save.c_str());
+  assert(restored.ItemCount(id("vaultsuit101"))==1&&restored.ItemCount(pipboy)>=1&&restored.ItemCount(id("ammo10mm"))==66);
+}
 static void OriginalIdentity(const fo3player::Catalog& catalog,bool female){
   fo3player::Player p(catalog);p.RegisterOriginalActors();std::string error;
   const auto& d=catalog.pipboy;const auto quest=d.formNames.at("cg00");
@@ -126,7 +216,7 @@ int main(int argc,char** argv){
   for(const char* invalid:{"[General]\nSCharGenQuest=0", "[General]\nSCharGenQuest=1z", "[General]\nSCharGenQuest=1\nSCharGenQuest=2", "[Other]\nSCharGenQuest=1"}){
     std::istringstream input(invalid);assert(!fo3newgame::ReadQuest(input,quest,error));
   }
-  Synthetic();Identity();
+  Synthetic();Identity();ScriptInventory();
   if(argc<2)return 0;
   fo3player::Catalog catalog;Check(fo3player::LoadCatalog(argv[1],catalog,error),error);
   fo3player::Player player(catalog);player.RegisterOriginalActors();
@@ -158,6 +248,6 @@ int main(int argc,char** argv){
   const auto& base=catalog.imageModifiers.at(catalog.pipboy.formNames.at("cg00birthbaseisfx"));assert(base.valid&&!(base.flags&1));
   fo3script::ImageStack images;images.Apply(1,base,0);images.Apply(2,catalog.imageModifiers.at(catalog.pipboy.formNames.at("cg00blackscreenisfx")),0);
   assert(images.Sample(0).fade[3]>.9f);images.Sample(20);assert(images.entries.size()==1);images.Remove(1);assert(images.entries.empty());
-  OriginalIdentity(catalog,false);OriginalIdentity(catalog,true);
+  OriginalIdentity(catalog,false);OriginalIdentity(catalog,true);OriginalInventory(catalog);
   std::cout<<"Original birth bootstrap, both sex-dependent dialogue branches, modal name entry, timer isolation and identity/save round trips passed\n";
 }

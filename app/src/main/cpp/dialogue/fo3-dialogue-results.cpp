@@ -328,11 +328,28 @@ bool CompileResult(const fo3pipdata::Definitions& d,const fo3pipdata::ResultScri
       if(!(in>>a)||(cmd.form=form(a))==0){error="invalid playsound form";return false;}
       if(in>>b){if(b!="0"&&b!="1"){error="invalid PlaySound wait flag";return false;}cmd.index=uint32_t(b=="1");}
       in.clear();
-    } else if(op=="player.removeitem") {
-      cmd.type=CommandType::RemoveItem;
-      if(!(in>>a>>b)||(cmd.form=form(a))==0||!number(b,cmd.value)||cmd.value<1||cmd.value>100000||std::floor(cmd.value)!=cmd.value){error="invalid removeitem";return false;}
-    } else if(op=="player.additem") {
-      cmd.type=CommandType::AddItem;if(!(in>>a>>b)||!(cmd.form=form(a))||!number(b,cmd.value)||cmd.value<1||cmd.value>100000||std::floor(cmd.value)!=cmd.value){error="invalid additem";return false;}
+    } else if(op=="autosave")cmd.type=CommandType::AutoSave;
+    else if(op=="pipboyradiooff")cmd.type=CommandType::RadioOff;
+    else if(op=="player.removeallitems")cmd.type=CommandType::RemoveAllItems;
+    else if(op=="player.equipitem"||op=="player.unequipitem"){
+      cmd.type=op=="player.equipitem"?CommandType::EquipItem:CommandType::UnequipItem;
+      if(!(in>>a)||!(cmd.form=form(a))){error="invalid equipment item";return false;}
+      // The childhood scripts use the native default/zero locking flag. Do not
+      // pretend to implement persistent No(Un)Equip restrictions by discarding it.
+      if(in>>b){if(b!="0"){error="unsupported equipment locking flag";return false;}
+        if(in>>c){if(c!="0"&&c!="1"){error="invalid equipment message flag";return false;}cmd.index=c=="1";}
+        else in.clear();
+      }else in.clear();
+    } else if(op=="additem"||op=="additemhealthpercent"||op=="removeitem"||
+        (op.find('.')!=std::string::npos&&(op.substr(op.find('.')+1)=="additem"||op.substr(op.find('.')+1)=="additemhealthpercent"||op.substr(op.find('.')+1)=="removeitem"))){
+      const auto dot=op.find('.');const auto verb=dot==std::string::npos?op:op.substr(dot+1);
+      cmd.type=verb=="removeitem"?CommandType::RemoveItem:CommandType::AddItem;cmd.offset[0]=1;
+      cmd.variable=dot==std::string::npos?owner:form(op.substr(0,dot));
+      if(!cmd.variable||!(in>>a>>b)||!(cmd.form=form(a))){error="invalid inventory command";return false;}
+      if(number(b,cmd.value)){if(cmd.value<0||cmd.value>100000||std::floor(cmd.value)!=cmd.value){error="invalid inventory count";return false;}}
+      else cmd.expression=b; // Native count arguments may be numeric script variables.
+      if(verb=="additemhealthpercent"&&(!(in>>c)||!number(c,cmd.offset[0])||cmd.offset[0]<0||cmd.offset[0]>1)){error="invalid inventory health percent";return false;}
+      if(in>>c){if(c!="0"&&c!="1"){error="invalid inventory message flag";return false;}cmd.index=c=="1";}else in.clear();
     } else {error="unsupported command: "+op;return false;}
     if(in>>extra){error="unsupported command arguments: "+line;return false;}
     return true;

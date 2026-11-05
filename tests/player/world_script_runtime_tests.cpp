@@ -173,6 +173,13 @@ int main(int argc,char** argv){try{
  fo3worldscript::Actions();Check(playerTransitions==1&&fo3bloodui::triggered==3&&fo3loading::gLocationSpecificOnly.load(),"production player move and presentation actions");
  fo3worldscript::Actions();Check(playerTransitions==1,"pending player scene transition is not duplicated");
  p.AcknowledgePlayerMove();playerTransitionPending=false;
+ fo3pipdata::ResultScript request;request.source="autosave";
+ const auto savedBefore=saves;std::string saveError;fo3pipdata::ResultScript empty;
+ auto savePlan=p.PrepareDialogueTransaction(request,empty,saveError);
+ Check(bool(savePlan)&&saves==savedBefore,"autosave preparation cannot write live files");
+ Check(p.CommitScriptTransaction(*savePlan),"autosave commit");
+ fo3worldscript::Actions();Check(saves==savedBefore+1,"committed autosave reaches production persistence adapter");
+ fo3worldscript::Actions();Check(saves==savedBefore+1,"autosave request consumed once");
  if(argc>1)OriginalPrayer(argv[1]);
  std::cout<<"World event/controller/presentation and original speech adapters passed\n";
 }catch(const std::exception& e){std::cerr<<e.what()<<"\n";return 1;}}

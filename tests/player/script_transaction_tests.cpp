@@ -895,7 +895,11 @@ int main(int argc,char** argv){
   assert(!p.CommitScriptTransaction(*competing));NoEffects(p);
 
   // Both dialogue fragments share one candidate and one instruction budget.
-  auto bad=p.PrepareDialogueTransaction(Script("player.AddItem TestItem 1"),Script("player.RemoveItem TestItem 2"),error);
+  auto clamped=p.PrepareDialogueTransaction(Script("player.AddItem TestItem 1"),Script("player.RemoveItem TestItem 2"),error);
+  assert(clamped&&clamped->CandidateState()->inventory.empty()&&p.ItemCount(400)==0);
+  assert(p.CommitScriptTransaction(*clamped)&&p.RollbackScriptTransaction(*clamped)&&p.ItemCount(400)==0);
+  // Equipping a Misc item is a genuine runtime failure after the first fragment.
+  auto bad=p.PrepareDialogueTransaction(Script("player.AddItem TestItem 1"),Script("player.EquipItem TestItem"),error);
   assert(!bad&&!error.empty()&&p.ItemCount(400)==0);
   const fo3player::Player frozen(Fixture());
   assert(frozen.PreviewDialogueResults(Script("player.AddItem TestItem 1"),{},error)&&frozen.ItemCount(400)==0);

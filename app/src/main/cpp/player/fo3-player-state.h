@@ -531,7 +531,10 @@ public:
   uint32_t ScriptReference() const { return scriptReference_; }
   int ScriptButton() const;
   int32_t ItemCount(uint32_t form) const;
-  bool ScriptRemoveItem(uint32_t form,int32_t count);
+  bool ScriptRemoveItem(uint32_t form,int32_t count,uint32_t receiver=PlayerRef);
+  bool ScriptAddItem(uint32_t receiver,uint32_t form,int32_t count,bool silent=false,float condition=1);
+  bool ScriptRemoveAllItems();
+  bool ScriptEquipItem(uint32_t form,bool equip);
   bool IsQuestObject(uint32_t form) const;
   bool SetQuestObject(uint32_t form,bool quest);
   bool RewardKarma(float amount);
@@ -613,7 +616,7 @@ public:
   bool Use(uint64_t stack);
   bool Add(uint32_t formId, int32_t count, float condition = 1);
   bool Remove(uint64_t stackId, int32_t count);
-  bool Equip(uint64_t stackId);
+  bool Equip(uint64_t stackId,bool scripted=false);
   bool Unequip(uint64_t stackId);
   const Stack *Weapon(uint64_t id) const;
   const Stack *EquippedWeapon() const;
@@ -751,7 +754,7 @@ private:
   bool PrepareInventory(uint32_t reference,bool actor);
   bool ExpandLoot(const std::vector<LootEntry>& entries,uint32_t seed,
                   std::vector<Stack>& contents,uint64_t& nextId) const;
-  bool AddScriptItem(uint32_t form,int32_t count);
+  bool AddScriptItem(uint32_t form,int32_t count,bool silent=false,float condition=1);
   void TouchMerchantCells(uint32_t cell);
   bool RestockMerchant(uint32_t actor,uint32_t chest);
   bool MigrateWeaponInstances(State &state) const;

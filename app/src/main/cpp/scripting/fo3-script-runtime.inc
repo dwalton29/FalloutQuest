@@ -268,7 +268,7 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
     if(c.type==C::If)gates.push_back({true,false,false,false});
     if(c.type==C::ElseIf||c.type==C::Else){if(gates.empty()||gates.back().hasElse){error="invalid else/elseif";return false;}if(c.type==C::Else)gates.back().hasElse=true;}
     if(c.type==C::EndIf){if(gates.empty()){error="orphan endif";return false;}gates.pop_back();}
-    if(c.type==C::If||c.type==C::ElseIf||c.type==C::Variable||c.type==C::Global||((c.type==C::ShowMessage||c.type==C::ShowBarterMenu)&&!c.expression.empty())){
+    if(c.type==C::If||c.type==C::ElseIf||c.type==C::Variable||c.type==C::Global||((c.type==C::ShowMessage||c.type==C::ShowBarterMenu||c.type==C::AddItem||c.type==C::RemoveItem)&&!c.expression.empty())){
       float v;
       if(!fo3script::Expression(*this,owner,c.expression,error,scriptId,nullptr,true).Evaluate(v))return false;
       // Capture resolvable original bindings without demanding capabilities
@@ -477,8 +477,11 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
       ok=EnsureQuestInstance(c.form)&&(!(c.type==C::ObjectiveDisplay&&c.value)||StartQuest(c.form))&&SetObjective(c.form,c.index,c.type==C::ObjectiveDisplay?bool(c.value):existing.displayed,
         c.type==C::ObjectiveComplete?(c.value?fo3pipdata::Completion::Complete:fo3pipdata::Completion::Active):existing.status);break;
     }
-    case C::AddItem:
-      ok=AddScriptItem(c.form,int32_t(c.value));
+    case C::AddItem:case C::RemoveItem:
+      value=c.value;
+      if(!c.expression.empty())ok=fo3script::Expression(*this,owner,c.expression,error,scriptId).Evaluate(value);
+      if(ok)ok=std::isfinite(value)&&value>=0&&value<=100000&&std::floor(value)==value;
+      if(ok)ok=c.type==C::AddItem?ScriptAddItem(uint32_t(c.variable),c.form,int32_t(value),c.index!=0,c.offset[0]):ScriptRemoveItem(c.form,int32_t(value),uint32_t(c.variable));
       break;
     case C::AddNote:
       if(!catalog_->pipboy.notes.count(c.form)){ok=false;break;}
@@ -489,7 +492,10 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
         if(ok){pendingScriptItems_.push_back({c.form,1});++scriptEffectRevision_;}
       }
       break;
-    case C::RemoveItem:ok=ScriptRemoveItem(c.form,int32_t(c.value));break;
+    case C::RemoveAllItems:ok=ScriptRemoveAllItems();break;
+    case C::EquipItem:case C::UnequipItem:ok=ScriptEquipItem(c.form,c.type==C::EquipItem);break;
+    case C::RadioOff:ok=TuneRadio(0);break;
+    case C::AutoSave:{fo3script::Action action;action.kind=fo3script::ActionKind::AutoSave;ok=QueueScriptAction(std::move(action));break;}
     case C::DoorState:ok=ScriptDoorState(c.form,c.value!=0);break;
     case C::TerminalBack:ok=QueueTerminalBack(c.form);break;
     case C::ShowMap:ok=RevealMapMarker(c.form,c.value!=0);break;
@@ -677,20 +683,51 @@ int32_t Player::ItemCount(uint32_t form) const {
   int64_t n=0;for(const auto& stack:state_.inventory)if(stack.formId==form)n+=stack.count;
   return int32_t(std::min<int64_t>(INT32_MAX,n));
 }
-bool Player::ScriptRemoveItem(uint32_t form,int32_t count){
-  if(count<=0||!catalog_->items.count(form)||ItemCount(form)<count)return false;
-  int64_t available=0;
-  for(const auto& stack:state_.inventory)if(stack.formId==form&&!stack.equipped)available+=stack.count;
-  if(available<count)return false;
-  // Script-origin quest item consumption is explicitly distinct from player Drop.
-  int32_t remaining=count;
-  for(auto it=state_.inventory.begin();it!=state_.inventory.end()&&remaining;){
-    if(it->formId!=form||it->equipped){++it;continue;}
-    const int32_t n=std::min(remaining,it->count);remaining-=n;it->count-=n;
-    if(!it->count)it=state_.inventory.erase(it);else ++it;
+bool Player::ScriptRemoveItem(uint32_t form,int32_t count,uint32_t receiver){
+  if(count<0||!catalog_->items.count(form))return false;
+  std::vector<Stack>* inventory=&state_.inventory;
+  if(receiver!=PlayerRef){
+    const auto ref=catalog_->references.find(receiver);if(ref==catalog_->references.end())return false;
+    if(!PrepareInventory(receiver,catalog_->actorInventories.count(ref->second.base)!=0))return false;
+    inventory=&state_.containers.at(receiver);
   }
-  if(remaining)return false; // caller's event transaction restores partial removal.
+  int64_t available=0;for(const auto& stack:*inventory)if(stack.formId==form)available+=stack.count;
+  count=int32_t(std::min<int64_t>(count,available));
+  if(!count)return true;
+  // Native scripted consumption can remove equipped and quest items, unlike Drop.
+  // Consume loose copies first so a partial removal preserves the equipped copy.
+  for(bool equipped:{false,true})for(auto it=inventory->begin();it!=inventory->end()&&count;){
+    if(it->formId!=form||it->equipped!=equipped){++it;continue;}
+    const int32_t removed=std::min(count,it->count);count-=removed;it->count-=removed;
+    if(!it->count){
+      if(receiver!=PlayerRef)if(auto* actor=state_.actors.Edit(receiver))if(actor->equippedWeapon==it->id)actor->equippedWeapon=0;
+      it=inventory->erase(it);
+    }else ++it;
+  }
   ++revision_;return true;
+}
+bool Player::ScriptRemoveAllItems(){
+  auto& items=state_.inventory;const auto size=items.size();
+  items.erase(std::remove_if(items.begin(),items.end(),[&](const Stack& stack){
+    const auto& item=catalog_->items.at(stack.formId);
+    // Original RemoveAllItems without a destination preserves quest objects and
+    // unplayable biped equipment (notably the player's Pip-Boy).
+    return !IsQuestObject(stack.formId)&&!(item.kind==ItemKind::Armour&&!item.playable&&item.bipedMask);
+  }),items.end());
+  if(items.size()!=size)++revision_;
+  return true;
+}
+bool Player::ScriptEquipItem(uint32_t form,bool equip){
+  const auto item=catalog_->items.find(form);
+  if(item==catalog_->items.end()||!(item->second.kind==ItemKind::Weapon||(item->second.kind==ItemKind::Armour&&item->second.bipedMask)))return false;
+  if(!equip){for(auto& stack:state_.inventory)if(stack.formId==form&&stack.equipped){stack.equipped=false;++revision_;}return true;}
+  // Resolve a base form to its canonical saved instance; never add a missing item.
+  uint64_t selected=0;float condition=-1;
+  for(const auto& stack:state_.inventory)if(stack.formId==form){
+    if(stack.equipped)return true;
+    if(stack.condition>condition){selected=stack.id;condition=stack.condition;}
+  }
+  return selected&&Equip(selected,true);
 }
 bool Player::QueueScriptMessage(uint32_t form,float argument,bool hasArgument,uint32_t owner){
   const auto m=catalog_->pipboy.messages.find(form);

@@ -302,7 +302,7 @@ static void NoticeTransactions() {
   fo3pipdata::ResultScript r;r.source="SetStage ExampleQuest 10\r\n";
   assert(p.PreviewDialogueResult(r,error)&&p.Revision()==revision&&!p.PollQuestNotice(n));
   // A later rejected command rolls back a previously queued fanfare.
-  r.source="SetStage ExampleQuest 10\r\nPlayer.RemoveItem TestCharge 1\r\n";
+  r.source="SetStage ExampleQuest 10\r\nPlayer.EquipItem TestCharge\r\n";
   assert(!p.ExecuteDialogueResult(r,error)&&!p.PollQuestNotice(n));
   assert(!p.Snapshot().pipboy.quests.at(20).announced);
   assert(p.ExecuteQuestStage(20,10,error)&&p.PollQuestNotice(n));
@@ -392,7 +392,7 @@ static void PersistentReferenceState() {
   std::array<uint8_t,7> special;special.fill(10);std::array<uint8_t,14> skills;skills.fill(100);
   assert(p.SetPlayerAttributes(special,skills));
   const auto worldRevision=p.Snapshot().referenceStateRevision;
-  assert(!p.ExecuteDialogueResult({"StartQuest ExampleQuest\nplayer.removeitem missingitem 1",{},{},{},{}},error));
+  assert(!p.ExecuteDialogueResult({"StartQuest ExampleQuest\nplayer.equipitem missingitem",{},{},{},{}},error));
   assert(p.Snapshot().referenceEnabled.size()==2&&p.Snapshot().referenceStateRevision==worldRevision&&p.Snapshot().pipboy.quests.empty());
   assert(p.PreviewDialogueResult({"StartQuest ExampleQuest",{},{},{},{}},error));
   assert(p.Snapshot().referenceEnabled.size()==2&&p.Snapshot().pipboy.quests.empty());
@@ -611,7 +611,7 @@ static void CompiledProgramsRemainLive() {
   assert(separate.Get(body,20,101,true,4096)->commands[0].form==21);
 
   c.pipboy.quests[20].flags|=1u;
-  c.items[400].formId=400;c.pipboy.formNames["existingitem"]=400;
+  c.items[400].formId=400;c.items[400].kind=fo3player::ItemKind::Weapon;c.pipboy.formNames["existingitem"]=400;
   c.pipboy.scripts[101].source="Begin GameMode\nif GetStage ExampleQuest == 10\nRewardKarma 4\nendif\nEnd";
   c.eventPrograms[101]=fo3script::ParseEvents(c.pipboy.scripts[101]);
   fo3player::Player p(std::move(c));auto rejectWorld=[](auto){return false;};
@@ -620,12 +620,12 @@ static void CompiledProgramsRemainLive() {
   p.PumpWorldAwareGameMode(.25,{},rejectWorld);assert(p.Snapshot().karma==4);
   p.PumpWorldAwareGameMode(.25,{},rejectWorld);assert(p.Snapshot().karma==8);
   // A later runtime failure still discards earlier commands on every attempt.
-  fo3pipdata::ResultScript fail;fail.source="RewardKarma 7\nPlayer.RemoveItem ExistingItem 1";
+  fo3pipdata::ResultScript fail;fail.source="RewardKarma 7\nPlayer.EquipItem ExistingItem";
   const auto revision=p.Revision();assert(!p.ExecuteDialogueResult(fail,error));
   assert(!p.ExecuteDialogueResult(fail,error));
   assert(p.Snapshot().karma==8&&p.Revision()==revision);
   assert(p.Add(400,1));assert(p.ExecuteDialogueResult(fail,error));
-  assert(p.Snapshot().karma==15&&p.ItemCount(400)==0);
+  assert(p.Snapshot().karma==15&&p.ItemCount(400)==1&&p.EquippedWeapon());
   std::cout<<"Bounded compiled programs preserve live conditions, catalogue identity, evidence limits and atomic failure\n";
 }
 int main(int argc,char** argv){

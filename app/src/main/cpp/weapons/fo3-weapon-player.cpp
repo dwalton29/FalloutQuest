@@ -157,6 +157,9 @@ bool Player::ChamberWeapon(uint64_t id) {
   return true;
 }
 bool Player::BootstrapDevelopmentWeapon() {
+  // Original New Game scripts own the loadout throughout childhood and beyond.
+  // The saved scripted arrival also identifies existing v309/v310 new games.
+  if(state_.inCharGen||state_.playerMove.marker)return false;
   if (state_.developmentWeaponGranted) return true;
   constexpr uint32_t pistol = 0x434f;
   const auto item = catalog_->items.find(pistol);

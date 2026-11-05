@@ -372,7 +372,7 @@ void WeaponUpdate(double now,bool backButton){
   if(Fo3DialogueFocus()){inputs.r=false;inputs.l=false;} // Dialogue suppresses new grabs; held trigger can interrupt.
   if(!gPlayerSession)return;auto&p=gPlayerSession->player;
   // Explicit milestone bootstrap, never part of authored starting inventory.
-  if(!gPlayerSession->saveBlocked&&!p.Snapshot().developmentWeaponGranted){if(p.BootstrapDevelopmentWeapon()){auto*s=p.EquippedWeapon();if(s)Log("GRANT",s->id,s->formId);}}
+  if(!gPlayerSession->saveBlocked&&!p.Snapshot().developmentWeaponGranted&&!p.Snapshot().inCharGen&&!p.Snapshot().playerMove.marker){if(p.BootstrapDevelopmentWeapon()){auto*s=p.EquippedWeapon();if(s)Log("GRANT",s->id,s->formId);}}
   auto*s=p.EquippedWeapon();
   if(!s||s->id!=active){if(active&&!world.count(active))fo3rigid::Live().Remove(fo3rigid::WeaponId(active));active=s?s->id:0;held=false;inside=false;stowAccess.Reset();RetireReload();trigger={};motion={};if(s)Log("EQUIP",s->id,s->formId);}
   if(sceneX!=gSceneCenterXQ1730||sceneY!=gSceneCenterYQ1730||sceneZ!=gSceneFloorZQ1730){

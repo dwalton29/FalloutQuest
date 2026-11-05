@@ -239,8 +239,8 @@ bool Conflicts(const Item &a, const Item &b) {
          (a.kind == ItemKind::Armour && b.kind == ItemKind::Armour &&
           (a.bipedMask & b.bipedMask));
 }
-bool CanEquip(const Item &item) {
-  return item.playable &&
+bool CanEquip(const Item &item,bool scripted=false) {
+  return (item.playable||scripted) &&
          (item.kind == ItemKind::Weapon ||
           (item.kind == ItemKind::Armour && item.bipedMask != 0));
 }
@@ -866,11 +866,11 @@ bool Player::Remove(uint64_t id, int32_t count) {
   ++revision_;
   return true;
 }
-bool Player::Equip(uint64_t id) {
+bool Player::Equip(uint64_t id,bool scripted) {
   auto &v = state_.inventory;
   const auto it = std::find_if(v.begin(), v.end(),
                                [&](const Stack &s) { return s.id == id; });
-  if (it == v.end() || !CanEquip(catalog_->items.at(it->formId)) ||
+  if (it == v.end() || !CanEquip(catalog_->items.at(it->formId),scripted) ||
       (it->condition <= 0 && catalog_->items.at(it->formId).kind != ItemKind::Weapon))
     return false;
   if (it->equipped)
@@ -1639,7 +1639,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
         stack.condition < 0 || stack.condition > 1 || s[20] > 1 ||
         (item->second.maxCondition == 0 && stack.condition != 1) ||
         (stack.equipped &&
-         (stack.count != 1 || !CanEquip(item->second) ||
+         (stack.count != 1 || !CanEquip(item->second,true) ||
           (stack.condition == 0 && item->second.kind != ItemKind::Weapon))) ||
         (version >= 5 && item->second.kind == ItemKind::Weapon && stack.count != 1))
       return fail("Invalid saved inventory stack");

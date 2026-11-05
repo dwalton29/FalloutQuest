@@ -187,21 +187,21 @@ bool Player::OpenScriptContainer(uint32_t id) {
   if(GetLock(id).locked&&!UnlockByKey(id))return false;
   scriptOpenedContainer_=id;++scriptEffectRevision_;return true;
 }
-bool Player::AddScriptItem(uint32_t form,int32_t count) {
+bool Player::AddScriptItem(uint32_t form,int32_t count,bool silent,float condition) {
   if(catalog_->items.count(form)){
-    if(pendingScriptItems_.size()>=128||!Add(form,count))return false;
-    pendingScriptItems_.push_back({form,count});++scriptEffectRevision_;return true;
+    if((!silent&&pendingScriptItems_.size()>=128)||!Add(form,count,condition))return false;
+    if(!silent){pendingScriptItems_.push_back({form,count});++scriptEffectRevision_;}return true;
   }
   std::vector<Stack> items;uint64_t nextId=state_.nextStackId;
   // Same original LVLI selection rules as containers. The committed outcome
   // persists; preview never consumes live RNG state (not Bethesda RNG parity).
   const uint32_t seed=form ^ catalog_->lootFingerprint ^ catalog_->worldFingerprint ^
       state_.level ^ uint32_t(state_.nextStackId);
-  LootEntry entry;entry.form=form;entry.count=count;
-  if(!ExpandLoot({entry},seed,items,nextId)||pendingScriptItems_.size()>128||items.size()>128-pendingScriptItems_.size())return false;
+  LootEntry entry;entry.form=form;entry.count=count;entry.condition=condition;
+  if(!ExpandLoot({entry},seed,items,nextId)||(!silent&&(pendingScriptItems_.size()>128||items.size()>128-pendingScriptItems_.size())))return false;
   for(const auto& item:items){
     if(!Add(item.formId,item.count,item.condition))return false;
-    pendingScriptItems_.push_back({item.formId,item.count});++scriptEffectRevision_;
+    if(!silent){pendingScriptItems_.push_back({item.formId,item.count});++scriptEffectRevision_;}
   }
   return true;
 }
@@ -247,3 +247,25 @@ bool Player::TakeContainerStack(uint32_t id, uint64_t stack) {
 }
 } // namespace fo3player
 #include "fo3-barter-state.inc"
+
+namespace fo3player {
+bool Player::ScriptAddItem(uint32_t receiver,uint32_t form,int32_t count,bool silent,float condition){
+  if(count<0||!std::isfinite(condition)||condition<0||condition>1)return false;
+  if(receiver==PlayerRef){
+    if(!count)return catalog_->items.count(form)||catalog_->lootLists.count(form);
+    return AddScriptItem(form,count,silent,condition);
+  }
+  const auto ref=catalog_->references.find(receiver);
+  if(ref==catalog_->references.end())return false;
+  if(!count)return catalog_->items.count(form)||catalog_->lootLists.count(form);
+  const bool actor=catalog_->actorInventories.count(ref->second.base)!=0;
+  if(!PrepareInventory(receiver,actor))return false;
+  std::vector<Stack> added;uint64_t next=state_.nextStackId;
+  LootEntry entry;entry.form=form;entry.count=count;entry.condition=condition;
+  if(!ExpandLoot({entry},receiver^form^uint32_t(next)^catalog_->lootFingerprint,added,next))return false;
+  size_t total=added.size();for(const auto& inventory:state_.containers)total+=inventory.second.size();
+  if(total>30000)return false;
+  auto& contents=state_.containers.at(receiver);
+  contents.insert(contents.end(),added.begin(),added.end());state_.nextStackId=next;++revision_;return true;
+}
+} // namespace fo3player

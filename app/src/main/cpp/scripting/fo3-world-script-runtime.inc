@@ -182,7 +182,9 @@ void Actions(){
         QueueFo3MapMarkerTransitionQ74(move.marker,move.position[0],move.position[1],move.position[2],move.rotation[0],move.rotation[1],move.rotation[2],0);
     fo3loading::gLocationSpecificOnly.store(player.Snapshot().locationSpecificLoadScreens);
     while(player.PollScriptAction(action)){
-        if(action.kind==fo3script::ActionKind::Look){
+        if(action.kind==fo3script::ActionKind::AutoSave){
+            FlushFo3PlayerState();
+        }else if(action.kind==fo3script::ActionKind::Look){
             if(auto* actor=DialogueActor(action.reference))actor->runtime.scriptLookTarget=action.form;
         }else if((action.kind==fo3script::ActionKind::SayTo||action.kind==fo3script::ActionKind::Conversation)){if(speechPending.size()<128)speechPending.push_back(action);
         }else if(action.kind==fo3script::ActionKind::DefaultActivate){
