@@ -290,6 +290,7 @@ struct Definitions {
   std::unordered_set<uint32_t> scriptReferencedForms; // Original SCRO dependencies survive placement pruning.
   std::unordered_map<std::string, uint32_t> questNames;
   bool playerFemale = false;
+  std::unordered_map<uint32_t,std::array<std::array<std::string,3>,2>> raceBodyModels;
   std::unordered_map<uint32_t,std::vector<uint32_t>> formLists;
   std::unordered_map<uint32_t,std::array<uint32_t,2>> raceVoices;
   std::unordered_map<uint32_t,Topic> dialogueTopics;

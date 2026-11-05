@@ -160,7 +160,19 @@ void Decode(Definitions &d, const std::string &t, uint32_t id, uint32_t flags,
     d.terminals[id]=std::move(terminal);
   }
   else if(t=="FLST") {for(auto& v:s)if(v.type=="LNAM"&&v.n==4)d.formLists[id].push_back(U(&v));}
-  else if(t=="RACE"){auto voices=Find(s,"VTCK");if(voices&&voices->n>=8)d.raceVoices[id]={U(voices),U(voices,4)};auto data=Find(s,"DATA");if(data&&data->n==36&&(U(data,32)&4))d.childRaces.insert(id);}
+  else if(t=="RACE"){
+    auto voices=Find(s,"VTCK");if(voices&&voices->n>=8)d.raceVoices[id]={U(voices),U(voices,4)};
+    auto data=Find(s,"DATA");if(data&&data->n==36&&(U(data,32)&4))d.childRaces.insert(id);
+    bool body=false;size_t sex=0;uint32_t slot=UINT32_MAX;
+    for(const auto& v:s){
+      if(v.type=="NAM0"||v.type=="HNAM"||v.type=="ENAM")body=false;
+      else if(v.type=="NAM1"){body=true;slot=UINT32_MAX;}
+      else if(v.type=="MNAM"&&body){sex=0;slot=UINT32_MAX;}
+      else if(v.type=="FNAM"&&body){sex=1;slot=UINT32_MAX;}
+      else if(v.type=="INDX"&&v.n==4)slot=U(&v);
+      else if(v.type=="MODL"&&body&&slot<3)d.raceBodyModels[id][sex][slot]=fo3esm::ZString(v.p,v.n);
+    }
+  }
   else if(t=="FURN") {auto& f=d.furniture[id];f.model=Text(s,"MODL");f.editor=editor;auto m=Find(s,"MNAM");f.markers=U(m);f.valid=m&&m->n==4&&!f.model.empty();}
   else if(t=="IDLE") { d.idleModels[id]=Text(s,"MODL");d.idleParents[id]=U(Find(s,"ANAM")); for(const auto& v:s)if(v.type=="CTDA")d.idleConditions[id].push_back(Cond(v)); }
   else if(t=="TERM") {d.terminalBases.insert(id);}

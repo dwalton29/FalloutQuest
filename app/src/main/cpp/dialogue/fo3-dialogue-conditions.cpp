@@ -106,7 +106,7 @@ static bool Value(const fo3pipdata::Condition& c,const Context& ctx,float& value
     if(!def){error="actor identity unavailable";return false;}
     if(c.function==68)value=def->actorClass==c.a;
     if(c.function==69)value=def->race==c.a;
-    if(c.function==70)value=uint32_t(def->female)==c.a;
+    if(c.function==70)value=uint32_t(pc?p.PlayerFemale():def->female)==c.a;
     if(c.function==71)value=p.ActorFactionRank(who.reference,c.a)>=0;
     if(c.function==73)value=p.ActorFactionRank(who.reference,c.a);
     return true;
@@ -115,7 +115,7 @@ static bool Value(const fo3pipdata::Condition& c,const Context& ctx,float& value
   case 77:if(!std::isfinite(ctx.randomPercent)||ctx.randomPercent<0||ctx.randomPercent>99){error="random percent sample unavailable";return false;}value=ctx.randomPercent;return true;
   case 80:if(!pc){error="NPC effective level unavailable";return false;}value=state.level;return true;
   case 101:value=(pc?p.EquippedWeapon():p.ActorWeapon(who.reference))!=nullptr;return true;
-  case 131:value=uint32_t(d.playerFemale)==c.a;return true;
+  case 131:value=uint32_t(p.PlayerFemale())==c.a;return true;
   case 136:value=who.reference==c.a;return true;
   case 141:value=ctx.talking&&who.reference==ctx.speaker.reference;return true;
   case 159:case 160:if(!pc){error="NPC furniture query unavailable";return false;}value=c.function==159?p.SittingState():p.FurnitureMarker();return true;

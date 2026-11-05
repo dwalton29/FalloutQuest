@@ -1,4 +1,5 @@
 #include "ui/interaction/fo3-item-notifications.h"
+#include "ui/chargen/fo3-name-entry.h"
 
 #include "dialogue/fo3-dialogue-panel.h"
 // The interaction test binary intentionally compiles without the headset
@@ -192,7 +193,28 @@ fo3loot::Cursor gScriptMessageCursor;
 uint32_t gScriptMessageOwner=0;
 uint64_t gScriptMessageSequence=1000000;
 bool gScriptMessageLastA=false,gScriptMessageLastB=false;
-bool Fo3ScriptMessageFocus(){return gScriptMessagePanel.visible;}
+fo3name::Model gPlayerNameEntry;
+fo3dialogue::Panel gPlayerNameKeyboard;
+bool Fo3PlayerNameFocus(){return gPlayerSession&&gPlayerSession->player.Snapshot().nameMenuOwner!=0;}
+bool Fo3ScriptMessageFocus(){return gScriptMessagePanel.visible||Fo3PlayerNameFocus();}
+void UpdateFo3PlayerName(double now,float x,float y,bool a,bool b,bool focused,const float* head){
+    if(!gPlayerSession||gPlayerSession->saveBlocked||IsFo3LoadingVisible())return;
+    auto& player=gPlayerSession->player;const auto owner=player.Snapshot().nameMenuOwner;
+    if(!owner&&!gPlayerNameEntry.owner)return;
+    if(owner&&gPlayerNameEntry.owner!=owner){
+        gPlayerNameKeyboard={};const float yaw=head[3];gPlayerNameKeyboard.yaw=yaw;
+        gPlayerNameKeyboard.anchor={head[0]-std::sin(yaw)*1.5f,head[1]-.35f,head[2]-std::cos(yaw)*1.5f};
+    }
+    const auto before=gPlayerNameEntry.revision;
+    const auto result=gPlayerNameEntry.Step(player,now,x,y,a,b,focused);
+    gPlayerNameKeyboard.visible=player.Snapshot().nameMenuOwner!=0;
+    gPlayerNameKeyboard.subtitle="Left/right: choose a character. A: add. B: delete.";
+    gPlayerNameKeyboard.choices=gPlayerNameEntry.Choices();gPlayerNameKeyboard.selected=gPlayerNameEntry.cursor.selected;
+    gPlayerNameKeyboard.revision=player.Revision()+gPlayerNameEntry.revision;
+    if(result!=fo3name::Model::Result::None){fo3audio::NamedSound("UIMenuOK");FlushFo3PlayerState();}
+    else if(gPlayerNameEntry.revision!=before)fo3audio::Scroll();
+}
+
 void UpdateFo3ScriptMessage(double now,float scroll,bool pressA,bool pressB,bool focused) {
     const bool a=pressA&&!gScriptMessageLastA,b=pressB&&!gScriptMessageLastB;
     gScriptMessageLastA=pressA;gScriptMessageLastB=pressB;
@@ -200,6 +222,7 @@ void UpdateFo3ScriptMessage(double now,float scroll,bool pressA,bool pressB,bool
         gScriptMessagePanel.visible=false;gScriptMessageOwner=0;return;
     }
     auto& player=gPlayerSession->player;
+    if(Fo3PlayerNameFocus())return;
     if(!gScriptMessagePanel.visible){
         if(Fo3LevelUpFocus())return; // Defer authored messages until level-up closes.
         fo3player::ScriptMessage request;

@@ -59,7 +59,7 @@ bool Player::CommitLevelUp(const std::array<uint8_t,14>& chosenSkills,
   const auto found=catalog_->pipboy.perks.find(perkForm);
   if(found==catalog_->pipboy.perks.end()||
      !fo3levelup::PerkEligible(perkForm,found->second,targetLevel,
-         state_.special,chosenSkills,catalog_->pipboy.playerFemale,
+         state_.special,chosenSkills,PlayerFemale(),
          state_.pipboy.perks))return false;
   const auto specialPerk=catalog_->pipboy.formNames.find("intensetraining");
   const bool intense=specialPerk!=catalog_->pipboy.formNames.end()&&

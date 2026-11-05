@@ -130,7 +130,13 @@ static void ScriptedActorMovement(){
   body.source="ActorRef.MoveToMarker DestMarker";assert(p.ExecuteDialogueResult(body,error)&&p.ScriptActorMoveEpoch(100)>epoch);
   body.source="ActorRef.MoveTo DestMarker\nPlayer.RemoveItem UnknownItem 1";
   const auto revision=p.Revision();assert(!p.ExecuteDialogueResult(body,error)&&p.Revision()==revision);
-  assert(!p.MoveActorTo(100,0x14,{})&&!p.MoveActorTo(0x14,300,{}));
+  const auto npcPosition=p.Snapshot().actors.at(100).position;
+  assert(!p.MoveActorTo(100,0x14,{})); // Moving an NPC to the tracked player still requires its own adapter.
+  assert(p.MoveActorTo(fo3player::PlayerRef,300,{}));
+  const auto& arrival=p.Snapshot().playerMove;
+  assert(arrival.pending&&arrival.marker==300&&arrival.cell==2&&arrival.rotation[2]==marker.rz);
+  assert((arrival.position==std::array<float,3>{100,200,300}));
+  assert(p.Snapshot().actors.at(100).position==npcPosition);
   fo3npc::RuntimeState runtime;runtime.position={1,2,3};runtime.navigationDoor=1;runtime.xtelDoor=2;runtime.nextPath=20;
   runtime.Relocate({4,5,6},1.25f,false);assert(runtime.offScene&&runtime.xtelDoor==0&&runtime.navigationDoor==0&&runtime.nextPath==0);
   assert((runtime.position==std::array<float,3>{4,5,6})&&runtime.returnYaw==1.25f);

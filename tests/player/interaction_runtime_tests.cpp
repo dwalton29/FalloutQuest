@@ -550,6 +550,21 @@ int main() {
     Check(query()&&t.furniture&&!t.pickup&&t.allowed&&std::string(t.prompt.data())=="Sit Office Chair","original FURN is a Sit target rather than an inventory item");
     activate();Check(seatRequests==1,"A dispatches seating through the actual interaction path");seatAllowed=false;Check(query()&&!t.allowed,"occupied furniture cannot sit");activate();Check(seatRequests==1,"blocked seat cannot activate");
     seatAllowed=true;testSeated=700;gObjects.clear();Check(query()&&t.furniture&&std::string(t.prompt.data())=="Stand Office Chair","seated empty ray exposes stand action");seatBlocked=true;Check(!query(),"blink transition blocks double activation");seatBlocked=false;testSeat=testSeated=0;
+    auto& named=gPlayerSession->player;
+    Check(named.SetPlayerControls(127,false)&&named.OpenPlayerNameMenu(700),"script requests name with gameplay controls disabled");
+    Check(Fo3PlayerNameFocus()&&Fo3ScriptMessageFocus()&&!CaptureFo3ResidentInteractionActivity().Idle(),"pending name is a real modal/residency barrier");
+    Check(!query(),"name entry excludes world targeting");
+    const float trackedHead[4]{0,1.6f,0,0};const int savesBeforeName=flushes;
+    UpdateFo3PlayerName(0,0,0,true,false,true,trackedHead);
+    Check(named.Snapshot().nameDraft.empty(),"opening A press cannot type into name menu");
+    UpdateFo3PlayerName(.1,0,0,false,false,true,trackedHead);UpdateFo3PlayerName(.2,0,0,false,false,true,trackedHead);
+    UpdateFo3PlayerName(.3,0,0,true,false,true,trackedHead);
+    Check(named.Snapshot().nameDraft=="A"&&flushes>savesBeforeName,"native adapter edits and saves the canonical draft");
+    UpdateFo3PlayerName(.4,0,0,false,false,false,trackedHead);UpdateFo3PlayerName(.5,0,0,true,false,true,trackedHead);
+    Check(named.Snapshot().nameDraft=="A","tracking restoration cannot repeat held A");
+    UpdateFo3PlayerName(.6,0,0,false,false,true,trackedHead);UpdateFo3PlayerName(.7,0,0,false,false,true,trackedHead);
+    gPlayerNameEntry.cursor.selected=2;UpdateFo3PlayerName(.8,0,0,true,false,true,trackedHead);
+    Check(named.PlayerName()=="A"&&!Fo3PlayerNameFocus()&&!gPlayerNameKeyboard.visible,"Done confirms and releases modal state");
     std::cout << "Interaction runtime tests passed\n";
     return 0;
   } catch (const std::exception &e) {

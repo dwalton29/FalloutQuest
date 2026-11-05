@@ -9,10 +9,13 @@
 #include "npc/fo3-ragdoll-pose.h"
 #include "player/fo3-sneak.h"
 #include "player/fo3-new-game.h"
+#include "ui/chargen/fo3-name-entry.h"
 #include "player/fo3-player-seat.h"
 #include "npc/fo3-detection.h"
 #include "scripting/fo3-script-imagespace.h"
 #include "scripting/fo3-nonresident-script.h"
+bool Fo3ScriptMessageFocus();
+bool Fo3PlayerNameFocus();
 namespace fo3worldscript {
 fo3script::ImagePresentation Presentation();
 bool PackageEvent(uint32_t reference,uint32_t package,bool completed);
@@ -1011,6 +1014,7 @@ bool gPipAnchorReady=false,gPipSolved=false;
 bool gPipEquipmentChanged=false;
 uint64_t gPipAppearanceRevision=UINT64_MAX;
 std::string gPipAppearanceModel;
+bool gPipAppearanceFemale=false;
 Vec3 gPipShoulder{},gPipHand{};
 double gPipUpdateUs=0,gPipScreenDrawUs=0;
 uint64_t gPipScreenQueries=0;
@@ -11678,14 +11682,14 @@ void SynchronizeFo3PipboyEquipment() {
     if (stack.equipped && item != player.Definitions().items.end() &&
         item->second.kind == fo3player::ItemKind::Armour &&
         (item->second.bipedMask & 4u))
-      model = item->second.model;
+      model = player.PlayerFemale()&&!item->second.femaleModel.empty()?item->second.femaleModel:item->second.model;
   }
-  if (gPipAppearanceRevision != UINT64_MAX && model != gPipAppearanceModel) {
+  if (gPipAppearanceRevision != UINT64_MAX && (model != gPipAppearanceModel||gPipAppearanceFemale!=player.PlayerFemale())) {
     gPipEquipmentChanged = true;
     gQ210PlayerBodyAttempted = false;
     gQ210PlayerBodyReady = false;
   }
-  gPipAppearanceModel = model;
+  gPipAppearanceModel = model;gPipAppearanceFemale=player.PlayerFemale();
   gPipAppearanceRevision = player.Revision();
 }
 void UpdateFo3PipboyMount(const Q213ArmPose &pose) {
@@ -12660,31 +12664,37 @@ bool Q210EnsurePlayerBody() {
     // PipBoy MODL      -> PipBoy3000\\PipBoyArm.NIF
     // PipBoyGlove MODL -> Characters\\_Male\\LeftHandPipboyGlove.NIF
     std::vector<std::string> bodyPaths;
-    const std::string q216UpperBodyIk = q215FindMesh(
+    std::string q216UpperBodyIk = q215FindMesh(
         "Characters\\_Male\\",
         "characters\\_male\\upperbody.nif");
     std::string q215Vault101 = q215FindMesh(
         "Armor\\VaultSuit\\M\\",
         "armor\\vaultsuit\\m\\outfit.nif");
-    const std::string q215PipBoyGlove = q215FindMesh(
+    std::string q215PipBoyGlove = q215FindMesh(
         "Characters\\_Male\\",
         "characters\\_male\\lefthandpipboyglove.nif");
-    const std::string q215RightHand = q215FindMesh(
+    std::string q215RightHand = q215FindMesh(
         "Characters\\_Male\\",
         "characters\\_male\\righthand.nif");
     const std::string q215PipBoy = q215FindMesh(
         "PipBoy3000\\",
         "pipboy3000\\pipboyarm.nif");
 
+    if(gPlayerSession){const auto& player=gPlayerSession->player;
+        const auto torso=player.PlayerBodyModel(0),hand=player.PlayerBodyModel(2);
+        if(!torso.empty())q216UpperBodyIk=torso;
+        if(!hand.empty())q215RightHand=hand;
+        if(player.PlayerFemale())q215PipBoyGlove=player.PlayerBodyModel(1);
+    }
     // Canonical equipped torso armour replaces the previous fixed Vault outfit.
     // Unequipping through ITEMS exposes the authored body; no invented stack.
     if(auto* player=GetFo3PlayerSession()) {
         std::string equipped;
         for(const auto& stack:player->player.Snapshot().inventory) {
             auto item=player->player.Definitions().items.find(stack.formId);
-            if(stack.equipped&&item!=player->player.Definitions().items.end()&&item->second.kind==fo3player::ItemKind::Armour&&(item->second.bipedMask&4u))equipped=item->second.model;
+            if(stack.equipped&&item!=player->player.Definitions().items.end()&&item->second.kind==fo3player::ItemKind::Armour&&(item->second.bipedMask&4u))equipped=player->player.PlayerFemale()&&!item->second.femaleModel.empty()?item->second.femaleModel:item->second.model;
         }
-        if(!equipped.empty()||gPipEquipmentChanged)q215Vault101=equipped;
+        if(!equipped.empty()||gPipEquipmentChanged||player->player.Snapshot().inCharGen)q215Vault101=equipped;
     }
     // Put the hidden canonical body first: master-arm selection is intentionally
     // first-valid, preserving the exact Q21.14 authored arm lengths/pivots.
@@ -12781,8 +12791,7 @@ bool Q210EnsurePlayerBody() {
             if(pipboy){for(int i=0;i<3;++i)if(fo3appearance::SameModel(part.mesh.shapeName,i==0?"StatsGlow:0":i==1?"ItemsGlow:0":"DataGlow:0"))gpu.pipButton=i;}
 
             gpu.q215IkReferenceOnly = !q215Vault101.empty() &&
-                Q210EndsWithInsensitive(
-                    path, "characters\\_male\\upperbody.nif");
+                fo3appearance::SameModel(path,q216UpperBodyIk);
             triangles += static_cast<size_t>(gpu.vertexCount / 3);
 
             const size_t q211GpuIndex = gQ210PlayerBody.size();
@@ -13236,6 +13245,7 @@ void QActorPrepareStereoFrame() {
     const bool ready=Q210EnsurePlayerBody();
     const double setupUs=fqopaque::Micros(setupStarted);
     if(ready){Q211UpdatePlayerRig(true);WeaponFinalizePlayerPose();}
+    if(Fo3ScriptMessageFocus()){PrepareFo3InteriorSceneLights();return;}
     const double npcNow=std::chrono::duration<double>(Fo3GameplayNow().time_since_epoch()).count();
     static double motionAt=-1;static std::array<float,3> oldHead{};static uint32_t motionCell=0;
     const float motionDt=float(npcNow-motionAt),travel=std::hypot(gQ210Head[0]-oldHead[0],gQ210Head[2]-oldHead[2]);

@@ -116,6 +116,12 @@ bool CompileResult(const fo3pipdata::Definitions& d,const fo3pipdata::ResultScri
       cmd.type=op=="if"?CommandType::If:CommandType::ElseIf;
       std::getline(in,cmd.expression);if(cmd.expression.empty()){error="missing conditional expression";return false;}
     } else if(op=="else"||op=="endif")cmd.type=op=="else"?CommandType::Else:CommandType::EndIf;
+    else if(op=="player.sexchange"){
+      cmd.type=CommandType::PlayerSex;cmd.index=2;
+      if(in>>a){if(a=="male")cmd.index=0;else if(a=="female")cmd.index=1;else {error="invalid SexChange sex";return false;}
+        if(in>>b){if(b!="0"&&b!="1"){error="invalid SexChange refresh flag";return false;}}else in.clear();
+      }else in.clear();
+    }else if(op=="getplayername")cmd.type=CommandType::PlayerNameMenu;
     else if(op=="setinchargen"||op=="setlocationspecificloadscreensonly"){
       cmd.type=op=="setinchargen"?CommandType::CharacterGeneration:CommandType::LocationLoadScreens;
       if(!(in>>a)||!number(a,cmd.value)||(cmd.value!=0&&cmd.value!=1)){error="invalid character generation flag";return false;}

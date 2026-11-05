@@ -1092,6 +1092,38 @@ bool Player::CanOpenDoorImpl(uint32_t actor,uint32_t id,bool sourceDelegated) co
       return true;
   return false;
 }
+std::string Player::PlayerBodyModel(unsigned slot)const{
+  const auto* base=fo3pipdata::ActorCategory(catalog_->pipboy,PlayerBase,1);
+  if(!base||slot>=3)return {};
+  const auto race=catalog_->pipboy.raceBodyModels.find(base->race);
+  return race==catalog_->pipboy.raceBodyModels.end()?std::string{}:race->second[PlayerFemale()?1:0][slot];
+}
+std::string Player::PlayerName()const{
+  if(!state_.playerName.empty())return state_.playerName;
+  const auto base=catalog_->pipboy.dialogueActors.find(PlayerBase);
+  return base!=catalog_->pipboy.dialogueActors.end()&&!base->second.name.empty()?base->second.name:"Player";
+}
+bool Player::SetPlayerSex(bool female){
+  const auto sex=uint8_t(female);if(state_.playerSex!=sex){state_.playerSex=sex;++revision_;}return true;
+}
+static bool ValidNameDraft(const std::string& name){
+  return name.size()<=32&&std::all_of(name.begin(),name.end(),[](unsigned char c){return c>=32&&c<=126;});
+}
+bool Player::OpenPlayerNameMenu(uint32_t owner){
+  if(!owner||(!catalog_->pipboy.quests.count(owner)&&!catalog_->references.count(owner)))return false;
+  if(state_.nameMenuOwner)return state_.nameMenuOwner==owner;
+  state_.nameMenuOwner=owner;state_.nameDraft=state_.playerName;++revision_;return true;
+}
+bool Player::EditPlayerName(const std::string& draft){
+  if(!state_.nameMenuOwner||!ValidNameDraft(draft))return false;
+  if(state_.nameDraft!=draft){state_.nameDraft=draft;++revision_;}return true;
+}
+bool Player::ConfirmPlayerName(){
+  if(!state_.nameMenuOwner||!ValidNameDraft(state_.nameDraft))return false;
+  const auto first=state_.nameDraft.find_first_not_of(' ');if(first==std::string::npos)return false;
+  state_.playerName=state_.nameDraft.substr(first,state_.nameDraft.find_last_not_of(' ')-first+1);
+  state_.nameMenuOwner=0;state_.nameDraft.clear();++revision_;return true;
+}
 bool Player::SetNoActivationSound(uint32_t sound){
   if(sound&&!catalog_->pipboy.sounds.count(sound))return false;
   if(state_.noActivationSound!=sound){state_.noActivationSound=sound;++revision_;}return true;
@@ -1296,7 +1328,8 @@ bool Player::Save(const std::string &path, std::string &error) const {
     payload.push_back(l.forceFailures);payload.push_back(l.rewarded?1:0);}
   // Optional RFE1 after the v14 lock tail. Empty overlays keep existing v14
   // bytes unchanged; older supported saves do not require this extension.
-  const bool hasNewGame=state_.noActivationSound||state_.inCharGen||state_.locationSpecificLoadScreens||state_.playerMove.marker;
+  const bool hasIdentity=state_.playerSex!=2||!state_.playerName.empty()||state_.nameMenuOwner||!state_.nameDraft.empty();
+  const bool hasNewGame=hasIdentity||state_.noActivationSound||state_.inCharGen||state_.locationSpecificLoadScreens||state_.playerMove.marker;
   const bool hasFactionRanks=hasNewGame||!state_.actorFactions.empty()||!state_.actorPackageEvents.empty();
   const bool hasBodyDamage=hasFactionRanks||state_.disabledControls||!state_.restrainedActors.empty()||std::any_of(state_.bodyDamage.begin(),state_.bodyDamage.end(),[](float v){return v!=0;});
   const bool hasCorpsePoses=hasBodyDamage||std::any_of(state_.actors.begin(),state_.actors.end(),[](const auto& a){return bool(a.second.corpse);});
@@ -1496,7 +1529,16 @@ bool Player::Save(const std::string &path, std::string &error) const {
     for(auto v:m.position)PutFloat(payload,v);
     for(auto v:m.rotation)PutFloat(payload,v);
   }
-  Put32(bytes, hasNewGame ? 28 : hasFactionRanks ? 27 : hasBodyDamage ? 26 : hasCorpsePoses ? 25 : hasDailyInfos ? 24 : hasScriptPackages ? 23 : hasScriptOverrides ? 22 : hasActorVariables ? 21 : hasDoorStates ? 20 : hasDebugPoints ? 19 : hasLevelAdvancement ? 18 : hasCompletionState ? 17 :
+  if(hasIdentity){
+    if(state_.playerSex>2||!ValidNameDraft(state_.playerName)||!ValidNameDraft(state_.nameDraft)||
+       (!state_.nameMenuOwner&&!state_.nameDraft.empty())||
+       (state_.nameMenuOwner&&!catalog_->pipboy.quests.count(state_.nameMenuOwner)&&!catalog_->references.count(state_.nameMenuOwner))){error="Invalid player identity";return false;}
+    Put32(payload,0x314E4449); // IDN1
+    Put32(payload,state_.playerSex);Put32(payload,state_.nameMenuOwner);
+    Put32(payload,uint32_t(state_.playerName.size()));payload.insert(payload.end(),state_.playerName.begin(),state_.playerName.end());
+    Put32(payload,uint32_t(state_.nameDraft.size()));payload.insert(payload.end(),state_.nameDraft.begin(),state_.nameDraft.end());
+  }
+  Put32(bytes, hasIdentity ? 29 : hasNewGame ? 28 : hasFactionRanks ? 27 : hasBodyDamage ? 26 : hasCorpsePoses ? 25 : hasDailyInfos ? 24 : hasScriptPackages ? 23 : hasScriptOverrides ? 22 : hasActorVariables ? 21 : hasDoorStates ? 20 : hasDebugPoints ? 19 : hasLevelAdvancement ? 18 : hasCompletionState ? 17 :
       hasMerchantVisits ? 16 : hasPlayerAttributeOverrides ? 15 : 14);
   Put32(bytes, catalog_->fingerprint);
   Put32(bytes, static_cast<uint32_t>(payload.size()));
@@ -1556,7 +1598,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
   const auto *h = bytes.data();
   const auto version = fo3esm::ReadU32(h + 4);
   if (std::memcmp(h, "FQPS", 4) ||
-      (version < 1 || version > 28))
+      (version < 1 || version > 29))
     return fail("Unsupported player save format");
   if (fo3esm::ReadU32(h + 8) != catalog_->fingerprint)
     return fail("Player save belongs to different game definitions");
@@ -2029,12 +2071,12 @@ bool Player::Restore(const std::string &path, std::string &error) {
       if(version>=27){
         if(payload.size()-at<8||fo3esm::ReadU32(p+at)!=0x31564550)return fail("Missing package event state");
         const auto count=fo3esm::ReadU32(p+at+4);at+=8;
-        if(count>10000||payload.size()-at!=9ull*count+(version>=28?48u:0u))return fail("Invalid package event count");
+        if(count>10000||(version>=29?payload.size()-at<9ull*count+68u:payload.size()-at!=9ull*count+(version>=28?48u:0u)))return fail("Invalid package event count");
         for(uint32_t n=0;n<count;++n){const auto ref=fo3esm::ReadU32(p+at),package=fo3esm::ReadU32(p+at+4);const auto done=p[at+8];at+=9;
           if(!catalog_->actorPlacements.count(ref)||(package&&!catalog_->pipboy.packages.count(package))||done>1||(!package&&done)||!next.actorPackageEvents.emplace(ref,std::make_pair(package,done!=0)).second)return fail("Invalid package event state");}
       }
       if(version>=28){
-        if(payload.size()-at!=48||fo3esm::ReadU32(p+at)!=0x31474E43)return fail("Missing character generation state");
+        if((version>=29?payload.size()-at<68:payload.size()-at!=48)||fo3esm::ReadU32(p+at)!=0x31474E43)return fail("Missing character generation state");
         const auto flags=fo3esm::ReadU32(p+at+4);auto& m=next.playerMove;
         m.marker=fo3esm::ReadU32(p+at+8);m.cell=fo3esm::ReadU32(p+at+12);m.world=fo3esm::ReadU32(p+at+16);next.noActivationSound=fo3esm::ReadU32(p+at+20);at+=24;
         for(auto& v:m.position){v=fo3esm::ReadF32(p+at);at+=4;}
@@ -2043,6 +2085,20 @@ bool Player::Restore(const std::string &path, std::string &error) {
            !std::all_of(m.position.begin(),m.position.end(),[](float v){return std::isfinite(v);})||
            !std::all_of(m.rotation.begin(),m.rotation.end(),[](float v){return std::isfinite(v);}))return fail("Invalid character generation state");
         next.inCharGen=flags&1;next.locationSpecificLoadScreens=flags&2;m.pending=flags&4;
+      }
+      if(version>=29){
+        if(payload.size()-at<20||fo3esm::ReadU32(p+at)!=0x314E4449)return fail("Missing player identity");
+        const auto sex=fo3esm::ReadU32(p+at+4);next.nameMenuOwner=fo3esm::ReadU32(p+at+8);at+=12;
+        if(sex>2||(next.nameMenuOwner&&!catalog_->pipboy.quests.count(next.nameMenuOwner)&&!catalog_->references.count(next.nameMenuOwner)))return fail("Invalid player identity owner/sex");
+        next.playerSex=uint8_t(sex);
+        for(auto* value:{&next.playerName,&next.nameDraft}){
+          if(payload.size()-at<4)return fail("Missing player name length");
+          const auto size=fo3esm::ReadU32(p+at);at+=4;
+          if(size>32||payload.size()-at<size)return fail("Invalid player name length");
+          value->assign(reinterpret_cast<const char*>(p+at),size);at+=size;
+          if(!ValidNameDraft(*value))return fail("Invalid player name characters");
+        }
+        if(!next.nameMenuOwner&&!next.nameDraft.empty())return fail("Orphan player name draft");
       }
       if(at!=payload.size())return fail("Trailing player save data");
     }

@@ -185,6 +185,9 @@ struct PlayerMove {
 };
 struct State {
   bool inCharGen=false,locationSpecificLoadScreens=false;
+  uint8_t playerSex=2; // 2 inherits the original NPC_ player record.
+  std::string playerName,nameDraft;
+  uint32_t nameMenuOwner=0;
   uint32_t noActivationSound=0;
   PlayerMove playerMove;
   fo3pipdata::SessionState pipboy;
@@ -419,6 +422,13 @@ public:
   bool ChangeActorValueDamage(uint32_t reference,uint32_t value,float amount,bool restore);
   float HealthPercentage(uint32_t reference) const;
   bool SetPlayerControls(uint32_t mask,bool enable);
+  bool PlayerFemale()const{return state_.playerSex<2?state_.playerSex==1:catalog_->pipboy.playerFemale;}
+  std::string PlayerName()const;
+  std::string PlayerBodyModel(unsigned slot)const;
+  bool SetPlayerSex(bool female);
+  bool OpenPlayerNameMenu(uint32_t owner);
+  bool EditPlayerName(const std::string& draft);
+  bool ConfirmPlayerName();
   bool SetCharacterGeneration(bool enabled);
   bool SetNoActivationSound(uint32_t sound);
   bool SetLocationSpecificLoadScreens(bool enabled);
@@ -513,7 +523,7 @@ public:
   // must own it until committed, rolled back or cancelled. Never run a second
   // evaluation to capture provenance.
   bool PumpWorldAwareGameMode(double realSeconds,const std::vector<uint32_t>& resident,
-      const std::function<bool(std::unique_ptr<ScriptTransactionPlan>)>& reserveWorld);
+      const std::function<bool(std::unique_ptr<ScriptTransactionPlan>)>& reserveWorld,bool menuMode=false);
   void SetScriptPlayerLocation(float x,float y,float z,uint32_t cell,uint32_t world);
   bool ScriptDistance(float& distance) const;
   float ScriptPlayerHeight()const{return scriptPlayerPosition_[2];}

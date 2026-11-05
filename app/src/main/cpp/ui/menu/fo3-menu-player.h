@@ -48,6 +48,7 @@ inline Document &PipDocument(int tab) {
   static Document docs[3];
   return docs[tab];
 }
+inline Document &NameDocument() {static Document d;return d;}
 inline Document &DialogueDocument() {
   static Document d;
   return d;
@@ -137,6 +138,19 @@ inline void Message(const float *mvp, const fo3dialogue::Panel &panel,
     doc.selection = panel.selected;
   }
   World(doc.surface, doc.layout, mvp);
+}
+inline void PlayerName(const float* mvp,const fo3player::Player& p,bool confirmSelected){
+  auto& doc=NameDocument();if(!doc.Ensure("menus\\dialog\\texteditmenu.xml",1280,1024))return;
+  const auto key=TextKey(p.Snapshot().nameDraft)^p.Revision();
+  if(doc.revision!=key||doc.selection!=size_t(confirmSelected)){
+    doc.Begin(p);auto& l=doc.layout;l.Set(l.Root(),"alpha",255.);
+    l.Set("textedit_text","string",p.Snapshot().nameDraft+"_");
+    // The controller field holds a whole name on one line inside the authored frame.
+    l.Set("textedit_text","wrapwidth",l.N(l.Find("TEM_MainRect"),"width")-64.);
+    l.Set("textedit_button_ok","mouseover",double(confirmSelected));
+    doc.Build();doc.revision=key;doc.selection=confirmSelected;
+  }
+  World(doc.surface,doc.layout,mvp);
 }
 inline void Notice(const float *mvp, const std::string &text,
                    const fo3player::Player &p, bool world,
@@ -783,7 +797,7 @@ inline void Shutdown() {
     d = {};
   }
   for (auto *d : {&DialogueDocument(), &BarterDocument(), &MessageDocument(),
-                  &QuantityDocument()}) {
+                  &QuantityDocument(), &NameDocument()}) {
     d->surface.Shutdown();
     *d = {};
   }

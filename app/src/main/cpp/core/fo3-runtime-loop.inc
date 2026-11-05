@@ -1477,14 +1477,14 @@ private:
             // Scripted restrictions affect game controls; tracked head/hands and
             // the system pause control always remain live for VR comfort.
             if(p.PlayerControlDisabled(0)||p.Restrained(fo3player::PlayerRef))moveX_=moveY_=0;
-            if(p.PlayerControlDisabled(4))turnX_=0;
+            if(p.PlayerControlDisabled(4)&&!Fo3ScriptMessageFocus())turnX_=0;
             if(p.PlayerControlDisabled(6))sneakDown_=false;
             static bool blockedActivationDown=false;
-            if(p.PlayerControlDisabled(5)){
+            if(p.PlayerControlDisabled(5)&&!Fo3ScriptMessageFocus()){
                 if(activateDownQ1700_&&!blockedActivationDown&&p.Snapshot().noActivationSound)
                     fo3audio::SoundEvent(p.Snapshot().noActivationSound);
                 blockedActivationDown=activateDownQ1700_;activateDownQ1700_=false;
-            }else blockedActivationDown=false;
+            }else blockedActivationDown=activateDownQ1700_;
         }
         const XrSpaceLocationFlags required = XR_SPACE_LOCATION_POSITION_VALID_BIT |
                                               XR_SPACE_LOCATION_ORIENTATION_VALID_BIT;
@@ -1898,12 +1898,12 @@ private:
                     !IsFo3LoadingVisible() && sessionState_==XR_SESSION_STATE_FOCUSED &&
                     previousWorldClockNs>0 && clockNs>previousWorldClockNs) {
                     const double seconds=std::clamp(double(clockNs-previousWorldClockNs)*1e-9,0.0,0.25);
-                    gPlayerSession->player.AdvanceGameClock(seconds);
+                    const bool scriptMenu=Fo3ScriptMessageFocus();
+                    if(!scriptMenu)gPlayerSession->player.AdvanceGameClock(seconds);
                     auto& scriptPlayer=gPlayerSession->player;
                     fo3worldscript::Register();
-                    fo3worldscript::seconds+=seconds;
-                    fo3worldscript::SpeechTick();
-                    scriptPlayer.SetScriptRuntimeClock(fo3worldscript::seconds,seconds);
+                    if(!scriptMenu){fo3worldscript::seconds+=seconds;fo3worldscript::SpeechTick();}
+                    scriptPlayer.SetScriptRuntimeClock(fo3worldscript::seconds,scriptMenu?0:seconds);
                     scriptPlayer.SetScriptPlayerLocation(
                         gSceneCenterXQ1730+gQ210Head[0]*FO3_UNITS_PER_METRE_Q715,
                         gSceneCenterYQ1730-(gQ210Head[2]-SCENE_FORWARD)*FO3_UNITS_PER_METRE_Q715,
@@ -1926,7 +1926,7 @@ private:
                     const uint64_t revision=gFo3VisualPublication.Revision();
                     const bool staticChanged=!revision||q230Statics.revision!=revision||q230Statics.storage!=gObjects.data()||q230Statics.count!=gObjects.size();
                     uint64_t q230ScanUs=0;
-                    if(scriptResidenceElapsed>=.25||staticChanged||scriptActorResidence!=gQ230NpcResidenceRevision){
+                    if(!scriptMenu&&(scriptResidenceElapsed>=.25||staticChanged||scriptActorResidence!=gQ230NpcResidenceRevision)){
                         fo3worldscript::Events();
                         const auto q230ScanStart=fqopaque::Clock::now();
                         if(staticChanged){
@@ -1950,7 +1950,7 @@ private:
                             if(!ticket)return false;
                             gFo3ResidentGameplayTicket=ticket;
                             FlushFo3PlayerState();return true;
-                        });
+                        },scriptMenu);
                     const uint64_t q230PumpUs=fqopaque::Micros(q230PumpStart);
                     static double nextScriptReport=0;static unsigned q230SlowReports=0;
                     if(fo3worldscript::seconds>=nextScriptReport||(q230PumpUs>=8000u&&q230SlowReports++<12u)){
@@ -2059,6 +2059,9 @@ private:
                         gPipActivation.Reset();gPipMenu.dirty=true;
                         Q6H_LOGI("PIPBOY SUPPRESS reason=held-physical-magazine-or-slide");
                     }
+                    const bool nameControls=Fo3PlayerNameFocus();
+                    UpdateFo3PlayerName(gameplaySeconds,q210RightValid?turnX_:0,q210RightValid?lootScrollY_:0,
+                        q210RightValid&&activateDownQ1700_,q210RightValid&&pipBackDown_,sessionState_==XR_SESSION_STATE_FOCUSED&&q210RightValid,gQ210Head);
                     UpdateFo3LevelUp(gameplaySeconds,
                         q210RightValid?lootScrollY_:0,
                         q210RightValid&&activateDownQ1700_,
@@ -2080,7 +2083,7 @@ private:
                     UpdateFo3Lockpick(gameplaySeconds,
                         q210RightValid?turnX_:0,q210RightValid?fingerTriggerValue_[1]:0,
                         activateDownQ1700_,pipBackDown_,sessionState_==XR_SESSION_STATE_FOCUSED&&q210RightValid,pipHead.m,fingerGripValue_[0]>.25f||fingerGripValue_[1]>.25f);
-                    const bool scriptControls=Fo3ScriptMessageFocus();
+                    const bool scriptControls=nameControls||Fo3ScriptMessageFocus();
                     UpdateFo3ScriptMessage(gameplaySeconds,
                         q210RightValid?lootScrollY_:0,q210RightValid&&activateDownQ1700_,
                         q210RightValid&&pipBackDown_,sessionState_==XR_SESSION_STATE_FOCUSED);
@@ -2639,6 +2642,15 @@ private:
             }
 
             // UI system colours are display colours, never world image-space inputs.
+            if(Fo3PlayerNameFocus()&&!IsFo3LoadingVisible()&&gPlayerSession){
+                const auto& panel=gPlayerNameKeyboard;Mat4 model{};const float yaw=panel.yaw;
+                model.m[0]=std::cos(yaw);model.m[2]=-std::sin(yaw);model.m[5]=1;
+                model.m[8]=std::sin(yaw);model.m[10]=std::cos(yaw);
+                model.m[12]=panel.anchor[0];model.m[13]=panel.anchor[1];model.m[14]=panel.anchor[2];model.m[15]=1;
+                const auto keyboard=Multiply(viewProjection,model);fo3menuui::Message(keyboard.m,panel,gPlayerSession->player);
+                model.m[13]+=.65f;
+                const auto field=Multiply(viewProjection,model);fo3menuui::PlayerName(field.m,gPlayerSession->player,gPlayerNameEntry.cursor.selected==2);
+            }
             if(gScriptMessagePanel.visible&&!IsFo3LoadingVisible()) {
                 const float yaw=gQ210Head[3];
                 Mat4 model{};
