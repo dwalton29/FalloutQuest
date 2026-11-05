@@ -71,10 +71,10 @@ public final class FalloutNativeActivity extends NativeActivity {
         });
     }
     public void audioDialogueGain(float gain) {
-        audio.post(() -> { dialogueGain=Math.max(0,Math.min(1,gain));if(dialogue!=null)try{dialogue.setVolume(dialogueGain,dialogueGain);}catch(IllegalStateException ignored){} });
+        audio.post(() -> { dialogueGain=Math.max(0,Math.min(1,gain));if(dialogue!=null)try{volume(dialogue,dialogueGain);}catch(IllegalStateException ignored){} });
     }
     private void duckSpeech() {
-        for(Broadcast b:broadcasts)if(b.player!=null)try{float gain=dialogue==null?1:.25f;b.player.setVolume(gain,gain);}catch(IllegalStateException ignored){}
+        for(Broadcast b:broadcasts)if(b.player!=null)try{float gain=dialogue==null?1:.25f;volume(b.player,gain);}catch(IllegalStateException ignored){}
     }
     private void releaseDialogue(boolean failed) {
         if(dialogue!=null) {dialogue.release();dialogue=null;if(failed)audioDialogueDone(dialogueToken,false);}
@@ -119,7 +119,20 @@ public final class FalloutNativeActivity extends NativeActivity {
     }
     private String ambientPath = "";
     private float ambientGain = 1;
-    private static final float MUSIC_VOLUME = .3f; // Original supplied FALLOUT.INI.
+    private float masterVolume=1, musicVolume=.3f, effectsVolume=1, voiceVolume=1, musicMultiplier=1;
+    private final java.util.Map<MediaPlayer,Float> baseGains=new java.util.WeakHashMap<>();
+    private float scaled(MediaPlayer player,float gain) {
+        float channel=player==music?musicVolume:(player==dialogue||player==broadcasts[0].player||player==broadcasts[1].player)?voiceVolume:effectsVolume;
+        return Math.max(0,Math.min(1,gain*masterVolume*channel));
+    }
+    private void volume(MediaPlayer player,float gain) {
+        baseGains.put(player,gain);float v=scaled(player,gain);player.setVolume(v,v);
+    }
+    public void audioVolumes(float master,float music,float effects,float voice) {
+        audio.post(() -> {masterVolume=master;musicVolume=music;effectsVolume=effects;voiceVolume=voice;
+            for(java.util.Map.Entry<MediaPlayer,Float> e:baseGains.entrySet())try{float v=scaled(e.getKey(),e.getValue());e.getKey().setVolume(v,v);}catch(IllegalStateException ignored){}
+        });
+    }
 
     @Override public void onCreate(Bundle state) {
         // Configure every native reader before NativeActivity loads the library.
@@ -156,10 +169,10 @@ public final class FalloutNativeActivity extends NativeActivity {
     public void audioActive(boolean value) {
         audio.post(() -> { if (focused != value) { focused = value; Log.i("FalloutQuest", "AUDIO XR focus=" + value); refresh(); } });
     }
-    public void audioMusic(String playlist) {
+    public void audioMusic(String playlist, float multiplier) {
         audio.post(() -> {
             if (destroyed) return;
-            releaseMusic(); tracks.clear(); track = 0;
+            releaseMusic(); tracks.clear(); track = 0; musicMultiplier=multiplier;
             for (String path : playlist.split("\n")) if (!path.isEmpty()) tracks.add(path);
             Collections.shuffle(tracks);
             refresh();
@@ -195,7 +208,7 @@ public final class FalloutNativeActivity extends NativeActivity {
         for (int channel = 0; channel < 2; ++channel) refreshBroadcast(channel);
         if (music == null && !tracks.isEmpty() && broadcasts[0].paths.isEmpty()) {
             MediaPlayer player = new MediaPlayer(); music = player;
-            prepare(player, tracks.get(track), MUSIC_VOLUME, false, () -> {
+            prepare(player, tracks.get(track), musicMultiplier, false, () -> {
                 if (music != player) return;
                 releaseMusic(); track = (track + 1) % tracks.size(); refresh();
             }, () -> music == player);
@@ -216,7 +229,7 @@ public final class FalloutNativeActivity extends NativeActivity {
             player.setDataSource(path);
             player.setOnPreparedListener(p -> {
                 if (enabled() && current.check()) {
-                    p.setVolume(gain, gain); p.setLooping(loop); p.start();
+                    volume(p,gain); p.setLooping(loop); p.start();
                     if(p==dialogue)Log.i("FalloutQuest", "DIALOGUE started token="+dialogueToken+" durationMs="+p.getDuration());
                     Log.i("FalloutQuest", "AUDIO playing: " + path + " gain=" + gain + " loop=" + loop);
                 }

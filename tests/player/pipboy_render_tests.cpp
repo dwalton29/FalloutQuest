@@ -11,6 +11,7 @@ inline void glGenBuffers(GLsizei n, GLuint *ids) {
     *ids++ = nextMenuObject++;
 }
 #include "ui/pipboy/fo3-pipboy-renderer.h"
+#include "ui/title/fo3-title-layout.h"
 #include <cassert>
 #include <fstream>
 #include <iostream>
@@ -106,6 +107,33 @@ int main(int argc, char **argv) {
       std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(input)), {});
       assert(fo3font::ParseFalloutFont(bytes, font.metrics));
       fo3font::ApplyFalloutLoadSemantics(font.metrics);
+    }
+  }
+  if(original){
+    fo3menu::Layout title;title.width=1280;title.height=960;
+    assert(title.Load("menus\\options\\start_menu.xml",[&](const std::string& path,std::string& out){
+      std::vector<uint8_t> bytes;if(!original->Read(path,bytes))return false;out.assign(bytes.begin(),bytes.end());return true;
+    }));
+    fo3menuui::Shared().textures["|Interface\\Main\\main_title.dds  "]={200,0,0,1,1,256,64};
+    fo3menuui::Shared().textures["|Interface\\Main\\main_title.dds"]={200,0,0,1,1,256,64};
+    fo3menuui::Measure(title);
+    fo3title::Model state;state.saves={{"save","Current game",1}};
+    for(auto page:{fo3title::Model::Page::Main,fo3title::Model::Page::Audio,fo3title::Model::Page::ConfirmNew}){
+      state.Go(page);fo3title::Bind(title,state);
+      for(const auto& command:title.Paint())if(!command.file.empty())
+        fo3menuui::Shared().textures[command.atlas+"|"+command.file]={200,0,0,1,1,256,64};
+      fo3menuui::Surface surface;assert(surface.Build(title));assert(!surface.vertices.empty());
+      bool text=false,mainColour=false;
+      for(const auto& batch:surface.batches){text=text||(batch.texture==107&&batch.count>0);
+        mainColour=mainColour||std::abs(batch.rgb[0]-fo3uicolor::Title[0])<.001f;}
+      assert(text&&mainColour);
+      if(page==fo3title::Model::Page::ConfirmNew){
+        bool warningVisible=false;
+        for(const auto& v:surface.vertices)warningVisible=warningVisible||(v.x>40&&v.x<700);
+        assert(warningVisible);
+      }
+      for(const auto& vertex:surface.vertices){assert(vertex.x>=0&&vertex.x<=1280&&vertex.y>=0&&vertex.y<=960);}
+      surface.Shutdown();
     }
   }
   // Real image decoding is covered separately; this fixture checks authored

@@ -1,6 +1,7 @@
 #pragma once
 #include "pipboy/fo3-radio-runtime.h"
 #include <cstdint>
+#include <array>
 #include <jni.h>
 #include <string>
 #include "fo3-dialogue-face.h"
@@ -22,7 +23,9 @@ uint32_t PlayingNote();
 void BroadcastDone(int channel, uint32_t generation);
 void Start(JavaVM *vm, jobject activity);
 void Shutdown();
+inline constexpr uint32_t TitleCell=0xfffffffeu;
 void Context(uint32_t cell, bool focused);
+void Volumes(const std::array<float,4>& values);
 void Pickup(uint32_t base);
 void Open(uint32_t base);
 void Close(uint32_t base);

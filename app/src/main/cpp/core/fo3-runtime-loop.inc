@@ -430,7 +430,7 @@ public:
         while (!exitRequested_ && !app_->destroyRequested) {
             ProcessAndroidEvents();
             ProcessXrEvents();
-            fo3audio::Context(gCurrentCellFormId, sessionState_ == XR_SESSION_STATE_FOCUSED);
+            fo3audio::Context(gFo3Title.open?fo3audio::TitleCell:gCurrentCellFormId, sessionState_ == XR_SESSION_STATE_FOCUSED);
             if (sessionRunning_) RenderFrame();
             else {
                 // STOPPING still drains cancellation and the deferred safe save.
@@ -450,7 +450,7 @@ public:
         ShutdownFo3LoadingVr();
         fo3pipui::Shutdown();ResetFo3Pipboy();fo3lockui::Shutdown();fo3terminalui::Shutdown();CancelFo3Lockpick();CancelFo3Terminal();
         fo3notifyui::Shutdown();
-        fo3barterui::Shutdown();fo3dialogueui::Shutdown();fo3menuui::Shutdown();
+        fo3barterui::Shutdown();fo3dialogueui::Shutdown();fo3titleui::Shutdown();fo3menuui::Shutdown();
          fo3levelui::Shutdown();fo3xpui::Shutdown();fo3pauseui::Shutdown();fo3perfui::Shutdown();fo3compassui::Shutdown();fo3sneakui::Shutdown();fo3blinkui::Shutdown();gPlayerSeat.Reset();
         gFo3PauseMenu.Close();gFo3PauseOpen=false;
          EndFo3Dialogue("renderer shutdown");
@@ -1347,7 +1347,7 @@ private:
                 if(sessionState_!=XR_SESSION_STATE_FOCUSED)PumpFo3ResidentWorkflow(false);
                 SetFo3ShoulderInteractionFocused(sessionState_==XR_SESSION_STATE_FOCUSED);
                 if(sessionState_!=XR_SESSION_STATE_FOCUSED) {fo3notify::Notifications().Clear();ResetFo3Pipboy();CancelFo3Lockpick();CancelFo3Terminal();}
-                fo3audio::Context(gCurrentCellFormId,sessionState_ == XR_SESSION_STATE_FOCUSED);
+                fo3audio::Context(gFo3Title.open?fo3audio::TitleCell:gCurrentCellFormId,sessionState_ == XR_SESSION_STATE_FOCUSED);
                 FQ_LOGI("OpenXR session state -> %d", static_cast<int>(sessionState_));
 
                 if (sessionState_ == XR_SESSION_STATE_READY && !sessionRunning_) {
@@ -1458,7 +1458,10 @@ private:
         barterConfirmDown_=ReadBoolActionQ1699(barterConfirmAction_,handPaths_[0]);
         pipBackDown_=ReadBoolActionQ1699(pipBackAction_,handPaths_[1]);
         const bool menuDown=ReadBoolActionQ1699(pauseAction_,handPaths_[0]);
-        UpdateFo3Pause(menuDown,activateDownQ1700_,pipBackDown_,turnX_,lootScrollY_,
+        UpdateFo3Title(menuDown,activateDownQ1700_,pipBackDown_,turnX_,lootScrollY_,
+            double(time)*1e-9,sessionState_==XR_SESSION_STATE_FOCUSED,exitRequested_);
+        if(gFo3Title.open&&exitRequested_)ANativeActivity_finish(app_->activity);
+        if(!gFo3Title.open)UpdateFo3Pause(menuDown,activateDownQ1700_,pipBackDown_,turnX_,lootScrollY_,
             double(time)*1e-9,sessionState_==XR_SESSION_STATE_FOCUSED);
         const bool neutral=!menuDown&&moveX_==0&&moveY_==0&&turnX_==0&&std::fabs(lootScrollY_)<.2f&&
             !sneakDown_&&!activateDownQ1700_&&!pipBackDown_&&!barterConfirmDown_&&fingerTriggerValue_[0]<.2f&&fingerTriggerValue_[1]<.2f&&
@@ -1851,7 +1854,7 @@ private:
                 ++gSceneLoadFrame;
                 // All loading work advances once before stereo acquisition.
                 // No scene uploads or preparation are dispatched from an eye.
-                if(!gSceneReady) {
+                if(!gSceneReady && !gFo3Title.open) {
                     const uint64_t bootCallStarted=fqloadprofile::NowUs();
                     Q1030BootMegatonOnRender();
                     const uint64_t bootCallUs=fqloadprofile::NowUs()-bootCallStarted;
@@ -1884,7 +1887,7 @@ private:
                 // across a loading screen or headset focus interruption.
                 const int64_t clockNs=gameplayFrameTime;
                 static int64_t previousWorldClockNs=0;
-                if(!IsFo3LoadingVisible()) {
+                if(!IsFo3LoadingVisible() && !gFo3Title.open) {
                 {FQ_PERF_SCOPE(Scripts);
                 if (!Fo3GameplayBlocked() && gPlayerSession && !gPlayerSession->saveBlocked && gSceneReady &&
                     !IsFo3LoadingVisible() && sessionState_==XR_SESSION_STATE_FOCUSED &&
@@ -2205,6 +2208,19 @@ private:
                     {FQ_PERF_SCOPE(Streaming);UpdateFo3ExteriorStreamingQ1890(head.position.x,head.position.z);}
                 }
                 previousWorldClockNs=clockNs;
+                if(gFo3Title.open){
+                    fo3titleui::Head(loadingHead.position.x,loadingHead.position.y,loadingHead.position.z,
+                        loadingHead.orientation.x,loadingHead.orientation.y,loadingHead.orientation.z,loadingHead.orientation.w);
+                    fo3titleui::Prepare(gFo3Title);
+                }
+                if(gSceneReady&&!IsFo3LoadingVisible()&&!gFo3Title.open&&!gSceneLoad.active){
+                    const auto head=ToVirtualPose(loadingHead);
+                    gFo3SavePose={gCurrentCellFormId,gExteriorWorldspaceQ1890,
+                        gSceneCenterXQ1730+head.position.x*FO3_UNITS_PER_METRE_Q715,
+                        gSceneCenterYQ1730-(head.position.z-SCENE_FORWARD)*FO3_UNITS_PER_METRE_Q715,
+                        gSceneFloorZQ1730+playerPosition_.y*FO3_UNITS_PER_METRE_Q715,
+                        -YawFromQuaternion(head.orientation),true};
+                }
                 if(IsFo3LoadingVisible() && fo3loadingvr::gGeneration!=GetFo3LoadingGeneration())
                     fo3loadingvr::AdvanceAssets();
                 loadingGpu.End();
@@ -2220,7 +2236,7 @@ private:
                     frame.scene=gSceneLoad.generation;frame.displayTime=frameState.predictedDisplayTime;
                     frame.world=gExteriorWorldspaceQ1890;frame.origin={gSceneCenterXQ1730,gSceneCenterYQ1730,gSceneFloorZQ1730};
                     frame.sceneReady=gSceneReady;frame.loading=IsFo3LoadingVisible();frame.focused=sessionState_==XR_SESSION_STATE_FOCUSED;
-                    frame.modal=gPlayerSeat.Busy()||Fo3PipboyFocus()||Fo3DialogueFocus()||Fo3TerminalFocus()||Fo3LockpickFocus()||gFo3PauseOpen||Fo3ScriptMessageFocus()||Fo3LevelUpFocus();
+                    frame.modal=gFo3Title.open||gPlayerSeat.Busy()||Fo3PipboyFocus()||Fo3DialogueFocus()||Fo3TerminalFocus()||Fo3LockpickFocus()||gFo3PauseOpen||Fo3ScriptMessageFocus()||Fo3LevelUpFocus();
                     XrPosef appPose{};appPose.orientation=YawQuaternion(playerYaw_);appPose.position=playerPosition_;appPose.position.y+=sneak_.offset;
                     const auto appMatrix=MatrixFromPose(appPose);std::copy(appMatrix.m,appMatrix.m+16,frame.appToWorld.begin());
                     for(unsigned eye=0;eye<2;++eye){const auto vp=Multiply(ProjectionFromFov(views[eye].fov,.04f,125000.f/FO3_UNITS_PER_METRE_Q715),ViewFromPose(ToVirtualPose(views[eye].pose)));
@@ -2231,13 +2247,13 @@ private:
                 if(fqvk::WorldProbeActive()) {
                     Mat4 matrices[2];XrPosef poses[2];
                     for(uint32_t i=0;i<2;++i) {
-                        poses[i]=IsFo3LoadingVisible()?views[i].pose:ToVirtualPose(views[i].pose);
+                        poses[i]=(IsFo3LoadingVisible()||gFo3Title.open)?views[i].pose:ToVirtualPose(views[i].pose);
                         matrices[i]=Multiply(ProjectionFromFov(views[i].fov,0.04f,125000.0f/FO3_UNITS_PER_METRE_Q715),ViewFromPose(poses[i]));
                     }
                     const Fo3Environment& clearEnvironment=GetFo3Environment();
                     static constexpr float fallbackHorizon[3]{0.018f,0.028f,0.020f};
                     const float* clearHorizon=clearEnvironment.valid?clearEnvironment.horizon:fallbackHorizon;
-                    const bool begun=fqvk::BeginWorldProbe(matrices[0].m,matrices[1].m,&poses[0].position.x,&poses[1].position.x,IsFo3LoadingVisible(),clearHorizon,spacewarpProducerReady_&&spacewarpSynthesisRequested_&&spacewarpHistory_.Ready());
+                    const bool begun=fqvk::BeginWorldProbe(matrices[0].m,matrices[1].m,&poses[0].position.x,&poses[1].position.x,IsFo3LoadingVisible()||gFo3Title.open,clearHorizon,spacewarpProducerReady_&&spacewarpSynthesisRequested_&&spacewarpHistory_.Ready());
                     if(vulkanGameplay_&&!begun){rendered=false;exitRequested_=true;}
                 }
 #endif
@@ -2386,7 +2402,7 @@ private:
                 }
             }
         } else previousLoadingCpu=0;
-        if(!IsFo3LoadingVisible() && !gSceneReady && !gSceneLoad.active) {
+        if(!IsFo3LoadingVisible() && !gSceneReady && !gSceneLoad.active && !gFo3Title.open) {
             static uint64_t lastBlankWarningUs=0u;
             const uint64_t now=fqloadprofile::NowUs();
             if(now-lastBlankWarningUs>=2000000u) {
@@ -2543,7 +2559,8 @@ private:
         glBindFramebuffer(GL_FRAMEBUFFER, framebuffer_);
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
                                vulkanGameplay_?scratchColor_:eye.images[imageIndex].image, 0);
-        const bool loadingEye=IsFo3LoadingVisible();
+        const bool titleEye=gFo3Title.open;
+        const bool loadingEye=IsFo3LoadingVisible()||titleEye;
         if(!loadingEye) {
             Q1280BeginEyePostQ1280(framebuffer_, eye.width, eye.height);
             glViewport(0, 0, eye.width, eye.height);
@@ -2553,7 +2570,10 @@ private:
             if(loadingEye) {
                 const Mat4 projection=ProjectionFromFov(view.fov,0.04f,125000.0f/FO3_UNITS_PER_METRE_Q715);
                 const Mat4 loadingVp=Multiply(projection,ViewFromPose(view.pose));
-                RenderFo3LoadingVr(framebuffer_,eye.width,eye.height,loadingVp.m,eyeIndex==0);
+                if(titleEye){
+                    glViewport(0,0,eye.width,eye.height);glDepthMask(GL_TRUE);glClearColor(0,0,0,1);glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
+                    fo3titleui::Render(loadingVp.m);
+                }else RenderFo3LoadingVr(framebuffer_,eye.width,eye.height,loadingVp.m,eyeIndex==0);
                 rendered=true;
             } else {
             glDisable(GL_DEPTH_TEST);

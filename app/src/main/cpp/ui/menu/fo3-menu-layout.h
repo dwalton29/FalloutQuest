@@ -321,6 +321,8 @@ class Layout {
         return "glow_general_button_rb.dds";
       if (key == "highdef")
         return 1.; // These VR surfaces use the original HD menu layout.
+      if (key == "mainmenu")
+        return 2.;
       if (key == "hudmain" || key == "pipboy" || key == "Pipboy")
         return 1.;
       return key;

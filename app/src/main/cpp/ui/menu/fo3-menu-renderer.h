@@ -384,7 +384,7 @@ struct Surface {
       batch.count = GLsizei(vertices.size() - first);
       batch.alpha = std::clamp(d.alpha, 0.f, 1.f);
       for (int c = 0; c < 3; ++c)
-        batch.rgb[c] = (d.colour ? fo3uicolor::Main[c] : 1.f) *
+        batch.rgb[c] = (d.colour == 2 ? fo3uicolor::Title[c] : d.colour ? fo3uicolor::Main[c] : 1.f) *
                        std::clamp(d.brightness, 0.f, 1.f);
       if (!batches.empty()) {
         auto &last = batches.back();

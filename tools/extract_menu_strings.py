@@ -14,7 +14,8 @@ import struct
 NATIVE_KEYS = '''sInventoryWeapons sInventoryApparel sInventoryAid sInventoryMisc
 sInventoryAmmoTab sLocalMapTabText sWorldMapTabText sQuestsTabText sNotesTabText
 sCommsTabText sTravelQuestion sYes sNo sInventoryEquip sInventoryUnequip
-sInventoryUse'''.split()
+sInventoryUse sAudio sControls sDefaults sMasterVolume sMusicVolume
+sEffectsVolume sVoiceVolume'''.split()
 
 
 def recover(path):

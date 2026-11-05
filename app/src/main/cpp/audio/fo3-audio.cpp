@@ -33,6 +33,7 @@ struct Event {
   const fo3pipdata::Definitions *definitions = nullptr;
   fo3pipdata::SessionState state;
   std::vector<std::string> paths;
+  std::array<float,4> volumes{1,.3f,1,1};
 };
 struct Runtime {
   JavaVM *vm = nullptr;
@@ -108,7 +109,7 @@ void Push(Event e) {
   if (!runtime.worker.joinable() || runtime.stop ||
       (!runtime.lastActive && (e.kind < 6 || e.kind==11 || e.kind==16)))
     return;
-  if (e.kind == 6 || e.kind == 7 || e.kind == 10 || e.kind == 14 || e.kind==16)
+  if (e.kind == 6 || e.kind == 7 || e.kind == 10 || e.kind == 14 || e.kind==16 || e.kind==17)
     runtime.events.erase(
         std::remove_if(runtime.events.begin(), runtime.events.end(),
                        [&](const Event &old) { return old.kind == e.kind; }),
@@ -137,8 +138,9 @@ void Worker() {
     return;
   }
   auto cls = env->GetObjectClass(runtime.activity);
+  auto volumes=env->GetMethodID(cls,"audioVolumes","(FFFF)V");
   auto menuLoop = env->GetMethodID(cls,"audioMenuLoop","(Ljava/lang/String;F)V");
-  auto music = env->GetMethodID(cls, "audioMusic", "(Ljava/lang/String;)V"),
+  auto music = env->GetMethodID(cls, "audioMusic", "(Ljava/lang/String;F)V"),
        effect = env->GetMethodID(cls, "audioEffect", "(Ljava/lang/String;F)V"),
        ambient =
            env->GetMethodID(cls, "audioAmbient", "(Ljava/lang/String;F)V"),
@@ -148,7 +150,7 @@ void Worker() {
        dialogue=env->GetMethodID(cls,"audioDialogue","(Ljava/lang/String;I)V"),
        dialogueGain=env->GetMethodID(cls,"audioDialogueGain","(F)V");
   if (env->ExceptionCheck() || !music || !effect || !ambient || !active ||
-      !broadcast || !dialogue || !dialogueGain || !menuLoop) {
+      !broadcast || !dialogue || !dialogueGain || !menuLoop || !volumes) {
     __android_log_print(ANDROID_LOG_ERROR, "FalloutQuest",
                         "AUDIO JNI bridge unavailable");
     env->ExceptionClear();
@@ -414,6 +416,7 @@ void Worker() {
       e = runtime.events.front();
       runtime.events.pop_front();
     }
+    if(e.kind==17){env->CallVoidMethod(runtime.activity,volumes,e.volumes[0],e.volumes[1],e.volumes[2],e.volumes[3]);if(env->ExceptionCheck())env->ExceptionClear();continue;}
     if(e.kind==13) {
       if(e.id&&!e.name.empty()) {
         auto path=e.name.rfind("@voice:",0)==0?voicePath(e.name):e.name;
@@ -482,7 +485,7 @@ void Worker() {
         env->ExceptionClear();
       if (cell != e.id) {
         cell = e.id;
-        auto relative = catalog.MusicForCell(cell);
+        auto relative = cell==TitleCell?std::string("music/special/maintitle.mp3"):catalog.MusicForCell(cell);
         if (relative != previousMusic) {
           previousMusic = relative;
           std::string playlist;
@@ -501,9 +504,9 @@ void Worker() {
                               relative.c_str(),
                               static_cast<size_t>(std::count(
                                   playlist.begin(), playlist.end(), '\n')));
-          call(music, playlist, 1, false);
+          call(music, playlist, cell==TitleCell?2.f:1.f, true);
         }
-        sound(catalog.AmbientForCell(cell), ambient);
+        sound(cell==TitleCell?0:catalog.AmbientForCell(cell), ambient);
       }
       continue;
     }
@@ -592,6 +595,7 @@ void Shutdown() {
   }
   runtime.activity = nullptr;
 }
+void Volumes(const std::array<float,4>& values){Event e{17,0,true};e.volumes=values;Push(std::move(e));}
 void Context(uint32_t cell, bool active) {
   std::lock_guard<std::mutex> lock(runtime.mutex);
   if (!runtime.worker.joinable() || runtime.stop ||

@@ -5,6 +5,13 @@ namespace fo3menu {
 // Original Fallout3.exe GameSetting string defaults. ESM/localized values win.
 inline const std::unordered_map<std::string, std::string> &StringDefaults() {
   static const std::unordered_map<std::string, std::string> values{
+      {"sAudio", "Audio"},
+      {"sControls", "Controls"},
+      {"sDefaults", "Defaults"},
+      {"sMasterVolume", "Master"},
+      {"sMusicVolume", "Music"},
+      {"sEffectsVolume", "Effects"},
+      {"sVoiceVolume", "Voice"},
       {"sAccept", "Accept"},
       {"sBack", "Back"},
       {"sCancel", "Cancel"},
