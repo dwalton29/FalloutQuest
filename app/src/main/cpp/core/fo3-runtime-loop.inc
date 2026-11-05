@@ -1529,9 +1529,14 @@ private:
         }
     }
 
+    XrVector3f ScaledLocal(XrVector3f point) const {
+        const auto mapped=fo3scale::Local({point.x,point.y,point.z},Fo3PlayerTrackingScale(),FLOOR_Y);
+        return {mapped[0],mapped[1],mapped[2]};
+    }
     void UpdatePlayer(const XrView& headView, XrTime frameTime,bool headTracked) {
         FQ_PERF_SCOPE(Motion);
-        XrPosef beforeApp{};beforeApp.orientation=YawQuaternion(playerYaw_);beforeApp.position=playerPosition_;beforeApp.position.y+=sneak_.offset;
+        const float characterScale=Fo3PlayerTrackingScale();SetFo3PlayerScale(characterScale);
+        XrPosef beforeApp{};beforeApp.orientation=YawQuaternion(playerYaw_);beforeApp.position=playerPosition_;beforeApp.position.y+=sneak_.offset*characterScale;
         const auto beforeMatrix=MatrixFromPose(beforeApp);
         double dt = 1.0 / 72.0;
         if (lastFrameTime_ != 0 && frameTime > lastFrameTime_) {
@@ -1549,13 +1554,13 @@ private:
         if(seatCommit!=fo3seat::State::Commit::None){
             const auto& pose=seatCommit==fo3seat::State::Commit::Sit?gPlayerSeat.sitting:gPlayerSeat.standing;
             playerYaw_=pose.yaw-YawFromQuaternion(headView.pose.orientation);
-            const auto local=RotateYaw(headView.pose.position,playerYaw_);
+            const auto local=RotateYaw(ScaledLocal(headView.pose.position),playerYaw_);
             const bool sitting=seatCommit==fo3seat::State::Commit::Sit;
-            const float physicalDrop=sitting?0:std::max(0.f,sneak_.standing-(headView.pose.position.y-FLOOR_Y));
+            const float physicalDrop=sitting?0:std::max(0.f,sneak_.standing-(headView.pose.position.y-FLOOR_Y))*characterScale;
             playerPosition_={pose.eye[0]-local.x,pose.eye[1]-physicalDrop-local.y,pose.eye[2]-local.z};
             if(sitting)seatTrackedY_=headView.pose.position.y;
             ResetFo3PlayerGravity();
-            sneak_.manual=false;sneak_.physical=sneak_.sneaking=physicalDrop>.22f;sneak_.offset=0;sneak_.drop=physicalDrop;
+            sneak_.manual=false;sneak_.physical=sneak_.sneaking=physicalDrop/characterScale>.22f;sneak_.offset=0;sneak_.drop=physicalDrop/characterScale;
             if(gPlayerSession)gPlayerSession->player.SetSneaking(sneak_.sneaking);
         }
         gPlayerSeatFade=gPlayerSeat.Alpha(seatNow);
@@ -1570,8 +1575,8 @@ private:
             snapTurnLatched_ = std::fabs(turnX_) >= .30f;
         } else if (!snapTurnLatched_ && std::fabs(turnX_) > 0.65f) {
             const float deltaYaw = turnX_ > 0.0f ? -SNAP_TURN_RADIANS : SNAP_TURN_RADIANS;
-            const XrVector3f before = RotateYaw(headView.pose.position, playerYaw_);
-            const XrVector3f after = RotateYaw(headView.pose.position, playerYaw_ + deltaYaw);
+            const XrVector3f before = RotateYaw(ScaledLocal(headView.pose.position), playerYaw_);
+            const XrVector3f after = RotateYaw(ScaledLocal(headView.pose.position), playerYaw_ + deltaYaw);
             playerPosition_.x += before.x - after.x;
             playerPosition_.z += before.z - after.z;
             playerYaw_ += deltaYaw;
@@ -1585,10 +1590,10 @@ private:
 
         const bool sneakInput= !gPlayerSeat.Active()&&!gFo3GameplayInputSuppressed&&!IsFo3LoadingVisible()&&sessionState_==XR_SESSION_STATE_FOCUSED&&!Fo3DialogueFocus()&&!Fo3BarterFocus()&&!Fo3PipboyFocus()&&!Fo3TerminalFocus()&&!Fo3LockpickFocus()&&!Fo3ScriptMessageFocus()&&!Fo3LevelUpFocus()&&!gFo3PauseOpen;
         sneak_.Step(headView.pose.position.y-FLOOR_Y,headTracked,sneakInput,sneakDown_,float(dt));
-        const auto stanceHead=RotateYaw(headView.pose.position,playerYaw_);
-        const float desiredHeight=std::clamp(headView.pose.position.y-FLOOR_Y+sneak_.offset+.10f,.7f,1.7f);
+        const auto stanceHead=RotateYaw(ScaledLocal(headView.pose.position),playerYaw_);
+        const float desiredHeight=std::clamp(headView.pose.position.y-FLOOR_Y+sneak_.offset+.10f,.7f,1.7f)*characterScale;
         if(headTracked&&sneakInput){const float actualHeight=SetFo3PlayerStanceHeight(stanceHead.x+playerPosition_.x,stanceHead.z+playerPosition_.z,playerPosition_.y,desiredHeight);
-            if(actualHeight+.001f<desiredHeight){sneak_.offset=std::min(sneak_.offset,actualHeight-.10f-headView.pose.position.y+FLOOR_Y);sneak_.sneaking=true;}
+            if(actualHeight+.001f<desiredHeight){sneak_.offset=std::min(sneak_.offset,actualHeight/characterScale-.10f-headView.pose.position.y+FLOOR_Y);sneak_.sneaking=true;}
             sneak_.drop=std::max(0.f,sneak_.standing-headView.pose.position.y+FLOOR_Y-sneak_.offset);
             if(gPlayerSession)gPlayerSession->player.SetSneaking(sneak_.sneaking);
         }
@@ -1599,14 +1604,14 @@ private:
         const float c = std::cos(headYaw);
         const float s = std::sin(headYaw);
         const float sneakSpeed=gPlayerSession&&gPlayerSession->player.IsSneaking()?fo3sneak::Setting(gPlayerSession->player.Definitions().sneakSettings,"fMoveSneakMult"):1.f;
-        const float velocity = MOVE_SPEED_METRES_PER_SECOND * sneakSpeed * static_cast<float>(dt);
+        const float velocity = MOVE_SPEED_METRES_PER_SECOND * sneakSpeed * characterScale * static_cast<float>(dt);
 
         const float requestedDx = (strafe * c - forward * s) * velocity;
         const float requestedDz = (-strafe * s - forward * c) * velocity;
         const float desiredPlayerX = playerPosition_.x + requestedDx;
         const float desiredPlayerZ = playerPosition_.z + requestedDz;
 
-        const XrVector3f headOffset = RotateYaw(headView.pose.position, playerYaw_);
+        const XrVector3f headOffset = RotateYaw(ScaledLocal(headView.pose.position), playerYaw_);
         const float currentCenterX = headOffset.x + playerPosition_.x;
         const float currentCenterZ = headOffset.z + playerPosition_.z;
         const float desiredCenterX = headOffset.x + desiredPlayerX;
@@ -1627,7 +1632,7 @@ private:
             playerPosition_.x = desiredPlayerX;
             playerPosition_.z = desiredPlayerZ;
         }
-        XrPosef afterApp{};afterApp.orientation=YawQuaternion(playerYaw_);afterApp.position=playerPosition_;afterApp.position.y+=sneak_.offset;
+        XrPosef afterApp{};afterApp.orientation=YawQuaternion(playerYaw_);afterApp.position=playerPosition_;afterApp.position.y+=sneak_.offset*characterScale;
         const auto afterMatrix=MatrixFromPose(afterApp);
         fo3rigid::M previousApp,currentApp;
         std::copy_n(beforeMatrix.m,16,previousApp.begin());std::copy_n(afterMatrix.m,16,currentApp.begin());
@@ -1639,7 +1644,7 @@ private:
             gPipActivation.phase!=fo3pip::Phase::Candidate && !GetFo3LootPanel().reference;
         const float actualDistance=std::hypot(playerPosition_.x+headOffset.x-currentCenterX,
                                               playerPosition_.z+headOffset.z-currentCenterZ);
-        const int step=fo3audio::AdvancePlayerFootsteps(actualDistance,float(dt),walkingEnabled,gPlayerSession&&gPlayerSession->player.IsSneaking());
+        const int step=fo3audio::AdvancePlayerFootsteps(actualDistance/characterScale,float(dt),walkingEnabled,gPlayerSession&&gPlayerSession->player.IsSneaking());
         uint32_t material=0;
         gPlayerDetectionSpeed=dt>0?actualDistance/float(dt):0;
         if(step>=0 && SampleFo3PlayerFootstepSurface(playerPosition_.x+headOffset.x,
@@ -1648,12 +1653,12 @@ private:
     }
 
     XrPosef ToVirtualPose(const XrPosef& localPose) const {
-        const XrVector3f rotated = RotateYaw(localPose.position, playerYaw_);
+        const XrVector3f rotated = RotateYaw(ScaledLocal(localPose.position), playerYaw_);
         XrPosef result{};
         result.orientation = QuaternionMultiply(YawQuaternion(playerYaw_), localPose.orientation);
         result.position = {
             rotated.x + playerPosition_.x,
-            rotated.y + playerPosition_.y + sneak_.offset,
+            rotated.y + playerPosition_.y + sneak_.offset*Fo3PlayerTrackingScale(),
             rotated.z + playerPosition_.z,
         };
         return result;
@@ -1795,7 +1800,7 @@ private:
         const bool focusBlocked=sessionState_!=XR_SESSION_STATE_FOCUSED||!frameState.shouldRender;
         if(focusBlocked&&!gFo3FocusPaused)PauseFo3ResidentGameplayTime();
         gFo3FocusPaused=focusBlocked;
-        if(focusBlocked){gFo3PauseMenu.Close();gFo3PauseOpen=false;}
+        if(focusBlocked){gFo3PauseMenu.Close();gFo3PauseOpen=false;PauseFo3Movie();}
         // Sample even on non-rendered/invalid-view frames. Resumption establishes
         // a fresh baseline before any gameplay consumer; XR tracking stays raw.
         (void)Fo3GameplayNow();
@@ -2023,7 +2028,7 @@ private:
                     q210VirtualHead.position.z,
                     YawFromQuaternion(q210VirtualHead.orientation),
                     playerYaw_,
-                    views[0].pose.position.y+sneak_.offset,
+                    ScaledLocal(views[0].pose.position).y+sneak_.offset*Fo3PlayerTrackingScale(),
                     q210LeftValid,
                     q210Left.position.x, q210Left.position.y, q210Left.position.z,
                     q210Left.orientation.x, q210Left.orientation.y,
@@ -2050,6 +2055,10 @@ private:
                 gVrLeftGripTracking={gripHandPoseValid_[0],pipLeftGripTracked_};
                 gVrLeftAimTracking={handPoseValid_[0],pipLeftAimTracked_};
                 bool dialogueControls=false;
+                const bool movieControls=Fo3MovieFocus();
+                UpdateFo3Movie(gameplaySeconds,q210RightValid&&activateDownQ1700_,q210RightValid&&pipBackDown_,
+                    !Fo3GameplayBlocked()&&!IsFo3LoadingVisible()&&sessionState_==XR_SESSION_STATE_FOCUSED,
+                    q210RightValid&&sessionState_==XR_SESSION_STATE_FOCUSED,gQ210Head);
                 if(!Fo3GameplayBlocked()) {
                     // Reload takes precedence over the left-wrist Pip-Boy gesture.
                     // Cancel even a primed activation so the physical magazine can
@@ -2059,7 +2068,7 @@ private:
                         gPipActivation.Reset();gPipMenu.dirty=true;
                         Q6H_LOGI("PIPBOY SUPPRESS reason=held-physical-magazine-or-slide");
                     }
-                    const bool nameControls=Fo3PlayerNameFocus()||Fo3SpecialBookFocus();
+                    const bool nameControls=movieControls||Fo3PlayerNameFocus()||Fo3SpecialBookFocus();
                     UpdateFo3SpecialBook(gameplaySeconds,q210RightValid?turnX_:0,q210RightValid?lootScrollY_:0,
                         q210RightValid&&activateDownQ1700_,q210RightValid&&pipBackDown_,sessionState_==XR_SESSION_STATE_FOCUSED&&q210RightValid,gQ210Head);
                     UpdateFo3PlayerName(gameplaySeconds,q210RightValid?turnX_:0,q210RightValid?lootScrollY_:0,
@@ -2246,8 +2255,8 @@ private:
                     frame.scene=gSceneLoad.generation;frame.displayTime=frameState.predictedDisplayTime;
                     frame.world=gExteriorWorldspaceQ1890;frame.origin={gSceneCenterXQ1730,gSceneCenterYQ1730,gSceneFloorZQ1730};
                     frame.sceneReady=gSceneReady;frame.loading=IsFo3LoadingVisible();frame.focused=sessionState_==XR_SESSION_STATE_FOCUSED;
-                    frame.modal=gFo3Title.open||gPlayerSeat.Busy()||Fo3PipboyFocus()||Fo3DialogueFocus()||Fo3TerminalFocus()||Fo3LockpickFocus()||gFo3PauseOpen||Fo3ScriptMessageFocus()||Fo3LevelUpFocus();
-                    XrPosef appPose{};appPose.orientation=YawQuaternion(playerYaw_);appPose.position=playerPosition_;appPose.position.y+=sneak_.offset;
+                    frame.modal=std::abs(Fo3PlayerTrackingScale()-1.f)>.001f||gFo3Title.open||gPlayerSeat.Busy()||Fo3PipboyFocus()||Fo3DialogueFocus()||Fo3TerminalFocus()||Fo3LockpickFocus()||gFo3PauseOpen||Fo3ScriptMessageFocus()||Fo3LevelUpFocus();
+                    XrPosef appPose{};appPose.orientation=YawQuaternion(playerYaw_);appPose.position=playerPosition_;appPose.position.y+=sneak_.offset*Fo3PlayerTrackingScale();
                     const auto appMatrix=MatrixFromPose(appPose);std::copy(appMatrix.m,appMatrix.m+16,frame.appToWorld.begin());
                     for(unsigned eye=0;eye<2;++eye){const auto vp=Multiply(ProjectionFromFov(views[eye].fov,.04f,125000.f/FO3_UNITS_PER_METRE_Q715),ViewFromPose(ToVirtualPose(views[eye].pose)));
                         std::copy(vp.m,vp.m+16,frame.viewProjection[eye].begin());}
@@ -2263,7 +2272,7 @@ private:
                     const Fo3Environment& clearEnvironment=GetFo3Environment();
                     static constexpr float fallbackHorizon[3]{0.018f,0.028f,0.020f};
                     const float* clearHorizon=clearEnvironment.valid?clearEnvironment.horizon:fallbackHorizon;
-                    const bool begun=fqvk::BeginWorldProbe(matrices[0].m,matrices[1].m,&poses[0].position.x,&poses[1].position.x,IsFo3LoadingVisible()||gFo3Title.open,clearHorizon,spacewarpProducerReady_&&spacewarpSynthesisRequested_&&spacewarpHistory_.Ready());
+                    const bool begun=fqvk::BeginWorldProbe(matrices[0].m,matrices[1].m,&poses[0].position.x,&poses[1].position.x,IsFo3LoadingVisible()||gFo3Title.open||Fo3MovieFocus(),clearHorizon,spacewarpProducerReady_&&spacewarpSynthesisRequested_&&spacewarpHistory_.Ready());
                     if(vulkanGameplay_&&!begun){rendered=false;exitRequested_=true;}
                 }
 #endif
@@ -2570,7 +2579,8 @@ private:
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
                                vulkanGameplay_?scratchColor_:eye.images[imageIndex].image, 0);
         const bool titleEye=gFo3Title.open;
-        const bool loadingEye=IsFo3LoadingVisible()||titleEye;
+        const bool movieEye=Fo3MovieFocus()&&!IsFo3LoadingVisible()&&!titleEye;
+        const bool loadingEye=IsFo3LoadingVisible()||titleEye||movieEye;
         if(!loadingEye) {
             Q1280BeginEyePostQ1280(framebuffer_, eye.width, eye.height);
             glViewport(0, 0, eye.width, eye.height);
@@ -2583,6 +2593,14 @@ private:
                 if(titleEye){
                     glViewport(0,0,eye.width,eye.height);glDepthMask(GL_TRUE);glClearColor(0,0,0,1);glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
                     fo3titleui::Render(loadingVp.m);
+                }else if(movieEye){
+                    glViewport(0,0,eye.width,eye.height);glDepthMask(GL_TRUE);glClearColor(0,0,0,1);glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
+                    const auto movieVp=Multiply(projection,ViewFromPose(ToVirtualPose(view.pose)));RenderFo3Movie(movieVp.m);
+                    if(gFo3PauseOpen){const float yaw=gQ210Head[3];Mat4 model{};
+                        model.m[0]=std::cos(yaw);model.m[2]=-std::sin(yaw);model.m[5]=1;model.m[8]=std::sin(yaw);model.m[10]=std::cos(yaw);
+                        model.m[12]=gQ210Head[0]-std::sin(yaw)*1.5f;model.m[13]=gQ210Head[1];model.m[14]=gQ210Head[2]-std::cos(yaw)*1.5f;model.m[15]=1;
+                        const auto pause=Multiply(movieVp,model);fo3pauseui::Render(pause.m);
+                    }
                 }else RenderFo3LoadingVr(framebuffer_,eye.width,eye.height,loadingVp.m,eyeIndex==0);
                 rendered=true;
             } else {

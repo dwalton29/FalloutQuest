@@ -84,6 +84,12 @@ jobs:
           echo "FQ_BULLET_SOURCE_DIR=$FQ_BULLET_SOURCE_DIR" >> "$GITHUB_ENV"
           git clone --depth 1 --branch 3.25 https://github.com/bulletphysics/bullet3.git "$FQ_BULLET_SOURCE_DIR"
 
+      - name: Fetch reviewed native movie source
+        run: |
+          FQ_FFMPEG_SOURCE_DIR="$RUNNER_TEMP/falloutquest-ffmpeg"
+          echo "FQ_FFMPEG_SOURCE_DIR=$FQ_FFMPEG_SOURCE_DIR" >> "$GITHUB_ENV"
+          git clone --depth 1 --branch n7.1.1 https://github.com/FFmpeg/FFmpeg.git "$FQ_FFMPEG_SOURCE_DIR"
+
       - name: Verify native source layout
         shell: bash
         run: |
@@ -232,6 +238,12 @@ jobs:
           cmake --build build/host-audio --parallel 2
           ctest --test-dir build/host-audio --output-on-failure
 
+      - name: Test native Bink playback on host
+        run: |
+          cmake -S tests/video -B build/host-video
+          cmake --build build/host-video --parallel 2
+          ctest --test-dir build/host-video --output-on-failure
+
       - name: Restore stable development signing key
         run: |
           base64 --decode app/falloutquest-dev.keystore.b64 > app/falloutquest-dev.keystore
@@ -268,6 +280,7 @@ jobs:
         run: |
           python3 tests/build/test_native_profile.py
           python3 tools/check_native_profile.py
+          python3 tools/check_movie_package.py app/build/outputs/apk/debug/app-debug.apk app/build/outputs/apk/profile/app-profile.apk
 
       - name: Upload build diagnostics
         if: always()

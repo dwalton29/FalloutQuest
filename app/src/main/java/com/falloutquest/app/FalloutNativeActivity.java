@@ -119,14 +119,24 @@ public final class FalloutNativeActivity extends NativeActivity {
     }
     private String ambientPath = "";
     private float ambientGain = 1;
+    private boolean movieMuteWorld=false, moviePauseMusic=false;
     private float masterVolume=1, musicVolume=.3f, effectsVolume=1, voiceVolume=1, musicMultiplier=1;
     private final java.util.Map<MediaPlayer,Float> baseGains=new java.util.WeakHashMap<>();
     private float scaled(MediaPlayer player,float gain) {
+        if(player!=music&&movieMuteWorld)return 0;
         float channel=player==music?musicVolume:(player==dialogue||player==broadcasts[0].player||player==broadcasts[1].player)?voiceVolume:effectsVolume;
         return Math.max(0,Math.min(1,gain*masterVolume*channel));
     }
     private void volume(MediaPlayer player,float gain) {
         baseGains.put(player,gain);float v=scaled(player,gain);player.setVolume(v,v);
+    }
+    public void audioMovie(boolean muteWorld, boolean pauseMusic) {
+        audio.post(() -> {
+            movieMuteWorld=muteWorld;moviePauseMusic=pauseMusic;
+            for(java.util.Map.Entry<MediaPlayer,Float> e:baseGains.entrySet())try{float v=scaled(e.getKey(),e.getValue());e.getKey().setVolume(v,v);}catch(IllegalStateException ignored){}
+            if(music!=null)try{if(pauseMusic&&music.isPlaying())music.pause();else if(!pauseMusic&&enabled())music.start();}catch(IllegalStateException ignored){}
+            if(!pauseMusic)refresh();
+        });
     }
     public void audioVolumes(float master,float music,float effects,float voice) {
         audio.post(() -> {masterVolume=master;musicVolume=music;effectsVolume=effects;voiceVolume=voice;
@@ -206,7 +216,7 @@ public final class FalloutNativeActivity extends NativeActivity {
     private void refresh() {
         if (!enabled()) { stopAll(); return; }
         for (int channel = 0; channel < 2; ++channel) refreshBroadcast(channel);
-        if (music == null && !tracks.isEmpty() && broadcasts[0].paths.isEmpty()) {
+        if (!moviePauseMusic && music == null && !tracks.isEmpty() && broadcasts[0].paths.isEmpty()) {
             MediaPlayer player = new MediaPlayer(); music = player;
             prepare(player, tracks.get(track), musicMultiplier, false, () -> {
                 if (music != player) return;
@@ -229,7 +239,7 @@ public final class FalloutNativeActivity extends NativeActivity {
             player.setDataSource(path);
             player.setOnPreparedListener(p -> {
                 if (enabled() && current.check()) {
-                    volume(p,gain); p.setLooping(loop); p.start();
+                    volume(p,gain); p.setLooping(loop); if(p!=music||!moviePauseMusic)p.start();
                     if(p==dialogue)Log.i("FalloutQuest", "DIALOGUE started token="+dialogueToken+" durationMs="+p.getDuration());
                     Log.i("FalloutQuest", "AUDIO playing: " + path + " gain=" + gain + " loop=" + loop);
                 }

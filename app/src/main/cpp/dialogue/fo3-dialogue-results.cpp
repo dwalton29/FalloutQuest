@@ -1,3 +1,4 @@
+#include <iomanip>
 #include "fo3-dialogue-results.h"
 #include "player/fo3-actor-values.h"
 #include "fo3-dialogue-selection.h"
@@ -121,6 +122,17 @@ bool CompileResult(const fo3pipdata::Definitions& d,const fo3pipdata::ResultScri
       if(in>>a){if(a=="male")cmd.index=0;else if(a=="female")cmd.index=1;else {error="invalid SexChange sex";return false;}
         if(in>>b){if(b!="0"&&b!="1"){error="invalid SexChange refresh flag";return false;}}else in.clear();
       }else in.clear();
+    }else if(op=="player.setscale"||op=="player.agerace"){
+      cmd.type=op=="player.setscale"?CommandType::PlayerScale:CommandType::PlayerAge;
+      if(!(in>>a)||!number(a,cmd.value)||(cmd.type==CommandType::PlayerScale?!fo3scale::Valid(cmd.value):(cmd.value<-16||cmd.value>16||std::floor(cmd.value)!=cmd.value))){error="invalid player scale/age";return false;}
+    }else if(op=="setpctoddler"||op=="autodisplayobjectives"){
+      cmd.type=op=="setpctoddler"?CommandType::PlayerToddler:CommandType::AutoObjectives;
+      if(!(in>>a)||(a!="0"&&a!="1")){error="invalid player lifecycle flag";return false;}cmd.value=a=="1";
+    }else if(op=="killquestupdates")cmd.type=CommandType::KillUpdates;
+    else if(op=="playbink"){
+      cmd.type=CommandType::PlayMovie;cmd.index=14;
+      in>>std::ws;if(in.peek()!='"'||!(in>>std::quoted(cmd.expression))||!fo3movie::ValidPath(cmd.expression)){error="invalid quoted Bink filename";return false;}
+      for(unsigned n=0;n<4;++n){if(!(in>>a)){in.clear();break;}if(a!="0"&&a!="1"){error="invalid Bink flag";return false;}if(a=="1")cmd.index|=1u<<n;else cmd.index&=~(1u<<n);}
     }else if(op=="showracemenu")cmd.type=CommandType::DeferredAppearanceMenu;
     else if(op=="showspecialbookmenu"||op=="ssbmp"){
       cmd.type=CommandType::SpecialBook;

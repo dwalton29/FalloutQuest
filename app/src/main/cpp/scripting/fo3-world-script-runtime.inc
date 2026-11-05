@@ -1,3 +1,4 @@
+#include "ui/interaction/fo3-item-notifications.h"
 #include "dialogue/fo3-dialogue-selection.h"
 #include "dialogue/fo3-dialogue-panel.h"
 #include "audio/fo3-animation-sounds.h"
@@ -177,12 +178,15 @@ void Events(){
 }
 void Actions(){
     auto& player=gPlayerSession->player;fo3script::Action action;
+    SetFo3PlayerScale(std::clamp(player.PlayerTrackingScale(),.1f,10.f));
     const auto& move=player.Snapshot().playerMove;
     if(move.pending&&!IsFo3LoadingVisible()&&!HasPendingFo3CellTransitionRequestQ74())
         QueueFo3MapMarkerTransitionQ74(move.marker,move.position[0],move.position[1],move.position[2],move.rotation[0],move.rotation[1],move.rotation[2],0);
     fo3loading::gLocationSpecificOnly.store(player.Snapshot().locationSpecificLoadScreens);
     while(player.PollScriptAction(action)){
-        if(action.kind==fo3script::ActionKind::AutoSave){
+        if(action.kind==fo3script::ActionKind::KillQuestUpdates){
+            fo3notify::Notifications().ClearQuests();
+        }else if(action.kind==fo3script::ActionKind::AutoSave){
             FlushFo3PlayerState();
         }else if(action.kind==fo3script::ActionKind::Look){
             if(auto* actor=DialogueActor(action.reference))actor->runtime.scriptLookTarget=action.form;

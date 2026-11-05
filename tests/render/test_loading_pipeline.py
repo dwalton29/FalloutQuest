@@ -49,8 +49,14 @@ class LoadingPipeline(unittest.TestCase):
         loading=eye.split('            if(loadingEye) {',1)[1].split('            } else {',1)[0]
         self.assertIn('ViewFromPose(view.pose)',loading)
         self.assertIn('RenderFo3LoadingVr(',loading)
-        for operation in ('RenderScene(', 'Q1280BeginEyePost', 'ToVirtualPose(', 'UpdateFo3VisualEye'):
+        for operation in ('RenderScene(', 'Q1280BeginEyePost', 'UpdateFo3VisualEye'):
             self.assertNotIn(operation,loading)
+        # A movie shares the isolated black surface but anchors in virtual
+        # space. Actual loading still uses the raw head pose above.
+        before_movie,movie=loading.split('}else if(movieEye){',1)
+        movie,after_movie=movie.split('}else RenderFo3LoadingVr(',1)
+        self.assertIn('ToVirtualPose(view.pose)',movie)
+        self.assertNotIn('ToVirtualPose(',before_movie+after_movie)
         preparation=loop.split('                // All loading work advances',1)[1].split('                SyncInput(',1)[0]
         self.assertIn('ProcessQ74TransitionRequest();',preparation)
         self.assertIn('fo3loadingvr::AdvanceAssets();',preparation)

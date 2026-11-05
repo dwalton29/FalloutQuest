@@ -2,6 +2,7 @@
 #include "scripting/fo3-script-master-match.h"
 #include "ui/chargen/fo3-name-entry.h"
 #include "ui/chargen/fo3-special-book.h"
+#include "player/fo3-vr-body.h"
 #include "dialogue/fo3-dialogue-conditions.h"
 #include "dialogue/fo3-dialogue-session.h"
 #include "dialogue/fo3-dialogue-selection.h"
@@ -121,6 +122,37 @@ static void ScriptInventory(){
     fo3pipdata::ResultScript invalid;invalid.source=source;assert(!p.ExecuteDialogueResult(invalid,error));
   }
 }
+static void Lifecycle(){
+  using namespace fo3player;Catalog c;c.initial.baseHealth=100;c.initial.special.fill(5);
+  c.pipboy.quests[101].name="Intro";c.pipboy.quests[101].objectives[1].text="Objective";
+  c.pipboy.dialogueActors[PlayerBase].race=100;c.pipboy.raceAges[100]={200,300};c.pipboy.raceAges[200]={0,100};c.pipboy.raceAges[300]={100,0};
+  c.pipboy.raceHeights[100]={1,1};c.pipboy.raceHeights[200]={.8f,.8f};c.pipboy.raceBodyModels[200][0][0]="original/child/body.nif";
+  Player p(c);std::string error;fo3pipdata::ResultScript result;
+  result.source="player.SetScale .4\nSetPCToddler 1\nAutoDisplayObjectives 1\nPlayBink \"1 year later.bik\" 0 0 1 0";
+  Check(p.ExecuteDialogueResult(result,error,101),error);
+  assert(p.Snapshot().playerToddler&&p.Snapshot().autoDisplayObjectives&&p.Snapshot().pipboy.selectedQuest==101&&p.PlayerTrackingScale()==.4f);
+  assert(p.Snapshot().movie.path=="1 year later.bik"&&p.Snapshot().movie.flags==4&&p.Snapshot().movie.owner==101);
+  assert(!p.OpenPlayerNameMenu(101)&&!p.OpenSpecialBook(101,40)&&!p.DeferAppearanceMenu(101));
+  const auto path="/tmp/fq-lifecycle-"+std::to_string(getpid());Check(p.Save(path,error),error);Player restored(c);Check(restored.Restore(path,error),error);unlink(path.c_str());
+  assert(restored.Snapshot().playerToddler&&restored.Snapshot().movie.path=="1 year later.bik"&&restored.PlayerTrackingScale()==.4f);
+  assert(!restored.CompleteMovie(restored.Snapshot().movie.serial+1));assert(restored.CompleteMovie(restored.Snapshot().movie.serial));
+  assert(restored.AgePlayerRace(-1)&&restored.PlayerRace()==200&&restored.PlayerBodyModel(0)=="original/child/body.nif");
+  assert(std::abs(restored.PlayerTrackingScale()-.32f)<.0001f&&restored.AgePlayerRace(1)&&restored.PlayerRace()==100);
+  assert(!restored.AgePlayerRace(-3)&&restored.PlayerRace()==100);
+  assert(!restored.SetPlayerScale(0)&&!restored.SetPlayerScale(INFINITY));
+  result.source="player.SetScale 1\nSetPCToddler 0\nAutoDisplayObjectives 0";Check(restored.ExecuteDialogueResult(result,error,101),error);
+  assert(restored.PlayerTrackingScale()==1&&!restored.Snapshot().playerToddler&&!restored.Snapshot().autoDisplayObjectives);
+  const auto local=fo3scale::Local({.2f,0,.3f},.4f,-1.55f);assert(std::abs(local[1]+.93f)<.0001f);
+  const auto floor=fo3scale::Local({0,-1.55f,0},.4f,-1.55f);assert(floor[1]==-1.55f);
+  const fo3vr::V hmd{local[0],local[1],local[2]};const auto root=fo3vr::BodyRoot({0,0,0},hmd,0);
+  const auto feet=root.Point({0,-1.55f*.4f,0});assert(std::abs(feet.y+1.55f)<.0001f);
+  assert(p.SetObjective(101,1,true,fo3pipdata::Completion::Active));
+  fo3pipdata::ResultScript kill,broken;kill.source="KillQuestUpdates";broken.source="Unsupported";
+  assert(!p.PrepareDialogueTransaction(kill,broken,error,101));QuestNotice notice;assert(p.PollQuestNotice(notice));
+  assert(p.SetObjective(101,1,false,fo3pipdata::Completion::Active)&&p.SetObjective(101,1,true,fo3pipdata::Completion::Active));
+  Check(p.ExecuteDialogueResult(kill,error,101),error);assert(!p.PollQuestNotice(notice));
+  fo3script::Action action;bool cleared=false;while(p.PollScriptAction(action))cleared|=action.kind==fo3script::ActionKind::KillQuestUpdates;assert(cleared);
+}
 static void CharacterMenus(){
   using namespace fo3player;
   Catalog c;c.initial.baseHealth=100;c.initial.special.fill(5);c.initial.skills.fill(15);c.rules.healthEnduranceMult=10;c.rules.apBase=50;c.rules.apMult=10;
@@ -224,14 +256,28 @@ static void OriginalIdentity(const fo3player::Catalog& catalog,bool female){
   auto boot=p.PrepareNewGameTransaction(quest,error);Check(bool(boot)&&p.CommitScriptTransaction(*boot),error);
   const auto start=p.Snapshot().playerMove;p.AcknowledgePlayerMove();
   p.SetScriptPlayerLocation(start.position[0],start.position[1],start.position[2],start.cell,start.world);
-  const std::vector<uint32_t> residents={d.formNames.at("cg00dadref"),d.formNames.at("cg00momref"),d.formNames.at("cg00doctorliref")};
+  const std::vector<uint32_t> residents={d.formNames.at("cg00dadref"),d.formNames.at("cg00momref"),d.formNames.at("cg00doctorliref"),d.formNames.at("cg01dadref")};
   auto registry=std::make_shared<fo3script::AnimationRegistry>();
   // Renderer-capability fixture, not a claim that the original NIF was loaded.
   (*registry)[d.formNames.at("cg00geneprojectorref")]={{"forward",1,false},{"backward",1,false}};p.SetScriptAnimationRegistry(registry);
-  bool chose=false,genderLine=false,enteredName=false;
+  bool chose=false,genderLine=false,enteredName=false,sawMovie=false;const auto baby=d.formNames.at("cg01");
   unsigned modalTicks=0;
   for(unsigned frame=0;frame<1600;++frame){
-    if(p.Snapshot().pipboy.quests.at(quest).stage==90)break;
+    const auto child=p.Snapshot().pipboy.quests.find(baby);
+    if(child!=p.Snapshot().pipboy.quests.end()&&child->second.stage==10)break;
+    if(p.Snapshot().movie.owner){
+      const auto request=p.Snapshot().movie;assert(!sawMovie&&request.path=="1 year later.bik"&&request.flags==4&&request.owner==baby);
+      assert(p.Snapshot().playerToddler&&p.Snapshot().playerScale==.4f&&p.Snapshot().pipboy.quests.at(baby).stage==5);sawMovie=true;
+      const auto variables=p.Snapshot().pipboy.dialogueVariables;
+      for(unsigned n=0;n<20;++n)p.PumpWorldAwareGameMode(.1,residents,[&](auto plan){return p.CommitScriptTransaction(*plan);});
+      assert(p.Snapshot().pipboy.dialogueVariables==variables);
+      const auto checkpoint="/tmp/fq-toddler-movie-"+std::to_string(getpid());Check(p.Save(checkpoint,error),error);
+      fo3player::Player saved(catalog);Check(saved.Restore(checkpoint,error),error);unlink(checkpoint.c_str());
+      assert(saved.Snapshot().movie.path==request.path&&saved.Snapshot().playerScale==.4f);
+      // Host presentation fixture signals actual completion; no quest stage is set.
+      assert(p.CompleteMovie(request.serial));const auto moved=p.Snapshot().playerMove;
+      p.SetScriptPlayerLocation(moved.position[0],moved.position[1],moved.position[2],moved.cell,moved.world);p.AcknowledgePlayerMove();continue;
+    }
     if(p.Snapshot().nameMenuOwner){
       assert(chose&&genderLine);
       if(modalTicks++<20){const auto stage=p.Snapshot().pipboy.quests.at(quest).stage;p.PumpWorldAwareGameMode(.25,residents,[&](auto plan){return p.CommitScriptTransaction(*plan);},true);assert(p.Snapshot().pipboy.quests.at(quest).stage==stage);continue;}
@@ -246,9 +292,11 @@ static void OriginalIdentity(const fo3player::Catalog& catalog,bool female){
       assert(p.Snapshot().pipboy.dialogueVariables==before);
       assert(p.SubmitScriptMessageButton(message.owner,female?1:0));chose=true;
     }
+    if(p.Snapshot().movie.owner)continue;
     fo3script::Action action;
     while(p.PollScriptAction(action))if(action.kind==fo3script::ActionKind::SayTo){
       if(std::find(residents.begin(),residents.end(),action.reference)==residents.end())continue;
+      bool disabled=false;if(!p.ReferenceDisabled(action.reference,disabled,error)||disabled)continue;
       fo3dialogue::Context ctx;ctx.player=&p;ctx.talking=true;
       Check(fo3dialogue::ReferenceContext(p,action.reference,ctx.speaker),"birth speaker context");
       Check(fo3dialogue::ReferenceContext(p,action.flags,ctx.target),"birth listener context");
@@ -271,8 +319,9 @@ static void OriginalIdentity(const fo3player::Catalog& catalog,bool female){
   }
   assert(chose&&genderLine&&enteredName&&p.PlayerFemale()==female&&!p.Snapshot().deferredAppearanceOwner);
   const auto& birth=p.Snapshot().pipboy.quests.at(quest);
-  if(birth.stage!=90)std::cerr<<"Birth stopped at "<<birth.stage<<'\n';
-  assert(birth.stage==90&&birth.stages.count(61)&&birth.stages.count(62)&&birth.stages.count(65)&&birth.stages.count(80));
+  if(birth.stage!=100)std::cerr<<"Birth stopped at "<<birth.stage<<'\n';
+  assert(birth.stage==100&&!birth.running&&birth.stages.count(61)&&birth.stages.count(62)&&birth.stages.count(65)&&birth.stages.count(80));
+  assert(sawMovie&&p.Snapshot().pipboy.quests.at(baby).stage==10&&p.Snapshot().playerToddler&&p.Snapshot().playerScale==.4f);
   const auto save="/tmp/fq-original-identity-"+std::to_string(getpid());Check(p.Save(save,error),error);
   fo3player::Player restored(catalog);Check(restored.Restore(save,error),error);unlink(save.c_str());
   assert(restored.PlayerFemale()==female&&restored.PlayerName()==(female?"Catherine":"James"));
@@ -284,7 +333,7 @@ int main(int argc,char** argv){
   for(const char* invalid:{"[General]\nSCharGenQuest=0", "[General]\nSCharGenQuest=1z", "[General]\nSCharGenQuest=1\nSCharGenQuest=2", "[Other]\nSCharGenQuest=1"}){
     std::istringstream input(invalid);assert(!fo3newgame::ReadQuest(input,quest,error));
   }
-  Synthetic();Identity();ScriptInventory();CharacterMenus();
+  Synthetic();Identity();ScriptInventory();CharacterMenus();Lifecycle();
   if(argc<2)return 0;
   fo3player::Catalog catalog;Check(fo3player::LoadCatalog(argv[1],catalog,error),error);
   fo3player::Player player(catalog);player.RegisterOriginalActors();
@@ -317,5 +366,5 @@ int main(int argc,char** argv){
   fo3script::ImageStack images;images.Apply(1,base,0);images.Apply(2,catalog.imageModifiers.at(catalog.pipboy.formNames.at("cg00blackscreenisfx")),0);
   assert(images.Sample(0).fade[3]>.9f);images.Sample(20);assert(images.entries.size()==1);images.Remove(1);assert(images.entries.empty());
   OriginalIdentity(catalog,false);OriginalIdentity(catalog,true);OriginalInventory(catalog);OriginalSpecialBook(catalog);
-  std::cout<<"Original birth through deferred appearance to stage 90, both dialogue branches, SPECIAL book, inventory and save round trips passed\n";
+  std::cout<<"Original birth through toddler arrival and first objective, both dialogue branches, movie pause, SPECIAL, inventory and saves passed\n";
 }

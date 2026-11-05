@@ -1,4 +1,6 @@
 #pragma once
+#include "video/fo3-movie-request.h"
+#include "player/fo3-player-scale.h"
 #include "fo3-corpse-pose.h"
 #include "fo3-sneak-defaults.h"
 
@@ -186,6 +188,10 @@ struct PlayerMove {
 };
 struct State {
   bool inCharGen=false,locationSpecificLoadScreens=false;
+  float playerScale=1;
+  uint32_t playerRace=0;
+  bool playerToddler=false,autoDisplayObjectives=false;
+  fo3movie::Request movie;
   uint8_t playerSex=2; // 2 inherits the original NPC_ player record.
   std::string playerName,nameDraft;
   uint32_t nameMenuOwner=0;
@@ -426,6 +432,15 @@ public:
   float HealthPercentage(uint32_t reference) const;
   bool SetPlayerControls(uint32_t mask,bool enable);
   bool PlayerFemale()const{return state_.playerSex<2?state_.playerSex==1:catalog_->pipboy.playerFemale;}
+  uint32_t PlayerRace()const;
+  float PlayerTrackingScale()const;
+  bool SetPlayerScale(float scale);
+  bool AgePlayerRace(int steps);
+  bool SetPlayerToddler(bool enabled);
+  bool SetAutoDisplayObjectives(bool enabled,uint32_t owner);
+  bool KillQuestUpdates();
+  bool PlayMovie(uint32_t owner,const std::string& path,uint8_t flags);
+  bool CompleteMovie(uint64_t serial);
   std::string PlayerName()const;
   std::string PlayerBodyModel(unsigned slot)const;
   bool SetPlayerSex(bool female);

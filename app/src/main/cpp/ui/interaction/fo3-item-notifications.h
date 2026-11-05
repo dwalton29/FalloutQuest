@@ -31,6 +31,12 @@ public:
     // VR policies, not claimed to be vanilla executable timing.
     static constexpr double Hold=2,Fade=.5,MaxAge=40;
     void Clear() {head_=size_=0;started_=0; ++revision_;}
+    void ClearQuests() {
+        std::array<Entry,Capacity> kept{};size_t count=0;const bool currentRemoved=size_&&entries_[head_].quest;
+        for(size_t i=0;i<size_;++i){auto& entry=entries_[(head_+i)%Capacity];if(!entry.quest)kept[count++]=std::move(entry);}
+        if(count==size_)return;
+        entries_=std::move(kept);head_=0;size_=count;if(currentRemoved)started_=now_;++revision_;
+    }
     void Enqueue(const std::string& text,const std::string& icon="") {
         if(size_==Capacity) {head_=(head_+1)%Capacity;--size_;started_=now_;++revision_;}
         auto& e=entries_[(head_+size_)%Capacity];

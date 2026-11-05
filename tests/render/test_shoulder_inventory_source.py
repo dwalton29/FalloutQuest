@@ -68,5 +68,5 @@ class ShoulderIntegration(unittest.TestCase):
     def test_authored_master_anchor(self):
         runtime=(ROOT/'app/src/main/cpp/core/fo3-runtime.cpp').read_text()
         self.assertIn('q213RightPose.solved?q213RightPose.shoulder:RuntimePoint(gVrArms[1].shoulder)',runtime)
-        self.assertIn('gShoulderZone.rear={gQ210PlayerRoot[8],0,gQ210PlayerRoot[10]}',runtime)
+        self.assertIn('gShoulderZone.rear={gQ210PlayerRoot[8]/Fo3PlayerTrackingScale(),0,gQ210PlayerRoot[10]/Fo3PlayerTrackingScale()}',runtime)
 if __name__=='__main__':unittest.main()

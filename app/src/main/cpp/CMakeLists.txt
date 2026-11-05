@@ -3,6 +3,7 @@ project(falloutquest LANGUAGES C CXX)
 
 find_package(OpenXR REQUIRED CONFIG)
 include(${CMAKE_CURRENT_SOURCE_DIR}/../../../../cmake/FalloutPhysics.cmake)
+include(${CMAKE_CURRENT_SOURCE_DIR}/../../../../cmake/FalloutMovies.cmake)
 
 # Native runtime sources.
 add_library(falloutquest SHARED
@@ -41,6 +42,7 @@ add_library(falloutquest SHARED
     dialogue/fo3-dialogue-results.cpp
     dialogue/fo3-dialogue-session.cpp
     player/fo3-container-state.cpp
+    video/fo3-movie-playback.cpp
     audio/fo3-audio.cpp
     audio/fo3-audio-catalog.cpp
     ${ANDROID_NDK}/sources/android/native_app_glue/android_native_app_glue.c
@@ -105,6 +107,8 @@ find_library(z-lib z)
 
 target_link_libraries(falloutquest
     fq_physics
+    fq_movie_decoder
+    aaudio
     OpenXR::openxr_loader
     ${android-lib}
     ${log-lib}

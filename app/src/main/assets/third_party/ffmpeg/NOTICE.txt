@@ -1,0 +1,12 @@
+This software uses FFmpeg under the GNU Lesser General Public License 2.1 or later.
+Upstream source: https://github.com/FFmpeg/FFmpeg
+Version: n7.1.1, commit db69d06eeeab4f46da15030a80d539efb4503ca8
+No GPL, nonfree, or LGPLv3-only options are enabled.
+The unmodified libraries are dynamically linked. Their exact build options are
+in cmake/FalloutMovies.cmake in the FalloutQuest source repository:
+https://github.com/dwalton29/FalloutQuest
+To rebuild/relink, obtain that repository and the pinned upstream source, then
+build the Android project. Replacement libavformat, libavcodec, libavutil and
+libswscale libraries can be packaged by the same CMake/Gradle build. The included
+development signing key supports installing the rebuilt APK. No proprietary
+Fallout files are provided by this project.

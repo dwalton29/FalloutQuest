@@ -82,6 +82,8 @@ static void Isolated() {
   cond.function=70;cond.a=0;cond.flags=0;cond.value=1;assert(Conditions({cond},ctx,error));
   auto fail=cond;fail.a=1;cond.flags=1;assert(Conditions({cond,fail},ctx,error));
   cond.flags=0;assert(!Conditions({cond,fail},ctx,error));
+  cond.flags=0;cond.value=0;cond.function=309;assert(Conditions({cond},ctx,error));
+  cond.function=523;assert(Conditions({cond},ctx,error));cond.value=1;assert(!Conditions({cond},ctx,error));
   cond.function=600;assert(!Conditions({cond},ctx,error)&&!error.empty());
   cond.function=58;cond.a=20;cond.value=0;assert(Conditions({cond},ctx,error));
   assert(p.StartQuest(20));cond.function=56;cond.value=1;assert(Conditions({cond},ctx,error));

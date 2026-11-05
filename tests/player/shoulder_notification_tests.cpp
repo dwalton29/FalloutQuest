@@ -4,6 +4,8 @@
 #include <cstring>
 #include <iostream>
 int main() {
+    {fo3notify::Queue queue;queue.Enqueue("Item");queue.EnqueueQuest("Quest","Sound");queue.EnqueueExperience("XP","XP Sound");queue.ClearQuests();assert(queue.Size()==2);}
+
     using namespace fo3shoulder;
     Zone z;z.ready=true;z.shoulder={.2f,1.4f,0};
     const Point palm{.34f,1.48f,.24f};

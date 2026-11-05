@@ -31,13 +31,15 @@ class HdrPassOrder(unittest.TestCase):
         eye=LOOP.split('bool RenderEye(',1)[1].split('\nprivate:',1)[0]
         # The title owns an isolated colour/depth surface. Gameplay still
         # defers its clear to Q233BeginMainEyeWorld after water visibility.
-        self.assertIn('const bool loadingEye=IsFo3LoadingVisible()||titleEye;',eye)
+        self.assertIn('const bool loadingEye=IsFo3LoadingVisible()||titleEye||movieEye;',eye)
         before_title,title_and_after=eye.split('if(titleEye){',1)
         title,after_title=title_and_after.split('}else RenderFo3LoadingVr(',1)
         self.assertIn('if(loadingEye) {',before_title)
         self.assertIn('glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT)',title)
         self.assertLess(title.index('glDepthMask(GL_TRUE)'),title.index('glClear('))
         self.assertLess(title.index('glClear('),title.index('fo3titleui::Render('))
+        movie=title.split('}else if(movieEye){',1)[1]
+        self.assertLess(movie.index('glClear('),movie.index('RenderFo3Movie('))
         self.assertNotIn('glClear(',before_title+after_title)
         self.assertNotIn('RenderFo3PcSky(',eye)
     def test_clear_honours_depth_mask_and_interior_loading_guards(self):

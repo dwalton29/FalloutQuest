@@ -156,6 +156,7 @@ bool IsFo3PlayerGrounded();
 // Actual authored BHK target blocks only; used by scripted model animation.
 std::vector<uint32_t> GetFo3ScriptCollisionTargets(uint32_t reference);
 
+void SetFo3PlayerScale(float scale);
 float SetFo3PlayerStanceHeight(float x,float z,float feetOffset,float height);
 
 void ResetFo3PlayerGravity();

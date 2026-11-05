@@ -200,7 +200,8 @@ bool Fo3PlayerNameFocus(){return gPlayerSession&&gPlayerSession->player.Snapshot
 fo3special::Model gSpecialBookEntry;
 fo3dialogue::Panel gSpecialBookPanel;
 bool Fo3SpecialBookFocus(){return gPlayerSession&&gPlayerSession->player.Snapshot().specialMenuOwner!=0;}
-bool Fo3ScriptMessageFocus(){return gScriptMessagePanel.visible||Fo3PlayerNameFocus()||Fo3SpecialBookFocus()||(gPlayerSession&&gPlayerSession->player.Snapshot().deferredAppearanceOwner);}
+bool Fo3MovieFocus(){return gPlayerSession&&gPlayerSession->player.Snapshot().movie.owner!=0;}
+bool Fo3ScriptMessageFocus(){return Fo3MovieFocus()||gScriptMessagePanel.visible||Fo3PlayerNameFocus()||Fo3SpecialBookFocus()||(gPlayerSession&&gPlayerSession->player.Snapshot().deferredAppearanceOwner);}
 void UpdateFo3SpecialBook(double now,float x,float y,bool a,bool b,bool focused,const float* head){
     if(!gPlayerSession||gPlayerSession->saveBlocked||IsFo3LoadingVisible())return;
     auto& player=gPlayerSession->player;const auto owner=player.Snapshot().specialMenuOwner;
@@ -244,7 +245,7 @@ void UpdateFo3ScriptMessage(double now,float scroll,bool pressA,bool pressB,bool
         gScriptMessagePanel.visible=false;gScriptMessageOwner=0;return;
     }
     auto& player=gPlayerSession->player;
-    if(Fo3PlayerNameFocus()||Fo3SpecialBookFocus()||player.Snapshot().deferredAppearanceOwner)return;
+    if(Fo3MovieFocus()||Fo3PlayerNameFocus()||Fo3SpecialBookFocus()||player.Snapshot().deferredAppearanceOwner)return;
     if(!gScriptMessagePanel.visible){
         if(Fo3LevelUpFocus())return; // Defer authored messages until level-up closes.
         fo3player::ScriptMessage request;
@@ -308,6 +309,13 @@ void DeliverFo3ScriptSounds(){
         const auto heading=def.strings.find(key);
         // Original executable's English defaults, overridden by authored GMST.
         std::string text=(heading==def.strings.end()?std::string(added?"Quest added":complete?"Quest completed":"Quest updated"):heading->second)+"\n"+quest->second.name;
+        if(player.Snapshot().autoDisplayObjectives&&player.Snapshot().pipboy.selectedQuest==notice.quest){
+            const auto instance=player.Snapshot().pipboy.quests.find(notice.quest);
+            if(instance!=player.Snapshot().pipboy.quests.end())for(const auto& objective:instance->second.objectives){
+                const auto authored=quest->second.objectives.find(objective.first);
+                if(objective.second.displayed&&objective.second.status==fo3pipdata::Completion::Active&&authored!=quest->second.objectives.end()&&!authored->second.text.empty())text+="\n"+authored->second.text;
+            }
+        }
         fo3notify::Notifications().EnqueueQuest(text,added?"UIPopUpQuestNew":complete?"UIPopUpQuestComplete":"UIQuestUpdate");
         Q6H_LOGI("QUEST FANFARE: quest=%08X kind=%d queued=%zu",notice.quest,int(notice.kind),fo3notify::Notifications().Size());
     }

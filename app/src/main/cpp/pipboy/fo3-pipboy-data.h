@@ -268,6 +268,8 @@ struct Definitions {
   std::unordered_map<uint32_t,FurnitureDefinition> furniture;
   std::unordered_set<uint32_t> terminalBases;
   std::unordered_set<uint32_t> childRaces;
+  std::unordered_map<uint32_t,std::array<uint32_t,2>> raceAges; // younger, older
+  std::unordered_map<uint32_t,std::array<float,2>> raceHeights;
   std::unordered_map<uint32_t, RadiationStage> radiationStages;
   std::unordered_map<uint32_t, World> worlds;
   std::unordered_set<uint32_t> doorBases;

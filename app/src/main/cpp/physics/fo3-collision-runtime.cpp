@@ -33,7 +33,9 @@ constexpr size_t MAX_EXTERIOR_COLLISION_TRIANGLES_Q78A = 250000u;
 constexpr size_t MAX_LINE_VERTICES = 800000u;
 constexpr bool SHOW_COLLISION_DEBUG_Q6G = false;
 
-constexpr float PLAYER_RADIUS = 0.26f;
+constexpr float PLAYER_BASE_RADIUS = 0.26f;
+float PLAYER_RADIUS = PLAYER_BASE_RADIUS;
+float gPlayerCollisionScale=1;
 float PLAYER_HEIGHT = 1.70f; // Current calibrated standing/crouched capsule.
 constexpr float PLAYER_SKIN = 0.003f;
 constexpr float MAX_STEP_UP = 0.42f; // Quest interior policy; original shack risers reach 0.40 m.
@@ -277,7 +279,7 @@ bool IsExteriorMegatonPlacementSetQ78A(const std::vector<Fo3WorldPlacement>& pla
 }
 
 float StepHeightQ78B() {
-    return gExteriorAllBhksQ78A ? EXTERIOR_MAX_STEP_UP_Q78B : MAX_STEP_UP;
+    return (gExteriorAllBhksQ78A ? EXTERIOR_MAX_STEP_UP_Q78B : MAX_STEP_UP)*gPlayerCollisionScale;
 }
 
 float GroundNormalThresholdQ713() {
@@ -444,7 +446,7 @@ bool FindGround(float x, float z, float feetY, float& groundY) {
         float u = 0.0f, v = 0.0f, w = 0.0f;
         if (!BarycentricXZ(tri, x, z, u, v, w)) continue;
         const float y = tri.a.y*u + tri.b.y*v + tri.c.y*w;
-        if (y > feetY + maxStepUp || y < feetY - MAX_GROUND_DROP) continue;
+        if (y > feetY + maxStepUp || y < feetY - MAX_GROUND_DROP*gPlayerCollisionScale) continue;
 
         if (gExteriorAllBhksQ78A) {
             const float verticalDistance = std::fabs(y - feetY);
@@ -2901,8 +2903,12 @@ void SynchronizeFo3RigidWorld(float x,float z) {
     SynchronizeFo3TerrainPhysics(x,z);
 }
 
+void SetFo3PlayerScale(float scale){
+ if(!std::isfinite(scale)||scale<.1f||scale>10||scale==gPlayerCollisionScale)return;
+ PLAYER_HEIGHT*=scale/gPlayerCollisionScale;PLAYER_RADIUS=PLAYER_BASE_RADIUS*scale;gPlayerCollisionScale=scale;
+}
 float SetFo3PlayerStanceHeight(float x,float z,float feetOffset,float height){
- height=std::clamp(height,.7f,1.7f);
+ height=std::clamp(height,.7f*gPlayerCollisionScale,1.7f*gPlayerCollisionScale);
  if(height>PLAYER_HEIGHT+.001f){SynchronizeFo3RigidWorld(x,z);if(!fo3rigid::Live().CanExpandCapsule({x,gCollisionFloorY+feetOffset,z},CollisionRadiusQ712(),PLAYER_HEIGHT,height))return PLAYER_HEIGHT;}
  PLAYER_HEIGHT=height;return PLAYER_HEIGHT;
 }

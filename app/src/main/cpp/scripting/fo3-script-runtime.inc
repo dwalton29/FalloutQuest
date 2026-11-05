@@ -443,6 +443,12 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
     switch(c.type) {
     case C::Return:return true;
     case C::PlayerSex:ok=SetPlayerSex(c.index==2?!PlayerFemale():c.index==1);break;
+    case C::PlayerScale:ok=SetPlayerScale(c.value);break;
+    case C::PlayerAge:ok=AgePlayerRace(int(c.value));break;
+    case C::PlayerToddler:ok=SetPlayerToddler(c.value!=0);break;
+    case C::AutoObjectives:ok=SetAutoDisplayObjectives(c.value!=0,owner);break;
+    case C::KillUpdates:ok=KillQuestUpdates();break;
+    case C::PlayMovie:ok=PlayMovie(owner,c.expression,uint8_t(c.index));break;
     case C::DeferredAppearanceMenu:ok=DeferAppearanceMenu(owner);break;
     case C::SpecialBook:ok=OpenSpecialBook(owner,uint32_t(c.value));break;
     // Explicit temporary policy: retain existing race/face/default-hair assets.
@@ -852,7 +858,7 @@ bool Player::PumpWorldAwareGameMode(double seconds,const std::vector<uint32_t>& 
     const std::function<bool(std::unique_ptr<ScriptTransactionPlan>)>& reserveWorld,bool menuMode) {
   if(!std::isfinite(seconds)||seconds<=0||seconds>1||!reserveWorld)return false;
   const auto deferredOwner=state_.deferredAppearanceOwner;
-  if(deferredOwner||state_.specialMenuOwner||state_.nameMenuOwner)menuMode=true;
+  if(deferredOwner||state_.specialMenuOwner||state_.nameMenuOwner||state_.movie.owner)menuMode=true;
   // Reference scripts retain their bounded cadence. Quest scripts use their
   // original DATA/SetQuestDelay interval, with at most one run per frame.
   if(!menuMode)questScriptAccumulator_=std::min(.5,questScriptAccumulator_+seconds);
@@ -939,7 +945,7 @@ bool Player::PumpWorldAwareGameMode(double seconds,const std::vector<uint32_t>& 
     if(elapsed+1e-7<interval)continue;
     tick->second=questScriptClock_;scriptElapsedSeconds_=elapsed;
     if(run(q->second.script,"GameMode",id,false))return true;
-    if(state_.deferredAppearanceOwner||state_.specialMenuOwner||state_.nameMenuOwner)return false;
+    if(state_.deferredAppearanceOwner||state_.specialMenuOwner||state_.nameMenuOwner||state_.movie.owner)return false;
   }
   if(menuMode&&deferredOwner&&state_.deferredAppearanceOwner==deferredOwner){
     const auto quest=catalog_->pipboy.quests.find(deferredOwner);
@@ -962,7 +968,7 @@ bool Player::PumpWorldAwareGameMode(double seconds,const std::vector<uint32_t>& 
     if(!ReferenceDisabled(id,disabled,error)||disabled)continue;
     const auto script=catalog_->eventBaseScripts.at(ref->second.base);
     if(run(script,"GameMode",id,true))return true;
-    if(state_.deferredAppearanceOwner||state_.specialMenuOwner||state_.nameMenuOwner)return false;
+    if(state_.deferredAppearanceOwner||state_.specialMenuOwner||state_.nameMenuOwner||state_.movie.owner)return false;
   }
   return false;
 }

@@ -109,7 +109,7 @@ void Push(Event e) {
   if (!runtime.worker.joinable() || runtime.stop ||
       (!runtime.lastActive && (e.kind < 6 || e.kind==11 || e.kind==16)))
     return;
-  if (e.kind == 6 || e.kind == 7 || e.kind == 10 || e.kind == 14 || e.kind==16 || e.kind==17)
+  if (e.kind == 6 || e.kind == 7 || e.kind == 10 || e.kind == 14 || e.kind==16 || e.kind==17 || e.kind==18)
     runtime.events.erase(
         std::remove_if(runtime.events.begin(), runtime.events.end(),
                        [&](const Event &old) { return old.kind == e.kind; }),
@@ -139,6 +139,7 @@ void Worker() {
   }
   auto cls = env->GetObjectClass(runtime.activity);
   auto volumes=env->GetMethodID(cls,"audioVolumes","(FFFF)V");
+  auto movie=env->GetMethodID(cls,"audioMovie","(ZZ)V");
   auto menuLoop = env->GetMethodID(cls,"audioMenuLoop","(Ljava/lang/String;F)V");
   auto music = env->GetMethodID(cls, "audioMusic", "(Ljava/lang/String;F)V"),
        effect = env->GetMethodID(cls, "audioEffect", "(Ljava/lang/String;F)V"),
@@ -150,7 +151,7 @@ void Worker() {
        dialogue=env->GetMethodID(cls,"audioDialogue","(Ljava/lang/String;I)V"),
        dialogueGain=env->GetMethodID(cls,"audioDialogueGain","(F)V");
   if (env->ExceptionCheck() || !music || !effect || !ambient || !active ||
-      !broadcast || !dialogue || !dialogueGain || !menuLoop || !volumes) {
+      !broadcast || !dialogue || !dialogueGain || !menuLoop || !volumes || !movie) {
     __android_log_print(ANDROID_LOG_ERROR, "FalloutQuest",
                         "AUDIO JNI bridge unavailable");
     env->ExceptionClear();
@@ -416,6 +417,7 @@ void Worker() {
       e = runtime.events.front();
       runtime.events.pop_front();
     }
+    if(e.kind==18){env->CallVoidMethod(runtime.activity,movie,jboolean((e.id&2)!=0),jboolean((e.id&4)!=0));if(env->ExceptionCheck())env->ExceptionClear();continue;}
     if(e.kind==17){env->CallVoidMethod(runtime.activity,volumes,e.volumes[0],e.volumes[1],e.volumes[2],e.volumes[3]);if(env->ExceptionCheck())env->ExceptionClear();continue;}
     if(e.kind==13) {
       if(e.id&&!e.name.empty()) {
@@ -595,6 +597,7 @@ void Shutdown() {
   }
   runtime.activity = nullptr;
 }
+void Movie(uint8_t flags){Push({18,flags,true});}
 void Volumes(const std::array<float,4>& values){Event e{17,0,true};e.volumes=values;Push(std::move(e));}
 void Context(uint32_t cell, bool active) {
   std::lock_guard<std::mutex> lock(runtime.mutex);

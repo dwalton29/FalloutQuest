@@ -163,6 +163,9 @@ void Decode(Definitions &d, const std::string &t, uint32_t id, uint32_t flags,
   else if(t=="RACE"){
     auto voices=Find(s,"VTCK");if(voices&&voices->n>=8)d.raceVoices[id]={U(voices),U(voices,4)};
     auto data=Find(s,"DATA");if(data&&data->n==36&&(U(data,32)&4))d.childRaces.insert(id);
+    d.raceAges[id]={U(Find(s,"YNAM")),U(Find(s,"ONAM"))};
+    if(data&&data->n==36){const float male=fo3esm::ReadF32(data->p+16),female=fo3esm::ReadF32(data->p+20);
+      if(std::isfinite(male)&&std::isfinite(female)&&male>0&&female>0&&male<=10&&female<=10)d.raceHeights[id]={male,female};}
     bool body=false;size_t sex=0;uint32_t slot=UINT32_MAX;
     for(const auto& v:s){
       if(v.type=="NAM0"||v.type=="HNAM"||v.type=="ENAM")body=false;

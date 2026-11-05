@@ -105,7 +105,7 @@ static bool Value(const fo3pipdata::Condition& c,const Context& ctx,float& value
   case 68:case 69:case 70:case 71:case 73:
     if(!def){error="actor identity unavailable";return false;}
     if(c.function==68)value=def->actorClass==c.a;
-    if(c.function==69)value=def->race==c.a;
+    if(c.function==69)value=(pc?p.PlayerRace():def->race)==c.a;
     if(c.function==70)value=uint32_t(pc?p.PlayerFemale():def->female)==c.a;
     if(c.function==71)value=p.ActorFactionRank(who.reference,c.a)>=0;
     if(c.function==73)value=p.ActorFactionRank(who.reference,c.a);
@@ -137,6 +137,9 @@ static bool Value(const fo3pipdata::Condition& c,const Context& ctx,float& value
   case 286:if(!pc){error="NPC sneak posture unavailable";return false;}value=p.IsSneaking();return true;
   case 289:value=who.combat;return true;
   case 546:if(!d.quests.count(c.a)){error="quest unavailable";return false;}value=quest!=state.pipboy.quests.end()&&quest->second.status!=fo3pipdata::Completion::Active;return true;
+  // Quest is neither of the original console platforms. These gates also
+  // occur on tutorial stage items, so rejecting them blocks the caller's INFO.
+  case 309:case 523:value=0;return true;
   case 310:value=who.world==c.a;return who.world!=0;
   case 372:{auto list=d.formLists.find(c.a);if(list==d.formLists.end()){error="form list unavailable";return false;}value=std::find(list->second.begin(),list->second.end(),pc?7:who.base)!=list->second.end();return true;}
   case 427:{auto voice=p.ActorVoice(who.reference);if(!voice)voice=fo3pipdata::ActorVoice(d,who.base);if(!voice){error="voice type unavailable";return false;}value=voice==c.a;return true;}

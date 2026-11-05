@@ -1097,10 +1097,50 @@ bool Player::CanOpenDoorImpl(uint32_t actor,uint32_t id,bool sourceDelegated) co
       return true;
   return false;
 }
+uint32_t Player::PlayerRace()const{
+  if(state_.playerRace)return state_.playerRace;
+  const auto* base=fo3pipdata::ActorCategory(catalog_->pipboy,PlayerBase,1);return base?base->race:0;
+}
+float Player::PlayerTrackingScale()const{
+  const auto height=catalog_->pipboy.raceHeights.find(PlayerRace());
+  return state_.playerScale*(height==catalog_->pipboy.raceHeights.end()?1.f:height->second[PlayerFemale()?1:0]);
+}
+bool Player::SetPlayerScale(float scale){
+  if(!fo3scale::Valid(scale))return false;
+  if(scale!=state_.playerScale){state_.playerScale=scale;++revision_;}return true;
+}
+bool Player::AgePlayerRace(int steps){
+  if(steps<-16||steps>16)return false;
+  uint32_t race=PlayerRace();
+  for(int n=0;n<std::abs(steps);++n){const auto ages=catalog_->pipboy.raceAges.find(race);
+    if(ages==catalog_->pipboy.raceAges.end()||!ages->second[steps>0?1:0])return false;
+    race=ages->second[steps>0?1:0];if(!catalog_->pipboy.raceAges.count(race))return false;
+  }
+  if(race!=PlayerRace()){state_.playerRace=race;++revision_;}return true;
+}
+bool Player::SetPlayerToddler(bool enabled){if(state_.playerToddler!=enabled){state_.playerToddler=enabled;++revision_;}return true;}
+bool Player::SetAutoDisplayObjectives(bool enabled,uint32_t owner){
+  if(enabled&&catalog_->pipboy.quests.count(owner)){if(!EnsureQuestInstance(owner)||!SelectQuest(owner))return false;}
+  if(state_.autoDisplayObjectives!=enabled){state_.autoDisplayObjectives=enabled;++revision_;}return true;
+}
+bool Player::KillQuestUpdates(){
+  pendingQuestNotices_.clear();++scriptEffectRevision_;
+  fo3script::Action action;action.kind=fo3script::ActionKind::KillQuestUpdates;return QueueScriptAction(std::move(action));
+}
+bool Player::PlayMovie(uint32_t owner,const std::string& path,uint8_t flags){
+  if(!owner||state_.nameMenuOwner||state_.specialMenuOwner||state_.deferredAppearanceOwner||flags>15||!fo3movie::ValidPath(path)||(!catalog_->pipboy.quests.count(owner)&&!catalog_->references.count(owner)))return false;
+  auto& movie=state_.movie;
+  if(movie.owner)return movie.owner==owner&&movie.path==path&&movie.flags==flags;
+  if(movie.serial==UINT64_MAX)return false;
+  ++movie.serial;movie.owner=owner;movie.flags=flags;movie.path=path;++revision_;return true;
+}
+bool Player::CompleteMovie(uint64_t serial){
+  auto& movie=state_.movie;if(!movie.owner||serial!=movie.serial)return false;
+  movie.owner=0;movie.path.clear();movie.flags=14;++revision_;return true;
+}
 std::string Player::PlayerBodyModel(unsigned slot)const{
-  const auto* base=fo3pipdata::ActorCategory(catalog_->pipboy,PlayerBase,1);
-  if(!base||slot>=3)return {};
-  const auto race=catalog_->pipboy.raceBodyModels.find(base->race);
+  if(slot>=3)return {};
+  const auto race=catalog_->pipboy.raceBodyModels.find(PlayerRace());
   return race==catalog_->pipboy.raceBodyModels.end()?std::string{}:race->second[PlayerFemale()?1:0][slot];
 }
 std::string Player::PlayerName()const{
@@ -1115,7 +1155,7 @@ static bool ValidNameDraft(const std::string& name){
   return name.size()<=32&&std::all_of(name.begin(),name.end(),[](unsigned char c){return c>=32&&c<=126;});
 }
 bool Player::OpenPlayerNameMenu(uint32_t owner){
-  if(!owner||state_.specialMenuOwner||state_.deferredAppearanceOwner||(!catalog_->pipboy.quests.count(owner)&&!catalog_->references.count(owner)))return false;
+  if(!owner||state_.movie.owner||state_.specialMenuOwner||state_.deferredAppearanceOwner||(!catalog_->pipboy.quests.count(owner)&&!catalog_->references.count(owner)))return false;
   if(state_.nameMenuOwner)return state_.nameMenuOwner==owner;
   state_.nameMenuOwner=owner;state_.nameDraft=state_.playerName;++revision_;return true;
 }
@@ -1130,7 +1170,7 @@ bool Player::ConfirmPlayerName(){
   state_.nameMenuOwner=0;state_.nameDraft.clear();++revision_;return true;
 }
 bool Player::DeferAppearanceMenu(uint32_t owner){
-  if(!owner||state_.nameMenuOwner||state_.specialMenuOwner||(!catalog_->pipboy.quests.count(owner)&&!catalog_->references.count(owner)))return false;
+  if(!owner||state_.movie.owner||state_.nameMenuOwner||state_.specialMenuOwner||(!catalog_->pipboy.quests.count(owner)&&!catalog_->references.count(owner)))return false;
   if(state_.deferredAppearanceOwner)return state_.deferredAppearanceOwner==owner;
   state_.deferredAppearanceOwner=owner;++revision_;return true;
 }
@@ -1138,7 +1178,7 @@ int Player::SpecialBookRemaining()const{
   int remaining=int(state_.specialMenuTotal);for(auto value:state_.specialDraft)remaining-=value;return remaining;
 }
 bool Player::OpenSpecialBook(uint32_t owner,uint32_t total){
-  if(!owner||total<7||total>70||state_.nameMenuOwner||state_.deferredAppearanceOwner||(!catalog_->pipboy.quests.count(owner)&&!catalog_->references.count(owner)))return false;
+  if(!owner||total<7||total>70||state_.movie.owner||state_.nameMenuOwner||state_.deferredAppearanceOwner||(!catalog_->pipboy.quests.count(owner)&&!catalog_->references.count(owner)))return false;
   if(state_.specialMenuOwner)return state_.specialMenuOwner==owner&&state_.specialMenuTotal==total;
   auto draft=state_.special;unsigned used=0;for(auto value:draft){if(value<1||value>10)return false;used+=value;}
   if(used>total)draft.fill(1);
@@ -1371,7 +1411,8 @@ bool Player::Save(const std::string &path, std::string &error) const {
     payload.push_back(l.forceFailures);payload.push_back(l.rewarded?1:0);}
   // Optional RFE1 after the v14 lock tail. Empty overlays keep existing v14
   // bytes unchanged; older supported saves do not require this extension.
-  const bool hasMenus=state_.deferredAppearanceOwner||state_.specialMenuOwner;
+  const bool hasLife=state_.playerScale!=1||state_.playerRace||state_.playerToddler||state_.autoDisplayObjectives||state_.movie.serial;
+  const bool hasMenus=hasLife||state_.deferredAppearanceOwner||state_.specialMenuOwner;
   const bool hasIdentity=hasMenus||state_.playerSex!=2||!state_.playerName.empty()||state_.nameMenuOwner||!state_.nameDraft.empty();
   const bool hasNewGame=hasIdentity||state_.noActivationSound||state_.inCharGen||state_.locationSpecificLoadScreens||state_.playerMove.marker;
   const bool hasFactionRanks=hasNewGame||!state_.actorFactions.empty()||!state_.actorPackageEvents.empty();
@@ -1592,7 +1633,15 @@ bool Player::Save(const std::string &path, std::string &error) const {
     Put32(payload,state_.deferredAppearanceOwner);Put32(payload,state_.specialMenuOwner);Put32(payload,state_.specialMenuTotal);
     for(auto value:state_.specialDraft)Put32(payload,value);
   }
-  Put32(bytes, hasMenus ? 30 : hasIdentity ? 29 : hasNewGame ? 28 : hasFactionRanks ? 27 : hasBodyDamage ? 26 : hasCorpsePoses ? 25 : hasDailyInfos ? 24 : hasScriptPackages ? 23 : hasScriptOverrides ? 22 : hasActorVariables ? 21 : hasDoorStates ? 20 : hasDebugPoints ? 19 : hasLevelAdvancement ? 18 : hasCompletionState ? 17 :
+  if(hasLife){
+    const auto& movie=state_.movie;
+    if(!fo3scale::Valid(state_.playerScale)||(state_.playerRace&&!catalog_->pipboy.raceAges.count(state_.playerRace))||movie.flags>15||
+       (movie.owner&&(state_.nameMenuOwner||state_.specialMenuOwner||state_.deferredAppearanceOwner||!movie.serial||!fo3movie::ValidPath(movie.path)||(!catalog_->pipboy.quests.count(movie.owner)&&!catalog_->references.count(movie.owner))))||(!movie.owner&&!movie.path.empty())){error="Invalid player lifecycle state";return false;}
+    Put32(payload,0x31415453); // STA1
+    Put32(payload,uint32_t(state_.playerToddler)|(uint32_t(state_.autoDisplayObjectives)<<1));PutFloat(payload,state_.playerScale);Put32(payload,state_.playerRace);
+    Put64(payload,movie.serial);Put32(payload,movie.owner);Put32(payload,movie.flags);Put32(payload,uint32_t(movie.path.size()));payload.insert(payload.end(),movie.path.begin(),movie.path.end());
+  }
+  Put32(bytes, hasLife ? 31 : hasMenus ? 30 : hasIdentity ? 29 : hasNewGame ? 28 : hasFactionRanks ? 27 : hasBodyDamage ? 26 : hasCorpsePoses ? 25 : hasDailyInfos ? 24 : hasScriptPackages ? 23 : hasScriptOverrides ? 22 : hasActorVariables ? 21 : hasDoorStates ? 20 : hasDebugPoints ? 19 : hasLevelAdvancement ? 18 : hasCompletionState ? 17 :
       hasMerchantVisits ? 16 : hasPlayerAttributeOverrides ? 15 : 14);
   Put32(bytes, catalog_->fingerprint);
   Put32(bytes, static_cast<uint32_t>(payload.size()));
@@ -1652,7 +1701,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
   const auto *h = bytes.data();
   const auto version = fo3esm::ReadU32(h + 4);
   if (std::memcmp(h, "FQPS", 4) ||
-      (version < 1 || version > 30))
+      (version < 1 || version > 31))
     return fail("Unsupported player save format");
   if (fo3esm::ReadU32(h + 8) != catalog_->fingerprint)
     return fail("Player save belongs to different game definitions");
@@ -2155,13 +2204,22 @@ bool Player::Restore(const std::string &path, std::string &error) {
         if(!next.nameMenuOwner&&!next.nameDraft.empty())return fail("Orphan player name draft");
       }
       if(version>=30){
-        if(payload.size()-at!=44||fo3esm::ReadU32(p+at)!=0x31495543)return fail("Missing character menu state");
+        if((version>=31?payload.size()-at<44:payload.size()-at!=44)||fo3esm::ReadU32(p+at)!=0x31495543)return fail("Missing character menu state");
         next.deferredAppearanceOwner=fo3esm::ReadU32(p+at+4);next.specialMenuOwner=fo3esm::ReadU32(p+at+8);next.specialMenuTotal=fo3esm::ReadU32(p+at+12);at+=16;
         unsigned used=0;for(auto& value:next.specialDraft){const auto raw=fo3esm::ReadU32(p+at);at+=4;if(raw>10)return fail("Invalid SPECIAL draft value");value=uint8_t(raw);used+=value;}
         auto validOwner=[&](uint32_t owner){return !owner||catalog_->pipboy.quests.count(owner)||catalog_->references.count(owner);};
         if(!validOwner(next.deferredAppearanceOwner)||!validOwner(next.specialMenuOwner)||next.nameMenuOwner||
            (next.specialMenuOwner&&(next.deferredAppearanceOwner||next.specialMenuTotal<7||next.specialMenuTotal>70||used>next.specialMenuTotal||std::any_of(next.specialDraft.begin(),next.specialDraft.end(),[](auto v){return v<1;})))||
            (!next.specialMenuOwner&&(used||next.specialMenuTotal)))return fail("Invalid character menu state");
+      }
+      if(version>=31){
+        if(payload.size()-at<36||fo3esm::ReadU32(p+at)!=0x31415453)return fail("Missing player lifecycle state");
+        const auto flags=fo3esm::ReadU32(p+at+4);next.playerScale=fo3esm::ReadF32(p+at+8);next.playerRace=fo3esm::ReadU32(p+at+12);
+        next.playerToddler=flags&1;next.autoDisplayObjectives=flags&2;next.movie.serial=U64(p+at+16);next.movie.owner=fo3esm::ReadU32(p+at+24);
+        const auto movieFlags=fo3esm::ReadU32(p+at+28),length=fo3esm::ReadU32(p+at+32);at+=36;
+        if(flags>3||!fo3scale::Valid(next.playerScale)||(next.playerRace&&!catalog_->pipboy.raceAges.count(next.playerRace))||movieFlags>15||length>240||payload.size()-at!=length)return fail("Invalid player lifecycle state");
+        next.movie.flags=uint8_t(movieFlags);next.movie.path.assign(reinterpret_cast<const char*>(p+at),length);at+=length;
+        if((next.movie.owner&&(next.nameMenuOwner||next.specialMenuOwner||next.deferredAppearanceOwner||!next.movie.serial||!fo3movie::ValidPath(next.movie.path)||(!catalog_->pipboy.quests.count(next.movie.owner)&&!catalog_->references.count(next.movie.owner))))||(!next.movie.owner&&!next.movie.path.empty()))return fail("Invalid saved movie request");
       }
       if(at!=payload.size())return fail("Trailing player save data");
     }

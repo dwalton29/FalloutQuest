@@ -17,6 +17,7 @@
 bool Fo3ScriptMessageFocus();
 bool Fo3PlayerNameFocus();
 bool Fo3SpecialBookFocus();
+void ShutdownFo3Movie();
 namespace fo3worldscript {
 fo3script::ImagePresentation Presentation();
 bool PackageEvent(uint32_t reference,uint32_t package,bool completed);
@@ -1015,7 +1016,7 @@ bool gPipAnchorReady=false,gPipSolved=false;
 bool gPipEquipmentChanged=false;
 uint64_t gPipAppearanceRevision=UINT64_MAX;
 std::string gPipAppearanceModel;
-bool gPipAppearanceFemale=false;
+bool gPipAppearanceFemale=false;uint32_t gPipAppearanceRace=0;
 Vec3 gPipShoulder{},gPipHand{};
 double gPipUpdateUs=0,gPipScreenDrawUs=0;
 uint64_t gPipScreenQueries=0;
@@ -3643,6 +3644,7 @@ uint64_t gSceneLoadFrame = 0u;
 fqopaque::GpuTimer gLoadingGpuTimer;
 GLsync gLoadingUploadFence=nullptr;
 std::unique_ptr<fo3player::Session> gPlayerSession;
+float Fo3PlayerTrackingScale(){return gPlayerSession?std::clamp(gPlayerSession->player.PlayerTrackingScale(),.1f,10.f):1.f;}
 std::shared_ptr<const fo3world::ReferenceStateSnapshot> gFo3ReferenceState;
 // Disabled inventory displays keep their immutable GPU resources until normal
 // scene retirement, while render, targeting and collision share the removal.
@@ -11685,12 +11687,12 @@ void SynchronizeFo3PipboyEquipment() {
         (item->second.bipedMask & 4u))
       model = player.PlayerFemale()&&!item->second.femaleModel.empty()?item->second.femaleModel:item->second.model;
   }
-  if (gPipAppearanceRevision != UINT64_MAX && (model != gPipAppearanceModel||gPipAppearanceFemale!=player.PlayerFemale())) {
+  if (gPipAppearanceRevision != UINT64_MAX && (model != gPipAppearanceModel||gPipAppearanceFemale!=player.PlayerFemale()||gPipAppearanceRace!=player.PlayerRace())) {
     gPipEquipmentChanged = true;
     gQ210PlayerBodyAttempted = false;
     gQ210PlayerBodyReady = false;
   }
-  gPipAppearanceModel = model;gPipAppearanceFemale=player.PlayerFemale();
+  gPipAppearanceModel = model;gPipAppearanceFemale=player.PlayerFemale();gPipAppearanceRace=player.PlayerRace();
   gPipAppearanceRevision = player.Revision();
 }
 void UpdateFo3PipboyMount(const Q213ArmPose &pose) {
@@ -12012,8 +12014,8 @@ void Q211UpdatePlayerRig(bool finalPose=false) {
         const auto anchor=Q211TransformPoint(gQ210PlayerRoot,
             q213RightPose.solved?q213RightPose.shoulder:RuntimePoint(gVrArms[1].shoulder));
         gShoulderZone.shoulder={anchor.x,anchor.y,anchor.z};
-        gShoulderZone.right={gQ210PlayerRoot[0],0,gQ210PlayerRoot[2]};
-        gShoulderZone.rear={gQ210PlayerRoot[8],0,gQ210PlayerRoot[10]};
+        gShoulderZone.right={gQ210PlayerRoot[0]/Fo3PlayerTrackingScale(),0,gQ210PlayerRoot[2]/Fo3PlayerTrackingScale()};
+        gShoulderZone.rear={gQ210PlayerRoot[8]/Fo3PlayerTrackingScale(),0,gQ210PlayerRoot[10]/Fo3PlayerTrackingScale()};
     }
     gWeaponPalmValid[0]=q221LeftPalmValid;gWeaponPalm[0]=q221LeftPalmWorld;
     gWeaponPalmValid[1]=q221RightPalmValid;gWeaponPalm[1]=q221RightPalmWorld;
@@ -15274,6 +15276,7 @@ bool ShutdownFo3SceneGpu() {
     DiscardFo3ResidentLightPlan();
     DiscardFo3ResidentDoorInteractionPlan();
     FlushFo3PlayerState();
+    ShutdownFo3Movie();
     gSceneLoad.collisionPreparation.Reset();
     if (gSceneLoad.preparation.Ready()) {
         for (auto& actor : gSceneLoad.preparation.Get().actors)
@@ -15435,6 +15438,7 @@ bool StartFo3DebugQuestEntry(fo3player::Player& player,uint32_t quest,std::strin
 #include "ui/title/fo3-title-renderer.h"
 #include "audio/fo3-audio-assets.h"
 #include "ui/title/fo3-title-runtime.inc"
+#include "ui/video/fo3-movie-runtime.inc"
 
 void SetFo3PlayerBodyTrackingQ210(
         float headX, float headY, float headZ, float headYaw,
@@ -15494,16 +15498,17 @@ void SetFo3PlayerBodyTrackingQ210(
     Vec3 anchor{};const bool anchorReady=Q211FindAvatarHeadAnchor(anchor);
     // Align the FINAL neck-posed eye midpoint in XYZ before solving arms.
     gVrNeckPose=fo3vr::NeckPose(VrPoint(gVrNeckAnchor),fo3vr::Wrap(headYaw-gQ213TorsoYaw));
-    const auto root=fo3vr::PosedBodyRoot(VrPoint(anchor),{headX,headY,headZ},gQ213TorsoYaw,gVrNeckPose);
+    const float playerScale=Fo3PlayerTrackingScale();
+    const auto root=fo3vr::BodyRoot(gVrNeckPose.Point(VrPoint(anchor))*playerScale,{headX,headY,headZ},gQ213TorsoYaw);
     const float rootX=root.translation.x,rootZ=root.translation.z;
-    const float q217RootY=anchorReady?root.translation.y:headY-localHeadY;
+    const float q217RootY=anchorReady?root.translation.y:headY-localHeadY+FLOOR_Y*(1-playerScale);
 
     std::fill(gQ210PlayerRoot, gQ210PlayerRoot + 16, 0.0f);
-    gQ210PlayerRoot[0] = c;
-    gQ210PlayerRoot[2] = -s;
-    gQ210PlayerRoot[5] = 1.0f;
-    gQ210PlayerRoot[8] = s;
-    gQ210PlayerRoot[10] = c;
+    gQ210PlayerRoot[0] = c*playerScale;
+    gQ210PlayerRoot[2] = -s*playerScale;
+    gQ210PlayerRoot[5] = playerScale;
+    gQ210PlayerRoot[8] = s*playerScale;
+    gQ210PlayerRoot[10] = c*playerScale;
     gQ210PlayerRoot[12] = rootX;
     gQ210PlayerRoot[13] = q217RootY;
     gQ210PlayerRoot[14] = rootZ;

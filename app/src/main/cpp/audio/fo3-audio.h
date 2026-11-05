@@ -25,6 +25,7 @@ void Start(JavaVM *vm, jobject activity);
 void Shutdown();
 inline constexpr uint32_t TitleCell=0xfffffffeu;
 void Context(uint32_t cell, bool focused);
+void Movie(uint8_t flags); // World mute/music pause; zero restores ordinary audio.
 void Volumes(const std::array<float,4>& values);
 void Pickup(uint32_t base);
 void Open(uint32_t base);

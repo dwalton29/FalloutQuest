@@ -60,6 +60,7 @@ void Dialogue(const std::string& p,uint32_t t){path=p;token=t;completion=0;}
 uint64_t DialogueCompletion(){return completion;}
 }
 namespace fo3bloodui {unsigned triggered=0;void Clear(){triggered=0;}void Trigger(uint32_t count,double,const fo3player::Catalog&){triggered+=count;}}
+float playerCollisionScale=1;void SetFo3PlayerScale(float scale){playerCollisionScale=scale;}
 bool playerTransitionPending=false;unsigned playerTransitions=0;
 bool HasPendingFo3CellTransitionRequestQ74(){return playerTransitionPending;}
 bool QueueFo3MapMarkerTransitionQ74(uint32_t,float,float,float,float,float,float,double){playerTransitionPending=true;++playerTransitions;return true;}
@@ -167,10 +168,11 @@ int main(int argc,char** argv){try{
  Check(p.ScriptActorTalking(81)&&fo3audio::path=="sound/original.ogg","production TACT adapter delivers original speech without NPC mesh");
  fo3audio::completion=(uint64_t(fo3audio::token)<<1)|1;fo3worldscript::SpeechTick();
  Check(!p.ScriptActorTalking(81),"TACT speech releases on actual voice completion");
+ Check(p.SetPlayerScale(.4f),"scripted toddler scale");
  Check(p.MoveActorTo(fo3player::PlayerRef,10,{}),"player MoveTo marker accepted");
  Check(p.SetLocationSpecificLoadScreens(true),"location-only loading flag");
  fo3script::Action blood;blood.kind=fo3script::ActionKind::ScreenBlood;blood.flags=3;Check(p.QueueScriptAction(blood),"queue screen blood");
- fo3worldscript::Actions();Check(playerTransitions==1&&fo3bloodui::triggered==3&&fo3loading::gLocationSpecificOnly.load(),"production player move and presentation actions");
+ fo3worldscript::Actions();Check(playerCollisionScale==.4f&&playerTransitions==1&&fo3bloodui::triggered==3&&fo3loading::gLocationSpecificOnly.load(),"production player move and presentation actions");
  fo3worldscript::Actions();Check(playerTransitions==1,"pending player scene transition is not duplicated");
  p.AcknowledgePlayerMove();playerTransitionPending=false;
  fo3pipdata::ResultScript request;request.source="autosave";
