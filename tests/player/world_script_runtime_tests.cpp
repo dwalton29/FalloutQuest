@@ -61,6 +61,7 @@ void Dialogue(const std::string& p,uint32_t t){path=p;token=t;completion=0;}
 uint64_t DialogueCompletion(){return completion;}
 }
 namespace fo3bloodui {unsigned triggered=0;void Clear(){triggered=0;}void Trigger(uint32_t count,double,const fo3player::Catalog&){triggered+=count;}}
+unsigned pipboyResets=0,radioRefreshes=0;void ResetFo3Pipboy(){++pipboyResets;}void RefreshFo3PipboyRadio(){++radioRefreshes;}
 float playerCollisionScale=1;void SetFo3PlayerScale(float scale){playerCollisionScale=scale;}
 bool playerTransitionPending=false;unsigned playerTransitions=0;
 bool HasPendingFo3CellTransitionRequestQ74(){return playerTransitionPending;}
@@ -98,6 +99,7 @@ int main(int argc,char** argv){try{
  auto& script=c.pipboy.scripts[200];script.variables={{1,"opened"},{2,"loaded"}};
  script.source="scn C\nshort opened\nshort loaded\nBegin OnTrigger\nRewardKarma 1\nEnd\nBegin OnTriggerEnter player\nPlayGroup Advance 5\nEnd\nBegin OnLoad\nset loaded to loaded + 1\nEnd\nBegin GameMode\nif IsAnimPlaying == 0\nPlayGroup Idle 5\nendif\nEnd";
  c.eventPrograms[200]=fo3script::ParseEvents(script);
+ c.references[82].base=810;c.references[82].flags=0x800;c.pipboy.targets[82].base=810;c.pipboy.targets[82].cell=1;
  c.references[81].base=810;c.pipboy.targets[81].base=810;c.pipboy.targets[81].cell=1;
  c.pipboy.dialogueActors[810].talkingActivator=true;
  c.references[80].base=800;c.containers[800].script=801;c.containers[800].entries={{900,0,2}};
@@ -105,6 +107,8 @@ int main(int argc,char** argv){try{
  c.pipboy.scripts[801].source="Begin OnActivate\nActivate player\nEnd";c.eventPrograms[801]=fo3script::ParseEvents(c.pipboy.scripts[801]);
  c.references[30].base=300;c.doorBases.insert(300);c.scriptedBases.insert(300);c.eventBaseScripts[300]=301;
  c.pipboy.scripts[301].source="Begin OnActivate\nActivate\nEnd";c.eventPrograms[301]=fo3script::ParseEvents(c.pipboy.scripts[301]);
+ c.actorPlacements[40].base=400;
+ c.pipboy.packages[850].type=15;c.pipboy.packages[850].dialogueType=1;c.pipboy.packages[850].dialogueTopic=500;c.pipboy.packages[850].target.valid=true;c.pipboy.packages[850].target.value=fo3player::PlayerRef;
  c.references[40].base=400;c.references[40].valid=true;c.pipboy.targets[40].base=400;c.pipboy.targets[40].cell=1;
  c.weapons.actors[400].health=20;c.pipboy.dialogueActors[400].script=401;
  c.pipboy.referenceScripts[40]={"speaker",400};c.eventBaseScripts[400]=401;
@@ -172,11 +176,21 @@ int main(int argc,char** argv){try{
  fo3audio::completion=(uint64_t(token)<<1)|1;fo3worldscript::SpeechTick();
  Check(!p.ScriptActorTalking(40)&&gQ230NpcActors.back().runtime.scriptSpeechToken==0,"completion releases speaking actor and lip token even after Session::End clears actor");
  Check(p.Snapshot().pipboy.dialogueVariables.at((uint64_t(40)<<32)|1)==1&&p.Snapshot().pipboy.dialogueVariables.at((uint64_t(40)<<32)|2)==1,"INFO end precedes source filtered SayToDone");
+ Check(p.SetDialogueVariable((uint64_t(40)<<32)|2,0),"clear SayToDone marker");
+ Check(fo3worldscript::PackageEvent(40,850,false),"adopt original dialogue package");
+ Check(p.QueueScriptSpeech(40,500,fo3player::PlayerRef,false,false,850),"queue package-specific speech");fo3worldscript::Actions();fo3worldscript::SpeechTick();
+ fo3audio::completion=(uint64_t(fo3audio::token)<<1)|1;fo3worldscript::SpeechTick();
+ Check(p.Snapshot().actorPackageEvents.at(40)==std::make_pair(uint32_t(850),true)&&p.Snapshot().pipboy.dialogueVariables.at((uint64_t(40)<<32)|2)==0,"package speech completes its package without sending SayToDone");
+ const auto priorVoiceToken=fo3audio::token;Check(p.QueueScriptSpeech(82,820,fo3player::PlayerRef),"queue disabled reference speech");fo3worldscript::Actions();fo3worldscript::SpeechTick();
+ Check(!p.ScriptActorTalking(82)&&fo3audio::token==priorVoiceToken,"disabled references cannot start ghost speech");
  Check(p.QueueScriptSpeech(81,820,fo3player::PlayerRef),"source Say selects non-actor TACT INFO");
  fo3worldscript::Actions();fo3worldscript::SpeechTick();
  Check(p.ScriptActorTalking(81)&&fo3audio::path=="sound/original.ogg","production TACT adapter delivers original speech without NPC mesh");
  fo3audio::completion=(uint64_t(fo3audio::token)<<1)|1;fo3worldscript::SpeechTick();
  Check(!p.ScriptActorTalking(81),"TACT speech releases on actual voice completion");
+ fo3pipdata::ResultScript reset,broken;reset.source="ResetPipboyManager\nForceRadioStationUpdate";broken.source="UnsupportedResetStep";
+ std::string resetError;Check(!p.PrepareDialogueTransaction(reset,broken,resetError),"failed reset transaction is private");fo3worldscript::Actions();Check(!pipboyResets&&!radioRefreshes,"failed scripts cannot reset presentation");
+ Check(p.ExecuteDialogueResult(reset,resetError),"queue original manager refresh commands");fo3worldscript::Actions();Check(pipboyResets==1&&radioRefreshes==1,"post-commit refresh reaches real adapters");
  Check(p.SetPlayerScale(.4f),"scripted toddler scale");
  Check(p.MoveActorTo(fo3player::PlayerRef,10,{}),"player MoveTo marker accepted");
  Check(p.SetLocationSpecificLoadScreens(true),"location-only loading flag");

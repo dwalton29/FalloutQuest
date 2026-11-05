@@ -1022,6 +1022,8 @@ double gPipUpdateUs=0,gPipScreenDrawUs=0;
 uint64_t gPipScreenQueries=0;
 GLint gPipGain=-1;
 fo3vr::PipboyTracking gVrPipTracking;
+uint64_t gPipRadioRefresh=0;
+void RefreshFo3PipboyRadio(){++gPipRadioRefresh;gPipMenu.dirty=true;}
 void ResetFo3Pipboy(){gVrPipTracking.Reset();gPipActivation.Reset();gPipSolved=false;gPipMenu.dirty=true;}
 bool Fo3PipboyFocus(){return gPipActivation.Focus();}
 float gQ210Head[4]{0.0f, 0.0f, 0.0f, 0.0f};

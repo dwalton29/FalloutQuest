@@ -53,7 +53,7 @@ static bool Value(const fo3pipdata::Condition& c,const Context& ctx,float& value
       who.reference=c.reference;who.base=ref->second.base;
     }else {
       auto ref=d.targets.find(c.reference);
-      if(ref==d.targets.end()||(c.function!=46&&c.function!=5&&c.function!=65&&c.function!=522&&c.function!=71&&c.function!=73)){error="reference context unavailable";return false;}
+      if(ref==d.targets.end()||(c.function!=46&&c.function!=5&&c.function!=65&&c.function!=522&&c.function!=192&&c.function!=71&&c.function!=73)){error="reference context unavailable";return false;}
       who.reference=c.reference;who.base=ref->second.base;
     }
   }}
@@ -134,6 +134,7 @@ static bool Value(const fo3pipdata::Condition& c,const Context& ctx,float& value
     if(package==d.packages.end()){error="service package missing";return false;}
     value=(package->second.flags&1)!=0&&!who.combat;return true;
   }
+  case 192:{bool ignored=false;if(!p.GetIgnoreCrime(who.reference,ignored)){error="crime-ignore actor unavailable";return false;}value=ignored;return true;}
   case 286:if(!pc){error="NPC sneak posture unavailable";return false;}value=p.IsSneaking();return true;
   case 289:value=who.combat;return true;
   case 546:if(!d.quests.count(c.a)){error="quest unavailable";return false;}value=quest!=state.pipboy.quests.end()&&quest->second.status!=fo3pipdata::Completion::Active;return true;

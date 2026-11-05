@@ -604,7 +604,7 @@ assert 'default:return nullptr;' in master_match
 assert master_match.index('if(seen.size()!=wanted.size())')<master_match.index('out=std::move(next);')
 assert 'e.origin.kind==Kind::ReferenceEvent||e.origin.kind==Kind::DialogueInfo' in master_match
 assert 'owners[e.owner].push_back(n)' in master_match
-assert 'pass==0&&info&&type!="ACHR"&&type!="ACRE"' in master_match
+assert 'pass==0&&(info||programs[index].origin.kind==Kind::PackageResult)&&type!="ACHR"&&type!="ACRE"' in master_match
 assert 'programs[index].origin.kind==Kind::ReferenceEvent&&association!=' in master_match
 assert 'requiredQuests[info.quest].push_back(index);requiredSpeakers[index]=info.speaker;' in master_match
 assert 'Same(programs[index].questConditions,quest->second.conditions)' in master_match

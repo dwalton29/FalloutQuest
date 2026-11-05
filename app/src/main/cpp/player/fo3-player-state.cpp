@@ -1223,6 +1223,17 @@ bool Player::SetPlayerControls(uint32_t mask,bool enable){
   const uint8_t next=enable?(state_.disabledControls&~mask):(state_.disabledControls|mask);
   if(next!=state_.disabledControls){state_.disabledControls=next;++revision_;}return true;
 }
+bool Player::GetIgnoreCrime(uint32_t reference,bool& ignored)const{
+  if(reference!=PlayerRef&&!catalog_->actorPlacements.count(reference))return false;
+  ignored=state_.ignoredCrimeActors.count(reference)!=0;return true;
+}
+bool Player::SetIgnoreCrime(uint32_t reference,bool ignored){
+  bool previous=false;if(!GetIgnoreCrime(reference,previous))return false;
+  if(previous==ignored)return true;
+  if(ignored){if(state_.ignoredCrimeActors.size()>=10000)return false;state_.ignoredCrimeActors.insert(reference);}
+  else state_.ignoredCrimeActors.erase(reference);
+  ++revision_;return true;
+}
 bool Player::SetRestrained(uint32_t reference,bool restrained){
   if(reference!=PlayerRef&&!catalog_->actorPlacements.count(reference))return false;
   const bool changed=restrained?state_.restrainedActors.insert(reference).second:state_.restrainedActors.erase(reference)!=0;
@@ -1411,7 +1422,8 @@ bool Player::Save(const std::string &path, std::string &error) const {
     payload.push_back(l.forceFailures);payload.push_back(l.rewarded?1:0);}
   // Optional RFE1 after the v14 lock tail. Empty overlays keep existing v14
   // bytes unchanged; older supported saves do not require this extension.
-  const bool hasLife=state_.playerScale!=1||state_.playerRace||state_.playerToddler||state_.autoDisplayObjectives||state_.movie.serial;
+  const bool hasCrime=!state_.ignoredCrimeActors.empty();
+  const bool hasLife=hasCrime||state_.playerScale!=1||state_.playerRace||state_.playerToddler||state_.autoDisplayObjectives||state_.movie.serial;
   const bool hasMenus=hasLife||state_.deferredAppearanceOwner||state_.specialMenuOwner;
   const bool hasIdentity=hasMenus||state_.playerSex!=2||!state_.playerName.empty()||state_.nameMenuOwner||!state_.nameDraft.empty();
   const bool hasNewGame=hasIdentity||state_.noActivationSound||state_.inCharGen||state_.locationSpecificLoadScreens||state_.playerMove.marker;
@@ -1641,7 +1653,13 @@ bool Player::Save(const std::string &path, std::string &error) const {
     Put32(payload,uint32_t(state_.playerToddler)|(uint32_t(state_.autoDisplayObjectives)<<1));PutFloat(payload,state_.playerScale);Put32(payload,state_.playerRace);
     Put64(payload,movie.serial);Put32(payload,movie.owner);Put32(payload,movie.flags);Put32(payload,uint32_t(movie.path.size()));payload.insert(payload.end(),movie.path.begin(),movie.path.end());
   }
-  Put32(bytes, hasLife ? 31 : hasMenus ? 30 : hasIdentity ? 29 : hasNewGame ? 28 : hasFactionRanks ? 27 : hasBodyDamage ? 26 : hasCorpsePoses ? 25 : hasDailyInfos ? 24 : hasScriptPackages ? 23 : hasScriptOverrides ? 22 : hasActorVariables ? 21 : hasDoorStates ? 20 : hasDebugPoints ? 19 : hasLevelAdvancement ? 18 : hasCompletionState ? 17 :
+  if(hasCrime){
+    if(state_.ignoredCrimeActors.size()>10000){error="Too many crime-ignore actors";return false;}
+    Put32(payload,0x31524349);Put32(payload,uint32_t(state_.ignoredCrimeActors.size())); // ICR1
+    std::vector<uint32_t> refs(state_.ignoredCrimeActors.begin(),state_.ignoredCrimeActors.end());std::sort(refs.begin(),refs.end());
+    for(uint32_t ref:refs){if(ref!=PlayerRef&&!catalog_->actorPlacements.count(ref)){error="Invalid crime-ignore actor";return false;}Put32(payload,ref);}
+  }
+  Put32(bytes, hasCrime ? 32 : hasLife ? 31 : hasMenus ? 30 : hasIdentity ? 29 : hasNewGame ? 28 : hasFactionRanks ? 27 : hasBodyDamage ? 26 : hasCorpsePoses ? 25 : hasDailyInfos ? 24 : hasScriptPackages ? 23 : hasScriptOverrides ? 22 : hasActorVariables ? 21 : hasDoorStates ? 20 : hasDebugPoints ? 19 : hasLevelAdvancement ? 18 : hasCompletionState ? 17 :
       hasMerchantVisits ? 16 : hasPlayerAttributeOverrides ? 15 : 14);
   Put32(bytes, catalog_->fingerprint);
   Put32(bytes, static_cast<uint32_t>(payload.size()));
@@ -1701,7 +1719,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
   const auto *h = bytes.data();
   const auto version = fo3esm::ReadU32(h + 4);
   if (std::memcmp(h, "FQPS", 4) ||
-      (version < 1 || version > 31))
+      (version < 1 || version > 32))
     return fail("Unsupported player save format");
   if (fo3esm::ReadU32(h + 8) != catalog_->fingerprint)
     return fail("Player save belongs to different game definitions");
@@ -2217,9 +2235,17 @@ bool Player::Restore(const std::string &path, std::string &error) {
         const auto flags=fo3esm::ReadU32(p+at+4);next.playerScale=fo3esm::ReadF32(p+at+8);next.playerRace=fo3esm::ReadU32(p+at+12);
         next.playerToddler=flags&1;next.autoDisplayObjectives=flags&2;next.movie.serial=U64(p+at+16);next.movie.owner=fo3esm::ReadU32(p+at+24);
         const auto movieFlags=fo3esm::ReadU32(p+at+28),length=fo3esm::ReadU32(p+at+32);at+=36;
-        if(flags>3||!fo3scale::Valid(next.playerScale)||(next.playerRace&&!catalog_->pipboy.raceAges.count(next.playerRace))||movieFlags>15||length>240||payload.size()-at!=length)return fail("Invalid player lifecycle state");
+        if(flags>3||!fo3scale::Valid(next.playerScale)||(next.playerRace&&!catalog_->pipboy.raceAges.count(next.playerRace))||movieFlags>15||length>240||(version>=32?payload.size()-at<length:payload.size()-at!=length))return fail("Invalid player lifecycle state");
         next.movie.flags=uint8_t(movieFlags);next.movie.path.assign(reinterpret_cast<const char*>(p+at),length);at+=length;
         if((next.movie.owner&&(next.nameMenuOwner||next.specialMenuOwner||next.deferredAppearanceOwner||!next.movie.serial||!fo3movie::ValidPath(next.movie.path)||(!catalog_->pipboy.quests.count(next.movie.owner)&&!catalog_->references.count(next.movie.owner))))||(!next.movie.owner&&!next.movie.path.empty()))return fail("Invalid saved movie request");
+      }
+      if(version>=32){
+        if(payload.size()-at<8||fo3esm::ReadU32(p+at)!=0x31524349)return fail("Missing crime-ignore state");
+        const uint32_t count=fo3esm::ReadU32(p+at+4);at+=8;
+        if(count>10000||payload.size()-at!=size_t(count)*4)return fail("Invalid crime-ignore count");
+        for(uint32_t n=0;n<count;++n){const uint32_t ref=fo3esm::ReadU32(p+at);at+=4;
+          if((ref!=PlayerRef&&!catalog_->actorPlacements.count(ref))||!next.ignoredCrimeActors.insert(ref).second)return fail("Invalid crime-ignore actor");
+        }
       }
       if(at!=payload.size())return fail("Trailing player save data");
     }

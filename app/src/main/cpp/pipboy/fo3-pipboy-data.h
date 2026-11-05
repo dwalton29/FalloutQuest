@@ -189,6 +189,8 @@ struct PackageDefinition {
   std::vector<uint32_t> idleAnimations;
   std::string editor;
   uint32_t flags=0,combatStyle=0;
+  uint32_t dialogueTopic=0,dialogueType=0,dialogueFlags=0;
+  bool dialogueValid=true;
   bool combatStyleValid=true;
   uint8_t type=0xff;
   uint16_t behaviorFlags=0,typeFlags=0;

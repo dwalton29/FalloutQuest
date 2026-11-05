@@ -122,8 +122,22 @@ bool Player::StopQuest(uint32_t id) {
 }
 bool Player::SetGlobalValue(uint32_t id,float value) {
   if(!catalog_->globals.count(id)||!std::isfinite(value))return false;
-  // Clock globals have canonical clock setters; do not shadow those systems.
-  if(id==catalog_->hourGlobal||id==catalog_->dayGlobal||id==catalog_->monthGlobal||id==catalog_->yearGlobal||id==catalog_->daysPassedGlobal||id==catalog_->timeScaleGlobal)return false;
+  // Route authored calendar assignments to the same clock used by PACKs,
+  // lighting and save data, rather than creating a shadow mutable global.
+  if(id==catalog_->hourGlobal){
+    if(value<0||value>=24)return false;
+    if(state_.gameHour!=value){state_.gameHour=value;++revision_;}return true;
+  }
+  if(id==catalog_->yearGlobal||id==catalog_->monthGlobal||id==catalog_->dayGlobal){
+    if(value<0||value>9999||std::floor(value)!=value)return false;
+    auto date=fo3schedule::Calendar{int(state_.gameYear),int(state_.gameMonth),int(state_.gameDay)};
+    if(id==catalog_->yearGlobal)date.year=int(value);else if(id==catalog_->monthGlobal)date.month=int(value);else date.day=int(value);
+    if(!fo3schedule::Valid(date))return false;
+    if(date.year!=int(state_.gameYear)||date.month!=int(state_.gameMonth)||date.day!=int(state_.gameDay)){
+      state_.gameYear=uint32_t(date.year);state_.gameMonth=uint32_t(date.month);state_.gameDay=uint32_t(date.day);++revision_;
+    }return true;
+  }
+  if(id==catalog_->daysPassedGlobal||id==catalog_->timeScaleGlobal)return false;
   state_.pipboy.mutableGlobals[id]=value;++revision_;return true;
 }
 bool Player::SetObjective(uint32_t id, uint32_t index, bool displayed,

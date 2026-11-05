@@ -218,8 +218,10 @@ static void InventoryDamagePersistence(bool finite) {
   assert(p.Snapshot().actors.at(101).hostile==100);
   const float before=p.Health();assert(p.ApplyAttack(100,10,0x14,20)&&p.Health()==before-20);
   assert(!p.ApplyAttack(100,10,100,20)&&!p.ApplyAttack(100,10,101,NAN));
-  c.weapons.actors[201].flags=2;Player essential(c);assert(essential.PrepareActorInventory(101));
+  c.weapons.actors[201].flags=2;c.actorPlacements[101].base=201;Player essential(c);assert(essential.PrepareActorInventory(101));
+  assert(essential.SetIgnoreCrime(101,true));
   assert(essential.ApplyAttack(0x14,10,101,10000)&&essential.ActorHealth(101)==1&&!essential.CanLootContainer(101));
+  assert(essential.Snapshot().actors.at(101).hostile==0x14); // IgnoreCrime does not remove direct self-defence.
   ActorState a=p.Snapshot().actors.at(100);a.position={123,456,789};a.yaw=.7f;a.package=77;a.sequence=4;a.packageWaitSeconds=7.5f;
   assert(p.UpdateActor(100,a));a.position[1]=NAN;assert(!p.UpdateActor(100,a));a=p.Snapshot().actors.at(100);a.packageWaitSeconds=-1;assert(!p.UpdateActor(100,a));
   const std::string path="/tmp/fq-npc-combat-"+std::to_string(getpid());std::string error;assert(p.Save(path,error));

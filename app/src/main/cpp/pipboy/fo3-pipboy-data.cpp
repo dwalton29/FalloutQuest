@@ -480,6 +480,14 @@ void Decode(Definitions &d, const std::string &t, uint32_t id, uint32_t flags,
     location(Find(s,"PLD2"),package.location2);
     location(Find(s,"PTDT"),package.target);
     location(Find(s,"PTD2"),package.target2);
+    if(auto dialogue=Find(s,"PKDD")){
+      package.dialogueValid=dialogue->n==12||dialogue->n==16||dialogue->n==20||dialogue->n==24;
+      if(package.dialogueValid){
+        const float fov=fo3esm::ReadF32(dialogue->p);package.dialogueTopic=U(dialogue,4);package.dialogueFlags=U(dialogue,8);
+        package.dialogueType=dialogue->n>=20?U(dialogue,16):0;
+        package.dialogueValid=std::isfinite(fov)&&fov>=0&&fov<=360&&package.dialogueType<=1&&(package.dialogueFlags&~0x101u)==0;
+      }
+    }
     if(auto style=Find(s,"CNAM")){package.combatStyleValid=style->n==4;if(package.combatStyleValid)package.combatStyle=U(style);}
     if(auto repeat=Find(s,"PKPT");repeat&&repeat->n)package.patrolRepeat=repeat->p[0]!=0;
     if(auto distance=Find(s,"PKE2");distance&&distance->n==4){package.escortDistance=U(distance);package.escortDistanceValid=true;}

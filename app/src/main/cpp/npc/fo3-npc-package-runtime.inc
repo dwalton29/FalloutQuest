@@ -565,7 +565,7 @@ static const fo3pipdata::PackageDefinition* Q240SelectPackage(
     if(package.type==10&&(package.location.valid||!package.target.valid||package.target.type!=0||package.target.radius<=0||package.procedureActions)){
       Q240AiLogOnce(actor.source.refFormId,packageId,"Flee requires an actor reference, positive minimum distance, no start location or procedure action");continue;
     }
-    if(package.type==15&&(!package.target.valid||package.target.type!=0||!package.target.value||package.target2.valid||package.location2.valid||package.procedureActions||package.otherProcedureScript)){
+    if(package.type==15&&(!package.dialogueValid||!package.target.valid||package.target.type!=0||!package.target.value||package.target2.valid||package.location2.valid||package.procedureActions||package.otherProcedureScript)){
       Q240AiLogOnce(actor.source.refFormId,packageId,"Dialogue AI requires one real actor target and no unsupported procedure actions");continue;
     }
     if(!package.combatStyleValid){Q240AiLogOnce(actor.source.refFormId,packageId,"malformed package combat style");continue;}
@@ -1327,6 +1327,7 @@ static void Q240AdvanceNpcTalk(Q230ActorVisual& actor,const fo3pipdata::PackageD
     if(now<actor.aiRepathAt)return;
 #ifdef FO3_NPC_CHAT_REQUEST
     if(FO3_NPC_CHAT_REQUEST(actor.source.refFormId,p.target.value,now)){
+      actor.aiRepathAt=now+2.;
       Q6H_LOGI("NPC CONVERSATION BEGIN actor=%08X package=%08X listener=%08X",
         actor.source.refFormId,actor.aiPackage,p.target.value);
       return;

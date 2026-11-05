@@ -241,6 +241,9 @@ static void PackageDecodeTests() {
   assert(fragments.scripted&&!fragments.procedureActions&&!fragments.otherProcedureScript&&fragments.procedureIdles[0]==123);
   assert(fragments.procedureScripts[0].source=="RewardKarma 1"&&fragments.procedureScripts[0].header.size()==20&&fragments.procedureScripts[0].records.size()==2);
   assert(fragments.procedureScripts[1].compiled==std::vector<uint8_t>({1,2})&&fragments.procedureScripts[1].references==std::vector<uint32_t>({123}));
+  auto dialogue=payload;std::vector<uint8_t> pkdd(24);const float fov=100;std::memcpy(pkdd.data(),&fov,4);pkdd[4]=123;pkdd[16]=1;
+  sub(dialogue,"PKDD",pkdd);Decode(d,"PACK",111,0,dialogue,0,0,0);assert(d.packages.at(111).dialogueValid&&d.packages.at(111).dialogueTopic==123&&d.packages.at(111).dialogueType==1);
+  dialogue=payload;pkdd.resize(19);sub(dialogue,"PKDD",pkdd);Decode(d,"PACK",112,0,dialogue,0,0,0);assert(!d.packages.at(112).dialogueValid);
   std::vector<uint8_t> styled=payload;std::vector<uint8_t> styleId;put32(styleId,1234);sub(styled,"CNAM",styleId);Decode(d,"PACK",105,0,styled,0,0,0);assert(d.packages.at(105).combatStyleValid&&d.packages.at(105).combatStyle==1234);
   styled=payload;sub(styled,"CNAM",std::vector<uint8_t>(3,0));Decode(d,"PACK",106,0,styled,0,0,0);assert(!d.packages.at(106).combatStyleValid);
   styled=payload;sub(styled,"CNAM",std::vector<uint8_t>(4,0));Decode(d,"PACK",107,0,styled,0,0,0);assert(d.packages.at(107).combatStyleValid&&!d.packages.at(107).combatStyle);

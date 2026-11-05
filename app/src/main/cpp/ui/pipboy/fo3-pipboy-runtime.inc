@@ -158,7 +158,7 @@ void UpdateFo3Pipboy(uint64_t frame, double now, const float *headPose,
     static double lastContext = 0, lastPan = 0;
     static uint32_t lastRadio = UINT32_MAX, lastNote = 0, lastMapCell = 0;
     static uint64_t lastMapGeneration = UINT64_MAX,
-                    lastRadioRevision = UINT64_MAX;
+                    lastRadioRevision = UINT64_MAX,lastRadioRefresh=UINT64_MAX;
     const float gameX = (gExteriorStreamingActiveQ1890 ? gExteriorOriginXQ1890
                                                        : gSceneCenterXQ1730) +
                         headPose[12] * FO3_UNITS_PER_METRE;
@@ -168,7 +168,9 @@ void UpdateFo3Pipboy(uint64_t frame, double now, const float *headPose,
     auto &defs = session->player.Definitions().pipboy;
     const uint32_t world =
         gExteriorWorldspaceQ1890;
-    if (now - lastContext > .5) {
+    const bool radioRefresh=lastRadioRefresh!=gPipRadioRefresh;
+    if (now - lastContext > .5||radioRefresh) {
+      lastRadioRefresh=gPipRadioRefresh;
       lastContext = now;
       auto previous = gPipMenu.map.location;
       gPipMenu.map.location = {gCurrentCellFormId, world, gameX, gameY,
@@ -306,7 +308,7 @@ void UpdateFo3Pipboy(uint64_t frame, double now, const float *headPose,
       fo3audio::Radio(tuned, defs, session->player.Snapshot().pipboy);
       lastRadioRevision = session->player.Revision();
     }
-    if (tuned && lastRadioRevision != session->player.Revision()) {
+    if (tuned && (lastRadioRevision != session->player.Revision()||radioRefresh)) {
       lastRadioRevision = session->player.Revision();
       fo3audio::RadioState(session->player.Snapshot().pipboy);
     }

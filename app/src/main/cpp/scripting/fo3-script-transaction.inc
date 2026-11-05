@@ -128,7 +128,7 @@ bool Player::PackageEventNeeded(uint32_t reference,uint32_t package,bool complet
   const auto old=state_.actorPackageEvents.find(reference);
   if(old!=state_.actorPackageEvents.end()&&old->second.first==package&&(!completed||old->second.second))return false;
   auto actions=[&](uint32_t id){const auto p=catalog_->pipboy.packages.find(id);if(p==catalog_->pipboy.packages.end())return false;
-    if(p->second.procedureActions||p->second.otherProcedureScript)return true;
+    if(p->second.procedureActions||p->second.otherProcedureScript||p->second.dialogueType==1)return true;
     for(size_t n=0;n<3;++n)if(p->second.procedureIdles[n]||!p->second.procedureScripts[n].source.empty()||!p->second.procedureScripts[n].compiled.empty())return true;
     return false;};
   if(!actions(package)&&!(old!=state_.actorPackageEvents.end()&&actions(old->second.first))&&

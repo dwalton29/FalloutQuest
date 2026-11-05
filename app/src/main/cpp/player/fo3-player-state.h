@@ -209,6 +209,7 @@ struct State {
   std::array<float,6> bodyDamage{};
   uint8_t disabledControls=0;
   std::unordered_set<uint32_t> restrainedActors;
+  std::unordered_set<uint32_t> ignoredCrimeActors;
   // One authoritative 24-hour clock shared by lighting and authored AI PACKs.
   // GameDaysPassed tracks midnight boundaries; dated calendar gates remain unsupported.
   float gameHour = 12.0f;
@@ -431,6 +432,8 @@ public:
   bool ChangeActorValueDamage(uint32_t reference,uint32_t value,float amount,bool restore);
   float HealthPercentage(uint32_t reference) const;
   bool SetPlayerControls(uint32_t mask,bool enable);
+  bool SetIgnoreCrime(uint32_t reference,bool ignored);
+  bool GetIgnoreCrime(uint32_t reference,bool& ignored)const;
   bool PlayerFemale()const{return state_.playerSex<2?state_.playerSex==1:catalog_->pipboy.playerFemale;}
   uint32_t PlayerRace()const;
   float PlayerTrackingScale()const;
@@ -596,7 +599,7 @@ public:
   bool ScriptAnimationPlaying(uint32_t reference,bool& playing) const;
   bool QueueScriptPlayGroup(uint32_t reference,const std::string& group,uint32_t flags);
   bool QueueScriptAction(fo3script::Action action);
-  bool QueueScriptSpeech(uint32_t reference,uint32_t topic,uint32_t target,bool conversation=false,bool forceSubtitle=false);
+  bool QueueScriptSpeech(uint32_t reference,uint32_t topic,uint32_t target,bool conversation=false,bool forceSubtitle=false,uint32_t package=0);
   bool PollScriptAction(fo3script::Action& action);
   double ScriptSecondsPassed() const {return scriptElapsedSeconds_;}
   std::vector<std::pair<uint32_t,bool>> ScriptTriggerChanges() const;

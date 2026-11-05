@@ -152,6 +152,9 @@ bool CompileResult(const fo3pipdata::Definitions& d,const fo3pipdata::ResultScri
     else if(op=="enableplayercontrols"||op=="disableplayercontrols"){
       cmd.type=CommandType::PlayerControls;cmd.value=op=="enableplayercontrols";cmd.index=127;
       for(unsigned n=0;n<7;++n){if(!(in>>a)){in.clear();break;}float flag;if(!number(a,flag)||(flag!=0&&flag!=1)){error="invalid player controls flag";return false;}if(flag==0)cmd.index&=~(1u<<n);}
+    }else if(op=="ignorecrime"||(op.size()>12&&op.substr(op.size()-12)==".ignorecrime")){
+      const auto dot=op.find('.');cmd.type=CommandType::IgnoreCrime;cmd.form=dot==std::string::npos?owner:form(op.substr(0,dot));
+      if(!cmd.form||!(in>>a)||!number(a,cmd.value)||(cmd.value!=0&&cmd.value!=1)){error="invalid IgnoreCrime";return false;}
     }else if(op=="setrestrained"||(op.size()>14&&op.substr(op.size()-14)==".setrestrained")){
       const auto dot=op.find('.');cmd.type=CommandType::Restrain;cmd.form=dot==std::string::npos?owner:form(op.substr(0,dot));
       if(!cmd.form||!(in>>a)||!number(a,cmd.value)||(cmd.value!=0&&cmd.value!=1)){error="invalid SetRestrained";return false;}
@@ -311,9 +314,9 @@ bool CompileResult(const fo3pipdata::Definitions& d,const fo3pipdata::ResultScri
     } else if(op=="rewardkarma") {
       cmd.type=CommandType::RewardKarma;
       if(!(in>>a)||!number(a,cmd.value)){error="invalid RewardKarma";return false;}
-    } else if(op.size()>4&&op.compare(op.size()-4,4,".evp")==0) {
-      cmd.type=CommandType::EvaluatePackage;
-      cmd.form=form(op.substr(0,op.size()-4));
+    } else if(op=="evp"||op=="evaluatepackage"||(op.find('.')!=std::string::npos&&(op.substr(op.find('.')+1)=="evp"||op.substr(op.find('.')+1)=="evaluatepackage"))) {
+      cmd.type=CommandType::EvaluatePackage;const auto dot=op.find('.');
+      cmd.form=dot==std::string::npos?owner:form(op.substr(0,dot));
       if(!cmd.form){error="unresolved EVP reference";return false;}
     } else if(op=="playgroup"||(op.size()>10&&op.substr(op.size()-10)==".playgroup")){
       cmd.type=CommandType::PlayGroup;
@@ -352,6 +355,8 @@ bool CompileResult(const fo3pipdata::Definitions& d,const fo3pipdata::ResultScri
       if(in>>b){if(b!="0"&&b!="1"){error="invalid PlaySound wait flag";return false;}cmd.index=uint32_t(b=="1");}
       in.clear();
     } else if(op=="autosave")cmd.type=CommandType::AutoSave;
+    else if(op=="resetpipboymanager")cmd.type=CommandType::PipboyReset;
+    else if(op=="forceradiostationupdate")cmd.type=CommandType::RadioRefresh;
     else if(op=="pipboyradiooff")cmd.type=CommandType::RadioOff;
     else if(op=="player.removeallitems")cmd.type=CommandType::RemoveAllItems;
     else if(op=="player.equipitem"||op=="player.unequipitem"){

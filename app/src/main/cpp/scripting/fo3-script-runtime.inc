@@ -73,6 +73,11 @@ class Expression {
       if(!p.ScriptInSameCell(id,same,error))return false;
       value=same;return true;
     }
+    if(query=="getignorecrime"){
+      const auto id=dot==std::string::npos?owner:form(t.substr(0,dot));bool ignored=false;
+      if(!p.GetIgnoreCrime(id,ignored))return Fail("crime-ignore actor unavailable");
+      value=ignored;return true;
+    }
     if(query=="gettalkedtopc"){
       const auto id=dot==std::string::npos?owner:form(t.substr(0,dot));value=p.Snapshot().pipboy.talkedActors.count(id);return true;
     }
@@ -476,6 +481,7 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
       break;
     case C::EnableControls:ok=SetPlayerControls(127,true);break;
     case C::PlayerControls:ok=SetPlayerControls(c.index,c.value!=0);break;
+    case C::IgnoreCrime:ok=SetIgnoreCrime(c.form,c.value!=0);break;
     case C::Restrain:ok=SetRestrained(c.form,c.value!=0);break;
     case C::StartQuest:ok=StartQuest(c.form);break;
     case C::StopQuest:ok=StopQuest(c.form);break;
@@ -504,6 +510,7 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
       break;
     case C::RemoveAllItems:ok=ScriptRemoveAllItems();break;
     case C::EquipItem:case C::UnequipItem:ok=ScriptEquipItem(c.form,c.type==C::EquipItem);break;
+    case C::PipboyReset:case C::RadioRefresh:{fo3script::Action action;action.kind=c.type==C::PipboyReset?fo3script::ActionKind::PipboyReset:fo3script::ActionKind::RadioRefresh;ok=QueueScriptAction(std::move(action));break;}
     case C::RadioOff:ok=TuneRadio(0);break;
     case C::AutoSave:{fo3script::Action action;action.kind=fo3script::ActionKind::AutoSave;ok=QueueScriptAction(std::move(action));break;}
     case C::DoorState:ok=ScriptDoorState(c.form,c.value!=0);break;
@@ -542,7 +549,7 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
     case C::AddTopic:if(!catalog_->pipboy.dialogueTopics.count(c.form))ok=false;else if(state_.pipboy.knownTopics.insert(c.form).second)++revision_;break;
     default:ok=false;break;
     }
-    if(!ok){if(error.empty())error="script command rejected by canonical Player API";return false;}
+    if(!ok){if(error.empty())error="script command rejected by canonical Player API (type="+std::to_string(int(c.type))+", form="+std::to_string(c.form)+", value="+std::to_string(c.value)+")";return false;}
   }
   return true;
 }
@@ -1036,7 +1043,12 @@ bool Player::ScriptPackage(uint32_t reference,uint32_t package,bool add){
 }
 
 namespace fo3player {
-bool Player::QueueScriptSpeech(uint32_t reference,uint32_t topic,uint32_t target,bool conversation,bool forceSubtitle){
+bool Player::QueueScriptSpeech(uint32_t reference,uint32_t topic,uint32_t target,bool conversation,bool forceSubtitle,uint32_t package){
+  if(package){
+    const auto definition=catalog_->pipboy.packages.find(package);
+    if(definition==catalog_->pipboy.packages.end()||!definition->second.dialogueValid||definition->second.dialogueType!=1||
+       (definition->second.dialogueTopic&&definition->second.dialogueTopic!=topic)||definition->second.target.value!=target)return false;
+  }
   static thread_local unsigned selecting=0;
   if(selecting>=8)return false;
   struct Guard{unsigned& depth;Guard(unsigned& d):depth(d){++depth;}~Guard(){--depth;}} guard(selecting);
@@ -1056,7 +1068,7 @@ bool Player::QueueScriptSpeech(uint32_t reference,uint32_t topic,uint32_t target
   // A legitimate empty selection is a no-op. An unsupported preflight must
   // roll back the caller too, rather than saving its waiting flags without speech.
   if(!selected)return !unsupported;
-  fo3script::Action action;action.kind=conversation?fo3script::ActionKind::Conversation:fo3script::ActionKind::SayTo;action.reference=reference;action.form=topic;action.flags=target;action.info=selected->id;action.forceSubtitle=forceSubtitle;
+  fo3script::Action action;action.kind=conversation?fo3script::ActionKind::Conversation:fo3script::ActionKind::SayTo;action.reference=reference;action.form=topic;action.flags=target;action.info=selected->id;action.forceSubtitle=forceSubtitle;action.package=package;
   return QueueScriptAction(std::move(action));
 }
 }
