@@ -442,6 +442,8 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
     bool ok=true;
     switch(c.type) {
     case C::Return:return true;
+    case C::CharacterGeneration:ok=SetCharacterGeneration(c.value!=0);break;
+    case C::LocationLoadScreens:ok=SetLocationSpecificLoadScreens(c.value!=0);break;
     case C::Kill:ok=KillActor(c.form);break;
     case C::MoveTo:ok=MoveActorTo(c.form,c.index,c.offset);break;
     case C::ResetHealth:ok=ResetActorHealth(c.form);break;
@@ -455,7 +457,7 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
     case C::Look:{fo3pipdata::Location location;ok=ScriptReferenceLocation(c.form,location)&&(!c.index||ScriptReferenceLocation(c.index,location));if(ok){fo3script::Action action;action.kind=fo3script::ActionKind::Look;action.reference=c.form;action.form=c.index;ok=QueueScriptAction(std::move(action));}break;}
     case C::ScriptPackage:ok=ScriptPackage(c.form,c.index,c.value!=0);break;
     case C::StartConversation:ok=QueueScriptSpeech(c.form,uint32_t(c.variable),c.index,true);break;
-    case C::SayTo:ok=QueueScriptSpeech(c.form,uint32_t(c.variable),c.index);break;
+    case C::SayTo:ok=QueueScriptSpeech(c.form,uint32_t(c.variable),c.index,false,c.value!=0);break;
     case C::Variable:case C::Global:
       ok=fo3script::Expression(*this,owner,c.expression,error,scriptId).Evaluate(value);
       if(ok)ok=c.type==C::Variable?SetDialogueVariable(c.variable,value):SetGlobalValue(c.form,value);
@@ -514,6 +516,9 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
     case C::Unavailable:error="unsupported executed command: "+c.expression;return false;
     case C::DefaultActivate:ok=QueueScriptDefaultActivate(c.form,c.index?c.index:scriptActivator_);break;
     case C::PlayGroup:ok=QueueScriptPlayGroup(c.form,c.expression,c.index);break;
+    case C::NoActivationSound:ok=SetNoActivationSound(c.form);break;
+    case C::ScreenBlood:{fo3script::Action action;action.kind=fo3script::ActionKind::ScreenBlood;action.flags=uint32_t(c.value);ok=QueueScriptAction(std::move(action));break;}
+    case C::RemoveImageModifier:{fo3script::Action action;action.kind=fo3script::ActionKind::RemoveImageModifier;action.form=c.form;ok=QueueScriptAction(std::move(action));break;}
     case C::ImageModifier:{fo3script::Action action;action.kind=fo3script::ActionKind::ImageModifier;action.reference=owner;action.form=c.form;ok=QueueScriptAction(std::move(action));break;}
     case C::PlaySound:ok=QueueScriptSound(c.form);break;
     case C::AddTopic:if(!catalog_->pipboy.dialogueTopics.count(c.form))ok=false;else if(state_.pipboy.knownTopics.insert(c.form).second)++revision_;break;
@@ -661,7 +666,7 @@ bool Player::RewardKarma(float amount) {
 }
 bool Player::ReevaluatePackage(uint32_t reference){
   const auto p=catalog_->actorPlacements.find(reference);
-  if(p==catalog_->actorPlacements.end()||!catalog_->weapons.actors.count(p->second.base))return false;
+  if(reference!=PlayerRef&&(p==catalog_->actorPlacements.end()||!catalog_->weapons.actors.count(p->second.base)))return false;
   // Q240's existing PackageRevision cache is invalidated by this revision.
   // The actual authored PACK selection happens in Q240SelectPackage.
   ++revision_;return true;
@@ -927,12 +932,18 @@ bool Player::ScriptReferenceLocation(uint32_t id,fo3pipdata::Location& out)const
 }
 bool Player::ScriptPackage(uint32_t reference,uint32_t package,bool add){
   const auto placed=catalog_->actorPlacements.find(reference);
-  if(placed==catalog_->actorPlacements.end()||!catalog_->weapons.actors.count(placed->second.base)||!catalog_->pipboy.packages.count(package))return false;
+  if((reference!=PlayerRef&&(placed==catalog_->actorPlacements.end()||!catalog_->weapons.actors.count(placed->second.base)))||(add&&!catalog_->pipboy.packages.count(package)))return false;
+  if(reference==PlayerRef&&add){
+    const auto& definition=catalog_->pipboy.packages.at(package);
+    if(definition.type!=6||definition.idleAnimations.empty()||definition.scripted)return false;
+  }
   if(!add&&!state_.scriptPackages.count(reference))return true;
   if(add&&!state_.scriptPackages.count(reference)&&state_.scriptPackages.size()>=10000)return false;
   if(add&&state_.scriptPackages.count(reference)){const auto& list=state_.scriptPackages.at(reference);if(list.size()>=128&&std::find(list.begin(),list.end(),package)==list.end())return false;}
   auto& packages=state_.scriptPackages[reference];
-  const auto old=packages;packages.erase(std::remove(packages.begin(),packages.end(),package),packages.end());
+  const auto old=packages;
+  if(!add&&!package){state_.scriptPackages.erase(reference);++revision_;++scriptEffectRevision_;return ReevaluatePackage(reference);}
+  packages.erase(std::remove(packages.begin(),packages.end(),package),packages.end());
   if(add)packages.insert(packages.begin(),package);
   if(packages==old)return true;
   if(packages.empty())state_.scriptPackages.erase(reference);
@@ -941,7 +952,7 @@ bool Player::ScriptPackage(uint32_t reference,uint32_t package,bool add){
 }
 
 namespace fo3player {
-bool Player::QueueScriptSpeech(uint32_t reference,uint32_t topic,uint32_t target,bool conversation){
+bool Player::QueueScriptSpeech(uint32_t reference,uint32_t topic,uint32_t target,bool conversation,bool forceSubtitle){
   static thread_local unsigned selecting=0;
   if(selecting>=8)return false;
   struct Guard{unsigned& depth;Guard(unsigned& d):depth(d){++depth;}~Guard(){--depth;}} guard(selecting);
@@ -961,7 +972,7 @@ bool Player::QueueScriptSpeech(uint32_t reference,uint32_t topic,uint32_t target
   // A legitimate empty selection is a no-op. An unsupported preflight must
   // roll back the caller too, rather than saving its waiting flags without speech.
   if(!selected)return !unsupported;
-  fo3script::Action action;action.kind=conversation?fo3script::ActionKind::Conversation:fo3script::ActionKind::SayTo;action.reference=reference;action.form=topic;action.flags=target;action.info=selected->id;
+  fo3script::Action action;action.kind=conversation?fo3script::ActionKind::Conversation:fo3script::ActionKind::SayTo;action.reference=reference;action.form=topic;action.flags=target;action.info=selected->id;action.forceSubtitle=forceSubtitle;
   return QueueScriptAction(std::move(action));
 }
 }

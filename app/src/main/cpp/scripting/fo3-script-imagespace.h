@@ -46,14 +46,14 @@ inline ImageModifier DecodeImageModifier(const std::vector<uint8_t>& payload){
       case 0x13:c=&m.contrastMult;break;case 'S':c=&m.contrastAdd;break;default:break;
     }
     if(c){if(!c->keys.empty()||!ReadImageCurve(b,n,dimensions,*c))ok=false;}
-  });m.valid=ok&&header&&std::isfinite(m.duration)&&m.duration>0&&(m.flags&1);return m;
+  });m.valid=ok&&header&&std::isfinite(m.duration)&&m.duration>0;return m;
 }
 struct ImagePresentation {
   std::array<float,4> fade{},tint{};float blur=0,saturation=1,brightness=1,contrast=1;
 };
 inline ImagePresentation SampleImageModifier(const ImageModifier& m,double elapsed){
-  ImagePresentation p;if(!m.valid||!std::isfinite(elapsed)||elapsed<0||elapsed>=m.duration)return p;
-  const float t=float(elapsed/m.duration);p.fade=m.fade.Sample(t);p.tint=m.tint.Sample(t);
+  ImagePresentation p;if(!m.valid||!std::isfinite(elapsed)||elapsed<0||((m.flags&1)&&elapsed>=m.duration))return p;
+  const float t=(m.flags&1)?float(elapsed/m.duration):0.f;p.fade=m.fade.Sample(t);p.tint=m.tint.Sample(t);
   p.blur=std::clamp(m.blur.Sample(t)[0],0.f,32.f);
   const std::array<float,4> one{1,1,1,1};
   p.saturation=std::clamp(m.saturationMult.Sample(t,one)[0]+m.saturationAdd.Sample(t)[0],0.f,10.f);
@@ -61,4 +61,28 @@ inline ImagePresentation SampleImageModifier(const ImageModifier& m,double elaps
   p.contrast=std::clamp(m.contrastMult.Sample(t,one)[0]+m.contrastAdd.Sample(t)[0],0.f,10.f);
   return p;
 }
+// Ordered independent modifiers: a static base remains until Remove, while
+// animated entries expire on their original duration. Reapplying restarts one.
+struct ImageStack {
+  struct Entry {uint32_t form;ImageModifier modifier;double started;};
+  std::vector<Entry> entries;
+  void Apply(uint32_t form,const ImageModifier& modifier,double now){
+    Remove(form);if(modifier.valid&&entries.size()<32)entries.push_back({form,modifier,now});
+  }
+  void Remove(uint32_t form){entries.erase(std::remove_if(entries.begin(),entries.end(),[&](const auto& e){return e.form==form;}),entries.end());}
+  ImagePresentation Sample(double now){
+    entries.erase(std::remove_if(entries.begin(),entries.end(),[&](const auto& e){return (e.modifier.flags&1)&&now-e.started>=e.modifier.duration;}),entries.end());
+    ImagePresentation result;
+    auto over=[](std::array<float,4>& dst,const std::array<float,4>& src){
+      const float a=std::clamp(src[3],0.f,1.f),b=std::clamp(dst[3],0.f,1.f),out=a+b*(1-a);
+      for(size_t c=0;c<3;++c)dst[c]=out>0?(src[c]*a+dst[c]*b*(1-a))/out:0;
+      dst[3]=out;
+    };
+    for(const auto& e:entries){const auto p=SampleImageModifier(e.modifier,now-e.started);
+      over(result.fade,p.fade);over(result.tint,p.tint);result.blur=std::max(result.blur,p.blur);
+      result.saturation*=p.saturation;result.brightness*=p.brightness;result.contrast*=p.contrast;
+    }return result;
+  }
+};
+
 }

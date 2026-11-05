@@ -65,8 +65,8 @@ inline void Bind(fo3menu::Layout &l, const Model &m) {
     break;
   case Page::ConfirmNew:
     message = "Start a new game? Your existing saves will be "
-              "kept.\nFalloutQuest currently starts at the Vault 101 cave; the "
-              "childhood sequence is not yet supported.";
+              "kept.\nBegin the original Vault 101 opening. Character creation "
+              "and the childhood sequence are still in development.";
     labels = {Label("sYes"), Label("sNo")};
     break;
   case Page::ConfirmQuit:

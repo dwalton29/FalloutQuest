@@ -98,6 +98,17 @@ std::unique_ptr<ScriptTransactionPlan> Player::PrepareDialogueInfoTransaction(
       (phase==DialogueScriptPhase::Begin||candidate.RunScript(authored.end,speaker,0,budget,e,0,std::move(end)));
   },error,capture==ScriptProgramCapture::EnteredPrograms);
 }
+std::unique_ptr<ScriptTransactionPlan> Player::PrepareNewGameTransaction(uint32_t quest,std::string& error) const {
+  if(!state_.pipboy.quests.empty()||state_.playerMove.marker){error="New Game requires a pristine session";return {};}
+  const auto found=catalog_->pipboy.quests.find(quest);
+  if(found==catalog_->pipboy.quests.end()||!found->second.script){error="Configured character-generation quest/script unavailable";return {};}
+  return PrepareScriptTransaction([=](Player& candidate,std::string& e){
+    if(!candidate.StartQuest(quest)){e="Cannot start configured character-generation quest";return false;}
+    if(!candidate.RunSourceEventDirect(found->second.script,"MenuMode",quest,0,e))return false;
+    if(!candidate.state_.playerMove.pending){e="Character-generation setup did not request a player MoveTo";return false;}
+    return true;
+  },error,true);
+}
 std::unique_ptr<ScriptTransactionPlan> Player::PrepareQuestStageTransaction(
     uint32_t quest,uint16_t stage,std::string& error,ScriptProgramCapture capture) const {
   return PrepareScriptTransaction([=](Player& candidate,std::string& e){

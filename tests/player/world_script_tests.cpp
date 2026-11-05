@@ -134,9 +134,10 @@ static void Synthetic(){
   doors.pipboy.scripts[301].source="Begin OnActivate\nif 1\nforceSave\nendif\nActivate\nEnd";doors.eventPrograms[301]=fo3script::ParseEvents(doors.pipboy.scripts[301]);
   Player unsupported(doors);Check(!unsupported.PrepareReferenceEventTransaction(30,"OnActivate",PlayerRef,error)&&!unsupported.PollScriptAction(action),"executed unsupported operation rejects entire event");
   // Image curves are sampled over the authored duration, not reduced to last keys.
-  fo3script::ImageModifier m;m.valid=true;m.duration=10;m.fade.keys={{0,{1,1,1,.8f}},{1,{1,1,1,0}}};m.blur.keys={{0,{2,0,0,0}},{1,{0,0,0,0}}};
+  fo3script::ImageModifier m;m.valid=true;m.flags=1;m.duration=10;m.fade.keys={{0,{1,1,1,.8f}},{1,{1,1,1,0}}};m.blur.keys={{0,{2,0,0,0}},{1,{0,0,0,0}}};
   auto image=fo3script::SampleImageModifier(m,5);Check(std::abs(image.fade[3]-.4f)<.001&&image.blur==1,"temporal modifier midpoint");
   Check(fo3script::SampleImageModifier(m,10).fade[3]==0,"modifier expires");
+  m.flags=0;Check(fo3script::SampleImageModifier(m,100).fade[3]>.79f,"static modifier remains at its authored base until removed");
 }
 static void Original(const char* path){
   const auto root="/tmp/fq-world-original-"+std::to_string(getpid());std::filesystem::create_directory(root);

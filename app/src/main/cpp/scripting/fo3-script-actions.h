@@ -1,10 +1,11 @@
 #pragma once
 #include "fo3-script-spatial.h"
 namespace fo3script {
-enum class ActionKind { PlayGroup, ImageModifier, DefaultActivate, SayTo, Look, Conversation };
+enum class ActionKind { PlayGroup, ImageModifier, RemoveImageModifier, ScreenBlood, DefaultActivate, SayTo, Look, Conversation };
 struct Action {
   ActionKind kind=ActionKind::PlayGroup;
   uint32_t reference=0,form=0,flags=0,info=0;
+  bool forceSubtitle=false;
   std::string group;
   double started=0;
 };

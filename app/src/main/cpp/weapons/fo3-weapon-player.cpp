@@ -458,10 +458,19 @@ bool Player::MoveActorTo(uint32_t reference,uint32_t destination,const std::arra
   // and rotation, then adds world-axis offsets. Canonical actor state already
   // persists across residency; it must change before any native pose is touched.
   const auto source=catalog_->pipboy.targets.find(reference),target=catalog_->pipboy.targets.find(destination);
-  if(reference==PlayerRef||destination==PlayerRef||source==catalog_->pipboy.targets.end()||
-     target==catalog_->pipboy.targets.end()||!catalog_->actorPlacements.count(reference)||
-     (source->second.flags&0x20u)||(target->second.flags&0x20u)||
+  if(destination==PlayerRef||(reference!=PlayerRef&&source==catalog_->pipboy.targets.end())||
+     target==catalog_->pipboy.targets.end()||(reference!=PlayerRef&&!catalog_->actorPlacements.count(reference))||
+     (reference!=PlayerRef&&(source->second.flags&0x20u))||(target->second.flags&0x20u)||
      !std::all_of(offset.begin(),offset.end(),[](float x){return std::isfinite(x);}))return false;
+  if(reference==PlayerRef){
+    const auto& p=target->second;if(!p.cell)return false;
+    PlayerMove move;move.marker=destination;move.cell=p.cell;move.world=p.world;
+    move.position={p.x,p.y,p.z};move.rotation={p.rx,p.ry,p.rz};move.pending=true;
+    const auto live=state_.actors.find(destination);
+    if(live!=state_.actors.end()){move.cell=live->second.cell;move.world=live->second.world;move.position=live->second.position;move.rotation={0,0,live->second.yaw};}
+    for(size_t n=0;n<3;++n)move.position[n]+=offset[n];
+    state_.playerMove=move;++revision_;return true;
+  }
   ActorState moved;const auto old=state_.actors.find(reference);
   if(old!=state_.actors.end())moved=old->second;
   moved.cell=target->second.cell;moved.world=target->second.world;

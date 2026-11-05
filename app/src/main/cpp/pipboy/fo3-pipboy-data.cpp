@@ -450,6 +450,7 @@ void Decode(Definitions &d, const std::string &t, uint32_t id, uint32_t flags,
   } else if (t == "PACK") {
     PackageDefinition package;
     package.editor=editor;
+    if(const auto* idle=Find(s,"IDLA");idle&&idle->n%4==0)for(uint32_t n=0;n<idle->n;n+=4)package.idleAnimations.push_back(U(idle,n));
     if(auto data=Find(s,"PKDT");data&&data->n>=8) {
       package.flags=U(data);
       package.type=data->p[4];

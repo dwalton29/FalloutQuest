@@ -116,6 +116,10 @@ bool CompileResult(const fo3pipdata::Definitions& d,const fo3pipdata::ResultScri
       cmd.type=op=="if"?CommandType::If:CommandType::ElseIf;
       std::getline(in,cmd.expression);if(cmd.expression.empty()){error="missing conditional expression";return false;}
     } else if(op=="else"||op=="endif")cmd.type=op=="else"?CommandType::Else:CommandType::EndIf;
+    else if(op=="setinchargen"||op=="setlocationspecificloadscreensonly"){
+      cmd.type=op=="setinchargen"?CommandType::CharacterGeneration:CommandType::LocationLoadScreens;
+      if(!(in>>a)||!number(a,cmd.value)||(cmd.value!=0&&cmd.value!=1)){error="invalid character generation flag";return false;}
+    }
     else if(op=="enableplayercontrols"||op=="disableplayercontrols"){
       cmd.type=CommandType::PlayerControls;cmd.value=op=="enableplayercontrols";cmd.index=127;
       for(unsigned n=0;n<7;++n){if(!(in>>a)){in.clear();break;}float flag;if(!number(a,flag)||(flag!=0&&flag!=1)){error="invalid player controls flag";return false;}if(flag==0)cmd.index&=~(1u<<n);}
@@ -135,7 +139,8 @@ bool CompileResult(const fo3pipdata::Definitions& d,const fo3pipdata::ResultScri
       cmd.form=dot==std::string::npos?owner:form(op.substr(0,dot));
       cmd.type=(verb=="look"||verb=="stoplook")?CommandType::Look:CommandType::ScriptPackage;
       cmd.value=verb=="addscriptpackage"?1:0;
-      if(verb!="stoplook"&&(!(in>>a)||!(cmd.index=form(a)))){error="invalid reference action argument";return false;}
+      if(verb!="stoplook"&&verb!="removescriptpackage"&&(!(in>>a)||!(cmd.index=form(a)))){error="invalid reference action argument";return false;}
+      if(verb=="removescriptpackage"){if(in>>a){if(!(cmd.index=form(a))){error="invalid package removal";return false;}}else in.clear();}
       if(!cmd.form){error="invalid reference action receiver";return false;}
     }
     else if(op=="startconversation"||(op.find('.')!=std::string::npos&&op.substr(op.find('.')+1)=="startconversation")){
@@ -146,6 +151,7 @@ bool CompileResult(const fo3pipdata::Definitions& d,const fo3pipdata::ResultScri
       cmd.type=CommandType::SayTo;cmd.form=op.find('.')==std::string::npos?owner:form(op.substr(0,op.find('.')));cmd.index=fo3player::PlayerRef;
       if(op=="sayto"||(op.size()>6&&op.substr(op.size()-6)==".sayto")){if(!(in>>a)||!(cmd.index=form(a))){error="invalid SayTo target";return false;}}
       if(!(in>>a)||!(cmd.variable=form(a))){error="invalid speech topic";return false;}
+      if(in>>a){if(!number(a,cmd.value)||(cmd.value!=0&&cmd.value!=1)){error="invalid speech subtitle flag";return false;}}else in.clear();
     } else if(op=="moveto"||op=="movetomarker"||
               (op.find('.')!=std::string::npos&&(op.substr(op.find('.')+1)=="moveto"||op.substr(op.find('.')+1)=="movetomarker"))){
       cmd.type=CommandType::MoveTo;cmd.form=op.find('.')==std::string::npos?owner:form(op.substr(0,op.find('.')));
@@ -287,6 +293,15 @@ bool CompileResult(const fo3pipdata::Definitions& d,const fo3pipdata::ResultScri
       cmd.expression=a;cmd.index=0;
       if(in>>b){float flags=0;if(!number(b,flags)||flags<0||flags>5||std::floor(flags)!=flags){error="invalid PlayGroup flags";return false;}cmd.index=uint32_t(flags);}
       in.clear();
+    } else if(op=="setnoactivationsound"||op=="clearnoactivationsound"){
+      cmd.type=CommandType::NoActivationSound;
+      if(op=="setnoactivationsound"&&(!(in>>a)||!(cmd.form=form(a)))){error="invalid activation sound";return false;}
+    } else if(op=="triggerscreenblood"){
+      cmd.type=CommandType::ScreenBlood;
+      if(!(in>>a)||!number(a,cmd.value)||cmd.value<0||cmd.value>1000||std::floor(cmd.value)!=cmd.value){error="invalid screen blood count";return false;}
+    } else if(op=="rimod"||op=="removeimagespacemodifier"){
+      cmd.type=CommandType::RemoveImageModifier;
+      if(!(in>>a)||!(cmd.form=form(a))){error="invalid image modifier";return false;}
     } else if(op=="imod"||op=="applyimagespacemodifier"){
       cmd.type=CommandType::ImageModifier;
       if(!(in>>a)||!(cmd.form=form(a))){error="invalid image modifier";return false;}

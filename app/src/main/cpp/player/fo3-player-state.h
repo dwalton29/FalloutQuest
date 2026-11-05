@@ -178,7 +178,15 @@ struct ScriptMessage {
   std::vector<std::string> buttons;
 };
 struct MerchantVisit {uint32_t day=0;float hour=0;};
+struct PlayerMove {
+  uint32_t marker=0,cell=0,world=0;
+  std::array<float,3> position{},rotation{};
+  bool pending=false;
+};
 struct State {
+  bool inCharGen=false,locationSpecificLoadScreens=false;
+  uint32_t noActivationSound=0;
+  PlayerMove playerMove;
   fo3pipdata::SessionState pipboy;
   std::array<uint8_t, 7> special{};
   std::array<uint8_t, 14> skills{}, skillOffsets{};
@@ -248,6 +256,7 @@ struct Catalog {
   fo3weapon::Definitions weapons;
   std::unordered_map<uint32_t,uint32_t> merchantContainers,merchantServices;
   std::unordered_map<std::string,float> barterSettings;
+  uint32_t screenBloodMaxCount=0;
   uint32_t merchantRespawnHours=72; // Fallout3.exe iHoursToRespawnCell default.
   std::unordered_set<uint32_t> encounterZoneReferences;
   // Immutable original ACHR census. This is a source data catalogue, not a
@@ -400,7 +409,9 @@ public:
   const Catalog &Definitions() const { return *catalog_; }
   const State &Snapshot() const { return state_; }
   fo3experience::Progress ExperienceProgress() const {
-    return fo3experience::Evaluate(state_.level,state_.experience,catalog_->xpBumpBase);
+    auto progress=fo3experience::Evaluate(state_.level,state_.experience,catalog_->xpBumpBase);
+    if(state_.inCharGen)progress.ready=false;
+    return progress;
   }
   float MaxHealth() const;
   float Health() const;
@@ -408,6 +419,12 @@ public:
   bool ChangeActorValueDamage(uint32_t reference,uint32_t value,float amount,bool restore);
   float HealthPercentage(uint32_t reference) const;
   bool SetPlayerControls(uint32_t mask,bool enable);
+  bool SetCharacterGeneration(bool enabled);
+  bool SetNoActivationSound(uint32_t sound);
+  bool SetLocationSpecificLoadScreens(bool enabled);
+  void AcknowledgePlayerMove();
+  double ScriptRuntimeSeconds()const{return scriptRuntimeSeconds_;}
+  std::unique_ptr<ScriptTransactionPlan> PrepareNewGameTransaction(uint32_t quest,std::string& error) const;
   bool PlayerControlDisabled(unsigned bit)const{return bit<7&&(state_.disabledControls&(1u<<bit));}
   bool SetRestrained(uint32_t reference,bool restrained);
   bool Restrained(uint32_t reference)const{return state_.restrainedActors.count(reference)!=0;}
@@ -543,7 +560,7 @@ public:
   bool ScriptAnimationPlaying(uint32_t reference,bool& playing) const;
   bool QueueScriptPlayGroup(uint32_t reference,const std::string& group,uint32_t flags);
   bool QueueScriptAction(fo3script::Action action);
-  bool QueueScriptSpeech(uint32_t reference,uint32_t topic,uint32_t target,bool conversation=false);
+  bool QueueScriptSpeech(uint32_t reference,uint32_t topic,uint32_t target,bool conversation=false,bool forceSubtitle=false);
   bool PollScriptAction(fo3script::Action& action);
   double ScriptSecondsPassed() const {return scriptElapsedSeconds_;}
   std::vector<std::pair<uint32_t,bool>> ScriptTriggerChanges() const;

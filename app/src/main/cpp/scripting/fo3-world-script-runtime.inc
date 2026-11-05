@@ -1,4 +1,5 @@
 #include "dialogue/fo3-dialogue-selection.h"
+#include "dialogue/fo3-dialogue-panel.h"
 #include "audio/fo3-animation-sounds.h"
 // Render-thread adapters for original reference events and controller actions.
 // No location, quest, reference, sound or animation-group IDs are embedded here.
@@ -12,9 +13,10 @@ struct Animation {
 };
 static std::unordered_map<uint32_t,Animation> animations;
 static std::unordered_set<uint32_t> loaded;
-static fo3script::ImageModifier modifier;
-static double modifierStarted=0,seconds=0;
+static fo3script::ImageStack modifiers;
+static double seconds=0;
 static fo3dialogue::Session speech;
+static fo3dialogue::Panel scriptSubtitle;
 static std::vector<fo3script::Action> speechPending;
 static uint32_t speechReference=0;
 static uint32_t speechTopic=0,speechTarget=0,speechToken=0,speechSerial=0;
@@ -41,6 +43,7 @@ static fo3dialogue::Context SpeechContext(uint32_t reference,uint32_t target){
     return ctx;
 }
 static void SpeechStop(){
+    scriptSubtitle.visible=false;scriptSubtitle.subtitle.clear();++scriptSubtitle.revision;
     if(gPlayerSession&&speechReference)gPlayerSession->player.SetScriptActorTalking(speechReference,false);
     if(auto* actor=DialogueActor(speechReference)){actor->runtime.speaking=false;actor->runtime.scriptSpeechToken=0;actor->lastFrame=UINT64_MAX;}
     if(speech.Active()&&!gDialogue.Active())fo3audio::DialogueStop();
@@ -83,6 +86,7 @@ void SpeechTick(){
         SpeechStop();speechPending.clear();speechGeneration=player.ScriptRuntimeGeneration();
     }
     if(speech.Active()){
+        if(scriptSubtitle.visible){const auto text=speech.Subtitle(player.Definitions().pipboy);if(text!=scriptSubtitle.subtitle){scriptSubtitle.subtitle=text;++scriptSubtitle.revision;}}
         if(auto* actor=DialogueActor(speech.actor))Q230DialogueResponseAnimation(*actor,speech);
         bool disabled=true;std::string error;
         if(gDialogue.Active()||IsFo3LoadingVisible()||!player.ReferenceDisabled(speech.actor,disabled,error)||disabled||seconds-speechBegan>60){SpeechStop();return;}
@@ -116,6 +120,11 @@ void SpeechTick(){
         Q6H_LOGW("SCRIPT SPEECH TOPIC UNAVAILABLE ref=%08X topic=%08X",action.reference,action.form);return;
     }
     speechReference=action.reference;speechTopic=action.form;speechTarget=action.flags;speechBegan=seconds;
+    if(action.forceSubtitle){
+        scriptSubtitle={};scriptSubtitle.visible=true;scriptSubtitle.yaw=gQ210Head[3];
+        scriptSubtitle.anchor={gQ210Head[0]-std::sin(scriptSubtitle.yaw)*1.5f,gQ210Head[1]-.25f,gQ210Head[2]-std::cos(scriptSubtitle.yaw)*1.5f};
+        scriptSubtitle.subtitle=speech.Subtitle(player.Definitions().pipboy);++scriptSubtitle.revision;
+    }
     player.SetScriptActorTalking(action.reference,true);if(actor){actor->runtime.speaking=true;actor->lastFrame=UINT64_MAX;}
     speechToken=0x30000000u|(++speechSerial&0xffffffu);
     if(actor)actor->runtime.scriptSpeechToken=speechToken;
@@ -125,7 +134,7 @@ void Register(){
     auto& player=gPlayerSession->player;
     const uint64_t revision=gFo3VisualPublication.Revision();
     if(actorRegistryRevision==gQ230NpcResidenceRevision&&registryPlayer==&player&&runtimeGeneration==player.ScriptRuntimeGeneration()&&registryRevision==revision&&registryStorage==gObjects.data()&&registryCount==gObjects.size())return;
-    if(registryPlayer!=&player||runtimeGeneration!=player.ScriptRuntimeGeneration()){animations.clear();loaded.clear();modifier={};seconds=0;for(auto& actor:gQ230NpcActors){actor.runtime.scriptLookTarget=actor.runtime.scriptSpeechToken=0;actor.responseIdle=actor.responseToken=actor.responseInfo=0;}}
+    if(registryPlayer!=&player||runtimeGeneration!=player.ScriptRuntimeGeneration()){animations.clear();loaded.clear();modifiers.entries.clear();fo3bloodui::Clear();seconds=0;for(auto& actor:gQ230NpcActors){actor.runtime.scriptLookTarget=actor.runtime.scriptSpeechToken=0;actor.responseIdle=actor.responseToken=actor.responseInfo=0;}}
     actorRegistryRevision=gQ230NpcResidenceRevision;runtimeGeneration=player.ScriptRuntimeGeneration();registryPlayer=&player;registryRevision=revision;registryStorage=gObjects.data();registryCount=gObjects.size();
     auto registry=std::make_shared<fo3script::AnimationRegistry>();
     std::unordered_set<uint32_t> present;
@@ -168,6 +177,10 @@ void Events(){
 }
 void Actions(){
     auto& player=gPlayerSession->player;fo3script::Action action;
+    const auto& move=player.Snapshot().playerMove;
+    if(move.pending&&!IsFo3LoadingVisible()&&!HasPendingFo3CellTransitionRequestQ74())
+        QueueFo3MapMarkerTransitionQ74(move.marker,move.position[0],move.position[1],move.position[2],move.rotation[0],move.rotation[1],move.rotation[2],0);
+    fo3loading::gLocationSpecificOnly.store(player.Snapshot().locationSpecificLoadScreens);
     while(player.PollScriptAction(action)){
         if(action.kind==fo3script::ActionKind::Look){
             if(auto* actor=DialogueActor(action.reference))actor->runtime.scriptLookTarget=action.form;
@@ -177,7 +190,9 @@ void Actions(){
                 Q6H_LOGW("SCRIPT DEFAULT ACTIVATE REJECTED: ref=%08X",action.reference);
         }else if(action.kind==fo3script::ActionKind::ImageModifier){
             const auto i=player.Definitions().imageModifiers.find(action.form);
-            if(i!=player.Definitions().imageModifiers.end()){modifier=i->second;modifierStarted=seconds;}
+            if(i!=player.Definitions().imageModifiers.end()){modifiers.Apply(action.form,i->second,seconds);}
+        }else if(action.kind==fo3script::ActionKind::RemoveImageModifier){modifiers.Remove(action.form);
+        }else if(action.kind==fo3script::ActionKind::ScreenBlood){fo3bloodui::Trigger(action.flags,seconds,player.Definitions());
         }else if(action.kind==fo3script::ActionKind::PlayGroup){
             const auto i=animations.find(action.reference);if(i==animations.end())continue;
             auto& state=i->second;
@@ -229,7 +244,7 @@ void Animate(){
         state.settled=ended;
     }
 }
-fo3script::ImagePresentation Presentation(){return fo3script::SampleImageModifier(modifier,seconds-modifierStarted);}
+fo3script::ImagePresentation Presentation(){return modifiers.Sample(seconds);}
 bool PackageEvent(uint32_t reference,uint32_t package,bool completed){
     if(!gPlayerSession||gPlayerSession->saveBlocked||Fo3ResidentFrameBlocked())return false;
     auto& player=gPlayerSession->player;std::string error;

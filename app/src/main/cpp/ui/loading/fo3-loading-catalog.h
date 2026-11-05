@@ -14,6 +14,7 @@
 // CPU-only ESM loading catalogue. Owned by the presentation worker, published
 // through Preparation before any reader accesses these immutable vectors.
 namespace fo3loading {
+inline std::atomic<bool> gLocationSpecificOnly{false};
 
 constexpr size_t RECORD_HEADER = 24u;
 constexpr uint32_t COMPRESSED_RECORD = 0x00040000u;
@@ -200,8 +201,9 @@ inline const LoadingScreen* Select(uint32_t cellFormId, uint32_t worldspaceFormI
     const std::vector<const LoadingScreen*>* choices = nullptr;
     if (!exact.empty()) choices = &exact;
     else if (!world.empty()) choices = &world;
-    else if (!generic.empty()) choices = &generic;
+    else if (!generic.empty()&&!gLocationSpecificOnly.load()) choices = &generic;
     if (!choices || choices->empty()) choices = nullptr;
+    if (!choices&&gLocationSpecificOnly.load())return nullptr;
     if (!choices) return &gScreens[fo3loadingpose::Mix(random ^ cellFormId ^ worldspaceFormId) % gScreens.size()];
     const uint32_t hash = cellFormId * 1664525u + worldspaceFormId * 1013904223u;
     return (*choices)[fo3loadingpose::Mix(random ^ hash) % choices->size()];

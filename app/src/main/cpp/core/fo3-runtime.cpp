@@ -8,6 +8,7 @@
 #include "physics/fo3-rigid-world.h"
 #include "npc/fo3-ragdoll-pose.h"
 #include "player/fo3-sneak.h"
+#include "player/fo3-new-game.h"
 #include "player/fo3-player-seat.h"
 #include "npc/fo3-detection.h"
 #include "scripting/fo3-script-imagespace.h"
@@ -43,6 +44,7 @@ bool PackageEvent(uint32_t reference,uint32_t package,bool completed);
 #include "ui/interaction/fo3-compass-hud.h"
 #include "ui/interaction/fo3-sneak-hud.h"
 #include "ui/interaction/fo3-blink-hud.h"
+#include "ui/interaction/fo3-screen-blood.h"
 #include "npc/fo3-animation-bounds.h"
 #include "rendering/actor-skinning.h"
 #include "rendering/opaque-telemetry.h"
@@ -177,6 +179,8 @@ fo3title::Model gFo3Title;
 std::string gFo3StartupPath=std::string(fo3title::SaveRoot)+"/player-state.fqps";
 bool gFo3StartupNew=false;
 fo3title::Pose gFo3SavePose;
+uint32_t gFo3StartupQuest=0;
+std::string gFo3StartupError;
 bool gFo3PauseOpen=false,gFo3FocusPaused=false,gFo3GameplayInputSuppressed=false;
 bool Fo3GameplayBlocked(){return gFo3Title.open||gFo3PauseOpen||gFo3FocusPaused||Fo3ResidentFrameBlocked();}
 bool Fo3ResidentLegacyStreamActive();
@@ -3554,6 +3558,7 @@ struct Fo3SceneCpuPreparation {
     std::vector<Q230ActorVisual> actors;
     std::shared_ptr<const fo3furniture::Scene> playerFurniture;
     std::unique_ptr<fo3player::Session> playerSession;
+    std::string startupError;
     size_t skipped = 0u;
     size_t unsupported = 0u;
     size_t preparedTextures = 0u;
@@ -4551,7 +4556,7 @@ void AbortFo3SceneLoad(const char* reason) {
     gSceneLoad.active = false;
     if (gSceneLoad.generation == GetFo3LoadingGeneration()) CancelFo3Loading();
     if(gSceneLoad.boot&&!gSceneReady){gPlayerSession.reset();gFo3SavePose={};gFo3Title.open=true;gFo3Title.neutral=false;
-        gFo3Title.Notice("Could not load the selected game. The save has been preserved. Check logcat for the asset or save error.");}
+        gFo3Title.Notice(gFo3StartupError.empty()?"Could not load the selected game. The save has been preserved. Check logcat for the asset or save error.":gFo3StartupError);}
 }
 
 static void Q230RealizeSceneActors(fo3player::Player& player,uint32_t cell,uint32_t world,float x,float y){
@@ -4606,6 +4611,7 @@ bool BeginFo3SceneLoad(const Fo3CellTransitionRequestQ74& request, bool boot) {
     const bool loadPlayer = !gPlayerSession;
     const std::string startupPath=gFo3StartupPath;
     const bool startupNew=gFo3StartupNew;
+    const uint32_t startupQuest=gFo3StartupQuest;
     fqloadprofile::Log("BEGIN generation=%llu mode=%s cell=%08X worldspace=%08X playerCatalog=%d sceneReadyBefore=%d",
         (unsigned long long)gSceneLoad.generation,boot?"cold-boot":"transition",
         request.cellFormId,request.worldspaceFormId,loadPlayer?1:0,gSceneReady?1:0);
@@ -4618,7 +4624,7 @@ bool BeginFo3SceneLoad(const Fo3CellTransitionRequestQ74& request, bool boot) {
     if(gPlayerSession)Q230RealizeSceneActors(gPlayerSession->player,request.cellFormId,request.worldspaceFormId,request.x,request.y);
     const auto referenceState=CaptureFo3ReferenceState();
     if (!gSceneLoad.preparation.Start(
-            [request, boot, loadPlayer, referenceState, startupPath, startupNew](Fo3SceneCpuPreparation& result, const std::atomic<bool>& cancel) {
+            [request, boot, loadPlayer, referenceState, startupPath, startupNew, startupQuest](Fo3SceneCpuPreparation& result, const std::atomic<bool>& cancel) {
         result.request = request;
         result.referenceState=referenceState;
         auto phase = std::chrono::steady_clock::now();
@@ -4629,14 +4635,15 @@ bool BeginFo3SceneLoad(const Fo3CellTransitionRequestQ74& request, bool boot) {
                 // Development NPC daytime-routing test: start ten in-game
                 // minutes before the original 10:00 Common House routine.
                 // Do not alter Bethesda's ESM, calendar or TimeScale.
-                catalog.initial.gameHour=fo3devclock::kStartupGameHour;
+                // Normal New Game retains the original GLOB calendar/time.
+                if(!startupNew)catalog.initial.gameHour=fo3devclock::kStartupGameHour;
                 result.playerSession = std::make_unique<fo3player::Session>(std::move(catalog));
                 auto& session = *result.playerSession;
                 session.player.SetScriptEventDiagnostic([](const std::string& message) {
                     Q6H_LOGI("SCRIPT EVENT: %s",message.c_str());
                 });
-                Q6H_LOGI("DEVELOPMENT GAME START time=%02d:%02d gameHour=%.6f timeScale=%.1f",
-                    fo3devclock::kStartupHour,fo3devclock::kStartupMinute,
+                Q6H_LOGI("GAME START source=%s gameHour=%.6f timeScale=%.1f",
+                    startupNew?"original-globals":"legacy-development-default",
                     session.player.Snapshot().gameHour,session.player.Definitions().gameTimeScale);
                 session.savePath = startupPath;
                 // Persist authored script/quest state across Quest restarts and
@@ -4670,13 +4677,30 @@ bool BeginFo3SceneLoad(const Fo3CellTransitionRequestQ74& request, bool boot) {
             } else {Q6H_LOGE("PLAYER STATE UNAVAILABLE: %s", error.c_str());return false;}
         }
         if (cancel.load(std::memory_order_acquire)) return false;
+        if(startupNew&&result.playerSession){
+            auto& player=result.playerSession->player;
+            auto plan=player.PrepareNewGameTransaction(startupQuest,result.startupError);
+            if(!plan||!player.CommitScriptTransaction(*plan)){
+                if(result.startupError.empty())result.startupError="Could not publish original New Game setup";
+                Q6H_LOGE("NEW GAME SETUP FAILED: %s",result.startupError.c_str());return false;
+            }
+        }
         if(result.playerSession)
             result.referenceState=std::make_shared<const fo3world::ReferenceStateSnapshot>(result.playerSession->player.CaptureReferenceState());
         result.playerUs = Fo3SceneElapsedUs(phase);
         phase = std::chrono::steady_clock::now();
         if (boot) {
             fo3title::Pose pose;
-            if(!startupNew && fo3title::ReadPose(startupPath,pose)) {
+            const bool savedPose=!startupNew&&fo3title::ReadPose(startupPath,pose);
+            const auto* pending=result.playerSession?&result.playerSession->player.Snapshot().playerMove:nullptr;
+            if(pending&&pending->marker&&(pending->pending||!savedPose)){
+                const auto& move=result.playerSession->player.Snapshot().playerMove;
+                result.request={};result.request.destinationDoorRef=move.marker;
+                result.request.cellFormId=move.cell;result.request.worldspaceFormId=move.world;
+                result.request.x=move.position[0];result.request.y=move.position[1];result.request.z=move.position[2];
+                result.request.rx=move.rotation[0];result.request.ry=move.rotation[1];result.request.rz=move.rotation[2];result.request.valid=true;
+                Q6H_LOGI("NEW GAME SCRIPT ARRIVAL quest=%08X marker=%08X cell=%08X",startupQuest,move.marker,move.cell);
+            } else if(savedPose) {
                 result.request={};result.request.cellFormId=pose.cell;result.request.worldspaceFormId=pose.world;
                 result.request.x=pose.x;result.request.y=pose.y;result.request.z=pose.z;result.request.rz=pose.yaw;result.request.valid=true;
             } else {
@@ -4847,6 +4871,7 @@ bool ProcessQ74TransitionRequest() {
     if (!gSceneLoad.preparation.Ready()) return false;
     MarkFo3TransitionWorkStarted();
     if (!gSceneLoad.preparation.Successful()) {
+        gFo3StartupError=gSceneLoad.preparation.Get().startupError;
         AbortFo3SceneLoad("cpu-preparation");
         return false;
     }
@@ -5187,6 +5212,11 @@ bool ProcessQ74TransitionRequest() {
         if (object.realNormal) ++realNormal;
     }
 
+    if(gPlayerSession){
+        const auto& move=gPlayerSession->player.Snapshot().playerMove;
+        if(move.pending&&move.cell==request.cellFormId&&move.world==request.worldspaceFormId&&
+           move.position==std::array<float,3>{request.x,request.y,request.z})gPlayerSession->player.AcknowledgePlayerMove();
+    }
     CompleteFo3CellTransitionQ74(request.cellFormId);
     markFinalization("complete-cell-transition");
     gCurrentCellFormId = request.cellFormId;
@@ -11690,6 +11720,46 @@ void UpdateFo3PipboyMount(const Q213ArmPose &pose) {
   gPipSolved = true;
 }
 #include "ui/pipboy/fo3-pipboy-runtime.inc"
+// Player packages use the same original IDLA/KF data as NPC packages. Their
+// skeletal pose can override avatar IK, but never the tracked OpenXR camera.
+struct QScriptPlayerAnimation {
+    const fo3player::Player* owner=nullptr;uint64_t generation=0,serial=UINT64_MAX;
+    uint32_t package=0;double started=0;bool valid=false;
+    fo3anim::Clip clip;fo3anim::Pose pose;
+};
+QScriptPlayerAnimation gScriptPlayerAnimation;
+bool QPrepareScriptPlayerAnimation(){
+    auto& state=gScriptPlayerAnimation;
+    if(!gPlayerSession||gVrSkeleton.bones.empty())return false;
+    auto& player=gPlayerSession->player;const auto& defs=player.Definitions().pipboy;
+    const auto scripts=player.Snapshot().scriptPackages.find(fo3player::PlayerRef);
+    uint32_t package=0;
+    if(scripts!=player.Snapshot().scriptPackages.end())for(auto id:scripts->second){
+        const auto found=defs.packages.find(id);if(found==defs.packages.end())continue;
+        fo3dialogue::Context context;context.player=&player;std::string error;
+        fo3dialogue::ReferenceContext(player,fo3player::PlayerRef,context.speaker);context.target=context.speaker;
+        if(fo3dialogue::Conditions(found->second.conditions,context,error)){package=id;break;}
+    }
+    if(state.owner!=&player||state.generation!=player.ScriptRuntimeGeneration()||state.package!=package){
+        state={};state.owner=&player;state.generation=player.ScriptRuntimeGeneration();state.package=package;
+        state.started=player.ScriptRuntimeSeconds();
+        if(package){const auto& definition=defs.packages.at(package);
+            for(auto idle:definition.idleAnimations){const auto model=defs.idleModels.find(idle);std::vector<uint8_t> bytes;
+                if(model!=defs.idleModels.end()&&LoadFalloutMeshFile(model->second,bytes)&&fo3anim::DecodeClip(bytes,state.clip)){
+                    fo3anim::BindClip(gVrSkeleton,state.clip,state.pose);state.valid=true;break;
+                }
+            }
+            Q6H_LOGI("PLAYER SCRIPT PACKAGE: package=%08X originalKf=%d trackedCameraUnchanged=1",package,state.valid?1:0);
+        }
+    }
+    if(!state.valid)return false;
+    if(state.serial!=gQ211TrackingSerial){
+        state.serial=gQ211TrackingSerial;
+        fo3anim::Sample(gVrSkeleton,state.clip,std::max(0.,player.ScriptRuntimeSeconds()-state.started),state.pose,nullptr,
+                        fo3anim::RootPolicy::Furniture,nullptr,fo3anim::Playback::Clamp);
+    }
+    return true;
+}
 void Q211UpdatePlayerRig(bool finalPose=false) {
     // Interaction first uses current tracking. Rendering is solved after the
     // weapon/loose-body step, and is the only owner that publishes skin poses.
@@ -11798,6 +11868,7 @@ void Q211UpdatePlayerRig(bool finalPose=false) {
     fqactor::player.fingers+=fqopaque::Micros(fingerStarted);
 
     static std::vector<Q211Delta> deltas;
+    const bool scriptedPlayer=QPrepareScriptPlayerAnimation();
     for (Q211PlayerRigPart& part : gQ211PlayerRigParts) {
         if (part.gpuIndex >= gQ210PlayerBody.size() ||
             part.skin.palette.empty()) {
@@ -11858,6 +11929,17 @@ void Q211UpdatePlayerRig(bool finalPose=false) {
                 direction[c*4]=d.x;direction[c*4+1]=d.y;direction[c*4+2]=d.z;
             }
             position[12]=origin.x;position[13]=origin.y;position[14]=origin.z;
+            if(scriptedPlayer){
+                const auto source=part.skin.mapping.sources[slot];
+                const int bone=fo3anim::FindBone(gVrSkeleton,part.bones[source].name);
+                if(bone>=0&&size_t(bone)<gScriptPlayerAnimation.pose.delta.size()){
+                    const float bindToScene[16]{1,0,0,0,0,1,0,0,0,0,1,0,0,FLOOR_Y,SCENE_FORWARD,1};
+                    fo3anim::Matrix scene{};
+                    if(fo3dooranim::ModelDeltaToScene(bindToScene,FO3_UNITS_PER_METRE,gScriptPlayerAnimation.pose.delta[size_t(bone)],scene)){
+                        position=scene;direction=scene;direction[12]=direction[13]=direction[14]=0;
+                    }
+                }
+            }
             fqskin::Pack(part.skin.palette[slot+1],position,direction);
         }
         fqactor::player.bones+=fqopaque::Micros(bonesStarted);
@@ -11951,7 +12033,7 @@ void Q210DeletePlayerBody(bool equipmentChange=false) {
     gQ211PlayerRigParts.clear();
     ++gQ211RigRevision;
     gQ211LastSkinnedSerial = ~0ull;
-    gVrArms[0]={};gVrArms[1]={};gVrArmState[0]={};gVrArmState[1]={};gVrSkeleton={};gVrEyeAnchorValid=false;
+    gVrArms[0]={};gVrArms[1]={};gVrArmState[0]={};gVrArmState[1]={};gVrSkeleton={};gScriptPlayerAnimation={};gVrEyeAnchorValid=false;
     if(!equipmentChange){gVrTorso=fo3vr::TorsoState{};gQ213TorsoYawReady=false;}
     gQ217FingerRig[0] = {};
     gQ217FingerRig[1] = {};

@@ -45,6 +45,14 @@ void UpdateFo3Title(bool menu, bool a, bool b, float x, float y, double now,
     quit = true;
   } else if (action == A::Continue || action == A::NewGame) {
     gFo3StartupNew = action == A::NewGame;
+    gFo3StartupError.clear();
+    if(gFo3StartupNew){
+      std::string source;
+      if(!fo3newgame::FindQuest(fo3assets::FalloutDataRoot(),gFo3StartupQuest,source,gFo3StartupError)){
+        gFo3Title.Notice(gFo3StartupError);return;
+      }
+      Q6H_LOGI("NEW GAME CONFIG: source=%s quest=%08X",source.c_str(),gFo3StartupQuest);
+    }
     gFo3StartupPath = gFo3StartupNew
                           ? fo3title::NewPath(fo3title::SaveRoot,
                                               uint64_t(std::time(nullptr)))

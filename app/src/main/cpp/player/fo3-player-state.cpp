@@ -549,6 +549,7 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
           {settings[id] = fo3esm::ReadF32(d->data);next.barterSettings[id]=settings[id];}
         if (!id.empty() && id[0] == 's' && d)
           next.strings[id] = fo3esm::ZString(d->data, d->size);
+        if(id=="iBloodSplatterMaxCount"&&d&&d->size==4&&I32(d->data)>0)next.screenBloodMaxCount=uint32_t(I32(d->data));
         if(id=="iHoursToRespawnCell"&&d&&d->size==4&&I32(d->data)>0)next.merchantRespawnHours=uint32_t(I32(d->data));
         if(id=="iKarmaChangeThreshold"&&d&&d->size==4&&I32(d->data)>0)next.karmaMajorThreshold=I32(d->data);
         if(id=="iXPBumpBase"&&d&&d->size==4&&I32(d->data)>0)
@@ -1091,6 +1092,17 @@ bool Player::CanOpenDoorImpl(uint32_t actor,uint32_t id,bool sourceDelegated) co
       return true;
   return false;
 }
+bool Player::SetNoActivationSound(uint32_t sound){
+  if(sound&&!catalog_->pipboy.sounds.count(sound))return false;
+  if(state_.noActivationSound!=sound){state_.noActivationSound=sound;++revision_;}return true;
+}
+bool Player::SetCharacterGeneration(bool enabled){
+  if(state_.inCharGen!=enabled){state_.inCharGen=enabled;++revision_;}return true;
+}
+bool Player::SetLocationSpecificLoadScreens(bool enabled){
+  if(state_.locationSpecificLoadScreens!=enabled){state_.locationSpecificLoadScreens=enabled;++revision_;}return true;
+}
+void Player::AcknowledgePlayerMove(){if(state_.playerMove.pending){state_.playerMove.pending=false;++revision_;}}
 bool Player::SetPlayerControls(uint32_t mask,bool enable){
   if(mask>127)return false;
   const uint8_t next=enable?(state_.disabledControls&~mask):(state_.disabledControls|mask);
@@ -1284,7 +1296,8 @@ bool Player::Save(const std::string &path, std::string &error) const {
     payload.push_back(l.forceFailures);payload.push_back(l.rewarded?1:0);}
   // Optional RFE1 after the v14 lock tail. Empty overlays keep existing v14
   // bytes unchanged; older supported saves do not require this extension.
-  const bool hasFactionRanks=!state_.actorFactions.empty()||!state_.actorPackageEvents.empty();
+  const bool hasNewGame=state_.noActivationSound||state_.inCharGen||state_.locationSpecificLoadScreens||state_.playerMove.marker;
+  const bool hasFactionRanks=hasNewGame||!state_.actorFactions.empty()||!state_.actorPackageEvents.empty();
   const bool hasBodyDamage=hasFactionRanks||state_.disabledControls||!state_.restrainedActors.empty()||std::any_of(state_.bodyDamage.begin(),state_.bodyDamage.end(),[](float v){return v!=0;});
   const bool hasCorpsePoses=hasBodyDamage||std::any_of(state_.actors.begin(),state_.actors.end(),[](const auto& a){return bool(a.second.corpse);});
   const bool hasDailyInfos=hasCorpsePoses||!state_.dailySaidInfos.empty();
@@ -1425,7 +1438,7 @@ bool Player::Save(const std::string &path, std::string &error) const {
     Put32(payload,0x314B5053);Put32(payload,uint32_t(state_.scriptPackages.size())); // SPK1
     std::vector<uint32_t> refs;for(const auto& row:state_.scriptPackages)refs.push_back(row.first);std::sort(refs.begin(),refs.end());
     for(auto ref:refs){const auto& packages=state_.scriptPackages.at(ref);
-      if(!catalog_->actorPlacements.count(ref)||packages.size()>128){error="Invalid script package owner/count";return false;}
+      if((ref!=PlayerRef&&!catalog_->actorPlacements.count(ref))||packages.size()>128){error="Invalid script package owner/count";return false;}
       Put32(payload,ref);Put32(payload,uint32_t(packages.size()));std::unordered_set<uint32_t> seen;
       for(auto id:packages){if(!catalog_->pipboy.packages.count(id)||!seen.insert(id).second){error="Invalid script package";return false;}Put32(payload,id);}
     }
@@ -1472,7 +1485,18 @@ bool Player::Save(const std::string &path, std::string &error) const {
       Put32(payload,ref);Put32(payload,event.first);payload.push_back(event.second?1:0);
     }
   }
-  Put32(bytes, hasFactionRanks ? 27 : hasBodyDamage ? 26 : hasCorpsePoses ? 25 : hasDailyInfos ? 24 : hasScriptPackages ? 23 : hasScriptOverrides ? 22 : hasActorVariables ? 21 : hasDoorStates ? 20 : hasDebugPoints ? 19 : hasLevelAdvancement ? 18 : hasCompletionState ? 17 :
+  if(hasNewGame){
+    const auto& m=state_.playerMove;
+    if(m.marker&&(!catalog_->pipboy.targets.count(m.marker)||!m.cell||
+       !std::all_of(m.position.begin(),m.position.end(),[](float v){return std::isfinite(v);})||
+       !std::all_of(m.rotation.begin(),m.rotation.end(),[](float v){return std::isfinite(v);}))) {error="Invalid player MoveTo state";return false;}
+    Put32(payload,0x31474E43); // CNG1
+    Put32(payload,uint32_t(state_.inCharGen)|(uint32_t(state_.locationSpecificLoadScreens)<<1)|(uint32_t(m.pending)<<2));
+    Put32(payload,m.marker);Put32(payload,m.cell);Put32(payload,m.world);Put32(payload,state_.noActivationSound);
+    for(auto v:m.position)PutFloat(payload,v);
+    for(auto v:m.rotation)PutFloat(payload,v);
+  }
+  Put32(bytes, hasNewGame ? 28 : hasFactionRanks ? 27 : hasBodyDamage ? 26 : hasCorpsePoses ? 25 : hasDailyInfos ? 24 : hasScriptPackages ? 23 : hasScriptOverrides ? 22 : hasActorVariables ? 21 : hasDoorStates ? 20 : hasDebugPoints ? 19 : hasLevelAdvancement ? 18 : hasCompletionState ? 17 :
       hasMerchantVisits ? 16 : hasPlayerAttributeOverrides ? 15 : 14);
   Put32(bytes, catalog_->fingerprint);
   Put32(bytes, static_cast<uint32_t>(payload.size()));
@@ -1532,7 +1556,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
   const auto *h = bytes.data();
   const auto version = fo3esm::ReadU32(h + 4);
   if (std::memcmp(h, "FQPS", 4) ||
-      (version < 1 || version > 27))
+      (version < 1 || version > 28))
     return fail("Unsupported player save format");
   if (fo3esm::ReadU32(h + 8) != catalog_->fingerprint)
     return fail("Player save belongs to different game definitions");
@@ -1953,7 +1977,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
         for(uint32_t i=0;i<count;++i){
           if(payload.size()-at<8)return fail("Truncated script packages");
           const auto ref=fo3esm::ReadU32(p+at),n=fo3esm::ReadU32(p+at+4);at+=8;
-          if(!catalog_->actorPlacements.count(ref)||!n||n>128||payload.size()-at<4ull*n||next.scriptPackages.count(ref))return fail("Invalid script package owner/count");
+          if((ref!=PlayerRef&&!catalog_->actorPlacements.count(ref))||!n||n>128||payload.size()-at<4ull*n||next.scriptPackages.count(ref))return fail("Invalid script package owner/count");
           auto& packages=next.scriptPackages[ref];std::unordered_set<uint32_t> seen;
           for(uint32_t j=0;j<n;++j,at+=4){const auto id=fo3esm::ReadU32(p+at);if(!catalog_->pipboy.packages.count(id)||!seen.insert(id).second)return fail("Invalid script package");packages.push_back(id);}
         }
@@ -2005,9 +2029,20 @@ bool Player::Restore(const std::string &path, std::string &error) {
       if(version>=27){
         if(payload.size()-at<8||fo3esm::ReadU32(p+at)!=0x31564550)return fail("Missing package event state");
         const auto count=fo3esm::ReadU32(p+at+4);at+=8;
-        if(count>10000||payload.size()-at!=9ull*count)return fail("Invalid package event count");
+        if(count>10000||payload.size()-at!=9ull*count+(version>=28?48u:0u))return fail("Invalid package event count");
         for(uint32_t n=0;n<count;++n){const auto ref=fo3esm::ReadU32(p+at),package=fo3esm::ReadU32(p+at+4);const auto done=p[at+8];at+=9;
           if(!catalog_->actorPlacements.count(ref)||(package&&!catalog_->pipboy.packages.count(package))||done>1||(!package&&done)||!next.actorPackageEvents.emplace(ref,std::make_pair(package,done!=0)).second)return fail("Invalid package event state");}
+      }
+      if(version>=28){
+        if(payload.size()-at!=48||fo3esm::ReadU32(p+at)!=0x31474E43)return fail("Missing character generation state");
+        const auto flags=fo3esm::ReadU32(p+at+4);auto& m=next.playerMove;
+        m.marker=fo3esm::ReadU32(p+at+8);m.cell=fo3esm::ReadU32(p+at+12);m.world=fo3esm::ReadU32(p+at+16);next.noActivationSound=fo3esm::ReadU32(p+at+20);at+=24;
+        for(auto& v:m.position){v=fo3esm::ReadF32(p+at);at+=4;}
+        for(auto& v:m.rotation){v=fo3esm::ReadF32(p+at);at+=4;}
+        if(flags>7||(next.noActivationSound&&!catalog_->pipboy.sounds.count(next.noActivationSound))||(m.marker&&(!catalog_->pipboy.targets.count(m.marker)||!m.cell))||(!m.marker&&(flags&4))||
+           !std::all_of(m.position.begin(),m.position.end(),[](float v){return std::isfinite(v);})||
+           !std::all_of(m.rotation.begin(),m.rotation.end(),[](float v){return std::isfinite(v);}))return fail("Invalid character generation state");
+        next.inCharGen=flags&1;next.locationSpecificLoadScreens=flags&2;m.pending=flags&4;
       }
       if(at!=payload.size())return fail("Trailing player save data");
     }

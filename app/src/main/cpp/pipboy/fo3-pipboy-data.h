@@ -186,6 +186,7 @@ struct PackageSchedule {
 };
 struct PatrolPoint { uint32_t reference=0; Placement placement; };
 struct PackageDefinition {
+  std::vector<uint32_t> idleAnimations;
   std::string editor;
   uint32_t flags=0,combatStyle=0;
   bool combatStyleValid=true;

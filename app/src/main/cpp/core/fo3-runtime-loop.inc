@@ -451,7 +451,7 @@ public:
         fo3pipui::Shutdown();ResetFo3Pipboy();fo3lockui::Shutdown();fo3terminalui::Shutdown();CancelFo3Lockpick();CancelFo3Terminal();
         fo3notifyui::Shutdown();
         fo3barterui::Shutdown();fo3dialogueui::Shutdown();fo3titleui::Shutdown();fo3menuui::Shutdown();
-         fo3levelui::Shutdown();fo3xpui::Shutdown();fo3pauseui::Shutdown();fo3perfui::Shutdown();fo3compassui::Shutdown();fo3sneakui::Shutdown();fo3blinkui::Shutdown();gPlayerSeat.Reset();
+         fo3levelui::Shutdown();fo3xpui::Shutdown();fo3pauseui::Shutdown();fo3perfui::Shutdown();fo3compassui::Shutdown();fo3sneakui::Shutdown();fo3blinkui::Shutdown();fo3bloodui::Shutdown();gPlayerSeat.Reset();
         gFo3PauseMenu.Close();gFo3PauseOpen=false;
          EndFo3Dialogue("renderer shutdown");
         fo3lootui::Shutdown();
@@ -1479,7 +1479,12 @@ private:
             if(p.PlayerControlDisabled(0)||p.Restrained(fo3player::PlayerRef))moveX_=moveY_=0;
             if(p.PlayerControlDisabled(4))turnX_=0;
             if(p.PlayerControlDisabled(6))sneakDown_=false;
-            if(p.PlayerControlDisabled(5))activateDownQ1700_=false;
+            static bool blockedActivationDown=false;
+            if(p.PlayerControlDisabled(5)){
+                if(activateDownQ1700_&&!blockedActivationDown&&p.Snapshot().noActivationSound)
+                    fo3audio::SoundEvent(p.Snapshot().noActivationSound);
+                blockedActivationDown=activateDownQ1700_;activateDownQ1700_=false;
+            }else blockedActivationDown=false;
         }
         const XrSpaceLocationFlags required = XR_SPACE_LOCATION_POSITION_VALID_BIT |
                                               XR_SPACE_LOCATION_ORIENTATION_VALID_BIT;
@@ -2658,6 +2663,13 @@ private:
                 const auto mvp=Multiply(viewProjection,model);
                 fo3levelui::Render(mvp.m,gLevelUp.panel);
             }
+            if(fo3worldscript::scriptSubtitle.visible&&!IsFo3LoadingVisible()&&gPlayerSession){
+                const auto& panel=fo3worldscript::scriptSubtitle;Mat4 model{};const float yaw=panel.yaw;
+                model.m[0]=std::cos(yaw);model.m[2]=-std::sin(yaw);model.m[5]=1;
+                model.m[8]=std::sin(yaw);model.m[10]=std::cos(yaw);
+                model.m[12]=panel.anchor[0];model.m[13]=panel.anchor[1];model.m[14]=panel.anchor[2];model.m[15]=1;
+                const auto mvp=Multiply(viewProjection,model);fo3menuui::Conversation(mvp.m,panel,gPlayerSession->player);
+            }
             if(gDialoguePanel.visible&&!gBarter.active&&!gScriptMessagePanel.visible&&!IsFo3LoadingVisible()) {
                 const auto& panel=gDialoguePanel;Mat4 model{};const float yaw=panel.yaw;
                 model.m[0]=std::cos(yaw);model.m[2]=-std::sin(yaw);model.m[5]=1;
@@ -2768,6 +2780,7 @@ private:
                 glBindFramebuffer(GL_FRAMEBUFFER,framebuffer_);
                 fo3lockui::Render(viewProjection.m,gLockpick,gPlayerSession->player,eye.width,eye.height);
             }
+            fo3bloodui::Render(fo3worldscript::seconds);
             fo3blinkui::Render(gPlayerSeatFade);
             if (depthReady) {
                 fqperf::GpuScope gpuDepth(fqperf::GpuDepthCopy);
