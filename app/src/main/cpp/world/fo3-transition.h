@@ -24,6 +24,7 @@ struct Fo3CellTransitionRequestQ74 {
     float rz = 0.0f;
     double travelHours=0; // Applied only at successful scene publication.
     bool valid = false;
+    bool preserveView = false; // Rebuild current resources without a player arrival/reset.
 };
 
 // CPU-only entry points: no terrain teardown or collision-policy mutation.
@@ -44,6 +45,7 @@ void SetFo3TransitionContextQ74(const Fo3CellTransitionRequestQ74& request);
 // teardown and rebuild happen later from the render thread.
 bool ConsumeFo3CellTransitionRequestQ74(Fo3CellTransitionRequestQ74& outRequest);
 bool HasPendingFo3CellTransitionRequestQ74() noexcept;
+bool QueueFo3SceneRefreshQ74(uint32_t cell,float x,float y,float z);
 void CompleteFo3CellTransitionQ74(uint32_t cellFormId);
 
 // Consumed by the authored collision resolver on the frame after a successful

@@ -61,7 +61,8 @@ bool PreviewFo3DialogueReferences(const fo3player::Player& player,
 bool PublishFo3DialogueReferences(fo3player::Player& player,
     fo3player::ScriptTransactionPlan& plan,std::string& error) {
   // Single render-thread turn; validate and allocate before logical publication.
-  if(!PreviewFo3DialogueReferences(player,plan,error)||!player.CanCommitScriptTransaction(plan))return false;
+  if(!player.CanCommitScriptTransaction(plan))return false;
+  if(!PreviewFo3DialogueReferences(player,plan,error))return PublishFo3DialogueSceneRefresh(player,plan,error);
   if(fo3script::CellHandoff(player,plan,gCurrentCellFormId,gExteriorWorldspaceQ1890)){
     const auto snapshot=plan.CandidateReferences();
     if(!fo3script::CommitCellHandoff(player,plan,[](const fo3player::PlayerMove& move){
@@ -190,7 +191,12 @@ void UpdateFo3Dialogue(double now,float stick,bool a,bool b,bool focused,float h
     // visible (system UI/headset state). Do not destroy an authored conversation
     // for that presentation-level event; input is already gated by focused below.
     else if(gBarter.active)UpdateFo3Barter(now,stick,horizontal,leftTrigger,trigger,x,pressA,pressB,focused);
-    else if(focused&&pressB)EndFo3Dialogue("B exit");
+    else if(focused&&pressB){
+      auto ctx=DialogueContext(*actor);const auto previous=gDialogue.audioToken;
+      if(gDialogue.RequestGoodbye(ctx,gPlayerSession->player)){
+        if(gDialogue.audioToken!=previous){fo3audio::DialogueStop();DialoguePublishAudio();}
+      }else EndFo3Dialogue("B exit");
+    }
     else {
       auto ctx=DialogueContext(*actor);
       if(gDialogue.phase==fo3dialogue::Phase::Results){

@@ -699,6 +699,16 @@ bool QueueFo3MapMarkerTransitionQ74(uint32_t marker,float x,float y,float z,
     gPendingTransitionQ74.travelHours=travelHours;
     return true;
 }
+bool QueueFo3SceneRefreshQ74(uint32_t cell,float x,float y,float z){
+    if(!cell||cell!=gCurrentCellQ74||gHasPendingTransitionQ74||IsFo3LoadingVisible()||
+       !std::isfinite(x)||!std::isfinite(y)||!std::isfinite(z))return false;
+    gPendingTransitionQ74={};gPendingTransitionQ74.cellFormId=cell;
+    gPendingTransitionQ74.x=x;gPendingTransitionQ74.y=y;gPendingTransitionQ74.z=z;
+    gPendingTransitionQ74.valid=true;gPendingTransitionQ74.preserveView=true;gHasPendingTransitionQ74=true;
+    BeginFo3Loading(cell,0);
+    Q71_LOGI("SCRIPT SCENE REFRESH QUEUED: cell=%08X origin=(%.2f %.2f %.2f) preserveView=1",cell,x,y,z);
+    return true;
+}
 
 namespace Q1840Prompt {
 
@@ -1176,8 +1186,8 @@ void CompleteFo3CellTransitionQ74(uint32_t cellFormId) {
             cellFormId,stage,static_cast<double>(micros)/1000.0);
     };
     gCurrentCellQ74 = cellFormId;
-    gPlayerResetPendingQ74 = true;
-    if (gPendingTransitionQ74.valid)
+    gPlayerResetPendingQ74 = !gPendingTransitionQ74.preserveView;
+    if (gPendingTransitionQ74.valid&&!gPendingTransitionQ74.preserveView)
         gArrivalFacingQ74.Publish(gPendingTransitionQ74.destinationDoorRef, gPendingTransitionQ74.rz);
     const bool q2013DeferWastelandLoading =
         gPendingTransitionQ74.valid &&

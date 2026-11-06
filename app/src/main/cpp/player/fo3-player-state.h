@@ -557,6 +557,8 @@ public:
   bool PumpWorldAwareGameMode(double realSeconds,const std::vector<uint32_t>& resident,
       const std::function<bool(std::unique_ptr<ScriptTransactionPlan>)>& reserveWorld,bool menuMode=false);
   void SetScriptPlayerLocation(float x,float y,float z,uint32_t cell,uint32_t world);
+  void SetScriptPlayerHeading(float sceneYaw);
+  bool ScriptHeadingAngle(uint32_t reference,uint32_t target,float& degrees) const;
   bool ScriptDistance(float& distance) const;
   float ScriptPlayerHeight()const{return scriptPlayerPosition_[2];}
   uint32_t ScriptActivator() const { return scriptActivator_; }
@@ -816,6 +818,8 @@ private:
   uint32_t scriptActivator_=0,scriptReference_=0,scriptPlayerCell_=0,scriptPlayerWorld_=0;
   std::array<float,3> scriptPlayerPosition_{};
   bool scriptPlayerPositionKnown_=false;
+  float scriptPlayerHeading_=0;
+  bool scriptPlayerHeadingKnown_=false;
   uint64_t scriptEffectRevision_=0;
   std::vector<ScriptExecution>* scriptTrace_=nullptr; // Private preparation only; never published/swapped.
   uint32_t scriptTraceParent_=ScriptExecution::NoParent;

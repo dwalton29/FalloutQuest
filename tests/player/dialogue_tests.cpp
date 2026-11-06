@@ -150,6 +150,22 @@ static void Lifecycle() {
   assert(fo3pipdata::DecodeState(encoded,p.Definitions().pipboy,bytes.data(),bytes.size(),error));
   assert(encoded.saidInfos==p.Snapshot().pipboy.saidInfos);
 }
+static void Farewell(){
+  fo3player::Catalog c;c.initial.baseHealth=100;c.pipboy.targets[100].base=10;c.weapons.actors[10].health=100;
+  c.pipboy.dialogueActors[10].voice=30;c.pipboy.voices[30]="Voice";c.pipboy.greetings={40};c.pipboy.quests[20].flags=1;
+  fo3pipdata::Info greeting;greeting.id=50;greeting.topic=40;greeting.quest=20;greeting.responses={{0,1,"Hello"}};c.pipboy.topics[40]={greeting};
+  c.pipboy.dialogueTopics[41].editor="GOODBYE";c.pipboy.dialogueTopics[41].type=1;
+  auto bye=greeting;bye.id=51;bye.topic=41;bye.type=1;bye.responses={{0,1,"Farewell"}};bye.end.source="RewardKarma 5";c.pipboy.topics[41]={bye};
+  fo3player::Player p(c);Context ctx;ctx.player=&p;ctx.speaker={100,10};ctx.target={fo3player::PlayerRef,7};Session voice;
+  assert(voice.Start(ctx,p));const auto interrupted=voice.audioToken;assert(voice.RequestGoodbye(ctx,p)&&voice.topic==41&&voice.info==51);
+  const auto farewell=voice.audioToken;assert(voice.RequestGoodbye(ctx,p)&&voice.audioToken==farewell&&p.Snapshot().karma==0);
+  assert(!voice.AudioDone(interrupted,true,ctx,p)&&voice.info==51);voice.AudioDone(farewell,true,ctx,p);
+  assert(!voice.Active()&&p.Snapshot().karma==5);assert(!voice.AudioDone(farewell,true,ctx,p)&&p.Snapshot().karma==5);
+  assert(voice.Start(ctx,p));voice.AudioDone(voice.audioToken,true,ctx,p);assert(voice.phase==Phase::Choices&&voice.RequestGoodbye(ctx,p));
+  voice.phase=Phase::Results;voice.resultTicket=9;assert(voice.RequestGoodbye(ctx,p)&&voice.phase==Phase::Results&&voice.resultTicket==9);voice.End("fixture reset");
+  c.pipboy.topics[41].front().end.source="UnsupportedFarewell";fo3player::Player unsupported(c);ctx.player=&unsupported;
+  assert(voice.Start(ctx,unsupported)&&!voice.RequestGoodbye(ctx,unsupported)&&voice.topic==40&&unsupported.Snapshot().karma==0);voice.End("no eligible farewell");
+}
 static void BoundPublication() {
   fo3player::Catalog c;c.initial.baseHealth=100;
   c.pipboy.targets[100].base=10;c.weapons.actors[10].health=100;
@@ -363,7 +379,7 @@ static void OriginalQuest(const char* path) {
   assert(restored.Snapshot().pipboy.quests.at(0x14e9e).stage==10);
   std::cout<<"Original MS11 acceptance, nested MSObjectives, target and save/reload passed\n";
 }
-int main(int argc,char** argv){Isolated();ConsequencesAndOrder();Lifecycle();BoundPublication();ResultConsequences();ActivationEvent();PresentationAndOverride();InfoParser();QuestParser();QuestFoundation();if(argc>1){Original(argv[1]);OriginalQuest(argv[1]);}
+int main(int argc,char** argv){Isolated();ConsequencesAndOrder();Lifecycle();Farewell();BoundPublication();ResultConsequences();ActivationEvent();PresentationAndOverride();InfoParser();QuestParser();QuestFoundation();if(argc>1){Original(argv[1]);OriginalQuest(argv[1]);}
   if(argc>2){std::ifstream voice(std::string(argv[2])+"/ms11_greeting_0003da20_3.ogg",std::ios::binary);char header[4]{};voice.read(header,4);assert(std::string(header,4)=="OggS");
     std::ifstream lip(std::string(argv[2])+"/ms11_greeting_0003da20_3.lip",std::ios::binary);assert(lip&&lip.peek()==1);std::cout<<"Original Lucas voice and companion LIP exist\n";}
   std::cout<<"Dialogue tests passed\n";}

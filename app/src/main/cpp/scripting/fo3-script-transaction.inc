@@ -8,6 +8,7 @@ Player::Player(const Player& source,ScriptCandidateTag)
       scriptActivator_(source.scriptActivator_),scriptReference_(source.scriptReference_),
       scriptPlayerCell_(source.scriptPlayerCell_),scriptPlayerWorld_(source.scriptPlayerWorld_),
       scriptPlayerPosition_(source.scriptPlayerPosition_),scriptPlayerPositionKnown_(source.scriptPlayerPositionKnown_),
+      scriptPlayerHeading_(source.scriptPlayerHeading_),scriptPlayerHeadingKnown_(source.scriptPlayerHeadingKnown_),
       scriptEffectRevision_(source.scriptEffectRevision_),
       scriptCompileCache_(source.scriptCompileCache_?source.scriptCompileCache_:
         (source.scriptCompileCache_=std::make_shared<fo3script::CompileCache>(source.catalog_->pipboy))),
@@ -208,7 +209,8 @@ std::unique_ptr<ScriptTransactionPlan> Player::PrepareTerminalTransaction(
 }
 bool Player::ScriptPlanContextMatches(const ScriptTransactionPlan& plan) const noexcept {
   const auto& candidate=*plan.candidate_;
-  return scriptPlayerPositionKnown_==candidate.scriptPlayerPositionKnown_ &&
+  return scriptPlayerHeadingKnown_==candidate.scriptPlayerHeadingKnown_ && scriptPlayerHeading_==candidate.scriptPlayerHeading_ &&
+    scriptPlayerPositionKnown_==candidate.scriptPlayerPositionKnown_ &&
     scriptPlayerPosition_==candidate.scriptPlayerPosition_ && scriptPlayerCell_==candidate.scriptPlayerCell_ &&
     scriptPlayerWorld_==candidate.scriptPlayerWorld_ && scriptActivator_==candidate.scriptActivator_ &&
     scriptReference_==candidate.scriptReference_;

@@ -2328,6 +2328,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
   questScriptClock_=questScriptAccumulator_=referenceScriptAccumulator_=0;questScriptLastTicks_.clear();
   pendingKarmaEvents_.clear();pendingTheftEvents_.clear();pendingQuestNotices_.clear();pendingScriptItems_.clear();
   pendingExperienceNotices_.clear();pendingLocationNotices_.clear();
+  scriptPlayerHeading_=0;scriptPlayerHeadingKnown_=false;
   pendingScriptActions_.clear();scriptActorMoves_.clear();scriptTalking_.clear();scriptAnimations_.clear();scriptInsideTriggers_.clear();++scriptRuntimeGeneration_;
   pendingScriptMessages_.clear();pendingScriptSounds_.clear();pendingBarters_.clear();scriptButtons_.clear();EndContainerInteraction();
   ++revision_;

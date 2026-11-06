@@ -1907,13 +1907,15 @@ private:
                     if(!scriptMenu)gPlayerSession->player.AdvanceGameClock(seconds);
                     auto& scriptPlayer=gPlayerSession->player;
                     fo3worldscript::Register();
-                    if(!scriptMenu){fo3worldscript::seconds+=seconds;fo3worldscript::SpeechTick();}
+                    if(!scriptMenu)fo3worldscript::seconds+=seconds;
                     scriptPlayer.SetScriptRuntimeClock(fo3worldscript::seconds,scriptMenu?0:seconds);
                     scriptPlayer.SetScriptPlayerLocation(
                         gSceneCenterXQ1730+gQ210Head[0]*FO3_UNITS_PER_METRE_Q715,
                         gSceneCenterYQ1730-(gQ210Head[2]-SCENE_FORWARD)*FO3_UNITS_PER_METRE_Q715,
                         gSceneFloorZQ1730+(gQ210Head[1]-FLOOR_Y)*FO3_UNITS_PER_METRE_Q715,
                         gCurrentCellFormId,gExteriorWorldspaceQ1890);
+                    scriptPlayer.SetScriptPlayerHeading(gQ210Head[3]);
+                    if(!scriptMenu)fo3worldscript::SpeechTick();
                     const auto beforeScripts=scriptPlayer.Revision();
                     // Discover resident identities at 4 Hz or a publication change;
                     // drive quest cadence every application frame, not per eye.

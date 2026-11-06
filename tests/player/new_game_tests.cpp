@@ -33,6 +33,36 @@ static void Synthetic(){
   fo3player::Player unsupported(c);assert(!unsupported.PrepareNewGameTransaction(101,error));
   assert(unsupported.Snapshot().pipboy.quests.empty()&&!unsupported.Snapshot().playerMove.marker);
 }
+static void HeadingAngles(){
+  using namespace fo3player;Catalog c;c.initial.special.fill(5);c.initial.baseHealth=100;
+  c.references[100].base=10;c.references[100].cell=1;c.references[100].valid=true;
+  c.actorPlacements[100].base=10;c.actorPlacements[100].cell=1;c.weapons.actors[10].health=20;
+  c.pipboy.targets[100].base=10;c.pipboy.targets[100].cell=1;
+  for(uint32_t id=200;id<=205;++id){c.references[id].base=20;c.references[id].valid=true;c.references[id].cell=1;c.pipboy.targets[id].base=20;c.pipboy.targets[id].cell=1;}
+  c.pipboy.targets[200].x=10;c.pipboy.targets[201].y=10;c.pipboy.targets[202].x=-10;c.pipboy.targets[203].y=-10;c.pipboy.targets[205].cell=2;
+  c.eventBaseScripts[10]=300;c.pipboy.objectReferenceScripts[100]={300,10};c.pipboy.formNames["target"]=200;
+  auto& source=c.pipboy.scripts[300];source.variables[1]="angle";source.source="scn Heading\nfloat angle\nBegin OnTrigger player\nset angle to player.getHeadingAngle target\nEnd";c.eventPrograms[300]=fo3script::ParseEvents(source);
+  Player p(c);p.RegisterOriginalActors();p.SetScriptPlayerLocation(0,0,0,1,0);float angle=999;
+  assert(!p.ScriptHeadingAngle(PlayerRef,200,angle));p.SetScriptPlayerHeading(0);
+  assert(p.ScriptHeadingAngle(PlayerRef,200,angle)&&std::fabs(angle-90)<.001f);
+  assert(p.ScriptHeadingAngle(PlayerRef,201,angle)&&std::fabs(angle)<.001f);
+  assert(p.ScriptHeadingAngle(PlayerRef,202,angle)&&std::fabs(angle+90)<.001f);
+  assert(p.ScriptHeadingAngle(PlayerRef,203,angle)&&std::fabs(std::fabs(angle)-180)<.001f);
+  assert(p.ScriptHeadingAngle(PlayerRef,204,angle)&&angle==0);
+  assert(!p.ScriptHeadingAngle(PlayerRef,205,angle)&&!p.ScriptHeadingAngle(PlayerRef,999,angle));
+  p.SetScriptPlayerHeading(7.85398163397f);assert(p.ScriptHeadingAngle(PlayerRef,202,angle)&&std::fabs(angle)<.001f);
+  auto actor=p.Snapshot().actors.at(100);actor.yaw=1.57079632679f;assert(p.UpdateActor(100,actor));
+  assert(p.ScriptHeadingAngle(100,201,angle)&&std::fabs(angle-90)<.001f);
+  assert(p.ScriptHeadingAngle(200,201,angle)&&angle==0);
+  p.SetScriptPlayerHeading(0);std::string error;
+  auto plan=p.PrepareReferenceEventTransaction(100,"OnTrigger",PlayerRef,error);Check(bool(plan),error);
+  assert(!p.Snapshot().pipboy.dialogueVariables.count(uint64_t(100)<<32|1));
+  p.SetScriptPlayerHeading(1);assert(!p.CanCommitScriptTransaction(*plan));p.SetScriptPlayerHeading(0);
+  assert(p.CommitScriptTransaction(*plan)&&std::fabs(p.Snapshot().pipboy.dialogueVariables.at(uint64_t(100)<<32|1)-90)<.001f);
+  p.SetScriptPlayerHeading(NAN);assert(!p.ScriptHeadingAngle(PlayerRef,200,angle));
+  p.SetScriptPlayerHeading(0);const auto path="/tmp/fq-heading-"+std::to_string(getpid());Check(p.Save(path,error),error);Check(p.Restore(path,error),error);unlink(path.c_str());
+  assert(!p.ScriptHeadingAngle(PlayerRef,200,angle));
+}
 static void Identity(){
   fo3player::Catalog c;c.initial.baseHealth=100;c.initial.special.fill(5);
   c.pipboy.dialogueActors[fo3player::PlayerBase].name="Original";
@@ -319,8 +349,8 @@ static void OriginalIdentity(const fo3player::Catalog& catalog,bool female,const
   };
   auto event=[&](uint32_t ref,const char* name){if(!p.HasReferenceEvent(ref,name))return;auto plan=p.PrepareReferenceEventTransaction(ref,name,fo3player::PlayerRef,error);Check(bool(plan)&&p.CommitScriptTransaction(*plan),error);};
   auto enter=[&](const char* script){const auto ref=scriptedReference(script);const auto& at=d.targets.at(ref);p.SetScriptPlayerLocation(at.x,at.y,at.z,at.cell,at.world);};
-  auto arrival=[&](const char* package){
-    const auto ref=d.formNames.at("cg01dadref"),id=d.formNames.at(package);
+  auto actorArrival=[&](const char* reference,const char* package){
+    const auto ref=d.formNames.at(reference),id=d.formNames.at(package);
     // Presentation fixture signals an actual package start/arrival boundary;
     // package and actor scripts perform all quest progression themselves.
     for(bool completed:{false,true}){
@@ -332,6 +362,7 @@ static void OriginalIdentity(const fo3player::Catalog& catalog,bool female,const
       Check(p.CommitScriptTransaction(*plan),error);
     }
   };
+  auto arrival=[&](const char* package){actorArrival("cg01dadref",package);};
   p.SetScriptEventDiagnostic([&](const std::string& message){if(message.find(std::to_string(d.formNames.at("cg01script")))!=std::string::npos||message.find(std::to_string(d.formNames.at("cg02script")))!=std::string::npos||message.find("DIALOGUE")!=std::string::npos)std::cerr<<message<<"\n";});
   unsigned modalTicks=0;bool allocated=false,followed=false,packageGreeting=false,resetSeen=false,radioSeen=false;
   for(unsigned frame=0;frame<4000;++frame){
@@ -512,6 +543,50 @@ static void OriginalIdentity(const fo3player::Catalog& catalog,bool female,const
   assert(restored.PlayerFemale()==female&&restored.PlayerName()==(female?"Catherine":"James"));
   assert(restored.Snapshot().pipboy.quests.at(birthday).stage==70&&restored.ActorHealth(roach)==0&&restored.Snapshot().pipboy.dialogueVariables.at(count)==3);
   assert(restored.Snapshot().pipboy.quests.at(birthday).stages.count(34)&&restored.ItemCount(d.formNames.at("bookskillmelee"))==1&&restored.ItemCount(d.formNames.at("kidhatprewarcapkid"))==1);
+  // Original photo: readiness comes from package callbacks and the placed
+  // trigger's heading check, rather than a stage/result injected by the test.
+  const auto wristCount=p.ItemCount(d.formNames.at("pipboy"));
+  talk("cg02dadref",{});assert(p.Snapshot().pipboy.quests.at(birthday).stage==80);queuedSpeech();
+  const auto photo=scriptedReference("cg02playerpicturetriggerscript");const auto& photoAt=d.targets.at(photo);
+  p.SetScriptPlayerLocation(photoAt.x,photoAt.y,photoAt.z,photoAt.cell,photoAt.world);p.SetScriptPlayerHeading(0);
+  for(const auto& change:p.ScriptTriggerChanges())p.AcknowledgeScriptTrigger(change.first,change.second);
+  const auto occupied=p.ScriptOccupiedTriggers();assert(std::find(occupied.begin(),occupied.end(),photo)!=occupied.end());
+  const auto ready=fo3dialogue::VariableKey(d,"CG02.PlayerReady");
+  event(photo,"OnTrigger");assert(!p.Snapshot().pipboy.dialogueVariables.count(ready)||p.Snapshot().pipboy.dialogueVariables.at(ready)==0);
+  actorArrival("cg02dadref","cg02dadwaitforpicture");actorArrival("cg02jonasref","cg02jonaswaitforpicture");
+  assert(p.Snapshot().pipboy.dialogueVariables.at(fo3dialogue::VariableKey(d,"CG02.DadReady"))==1&&p.Snapshot().pipboy.dialogueVariables.at(fo3dialogue::VariableKey(d,"CG02.JonasReady"))==1);
+  const auto& photographer=p.Snapshot().actors.at(jonas);
+  const auto faceJonas=float(std::atan2(-(photographer.position[0]-photoAt.x),photographer.position[1]-photoAt.y));
+  p.SetScriptPlayerHeading(faceJonas+1.57079632679f);event(photo,"OnTrigger");assert(p.Snapshot().pipboy.dialogueVariables.at(ready)==0);
+  p.SetScriptPlayerHeading(faceJonas);
+  {auto pose=p.PrepareReferenceEventTransaction(photo,"OnTrigger",fo3player::PlayerRef,error,fo3player::ScriptProgramCapture::EnteredPrograms);Check(bool(pose),error);
+    std::atomic<bool> cancel{false};fo3script::ScriptMasterMatch report;Check(fo3script::MatchScriptProgramsToMaster(master,pose->ExecutedScripts(),report,cancel,error),error);Check(p.CommitScriptTransaction(*pose),error);}
+  assert(p.Snapshot().pipboy.dialogueVariables.at(ready)==1);
+  event(photo,"OnTriggerLeave");assert(p.Snapshot().pipboy.dialogueVariables.at(ready)==0);event(photo,"OnTrigger");
+  p.PumpWorldAwareGameMode(.1,{},[&](auto plan){return p.CommitScriptTransaction(*plan);});
+  assert(p.Snapshot().pipboy.quests.at(birthday).stage==90&&p.PlayerControlDisabled(0));queuedSpeech();
+  assert(p.Snapshot().pipboy.quests.at(birthday).stage==95&&!p.EquippedWeapon());
+  for(unsigned tick=0;tick<100&&!p.Snapshot().movie.owner;++tick){p.SetScriptRuntimeClock(1200+tick*.1,.1);p.PumpWorldAwareGameMode(.1,{},[&](auto plan){return p.CommitScriptTransaction(*plan);});}
+  const auto teen=d.formNames.at("cg03");const auto jump=p.Snapshot().movie;
+  assert(jump.owner==teen&&jump.path=="6 years later.bik"&&jump.flags==4);
+  assert(p.Snapshot().pipboy.quests.at(birthday).stage==100&&!p.Snapshot().pipboy.quests.at(birthday).running&&p.Snapshot().pipboy.quests.at(birthday).stages.count(98));
+  assert(p.Snapshot().pipboy.quests.at(teen).stage==5&&p.PlayerRace()==adult&&p.PlayerControlDisabled(0));
+  assert(p.Snapshot().gameYear==2274&&p.Snapshot().gameMonth==7&&p.Snapshot().gameDay==3&&!p.Snapshot().playerToddler);
+  assert(!p.ItemCount(bb)&&!p.ItemCount(d.formNames.at("bookskillmelee"))&&p.ItemCount(d.formNames.at("pipboy"))==wristCount);
+  const auto* dresser=p.ContainerContents(d.formNames.at("cg04playerdresserref"));assert(dresser&&std::any_of(dresser->begin(),dresser->end(),[&](const auto& item){return item.formId==d.formNames.at("bookskillmelee")&&item.count==1;}));
+  bool flash=false;fo3script::Action photoAction;while(p.PollScriptAction(photoAction))if(photoAction.kind==fo3script::ActionKind::ImageModifier&&photoAction.form==d.formNames.at("cgcameraflashisfx"))flash=true;assert(flash);
+  const auto jumpSave="/tmp/fq-photo-"+std::to_string(getpid());Check(p.Save(jumpSave,error),error);fo3player::Player photoRestored(catalog);Check(photoRestored.Restore(jumpSave,error),error);unlink(jumpSave.c_str());
+  assert(photoRestored.Snapshot().movie.path==jump.path&&photoRestored.Snapshot().playerMove.marker==d.formNames.at("cg03startmarkerref"));
+  const auto beforeMovie=p.Snapshot().pipboy.dialogueVariables;
+  for(unsigned tick=0;tick<20;++tick)p.PumpWorldAwareGameMode(.1,{d.formNames.at("cg03dadref")},[&](auto plan){return p.CommitScriptTransaction(*plan);});
+  assert(p.Snapshot().pipboy.dialogueVariables==beforeMovie);
+  assert(p.CompleteMovie(jump.serial));const auto teenStart=p.Snapshot().playerMove;
+  p.SetScriptPlayerLocation(teenStart.position[0],teenStart.position[1],teenStart.position[2],teenStart.cell,teenStart.world);p.SetScriptPlayerHeading(teenStart.rotation[2]);p.AcknowledgePlayerMove();
+  for(unsigned tick=0;tick<80&&p.Snapshot().pipboy.quests.at(teen).stage==5;++tick){p.SetScriptRuntimeClock(1300+tick*.1,.1);p.PumpWorldAwareGameMode(.1,{d.formNames.at("cg03dadref")},[&](auto plan){return p.CommitScriptTransaction(*plan);});queuedSpeech();}
+  assert(p.Snapshot().pipboy.quests.at(teen).stage==6);
+  {auto ctx=context(d.formNames.at("cg03dadref"));fo3dialogue::Session voice;configure(voice);Check(voice.Start(ctx,p),"original exam greeting");finish(voice,ctx);
+    assert(p.PlayerControlDisabled(0));Check(voice.RequestGoodbye(ctx,p),"original exam farewell");assert(voice.topic==d.formNames.at("goodbye")&&p.PlayerControlDisabled(0));finish(voice,ctx);assert(!voice.Active());}
+  assert(p.Snapshot().pipboy.quests.at(teen).stage==10&&!p.PlayerControlDisabled(0)&&p.Snapshot().pipboy.quests.at(teen).objectives.at(10).displayed);
 }
 int main(int argc,char** argv){
   std::string error;uint32_t quest=0;
@@ -520,7 +595,7 @@ int main(int argc,char** argv){
   for(const char* invalid:{"[General]\nSCharGenQuest=0", "[General]\nSCharGenQuest=1z", "[General]\nSCharGenQuest=1\nSCharGenQuest=2", "[Other]\nSCharGenQuest=1"}){
     std::istringstream input(invalid);assert(!fo3newgame::ReadQuest(input,quest,error));
   }
-  Synthetic();Identity();ScriptInventory();CharacterMenus();Lifecycle();TalkingActivators();CrimeFlags();CalendarAssignments();
+  Synthetic();HeadingAngles();Identity();ScriptInventory();CharacterMenus();Lifecycle();TalkingActivators();CrimeFlags();CalendarAssignments();
   if(argc<2)return 0;
   fo3player::Catalog catalog;Check(fo3player::LoadCatalog(argv[1],catalog,error),error);
   fo3player::Player player(catalog);player.RegisterOriginalActors();
@@ -553,5 +628,5 @@ int main(int argc,char** argv){
   fo3script::ImageStack images;images.Apply(1,base,0);images.Apply(2,catalog.imageModifiers.at(catalog.pipboy.formNames.at("cg00blackscreenisfx")),0);
   assert(images.Sample(0).fade[3]>.9f);images.Sample(20);assert(images.entries.size()==1);images.Remove(1);assert(images.entries.empty());
   OriginalIdentity(catalog,false,argv[1]);OriginalIdentity(catalog,true,argv[1]);OriginalInventory(catalog);OriginalSpecialBook(catalog);
-  std::cout<<"Original birth, playpen, birthday movie/intro, Pip-Boy gift, party presents, intercom, BB gun, three target hits and radroach death, both sex branches, package topic, calendar/crime state and saves passed\n";
+  std::cout<<"Original birth, playpen, birthday, intercom, target practice, photo, six-year jump and G.O.A.T. introduction, both sex branches, package callbacks, heading, inventory and saves passed\n";
 }

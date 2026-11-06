@@ -15439,6 +15439,7 @@ int Fo3DialogueResultStatus(uint64_t ticket){
     if(ticket&&ticket==gFo3DialogueCompletedTicket)return gFo3DialogueCompletedStatus;
     return ticket&&ticket==gFo3DialogueResultTicket?0:-1;
 }
+#include "dialogue/fo3-dialogue-scene-refresh.inc"
 #include "dialogue/fo3-dialogue-runtime.inc"
 bool Fo3DialogueResultOwnsAdmission(){
     return gDialogue.phase==fo3dialogue::Phase::Results&&

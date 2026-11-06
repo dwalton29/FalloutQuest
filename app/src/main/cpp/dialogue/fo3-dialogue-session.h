@@ -34,6 +34,7 @@ struct Session {
   bool StartSelectedTopic(uint32_t topic,uint32_t info,const Context&,fo3player::Player&,bool conversation=false);
   bool Start(const Context&,fo3player::Player&);
   bool Choose(size_t,const Context&,fo3player::Player&);
+  bool RequestGoodbye(const Context&,fo3player::Player&);
   bool AudioDone(uint32_t,bool,const Context&,fo3player::Player&);
   std::string Audio(const fo3pipdata::Definitions&)const;
   std::string Subtitle(const fo3pipdata::Definitions&)const;

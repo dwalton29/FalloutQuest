@@ -9,6 +9,18 @@ assert transition.index('PublishFo3CollisionSnapshotQ1930') < transition.index('
 assert transition.index('gSceneLoad.collisionComplete = true') < transition.index('PublishFo3CollisionSnapshotQ1930')
 print('Scene collision independence and publication ordering passed')
 
+refresh=Path('app/src/main/cpp/dialogue/fo3-dialogue-scene-refresh.inc').read_text()
+assert refresh.index('CanDeferFo3DialogueResult()') < refresh.index('CommitScriptTransaction(plan)') < refresh.index('QueueFo3SceneRefreshQ74(')
+assert 'candidate->playerMove.pending' in refresh and 'gExteriorWorldspaceQ1890' in refresh
+assert refresh.index('RollbackScriptTransaction(plan)') < refresh.index('player.CaptureReferenceState()')
+cell_world=Path('app/src/main/cpp/world/fo3-cell-world.cpp').read_text()
+refresh_queue=cell_world[cell_world.index('bool QueueFo3SceneRefreshQ74('):cell_world.index('namespace Q1840Prompt')]
+assert refresh_queue.index('gHasPendingTransitionQ74') < refresh_queue.index('gPendingTransitionQ74={}')
+assert refresh_queue.index('preserveView=true') < refresh_queue.index('BeginFo3Loading(cell,0)')
+assert 'gPlayerResetPendingQ74 = !gPendingTransitionQ74.preserveView' in cell_world
+assert 'gPendingTransitionQ74.valid&&!gPendingTransitionQ74.preserveView' in cell_world
+print('Script scene refresh commits under loader admission, rolls back queue failure and preserves the existing view')
+
 # Reference state must be checked before every transition upload/publication.
 assert transition.index('AbortFo3SceneLoad("reference-state-changed")') < transition.index('UploadCpuObject(')
 assert transition.index('gFo3ScenePublication.Publish(prepared.referenceState)') > transition.index('PublishFo3CollisionSnapshotQ1930')
@@ -359,6 +371,11 @@ assert actor_frame.index('Fo3GameplayBlocked()') < actor_frame.index('Q230Simula
 loose=s[s.index('void Q221UpdateLooseObjectsFromSolvedPalms('):s.index('std::string Q211Lower(')]
 assert loose.index('Fo3GameplayBlocked()') < loose.index('Q223AdvanceDynamicBodies()')
 loop=Path('app/src/main/cpp/core/fo3-runtime-loop.inc').read_text()
+# Live view input must precede script evaluation and speech result preparation.
+# Sampling after SpeechTick would immediately stale a heading-dependent plan.
+script_input=loop[loop.index('auto& scriptPlayer=gPlayerSession->player;'):]
+assert script_input.index('SetScriptPlayerLocation(') < script_input.index('SetScriptPlayerHeading(gQ210Head[3])') < script_input.index('fo3worldscript::SpeechTick()')
+assert script_input.index('SetScriptPlayerHeading(gQ210Head[3])') < script_input.index('fo3worldscript::Events()') < script_input.index('fo3worldscript::TriggerTick()')
 assert 'if (!Fo3GameplayBlocked() && gPlayerSession' in loop
 assert 'if (!Fo3GameplayBlocked() && !IsFo3LoadingVisible())' in loop
 # Check actual block nesting so a later misplaced brace cannot silently ungate
@@ -579,7 +596,7 @@ print('Detached script provenance records exact entered bodies and typed origins
 dialogue_session=Path('app/src/main/cpp/dialogue/fo3-dialogue-session.cpp').read_text()
 player_source=Path('app/src/main/cpp/player/fo3-player-state.cpp').read_text()
 assert 'PrepareDialogueTransaction(' not in dialogue_session
-assert dialogue_session.count('PrepareDialogueInfoTransaction(')==2
+assert dialogue_session.count('PrepareDialogueInfoTransaction(')==3
 assert 'DialogueScriptPhase::Both,error,ctx.speaker.reference' in dialogue_session
 assert 'phase,error,actor,fo3player::ScriptProgramCapture::EnteredPrograms' in dialogue_session
 assert 'Execute(i,fo3player::DialogueScriptPhase::Begin' in dialogue_session

@@ -22,8 +22,8 @@ android {
         applicationId 'com.falloutquest.app'
         minSdk 29
         targetSdk 35
-        versionCode 321
-        versionName '0.171.0-vault-range-events'
+        versionCode 322
+        versionName '0.172.0-vault-birthday-photo'
 
         ndk {
             abiFilters 'arm64-v8a'

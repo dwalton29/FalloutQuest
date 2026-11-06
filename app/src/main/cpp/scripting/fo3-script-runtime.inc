@@ -22,7 +22,7 @@ class Expression {
       const auto dot=t.find('.');const auto query=dot==std::string::npos?t:t.substr(dot+1);
       size_t arguments=0;
       if(query=="getstage"||query=="getquestrunning"||query=="isactionref"||query=="getav"||
-         query=="getitemcount"||query=="getinsamecell"||query=="getincell"||query=="getdistance"||query=="getinfaction"||query=="getfactionrank")arguments=1;
+         query=="getitemcount"||query=="getinsamecell"||query=="getincell"||query=="getdistance"||query=="getheadingangle"||query=="getinfaction"||query=="getfactionrank")arguments=1;
       if(query=="getstagedone"||query=="getobjectivedisplayed"||query=="getobjectivecompleted")arguments=2;
       for(size_t n=0;n<arguments;++n){
         if(at==tokens.size()||tokens[at]=="("||tokens[at]==")"||tokens[at]=="&&"||tokens[at]=="||"||tokens[at]=="==")return Fail("missing expression query argument");
@@ -92,6 +92,12 @@ class Expression {
       const auto id=dot==std::string::npos?owner:form(t.substr(0,dot));
       const auto placed=d.targets.find(id);if(placed==d.targets.end())return Fail("open-state reference unavailable");
       const auto saved=p.Snapshot().doorStates.find(id);value=saved==p.Snapshot().doorStates.end()?placed->second.openByDefault:saved->second;return true;
+    }
+    if(query=="getheadingangle"){
+      const auto id=dot==std::string::npos?owner:form(t.substr(0,dot));
+      if(at==tokens.size())return Fail("missing heading target");
+      const auto target=form(tokens[at++]);
+      return p.ScriptHeadingAngle(id,target,value)||Fail("heading location or view unavailable");
     }
     if(query=="getdistance"){
       const auto id=dot==std::string::npos?owner:form(t.substr(0,dot));
@@ -656,6 +662,25 @@ namespace fo3player {
 void Player::SetScriptPlayerLocation(float x,float y,float z,uint32_t cell,uint32_t world){
   if(!std::isfinite(x)||!std::isfinite(y)||!std::isfinite(z))return;
   scriptPlayerPosition_={x,y,z};scriptPlayerCell_=cell;scriptPlayerWorld_=world;scriptPlayerPositionKnown_=true;TouchMerchantCells(cell);
+}
+void Player::SetScriptPlayerHeading(float yaw){
+  scriptPlayerHeadingKnown_=std::isfinite(yaw);
+  scriptPlayerHeading_=scriptPlayerHeadingKnown_?std::remainder(yaw,6.283185307179586f):0;
+}
+bool Player::ScriptHeadingAngle(uint32_t reference,uint32_t target,float& degrees)const{
+  fo3pipdata::Location from,to;
+  if(!ScriptReferenceLocation(reference,from)||!ScriptReferenceLocation(target,to))return false;
+  if(from.cell!=to.cell&&(!from.world||from.world!=to.world))return false;
+  if(reference!=PlayerRef&&!catalog_->actorPlacements.count(reference)){degrees=0;return true;}
+  if(reference==PlayerRef&&!scriptPlayerHeadingKnown_)return false;
+  const float yaw=reference==PlayerRef?scriptPlayerHeading_:from.facing;
+  const float dx=to.x-from.x,dy=to.y-from.y;
+  if(!std::isfinite(yaw)||!std::isfinite(dx)||!std::isfinite(dy))return false;
+  if(dx==0&&dy==0){degrees=0;return true;}
+  // Scene yaw turns north toward west; GECK heading offsets are clockwise.
+  const double angle=std::atan2(double(dx),double(dy))+yaw;
+  degrees=float(std::remainder(angle,6.2831853071795864769)*57.295779513082320877);
+  return true;
 }
 bool Player::ScriptDistance(float& distance) const {
   const auto found=catalog_->pipboy.targets.find(scriptReference_);

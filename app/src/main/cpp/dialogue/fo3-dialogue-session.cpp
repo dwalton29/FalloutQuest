@@ -6,6 +6,9 @@
 #include <cmath>
 namespace fo3dialogue {
 static std::string Id(uint32_t id){char b[16];std::snprintf(b,sizeof(b),"%08X",id);return b;}
+static bool GoodbyeTopic(const fo3pipdata::Definitions& d,uint32_t topic){
+  const auto found=d.dialogueTopics.find(topic);return found!=d.dialogueTopics.end()&&found->second.editor=="GOODBYE";
+}
 const fo3pipdata::Info* Session::Current(const fo3pipdata::Definitions& d)const {
   auto t=d.topics.find(topic);if(t==d.topics.end())return nullptr;
   for(auto& i:t->second)if(i.id==info)return &i;
@@ -77,6 +80,12 @@ bool Session::Execute(const fo3pipdata::Info& i,fo3player::DialogueScriptPhase p
   if(!plan)return false;
   if(plan->HasReferenceChanges()){
     if(publishReferences&&publishReferences(p,*plan,error))return true;
+    // A rejected scene queue may already have rolled its logical commit back.
+    // Deferred preparation needs a fresh candidate bound to that restored state.
+    if(!p.CanCommitScriptTransaction(*plan)){
+      plan=p.PrepareDialogueInfoTransaction(i.topic,i.id,phase,error,actor,fo3player::ScriptProgramCapture::EnteredPrograms);
+      if(!plan)return false;
+    }
     if(phase==fo3player::DialogueScriptPhase::End&&deferEndResult&&endResultStatus){
       if(readyForEndResult&&!readyForEndResult()){this->phase=Phase::Results;return false;}
       this->phase=Phase::Results;
@@ -102,6 +111,17 @@ bool Session::Choose(size_t index,const Context& ctx,fo3player::Player& p) {
   auto t=choices[index].topic;auto i=Resolve(t,ctx,true);if(!i)return false;
   if(diagnostic)diagnostic("DIALOGUE CHOICE actor="+Id(actor)+" topic="+Id(t)+" index="+std::to_string(index));
   return Enter(*i,ctx,p);
+}
+bool Session::RequestGoodbye(const Context& ctx,fo3player::Player& p){
+  if(!Active()||scriptedTopic)return false;
+  // A pending result still owns this dialogue. Repeated exit input must not
+  // drop its transaction, or restart an already speaking farewell.
+  if(phase==Phase::Results||GoodbyeTopic(p.Definitions().pipboy,topic))return true;
+  std::vector<uint32_t> topics;
+  for(const auto& t:p.Definitions().pipboy.dialogueTopics)if(t.second.editor=="GOODBYE")topics.push_back(t.first);
+  std::sort(topics.begin(),topics.end());
+  for(auto t:topics)if(const auto* line=Resolve(t,ctx,true))return Enter(*line,ctx,p);
+  return false;
 }
 void Session::BuildChoices(const Context& ctx) {
   choices.clear();const auto& d=ctx.player->Definitions().pipboy;auto i=Current(d);if(!i)return;
@@ -158,7 +178,7 @@ bool Session::FinishInfo(const fo3pipdata::Info& line,const Context& ctx,fo3play
     }
     End("scripted INFO completed");return false;
   }
-  if(i->flags&1){End("authored goodbye");return false;}
+  if((i->flags&1)||GoodbyeTopic(p.Definitions().pipboy,i->topic)){End("authored goodbye");return false;}
   phase=Phase::Choices;BuildChoices(ctx);return false;
 }
 std::string Session::Audio(const fo3pipdata::Definitions& d)const {
