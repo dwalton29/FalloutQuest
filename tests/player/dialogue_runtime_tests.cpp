@@ -1,3 +1,9 @@
+#include <cstdint>
+struct Q230ActorVisual;
+static bool Q230ChatEligible(const Q230ActorVisual&,uint32_t,uint32_t);
+static bool Q230ChatBegin(uint32_t,uint32_t,double);
+#define FO3_NPC_CHAT_AVAILABLE(actor,target,package) Q230ChatEligible(actor,target,package)
+#define FO3_NPC_CHAT_REQUEST(actor,target,now) Q230ChatBegin(actor,target,now)
 // Exercise the production dialogue bridge and package executor. Platform audio,
 // input and skin queries are adapters; dialogue conditions/results are real.
 #define main PackageFixtureMain
@@ -52,6 +58,10 @@ bool Fo3AcceptsScenePublication(fo3scene::PublicationStamp stamp){
   return gPlayerSession&&gFo3ScenePublication.Accepts(stamp,gPlayerSession->player.Snapshot().referenceStateRevision);
 }
 #include "dialogue/fo3-dialogue-runtime.inc"
+#include "npc/fo3-npc-conversation.h"
+static bool Q230ChatEligible(const Q230ActorVisual&,uint32_t,uint32_t=0);
+bool HasFo3InteractionOccluder(float,float,float,float,float,float,float,uint32_t){return false;}
+#include "npc/fo3-npc-chat-runtime.inc"
 static double clockTime=0;
 static void Tick(bool a=false,bool b=false,bool x=false,float horizontal=0){++gStereoFrame;clockTime+=.05;UpdateFo3Dialogue(clockTime,0,a,b,true,horizontal,0,0,x);}
 static void Speak(){
@@ -270,8 +280,38 @@ static void NonresidentPublication(){
   assert(Fo3AcceptsScenePublication(gFo3ScenePublication.Stamp()));
   std::cout<<"Production nonresident dialogue publication and busy-scene rejection passed\n";
 }
+static void IntercomPackageAdmission(){
+  PrepareSynthetic();auto c=gPlayerSession->player.Definitions();std::string error;
+  c.references[42].base=43;c.references[42].valid=true;c.actorPlacements[42].base=43;
+  c.references[400].base=401;c.references[400].valid=true;c.pipboy.targets[400].base=401;c.pipboy.targets[400].cell=gCurrentCellFormId;c.pipboy.dialogueActors[401].talkingActivator=true;
+  c.references[500].base=501;c.references[500].valid=true;c.actorPlacements[500].base=501;c.pipboy.targets[500].base=501;c.pipboy.targets[500].cell=999;c.weapons.actors[501].health=20;
+  auto& package=c.pipboy.packages[50];package.type=15;package.dialogueValid=true;package.dialogueType=0;package.dialogueTopic=80;package.target.valid=true;package.target.value=400;
+  auto& first=c.pipboy.topics[80].front();first.responses.front().sound=0;first.end.source="RewardKarma 1";
+  gPlayerSession=std::make_unique<Session>(c);auto& p=gPlayerSession->player;gQ230NpcActors.front().aiPackage=50;gQ230NpcActors.front().runtime.package=50;
+  assert(!Q230ChatEligible(gQ230NpcActors.front(),400,50));
+  assert(p.SetTalkingActivatorActor(400,500));
+  std::array<float,3> point;assert(Q240PackageActorTarget(gQ230NpcActors.front(),400,point));
+  assert(Q230ChatEligible(gQ230NpcActors.front(),400,50)&&Q230ChatBegin(42,400,1));
+  fo3script::Action action;assert(p.PollScriptAction(action)&&action.kind==fo3script::ActionKind::Conversation&&action.package==50&&action.flags==400&&action.form==80);
+  auto done=p.PreparePackageEventTransaction(42,50,true,error);assert(done&&p.CommitScriptTransaction(*done));
+  assert(!Q230ChatEligible(gQ230NpcActors.front(),400,50));
+}
+static void OriginalIntercomApproach(const fo3player::Catalog& original,const char* path){
+  auto c=original;const auto q=c.pipboy.formNames.at("cg02"),ref=c.pipboy.formNames.at("cg02dadref"),travel=c.pipboy.formNames.at("cg02dadtointercom"),conversation=c.pipboy.formNames.at("cg02dadtalktojonasonintercom");
+  auto& quest=c.initial.pipboy.quests[q];quest.stage=35;quest.running=true;quest.stages.insert(35);
+  const auto marker=c.pipboy.targets.at(c.pipboy.packages.at(travel).location.value);gCurrentCellFormId=marker.cell;gExteriorWorldspaceQ1890=marker.world;
+  std::vector<Fo3NpcNavMeshQ240> meshes;assert(LoadFo3NpcNavigationQ240(marker.cell,marker.world,meshes,path));auto graph=std::make_shared<Q240NavigationGraph>();
+  for(auto& mesh:meshes){graph->triangleOffsets.push_back(graph->triangleCount);graph->triangleCount+=mesh.triangles.size();graph->byForm[mesh.formId]=graph->meshes.size();graph->meshes.push_back(std::make_shared<Fo3NpcNavMeshQ240>(std::move(mesh)));}
+  gPlayerSession=std::make_unique<Session>(c);auto& p=gPlayerSession->player;p.RegisterOriginalActors();assert(p.SetTalkingActivatorActor(c.pipboy.formNames.at("cg02dinerintercomref"),c.pipboy.formNames.at("cg02jonasref")));
+  p.SetScriptPlayerLocation(marker.x,marker.y,marker.z,marker.cell,marker.world);
+  Q230ActorVisual actor;actor.source.refFormId=ref;actor.source.baseFormId=c.pipboy.targets.at(ref).base;actor.navigationGraph=graph;actor.runtime.position=Q240ScenePosition({marker.x,marker.y,marker.z});
+  for(unsigned n=0;n<1200&&actor.aiPackage!=conversation;++n)Q240UpdateNpcPackage(actor,n*.05);
+  assert(actor.aiPackage==conversation&&!p.CanStartDailyPackage(ref,travel));
+  std::cout<<"Original Dad intercom Travel reaches completion and selects conversation through Once Per Day scheduling\n";
+}
 static void OriginalBirthHandoff(const char* path){
   fo3player::Catalog c;std::string error;assert(fo3player::LoadCatalog(path,c,error));
+  OriginalIntercomApproach(c,path);
   const auto birth=c.pipboy.formNames.at("cg00"),baby=c.pipboy.formNames.at("cg01"),dad=c.pipboy.formNames.at("cg00dadref");
   // Boundary precondition: the preceding end-of-birth fade reached stage 90.
   auto& stage=c.initial.pipboy.quests[birth];stage.stage=90;stage.running=true;stage.stages.insert(90);
@@ -314,4 +354,4 @@ static void OriginalMoiraInterview(const char* path){
   }
   std::cout<<"Original Moira five vault answers with resident display removal and real publication bridge passed\n";
 }
-int main(int argc,char** argv){Synthetic();SkipWithA();BarterBridge();CellPublication();NonresidentPublication();if(argc>1){OriginalBirthHandoff(argv[1]);OriginalBridge(argv[1]);OriginalMoiraInterview(argv[1]);}std::cout<<"Dialogue bridge lifecycle tests passed\n";}
+int main(int argc,char** argv){Synthetic();SkipWithA();BarterBridge();CellPublication();NonresidentPublication();IntercomPackageAdmission();if(argc>1){OriginalBirthHandoff(argv[1]);OriginalBridge(argv[1]);OriginalMoiraInterview(argv[1]);}std::cout<<"Dialogue bridge lifecycle tests passed\n";}

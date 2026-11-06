@@ -1,4 +1,5 @@
 #include "rendering/performance-capture.h"
+#include "dialogue/fo3-dialogue-selection.h"
 #include <limits>
 #include "npc/fo3-npc-residency.h"
 #include "fo3-package-schedule.h"
@@ -354,6 +355,14 @@ static bool Q240ResidentAccompanyTarget(const ResidentActors& actors,uint32_t re
   }return false;
 }
 static bool Q240PackageActorTarget(const Q230ActorVisual& actor,uint32_t reference,std::array<float,3>& point) {
+  if(gPlayerSession&&gPlayerSession->player.TalkingActivatorActor(reference)){
+    auto& player=gPlayerSession->player;const auto& definitions=player.Definitions().pipboy;
+    const auto placed=definitions.targets.find(reference);bool disabled=true;std::string error;
+    if(placed==definitions.targets.end()||player.ActorHealth(player.TalkingActivatorActor(reference))<=0||
+       !player.ReferenceDisabled(reference,disabled,error)||disabled||
+       (placed->second.cell!=gCurrentCellFormId&&(!gExteriorWorldspaceQ1890||placed->second.world!=gExteriorWorldspaceQ1890)))return false;
+    point={placed->second.x,placed->second.y,placed->second.z};return true;
+  }
   if(!gPlayerSession||reference==actor.source.refFormId||gPlayerSession->player.ActorHealth(reference)<=0)return false;
   if(reference==0x14)point={gSceneCenterXQ1730+gQ210Head[0]*FO3_UNITS_PER_METRE,
     gSceneCenterYQ1730-(gQ210Head[2]-SCENE_FORWARD)*FO3_UNITS_PER_METRE,
@@ -547,6 +556,10 @@ static const fo3pipdata::PackageDefinition* Q240SelectPackage(
     if(retry!=actor.runtime.packageRetryAfter.end()&&actor.aiLastUpdate<retry->second)continue;
     const auto found=definitions.packages.find(packageId);if(found==definitions.packages.end())continue;
     const auto& package=found->second;
+    if((package.flags&0x400u)&&!gPlayerSession->player.CanStartDailyPackage(actor.source.refFormId,packageId)){
+      const auto active=gPlayerSession->player.Snapshot().actorPackageEvents.find(actor.source.refFormId);
+      if(actor.aiPackage!=packageId||active==gPlayerSession->player.Snapshot().actorPackageEvents.end()||active->second.first!=packageId||active->second.second)continue;
+    }
     if(package.type!=7&&package.type!=3&&package.type!=4&&package.type!=1&&package.type!=2&&package.type!=6&&package.type!=14&&package.type!=13&&package.type!=5&&package.type!=12&&package.type!=10&&package.type!=8&&package.type!=15){Q240AiLogOnce(actor.source.refFormId,packageId,"package type "+std::to_string(package.type));continue;}
     if(package.type==13){std::string error;const auto* route=Q240PatrolRoute(actor,packageId,package,nullptr,&error);if(!route||route->empty()||!error.empty()){Q240AiLogOnce(actor.source.refFormId,packageId,error.empty()?"Patrol route unavailable":error);continue;}}
     if(package.type==2&&((package.location.type!=0&&package.location.type!=3)||!package.escortDistanceValid||!package.target.valid||package.target.type!=0||package.target.value!=0x14)){
@@ -593,6 +606,7 @@ static const fo3pipdata::PackageDefinition* Q240SelectPackage(
       }
       ctx.target={package.target.value,placement->second.base,gCurrentCellFormId,gExteriorWorldspaceQ1890,0,
         listener[0],listener[1],listener[2],false,false};
+      if(gPlayerSession->player.TalkingActivatorActor(package.target.value)&&!fo3dialogue::ReferenceContext(gPlayerSession->player,package.target.value,ctx.target))continue;
     }
     // Quest policy: a stable Accompany random gate per actor/package/game minute.
     if(package.type==7)ctx.randomPercent=float((actor.source.refFormId*2654435761u^packageId*2246822519u^uint32_t(fo3tod::WrapHour(hour)*60)*3266489917u)%100);
@@ -1488,15 +1502,17 @@ static void Q240AdvanceNpcPackage(Q230ActorVisual& actor,double now) {
   const auto& definitions=gPlayerSession->player.Definitions().pipboy;
   const auto active=definitions.packages.find(actor.aiPackage);
   const auto delivered=gPlayerSession->player.Snapshot().actorPackageEvents.find(actor.source.refFormId);
-  if(active!=definitions.packages.end()&&active->second.type==6&&(active->second.flags&4u)&&active->second.procedureIdles[1]&&
+  if(active!=definitions.packages.end()&&active->second.type==6&&((active->second.flags&0x400u)||((active->second.flags&4u)&&active->second.procedureIdles[1]))&&
      delivered!=gPlayerSession->player.Snapshot().actorPackageEvents.end()&&delivered->second==std::make_pair(actor.aiPackage,true)){
     const auto idle=active->second.procedureIdles[1];
+    if(idle&&(active->second.flags&4u)){
     if(state.packageEndIdle!=idle){
       fo3script::Action action;action.kind=fo3script::ActionKind::PackageIdle;action.reference=actor.source.refFormId;action.form=idle;action.flags=active->second.flags;
       if(gPlayerSession->player.QueueScriptAction(std::move(action))){state.packageEndIdle=idle;state.packageEndIdleUntil=-1;}
       return;
     }
     if(state.packageEndIdleUntil<0||now<state.packageEndIdleUntil)return;
+    }
     if(!Q240PackageEvent(actor,0,false))return;
     actor.aiPackage=state.package=0;state.packageKnown=false;state.nextPackageEvaluation=0;
     state.packageEndIdle=0;state.packageEndIdleUntil=-1;

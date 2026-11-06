@@ -1,4 +1,5 @@
 #include "player/fo3-player-presentation.h"
+#include "scripting/fo3-script-cell-handoff.h"
 #include "rendering/mesh/fo3-lod-material.h"
 #include "world/interaction/fo3-door-activation.h"
 #include "world/interaction/fo3-world-door-anchors.h"

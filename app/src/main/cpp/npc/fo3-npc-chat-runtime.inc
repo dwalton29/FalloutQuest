@@ -46,8 +46,15 @@ static bool Q230ChatEligible(const Q230ActorVisual& initiator,uint32_t reference
     fo3dialogue::Session candidate;Q230PrepareNpcChat(candidate);
     return candidate.Resolve(definition->second.dialogueTopic?definition->second.dialogueTopic:Q230HelloTopic(),context)!=nullptr;
   }
-  // Explicit-topic conversations need the interactive package director.
-  if(definition!=definitions.packages.end()&&definition->second.dialogueTopic)return false;
+  if(definition!=definitions.packages.end()&&definition->second.dialogueTopic){
+    if(reference==fo3player::PlayerRef||definition->second.dialogueType!=0||!definition->second.dialogueValid||definition->second.dialogueFlags||!initiator.runtime.CanTalk())return false;
+    const auto completed=gPlayerSession->player.Snapshot().actorPackageEvents.find(initiator.source.refFormId);
+    if(completed!=gPlayerSession->player.Snapshot().actorPackageEvents.end()&&completed->second==std::make_pair(package,true))return false;
+    auto context=DialogueContext(initiator);context.talking=true;context.speaker.package=package;context.speaker.packageKnown=true;
+    if(!fo3dialogue::ReferenceContext(gPlayerSession->player,reference,context.target))return false;
+    if(reference!=fo3player::PlayerRef&&!context.target.proxy){const auto* partner=DialogueActor(reference);if(!partner||partner->runtime.offScene||!partner->runtime.CanTalk())return false;}
+    fo3dialogue::Session candidate;Q230PrepareNpcChat(candidate);return candidate.Resolve(definition->second.dialogueTopic,context)!=nullptr;
+  }
   if(reference==fo3player::PlayerRef){
     return !initiator.runtime.furniture.Active()&&initiator.runtime.CanTalk()&&
       DialogueCanStart(const_cast<Q230ActorVisual&>(initiator));
@@ -85,9 +92,9 @@ static bool Q230ChatBegin(uint32_t speaker,uint32_t listener,double now) {
   if(gQ230NpcChat.Active()||!gPlayerSession||gDialogue.Active())return false;
   auto* initiator=DialogueActor(speaker);
   if(initiator){const auto& definitions=gPlayerSession->player.Definitions().pipboy;const auto definition=definitions.packages.find(initiator->aiPackage);
-    if(definition!=definitions.packages.end()&&definition->second.dialogueType==1){
+    if(definition!=definitions.packages.end()&&(definition->second.dialogueType==1||definition->second.dialogueTopic)){
       if(!Q230ChatEligible(*initiator,listener,initiator->aiPackage))return false;
-      return gPlayerSession->player.QueueScriptSpeech(speaker,definition->second.dialogueTopic?definition->second.dialogueTopic:Q230HelloTopic(),listener,false,false,initiator->aiPackage);
+      return gPlayerSession->player.QueueScriptSpeech(speaker,definition->second.dialogueTopic?definition->second.dialogueTopic:Q230HelloTopic(),listener,definition->second.dialogueType==0,false,initiator->aiPackage);
     }
   }
   if(listener==fo3player::PlayerRef){

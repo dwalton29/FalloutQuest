@@ -267,6 +267,7 @@ target_link_libraries(npc_door_runtime_tests PRIVATE ZLIB::ZLIB)
 add_test(NAME npc_door_runtime_tests COMMAND npc_door_runtime_tests)
 
 add_executable(dialogue_runtime_tests dialogue_runtime_tests.cpp ${dialogue_shared}
+    ../../app/src/main/cpp/npc/fo3-npc-conversation.cpp
     ../../app/src/main/cpp/npc/fo3-actor-animation.cpp
     ../../app/src/main/cpp/npc/fo3-npc.cpp)
 target_compile_features(dialogue_runtime_tests PRIVATE cxx_std_17)

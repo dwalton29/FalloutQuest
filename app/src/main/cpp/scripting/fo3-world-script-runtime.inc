@@ -20,7 +20,7 @@ static double seconds=0;
 static fo3dialogue::Session speech;
 static fo3dialogue::Panel scriptSubtitle;
 static std::vector<fo3script::Action> speechPending;
-static uint32_t speechReference=0;
+static uint32_t speechReference=0,speechIdentity=0,speechListenerIdentity=0,speechPackageOwner=0;
 static uint32_t speechTopic=0,speechTarget=0,speechToken=0,speechSerial=0,speechPackage=0;
 static std::pair<uint32_t,uint32_t> pendingPackageDone{};
 static double speechBegan=0;
@@ -28,10 +28,8 @@ static uint64_t speechGeneration=~uint64_t{0};
 static fo3dialogue::Context SpeechContext(uint32_t reference,uint32_t target){
     auto& player=gPlayerSession->player;
     fo3dialogue::Context ctx;ctx.player=&player;ctx.talking=true;
-    const auto& defs=player.Definitions();
-    auto placed=defs.pipboy.targets.find(reference);
-    if(placed!=defs.pipboy.targets.end()){const auto& p=placed->second;ctx.speaker={reference,p.base,p.cell,p.world,0,p.x,p.y,p.z,false,false};}
-    if(auto* actor=DialogueActor(reference)){
+    fo3dialogue::ReferenceContext(player,reference,ctx.speaker);
+    if(auto* actor=ctx.speaker.proxy?nullptr:DialogueActor(reference)){
         const auto pos=Q240GamePosition(*actor);
         ctx.speaker={reference,actor->source.baseFormId,gCurrentCellFormId,gExteriorWorldspaceQ1890,actor->aiPackage,pos[0],pos[1],pos[2],actor->runtime.activity==fo3npc::Activity::Combat,actor->runtime.packageKnown};
     }
@@ -40,17 +38,17 @@ static fo3dialogue::Context SpeechContext(uint32_t reference,uint32_t target){
         gSceneCenterXQ1730+gQ210Head[0]*FO3_UNITS_PER_METRE,
         gSceneCenterYQ1730-(gQ210Head[2]-SCENE_FORWARD)*FO3_UNITS_PER_METRE,
         gSceneFloorZQ1730+(gQ210Head[1]-FLOOR_Y)*FO3_UNITS_PER_METRE,false,false};
-    }else if(const auto* actor=DialogueActor(target)){const auto pos=Q240GamePosition(*actor);
+    }else if(const auto* actor=ctx.target.proxy?nullptr:DialogueActor(target)){const auto pos=Q240GamePosition(*actor);
       ctx.target={target,actor->source.baseFormId,gCurrentCellFormId,gExteriorWorldspaceQ1890,actor->aiPackage,pos[0],pos[1],pos[2],actor->runtime.activity==fo3npc::Activity::Combat,actor->runtime.packageKnown};
     }
     return ctx;
 }
 static void SpeechStop(){
     scriptSubtitle.visible=false;scriptSubtitle.subtitle.clear();++scriptSubtitle.revision;
-    if(gPlayerSession&&speechReference)gPlayerSession->player.SetScriptActorTalking(speechReference,false);
+    if(gPlayerSession){if(speechReference)gPlayerSession->player.SetScriptActorTalking(speechReference,false);if(speechIdentity)gPlayerSession->player.SetScriptActorTalking(speechIdentity,false);}
     if(auto* actor=DialogueActor(speechReference)){actor->runtime.speaking=false;actor->runtime.scriptSpeechToken=0;actor->lastFrame=UINT64_MAX;}
     if(speech.Active()&&!gDialogue.Active())fo3audio::DialogueStop();
-    speech.End("scripted speech stopped");speechToken=0;speechReference=0;speechPackage=0;
+    speech.End("scripted speech stopped");speechToken=0;speechReference=0;speechPackage=0;speechIdentity=0;speechListenerIdentity=0;speechPackageOwner=0;
 }
 
 static uint64_t runtimeGeneration=~uint64_t{0};
@@ -91,20 +89,23 @@ void SpeechTick(){
     if(pendingPackageDone.first){if(!PackageEvent(pendingPackageDone.first,pendingPackageDone.second,true))return;pendingPackageDone={};}
     if(speech.Active()){
         if(scriptSubtitle.visible){const auto text=speech.Subtitle(player.Definitions().pipboy);if(text!=scriptSubtitle.subtitle){scriptSubtitle.subtitle=text;++scriptSubtitle.revision;}}
-        if(auto* actor=DialogueActor(speech.actor))Q230DialogueResponseAnimation(*actor,speech);
+        if(auto* actor=DialogueActor(speechReference))Q230DialogueResponseAnimation(*actor,speech);
         bool disabled=true;std::string error;
-        if(gDialogue.Active()||IsFo3LoadingVisible()||!player.ReferenceDisabled(speech.actor,disabled,error)||disabled||seconds-speechBegan>60){SpeechStop();return;}
+        if(gDialogue.Active()||IsFo3LoadingVisible()||!player.ReferenceDisabled(speechReference,disabled,error)||disabled||
+           (speechIdentity!=speechReference&&(player.TalkingActivatorActor(speechReference)!=speechIdentity||player.ActorHealth(speechIdentity)<=0))||
+           (speechListenerIdentity!=speechTarget&&(player.TalkingActivatorActor(speechTarget)!=speechListenerIdentity||player.ActorHealth(speechListenerIdentity)<=0))||seconds-speechBegan>60){SpeechStop();return;}
         const auto done=fo3audio::DialogueCompletion();
         if(!done||uint32_t(done>>1)!=speechToken)return;
         const uint32_t actor=speech.actor,topic=speechTopic;
         // Only actual successful audio completion can run authored INFO end
         // results. Missing audio must never pretend Weld finished his greeting.
         if(!(done&1u)){Q6H_LOGW("SCRIPT SPEECH VOICE UNAVAILABLE ref=%08X topic=%08X",actor,topic);SpeechStop();return;}
-        if(speech.AudioDone(speech.audioToken,true,SpeechContext(actor,speechTarget),player)){
-            if(speech.actor!=speechReference){
-                player.SetScriptActorTalking(speechReference,false);
+        if(speech.AudioDone(speech.audioToken,true,SpeechContext(speechReference,speechTarget),player)){
+            const uint32_t endpoint=speech.proxy?speech.proxy:speech.actor;
+            if(endpoint!=speechReference||speech.actor!=speechIdentity){
+                player.SetScriptActorTalking(speechReference,false);player.SetScriptActorTalking(speechIdentity,false);
                 if(auto* previous=DialogueActor(speechReference)){previous->runtime.speaking=false;previous->runtime.scriptSpeechToken=0;}
-                speechTarget=speechReference;speechReference=speech.actor;player.SetScriptActorTalking(speechReference,true);
+                speechTarget=speechReference;speechListenerIdentity=speechIdentity;speechReference=endpoint;speechIdentity=speech.actor;player.SetScriptActorTalking(speechReference,true);player.SetScriptActorTalking(speechIdentity,true);
                 if(auto* next=DialogueActor(speechReference))next->runtime.speaking=true;
             }
             speechBegan=seconds;
@@ -112,8 +113,8 @@ void SpeechTick(){
             if(auto* live=DialogueActor(speechReference))live->runtime.scriptSpeechToken=speechToken;
             fo3audio::Dialogue(speech.Audio(player.Definitions().pipboy),speechToken);return;
         }
-        const auto package=speechPackage;SpeechStop();
-        if(package){pendingPackageDone={actor,package};if(PackageEvent(actor,package,true))pendingPackageDone={};}
+        const auto package=speechPackage,packageOwner=speechPackageOwner;SpeechStop();
+        if(package){pendingPackageDone={packageOwner,package};if(PackageEvent(packageOwner,package,true))pendingPackageDone={};}
         else Event(actor,"SayToDone",topic);
         FlushFo3PlayerState();
     }
@@ -121,6 +122,8 @@ void SpeechTick(){
     const auto action=speechPending.front();speechPending.erase(speechPending.begin());
     bool disabled=true;std::string enabledError;
     if(!player.ReferenceDisabled(action.reference,disabled,enabledError)||disabled)return;
+    const auto admission=SpeechContext(action.reference,action.flags);
+    if((action.sourceActor&&admission.speaker.reference!=action.sourceActor)||(action.targetActor&&admission.target.reference!=action.targetActor))return;
     auto* actor=DialogueActor(action.reference);
     if(actor&&(actor->runtime.offScene||!actor->runtime.CanTalk()))return;
     speech.publishReferences=[](fo3player::Player& p,fo3player::ScriptTransactionPlan& plan,std::string& e){return PublishFo3DialogueReferences(p,plan,e);};
@@ -128,13 +131,13 @@ void SpeechTick(){
     if(!(action.info?speech.StartSelectedTopic(action.form,action.info,SpeechContext(action.reference,action.flags),player,action.kind==fo3script::ActionKind::Conversation):speech.StartTopic(action.form,SpeechContext(action.reference,action.flags),player))){
         Q6H_LOGW("SCRIPT SPEECH TOPIC UNAVAILABLE ref=%08X topic=%08X",action.reference,action.form);return;
     }
-    speechReference=action.reference;speechTopic=action.form;speechTarget=action.flags;speechBegan=seconds;speechPackage=action.package;
+    speechReference=action.reference;speechTopic=action.form;speechTarget=action.flags;speechBegan=seconds;speechPackage=action.package;speechPackageOwner=action.reference;speechIdentity=speech.actor;speechListenerIdentity=admission.target.reference;
     if(action.forceSubtitle){
         scriptSubtitle={};scriptSubtitle.visible=true;scriptSubtitle.yaw=gQ210Head[3];
         scriptSubtitle.anchor={gQ210Head[0]-std::sin(scriptSubtitle.yaw)*1.5f,gQ210Head[1]-.25f,gQ210Head[2]-std::cos(scriptSubtitle.yaw)*1.5f};
         scriptSubtitle.subtitle=speech.Subtitle(player.Definitions().pipboy);++scriptSubtitle.revision;
     }
-    player.SetScriptActorTalking(action.reference,true);if(actor){actor->runtime.speaking=true;actor->lastFrame=UINT64_MAX;}
+    player.SetScriptActorTalking(action.reference,true);player.SetScriptActorTalking(speechIdentity,true);if(actor){actor->runtime.speaking=true;actor->lastFrame=UINT64_MAX;}
     speechToken=0x30000000u|(++speechSerial&0xffffffu);
     if(actor)actor->runtime.scriptSpeechToken=speechToken;
     fo3audio::DialogueGain(.7f);fo3audio::Dialogue(speech.Audio(player.Definitions().pipboy),speechToken);

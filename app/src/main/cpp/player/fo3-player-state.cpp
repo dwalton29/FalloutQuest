@@ -1227,6 +1227,32 @@ bool Player::GetIgnoreCrime(uint32_t reference,bool& ignored)const{
   if(reference!=PlayerRef&&!catalog_->actorPlacements.count(reference))return false;
   ignored=state_.ignoredCrimeActors.count(reference)!=0;return true;
 }
+static bool TalkingBinding(const Catalog& c,uint32_t reference,uint32_t actor){
+  const auto placed=c.references.find(reference);if(placed==c.references.end()||!placed->second.valid)return false;
+  const auto object=c.pipboy.dialogueActors.find(placed->second.base);
+  if(object==c.pipboy.dialogueActors.end()||!object->second.talkingActivator)return false;
+  if(!actor)return true;
+  const auto speaker=c.actorPlacements.find(actor);
+  return speaker!=c.actorPlacements.end()&&c.weapons.actors.count(speaker->second.base);
+}
+bool Player::CanStartDailyPackage(uint32_t reference,uint32_t package)const{
+  const auto start=state_.dailyPackages.find((uint64_t(reference)<<32)|package);
+  return start==state_.dailyPackages.end()||double(state_.gameDaysPassed)+state_.gameHour/24.-start->second>=1.;
+}
+bool Player::RecordDailyPackage(uint32_t reference,uint32_t package){
+  const auto definition=catalog_->pipboy.packages.find(package);
+  if(!catalog_->actorPlacements.count(reference)||definition==catalog_->pipboy.packages.end()||!(definition->second.flags&0x400u))return false;
+  const auto key=(uint64_t(reference)<<32)|package;
+  if(state_.dailyPackages.size()>=100000&&!state_.dailyPackages.count(key))return false;
+  state_.dailyPackages[key]=double(state_.gameDaysPassed)+state_.gameHour/24.;++revision_;return true;
+}
+bool Player::SetTalkingActivatorActor(uint32_t reference,uint32_t actor){
+  if(!TalkingBinding(*catalog_,reference,actor))return false;
+  if(TalkingActivatorActor(reference)==actor)return true;
+  if(actor){if(state_.talkingActivators.size()>=10000&&!state_.talkingActivators.count(reference))return false;state_.talkingActivators[reference]=actor;}
+  else state_.talkingActivators.erase(reference);
+  ++revision_;return true;
+}
 bool Player::SetIgnoreCrime(uint32_t reference,bool ignored){
   bool previous=false;if(!GetIgnoreCrime(reference,previous))return false;
   if(previous==ignored)return true;
@@ -1422,7 +1448,8 @@ bool Player::Save(const std::string &path, std::string &error) const {
     payload.push_back(l.forceFailures);payload.push_back(l.rewarded?1:0);}
   // Optional RFE1 after the v14 lock tail. Empty overlays keep existing v14
   // bytes unchanged; older supported saves do not require this extension.
-  const bool hasCrime=!state_.ignoredCrimeActors.empty();
+  const bool hasTalking=!state_.talkingActivators.empty()||!state_.dailyPackages.empty();
+  const bool hasCrime=hasTalking||!state_.ignoredCrimeActors.empty();
   const bool hasLife=hasCrime||state_.playerScale!=1||state_.playerRace||state_.playerToddler||state_.autoDisplayObjectives||state_.movie.serial;
   const bool hasMenus=hasLife||state_.deferredAppearanceOwner||state_.specialMenuOwner;
   const bool hasIdentity=hasMenus||state_.playerSex!=2||!state_.playerName.empty()||state_.nameMenuOwner||!state_.nameDraft.empty();
@@ -1659,7 +1686,21 @@ bool Player::Save(const std::string &path, std::string &error) const {
     std::vector<uint32_t> refs(state_.ignoredCrimeActors.begin(),state_.ignoredCrimeActors.end());std::sort(refs.begin(),refs.end());
     for(uint32_t ref:refs){if(ref!=PlayerRef&&!catalog_->actorPlacements.count(ref)){error="Invalid crime-ignore actor";return false;}Put32(payload,ref);}
   }
-  Put32(bytes, hasCrime ? 32 : hasLife ? 31 : hasMenus ? 30 : hasIdentity ? 29 : hasNewGame ? 28 : hasFactionRanks ? 27 : hasBodyDamage ? 26 : hasCorpsePoses ? 25 : hasDailyInfos ? 24 : hasScriptPackages ? 23 : hasScriptOverrides ? 22 : hasActorVariables ? 21 : hasDoorStates ? 20 : hasDebugPoints ? 19 : hasLevelAdvancement ? 18 : hasCompletionState ? 17 :
+  if(hasTalking){
+    if(state_.talkingActivators.size()>10000){error="Too many talking activators";return false;}
+    Put32(payload,0x31504154);Put32(payload,uint32_t(state_.talkingActivators.size())); // TAP1
+    std::vector<std::pair<uint32_t,uint32_t>> bindings(state_.talkingActivators.begin(),state_.talkingActivators.end());std::sort(bindings.begin(),bindings.end());
+    for(const auto& binding:bindings){if(!binding.second||!TalkingBinding(*catalog_,binding.first,binding.second)){error="Invalid talking activator binding";return false;}Put32(payload,binding.first);Put32(payload,binding.second);}
+    if(state_.dailyPackages.size()>100000){error="Too many daily packages";return false;}
+    Put32(payload,0x3144504f);Put32(payload,uint32_t(state_.dailyPackages.size())); // OPD1
+    std::vector<std::pair<uint64_t,double>> starts(state_.dailyPackages.begin(),state_.dailyPackages.end());std::sort(starts.begin(),starts.end());
+    for(const auto& start:starts){
+      const auto definition=catalog_->pipboy.packages.find(uint32_t(start.first));
+      if(!catalog_->actorPlacements.count(uint32_t(start.first>>32))||definition==catalog_->pipboy.packages.end()||!(definition->second.flags&0x400u)||!std::isfinite(start.second)||start.second<0){error="Invalid daily package history";return false;}
+      uint64_t bits;std::memcpy(&bits,&start.second,8);Put64(payload,start.first);Put64(payload,bits);
+    }
+  }
+  Put32(bytes, hasTalking ? 33 : hasCrime ? 32 : hasLife ? 31 : hasMenus ? 30 : hasIdentity ? 29 : hasNewGame ? 28 : hasFactionRanks ? 27 : hasBodyDamage ? 26 : hasCorpsePoses ? 25 : hasDailyInfos ? 24 : hasScriptPackages ? 23 : hasScriptOverrides ? 22 : hasActorVariables ? 21 : hasDoorStates ? 20 : hasDebugPoints ? 19 : hasLevelAdvancement ? 18 : hasCompletionState ? 17 :
       hasMerchantVisits ? 16 : hasPlayerAttributeOverrides ? 15 : 14);
   Put32(bytes, catalog_->fingerprint);
   Put32(bytes, static_cast<uint32_t>(payload.size()));
@@ -1719,7 +1760,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
   const auto *h = bytes.data();
   const auto version = fo3esm::ReadU32(h + 4);
   if (std::memcmp(h, "FQPS", 4) ||
-      (version < 1 || version > 32))
+      (version < 1 || version > 33))
     return fail("Unsupported player save format");
   if (fo3esm::ReadU32(h + 8) != catalog_->fingerprint)
     return fail("Player save belongs to different game definitions");
@@ -2242,9 +2283,24 @@ bool Player::Restore(const std::string &path, std::string &error) {
       if(version>=32){
         if(payload.size()-at<8||fo3esm::ReadU32(p+at)!=0x31524349)return fail("Missing crime-ignore state");
         const uint32_t count=fo3esm::ReadU32(p+at+4);at+=8;
-        if(count>10000||payload.size()-at!=size_t(count)*4)return fail("Invalid crime-ignore count");
+        if(count>10000||(version>=33?payload.size()-at<size_t(count)*4:payload.size()-at!=size_t(count)*4))return fail("Invalid crime-ignore count");
         for(uint32_t n=0;n<count;++n){const uint32_t ref=fo3esm::ReadU32(p+at);at+=4;
           if((ref!=PlayerRef&&!catalog_->actorPlacements.count(ref))||!next.ignoredCrimeActors.insert(ref).second)return fail("Invalid crime-ignore actor");
+        }
+      }
+      if(version>=33){
+        if(payload.size()-at<8||fo3esm::ReadU32(p+at)!=0x31504154)return fail("Missing talking activator state");
+        const auto count=fo3esm::ReadU32(p+at+4);at+=8;
+        if(count>10000||payload.size()-at<size_t(count)*8+8)return fail("Invalid talking activator count");
+        for(uint32_t n=0;n<count;++n){const auto ref=fo3esm::ReadU32(p+at),actor=fo3esm::ReadU32(p+at+4);at+=8;
+          if(!actor||!TalkingBinding(*catalog_,ref,actor)||!next.talkingActivators.emplace(ref,actor).second)return fail("Invalid talking activator binding");
+        }
+        if(payload.size()-at<8||fo3esm::ReadU32(p+at)!=0x3144504f)return fail("Missing daily package state");
+        const auto packages=fo3esm::ReadU32(p+at+4);at+=8;
+        if(packages>100000||payload.size()-at!=size_t(packages)*16)return fail("Invalid daily package count");
+        for(uint32_t n=0;n<packages;++n){const auto key=U64(p+at),bits=U64(p+at+8);at+=16;double time;std::memcpy(&time,&bits,8);
+          const auto definition=catalog_->pipboy.packages.find(uint32_t(key));
+          if(!catalog_->actorPlacements.count(uint32_t(key>>32))||definition==catalog_->pipboy.packages.end()||!(definition->second.flags&0x400u)||!std::isfinite(time)||time<0||!next.dailyPackages.emplace(key,time).second)return fail("Invalid daily package history");
         }
       }
       if(at!=payload.size())return fail("Trailing player save data");

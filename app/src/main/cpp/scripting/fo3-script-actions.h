@@ -8,6 +8,7 @@ struct Action {
   bool forceSubtitle=false;
   std::string group;
   double started=0;
+  uint32_t sourceActor=0,targetActor=0;
 };
 using AnimationRegistry=std::unordered_map<uint32_t,std::vector<AnimationSequence>>;
 }

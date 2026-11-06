@@ -210,6 +210,8 @@ struct State {
   uint8_t disabledControls=0;
   std::unordered_set<uint32_t> restrainedActors;
   std::unordered_set<uint32_t> ignoredCrimeActors;
+  std::unordered_map<uint32_t,uint32_t> talkingActivators;
+  std::unordered_map<uint64_t,double> dailyPackages;
   // One authoritative 24-hour clock shared by lighting and authored AI PACKs.
   // GameDaysPassed tracks midnight boundaries; dated calendar gates remain unsupported.
   float gameHour = 12.0f;
@@ -433,6 +435,10 @@ public:
   float HealthPercentage(uint32_t reference) const;
   bool SetPlayerControls(uint32_t mask,bool enable);
   bool SetIgnoreCrime(uint32_t reference,bool ignored);
+  bool SetTalkingActivatorActor(uint32_t reference,uint32_t actor);
+  bool CanStartDailyPackage(uint32_t reference,uint32_t package)const;
+  bool RecordDailyPackage(uint32_t reference,uint32_t package);
+  uint32_t TalkingActivatorActor(uint32_t reference)const{const auto i=state_.talkingActivators.find(reference);return i==state_.talkingActivators.end()?0:i->second;}
   bool GetIgnoreCrime(uint32_t reference,bool& ignored)const;
   bool PlayerFemale()const{return state_.playerSex<2?state_.playerSex==1:catalog_->pipboy.playerFemale;}
   uint32_t PlayerRace()const;

@@ -18,7 +18,7 @@ const fo3pipdata::Info* Session::Resolve(uint32_t id,const Context& ctx,bool dra
   return ResolveTopicInfo(id,ctx,[&](const auto& info){return Eligible(info,ctx);},draw?&random:nullptr);
 }
 bool Session::CanStart(const Context& ctx)const {
-  if(!ctx.player||ctx.player->ActorHealth(ctx.speaker.reference)<=0||ctx.speaker.combat)return false;
+  if(!ctx.player||ctx.speaker.proxy||ctx.player->ActorHealth(ctx.speaker.reference)<=0||ctx.speaker.combat)return false;
   for(auto t:ctx.player->Definitions().pipboy.greetings)if(Resolve(t,ctx))return true;
   return false;
 }
@@ -42,7 +42,7 @@ bool Session::StartTopic(uint32_t requested,const Context& ctx,fo3player::Player
   if(Active()||!ctx.player||ctx.speaker.combat||!ScriptSpeakerAlive(ctx,p))return false;
   scriptedTopic=true;
   const auto* chosen=Resolve(requested,ctx,true);if(!chosen)return false;
-  actor=ctx.speaker.reference;base=ctx.speaker.base;voice=p.ActorVoice(actor);if(!voice)voice=fo3pipdata::ActorVoice(p.Definitions().pipboy,base);
+  actor=ctx.speaker.reference;proxy=ctx.speaker.proxy;base=ctx.speaker.base;voice=p.ActorVoice(actor);if(!voice)voice=fo3pipdata::ActorVoice(p.Definitions().pipboy,base);
   return Enter(*chosen,ctx,p);
 }
 bool Session::StartSelectedTopic(uint32_t requested,uint32_t selected,const Context& ctx,fo3player::Player& p,bool conversation){
@@ -54,12 +54,12 @@ bool Session::StartSelectedTopic(uint32_t requested,uint32_t selected,const Cont
   // later script assignments. Revalidate result capability at audio admission.
   std::string error;auto plan=p.PrepareDialogueInfoTransaction(requested,selected,fo3player::DialogueScriptPhase::Both,error,ctx.speaker.reference);
   if(!plan||(plan->HasReferenceChanges()&&(!previewReferences||!previewReferences(p,*plan,error))))return false;
-  scriptedTopic=true;linkedConversation=conversation;actor=ctx.speaker.reference;base=ctx.speaker.base;voice=p.ActorVoice(actor);if(!voice)voice=fo3pipdata::ActorVoice(p.Definitions().pipboy,base);
+  scriptedTopic=true;linkedConversation=conversation;actor=ctx.speaker.reference;proxy=ctx.speaker.proxy;base=ctx.speaker.base;voice=p.ActorVoice(actor);if(!voice)voice=fo3pipdata::ActorVoice(p.Definitions().pipboy,base);
   return Enter(*chosen,ctx,p);
 }
 bool Session::Start(const Context& ctx,fo3player::Player& p) {
   scriptedTopic=false;
-  if(Active()||!ctx.player||ctx.speaker.combat||p.ActorHealth(ctx.speaker.reference)<=0)return false;
+  if(Active()||!ctx.player||ctx.speaker.proxy||ctx.speaker.combat||p.ActorHealth(ctx.speaker.reference)<=0)return false;
   std::string activationError;
   if(!Activate(ctx,p,activationError)){if(diagnostic)diagnostic("DIALOGUE UNSUPPORTED SCRIPT actor="+Id(ctx.speaker.reference)+" "+activationError);return false;}
   // OnActivate can change local variables used by the next GREETING. Resolve
@@ -68,7 +68,7 @@ bool Session::Start(const Context& ctx,fo3player::Player& p) {
   interruption.clear();const float dx=ctx.speaker.x-ctx.target.x,dy=ctx.speaker.y-ctx.target.y,dz=ctx.speaker.z-ctx.target.z;
   startDistanceGameUnits=std::sqrt(dx*dx+dy*dy+dz*dz);
   startDistance=std::sqrt((ctx.speaker.x-ctx.target.x)*(ctx.speaker.x-ctx.target.x)+(ctx.speaker.y-ctx.target.y)*(ctx.speaker.y-ctx.target.y)+(ctx.speaker.z-ctx.target.z)*(ctx.speaker.z-ctx.target.z))/100.f;endReason.clear();
-  actor=ctx.speaker.reference;base=ctx.speaker.base;voice=p.ActorVoice(actor);if(!voice)voice=fo3pipdata::ActorVoice(p.Definitions().pipboy,base);
+  actor=ctx.speaker.reference;proxy=ctx.speaker.proxy;base=ctx.speaker.base;voice=p.ActorVoice(actor);if(!voice)voice=fo3pipdata::ActorVoice(p.Definitions().pipboy,base);
   for(auto t:p.Definitions().pipboy.greetings)if(auto i=Resolve(t,ctx,true))return Enter(*i,ctx,p);
   return false;
 }
@@ -122,7 +122,7 @@ bool Session::AudioDone(uint32_t token,bool success,const Context& ctx,fo3player
       auto next=ctx;if(i->nextSpeaker==0)std::swap(next.speaker,next.target);
       if(next.speaker.reference!=fo3player::PlayerRef&&ScriptSpeakerAlive(next,p)){
         for(auto link:i->links)if(const auto* line=Resolve(link,next,true)){
-          actor=next.speaker.reference;base=next.speaker.base;voice=p.ActorVoice(actor);if(!voice)voice=fo3pipdata::ActorVoice(p.Definitions().pipboy,base);
+          actor=next.speaker.reference;proxy=next.speaker.proxy;base=next.speaker.base;voice=p.ActorVoice(actor);if(!voice)voice=fo3pipdata::ActorVoice(p.Definitions().pipboy,base);
           return Enter(*line,next,p);
         }
       }
@@ -142,6 +142,6 @@ std::string Session::Subtitle(const fo3pipdata::Definitions& d)const {
 }
 void Session::End(const std::string& reason) {
   if(Active()&&diagnostic)diagnostic("DIALOGUE END actor="+Id(actor)+" info="+Id(info)+" reason="+reason);
-  linkedConversation=false;interruption=reason;phase=Phase::Inactive;actor=base=topic=info=voice=0;response=selected=0;choices.clear();++audioToken;
+  linkedConversation=false;interruption=reason;phase=Phase::Inactive;actor=base=topic=info=voice=proxy=0;response=selected=0;choices.clear();++audioToken;
 }
 }

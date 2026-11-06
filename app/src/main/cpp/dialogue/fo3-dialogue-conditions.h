@@ -7,6 +7,7 @@ struct ActorContext {
   uint32_t reference=0,base=0,cell=0,world=0,package=0;
   float x=0,y=0,z=0;
   bool combat=false,packageKnown=false;
+  uint32_t proxy=0; // Physical talking activator; reference/base retain the actor identity.
 };
 struct Context {
   const fo3player::Player* player=nullptr;

@@ -68,6 +68,30 @@ bool playerTransitionPending=false;unsigned playerTransitions=0;
 bool HasPendingFo3CellTransitionRequestQ74(){return playerTransitionPending;}
 bool QueueFo3MapMarkerTransitionQ74(uint32_t,float,float,float,float,float,float,double){playerTransitionPending=true;++playerTransitions;return true;}
 #include "scripting/fo3-world-script-runtime.inc"
+static void OriginalIntercom(const char* path){
+ fo3player::Catalog c;std::string error;Check(fo3player::LoadCatalog(path,c,error),"original intercom catalogue");
+ const auto q=c.pipboy.formNames.at("cg02"),dad=c.pipboy.formNames.at("cg02dadref"),jonas=c.pipboy.formNames.at("cg02jonasref"),intercom=c.pipboy.formNames.at("cg02dinerintercomref"),package=c.pipboy.formNames.at("cg02dadtalktojonasonintercom");
+ // Isolate the reached birthday intercom boundary; the full New Game test
+ // reaches this same assignment through the unmodified quest timer.
+ auto& quest=c.initial.pipboy.quests[q];quest.stage=35;quest.running=true;quest.stages.insert(35);c.initial.referenceEnabled[dad]=true;
+ gPlayerSession=std::make_unique<fo3player::Session>(c);auto& p=gPlayerSession->player;p.RegisterOriginalActors();
+ Check(p.SetTalkingActivatorActor(intercom,jonas),"original stage-35 assignment fixture");
+ const auto& at=c.pipboy.targets.at(intercom);gCurrentCellFormId=at.cell;gExteriorWorldspaceQ1890=at.world;
+ p.SetScriptPlayerLocation(at.x,at.y,at.z,at.cell,at.world);gQ210Head[0]=at.x;gQ210Head[1]=at.z;gQ210Head[2]=-at.y;
+ gQ230NpcActors.clear();ActorVisual actor;actor.source={dad,c.pipboy.targets.at(dad).base};actor.aiPackage=package;actor.runtime.position={at.x,at.y,at.z};gQ230NpcActors.push_back(actor);
+ actor.source={jonas,c.pipboy.targets.at(jonas).base};actor.runtime.offScene=true;gQ230NpcActors.push_back(actor);++gQ230NpcResidenceRevision;
+ fo3worldscript::SpeechTick();Check(fo3worldscript::PackageEvent(dad,package,false),"original intercom package start");
+ Check(p.QueueScriptSpeech(dad,c.pipboy.packages.at(package).dialogueTopic,intercom,true,false,package),"original intercom selected topic");
+ fo3worldscript::Actions();fo3worldscript::SpeechTick();std::unordered_set<uint32_t> infos;unsigned responses=0;
+ while(fo3worldscript::speech.Active()){
+  const auto* info=fo3worldscript::speech.Current(c.pipboy);Check(info!=nullptr,"original intercom INFO");infos.insert(info->id);Check(!fo3audio::path.empty(),"original intercom voice path");Check(++responses<=16,"bounded original intercom chain");
+  fo3audio::completion=(uint64_t(fo3audio::token)<<1)|1;fo3worldscript::SpeechTick();
+ }
+ Check(infos.size()>=3&&p.Snapshot().pipboy.quests.at(q).stage==38&&!p.TalkingActivatorActor(intercom),"original linked greeting, reply and goodbye clear assignment");
+ Check(p.Snapshot().actorPackageEvents.at(dad)==std::make_pair(package,true),"original intercom completes Dad package");
+ Check(!p.ScriptActorTalking(dad)&&!p.ScriptActorTalking(jonas)&&!p.ScriptActorTalking(intercom)&&gQ230NpcActors.back().runtime.scriptSpeechToken==0,"remote actor remains off-scene and speech ownership releases");
+ std::cout<<"Original intercom package, linked voices, stage 38, assignment clear and initiating package completion passed\n";
+}
 static void OriginalPrayer(const char* path){
  fo3player::Catalog catalog;std::string error;Check(fo3player::LoadCatalog(path,catalog,error),"original prayer catalogue");
  gPlayerSession=std::make_unique<fo3player::Session>(catalog);auto& p=gPlayerSession->player;p.RegisterOriginalActors();
@@ -128,6 +152,12 @@ int main(int argc,char** argv){try{
  fo3anim::Track track;track.bone="leaf";track.hasTranslation=true;track.translation.dimensions=3;track.translation.interpolation=1;track.translation.keys={{0,{0,0,0,0},{},{}},{2,{4,0,0,0},{},{}}};clip.tracks.push_back(track);
  fo3anim::PropertyTrack alpha;alpha.bone="leaf";alpha.kind=fo3anim::PropertyKind::Alpha;alpha.values.dimensions=1;alpha.values.interpolation=1;alpha.values.keys={{0,{0,0,0,0},{},{}},{2,{1,0,0,0},{},{}}};clip.properties.push_back(alpha);asset->clips.push_back(clip);
  clip.textKeys.clear();clip.name="Idle";clip.cycle=0;clip.stop=1;clip.tracks[0].translation.keys={{0,{4,0,0,0},{},{}}};asset->clips.push_back(clip);
+ c.references[41].base=411;c.references[41].valid=true;c.actorPlacements[41].base=411;c.pipboy.targets[41].base=411;c.pipboy.targets[41].cell=1;c.weapons.actors[411].health=20;
+ c.pipboy.dialogueActors[411].voice=0;
+ fo3pipdata::Info first;first.id=911;first.topic=910;first.quest=600;first.type=1;first.links={920};first.nextSpeaker=0;first.responses.push_back({700,0,"Call"});
+ fo3pipdata::Condition caller;caller.function=72;caller.a=411;caller.value=1;first.conditions.push_back(caller);c.pipboy.topics[910].push_back(first);
+ auto reply=first;reply.id=921;reply.topic=920;reply.flags=1;reply.links.clear();reply.conditions.front().a=400;reply.end.source="RewardKarma 2";c.pipboy.topics[920].push_back(reply);
+ auto& conversation=c.pipboy.packages[851];conversation.type=15;conversation.dialogueValid=true;conversation.dialogueType=0;conversation.dialogueTopic=910;conversation.target.valid=true;conversation.target.value=81;
  gPlayerSession=std::make_unique<fo3player::Session>(std::move(c));auto& p=gPlayerSession->player;
  GpuObject object;object.refFormId=10;object.q2401DoorAnimation=asset;gObjects.push_back(object);
  p.SetScriptPlayerLocation(0,0,0,1,0);fo3worldscript::Register();p.SetScriptRuntimeClock(0,.25);fo3worldscript::Events();fo3worldscript::TriggerTick();fo3worldscript::Actions();fo3worldscript::Animate();
@@ -189,6 +219,22 @@ int main(int argc,char** argv){try{
  Check(p.ScriptActorTalking(81)&&fo3audio::path=="sound/original.ogg","production TACT adapter delivers original speech without NPC mesh");
  fo3audio::completion=(uint64_t(fo3audio::token)<<1)|1;fo3worldscript::SpeechTick();
  Check(!p.ScriptActorTalking(81),"TACT speech releases on actual voice completion");
+ Check(p.SetTalkingActivatorActor(81,40),"assign remote actor to intercom");
+ Check(fo3worldscript::PackageEvent(41,851,false),"adopt specified conversation package");
+ const auto expiredToken=fo3audio::token;
+ Check(p.QueueScriptSpeech(41,910,81,true,false,851),"bind queued intercom actors");Check(p.SetTalkingActivatorActor(81,41),"replace queued target identity");
+ fo3worldscript::Actions();fo3worldscript::SpeechTick();Check(fo3audio::token==expiredToken&&!p.ScriptActorTalking(41),"stale assigned actor cannot inherit queued dialogue");
+ Check(p.SetTalkingActivatorActor(81,40),"restore intended intercom actor");
+ const auto oldKarma=p.Snapshot().karma;
+ Check(p.QueueScriptSpeech(41,910,81,true,false,851),"bind specified conversation topic");fo3worldscript::Actions();fo3worldscript::SpeechTick();
+ Check(p.ScriptActorTalking(41),"initiating actor speaks first");
+ fo3audio::completion=(uint64_t(fo3audio::token)<<1)|1;fo3worldscript::SpeechTick();
+ Check(!p.ScriptActorTalking(41)&&p.ScriptActorTalking(40)&&p.ScriptActorTalking(81),"linked response owns actor identity and physical intercom");
+ Check(fo3worldscript::speech.actor==40&&fo3worldscript::speech.proxy==81&&gQ230NpcActors.back().runtime.scriptSpeechToken==0,"proxy voice does not animate remote NPC mesh");
+ fo3audio::completion=(uint64_t(fo3audio::token)<<1)|1;fo3worldscript::SpeechTick();
+ Check(!p.ScriptActorTalking(40)&&!p.ScriptActorTalking(81)&&p.Snapshot().karma==oldKarma+2,"proxy end results publish once and both speech flags release");
+ Check(p.Snapshot().actorPackageEvents.at(41)==std::make_pair(uint32_t(851),true),"completion belongs to initiating package actor");
+ Check(p.SetTalkingActivatorActor(81,0),"restore ordinary activator voice");
  auto& fighter=gQ230NpcActors.back();fighter.runtime.BeginCombat(fo3player::PlayerRef);fighter.runtime.pendingAttack=true;
  Check(p.SetActorHostile(40,fo3player::PlayerRef),"canonical combat fixture");
  fo3pipdata::ResultScript stop,unsupported;stop.source="speaker.StopCombat";unsupported.source="UnsupportedStopStep";std::string stopError;
@@ -213,6 +259,6 @@ int main(int argc,char** argv){try{
  Check(p.CommitScriptTransaction(*savePlan),"autosave commit");
  fo3worldscript::Actions();Check(saves==savedBefore+1,"committed autosave reaches production persistence adapter");
  fo3worldscript::Actions();Check(saves==savedBefore+1,"autosave request consumed once");
- if(argc>1)OriginalPrayer(argv[1]);
+ if(argc>1){OriginalIntercom(argv[1]);OriginalPrayer(argv[1]);}
  std::cout<<"World event/controller/presentation and original speech adapters passed\n";
 }catch(const std::exception& e){std::cerr<<e.what()<<"\n";return 1;}}

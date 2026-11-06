@@ -527,6 +527,7 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
     case C::AddAchievement:ok=AddAchievement(uint32_t(c.value));break;
     case C::Disable:ok=StageReferenceEnable(c.form,false,error);break;
     case C::Enable:ok=StageReferenceEnable(c.form,true,error);break;
+    case C::TalkingActivator:ok=SetTalkingActivatorActor(c.form,c.index);break;
     case C::StopCombat:ok=StopActorCombat(c.form);break;
     case C::EvaluatePackage:ok=ReevaluatePackage(c.form);break;
     case C::ShowMessage: {
@@ -1054,8 +1055,9 @@ bool Player::ScriptPackage(uint32_t reference,uint32_t package,bool add){
 namespace fo3player {
 bool Player::QueueScriptSpeech(uint32_t reference,uint32_t topic,uint32_t target,bool conversation,bool forceSubtitle,uint32_t package){
   if(package){
+    if(conversation&&target==PlayerRef)return false; // Interactive player package direction is separate.
     const auto definition=catalog_->pipboy.packages.find(package);
-    if(definition==catalog_->pipboy.packages.end()||!definition->second.dialogueValid||definition->second.dialogueType!=1||
+    if(definition==catalog_->pipboy.packages.end()||!definition->second.dialogueValid||definition->second.dialogueType!=(conversation?0:1)||
        (definition->second.dialogueTopic&&definition->second.dialogueTopic!=topic)||definition->second.target.value!=target)return false;
   }
   static thread_local unsigned selecting=0;
@@ -1078,6 +1080,7 @@ bool Player::QueueScriptSpeech(uint32_t reference,uint32_t topic,uint32_t target
   // roll back the caller too, rather than saving its waiting flags without speech.
   if(!selected)return !unsupported;
   fo3script::Action action;action.kind=conversation?fo3script::ActionKind::Conversation:fo3script::ActionKind::SayTo;action.reference=reference;action.form=topic;action.flags=target;action.info=selected->id;action.forceSubtitle=forceSubtitle;action.package=package;
+  action.sourceActor=context.speaker.reference;action.targetActor=context.target.reference;
   return QueueScriptAction(std::move(action));
 }
 }

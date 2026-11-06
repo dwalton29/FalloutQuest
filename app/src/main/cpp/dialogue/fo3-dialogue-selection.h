@@ -57,6 +57,12 @@ inline bool ReferenceContext(const fo3player::Player& player,uint32_t id,ActorCo
   const auto& d=player.Definitions().pipboy;const auto placed=d.targets.find(id);
   out={id,id==fo3player::PlayerRef?fo3player::PlayerBase:placed==d.targets.end()?0:placed->second.base,location.cell,location.world,0,location.x,location.y,id==fo3player::PlayerRef?player.ScriptPlayerHeight():placed==d.targets.end()?0:placed->second.z,false,false};
   const auto actor=player.Snapshot().actors.find(id);if(actor!=player.Snapshot().actors.end()){out.z=actor->second.position[2];out.package=actor->second.package;out.packageKnown=true;out.combat=actor->second.hostile!=0;}
+  if(const auto assigned=player.TalkingActivatorActor(id)){
+    bool disabled=true;std::string error;
+    const auto identity=d.targets.find(assigned);
+    if(identity==d.targets.end()||player.ActorHealth(assigned)<=0||!player.ReferenceDisabled(id,disabled,error)||disabled)return false;
+    out.proxy=id;out.reference=assigned;out.base=identity->second.base;out.package=0;out.packageKnown=false;out.combat=false;
+  }
   return out.base!=0;
 }
 }

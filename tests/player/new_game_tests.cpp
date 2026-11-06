@@ -140,6 +140,20 @@ static void CalendarAssignments(){
   const auto path="/tmp/fq-script-calendar-"+std::to_string(getpid());Check(p.Save(path,error),error);Player restored(c);Check(restored.Restore(path,error),error);unlink(path.c_str());
   assert(restored.Snapshot().gameYear==2269&&restored.Snapshot().gameMonth==1&&restored.Snapshot().gameDay==28&&restored.Snapshot().gameHour==16);
 }
+static void TalkingActivators(){
+  using namespace fo3player;Catalog c;c.initial.baseHealth=100;c.initial.special.fill(5);
+  c.references[100].base=200;c.references[100].valid=true;c.pipboy.targets[100].base=200;c.pipboy.targets[100].cell=1;c.pipboy.targets[100].x=10;c.pipboy.dialogueActors[200].talkingActivator=true;
+  c.references[101].base=201;c.references[101].valid=true;c.actorPlacements[101].base=201;c.weapons.actors[201].health=20;c.pipboy.targets[101].base=201;c.pipboy.targets[101].cell=2;
+  c.pipboy.formNames["intercom"]=100;c.pipboy.formNames["speaker"]=101;
+  Player p(c);std::string error;fo3pipdata::ResultScript set,bad;set.source="Intercom.SetTalkingActivatorActor Speaker";bad.source="UnsupportedProxyStep";
+  Check(p.PreviewDialogueResult(set,error),error);assert(!p.TalkingActivatorActor(100));
+  assert(!p.PrepareDialogueTransaction(set,bad,error)&&!p.TalkingActivatorActor(100));
+  Check(p.ExecuteDialogueResult(set,error),error);assert(p.TalkingActivatorActor(100)==101);
+  fo3dialogue::ActorContext ctx;Check(fo3dialogue::ReferenceContext(p,100,ctx),"mapped context");assert(ctx.reference==101&&ctx.proxy==100&&ctx.base==201&&ctx.cell==1&&ctx.x==10);
+  const auto path="/tmp/fq-talking-activator-"+std::to_string(getpid());Check(p.Save(path,error),error);Player restored(c);Check(restored.Restore(path,error),error);unlink(path.c_str());assert(restored.TalkingActivatorActor(100)==101);
+  set.source="SetTalkingActivatorActor";Check(restored.ExecuteDialogueResult(set,error,100),error);assert(!restored.TalkingActivatorActor(100));
+  set.source="Speaker.SetTalkingActivatorActor Intercom";assert(!p.ExecuteDialogueResult(set,error));
+}
 static void CrimeFlags(){
   using namespace fo3player;Catalog c;c.initial.baseHealth=100;c.initial.special.fill(5);
   c.actorPlacements[1000].base=10;c.actorPlacements[1001].base=10;c.references[1000].base=10;c.references[1001].base=10;
@@ -424,16 +438,17 @@ static void OriginalIdentity(const fo3player::Catalog& catalog,bool female,const
   assert(p.Snapshot().pipboy.quests.at(birthday).stage>=12&&!p.Snapshot().autoDisplayObjectives&&p.Snapshot().pipboy.quests.at(baby).stages.count(50));
   // Continue through the actual party choices, not direct stage commands.
   auto context=[&](uint32_t ref){fo3dialogue::Context ctx;ctx.player=&p;ctx.talking=true;Check(fo3dialogue::ReferenceContext(p,ref,ctx.speaker),"party speaker");Check(fo3dialogue::ReferenceContext(p,fo3player::PlayerRef,ctx.target),"party listener");return ctx;};
-  auto finish=[&](fo3dialogue::Session& voice,fo3dialogue::Context& ctx){unsigned n=0;while(voice.phase==fo3dialogue::Phase::Speaking){assert(++n<32);voice.AudioDone(voice.audioToken,true,ctx,p);}};
+  auto finish=[&](fo3dialogue::Session& voice,fo3dialogue::Context& ctx){unsigned n=0;while(voice.phase==fo3dialogue::Phase::Speaking){assert(++n<32);voice.AudioDone(voice.audioToken,true,ctx,p);if(voice.phase==fo3dialogue::Phase::Speaking&&(voice.actor!=ctx.speaker.reference||voice.proxy!=ctx.speaker.proxy))std::swap(ctx.speaker,ctx.target);}};
   auto configure=[&](fo3dialogue::Session& voice){voice.previewReferences=[](const auto&,const auto&,auto&){return true;};voice.publishReferences=[](auto& player,auto& plan,auto&){return player.CommitScriptTransaction(plan);};voice.diagnostic=[&](const std::string& e){error=e;};};
   auto talk=[&](const char* ref,std::initializer_list<const char*> topics){auto ctx=context(d.formNames.at(ref));fo3dialogue::Session voice;configure(voice);Check(voice.Start(ctx,p),std::string("party greeting ")+ref+": "+error);finish(voice,ctx);
     for(const char* name:topics){auto choice=std::find_if(voice.choices.begin(),voice.choices.end(),[&](const auto& v){return v.topic==d.formNames.at(name);});
       if(choice==voice.choices.end()){std::cerr<<"Missing party choice "<<name<<" available:";for(const auto& c:voice.choices)std::cerr<<" "<<c.text;std::cerr<<"\n";}
       Check(choice!=voice.choices.end(),std::string("party choice ")+name+": "+error);Check(voice.Choose(size_t(choice-voice.choices.begin()),ctx,p),error);finish(voice,ctx);}
     voice.End("party fixture finished");};
-  auto queuedSpeech=[&](){fo3script::Action action;unsigned n=0;while(p.PollScriptAction(action)){assert(++n<64);if(action.kind!=fo3script::ActionKind::SayTo)continue;
-    auto ctx=context(action.reference);Check(fo3dialogue::ReferenceContext(p,action.flags,ctx.target),"cake listener");fo3dialogue::Session voice;configure(voice);Check(voice.StartSelectedTopic(action.form,action.info,ctx,p),"original cake speech: "+error);finish(voice,ctx);
-    const auto done=p.DispatchReferenceEvent(action.reference,"SayToDone",action.form,error);Check(done==fo3player::ScriptEventResult::Executed||done==fo3player::ScriptEventResult::NoHandler,error);
+  auto queuedSpeech=[&](){fo3script::Action action;unsigned n=0;while(p.PollScriptAction(action)){assert(++n<64);if(action.kind!=fo3script::ActionKind::SayTo&&action.kind!=fo3script::ActionKind::Conversation)continue;
+    auto ctx=context(action.reference);Check(fo3dialogue::ReferenceContext(p,action.flags,ctx.target),"cake listener");fo3dialogue::Session voice;configure(voice);Check(voice.StartSelectedTopic(action.form,action.info,ctx,p,action.kind==fo3script::ActionKind::Conversation),"original party speech: "+error);finish(voice,ctx);
+    if(action.package){auto done=p.PreparePackageEventTransaction(action.reference,action.package,true,error);Check(bool(done)&&p.CommitScriptTransaction(*done),error);}
+    else {const auto done=p.DispatchReferenceEvent(action.reference,"SayToDone",action.form,error);Check(done==fo3player::ScriptEventResult::Executed||done==fo3player::ScriptEventResult::NoHandler,error);}
   }};
   talk("cg02oldladypalmerref",{"cg02oldladypalmera2"});
   assert(p.ItemCount(d.formNames.at("cg02sweetroll"))==1&&p.Snapshot().pipboy.quests.at(birthday).stages.count(20));
@@ -456,6 +471,22 @@ static void OriginalIdentity(const fo3player::Catalog& catalog,bool female,const
   talk("cg02stanleyref",{"cg02stanleya1","cg02stanleyb1"});
   assert(p.ItemCount(d.formNames.at("bookskillmelee"))==1&&p.ItemCount(d.formNames.at("kidhatprewarcapkid"))==1);
   assert(p.Snapshot().pipboy.quests.at(birthday).stages.count(34));
+  // The original timer assigns Jonas to the intercom; no stage is injected.
+  for(unsigned tick=0;tick<160&&p.Snapshot().pipboy.quests.at(birthday).stage<35;++tick){p.SetScriptRuntimeClock(1000+tick*.1,.1);p.PumpWorldAwareGameMode(.1,residents,[&](auto plan){return p.CommitScriptTransaction(*plan);});}
+  const auto intercom=d.formNames.at("cg02dinerintercomref"),jonas=d.formNames.at("cg02jonasref"),dad=d.formNames.at("cg02dadref");
+  assert(p.Snapshot().pipboy.quests.at(birthday).stage==35&&p.TalkingActivatorActor(intercom)==jonas);
+  const auto checkpoint="/tmp/fq-intercom-"+std::to_string(getpid());Check(p.Save(checkpoint,error),error);fo3player::Player intercomRestored(catalog);Check(intercomRestored.Restore(checkpoint,error),error);unlink(checkpoint.c_str());assert(intercomRestored.TalkingActivatorActor(intercom)==jonas);
+  fo3dialogue::ActorContext proxy;Check(fo3dialogue::ReferenceContext(p,intercom,proxy),"original intercom identity");assert(proxy.reference==jonas&&proxy.proxy==intercom&&proxy.base==d.targets.at(jonas).base&&proxy.cell==d.targets.at(intercom).cell);
+  const auto conversation=d.formNames.at("cg02dadtalktojonasonintercom");auto dadAt=p.Snapshot().actors.at(dad);dadAt.package=conversation;dadAt.position={proxy.x,proxy.y,proxy.z};dadAt.cell=proxy.cell;dadAt.world=proxy.world;Check(p.UpdateActor(dad,dadAt),"intercom approach fixture");
+  auto started=p.PreparePackageEventTransaction(dad,conversation,false,error);Check(bool(started)&&p.CommitScriptTransaction(*started),error);
+  Check(p.QueueScriptSpeech(dad,d.packages.at(conversation).dialogueTopic,intercom,true,false,conversation),"original specified-topic intercom conversation");queuedSpeech();
+  assert(p.Snapshot().pipboy.quests.at(birthday).stage==38&&!p.TalkingActivatorActor(intercom));
+  assert((p.Snapshot().actorPackageEvents.at(dad)==std::make_pair(conversation,true)));
+  talk("cg02dadref",{});assert(p.Snapshot().pipboy.quests.at(birthday).stage==40);
+  talk("cg02jonasref",{"cg02jonasa1"});assert(p.Snapshot().pipboy.quests.at(birthday).stage==42);
+  talk("cg02dadref",{"cg02dadtopic1","cg02dadchoice1"});
+  assert(p.Snapshot().pipboy.quests.at(birthday).stages.count(44)&&p.ItemCount(d.formNames.at("cg02weapbbgun"))==1&&p.ItemCount(d.formNames.at("ammobb"))>=50);
+  assert(!p.PlayerControlDisabled(2)&&!p.GetLock(d.formNames.at("cg02targetrangedoornew")).locked);
   const auto save="/tmp/fq-original-identity-"+std::to_string(getpid());Check(p.Save(save,error),error);
   fo3player::Player restored(catalog);Check(restored.Restore(save,error),error);unlink(save.c_str());
   assert(restored.PlayerFemale()==female&&restored.PlayerName()==(female?"Catherine":"James"));
@@ -468,7 +499,7 @@ int main(int argc,char** argv){
   for(const char* invalid:{"[General]\nSCharGenQuest=0", "[General]\nSCharGenQuest=1z", "[General]\nSCharGenQuest=1\nSCharGenQuest=2", "[Other]\nSCharGenQuest=1"}){
     std::istringstream input(invalid);assert(!fo3newgame::ReadQuest(input,quest,error));
   }
-  Synthetic();Identity();ScriptInventory();CharacterMenus();Lifecycle();CrimeFlags();CalendarAssignments();
+  Synthetic();Identity();ScriptInventory();CharacterMenus();Lifecycle();TalkingActivators();CrimeFlags();CalendarAssignments();
   if(argc<2)return 0;
   fo3player::Catalog catalog;Check(fo3player::LoadCatalog(argv[1],catalog,error),error);
   fo3player::Player player(catalog);player.RegisterOriginalActors();
@@ -501,5 +532,5 @@ int main(int argc,char** argv){
   fo3script::ImageStack images;images.Apply(1,base,0);images.Apply(2,catalog.imageModifiers.at(catalog.pipboy.formNames.at("cg00blackscreenisfx")),0);
   assert(images.Sample(0).fade[3]>.9f);images.Sample(20);assert(images.entries.size()==1);images.Remove(1);assert(images.entries.empty());
   OriginalIdentity(catalog,false,argv[1]);OriginalIdentity(catalog,true,argv[1]);OriginalInventory(catalog);OriginalSpecialBook(catalog);
-  std::cout<<"Original birth, playpen, birthday movie/intro, Pip-Boy gift, cake, sweetroll choice and party presents, both sex branches, package topic, calendar/crime state and saves passed\n";
+  std::cout<<"Original birth, playpen, birthday movie/intro, Pip-Boy gift, party presents, intercom conversation and BB gun, both sex branches, package topic, calendar/crime state and saves passed\n";
 }

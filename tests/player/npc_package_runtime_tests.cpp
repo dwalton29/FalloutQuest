@@ -123,6 +123,16 @@ static Q230ActorVisual Actor(uint8_t type,bool linkedFurniture=false) {
   Q230ActorVisual actor;actor.source.refFormId=42;actor.source.baseFormId=43;
   actor.runtime.position=Q240ScenePosition({1010,2010,20});actor.navigationGraph=Graph();return actor;
 }
+static void DailyPackageRetirement(){
+  auto actor=Actor(6);auto c=gPlayerSession->player.Definitions();c.references[42].base=43;c.actorPlacements[42].base=43;
+  c.pipboy.packages[50].flags=0x404;c.pipboy.packages[50].procedureScripts[2].source="RewardKarma 3";
+  c.pipboy.packages[52]=c.pipboy.packages[50];c.pipboy.packages[52].flags=0;c.pipboy.packages[52].procedureScripts[2]={};c.pipboy.dialogueActors[43].packages.push_back(52);
+  gPlayerSession=std::make_unique<Session>(c);auto& p=gPlayerSession->player;
+  for(unsigned n=0;n<3000&&actor.aiPackage!=52;++n)Q240UpdateNpcPackage(actor,n*.05);
+  assert(actor.aiPackage==52&&p.Snapshot().karma==3&&!p.CanStartDailyPackage(42,50)&&p.CanStartDailyPackage(44,50));
+  const auto path="/tmp/fq-daily-package-"+std::to_string(getpid());std::string error;assert(p.Save(path,error));fo3player::Player restored(c);assert(restored.Restore(path,error));unlink(path.c_str());
+  assert(!restored.CanStartDailyPackage(42,50));assert(restored.AdvanceGameHours(23.99)&&!restored.CanStartDailyPackage(42,50));assert(restored.AdvanceGameHours(.02)&&restored.CanStartDailyPackage(42,50));
+}
 static void EndIdleRetirement(){
   auto actor=Actor(6);auto c=gPlayerSession->player.Definitions();
   c.references[42].base=43;c.actorPlacements[42].base=43;
@@ -395,7 +405,7 @@ static void PackageCallbacks(){
   std::cout<<"Production NAVM package start/arrival/change callbacks and reload replay protection passed\n";
 }
 int main(int argc,char** argv) {
-  EndIdleRetirement();
+  DailyPackageRetirement();EndIdleRetirement();
   PackageCallbacks();
   {
     auto actor=Actor(6);actor.runtime.authoredMotionUntil=4;

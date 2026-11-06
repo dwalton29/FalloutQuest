@@ -2,6 +2,12 @@ from pathlib import Path
 import unittest
 ROOT=Path(__file__).resolve().parents[2]/'app/src/main/cpp'
 class Scope(unittest.TestCase):
+    def test_cell_handoff_namespace_is_global_before_runtime_includes(self):
+        core=(ROOT/'core/fo3-runtime.cpp').read_text()
+        # This public namespace header is also included by an internal .inc.
+        # Its first inclusion must precede the runtime's anonymous namespace.
+        self.assertLess(core.index('#include "scripting/fo3-script-cell-handoff.h"'),core.index('namespace {'))
+
     def test_actor_cache_preserves_authored_roots(self):
         core=(ROOT/'core/fo3-runtime.cpp').read_text()
         build=core.split('bool BuildCpuObjects(',1)[1].split('float*',1)[0]
