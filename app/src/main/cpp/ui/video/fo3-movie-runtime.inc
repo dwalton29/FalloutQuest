@@ -53,7 +53,7 @@ void UpdateFo3Movie(double now,bool a,bool b,bool focused,bool inputFocused,cons
     if(complete){if(player.CompleteMovie(request.serial))FlushFo3PlayerState();Reset();return;}
     if(failed&&!failure.visible)Q6H_LOGW("MOVIE FAILED file=%s reason=%s",request.path.c_str(),playback.Error().c_str());
     failure.visible=failed;failure.yaw=yaw;failure.anchor=anchor;
-    failure.title="Movie unavailable";failure.subtitle=request.path+"\nInstall the original Data/Video files, or continue without this movie.";
+    failure.title=request.path.substr(0,request.path.find_last_of('.'));failure.subtitle=request.path+"\nOriginal Data/Video movie unavailable. Press A to continue without it.";
     failure.choices={"Continue without movie"};failure.selected=0;failure.revision=request.serial;
     if(!failed)Upload(playback.Frame());
 }

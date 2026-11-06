@@ -1,5 +1,6 @@
 #include "dialogue/fo3-dialogue-panel.h"
 #include "scripting/fo3-nonresident-script.h"
+#include "scripting/fo3-script-cell-handoff.h"
 // Render-thread bridge only. Authored graph/conditions/results live in host-testable modules.
 fo3dialogue::Session gDialogue;
 fo3dialogue::Panel gDialoguePanel;
@@ -51,6 +52,7 @@ bool PreviewFo3DialogueReferences(const fo3player::Player& player,
     error="reference publication scene/background work busy";return false;
   }
   std::vector<uint32_t> live;
+  if(fo3script::CellHandoff(player,plan,gCurrentCellFormId,gExteriorWorldspaceQ1890))return !Fo3ResidentAssetLaneBlocked()&&!gQ230NpcArrival.active;
   for(const auto& a:gQ230NpcActors)live.push_back(a.source.refFormId);
   for(const auto& object:gObjects)live.push_back(object.refFormId);
   return fo3script::NonresidentActorRemoval(player,plan,gCurrentCellFormId,gExteriorWorldspaceQ1890,live,error)||
@@ -60,6 +62,17 @@ bool PublishFo3DialogueReferences(fo3player::Player& player,
     fo3player::ScriptTransactionPlan& plan,std::string& error) {
   // Single render-thread turn; validate and allocate before logical publication.
   if(!PreviewFo3DialogueReferences(player,plan,error)||!player.CanCommitScriptTransaction(plan))return false;
+  if(fo3script::CellHandoff(player,plan,gCurrentCellFormId,gExteriorWorldspaceQ1890)){
+    const auto snapshot=plan.CandidateReferences();
+    if(!fo3script::CommitCellHandoff(player,plan,[](const fo3player::PlayerMove& move){
+      return QueueFo3MapMarkerTransitionQ74(move.marker,move.position[0],move.position[1],move.position[2],move.rotation[0],move.rotation[1],move.rotation[2],0);
+    },error)){
+      gFo3ReferenceState=std::make_shared<const fo3world::ReferenceStateSnapshot>(player.CaptureReferenceState());
+      gFo3ScenePublication.Publish(gFo3ReferenceState);return false;
+    }
+    gFo3ReferenceState=snapshot;gFo3ScenePublication.Publish(snapshot);
+    Q6H_LOGI("SCRIPT CELL HANDOFF queued canonical state and reference snapshot for full scene load");return true;
+  }
   auto removed=gFo3ScriptRemovedItems;
   std::string removalError;
   const bool inventory=fo3script::InventoryReferenceRemoval(player,plan,CanRemoveFo3DialogueInventory,removalError);

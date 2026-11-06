@@ -2807,7 +2807,7 @@ private:
                 const auto notificationMvp=Multiply(viewProjection,MatrixFromPose(notificationHead_));
                 fo3notifyui::Render(notificationMvp.m);
                 fo3xpui::Render(notificationMvp.m);
-                if(!gFo3PauseOpen){fo3compassui::Render(notificationMvp.m);fo3sneakui::Render(notificationMvp.m);}
+                if(!gFo3PauseOpen&&!(gPlayerSession&&fo3player::EarlyFirstPerson(gPlayerSession->player))){fo3compassui::Render(notificationMvp.m);fo3sneakui::Render(notificationMvp.m);}
             }
             // Modal lockpicking is last among world/hand/ordinary HUD draws.
             // It has fresh self-occlusion depth, independent of nearby models.

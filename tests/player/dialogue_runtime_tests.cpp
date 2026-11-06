@@ -46,6 +46,8 @@ struct {bool active=false;} gSceneLoad,gQ230NpcArrival;
 std::shared_ptr<const fo3world::ReferenceStateSnapshot> gFo3ReferenceState;
 fo3scene::ReferencePublication gFo3ScenePublication;
 bool Fo3ResidentAssetLaneBlocked(){return false;}
+bool rejectCellQueue=false;unsigned cellQueues=0;
+bool QueueFo3MapMarkerTransitionQ74(uint32_t,float,float,float,float,float,float,double){if(rejectCellQueue)return false;loading=true;++cellQueues;return true;}
 bool Fo3AcceptsScenePublication(fo3scene::PublicationStamp stamp){
   return gPlayerSession&&gFo3ScenePublication.Accepts(stamp,gPlayerSession->player.Snapshot().referenceStateRevision);
 }
@@ -234,6 +236,22 @@ static void BarterBridge(){
   assert(!gBarter.active&&gPlayerSession->player.ItemCount(0xf)==capsBefore);
   std::cout<<"Barter bridge: authored voice phases, input focus, pending selection, commit, return and walk-away passed\n";
 }
+static void CellPublication(){
+  PrepareSynthetic();auto c=gPlayerSession->player.Definitions();
+  c.references[400].base=43;c.references[400].cell=10;c.references[400].valid=true;c.actorInventories[43].valid=true;
+  c.pipboy.formNames["retiring"]=400;c.pipboy.formNames["arrival"]=401;c.pipboy.targets[401].cell=20;
+  gPlayerSession=std::make_unique<Session>(c);auto& p=gPlayerSession->player;gCurrentCellFormId=10;gExteriorWorldspaceQ1890=0;
+  gObjects={{400,true,false,false,"ACHR"}};gFo3ReferenceState=std::make_shared<const fo3world::ReferenceStateSnapshot>(p.CaptureReferenceState());gFo3ScenePublication.Publish(gFo3ReferenceState);
+  fo3pipdata::ResultScript script;script.source="Retiring.Disable\nplayer.MoveTo Arrival";std::string error;
+  auto plan=p.PrepareDialogueTransaction(script,{},error);assert(plan&&plan->HasReferenceChanges());
+  assert(PreviewFo3DialogueReferences(p,*plan,error)&&!loading&&!p.Snapshot().playerMove.pending);
+  rejectCellQueue=true;assert(!PublishFo3DialogueReferences(p,*plan,error));
+  assert(!loading&&!p.Snapshot().playerMove.pending&&gFo3ReferenceState->Enabled(400,true)&&Fo3AcceptsScenePublication(gFo3ScenePublication.Stamp()));
+  plan=p.PrepareDialogueTransaction(script,{},error);assert(plan);rejectCellQueue=false;
+  const auto before=cellQueues;assert(PublishFo3DialogueReferences(p,*plan,error)&&loading&&cellQueues==before+1);
+  assert(p.Snapshot().playerMove.pending&&p.Snapshot().playerMove.cell==20&&!gFo3ReferenceState->Enabled(400,true));
+  assert(Fo3AcceptsScenePublication(gFo3ScenePublication.Stamp()));loading=false;gObjects.clear();
+}
 static void NonresidentPublication(){
   PrepareSynthetic();auto c=gPlayerSession->player.Definitions();
   c.pipboy.formNames["offscene"]=400;c.references[400].base=43;c.references[400].cell=1234;
@@ -251,6 +269,23 @@ static void NonresidentPublication(){
   assert(!gFo3ReferenceState->Enabled(400,true)&&gFo3ScenePublication.Stamp().scene!=stamp.scene);
   assert(Fo3AcceptsScenePublication(gFo3ScenePublication.Stamp()));
   std::cout<<"Production nonresident dialogue publication and busy-scene rejection passed\n";
+}
+static void OriginalBirthHandoff(const char* path){
+  fo3player::Catalog c;std::string error;assert(fo3player::LoadCatalog(path,c,error));
+  const auto birth=c.pipboy.formNames.at("cg00"),baby=c.pipboy.formNames.at("cg01"),dad=c.pipboy.formNames.at("cg00dadref");
+  // Boundary precondition: the preceding end-of-birth fade reached stage 90.
+  auto& stage=c.initial.pipboy.quests[birth];stage.stage=90;stage.running=true;stage.stages.insert(90);
+  gPlayerSession=std::make_unique<Session>(c);auto& p=gPlayerSession->player;p.RegisterOriginalActors();
+  const auto start=c.pipboy.targets.at(c.pipboy.formNames.at("cg00playerstartmarker"));
+  gCurrentCellFormId=start.cell;gExteriorWorldspaceQ1890=start.world;loading=false;gObjects={{dad,true,false,false,"ACHR"}};
+  gFo3ReferenceState=std::make_shared<const fo3world::ReferenceStateSnapshot>(p.CaptureReferenceState());gFo3ScenePublication.Publish(gFo3ReferenceState);
+  auto plan=p.PrepareQuestStageTransaction(birth,100,error);if(!plan)std::cerr<<error<<"\n";assert(plan&&plan->HasReferenceChanges());
+  const bool published=PublishFo3DialogueReferences(p,*plan,error);if(!published)std::cerr<<"Birth handoff: "<<error<<" from="<<start.cell<<" to="<<plan->CandidateState()->playerMove.cell<<"\n";assert(published&&loading);
+  const auto destination=c.pipboy.targets.at(c.pipboy.formNames.at("cg01playerstartmarker"));
+  assert((p.Snapshot().playerMove.pending&&p.Snapshot().playerMove.cell==destination.cell&&p.Snapshot().playerMove.position!=std::array<float,3>{start.x,start.y,start.z}));
+  assert(p.Snapshot().movie.owner==baby&&p.Snapshot().movie.path=="1 year later.bik"&&p.Snapshot().playerToddler);
+  assert(!gFo3ReferenceState->Enabled(dad,true));loading=false;gObjects.clear();
+  std::cout<<"Original birth fade endpoint publishes actor removal, toddler move and pending movie through production full-cell bridge\n";
 }
 static void OriginalMoiraInterview(const char* path){
   fo3player::Catalog catalog;std::string error;assert(fo3player::LoadCatalog(path,catalog,error));
@@ -279,4 +314,4 @@ static void OriginalMoiraInterview(const char* path){
   }
   std::cout<<"Original Moira five vault answers with resident display removal and real publication bridge passed\n";
 }
-int main(int argc,char** argv){Synthetic();SkipWithA();BarterBridge();NonresidentPublication();if(argc>1){OriginalBridge(argv[1]);OriginalMoiraInterview(argv[1]);}std::cout<<"Dialogue bridge lifecycle tests passed\n";}
+int main(int argc,char** argv){Synthetic();SkipWithA();BarterBridge();CellPublication();NonresidentPublication();if(argc>1){OriginalBirthHandoff(argv[1]);OriginalBridge(argv[1]);OriginalMoiraInterview(argv[1]);}std::cout<<"Dialogue bridge lifecycle tests passed\n";}

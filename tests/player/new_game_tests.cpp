@@ -1,4 +1,5 @@
 #include "player/fo3-new-game.h"
+#include "player/fo3-player-presentation.h"
 #include "scripting/fo3-script-master-match.h"
 #include "ui/chargen/fo3-name-entry.h"
 #include "ui/chargen/fo3-special-book.h"
@@ -289,6 +290,7 @@ static void OriginalIdentity(const fo3player::Catalog& catalog,bool female,const
   const auto& d=catalog.pipboy;const auto quest=d.formNames.at("cg00");
   auto boot=p.PrepareNewGameTransaction(quest,error);Check(bool(boot)&&p.CommitScriptTransaction(*boot),error);
   const auto start=p.Snapshot().playerMove;p.AcknowledgePlayerMove();
+  assert(fo3player::EarlyFirstPerson(p));
   p.SetScriptPlayerLocation(start.position[0],start.position[1],start.position[2],start.cell,start.world);
   std::vector<uint32_t> residents={d.formNames.at("cg00dadref"),d.formNames.at("cg00momref"),d.formNames.at("cg00doctorliref"),d.formNames.at("cg01dadref")};
   auto registry=std::make_shared<fo3script::AnimationRegistry>();
@@ -415,6 +417,7 @@ static void OriginalIdentity(const fo3player::Catalog& catalog,bool female,const
   assert(packageGreeting&&resetSeen&&radioSeen);
   bool radioDisabled=true;Check(p.ReferenceDisabled(d.formNames.at("radiovault101ref"),radioDisabled,error),error);assert(!radioDisabled);
   assert(!p.PlayerControlDisabled(0)&&!p.PlayerControlDisabled(5)&&p.PlayerControlDisabled(2));
+  assert(!fo3player::EarlyFirstPerson(p));
   assert(p.Snapshot().gameYear==2268&&p.Snapshot().gameMonth==6&&p.Snapshot().gameDay==13);
   const auto adult=fo3pipdata::ActorCategory(d,fo3player::PlayerBase,1)->race;
   assert(p.PlayerRace()==d.raceAges.at(adult)[0]&&p.ItemCount(d.formNames.at("pipboy"))>=1);

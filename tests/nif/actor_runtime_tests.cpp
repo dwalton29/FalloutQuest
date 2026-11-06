@@ -446,6 +446,16 @@ int main(int argc,char** argv) {
   residentRawNow+=std::chrono::milliseconds{500};
   ++gStereoFrame;Q230UpdateActor(animated);
   assert(std::fabs(animated.pose.local.front().translation[0]-beforePause[0]-.5f)<1e-5f);
+  // A package's clamped pose remains owned after its clip ends, including
+  // during speech; dialogue must not fall back to a standing idle.
+  auto held=animated.clip;held.stop=1;held.cycle=2;
+  held.tracks.front().translation.keys.clear();held.tracks.front().base.translation={77,0,5};
+  animated.responseClips[900]=held;animated.responseIdle=900;animated.runtime.packagePoseIdle=900;
+  animated.responseStarted=std::chrono::duration<double>(Fo3GameplayNow().time_since_epoch()).count()-20;
+  animated.runtime.speaking=true;++gStereoFrame;Q230UpdateActor(animated);
+  assert(animated.pose.local.front().translation[0]==77);
+  animated.runtime.packagePoseIdle=0;animated.runtime.speaking=false;++gStereoFrame;Q230UpdateActor(animated);
+  assert(animated.pose.local.front().translation[0]!=77);
   CombatCompositionTests();
   // Production furniture branch must feed the continuation root to the skin
   // palette, without moving the accumulated pivot or reapplying it to exit.

@@ -24,7 +24,8 @@ static void SyntheticFurniture(){
   for(int i=1;i<100;++i)Q240UpdateNpcPackage(a,i*.1);
   assert(a.runtime.furniture.phase==fo3furniture::Phase::Loop&&scene->reservations->owners.size()==1);
   a.runtime.BeginDialogue();for(int i=100;i<140;++i)Q240UpdateNpcPackage(a,i*.1);
-  assert(!a.runtime.furniture.Active()&&scene->reservations->owners.empty());a.runtime.EndDialogue();
+  assert(a.runtime.furniture.phase==fo3furniture::Phase::Loop&&scene->reservations->owners.size()==1);
+  const auto facing=a.runtime.yaw;a.runtime.Face(facing+1,1);assert(a.runtime.yaw==facing);a.runtime.EndDialogue();
   for(int i=140;i<240;++i)Q240UpdateNpcPackage(a,i*.1);
   assert(a.runtime.furniture.phase==fo3furniture::Phase::Loop);a.runtime.BeginCombat(0x14);
   for(int i=240;i<280;++i)Q240UpdateNpcPackage(a,i*.1);
@@ -36,7 +37,7 @@ static void SyntheticFurniture(){
   for(int i=480;i<580;++i)Q240UpdateNpcPackage(a,i*.1);assert(a.runtime.furniture.phase==fo3furniture::Phase::Loop);
   auto changed=gPlayerSession->player.Definitions();changed.pipboy.packages[50].type=6;gPlayerSession=std::make_unique<Session>(std::move(changed));a.runtime.nextPackageEvaluation=0;
   for(int i=580;i<680;++i)Q240UpdateNpcPackage(a,i*.1);assert(!a.runtime.furniture.Active()&&scene->reservations->owners.empty());
-  std::cout<<"Furniture ownership, dialogue/combat exits and death cleanup passed\n";
+  std::cout<<"Furniture ownership, dialogue pose retention, combat exits and death cleanup passed\n";
 }
 static std::shared_ptr<Q240NavigationGraph> Navigation(uint32_t cell,uint32_t world,const char* esm){
  std::vector<Fo3NpcNavMeshQ240> raw;assert(LoadFo3NpcNavigationQ240(cell,world,raw,esm));auto graph=std::make_shared<Q240NavigationGraph>();
@@ -182,7 +183,8 @@ static void SandboxActivities(){
  auto c=gPlayerSession->player.Definitions();c.pipboy.packages[50].typeFlags=32;gPlayerSession=std::make_unique<Session>(std::move(c));
  for(int i=0;i<1600;++i)Q240UpdateNpcPackage(a,i*.1);
  assert(a.runtime.sandboxCycles>=4);assert(a.aiPackage==50);assert(a.runtime.sandboxLastTarget==55);
- a.runtime.BeginDialogue();for(int i=1600;i<1640;++i)Q240UpdateNpcPackage(a,i*.1);assert(scene->reservations->owners.empty());a.runtime.EndDialogue();
+ const auto occupied=scene->reservations->owners;
+ a.runtime.BeginDialogue();for(int i=1600;i<1640;++i)Q240UpdateNpcPackage(a,i*.1);assert(scene->reservations->owners==occupied);a.runtime.EndDialogue();
  for(int i=1640;i<1800;++i)Q240UpdateNpcPackage(a,i*.1);assert(a.runtime.furniture.Active());
  a.runtime.BeginCombat(0x14);for(int i=1800;i<1840;++i)Q240UpdateNpcPackage(a,i*.1);assert(scene->reservations->owners.empty());a.runtime.EndCombat();
  auto restricted=gPlayerSession->player.Definitions();restricted.pipboy.packages[50].typeFlags=48;gPlayerSession=std::make_unique<Session>(std::move(restricted));a.runtime.nextPackageEvaluation=0;
@@ -202,7 +204,7 @@ static void SandboxActivities(){
  }
  assert(a.runtime.sandboxLastTarget==56&&seenIdles[0]&&seenIdles[1]);
  a.runtime.Die(210);assert(scene->reservations->owners.empty());
- std::cout<<"Sandbox repeated chair activity, authored No Wandering/No Furniture, dialogue/combat release passed\n";
+ std::cout<<"Sandbox repeated chair activity, authored No Wandering/No Furniture, dialogue retention/combat release passed\n";
 }
 
 static void SyntheticUseItemAt(){
@@ -235,14 +237,14 @@ static void SyntheticUseItemAt(){
   assert(scene->reservations->owners.size()==1);
   actor.runtime.BeginDialogue();
   for(int i=800;i<860;++i)Q240UpdateNpcPackage(actor,i*.1);
-  assert(!actor.runtime.furniture.Active()&&scene->reservations->owners.empty());
+  assert(actor.runtime.furniture.phase==fo3furniture::Phase::Loop&&scene->reservations->owners.size()==1);
   actor.runtime.EndDialogue();
   auto invalid=gPlayerSession->player.Definitions();
   invalid.pipboy.packages[50].typeFlags=0; // Unverified nonseated behavior rejected.
   gPlayerSession=std::make_unique<Session>(std::move(invalid));
   actor.runtime.nextPackageEvaluation=0;
-  Q240UpdateNpcPackage(actor,90);
-  assert(actor.aiPackage!=50);
+  for(int i=0;i<40&&actor.aiPackage==50;++i)Q240UpdateNpcPackage(actor,90+i*.1);
+  assert(actor.aiPackage!=50&&!actor.runtime.furniture.Active());
   std::cout<<"Use Item At seated interaction and unsupported fallback passed\\n";
 }
 static void OriginalUseItemAt(const char* esm){

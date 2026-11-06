@@ -49,7 +49,7 @@ struct RuntimeState {
   float aimPitch=0;
   float yaw=0,authoredYaw=0,returnYaw=0,speed=0,headYaw=0,suspendedSpeed=0;
   double authoredMotionUntil=0;
-  uint32_t packageEndIdle=0;
+  uint32_t packageEndIdle=0,packagePoseIdle=0;
   double packageEndIdleUntil=-1;
   bool OwnsAuthoredMotion(double now)const{return Alive()&&activity!=Activity::Combat&&now<authoredMotionUntil;}
   bool dialogue=false,speaking=false,packageKnown=false;
@@ -100,11 +100,11 @@ struct RuntimeState {
   }
   void EndCombat(){if(activity!=Activity::Combat)return;combatTarget=0;activity=suspended;package=suspendedPackage;speed=0;animation=Animation::Idle;reloadUntil=0;combatMovement=CombatAction::Acquire;tacticalRouteKind=0;coverUntil=-1;nextManoeuvre=manoeuvreUntil=nextMeleeDecision=0;crowdBlockedSince=-1;moraleFlee=false;fleeUntil=nextTactic=burstUntil=burstWaitUntil=0;blockedSince=-1;procedure=Procedure::Interrupted;nextPackageEvaluation=0;}
   void Die(double now){if(activity==Activity::Dying||activity==Activity::Dead)return;furniture.Clear();dialogue=speaking=false;combatTarget=0;activity=Activity::Dying;speed=0;animation=Animation::Death;deathAt=now;++actionSerial;}
-  void BeginDialogue(){if(dialogue||!CanTalk())return;furniture.RequestExit();suspended=activity;suspendedPackage=package;suspendedSpeed=speed;returnYaw=yaw;dialogue=true;activity=Activity::Dialogue;speed=0;}
+  void BeginDialogue(){if(dialogue||!CanTalk())return;suspended=activity;suspendedPackage=package;suspendedSpeed=speed;returnYaw=yaw;dialogue=true;activity=Activity::Dialogue;speed=0;}
   void EndDialogue(){if(!dialogue)return;dialogue=false;speaking=false;if(activity!=Activity::Combat){activity=suspended;package=suspendedPackage;speed=suspendedSpeed;}animation=Animation::Idle;blockedSince=-1;procedure=Procedure::Interrupted;nextPackageEvaluation=0;}
   void Face(float desired,float dt){
     const float error=Angle((dialogue?desired:returnYaw)-yaw);
-    const bool turn=dialogue?std::fabs(error)>DialoguePolicy::BodyThreshold:std::fabs(error)>.01f;
+    const bool turn=!furniture.Active()&&(dialogue?std::fabs(error)>DialoguePolicy::BodyThreshold:std::fabs(error)>.01f);
     if(turn)yaw=Angle(yaw+std::clamp(error,-DialoguePolicy::BodySpeed*dt,DialoguePolicy::BodySpeed*dt));
     const float look=dialogue?std::clamp(Angle(desired-yaw),-DialoguePolicy::HeadLimit,DialoguePolicy::HeadLimit):0;
     headYaw+=std::clamp(look-headYaw,-DialoguePolicy::HeadSpeed*dt,DialoguePolicy::HeadSpeed*dt);

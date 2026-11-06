@@ -748,7 +748,7 @@ static bool Q240AdoptPackage(Q230ActorVisual& actor,uint32_t packageId,const fo3
     actor.runtime.sandboxLastTarget=0;actor.runtime.sandboxCycles=0;actor.runtime.sandboxNext=0;
     actor.runtime.hasLastRoamDestination=false;actor.runtime.roamWaitUntil=0;
     actor.aiPackage=packageId;actor.aiAnchorGame=anchor;actor.aiSequence=0;actor.aiPathGame.clear();actor.aiPathSurfaces.clear();actor.aiPathIndex=0;actor.runtime.navigationDoor=0;actor.aiRepathAt=0;
-    actor.runtime.packageEndIdle=0;actor.runtime.packageEndIdleUntil=-1;
+    actor.runtime.packageEndIdle=0;actor.runtime.packageEndIdleUntil=-1;actor.runtime.packagePoseIdle=0;
 #ifdef FO3_NPC_STAGGER_ROUTING
     // Megaton's 10:00 schedules may all change on the same stereo frame.
     // Delay only the first locally-planned civilian route by <= 0.5 seconds;
@@ -1463,7 +1463,7 @@ static void Q240AdvanceNpcPackage(Q230ActorVisual& actor,double now) {
     const auto active=gPlayerSession->player.Definitions().pipboy.packages.find(actor.aiPackage);
     if(active!=gPlayerSession->player.Definitions().pipboy.packages.end()&&active->second.type==7)
       Q240AccompanyOnce(actor.source.refFormId,actor.aiPackage,active->second.target.value,"INTERRUPT",actor.runtime.dialogue?"dialogue":"combat");
-    if(actor.runtime.furniture.Active()){actor.runtime.furniture.RequestExit();Q240AdvanceFurniture(actor,nullptr,0,0,now);}return;
+    if(actor.runtime.furniture.Active()&&actor.runtime.activity==fo3npc::Activity::Combat){actor.runtime.furniture.RequestExit();Q240AdvanceFurniture(actor,nullptr,0,0,now);}return;
   }
   // ACHR z and original marker coordinates may not land exactly on the
   // rendered floor. Only on first resident update: no per-frame NAVM scan.
@@ -1522,7 +1522,7 @@ static void Q240AdvanceNpcPackage(Q230ActorVisual& actor,double now) {
     if(actor.runtime.procedure!=fo3npc::Procedure::Unsupported)
       Q6H_LOGI("NPC AI IDLE actor=%08X base=%08X reason=no-executable-package",actor.source.refFormId,actor.source.baseFormId);
     actor.runtime.procedure=fo3npc::Procedure::Unsupported;
-    actor.aiPackage=actor.runtime.package=0;actor.runtime.packageKnown=false;
+    actor.aiPackage=actor.runtime.package=0;actor.runtime.packageKnown=false;actor.runtime.packagePoseIdle=0;
     actor.runtime.activity=fo3npc::Activity::Idle;actor.runtime.speed=0;
     actor.runtime.animation=fo3npc::Animation::Idle;actor.aiPathGame.clear();actor.aiPathSurfaces.clear();actor.aiPathIndex=0;actor.runtime.navigationDoor=0;return;
   }

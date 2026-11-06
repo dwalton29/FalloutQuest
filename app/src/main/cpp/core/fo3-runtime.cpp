@@ -1,3 +1,4 @@
+#include "player/fo3-player-presentation.h"
 #include "rendering/mesh/fo3-lod-material.h"
 #include "world/interaction/fo3-door-activation.h"
 #include "world/interaction/fo3-world-door-anchors.h"
@@ -12867,6 +12868,7 @@ bool Q210EnsurePlayerBody() {
 
 
 void Q210RenderPlayerBody(bool alphaPass) {
+    if(gPlayerSession&&fo3player::EarlyFirstPerson(gPlayerSession->player))return;
     WeaponRender(alphaPass);
     if (!gQ210PlayerBodyReady) return;
     const auto drawStarted=fqopaque::Clock::now();

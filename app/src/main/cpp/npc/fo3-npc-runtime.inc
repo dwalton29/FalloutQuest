@@ -620,7 +620,7 @@ void Q230UpdateActor(Q230ActorVisual &actor) {
   const auto* slot=furniture.Selected();
   const auto responseClip=actor.responseClips.find(actor.responseIdle);
   const double responseNow=std::chrono::duration<double>(Fo3GameplayNow().time_since_epoch()).count();
-  const bool responsePose=actor.runtime.Alive()&&actor.runtime.activity!=fo3npc::Activity::Combat&&!actor.runtime.furniture.Active()&&actor.runtime.speed<.01f&&responseClip!=actor.responseClips.end()&&responseNow-actor.responseStarted<(responseClip->second.stop-responseClip->second.start)/responseClip->second.frequency;
+  const bool responsePose=actor.runtime.Alive()&&actor.runtime.activity!=fo3npc::Activity::Combat&&!actor.runtime.furniture.Active()&&actor.runtime.speed<.01f&&responseClip!=actor.responseClips.end()&&(actor.runtime.packagePoseIdle==actor.responseIdle||responseNow-actor.responseStarted<(responseClip->second.stop-responseClip->second.start)/responseClip->second.frequency);
   const bool furniturePose=!responsePose&&slot&&(furniture.phase==fo3furniture::Phase::Enter||furniture.phase==fo3furniture::Phase::Loop||furniture.phase==fo3furniture::Phase::Exit);
   if(responsePose){
 #ifndef FO3_ACTOR_RUNTIME_HOST_TEST
@@ -802,7 +802,7 @@ void Q230RenderNpcActors(bool alphaPass) {
 void Q230PlayPackageIdle(Q230ActorVisual& actor,uint32_t idle,uint32_t packageFlags){
   // Preserve the active voice token so its next update does not immediately
   // replace this package action. A genuinely new response still takes over.
-  actor.responseIdle=idle;actor.responseLastTime=-1;
+  actor.responseIdle=idle;actor.responseLastTime=-1;actor.runtime.packagePoseIdle=idle;
   actor.responseStarted=std::chrono::duration<double>(Fo3GameplayNow().time_since_epoch()).count();actor.lastFrame=UINT64_MAX;
   const auto clip=actor.responseClips.find(idle);
   if(clip==actor.responseClips.end()){Q6H_LOGW("PACKAGE IDLE UNAVAILABLE actor=%08X idle=%08X",actor.source.refFormId,idle);return;}
@@ -817,9 +817,10 @@ void Q230PlayPackageIdle(Q230ActorVisual& actor,uint32_t idle,uint32_t packageFl
 }
 void Q230DialogueResponseAnimation(Q230ActorVisual& actor,const fo3dialogue::Session& session){
   if(session.phase!=fo3dialogue::Phase::Speaking||(actor.responseToken==session.audioToken&&actor.responseInfo==session.info))return;
-  actor.runtime.packageEndIdle=0;actor.runtime.packageEndIdleUntil=-1;
   actor.responseToken=session.audioToken;actor.responseInfo=session.info;const auto* info=session.Current(gPlayerSession->player.Definitions().pipboy);
   const auto idle=info&&session.response<info->responses.size()?info->responses[session.response].speakerAnimation:0;
+  if(!idle&&actor.runtime.packagePoseIdle&&actor.runtime.packagePoseIdle==actor.responseIdle)return;
+  actor.runtime.packagePoseIdle=0;actor.runtime.packageEndIdle=0;actor.runtime.packageEndIdleUntil=-1;
   actor.responseIdle=idle;actor.responseLastTime=-1;actor.responseStarted=std::chrono::duration<double>(Fo3GameplayNow().time_since_epoch()).count();actor.lastFrame=UINT64_MAX;
   const auto authored=actor.responseClips.find(idle);
   actor.runtime.authoredMotionUntil=authored!=actor.responseClips.end()&&fo3anim::ControlsAccumulationRoot(authored->second)&&authored->second.frequency>0?
