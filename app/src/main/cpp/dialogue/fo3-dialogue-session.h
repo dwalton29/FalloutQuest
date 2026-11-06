@@ -21,6 +21,7 @@ struct Session {
   // Deferred world results own their original transaction until publication.
   std::function<uint64_t(std::unique_ptr<fo3player::ScriptTransactionPlan>,std::string&)> deferEndResult;
   std::function<int(uint64_t)> endResultStatus; // -1 failed, 0 pending, 1 finalized commit.
+  std::function<bool()> readyForEndResult;
   uint64_t resultTicket=0;
   bool ResumeResults(const Context&,fo3player::Player&);
   mutable std::mt19937 random{std::random_device{}()};

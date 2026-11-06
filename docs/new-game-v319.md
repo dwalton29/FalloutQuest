@@ -47,7 +47,9 @@ fast paths. INFO begin-result deferral remains unsupported.
 
 After successful finalization, dialogue records completion and resumes its
 original linked line, choices, goodbye or package completion. Repeated EOFs
-while waiting cannot run results twice. Failed/cancelled publication cannot
+while waiting cannot run results twice. Transient resource contention retains
+the closing INFO and retries admission after the background work finishes;
+selected scripted speech is likewise kept queued while admission is busy. Failed/cancelled publication cannot
 record INFO success or complete the initiating package. Scripted speech,
 interactive dialogue and NPC conversations use the same completion protocol.
 No controls are restored unless the original transaction succeeds.

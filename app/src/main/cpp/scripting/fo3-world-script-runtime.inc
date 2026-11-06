@@ -126,6 +126,7 @@ void SpeechTick(){
         FlushFo3PlayerState();
     }
     if(speechPending.empty()||gDialogue.Active()||gQ230NpcChat.Active()||IsFo3LoadingVisible())return;
+    if(!CanDeferFo3DialogueResult())return; // Keep selected speech queued while resource work owns admission.
     const auto action=speechPending.front();speechPending.erase(speechPending.begin());
     bool disabled=true;std::string enabledError;
     if(!player.ReferenceDisabled(action.reference,disabled,enabledError)||disabled)return;

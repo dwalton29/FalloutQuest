@@ -78,6 +78,7 @@ bool Session::Execute(const fo3pipdata::Info& i,fo3player::DialogueScriptPhase p
   if(plan->HasReferenceChanges()){
     if(publishReferences&&publishReferences(p,*plan,error))return true;
     if(phase==fo3player::DialogueScriptPhase::End&&deferEndResult&&endResultStatus){
+      if(readyForEndResult&&!readyForEndResult()){this->phase=Phase::Results;return false;}
       resultTicket=deferEndResult(std::move(plan),error);
       if(resultTicket){this->phase=Phase::Results;return false;}
     }
@@ -124,7 +125,15 @@ bool Session::AudioDone(uint32_t token,bool success,const Context& ctx,fo3player
   return FinishInfo(*i,ctx,p);
 }
 bool Session::ResumeResults(const Context& ctx,fo3player::Player& p){
-  if(phase!=Phase::Results||!resultTicket||!endResultStatus)return false;
+  if(phase!=Phase::Results||!endResultStatus)return false;
+  if(!resultTicket){
+    if(readyForEndResult&&!readyForEndResult())return false;
+    const auto* line=Current(p.Definitions().pipboy);if(!line){End("INFO missing while waiting for world resources");return false;}
+    std::string error;
+    if(Execute(*line,fo3player::DialogueScriptPhase::End,p,error))return FinishInfo(*line,ctx,p);
+    if(!resultTicket){End("world result admission failed");return false;}
+    return false;
+  }
   const int status=endResultStatus(resultTicket);if(!status)return false;
   resultTicket=0;
   if(status<0){End("world result publication failed");return false;}

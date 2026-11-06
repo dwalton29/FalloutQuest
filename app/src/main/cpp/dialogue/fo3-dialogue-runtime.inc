@@ -96,6 +96,7 @@ void ConfigureFo3DialogueSession(fo3dialogue::Session& session){
   };
   session.publishReferences=PublishFo3DialogueReferences;
   session.deferEndResult=DeferFo3DialogueResult;session.endResultStatus=Fo3DialogueResultStatus;
+  session.readyForEndResult=CanDeferFo3DialogueResult;
 }
 void ConfigureFo3Dialogue() {
   gDialogue.diagnostic=DialogueDiagnostic;ConfigureFo3DialogueSession(gDialogue);

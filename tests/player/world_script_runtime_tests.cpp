@@ -23,7 +23,9 @@ constexpr float FO3_UNITS_PER_METRE=1;
 uint64_t gFo3ResidentGameplayTicket=0;int saves=0;
 bool Fo3ResidentFrameBlocked(){return false;}
 void FlushFo3PlayerState(){++saves;}
-bool worldDefer=false;int worldResult=0;uint64_t worldResultTicket=0;
+bool worldDefer=false,worldBusy=false;
+bool CanDeferFo3DialogueResult(){return !worldBusy;}
+int worldResult=0;uint64_t worldResultTicket=0;
 std::unique_ptr<fo3player::ScriptTransactionPlan> worldResultPlan;
 bool PublishFo3DialogueReferences(fo3player::Player& p,fo3player::ScriptTransactionPlan& plan,std::string&){return !worldDefer&&p.CommitScriptTransaction(plan);}
 uint64_t BeginFo3ResidentPreparedWorkflow(int,std::unique_ptr<fo3player::ScriptTransactionPlan>){return 0;}
@@ -58,6 +60,7 @@ bool PreviewFo3DialogueReferences(const fo3player::Player&,const fo3player::Scri
 void ConfigureFo3DialogueSession(fo3dialogue::Session& s){
  s.previewReferences=PreviewFo3DialogueReferences;s.publishReferences=PublishFo3DialogueReferences;
  s.deferEndResult=[](auto plan,std::string&)->uint64_t{if(!worldDefer||worldResultPlan)return 0;worldResultPlan=std::move(plan);worldResult=0;return ++worldResultTicket;};
+ s.readyForEndResult=CanDeferFo3DialogueResult;
  s.endResultStatus=[](uint64_t ticket){return ticket==worldResultTicket?worldResult:-1;};
 }
 namespace fo3audio {
@@ -225,8 +228,14 @@ int main(int argc,char** argv){try{
  for(bool success:{false,true}){
   worldDefer=true;const auto before=p.Snapshot().karma;
   Check(fo3worldscript::PackageEvent(40,852,false),"start world-result package");
-  Check(p.QueueScriptSpeech(40,830,fo3player::PlayerRef,false,false,852),"queue world-result speech");fo3worldscript::Actions();fo3worldscript::SpeechTick();
-  fo3audio::completion=(uint64_t(fo3audio::token)<<1)|1;fo3worldscript::SpeechTick();
+  Check(p.QueueScriptSpeech(40,830,fo3player::PlayerRef,false,false,852),"queue world-result speech");
+  worldBusy=true;fo3worldscript::Actions();fo3worldscript::SpeechTick();
+  Check(!p.ScriptActorTalking(40)&&!fo3worldscript::speechPending.empty(),"busy admission preserves queued speech");
+  worldBusy=false;fo3worldscript::SpeechTick();
+  worldBusy=true;fo3audio::completion=(uint64_t(fo3audio::token)<<1)|1;fo3worldscript::SpeechTick();
+  Check(fo3worldscript::speech.phase==fo3dialogue::Phase::Results&&!worldResultPlan,"busy world work retains the closing INFO");
+  fo3worldscript::SpeechTick();Check(p.Snapshot().karma==before&&!worldResultPlan,"busy retry does not publish results");
+  worldBusy=false;fo3worldscript::SpeechTick();
   Check(fo3worldscript::speech.phase==fo3dialogue::Phase::Results&&bool(worldResultPlan),"EOF waits for resident result transaction");
   fo3worldscript::SpeechTick();Check(p.ScriptActorTalking(40)&&p.Snapshot().karma==before&&p.Snapshot().actorPackageEvents.at(40)==std::make_pair(uint32_t(852),false),"pending result cannot complete package or replay EOF");
   if(success)Check(p.CommitScriptTransaction(*worldResultPlan),"resident result commit");
