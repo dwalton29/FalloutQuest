@@ -24,7 +24,11 @@ bool LoadFalloutMeshFile(const std::string&,std::vector<uint8_t>&,std::string*) 
 #endif
 bool LoadFalloutTextureRgba(const std::string&,Fo3RgbaTexture&) {return false;}
 bool originalLogs=false;
-template<class... T> void TestLog(const char* fmt,T... args){if(originalLogs){std::printf(fmt,args...);std::puts("");}}
+template<class... T> void TestLog(const char* fmt,T... args){if(originalLogs){
+  if constexpr(sizeof...(args)==0)std::fputs(fmt,stdout);
+  else std::printf(fmt,args...);
+  std::puts("");
+}}
 #define Q6H_LOGI(...) TestLog(__VA_ARGS__)
 namespace fo3tod {float WrapHour(float h){return std::fmod(h+24.f,24.f);}}
 float packageHour=12;

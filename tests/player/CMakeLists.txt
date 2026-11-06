@@ -270,7 +270,7 @@ add_executable(dialogue_runtime_tests dialogue_runtime_tests.cpp ${dialogue_shar
     ../../app/src/main/cpp/npc/fo3-actor-animation.cpp
     ../../app/src/main/cpp/npc/fo3-npc.cpp)
 target_compile_features(dialogue_runtime_tests PRIVATE cxx_std_17)
-target_compile_options(dialogue_runtime_tests PRIVATE -Wall -Wextra -Werror -Wno-misleading-indentation -Wno-unused-function)
+target_compile_options(dialogue_runtime_tests PRIVATE -Wall -Wextra -Werror -Wformat-security -Wno-misleading-indentation -Wno-unused-function)
 target_include_directories(dialogue_runtime_tests PRIVATE ../nif ../../app/src/main/cpp ../../app/src/main/cpp/data)
 target_link_libraries(dialogue_runtime_tests PRIVATE ZLIB::ZLIB)
 add_test(NAME dialogue_runtime_tests COMMAND dialogue_runtime_tests)
