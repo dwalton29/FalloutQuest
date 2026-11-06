@@ -456,6 +456,15 @@ int main(int argc,char** argv) {
   assert(animated.pose.local.front().translation[0]==77);
   animated.runtime.packagePoseIdle=0;animated.runtime.speaking=false;++gStereoFrame;Q230UpdateActor(animated);
   assert(animated.pose.local.front().translation[0]!=77);
+  {
+    animated.responseIdle=0;animated.responseClips[901]=held;
+    auto& posture=animated.responseClips[901];posture.accumulationRoot=posture.tracks.front().bone;
+    assert(fo3npc::SelectResponseAnimation(animated,901,10));
+    assert(!fo3npc::SelectResponseAnimation(animated,901,11)&&animated.responseStarted==10);
+    assert(!fo3npc::SelectResponseAnimation(animated,0,12)&&animated.responseIdle==901);
+    assert(!fo3npc::SelectResponseAnimation(animated,9999,13)&&animated.responseIdle==901);
+    assert(fo3npc::SelectResponseAnimation(animated,900,14)&&animated.responseStarted==14);
+  }
   CombatCompositionTests();
   // Production furniture branch must feed the continuation root to the skin
   // palette, without moving the accumulated pivot or reapplying it to exit.

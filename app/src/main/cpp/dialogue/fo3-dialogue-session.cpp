@@ -76,13 +76,18 @@ bool Session::Execute(const fo3pipdata::Info& i,fo3player::DialogueScriptPhase p
   auto plan=p.PrepareDialogueInfoTransaction(i.topic,i.id,phase,error,actor,fo3player::ScriptProgramCapture::EnteredPrograms);
   if(!plan)return false;
   if(plan->HasReferenceChanges()){
-    if(publishReferences)return publishReferences(p,*plan,error);
+    if(publishReferences&&publishReferences(p,*plan,error))return true;
+    if(phase==fo3player::DialogueScriptPhase::End&&deferEndResult&&endResultStatus){
+      resultTicket=deferEndResult(std::move(plan),error);
+      if(resultTicket){this->phase=Phase::Results;return false;}
+    }
     error="world mutation requires resident coordinator";return false;
   }
   if(p.CommitScriptTransaction(*plan))return true;
   error="dialogue transaction changed before publication";return false;
 }
 bool Session::Enter(const fo3pipdata::Info& i,const Context&,fo3player::Player& p) {
+  infoCompleted=false;
   std::string error;if(!Execute(i,fo3player::DialogueScriptPhase::Begin,p,error)){if(diagnostic)diagnostic("DIALOGUE UNSUPPORTED SCRIPT info="+Id(i.id)+" "+error);End("result rejected");return false;}
   if(diagnostic&&!i.begin.source.empty())diagnostic("DIALOGUE RESULT info="+Id(i.id)+" phase=begin");
   topic=i.topic;info=i.id;response=selected=0;choices.clear();phase=Phase::Speaking;++audioToken;
@@ -114,8 +119,21 @@ bool Session::AudioDone(uint32_t token,bool success,const Context& ctx,fo3player
   auto i=Current(p.Definitions().pipboy);if(!i){End("INFO missing");return false;}
   if(++response<i->responses.size()){++audioToken;return true;}
   if(diagnostic)diagnostic("DIALOGUE TRANSITION info="+Id(i->id)+" stage=end-result");
-  std::string error;if(!Execute(*i,fo3player::DialogueScriptPhase::End,p,error)){if(diagnostic)diagnostic("DIALOGUE UNSUPPORTED SCRIPT info="+Id(i->id)+" "+error);End("end result rejected");return false;}
+  std::string error;if(!Execute(*i,fo3player::DialogueScriptPhase::End,p,error)){if(phase==Phase::Results)return true;if(diagnostic)diagnostic("DIALOGUE UNSUPPORTED SCRIPT info="+Id(i->id)+" "+error);End("end result rejected");return false;}
   if(diagnostic&&!i->end.source.empty())diagnostic("DIALOGUE RESULT info="+Id(i->id)+" phase=end");
+  return FinishInfo(*i,ctx,p);
+}
+bool Session::ResumeResults(const Context& ctx,fo3player::Player& p){
+  if(phase!=Phase::Results||!resultTicket||!endResultStatus)return false;
+  const int status=endResultStatus(resultTicket);if(!status)return false;
+  resultTicket=0;
+  if(status<0){End("world result publication failed");return false;}
+  const auto* line=Current(p.Definitions().pipboy);if(!line){End("INFO missing after world result");return false;}
+  return FinishInfo(*line,ctx,p);
+}
+bool Session::FinishInfo(const fo3pipdata::Info& line,const Context& ctx,fo3player::Player& p){
+  infoCompleted=true;
+  const auto* i=&line;
   p.RecordDialogue(actor,(i->flags&4)?i->id:0,i->addedTopics,!scriptedTopic&&ctx.target.reference==fo3player::PlayerRef,(i->flags2&1u)?i->id:0);
   if(scriptedTopic){
     if(linkedConversation&&!(i->flags&1)&&!i->links.empty()){
@@ -142,6 +160,6 @@ std::string Session::Subtitle(const fo3pipdata::Definitions& d)const {
 }
 void Session::End(const std::string& reason) {
   if(Active()&&diagnostic)diagnostic("DIALOGUE END actor="+Id(actor)+" info="+Id(info)+" reason="+reason);
-  linkedConversation=false;interruption=reason;phase=Phase::Inactive;actor=base=topic=info=voice=proxy=0;response=selected=0;choices.clear();++audioToken;
+  resultTicket=0;linkedConversation=false;interruption=reason;phase=Phase::Inactive;actor=base=topic=info=voice=proxy=0;response=selected=0;choices.clear();++audioToken;
 }
 }

@@ -2,11 +2,11 @@
 #include "fo3-dialogue-results.h"
 #include <random>
 namespace fo3dialogue {
-enum class Phase { Inactive, Speaking, Choices };
+enum class Phase { Inactive, Speaking, Choices, Results };
 struct Choice {uint32_t topic=0,info=0;std::string text;};
 struct Session {
   Phase phase=Phase::Inactive;
-  bool scriptedTopic=false,linkedConversation=false;
+  bool scriptedTopic=false,linkedConversation=false,infoCompleted=false;
   uint32_t actor=0,base=0,topic=0,info=0,voice=0,proxy=0;
   size_t response=0,selected=0;
   uint32_t audioToken=0;
@@ -18,6 +18,11 @@ struct Session {
   Diagnostic diagnostic;
   std::function<bool(const fo3player::Player&,const fo3player::ScriptTransactionPlan&,std::string&)> previewReferences;
   std::function<bool(fo3player::Player&,fo3player::ScriptTransactionPlan&,std::string&)> publishReferences;
+  // Deferred world results own their original transaction until publication.
+  std::function<uint64_t(std::unique_ptr<fo3player::ScriptTransactionPlan>,std::string&)> deferEndResult;
+  std::function<int(uint64_t)> endResultStatus; // -1 failed, 0 pending, 1 finalized commit.
+  uint64_t resultTicket=0;
+  bool ResumeResults(const Context&,fo3player::Player&);
   mutable std::mt19937 random{std::random_device{}()};
   bool Active()const{return phase!=Phase::Inactive;}
   const fo3pipdata::Info* Current(const fo3pipdata::Definitions&)const;
@@ -36,6 +41,7 @@ private:
   bool Execute(const fo3pipdata::Info&,fo3player::DialogueScriptPhase,fo3player::Player&,std::string&);
   bool Enter(const fo3pipdata::Info&,const Context&,fo3player::Player&);
   bool Eligible(const fo3pipdata::Info&,const Context&)const;
+  bool FinishInfo(const fo3pipdata::Info&,const Context&,fo3player::Player&);
   void BuildChoices(const Context&);
 };
 }

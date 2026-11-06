@@ -23,7 +23,9 @@ constexpr float FO3_UNITS_PER_METRE=1;
 uint64_t gFo3ResidentGameplayTicket=0;int saves=0;
 bool Fo3ResidentFrameBlocked(){return false;}
 void FlushFo3PlayerState(){++saves;}
-bool PublishFo3DialogueReferences(fo3player::Player& p,fo3player::ScriptTransactionPlan& plan,std::string&){return p.CommitScriptTransaction(plan);}
+bool worldDefer=false;int worldResult=0;uint64_t worldResultTicket=0;
+std::unique_ptr<fo3player::ScriptTransactionPlan> worldResultPlan;
+bool PublishFo3DialogueReferences(fo3player::Player& p,fo3player::ScriptTransactionPlan& plan,std::string&){return !worldDefer&&p.CommitScriptTransaction(plan);}
 uint64_t BeginFo3ResidentPreparedWorkflow(int,std::unique_ptr<fo3player::ScriptTransactionPlan>){return 0;}
 std::vector<uint32_t> GetFo3ScriptCollisionTargets(uint32_t){return {0,1};}
 Fo3DoorCollisionPose collision;int collisionUpdates=0;
@@ -53,6 +55,11 @@ float gSceneCenterXQ1730=0,gSceneCenterYQ1730=0,gSceneFloorZQ1730=0;
 constexpr float SCENE_FORWARD=0,FLOOR_Y=0;
 bool IsFo3LoadingVisible(){return false;}
 bool PreviewFo3DialogueReferences(const fo3player::Player&,const fo3player::ScriptTransactionPlan&,std::string&){return true;}
+void ConfigureFo3DialogueSession(fo3dialogue::Session& s){
+ s.previewReferences=PreviewFo3DialogueReferences;s.publishReferences=PublishFo3DialogueReferences;
+ s.deferEndResult=[](auto plan,std::string&)->uint64_t{if(!worldDefer||worldResultPlan)return 0;worldResultPlan=std::move(plan);worldResult=0;return ++worldResultTicket;};
+ s.endResultStatus=[](uint64_t ticket){return ticket==worldResultTicket?worldResult:-1;};
+}
 namespace fo3audio {
 uint32_t token=0;uint64_t completion=0;std::string path;std::vector<uint32_t> sounds;
 void SoundEvent(uint32_t id){sounds.push_back(id);}
@@ -146,6 +153,9 @@ int main(int argc,char** argv){try{
  line.responses.push_back({700,0,"Original speech"});line.end.source="set speaker.ended to 1";
  c.pipboy.topics[500].push_back(line);
  auto broadcast=line;broadcast.id=821;broadcast.topic=820;broadcast.flags=1;broadcast.end={};c.pipboy.topics[820].push_back(broadcast);
+ c.references[82].valid=true;c.references[82].cell=1;c.pipboy.formNames["hiddenspeaker"]=82;
+ auto deferred=line;deferred.id=831;deferred.topic=830;deferred.end.source="HiddenSpeaker.Enable\nRewardKarma 3";c.pipboy.topics[830].push_back(deferred);
+ c.pipboy.packages[852]=c.pipboy.packages[850];c.pipboy.packages[852].dialogueTopic=830;
  auto asset=std::make_shared<fo3dooranim::Asset>();fo3anim::Bone root;root.name="root";asset->hierarchy.bones.push_back(root);fo3anim::Bone leaf;leaf.name="leaf";leaf.parent=0;asset->hierarchy.bones.push_back(leaf);
  Check(fo3anim::FinalizeSkeleton(asset->hierarchy),"hierarchy");asset->blockBones={0,1};
  fo3anim::Clip clip;clip.name="Advance";clip.stop=2;clip.cycle=2;clip.textKeys={{.1f,"sound: OriginalSound"},{1.5f,"OriginalSound"}};
@@ -212,6 +222,21 @@ int main(int argc,char** argv){try{
  Check(p.QueueScriptSpeech(40,500,fo3player::PlayerRef,false,false,850),"queue package-specific speech");fo3worldscript::Actions();fo3worldscript::SpeechTick();
  fo3audio::completion=(uint64_t(fo3audio::token)<<1)|1;fo3worldscript::SpeechTick();
  Check(p.Snapshot().actorPackageEvents.at(40)==std::make_pair(uint32_t(850),true)&&p.Snapshot().pipboy.dialogueVariables.at((uint64_t(40)<<32)|2)==0,"package speech completes its package without sending SayToDone");
+ for(bool success:{false,true}){
+  worldDefer=true;const auto before=p.Snapshot().karma;
+  Check(fo3worldscript::PackageEvent(40,852,false),"start world-result package");
+  Check(p.QueueScriptSpeech(40,830,fo3player::PlayerRef,false,false,852),"queue world-result speech");fo3worldscript::Actions();fo3worldscript::SpeechTick();
+  fo3audio::completion=(uint64_t(fo3audio::token)<<1)|1;fo3worldscript::SpeechTick();
+  Check(fo3worldscript::speech.phase==fo3dialogue::Phase::Results&&bool(worldResultPlan),"EOF waits for resident result transaction");
+  fo3worldscript::SpeechTick();Check(p.ScriptActorTalking(40)&&p.Snapshot().karma==before&&p.Snapshot().actorPackageEvents.at(40)==std::make_pair(uint32_t(852),false),"pending result cannot complete package or replay EOF");
+  if(success)Check(p.CommitScriptTransaction(*worldResultPlan),"resident result commit");
+  worldResultPlan.reset();worldResult=success?1:-1;fo3worldscript::SpeechTick();
+  Check(!p.ScriptActorTalking(40)&&!fo3worldscript::speech.Active(),"settled result releases speech");
+  Check(p.Snapshot().karma==before+(success?3:0)&&p.Snapshot().actorPackageEvents.at(40)==std::make_pair(uint32_t(852),success),"only finalized results can complete their package");
+  worldDefer=false;
+ }
+ // Restore this originally disabled reference before testing ghost speech.
+ {fo3pipdata::ResultScript disable;disable.source="HiddenSpeaker.Disable";std::string error;auto reset=p.PrepareDialogueTransaction(disable,{},error);Check(bool(reset)&&p.CommitScriptTransaction(*reset),"restore disabled test reference");}
  const auto priorVoiceToken=fo3audio::token;Check(p.QueueScriptSpeech(82,820,fo3player::PlayerRef),"queue disabled reference speech");fo3worldscript::Actions();fo3worldscript::SpeechTick();
  Check(!p.ScriptActorTalking(82)&&fo3audio::token==priorVoiceToken,"disabled references cannot start ghost speech");
  Check(p.QueueScriptSpeech(81,820,fo3player::PlayerRef),"source Say selects non-actor TACT INFO");

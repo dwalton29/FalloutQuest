@@ -241,7 +241,11 @@ static void PresentationAndOverride() {
   npc.speaking=true;npc.Face(npc.yaw+.1f,.1f);assert(npc.animation==fo3npc::Animation::Speaking);
   npc.speaking=false;npc.Face(npc.yaw+.1f,.1f);assert(npc.animation==fo3npc::Animation::Conversation);
   npc.EndDialogue();assert(!npc.speaking);assert(!npc.dialogue&&npc.activity==fo3npc::Activity::Package&&npc.package==99&&npc.speed==1);
-  assert(npc.authoredYaw==.2f);for(int n=0;n<20;++n)npc.Face(0,.1f);assert(std::fabs(npc.yaw-.2f)<.01f);
+  assert(npc.authoredYaw==.2f);npc.speed=0;for(int n=0;n<20;++n)npc.Face(0,.1f);assert(std::fabs(npc.yaw-.2f)<.01f);
+  npc.speed=1;npc.animation=fo3npc::Animation::Walk;const float walkingYaw=npc.yaw;
+  npc.Face(walkingYaw+1,.1f,true);assert(npc.animation==fo3npc::Animation::Walk&&npc.yaw==walkingYaw&&npc.headYaw>0);
+  npc.speed=0;npc.dialogue=false;npc.returnYaw=npc.yaw;
+  npc.Face(npc.yaw+1,.1f,true);assert(npc.yaw!=walkingYaw&&npc.animation==fo3npc::Animation::TurnLeft);
   npc.BeginDialogue();npc.activity=fo3npc::Activity::Combat;npc.EndDialogue();assert(npc.activity==fo3npc::Activity::Combat);
   assert(!fo3npc::Interrupted(false,true,true,false,4));
   assert(fo3npc::Interrupted(false,true,true,false,6));assert(fo3npc::Interrupted(false,true,false,false,2));

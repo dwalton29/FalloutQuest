@@ -1,5 +1,6 @@
 #include "player/fo3-player-presentation.h"
 #include "scripting/fo3-script-cell-handoff.h"
+#include "npc/fo3-response-animation.h"
 #include "rendering/mesh/fo3-lod-material.h"
 #include "world/interaction/fo3-door-activation.h"
 #include "world/interaction/fo3-world-door-anchors.h"
@@ -3837,6 +3838,8 @@ struct Fo3ResidentWorkflowRequest {Fo3WorldspaceSelection visuals,collision;};
 using Fo3ResidentWorkflow=fo3scene::ResidentWorkflow<fo3player::ScriptTransactionPlan,
     Fo3ResidentCpuPreparation,Fo3ResidentWorkflowRequest>;
 Fo3ResidentWorkflow gFo3ResidentWorkflow;
+uint64_t gFo3DialogueResultTicket=0,gFo3DialogueCompletedTicket=0;
+int gFo3DialogueCompletedStatus=-1;
 uint64_t gFo3ResidentGameplayTicket=0; // Explicit gameplay request; Ready is not implicit commit.
 bool gFo3ResidentWorkflowCleanup=false;
 bool gFo3ResidentTeardownActive=false;
@@ -4363,6 +4366,11 @@ void PumpFo3ResidentWorkflow(bool focused) noexcept {
                     (unsigned long long)gFo3ResidentGameplayTicket);
             }
         }
+    }
+    if(gFo3DialogueResultTicket&&!gFo3ResidentWorkflow.Active()){
+        gFo3DialogueCompletedTicket=gFo3DialogueResultTicket;
+        gFo3DialogueCompletedStatus=gFo3ResidentWorkflow.Outcome().status==fo3scene::ResidentExchangeStatus::Committed?1:-1;
+        gFo3DialogueResultTicket=0;
     }
     if(!gFo3ResidentWorkflow.Active() ||
         (gFo3ResidentGameplayTicket &&
@@ -15410,6 +15418,20 @@ void Q6HClear(GLbitfield mask) {
 
 
 #define FO3_NPC_CHAT_RUNTIME 1
+bool CanDeferFo3DialogueResult(){
+    return gPlayerSession&&gSceneReady&&!gSceneLoad.active&&!gPlayerSession->saveBlocked&&
+        !gFo3ResidentWorkflow.Active()&&!Fo3ResidentAssetLaneBlocked()&&!gQ230NpcArrival.active;
+}
+uint64_t DeferFo3DialogueResult(std::unique_ptr<fo3player::ScriptTransactionPlan> plan,std::string& error){
+    if(!CanDeferFo3DialogueResult()){error="dialogue world publication busy";return 0;}
+    const auto ticket=BeginFo3ResidentPreparedWorkflow({},std::move(plan));
+    if(!ticket){error="dialogue world preparation unavailable";return 0;}
+    gFo3DialogueResultTicket=gFo3ResidentGameplayTicket=ticket;return ticket;
+}
+int Fo3DialogueResultStatus(uint64_t ticket){
+    if(ticket&&ticket==gFo3DialogueCompletedTicket)return gFo3DialogueCompletedStatus;
+    return ticket&&ticket==gFo3DialogueResultTicket?0:-1;
+}
 #include "dialogue/fo3-dialogue-runtime.inc"
 #undef FO3_NPC_CHAT_RUNTIME
 #include "npc/fo3-npc-chat-runtime.inc"

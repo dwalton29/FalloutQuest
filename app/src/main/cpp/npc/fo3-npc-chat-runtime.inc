@@ -28,7 +28,7 @@ static uint32_t Q230HelloTopic(){
   return 0;
 }
 static void Q230PrepareNpcChat(fo3dialogue::Session& session){
-  session.previewReferences=PreviewFo3DialogueReferences;session.publishReferences=PublishFo3DialogueReferences;
+  ConfigureFo3DialogueSession(session);
 }
 static bool Q230ChatEligible(const Q230ActorVisual& initiator,uint32_t reference,uint32_t package) {
   if(!gPlayerSession||gPlayerSession->saveBlocked||gDialogue.Active()||
@@ -179,16 +179,23 @@ static void Q230ChatTick(double now) {
     Q230ChatStop("separation/audio timeout");return;
   }
   Q230DialogueResponseAnimation(*a,gQ230AuthoredNpcChat);
-  const uint64_t done=fo3audio::DialogueCompletion();
-  if(done&&uint32_t(done>>1)==gQ230NpcChat.token){
+  auto context=Q230ChatContext(*a,*b);context.talking=true;
+  bool advanced=false;
+  if(gQ230AuthoredNpcChat.phase==fo3dialogue::Phase::Results){
+    advanced=gQ230AuthoredNpcChat.ResumeResults(context,gPlayerSession->player);
+    if(gQ230AuthoredNpcChat.phase==fo3dialogue::Phase::Results)return;
+  }else{
+    const uint64_t done=fo3audio::DialogueCompletion();
+    if(!done||uint32_t(done>>1)!=gQ230NpcChat.token)return;
     if(!(done&1u)){Q230ChatStop("voice unavailable");return;}
-    auto context=Q230ChatContext(*a,*b);context.talking=true;
-    if(gQ230AuthoredNpcChat.AudioDone(gQ230AuthoredNpcChat.audioToken,true,context,gPlayerSession->player)){
-      gQ230NpcChat.token=0x20000000u|((++gQ230NpcChat.serial)&0xffffu);
-      fo3audio::Dialogue(gQ230AuthoredNpcChat.Audio(gPlayerSession->player.Definitions().pipboy),gQ230NpcChat.token);return;
-    }
-    FlushFo3PlayerState();Q230ChatStop("authored audio and INFO results completed");
+    advanced=gQ230AuthoredNpcChat.AudioDone(gQ230AuthoredNpcChat.audioToken,true,context,gPlayerSession->player);
+    if(gQ230AuthoredNpcChat.phase==fo3dialogue::Phase::Results)return;
   }
+  if(advanced){
+    gQ230NpcChat.token=0x20000000u|((++gQ230NpcChat.serial)&0xffffu);
+    fo3audio::Dialogue(gQ230AuthoredNpcChat.Audio(gPlayerSession->player.Definitions().pipboy),gQ230NpcChat.token);return;
+  }
+  FlushFo3PlayerState();Q230ChatStop("authored audio and INFO results completed");
 }
 static bool Q230ChatSpeaking(uint32_t reference) {
   return gQ230NpcChat.Active()&&gQ230NpcChat.speaker==reference;

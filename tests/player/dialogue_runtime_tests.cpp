@@ -57,6 +57,14 @@ bool QueueFo3MapMarkerTransitionQ74(uint32_t,float,float,float,float,float,float
 bool Fo3AcceptsScenePublication(fo3scene::PublicationStamp stamp){
   return gPlayerSession&&gFo3ScenePublication.Accepts(stamp,gPlayerSession->player.Snapshot().referenceStateRevision);
 }
+bool deferAllowed=false;int deferredStatus=0;uint64_t deferredSerial=0;
+std::unique_ptr<fo3player::ScriptTransactionPlan> deferredResult;
+bool CanDeferFo3DialogueResult(){return deferAllowed&&!deferredResult;}
+uint64_t DeferFo3DialogueResult(std::unique_ptr<fo3player::ScriptTransactionPlan> plan,std::string&){
+  if(!CanDeferFo3DialogueResult())return 0;
+  deferredResult=std::move(plan);deferredStatus=0;return ++deferredSerial;
+}
+int Fo3DialogueResultStatus(uint64_t ticket){return ticket==deferredSerial?deferredStatus:-1;}
 #include "dialogue/fo3-dialogue-runtime.inc"
 #include "npc/fo3-npc-conversation.h"
 static bool Q230ChatEligible(const Q230ActorVisual&,uint32_t,uint32_t=0);
@@ -309,9 +317,40 @@ static void OriginalIntercomApproach(const fo3player::Catalog& original,const ch
   assert(actor.aiPackage==conversation&&!p.CanStartDailyPackage(ref,travel));
   std::cout<<"Original Dad intercom Travel reaches completion and selects conversation through Once Per Day scheduling\n";
 }
+static void OriginalBirthdayRelease(const fo3player::Catalog& original){
+  const auto q=original.pipboy.formNames.at("cg02"),dad=original.pipboy.formNames.at("cg02dadref"),radio=original.pipboy.formNames.at("radiovault101ref");
+  for(bool success:{false,true}){
+    auto c=original;auto& stage=c.initial.pipboy.quests[q];stage.stage=10;stage.running=true;stage.stages={5,6,7,8,10};
+    c.initial.referenceEnabled[dad]=true;c.initial.referenceEnabled[radio]=false;c.initial.disabledControls=0x2f;
+    gPlayerSession=std::make_unique<Session>(c);auto& p=gPlayerSession->player;p.RegisterOriginalActors();
+    const auto& placed=c.pipboy.targets.at(dad);gCurrentCellFormId=placed.cell;gExteriorWorldspaceQ1890=placed.world;
+    p.SetScriptPlayerLocation(placed.x,placed.y+40,placed.z,placed.cell,placed.world);
+    gObjects={{dad,true,false,false,"ACHR"}};gQ230NpcActors.clear();loading=false;
+    gFo3ReferenceState=std::make_shared<const fo3world::ReferenceStateSnapshot>(p.CaptureReferenceState());gFo3ScenePublication.Publish(gFo3ReferenceState);
+    const fo3pipdata::Info* final=nullptr;
+    for(const auto& topic:c.pipboy.topics)for(const auto& line:topic.second)if(line.id==0x1f9c2)final=&line;
+    assert(final);
+    std::string error;auto plan=p.PrepareDialogueInfoTransaction(final->topic,final->id,fo3player::DialogueScriptPhase::Both,error,dad);
+    assert(plan&&plan->HasReferenceChanges()&&!PreviewFo3DialogueReferences(p,*plan,error));
+    fo3dialogue::Context ctx;ctx.player=&p;assert(fo3dialogue::ReferenceContext(p,dad,ctx.speaker));assert(fo3dialogue::ReferenceContext(p,fo3player::PlayerRef,ctx.target));
+    fo3dialogue::Session voice;deferAllowed=true;ConfigureFo3DialogueSession(voice);
+    assert(voice.StartSelectedTopic(final->topic,final->id,ctx,p));const auto token=voice.audioToken;
+    assert(voice.AudioDone(token,true,ctx,p)&&voice.phase==fo3dialogue::Phase::Results&&deferredResult);
+    assert(p.PlayerControlDisabled(0)&&p.Snapshot().pipboy.quests.at(q).stage==10&&!voice.infoCompleted);
+    assert(!voice.AudioDone(token,true,ctx,p)&&!voice.ResumeResults(ctx,p));
+    if(success){assert(p.CommitScriptTransaction(*deferredResult));gFo3ReferenceState=std::make_shared<const fo3world::ReferenceStateSnapshot>(p.CaptureReferenceState());gFo3ScenePublication.Publish(gFo3ReferenceState);}
+    deferredResult.reset();deferredStatus=success?1:-1;voice.ResumeResults(ctx,p);
+    assert(!voice.Active()&&voice.infoCompleted==success);
+    if(success){bool disabled=true;assert(p.ReferenceDisabled(radio,disabled,error)&&!disabled);assert(!p.PlayerControlDisabled(0)&&p.PlayerControlDisabled(2)&&p.Snapshot().pipboy.quests.at(q).stage==12);}
+    else assert(p.PlayerControlDisabled(0)&&p.Snapshot().pipboy.quests.at(q).stage==10);
+    deferAllowed=false;
+  }
+  std::cout<<"Original birthday final INFO waits for radio world publication before restoring controls; cancellation cannot complete it\n";
+}
 static void OriginalBirthHandoff(const char* path){
   fo3player::Catalog c;std::string error;assert(fo3player::LoadCatalog(path,c,error));
   OriginalIntercomApproach(c,path);
+  OriginalBirthdayRelease(c);
   const auto birth=c.pipboy.formNames.at("cg00"),baby=c.pipboy.formNames.at("cg01"),dad=c.pipboy.formNames.at("cg00dadref");
   // Boundary precondition: the preceding end-of-birth fade reached stage 90.
   auto& stage=c.initial.pipboy.quests[birth];stage.stage=90;stage.running=true;stage.stages.insert(90);

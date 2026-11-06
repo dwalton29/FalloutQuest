@@ -102,13 +102,19 @@ struct RuntimeState {
   void Die(double now){if(activity==Activity::Dying||activity==Activity::Dead)return;furniture.Clear();dialogue=speaking=false;combatTarget=0;activity=Activity::Dying;speed=0;animation=Animation::Death;deathAt=now;++actionSerial;}
   void BeginDialogue(){if(dialogue||!CanTalk())return;suspended=activity;suspendedPackage=package;suspendedSpeed=speed;returnYaw=yaw;dialogue=true;activity=Activity::Dialogue;speed=0;}
   void EndDialogue(){if(!dialogue)return;dialogue=false;speaking=false;if(activity!=Activity::Combat){activity=suspended;package=suspendedPackage;speed=suspendedSpeed;}animation=Animation::Idle;blockedSince=-1;procedure=Procedure::Interrupted;nextPackageEvaluation=0;}
-  void Face(float desired,float dt){
-    const float error=Angle((dialogue?desired:returnYaw)-yaw);
-    const bool turn=!furniture.Active()&&(dialogue?std::fabs(error)>DialoguePolicy::BodyThreshold:std::fabs(error)>.01f);
+  void Face(float desired,float dt,bool scriptedLook=false){
+    const bool tracking=dialogue||scriptedLook;
+    if(speed>.01f){
+      const float look=tracking?std::clamp(Angle(desired-yaw),-DialoguePolicy::HeadLimit,DialoguePolicy::HeadLimit):0;
+      headYaw+=std::clamp(look-headYaw,-DialoguePolicy::HeadSpeed*dt,DialoguePolicy::HeadSpeed*dt);
+      return; // Navigation owns body facing and gait while moving.
+    }
+    const float error=Angle((tracking?desired:returnYaw)-yaw);
+    const bool turn=!furniture.Active()&&(tracking?std::fabs(error)>DialoguePolicy::BodyThreshold:std::fabs(error)>.01f);
     if(turn)yaw=Angle(yaw+std::clamp(error,-DialoguePolicy::BodySpeed*dt,DialoguePolicy::BodySpeed*dt));
-    const float look=dialogue?std::clamp(Angle(desired-yaw),-DialoguePolicy::HeadLimit,DialoguePolicy::HeadLimit):0;
+    const float look=tracking?std::clamp(Angle(desired-yaw),-DialoguePolicy::HeadLimit,DialoguePolicy::HeadLimit):0;
     headYaw+=std::clamp(look-headYaw,-DialoguePolicy::HeadSpeed*dt,DialoguePolicy::HeadSpeed*dt);
-    animation=dialogue?(turn?(error>0?Animation::TurnLeft:Animation::TurnRight):(speaking?Animation::Speaking:Animation::Conversation)):Animation::Idle;
+    animation=tracking&&turn?(error>0?Animation::TurnLeft:Animation::TurnRight):dialogue?(speaking?Animation::Speaking:Animation::Conversation):Animation::Idle;
   }
 };
 inline bool Interrupted(bool loading,bool resident,bool alive,bool combat,float distance){return loading||!resident||!alive||combat||!std::isfinite(distance)||distance>DialoguePolicy::LeaveRange;}

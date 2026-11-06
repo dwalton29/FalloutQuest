@@ -88,10 +88,17 @@ bool PublishFo3DialogueReferences(fo3player::Player& player,
   }
   return true;
 }
+void ConfigureFo3DialogueSession(fo3dialogue::Session& session){
+  session.previewReferences=[](const auto& player,const auto& plan,std::string& error){
+    if(PreviewFo3DialogueReferences(player,plan,error))return true;
+    if(CanDeferFo3DialogueResult()){error.clear();return true;}
+    return false;
+  };
+  session.publishReferences=PublishFo3DialogueReferences;
+  session.deferEndResult=DeferFo3DialogueResult;session.endResultStatus=Fo3DialogueResultStatus;
+}
 void ConfigureFo3Dialogue() {
-  gDialogue.diagnostic=DialogueDiagnostic;
-  gDialogue.previewReferences=PreviewFo3DialogueReferences;
-  gDialogue.publishReferences=PublishFo3DialogueReferences;
+  gDialogue.diagnostic=DialogueDiagnostic;ConfigureFo3DialogueSession(gDialogue);
 }
 bool DialogueCanStart(Q230ActorVisual& actor) {
   if((actor.source.creature&&!(actor.source.actorBaseFlags&0x200000))||!gPlayerSession||gPlayerSession->player.AnyScriptActorTalking()||gPlayerSession->saveBlocked||!actor.runtime.CanTalk()||gPlayerSession->player.ActorHealth(actor.source.refFormId)<=0)return false;
@@ -185,6 +192,10 @@ void UpdateFo3Dialogue(double now,float stick,bool a,bool b,bool focused,float h
     else if(focused&&pressB)EndFo3Dialogue("B exit");
     else {
       auto ctx=DialogueContext(*actor);
+      if(gDialogue.phase==fo3dialogue::Phase::Results){
+        gDialogue.ResumeResults(ctx,gPlayerSession->player);
+        if(!gDialogue.Active()){CleanupFo3Dialogue(actor->source.refFormId,"world result complete");return;}
+      }
       // A is a skip request while a response is speaking, not a menu choice.
       // Capture its phase before consuming a possible natural audio completion;
       // one button edge may advance at most one authored response.
@@ -295,7 +306,7 @@ void UpdateFo3Dialogue(double now,float stick,bool a,bool b,bool focused,float h
       const float targetX=chat?chatPartner[0]:gQ210Head[0];
       const float targetZ=chat?chatPartner[2]:gQ210Head[2];
       const float desired=std::atan2(-(targetX-x),-(targetZ-z));
-      actor.runtime.Face(desired,dt);actor.lastFrame=UINT64_MAX;Q230UpdateActor(actor);
+      actor.runtime.Face(desired,dt,actor.runtime.scriptLookTarget!=0);actor.lastFrame=UINT64_MAX;Q230UpdateActor(actor);
     }
   }
 }

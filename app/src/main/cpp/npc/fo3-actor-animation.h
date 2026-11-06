@@ -72,6 +72,8 @@ inline bool ControlsAccumulationRoot(const Clip& clip){
 }
 struct SampleTimings { double clipUs=0,skeletonUs=0; };
 struct Pose {
+  const Skeleton* boundSkeleton=nullptr;
+  const Clip* boundClip=nullptr;
   int accumulation=-1;
   std::string accumulationRoot;
   std::vector<Transform> local;

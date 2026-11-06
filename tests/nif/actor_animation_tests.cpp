@@ -91,6 +91,19 @@ int main(int argc, char **argv) {
   assert(Near(pose.global[0][12], 0) && Near(pose.global[0][13], 0) &&
          Near(pose.global[0][14], 0));
   assert(Near(pose.global[1][14], 5));
+  // Equal-sized clips can have different track orders. Switching back from a
+  // response must rebind by identity, never reuse its bone-index cache.
+  {
+    Clip other=clip;other.accumulationRoot.clear();other.tracks.resize(1);
+    other.tracks[0].bone="root";other.tracks[0].hasTranslation=true;
+    other.tracks[0].translation={};other.tracks[0].base.translation={7,8,9};
+    Clip base=other;base.tracks[0].bone="child";base.tracks[0].base.translation={0,0,5};
+    Pose reused;assert(Sample(skeleton,base,0,reused));
+    assert(Sample(skeleton,other,0,reused)&&Near(reused.local[0].translation[0],7));
+    assert(Sample(skeleton,base,0,reused)&&Near(reused.local[0].translation[0],0)&&Near(reused.local[1].translation[2],5));
+    Skeleton reordered=skeleton;std::swap(reordered.bones[0].name,reordered.bones[1].name);
+    assert(Sample(reordered,base,0,reused)&&reused.trackBones[0]==0);
+  }
   Skeleton cycle = skeleton;
   cycle.bones[0].parent = 1;
   assert(!FinalizeSkeleton(cycle));
