@@ -201,7 +201,9 @@ void Actions(){
         QueueFo3MapMarkerTransitionQ74(move.marker,move.position[0],move.position[1],move.position[2],move.rotation[0],move.rotation[1],move.rotation[2],0);
     fo3loading::gLocationSpecificOnly.store(player.Snapshot().locationSpecificLoadScreens);
     while(player.PollScriptAction(action)){
-        if(action.kind==fo3script::ActionKind::PipboyReset){ResetFo3Pipboy();}
+        if(action.kind==fo3script::ActionKind::StopCombat){
+            if(auto* actor=DialogueActor(action.reference))Q230StopScriptCombat(*actor,seconds);
+        }else if(action.kind==fo3script::ActionKind::PipboyReset){ResetFo3Pipboy();}
         else if(action.kind==fo3script::ActionKind::RadioRefresh){RefreshFo3PipboyRadio();}
         else if(action.kind==fo3script::ActionKind::PackageIdle){
             if(auto* actor=DialogueActor(action.reference))Q230PlayPackageIdle(*actor,action.form,action.flags);

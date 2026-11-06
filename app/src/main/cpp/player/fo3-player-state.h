@@ -689,6 +689,7 @@ public:
   bool MoveActorTo(uint32_t reference,uint32_t destination,const std::array<float,3>& offset);
   uint64_t ScriptActorMoveEpoch(uint32_t reference) const {const auto i=scriptActorMoves_.find(reference);return i==scriptActorMoves_.end()?0:i->second;}
   bool SetActorHostile(uint32_t reference,uint32_t target);
+  bool StopActorCombat(uint32_t reference);
   bool DoorInteractionCrime(uint32_t reference) const;
   bool ScriptReferenceLocation(uint32_t reference,fo3pipdata::Location& location) const;
   bool ScriptPackage(uint32_t reference,uint32_t package,bool add);

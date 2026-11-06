@@ -1,5 +1,14 @@
 #include "fo3-combat-animation.h"
 #include "rendering/performance-capture.h"
+static void Q230StopScriptCombat(Q230ActorVisual& actor,double now) {
+  auto& state=actor.runtime;
+  const bool fighting=state.activity==fo3npc::Activity::Combat;
+  state.EndCombat();state.pendingAttack=false;
+  if(fighting){state.packageEndIdle=0;state.packageEndIdleUntil=-1;}
+  actor.aiPathGame.clear();actor.aiPathSurfaces.clear();actor.aiPathIndex=0;
+  state.navigationDoor=0;state.nextPath=0;state.nextThink=now+.25;
+  if(fighting)Q240ResumePackageWait(actor,now);
+}
 // Resident actor simulation. Immutable assets are prepared in the scene worker.
 // Nonresident actors retain canonical game-coordinate state and do not advance.
 #ifndef FO3_NPC_COMBAT_HOST_TEST
@@ -446,7 +455,7 @@ static void Q230SimulateActor(Q230ActorVisual& actor,double now) {
   // loaded-scene bridge uses authored player detection expiry and the existing
   // 15-second NPC-target search; absence/death ends immediately.
   if(!valid||(!visible&&searchExpired&&!(s.moraleFlee&&now<s.fleeUntil)&&s.combatMovement!=fo3npc::CombatAction::Cover)){
-    const auto old=s.combatTarget;s.EndCombat();s.pendingAttack=false;actor.aiPathGame.clear();actor.aiPathSurfaces.clear();actor.aiPathIndex=0;s.navigationDoor=0;const auto package=c.pipboy.packages.find(actor.aiPackage);if(package==c.pipboy.packages.end()||(package->second.type!=13&&package->second.type!=2&&package->second.type!=10))actor.aiSequence=0;Q240ResumePackageWait(actor,now);
+    const auto old=s.combatTarget;Q230StopScriptCombat(actor,now);const auto package=c.pipboy.packages.find(actor.aiPackage);if(package==c.pipboy.packages.end()||(package->second.type!=13&&package->second.type!=2&&package->second.type!=10))actor.aiSequence=0;
     p.SetActorHostile(actor.source.refFormId,0);Q6H_LOGI("NPC COMBAT END actor=%08X target=%08X",actor.source.refFormId,old);return;
   }
   const float dt=actor.aiLastUpdate<0?0:std::clamp(float(now-actor.aiLastUpdate),0.f,.1f);actor.aiLastUpdate=now;

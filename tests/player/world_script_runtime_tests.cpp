@@ -45,6 +45,7 @@ ActorVisual* DialogueActor(uint32_t ref){for(auto& a:gQ230NpcActors)if(a.source.
 std::array<float,3> Q240GamePosition(const ActorVisual& a){return a.runtime.position;}
 void Q230DialogueResponseAnimation(ActorVisual&,const fo3dialogue::Session&){}
 void Q230PlayPackageIdle(ActorVisual& a,uint32_t idle,uint32_t){a.responseIdle=idle;}
+void Q230StopScriptCombat(ActorVisual& a,double){a.runtime.EndCombat();a.runtime.pendingAttack=false;}
 fo3dialogue::Session gDialogue;
 struct Chat{bool Active()const{return false;}}gQ230NpcChat;
 uint32_t gCurrentCellFormId=1,gExteriorWorldspaceQ1890=0;
@@ -188,6 +189,13 @@ int main(int argc,char** argv){try{
  Check(p.ScriptActorTalking(81)&&fo3audio::path=="sound/original.ogg","production TACT adapter delivers original speech without NPC mesh");
  fo3audio::completion=(uint64_t(fo3audio::token)<<1)|1;fo3worldscript::SpeechTick();
  Check(!p.ScriptActorTalking(81),"TACT speech releases on actual voice completion");
+ auto& fighter=gQ230NpcActors.back();fighter.runtime.BeginCombat(fo3player::PlayerRef);fighter.runtime.pendingAttack=true;
+ Check(p.SetActorHostile(40,fo3player::PlayerRef),"canonical combat fixture");
+ fo3pipdata::ResultScript stop,unsupported;stop.source="speaker.StopCombat";unsupported.source="UnsupportedStopStep";std::string stopError;
+ Check(!p.PrepareDialogueTransaction(stop,unsupported,stopError),"combat stop preparation rolls back");fo3worldscript::Actions();
+ Check(fighter.runtime.activity==fo3npc::Activity::Combat&&p.Snapshot().actors.at(40).hostile==fo3player::PlayerRef,"failed scripts leave combat live");
+ Check(p.ExecuteDialogueResult(stop,stopError),"authored StopCombat accepted");Check(fighter.runtime.activity==fo3npc::Activity::Combat,"live combat changes only after commit delivery");
+ fo3worldscript::Actions();Check(fighter.runtime.activity!=fo3npc::Activity::Combat&&!fighter.runtime.pendingAttack&&p.Snapshot().actors.at(40).hostile==0,"committed stop ends canonical and live combat");
  fo3pipdata::ResultScript reset,broken;reset.source="ResetPipboyManager\nForceRadioStationUpdate";broken.source="UnsupportedResetStep";
  std::string resetError;Check(!p.PrepareDialogueTransaction(reset,broken,resetError),"failed reset transaction is private");fo3worldscript::Actions();Check(!pipboyResets&&!radioRefreshes,"failed scripts cannot reset presentation");
  Check(p.ExecuteDialogueResult(reset,resetError),"queue original manager refresh commands");fo3worldscript::Actions();Check(pipboyResets==1&&radioRefreshes==1,"post-commit refresh reaches real adapters");

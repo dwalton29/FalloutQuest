@@ -748,6 +748,7 @@ static bool Q240AdoptPackage(Q230ActorVisual& actor,uint32_t packageId,const fo3
     actor.runtime.sandboxLastTarget=0;actor.runtime.sandboxCycles=0;actor.runtime.sandboxNext=0;
     actor.runtime.hasLastRoamDestination=false;actor.runtime.roamWaitUntil=0;
     actor.aiPackage=packageId;actor.aiAnchorGame=anchor;actor.aiSequence=0;actor.aiPathGame.clear();actor.aiPathSurfaces.clear();actor.aiPathIndex=0;actor.runtime.navigationDoor=0;actor.aiRepathAt=0;
+    actor.runtime.packageEndIdle=0;actor.runtime.packageEndIdleUntil=-1;
 #ifdef FO3_NPC_STAGGER_ROUTING
     // Megaton's 10:00 schedules may all change on the same stereo frame.
     // Delay only the first locally-planned civilian route by <= 0.5 seconds;
@@ -1480,6 +1481,26 @@ static void Q240AdvanceNpcPackage(Q230ActorVisual& actor,double now) {
   actor.aiLastUpdate=now;
   uint32_t packageId=0;std::array<float,3> anchor{};float radius=0;
   auto& state=actor.runtime;
+  // A Must Complete travel package with an authored end idle owns its final
+  // action before OnChange. Retire it only after a valid clip really elapsed;
+  // missing clips never manufacture completion. Restored completion state
+  // replays the presentation action, without repeating its result script.
+  const auto& definitions=gPlayerSession->player.Definitions().pipboy;
+  const auto active=definitions.packages.find(actor.aiPackage);
+  const auto delivered=gPlayerSession->player.Snapshot().actorPackageEvents.find(actor.source.refFormId);
+  if(active!=definitions.packages.end()&&active->second.type==6&&(active->second.flags&4u)&&active->second.procedureIdles[1]&&
+     delivered!=gPlayerSession->player.Snapshot().actorPackageEvents.end()&&delivered->second==std::make_pair(actor.aiPackage,true)){
+    const auto idle=active->second.procedureIdles[1];
+    if(state.packageEndIdle!=idle){
+      fo3script::Action action;action.kind=fo3script::ActionKind::PackageIdle;action.reference=actor.source.refFormId;action.form=idle;action.flags=active->second.flags;
+      if(gPlayerSession->player.QueueScriptAction(std::move(action))){state.packageEndIdle=idle;state.packageEndIdleUntil=-1;}
+      return;
+    }
+    if(state.packageEndIdleUntil<0||now<state.packageEndIdleUntil)return;
+    if(!Q240PackageEvent(actor,0,false))return;
+    actor.aiPackage=state.package=0;state.packageKnown=false;state.nextPackageEvaluation=0;
+    state.packageEndIdle=0;state.packageEndIdleUntil=-1;
+  }
   const auto* package=Q280EvaluatePackage(actor,now,packageId,anchor,radius);
   const auto previousDoor=state.xtelDoor;
   state.xtelDoor=state.evaluatedXtelDoor;state.xtelCell=state.evaluatedXtelCell;

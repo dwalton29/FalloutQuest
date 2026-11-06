@@ -284,7 +284,12 @@ int main(int argc,char** argv) {
    d.dialogueActors[43].templateActor=44;d.dialogueActors[43].templateFlags=16;
    d.dialogueActors[44].packages.push_back(45);d.packages[45].procedureIdles[0]=46;d.idleModels[46]="InheritedPackageIdle.kf";
    Q230CacheDialogueAnimations(actor,&d);assert(std::find(requestedActorClips.begin(),requestedActorClips.end(),"OriginalResponse.kf")!=requestedActorClips.end());
-   assert(std::find(requestedActorClips.begin(),requestedActorClips.end(),"InheritedPackageIdle.kf")!=requestedActorClips.end());}
+   assert(std::find(requestedActorClips.begin(),requestedActorClips.end(),"InheritedPackageIdle.kf")!=requestedActorClips.end());
+   const auto humanResponses=std::count(requestedActorClips.begin(),requestedActorClips.end(),"OriginalResponse.kf");
+   const auto packageIdles=std::count(requestedActorClips.begin(),requestedActorClips.end(),"InheritedPackageIdle.kf");
+   actor.source.creature=true;Q230CacheDialogueAnimations(actor,&d);
+   assert(std::count(requestedActorClips.begin(),requestedActorClips.end(),"InheritedPackageIdle.kf")==packageIdles+1);
+   assert(std::count(requestedActorClips.begin(),requestedActorClips.end(),"OriginalResponse.kf")==humanResponses);}
 #endif
   // FO3 rigid parts keep actor axes despite a rotated head bone.
   {

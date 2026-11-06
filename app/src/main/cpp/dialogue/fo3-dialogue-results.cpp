@@ -314,6 +314,10 @@ bool CompileResult(const fo3pipdata::Definitions& d,const fo3pipdata::ResultScri
     } else if(op=="rewardkarma") {
       cmd.type=CommandType::RewardKarma;
       if(!(in>>a)||!number(a,cmd.value)){error="invalid RewardKarma";return false;}
+    } else if(op=="stopcombat"||(op.find('.')!=std::string::npos&&op.substr(op.find('.')+1)=="stopcombat")) {
+      cmd.type=CommandType::StopCombat;const auto dot=op.find('.');
+      cmd.form=dot==std::string::npos?owner:form(op.substr(0,dot));
+      if(!cmd.form){error="unresolved StopCombat reference";return false;}
     } else if(op=="evp"||op=="evaluatepackage"||(op.find('.')!=std::string::npos&&(op.substr(op.find('.')+1)=="evp"||op.substr(op.find('.')+1)=="evaluatepackage"))) {
       cmd.type=CommandType::EvaluatePackage;const auto dot=op.find('.');
       cmd.form=dot==std::string::npos?owner:form(op.substr(0,dot));

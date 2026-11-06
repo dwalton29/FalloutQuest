@@ -527,6 +527,7 @@ bool Player::RunScript(const fo3pipdata::ResultScript& script,uint32_t owner,uns
     case C::AddAchievement:ok=AddAchievement(uint32_t(c.value));break;
     case C::Disable:ok=StageReferenceEnable(c.form,false,error);break;
     case C::Enable:ok=StageReferenceEnable(c.form,true,error);break;
+    case C::StopCombat:ok=StopActorCombat(c.form);break;
     case C::EvaluatePackage:ok=ReevaluatePackage(c.form);break;
     case C::ShowMessage: {
       if(!c.expression.empty())ok=fo3script::Expression(*this,owner,c.expression,error,scriptId).Evaluate(value);
@@ -688,6 +689,14 @@ bool Player::RewardKarma(float amount) {
   if(karma!=state_.karma){state_.karma=karma;++revision_;}
   if(amount!=0){pendingKarmaEvents_.push_back({change,amount});++scriptEffectRevision_;}
   return true;
+}
+bool Player::StopActorCombat(uint32_t reference){
+  const auto placed=catalog_->actorPlacements.find(reference);
+  // Player combat ownership and whole combat groups need separate adapters.
+  if(placed==catalog_->actorPlacements.end()||!catalog_->weapons.actors.count(placed->second.base))return false;
+  if(!SetActorHostile(reference,0)||!ReevaluatePackage(reference))return false;
+  fo3script::Action action;action.kind=fo3script::ActionKind::StopCombat;action.reference=reference;
+  return QueueScriptAction(std::move(action));
 }
 bool Player::ReevaluatePackage(uint32_t reference){
   const auto p=catalog_->actorPlacements.find(reference);

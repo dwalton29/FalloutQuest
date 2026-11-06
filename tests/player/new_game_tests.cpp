@@ -419,9 +419,44 @@ static void OriginalIdentity(const fo3player::Catalog& catalog,bool female,const
   const auto adult=fo3pipdata::ActorCategory(d,fo3player::PlayerBase,1)->race;
   assert(p.PlayerRace()==d.raceAges.at(adult)[0]&&p.ItemCount(d.formNames.at("pipboy"))>=1);
   assert(p.Snapshot().pipboy.quests.at(birthday).stage>=12&&!p.Snapshot().autoDisplayObjectives&&p.Snapshot().pipboy.quests.at(baby).stages.count(50));
+  // Continue through the actual party choices, not direct stage commands.
+  auto context=[&](uint32_t ref){fo3dialogue::Context ctx;ctx.player=&p;ctx.talking=true;Check(fo3dialogue::ReferenceContext(p,ref,ctx.speaker),"party speaker");Check(fo3dialogue::ReferenceContext(p,fo3player::PlayerRef,ctx.target),"party listener");return ctx;};
+  auto finish=[&](fo3dialogue::Session& voice,fo3dialogue::Context& ctx){unsigned n=0;while(voice.phase==fo3dialogue::Phase::Speaking){assert(++n<32);voice.AudioDone(voice.audioToken,true,ctx,p);}};
+  auto configure=[&](fo3dialogue::Session& voice){voice.previewReferences=[](const auto&,const auto&,auto&){return true;};voice.publishReferences=[](auto& player,auto& plan,auto&){return player.CommitScriptTransaction(plan);};voice.diagnostic=[&](const std::string& e){error=e;};};
+  auto talk=[&](const char* ref,std::initializer_list<const char*> topics){auto ctx=context(d.formNames.at(ref));fo3dialogue::Session voice;configure(voice);Check(voice.Start(ctx,p),std::string("party greeting ")+ref+": "+error);finish(voice,ctx);
+    for(const char* name:topics){auto choice=std::find_if(voice.choices.begin(),voice.choices.end(),[&](const auto& v){return v.topic==d.formNames.at(name);});
+      if(choice==voice.choices.end()){std::cerr<<"Missing party choice "<<name<<" available:";for(const auto& c:voice.choices)std::cerr<<" "<<c.text;std::cerr<<"\n";}
+      Check(choice!=voice.choices.end(),std::string("party choice ")+name+": "+error);Check(voice.Choose(size_t(choice-voice.choices.begin()),ctx,p),error);finish(voice,ctx);}
+    voice.End("party fixture finished");};
+  auto queuedSpeech=[&](){fo3script::Action action;unsigned n=0;while(p.PollScriptAction(action)){assert(++n<64);if(action.kind!=fo3script::ActionKind::SayTo)continue;
+    auto ctx=context(action.reference);Check(fo3dialogue::ReferenceContext(p,action.flags,ctx.target),"cake listener");fo3dialogue::Session voice;configure(voice);Check(voice.StartSelectedTopic(action.form,action.info,ctx,p),"original cake speech: "+error);finish(voice,ctx);
+    const auto done=p.DispatchReferenceEvent(action.reference,"SayToDone",action.form,error);Check(done==fo3player::ScriptEventResult::Executed||done==fo3player::ScriptEventResult::NoHandler,error);
+  }};
+  talk("cg02oldladypalmerref",{"cg02oldladypalmera2"});
+  assert(p.ItemCount(d.formNames.at("cg02sweetroll"))==1&&p.Snapshot().pipboy.quests.at(birthday).stages.count(20));
+  queuedSpeech();
+  const auto andy=d.formNames.at("cg02andyref"),cut=d.formNames.at("cg02andycutcake"),cake=d.formNames.at("cg02cakeref");
+  (*registry)[cake]={{"forward",1,false}};p.SetScriptAnimationRegistry(registry);
+  auto cutter=p.Snapshot().actors.at(andy);cutter.package=cut;Check(p.UpdateActor(andy,cutter),"cake package fixture");
+  for(bool done:{false,true}){auto plan=p.PreparePackageEventTransaction(andy,cut,done,error,fo3player::ScriptProgramCapture::EnteredPrograms);Check(bool(plan),error);
+    if(!plan->ExecutedScripts().empty()){std::atomic<bool> cancel{false};fo3script::ScriptMasterMatch report;Check(fo3script::MatchScriptProgramsToMaster(master,plan->ExecutedScripts(),report,cancel,error),error);}Check(p.CommitScriptTransaction(*plan),error);}
+  // Presentation fixture: the authored final idle finishes, then the runtime
+  // retires the Must Complete travel package and delivers its real OnChange.
+  auto retire=p.PreparePackageEventTransaction(andy,0,false,error,fo3player::ScriptProgramCapture::EnteredPrograms);Check(bool(retire),error);
+  {std::atomic<bool> cancel{false};fo3script::ScriptMasterMatch report;Check(fo3script::MatchScriptProgramsToMaster(master,retire->ExecutedScripts(),report,cancel,error),error);}Check(p.CommitScriptTransaction(*retire),error);
+  queuedSpeech();assert(p.Snapshot().pipboy.quests.at(birthday).stages.count(16));
+  const auto butch=d.formNames.at("cg02butchref"),findPlayer=d.formNames.at("cg02butchfindplayer");
+  auto bully=p.Snapshot().actors.at(butch);bully.package=findPlayer;Check(p.UpdateActor(butch,bully),"Butch approach package fixture");
+  auto approach=p.PreparePackageEventTransaction(butch,findPlayer,false,error);Check(bool(approach)&&p.CommitScriptTransaction(*approach),error);
+  talk("cg02butchref",{"cg02butcha3"});assert(p.ItemCount(d.formNames.at("cg02sweetroll"))==0&&p.Snapshot().pipboy.quests.at(birthday).stages.count(30));
+  talk("cg02amataref",{"cg02amatapresenta2","cg02amatapresentb1"});
+  talk("cg02stanleyref",{"cg02stanleya1","cg02stanleyb1"});
+  assert(p.ItemCount(d.formNames.at("bookskillmelee"))==1&&p.ItemCount(d.formNames.at("kidhatprewarcapkid"))==1);
+  assert(p.Snapshot().pipboy.quests.at(birthday).stages.count(34));
   const auto save="/tmp/fq-original-identity-"+std::to_string(getpid());Check(p.Save(save,error),error);
   fo3player::Player restored(catalog);Check(restored.Restore(save,error),error);unlink(save.c_str());
   assert(restored.PlayerFemale()==female&&restored.PlayerName()==(female?"Catherine":"James"));
+  assert(restored.Snapshot().pipboy.quests.at(birthday).stages.count(34)&&restored.ItemCount(d.formNames.at("bookskillmelee"))==1&&restored.ItemCount(d.formNames.at("kidhatprewarcapkid"))==1);
 }
 int main(int argc,char** argv){
   std::string error;uint32_t quest=0;
@@ -463,5 +498,5 @@ int main(int argc,char** argv){
   fo3script::ImageStack images;images.Apply(1,base,0);images.Apply(2,catalog.imageModifiers.at(catalog.pipboy.formNames.at("cg00blackscreenisfx")),0);
   assert(images.Sample(0).fade[3]>.9f);images.Sample(20);assert(images.entries.size()==1);images.Remove(1);assert(images.entries.empty());
   OriginalIdentity(catalog,false,argv[1]);OriginalIdentity(catalog,true,argv[1]);OriginalInventory(catalog);OriginalSpecialBook(catalog);
-  std::cout<<"Original birth, playpen, birthday movie/intro, Pip-Boy gift and first party objective, both sex branches, package topic, calendar/crime state and saves passed\n";
+  std::cout<<"Original birth, playpen, birthday movie/intro, Pip-Boy gift, cake, sweetroll choice and party presents, both sex branches, package topic, calendar/crime state and saves passed\n";
 }

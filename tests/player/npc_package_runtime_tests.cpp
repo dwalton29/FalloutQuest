@@ -119,6 +119,25 @@ static Q230ActorVisual Actor(uint8_t type,bool linkedFurniture=false) {
   Q230ActorVisual actor;actor.source.refFormId=42;actor.source.baseFormId=43;
   actor.runtime.position=Q240ScenePosition({1010,2010,20});actor.navigationGraph=Graph();return actor;
 }
+static void EndIdleRetirement(){
+  auto actor=Actor(6);auto c=gPlayerSession->player.Definitions();
+  c.references[42].base=43;c.actorPlacements[42].base=43;
+  c.pipboy.formNames["ended"]=700;c.pipboy.quests[700].stages[1].items.emplace_back();
+  auto& package=c.pipboy.packages[50];package.flags=4;package.procedureIdles[1]=701;
+  package.procedureScripts[2].source="SetStage Ended 1";
+  fo3pipdata::Condition unfinished;unfinished.function=58;unfinished.a=700;unfinished.value=0;package.conditions.push_back(unfinished);
+  gPlayerSession=std::make_unique<Session>(c);auto& player=gPlayerSession->player;std::string error;
+  for(bool done:{false,true}){auto plan=player.PreparePackageEventTransaction(42,50,done,error);assert(plan&&player.CommitScriptTransaction(*plan));}
+  fo3script::Action action;while(player.PollScriptAction(action)){}
+  actor.aiPackage=actor.runtime.package=50;actor.runtime.packageKnown=true;actor.aiLastUpdate=0;
+  Q240UpdateNpcPackage(actor,1);assert(actor.runtime.packageEndIdle==701&&actor.runtime.packageEndIdleUntil<0);
+  assert(player.PollScriptAction(action)&&action.kind==fo3script::ActionKind::PackageIdle&&action.form==701&&!player.PollScriptAction(action));
+  Q240UpdateNpcPackage(actor,50);assert(!player.Snapshot().pipboy.quests.count(700)); // Missing idle never claims success.
+  actor.runtime.packageEndIdleUntil=52; // Recording clip adapter acknowledges actual decoded duration.
+  Q240UpdateNpcPackage(actor,51);assert(!player.Snapshot().pipboy.quests.count(700));
+  Q240UpdateNpcPackage(actor,52);assert(player.Snapshot().pipboy.quests.at(700).stage==1&&actor.aiPackage==0);
+  const auto revision=player.Revision();Q240UpdateNpcPackage(actor,53);assert(player.Revision()==revision);
+}
 static void OriginalColvinArrival(const fo3player::Catalog& original,const char* path){
   // Isolate the authored arrival checkpoint. The valid stage-74 snapshot is
   // a test precondition, not a stage command or a claim of full D.C. traversal.
@@ -372,6 +391,7 @@ static void PackageCallbacks(){
   std::cout<<"Production NAVM package start/arrival/change callbacks and reload replay protection passed\n";
 }
 int main(int argc,char** argv) {
+  EndIdleRetirement();
   PackageCallbacks();
   {
     auto actor=Actor(6);actor.runtime.authoredMotionUntil=4;

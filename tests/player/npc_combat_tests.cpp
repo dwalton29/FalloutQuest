@@ -22,6 +22,24 @@ static Catalog Fixture(bool finite=true) {
   }
   c.pipboy.packages[77].type=6;c.weapons.relations[600][601]=1;return c;
 }
+static void ScriptedCombatStop(){
+  auto c=Fixture();for(uint32_t ref:{100,101}){c.actorPlacements[ref].base=ref+100;c.actorPlacements[ref].cell=1;}
+  c.pipboy.formNames["actorref"]=100;c.pipboy.formNames["otherref"]=101;
+  Player p(c);std::string error;fo3pipdata::ResultScript script;fo3script::Action action;
+  assert(p.SetActorHostile(100,PlayerRef)&&p.SetActorHostile(101,100));
+  script.source="ActorRef.StopCombat";
+  assert(p.PreviewDialogueResult(script,error)&&p.Snapshot().actors.at(100).hostile==PlayerRef&&!p.PollScriptAction(action));
+  assert(p.ExecuteDialogueResult(script,error)&&p.Snapshot().actors.at(100).hostile==0&&p.Snapshot().actors.at(101).hostile==100);
+  assert(p.PollScriptAction(action)&&action.kind==fo3script::ActionKind::StopCombat&&action.reference==100&&!p.PollScriptAction(action));
+  assert(p.SetActorHostile(100,PlayerRef));
+  script.source="ActorRef.StopCombat\nActorRef.SetAV NotAnActorValue 1";
+  assert(!p.ExecuteDialogueResult(script,error)&&p.Snapshot().actors.at(100).hostile==PlayerRef&&!p.PollScriptAction(action));
+  script.source="StopCombat";assert(p.ExecuteDialogueResult(script,error,100)&&p.Snapshot().actors.at(100).hostile==0);
+  assert(p.PollScriptAction(action)&&action.reference==100);
+  script.source="player.StopCombat";assert(!p.ExecuteDialogueResult(script,error));
+  const auto save="/tmp/fq-script-stop-combat-"+std::to_string(getpid());assert(p.Save(save,error));
+  Player restored(c);assert(restored.Restore(save,error));unlink(save.c_str());assert(restored.Snapshot().actors.at(100).hostile==0&&restored.Snapshot().actors.at(101).hostile==100);
+}
 static void ScriptedMemberships(){
   using namespace fo3npc;auto c=Fixture();
   for(uint32_t ref:{100,101}){c.actorPlacements[ref].base=ref+100;c.actorPlacements[ref].cell=1;}
@@ -327,4 +345,4 @@ static void Original(const char* path) {
     assert(fo3npc::AI(c.pipboy,r.second.base,[&](uint32_t list){return p.ActorTemplate(r.first,list);}).valid);++count;
   }assert(count==5);
 }
-int main(int argc,char** argv){ScriptedMemberships();CorpsePersistence();ScriptedRelationsAndEssential();ScriptedNotes();ScriptPlacementsSurviveFinalization();ScriptedActorMovement();StyleDecodeValidation();SourceContext();StateAndPerception();CombatAssetCandidates();InventoryDamagePersistence(true);InventoryDamagePersistence(false);if(argc>1)Original(argv[1]);std::cout<<"NPC combat state tests passed\n";}
+int main(int argc,char** argv){ScriptedCombatStop();ScriptedMemberships();CorpsePersistence();ScriptedRelationsAndEssential();ScriptedNotes();ScriptPlacementsSurviveFinalization();ScriptedActorMovement();StyleDecodeValidation();SourceContext();StateAndPerception();CombatAssetCandidates();InventoryDamagePersistence(true);InventoryDamagePersistence(false);if(argc>1)Original(argv[1]);std::cout<<"NPC combat state tests passed\n";}

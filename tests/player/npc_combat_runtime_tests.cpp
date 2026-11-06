@@ -227,7 +227,20 @@ int main(int argc,char** argv){
 #ifdef FO3_NPC_DETECTION_HOST_TEST
  DetectionIntegration();return 0;
 #endif
+  EndIdleRetirement();
   WeaponCommitAndMeleeTests();CoverGeometryTests();ConcurrentWeaponTests();
+  {
+    Prepare();auto& actor=gQ230NpcActors[0];actor.runtime.EndDialogue();actor.runtime.BeginCombat(0x14);
+    actor.runtime.pendingAttack=true;actor.runtime.reloadUntil=20;actor.runtime.navigationDoor=77;
+    actor.runtime.packageEndIdle=701;actor.runtime.packageEndIdleUntil=4;
+    actor.runtime.suspendedPackageWait=3;actor.aiPathGame={{1,2,3}};actor.aiPathSurfaces={{0,0}};actor.aiPathIndex=1;
+    Q230StopScriptCombat(actor,5);
+    assert(actor.runtime.activity==fo3npc::Activity::Package&&actor.runtime.package==50&&actor.runtime.combatTarget==0);
+    assert(!actor.runtime.pendingAttack&&actor.runtime.reloadUntil==0&&actor.runtime.navigationDoor==0);
+    assert(actor.runtime.packageEndIdle==0&&actor.runtime.packageEndIdleUntil<0);
+    assert(actor.aiPathGame.empty()&&actor.aiPathSurfaces.empty()&&actor.aiPathIndex==0&&actor.aiRepathAt==8);
+    actor.runtime.activity=fo3npc::Activity::Dead;Q230StopScriptCombat(actor,6);assert(actor.runtime.activity==fo3npc::Activity::Dead);
+  }
   {
     Prepare();auto& actor=gQ230NpcActors[0];assert(gPlayerSession->player.PrepareActorInventory(42));
     assert(Q230SelectWeapon(actor));assert(gPlayerSession->player.ReloadActorWeapon(42,actor.runtime.equippedWeapon));

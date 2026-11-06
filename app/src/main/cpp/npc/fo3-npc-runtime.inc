@@ -36,9 +36,9 @@ void Q230CacheDialogueAnimations(Q230ActorVisual& actor,const fo3pipdata::Defini
     const bool ready=!paths[i].empty()&&LoadFalloutMeshFile(paths[i],bytes)&&fo3anim::DecodeClip(bytes,actor.animations[i]);
     (void)ready;Q6H_LOGI("NPC CLIP actor=%08X slot=%zu ready=%d path=%s",actor.source.refFormId,i,ready,paths[i].c_str());
   }
-  if(d&&!actor.source.creature){
+  if(d){
     std::unordered_set<uint32_t> idles;
-    for(const auto& topic:d->topics)for(const auto& info:topic.second){
+    if(!actor.source.creature)for(const auto& topic:d->topics)for(const auto& info:topic.second){
       const bool speaker=info.speaker==actor.source.baseFormId||std::any_of(info.conditions.begin(),info.conditions.end(),[&](const auto& c){return c.function==72&&c.a==actor.source.baseFormId&&c.run==0;});
       if(speaker)for(const auto& response:info.responses)if(response.speakerAnimation)idles.insert(response.speakerAnimation);
     }
@@ -806,11 +806,18 @@ void Q230PlayPackageIdle(Q230ActorVisual& actor,uint32_t idle,uint32_t packageFl
   actor.responseStarted=std::chrono::duration<double>(Fo3GameplayNow().time_since_epoch()).count();actor.lastFrame=UINT64_MAX;
   const auto clip=actor.responseClips.find(idle);
   if(clip==actor.responseClips.end()){Q6H_LOGW("PACKAGE IDLE UNAVAILABLE actor=%08X idle=%08X",actor.source.refFormId,idle);return;}
+  const auto package=gPlayerSession->player.Definitions().pipboy.packages.find(actor.aiPackage);
+  if(package!=gPlayerSession->player.Definitions().pipboy.packages.end()&&package->second.procedureIdles[1]==idle&&
+     clip->second.frequency>0&&clip->second.stop>clip->second.start){
+    actor.runtime.packageEndIdle=idle;
+    actor.runtime.packageEndIdleUntil=actor.responseStarted+(clip->second.stop-clip->second.start)/clip->second.frequency;
+  }
   actor.runtime.authoredMotionUntil=((packageFlags&4)||fo3anim::ControlsAccumulationRoot(clip->second))?
     actor.responseStarted+(clip->second.stop-clip->second.start)/clip->second.frequency:0;
 }
 void Q230DialogueResponseAnimation(Q230ActorVisual& actor,const fo3dialogue::Session& session){
   if(session.phase!=fo3dialogue::Phase::Speaking||(actor.responseToken==session.audioToken&&actor.responseInfo==session.info))return;
+  actor.runtime.packageEndIdle=0;actor.runtime.packageEndIdleUntil=-1;
   actor.responseToken=session.audioToken;actor.responseInfo=session.info;const auto* info=session.Current(gPlayerSession->player.Definitions().pipboy);
   const auto idle=info&&session.response<info->responses.size()?info->responses[session.response].speakerAnimation:0;
   actor.responseIdle=idle;actor.responseLastTime=-1;actor.responseStarted=std::chrono::duration<double>(Fo3GameplayNow().time_since_epoch()).count();actor.lastFrame=UINT64_MAX;
