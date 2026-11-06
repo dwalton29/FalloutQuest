@@ -17,6 +17,7 @@
 #include <iostream>
 #include <memory>
 #include <stdexcept>
+#include <unistd.h>
 namespace fo3audio {
 int pickups = 0, opens = 0, closes = 0, scrolls = 0,karmaSounds=0;
 void SoundEvent(uint32_t) {}
@@ -552,6 +553,7 @@ int main() {
     frameReserved=false;
     gObjects.clear();gQ230NpcActors.clear();doorPresent=false;testSeat=700;seatRequests=0;seatAllowed=true;testSeated=0;
     fo3player::Catalog seats;seats.initial.baseHealth=100;seats.initial.special.fill(5);Reference chair;chair.base=701;seats.references[700]=chair;seats.pipboy.targets[700].base=701;seats.pipboy.targets[700].cell=1;seats.pipboy.furniture[701]={};seats.eventBaseNames[701]="Office Chair";
+    seats.pipboy.messages[702]={"Question","First question",{"One","Two"},1};seats.pipboy.messages[703]={"Question","Another question",{"One","Two"},1};
     gPlayerSession=std::make_unique<fo3player::Session>(seats);gObjects.push_back({});auto& seatObject=gObjects.back();seatObject.baseRecordType="FURN";seatObject.baseFormId=701;seatObject.refFormId=700;seatObject.minX=seatObject.minY=-.5f;seatObject.maxX=seatObject.maxY=.5f;seatObject.minZ=-2;seatObject.maxZ=-1;
     Check(query()&&t.furniture&&!t.pickup&&t.allowed&&std::string(t.prompt.data())=="Sit Office Chair","original FURN is a Sit target rather than an inventory item");
     activate();Check(seatRequests==1,"A dispatches seating through the actual interaction path");seatAllowed=false;Check(query()&&!t.allowed,"occupied furniture cannot sit");activate();Check(seatRequests==1,"blocked seat cannot activate");
@@ -581,6 +583,20 @@ int main() {
     UpdateFo3SpecialBook(1.4,0,0,false,false,true,trackedHead);gSpecialBookEntry.cursor.selected=7;
     UpdateFo3SpecialBook(1.5,0,0,true,false,true,trackedHead);
     Check(!Fo3SpecialBookFocus()&&!gSpecialBookPanel.visible&&named.Snapshot().special[0]==6,"book Done commits and releases focus");
+    Check(named.OpenTagSkills(700,3,false)&&Fo3TagSkillsFocus()&&Fo3ScriptMessageFocus()&&!query()&&!CaptureFo3ResidentInteractionActivity().Idle(),"tag selection blocks world actions and resident publication");
+    UpdateFo3TagSkills(2,0,true,false,true,trackedHead);Check(named.TagSkillsRemaining()==3&&gTagSkillsPanel.choices.size()==14,"tag opening input does not select");
+    UpdateFo3TagSkills(2.1,0,false,false,true,trackedHead);UpdateFo3TagSkills(2.2,0,true,false,true,trackedHead);Check(named.TagSkillsRemaining()==2,"tag controller selects draft skill");
+    const auto menuSave="/tmp/fq-native-menus-"+std::to_string(getpid());std::string menuError;Check(named.Save(menuSave,menuError),"save native tag draft");gTagSkillsEntry.cursor.selected=13;
+    Check(named.Restore(menuSave,menuError),"restore native tag draft");UpdateFo3TagSkills(2.3,0,true,false,true,trackedHead);
+    Check(gTagSkillsEntry.cursor.selected==0&&named.TagSkillsRemaining()==2,"restored tag menu resets controller edges and keeps draft");
+    Check(named.ToggleTagSkill(1)&&named.ToggleTagSkill(13),"finish distinct tag selections");UpdateFo3TagSkills(2.4,0,false,false,true,trackedHead);gTagSkillsEntry.cursor.selected=13;
+    UpdateFo3TagSkills(2.5,0,true,false,true,trackedHead);Check(!Fo3TagSkillsFocus()&&!gTagSkillsPanel.visible&&named.IsPlayerTagSkill(45),"tag Done commits Unarmed and releases native panel");
+    Check(named.QueueScriptMessage(702,0,false,700),"queue original message identity");UpdateFo3ScriptMessage(3,0,true,false,true);Check(named.Save(menuSave,menuError),"save displayed question");
+    UpdateFo3ScriptMessage(3.1,0,false,false,true);UpdateFo3ScriptMessage(3.2,0,true,false,true);Check(!gScriptMessagePanel.visible,"answer original question");
+    Check(named.Restore(menuSave,menuError),"restore displayed question");gScriptMessagePanel.visible=true;gScriptMessagePanel.subtitle="stale presentation";
+    UpdateFo3ScriptMessage(3.3,0,true,false,true);Check(gScriptMessagePanel.subtitle=="First question"&&gScriptMessagePanel.visible&&!named.PendingScriptMessageCount(),"restore replaces stale panel with one canonical prompt");
+    UpdateFo3ScriptMessage(3.4,0,true,false,true);Check(gScriptMessagePanel.visible,"held restore A does not answer");
+    UpdateFo3ScriptMessage(3.5,0,false,false,true);UpdateFo3ScriptMessage(3.6,0,true,false,true);Check(!gScriptMessagePanel.visible,"restored question accepts fresh answer");std::remove(menuSave.c_str());
     std::cout << "Interaction runtime tests passed\n";
     return 0;
   } catch (const std::exception &e) {

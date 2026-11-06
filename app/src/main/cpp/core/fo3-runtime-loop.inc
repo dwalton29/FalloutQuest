@@ -2071,7 +2071,9 @@ private:
                         gPipActivation.Reset();gPipMenu.dirty=true;
                         Q6H_LOGI("PIPBOY SUPPRESS reason=held-physical-magazine-or-slide");
                     }
-                    const bool nameControls=movieControls||Fo3PlayerNameFocus()||Fo3SpecialBookFocus();
+                    const bool nameControls=movieControls||Fo3PlayerNameFocus()||Fo3SpecialBookFocus()||Fo3TagSkillsFocus();
+                    UpdateFo3TagSkills(gameplaySeconds,q210RightValid?lootScrollY_:0,
+                        q210RightValid&&activateDownQ1700_,q210RightValid&&pipBackDown_,sessionState_==XR_SESSION_STATE_FOCUSED&&q210RightValid,gQ210Head);
                     UpdateFo3SpecialBook(gameplaySeconds,q210RightValid?turnX_:0,q210RightValid?lootScrollY_:0,
                         q210RightValid&&activateDownQ1700_,q210RightValid&&pipBackDown_,sessionState_==XR_SESSION_STATE_FOCUSED&&q210RightValid,gQ210Head);
                     UpdateFo3PlayerName(gameplaySeconds,q210RightValid?turnX_:0,q210RightValid?lootScrollY_:0,
@@ -2665,8 +2667,8 @@ private:
             }
 
             // UI system colours are display colours, never world image-space inputs.
-            if((Fo3PlayerNameFocus()||Fo3SpecialBookFocus())&&!IsFo3LoadingVisible()&&gPlayerSession){
-                const auto& panel=Fo3SpecialBookFocus()?gSpecialBookPanel:gPlayerNameKeyboard;Mat4 model{};const float yaw=panel.yaw;
+            if((Fo3PlayerNameFocus()||Fo3SpecialBookFocus()||Fo3TagSkillsFocus())&&!IsFo3LoadingVisible()&&gPlayerSession){
+                const auto& panel=Fo3TagSkillsFocus()?gTagSkillsPanel:Fo3SpecialBookFocus()?gSpecialBookPanel:gPlayerNameKeyboard;Mat4 model{};const float yaw=panel.yaw;
                 model.m[0]=std::cos(yaw);model.m[2]=-std::sin(yaw);model.m[5]=1;
                 model.m[8]=std::sin(yaw);model.m[10]=std::cos(yaw);
                 model.m[12]=panel.anchor[0];model.m[13]=panel.anchor[1];model.m[14]=panel.anchor[2];model.m[15]=1;

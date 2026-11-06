@@ -4,12 +4,13 @@
 namespace fo3player {
 Player::Player(const Player& source,ScriptCandidateTag)
     : referencePlanIdentity_(source.referencePlanIdentity_),catalog_(source.catalog_),
-      state_(source.state_),revision_(source.revision_),furnitureRef_(source.furnitureRef_),furnitureMarker_(source.furnitureMarker_),sittingState_(source.sittingState_),sneaking_(source.sneaking_),actorPoseRevisions_(source.actorPoseRevisions_),scriptActorMoves_(source.scriptActorMoves_),
+      state_(source.state_),scriptRandomInitial_(source.scriptRandomInitial_),revision_(source.revision_),furnitureRef_(source.furnitureRef_),furnitureMarker_(source.furnitureMarker_),sittingState_(source.sittingState_),sneaking_(source.sneaking_),actorPoseRevisions_(source.actorPoseRevisions_),scriptActorMoves_(source.scriptActorMoves_),
       scriptActivator_(source.scriptActivator_),scriptReference_(source.scriptReference_),
       scriptPlayerCell_(source.scriptPlayerCell_),scriptPlayerWorld_(source.scriptPlayerWorld_),
       scriptPlayerPosition_(source.scriptPlayerPosition_),scriptPlayerPositionKnown_(source.scriptPlayerPositionKnown_),
       scriptPlayerHeading_(source.scriptPlayerHeading_),scriptPlayerHeadingKnown_(source.scriptPlayerHeadingKnown_),
       scriptEffectRevision_(source.scriptEffectRevision_),
+      scriptFurniture_(source.scriptFurniture_),scriptFurnitureRevision_(source.scriptFurnitureRevision_),
       scriptCompileCache_(source.scriptCompileCache_?source.scriptCompileCache_:
         (source.scriptCompileCache_=std::make_shared<fo3script::CompileCache>(source.catalog_->pipboy))),
       scriptButtons_(source.scriptButtons_),
@@ -17,7 +18,7 @@ Player::Player(const Player& source,ScriptCandidateTag)
       scriptAnimations_(source.scriptAnimations_),scriptInsideTriggers_(source.scriptInsideTriggers_),
       scriptRuntimeSeconds_(source.scriptRuntimeSeconds_),scriptElapsedSeconds_(source.scriptElapsedSeconds_),
       scriptRuntimeGeneration_(source.scriptRuntimeGeneration_),
-      pendingScriptMessages_(source.pendingScriptMessages_),pendingQuestNotices_(source.pendingQuestNotices_),
+      pendingScriptMessages_(source.pendingScriptMessages_),scriptPrompts_(source.scriptPrompts_),pendingQuestNotices_(source.pendingQuestNotices_),
       pendingExperienceNotices_(source.pendingExperienceNotices_),pendingLocationNotices_(source.pendingLocationNotices_),pendingScriptItems_(source.pendingScriptItems_),
       pendingScriptSounds_(source.pendingScriptSounds_),pendingTerminalBack_(source.pendingTerminalBack_),pendingBarters_(source.pendingBarters_),pendingKarmaEvents_(source.pendingKarmaEvents_),
       pendingTheftEvents_(source.pendingTheftEvents_),scriptOpenedContainer_(source.scriptOpenedContainer_),containerInteraction_(source.containerInteraction_),
@@ -209,7 +210,8 @@ std::unique_ptr<ScriptTransactionPlan> Player::PrepareTerminalTransaction(
 }
 bool Player::ScriptPlanContextMatches(const ScriptTransactionPlan& plan) const noexcept {
   const auto& candidate=*plan.candidate_;
-  return scriptPlayerHeadingKnown_==candidate.scriptPlayerHeadingKnown_ && scriptPlayerHeading_==candidate.scriptPlayerHeading_ &&
+  return scriptFurnitureRevision_==candidate.scriptFurnitureRevision_ &&
+    scriptPlayerHeadingKnown_==candidate.scriptPlayerHeadingKnown_ && scriptPlayerHeading_==candidate.scriptPlayerHeading_ &&
     scriptPlayerPositionKnown_==candidate.scriptPlayerPositionKnown_ &&
     scriptPlayerPosition_==candidate.scriptPlayerPosition_ && scriptPlayerCell_==candidate.scriptPlayerCell_ &&
     scriptPlayerWorld_==candidate.scriptPlayerWorld_ && scriptActivator_==candidate.scriptActivator_ &&
@@ -239,6 +241,7 @@ void Player::SwapScriptPayload(Player& other) noexcept {
   scriptButtons_.swap(other.scriptButtons_);
   pendingScriptActions_.swap(other.pendingScriptActions_);scriptAnimations_.swap(other.scriptAnimations_);
   pendingScriptMessages_.swap(other.pendingScriptMessages_);
+  scriptPrompts_.swap(other.scriptPrompts_);
   pendingScriptSounds_.swap(other.pendingScriptSounds_);
   pendingTerminalBack_.swap(other.pendingTerminalBack_);
   pendingBarters_.swap(other.pendingBarters_);

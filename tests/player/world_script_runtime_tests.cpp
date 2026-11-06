@@ -175,6 +175,7 @@ int main(int argc,char** argv){try{
  fo3pipdata::Condition caller;caller.function=72;caller.a=411;caller.value=1;first.conditions.push_back(caller);c.pipboy.topics[910].push_back(first);
  auto reply=first;reply.id=921;reply.topic=920;reply.flags=1;reply.links.clear();reply.conditions.front().a=400;reply.end.source="RewardKarma 2";c.pipboy.topics[920].push_back(reply);
  auto& conversation=c.pipboy.packages[851];conversation.type=15;conversation.dialogueValid=true;conversation.dialogueType=0;conversation.dialogueTopic=910;conversation.target.valid=true;conversation.target.value=81;
+ c.pipboy.targets[888].base=889;c.pipboy.targets[888].cell=1;c.pipboy.furniture[889].markers=1u<<11;
  gPlayerSession=std::make_unique<fo3player::Session>(std::move(c));auto& p=gPlayerSession->player;
  GpuObject object;object.refFormId=10;object.q2401DoorAnimation=asset;gObjects.push_back(object);
  p.SetScriptPlayerLocation(0,0,0,1,0);fo3worldscript::Register();p.SetScriptRuntimeClock(0,.25);fo3worldscript::Events();fo3worldscript::TriggerTick();fo3worldscript::Actions();fo3worldscript::Animate();
@@ -223,6 +224,16 @@ int main(int argc,char** argv){try{
  fo3script::Action look;look.kind=fo3script::ActionKind::Look;look.reference=40;look.form=fo3player::PlayerRef;
  Check(p.QueueScriptAction(look),"queue look before actor arrival");fo3worldscript::Actions();
  ActorVisual voiceActor;voiceActor.source={40,400};gQ230NpcActors.push_back(voiceActor);++gQ230NpcResidenceRevision;fo3worldscript::Register();
+ auto seats=std::make_shared<fo3furniture::Scene>();fo3furniture::Slot seat;seat.reference=888;seat.marker.reference=11;seats->slots.push_back(seat);
+ auto& seated=gQ230NpcActors.back().runtime.furniture;seated.scene=seats;seated.slot=0;
+ uint32_t observedRef;uint8_t observedMarker,observedState;
+ for(auto phase:{fo3furniture::Phase::Approach,fo3furniture::Phase::Enter,fo3furniture::Phase::Loop,fo3furniture::Phase::Exit}){
+   seated.phase=phase;fo3worldscript::Register();const auto expected=phase==fo3furniture::Phase::Approach?0:phase==fo3furniture::Phase::Enter?2:phase==fo3furniture::Phase::Loop?3:4;
+   Check(p.ScriptFurniture(40,observedRef,observedMarker,observedState)&&observedState==expected,"furniture changes observed through registry cache hit");
+   if(expected)Check(observedRef==888&&observedMarker==11,"authored marker reference reaches script queries");
+ }
+ gQ230NpcActors.back().runtime.offScene=true;fo3worldscript::Register();Check(!p.ScriptFurniture(40,observedRef,observedMarker,observedState),"off-scene seat observations expire");
+ gQ230NpcActors.back().runtime.offScene=false;seated.Clear();fo3worldscript::Register();Check(p.ScriptFurniture(40,observedRef,observedMarker,observedState)&&!observedState,"resident standing observation replaces seat");
  Check(gQ230NpcActors.back().runtime.scriptLookTarget==fo3player::PlayerRef,"delayed actor arrival retains original look target");
  look.form=0;Check(p.QueueScriptAction(look),"stop retained look");fo3worldscript::Actions();
  Check(!gQ230NpcActors.back().runtime.scriptLookTarget&&!fo3worldscript::lookTargets.count(40),"stop look removes retained target");
@@ -293,6 +304,12 @@ int main(int argc,char** argv){try{
  Check(fighter.runtime.activity==fo3npc::Activity::Combat&&p.Snapshot().actors.at(40).hostile==fo3player::PlayerRef,"failed scripts leave combat live");
  Check(p.ExecuteDialogueResult(stop,stopError),"authored StopCombat accepted");Check(fighter.runtime.activity==fo3npc::Activity::Combat,"live combat changes only after commit delivery");
  fo3worldscript::Actions();Check(fighter.runtime.activity!=fo3npc::Activity::Combat&&!fighter.runtime.pendingAttack&&p.Snapshot().actors.at(40).hostile==0,"committed stop ends canonical and live combat");
+ ActorVisual otherFighter;otherFighter.source={41,p.Definitions().pipboy.targets.at(41).base};gQ230NpcActors.push_back(otherFighter);++gQ230NpcResidenceRevision;
+ for(auto& actor:gQ230NpcActors)actor.runtime.BeginCombat(actor.source.refFormId==40?fo3player::PlayerRef:40);
+ Check(p.SetActorHostile(40,fo3player::PlayerRef)&&p.SetActorHostile(41,40),"separate combat targets");stop.source="Player.SCAOnActor";
+ Check(!p.PrepareDialogueTransaction(stop,unsupported,stopError)&&p.Snapshot().actors.at(40).hostile==fo3player::PlayerRef,"failed group stop remains private");
+ Check(p.ExecuteDialogueResult(stop,stopError)&&p.Snapshot().actors.at(40).hostile==0&&p.Snapshot().actors.at(41).hostile==40,"group stop clears matching canonical target only");
+ fo3worldscript::Actions();Check(DialogueActor(40)->runtime.activity!=fo3npc::Activity::Combat&&DialogueActor(41)->runtime.combatTarget==40,"group stop preserves unrelated live combat");
  fo3pipdata::ResultScript reset,broken;reset.source="ResetPipboyManager\nForceRadioStationUpdate";broken.source="UnsupportedResetStep";
  std::string resetError;Check(!p.PrepareDialogueTransaction(reset,broken,resetError),"failed reset transaction is private");fo3worldscript::Actions();Check(!pipboyResets&&!radioRefreshes,"failed scripts cannot reset presentation");
  Check(p.ExecuteDialogueResult(reset,resetError),"queue original manager refresh commands");fo3worldscript::Actions();Check(pipboyResets==1&&radioRefreshes==1,"post-commit refresh reaches real adapters");

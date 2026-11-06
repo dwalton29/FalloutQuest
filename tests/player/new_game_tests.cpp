@@ -3,6 +3,7 @@
 #include "scripting/fo3-script-master-match.h"
 #include "ui/chargen/fo3-name-entry.h"
 #include "ui/chargen/fo3-special-book.h"
+#include "ui/chargen/fo3-tag-skills.h"
 #include "player/fo3-vr-body.h"
 #include "dialogue/fo3-dialogue-conditions.h"
 #include "dialogue/fo3-dialogue-session.h"
@@ -62,6 +63,79 @@ static void HeadingAngles(){
   p.SetScriptPlayerHeading(NAN);assert(!p.ScriptHeadingAngle(PlayerRef,200,angle));
   p.SetScriptPlayerHeading(0);const auto path="/tmp/fq-heading-"+std::to_string(getpid());Check(p.Save(path,error),error);Check(p.Restore(path,error),error);unlink(path.c_str());
   assert(!p.ScriptHeadingAngle(PlayerRef,200,angle));
+}
+static void TagSkills(){
+  using namespace fo3player;Catalog c;c.initial.baseHealth=100;c.initial.special.fill(5);c.initial.skills.fill(90);c.pipboy.quests[101]={};
+  Player p(c);std::string error;fo3pipdata::ResultScript script;
+  script.source="SetPlayerTagSkill Barter 0\nSetPlayerTagSkill Science 1";Check(p.ExecuteDialogueResult(script,error,101),error);
+  assert(p.IsPlayerTagSkill(32)&&p.IsPlayerTagSkill(40)&&p.Snapshot().skills[0]==100&&p.Snapshot().tagBonuses[0]==10);
+  const auto revision=p.Revision();assert(p.SetPlayerTagSkill(32,0)&&p.Revision()==revision);
+  assert(p.SetPlayerTagSkill(40,0)&&p.Snapshot().skills[0]==90&&p.Snapshot().skills[8]==100); // Duplicate slots do not stack.
+  assert(!p.SetPlayerTagSkill(44,0)&&!p.SetPlayerTagSkill(40,4)&&!p.SetPlayerTagSkill(16,0));
+  script.source="SetPlayerTagSkill Medicine 2\nUnsupportedTagCommand";assert(!p.ExecuteDialogueResult(script,error,101)&&!p.IsPlayerTagSkill(37));
+  script.source="SetTagSkills 3 0";Check(p.ExecuteDialogueResult(script,error,101),error);
+  assert(p.Snapshot().tagMenuOwner==101&&p.TagSkillsRemaining()==3&&p.IsPlayerTagSkill(40)&&!p.ConfirmTagSkills());
+  assert(!p.OpenPlayerNameMenu(101)&&!p.OpenSpecialBook(101,40)&&!p.ToggleTagSkill(12));
+  fo3tagmenu::Model menu;menu.Step(p,0,0,true,false,true);menu.Step(p,.1,0,true,false,true);assert(p.TagSkillsRemaining()==3);
+  menu.Step(p,.2,0,false,false,true);menu.Step(p,.3,0,true,false,true);assert(p.TagSkillsRemaining()==2);
+  const auto save="/tmp/fq-tags-"+std::to_string(getpid());Check(p.Save(save,error),error);Player resumed(c);Check(resumed.Restore(save,error),error);unlink(save.c_str());
+  assert(resumed.Snapshot().taggedSkills==p.Snapshot().taggedSkills&&resumed.Snapshot().tagDraft==p.Snapshot().tagDraft&&resumed.Snapshot().tagMenuOwner==101&&resumed.Snapshot().skills==p.Snapshot().skills);
+  for(unsigned i:{1u,2u}){menu.Step(p,.4+i,0,false,false,true);menu.cursor.selected=i;menu.Step(p,.5+i,0,true,false,true);}
+  assert(p.TagSkillsRemaining()==0&&!p.ToggleTagSkill(3));menu.Step(p,4,0,false,false,true);menu.cursor.selected=13;
+  assert(menu.Step(p,4.1,0,true,false,true)==fo3tagmenu::Model::Result::Confirmed);
+  assert(!p.Snapshot().tagMenuOwner&&p.IsPlayerTagSkill(32)&&p.IsPlayerTagSkill(33)&&p.IsPlayerTagSkill(34)&&!p.IsPlayerTagSkill(40)&&p.Snapshot().skills[8]==90);
+  assert(p.OpenTagSkills(101,3,true)&&p.TagSkillsRemaining()==0&&p.ToggleTagSkill(0)&&p.ToggleTagSkill(8)&&p.ConfirmTagSkills());
+  assert(p.Snapshot().skills[0]==90&&p.Snapshot().skills[8]==100);Check(p.Save(save,error),error);Check(resumed.Restore(save,error),error);unlink(save.c_str());
+  assert(resumed.Snapshot().tagBonuses==p.Snapshot().tagBonuses&&resumed.Snapshot().taggedSkills==p.Snapshot().taggedSkills);
+  assert(!resumed.OpenTagSkills(101,5,false)&&!resumed.OpenTagSkills(999,3,false));
+}
+static void ScriptMathAndPrompts(){
+  using namespace fo3player;Catalog c;c.initial.baseHealth=100;c.initial.special.fill(5);c.pipboy.formNames["exam"]=101;c.pipboy.quests[101].script=102;c.pipboy.quests[101].scriptDelay=.01f;
+  auto& source=c.pipboy.scripts[102];source.variables={{1,"value"},{2,"answer"}};source.source="float value\nshort answer\nBegin GameMode\nset answer to GetButtonPressed\nEnd";c.eventPrograms[102]=fo3script::ParseEvents(source);
+  c.pipboy.messages[200]={"Question","Value %.0f",{"One","Two"},1};Player p(c);std::string error;fo3pipdata::ResultScript math;
+  math.source="set Exam.value to (2 + 3) * 4 / 2";Check(p.ExecuteDialogueResult(math,error,101),error);const auto key=fo3dialogue::VariableKey(c.pipboy,"Exam.value");assert(p.Snapshot().pipboy.dialogueVariables.at(key)==10);
+  math.source="set Exam.value to GetRandomPercent / 100 + .2";auto first=p.PrepareDialogueTransaction(math,{},error,101),second=p.PrepareDialogueTransaction(math,{},error,101);Check(bool(first)&&bool(second),error);
+  auto captured=p.PrepareDialogueTransaction(math,{},error,101,ScriptProgramCapture::EnteredPrograms);Check(bool(captured),error);
+  assert(captured->CandidateState()->scriptRandom==first->CandidateState()->scriptRandom); // Provenance preflight cannot consume a draw.
+  assert(!p.Snapshot().scriptRandom&&first->CandidateState()->scriptRandom==second->CandidateState()->scriptRandom&&first->CandidateState()->pipboy.dialogueVariables.at(key)>=.2f&&first->CandidateState()->pipboy.dialogueVariables.at(key)<=1.2f);
+  assert(p.CommitScriptTransaction(*first)&&!p.CanCommitScriptTransaction(*second));const auto seed=p.Snapshot().scriptRandom;
+  math.source="set Exam.value to GetRandomPercent\nset Exam.value to 1 / 0";assert(!p.PrepareDialogueTransaction(math,{},error,101)&&p.Snapshot().scriptRandom==seed);
+  const auto path="/tmp/fq-prompts-"+std::to_string(getpid());Check(p.StartQuest(101),"prompt owner");
+  Check(p.QueueScriptMessage(200,12,true,101),"formatted prompt");ScriptMessage message;assert(p.PollScriptMessage(message)&&message.text=="Value 12");
+  Check(p.Save(path,error),error);Player restored(c);Check(restored.Restore(path,error),error);assert(restored.PollScriptMessage(message)&&message.form==200&&message.text=="Value 12"&&message.owner==101&&!restored.PollScriptMessage(message));
+  assert(p.DrawScriptRandomPercent()==restored.DrawScriptRandomPercent());
+  assert(!restored.SubmitScriptMessageButton(101,2)&&restored.SubmitScriptMessageButton(101,1));Check(restored.Save(path,error),error);Check(restored.Restore(path,error),error);unlink(path.c_str());
+  assert(!restored.PollScriptMessage(message));restored.PumpWorldAwareGameMode(.3,{},[&](auto plan){return restored.CommitScriptTransaction(*plan);});
+  assert(restored.Snapshot().pipboy.dialogueVariables.at(fo3dialogue::VariableKey(c.pipboy,"Exam.answer"))==1);
+  restored.PumpWorldAwareGameMode(.3,{},[&](auto plan){return restored.CommitScriptTransaction(*plan);});assert(restored.Snapshot().pipboy.dialogueVariables.at(fo3dialogue::VariableKey(c.pipboy,"Exam.answer"))==-1);
+}
+static void NestedActivation(){
+  using namespace fo3player;Catalog c;c.initial.baseHealth=100;c.initial.special.fill(5);
+  c.references[100].base=10;c.actorPlacements[100].base=10;c.pipboy.targets[100].base=10;c.weapons.actors[10].health=20;
+  c.references[200].base=20;c.pipboy.targets[200].base=20;c.pipboy.formNames={{"actor",100},{"target",200},{"testquest",101}};c.pipboy.quests[101].script=301;c.pipboy.scripts[301].variables[1]="after";
+  c.eventBaseScripts[20]=300;c.pipboy.objectReferenceScripts[200]={300,20};c.pipboy.scripts[300].variables[1]="count";
+  auto& source=c.pipboy.scripts[300];source.source="short count\nBegin OnActivate\nif IsActionRef Actor == 1\nset count to count + 1\nendif\nEnd";c.eventPrograms[300]=fo3script::ParseEvents(source);
+  Player p(c);p.RegisterOriginalActors();std::string error;fo3pipdata::ResultScript call;call.source="Target.Activate Actor 1\nset TestQuest.after to Target.count";
+  auto plan=p.PrepareDialogueTransaction(call,{},error,100,ScriptProgramCapture::EnteredPrograms);Check(bool(plan),error);assert(p.Snapshot().pipboy.dialogueVariables.empty());Check(p.CommitScriptTransaction(*plan),error);
+  assert(p.Snapshot().pipboy.dialogueVariables.at(fo3dialogue::VariableKey(c.pipboy,"TestQuest.after"))==1);
+  assert(std::any_of(plan->ExecutedScripts().begin(),plan->ExecutedScripts().end(),[](const auto& script){return script.owner==200&&script.origin.kind==ScriptProgramKind::ReferenceEvent&&script.origin.record==300&&script.parent!=ScriptExecution::NoParent;}));
+  source.source="short count\nBegin OnActivate\nset count to count + 1\nTarget.Activate Actor 1\nEnd";c.eventPrograms[300]=fo3script::ParseEvents(source);Player recursive(c);recursive.RegisterOriginalActors();
+  assert(!recursive.PrepareDialogueTransaction(call,{},error,100)&&error.find("depth")!=std::string::npos&&recursive.Snapshot().pipboy.dialogueVariables.empty());
+}
+static void ActorFurniture(){
+  using namespace fo3player;Catalog c;c.initial.baseHealth=100;c.initial.special.fill(5);
+  c.references[100].base=10;c.actorPlacements[100].base=10;c.weapons.actors[10].health=20;c.pipboy.targets[100].base=10;
+  c.references[200].base=20;c.pipboy.targets[200].base=20;c.pipboy.furniture[20].markers=0x40000001;
+  c.pipboy.formNames["actor"]=100;c.pipboy.formNames["seat"]=200;
+  c.eventBaseScripts[10]=300;c.pipboy.objectReferenceScripts[100]={300,10};auto& src=c.pipboy.scripts[300];src.variables[1]="sitting";
+  src.source="short sitting\nBegin OnActivate\nset sitting to actor.GetSitting\nEnd";c.eventPrograms[300]=fo3script::ParseEvents(src);
+  Player p(c);p.RegisterOriginalActors();uint32_t ref;uint8_t marker,state;std::string error;
+  assert(!p.ScriptFurniture(100,ref,marker,state));p.SetScriptActorFurniture(100,0,0,0);assert(p.ScriptFurniture(100,ref,marker,state)&&state==0);
+  p.SetScriptActorFurniture(100,200,0,3);assert(p.ScriptFurniture(100,ref,marker,state)&&state==3&&ref==200);
+  auto plan=p.PrepareReferenceEventTransaction(100,"OnActivate",PlayerRef,error);Check(bool(plan),error);p.SetScriptActorFurniture(100,200,0,4);assert(!p.CanCommitScriptTransaction(*plan));
+  plan=p.PrepareReferenceEventTransaction(100,"OnActivate",PlayerRef,error);Check(bool(plan)&&p.CommitScriptTransaction(*plan),error);assert(p.Snapshot().pipboy.dialogueVariables.at((uint64_t(100)<<32)|1)==4);
+  fo3dialogue::Context ctx;ctx.player=&p;ctx.speaker.reference=100;fo3pipdata::Condition sitting;sitting.function=159;sitting.value=4;Check(fo3dialogue::Conditions({sitting},ctx,error),error);
+  p.SetScriptActorFurniture(100,0,0,255);assert(!p.ScriptFurniture(100,ref,marker,state));p.SetFurnitureUse(200,0,3);assert(p.ScriptFurniture(PlayerRef,ref,marker,state)&&state==3);
 }
 static void Identity(){
   fo3player::Catalog c;c.initial.baseHealth=100;c.initial.special.fill(5);
@@ -329,6 +403,71 @@ static void OriginalInventory(const fo3player::Catalog& catalog){
   Player restored(catalog);Check(restored.Restore(save,error),error);unlink(save.c_str());
   assert(restored.ItemCount(id("vaultsuit101"))==1&&restored.ItemCount(pipboy)>=1&&restored.ItemCount(id("ammo10mm"))==66);
 }
+static void OriginalExam(const fo3player::Catalog& original,const char* master,bool skip){
+  auto catalog=original;const auto& d=catalog.pipboy;const auto quest=d.formNames.at("cg03"),teacher=d.formNames.at("cg03mrbrotchref"),butch=d.formNames.at("cg03butchref");
+  // Boundary fixture: the prior introduction and hallway conversation ended.
+  // All subsequent stages/results come from original dialogue/events.
+  auto& started=catalog.initial.pipboy.quests[quest];started.stage=30;started.running=true;started.stages={5,6,10,20,25,28,30};
+  catalog.initial.referenceEnabled[d.formNames.at("cg03dadref")]=true;catalog.initial.inCharGen=true;
+  fo3player::Player p(catalog);p.RegisterOriginalActors();std::string error;
+  p.SetScriptEventDiagnostic([&](const std::string& e){if(e.find("DIALOGUE UNSUPPORTED SCRIPT")!=std::string::npos){std::cerr<<e<<"\n";return;}for(const char* script:{"cg03script","cg03mrbrotchscript","cg03butchscript"})if(e.find(std::to_string(d.formNames.at(script)))!=std::string::npos){std::cerr<<"EXAM "<<e<<"\n";break;}});
+  const auto& placed=d.targets.at(teacher);p.SetScriptPlayerLocation(placed.x,placed.y+50,placed.z,placed.cell,placed.world);
+  auto context=[&](uint32_t ref,uint32_t listener=fo3player::PlayerRef){fo3dialogue::Context ctx;ctx.player=&p;ctx.talking=true;Check(fo3dialogue::ReferenceContext(p,ref,ctx.speaker),"exam speaker");Check(fo3dialogue::ReferenceContext(p,listener,ctx.target),"exam listener");return ctx;};
+  auto configure=[&](fo3dialogue::Session& voice){voice.previewReferences=[](const auto&,const auto&,auto&){return true;};voice.publishReferences=[](auto& player,auto& plan,auto&){return player.CommitScriptTransaction(plan);};voice.diagnostic=[&](const std::string& e){if(e.find("UNSUPPORTED SCRIPT")!=std::string::npos)std::cerr<<e<<"\n";error=e;};};
+  auto finish=[&](fo3dialogue::Session& voice,const fo3dialogue::Context& ctx){unsigned lines=0;while(voice.phase==fo3dialogue::Phase::Speaking){assert(++lines<32);voice.AudioDone(voice.audioToken,true,ctx,p);}};
+  auto choose=[&](fo3dialogue::Session& voice,const fo3dialogue::Context& ctx,const char* topic){const auto id=d.formNames.at(topic);auto option=std::find_if(voice.choices.begin(),voice.choices.end(),[&](const auto& c){return c.topic==id;});
+    if(option==voice.choices.end()){std::cerr<<"Missing exam choice "<<topic<<" available:";for(const auto& c:voice.choices)std::cerr<<" "<<c.text;std::cerr<<"\n";}
+    Check(option!=voice.choices.end(),"original exam choice");Check(voice.Choose(size_t(option-voice.choices.begin()),ctx,p),error);finish(voice,ctx);};
+  auto ctx=context(teacher);fo3dialogue::Session talk;configure(talk);Check(talk.Start(ctx,p),"original exam greeting");finish(talk,ctx);
+  if(skip){choose(talk,ctx,"cg03brotchstarta2");choose(talk,ctx,"cg03brotchstartb1");
+    assert(p.Snapshot().pipboy.quests.at(quest).stages.count(45)&&p.Snapshot().tagMenuOwner==teacher&&p.TagSkillsRemaining()==3);
+    for(unsigned skill:{0u,8u,11u})assert(p.ToggleTagSkill(skill));assert(p.ConfirmTagSkills());
+  }else{
+    choose(talk,ctx,"cg03brotchstarta3");assert(p.Snapshot().pipboy.quests.at(quest).stage==42);talk.End("presentation fixture");
+    uint32_t trigger=0;const auto triggerScript=d.formNames.at("cg03classroomtriggerscript");for(const auto& ref:catalog.references){const auto script=catalog.eventBaseScripts.find(ref.second.base);if(script!=catalog.eventBaseScripts.end()&&script->second==triggerScript){trigger=ref.first;break;}}assert(trigger);
+    const auto& at=d.targets.at(trigger);p.SetScriptPlayerLocation(at.x,at.y,at.z,at.cell,at.world);
+    auto event=[&](){auto plan=p.PrepareReferenceEventTransaction(trigger,"OnTrigger",fo3player::PlayerRef,error,fo3player::ScriptProgramCapture::EnteredPrograms);Check(bool(plan),error);
+      std::atomic<bool> cancel{false};fo3script::ScriptMasterMatch report;Check(fo3script::MatchScriptProgramsToMaster(master,plan->ExecutedScripts(),report,cancel,error),error);Check(p.CommitScriptTransaction(*plan),error);};
+    std::vector<uint32_t> chairs;for(const auto& ref:d.targets)if(ref.second.cell==at.cell&&d.furniture.count(ref.second.base))chairs.push_back(ref.first);std::sort(chairs.begin(),chairs.end());assert(chairs.size()>=8);const auto chair=chairs.front();
+    p.SetFurnitureUse(chair,0,3);event();assert(p.Snapshot().pipboy.quests.at(quest).stage==50);
+    const auto package=d.formNames.at("cg03mrbrotchtoclassroom");
+    for(bool done:{false,true}){auto plan=p.PreparePackageEventTransaction(teacher,package,done,error);Check(bool(plan)&&p.CommitScriptTransaction(*plan),error);}
+    assert(p.Snapshot().pipboy.quests.at(quest).stage==55);
+    const char* students[]={"cg03amataref","cg03butchref","cg03paulhannonref","cg03wallymackref","cg03freddiegomezref","cg03christinekendallref","cg03susiemackref"};
+    for(auto name:students)p.SetScriptActorFurniture(d.formNames.at(name),0,0,0);
+    event();assert(p.Snapshot().pipboy.quests.at(quest).stage==55);
+    for(unsigned i=0;i<7;++i)p.SetScriptActorFurniture(d.formNames.at(students[i]),chairs[i+1],11,3);
+    event();assert(p.Snapshot().pipboy.quests.at(quest).stage==60&&p.PlayerControlDisabled(0));
+    const auto slides=d.formNames.at("cg03goatslidesref");auto registry=std::make_shared<fo3script::AnimationRegistry>();
+    for(const char* group:{"Forward","Backward","FastForward","FastBackward","Left","Right","FastLeft","FastRight","TurnLeft","Equip"})(*registry)[slides].push_back({group,1,false});p.SetScriptAnimationRegistry(registry);
+    unsigned answers=0,speechLines=0;bool checkedNested=false;std::unordered_set<uint32_t> messages;
+    for(unsigned tick=0;tick<2000&&p.Snapshot().pipboy.quests.at(quest).stage<70;++tick){
+      p.SetScriptRuntimeClock(2000+tick*.1,.1);p.PumpWorldAwareGameMode(.1,{teacher,butch},[&](auto plan){return p.CommitScriptTransaction(*plan);});
+      fo3script::Action action;while(p.PollScriptAction(action)){if(action.kind!=fo3script::ActionKind::SayTo)continue;assert(++speechLines<100);
+        if(!checkedNested&&action.info==0x34901){auto evidence=p.PrepareDialogueInfoTransaction(action.form,action.info,fo3player::DialogueScriptPhase::Both,error,action.reference,fo3player::ScriptProgramCapture::EnteredPrograms);Check(bool(evidence),error);
+          std::atomic<bool> cancel{false};fo3script::ScriptMasterMatch report;Check(fo3script::MatchScriptProgramsToMaster(master,evidence->ExecutedScripts(),report,cancel,error),error);checkedNested=true;}
+        auto speaking=context(action.reference,action.flags);fo3dialogue::Session line;configure(line);Check(line.StartSelectedTopic(action.form,action.info,speaking,p),"original exam speech: "+error);finish(line,speaking);
+        const auto done=p.DispatchReferenceEvent(action.reference,"SayToDone",action.form,error);Check(done==fo3player::ScriptEventResult::Executed||done==fo3player::ScriptEventResult::NoHandler,error);
+      }
+      fo3player::ScriptMessage message;while(p.PollScriptMessage(message)){
+        if(message.owner!=quest)continue;assert(message.buttons.size()==4&&messages.insert(message.form).second);
+        const auto checkpoint="/tmp/fq-question-"+std::to_string(getpid());
+        if(answers==2){Check(p.Save(checkpoint,error)&&p.Restore(checkpoint,error),error);unlink(checkpoint.c_str());fo3player::ScriptMessage replay;assert(p.PollScriptMessage(replay)&&replay.form==message.form&&replay.owner==message.owner&&replay.buttons==message.buttons);p.SetScriptAnimationRegistry(registry);}
+        Check(p.SubmitScriptMessageButton(message.owner,0),"original exam answer");++answers;
+        if(answers==4){Check(p.Save(checkpoint,error)&&p.Restore(checkpoint,error),error);unlink(checkpoint.c_str());p.SetScriptAnimationRegistry(registry);}
+      }
+    }
+    if(p.Snapshot().pipboy.quests.at(quest).stage!=70||answers!=10||p.PlayerControlDisabled(0))std::cerr<<"Exam stopped stage="<<p.Snapshot().pipboy.quests.at(quest).stage<<" answers="<<answers<<" lines="<<speechLines<<" controls="<<unsigned(p.Snapshot().disabledControls)<<"\n";
+    assert(p.Snapshot().pipboy.quests.at(quest).stage==70&&answers==10&&messages.size()==10&&!p.PlayerControlDisabled(0)&&checkedNested);
+    assert(p.Snapshot().pipboy.dialogueVariables.at(fo3dialogue::VariableKey(d,"CG03GoatSlidesREF.stage"))==10);
+    assert(p.Snapshot().pipboy.dialogueVariables.at(fo3dialogue::VariableKey(d,"CG03.question"))==-1&&fo3tags::Count(fo3tags::Mask(p.Snapshot().taggedSkills))==3);
+    p.SetFurnitureUse(0,0,0);ctx=context(teacher);talk={};configure(talk);Check(talk.Start(ctx,p),"original test result greeting");finish(talk,ctx);choose(talk,ctx,"cg03brotcha1");
+    assert(p.Snapshot().tagMenuOwner==teacher&&p.TagSkillsRemaining()==0&&p.ConfirmTagSkills()&&p.Snapshot().pipboy.quests.at(quest).stage==80);
+  }
+  const auto save="/tmp/fq-exam-"+std::to_string(getpid());Check(p.Save(save,error),error);fo3player::Player resumed(catalog);Check(resumed.Restore(save,error),error);unlink(save.c_str());
+  assert(resumed.Snapshot().taggedSkills==p.Snapshot().taggedSkills&&resumed.Snapshot().tagBonuses==p.Snapshot().tagBonuses);
+  std::cout<<"Original G.O.A.T. "<<(skip?"skip/selection":"ten questions/results")<<" path passed\n";
+}
 static void OriginalIdentity(const fo3player::Catalog& catalog,bool female,const char* master){
   fo3player::Player p(catalog);p.RegisterOriginalActors();std::string error;
   const auto& d=catalog.pipboy;const auto quest=d.formNames.at("cg00");
@@ -595,9 +734,10 @@ int main(int argc,char** argv){
   for(const char* invalid:{"[General]\nSCharGenQuest=0", "[General]\nSCharGenQuest=1z", "[General]\nSCharGenQuest=1\nSCharGenQuest=2", "[Other]\nSCharGenQuest=1"}){
     std::istringstream input(invalid);assert(!fo3newgame::ReadQuest(input,quest,error));
   }
-  Synthetic();HeadingAngles();Identity();ScriptInventory();CharacterMenus();Lifecycle();TalkingActivators();CrimeFlags();CalendarAssignments();
+  Synthetic();HeadingAngles();TagSkills();ScriptMathAndPrompts();NestedActivation();ActorFurniture();Identity();ScriptInventory();CharacterMenus();Lifecycle();TalkingActivators();CrimeFlags();CalendarAssignments();
   if(argc<2)return 0;
   fo3player::Catalog catalog;Check(fo3player::LoadCatalog(argv[1],catalog,error),error);
+  if(argc>2&&std::string(argv[2])=="--exam"){OriginalExam(catalog,argv[1],false);OriginalExam(catalog,argv[1],true);return 0;}
   fo3player::Player player(catalog);player.RegisterOriginalActors();
   auto plan=player.PrepareNewGameTransaction(catalog.pipboy.formNames.at("cg00"),error);Check(bool(plan),error);
   fo3script::ScriptMasterMatch match;std::atomic<bool> cancelled{false};
@@ -627,6 +767,6 @@ int main(int argc,char** argv){
   const auto& base=catalog.imageModifiers.at(catalog.pipboy.formNames.at("cg00birthbaseisfx"));assert(base.valid&&!(base.flags&1));
   fo3script::ImageStack images;images.Apply(1,base,0);images.Apply(2,catalog.imageModifiers.at(catalog.pipboy.formNames.at("cg00blackscreenisfx")),0);
   assert(images.Sample(0).fade[3]>.9f);images.Sample(20);assert(images.entries.size()==1);images.Remove(1);assert(images.entries.empty());
-  OriginalIdentity(catalog,false,argv[1]);OriginalIdentity(catalog,true,argv[1]);OriginalInventory(catalog);OriginalSpecialBook(catalog);
+  OriginalIdentity(catalog,false,argv[1]);OriginalIdentity(catalog,true,argv[1]);OriginalInventory(catalog);OriginalSpecialBook(catalog);OriginalExam(catalog,argv[1],false);OriginalExam(catalog,argv[1],true);
   std::cout<<"Original birth, playpen, birthday, intercom, target practice, photo, six-year jump and G.O.A.T. introduction, both sex branches, package callbacks, heading, inventory and saves passed\n";
 }

@@ -1,6 +1,7 @@
 #include "ui/interaction/fo3-item-notifications.h"
 #include "ui/chargen/fo3-name-entry.h"
 #include "ui/chargen/fo3-special-book.h"
+#include "ui/chargen/fo3-tag-skills.h"
 
 #include "dialogue/fo3-dialogue-panel.h"
 // The interaction test binary intentionally compiles without the headset
@@ -200,8 +201,29 @@ bool Fo3PlayerNameFocus(){return gPlayerSession&&gPlayerSession->player.Snapshot
 fo3special::Model gSpecialBookEntry;
 fo3dialogue::Panel gSpecialBookPanel;
 bool Fo3SpecialBookFocus(){return gPlayerSession&&gPlayerSession->player.Snapshot().specialMenuOwner!=0;}
+fo3tagmenu::Model gTagSkillsEntry;
+fo3dialogue::Panel gTagSkillsPanel;
+bool Fo3TagSkillsFocus(){return gPlayerSession&&gPlayerSession->player.Snapshot().tagMenuOwner!=0;}
 bool Fo3MovieFocus(){return gPlayerSession&&gPlayerSession->player.Snapshot().movie.owner!=0;}
-bool Fo3ScriptMessageFocus(){return Fo3MovieFocus()||gScriptMessagePanel.visible||Fo3PlayerNameFocus()||Fo3SpecialBookFocus()||(gPlayerSession&&gPlayerSession->player.Snapshot().deferredAppearanceOwner);}
+bool Fo3ScriptMessageFocus(){return Fo3MovieFocus()||gScriptMessagePanel.visible||Fo3PlayerNameFocus()||Fo3SpecialBookFocus()||Fo3TagSkillsFocus()||(gPlayerSession&&gPlayerSession->player.Snapshot().deferredAppearanceOwner);}
+void UpdateFo3TagSkills(double now,float y,bool a,bool b,bool focused,const float* head){
+    if(!gPlayerSession||gPlayerSession->saveBlocked||IsFo3LoadingVisible())return;
+    auto& player=gPlayerSession->player;
+    static const fo3player::Player* previous=nullptr;static uint64_t generation=UINT64_MAX;
+    if(previous!=&player||generation!=player.ScriptRuntimeGeneration()){gTagSkillsEntry={};gTagSkillsPanel={};previous=&player;generation=player.ScriptRuntimeGeneration();}
+    const auto owner=player.Snapshot().tagMenuOwner;
+    if(!owner&&!gTagSkillsEntry.owner)return;
+    if(owner&&owner!=gTagSkillsEntry.owner){gTagSkillsPanel={};const float yaw=head[3];gTagSkillsPanel.yaw=yaw;
+        gTagSkillsPanel.anchor={head[0]-std::sin(yaw)*1.5f,head[1]+.12f,head[2]-std::cos(yaw)*1.5f};}
+    const auto before=gTagSkillsEntry.revision;const auto result=gTagSkillsEntry.Step(player,now,y,a,b,focused);
+    gTagSkillsPanel.visible=player.Snapshot().tagMenuOwner!=0;
+    const auto title=player.Definitions().strings.find("sTagSkills");gTagSkillsPanel.title=title==player.Definitions().strings.end()?"Tag Skills":title->second;
+    gTagSkillsPanel.subtitle="Selections remaining: "+std::to_string(player.TagSkillsRemaining())+". A: select or clear.";
+    gTagSkillsPanel.choices=gTagSkillsEntry.Choices(player);gTagSkillsPanel.selected=gTagSkillsEntry.cursor.selected;
+    gTagSkillsPanel.revision=player.Revision()+gTagSkillsEntry.revision;
+    if(result!=fo3tagmenu::Model::Result::None){fo3audio::NamedSound("UIMenuOK");FlushFo3PlayerState();}
+    else if(gTagSkillsEntry.revision!=before)fo3audio::Scroll();
+}
 void UpdateFo3SpecialBook(double now,float x,float y,bool a,bool b,bool focused,const float* head){
     if(!gPlayerSession||gPlayerSession->saveBlocked||IsFo3LoadingVisible())return;
     auto& player=gPlayerSession->player;const auto owner=player.Snapshot().specialMenuOwner;
@@ -245,7 +267,11 @@ void UpdateFo3ScriptMessage(double now,float scroll,bool pressA,bool pressB,bool
         gScriptMessagePanel.visible=false;gScriptMessageOwner=0;return;
     }
     auto& player=gPlayerSession->player;
-    if(Fo3MovieFocus()||Fo3PlayerNameFocus()||Fo3SpecialBookFocus()||player.Snapshot().deferredAppearanceOwner)return;
+    static const fo3player::Player* previous=nullptr;static uint64_t generation=UINT64_MAX;
+    if(previous!=&player||generation!=player.ScriptRuntimeGeneration()){
+        gScriptMessagePanel={};gScriptMessageOwner=0;gScriptMessageCursor={};previous=&player;generation=player.ScriptRuntimeGeneration();
+    }
+    if(Fo3MovieFocus()||Fo3PlayerNameFocus()||Fo3SpecialBookFocus()||Fo3TagSkillsFocus()||player.Snapshot().deferredAppearanceOwner)return;
     if(!gScriptMessagePanel.visible){
         if(Fo3LevelUpFocus())return; // Defer authored messages until level-up closes.
         fo3player::ScriptMessage request;

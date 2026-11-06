@@ -1,4 +1,5 @@
 #include "fo3-player-state.h"
+#include "fo3-tag-skills.h"
 #include "data/fo3-esm-reader.h"
 #include "npc/fo3-package-schedule.h"
 
@@ -8,6 +9,7 @@
 #include <cstring>
 #include <fcntl.h>
 #include <limits>
+#include <random>
 #include <memory>
 #include <unistd.h>
 #include <unordered_set>
@@ -641,6 +643,8 @@ bool LoadCatalog(const std::string &path, Catalog &out, std::string &error) {
     const auto setting=settings.find(entry.first);
     if(setting!=settings.end()&&std::isfinite(setting->second)&&setting->second>=0&&setting->second<=10)*entry.second=setting->second;
   }
+  const auto tagBonus=settings.find("fAVDTagSkillBonus");
+  if(tagBonus!=settings.end()){if(!std::isfinite(tagBonus->second)||tagBonus->second<0||tagBonus->second>100)return fail("Invalid tag skill bonus");next.rules.tagSkillBonus=tagBonus->second;}
   // Fast NPC flee locomotion uses the actual Fallout3.esm run multiplier;
   // absent/invalid source fails closed to current walk speed.
   const auto runSetting=settings.find("fMoveRunMult");
@@ -711,10 +715,11 @@ static std::shared_ptr<const Catalog> SharePlayerCatalog(Catalog catalog) {
   FinalizePlayerCatalog(catalog);
   return std::make_shared<const Catalog>(std::move(catalog));
 }
+static uint64_t InitialScriptRandom(){std::random_device source;const uint64_t seed=(uint64_t(source())<<32)|source();return seed?seed:1;}
 Player::Player(Catalog catalog)
-    : catalog_(SharePlayerCatalog(std::move(catalog))), state_(catalog_->initial) {}
+    : catalog_(SharePlayerCatalog(std::move(catalog))), state_(catalog_->initial),scriptRandomInitial_(InitialScriptRandom()) {}
 Player::Player(std::shared_ptr<const Catalog> catalog)
-    : catalog_(std::move(catalog)), state_(catalog_->initial) {}
+    : catalog_(std::move(catalog)), state_(catalog_->initial),scriptRandomInitial_(InitialScriptRandom()) {}
 bool Player::SetPlayerAttributes(const std::array<uint8_t,7>& special,
                                  const std::array<uint8_t,14>& skills) {
   if(std::any_of(special.begin(),special.end(),[](uint8_t value){return value<1||value>10;}) ||
@@ -1128,7 +1133,7 @@ bool Player::KillQuestUpdates(){
   fo3script::Action action;action.kind=fo3script::ActionKind::KillQuestUpdates;return QueueScriptAction(std::move(action));
 }
 bool Player::PlayMovie(uint32_t owner,const std::string& path,uint8_t flags){
-  if(!owner||state_.nameMenuOwner||state_.specialMenuOwner||state_.deferredAppearanceOwner||flags>15||!fo3movie::ValidPath(path)||(!catalog_->pipboy.quests.count(owner)&&!catalog_->references.count(owner)))return false;
+  if(!owner||state_.nameMenuOwner||state_.tagMenuOwner||state_.specialMenuOwner||state_.deferredAppearanceOwner||flags>15||!fo3movie::ValidPath(path)||(!catalog_->pipboy.quests.count(owner)&&!catalog_->references.count(owner)))return false;
   auto& movie=state_.movie;
   if(movie.owner)return movie.owner==owner&&movie.path==path&&movie.flags==flags;
   if(movie.serial==UINT64_MAX)return false;
@@ -1155,7 +1160,7 @@ static bool ValidNameDraft(const std::string& name){
   return name.size()<=32&&std::all_of(name.begin(),name.end(),[](unsigned char c){return c>=32&&c<=126;});
 }
 bool Player::OpenPlayerNameMenu(uint32_t owner){
-  if(!owner||state_.movie.owner||state_.specialMenuOwner||state_.deferredAppearanceOwner||(!catalog_->pipboy.quests.count(owner)&&!catalog_->references.count(owner)))return false;
+  if(!owner||state_.movie.owner||state_.tagMenuOwner||state_.specialMenuOwner||state_.deferredAppearanceOwner||(!catalog_->pipboy.quests.count(owner)&&!catalog_->references.count(owner)))return false;
   if(state_.nameMenuOwner)return state_.nameMenuOwner==owner;
   state_.nameMenuOwner=owner;state_.nameDraft=state_.playerName;++revision_;return true;
 }
@@ -1170,7 +1175,7 @@ bool Player::ConfirmPlayerName(){
   state_.nameMenuOwner=0;state_.nameDraft.clear();++revision_;return true;
 }
 bool Player::DeferAppearanceMenu(uint32_t owner){
-  if(!owner||state_.movie.owner||state_.nameMenuOwner||state_.specialMenuOwner||(!catalog_->pipboy.quests.count(owner)&&!catalog_->references.count(owner)))return false;
+  if(!owner||state_.movie.owner||state_.nameMenuOwner||state_.tagMenuOwner||state_.specialMenuOwner||(!catalog_->pipboy.quests.count(owner)&&!catalog_->references.count(owner)))return false;
   if(state_.deferredAppearanceOwner)return state_.deferredAppearanceOwner==owner;
   state_.deferredAppearanceOwner=owner;++revision_;return true;
 }
@@ -1178,7 +1183,7 @@ int Player::SpecialBookRemaining()const{
   int remaining=int(state_.specialMenuTotal);for(auto value:state_.specialDraft)remaining-=value;return remaining;
 }
 bool Player::OpenSpecialBook(uint32_t owner,uint32_t total){
-  if(!owner||total<7||total>70||state_.movie.owner||state_.nameMenuOwner||state_.deferredAppearanceOwner||(!catalog_->pipboy.quests.count(owner)&&!catalog_->references.count(owner)))return false;
+  if(!owner||total<7||total>70||state_.tagMenuOwner||state_.movie.owner||state_.nameMenuOwner||state_.deferredAppearanceOwner||(!catalog_->pipboy.quests.count(owner)&&!catalog_->references.count(owner)))return false;
   if(state_.specialMenuOwner)return state_.specialMenuOwner==owner&&state_.specialMenuTotal==total;
   auto draft=state_.special;unsigned used=0;for(auto value:draft){if(value<1||value>10)return false;used+=value;}
   if(used>total)draft.fill(1);
@@ -1207,6 +1212,7 @@ bool Player::ConfirmSpecialBook(){
   if(!SetPlayerAttributes(state_.specialDraft,skills))return false;
   state_.specialMenuOwner=state_.specialMenuTotal=0;state_.specialDraft={};++revision_;return true;
 }
+#include "fo3-tag-skills.inc"
 bool Player::SetNoActivationSound(uint32_t sound){
   if(sound&&!catalog_->pipboy.sounds.count(sound))return false;
   if(state_.noActivationSound!=sound){state_.noActivationSound=sound;++revision_;}return true;
@@ -1448,7 +1454,9 @@ bool Player::Save(const std::string &path, std::string &error) const {
     payload.push_back(l.forceFailures);payload.push_back(l.rewarded?1:0);}
   // Optional RFE1 after the v14 lock tail. Empty overlays keep existing v14
   // bytes unchanged; older supported saves do not require this extension.
-  const bool hasTalking=!state_.talkingActivators.empty()||!state_.dailyPackages.empty();
+  const bool hasTags=state_.scriptRandom||!scriptPrompts_.empty()||!scriptButtons_.empty()||state_.tagMenuOwner||std::any_of(state_.taggedSkills.begin(),state_.taggedSkills.end(),[](auto skill){return skill!=255;});
+  if(!fo3tags::Valid(state_)||(state_.tagMenuOwner&&((!catalog_->pipboy.quests.count(state_.tagMenuOwner)&&!catalog_->references.count(state_.tagMenuOwner))||state_.movie.owner||state_.nameMenuOwner||state_.specialMenuOwner||state_.deferredAppearanceOwner))){error="Invalid tag skills state";return false;}
+  const bool hasTalking=hasTags||!state_.talkingActivators.empty()||!state_.dailyPackages.empty();
   const bool hasCrime=hasTalking||!state_.ignoredCrimeActors.empty();
   const bool hasLife=hasCrime||state_.playerScale!=1||state_.playerRace||state_.playerToddler||state_.autoDisplayObjectives||state_.movie.serial;
   const bool hasMenus=hasLife||state_.deferredAppearanceOwner||state_.specialMenuOwner;
@@ -1675,7 +1683,7 @@ bool Player::Save(const std::string &path, std::string &error) const {
   if(hasLife){
     const auto& movie=state_.movie;
     if(!fo3scale::Valid(state_.playerScale)||(state_.playerRace&&!catalog_->pipboy.raceAges.count(state_.playerRace))||movie.flags>15||
-       (movie.owner&&(state_.nameMenuOwner||state_.specialMenuOwner||state_.deferredAppearanceOwner||!movie.serial||!fo3movie::ValidPath(movie.path)||(!catalog_->pipboy.quests.count(movie.owner)&&!catalog_->references.count(movie.owner))))||(!movie.owner&&!movie.path.empty())){error="Invalid player lifecycle state";return false;}
+       (movie.owner&&(state_.nameMenuOwner||state_.tagMenuOwner||state_.specialMenuOwner||state_.deferredAppearanceOwner||!movie.serial||!fo3movie::ValidPath(movie.path)||(!catalog_->pipboy.quests.count(movie.owner)&&!catalog_->references.count(movie.owner))))||(!movie.owner&&!movie.path.empty())){error="Invalid player lifecycle state";return false;}
     Put32(payload,0x31415453); // STA1
     Put32(payload,uint32_t(state_.playerToddler)|(uint32_t(state_.autoDisplayObjectives)<<1));PutFloat(payload,state_.playerScale);Put32(payload,state_.playerRace);
     Put64(payload,movie.serial);Put32(payload,movie.owner);Put32(payload,movie.flags);Put32(payload,uint32_t(movie.path.size()));payload.insert(payload.end(),movie.path.begin(),movie.path.end());
@@ -1700,7 +1708,25 @@ bool Player::Save(const std::string &path, std::string &error) const {
       uint64_t bits;std::memcpy(&bits,&start.second,8);Put64(payload,start.first);Put64(payload,bits);
     }
   }
-  Put32(bytes, hasTalking ? 33 : hasCrime ? 32 : hasLife ? 31 : hasMenus ? 30 : hasIdentity ? 29 : hasNewGame ? 28 : hasFactionRanks ? 27 : hasBodyDamage ? 26 : hasCorpsePoses ? 25 : hasDailyInfos ? 24 : hasScriptPackages ? 23 : hasScriptOverrides ? 22 : hasActorVariables ? 21 : hasDoorStates ? 20 : hasDebugPoints ? 19 : hasLevelAdvancement ? 18 : hasCompletionState ? 17 :
+  if(hasTags){
+    Put32(payload,0x31534754); // TGS1
+    payload.insert(payload.end(),state_.taggedSkills.begin(),state_.taggedSkills.end());
+    payload.insert(payload.end(),state_.tagBonuses.begin(),state_.tagBonuses.end());
+    Put32(payload,state_.tagMenuOwner);Put32(payload,state_.tagMenuTotal);Put32(payload,state_.tagDraft);
+    Put32(payload,0x31474e52);Put64(payload,state_.scriptRandom); // RNG1
+    if(scriptPrompts_.size()>16||scriptButtons_.size()>10000){error="Too many script prompts/buttons";return false;}
+    Put32(payload,0x31504d53);Put32(payload,uint32_t(scriptPrompts_.size())); // SMP1
+    for(const auto& prompt:scriptPrompts_){
+      ScriptMessage verified;
+      if((!catalog_->pipboy.quests.count(prompt.owner)&&!catalog_->references.count(prompt.owner))||!MakeScriptMessage(prompt.form,prompt.argument,prompt.hasArgument,prompt.owner,verified)||verified.buttons.empty()){error="Invalid script prompt";return false;}
+      Put32(payload,prompt.form);Put32(payload,prompt.owner);PutFloat(payload,prompt.argument);Put32(payload,prompt.hasArgument?1:0);
+    }
+    Put32(payload,0x31424d53);Put32(payload,uint32_t(scriptButtons_.size())); // SMB1
+    std::vector<std::pair<uint32_t,int>> buttons(scriptButtons_.begin(),scriptButtons_.end());std::sort(buttons.begin(),buttons.end());
+    for(const auto& button:buttons){if((!catalog_->pipboy.quests.count(button.first)&&!catalog_->references.count(button.first))||button.second<0||button.second>31){error="Invalid script button";return false;}Put32(payload,button.first);Put32(payload,uint32_t(button.second));}
+
+  }
+  Put32(bytes, hasTags ? 34 : hasTalking ? 33 : hasCrime ? 32 : hasLife ? 31 : hasMenus ? 30 : hasIdentity ? 29 : hasNewGame ? 28 : hasFactionRanks ? 27 : hasBodyDamage ? 26 : hasCorpsePoses ? 25 : hasDailyInfos ? 24 : hasScriptPackages ? 23 : hasScriptOverrides ? 22 : hasActorVariables ? 21 : hasDoorStates ? 20 : hasDebugPoints ? 19 : hasLevelAdvancement ? 18 : hasCompletionState ? 17 :
       hasMerchantVisits ? 16 : hasPlayerAttributeOverrides ? 15 : 14);
   Put32(bytes, catalog_->fingerprint);
   Put32(bytes, static_cast<uint32_t>(payload.size()));
@@ -1760,7 +1786,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
   const auto *h = bytes.data();
   const auto version = fo3esm::ReadU32(h + 4);
   if (std::memcmp(h, "FQPS", 4) ||
-      (version < 1 || version > 33))
+      (version < 1 || version > 34))
     return fail("Unsupported player save format");
   if (fo3esm::ReadU32(h + 8) != catalog_->fingerprint)
     return fail("Player save belongs to different game definitions");
@@ -1771,6 +1797,7 @@ bool Player::Restore(const std::string &path, std::string &error) {
     return fail("Player save checksum failed");
   const auto *p = payload.data();
   State next = catalog_->initial;
+  std::vector<ScriptMessage> restoredPrompts;std::unordered_map<uint32_t,int> restoredButtons;
   next.referenceEnabled.clear();
   next.referenceStateRevision=state_.referenceStateRevision+1;
   next.worldWeapons.clear();
@@ -2297,11 +2324,32 @@ bool Player::Restore(const std::string &path, std::string &error) {
         }
         if(payload.size()-at<8||fo3esm::ReadU32(p+at)!=0x3144504f)return fail("Missing daily package state");
         const auto packages=fo3esm::ReadU32(p+at+4);at+=8;
-        if(packages>100000||payload.size()-at!=size_t(packages)*16)return fail("Invalid daily package count");
+        if(packages>100000||(version>=34?payload.size()-at<size_t(packages)*16:payload.size()-at!=size_t(packages)*16))return fail("Invalid daily package count");
         for(uint32_t n=0;n<packages;++n){const auto key=U64(p+at),bits=U64(p+at+8);at+=16;double time;std::memcpy(&time,&bits,8);
           const auto definition=catalog_->pipboy.packages.find(uint32_t(key));
           if(!catalog_->actorPlacements.count(uint32_t(key>>32))||definition==catalog_->pipboy.packages.end()||!(definition->second.flags&0x400u)||!std::isfinite(time)||time<0||!next.dailyPackages.emplace(key,time).second)return fail("Invalid daily package history");
         }
+      }
+      if(version>=34){
+        if(payload.size()-at<62||fo3esm::ReadU32(p+at)!=0x31534754)return fail("Invalid tag skills state");
+        at+=4;
+        std::copy_n(p+at,4,next.taggedSkills.begin());at+=4;std::copy_n(p+at,14,next.tagBonuses.begin());at+=14;
+        next.tagMenuOwner=fo3esm::ReadU32(p+at);next.tagMenuTotal=fo3esm::ReadU32(p+at+4);const auto draft=fo3esm::ReadU32(p+at+8);at+=12;next.tagDraft=uint16_t(draft);
+        if(draft>65535||!fo3tags::Valid(next)||(next.tagMenuOwner&&((!catalog_->pipboy.quests.count(next.tagMenuOwner)&&!catalog_->references.count(next.tagMenuOwner))||next.movie.owner||next.nameMenuOwner||next.specialMenuOwner||next.deferredAppearanceOwner)))return fail("Invalid saved tag skills");
+        if(fo3esm::ReadU32(p+at)!=0x31474e52)return fail("Missing script random state");
+        next.scriptRandom=U64(p+at+4);at+=12;
+        if(payload.size()-at<16||fo3esm::ReadU32(p+at)!=0x31504d53)return fail("Missing script prompts");
+        const auto prompts=fo3esm::ReadU32(p+at+4);at+=8;if(prompts>16||payload.size()-at<size_t(prompts)*16+8)return fail("Invalid script prompt count");
+        for(uint32_t i=0;i<prompts;++i){const auto form=fo3esm::ReadU32(p+at),owner=fo3esm::ReadU32(p+at+4),flags=fo3esm::ReadU32(p+at+12);const auto argument=fo3esm::ReadF32(p+at+8);at+=16;ScriptMessage message;
+          if(flags>1||!std::isfinite(argument)||(!catalog_->pipboy.quests.count(owner)&&!catalog_->references.count(owner))||!MakeScriptMessage(form,argument,flags!=0,owner,message)||message.buttons.empty())return fail("Invalid saved script prompt");
+          restoredPrompts.push_back(std::move(message));
+        }
+        if(fo3esm::ReadU32(p+at)!=0x31424d53)return fail("Missing script buttons");
+        const auto buttons=fo3esm::ReadU32(p+at+4);at+=8;if(buttons>10000||payload.size()-at!=size_t(buttons)*8)return fail("Invalid script button count");
+        for(uint32_t i=0;i<buttons;++i){const auto owner=fo3esm::ReadU32(p+at),index=fo3esm::ReadU32(p+at+4);at+=8;
+          if(index>31||(!catalog_->pipboy.quests.count(owner)&&!catalog_->references.count(owner))||!restoredButtons.emplace(owner,int(index)).second)return fail("Invalid saved script button");
+        }
+
       }
       if(at!=payload.size())return fail("Trailing player save data");
     }
@@ -2328,9 +2376,10 @@ bool Player::Restore(const std::string &path, std::string &error) {
   questScriptClock_=questScriptAccumulator_=referenceScriptAccumulator_=0;questScriptLastTicks_.clear();
   pendingKarmaEvents_.clear();pendingTheftEvents_.clear();pendingQuestNotices_.clear();pendingScriptItems_.clear();
   pendingExperienceNotices_.clear();pendingLocationNotices_.clear();
-  scriptPlayerHeading_=0;scriptPlayerHeadingKnown_=false;
+  scriptPlayerHeading_=0;scriptPlayerHeadingKnown_=false;ClearScriptActorFurniture();
   pendingScriptActions_.clear();scriptActorMoves_.clear();scriptTalking_.clear();scriptAnimations_.clear();scriptInsideTriggers_.clear();++scriptRuntimeGeneration_;
-  pendingScriptMessages_.clear();pendingScriptSounds_.clear();pendingBarters_.clear();scriptButtons_.clear();EndContainerInteraction();
+  scriptPrompts_=restoredPrompts;pendingScriptMessages_=std::move(restoredPrompts);scriptButtons_=std::move(restoredButtons);
+  pendingScriptSounds_.clear();pendingBarters_.clear();EndContainerInteraction();
   ++revision_;
   return true;
 }

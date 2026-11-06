@@ -122,6 +122,7 @@ struct Rules {
   float healthEnduranceMult = 0, healthEnduranceOffset = 0, healthLevelMult = 0;
   float apBase = 0, apMult = 0, carryBase = 0, carryMult = 0;
   float skillPrimaryMult=2,skillLuckMult=.5f; // Verified native fAVDSkill defaults.
+  float tagSkillBonus=15; // fAVDTagSkillBonus.
 };
 enum class LockChange : uint8_t { Locked, Key, Picked, Forced, Broken, ScriptUnlocked };
 struct LockOverride { LockChange change=LockChange::Locked; uint8_t level=0,forceFailures=0; bool rewarded=false; };
@@ -179,6 +180,7 @@ struct ScriptMessage {
   uint32_t form=0, owner=0;
   std::string title,text;
   std::vector<std::string> buttons;
+  float argument=0;bool hasArgument=false;
 };
 struct MerchantVisit {uint32_t day=0;float hour=0;};
 struct PlayerMove {
@@ -197,6 +199,11 @@ struct State {
   uint32_t nameMenuOwner=0;
   uint32_t deferredAppearanceOwner=0,specialMenuOwner=0,specialMenuTotal=0;
   std::array<uint8_t,7> specialDraft{};
+  std::array<uint8_t,4> taggedSkills{{255,255,255,255}}; // DNAM skill indices, 255 empty.
+  std::array<uint8_t,14> tagBonuses{}; // Applied grant, retained across capped/replaced tags.
+  uint32_t tagMenuOwner=0,tagMenuTotal=0;
+  uint16_t tagDraft=0;
+  uint64_t scriptRandom=0; // Zero until the first committed scripted draw.
   uint32_t noActivationSound=0;
   PlayerMove playerMove;
   fo3pipdata::SessionState pipboy;
@@ -479,6 +486,15 @@ public:
   uint8_t SittingState()const{return sittingState_;}
   uint8_t FurnitureMarker()const{return furnitureMarker_;}
   void SetFurnitureUse(uint32_t ref,uint8_t marker,uint8_t state){if(!state){ref=0;marker=0;}if(ref!=furnitureRef_||marker!=furnitureMarker_||state!=sittingState_){furnitureRef_=ref;furnitureMarker_=marker;sittingState_=state;++revision_;}}
+  void SetScriptActorFurniture(uint32_t actor,uint32_t ref,uint8_t marker,uint8_t state);
+  void ClearScriptActorFurniture();
+  bool ScriptFurniture(uint32_t actor,uint32_t& ref,uint8_t& marker,uint8_t& state)const;
+  bool SetPlayerTagSkill(uint32_t actorValue,unsigned slot);
+  bool IsPlayerTagSkill(uint32_t actorValue)const;
+  bool OpenTagSkills(uint32_t owner,uint32_t total,bool showExisting);
+  int TagSkillsRemaining()const;
+  bool ToggleTagSkill(unsigned skill);
+  bool ConfirmTagSkills();
   bool IsSneaking()const{return sneaking_;}
   void SetSneaking(bool value){if(value!=sneaking_){sneaking_=value;++revision_;}}
   uint64_t Revision() const { return revision_; }
@@ -564,6 +580,7 @@ public:
   uint32_t ScriptActivator() const { return scriptActivator_; }
   uint32_t ScriptReference() const { return scriptReference_; }
   int ScriptButton() const;
+  float DrawScriptRandomPercent()const;
   int32_t ItemCount(uint32_t form) const;
   bool ScriptRemoveItem(uint32_t form,int32_t count,uint32_t receiver=PlayerRef);
   bool ScriptAddItem(uint32_t receiver,uint32_t form,int32_t count,bool silent=false,float condition=1);
@@ -700,7 +717,7 @@ public:
   bool MoveActorTo(uint32_t reference,uint32_t destination,const std::array<float,3>& offset);
   uint64_t ScriptActorMoveEpoch(uint32_t reference) const {const auto i=scriptActorMoves_.find(reference);return i==scriptActorMoves_.end()?0:i->second;}
   bool SetActorHostile(uint32_t reference,uint32_t target);
-  bool StopActorCombat(uint32_t reference);
+  bool StopActorCombat(uint32_t reference,bool targetingActor=false);
   bool DoorInteractionCrime(uint32_t reference) const;
   bool ScriptReferenceLocation(uint32_t reference,fo3pipdata::Location& location) const;
   bool ScriptPackage(uint32_t reference,uint32_t package,bool add);
@@ -771,6 +788,7 @@ private:
   friend bool LoadCatalog(const std::string&,Catalog&,std::string&);
   explicit Player(std::shared_ptr<const Catalog> catalog);
   struct ScriptCandidateTag {};
+  bool MakeScriptMessage(uint32_t form,float argument,bool hasArgument,uint32_t owner,ScriptMessage& out)const;
   Player(const Player& source,ScriptCandidateTag);
   std::unique_ptr<ScriptTransactionPlan> PrepareScriptTransaction(
       const std::function<bool(Player&,std::string&)>& execute,std::string& error,bool capturePrograms=false) const;
@@ -803,6 +821,7 @@ private:
   bool EnsureQuestInstance(uint32_t);
   std::shared_ptr<const Catalog> catalog_;
   mutable State state_;
+  uint64_t scriptRandomInitial_=1;
   mutable uint64_t revision_ = 0;
   uint32_t furnitureRef_=0;uint8_t furnitureMarker_=0,sittingState_=0; // Transient physical furniture use.
   bool sneaking_=false; // Tracking/input state; recomputed rather than serialized.
@@ -821,8 +840,11 @@ private:
   float scriptPlayerHeading_=0;
   bool scriptPlayerHeadingKnown_=false;
   uint64_t scriptEffectRevision_=0;
+  std::unordered_map<uint32_t,std::array<uint32_t,3>> scriptFurniture_;
+  uint64_t scriptFurnitureRevision_=0;
   std::vector<ScriptExecution>* scriptTrace_=nullptr; // Private preparation only; never published/swapped.
   uint32_t scriptTraceParent_=ScriptExecution::NoParent;
+  unsigned scriptActivationDepth_=0;
   size_t scriptTraceBytes_=0;
   mutable std::shared_ptr<fo3script::CompileCache> scriptCompileCache_;
   std::unordered_map<uint32_t,int> scriptButtons_;
@@ -834,6 +856,7 @@ private:
   double scriptRuntimeSeconds_=0,scriptElapsedSeconds_=0;
   uint64_t scriptRuntimeGeneration_=0;
   std::vector<ScriptMessage> pendingScriptMessages_;
+  std::vector<ScriptMessage> scriptPrompts_; // Button prompts remain owned until an answer commits.
   std::vector<QuestNotice> pendingQuestNotices_;
   std::vector<ExperienceNotice> pendingExperienceNotices_;
   std::vector<uint32_t> pendingLocationNotices_;

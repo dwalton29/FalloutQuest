@@ -137,6 +137,15 @@ bool CompileResult(const fo3pipdata::Definitions& d,const fo3pipdata::ResultScri
     else if(op=="showspecialbookmenu"||op=="ssbmp"){
       cmd.type=CommandType::SpecialBook;
       if(!(in>>a)||!number(a,cmd.value)||cmd.value<7||cmd.value>70||std::floor(cmd.value)!=cmd.value){error="invalid SPECIAL point total";return false;}
+    }else if(op=="setplayertagskill"){
+      cmd.type=CommandType::PlayerTagSkill;
+      if(!(in>>std::quoted(a)>>b)||!number(b,cmd.value)||cmd.value<0||cmd.value>3||std::floor(cmd.value)!=cmd.value){error="invalid tag skill slot";return false;}
+      cmd.form=fo3av::ID(a);cmd.index=uint32_t(cmd.value);
+      if(cmd.form<32||cmd.form>45||cmd.form==44){error="invalid tag actor value";return false;}
+    }else if(op=="settagskills"){
+      cmd.type=CommandType::TagSkills;cmd.index=1;
+      if(!(in>>a)||!number(a,cmd.value)||cmd.value<1||cmd.value>4||std::floor(cmd.value)!=cmd.value){error="invalid tag skill total";return false;}
+      if(in>>a){if(a!="0"&&a!="1"){error="invalid initial tag flag";return false;}cmd.index=a=="1";}else in.clear();
     }else if(op=="setpcyoung"){
       cmd.type=CommandType::DeferredAppearance;
       if(!(in>>a)||(a!="0"&&a!="1")){error="invalid default-hair flag";return false;}
@@ -318,8 +327,10 @@ bool CompileResult(const fo3pipdata::Definitions& d,const fo3pipdata::ResultScri
       cmd.type=CommandType::TalkingActivator;const auto dot=op.find('.');cmd.form=dot==std::string::npos?owner:form(op.substr(0,dot));
       if(!cmd.form){error="unresolved talking activator";return false;}
       if(in>>a){cmd.index=form(a);if(!cmd.index){error="unresolved talking actor";return false;}}else in.clear();
-    } else if(op=="stopcombat"||(op.find('.')!=std::string::npos&&op.substr(op.find('.')+1)=="stopcombat")) {
+    } else if(op=="stopcombat"||op=="scaonactor"||op=="stopcombatalarmonactor"||
+        (op.find('.')!=std::string::npos&&(op.substr(op.find('.')+1)=="stopcombat"||op.substr(op.find('.')+1)=="scaonactor"||op.substr(op.find('.')+1)=="stopcombatalarmonactor"))) {
       cmd.type=CommandType::StopCombat;const auto dot=op.find('.');
+      const auto verb=dot==std::string::npos?op:op.substr(dot+1);cmd.index=verb!="stopcombat";
       cmd.form=dot==std::string::npos?owner:form(op.substr(0,dot));
       if(!cmd.form){error="unresolved StopCombat reference";return false;}
     } else if(op=="evp"||op=="evaluatepackage"||(op.find('.')!=std::string::npos&&(op.substr(op.find('.')+1)=="evp"||op.substr(op.find('.')+1)=="evaluatepackage"))) {
@@ -345,14 +356,14 @@ bool CompileResult(const fo3pipdata::Definitions& d,const fo3pipdata::ResultScri
     } else if(op=="imod"||op=="applyimagespacemodifier"){
       cmd.type=CommandType::ImageModifier;
       if(!(in>>a)||!(cmd.form=form(a))){error="invalid image modifier";return false;}
-    } else if(op=="activate") {
-      cmd.type=CommandType::DefaultActivate;cmd.form=owner;
-      if(!owner){error="Activate requires a reference owner";return false;}
-      if(in>>a){if(a!="player"){error="unsupported Activate actor";return false;}cmd.index=fo3player::PlayerRef;
-        if(in>>b){if(b!="0"){error="Activate event re-entry unsupported";return false;}}
+    } else if(op=="activate"||(op.find('.')!=std::string::npos&&op.substr(op.find('.')+1)=="activate")) {
+      cmd.type=CommandType::DefaultActivate;const auto dot=op.find('.');cmd.form=dot==std::string::npos?owner:form(op.substr(0,dot));
+      if(!cmd.form){error="Activate requires a reference owner";return false;}
+      if(in>>a){cmd.index=form(a);if(!cmd.index){error="unresolved Activate actor";return false;}
+        if(in>>b){if(b!="0"&&b!="1"){error="invalid Activate event flag";return false;}cmd.variable=b=="1";}
       }
       in.clear();
-    } else if(op=="player.scaonactor"||op=="forcesave") {
+    } else if(op=="forcesave") {
       // Recognize these commands without pretending their effects exist.
       // Unentered character-generation branches do not execute them; entered
       // branches still reject the entire transaction explicitly.

@@ -6,6 +6,7 @@
 #include <cstring>
 #include <cmath>
 #include <memory>
+#include <sstream>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -13,6 +14,24 @@ namespace fo3script {
 namespace {
 using Execution=fo3player::ScriptExecution;
 using Kind=fo3player::ScriptProgramKind;
+bool ActivationChild(const Execution& parent,const Execution& child){
+  if(child.origin.event!="onactivate"||child.origin.filterForm||child.reference!=child.owner||!child.activator)return false;
+  const auto form=[&](const std::string& name){
+    if(name=="player")return fo3player::PlayerRef;
+    for(const auto& binding:parent.commandForms)if(binding.second==name)return binding.first;
+    return uint32_t(0);
+  };
+  std::istringstream lines(parent.program.source);std::string line;
+  while(std::getline(lines,line)){
+    const auto comment=line.find(';');if(comment!=std::string::npos)line.resize(comment);
+    std::istringstream row(Lower(line));std::string op;if(!(row>>op))continue;
+    if(op.back()=='.'){std::string verb;if(!(row>>verb))continue;op+=verb;}
+    const auto dot=op.find('.');if((dot==std::string::npos?op:op.substr(dot+1))!="activate")continue;
+    std::string actor,flag,extra;if(!(row>>actor>>flag)||flag!="1"||(row>>extra))continue;
+    if((dot==std::string::npos?parent.owner:form(op.substr(0,dot)))==child.owner&&form(actor)==child.activator)return true;
+  }
+  return false;
+}
 bool Is(const uint8_t* p,const char* tag){return std::memcmp(p,tag,4)==0;}
 bool Same(const fo3pipdata::ResultScript& a,const fo3pipdata::ResultScript& b) noexcept {
   return a.source==b.source&&a.compiled==b.compiled&&a.header==b.header&&
@@ -54,12 +73,13 @@ bool Contexts(const std::vector<Execution>& programs){
       if(e.origin.kind==Kind::ReferenceEvent||e.origin.kind==Kind::TerminalEntry||e.origin.kind==Kind::PackageResult){if(e.reference!=e.owner)return false;}
       else if(e.reference||e.activator)return false;
     }else{
-      if(e.parent>=n||e.origin.kind!=Kind::QuestStageItem)return false;
+      if(e.parent>=n)return false;
       // An already-returned call cannot become a parent again in this preorder.
       while(depth&&active[depth-1]!=e.parent)--depth;
       if(!depth)return false;
       const auto& parent=programs[e.parent];
-      if(e.reference!=parent.reference||e.activator!=parent.activator)return false;
+      if(e.origin.kind==Kind::QuestStageItem){if(e.reference!=parent.reference||e.activator!=parent.activator)return false;}
+      else if(e.origin.kind!=Kind::ReferenceEvent||!ActivationChild(parent,e))return false;
     }
     if(depth==active.size())return false;
     active[depth++]=n;

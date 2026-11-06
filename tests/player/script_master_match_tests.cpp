@@ -252,8 +252,24 @@ int main(){
   auto reversed=f.programs;std::swap(reversed[0],reversed[1]);assert(!report.Matches(reversed));
   auto repeats=f.programs;repeats.push_back(repeats[0]);fo3script::ScriptMasterMatch repeated;
   assert(fo3script::MatchScriptProgramsToMaster(path,repeats,repeated,cancel,error)&&repeated.Matches(repeats));
-  // Captured entry order is a preorder tree. Children are stage fragments and
-  // inherit the implicit reference/activator of an active parent call.
+  // Activation children replace the implicit context only when the active
+  // parent contains that exact Activate actor 1 call.
+  {
+    auto activation=f;activation.event.clear();Sub(activation.event,"EDID",Text("FixtureScript"));Script(activation.event,"Begin OnActivate\nActivate Player 1\nRewardKarma 4\nEnd");
+    fo3pipdata::Definitions decoded;fo3pipdata::Decode(decoded,"SCPT",60,0,activation.event,0,0,0);
+    auto parent=f.programs.back();parent.container=decoded.scripts.at(60);parent.program.source=fo3script::ParseEvents(decoded.scripts.at(60)).blocks[0].body;
+    auto nested=parent;nested.parent=0;std::vector<Execution> calls={parent,nested};write(activation.Master());fo3script::ScriptMasterMatch callReport;
+    assert(fo3script::MatchScriptProgramsToMaster(path,calls,callReport,cancel,error));
+    for(unsigned field=0;field<4;++field){auto invalid=calls;
+      if(field==0)invalid[1].activator=102;
+      if(field==1)invalid[1].reference=102;
+      if(field==2)invalid[1].origin.event="gamemode";
+      if(field==3)invalid[0].program.source="Activate Player 0\n";
+      assert(!fo3script::MatchScriptProgramsToMaster(path,invalid,callReport,cancel,error)&&callReport.Matches(calls));
+    }
+    write(f.Master());
+  }
+  // Stage children inherit the implicit context of an active parent call.
   auto child=f.programs[0];child.parent=0;child.reference=101;child.activator=0x14;
   auto grandchild=child;grandchild.parent=1;
   auto sibling=child;

@@ -153,6 +153,17 @@ void SpeechTick(){
 void Register(){
     auto& player=gPlayerSession->player;
     const uint64_t revision=gFo3VisualPublication.Revision();
+    if(actorRegistryRevision!=gQ230NpcResidenceRevision||registryPlayer!=&player||runtimeGeneration!=player.ScriptRuntimeGeneration())player.ClearScriptActorFurniture();
+    for(const auto& actor:gQ230NpcActors){
+        if(actor.runtime.offScene){player.SetScriptActorFurniture(actor.source.refFormId,0,0,255);continue;}
+        const auto& furniture=actor.runtime.furniture;const auto* slot=furniture.Selected();
+        uint8_t sitting=0;uint32_t ref=0;uint8_t marker=0;
+        if(slot&&!slot->idleMarker&&furniture.phase!=fo3furniture::Phase::None&&furniture.phase!=fo3furniture::Phase::Approach){
+            ref=slot->reference;marker=slot->marker.reference;
+            if(!slot->sleep)sitting=furniture.phase==fo3furniture::Phase::Enter?2:furniture.phase==fo3furniture::Phase::Loop?3:4;
+        }
+        player.SetScriptActorFurniture(actor.source.refFormId,ref,marker,sitting);
+    }
     if(actorRegistryRevision==gQ230NpcResidenceRevision&&registryPlayer==&player&&runtimeGeneration==player.ScriptRuntimeGeneration()&&registryRevision==revision&&registryStorage==gObjects.data()&&registryCount==gObjects.size())return;
     if(registryPlayer!=&player||runtimeGeneration!=player.ScriptRuntimeGeneration()){animations.clear();loaded.clear();lookTargets.clear();hitPending.clear();modifiers.entries.clear();fo3bloodui::Clear();seconds=0;for(auto& actor:gQ230NpcActors){actor.runtime.scriptLookTarget=actor.runtime.scriptSpeechToken=0;actor.responseIdle=actor.responseToken=actor.responseInfo=0;}}
     actorRegistryRevision=gQ230NpcResidenceRevision;runtimeGeneration=player.ScriptRuntimeGeneration();registryPlayer=&player;registryRevision=revision;registryStorage=gObjects.data();registryCount=gObjects.size();
@@ -234,7 +245,8 @@ void Actions(){
     fo3loading::gLocationSpecificOnly.store(player.Snapshot().locationSpecificLoadScreens);
     while(player.PollScriptAction(action)){
         if(action.kind==fo3script::ActionKind::StopCombat){
-            if(auto* actor=DialogueActor(action.reference))Q230StopScriptCombat(*actor,seconds);
+            if(action.flags&1){for(auto& actor:gQ230NpcActors)if(actor.runtime.combatTarget==action.reference)Q230StopScriptCombat(actor,seconds);}
+            else if(auto* actor=DialogueActor(action.reference))Q230StopScriptCombat(*actor,seconds);
         }else if(action.kind==fo3script::ActionKind::PipboyReset){ResetFo3Pipboy();}
         else if(action.kind==fo3script::ActionKind::RadioRefresh){RefreshFo3PipboyRadio();}
         else if(action.kind==fo3script::ActionKind::PackageIdle){
