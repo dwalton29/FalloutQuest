@@ -17,6 +17,14 @@ target_compile_options(actor_animation_tests PRIVATE -Wall -Wextra -Werror -Wno-
 target_include_directories(actor_animation_tests PRIVATE . ../../app/src/main/cpp/data ../../app/src/main/cpp/npc)
 add_test(NAME actor_animation_tests COMMAND actor_animation_tests)
 find_package(ZLIB REQUIRED)
+# The actor bridge resolves inherited package idles through the production
+# record helpers, in both the synthetic and real-creature test executables.
+add_library(actor_record_data STATIC
+    ../../app/src/main/cpp/pipboy/fo3-pipboy-data.cpp
+    ../../app/src/main/cpp/data/fo3-esm-reader.cpp)
+target_compile_features(actor_record_data PRIVATE cxx_std_17)
+target_include_directories(actor_record_data PRIVATE ../../app/src/main/cpp)
+target_link_libraries(actor_record_data PUBLIC ZLIB::ZLIB)
 add_executable(npc_record_tests npc_record_tests.cpp ../../app/src/main/cpp/npc/fo3-npc.cpp ../../app/src/main/cpp/data/fo3-esm-reader.cpp)
 target_compile_features(npc_record_tests PRIVATE cxx_std_17)
 target_compile_options(npc_record_tests PRIVATE -Wall -Wextra -Werror)
@@ -27,6 +35,7 @@ add_executable(actor_runtime_tests actor_runtime_tests.cpp ../../app/src/main/cp
 target_compile_features(actor_runtime_tests PRIVATE cxx_std_17)
 target_compile_options(actor_runtime_tests PRIVATE -Wall -Wextra -Werror)
 target_include_directories(actor_runtime_tests PRIVATE ../../app/src/main/cpp ../../app/src/main/cpp/data ../../app/src/main/cpp/npc)
+target_link_libraries(actor_runtime_tests PRIVATE actor_record_data)
 add_test(NAME actor_runtime_tests COMMAND actor_runtime_tests)
 add_executable(loading_animation_tests loading_animation_tests.cpp ../../app/src/main/cpp/npc/fo3-actor-animation.cpp)
 target_compile_features(loading_animation_tests PRIVATE cxx_std_17)
@@ -115,6 +124,7 @@ target_compile_definitions(creature_actor_asset_tests PRIVATE FQ_REAL_CREATURE_A
 target_compile_features(creature_actor_asset_tests PRIVATE cxx_std_17)
 target_compile_options(creature_actor_asset_tests PRIVATE -UNDEBUG -Wall -Wextra -Werror -Wno-unused-function -Wno-misleading-indentation)
 target_include_directories(creature_actor_asset_tests PRIVATE . ../../app/src/main/cpp ../../app/src/main/cpp/data ../../app/src/main/cpp/npc)
+target_link_libraries(creature_actor_asset_tests PRIVATE actor_record_data)
 add_test(NAME creature_actor_asset_tests COMMAND creature_actor_asset_tests)
 set_tests_properties(creature_actor_asset_tests PROPERTIES SKIP_RETURN_CODE 77)
 

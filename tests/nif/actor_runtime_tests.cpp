@@ -281,7 +281,10 @@ int main(int argc,char** argv) {
   {Q230ActorVisual actor;actor.source.baseFormId=43;actor.source.skeletonModel="Characters\\_Male\\skeleton.nif";
    fo3pipdata::Definitions d;fo3pipdata::Info info;fo3pipdata::Condition isActor;isActor.function=72;isActor.a=43;info.conditions.push_back(isActor);
    fo3pipdata::Response response;response.speakerAnimation=19;info.responses.push_back(response);d.topics[1].push_back(info);d.idleModels[19]="OriginalResponse.kf";
-   Q230CacheDialogueAnimations(actor,&d);assert(std::find(requestedActorClips.begin(),requestedActorClips.end(),"OriginalResponse.kf")!=requestedActorClips.end());}
+   d.dialogueActors[43].templateActor=44;d.dialogueActors[43].templateFlags=16;
+   d.dialogueActors[44].packages.push_back(45);d.packages[45].procedureIdles[0]=46;d.idleModels[46]="InheritedPackageIdle.kf";
+   Q230CacheDialogueAnimations(actor,&d);assert(std::find(requestedActorClips.begin(),requestedActorClips.end(),"OriginalResponse.kf")!=requestedActorClips.end());
+   assert(std::find(requestedActorClips.begin(),requestedActorClips.end(),"InheritedPackageIdle.kf")!=requestedActorClips.end());}
 #endif
   // FO3 rigid parts keep actor axes despite a rotated head bone.
   {
